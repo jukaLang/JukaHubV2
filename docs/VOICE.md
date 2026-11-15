@@ -204,6 +204,7 @@ page doubles as a command line.
 | "turn off Wi-Fi", "Bluetooth on", "turn on airplane mode" | Quick Settings' own switches; switching a radio **off** (or airplane mode on) waits the same cancellable moment as opening something, because afterwards voice has no internet to switch it back |
 | "pause", "resume", "next song", "previous song", "play some music" | the music player |
 | "go home", "open the home screen", "go back", "quick settings", "turn off the screen" | moves around |
+| "close all apps", "close everything", "free up memory" | closes every game and app JukaHub started (and, on the handheld, ones a crash left running) and says how much memory came back; Juka's offline AI stays. Over a game, through the game assistant, it closes background apps only and keeps the game |
 | "search the web for cat videos", "google pancakes" | the Browser, with your search engine |
 | "search for mario", "find my notes" | the Home search sheet, with the words typed in |
 | "what time is it", "what's the date", "how much battery is left" | answers on the page |

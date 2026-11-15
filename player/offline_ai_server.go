@@ -11,7 +11,8 @@ package main
 // free port picked at start, and wants a random key per start.
 //
 // It stops after offlineAIIdleStop without a question (offlineAIIdleInGame
-// while a game is open), at once when a game starts (voiceReleaseForGame),
+// after an answer while a game is open), at once when a game starts or
+// resumes (voiceReleaseForGame),
 // when available memory falls below offlineAILowWaterMB, and with JukaHub.
 // The kernel kills it first if memory runs out (oom_score_adj 1000), never
 // JukaHub. A package without llama-server, or a server that will not start,
@@ -67,7 +68,10 @@ type offlineAIServerProc struct {
 	exited  chan struct{} // closed when the process is gone
 	started time.Time
 	log     *strings.Builder // the start of its messages, for a failure
-	readyOK bool             // under offlineAIServer.mu
+	// Under offlineAIServer.mu: readyOK once /health answered; answered when
+	// a question finished since the orb last opened (offlineAIPrewarm).
+	readyOK  bool
+	answered bool
 }
 
 // offlineAIServer is the running server, if any. Any goroutine, under mu.
@@ -176,6 +180,7 @@ func offlineAIPrewarm(avail uint64, pausedGame bool) bool {
 	running := offlineAIServer.p != nil
 	if running {
 		offlineAIServer.lastUse = time.Now()
+		offlineAIServer.p.answered = false // a new question is coming
 	}
 	retired := offlineAIServer.fails >= offlineAIServerFailMax
 	offlineAIServer.mu.Unlock()
@@ -369,6 +374,10 @@ func offlineAIServerWaitReady(p *offlineAIServerProc) {
 // cache already holds it when the question comes (cache_prompt).
 func offlineAIServerPrime(p *offlineAIServerProc) {
 	prompt := offlineAIPrompt("", false)
+	if gameAssistOverlayActive() {
+		// Over a paused game the question gets the game helper's instructions.
+		prompt = offlineAIGamePrompt("", "", "")
+	}
 	if i := strings.LastIndex(prompt, "<|im_start|>user\n"); i >= 0 {
 		prompt = prompt[:i+len("<|im_start|>user\n")]
 	}
@@ -467,24 +476,38 @@ func offlineAIReadStream(r io.Reader, w io.Writer) error {
 // (it would not start, it stopped, it refused the request) and nothing was
 // written yet.
 func offlineAIServerAnswer(ctx context.Context, server, model, prompt string, output *offlineAIStreamWriter) (fallback bool, err error) {
+	// Taken and marked busy at once: the idle watcher cannot stop it between.
 	offlineAIServer.mu.Lock()
 	p := offlineAIServer.p
+	if p != nil {
+		offlineAIServer.busy++
+	}
 	offlineAIServer.mu.Unlock()
 	if p == nil {
-		if freeMemoryMB() < offlineAIStartNeedMB(model) {
+		// A question given up on, or a game that started meanwhile, must
+		// not load the model.
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if offlineAIGameBlocks() || freeMemoryMB() < offlineAIStartNeedMB(model) {
 			return false, errOfflineAIMemory
 		}
 		if p = offlineAIServerStart(server, model, "question"); p == nil {
 			return true, errOfflineAIServerGone
 		}
+		offlineAIServer.mu.Lock()
+		offlineAIServer.busy++
+		offlineAIServer.mu.Unlock()
 	}
-	offlineAIServer.mu.Lock()
-	offlineAIServer.busy++
-	offlineAIServer.mu.Unlock()
 	defer func() {
 		offlineAIServer.mu.Lock()
 		offlineAIServer.busy--
 		offlineAIServer.lastUse = time.Now()
+		// Only a question that got words counts: one given up on while the
+		// model loaded must not start the short in-game idle limit.
+		if err == nil || output.raw.Len() > 0 {
+			p.answered = true
+		}
 		offlineAIServer.mu.Unlock()
 	}()
 	select {
@@ -534,14 +557,18 @@ func offlineAIServerWatch() {
 		}
 		idle := time.Since(offlineAIServer.lastUse)
 		busy := offlineAIServer.busy > 0
+		// A loading server has its own limit (offlineAILoadTimeout).
+		loading, answered := !p.readyOK, p.answered
 		offlineAIServer.mu.Unlock()
 		limit := offlineAIIdleStop
-		if runningGameChildren.Load() > 0 {
+		// Over a paused game the model goes soon after its answer; one loaded
+		// while the player is still talking waits for the question.
+		if runningGameChildren.Load() > 0 && (answered || !gameAssistOverlayActive()) {
 			limit = offlineAIIdleInGame
 		}
 		switch {
 		case busy:
-		case idle > limit:
+		case idle > limit && !loading:
 			offlineAIServerStopProc(p, "idle")
 		case freeMemoryMB() < offlineAILowWaterMB:
 			offlineAIServerStopProc(p, "low memory")
@@ -557,6 +584,14 @@ func offlineAIServerStop(why string) {
 	if p != nil {
 		offlineAIServerStopProc(p, why)
 	}
+}
+
+// offlineAIServerResetFails gives a newly installed package's server its own
+// tries: an older one that would not start must not retire it. Any goroutine.
+func offlineAIServerResetFails() {
+	offlineAIServer.mu.Lock()
+	offlineAIServer.fails = 0
+	offlineAIServer.mu.Unlock()
 }
 
 // offlineAIServerStopProc ends p. Its wait goroutine clears the state.

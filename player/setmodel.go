@@ -116,7 +116,7 @@ var setSectionsCache []setSection
 // sections folded into their neighbours (setessentials.go).
 func setSections() []setSection {
 	if setSectionsCache == nil {
-		setSectionsCache = setArrangeSections(setBuildSections())
+		setSectionsCache = jukaosFilterSections(setArrangeSections(setBuildSections()))
 	}
 	return setSectionsCache
 }
@@ -1711,12 +1711,21 @@ func setBuildSections() []setSection {
 						handleTrigger(nil, c, Element{Trigger: "cache_clear"})
 					},
 				},
+				// Startup lock: a button code or a password (bootlock.go).
+				bootLockTypeRow(), bootLockWhenRow(), bootLockChangeRow(),
 			},
 		},
 		{
 			ID: "plugins", Title: "Plugins", Glyph: "plugin",
 			Subtitle: "Small scripts that add actions to JukaHub",
 			Dynamic:  setPluginRows,
+		},
+		{
+			// JukaHub OS: mode, layers and the way back (jukaos_settings.go);
+			// only on the handheld (jukaosFilterSections).
+			ID: jukaosSettingsSection, Title: "JukaHub OS", Glyph: "chip",
+			Subtitle: "Run JukaHub as the handheld's OS, with temporary layers",
+			Dynamic:  jukaosSettingsRows,
 		},
 		{
 			ID: "about", Title: "About", Glyph: "info",

@@ -270,7 +270,7 @@ func voiceSay(msg string, tone tbxTone, fix voiceFix) {
 	voicePage.choices = nil
 	voicePage.act, voicePage.leave = nil, false
 	switch fix {
-	case voiceFixGroqKey, voiceFixOfflineSpeech, voiceFixPhone, voiceFixType:
+	case voiceFixGroqKey, voiceFixOfflineSpeech, voiceFixPhone, voiceFixType, voiceFixFreeMemory:
 		voicePage.nav.focus = "fix"
 	default:
 		voicePage.nav.focus = "speak"
@@ -532,7 +532,7 @@ func voiceTranscribed(gen int, text string, err error) {
 // voiceErrorText turns a failed request into a sentence and its fix.
 func voiceErrorText(err error) (string, voiceFix) {
 	if errors.Is(err, errSTTMemory) {
-		return "Close a game to free memory for offline speech, then try again", voiceFixNone
+		return "Not enough free memory for offline speech", voiceFixFreeMemory
 	}
 	if errors.Is(err, errSTTUnavailable) {
 		if relPackRunning(sttPackKey) {
@@ -837,6 +837,10 @@ func voiceRunFix(config *Config) {
 		voiceOpenPhoneSheet(config)
 	case voiceFixType:
 		voiceTypePrompt(config)
+	case voiceFixFreeMemory:
+		// Apps close; the toast says what came back, then speak again.
+		voiceReset()
+		closeAllStart(false, nil)
 	}
 }
 
@@ -851,6 +855,8 @@ func voiceFixLabel(fix voiceFix) string {
 		return "Use my phone"
 	case voiceFixType:
 		return "Type it"
+	case voiceFixFreeMemory:
+		return "Close apps"
 	}
 	return ""
 }

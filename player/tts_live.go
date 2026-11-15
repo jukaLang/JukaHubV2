@@ -38,6 +38,7 @@ type ttsSource struct {
 	pending []string // sentences (each ≤ ttsChunkMax bytes) not packed yet
 	done    bool     // nothing more will come
 	wake    chan struct{}
+	moved   time.Time // the answer last grew (push or touch)
 }
 
 // ttsFixedSource is a line whose chunks are all known.
@@ -67,8 +68,17 @@ func (s *ttsSource) push(sentences []string, done bool) {
 	if done {
 		s.done = true
 	}
+	s.moved = time.Now()
 	close(s.wake)
 	s.wake = make(chan struct{})
+}
+
+// touch notes that the answer is still arriving although no sentence is
+// complete yet (a slow offline model writes one in many seconds).
+func (s *ttsSource) touch() {
+	s.mu.Lock()
+	s.moved = time.Now()
+	s.mu.Unlock()
 }
 
 // at is chunk i (asked for in order from 0), waiting while the line is still
@@ -100,8 +110,17 @@ func (s *ttsSource) at(ctx context.Context, i int) (string, bool) {
 		case <-ctx.Done():
 			return "", false
 		case <-idle.C:
-			logWarn("tts", "Juka's answer stopped arriving; ending the line")
+			// Only an answer that stopped growing altogether ends: one still
+			// being written word by word is waited for.
 			s.mu.Lock()
+			if quiet := time.Since(s.moved); !s.done && quiet < ttsLiveIdleMax {
+				s.mu.Unlock()
+				idle.Reset(ttsLiveIdleMax - quiet)
+				continue
+			}
+			if !s.done {
+				logWarn("tts", "Juka's answer stopped arriving; ending the line")
+			}
 			s.done = true
 			s.mu.Unlock()
 		}
@@ -228,6 +247,8 @@ func (l *ttsLive) feed(text string, final bool) {
 	}
 	if len(add) > 0 || done {
 		l.src.push(add, done)
+	} else {
+		l.src.touch()
 	}
 }
 

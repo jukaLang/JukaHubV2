@@ -401,6 +401,22 @@ keys and a few buttons type Enter, Esc, Tab and Space, and Select + Start
 closes the window (held, it ends the program). The table is under
 [Windows apps](#windows-apps).
 
+#### End a stuck game (hold Select + Start)
+
+On a TrimUI handheld, hold **Select + Start** for three seconds in any game,
+emulator or port JukaHub started and the game ends: it is asked to quit (so
+it can still save) and, if it has not after six seconds, stopped. Nothing is
+drawn and the game is not paused first, so this works when the screen is
+black, when the game ignores the buttons, or when the in-game menu cannot
+come up over it. The motor gives a firm pulse when the hold counts. A tap or
+a short hold of Select + Start is still the game's. If the game was
+JukaHub's own PPSSPP and it had been running for less than a minute, PSP
+games switch to the firmware's PPSSPP for the next game (a toast says so);
+choosing JukaHub's PPSSPP on the PSP tile switches back.
+
+In a PSP game, **Menu** also opens PPSSPP's own pause menu, whose **Exit**
+comes back to JukaHub.
+
 #### In-game menu (hold Select + L2)
 
 With **Settings → Controls → In-game menu** on (TrimUI handhelds; on by

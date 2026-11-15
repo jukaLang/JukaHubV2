@@ -69,7 +69,11 @@ func resolveGameLauncherFor(game libraryGame) string {
 	if last := strings.TrimSpace(opts.LastEmulator); last != "" && regularFile(last) {
 		return last
 	}
-	return resolveGameLauncher(game.System)
+	// resolveGameLauncher's catalog step, for this game's own Roms folder.
+	if all := findGameLaunchersFor(game.System, game.Path, emulatorEntries()); len(all) > 0 {
+		return all[0].Launch
+	}
+	return ""
 }
 
 // chooseGameLauncher runs launch with the emulator game should start in. When
@@ -98,7 +102,7 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		launch(configured)
 		return
 	}
-	options := findGameLaunchers(game.System, emulatorEntries())
+	options := findGameLaunchersFor(game.System, game.Path, emulatorEntries())
 	switch len(options) {
 	case 0:
 		launch("")

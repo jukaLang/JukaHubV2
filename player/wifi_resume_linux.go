@@ -57,23 +57,47 @@ func wifiIfaceHasIPv4(iface string) bool {
 // line: a udhcpc already serving the interface gets SIGUSR1 (renew now), so the
 // firmware's own client keeps its job; with none running, the one-shot client
 // a join runs (wifiRunDHCP).
+//
+// It does not log: its callers (the wake watcher, the keeper) write one line
+// each with the answer, so the log does not say the same thing twice.
 func wifiRenewLease(iface string) string {
-	if pid := udhcpcPIDFor(iface); pid > 0 {
-		if err := syscall.Kill(pid, syscall.SIGUSR1); err == nil {
-			logInfo("wifi", "after wake: asked udhcpc (pid %d) to renew the lease on %s", pid, iface)
-			return "DHCP renewed"
-		}
+	if wifiSignalRenew(iface) {
+		return "DHCP renewed"
 	}
 	if _, err := wifiRunDHCP(iface); err != nil {
-		logWarn("wifi", "after wake: DHCP on %s: %v", iface, err)
+		logDebug("wifi", "DHCP on %s: %v", iface, err)
 		return "DHCP failed"
 	}
-	logInfo("wifi", "after wake: DHCP on %s answered", iface)
 	return "DHCP asked again"
+}
+
+// wifiSignalRenew sends SIGUSR1 (renew now) to a udhcpc already serving iface
+// and reports whether there was one to ask.
+func wifiSignalRenew(iface string) bool {
+	if pid := udhcpcPIDFor(iface); pid > 0 {
+		if err := syscall.Kill(pid, syscall.SIGUSR1); err == nil {
+			logDebug("wifi", "asked udhcpc (pid %d) to renew the lease on %s", pid, iface)
+			return true
+		}
+	}
+	return false
 }
 
 // udhcpcPIDFor finds a running udhcpc serving iface, or 0.
 func udhcpcPIDFor(iface string) int {
+	return procPIDMatching(func(argv []string) bool { return udhcpcServes(argv, iface) })
+}
+
+// supplicantPIDFor finds a running wpa_supplicant for iface, or 0: one that
+// does not answer is still there, and a second one on the same radio fights it
+// (ensureWifiBackend).
+func supplicantPIDFor(iface string) int {
+	return procPIDMatching(func(argv []string) bool { return supplicantServes(argv, iface) })
+}
+
+// procPIDMatching finds the first process (not this one, not init) whose
+// command line match accepts, or 0.
+func procPIDMatching(match func(argv []string) bool) int {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return 0
@@ -88,7 +112,7 @@ func udhcpcPIDFor(iface string) int {
 		if err != nil || len(raw) == 0 {
 			continue
 		}
-		if udhcpcServes(strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00"), iface) {
+		if match(strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")) {
 			return pid
 		}
 	}

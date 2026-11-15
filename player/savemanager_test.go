@@ -78,6 +78,17 @@ func TestResolveRetroArchSaveDir(t *testing.T) {
 		{"default", "default", ""},
 		{"disabled", "disabled", ""},
 	}
+	if !IsWindows() {
+		// The TrimUI launchers set HOME to RetroArch's folder, not JukaHub's.
+		// A home of its own, so a temp folder inside the real home cannot
+		// make the config look like a desktop one.
+		t.Setenv("HOME", t.TempDir())
+		cases = append(cases, struct {
+			name  string
+			value string
+			want  string
+		}{"home is RetroArch's", "~/.retroarch/saves", filepath.Join(cfgDir, ".retroarch", "saves")})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := resolveRetroArchSaveDir(tc.value, cfg)

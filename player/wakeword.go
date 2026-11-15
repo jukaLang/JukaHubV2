@@ -132,6 +132,7 @@ var hj struct {
 	resumeAt  time.Time
 	hadVoices bool
 	failed    bool
+	warm      bool   // the recognizer was asked to load for this capture
 	deadRuns  int    // reopens in a row after a microphone that gave nothing
 	why       string // the last reason it stood aside, for the log
 	memAt     time.Time
@@ -176,6 +177,9 @@ func hjHoldsMic() bool { return hj.mic != nil || hj.hand != nil }
 // hjTick runs the listener, once a frame from the main loop and ten times a
 // second from the parked loop (inGame).
 func hjTick(config *Config, inGame bool) {
+	// The recognition setting for the transcription goroutines (stt_local.go
+	// sttModeNow): read here, on the main thread, every frame.
+	sttModeRemember(config)
 	now := time.Now()
 	if hj.hand != nil && now.Sub(hj.hand.at) > hjHandoffLife {
 		hjDropHandoff("nothing took it")
@@ -234,7 +238,7 @@ func hjBlocked(config *Config, inGame bool, now time.Time) string {
 		return "the handheld is resting"
 	case !inGame && (playerPhase() == "playing" || hjMusicPlaying()):
 		return "media is playing"
-	case virtualKeyboardActive, onboarding.active:
+	case virtualKeyboardActive, onboarding.active, startupLocked():
 		return "a screen needs the buttons"
 	case !hj.memOK:
 		return "memory is low"
@@ -262,7 +266,10 @@ func hjLook(now time.Time) bool {
 	hj.localOK = sttLocalReady()
 	avail := sttMemAvailable()
 	need := int64(sttServeStartAvail)
-	if hj.mic != nil {
+	if hj.mic != nil && sttServeLoaded() {
+		// A loaded recognizer gives way only under sttServeKeepAvail. One the
+		// reaper stopped for memory needs sttServeStartAvail to come back:
+		// below that every segment would fail, so the microphone is let go.
 		need = sttServeKeepAvail
 	}
 	hj.memOK = avail <= 0 || avail >= need
@@ -291,8 +298,7 @@ func hjOpen(now time.Time, inGame bool) bool {
 	hj.carry, hj.preroll = hj.carry[:0], hj.preroll[:0]
 	hj.floorSet, hj.loud, hj.level = false, 0, 0
 	sttServeKeep(true)
-	sttServeWarm()
-	hjResolveGrammar()
+	hj.warm = false // the recognizer loads with the first sound (hjRead)
 	logInfo("voice", "Hey Juka is listening (%s, in a game: %t)", m.Via(), inGame)
 	hj.why = ""
 	return true
@@ -357,6 +363,14 @@ func hjRead(now time.Time) {
 	if got {
 		hj.gotAt = now
 		hj.deadRuns = 0
+		if !hj.warm {
+			// Only a microphone that delivers loads the model: a capture a
+			// game holds gives nothing, is reopened again and again, and
+			// must not start (and the reaper stop) the recognizer each time.
+			hj.warm = true
+			sttServeWarm()
+			hjResolveGrammar()
+		}
 	} else if now.Sub(hj.gotAt) > hjDeadAfter {
 		hjRelease("the microphone gave nothing; reopening")
 		// A capture that stays dead (a game holding the codec) is tried

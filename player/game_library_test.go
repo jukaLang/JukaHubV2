@@ -43,6 +43,37 @@ func TestGameLaunchCommand(t *testing.T) {
 			}
 		}
 	}
+	// A system's Roms folder names find its Emus folder: Roms/WS → Emus/WS.
+	emus := []emuEntry{
+		{Name: "WS", Status: emuAvailable, Launch: "/e/WS/launch.sh"},
+		{Name: "FBNEO", Status: emuAvailable, Launch: "/e/FBNEO/launch.sh"},
+		{Name: "GBA", Status: emuAvailable, Launch: "/e/GBA/launch.sh"},
+	}
+	for system, want := range map[string]string{"WonderSwan": "/e/WS/launch.sh", "Arcade": "/e/FBNEO/launch.sh", "Game Boy": ""} {
+		if got := findGameLauncher(system, emus); got != want {
+			t.Errorf("findGameLauncher(%q) = %q, want %q", system, got, want)
+		}
+	}
+	// An arcade set starts in the Emus folder named like its own Roms folder,
+	// with no question; the other arcade folders are offered only when no
+	// alias matches; NES never takes the SNES folder.
+	emus = append(emus,
+		emuEntry{Name: "CPS1", Status: emuAvailable, Launch: "/e/CPS1/launch.sh"},
+		emuEntry{Name: "CPS2", Status: emuAvailable, Launch: "/e/CPS2/launch.sh"},
+		emuEntry{Name: "SFC", Status: emuAvailable, Launch: "/e/SFC/launch.sh"})
+	if got := findGameLaunchersFor("Arcade", "/mnt/SDCARD/Roms/CPS2/sf2.zip", emus); len(got) != 1 || got[0].Launch != "/e/CPS2/launch.sh" {
+		t.Errorf("Roms/CPS2 game: %+v", got)
+	}
+	if got := findGameLaunchersFor("Arcade", "/mnt/SDCARD/Roms/MAME2003/x.zip", emus); len(got) != 3 || got[0].Launch != "/e/CPS1/launch.sh" {
+		t.Errorf("Roms/MAME2003 game without its folder: %+v", got)
+	}
+	arcade := append(emus, emuEntry{Name: "ARCADE", Status: emuAvailable, Launch: "/e/ARCADE/launch.sh"})
+	if got := findGameLaunchersFor("Arcade", "/mnt/SDCARD/Roms/MAME2003/x.zip", arcade); len(got) != 1 || got[0].Launch != "/e/ARCADE/launch.sh" {
+		t.Errorf("Arcade with Emus/ARCADE: %+v", got)
+	}
+	if got := findGameLaunchersFor("NES", "/mnt/SDCARD/Roms/NES/a.nes", emus); len(got) != 0 {
+		t.Errorf("NES game took %+v", got)
+	}
 }
 
 // resetGameRecentsState clears the package-level recents cache between tests.
@@ -297,6 +328,10 @@ func TestFirmwareROMArgAndLauncherOutput(t *testing.T) {
 	}
 	if issues, _ := launcherOutputFindings(out[:3], "/x/launch.sh"); len(issues) != 1 || issues[0].Files[0] != "cpufreq.sh" {
 		t.Errorf("without RetroArch: %+v", issues)
+	}
+	loader := []string{"./ra64.trimui: error while loading shared libraries: libEGL.so: cannot open shared object file: No such file or directory"}
+	if issues, _ := launcherOutputFindings(loader, "/x/launch.sh"); len(issues) != 1 || issues[0].Files[0] != "libEGL.so" {
+		t.Errorf("missing library: %+v", issues)
 	}
 
 	// A launcher's "#!" line, read the way the kernel reads it (MainUI runs

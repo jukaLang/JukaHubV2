@@ -45,6 +45,10 @@ const (
 	// gmQuitGrace is how long a game asked to quit gets before its group is
 	// killed: RetroArch writing a save state on exit takes a moment.
 	gmQuitGrace = 6 * time.Second
+	// gmForceQuitHold is how long Select + Start are held to end a game from
+	// the pad alone (gameForceQuit): long enough that no game's own use of
+	// the pair ends it.
+	gmForceQuitHold = 3 * time.Second
 )
 
 // gmQuitting is set from Quit to JukaHub until the game is gone (or killed):
@@ -64,6 +68,7 @@ const (
 	gmSleep
 	gmRewind
 	gmFast
+	gmCloseBg // close background apps, keep the game (closeall.go)
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -104,7 +109,7 @@ func gmItems(config *Config) []gmItem {
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
 	}
-	return append(items, gmSleep, gmQuit)
+	return append(items, gmCloseBg, gmSleep, gmQuit)
 }
 
 // gmLabel is a row's words: its label and the smaller line under it.
@@ -128,6 +133,8 @@ func gmLabel(it gmItem) (string, string) {
 			return "Normal speed", "Turn fast forward off and keep playing"
 		}
 		return "Fast forward", "Run the game faster until you switch it off"
+	case gmCloseBg:
+		return "Close background apps", closeAllMenuSub()
 	}
 	return "Resume game", ""
 }
@@ -190,6 +197,10 @@ func gmPress(config *Config, b gaButton) {
 		case gmFast:
 			PlayActivateSound()
 			retroTransportCommand(false)
+		case gmCloseBg:
+			// The game stays paused here; the row's line shows the result.
+			PlayActivateSound()
+			closeAllFromGameMenu()
 		}
 	}
 }
@@ -227,6 +238,38 @@ func gmQuitGame() {
 	// Children the overlay did not pause (none, normally) are continued too,
 	// so every one acts on the interrupt.
 	for _, cmd := range cmds {
+		_ = alarmSignalChild(cmd, false)
+	}
+	go gmQuitWatch(cmds)
+}
+
+// gameForceQuit ends the game after the pad watcher saw Select + Start held for
+// gmForceQuitHold (gameassist_linux.go). It is Quit to JukaHub without the menu:
+// nothing is drawn and the game is not paused, so it works when the game's
+// screen is black, when the game ignores the pad, and when JukaHub's overlay
+// could not come up over it — the cases that left only the power key (Juka,
+// 2026-11-15: a PSP game went black and the handheld had to be restarted).
+// The game is asked to quit (an interrupt, so it can still save) and killed
+// after gmQuitGrace. Main thread (gameAssistParkedTick).
+func gameForceQuit() {
+	if gaOverlay.active || gmQuitting.Load() || powerSleepActive() {
+		// The overlay's own Quit is right there; a quit is already under way;
+		// or the handheld sleeps with the game stopped (a hold in a pocket).
+		return
+	}
+	cmds := liveScreenChildren()
+	if len(cmds) == 0 {
+		return
+	}
+	logInfo("gamemenu", "Select + Start held for %s: ending the game (%d process group(s))", gmForceQuitHold, len(cmds))
+	// Before the interrupt, while the emulator is still there to be seen.
+	ppssppNoteForceQuit()
+	gmQuitting.Store(true)
+	for _, cmd := range cmds {
+		// The player left: not a game that failed to start (gamelaunch_watch.go).
+		gameLaunchNoteStop(cmd)
+		gmInterruptGame(cmd)
+		// A game paused by an alarm acts on the interrupt at once.
 		_ = alarmSignalChild(cmd, false)
 	}
 	go gmQuitWatch(cmds)
@@ -320,10 +363,11 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	inner := w - 2*pad
 	title = ellipsize(fonts.body, title, inner)
 
+	subs := true
 	rowH := func(it gmItem) int32 {
 		_, sub := gmLabel(it)
 		h := fonts.bodyH + 2*pad
-		if sub != "" {
+		if sub != "" && subs {
 			h += 2 + fonts.smallH
 		}
 		return h
@@ -335,6 +379,16 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	h += pad/2 + fonts.smallH + pad
 	if gaOverlay.system != "" {
 		h += 2 + fonts.smallH
+	}
+	if h > screenHeight-2*pad {
+		// Every row (save slots, Ask Juka, Close background apps) on a short
+		// screen: the rows drop their smaller lines so the card fits.
+		subs = false
+		for _, it := range items {
+			if _, sub := gmLabel(it); sub != "" {
+				h -= 2 + fonts.smallH
+			}
+		}
 	}
 
 	card := sdl.Rect{X: (screenWidth - w) / 2, Y: (screenHeight - h) / 2, W: w, H: h}
@@ -367,7 +421,7 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 		}
 		ty := row.Y + pad
 		drawText(renderer, fonts.body, ellipsize(fonts.body, label, inner-pad), row.X+pad, ty, ColorTextPrimary(), textAlignLeft)
-		if sub != "" {
+		if sub != "" && subs {
 			drawText(renderer, fonts.small, ellipsize(fonts.small, sub, inner-pad), row.X+pad, ty+fonts.bodyH+2, ColorTextSecondary(), textAlignLeft)
 		}
 		y += rh + rowGap

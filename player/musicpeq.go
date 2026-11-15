@@ -404,6 +404,13 @@ func musicPEQStatus() string {
 // Panel
 // ──────────────────────────────────────────────────────────────────────
 
+// musicPEQLayout is the panel's measured hint and slider geometry, kept for
+// the real-font containment tests. Render thread only.
+var musicPEQLayout struct {
+	panel, hint sdl.Rect
+	bandTop     int32
+}
+
 // musicPEQPanelRect is where the panel sits, kept here so the click handler and
 // the renderer agree.
 func musicPEQPanelRect() sdl.Rect {
@@ -413,6 +420,32 @@ func musicPEQPanelRect() sdl.Rect {
 	}
 	h := int32(336)
 	return sdl.Rect{X: (screenWidth - w) / 2, Y: (screenHeight - h) / 2, W: w, H: h}
+}
+
+// musicPEQLabelShown reports whether a band gets a frequency label. Every
+// fifth band is labelled, plus the selection; a fifth band next to the
+// selection is dropped, because on the 960 canvas its label and the selected
+// band's label overlap ("160" and "200" were painted as "160200"). The
+// selected frequency is still shown in the panel header either way.
+func musicPEQLabelShown(band, selected int) bool {
+	if band == selected {
+		return true
+	}
+	if band%5 != 0 {
+		return false
+	}
+	if selected >= 0 {
+		d := band - selected
+		if d < 0 {
+			d = -d
+		}
+		// Two bands away is still too close on the 960 canvas: its selected
+		// labels are up to 58px wide and the band step is 25px.
+		if d <= 2 {
+			return false
+		}
+	}
+	return true
 }
 
 // musicPEQBandRect returns the slider hit box for one band, so dragging or
@@ -512,8 +545,16 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 	hint := hintLine(FooterHint{"Left/Right", "Band"}, FooterHint{"Up/Down", "Gain"},
 		FooterHint{"Y", "Preset"}, FooterHint{"X", "Flatten Band"}, FooterHint{"G", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
+	// The band sliders begin 96px down the card. The hint used to be drawn at
+	// the end of the header band, which is below that: on both canvases the
+	// selected slider's outline ran through "Band". Sit the line fully above
+	// the sliders instead, still under the header's subtitle.
+	hintY := panel.Y + band - int32(font.Height()) - SpaceXS
 	renderText(renderer, config, font, hint, ColorTextTertiary(),
-		panel.X+(panel.W-int32(hw))/2, panel.Y+band)
+		panel.X+(panel.W-int32(hw))/2, hintY)
+	musicPEQLayout.panel = panel
+	musicPEQLayout.bandTop = panel.Y + 96
+	musicPEQLayout.hint = sdl.Rect{X: panel.X, Y: hintY, W: panel.W, H: int32(font.Height())}
 
 	midY := panel.Y + 96 + 84
 	renderer.SetDrawColor(255, 255, 255, 26)
@@ -547,8 +588,9 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 6, 1, accentColor)
 		}
 		// Label every fifth band, plus the selection, so 31 labels do not
-		// collide on a small screen.
-		if band%5 == 0 || band == musicEQ.sel {
+		// collide on a small screen. The helper also drops the fifth band
+		// beside a selected one, whose wider label would touch it.
+		if musicPEQLabelShown(band, musicEQ.sel) {
 			label := musicBandLabel(musicPEQFrequencies[band])
 			lw, _, _ := font.SizeUTF8(label)
 			renderText(renderer, config, font, label, ColorTextTertiary(),

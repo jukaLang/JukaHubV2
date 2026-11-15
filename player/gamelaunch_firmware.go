@@ -182,6 +182,9 @@ func (o *launcherOutput) watch() {
 // kernel's "x: No such file or directory".
 var launcherMissingRe = regexp.MustCompile(`(?i)(?:can't (?:open|cd to) '?([^'\s:]+)'?|([^\s:'"]+): (?:not found|no such file or directory))`)
 
+// launcherLoaderRe finds the library the dynamic loader could not open.
+var launcherLoaderRe = regexp.MustCompile(`(?i)error while loading shared libraries: ([^\s:]+)`)
+
 // launcherOutputFindings reads a launch script's output: an issue for what
 // it could not find (RetroArch when that is among them, else the first),
 // and its last lines for the card. RetroArch's own log lines ("[ERROR] …",
@@ -200,6 +203,16 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		}
 		excerpt = append(excerpt, line)
 		if strings.HasPrefix(line, "[") || (missing != "" && launcherRetroArchName(missing)) {
+			continue
+		}
+		if lib := launcherLoaderRe.FindStringSubmatch(line); lib != nil {
+			// The dynamic loader's "error while loading shared libraries:
+			// libX.so: cannot open shared object file: No such file or
+			// directory" — the program is there, a library it needs is not.
+			// The plain pattern below read "file" out of it.
+			if missing == "" {
+				missing, missingLine = lib[1], line
+			}
 			continue
 		}
 		m := launcherMissingRe.FindStringSubmatch(line)
@@ -225,10 +238,29 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		title = "The launch script could not find RetroArch"
 	}
 	detail := script + " stopped with: " + missingLine
-	if strings.HasPrefix(missing, "/") && strings.Count(missing, "/") == 1 {
+	switch {
+	case strings.HasPrefix(missing, "/") && strings.Count(missing, "/") == 1:
 		// "/ra64.trimui": the folder variable in front of it was empty.
 		detail += " — the folder in front of it is empty, so the script did not get a setting it expected."
+	case launcherLoaderRe.MatchString(missingLine):
+		title = "A library the game needs is missing: " + path.Base(missing)
+		detail += " — the program is there, but a library it loads is on none of the folders in LD_LIBRARY_PATH (JukaHub's log has the list it was given)."
+	case path.IsAbs(missing) && regularFile(missing):
+		// busybox says "x: not found" for a program that is there when its
+		// loader (#! interpreter or ELF loader) is not, or it is not executable.
+		detail += " — " + missing + " is there, so what is missing is the program that starts it: its #! line or its loader, or it is not executable."
 	}
+	if launcherRetroArchName(missing) {
+		// Where JukaHub itself sees RetroArch, so the report tells a script
+		// that lost its folder apart from a card without RetroArch.
+		if ra := netplayRetroArchPath(); ra != "" {
+			detail += " JukaHub finds RetroArch at " + ra + "."
+		} else {
+			detail += " JukaHub finds no RetroArch either (it searched the RetroArch folders on " +
+				childEnvFirmwareCard() + ", every launch script in Emus and the card itself)."
+		}
+	}
+	logWarn("gamediag", "%s: %s", title, missingLine)
 	issues = append(issues, launchIssue{
 		Level:  int(gameDiagSure),
 		Title:  title,

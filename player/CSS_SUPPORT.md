@@ -56,9 +56,15 @@ gap, not a silent promise.
 ### Typography and paint
 
 - Colour, background colour, linear/radial/conic gradients and opacity.
-- Font size, weight (faux bold), text transform, text align, line height,
-  `font-style: italic/oblique` (synthetic italic face), `letter-spacing`,
-  `word-spacing`, `white-space: pre*`.
+- Font size, weight (faux bold), text transform, text align (including
+  `justify`), line height, `font-style: italic/oblique` (synthetic italic
+  face), `letter-spacing`, and `word-spacing`.
+- `white-space: normal`, `nowrap`, `pre`, `pre-wrap`, `pre-line` and
+  `break-spaces`. `nowrap` keeps one line and ellipsizes overflow; `pre` keeps
+  authored spaces and newlines without wrapping; `pre-wrap` and `break-spaces`
+  preserve both and still wrap; `pre-line` preserves newlines while collapsing
+  spaces. Justified text stretches inter-word gaps on every line except the
+  last, so non-final lines reach the right content edge.
 - `text-decoration` underline/strikethrough, `text-decoration-color`, pixel
   `text-decoration-thickness`, and `solid`/`double`/`dotted`/`dashed`/`wavy`
   `text-decoration-style`.
@@ -142,15 +148,41 @@ mistaken for working CSS.
 | `text-overflow` | Accepted; the page uses its own ellipsis. |
 | `transform`, `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. |
 | `grid-template-rows`, `grid-row`, `grid-column`, `grid-area` | Accepted; only explicit columns and auto-fit rows are modelled. |
-| `white-space: nowrap/pre-wrap` details | Accepted; `pre*` keeps code lines, other wrapping modes are approximated. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
-| `text-align: justify` | Accepted; lines align left because the reader does not redistribute inter-word space. |
 | `@import`, `@charset`, `@namespace` | Not fetched or applied. |
 | `@font-face`, `@keyframes`, `@page`, `@layer` ordering | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated. |
+
+## Draw-path fixture coverage
+
+`player/webpage_headless_features_test.go` drives every row below through
+`parseWebPage` → `fetchWebImages` → `setBrowserDocument` →
+`browserPageLayout` → `drawWebDocument` on a software renderer. Each fixture
+asserts on the rasterized pixels and the laid-out geometry, so a supported
+feature that regresses paint or box flow fails the suite.
+
+| Feature area | Fixture | Known limits exercised |
+| --- | --- | --- |
+| Inline `strong`/`em`/`code`/links, wrapping, `white-space` | `InlineFormattingAndWhitespace` and `WhiteSpaceModes` | Tabs in preserved text use four spaces rather than `tab-size`. |
+| List markers, nesting, counters | `NestedLists` | Markers are text; no `list-style-image` or marker boxes. |
+| Floats and `clear` | `FloatsAndClear` | Float shrink-to-fit uses the widest run. |
+| Four-side borders, styles, radius | `BordersAndRadius` | Radius is clamped to the used box; no elliptical radii. |
+| Opacity | `OpacityPaintsThrough` | Opacity multiplies paint, not an isolated compositing group. |
+| Transforms | `TransformsStayInFlow` | `transform` is accepted but deliberately not applied; content stays readable in normal flow. |
+| Text alignment, decoration, line height, letter spacing | `TextMetricsAndDecoration` and `JustifiedText` | Justification stretches automatic word gaps; a line with no gaps stays left-aligned. |
+| Table borders, collapsed separators, padding, spans | `TableSpanPaddingAndBorders` | Column-level borders/backgrounds are not painted. |
+| Image dimensions, natural size, `object-fit`/`max-width` | `ImageSizingAndFit` | Natural size is capped to the reading measure and four-thirds screen height. |
+| Background colour/image layers, repeat, position | `BackgroundLayersRepeatAndPosition` | Four layers and 512 tiles per block are the cap. |
+| Relative/absolute/fixed offsets | `PositionedOffsets` | `fixed` anchors to the viewport-sized page box; there is no scrolling viewport. |
+| Media queries and meta viewport | `MediaQueriesAndViewportMeta` | Width-based `@media` is evaluated against the reader viewport; printable/device-specific queries do not change layout. |
+| Default and disabled form controls | `FormControlStates` | Native OS widgets are replaced by reader-drawn controls. |
+
+The full list of accepted-but-not-rendered CSS remains the table above; the
+fixture column names the fallback each gap degrades to rather than an
+unasserted promise.
 
 ## Adding support
 

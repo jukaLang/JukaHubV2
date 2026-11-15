@@ -239,6 +239,17 @@ func processPanelActivate() {
 	refreshProcessPanel()
 }
 
+// processPanelCloseAll is X: "Close all apps", the two-step close of every app
+// and game (closeall.go); the list reloads once they are gone.
+func processPanelCloseAll() {
+	processPanel.confirmPID = 0
+	closeAllArmPress("processes", hintKeyFor("X", ""), false, func(closeAllResult) {
+		if processPanel.open {
+			refreshProcessPanel()
+		}
+	})
+}
+
 // ctrlProcessPanel is called before every other controller overlay.
 func ctrlProcessPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
@@ -250,6 +261,8 @@ func ctrlProcessPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 		processPanelActivate()
 	case sdl.CONTROLLER_BUTTON_Y:
 		refreshProcessPanel()
+	case sdl.CONTROLLER_BUTTON_X:
+		processPanelCloseAll()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		processPanelBack()
 	}
@@ -276,6 +289,8 @@ func handleProcessKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_r:
 		refreshProcessPanel()
 		PlayNavSound()
+	case sdl.K_x:
+		processPanelCloseAll()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		processPanelBack()
 	}
@@ -415,7 +430,7 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 		rowY += lineH
 	}
 
-	footer := hintLine(FooterHint{"A", "Kill"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
+	footer := hintLine(FooterHint{"A", "Kill"}, FooterHint{"X", "Close all apps"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
 	if processPanel.confirmPID != 0 {
 		footer = hintLine(FooterHint{"A", "Confirm Again"}, FooterHint{"B", "Cancel"})
 	}

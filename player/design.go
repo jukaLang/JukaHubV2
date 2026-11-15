@@ -92,6 +92,11 @@ var (
 	FontSizeXL  = int32(24)
 	FontSize2XL = int32(32)
 	FontSize3XL = int32(40)
+	// Display sizes are for the few numerals drawn larger than any text role
+	// (the startup lock's clock). They are still design tokens, not per-screen
+	// pixel choices, and the compact size follows the smaller canvas.
+	FontSizeDisplay        = int32(76)
+	FontSizeDisplayCompact = int32(52)
 
 	// Motion tokens (approximate durations in milliseconds).
 	// Use these for any UI animations so motion feels consistent.
@@ -242,15 +247,12 @@ func ColorTextAccent() sdl.Color { return a11yReadableText(textAccentColor) }
 // ColorTextMuted returns the muted/secondary text color.
 func ColorTextMuted() sdl.Color { return a11yReadableText(textSecondaryColor) }
 
-// a11yReadableText leaves a normal theme's text tokens untouched, but makes
-// Increase Contrast apply to every semantic text accessor. TextInk blends a
-// colour towards the readable end of the palette only when it misses the
-// target, so colours that already pass come back unchanged.
+// a11yReadableText makes every semantic text accessor return the readable
+// variant of its token. TextInk moves a colour only when it misses the target,
+// so an authored palette that already passes comes back untouched; Increase
+// Contrast simply raises the target to 7:1.
 func a11yReadableText(c sdl.Color) sdl.Color {
-	if a11y.increaseContrast {
-		return TextInk(c)
-	}
-	return c
+	return TextInk(c)
 }
 
 // SuccessInk returns the success colour as readable text.
@@ -366,6 +368,11 @@ func ApplyThemeColors(p ThemePreset) {
 	ColorSurface = hexRGBA(p.Surface)
 	ColorSurfaceAlt = hexRGBA(p.SurfaceAlt)
 	ColorSurfaceRaised = hexRGBA(p.SurfaceRaised)
+	// ColorPanelRaised is the legacy alias many screens still paint with. It
+	// used to keep the shipped #2D3644 across every preset, so on Light the
+	// Search/Exit pills and artwork placeholders were dark islands with dark
+	// labels. Keep it tied to the surface it names.
+	ColorPanelRaised = ColorSurfaceRaised
 	ColorSurfaceCard = hexRGBA(p.SurfaceRaised)
 	ColorSurfaceRow = hexRGBA(p.SurfaceAlt)
 	ColorSurfacePanel = hexRGBA(p.Surface)
@@ -446,6 +453,15 @@ func wcagLuminance(c sdl.Color) float64 {
 	return 0.2126*channel(c.R) + 0.7152*channel(c.G) + 0.0722*channel(c.B)
 }
 
+// wcagContrast is the WCAG contrast ratio between two opaque colours.
+func wcagContrast(a, b sdl.Color) float64 {
+	la, lb := wcagLuminance(a), wcagLuminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
 // contrastText returns a readable text color for the given background: dark
 // text on bright surfaces, light text on dark surfaces.
 //
@@ -471,16 +487,39 @@ const textInkMinContrast = 4.5
 // The status colours are authored as fills, and the app also draws labels in
 // them ("Failed", "Offline", the Groq status). On a preset whose warning is a
 // deep amber sitting at 2.6:1 against its own background, that label was barely
-// there. Blending towards white, or towards dark ink on a light palette, keeps
-// the hue (an amber stays amber) while reaching WCAG AA on all three surfaces.
-// A colour that already passes comes back untouched, so a palette authored
+// there. The adjustment walks HSL lightness instead of blending towards white
+// or black: blending kept the ratio but washed the hue out, so on the light and
+// colour-blind presets an error label became the same near-black or near-white
+// as ordinary body copy and the state stopped being colour-coded at all. A
+// colour that already passes comes back untouched, so a palette authored
 // correctly cannot drift.
 func TextInk(c sdl.Color) sdl.Color {
 	minContrast := textInkMinContrast
 	if a11y.increaseContrast {
 		minContrast = 7.0
 	}
-	surfaces := [...]sdl.Color{ColorBackground, ColorSurface, ColorSurfaceAlt}
+	return readableInk(c, minContrast)
+}
+
+// FocusInk is TextInk for a focus ring rather than a label: the 3:1 WCAG
+// requirement for a non-text control, applied without changing the hue.
+func FocusInk(c sdl.Color) sdl.Color {
+	return readableInk(c, 3.0)
+}
+
+// inkSurfaces are every fill the app paints text directly onto. SurfaceRaised
+// is included because selected rows, raised cards and search results are text
+// surfaces too; leaving it out was why dimmed text could pass on the page and
+// still disappear inside a card. It is built per call: a package-level copy
+// would freeze the shipped palette before ApplyThemeColors ran.
+func inkSurfaces() [4]sdl.Color {
+	return [4]sdl.Color{ColorBackground, ColorSurface, ColorSurfaceAlt, ColorSurfaceRaised}
+}
+
+// readableInk moves c along HSL lightness until it clears minContrast against
+// every ink surface, preserving hue, saturation and alpha.
+func readableInk(c sdl.Color, minContrast float64) sdl.Color {
+	surfaces := inkSurfaces()
 	readable := func(v sdl.Color) bool {
 		for _, s := range surfaces {
 			la, lb := wcagLuminance(v), wcagLuminance(s)
@@ -496,31 +535,105 @@ func TextInk(c sdl.Color) sdl.Color {
 	if readable(c) {
 		return c
 	}
-	// Towards white on dark surfaces, towards near-black on light ones: the
-	// direction with contrast to give, not the one that looks better on the
-	// palette currently loaded.
-	goal := sdl.Color{R: 255, G: 255, B: 255, A: 255}
 	mean := 0.0
 	for _, s := range surfaces {
 		mean += wcagLuminance(s)
 	}
-	if mean/float64(len(surfaces)) > 0.179 {
-		goal = sdl.Color{R: 18, G: 22, B: 30, A: 255}
-	}
-	mix := func(from, to uint8, t float64) uint8 {
-		return uint8(math.Round(float64(from) + (float64(to)-float64(from))*t))
-	}
+	lighten := mean/float64(len(surfaces)) <= 0.179
+	h, s, l := rgbToHSL(c)
 	cand := c
-	// 32 steps is finer than the 8-bit ramp being walked, so the result lands as
-	// close to the authored colour as the contrast requirement allows.
-	for step := 1; step <= 32; step++ {
-		f := float64(step) / 32
-		cand = sdl.Color{R: mix(c.R, goal.R, f), G: mix(c.G, goal.G, f), B: mix(c.B, goal.B, f), A: c.A}
+	// 100 steps is finer than the 8-bit ramp being walked, so the result lands
+	// as close to the authored colour as the contrast requirement allows.
+	for step := 0; step < 100; step++ {
+		if lighten {
+			l += 0.01
+			if l > 1 {
+				l = 1
+			}
+		} else {
+			l -= 0.01
+			if l < 0 {
+				l = 0
+			}
+		}
+		cand = hslToRGB(h, s, l)
+		cand.A = c.A
 		if readable(cand) {
 			return cand
 		}
 	}
 	return cand
+}
+
+// rgbToHSL converts an sRGB colour to hue (0..1), saturation and lightness.
+func rgbToHSL(c sdl.Color) (h, s, l float64) {
+	r := float64(c.R) / 255
+	g := float64(c.G) / 255
+	b := float64(c.B) / 255
+	max := math.Max(r, math.Max(g, b))
+	min := math.Min(r, math.Min(g, b))
+	l = (max + min) / 2
+	if max == min {
+		return 0, 0, l
+	}
+	d := max - min
+	if l > 0.5 {
+		s = d / (2 - max - min)
+	} else {
+		s = d / (max + min)
+	}
+	switch max {
+	case r:
+		h = (g - b) / d
+		if g < b {
+			h += 6
+		}
+	case g:
+		h = (b-r)/d + 2
+	default:
+		h = (r-g)/d + 4
+	}
+	h /= 6
+	return h, s, l
+}
+
+// hslToRGB converts hue (0..1), saturation and lightness back to sRGB.
+func hslToRGB(h, s, l float64) sdl.Color {
+	hue := func(p, q, t float64) float64 {
+		if t < 0 {
+			t += 1
+		}
+		if t > 1 {
+			t -= 1
+		}
+		switch {
+		case t < 1.0/6:
+			return p + (q-p)*6*t
+		case t < 0.5:
+			return q
+		case t < 2.0/3:
+			return p + (q-p)*(2.0/3-t)*6
+		}
+		return p
+	}
+	to8 := func(v float64) uint8 {
+		return uint8(math.Round(math.Max(0, math.Min(1, v)) * 255))
+	}
+	if s == 0 {
+		v := to8(l)
+		return sdl.Color{R: v, G: v, B: v, A: 255}
+	}
+	q := l * (1 + s)
+	if l >= 0.5 {
+		q = l + s - l*s
+	}
+	p := 2*l - q
+	return sdl.Color{
+		R: to8(hue(p, q, h+1.0/3)),
+		G: to8(hue(p, q, h)),
+		B: to8(hue(p, q, h-1.0/3)),
+		A: 255,
+	}
 }
 
 // WithAlpha returns a copy of c with the alpha channel replaced.
@@ -715,10 +828,13 @@ const (
 )
 
 func focusColorForAccent(accent sdl.Color) sdl.Color {
+	fallback := sdl.Color{R: 85, G: 216, B: 255, A: 255}
 	if int(accent.R)+int(accent.G) > 420 && int(accent.R) > int(accent.B) {
-		return sdl.Color{R: 139, G: 124, B: 255, A: 255}
+		fallback = sdl.Color{R: 139, G: 124, B: 255, A: 255}
 	}
-	return sdl.Color{R: 85, G: 216, B: 255, A: 255}
+	// A different hue is not enough if the fallback is as pale as a pastel
+	// page. Keep it a ring (3:1) rather than body text (4.5:1).
+	return FocusInk(fallback)
 }
 
 // fitTextWidth truncates `text` (single line) to fit within maxW using the

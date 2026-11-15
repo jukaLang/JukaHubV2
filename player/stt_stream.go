@@ -98,24 +98,26 @@ type sttServeCap struct {
 }
 
 // sttServeCapable reports whether bin has the server mode (its --help names
-// --serve). Runs the binary once per build; not on the main thread.
-func sttServeCapable(bin string) bool {
+// --serve). known is false when the answer did not come in time (a slow card
+// at boot): ask again later rather than take it as "cannot stream". Runs the
+// binary once per build; not on the main thread.
+func sttServeCapable(bin string) (ok, known bool) {
 	info, err := os.Stat(bin)
 	if err != nil {
-		return false
+		return false, true
 	}
 	sttServeCaps.mu.Lock()
 	c, hit := sttServeCaps.m[bin]
 	sttServeCaps.mu.Unlock()
 	if hit && c.size == info.Size() && c.mod.Equal(info.ModTime()) {
-		return c.ok
+		return c.ok, true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, bin, "--help").Output()
-	ok := strings.Contains(string(out), "--serve")
+	ok = strings.Contains(string(out), "--serve")
 	if !ok && ctx.Err() != nil {
-		return false // a slow card at boot: ask again next time
+		return false, false // a slow card at boot: ask again next time
 	}
 	sttServeCaps.mu.Lock()
 	if sttServeCaps.m == nil {
@@ -123,26 +125,36 @@ func sttServeCapable(bin string) bool {
 	}
 	sttServeCaps.m[bin] = sttServeCap{size: info.Size(), mod: info.ModTime(), ok: ok}
 	sttServeCaps.mu.Unlock()
-	return ok
+	return ok, true
 }
 
 // sttServeFiles is the recognizer and model of the first installed package
 // that streams, or "" — an old bundled copy beside the binary does not hide a
-// newer download. Not on the main thread.
-func sttServeFiles() (string, string) {
+// newer download. sure is false when "" may only mean a slow --help (see
+// sttServeCapable). Not on the main thread.
+func sttServeFiles() (bin, model string, sure bool) {
+	sure = true
 	for _, dir := range []string{sttDownloadedDir(), sttBundledDir()} {
-		if bin, model, ok := sttFastFilesIn(dir); ok && sttServeCapable(bin) {
-			return bin, model
+		b, m, ok := sttFastFilesIn(dir)
+		if !ok {
+			continue
 		}
+		serves, known := sttServeCapable(b)
+		if serves {
+			return b, m, true
+		}
+		sure = sure && known
 	}
-	return "", ""
+	return "", "", sure
 }
 
 // sttServeProbe is what the main thread knows about streaming here: unknown
-// until a goroutine has looked (sttServeUsable starts one).
+// until a goroutine has looked (sttServeUsable starts one). retryAt
+// (UnixNano) paces a look that could not tell.
 var sttServeProbe struct {
 	state   atomic.Int32
 	running atomic.Bool
+	retryAt atomic.Int64
 }
 
 // sttServeUsable reports whether the installed package streams. Main thread
@@ -162,15 +174,21 @@ func sttServeUsable() bool {
 
 // sttServeProbeStart looks once in the background.
 func sttServeProbeStart() {
-	if !sttServeProbe.running.CompareAndSwap(false, true) {
+	if time.Now().UnixNano() < sttServeProbe.retryAt.Load() ||
+		!sttServeProbe.running.CompareAndSwap(false, true) {
 		return
 	}
 	go func() {
 		defer sttServeProbe.running.Store(false)
-		if bin, _ := sttServeFiles(); bin != "" {
+		switch bin, _, sure := sttServeFiles(); {
+		case bin != "":
 			sttServeProbe.state.Store(sttServeYes)
-		} else {
+		case sure:
 			sttServeProbe.state.Store(sttServeNo)
+		default:
+			// --help was too slow to answer: stay unknown and look again,
+			// instead of turning streaming (and Hey Juka) off for the run.
+			sttServeProbe.retryAt.Store(time.Now().Add(10 * time.Second).UnixNano())
 		}
 	}()
 }
@@ -264,8 +282,13 @@ func sttServerGet() (*sttServer, error) {
 	if avail := sttMemAvailable(); avail > 0 && avail < sttServeStartAvail {
 		return nil, errSTTMemory
 	}
-	bin, model := sttServeFiles()
+	bin, model, sure := sttServeFiles()
 	if bin == "" {
+		if !sure {
+			// A slow --help: look again in 10 s, not on every clip until then.
+			sttServeProbe.retryAt.Store(time.Now().Add(10 * time.Second).UnixNano())
+			return nil, errSTTServeDown
+		}
 		sttServeProbe.state.Store(sttServeNo)
 		return nil, errSTTNoServe
 	}
@@ -296,6 +319,7 @@ func sttServerStart(bin, model string) (*sttServer, error) {
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = in.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
@@ -487,6 +511,16 @@ func sttServeStop(why string) {
 		s.stop()
 		logInfo("voice", "offline speech server stopped: %s", why)
 	}
+}
+
+// sttServeLoaded reports a server running or starting. It never waits for
+// the lock (a start may hold it for seconds), so the main thread may ask.
+func sttServeLoaded() bool {
+	if !sttServe.mu.TryLock() {
+		return true // a start or a stop is under way
+	}
+	defer sttServe.mu.Unlock()
+	return sttServe.srv != nil && !sttServe.srv.dead()
 }
 
 // sttServeReap stops the server when it is not needed: idle past
@@ -806,6 +840,50 @@ func sttParseResult(body []byte) (string, []sttWord) {
 		return "", nil
 	}
 	return strings.TrimSpace(r.Text), r.Result
+}
+
+// sttServeClipChunk is the audio per request when a whole clip goes to the
+// warm server (one second).
+const sttServeClipChunk = 32000
+
+// sttServeTranscribe recognizes a recorded 16 kHz mono WAV with the warm
+// server (started when none runs): the Voice command page, voice shortcuts
+// and English dictation then skip the one-shot recognizer's model load.
+// errSTTNoServe: the package cannot stream. Not on the main thread.
+func sttServeTranscribe(ctx context.Context, wav []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err // given up already: do not load the server for it
+	}
+	switch sttServeProbe.state.Load() {
+	case sttServeNo:
+		return "", errSTTNoServe
+	case sttServeUnknown:
+		// --help was slow a moment ago: the one-shot recognizer now, the
+		// server again after the pause sttServeProbeStart keeps.
+		if time.Now().UnixNano() < sttServeProbe.retryAt.Load() {
+			return "", errSTTNoServe
+		}
+	}
+	if !sttSupported() {
+		return "", errSTTNoServe
+	}
+	// vkEncodeWAV's header, as vosk-cli's one-shot mode checks it.
+	if len(wav) < 44 || string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" ||
+		binary.LittleEndian.Uint16(wav[20:]) != 1 || binary.LittleEndian.Uint16(wav[22:]) != 1 ||
+		binary.LittleEndian.Uint32(wav[24:]) != 16000 || binary.LittleEndian.Uint16(wav[34:]) != 16 ||
+		string(wav[36:40]) != "data" {
+		return "", errors.New("offline speech: expected mono 16-bit 16 kHz WAV")
+	}
+	pcm := wav[44:]
+	// One goroutine owns this stream's Feed and Finish.
+	st := sttStreamStart(sttStreamOpts{})
+	for len(pcm) > 0 {
+		n := min(len(pcm), sttServeClipChunk)
+		st.Feed(pcm[:n])
+		pcm = pcm[n:]
+	}
+	st.Finish()
+	return st.Result(ctx)
 }
 
 // sttStreamChoice keeps the local transcript ready when it will be used first.

@@ -2616,6 +2616,70 @@ picture on screen to Juka; the transcript upload is compressed (FLAC or Opus)
 when the firmware's ffmpeg has the encoder, so a ten-minute clip goes faster
 on slow Wi-Fi.
 
+### SYS-22 — JukaHub OS on a device (P1, M) [HW]
+**Why.** JukaHub OS (2026-11-14) — a private mount namespace with read-only
+bind-mounted layers, a re-exec into it, kernel drivers loaded only on an exact
+vermagic match and whitelisted sysfs values, journaled in `/tmp/jukaos` and
+undone on quit — was written and reviewed without a device, Go toolchain or the
+TrimUI kernel config.
+**Where.** `jukaos.go` (layer.json checks, journal), `jukaos_linux.go`
+(`jukaosSessionEntry`, namespace, binds, modules), `jukaos_settings.go`
+(Settings → JukaHub OS, escape hatch, OS guard), `launch.sh` (the os.json
+grep), `childenv.go`; log tag `jukaos`; docs/JUKAHUB_OS.md.
+**Done when.** On a Smart Pro and a Brick (stock 1.1.x and CrossMix):
+`unshare(CLONE_NEWNS)` works as root (log "OS session: N layer(s), M bind(s)";
+`/proc/<pid>/ns/mnt` differs from MainUI's parent); "/" accepts MS_REC|MS_SLAVE,
+a bind is invisible from an SSH shell outside, a USB stick plugged in during a
+session shows inside; a file bind from the FAT/exFAT card over `/usr/lib/x.so`
+works, is executable (no `noexec`) and remounts read-only; the exec keeps the
+pid (launch.sh's wait and `.last-exit`); after a failed exec the setns back
+works on 4.9; `finit_module` exists (else the init_module fallback), the
+vermagic of a stock `.ko` matches the parser, and module signing is not forced
+(else the log says so); `drop_caches` is writable; a CrossMix RetroArch started
+with the built-in "JukaHub libraries for games" layer and a newer libSDL2 in
+`libs/` maps it (`/proc/<ra>/maps`); Select/B held through the power-on boot
+gives the stock menu (physical B vs SDL B after the swaps); Return to <firmware>
+brings MainUI back and a reboot is stock; a card made from
+`JukaHub-OS-Trimui.zip` (`trimui/make-os-package.sh`) boots into JukaHub OS
+on its first power-on without the app ever being opened.
+
+### SYS-23 — JukaHub OS, second round (P2, M)
+**Why.** The first round (2026-11-14) left out what needed device data.
+**Where.** `jukaos*.go`, `emulators.go` (`deviceRetroArchCoresDir`),
+`gamelaunch_firmware.go` (`firmwareROMArg`), `elfcompat.go`,
+`ports_catalog.go`, `files_extract_ui.go`, `home_power.go`.
+**Done when.** A generated per-firmware paths layer dir-binds one stable tree
+(RetroArch cores/system/saves, `Emus/*/`) so RetroArch, the firmware's emulators
+and netplay stop guessing among five roots and MainUI's `../../Roms` form;
+`elfcompat.go`/`ports_catalog.go` also search the session's
+`JUKAHUB_OS_CHILD_LIBS`, so a game a layer fixes no longer reports a missing
+library; the Files archive sheet offers **Install as JukaHub OS layer** for a zip
+with `layer.json`; driver and value changes apply live where possible instead of
+**Restart JukaHub OS**; a per-session report page lists what was bound, loaded
+and skipped; the power card can restart JukaHub OS.
+
+### SYS-24 — JukaHub OS image on plastron, TortOS's Linux (P3, L) [HW]
+**Why.** Juka (2026-11-15): "base drivers on TortOS (or ChaOS) so we can have
+speed up for the OS". TortOS 2 and ChaOS boot the Brick to their menu in about
+1.9 s because the card is the whole system: plastron (github.com/tarikbc/plastron,
+now ZyperOS) builds U-Boot + TF-A and Allwinner's 4.9.191 A133 kernel (Creality
+Sonic Pad SDK + patches: mainline exFAT, charger) from source. Their modules
+cannot be JukaHub OS layers on the stock kernel (vermagic/CRCs); the Speed
+layer (`trimui/os-layers/speed`) is the stock-kernel part. Research here was
+from search snippets only: github.com is not on this workspace's egress
+allowlist, so plastron's tree, board files and licence were not read.
+**Where.** New: a `jukaos-image.yml` workflow (manual) that checks plastron out
+at a pinned commit, `make brick-bootloader brick-kernel`, and assembles
+`JukaHub-OS-Brick.img.xz` with JukaHub as the shell; `docs/JUKAHUB_OS.md`.
+**Done when.** The licences of plastron and TortOS allow redistribution (else
+stop); a Brick boots the image into JukaHub (time it against TortOS's 1.9 s)
+with a working video path for SDL2 — the PowerVR GE8300 userspace copied from
+the owner's own stock firmware at install (as TortOS's PROPRIETARY.txt does),
+or SDL2 KMSDRM/fbdev with software rendering if no GPU is reachable — plus
+Wi-Fi firmware, audio, sticks, LEDs and battery; taking the card out still
+boots the stock system; then a Smart Pro board (device tree, 1280×720 panel,
+inputs) is scoped.
+
 ---
 
 ## Sound and haptics (SND)
@@ -2767,6 +2831,19 @@ piper from `required/`), the tools installer (`patch_engine.go`, `tools.go`).
 linux-arm64 (flite, or a low-quality piper voice) into `required/`, checked
 like the other tools; its real-time factor and memory on the A133P are
 recorded; **This device** then appears in Settings → Voice & AI → Voice.
+
+### SND-16 — Juka on the stick lights, on a device (P2, S) [HW]
+**Why.** The Juka layer on the stick lights (2026-11-14, `ledjuka.go`, setting
+`led_juka`) changes hue only through dark so the TrimUI `led_anim` rings do not
+blink on a re-arm; whether a re-arm at a near-zero scale is really invisible,
+and whether the firmware lets JukaHub take the rings mid-game, was not seen.
+**Where.** `ledjuka.go`, `ledanim.go` (`applyLEDAnim`), `ledsync.go`.
+**Done when.** On a Smart Pro: listening, thinking, speaking and answer phases
+show without a flash between them (else write the scale before the re-arm);
+with the lights off and **Always**, the rings light for Juka and return to the
+firmware colour; the in-game assistant over a RetroArch game lights them and
+the game-time colour comes back when it closes; levels feel right at the
+default Mic sensitivity.
 
 ---
 
@@ -2959,6 +3036,23 @@ write: `DEPS_PREFIX`, `/tmp/jukahub-*`, `player/native/bin` through `/src`).
 (`chroot --userspec`) that owns only the folders they write, `create` and the
 package installs stay root, and the builds still pass.
 **Verify.** One helper and one Box64 run on GitHub, and `id` in a build log.
+
+### SEC-30 — Startup lock, the remaining paths (P2, M)
+**Why.** The startup lock (2026-11-14, `bootlock*.go`) covers the screen, the
+companion (HTTP 423), FTP/SSH, voice and Quick Settings, but not everything
+that can act on a locked device.
+**Where.** `peernet.go`, `livebuilder.go`, the Steam OpenID return
+(`/steam/return`), `powersleep.go` and the parked game loop in `main.go`,
+the Reset settings, backup restore and config-history paths, plugin startup
+hooks, `bootlock_ui.go`.
+**Done when.** Paired devices' save sync and hand-off and the Live Builder are
+refused while locked; a Steam sign-in cannot complete behind the lock; with
+"after sleep" a game paused by the sleep stays paused under the lock instead of
+resuming playable; Reset settings, a backup restore or a config rollback cannot
+remove or change the lock (or "Lock when") without the code; plugin startup
+actions wait for the unlock; a PC mouse can click the lock's power choices; the
+PBKDF2 cost is timed on the A133 ("Checking…" under about a second, else lower
+the stored iteration count for new hashes).
 
 ---
 
@@ -3269,6 +3363,22 @@ bounded list (never the same twice in a row).
 ### SHELL-10 — Clock faces and a real standby screen (P3, M)
 **Done when.** The screensaver and dock offer three clock faces (analogue,
 digital, minimal) with OLED-safe pixel shift; the choice is a theme-able token.
+
+### SHELL-11 — Close all apps & games on a device (P2, S) [HW]
+**Why.** Close all (2026-11-14, `closeall*.go`) finds untracked apps by a
+`/proc` name and folder table and never touches JukaHub's group, its ancestors,
+the paused firmware loops (`/tmp/jukahub-paused`) or the offline AI servers;
+the names were taken from the code, not from a running handheld.
+**Where.** `closeall_linux.go` (`closeAllRules`, `closeAllNeverRules`),
+`closeall.go`, `gamemenu.go`.
+**Done when.** On a Smart Pro (stock and CrossMix): Close all over a RetroArch
+game, a PortMaster port, a Wine program under Box64 and Remote Play closes each
+(RetroArch saves on the interrupt; an orphan from a killed JukaHub saves on
+SIGTERM) and names them in the toast; no firmware process matches a rule;
+**Close background apps** from the in-game menu leaves the game paused and
+resumable and the paused pids stopped; the 9-row in-game card fits on the
+Brick and the Smart Pro; "Close apps and try again" after an offline-AI memory
+error answers the question.
 
 ---
 
@@ -4208,6 +4318,7 @@ From the 2026-11-11 tester pass: HW-3 (with GPU-5) and MED-33.
 From the Groq key, L2 Edit Home and square tiles pass: HW-4.
 From the voice speed, Hey Juka, voice settings, headset and PPSSPP pass: HW-5.
 From the glass, Settings, console themes and screen-vision pass: HW-6.
+From the JukaHub OS, startup lock, close-all and Juka lights pass: SYS-22, SND-16, SHELL-11.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 

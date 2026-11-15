@@ -606,6 +606,12 @@ func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		s.noteSuccess(addr)
+		// The startup lock (bootlock.go): nothing acts from the phone until
+		// the handheld is unlocked. The page itself still loads.
+		if startupLocked() {
+			http.Error(w, "JukaHub is locked", http.StatusLocked)
+			return
+		}
 		next(w, r)
 	}
 }

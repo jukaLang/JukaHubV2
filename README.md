@@ -192,6 +192,13 @@ If JukaHub does not appear in **Apps**, reboot the device — the stock launcher
 only scans `Apps/` at boot. Also check that the folder is exactly
 `Apps/JukaHub` and that `launch.sh` is inside it.
 
+**Want JukaHub as the handheld's OS?** Download **`JukaHub-OS-Trimui.zip`**
+instead and extract it to the **root** of the card (merge the `Apps` and
+`System` folders). The handheld then powers on straight into
+[JukaHub OS](docs/JUKAHUB_OS.md); the stock system is never replaced, holding
+**Select** while the logo boots gives the stock menu once, and Settings →
+JukaHub OS → **Boot into JukaHub OS** off makes it an app again.
+
 > **Here to build it, not just use it?** Clone to a running build in about five
 > minutes with [docs/QUICK_START.md](docs/QUICK_START.md), pick up work labelled
 > [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue),
@@ -348,6 +355,9 @@ D-pad moves, **A** confirms, **B** goes back, **X** and **Y** are the secondary
 and tertiary actions, **L1/R1** move between sections and pages, **Start** opens
 the Start menu — scenes in one group, games, tools and device actions in the
 others, so switching screen or taking a screenshot is two presses away.
+
+To open **Quick Settings** (Wi-Fi, Bluetooth, volume, brightness, LED lights,
+Close all apps and more), hold **Select**. Press **Select** or **B** to close it.
 
 To leave the app, hold **Select + Start** together. JukaHub saves, shows a
 teardown card while it stops games, servers and caches, then returns to the

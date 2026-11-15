@@ -117,6 +117,9 @@ func shutdownSteps(config *Config) []shutdownStep {
 			return "cache database closed", nil
 		}},
 	}
+	// JukaHub OS undoes its drivers and values beside the caches, after the
+	// games are gone (jukaos_settings.go; nothing is added in App mode).
+	steps = jukaosShutdownStepAdd(steps)
 	if shutdownSyncs() {
 		steps = append(steps, shutdownStep{label: "Writing everything to the card", group: 3, timeout: 1500 * time.Millisecond, fn: func() (string, error) {
 			bootSyncFilesystems()

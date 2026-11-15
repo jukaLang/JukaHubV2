@@ -11,12 +11,49 @@ import (
 	"strings"
 )
 
+// ppssppTrimuiButtons is the pad half of controls.ini for the TrimUI pad as
+// PPSSPP's SDL front end reports it (device 10 = the first game controller).
+// Pause is 10-4: SDL's Guide button — the handheld's Menu key — arrives as
+// NKCODE_BACK (4), so Menu opens PPSSPP's pause menu, whose Exit comes back to
+// JukaHub (--pause-menu-exit). It was 10-109 (KEYCODE_BUTTON_SELECT), a code
+// the SDL front end never sends, so nothing on the pad paused the game or left
+// it (Juka, 2026-11-15: "the screen went black and I had to restart").
 var ppssppTrimuiButtons = [...]struct{ key, mapping string }{
 	{"Up", "10-19"}, {"Down", "10-20"}, {"Left", "10-21"}, {"Right", "10-22"},
 	{"Circle", "10-190"}, {"Cross", "10-189"}, {"Square", "10-191"}, {"Triangle", "10-188"},
 	{"Start", "10-197"}, {"Select", "10-196"}, {"L", "10-193"}, {"R", "10-192"},
-	{"Pause", "10-109"},
+	{"Pause", "10-4"},
 	{"An.Up", "10-4003"}, {"An.Down", "10-4002"}, {"An.Left", "10-4001"}, {"An.Right", "10-4000"},
+}
+
+// ppssppTrimuiPadMapping is the SDL game-controller mapping of the TrimUI's
+// own pad ("TRIMUI Player1", an Xbox 360 id), the same one main.go adds for
+// JukaHub. The launcher hands it to PPSSPP in SDL_GAMECONTROLLERCONFIG, so the
+// pad is a game controller to PPSSPP even when the package's controller
+// database lacks it — without one, PPSSPP's SDL front end ignores the pad and
+// only the keyboard mapping is left.
+const ppssppTrimuiPadMapping = "030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,"
+
+// ppssppHasMapping reports whether a controls.ini value (mappings separated
+// by commas) holds mapping itself.
+func ppssppHasMapping(value, mapping string) bool {
+	for _, part := range strings.Split(value, ",") {
+		if strings.TrimSpace(part) == mapping {
+			return true
+		}
+	}
+	return false
+}
+
+// ppssppNeedsPadMapping reports whether a button's value lacks its TrimUI pad
+// mapping: no pad code at all, or — for Pause — the dead 10-109 an older
+// JukaHub wrote without the Menu key beside it. A player who maps Pause to
+// another pad button in PPSSPP keeps that.
+func ppssppNeedsPadMapping(key, value, mapping string) bool {
+	if key == "Pause" && ppssppHasMapping(value, "10-109") {
+		return !ppssppHasMapping(value, mapping)
+	}
+	return !strings.Contains(value, "10-")
 }
 
 // ppssppINIValue reads one key from a named section. A false result means the
@@ -116,7 +153,7 @@ func ppssppPrepareTrimuiHome(sys, platform string) {
 	// code, including a keyboard-only or partly mapped older HOME.
 	var missing []struct{ key, mapping string }
 	for _, button := range ppssppTrimuiButtons {
-		if value, _ := ppssppINIValue(lines, "ControlMapping", button.key); !strings.Contains(value, "10-") {
+		if value, _ := ppssppINIValue(lines, "ControlMapping", button.key); ppssppNeedsPadMapping(button.key, value, button.mapping) {
 			missing = append(missing, button)
 		}
 	}

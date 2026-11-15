@@ -418,11 +418,11 @@ func (p *webParser) considerPictureSource(attrs string) {
 	if typ := htmlAttrValue(htmlTagAttribute(attrs, "type")); typ != "" && !webImageTypeSupported(typ) {
 		return
 	}
-	srcset := htmlAttrValue(htmlTagAttribute(attrs, "srcset"))
+	srcset := webImageAttrValue(attrs, "data-srcset", "srcset")
 	if srcset == "" {
 		return
 	}
-	picked := p.webSrcsetPickForImage(srcset, htmlAttrValue(htmlTagAttribute(attrs, "sizes")))
+	picked := p.webSrcsetPickForImage(srcset, webImageAttrValue(attrs, "data-sizes", "sizes"))
 	if picked == "" {
 		return
 	}
@@ -439,13 +439,34 @@ func (p *webParser) webImageSource(attrs string) string {
 	if n := len(p.pictures); n > 0 && p.pictures[n-1].selected {
 		return p.pictures[n-1].chosen
 	}
-	if srcset := htmlAttrValue(htmlTagAttribute(attrs, "srcset")); srcset != "" {
-		picked := p.webSrcsetPickForImage(srcset, htmlAttrValue(htmlTagAttribute(attrs, "sizes")))
+	// Lazy-loading markup keeps the real rendition in data-* attributes and
+	// leaves src/srcset pointing at a tiny placeholder (often a transparent
+	// GIF). Prefer the data attributes so the reader paints the actual image
+	// instead of an empty box, then fall back to the ordinary source.
+	if srcset := webImageAttrValue(attrs, "data-srcset", "srcset"); srcset != "" {
+		picked := p.webSrcsetPickForImage(srcset, webImageAttrValue(attrs, "data-sizes", "sizes"))
 		if resolved := p.webImageURL(picked); picked != "" && resolved != "" {
 			return resolved
 		}
 	}
-	return p.webImageURL(htmlAttrValue(htmlTagAttribute(attrs, "src")))
+	for _, name := range []string{"data-src", "data-original", "data-lazy-src", "src"} {
+		if resolved := p.webImageURL(htmlAttrValue(htmlTagAttribute(attrs, name))); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
+}
+
+// webImageAttrValue returns the first non-empty HTML attribute among names.
+// Lazy loaders use several spellings for the same image URL; checking them in
+// one place keeps <img>, <source> and their data-* forms in agreement.
+func webImageAttrValue(attrs string, names ...string) string {
+	for _, name := range names {
+		if value := htmlAttrValue(htmlTagAttribute(attrs, name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // webImageURL resolves an img src into either a data:image/...;base64 URI or
@@ -795,18 +816,27 @@ func fetchWebImages(doc *webDocument) {
 		seen[b.ImageSrc] = true
 		srcs = append(srcs, b.ImageSrc)
 	}
-	for _, b := range doc.Blocks {
-		for i := 0; i < b.Style.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
-			src := b.Style.BackgroundLayers[i].Image
-			if src == "" || seen[src] {
-				continue
-			}
-			if len(srcs) >= webMaxImagesPerPage {
-				break
+	addBackground := func(st webStyle) {
+		add := func(src string) {
+			if src == "" || seen[src] || len(srcs) >= webMaxImagesPerPage {
+				return
 			}
 			seen[src] = true
 			srcs = append(srcs, src)
 		}
+		add(st.BackgroundImage)
+		for i := 0; i < st.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
+			add(st.BackgroundLayers[i].Image)
+		}
+	}
+	for _, b := range doc.Blocks {
+		addBackground(b.Style)
+	}
+	// A wrapper with a background image usually produces no block of its
+	// own (a hero section is exactly that), so its style lives only in the
+	// document's box table. Missing that table left CSS images unfetched.
+	for _, box := range doc.Boxes {
+		addBackground(box.style)
 	}
 	// Video play cards (YouTube embeds) carry a thumbnail URL on the block;
 	// the same pass fetches it so a card paints the video's real artwork with
@@ -992,9 +1022,47 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 	if x < padX {
 		x = padX
 	}
+	imageBox := sdl.Rect{X: x, Y: idx * rowH, W: w, H: h}
+	// A replaced element still paints its own background and border. This is
+	// visible with object-fit: contain, where the letterbox belongs to the
+	// element's background rather than the image's transparent margin.
+	if !b.Style.Invisible {
+		radius := int32(math.Round(b.Style.Radius * scale))
+		if half := min32(w, h) / 2; radius > half {
+			radius = half
+		}
+		if b.Style.HasBg {
+			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
+				Rect: imageBox, Color: webFadeColor(b.Style.Background, l.doc.Paper, b.Style),
+				Radius: radius, Z: b.ZIndex,
+			})
+		}
+		if b.Style.HasGradient && b.Gradient.Stops != nil {
+			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
+				Rect: imageBox, Color: webGradientAverage(b.Gradient),
+				Gradient:    webFadeGradient(b.Gradient, l.doc.Paper, b.Style),
+				HasGradient: true, Radius: radius, Z: b.ZIndex,
+			})
+		}
+		if b.BoxBorder || b.BorderLeft || b.BorderRight || b.BorderTop || b.BorderBottom {
+			color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
+			if b.HasBorderColor {
+				color = b.BorderColor
+			}
+			thickness := int32(math.Round(b.BorderWidth * scale))
+			if thickness < 1 {
+				thickness = 1
+			}
+			layout.Rects = append(layout.Rects, webRect{
+				Rect: imageBox, Color: webFadeColor(color, l.doc.Paper, b.Style),
+				Stroke: true, Thickness: thickness, Radius: radius,
+				BorderStyle: b.BorderStyle, Z: b.ZIndex,
+			})
+		}
+	}
 	layout.Images = append(layout.Images, webImagePos{
 		Key:            b.ImageSrc,
-		Rect:           sdl.Rect{X: x, Y: idx * rowH, W: w, H: h},
+		Rect:           imageBox,
 		ObjectFit:      b.Style.ObjectFit,
 		ObjectPosition: b.Style.ObjectPosition,
 		Invisible:      b.Style.Invisible,

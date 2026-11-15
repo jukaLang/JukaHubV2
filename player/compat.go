@@ -1371,6 +1371,13 @@ func coreRetroArchBinary(coresDir string) string {
 			}
 		}
 	}
+	// Another RetroArch build name (ra64.<model>, retroarch64), the way the
+	// wider search (rafind.go) recognises one.
+	for _, root := range []string{filepath.Dir(filepath.Dir(coresDir)), filepath.Dir(coresDir)} {
+		if p := raBinaryIn(root, true); p != "" {
+			return p
+		}
+	}
 	return ""
 }
 

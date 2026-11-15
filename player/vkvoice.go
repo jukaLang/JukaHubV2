@@ -57,6 +57,7 @@ type vkVoiceAction int
 const (
 	vkVoiceNoAction vkVoiceAction = iota
 	vkVoiceOpenKey
+	vkVoiceFreeMemory // close apps (closeall.go)
 )
 
 const (
@@ -561,7 +562,7 @@ func vkVoiceInsert(text string, config *Config) {
 // dial error.
 func vkVoiceErrorText(err error) (string, vkVoiceAction) {
 	if errors.Is(err, errSTTMemory) {
-		return "Close a game to free memory for offline speech", vkVoiceNoAction
+		return "Not enough free memory for offline speech — " + hintKeyFor("A", "") + " closes apps", vkVoiceFreeMemory
 	}
 	if errors.Is(err, errSTTUnavailable) {
 		if relPackRunning(sttPackKey) {
@@ -596,8 +597,11 @@ func vkVoiceErrorText(err error) (string, vkVoiceAction) {
 func vkVoiceRunAction(config *Config) {
 	action := vkVoice.action
 	vkVoice.phase, vkVoice.action = vkVoiceIdle, vkVoiceNoAction
-	if action == vkVoiceOpenKey {
+	switch action {
+	case vkVoiceOpenKey:
 		vkVoiceOpenKeySettings(config)
+	case vkVoiceFreeMemory:
+		closeAllStart(false, nil) // the toast says what came back (closeall.go)
 	}
 }
 

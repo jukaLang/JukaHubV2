@@ -557,11 +557,56 @@ func deviceRetroArchCoresDir() string {
 		ra := filepath.Dir(filepath.Dir(cores))
 		for _, name := range netplayRetroArchNames {
 			if regularFile(filepath.Join(ra, name)) {
+				deviceRetroArchNote(filepath.Join(ra, name), nil)
 				return cores
 			}
 		}
 	}
+	// Nowhere usual: the wider search (rafind.go) — more folders, a running
+	// RetroArch, the paths the launch scripts name, a walk of the card.
+	if loc := raLocateDevice(); loc.Bin != "" {
+		deviceRetroArchNote(loc.Bin, nil)
+		return raCoresDirFor(loc.Bin)
+	}
+	deviceRetroArchNote("", cands)
 	return deviceRACores
+}
+
+// raPathSeen is the last answer each RetroArch lookup logged: they run on
+// every catalog build and launch, so only a change is written down.
+var raPathSeen struct {
+	mu   sync.Mutex
+	last map[string]string
+}
+
+// raPathChanged records value as kind's answer and reports whether it differs
+// from the one recorded before (the first answer always does).
+func raPathChanged(kind, value string) bool {
+	raPathSeen.mu.Lock()
+	defer raPathSeen.mu.Unlock()
+	if raPathSeen.last == nil {
+		raPathSeen.last = map[string]string{}
+	}
+	old, seen := raPathSeen.last[kind]
+	raPathSeen.last[kind] = value
+	return !seen || old != value
+}
+
+// deviceRetroArchNote logs where the handheld's RetroArch was found, or every
+// RetroArch folder looked at when none holds one, once per change.
+func deviceRetroArchNote(bin string, looked []string) {
+	if !raPathChanged("binary", bin) {
+		return
+	}
+	if bin != "" {
+		logInfo("emulators", "RetroArch: %s", bin)
+		return
+	}
+	dirs := make([]string, 0, len(looked))
+	for _, cores := range looked {
+		dirs = append(dirs, filepath.Dir(filepath.Dir(cores)))
+	}
+	logWarn("emulators", "no RetroArch binary (%s) in any of %s", strings.Join(netplayRetroArchNames, ", "), strings.Join(dirs, ", "))
 }
 
 // emuFolderConfigMax bounds how much of an emulator folder's config.json a
@@ -983,6 +1028,7 @@ func emulatorEntries() []emuEntry {
 
 func invalidateEmulatorCache() {
 	invalidateEmuCorePresence()
+	raLocateForget()
 	winExtraDirsCache.mu.Lock()
 	if !winExtraDirsCache.at.IsZero() {
 		// Stale now: the next look refreshes in the background.

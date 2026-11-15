@@ -60,6 +60,8 @@ const (
 	voiceIntentCancel
 	// voiceIntentSetting reads or changes a Settings row (voicesettings.go).
 	voiceIntentSetting
+	// voiceIntentCloseAll closes every app and game (closeall.go).
+	voiceIntentCloseAll
 )
 
 // voiceStepDefault is how far "louder" or "brighter" moves a level, in percent.
@@ -385,6 +387,17 @@ var (
 		"how much battery do i have", "how much battery left", "what is my battery", "battery status",
 		"how is my battery", "check battery", "check the battery", "battery percentage", "battery life",
 		"show battery", "what is the battery", "what is the battery level", "battery left", "battery percent")
+	// voiceCloseAllPhrases close every app and game (closeall.go); over a game
+	// the assistant keeps the game itself.
+	voiceCloseAllPhrases = voiceSet("close all apps", "close all the apps", "close all games", "close all the games",
+		"close all apps and games", "close all apps games", "close all games and apps", "close all", "close everything",
+		"close all running apps", "close running apps", "close all programs", "close background apps",
+		"close all background apps", "close other apps", "close the other apps", "close apps", "kill all apps",
+		"kill all the apps", "kill all games", "kill all the games", "kill all apps and games", "kill everything",
+		"kill all", "kill all processes", "stop all games", "stop all apps", "quit all apps", "quit all games",
+		"quit everything", "exit all apps", "end all apps", "end all games", "free memory", "free up memory",
+		"free some memory", "free up some memory", "free ram", "free up ram", "clear memory", "clear ram",
+		"free memory for the ai", "free up memory for the ai", "make room for the ai")
 )
 
 // voiceOpenVerbs introduce a name. Longest first, so "go to" wins over "go".
@@ -432,6 +445,8 @@ func voiceParse(raw string) voiceIntent {
 		return set(voiceIntentBattery)
 	case voiceQuitPhrases[s]:
 		return set(voiceIntentQuit)
+	case voiceCloseAllPhrases[s]:
+		return set(voiceIntentCloseAll)
 	case voiceScreenOffPhrases[s]:
 		return set(voiceIntentSleepScreen)
 	case voiceQSPhrases[s]:

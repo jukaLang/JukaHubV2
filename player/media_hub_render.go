@@ -20,15 +20,48 @@ import (
 
 // mediaLayout is the screen's geometry for one frame.
 type mediaLayout struct {
-	search  sdl.Rect
-	status  sdl.Rect
-	tabs    sdl.Rect
-	content sdl.Rect
+	search   sdl.Rect
+	status   sdl.Rect
+	tabs     sdl.Rect
+	tabRects [mediaTabCount]sdl.Rect
+	tabRows  int32
+	content  sdl.Rect
+}
+
+// mediaTabsLayout wraps the tab chips inside area. The shortcut group's
+// separator is kept on the row where the group starts; a wrapped group starts
+// at the left gutter without a stray divider.
+func mediaTabsLayout(font *ttf.Font, area sdl.Rect) ([mediaTabCount]sdl.Rect, int32) {
+	var rects [mediaTabCount]sdl.Rect
+	tabs := mediaHubTabs()
+	if font == nil || len(tabs) == 0 {
+		return rects, 0
+	}
+	const gap, sep = int32(10), int32(12)
+	x, y := area.X, area.Y
+	rows := int32(1)
+	for i, t := range tabs {
+		divider := int32(0)
+		if mediaTabShortcut(t) && i > 0 && !mediaTabShortcut(tabs[i-1]) && x > area.X {
+			divider = sep
+		}
+		w := mediaTabChipWidth(font, t, 18)
+		if x > area.X && x+divider+w > area.X+area.W {
+			x = area.X
+			y += area.H + gap
+			rows++
+			divider = 0
+		}
+		x += divider
+		rects[i] = sdl.Rect{X: x, Y: y, W: w, H: area.H}
+		x += w + gap
+	}
+	return rects, rows
 }
 
 // mediaHubComputeLayout lays the screen out on the current canvas: search row,
-// tab strip, then the content down to the footer band.
-func mediaHubComputeLayout(statusW int32) mediaLayout {
+// the wrapped tab rows, then the content down to the footer band.
+func mediaHubComputeLayout(config *Config, statusW int32) mediaLayout {
 	margin := scaleX(homeSideMargin, screenWidth)
 	top := headerBarHeight() + 10
 	bottom := sceneFooterBand().Y - 10
@@ -41,6 +74,10 @@ func mediaHubComputeLayout(statusW int32) mediaLayout {
 		l.status = sdl.Rect{X: margin + l.search.W + 12, Y: top, W: statusW, H: searchH}
 	}
 	l.tabs = sdl.Rect{X: margin, Y: top + searchH + 12, W: full, H: 38}
+	l.tabRects, l.tabRows = mediaTabsLayout(FontForRole(config, TypeLabel), l.tabs)
+	if l.tabRows > 1 {
+		l.tabs.H = l.tabRows*l.tabs.H + (l.tabRows-1)*10
+	}
 	contentY := l.tabs.Y + l.tabs.H + 14
 	l.content = sdl.Rect{X: margin, Y: contentY, W: full, H: bottom - contentY}
 	if l.content.H < 80 {
@@ -96,9 +133,9 @@ func mediaRowPitch(row mediaRow) int32 {
 	return mediaRowCardW() + mediaCardGap
 }
 
-// mediaHitClip is the visible part of the strip or list being drawn: a card
-// scrolled under the search bar or past the tab strip's edge must not take
-// their clicks. The zero rect means no clipping.
+// mediaHitClip is the visible part of the list being drawn: a card scrolled
+// under the search bar or past the viewport's edge must not take its click.
+// The zero rect means no clipping.
 var mediaHitClip sdl.Rect
 
 // mediaAddHit records a click target cut to mediaHitClip; one scrolled wholly
@@ -411,13 +448,13 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 			statusW = limit
 		}
 	}
-	layout := mediaHubComputeLayout(statusW)
+	layout := mediaHubComputeLayout(config, statusW)
 
 	mediaHubDrawSearch(renderer, config, layout.search, online)
 	if statusW > 0 {
 		mediaHubDrawStatusPill(renderer, statusFont, layout.status, statusText, statusKind)
 	}
-	mediaHubDrawTabs(renderer, config, layout.tabs, online)
+	mediaHubDrawTabs(renderer, config, layout, online)
 
 	switch mediaHub.tab {
 	case mediaTabForYou:
@@ -555,71 +592,30 @@ func mediaHubDrawStatusPill(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rec
 	drawText(renderer, font, ellipsize(font, text, rect.X+rect.W-14-textX), textX, rect.Y+(rect.H-th)/2, ink, textAlignLeft)
 }
 
-// mediaTabsScroll is the strip's horizontal offset when its chips do not fit.
-var mediaTabsScroll float64
-
-// mediaHubDrawTabs paints the chip strip. The selected tab is accent glass; the
-// chip under the pad ring lifts with Home's ring. The strip scrolls sideways on
-// a narrow canvas so the focused chip is always whole.
-func mediaHubDrawTabs(renderer *sdl.Renderer, config *Config, rect sdl.Rect, online bool) {
+// mediaHubDrawTabs paints the wrapped chip rows. The selected tab is accent
+// glass; the chip under the pad ring lifts with Home's ring. Every chip has a
+// rect inside the content gutter, so no control is left off the canvas.
+func mediaHubDrawTabs(renderer *sdl.Renderer, config *Config, l mediaLayout, online bool) {
 	font := FontForRole(config, TypeLabel)
 	if font == nil {
 		return
 	}
 	tabs := mediaHubTabs()
-	glyph := int32(18)
-	gap := int32(10)
-	// Measure the strip.
-	total := int32(0)
-	focusX, focusW := int32(0), int32(0)
+	const glyph = int32(18)
 	for i, t := range tabs {
-		w := mediaTabChipWidth(font, t, glyph)
-		if mediaTabShortcut(t) && i > 0 && !mediaTabShortcut(tabs[i-1]) {
-			total += 12
+		chip := l.tabRects[i]
+		if chip.W <= 0 {
+			continue
 		}
-		if (mediaHub.zone == mediaZoneTabs && i == mediaHub.tabFocus) || (mediaHub.zone != mediaZoneTabs && t == mediaHub.tab) {
-			focusX, focusW = total, w
-		}
-		total += w + gap
-	}
-	target := mediaTabsScroll
-	if focusX-int32(target) < 0 {
-		target = float64(focusX)
-	}
-	if focusX+focusW-int32(target) > rect.W {
-		target = float64(focusX + focusW - rect.W)
-	}
-	if max := float64(total - gap - rect.W); target > max {
-		target = max
-	}
-	if target < 0 {
-		target = 0
-	}
-	mediaTabsScroll += (target - mediaTabsScroll) * 0.35
-	if d := target - mediaTabsScroll; d < 1 && d > -1 {
-		mediaTabsScroll = target
-	}
-
-	clip := sdl.Rect{X: rect.X - 8, Y: rect.Y - 8, W: rect.W + 16, H: rect.H + 16}
-	renderer.SetClipRect(&clip)
-	mediaHitClip = rect
-	x := rect.X - int32(mediaTabsScroll)
-	for i, t := range tabs {
-		if mediaTabShortcut(t) && i > 0 && !mediaTabShortcut(tabs[i-1]) {
+		if mediaTabShortcut(t) && i > 0 && !mediaTabShortcut(tabs[i-1]) && l.tabRects[i-1].Y == chip.Y {
 			setDrawColor(renderer, glassHairline())
-			renderer.FillRect(&sdl.Rect{X: x + 1, Y: rect.Y + 8, W: 1, H: rect.H - 16})
-			x += 12
+			renderer.FillRect(&sdl.Rect{X: chip.X - 11, Y: chip.Y + 8, W: 1, H: chip.H - 16})
 		}
-		w := mediaTabChipWidth(font, t, glyph)
-		chip := sdl.Rect{X: x, Y: rect.Y, W: w, H: rect.H}
 		selected := t == mediaHub.tab
 		focused := mediaHub.zone == mediaZoneTabs && i == mediaHub.tabFocus && !mediaHub.sheet.open && !mediaHub.confirm.open
 		mediaDrawTabChip(renderer, font, chip, t, selected, focused, online, glyph)
 		mediaAddHit(mediaHit{kind: mediaHitTab, a: i, rect: chip})
-		x += w + gap
 	}
-	mediaHitClip = sdl.Rect{}
-	renderer.SetClipRect(nil)
 }
 
 // mediaTabChipWidth measures one chip: icon, label and the Downloads count.

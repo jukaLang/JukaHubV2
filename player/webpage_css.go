@@ -249,7 +249,14 @@ func (g webGradient) At(t float64) sdl.Color {
 		if span <= 0 {
 			return next.Color
 		}
-		return lerpColor(prev.Color, next.Color, float32((t-prev.Pos)/span))
+		f := float32((t - prev.Pos) / span)
+		color := lerpColor(prev.Color, next.Color, f)
+		// lerpColor deliberately keeps the start alpha for the app's UI ramps,
+		// but a CSS gradient often changes only alpha: a hero overlay written
+		// as rgba(10,30,60,.8) -> rgba(10,30,60,.4) must fade the photograph
+		// through, not paint both stops at the first stop's opacity.
+		color.A = uint8(int(prev.Color.A) + int(float32(int(next.Color.A)-int(prev.Color.A))*f))
+		return color
 	}
 	return g.Stops[last].Color
 }

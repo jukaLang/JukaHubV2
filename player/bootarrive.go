@@ -518,7 +518,7 @@ func bootArriveBrandBox() sdl.Rect {
 	if bw <= 0 || bh <= 0 {
 		return sdl.Rect{}
 	}
-	return sdl.Rect{X: StatusBarMargin, Y: (headerBarHeight() - bh) / 2, W: bw, H: bh}
+	return sdl.Rect{X: headerBrandX(), Y: (headerBarHeight() - bh) / 2, W: bw, H: bh}
 }
 
 // bootArriveTarget is a screen-sized render target with linear filtering (see

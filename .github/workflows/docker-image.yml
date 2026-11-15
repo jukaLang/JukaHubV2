@@ -93,6 +93,20 @@ jobs:
       contents: read
       actions: read
 
+  # The optional offline AI (llama-cli, llama-server and the SmolLM2 model),
+  # on an arm64 runner of its own from the start, like Box64: nothing on the
+  # way to the release waits for it, and attach-offline-ai below puts
+  # JukaHub-OfflineAI-linux-arm64.zip on the release whenever it is ready. (As
+  # the last step of the helpers' job, a llama.cpp build held up
+  # JukaHub-Trimui.zip, and the run sat on "Build optional offline AI".)
+  build-offline-ai:
+    name: Offline AI
+    uses: ./.github/workflows/offline-ai.yml
+    # What its job asks for, as above.
+    permissions:
+      contents: read
+      actions: read
+
   # The handheld binary (linux/arm64, cgo + SDL2), compiled in the community
   # TrimUI toolchain image, which carries what a binary must be linked against
   # to start on the handheld: the device SDK sysroot, the Linaro aarch64 gcc and
@@ -355,13 +369,6 @@ jobs:
           name: offline-stt
           path: offline-stt
 
-      - name: Download optional offline AI
-        timeout-minutes: 10
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: offline-llm
-          path: offline-llm
-
       - name: Package Artifacts
         id: package
         run: |
@@ -431,12 +438,6 @@ jobs:
             echo "::error title=Offline speech::the verified recognizer is missing or did not verify; refusing to publish a release without JukaHub-OfflineSpeech-linux-arm64.zip"
             exit 1
           fi
-          if sh player/native/package-llm.sh offline-llm JukaHub-OfflineAI-linux-arm64.zip; then
-            echo "llm_package=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error title=Offline AI::the verified on-device model is missing"
-            exit 1
-          fi
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
           cp player/launch.sh JukaHub-Trimui/
@@ -451,6 +452,16 @@ jobs:
           # to decide whether a newer release exists.
           printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui/release-info.json
           zip -r JukaHub-Trimui.zip JukaHub-Trimui/
+          # JukaHub OS: the same app laid out as an SD-card root that boots
+          # straight into JukaHub OS (os/os.json on, the boot hook already in
+          # System/starts; player/trimui/make-os-package.sh, docs/JUKAHUB_OS.md).
+          # Optional: a failure warns and the release goes out without it.
+          if bash player/trimui/make-os-package.sh JukaHub-Trimui JukaHub-OS-Trimui.zip; then
+            echo "os_package=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f JukaHub-OS-Trimui.zip
+            echo "::warning title=JukaHub OS::the OS package could not be made; this release goes out without JukaHub-OS-Trimui.zip"
+          fi
 
       - name: Upload Release Assets
         uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
@@ -458,6 +469,22 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-Trimui.zip
           asset_name: JukaHub-Trimui.zip
+          asset_content_type: application/zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload the JukaHub OS package
+        # Optional like the helpers: publish-release waits only for the app
+        # archives. Bounded, because continue-on-error does not end a step that
+        # hangs.
+        if: steps.package.outputs.os_package == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
+        with:
+          upload_url: ${{ needs.create-tag.outputs.upload_url }}
+          asset_path: ./JukaHub-OS-Trimui.zip
+          asset_name: JukaHub-OS-Trimui.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -502,18 +529,6 @@ jobs:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-OfflineSpeech-linux-arm64.zip
           asset_name: JukaHub-OfflineSpeech-linux-arm64.zip
-          asset_content_type: application/zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload the offline AI package
-        if: steps.package.outputs.llm_package == 'true'
-        timeout-minutes: 15
-        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
-        with:
-          upload_url: ${{ needs.create-tag.outputs.upload_url }}
-          asset_path: ./JukaHub-OfflineAI-linux-arm64.zip
-          asset_name: JukaHub-OfflineAI-linux-arm64.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -588,6 +603,73 @@ jobs:
               --clobber --repo "$GITHUB_REPOSITORY" 2> "$RUNNER_TEMP/upload.err"; then
             cat "$RUNNER_TEMP/upload.err"
             echo "::warning title=Box64::could not attach JukaHub-Wine-linux-arm64.zip to $TAG_NAME ($(head -n 1 "$RUNNER_TEMP/upload.err")); JukaHub installs the pack from an older release. With immutable releases on, a release published before the pack was ready cannot take it."
+          fi
+
+  # The optional offline AI, attached the same way as the Box64 pack and for
+  # the same reasons: JukaHub installs it from the newest release that carries
+  # it (offline_ai_install.go), so publish-release does not wait for it, and
+  # the job that builds llama.cpp as root never holds a token that can write
+  # to the repository. When that build was reused (the usual case) this is
+  # done within minutes, long before the app archives.
+  attach-offline-ai:
+    name: Attach the offline AI package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: [create-tag, build-offline-ai]
+    # Whatever became of the build: without it this only warns.
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
+    permissions:
+      contents: write   # attach the package to the release
+    steps:
+      - name: Check out package-llm.sh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The packager and build-llm.sh, which holds the model's pins;
+          # nothing here pushes.
+          sparse-checkout: |
+            player/native/package-llm.sh
+            player/native/build-llm.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Download optional offline AI
+        # Absent when its build failed. Bounded, because continue-on-error
+        # does not end a step that hangs.
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-llm
+          path: offline-llm
+
+      - name: Package the offline AI
+        id: pack
+        # package-llm.sh checks the model against build-llm.sh's pins and both
+        # runners against BUILDINFO.txt, then zips them with a SHA256SUMS that
+        # JukaHub checks before it installs the package.
+        run: |
+          if [ ! -d offline-llm ]; then
+            echo "::warning title=Offline AI::not built for this run; this release goes out without JukaHub-OfflineAI-linux-arm64.zip (see the Offline AI job)"
+          elif sh player/native/package-llm.sh offline-llm JukaHub-OfflineAI-linux-arm64.zip; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f JukaHub-OfflineAI-linux-arm64.zip
+            echo "::warning title=Offline AI::the offline AI files did not verify; this release goes out without JukaHub-OfflineAI-linux-arm64.zip"
+          fi
+
+      - name: Upload the offline AI package
+        # --clobber: a re-run replaces what an earlier attempt attached.
+        if: steps.pack.outputs.ready == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
+        run: |
+          if ! gh release upload "$TAG_NAME" JukaHub-OfflineAI-linux-arm64.zip \
+              --clobber --repo "$GITHUB_REPOSITORY" 2> "$RUNNER_TEMP/upload.err"; then
+            cat "$RUNNER_TEMP/upload.err"
+            echo "::warning title=Offline AI::could not attach JukaHub-OfflineAI-linux-arm64.zip to $TAG_NAME ($(head -n 1 "$RUNNER_TEMP/upload.err")); JukaHub installs it from an older release. With immutable releases on, a release published before the package was ready cannot take it."
           fi
 
   # Cross-compiled on Ubuntu with the distribution's MinGW-w64. This job used
@@ -879,7 +961,7 @@ jobs:
         with:
           script: |
             const tag = process.env.TAG_NAME;
-            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip', 'JukaHub-OfflineAI-linux-arm64.zip'];
+            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip', 'JukaHub-OfflineSpeech-linux-arm64.zip'];
             const {data: releases} = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,

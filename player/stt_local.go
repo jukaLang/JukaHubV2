@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,10 +35,45 @@ const (
 	sttModeGroq     = "groq"
 )
 
+// sttQuickContextBytes is the longest clip (14 s of 16 kHz mono) a quick
+// Whisper run encodes with a shortened audio context.
+const sttQuickContextBytes = 14 * 16000 * 2
+
 var errSTTUnavailable = errors.New("offline speech recognition is not installed")
 var errSTTMemory = errors.New("not enough free memory for offline speech recognition")
 var errSTTGroqKey = errors.New("Groq speech recognition needs an API key")
 var errSTTGroqOffline = errors.New("Groq speech recognition needs Wi-Fi")
+
+// sttModeSnap is the recognition setting as the main thread last read it
+// (sttModeRemember, every frame from hjTick). Transcription goroutines read it
+// here: config.Variables.Custom is not safe to read off the main thread.
+// 0: not read yet, then 1 + the index in sttModes.
+var sttModeSnap atomic.Int32
+
+var sttModes = [...]string{sttModeAuto, sttModeOffline, sttModeGroq}
+
+// sttModeRemember reads the setting on the main thread for sttModeNow. Every
+// frame, so it does not allocate (sttModeOf formats the value).
+func sttModeRemember(config *Config) {
+	n := int32(1)
+	if config != nil {
+		switch v, _ := config.Variables.Custom[sttModeKey].(string); v {
+		case sttModeOffline:
+			n = 2
+		case sttModeGroq:
+			n = 3
+		}
+	}
+	sttModeSnap.Store(n)
+}
+
+// sttModeNow is the setting for any goroutine.
+func sttModeNow() string {
+	if n := sttModeSnap.Load(); n > 0 && int(n) <= len(sttModes) {
+		return sttModes[n-1]
+	}
+	return sttModeOf(appConfig) // before the first frame: nothing else runs yet
+}
 
 // Auto is the default, including for configs saved before this setting existed.
 func sttModeOf(config *Config) string {
@@ -170,7 +206,7 @@ func sttWithFallback(ctx context.Context, key string, wav []byte, lang, prompt s
 // orb's streamed words, stt_stream.go).
 func sttWithFallbackLocal(ctx context.Context, key string, wav []byte, cloud func(context.Context, string, []byte) (string, error),
 	localTranscribe func(context.Context, []byte) (string, error)) (string, error) {
-	mode := sttModeOf(appConfig)
+	mode := sttModeNow() // a goroutine: not the settings map itself
 	local := sttLocalReady()
 	if mode != sttModeOffline && (!local || mode == sttModeGroq) && netReconnecting() && strings.TrimSpace(key) != "" {
 		netWaitOnline(ctx, netWakeWaitMax)
@@ -262,7 +298,8 @@ func sttCommandTranscribeStream(ctx context.Context, key string, wav []byte, pro
 			return "", ctx.Err()
 		}
 		logInfo("voice", "streamed offline recognition failed (%v); recognizing the whole clip", err)
-		return sttLocalTranscribe(ctx, wav, "en", prompt)
+		// The warm server just failed this clip: straight to the one-shot path.
+		return sttLocalTranscribeRun(ctx, wav, "en", prompt, prompt != "", false)
 	})
 }
 
@@ -277,20 +314,42 @@ func sttLocalPreviewTranscribe(ctx context.Context, wav []byte, lang string) (st
 }
 
 func sttLocalTranscribeSearch(ctx context.Context, wav []byte, lang, prompt string, quick bool) (string, error) {
+	return sttLocalTranscribeRun(ctx, wav, lang, prompt, quick, true)
+}
+
+// sttLocalTranscribeRun recognizes a whole clip. English goes to Vosk: the
+// warm server when serve allows (a model already in memory answers at once;
+// stt_stream.go), else a one-shot vosk-cli; Whisper takes the rest and any
+// Vosk failure.
+func sttLocalTranscribeRun(ctx context.Context, wav []byte, lang, prompt string, quick, serve bool) (string, error) {
 	if !sttLocalReady() {
 		return "", errSTTUnavailable
 	}
-	if err := sttCheckMemory(); err != nil {
-		return "", err
-	}
 	if lang == "en" {
+		if serve {
+			text, err := sttServeTranscribe(ctx, wav)
+			if err == nil || ctx.Err() != nil {
+				return text, err
+			}
+			if !errors.Is(err, errSTTNoServe) {
+				logInfo("voice", "warm offline recognition failed (%v); starting the recognizer for this clip", err)
+			}
+		}
 		if bin, model := sttFastFiles(); bin != "" {
+			// Vosk's small model needs what the warm server needs, not
+			// Whisper's larger allowance.
+			if err := sttCheckMemoryFor(sttServeStartAvail); err != nil {
+				return "", err
+			}
 			text, err := sttRunFast(ctx, bin, model, wav)
 			if err == nil || ctx.Err() != nil {
 				return text, err
 			}
 			logWarn("voice", "fast offline recognition failed; trying Whisper: %v", err)
 		}
+	}
+	if err := sttCheckMemoryFor(sttMinAvailable); err != nil {
+		return "", err
 	}
 	bin, model := sttLocalFiles()
 	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
@@ -325,7 +384,8 @@ func sttRunFast(ctx context.Context, bin, model string, wav []byte) (string, err
 	return strings.TrimSpace(result.Text), nil
 }
 
-func sttCheckMemory() error {
+// sttCheckMemoryFor reports errSTTMemory when MemAvailable is under need bytes.
+func sttCheckMemoryFor(need int64) error {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return nil // on unusual firmware, let the process itself decide
@@ -335,7 +395,7 @@ func sttCheckMemory() error {
 			continue
 		}
 		var kb int64
-		if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &kb); err == nil && kb*1024 < sttMinAvailable {
+		if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &kb); err == nil && kb*1024 < need {
 			return errSTTMemory
 		}
 		break
@@ -354,6 +414,12 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 		lang = "no" // Whisper names Norwegian "no"; the keyboard layout uses "nb".
 	}
 	args := sttLocalArgs(model, lang, prompt, quick)
+	if quick && len(wav) <= 44+sttQuickContextBytes {
+		// Whisper encodes a full 30 s window (1500 frames) by default, most of
+		// the wait on the A53. A clip that fits 768 frames (15.36 s) is encoded
+		// in about half the time; dictation keeps the full window.
+		args = append(args, "-ac", "768")
+	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
@@ -381,7 +447,9 @@ func sttLocalArgs(model, lang, prompt string, quick bool) []string {
 	}
 	args := []string{"-m", model, "-f", "-", "-t", threads, "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
 	if quick {
-		args = append(args, "-bs", "3", "-bo", "3")
+		// -nf: no temperature fallback. Noise or silence otherwise makes the
+		// tiny model decode the clip up to five more times.
+		args = append(args, "-bs", "3", "-bo", "3", "-nf")
 	}
 	if prompt != "" {
 		args = append(args, "--prompt", prompt)

@@ -1787,6 +1787,13 @@ func drawRow(renderer *sdl.Renderer, x, y, w, h, r int32, selected, hovered bool
 	UIListRow(renderer, sdl.Rect{X: x, Y: y, W: w, H: h}, r, selected, hovered)
 }
 
+// scrollbarThumbAlpha is the glass ink's weight for the thumb. 75/255 left
+// the thumb below 3:1 on the dark palettes and on the raised cards; on the
+// green DMG surface even 150 did. 130 clears 3:1 on every shipped background
+// once glassA's light-theme boost is applied, without turning the bar into a
+// bright slab.
+const scrollbarThumbAlpha = 130
+
 // drawScrollbar draws a vertical scrollbar within a track when content
 // overflows. thumbFrac is visible/total (0..1); scrollFrac is the scroll
 // position as a fraction (0..1).
@@ -1800,7 +1807,7 @@ func drawScrollbar(renderer *sdl.Renderer, x, y, w, h int32, thumbFrac, scrollFr
 	renderer.SetDrawColor(track.R, track.G, track.B, track.A)
 	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 	thumb := scrollbarThumbRect(y, h, thumbFrac, scrollFrac)
-	fillRoundedRect(renderer, x, thumb.Y, w, thumb.H, w/2, glassA(75))
+	fillRoundedRect(renderer, x, thumb.Y, w, thumb.H, w/2, glassA(scrollbarThumbAlpha))
 }
 
 // scrollbarThumbRect is the thumb's geometry inside a track h tall at y. A

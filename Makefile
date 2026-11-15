@@ -60,7 +60,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build run test test-web e2e vet fmt fmt-check lint bench web \
-        release clean check coverage workflows docs-links test-scripts test-spatialfx
+        release os-package clean check coverage workflows docs-links test-scripts test-spatialfx
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -128,6 +128,12 @@ web: ## Serve the builder at http://127.0.0.1:8123
 
 release: ## Package the release artifacts into player/dist
 	cd $(PLAYER) && bash ./release.sh
+
+# APP is a built TrimUI app: the JukaHub-Trimui folder, JukaHub-Trimui.zip from a
+# release, or player/dist/JukaHub-SDCARD/Apps/JukaHub.
+APP ?= JukaHub-Trimui.zip
+os-package: ## JukaHub OS SD-card zip from a TrimUI build: make os-package APP=JukaHub-Trimui.zip
+	bash $(PLAYER)/trimui/make-os-package.sh "$(APP)" JukaHub-OS-Trimui.zip
 
 clean: ## Remove build outputs (Windows also removes the local SDL copy)
 	$(CLEAN)

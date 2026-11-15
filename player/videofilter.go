@@ -215,8 +215,8 @@ func videoFilterExpandDir(value, cfgPath string) string {
 	case strings.HasPrefix(value, ":"):
 		value = filepath.Join(install, strings.TrimLeft(value[1:], `/\`))
 	case value == "~" || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`):
-		home, _ := os.UserHomeDir()
-		if home == "" || !strings.HasPrefix(filepath.Clean(cfgPath), filepath.Clean(home)+string(filepath.Separator)) {
+		home := retroArchHomeFor(cfgPath)
+		if home == "" {
 			home = install
 		}
 		value = filepath.Join(home, strings.TrimLeft(value[1:], `/\`))

@@ -98,12 +98,14 @@ func voicePrewarm(config *Config) {
 	// The memory check includes the game's resident process and speech model.
 	llm := false
 	pausedGame := gaOverlay.active && gaOverlay.mode == gaModeAsk
+	// A model already loaded is already outside avail: not counted twice.
+	llmLoaded := offlineAIServerReady()
 	if (runningGameChildren.Load() == 0 || pausedGame) && orbAnswerChoice(key, online, offlineAIReady()) == "offline" {
 		llm = offlineAIPrewarm(avail, pausedGame)
 	}
 	if voiceDeviceVoiceLikely(config, key, online) {
 		need := uint64(voiceSTTReserveMB + voicePiperWarmMB)
-		if llm {
+		if llm && !llmLoaded {
 			_, model := offlineAIFiles()
 			need += offlineAIServerNeedFor(model)
 		}

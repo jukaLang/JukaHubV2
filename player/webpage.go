@@ -178,6 +178,80 @@ const (
 
 const webMaxBackgroundLayers = 4
 
+// webWhiteSpace is the CSS white-space mode. Normal collapses runs of spaces
+// and wraps; nowrap collapses but never wraps; pre preserves both spaces and
+// newlines without wrapping; pre-wrap preserves both and still wraps;
+// pre-line collapses spaces but keeps authored newlines.
+const (
+	webWhiteSpaceNormal = iota
+	webWhiteSpaceNowrap
+	webWhiteSpacePre
+	webWhiteSpacePreWrap
+	webWhiteSpacePreLine
+	webWhiteSpaceBreakSpaces
+)
+
+func webWhiteSpaceValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "nowrap":
+		return webWhiteSpaceNowrap
+	case "pre":
+		return webWhiteSpacePre
+	case "pre-wrap":
+		return webWhiteSpacePreWrap
+	case "pre-line":
+		return webWhiteSpacePreLine
+	case "break-spaces":
+		return webWhiteSpaceBreakSpaces
+	}
+	return webWhiteSpaceNormal
+}
+
+func webWhiteSpacePreservesSpaces(mode int) bool {
+	return mode == webWhiteSpacePre || mode == webWhiteSpacePreWrap || mode == webWhiteSpaceBreakSpaces
+}
+
+func webWhiteSpaceWraps(mode int) bool {
+	return mode != webWhiteSpaceNowrap && mode != webWhiteSpacePre
+}
+
+// webPreWrapTokens splits a preserved line into measured chunks. Each run of
+// spaces is attached to the word after it, so a wrapped line keeps the
+// author's indentation instead of losing it at the break. A line made only of
+// spaces stays one token and remains visible.
+func webPreWrapTokens(s string) []string {
+	var tokens []string
+	var word, spaces strings.Builder
+	flushWord := func() {
+		if word.Len() == 0 {
+			return
+		}
+		tokens = append(tokens, word.String())
+		word.Reset()
+	}
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			flushWord()
+			if r == '\t' {
+				spaces.WriteString("    ")
+			} else {
+				spaces.WriteRune(r)
+			}
+			continue
+		}
+		if spaces.Len() > 0 {
+			word.WriteString(spaces.String())
+			spaces.Reset()
+		}
+		word.WriteRune(r)
+	}
+	flushWord()
+	if spaces.Len() > 0 {
+		tokens = append(tokens, spaces.String())
+	}
+	return tokens
+}
+
 // webBackgroundLayerStyle is one CSS background layer. Pointers keep the
 // style comparable, so runs can still merge on style equality.
 type webBackgroundLayerStyle struct {
@@ -196,6 +270,12 @@ type webStyle struct {
 	HasColor   bool
 	Background sdl.Color
 	HasBg      bool
+	// Backdrop is the nearest ancestor surface (or this element's own one)
+	// that text sits on. It inherits, unlike the background itself, so white
+	// copy inside a dark hero keeps its author colour instead of being
+	// contrast-flipped against the page's white paper.
+	Backdrop    sdl.Color
+	HasBackdrop bool
 	// BackgroundImage is a resolved url() background. The layout carries a
 	// background layer into layout.Images so it paints under the text.
 	BackgroundImage string
@@ -223,8 +303,11 @@ type webStyle struct {
 	Strike      bool
 	Link        bool
 	Align       int
-	Pre         bool
-	Hidden      bool
+	WhiteSpace  int
+	// Pre is retained for code that only needs "preserve authored text". New
+	// layout uses WhiteSpace, which distinguishes pre, pre-wrap and pre-line.
+	Pre    bool
+	Hidden bool
 	// Invisible is CSS visibility:hidden. Unlike Hidden (display:none or an
 	// aria-hidden helper), it keeps the element's box and text metrics in the
 	// flow and suppresses only the paint. It inherits, and visibility:visible
@@ -241,6 +324,11 @@ type webStyle struct {
 	TextIndent float64
 	MarginTop  float64
 	MarginBot  float64
+	// PadTop/PadBot are the vertical padding part of MarginTop/MarginBot.
+	// The flow still reserves the combined top/bottom inset, but the painted
+	// box must extend over the padding while leaving the margin outside it.
+	PadTop float64
+	PadBot float64
 	// MarginTopAuto/MarginBotAuto remember `margin: auto` on the block axis.
 	// Block flow ignores them; flex cross-axis and grid rows use them after
 	// the item's own height is known.
@@ -340,18 +428,31 @@ type webStyle struct {
 	// side by side (row) or one under the other (column); the reader has no
 	// DOM, so the parser marks each direct child as one flex item and the
 	// layout stacks those items into columns.
-	Display     int
-	FlexDir     int
-	FlexReverse bool
-	Justify     int
-	AlignItems  int
-	GapX, GapY  float64
-	FlexWrap    bool
-	GridCols    int
+	Display int
+	// DisplayBlock records an explicit block-level display (block, flow-root,
+	// flex, grid, table). Default display is block for every element, so the
+	// parser cannot otherwise tell a styled <label> or <span> from an inline
+	// one; without this flag `label{display:block}` left a form label on the
+	// same line as its input.
+	DisplayBlock bool
+	FlexDir      int
+	FlexReverse  bool
+	Justify      int
+	AlignItems   int
+	GapX, GapY   float64
+	FlexWrap     bool
+	GridCols     int
 	// GridMin is the minimum track width from a responsive
 	// repeat(auto-fit|auto-fill, minmax(Npx, 1fr)); 0 means the track count
 	// is explicit (or not a grid).
 	GridMin float64
+	// GridWeights and GridBases keep explicit tracks such as
+	// `grid-template-columns: 240px 1fr`. A fixed track has its pixel width in
+	// GridBases; a flexible one has its fr factor in GridWeights. The old
+	// parser kept only the count and divided the page into equal columns, so
+	// a sidebar was as wide as the article beside it.
+	GridWeights [6]float64
+	GridBases   [6]float64
 	// FlexGrow/Shrink/Basis describe the element as a flex item. Basis is -1
 	// when the author did not state one (auto), which is different from 0px.
 	FlexGrow   float64
@@ -419,8 +520,11 @@ type webStyle struct {
 	ContainerName string
 	// ZIndex and Position place an element in the stacking order. Absolute and
 	// fixed elements leave the flow and are painted over the text in z order.
-	ZIndex    int
-	Position  int
+	ZIndex   int
+	Position int
+	// Sticky marks position:sticky. The element stays in normal flow and
+	// layout records a pinned copy for the renderer once it scrolls past.
+	Sticky    bool
 	Top       float64
 	Right     float64
 	Bottom    float64
@@ -514,6 +618,7 @@ type webBlock struct {
 	// author marker from the reader's default bullet.
 	MarkerStyle        webStyle
 	HasMarkerStyle     bool
+	WhiteSpace         int
 	Pre                bool
 	HasBg              bool
 	Background         sdl.Color
@@ -555,6 +660,10 @@ type webBlock struct {
 	FlexWrap   bool
 	GridCols   int
 	GridMin    float64
+	// GridWeights/GridBases retain an explicit `240px 1fr` track list so a
+	// sidebar keeps its width instead of becoming another equal column.
+	GridWeights [6]float64
+	GridBases   [6]float64
 	// FlexTrail holds nested container memberships after the outermost one.
 	// Each sub-layout consumes one entry, so an inner row stays inside its
 	// parent card instead of being measured across the full page width.
@@ -603,6 +712,17 @@ type webBlock struct {
 	// the element's box, background and border in the flow instead of dropping
 	// its content into the surrounding text.
 	Placeholder bool
+	// Boxes lists the visual container boxes enclosing this block, outermost
+	// first. An element that contains only child blocks (a card with an h3 and
+	// a paragraph, a hero with a heading, a grid sidebar) emits no block of its
+	// own, so its background, border and shadow used to disappear even though
+	// its children were laid out. Layout paints these boxes around the runs
+	// they contain.
+	Boxes []int
+	// BoxOwner is the nearest enclosing box this block represents directly.
+	// A box with a direct block is already painted by that block; a box that
+	// only contains child blocks is painted by the container pass.
+	BoxOwner int
 	// TableEmptyRow marks a <tr> that emitted no cell blocks. Layout still
 	// reserves its row height, so a pure rowspan gap does not collapse.
 	TableEmptyRow bool
@@ -635,6 +755,8 @@ type webFlexMembership struct {
 	reverse                          bool
 	gridCols                         int
 	gridMin                          float64
+	gridWeights                      [6]float64
+	gridBases                        [6]float64
 	grow, shrink, basis, basisPct    float64
 	order                            int
 	width, widthPct                  float64
@@ -645,6 +767,7 @@ func webFlexMembershipFromFrame(f *webFlexFrame) webFlexMembership {
 	return webFlexMembership{
 		group: f.group, item: f.item, dir: f.dir, justify: f.justify, align: f.align,
 		gapX: f.gapX, gapY: f.gapY, wrap: f.wrap, gridCols: f.gridCols, gridMin: f.gridMin,
+		gridWeights: f.gridWeights, gridBases: f.gridBases,
 		height:  f.height,
 		reverse: f.reverse,
 		grow:    f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
@@ -656,6 +779,7 @@ func (b *webBlock) setFlexMembership(m webFlexMembership) {
 	b.FlexGroup, b.FlexItem = m.group, m.item
 	b.FlexDir, b.FlexReverse, b.FlexJustify, b.FlexAlign = m.dir, m.reverse, m.justify, m.align
 	b.FlexGapX, b.FlexGapY, b.FlexWrap, b.GridCols, b.GridMin = m.gapX, m.gapY, m.wrap, m.gridCols, m.gridMin
+	b.GridWeights, b.GridBases = m.gridWeights, m.gridBases
 	b.FlexHeight = m.height
 	b.FlexGrow, b.FlexShrink, b.FlexBasis, b.BasisPct = m.grow, m.shrink, m.basis, m.basisPct
 	b.Order = m.order
@@ -689,6 +813,7 @@ type webDocument struct {
 	// whether any style actually used cq*; pages without one skip the extra
 	// layout pass entirely.
 	Containers        map[int]webContainerInfo
+	Boxes             map[int]webBoxInfo
 	HasContainerUnits bool
 	Paper             sdl.Color
 	// PaperGradient is a body/html background ramp: the page under the text is
@@ -719,15 +844,33 @@ type webDocument struct {
 	imageMu sync.Mutex
 }
 
+// webBoxInfo is one visual container box an element contributed. direct is
+// set when the element also produced a block of its own; that block already
+// paints the box, so the container pass must not paint a second copy. A box
+// with only child blocks has no direct block and is painted from the runs that
+// carry its ID.
+type webBoxInfo struct {
+	style  webStyle
+	direct bool
+	// visual records whether the element declared a surface. A wrapper that
+	// only declares padding/width/height still needs a box ID so its children
+	// inherit the right measure, but it has nothing to paint itself.
+	visual bool
+}
+
 // webRunPos is a measured run, ready to draw.
 type webRunPos struct {
-	Text      string
-	X         int32
-	Font      *ttf.Font
-	Color     sdl.Color
-	Bold      bool
-	Underline bool
-	Strike    bool
+	Text string
+	X    int32
+	// SpaceBefore is the automatic inter-word gap that placed this run. Text
+	// justification expands these gaps; a run whose spaces are part of its own
+	// text (pre-wrap) keeps SpaceBefore zero.
+	SpaceBefore int32
+	Font        *ttf.Font
+	Color       sdl.Color
+	Bold        bool
+	Underline   bool
+	Strike      bool
 	// DecorationColor overrides the text colour for the underline and
 	// strikethrough; HasDecorationColor distinguishes an author colour from
 	// the default currentColor.
@@ -748,8 +891,13 @@ type webRunPos struct {
 	HasBg bool
 	Bg    sdl.Color
 	// Control carries the form control this run draws, if any.
-	Control        *webControl
-	BoxW, BoxH     int32
+	Control    *webControl
+	BoxW, BoxH int32
+	// Boxes and BoxWidth are the container boxes this run belongs to and the
+	// used column width at the point it was laid out. The container pass uses
+	// them to paint a card, sidebar or hero around all of its child runs.
+	Boxes          []int
+	BoxWidth       int32
 	Invisible      bool
 	VerticalOffset int32
 	Clip           sdl.Rect
@@ -783,6 +931,10 @@ type webRect struct {
 	// the average, used for the corner rounding and as the fallback.
 	Gradient    webGradient
 	HasGradient bool
+	// BoxID ties a block-painted rect to the container box that declared the
+	// surface. The container pass can then replace that partial paint with
+	// one union when the wrapper also contains nested blocks.
+	BoxID int
 	// Radius is the author's border-radius in design pixels, clamped to half
 	// the shorter side when drawn. 0 keeps the reader's crisp corner.
 	Radius int32
@@ -793,14 +945,21 @@ type webRect struct {
 }
 
 // webFloat is an absolutely positioned block: it is laid out at its own width,
-// then painted over the flow in z order. A page's badge, sticky header or modal
+// then painted over the flow in z order. A page's badge, fixed header or modal
 // is exactly this.
 type webFloat struct {
-	Z      int
-	X, Y   int32
-	Rows   []webRow
-	Rects  []webRect
-	Images []webImagePos
+	Z    int
+	X, Y int32
+	// Top is the sticky inset in layout pixels. A sticky overlay is painted
+	// at Top once the normal flow position has scrolled above the viewport.
+	Top   int32
+	Rows  []webRow
+	Rects []webRect
+	// Backgrounds and Images live beside the rows for the same reason they do
+	// on the page: a painted layer is not a box, and dropping either left an
+	// absolutely positioned card transparent.
+	Backgrounds []webBackgroundPaint
+	Images      []webImagePos
 }
 
 // webLayout is the measured page for one width and font configuration.
@@ -823,6 +982,9 @@ type webLayout struct {
 	// Floats are the absolutely positioned blocks, painted over the rows in
 	// ascending z order.
 	Floats []webFloat
+	// Stickies are pinned copies of position:sticky blocks. Their normal rows
+	// remain in Rows for flow and for the top-of-page rendering.
+	Stickies []webFloat
 	// Images are the reader's <img> boxes, in layout-local coordinates like
 	// Rects. They draw after the icon rects and before the text rows.
 	Images []webImagePos
@@ -836,6 +998,7 @@ type webBackgroundPaint struct {
 	Color          sdl.Color
 	Gradient       webGradient
 	HasGradient    bool
+	BoxID          int
 	Image          string
 	ObjectFit      int
 	ObjectPosition string
@@ -1054,6 +1217,10 @@ type webFrame struct {
 	// containerID is non-zero when this element is a CSS containment
 	// container. Descendant blocks copy the open IDs so layout can find them.
 	containerID int
+	// boxID is non-zero when this element contributed a visual container box
+	// (background, border, outline or shadow). Descendant blocks carry its ID
+	// so layout can paint the box even when the element has no direct text.
+	boxID int
 }
 
 // webContainerInfo is one containment container's element facts. The size
@@ -1087,20 +1254,22 @@ type webContainerSize struct {
 // webFlexFrame is one open flex container while parsing. item counts its
 // direct children so every block can be tagged with the item it belongs to.
 type webFlexFrame struct {
-	group     int
-	item      int
-	depth     int
-	itemStyle webStyle
-	dir       int
-	justify   int
-	align     int
-	gapX      float64
-	gapY      float64
-	height    float64
-	wrap      bool
-	reverse   bool
-	gridCols  int
-	gridMin   float64
+	group       int
+	item        int
+	depth       int
+	itemStyle   webStyle
+	dir         int
+	justify     int
+	align       int
+	gapX        float64
+	gapY        float64
+	height      float64
+	wrap        bool
+	reverse     bool
+	gridCols    int
+	gridMin     float64
+	gridWeights [6]float64
+	gridBases   [6]float64
 }
 
 // webListState tracks <ul>/<ol> numbering.
@@ -5730,7 +5899,8 @@ var webNamedColors = map[string]sdl.Color{
 }
 
 // parseWebColor handles hex, rgb()/rgba() and the common named colours. Alpha
-// is ignored: the page background decides what is readable here.
+// is kept: a translucent gradient overlay is how most hero images stay
+// readable, and dropping it painted the ramp as an opaque sheet over the photo.
 func parseWebColor(value string) (sdl.Color, bool) {
 	v := strings.ToLower(strings.TrimSpace(value))
 	if v == "" {
@@ -5744,14 +5914,26 @@ func parseWebColor(value string) (sdl.Color, bool) {
 			g, ok2 := webHexByte(string([]byte{hex[1], hex[1]}))
 			b, ok3 := webHexByte(string([]byte{hex[2], hex[2]}))
 			if ok1 && ok2 && ok3 {
-				return sdl.Color{R: r, G: g, B: b, A: 255}, true
+				a := uint8(255)
+				if len(hex) == 4 {
+					if v, ok := webHexByte(string([]byte{hex[3], hex[3]})); ok {
+						a = v
+					}
+				}
+				return sdl.Color{R: r, G: g, B: b, A: a}, true
 			}
 		case 6, 8:
 			r, ok1 := webHexByte(hex[0:2])
 			g, ok2 := webHexByte(hex[2:4])
 			b, ok3 := webHexByte(hex[4:6])
 			if ok1 && ok2 && ok3 {
-				return sdl.Color{R: r, G: g, B: b, A: 255}, true
+				a := uint8(255)
+				if len(hex) == 8 {
+					if v, ok := webHexByte(hex[6:8]); ok {
+						a = v
+					}
+				}
+				return sdl.Color{R: r, G: g, B: b, A: a}, true
 			}
 		}
 		return sdl.Color{}, false
@@ -5767,6 +5949,7 @@ func parseWebColor(value string) (sdl.Color, bool) {
 			return sdl.Color{}, false
 		}
 		vals := make([]uint8, 3)
+		alpha := uint8(255)
 		for i := 0; i < 3; i++ {
 			part := strings.TrimSpace(parts[i])
 			percent := strings.HasSuffix(part, "%")
@@ -5787,7 +5970,28 @@ func parseWebColor(value string) (sdl.Color, bool) {
 			}
 			vals[i] = uint8(n)
 		}
-		return sdl.Color{R: vals[0], G: vals[1], B: vals[2], A: 255}, true
+		if len(parts) > 3 {
+			part := strings.TrimSpace(parts[3])
+			percent := strings.HasSuffix(part, "%")
+			part = strings.TrimSuffix(part, "%")
+			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err == nil {
+				if percent {
+					n = n * 255 / 100
+				} else {
+					n *= 255
+				}
+				n = math.Round(n)
+				if n < 0 {
+					n = 0
+				}
+				if n > 255 {
+					n = 255
+				}
+				alpha = uint8(n)
+			}
+		}
+		return sdl.Color{R: vals[0], G: vals[1], B: vals[2], A: alpha}, true
 	}
 	if c, ok := webNamedColors[v]; ok {
 		if c.A == 0 {
@@ -6054,6 +6258,8 @@ func webTextAlign(value string) int {
 		return 1
 	case "right", "end":
 		return 2
+	case "justify":
+		return 3
 	}
 	return 0
 }
@@ -6771,6 +6977,7 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.BorderLeft = true
 	case "pre":
 		st.Pre = true
+		st.WhiteSpace = webWhiteSpacePre
 		st.FontPx = 13
 		st.MarginTop, st.MarginBot = 16, 16
 		st.HasBg = true
@@ -7012,7 +7219,8 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.TextIndent = webLength(v, st.FontPx)
 	}
 	if v, ok := decls["white-space"]; ok {
-		st.Pre = strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "pre")
+		st.WhiteSpace = webWhiteSpaceValue(v)
+		st.Pre = webWhiteSpacePreservesSpaces(st.WhiteSpace)
 	}
 	if v, ok := decls["display"]; ok {
 		if strings.EqualFold(strings.TrimSpace(v), "none") {
@@ -7069,10 +7277,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	// margin: without it a card written as `padding-top: 24px` sat flush
 	// against the paragraph above it.
 	if v, ok := decls["padding-top"]; ok {
-		st.MarginTop += webLength(v, st.FontPx)
+		px := webLength(v, st.FontPx)
+		st.MarginTop += px
+		st.PadTop += px
 	}
 	if v, ok := decls["padding-bottom"]; ok {
-		st.MarginBot += webLength(v, st.FontPx)
+		px := webLength(v, st.FontPx)
+		st.MarginBot += px
+		st.PadBot += px
 	}
 	// The logical shorthands every modern sheet uses. The reader is a
 	// left-to-right column, so inline = left/right and block = top/bottom;
@@ -7088,6 +7300,8 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		if top, _, bottom, _, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.MarginTop += top
 			st.MarginBot += bottom
+			st.PadTop += top
+			st.PadBot += bottom
 		}
 	}
 	for _, key := range []string{"margin-inline", "padding-inline"} {
@@ -7112,7 +7326,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		"padding-block-end":    &st.MarginBot,
 	} {
 		if v, ok := decls[key]; ok {
-			*target += webLength(v, st.FontPx)
+			px := webLength(v, st.FontPx)
+			*target += px
+			switch key {
+			case "padding-block-start":
+				st.PadTop += px
+			case "padding-block-end":
+				st.PadBot += px
+			}
 		}
 	}
 	if v, ok := decls["margin-inline-start"]; ok {
@@ -7133,6 +7354,8 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.IndentRight += right
 			st.MarginTop += top
 			st.MarginBot += bottom
+			st.PadTop += top
+			st.PadBot += bottom
 		}
 	}
 	if v, ok := decls["padding-right"]; ok {
@@ -7404,24 +7627,36 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		switch lower {
 		case "flex", "inline-flex":
 			st.Display = webDisplayFlex
+			st.DisplayBlock = lower == "flex"
 		case "grid", "inline-grid":
 			st.Display = webDisplayGrid
 			st.FlexDir, st.FlexWrap = webFlexRow, true
+			st.DisplayBlock = lower == "grid"
 		case "table":
 			st.Display = webDisplayTable
+			st.DisplayBlock = true
 		case "table-row":
 			st.Display, st.FlexDir = webDisplayTableRow, webFlexRow
+			st.DisplayBlock = true
 		case "table-cell":
 			st.Display = webDisplayTableCell
+			st.DisplayBlock = true
 		case "table-header-group":
 			st.Display = webDisplayTableHeaderGroup
+			st.DisplayBlock = true
 		case "table-row-group":
 			st.Display = webDisplayTableRowGroup
+			st.DisplayBlock = true
 		case "table-footer-group":
 			st.Display = webDisplayTableFooterGroup
+			st.DisplayBlock = true
 		case "table-caption":
 			st.Display = webDisplayTableCaption
-		case "block", "flow-root", "inline-block":
+			st.DisplayBlock = true
+		case "block", "flow-root":
+			st.Display = webDisplayBlock
+			st.DisplayBlock = true
+		case "inline-block":
 			st.Display = webDisplayBlock
 		}
 	}
@@ -7451,6 +7686,10 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["grid-template-columns"]; ok && st.Display == webDisplayGrid {
 		st.GridCols, st.GridMin = webGridTemplate(v)
+		weights, bases, count := webGridTracks(v)
+		if count > 0 {
+			st.GridCols, st.GridWeights, st.GridBases = count, weights, bases
+		}
 	}
 	if v, ok := decls["flex-direction"]; ok {
 		lower := strings.ToLower(strings.TrimSpace(v))
@@ -7608,10 +7847,20 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "relative":
 			st.Position = webPositionRelative
-		case "absolute", "fixed", "sticky":
-			// The reader has no sticky scrolling; a fixed or sticky element
-			// keeps its place on the page and is stacked like an absolute one.
+		case "absolute":
 			st.Position = webPositionAbsolute
+		case "fixed":
+			// A fixed layer has the viewport as its containing block. It is
+			// still painted as a layer (the reader has no scroll compositor),
+			// but keeping the flag makes right/bottom offsets anchor to the
+			// screen rather than the body's content inset.
+			st.Position = webPositionFixed
+		case "sticky":
+			// A sticky header starts in normal flow. Treating it as absolute
+			// painted it over the first hero/content rows at the top of the
+			// page; it keeps its flow rows and layout records a pinned copy.
+			st.Position = webPositionStatic
+			st.Sticky = true
 		}
 	}
 	if v, ok := decls["z-index"]; ok {
@@ -7722,6 +7971,86 @@ func webGridTemplate(value string) (int, float64) {
 		return tracks, 0
 	}
 	return 0, 0
+}
+
+// webGridTracks reads the used width and fr weight of each explicit grid
+// track. `grid-template-columns: 240px 1fr` is two tracks, not two equal
+// columns: the sidebar keeps its 240px and the article column takes the rest.
+// Percentages and content-sized tracks have no width until layout, so they
+// are treated as one fr.
+func webGridTracks(value string) (weights, bases [6]float64, count int) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "none" || value == "subgrid" {
+		return weights, bases, 0
+	}
+	appendTrack := func(track string) {
+		if count >= 6 {
+			return
+		}
+		weight, base := webGridTrackSpec(track)
+		if weight == 0 && base == 0 {
+			weight = 1
+		}
+		weights[count], bases[count] = weight, base
+		count++
+	}
+	if strings.HasPrefix(value, "repeat(") {
+		open := len("repeat")
+		if end := webCSSParenEnd(value, open); end > open {
+			parts := webSplitTopLevel(value[open+1:end], ',')
+			if len(parts) >= 2 {
+				if n, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil && n >= 1 && n <= 6 {
+					for i := 0; i < n; i++ {
+						appendTrack(parts[1])
+					}
+				}
+			}
+		}
+		return weights, bases, count
+	}
+	for _, track := range webCSSSpaceFields(value) {
+		appendTrack(track)
+	}
+	return weights, bases, count
+}
+
+// webGridTrackSpec resolves one track to an fr weight and a fixed pixel base.
+func webGridTrackSpec(track string) (weight, base float64) {
+	track = strings.ToLower(strings.TrimSpace(track))
+	if strings.HasPrefix(track, "minmax(") {
+		open := len("minmax")
+		if end := webCSSParenEnd(track, open); end > open {
+			parts := webSplitTopLevel(track[open+1:end], ',')
+			if len(parts) >= 2 {
+				base = webGridTrackMin(parts[0])
+				weight = webGridFr(parts[1])
+				if base == 0 && weight == 0 {
+					weight = 1
+				}
+				return weight, base
+			}
+		}
+		return 0, 0
+	}
+	if weight = webGridFr(track); weight > 0 {
+		return weight, 0
+	}
+	if track == "auto" || track == "min-content" || track == "max-content" {
+		return 1, 0
+	}
+	return 0, webGridTrackMin(track)
+}
+
+func webGridFr(track string) float64 {
+	track = strings.TrimSpace(strings.ToLower(track))
+	if !strings.HasSuffix(track, "fr") {
+		return 0
+	}
+	factor, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(track, "fr")), 64)
+	if err != nil || factor <= 0 {
+		return 0
+	}
+	return factor
 }
 
 // webGridTrackMin extracts the first argument of minmax(), or a plain length.
@@ -7917,6 +8246,7 @@ type webParser struct {
 	pendingCounterResets []string
 	mainDepth            int
 	flexSeq              int
+	boxSeq               int
 	containerSeq         int
 	hasContainerUnits    bool
 	flexStack            []webFlexFrame
@@ -7938,6 +8268,7 @@ type webParser struct {
 	// run. Their own text must not also appear as ordinary page text.
 	textarea             *webControl
 	textareaText         strings.Builder
+	textareaStyle        webStyle
 	buttonCtrl           *webControl
 	buttonText           strings.Builder
 	buttonStyle          webStyle
@@ -8045,9 +8376,39 @@ func filterWebMainContent(blocks []webBlock) []webBlock {
 	if !hasMain {
 		return blocks
 	}
+	// A main column is often one grid/flex cell beside a sidebar or nav. Keep
+	// every sibling that belongs to a container which also contains main
+	// content, otherwise the filter deletes the sidebar and the grid is left
+	// with an orphaned article in one column.
+	mainGroups := map[int]bool{}
+	for _, block := range blocks {
+		if !block.InMain {
+			continue
+		}
+		if block.FlexGroup != 0 {
+			mainGroups[block.FlexGroup] = true
+		}
+		for _, m := range block.FlexTrail {
+			if m.group != 0 {
+				mainGroups[m.group] = true
+			}
+		}
+	}
 	kept := blocks[:0]
 	for _, block := range blocks {
-		if block.InMain {
+		keep := block.InMain
+		if !keep && block.FlexGroup != 0 && mainGroups[block.FlexGroup] {
+			keep = true
+		}
+		if !keep {
+			for _, m := range block.FlexTrail {
+				if m.group != 0 && mainGroups[m.group] {
+					keep = true
+					break
+				}
+			}
+		}
+		if keep {
 			kept = append(kept, block)
 		}
 	}
@@ -8155,7 +8516,66 @@ func fetchWebStylesheet(pageURL, address string) string {
 	if err != nil || len(body) > webSheetByteCap {
 		return ""
 	}
-	return string(body)
+	return webRebaseCSSURLs(string(body), resp.Request.URL)
+}
+
+// webRebaseCSSURLs resolves url(...) references against the stylesheet that
+// declared them. Page CSS almost always lives in /assets/css/, so resolving
+// `url(../img/hero.jpg)` against the page URL pointed at a file that does not
+// exist and left the hero blank. Inline style blocks keep the page URL because
+// they never pass through this function.
+func webRebaseCSSURLs(css string, base *url.URL) string {
+	if base == nil || css == "" || !strings.Contains(strings.ToLower(css), "url(") {
+		return css
+	}
+	var out strings.Builder
+	out.Grow(len(css))
+	last := 0
+	for pos := 0; pos < len(css); {
+		rel := webIndexFold(css[pos:], "url(")
+		if rel < 0 {
+			break
+		}
+		start := pos + rel
+		open := start + len("url(")
+		close := webCSSParenEnd(css, start+3)
+		if close < 0 {
+			break
+		}
+		inner := strings.TrimSpace(css[open:close])
+		quote := byte(0)
+		if len(inner) >= 2 && (inner[0] == '\'' || inner[0] == '"') && inner[len(inner)-1] == inner[0] {
+			quote = inner[0]
+			inner = strings.TrimSpace(inner[1 : len(inner)-1])
+		}
+		lower := strings.ToLower(inner)
+		if inner == "" || strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "http:") ||
+			strings.HasPrefix(lower, "https:") || strings.HasPrefix(lower, "//") || strings.HasPrefix(inner, "#") {
+			pos = close + 1
+			continue
+		}
+		ref, err := url.Parse(inner)
+		if err != nil {
+			pos = close + 1
+			continue
+		}
+		resolved := base.ResolveReference(ref).String()
+		out.WriteString(css[last:open])
+		if quote != 0 {
+			out.WriteByte(quote)
+		}
+		out.WriteString(resolved)
+		if quote != 0 {
+			out.WriteByte(quote)
+		}
+		last = close
+		pos = close + 1
+	}
+	if last == 0 {
+		return css
+	}
+	out.WriteString(css[last:])
+	return out.String()
 }
 
 func webIndexFold(source, sub string) int {
@@ -8695,7 +9115,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 	case "textarea":
 		p.beginFlexLeaf(style)
-		p.startTextarea(attrs)
+		p.startTextarea(attrs, style)
 		return
 	case "select":
 		p.beginFlexLeaf(style)
@@ -8731,7 +9151,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		p.push(el, style, "block", attrs)
 		return
 	}
-	if webBlockElement(name) || style.Display >= webDisplayTable {
+	if webBlockElement(name) || style.DisplayBlock || style.Display >= webDisplayTable {
 		p.flush()
 		p.push(el, style, "block", attrs)
 		if selfClose {
@@ -9037,6 +9457,18 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		}
 		p.doc.Containers[containerID] = info
 	}
+	// A visual box belongs to the element, not to whichever child happens to
+	// hold text. Record it now so descendant blocks can carry its ID even when
+	// the element itself never produces a block (the card/hero/sidebar case).
+	boxID := 0
+	if (kind == "block" || kind == "list") && (webStyleHasBox(style) || webStyleHasLayoutBox(style)) {
+		p.boxSeq++
+		boxID = p.boxSeq
+		if p.doc.Boxes == nil {
+			p.doc.Boxes = make(map[int]webBoxInfo)
+		}
+		p.doc.Boxes[boxID] = webBoxInfo{style: style, visual: webStyleHasBox(style)}
+	}
 	// A block element pushed directly under an open flex container is one of
 	// its items; nested elements belong to the same item. Text-only children
 	// are tagged by ensureBlock instead, which is why the counter starts at
@@ -9056,22 +9488,24 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		p.flexSeq++
 		group = p.flexSeq
 		p.flexStack = append(p.flexStack, webFlexFrame{
-			group:    group,
-			depth:    depth,
-			dir:      style.FlexDir,
-			justify:  style.Justify,
-			align:    style.AlignItems,
-			gapX:     style.GapX,
-			gapY:     style.GapY,
-			height:   webFlexContainerHeight(style),
-			wrap:     style.FlexWrap,
-			reverse:  style.FlexReverse,
-			gridCols: style.GridCols,
-			gridMin:  style.GridMin,
+			group:       group,
+			depth:       depth,
+			dir:         style.FlexDir,
+			justify:     style.Justify,
+			align:       style.AlignItems,
+			gapX:        style.GapX,
+			gapY:        style.GapY,
+			height:      webFlexContainerHeight(style),
+			wrap:        style.FlexWrap,
+			reverse:     style.FlexReverse,
+			gridCols:    style.GridCols,
+			gridMin:     style.GridMin,
+			gridWeights: style.GridWeights,
+			gridBases:   style.GridBases,
 		})
 	}
 	frame := webFrame{
-		el: el, style: style, kind: kind, flexGroup: group, containerID: containerID,
+		el: el, style: style, kind: kind, flexGroup: group, containerID: containerID, boxID: boxID,
 		attrs: attrs, counterResets: p.pendingCounterResets,
 	}
 	p.pendingCounterResets = nil
@@ -9131,6 +9565,7 @@ func webResetElementStyle(st *webStyle) {
 	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
 	st.MarginLeftAuto, st.MarginRightAuto = false, false
 	st.MarginTopAuto, st.MarginBotAuto = false, false
+	st.MarginLeftAuto, st.MarginRightAuto = false, false
 	st.BorderLeft, st.BorderRight, st.ListNone = false, false, false
 	st.BorderWidth = 0
 	st.BorderSideWidth = [4]float64{}
@@ -9141,15 +9576,17 @@ func webResetElementStyle(st *webStyle) {
 	// A radius and a right gutter belong to the element that declared them;
 	// line-height, the list marker and the opacity group are inherited above.
 	st.Radius, st.IndentRight = 0, 0
+	st.PadTop, st.PadBot = 0, 0
 	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
 	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
 	st.BorderStyle, st.Outline, st.OutlineOffset = webBorderSolid, false, 0
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
-	st.Display, st.FlexDir = webDisplayBlock, webFlexRow
+	st.Display, st.DisplayBlock, st.FlexDir = webDisplayBlock, false, webFlexRow
 	st.FlexReverse = false
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.GapX, st.GapY, st.FlexWrap, st.GridCols, st.GridMin = 0, 0, false, 0, 0
+	st.GridWeights, st.GridBases = [6]float64{}, [6]float64{}
 	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
 	st.Order = 0
 	st.Width, st.WidthPct, st.Height = 0, 0, 0
@@ -9161,7 +9598,7 @@ func webResetElementStyle(st *webStyle) {
 	st.ObjectPosition = ""
 	st.ContainerType, st.ContainerName = 0, ""
 	st.CQ = nil
-	st.ZIndex, st.Position = 0, webPositionStatic
+	st.ZIndex, st.Position, st.Sticky = 0, webPositionStatic, false
 	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
 	st.Content = ""
@@ -9303,6 +9740,16 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	}
 	if st.BackgroundLayerCount > 0 {
 		st.BackgroundImage = st.BackgroundLayers[0].Image
+	}
+	// Carry the surface down to the text. A gradient's average is a better
+	// contrast backing than the page paper for a hero's white copy; an image
+	// alone has no reliable colour, so the nearest solid/gradient ancestor
+	// stays in effect.
+	if st.HasBg {
+		st.Backdrop, st.HasBackdrop = st.Background, true
+	}
+	if st.HasGradient && st.Gradient != nil {
+		st.Backdrop, st.HasBackdrop = webGradientAverage(*st.Gradient), true
 	}
 	if needsCQ {
 		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars}
@@ -9770,6 +10217,7 @@ func (p *webParser) ensureBlock() *webBlock {
 		TextIndent:         st.TextIndent,
 		MarginTop:          st.MarginTop,
 		MarginBot:          st.MarginBot,
+		WhiteSpace:         st.WhiteSpace,
 		Pre:                st.Pre,
 		HasBg:              st.HasBg,
 		Background:         st.Background,
@@ -9801,7 +10249,7 @@ func (p *webParser) ensureBlock() *webBlock {
 		WidthPct:           st.WidthPct,
 		AlignSelf:          st.AlignSelf,
 		ZIndex:             st.ZIndex,
-		Float:              st.Position == webPositionAbsolute,
+		Float:              st.Position == webPositionAbsolute || st.Position == webPositionFixed,
 		PosTop:             st.Top,
 		PosRight:           st.Right,
 		PosBottom:          st.Bottom,
@@ -9816,6 +10264,26 @@ func (p *webParser) ensureBlock() *webBlock {
 	// comparison.
 	if st.HasGradient && st.Gradient != nil {
 		block.Gradient, block.HasGradient = *st.Gradient, true
+	}
+	block.Boxes = p.boxPath()
+	if len(block.Boxes) > 0 {
+		block.BoxOwner = block.Boxes[len(block.Boxes)-1]
+		// Only the element that owns the box produces its direct block. A
+		// paragraph inside a card inherits the card's box ID but must not mark
+		// it direct, or the container pass skips the card's real surface.
+		nearest := 0
+		for i := len(p.stack) - 1; i >= 0; i-- {
+			if p.stack[i].kind == "block" || p.stack[i].kind == "list" {
+				nearest = p.stack[i].boxID
+				break
+			}
+		}
+		if nearest == block.BoxOwner {
+			if info, ok := p.doc.Boxes[block.BoxOwner]; ok {
+				info.direct = true
+				p.doc.Boxes[block.BoxOwner] = info
+			}
+		}
 	}
 	p.tagFlexBlock(block, st)
 	block.Details, block.DetailsShown = p.detailsTag()
@@ -9836,6 +10304,36 @@ func (p *webParser) containerPath() []int {
 		}
 	}
 	return ids
+}
+
+// boxPath returns the visual container boxes enclosing the current element,
+// outermost first. It mirrors containerPath for backgrounds/borders/shadows.
+func (p *webParser) boxPath() []int {
+	var ids []int
+	for i := range p.stack {
+		if id := p.stack[i].boxID; id != 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// webStyleHasBox reports whether an element contributes a visible box that
+// must survive even when all of its content is nested block elements.
+func webStyleHasBox(st webStyle) bool {
+	return st.HasBg || st.BackgroundLayerCount > 0 || st.BackgroundImage != "" ||
+		st.HasGradient || st.BoxBorder || st.BorderLeft || st.BorderRight ||
+		st.BorderTop || st.BorderBottom || st.Outline || st.HasBoxShadow || st.Radius > 0
+}
+
+// webStyleHasLayoutBox reports whether an element constrains its children's
+// measure even if it has no surface of its own. An article wrapper with
+// `max-width` and padding used to disappear from every child's ancestry, so
+// its paragraphs ran to the page edge and the image/list inset did not line up.
+func webStyleHasLayoutBox(st webStyle) bool {
+	return st.Width > 0 || st.WidthPct > 0 || st.MaxWidth > 0 || st.MaxWidthPct > 0 ||
+		st.MinWidth > 0 || st.MinWidthPct > 0 || st.Height > 0 || st.MinHeight > 0 ||
+		st.Indent != 0 || st.IndentRight != 0
 }
 
 func (p *webParser) tagFlexBlock(block *webBlock, st webStyle) {
@@ -9945,9 +10443,10 @@ func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	st := style
 	st.Control = ctrl
 	ctrl.Width, ctrl.WidthPct, ctrl.Height = style.Width, style.WidthPct, style.Height
-	if boxed {
+	if boxed && !st.HasBg {
 		// The same filled chip an inline <code> gets, sized by the text it
-		// shows, so a field cannot be mistaken for body copy.
+		// shows, so a field cannot be mistaken for body copy. An author's
+		// background (including input:disabled) wins over this default.
 		st.HasBg = true
 		st.Background = sdl.Color{R: 232, G: 237, B: 244, A: 255}
 	}
@@ -10029,7 +10528,7 @@ func htmlTagAttributeHas(attrs, want string) bool {
 
 // startTextarea opens a <textarea>. Its shipped value is the text between the
 // tags, so the control is drawn by endTextarea once that is known.
-func (p *webParser) startTextarea(attrs string) {
+func (p *webParser) startTextarea(attrs string, style webStyle) {
 	if p.inHead {
 		return
 	}
@@ -10044,6 +10543,10 @@ func (p *webParser) startTextarea(attrs string) {
 		Placeholder: htmlAttrValue(htmlTagAttribute(attrs, "placeholder")),
 		Form:        p.form,
 	}
+	// The element's own style (background, colour, border, :disabled state)
+	// belongs to the field, not to whatever element happens to be on top when
+	// the closing tag arrives.
+	p.textareaStyle = style
 	p.textareaText.Reset()
 }
 
@@ -10089,7 +10592,7 @@ func (p *webParser) endTextarea() {
 		p.form.Field = ctrl.Name
 	}
 	ctrl.Form = p.form
-	p.emitControl(ctrl, p.topStyle(), true)
+	p.emitControl(ctrl, p.textareaStyle, true)
 }
 
 // startSelect opens a <select>: its options are collected and drawn as one
@@ -10203,11 +10706,27 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 		return
 	}
 	text := strings.ToValidUTF8(htmlstd.UnescapeString(raw), "")
-	if style.Pre {
+	whiteSpace := style.WhiteSpace
+	if style.Pre && whiteSpace == webWhiteSpaceNormal {
+		whiteSpace = webWhiteSpacePre
+	}
+	if whiteSpace != webWhiteSpaceNormal && whiteSpace != webWhiteSpaceNowrap {
 		text = strings.ReplaceAll(text, "\r\n", "\n")
 		text = strings.ReplaceAll(text, "\r", "\n")
 		if text == "" {
 			return
+		}
+		if whiteSpace == webWhiteSpacePreLine {
+			// pre-line keeps the authored line structure but collapses spaces
+			// inside each line, exactly like normal text does between breaks.
+			lines := strings.Split(text, "\n")
+			for i, line := range lines {
+				lines[i] = strings.Join(strings.Fields(line), " ")
+			}
+			text = strings.Join(lines, "\n")
+			if text == "" {
+				return
+			}
 		}
 		p.appendRun(text, style)
 		return
@@ -10456,6 +10975,7 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 
 		layout.Height = int32(len(layout.Rows)) * rowH
 		l.layoutFloats(floats, padX, contentW)
+		l.paintContainerBoxes()
 		l.finishContainerSizes(layout)
 		return layout, sizes
 	}
@@ -10935,6 +11455,76 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	}
 	marginRows := func(cssPx float64) int32 { return webMarginRows(cssPx, baseSize, rowH) }
 
+	// A wrapper with only child blocks (a hero, a card) has no block of its
+	// own to reserve a min-height. Track the boxes opened by the first child
+	// and, when the next block leaves one, pad the flow out to that box's
+	// declared height. Without this a 300px hero painted its background past
+	// the following paragraph instead of pushing that paragraph below it.
+	// Only boxes whose owning block is in this pass may reserve their own
+	// height here. A flex item's sublayout carries its container's box IDs as
+	// ancestors too; reserving the container's 240px height inside a one-line
+	// item consumed all the free space the item's margin-top:auto would have
+	// taken, pinning it to the top of the column.
+	ownedBoxes := make(map[int]bool, 8)
+	for _, b := range blocks {
+		if b.BoxOwner != 0 {
+			ownedBoxes[b.BoxOwner] = true
+		}
+	}
+	var openBoxes []int
+	openStart := map[int]int32{}
+	closeBox := func(id int) {
+		start, ok := openStart[id]
+		if !ok || d == nil {
+			return
+		}
+		info, ok := d.Boxes[id]
+		if !ok {
+			return
+		}
+		px := max(info.style.Height, info.style.MinHeight)
+		if px <= 0 || baseSize <= 0 || rowH <= 0 {
+			return
+		}
+		rows := int32(math.Ceil(px * baseSize / 16 / float64(rowH)))
+		if rows > int32(len(layout.Rows))-start {
+			skipRows(rows - (int32(len(layout.Rows)) - start))
+		}
+	}
+	syncBoxes := func(boxes []int) {
+		local := make([]int, 0, len(boxes))
+		for _, id := range boxes {
+			if ownedBoxes[id] {
+				local = append(local, id)
+			}
+		}
+		boxes = local
+		common := 0
+		for common < len(openBoxes) && common < len(boxes) && openBoxes[common] == boxes[common] {
+			common++
+		}
+		for i := len(openBoxes) - 1; i >= common; i-- {
+			closeBox(openBoxes[i])
+			delete(openStart, openBoxes[i])
+		}
+		openBoxes = openBoxes[:common]
+		for _, id := range boxes[common:] {
+			if _, ok := openStart[id]; !ok {
+				// A wrapper that has no direct text block (a form, hero or card)
+				// still owns its top padding. The first child used to start at the
+				// wrapper edge, so the painted surface backed up over the previous
+				// table row (or sat tight against a hero heading).
+				if info, ok := d.Boxes[id]; ok {
+					if rows := marginRows(info.style.MarginTop); rows > 0 {
+						skipRows(rows)
+					}
+				}
+				openStart[id] = int32(len(layout.Rows))
+			}
+			openBoxes = append(openBoxes, id)
+		}
+	}
+
 	// Adjacent vertical margins collapse to the larger of the two, the way CSS
 	// does it. Summing them stacked a heading's own spacing on top of the
 	// previous block's and filled real pages with holes on a small screen.
@@ -10946,11 +11536,20 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if len(layout.Rows) >= webMaxRows {
 			break
 		}
+		if block.Style.FloatSide == 0 && !block.Float {
+			// A float/absolute box owns its geometry in its own sublayout;
+			// opening it here made the next block close it and pad the main
+			// flow by its min-height, pushing siblings below a float that had
+			// never displaced them.
+			syncBoxes(block.Boxes)
+		}
 		// A float only narrows the rows it overlaps. Start each block with the
 		// full column and subtract the reserves that are active at its top row.
 		padX, contentW = flowPadX, flowContentW
+		padX, contentW = l.applyBoxConstraints(block, padX, contentW)
 		blockStart := int32(len(layout.Rows))
 		rectStart, imageStart := len(layout.Rects), len(layout.Images)
+		bgStart := len(layout.Backgrounds)
 		videoStart, floatStart := len(layout.Videos), len(layout.Floats)
 		dx, dy := webRelativeOffset(block.Style, baseSize)
 		shiftRelative := func() {
@@ -11003,21 +11602,26 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if len(layout.Rows) > 0 {
 				skipRows(marginRows(gap))
 			}
-			rowW := contentW
+			// applyBoxConstraints already skipped the item's own box (its width
+			// and padding are applied inside the item sublayout). What remains is
+			// the container's padding/width: a section's 12px inset must shift the
+			// cards, and its max-width must bound the tracks.
+			groupPadX, groupW := padX, contentW
+			rowW := groupW
 			if block.Style.TableRole == webTableRoleCell {
 				if block.Style.TableWidthPct > 0 {
-					rowW = int32(float64(contentW) * block.Style.TableWidthPct / 100)
+					rowW = int32(float64(groupW) * block.Style.TableWidthPct / 100)
 				} else if block.Style.TableWidthPx > 0 {
 					rowW = int32(block.Style.TableWidthPx * baseSize / 16)
 				}
-				if rowW > contentW {
-					rowW = contentW
+				if rowW > groupW {
+					rowW = groupW
 				}
 				if rowW < 32 {
 					rowW = 32
 				}
 			}
-			l.layoutFlexRow(blocks[i:j], padX, rowW)
+			l.layoutFlexRow(blocks[i:j], groupPadX, rowW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = 0
 			shiftRelative()
@@ -11043,8 +11647,9 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if len(layout.Rows) > 0 {
 					skipRows(marginRows(lead))
 				}
+				groupPadX, groupW := padX, contentW
 				if heightRows := l.flexColumnHeightRows(block.FlexHeight); heightRows > 0 && flexAutoCount(grouped) > 0 {
-					l.layoutFlexColumnAuto(grouped, block, padX, contentW, heightRows)
+					l.layoutFlexColumnAuto(grouped, block, groupPadX, groupW, heightRows)
 				} else {
 					for k, item := range grouped {
 						if k > 0 {
@@ -11057,8 +11662,8 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							itemBlocks = append([]webBlock(nil), item.blocks...)
 							itemBlocks[0].MarginTop = 0
 						}
-						shift := l.flexCrossOffset(itemBlocks, contentW)
-						l.layoutBlocksFlat(itemBlocks, padX+shift, contentW)
+						shift := l.flexCrossOffset(itemBlocks, groupW)
+						l.layoutBlocksFlat(itemBlocks, groupPadX+shift, groupW)
 					}
 				}
 			}
@@ -11158,6 +11763,20 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			continue
 		}
 		startGrid := int32(len(layout.Rows))
+		// The flow already skipped the block's top inset before startGrid.
+		// MarginTop/MarginBot contain both margins and padding, but only the
+		// padding belongs inside the painted surface. Growing the box upward
+		// and downward by the padding keeps a card's content inset while the
+		// transparent margin stays outside its background and border.
+		padTop := int32(math.Round(block.Style.PadTop * baseSize / 16))
+		padBot := int32(math.Round(block.Style.PadBot * baseSize / 16))
+		if padTop < 0 {
+			padTop = 0
+		}
+		if padBot < 0 {
+			padBot = 0
+		}
+		paintTop := startGrid*rowH - padTop
 
 		indent := int32(block.Indent * baseSize / 16)
 		if indent < 0 {
@@ -11244,12 +11863,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 
 		var line []webRunPos
 		var lineMax, lineFontH int32
+		lineClipped := false
 		firstLine := true
 		lineStart := padX + textIndent
 		lineRight := lineStart + avail
 		x := lineStart + firstLineIndent
 
-		flushLine := func() {
+		flushLine := func(last bool) {
 			if len(line) == 0 {
 				return
 			}
@@ -11273,6 +11893,36 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				lineAvail = avail - firstLineIndent
 				if lineAvail < 0 {
 					lineAvail = 0
+				}
+			}
+			// Justification stretches the automatic gaps between words on
+			// every line except the last. A forced break is a last line too,
+			// which matches how browsers leave a <br> line unstretched.
+			if block.Align == 3 && !last && lineAvail > lineWidth {
+				gaps := 0
+				for i := 1; i < len(line); i++ {
+					if line[i].SpaceBefore > 0 {
+						gaps++
+					}
+				}
+				if gaps > 0 {
+					slack := lineAvail - lineWidth
+					extra := slack / int32(gaps)
+					remainder := slack % int32(gaps)
+					var shift int32
+					for i := 1; i < len(line); i++ {
+						if line[i].SpaceBefore > 0 {
+							shift += extra
+							if remainder > 0 {
+								shift++
+								remainder--
+							}
+						}
+						// Every glyph after the gap moves too; letter-spaced words
+						// are stored as one position per glyph.
+						line[i].X += shift
+					}
+					lineWidth = lineAvail
 				}
 			}
 			offset := int32(0)
@@ -11305,6 +11955,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			firstLine = false
 			line = nil
 			lineMax, lineFontH = 0, 0
+			lineClipped = false
 			x = lineStart
 		}
 
@@ -11317,6 +11968,16 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if run.Style.Control != nil {
 				runText = run.Style.Control.Display()
 			}
+			runWhiteSpace := block.WhiteSpace
+			if runWhiteSpace == webWhiteSpaceNormal {
+				runWhiteSpace = block.Style.WhiteSpace
+			}
+			if run.Style.WhiteSpace != webWhiteSpaceNormal {
+				runWhiteSpace = run.Style.WhiteSpace
+			}
+			if run.Style.Pre && runWhiteSpace == webWhiteSpaceNormal {
+				runWhiteSpace = webWhiteSpacePre
+			}
 			segments := strings.Split(runText, "\n")
 			for si, segment := range segments {
 				if si > 0 {
@@ -11324,17 +11985,27 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						// An explicit <br> on an empty line is a blank row.
 						skipRows(1)
 					} else {
-						flushLine()
+						flushLine(true)
 					}
 				}
 				if segment == "" {
 					continue
 				}
-				words := strings.Fields(segment)
-				if block.Pre && len(words) > 0 {
-					// Keep code lines as one measured run; a long one is
-					// clipped to the page width instead of re-flowed.
+				whiteSpace := runWhiteSpace
+				preserveSpaces := webWhiteSpacePreservesSpaces(whiteSpace)
+				wrap := webWhiteSpaceWraps(whiteSpace)
+				var words []string
+				switch {
+				case whiteSpace == webWhiteSpacePre:
+					// A pre line is one measured run: its spaces and tabs are
+					// content, and the line clips instead of re-flowing.
 					words = []string{strings.TrimRight(segment, " ")}
+				case whiteSpace == webWhiteSpacePreWrap || whiteSpace == webWhiteSpaceBreakSpaces:
+					// Preserve authored spaces and attach each space run to the
+					// word that follows, so wrapped lines keep their indentation.
+					words = webPreWrapTokens(segment)
+				default:
+					words = strings.Fields(segment)
 				}
 				if run.Style.Control != nil && len(words) > 0 {
 					// A control is one box. Splitting its label at the spaces would
@@ -11346,9 +12017,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				// A run only gets a space before it when the source had one.
 				// Inserting one at every style boundary pushed punctuation
 				// away from the word it belongs to ("price , bold ,").
-				leadingSpace := strings.HasPrefix(segment, " ") || strings.HasPrefix(segment, "\t")
+				leadingSpace := !preserveSpaces && (strings.HasPrefix(segment, " ") || strings.HasPrefix(segment, "\t"))
 				for wi, word := range words {
 					if word == "" {
+						continue
+					}
+					if lineClipped {
 						continue
 					}
 					font := fontAtStyle(run.Style)
@@ -11410,23 +12084,51 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						}
 						wordW = boxW
 					}
-					if len(line) > 0 && (wi > 0 || leadingSpace) {
-						spaceW := l.spaceWidth(font) + int32(math.Round(run.Style.WordSpacing*baseSize/16)) + letterSpacing
-						if spaceW < 0 {
-							spaceW = 0
-						}
-						if x+spaceW+wordW > lineRight {
-							flushLine()
-						} else {
-							x += spaceW
+					spaceBefore := int32(0)
+					if len(line) > 0 {
+						switch {
+						case preserveSpaces:
+							// The token carries its own leading spaces. A wrap drops
+							// the whole token to the next line, indentation included.
+							if wrap && x+wordW > lineRight && wordW <= avail {
+								flushLine(false)
+							}
+						case wi > 0 || leadingSpace:
+							spaceW := l.spaceWidth(font) + int32(math.Round(run.Style.WordSpacing*baseSize/16)) + letterSpacing
+							if spaceW < 0 {
+								spaceW = 0
+							}
+							// A nowrap inline run may still break before it starts when
+							// the authored space gives the line a break opportunity; it
+							// may not break between its own words.
+							canBreak := wrap || (wi == 0 && leadingSpace)
+							if canBreak && x+spaceW+wordW > lineRight {
+								flushLine(false)
+							} else {
+								x += spaceW
+								spaceBefore = spaceW
+							}
 						}
 					}
 					if boxW > 0 && len(line) > 0 && x+boxW > lineRight {
-						flushLine()
+						flushLine(false)
 					}
 					if boxW == 0 && wordW > avail {
 						text = ellipsize(font, text, avail)
 						wordW = measure(text)
+					}
+					if boxW == 0 && !wrap && x+wordW > lineRight {
+						// nowrap/pre keeps one line: clip the overflowing tail with
+						// an ellipsis instead of silently wrapping or painting over
+						// the next block.
+						remaining := lineRight - x
+						if remaining <= 0 {
+							lineClipped = true
+							continue
+						}
+						text = ellipsize(font, text, remaining)
+						wordW = measure(text)
+						lineClipped = true
 					}
 					color := webResolveColor(run.Style, d)
 					if run.Style.Control != nil && run.Style.Control.PlaceholderShown() {
@@ -11444,6 +12146,9 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					pos := webRunPos{
 						Text:                text,
 						X:                   x,
+						SpaceBefore:         spaceBefore,
+						Boxes:               append([]int(nil), block.Boxes...),
+						BoxWidth:            contentW,
 						Font:                font,
 						Color:               color,
 						Bold:                run.Style.Bold,
@@ -11472,9 +12177,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					// their spacing is visually irrelevant.
 					if letterSpacing != 0 && boxW == 0 && !pos.HasBg && pos.Control == nil {
 						drawX := x
-						for _, r := range text {
+						for gi, r := range text {
 							glyph := string(r)
 							pos.Text, pos.X = glyph, drawX
+							if gi > 0 {
+								pos.SpaceBefore = 0
+							}
 							line = append(line, pos)
 							gw, _, err := font.SizeUTF8(glyph)
 							if err != nil {
@@ -11497,8 +12205,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					}
 				}
 			}
+			if lineClipped && !webWhiteSpaceWraps(runWhiteSpace) {
+				// The clipped run has no line of its own left to fill; start the
+				// following run on a fresh line instead of dropping it.
+				flushLine(true)
+			}
 		}
-		flushLine()
+		flushLine(true)
 
 		endGrid := int32(len(layout.Rows))
 		// A pixel height is a floor for the flow box: short content pads out,
@@ -11533,7 +12246,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 		}
 		l.recordContainerRows(block, blockStart, endGrid)
-		height := (endGrid - startGrid) * rowH
+		height := (endGrid-startGrid)*rowH + padTop + padBot
+		if half := min32(paintW, height) / 2; radius > half {
+			// A pill/circle radius is clamped on the used box, not left as the
+			// author's 999px sentinel for every consumer to remember to clamp.
+			radius = half
+		}
 		if block.Style.HasBoxShadow && !block.Style.Invisible && height > 0 {
 			shadowColor := sdl.Color{R: 0, G: 0, B: 0, A: 70}
 			if block.Style.HasBoxShadowColor {
@@ -11542,7 +12260,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			layout.Rects = append(layout.Rects, webRect{
 				Rect: sdl.Rect{
 					X: padX - 4 + int32(math.Round(block.Style.BoxShadowX*baseSize/16)),
-					Y: startGrid*rowH + int32(math.Round(block.Style.BoxShadowY*baseSize/16)),
+					Y: paintTop + int32(math.Round(block.Style.BoxShadowY*baseSize/16)),
 					W: paintW + 8, H: height,
 				},
 				Color:  webFadeColor(shadowColor, d.Paper, block.Style),
@@ -11566,7 +12284,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			})
 		}
 		if !block.Style.Invisible && height > 0 {
-			tileBox := sdl.Rect{X: padX + indent, Y: startGrid * rowH, W: blockW + indentRight, H: height}
+			tileBox := sdl.Rect{X: padX + indent, Y: paintTop, W: blockW + indentRight, H: height}
 			layers := make([]webBackgroundLayerStyle, 0, webMaxBackgroundLayers)
 			for i := 0; i < block.Style.BackgroundLayerCount && i < webMaxBackgroundLayers; i++ {
 				layers = append(layers, block.Style.BackgroundLayers[i])
@@ -11676,7 +12394,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if block.BorderWidth <= 0 {
 				ruleH = 2
 			}
-			top := startGrid * rowH
+			top := paintTop
 			if borderPaint && block.BorderLeft {
 				layout.Rects = append(layout.Rects, webRect{
 					Rect:        sdl.Rect{X: padX + indent - 8, Y: top, W: barW, H: height},
@@ -11771,8 +12489,58 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 		}
 		shiftRelative()
+		l.tagBlockBox(block, rectStart, bgStart)
+		l.recordSticky(block, startGrid, endGrid, rectStart, bgStart, imageStart)
 	}
+	syncBoxes(nil)
+}
 
+// tagBlockBox marks the paints this block produced for its own container box.
+// The container pass uses the tag to replace a direct block's partial surface
+// when the same wrapper also contains nested block content.
+func (l *webLayouter) tagBlockBox(block webBlock, rectStart, bgStart int) {
+	if l == nil || l.layout == nil || block.BoxOwner == 0 {
+		return
+	}
+	for i := rectStart; i < len(l.layout.Rects); i++ {
+		if l.layout.Rects[i].BoxID == 0 {
+			l.layout.Rects[i].BoxID = block.BoxOwner
+		}
+	}
+	for i := bgStart; i < len(l.layout.Backgrounds); i++ {
+		if l.layout.Backgrounds[i].BoxID == 0 {
+			l.layout.Backgrounds[i].BoxID = block.BoxOwner
+		}
+	}
+}
+
+// recordSticky keeps a copy of a sticky block's measured geometry. The block
+// itself remains in Rows, so its flow space is unchanged; this copy is what
+// the renderer pins to the top of the viewport after a scroll. Rows, rects and
+// layers in the copy keep their page-local y coordinates, and Y is the normal
+// flow origin the pinned pass subtracts from Top.
+func (l *webLayouter) recordSticky(block webBlock, startGrid, endGrid int32, rectStart, bgStart, imageStart int) {
+	if l == nil || l.layout == nil || !block.Style.Sticky || endGrid <= startGrid || l.rowH <= 0 {
+		return
+	}
+	f := webFloat{Z: block.ZIndex, Y: startGrid * l.rowH}
+	if block.Style.HasTop && l.baseSize > 0 {
+		f.Top = int32(math.Round(block.Style.Top * l.baseSize / 16))
+	}
+	if f.Top < 0 {
+		f.Top = 0
+	}
+	f.Rows = append([]webRow(nil), l.layout.Rows[startGrid:endGrid]...)
+	if rectStart < len(l.layout.Rects) {
+		f.Rects = append([]webRect(nil), l.layout.Rects[rectStart:]...)
+	}
+	if bgStart < len(l.layout.Backgrounds) {
+		f.Backgrounds = append([]webBackgroundPaint(nil), l.layout.Backgrounds[bgStart:]...)
+	}
+	if imageStart < len(l.layout.Images) {
+		f.Images = append([]webImagePos(nil), l.layout.Images[imageStart:]...)
+	}
+	l.layout.Stickies = append(l.layout.Stickies, f)
 }
 
 // webHrefFollowable reports whether an anchor target is worth a cursor stop:
@@ -11833,9 +12601,18 @@ func collectWebControls(layout *webLayout) []webLinkHit {
 				j = i + 1
 			}
 			hit := webLinkHit{Row: rowIdx, X: startX, W: endX - startX, Text: strings.TrimSpace(label), Control: ctrl}
-			if run := row.Runs[i]; run.BoxW > 0 && run.BoxH > 0 {
+			run := row.Runs[i]
+			if run.BoxW > 0 && run.BoxH > 0 {
 				hit.W = run.BoxW
 				hit.Box = sdl.Rect{X: run.X, Y: row.Y, W: run.BoxW, H: run.BoxH}
+			} else if run.Font != nil {
+				// A submit button draws its label as ordinary text and has no
+				// control frame of its own. Its hit box was left at 0×0, so the
+				// D-pad could focus the button but not touch it. Use the measured
+				// run as the hit target, just like a link uses its own extent.
+				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil && w > 0 && h > 0 {
+					hit.Box = sdl.Rect{X: run.X, Y: row.Y, W: int32(w), H: int32(h)}
+				}
 			}
 			hits = append(hits, hit)
 			i = j
@@ -11933,6 +12710,8 @@ func webResolveColor(style webStyle, doc *webDocument) sdl.Color {
 	bg := doc.Paper
 	if style.HasBg {
 		bg = style.Background
+	} else if style.HasBackdrop {
+		bg = style.Backdrop
 	}
 	color := doc.Text
 	if style.HasColor {
@@ -12431,6 +13210,9 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				}
 				restore()
 			}
+		}
+		if len(layout.Stickies) > 0 {
+			drawWebStickies(r, config, doc, layout, rect, offset)
 		}
 		if len(layout.Floats) > 0 {
 			drawWebFloats(r, config, doc, layout, rect, offset, false)

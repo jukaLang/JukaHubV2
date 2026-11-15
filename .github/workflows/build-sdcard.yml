@@ -127,6 +127,7 @@ jobs:
           if-no-files-found: error
           path: |
             player/dist/JukaHub-SDCARD.zip
+            player/dist/JukaHub-OS-SDCARD.zip
             player/dist/JukaHub-SDCARD/
 
       - name: Summary

@@ -1057,6 +1057,16 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
+	// A modal still leaves the scene footer band visible under its scrim; the
+	// stream menu ended ten pixels into it on the wide canvas. Lift the card
+	// just enough to clear the band instead of shrinking the list.
+	if footerY := sceneFooterBand().Y; panelY+panelH > footerY {
+		if panelH <= footerY {
+			panelY = footerY - panelH
+		} else {
+			panelY = 0
+		}
+	}
 	ipPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
 	drawOverlayScrim(renderer)

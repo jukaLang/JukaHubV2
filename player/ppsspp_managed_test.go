@@ -376,6 +376,8 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 		`[ "$ELAPSED" -lt 10 ]`,
 		`HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS"`,
 		`exec /bin/sh "$FALLBACK" "$@"`,
+		`LIBS="$PPSSPP_LIBS:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`,
+		`if (: >"$LOG") 2>/dev/null; then`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("script lacks %q", want)
@@ -451,12 +453,14 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 	ppssppWriteFiles(t, dir, ppssppFiles(
 		"bin/mount", "#!/bin/sh\nexit 0\n",
 		"bin/umount", "#!/bin/sh\nexit 0\n",
-		"build/PPSSPP/fail", "#!/bin/sh\nexit 3\n",
+		"build/PPSSPP/fail", "#!/bin/sh\necho 'no EGL display' >&2\nexit 3\n",
 		"build/PPSSPP/ok", "#!/bin/sh\nprintf '%s|%s' \"$*\" \"$HOME\" >"+shellQuote(played)+"\nexit 0\n",
 		"firmware/fallback.sh", "#!/bin/sh\nprintf '%s|%s' \"$*\" \"$HOME\" >"+shellQuote(marker)+"\n",
 		"stick/SYSTEM/ppsspp.ini", "[General]\n",
 	))
-	fallbackSaw := "/roms/Game.iso|/original/home"
+	// The fallback gets the ROM in MainUI's form, through the interpreter its
+	// first line names.
+	fallbackSaw := "/card/Emus/PSP/../../Roms/Game.iso|/original/home"
 	withFirmware := true
 	run := func(binary string) {
 		t.Helper()
@@ -471,12 +475,15 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 		if withFirmware {
 			spec.Stick = filepath.Join(dir, "stick")
 			spec.Fallback = filepath.Join(dir, "firmware", "fallback.sh")
+			spec.FallbackShell = sh
+			spec.FallbackRoms = "/card/Roms"
+			spec.FallbackRomsAs = "/card/Emus/PSP/../../Roms"
 		}
 		script := filepath.Join(dir, "build", ppssppScriptName)
 		if err := os.WriteFile(script, []byte(ppssppLauncherScript(spec)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(sh, script, "/roms/Game.iso")
+		cmd := exec.Command(sh, script, "/card/Roms/Game.iso")
 		cmd.Env = append(os.Environ(), "HOME=/original/home", "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 		_ = cmd.Run()
 	}
@@ -486,12 +493,12 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 	if regularFile(bad) || regularFile(marker) {
 		t.Fatal("a clean exit marked the build bad or ran the fallback")
 	}
-	if got, _ := os.ReadFile(played); string(got) != "--pause-menu-exit /roms/Game.iso|"+filepath.Join(dir, "home") {
+	if got, _ := os.ReadFile(played); string(got) != "--pause-menu-exit /card/Roms/Game.iso --fullscreen|"+filepath.Join(dir, "home") {
 		t.Fatalf("PPSSPP ran as %q", got)
 	}
 	run("fail")
 	reason, isBad := ppssppReadFirstLine(bad)
-	if !isBad || !strings.Contains(reason, "exited with status 3") {
+	if !isBad || !strings.Contains(reason, "exited with status 3") || !strings.Contains(reason, "no EGL display") {
 		t.Fatalf("bad marker = %q, %v", reason, isBad)
 	}
 	if got, _ := os.ReadFile(marker); string(got) != fallbackSaw {
@@ -513,7 +520,7 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 	_ = os.Remove(played)
 	withFirmware = false
 	run("ok")
-	if got, _ := os.ReadFile(played); string(got) != "--pause-menu-exit /roms/Game.iso|"+filepath.Join(dir, "home") {
+	if got, _ := os.ReadFile(played); string(got) != "--pause-menu-exit /card/Roms/Game.iso --fullscreen|"+filepath.Join(dir, "home") {
 		t.Errorf("without a firmware PPSSPP the build ran as %q", got)
 	}
 	if !dirExists(filepath.Join(dir, "home", ".config", "ppsspp", "PSP", "SAVEDATA")) {
@@ -707,7 +714,7 @@ func TestPPSSPPRevertBad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "PPSSPP 1.20.3 did not start on this device — PSP games use PPSSPP 1.20.2 again"; msg != want {
+	if want := "PPSSPP 1.20.3 did not start on this device (PPSSPP 1.20.3 exited with status 139 after 2s) — PSP games use PPSSPP 1.20.2 again"; msg != want {
 		t.Errorf("toast = %q, want %q", msg, want)
 	}
 	snap := ppssppSnapshot()
@@ -725,7 +732,7 @@ func TestPPSSPPRevertBad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "PPSSPP 1.20.2 did not start on this device — PSP games use PPSSPP 1.18.1 again"; msg != want {
+	if want := "PPSSPP 1.20.2 did not start on this device (PPSSPP 1.20.2 exited with status 1 after 1s) — PSP games use PPSSPP 1.18.1 again"; msg != want {
 		t.Errorf("toast = %q, want %q", msg, want)
 	}
 	if snap := ppssppSnapshot(); snap.Active != "" || snap.Override {

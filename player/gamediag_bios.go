@@ -431,13 +431,14 @@ func gameDiagResolveRADir(value, cfgPath, romPath string) string {
 		rest = value[1:]
 	case strings.HasPrefix(value, "~"):
 		rest = value[1:]
-		if IsWindows() {
-			if home, err := os.UserHomeDir(); err == nil && home != "" {
-				return filepath.Clean(filepath.Join(home, filepath.FromSlash(strings.TrimLeft(rest, `/\`))))
+		// The save manager's "~" (retroArchHomeFor): the user's home on
+		// Windows and for a desktop config under it; on the handheld the
+		// launch scripts start RetroArch with HOME set to its own folder.
+		if IsWindows() || strings.TrimSpace(cfgPath) != "" {
+			if home := retroArchHomeFor(cfgPath); home != "" {
+				return filepath.Clean(filepath.Join(home, filepath.FromSlash(strings.TrimLeft(strings.ReplaceAll(rest, `\`, "/"), "/"))))
 			}
 		}
-		// The handheld launch scripts start RetroArch with HOME set to its
-		// own folder.
 	case filepath.IsAbs(value) || strings.HasPrefix(value, "/"):
 		return filepath.Clean(filepath.FromSlash(value))
 	default:

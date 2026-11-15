@@ -1190,6 +1190,15 @@ func musicUpdateVisualizer() {
 	}
 }
 
+// musicVisualizerLayout is the immersive screen's measured geometry, kept for
+// the real-font containment tests. Render thread only.
+type musicVisualizerLayoutState struct {
+	title, meta, spectrum, rail, time, state, hint sdl.Rect
+	timeLabel                                      string
+}
+
+var musicVisualizerLayout musicVisualizerLayoutState
+
 // renderMusicFullVisualizer is the immersive mode toggled with V. It trades the
 // playlist for a mirrored spectrum, large track title, and a progress rail. The
 // bars come from the same smoothed visualizer the artwork tile uses, so the two
@@ -1237,15 +1246,21 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 		title = strings.TrimSuffix(tracks[cur].Name, filepath.Ext(tracks[cur].Name))
 		meta = fmt.Sprintf("Track %d of %d", cur+1, len(tracks))
 	}
+	fontH := int32(font.Height())
 	titleLine := ellipsize(big, title, nowPlayingLineMax(screenWidth))
-	tw, _, _ := big.SizeUTF8(titleLine)
-	renderText(renderer, config, big, titleLine,
-		ColorTextPrimary(), nowPlayingLineX(screenWidth, int32(tw)), 54)
+	tw, th, _ := big.SizeUTF8(titleLine)
+	titleX := nowPlayingLineX(screenWidth, int32(tw))
+	renderText(renderer, config, big, titleLine, ColorTextPrimary(), titleX, 54)
 	metaLine := ellipsize(font, meta, nowPlayingLineMax(screenWidth))
-	mw, _, _ := font.SizeUTF8(metaLine)
-	renderText(renderer, config, font, metaLine, ColorTextTertiary(), nowPlayingLineX(screenWidth, int32(mw)), 54+int32(big.Height())+10)
+	mw, mh, _ := font.SizeUTF8(metaLine)
+	metaY := 54 + int32(big.Height()) + 10
+	renderText(renderer, config, font, metaLine, ColorTextTertiary(), nowPlayingLineX(screenWidth, int32(mw)), metaY)
+	musicVisualizerLayout.title = sdl.Rect{X: titleX, Y: 54, W: int32(tw), H: int32(th)}
+	musicVisualizerLayout.meta = sdl.Rect{X: nowPlayingLineX(screenWidth, int32(mw)), Y: metaY, W: int32(mw), H: int32(mh)}
 
 	// Spectrum. 48 bars, mirrored around a centre line with a faint reflection.
+	// Its top follows the meta line: the old fixed 42%-of-height ceiling could
+	// grow up through a long title at the same time as the title grew down.
 	bars := 48
 	gap := int32(5)
 	usable := screenWidth - 120
@@ -1254,7 +1269,15 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 		barW = 4
 	}
 	baseY := screenHeight/2 + 70
-	maxH := int32(float64(screenHeight) * 0.42)
+	spectrumTop := metaY + int32(mh) + 12
+	maxH := baseY - spectrumTop
+	if ceiling := int32(float64(screenHeight) * 0.42); maxH > ceiling {
+		maxH = ceiling
+	}
+	if maxH < 8 {
+		maxH = 8
+	}
+	musicVisualizerLayout.spectrum = sdl.Rect{X: 60, Y: baseY - maxH, W: screenWidth - 120, H: maxH}
 	for i := 0; i < bars; i++ {
 		v := barsData[(i*visualBars/bars)%visualBars]
 		h := int32(v / float64(visualMaxH) * float64(maxH))
@@ -1285,14 +1308,32 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	if frac > 1 {
 		frac = 1
 	}
-	railY := screenHeight - 66
+	// The bottom stack is derived from the hint font, not three fixed offsets:
+	// "Playing · Vol" used to sit on the time line and the hint line sat on the
+	// state line at 720 px. The rail sits above the time, and the spectrum above
+	// that.
+	hintY := screenHeight - fontH - 8
+	stateY := hintY - fontH - 4
+	timeY := stateY - fontH - 4
+	railY := timeY - 18
+	musicVisualizerLayout.rail = sdl.Rect{X: 60, Y: railY, W: screenWidth - 120, H: 6}
 	fillRoundedRect(renderer, 60, railY, screenWidth-120, 6, 3, WithAlpha(ColorBorder, 120))
 	if frac > 0 {
 		fillRoundedRect(renderer, 60, railY, int32(float64(screenWidth-120)*frac), 6, 3, accentColor)
 	}
-	timeText := formatTime(position) + "  /  " + formatTime(duration)
+	dispPos, dispDur := position, duration
+	if cur < 0 || cur >= len(tracks) {
+		dispPos, dispDur = 0, 0
+	}
+	totalText := "--:--"
+	if dispDur > 0 {
+		totalText = formatTime(dispDur)
+	}
+	timeText := formatTime(dispPos) + "  /  " + totalText
 	tw, _, _ = font.SizeUTF8(timeText)
-	renderText(renderer, config, font, timeText, ColorTextSecondary(), (screenWidth-int32(tw))/2, railY+16)
+	renderText(renderer, config, font, timeText, ColorTextSecondary(), (screenWidth-int32(tw))/2, timeY)
+	musicVisualizerLayout.time = sdl.Rect{X: (screenWidth - int32(tw)) / 2, Y: timeY, W: int32(tw), H: fontH}
+	musicVisualizerLayout.timeLabel = timeText
 
 	state := "Playing"
 	if !playing {
@@ -1302,11 +1343,14 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	}
 	state = fmt.Sprintf("%s   ·   Vol %d%%", state, int(math.Round(volume*100)))
 	sw, _, _ := font.SizeUTF8(state)
-	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, screenHeight-38)
+	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, stateY)
+	musicVisualizerLayout.state = sdl.Rect{X: (screenWidth - int32(sw)) / 2, Y: stateY, W: int32(sw), H: fontH}
 
 	hint := hintLine(FooterHint{"V", "Close Visualizer"}, FooterHint{"Space", "Pause"}, FooterHint{"B", "Back"})
+	hint = ellipsize(font, hint, screenWidth-32)
 	hw, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, WithAlpha(ColorTextTertiary(), 170), (screenWidth-int32(hw))/2, screenHeight-20)
+	renderText(renderer, config, font, hint, ColorTextMuted(), (screenWidth-int32(hw))/2, hintY)
+	musicVisualizerLayout.hint = sdl.Rect{X: (screenWidth - int32(hw)) / 2, Y: hintY, W: int32(hw), H: fontH}
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -1326,6 +1370,20 @@ var musicRects = struct {
 	rowStart                    int
 	valid                       bool
 }{}
+
+// musicAuralisLayout is the artwork layout's list and footer-hint geometry,
+// kept for the real-font containment tests. Render thread only.
+var musicAuralisLayout struct {
+	list      sdl.Rect
+	hints     []sdl.Rect
+	hintLines []string
+	search    sdl.Rect
+	hintInk   sdl.Color
+	elapsed   string
+	total     string
+	barFrac   float64
+	emptyHint bool
+}
 
 const musicRowHeight = 46
 
@@ -1499,9 +1557,16 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	seekX := textX
 	seekW := textW
 	fillRoundedRect(renderer, seekX, seekY, seekW, 8, 4, ColorTrack)
+	// An empty queue can still carry the last track's position and duration
+	// in the music state. Showing those under "Nothing playing" looked like a
+	// paused song and kept the thumb halfway across the bar.
+	dispPos, dispDur := position, duration
+	if cur < 0 || cur >= len(tracks) {
+		dispPos, dispDur = 0, 0
+	}
 	frac := 0.0
-	if duration > 0 {
-		frac = position / duration
+	if dispDur > 0 {
+		frac = dispPos / dispDur
 	}
 	if frac < 0 {
 		frac = 0
@@ -1516,11 +1581,14 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	fillRoundedRect(renderer, thumbX-7, seekY-3, 14, 14, 7, ColorTextPrimary())
 	musicRects.seek = sdl.Rect{X: seekX, Y: seekY - 10, W: seekW, H: 28}
 
-	elapsedText := formatTime(position)
+	elapsedText := formatTime(dispPos)
 	totalText := "--:--"
-	if duration > 0 {
-		totalText = formatTime(duration)
+	if dispDur > 0 {
+		totalText = formatTime(dispDur)
 	}
+	musicAuralisLayout.elapsed, musicAuralisLayout.total = elapsedText, totalText
+	musicAuralisLayout.barFrac = frac
+	musicAuralisLayout.emptyHint = cur < 0 || cur >= len(tracks)
 	timeY := seekY + 16
 	renderText(renderer, config, font, elapsedText, ColorTextSecondary(), seekX, timeY)
 	tw, _, _ := font.SizeUTF8(totalText)
@@ -1647,11 +1715,24 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	// ── Playlist card ──
 	listY := cardY + cardH + 20
 	// Two footer hint lines need more room than the single line the player had.
-	listH := screenHeight - listY - 74
+	// They use the shared footer-hint face, not the body face: at the largest
+	// accessibility size the body font made the hints overflow the right edge
+	// and crowd the canvas bottom, and the smaller face is what every other
+	// footer already uses. The stride is measured from that face.
+	hintFont := getFontSized(config, "small", footerHintSize)
+	if hintFont == nil {
+		hintFont = font
+	}
+	footerFontH := int32(hintFont.Height())
+	const hintGap = int32(2)
+	hintStack := 2*footerFontH + hintGap
+	listH := screenHeight - listY - hintStack - 20
 	if listH < 120 {
 		listH = 120
 	}
 	drawCard(renderer, cardX, listY, cardW, listH, 18)
+	musicAuralisLayout.list = sdl.Rect{X: cardX, Y: listY, W: cardW, H: listH}
+	musicAuralisLayout.hints = musicAuralisLayout.hints[:0]
 
 	header := "Playlist"
 	if len(tracks) > 0 {
@@ -1674,9 +1755,13 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 	exitX := cardX + cardW - 24 - exitW
 	searchW := int32(96)
+	if tw, _, _ := font.SizeUTF8("Search"); int32(tw)+24 > searchW {
+		searchW = int32(tw) + 24
+	}
 	searchX := exitX - 12 - searchW
 	musicRects.exitTimer = musicHeaderButton(renderer, config, font, exitX, listY+11, exitW, 32, exitLabel, musicExitRemaining() > 0)
 	musicRects.search = musicHeaderButton(renderer, config, font, searchX, listY+11, searchW, 32, "Search", musicSearchActive())
+	musicAuralisLayout.search = musicRects.search
 
 	rowsTop := listY + 54
 	visible := int((listH - 66) / musicRowHeight)
@@ -1702,7 +1787,12 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			rowY := rowsTop + int32(i-start)*musicRowHeight
 			row := sdl.Rect{X: cardX + 16, Y: rowY, W: cardW - 32, H: musicRowHeight - 6}
 			if i == cursor {
+				// The playlist cursor is a keyboard focus, not a selected mark:
+				// a filled row alone read as hover once the row was already
+				// playing. The 3px ring goes over the fill and stays inside the
+				// row, so the list's edges cannot clip it.
 				fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, WithAlpha(ColorCardFocus, 255))
+				drawGlassFocusRing(renderer, row, 10)
 			}
 			if i == cur {
 				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
@@ -1739,13 +1829,20 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		"ENTER Play   SPACE Pause   LEFT/RIGHT Seek   hold -/+ Skip   [ ] Speed   T Sleep   E Exit",
 		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   G PEQ   / Search   O Screen off   B Back",
 	}
+	hintTop := screenHeight - 10 - hintStack
+	musicAuralisLayout.hintInk = ColorTextMuted()
+	musicAuralisLayout.hintLines = musicAuralisLayout.hintLines[:0]
 	for i, line := range hints {
 		// The key list is longer than a narrow window at a large text scale;
 		// ellipsize it so the line cannot run off both edges of the screen.
-		line = ellipsize(font, line, screenWidth-32)
-		hw, _, _ := font.SizeUTF8(line)
-		renderText(renderer, config, font, line, sdl.Color{R: 110, G: 125, B: 150, A: 170},
-			(screenWidth-int32(hw))/2, screenHeight-52+int32(i)*18)
+		line = ellipsize(hintFont, line, screenWidth-32)
+		hw, _, _ := hintFont.SizeUTF8(line)
+		y := hintTop + int32(i)*(footerFontH+hintGap)
+		renderText(renderer, config, hintFont, line, musicAuralisLayout.hintInk,
+			(screenWidth-int32(hw))/2, y)
+		musicAuralisLayout.hints = append(musicAuralisLayout.hints,
+			sdl.Rect{X: (screenWidth - int32(hw)) / 2, Y: y, W: int32(hw), H: footerFontH})
+		musicAuralisLayout.hintLines = append(musicAuralisLayout.hintLines, line)
 	}
 
 	// Header last, so no row or hint line can be painted over the bar.
@@ -1768,6 +1865,20 @@ var musicButtonIcons = map[string]string{
 	"-":  "minus",
 }
 
+// musicLabelWidth is the width a labelled pill needs for the loaded font, with
+// room for its horizontal padding. It never returns less than min, so a pill
+// keeps the layout's original minimum at small text sizes.
+func musicLabelWidth(font *ttf.Font, label string, min int32) int32 {
+	if font == nil {
+		return min
+	}
+	tw, _, _ := font.SizeUTF8(label)
+	if w := int32(tw) + 16; w > min {
+		return w
+	}
+	return min
+}
+
 // musicButton draws one rounded transport button and returns its rect. A
 // transport mark is drawn as its icon; any other label (Shuffle, Repeat, Fav)
 // stays text.
@@ -1785,7 +1896,8 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 	if isIcon {
 		text = ""
 	}
-	rect := UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: w, H: h}, text, UIButtonStyle{
+	btn := sdl.Rect{X: x, Y: y, W: w, H: h}
+	rect := UIButton(renderer, config, btn, text, UIButtonStyle{
 		Variant:    UIButtonCustom,
 		Fill:       fill,
 		Border:     border,
@@ -1793,7 +1905,7 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 		Font:       font,
 		Radius:     RadiusMD,
 		NoShadow:   true,
-	}, UIButtonState{})
+	}, UIButtonState{Hovered: pointInRect(mouseX, mouseY, btn)})
 	if isIcon && renderer != nil {
 		g := min32(w, h) * 9 / 20
 		if g < 12 {
@@ -2120,11 +2232,11 @@ func renderLyricsTile(renderer *sdl.Renderer, config *Config, font *ttf.Font, li
 		if i < 0 || i >= len(lines) {
 			continue
 		}
-		col := WithAlpha(ColorTextTertiary(), 150)
+		col := ColorTextTertiary()
 		if off == 0 {
 			col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
 		} else if off == -1 || off == 1 {
-			col = WithAlpha(ColorTextSecondary(), 190)
+			col = ColorTextSecondary()
 		}
 		text := ellipsize(font, strings.TrimSpace(lines[i].Text), inner)
 		if text == "" {
@@ -2138,7 +2250,7 @@ func renderLyricsTile(renderer *sdl.Renderer, config *Config, font *ttf.Font, li
 	if idx < 0 {
 		text := "…"
 		tw, _, _ := font.SizeUTF8(text)
-		renderText(renderer, config, font, text, WithAlpha(ColorTextTertiary(), 160),
+		renderText(renderer, config, font, text, ColorTextTertiary(),
 			x+(size-int32(tw))/2, y+size-40)
 	}
 }

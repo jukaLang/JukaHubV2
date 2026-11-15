@@ -280,6 +280,14 @@ func collectWiFiDiagnostics() wifiDiagReport {
 		add("Station", "not read — no backend", wifiDiagInfo)
 	}
 
+	// What the keeper (wifi_keeper.go) did last: the evidence for "it does not
+	// reconnect by itself".
+	if text, at := wifiKeeperLastNote(); text != "" {
+		add("Auto-connect", fmt.Sprintf("%s · %s ago", text, shortAge(time.Since(at))), wifiDiagInfo)
+	} else if wifiKeeperStarted.Load() {
+		add("Auto-connect", "watching — nothing needed yet", wifiDiagInfo)
+	}
+
 	if text, source, at := wifiLastError(); text != "" {
 		label := "Last error"
 		if source != "" {

@@ -154,20 +154,45 @@ func resolveRetroArchSaveDir(value, cfgPath string) string {
 		return ""
 	}
 	if configRelative && cfgPath != "" {
-		return filepath.Clean(filepath.Join(filepath.Dir(cfgPath), strings.TrimLeft(v, `/\`)))
+		return filepath.Clean(filepath.Join(raInstallDir(cfgPath), strings.TrimLeft(v, `/\`)))
 	}
-	if strings.HasPrefix(v, "~") {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			v = filepath.Join(home, strings.TrimPrefix(v, "~"))
+	if v == "~" || strings.HasPrefix(v, "~/") || strings.HasPrefix(v, `~\`) {
+		if home := retroArchHomeFor(cfgPath); home != "" {
+			v = filepath.Join(home, strings.TrimLeft(v[1:], `/\`))
 		}
 	}
 	if !filepath.IsAbs(v) {
 		if cfgPath == "" {
 			return ""
 		}
-		v = filepath.Join(filepath.Dir(cfgPath), v)
+		// RetroArch runs from its own folder (the launch scripts cd there),
+		// which is also where a .retroarch/retroarch.cfg's paths start.
+		v = filepath.Join(raInstallDir(cfgPath), v)
 	}
 	return filepath.Clean(v)
+}
+
+// retroArchHomeFor is the folder "~" means in the retroarch.cfg at cfgPath:
+// the stock and CrossMix launch scripts start ra64.trimui with HOME set to its
+// own folder, while JukaHub's HOME is its app folder (launch.sh), so expanding
+// "~" with JukaHub's own home sent ~/.retroarch/saves to
+// Apps/JukaHub/.retroarch/saves and the saves were "not found". On a desktop a
+// config anywhere under the user's real home (~/.config, an XDG_CONFIG_HOME
+// inside it, a flatpak's ~/.var/app/…) keeps that home, and Windows's
+// RetroArch always reads "~" as the user's home. The save manager, the video
+// looks (videoFilterExpandDir) and the BIOS check (gameDiagResolveRADir) all
+// read "~" through this, so one value names one folder.
+func retroArchHomeFor(cfgPath string) string {
+	home, _ := os.UserHomeDir()
+	if IsWindows() || strings.TrimSpace(cfgPath) == "" {
+		return home
+	}
+	// On the handheld "~" is always RetroArch's folder; elsewhere a HOME of /
+	// would hold every config.
+	if !IsTrimuiDevice() && home != "" && filepath.Clean(home) != string(filepath.Separator) && isPathWithin(cfgPath, home) {
+		return home
+	}
+	return raInstallDir(cfgPath)
 }
 
 // saveRootsFor is the pure discovery step. It only returns directories that

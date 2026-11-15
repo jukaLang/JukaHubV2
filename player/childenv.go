@@ -54,7 +54,84 @@ var childEnvAppDir = exeDir
 // app's own, os.Environ()) with the firmware's HOME, PATH and LD_LIBRARY_PATH
 // put back and JukaHub's markers removed. See the file comment.
 func screenChildEnv(environ []string) []string {
-	return childEnvWithTZ(screenChildEnvFor(environ, childEnvAppDir()), gameChildZone())
+	env := screenChildEnvFor(environ, childEnvAppDir())
+	if IsTrimuiDevice() {
+		env = childEnvFirmwareDirs(env, childEnvFirmwareCard())
+	}
+	// In a JukaHub OS session the layers meant for games go first on the
+	// library path; JukaHub OS's own variables never reach a child (jukaos.go).
+	env = jukaosChildEnv(env)
+	return childEnvWithTZ(env, gameChildZone())
+}
+
+// childEnvFirmwareCard is the card the firmware's tools live on.
+func childEnvFirmwareCard() string {
+	if root := strings.TrimSpace(trimuiSDRootFn()); root != "" {
+		return root
+	}
+	return "/mnt/SDCARD"
+}
+
+// childEnvFirmwareDirs appends the firmware's tool and library folders that
+// exist and are missing from PATH and LD_LIBRARY_PATH. When JukaHub starts at
+// boot instead of from MainUI, the environment launch.sh recorded is init's,
+// without the folders MainUI's start script adds (CrossMix's System/bin with
+// jq, System/lib, /usr/trimui/lib), so a launch script that worked from MainUI
+// could not find its helpers — or the folder variables they fill in — and
+// RetroArch was "not found". Appended, never put first: a list the firmware
+// set keeps its order.
+func childEnvFirmwareDirs(environ []string, card string) []string {
+	add := map[string][]string{
+		"PATH": {"/usr/trimui/bin", filepath.Join(card, "System", "bin"),
+			filepath.Join(card, "System", "usr", "trimui", "scripts")},
+		"LD_LIBRARY_PATH": {"/usr/trimui/lib", filepath.Join(card, "System", "lib")},
+	}
+	out := append(make([]string, 0, len(environ)+2), environ...)
+	for _, key := range []string{"PATH", "LD_LIBRARY_PATH"} {
+		// The last occurrence is the one a child sees (childEnvLookup).
+		last := -1
+		for i, kv := range out {
+			if k, _, ok := strings.Cut(kv, "="); ok && k == key {
+				last = i
+			}
+		}
+		if last >= 0 {
+			_, value, _ := strings.Cut(out[last], "=")
+			out[last] = key + "=" + childEnvAppendDirs(value, add[key])
+		} else {
+			base := ""
+			if key == "PATH" {
+				// With no PATH a shell uses its built-in one; a PATH of the
+				// firmware's folders alone would hide /bin and /usr/bin.
+				base = "/usr/sbin:/usr/bin:/sbin:/bin"
+			}
+			if value := childEnvAppendDirs(base, add[key]); value != "" && value != base {
+				out = append(out, key+"="+value)
+			}
+		}
+	}
+	return out
+}
+
+// childEnvAppendDirs appends each existing folder of dirs that list lacks.
+func childEnvAppendDirs(list string, dirs []string) string {
+	have := map[string]bool{}
+	for _, part := range strings.Split(list, childEnvListSep) {
+		if strings.TrimSpace(part) != "" {
+			have[filepath.Clean(part)] = true
+		}
+	}
+	for _, dir := range dirs {
+		if have[filepath.Clean(dir)] || !dirExists(dir) {
+			continue
+		}
+		have[filepath.Clean(dir)] = true
+		if list != "" {
+			list += childEnvListSep
+		}
+		list += dir
+	}
+	return list
 }
 
 // gameChildZone is the zone a game child should run in: the one JukaHub uses

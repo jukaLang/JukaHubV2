@@ -327,6 +327,12 @@ and writes to `dist/`:
   `sha256`, `size`, `min_firmware`, `files`)
 - `SHA256SUMS`
 
+The JukaHub OS package is made from any of these TrimUI builds by
+`player/trimui/make-os-package.sh` (`make os-package APP=...`): the app as an
+SD-card root with OS mode on and the boot hook already in `System/starts`. The
+release workflow attaches it as `JukaHub-OS-Trimui.zip`; see
+[JukaHub OS](JUKAHUB_OS.md#the-os-package-jukahub-os-trimuizip).
+
 The compile stamp is what the updater compares: release tags are timestamps, so
 "is there something newer" is decided by comparing the release's publication
 time with the stamp inside the running binary, never by comparing version
@@ -343,6 +349,7 @@ numbers. See [Patch and package format](PACKAGES.md) for what consumes it.
 | [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` (with the Remote Play helpers and the two runtime packages in `native/bin`) on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json`, `SHA256SUMS` and (when they were built) `JukaHub-RemotePlay-linux-arm64.zip`, `JukaHub-AndroidRT-linux-arm64.zip` and `JukaHub-Wine-linux-arm64.zip` to the GitHub release, then publishes it once the draft upload is complete |
 | [`.github/workflows/remote-play-helpers.yml`](../.github/workflows/remote-play-helpers.yml) | called by the three workflows above, or manual | `remote-play-helpers` artifact: `chiaki-stream`, `chiaki-regist` and `BUILDINFO.txt`, built by `build-helpers.sh` in native mode on an arm64 runner inside a debootstrapped Ubuntu 20.04 root (its five static dependencies side by side); `androidrt-package` (`JukaHub-AndroidRT-linux-arm64.zip`), built by `build-runtimes.sh` in the same root, with AndroidRT's smoke suite on arm64 as an advisory step. [`.github/scripts/build-root.sh`](../.github/scripts/build-root.sh) makes the root and runs every build in it. Each part is reused from an earlier push-to-main run of the same calling workflow when nothing it is built from changed (the artifacts `remote-play-helpers-<hash>` and `androidrt-pack-<hash>`, named by `build-root.sh key`: each hash covers that part's sources and `build-root.sh`, not the workflow files, so editing a workflow costs no rebuild; under the build cache's provenance rules). Either part may fail without stopping anything, the other included: the callers run regardless and their packages then ship without that part, with a warning. |
 | [`.github/workflows/wine-runtime.yml`](../.github/workflows/wine-runtime.yml) | called by `docker-image.yml` and `release.yml`, or manual | `wine-runtime-package` (`JukaHub-Wine-linux-arm64.zip`, the Box64 pack of the Windows-app runtime), built by `build-runtimes.sh` in the same kind of root on an arm64 runner of its own, with Wine 10.0 under the new Box64 as an advisory step, and reused like the helpers (`wine-runtime-pack-<hash>`). It is in no archive: `docker-image.yml` attaches it in a job nothing waits for, `release.yml` waits for whichever of it and the helpers finishes last. A failure costs the release only the pack. |
+| [`.github/workflows/offline-ai.yml`](../.github/workflows/offline-ai.yml) | called by `docker-image.yml`, or manual | `offline-llm` artifact: `llama-cli`, `llama-server` (static, CPU-only llama.cpp), the SmolLM2 GGUF and their licenses, built by `player/native/build-llm.sh` in the same kind of root on an arm64 runner of its own, and reused like the helpers (`offline-llm-<hash>`; the lookup reads the model pins from `build-llm.sh`). `docker-image.yml` zips it with `package-llm.sh` and attaches `JukaHub-OfflineAI-linux-arm64.zip` in a job nothing waits for; JukaHub installs the model from the newest release that carries it, so a failed build costs the release only that package. |
 
 Both the updater and the version line in the UI read `release-info.json`, so a
 release built by CI advertises itself correctly without any extra steps.

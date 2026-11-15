@@ -299,6 +299,9 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// (header_trophy.go, and the first build's visit time), and whether Reduce
 	// motion was ever switched by hand (bootOSMotion): bookkeeping too.
 	trophySeenKey: true, trophySeenOldKey: true, bootOSMotionChosenKey: true,
+	// The startup lock's hashed code and its wrong-attempt count (bootlock.go):
+	// carried to another device the hash would lock it with this one's code.
+	bootLockSecretKey: true, bootLockFailsKey: true, bootLockPendingKey: true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a

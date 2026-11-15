@@ -470,14 +470,31 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	if len(sub.Rows) == 0 {
 		return startRow, width
 	}
-	endRow = startRow + int32(len(sub.Rows))
+	// The float's flow reserve covers its painted box, not just its text
+	// rows: a padded float otherwise let `clear` put the next paragraph over
+	// its bottom padding. min-height/height are floors here just as they are
+	// in the ordinary block box.
+	padTop := int32(math.Round(block.Style.PadTop * scale))
+	padBot := int32(math.Round(block.Style.PadBot * scale))
+	if padTop < 0 {
+		padTop = 0
+	}
+	if padBot < 0 {
+		padBot = 0
+	}
+	boxH := int32(len(sub.Rows))*l.rowH + padTop + padBot
+	if floor := int32(math.Round(max(block.Style.Height, block.Style.MinHeight) * scale)); floor > boxH {
+		boxH = floor + padTop + padBot
+	}
+	endRow = startRow + int32(math.Ceil(float64(boxH)/float64(l.rowH)))
 	l.layout.Floats = append(l.layout.Floats, webFloat{
-		Z:      block.ZIndex,
-		X:      x,
-		Y:      startRow * l.rowH,
-		Rows:   sub.Rows,
-		Rects:  sub.Rects,
-		Images: sub.Images,
+		Z:           block.ZIndex,
+		X:           x,
+		Y:           startRow * l.rowH,
+		Rows:        sub.Rows,
+		Rects:       sub.Rects,
+		Backgrounds: sub.Backgrounds,
+		Images:      sub.Images,
 	})
 	return endRow, width
 }
@@ -584,6 +601,480 @@ func (l *webLayouter) primeItemContainerWidths(blocks []webBlock, width int32) {
 	if id := l.itemContainerID(blocks); id != 0 {
 		l.setContainerWidth(id, width)
 	}
+}
+
+// containerBoxSpan is the union of the runs that carry one container-box ID.
+// It is collected after the page is laid out so a box that contains only
+// child blocks still has real geometry.
+type containerBoxSpan struct {
+	minX, minY int32
+	maxX, maxY int32
+	width      int32
+	seen       bool
+}
+
+// paintContainerBoxes paints the backgrounds, borders and shadows of elements
+// that produced no block of their own. Cards, sidebars and hero sections used
+// to lay out their children correctly and then lose the box that gave those
+// children their visible surface. Each run carries the box IDs of its
+// ancestors; a union of the runs is the box's used rectangle.
+func (l *webLayouter) paintContainerBoxes() {
+	if l == nil || l.layout == nil || l.doc == nil || len(l.doc.Boxes) == 0 {
+		return
+	}
+	spans := make(map[int]*containerBoxSpan)
+	addRun := func(run webRunPos, rowY, ox, oy int32) {
+		if len(run.Boxes) == 0 || run.Font == nil {
+			return
+		}
+		w, h, err := run.Font.SizeUTF8(run.Text)
+		if err != nil {
+			return
+		}
+		y := rowY + oy
+		for _, id := range run.Boxes {
+			span := spans[id]
+			if span == nil {
+				span = &containerBoxSpan{minX: run.X + ox, minY: y, width: run.BoxWidth}
+				spans[id] = span
+			}
+			if !span.seen {
+				span.minX, span.minY, span.seen = run.X+ox, y, true
+			}
+			if x := run.X + ox; x < span.minX {
+				span.minX = x
+			}
+			if x := run.X + ox + int32(w); x > span.maxX {
+				span.maxX = x
+			}
+			if y2 := y + int32(h); y2 > span.maxY {
+				span.maxY = y2
+			}
+			if run.BoxWidth > span.width {
+				span.width = run.BoxWidth
+			}
+		}
+	}
+	for _, row := range l.layout.Rows {
+		for _, run := range row.Runs {
+			addRun(run, row.Y, 0, 0)
+		}
+	}
+	for _, f := range l.layout.Floats {
+		for _, row := range f.Rows {
+			for _, run := range row.Runs {
+				addRun(run, row.Y, f.X, f.Y)
+			}
+		}
+	}
+	// Creation order is outer-to-inner for nested boxes, so a child's surface
+	// paints over its parent's instead of being hidden by it.
+	ids := make([]int, 0, len(spans))
+	for id := range spans {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	for _, id := range ids {
+		info, ok := l.doc.Boxes[id]
+		if !ok || !info.visual {
+			continue
+		}
+		nested := l.boxHasNestedBlocks(id)
+		// A form is one surface made of several direct control/label blocks.
+		// Counting them keeps the wrapper from being treated as a single block
+		// that already painted itself: each control's fragment used to leave
+		// white bands between the fields and a label outside the form fill.
+		directBlocks := 0
+		for _, b := range l.doc.Blocks {
+			if b.BoxOwner == id {
+				directBlocks++
+			}
+		}
+		// A box with a single direct block and no nested content is already
+		// fully painted by that block. A mixed wrapper (intro text plus a
+		// child paragraph, a card plus a nested card, or a form with several
+		// controls) is not: the direct blocks' surfaces stop at their own
+		// rows, so replace them with the descendant union and paint the whole
+		// wrapper once.
+		if info.direct && !nested && directBlocks <= 1 {
+			continue
+		}
+		if info.direct && (nested || directBlocks > 1) {
+			l.removeBoxPaints(id)
+		}
+		span := spans[id]
+		if span == nil || !span.seen {
+			continue
+		}
+		w := span.width
+		if w <= 0 {
+			w = span.maxX - span.minX
+		}
+		if span.maxX > span.minX+w {
+			w = span.maxX - span.minX
+		}
+		if w <= 0 || span.maxY <= span.minY {
+			continue
+		}
+		top := int32(info.style.MarginTop * scale)
+		bottom := int32(info.style.MarginBot * scale)
+		if top < 0 {
+			top = 0
+		}
+		if bottom < 0 {
+			bottom = 0
+		}
+		// The run's X starts after the wrapper's left padding/margin. The
+		// painter wants the border-box edge, so back that inset out here.
+		left := int32(info.style.Indent * scale)
+		x, y := span.minX-left, span.minY-top
+		h := span.maxY - span.minY + top + bottom
+		// A wrapper's own min-height/height belongs to its box, not to the
+		// child runs that happen to define its top and bottom. Without this a
+		// 300px hero with only a heading and a paragraph collapsed to the
+		// text height, and its background image never covered the hero.
+		if minH := int32(math.Round(max(info.style.MinHeight, info.style.Height) * scale)); minH > h {
+			h = minH
+		}
+		// A card at the top of the page can have padding above its first line;
+		// the page clip starts at zero, so keep the painted box on-page and
+		// retain its full height instead of drawing a negative strip.
+		if x < 0 {
+			w += x
+			x = 0
+		}
+		if y < 0 {
+			h += y
+			y = 0
+		}
+		if w <= 0 || h <= 0 {
+			continue
+		}
+		l.paintWebBox(info, sdl.Rect{X: x, Y: y, W: w, H: h})
+	}
+}
+
+// applyBoxConstraints narrows a block's measure to the layout boxes that
+// enclose it. Wrappers that only declared a width, max-width, height or
+// padding used to be invisible to layout: their child paragraphs ran to the
+// page edge, so an inset article's image and list did not line up with its copy.
+func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) (int32, int32) {
+	if l == nil || l.doc == nil || len(block.Boxes) == 0 || l.baseSize <= 0 {
+		return padX, contentW
+	}
+	scale := l.baseSize / 16
+	for _, id := range block.Boxes {
+		info, ok := l.doc.Boxes[id]
+		if !ok {
+			continue
+		}
+		// A block whose style is the same element style already had its own
+		// padding and width applied by the ordinary block pass. Only an
+		// ancestor wrapper contributes here; otherwise a card's direct text
+		// would receive its padding twice.
+		if block.BoxOwner == id {
+			// This is the element that owns the box. Its own width, padding and
+			// auto margins were already applied by the ordinary block pass;
+			// applying them again here centred a flex column item twice (once
+			// by flexCrossOffset and once by this box).
+			continue
+		}
+		st := info.style
+		left := int32(math.Round(st.Indent * scale))
+		right := int32(math.Round(st.IndentRight * scale))
+		if left < 0 {
+			left = 0
+		}
+		if right < 0 {
+			right = 0
+		}
+		target := contentW
+		if st.WidthPct > 0 {
+			target = min32(target, int32(math.Round(float64(contentW)*st.WidthPct/100)))
+		} else if st.Width > 0 {
+			target = min32(target, int32(math.Round(st.Width*scale)))
+		}
+		if st.MaxWidthPct > 0 {
+			target = min32(target, int32(math.Round(float64(contentW)*st.MaxWidthPct/100)))
+		} else if st.MaxWidth > 0 {
+			target = min32(target, int32(math.Round(st.MaxWidth*scale)))
+		}
+		if st.MinWidthPct > 0 {
+			target = max(target, int32(math.Round(float64(contentW)*st.MinWidthPct/100)))
+		} else if st.MinWidth > 0 {
+			target = max(target, int32(math.Round(st.MinWidth*scale)))
+		}
+		if target < 32 {
+			target = 32
+		}
+		if target > contentW {
+			target = contentW
+		}
+		inner := target - left - right
+		if inner < 32 {
+			left, right, inner = 0, 0, target
+		}
+		x := padX + left
+		if free := contentW - target; free > 0 && (st.MarginLeftAuto || st.MarginRightAuto) {
+			switch {
+			case st.MarginLeftAuto && st.MarginRightAuto:
+				x += free / 2
+			case st.MarginLeftAuto:
+				x += free
+			}
+		}
+		padX, contentW = x, inner
+	}
+	return padX, contentW
+}
+
+// boxHasNestedBlocks reports whether any block other than the box's direct
+// block descends from it. That is the mixed wrapper case: the direct block's
+// background covers only its own rows, while a nested paragraph or card sits
+// outside that surface.
+func (l *webLayouter) boxHasNestedBlocks(id int) bool {
+	if l == nil || l.doc == nil || id == 0 {
+		return false
+	}
+	for _, b := range l.doc.Blocks {
+		if b.BoxOwner == id {
+			continue
+		}
+		for _, box := range b.Boxes {
+			if box == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// removeBoxPaints drops the partial surface a direct block painted for a
+// wrapper that also has nested content. Layered fills are removed together so
+// a translucent background is not applied twice when the union replaces it.
+func (l *webLayouter) removeBoxPaints(id int) {
+	if l == nil || l.layout == nil || id == 0 {
+		return
+	}
+	if len(l.layout.Rects) > 0 {
+		kept := l.layout.Rects[:0]
+		for _, r := range l.layout.Rects {
+			if r.BoxID != id {
+				kept = append(kept, r)
+			}
+		}
+		l.layout.Rects = kept
+	}
+	if len(l.layout.Backgrounds) > 0 {
+		kept := l.layout.Backgrounds[:0]
+		for _, bg := range l.layout.Backgrounds {
+			if bg.BoxID != id {
+				kept = append(kept, bg)
+			}
+		}
+		l.layout.Backgrounds = kept
+	}
+}
+
+// boxFlowRect returns the used rectangle of a laid-out visual box before the
+// absolute layers are positioned. It is the containing block for an absolutely
+// positioned child: an overlay inside a position:relative hero must sit 20px
+// from the hero's edge, not 20px from the top of the page.
+func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
+	if l == nil || l.layout == nil || l.doc == nil || id == 0 || l.baseSize <= 0 {
+		return sdl.Rect{}, false
+	}
+	info, ok := l.doc.Boxes[id]
+	if !ok {
+		return sdl.Rect{}, false
+	}
+	minX, minY, maxX, maxY := int32(1<<30-1), int32(1<<30-1), int32(0), int32(0)
+	width := int32(0)
+	seen := false
+	for _, row := range l.layout.Rows {
+		for _, run := range row.Runs {
+			if run.Font == nil {
+				continue
+			}
+			found := false
+			for _, box := range run.Boxes {
+				if box == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+			w, h, err := run.Font.SizeUTF8(run.Text)
+			if err != nil {
+				continue
+			}
+			seen = true
+			minX = min32(minX, run.X)
+			minY = min32(minY, row.Y)
+			maxX = max(maxX, run.X+int32(w))
+			maxY = max(maxY, row.Y+int32(h))
+			width = max(width, run.BoxWidth)
+		}
+	}
+	if !seen {
+		return sdl.Rect{}, false
+	}
+	scale := l.baseSize / 16
+	left := int32(math.Round(info.style.Indent * scale))
+	top := int32(math.Round(info.style.MarginTop * scale))
+	bottom := int32(math.Round(info.style.MarginBot * scale))
+	if left < 0 {
+		left = 0
+	}
+	if top < 0 {
+		top = 0
+	}
+	if bottom < 0 {
+		bottom = 0
+	}
+	w := width
+	if w <= 0 {
+		w = maxX - minX
+	}
+	if maxX > minX+w {
+		w = maxX - minX
+	}
+	h := maxY - minY + top + bottom
+	if floor := int32(math.Round(max(info.style.Height, info.style.MinHeight) * scale)); floor > h {
+		h = floor
+	}
+	if w <= 0 || h <= 0 {
+		return sdl.Rect{}, false
+	}
+	return sdl.Rect{X: minX - left, Y: minY - top, W: w, H: h}, true
+}
+
+// paintWebBox reuses the ordinary block painter for a box that had no block of
+// its own. A throwaway layout is cheaper and much less error-prone than a
+// second implementation of gradients, background layers, radii and borders.
+func (l *webLayouter) paintWebBox(info webBoxInfo, rect sdl.Rect) {
+	if rect.W <= 0 || rect.H <= 0 || l.baseSize <= 0 || l.rowH <= 0 || l.layout == nil {
+		return
+	}
+	style := info.style
+	style.Width, style.WidthPct = 0, 0
+	style.Height = float64(rect.H) * 16 / l.baseSize
+	style.MinHeight, style.MaxHeight = 0, 0
+	style.Indent, style.IndentRight = 0, 0
+	style.MarginTop, style.MarginBot = 0, 0
+	style.PadTop, style.PadBot = 0, 0
+	box := webBlock{Style: style}
+	box.HasBg, box.Background = style.HasBg, style.Background
+	box.BorderLeft, box.BorderRight = style.BorderLeft, style.BorderRight
+	box.BorderTop, box.BorderBottom = style.BorderTop, style.BorderBottom
+	box.BoxBorder = style.BoxBorder
+	box.BorderWidth, box.BorderStyle = style.BorderWidth, style.BorderStyle
+	box.BorderSideWidth, box.BorderSideStyle = style.BorderSideWidth, style.BorderSideStyle
+	box.BorderSideStyleSet, box.BorderSideColor = style.BorderSideStyleSet, style.BorderSideColor
+	box.BorderSideHasColor = style.BorderSideHasColor
+	box.BorderColor, box.HasBorderColor = style.BorderColor, style.HasBorderColor
+	box.Outline, box.OutlineOffset = style.Outline, style.OutlineOffset
+	if style.HasGradient && style.Gradient != nil {
+		box.Gradient, box.HasGradient = *style.Gradient, true
+	}
+	boxLayout := &webLayout{RowH: l.rowH}
+	sl := &webLayouter{
+		doc: l.doc, layout: boxLayout, rowH: l.rowH, baseSize: l.baseSize,
+		fontAt: l.fontAt, fontAtStyle: l.fontAtStyle, spaceWidths: l.spaceWidths,
+		sanitized: l.sanitized, containerSizes: l.containerSizes,
+		containerRows: make(map[int]webContainerRowSpan),
+	}
+	sl.layoutBlocks([]webBlock{box}, 0, rect.W)
+	for _, r := range boxLayout.Rects {
+		r.Rect.X += rect.X
+		r.Rect.Y += rect.Y
+		l.layout.Rects = append(l.layout.Rects, r)
+	}
+	for _, bg := range boxLayout.Backgrounds {
+		bg.Rect.X += rect.X
+		bg.Rect.Y += rect.Y
+		l.layout.Backgrounds = append(l.layout.Backgrounds, bg)
+	}
+}
+
+// gridTrackWidths resolves an explicit grid-template-columns list into the
+// actual pixel width of each track. A fixed track keeps its width; the fr
+// tracks split what is left in proportion to their factors. Returning nil
+// keeps the historical equal-column path for a bare `display:grid`.
+func (l *webLayouter) gridTrackWidths(first webBlock, cols int, contentW, gap int32) []int32 {
+	if cols <= 0 || first.GridCols <= 0 || cols > len(first.GridWeights) {
+		return nil
+	}
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	trackSpace := contentW - gap*int32(cols-1)
+	if trackSpace <= 0 {
+		return nil
+	}
+	widths := make([]int32, cols)
+	fixed := int32(0)
+	totalWeight := 0.0
+	hasExplicit := false
+	for i := 0; i < cols; i++ {
+		if first.GridBases[i] > 0 {
+			widths[i] = int32(math.Round(first.GridBases[i] * scale))
+			if widths[i] < 1 {
+				widths[i] = 1
+			}
+			fixed += widths[i]
+			hasExplicit = true
+		}
+		if first.GridWeights[i] > 0 {
+			totalWeight += first.GridWeights[i]
+			hasExplicit = true
+		}
+	}
+	if !hasExplicit {
+		return nil
+	}
+	if fixed > trackSpace {
+		// The author's fixed tracks cannot fit the page measure. Keep their
+		// proportional shape rather than overflowing the content column.
+		for i := range widths {
+			widths[i] = int32(float64(widths[i]) * float64(trackSpace) / float64(fixed))
+			if widths[i] < 1 {
+				widths[i] = 1
+			}
+		}
+		fixed = 0
+		for _, w := range widths {
+			fixed += w
+		}
+	}
+	left := trackSpace - fixed
+	if left < 0 {
+		left = 0
+	}
+	remainingWeight := totalWeight
+	for i := 0; i < cols; i++ {
+		weight := first.GridWeights[i]
+		if weight <= 0 {
+			continue
+		}
+		share := int32(0)
+		if remainingWeight > 0 {
+			share = int32(math.Round(float64(left) * weight / remainingWeight))
+		}
+		widths[i] += share
+		left -= share
+		remainingWeight -= weight
+	}
+	// A grid whose tracks are all fixed but do not fill the row leaves the
+	// remaining room as the row's free space (justify-content handles it).
+	return widths
 }
 
 // layoutFlexRow lays one container's items out side by side: widths from
@@ -705,6 +1196,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		return
 	}
 
+	gridWidths := l.gridTrackWidths(first, int(n), contentW, gap)
 	widths := make([]int32, n)
 	containerIDs := make([]int, n)
 	fixed := int32(0)
@@ -718,6 +1210,16 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	for i, item := range grouped {
 		b := item.blocks[0]
 		containerIDs[i] = l.itemContainerID(item.blocks)
+		if len(gridWidths) > 0 {
+			track := gridWidths[i]
+			itemW := l.itemWidth(b, track)
+			if itemW <= 0 || itemW > track {
+				itemW = track
+			}
+			widths[i] = itemW
+			fixed += widths[i]
+			continue
+		}
 		w := l.itemWidth(b, avail)
 		if w <= 0 && containerIDs[i] != 0 && b.FlexGrow <= 0 {
 			// A content-sized containment container is shrink-to-fit: its
@@ -878,7 +1380,25 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	}
 
 	cellX := make([]int32, n)
-	if gridMode && autoCount > 0 {
+	if len(gridWidths) > 0 {
+		// Each item is placed at the start of its own track. Auto margins
+		// resolve against that track, not against the whole row, so a 120px
+		// card centres inside a wider 1fr column.
+		cursor := padX
+		for i, item := range grouped {
+			base := cursor
+			freeTrack := gridWidths[i] - widths[i]
+			a, z := flexAutoMain(item.blocks[0])
+			switch {
+			case freeTrack > 0 && a && z:
+				base += freeTrack / 2
+			case freeTrack > 0 && a:
+				base += freeTrack
+			}
+			cellX[i] = base
+			cursor += gridWidths[i] + gap
+		}
+	} else if gridMode && autoCount > 0 {
 		// A grid item's auto margins consume the free space inside its track,
 		// not the free space of the whole row. Keep the tracks equal and place
 		// each item inside its own area.
@@ -972,26 +1492,11 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 				drop = freeRows
 			}
 		}
-		for ri, row := range cell.sub.Rows {
-			target := baseRow + drop + int32(ri)
-			if target < 0 || target >= int32(len(l.layout.Rows)) {
-				continue
-			}
-			for _, run := range row.Runs {
-				run.X += cellX[i]
-				l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
-			}
-		}
-		for _, r := range cell.sub.Rects {
-			r.Rect.X += cellX[i]
-			r.Rect.Y += (baseRow + drop) * l.rowH
-			l.layout.Rects = append(l.layout.Rects, r)
-		}
-		for _, im := range cell.sub.Images {
-			im.Rect.X += cellX[i]
-			im.Rect.Y += (baseRow + drop) * l.rowH
-			l.layout.Images = append(l.layout.Images, im)
-		}
+		// Merge every layer the item measured, not just its text, boxes and
+		// images: a card's gradient/background image, an embedded video and a
+		// positioned badge all live beside the rows and used to disappear when
+		// the card was a flex or grid item.
+		l.mergeFlexSubLayout(cell.sub, cellX[i], baseRow+drop)
 	}
 }
 
@@ -1047,30 +1552,53 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 		}
 		h := int32(len(sub.Rows)) * l.rowH
 
-		x := padX
+		// Find the nearest positioned ancestor. `top:20px` is measured from
+		// that box, not from the document, or an overlay lands under the
+		// sticky site header. No positioned ancestor means the page is the
+		// containing block, which is what an absolutely positioned banner
+		// directly under <body> expects.
+		anchor := sdl.Rect{X: padX, Y: 0, W: contentW, H: pageH}
+		if b.Style.Position == webPositionFixed {
+			// fixed: the viewport is the containing block, so right:0 and
+			// bottom:0 reach the screen edge rather than the body's inset.
+			anchor = sdl.Rect{X: 0, Y: 0, W: contentW + 2*padX, H: pageH}
+		} else {
+			for i := len(b.Boxes) - 1; i >= 0; i-- {
+				info, ok := l.doc.Boxes[b.Boxes[i]]
+				if !ok || info.style.Position != webPositionRelative {
+					continue
+				}
+				if rect, ok := l.boxFlowRect(b.Boxes[i]); ok {
+					anchor = rect
+				}
+				break
+			}
+		}
+		x := anchor.X
 		switch {
 		case b.HasLeft:
-			x = padX + int32(b.PosLeft*scale)
+			x = anchor.X + int32(b.PosLeft*scale)
 		case b.HasRight:
-			x = padX + contentW - w - int32(b.PosRight*scale)
+			x = anchor.X + anchor.W - w - int32(b.PosRight*scale)
 		}
-		y := int32(0)
+		y := anchor.Y
 		switch {
 		case b.HasTop:
-			y = int32(b.PosTop * scale)
+			y = anchor.Y + int32(b.PosTop*scale)
 		case b.HasBottom:
-			y = pageH - h - int32(b.PosBottom*scale)
+			y = anchor.Y + anchor.H - h - int32(b.PosBottom*scale)
 		}
 		if y < 0 {
 			y = 0
 		}
 		l.layout.Floats = append(l.layout.Floats, webFloat{
-			Z:      b.ZIndex,
-			X:      x,
-			Y:      y,
-			Rows:   sub.Rows,
-			Rects:  sub.Rects,
-			Images: sub.Images,
+			Z:           b.ZIndex,
+			X:           x,
+			Y:           y,
+			Rows:        sub.Rows,
+			Rects:       sub.Rects,
+			Backgrounds: sub.Backgrounds,
+			Images:      sub.Images,
 		})
 	}
 	sort.SliceStable(l.layout.Floats, func(i, j int) bool {
@@ -1091,56 +1619,110 @@ func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *we
 		if top+int32(len(f.Rows))*layout.RowH <= rect.Y || top >= rect.Y+rect.H {
 			continue
 		}
-		for _, im := range f.Images {
-			if im.Invisible {
-				continue
-			}
-			y := top + im.Rect.Y
-			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
-				continue
-			}
-			drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
+		drawWebLayer(r, config, doc, layout, rect, f, top)
+	}
+}
+
+// drawWebStickies paints the sticky blocks that have scrolled past their
+// normal position. A sticky block keeps its flow rows (so it reserves space)
+// and this pass adds the pinned copy at its top offset, which is the other
+// half of CSS sticky: the page may scroll underneath it while it stays.
+func drawWebStickies(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, offset int32) {
+	for _, f := range layout.Stickies {
+		if offset <= f.Y {
+			// The block is still at or above its flow position; the normal
+			// painting already shows it there.
+			continue
 		}
-		for _, bg := range f.Rects {
-			y := top + bg.Rect.Y
-			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
-				continue
-			}
-			if bg.Stroke {
-				thickness := bg.Thickness
-				if thickness < 1 {
-					thickness = 1
-				}
-				strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
-				continue
-			}
-			if bg.HasGradient {
-				drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
-				continue
-			}
-			fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
+		top := rect.Y + f.Top - f.Y
+		if top >= rect.Y+rect.H {
+			continue
 		}
-		for _, row := range f.Rows {
-			y := top + row.Y
-			if y >= rect.Y+rect.H {
-				break
+		drawWebLayer(r, config, doc, layout, rect, f, top)
+	}
+}
+
+// drawWebLayer paints one positioned block: backgrounds and images below its
+// borders and text, matching the order of an in-flow box. Sticky overlays and
+// absolutely positioned floats share this body; they differ only in how top
+// is derived from the scroll offset.
+func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, f webFloat, top int32) {
+	// Background layers sit under the box borders and content, exactly as
+	// they do on an in-flow card. A fixed or sticky header usually carries
+	// its only colour here, so dropping these left it transparent.
+	for _, bg := range f.Backgrounds {
+		y := top + bg.Rect.Y
+		if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
+			continue
+		}
+		if bg.Image != "" {
+			drawWebImage(r, config, doc, webImagePos{
+				Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
+				ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
+			}, rect.X+f.X+bg.Rect.X, y)
+			continue
+		}
+		if bg.HasGradient {
+			drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, bg.Radius, bg.Gradient)
+			continue
+		}
+		fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
+	}
+	for _, im := range f.Images {
+		if im.Invisible {
+			continue
+		}
+		y := top + im.Rect.Y
+		if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
+			continue
+		}
+		drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
+	}
+	for _, bg := range f.Rects {
+		if bg.BackgroundFill {
+			// The block colour is already in f.Backgrounds, where layers can
+			// stack in CSS order; painting it here again would double a
+			// translucent fill.
+			continue
+		}
+		y := top + bg.Rect.Y
+		if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
+			continue
+		}
+		if bg.Stroke {
+			thickness := bg.Thickness
+			if thickness < 1 {
+				thickness = 1
 			}
-			for _, run := range row.Runs {
-				if run.Invisible {
-					continue
+			strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
+			continue
+		}
+		if bg.HasGradient {
+			drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
+			continue
+		}
+		fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
+	}
+	for _, row := range f.Rows {
+		y := top + row.Y
+		if y >= rect.Y+rect.H {
+			break
+		}
+		for _, run := range row.Runs {
+			if run.Invisible {
+				continue
+			}
+			if run.Font == nil {
+				continue
+			}
+			if run.HasBg {
+				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil {
+					fillRoundedRect(r, rect.X+f.X+run.X-2, y-1, int32(w)+4, int32(h), 3, run.Bg)
 				}
-				if run.Font == nil {
-					continue
-				}
-				if run.HasBg {
-					if w, h, err := run.Font.SizeUTF8(run.Text); err == nil {
-						fillRoundedRect(r, rect.X+f.X+run.X-2, y-1, int32(w)+4, int32(h), 3, run.Bg)
-					}
-				}
-				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X, y)
-				if run.Bold {
-					drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X+1, y)
-				}
+			}
+			drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X, y)
+			if run.Bold {
+				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X+1, y)
 			}
 		}
 	}

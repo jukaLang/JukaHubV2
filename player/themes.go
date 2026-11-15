@@ -423,9 +423,12 @@ var themePresets = map[string]ThemePreset{
 		BorderFocus:   "#ff8fb8",
 		Success:       "#3fbf8f",
 		Warning:       "#e0a800",
-		Danger:        "#e05a72",
-		Info:          "#ff7aa8",
-		Overlay:       "#fff7fb99",
+		// A deep red, not another pink: the old danger sat 5 degrees from
+		// the palette's accent after both were darkened for the light page,
+		// so an error and a now-playing highlight read as the same state.
+		Danger:  "#b3261e",
+		Info:    "#ff7aa8",
+		Overlay: "#fff7fb99",
 	},
 	// girly: hot pink and rose on a warm white shell.
 	"girly": {
@@ -467,9 +470,11 @@ var themePresets = map[string]ThemePreset{
 		BorderFocus:   "#ff7f9c",
 		Success:       "#4fbf8b",
 		Warning:       "#d99b2b",
-		Danger:        "#d94f5c",
-		Info:          "#ff7f9c",
-		Overlay:       "#fff6f499",
+		// Deep red against the blossom accent, for the same reason as Cute:
+		// the two pinks converged once adjusted for the light page.
+		Danger:  "#b3261e",
+		Info:    "#ff7f9c",
+		Overlay: "#fff6f499",
 	},
 	// lavender: gentle violet in the light range, easier on the eyes than white.
 	"lavender": {
@@ -510,10 +515,12 @@ var themePresets = map[string]ThemePreset{
 		BorderDefault: "#d9c7a9",
 		BorderFocus:   "#b4762e",
 		Success:       "#3f8f63",
-		Warning:       "#b57a12",
-		Danger:        "#b23f38",
-		Info:          "#b4762e",
-		Overlay:       "#f6efe499",
+		// A clearer golden warning: the old value sat one hue step from the
+		// amber accent, so warning and now-playing looked identical.
+		Warning: "#c28a00",
+		Danger:  "#b23f38",
+		Info:    "#b4762e",
+		Overlay: "#f6efe499",
 	},
 	// nord: the muted arctic blue-grey palette.
 	"nord": {
@@ -885,10 +892,12 @@ var themePresets = map[string]ThemePreset{
 		BorderDefault: "#3d2705",
 		BorderFocus:   "#ffb000",
 		Success:       "#ffd27a",
-		Warning:       "#ffe08a",
-		Danger:        "#ff6a3d",
-		Info:          "#ffb000",
-		Overlay:       "#0c0700cc",
+		// Darker orange so warning, success and danger stay three states in
+		// an all-amber palette instead of three nearly equal pale yellows.
+		Warning: "#ff7b00",
+		Danger:  "#ff6a3d",
+		Info:    "#ffb000",
+		Overlay: "#0c0700cc",
 	},
 	// oceanglass: deep water under frosted glass, cyan on teal-black.
 	"oceanglass": {

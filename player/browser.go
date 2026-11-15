@@ -2431,7 +2431,7 @@ func browserPageContentBox(elem Element) (left, top, width, height int32) {
 	}
 	width = getElementWidth(elem, 1100) - 14
 	headerH := int32(28)
-	height = getElementHeight(elem, 480) - headerH - textBrowserURLBarHeight - 12
+	height = getElementHeight(elem, 480) - headerH - textBrowserURLBarHeight - 12 - browserCookieStripReserved
 	left = elem.X + 7
 	top = elem.Y + 8 + headerH + textBrowserURLBarHeight + 8
 	return left, top, width, height

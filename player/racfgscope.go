@@ -376,6 +376,17 @@ func raInstallDir(path string) string {
 	if strings.EqualFold(filepath.Base(dir), ".retroarch") {
 		return filepath.Dir(dir)
 	}
+	// <RetroArch>/.config/retroarch/retroarch.cfg (raConfigsIn) belongs to the
+	// RetroArch two folders up — when one is there: a desktop's
+	// ~/.config/retroarch is an install of its own.
+	if strings.EqualFold(filepath.Base(dir), "retroarch") && filepath.Base(filepath.Dir(dir)) == ".config" {
+		top := filepath.Dir(filepath.Dir(dir))
+		for _, name := range netplayRetroArchNames {
+			if regularFile(filepath.Join(top, name)) {
+				return top
+			}
+		}
+	}
 	return dir
 }
 

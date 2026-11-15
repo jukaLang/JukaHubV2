@@ -49,3 +49,6 @@ tests/e2e/design.json
 player/jukauser.json*
 *.bak
 /test-results/
+
+# make os-package output (player/trimui/make-os-package.sh)
+/JukaHub-OS-Trimui.zip

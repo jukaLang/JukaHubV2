@@ -246,6 +246,11 @@ var gaLink struct {
 	wake    atomic.Bool
 	mu      sync.Mutex
 	presses []gaButton
+
+	// forceQuitAt: when Select + Start was held (UnixNano, 0 = not); the main
+	// loop ends the game (gameForceQuit, gamemenu.go) if it is fresh, so a
+	// hold the game outran never ends the next one.
+	forceQuitAt atomic.Int64
 }
 
 // gaPush queues a press for the main loop. Any goroutine.
@@ -314,9 +319,14 @@ func gameAssistParkedTick(config *Config) {
 	// A game quitting from the in-game menu is left alone: pausing it now
 	// would stop it mid-save, and the quit watch would kill it stopped.
 	can := gameAssistSupported() && !wineInputActive() && !alarmFiringActive() && !gmQuitting.Load()
-	// Hold Menu: screenshot reads the same pad (menushot.go).
+	// Hold Menu: screenshot reads the same pad (menushot.go), and so does the
+	// Select + Start hold that ends a game which shows nothing or ignores the
+	// pad (gameForceQuit) — always on, it is the way out.
 	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config),
-		can && P().IsHandheld() && menuShotEnabled(config))
+		can && P().IsHandheld() && menuShotEnabled(config), can && P().IsHandheld() && !powerSleepActive())
+	if at := gaLink.forceQuitAt.Swap(0); at != 0 && time.Since(time.Unix(0, at)) < time.Second {
+		gameForceQuit()
+	}
 	if gaLink.request.Swap(false) && !gaOpen(config, gaMode(gaLink.mode.Load())) {
 		gaLink.release.Store(true)
 	}
@@ -327,6 +337,9 @@ func gameAssistParkedTick(config *Config) {
 func gaOpen(config *Config, mode gaMode) bool {
 	if gaOverlay.active {
 		return true
+	}
+	if startupLocked() { // nothing opens over the startup lock (bootlock.go)
+		return false
 	}
 	// Nor over a sleeping handheld (powersleep.go): the screen-off sleep keeps
 	// the game stopped and would continue it on the wake under the overlay.
@@ -454,6 +467,10 @@ func gaAsk(question string) {
 	// (voicesettings_ai.go).
 	if out, ok := voiceSettingsGameCommand(appConfig, question); ok {
 		gaCommandDone(question, out)
+		return
+	}
+	// "Close all apps", "free up memory": the background ones (closeall.go).
+	if closeAllGameCommand(question) {
 		return
 	}
 	key := strings.TrimSpace(groqAPIKey())
@@ -585,12 +602,17 @@ func gaAnswered(gen int, question, reply string, err error, local bool) {
 		}
 		logWarn("gameassist", "Juka could not answer: %v", err)
 		msg := chatFriendlyAIError(err)
+		offer := orbOfferNone
 		if errors.Is(err, errOfflineAIMissing) {
 			msg = "Game hints need a Groq key or offline answers"
 		} else if local && errors.Is(err, errOfflineAIMemory) {
-			msg = "Close another app to free memory for offline hints"
+			// A closes the background apps and asks again (closeall.go).
+			msg, offer = "Not enough free memory for offline hints", closeAllMemoryOffer()
 		}
-		voiceOrbSay(msg, orbQuote(question), tbxToneWarn, orbOfferNone)
+		voiceOrbSay(msg, orbQuote(question), tbxToneWarn, offer)
+		if offer == orbOfferFreeMemory {
+			voiceOrb.words = question
+		}
 		voiceOrb.hideAt = 0
 		PlayErrorSound()
 		return
@@ -652,6 +674,11 @@ func gaPress(config *Config, b gaButton) {
 			voiceOrbFinish(config)
 		case voiceOrb.phase == orbThinking && voiceOrb.fadeAt == 0:
 			// Whisper or Juka is working; B gives up.
+		case voiceOrb.phase == orbAnswer && voiceOrb.offer == orbOfferFreeMemory:
+			// "Not enough free memory": the background apps close, the game
+			// stays paused, and the question is asked again (closeall.go).
+			PlayActivateSound()
+			closeAllOrbRetry(voiceOrb.words)
 		default:
 			gaListen(config)
 		}
@@ -697,6 +724,9 @@ func gameAssistOrbHint() (string, bool) {
 	case orbThinking:
 		return back, true
 	}
+	if voiceOrb.offer == orbOfferFreeMemory {
+		return orbKeyName("A") + " close apps and ask again · " + back, true
+	}
 	return orbKeyName("A") + " ask again · " + back, true
 }
 
@@ -737,10 +767,13 @@ func gaTick(config *Config) {
 	}
 	// An answer stays until the player leaves, and the orb's fixes (Settings,
 	// the phone page) are not offered: they would open a screen of JukaHub's
-	// with the game still paused behind it.
+	// with the game still paused behind it. Closing background apps opens
+	// nothing, so that one stays (closeall.go).
 	if voiceOrb.phase == orbAnswer {
 		voiceOrb.hideAt = 0
-		voiceOrb.offer = orbOfferNone
+		if voiceOrb.offer != orbOfferFreeMemory {
+			voiceOrb.offer = orbOfferNone
+		}
 	}
 }
 
@@ -760,7 +793,7 @@ func gaClose(why string, handBack bool) {
 	gaTakePresses()
 	gmPickDrop() // the in-game menu's slot pictures (gamemenu_states.go)
 	jukaSpeakStop()
-	// The offline model (locked in memory) and Piper go before the game runs
+	// The offline model (held in memory) and Piper go before the game runs
 	// on, not at their in-game idle limit (voiceboost.go).
 	voiceReleaseForGame()
 	voiceOrbHideNow()

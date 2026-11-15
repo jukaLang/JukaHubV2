@@ -209,8 +209,8 @@ func ledSettingsBrightnessOptions(*Config) []setOption {
 
 // ledSettingsRows is the Stick lights page: the switch, then what the lights
 // show, then only the rows that mode uses (Colour: colour, effect, wheel;
-// Microphone: sensitivity), then the brightness every mode shares. With the
-// switch off only the switch is left.
+// Microphone: sensitivity), then the brightness every mode shares, then React
+// to Juka. With the switch off only the switch and React to Juka are left.
 func ledSettingsRows() []setRow {
 	return []setRow{
 		{
@@ -377,5 +377,8 @@ func ledSettingsRows() []setRow {
 				ledSettingsApply(c)
 			},
 		},
+		// Juka's layer over every mode (ledjuka.go). Shown with the switch off
+		// too: Always lights the sticks for Juka even then.
+		ledJukaRow(),
 	}
 }

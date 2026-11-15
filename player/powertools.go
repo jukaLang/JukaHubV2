@@ -76,6 +76,7 @@ const (
 	powerActionExportBenchmark
 	powerActionBack
 	powerActionClose
+	powerActionCloseAll // close all apps & games (closeall.go)
 )
 
 type powerToolRow struct {
@@ -209,6 +210,7 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenBench, enabled: true},
 			{label: "Memory scanner", value: memoryMenuValue(), detail: "Scan and edit a running game's RAM, then write a value back", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenMemory, enabled: true},
 			{label: "Controller test", value: "Sticks · triggers · buttons", detail: "Raw axis values, drift verdicts and a button check", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenCtrlDiag, enabled: true},
+			{label: "Close all apps & games", value: "Frees memory", detail: "Games, emulators, ports and Wine · Juka's offline AI stays", hint: hintLine(FooterHint{"A", "Close all"}), action: powerActionCloseAll, enabled: true},
 		}
 	case powerPageFiles:
 		rows := make([]powerToolRow, 0, len(powerTools.files)+1)
@@ -617,6 +619,9 @@ func powerActivate(config *Config) {
 		openMemPanel()
 	case powerActionOpenCtrlDiag:
 		openCtrldiag()
+	case powerActionCloseAll:
+		// Two presses: the first names what would close (closeall.go).
+		closeAllArmPress("powertools", hintKeyFor("A", ""), false, nil)
 	case powerActionInspectFile:
 		path := row.arg
 		powerStartAsync(filepath.Base(path), "Reading "+filepath.Base(path)+"…", func() powerAsyncResult {

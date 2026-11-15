@@ -1,0 +1,175 @@
+name: Offline AI (llama.cpp + SmolLM2)
+
+# Builds the optional on-device text model for the Smart Pro: llama-cli and
+# llama-server from the pinned llama.cpp, static, in the same Ubuntu 20.04
+# (glibc 2.31) arm64 root as the Remote Play helpers (why that root: see
+# remote-play-helpers.yml), plus the pinned SmolLM2 GGUF, and hands them over
+# as the artifact "offline-llm". docker-image.yml's attach-offline-ai zips it
+# with player/native/package-llm.sh and puts JukaHub-OfflineAI-linux-arm64.zip
+# on the release.
+#
+# A job of its own, on a runner of its own: it used to be the last step of the
+# Remote Play helpers job, which JukaHub-Trimui.zip waits for, so every llama.cpp
+# build (20-30 minutes, most of it llama-server's one huge source file) held up
+# the app archive and the whole release looked stuck on "Build optional
+# offline AI". Nothing waits for this job now. The model is optional: JukaHub
+# installs it from the newest release that carries it (offline_ai_install.go,
+# relpack.go), so a release without it costs nothing.
+#
+# Most pushes change nothing here, so the job first looks for what an earlier
+# push-to-main run built from exactly the same sources (the artifact
+# offline-llm-<hash> named by `build-root.sh key llm`, under the provenance
+# rules of .github/scripts/go-build-cache.sh) and builds only when there is
+# none. The model's name, size and SHA-256 come from player/native/build-llm.sh,
+# the one place they are pinned. (The lookup once kept its own copy of them;
+# when build-llm.sh moved to the 135M model the copy still named the 360M one,
+# every lookup missed, and every push rebuilt llama.cpp.)
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Offline AI (linux/arm64, glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    # The build root (about 5 minutes) and llama.cpp from scratch (20-30) in
+    # the worst case, with room for each step's own bound; a reused build
+    # takes a minute.
+    timeout-minutes: 80
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read     # find and download what an earlier run built
+    env:
+      ROOTFS: /srv/jukahub-focal
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Third-party build code runs as root in the build root; nothing here
+          # pushes, so no token stays in .git/config for it to read.
+          persist-credentials: false
+
+      - name: Look for offline AI built from these sources
+        id: cache
+        # A miss, or any trouble here, only means the steps below build it:
+        # this step must not fail, since a failed step would skip them too.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          dest=player/native/bin/juka-llm
+          pin() { sed -n "s/^$1=\([A-Za-z0-9._-]*\)\$/\1/p" player/native/build-llm.sh; }
+          model=$(pin MODEL_NAME)
+          model_size=$(pin MODEL_SIZE)
+          model_sha=$(pin MODEL_SHA)
+          miss() { rm -rf "$dest"; exit 0; }
+          if [ -z "$model" ] || [ -z "$model_size" ] || [ -z "$model_sha" ]; then
+            echo "::warning title=Offline AI::could not read the model pins from build-llm.sh; building it"
+            miss
+          fi
+          if ! name=$(sh .github/scripts/build-root.sh key llm); then
+            echo "::warning title=Offline AI::could not list its sources; building it"
+            miss
+          fi
+          echo "artifact=$name" >> "$GITHUB_OUTPUT"
+          echo "offline AI sources: $name ($model)"
+          if ! timeout 360 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
+              llama-cli llama-server "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; then
+            miss
+          fi
+          want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          want_server=$(awk '$1 == "server" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          [ -n "$want_bin" ] && [ -n "$want_server" ] || miss
+          [ "$(wc -c < "$dest/$model")" -eq "$model_size" ] || miss
+          [ "$(sha256sum "$dest/$model" | cut -d' ' -f1)" = "$model_sha" ] || miss
+          [ "$(sha256sum "$dest/llama-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
+          [ "$(sha256sum "$dest/llama-server" | cut -d' ' -f1)" = "$want_server" ] || miss
+          chmod 755 "$dest/llama-cli" "$dest/llama-server"
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the Ubuntu 20.04 build root
+        id: root
+        if: steps.cache.outputs.hit != 'true'
+        timeout-minutes: 15
+        run: sh .github/scripts/build-root.sh create
+
+      - name: Build optional offline AI
+        id: llm
+        if: steps.cache.outputs.hit != 'true'
+        # build-llm.sh bounds each phase itself (downloads, a 25-minute
+        # compile, the smoke runs) and prints a line per phase.
+        timeout-minutes: 50
+        run: sh .github/scripts/build-root.sh build llm
+
+      - name: Report the offline AI build
+        if: always()
+        continue-on-error: true
+        env:
+          LLM_OUTCOME: ${{ steps.llm.outcome }}
+          ROOT_OUTCOME: ${{ steps.root.outcome }}
+          REUSED_FROM: ${{ steps.cache.outputs.hit == 'true' && steps.cache.outputs.run || '' }}
+        run: |
+          info=player/native/bin/juka-llm/BUILDINFO.txt
+          {
+            echo "### Offline AI"
+            echo ""
+            if [ -n "$REUSED_FROM" ]; then
+              echo "Reused from run $REUSED_FROM, which built and verified it from the same sources."
+            elif [ "$LLM_OUTCOME" = success ]; then
+              echo "Built and verified."
+            else
+              echo "Not built (${LLM_OUTCOME:-not run}): the release goes out without JukaHub-OfflineAI-linux-arm64.zip; JukaHub installs the model from an older release that has one."
+              if [ "$ROOT_OUTCOME" = failure ]; then
+                echo "The **Create the Ubuntu 20.04 build root** step says why."
+              else
+                echo "The **Build optional offline AI** step says why."
+              fi
+            fi
+            if [ -f "$info" ]; then
+              echo ""
+              echo '```'
+              cat "$info"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$REUSED_FROM" ] && [ "$LLM_OUTCOME" != success ]; then
+            echo "::warning title=Offline AI::not built; the release goes out without JukaHub-OfflineAI-linux-arm64.zip"
+          fi
+
+      - name: Upload optional offline AI
+        if: ${{ !cancelled() && (steps.llm.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-llm
+          path: player/native/bin/juka-llm/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+
+      - name: Keep offline AI for later runs
+        # A fresh build that passed its checks, on a push to main: the only
+        # kind the lookup above accepts.
+        if: ${{ !cancelled() && steps.llm.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: player/native/bin/juka-llm/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
+      - name: Release the build root
+        if: always()
+        run: sh .github/scripts/build-root.sh release

@@ -61,7 +61,7 @@ const (
 	// requesting a scan. A scan that returns nothing by then gets a message.
 	wifiScanWaitTimeout  = 8 * time.Second
 	wifiScanPoll         = 400 * time.Millisecond
-	wifiDHCPTimeout      = 12 * time.Second
+	wifiDHCPTimeout      = 18 * time.Second
 	wifiMaxSSIDBytes     = 32
 	wifiMinPassphraseLen = 8
 	wifiMaxPassphraseLen = 63
@@ -83,10 +83,12 @@ const (
 )
 
 // wifiAssociateTimeout is how long association may take before the join is
-// reported as failed. WPA2 on a weak handheld radio is slow, not broken. It is
+// reported as failed. WPA2 on a weak handheld radio is slow, not broken: the
+// TrimUI's SDIO radio scans the whole 2.4 GHz band before it associates, and 15 s
+// timed out joins that were still in the handshake. It is
 // a variable only so a test can prove the failure paths (rejected password,
 // stuck supplicant) without waiting out the real seconds.
-var wifiAssociateTimeout = 15 * time.Second
+var wifiAssociateTimeout = 25 * time.Second
 
 // The supplicant probe's cached answer. Discovery runs on the render thread (the
 // status bar asks for the interface), so the probe behind it is remembered: a
@@ -839,15 +841,43 @@ func startSupplicantFor(iface, config, ctrlDir string) (string, error) {
 // stock firmware has a radio and no control socket — the supplicant is started
 // by the firmware's own menu — so the socket the picker looks for only exists
 // after something starts it. It reports whether it ran the start command.
-func ensureWifiBackend() bool {
+func ensureWifiBackend() bool { return ensureWifiBackendRetry(false) }
+
+// ensureWifiBackendMu makes the whole check-then-start one step: the Home
+// tile, the Wi-Fi page and the keeper can all ask at once, and two starts on
+// one radio leave two supplicants fighting over it.
+var ensureWifiBackendMu sync.Mutex
+
+// ensureWifiBackendRetry is ensureWifiBackend; again lifts the one start per
+// session (the keeper's later tries), which is safe here because it happens
+// under the lock and after the running-process check.
+func ensureWifiBackendRetry(again bool) bool {
 	if winWifiActive() {
 		return false
 	}
-	if wifiCommandBackend() != "" {
+	ensureWifiBackendMu.Lock()
+	defer ensureWifiBackendMu.Unlock()
+	// wpa_cli counts as a backend whether or not a supplicant is running, so
+	// on the TrimUI the supplicant itself is asked; without this a dead
+	// supplicant there was never started again (wifi_keeper.go). Elsewhere a
+	// wpa_cli image may have a supplicant reached only over D-Bus
+	// (NetworkManager), which must not get a second one.
+	switch wifiCommandBackend() {
+	case wifiBackendSocket:
 		return false
+	case wifiBackendCli:
+		if !IsTrimuiDevice() || wifiSupplicantAnswers() {
+			return false
+		}
 	}
 	iface := wifiInterface()
 	if iface == "" {
+		return false
+	}
+	// A supplicant that runs but does not answer (hung, slow, or a local
+	// socket problem) is reported, not doubled.
+	if pid := supplicantPIDFor(iface); pid > 0 {
+		recordSupplicantStart(iface, fmt.Sprintf("running (pid %d) but not answering — not starting a second one", pid))
 		return false
 	}
 	// Never start a supplicant against a radio the firmware has switched off:
@@ -860,12 +890,17 @@ func ensureWifiBackend() bool {
 	if config == "" || !wifiToolExists("wpa_supplicant") {
 		return false
 	}
+	if again {
+		resetSupplicantStart(iface)
+	}
 	if !beginSupplicantStart(iface) {
 		return false
 	}
 	dir := supplicantStartDir()
 	out, err := startSupplicantFor(iface, config, dir)
-	if err != nil && dir != tempSupplicantDir() {
+	// "ctrl_iface exists" is a supplicant already holding the socket, and any
+	// process on the radio by now is one: the /tmp fallback would be a second.
+	if err != nil && dir != tempSupplicantDir() && !strings.Contains(out, "ctrl_iface exists") && supplicantPIDFor(iface) == 0 {
 		// The image's control directory can be root-owned and read-only for this
 		// process; a socket in a temporary directory is still reachable, and
 		// discovery reads the same list this start was given.
@@ -891,13 +926,20 @@ func ensureWifiBackend() bool {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		resetWiFiInterfaceCache()
-		if wifiCommandBackend() == wifiBackendSocket {
+		if wifiCommandBackend() == wifiBackendSocket || wifiSupplicantAnswers() {
 			return true
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	recordSupplicantStart(iface, "started, but no control socket appeared in "+dir)
 	return true
+}
+
+// wifiSupplicantAnswers reports whether a supplicant answers STATUS for the
+// radio (wifiResumeStatus: the socket where it is known, else wpa_cli).
+func wifiSupplicantAnswers() bool {
+	_, _, ok := wifiResumeStatus()
+	return ok
 }
 
 // wifiUnavailableReason explains an unavailable backend in one line.
@@ -1620,22 +1662,42 @@ func wifiWaitForAssociation(ssid string, timeout time.Duration) (wifiStatus, err
 	deadline := time.Now().Add(timeout)
 	last := wifiStatus{}
 	lastErr := error(nil)
+	// handshakeFails counts handshakes that fell back to scanning: two in a
+	// row is a key the router refuses, and waiting out the rest of the timeout
+	// would only delay the password prompt. A join still in the handshake at
+	// the deadline with none failed gets a little longer instead: on the slow
+	// handheld radio that is a join about to finish, not a wrong password.
+	handshakeFails := 0
+	extended := false
 	for {
 		st, err := wifiReadStatus()
 		if err == nil {
+			if wifiInHandshake(last.State) && !wifiInHandshake(st.State) && st.State != wifiCompleteState {
+				handshakeFails++
+			}
 			last = st
 			if st.Connected && st.SSID == ssid {
 				return st, nil
+			}
+			if handshakeFails >= 2 {
+				break
 			}
 		} else {
 			lastErr = err
 		}
 		if time.Now().After(deadline) {
+			if !extended && handshakeFails == 0 && (wifiInHandshake(last.State) || last.State == "ASSOCIATING" || last.State == "ASSOCIATED" || last.State == "AUTHENTICATING") {
+				extended = true
+				deadline = time.Now().Add(8 * time.Second)
+				logInfo("wifi", "join of %s still %s at the timeout; waiting 8 s more", ssid, strings.ToLower(last.State))
+				continue
+			}
 			break
 		}
 		time.Sleep(wifiAssociatePoll)
 	}
-	if last.State == "4WAY_HANDSHAKE" || last.State == "GROUP_HANDSHAKE" {
+	logInfo("wifi", "join of %s failed: last state %q, %d failed handshake(s)", ssid, last.State, handshakeFails)
+	if handshakeFails >= 2 || wifiInHandshake(last.State) {
 		return last, fmt.Errorf("could not join %s: the password was rejected", ssid)
 	}
 	if last.State == "" && lastErr != nil {
@@ -1648,31 +1710,77 @@ func wifiWaitForAssociation(ssid string, timeout time.Duration) (wifiStatus, err
 	return last, fmt.Errorf("could not join %s (%s)", ssid, strings.ToLower(state))
 }
 
+// wifiInHandshake reports whether a supplicant state is the WPA key exchange.
+// Pure.
+func wifiInHandshake(state string) bool {
+	return state == "4WAY_HANDSHAKE" || state == "GROUP_HANDSHAKE"
+}
+
 // wifiObtainAddress asks the firmware's DHCP client for a lease when the
 // supplicant did not already get one. It is best-effort: a connected network
 // without an address is still worth reporting as connected.
-func wifiObtainAddress(iface string) (string, error) {
+//
+// The address the supplicant reports is only trusted when the radio was already
+// on this same network before the join (prevSSID) and still has the default
+// route: on the TrimUI the firmware's DHCP runs inside MainUI, which JukaHub
+// stops, so an address left from the previous network or from before a drop
+// used to be taken as the new lease and the join ended with no working network.
+func wifiObtainAddress(iface, prevSSID string) (string, error) {
 	// A join just finished: the connectivity probe looks now rather than at
 	// its next turn, so Chat and Juka see the network at once (netmon.go).
 	defer netNudge()
-	if st, err := wifiReadStatus(); err == nil && st.IP != "" {
+	// Elsewhere the system's own DHCP client already serves the join, and a
+	// second one is only in its way.
+	if st, err := wifiReadStatus(); err == nil && st.IP != "" && (!IsTrimuiDevice() || (st.SSID == prevSSID && wifiIfaceRouted(iface))) {
 		return st.IP, nil
 	}
-	return wifiRunDHCP(iface)
+	// A udhcpc already serving the radio (the firmware's, or the keeper's
+	// one-shot) is asked to renew instead of a second client being started
+	// beside it. Not over an old network's address and route: that would
+	// read as the answer at once.
+	if !wifiIfaceRouted(iface) && wifiSignalRenew(iface) {
+		for end := time.Now().Add(8 * time.Second); time.Now().Before(end); {
+			time.Sleep(500 * time.Millisecond)
+			if wifiIfaceRouted(iface) {
+				if st, err := wifiReadStatus(); err == nil && st.IP != "" {
+					logInfo("wifi", "DHCP on %s after the join: %s (running udhcpc renewed)", iface, st.IP)
+					return st.IP, nil
+				}
+			}
+		}
+	}
+	ip, err := wifiRunDHCP(iface)
+	if err != nil {
+		logWarn("wifi", "DHCP on %s after the join: %v", iface, err)
+	} else {
+		logInfo("wifi", "DHCP on %s after the join: %s", iface, ip)
+	}
+	return ip, err
 }
+
+// wifiDHCPMu serialises wifiRunDHCP.
+var wifiDHCPMu sync.Mutex
 
 // wifiRunDHCP runs the firmware's one-shot DHCP client for iface and returns
 // the address the supplicant then reports. The wake watcher calls it too
 // (wifi_resume.go), where "the supplicant has an address" is not the question:
 // a link that went down and up keeps its address but loses its route.
 func wifiRunDHCP(iface string) (string, error) {
+	// One client at a time: a join and the keeper asking together would run
+	// two, and both rewrite the address and the routes.
+	wifiDHCPMu.Lock()
+	defer wifiDHCPMu.Unlock()
 	type dhcpClient struct {
 		name string
 		args []string
 	}
 	attempts := make([]dhcpClient, 0, 3)
 	if wifiToolExists("udhcpc") {
-		attempts = append(attempts, dhcpClient{"udhcpc", []string{"-i", iface, "-n", "-q", "-t", "5"}})
+		// Five discovers two seconds apart fit inside wifiDHCPTimeout, with
+		// room for an offer to the last one and its request; with
+		// busybox's default three seconds the fifth was still unanswered when
+		// the runner killed the client.
+		attempts = append(attempts, dhcpClient{"udhcpc", []string{"-i", iface, "-n", "-q", "-t", "5", "-T", "2"}})
 	}
 	if wifiToolExists("dhcpcd") {
 		attempts = append(attempts, dhcpClient{"dhcpcd", []string{"-n", "-t", "8", iface}})
@@ -1711,6 +1819,15 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	}
 	if !wifiControlAvailable() {
 		return res, errors.New(wifiUnavailableReason())
+	}
+	// The keeper (wifi_keeper.go) stands aside while the user drives the radio.
+	defer wifiUserOpBegin()()
+	wifiKeeperUserAction(false)
+	// The network the radio was on decides whether its address can be kept
+	// (wifiObtainAddress).
+	prevSSID := ""
+	if before, err := wifiReadStatus(); err == nil && before.Connected {
+		prevSSID = before.SSID
 	}
 	// The supplicant may already hold an entry for this SSID with a password
 	// the router no longer accepts. Joining must not leave both: the stale
@@ -1793,16 +1910,14 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	// disabled=1, so the handheld never rejoined home after one visit to a
 	// friend's Wi-Fi. save_config fails when the supplicant runs with
 	// update_config=0; the connection still works, so that is a warning.
-	saved := false
-	if out, err := wifiWPA("save_config"); err == nil && !wifiCommandFailed(out) {
-		saved = true
-	}
+	saved := wifiSaveConfig()
 	res.Saved = saved
 	warnings := make([]string, 0, 2)
 	if !saved {
+		logWarn("wifi", "save_config failed: %s will not be rejoined after a reboot", ssid)
 		warnings = append(warnings, "this network could not be saved for the next boot")
 	}
-	if ip, ipErr := wifiObtainAddress(wifiInterface()); ipErr == nil {
+	if ip, ipErr := wifiObtainAddress(wifiInterface(), prevSSID); ipErr == nil {
 		res.IP = ip
 	} else if st.IP != "" {
 		res.IP = st.IP
@@ -1811,6 +1926,25 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	}
 	res.Warn = strings.Join(warnings, "; ")
 	return res, nil
+}
+
+// wifiSaveConfig writes the saved networks to the supplicant's config file and
+// reports whether it could.
+func wifiSaveConfig() bool {
+	if out, err := wifiWPA("save_config"); err == nil && !wifiCommandFailed(out) {
+		return true
+	}
+	// A config without update_config=1 refuses every save, so a network
+	// joined here was gone after a reboot; the supplicant lets the switch be
+	// flipped at run time, and the file then keeps it.
+	if out, err := wifiWPA("set", "update_config", "1"); err != nil || wifiCommandFailed(out) {
+		return false
+	}
+	if out, err := wifiWPA("save_config"); err != nil || wifiCommandFailed(out) {
+		return false
+	}
+	logInfo("wifi", "save_config needed update_config=1; set it and saved")
+	return true
 }
 
 // wifiNetworkDisabled reports whether list_networks flagged an entry as
@@ -1866,6 +2000,10 @@ func wifiSelectSaved(id int) (wifiJoinResult, error) {
 	if !wifiControlAvailable() {
 		return res, errors.New(wifiUnavailableReason())
 	}
+	// First, so an early failure below cannot leave a Disconnect (Reconnect's
+	// own) blocking the keeper: the user asked to join.
+	defer wifiUserOpBegin()()
+	wifiKeeperUserAction(false)
 	nets, err := wifiReadSavedNetworks()
 	if err != nil {
 		return res, err
@@ -1881,6 +2019,10 @@ func wifiSelectSaved(id int) (wifiJoinResult, error) {
 		return res, fmt.Errorf("network %d is no longer saved", id)
 	}
 	res.SSID = ssid
+	prevSSID := ""
+	if before, err := wifiReadStatus(); err == nil && before.Connected {
+		prevSSID = before.SSID
+	}
 	// select_network disables every other saved network; they are enabled
 	// again whatever happens, so a reconnect that fails does not leave the
 	// handheld unable to fall back to another network it knows.
@@ -1891,7 +2033,7 @@ func wifiSelectSaved(id int) (wifiJoinResult, error) {
 	if _, err := wifiWaitForAssociation(ssid, wifiAssociateTimeout); err != nil {
 		return res, err
 	}
-	if ip, ipErr := wifiObtainAddress(wifiInterface()); ipErr == nil {
+	if ip, ipErr := wifiObtainAddress(wifiInterface(), prevSSID); ipErr == nil {
 		res.IP = ip
 	} else {
 		res.Warn = "no IP address was assigned; check DHCP on this network"
@@ -1904,6 +2046,10 @@ func wifiDisconnect() error {
 	if winWifiActive() {
 		return winWifiDisconnect()
 	}
+	// The keeper must not undo a Disconnect the user pressed; the next join
+	// lifts this.
+	defer wifiUserOpBegin()()
+	wifiKeeperUserAction(true)
 	_, err := wifiWPAChecked("disconnect")
 	return err
 }
@@ -1920,6 +2066,7 @@ func wifiReconnect() (wifiJoinResult, error) {
 	if !wifiControlAvailable() {
 		return wifiJoinResult{}, errors.New(wifiUnavailableReason())
 	}
+	defer wifiUserOpBegin()()
 	status, err := wifiReadStatus()
 	if err != nil {
 		return wifiJoinResult{}, err
@@ -1935,7 +2082,8 @@ func wifiReconnect() (wifiJoinResult, error) {
 	if !ok {
 		return wifiJoinResult{}, fmt.Errorf("%s is not saved, so it needs its password again", status.SSID)
 	}
-	if err := wifiDisconnect(); err != nil {
+	// Not wifiDisconnect: this is no Disconnect for the keeper to respect.
+	if _, err := wifiWPAChecked("disconnect"); err != nil {
 		return wifiJoinResult{}, err
 	}
 	// Give the driver a moment to leave the old association; selecting a
@@ -1951,6 +2099,8 @@ func wifiForget(ssid string) error {
 	if winWifiActive() {
 		return winWifiForget(ssid)
 	}
+	// The keeper's minute of hands-off starts here too.
+	defer wifiUserOpBegin()()
 	nets, err := wifiReadSavedNetworks()
 	if err != nil {
 		return err
@@ -1968,7 +2118,7 @@ func wifiForget(ssid string) error {
 	if _, err := wifiWPAChecked("remove_network", strconv.Itoa(id)); err != nil {
 		return err
 	}
-	if out, err := wifiWPA("save_config"); err != nil || wifiCommandFailed(out) {
+	if !wifiSaveConfig() {
 		return errors.New("the network was removed for this session but the saved list could not be rewritten")
 	}
 	// Removing the network that is currently associated does not drop the

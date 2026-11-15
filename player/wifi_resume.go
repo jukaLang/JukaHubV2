@@ -23,7 +23,8 @@ package main
 //
 // A supplicant that is not running at all is reported, not started: the
 // firmware starts its own on the way up, and two on one radio fight over it.
-// The Wi-Fi page can still start one, as it always could (ensureWifiBackend).
+// The Wi-Fi page can still start one, as it always could (ensureWifiBackend),
+// and the keeper (wifi_keeper.go) does once this watcher is done and none came.
 //
 // Status is read over the supplicant's control socket where there is one (no
 // fork per second), once a second for the minute after a wake and only until
@@ -86,8 +87,16 @@ func wifiResumeAfterWake() {
 	wifiResume.actions = nil
 	wifiResume.mu.Unlock()
 	if kicks {
+		// Counted here, not in the goroutine, so the keeper cannot slip in
+		// between the wake and the watcher's first line.
+		wifiResumeRunning.Add(1)
 		go wifiResumeWatch(gen)
 	}
+	// The keeper (wifi_keeper.go) starts over with a fresh back-off; it waits
+	// while this watcher runs and covers what the watcher does not: a device
+	// that was offline before it slept (no wake window), and everything after
+	// the window's minute.
+	wifiKeeperKick()
 }
 
 // wifiResumeCurrent reports whether gen is still the latest wake.
@@ -128,6 +137,7 @@ func wifiResumeSummary() string {
 // nudges it when it is slow (see the top of the file). It stops as soon as the
 // internet answers (the wake window closes) or a newer wake takes over.
 func wifiResumeWatch(gen uint64) {
+	defer wifiResumeRunning.Add(-1)
 	defer func() {
 		if r := recover(); r != nil {
 			logWarn("wifi", "wake watcher stopped: %v", r)
@@ -180,7 +190,13 @@ func wifiResumeWatch(gen uint64) {
 			}
 			if !renewed && time.Since(completedAt) >= wifiResumeDHCPAfter && !wifiIfaceRouted(iface) {
 				renewed = true
-				wifiResumeNote(gen, wifiRenewLease(iface))
+				result := wifiRenewLease(iface)
+				if result == "DHCP failed" {
+					logWarn("wifi", "after wake: %s on %s", result, iface)
+				} else {
+					logInfo("wifi", "after wake: %s on %s", result, iface)
+				}
+				wifiResumeNote(gen, result)
 				netNudge()
 			}
 			continue
@@ -197,6 +213,11 @@ func wifiResumeWatch(gen uint64) {
 				logInfo("wifi", "after wake: the radio is switched off — leaving it alone")
 				return
 			}
+		}
+		if wifiKeeperUserOff.Load() {
+			// The user pressed Disconnect before the sleep: a wake does not
+			// undo it (the keeper waits for the same flag).
+			continue
 		}
 		if !reconnected && elapsed >= wifiResumeReconnectAt {
 			reconnected = true
@@ -285,6 +306,27 @@ func procRouteHasDefault(table, iface string) bool {
 			continue
 		}
 		if f[0] == iface && f[1] == "00000000" && f[7] == "00000000" {
+			return true
+		}
+	}
+	return false
+}
+
+// supplicantServes reports whether a process command line (argv, from
+// /proc/<pid>/cmdline) is wpa_supplicant for iface: "-i wlan0", "-iwlan0" or
+// "--interface=wlan0" anywhere in it. Pure.
+func supplicantServes(argv []string, iface string) bool {
+	if len(argv) == 0 || iface == "" || path.Base(argv[0]) != "wpa_supplicant" {
+		return false
+	}
+	args := argv[1:]
+	for i, a := range args {
+		switch a {
+		case "-i", "--interface":
+			if i+1 < len(args) && args[i+1] == iface {
+				return true
+			}
+		case "-i" + iface, "--interface=" + iface:
 			return true
 		}
 	}

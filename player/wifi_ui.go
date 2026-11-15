@@ -255,6 +255,13 @@ func wifiScrBeginVisit() {
 	// Discard anything a previous visit left behind before asking for fresh
 	// state, so an old list cannot appear as the result of this scan.
 	wifiDrainDiscarded()
+	if IsTrimuiDevice() {
+		// wpa_cli makes the page "available" even with no supplicant running;
+		// a visit is a fresh chance to start one (the refresh below asks).
+		if iface := wifiInterface(); iface != "" {
+			resetSupplicantStart(iface)
+		}
+	}
 	wifiRefreshAsync(true)
 }
 
@@ -302,6 +309,11 @@ func wifiRefreshAsync(scan bool) {
 	}
 	wifiStartWork(label, func() wifiUpdate {
 		scanErr := ""
+		if scan && IsTrimuiDevice() {
+			// A supplicant that died is started again (at most once per
+			// visit; ensureWifiBackend guards itself).
+			ensureWifiBackend()
+		}
 		if scan {
 			if _, err := wifiScanNetworks(); err != nil {
 				scanErr = firstLine(err.Error())
@@ -427,6 +439,8 @@ func wifiEnableRadioAsync() {
 		if err := setWifiEnabled(true); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
+		// The keeper rejoins from here, even over the firmware's Wi-Fi-off.
+		wifiKeeperRadioOn()
 		// Home's Wi-Fi tile reads the radio again (home_quicktiles.go).
 		saverWifiInvalidate()
 		// Give the interface a moment to come up before scanning.
@@ -470,9 +484,9 @@ func wifiStartBackendAsync() {
 // nothing is listening), then reads the snapshot. It runs on the worker
 // goroutine; the answer goes back through the usual update slot.
 func wifiBackendUpdate(msg string) wifiUpdate {
-	if wifiCommandBackend() == "" {
-		ensureWifiBackend()
-	}
+	// Asked whatever the backend: on the TrimUI wpa_cli is "a backend" with
+	// no supplicant behind it (ensureWifiBackend checks for itself).
+	ensureWifiBackend()
 	if !wifiControlAvailable() {
 		// No route still: report the reason the page knows, so a radio that
 		// refused to come up says why instead of looking like a dead button.

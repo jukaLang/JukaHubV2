@@ -191,8 +191,16 @@ func sttServeUpdateCheck() {
 			logWarn("voice", "offline speech update check stopped: %v", r)
 		}
 	}()
-	if bin, _ := sttServeFiles(); bin != "" {
+	bin, _, sure := sttServeFiles()
+	if bin != "" {
 		sttServeProbe.state.Store(sttServeYes)
+		return
+	}
+	if !sure {
+		// vosk-cli --help was too slow (a busy card at boot): this says
+		// nothing about the package, so neither streaming nor a download is
+		// ruled on; the next tools check or reconnect looks again.
+		sttServeUpdateChecked.Store(false)
 		return
 	}
 	sttServeProbe.state.Store(sttServeNo)

@@ -84,6 +84,8 @@ const (
 	// The Bluetooth page (bluetooth_devices_ui.go): pads, headphones and
 	// keyboards are paired without leaving JukaHub.
 	qsLinkBluetooth
+	// Close all apps & games (closeall.go): a two-step press, not a panel.
+	qsLinkCloseAll
 )
 
 type qsLink struct {
@@ -171,6 +173,8 @@ func qsInit() {
 			// Colour, effect and brightness live in their own panel; the LED
 			// Mode cycler below stays the one-press shortcut.
 			{Label: "LED Style", Icon: "[R]", Action: qsLinkLEDPanel},
+			// Frees memory when Juka's offline AI needs it (closeall.go).
+			{Label: "Close all apps & games", Icon: "[X]", Action: qsLinkCloseAll},
 		},
 		// The app's idle timer drives the screensaver overlay, not a display
 		// blank, so the row says what it actually controls.
@@ -279,6 +283,8 @@ func qsRefreshAvailability() {
 			// since leaves the row dim instead of opening an empty page.
 			l.Available = btDevicesAvailable()
 			l.Detail = "Unavailable"
+		case qsLinkCloseAll:
+			l.Available = true
 		}
 	}
 	volumeOK := volumeBackend() != ""
@@ -579,6 +585,9 @@ func qsApplyProbe(r qsProbe) {
 }
 
 func qsToggleOpen() {
+	if !qs.open && startupLocked() { // not over the startup lock (bootlock.go)
+		return
+	}
 	qs.open = !qs.open
 	if qs.open {
 		trophyEvent(tkQuickSettings)
@@ -661,6 +670,10 @@ func qsOpenLink(l qsLink) {
 	case qsLinkLEDPanel:
 		qs.open = false
 		openLEDPanel()
+	case qsLinkCloseAll:
+		// The panel stays: the toast names what would close, the second
+		// press closes it (closeall.go).
+		closeAllArmPress("qs", hintKeyFor("A", ""), false, nil)
 	}
 }
 
@@ -729,6 +742,10 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 	case qsActionWifi:
 		if err := setWifiEnabled(want); err != nil {
 			return err
+		}
+		if want {
+			// Saved networks reconnect by themselves again (wifi_keeper.go).
+			wifiKeeperRadioOn()
 		}
 		qsNoteEdit()
 		qsStartProbe()

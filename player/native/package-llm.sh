@@ -5,9 +5,18 @@ set -eu
 
 src=${1:?source directory required}
 out=${2:?output zip required}
-model=SmolLM2-135M-Instruct-Q4_0.gguf
-model_sha=bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03
-model_size=91893088
+# The model's pins live in build-llm.sh beside this script, the one place to
+# change them (offline-ai.yml reads them from there too).
+pin() {
+    sed -n "s/^$1=\([A-Za-z0-9._-]*\)\$/\1/p" "$(dirname "$0")/build-llm.sh"
+}
+model=$(pin MODEL_NAME)
+model_sha=$(pin MODEL_SHA)
+model_size=$(pin MODEL_SIZE)
+if [ -z "$model" ] || [ -z "$model_sha" ] || [ -z "$model_size" ]; then
+    echo "package-llm.sh: could not read the model pins from build-llm.sh" >&2
+    exit 1
+fi
 
 for name in llama-cli llama-server "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; do
     test -s "$src/$name"

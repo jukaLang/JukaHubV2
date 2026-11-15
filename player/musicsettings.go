@@ -389,11 +389,18 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 		panelW = screenWidth - 48
 	}
 	panelH := band + int32(len(rows))*rowH + 12 + 2*smallH + 20 + footerH
-	if panelH > screenHeight-56 {
-		panelH = screenHeight - 56
+	// Leave the scene's footer band uncovered: a centred panel capped at
+	// screenHeight-56 still ended 28px into the band, under the player's own
+	// hint row. The rows are scrolled, so a shorter card loses no content.
+	maxPanelH := screenHeight - 2*footerBarHeight()
+	if panelH > maxPanelH {
+		panelH = maxPanelH
 	}
 	x := (screenWidth - panelW) / 2
 	y := (screenHeight - panelH) / 2
+	if footerY := sceneFooterBand().Y; y+panelH > footerY {
+		y = footerY - panelH
+	}
 	card := sdl.Rect{X: x, Y: y, W: panelW, H: panelH}
 	musicSettings.panelRect = card
 

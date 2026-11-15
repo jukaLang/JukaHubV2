@@ -209,7 +209,11 @@ const (
 // settle. Call this instead of noteGameChildExited from the reaper goroutine.
 func screenChildReaped(cmd *exec.Cmd) {
 	if screenChildGroupAlive(cmd) {
-		logDebug("handover", "launcher %d exited but its process group is still running; keeping the screen parked", cmd.Process.Pid)
+		// Named in the log: a helper the script left running (a key mapper,
+		// a watcher) keeps the screen parked too, which looks like a black
+		// screen; Select + Start held ends the group (gameForceQuit).
+		logInfo("handover", "launcher %d exited but its process group is still running (%s); keeping the screen parked",
+			cmd.Process.Pid, screenChildGroupNames(cmd))
 		deadline := time.Now().Add(screenGroupWatch)
 		for screenChildGroupAlive(cmd) && time.Now().Before(deadline) {
 			time.Sleep(screenGroupPoll)

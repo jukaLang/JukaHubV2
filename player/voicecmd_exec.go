@@ -42,6 +42,7 @@ const (
 	voiceFixOfflineSpeech
 	voiceFixPhone
 	voiceFixType
+	voiceFixFreeMemory // close apps (closeall.go)
 )
 
 // voiceOutcome is what a command did, or will do.
@@ -135,6 +136,8 @@ func voiceExecute(config *Config, in voiceIntent, src voiceSource) voiceOutcome 
 		return voiceOutcome{Say: "Searching for “" + q + "”", Leave: true, Act: func(c *Config) { voiceOpenSearchSheet(c, q) }}
 	case voiceIntentQuit:
 		return voiceQuitOutcome(config)
+	case voiceIntentCloseAll:
+		return closeAllVoiceOutcome()
 	case voiceIntentOpen:
 		return voiceOpenTarget(config, in)
 	case voiceIntentSetting:

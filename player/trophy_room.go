@@ -329,7 +329,6 @@ type trophyRoomState struct {
 	grid       sdl.Rect
 	scrollF    float64
 	chipRects  [trophyChipCount]sdl.Rect
-	chipScroll int32
 	tabRects   [2]sdl.Rect
 	raRect     sdl.Rect
 	cardRects  [trophyCardsMax]sdl.Rect
@@ -387,7 +386,6 @@ func trophyRoomSyncVisit() {
 	r.chip = r.filter
 	r.cursor = 0
 	r.sheet = false
-	r.chipScroll = 0
 	trophyGroupSheet.open, trophyGroupSheet.choose = false, nil
 	if entered {
 		trophyEvent(tkRoomVisit)
@@ -650,19 +648,22 @@ func trophyFontH(f *ttf.Font, fallback int32) int32 {
 
 // trophyRoomLayout is the page's geometry on this canvas.
 type trophyRoomLayout struct {
-	body    sdl.Rect // between the bars
-	hero    sdl.Rect
-	tabsY   int32
-	tabsH   int32
-	content sdl.Rect // under the tab row
-	cols    int
-	cardW   int32
-	cardH   int32
-	gap     int32
+	body      sdl.Rect // between the bars
+	hero      sdl.Rect
+	tabsY     int32
+	tabsH     int32
+	chips     sdl.Rect // the wrapped filter chips, directly under the tabs
+	chipRows  int32
+	chipRects [trophyChipCount]sdl.Rect
+	content   sdl.Rect // under the tabs and chips
+	cols      int
+	cardW     int32
+	cardH     int32
+	gap       int32
 }
 
 // trophyRoomLayoutFor lays the page out for the current canvas and fonts.
-func trophyRoomLayoutFor(f trophyFonts) trophyRoomLayout {
+func trophyRoomLayoutFor(config *Config, f trophyFonts) trophyRoomLayout {
 	margin := scaleX(homeSideMargin, screenWidth)
 	if margin < 12 {
 		margin = 12
@@ -682,7 +683,36 @@ func trophyRoomLayoutFor(f trophyFonts) trophyRoomLayout {
 		l.tabsH = 30
 	}
 	l.tabsY = l.hero.Y + l.hero.H + 12
+	// The filters get their own full-width rows under the tabs. A single
+	// clipped carousel cut off the last chips on every canvas; wrapping keeps
+	// every label and hit area inside the content bounds instead. The row uses
+	// the same chip gap and height as the tab row's controls.
+	if trophyRoom.tab == trophyTabTrophies && f.chip != nil {
+		chipH := l.tabsH - 4
+		const chipGap = int32(8)
+		l.chips = sdl.Rect{
+			X: margin,
+			Y: l.tabsY + l.tabsH + chipGap,
+			W: screenWidth - 2*margin,
+		}
+		x, y := l.chips.X, l.chips.Y
+		for i := 0; i < trophyChipCount; i++ {
+			w := trophyRoomChipWidth(config, f, i)
+			if x > l.chips.X && x+w > l.chips.X+l.chips.W {
+				x = l.chips.X
+				y += chipH + chipGap
+				l.chipRows++
+			}
+			l.chipRects[i] = sdl.Rect{X: x, Y: y, W: w, H: chipH}
+			x += w + chipGap
+		}
+		l.chipRows++
+		l.chips.H = l.chipRows*chipH + (l.chipRows-1)*chipGap
+	}
 	top := l.tabsY + l.tabsH + 12
+	if l.chips.H > 0 {
+		top = l.chips.Y + l.chips.H + 12
+	}
 	l.content = sdl.Rect{X: margin, Y: top, W: screenWidth - 2*margin, H: footY - 10 - top}
 	if l.content.H < 60 {
 		l.content.H = 60
@@ -784,7 +814,7 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	if f.sub == nil {
 		return
 	}
-	l := trophyRoomLayoutFor(f)
+	l := trophyRoomLayoutFor(config, f)
 	r := &trophyRoom
 	r.cols, r.cardH, r.gap = l.cols, l.cardH, l.gap
 	r.grid = l.content
@@ -1126,8 +1156,8 @@ func trophyRoomChipHasGlyph(i int) bool {
 	return i == trophyChipGroup || i == trophyChipSort || i == trophyChipStyle
 }
 
-// trophyRoomDrawTabs draws the tab pills and, on the Trophies tab, the chip
-// row; on the Playtime tab the RetroAchievements button takes its place.
+// trophyRoomDrawTabs draws the tab pills and, on the Trophies tab, the wrapped
+// chip rows; on the Playtime tab the RetroAchievements button takes their place.
 func trophyRoomDrawTabs(renderer *sdl.Renderer, config *Config, f trophyFonts, l trophyRoomLayout) {
 	r := &trophyRoom
 	cy := l.tabsY + l.tabsH/2
@@ -1163,66 +1193,23 @@ func trophyRoomDrawTabs(renderer *sdl.Renderer, config *Config, f trophyFonts, l
 		return
 	}
 
-	// The chip row. It is a carousel when it does not fit: the focused chip is
-	// always scrolled into view and the row is clipped to its own band.
-	area := sdl.Rect{X: x, Y: l.tabsY - 6, W: right - x, H: l.tabsH + 12}
-	if area.W < 80 {
-		return
-	}
-	const gap = int32(8)
-	var widths [trophyChipCount]int32
-	total := int32(0)
-	for i := 0; i < trophyChipCount; i++ {
-		widths[i] = trophyRoomChipWidth(config, f, i)
-		total += widths[i]
-		if i > 0 {
-			total += gap
-		}
-	}
-	// A little room either side for the focus lift.
-	inner := area.W - 8
-	if total <= inner {
-		r.chipScroll = 0
-	} else {
-		start := int32(0)
-		for i := 0; i < r.chip && i < trophyChipCount; i++ {
-			start += widths[i] + gap
-		}
-		end := start + widths[r.chip]
-		if start-r.chipScroll < 0 {
-			r.chipScroll = start
-		}
-		if end-r.chipScroll > inner {
-			r.chipScroll = end - inner
-		}
-		if r.chipScroll > total-inner {
-			r.chipScroll = total - inner
-		}
-		if r.chipScroll < 0 {
-			r.chipScroll = 0
-		}
-	}
+	// The chip rows come from the page layout, so the drawn rects, the mouse
+	// hit areas and the content below them all share the same wrapped geometry.
 	focusOn := r.zone == trophyZoneChips && !r.sheet && trophyRoomFocusVisible()
-	renderWithClip(renderer, area.X, area.Y, area.W, area.H, func(_ *sdl.Renderer) {
-		cx := area.X + 4 - r.chipScroll
-		for i := 0; i < trophyChipCount; i++ {
-			rect := sdl.Rect{X: cx, Y: l.tabsY + 2, W: widths[i], H: l.tabsH - 4}
-			cx += widths[i] + gap
-			if rect.X+rect.W < area.X || rect.X > area.X+area.W {
-				continue
-			}
-			visible := glassIntersect(rect, area)
-			r.chipRects[i] = visible
-			// A filter is lit while it is the one applied; the category chip
-			// while it narrows the grid to one category.
-			active := (i < trophyFilterCount && i == r.filter) || (i == trophyChipGroup && r.group != "")
-			focused := focusOn && i == r.chip
-			trophyRoomDrawChip(renderer, config, f, rect, i, active, focused)
+	for i, rect := range l.chipRects {
+		if rect.W <= 0 {
+			continue
 		}
-	})
+		r.chipRects[i] = rect
+		// A filter is lit while it is the one applied; the category chip
+		// while it narrows the grid to one category.
+		active := (i < trophyFilterCount && i == r.filter) || (i == trophyChipGroup && r.group != "")
+		focused := focusOn && i == r.chip
+		trophyRoomDrawChip(renderer, config, f, rect, i, active, focused)
+	}
 }
 
-// trophyRoomDrawChip draws one chip of the row.
+// trophyRoomDrawChip draws one chip of the wrapped rows.
 func trophyRoomDrawChip(renderer *sdl.Renderer, config *Config, f trophyFonts, rect sdl.Rect, i int, active, focused bool) {
 	radius := rect.H / 2
 	accent := glassAccent()
@@ -2253,6 +2240,18 @@ func trophyRoomFooterHints() []FooterHint {
 	return hints
 }
 
+// trophyChipAtPoint maps a click to the wrapped chip it lands on. The draw
+// pass publishes exactly the rects returned by trophyRoomLayoutFor, so a chip
+// the user can see is a chip the pointer can hit.
+func trophyChipAtPoint(rects [trophyChipCount]sdl.Rect, mx, my int32) (int, bool) {
+	for i, rect := range rects {
+		if rect.W > 0 && pointInRect(mx, my, rect) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 // trophyRoomClick handles a click or a tap. It reports whether the room used it.
 func trophyRoomClick(mx, my int32) bool {
 	trophyRoomSyncVisit()
@@ -2302,10 +2301,7 @@ func trophyRoomClick(mx, my int32) bool {
 	if r.tab == trophyTabStats {
 		return false
 	}
-	for i, rect := range r.chipRects {
-		if rect.W <= 0 || !pointInRect(mx, my, rect) {
-			continue
-		}
+	if i, ok := trophyChipAtPoint(r.chipRects, mx, my); ok {
 		r.zone = trophyZoneChips
 		r.chip = i
 		switch {

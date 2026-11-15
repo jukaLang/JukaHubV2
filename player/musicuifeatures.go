@@ -86,6 +86,13 @@ var musicSearchRowHits []struct {
 	rect  sdl.Rect
 }
 
+// The search card's measured geometry, kept for the containment tests in
+// musicsearch_layout_test.go. Render thread only, like the hit rows above.
+var musicSearchLayout struct {
+	card, field, hint sdl.Rect
+	rows              int
+}
+
 // musicSelectSearchHit highlights one visible row and plays it.
 func musicSelectSearchHit(track int) {
 	music.mu.Lock()
@@ -447,7 +454,18 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 	if rows > 7 {
 		rows = 7
 	}
-	panelH := int32(150) + int32(rows)*34
+	// The card is measured from the content it really holds: the shared header
+	// band, the query field, one row per hit (or one empty-state row), and the
+	// hint line. The old fixed 150+34*rows height put the hint inside the field
+	// and the last hit, and pushed the empty-state line out of the card.
+	header := overlayPageHeader(sdl.Rect{X: 0, Y: 0, W: panelW, H: 0}, "Search songs", "Type initials: iwyn = I Want You Now", "media")
+	band := UIPanelHeaderBand(config, header, 12)
+	listH := int32(rows) * 34
+	if rows == 0 {
+		listH = 34
+	}
+	hintH := int32(30)
+	panelH := band + 46 + 12 + listH + 12 + hintH
 	if panelH > screenHeight-80 {
 		panelH = screenHeight - 80
 	}
@@ -458,8 +476,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 
 	// The search sheet opens with the shared page header instead of its own
 	// all-caps label, so its field starts where every panel's body starts.
-	header := overlayPageHeader(card, "Search songs", "Type initials: iwyn = I Want You Now", "media")
-	band := UIPanelHeaderBand(config, header, 12)
+	header = overlayPageHeader(card, "Search songs", "Type initials: iwyn = I Want You Now", "media")
 	UIPageHeaderDraw(renderer, config, header)
 
 	queryText := query
@@ -474,6 +491,10 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 
 	listY := field.Y + field.H + 12
 	musicSearchRowHits = musicSearchRowHits[:0]
+	musicSearchLayout.card = card
+	musicSearchLayout.field = field
+	musicSearchLayout.rows = rows
+	musicSearchLayout.hint = sdl.Rect{X: px + OverlayPadX, Y: py + panelH - hintH, W: panelW - 2*OverlayPadX, H: hintH}
 	if len(hits) == 0 {
 		msg := "No matches yet"
 		if strings.TrimSpace(query) != "" {
@@ -515,7 +536,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 		hint = "Type the initials on the keyboard, then A to search"
 	}
 	hintW, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, ColorTextTertiary(), px+(panelW-int32(hintW))/2, py+panelH-30)
+	renderText(renderer, config, font, hint, ColorTextTertiary(), px+(panelW-int32(hintW))/2, musicSearchLayout.hint.Y)
 
 	// Keep the exit timer visible behind the panel: a timer the user forgot is
 	// worse than an empty corner.
@@ -559,6 +580,11 @@ func musicHeaderButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x
 		fill = WithAlpha(accentColor, 40)
 		border = accentColor
 		fg = accentColor
+	} else if pointInRect(mouseX, mouseY, rect) {
+		// Pointer feedback, distinct from the active (armed/searching) fill and
+		// from the 3px keyboard ring on the controls that own focus.
+		fill = ColorCardHover
+		border = glassEdgeHover()
 	}
 	fillRoundedRect(renderer, x, y, w, h, 8, fill)
 	strokeRoundedRect(renderer, x, y, w, h, 8, 1, border)

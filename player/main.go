@@ -46,6 +46,11 @@ func main() {
 		}
 	}()
 
+	// JukaHub OS (jukaos_linux.go): launch.sh starts "JukaHub --os-session" in
+	// OS mode; this applies the layers in a private mount namespace and runs
+	// JukaHub again inside it, or carries on as the app.
+	jukaosSessionEntry()
+
 	// Secret management (set/check encrypted config values) runs before SDL so
 	// it works without a display, e.g. over SSH on the handheld.
 	if handled, code := handleSecretCommand(os.Args[1:]); handled {
@@ -118,6 +123,9 @@ func main() {
 	// clock time. Three failed starts in a row start safe mode; a new build
 	// that crashed its first starts is rolled back after InitPatchModule below.
 	initBootGuard()
+	// JukaHub OS: a journal a crashed session left is undone, and a session's
+	// drivers and values are applied in the background (jukaos_linux.go).
+	jukaosInit()
 
 	// Enable text input so physical keyboard typing works in input fields
 	// (both the on-screen keyboard modal and the main loop).
@@ -712,7 +720,13 @@ func main() {
 	if allotment > 0 && !bootOSPowerOnActive() {
 		bootChimeStart(config)
 	}
+	// Whether this start asks for the startup lock, before the boot draws
+	// anything of Home (bootlock.go).
+	bootLockArm(config)
 	ShowSplash(renderer, config, allotment)
+	// JukaHub OS's escape hatch: Select or B held through the power-on boot
+	// starts the firmware's menu for this boot instead (jukaos_settings.go).
+	jukaosEscapeCheck()
 	startupMarkNow("splash")
 	// Whatever did not fit between frames runs now — and on a warm start, where
 	// no splash was drawn, this is where all of it happens.
@@ -828,6 +842,7 @@ func main() {
 			voiceOrbAway()
 			// Nor do the stick lights: the game gets the microphone (ledmic.go).
 			ledMicClose()
+			ledJukaTick(config, time.Now()) // Juka's lights fade out and hand back (ledjuka.go)
 			// Mouse in games and apps: a goroutine watches the pad for the
 			// Select + L1 chord while the child runs (vcursor_bridge_linux.go).
 			vcursorBridgeTick(config)
@@ -877,7 +892,7 @@ func main() {
 		// path as the handheld's own input. While the game assistant is up over
 		// a paused game they wait, as they do while the game owns the screen: a
 		// phone "launch" must not start something behind a stopped game.
-		if !gameAssistOverlayActive() {
+		if !gameAssistOverlayActive() && !startupLocked() {
 			drainCompanionQueue(config)
 		}
 		// Exit request (home Exit button or config "exit" trigger): leave the
@@ -904,6 +919,10 @@ func main() {
 			// Asleep, and a moment after the wake: presses are dropped, so
 			// neither a pocket nor the wake press acts (powersleep.go).
 			if powerSleepDropInput(event) {
+				continue
+			}
+			// The startup lock takes every press while it is up (bootlock.go).
+			if bootLockEvent(config, event) {
 				continue
 			}
 			// Moving around, choosing and going back stir the liquid
@@ -3403,6 +3422,7 @@ func main() {
 		syncLEDLoopSettingsIfDue(config, time.Now())
 		// LED mode Microphone reads the mic here, on the main thread (ledmic.go).
 		ledMicTick(time.Now())
+		ledJukaTick(config, time.Now()) // the stick lights show Juka listening/thinking/speaking (ledjuka.go)
 		// So does "Hey Juka" (wakeword.go).
 		hjTick(config, false)
 
@@ -3930,8 +3950,9 @@ func main() {
 		if globalSearchOpen {
 			renderGlobalSearch(renderer, config)
 		}
-		// Virtual keyboard overlay (open for chat and input elements).
-		if virtualKeyboardActive {
+		// Virtual keyboard overlay (open for chat and input elements). Over
+		// the startup lock it is drawn with the lock (bootLockRender).
+		if virtualKeyboardActive && !bootLockOverlayUp() {
 			renderKeyboard(renderer, config)
 		}
 		// First-run tour sits above every scene and overlay.
@@ -3967,6 +3988,9 @@ func main() {
 		// A trophy unlock celebrates above every scene and panel (card, confetti,
 		// chime); only a ringing alarm, drawn next, covers it. trophy_celebrate.go.
 		trophyRenderOverlay(renderer, config)
+		// The startup lock covers all of the above, toasts included; only a
+		// ringing alarm, drawn below, goes over it (bootlock_ui.go).
+		bootLockRender(renderer, config)
 		// The game assistant over a paused game covers the screen behind it;
 		// the voice orb is drawn on it below. Every frame it also follows
 		// which game is played, for Juka's prompt (gameassist.go).
@@ -4030,6 +4054,8 @@ func main() {
 			// The boot guard's health clock starts at the first frame: a session
 			// that keeps running past it is a healthy boot (bootguard.go).
 			bootGuardFirstFrame()
+			// JukaHub OS's guard runs on the same clock (jukaos_settings.go).
+			jukaosFirstFrame()
 			// Bench mode measures boot and stops before the event loop settles
 			// into idle work, so CI can assert on the number.
 			if startupBenchEnabled() {

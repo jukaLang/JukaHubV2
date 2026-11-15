@@ -16,6 +16,9 @@ partyhistory.json
 .msys2-installer.exe
 .sdl2/
 
+# Headless browser raster diagnostics (written by the render tests)
+testdata/headless-render/
+
 # Remote Play helpers (built by native/build-helpers.sh)
 native/bin/
 native/libs/

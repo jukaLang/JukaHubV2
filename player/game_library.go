@@ -286,6 +286,37 @@ func gameLauncherCandidates(system string) []string {
 	return out
 }
 
+// gameLauncherFolders is every Roms folder name the scanner files under
+// system (romSystemAliases' keys), sorted so the order is the same on every
+// run. On the card each is also the name of that system's Emus folder (MainUI
+// pairs them through config.json's rompath): Roms/WS, NGP, LYNX, CPS1, FBNEO…
+// had games but "no launcher", as no alias named Emus/WS and the rest.
+// findGameLaunchersFor matches them by exact name only: the game's own folder
+// first, the rest when no alias found anything. Arcade has nine of them, so
+// they must not all be offered beside the aliases' match on every launch.
+func gameLauncherFolders(system string) []string {
+	var out []string
+	for folder, s := range romSystemAliases {
+		if s.Name == system {
+			out = append(out, folder)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// gameRomsFolder is the normalised name of the folder right under the "Roms"
+// folder that holds romPath (…/Roms/CPS2/sf2.zip is "cps2"), or "".
+func gameRomsFolder(romPath string) string {
+	parts := strings.FieldsFunc(romPath, func(r rune) bool { return r == '/' || r == '\\' })
+	for i := len(parts) - 3; i >= 0; i-- {
+		if strings.EqualFold(parts[i], "roms") {
+			return normaliseLauncherName(parts[i+1])
+		}
+	}
+	return ""
+}
+
 // launcherNameGroups splits a catalog name at brackets and separators and
 // normalises each part: "Game Boy (Gambatte)" is "gameboy" and "gambatte".
 func launcherNameGroups(name string) []string {
@@ -328,6 +359,17 @@ func findGameLauncher(system string, entries []emuEntry) string {
 // match first (findGameLauncher's order), one entry per launcher file: the
 // emulator picker (emupicker.go) offers them when there is more than one.
 func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
+	return findGameLaunchersFor(system, "", entries)
+}
+
+// findGameLaunchersFor is findGameLaunchers for the game at romPath. The Emus
+// folder named exactly like the game's own Roms folder (one of the system's,
+// gameLauncherFolders) is the one MainUI would start it with: when there is
+// one, it is the only answer, so a Roms/CPS2 set goes to Emus/CPS2 without a
+// question rather than to the first arcade folder. A folder that is also an
+// alias of the system (Roms/GBA) keeps the usual list, so the picker still
+// offers GBA beside mGBA. With no romPath this is findGameLaunchers.
+func findGameLaunchersFor(system, romPath string, entries []emuEntry) []emuEntry {
 	candidates := gameLauncherCandidates(system)
 	if len(candidates) == 0 {
 		return nil
@@ -351,22 +393,32 @@ func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
 	// A row whose whole name is another console's ("PlayStation 2", "Xbox
 	// 360") is that console's emulator, even though a word of it ("playstation",
 	// "xbox") names this one: the looser passes leave it out.
+	// The other consoles' names, built on first use: each one's candidates
+	// walk the whole folder table.
+	var otherNames map[string]bool
 	otherConsole := func(e emuEntry) bool {
 		name := normaliseLauncherName(e.Name)
 		if contains(candidates, name) {
 			return false
 		}
-		for other := range systemLauncherAliases {
-			if other != system && contains(gameLauncherCandidates(other), name) {
-				return true
+		if otherNames == nil {
+			otherNames = map[string]bool{}
+			for other := range systemLauncherAliases {
+				if other == system {
+					continue
+				}
+				for _, n := range gameLauncherCandidates(other) {
+					otherNames[n] = true
+				}
 			}
 		}
-		return false
+		return otherNames[name]
 	}
 	var out []emuEntry
 	seen := map[string]bool{}
-	for pass, match := range passes {
-		for _, want := range candidates {
+	collect := func(pass int, wants []string) {
+		match := passes[pass]
+		for _, want := range wants {
 			for _, e := range entries {
 				if !usable(e) || !match(e, want) {
 					continue
@@ -383,6 +435,24 @@ func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
 				out = append(out, e)
 			}
 		}
+	}
+	// Folder names are matched whole (pass 0) only, so NES/SNES, GB/GBC/GBA
+	// and PS/PSP stay apart.
+	var folders []string
+	for _, f := range gameLauncherFolders(system) {
+		folders = append(folders, normaliseLauncherName(f))
+	}
+	if own := gameRomsFolder(romPath); own != "" && !contains(candidates, own) && contains(folders, own) {
+		collect(0, []string{own})
+		if len(out) > 0 {
+			return out
+		}
+	}
+	for pass := range passes {
+		collect(pass, candidates)
+	}
+	if len(out) == 0 {
+		collect(0, folders)
 	}
 	return out
 }
@@ -551,7 +621,32 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		if hint := emuLibraryLauncherHint(game.System); hint != "" {
 			return errors.New(hint)
 		}
-		return fmt.Errorf("no launcher for %s", game.System)
+		// Which names were looked for, and where, so a report says why. The
+		// card's own folder names (WS, CPS2) come first, as on the card; the
+		// collection names ("nintendo - game boy") are no folder anyone makes.
+		var names []string
+		named := map[string]bool{}
+		for _, f := range gameLauncherFolders(game.System) {
+			if !strings.Contains(f, " ") {
+				names = append(names, strings.ToUpper(f))
+				named[normaliseLauncherName(f)] = true
+			}
+		}
+		sort.SliceStable(names, func(i, j int) bool { return len(names[i]) < len(names[j]) })
+		for _, n := range gameLauncherCandidates(game.System) {
+			if !named[n] {
+				names = append(names, n)
+			}
+		}
+		where, what := "", "emulator"
+		if IsTrimuiDevice() {
+			where, what = " (emulator folders in "+strings.Join(deviceEmuRoots, ", ")+")", "emulator folder"
+		}
+		logWarn("library", "no launcher for %s: no usable emulator named any of %s%s", game.System, strings.Join(names, ", "), where)
+		if len(names) > 3 {
+			names = names[:3]
+		}
+		return fmt.Errorf("no launcher for %s — no %s named %s", game.System, what, strings.Join(names, ", "))
 	}
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
@@ -642,6 +737,14 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	launchedAt := time.Now()
 	gameLaunchWatchStart(cmd)
 	gameLaunchLogStart(game, cmd, diag.memFreeMB())
+	if !IsWindows() && launcherShellScript(launcher) {
+		// What a launch script that "cannot find RetroArch" was given: the
+		// evidence the next report needs.
+		home, _ := childEnvLookup(cmd.Env, "HOME")
+		path, _ := childEnvLookup(cmd.Env, "PATH")
+		libs, _ := childEnvLookup(cmd.Env, "LD_LIBRARY_PATH")
+		logInfo("library", "launch script environment: HOME=%q PATH=%q LD_LIBRARY_PATH=%q", home, path, libs)
+	}
 	// The time-lapse covers exactly this child's life: it starts when the game
 	// does and is assembled when the game exits. A machine with no readable
 	// framebuffer returns nil here and the launch is unchanged.

@@ -19,6 +19,7 @@ import "github.com/veandco/go-sdl2/sdl"
 
 type paletteSnapshot struct {
 	background, surface, surfaceAlt, surfaceRaised sdl.Color
+	panelRaised                                    sdl.Color
 	surfaceCard, surfaceRow, surfacePanel          sdl.Color
 	buttonRaised, borderSubtle, borderDefault      sdl.Color
 	borderFocus, success, warning, danger          sdl.Color
@@ -42,6 +43,7 @@ func capturePalette() paletteSnapshot {
 		surface:          ColorSurface,
 		surfaceAlt:       ColorSurfaceAlt,
 		surfaceRaised:    ColorSurfaceRaised,
+		panelRaised:      ColorPanelRaised,
 		surfaceCard:      ColorSurfaceCard,
 		surfaceRow:       ColorSurfaceRow,
 		surfacePanel:     ColorSurfacePanel,
@@ -89,6 +91,7 @@ func restorePalette(s paletteSnapshot) {
 	ColorSurface = s.surface
 	ColorSurfaceAlt = s.surfaceAlt
 	ColorSurfaceRaised = s.surfaceRaised
+	ColorPanelRaised = s.panelRaised
 	ColorSurfaceCard = s.surfaceCard
 	ColorSurfaceRow = s.surfaceRow
 	ColorSurfacePanel = s.surfacePanel

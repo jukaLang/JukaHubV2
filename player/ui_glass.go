@@ -107,9 +107,11 @@ func glassAccent() sdl.Color {
 		return sdl.Color{R: 85, G: 216, B: 255, A: 255}
 	}
 	if math.Abs(colorLuma(c)-colorLuma(ColorBackground)) < 60 {
-		return focusColorForAccent(c)
+		c = focusColorForAccent(c)
 	}
-	return c
+	// Even an accent far enough in luma can sit just under 3:1 against a
+	// raised card. Nudge only the ring that fails, preserving its hue.
+	return FocusInk(c)
 }
 
 // themeAccentColor is the value accentColor is set from: the active theme's
@@ -380,6 +382,25 @@ func glassLifted(rect sdl.Rect) sdl.Rect {
 	}
 }
 
+// focusLiftFits reports whether the lifted focus surface still fits in the
+// current clip and on the canvas. A button at the edge of a clipped list used
+// to lose the outer three pixels of its ring to that clip; it falls back to a
+// ring on its own edge instead.
+func focusLiftFits(renderer *sdl.Renderer, rect sdl.Rect) bool {
+	if renderer == nil {
+		return false
+	}
+	lifted := glassLifted(rect)
+	clip := renderer.GetClipRect()
+	if clip.W > 0 && clip.H > 0 &&
+		(lifted.X < clip.X || lifted.Y < clip.Y ||
+			lifted.X+lifted.W > clip.X+clip.W || lifted.Y+lifted.H > clip.Y+clip.H) {
+		return false
+	}
+	return lifted.X >= 0 && lifted.Y >= 0 &&
+		lifted.X+lifted.W <= screenWidth && lifted.Y+lifted.H <= screenHeight
+}
+
 // drawGlassFocusGlow paints Home's soft accent bloom behind a focused control.
 // It is drawn before the control so the light reads as coming from behind it,
 // and it is scaled to the control so a button's bloom does not wash over its
@@ -405,6 +426,15 @@ func drawGlassFocusGlow(renderer *sdl.Renderer, rect sdl.Rect) {
 // drawGlassFocusRing is Home's ring: 3px of accent drawn on the control's own
 // edge, so a focused control never grows past the slot it was laid out in.
 func drawGlassFocusRing(renderer *sdl.Renderer, rect sdl.Rect, radius int32) {
+	drawGlassFocusRingInk(renderer, rect, radius, glassAccent())
+}
+
+// drawGlassFocusRingInk draws the same ring in an explicit ink. The solid
+// accent/danger buttons need this: their focus fill is a lightened version of
+// the accent, so an accent-on-accent ring was invisible. They get the button's
+// contrasting text ink instead, while ordinary glass controls keep the theme's
+// focus colour.
+func drawGlassFocusRingInk(renderer *sdl.Renderer, rect sdl.Rect, radius int32, ink sdl.Color) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
@@ -413,7 +443,19 @@ func drawGlassFocusRing(renderer *sdl.Renderer, rect sdl.Rect, radius int32) {
 	// On Home the ring glides between controls (homefocusglide.go); elsewhere
 	// apply returns rect. The shape stays keyed to rect's size, so the cache
 	// gains no entry per frame of the move.
-	strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), radius, glassFocusRingWidth, glassAccent())
+	strokeRoundedRectAt(renderer, rect, homeFocusGlide.apply(rect), radius, glassFocusRingWidth, ink)
+}
+
+// focusRingInk picks the ring ink for a solid fill. The theme accent is the
+// first choice; if it sits too close to the fill, the fill's contrasting text
+// ink draws the boundary instead. A ring that is the fill's own colour is not
+// a focus indicator.
+func focusRingInk(fill sdl.Color) sdl.Color {
+	accent := glassAccent()
+	if fill.A > 0 && wcagContrast(accent, fill) < 3.0 {
+		return contrastText(fill)
+	}
+	return accent
 }
 
 // drawGlassSurface paints one glass control: the translucent fill, the hairline

@@ -123,6 +123,7 @@ const (
 	ppssppScriptName   = "jukahub-ppsspp.sh"
 	ppssppManifestName = "jukahub-build.json"
 	ppssppStatusName   = "jukahub-ppsspp.status"
+	ppssppLogName      = "jukahub-ppsspp.log"
 	ppssppBadName      = "jukahub-ppsspp.bad"
 	ppssppStateName    = "state.json"
 )
@@ -150,6 +151,8 @@ const (
 	ppssppFirmwareTTL = 10 * time.Minute
 	// ppssppStatusMax is the size the launcher's status log is trimmed to.
 	ppssppStatusMax = 64 << 10
+	// ppssppLogMax is the size PPSSPP's own output log is cut to after a game.
+	ppssppLogMax = 256 << 10
 	// ppssppStartRecheck: every start of JukaHub looks for a newer PPSSPP once
 	// its last check is this old, besides the daily check (Juka, 2026-11-13:
 	// "update to latest PPSSPP automatically" — a check stamped the evening
@@ -1317,6 +1320,111 @@ func ppssppManagedProcessRunning(root string) bool {
 	return false
 }
 
+// ppssppForceQuitWindow is how soon after PPSSPP started a Select + Start
+// force quit counts against JukaHub's build: a player who gives up on a game
+// within this time had no picture or no controls, not a game to finish (the
+// normal way out, Menu → Exit, never counts).
+const ppssppForceQuitWindow = 60 * time.Second
+
+// ppssppProcessesIn lists the processes running a binary from dir (Linux
+// /proc only; nil elsewhere).
+func ppssppProcessesIn(dir string) []int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil || dir == "" {
+		return nil
+	}
+	var out []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && isPathWithin(exe, dir) {
+			out = append(out, pid)
+		}
+	}
+	return out
+}
+
+// ppssppProcessAge is how long process pid has run, from its start time in
+// /proc/<pid>/stat (field 22, clock ticks since boot; the kernel's USER_HZ is
+// 100 on every arm64 and x86 Linux) and /proc/uptime.
+func ppssppProcessAge(pid int) (time.Duration, bool) {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0, false
+	}
+	up, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, false
+	}
+	return ppssppAgeFrom(string(stat), string(up))
+}
+
+// ppssppAgeFrom is ppssppProcessAge on the two files' text. The command name in
+// brackets may hold spaces, so fields are counted from its last ")". Pure.
+func ppssppAgeFrom(stat, uptime string) (time.Duration, bool) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return 0, false
+	}
+	f := strings.Fields(stat[i+1:])
+	upFields := strings.Fields(uptime)
+	if len(f) < 20 || len(upFields) == 0 {
+		return 0, false
+	}
+	ticks, err := strconv.ParseInt(f[19], 10, 64)
+	if err != nil || ticks < 0 {
+		return 0, false
+	}
+	upSec, err := strconv.ParseFloat(upFields[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	age := time.Duration((upSec - float64(ticks)/100) * float64(time.Second))
+	if age < 0 {
+		age = 0
+	}
+	return age, true
+}
+
+// ppssppNoteForceQuit is called just before a Select + Start force quit
+// (gameForceQuit). When the game being ended is JukaHub's own PPSSPP and it
+// started less than ppssppForceQuitWindow ago, the build is marked as not
+// working here — the same mark its launcher leaves when PPSSPP exits at once —
+// so the next PSP game opens in the firmware's PPSSPP and the next look
+// switches to it with a toast (ppssppReviewLastRun). A black screen or a pad
+// PPSSPP did not answer never ends in an exit status, so the launcher alone
+// could not tell; this was what kept sending Juka's PSP games back to a black
+// screen (2026-11-15). Choosing JukaHub's PPSSPP on the PSP tile clears it.
+func ppssppNoteForceQuit() {
+	if !ppssppManagedEnabled() {
+		return
+	}
+	st := ppssppSnapshot()
+	b, ok := st.build(st.Active)
+	if !ok || b.Dir == "" {
+		return
+	}
+	for _, pid := range ppssppProcessesIn(b.Dir) {
+		age, ok := ppssppProcessAge(pid)
+		if !ok || age > ppssppForceQuitWindow {
+			continue
+		}
+		bad := filepath.Join(b.Dir, ppssppBadName)
+		if regularFile(bad) {
+			return
+		}
+		reason := fmt.Sprintf("it was ended with Select + Start %ds after it started — no picture or no controls", int(age.Round(time.Second)/time.Second))
+		if err := os.WriteFile(bad, []byte(reason+"\n"), 0o644); err != nil {
+			logWarn("ppsspp", "could not mark %s as not working: %v", b.label(), err)
+			return
+		}
+		logWarn("ppsspp", "%s %s; the next PSP game uses the firmware's PPSSPP", b.label(), reason)
+		return
+	}
+}
+
 // ppssppCleanStaleMounts takes down the binds a killed launch left behind, so
 // nothing in JukaHub's data folder leads into the firmware's saves. It stands
 // aside while one of the builds is running.
@@ -1341,19 +1449,28 @@ func ppssppCleanStaleMounts() {
 
 // ppssppScriptSpec is what one launcher script needs: absolute paths of the
 // build's pieces, the firmware memstick to share and the launcher to fall back
-// to.
+// to. FallbackShell (and FallbackShellArg) is the interpreter the fallback's
+// "#!" line names when that is not sh, the way a library launch starts it
+// (firmwareScriptCommand); FallbackRoms and FallbackRomsAs turn a ROM under the
+// card's Roms folder into MainUI's form for it (firmwareROMArg). Empty: the
+// fallback runs with /bin/sh and gets the ROM path as it is.
 type ppssppScriptSpec struct {
-	Build        string
-	Binary       string
-	Work         string
-	Home         string
-	Platform     string
-	Libs         []string
-	ControllerDB string
-	Stick        string
-	Fallback     string
-	Version      string
-	Tag          string
+	Build            string
+	Binary           string
+	Work             string
+	Home             string
+	Platform         string
+	Libs             []string
+	ControllerDB     string
+	Stick            string
+	Fallback         string
+	FallbackShell    string
+	FallbackShellArg string
+	FallbackDirect   bool
+	FallbackRoms     string
+	FallbackRomsAs   string
+	Version          string
+	Tag              string
 }
 
 // ppssppScriptComment keeps a value from the network on one comment line.
@@ -1443,7 +1560,7 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	}
 	libs := append(append([]string(nil), s.Libs...), "/usr/trimui/lib")
 	fallbackSh := "0"
-	if ppssppFallbackRunsWithSh(s.Fallback) {
+	if ppssppFallbackRunsWithSh(s.Fallback) && !s.FallbackDirect {
 		fallbackSh = "1"
 	}
 	var b strings.Builder
@@ -1470,15 +1587,23 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("FIRMWARE_STICK=", ppssppScriptValue(s.Stick))
 	line("FALLBACK=", ppssppScriptValue(s.Fallback))
 	line("FALLBACK_SH=", fallbackSh)
+	line("FALLBACK_SHELL=", ppssppScriptValue(s.FallbackShell))
+	line("FALLBACK_SHELL_ARG=", ppssppScriptValue(s.FallbackShellArg))
+	line("FALLBACK_ROMS=", ppssppScriptValue(s.FallbackRoms))
+	line("FALLBACK_ROMS_AS=", ppssppScriptValue(s.FallbackRomsAs))
 	line("VERSION=", ppssppScriptValue(s.Version))
 	line(`STATUS="$BUILD/`, ppssppStatusName, `"`)
+	line(`LOG="$BUILD/`, ppssppLogName, `"`)
 	line(`BAD="$BUILD/`, ppssppBadName, `"`)
 	line(`STICK="$PPSSPP_HOME/.config/ppsspp/PSP"`)
 	line("SAVE_BOUND=0")
 	line("STATE_BOUND=0")
 	line()
+	line("# note MESSAGE: a line in the status log beside the build, and on stderr,")
+	line("# which JukaHub keeps in gamediag/launcher.log for the launch card.")
 	line("note() {")
 	line(`	printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null)" "$*" >>"$STATUS" 2>/dev/null`)
+	line(`	printf 'jukahub-ppsspp: %s\n' "$*" >&2`)
 	line("}")
 	line()
 	line("unbind() {")
@@ -1497,13 +1622,28 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("}")
 	line()
 	line("# firmware REASON [ARGS...] hands the game (ARGS: the ROM and its options)")
-	line("# to the firmware's launcher, the way JukaHub would start it without this one.")
+	line("# to the firmware's launcher, the way JukaHub would start it without this one:")
+	line("# with the interpreter its first line names and a ROM on the card's Roms")
+	line("# folder in MainUI's form (Emus/<system>/../../Roms/...).")
 	line("firmware() {")
 	line("	unbind")
 	line(`	note "firmware PPSSPP: $1"`)
 	line("	shift")
+	line("	exec 4>&-")
 	line(`	if [ -n "$FALLBACK" ] && [ -f "$FALLBACK" ]; then`)
+	line(`		if [ -n "$FALLBACK_ROMS" ] && [ "$#" -gt 0 ]; then`)
+	line(`			case "$1" in`)
+	line(`			"$FALLBACK_ROMS"/*)`)
+	line(`				r="$FALLBACK_ROMS_AS/${1#"$FALLBACK_ROMS"/}"`)
+	line("				shift")
+	line(`				set -- "$r" "$@"`)
+	line("				;;")
+	line("			esac")
+	line("		fi")
 	line(`		cd "$(dirname "$FALLBACK")" 2>/dev/null`)
+	line(`		if [ -n "$FALLBACK_SHELL" ]; then`)
+	line(`			exec "$FALLBACK_SHELL" ${FALLBACK_SHELL_ARG:+"$FALLBACK_SHELL_ARG"} "$FALLBACK" "$@"`)
+	line("		fi")
 	line(`		if [ "$FALLBACK_SH" = 1 ]; then`)
 	line(`			exec /bin/sh "$FALLBACK" "$@"`)
 	line("		fi")
@@ -1545,7 +1685,24 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line(`if [ -n "$PPSSPP_PADS" ] && [ -f "$PPSSPP_PADS" ]; then`)
 	line(`	PADS="$PPSSPP_PADS"`)
 	line("fi")
-	line(`LIBS="$PPSSPP_LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`)
+	// The handheld's own pad, as a game controller, after any mapping the
+	// environment brings (the last one for an id wins), so PPSSPP sees it
+	// whatever the package's controller database holds (ppssppTrimuiPadMapping).
+	padMap := ""
+	if ppssppPlatformDirRe().MatchString(s.Platform) {
+		padMap = ppssppTrimuiPadMapping
+	}
+	line("PADMAP=", ppssppScriptValue(padMap))
+	line(`if [ -n "$PADMAP" ] && [ -n "${SDL_GAMECONTROLLERCONFIG:-}" ]; then`)
+	line(`	PADMAP="$SDL_GAMECONTROLLERCONFIG`)
+	line(`$PADMAP"`)
+	line(`elif [ -z "$PADMAP" ]; then`)
+	line(`	PADMAP="${SDL_GAMECONTROLLERCONFIG:-}"`)
+	line("fi")
+	// The system's own folders come right after the bundled ones, so a library
+	// the package lacks is not taken from a firmware's older copy (CrossMix's
+	// System/lib) that the inherited path lists first.
+	line(`LIBS="$PPSSPP_LIBS:/usr/lib:/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"`)
 	line(`cd "$PPSSPP_WORK" || firmware "cannot enter the PPSSPP folder" "$@"`)
 	line()
 	// The A133P firmware exposes its framebuffer through SDL's mali driver.
@@ -1555,25 +1712,45 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 		video = `SDL_VIDEODRIVER=mali `
 	}
 	line(`note "start PPSSPP $VERSION: $ROM"`)
+	line("# PPSSPP's own output (this run only) stays beside the build, so a report")
+	line("# after a failed start has PPSSPP's reason in it.")
+	// The probe runs in a subshell: a failed redirection on ":" (a special
+	// builtin) ends the shell it runs in, even inside "if" — on a full or
+	// read-only card that would end the script before PPSSPP or the fallback.
+	line(`if (: >"$LOG") 2>/dev/null; then exec 4>>"$LOG"; else LOG=""; exec 4>&2; fi`)
 	line("START=$(date +%s 2>/dev/null)")
 	line(`case "$START" in ''|*[!0-9]*) START=0 ;; esac`)
 	line(`if [ "$#" -gt 0 ]; then`)
-	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen >&4 2>&4`)
 	line("else")
-	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" "$PPSSPP_BIN" --fullscreen`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --fullscreen >&4 2>&4`)
 	line("fi")
 	line("RC=$?")
+	line("exec 4>&-")
 	line("END=$(date +%s 2>/dev/null)")
 	line(`case "$END" in ''|*[!0-9]*) END=0 ;; esac`)
 	line("unbind")
 	line("ELAPSED=$((END - START))")
 	line(`note "PPSSPP exited with status $RC after ${ELAPSED}s"`)
+	line("QUICK=0")
+	line(`if [ "$START" -gt 0 ] && [ "$ELAPSED" -lt `, strconv.Itoa(ppssppQuickExit), ` ]; then QUICK=1; fi`)
 	line(`case "$RC" in`)
-	line(`	0|129|130|137|143) exit "$RC" ;;`)
+	line(`	129|130|137|143) exit "$RC" ;;`)
+	line(`	0) [ "$QUICK" = 1 ] || exit 0 ;;`)
 	line("esac")
-	line(`if [ "$START" -gt 0 ] && [ "$ELAPSED" -lt `, strconv.Itoa(ppssppQuickExit), ` ]; then`)
-	line(`	printf 'PPSSPP %s exited with status %s after %ss\n' "$VERSION" "$RC" "$ELAPSED" >"$BAD" 2>/dev/null`)
-	line(`	firmware "PPSSPP $VERSION exited with status $RC after ${ELAPSED}s" "$@"`)
+	line("# What PPSSPP said last (after an error, or a clean exit within seconds,")
+	line("# such as an ISO it could not load): in the status log, on stderr for the")
+	line("# launch card, and its last line in the reason JukaHub shows. With no log")
+	line("# of this run, an older one is not passed off as its reason.")
+	line("LAST=")
+	line(`if [ -n "$LOG" ]; then`)
+	line(`	tail -n 15 "$LOG" 2>/dev/null | sed 's/^/  | /' >>"$STATUS" 2>/dev/null`)
+	line(`	tail -n 15 "$LOG" >&2 2>/dev/null`)
+	line(`	LAST=$(tail -n 1 "$LOG" 2>/dev/null | tr -d '\r' | cut -c 1-160)`)
+	line("fi")
+	line(`if [ "$RC" != 0 ] && [ "$QUICK" = 1 ]; then`)
+	line(`	printf 'PPSSPP %s exited with status %s after %ss%s\n' "$VERSION" "$RC" "$ELAPSED" "${LAST:+: $LAST}" >"$BAD" 2>/dev/null`)
+	line(`	firmware "PPSSPP $VERSION exited with status $RC after ${ELAPSED}s${LAST:+: $LAST}" "$@"`)
 	line("fi")
 	line(`exit "$RC"`)
 	return b.String()
@@ -1585,7 +1762,7 @@ func ppssppScriptSpecFor(b ppssppBuild, fw ppssppFirmwareInfo) ppssppScriptSpec 
 	for _, l := range b.Layout.Libs {
 		libs = append(libs, b.path(l))
 	}
-	return ppssppScriptSpec{
+	spec := ppssppScriptSpec{
 		Build:        b.Dir,
 		Binary:       b.binary(),
 		Work:         b.path(b.Layout.Work),
@@ -1598,6 +1775,30 @@ func ppssppScriptSpecFor(b ppssppBuild, fw ppssppFirmwareInfo) ppssppScriptSpec 
 		Version:      b.Version,
 		Tag:          b.Tag,
 	}
+	if fw.Launcher == "" || !ppssppFallbackRunsWithSh(fw.Launcher) {
+		return spec
+	}
+	// The fallback is started the way launchLibraryGame starts it: a bash
+	// script under bash (CrossMix), not read by sh.
+	switch name, args := firmwareScriptCommand(fw.Launcher, "sh", []string{fw.Launcher}); {
+	case name == fw.Launcher:
+		// A program (ELF) without an extension runs as itself, not under sh.
+		spec.FallbackDirect = true
+	case name != "sh":
+		spec.FallbackShell = name
+		if len(args) == 2 {
+			spec.FallbackShellArg = args[0]
+		}
+	}
+	// And a ROM under the card's Roms folder in MainUI's form, when the
+	// launcher sits in <card>/Emus/<system>.
+	card := filepath.ToSlash(filepath.Dir(filepath.Dir(filepath.Dir(fw.Launcher))))
+	probe := path.Join(card, "Roms", "x")
+	if got := firmwareROMArg(fw.Launcher, probe); got != probe && strings.HasSuffix(got, "/Roms/x") {
+		spec.FallbackRoms = path.Dir(probe)
+		spec.FallbackRomsAs = strings.TrimSuffix(got, "/x")
+	}
+	return spec
 }
 
 // ppssppWriteScript writes a build's launcher. A "firmware" memstick inside
@@ -1626,15 +1827,27 @@ func ppssppWriteScript(b ppssppBuild, fw ppssppFirmwareInfo) error {
 
 // ppssppTrimStatus keeps the launcher's status log to its last part.
 func ppssppTrimStatus(file string) {
+	ppssppTrimTail(file, ppssppStatusMax)
+}
+
+// ppssppTrimTail cuts a file that grew past limit to its last quarter, from
+// the start of a line.
+func ppssppTrimTail(file string, limit int) {
 	info, err := os.Stat(file)
-	if err != nil || info.Size() <= ppssppStatusMax {
+	if err != nil || info.Size() <= int64(limit) {
 		return
 	}
-	data, err := os.ReadFile(file)
-	if err != nil || len(data) <= ppssppStatusMax {
+	// Only the part kept is read: a runaway log can be far larger than RAM.
+	f, err := os.Open(file)
+	if err != nil {
 		return
 	}
-	tail := data[len(data)-ppssppStatusMax/4:]
+	tail := make([]byte, limit/4)
+	_, err = f.ReadAt(tail, info.Size()-int64(len(tail)))
+	_ = f.Close()
+	if err != nil {
+		return
+	}
 	if i := bytes.IndexByte(tail, '\n'); i >= 0 {
 		tail = tail[i+1:]
 	}
@@ -2624,7 +2837,13 @@ func ppssppRevertBad(tag, reason string, fw ppssppFirmwareInfo) (string, error) 
 		return "", err
 	}
 	logWarn("ppsspp", "%s did not start (%s); PSP games use %s again", failedLabel, reason, back)
-	return failedLabel + " did not start on this device — PSP games use " + back + " again", nil
+	// The launcher's reason (with PPSSPP's last line) is in the toast, so a
+	// report from the device carries it.
+	why := reason
+	if r := []rune(why); len(r) > 120 {
+		why = string(r[:120]) + "…"
+	}
+	return failedLabel + " did not start on this device (" + why + ") — PSP games use " + back + " again", nil
 }
 
 // ppssppReadFirstLine reads the first line of a small file.
@@ -2680,6 +2899,10 @@ func ppssppReviewLastRun() {
 	if !ok {
 		return
 	}
+	// The script appends to both logs; they are kept short here, between
+	// games (the scheduler calls this only while no game holds the screen).
+	ppssppTrimStatus(filepath.Join(b.Dir, ppssppStatusName))
+	ppssppTrimTail(filepath.Join(b.Dir, ppssppLogName), ppssppLogMax)
 	if reason, bad := ppssppReadFirstLine(filepath.Join(b.Dir, ppssppBadName)); bad {
 		// A switch that failed (an unreadable launcher file) is tried again
 		// now and then, not at every wake.
@@ -2950,24 +3173,50 @@ func ppssppRefreshActiveScript() {
 	logInfo("ppsspp", "rewrote the launcher of %s for the firmware's PPSSPP as it is now", b.label())
 }
 
-// ppssppPrepareManagedLaunch repairs an installed build even when the first
-// PSP game is started before the background firmware scan refreshes its script.
-// The video driver is also passed to an older generated script for that one
-// launch. Other emulator launches are untouched.
+// ppssppPrepareManagedLaunch readies the build a PSP game is about to start in,
+// even when the game starts before the background look has refreshed it: the
+// shared HOME is seeded, and a launcher an older JukaHub wrote is written again
+// with the firmware's PPSSPP as last detected. It never sets cmd.Env — it runs
+// before screenChildGroupConfigure, which fills in the firmware's HOME, PATH and
+// LD_LIBRARY_PATH only while cmd.Env is nil. Setting it here (os.Environ() plus
+// SDL_VIDEODRIVER, 2026-11-14) gave the script, and so the firmware's PPSSPP it
+// falls back to, JukaHub's own HOME and libraries. The video driver is set in
+// the script, on PPSSPP's command alone. Other emulator launches are untouched.
 func ppssppPrepareManagedLaunch(launcher string, cmd *exec.Cmd) {
 	if cmd == nil || !ppssppIsManagedLauncher(launcher) {
 		return
+	}
+	// A game started before the first background look (boot resume, Continue,
+	// voice) still gets a current script: one an older JukaHub wrote lacks the
+	// video driver, exits at once and would mark the build bad. The detection
+	// takes ppssppMgr.mu itself, so it runs before the lock.
+	if _, ok := ppssppFirmwareCached(); !ok {
+		ppssppDetectFirmwareNow()
 	}
 	ppssppMgr.mu.Lock()
 	defer ppssppMgr.mu.Unlock()
 	st := ppssppLockedState()
 	b, ok := st.build(st.Active)
-	if !ok || !strings.EqualFold(filepath.Clean(b.script()), filepath.Clean(launcher)) || b.Platform != ppssppOwnPlatform {
+	if !ok || !strings.EqualFold(filepath.Clean(b.script()), filepath.Clean(launcher)) {
 		return
 	}
-	fw, _ := ppssppFirmwareCached()
-	ppssppSeedHome(b, ppssppSanitizeFirmware(fw).Stick)
-	cmd.Env = append(os.Environ(), "SDL_VIDEODRIVER=mali")
+	fw, known := ppssppFirmwareCached()
+	fw = ppssppSanitizeFirmware(fw)
+	ppssppSeedHome(b, fw.Stick)
+	if !known || !regularFile(b.binary()) {
+		// No detection (it failed to publish): the script on the card keeps
+		// the fallback it was written with rather than losing it.
+		return
+	}
+	want := ppssppLauncherScript(ppssppScriptSpecFor(b, fw))
+	if current, err := os.ReadFile(b.script()); err == nil && string(current) == want {
+		return
+	}
+	if err := ppssppWriteScript(b, fw); err != nil {
+		logWarn("ppsspp", "could not rewrite the launcher of %s before a launch: %v", b.label(), err)
+		return
+	}
+	logInfo("ppsspp", "rewrote the launcher of %s before a launch", b.label())
 }
 
 // ppssppCheckPlatform handles a card moved to another TrimUI model: a build

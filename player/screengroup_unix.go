@@ -14,6 +14,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -112,4 +114,46 @@ func screenChildGroupAlive(cmd *exec.Cmd) bool {
 		return true
 	}
 	return errors.Is(err, syscall.EPERM)
+}
+
+// screenChildGroupNames lists what still runs in cmd's group, "name(pid)"
+// separated by spaces, from /proc (empty where there is none). It is for the
+// log line that says why the screen stays with a game whose launcher ended: a
+// leftover helper there is what keeps JukaHub off a black screen until the
+// group is gone (Select + Start held ends it, gameForceQuit).
+func screenChildGroupNames(cmd *exec.Cmd) string {
+	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return ""
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return ""
+	}
+	pgid := cmd.Process.Pid
+	var parts []string
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		stat, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		s := string(stat)
+		open, end := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
+		if open < 0 || end < open {
+			continue
+		}
+		f := strings.Fields(s[end+1:])
+		if len(f) < 3 || f[2] != strconv.Itoa(pgid) {
+			continue
+		}
+		parts = append(parts, s[open+1:end]+"("+e.Name()+")")
+		if len(parts) >= 12 {
+			parts = append(parts, "…")
+			break
+		}
+	}
+	return strings.Join(parts, " ")
 }

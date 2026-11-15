@@ -151,6 +151,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 		radius = rect.H / 2
 	}
 	ring := state.Focused && !state.Disabled && !style.HideFocusRing
+	liftRing := ring && focusLiftFits(renderer, rect)
 	glass := (style.Variant == UIButtonSecondary || style.Variant == UIButtonGhost) && style.Fill.A == 0
 
 	labelColor := style.LabelColor
@@ -164,6 +165,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 			Hovered:  state.Hovered || (state.Focused && style.HideFocusRing),
 			Pressed:  state.Pressed,
 			Disabled: state.Disabled,
+			NoLift:   ring && !liftRing,
 		}
 		if style.Variant == UIButtonGhost && !st.Focused && !st.Hovered && !st.Pressed {
 			// A ghost button rests as its label on a whisper of glass.
@@ -185,7 +187,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 			labelColor = ColorTextPrimary()
 		}
 		if state.Disabled {
-			labelColor = WithAlpha(ColorTextTertiary(), 160)
+			labelColor = ColorTextTertiary()
 		}
 	} else {
 		fill := style.Fill
@@ -210,7 +212,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 		if state.Disabled {
 			fill = WithAlpha(fill, 90)
 			border = WithAlpha(border, 90)
-			labelColor = WithAlpha(ColorTextTertiary(), 160)
+			labelColor = ColorTextTertiary()
 		} else if state.Pressed {
 			fill = darken(fill, 16)
 		} else if state.Focused {
@@ -220,7 +222,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 			border = glassEdgeHover()
 		}
 		surface, surfaceR := rect, radius
-		if ring {
+		if liftRing {
 			surface, surfaceR = glassLifted(rect), radius+glassFocusLift
 		}
 		fillRoundedRect(renderer, surface.X, surface.Y, surface.W, surface.H, surfaceR, fill)
@@ -232,7 +234,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 			UIProgressBar(renderer, rect, style.Progress, sdl.Color{}, progressFill)
 		}
 		if ring {
-			drawGlassFocusRing(renderer, surface, surfaceR)
+			drawGlassFocusRingInk(renderer, surface, surfaceR, focusRingInk(fill))
 		} else {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, border)
 		}
@@ -394,7 +396,7 @@ func UIIconButtonDraw(renderer *sdl.Renderer, b UIIconButton) sdl.Rect {
 		ink = ColorTextPrimary()
 	}
 	if b.State.Disabled {
-		ink = WithAlpha(ColorTextTertiary(), 160)
+		ink = ColorTextTertiary()
 	}
 	if b.Style.Glyph != nil {
 		box := rect
@@ -476,12 +478,16 @@ func UIListRow(renderer *sdl.Renderer, rect sdl.Rect, radius int32, selected, ho
 // UIEmptyState draws the standard "nothing here yet" block: an optional muted
 // glyph, a title and one supporting line, centred inside rect.
 func UIEmptyState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string) {
-	uiStateBlock(renderer, config, rect, glyph, title, body, ColorTextTertiary())
+	uiStateBlock(renderer, config, rect, glyph, title, body, ColorTextTertiary(), ColorTextPrimary())
 }
 
-// UIErrorState is the same block in the danger colour, for failures.
+// UIErrorState is the same block in the danger colour, for failures. The title
+// is tinted too: leaving it in body ink made the failure indistinguishable
+// from an ordinary empty state once the danger ink had to be adjusted for a
+// light or colour-blind palette.
 func UIErrorState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string) {
-	uiStateBlock(renderer, config, rect, glyph, title, body, DangerInk())
+	tone := DangerInk()
+	uiStateBlock(renderer, config, rect, glyph, title, body, tone, tone)
 }
 
 // The empty state's type is a heading over a caption. Both lines used to
@@ -565,7 +571,7 @@ func uiStateBlockHeight(config *Config, glyph, title, body string) int32 {
 	return glyphH + titleH + gap + bodyH
 }
 
-func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string, tone sdl.Color) {
+func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string, tone, titleTone sdl.Color) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
@@ -600,7 +606,7 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	}
 	title = ellipsize(titleFont, title, textW)
 	tw, _, _ := titleFont.SizeUTF8(title)
-	renderText(renderer, config, titleFont, title, ColorTextPrimary(), cx-int32(tw)/2, y)
+	renderText(renderer, config, titleFont, title, titleTone, cx-int32(tw)/2, y)
 	y += titleH + gap
 	if bodyFont != nil && bodyH > 0 {
 		lineH := int32(bodyFont.Height())
@@ -624,7 +630,7 @@ func uiStateGlyph(renderer *sdl.Renderer, name string, cx, cy, size int32, tone 
 		drawBellIcon(renderer, cx, cy, size, tone)
 		return
 	}
-	DrawHomeIcon(renderer, name, sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, false)
+	drawHomeGlyphTinted(renderer, name, sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, tone)
 }
 
 // UIGridColumns returns how many cells of at least minCellW fit across areaW

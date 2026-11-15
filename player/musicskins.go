@@ -183,6 +183,16 @@ func musicRowVisibleRange(cursor, count, visible int) int {
 // StockOS layout
 // ──────────────────────────────────────────────────────────────────────
 
+// musicStockOSLayout is the list-first layout's measured geometry, kept for
+// the real-font containment tests. Render thread only.
+var musicStockOSLayout struct {
+	strip, text, controls, list sdl.Rect
+	meta, seek, times           sdl.Rect
+	rowName, rowDuration        sdl.Rect
+	hintY                       int32
+	hintInk                     sdl.Color
+}
+
 // renderMusicStockOS draws the list-first layout. It is called from
 // renderMusicPlayer once the background is cleared.
 func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
@@ -237,12 +247,14 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	musicRects.rows = musicRects.rows[:0]
 	musicRects.rowStart = 0
 	musicRects.valid = true
+	musicStockOSLayout.rowName, musicStockOSLayout.rowDuration = sdl.Rect{}, sdl.Rect{}
 
 	// ── Now playing strip ──
 	const stripH = int32(150)
 	stripX := int32(24)
 	stripY := headerH + 16
 	stripW := screenWidth - 2*stripX
+	musicStockOSLayout.strip = sdl.Rect{X: stripX, Y: stripY, W: stripW, H: stripH}
 	drawCard(renderer, stripX, stripY, stripW, stripH, 16)
 
 	artSize := int32(110)
@@ -259,6 +271,7 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 
 	textX := artX + artSize + 20
 	textW := stripW - (textX - stripX) - 260
+	musicStockOSLayout.text = sdl.Rect{X: textX, Y: stripY, W: textW, H: stripH}
 	title := "Nothing playing"
 	meta := "Pick a song from the list below"
 	if cur >= 0 && cur < len(tracks) {
@@ -274,19 +287,20 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		meta += "   ·   " + musicPEQStatus()
 	}
 	renderText(renderer, config, bigFont, ellipsize(bigFont, title, textW), ColorTextPrimary(), textX, stripY+22)
-	renderText(renderer, config, font, ellipsize(font, meta, textW), ColorTextTertiary(), textX, stripY+22+int32(bigFont.Height())+6)
-	// The layout tag the header used to carry: a muted chip at the strip's top
-	// right, clear of the title and the transport row.
-	tag := "StockOS layout"
-	tagW, _, _ := font.SizeUTF8(tag)
-	tagX := stripX + stripW - 16 - int32(tagW)
-	renderText(renderer, config, font, tag, ColorTextTertiary(), tagX, stripY+12)
+	metaY := stripY + 22 + int32(bigFont.Height()) + 6
+	renderText(renderer, config, font, ellipsize(font, meta, textW), ColorTextTertiary(), textX, metaY)
+	fontH := int32(font.Height())
+	musicStockOSLayout.meta = sdl.Rect{X: textX, Y: metaY, W: textW, H: fontH}
 
 	// Flat progress line, stock style: a thin track with the elapsed time under
-	// the left end and the total under the right.
+	// the left end and the total under the right. It follows the meta line
+	// rather than the strip's bottom edge: with the real display font the meta
+	// line reached y=108 and the old fixed seek at y=108 painted through it.
 	seekX := textX
-	seekY := stripY + stripH - 42
+	seekY := metaY + fontH + SpaceSM
 	seekW := textW
+	musicStockOSLayout.seek = sdl.Rect{X: seekX, Y: seekY, W: seekW, H: 4}
+	musicStockOSLayout.times = sdl.Rect{X: seekX, Y: seekY + 10, W: seekW, H: fontH}
 	fillRoundedRect(renderer, seekX, seekY, seekW, 4, 2, ColorTrack)
 	frac := 0.0
 	if duration > 0 {
@@ -321,9 +335,22 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	musicRects.next = musicButton(renderer, config, medFont, rightX-56, btnY, 56, btnH, ">|", false)
 	musicRects.playPause = musicButton(renderer, config, medFont, rightX-56-70, btnY, 62, btnH, playIcon, true)
 	musicRects.prev = musicButton(renderer, config, medFont, rightX-56-70-64, btnY, 56, btnH, "|<", false)
-	musicRects.stop = musicButton(renderer, config, font, rightX-56, btnY+btnH+8, 56, 32, "[]", false)
-	musicRects.shuffle = musicButton(renderer, config, font, rightX-56-70, btnY+btnH+8, 62, 32, "Shuf", shuffleOn)
-	musicRects.repeat = musicButton(renderer, config, font, rightX-56-70-64, btnY+btnH+8, 56, 32, repeatMode.short(), repeatMode != musicRepeatOff)
+	// The mode labels were fixed-width at 62 and 56 px. At 145% text "Shuf"
+	// needed more, so the pill painted "Sh..." and the button no longer said
+	// what it did. Measure the labels and walk the mode row left from Stop.
+	const modeGap = int32(8)
+	stopW := int32(56)
+	shuffleLabel := "Shuf"
+	shuffleW := musicLabelWidth(font, shuffleLabel, 62)
+	repeatLabel := repeatMode.short()
+	repeatW := musicLabelWidth(font, repeatLabel, 56)
+	stopX := rightX - stopW
+	shuffleX := stopX - modeGap - shuffleW
+	repeatX := shuffleX - modeGap - repeatW
+	musicRects.stop = musicButton(renderer, config, font, stopX, btnY+btnH+8, stopW, 32, "[]", false)
+	musicRects.shuffle = musicButton(renderer, config, font, shuffleX, btnY+btnH+8, shuffleW, 32, shuffleLabel, shuffleOn)
+	musicRects.repeat = musicButton(renderer, config, font, repeatX, btnY+btnH+8, repeatW, 32, repeatLabel, repeatMode != musicRepeatOff)
+	musicStockOSLayout.controls = sdl.Rect{X: repeatX, Y: btnY, W: rightX - repeatX, H: btnH + 8 + 32}
 
 	// ── List ──
 	listY := stripY + stripH + 16
@@ -332,6 +359,7 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		listH = 120
 	}
 	drawCard(renderer, stripX, listY, stripW, listH, 16)
+	musicStockOSLayout.list = sdl.Rect{X: stripX, Y: listY, W: stripW, H: listH}
 
 	header := fmt.Sprintf("All songs   ·   %d", len(tracks))
 	renderText(renderer, config, font, header, ColorTextSecondary(), stripX+20, listY+14)
@@ -346,6 +374,9 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	}
 	exitX := stripX + stripW - 16 - exitW
 	searchW := int32(96)
+	if tw, _, _ := font.SizeUTF8("Search"); int32(tw)+24 > searchW {
+		searchW = int32(tw) + 24
+	}
 	searchX := exitX - 10 - searchW
 	musicRects.exitTimer = musicHeaderButton(renderer, config, font, exitX, listY+9, exitW, 30, exitLabel, musicExitRemaining() > 0)
 	musicRects.search = musicHeaderButton(renderer, config, font, searchX, listY+9, searchW, 30, "Search", musicSearchActive())
@@ -370,6 +401,7 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 			row := sdl.Rect{X: stripX + 12, Y: rowY, W: stripW - 24, H: musicRowHeight - 6}
 			if i == cursor {
 				fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(ColorCardFocus, 255))
+				drawGlassFocusRing(renderer, row, 8)
 			}
 			if i == cur {
 				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
@@ -381,17 +413,30 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 			if i == cur {
 				col = accentColor
 			}
-			nameW := row.W - 62 - 80
+			durText := ""
+			var durW int32
+			if d := tracks[i].Duration; d > 0 {
+				durText = formatTime(d)
+				dw, _, _ := font.SizeUTF8(durText)
+				durW = int32(dw)
+			}
+			nameX := row.X + 52
+			nameW := row.W - durW - 100
+			if nameW < 40 {
+				nameW = 40
+			}
+			nameY := row.Y + (row.H-int32(font.Height()))/2
 			renderText(renderer, config, font, ellipsize(font, musicTrackTitle(tracks[i].Name), nameW), col,
-				row.X+52, row.Y+(row.H-int32(font.Height()))/2)
+				nameX, nameY)
 			if musicIsFavorite(tracks[i].Path) {
 				fillCircle(renderer, row.X+row.W-26, row.Y+row.H/2, 4, accentColor)
 			}
-			if d := tracks[i].Duration; d > 0 {
-				dur := formatTime(d)
-				dw, _, _ := font.SizeUTF8(dur)
-				renderText(renderer, config, font, dur, ColorTextTertiary(), row.X+row.W-int32(dw)-40, row.Y+(row.H-int32(font.Height()))/2)
+			if durText != "" {
+				durX := row.X + row.W - durW - 40
+				renderText(renderer, config, font, durText, ColorTextTertiary(), durX, nameY)
+				musicStockOSLayout.rowDuration = sdl.Rect{X: durX, Y: nameY, W: durW, H: int32(font.Height())}
 			}
+			musicStockOSLayout.rowName = sdl.Rect{X: nameX, Y: nameY, W: nameW, H: int32(font.Height())}
 			musicRects.rows = append(musicRects.rows, row)
 		}
 	}
@@ -404,8 +449,10 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	}
 	hint := hintLine(hints...)
 	hw, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
-		(screenWidth-int32(hw))/2, screenHeight-34)
+	musicStockOSLayout.hintY = screenHeight - 34
+	musicStockOSLayout.hintInk = ColorTextMuted()
+	renderText(renderer, config, font, hint, musicStockOSLayout.hintInk,
+		(screenWidth-int32(hw))/2, musicStockOSLayout.hintY)
 
 	// Header last, so the list and its hints cannot paint over the bar.
 	renderStatusBar(renderer, config)

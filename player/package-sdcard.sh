@@ -15,6 +15,7 @@
 #      WITH_YTDLP     1 = download the static ARM64 yt-dlp   (default 1)
 #      WITH_FFMPEG    1 = download ffmpeg/ffprobe            (default 1)
 #      FFMPEG_BUILD   BtbN asset name                       (default rolling master)
+#      WITH_OS        1 = also write dist/JukaHub-OS-SDCARD.zip  (default 1)
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -221,6 +222,14 @@ say "Creating archive"
 # $STAGE - otherwise zip looks for dist/.../dist/... and fails with I/O error.
 OUT_ABS="$(cd "$OUT" && pwd)"
 ( cd "$STAGE" && zip -qr "$OUT_ABS/${APP_NAME}-SDCARD.zip" Apps )
+
+# The same card as JukaHub OS: an SD-card root that boots straight into it
+# (trimui/make-os-package.sh). WITH_OS=0 skips it; a failure only warns.
+if [ "${WITH_OS:-1}" = "1" ]; then
+    say "Creating the JukaHub OS archive"
+    bash trimui/make-os-package.sh "$PKG" "$OUT_ABS/${APP_NAME}-OS-SDCARD.zip" ||
+        echo "warning: the JukaHub OS archive could not be made" >&2
+fi
 
 SIZE="$(du -h "$OUT/${APP_NAME}-SDCARD.zip" | cut -f1)"
 

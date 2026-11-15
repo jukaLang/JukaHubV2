@@ -79,6 +79,7 @@ const (
 	orbOfferOfflineAI              // optional on-device text model
 	orbOfferPhone                  // the Voice command page's phone QR code
 	orbOfferSearch                 // the Home search sheet with the words typed in
+	orbOfferFreeMemory             // close apps, then ask voiceOrb.words again (closeall.go)
 )
 
 // orbSource is where a press of the voice button came from.
@@ -911,7 +912,8 @@ func voiceOrbWake(config *Config) bool {
 // video being prepared, the controller test, the emulator picker.
 func voiceOrbBlockingCard() bool {
 	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
-		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen()
+		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen() ||
+		startupLocked() // bootlock.go
 }
 
 // voiceOrbBlocked names what keeps the orb from coming up, or "": those cards,
@@ -1249,6 +1251,8 @@ func voiceOrbTranscribed(gen int, text string, err error) {
 			offer = orbOfferOfflineSpeech
 		case voiceFixPhone, voiceFixType:
 			offer = orbOfferPhone
+		case voiceFixFreeMemory:
+			offer = closeAllMemoryOffer() // A closes apps (closeall.go)
 		}
 		voiceOrbSay(msg, "", tbxToneWarn, offer)
 		PlayErrorSound()
@@ -1408,6 +1412,9 @@ func voiceOrbRunOffer(config *Config) {
 	case orbOfferSearch:
 		PlayActivateSound()
 		voiceOpenSearchSheet(config, words)
+	case orbOfferFreeMemory:
+		PlayActivateSound()
+		closeAllOrbRetry(words)
 	}
 }
 
@@ -1626,12 +1633,16 @@ func voiceOrbAnswered(gen int, question, reply string, err error, local, unmatch
 		if local {
 			msg = "Offline AI could not answer — try again"
 			if errors.Is(err, errOfflineAIMemory) {
-				msg = "Close a game or app to free memory for offline AI"
+				// A closes apps and asks again (closeall.go).
+				msg, offer = "Not enough free memory for offline AI", closeAllMemoryOffer()
 			}
 		} else if offlineAISupported() && !offlineAIReady() {
 			offer = orbOfferOfflineAI
 		}
 		voiceOrbSay(msg, orbQuote(question), tbxToneWarn, offer)
+		if offer == orbOfferFreeMemory {
+			voiceOrb.words = question // asked again once the apps are closed
+		}
 		PlayErrorSound()
 		return
 	}
@@ -1971,6 +1982,8 @@ func orbOfferLabel(o orbOffer) string {
 		return "Use my phone"
 	case orbOfferSearch:
 		return "Search for it"
+	case orbOfferFreeMemory:
+		return "Close apps and try again"
 	}
 	return ""
 }

@@ -476,11 +476,10 @@ func TestWebCSSUnsupportedConstructsAreDocumented(t *testing.T) {
 		"position: sticky",
 		"text-overflow", "transform",
 		"transition", "animation", "filter", "clip-path", "grid-template-rows",
-		"grid-row", "grid-column", "grid-area", "white-space",
+		"grid-row", "grid-column", "grid-area",
 		"list-style-image", "list-style-position",
 		"::first-line", "::first-letter", "::selection", "::placeholder", "::backdrop",
 		"content: url", "@font-face", "@keyframes", "@page", "@layer", "@import",
-		"text-align: justify",
 	} {
 		if !strings.Contains(doc, construct) {
 			t.Fatalf("unsupported CSS %q is not documented in CSS_SUPPORT.md", construct)

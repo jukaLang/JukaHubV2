@@ -518,7 +518,20 @@ while :; do
     # Also covers a stop that arrived while waiting for an update helper.
     [ "$STOPPED" -eq 1 ] && break
     cpu_snapshot
-    "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
+    # JukaHub OS (docs/JUKAHUB_OS.md). With OS mode on in os/os.json, JukaHub
+    # starts as "JukaHub --os-session": it applies its layers in a private
+    # mount namespace and executes itself again inside it — the same process,
+    # so the wait, the exit status and .last-exit below are unchanged. Read on
+    # every pass, so "Start OS session now" (a clean exit with .restart-now)
+    # comes back in the new mode. JukaHub checks the file again itself and
+    # starts as the app when OS mode cannot run; an older JukaHub ignores the
+    # flag.
+    if grep -q '"enabled": *true' "$APP_DIR/os/os.json" 2>/dev/null; then
+        say "starting JukaHub OS"
+        "$APP_DIR/JukaHub" --os-session >>"$LOG" 2>&1 &
+    else
+        "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
+    fi
     APP_PID=$!
     wait "$APP_PID"
     RC=$?

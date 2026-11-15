@@ -252,6 +252,26 @@ booted, which the kernel's boot id recorded with each first frame
 logo**) keeps its record in `Apps/JukaHub/data/bootlogo/state.json`, not in
 `jukauser.json`; see [BOOT.md](BOOT.md).
 
+The startup lock (Settings → Privacy & data → **Startup lock**) keeps four
+custom keys. `startupLockSecret` is the salted PBKDF2-SHA256 hash,
+`jhlock1$<kind>$<iterations>$<salt>$<key>` with kind `code` (a button code) or
+`password`; empty or unreadable means no lock. Set it to `""` on a computer to
+remove a forgotten code. `startupLockWhen` is `power` (power-on starts only; the
+default on the handheld, detected even with the Quick startup animation),
+`start` (every start; the default on a PC) or `wake` (every start and after
+sleep). `startupLockFails` counts wrong tries in a row (5 free, then 30 s
+doubling to 5 minutes, re-imposed after a restart) and `startupLockPending` (bool)
+records a lock that was up and never unlocked, so the next start locks whatever
+`startupLockWhen` says. All four are bookkeeping: never exported, never logged.
+
+JukaHub OS keeps its state outside `jukauser.json`, in `Apps/JukaHub/os/`:
+`os.json` (`enabled` — launch.sh starts `JukaHub --os-session` when it reads
+`"enabled": true` —, `layers` mapping a layer id to on/off, `dropCaches`,
+default true), `guard.json` (the OS guard's count of failed starts with layers)
+and `layers/<id>/layer.json` (the layer format, see
+[JUKAHUB_OS.md](JUKAHUB_OS.md)). A running session writes `/tmp/jukaos/`
+(`session.json`, `journal.json`, `stock-once`), which a reboot clears.
+
 Quick Settings (`Ctrl+Q`) writes these keys:
 
 | Key | Meaning |
@@ -397,6 +417,16 @@ scene names the driver state when the rings are taken.
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It
 is applied to the RGB value rather than to the sysfs `brightness` file, because
 brightness-only LEDs derive their level from the peak channel.
+
+`led_juka` (string, default `always`) is Settings → Stick lights → **React to
+Juka**: while the voice orb or the in-game assistant is up the sticks show Juka
+over whatever `led_policy` shows — cyan following your voice while it listens, a
+slow violet breath while it thinks, blue following Juka's voice while it answers
+(amber when the answer is a problem). `always` lights the sticks for Juka even
+with the LED sync off (the loop runs only while Juka is up and the firmware's
+ring state is put back after), `on` only while the sync is on and
+`led_brightness` is above 0, `off` never; anything else means `always`.
+`led_brightness` trims Juka's colour too while the lights are on.
 
 **Quick Settings → LED Style** edits all four keys — mode, effect, colour and
 brightness — with the animation running for a live preview, and writes them

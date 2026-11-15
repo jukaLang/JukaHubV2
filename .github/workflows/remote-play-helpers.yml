@@ -55,7 +55,9 @@ name: Remote Play helpers and AndroidRT
 # the release (as JukaHub-OfflineSpeech-linux-arm64.zip, which the Smart Pro
 # downloads after ffmpeg; it is not inside the app archive); a missing
 # offline-stt artifact fails the packaging job so a release cannot silently
-# ship another Groq-only Menu button.
+# ship another Groq-only Menu button. The optional offline AI (llama.cpp) is
+# built by offline-ai.yml on a runner of its own: as the last step of this job
+# it held up JukaHub-Trimui.zip for the 20-30 minutes a llama.cpp build takes.
 # The two other parts are independent after the shared build
 # root: the AndroidRT steps run whatever became of the helpers, so a failed
 # build costs the run that part and nothing else. An advisory step runs
@@ -207,35 +209,10 @@ jobs:
           chmod 755 "$dest/whisper-cli" "$dest/vosk-cli"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
-      - name: Look for offline AI built from these sources
-        id: llm_cache
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          dest=player/native/bin/juka-llm
-          model=SmolLM2-360M-Instruct-Q4_0.gguf
-          miss() { rm -f "$dest/llama-cli" "$dest/llama-server" "$dest/$model" "$dest/BUILDINFO.txt" "$dest/LLAMA_LICENSE.txt" "$dest/MODEL_LICENSE.txt"; exit 0; }
-          if ! name=$(sh .github/scripts/build-root.sh key llm); then miss; fi
-          echo "artifact=$name" >> "$GITHUB_OUTPUT"
-          if ! timeout 360 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
-              llama-cli llama-server "$model" BUILDINFO.txt LLAMA_LICENSE.txt MODEL_LICENSE.txt; then miss; fi
-          want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
-          want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
-          want_server=$(awk '$1 == "server" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
-          [ -n "$want_model" ] && [ -n "$want_bin" ] && [ -n "$want_server" ] || miss
-          [ "$(wc -c < "$dest/$model")" -eq 229733280 ] || miss
-          [ "$(sha256sum "$dest/$model" | cut -d' ' -f1)" = "$want_model" ] || miss
-          [ "$(sha256sum "$dest/llama-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
-          [ "$(sha256sum "$dest/llama-server" | cut -d' ' -f1)" = "$want_server" ] || miss
-          chmod 755 "$dest/llama-cli" "$dest/llama-server"
-          echo "hit=true" >> "$GITHUB_OUTPUT"
-
       - name: Create the Ubuntu 20.04 build root
         id: root
         # Needed by whichever part an earlier run did not leave behind.
-        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true' || steps.stt_cache.outputs.hit != 'true' || steps.llm_cache.outputs.hit != 'true'
+        if: steps.cache.outputs.hit != 'true' || steps.androidrt_cache.outputs.hit != 'true' || steps.stt_cache.outputs.hit != 'true'
         run: sh .github/scripts/build-root.sh create
 
       - name: Build the helpers
@@ -511,38 +488,6 @@ jobs:
         with:
           name: ${{ steps.stt_cache.outputs.artifact }}
           path: player/native/bin/juka-whisper/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
-          overwrite: true
-
-      - name: Build optional offline AI
-        id: llm
-        if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.llm_cache.outputs.hit != 'true' }}
-        # llama-cli and llama-server, then a smoke test of each.
-        timeout-minutes: 40
-        run: sh .github/scripts/build-root.sh build llm
-
-      - name: Upload optional offline AI
-        if: ${{ !cancelled() && (steps.llm.outcome == 'success' || steps.llm_cache.outputs.hit == 'true') }}
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: offline-llm
-          path: player/native/bin/juka-llm/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
-          overwrite: true
-
-      - name: Keep offline AI for later runs
-        if: ${{ !cancelled() && steps.llm.outcome == 'success' && steps.llm_cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 10
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.llm_cache.outputs.artifact }}
-          path: player/native/bin/juka-llm/
           if-no-files-found: error
           compression-level: 0
           retention-days: 90

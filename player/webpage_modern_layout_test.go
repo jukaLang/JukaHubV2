@@ -2,6 +2,7 @@ package main
 
 import (
 	"math"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -184,6 +185,91 @@ func TestWebPictureFallsBackToImg(t *testing.T) {
 	}
 	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/fallback-large.png"; got != want {
 		t.Fatalf("picture fallback src %q, want img srcset candidate %q", got, want)
+	}
+}
+
+func TestWebImagePrefersLazyLoadedSource(t *testing.T) {
+	source := `<img src="data:image/gif;base64,AAAA" data-src="real.png" alt="photo">`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/real.png"; got != want {
+		t.Fatalf("lazy image src = %q, want %q", got, want)
+	}
+}
+
+func TestWebImagePrefersLazySrcset(t *testing.T) {
+	source := `<img src="placeholder.png" srcset="placeholder.png 1x" ` +
+		`data-srcset="small.png 320w, large.png 1280w" data-sizes="100vw" alt="photo">`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/large.png"; got != want {
+		t.Fatalf("lazy srcset picked %q, want %q", got, want)
+	}
+}
+
+func TestWebPictureSourcePrefersLazySrcset(t *testing.T) {
+	source := `<picture>` +
+		`<source data-srcset="wide.png 1200w">` +
+		`<img src="fallback.png" alt="photo">` +
+		`</picture>`
+	doc := parseWebPage(source, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/wide.png"; got != want {
+		t.Fatalf("lazy picture source = %q, want %q", got, want)
+	}
+}
+
+func TestWebImageFallsBackToOrdinarySrc(t *testing.T) {
+	doc := parseWebPage(`<img src="normal.png" alt="photo">`, "", "https://example.com/page")
+	if len(doc.Blocks) != 1 || !doc.Blocks[0].Image {
+		t.Fatalf("expected one image block, got %#v", doc.Blocks)
+	}
+	if got, want := doc.Blocks[0].ImageSrc, "https://example.com/normal.png"; got != want {
+		t.Fatalf("ordinary image src = %q, want %q", got, want)
+	}
+}
+
+func TestWebAbsoluteBlockKeepsBackgroundLayers(t *testing.T) {
+	legibleTestInitFonts(t)
+	source := `<style>.hero{position:absolute;top:0;left:0;width:300px;` +
+		`background-image:linear-gradient(#123,#456)}</style><div class="hero">Hero</div>`
+	layout := parseWebPage(source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if layout == nil || len(layout.Floats) != 1 {
+		t.Fatalf("absolute hero layout = %+v", layout)
+	}
+	for _, bg := range layout.Floats[0].Backgrounds {
+		if bg.HasGradient {
+			return
+		}
+	}
+	t.Fatal("an absolutely positioned block's gradient background was dropped")
+}
+
+func TestWebRebaseCSSURLsUsesStylesheetBase(t *testing.T) {
+	base, err := url.Parse("https://example.com/assets/css/site.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := `.a{background:url("../img/bg.png")}` +
+		`.b{background:url('/root.png')}` +
+		`.c{background:url(data:image/png;base64,AAAA)}` +
+		`.d{background:url(https://cdn.example/x.png)}`
+	got := webRebaseCSSURLs(source, base)
+	for _, want := range []string{
+		`url("https://example.com/assets/img/bg.png")`,
+		`url('https://example.com/root.png')`,
+		`url(data:image/png;base64,AAAA)`,
+		`url(https://cdn.example/x.png)`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("rebased CSS %q does not contain %q", got, want)
+		}
 	}
 }
 

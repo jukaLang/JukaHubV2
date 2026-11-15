@@ -550,6 +550,29 @@ func podcastStatusText() string {
 
 var podPanel podcastPanelState
 
+// podcastPanelLayout is the browser's measured geometry for the tests: both
+// columns and the scrollbar tracks that only appear when a column overflows.
+var podcastPanelLayout struct {
+	showList, epList sdl.Rect
+	showBar, epBar   sdl.Rect
+}
+
+// podcastEpisodeEmptyState is the episode column's empty/loading/error block.
+// A feed error keeps the error tone instead of the tertiary empty tone, and
+// every block names a drawn @glyph (a bare icon name painted as literal text).
+func podcastEpisodeEmptyState(show podcastShow, selected bool) (glyph, title, body string, isError bool) {
+	if !selected {
+		return "@media", "No show selected", "Pick a show on the left, or add a feed.", false
+	}
+	if len(show.Episodes) > 0 {
+		return "", "", "", false
+	}
+	if show.Err != "" {
+		return "@warning", "Couldn't load this show", show.Err, true
+	}
+	return "@media", "Nothing to play yet", "Loading episodes...", false
+}
+
 // podcastPanelShows is the show column, with one extra row at the end that asks
 // for a feed. A D-pad user must be able to reach every action, and an action
 // that only exists as a footer hint is unreachable on the Brick.
@@ -949,6 +972,8 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	showList := sdl.Rect{X: panelX + pad, Y: bodyY, W: showW, H: bodyH - 8}
 	epList := sdl.Rect{X: showList.X + showList.W + 18, Y: bodyY, W: panelW - showW - pad*3 - 18, H: bodyH - 8}
+	podcastPanelLayout.showList, podcastPanelLayout.epList = showList, epList
+	podcastPanelLayout.showBar, podcastPanelLayout.epBar = sdl.Rect{}, sdl.Rect{}
 
 	// A divider makes the two columns read as one browser rather than two
 	// unrelated lists.
@@ -968,10 +993,22 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 	if podPanel.show >= podPanel.firstShow+showVisible {
 		podPanel.firstShow = podPanel.show - showVisible + 1
 	}
+	showRows := len(shows) + 1
+	maxFirstShow := showRows - showVisible
+	if maxFirstShow < 0 {
+		maxFirstShow = 0
+	}
+	if podPanel.firstShow > maxFirstShow {
+		podPanel.firstShow = maxFirstShow
+	}
+	if podPanel.firstShow < 0 {
+		podPanel.firstShow = 0
+	}
 	firstShow := podPanel.firstShow
 	podcastPanelFirst[podcastColumnShows] = firstShow
 	podcastShowRowHits = podcastShowRowHits[:0]
 	focus := installHighlight()
+	var focusedShowRect sdl.Rect
 	for i := 0; i < showVisible; i++ {
 		idx := firstShow + i
 		if idx >= len(shows)+1 {
@@ -979,10 +1016,19 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		rect := sdl.Rect{X: showList.X, Y: showList.Y + int32(i)*showRowH, W: showList.W, H: showRowH - 4}
 		podcastShowRowHits = append(podcastShowRowHits, rect)
-		active := idx == podPanel.show
-		if active {
+		selected := idx == podPanel.show
+		focused := selected && podPanel.column == podcastColumnShows
+		if selected {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(focus, 42))
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, WithAlpha(focus, 220))
+			if focused {
+				// The show stays marked while the episode column has the cursor,
+				// but only the column that owns the keyboard focus gets the ring.
+				// The ring is painted again after the scrollbar, which sits on the
+				// row's right edge and used to hide that side.
+				focusedShowRect = rect
+			} else {
+				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, WithAlpha(focus, 220))
+			}
 		}
 		if idx >= len(shows) {
 			// The add row.
@@ -991,11 +1037,11 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 			continue
 		}
 		show := shows[idx]
-		titleCol := ColorTextSecondary()
-		if active {
-			titleCol = ColorTextPrimary()
-		}
-		title := ellipsize(font, show.Title, rect.W-28)
+					titleCol := ColorTextSecondary()
+			if selected {
+				titleCol = ColorTextPrimary()
+			}
+			title := ellipsize(font, show.Title, rect.W-28)
 		renderText(renderer, config, font, title, titleCol, rect.X+14, rect.Y+8)
 		meta := fmt.Sprintf("%d episodes", len(show.Episodes))
 		if show.Err != "" && len(show.Episodes) == 0 {
@@ -1008,79 +1054,118 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 	if len(shows) == 0 {
 		renderText(renderer, config, font, "No subscriptions yet.", ColorTextTertiary(), showList.X+4, showList.Y+4)
 	}
+	if content := int32(showRows)*showRowH - 4; content > showList.H {
+		podcastPanelLayout.showBar = sdl.Rect{X: showList.X + showList.W - 3, Y: showList.Y, W: 3, H: showList.H}
+		frac := 0.0
+		if maxFirstShow > 0 {
+			frac = float64(firstShow) / float64(maxFirstShow)
+		}
+		drawScrollbar(renderer, podcastPanelLayout.showBar.X, podcastPanelLayout.showBar.Y,
+			podcastPanelLayout.showBar.W, podcastPanelLayout.showBar.H,
+			float64(showList.H)/float64(content), frac)
+	}
+	if focusedShowRect.H > 0 {
+		drawGlassFocusRing(renderer, focusedShowRect, 10)
+	}
 
 	// Episode column.
 	podcastEpisodeHits = podcastEpisodeHits[:0]
-	if podPanel.show < 0 || podPanel.show >= len(shows) {
-		UIEmptyState(renderer, config, epList, "media", "No show selected", "Pick a show on the left, or add a feed.")
-	} else {
-		show := shows[podPanel.show]
-		if len(show.Episodes) == 0 {
-			msg := "Loading episodes..."
-			if show.Err != "" {
-				msg = show.Err
-			}
-			UIEmptyState(renderer, config, epList, "media", "Nothing to play yet", msg)
+	var focusedEpisodeRect sdl.Rect
+	selected := podPanel.show >= 0 && podPanel.show < len(shows)
+	show := podcastShow{}
+	if selected {
+		show = shows[podPanel.show]
+	}
+	glyph, title, body, isError := podcastEpisodeEmptyState(show, selected)
+	if len(show.Episodes) == 0 {
+		if isError {
+			UIErrorState(renderer, config, epList, glyph, title, body)
 		} else {
-			epRowH := int32(font.Height())*2 + 18
-			epVisible := int(epList.H / epRowH)
-			if epVisible < 1 {
-				epVisible = 1
+			UIEmptyState(renderer, config, epList, glyph, title, body)
+		}
+	} else {
+		epRowH := int32(font.Height())*2 + 18
+		epVisible := int(epList.H / epRowH)
+		if epVisible < 1 {
+			epVisible = 1
+		}
+		if podPanel.episode < podPanel.firstEpisode {
+			podPanel.firstEpisode = podPanel.episode
+		}
+		if podPanel.episode >= podPanel.firstEpisode+epVisible {
+			podPanel.firstEpisode = podPanel.episode - epVisible + 1
+		}
+		epRows := len(show.Episodes)
+		maxFirstEp := epRows - epVisible
+		if maxFirstEp < 0 {
+			maxFirstEp = 0
+		}
+		if podPanel.firstEpisode > maxFirstEp {
+			podPanel.firstEpisode = maxFirstEp
+		}
+		if podPanel.firstEpisode < 0 {
+			podPanel.firstEpisode = 0
+		}
+		firstEp := podPanel.firstEpisode
+		podcastPanelFirst[podcastColumnEpisodes] = firstEp
+		for i := 0; i < epVisible; i++ {
+			idx := firstEp + i
+			if idx >= len(show.Episodes) {
+				break
 			}
-			if podPanel.episode < podPanel.firstEpisode {
-				podPanel.firstEpisode = podPanel.episode
+			ep := show.Episodes[idx]
+			rect := sdl.Rect{X: epList.X, Y: epList.Y + int32(i)*epRowH, W: epList.W, H: epRowH - 6}
+			podcastEpisodeHits = append(podcastEpisodeHits, rect)
+			active := podPanel.column == podcastColumnEpisodes && idx == podPanel.episode
+			if active {
+				fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(focus, 42))
+				focusedEpisodeRect = rect
 			}
-			if podPanel.episode >= podPanel.firstEpisode+epVisible {
-				podPanel.firstEpisode = podPanel.episode - epVisible + 1
+			titleCol := ColorTextSecondary()
+			if active {
+				titleCol = ColorTextPrimary()
 			}
-			firstEp := podPanel.firstEpisode
-			podcastPanelFirst[podcastColumnEpisodes] = firstEp
-			for i := 0; i < epVisible; i++ {
-				idx := firstEp + i
-				if idx >= len(show.Episodes) {
-					break
+			title := ellipsize(font, ep.Title, rect.W-120)
+			renderText(renderer, config, font, title, titleCol, rect.X+14, rect.Y+8)
+			if podcastIsNew(ep) {
+				badge := "NEW"
+				bw, _, _ := font.SizeUTF8(badge)
+				renderText(renderer, config, font, badge, WithAlpha(focus, 230), rect.X+rect.W-int32(bw)-14, rect.Y+8)
+			} else {
+				meta := podcastEpisodeMeta(ep)
+				if meta != "" {
+					mw, _, _ := font.SizeUTF8(meta)
+					renderText(renderer, config, font, meta, ColorTextTertiary(), rect.X+rect.W-int32(mw)-14, rect.Y+8)
 				}
-				ep := show.Episodes[idx]
-				rect := sdl.Rect{X: epList.X, Y: epList.Y + int32(i)*epRowH, W: epList.W, H: epRowH - 6}
-				podcastEpisodeHits = append(podcastEpisodeHits, rect)
-				active := podPanel.column == podcastColumnEpisodes && idx == podPanel.episode
-				if active {
-					fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(focus, 42))
-					strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, WithAlpha(focus, 220))
+			}
+			detail := "A plays this episode"
+			if fraction := podcastResumeFraction(ep); fraction > 0 {
+				detail = fmt.Sprintf("Resume %d%%", int(math.Round(fraction*100)))
+			}
+			renderText(renderer, config, font, detail, ColorTextTertiary(), rect.X+14, rect.Y+8+int32(font.Height())+2)
+			// A hairline along the row's foot for the listened part.
+			if fraction := podcastResumeFraction(ep); fraction > 0 {
+				barW := int32(float64(rect.W-28) * fraction)
+				if barW < 2 {
+					barW = 2
 				}
-				titleCol := ColorTextSecondary()
-				if active {
-					titleCol = ColorTextPrimary()
-				}
-				title := ellipsize(font, ep.Title, rect.W-120)
-				renderText(renderer, config, font, title, titleCol, rect.X+14, rect.Y+8)
-				if podcastIsNew(ep) {
-					badge := "NEW"
-					bw, _, _ := font.SizeUTF8(badge)
-					renderText(renderer, config, font, badge, WithAlpha(focus, 230), rect.X+rect.W-int32(bw)-14, rect.Y+8)
-				} else {
-					meta := podcastEpisodeMeta(ep)
-					if meta != "" {
-						mw, _, _ := font.SizeUTF8(meta)
-						renderText(renderer, config, font, meta, ColorTextTertiary(), rect.X+rect.W-int32(mw)-14, rect.Y+8)
-					}
-				}
-				detail := "A plays this episode"
-				if fraction := podcastResumeFraction(ep); fraction > 0 {
-					detail = fmt.Sprintf("Resume %d%%", int(math.Round(fraction*100)))
-				}
-				renderText(renderer, config, font, detail, ColorTextTertiary(), rect.X+14, rect.Y+8+int32(font.Height())+2)
-				// A hairline along the row's foot for the listened part.
-				if fraction := podcastResumeFraction(ep); fraction > 0 {
-					barW := int32(float64(rect.W-28) * fraction)
-					if barW < 2 {
-						barW = 2
-					}
-					renderer.SetDrawColor(focus.R, focus.G, focus.B, 150)
-					renderer.FillRect(&sdl.Rect{X: rect.X + 14, Y: rect.Y + rect.H - 3, W: barW, H: 2})
-				}
+				renderer.SetDrawColor(focus.R, focus.G, focus.B, 150)
+				renderer.FillRect(&sdl.Rect{X: rect.X + 14, Y: rect.Y + rect.H - 3, W: barW, H: 2})
 			}
 		}
+		if content := int32(epRows)*epRowH - 6; content > epList.H {
+			podcastPanelLayout.epBar = sdl.Rect{X: epList.X + epList.W - 3, Y: epList.Y, W: 3, H: epList.H}
+			frac := 0.0
+			if maxFirstEp > 0 {
+				frac = float64(firstEp) / float64(maxFirstEp)
+			}
+			drawScrollbar(renderer, podcastPanelLayout.epBar.X, podcastPanelLayout.epBar.Y,
+				podcastPanelLayout.epBar.W, podcastPanelLayout.epBar.H,
+				float64(epList.H)/float64(content), frac)
+		}
+	}
+	if focusedEpisodeRect.H > 0 {
+		drawGlassFocusRing(renderer, focusedEpisodeRect, 10)
 	}
 
 	footer := hintLine(

@@ -179,13 +179,14 @@ func ttsLocalEnv(v ttsLocalVoice) []string {
 // ttsPiperStream speaks chunks with one Piper process, so the first sentence
 // plays while the rest are still being made (a neural voice on the Smart
 // Pro's four A53 cores is about as slow as speech itself; rendering a long
-// answer whole kept the user waiting in silence). Each chunk is one input
-// line; with --output_dir Piper writes one WAV per line into a private folder
-// and prints its path when the file is complete. emit gets each chunk's sound
+// answer whole kept the user waiting in silence). Each sentence of a chunk is
+// one input line (ttsPiperLines); with --output_dir Piper writes one WAV per
+// line into a private folder and prints its path when the file is complete.
+// emit gets each line's sound
 // in order and returns false to stop. next gives the chunks — a live answer's
 // as they are written (tts_live.go) — and each goes to Piper as soon as it
 // comes, so the model is loaded and the first sentence playing while the rest
-// of the answer is still on its way. It returns how many chunks were emitted.
+// of the answer is still on its way. It returns how many Piper lines were emitted.
 func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Context) (string, bool), emit func([]int16, int) bool) (int, error) {
 	if v.kind != "piper" || v.path == "" || v.model == "" {
 		return 0, errors.New("not a Piper voice")
@@ -235,6 +236,7 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	if err := cmd.Start(); err != nil {
 		return 0, err
 	}
+	ttsPiperOOMFirst(cmd.Process.Pid)
 	// A Piper that stops answering is ended after ttsPiperTimeout without
 	// progress while it owes a line (the model load counts against the first):
 	// a short line no longer waits out the whole-answer cap above. Waiting for
@@ -268,12 +270,16 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 		defer stdin.Close()
 		line := first
 		for {
-			owed.Add(1)
-			progress.Store(time.Now().UnixNano())
-			if _, err := io.WriteString(stdin, line+"\n"); err != nil {
-				return
+			// A sentence (or a part of a long one) per line, so each sound is
+			// ready about when the one before it has played.
+			for _, piece := range ttsPiperLines(line) {
+				owed.Add(1)
+				progress.Store(time.Now().UnixNano())
+				if _, err := io.WriteString(stdin, piece+"\n"); err != nil {
+					return
+				}
+				total++
 			}
-			total++
 			line = ""
 			for line == "" {
 				c, ok := next(ctx)
@@ -440,6 +446,13 @@ var ttsPiperWarm struct {
 
 func ttsPiperKey(v ttsLocalVoice) string { return v.path + "\x00" + v.model }
 
+// ttsPiperOOMFirst makes a Piper the first thing the kernel ends when memory
+// runs out on the 1 GB handheld, rather than JukaHub or a paused game. Linux
+// only; elsewhere the write fails harmlessly.
+func ttsPiperOOMFirst(pid int) {
+	_ = os.WriteFile(filepath.Join("/proc", strconv.Itoa(pid), "oom_score_adj"), []byte("800"), 0o644)
+}
+
 // ttsPiperPrewarm loads the device's Piper voice, if that is its voice. Any
 // goroutine.
 func ttsPiperPrewarm() {
@@ -491,7 +504,7 @@ func ttsPiperWarmStartLocked(v ttsLocalVoice) *ttsPiperProc {
 		return nil
 	}
 	p.stdin = stdin
-	_ = os.WriteFile(filepath.Join("/proc", strconv.Itoa(cmd.Process.Pid), "oom_score_adj"), []byte("800"), 0o644)
+	ttsPiperOOMFirst(cmd.Process.Pid)
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 4096), 64<<10)
@@ -646,10 +659,13 @@ func ttsPiperStreamWarm(ctx context.Context, p *ttsPiperProc, first string, next
 		line := first
 		for {
 			voiceBoostHold(voiceBoostSpeak)
-			sent.Add(1)
-			if _, err := io.WriteString(p.stdin, line+"\n"); err != nil {
-				writeFailed.Store(true)
-				return
+			// A sentence (or a part of a long one) per line (ttsPiperLines).
+			for _, piece := range ttsPiperLines(line) {
+				sent.Add(1)
+				if _, err := io.WriteString(p.stdin, piece+"\n"); err != nil {
+					writeFailed.Store(true)
+					return
+				}
 			}
 			line = ""
 			for line == "" {

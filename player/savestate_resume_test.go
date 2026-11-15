@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -216,5 +217,57 @@ func TestPrepareSavestateResumeLeavesStandaloneEmulatorsAlone(t *testing.T) {
 	raw, _ := os.ReadFile(cfgPath)
 	if strings.Contains(string(raw), savestateAutoSaveKey) {
 		t.Errorf("standalone launch edited retroarch.cfg:\n%s", raw)
+	}
+}
+
+// TestRALocateReadsLaunchScripts: the wider RetroArch search (rafind.go) finds
+// a RetroArch kept outside the usual folders through what a launch script
+// names — a folder variable, $(dirname "$0") — and by walking the card, and it
+// never takes a wrapper script named like RetroArch for the binary.
+func TestRALocateReadsLaunchScripts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the handheld's layout")
+	}
+	prevDirs, prevRunning := raSystemDirs, raRunningBinaryFn
+	raSystemDirs, raRunningBinaryFn = nil, func() string { return "" }
+	t.Cleanup(func() { raSystemDirs, raRunningBinaryFn = prevDirs, prevRunning })
+	elf := []byte("\x7fELF\x02\x01\x01")
+	write := func(p string, data []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card := t.TempDir()
+	bin := filepath.Join(card, "System", "RA", "ra64.trimui")
+	write(bin, elf)
+	write(filepath.Join(card, "Emus", "GBA", "launch.sh"),
+		[]byte("#!/bin/sh\nRA_DIR=${RA_DIR:-"+filepath.ToSlash(filepath.Join(card, "System", "RA"))+"}\ncd \"$RA_DIR\"\n\"$RA_DIR\"/ra64.trimui -L x \"$1\"\n"))
+	if loc := raLocateSearch([]string{card}); loc.Bin != bin {
+		t.Fatalf("folder variable: found %q (%s), want %q", loc.Bin, loc.Via, bin)
+	}
+
+	card = t.TempDir()
+	bin = filepath.Join(card, "Other", "retroarch64")
+	write(bin, elf)
+	write(filepath.Join(card, "Emus", "SFC", "launch.sh"),
+		[]byte("#!/bin/sh\nHERE=$(dirname \"$0\")\nexec \"$HERE/../../Other/retroarch64\" \"$1\"\n"))
+	if loc := raLocateSearch([]string{card}); loc.Bin != bin {
+		t.Fatalf("dirname: found %q (%s), want %q", loc.Bin, loc.Via, bin)
+	}
+
+	card = t.TempDir()
+	write(filepath.Join(card, "Tools", "retroarch"), []byte("#!/bin/sh\nexec /nowhere/ra64.trimui \"$@\"\n"))
+	bin = filepath.Join(card, "Tools", "Emu", "RA", "ra64.trimui")
+	write(bin, elf)
+	write(filepath.Join(card, "Roms", "GBA", "ra64.trimui"), elf)
+	if loc := raLocateSearch([]string{card}); loc.Bin != bin {
+		t.Fatalf("card walk: found %q (%s), want %q", loc.Bin, loc.Via, bin)
+	}
+	if got := raCoresDirFor(bin); got != filepath.Join(filepath.Dir(bin), ".retroarch", "cores") {
+		t.Errorf("cores folder = %q", got)
 	}
 }

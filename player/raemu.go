@@ -30,6 +30,10 @@ func raConfigsIn(dir string) []string {
 	return []string{
 		filepath.Join(dir, "retroarch.cfg"),
 		filepath.Join(dir, ".retroarch", "retroarch.cfg"),
+		// Where an unpatched RetroArch started with HOME set to its folder
+		// (as every TrimUI launcher does) keeps its config: last, for a card
+		// with no config of the other two.
+		filepath.Join(dir, ".config", "retroarch", "retroarch.cfg"),
 	}
 }
 
@@ -43,6 +47,12 @@ func deviceRetroArchEntry(coresDir string, coreCount int) (emuEntry, bool) {
 		return emuEntry{}, false
 	}
 	dir := filepath.Dir(filepath.Dir(coresDir))
+	// A RetroArch the wider search found (rafind.go) may keep its cores in
+	// a plain cores/ beside it rather than TrimUI's .retroarch/cores.
+	if plain := filepath.Dir(coresDir); !strings.EqualFold(filepath.Base(filepath.Dir(coresDir)), ".retroarch") &&
+		raBinaryIn(dir, false) == "" && raBinaryIn(plain, false) != "" {
+		dir = plain
+	}
 	if !dirExists(dir) {
 		return emuEntry{}, false
 	}
@@ -51,13 +61,8 @@ func deviceRetroArchEntry(coresDir string, coreCount int) (emuEntry, bool) {
 	if coreCount == 1 {
 		cores = "1 core"
 	}
-	bin := ""
-	for _, name := range netplayRetroArchNames {
-		if p := filepath.Join(dir, name); regularFile(p) {
-			bin = p
-			break
-		}
-	}
+	// The usual names first, then any other RetroArch build (ra64.<model>).
+	bin := raBinaryIn(dir, false)
 	if bin == "" {
 		e.Status = emuBroken
 		e.Detail = dir + " — no RetroArch binary (ra64.trimui) · " + cores

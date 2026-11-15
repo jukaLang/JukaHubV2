@@ -262,13 +262,14 @@ func hqWifiSwitchNow(on bool) error {
 	if err := setWifiEnabled(true); err != nil {
 		return err
 	}
+	// The keeper rejoins from here, even over the firmware's Wi-Fi-off.
+	wifiKeeperRadioOn()
 	// Give the interface a moment to come up, then start the supplicant where
 	// the image has one and nothing listens yet, so the saved network is
-	// joined again (wifi.go ensureWifiBackend).
+	// joined again (wifi.go ensureWifiBackend checks for itself: on the TrimUI
+	// wpa_cli exists with no supplicant behind it).
 	time.Sleep(600 * time.Millisecond)
-	if wifiCommandBackend() == "" {
-		ensureWifiBackend()
-	}
+	ensureWifiBackend()
 	return nil
 }
 

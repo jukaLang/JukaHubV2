@@ -142,10 +142,21 @@ func headerCaptionText(version, scene string) string {
 	return b.String()
 }
 
+// headerBrandX is the wordmark's left edge: the same gutter the page content
+// uses. The bar's margin is a design-canvas value, so the compact 960-wide
+// canvas scales it with the content instead of leaving the brand inset from
+// the greeting and cards below it.
+func headerBrandX() int32 {
+	if screenWidth <= 0 {
+		return StatusBarMargin
+	}
+	return scaleX(StatusBarMargin, screenWidth)
+}
+
 // drawHeaderBrand paints the wordmark and its caption and returns the x just
 // past them, which is where the screen's own chrome starts.
 func drawHeaderBrand(renderer *sdl.Renderer, config *Config, barH int32, caption string) int32 {
-	x := StatusBarMargin
+	x := headerBrandX()
 	if renderer == nil {
 		return x
 	}

@@ -90,5 +90,8 @@ current facts may be unknown to it. Pictures, video, and Chat's Juka AI tab
 still use Groq.
 
 The optional model package is `JukaHub-OfflineAI-linux-arm64.zip` on JukaHub
-releases. JukaHub stores an installed copy in its data folder as `juka-llm/`.
+releases. It is built by `.github/workflows/offline-ai.yml` on its own runner,
+so the app archives never wait for it; a release that goes out without it
+makes JukaHub install the model from the newest release that has one.
+JukaHub stores an installed copy in its data folder as `juka-llm/`.
 Once installed, it can be used entirely offline.

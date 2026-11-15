@@ -44,6 +44,34 @@ type startMenuState struct {
 
 var tb startMenuState
 
+// startMenuHeadNow is the header height for the fonts currently loaded. It is
+// refreshed at the top of every render: at 145% text the fixed 64 px band let
+// the subtitle run under the first row's focus ring.
+var startMenuHeadNow = startMenuHeadH
+
+// startMenuHeadHeight measures the title and subtitle plus the gap before the
+// first row, never below the original 64 px band.
+func startMenuHeadHeight(config *Config) int32 {
+	height := startMenuHeadH
+	font, _ := getCachedFont(config, "medium")
+	if font == nil {
+		return height
+	}
+	caption := getFontSized(config, "small", footerHintSize)
+	measured := int32(10) + int32(font.Height()) + 4
+	if caption != nil {
+		measured += int32(caption.Height()) + 8
+	}
+	if measured > height {
+		return measured
+	}
+	return height
+}
+
+var startMenuLayout struct {
+	title, subtitle, firstRow, footer sdl.Rect
+}
+
 // startMenuEntry is a single item in a group: a scene to open or an action.
 type startMenuEntry struct {
 	name   string
@@ -461,7 +489,7 @@ func startMenuOrigin() (int32, int32) {
 // startMenuRows returns how many entries fit in the list pane.
 func startMenuRows() int {
 	_, menuH := startMenuSize()
-	rows := int((menuH - startMenuHeadH - startMenuFootH) / startMenuItemH)
+	rows := int((menuH - startMenuHeadNow - startMenuFootH) / startMenuItemH)
 	if rows < 1 {
 		rows = 1
 	}
@@ -472,7 +500,7 @@ func startMenuRows() int {
 // always do; the clamp keeps a future fifth group from drawing past the card.
 func startMenuGroupRows() int {
 	_, menuH := startMenuSize()
-	rows := int((menuH - startMenuHeadH - startMenuFootH) / startMenuGroupH)
+	rows := int((menuH - startMenuHeadNow - startMenuFootH) / startMenuGroupH)
 	if rows < 1 {
 		rows = 1
 	}
@@ -538,6 +566,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		captionFont = smallFont
 	}
 
+	startMenuHeadNow = startMenuHeadHeight(config)
 	menuW, menuH := startMenuSize()
 	menuX, menuY := startMenuOrigin()
 	group, groups := startMenuCurrentGroup(config)
@@ -570,10 +599,16 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		drawOverlayCard(renderer, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH})
 
 		// ── Header ──────────────────────────────────────────────────────
-		renderText(renderer, config, font, "Start", ColorTextPrimary(), menuX+20, menuY+10)
+		titleY := menuY + 10
+		renderText(renderer, config, font, "Start", ColorTextPrimary(), menuX+20, titleY)
+		tw, th, _ := font.SizeUTF8("Start")
+		startMenuLayout.title = sdl.Rect{X: menuX + 20, Y: titleY, W: int32(tw), H: int32(th)}
 		if captionFont != nil {
-			renderText(renderer, config, captionFont, "Go to a screen, or run an action",
-				ColorTextMuted(), menuX+20, menuY+10+int32(font.Height())+2)
+			subtitle := "Go to a screen, or run an action"
+			subtitleY := menuY + 10 + int32(font.Height()) + 4
+			renderText(renderer, config, captionFont, subtitle, ColorTextMuted(), menuX+20, subtitleY)
+			sw, sh, _ := captionFont.SizeUTF8(subtitle)
+			startMenuLayout.subtitle = sdl.Rect{X: menuX + 20, Y: subtitleY, W: int32(sw), H: int32(sh)}
 		}
 
 		// ── Group rail ──────────────────────────────────────────────────
@@ -591,7 +626,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		groupRows := startMenuGroupRows()
 		for i := 0; i < len(groups) && i < groupRows; i++ {
 			g := groups[i]
-			ry := menuY + startMenuHeadH + int32(i)*startMenuGroupH
+			ry := menuY + startMenuHeadNow + int32(i)*startMenuGroupH
 			rect := sdl.Rect{X: railX, Y: ry, W: railW, H: startMenuGroupH - 4}
 			startMenuGroupHits = append(startMenuGroupHits, startMenuHit{index: i, rect: rect})
 
@@ -617,7 +652,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		// A hairline makes the two panes read as panes rather than one grid.
 		dividerX := railX + railW + 5
 		setDrawColor(renderer, glassHairline())
-		renderer.FillRect(&sdl.Rect{X: dividerX, Y: menuY + startMenuHeadH - 6, W: 1, H: menuH - startMenuHeadH - startMenuFootH + 4})
+		renderer.FillRect(&sdl.Rect{X: dividerX, Y: menuY + startMenuHeadNow - 6, W: 1, H: menuH - startMenuHeadNow - startMenuFootH + 4})
 
 		// ── Entries ─────────────────────────────────────────────────────
 		listX := dividerX + 13
@@ -626,7 +661,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		if len(items) == 0 {
 			if smallFont != nil {
 				renderText(renderer, config, smallFont, "Nothing in this group yet",
-					ColorTextTertiary(), listX, menuY+startMenuHeadH+12)
+					ColorTextTertiary(), listX, menuY+startMenuHeadNow+12)
 			}
 		}
 		rows := startMenuRows()
@@ -636,9 +671,12 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 				break
 			}
 			entry := items[i]
-			iy := menuY + startMenuHeadH + int32(row)*startMenuItemH
+			iy := menuY + startMenuHeadNow + int32(row)*startMenuItemH
 			rect := sdl.Rect{X: listX, Y: iy, W: listW, H: startMenuItemH - 4}
 			startMenuItemHits = append(startMenuItemHits, startMenuHit{index: i, rect: rect})
+			if row == 0 {
+				startMenuLayout.firstRow = rect
+			}
 
 			focused := tb.focus == 1 && i == tb.cursor
 			hovered := pointInRect(mouseX, mouseY, rect)
@@ -685,6 +723,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 		// The power key stays on the right: X asks to quit.
 		if captionFont != nil {
 			footTop := menuY + menuH - startMenuFootH
+			startMenuLayout.footer = sdl.Rect{X: menuX, Y: footTop, W: menuW, H: startMenuFootH}
 			textY := footTop + (startMenuFootH-int32(captionFont.Height()))/2
 			const powerKey, powerLabel = "X", "Quit JukaHub"
 			badgeH := footerBadgeHeight(captionFont)
@@ -702,8 +741,8 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			if len(items) > rows {
 				scrollFrac = float64(tb.scroll) / float64(len(items)-rows)
 			}
-			drawScrollbar(renderer, menuX+menuW-6, menuY+startMenuHeadH, 3,
-				menuH-startMenuHeadH-startMenuFootH, thumbFrac, scrollFrac)
+			drawScrollbar(renderer, menuX+menuW-6, menuY+startMenuHeadNow, 3,
+				menuH-startMenuHeadNow-startMenuFootH, thumbFrac, scrollFrac)
 		}
 	})
 }

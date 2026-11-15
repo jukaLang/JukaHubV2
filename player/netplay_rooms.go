@@ -950,7 +950,7 @@ func netplayPlanForRoom(room netplayRoom, index map[string][]libraryGame, instal
 	}
 	plan := netplayPlan{Nick: netplayNickname(), RetroArch: retroArch}
 	if plan.RetroArch == "" {
-		return netplayPlan{}, errors.New("RetroArch not found — install it from Emulators, or set JUKAHUB_RETROARCH")
+		return netplayPlan{}, errors.New(netplayRetroArchMissing())
 	}
 	core, err := netplayRoomCore(room, installed)
 	if err != nil {

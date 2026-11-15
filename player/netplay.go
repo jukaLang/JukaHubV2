@@ -308,6 +308,21 @@ func netplayCardRetroArch(roots []string) string {
 	return ""
 }
 
+// netplayRetroArchMissing is the "RetroArch not found" message, naming the
+// folders the handheld looked in so a report says where. Room rows build it on
+// every rebuild, so the folders are logged once per card, not per call.
+func netplayRetroArchMissing() string {
+	if !IsTrimuiDevice() {
+		return "RetroArch not found — install it from Emulators, or set JUKAHUB_RETROARCH"
+	}
+	card := childEnvFirmwareCard()
+	if raPathChanged("netplay-missing", card) {
+		logWarn("netplay", "no RetroArch binary (%s) in %s or %s, in the launch scripts or anywhere on the card, nor JUKAHUB_RETROARCH",
+			strings.Join(netplayRetroArchNames, ", "), filepath.Join(card, "RetroArch"), filepath.Join(card, "Apps", "RetroArch"))
+	}
+	return "RetroArch not found on " + card + " (searched its RetroArch folders, the launch scripts and the card) — install it from Emulators, or set JUKAHUB_RETROARCH"
+}
+
 // netplayTrimuiBuild reports whether path is TrimUI's own RetroArch build.
 func netplayTrimuiBuild(path string) bool {
 	name := strings.ToLower(filepath.Base(path))
@@ -329,6 +344,11 @@ func netplayRetroArchPath() string {
 	if !IsWindows() {
 		if p := netplayCardRetroArch([]string{trimuiSDRootFn(), "/mnt/SDCARD", "/mnt/sdcard"}); p != "" {
 			return p
+		}
+		// Then the wider search (rafind.go): more folders, a running RetroArch,
+		// the paths the launch scripts name, and a walk of the card.
+		if loc := raLocateDevice(); loc.Bin != "" {
+			return loc.Bin
 		}
 	} else if p := emuWinExe("RetroArch"); p != "" {
 		// The RetroArch the Emulators page lists — the one it installed,
@@ -471,7 +491,7 @@ func netplayPlanFor(role netplayRole, game libraryGame, rawAddress string) (netp
 	plan := netplayPlan{Nick: netplayNickname()}
 	plan.RetroArch = netplayRetroArchPath()
 	if plan.RetroArch == "" {
-		return netplayPlan{}, errors.New("RetroArch not found — install it from Emulators, or set JUKAHUB_RETROARCH")
+		return netplayPlan{}, errors.New(netplayRetroArchMissing())
 	}
 	plan.Core = netplayCorePath(game.System, netplayCoreDirs())
 	if plan.Core == "" {

@@ -984,6 +984,11 @@ func (r *bootOSRun) play() {
 		}
 		switch {
 		case holdEnd < 0 && (skip || r.holdDone(ms)):
+			if !r.preview && startupLocked() {
+				// The startup lock comes next: no arrival draws Home first.
+				bootWorkDrain()
+				return
+			}
 			// A press asks for the first screen: a power-on's arrives at the
 			// quick pace, a launch's at once.
 			beats := &bootArrivePower

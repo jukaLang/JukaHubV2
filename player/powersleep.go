@@ -196,6 +196,8 @@ func powerSleepRun(source string) {
 	}()
 
 	logInfo("sleep", "going to sleep (%s)", source)
+	// "Lock after sleep" goes up now, before the screen comes back (bootlock.go).
+	bootLockNoteSleep()
 	held = powerSleepHold()
 	// devpower.go's switch: the display driver's backlight on the TrimUI,
 	// with a marker that lets the next start undo a light a crash left off.

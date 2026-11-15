@@ -412,9 +412,39 @@ func ttsVoiceClient() *http.Client {
 	}
 }
 
+// ttsVoiceStallMax ends a download that has received nothing for this long (a
+// dead Wi-Fi link or a server that stopped sending): the card says so, and the
+// partial file is kept for the next try, instead of the card sitting still
+// until the half-hour cap.
+const ttsVoiceStallMax = 60 * time.Second
+
 // ttsFetchPinned keeps a partial for a later retry. A complete file is renamed
 // into place only after its exact byte count and digest match the pinned file.
+// A download that stalls for ttsVoiceStallMax fails as a network error.
 func ttsFetchPinned(ctx context.Context, client *http.Client, raw, dest, expectedSHA string, expectedSize int64, progress func(int64)) error {
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var stalled atomic.Bool
+	watchdog := time.AfterFunc(ttsVoiceStallMax, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	defer watchdog.Stop()
+	err := ttsFetchPinnedWatched(ctx, client, raw, dest, expectedSHA, expectedSize, func(n int64) {
+		watchdog.Reset(ttsVoiceStallMax)
+		if progress != nil {
+			progress(n)
+		}
+	})
+	if err != nil && stalled.Load() && parent.Err() == nil {
+		return fmt.Errorf("download stalled: nothing arrived for %s: %w", ttsVoiceStallMax, context.DeadlineExceeded)
+	}
+	return err
+}
+
+// ttsFetchPinnedWatched is ttsFetchPinned without the stall watchdog.
+func ttsFetchPinnedWatched(ctx context.Context, client *http.Client, raw, dest, expectedSHA string, expectedSize int64, progress func(int64)) error {
 	if ttsFileMatches(dest, expectedSize, expectedSHA) {
 		if progress != nil {
 			progress(expectedSize)
@@ -559,6 +589,10 @@ func ttsFetchVoiceConfig(ctx context.Context, client *http.Client, raw, dest str
 		return nil
 	}
 	_ = os.Remove(dest)
+	// A few kilobytes: a link that stalls on them fails, as a stalled
+	// download does, rather than holding the card.
+	ctx, cancel := context.WithTimeout(ctx, ttsVoiceStallMax)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
 		return err

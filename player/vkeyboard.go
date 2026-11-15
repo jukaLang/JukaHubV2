@@ -336,6 +336,8 @@ func vkActionLabel() string {
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL:
 		return "Save"
+	case bootLockVKTarget:
+		return bootLockKeyboardAction()
 	case vkTargetScene:
 		switch {
 		case textBrowserAddressEditing:
@@ -893,6 +895,8 @@ func vkCurrentText() string {
 		return alarmLabelBuffer
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
+	case bootLockVKTarget:
+		return bootLockBuffer
 	case vkTargetBrowserURL:
 		return brwPref.buffer
 	}
@@ -1008,6 +1012,9 @@ func vkSetText(text string, config *Config) {
 		// The key is saved on submit only, so a half-pasted key never replaces
 		// a working one.
 		vkGroqKeyBuffer = text
+	case bootLockVKTarget:
+		// The startup lock's password: checked on submit only (bootlock.go).
+		bootLockBuffer = text
 	case vkTargetBrowserURL:
 		// Same rule for the home page and a custom search address: a
 		// half-typed host never becomes either (browser_engines.go).
@@ -1231,6 +1238,8 @@ func vkTitle() string {
 		return "DEVICE ADDRESS"
 	case vkTargetGroqKey:
 		return "GROQ API KEY"
+	case bootLockVKTarget:
+		return bootLockKeyboardTitle()
 	case vkTargetBrowserURL:
 		return brwPrefTitle()
 	}
@@ -1371,6 +1380,8 @@ func vkPlaceholder() string {
 		return "user@192.168.1.7:2222/roms"
 	case vkTargetGroqKey:
 		return "Paste your key from console.groq.com"
+	case bootLockVKTarget:
+		return bootLockKeyboardPlaceholder()
 	case vkTargetBrowserURL:
 		return brwPrefPlaceholder()
 	}
@@ -1905,6 +1916,10 @@ func vkCloseKeyboard() {
 		// A pasted key must not outlive the field that asked for it.
 		vkGroqKeyBuffer = ""
 	}
+	if vkTarget == bootLockVKTarget {
+		// Nor a typed startup password (bootlock.go).
+		bootLockBuffer = ""
+	}
 	if vkTarget == vkTargetPSRemote && psPanelEditField == psEditLoginPIN {
 		// Nor a typed login passcode; a submit has read it already.
 		vkPSRemoteBuffer = ""
@@ -2428,6 +2443,10 @@ func vkSubmit(config *Config, askAI bool) {
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
 		vkSaveGroqKey(config, text)
+	case bootLockVKTarget:
+		// The same: the startup lock checks the password it was handed.
+		vkCloseKeyboard()
+		bootLockPasswordSubmit(config, text)
 	case vkTargetBrowserURL:
 		// The text was read above; the address applies only here, so B leaves
 		// the home page and the search engine as they were.

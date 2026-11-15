@@ -44,6 +44,12 @@ package main
 // screenshot (menushot.go): the game keeps Menu (its menu still opens), and
 // the screen read at the press is saved when the hold lands.
 //
+// And Select + Start held for gmForceQuitHold (3 s) ends the game whatever it
+// is doing (gameForceQuit, gamemenu.go): no overlay, no grab — the way out of a
+// game that shows a black screen or does not answer the pad, which used to
+// leave nothing but holding the power key (Juka, 2026-11-15, a PSP game). A
+// tap or a short hold of the pair is still the game's.
+//
 // Before the overlay is up the feedback is the motor: a firm pulse when the
 // pad is taken, a long one when it could not be.
 //
@@ -118,6 +124,8 @@ var gaPad struct {
 	wantMenu atomic.Bool
 	// wantShot: Menu held alone saves the game's screen (menushot.go).
 	wantShot atomic.Bool
+	// wantQuit: Select + Start held ends the game (gameForceQuit).
+	wantQuit atomic.Bool
 }
 
 // gameAssistSupported reports whether the assistant can come up over a game
@@ -125,16 +133,17 @@ var gaPad struct {
 func gameAssistSupported() bool { return IsTrimuiDevice() }
 
 // gaPadSync runs on the main thread, from the parked loop: it mirrors which
-// chords are wanted — and the Menu hold for a screenshot — and starts one
-// watcher per game while any is.
-func gaPadSync(config *Config, ask, menu, shot bool) {
-	want := ask || menu || shot
+// chords are wanted — the Menu hold for a screenshot and the Select + Start
+// hold that ends the game too — and starts one watcher per game while any is.
+func gaPadSync(config *Config, ask, menu, shot, quit bool) {
+	want := ask || menu || shot || quit
 	if shot {
 		gameShotSync(config)
 	}
 	gaPad.wantAsk.Store(ask)
 	gaPad.wantMenu.Store(menu)
 	gaPad.wantShot.Store(shot)
+	gaPad.wantQuit.Store(quit)
 	gaPad.want.Store(want)
 	if !want {
 		return
@@ -190,9 +199,11 @@ type gaPadSession struct {
 	events   []evdevEvent
 	lastNote string
 
-	// The chords: Select + R2 (the assistant) and Select + L2 (the menu).
+	// The chords: Select + R2 (the assistant), Select + L2 (the menu) and
+	// Select + Start (end the game).
 	ask  gaChord
 	menu gaChord
+	quit gaChord
 	// R2: the trigger past half (with hysteresis), and R2 down by the trigger
 	// or a button. r2Latched: R2 was held when the pad was taken, so its next
 	// press counts only after a release. L2 the same, without the latch (L2
@@ -234,8 +245,10 @@ type gaPadSession struct {
 func gaPadRun(p mbridgeParams, stop <-chan struct{}, done chan<- struct{}) {
 	s := &gaPadSession{fd: -1, buf: make([]byte, mbridgeReadEvents*evdevEventSize)}
 	s.eng.p = p
-	// A "Hey Juka" from an earlier game is not this one's.
+	// A "Hey Juka" from an earlier game is not this one's, nor a Select +
+	// Start hold that game ended by itself before the main loop acted on it.
 	gaLink.wake.Store(false)
+	gaLink.forceQuitAt.Store(0)
 	// Run last to first: the pad is given back, the watcher is marked stopped,
 	// and a fault anywhere is logged instead of taking JukaHub down with it.
 	defer func() {
@@ -313,16 +326,17 @@ func (s *gaPadSession) open(now time.Time) error {
 	s.resync(now)
 	// A chord already held when the watch starts does not fire from it.
 	s.resetChords()
-	logInfo("gameassist", "watching %q (%s) for Select + R2 and Select + L2", dev.Name, path)
+	logInfo("gameassist", "watching %q (%s) for Select + R2, Select + L2 and Select + Start held", dev.Name, path)
 	return nil
 }
 
-// resetChords starts both chords over: one still held must be let go before
+// resetChords starts every chord over: one still held must be let go before
 // it counts again.
 func (s *gaPadSession) resetChords() {
 	sel := s.eng.key(evdevBtnSelect)
 	s.ask.reset(sel && s.r2)
 	s.menu.reset(sel && s.l2)
+	s.quit.reset(sel && s.eng.key(evdevBtnStart))
 }
 
 // resync reads the pad whole — the buttons held, each axis's range and value
@@ -396,6 +410,8 @@ func (s *gaPadSession) step(now time.Time) error {
 	switch {
 	case s.held:
 		s.heldTick(now)
+	case gaPad.wantQuit.Load() && s.quit.due(now, gmForceQuitHold):
+		s.forceQuit(now)
 	case gaLink.wake.Swap(false):
 		// "Hey Juka" (wakeword.go): the assistant as if the chord were held.
 		if gaPad.wantAsk.Load() {
@@ -445,7 +461,7 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 			s.setR2(now)
 		case gaEvdevBtnTL2:
 			s.setL2(now)
-		case evdevBtnSelect:
+		case evdevBtnSelect, evdevBtnStart:
 			s.chord(now)
 		}
 		if !s.held && down != was {
@@ -693,11 +709,30 @@ func (c *gaChord) reset(held bool) {
 	c.fired, c.since = held, time.Time{}
 }
 
-// chord follows both holds: Select + R2 and Select + L2.
+// chord follows every hold: Select + R2, Select + L2 and Select + Start.
 func (s *gaPadSession) chord(now time.Time) {
 	sel := s.eng.key(evdevBtnSelect)
 	s.ask.follow(sel, s.r2, now)
 	s.menu.follow(sel, s.l2, now)
+	s.quit.follow(sel, s.eng.key(evdevBtnStart), now)
+}
+
+// forceQuit is Select + Start held for gmForceQuitHold: the main loop is told
+// to end the game (gameForceQuit). The pad is asked first, as take does, so a
+// release that went missing never ends a game. Nothing is grabbed: the game
+// keeps the pad until it is gone.
+func (s *gaPadSession) forceQuit(now time.Time) {
+	bitmap := make([]byte, evdevKeyBitmapSize)
+	if mbridgeIoctlBuf(s.fd, evdevGetKey(evdevKeyBitmapSize), bitmap) == nil &&
+		!(evdevKeyBit(bitmap, evdevBtnSelect) && evdevKeyBit(bitmap, evdevBtnStart)) {
+		s.resync(now)
+		s.resetChords()
+		return
+	}
+	s.shotCancel()
+	gaLink.forceQuitAt.Store(time.Now().UnixNano())
+	playHaptic(hapticSuccessPulse)
+	logInfo("gameassist", "Select + Start held for %s in %q: ending the game", gmForceQuitHold, s.name)
 }
 
 // gaChordKeys is the trigger of a mode's chord: its button and its axis.
@@ -897,7 +932,7 @@ func (s *gaPadSession) close() {
 		s.fd = -1
 	}
 	s.eng = mbridgeEngine{p: s.eng.p}
-	s.ask, s.menu = gaChord{}, gaChord{}
+	s.ask, s.menu, s.quit = gaChord{}, gaChord{}, gaChord{}
 	s.r2Axis, s.r2, s.r2Latched = false, false, false
 	s.l2Axis, s.l2 = false, false
 	s.menuDown = false

@@ -550,7 +550,11 @@ func spatialRetroArchAvailability() (ok bool, reason string) {
 	}
 	cfgs := raScopeTargets(candidates)
 	if len(cfgs) == 0 {
-		return false, "RetroArch was not found, so there is nothing to add the plugin to"
+		where := ""
+		if len(candidates) > 0 {
+			where = " (looked first at " + candidates[0] + ")"
+		}
+		return false, "RetroArch's settings file, retroarch.cfg, was not found" + where + ", so there is nothing to add the plugin to"
 	}
 	if own := spatialOwnFilterCached(cfgs[0]); own != "" {
 		return false, "RetroArch already uses its own audio filter (" + filepath.Base(filepath.FromSlash(strings.ReplaceAll(own, "\\", "/"))) +

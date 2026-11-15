@@ -487,7 +487,8 @@ func homePowerCardLayout(pill sdl.Rect, w, h int32, full bool) (card sdl.Rect, b
 func homePowerButtonLook(id int) (label, icon string, danger bool) {
 	switch id {
 	case homePowerExit:
-		return "Exit", "power", true
+		// "Return to CrossMix" in a JukaHub OS session (jukaos_settings.go).
+		return jukaosExitLabel("Exit"), "power", true
 	case homePowerSleep:
 		return "Sleep", "moon", false
 	case homePowerRestart:

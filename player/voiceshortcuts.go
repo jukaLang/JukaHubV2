@@ -750,6 +750,8 @@ func voiceCommandPreview(command string, targets []voiceTarget) string {
 		return "Turns airplane mode " + onOffWord(in.On)
 	case voiceIntentHome:
 		return "Goes to Home"
+	case voiceIntentCloseAll:
+		return "Closes all apps and games"
 	case voiceIntentBack:
 		return "Goes back"
 	case voiceIntentMusicPause:

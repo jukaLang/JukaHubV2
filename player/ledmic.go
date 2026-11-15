@@ -2,6 +2,9 @@ package main
 
 // ledmic.go — the stick lights follow the microphone.
 //
+// While the voice orb or the in-game assistant is up, Juka's own layer
+// (ledjuka.go) shows over this mode unless React to Juka is Off.
+//
 // LED mode "Microphone" (led_policy "mic") keeps the rings on with a soft,
 // steady glow in the chosen colour and brightens them smoothly with what the
 // handheld hears — the user talking (to Juka too: the orb's own capture feeds
@@ -234,6 +237,8 @@ func (f *ledMicFollower) pitch(hz, dt float64) float64 {
 // ledMicWanted reports whether the lights should be listening now.
 func ledMicWanted() bool {
 	return LEDSyncRunning() &&
+		// A loop run for Juka alone (ledjuka.go) is not the user's lights.
+		!ledJukaOnly.Load() &&
 		currentLEDLoopSettings().policy == ledPolicyMic &&
 		!backgroundPaused() &&
 		!powerSleepActive() &&
@@ -355,7 +360,7 @@ func ledMicFeedVoice(rms float64) {
 	st := &ledMicState
 	// 0 is the orb's start chime, skipped, not a reading: as the first one
 	// it would set the noise floor to the first word.
-	if rms <= 0 || st.stream != nil || !LEDSyncRunning() || currentLEDLoopSettings().policy != ledPolicyMic {
+	if rms <= 0 || st.stream != nil || !LEDSyncRunning() || ledJukaOnly.Load() || currentLEDLoopSettings().policy != ledPolicyMic {
 		return
 	}
 	now := time.Now()

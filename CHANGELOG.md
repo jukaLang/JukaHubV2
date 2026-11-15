@@ -13,6 +13,81 @@ For anything older, the git log and the
 
 ### Added
 
+- **Hold Select + Start for three seconds to end a stuck game** (TrimUI).
+  Any game, emulator or port JukaHub started is asked to quit and, after six
+  seconds, stopped — nothing is drawn and the game is not paused, so it works
+  on a black screen or a game that ignores the pad, which used to leave only
+  a hard restart (Juka, 2026-11-15, a PSP game). A tap of the pair is still
+  the game's. The pad watcher reads it beside the game
+  (`player/gameassist_linux.go`, `gameForceQuit` in `player/gamemenu.go`), and
+  when a launcher ends but something it started keeps the screen, the log now
+  names what is still running.
+
+- **JukaHub OS** (Settings → JukaHub OS, TrimUI). JukaHub can now run as the
+  handheld's OS instead of an app, and still installs like an app. Layers in
+  `Apps/JukaHub/os/layers/<id>/layer.json` bring newer libraries (for JukaHub
+  and, if the layer says so, every game it starts), replaced files, kernel
+  drivers built for this exact kernel (vermagic must match `uname -r`) and a
+  few whitelisted system values. All of it is temporary: files are
+  bind-mounted read-only inside JukaHub's own private mount namespace, so only
+  JukaHub and its games see them, and drivers and values are journaled in RAM
+  (`/tmp/jukaos/journal.json`) and undone on quit, on **Return to CrossMix /
+  TrimUI**, or at the next start after a crash. Nothing on the firmware is
+  written and a reboot is always the stock system. Rows: **Boot into JukaHub
+  OS**, **Start OS session now**, a switch per layer with the reason one can't
+  be used, and a built-in **JukaHub libraries for games** layer (JukaHub's
+  `libs/` for games; off by default). Ways out: the power card's Exit becomes
+  **Return to <firmware>**; holding Select or B through the power-on animation
+  starts the stock menu for that boot (not while the startup lock is up); two
+  failed starts with layers start without them; safe mode skips layers; a
+  damaged layer or a failed re-exec falls back to a plain start. See
+  [docs/JUKAHUB_OS.md](docs/JUKAHUB_OS.md).
+- **JukaHub OS package** (`JukaHub-OS-Trimui.zip` on every release). The
+  same JukaHub laid out as an SD-card root that powers on straight into
+  JukaHub OS: OS mode already on (`os/os.json` with `"edition": "os"`) and the
+  boot hook already in `System/starts` — the app's own hook, cut out of
+  `autostart.go` at build time. Extract it to the card's root and turn the
+  handheld on. Built by `player/trimui/make-os-package.sh` from any TrimUI
+  build (`make os-package`, and `package-sdcard.sh` writes
+  `JukaHub-OS-SDCARD.zip`); optional in CI, so the app packages ship anyway.
+  It ships the **Speed** layer, switched on: TortOS/ChaOS-style tuning with the
+  stock kernel's own values — `noop` scheduler, 512 KB read-ahead and no
+  entropy/I-O accounting on the SD card and storage, folder listings cached
+  longer, fewer background wake-ups — journaled and undone when the session
+  ends (`player/trimui/os-layers/speed/layer.json`).
+- **Startup lock** (Settings → Privacy & data). A button code (4–8 presses of
+  the D-pad, A, B, X, Y, L1 and R1 — Start unlocks, Select deletes; read as the
+  physical buttons, so a later A/B swap doesn't change it) or a password on the
+  on-screen keyboard, asked at power-on (the default on the handheld, also with
+  the Quick boot animation), on every start (the default on a PC), or on every
+  start and after sleep. A start after a crash or restart that never got past
+  the lock locks again. Codes are stored only as a salted PBKDF2-SHA256 hash;
+  after 5 wrong tries each try waits 30 s, doubling to 5 minutes, and a restart
+  doesn't reset it. While locked nothing behind it shows or acts — no toasts,
+  voice, Hey Juka, Quick Settings or game assistant; the phone companion answers
+  "JukaHub is locked" (HTTP 423); FTP/SSH stop — but Menu opens Sleep, Restart
+  and Power off, and alarms still ring. It locks the screen, it does not encrypt
+  the SD card: a forgotten code is removed by setting `"startupLockSecret": ""`
+  in `Apps/JukaHub/jukauser.json` on a computer.
+- **Close all apps & games.** One action closes every game, emulator, port,
+  Wine program, Remote Play client, the video player and the Terminal's command
+  — politely first (games save and quit), firmly after a few seconds — then
+  says how much memory came back ("Closed 3 apps · 412 MB free now"). On the
+  handheld it also finds apps a crash left running and frees the page cache.
+  JukaHub itself, its process group, the firmware loops it paused, its services
+  and Juka's offline AI and speech servers are never closed. In Quick Settings,
+  Power tools, the Processes panel (X), the in-game menu (**Close background
+  apps** keeps your game) and by voice ("close all apps", "free up memory").
+  When offline AI, game hints or offline speech run out of memory, Juka now
+  offers **Close apps and try again** and asks your question again by itself.
+- **The stick lights react to Juka.** Cyan and brighter with your voice while
+  Juka listens, a slow violet breath while it thinks, blue following Juka's
+  voice while it answers (amber for a problem) — in the voice orb and in the
+  in-game assistant over a paused game, whatever the lights normally show. They
+  ease back to your own mode (or the firmware's colour) about half a second
+  after Juka is done; colour changes pass through dark so the TrimUI rings
+  don't blink. Settings → Stick lights → **React to Juka**: Always (default; the
+  lights wake for Juka even when they are off), When lights are on, or Off.
 - **Xbox One Style** and **Minimal UI** themes. Xbox One Style is the 2013 Metro dashboard (square flat tiles on near-black, lime green). Minimal UI turns Home into plain text: a list of names you walk with Up and Down, no tiles or art (`carouselStyle: "text"`, `player/thememinimal.go`).
 - **Switch 2 Style is now the console's home screen.** The Switch themes,
   renamed **Switch 2 Style** and **Switch 2 Style Dark**, draw the Switch home
@@ -670,6 +745,32 @@ For anything older, the git log and the
 
 ### Changed
 
+- **RetroArch is searched for, not just looked up.** When RetroArch is not in
+  RetroArch/ or Apps/RetroArch/, JukaHub now also looks in more folders on
+  every card (Emus/RetroArch, Emus/RA, System/RetroArch, RetroArch64…) and
+  the firmware's, at a RetroArch that is running, at the paths the firmware's
+  launch scripts name (folder variables and `$(dirname "$0")` filled in,
+  CrossMix's shared launcher scripts included), and finally walks each card
+  three folders deep, skipping ROMs, art and saves. Any RetroArch build name
+  counts (ra64.<model>, retroarch64), and only a real program, never a wrapper
+  script. The Emulators page's RetroArch tile, core installs, netplay, the
+  launch card and RetroArch's settings all use it; the log says where it was
+  found, or every place searched (`player/rafind.go`).
+
+- **The release no longer waits for the offline AI build.** llama.cpp and the
+  SmolLM2 model now build in their own workflow (`offline-ai.yml`) on their
+  own runner, and `JukaHub-OfflineAI-linux-arm64.zip` is attached to the
+  release when it is ready, like the Box64 pack. A release that goes out
+  without it makes the Smart Pro install the model from the newest release
+  that has one.
+- **Offline voice commands are faster.** The Voice command page, voice
+  shortcuts and English dictation use the speech model that is already
+  loaded instead of loading it again for every clip, and English recognition
+  works with less free memory.
+- **Juka's offline voice no longer goes quiet between sentences.** Long
+  answers are spoken sentence by sentence as Piper renders them, and a short
+  opening like "Sure." plays at once.
+
 - **Offline speech answers right after you stop talking.** The Smart Pro now
   recognises English while you speak (a warm Vosk recogniser fed as the
   microphone records) instead of loading the model after the recording; the
@@ -908,6 +1009,73 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **PSP games: the pad works and Menu gets you out.** JukaHub's PPSSPP
+  mapped Pause to a code PPSSPP's SDL front end never sends, so nothing on the
+  pad opened its pause menu; Menu does now (and its Exit comes back to
+  JukaHub), and a settings folder an older JukaHub wrote gets it added. The
+  launcher also hands PPSSPP the TrimUI pad's own controller mapping, so PPSSPP
+  treats the pad as a game controller even when its controller database does
+  not know it — without that only the keyboard mapping was left. A PSP game in
+  JukaHub's PPSSPP that is ended with Select + Start within a minute of
+  starting marks that build as not working here, so the next PSP game opens in
+  the firmware's PPSSPP with a toast; choosing JukaHub's PPSSPP on the PSP tile
+  tries it again (`player/ppsspp_trimui_setup.go`, `player/ppsspp_managed.go`).
+
+- **PSP games start again on the TrimUI Smart Pro.** When JukaHub's own
+  PPSSPP was the PSP emulator, its launcher ran with JukaHub's home folder
+  and libraries instead of the firmware's, so even the firmware PPSSPP it
+  falls back to opened with a blank configuration. PSP games get the
+  firmware's environment again; the fallback starts the firmware launcher the
+  way a normal launch does; a game started in the first seconds after boot no
+  longer marks JukaHub's build as broken; and a build that does not start says
+  why: PPSSPP's last lines are in the toast, the launch card and
+  `jukahub-ppsspp.log` in the build's folder (`player/ppsspp_managed.go`).
+- **RetroArch games and saves are found on the handheld.** WonderSwan, Neo
+  Geo Pocket, Lynx, Atari, CPS, FBNeo, MAME and other systems said "no
+  launcher" even though the card had their emulator folder (Emus/WS,
+  Emus/NGP…); the Emus folder named like the game's Roms folder is now tried
+  first. Saves, save states and recordings written as `~/…` in
+  `retroarch.cfg` were looked for in JukaHub's app folder instead of
+  RetroArch's. Games started after JukaHub opens at boot now get the
+  firmware's tool and library folders (CrossMix's `System/bin` and
+  `System/lib`). When something is still missing, the launch card names the
+  missing library or where it looked for RetroArch, and the log lists the
+  folders checked (`player/game_library.go`, `player/savemanager.go`,
+  `player/childenv.go`, `player/gamelaunch_firmware.go`).
+- **Wi-Fi reconnects by itself on TrimUI.** The stock menu is what fetches an
+  address after the radio joins and re-selects a saved network after a drop;
+  it is not running under JukaHub, so nothing did. JukaHub now does it
+  (`player/wifi_keeper.go`): saved networks are joined again at start-up,
+  after sleep and when the router comes back, with backing-off retries, never
+  after you pressed Disconnect or turned Wi-Fi off, and never on a network
+  whose password was refused twice. Connecting from the Wi-Fi page works first
+  time more often: it waits longer for the slow radio, no longer asks again
+  for a password that was right, always fetches a fresh address, and never
+  starts a second wpa_supplicant. Each attempt is logged as `wifi: keeper:`.
+- **CI no longer sits on "Build optional offline AI".** The reuse check
+  still looked for the old 360M model after the switch to the 135M one, so
+  every push rebuilt llama.cpp; it now reads the model pins from
+  `build-llm.sh`. Every phase of the build is bounded: a stalled download is
+  cut off and retried (it could hang for 40 minutes), the compile and smoke
+  runs have time limits, and `llama-server` is killed if it ignores SIGTERM
+  instead of a bare `wait`. Each phase prints its elapsed time.
+- **Offline answers no longer stop at "3." in "3.14" or at "U.S.",** a long
+  or non-Latin question no longer makes every offline answer fail, and the
+  model is not loaded in the background when a game starts.
+- **Offline game hints start faster:** the model preloaded while you talk is
+  kept until your question arrives, and the in-game idle limit only starts
+  after an answer.
+- **Settings no longer offers an offline AI update that would download the
+  same files again,** and a fixed package re-enables the warm server.
+- **Hey Juka no longer switches itself off for the session when the SD card
+  is slow at startup,** and it no longer reloads the speech model again and
+  again during games that hold the microphone.
+- **Offline game hints are read out to the end** even when the model writes
+  slowly; "Dr.", "Mr." and similar no longer end a spoken sentence.
+- **A stalled offline-voice download stops after a minute** with a message
+  instead of sitting still for half an hour, and if Groq's voice does not
+  answer within 10 seconds the offline voice takes over.
 
 - **Restores and reloads keep current settings.** Backup and Recovery now
   merge against the live settings and playtime, a temporary read failure

@@ -123,3 +123,36 @@ func TestWebFlexBasisOverridesWidthAndShorthand(t *testing.T) {
 		t.Fatalf("flex: initial = grow %g, basis %g", style.FlexGrow, style.FlexBasis)
 	}
 }
+
+func TestWebFlexItemsKeepBackgroundLayersAndVideos(t *testing.T) {
+	legibleTestInitFonts(t)
+	source := `<style>` +
+		`.row{display:flex;gap:20px}.card{flex:1}` +
+		`.tinted{background-image:linear-gradient(#eef,#335)}` +
+		`</style><div class="row">` +
+		`<div class="card tinted">First</div>` +
+		`<div class="card">Second<video src="https://example.com/movie.mp4"></video></div>` +
+		`</div>`
+	layout := parseWebPage(source, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if layout == nil {
+		t.Fatal("flex page produced no layout")
+	}
+	gradients := 0
+	for _, bg := range layout.Backgrounds {
+		if bg.HasGradient {
+			gradients++
+		}
+	}
+	if gradients == 0 {
+		t.Fatal("a flex item's gradient background was dropped when its cell was merged into the page")
+	}
+	if len(layout.Videos) != 1 {
+		t.Fatalf("a video inside a flex item was dropped: got %d video cards", len(layout.Videos))
+	}
+	firstRow, firstX := webTestTextPosition(t, layout, "First")
+	secondRow, secondX := webTestTextPosition(t, layout, "Second")
+	if firstRow != secondRow || firstX >= secondX {
+		t.Fatalf("the two cards should share one row: First=(%d,%d) Second=(%d,%d)",
+			firstRow, firstX, secondRow, secondX)
+	}
+}

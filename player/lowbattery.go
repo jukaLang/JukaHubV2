@@ -195,12 +195,19 @@ func retroArchConfigCandidates() []string {
 // retroArchConfig reads the first readable candidate. It returns the text, the
 // path it came from, and whether one was found at all.
 func retroArchConfig() (text, path string, ok bool) {
-	for _, candidate := range retroArchConfigCandidates() {
+	candidates := retroArchConfigCandidates()
+	for _, candidate := range candidates {
 		data, err := os.ReadFile(candidate)
 		if err != nil {
 			continue
 		}
+		if raPathChanged("config", candidate) {
+			logInfo("emulators", "RetroArch config: %s", candidate)
+		}
 		return string(data), candidate, true
+	}
+	if raPathChanged("config", "") {
+		logWarn("emulators", "no readable retroarch.cfg in any of %s", strings.Join(candidates, ", "))
 	}
 	return "", "", false
 }

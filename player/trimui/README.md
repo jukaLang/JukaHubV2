@@ -156,6 +156,18 @@ written by the helper as the result, and `launch.sh` removes them all when it
 starts. `launch.sh` in the release package and in `Apps/JukaHub` must be
 identical — a test rejects the build if they differ.
 
+### JukaHub OS
+
+**Settings → JukaHub OS** runs JukaHub as the handheld's OS instead of an app:
+`launch.sh` starts `JukaHub --os-session` when `Apps/JukaHub/os/os.json` says
+`"enabled": true`, and JukaHub applies the layers you switched on (newer
+libraries for games, drivers built for this kernel, a few system values) in a
+private mount namespace and a RAM journal. Nothing on the firmware's partitions
+is written, the power card's Exit becomes **Return to CrossMix**, holding
+**Select or B** through the boot animation starts the stock menu for that boot,
+and a reboot always comes back to the stock system. Layer format, what is and
+is not touched, and recovery: [docs/JUKAHUB_OS.md](../../docs/JUKAHUB_OS.md).
+
 ---
 
 ## 3. If something goes wrong

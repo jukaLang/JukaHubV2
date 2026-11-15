@@ -216,7 +216,10 @@ func openLEDPanel() {
 	ledPanel.row = 0
 	ledPanel.hits = ledPanel.hits[:0]
 	// Live preview: the panel's values mean nothing until the loop writes them.
-	if !LEDSyncRunning() {
+	// A loop running only for Juka (ledjuka.go) becomes the preview's.
+	if ledJukaHandOver() {
+		ledPanel.forcedSync = true
+	} else if !LEDSyncRunning() {
 		if err := SetLEDSync(true); err == nil {
 			ledPanel.forcedSync = true
 		}

@@ -93,6 +93,8 @@ type setHubState struct {
 	searchRect  sdl.Rect // the Search entry, for the mouse
 	sheet       setSheetState
 	railRects   []sdl.Rect
+	railRect    sdl.Rect // the scrolling section list, for its scrollbar and tests
+	railBar     sdl.Rect
 	rowRects    []sdl.Rect
 	rowParts    []setCarouselParts
 	rowClip     []uint8
@@ -768,6 +770,7 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 // setHubDrawRail draws the section list.
 func setHubDrawRail(renderer *sdl.Renderer, c *Config, f setHubFonts, rail sdl.Rect, chrome bool) {
 	sections := setSections()
+	setHub.railBar = sdl.Rect{}
 	if rail.W <= 0 || rail.H <= 0 || len(sections) == 0 {
 		return
 	}
@@ -804,6 +807,7 @@ func setHubDrawRail(renderer *sdl.Renderer, c *Config, f setHubFonts, rail sdl.R
 		setHub.railRects = make([]sdl.Rect, len(sections))
 	}
 	setHub.railRects = setHub.railRects[:len(sections)]
+	setHub.railRect = rail
 
 	accent := glassAccent()
 	icon := itemH - 22
@@ -847,6 +851,17 @@ func setHubDrawRail(renderer *sdl.Renderer, c *Config, f setHubFonts, rail sdl.R
 			ink = ColorTextPrimary()
 		}
 		drawText(renderer, f.rail, ellipsize(f.rail, s.Title, r.X+r.W-12-tx), tx, r.Y+(r.H-textH)/2, ink, textAlignLeft)
+	}
+	// The rail scrolls with the selection; like every other scrolling list it
+	// needs a track, or the sections below the fold have no visible cue.
+	if total > rail.H {
+		setHub.railBar = sdl.Rect{X: rail.X + rail.W - 4, Y: rail.Y, W: 3, H: rail.H}
+		frac := 0.0
+		if maxScroll := total - rail.H; maxScroll > 0 {
+			frac = float64(setHub.railScroll) / float64(maxScroll)
+		}
+		drawScrollbar(renderer, setHub.railBar.X, setHub.railBar.Y, setHub.railBar.W, setHub.railBar.H,
+			float64(rail.H)/float64(total), frac)
 	}
 	_ = renderer.SetClipRect(nil)
 }
@@ -1069,7 +1084,7 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 	}
 	labelInk, detailInk := ColorTextPrimary(), ColorTextMuted()
 	if v.disabled {
-		labelInk, detailInk = ColorTextTertiary(), WithAlpha(ColorTextTertiary(), 200)
+		labelInk, detailInk = ColorTextTertiary(), ColorTextTertiary()
 	}
 	lh, dh := int32(f.label.Height()), int32(f.detail.Height())
 	label := ellipsize(f.label, row.Label, avail)

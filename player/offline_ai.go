@@ -34,6 +34,7 @@ const (
 	offlineAIStartMB       = 220
 	offlineAILegacyStartMB = 360
 	offlineAIReplyRunes    = 420
+	offlineAIQuestionRunes = 400 // about 100 tokens: fits -c 384 beside the system prompt and the reply
 	offlineAITimeout       = 60 * time.Second
 	offlineAIOutputMax     = 8 << 10
 )
@@ -122,6 +123,12 @@ func offlineAIStartNeedMB(model string) uint64 {
 	return offlineAIStartMB
 }
 
+// offlineAIGameBlocks reports whether a game runs without the assistant
+// paused over it: the model must not load beside it. Any goroutine.
+func offlineAIGameBlocks() bool {
+	return runningGameChildren.Load() > 0 && !gameAssistOverlayActive()
+}
+
 func offlineAICheckMemory(model string) error {
 	if freeMemoryMB() < offlineAIStartNeedMB(model) {
 		return errOfflineAIMemory
@@ -141,6 +148,16 @@ func offlineAIPrompt(question string, unmatchedAction bool) string {
 
 func offlineAIChatPrompt(system, question string) string {
 	clean := strings.NewReplacer("<|im_start|>", " ", "<|im_end|>", " ")
+	// A long dictation would not fit the small context with the instructions
+	// and the answer: the runner then refuses every try.
+	if utf8.RuneCountInString(question) > offlineAIQuestionRunes {
+		question = string([]rune(question)[:offlineAIQuestionRunes])
+	}
+	// Bytes too: in Cyrillic or CJK 400 runes are far more tokens.
+	for len(question) > offlineAIQuestionRunes {
+		_, n := utf8.DecodeLastRuneInString(question)
+		question = question[:len(question)-n]
+	}
 	return "<|im_start|>system\n" + clean.Replace(system) + "<|im_end|>\n" +
 		"<|im_start|>user\n" + clean.Replace(question) + "<|im_end|>\n<|im_start|>assistant\n"
 }
@@ -164,7 +181,7 @@ func offlineAIGamePrompt(game, platform, question string) string {
 // offlineAIArgs is the one-shot runner's command line (no server in the
 // package, or it would not start): all four cores, nothing else runs then.
 func offlineAIArgs(model, prompt string) []string {
-	return []string{"-m", model, "-p", prompt, "-n", strconv.Itoa(offlineAIPredict), "-c", "256", "-b", "64", "-ub", "64",
+	return []string{"-m", model, "-p", prompt, "-n", strconv.Itoa(offlineAIPredict), "-c", "384", "-b", "64", "-ub", "64",
 		"-t", "4", "-ngl", "0", "--temp", "0.2", "--no-conversation", "--single-turn",
 		"--no-display-prompt", "--no-warmup", "--simple-io"}
 }
@@ -222,13 +239,23 @@ func (w *offlineAIStreamWriter) Write(p []byte) (int, error) {
 	_, _ = w.raw.Write(p)
 	if w.sentence == "" && utf8.Valid(w.raw.Bytes()) {
 		partial := offlineAIClean(w.raw.String())
+		first := offlineAIFirstSentence(partial)
+		// A stop that ends the words so far may be "3." of "3.14" or "U." of
+		// "U.S.": it counts once the next token shows a space after it. The
+		// end of the stream keeps the whole text anyway (offlineAIResult).
+		if first != "" && len(first) == len(partial) && !offlineAIEndsInSpace(w.raw.Bytes()) {
+			first = ""
+		}
+		if first != "" {
+			partial = first
+		}
 		if partial != "" && partial != w.last {
 			w.last = partial
 			if w.onPartial != nil {
 				w.onPartial(partial)
 			}
 		}
-		if first := offlineAIFirstSentence(partial); first != "" {
+		if first != "" {
 			w.sentence = first
 			if w.stop != nil {
 				w.stop()
@@ -236,6 +263,19 @@ func (w *offlineAIStreamWriter) Write(p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// offlineAIEndsInSpace reports whether raw output ends with white space, so
+// its last word is complete. Pure.
+func offlineAIEndsInSpace(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	switch raw[len(raw)-1] {
+	case ' ', '\n', '\t', '\r':
+		return true
+	}
+	return false
 }
 
 func offlineAIAnswer(ctx context.Context, question string, unmatchedAction bool, onPartial func(string)) (string, error) {
@@ -267,6 +307,13 @@ func offlineAIAnswerPrompt(ctx context.Context, prompt string, onPartial func(st
 		}
 		logWarn("voice", "offline AI server could not answer (%v); using the one-shot runner", err)
 		output = &offlineAIStreamWriter{onPartial: onPartial}
+	}
+	// The server also stops when a game starts: the question went with it.
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if offlineAIGameBlocks() {
+		return "", errOfflineAIMemory
 	}
 	if err := offlineAICheckMemory(model); err != nil {
 		return "", err

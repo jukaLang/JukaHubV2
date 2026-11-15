@@ -51,6 +51,8 @@ const (
 	// 200-character chunk is about 0.7 MB of 24 kHz audio).
 	ttsGroqTimeout  = 30 * time.Second
 	ttsGroqMaxBytes = 16 << 20
+	// ttsGroqAnswerMax bounds the wait for Groq to start answering a request.
+	ttsGroqAnswerMax = 10 * time.Second
 	// ttsGroqShortWait is the longest per-minute wait sat out in the middle of
 	// an answer; ttsGroqDayRest is how long a daily limit rests the voice when
 	// Groq does not say.
@@ -139,17 +141,28 @@ func ttsGroqRequest(ctx context.Context, key, voice, text string) ([]int16, int,
 	if err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ttsGroqEndpoint, bytes.NewReader(body))
+	// Groq answers a chunk in a second or two. One that has not begun to answer
+	// by ttsGroqAnswerMax is given up, so the device's voice takes over while
+	// the user still waits, not after the whole ttsGroqTimeout.
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+	slow := time.AfterFunc(ttsGroqAnswerMax, cancelReq)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ttsGroqEndpoint, bytes.NewReader(body))
 	if err != nil {
+		slow.Stop()
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "audio/wav")
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := ttsGroqHTTP.Do(req)
+	late := !slow.Stop()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, 0, ctx.Err()
+		}
+		if late {
+			return nil, 0, &ttsError{fail: ttsFailServer, msg: "Groq's voice did not answer in time", err: err}
 		}
 		fail := ttsFailServer
 		if plainNetworkError(err) == offlinePlainNotice {

@@ -755,7 +755,7 @@ func (h *HomeLayout) homeBrandOrAvatar(renderer *sdl.Renderer, config *Config, f
 	}
 	d := min32(scaleX(homeSwAvatarD, h.Width), scaleY(homeSwAvatarD, h.Height))
 	d = min32(d, barH)
-	r := sdl.Rect{X: StatusBarMargin, Y: max32(2, (barH-d)/2+scaleY(4, h.Height)), W: d, H: d}
+	r := sdl.Rect{X: headerBrandX(), Y: max32(2, (barH-d)/2+scaleY(4, h.Height)), W: d, H: d}
 	h.switchDrawAvatar(renderer, config, fonts, r)
 	homeSwitch.avatar = r
 	return r.X + r.W

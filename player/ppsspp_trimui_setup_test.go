@@ -15,7 +15,9 @@ func TestPPSSPPTrimuiHomeRepairsKeyboardAndGraphics(t *testing.T) {
 	if err := os.WriteFile(graphics, []byte("[General]\nLanguage = en_US\n[Graphics]\nGraphicsBackend = 3 (VULKAN)\nDisplayAspectRatio = 0.848000\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(controls, []byte("[ControlMapping]\nCross = 1-44\nCircle = 1-27\n"), 0o644); err != nil {
+	// Pause = 10-109 is what an older JukaHub wrote: a code PPSSPP's SDL front
+	// end never sends, so Menu (10-4) is added beside it.
+	if err := os.WriteFile(controls, []byte("[ControlMapping]\nCross = 1-44\nCircle = 1-27\nPause = 10-109\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ppssppPrepareTrimuiHome(sys, "tg5040")
@@ -24,7 +26,8 @@ func TestPPSSPPTrimuiHomeRepairsKeyboardAndGraphics(t *testing.T) {
 		t.Fatalf("graphics were not repaired without losing settings: %s", gotGraphics)
 	}
 	gotControls, _ := os.ReadFile(controls)
-	if !strings.Contains(string(gotControls), "Cross = 1-44,10-189") || !strings.Contains(string(gotControls), "An.Up = 10-4003") {
+	if !strings.Contains(string(gotControls), "Cross = 1-44,10-189") || !strings.Contains(string(gotControls), "An.Up = 10-4003") ||
+		!strings.Contains(string(gotControls), "Pause = 10-109,10-4") {
 		t.Fatalf("keyboard and pad were not both mapped: %s", gotControls)
 	}
 	ppssppPrepareTrimuiHome(sys, "tg5040")
@@ -46,11 +49,13 @@ func TestPPSSPPFirstManagedLaunchRepairsExistingHome(t *testing.T) {
 	ppssppMgr.mu.Unlock()
 	cmd := exec.Command("sh", b.script())
 	ppssppPrepareManagedLaunch(b.script(), cmd)
-	foundVideo := false
-	for _, item := range cmd.Env {
-		foundVideo = foundVideo || item == "SDL_VIDEODRIVER=mali"
+	// The video driver is set in the script, on PPSSPP's command alone
+	// (TestPPSSPPLauncherScript): the launch keeps the environment JukaHub
+	// gives every game, so a fallback sees the firmware's.
+	if cmd.Env != nil {
+		t.Fatal("the PSP launch got its own environment")
 	}
-	if !foundVideo || !regularFile(filepath.Join(b.memstick(), "SYSTEM", "controls.ini")) ||
+	if !regularFile(filepath.Join(b.memstick(), "SYSTEM", "controls.ini")) ||
 		!regularFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")) {
 		t.Fatal("the first game did not prepare the managed PPSSPP before launch")
 	}

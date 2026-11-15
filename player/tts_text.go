@@ -39,6 +39,11 @@ const (
 	// Even a single long sentence starts with a small piece, so Piper can
 	// play it while the rest of the line is being rendered.
 	ttsFirstChunkMax = 64
+	// ttsPiperLineMax is the longest line Piper is given (ttsPiperLines). On
+	// the Smart Pro Piper renders about as fast as it speaks, and it hands a
+	// line back only when all of it is made: a piece much longer than the one
+	// playing leaves a silence while it is still being rendered.
+	ttsPiperLineMax = 80
 	// ttsInlineCodeMax is the longest inline code that is still read out.
 	ttsInlineCodeMax = 40
 	// ttsRestOnScreen is said when an answer was cut short.
@@ -174,6 +179,9 @@ func ttsSentences(s string) []string {
 			!strings.ContainsRune(`"'“‘(«`, rs[next]) {
 			continue
 		}
+		if next < len(rs) && rs[i] == '.' && ttsAbbrevBefore(rs[start:i]) {
+			continue
+		}
 		if t := strings.TrimSpace(string(rs[start:end])); t != "" {
 			out = append(out, t)
 		}
@@ -186,6 +194,24 @@ func ttsSentences(s string) []string {
 		}
 	}
 	return out
+}
+
+// ttsAbbrevs are the title abbreviations a full stop does not end a sentence
+// after ("Dr. Smith"), lower case.
+var ttsAbbrevs = map[string]bool{"mr": true, "mrs": true, "ms": true, "dr": true, "prof": true, "vs": true}
+
+// ttsAbbrevBefore reports whether the text before a full stop ends in a title
+// abbreviation, which the stop does not end a sentence after. A single capital
+// does end one: "Press A. Then jump." is two.
+func ttsAbbrevBefore(rs []rune) bool {
+	j := len(rs)
+	for j > 0 && unicode.IsLetter(rs[j-1]) {
+		j--
+	}
+	if j > 0 && rs[j-1] != ' ' {
+		return false // "U.S.", "e.g."
+	}
+	return j < len(rs) && ttsAbbrevs[strings.ToLower(string(rs[j:]))]
 }
 
 // ttsCap keeps the sentences that fit in limit characters, and says that the
@@ -257,6 +283,20 @@ func ttsSplitFirst(s string, max int) []string {
 	first := firstPieces[0]
 	rest := strings.TrimSpace(s[len(first):])
 	return append([]string{first}, ttsSplitLong(rest, max)...)
+}
+
+// ttsPiperLines cuts a chunk into the lines Piper is given, one sound each:
+// its sentences, and a long sentence at a pause (or a space) so no line is
+// longer than ttsPiperLineMax bytes. Nothing is dropped. Pure.
+func ttsPiperLines(chunk string) []string {
+	var out []string
+	for _, s := range ttsSentences(chunk) {
+		out = append(out, ttsSplitLong(s, ttsPiperLineMax)...)
+	}
+	if len(out) == 0 && strings.TrimSpace(chunk) != "" {
+		out = []string{strings.TrimSpace(chunk)}
+	}
+	return out
 }
 
 // ttsSplitLong cuts a sentence longer than max bytes into pieces that fit:

@@ -17,3 +17,9 @@ func wifiRenewLease(string) string { return "" }
 
 // udhcpcPIDFor finds nothing: there is no udhcpc off Linux.
 func udhcpcPIDFor(string) int { return 0 }
+
+// wifiSignalRenew has no udhcpc to signal off Linux.
+func wifiSignalRenew(string) bool { return false }
+
+// supplicantPIDFor finds nothing: off Linux no wpa_supplicant is started.
+func supplicantPIDFor(string) int { return 0 }

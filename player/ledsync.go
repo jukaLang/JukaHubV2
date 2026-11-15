@@ -844,8 +844,12 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 		case <-ticker.C:
 			// While a game owns the screen there is no JukaHub UI to light: keep
 			// the frame clock but stop writing sysfs thirty times a second. See
-			// backgroundwork.go.
-			if backgroundPaused() {
+			// backgroundwork.go. The one exception is Juka over a paused game
+			// (the in-game assistant): its layer draws until it has faded out
+			// (ledjuka.go).
+			now := time.Now()
+			overGame := backgroundPaused()
+			if overGame && !ledJukaHolds(now) {
 				// Hand the lights back once instead of leaving them frozen on
 				// the last frame: the rings get the firmware's colour, the
 				// others go dark. The first frame back repaints everything.
@@ -861,7 +865,8 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 				}
 				continue
 			}
-			rawR, rawG, rawB := ledFrameColor(currentLEDLoopSettings(), time.Now())
+			// The user's mode, with Juka's layer over it (ledjuka.go).
+			rawR, rawG, rawB := ledJukaFrame(currentLEDLoopSettings(), now, overGame)
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
 			r, g, b := quantiseLEDChannel(rawR), quantiseLEDChannel(rawG), quantiseLEDChannel(rawB)

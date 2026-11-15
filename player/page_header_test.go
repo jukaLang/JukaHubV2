@@ -29,6 +29,24 @@ func TestStatusBarNamesTheBrandOnly(t *testing.T) {
 	}
 }
 
+// TestHeaderBrandUsesEachCanvasGutter keeps the wordmark on the same left
+// margin as the greeting, search pill and page content: 32px on the wide
+// design canvas and the scaled 24px gutter on the compact 960 canvas.
+func TestHeaderBrandUsesEachCanvasGutter(t *testing.T) {
+	oldW, oldH := screenWidth, screenHeight
+	t.Cleanup(func() { screenWidth, screenHeight = oldW, oldH })
+	screenHeight = 720
+	for _, c := range []struct {
+		width int32
+		want  int32
+	}{{1280, 32}, {960, 24}} {
+		screenWidth = c.width
+		if got := headerBrandX(); got != c.want {
+			t.Fatalf("%d-wide brand margin = %d, want %d", c.width, got, c.want)
+		}
+	}
+}
+
 // TestPageHeaderTitlesAreAtLeastHeading drives the real title resolver: the
 // default page title is a Heading, and a larger role or size is a Title.
 // TestCenteredPageHeaderLinesFitTheBand covers the centered header path: it

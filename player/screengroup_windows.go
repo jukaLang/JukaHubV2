@@ -46,3 +46,6 @@ func screenChildSignal(cmd *exec.Cmd, kind screenSignal) error {
 func screenChildKill(cmd *exec.Cmd) error { return screenChildSignal(cmd, screenSignalKill) }
 
 func screenChildGroupAlive(cmd *exec.Cmd) bool { return false }
+
+// screenChildGroupNames has no group to list on Windows.
+func screenChildGroupNames(cmd *exec.Cmd) string { return "" }

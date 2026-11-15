@@ -61,7 +61,7 @@ func offlineAIPackProbe(dir string) string {
 // larger model or lacks a warm server. It still answers while an update is
 // available from Settings or after an offline answer on Wi-Fi.
 func offlineAIOutdated() bool {
-	if !offlineAIReady() {
+	if !offlineAIReady() || offlineAINewestInstalled {
 		return false
 	}
 	server, model := offlineAIServerFiles()
@@ -73,6 +73,11 @@ func offlineAIOutdated() bool {
 
 // offlineAIUpgradeTried keeps the automatic update to one try per run.
 var offlineAIUpgradeTried bool
+
+// offlineAINewestInstalled: the newest release is the installed build, even
+// though it is still an older kind of package. Settings then stops offering
+// an update that would download the same files again. Main thread.
+var offlineAINewestInstalled bool
 
 // offlineAIMaybeUpgrade updates an outdated package once per run, after an
 // offline answer, when Wi-Fi is up, nothing else is installing and the newest
@@ -94,6 +99,7 @@ func offlineAIMaybeUpgrade() {
 		}
 		if installed, ok := relPackRead(dir); ok && !relPackNewer(installed, latest) {
 			logDebug("voice", "offline AI: the newest release has the installed build")
+			tbxPost(func() { offlineAINewestInstalled = true })
 			return
 		}
 		tbxPost(func() {
@@ -190,6 +196,11 @@ func offlineAIStartInstall() {
 				// A server started from the old files lets go; the next
 				// question loads the new ones.
 				offlineAIServerStop("package updated")
+				offlineAIServerResetFails()
+				// The release just installed is the newest: if it is still
+				// the older kind, Settings must not offer it again.
+				offlineAINewestInstalled = false
+				offlineAINewestInstalled = offlineAIOutdated()
 				installBarDoneRun(gen)
 				ShowToast("Offline AI ready — try asking Juka a question", ToastKindInfo)
 			}
