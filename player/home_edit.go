@@ -53,12 +53,12 @@ import (
 )
 
 const (
-	// The strip's chips after the four layouts: Top bar (the row that
-	// arranges the top bar, home_edit_header.go), Reset and Done.
-	homeEditStripBar   = 4
-	homeEditStripReset = 5
-	homeEditStripDone  = 6
-	homeEditStripCount = 7
+	// The strip's chips after the layouts: Top bar (the row that arranges
+	// the top bar, home_edit_header.go), Reset and Done.
+	homeEditStripBar   = len(homeArrangementChoiceList)
+	homeEditStripReset = homeEditStripBar + 1
+	homeEditStripDone  = homeEditStripBar + 2
+	homeEditStripCount = homeEditStripBar + 3
 
 	// homeEditResetArmMS is how long Reset waits for its second press.
 	homeEditResetArmMS = 3000
@@ -199,6 +199,12 @@ func homeEditPendingCheck(config *Config) {
 func homeEditBegin(config *Config) {
 	homeEdit.pending = false
 	if homeLayout == nil || config == nil {
+		return
+	}
+	// The Tabs Home is arranged by its own sheet: the tabs, their views and
+	// the layout (hometabs_edit.go).
+	if homeArrangement(config) == homeArrangementTabs && homeTabsOn() {
+		homeTabsEditToggle(config)
 		return
 	}
 	// Standard and the Hero grid have nothing to arrange: Home shows Widgets
@@ -1401,6 +1407,10 @@ func homeWheel(config *Config, dy int32) bool {
 	if homeEdit.open && (homeEdit.holding || homeEdit.resizing || homeEdit.press.active) {
 		return true
 	}
+	// The Tabs Home walks its page (hometabs.go).
+	if homeTabsOn() {
+		return homeLayout.tabsWheel(dy)
+	}
 	return homeLayout.dynWheel(dy)
 }
 
@@ -1408,6 +1418,10 @@ func homeWheel(config *Config, dy int32) bool {
 // or Carousel Home.
 func homeRightClick(config *Config, mx, my int32) bool {
 	h := homeLayout
+	// On the Tabs Home a right click is X: the item's sheet (hometabs.go).
+	if homeTabsOn() && homeOwnsPointer() {
+		return homeTabsRightClick(config, mx, my)
+	}
 	if !homeLayoutActive || h == nil || !h.dynActive() {
 		return false
 	}
@@ -1587,6 +1601,9 @@ func (h *HomeLayout) homeFooterHintSet(showBack bool) [len(homeFooterHintsStart)
 			set[6] = footerHint{button: "B", label: "Back"}
 		}
 		return homeFooterL2(set)
+	case h.tabsActive() && homeTabs.on:
+		// The Tabs Home's row (hometabs.go).
+		return homeFooterL2(homeTabsFooter(showBack))
 	case showBack:
 		return homeFooterL2(homeFooterHintsBack)
 	}
@@ -1698,6 +1715,8 @@ func homeEditCaption(arrangement string) string {
 		return "Move, resize, add and remove tiles"
 	case homeArrangementCarousel:
 		return "Reorder, add and remove cards"
+	case homeArrangementTabs:
+		return "Press Done, then Edit on the Tabs Home to arrange its tabs"
 	}
 	return "This layout keeps its cards in place: pick Carousel or Widgets to change them"
 }

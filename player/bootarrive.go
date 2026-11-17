@@ -620,7 +620,9 @@ func (r *bootOSRun) drawArrival(ms, am float64) {
 	if b == nil {
 		b = &bootArriveQuick
 	}
-	f := bootOSTimeline(ms, r.powerOn, r.motion, r.continuity)
+	// The boot's layer as its style has it (bootstyles.go): the buzzes stay
+	// with the hold.
+	f := r.frame(ms, false)
 	// The boot's backdrop is only drawn while something of it still shows:
 	// once Home's opaque backdrop (or the whole first screen, in place) covers
 	// it, it is several screens of fill nobody sees.

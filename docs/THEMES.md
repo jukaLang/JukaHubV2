@@ -119,6 +119,61 @@ pills, and panes over videos or games get the light and rim but not the blur.
 Realistic is off while Reduce Transparency or High contrast is on. It is stored
 as `"glassStyle": "classic" | "realistic"` in the custom variables.
 
+## Liquid glass concepts
+
+These images are design concepts, not screenshots: they show where Realistic
+glass could go next, and none of them is a shipping screen yet. Each pane is
+drawn the way Realistic describes it (blurred and slightly magnified backdrop,
+top sheen, a rim lit from the top left with a glint on the far corner, a soft
+shadow), plus one thing the current renderer does not do: the last few pixels
+of every edge bend the scene like the rim of a lens, with a faint colour
+fringe. All data is made up (9:41, "HomeNet", the games and their art). They
+are rendered by `branding/mkglass_concepts.py`; run
+`python3 branding/mkglass_concepts.py` to redraw them after a change.
+
+<p><img src="assets/glass-concept-1-home.png" alt="Concept: the Home dashboard with every card in realistic liquid glass over the navy backdrop's cyan and violet lights; the Continue card shows original synthwave art with a glass Resume pill and play button on top"></p>
+
+**Liquid Home.** The Home dashboard with every card, the search pill and the
+footer in Realistic glass. The backdrop's lights show through each card, so
+the row of cards shades from cyan on the left to violet on the right. The
+Continue card keeps its artwork; only the chip, the play button and the
+Resume pill are glass, and they bend the art under them. The icon wells are a
+second, smaller layer of glass on each card.
+
+<p><img src="assets/glass-concept-2-dock.png" alt="Concept: a carousel of square game covers with the focused one larger and ringed in white, and a floating glass dock at the bottom whose Games slot carries a magnifying glass lens"></p>
+
+**Floating dock with a lens.** The Carousel layout with a floating glass dock
+in place of the footer. The covers sink a little behind the dock, so their
+colours run through it (the orange kart cover glows in the middle). The
+focused slot is a clear lens rather than a highlight: it magnifies the icon
+under it, and moving with L1/R1 would slide the lens along the dock.
+
+<p><img src="assets/glass-concept-3-quick-settings.png" alt="Concept: a Quick Settings sheet in liquid glass over a dimmed Home, with round glass toggles for Wi-Fi, Bluetooth, Airplane, Focus, Share screen and Rumble, two glass sliders with liquid fills, a now-playing card and three power pills"></p>
+
+**Quick Settings sheet.** Quick Settings as one large pane over a dimmed Home.
+Toggles are glass drops that fill with the accent when on; the focused one
+takes the white ring. Brightness and Volume are glass capsules with a light
+liquid fill and a clear thumb that magnifies the edge of the fill. Today's
+overlay sheets get the rim but no blur, so this one would need the blurred
+backdrop cached when the sheet opens.
+
+<p><img src="assets/glass-concept-4-in-game.png" alt="Concept: the in-game menu as a clear dark glass pane over an original pixel-art platformer, with Resume highlighted in an accent glass pill, and a glass toast reading Saved to slot 2"></p>
+
+**In-game menu over a running game.** The hold Select + L2 menu as clear glass:
+over games the pane bends and magnifies the frame but does not blur it, which
+keeps it cheap and keeps the game readable as context. A dark tint carries the
+text. The "Saved to slot 2" toast uses the same glass.
+
+<p><img src="assets/glass-concept-5-variants.png" alt="Concept: the Games tile six times, in Clear, Tinted and Reduce Transparency, on a dark theme in the top row and a light theme in the bottom row, over stripes that show the bending"></p>
+
+**Clear, Tinted and Reduce Transparency.** The same Games tile on a dark and a
+light theme. Clear is Realistic as it is now; Tinted mixes the accent into the
+glass (iOS 26's tinted option) so text sits on a steadier colour; Reduce
+Transparency drops the glass for an opaque surface with a hairline edge. The
+stripes behind are there to show how much each one bends and blurs. Tinted
+would be a third value of `glassStyle`; Reduce Transparency already exists and
+already turns Realistic off.
+
 ## Glass rules
 
 Glass is derived from the theme's `background` and `info` accent rather than

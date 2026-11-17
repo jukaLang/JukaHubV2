@@ -252,6 +252,16 @@ booted, which the kernel's boot id recorded with each first frame
 logo**) keeps its record in `Apps/JukaHub/data/bootlogo/state.json`, not in
 `jukauser.json`; see [BOOT.md](BOOT.md).
 
+`bootStyle` (Settings → General → **Boot animation**) chooses what the logo
+does in that boot: `cinematic` (the default: it crashes onto a cracking floor,
+with a buzz of the vibration motor and a knock in the chime), `roll` (it rolls
+in on its rounded corners), `image` (the logo still), `classic` (the glass
+light running round the pane), `random` (cinematic, roll or classic, a
+different one each start) or `none` (no boot animation and no quick hello: the
+fastest start, `startupAnimation` then has no effect). Reduce motion switched
+on by hand, and battery saver, play `cinematic` and `roll` as `image`; an app
+launch plays a short version of the style. See [BOOT.md](BOOT.md).
+
 The startup lock (Settings → Privacy & data → **Startup lock**) keeps four
 custom keys. `startupLockSecret` is the salted PBKDF2-SHA256 hash,
 `jhlock1$<kind>$<iterations>$<salt>$<key>` with kind `code` (a button code) or
@@ -478,14 +488,15 @@ config-customizable.
 
 ### Home arrangements and total conversions
 
-The home screen has five arrangements, chosen with the `homeArrangement`
+The home screen has six arrangements, chosen with the `homeArrangement`
 custom variable. **Settings → Display & theme → Home layout** and the strip at
 the top of Home's edit mode ([CONTROLS.md](CONTROLS.md#home-layouts)) offer
-four of them: Standard, Hero grid, Carousel and Widgets.
+five of them: Tabs, Standard, Hero grid, Carousel and Widgets.
 
 | Value | In Settings | What it is |
 |---|---|---|
-| `custom` (default, and any unset or unknown value) | Standard | the scene's own tiles decide where the cards are — the arrangement described above |
+| `tabs` (default when unset; `tab`, `jukaos` and `v2` are read as `tabs`) | Tabs | the Tabs Home of JukaOS v2: a strip of tabs (Recent, Main, Games, Entertainment, Favourites, Collections) in the top bar over a page of tiles — see [HOME_TABS.md](HOME_TABS.md) |
+| `custom` (and any unknown value) | Standard | the scene's own tiles decide where the cards are — the arrangement described above |
 | `dashboard` | Standard | the built-in composition: the wide Continue card with the smaller cards beside it |
 | `grid` | Hero grid | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |
 | `carousel` | Carousel | one row of big cards centred on the focused one and wrapping around, with its title and description under it and a row of position dots; the cards are the tiles of `homeTiles` (below), in order, all at one size |
@@ -501,7 +512,23 @@ cannot be edited on the device; **Edit Home** (L2 on Home) opened on one of
 them switches to Widgets first, and back again when editing ends with nothing
 changed.
 
-An experience pack's `homeLayout` takes the same five values. A pack picks the
+The Tabs Home keeps its own state in four more custom variables:
+`homeTabViews` (`"<tab or folder>=<view>"` pairs split by `;`, views `grid`,
+`row`, `list`, `carousel`, `compact`; folder keys `store` and `col:<id>`),
+`homeTabsShown` (the tab IDs in order, comma-separated, `-` before a hidden
+one; a tab it does not name is shown at the end), `homeTabsRemember` (`true`
+by default: open on the last tab; `false` opens on Main) and `homeTabLast` (the
+tab to come back to — bookkeeping, left out of the config document). Its Games
+tab reads `homeTabsEmuClean` (Settings → Games & emulators → **Hide emulators
+without games**): `auto` (the default) hides consoles with no games and dims a
+console whose games have no emulator with an Install badge; `all` lists every
+console this device has an emulator for, empty ones as "0 games" (`on`, `off`,
+`true` and `false` are read too). Collections and non-game favourites live in
+`collections.json` ([Other JSON stores](#other-json-stores)). The keys, tab
+IDs and examples are in [HOME_TABS.md](HOME_TABS.md#settings-keys).
+
+An experience pack's `homeLayout` takes the same values except `tabs` (the pack
+validator drops it today, so such a pack leaves the user's layout alone). A pack picks the
 arrangement, never the tiles: on `carousel` or `widgets` Home shows the user's
 own `homeTiles`.
 
@@ -819,6 +846,7 @@ log.
 | `power-scripts.json` | Toolbox snippets (mode 0600) |
 | `terminal_history` | terminal history (a text file, one command per line) |
 | `notes.json`, `jukaalarm.json` | notes and alarms |
+| `collections.json` | the Tabs Home's collections and its non-game favourites: `{"version":1,"collections":[{"id","name","items":[{"ref","title"}],"created"}],"favourites":[{"ref","title"}]}`. Refs are `game:<path>`, `sys:<console>`, `app:scene:…`, `app:do:…` or a Home card ID (`col:<id>` only among favourites). At most 100 collections of 500 items, 500 favourites, names up to 40 characters. A damaged file is restored from the `.bak` and kept as `collections.json.corrupt`. Game favourites are not here: they are the Favorite tag in `game-meta/games.json` |
 
 Three files are read but never written by the player, so there is no backup to
 fall back to and the loaders say so instead: `game-launchers.json` (per-console
@@ -830,7 +858,9 @@ app `config.json` manifests owned by other software.
 Caches are deliberately **not** backed up: `weather_cache`, the
 RetroAchievements cache, the artwork-miss store, the patch `db.json` and the
 emulator-update `source.json` are rebuilt from their source, so a reset costs a
-refetch, not a user's work. They are still written atomically where the writer
+refetch, not a user's work. `bt-output-volume.json` (the volume the speaker and
+each Bluetooth headset, by address, were last left at) has no backup either: a
+lost file only means each output starts at the current level once. They are still written atomically where the writer
 already did so.
 
 ## Privacy and diagnostics

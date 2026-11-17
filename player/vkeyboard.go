@@ -334,7 +334,7 @@ func vkActionLabel() string {
 		}
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
-		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL:
+		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget:
 		return "Save"
 	case bootLockVKTarget:
 		return bootLockKeyboardAction()
@@ -893,6 +893,8 @@ func vkCurrentText() string {
 		return apkStoreUI.fdroidQuery
 	case alarmLabelVKTarget:
 		return alarmLabelBuffer
+	case homeTabsNameVKTarget:
+		return homeTabsNameBuffer
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
 	case bootLockVKTarget:
@@ -972,6 +974,9 @@ func vkSetText(text string, config *Config) {
 	case alarmLabelVKTarget:
 		// The editor takes the label on Done only (alarmLabelSubmit).
 		alarmLabelBuffer = text
+	case homeTabsNameVKTarget:
+		// A collection is made or renamed on Done only (hometabs_collections_ui.go).
+		homeTabsNameBuffer = text
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -1172,6 +1177,8 @@ func vkTitle() string {
 		return "SEARCH F-DROID"
 	case alarmLabelVKTarget:
 		return "ALARM LABEL"
+	case homeTabsNameVKTarget:
+		return homeTabsNameKeyboardTitle()
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -1309,6 +1316,8 @@ func vkPlaceholder() string {
 		return "App name or package"
 	case alarmLabelVKTarget:
 		return "Wake up, Medicine, Bus…"
+	case homeTabsNameVKTarget:
+		return "Couch co-op, RPGs to finish…"
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -1422,8 +1431,8 @@ func vkOpenName() {
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
-	// The shared name (Settings → Your name), empty when unset, so the field
-	// does not open holding the "You" placeholder.
+	// The shared name (Settings → Your name) stays empty when unset, so the
+	// field does not open holding the generated chat name.
 	vkNameBuffer = userName(appConfig)
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
@@ -1932,6 +1941,9 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == alarmLabelVKTarget {
 		alarmLabelBuffer = ""
+	}
+	if vkTarget == homeTabsNameVKTarget {
+		homeTabsNameBuffer = ""
 	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
@@ -2476,6 +2488,10 @@ func vkSubmit(config *Config, askAI bool) {
 		// the editor's label as it was.
 		vkCloseKeyboard()
 		alarmLabelSubmit(text)
+	case homeTabsNameVKTarget:
+		// The same: B leaves the collections as they were.
+		vkCloseKeyboard()
+		homeTabsNameSubmit(text)
 	case vkTargetDownloads:
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.
@@ -2501,11 +2517,11 @@ func vkSubmit(config *Config, askAI bool) {
 		}
 	case vkTargetName:
 		// The chat's name is the user's name (Settings → Your name, the Home
-		// greeting). Empty input clears it and the chat signs as "You".
+		// greeting). Empty input clears it and chat uses the device name.
 		name := setChatDisplayName(text)
 		vkCloseKeyboard()
 		if userName(appConfig) == "" {
-			showToast("Name cleared · Chat signs as You", ToastInfo())
+			showToast("Name cleared · Chat signs as "+name, ToastInfo())
 		} else {
 			showToast("Name set to "+name+" · Home and Settings use it too", ToastInfo())
 		}

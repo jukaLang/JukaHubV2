@@ -4,6 +4,8 @@ package main
 // what a nearby device can make the bluetoothctl session do.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -146,5 +148,59 @@ func TestBzValidMACRefusesAnythingElse(t *testing.T) {
 		if mac, ok := bzValidMAC(bad); ok {
 			t.Errorf("bzValidMAC(%q) accepted %q", bad, mac)
 		}
+	}
+}
+
+// What the kernel and BlueALSA say about a connected device (bt_padinfo.go):
+// a pad battery by percent or by level word, never the handheld's own
+// battery; the order pads connected in; a headset's codec by name or number.
+func TestBtDeviceFactsFromTheSystem(t *testing.T) {
+	root := t.TempDir()
+	write := func(dir string, files map[string]string) {
+		for name, body := range files {
+			path := filepath.Join(root, dir, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	write("ps-controller-battery-aa_bb_cc_dd_ee_01", map[string]string{"type": "Battery", "scope": "Device", "capacity": "80", "status": "Discharging"})
+	write("nintendo_switch_controller_battery_x", map[string]string{"type": "Battery", "scope": "Device", "capacity_level": "Low",
+		"device/uevent": "HID_NAME=Pro Controller\nHID_UNIQ=aa:bb:cc:dd:ee:02"})
+	write("axp2202-battery", map[string]string{"type": "Battery", "capacity": "50"})
+	got := btBatteryByMAC(btPadBatteriesIn(root))
+	if len(got) != 2 || got["AA:BB:CC:DD:EE:01"].Percent != 80 || got["AA:BB:CC:DD:EE:02"].Percent != 15 ||
+		got["AA:BB:CC:DD:EE:02"].Name != "Pro Controller" {
+		t.Errorf("batteries = %+v", got)
+	}
+
+	keys := "7fdb000000000000 0 0 0 0" // a DualShock 4's buttons
+	devs := []bzInputDev{
+		{Bus: 0x05, Name: "Second", Uniq: "aa:bb:cc:dd:ee:02", KeyBits: keys, Handlers: "event9 js2"},
+		{Bus: 0x05, Name: "First", Uniq: "aa:bb:cc:dd:ee:01", KeyBits: keys, Handlers: "kbd event4 js1"},
+	}
+	if slots := btPadSlots(devs, 64); slots["AA:BB:CC:DD:EE:01"] != 1 || slots["AA:BB:CC:DD:EE:02"] != 2 {
+		t.Errorf("slots = %v", slots)
+	}
+
+	reply := `   array [
+      dict entry(
+         object path "/org/bluealsa/hci0/dev_AA_BB_CC_DD_EE_03/a2dpsrc/sink"
+         array [
+            dict entry(
+               string "Codec"
+               variant                   string "AAC"
+            )`
+	if c := parseBluealsaCodec(reply, "aa:bb:cc:dd:ee:03"); c != "AAC" {
+		t.Errorf("codec = %q, want AAC", c)
+	}
+	if c := parseBluealsaCodec(strings.Replace(reply, `string "AAC"`, "uint16 0", 1), "AA:BB:CC:DD:EE:03"); c != "SBC" {
+		t.Errorf("numbered codec = %q, want SBC", c)
+	}
+	if c := parseBluealsaCodec(reply, "AA:BB:CC:DD:EE:04"); c != "" {
+		t.Errorf("another headset's codec = %q", c)
 	}
 }

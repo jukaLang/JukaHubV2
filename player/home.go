@@ -91,7 +91,9 @@ func refreshHomeLayout(config *Config) {
 
 	// The Carousel and Widgets bodies follow the tile list and step their
 	// animations (home_dynbody.go); an Edit Home asked for on another screen
-	// opens now that Home is up (home_edit.go).
+	// opens now that Home is up (home_edit.go). The Tabs Home goes first: it
+	// hands the cards back before a tile layout takes them (hometabs.go).
+	homeLayout.tabsSync(config)
 	homeLayout.dynSync(config)
 	homeEditPendingCheck(config)
 
@@ -361,6 +363,10 @@ func homeActivate(config *Config) {
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()
 
+	// The Tabs Home's page and strip (hometabs.go).
+	if homeTabsActivate(config, id) {
+		return
+	}
 	// The tile layouts' own controls: a widget, an app tile, the add tile and
 	// the Edit pill (home_edit.go). Built-in cards go on as below.
 	if homeActivateDynamic(config, id) {
@@ -520,9 +526,17 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if homePowerConfirm.open {
 		return homePowerKey(e)
 	}
-	// So is Edit Home (home_edit.go).
+	// So is Edit Home (home_edit.go), and so are the Tabs Home's sheets: its
+	// own (arranging the tabs) and the item sheet, which handles its keys
+	// itself (hometabs*.go).
 	if homeEditActive() {
 		return homeEditKey(e, config)
+	}
+	if homeTabsEdit.open && homeTabsOn() {
+		return homeTabsEditKey(e, config)
+	}
+	if homeTabsOn() && homeTabsItemSheetActive() {
+		return true
 	}
 	// Easter egg: track J-U-K-A key sequence for firework animation.
 	if !fw.active {
@@ -568,7 +582,17 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		PlayActivateSound()
 		homeSearchOpen(config, false)
 		homeSearch.skipText = "/"
+	case sdl.K_TAB, sdl.K_PAGEUP, sdl.K_PAGEDOWN:
+		// Tab / Shift+Tab and PgUp / PgDn change tab on the Tabs Home
+		// (L1/R1's twins, hometabs.go); elsewhere they are not Home's.
+		if !homeTabsKey(e, config) {
+			return false
+		}
 	case sdl.K_x:
+		// X on the Tabs Home opens the focused item's sheet (hometabs.go).
+		if e.Repeat == 0 && homeTabsX(config) {
+			break
+		}
 		// X edits a Carousel or Widgets Home, as the pad's X does; elsewhere
 		// the key keeps its old meaning further down the dispatch.
 		if !homeLayout.dynActive() || e.Repeat != 0 || homeLayout.Focus.Current() == HomeFocusNowPlaying {
@@ -603,6 +627,10 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 			homeCalendarOpen = false
 			break
 		}
+		// Then a Tabs Home sub-page goes back to its tab (hometabs.go).
+		if homeTabsBack(config) {
+			break
+		}
 		// Home is the root scene, but a video left playing from another scene
 		// must still be closable instead of swallowing the key.
 		if snapshotVideoState().phase != "idle" {
@@ -625,6 +653,13 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	if homeEditActive() {
 		return homeEditPad(e, config)
+	}
+	// The Tabs Home's sheets own the pad while they are up (hometabs*.go).
+	if homeTabsEdit.open && homeTabsOn() {
+		return homeTabsEditPad(e, config)
+	}
+	if homeTabsOn() && homeTabsItemSheetActive() {
+		return true
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -653,6 +688,10 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		PlayActivateSound()
 		homeSearchOpen(config, true)
 	case sdl.CONTROLLER_BUTTON_X:
+		// On the Tabs Home, X opens the focused item's sheet (hometabs.go).
+		if homeTabsX(config) {
+			break
+		}
 		// On a Carousel or Widgets Home, X edits it (the footer says so);
 		// the now-playing chip keeps closing the mini player.
 		if homeLayout.dynActive() && homeLayout.Focus.Current() != HomeFocusNowPlaying {
@@ -667,6 +706,10 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// B dismisses the calendar popover first.
 		if homeCalendarOpen {
 			homeCalendarOpen = false
+			break
+		}
+		// Then a Tabs Home sub-page goes back to its tab (hometabs.go).
+		if homeTabsBack(config) {
 			break
 		}
 		// Home is the root scene; a playing video is the only thing to close.
@@ -743,6 +786,10 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	}
 	// PS5 Style's Media tab beside Games opens Media (themeps5hub.go).
 	if homeHubTabClick(mx, my, config) {
+		return true
+	}
+	// The Tabs Home's tabs, its sheet, Back and tiles (hometabs.go).
+	if homeTabsClick(mx, my, config) {
 		return true
 	}
 	// A carousel card: a side card turns the row to it, the middle one opens
@@ -923,6 +970,8 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// Edit Home's add sheet (home_addsheet.go); edit mode also ends here when
 	// another overlay has taken the screen.
 	renderHomeEditOverlays(renderer, config)
+	// The Tabs Home's arranging sheet (hometabs_edit.go).
+	renderHomeTabsOverlays(renderer, config)
 }
 
 // loadHomeFonts opens the bundled Inter font at the home-screen sizes. Inter

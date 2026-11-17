@@ -81,6 +81,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 		}
 		return true
 	}
+	// So do the Tabs Home's sheets; L2 closes the arranging one
+	// (hometabs.go).
+	if homeTabsSheetShoulder(s, config) {
+		return true
+	}
 	// The editor's one destructive key lives on R2. A/X/Y/B are already editing
 	// keys there and DELETE exists only on a keyboard the handheld does not
 	// have, so a line could be added but never removed. The footer advertises
@@ -144,6 +149,10 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 		!liquidR2Taken(footerHints(config, config.Scenes[currentSceneIndex])) {
 		PlayActivateSound()
 		liquidCycle(config)
+		return true
+	}
+	// L1/R1 change tab on the Tabs Home (hometabs.go).
+	if homeTabsShoulder(s, config) {
 		return true
 	}
 	if handleListShoulder(s, config) {
@@ -228,7 +237,7 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 func triggerOwnedByOverlay() bool {
 	switch {
 	case ambientIsActive(), launchFailure.open, videoPrepareActive(), voiceOrbModal(),
-		onboarding.active && !onboardingCoveredByOverlay(), recoveryCard.open, emuPickOpen():
+		onboarding.active && !onboardingCoveredByOverlay(), recoveryCard.open, emuPickOpen(), homeTabsItemSheetActive():
 		return true
 	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
 		browserCookiePanel.open, browserBookmarkPanel.open, brwInfo.open, brwMenu.open, homeCalendarOpen,

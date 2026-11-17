@@ -76,6 +76,9 @@ type emuEntry struct {
 	Via string
 	// Note says why an unsupported tile cannot run here.
 	Note string
+	// Better is the system this missing tile is the better emulator for
+	// (emubest.go): the tile says so and sorts first among the missing.
+	Better string
 }
 
 // ── Windows catalog ──────────────────────────────────────────────────────
@@ -941,7 +944,15 @@ func coreCoversSystem(installed map[string]bool, system string) bool {
 // sortEmulatorEntries groups rows by availability (available first, then
 // broken, missing and finally unsupported), then alphabetically.
 func sortEmulatorEntries(entries []emuEntry) {
-	rank := map[emuStatus]int{emuAvailable: 0, emuBroken: 1, emuMissing: 2, emuUnsupported: 3}
+	statusRank := map[emuStatus]int{emuAvailable: 0, emuBroken: 2, emuMissing: 3, emuUnsupported: 4}
+	// A better emulator waiting to be installed (emubest.go) comes right
+	// after the ones that are there.
+	rank := func(e emuEntry) int {
+		if e.Better != "" && e.Status == emuMissing {
+			return 1
+		}
+		return statusRank[e.Status]
+	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Pinned != entries[j].Pinned {
 			return entries[i].Pinned
@@ -951,8 +962,8 @@ func sortEmulatorEntries(entries []emuEntry) {
 			// alphabetising the utility rows.
 			return false
 		}
-		if rank[entries[i].Status] != rank[entries[j].Status] {
-			return rank[entries[i].Status] < rank[entries[j].Status]
+		if ri, rj := rank(entries[i]), rank(entries[j]); ri != rj {
+			return ri < rj
 		}
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
@@ -984,6 +995,9 @@ func emulatorEntries() []emuEntry {
 		// The PSP tile says which PPSSPP plays PSP games (ppsspp_managed_ui.go).
 		entries = ppssppDecorateCatalog(entries)
 	}
+	// A better emulator the page can install for a system with games
+	// (emubest.go) says so on its tile.
+	entries = emuBestDecorate(entries)
 	// Pinned rows keep their append order: RetroAchievements stays first (it
 	// was the original top row), followed by BIOS Doctor and the launchers.
 	// The profile row is always present so the folder is discoverable before

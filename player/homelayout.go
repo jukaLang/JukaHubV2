@@ -200,13 +200,16 @@ func (h *HomeLayout) Resize(width, height int32) {
 // which is why choosing a conversion never rewrites the scene's own geometry.
 //
 // Carousel and Widgets do not place the built-in cards at all: they lay out
-// the tile list the user edits (home_tiles.go, home_dynbody.go).
+// the tile list the user edits (home_tiles.go, home_dynbody.go). Tabs — the
+// JukaOS v2 Home, and the default when none is stored — has a strip of tabs
+// in the top bar and a page per tab (hometabs.go).
 const (
 	homeArrangementCustom    = "custom"
 	homeArrangementDashboard = "dashboard"
 	homeArrangementGrid      = "grid"
 	homeArrangementCarousel  = "carousel"
 	homeArrangementWidgets   = "widgets"
+	homeArrangementTabs      = "tabs"
 )
 
 // homeArrangementLabel is the name the UI shows for an arrangement.
@@ -220,6 +223,8 @@ func homeArrangementLabel(name string) string {
 		return "Carousel"
 	case homeArrangementWidgets:
 		return "Widgets"
+	case homeArrangementTabs:
+		return "Tabs"
 	}
 	return "Custom (from jukaconfig.json)"
 }
@@ -235,6 +240,8 @@ func normalizeHomeArrangement(name string) string {
 		return homeArrangementCarousel
 	case homeArrangementWidgets, "widget", "tiles":
 		return homeArrangementWidgets
+	case homeArrangementTabs, "tab", "jukaos", "v2":
+		return homeArrangementTabs
 	}
 	return homeArrangementCustom
 }
@@ -254,12 +261,14 @@ func homeArrangementIsDynamic(name string) bool {
 // config it is what Standard already shows, and two identical choices would
 // only confuse — a theme that installs it shows as Standard.
 var homeArrangementChoiceList = [...]string{
-	homeArrangementCustom, homeArrangementGrid, homeArrangementCarousel, homeArrangementWidgets,
+	homeArrangementTabs, homeArrangementCustom, homeArrangementGrid, homeArrangementCarousel, homeArrangementWidgets,
 }
 
 // homeArrangementChoiceLabel is a choice's name in Settings and on the strip.
 func homeArrangementChoiceLabel(name string) string {
 	switch normalizeHomeArrangement(name) {
+	case homeArrangementTabs:
+		return "Tabs"
 	case homeArrangementGrid:
 		return "Hero grid"
 	case homeArrangementCarousel:
@@ -274,12 +283,16 @@ func homeArrangementChoiceLabel(name string) string {
 // homeArrangementChoiceList; the dashboard (and anything unknown) is Standard.
 func homeArrangementChoiceIndex(name string) int {
 	n := normalizeHomeArrangement(name)
+	standard := 0
 	for i, c := range homeArrangementChoiceList {
 		if c == n {
 			return i
 		}
+		if c == homeArrangementCustom {
+			standard = i
+		}
 	}
-	return 0
+	return standard
 }
 
 // homeSetArrangement stores the user's layout choice and applies it to the
@@ -294,9 +307,10 @@ func homeSetArrangement(config *Config, name string) {
 	}
 }
 
-// homeArrangement is the arrangement the user is on. The unset case is Custom:
-// the shipped configs place their own cards, so an unset value must not move
-// anything.
+// homeArrangement is the arrangement the user is on. The unset case is Tabs,
+// the JukaOS v2 Home (hometabs.go); a stored choice — Standard (Custom), a
+// console theme's Carousel — stays what it is. A nil config is Custom: the
+// cards as authored.
 func homeArrangement(config *Config) string {
 	// Edit Home opened on Standard or the Hero grid shows Widgets without
 	// saving it until something is changed (home_edit.go homeEdit.restore).
@@ -306,10 +320,10 @@ func homeArrangement(config *Config) string {
 	if config == nil {
 		return homeArrangementCustom
 	}
-	if s, ok := customString(config.Variables.Custom, "homeArrangement"); ok {
+	if s, ok := customString(config.Variables.Custom, "homeArrangement"); ok && strings.TrimSpace(s) != "" {
 		return normalizeHomeArrangement(s)
 	}
-	return homeArrangementCustom
+	return homeArrangementTabs
 }
 
 // homeGridRects lays the body cards out as a mosaic: four columns over the
@@ -649,6 +663,10 @@ func (h *HomeLayout) Move(direction FocusDirection) HomeFocusID {
 	if h.dyn.active {
 		return h.dynMove(direction)
 	}
+	// The Tabs Home steps through its page and strip (hometabs.go).
+	if h.tabsActive() && homeTabs.on {
+		return h.tabsMove(direction)
+	}
 	if h.Arrangement == homeArrangementGrid || h.geometryEdited {
 		// The power button is not a body card, and the graph's Up from it names
 		// the dashboard's Favorites: here Up takes whichever card is drawn
@@ -821,6 +839,10 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 	if h == nil || homePowerConfirm.open {
 		return false
 	}
+	// The Tabs Home's strip and page (hometabs.go).
+	if handled, focused := h.tabsFocusAt(x, y); handled {
+		return focused
+	}
 	// The Switch Home's picture and round buttons (themeswitch.go).
 	if id := h.switchHitAt(x, y); id != "" {
 		return h.Focus.Set(id)
@@ -935,10 +957,12 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	// Edit Home's strip (the layouts, Reset, Done) takes the greeting's and
 	// the search pill's place while Home is being edited (home_edit.go).
 	editing := homeEditActive()
+	tabs := h.tabsActive() && homeTabs.on
 	if editing {
 		h.drawEditStrip(renderer, fonts)
-	} else if !h.switchChrome() {
-		// The Switch Home has no greeting (themeswitch.go).
+	} else if !h.switchChrome() && !tabs {
+		// The Switch Home has no greeting (themeswitch.go), nor has the
+		// Tabs Home, whose tabs head it from the top bar (hometabs.go).
 		h.drawGreeting(renderer, fonts, data)
 	}
 
@@ -977,6 +1001,9 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	if h.dyn.active {
 		h.dynRender(renderer, fonts, data, focused, lift)
 		h.switchDrawDock(renderer, fonts, data)
+	} else if tabs {
+		// The Tabs Home's strip and page (hometabs_draw.go).
+		h.tabsRender(renderer, fonts, data, focused, lift)
 	} else if editing {
 		// Editing Standard or the Hero grid: the strip has the focus, so no
 		// card under the veil wears the ring.
@@ -985,6 +1012,10 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	for _, id := range h.Order {
 		// The welcome hub draws its own pills and cards (themeps5hub.go).
 		if h.dyn.active && (h.dynIsTile(id) || h.hubIsItem(id)) {
+			continue
+		}
+		// The Tabs Home has no cards and no search pill.
+		if tabs && (homeIsBodyCard(id) || id == HomeFocusSearch) {
 			continue
 		}
 		item := h.Items[id]
@@ -1080,11 +1111,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	// The build date belongs beside the wordmark on Home alone.
 	caption := ""
-	if data.BuildDate != "" {
+	if data.BuildDate != "" && !h.tabsActive() {
+		// Not on the Tabs Home: the bar's middle is the tabs' (hometabs.go).
 		caption = " · " + data.BuildDate
 	}
-	// The Switch Home has the user's picture there (themeswitch.go).
-	brandEnd := h.homeBrandOrAvatar(renderer, headerConfig, fonts, barH, caption)
+	// The Switch Home has the user's picture there (themeswitch.go). On a
+	// crowded Tabs Home bar the wordmark yields to the tabs (hometabs.go).
+	brandEnd := headerBrandX()
+	if !h.tabsBrandYields() {
+		brandEnd = h.homeBrandOrAvatar(renderer, headerConfig, fonts, barH, caption)
+	}
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -1171,6 +1207,8 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// header_arrange.go); the shipped order puts the corner's buttons last,
 	// the bell at the margin. Home's cluster is never trimmed.
 	plan := headerPlan(headerConfig, data.StatusParts, partW, &corner, sepW, headerCornerGap, right)
+	// The Tabs Home's strip takes the span between the wordmark and these.
+	h.tabsNoteSpan(brandEnd, plan)
 	bellDrawn := false
 	for _, it := range plan {
 		switch it.slot {
@@ -1280,8 +1318,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// the caption before the pills. Edit Home's strip has the band while Home
 	// is being edited.
 	withPS, withX1 := psRemoteSupported(), x1PillSupported()
-	// The Switch Home's round buttons stand in for the pills (themeswitch.go).
-	if (withPS || withX1) && !homeEditActive() && !h.switchChrome() {
+	// The Switch Home's round buttons stand in for the pills (themeswitch.go);
+	// the Tabs Home's page starts under the bar, Remote Play is in Games.
+	if (withPS || withX1) && !homeEditActive() && !h.switchChrome() && !h.tabsActive() {
 		label := psPillGroupLabel
 		group, p4, p5, px1 := psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
 		if group.W > 0 && group.X < minGroupX {
@@ -1520,8 +1559,9 @@ const (
 // Empty when that leaves less than the floor.
 func (h *HomeLayout) headerQRRect(bandRight, top int32) sdl.Rect {
 	// Edit Home's strip has the band while Home is being edited; the Switch
-	// Home has a round Phone button for the code (themeswitch.go).
-	if homeEditActive() || h.switchChrome() {
+	// Home has a round Phone button for the code (themeswitch.go), the Tabs
+	// Home a Phone tile on Main (hometabs_items.go).
+	if homeEditActive() || h.switchChrome() || h.tabsActive() {
 		return sdl.Rect{}
 	}
 	maxSide := scaleY(homeHeaderQRMax, h.Height)

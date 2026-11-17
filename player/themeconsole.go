@@ -200,6 +200,10 @@ func homeFocusRingColor() sdl.Color {
 // homeConsoleAnimating reports a pulsing ring or a sliding strip, so Home
 // keeps its interactive frame rate until they settle (homeLayoutAnimating).
 func homeConsoleAnimating() bool {
+	// The Tabs Home's gliding pill and sliding pages count too (hometabs.go).
+	if homeTabsAnimating() {
+		return true
+	}
 	l := &homeConsoleLook
 	if l.pulse && l.pulseFor != "" && uiClockMS() < l.pulseAt+homeRingPulseMS+20 {
 		return true

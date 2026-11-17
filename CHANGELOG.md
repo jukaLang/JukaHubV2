@@ -13,6 +13,83 @@ For anything older, the git log and the
 
 ### Added
 
+- **The Tabs Home (JukaOS v2).** A strip of tabs in the middle of the top bar
+  — Recent, Main, Games, Entertainment, Favourites, Collections — fading out
+  at both ends, with the system controls either side. L1/R1 (Tab / Shift+Tab,
+  PgUp / PgDn) change tab and the page slides in from the side you travel to
+  (an instant swap under Reduce motion). Every tab and folder has its own view
+  — Grid, Rows, List (with a large preview), Carousel or Compact — stepped by A
+  on the strip; L2 (Q) opens a sheet to reorder, hide and set the view of each
+  tab. Recent holds Continue, your last games with their covers and your last
+  apps; Main holds Settings, Trophies, RetroAchievements, Chat, Browser, a
+  Store folder (Android apps, Packages, PortMaster, Windows Apps, Downloads,
+  Themes, Wallpapers), Tools, Files, Bluetooth, Wi-Fi and the phone's pairing
+  code; Entertainment holds YouTube, Shorts, Live TV, Downloaded, Music,
+  Podcasts and Game clips. Settings → Display & theme gains Tabs and Remember
+  last tab (`player/hometabs*.go`, [docs/HOME_TABS.md](docs/HOME_TABS.md)).
+
+- **Games, Favourites and Collections on the Tabs Home.** Games lists your
+  consoles (recently played first) with covers and game counts, then
+  JukaGames, PS and Xbox Remote Play, Steam, Minecraft, PortMaster, Windows
+  Apps and the Emulators page. Consoles without games are hidden, and one
+  whose games have no emulator is dimmed with an **Install** badge that opens
+  the Emulators page on it (Settings → Games & emulators → **Hide emulators
+  without games** off lists every console the device can play). X on any game
+  or app opens its sheet: Play, Add to Favourites (a game's favourite is the
+  same Favorite tag the Games library shows) and Add to collection…; your own
+  collections can be renamed, reordered and deleted, each with its own view,
+  and Most played, Recently added and Never played fill themselves. Stored in
+  `collections.json`, written atomically with a backup
+  (`player/hometabs_games.go`, `player/hometabs_favourites.go`,
+  `player/hometabs_collections*.go`).
+
+- **Boot animation styles.** Settings → General → **Boot animation** chooses
+  what the logo does at power-on: **Cinematic** (the logo crashes onto a floor
+  that cracks, with a buzz of the vibration motor, a shake, dust and sparks and
+  a knock in the startup chime), **Roll** (the rounded logo tumbles in and
+  stops upright in the middle), **Still logo**, **Classic** (the glass light),
+  **Surprise me**, or **None** (no animation and no quick hello: the fastest
+  start). Watch the boot animation previews the chosen style; Reduce motion and
+  battery saver play Cinematic and Roll as the still logo, and opening JukaHub
+  as an app plays a short version (`player/bootstyles.go`,
+  [docs/BOOT.md](docs/BOOT.md#boot-animation-styles)).
+
+- **Bluetooth that behaves like a phone's.** Remembered headphones and pads
+  reconnect by themselves after a start, a wake from sleep or switching
+  Bluetooth on (three tries, then quiet; a device you disconnected on the
+  Bluetooth page is left alone, and nothing runs during a game). A headset that
+  drops pauses the playing video or song, and the speaker and each headset keep
+  their own volume (`bt-output-volume.json`). The Bluetooth page shows a pad's
+  battery and its order (Pad 1, Pad 2), warns once when a pad falls to 15 %,
+  names a headset's codec (SBC, AAC, aptX) with what it means for delay, and
+  **Identify** makes a connected pad buzz and blink (`player/bt_autoreconnect.go`,
+  `player/bt_audiofollow.go`, `player/bt_padinfo.go`,
+  `player/bt_identify_linux.go`).
+
+- **The recommended emulator for each console.** A ranked list per console for
+  the handheld and for Windows (`player/emubest.go`; DraStic for DS,
+  standalone PPSSPP, Mupen64Plus, Flycast, YabaSanshiro…, with sources in
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#the-recommended-emulator)).
+  **Which emulator?** lists it first with a **Recommended** badge and
+  highlights it unless you picked another last time, and on Windows the Emulators
+  page marks the install tile of a better emulator for a console you have
+  games for. Never installs anything by itself.
+
+- **Natural offline voice for TrimUI handhelds.** Juka can now speak offline
+  in Gradium's Phonon 31M voice (Apache-2.0), which sounds far more like a
+  person than Piper's Kristin. It downloads by itself after Piper (or from
+  Settings → Voice & AI → Natural offline voice), is timed on the device
+  before it is installed — refused, with Piper kept, if the A133P needs more
+  than 1.4 s of work per second of speech — and falls back to Piper whenever
+  it cannot speak. The server stays loaded during a conversation, streams the
+  first words in short pieces and renders each sentence while the previous
+  one plays (`player/tts_phonon.go`, `player/tts_phonon_install.go`). CI builds
+  it for the Cortex-A53 (Gradium's ARM64 build needs dotprod and fp16, which
+  the A53 lacks), checks the binary for those instructions, and only ships it
+  after it speaks offline under qemu's Cortex-A53
+  (`.github/scripts/build-voice.sh`, `.github/workflows/offline-voice.yml`,
+  `JukaHub-Voice-linux-arm64.zip`). Not yet heard on a handheld.
+
 - **Hold Select + Start for three seconds to end a stuck game** (TrimUI).
   Any game, emulator or port JukaHub started is asked to quit and, after six
   seconds, stopped — nothing is drawn and the game is not paused, so it works
@@ -757,6 +834,38 @@ For anything older, the git log and the
   crashing input. (OpenSSF Scorecard `Fuzzing`.)
 
 ### Changed
+
+- **JukaOS v2 defaults: the Tabs Home and the Cinematic boot** (Juka,
+  2026-11-16). A setup that never saved a Home layout (`homeArrangement`
+  unset) now opens on the Tabs Home; a layout you picked before — Standard,
+  Hero grid, Carousel, Widgets or a console theme — is kept, and Settings →
+  Display & theme → Home layout switches back. The boot animation defaults to
+  Cinematic for everyone; Classic, the previous look, is one row away in
+  Settings → General → Boot animation. Where JukaHub names a game's emulator
+  without asking (no pin, no last choice: save states, the diagnosis, Reset
+  game), it now assumes the console's recommended one rather than the
+  catalog's first match.
+
+- **Juka's offline voice answers faster** (Juka, 2026-11-16). Short everyday
+  lines ("Going Home", "Taking a screenshot", the launch greeting) are kept
+  as WAVs in the data folder's `voice-cache/` the first time Groq's voice or
+  Piper says them and play from the file afterwards: no request, no Piper,
+  no wait (`player/tts_cache.go`; at most 160 files / 12 MB, least recently
+  heard go first; Hear Juka still asks the voice). While Piper sits loaded
+  after a conversation it makes the common voice-command answers in the
+  background, one per second, without the CPU boost; a line that wants Piper
+  meanwhile raises the CPU and waits for that one instead of loading a second
+  Piper. Piper now lets go 10 s after the conversation ends (was 45 s after
+  its last line; the orb being up counts as the conversation, so a slow
+  offline answer never finds it unloaded; Chat and the Voice command page
+  keep 45 s), runs on three of the handheld's four cores so the
+  interface and Hey Juka keep one (`player/tts_cpu_linux.go`; Piper has no
+  thread option, so its threads are pinned), and writes its per-sentence
+  WAVs to /dev/shm (memory) when it can.
+
+- **Chat uses the device name when Your name is empty.** Messages and the
+  rename chip now show "{Device name}'s user" in place of "You". Renaming the
+  device updates that default; a name entered in Settings or Chat still wins.
 
 - **The Games library fills the screen, with a button for every console.**
   The old card of three narrow columns (a console list, a game list and a

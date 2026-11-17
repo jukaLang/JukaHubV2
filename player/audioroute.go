@@ -792,6 +792,9 @@ func audioRouteUpdate(addr string) {
 		}
 	}
 	outSetRoute(pcm, gain)
+	// Per-output volume, pause when the headset drops, its codec
+	// (bt_audiofollow.go).
+	btFollowRoute(addr, audioRouteChildPCM() != "")
 }
 
 // audioRouteSetVolume applies a volume change (0..100) to the headset at once;

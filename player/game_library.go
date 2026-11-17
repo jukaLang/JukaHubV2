@@ -350,6 +350,10 @@ func launcherNameTokens(name string) []string {
 // core and PlayStation games to PPSSPP whenever the exact name was missing.
 func findGameLauncher(system string, entries []emuEntry) string {
 	if all := findGameLaunchers(system, entries); len(all) > 0 {
+		// Of several, the one recommended for this hardware (emubest.go).
+		if i := emuBestPick(system, all); i > 0 {
+			return all[i].Launch
+		}
 		return all[0].Launch
 	}
 	return ""

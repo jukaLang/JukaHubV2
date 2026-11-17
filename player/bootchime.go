@@ -70,8 +70,9 @@ func shutdownChimeWait() {
 	playing := append([]*chimePlayback(nil), chimeState.playing...)
 	chimeState.mu.Unlock()
 	// Every chime gives up chimeGrace after its own length (chimeRun), so this
-	// bound always outlasts the longest one.
-	deadline := time.After(time.Duration((chimeStartSeconds + chimeGrace + 0.5) * float64(time.Second)))
+	// bound always outlasts the longest one: the start chime pushed back by a
+	// boot style's entrance included (bootstyles.go).
+	deadline := time.After(time.Duration((chimeStartSeconds + bootStyleChimeMaxDelay + chimeGrace + 0.5) * float64(time.Second)))
 	for _, p := range playing {
 		select {
 		case <-p.done:
@@ -100,7 +101,18 @@ const (
 	chimePad chimeKind = iota
 	chimeBell
 	chimeAir
+	// chimeThud is a knock (the boot's impact, bootstyles.go): freq falls
+	// towards half of itself with time constant indexTau, under a burst of
+	// muffled noise at index of the sine's level.
+	chimeThud
 )
+
+// chimeThudNote is a knock at at seconds: a low sine falling from freq under a
+// burst of noise (noise: its level against the sine), dying in a few tenths
+// of a second.
+func chimeThudNote(at, freq, level, noise float64) chimeNote {
+	return chimeNote{kind: chimeThud, at: at, freq: freq, length: 0.55, attack: 0.002, release: 0.12, decay: 0.11, level: level, index: noise, indexTau: 0.07}
+}
 
 // chimeNote is one event of a chime.
 type chimeNote struct {
@@ -406,6 +418,26 @@ func (c *chimeSynth) voiceAdd(v *chimeVoice, from, to int) {
 			v.lo2 += v.al * (nr - v.lo2)
 			l = (v.hi - v.lo) * 2.2
 			r = (v.hi2 - v.lo2) * 2.2
+		case chimeThud:
+			// The sine glides down as its drift decays; the noise is a
+			// low thump (380 Hz) with a little grit above it (to 2 kHz),
+			// fading with the strike partial's quick decay.
+			e *= v.dec
+			if i == 0 {
+				v.ah = 1 - math.Exp(-2*math.Pi*2000/sr)
+			}
+			v.p1 += n.freq * (0.5 + 0.5*v.drift) / sr
+			v.drift *= v.kidx
+			if v.p1 >= 1 {
+				v.p1--
+			}
+			nz := chimeNoise(&v.seed)
+			v.hi += v.ah * (nz - v.hi)
+			v.lo += v.al * (nz - v.lo)
+			burst := n.index * v.bar / chimeBarLevel
+			l = chimeLookup(&chimeTables.sin, v.p1) + burst*(2.5*v.lo+0.6*(v.hi-v.lo))
+			r = l
+			v.bar *= v.kbar
 		}
 		v.dec *= v.kdec
 		c.mixL[f-from] += e * l * v.gl

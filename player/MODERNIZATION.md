@@ -299,6 +299,26 @@ Widgets grid has seven square columns and X resizes any tile a cell at a time
 up to 7 × 3, with a corner handle for the mouse (`home_tiles.go`). HW-4 is new:
 322 tasks.
 
+JukaOS v2 (**2026-11-16**, unbuilt; the owner asked for boot animations —
+Cinematic, Roll, an image or none —, a tabbed Home switched with L1/R1, a Games
+tab that cleans up emulators, collections, better Bluetooth and the best
+standalone emulators): Settings → General → Boot animation with Cinematic (the
+logo crashes onto a cracking floor, with a buzz and a knock) as the new
+default, Roll, Still logo, Classic, Surprise me and None (`bootstyles.go`);
+the Tabs Home — Recent, Main, Games, Entertainment, Favourites, Collections in
+the top bar, five views per tab and folder, an arranging sheet on L2 — now the
+Home of every setup without a saved layout (`hometabs*.go`); a Games tab that
+hides consoles without games and badges those without an emulator, Favourites
+on the library's Favorite tag and collections in `collections.json`
+(`hometabs_games.go`, `hometabs_favourites.go`, `hometabs_collections*.go`);
+Bluetooth that reconnects remembered devices, pauses on a headset drop, keeps
+a volume per output and shows pad battery, order, codec and Identify
+(`bt_*.go`); and a ranked best emulator per console for the picker and the
+Windows Emulators page (`emubest.go`). Each part was statically checked;
+nothing is compiled or has run on a handheld. LIB-3 was rewritten for what
+shipped. Follow-ups: HW-7, SHELL-12, SHELL-13, LIB-22 to LIB-24, SYS-25 and
+SND-17: 339 tasks in the file.
+
 ## How to use this file (agents read this first)
 
 1. **Pick** the highest-priority task you can actually verify. Tags tell you what
@@ -808,6 +828,46 @@ same tabs, L1/R1 go back, B never bounces between the two. (4) With a Groq key,
 "what's this?" on Settings and on a game list describes what is on screen; the
 orb is not in the picture; the pairing code is blanked; Off sends nothing; the
 screen read does not stall the orb noticeably.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### HW-7 — JukaOS v2 on a device: boot styles, Tabs Home, Bluetooth, emulators (P0, M) [HW]
+**Why.** Juka asked (2026-11-16) for JukaOS v2: boot animations (Cinematic,
+Roll, Still logo, None), a tabbed Home that is now the default, a Games tab
+that cleans up emulators, collections, better Bluetooth and the best
+emulator per console. Written by four agents without a device or a compiler;
+nothing has been drawn, heard or felt.
+**Where.** Smart Pro and Brick (stock and CrossMix), Windows; a Bluetooth
+headset and a DualSense/DualShock 4 over Bluetooth. `bootstyles.go`,
+`bootos.go`, `bootchime.go` (`chimeThud`); `hometabs*.go`, `homelayout.go`,
+`home.go`, `home_edit.go`, `shoulders.go`; `bt_autoreconnect.go`,
+`bt_audiofollow.go`, `bt_padinfo.go`, `bt_identify_linux.go`; `emubest.go`,
+`emupicker.go`, `game_library.go` (`findGameLauncher`).
+**Done when.** (1) Boot: a power-on in each style; Cinematic's crack layer
+draws on the GE8300 (render target accepted — else the per-frame line
+fallback runs), holds the UI frame rate (else drop the grid, then the cool
+crack copy), buzzes on the impact frame and its knock is audible on the
+speakers; Roll is smooth at 30 fps; the floor and horizon fit the Brick's 4:3
+canvas; the firmware logo hands over without a jump; None starts straight to
+Home; Reduce motion and battery saver show the still logo; an app launch plays
+the short version. (2) Tabs Home: a fresh card opens on Tabs and an existing
+`homeArrangement` is kept; the strip fits on the Brick at 1024×768 with a full
+top-bar cluster (the wordmark yields); Up/Down/Left/Right between the strip,
+the page, the top-bar controls and the power pill; L1/R1 and Tab/PgUp/PgDn;
+L2 opens and closes the arranging sheet; the Start menu over the sheet closes
+it; Recent and Games covers appear without stalls on a full card; the first
+Games/Favourites/Collections visit does not freeze Home while the library
+scans. (3) Games tab: Install badges match what CrossMix's `Emus` folders
+really launch, and Install lands the Emulators page on the right tile; the
+collection keyboard (vk target 130) names, renames and deletes; the item sheet
+fits at 1024×768. (4) Bluetooth: paired pads and a headset reconnect after a
+start, a wake and switching the radio on, and are left alone after a manual
+disconnect; a headset dropping pauses video and music; the speaker and
+headset keep their own volumes; pad battery reads from
+`/sys/class/power_supply` on the TSP kernel; Identify rumbles (EVIOCSFF with a
+48-byte `ff_effect`) and blinks the pad's LEDs; the codec line shows SBC/AAC.
+(5) Emulators: on CrossMix the recognised emulators match `drastic.sh`,
+`ppsspp_*.sh` and the RetroArch scripts, and Which emulator? badges the
+expected one.
 **Verify.** Record in the HW log; file a FIX task for anything that differs.
 
 ---
@@ -2685,6 +2745,24 @@ Smart Pro's open questions are whether boot0 copied from the eMMC loads U-Boot
 from the card, whether U-Boot honours the rewritten env `root=PARTUUID=…`, and
 which stock daemons beyond `trimui_inputd` the hardware needs.
 
+### SYS-25 — Bluetooth, third round (P2, M)
+**Why.** The 2026-11-16 pass reconnects remembered devices, pauses on a
+headset drop, keeps a volume per output and shows pad battery, order and the
+headset codec (`bt_autoreconnect.go`, `bt_audiofollow.go`, `bt_padinfo.go`).
+Three things phones do are still missing: the radio is never switched on at
+boot (the loop only reconnects when the firmware or the user switched it on),
+a game that is already running keeps the speaker when a headset connects
+mid-game (ALSA opens its device once), and a headset's own battery is not
+shown.
+**Where.** `bt_autoreconnect.go`, `bluetooth_bringup*.go`, `audioroute*.go`,
+`bluetooth_devices_ui.go`.
+**Done when.** JukaHub remembers that Bluetooth was on and brings it up at
+start (bounded, off the render thread); a headset that connects during a
+RetroArch game gets its sound, through a BlueALSA-aware ALSA plug or a
+resume-safe restart the user agrees to; and a headset's row and sheet show its
+battery from BlueZ's `Battery1` ("Battery Percentage" in `bluetoothctl info`)
+when it reports one.
+
 ---
 
 ## Sound and haptics (SND)
@@ -2849,6 +2927,19 @@ with the lights off and **Always**, the rings light for Juka and return to the
 firmware colour; the in-game assistant over a RetroArch game lights them and
 the game-time colour comes back when it closes; levels feel right at the
 default Mic sensitivity.
+
+### SND-17 — The Cinematic knock in the chime reference (P3, S)
+**Why.** The Cinematic and Roll boot styles (2026-11-16) add knocks to the
+startup chime through a new `chimeThud` voice (`bootchime.go`), but
+`branding/sound/chime_reference.c`, which mirrors the scores for WAV renders
+and listening tests (SND-1), has no thud voice, so the reference renders no
+longer match what the device plays. The thud (a 190 → 95 Hz sine under the
+110 Hz high-pass) may also be mostly inaudible on the handheld's speakers.
+**Where.** `branding/sound/chime_reference.c`, `bootchime.go`
+(`chimeThudNote`).
+**Done when.** The reference renders the Cinematic and Roll chimes with their
+knocks; on a Smart Pro the knock is heard at the default volume (else lift its
+noise part or its pitch).
 
 ---
 
@@ -3385,6 +3476,30 @@ resumable and the paused pids stopped; the 9-row in-game card fits on the
 Brick and the Smart Pro; "Close apps and try again" after an offline-AI memory
 error answers the question.
 
+### SHELL-12 — Swipe between the Tabs Home's tabs (P3, S)
+**Why.** The Tabs Home (2026-11-16) changes tab by L1/R1, Tab, PgUp/PgDn, a
+click on the strip and the wheel, but a touch screen has only the tap: Home
+has no shared horizontal-swipe helper, so the tabs agent left it out.
+**Where.** `hometabs.go` (`homeTabsClick`, `tabsWheel`), the touch path in
+`main.go`; reuse a swipe detector if another screen has one (the browser's
+or the image viewer's).
+**Done when.** A horizontal swipe on the page changes tab in the swipe's
+direction with the same slide as L1/R1 (instant under Reduce motion); a
+vertical drag still scrolls; a tap still opens; nothing changes for the pad.
+
+### SHELL-13 — Experience packs and other Start entries on the Tabs Home (P3, S)
+**Why.** Loose ends of the Tabs Home (2026-11-16). The pack validator part is
+DONE the same day (`xpack.go`/`xpackui.go` accept `tabs`; CONFIGURATION.md's
+pack table still to mention it). Left: Xbox Remote Play and Steam have no Start-menu row: their
+`app:do:` refs resolve only through the Games tab's `homeTabsExtraApps`, so a
+favourite or collection item of either opened through `homeActivateApp`
+would say "not available".
+**Where.** `xpack.go`, `xpackui.go`, `hometabs_games.go`
+(`homeTabsExtraApps`), the Start menu groups (`startMenuGroups`).
+**Done when.** A pack with `"homeLayout": "tabs"` applies and its preview
+line names Tabs (docs/CONFIGURATION.md updated); Xbox Remote Play and Steam
+open from a favourite, a collection and Home search alike.
+
 ---
 
 ## Power, sleep and battery (PWR)
@@ -3812,10 +3927,16 @@ mtimes, CRCs (≤ 64 MiB) and metadata; the library opens from it instantly and
 refreshes changed folders after a launch, a copy or a manual "Rescan".
 
 ### LIB-3 — Collections that build themselves (P1, M)
-**Done when.** Smart collections — Recently added, Most played, Never played,
-by genre, by decade, by player count (from `gmeta_dat.go` metadata) — appear in
-the library and can be pinned to Home as shelves; custom collections can be
-ordered and pinned; the 32-tag limit becomes a bounded list per collection.
+**Status 2026-11-16.** Partly done, unbuilt: the Tabs Home's Collections tab
+has user collections (`collections.json`: ordered, renamed, deleted, up to
+100 × 500) and the automatic Most played, Recently added and Never played
+(`hometabs_collections.go`). Open: the smart ones from metadata, the
+collections inside the Games library, and a switch to hide the automatic ones.
+**Done when.** Smart collections — by genre, by decade, by player count (from
+`gmeta_dat.go` metadata) — join the automatic three; the Games library shows
+the same collections as Home (one store, `collections.json`); Settings can
+hide the automatic ones; the 32-tag limit becomes a bounded list per
+collection.
 
 ### LIB-5 — Rich media per game (P2, M) [NET]
 **Why.** Art is libretro `Named_Boxarts` only.
@@ -3952,6 +4073,39 @@ Install), `emuautoupdate_runtimes.go`.
 `androidRTInstallProgress` does; Notify sets the Runtime tab's update line and
 an automatic install calls `apkStoreRuntimeChanged`; and the label carries the
 first 8 characters of the asset's digest.
+
+### LIB-22 — The Games tab's Install badge knows per-game emulators (P3, S)
+**Why.** The Tabs Home's Games tab (2026-11-16) dims a console whose games
+have no launcher (`resolveGameLauncher` empty) with an Install badge. The
+check is per console, so a console whose only emulator is pinned per game
+(game options → Emulator) reads "Install" although its games start.
+**Where.** `hometabs_games.go` (the emulator check), `emupicker.go`
+(`gameLauncherPinned`).
+**Done when.** A console counts as playable when any of its games has a pin
+that is a regular file; the check stays off the render thread and bounded on
+a big card.
+
+### LIB-23 — A "Better" pill on the Emulators page (P3, S) [WIN]
+**Why.** `emuBestDecorate` (2026-11-16, `emubest.go`) marks a better emulator
+the Windows Emulators page can install (`emuEntry.Better`, a Detail line and
+its place after the installed tiles), but the tile itself has no chip, so the
+upgrade is easy to miss in a long grid.
+**Where.** `emutiles.go` `emuTileChip`.
+**Done when.** A missing tile with `Better` set shows a "Better" pill in the
+accent (as "Update" does), translated; nothing changes on the handheld.
+
+### LIB-24 — The recommended-emulator ranking, measured (P2, S) [HW]
+**Why.** `emubest.go`'s handheld ranking (2026-11-16) comes from CrossMix,
+KNULLI and spruceOS notes and search snippets; standalone Flycast ahead of its
+core, the mGBA core ahead of standalone mGBA, the Saturn order and the order
+of the light cores are judgement calls (docs/GAME_LIBRARY.md lists the
+sources).
+**Where.** `emubest.go` (`emuBestTable`), docs/GAME_LIBRARY.md.
+**Done when.** On a Smart Pro with CrossMix, two or three demanding games per
+console (DS, PSP, N64, Dreamcast, Saturn, PS1, GBA) are timed in each ranked
+emulator (frame rate or the emulator's own speed readout, audio crackle); the
+table is reordered where a lower-ranked one is clearly better, and the doc's
+table and sources say what was measured.
 
 ---
 
@@ -4324,6 +4478,7 @@ From the Groq key, L2 Edit Home and square tiles pass: HW-4.
 From the voice speed, Hey Juka, voice settings, headset and PPSSPP pass: HW-5.
 From the glass, Settings, console themes and screen-vision pass: HW-6.
 From the JukaHub OS, startup lock, close-all and Juka lights pass: SYS-22, SND-16, SHELL-11.
+From the JukaOS v2 pass (boot styles, Tabs Home, Bluetooth, emulators): HW-7, LIB-24.
 Also still open from earlier passes: the browser's touch accuracy and link-mode
 ergonomics on real hardware (`docs/BROWSER.md`).
 
@@ -4400,6 +4555,11 @@ rough.
   ships it for voice chat.
 - **"Play style" profile** (S): muOS-style summary of when and what you play,
   from LIB-13's session log.
+- **Tabs Home extras** (S each, from the 2026-11-16 pass): an unread dot on the
+  tab that holds Chat; a subtle accent tint of the strip's pill per tab; the
+  scroll of each tab kept across restarts; hold A on the strip to open the
+  arranging sheet; a crossfade (not an instant swap) between tabs under Reduce
+  motion.
 - **Screen Share sound** (L): the stock firmware has no ALSA loopback to capture
   the output from, and a tap in JukaHub's own mixer would only cover its media,
   never a game.

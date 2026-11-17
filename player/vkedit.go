@@ -385,7 +385,7 @@ func vkLearnLastWord() {
 // vkSentenceTarget is a field of prose, where a sentence starts capitalised.
 func vkSentenceTarget() bool {
 	switch vkTarget {
-	case vkTargetChat, vkTargetFileLine, vkTargetName, vkTargetPlaylist:
+	case vkTargetChat, vkTargetFileLine, vkTargetName, vkTargetPlaylist, homeTabsNameVKTarget:
 		return true
 	}
 	return false

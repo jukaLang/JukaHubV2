@@ -40,6 +40,9 @@ var emuPickUI struct {
 	rowHits []gameLibRowHit
 	// eatUp swallows the release of a click the sheet took (emuPickEatRelease).
 	eatUp bool
+	// recommended: options[0] is the emulator recommended for this hardware
+	// (emubest.go), drawn with a badge.
+	recommended bool
 }
 
 // gameLauncherPinned is the launcher a game was set to always use, or "" when
@@ -69,8 +72,10 @@ func resolveGameLauncherFor(game libraryGame) string {
 	if last := strings.TrimSpace(opts.LastEmulator); last != "" && regularFile(last) {
 		return last
 	}
-	// resolveGameLauncher's catalog step, for this game's own Roms folder.
+	// resolveGameLauncher's catalog step, for this game's own Roms folder:
+	// of several, the one recommended for this hardware (emubest.go).
 	if all := findGameLaunchersFor(game.System, game.Path, emulatorEntries()); len(all) > 0 {
+		all, _ = emuBestOrder(game.System, all)
 		return all[0].Launch
 	}
 	return ""
@@ -103,6 +108,9 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		return
 	}
 	options := findGameLaunchersFor(game.System, game.Path, emulatorEntries())
+	// The emulator recommended for this hardware leads the list, badged, and
+	// takes the highlight unless another was picked last (emubest.go).
+	options, recommended := emuBestOrder(game.System, options)
 	switch len(options) {
 	case 0:
 		launch("")
@@ -114,6 +122,7 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 	emuPickUI.open = true
 	emuPickUI.game = game
 	emuPickUI.options = options
+	emuPickUI.recommended = recommended
 	emuPickUI.details = make([]string, len(options))
 	for i, e := range options {
 		emuPickUI.details[i] = emuPickDetail(e)
@@ -141,6 +150,7 @@ func emuPickClose() {
 	emuPickUI.then = nil
 	emuPickUI.options = nil
 	emuPickUI.details = nil
+	emuPickUI.recommended = false
 	emuPickUI.rowHits = emuPickUI.rowHits[:0]
 }
 
@@ -417,7 +427,20 @@ func renderEmuPick(renderer *sdl.Renderer, config *Config) {
 		if selected {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
 		}
-		renderText(renderer, config, medium, ellipsize(medium, e.Name, rect.W-28), ColorTextPrimary(),
+		nameRoom := rect.W - 28
+		if idx == 0 && emuPickUI.recommended {
+			// The emulator recommended for this hardware wears a badge at the
+			// row's right edge (emubest.go).
+			const badge = "Recommended"
+			tw, _ := measureText(font, badge)
+			bw, bh := tw+20, smallH+6
+			bx := rect.X + rect.W - 14 - bw
+			ink := glassAccent()
+			fillRoundedRect(renderer, bx, rect.Y+8, bw, bh, bh/2, WithAlpha(ink, 50))
+			renderText(renderer, config, font, badge, ink, bx+10, rect.Y+8+3)
+			nameRoom -= bw + 10
+		}
+		renderText(renderer, config, medium, ellipsize(medium, e.Name, nameRoom), ColorTextPrimary(),
 			rect.X+14, rect.Y+8)
 		detail := ""
 		if idx < len(emuPickUI.details) {

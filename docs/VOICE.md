@@ -111,10 +111,42 @@ With a key, Piper takes over whenever Groq cannot speak. Piper and the voice
 model are checksum verified and resume after a dropped connection; the
 voice's small settings file is checked for the shape Piper reads. Long
 answers start playing after the first sentence while the rest is made.
+To keep the first word quick, the voice loads while you are still talking (the
+orb, the game assistant, or **Hey Juka**) and stays loaded until about ten
+seconds after the conversation ends, then gives its memory back. Short
+everyday lines ("Going Home", "Taking a screenshot", the launch greeting) are
+kept as small sound files in JukaHub's data folder (`voice-cache/`, at most
+about 12 MB) the first time a voice says them and play from there afterwards,
+with no wait and almost no battery; the commonest ones are made in the
+background while the voice is still loaded. Piper's sound goes through memory,
+never the card, and on the handheld it runs on three of the four cores so
+menus and the wake word keep one to themselves.
 The voice files live in `Apps/JukaHub/required/juka-piper/`.
 The [Piper engine](https://github.com/rhasspy/piper) is MIT licensed; the
 [Kristin voice card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/kristin/medium/MODEL_CARD)
 identifies public-domain LibriVox recordings as its training data.
+
+**Natural offline voice.** Once Piper is in, a TrimUI also fetches a second,
+more natural offline voice by itself: Gradium's
+[Phonon 31M](https://huggingface.co/gradium/phonon-31m-en) English model
+(Apache-2.0, October 2026) behind the speech server of
+[xn-ptts](https://github.com/gradium-ai/xn-ptts), about 70 MB, or right away
+from **Natural offline voice** in **Settings → Voice & AI**. JukaHub builds it
+itself for the handheld's Cortex-A53 cores (Gradium's own ARM64 build needs
+newer instructions and would not start there) as
+`JukaHub-Voice-linux-arm64.zip` on its releases, and before installing it
+times a sentence on your device: if the handheld needs more than 1.4 seconds
+of work per second of speech it says so, keeps Piper and does not download it
+again (the same row tries again). Otherwise it becomes Juka's offline voice; the
+row shows the measured speed and switches between it and Piper. It stays
+loaded like Piper (about 200 MB of memory while a conversation lasts), says the
+first words of an answer in short pieces and the rest in whole sentences, and
+renders each sentence while the one before it plays. If it cannot start (too
+little free memory, say) Piper says the line instead, and after two failures
+in a row Piper speaks for the rest of the run (**Hear Juka** tries it again).
+It works without the internet once installed: the build proves that by
+speaking with the network cut off on an emulated Cortex-A53. The files live in
+`Apps/JukaHub/required/juka-voice/`. It has not been heard on a handheld yet.
 
 Other Linux devices may also use espeak-ng, espeak, flite, pico2wave or Piper
 (with a voice) in JukaHub's `required/` folder or on its PATH. Music and a

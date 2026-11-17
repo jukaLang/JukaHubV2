@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -104,6 +105,10 @@ type btScreenState struct {
 	// row that goes away (forgotten, paired, out of range) hands the focus to
 	// the row that takes its place rather than to the switch at the top.
 	focusAt int
+	// battery and slot are read with the pads (bt_padinfo.go): each
+	// controller's battery, and its place in the order the pads connected.
+	battery map[string]btPadBattery
+	slot    map[string]int
 }
 
 var btScreen btScreenState
@@ -192,6 +197,8 @@ func btScreenEnter() {
 	btScreen.padOK = map[string]bool{}
 	btScreen.noPad = map[string]bool{}
 	btScreen.connectedAt = map[string]time.Time{}
+	btScreen.battery = map[string]btPadBattery{}
+	btScreen.slot = map[string]int{}
 	btScreen.padReadAt = time.Now()
 	btScreen.padReading = false
 	btScreen.radioBusy = false
@@ -227,7 +234,9 @@ func btScreenEnter() {
 		}
 		// Read after the listing: a pad connected before the page opened has
 		// had its time to get a controller (btApplyPadReading).
-		pads, anon := bzPadReading(bzReadInputDevices(), bits.UintSize)
+		inputs := bzReadInputDevices()
+		pads, anon := bzPadReading(inputs, bits.UintSize)
+		slots, bats := btPadSlots(inputs, bits.UintSize), btBatteryByMAC(btPadBatteries())
 		links := btSysfsLinkCount()
 		if ctx.Err() != nil {
 			return
@@ -242,6 +251,7 @@ func btScreenEnter() {
 			btScreen.noAdapter = noAdapter
 			btReplaceList(devs)
 			btApplyPadReading(pads, anon)
+			btScreen.slot, btScreen.battery = slots, bats
 			if err != nil {
 				btScreen.listErr = bzErrText(err)
 			}
@@ -697,6 +707,7 @@ func btStartPair(mac string) {
 		return
 	}
 	dev, gen := *d, btScreen.gen
+	btAutoClearManual(dev.MAC)
 	PlayActivateSound()
 	ShowToast("Pairing "+dev.label()+" — keep it in pairing mode", ToastKindInfo)
 	started := runSceneTask(func(ctx context.Context) {
@@ -727,6 +738,7 @@ func btStartConnect(mac string) {
 		return
 	}
 	dev, gen := *d, btScreen.gen
+	btAutoClearManual(dev.MAC)
 	started := runSceneTask(func(ctx context.Context) {
 		stage := btStageFunc(gen, dev.MAC)
 		if err := btBringUp(ctx, stage); err != nil {
@@ -873,6 +885,9 @@ func btStartDisconnect(mac string) {
 				ShowToast("Could not disconnect "+dev.label()+": "+bzErrText(err), ToastKindError)
 				return
 			}
+			// Disconnected on purpose: the background reconnects leave it
+			// alone until it connects again (bt_autoreconnect.go).
+			btAutoNoteManualDisconnect(dev.MAC)
 			if btScreen.gen == gen {
 				if d := btScreen.devices[dev.MAC]; d != nil {
 					d.Connected = false
@@ -1033,7 +1048,9 @@ func btRefreshPads() {
 	btScreen.padReadAt = time.Now()
 	gen := btScreen.gen
 	started := runSceneTask(func(ctx context.Context) {
-		pads, anon := bzPadReading(bzReadInputDevices(), bits.UintSize)
+		inputs := bzReadInputDevices()
+		pads, anon := bzPadReading(inputs, bits.UintSize)
+		slots, bats := btPadSlots(inputs, bits.UintSize), btBatteryByMAC(btPadBatteries())
 		links := btSysfsLinkCount()
 		if ctx.Err() != nil {
 			return
@@ -1045,6 +1062,7 @@ func btRefreshPads() {
 			btScreen.padReading = false
 			btScreen.padReadAt = time.Now()
 			btApplyPadReading(pads, anon)
+			btScreen.slot, btScreen.battery = slots, bats
 			if btScreen.listed && btScreen.links >= 0 && links != btScreen.links {
 				btRelist(false)
 			}
@@ -1189,6 +1207,9 @@ func btPairedRow(d bzDevice) tbxRowSpec {
 		spec.pill, spec.tone = btScreen.busyWord, tbxToneAccent
 	case d.Connected && kind == bzKindController && btScreen.padOK[d.MAC]:
 		spec.subtitle = "Controller · connected — works in games and Remote Play"
+		if extra := btPadFacts(d.MAC); extra != "" {
+			spec.subtitle = "Controller · " + extra + " — works in games and Remote Play"
+		}
 		spec.pill, spec.tone = "Connected", tbxToneGood
 	case d.Connected && kind == bzKindController && btScreen.noPad[d.MAC]:
 		spec.subtitle = "Connected, but no controller appeared — Options has the details"
@@ -1198,6 +1219,9 @@ func btPairedRow(d bzDevice) tbxRowSpec {
 		spec.pill, spec.tone = "Checking…", tbxToneNeutral
 	case d.Connected:
 		spec.subtitle = kind.word() + " · connected"
+		if codec := btHeadsetCodec(d.MAC); kind == bzKindAudio && codec != "" {
+			spec.subtitle += " · " + codec
+		}
 		spec.pill, spec.tone = "Connected", tbxToneGood
 	case kind == bzKindController:
 		spec.subtitle = "Controller · press its PS or Home button, or choose Connect"
@@ -1281,6 +1305,9 @@ func btHeader() UIPageHeader {
 
 // btRenderScreen draws the page.
 func btRenderScreen(renderer *sdl.Renderer, config *Config) {
+	// The background reconnects stay off the radio while the page is up
+	// (bt_autoreconnect.go).
+	btAutoNotePage()
 	if btScreen.visit.begin() {
 		btScreenEnter()
 	}
@@ -1675,6 +1702,20 @@ func btOpenDeviceSheet(config *Config, mac string) {
 		default:
 			b.WriteString("Press its PS or Home button and it connects by itself, or choose Connect.\n")
 		}
+		if dev.Connected {
+			if bat := btBatteryWords(btScreen.battery[mac]); bat != "" {
+				b.WriteString("\n## Battery\n" + strings.ToUpper(bat[:1]) + bat[1:] + "\n")
+			}
+			if n := btScreen.slot[mac]; n > 0 {
+				b.WriteString("\n## Order\nPad " + strconv.Itoa(n) + " — the " + btOrdinal(n) +
+					" extra controller to connect. Games number extra pads in the order they connected; Identify buzzes this one.\n")
+			}
+		}
+	}
+	if kind == bzKindAudio && dev.Connected {
+		if hint := btCodecHint(btHeadsetCodec(mac)); hint != "" {
+			b.WriteString("\n## Sound\nCodec " + hint + "\n")
+		}
 	}
 	b.WriteString("\n## Wi-Fi\nBluetooth shares the radio with Wi-Fi here. If a Remote Play or video stream stutters, choose a lower stream quality, or use the pad on a USB cable.")
 	primaryLabel := "Connect"
@@ -1683,17 +1724,65 @@ func btOpenDeviceSheet(config *Config, mac string) {
 		primaryLabel = "Disconnect"
 		primaryRun = func() { btStartDisconnect(mac) }
 	}
+	buttons := []tbxSheetButton{{label: "Forget", run: func() { btConfirmForget(config, dev) }}}
+	if kind == bzKindController && dev.Connected && btScreen.padOK[mac] {
+		// Which pad is this one? It buzzes and blinks (bt_identify_linux.go).
+		buttons = append(buttons, tbxSheetButton{label: "Identify", keepOpen: true, run: func() { btStartIdentify(dev) }})
+	}
+	buttons = append(buttons, tbxSheetButton{label: primaryLabel, primary: true, run: primaryRun})
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    dev.label(),
 		subtitle: kind.word() + " · " + status,
 		icon:     kind.icon(),
 		body:     b.String(),
-		buttons: []tbxSheetButton{
-			{label: "Forget", run: func() { btConfirmForget(config, dev) }},
-			{label: primaryLabel, primary: true, run: primaryRun},
-		},
-		focus: 1,
+		buttons:  buttons,
+		focus:    len(buttons) - 1,
 	})
+}
+
+// btIdentifying is set while a pad buzzes, so presses do not stack.
+var btIdentifying atomic.Bool
+
+// btStartIdentify buzzes and blinks a connected pad, off the main loop.
+func btStartIdentify(dev bzDevice) {
+	if !btIdentifying.CompareAndSwap(false, true) {
+		return
+	}
+	PlayActivateSound()
+	go func() {
+		defer btIdentifying.Store(false)
+		if err := btIdentifyPad(dev.MAC); err != nil {
+			ShowToast("Could not identify "+dev.label()+": "+err.Error(), ToastKindInfo)
+		}
+	}()
+}
+
+// btPadFacts is a connected pad's order and battery for its row ("Pad 2 ·
+// 80% battery"), "" when neither is known.
+func btPadFacts(mac string) string {
+	var parts []string
+	if n := btScreen.slot[mac]; n > 0 {
+		parts = append(parts, "Pad "+strconv.Itoa(n))
+	}
+	if bat := btBatteryWords(btScreen.battery[mac]); bat != "" {
+		parts = append(parts, bat)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// btOrdinal is 1st, 2nd, 3rd, 4th…
+func btOrdinal(n int) string {
+	suffix := "th"
+	switch {
+	case n%100 >= 11 && n%100 <= 13:
+	case n%10 == 1:
+		suffix = "st"
+	case n%10 == 2:
+		suffix = "nd"
+	case n%10 == 3:
+		suffix = "rd"
+	}
+	return strconv.Itoa(n) + suffix
 }
 
 // btConfirmForget asks before unpairing.

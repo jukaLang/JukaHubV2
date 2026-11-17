@@ -1714,6 +1714,10 @@ type bzInputDev struct {
 	Uniq    string
 	Sysfs   string
 	KeyBits string
+	// Handlers are the device's nodes ("event5 js0"): the event node is
+	// where Identify rumbles a pad (bt_identify_linux.go), and its number
+	// the order pads connected in (btPadSlots).
+	Handlers string
 }
 
 // bzReadInputDevices reads the kernel's input devices; tests replace it.
@@ -1759,6 +1763,8 @@ func bzParseInputDevices(data []byte) []bzInputDev {
 			cur.Sysfs = strings.TrimPrefix(line, "S: Sysfs=")
 		case strings.HasPrefix(line, "B: KEY="):
 			cur.KeyBits = strings.TrimPrefix(line, "B: KEY=")
+		case strings.HasPrefix(line, "H: Handlers="):
+			cur.Handlers = strings.TrimSpace(strings.TrimPrefix(line, "H: Handlers="))
 		}
 	}
 	flush()

@@ -268,8 +268,8 @@ func chatRemoveLocked(tab chatTab, id string) bool {
 }
 
 // chatIsOwn reports whether a message was written on this device. A Discord
-// message (snowflake id) never counts by name alone: every JukaHub user who
-// kept the default name posts as "You".
+// message (snowflake id) never counts by name alone: different devices can
+// share the same default name.
 func chatIsOwn(msg ChatMessage) bool {
 	if msg.Own {
 		return true

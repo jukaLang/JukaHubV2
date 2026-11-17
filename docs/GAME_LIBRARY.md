@@ -210,7 +210,9 @@ resolves the emulator in this order:
 3. the Emulators catalog: every available row whose name matches the console's
    aliases exactly (`GBA`, `mGBA` for Game Boy Advance), then whose bracketed
    part or a whole word does (`RetroArch GBA`). One match starts at once; two
-   or more open **Which emulator?**, listing each with its kind and folder:
+   or more open **Which emulator?**, listing each with its kind and folder —
+   the one [recommended for this hardware](#the-recommended-emulator) first,
+   with a **Recommended** badge:
    **A** plays with the highlighted one (it is highlighted again next time),
    **Y** always uses it for that game, **B** cancels. Game options →
    **Emulator** sets a game back to *Ask each time*;
@@ -291,6 +293,59 @@ and **A** opens RetroArch's own menu, started the way the firmware's launchers
 start it (from its folder, with `HOME` there). **A** on a core row opens this
 library searched for the console that core plays (the first **B** clears the
 search).
+
+### The recommended emulator
+
+CrossMix and the other TrimUI firmwares ship more than one emulator for the
+heavier consoles, and which one plays best on this chip (Allwinner A133P,
+PowerVR GE8300, 1 GB) is mostly word of mouth. JukaHub keeps that knowledge as
+a ranked list per console (`player/emubest.go`), one for the handheld and one
+for a Windows PC, and uses it in three places — never against a choice you made:
+
+- **Which emulator?** lists the recommended installed emulator first, with a
+  **Recommended** badge. The highlight still starts on the one you picked last.
+- When a game has no emulator of its own, its console has none in
+  `game-launchers.json` and nothing was picked last, the emulator a save state,
+  the diagnosis or Reset game assume is the recommended one rather than the
+  catalog's first match. Every pin still wins.
+- On Windows, the Emulators page marks the install tile of a better emulator for
+  a console you have games for but only a weaker emulator installed —
+  *Better emulator available: DuckStation plays PlayStation better than the
+  PCSX-ReARMed (RetroArch) you use now* — and lists it right after the
+  installed ones. Nothing installs until you press Install. The handheld shows
+  no such tile: its firmware's launch scripts choose the core, so installing a
+  core would not change what a game starts in.
+
+JukaHub recognises which emulator an `Emus` folder starts from its launcher's
+name (`drastic.sh`, `ppsspp_1.17.1_gl.sh`), the one core a RetroArch launch
+script names, the folder's name, and the emulator a script runs. When it cannot
+tell, it only puts a recognised emulator ahead of that folder if it is the
+console's very best.
+
+| Console | Handheld, best first | Windows, best first |
+|---------|---------------------|---------------------|
+| Nintendo DS | DraStic · melonDS DS core · melonDS core · DeSmuME core | melonDS · melonDS DS core · DeSmuME core |
+| PSP | PPSSPP · PPSSPP core | PPSSPP · PPSSPP core |
+| Nintendo 64 | Mupen64Plus · Mupen64Plus-Next core · ParaLLEl N64 core | Mupen64Plus-Next core · ParaLLEl N64 core |
+| Dreamcast | Flycast · Flycast core | Flycast core |
+| Saturn | YabaSanshiro · YabaSanshiro core · Yabause core | Beetle Saturn core · Kronos core · YabaSanshiro core |
+| PlayStation | PCSX-ReARMed core · SwanStation core · DuckStation core · Beetle PSX core | DuckStation · SwanStation core · Beetle PSX HW core · PCSX-ReARMed core |
+| Game Boy Advance | mGBA core · mGBA · gpSP core · VBA Next core | mGBA · mGBA core |
+| SNES | Snes9x core · Snes9x 2005 core · bsnes core | Snes9x core · Snes9x · bsnes |
+| NES | FCEUmm core · Nestopia core · QuickNES core | Mesen core · FCEUmm core · Nestopia core · FCEUX |
+| Game Boy, Game Boy Color | Gambatte core · SameBoy core · mGBA core · Gearboy core | the same |
+| Mega Drive | Genesis Plus GX core · PicoDrive core | the same |
+| GameCube, Wii / PS2 | — | Dolphin / PCSX2 |
+
+Where the handheld ranking comes from: CrossMix's emulator list and release
+notes (standalone DraStic, PPSSPP, Mupen64Plus, Flycast, YabaSanshiro and
+mGBA; `mgba_libretro` as its recommended GBA core; PCSX-ReARMed for
+PlayStation), KNULLI's Scarab release (standalone YabaSanshiro "significantly
+boosts" Saturn), and spruceOS's A133P measurements (standalone Mupen64Plus with
+GLideN64 at full speed on the Smart Pro and Brick). Judgement calls rather than
+measurements: standalone Flycast ahead of its core, the mGBA core ahead of
+standalone mGBA, and the order of the light 8- and 16-bit cores, which all run
+at full speed on this chip.
 
 ### Per-game launch options
 

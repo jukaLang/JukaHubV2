@@ -14,6 +14,8 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // ttsLocalVoice is a speech engine on this device.
@@ -36,12 +38,55 @@ var ttsLocalState struct {
 // ttsLocalFailLimit is how many failures in a row retire the engine.
 const ttsLocalFailLimit = 2
 
+// errTTSPartial: the device's voice said only part of the line.
+var errTTSPartial = errors.New("the device's voice stopped part-way")
+
+// errTTSFellBack: the line was heard, but from Piper standing in for the
+// natural voice, so tts_cache.go must not keep it as the natural voice's.
+var errTTSFellBack = errors.New("Piper spoke for the natural voice")
+
+// ttsTalkAt is when a conversation with Juka last showed signs of life — the
+// orb up, listening, thinking or answering — as time since ttsTalkEpoch (0:
+// never). A loaded Piper stays until ttsPiperWarmIdle after both this and
+// its last line (tts_local_other.go), so a slow offline answer does not
+// find the voice gone. Any goroutine.
+var ttsTalkAt atomic.Int64
+
+// ttsTalkEpoch is ttsTalkAt's zero, on the monotonic clock (the handheld's
+// wall clock jumps when NTP arrives).
+var ttsTalkEpoch = time.Now()
+
+// ttsTalkTyped is set while the device's voice last spoke a Chat reply or a
+// Voice command page answer: the next question there is typed, or asked
+// without the orb that keeps the voice loaded, so the voice waits longer
+// before it lets go. Any goroutine.
+var ttsTalkTyped atomic.Bool
+
+// ttsKeepWarm notes that a conversation is still going. Any goroutine; cheap
+// enough for every frame.
+func ttsKeepWarm() { ttsTalkAt.Store(int64(time.Since(ttsTalkEpoch)) | 1) }
+
+// ttsTalkLast is when ttsKeepWarm was last called (zero time: never).
+func ttsTalkLast() time.Time {
+	at := ttsTalkAt.Load()
+	if at == 0 {
+		return time.Time{}
+	}
+	return ttsTalkEpoch.Add(time.Duration(at))
+}
+
 // ttsLocal is the device's voice, when it has a working one.
 func ttsLocal() (ttsLocalVoice, bool) {
 	ttsLocalState.mu.Lock()
 	defer ttsLocalState.mu.Unlock()
 	if !ttsLocalState.checked {
-		ttsLocalState.voice, ttsLocalState.ok = ttsLocalFind()
+		// The natural voice first, when it is installed and wanted
+		// (tts_phonon_install.go); Piper or the PC's voice otherwise.
+		if v, ok := ttsPhononVoice(); ok {
+			ttsLocalState.voice, ttsLocalState.ok = v, true
+		} else {
+			ttsLocalState.voice, ttsLocalState.ok = ttsLocalFind()
+		}
 		ttsLocalState.checked = true
 	}
 	if ttsLocalState.fails >= ttsLocalFailLimit {
@@ -60,7 +105,23 @@ func ttsLocalRecheck() {
 
 // ttsLocalSpeak renders text with the device's voice, counting its failures.
 func ttsLocalSpeak(ctx context.Context, v ttsLocalVoice, text, gender string) ([]int16, int, error) {
-	samples, rate, err := ttsLocalSynth(ctx, v, text, gender)
+	var samples []int16
+	var rate int
+	var err error
+	if v.kind == "phonon" {
+		// The natural voice counts its own failures (ttsPhononNoteFail);
+		// Piper says the line when it cannot.
+		samples, rate, err = ttsPhononSynth(ctx, v, text, gender)
+		if err != nil && ctx.Err() == nil {
+			if pv, ok := ttsManagedVoice(); ok {
+				logWarn("tts", "the natural voice failed, Piper speaks instead: %v", err)
+				v = pv
+				samples, rate, err = ttsLocalSynth(ctx, v, text, gender)
+			}
+		}
+	} else {
+		samples, rate, err = ttsLocalSynth(ctx, v, text, gender)
+	}
 	if ctx.Err() != nil {
 		return nil, 0, ctx.Err()
 	}
@@ -94,6 +155,41 @@ func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, next func(context
 		}
 		return c, ok
 	}
+	if v.kind == "phonon" {
+		// The natural voice (tts_phonon.go) streams like Piper. When it
+		// fails, Piper says what it had not said yet, then the rest.
+		n, rest, err := ttsPhononStream(ctx, v, gender, next, emit)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err == nil {
+			return nil
+		}
+		pv, ok := ttsManagedVoice()
+		if !ok {
+			if n > 0 {
+				logWarn("tts", "the natural voice stopped part-way: %v", err)
+				return errTTSPartial
+			}
+			return err
+		}
+		logWarn("tts", "the natural voice failed after %d pieces, Piper goes on: %v", n, err)
+		replay := func(ctx context.Context) (string, bool) {
+			if len(rest) > 0 {
+				c := rest[0]
+				rest = rest[1:]
+				return c, true
+			}
+			return next(ctx)
+		}
+		if err := ttsLocalSpeakChunks(ctx, pv, replay, gender, emit); err != nil {
+			if n > 0 && ctx.Err() == nil {
+				return errTTSPartial
+			}
+			return err
+		}
+		return errTTSFellBack
+	}
 	if v.kind == "piper" {
 		n, err := ttsPiperStream(ctx, v, record, emit)
 		if ctx.Err() != nil {
@@ -104,7 +200,10 @@ func ttsLocalSpeakChunks(ctx context.Context, v ttsLocalVoice, next func(context
 			ttsLocalState.fails = 0
 			ttsLocalState.mu.Unlock()
 			if err != nil {
+				// Some of it was heard: not a failure of the voice, but
+				// not the whole line either (tts_cache.go keeps only that).
 				logWarn("tts", "Piper stopped part-way: %v", err)
+				return errTTSPartial
 			}
 			return nil
 		}

@@ -107,6 +107,16 @@ jobs:
       contents: read
       actions: read
 
+  # The optional natural offline voice (Phonon 31M behind xn-ptts's server,
+  # built for the Cortex-A53), the same way: attach-offline-voice puts
+  # JukaHub-Voice-linux-arm64.zip on the release whenever it is ready.
+  build-offline-voice:
+    name: Natural offline voice
+    uses: ./.github/workflows/offline-voice.yml
+    permissions:
+      contents: read
+      actions: read
+
   # The handheld binary (linux/arm64, cgo + SDL2), compiled in the community
   # TrimUI toolchain image, which carries what a binary must be linked against
   # to start on the handheld: the device SDK sysroot, the Linaro aarch64 gcc and
@@ -671,6 +681,63 @@ jobs:
               --clobber --repo "$GITHUB_REPOSITORY" 2> "$RUNNER_TEMP/upload.err"; then
             cat "$RUNNER_TEMP/upload.err"
             echo "::warning title=Offline AI::could not attach JukaHub-OfflineAI-linux-arm64.zip to $TAG_NAME ($(head -n 1 "$RUNNER_TEMP/upload.err")); JukaHub installs it from an older release. With immutable releases on, a release published before the package was ready cannot take it."
+          fi
+
+  # The optional natural offline voice, attached exactly like the offline AI:
+  # JukaHub installs it from the newest release that carries it
+  # (tts_phonon_install.go) and speaks with Piper until then.
+  attach-offline-voice:
+    name: Attach the natural voice package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    needs: [create-tag, build-offline-voice]
+    if: ${{ !cancelled() && needs.create-tag.result == 'success' }}
+    permissions:
+      contents: write   # attach the package to the release
+    steps:
+      - name: Check out package-voice.sh
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/scripts/package-voice.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Download the natural voice
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: offline-voice
+          path: offline-voice
+
+      - name: Package the natural voice
+        id: pack
+        # package-voice.sh checks the build against its BUILDINFO.txt and
+        # voice.json, then zips it with a SHA256SUMS that JukaHub checks
+        # before it installs the package.
+        run: |
+          if [ ! -d offline-voice ]; then
+            echo "::warning title=Natural voice::not built for this run; this release goes out without JukaHub-Voice-linux-arm64.zip (see the Natural offline voice job)"
+          elif sh .github/scripts/package-voice.sh offline-voice JukaHub-Voice-linux-arm64.zip; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            rm -f JukaHub-Voice-linux-arm64.zip
+            echo "::warning title=Natural voice::the natural voice files did not verify; this release goes out without JukaHub-Voice-linux-arm64.zip"
+          fi
+
+      - name: Upload the natural voice package
+        if: steps.pack.outputs.ready == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
+        run: |
+          if ! gh release upload "$TAG_NAME" JukaHub-Voice-linux-arm64.zip \
+              --clobber --repo "$GITHUB_REPOSITORY" 2> "$RUNNER_TEMP/upload.err"; then
+            cat "$RUNNER_TEMP/upload.err"
+            echo "::warning title=Natural voice::could not attach JukaHub-Voice-linux-arm64.zip to $TAG_NAME ($(head -n 1 "$RUNNER_TEMP/upload.err")); JukaHub installs it from an older release. With immutable releases on, a release published before the package was ready cannot take it."
           fi
 
   # Cross-compiled on Ubuntu with the distribution's MinGW-w64. This job used

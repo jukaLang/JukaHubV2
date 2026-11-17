@@ -526,7 +526,8 @@ type ChatSection struct {
 	// Messages is the community (Discord) tab. Before the tabs existed it was
 	// one mixed list; loadChatMessages splits such a history once.
 	Messages []ChatMessage `json:"messages"`
-	// Name is the display name the local user chats under (default "You").
+	// Name is the display name the local user chats under. Empty uses the
+	// device name followed by "'s user".
 	Name string `json:"name,omitempty"`
 	// AI is the Juka AI conversation and Saved the notes-to-self tab; both
 	// stay on this device.
@@ -586,8 +587,8 @@ func chatRefreshName(c *Config) {
 }
 
 // chatDisplayName returns the name the local user's messages are signed with:
-// the user's name (userName), or "You" when none is set. Safe off the main
-// thread: it never reads the config itself.
+// the user's name (userName), or the device name followed by "'s user" when
+// none is set. Safe off the main thread: it never reads the config itself.
 func chatDisplayName() string {
 	chatNameCache.Lock()
 	n, valid := chatNameCache.name, chatNameCache.valid
@@ -601,13 +602,13 @@ func chatDisplayName() string {
 	if n != "" {
 		return n
 	}
-	return "You"
+	return peerDeviceName() + "'s user"
 }
 
 // setChatDisplayName updates and persists the local user's name from the chat's
 // name chip. It is the same setting as Settings → Your name (and the Home
-// greeting), so both change together. An empty name — or "You", the chat's
-// placeholder — clears it, and the chat signs as "You" again.
+// greeting), so both change together. An empty name — or the old "You"
+// placeholder — clears it, and the chat uses the device-based default.
 func setChatDisplayName(name string) string {
 	name = strings.TrimSpace(name)
 	if strings.EqualFold(name, "You") {
@@ -631,10 +632,7 @@ func setChatDisplayName(name string) string {
 		saveUserConfig(userConfigCache)
 	}
 	chatRefreshName(appConfig)
-	if name == "" {
-		return "You"
-	}
-	return name
+	return chatDisplayName()
 }
 
 // defaultDiscordChannel is the JukaHub Discord channel the chat connects to when

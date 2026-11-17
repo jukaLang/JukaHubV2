@@ -558,6 +558,8 @@ func setHomeLayoutOptions(*Config) []setOption {
 	for _, name := range homeArrangementChoiceList {
 		note := "Your config's dashboard"
 		switch name {
+		case homeArrangementTabs:
+			note = "Tabs for Recent, Main, Games, Entertainment and more"
 		case homeArrangementGrid:
 			note = "The same cards as equal tiles"
 		case homeArrangementCarousel:
@@ -721,10 +723,21 @@ func setBuildSections() []setSection {
 					// The full boot at power-on, on every start, or never
 					// (bootos.go).
 					ID: "startupAnimation", Label: "Startup animation", Kind: setKindChoice,
-					Detail:  bootOSAnimationDetail,
-					Options: bootOSAnimationOptions,
-					Current: bootOSAnimationCurrent,
-					Choose:  bootOSAnimationChoose,
+					Detail:   bootOSAnimationDetail,
+					Options:  bootOSAnimationOptions,
+					Current:  bootOSAnimationCurrent,
+					Choose:   bootOSAnimationChoose,
+					Disabled: bootStyleOff,
+				},
+				{
+					// What the logo does: the cinematic crash, the roll, the
+					// still image, the classic glass light, a random one or
+					// none (bootstyles.go).
+					ID: "bootStyle", Label: "Boot animation", Kind: setKindChoice,
+					Detail:  bootStyleDetail,
+					Options: bootStyleOptions,
+					Current: bootStyleCurrent,
+					Choose:  bootStyleChoose,
 				},
 				{
 					// The firmware's power-on picture (bootlogo.go): A twice
@@ -737,7 +750,7 @@ func setBuildSections() []setSection {
 				},
 				{
 					ID: "bootPreview", Label: "Watch the boot animation", Kind: setKindAction,
-					Detail: setStatic("The full boot JukaHub plays when the device starts"),
+					Detail: bootStylePreviewDetail,
 					Open:   bootOSPreviewOpen,
 				},
 				{
@@ -776,7 +789,7 @@ func setBuildSections() []setSection {
 					// widgets you arrange (home_edit.go). A opens the list with a
 					// line on each; Left/Right step through them.
 					ID: "homeLayout", Label: "Home layout", Kind: setKindChoice,
-					Detail:     setStatic("Standard, Hero grid, a carousel or widgets you arrange"),
+					Detail:     setStatic("Tabs, Standard, Hero grid, a carousel or widgets you arrange"),
 					Options:    setHomeLayoutOptions,
 					Current:    func(c *Config) int { return homeArrangementChoiceIndex(homeArrangement(c)) },
 					Sheet:      setHomeLayoutOptions,
@@ -786,10 +799,16 @@ func setBuildSections() []setSection {
 						setToast("Home layout: " + homeArrangementChoiceLabel(value))
 					},
 				},
+				// The Tabs Home's own rows: its arranging sheet and whether it
+				// opens on the tab it was left on (hometabs_edit.go). Shown only
+				// on that layout, where they stand in for Edit Home.
+				homeTabsSettingsRow(),
+				homeTabsRememberRow(),
 				{
 					// Home's edit mode from here (home_edit.go): it opens Home
 					// first, switching to Widgets when Home is not a tile layout.
 					ID: "homeEdit", Label: "Edit Home", Kind: setKindAction,
+					Visible: func(c *Config) bool { return !homeTabsOnTabs(c) },
 					Detail: func(*Config) string {
 						if hintsUseKeyboard() {
 							return "Move, resize, add and remove Home tiles — Q on Home"
@@ -1492,6 +1511,22 @@ func setBuildSections() []setSection {
 					ID: "library", Label: "Game library", Kind: setKindAction,
 					Detail: setStatic("Every game on the card, by system"),
 					Open:   func(*Config) { openGameLibraryPanel() },
+				},
+				{
+					// The Tabs Home's Games tab (hometabs_games.go): consoles
+					// without games left out, ones without an emulator dimmed.
+					ID: "homeTabsEmuClean", Label: "Hide emulators without games", Kind: setKindToggle,
+					Detail: func(c *Config) string {
+						if homeTabsEmuCleanOn(c) {
+							return "Home's Games tab shows only consoles that have games"
+						}
+						return "Home's Games tab shows every console this device can play"
+					},
+					Get: homeTabsEmuCleanOn,
+					Set: func(c *Config, on bool) {
+						homeTabsSetEmuClean(c, on)
+						setToast("Hide emulators without games: " + setOnOff(on))
+					},
 				},
 				{
 					ID: "romManager", Label: "ROM manager", Kind: setKindAction,

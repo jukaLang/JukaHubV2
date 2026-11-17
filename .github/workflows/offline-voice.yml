@@ -1,0 +1,159 @@
+name: Natural offline voice (Phonon 31M)
+
+# Builds the optional natural offline voice for the TrimUI handhelds:
+# Gradium's Phonon 31M English model (Apache-2.0) behind xn-ptts's speech
+# server, compiled for the Cortex-A53 in the same Ubuntu 20.04 (glibc 2.31)
+# arm64 root as the Remote Play helpers and the offline AI, smoke-tested under
+# qemu's Cortex-A53 with no network (.github/scripts/build-voice.sh says why the
+# stock ARM64 build cannot be used), and hands it over as the artifact
+# "offline-voice". docker-image.yml's attach-offline-voice zips it with
+# .github/scripts/package-voice.sh and puts JukaHub-Voice-linux-arm64.zip on the
+# release. JukaHub installs it from the newest release that carries it
+# (tts_phonon_install.go) and keeps Piper otherwise, so a release without it
+# costs nothing, and nothing on the way to the release waits for this job.
+#
+# A workflow of its own (not a second job of offline-ai.yml) so that the
+# offline AI's attach job, which waits for every job of the workflow it calls,
+# never waits for this longer build.
+#
+# Its reuse key is made here rather than by `build-root.sh key` (which has no
+# part for it): a hash of build-voice.sh, build-root.sh and .gitattributes.
+# Its scripts live in .github/scripts, not player/native, because the Remote
+# Play helpers' key hashes all of player/native: there, every change to the
+# voice would rebuild the helpers that JukaHub-Trimui.zip waits for.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  voice:
+    name: Natural offline voice (linux/arm64, Cortex-A53, glibc 2.31)
+    runs-on: ubuntu-24.04-arm
+    # The build root (about 5 minutes), Rust and the server (15-30), the
+    # emulated smoke runs (up to 2 x 35) in the worst case; a reused build
+    # takes a minute.
+    timeout-minutes: 120
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read     # find and download what an earlier run built
+    env:
+      ROOTFS: /srv/jukahub-focal
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Look for the voice built from these sources
+        id: cache
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          dest=player/native/bin/juka-voice
+          miss() { rm -rf "$dest"; exit 0; }
+          sources=$(git ls-files -s -- .github/scripts/build-voice.sh .github/scripts/build-root.sh .gitattributes)
+          if ! printf '%s\n' "$sources" | cut -f2 | grep -qxF .github/scripts/build-voice.sh; then
+            echo "::warning title=Natural voice::git does not list build-voice.sh; building it"
+            miss
+          fi
+          name="offline-voice-$(printf '%s\n' "$sources" | sha256sum | cut -c1-16)"
+          echo "artifact=$name" >> "$GITHUB_OUTPUT"
+          echo "natural voice sources: $name"
+          if ! timeout 360 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
+              juka-voice.tar BUILDINFO.txt; then
+            miss
+          fi
+          want=$(awk '$1 == "tar" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
+          [ -n "$want" ] || miss
+          [ "$(sha256sum "$dest/juka-voice.tar" | cut -d' ' -f1)" = "$want" ] || miss
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the Ubuntu 20.04 build root
+        id: root
+        if: steps.cache.outputs.hit != 'true'
+        timeout-minutes: 15
+        run: sh .github/scripts/build-root.sh create
+
+      - name: Build the natural offline voice
+        id: voice
+        if: steps.cache.outputs.hit != 'true'
+        # build-voice.sh bounds each phase itself and prints a line per phase.
+        # It runs in the root the way build-root.sh's own parts do.
+        timeout-minutes: 100
+        run: |
+          sudo chroot "$ROOTFS" /usr/bin/env -i HOME=/root LANG=C.UTF-8 \
+            DEBIAN_FRONTEND=noninteractive \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            JOBS="$(nproc)" /bin/sh /src/.github/scripts/build-voice.sh
+
+      - name: Report the natural voice build
+        if: always()
+        continue-on-error: true
+        env:
+          VOICE_OUTCOME: ${{ steps.voice.outcome }}
+          ROOT_OUTCOME: ${{ steps.root.outcome }}
+          REUSED_FROM: ${{ steps.cache.outputs.hit == 'true' && steps.cache.outputs.run || '' }}
+        run: |
+          info=player/native/bin/juka-voice/BUILDINFO.txt
+          {
+            echo "### Natural offline voice"
+            echo ""
+            if [ -n "$REUSED_FROM" ]; then
+              echo "Reused from run $REUSED_FROM, which built and verified it from the same sources."
+            elif [ "$VOICE_OUTCOME" = success ]; then
+              echo "Built, and spoke offline on an emulated Cortex-A53."
+            else
+              echo "Not built (${VOICE_OUTCOME:-not run}): the release goes out without JukaHub-Voice-linux-arm64.zip; JukaHub keeps using Piper, or installs the voice from an older release that has one."
+              if [ "$ROOT_OUTCOME" = failure ]; then
+                echo "The **Create the Ubuntu 20.04 build root** step says why."
+              else
+                echo "The **Build the natural offline voice** step says why."
+              fi
+            fi
+            if [ -f "$info" ]; then
+              echo ""
+              echo '```'
+              cat "$info"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$REUSED_FROM" ] && [ "$VOICE_OUTCOME" != success ]; then
+            echo "::warning title=Natural voice::not built; the release goes out without JukaHub-Voice-linux-arm64.zip"
+          fi
+
+      - name: Upload the natural offline voice
+        if: ${{ !cancelled() && (steps.voice.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: offline-voice
+          path: player/native/bin/juka-voice/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+
+      - name: Keep the natural voice for later runs
+        if: ${{ !cancelled() && steps.voice.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: player/native/bin/juka-voice/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
+      - name: Release the build root
+        if: always()
+        run: sh .github/scripts/build-root.sh release

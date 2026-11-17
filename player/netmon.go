@@ -708,6 +708,8 @@ func refreshToolHealth() {
 		// voice, which waits for it.
 		sttAutoInstallOffline()
 		ttsAutoInstallOfflineVoice()
+		// The natural voice comes after Piper (tts_phonon_install.go).
+		ttsPhononAutoInstall()
 	}
 }
 

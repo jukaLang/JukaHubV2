@@ -81,6 +81,7 @@ func ttsSettingsRows() []setRow {
 			Value:   ttsOfflineVoiceValue,
 			Open:    ttsInstallOfflineVoice,
 		},
+		ttsPhononSettingsRow(),
 		{
 			ID: "jukaVoiceTest", Label: "Hear Juka", Kind: setKindAction,
 			Detail: setStatic("Says a short line in the chosen voice — or what keeps it quiet"),
@@ -89,6 +90,7 @@ func ttsSettingsRows() []setRow {
 				// A fresh try: Groq is asked again even after a refusal, and a
 				// voice installed since the last look is found.
 				ttsGateClear()
+				ttsPhononFailReset()
 				ttsLocalRecheck()
 				ttsSpeakFrom(ttsFromTest, ttsKindVoice, ttsTestLine)
 			},

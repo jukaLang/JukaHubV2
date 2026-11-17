@@ -34,6 +34,11 @@ package main
 // motion keeps every beat as a fade: no light travels, nothing drifts, scales
 // or flies — a Reduce motion chosen by hand, or a battery saver, not the
 // handheld's out-of-box default (bootOSMotion).
+//
+// What the logo does is the user's choice (Settings → General → Boot
+// animation, bootstyles.go): the cinematic crash onto a cracking floor (the
+// default), the roll, the still image, this glass light ("classic"), a random
+// one, or none at all.
 
 import (
 	"math"
@@ -416,6 +421,17 @@ func bootOSLiveInputs(config *Config, now time.Time) bootOSInputs {
 func bootOSPlanStartup(config *Config, allotment time.Duration) time.Duration {
 	powerOn, reason := bootOSDecide(bootOSLiveInputs(config, time.Now()))
 	bootOS.reason = reason
+	if bootStyleSetting(config) == bootStyleNone {
+		// Boot animation "None": no boot and no hello. A power-on is still
+		// one (the startup lock and the OS escape read it); the queue runs
+		// straight after, and the first screen comes up as soon as it can.
+		bootOS.mode = bootOSModeNone
+		if powerOn {
+			bootOS.mode = bootOSModePowerOn
+		}
+		logInfo("startup", "boot animation off (bootStyle none): straight to the first screen")
+		return 0
+	}
 	switch {
 	case powerOn:
 		bootOS.mode = bootOSModePowerOn
@@ -849,6 +865,9 @@ type bootOSRun struct {
 	deadlineMS float64
 	layout     bootLogoLayout
 	cx         float64
+	style      bootStyleRun
+	drift      bool
+	nowMS      float64
 	// The progress line: the queue's snapshot, the fraction drawn (eased
 	// toward the real one, never back), the status label and when it last
 	// changed.
@@ -920,6 +939,11 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 	r.continuity = r.powerOn && !preview && bootOSContinuityReason(bootOS.reason) && bootLogoStateSaysOurs() &&
 		!trimuiAutostartMenuShown()
 	r.deadlineMS = float64((allotted + splashCheckGrace).Milliseconds())
+	// The style the logo enters with (bootstyles.go); a launch's hello plays
+	// its compressed version, and the still image moves nothing, the backdrop
+	// included.
+	r.style = bootStyleResolve(config, r.motion, !r.powerOn)
+	r.drift = r.motion && r.style.kind != bootStyleImage
 
 	// The wordmark is Inter at the layout's size, without the accessibility
 	// scale, so it is the same word on the same pixels as the boot logo's.
@@ -939,6 +963,9 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 	r.cx = float64(screenWidth) / 2
 	bootOSKitPrepare(renderer, r.layout.Sprite.W)
 	defer bootOSKitRelease()
+	r.styleGuard("preparing", r.stylePrepare)
+	defer func() { r.style.release() }()
+	logInfo("startup", "boot animation: %s", r.style.kind)
 	defer r.arrive.release()
 	if !preview {
 		// The warm-up keeps its render for the arrival while the boot is up.
@@ -958,7 +985,9 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 		bootWorkDrain()
 	}
 	if r.powerOn {
-		chimeStart(config, bootOSDelayedScore(chimeStartScore, bootOSChimeDelay), chimeStartSeconds+bootOSChimeDelay, chimeStartGain)
+		// The bells wait for the style's entrance, its knocks land with it.
+		score, seconds := r.style.chimeScore()
+		chimeStart(config, score, seconds, chimeStartGain)
 	}
 	r.play()
 	_ = renderer.SetClipRect(nil)
@@ -1042,18 +1071,18 @@ func (r *bootOSRun) holdDone(ms float64) bool {
 		return true
 	}
 	if r.powerOn {
-		if ms < bootOSPowerOnMinMS {
+		if ms < r.styleMinMS(bootOSPowerOnMinMS) {
 			return false
 		}
 		if r.preview {
-			return ms >= bootOSPreviewSettleMS
+			return ms >= bootOSPreviewSettleMS+r.style.lead
 		}
 		return bootWorkSettled()
 	}
 	if ms >= r.deadlineMS-bootOSLaunchOverlapMS {
 		return true
 	}
-	return ms >= bootOSLaunchMinMS && bootWorkSettled()
+	return ms >= math.Max(bootOSLaunchMinMS, r.style.minMS) && bootWorkSettled()
 }
 
 // beginArrival ends the hold with arrival beats. The arrival draws the first
@@ -1075,7 +1104,7 @@ func (r *bootOSRun) updateProgress(ms float64) {
 	r.lastMS = ms
 	target, label := 1.0, ""
 	if r.preview {
-		target, label = bootOSPreviewProgress(ms)
+		target, label = bootOSPreviewProgress(ms - r.style.lead)
 	} else {
 		bootWorkSnapshotInto(&r.snap)
 		target = r.snap.fraction()
@@ -1160,7 +1189,7 @@ func bootOSInkOn(boot, theme, bg sdl.Color, dawn float64, light bool) sdl.Color 
 
 // drawHold paints a frame of the hold.
 func (r *bootOSRun) drawHold(ms float64) {
-	f := bootOSTimeline(ms, r.powerOn, r.motion, r.continuity)
+	f := r.frame(ms, true)
 	r.drawBackdrop(ms, &f)
 	r.drawLayer(&f, 1, 1)
 	r.drawWord(&f, 1)
@@ -1187,7 +1216,7 @@ func (r *bootOSRun) drawBackdrop(ms float64, f *bootOSFrame) {
 	}
 	t := ms / 1000
 	w, h := float64(screenWidth), float64(screenHeight)
-	px, py := bootLiquidParallax(t, r.motion)
+	px, py := bootLiquidParallax(t, r.drift)
 	tileX := float64(r.layout.Sprite.X) + float64(r.layout.Sprite.W)/2
 	tileY := float64(r.layout.Sprite.Y) + float64(r.layout.Sprite.H)/2
 	accent := glassAccent()
@@ -1201,7 +1230,7 @@ func (r *bootOSRun) drawBackdrop(ms float64, f *bootOSFrame) {
 		if tex == nil {
 			continue
 		}
-		cx, cy, d, angle := bootBlobPlace(i, t, r.motion, w, h)
+		cx, cy, d, angle := bootBlobPlace(i, t, r.drift, w, h)
 		if e := f.emerge; e < 1 {
 			cx = tileX + (cx-tileX)*e
 			cy = tileY + (cy-tileY)*e
@@ -1215,9 +1244,9 @@ func (r *bootOSRun) drawBackdrop(ms float64, f *bootOSFrame) {
 		if k.light {
 			alpha *= 0.55
 		}
-		if !r.motion {
-			// Reduced motion keeps the light alive with a slow breath of
-			// brightness instead of movement.
+		if !r.drift {
+			// Reduced motion (and the still image) keeps the light alive
+			// with a slow breath of brightness instead of movement.
 			alpha *= 0.92 + 0.08*math.Sin(t*0.9+b.phase)
 		}
 		_ = tex.SetColorMod(col.R, col.G, col.B)
@@ -1247,6 +1276,11 @@ func (r *bootOSRun) drawBackdrop(ms float64, f *bootOSFrame) {
 // every part's presence and zoom grows them all about the artwork's centre
 // (the arrival's zoom through the glass).
 func (r *bootOSRun) drawLayer(f *bootOSFrame, fade, zoom float64) {
+	// The cinematic and roll styles draw their own (bootstyles.go); one that
+	// fails hands this frame, and the rest of the boot, to the classic.
+	if r.style.animated() && r.drawStyleLayer(f, fade, zoom) {
+		return
+	}
 	sp := r.layout.Sprite
 	logoA := bootClamp01(f.logo) * bootClamp01(fade)
 	if sp.W <= 0 || logoA <= 0 {
@@ -1258,15 +1292,8 @@ func (r *bootOSRun) drawLayer(f *bootOSFrame, fade, zoom float64) {
 	cy := float64(sp.Y) + float64(sp.H)/2
 	scale := zoom * f.logoScale
 	side := float64(sp.W) * scale
-	// The halo: the logo's two blooms, spilled onto the screen behind it.
 	if halo := bootClamp01(f.halo) * logoA; halo > 0 && k.dot != nil {
-		_ = k.dot.SetBlendMode(sdl.BLENDMODE_BLEND)
-		peak := 74.0
-		if glassLightTheme() {
-			peak = 46
-		}
-		r.drawDot(cx-0.10*side, cy-0.08*side, 2.3*side, glassAccent(), peak*halo)
-		r.drawDot(cx+0.12*side, cy+0.10*side, 2.3*side, bootOSBloomViolet, 0.85*peak*halo)
+		r.drawHalo(cx, cy, side, halo)
 	}
 	if tex := brandLogoTexture(renderer, sp.W); tex != nil {
 		bootOSF = sdl.FRect{X: float32(cx - side/2), Y: float32(cy - side/2), W: float32(side), H: float32(side)}
@@ -1274,27 +1301,9 @@ func (r *bootOSRun) drawLayer(f *bootOSFrame, fade, zoom float64) {
 		_ = renderer.CopyF(tex, nil, &bootOSF)
 		_ = tex.SetAlphaMod(255)
 	}
-	// The rim's glow, then the light running round it, both added to the
-	// glass so they read as light, not paint. Added white vanishes on a light
-	// theme's backdrop, so there they are laid on normally in the rim's own
-	// colours, which show on black and on white alike.
 	light := glassLightTheme()
 	if rim := bootClamp01(f.rim) * logoA; rim > 0 && k.ring != nil {
-		s := (float64(sp.W) + 2*float64(k.ringPad)) * scale
-		tint := glassMix(sdl.Color{R: 255, G: 255, B: 255, A: 255}, glassAccent(), 0.25)
-		mode, peak := sdl.BlendMode(sdl.BLENDMODE_ADD), 150.0
-		if light {
-			tint = glassMix(bootOSRimCyan, bootOSRimViolet, 0.5)
-			mode, peak = sdl.BLENDMODE_BLEND, 190
-		}
-		_ = k.ring.SetBlendMode(mode)
-		_ = k.ring.SetColorMod(tint.R, tint.G, tint.B)
-		_ = k.ring.SetAlphaMod(uint8(math.Round(peak * rim)))
-		bootOSF = sdl.FRect{X: float32(cx - s/2), Y: float32(cy - s/2), W: float32(s), H: float32(s)}
-		_ = renderer.CopyF(k.ring, nil, &bootOSF)
-		_ = k.ring.SetColorMod(255, 255, 255)
-		_ = k.ring.SetAlphaMod(255)
-		_ = k.ring.SetBlendMode(sdl.BLENDMODE_ADD)
+		r.drawRim(cx, cy, scale, rim)
 	}
 	if f.comet >= 0 && f.cometA > 0 && k.dot != nil {
 		r.drawComet(f.comet, f.cometA*logoA, cx, cy, scale, light)
@@ -1304,6 +1313,49 @@ func (r *bootOSRun) drawLayer(f *bootOSFrame, fade, zoom float64) {
 		_ = k.dot.SetAlphaMod(255)
 		_ = k.dot.SetBlendMode(sdl.BLENDMODE_BLEND)
 	}
+}
+
+// drawHalo paints the logo's two blooms, spilled onto the screen behind an
+// artwork side pixels across centred on (cx, cy), at presence halo.
+func (r *bootOSRun) drawHalo(cx, cy, side, halo float64) {
+	k := &bootOSKit
+	if k.dot == nil {
+		return
+	}
+	_ = k.dot.SetBlendMode(sdl.BLENDMODE_BLEND)
+	peak := 74.0
+	if glassLightTheme() {
+		peak = 46
+	}
+	r.drawDot(cx-0.10*side, cy-0.08*side, 2.3*side, glassAccent(), peak*halo)
+	r.drawDot(cx+0.12*side, cy+0.10*side, 2.3*side, bootOSBloomViolet, 0.85*peak*halo)
+}
+
+// drawRim paints the glow of the logo's pane rim round an artwork centred on
+// (cx, cy) and grown by scale, at presence rim, added to the glass so it reads
+// as light, not paint. Added white vanishes on a light theme's backdrop, so
+// there it is laid on normally in the rim's own colours, which show on black
+// and on white alike.
+func (r *bootOSRun) drawRim(cx, cy, scale, rim float64) {
+	k := &bootOSKit
+	if k.ring == nil {
+		return
+	}
+	s := (float64(r.layout.Sprite.W) + 2*float64(k.ringPad)) * scale
+	tint := glassMix(sdl.Color{R: 255, G: 255, B: 255, A: 255}, glassAccent(), 0.25)
+	mode, peak := sdl.BlendMode(sdl.BLENDMODE_ADD), 150.0
+	if glassLightTheme() {
+		tint = glassMix(bootOSRimCyan, bootOSRimViolet, 0.5)
+		mode, peak = sdl.BLENDMODE_BLEND, 190
+	}
+	_ = k.ring.SetBlendMode(mode)
+	_ = k.ring.SetColorMod(tint.R, tint.G, tint.B)
+	_ = k.ring.SetAlphaMod(uint8(math.Round(peak * rim)))
+	bootOSF = sdl.FRect{X: float32(cx - s/2), Y: float32(cy - s/2), W: float32(s), H: float32(s)}
+	_ = r.renderer.CopyF(k.ring, nil, &bootOSF)
+	_ = k.ring.SetColorMod(255, 255, 255)
+	_ = k.ring.SetAlphaMod(255)
+	_ = k.ring.SetBlendMode(sdl.BLENDMODE_ADD)
 }
 
 // drawDot paints the soft round light centred on (x, y), d across, tinted c at
@@ -1411,6 +1463,10 @@ func bootOSPreviewOpen(c *Config) {
 	if c == nil || mainWindow == nil || bootOS.running {
 		return
 	}
+	if bootStyleSetting(c) == bootStyleNone {
+		setToast("Boot animation is off: JukaHub opens straight to Home")
+		return
+	}
 	if currentSceneIndex < 0 || currentSceneIndex >= len(c.Scenes) {
 		return
 	}
@@ -1425,5 +1481,5 @@ func bootOSPreviewOpen(c *Config) {
 	defer bootHandoffRelease()
 	bootHandoff.keep = true
 	warmSceneCaches(renderer, c, c.Scenes[currentSceneIndex])
-	bootOSPlay(renderer, c, time.Duration(bootOSPowerOnMinMS+1500)*time.Millisecond, true)
+	bootOSPlay(renderer, c, time.Duration(bootStylePreviewAllotMS)*time.Millisecond, true)
 }

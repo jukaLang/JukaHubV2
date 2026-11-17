@@ -290,3 +290,67 @@ func TestLibraryDurCurationProfileIsWrittenAtomically(t *testing.T) {
 		t.Errorf("live profile did not receive the new notes:\n%s", live)
 	}
 }
+
+// The Tabs Home's collections.json (hometabs_collections.go): a save round-
+// trips and is cleaned on load (names tidied, duplicates and nested
+// collections dropped), the second save leaves the first in .bak, a damaged
+// file comes back from it with the damage kept as .corrupt, and a file with
+// no usable copy at all reads as empty instead of failing.
+func TestLibraryDurCollectionsRecoverFromBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), homeTabsColFileName)
+	if got := homeTabsColLoadFile(path); len(got.Collections) != 0 || len(got.Favourites) != 0 {
+		t.Fatalf("absent file is not empty: %+v", got)
+	}
+	first := homeTabsColFile{
+		Collections: []homeTabsCollection{{
+			ID:   "a1",
+			Name: "  Couch   co-op ",
+			Items: []homeTabsColItem{
+				{Ref: "game:/roms/SNES/a.sfc", Title: "A"},
+				{Ref: "game:/roms/SNES/a.sfc"},
+				{Ref: "col:b2"},
+				{Ref: "app:do:Steam", Title: "Steam"},
+			},
+		}},
+		Favourites: []homeTabsColItem{{Ref: "sys:SNES"}, {Ref: "sys:SNES"}},
+	}
+	if err := homeTabsColSaveFile(path, first); err != nil {
+		t.Fatalf("first save: %v", err)
+	}
+	got := homeTabsColLoadFile(path)
+	if got.Version != homeTabsColVersion || len(got.Collections) != 1 || len(got.Favourites) != 1 {
+		t.Fatalf("loaded %+v", got)
+	}
+	if col := got.Collections[0]; col.Name != "Couch co-op" || len(col.Items) != 2 || col.Items[1].Ref != "app:do:Steam" {
+		t.Fatalf("collection not cleaned: %+v", col)
+	}
+	if err := homeTabsColSaveFile(path, got); err != nil {
+		t.Fatalf("second save: %v", err)
+	}
+	got.Collections[0].Name = "Renamed"
+	if err := homeTabsColSaveFile(path, got); err != nil {
+		t.Fatalf("third save: %v", err)
+	}
+	libraryDurRequireBackupOf(t, path, `"name": "Couch co-op"`)
+
+	libraryDurCorrupt(t, path)
+	back := homeTabsColLoadFile(path)
+	if len(back.Collections) != 1 || back.Collections[0].Name != "Couch co-op" {
+		t.Fatalf("damaged file did not come back from the backup: %+v", back)
+	}
+	if kept, err := os.ReadFile(path + ".corrupt"); err != nil || !strings.Contains(string(kept), `{"half":`) {
+		t.Errorf("the damaged copy was not kept: %q, %v", kept, err)
+	}
+	if again := homeTabsColLoadFile(path); len(again.Collections) != 1 {
+		t.Errorf("the live file was not restored from the backup: %+v", again)
+	}
+
+	for _, p := range []string{path, path + ".bak"} {
+		if err := os.WriteFile(p, []byte("not json"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if lost := homeTabsColLoadFile(path); len(lost.Collections) != 0 || len(lost.Favourites) != 0 {
+		t.Errorf("unreadable store did not read as empty: %+v", lost)
+	}
+}

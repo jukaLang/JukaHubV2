@@ -253,7 +253,7 @@ func xpackDescribeLines(c *Config, e xpackEntry) []string {
 	switch m.HomeLayout {
 	case homeArrangementCustom:
 		lines = append(lines, "Home: your own layout")
-	case homeArrangementDashboard, homeArrangementGrid:
+	case homeArrangementDashboard, homeArrangementGrid, homeArrangementTabs:
 		lines = append(lines, "Home: "+homeArrangementLabel(m.HomeLayout))
 	case homeArrangementCarousel, homeArrangementWidgets:
 		// The tile layouts show the user's own tiles (homeTiles): a pack

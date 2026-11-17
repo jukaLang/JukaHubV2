@@ -1875,7 +1875,7 @@ Bluetooth settings**, the system's own pairing screen, instead.
 |-------|--------|
 | D-pad / arrows | Move through the rows |
 | A / Enter | Switch Bluetooth on or off, connect or disconnect a paired device, pair a device under Nearby, search, or show how to put a pad in pairing mode |
-| Y / `y` | A paired device's sheet: what it is, whether it reconnects by itself, Connect or Disconnect, Forget |
+| Y / `y` | A paired device's sheet: what it is, whether it reconnects by itself, a pad's battery and order, a headset's codec, Identify (a connected pad buzzes and blinks), Connect or Disconnect, Forget |
 | X / `x` | Search (ten seconds) |
 | L1 / R1, PgUp / PgDn | Page up and down; Home / End jump to the ends |
 | B / Esc | Close the sheet, then leave the page |
@@ -1889,6 +1889,25 @@ and Search — starts it first, and the switch or the device's row says what it
 is doing meanwhile. Pairing a controller, what its row says and
 what to do when a pad shows **No input** are in
 [REMOTE_PLAY.md](REMOTE_PLAY.md#bluetooth-controllers).
+
+A connected pad's row adds its place in the order the pads connected and its
+battery (**Pad 1 · 80% battery**), read from the kernel; a pad that drops to
+15% says so once, and again only after it was charged. A connected headset's
+row names its codec (SBC, AAC, aptX) once BlueALSA reports it, and its sheet
+says what that codec means for delay.
+
+Remembered devices come back by themselves: shortly after JukaHub starts, after
+every wake from sleep and when Bluetooth is switched on, paired and trusted
+headphones and pads that are not connected are called — three tries at most
+(at once, 20 s and a minute later), up to four devices a try, then it gives up
+quietly until the next start, wake or switch. It never switches Bluetooth on,
+never runs while a game is on screen or this page is open, and leaves alone a
+device you disconnected here until it connects again some other way.
+
+When a headset connects, every JukaHub sound moves to it (a game started
+afterwards gets it too); when it goes, sound returns to the speaker and a
+playing video or song pauses, like a phone. The speaker and each headset keep
+their own volume (`bt-output-volume.json` in the data folder).
 
 ## Power tools
 

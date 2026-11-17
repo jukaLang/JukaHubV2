@@ -913,6 +913,7 @@ func voiceOrbWake(config *Config) bool {
 func voiceOrbBlockingCard() bool {
 	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
 		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen() ||
+		homeTabsItemSheetActive() ||
 		startupLocked() // bootlock.go
 }
 
@@ -2060,6 +2061,8 @@ func voiceOrbTick(config *Config) {
 		voiceOrbHideNow()
 		return
 	}
+	// A conversation is going: the device's voice stays loaded (tts_local.go).
+	ttsKeepWarm()
 	switch voiceOrb.phase {
 	case orbListening:
 		voiceOrbListenTick(config, now)

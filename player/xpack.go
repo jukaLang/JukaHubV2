@@ -423,10 +423,10 @@ func xpackValidate(e *xpackEntry) {
 	if layout := strings.ToLower(strings.TrimSpace(m.HomeLayout)); layout != "" {
 		switch layout {
 		case homeArrangementCustom, homeArrangementDashboard, homeArrangementGrid,
-			homeArrangementCarousel, homeArrangementWidgets:
+			homeArrangementCarousel, homeArrangementWidgets, homeArrangementTabs:
 			m.HomeLayout = layout
 		default:
-			drop("Home layout %q is not custom, dashboard, grid, carousel or widgets", m.HomeLayout)
+			drop("Home layout %q is not custom, dashboard, grid, carousel, widgets or tabs", m.HomeLayout)
 			m.HomeLayout = ""
 		}
 	}

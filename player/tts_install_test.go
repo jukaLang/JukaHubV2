@@ -224,3 +224,38 @@ func TestTTSLiveSourceOrderAndCap(t *testing.T) {
 		t.Fatalf("cap: %v %v total %d", out, capped, total)
 	}
 }
+
+// TestTTSPhononManifest: the natural voice's voice.json is read as the build
+// writes it, and anything that would point the server elsewhere is refused.
+func TestTTSPhononManifest(t *testing.T) {
+	good := `{"engine":"phonon","server":"juka-voice-server","args":["--model","{dir}/model","--quant","q8"],
+		"env":{"HF_HOME":"{tmp}","HF_HUB_OFFLINE":"1"},"addr_flag":"--addr","model":"phonon-31m-en",
+		"format":"pcm","rate":24000,"female":"Freya","male":"Easton","rss_mb":180}`
+	m, err := ttsPhononParseManifest([]byte(good))
+	if err != nil {
+		t.Fatalf("good manifest: %v", err)
+	}
+	if got := ttsPhononExpand(m.Args[1], "/sd/juka-voice", "/tmp/x"); got != "/sd/juka-voice/model" {
+		t.Fatalf("expand = %q", got)
+	}
+	if ttsPhononVoiceFor(m, "male") != "Easton" || ttsPhononVoiceFor(m, "") != "Freya" {
+		t.Fatal("voice by gender")
+	}
+	if need := ttsPhononNeedMB(m); need != 216 {
+		t.Fatalf("need = %d MB", need)
+	}
+	for _, bad := range []string{
+		strings.Replace(good, `"juka-voice-server"`, `"../bin/sh"`, 1),
+		strings.Replace(good, `"HF_HUB_OFFLINE"`, `"LD_PRELOAD"`, 1),
+		strings.Replace(good, `"HF_HUB_OFFLINE"`, `"PATH"`, 1),
+		strings.Replace(good, `"pcm"`, `"mp3"`, 1),
+		strings.Replace(good, `"--addr"`, `"addr"`, 1),
+		strings.Replace(good, `24000`, `1000000`, 1),
+		strings.Replace(good, `"phonon"`, `"piper"`, 1),
+		strings.Replace(good, `"Freya"`, `"Fre\"ya"`, 1),
+	} {
+		if _, err := ttsPhononParseManifest([]byte(bad)); err == nil {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+}

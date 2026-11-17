@@ -36,6 +36,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -147,9 +148,24 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 		if !ok {
 			return
 		}
+		// A short line this voice has said before plays from its file
+		// (tts_cache.go). Hear Juka always asks the voice itself.
+		keep := ttsCacheable(chunk)
+		if keep && s.origin != ttsFromTest && (groq || s.hasLocal) {
+			if samples, rate, hit := ttsCacheLoad(s.cacheID(groq), chunk); hit {
+				res.local = res.local || !groq
+				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !ttsSend(ctx, out, clip) {
+					return
+				}
+				continue
+			}
+		}
 		if groq {
 			samples, rate, err := ttsGroqSpeak(ctx, s.key, s.voice, chunk)
 			if err == nil {
+				if keep {
+					ttsCacheStore(s.cacheID(true), chunk, samples, rate)
+				}
 				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !ttsSend(ctx, out, clip) {
 					return
 				}
@@ -183,8 +199,24 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 			return c, ok
 		}
 		emitted := false
+		// A short chunk's sound is gathered as it is made, to keep once it
+		// turns out to be all the device's voice said (no later chunk was
+		// pulled) and it said all of it.
+		ttsTalkTyped.Store(s.origin == ttsFromChat || s.origin == ttsFromPage)
+		var made []int16
+		madeRate, pieces, want := 0, 0, 1
+		if s.local.kind == "piper" || s.local.kind == "phonon" {
+			want = len(ttsPiperLines(chunk)) // Piper says it a sentence at a time
+		}
 		err := ttsLocalSpeakChunks(ctx, s.local, pull, s.gender, func(samples []int16, rate int) bool {
 			res.local = true
+			pieces++
+			if keep && (madeRate == 0 || madeRate == rate) && len(made)+len(samples) <= rate*ttsCacheMaxSeconds {
+				madeRate = rate
+				made = append(made, samples...)
+			} else {
+				keep = false
+			}
 			clip := ttsClipFor(samples, rate, s.rate)
 			if clip == nil {
 				return ctx.Err() == nil
@@ -192,8 +224,11 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 			emitted = true
 			return ttsSend(ctx, out, clip)
 		})
-		if err != nil && !emitted {
+		if err != nil && !emitted && !errors.Is(err, errTTSPartial) {
 			res.localFailed = ctx.Err() == nil
+		}
+		if err == nil && keep && next == i && pieces == want && len(made) > 0 && ctx.Err() == nil {
+			ttsCacheStore(s.cacheID(false), chunk, made, madeRate)
 		}
 		return
 	}

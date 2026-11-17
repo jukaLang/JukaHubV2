@@ -402,6 +402,9 @@ func main() {
 	// chip can name a connected headset while nothing plays. Local probes only,
 	// on their own ticker.
 	deferStartupTask("audio-output", startAudioOutputMonitor)
+	// Remembered headphones and pads reconnect after a start or a wake, and a
+	// pad's low battery is said once (bt_autoreconnect.go).
+	deferStartupTask("bt-autoreconnect", startBluetoothAutoReconnect)
 
 	// Watch the kernel's CPU thermal limit on the handheld; the poller parks
 	// whenever a game owns the screen or the desktop window is hidden.
@@ -724,6 +727,12 @@ func main() {
 	// anything of Home (bootlock.go).
 	bootLockArm(config)
 	ShowSplash(renderer, config, allotment)
+	// Boot animation "None" draws no boot, so nothing has run the boot queue
+	// yet — including the step that adds the TrimUI pad mapping the escape
+	// check reads. Drain it first (a second drain below is a no-op).
+	if allotment <= 0 && bootOSPowerOnActive() {
+		bootWorkDrain()
+	}
 	// JukaHub OS's escape hatch: Select or B held through the power-on boot
 	// starts the firmware's menu for this boot instead (jukaos_settings.go).
 	jukaosEscapeCheck()
@@ -1097,6 +1106,10 @@ func main() {
 					}
 					// "Which emulator?" before a game starts (emupicker.go).
 					if handleEmuPickKey(e) {
+						continue
+					}
+					// The Tabs Home's item sheet (hometabs_collections_ui.go).
+					if homeTabsSheetKey(e) {
 						continue
 					}
 					// The first-run tour is the topmost modal: while it is open it
@@ -1783,7 +1796,7 @@ func main() {
 				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
 				// A ringing alarm is modal: the pointer moves, hovers and drags
 				// nothing behind its takeover. So is the recovery card.
-				if alarmFiringActive() || recoveryCard.open || emuPickOpen() {
+				if alarmFiringActive() || recoveryCard.open || emuPickOpen() || homeTabsItemSheetActive() {
 					continue
 				}
 				// The wallpaper picker covers the screen: the pointer hovers its
@@ -1854,6 +1867,11 @@ func main() {
 					} else if e.Y < 0 {
 						emuPickMove(1)
 					}
+					continue
+				}
+				// So does the Tabs Home's item sheet (hometabs_collections_ui.go).
+				if homeTabsItemSheetActive() {
+					homeTabsSheetWheel(e.Y)
 					continue
 				}
 				// Nor behind the wallpaper picker, whose list it scrolls.
@@ -2071,7 +2089,7 @@ func main() {
 				}
 				// The emulator picker takes the left button below; nothing else
 				// clicks behind it.
-				if emuPickOpen() && e.Button != sdl.BUTTON_LEFT {
+				if (emuPickOpen() || homeTabsItemSheetActive()) && e.Button != sdl.BUTTON_LEFT {
 					continue
 				}
 				// A right click is the mouse's Select on the Browser: it opens the
@@ -2110,6 +2128,9 @@ func main() {
 					if e.Type == sdl.MOUSEBUTTONUP && emuPickEatRelease() {
 						continue
 					}
+					if e.Type == sdl.MOUSEBUTTONUP && homeTabsSheetEatRelease() {
+						continue
+					}
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						if recoveryCardHandleClick(mx, my, config) {
 							break
@@ -2119,6 +2140,9 @@ func main() {
 							break
 						}
 						if handleEmuPickMouse(mx, my) {
+							break
+						}
+						if homeTabsSheetMouse(mx, my) {
 							break
 						}
 						if handleOnboardingMouse(mx, my, config) {
@@ -3003,6 +3027,9 @@ func main() {
 						continue
 					}
 					if handleEmuPickController(e) {
+						continue
+					}
+					if homeTabsSheetPad(e) {
 						continue
 					}
 					// The first-run tour is modal and above every other overlay.
@@ -3967,6 +3994,9 @@ func main() {
 		wineShowProfileFailure()
 		// A game that quit at once, and what it was missing (gamediag.go).
 		gameDiagShowPending()
+		// The Tabs Home's covers and item sheet (hometabs_collections_ui.go),
+		// under the emulator picker a Play row can open.
+		homeTabsProvidersRender(renderer, config)
 		renderEmuPick(renderer, config)
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
