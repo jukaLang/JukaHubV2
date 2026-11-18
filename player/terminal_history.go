@@ -18,7 +18,9 @@ package main
 //
 // The history picker (Y on the pad, Ctrl+R or F7 on a keyboard) lists the saved
 // commands newest first, so a long command typed once with the on-screen
-// keyboard runs again with two presses. Its drawing is in terminal_ui.go.
+// keyboard runs again with two presses. Y in the picker (Ctrl+S) pins the
+// command to the Command Deck's Favorites (cmddeck_store.go), where it stays
+// even after the history has rolled past it. Its drawing is in terminal_ui.go.
 
 import (
 	"os"
@@ -219,22 +221,9 @@ func termDirectoryEntries() []string {
 	if dir == "" {
 		dir = "."
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	out := make([]string, 0, len(entries))
-	for i, e := range entries {
-		if i >= termCompleteMaxEntries {
-			break
-		}
-		name := e.Name()
-		if e.IsDir() {
-			name += "/"
-		}
-		out = append(out, name)
-	}
-	return out
+	// A bounded read: os.ReadDir listed (and sorted) the whole folder before
+	// the cap applied, a stall on a 20 000-ROM folder.
+	return termReadDirNames(dir, termCompleteMaxEntries)
 }
 
 // termComplete is the Tab handler: complete the current input, or open the
@@ -383,6 +372,23 @@ func termHistoryDelete() {
 	PlayBackSound()
 }
 
+// termHistoryPin saves the highlighted command to the Command Deck's
+// Favorites (Y, Ctrl+S). The picker stays open, so several can be pinned.
+func termHistoryPin() {
+	cmd, _, ok := termHistorySelected()
+	if !ok {
+		PlayErrorSound()
+		return
+	}
+	if cmdFavAdd("", []string{cmd}) {
+		PlayActivateSound()
+		ShowToast("Pinned to Commands → Favorites", ToastKindSuccess)
+		return
+	}
+	PlayNavSound()
+	ShowToast("Already in Favorites", ToastKindInfo)
+}
+
 // termHistoryMove moves the highlight, clamped to the list.
 func termHistoryMove(delta int) {
 	n := len(termHist.matches)
@@ -422,6 +428,10 @@ func termHistoryKey(e *sdl.KeyboardEvent) {
 		if ctrl {
 			termHistoryClose()
 			PlayBackSound()
+		}
+	case sdl.K_s:
+		if ctrl {
+			termHistoryPin()
 		}
 	case sdl.K_UP:
 		termHistoryMove(-1)
@@ -474,9 +484,11 @@ func termHistoryType(text string) {
 // button is consumed so nothing reaches the terminal behind it.
 func termHistoryPad(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_Y:
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		termHistoryClose()
 		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_Y:
+		termHistoryPin()
 	case sdl.CONTROLLER_BUTTON_A:
 		termHistoryInsert()
 	case sdl.CONTROLLER_BUTTON_START:

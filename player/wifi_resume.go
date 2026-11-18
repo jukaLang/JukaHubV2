@@ -79,7 +79,9 @@ func wifiResumeAfterWake() {
 	// The supplicant may be a new process with a new socket, and the cached
 	// answers are from before the sleep, or from a read while it was gone.
 	resetWiFiInterfaceCache()
-	kicks := wifiResumeKicks()
+	// The hotspot holds the radio: there is no station link to bring back,
+	// and its own monitor notices an access point the sleep took down.
+	kicks := wifiResumeKicks() && !hotspotHoldsRadio()
 	wifiResume.mu.Lock()
 	wifiResume.gen++
 	gen := wifiResume.gen

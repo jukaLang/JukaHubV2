@@ -21,9 +21,18 @@ type gameProfilePanelState struct {
 	cursor    int
 	scroll    int
 	returnEmu bool
+	// offerID is the Android profile whose A found no AndroidRT: its row
+	// offers "Install and play" (A again) until the cursor moves or B.
+	offerID string
 }
 
 var gpPanel gameProfilePanelState
+
+// gameProfilePanelStartingID is the profile a background start from this
+// panel is still staging (gameProfilePanelStart); render thread only. It
+// outlives a closed panel, so no second game stages beside it on a 1 GB
+// handheld.
+var gameProfilePanelStartingID string
 
 // gameProfileRowHit maps a click back to a loaded profile index. Only touched
 // on the render/event thread.
@@ -83,6 +92,7 @@ func gameProfilePanelMove(delta int) {
 	if len(entries) == 0 {
 		return
 	}
+	gpPanel.offerID = ""
 	gpPanel.cursor += delta
 	if gpPanel.cursor < 0 {
 		gpPanel.cursor = len(entries) - 1
@@ -93,6 +103,14 @@ func gameProfilePanelMove(delta int) {
 	PlayNavSound()
 }
 
+// gameProfilePanelActivate is A on a row. A Wine profile starts here: its
+// launch reads the settings it needs on this thread and continues on a
+// goroutine of its own (launchWineProfile, wineStart). Every other runtime
+// starts in the background like the Games Library's Play
+// (gameProfilePanelStart): resolving the profile, triaging and staging an APK
+// and starting the process take seconds on the handheld. An Android profile on
+// a device that could run AndroidRT but has none offers the one-press install
+// first.
 func gameProfilePanelActivate() {
 	entries := gameProfileEntries()
 	if len(entries) == 0 {
@@ -103,20 +121,136 @@ func gameProfilePanelActivate() {
 		return
 	}
 	entry := entries[gpPanel.cursor]
-	if err := launchGameProfile(entry); err != nil {
-		logWarn("gameprofiles", "launch %s failed: %v", entry.Profile.ID, err)
-		logPath := filepath.Join(gameProfilesLogsDir(), entry.Profile.ID+".log")
-		if _, statErr := os.Stat(logPath); statErr != nil {
-			logPath = ""
-		}
-		showLaunchFailureDialog(entry.Profile.Title, err, logPath)
+	id, title := entry.Profile.ID, entry.Profile.Title
+	if gpPanel.offerID != "" && gpPanel.offerID == id {
+		gameProfilePanelInstallAndPlay(id)
 		return
 	}
+	gpPanel.offerID = ""
+	if gameProfilePanelStartingID != "" {
+		PlayNavSound()
+		ShowToast("Another game is starting — wait a moment", ToastKindInfo)
+		return
+	}
+	if pid := gameProfileRunningPID(id); pid > 0 {
+		PlayNavSound()
+		ShowToast(fmt.Sprintf("%s is already running (pid %d)", title, pid), ToastKindInfo)
+		return
+	}
+	if gameProfilePanelStarting(entry) {
+		PlayNavSound()
+		ShowToast(title+" is already starting", ToastKindInfo)
+		return
+	}
+	if entry.Profile.Runtime == gameRuntimeWine {
+		if err := launchGameProfile(entry); err != nil {
+			gameProfilePanelFailed(entry, err)
+			return
+		}
+		gameProfilePanelLaunched(title)
+		return
+	}
+	if entry.Profile.Runtime == gameRuntimeAndroidPak && androidRTSupported() && androidRuntimeMissingNow() {
+		if androidRTInstalling() {
+			PlayNavSound()
+			ShowToast("AndroidRT is being installed — "+title+" can start once the install bar is done", ToastKindInfo)
+			return
+		}
+		gpPanel.offerID = id
+		PlayActivateSound()
+		return
+	}
+	gameProfilePanelStart(entry)
+}
+
+// gameProfilePanelStarting reports a launch of entry under way: its start
+// claim, or for a Wine profile the minutes Windows may spend preparing before
+// the program runs (wineLaunchPhase).
+func gameProfilePanelStarting(entry gameProfileEntry) bool {
+	id := entry.Profile.ID
+	if gameProfileStartingNow(id) {
+		return true
+	}
+	return entry.Profile.Runtime == gameRuntimeWine && wineLaunchPhase("profile:"+id) != ""
+}
+
+// gameProfilePanelStart starts a profile in the background, the way the Games
+// Library starts an Android game (launchAndroidLibraryGame). The start is
+// claimed here, before the background work, so no other Play (here, the
+// library's or the APK Store's) starts the game a second time while this one
+// stages it, and the row says "Starting…" meanwhile; the time-lapse settings
+// are read here too: the launch goroutine must not read the config. The panel
+// stays up until the answer: a game that started closes it, one that did not
+// opens the launch-failure dialog.
+func gameProfilePanelStart(entry gameProfileEntry) {
+	id, title := entry.Profile.ID, entry.Profile.Title
+	if !gameProfileClaimStart(id) {
+		PlayNavSound()
+		ShowToast(title+" is already starting", ToastKindInfo)
+		return
+	}
+	tl := timelapseSettingsFor(appConfig)
+	gameProfilePanelStartingID = id
+	PlayActivateSound()
+	go func() {
+		err := func() error {
+			// Released once the game has started (its PID is recorded by
+			// then, and the running check takes over) or the start failed.
+			defer gameProfileReleaseStart(id)
+			return launchGameProfileClaimed(entry, tl)
+		}()
+		tbxPost(func() {
+			if gameProfilePanelStartingID == id {
+				gameProfilePanelStartingID = ""
+			}
+			if err != nil {
+				gameProfilePanelFailed(entry, err)
+				return
+			}
+			gameProfilePanelLaunched(title)
+		})
+	}()
+}
+
+// gameProfilePanelLaunched closes the panel behind a game that started.
+func gameProfilePanelLaunched(title string) {
 	gpPanel.open = false
+	gpPanel.offerID = ""
 	gameProfilePanelRect = sdl.Rect{}
 	gameProfileRowHits = nil
 	PlaySuccessSound()
-	ShowToast("Launching "+entry.Profile.Title, ToastKindSuccess)
+	ShowToast("Launching "+title, ToastKindSuccess)
+}
+
+// gameProfilePanelFailed opens the launch-failure dialog, with the profile's
+// log when there is one.
+func gameProfilePanelFailed(entry gameProfileEntry, err error) {
+	logWarn("gameprofiles", "launch %s failed: %v", entry.Profile.ID, err)
+	logPath := filepath.Join(gameProfilesLogsDir(), entry.Profile.ID+".log")
+	if _, statErr := os.Stat(logPath); statErr != nil {
+		logPath = ""
+	}
+	PlayErrorSound()
+	showLaunchFailureDialog(entry.Profile.Title, err, logPath)
+}
+
+// gameProfilePanelInstallAndPlay is A on the "Install and play" offer:
+// AndroidRT is installed from JukaHub's releases on the install bar, and the
+// game starts when it is in — only if the panel is still up (someone who
+// left meanwhile gets the install's toast, not a game starting).
+func gameProfilePanelInstallAndPlay(id string) {
+	gpPanel.offerID = ""
+	androidRTStartInstall(func(err error) {
+		if err != nil || !gpPanel.open {
+			return
+		}
+		for _, entry := range gameProfileEntries() {
+			if entry.Profile.ID == id {
+				gameProfilePanelStart(entry)
+				return
+			}
+		}
+	})
 }
 
 func gameProfilePanelExport() {
@@ -135,7 +269,19 @@ func gameProfilePanelExport() {
 	ShowToast("Exported "+entry.Profile.Title+" to "+path, ToastKindSuccess)
 }
 
+// gameProfilePanelBack is B: it takes an "Install and play" offer back, or
+// closes the panel.
+func gameProfilePanelBack() {
+	if gpPanel.offerID != "" {
+		gpPanel.offerID = ""
+		PlayBackSound()
+		return
+	}
+	closeGameProfilePanel()
+}
+
 func gameProfilePanelRescan() {
+	gpPanel.offerID = ""
 	invalidateGameProfileCache()
 	entries := gameProfileEntries()
 	if gpPanel.cursor >= len(entries) {
@@ -168,7 +314,7 @@ func ctrlGameProfiles(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_Y:
 		gameProfilePanelRescan()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		closeGameProfilePanel()
+		gameProfilePanelBack()
 	}
 	return true
 }
@@ -191,7 +337,7 @@ func handleGameProfileKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_y, sdl.K_r:
 		gameProfilePanelRescan()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closeGameProfilePanel()
+		gameProfilePanelBack()
 	}
 	return true
 }
@@ -220,6 +366,12 @@ func gameProfileStatus(entry gameProfileEntry) (string, sdl.Color) {
 	if pid := gameProfileRunningPID(entry.Profile.ID); pid > 0 {
 		return "Running", accentColor
 	}
+	if gameProfilePanelStarting(entry) {
+		return "Starting…", accentColor
+	}
+	if gpPanel.offerID != "" && gpPanel.offerID == entry.Profile.ID {
+		return "Needs AndroidRT", ColorToastWarn
+	}
 	if !entry.ready() {
 		return "Unavailable", ColorToastError
 	}
@@ -246,6 +398,9 @@ func gameProfileSummary(entries []gameProfileEntry, issues int) string {
 // gameProfileDetailLine is the second row line: runtime, executable, source
 // and the tested firmware, or the exact reason the profile cannot launch.
 func gameProfileDetailLine(entry gameProfileEntry) string {
+	if gpPanel.offerID != "" && gpPanel.offerID == entry.Profile.ID {
+		return "No AndroidRT yet · it installs from JukaHub's releases (a few MB), then the game starts"
+	}
 	if entry.Issue != "" {
 		return entry.Issue
 	}
@@ -389,7 +544,10 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 
 			detail := gameProfileDetailLine(entry)
 			detailColor := ColorTextTertiary()
-			if !entry.ready() {
+			switch {
+			case gpPanel.offerID != "" && gpPanel.offerID == entry.Profile.ID:
+				detailColor = ColorToastWarn
+			case !entry.ready():
 				detailColor = ColorToastError
 			}
 			renderText(renderer, config, font, ellipsize(font, detail, r.W-32),
@@ -402,9 +560,12 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 		backLabel = "Emulators"
 	}
 	var hint string
-	if len(entries) == 0 {
+	switch {
+	case len(entries) == 0:
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
-	} else {
+	case gpPanel.offerID != "":
+		hint = hintLine(FooterHint{"A", "Install and play"}, FooterHint{"B", "Not now"})
+	default:
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"X", "Export"},
 			FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
 	}

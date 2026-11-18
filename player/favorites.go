@@ -226,6 +226,7 @@ func loadFavorites() {
 	}
 }
 
+// loadFavoritesFrom is a test seam (ARCH-8): only tests call it.
 func loadFavoritesFrom(path string) {
 	favoritesMutex.Lock()
 	defer favoritesMutex.Unlock()
@@ -271,6 +272,7 @@ func saveFavorites() {
 	saveUserConfig(userConfigCache)
 }
 
+// saveFavoritesTo is a test seam (ARCH-8): only tests call it.
 func saveFavoritesTo(path string) {
 	favoritesMutex.Lock()
 	defer favoritesMutex.Unlock()

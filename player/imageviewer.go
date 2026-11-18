@@ -142,8 +142,8 @@ func openImageViewerURL(url string) {
 // libwebp loaded at runtime, so a build can carry the WebP code path and still
 // fail to decode (the Windows SDL2_image.dll needs libwebp-2.dll beside it,
 // which the release archive does not ship). Decoding this tiny image once is
-// the only honest capability check; the handheld build links libwebp into
-// SDL2_image, so the same probe succeeds there.
+// the only honest capability check. Stock Smart Pro firmware 1.1.0 lacks the
+// SDL_image WebP decoder, even though its FFmpeg has one.
 var webpProbe = []byte{
 	0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
 	0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
@@ -183,13 +183,14 @@ func webpDecodable() bool {
 
 // isImageExtension reports whether a lower-case extension (with the dot) is an
 // image this build can decode. WebP is offered only when the loaded SDL_image
-// can actually decode it, so box art never shows up as a broken picture.
+// can actually decode it, or the card's ffmpeg can (webpdecode.go), so box art
+// never shows up as a broken picture.
 func isImageExtension(ext string) bool {
 	switch strings.ToLower(ext) {
 	case ".png", ".jpg", ".jpeg", ".bmp", ".gif":
 		return true
 	case ".webp":
-		return webpDecodable()
+		return webpCurrentDecoder() != webpDecoderNone
 	}
 	return false
 }
@@ -444,7 +445,8 @@ func imgvCurrent(gen int) bool {
 }
 
 // imgvDecodeFile decodes a picture with Go's decoders (JPEG, PNG, GIF), and
-// anything else (BMP, WebP) through SDL_image.
+// anything else (BMP, WebP) through SDL_image — or a WebP that SDL_image cannot
+// read through the card's ffmpeg, at the texture limit (webpdecode.go).
 func imgvDecodeFile(path string) (image.Image, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -463,7 +465,11 @@ func imgvDecodeFile(path string) (image.Image, error) {
 			return pic, nil
 		}
 	}
-	return imgvDecodeSDL(path)
+	pic, err := imgvDecodeSDL(path)
+	if err != nil && webpFFmpegFallback(path) {
+		return webpDecodeImage(path, imgvMaxTextureDim(), imgvMaxPixels)
+	}
+	return pic, err
 }
 
 // imgvDecodeSDL decodes through SDL_image and copies the pixels into Go

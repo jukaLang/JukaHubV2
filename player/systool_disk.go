@@ -285,7 +285,7 @@ func sysToolDiskSync() {
 	sysToolDiskView.built = true
 	sysToolDiskView.status = ""
 	if sysToolDiskView.d.loaded {
-		sysToolDiskView.status = "Updated " + sysToolDiskView.d.at.Format("15:04:05")
+		sysToolDiskView.status = "Updated " + clockDigitsSeconds(nil, sysToolDiskView.d.at)
 	}
 }
 

@@ -84,14 +84,23 @@ func pushSyntheticMouseMotion(x, y int32) error {
 	return err
 }
 
+// pushSyntheticMouseButton queues one mouse press (state sdl.PRESSED) or
+// release (sdl.RELEASED). The event type follows the state: the main loop
+// dispatches on Type, and a release that went out as MOUSEBUTTONDOWN made
+// every tap two presses and no release.
 func pushSyntheticMouseButton(button uint8, state uint8, x, y int32) error {
+	typ := uint32(sdl.MOUSEBUTTONDOWN)
+	if state != sdl.PRESSED {
+		typ = sdl.MOUSEBUTTONUP
+	}
 	_, err := syntheticEventPush(&queuedMouseButtonEvent{MouseButtonEvent: sdl.MouseButtonEvent{
-		Type:   sdl.MOUSEBUTTONDOWN,
-		Button: button,
-		State:  state,
-		Clicks: 1,
-		X:      x,
-		Y:      y,
+		Type:      typ,
+		Timestamp: sdl.GetTicks(),
+		Button:    button,
+		State:     state,
+		Clicks:    1,
+		X:         x,
+		Y:         y,
 	}})
 	return err
 }

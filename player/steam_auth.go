@@ -745,7 +745,7 @@ func steamQRFinish(gen int, a steamPollAnswer) string {
 		access, _, err = steamRenewAccessToken(rctx, a.RefreshToken, id)
 		cancel()
 		if err != nil {
-			logWarn("steam", "first access token: %v", err)
+			logWarn("steam", "getting the first access token failed: %v", err)
 		}
 	}
 	if err := steamSignInWithTokens(id, a.RefreshToken, access, a.AccountName); err != nil {

@@ -331,6 +331,13 @@ func gameDiagRunManual(game libraryGame) {
 		ShowToast("Android games start through their game profile; nothing to check here", ToastKindInfo)
 		return
 	}
+	if game.System == portsLibrarySystem {
+		// A port's own checks: PortMaster, runtimes, game files, its log
+		// (ports_manage.go).
+		ShowToast("Checking "+game.Label()+"…", ToastKindInfo)
+		portWhyRun(game.Label(), game.Path)
+		return
+	}
 	launcher := resolveGameLauncherFor(game)
 	ShowToast("Checking "+game.Label()+"…", ToastKindInfo)
 	go func() {

@@ -1,8 +1,9 @@
 package main
 
-// The Ports panel reads PortMaster's own catalogue. A selected zip is verified,
-// placed in PortMaster's autoinstall inbox, then handed to PortMaster; its
-// installer fetches the runtimes declared by the port.
+// The Ports panel reads PortMaster's own catalogue. A selected port goes into
+// the shared install queue (ports_store_install.go): verified against the
+// catalogue's MD5, then installed by PortMaster's own installer, which fetches
+// the runtimes the port declares. The first row opens the Ports Store.
 
 import (
 	"context"
@@ -13,28 +14,29 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 )
 
 var portCatalogLoadSerial uint64 // UI thread only; prevents a closed panel's result landing in a new one
 
-var portCatalogInstallState struct {
-	mu   sync.Mutex
-	busy bool
-}
+// portsStoreRow heads the catalogue: the Ports Store is the full view of it
+// (screenshots, genres, Ready to Run ports, one-press installs).
+var portsStoreRow = portEntry{Name: "Open the Ports Store", Detail: "Screenshots, genres, Ready to Run ports and one-press installs", Info: true, Store: true}
 
 func portsPanelRows() []portEntry {
+	if portsPanel.opts {
+		return portsPanel.optsRows
+	}
 	if !portsPanel.catalog {
 		return portEntries()
 	}
 	if portsPanel.catalogLoading {
-		return []portEntry{{Name: "Loading PortMaster's catalogue…", Detail: "Connect to Wi-Fi to browse ports", Info: true}}
+		return []portEntry{portsStoreRow, {Name: "Loading PortMaster's catalogue…", Detail: "Connect to Wi-Fi to browse ports", Info: true}}
 	}
 	if portsPanel.catalogErr != "" {
-		return []portEntry{{Name: "Catalogue unavailable", Detail: portsPanel.catalogErr + " · A retries", Info: true}}
+		return []portEntry{portsStoreRow, {Name: "Catalogue unavailable", Detail: portsPanel.catalogErr + " · A retries", Info: true}}
 	}
 	if len(portsPanel.catalogRows) == 0 {
-		return []portEntry{{Name: "No matching ports", Detail: "Press R1 to search or Y to change the May Run filter", Info: true}}
+		return []portEntry{portsStoreRow, {Name: "No matching ports", Detail: hintSentence2("Press %s to search or %s to change the May Run filter", "R1", "Search", "Y", "May Run"), Info: true}}
 	}
 	return portsPanel.catalogRows
 }
@@ -59,6 +61,13 @@ func portsPanelToggleMayRun() {
 }
 
 func portsPanelSetQuery(query string) {
+	// The Ports Store reuses this keyboard (vkTargetPortsSearch); the panel
+	// open over the store keeps its own search.
+	if !portsPanel.open && portsStoreOnScreen(appConfig) {
+		portsPanel.query = query
+		pstoreSetQuery(query)
+		return
+	}
 	if !portsPanel.open || !portsPanel.catalog {
 		return
 	}
@@ -88,10 +97,19 @@ func portsPanelLoadCatalog() {
 			portsPanel.catalogLoading = false
 			if err != nil {
 				portsPanel.catalogErr = firstLine(err.Error())
+				if portsPanel.opts {
+					portsPanelBuildOptions()
+				}
 				return
 			}
 			portsPanel.catalogEntries = entries
 			portsPanelRebuildCatalogRows()
+			// The installed rows learn which ports have a newer build, and
+			// an open port's options get their Update row.
+			invalidatePortsCache()
+			if portsPanel.opts {
+				portsPanelBuildOptions()
+			}
 		})
 	}()
 }
@@ -116,7 +134,8 @@ func portCatalogMayRun(e mcCatalogEntry, device DeviceModel, hostGlibc string) b
 		return false
 	}
 	if e.MinGlibc != "" && hostGlibc != "" &&
-		elfVersionLess(hostGlibc, "GLIBC_"+strings.TrimPrefix(e.MinGlibc, "GLIBC_")) {
+		elfVersionLess(hostGlibc, "GLIBC_"+strings.TrimPrefix(e.MinGlibc, "GLIBC_")) &&
+		!privateGlibcCatalogEligible(e, device) {
 		return false
 	}
 	brick := device == DeviceTrimuiBrick || device == DeviceTrimuiHammer
@@ -212,7 +231,10 @@ func portsPanelRebuildCatalogRows() {
 		rows = append(rows, portCatalogRow(entry, portCatalogIsInstalled(entry, names)))
 	}
 	sort.Slice(rows, func(i, j int) bool { return strings.ToLower(rows[i].Name) < strings.ToLower(rows[j].Name) })
-	portsPanel.catalogRows = rows
+	if len(rows) == 0 {
+		rows = append(rows, portEntry{Name: "No matching ports", Detail: hintSentence2("Press %s to search or %s to change the May Run filter", "R1", "Search", "Y", "May Run"), Info: true})
+	}
+	portsPanel.catalogRows = append([]portEntry{portsStoreRow}, rows...)
 }
 
 func portCatalogSummary() string {
@@ -229,62 +251,31 @@ func portCatalogSummary() string {
 	if portsPanel.query != "" {
 		filter += " · " + strings.TrimSpace(portsPanel.query)
 	}
-	return fmt.Sprintf("%s · %d shown", filter, len(portsPanel.catalogRows))
+	shown := 0
+	for _, r := range portsPanel.catalogRows {
+		if r.Catalog.Zip != "" {
+			shown++
+		}
+	}
+	return fmt.Sprintf("%s · %d shown", filter, shown)
 }
 
+// portCatalogInstallStart queues a catalogue port in the shared install
+// queue (ports_store_install.go), which downloads and checks it and lets
+// PortMaster install it — headless when it can, else by opening PortMaster.
 func portCatalogInstallStart(e mcCatalogEntry) error {
 	if runtime.GOOS != "linux" {
 		return errors.New("ports install on the handheld")
 	}
-	launcher := portMasterLauncher(portMasterSDRoot)
-	if launcher == "" {
-		if err := startPortMasterInstall(); err != nil {
-			return err
-		}
-		ShowToast("Installing PortMaster first — press A on the port again when it is ready", ToastKindInfo)
-		return nil
+	if err := pstoreEnqueueWith(e, true); err != nil {
+		return err
 	}
-	inbox := mcAutoinstallDir(launcher)
-	if inbox == "" {
-		return errors.New("PortMaster has no autoinstall folder; open it to install this port")
+	n, _ := pstoreQueueCounts()
+	msg := pstoreTitle(e) + " is downloading — the status strip shows how far"
+	if n > 1 {
+		msg = pstoreTitle(e) + " is queued (" + pluralizeCount(n, "port", "ports") + " in the queue)"
 	}
-	if !IsOnline() {
-		return errors.New("connect to Wi-Fi to download this port")
-	}
-	portCatalogInstallState.mu.Lock()
-	if portCatalogInstallState.busy || installBarActive() {
-		portCatalogInstallState.mu.Unlock()
-		return errors.New("another download is in progress")
-	}
-	portCatalogInstallState.busy = true
-	portCatalogInstallState.mu.Unlock()
-	name := e.Title
-	if name == "" {
-		name = e.Zip
-	}
-	gen, card := installBarBeginRun(name)
-	ctx, cancel := mcRunContext(gen, card)
-	go func() {
-		defer cancel()
-		_, err := portCatalogDownload(ctx, gen, e, inbox)
-		switch {
-		case err == nil:
-			installBarDoneRun(gen)
-			tbxPost(func() {
-				portsPanel.open = false
-				launchPortScript(portMasterAppName, launcher)
-				ShowToast("PortMaster is installing "+name+" and its runtimes", ToastKindInfo)
-			})
-		case ctx.Err() != nil:
-			installBarAbortRun(gen)
-		default:
-			installBarFailRun(gen, firstLine(err.Error()))
-			tbxPost(func() { ShowToast("Could not download "+name+": "+firstLine(err.Error()), ToastKindError) })
-		}
-		portCatalogInstallState.mu.Lock()
-		portCatalogInstallState.busy = false
-		portCatalogInstallState.mu.Unlock()
-	}()
+	ShowToast(msg, ToastKindInfo)
 	return nil
 }
 

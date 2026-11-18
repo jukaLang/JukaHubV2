@@ -575,12 +575,12 @@ without the details of the machine that took them. From `player/`, after a build
 JukaHub --screenshot-tour ../screenshots
 ```
 
-opens Home, Media, Settings → Display & theme and the dock one after another,
+opens Home, Media, Settings → Theme & look and the dock one after another,
 writes `home.png`, `media.png`, `settings.png` and `ambient.png` (one frame of
 the 1280×720 canvas each) into the folder, and quits — about half a minute.
 Leave the window visible while it runs. `JukaHub --screenshot-mode` is the same
 session without the walk: F12 or Start → Screenshot saves the next frame as a
-PNG into `--screenshot-dir` (default `Pictures\JukaHub`).
+PNG into `--screenshot-dir` (default: the `screenshots` folder beside the app).
 `JUKAHUB_SCREENSHOT_MODE=1` turns the mode on from `launch.sh` on the handheld.
 
 `screenshotmode.go` swaps out what identifies the person taking the picture:

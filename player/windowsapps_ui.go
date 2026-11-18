@@ -8,6 +8,7 @@ package main
 // detected Wine/Box64/display status. On Windows it only lists and starts.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -140,8 +141,82 @@ func setupActivate() {
 	case windowsSetupRowDXVK:
 		windowsAppsPanelInstallDXVK()
 	default:
+		if tag := windowsRuntimeUpdateTag(); tag != "" {
+			windowsAppsPanelUpdateRuntime(tag)
+			return
+		}
 		windowsAppsPanelInstall()
 	}
+}
+
+// windowsRuntimeUpdateTag is the newer Windows-app runtime the daily pass's
+// check found (wineUpdateCheck, LIB-25) when the runtime row can offer it as
+// Update: the Box64 pack's runtime is installed and no runtime install runs.
+// "" otherwise. Main thread.
+func windowsRuntimeUpdateTag() string {
+	newer, tag := wineUpdateKnown()
+	if !newer || tag == "" || IsWindows() || !winePackSupported() || windowsRuntimeInstalling() {
+		return ""
+	}
+	if base := windowsSetupSnapshot(); len(base.rows) == 0 || base.rows[0].Status != "installed" {
+		return ""
+	}
+	return tag
+}
+
+// windowsAppsPanelUpdateRuntime is the runtime row's Update: the install the
+// daily pass runs (wineUpdateInstall — the newer Box64 pack and the Wine it
+// names), started from a press, on the install bar with its phase and bytes,
+// and on the page's installer line.
+func windowsAppsPanelUpdateRuntime(tag string) {
+	switch {
+	case wineProgramsRunning():
+		ShowToast("Close the running Windows app first, then update the runtime", ToastKindInfo)
+		return
+	case !IsOnline():
+		PlayErrorSound()
+		ShowToast("Updating the Windows app runtime needs internet — connect to Wi-Fi, then try again", ToastKindWarning)
+		return
+	case installBarActive() || !tryBeginPatchOp():
+		// A new install-bar run would cancel the one on the bar now.
+		ShowToast("Another install is running — try again when it finishes", ToastKindInfo)
+		return
+	}
+	gen, runCtx := installBarBeginRun("Windows runtime")
+	installBarPhase(installPhaseResolving)
+	go func() {
+		defer endPatchOp()
+		ctx, cancel := context.WithTimeout(emuRuntimeWithRun(runCtx, gen), emuWinInstallTimeout)
+		defer cancel()
+		err := wineUpdateInstall(ctx, nil, func(line string) {
+			if installBarGeneration() == gen {
+				installBarDetail(line)
+			}
+		})
+		invalidateWindowsAppsCache()
+		invalidateWindowsSetupSnapshot()
+		windowsRuntimeStatusForget()
+		tbxPost(func() {
+			switch {
+			case errors.Is(err, context.Canceled):
+				installBarAbortRun(gen)
+				ShowToast("Stopped updating the Windows app runtime", ToastKindInfo)
+			case errors.Is(err, errRelPackBusy):
+				installBarAbortRun(gen)
+				ShowToast("The runtime is busy (an install or a Windows program) — try again when it is free", ToastKindInfo)
+			case err != nil:
+				msg := relPackFriendly(err)
+				installBarFailRun(gen, installCardDetail(msg))
+				PlayErrorSound()
+				ShowToast("Could not update the Windows app runtime: "+msg, ToastKindError)
+			default:
+				installBarDoneRun(gen)
+				PlaySuccessSound()
+				ShowToast("The Windows app runtime is updated ("+tag+")", ToastKindSuccess)
+			}
+		})
+	}()
+	PlayActivateSound()
 }
 
 // windowsAppsPanelProvision installs every missing runtime piece for entry and
@@ -702,6 +777,15 @@ func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 			rows[i].Status, rows[i].Bad = "failed", true
 		}
 	}
+	// The daily pass found a newer runtime (Emulator updates on Notify me, or
+	// an install that failed): the runtime row says so and A updates it.
+	if tag := windowsRuntimeUpdateTag(); tag != "" && len(rows) > 0 {
+		rows[0].Status = "update"
+		rows[0].Detail = tag + " is out · " + hintSentence("%s updates it", "A", "Update")
+		if why := windowsRuntimeFailed("wine"); why != "" {
+			rows[0].Detail = tag + " is out · the last update failed (" + why + ") · " + hintSentence("%s tries again", "A", "Update")
+		}
+	}
 	return rows
 }
 
@@ -853,7 +937,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			switch {
 			case row.Bad:
 				statusColor = ToastErrorInk()
-			case row.Status == "installing":
+			case row.Status == "installing" || row.Status == "update":
 				statusColor = WarningInk()
 			case row.Status == "optional" || row.Status == "not needed" || row.Status == "off":
 				statusColor = ColorTextTertiary()

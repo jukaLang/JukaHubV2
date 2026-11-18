@@ -319,7 +319,7 @@ func (h *HomeLayout) carDrawLabels(renderer *sdl.Renderer, fonts HomeFonts) {
 	maxW := scaleX(homeCarW+200, h.Width)
 	cx := scaleX(int32(homeCarCX), h.Width)
 	if f := fonts.Greeting; f != nil && item.Title != "" {
-		drawText(renderer, f, ellipsize(f, item.Title, maxW), cx, scaleY(homeCarTitleY, h.Height), ColorTextPrimary(), textAlignCenter)
+		titleScrollDrawText(renderer, appConfig, f, item.Title, cx, scaleY(homeCarTitleY, h.Height), maxW, ColorTextPrimary(), textAlignCenter, true)
 	}
 	if f := fonts.Helper; f != nil && item.Subtitle != "" {
 		drawText(renderer, f, ellipsize(f, item.Subtitle, maxW), cx, scaleY(homeCarNoteY, h.Height), ColorTextMuted(), textAlignCenter)

@@ -273,6 +273,7 @@ var ledPolicyOrder = []struct {
 	{ledPolicyCharging, "Charging"},
 	{ledPolicyTemperature, "Temperature"},
 	{ledPolicyCustom, "Custom"},
+	{ledPolicyScreen, "Screen colours"}, // the picture's colours, in games too (ledscreen.go)
 }
 
 // ledPolicyKey normalises a stored policy; an unknown value falls back to audio
@@ -664,6 +665,9 @@ const ledStopWait = 250 * time.Millisecond
 
 // StartLEDSyncIfEnabled restores the saved setting at launch.
 func StartLEDSyncIfEnabled(config *Config) {
+	// The panel's saved contrast/saturation/exposure/colour temperature ride
+	// on this startup hook (displaytune.go); they need no lights.
+	displayTuneApplyStartup(config)
 	if config == nil || !config.Variables.LEDSync {
 		return
 	}
@@ -749,6 +753,8 @@ func syncLEDLoopSettings(config *Config) {
 	ledLoopState.settings = s
 	ledLoopState.synced = time.Now()
 	ledLoopState.Unlock()
+	// The indicators' and Screen colours' settings (ledindicators.go).
+	ledExtrasPublish(config)
 }
 
 // syncLEDLoopSettingsIfDue is the main loop's throttled refresh, so every writer
@@ -790,6 +796,12 @@ func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 			level = levelFromRMS(sample.RMS)
 		}
 		return ledColorFor(level, sample.Freq)
+	}
+	if s.policy == ledPolicyScreen {
+		if s.brightness <= 0 {
+			return 0, 0, 0 // Off: the picture is not read for a dark ring
+		}
+		return ledScreenColor(now) // the picture's edges (ledscreen.go)
 	}
 	if s.policy == ledPolicyMic {
 		// Already gated, scaled and smoothed on the main thread (ledmic.go).
@@ -840,6 +852,8 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 				}
 				_ = applyLED(dev, 0, 0, 0)
 			}
+			// Screen colours' framebuffer reader (ledscreen.go).
+			ledScreenRelease()
 			return
 		case <-ticker.C:
 			// While a game owns the screen there is no JukaHub UI to light: keep
@@ -847,9 +861,13 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 			// backgroundwork.go. The one exception is Juka over a paused game
 			// (the in-game assistant): its layer draws until it has faded out
 			// (ledjuka.go).
+			// So do the indicators and Screen colours in a game
+			// (ledindicators.go).
 			now := time.Now()
 			overGame := backgroundPaused()
-			if overGame && !ledJukaHolds(now) {
+			settings := currentLEDLoopSettings()
+			layers := ledLayersNow(settings, now, overGame)
+			if overGame && !ledJukaHolds(now) && !layers.holds() {
 				// Hand the lights back once instead of leaving them frozen on
 				// the last frame: the rings get the firmware's colour, the
 				// others go dark. The first frame back repaints everything.
@@ -865,8 +883,9 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 				}
 				continue
 			}
-			// The user's mode, with Juka's layer over it (ledjuka.go).
-			rawR, rawG, rawB := ledJukaFrame(currentLEDLoopSettings(), now, overGame)
+			// The user's mode, with Juka's layer over it (ledjuka.go) and the
+			// indicators over both (ledindicators.go).
+			rawR, rawG, rawB := ledLayersFrame(settings, layers, now, overGame)
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
 			r, g, b := quantiseLEDChannel(rawR), quantiseLEDChannel(rawG), quantiseLEDChannel(rawB)

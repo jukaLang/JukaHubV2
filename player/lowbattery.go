@@ -277,6 +277,48 @@ func retroArchRunning() bool {
 	return false
 }
 
+// raRunningCache backs retroArchRunningCached.
+var raRunningCache struct {
+	mu      sync.Mutex
+	at      time.Time
+	running bool
+	busy    bool
+}
+
+// retroArchRunningCached is retroArchRunning for the once-a-second UI-thread
+// checks (the idle screens' entry, the low-battery guard): the answer is at
+// most about a second old and the /proc scan runs on a goroutine. Reading
+// another process's cmdline waits on that process's memory lock, so a child
+// stalled on the SD card used to stall the UI thread with it.
+func retroArchRunningCached() bool {
+	running, fresh := retroArchRunningCachedFresh()
+	// Only a recent answer counts. The low-battery guard asks only below the
+	// warning level, so the last answer can be hours old there: a "running"
+	// left from a game long closed suspended the device with no game to save
+	// (batteryGuardProtect). Unknown is "not running"; the next tick knows.
+	return running && fresh
+}
+
+// retroArchRunningCachedFresh is the cached answer and whether it is recent
+// (raRunningMaxAge); each call past a second also starts the next scan.
+func retroArchRunningCachedFresh() (running, fresh bool) {
+	raRunningCache.mu.Lock()
+	defer raRunningCache.mu.Unlock()
+	if !raRunningCache.busy && time.Since(raRunningCache.at) >= time.Second {
+		raRunningCache.busy = true
+		go func() {
+			running := retroArchRunning()
+			raRunningCache.mu.Lock()
+			raRunningCache.running, raRunningCache.at, raRunningCache.busy = running, time.Now(), false
+			raRunningCache.mu.Unlock()
+		}()
+	}
+	return raRunningCache.running, time.Since(raRunningCache.at) <= raRunningMaxAge
+}
+
+// raRunningMaxAge is how old a retroArchRunningCached answer may be.
+const raRunningMaxAge = 3 * time.Second
+
 // --- Network commands --------------------------------------------------------
 
 // sendRetroArchNetCmd writes one command per line to RetroArch's command port.
@@ -335,6 +377,9 @@ func askRetroArchNetCmd(port int, command string, wait time.Duration) (string, e
 // rather than the only copy.
 var suspendStates = []string{"mem", "freeze"}
 
+// suspendLogOnce logs the suspend mode the kernel offers, the first time.
+var suspendLogOnce sync.Once
+
 // pickSuspendState returns the state to write into /sys/power/state, or "" when
 // the device supports neither.
 func pickSuspendState(available string) string {
@@ -364,6 +409,15 @@ func suspendDevice() error {
 	if state == "" {
 		return fmt.Errorf("device supports no suspend state (available: %s)", strings.TrimSpace(string(data)))
 	}
+	suspendLogOnce.Do(func() {
+		// On a 5.15 kernel (the Smart Pro S) "mem" is whichever of
+		// /sys/power/mem_sleep's modes is bracketed: deep (RAM kept, the
+		// rest off) or s2idle (frozen, more drain). Logged once, so a sleep
+		// that drains is explained in the log.
+		memSleep, _ := os.ReadFile("/sys/power/mem_sleep")
+		logInfo("sleep", "suspend state %q (offered: %s; mem_sleep: %s)", state,
+			strings.TrimSpace(string(data)), strings.TrimSpace(string(memSleep)))
+	})
 	if err := os.WriteFile("/sys/power/state", []byte(state), 0o644); err != nil {
 		return fmt.Errorf("suspend (%s): %w", state, err)
 	}
@@ -459,7 +513,7 @@ func lowBatteryTick(config *Config) {
 		return
 	}
 	acted, warned, _ := lowBatteryGuardFlags()
-	switch batteryGuardActionFor(percent, charging, retroArchRunning(), acted, warned) {
+	switch batteryGuardActionFor(percent, charging, retroArchRunningCached(), acted, warned) {
 	case batteryGuardWarn:
 		if markLowBatteryWarned() {
 			trophyEvent(tkLowBattery)
@@ -500,36 +554,63 @@ func lowBatteryMessage(config *Config, percent int, cableIn bool) string {
 	return msg
 }
 
+// retroArchNetCmdReady reports whether RetroArch's network commands can be
+// used at all, and if not, why in words for the log.
+func retroArchNetCmdReady() (bool, string) {
+	cfg, _, haveCfg := retroArchConfig()
+	switch {
+	case !haveCfg:
+		return false, "no retroarch.cfg was found"
+	case !networkCmdEnabled(cfg):
+		return false, "network commands are off in RetroArch"
+	}
+	return true, ""
+}
+
+// retroArchSaveAndQuit asks the running RetroArch to write a save state and
+// quit, through its network commands, and waits for it to exit. It reports
+// whether the state was saved and, when not, why. A UDP write always
+// succeeds, so the exit is the only proof the commands reached RetroArch.
+// tag names the caller in the log. Shared by the low-battery guard and the
+// sleep's power off (quickresume.go). Off the render thread: it waits.
+func retroArchSaveAndQuit(tag string) (bool, string) {
+	cfg, cfgPath, haveCfg := retroArchConfig()
+	if !haveCfg {
+		Log().Warn(tag + ": no retroarch.cfg found; skipping save state")
+		return false, "no retroarch.cfg was found"
+	}
+	if !networkCmdEnabled(cfg) {
+		Log().Warn(tag+": network commands disabled in RetroArch; skipping save state", "config", cfgPath)
+		return false, "network commands are off in RetroArch"
+	}
+	port := networkCmdPort(cfg)
+	if err := sendRetroArchNetCmd(port, "SAVE_STATE"); err != nil {
+		Log().Warn(tag+": RetroArch command failed", "port", port, "err", err)
+		return false, "RetroArch's command port did not take the save"
+	}
+	Log().Info(tag+": save state requested", "port", port, "config", cfgPath)
+	time.Sleep(lowBatterySaveDelay)
+	// JukaHub ends the game here, not the game itself (gamelaunch_watch.go).
+	gameLaunchNoteStopAll()
+	_ = sendRetroArchNetCmd(port, "QUIT")
+	if !waitForRetroArchExit(lowBatteryQuitWait) {
+		Log().Warn(tag + ": RetroArch did not exit after QUIT")
+		return false, "RetroArch did not exit after saving"
+	}
+	return true, ""
+}
+
 // protectLowBattery saves, syncs and suspends. It runs off the render thread.
 func protectLowBattery() {
-	saved := false
-	cfg, cfgPath, haveCfg := retroArchConfig()
-	if haveCfg && networkCmdEnabled(cfg) {
-		port := networkCmdPort(cfg)
-		if err := sendRetroArchNetCmd(port, "SAVE_STATE"); err == nil {
-			saved = true
-			Log().Info("low battery: save state requested", "port", port, "config", cfgPath)
-			time.Sleep(lowBatterySaveDelay)
-			// JukaHub ends the game here, not the game itself (gamelaunch_watch.go).
-			gameLaunchNoteStopAll()
-			_ = sendRetroArchNetCmd(port, "QUIT")
-			// A UDP write always succeeds, so the exit is the only proof the
-			// command reached RetroArch. Without it, say the save did not happen.
-			if !waitForRetroArchExit(lowBatteryQuitWait) {
-				saved = false
-				Log().Warn("low battery: RetroArch did not exit after QUIT")
-			}
-		} else {
-			Log().Warn("low battery: RetroArch command failed", "port", port, "err", err)
-		}
-	} else if !haveCfg {
-		Log().Warn("low battery: no retroarch.cfg found; skipping save state")
-	} else {
-		Log().Warn("low battery: network commands disabled in RetroArch; skipping save state", "config", cfgPath)
-	}
+	saved, _ := retroArchSaveAndQuit("low battery")
 	if !saved {
 		showToast("Could not save state — suspending without it", ToastWarn())
 	}
+	// Music playing with the screen dark stops first (quickresume.go).
+	quickDarkLowBatteryHold()
+	// The battery history's last minutes, before the battery may run out
+	// asleep (battgraph.go).
+	battGraphFlushNow()
 	if err := syncDisks(); err != nil {
 		Log().Warn("low battery: sync failed", "err", err)
 	}

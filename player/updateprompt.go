@@ -27,12 +27,45 @@ import (
 )
 
 var updatePrompt struct {
-	open     bool
-	focus    int // 0 = Update now, 1 = Not now
-	seen     bool
-	badge    sdl.Rect
-	nowBtn   sdl.Rect
-	laterBtn sdl.Rect
+	open      bool
+	focus     int // 0 = Update now, the last = Not now (updatePromptChoice)
+	seen      bool
+	cached    bool // the release is in the update cache, so it can install later (REL-9)
+	badge     sdl.Rect
+	nowBtn    sdl.Rect
+	nextBtn   sdl.Rect
+	chargeBtn sdl.Rect
+	laterBtn  sdl.Rect
+}
+
+// updatePromptCount is how many buttons the prompt has: Update now and Not
+// now, with Next start and When charging between them for a release that is
+// already in the update cache (upch.go installs it then, never over a game).
+func updatePromptCount() int {
+	if updatePrompt.cached {
+		return 4
+	}
+	return 2
+}
+
+// updatePromptChoice names the focused button: "now", "next", "charge" or
+// "later".
+func updatePromptChoice() string {
+	switch {
+	case updatePrompt.focus == 0:
+		return "now"
+	case updatePrompt.cached && updatePrompt.focus == 1:
+		return "next"
+	case updatePrompt.cached && updatePrompt.focus == 2:
+		return "charge"
+	}
+	return "later"
+}
+
+// updatePromptMove moves the focus along the buttons.
+func updatePromptMove(delta int) {
+	n := updatePromptCount()
+	updatePrompt.focus = ((updatePrompt.focus+delta)%n + n) % n
 }
 
 // updateAvailable reports whether the header should offer a release. A stored
@@ -57,11 +90,18 @@ func openUpdatePrompt() {
 	updatePrompt.open = true
 	updatePrompt.focus = 0
 	updatePrompt.seen = true
+	// Next start / When charging install the cached release, so they are
+	// offered only when that is the release this prompt names: with an older
+	// one cached and a newer one advertised they would install the older one.
+	v := upchStatusView()
+	updatePrompt.cached = v.Ready && strings.EqualFold(v.ReadyTag, availableUpdateTag())
 }
 
 func closeUpdatePrompt() {
 	updatePrompt.open = false
 	updatePrompt.nowBtn = sdl.Rect{}
+	updatePrompt.nextBtn = sdl.Rect{}
+	updatePrompt.chargeBtn = sdl.Rect{}
 	updatePrompt.laterBtn = sdl.Rect{}
 }
 
@@ -71,11 +111,16 @@ func maybeOfferUpdate() {
 	if updatePrompt.open || updatePrompt.seen || !updateAvailable() {
 		return
 	}
+	// The user already chose when it installs (upch.go); asking again at
+	// every start would undo the point of choosing.
+	if s := upchScheduled(); s.When != "" && strings.EqualFold(s.Tag, availableUpdateTag()) {
+		return
+	}
 	if virtualKeyboardActive || toolsPanel.open || imageViewerPath != "" || qs.open ||
 		patchModal != nil || transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
 		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || winAppsPanel.open || portsPanel.open || steamPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open || raPanel.open || a11y.open ||
 		wpOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen || smartHomePanel.open ||
-		memPanel.open || ctrldiag.open || fileEditor.open {
+		memPanel.open || ctrldiag.open || fileEditor.open || mlPanel.open {
 		return
 	}
 	openUpdatePrompt()
@@ -83,14 +128,27 @@ func maybeOfferUpdate() {
 
 // activateUpdatePrompt runs the focused choice.
 func activateUpdatePrompt(config *Config) {
-	if updatePrompt.focus == 0 {
-		closeUpdatePrompt()
+	choice := updatePromptChoice()
+	closeUpdatePrompt()
+	switch choice {
+	case "now":
 		// One press installs: no Patch detour and no second confirmation. The
 		// header download chip runs this same action.
 		startHeaderUpdate()
-		return
+	case "next", "charge":
+		// The cached release installs later; the choice is kept across
+		// restarts (upch.go).
+		v := upchStatusView()
+		if !v.Ready || !strings.EqualFold(v.ReadyTag, availableUpdateTag()) {
+			ShowToast("This update is not downloaded yet: Update now gets it", ToastKindInfo)
+			return
+		}
+		when := upchWhenNextStart
+		if choice == "charge" {
+			when = upchWhenCharging
+		}
+		upchScheduleWithToast(v.ReadyTag, v.ReadyLabel, when)
 	}
-	closeUpdatePrompt()
 }
 
 // updateInstallRunner performs the download, extraction and staged swap. It is
@@ -328,11 +386,27 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 	btnH := int32(42)
 	updateW := int32(160)
 	laterW := int32(120)
-	laterX := x + cardW - OverlayPadX - laterW
-	updateX := laterX - 12 - updateW
 	btnY := layout.buttonsY
-	updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
-	updatePrompt.nowBtn = sdl.Rect{X: updateX, Y: btnY, W: updateW, H: btnH}
+	if updatePrompt.cached {
+		// Four buttons: narrower, and shared out evenly if the card is.
+		updateW, laterW = 140, 104
+		nextW, chargeW := int32(124), int32(150)
+		if avail := cardW - 2*OverlayPadX - 3*12; updateW+nextW+chargeW+laterW > avail {
+			updateW, nextW, chargeW, laterW = avail/4, avail/4, avail/4, avail/4
+		}
+		laterX := x + cardW - OverlayPadX - laterW
+		chargeX := laterX - 12 - chargeW
+		nextX := chargeX - 12 - nextW
+		updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
+		updatePrompt.chargeBtn = sdl.Rect{X: chargeX, Y: btnY, W: chargeW, H: btnH}
+		updatePrompt.nextBtn = sdl.Rect{X: nextX, Y: btnY, W: nextW, H: btnH}
+		updatePrompt.nowBtn = sdl.Rect{X: nextX - 12 - updateW, Y: btnY, W: updateW, H: btnH}
+	} else {
+		laterX := x + cardW - OverlayPadX - laterW
+		updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
+		updatePrompt.nowBtn = sdl.Rect{X: laterX - 12 - updateW, Y: btnY, W: updateW, H: btnH}
+		updatePrompt.nextBtn, updatePrompt.chargeBtn = sdl.Rect{}, sdl.Rect{}
+	}
 
 	updateFill := WithAlpha(ColorInfo, 90)
 	if updatePrompt.focus == 0 {
@@ -349,7 +423,7 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 		Pill:       true,
 		NoShadow:   true,
 	}, UIButtonState{Focused: updatePrompt.focus == 0})
-	updatePrompt.laterBtn = UIButton(renderer, config, updatePrompt.laterBtn, "Not now", UIButtonStyle{
+	quiet := UIButtonStyle{
 		Variant:    UIButtonCustom,
 		Fill:       ColorIconSurface,
 		HoverFill:  ColorIconSurface,
@@ -358,7 +432,15 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 		Font:       font,
 		Pill:       true,
 		NoShadow:   true,
-	}, UIButtonState{Focused: updatePrompt.focus == 1})
+	}
+	if updatePrompt.cached {
+		updatePrompt.nextBtn = UIButton(renderer, config, updatePrompt.nextBtn, "Next start", quiet,
+			UIButtonState{Focused: updatePromptChoice() == "next"})
+		updatePrompt.chargeBtn = UIButton(renderer, config, updatePrompt.chargeBtn, "When charging", quiet,
+			UIButtonState{Focused: updatePromptChoice() == "charge"})
+	}
+	updatePrompt.laterBtn = UIButton(renderer, config, updatePrompt.laterBtn, "Not now", quiet,
+		UIButtonState{Focused: updatePromptChoice() == "later"})
 }
 
 // updatePromptLayout is the measured geometry of the modal. The renderer draws
@@ -398,6 +480,10 @@ func layoutUpdatePrompt(font, medium *ttf.Font) updatePromptLayout {
 	body := fmt.Sprintf("Release %s is ready to install. Download and restart when you are ready — nothing is installed without your confirmation.", availableUpdateLabel())
 	bodyLines := wrapTextLines(font, body, innerW, 3)
 	hintLines := wrapTextLines(font, "You can always install it later from Tools → Patch.", innerW, 1)
+	if updatePrompt.cached {
+		hintLines = wrapTextLines(font, "It is already downloaded. Next start installs it when JukaHub opens again; "+
+			"When charging waits until it charges untouched for 15 minutes. Never during a game.", innerW, 3)
+	}
 	notes := updatePromptHighlights(updatePromptMaxNotes)
 
 	measure := func(withNotes bool) updatePromptLayout {
@@ -488,8 +574,11 @@ func updatePromptHighlights(max int) []string {
 
 func ctrlUpdatePrompt(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		updatePrompt.focus = 1 - updatePrompt.focus
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		updatePromptMove(-1)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		updatePromptMove(1)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
 		PlayActivateSound()
@@ -506,8 +595,10 @@ func handleUpdatePromptKey(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	switch e.Keysym.Sym {
-	case sdl.K_LEFT, sdl.K_RIGHT, sdl.K_TAB:
-		updatePrompt.focus = 1 - updatePrompt.focus
+	case sdl.K_LEFT:
+		updatePromptMove(-1)
+	case sdl.K_RIGHT, sdl.K_TAB:
+		updatePromptMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		activateUpdatePrompt(config)
 	case sdl.K_ESCAPE:
@@ -525,8 +616,18 @@ func handleUpdatePromptMouse(mx, my int32, config *Config) bool {
 		activateUpdatePrompt(config)
 		return true
 	}
-	if pointInRect(mx, my, updatePrompt.laterBtn) {
+	if updatePrompt.cached && pointInRect(mx, my, updatePrompt.nextBtn) {
 		updatePrompt.focus = 1
+		activateUpdatePrompt(config)
+		return true
+	}
+	if updatePrompt.cached && pointInRect(mx, my, updatePrompt.chargeBtn) {
+		updatePrompt.focus = 2
+		activateUpdatePrompt(config)
+		return true
+	}
+	if pointInRect(mx, my, updatePrompt.laterBtn) {
+		updatePrompt.focus = updatePromptCount() - 1
 		activateUpdatePrompt(config)
 		return true
 	}

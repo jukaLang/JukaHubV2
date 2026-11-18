@@ -82,8 +82,10 @@ const (
 	gaEvdevBtnTL2 = 0x138
 	// gaEvdevBtnDpadUp / gaEvdevBtnDpadDown are a D-pad sent as buttons; the
 	// TrimUI pads send a hat (ABS_HAT0Y), and both are read.
-	gaEvdevBtnDpadUp   = 0x220
-	gaEvdevBtnDpadDown = 0x221
+	gaEvdevBtnDpadUp    = 0x220
+	gaEvdevBtnDpadDown  = 0x221
+	gaEvdevBtnDpadLeft  = 0x222
+	gaEvdevBtnDpadRight = 0x223
 	// gaChordHold is how long Select + R2 are held: the games mouse's hold, so
 	// the two chords feel the same.
 	gaChordHold = vcursorChordHold
@@ -432,14 +434,20 @@ func (s *gaPadSession) step(now time.Time) error {
 func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 	switch ev.Type {
 	case evdevEvKey:
-		if ev.Code == gaEvdevBtnDpadUp || ev.Code == gaEvdevBtnDpadDown {
+		if ev.Code >= gaEvdevBtnDpadUp && ev.Code <= gaEvdevBtnDpadRight {
 			// A D-pad sent as buttons: outside the pad's button range, read
-			// only to move the menu's highlight while the pad is held.
+			// only to move the menu's highlight (and the Music row's track)
+			// while the pad is held.
 			if s.held && ev.Value == 1 && !now.Before(s.quiet) {
-				if ev.Code == gaEvdevBtnDpadUp {
+				switch ev.Code {
+				case gaEvdevBtnDpadUp:
 					gaPush(gaBtnUp)
-				} else {
+				case gaEvdevBtnDpadDown:
 					gaPush(gaBtnDown)
+				case gaEvdevBtnDpadLeft:
+					gaPush(gaBtnLeft)
+				default:
+					gaPush(gaBtnRight)
 				}
 			}
 			if ev.Value == 1 {
@@ -476,8 +484,7 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 		}
 		if ev.Code == evdevBtnMode && s.menuDown {
 			// Menu acts when it comes up, the way the TrimUI's own launchers
-			// read it: a volume key pressed meanwhile made it the firmware's
-			// Menu + volume brightness chord.
+			// read it: a volume key pressed meanwhile made it a chord.
 			s.menuDown = false
 			if orbVolumeKeys.Load() == s.menuVolume {
 				gaPush(gaBtnMenu)
@@ -497,6 +504,14 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 		case evdevAbsHat0X:
 			if ev.Value != 0 {
 				s.shotCancel() // Menu + the D-pad: a hotkey
+			}
+			// Left or right while the pad is held: the Music row's track.
+			if d := evdevHatDir(ev.Value); s.held && d != 0 && d != evdevHatDir(prev) && !now.Before(s.quiet) {
+				if d < 0 {
+					gaPush(gaBtnLeft)
+				} else {
+					gaPush(gaBtnRight)
+				}
 			}
 		case evdevAbsHat0Y:
 			if ev.Value != 0 {
@@ -632,7 +647,7 @@ func (s *gaPadSession) shotOtherHeld() bool {
 }
 
 // shotStillAlone reports Menu still down alone, with no volume key pressed
-// since it went down (the firmware's Menu + volume brightness).
+// since it went down (a Menu + volume chord).
 func (s *gaPadSession) shotStillAlone() bool {
 	return gaPad.wantShot.Load() && s.eng.key(evdevBtnMode) && !s.shotOtherHeld() &&
 		orbVolumeKeys.Load() == s.shotVolume
@@ -640,7 +655,7 @@ func (s *gaPadSession) shotStillAlone() bool {
 
 // shotArm is the hold reaching menuShotHold: a tick of the motor says Menu
 // may be let go. The picture is saved on the release, so a volume key
-// pressed late in a long hold (brightness) still cancels it.
+// pressed late in a long hold still cancels it.
 func (s *gaPadSession) shotArm() {
 	if !s.shotStillAlone() {
 		s.shotCancel()

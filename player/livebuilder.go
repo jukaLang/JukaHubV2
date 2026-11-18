@@ -564,6 +564,7 @@ func (s *liveBuilderServer) detachIfIdle(stop chan struct{}, now time.Time) *htt
 }
 
 // idleExpired reports whether a running server has gone unused for the limit.
+// Test seam (ARCH-8): only tests call it.
 func (s *liveBuilderServer) idleExpired(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1740,6 +1741,7 @@ func liveBuilderKeyWords(name string) []string {
 
 // liveBuilderReadDesign is the design on the device, or nil when there is none
 // that parses (then everything a push can do counts as new).
+// Test seam (ARCH-8): only tests call it.
 func liveBuilderReadDesign(path string) *Config {
 	data, err := os.ReadFile(path)
 	if err != nil {

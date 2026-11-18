@@ -586,7 +586,7 @@ func feEntryMeta(entry FileEntry) string {
 	}
 	meta := humanBytes(entry.Size)
 	if !entry.Mod.IsZero() {
-		meta += " · " + entry.Mod.Format("Jan 2")
+		meta += " · " + formatDateNear(nil, entry.Mod, time.Now())
 	}
 	if progress := readerProgressLabel(entry.Path); progress != "" {
 		meta += " · " + progress

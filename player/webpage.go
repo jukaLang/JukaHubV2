@@ -38,18 +38,26 @@ import (
 
 const (
 	// webMaxTextBytes bounds how much readable text one page may contribute.
-	webMaxTextBytes = 384 << 10
+	webMaxTextBytes = 768 << 10
 	// webMaxBlocks bounds the block list so a pathological page cannot make
-	// the layout take seconds on the handheld.
-	webMaxBlocks = 1800
-	// webMaxStylesheets and webSheetByteCap bound external CSS fetching: a
-	// handful of small sheets is what makes real sites look like themselves.
-	webMaxStylesheets = 3
-	webSheetByteCap   = 256 << 10
-	webMaxCSSBytes    = 1 << 20
-	// A linked sheet may @import its base sheet. Keep the chain short and
-	// shared with webMaxStylesheets' budget: imports are real requests too.
-	webMaxStyleImports     = 4
+	// the layout take seconds on the handheld. 1800 cut long articles and
+	// busy front pages off part-way down.
+	webMaxBlocks = 4000
+	// webMaxStylesheets and webSheetByteCap bound external CSS fetching. Real
+	// sites link a theme, a framework and several plugin sheets, and their main
+	// sheet is often well past 256 KiB: the old limits (3 sheets, and a larger
+	// sheet dropped whole) left most pages unstyled. A sheet past the cap keeps
+	// its complete rules up to the cap (webCSSBudgetPrefix).
+	webMaxStylesheets = 12
+	webSheetByteCap   = 1536 << 10
+	// webMaxLinkedCSSBytes is the share of webMaxCSSBytes linked sheets may
+	// take, so the page's own <style> blocks — often its critical layout CSS —
+	// always keep room after them.
+	webMaxLinkedCSSBytes = 2 << 20
+	webMaxCSSBytes       = 3 << 20
+	// A linked sheet may @import its base sheet. Keep the chain short: imports
+	// are real requests too.
+	webMaxStyleImports     = 8
 	webMaxStyleImportDepth = 3
 	// webMaxRows bounds the laid-out row count (each row is one text line).
 	webMaxRows = 12000
@@ -692,9 +700,6 @@ type webBlock struct {
 	HasRight  bool
 	HasBottom bool
 	HasLeft   bool
-	// InMain marks text inside <main>/<article>. When a page has any, the
-	// reader shows that content instead of the site's navigation furniture.
-	InMain bool
 	// Details and DetailsShown fold a <details> section. Details is every
 	// enclosing section, outermost first, because a closed outer section hides
 	// an open section inside it — one owner pointer could not say that. While any
@@ -1203,6 +1208,93 @@ func (r *webRule) mode() webSelMode {
 		return webSelReveal
 	}
 	return webSelLenient
+}
+
+// webRuleIndex buckets a sheet's rules by what their subject compound (the
+// rightmost one) demands of the element: an id, else a class, else a tag. The
+// matcher used to test every rule against every element — a real site's few
+// thousand rules times a few thousand elements was most of a page's parse
+// time on the handheld. Id, class and tag tests are definite in every match
+// mode (webSelCompoundTest), so a rule outside an element's buckets can never
+// match it and skipping it changes nothing.
+type webRuleIndex struct {
+	byID    map[string][]int32
+	byClass map[string][]int32
+	byTag   map[string][]int32
+	rest    []int32
+}
+
+func newWebRuleIndex(rules []webRule) *webRuleIndex {
+	if len(rules) == 0 {
+		return nil // candidates answers nil for a page without CSS
+	}
+	ix := &webRuleIndex{
+		byID:    make(map[string][]int32),
+		byClass: make(map[string][]int32),
+		byTag:   make(map[string][]int32),
+	}
+	for i := range rules {
+		sel := rules[i].sel
+		if sel == nil || sel.never || len(sel.compounds) == 0 {
+			continue // matchesIn never matches it
+		}
+		subject := &sel.compounds[len(sel.compounds)-1]
+		// Only ASCII names become keys: strings.ToLower does not fold every
+		// pair strings.EqualFold matches (ſ and s, ς and σ), so a non-ASCII
+		// name is left to the next key, or to rest.
+		var id, class string
+		for j := range subject.simples {
+			switch s := &subject.simples[j]; s.kind {
+			case webSelID:
+				if id == "" && webASCIIName(s.name) {
+					id = strings.ToLower(s.name)
+				}
+			case webSelClass:
+				if class == "" && webASCIIName(s.name) {
+					class = strings.ToLower(s.name)
+				}
+			}
+		}
+		n := int32(i)
+		switch {
+		case id != "":
+			ix.byID[id] = append(ix.byID[id], n)
+		case class != "":
+			ix.byClass[class] = append(ix.byClass[class], n)
+		case subject.tag != "":
+			ix.byTag[subject.tag] = append(ix.byTag[subject.tag], n)
+		default:
+			ix.rest = append(ix.rest, n)
+		}
+	}
+	return ix
+}
+
+func webASCIIName(name string) bool {
+	for i := 0; i < len(name); i++ {
+		if name[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// candidates lists, in sheet order, the rules that may match el.
+func (ix *webRuleIndex) candidates(el *webElement) []int32 {
+	if ix == nil {
+		return nil
+	}
+	out := make([]int32, 0, len(ix.rest)+16)
+	out = append(out, ix.rest...)
+	if el.id != "" {
+		out = append(out, ix.byID[strings.ToLower(el.id)]...)
+	}
+	for _, c := range el.classes {
+		out = append(out, ix.byClass[strings.ToLower(c)]...)
+	}
+	out = append(out, ix.byTag[el.tag]...)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // webFrame is an open element during the streaming parse.
@@ -2190,8 +2282,8 @@ const (
 	// quadratic time and gigabytes of copies before the page appeared.
 	webCSSMaxNesting = 8
 	// webCSSMaxRules bounds the rules one page keeps; a large site uses a few
-	// thousand.
-	webCSSMaxRules = 16000
+	// thousand. Matching cost no longer grows with it (webRuleIndex).
+	webCSSMaxRules = 24000
 )
 
 // parseWebCSSInto appends the rules of one (comment-free) block to rules.
@@ -6428,6 +6520,7 @@ func webBackgroundShorthandLayer(segment string) webBackgroundLayerStyle {
 // contain and explicit sizes produce a smaller layer, and background-position
 // anchors that layer inside the box. Gradients have no intrinsic pixels, so
 // they keep the box unless an explicit size was declared.
+// Test seam (ARCH-8): only tests call it.
 func webBackgroundLayerRect(box sdl.Rect, style webStyle, doc *webDocument, scale float64) (sdl.Rect, int) {
 	layer := webBackgroundLayerStyle{Image: style.BackgroundImage, Size: style.BackgroundSize, Position: style.BackgroundPosition}
 	if style.BackgroundLayerCount > 0 {
@@ -8220,6 +8313,7 @@ type webPictureFrame struct {
 type webParser struct {
 	doc     *webDocument
 	rules   []webRule
+	ruleIx  *webRuleIndex
 	css     strings.Builder
 	stack   []webFrame
 	blocks  []webBlock
@@ -8246,7 +8340,6 @@ type webParser struct {
 	// it, while counter-increment changes the nearest one.
 	counters             map[string][]int
 	pendingCounterResets []string
-	mainDepth            int
 	flexSeq              int
 	boxSeq               int
 	containerSeq         int
@@ -8334,6 +8427,7 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	if p.css.Len() > 0 {
 		p.rules = parseWebCSS(p.css.String())
 	}
+	p.ruleIx = newWebRuleIndex(p.rules)
 	p.pseudoMask = webRulesPseudoMask(p.rules)
 	if webRulesNeedSelectorTree(p.rules) {
 		p.selTree = webBuildSelectorTree(source)
@@ -8348,13 +8442,15 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	p.flush()
 	doc.FormHidden = p.formHidden
 	doc.HasContainerUnits = p.hasContainerUnits
-	doc.Blocks = filterWebMainContent(p.blocks)
+	// Every block is kept. The reader used to drop everything outside <main>
+	// and <article> whenever a page had one: a news or shop front page whose
+	// story and product cards are <article>s lost its header, menus, section
+	// titles and everything between the cards, and a page with a single
+	// <article> widget showed only that widget.
+	doc.Blocks = p.blocks
 	if p.trunc {
-		// The note goes in after the <main> filter, and at the top. Tagging it
-		// as main content made the filter keep only this one sentence and drop
-		// every real block, so an article past the text budget drew as a
-		// single line; left at the end it would sit below thousands of rows
-		// that the layout never reaches.
+		// The note goes at the top: left at the end it would sit below
+		// thousands of rows that the layout never reaches.
 		note := webBlock{
 			Style: webStyle{FontPx: 13, Italic: true},
 			Runs:  []webRun{{Text: "[Page content truncated so the handheld keeps its memory.]", Style: webStyle{FontPx: 13, Italic: true}}},
@@ -8364,86 +8460,146 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	return doc
 }
 
-// filterWebMainContent drops navigation, headers and footers when the page
-// marks its real content with <main> or <article>. Reading a docs page should
-// start at the docs, not at the site's menu.
-func filterWebMainContent(blocks []webBlock) []webBlock {
-	hasMain := false
-	for _, block := range blocks {
-		if block.InMain {
-			hasMain = true
-			break
-		}
-	}
-	if !hasMain {
-		return blocks
-	}
-	// A main column is often one grid/flex cell beside a sidebar or nav. Keep
-	// every sibling that belongs to a container which also contains main
-	// content, otherwise the filter deletes the sidebar and the grid is left
-	// with an orphaned article in one column.
-	mainGroups := map[int]bool{}
-	for _, block := range blocks {
-		if !block.InMain {
-			continue
-		}
-		if block.FlexGroup != 0 {
-			mainGroups[block.FlexGroup] = true
-		}
-		for _, m := range block.FlexTrail {
-			if m.group != 0 {
-				mainGroups[m.group] = true
-			}
-		}
-	}
-	kept := blocks[:0]
-	for _, block := range blocks {
-		keep := block.InMain
-		if !keep && block.FlexGroup != 0 && mainGroups[block.FlexGroup] {
-			keep = true
-		}
-		if !keep {
-			for _, m := range block.FlexTrail {
-				if m.group != 0 && mainGroups[m.group] {
-					keep = true
-					break
-				}
-			}
-		}
-		if keep {
-			kept = append(kept, block)
-		}
-	}
-	return kept
-}
-
 // fetchWebStylesheets pulls the page's linked stylesheets. External CSS is what
-// makes most real pages look like themselves, so a few small sheets are worth
-// the request; large frameworks are capped and simply contribute nothing.
+// makes most real pages look like themselves; a sheet or set of sheets past the
+// budget contributes its complete leading rules.
 func fetchWebStylesheets(source string, base *url.URL) string {
 	if base == nil {
 		return ""
 	}
-	var addresses []string
+	sheets := webLinkedStylesheets(source, base)
+	if len(sheets) == 0 {
+		return ""
+	}
+	// Fetch the sheets side by side. One slow sheet used to hold up the whole
+	// page load, and on handheld wifi three sequential timeouts could keep the
+	// reader on "Loading ..." for the better part of a minute.
+	bodies := make([]string, len(sheets))
+	var wg sync.WaitGroup
+	pageURL := base.String()
+	for i, sheet := range sheets {
+		wg.Add(1)
+		go func(i int, address string) {
+			defer wg.Done()
+			// Each sheet is cut to the whole budget as it lands, so twelve
+			// sheets with their imports are never all held at full size.
+			bodies[i] = webCSSBudgetPrefix(fetchWebStylesheet(pageURL, address), webMaxLinkedCSSBytes)
+		}(i, sheet.url)
+	}
+	wg.Wait()
+	var out strings.Builder
+	for i, css := range bodies {
+		remaining := webMaxLinkedCSSBytes - out.Len() - 1
+		if css == "" || remaining <= 0 {
+			continue
+		}
+		media := sheets[i].media
+		if media != "" {
+			// The wrapper's own bytes come out of the same budget.
+			remaining -= len(media) + 16
+		}
+		// A sheet that does not fit whole still gives its complete leading
+		// rules: the base and layout rules sit at the top of a theme.
+		css = webCSSBudgetPrefix(css, remaining)
+		if css == "" {
+			continue
+		}
+		if media != "" {
+			out.WriteString("@media ")
+			out.WriteString(media)
+			out.WriteString(" {\n")
+			out.WriteString(css)
+			out.WriteString("\n}\n")
+			continue
+		}
+		out.WriteString(css)
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+// webLinkedSheet is one <link> stylesheet: its absolute address and the media
+// query it is limited to ("" for all media).
+type webLinkedSheet struct {
+	url   string
+	media string
+}
+
+// webLinkedStylesheets lists the page's linked stylesheets in document order,
+// as a browser would apply them to a screen:
+//   - rel="stylesheet", but not "alternate stylesheet" or a disabled link;
+//   - a media query that cannot hold on this screen (media="print") is not
+//     fetched, and any other query wraps the sheet in @media;
+//   - the two common async-CSS loaders count as the stylesheet they turn into
+//     once loaded: rel="preload" as="style" whose onload sets rel to
+//     stylesheet, and media="print" whose onload sets media to all;
+//   - commented-out markup is skipped.
+func webLinkedStylesheets(source string, base *url.URL) []webLinkedSheet {
+	var sheets []webLinkedSheet
 	seen := make(map[string]bool)
-	pos := 0
-	for pos < len(source) && len(addresses) < webMaxStylesheets {
-		rel := webIndexFold(source[pos:], "<link")
-		if rel < 0 {
+	for pos := 0; pos < len(source) && len(sheets) < webMaxStylesheets; {
+		lt := strings.IndexByte(source[pos:], '<')
+		if lt < 0 {
 			break
 		}
-		start := pos + rel
+		start := pos + lt
+		if strings.HasPrefix(source[start:], "<!--") {
+			end := strings.Index(source[start+4:], "-->")
+			if end < 0 {
+				pos = start + 4 // an unclosed comment hides nothing
+				continue
+			}
+			pos = start + 4 + end + 3
+			continue
+		}
+		// A script's or style's text is not markup: "<link" or "<!--" in a
+		// string literal must neither add a sheet nor hide the real ones.
+		if raw := webLinkScanRawTag(source, start); raw != "" {
+			end := findTextBrowserTagEnd(source, start+1)
+			if end < 0 {
+				break
+			}
+			_, pos, _ = webRawElement(source, end+1, raw)
+			continue
+		}
+		if len(source)-start < 5 || !strings.EqualFold(source[start+1:start+5], "link") ||
+			(len(source)-start > 5 && isWebIdentByte(source[start+5])) {
+			pos = start + 1
+			continue
+		}
 		end := findTextBrowserTagEnd(source, start+1)
 		if end < 0 {
 			break
 		}
 		tag := source[start+1 : end]
 		pos = end + 1
-		relAttr := strings.ToLower(htmlTagAttribute(tag, "rel"))
-		if !strings.Contains(relAttr, "stylesheet") {
+		rel := " " + strings.ToLower(strings.Join(strings.Fields(htmlAttrValue(htmlTagAttribute(tag, "rel"))), " ")) + " "
+		onload := strings.ToLower(htmlAttrValue(htmlTagAttribute(tag, "onload")))
+		switch {
+		case strings.Contains(rel, " alternate "):
+			continue
+		case strings.Contains(rel, " stylesheet "):
+		case strings.Contains(rel, " preload ") &&
+			strings.EqualFold(strings.TrimSpace(htmlAttrValue(htmlTagAttribute(tag, "as"))), "style") &&
+			strings.Contains(onload, "stylesheet"):
+		default:
 			continue
 		}
-		href := htmlAttrValue(htmlTagAttribute(tag, "href"))
+		if htmlTagAttributeHas(strings.TrimSuffix(tag, "/"), "disabled") {
+			continue
+		}
+		media := strings.TrimSpace(htmlAttrValue(htmlTagAttribute(tag, "media")))
+		if strings.Contains(onload, "media") {
+			// <link media="print" onload="this.media='all'">: a load-time swap.
+			media = ""
+		}
+		if lm := strings.ToLower(media); lm == "all" || lm == "screen" || lm == "only screen" {
+			media = ""
+		}
+		if media != "" && !webMediaBlockApplies(media) {
+			continue
+		}
+		href := strings.TrimSpace(htmlAttrValue(htmlTagAttribute(tag, "href")))
 		if href == "" {
 			continue
 		}
@@ -8452,38 +8608,27 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 			continue
 		}
 		abs := base.ResolveReference(ref)
+		abs.Fragment = ""
 		if abs.Scheme != "http" && abs.Scheme != "https" || seen[abs.String()] {
 			continue
 		}
 		seen[abs.String()] = true
-		addresses = append(addresses, abs.String())
+		sheets = append(sheets, webLinkedSheet{url: abs.String(), media: media})
 	}
-	if len(addresses) == 0 {
-		return ""
-	}
-	// Fetch the sheets side by side. One slow sheet used to hold up the whole
-	// page load, and on handheld wifi three sequential timeouts could keep the
-	// reader on "Loading ..." for the better part of a minute.
-	bodies := make([]string, len(addresses))
-	var wg sync.WaitGroup
-	pageURL := base.String()
-	for i, address := range addresses {
-		wg.Add(1)
-		go func(i int, address string) {
-			defer wg.Done()
-			bodies[i] = fetchWebStylesheet(pageURL, address)
-		}(i, address)
-	}
-	wg.Wait()
-	var out strings.Builder
-	for _, css := range bodies {
-		if css == "" || out.Len() >= webMaxCSSBytes {
-			continue
+	return sheets
+}
+
+// webLinkScanRawTag names the raw-text element (script or style) whose start
+// tag begins at source[start], or "".
+func webLinkScanRawTag(source string, start int) string {
+	for _, name := range [...]string{"script", "style"} {
+		end := start + 1 + len(name)
+		if end <= len(source) && strings.EqualFold(source[start+1:end], name) &&
+			(end == len(source) || !isWebIdentByte(source[end]) && source[end] != '-') {
+			return name
 		}
-		out.WriteString(css)
-		out.WriteString("\n")
 	}
-	return out.String()
+	return ""
 }
 
 func fetchWebStylesheet(pageURL, address string) string {
@@ -8529,10 +8674,17 @@ func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, dept
 		return ""
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, webSheetByteCap+1))
-	if err != nil || len(body) > webSheetByteCap {
+	if err != nil {
 		return ""
 	}
-	css := webRebaseCSSURLs(string(body), resp.Request.URL)
+	// A sheet past the cap used to be dropped whole, and a site's main sheet
+	// is the one most likely to be that large: the page then drew unstyled.
+	// Its complete rules up to the cap are kept instead.
+	css := webCSSBudgetPrefix(string(body), webSheetByteCap)
+	if css == "" {
+		return ""
+	}
+	css = webRebaseCSSURLs(css, resp.Request.URL)
 	return webExpandCSSImports(css, resp.Request.URL, pageURL, seen, depth)
 }
 
@@ -8555,6 +8707,9 @@ func webExpandCSSImports(css string, base *url.URL, pageURL string, seen map[str
 		abs := base.ResolveReference(ref)
 		if abs.Scheme != "http" && abs.Scheme != "https" {
 			continue
+		}
+		if imported.Len() >= webMaxLinkedCSSBytes {
+			break // the page could not use more than this anyway
 		}
 		child := fetchWebStylesheetDepth(pageURL, abs.String(), seen, depth+1)
 		if child == "" {
@@ -9216,10 +9371,6 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 	}
 
-	if name == "main" || name == "article" {
-		p.mainDepth++
-	}
-
 	// A control whose closing tag never arrived ends at the next element that
 	// starts a new context, so one malformed field cannot eat the whole page.
 	// Its own children are not that context: an <option> belongs to the open
@@ -9616,9 +9767,6 @@ func (p *webParser) endTag(name string) {
 		if name == "head" {
 			p.inHead = false
 		}
-		if (name == "main" || name == "article") && p.mainDepth > 0 {
-			p.mainDepth--
-		}
 		if name == "ul" || name == "ol" {
 			if depth := len(p.lists); depth > 0 {
 				p.lists = p.lists[:depth-1]
@@ -9856,7 +10004,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// element styled was most of what this loop allocated — and sorted without
 	// reflection.
 	var matched []*webRule
-	for i := range p.rules {
+	for _, i := range p.ruleIx.candidates(&el) {
 		rule := &p.rules[i]
 		if rule.sel.pseudo != webPseudoElemNone {
 			continue
@@ -10037,7 +10185,7 @@ func (p *webParser) pseudoContent(el webElement, attrs string, base webStyle, ps
 	chain = append(chain, el)
 
 	var matched []*webRule
-	for i := range p.rules {
+	for _, i := range p.ruleIx.candidates(&el) {
 		rule := &p.rules[i]
 		if rule.sel.pseudo != pseudo {
 			continue
@@ -10460,7 +10608,6 @@ func (p *webParser) ensureBlock() *webBlock {
 		Bullet:             p.pendingB,
 		MarkerStyle:        p.pendingBStyle,
 		HasMarkerStyle:     p.hasPendingBStyle,
-		InMain:             p.mainDepth > 0,
 		FlexGrow:           st.FlexGrow,
 		FlexShrink:         st.FlexShrink,
 		FlexBasis:          st.FlexBasis,

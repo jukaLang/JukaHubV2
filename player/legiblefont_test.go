@@ -204,3 +204,34 @@ func TestLegibleFontSettingPersistsResetsAndHasARow(t *testing.T) {
 	}
 	t.Fatal("Settings -> Accessibility has no legibleFont row")
 }
+
+// TestUIFontDownloadValidator: a downloaded font (uifont.go) is installed only
+// when it is a real TrueType/OpenType file whose map has the basic letters; an
+// error page or a cut-off download never becomes the interface face.
+func TestUIFontDownloadValidator(t *testing.T) {
+	dir := t.TempDir()
+	if err := uiFontValidateFile(legibleTestFace(t, dir, "good.ttf")); err != nil {
+		t.Fatalf("bundled Inter refused: %v", err)
+	}
+	page := filepath.Join(dir, "page.ttf")
+	if err := os.WriteFile(page, []byte("<!DOCTYPE html><html>404</html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uiFontValidateFile(page); err == nil {
+		t.Fatal("an HTML page passed as a font")
+	}
+	data, err := os.ReadFile(homeUIFontFile)
+	if err != nil {
+		t.Fatalf("read bundled Inter: %v", err)
+	}
+	cut := filepath.Join(dir, "cut.ttf")
+	if err := os.WriteFile(cut, data[:64], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := uiFontValidateFile(cut); err == nil {
+		t.Fatal("a cut-off font passed")
+	}
+	if uiFontMissingBasics([]runeRange{{'A', 'Z'}, {'a', 'z'}}) != "'0'" {
+		t.Fatal("a font with no digits was not caught")
+	}
+}

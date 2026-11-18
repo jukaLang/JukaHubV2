@@ -556,3 +556,72 @@ func TestSsyncBaseRoundTripDropsBadEntries(t *testing.T) {
 		t.Error("a malformed id loaded a base")
 	}
 }
+
+// TestGdriveReadsDriveAnswers checks the two answers from outside that Google
+// Drive sync trusts: the file list (names and labels judged like a paired
+// device's, a duplicate folder from two devices still found) and the token
+// endpoint's error codes.
+func TestGdriveReadsDriveAnswers(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	page := []byte(`{"files":[
+	 {"id":"top","mimeType":"application/vnd.google-apps.folder","appProperties":{"jhkind":"dir","jhdir":"."},"createdTime":"2026-11-01T10:00:00Z"},
+	 {"id":"ra1","mimeType":"application/vnd.google-apps.folder","appProperties":{"jhkind":"dir","jhdir":"retroarch-saves"},"createdTime":"2026-11-02T10:00:00Z"},
+	 {"id":"ra0","mimeType":"application/vnd.google-apps.folder","appProperties":{"jhkind":"dir","jhdir":"retroarch-saves"},"createdTime":"2026-11-01T10:00:00Z"},
+	 {"id":"bad","mimeType":"application/vnd.google-apps.folder","appProperties":{"jhkind":"dir","jhdir":"retroarch-saves/../x"}},
+	 {"id":"f1","name":"Zelda.srm","parents":["ra1"],"size":"8","sha256Checksum":"` + strings.ToUpper(sha) + `","modifiedTime":"2026-11-03T10:00:00Z","appProperties":{"jhkind":"save","jhmtime":"1762000000"}},
+	 {"id":"f2","name":"Mario.srm","parents":["ra0"],"size":"4","appProperties":{"jhkind":"save","jhsha":"` + sha + `"}},
+	 {"id":"f3","name":"..","parents":["ra0"],"size":"4","appProperties":{"jhkind":"save","jhsha":"` + sha + `"}},
+	 {"id":"f4","name":"NoSum.srm","parents":["ra0"],"size":"4","appProperties":{"jhkind":"save"}},
+	 {"id":"f5","name":"Lost.srm","parents":["bad"],"size":"4","appProperties":{"jhkind":"save","jhsha":"` + sha + `"}}
+	]}`)
+	list, err := gdriveParseList(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gdriveParseList([]byte(`{"incompleteSearch":true,"files":[]}`)); err == nil {
+		t.Fatal("a partial list must be refused")
+	}
+	var dirs, files []gdriveFile
+	for _, f := range list.Files {
+		if f.MimeType == gdriveFolderMime {
+			dirs = append(dirs, f)
+		} else {
+			files = append(files, f)
+		}
+	}
+	r := gdriveBuildRemote(dirs, files)
+	if r.dirs["retroarch-saves"] != "ra0" {
+		t.Fatalf("new files must go into the oldest folder, got %q", r.dirs["retroarch-saves"])
+	}
+	z, ok := r.files["retroarch-saves/Zelda.srm"]
+	if !ok || z.SHA != sha || z.Size != 8 || z.MTime != 1762000000 {
+		t.Fatalf("Zelda.srm read as %+v (%v)", z, ok)
+	}
+	if _, ok := r.files["retroarch-saves/Mario.srm"]; !ok {
+		t.Fatal("a file in the duplicate folder was lost")
+	}
+	if len(r.files) != 2 || r.manifest.Skipped != 2 {
+		t.Fatalf("got %d files, %d skipped; want 2 and 2 (bad name, no checksum)", len(r.files), r.manifest.Skipped)
+	}
+	for _, f := range r.manifest.Files {
+		if f.MTime != 0 {
+			t.Fatalf("Drive's time must not reach the rules: %+v", f)
+		}
+	}
+
+	if _, err := gdriveParseTokenAnswer(428, []byte(`{"error":"authorization_pending"}`)); err == nil {
+		t.Fatal("authorization_pending must be an error")
+	} else {
+		var oe *gdriveOAuthError
+		if !errors.As(err, &oe) || oe.Code != "authorization_pending" {
+			t.Fatalf("got %v", err)
+		}
+	}
+	if _, err := gdriveParseTokenAnswer(200, []byte(`<html>`)); err == nil {
+		t.Fatal("a page that is not JSON must be refused")
+	}
+	ans, err := gdriveParseTokenAnswer(200, []byte(`{"access_token":"a","expires_in":0,"refresh_token":"r"}`))
+	if err != nil || ans.ExpiresIn != 3600 || ans.RefreshToken != "r" {
+		t.Fatalf("got %+v, %v", ans, err)
+	}
+}

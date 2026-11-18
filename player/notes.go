@@ -317,7 +317,7 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 
 		// Metadata.
 		folderStr := n.Folder
-		timeStr := n.UpdatedAt.Format("Jan 2 15:04")
+		timeStr := formatDateTimeNear(config, n.UpdatedAt, time.Now())
 		meta := fmt.Sprintf("%s  •  %s", folderStr, timeStr)
 		renderText(renderer, config, subFont, meta,
 			WithAlpha(ColorTextTertiary(), 140), listX+16, ry+58)

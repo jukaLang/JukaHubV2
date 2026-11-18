@@ -687,7 +687,9 @@ func chatAskAIWith(text string, files []ChatFile) bool {
 	if text == "" && len(files) == 0 {
 		return false
 	}
-	if groqAPIKey() == "" {
+	// Without a key a question still gets offline Juka's read-only checks
+	// when device tools are on (aiagent.go); a file needs Groq.
+	if groqAPIKey() == "" && (len(files) > 0 || !aiToolsOn()) {
 		groqStatus = "Groq: no API key"
 		showToast("Add your Groq API key to talk to Juka", ToastWarn())
 		return false
@@ -765,6 +767,7 @@ func chatAddMarker() bool {
 	})
 	chatMutex.Unlock()
 	chatDirty.Store(true)
+	aiConversationEnded() // a waiting card is a no; "allow for this chat" ends (aiagent.go)
 	return true
 }
 
@@ -793,6 +796,9 @@ func chatClearTab(tab chatTab) {
 	*chatTabSliceLocked(tab) = []ChatMessage{}
 	chatTabs[tab].unread = 0
 	chatMutex.Unlock()
+	if tab == chatTabAI {
+		aiConversationEnded() // aiagent.go
+	}
 	if tab == chatActiveTabID() {
 		clearChatSelection()
 	}

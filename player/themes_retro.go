@@ -3,7 +3,7 @@ package main
 // themes_retro.go — the classic consoles as themes: PlayStation (PS1, PS2,
 // PSP), Nintendo (Super Nintendo, Nintendo 64, GameCube) and Sega (Mega Drive,
 // Dreamcast). Each is a palette in the Colour tab — like Sega Blue and Game
-// Boy — and a "… Style" total conversion in the Consoles tab that adds the
+// Boy — and a "… Style" preset in the Styles tab that adds the
 // home arrangement, the glows and, where it helps, the console look
 // (CarouselStyle, TileRadius, FocusRing; themeconsole.go). Colour, shape and
 // arrangement only: no logos, fonts or artwork.
@@ -238,8 +238,7 @@ type themeRetroConversion struct {
 	ring, ring2          string
 }
 
-// themeRetroConversions are the console conversions, in the Consoles tab's
-// order within each maker (themeConsoleTabOrder).
+// themeRetroConversions are the console conversions, grouped within Styles.
 var themeRetroConversions = []themeRetroConversion{
 	{key: "convert-ps1", name: "PS1 Style", palette: "ps1", arrangement: homeArrangementGrid,
 		summary: "Hero tile · grey shell, four symbols", radius: 6, ring: "#2f5fc4", ring2: "#c8407a"},
@@ -259,34 +258,23 @@ var themeRetroConversions = []themeRetroConversion{
 		summary: "Tile row · white and swirl orange", carousel: homeCarouselStrip, radius: 16, ring: "#c94a08", ring2: "#e0600c"},
 }
 
-// themeConsoleTabOrder is the Consoles tab, grouped by maker: PlayStation,
-// Nintendo, Xbox, Sega. A console conversion missing here (one added later)
-// still shows, after these, in the catalogue's order (themeConsolePresets).
-var themeConsoleTabOrder = []string{
+// themeStyleTabOrder puts distinct looks first, grouped by maker, with Minimal
+// UI last. New conversion styles appear after these in catalogue order.
+var themeStyleTabOrder = []string{
 	"convert-ps5", "convert-ps4", "convert-ps1", "convert-ps2", "convert-psp",
 	"convert-switch", "convert-switch-dark", "convert-snes", "convert-n64",
-	"convert-gamecube", "convert-dmg",
+	"convert-gamecube",
 	"convert-xbox", "convert-xboxone",
-	"convert-megadrive", "convert-dreamcast", "convert-segablue",
+	"convert-megadrive", "convert-dreamcast",
+	"convert-minimal",
 }
 
-// themeConsoleExtras are the console conversions that carry no console look
-// of their own (themeConsoleSpecs) but belong in the Consoles tab.
-var themeConsoleExtras = map[string]bool{
-	"convert-segablue": true,
-	"convert-dmg":      true,
-}
-
-// themePresetIsConsole reports whether a preset id is a console look: the
-// Consoles tab's, and so not the Total conversion tab's.
-func themePresetIsConsole(name string) bool {
+// themePresetIsStyle identifies built-ins with a distinct UI treatment.
+func themePresetIsStyle(name string) bool {
 	if name == "convert-minimal" {
-		return false // a look, not a console (thememinimal.go)
+		return true // text-only Home (thememinimal.go)
 	}
 	if _, ok := themeConsoleSpecs[name]; ok {
-		return true
-	}
-	if themeConsoleExtras[name] {
 		return true
 	}
 	for _, c := range themeRetroConversions {
@@ -374,7 +362,8 @@ func themeOrderInsertAfter(order []string, anchor string, add []string) []string
 			}
 		}
 	}
-	out := make([]string, 0, len(order)+len(fresh))
+	// One length, no sum: append grows it by len(fresh) at most once.
+	out := make([]string, 0, len(order))
 	out = append(out, order[:at]...)
 	out = append(out, fresh...)
 	return append(out, order[at:]...)

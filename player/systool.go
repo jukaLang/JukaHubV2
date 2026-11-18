@@ -88,7 +88,7 @@ func sysToolHandleClick(mx, my int32, config *Config) bool {
 	// A sheet a screen opened over itself is modal: it takes every click,
 	// the bar's too.
 	switch {
-	case name == "Terminal" && termHist.open:
+	case name == "Terminal" && (termHist.open || cmdDeck.open):
 		return handleTermMouseClick(mx, my, config)
 	case name == schedSceneName && schedUI.sheet:
 		return schedHandleClick(mx, my, config)

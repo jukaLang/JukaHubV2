@@ -30,6 +30,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,7 +64,7 @@ func (s ffmpegStderrSink) Write(p []byte) (int, error) {
 	if s.tail != nil {
 		_, _ = s.tail.Write(p)
 	}
-	_, _ = os.Stderr.Write(p)
+	_, _ = os.Stderr.WriteString(redactLogSecrets(string(p))) // an error names its URL: no ?token= on the card (SEC-2)
 	return len(p), nil
 }
 
@@ -117,15 +118,245 @@ func mediaIsHLS(u string) bool {
 // ffmpeg's name answers with 403. Such a stream also reconnects where it broke
 // off (a Range request, which the https relay passes through): a connection
 // the CDN or the relay dropped during a pause used to end the video there.
-// All of these are options of ffmpeg's http protocol, which every one of these
-// inputs is opened with (the relay's loopback address included); a direct link
-// keeps ffmpeg's defaults, and an rtsp/udp input (whose protocol would not take
-// them, so ffmpeg would refuse to start) never gets them.
+//
+// Every http(s) input — a direct link and a live channel too — also gets a read
+// timeout (ffmpegReadTimeout) and the reconnect. Without the timeout a stream
+// that went quiet without closing (a CDN that stopped sending, Wi-Fi that
+// dropped behind a NAT that never sent a reset) left ffmpeg waiting in recv for
+// good: a frozen picture, or the loading picture, that nothing recovered from.
+// With it, the socket read gives up after that long without a byte; on a file
+// whose length the server announced, -reconnect then asks again from where it
+// broke off (backing off 0, 1 and 3 s, then giving up past
+// -reconnect_delay_max), so a short drop plays on, and a stall that outlasts
+// all of that ends the decoder with ffmpeg's I/O error, which
+// mediaDecoderStalled turns into a failure for mediaRecoverStream. A live
+// stream (no length) is not reconnected — ffmpeg would restart it from its live
+// edge — it just ends there. The user agent stays for page streams: a direct
+// link keeps ffmpeg's own name, as before.
+//
+// All of these are options of ffmpeg's http protocol (-rw_timeout of every
+// protocol), which every one of these inputs is opened with (the relay's
+// loopback address included; the HLS demuxer hands -rw_timeout on to each
+// segment it opens); an rtsp/udp input (whose protocol would not take them, so
+// ffmpeg would refuse to start) never gets them.
 func ffmpegStreamInputArgs(source, pageURL string) []string {
-	if mediaPageStream(source, pageURL) {
-		return []string{"-user_agent", streamUserAgent, "-reconnect", "1", "-reconnect_delay_max", "4"}
+	if !isHTTPMediaURL(source) {
+		return nil
 	}
-	return nil
+	args := make([]string, 0, 8)
+	if mediaPageStream(source, pageURL) {
+		args = append(args, "-user_agent", streamUserAgent)
+	}
+	return append(args, "-rw_timeout", ffmpegReadTimeoutArg(), "-reconnect", "1", "-reconnect_delay_max", "4")
+}
+
+// ffmpegReadTimeout is how long a decoder (and ffprobe) reading an http(s)
+// input waits for the next byte before it gives the connection up. 15 s, the
+// bound the probe already had: well past what handheld Wi-Fi goes quiet for
+// while it is healthy — a background scan or a roam pauses traffic for 2-8 s,
+// a weak link retransmits for a few seconds, a CDN that throttles to playback
+// speed still sends something every second or two — and short enough that a
+// dead stream says so instead of freezing. It counts time without a single
+// byte, not time to fill a buffer, so a slow link that still trickles never
+// trips it; and nothing reads while the video is paused (ffmpeg is blocked
+// writing its pipe), so a long pause does not either.
+const ffmpegReadTimeout = 15 * time.Second
+
+// ffmpegReadTimeoutArg is ffmpegReadTimeout as -rw_timeout takes it
+// (microseconds).
+func ffmpegReadTimeoutArg() string {
+	return fmt.Sprint(ffmpegReadTimeout.Microseconds())
+}
+
+// mediaStallWait is how long the picture decoder's last read must have waited
+// for a pipe that then closed for the close to count as a stall: the read
+// timeout, less the frames ffmpeg still had queued when its input went quiet.
+// A file that simply ends delivers its last frames at once; ffmpeg closing the
+// pipe after this long without a frame gave up on its input.
+const mediaStallWait = ffmpegReadTimeout - 3*time.Second
+
+// mediaDecoderStalled decides whether a picture decoder of an http(s) input
+// that had delivered frames stopped because its input went quiet (the read
+// timeout above, then the reconnects, ran out) rather than at its end, when
+// mediaDecoderFailed did not already count it. lastWait is how long the read
+// that found the pipe closed had waited.
+//
+// A file (a known length) that stalled anywhere but at its end failed; a web
+// video stalled in its last half minute still ends there, as one that broke
+// off there always has (the download that takes it over is not worth it). A
+// live stream (no length) can also end by itself after a wait — a playlist
+// that closes when the broadcast stops — so it needs ffmpeg to say its input
+// broke off as well, unless watchdog is set: mediaReadWatch stopped the
+// decoder, whose read had hung, so it did not end by itself.
+func mediaDecoderStalled(frames int, httpInput, pageStream bool, position, duration float64, lastWait time.Duration, stderr string, watchdog bool) bool {
+	if frames <= 0 || !httpInput {
+		return false // no frame at all is mediaDecoderFailed's
+	}
+	stalled := watchdog || lastWait >= mediaStallWait || strings.Contains(strings.ToLower(stderr), "timed out")
+	if !stalled {
+		return false
+	}
+	if duration <= 0 {
+		return watchdog || (lastWait >= mediaStallWait && ffmpegStreamBroke(stderr))
+	}
+	if pageStream {
+		return duration-position > 30 && position < duration*0.9
+	}
+	return position < duration-2
+}
+
+// mediaStallReason is a stalled decoder's reason: ffmpeg's own when it said
+// the read timed out, else what happened in words mediaReasonForPeople reads
+// as a time-out ("the connection timed out").
+func mediaStallReason(stderr string) string {
+	if reason := ffmpegFailureReason(stderr); strings.Contains(strings.ToLower(reason), "timed out") {
+		return reason
+	}
+	return fmt.Sprintf("no data for %d s, the read timed out", int(ffmpegReadTimeout/time.Second))
+}
+
+// mediaStallGiveUp is how long one read of the picture decoder of an http(s)
+// input may wait — the player not paused, and no sound arriving either —
+// before mediaReadWatch stops the decoder as stalled. HLS hides a dead network
+// from ffmpeg's own timeouts: a live playlist's failed reloads and segment
+// opens are only warnings, so ffmpeg neither ends nor says why; a VOD playlist
+// skips each segment that times out and waits on the next, for minutes; and
+// -reconnect never reaches the segments. 90 s is past the about 80 s the read
+// timeout and the reconnects of a progressive stream can take, so those still
+// end by themselves, with ffmpeg's own reason.
+const mediaStallGiveUp = 90 * time.Second
+
+// mediaReadWatchTick is how often the watch looks.
+const mediaReadWatchTick = 5 * time.Second
+
+// mediaReadWatch stops a picture decoder whose pipe read has hung. The decoder
+// brackets each read with begin and end and stops the watch when its loop is
+// over. A read still pending while the player is paused, while the sound
+// decoder still feeds the device (the input is alive, only the picture is
+// quiet), or across a sleep of the PC or handheld, counts from then on. A nil
+// watch does nothing.
+type mediaReadWatch struct {
+	base time.Time
+	// pending is the pending read's start, as nanoseconds since base plus
+	// one; 0 when no read is pending.
+	pending atomic.Int64
+	fired   atomic.Bool
+	stop    chan struct{}
+	stopped bool // stop is closed; the decoder's goroutine only
+}
+
+// startMediaReadWatch starts the watch of one decoder: done is its session's
+// end, av its clock (whose sound shows the input alive), paused reports the
+// player paused and kill stops the decoder.
+func startMediaReadWatch(done <-chan struct{}, av *avSync, paused func() bool, kill func()) *mediaReadWatch {
+	w := &mediaReadWatch{base: time.Now(), stop: make(chan struct{})}
+	go w.run(done, av, paused, kill)
+	return w
+}
+
+func (w *mediaReadWatch) now() int64 { return int64(time.Since(w.base)) + 1 }
+
+// begin notes a read starting. Decoder goroutine.
+func (w *mediaReadWatch) begin() {
+	if w != nil {
+		w.pending.Store(w.now())
+	}
+}
+
+// end notes the read over. Decoder goroutine.
+func (w *mediaReadWatch) end() {
+	if w != nil {
+		w.pending.Store(0)
+	}
+}
+
+// Stop ends the watch; more calls do nothing. Decoder goroutine.
+func (w *mediaReadWatch) Stop() {
+	if w != nil && !w.stopped {
+		w.stopped = true
+		close(w.stop)
+	}
+}
+
+// Fired reports whether the watch stopped the decoder.
+func (w *mediaReadWatch) Fired() bool {
+	return w != nil && w.fired.Load()
+}
+
+// run is the watch's goroutine. It ends with the session, with Stop, or once
+// it has stopped the decoder; its ticker goes with it.
+func (w *mediaReadWatch) run(done <-chan struct{}, av *avSync, paused func() bool, kill func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			logWarn("video", "the stall watch failed: %v", r)
+		}
+	}()
+	t := time.NewTicker(mediaReadWatchTick)
+	defer t.Stop()
+	lastFed := int64(-1)
+	last, seenWakes := time.Now(), wakeCount()
+	for {
+		select {
+		case <-w.stop:
+			return
+		case <-done:
+			return
+		case <-t.C:
+		}
+		// A tick far behind its time (on Windows Go's monotonic clock counts
+		// a sleep, so the first tick after a wake comes that late; a stopped
+		// process too) or a wake the watcher noticed (wake_resume.go): the
+		// time away is not the read's, so a pending read counts from now and
+		// the sound is looked at afresh.
+		away := time.Since(last) > 3*mediaReadWatchTick
+		last = time.Now()
+		if n := wakeCount(); away || n != seenWakes {
+			seenWakes = n
+			if at := w.pending.Load(); at != 0 {
+				w.pending.CompareAndSwap(at, w.now())
+			}
+			lastFed = -1
+			continue
+		}
+		fed := mediaSoundFed(av)
+		soundMoved := lastFed >= 0 && fed >= 0 && fed != lastFed
+		lastFed = fed
+		at := w.pending.Load()
+		if at == 0 {
+			continue
+		}
+		if soundMoved || paused() {
+			// Not a stall: this read counts from now — if it is still the
+			// same read (the decoder may have finished it meanwhile).
+			w.pending.CompareAndSwap(at, w.now())
+			continue
+		}
+		if time.Duration(w.now()-at) > mediaStallGiveUp {
+			w.fired.Store(true)
+			kill()
+			return
+		}
+	}
+}
+
+// mediaSoundFed is how much sound this session's sound decoder has given the
+// device so far (taken plus still queued), or -1 before its first buffer or
+// with no device.
+func mediaSoundFed(av *avSync) int64 {
+	if av == nil || !av.audioStarted.Load() {
+		return -1
+	}
+	consumed, _, queued, _, _, ok := videoAudioClock()
+	if !ok {
+		return -1
+	}
+	return consumed + queued
+}
+
+// mediaWatchdogReason is the reason of a decoder mediaReadWatch stopped, in
+// words mediaReasonForPeople reads as a time-out.
+func mediaWatchdogReason() string {
+	return fmt.Sprintf("no data for %d s, the read timed out", int(mediaStallGiveUp/time.Second))
 }
 
 // ffmpegFailureReason picks the line of a decoder's stderr that says why it

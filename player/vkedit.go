@@ -47,10 +47,11 @@ const (
 type vkStripMode int
 
 const (
-	vkStripHidden    vkStripMode = iota
-	vkStripWords                 // word suggestions
-	vkStripQuickURL              // ".com", "https://" ...
-	vkStripQuickHost             // ".", ":", "192.168." ...
+	vkStripHidden     vkStripMode = iota
+	vkStripWords                  // word suggestions
+	vkStripQuickURL               // ".com", "https://" ...
+	vkStripQuickHost              // ".", ":", "192.168." ...
+	vkStripTermTokens             // Terminal: whole-token chips (cmddeck_chips.go)
 )
 
 const (
@@ -387,6 +388,8 @@ func vkSentenceTarget() bool {
 	switch vkTarget {
 	case vkTargetChat, vkTargetFileLine, vkTargetName, vkTargetPlaylist, homeTabsNameVKTarget:
 		return true
+	case mailComposeVKTarget:
+		return mailComposeProse()
 	}
 	return false
 }
@@ -432,7 +435,7 @@ func vkApplyAutoShift() {
 // vkSecretTarget is a field whose text must not be shown, copied or learned.
 func vkSecretTarget() bool {
 	switch vkTarget {
-	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget:
+	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget:
 		return true
 	case vkTargetRommServer:
 		return rommCloud.editToken
@@ -448,12 +451,15 @@ func vkSecretTarget() bool {
 }
 
 // vkStripModeNow is what the strip offers for the active target: words for
-// prose and searches, quick inserts for links and hosts, nothing for secrets,
-// numbers, commands and initials.
+// prose and searches, quick inserts for links and hosts, command tokens for
+// the Terminal, nothing for secrets, numbers and initials.
 func vkStripModeNow() vkStripMode {
 	switch vkTarget {
-	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit, vkTargetTerm,
-		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey, bootLockVKTarget:
+	case vkTargetTerm:
+		return vkStripTermTokens
+	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit,
+		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey, bootLockVKTarget,
+		feArchivePassVKTarget:
 		return vkStripHidden
 	case vkTargetRommServer:
 		if rommCloud.editToken {
@@ -462,8 +468,13 @@ func vkStripModeNow() vkStripMode {
 		return vkStripQuickURL
 	case vkTargetDownloads, vkTargetPodcast, vkTargetToolsURL, vkTargetParty, vkTargetBrowserURL:
 		return vkStripQuickURL
-	case vkTargetDNS, vkTargetNetwork, vkTargetNetplay:
+	case vkTargetDNS, vkTargetNetwork, vkTargetNetplay, mlAddrVKTarget:
 		return vkStripQuickHost
+	case mailComposeVKTarget:
+		// Addresses are not words: the strip must not learn pieces of them.
+		if f := mailUI.compose.editing; f == "to" || f == "cc" {
+			return vkStripQuickHost
+		}
 	case vkTargetFiles:
 		switch filesKeyboard {
 		case filesEditPassword:
@@ -515,7 +526,12 @@ var vkSuggestState vkSuggestCache
 // vkSyncSuggestions refreshes the strip's row when its inputs changed. It runs
 // once per frame; with nothing changed it is two comparisons.
 func vkSyncSuggestions() {
-	if vkStripModeNow() != vkStripWords {
+	switch vkStripModeNow() {
+	case vkStripWords:
+	case vkStripTermTokens:
+		termChipsSync()
+		return
+	default:
 		return
 	}
 	text := vkCurrentText()
@@ -545,11 +561,15 @@ func vkSyncSuggestions() {
 
 // vkStripDisplay is what strip cell i shows ("" for an empty cell).
 func vkStripDisplay(i int) string {
-	if vkStripModeNow() == vkStripWords {
+	switch vkStripModeNow() {
+	case vkStripWords:
 		if i < 0 || i >= len(vkSuggestState.disp) {
 			return ""
 		}
 		return vkSuggestState.disp[i]
+	case vkStripTermTokens:
+		_, disp := termChipText(i)
+		return disp
 	}
 	text, _ := vkStripCellText(i)
 	return text
@@ -571,6 +591,9 @@ func vkStripCellText(i int) (string, bool) {
 			return "", false
 		}
 		return chips[i], false
+	case vkStripTermTokens:
+		tok, _ := termChipText(i)
+		return tok, false
 	}
 	return "", false
 }
@@ -582,6 +605,8 @@ func vkStripCount() int {
 		return len(vkSuggestRow{})
 	case vkStripQuickURL, vkStripQuickHost:
 		return len(vkQuickChips(mode))
+	case vkStripTermTokens:
+		return termChipMax
 	}
 	return 0
 }
@@ -602,9 +627,12 @@ func vkActivateStrip(i int, config *Config) {
 	if text == "" {
 		return
 	}
-	if vkStripModeNow() == vkStripWords {
+	switch vkStripModeNow() {
+	case vkStripWords:
 		vkApplySuggestion(vkSuggestion{Text: text, Literal: literal}, config)
-	} else {
+	case vkStripTermTokens:
+		termChipApply(i, config)
+	default:
 		vkInsertText(text, config)
 	}
 	vkKeySound()

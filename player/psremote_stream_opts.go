@@ -90,8 +90,10 @@ var (
 
 // psPrepareStream is the stream's setup: the address to use (home or
 // internet) and the options the session file carries. It is called on the
-// event thread right before the hand-off; the only wait in it is the home
-// probe, and only for a console that has an internet address.
+// event thread right before the hand-off, with the console narrowed to the
+// address Play already chose off the event thread (psConsoleAt, from
+// psStreamGetReady), so psChooseStreamHost has nothing left to ask: a console
+// with both addresses would wait here for the home probe.
 func psPrepareStream(c psConsole) (psConsole, psStreamOptions) {
 	host, remote := psChooseStreamHost(c)
 	if host != "" {
@@ -296,23 +298,44 @@ func psDpadStickDefault(device DeviceModel) bool {
 
 // psChooseStreamHost picks the address a stream connects to. Without an
 // internet address it is the paired (home) address, as it always was. With
-// one, the home address gets a short discovery probe first: a console that
-// answers — awake or in rest mode — is on this network; one that does not is
-// reached over the internet.
+// one, the home address gets a short discovery probe first (up to
+// psStreamProbeTimeout, so never on the event thread): a console that answers
+// — awake or in rest mode — is on this network; one that does not is reached
+// over the internet.
 func psChooseStreamHost(c psConsole) (host string, remote bool) {
 	lan := strings.TrimSpace(c.Host)
+	home := true
+	if internet := strings.TrimSpace(c.RemoteHost); lan != "" && internet != "" && !strings.EqualFold(internet, lan) {
+		home = psStreamProbe(lan, psConsoleIsPS5(c), c, psStreamProbeTimeout)
+	}
+	return psStreamHostFor(c, home)
+}
+
+// psStreamHostFor is the address once it is known whether the console
+// answered at home — to the stream probe, or to the wake worker, which asks the
+// same address with the same rule (psWakeSameConsole): the home address when it
+// did or when there is no other, the internet address when it did not or when
+// there is no home one.
+func psStreamHostFor(c psConsole, home bool) (host string, remote bool) {
+	lan := strings.TrimSpace(c.Host)
 	internet := strings.TrimSpace(c.RemoteHost)
-	if internet == "" || strings.EqualFold(internet, lan) {
+	if internet == "" || strings.EqualFold(internet, lan) || (home && lan != "") {
 		return lan, false
 	}
-	if lan == "" {
-		return internet, true
-	}
-	if psStreamProbe(lan, psConsoleIsPS5(c), c, psStreamProbeTimeout) {
-		return lan, false
-	}
-	logInfo("psremote", "console not on this network; streaming to its internet address")
 	return internet, true
+}
+
+// psConsoleAt is c with only the address a stream goes to left in it: the home
+// address alone, or the internet address alone. psChooseStreamHost reads the
+// same answer from it without a probe, which is how Play hands its choice to
+// psRemoteStream on the event thread (psStreamGetReady).
+func psConsoleAt(c psConsole, host string, remote bool) psConsole {
+	if remote {
+		c.Host, c.RemoteHost = "", host
+	} else {
+		c.Host, c.RemoteHost = host, ""
+	}
+	return c
 }
 
 // psProbeAcceptsConsole reports whether a discovery answer can be the console

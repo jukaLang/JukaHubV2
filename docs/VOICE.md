@@ -35,8 +35,8 @@ lights follow your voice. Say a command or a question:
 
 Menu is read the way the TrimUI's own launchers read it: a tap acts when the
 button comes up, a hold takes a screenshot (or opens the orb to talk), and a press
-that another button joins is a chord, not a voice press — so the firmware's
-**Menu + volume** (brightness) never opens the orb, and **Menu + Start** still
+that another button joins is a chord, not a voice press — so **Menu + volume**
+never opens the orb, and **Menu + Start** still
 quits like **Select + Start**. A Bluetooth pad's PS or Xbox button is the
 same Menu button on the handheld.
 
@@ -51,6 +51,16 @@ key and connection are available, or with the optional on-device model from
 faster and more capable; if it fails, the installed offline model takes over.
 The local answer is labelled **Offline answer**. An unknown action cannot run
 through the model; the bubble explicitly says **Command wasn't run**.
+
+While Juka thinks without a Groq key, the bubble shows "Speed up by providing a
+Groq key" with **Add Groq key** and, under it, **Type instead**: the D-pad
+moves between the two and **A** (Enter, or a click) runs the one with the
+focus. **Type instead** drops the wait and opens the keyboard ("Ask Juka");
+what you type runs exactly as if you had said it, and the orb comes back with
+the result. An answer whose fix is a Groq key ("add a Groq key") offers the
+same pair. The orb and its text are a size up from the other panels' (Heading
+for what Juka says, Body under it, Label for the controls) so the bubble reads
+at arm's length.
 
 An answer lingers for as long as it takes to read and does not hold the
 controls: any button puts it away and does its own job, **Menu** asks again.
@@ -96,7 +106,7 @@ shows a QR code for your phone. Accept, then press **Hear Juka**.
 
 When Groq's voice can't speak (no key, no internet, the allowance, the terms),
 a PC speaks with Windows' own voice, offline. On a TrimUI, JukaHub downloads
-Piper's Kristin voice by itself once the startup tools (ffmpeg) are in place,
+Piper's Lessac voice by itself once the startup tools (ffmpeg) are in place,
 or right away from **Download offline voice** in **Settings → Voice & AI**
 (that row also selects **This device** as Juka's voice). It reads text
 without Wi-Fi, a Groq key or a daily speech limit. The download is about 90 MB
@@ -105,8 +115,19 @@ With no Groq key and no voice chosen, the offline voice is Juka's voice by
 default. Groq is the faster choice when you have a key; **Speech recognition →
 Automatic** tries it first and uses offline recognition when it cannot. A key
 is optional. The orb mentions this once per launch while it is understanding
-an offline recording. On the Smart Pro, Piper can take several seconds before
-the first spoken word; **Hear Juka** lets you check its output.
+an offline recording. Lessac is Piper's "low" quality voice: it speaks at
+16 kHz, which is about a quarter less work per second of speech than the
+22 kHz Kristin voice JukaHub used before, so on the handheld's A53 cores Piper
+keeps ahead of what it says instead of falling behind. A handheld that already
+has Kristin keeps speaking with her and swaps to Lessac by itself the next
+time it is online (about 60 MB; Kristin is removed once Lessac has said a
+word). Lessac's checksum and size come from the Git LFS pointer of a pinned
+piper-voices commit; if that pointer cannot be read on a first install,
+Kristin is installed instead. The first piece Juka says is short — about six
+words, cut at a comma when there is one, while a first sentence of up to
+about ten words stays whole — and the pieces after it grow, so the first word
+comes quickly and the voice does not stop to catch up. The log says how long
+the first sound took (`Piper: first sound after …`).
 With a key, Piper takes over whenever Groq cannot speak. Piper and the voice
 model are checksum verified and resume after a dropped connection; the
 voice's small settings file is checked for the shape Piper reads. Long
@@ -121,32 +142,31 @@ with no wait and almost no battery; the commonest ones are made in the
 background while the voice is still loaded. Piper's sound goes through memory,
 never the card, and on the handheld it runs on three of the four cores so
 menus and the wake word keep one to themselves.
+With **Your name** set, the shutdown's "Goodbye, *name*" ("See you soon,
+*name*" for a restart) is said aloud as well, and the launch greeting ("Good
+morning, *name*", "Good afternoon, *name*", "Good evening, *name*") plays at
+once instead of being made at boot: the device's own voice makes all five lines
+a couple of seconds after the name changes (once the keyboard is closed and a
+game or Juka has finished), keeps them in `voice-name/` in the data folder and
+puts the greetings into the cache above under the launch's own key (put back
+from there if the cache drops them). The exit plays its line from memory
+instead of loading Piper on the way out. A line is never played for another
+name, nothing is made or said while Juka's voice is Off, the greetings are made
+only where the launch speaks them (with Offline answers installed), and
+clearing the name deletes them all (`byevoice.go`).
 The voice files live in `Apps/JukaHub/required/juka-piper/`.
 The [Piper engine](https://github.com/rhasspy/piper) is MIT licensed; the
+[Lessac voice card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/lessac/low/MODEL_CARD)
+describes its training data and its licence (JukaHub does not ship the voice:
+the handheld downloads it from Hugging Face), and the
 [Kristin voice card](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/kristin/medium/MODEL_CARD)
 identifies public-domain LibriVox recordings as its training data.
 
-**Natural offline voice.** Once Piper is in, a TrimUI also fetches a second,
-more natural offline voice by itself: Gradium's
-[Phonon 31M](https://huggingface.co/gradium/phonon-31m-en) English model
-(Apache-2.0, October 2026) behind the speech server of
-[xn-ptts](https://github.com/gradium-ai/xn-ptts), about 70 MB, or right away
-from **Natural offline voice** in **Settings → Voice & AI**. JukaHub builds it
-itself for the handheld's Cortex-A53 cores (Gradium's own ARM64 build needs
-newer instructions and would not start there) as
-`JukaHub-Voice-linux-arm64.zip` on its releases, and before installing it
-times a sentence on your device: if the handheld needs more than 1.4 seconds
-of work per second of speech it says so, keeps Piper and does not download it
-again (the same row tries again). Otherwise it becomes Juka's offline voice; the
-row shows the measured speed and switches between it and Piper. It stays
-loaded like Piper (about 200 MB of memory while a conversation lasts), says the
-first words of an answer in short pieces and the rest in whole sentences, and
-renders each sentence while the one before it plays. If it cannot start (too
-little free memory, say) Piper says the line instead, and after two failures
-in a row Piper speaks for the rest of the run (**Hear Juka** tries it again).
-It works without the internet once installed: the build proves that by
-speaking with the network cut off on an emulated Cortex-A53. The files live in
-`Apps/JukaHub/required/juka-voice/`. It has not been heard on a handheld yet.
+**No second, "natural" offline voice.** A Phonon 31M voice was tried
+(2026-11-16) and removed again on 2026-11-17: on the TrimUI the voice has to be
+as quick and light as possible, and Piper's 16 kHz Lessac is its lightest
+English voice. A handheld that downloaded it deletes its folder
+(`Apps/JukaHub/required/juka-voice/`, about 70 MB) at the next start.
 
 Other Linux devices may also use espeak-ng, espeak, flite, pico2wave or Piper
 (with a voice) in JukaHub's `required/` folder or on its PATH. Music and a
@@ -357,7 +377,7 @@ while the pairing code is enlarged. Over a paused game the game assistant's
 own picture is used instead.
 
 Juka is also told which screen you're on and what is highlighted ("Settings,
-Display & theme; highlighted: Glass"). Offline answers can't look at
+Theme & look; highlighted: Glass"). Offline answers can't look at
 pictures, so they only get that line.
 
 Settings → Voice & AI → **Let Juka see the screen**:
@@ -369,6 +389,15 @@ Settings → Voice & AI → **Let Juka see the screen**:
 - **Every question** — the picture goes with every question to Groq.
 
 If the vision model can't answer, Juka answers the question as text instead.
+
+## Asking about the device
+
+Questions about the handheld itself — "why won't my game start?", "what's
+filling my card?", "is my Wi-Fi working?", "what's draining the battery?" —
+go to Juka with its device tools, **read-only**: Juka looks at the game's
+files and log, the storage, the network or the battery and says what it
+found. Nothing is changed from the orb; to fix something, ask in Chat →
+Juka AI, where every change waits for your OK. See [AI_TOOLS.md](AI_TOOLS.md).
 
 ## Hey Juka
 
@@ -396,6 +425,20 @@ sound level, well under 1% of one core. Once something is heard it decodes
 with a tiny grammar ("hey" plus the name, everything else ignored) on one
 core; a loud game keeps it decoding, which is what **Hey Juka
 in games** turns off. It gives its memory back when free memory runs low.
+
+## Voice unlock
+
+The startup lock (Settings → Privacy & data) can take a spoken phrase beside
+its button code or password: **Voice unlock** is **Code or voice** (the lock
+screen listens for the phrase by itself for 90 seconds when offline speech is
+installed; **R2**, or **V** on a keyboard, listens again; the code always
+works) or **Code and voice** (the code, then the phrase). Never the phrase
+alone. It is set after the current code by saying it twice (at least 8
+letters, at most 8 words); both must be heard the same. Only a salted hash is
+kept, with the recognizer that heard it: offline speech when installed (then
+nothing leaves the handheld), else Groq, which listens only when R2 asks.
+Five misses in a row rest the phrase until the right code. It recognizes
+words, not voices: anyone who hears the phrase can say it.
 
 ## Pictures and videos
 
@@ -425,7 +468,7 @@ when the keyboard opens** makes a Chat message's keyboard listen as soon as it
 opens, for people who text by voice; it stops on its own when nothing is said
 for a few seconds, and password, key, address and search fields never listen.
 Offline speech is not in the app download: once ffmpeg is installed, a Smart
-Pro connected to Wi-Fi downloads and verifies the roughly 120 MB speech package
+Pro connected to Wi-Fi downloads and verifies the roughly 90 MB speech package
 by itself (before the offline voice), and
 **Settings → Voice & AI → Install offline speech** then shows **Ready**.
 Press that row to start the download yourself at any time; with speech
@@ -493,7 +536,7 @@ and process pipes without being saved to a file.
 * Offline recognition on Windows and other TrimUI models; the first bundled
   model targets the Smart Pro.
 * Juka's voice in languages other than English (Groq's Orpheus and the
-  downloadable Kristin voice are English).
+  downloadable Lessac voice are English).
 * "Hey Juka" on Windows or other handhelds (it runs on the Smart Pro's
   offline recognizer), and a name the small model does not know: it listens
   for the spellings it does know ("juka", "yuka", "joker", …; the log says which).

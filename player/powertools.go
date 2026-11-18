@@ -168,15 +168,8 @@ func powerRefreshCaches() {
 	}
 }
 
-func powerHumanSize(n int64) string {
-	switch {
-	case n >= 1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
-	case n >= 1024:
-		return fmt.Sprintf("%.1f KB", float64(n)/1024)
-	}
-	return fmt.Sprintf("%d B", n)
-}
+// powerHumanSize is formatSize (clockformat.go), the one size format.
+func powerHumanSize(n int64) string { return formatSize(n) }
 
 func powerShortPath(p string) string {
 	p = strings.TrimSpace(p)
@@ -264,13 +257,13 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Target", value: powerShortPath(powerTools.syncTarget), detail: "Local folder or user@host:/path", hint: hintLine(FooterHint{"A", "Set"}), action: powerActionSetSyncTarget, enabled: true},
 			{label: "Dry run", value: "Preview changes", detail: "rsync -azn --itemize-changes", hint: hintLine(FooterHint{"A", "Preview"}), action: powerActionRsyncDryRun, enabled: true},
 			{label: "Sync now", value: "Copy changed files", detail: "No --delete: the target never loses extra files", hint: hintLine(FooterHint{"A", "Sync"}), action: powerActionRsyncNow, enabled: true},
-			{label: "Syncthing status", value: "Check localhost:8384", detail: "Reports binary and web UI without an API key", hint: hintLine(FooterHint{"A", "Check"}), action: powerActionSyncthing, enabled: true},
+			{label: "Syncthing status", value: "Check", detail: "JukaHub's built-in Syncthing, and any other on port 8384", hint: hintLine(FooterHint{"A", "Check"}), action: powerActionSyncthing, enabled: true},
 		}
 	case powerPageConfigs:
 		rows := []powerToolRow{{label: "Snapshot now", value: "jukauser.json", detail: "A timestamped copy appears in power-config-history", hint: hintLine(FooterHint{"A", "Save"}), action: powerActionSnapshotNow, enabled: true}}
 		for i, s := range powerTools.snapshots {
 			rows = append(rows, powerToolRow{
-				label:   s.ModTime.Format("Jan 2 15:04:05"),
+				label:   formatDateNear(config, s.ModTime, time.Now()) + " " + clockDigitsSeconds(config, s.ModTime),
 				value:   powerHumanSize(s.Size),
 				detail:  s.Name,
 				hint:    hintLine(FooterHint{"A", "Diff"}, FooterHint{"X", "Restore"}),
@@ -678,7 +671,7 @@ func powerActivate(config *Config) {
 			return powerAsyncResult{text: out, err: err}
 		})
 	case powerActionSyncthing:
-		powerStartAsync("Syncthing status", "Checking localhost:8384…", func() powerAsyncResult {
+		powerStartAsync("Syncthing status", "Checking Syncthing…", func() powerAsyncResult {
 			return powerAsyncResult{text: powerSyncthingStatus()}
 		})
 	case powerActionSnapshotNow:

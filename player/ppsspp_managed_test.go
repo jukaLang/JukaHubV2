@@ -36,14 +36,17 @@ func ppssppTestEnv(t *testing.T) (root, overrides string) {
 	overrides = filepath.Join(base, "data", "game-launchers.json")
 	prevRoot, prevOverrides := ppssppManagedRootFn, ppssppOverridesPathFn
 	prevCard, prevEmu := ppssppCardRootFn, ppssppEmuRootsFn
+	prevLogin := ppssppRALoginFn
 	ppssppManagedRootFn = func() string { return root }
 	ppssppOverridesPathFn = func() string { return overrides }
 	ppssppCardRootFn = func() string { return "" }
 	ppssppEmuRootsFn = func() []string { return nil }
+	ppssppRALoginFn = func() (string, string) { return "", "" }
 	ppssppResetForTest()
 	t.Cleanup(func() {
 		ppssppManagedRootFn, ppssppOverridesPathFn = prevRoot, prevOverrides
 		ppssppCardRootFn, ppssppEmuRootsFn = prevCard, prevEmu
+		ppssppRALoginFn = prevLogin
 		ppssppResetForTest()
 	})
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -680,6 +683,110 @@ func TestPPSSPPOverrideRefusesBrokenFile(t *testing.T) {
 	}
 }
 
+// The user's own PSP entry is in state.json before game-launchers.json loses
+// it, so a power cut between the two writes cannot leave it only in memory —
+// and a build gone back from stays recorded across a restart.
+func TestPPSSPPStateIsWrittenBeforeTheLauncherFile(t *testing.T) {
+	root, file := ppssppTestEnv(t)
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte(`{"PlayStation Portable": "/mnt/SDCARD/Emus/PSP/mine.sh"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	older := ppssppTestBuild(t, root, "6.1.0", "1.20.2")
+	newer := ppssppTestBuild(t, root, "6.2.0", "1.20.3")
+	fw := ppssppFirmwareInfo{Launcher: "/mnt/SDCARD/Emus/PSP/launch.sh", Version: "1.18.1", Stick: filepath.Join(filepath.Dir(root), "stick")}
+	ppssppMgr.mu.Lock()
+	st := ppssppLockedState()
+	st.Builds = []ppssppBuild{newer, older}
+	err := ppssppUseBuildLocked(st, older, fw)
+	ppssppMgr.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No caller saved: what is on the card is what the switch wrote first.
+	var onCard ppssppState
+	if data, err := os.ReadFile(ppssppStatePath()); err != nil || json.Unmarshal(data, &onCard) != nil {
+		t.Fatalf("state.json: %v", err)
+	}
+	if !onCard.Override || onCard.Active != "6.1.0" || onCard.Replaced["PlayStation Portable"] != `"/mnt/SDCARD/Emus/PSP/mine.sh"` {
+		t.Fatalf("state on the card = %+v, want the user's entry and the build it points at", onCard)
+	}
+
+	ppssppMgr.mu.Lock()
+	st = ppssppLockedState()
+	err = ppssppUseBuildLocked(st, newer, fw)
+	if err == nil {
+		err = ppssppSaveLocked()
+	}
+	ppssppMgr.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := ppssppGoBackTarget(ppssppSnapshot()); !ok || got.Tag != "6.1.0" {
+		t.Fatalf("go-back target = %q, %v; want the build used before", got.Tag, ok)
+	}
+	from, to, err := ppssppGoBack("6.1.0", fw)
+	if err != nil || from.Tag != "6.2.0" || to.Tag != "6.1.0" {
+		t.Fatalf("go back = %q → %q, %v", from.Tag, to.Tag, err)
+	}
+	ppssppResetForTest()
+	if snap := ppssppSnapshot(); snap.Active != "6.1.0" || snap.RolledBack != "6.2.0" {
+		t.Fatalf("after a restart: active %q, rolled back from %q", snap.Active, snap.RolledBack)
+	}
+	if got := loadGameLauncherOverrides(file)["playstation portable"]; got != older.script() {
+		t.Fatalf("PSP games resolve to %q, want the build gone back to", got)
+	}
+}
+
+// The mount and process checks match a folder reached through a link: the
+// mount table names the real path.
+func TestPPSSPPMountChecksResolveLinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need privileges on Windows")
+	}
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	stick := filepath.Join(realDir, "home", ".config", "ppsspp", "PSP", "SAVEDATA")
+	if err := os.MkdirAll(stick, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	realStick, err := filepath.EvalSymlinks(stick)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mounts := "/dev/mmcblk0p1 " + strings.ReplaceAll(filepath.ToSlash(realStick), " ", `\040`) + " vfat rw 0 0\n"
+	if got := ppssppMountPointsFor(mounts, link); len(got) != 1 {
+		t.Fatalf("mounts within the linked folder = %v, want the bind under its real path", got)
+	}
+	if got := ppssppResolvePath(filepath.Join(link, "builds", "not-yet")); !strings.HasSuffix(got, filepath.Join("real", "builds", "not-yet")) {
+		t.Errorf("a path not created yet resolves to %q", got)
+	}
+	// The Brick's aspect ratio replaces only a value the pak itself writes.
+	for _, tc := range []struct {
+		cur   string
+		found bool
+		want  string
+		set   bool
+	}{
+		{"", false, "0.848000", true},
+		{"1.000000", true, "0.848000", true},
+		{"0.848000", true, "1.000000", true},
+		{"", false, "1.000000", false},
+		{"0.750000", true, "0.848000", false},
+		{"0.848", true, "0.848000", false},
+	} {
+		if got := ppssppAspectNeedsSet(tc.cur, tc.found, tc.want); got != tc.set {
+			t.Errorf("aspect %q (found %v) → %s: set = %v, want %v", tc.cur, tc.found, tc.want, got, tc.set)
+		}
+	}
+}
+
 // ppssppTestBuild lays down an installed build.
 func ppssppTestBuild(t *testing.T, root, tag, version string) ppssppBuild {
 	t.Helper()
@@ -1090,5 +1197,159 @@ func TestPPSSPPInstallFromRelease(t *testing.T) {
 	}
 	if dirExists(filepath.Join(root, "builds", "6.5.0")) {
 		t.Error("a refused download left a build folder")
+	}
+}
+
+// JukaHub's PPSSPP signs in to RetroAchievements with JukaHub's account
+// (GAME-21): the merge rule, the files it writes (the token only in its own
+// 0600 store, never the ini) and the RetroArch login it reads.
+func TestPPSSPPRetroAchievementsSignIn(t *testing.T) {
+	const token = "AbCdEf0123456789"
+	for _, tc := range []struct {
+		name      string
+		optOut    bool
+		user, tok string
+		iniUser   string
+		haveToken bool
+		write     bool
+	}{
+		{"nobody signed in", false, "Juka", token, "", false, true},
+		{"a token left without an account", false, "Juka", token, "", true, true},
+		{"the same account without a token", false, "Juka", token, " juka ", false, true},
+		{"the same account already signed in", false, "Juka", token, "JUKA", true, false},
+		{"another account signed in", false, "Juka", token, "Someone", true, false},
+		{"another account without a token", false, "Juka", token, "Someone", false, false},
+		{"off on the card", true, "Juka", token, "", false, false},
+		{"no token to share", false, "Juka", "", "", false, false},
+		{"no account", false, "", token, "", false, false},
+	} {
+		plan := ppssppRAMerge(tc.optOut, tc.user, tc.tok, tc.iniUser, tc.haveToken)
+		if plan.write != tc.write {
+			t.Errorf("%s: write = %v, want %v (%s)", tc.name, plan.write, tc.write, plan.reason)
+		}
+		if plan.reason == "" || strings.Contains(plan.reason, token) {
+			t.Errorf("%s: outcome %q is empty or names the token", tc.name, plan.reason)
+		}
+	}
+
+	// Signing in: token in its store, account in [Achievements], hardcore off,
+	// the rest of the ini kept, the token in no other file.
+	stick := filepath.Join(t.TempDir(), "PSP")
+	sys := filepath.Join(stick, "SYSTEM")
+	ini := ppssppMemstickIni(stick)
+	store := filepath.Join(sys, ppssppRATokenFile)
+	if err := os.MkdirAll(sys, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ini, []byte("[Graphics]\nFullScreen = True\n[Achievements]\nAchievementsChallengeMode = True\nAchievementsUserName = \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	iniValue := func(key string) string {
+		raw, _ := os.ReadFile(ini)
+		v, _ := ppssppINIValue(strings.Split(string(raw), "\n"), "Achievements", key)
+		return v
+	}
+	if outcome := ppssppRASignIn(stick, false, "Juka", token); strings.Contains(outcome, token) {
+		t.Fatal("the outcome names the token")
+	}
+	if got, err := os.ReadFile(store); err != nil || string(got) != token {
+		t.Fatalf("the token store does not hold exactly the token (%v)", err)
+	}
+	if info, err := os.Stat(store); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Errorf("token store mode %v, want 0600", info.Mode().Perm())
+	}
+	if iniValue("AchievementsUserName") != "Juka" || iniValue("AchievementsEnable") != "True" || iniValue("AchievementsChallengeMode") != "False" {
+		t.Errorf("[Achievements] after sign-in: user %q, enable %q, hardcore %q", iniValue("AchievementsUserName"),
+			iniValue("AchievementsEnable"), iniValue("AchievementsChallengeMode"))
+	}
+	if raw, _ := os.ReadFile(ini); !strings.Contains(string(raw), "FullScreen = True") {
+		t.Error("another setting was lost")
+	}
+	entries, _ := os.ReadDir(sys)
+	for _, e := range entries {
+		if data, _ := os.ReadFile(filepath.Join(sys, e.Name())); e.Name() != ppssppRATokenFile && strings.Contains(string(data), token) {
+			t.Errorf("%s holds the token", e.Name())
+		}
+	}
+
+	// Signed in: a hardcore mode chosen in PPSSPP and its token stay.
+	if err := writePPSSPPControls(ini, func(lines []string) []string {
+		return ppssppSetSectionValue(lines, "Achievements", "AchievementsChallengeMode", "True")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ppssppRASignIn(stick, false, "Juka", "Other0123456789x")
+	if got, _ := os.ReadFile(store); string(got) != token || iniValue("AchievementsChallengeMode") != "True" {
+		t.Error("an existing sign-in of the same account was replaced")
+	}
+
+	// Another account signed in inside PPSSPP is left alone.
+	if err := writePPSSPPControls(ini, func(lines []string) []string {
+		return ppssppSetSectionValue(lines, "Achievements", "AchievementsUserName", "Someone")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store); err != nil {
+		t.Fatal(err)
+	}
+	ppssppRASignIn(stick, false, "Juka", token)
+	if regularFile(store) || iniValue("AchievementsUserName") != "Someone" {
+		t.Error("another account's PPSSPP sign-in was replaced")
+	}
+
+	// Off on the card, or a token that could break the ini: nothing written.
+	for _, tc := range []struct {
+		optOut bool
+		token  string
+	}{{true, token}, {false, "abc\nAchievementsUserName = x"}} {
+		fresh := filepath.Join(t.TempDir(), "PSP")
+		ppssppRASignIn(fresh, tc.optOut, "Juka", tc.token)
+		if regularFile(ppssppMemstickIni(fresh)) || regularFile(filepath.Join(fresh, "SYSTEM", ppssppRATokenFile)) {
+			t.Errorf("sign-in wrote files (off %v)", tc.optOut)
+		}
+	}
+	// A HOME PPSSPP has not run in yet gets a minimal [Achievements].
+	fresh := filepath.Join(t.TempDir(), "PSP")
+	ppssppRASignIn(fresh, false, "Juka", token)
+	if raw, _ := os.ReadFile(ppssppMemstickIni(fresh)); !strings.Contains(string(raw), "[Achievements]") ||
+		!strings.Contains(string(raw), "AchievementsUserName = Juka") {
+		t.Errorf("no [Achievements] written to a new ini: %q", raw)
+	}
+
+	// The login: RetroArch's token only for JukaHub's own account.
+	dir := t.TempDir()
+	other, mine := filepath.Join(dir, "other.cfg"), filepath.Join(dir, "retroarch.cfg")
+	settings := filepath.Join(dir, "retroachievements.json")
+	for path, body := range map[string]string{
+		other:    "cheevos_username = \"Someone\"\ncheevos_token = \"Zzzzzzzzzzzzzzzz\"\n",
+		mine:     "cheevos_password = \"\"\ncheevos_username = \"juka\"\ncheevos_token = \"" + token + "\"\n",
+		settings: `{"username": "Juka"}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prevPaths, prevGlobs, prevSettings := raRetroArchConfigPaths, raRetroArchConfigGlobs, raSettingsPathOverride
+	raReset := func() {
+		raSettingsState.mu.Lock()
+		raSettingsState.loaded, raSettingsState.data = false, raSettings{}
+		raSettingsState.mu.Unlock()
+		raInvalidateCredentialCache()
+	}
+	t.Cleanup(func() {
+		raRetroArchConfigPaths, raRetroArchConfigGlobs, raSettingsPathOverride = prevPaths, prevGlobs, prevSettings
+		raReset()
+	})
+	raRetroArchConfigPaths, raRetroArchConfigGlobs, raSettingsPathOverride = []string{other, mine}, nil, settings
+	raReset()
+	if user, tok := ppssppRALogin(); user != "juka" || tok != token {
+		t.Errorf("login = %q and a %d-character token, want RetroArch's for juka", user, len(tok))
+	}
+	if err := os.WriteFile(settings, []byte(`{"username": "Nobody"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	raReset()
+	if user, tok := ppssppRALogin(); user != "" || tok != "" {
+		t.Error("another account's RetroArch token was taken")
 	}
 }

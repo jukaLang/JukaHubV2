@@ -163,7 +163,9 @@ func vkMicProbeStart() {
 }
 
 // vkVoiceAvailable reports whether the mic chip can be offered: a field with a
-// strip (not a password, a command or a number) and no known-missing mic.
+// strip (not a password or key, launch arguments or a number; vkStripModeNow)
+// and no known-missing mic. The Terminal's command line has one — its token
+// chips (cmddeck_chips.go) — so a command can be spoken too.
 func vkVoiceAvailable() bool {
 	return vkStripModeNow() != vkStripHidden && !vkSecretTarget() && vkMic.Load() != vkMicAbsent
 }

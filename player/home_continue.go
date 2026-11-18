@@ -153,6 +153,13 @@ func homePersistFavorites() {
 // nothing to resume, and the card then opens Media instead.
 func homeContinueResume(config *Config) bool {
 	it, ok := homeContinueItem()
+	// With nothing in progress the card shows today's challenge (game_daily.go)
+	// and Play starts that game.
+	if c, daily := homeContinueDaily(it, ok); daily {
+		homeContinueInvalidate()
+		playRecentGame(c.dailyGame())
+		return true
+	}
 	if !ok {
 		return false
 	}
@@ -183,8 +190,14 @@ func homeContinueSnapshot() HomeContinueState {
 	}
 	homeNoteMusicSession()
 	st := homeContinueEmptyState()
-	if it, ok := homeContinueItem(); ok {
+	it, ok := homeContinueItem()
+	if c, daily := homeContinueDaily(it, ok); daily {
+		st = dailyContinueState(c)
+	} else if ok {
 		st = homeContinueStateFor(it)
+		if note := dailyContinueNote(it); note != "" {
+			st.Subtitle += " · " + note
+		}
 	}
 	homeContinueCache.state, homeContinueCache.at, homeContinueCache.valid = st, now, true
 	return st
@@ -601,15 +614,11 @@ func homePreviewDiskPut(diskKey string, data []byte) {
 	}
 }
 
-// homeDecodeFile decodes a picture file.
+// homeDecodeFile decodes a picture file. It goes through imgvDecodeFile so a
+// .webp cover (which Go cannot decode) still loads via SDL_image, and a huge
+// picture is refused before its pixels are allocated.
 func homeDecodeFile(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	pic, _, err := image.Decode(bufio.NewReader(f))
-	return pic, err
+	return imgvDecodeFile(path)
 }
 
 // homeFFmpeg is the installed ffmpeg, or "" — a preview is never worth a

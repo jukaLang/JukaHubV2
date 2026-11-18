@@ -286,6 +286,7 @@ func modalPanelBlockReason() string {
 		{"curation panel", curationPanel.open},
 		{"ports panel", portsPanel.open},
 		{"Steam panel", steamPanel.open},
+		{"PC streaming panel", mlPanel.open},
 		{"Tools panel", toolsPanel.open},
 		{"netplay panel", netplayPanel.open},
 		{"game library", gameLib.open},

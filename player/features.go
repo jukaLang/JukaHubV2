@@ -441,6 +441,13 @@ func feEnterFocused(config *Config) {
 			return
 		}
 	}
+	// An .ics calendar offers itself to the clock's calendar; A again adds
+	// it (calsync.go). One already in the calendar's folder opens as text.
+	if strings.EqualFold(filepath.Ext(entry.Path), ".ics") {
+		if icsPath, err := resolveExplorerEntry(config, entry.Path); err == nil && calFilesOpen(config, icsPath) {
+			return
+		}
+	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if isImageExtension(ext) {
 		imagePath, err := resolveExplorerEntry(config, entry.Path)

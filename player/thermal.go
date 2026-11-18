@@ -17,6 +17,33 @@ import (
 
 const thermalPollInterval = 10 * time.Second
 
+func init() { registerDriverStatus("Thermal", thermalDriverStatus) }
+
+// thermalDriverStatus is the Thermal line of Settings → Drivers & hardware:
+// the zones the temperature is read from (hardware.go cpuTempZones), the
+// hottest reading and whether the kernel is holding the CPU back.
+func thermalDriverStatus() driverStatus {
+	if runtime.GOOS != "linux" {
+		return driverStatus{State: driverUnknown, Detail: "only on the handheld"}
+	}
+	zones := cpuTempZones()
+	kinds := make([]string, 0, len(zones))
+	for _, z := range zones {
+		kinds = append(kinds, z.kind)
+	}
+	st := driverStatus{Driver: "thermal zones", Node: strings.Join(kinds, ", ")}
+	temp, ok := cpuTempValueC()
+	if !ok {
+		st.State, st.Detail = driverMissing, "no temperature reading"
+		return st
+	}
+	st.State, st.Detail = driverOK, fmt.Sprintf("%.0f °C", temp)
+	if active, known := cpuThermalThrottleState(); known && active {
+		st.Detail += " · CPU thermal limit active"
+	}
+	return st
+}
+
 // cpuThermalThrottleState reads the active state of CPU cooling devices. A
 // missing thermal interface is unknown, not a claim that the CPU is clear.
 func cpuThermalThrottleState() (active, known bool) {
@@ -58,6 +85,9 @@ func startThermalMonitor() {
 	if runtime.GOOS != "linux" || !IsTrimuiDevice() {
 		return
 	}
+	// The Smart Pro S's fan (fan.go) runs its own goroutine, which never
+	// parks; this one only reports.
+	startFanControl(appConfig)
 	go func() {
 		ticker := time.NewTicker(thermalPollInterval)
 		defer ticker.Stop()

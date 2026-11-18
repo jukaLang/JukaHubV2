@@ -77,6 +77,8 @@ var setSearchPhrases = []struct {
 	{"time zone", []string{"timezone"}},
 	{"hey juka", []string{"wake word", "hey juka"}},
 	{"stick lights", []string{"led", "lights"}},
+	{"lock screen", []string{"lock screen after", "screensaver"}},
+	{"led brightness", []string{"led brightness", "lights"}},
 }
 
 // setSearchSynonyms widen one typed word.
@@ -84,6 +86,8 @@ var setSearchSynonyms = map[string][]string{
 	"wifi":          {"wi fi", "network", "wireless", "internet"},
 	"internet":      {"network", "wi fi"},
 	"wireless":      {"wi fi", "bluetooth"},
+	"tether":        {"hotspot"},
+	"hotspot":       {"wi fi", "netplay"},
 	"dark":          {"theme", "light dark"},
 	"light":         {"theme", "light dark", "brightness"},
 	"theme":         {"themes", "colour", "wallpaper"},
@@ -124,9 +128,9 @@ var setSearchSynonyms = map[string][]string{
 	"date":          {"time", "clock"},
 	"brightness":    {"backlight", "screen"},
 	"screen":        {"brightness", "display", "full screen"},
-	"display":       {"theme", "brightness", "text size"},
+	"display":       {"brightness", "contrast", "lock screen", "text size"},
 	"text":          {"text size", "bold", "font"},
-	"font":          {"text", "bold", "legible"},
+	"font":          {"text", "bold", "legible", "remove a font"},
 	"big":           {"text size", "magnifier", "zoom"},
 	"zoom":          {"magnifier", "text size"},
 	"update":        {"updates", "emulator updates"},
@@ -163,6 +167,15 @@ var setSearchSynonyms = map[string][]string{
 	"plugin":        {"plugins"},
 	"overlay":       {"in game overlay", "osd"},
 	"fps":           {"in game overlay"},
+	"lag":           {"latency"},
+	"latency":       {"lag", "emulation"},
+	"pal":           {"pal mode", "region"},
+	"tate":          {"arcade rotation"},
+	"bezel":         {"overlay", "border"},
+	"vsync":         {"smooth motion"},
+	"tearing":       {"smooth motion"},
+	"stutter":       {"smooth motion"},
+	"resampler":     {"audio quality"},
 }
 
 // setSearchFold lowercases and turns punctuation into spaces.

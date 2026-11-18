@@ -8,8 +8,9 @@ package main
 // shows one when there is evidence for it. In order of trust:
 //
 //  1. the kernel's own time_to_empty / time_to_full (the _avg files first),
-//     once the driver's unit is known (most report seconds, the Smart Pro's
-//     AXP2202 reports minutes) and while the figure is possible at this level;
+//     once the driver's unit is known (seconds on this Smart Pro's stock
+//     AXP2202 firmware; other gauges may report minutes) and while the
+//     figure is possible at this level;
 //  2. the charge (or energy) left divided by a smoothed current (or power)
 //     draw — only while unplugged;
 //  3. the speed of the percentage itself: the moments each new low (or high)
@@ -1282,6 +1283,7 @@ func batteryETAReadRich(dir string) batteryRich {
 		return r
 	}
 	r.status = batteryStatusIn(dir)
+	axp2202 := strings.Contains(powerSupplyAttr(dir, "serial_number"), "axp2202")
 	first := func(names ...string) float64 {
 		for _, name := range names {
 			if v, ok := readBatteryCounter(filepath.Join(dir, name)); ok && v != 0 {
@@ -1295,9 +1297,32 @@ func batteryETAReadRich(dir string) batteryRich {
 	r.chargeNowUAh = first("charge_now")
 	r.chargeFullUAh = first("charge_full", "charge_full_design")
 	r.energyNowUWh = first("energy_now")
-	r.energyFullUWh = first("energy_full", "energy_full_design")
+	r.energyFullUWh = first("energy_full")
+	if !axp2202 && r.energyFullUWh == 0 {
+		r.energyFullUWh = first("energy_full_design")
+	}
+	if axp2202 && r.chargeFullUAh >= 1000 && r.chargeFullUAh <= 20000 {
+		// The stock AXP2202's charge_full and charge_counter are mAh, not
+		// the standard µAh. Its energy_full_design is also mAh despite its
+		// name, so it cannot be used as a µWh fallback.
+		r.chargeFullUAh *= 1000
+		if r.chargeNowUAh == 0 {
+			r.chargeNowUAh = first("charge_counter")
+		}
+		if r.chargeNowUAh > 0 && r.chargeNowUAh <= 20000 {
+			r.chargeNowUAh *= 1000
+		}
+	}
 	r.tteRaw = first("time_to_empty_avg", "time_to_empty_now")
 	r.ttfRaw = first("time_to_full_avg", "time_to_full_now")
+	if r.chargeFullUAh == 0 && r.energyFullUWh == 0 {
+		// A gauge with a current but no capacity (some AXP drivers): the
+		// model's pack size, so the draw still gives an estimate. The
+		// plausibility checks in drawHours apply to it as to any counter.
+		if mah := batteryModelDesignMAh(DetectDevice()); mah > 0 {
+			r.chargeFullUAh = float64(mah) * 1000
+		}
+	}
 	return r
 }
 

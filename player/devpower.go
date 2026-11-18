@@ -80,6 +80,11 @@ func devPowerSupported() bool {
 // devPowerRequest quits through the normal clean exit, then restarts or powers
 // off the device.
 func devPowerRequest(a devPowerAction) {
+	// A RetroArch game still running is saved first, for the next power-on
+	// to resume; the request comes back here once it is (quickresume.go).
+	if a == devPowerPoweroff && quickPowerOffSavesFirst() {
+		return
+	}
 	if jukaosNativeActive() && a == devPowerReboot {
 		if err := os.WriteFile(jukaosNativeRebootMarker, []byte("1\n"), 0600); err != nil {
 			logWarn("power", "could not mark native OS reboot: %v", err)
@@ -115,6 +120,11 @@ func devPowerShutdownTitle() string {
 // devPowerAfterShutdown runs the pending restart or power off once the
 // teardown has flushed everything. A no-op for a plain exit.
 func devPowerAfterShutdown() {
+	// A wake alarm set for a NextUI game's sleep must not outlive JukaHub: it
+	// would wake NextUI or the firmware later, or start a powered-off device
+	// on a PMIC that boots on the RTC alarm. A marker minarch's wake removed
+	// goes back for the next power-on (nextui_sleep.go).
+	nextuiSleepGuardClose()
 	a := devPowerAction(devPowerPending.Swap(int32(devPowerNone)))
 	if a == devPowerNone {
 		return
@@ -317,11 +327,46 @@ func autoSleepDownloading() bool {
 // ── Backlight ─────────────────────────────────────────────────────────────
 
 // backlight is the panel's light while JukaHub has it off. raw is the level
-// the fallback replaced with 0 (0 when the driver's switch did it).
+// the fallback replaced with 0 (0 when the driver's switch did it); sysfs is
+// set when the sysfs backlight's bl_power switched it instead of /dev/disp.
 var backlight struct {
-	mu  sync.Mutex
-	off bool
-	raw int
+	mu    sync.Mutex
+	off   bool
+	raw   int
+	sysfs bool
+}
+
+// backlightSysfsMarker is the marker's value for a light bl_power switched off.
+const backlightSysfsMarker = -1
+
+// backlightSysfsPower writes the sysfs backlight's bl_power: 4
+// (FB_BLANK_POWERDOWN) switches the light off, 0 (FB_BLANK_UNBLANK) on. It
+// is the switch on the models whose firmware drives the backlight through
+// sysfs (brightnessNewerTrimui: the Smart Pro S, a 5.x kernel), and the
+// fallback where /dev/disp does not answer.
+func backlightSysfsPower(v int) error {
+	dir, _, err := findBacklight(backlightRoot)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "bl_power"), []byte(strconv.Itoa(v)+"\n"), 0o644)
+}
+
+// backlightSwitchOff switches the light off the way this model's firmware
+// does: sysfs first where that is the backlight's driver, /dev/disp first
+// otherwise, each the other's fallback.
+func backlightSwitchOff() (raw int, sysfs bool, err error) {
+	if brightnessNewerTrimui() && backlightSysfsPower(4) == nil {
+		return 0, true, nil
+	}
+	raw, err = dispBacklightOff()
+	if err == nil {
+		return raw, false, nil
+	}
+	if sysErr := backlightSysfsPower(4); sysErr == nil {
+		return 0, true, nil
+	}
+	return 0, false, err
 }
 
 // backlightIsOff mirrors backlight.off for the per-frame guard.
@@ -352,7 +397,7 @@ func backlightOff(keep func() bool) {
 	// Marked off before the ioctl: a backlightOn racing it then takes the
 	// lock and waits instead of reading "on" and skipping.
 	backlightIsOff.Store(true)
-	raw, err := dispBacklightOff()
+	raw, sysfs, err := backlightSwitchOff()
 	if err != nil {
 		backlightIsOff.Store(false)
 		logWarn("backlight", "could not switch the backlight off: %v", err)
@@ -363,9 +408,13 @@ func backlightOff(keep func() bool) {
 		// and the exit puts the user's level back if nothing else does.
 		brightnessBorrowed.Store(true)
 	}
-	backlight.off, backlight.raw = true, raw
+	backlight.off, backlight.raw, backlight.sysfs = true, raw, sysfs
 	backlightIsOff.Store(true)
-	if err := os.WriteFile(backlightMarkerPath(), []byte(strconv.Itoa(raw)), 0o600); err != nil {
+	mark := raw
+	if sysfs {
+		mark = backlightSysfsMarker
+	}
+	if err := os.WriteFile(backlightMarkerPath(), []byte(strconv.Itoa(mark)), 0o600); err != nil {
 		logWarn("backlight", "could not record the backlight state: %v", err)
 	}
 }
@@ -381,11 +430,16 @@ func backlightOn() {
 	if !backlight.off {
 		return
 	}
-	err := dispBacklightOn(backlight.raw)
+	var err error
+	if backlight.sysfs {
+		err = backlightSysfsPower(0)
+	} else {
+		err = dispBacklightOn(backlight.raw)
+	}
 	if backlight.raw > 0 {
 		brightnessBorrowed.Store(false)
 	}
-	backlight.off, backlight.raw = false, 0
+	backlight.off, backlight.raw, backlight.sysfs = false, 0, false
 	backlightIsOff.Store(false)
 	if err != nil {
 		logWarn("backlight", "could not switch the backlight on: %v", err)
@@ -412,7 +466,11 @@ func backlightRecover() {
 	}
 	raw, _ := strconv.Atoi(strings.TrimSpace(string(data)))
 	if backlightSupported() {
-		if err := dispBacklightOn(raw); err != nil {
+		on := func() error { return dispBacklightOn(raw) }
+		if raw == backlightSysfsMarker {
+			on = func() error { return backlightSysfsPower(0) }
+		}
+		if err := on(); err != nil {
 			logWarn("backlight", "could not switch on the backlight a previous run left off: %v", err)
 		} else {
 			logInfo("backlight", "switched on the backlight a previous run left off")

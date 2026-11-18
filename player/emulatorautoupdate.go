@@ -464,7 +464,7 @@ func coreAutoUpdateLastCheck() string {
 func emuAutoUpdateSummary(report emuInstallReport) string {
 	n := len(report.Updated)
 	if n == 0 {
-		if len(report.Refused) > 0 && len(report.Errors) == 0 && report.LowSpace == "" {
+		if len(report.Refused) > 0 && len(report.Errors) == 0 && report.LowSpace == "" && len(report.Asked) == 0 {
 			return coreRefusedSummary(report)
 		}
 		return report.summary()
@@ -485,6 +485,9 @@ func emuAutoUpdateSummary(report emuInstallReport) string {
 	}
 	if len(report.Errors) > 0 {
 		msg += fmt.Sprintf(" · %d failed", len(report.Errors))
+	}
+	if len(report.Asked) > 0 {
+		msg += " · " + coreCrossMixAskNote(report.Asked)
 	}
 	if report.LowSpace != "" {
 		msg += " · " + coreLowSpaceNote(report.LowSpace)
@@ -657,7 +660,7 @@ func coreAutoUpdateTick(now time.Time) (ran, waiting bool) {
 	}
 	var cores emuAutoCoreRunner
 	if coresDue {
-		cores = runInstalledCoreUpdates
+		cores = coreAutoUpdateRunner(nil)
 	}
 	return emuAutoInstallPass(now, cores, extras)
 }
@@ -826,7 +829,7 @@ func coreAutoUpdateSettle(now time.Time, report emuInstallReport, timedOut, stop
 		emuForgetAllUpdates()
 		coreBuildsRequestReload()
 	}
-	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" {
+	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" && len(report.Asked) == 0 {
 		switch {
 		case !report.Interrupted:
 			logPatch("core auto-update: %d core(s) checked, all current", report.Current)

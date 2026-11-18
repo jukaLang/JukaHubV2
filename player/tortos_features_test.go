@@ -92,6 +92,8 @@ func TestGameHistoryRecoversInterruptedLaunch(t *testing.T) {
 	gameHistoryStore.data = gameHistoryFile{}
 	gameHistoryStore.mu.Unlock()
 	t.Cleanup(func() {
+		// History writes run in the background: let them land before the temp dir goes.
+		gameHistoryFlush(time.Second)
 		gameHistoryPath = oldPath
 		gameHistoryStore.mu.Lock()
 		gameHistoryStore.loaded = false

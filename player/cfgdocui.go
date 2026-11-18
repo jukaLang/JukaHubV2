@@ -257,7 +257,7 @@ func cfgdocBuildRows(loading bool, rep cfgdocReport, rec cfgdocDefaultsRecord, u
 				if from == "" {
 					from = d.Doc.Device.Platform
 				}
-				row.Detail = "From " + from + " · " + d.Doc.GeneratedBy + " · " + d.ModTime.Format("Jan 2, 15:04")
+				row.Detail = "From " + from + " · " + d.Doc.GeneratedBy + " · " + formatDateTimeNear(nil, d.ModTime, time.Now())
 				row.Value = xpackKitCount(len(cfgdocDocValues(d.Doc)), "setting", "settings")
 			}
 			rows = append(rows, row)

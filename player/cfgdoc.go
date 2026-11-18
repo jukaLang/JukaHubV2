@@ -285,8 +285,8 @@ var cfgdocDeviceKeys = map[string]bool{
 // cfgdocRuntimeKeys are Custom entries the app writes as it runs — counters,
 // caches, status lines, bookkeeping — which are not settings anyone chose.
 var cfgdocRuntimeKeys = map[string]bool{
-	"playtime_v1": true, "recently_played": true, plugSeededKey: true, "weatherUnitAuto": true,
-	"screensaverTimeoutMigrated": true, xpackUndoKey: true, xpackActiveFileKey: true,
+	"playtime_v1": true, "recently_played": true, plugSeededKey: true, plugRetiredKey: true,
+	"weatherUnitAuto": true, "screensaverTimeoutMigrated": true, xpackUndoKey: true, xpackActiveFileKey: true,
 	xpackWallpaperKey: true, "chat_input": true, "local_ip": true, "plugin_list": true,
 	"batterySaverRestore": true, "media_recent_searches": true, "weather_screen_text": true,
 	// The TrimUI first-start autostart default was considered on THIS device;
@@ -302,6 +302,12 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// The startup lock's hashed code and its wrong-attempt count (bootlock.go):
 	// carried to another device the hash would lock it with this one's code.
 	bootLockSecretKey: true, bootLockFailsKey: true, bootLockPendingKey: true,
+	// Voice unlock's hashed phrase, its mode and misses (bootlock_voice.go): a
+	// change needs the code, so an imported config must not make one.
+	bootLockVoiceKey: true, bootLockVoiceModeKey: true, bootLockVoiceMissKey: true,
+	// The FN switch reading that means "locked" (travellock.go): another
+	// device's switch may read the other way round.
+	travelLockAtKey: true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a
@@ -1010,6 +1016,15 @@ func cfgdocResetKey(config *Config, key string, defaults map[string]interface{})
 		return fmt.Errorf("%s is %s", key, why)
 	}
 	dropCustomMirror(config, key)
+	if strings.EqualFold(key, coreUpdateModeSetting) {
+		// The Emulator updates mode goes back to the default with its
+		// bookkeeping: the old switch written beside it would decide the mode
+		// again (coreUpdateModeFrom), and the chosen marker would make the
+		// default read as a pick. The schedulers act on it now.
+		dropCustomMirror(config, emuAutoUpdateSetting)
+		dropCustomMirror(config, coreUpdateModeChosenSetting)
+		emuCoreUpdateMode.Store(int32(coreUpdateModeFrom(config.Variables.Custom)))
+	}
 	return nil
 }
 

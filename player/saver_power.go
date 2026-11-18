@@ -314,16 +314,9 @@ func saverPowerPlan(root string, want saverPowerMode) []saverSysfsWrite {
 		return nil
 	}
 	var plan []saverSysfsWrite
-	seen := make(map[string]bool)
-	for _, dir := range cpufreqDirs(root) {
-		key := dir
-		if real, err := filepath.EvalSymlinks(dir); err == nil {
-			key = real
-		}
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+	// Each policy picks from its own table (saverIdleCeilingKHz), so both
+	// A523 clusters drop to their own low point.
+	for _, dir := range cpufreqPolicyDirs(root) {
 		plan = append(plan, saverPolicyPlan(dir, want)...)
 	}
 	return plan

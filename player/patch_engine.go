@@ -81,7 +81,7 @@ var ErrTimeout = errors.New("operation timed out")
 var ErrCancelled = errors.New("operation cancelled")
 
 // ---------------------------------------------------------------------------
-// Semantic version comparison (SemVer 2.0.0 subset with build metadata)
+// Semantic version parsing (SemVer 2.0.0 subset with build metadata)
 // ---------------------------------------------------------------------------
 
 // semver is a parsed semantic version. Build metadata is preserved for display
@@ -147,167 +147,6 @@ func parseSemver(s string) (semver, error) {
 		return semver{}, fmt.Errorf("non-numeric version component in %q", s)
 	}
 	return vv, nil
-}
-
-// compareSemver orders two versions: -1, 0, or 1. Prerelease versions sort
-// before their release (1.0.0-rc.1 < 1.0.0); build metadata is ignored.
-func compareSemver(a, b string) (int, error) {
-	av, err := parseSemver(a)
-	if err != nil {
-		return 0, err
-	}
-	bv, err := parseSemver(b)
-	if err != nil {
-		return 0, err
-	}
-	if av.Major != bv.Major {
-		return sign(av.Major - bv.Major), nil
-	}
-	if av.Minor != bv.Minor {
-		return sign(av.Minor - bv.Minor), nil
-	}
-	if av.Patch != bv.Patch {
-		return sign(av.Patch - bv.Patch), nil
-	}
-	return comparePrerelease(av.Prerelease, bv.Prerelease), nil
-}
-
-// NewerVersion returns true when candidate is strictly newer than installed,
-// treating unparseable versions as never-newer (fail closed).
-func NewerVersion(installed, candidate string) bool {
-	c, err := compareSemver(installed, candidate)
-	if err != nil {
-		return false
-	}
-	return c < 0
-}
-
-func comparePrerelease(a, b []string) int {
-	// A release (no prerelease) is newer than any prerelease of itself.
-	if len(a) == 0 && len(b) == 0 {
-		return 0
-	}
-	if len(a) == 0 {
-		return 1
-	}
-	if len(b) == 0 {
-		return -1
-	}
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	for i := 0; i < n; i++ {
-		an, aerr := strconv.Atoi(a[i])
-		bn, berr := strconv.Atoi(b[i])
-		switch {
-		case aerr == nil && berr == nil:
-			if an != bn {
-				return sign(an - bn)
-			}
-		case aerr == nil:
-			return -1 // numeric identifiers sort before alphanumeric
-		case berr == nil:
-			return 1
-		default:
-			if c := strings.Compare(a[i], b[i]); c != 0 {
-				return c
-			}
-		}
-	}
-	// Fewer fields wins (1.0.0-alpha < 1.0.0-alpha.1).
-	return sign(len(a) - len(b))
-}
-
-func sign(n int) int {
-	switch {
-	case n < 0:
-		return -1
-	case n > 0:
-		return 1
-	}
-	return 0
-}
-
-// ---------------------------------------------------------------------------
-// Manifest (JukaHub update manifest, versioned, fail-closed on unknown schema)
-// ---------------------------------------------------------------------------
-
-// PatchManifestSchema is the current manifest schema version.
-const PatchManifestSchema = 1
-
-// PatchManifest describes a JukaHub release and its per-target artifacts.
-type PatchManifest struct {
-	Schema      int              `json:"schema"`
-	Product     string           `json:"product"`
-	Version     string           `json:"version"`
-	Channel     string           `json:"channel"`
-	PublishedAt string           `json:"published_at"`
-	Targets     []ManifestTarget `json:"targets"`
-}
-
-// ManifestTarget is a single downloadable artifact for a specific device/OS.
-type ManifestTarget struct {
-	Device  string   `json:"device"`
-	OS      string   `json:"os"`
-	Arch    string   `json:"arch"`
-	Asset   string   `json:"asset"`
-	SHA256  string   `json:"sha256"`
-	Size    int64    `json:"size"`
-	MinFW   string   `json:"min_firmware,omitempty"`
-	Files   []string `json:"files,omitempty"`
-	Summary string   `json:"summary,omitempty"`
-}
-
-// ParsePatchManifest validates and decodes a manifest. Unknown schema versions
-// fail closed: the caller must treat them as unusable.
-func ParsePatchManifest(data []byte) (*PatchManifest, error) {
-	var m PatchManifest
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("manifest: %w", err)
-	}
-	if m.Schema != PatchManifestSchema {
-		return nil, fmt.Errorf("manifest schema %d is not supported (expected %d)", m.Schema, PatchManifestSchema)
-	}
-	if strings.TrimSpace(m.Product) == "" {
-		return nil, errors.New("manifest: missing product")
-	}
-	if _, err := parseSemver(m.Version); err != nil {
-		return nil, fmt.Errorf("manifest: bad version: %w", err)
-	}
-	if len(m.Targets) == 0 {
-		return nil, errors.New("manifest: no targets")
-	}
-	for i, t := range m.Targets {
-		if t.Asset == "" {
-			return nil, fmt.Errorf("manifest: target %d missing asset", i)
-		}
-		if t.SHA256 != "" {
-			if len(t.SHA256) != 64 {
-				return nil, fmt.Errorf("manifest: target %d bad sha256 length", i)
-			}
-			if _, err := hex.DecodeString(t.SHA256); err != nil {
-				return nil, fmt.Errorf("manifest: target %d bad sha256 hex", i)
-			}
-		}
-		if t.Size < 0 {
-			return nil, fmt.Errorf("manifest: target %d negative size", i)
-		}
-	}
-	return &m, nil
-}
-
-// ManifestTargetFor returns the first target matching the given device, OS and
-// architecture, or nil when none match.
-func (m *PatchManifest) ManifestTargetFor(device, goos, arch string) *ManifestTarget {
-	for i := range m.Targets {
-		t := &m.Targets[i]
-		if t.Device == device && t.OS == goos && t.Arch == arch {
-			return t
-		}
-	}
-	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -2013,10 +1852,16 @@ type githubRelease struct {
 	PublishedAt string        `json:"published_at"`
 	Body        string        `json:"body"`
 	Assets      []githubAsset `json:"assets"`
+	Prerelease  bool          `json:"prerelease"`
 }
 
-// FetchLatestJukaHubRelease returns the latest JukaHub release metadata.
+// FetchLatestJukaHubRelease returns the latest JukaHub release metadata: the
+// newest stable release, or on the Beta update channel the newest release
+// with prereleases included (autoupdate_channel.go).
 func FetchLatestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
+	if updateChannelBetaOn.Load() {
+		return fetchNewestJukaHubRelease(ctx)
+	}
 	client := newPatchClient()
 	data, err := fetchBounded(ctx, client, githubReleaseAPI, patchMaxMetadata)
 	if err != nil {
@@ -2701,7 +2546,7 @@ func checkInterruptedJournal() {
 // logPatch writes a Patch-module log line (console/log files only — never a
 // permanent on-screen box).
 func logPatch(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "[patch] "+format+"\n", args...)
+	_, _ = os.Stderr.WriteString(redactLogSecrets("[patch] "+fmt.Sprintf(format, args...)) + "\n")
 }
 
 // ---------------------------------------------------------------------------

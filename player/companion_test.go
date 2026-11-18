@@ -528,3 +528,56 @@ func TestRemotePlayCardNeedsThePINAndHidesTheAccountID(t *testing.T) {
 		t.Fatalf("the card queued phone events: %+v", *events)
 	}
 }
+
+// The Email and Calendars cards (companion_mailcal.go): the route needs the
+// PIN, and what the phone types is checked before any server is asked.
+func TestMailCalPhoneInputValidation(t *testing.T) {
+	srv, _ := newTestCompanion(t)
+	rec := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, companionRequest(http.MethodGet, "/api/mailcal", "", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unpaired GET status = %d, want 401", rec.Code)
+	}
+	for _, c := range []struct {
+		raw, want string
+		ok        bool
+	}{
+		{"webcal://p01-calendars.icloud.com/x.ics", "https://p01-calendars.icloud.com/x.ics", true},
+		{"calendar.google.com/calendar/ical/a/private-b/basic.ics", "https://calendar.google.com/calendar/ical/a/private-b/basic.ics", true},
+		{"http://192.168.1.20:5232/user/cal/", "http://192.168.1.20:5232/user/cal/", true},
+		{"http://nas.local/dav/", "http://nas.local/dav/", true},
+		{"http://example.com/cal.ics", "", false},
+		{"https://user:pass@example.com/cal.ics", "", false},
+		{"ftp://example.com/cal.ics", "", false},
+		{"https://example.com/a b.ics", "", false},
+	} {
+		got, err := mailcalCleanCalURL(c.raw)
+		if (err == nil) != c.ok || got != c.want {
+			t.Errorf("mailcalCleanCalURL(%q) = %q, %v; want %q, ok %v", c.raw, got, err, c.want, c.ok)
+		}
+	}
+	for _, bad := range []string{"https://imap.example.com", "imap.example.com:993", "-x.com", "a..b"} {
+		if _, err := mailcalCleanHost(bad); err == nil {
+			t.Errorf("mailcalCleanHost(%q) accepted", bad)
+		}
+	}
+	if h, err := mailcalCleanHost("IMAP.Example.com."); err != nil || h != "imap.example.com" {
+		t.Errorf("mailcalCleanHost = %q, %v", h, err)
+	}
+	for _, p := range []string{"0", "65536", "99999", "abc", "-1"} {
+		if _, err := mailcalCleanPort(p); err == nil {
+			t.Errorf("mailcalCleanPort(%q) accepted", p)
+		}
+	}
+	if _, err := mailcalCleanSec("ssl"); err == nil {
+		t.Error("mailcalCleanSec accepted ssl")
+	}
+	for _, bad := range []string{"", "no-at-sign", "a@b", "a b@example.com", "a@@example.com", "a@example.com\nBcc: x"} {
+		if _, err := mailcalCleanEmail(bad); err == nil {
+			t.Errorf("mailcalCleanEmail(%q) accepted", bad)
+		}
+	}
+	if _, err := mailcalCleanSecret("line\nbreak"); err == nil {
+		t.Error("mailcalCleanSecret accepted a line break")
+	}
+}

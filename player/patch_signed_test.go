@@ -236,15 +236,7 @@ func TestPatchDBSaveLoad(t *testing.T) {
 	if !dbIsInstalled("p1") {
 		t.Fatal("db round-trip failed")
 	}
-	// Hold + history.
-	if err := dbSetHeld("p1", true); err != nil {
-		t.Fatal(err)
-	}
-	patchDB = &PatchDB{Schema: 1}
-	loadPatchDB()
-	if !dbIsHeld("p1") {
-		t.Fatal("hold flag did not persist")
-	}
+	// History.
 	if err := dbAppendTransaction(DBTransaction{ID: "t1", Op: "install", Result: "committed"}); err != nil {
 		t.Fatal(err)
 	}
@@ -253,6 +245,70 @@ func TestPatchDBSaveLoad(t *testing.T) {
 	txs := dbTransactions()
 	if len(txs) != 1 || txs[0].ID != "t1" {
 		t.Fatalf("history did not persist: %+v", txs)
+	}
+
+	// A db.json this build cannot read (here a newer schema) is never
+	// overwritten by the session's empty database.
+	newer := []byte(`{"schema":2,"installed":[{"name":"keep"}]}`)
+	if err := os.WriteFile(path, newer, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	patchDB = &PatchDB{Schema: 1}
+	loadPatchDB()
+	defer func() {
+		patchDBMu.Lock()
+		patchDB, patchDBUnread = &PatchDB{Schema: 1}, nil
+		patchDBMu.Unlock()
+	}()
+	if err := dbRecordInstall(DBInstalledPkg{Name: "p2", Version: "1.0.0"}); err == nil {
+		t.Fatal("saved over a package database it could not read")
+	}
+	if got, _ := os.ReadFile(path); string(got) != string(newer) {
+		t.Fatalf("unreadable db.json was rewritten: %s", got)
+	}
+}
+
+// A package installed in an earlier session is removed from where it was
+// installed: db.json's absolute path is mapped back under the install root
+// (it used to be joined to the root a second time and count as "already
+// absent"), the manifest's /JukaHub/x form stays root-relative, and nothing
+// that names the root itself or climbs out of it is accepted.
+func TestPatchInstalledRelPath(t *testing.T) {
+	origFn := patchStateDirFn
+	state := t.TempDir()
+	patchStateDirFn = func() (string, error) { return state, nil }
+	defer func() { patchStateDirFn = origFn }()
+
+	root := filepath.Join(t.TempDir(), "SDCARD")
+	file := filepath.Join(root, "JukaHub", "p1-f.txt")
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range []string{file, "/JukaHub/p1-f.txt", "JukaHub/p1-f.txt"} {
+		if rel, err := patchInstalledRelPath(root, rec); err != nil || rel != "JukaHub/p1-f.txt" {
+			t.Fatalf("patchInstalledRelPath(%q) = %q, %v; want JukaHub/p1-f.txt", rec, rel, err)
+		}
+	}
+	refused := []string{"", root, "../outside.txt", "JukaHub/../../outside.txt"}
+	if vol := filepath.VolumeName(root); vol != "" && !strings.EqualFold(vol, "Q:") {
+		refused = append(refused, `Q:\elsewhere\x.txt`) // another drive
+	}
+	for _, rec := range refused {
+		if rel, err := patchInstalledRelPath(root, rec); err == nil {
+			t.Fatalf("patchInstalledRelPath(%q) = %q; want it refused", rec, rel)
+		}
+	}
+
+	rel, _ := patchInstalledRelPath(root, file)
+	files := []PackageFile{{Src: rel, Dest: rel}}
+	if err := RemovePackage(context.Background(), &PatchPackage{ID: "p1", DestRoot: root, Files: files}, files); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Fatalf("the installed file survived Remove: %v", err)
 	}
 }
 
@@ -296,7 +352,10 @@ func TestSignedPackageFlow(t *testing.T) {
 	if err := writeTestZip(archive, pkgDir); err != nil {
 		t.Fatal(err)
 	}
-	sha := packageArchiveSHA(archive)
+	sha, err := SHA256File(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Signed index with the package.
 	idx := &SignedRepoIndex{

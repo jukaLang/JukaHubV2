@@ -5,6 +5,19 @@
 #   chiaki-stream  SDL2 + FFmpeg streamer, driven by a session file
 #   chiaki-regist  PS5 pairing handshake (PS4 pairing is Go, in ../psremote_ps4.go)
 #
+# Native mode also builds a third, optional one, after those two have passed
+# their checks:
+#   moonlight-stream  the Moonlight (GameStream) streamer for Vibepollo, Apollo,
+#                     Sunshine and GeForce Experience PCs, from moonlight-common-c
+#                     (a CMake project of its own, moonlight/). A failure there is
+#                     reported and leaves the PS helpers as they are (logs:
+#                     LOG_DIR/moonlight-*.log); MOONLIGHT_REQUIRED=1 makes it
+#                     fatal. It is held to the same checks and gets its own block
+#                     in BUILDINFO.txt. MOONLIGHT_COMMON_COMMIT pins the library
+#                     (a full 40-hex id, fetched by that id and checked); empty
+#                     builds the tip of its default branch (master) and says so,
+#                     "NOT PINNED", in BUILDINFO.txt and as a warning.
+#
 # They are built from the upstream chiaki-ng library sources, pinned to a commit,
 # and installed into ./bin next to this script (player/native/bin). That is
 # where release.sh, package-sdcard.sh and the release workflows pick them up, so
@@ -81,11 +94,23 @@ MINIUPNPC_TAG="${MINIUPNPC_TAG:-miniupnpc_2_2_8}"
 # can be moved and a short prefix can be forged cheaply, so the source is
 # fetched by this id, the way chiaki-ng's is, and checked against all of it.
 MINIUPNPC_COMMIT="${MINIUPNPC_COMMIT:-b55145ec095652289a59c33603f3abafee898273}"
+# moonlight-common-c (GPLv3), for moonlight-stream. No full commit id could be
+# looked up when this was written, so the default is empty: the master tip of
+# the day, recorded as NOT PINNED. Put the id BUILDINFO.txt reports here (40 hex
+# digits) to pin it; the build then fetches exactly that commit and checks it.
+MOONLIGHT_COMMON_REPO="${MOONLIGHT_COMMON_REPO:-https://github.com/moonlight-stream/moonlight-common-c.git}"
+MOONLIGHT_COMMON_COMMIT="${MOONLIGHT_COMMON_COMMIT:-}"
+MOONLIGHT_COMMON_SOURCE="${MOONLIGHT_COMMON_SOURCE:-/tmp/moonlight-common-c}"
+MOONLIGHT_BUILD_DIR="${MOONLIGHT_BUILD_DIR:-/tmp/jukahub-moonlight-build}"
+MOONLIGHT_REQUIRED="${MOONLIGHT_REQUIRED:-0}"
 OUTPUT_BIN="${OUTPUT_BIN:-$NATIVE_DIR/bin}"
 LOG_DIR="${LOG_DIR:-/tmp/jukahub-helper-logs}"
 # Why the build stopped, for the CI summary. A part that runs beside others
 # (start_part) keeps its own until wait_parts gathers them here.
 FAILURE_FILE="$LOG_DIR/failure.txt"
+# What fetch_moonlight got ("<commit> pinned" or "<commit> NOT PINNED (...)"),
+# a file because the fetch may run in a part of its own (a subshell).
+MOONLIGHT_STATE="$LOG_DIR/moonlight-source.txt"
 PYTHON="${PYTHON:-$(command -v python3 || echo /usr/bin/python3)}"
 if [ -z "${JOBS:-}" ]; then
     JOBS="$(nproc 2>/dev/null || echo 4)"
@@ -669,11 +694,183 @@ fetch_sources() {
     fi
 }
 
+# fetch_moonlight puts moonlight-common-c, with its enet submodule, at
+# MOONLIGHT_COMMON_COMMIT (or the default branch's tip when that is empty) and
+# writes what it got to MOONLIGHT_STATE. It never stops the build: on any
+# trouble it returns 1 with the reason in LOG_DIR/moonlight-fetch.log, and
+# moonlight-stream is then skipped. (Called as a condition, so set -e is off in
+# here: every step checks its own result.)
+fetch_moonlight() {
+    rm -f "$MOONLIGHT_STATE"
+    fm_log="$LOG_DIR/moonlight-fetch.log"
+    : > "$fm_log"
+    fm_want="$MOONLIGHT_COMMON_COMMIT"
+    if [ -n "$fm_want" ] && ! printf '%s\n' "$fm_want" | grep -Eqx '[0-9a-f]{40}'; then
+        echo "MOONLIGHT_COMMON_COMMIT must be a full 40-hex commit id, or empty; it is '$fm_want'" >> "$fm_log"
+        return 1
+    fi
+    if [ ! -d "$MOONLIGHT_COMMON_SOURCE/.git" ]; then
+        { mkdir -p "$MOONLIGHT_COMMON_SOURCE" &&
+            git -C "$MOONLIGHT_COMMON_SOURCE" init -q &&
+            git -C "$MOONLIGHT_COMMON_SOURCE" remote add origin "$MOONLIGHT_COMMON_REPO"; } >> "$fm_log" 2>&1 || return 1
+    fi
+    git -C "$MOONLIGHT_COMMON_SOURCE" remote set-url origin "$MOONLIGHT_COMMON_REPO" >> "$fm_log" 2>&1 || return 1
+    if [ -z "$fm_want" ]; then
+        { git -C "$MOONLIGHT_COMMON_SOURCE" fetch -q --depth 1 origin HEAD &&
+            git -C "$MOONLIGHT_COMMON_SOURCE" checkout -q --detach FETCH_HEAD; } >> "$fm_log" 2>&1 || return 1
+    elif [ "$(git -C "$MOONLIGHT_COMMON_SOURCE" rev-parse HEAD 2>/dev/null || true)" != "$fm_want" ]; then
+        { git -C "$MOONLIGHT_COMMON_SOURCE" fetch -q --depth 1 origin "$fm_want" &&
+            git -C "$MOONLIGHT_COMMON_SOURCE" checkout -q --detach "$fm_want"; } >> "$fm_log" 2>&1 || return 1
+    fi
+    fm_have="$(git -C "$MOONLIGHT_COMMON_SOURCE" rev-parse HEAD 2>> "$fm_log" || true)"
+    if ! printf '%s\n' "$fm_have" | grep -Eqx '[0-9a-f]{40}' || { [ -n "$fm_want" ] && [ "$fm_have" != "$fm_want" ]; }; then
+        echo "moonlight-common-c checkout is at '$fm_have', not ${fm_want:-a commit}" >> "$fm_log"
+        return 1
+    fi
+    # enet at the commit the superproject records.
+    git -C "$MOONLIGHT_COMMON_SOURCE" submodule update --init --depth 1 enet >> "$fm_log" 2>&1 || return 1
+    if [ ! -f "$MOONLIGHT_COMMON_SOURCE/enet/CMakeLists.txt" ] || [ ! -f "$MOONLIGHT_COMMON_SOURCE/CMakeLists.txt" ]; then
+        echo "moonlight-common-c at $fm_have has no CMakeLists.txt or no enet/CMakeLists.txt" >> "$fm_log"
+        return 1
+    fi
+    if [ -n "$fm_want" ]; then
+        printf '%s pinned\n' "$fm_have" > "$MOONLIGHT_STATE"
+    else
+        printf '%s NOT PINNED (master tip on %s)\n' "$fm_have" "$(date -u +%Y-%m-%d)" > "$MOONLIGHT_STATE"
+    fi
+}
+
+# fetch_moonlight_note: fetch_moonlight in native mode, with one line for the
+# console. Never fails.
+fetch_moonlight_note() {
+    [ "$NATIVE_MODE" = "1" ] || return 0
+    if fetch_moonlight; then
+        echo "    moonlight-common-c: $(cat "$MOONLIGHT_STATE")"
+    else
+        echo "    moonlight-common-c: not fetched, moonlight-stream will be skipped (log: $LOG_DIR/moonlight-fetch.log)"
+        tail -n 5 "$LOG_DIR/moonlight-fetch.log" 2>/dev/null | sed 's/^/        /' || true
+    fi
+}
+
 # fetch_sources_part: fetch_sources as a part beside the dependency builds,
-# with a heading of its own for its lines.
+# with a heading of its own for its lines; moonlight-common-c comes along.
 fetch_sources_part() {
-    say "Fetching chiaki-ng $CHIAKI_COMMIT and miniupnpc $MINIUPNPC_TAG"
+    say "Fetching chiaki-ng $CHIAKI_COMMIT, miniupnpc $MINIUPNPC_TAG and moonlight-common-c ${MOONLIGHT_COMMON_COMMIT:-(master tip)}"
     fetch_sources
+    fetch_moonlight_note
+}
+
+# ── moonlight-stream (native mode, optional) ─────────────────────────────
+
+# ml_fail STEP [LOG] notes the step that failed (ML_FAILED) and shows the end
+# of its log; returns 1.
+ml_fail() {
+    ML_FAILED="$1"
+    if [ -n "${2:-}" ] && [ -f "$2" ]; then
+        show_failure "$2"
+    fi
+    return 1
+}
+
+# ml_expect_exit CODE BINARY ARGS...: expect_exit for moonlight-stream, which
+# reports instead of stopping the build.
+ml_expect_exit() {
+    me_want="$1"
+    shift
+    me_rc=0
+    LD_BIND_NOW=1 LD_LIBRARY_PATH="$DEPS_PREFIX/lib" "$@" >/dev/null 2>&1 || me_rc=$?
+    if [ "$me_rc" != "$me_want" ]; then
+        echo "smoke test: '$*' exited with $me_rc, expected $me_want" >&2
+        return 1
+    fi
+    echo "smoke test: '$*' -> $me_rc"
+}
+
+# build_moonlight configures moonlight/ against the fetched moonlight-common-c
+# and the static dependencies, builds moonlight-stream, holds it to the PS
+# helpers' checks (strip, no rpath, the NEEDED allowlist, GLIBC_MAX, exit 2
+# without arguments and 3 without a session file), then installs it into
+# OUTPUT_BIN and appends its block to OUTPUT_BIN/BUILDINFO.txt. Returns 1, with
+# the failed step in ML_FAILED, on any trouble; it never stops the build itself.
+build_moonlight() {
+    ML_FAILED=""
+    if [ ! -s "$MOONLIGHT_STATE" ]; then
+        ml_fail "fetching moonlight-common-c" "$LOG_DIR/moonlight-fetch.log"
+        return 1
+    fi
+    ml_commit="$(cut -d' ' -f1 "$MOONLIGHT_STATE")"
+    ml_pin="$(cut -d' ' -f2- "$MOONLIGHT_STATE")"
+    case "$ml_pin" in
+        pinned) ;;
+        *) echo "::warning title=Moonlight helper::moonlight-common-c is not pinned: this build used its master tip $ml_commit. Set MOONLIGHT_COMMON_COMMIT in player/native/build-helpers.sh to that id to pin it." ;;
+    esac
+    rm -rf "$MOONLIGHT_BUILD_DIR"
+    if ! cmake -S "$NATIVE_DIR/moonlight" -B "$MOONLIGHT_BUILD_DIR" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_SKIP_RPATH=ON \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENSSL_USE_STATIC_LIBS=TRUE \
+        -DCMAKE_PREFIX_PATH="$DEPS_PREFIX" \
+        -DMOONLIGHT_COMMON_SOURCE="$MOONLIGHT_COMMON_SOURCE" \
+        > "$LOG_DIR/moonlight-configure.log" 2>&1; then
+        ml_fail "configure" "$LOG_DIR/moonlight-configure.log"
+        return 1
+    fi
+    echo "    moonlight-configure: done (whole log: $LOG_DIR/moonlight-configure.log)"
+    if ! cmake --build "$MOONLIGHT_BUILD_DIR" --target moonlight-stream -j "$JOBS" \
+        > "$LOG_DIR/moonlight-build.log" 2>&1; then
+        ml_fail "compile" "$LOG_DIR/moonlight-build.log"
+        return 1
+    fi
+    echo "    moonlight-build: done"
+    ml_stage="$MOONLIGHT_BUILD_DIR/jukahub-stage"
+    ml_bin="$ml_stage/moonlight-stream"
+    rm -rf "$ml_stage"
+    if ! { mkdir -p "$ml_stage" && cp "$MOONLIGHT_BUILD_DIR/moonlight-stream" "$ml_bin" &&
+        "$STRIP" --strip-unneeded "$ml_bin" && chmod 755 "$ml_bin"; }; then
+        ml_fail "staging (copy and strip)"
+        return 1
+    fi
+    if readelf -d "$ml_bin" | grep -Eq '\((RPATH|RUNPATH)\)'; then
+        if ! command -v patchelf >/dev/null 2>&1 || ! patchelf --remove-rpath "$ml_bin"; then
+            ml_fail "the rpath check (it carries an rpath and patchelf could not remove it)"
+            return 1
+        fi
+    fi
+    ml_needed="$(needed_libs "$ml_bin" | tr '\n' ' ')"
+    for ml_lib in $ml_needed; do
+        case "$ml_lib" in
+            libSDL2-2.0.so.0|libc.so.6|libm.so.6|libpthread.so.0|libdl.so.2|librt.so.1|libgcc_s.so.1|ld-linux-aarch64.so.1) ;;
+            *)
+                ml_fail "the NEEDED check ($ml_lib, which the handheld may not have)"
+                return 1
+                ;;
+        esac
+    done
+    ml_max="$(glibc_max "$ml_bin")"
+    if [ -z "$ml_max" ] || ! version_le "$ml_max" "$GLIBC_MAX"; then
+        ml_fail "the glibc check (GLIBC_${ml_max:-?}, newer than GLIBC_$GLIBC_MAX)"
+        return 1
+    fi
+    if ! ml_expect_exit 2 "$ml_bin" || ! ml_expect_exit 3 "$ml_bin" "$DEPS_SRC/no-such-session.conf"; then
+        ml_fail "the smoke test"
+        return 1
+    fi
+    if ! { cp "$ml_bin" "$OUTPUT_BIN/moonlight-stream.part" && chmod 755 "$OUTPUT_BIN/moonlight-stream.part" &&
+        mv -f "$OUTPUT_BIN/moonlight-stream.part" "$OUTPUT_BIN/moonlight-stream"; }; then
+        rm -f "$OUTPUT_BIN/moonlight-stream.part" "$OUTPUT_BIN/moonlight-stream"
+        ml_fail "installing into $OUTPUT_BIN"
+        return 1
+    fi
+    {
+        echo ""
+        echo "moonlight-common-c: $MOONLIGHT_COMMON_REPO @ $ml_commit ($ml_pin), static, with its enet submodule"
+        echo ""
+        echo "moonlight-stream"
+        echo "  sha256:     $(sha256sum "$OUTPUT_BIN/moonlight-stream" | cut -d' ' -f1)"
+        echo "  size:       $(wc -c < "$OUTPUT_BIN/moonlight-stream" | tr -d ' ') bytes"
+        echo "  needs:      $ml_needed"
+        echo "  glibc max:  GLIBC_$ml_max (limit GLIBC_$GLIBC_MAX)"
+    } >> "$OUTPUT_BIN/BUILDINFO.txt"
 }
 
 # ── Mode setup ───────────────────────────────────────────────────────────
@@ -738,6 +935,7 @@ fi
 say "chiaki-ng $CHIAKI_COMMIT"
 if [ "$SOURCES_FETCHED" != "1" ]; then
     fetch_sources
+    fetch_moonlight_note
 fi
 
 # chiaki-lib links the bundled curl as CURL::libcurl_shared, the target curl's
@@ -786,7 +984,8 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
 
 # Binaries from an earlier run must not outlive a build that fails, or a
 # packaging script would ship them as this build's.
-rm -f "$OUTPUT_BIN/chiaki-stream" "$OUTPUT_BIN/chiaki-regist" "$OUTPUT_BIN/BUILDINFO.txt"
+rm -f "$OUTPUT_BIN/chiaki-stream" "$OUTPUT_BIN/chiaki-regist" "$OUTPUT_BIN/BUILDINFO.txt" \
+    "$OUTPUT_BIN/moonlight-stream" "$OUTPUT_BIN/moonlight-stream.part"
 
 say "Configuring chiaki-ng"
 set -- \
@@ -860,6 +1059,26 @@ for name in chiaki-stream chiaki-regist BUILDINFO.txt; do
     fi
 done
 chmod 755 "$OUTPUT_BIN/chiaki-stream" "$OUTPUT_BIN/chiaki-regist"
+
+# moonlight-stream comes last, once the PS helpers are installed: whatever
+# happens to it cannot cost them anything.
+if [ "$NATIVE_MODE" = "1" ]; then
+    say "Building moonlight-stream (optional)"
+    if build_moonlight; then
+        echo "moonlight-stream: built and verified"
+        sed -n '/^moonlight-common-c:/,$p' "$OUTPUT_BIN/BUILDINFO.txt"
+    else
+        rm -f "$OUTPUT_BIN/moonlight-stream" "$OUTPUT_BIN/moonlight-stream.part"
+        printf '\nmoonlight-stream: not built (%s failed; logs: %s/moonlight-*.log)\n' "$ML_FAILED" "$LOG_DIR" \
+            >> "$OUTPUT_BIN/BUILDINFO.txt"
+        if [ "$MOONLIGHT_REQUIRED" = "1" ]; then
+            die "moonlight-stream: $ML_FAILED failed (logs: $LOG_DIR/moonlight-*.log; MOONLIGHT_REQUIRED=1)"
+        fi
+        echo "::warning title=Moonlight helper::moonlight-stream was not built: $ML_FAILED failed (logs: $LOG_DIR/moonlight-*.log). The PS Remote Play helpers are not affected; this build ships without Moonlight streaming."
+    fi
+else
+    echo "moonlight-stream: skipped (a TG5050 SDK build makes the PS helpers only; native mode builds it)"
+fi
 
 echo "Installed helpers into $OUTPUT_BIN"
 ls -l "$OUTPUT_BIN"

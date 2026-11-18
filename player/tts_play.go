@@ -205,7 +205,7 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 		ttsTalkTyped.Store(s.origin == ttsFromChat || s.origin == ttsFromPage)
 		var made []int16
 		madeRate, pieces, want := 0, 0, 1
-		if s.local.kind == "piper" || s.local.kind == "phonon" {
+		if s.local.kind == "piper" {
 			want = len(ttsPiperLines(chunk)) // Piper says it a sentence at a time
 		}
 		err := ttsLocalSpeakChunks(ctx, s.local, pull, s.gender, func(samples []int16, rate int) bool {

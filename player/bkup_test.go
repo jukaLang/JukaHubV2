@@ -379,6 +379,52 @@ func TestBkupTargetsNameKnownPlacesOnly(t *testing.T) {
 	}
 }
 
+// A backup is a file from anywhere: a restore writes into JukaHub's own folder
+// only the settings files a backup takes from there — never a marker the next
+// start acts on, launch.sh, a script or the program — and an erase's undo file
+// is never written live.
+func TestBkupRestoreWritesOnlySettingsIntoTheAppFolder(t *testing.T) {
+	bkupTestPlaces(t)
+	m := bkupManifest{Format: bkupFormat, Version: bkupVersion, Platform: P().Name()}
+	allowed := map[string]bool{"app:jukauser.json": true, "app:jukaconfig.json": true, "app:notes.json": true, "app:jukatimezone": true}
+	for _, target := range []string{"app:jukauser.json", "app:jukaconfig.json", "app:notes.json", "app:jukatimezone",
+		"app:" + factoryEraseMarker, "app:" + factoryUndoMarker, "app:" + recoveryRestartMarker, "app:launch.sh",
+		"app:JukaHub", "app:JukaHub.exe", "app:scripts/run.sh", "app:jukauser.json.bak"} {
+		m.Files = append(m.Files, bkupFile{Path: bkupEntryName(target), Target: target, Category: bkupCatSettings})
+	}
+	for _, rf := range bkupPlanRestore("x"+bkupExt, m, bkupTestAllCats()).Files {
+		if (rf.Dest != "") != allowed[rf.File.Target] {
+			t.Errorf("%s: restore destination %q (skip %q)", rf.File.Target, rf.Dest, rf.Skip)
+		}
+	}
+	m.Label = factoryEraseLabel
+	for _, rf := range bkupPlanRestore("x"+bkupExt, m, bkupTestAllCats()).Files {
+		if rf.Dest != "" {
+			t.Errorf("a live restore writes %s from an erase's undo file", rf.File.Target)
+		}
+	}
+}
+
+// The data folder also holds emulators, runtimes and other programs: a restore
+// writes there only the top-level stores a backup carries and the files of
+// the folders bkupSources names.
+func TestBkupRestoreWritesOnlyStoresIntoTheDataFolder(t *testing.T) {
+	bkupTestPlaces(t)
+	m := bkupManifest{Format: bkupFormat, Version: bkupVersion, Platform: P().Name()}
+	curated := "data:" + curationDirName + "/feeds.json"
+	allowed := map[string]bool{"data:vk-words.json": true, "data:games.json": true, curated: true}
+	for _, target := range []string{"data:vk-words.json", "data:games.json", curated, "data:emulators/x",
+		"data:emulators/ppsspp/PPSSPPSDL", "data:sub/x.json", "data:launch.sh", "data:browser-cookies.json",
+		"data:release-info.json", "data:vk-words.json/x"} {
+		m.Files = append(m.Files, bkupFile{Path: bkupEntryName(target), Target: target, Category: bkupCatLibrary})
+	}
+	for _, rf := range bkupPlanRestore("x"+bkupExt, m, bkupTestAllCats()).Files {
+		if (rf.Dest != "") != allowed[rf.File.Target] {
+			t.Errorf("%s: restore destination %q (skip %q)", rf.File.Target, rf.Dest, rf.Skip)
+		}
+	}
+}
+
 func TestBkupTranslatesFoldersBetweenDevices(t *testing.T) {
 	from := map[string]string{"data": `C:\Users\me\AppData\Roaming\JukaHub`, "app": `C:\JukaHub`, "home": `C:\Users\me`}
 	to := map[string]string{"data": "/mnt/SDCARD/Apps/JukaHub/data", "app": "/mnt/SDCARD/Apps/JukaHub", "home": "/root", "card": "/mnt/SDCARD"}

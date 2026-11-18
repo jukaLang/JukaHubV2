@@ -132,6 +132,9 @@ var vpnMgr struct {
 	// ever changes the tunnel then, and a profile that failed for good is
 	// tried again.
 	explicit bool
+	// held: an erase is under way (factoryreset.go sets and clears it): the
+	// tunnel stays down whatever the switch says, until it is released.
+	held bool
 
 	loaded       bool
 	profile      *vpnProfile
@@ -149,6 +152,7 @@ var vpnMgr struct {
 	recovered    string    // the dead tunnel whose leftovers were put back
 	removeReq    bool      // Remove was chosen: stop, then delete the profile
 	lastErr      string
+	looks        uint64 // probes taken so far: a waiter knows one is newer than its change
 }
 
 // vpnSaveMu keeps two imports (phone and Files) from writing the profile at
@@ -418,7 +422,7 @@ func vpnReconcile() time.Duration {
 	m := &vpnMgr
 	// Safe mode holds the handheld's own tunnel; WireGuard's service on
 	// Windows is not JukaHub's to start or stop on its own.
-	want := m.enabled && (!m.safe || !auto) && m.parsed != nil
+	want := m.enabled && !m.held && (!m.safe || !auto) && m.parsed != nil
 	explicit := m.explicit
 	m.explicit = false
 	remove := m.removeReq
@@ -469,6 +473,7 @@ func vpnReconcile() time.Duration {
 	due := explicit || (auto && !now.Before(m.retryAt))
 	fatal := m.fatalHash
 	m.probe = probe
+	m.looks++
 	m.mu.Unlock()
 
 	for _, e := range fresh {

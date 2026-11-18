@@ -406,6 +406,9 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	// Your other JukaHubs: who is playing what on this Wi-Fi, and saves kept
 	// the same across devices (peer.go, nearby.go, ssync.go).
 	tiles = append(tiles, nearbyHubTile(), ssyncHubTile())
+	// Your mail and calendars, beside the saves that follow you
+	// (mailcal_ui.go).
+	tiles = append(tiles, mailcalHubTile())
 
 	// TOOLKITS
 	toolbox := toolsHubTile{
@@ -449,6 +452,15 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		wifi.icon = "wifi-off"
 	}
 	tiles = append(tiles, network, wifi)
+	// The handheld as a Wi-Fi network of its own, on the firmware's hotspot
+	// tools (hotspot.go); a PC shares its connection from its own settings.
+	if hotspotSupported() {
+		hs := toolsHubTile{id: "hotspot", label: "Hotspot", icon: "radar", value: hotspotTileValue()}
+		if hotspotHoldsRadio() {
+			hs.tone = toolsHubToneGood
+		}
+		tiles = append(tiles, hs)
+	}
 	if has("NetSpeed") {
 		tiles = append(tiles, toolsHubTile{
 			id: "netspeed", label: "Net speed", icon: "speed",
@@ -460,6 +472,7 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	system := make([]toolsHubTile, 0, 12)
 	if has("Terminal") {
 		system = append(system, toolsHubTile{id: "terminal", label: "Terminal", icon: "terminal", value: "Run commands on this device"})
+		system = append(system, toolsHubTile{id: "cmddeck", label: "Commands", icon: "list", value: "Ready-made commands, no typing"})
 	}
 	if has("Cron") {
 		system = append(system, toolsHubTile{id: "sched", label: "Scheduled tasks", icon: "schedule", value: "Timed jobs and startup items"})
@@ -469,6 +482,21 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	}
 	if has("DiskSpace") {
 		system = append(system, toolsHubTile{id: "disk", label: "Disk space", icon: "disk", value: "How full each drive is"})
+	}
+	// The two handheld-only tools: what is on the USB-C port (usbotg.go) and
+	// the battery gauge's calibration cycle (batterycal.go). A PC has neither
+	// a sysfs USB role switch nor a fuel gauge JukaHub can read.
+	if P().IsHandheld() {
+		usb := toolsHubTile{id: "usbotg", label: "USB & OTG", icon: "plug", value: usbOtgTileValue()}
+		if usb.value == "" {
+			usb.value = "Sticks, pads and DACs on USB-C"
+		}
+		system = append(system, usb)
+		batt := toolsHubTile{id: "battcal", label: "Battery calibration", icon: "battery", value: batteryCalTileValue()}
+		if batt.value == "" {
+			batt.value = "Teach the gauge your battery"
+		}
+		system = append(system, batt)
 	}
 	if has("Benchmark") {
 		system = append(system, toolsHubTile{id: "benchmark", label: "Benchmark", icon: "benchmark", value: "Storage read and write speed"})
@@ -625,6 +653,8 @@ func toolsHubActivate(config *Config, idx int) {
 		nearbyOpenScreen(config)
 	case "ssync":
 		ssyncOpenScreen(config)
+	case "mailcal":
+		mailcalOpenSettings(config)
 	case "toolbox":
 		tbxOpenScreen(config)
 	case "audit":
@@ -635,16 +665,24 @@ func toolsHubActivate(config *Config, idx int) {
 		netToolsOpen(config)
 	case "wifi":
 		wifiScrOpen(config)
+	case "hotspot":
+		hotspotOpenScreen(config)
 	case "netspeed":
 		toolsHubOpenScene(config, "NetSpeed")
 	case "terminal":
 		toolsHubOpenScene(config, "Terminal")
+	case "cmddeck":
+		cmdDeckOpenFromAnywhere(config, "")
 	case "sched":
 		schedOpen(config)
 	case "hardware":
 		toolsHubOpenScene(config, "Hardware")
 	case "disk":
 		toolsHubOpenScene(config, "DiskSpace")
+	case "usbotg":
+		usbOtgOpenScreen(config)
+	case "battcal":
+		batteryCalOpenScreen(config)
 	case "benchmark":
 		toolsHubOpenScene(config, "Benchmark")
 	case "logs":

@@ -1311,12 +1311,12 @@ func pdfvGlyphRune(name string) (rune, bool) {
 		return rune(name[0]), true
 	}
 	if strings.HasPrefix(name, "uni") && len(name) >= 7 {
-		if v, err := strconv.ParseUint(name[3:7], 16, 32); err == nil {
+		if v, err := strconv.ParseUint(name[3:7], 16, 32); err == nil && v <= utf8.MaxRune {
 			return rune(v), true
 		}
 	}
 	if strings.HasPrefix(name, "u") && len(name) >= 5 && len(name) <= 7 {
-		if v, err := strconv.ParseUint(name[1:], 16, 32); err == nil {
+		if v, err := strconv.ParseUint(name[1:], 16, 32); err == nil && v <= utf8.MaxRune {
 			return rune(v), true
 		}
 	}

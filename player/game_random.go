@@ -49,6 +49,48 @@ var gameRandomIntn = rand.Intn
 // playing it is a game started from the random pick (gmetaPlay, tkGameRandom).
 var gameRandomPick string
 
+// gameRandomRollGen is the library scan a "Pick a game for me" press waits for
+// (the Random game plugin's Start menu row opens the library, whose scan is
+// still running); 0 when nothing waits. A scan from a closed panel never
+// lands, so a stale wait cannot fire on a later visit.
+var gameRandomRollGen uint64
+
+// gameRandomRollWhenReady rolls from the whole library now, or as soon as the
+// scan the panel is running has landed.
+func gameRandomRollWhenReady() {
+	if gameLib.scanning {
+		gameRandomRollGen = gameLib.scanGen
+		ShowToast("Picking a game…", ToastKindInfo)
+		return
+	}
+	gameRandomRollGen = 0
+	gameRandomRollWholeLibrary()
+}
+
+// gameRandomAfterScan runs the roll a press was waiting for, once scan gen is
+// installed (startGameLibraryScan).
+func gameRandomAfterScan(gen uint64) {
+	if gameRandomRollGen == 0 || gameRandomRollGen != gen {
+		return
+	}
+	gameRandomRollGen = 0
+	gameRandomRollWholeLibrary()
+}
+
+// gameRandomRollWholeLibrary rolls the "Whole library" scope without showing
+// the scope sheet: the press already said what it wanted.
+func gameRandomRollWholeLibrary() {
+	scopes := buildGameRandomScopes()
+	if len(scopes) == 0 {
+		ShowToast("No games to pick from yet — copy ROMs and press Y to rescan", ToastKindInfo)
+		return
+	}
+	gameOptsUI.open = false
+	gameRandomUI = gameRandomPickerState{open: true, scopes: scopes}
+	// "Whole library" is always the last scope when there are games at all.
+	chooseGameRandomScope(len(scopes) - 1)
+}
+
 // randomPickerConsoles is the library without the Continue row: recents are a
 // view over games that are already in their console, so rolling from them would
 // weight a recently played title twice.

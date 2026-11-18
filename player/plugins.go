@@ -32,9 +32,12 @@ type PluginInfo struct {
 	// action run, and shown, the moment it is switched on; OnStartup runs
 	// when JukaHub starts (once a day with StartupDaily); Quick are the action
 	// ids the Start menu lists under Plugins (the first action when empty).
+	// StartupQuiet keeps the startup run's result off the toasts unless it is
+	// an error.
 	OnEnable     string   `json:"onEnable,omitempty"`
 	OnStartup    string   `json:"onStartup,omitempty"`
 	StartupDaily bool     `json:"startupDaily,omitempty"`
+	StartupQuiet bool     `json:"startupQuiet,omitempty"`
 	Quick        []string `json:"quick,omitempty"`
 }
 
@@ -121,7 +124,7 @@ func LoadPlugins(config *Config) {
 	plugins = loaded
 	plugSetCatalog(catalog)
 	// The first scan of a launch runs the startup actions of the plugins that
-	// are on (a quote of the day, say).
+	// are on (Save guard's backup).
 	plugRunStartupHooks(config)
 }
 

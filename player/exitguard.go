@@ -203,6 +203,9 @@ func exitLastChanceRestore(grace time.Duration) {
 		if _, err := restoreBootCPUSettings(); err != nil {
 			logWarn("exit", "CPU restore on the forced exit: %v", err)
 		}
+		// The Smart Pro S fan goes back to the firmware's cap and speed; a
+		// no-op on a model without one or when the fan was never touched.
+		fanRelease()
 		alarmVolumeRestoreWait(grace)
 	}()
 	select {

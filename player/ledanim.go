@@ -24,12 +24,19 @@ package main
 // What the rings showed before JukaHub took them (colour, effect, scale) is
 // read on the first write and put back when the sync stops, so the firmware's
 // own ring colour comes back instead of a dark ring.
+//
+// The _lr names above are one zone. The models light different things (the
+// Brick's top bar, FN keys and shoulders; the Smart Pro's logo; the Smart Pro
+// S and Brick Pro's stick rings), so every zone is read from the directory
+// (ledAnimZones) and gets the same colour; nothing is assumed from the model
+// and a node that is not there is never written.
 
 import (
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,11 +77,17 @@ const (
 // new loop while the old one blanks, so it is locked.
 var ledAnimState struct {
 	sync.Mutex
-	taken     bool
-	saved     ledAnimSaved
-	static    int
+	taken  bool
+	saved  ledAnimSaved
+	static int
+	// zones are the lit areas found in the driver (ledAnimZones); the first
+	// one is the primary, the one whose read-back decides a drift.
+	zones []ledAnimZone
+	// scaleFile is the primary zone's scale node; scales are every distinct
+	// scale node with its own ceiling, all written with the same level.
 	scaleFile string
 	scaleMax  int
+	scales    []ledAnimScale
 	hue       [3]uint8
 	hueSet    bool
 	rearmedAt time.Time
@@ -103,17 +116,48 @@ var ledAnimState struct {
 	switchOff []string
 }
 
-// ledAnimSaved is the rings' state before the first write, switches included
-// (rings the stock settings turned off stay off after JukaHub).
+// ledAnimSaved is the lights' state before the first write, switches included
+// (lights the stock settings turned off stay off after JukaHub).
 type ledAnimSaved struct {
-	color, effect, scale  string
-	cycles, enable, effEn string
+	enable, effEn string
+	zones         []ledAnimZoneSaved
 }
 
-// ledAnimFiles are the driver nodes JukaHub writes.
-var ledAnimFiles = []string{
-	"effect_rgb_hex_lr", "effect_lr", "effect_cycles_lr", "max_scale",
-	"max_scale_lr", "enable", "effect_enable",
+// ledAnimZoneSaved is one zone's colour, effect and cycles before the take.
+type ledAnimZoneSaved struct {
+	color, effect, cycles string
+}
+
+// ledAnimScale is one brightness node and the ceiling JukaHub drives it to.
+type ledAnimScale struct {
+	file  string
+	max   int
+	saved string
+}
+
+// ledAnimZone is one lit area of the driver. The models differ, so the zones
+// are read from the directory, never assumed from the model:
+//
+//	lr     both stick rings (Smart Pro, Smart Pro S, Brick Pro) or the
+//	       shoulder lights (Brick); l / r are the rings one at a time
+//	m      the top bar (Brick) or the logo (Smart Pro)
+//	f1 f2  the Brick's FN-key lights
+type ledAnimZone struct {
+	name  string // the node suffix: "lr"
+	scale string // its brightness node: "max_scale_lr", "max_scale_f1f2", "max_scale"
+}
+
+// ledAnimNodeKept reports whether a node is one JukaHub writes and so must be
+// writable: the effect, colour and cycle nodes of any zone, the scale nodes and
+// the two switches. Pure.
+func ledAnimNodeKept(name string) bool {
+	switch name {
+	case "enable", "effect_enable":
+		return true
+	}
+	return strings.HasPrefix(name, "effect_rgb_hex_") || strings.HasPrefix(name, "effect_cycles_") ||
+		strings.HasPrefix(name, "max_scale") ||
+		(strings.HasPrefix(name, "effect_") && !strings.HasPrefix(name, "effect_duration_") && name != "effect_names")
 }
 
 // ledAnimUnlock makes the driver's nodes writable. The firmware leaves them
@@ -122,33 +166,116 @@ var ledAnimFiles = []string{
 // `chmod -R 777 /sys/class/led_anim`. Without this the rings were never found
 // ("the driver is there, but JukaHub can't write to it").
 func ledAnimUnlock(dir string) {
-	for _, name := range ledAnimFiles {
-		path := filepath.Join(dir, name)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !ledAnimNodeKept(e.Name()) {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
 		info, err := os.Stat(path)
-		if err != nil || info.Mode().Perm()&0o200 != 0 {
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o200 != 0 {
 			continue
 		}
 		_ = os.Chmod(path, info.Mode().Perm()|0o600)
 	}
 }
 
-// classifyLEDAnim reports the TrimUI rings as one device when the driver is
-// there and writable.
+// ledAnimZoneNames picks the zones from a directory listing: every suffix z
+// with both effect_<z> and effect_rgb_hex_<z>. l and r are left out when lr
+// drives both (writing all three would re-arm the rings twice). lr comes
+// first, the rest in name order. Pure.
+func ledAnimZoneNames(files []string) []string {
+	have := make(map[string]bool, len(files))
+	for _, f := range files {
+		have[f] = true
+	}
+	var zones []string
+	for _, f := range files {
+		z, ok := strings.CutPrefix(f, "effect_rgb_hex_")
+		if !ok || z == "" || !have["effect_"+z] {
+			continue
+		}
+		if (z == "l" || z == "r") && have["effect_rgb_hex_lr"] && have["effect_lr"] {
+			continue
+		}
+		zones = append(zones, z)
+	}
+	sort.Slice(zones, func(i, j int) bool {
+		if (zones[i] == "lr") != (zones[j] == "lr") {
+			return zones[i] == "lr"
+		}
+		return zones[i] < zones[j]
+	})
+	return zones
+}
+
+// ledAnimZones lists the zones dir has that JukaHub can write, each with the
+// scale node that dims it. A zone without a writable colour, effect or scale
+// node is left out (and never written).
+func ledAnimZones(dir string) []ledAnimZone {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	files := make([]string, 0, len(entries))
+	for _, e := range entries {
+		files = append(files, e.Name())
+	}
+	var out []ledAnimZone
+	for _, z := range ledAnimZoneNames(files) {
+		if !canWriteFile(filepath.Join(dir, "effect_rgb_hex_"+z)) || !canWriteFile(filepath.Join(dir, "effect_"+z)) {
+			continue
+		}
+		cands := []string{"max_scale_" + z}
+		if z == "f1" || z == "f2" {
+			cands = append(cands, "max_scale_f1f2")
+		}
+		if z == "l" || z == "r" {
+			cands = append(cands, "max_scale_lr")
+		}
+		cands = append(cands, "max_scale")
+		for _, c := range cands {
+			if canWriteFile(filepath.Join(dir, c)) {
+				out = append(out, ledAnimZone{name: z, scale: c})
+				break
+			}
+		}
+	}
+	return out
+}
+
+// ledAnimZoneList is the zones' names for a log line.
+func ledAnimZoneList(zones []ledAnimZone) string {
+	names := make([]string, 0, len(zones))
+	for _, z := range zones {
+		names = append(names, z.name)
+	}
+	return strings.Join(names, ",")
+}
+
+// classifyLEDAnim reports the TrimUI lights as one device when the driver is
+// there with at least one writable zone.
 func classifyLEDAnim(dir string) (ledDevice, bool) {
-	if _, err := os.Stat(filepath.Join(dir, "effect_lr")); err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		return ledDevice{}, false
 	}
 	ledAnimUnlock(dir)
-	if !canWriteFile(filepath.Join(dir, "effect_rgb_hex_lr")) || !canWriteFile(filepath.Join(dir, "effect_lr")) {
+	zones := ledAnimZones(dir)
+	if len(zones) == 0 {
+		ledAnimNoZonesOnce.Do(func() {
+			LogScene("led").Info("led_anim has no writable zone; lights not driven", "dir", dir)
+		})
 		return ledDevice{}, false
 	}
-	// The level goes through a scale file; without one the rings could only
-	// change colour.
-	if !canWriteFile(filepath.Join(dir, "max_scale_lr")) && !canWriteFile(filepath.Join(dir, "max_scale")) {
-		return ledDevice{}, false
-	}
-	return ledDevice{Name: "stick rings", Dir: dir, Mode: ledModeAnim, Max: ledAnimScaleLimit}, true
+	return ledDevice{Name: "led_anim " + ledAnimZoneList(zones), Dir: dir, Mode: ledModeAnim, Max: ledAnimScaleLimit}, true
 }
+
+// ledAnimNoZonesOnce keeps the "no zone" line to one per run: the Settings
+// page asks again on every visit.
+var ledAnimNoZonesOnce sync.Once
 
 // ledAnimSplit divides a colour into its hue at full value and a level 0..1.
 // Pure.
@@ -271,19 +398,29 @@ func ledAnimDrifted(dir string, hue [3]uint8, static int) (drifted bool, what st
 			drifted, what = true, sw+"=0"
 		}
 	}
+	z := ledAnimPrimary()
 	if !st.noEffectBack {
-		raw := ledAnimRead(dir, "effect_lr")
+		raw := ledAnimRead(dir, "effect_"+z)
 		if n, err := strconv.Atoi(raw); err == nil && n != static {
-			drifted, what = true, "effect_lr="+raw
+			drifted, what = true, "effect_"+z+"="+raw
 		}
 	}
 	if !st.noColorBack {
-		raw := ledAnimRead(dir, "effect_rgb_hex_lr")
+		raw := ledAnimRead(dir, "effect_rgb_hex_"+z)
 		if r, g, b, ok := ledAnimParseHex(raw); ok && !ledAnimHueNear([3]uint8{r, g, b}, hue) {
-			drifted, what = true, "effect_rgb_hex_lr="+raw
+			drifted, what = true, "effect_rgb_hex_"+z+"="+raw
 		}
 	}
 	return drifted, what
+}
+
+// ledAnimPrimary is the zone whose read-back stands for all of them: lr when
+// the driver has it. Under lock.
+func ledAnimPrimary() string {
+	if len(ledAnimState.zones) == 0 {
+		return "lr"
+	}
+	return ledAnimState.zones[0].name
 }
 
 // ledAnimVerify reads the colour and effect back right after a re-arm. A node
@@ -291,15 +428,16 @@ func ledAnimDrifted(dir string, hue [3]uint8, static int) (drifted bool, what st
 // (see noColorBack). Under lock.
 func ledAnimVerify(dir string, hue [3]uint8, static int) {
 	st := &ledAnimState
+	z := ledAnimPrimary()
 	if !st.noEffectBack {
-		raw := ledAnimRead(dir, "effect_lr")
+		raw := ledAnimRead(dir, "effect_"+z)
 		if n, err := strconv.Atoi(raw); err == nil && n != static {
 			st.noEffectBack = true
-			LogScene("led").Info("stick rings: effect_lr reads back differently, not watching it", "wrote", static, "read", raw)
+			LogScene("led").Info("stick rings: effect reads back differently, not watching it", "zone", z, "wrote", static, "read", raw)
 		}
 	}
 	if !st.noColorBack {
-		raw := ledAnimRead(dir, "effect_rgb_hex_lr")
+		raw := ledAnimRead(dir, "effect_rgb_hex_"+z)
 		if r, g, b, ok := ledAnimParseHex(raw); ok && !ledAnimHueNear([3]uint8{r, g, b}, hue) {
 			st.noColorBack = true
 			LogScene("led").Info("stick rings: colour reads back differently, not watching it", "wrote", fmt.Sprintf("%02X%02X%02X", hue[0], hue[1], hue[2]), "read", raw)
@@ -342,37 +480,74 @@ func ledAnimTake(dir string) {
 	st.fights, st.fightLogged = 0, false
 	st.switchOff = st.switchOff[:0]
 	st.static = ledAnimStaticIndex(ledAnimRead(dir, "effect_names"))
-	st.scaleFile = "max_scale"
-	if canWriteFile(filepath.Join(dir, "max_scale_lr")) {
-		st.scaleFile = "max_scale_lr"
-	}
+	// The zones are probed again on every take: a firmware update or a
+	// suspend can change what is writable.
+	st.zones = ledAnimZones(dir)
 	st.saved = ledAnimSaved{
-		color:  ledAnimRead(dir, "effect_rgb_hex_lr"),
-		effect: ledAnimRead(dir, "effect_lr"),
-		scale:  ledAnimRead(dir, st.scaleFile),
-		cycles: ledAnimRead(dir, "effect_cycles_lr"),
 		enable: ledAnimRead(dir, "enable"),
 		effEn:  ledAnimRead(dir, "effect_enable"),
+		zones:  make([]ledAnimZoneSaved, len(st.zones)),
 	}
-	// The firmware's own brightness is the ceiling (the user set it in the
-	// stock settings); an unset or unreadable one gets the driver's limit.
+	st.scales = st.scales[:0]
+	st.scaleFile = ""
+	for i, z := range st.zones {
+		st.saved.zones[i] = ledAnimZoneSaved{
+			color:  ledAnimRead(dir, "effect_rgb_hex_"+z.name),
+			effect: ledAnimRead(dir, "effect_"+z.name),
+			cycles: ledAnimRead(dir, "effect_cycles_"+z.name),
+		}
+		if i == 0 {
+			st.scaleFile = z.scale
+		}
+		seen := false
+		for _, s := range st.scales {
+			if s.file == z.scale {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			saved := ledAnimRead(dir, z.scale)
+			st.scales = append(st.scales, ledAnimScale{file: z.scale, max: ledAnimScaleCeiling(saved), saved: saved})
+		}
+		if canWriteFile(filepath.Join(dir, "effect_cycles_"+z.name)) {
+			_ = writeLEDFile(filepath.Join(dir, "effect_cycles_"+z.name), "-1")
+		}
+	}
 	st.scaleMax = ledAnimScaleLimit
-	if n, err := strconv.Atoi(st.saved.scale); err == nil && n > 0 && n < ledAnimScaleLimit {
-		st.scaleMax = n
+	if len(st.scales) > 0 {
+		st.scaleMax = st.scales[0].max
 	}
-	if st.scaleMax < 20 {
-		// A ring the user dimmed almost to nothing would make the sync look
-		// broken; it still never goes past the driver's limit.
-		st.scaleMax = 20
+	for _, sw := range []string{"effect_enable", "enable"} {
+		// No zone to drive: the switches stay as the firmware left them.
+		if len(st.zones) > 0 && canWriteFile(filepath.Join(dir, sw)) {
+			_ = writeLEDFile(filepath.Join(dir, sw), "1")
+		}
 	}
-	_ = writeLEDFile(filepath.Join(dir, "effect_cycles_lr"), "-1")
-	_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
-	_ = writeLEDFile(filepath.Join(dir, "enable"), "1")
 	// What the driver showed, once per take: if the rings still blink, this
 	// line (with the "reads back" and "keeps changing" ones) says why.
-	LogScene("led").Info("stick rings taken", "effect", st.saved.effect, "static", st.static,
-		"cycles", st.saved.cycles, "duration", ledAnimRead(dir, "effect_duration_lr"),
-		"scale", st.saved.scale, "scaleFile", st.scaleFile)
+	first := ledAnimZoneSaved{}
+	if len(st.saved.zones) > 0 {
+		first = st.saved.zones[0]
+	}
+	LogScene("led").Info("lights taken", "zones", ledAnimZoneList(st.zones), "effect", first.effect, "static", st.static,
+		"cycles", first.cycles, "duration", ledAnimRead(dir, "effect_duration_"+ledAnimPrimary()),
+		"scaleFile", st.scaleFile, "scaleMax", st.scaleMax)
+}
+
+// ledAnimScaleCeiling is how bright JukaHub drives a scale node: the
+// firmware's own setting (the user chose it in the stock settings) up to the
+// driver's limit; unset or unreadable gets the limit. A light the user dimmed
+// almost to nothing would make the sync look broken, so never below 20. Pure.
+func ledAnimScaleCeiling(saved string) int {
+	ceiling := ledAnimScaleLimit
+	if n, err := strconv.Atoi(saved); err == nil && n > 0 && n < ledAnimScaleLimit {
+		ceiling = n
+	}
+	if ceiling < 20 {
+		ceiling = 20
+	}
+	return ceiling
 }
 
 // applyLEDAnim writes one colour to the rings.
@@ -382,6 +557,10 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 	defer st.Unlock()
 	if !st.taken {
 		ledAnimTake(dev.Dir)
+	}
+	if len(st.zones) == 0 || len(st.scales) == 0 {
+		// Nothing writable any more: one error the loop logs once, no writes.
+		return fmt.Errorf("led_anim: no writable zone")
 	}
 	hue, level := ledAnimSplit(r, g, b)
 	scale := 0
@@ -433,12 +612,16 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 		}
 		st.switchOff = st.switchOff[:0]
 		col := fmt.Sprintf("%02X%02X%02X ", hue[0], hue[1], hue[2])
-		if err := writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_lr"), col); err != nil {
-			return err
-		}
-		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_lr"), "0")
-		if err := writeLEDFile(filepath.Join(dev.Dir, "effect_lr"), strconv.Itoa(st.static)); err != nil {
-			return err
+		for i, z := range st.zones {
+			// The primary zone's failure is the device's; another zone that
+			// stops answering keeps the rest lit.
+			if err := writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_"+z.name), col); err != nil && i == 0 {
+				return err
+			}
+			_ = writeLEDFile(filepath.Join(dev.Dir, "effect_"+z.name), "0")
+			if err := writeLEDFile(filepath.Join(dev.Dir, "effect_"+z.name), strconv.Itoa(st.static)); err != nil && i == 0 {
+				return err
+			}
 		}
 		st.hue, st.hueSet, st.rearmedAt = hue, true, now
 		ledAnimVerify(dev.Dir, hue, st.static)
@@ -448,8 +631,19 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 	if scale == st.lastScale {
 		return nil
 	}
-	if err := writeLEDFile(filepath.Join(dev.Dir, st.scaleFile), strconv.Itoa(scale)); err != nil {
-		return err
+	for i, s := range st.scales {
+		v := scale
+		if i > 0 {
+			// Each scale node has its own ceiling (max_scale_f1f2 is not
+			// max_scale_lr): the same level, in its own range.
+			v = int(math.Round(level * float64(s.max)))
+			if level > 0 && v < 1 {
+				v = 1
+			}
+		}
+		if err := writeLEDFile(filepath.Join(dev.Dir, s.file), strconv.Itoa(v)); err != nil && i == 0 {
+			return err
+		}
 	}
 	st.lastScale = scale
 	if !st.scaleChecked && !st.noScaleBack {
@@ -476,20 +670,30 @@ func releaseLEDAnim(dev ledDevice) {
 	}
 	st.taken = false
 	saved := st.saved
-	if saved.color != "" {
-		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_lr"), saved.color+" ")
-	} else {
-		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_lr"), "000000 ")
+	for i, z := range st.zones {
+		if i >= len(saved.zones) {
+			break
+		}
+		zs := saved.zones[i]
+		col := "000000 "
+		if zs.color != "" {
+			col = zs.color + " "
+		}
+		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_rgb_hex_"+z.name), col)
+		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_"+z.name), "0")
+		if zs.effect != "" && zs.effect != "0" {
+			_ = writeLEDFile(filepath.Join(dev.Dir, "effect_"+z.name), zs.effect)
+		}
+		if zs.cycles != "" {
+			_ = writeLEDFile(filepath.Join(dev.Dir, "effect_cycles_"+z.name), zs.cycles)
+		}
 	}
-	_ = writeLEDFile(filepath.Join(dev.Dir, "effect_lr"), "0")
-	if saved.effect != "" && saved.effect != "0" {
-		_ = writeLEDFile(filepath.Join(dev.Dir, "effect_lr"), saved.effect)
-	}
-	if saved.scale != "" {
-		_ = writeLEDFile(filepath.Join(dev.Dir, st.scaleFile), saved.scale)
+	for _, s := range st.scales {
+		if s.saved != "" {
+			_ = writeLEDFile(filepath.Join(dev.Dir, s.file), s.saved)
+		}
 	}
 	for _, sw := range []struct{ file, value string }{
-		{"effect_cycles_lr", saved.cycles},
 		{"effect_enable", saved.effEn},
 		{"enable", saved.enable},
 	} {
@@ -497,4 +701,48 @@ func releaseLEDAnim(dev ledDevice) {
 			_ = writeLEDFile(filepath.Join(dev.Dir, sw.file), sw.value)
 		}
 	}
+}
+
+func init() { registerDriverStatus(driverRowLEDs, ledAnimDriverStatus) }
+
+// ledAnimDriverStatus is the LEDs line of Settings → Drivers & hardware: the
+// zones the driver has and which of them JukaHub can write. Read-only: it
+// lists and opens nodes for writing, it never chmods or writes them.
+func ledAnimDriverStatus() driverStatus {
+	entries, err := os.ReadDir(ledAnimDir)
+	if err != nil {
+		if deviceHardwareCurrent().HasLEDs {
+			return driverStatus{State: driverMissing, Driver: "led_anim", Detail: "no " + ledAnimDir}
+		}
+		return driverStatus{State: driverNotUsed, Detail: "no RGB lights on this model"}
+	}
+	files := make([]string, 0, len(entries))
+	for _, e := range entries {
+		files = append(files, e.Name())
+	}
+	names := ledAnimZoneNames(files)
+	st := driverStatus{Driver: "led_anim", Node: ledAnimDir}
+	if len(names) == 0 {
+		st.State, st.Detail = driverProblem, "no colour zones in the driver"
+		return st
+	}
+	writable := 0
+	for _, z := range names {
+		if canWriteFile(filepath.Join(ledAnimDir, "effect_rgb_hex_"+z)) {
+			writable++
+		}
+	}
+	st.Detail = fmt.Sprintf("zones %s", strings.Join(names, ","))
+	switch {
+	case writable == 0:
+		// The firmware ships the nodes 0444; the sync unlocks them on start.
+		st.State = driverUnknown
+		st.Detail += " · locked until the lights start"
+	case LEDSyncRunning():
+		st.State = driverOK
+		st.Detail += " · driven by JukaHub"
+	default:
+		st.State = driverOK
+	}
+	return st
 }

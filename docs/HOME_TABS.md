@@ -21,7 +21,7 @@ PortMaster (not on Windows), Windows Apps, Downloads, Themes and Wallpapers.
 A collection is a folder too.
 
 Users on a layout they picked before (Standard, Hero grid, Carousel, Widgets,
-or a console theme such as PS5 Style) keep it; Settings → Display & theme →
+or a console theme such as PS5 Style) keep it; Settings → Theme & look →
 Home layout switches to Tabs and back.
 
 ## Controls
@@ -45,13 +45,14 @@ change its view), tap a tile to open it, right-click a tile for its options,
 and the wheel walks the page.
 
 Each tab remembers where its focus was, and Home opens on the tab you left it
-on (Settings → Display & theme → Remember last tab).
+on (Settings → Theme & look → Remember last tab).
 
 ## Views
 
 Every tab — and every folder, each collection on its own — has a view:
 
-- **Grid** — square tiles, scrolls up and down (the default).
+- **Grid** — larger square tiles that center when a page has only a few items;
+  fuller pages scroll up and down (the default).
 - **Rows** — large tiles in one or two rows, scrolls left and right (Recent's
   default, with its first item as a large hero).
 - **List** — a line per item, the focused one large beside the list.
@@ -91,11 +92,12 @@ the same favourite in the Games library (L3 → Favorite).
 it with A and pick its view (grid, row, list…) like any page — every
 collection remembers its own. Items that have since disappeared stay in the
 list, dimmed as *Missing*, until you remove them. *Most played*, *Recently
-added* and *Never played* are automatic and read-only.
+added* and *Never played* are automatic and read-only. On a short page, a
+heading explains that these lists update automatically.
 
 ## Arranging the tabs
 
-L2 (Q), Start → Device → Edit Home or Settings → Display & theme → Tabs open
+L2 (Q), Start → Device → Edit Home or Settings → Theme & look → Tabs open
 a sheet over Home:
 
 - Up / Down choose a tab; A picks it up and Up / Down carry it to another

@@ -214,6 +214,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		return ctrlSteamPanel(e)
 	}
+	// PC streaming (Moonlight) is modal too; its address keyboard takes the
+	// pad while up (moonlight_ui.go).
+	if mlPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
+		return ctrlMoonlightPanel(e)
+	}
 	// LAN play is modal over the game library; its host-address keyboard takes
 	// the pad while it is up, as the key chain already lets it take the keys.
 	if netplayPanel.open {
@@ -238,7 +246,7 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return ctrlEmuPanel(e, config)
 	}
 	// The clock popover is the other top-bar overlay: it takes the pad before the
-	// notification centre and the scene, and its D-pad maps onto months.
+	// notification centre and the scene, and its D-pad moves the selected day.
 	if homeCalendarOpen && calendarPopoverController(e) {
 		return true
 	}
@@ -343,6 +351,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// In Chat, Start sends what is typed; with nothing typed it falls through
 	// to the Start menu like everywhere else.
 	if e.Button == sdl.CONTROLLER_BUTTON_START && chatStartSendsDraft(config) {
+		return true
+	}
+	// So does Mail while a message is being written (mail_compose.go).
+	if e.Button == sdl.CONTROLLER_BUTTON_START && mailStartSends(config) {
 		return true
 	}
 	// Start opens the menu from every ordinary screen. Scenes that bind Start

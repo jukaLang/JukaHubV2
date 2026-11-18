@@ -20,8 +20,10 @@ package main
 // kernels the last close of /dev/disp resets the display's layers, and the
 // ports that open it per call never had to find out on these boards.
 //
-// Nothing here was run on a device from this desk: the commands and their
-// layout come from the sunxi driver's header and the ports that use them.
+// GET was run on a stock Smart Pro 1.1.0: steps 5, 6, 7 and 10 returned raw
+// 112, 133, 155 and 220. A one-step SET/GET round trip read 112 → 113 and
+// restored 112. Backlight enable/disable and JukaHub's full UI path still
+// need a live build before they can be called verified.
 
 import (
 	"fmt"

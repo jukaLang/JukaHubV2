@@ -125,11 +125,19 @@ func TestSyntheticEventsCarryPressState(t *testing.T) {
 				}
 			}
 		case *queuedMouseButtonEvent:
+			// The main loop dispatches on Type: a release sent as a
+			// MOUSEBUTTONDOWN made every tap two presses.
 			switch e.State {
 			case sdl.PRESSED:
 				mouseDowns++
+				if e.Type != sdl.MOUSEBUTTONDOWN {
+					t.Errorf("mouse press has Type %#x, want MOUSEBUTTONDOWN", e.Type)
+				}
 			case sdl.RELEASED:
 				mouseUps++
+				if e.Type != sdl.MOUSEBUTTONUP {
+					t.Errorf("mouse release has Type %#x, want MOUSEBUTTONUP", e.Type)
+				}
 			default:
 				t.Errorf("mouse button carries State %d, want PRESSED or RELEASED", e.State)
 			}

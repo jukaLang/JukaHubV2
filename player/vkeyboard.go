@@ -13,7 +13,9 @@ package main
 //   * rounded glass keys with Home's 3px accent focus ring and a short press
 //     animation; holding a letter offers its accents,
 //   * word suggestions from an embedded English list plus the words the user
-//     taught it (vkdict.go), and voice typing through Groq (vkvoice.go).
+//     taught it (vkdict.go), and voice typing through Groq (vkvoice.go);
+//     in the Terminal the strip offers whole command tokens instead and
+//     Select takes the first one (cmddeck_chips.go).
 //
 // Behaviour goals:
 //   * typing always lands in exactly one target (scene input, chat or unit
@@ -334,10 +336,15 @@ func vkActionLabel() string {
 		}
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
-		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget:
+		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
+		artworkAliasVKTarget:
 		return "Save"
+	case mlAddrVKTarget:
+		return mlVKActionLabel()
 	case bootLockVKTarget:
 		return bootLockKeyboardAction()
+	case feArchivePassVKTarget:
+		return "Extract"
 	case vkTargetScene:
 		switch {
 		case textBrowserAddressEditing:
@@ -606,8 +613,11 @@ func vkBuildGeometry() {
 	if stripH > 0 {
 		vkGeom.strip = sdl.Rect{X: contentX, Y: y, W: contentW, H: stripH}
 		n := 3
-		if stripMode == vkStripQuickURL || stripMode == vkStripQuickHost {
+		switch stripMode {
+		case vkStripQuickURL, vkStripQuickHost:
 			n = len(vkQuickChips(stripMode))
+		case vkStripTermTokens:
+			n = termChipMax
 		}
 		if n > len(vkGeom.cells) {
 			n = len(vkGeom.cells)
@@ -895,10 +905,18 @@ func vkCurrentText() string {
 		return alarmLabelBuffer
 	case homeTabsNameVKTarget:
 		return homeTabsNameBuffer
+	case artworkAliasVKTarget:
+		return artworkAliasBuffer
+	case mlAddrVKTarget:
+		return mlVKText()
+	case mailComposeVKTarget:
+		return mailComposeBuffer
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
 	case bootLockVKTarget:
 		return bootLockBuffer
+	case feArchivePassVKTarget:
+		return feArchivePass.buffer
 	case vkTargetBrowserURL:
 		return brwPref.buffer
 	}
@@ -977,6 +995,15 @@ func vkSetText(text string, config *Config) {
 	case homeTabsNameVKTarget:
 		// A collection is made or renamed on Done only (hometabs_collections_ui.go).
 		homeTabsNameBuffer = text
+	case artworkAliasVKTarget:
+		// The name covers are matched by is stored on Save only (artwork_choose.go).
+		artworkAliasBuffer = text
+	case mlAddrVKTarget:
+		// A PC's address is asked or saved on Done only (moonlight_ui.go).
+		mlVKSetText(text)
+	case mailComposeVKTarget:
+		// A Mail compose field changes on Done only (mail_compose.go).
+		mailComposeBuffer = text
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -1020,6 +1047,10 @@ func vkSetText(text string, config *Config) {
 	case bootLockVKTarget:
 		// The startup lock's password: checked on submit only (bootlock.go).
 		bootLockBuffer = text
+	case feArchivePassVKTarget:
+		// An encrypted archive's password: handed to 7-Zip on submit only, and
+		// never saved (files_extract_ui.go).
+		feArchivePass.buffer = text
 	case vkTargetBrowserURL:
 		// Same rule for the home page and a custom search address: a
 		// half-typed host never becomes either (browser_engines.go).
@@ -1179,6 +1210,12 @@ func vkTitle() string {
 		return "ALARM LABEL"
 	case homeTabsNameVKTarget:
 		return homeTabsNameKeyboardTitle()
+	case artworkAliasVKTarget:
+		return "NAME FOR COVERS"
+	case mlAddrVKTarget:
+		return mlVKTitle()
+	case mailComposeVKTarget:
+		return mailComposeKeyboardTitle()
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -1247,6 +1284,8 @@ func vkTitle() string {
 		return "GROQ API KEY"
 	case bootLockVKTarget:
 		return bootLockKeyboardTitle()
+	case feArchivePassVKTarget:
+		return "ARCHIVE PASSWORD"
 	case vkTargetBrowserURL:
 		return brwPrefTitle()
 	}
@@ -1318,6 +1357,12 @@ func vkPlaceholder() string {
 		return "Wake up, Medicine, Bus…"
 	case homeTabsNameVKTarget:
 		return "Couch co-op, RPGs to finish…"
+	case artworkAliasVKTarget:
+		return "Legend of Zelda, The - The Minish Cap"
+	case mlAddrVKTarget:
+		return mlVKPlaceholder()
+	case mailComposeVKTarget:
+		return mailComposeKeyboardHint()
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -1391,6 +1436,8 @@ func vkPlaceholder() string {
 		return "Paste your key from console.groq.com"
 	case bootLockVKTarget:
 		return bootLockKeyboardPlaceholder()
+	case feArchivePassVKTarget:
+		return feArchivePassPlaceholder()
 	case vkTargetBrowserURL:
 		return brwPrefPlaceholder()
 	}
@@ -1929,6 +1976,10 @@ func vkCloseKeyboard() {
 		// Nor a typed startup password (bootlock.go).
 		bootLockBuffer = ""
 	}
+	if vkTarget == feArchivePassVKTarget {
+		// Nor an archive's password; a submit has handed it to the job.
+		feArchivePassForget()
+	}
 	if vkTarget == vkTargetPSRemote && psPanelEditField == psEditLoginPIN {
 		// Nor a typed login passcode; a submit has read it already.
 		vkPSRemoteBuffer = ""
@@ -1944,6 +1995,15 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == homeTabsNameVKTarget {
 		homeTabsNameBuffer = ""
+	}
+	if vkTarget == artworkAliasVKTarget {
+		artworkAliasBuffer = ""
+	}
+	if vkTarget == mlAddrVKTarget {
+		mlVKClear()
+	}
+	if vkTarget == mailComposeVKTarget {
+		mailComposeBuffer = ""
 	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
@@ -2168,7 +2228,16 @@ func vkHandleControllerButton(button uint8, config *Config) bool {
 		vkMoveFocus(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		vkPadPress(config)
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// In the Terminal Select takes the first token chip, the pad's Tab
+		// (cmddeck_chips.go); with no chip it closes, as everywhere else.
+		if vkTarget == vkTargetTerm && termChipApply(0, config) {
+			vkKeySound()
+			return true
+		}
+		vkCloseKeyboard()
+		vkPlay(PlayBackSound)
+	case sdl.CONTROLLER_BUTTON_B:
 		vkCloseKeyboard()
 		vkPlay(PlayBackSound)
 	case sdl.CONTROLLER_BUTTON_START:
@@ -2459,6 +2528,12 @@ func vkSubmit(config *Config, askAI bool) {
 		// The same: the startup lock checks the password it was handed.
 		vkCloseKeyboard()
 		bootLockPasswordSubmit(config, text)
+	case feArchivePassVKTarget:
+		// The password as typed, spaces kept; closing clears it, so the job
+		// is taken first.
+		job, password := feArchivePass.job, feArchivePass.buffer
+		vkCloseKeyboard()
+		feArchivePasswordSubmit(job, password)
 	case vkTargetBrowserURL:
 		// The text was read above; the address applies only here, so B leaves
 		// the home page and the search engine as they were.
@@ -2492,6 +2567,18 @@ func vkSubmit(config *Config, askAI bool) {
 		// The same: B leaves the collections as they were.
 		vkCloseKeyboard()
 		homeTabsNameSubmit(text)
+	case artworkAliasVKTarget:
+		// And the game's name for covers (artwork_choose.go).
+		vkCloseKeyboard()
+		artworkAliasSubmit(text)
+	case mlAddrVKTarget:
+		// And a PC's address: nothing is asked or saved until here.
+		vkCloseKeyboard()
+		mlVKSubmit(text)
+	case mailComposeVKTarget:
+		// And B leaves the message as it was.
+		vkCloseKeyboard()
+		mailComposeSubmit(text)
 	case vkTargetDownloads:
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.

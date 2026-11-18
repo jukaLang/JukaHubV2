@@ -46,8 +46,13 @@ first, then the title without tags, articles and spacing. When none of those
 finds one, the closest title on the list is taken (the most shared words,
 near-misses like "Saphire" and joined-up names like `SuperMarioWorld2`
 included), so "Zelda Minish Cap" gets *The Legend of Zelda - The Minish Cap*
-and "Street Fighter Alpha 3" at worst another Street Fighter Alpha box. A title
-that shares too little with everything on the list gets no cover.
+and "Street Fighter Alpha 3" at worst another Street Fighter Alpha box. More
+pictures beat fewer: a sister console's list is asked too (Game Boy and Game Boy
+Color, Master System and Game Gear, Mega Drive with Sega CD and 32X, Neo Geo
+with Neo Geo CD and FBNeo…), first for the exact title, then for the closest,
+and a game with no box art anywhere gets its title screen or an in-game
+picture instead. A title that shares no real word with anything on those lists
+gets no picture.
 
 The **Built-in games** console lists JukaLand and the Synth (A opens them).
 Their covers ship inside JukaHub (`player/builtin_covers/`, drawn by
@@ -61,7 +66,7 @@ but nothing already saved is thrown away, and starting again scans the card and
 queues only what is still missing, so an interrupted or crashed run resumes
 where it left off. A title the
 thumbnail set does not have is remembered in
-`data/game-art/.missing-art.json` and not requested again for 30 days, so a
+`data/game-art/.missing-art.json` and not requested again for 14 days, so a
 library full of unlisted homebrew does not re-download 200 404s every time.
 Network errors are not cached — only a real 404 is.
 
@@ -71,7 +76,7 @@ Covers are also found without a press. About a minute and a half after JukaHub
 starts on a card that has never had a pass, and then at most once a day, a
 background pass scans the card once and asks the thumbnail set for the games
 that still have no cover, skipping the titles it already answered "not found"
-for within the 30 days above. Every half hour it also looks at the ROM folders
+for within the 14 days above. Every half hour it also looks at the ROM folders
 — the names in each console folder and the time of a game's sub-folder, not a
 walk of the card — so games copied onto the card get their covers within about
 half an hour instead of the next day.
@@ -495,6 +500,50 @@ If your card uses folder names the catalog does not recognise, create
 Keys are console names as the library shows them (case-insensitive). A path
 that no longer exists is ignored, so detection takes over again instead of
 failing.
+
+## On NextUI
+
+On a NextUI card (one with `.system/tg5040` or `.system/tg5050`) JukaHub uses
+NextUI's layout in place. Nothing is moved, and nothing in `.system`, `Roms`,
+`Saves` or `.userdata` is written.
+
+- **Folders.** `Roms/Display Name (TAG)` folders are read by their TAG (GB, GBC,
+  GBA, MGBA, FC, SFC, SUPA, MD, PS, PCE, FBN, …). The TAG is found the way
+  MinUI finds it: from the last `(` to the `)` after it, so `Game Boy (GB)
+  Hacks` is GB. Folders of the same console (GBA and MGBA) are grouped under
+  one console, as NextUI shows them. A TAG JukaHub does not know is still listed,
+  under the folder's own name. Every file NextUI would list in such a folder is
+  a game (pictures, notes, saves and `map.txt` excepted). These `Name (TAG)`
+  folders and `map.txt` are only read on a NextUI card; on CrossMix, stock or
+  Windows the library keeps reading the plain folder names it always did.
+- **map.txt.** Names from `map.txt` are shown unless you gave the game a title in
+  JukaHub, and entries it hides (a name starting with `.`) stay hidden.
+  JukaHub only reads the file.
+- **Launch.** A game in a `Name (TAG)` folder starts through
+  `Emus/<platform>/<TAG>.pak` if you added one, else NextUI's own `<TAG>.pak`,
+  with the variables NextUI's launcher exports (`PLATFORM`, `SDCARD_PATH`,
+  `BIOS_PATH`, `SAVES_PATH`, `CHEATS_PATH`, `USERDATA_PATH`, `LOGS_PATH`, …) and
+  NextUI's `bin` and `lib` first on the paths. `DEVICE` is `brick` on the Brick
+  (and Hammer), `brickpro` on the Brick Pro and `smartpro` on the Smart Pro, as
+  NextUI sets it. So BIOS stay in `Bios/<TAG>`, saves in `Saves/<TAG>`, cheats in
+  `Cheats/<TAG>` and save states in `.userdata/shared/<TAG>-<core>`, shared with
+  NextUI. NextUI's own slot-9 auto-resume is left alone (a stale
+  `/tmp/resume_slot.txt` is cleared before a launch). A game whose pak is
+  missing says so ("no emulator for VB games — NextUI needs VB.pak in
+  Emus/tg5040 on the card"). To use another emulator for one game, pick it in
+  the game's options → Emulator (it shows "Automatic · GBA.pak (NextUI)" until
+  you do); a pin or `game-launchers.json` still wins.
+- **Covers.** Covers already in `.media` (or MinUI's `.res`) are shown first and
+  never changed. A folder's own console icon is never taken as a game's cover.
+- **Saves.** The Save Manager and Syncthing see `Saves` and each state folder
+  ([SAVE_MANAGER.md](SAVE_MANAGER.md)).
+- **Recently played.** NextUI's list is copied into Continue once, after
+  JukaHub's own entries, for games still on the card.
+- **Tools entry.** JukaHub adds `Tools/<platform>/JukaHub.pak` to NextUI's
+  Tools list once, when it lives in `Apps/JukaHub`. Opening it starts JukaHub;
+  quitting JukaHub returns to NextUI's menu (the stock menu is never started
+  over it). Delete the `JukaHub.pak` folder to remove the entry; JukaHub does not
+  add it again.
 
 ## Continue
 

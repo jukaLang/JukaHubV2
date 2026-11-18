@@ -1,9 +1,9 @@
 # Time-lapse
 
-Every game launch can leave a two-minute film behind: one still every twenty
-seconds of play, assembled into a short mp4 when you quit the game. It costs
-nothing to enable, needs no emulator cooperation, and works for RetroArch, the
-standalone emulators and PortMaster ports alike.
+Every game launch can leave a short film behind: one still every twenty seconds
+of play, assembled into an MP4 when you quit the game. Recording needs no
+emulator cooperation. The framebuffer path is available on the stock Smart Pro;
+capturing actual game frames still needs a hands-on check for each emulator.
 
 ## Where the films go
 
@@ -25,9 +25,12 @@ only copy, and a later build can assemble it.
 
 The emulator owns the panel while it runs, and JukaHub is only waiting for the
 process to exit, so the film cannot come from JukaHub's own renderer. Each grab
-is a single `ffmpeg -f fbdev -i /dev/fb0` frame, downscaled to 640 px wide, and
-the same bundled ffmpeg assembles them at 24 fps into an H.264 mp4 with
-`+faststart` (plays on a phone without a re-mux).
+is a single `ffmpeg -f fbdev -i /dev/fb0` JPEG frame, downscaled to 640 px
+wide. The same ffmpeg assembles the frames at 24 fps into an MPEG-4 Part 2 MP4
+with `+faststart`. Stock Smart Pro firmware 1.1.0 has the MJPEG and MPEG-4
+encoders. It has no PNG or libx264 encoder; its H.264 V4L2 wrapper has no
+`/dev/video*` device to use. The app uses an installed ffmpeg, including the
+firmware's `/usr/bin/ffmpeg` when no copy is bundled.
 
 | Limit | Value | Why |
 |---|---|---|
@@ -59,8 +62,8 @@ Both are plain custom keys in `jukaconfig.json`:
 }
 ```
 
-Recording is on by default because the only thing it costs is a few megabytes on
-the card, and the feature switches itself off where it cannot work. It records
+Recording is on by default and uses a little CPU and card space during play.
+The feature switches itself off where it cannot work. It records
 the panel, not the emulator, so it also captures a launcher screen or a crash.
 
 ## When it does not record
@@ -80,5 +83,5 @@ Nothing is written outside `<data folder>/timelapses/`.
 |---|---|
 | No folder after a session | The game ran under a minute (under four frames), or `/dev/fb0` is unreadable. `grep timelapse jukahub.log` says which. |
 | Black or striped frames | The panel is drawn by a compositor that does not expose the framebuffer. Nothing to fix from the hub; the emulator's own recording is the fallback. |
-| Film is one still | The session was shorter than four intervals. Lower `timelapse_interval`. |
-| Encode toast | `ffmpeg` is missing or has no H.264 encoder in the build on the card. The frames stay in the dot-folder next to where the film would have been. |
+| Film shows a launcher or black frame | Check whether `/dev/fb0` contains that emulator's game picture on this firmware. |
+| Encode toast | Check `ffmpeg` and its MJPEG and MPEG-4 encoders. The frames stay in the dot-folder next to where the film would have been. |

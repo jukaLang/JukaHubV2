@@ -218,38 +218,12 @@ func trophySizeText(mb int64) string {
 	if tenths%10 == 0 || tenths >= 1000 {
 		return trophyNum(tenths/10) + " GB"
 	}
-	return fmt.Sprintf("%d.%d GB", tenths/10, tenths%10)
+	return formatDecimal(float64(tenths)/10, 1) + " GB"
 }
 
-// trophyNum is n with thousands grouped: "12,345".
-func trophyNum(n int64) string {
-	s := strconv.FormatInt(n, 10)
-	neg := strings.HasPrefix(s, "-")
-	if neg {
-		s = s[1:]
-	}
-	if len(s) <= 3 {
-		if neg {
-			return "-" + s
-		}
-		return s
-	}
-	var b strings.Builder
-	if neg {
-		b.WriteByte('-')
-	}
-	lead := len(s) % 3
-	if lead > 0 {
-		b.WriteString(s[:lead])
-	}
-	for i := lead; i < len(s); i += 3 {
-		if b.Len() > 0 && !(neg && b.Len() == 1) {
-			b.WriteByte(',')
-		}
-		b.WriteString(s[i : i+3])
-	}
-	return b.String()
-}
+// trophyNum is n with thousands grouped: "12,345" (formatNumber, so in the
+// interface language's way).
+func trophyNum(n int64) string { return formatNumber(n) }
 
 // trophyRow is one trophy's display data, formatted when the list is rebuilt
 // so a frame only draws strings it already has.
@@ -429,8 +403,8 @@ func trophyRoomRefresh(config *Config) {
 			row.when, row.whenLong = "Earned", "Earned"
 			if t, err := time.Parse(time.RFC3339, strings.TrimSpace(stamp)); err == nil {
 				row.stamp = t
-				row.when = "Earned " + t.Format("2 Jan 2006")
-				row.whenLong = "Earned " + t.Format("Monday, 2 January 2006") + " at " + clockDigits(config, t)
+				row.when = "Earned " + formatDate(config, t)
+				row.whenLong = "Earned " + formatDateLong(config, t) + " at " + clockDigits(config, t)
 			}
 		} else {
 			cur, goal := trophyProgressWith(a, d, &st)

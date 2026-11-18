@@ -38,8 +38,6 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -272,82 +270,12 @@ func emuDesktopManagedCores(coresDir string) map[string]coreBuild {
 	return out
 }
 
-// emuDesktopCoreRunner brings the managed RetroArch's cores forward:
-// runInstalledCoreUpdates' steps over that RetroArch's cores alone, with the
-// same rules — a build refused before is not fetched again, the pass stops
-// while the disk still has room, a stop ends it between cores — and the same
-// report. (runInstalledCoreUpdates updates every RetroArch the inventory finds,
-// which a press may do and an unattended pass must not.)
+// emuDesktopCoreRunner brings the managed RetroArch's cores forward: the
+// automatic pass's core run (coreAutoUpdateRunner, runInstalledCoreUpdates'
+// rules and report) over that RetroArch's cores alone. A press may update every
+// RetroArch the inventory finds; an unattended pass must not.
 func emuDesktopCoreRunner(coresDir string) emuAutoCoreRunner {
-	return func(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
-		var report emuInstallReport
-		notify := func(phase, detail string) {
-			if progress != nil {
-				progress(phase, detail)
-			}
-		}
-		notify(installPhaseResolving, "")
-		index, err := fetchCoreIndex(ctx, client)
-		if err != nil {
-			report.Errors = append(report.Errors, "core index: "+err.Error())
-			return report
-		}
-		report.Checked = true
-		active := emuDesktopManagedCores(coresDir)
-		planned := planCoreUpdates(index, active)
-		report.Current = len(active) - len(planned)
-		if report.Current < 0 {
-			report.Current = 0
-		}
-		updates := make([]coreUpdate, 0, len(planned))
-		for _, upd := range planned {
-			if reason, refused := coreBuildRefused(upd.Core, upd.CRC32); refused {
-				logDebug("emulators", "core %s %s not fetched: refused before (%s)", upd.Core, upd.Date, reason)
-				report.KnownRefused++
-				continue
-			}
-			updates = append(updates, upd)
-		}
-		pool := compatCorePoolDir()
-		for i, upd := range updates {
-			if ctx.Err() != nil {
-				report.Interrupted = true
-				break
-			}
-			if free, err := freeBytes(filepath.Dir(upd.Active)); err == nil && free < coreUpdateFreeFloor(upd.Active) {
-				report.LowSpace = bootFormatBytes(free)
-				logWarn("emulators", "core updates stopped before %s: only %s free", upd.Core, report.LowSpace)
-				break
-			}
-			notify(installPhaseDownload, fmt.Sprintf("%s (%d/%d)", coreConfigDisplayName(upd.Core), i+1, len(updates)))
-			build, err := fetchCoreUpdate(ctx, client, upd, pool)
-			if err == nil {
-				var target string
-				target, _, err = activateCoreBuild(build)
-				emuCRCForget(target)
-			}
-			if err != nil {
-				var refused *coreRefusedError
-				switch {
-				case ctx.Err() != nil:
-					report.Interrupted = true
-				case errors.As(err, &refused):
-					report.Refused = append(report.Refused, coreConfigDisplayName(upd.Core))
-					if report.RefusedNote == "" {
-						report.RefusedNote = err.Error()
-					}
-				default:
-					report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
-				}
-				if report.Interrupted {
-					break
-				}
-				continue
-			}
-			report.Updated = append(report.Updated, coreConfigDisplayName(upd.Core))
-		}
-		return report
-	}
+	return coreAutoUpdateRunner(func(b coreBuild) bool { return emuPathWithin(b.Path, coresDir) })
 }
 
 // ── The Windows emulators as updaters ───────────────────────────────────────

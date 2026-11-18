@@ -28,6 +28,10 @@ package main
 //     with its tile selected, where A starts it and X installs it. A spoken
 //     command never installs anything.
 //
+// Home search offers the same targets (homeSearchSheetScreens, INP-23), and
+// presses — no longer focuses — a Settings row that is only a door to a page
+// of the same name, so "emulators" there opens the page too.
+//
 // The tile list is emulatorEntries(), which is cached; nothing here scans the
 // card or drops that cache, so a command costs one walk over a short list.
 // Main thread only, like the rest of the voice catalog.
@@ -90,6 +94,25 @@ func voiceEmuPinnedOpens(name string) bool {
 // same name twice made "open RetroArch" ask which of two identical rows was
 // meant.
 func voiceEmulatorTargets(existing []voiceTarget) []voiceTarget {
+	return voiceEmulatorTargetsFrom(existing, emulatorEntries())
+}
+
+// voiceEmuCachedEntries is the Emulators page's tile list when it is built,
+// without building it (that walks the card): built is false until something
+// has asked for it since the last change. Home search, which opens on the
+// render thread, offers the tiles only from here (homeSearchSheetScreens).
+func voiceEmuCachedEntries() (entries []emuEntry, built bool) {
+	// TryLock: emulatorEntries holds the lock for its whole walk of the card;
+	// a sheet opening meanwhile must not wait for it (it warms up instead).
+	if !emuCache.mu.TryLock() {
+		return nil, false
+	}
+	defer emuCache.mu.Unlock()
+	return emuCache.entries, emuCache.built
+}
+
+// voiceEmulatorTargetsFrom is voiceEmulatorTargets over a given tile list.
+func voiceEmulatorTargetsFrom(existing []voiceTarget, entries []emuEntry) []voiceTarget {
 	taken := make(map[string]bool, 64)
 	for _, t := range existing {
 		if t.Kind == voiceTargetScreen || t.Kind == voiceTargetApp {
@@ -115,7 +138,7 @@ func voiceEmulatorTargets(existing []voiceTarget) []voiceTarget {
 	if t, ok := voiceEmuManagedPPSSPP(); ok {
 		add(t)
 	}
-	for _, e := range emulatorEntries() {
+	for _, e := range entries {
 		if t, ok := voiceEmuTileTarget(e); ok {
 			add(t)
 		}

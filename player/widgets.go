@@ -327,33 +327,58 @@ func batterySysfsDir() string {
 // false for a link, so the old IsDir check skipped every battery and the Smart
 // Pro read "unknown". The lookup therefore follows the link with os.Stat and
 // prefers an entry that actually exposes a charge level.
+//
+// The PMIC's name differs by model (axp2202-battery on the A133P handhelds;
+// the Smart Pro S's AXP717 driver names its own), so the kernel's type
+// "Battery" decides first and the name only where a driver leaves the type
+// out. An entry with scope "Device" is a peripheral's battery — a paired game
+// pad or mouse (bt_padinfo.go reads those) — and never the handheld's own.
 func batterySysfsDirIn(base string) string {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return ""
 	}
-	var named, withCapacity string
+	var typed, levelNamed, named, withCapacity string
 	for _, entry := range entries {
 		path := filepath.Join(base, entry.Name())
 		info, err := os.Stat(path) // follows the symlink
 		if err != nil || !info.IsDir() {
 			continue
 		}
+		kind := powerSupplyAttr(path, "type")
+		if powerSupplyAttr(path, "scope") == "device" || (kind != "" && kind != "battery") {
+			continue
+		}
 		name := strings.ToLower(entry.Name())
 		looksLikeBattery := strings.Contains(name, "bat")
+		hasLevel := batteryLevelFile(path) != ""
 		switch {
-		case looksLikeBattery && batteryLevelFile(path) != "":
-			return path
+		case kind == "battery" && hasLevel && typed == "":
+			typed = path
+		case looksLikeBattery && hasLevel && levelNamed == "":
+			levelNamed = path
 		case looksLikeBattery && named == "":
 			named = path
-		case batteryLevelFile(path) != "" && withCapacity == "":
+		case hasLevel && withCapacity == "":
 			withCapacity = path
 		}
 	}
-	if named != "" {
-		return named
+	for _, pick := range []string{typed, levelNamed, named} {
+		if pick != "" {
+			return pick
+		}
 	}
 	return withCapacity
+}
+
+// powerSupplyAttr reads one small power_supply attribute, lower-cased and
+// trimmed; "" when the driver does not expose it.
+func powerSupplyAttr(dir, name string) string {
+	data, err := os.ReadFile(filepath.Join(dir, name))
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(string(data)))
 }
 
 // batteryLevelFile names the first readable charge source in a battery
@@ -608,6 +633,8 @@ func widgetsTick(config *Config) {
 	batteryTrendNote(percent, cableIn)
 	// The same reading feeds the time-to-empty estimate (battery_eta.go).
 	batteryETANote(percent, cableIn)
+	// And the battery history graph (battgraph.go).
+	battGraphNote(percent, cableIn)
 	if batterySaverEnabled(config) {
 		engage := batterySaverShouldEngage(percent, batteryHoldingCharge(), batterySaverActive)
 		applyBatterySaver(config, engage, percent)
@@ -825,7 +852,7 @@ func ensureSmartSettingsScene(config *Config) {
 		{"Battery saver (automatic)", "batterySaver",
 			"At 20% or less: slower cadence, no motion, OLED theme."},
 		{"Light & dark by time of day", "timeOfDayTheme",
-			"Day and night themes and times: Settings → Display & theme."},
+			"Day and night themes and times: Settings → Theme & look."},
 		{"Save & suspend at 3%", "lowBatteryGuard",
 			"While a game runs: save state, sync, then suspend."},
 	}

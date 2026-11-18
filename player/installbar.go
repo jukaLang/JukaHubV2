@@ -466,25 +466,9 @@ func installBarSnapshot() (visible bool, tool, phase, detail string, done, total
 		installBar.done, installBar.total, installBar.speed, age, !installBar.endedAt.IsZero()
 }
 
-// formatInstallBytes renders byte counts compactly ("78.4 MB", "912 KB").
-func formatInstallBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	// int64 reaches exabytes, so the table covers every reachable unit; the
-	// clamp keeps a future caller from indexing past it.
-	units := "KMGTPE"
-	if exp >= len(units) {
-		exp = len(units) - 1
-	}
-	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), units[exp])
-}
+// formatInstallBytes renders byte counts compactly ("78.4 MB", "912.0 KB"):
+// formatSize (clockformat.go), the one size format every screen shows.
+func formatInstallBytes(n int64) string { return formatSize(n) }
 
 // formatInstallSpeed renders a transfer rate ("3.2 MB/s").
 func formatInstallSpeed(bps float64) string {

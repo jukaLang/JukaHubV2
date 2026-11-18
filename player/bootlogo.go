@@ -3,11 +3,10 @@ package main
 // bootlogo.go — the picture the handheld shows while it powers on.
 //
 // Before Linux starts, the firmware's bootloader draws a BMP kept on the
-// device's internal storage. JukaHub can put its own boot screen there — the
-// logo and the wordmark on the same pixels as the first frame of its boot
-// animation (bootlogo_layout.go places both) — so a handheld that starts in
-// JukaHub powers on as one continuous picture instead of the TrimUI logo, a
-// black gap and then an app.
+// device's internal storage. On a full-screen BMP JukaHub places its tile and
+// name on the same pixels as the first animation frame (bootlogo_layout.go).
+// The stock Smart Pro 1.1.0 instead stores a 396×66 banner, so JukaHub draws
+// a horizontal mark in that file's own shape.
 //
 // It is the one place JukaHub writes outside the SD card, so the installer is
 // narrow on purpose:
@@ -36,9 +35,9 @@ package main
 //     not read back puts the previous picture back.
 //
 // Settings → General → Boot logo installs it (A twice) and puts the previous
-// picture back (A twice again). Nothing here was run on a device from this
-// desk: the partition layout is Allwinner's documented one, and the installer
-// says "Unavailable" with the reason rather than guess on anything else.
+// picture back (A twice again). The Smart Pro 1.1.0 bootloader partition and
+// BMP were inspected read-only; installing and restoring still need a live
+// JukaHub build and a reboot to verify the displayed image.
 
 import (
 	"bytes"
@@ -241,16 +240,23 @@ func bmpParse(data []byte) (bmpInfo, error) {
 	return info, nil
 }
 
+// bootLogoStockBanner is the Smart Pro 1.1.0 logo read from its bootloader FAT
+// partition. The firmware stores this small mark rather than a full screen.
+// Keep the exception exact so another small bitmap is not rewritten by guess.
+func bootLogoStockBanner(info bmpInfo) bool {
+	return info.Width == 396 && info.Height == 66 && info.BitCount == 32 &&
+		info.Compression == bmpBIRGB && info.HeaderSize == 40 && info.DataOffset == 54
+}
+
 // bootLogoAcceptable applies the installer's own limits to a parsed stock
-// logo of total bytes: a landscape picture of a plausible screen size, no more
-// than 8 MiB, whose size field agrees with its pixel rows. A portrait logo
-// means the firmware stores it rotated, and which way is not something to
-// guess.
+// logo of total bytes: a landscape screen or the known Smart Pro banner, no
+// more than 8 MiB, whose size field agrees with its pixel rows. A portrait
+// logo means the firmware stores it rotated, which we cannot safely guess.
 func bootLogoAcceptable(info bmpInfo, total int) error {
 	if total > bootLogoMaxBytes {
 		return fmt.Errorf("%w (%d bytes is over 8 MiB)", errBootLogoFormat, total)
 	}
-	if info.Width < bootLogoMinW || info.Height < bootLogoMinH || info.Width > bootLogoMaxSide || info.Height > bootLogoMaxSide {
+	if !bootLogoStockBanner(info) && (info.Width < bootLogoMinW || info.Height < bootLogoMinH || info.Width > bootLogoMaxSide || info.Height > bootLogoMaxSide) {
 		return fmt.Errorf("%w (%dx%d is no screen size)", errBootLogoFormat, info.Width, info.Height)
 	}
 	if info.Height > info.Width {
@@ -356,6 +362,13 @@ func bmpEncode24(rgba []byte, w, h int) []byte {
 // wordmark's own surface. The wordmark's left edge is (w-ww)/2 in whole
 // pixels, the same rounding the boot animation draws it with.
 func bootLogoCompose(w, h int, logo *image.NRGBA, word []uint8, ww, wh int) []byte {
+	l := bootLogoPlace(int32(w), int32(h), int32(wh))
+	return bootLogoComposeAt(w, h, logo, int(l.Sprite.X), int(l.Sprite.Y), word, ww, wh, (w-ww)/2, int(l.WordTop))
+}
+
+// bootLogoComposeAt paints the same opaque mark at explicit positions. The
+// stock Smart Pro's short boot banner uses a horizontal layout.
+func bootLogoComposeAt(w, h int, logo *image.NRGBA, logoX, logoY int, word []uint8, ww, wh, wordX, wordY int) []byte {
 	if w <= 0 || h <= 0 {
 		return nil
 	}
@@ -372,23 +385,21 @@ func bootLogoCompose(w, h int, logo *image.NRGBA, word []uint8, ww, wh int) []by
 		d[1] = uint8((g*a + uint32(d[1])*(255-a) + 127) / 255)
 		d[2] = uint8((b*a + uint32(d[2])*(255-a) + 127) / 255)
 	}
-	l := bootLogoPlace(int32(w), int32(h), int32(wh))
 	if logo != nil {
 		b := logo.Rect
 		for y := 0; y < b.Dy(); y++ {
 			for x := 0; x < b.Dx(); x++ {
 				i := logo.PixOffset(b.Min.X+x, b.Min.Y+y)
 				p := logo.Pix[i : i+4]
-				over(int(l.Sprite.X)+x, int(l.Sprite.Y)+y, uint32(p[0]), uint32(p[1]), uint32(p[2]), uint32(p[3]))
+				over(logoX+x, logoY+y, uint32(p[0]), uint32(p[1]), uint32(p[2]), uint32(p[3]))
 			}
 		}
 	}
 	if ww > 0 && wh > 0 && len(word) >= ww*wh {
-		ox, oy := (w-ww)/2, int(l.WordTop)
 		ink := bootLogoInk
 		for y := 0; y < wh; y++ {
 			for x := 0; x < ww; x++ {
-				over(ox+x, oy+y, uint32(ink.R), uint32(ink.G), uint32(ink.B), uint32(word[y*ww+x]))
+				over(wordX+x, wordY+y, uint32(ink.R), uint32(ink.G), uint32(ink.B), uint32(word[y*ww+x]))
 			}
 		}
 	}
@@ -408,10 +419,14 @@ type bootLogoArtwork struct {
 
 // bootLogoWordmark rasterises the wordmark for a screen h pixels tall, with the
 // face and size the boot animation draws it with (Inter at bootLogoWordPx, no
-// accessibility scaling), so both pictures match. It calls SDL_ttf and must run
-// on the render thread.
+// accessibility scaling, whatever font Settings → Display picked), so both
+// pictures match. It calls SDL_ttf and must run on the render thread.
 func bootLogoWordmark(h int) ([]uint8, int, int, bool) {
-	font := loadCachedFont(homeUIFontFile, bootLogoWordPx(int32(h)))
+	px := bootLogoWordPx(int32(h))
+	if h == 66 { // the stock Smart Pro banner is 396×66
+		px = 42
+	}
+	font := homeUIInterFont(px)
 	return bootLiquidTextAlpha(font, bootLogoWordText)
 }
 
@@ -423,6 +438,16 @@ func bootLogoPicture(info bmpInfo, art bootLogoArtwork) ([]byte, error) {
 	src := brandLogoSource()
 	if src == nil {
 		return nil, errors.New("the JukaHub logo artwork could not be decoded")
+	}
+	if bootLogoStockBanner(info) {
+		const side, gap, margin = 52, 12, 6
+		if art.WordW+side+gap > info.Width-2*margin || art.WordH > info.Height-2*margin {
+			return nil, errors.New("the JukaHub wordmark does not fit the stock boot banner")
+		}
+		logo := brandResample(src, side)
+		left := (info.Width - side - gap - art.WordW) / 2
+		return bootLogoComposeAt(info.Width, info.Height, logo, left, (info.Height-side)/2,
+			art.Word, art.WordW, art.WordH, left+side+gap, (info.Height-art.WordH)/2), nil
 	}
 	l := bootLogoPlace(int32(info.Width), int32(info.Height), int32(art.WordH))
 	logo := brandResample(src, int(l.Sprite.W))

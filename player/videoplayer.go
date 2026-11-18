@@ -928,7 +928,7 @@ func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, 
 		// some CDNs answer with 403 — the handheld then rejected a stream
 		// the decoder itself plays, and fell back to downloading the file.
 		args = append(args, "-user_agent", streamUserAgent,
-			"-rw_timeout", "15000000")
+			"-rw_timeout", ffmpegReadTimeoutArg()) // the decoders' bound too (videorecover.go)
 	}
 	// The firmware's own ffprobe cannot open https; such a URL is handed to
 	// it through the loopback relay (ffmpegtls.go).
@@ -1146,11 +1146,21 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	frameSize := int(frameBytes)
 	buf := make([]byte, frameSize)
 	frameCount := 0
+	var lastWait time.Duration
 	clock := &sess.av
 	isPaused := func() bool {
 		embeddedPlayer.mu.Lock()
 		defer embeddedPlayer.mu.Unlock()
 		return embeddedPlayer.phase == "paused"
+	}
+	// A read of an http(s) input that hangs — HLS on a network that went
+	// silently dead, which ffmpeg's own timeouts do not end — stops ffmpeg
+	// after mediaStallGiveUp, and the stall is reported below
+	// (videorecover.go). Stopped when the loop is over, and on every return.
+	var watch *mediaReadWatch
+	if isHTTPMediaURL(path) {
+		watch = startMediaReadWatch(sess.ctx.Done(), clock, isPaused, func() { _ = cmd.Process.Kill() })
+		defer watch.Stop()
 	}
 
 	// NOTE: playback speed is intentionally kept at 1x here. Applying
@@ -1177,7 +1187,14 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			}
 			continue
 		}
-		if _, err := io.ReadFull(pipe, buf); err != nil {
+		readAt := time.Now()
+		watch.begin()
+		_, err := io.ReadFull(pipe, buf)
+		watch.end()
+		if err != nil {
+			// How long the pipe kept us waiting before it closed tells a stall
+			// (ffmpeg gave up on a quiet input) from an end (mediaDecoderStalled).
+			lastWait = time.Since(readAt)
 			break
 		}
 		frameCount++
@@ -1247,6 +1264,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	// stderr: whether this was the end of the file or a stream that would not
 	// open (or broke off) is in there. The deferred Wait then has nothing left
 	// to do.
+	watch.Stop()
 	_ = cmd.Wait()
 	// A cancelled session (stop, seek, next video) is neither an end of stream
 	// nor a failure — checked after the Wait, so a Stop during it counts too.
@@ -1255,6 +1273,12 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	}
 	position := startSec + float64(frameCount)/fps
 	stderr := stderrTail.String()
+	if watch.Fired() && frameCount == 0 {
+		// It hung opening the input: a failure with the watch's reason, not
+		// ffmpeg's (it was stopped before it could say anything).
+		logWarn("video", "stream stalled: no picture for %.0f s, the decoder was stopped", lastWait.Seconds())
+		return failure(0, position, mediaWatchdogReason())
+	}
 	if frameCount == 0 && avNoteFilterMissing(stderr, filtered) {
 		// This ffmpeg has no fps filter: once more without it.
 		return startFFmpegDecoder(sess, ffmpegPath, path, width, height, startSec)
@@ -1263,6 +1287,17 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		// A certificate failure routes the next attempt through the relay.
 		ffmpegNoteTLSFailure(stderr)
 		return failure(frameCount, position, ffmpegFailureReason(stderr))
+	}
+	// A stream that went quiet ran out its read timeout and reconnects
+	// (ffmpegStreamInputArgs), or hung until the watch stopped it: that is no
+	// end either.
+	if mediaDecoderStalled(frameCount, isHTTPMediaURL(path), pageStream, position, duration, lastWait, stderr, watch.Fired()) {
+		if watch.Fired() {
+			logWarn("video", "stream stalled: no picture for %.0f s, the decoder was stopped", lastWait.Seconds())
+			return failure(frameCount, position, mediaWatchdogReason())
+		}
+		logWarn("video", "stream stalled: the decoder waited %.0f s before its input closed", lastWait.Seconds())
+		return failure(frameCount, position, mediaStallReason(stderr))
 	}
 	// Only a decoder that ran to the end raises the flag.
 	if frameCount > 0 {
@@ -1884,7 +1919,10 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 		// next video's history entry every five seconds.
 		if sess := playbackCurrentSession(); sess != nil && sess.pageURL != "" && state.duration > 0 {
 			updateRecentPosition(sess.pageURL, fraction*state.duration)
-			saveFavorites()
+			// Debounced: this runs from the frame, and a synchronous
+			// jukauser.json write (several fsyncs) every five seconds made
+			// playback and the controls stutter (home_continue.go).
+			homePersistFavorites()
 		}
 	}
 }

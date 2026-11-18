@@ -12,16 +12,19 @@ package main
 
 import (
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	// powerRTCWakealarm is the first RTC's wake alarm. Written as "+N" it
-	// wakes the device N seconds from now in the RTC's own time, so an RTC
-	// kept in local time instead of UTC does not shift it.
-	powerRTCWakealarm = "/sys/class/rtc/rtc0/wakealarm"
+	// powerRTCClass holds the RTCs. A wake alarm written as "+N" wakes the
+	// device N seconds from now in the RTC's own time, so an RTC kept in
+	// local time instead of UTC does not shift it.
+	powerRTCClass = "/sys/class/rtc"
 	// powerProcScanMax bounds the /proc walk; a handheld never runs this many
 	// processes.
 	powerProcScanMax = 1024
@@ -58,14 +61,103 @@ func powerRTCWakeIn(d time.Duration) func() {
 	if secs < 1 {
 		secs = 1
 	}
-	// A pending alarm has to be cleared before a new one is accepted.
-	_ = os.WriteFile(powerRTCWakealarm, []byte("0"), 0o644)
-	if err := os.WriteFile(powerRTCWakealarm, []byte("+"+strconv.FormatInt(secs, 10)), 0o644); err != nil {
-		logWarn("sleep", "could not set the wake-up alarm for the next alarm: %v", err)
+	wakealarm := powerRTCWakealarm()
+	if wakealarm == "" {
+		logWarn("sleep", "no RTC with a wake alarm: the next alarm rings when the device is woken")
 		return func() {}
 	}
-	logInfo("sleep", "the device wakes itself in %s for an alarm", (time.Duration(secs) * time.Second).String())
-	return func() { _ = os.WriteFile(powerRTCWakealarm, []byte("0"), 0o644) }
+	// A pending alarm has to be cleared before a new one is accepted.
+	_ = os.WriteFile(wakealarm, []byte("0"), 0o644)
+	if err := os.WriteFile(wakealarm, []byte("+"+strconv.FormatInt(secs, 10)), 0o644); err != nil {
+		logWarn("sleep", "could not set the RTC wake-up alarm: %v", err)
+		return func() {}
+	}
+	logInfo("sleep", "the device wakes itself in %s (an alarm, or the power off after sleeping)", (time.Duration(secs) * time.Second).String())
+	return func() { _ = os.WriteFile(wakealarm, []byte("0"), 0o644) }
+}
+
+// powerRTCWakeSet arms the wake alarm secs from now in the RTC's own time,
+// without a log line (nextui_sleep.go arms it as a NextUI game goes to
+// sleep). It reports whether the alarm was written.
+func powerRTCWakeSet(secs int64) bool {
+	wakealarm := powerRTCWakealarmCached()
+	if wakealarm == "" || secs < 1 {
+		return false
+	}
+	// A pending alarm has to be cleared before a new one is accepted.
+	_ = os.WriteFile(wakealarm, []byte("0"), 0o644)
+	return os.WriteFile(wakealarm, []byte("+"+strconv.FormatInt(secs, 10)), 0o644) == nil
+}
+
+// powerRTCWakeClear clears the wake alarm, quietly.
+func powerRTCWakeClear() {
+	if wakealarm := powerRTCWakealarmCached(); wakealarm != "" {
+		_ = os.WriteFile(wakealarm, []byte("0"), 0o644)
+	}
+}
+
+// powerRTCWakealarmPath caches powerRTCWakealarm once it found one: the RTCs
+// do not change while JukaHub runs, and nextui_sleep.go reads the clock four
+// times a second. Not found is looked for again next time.
+var powerRTCWakealarmPath atomic.Pointer[string]
+
+// powerRTCWakealarmCached is powerRTCWakealarm through that cache.
+func powerRTCWakealarmCached() string {
+	if p := powerRTCWakealarmPath.Load(); p != nil {
+		return *p
+	}
+	p := powerRTCWakealarm()
+	if p != "" {
+		powerRTCWakealarmPath.Store(&p)
+	}
+	return p
+}
+
+// powerRTCNow is the time the waking RTC (the one powerRTCWakealarm arms)
+// holds, in whole seconds since the epoch — the clock its alarm runs on,
+// which keeps counting through a suspend whatever the kernel's clocks do.
+// ok is false where it cannot be read.
+func powerRTCNow() (int64, bool) {
+	wakealarm := powerRTCWakealarmCached()
+	if wakealarm == "" {
+		return 0, false
+	}
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(wakealarm), "since_epoch"))
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// powerRTCWakealarm is the wake alarm of the first RTC that has one: rtc0 on
+// the A133P handhelds; on a board where rtc0 is a PMIC clock without an alarm
+// (the Smart Pro S's 5.15 BSP may register the SoC's RTC second) the next
+// one. "" when no RTC can wake the device.
+func powerRTCWakealarm() string {
+	names, err := sysfsClassChildren(powerRTCClass)
+	if err != nil {
+		return ""
+	}
+	sort.SliceStable(names, func(i, j int) bool { return powerRTCIndex(names[i]) < powerRTCIndex(names[j]) })
+	for _, name := range names {
+		path := filepath.Join(powerRTCClass, name, "wakealarm")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+// powerRTCIndex is N in "rtcN" (rtc10 after rtc2), large for other names.
+func powerRTCIndex(name string) int {
+	if n, err := strconv.Atoi(strings.TrimPrefix(name, "rtc")); err == nil && n >= 0 {
+		return n
+	}
+	return 1 << 30
 }
 
 // powerChildGroupStopped reports whether pid, or any process in the group pid

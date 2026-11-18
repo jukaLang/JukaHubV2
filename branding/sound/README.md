@@ -14,6 +14,12 @@ the app. This folder holds the tools they were designed with.
   carries the tail.
 - **Shutdown (2.1 s)** is the mirror: three bells fall A♭ E♭ D♭ back to the
   root, right to left, over a pad that closes.
+- **Cinematic and Roll boot styles** push the startup chime back behind their
+  entrance (at most 2.5 s) and add a knock on every landing: a low sine
+  falling to half its pitch under a short burst of muffled noise
+  (`chimeThudNote`). Cinematic knocks three times as the logo lands and hops
+  (190, 180 and 175 Hz, each quieter); Roll knocks at 420 Hz on every
+  quarter-turn that lands on screen, the last a little louder.
 
 Bells are two-operator FM with a harmonic 3:1 ratio, so they ring like glass
 rather than bronze, plus a faint struck-bar partial for the strike. Everything
@@ -37,9 +43,18 @@ scores, constants and block-streaming structure. Edit both together.
 cc -O2 -o chime chime_reference.c -lm
 ./chime start 48000 startup.wav 1.55
 ./chime stop  48000 shutdown.wav 1.50
-python3 analyze.py startup.wav shutdown.wav   # levels, spectrum, spectrogram PNG
+./chime cinematic 48000 cinematic.wav 1.55        # add "lift" for a power-on from the firmware's logo
+./chime roll 48000 roll.wav 1.55                  # Smart Pro; "1024 768" lays the roll out for the Brick
+python3 analyze.py startup.wav shutdown.wav cinematic.wav roll.wav   # levels, spectrum, spectrogram PNG
 ```
 
 The program prints the gain that would put the peak at 0.56 of full scale;
-copy it into `chimeStartGain` / `chimeStopGain`. Listen to the result (and
-run `analyze.py`): no Go test checks the chimes.
+copy it into `chimeStartGain` / `chimeStopGain`. For the boot styles it also
+prints the lead, how far the bells moved and each knock's time, pitch and
+level; the knock timings mirror `prepareDrop` / `prepareRoll` in
+`player/bootstyles.go` and the logo layout in `bootlogo_layout.go`, so change
+them together too. With the knocks the styles' peaks stay under the start
+chime's (the gain stays 1.55). Listen to the result (and run `analyze.py`): no
+Go test checks the chimes. Whether the knocks are audible on the handheld's
+speakers is a device check (HW-1 step 3). Rendered WAVs are not kept in the
+repo.

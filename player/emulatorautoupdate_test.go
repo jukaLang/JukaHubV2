@@ -107,7 +107,7 @@ func TestRunInstalledCoreUpdatesUpdatesWithoutAPress(t *testing.T) {
 	var phases []string
 	report := runInstalledCoreUpdates(context.Background(), client, func(phase, detail string) {
 		phases = append(phases, phase)
-	})
+	}, nil)
 
 	if !report.Checked {
 		t.Fatalf("report says the index was never read: %+v", report)
@@ -150,7 +150,7 @@ func TestRunInstalledCoreUpdatesLeavesACurrentCardAlone(t *testing.T) {
 	index := fmt.Sprintf("2026-10-24 %s snes9x_libretro.so.zip\n", crcOf([]byte(body)))
 	client := coreIndexServer(t, index, nil)
 
-	report := runInstalledCoreUpdates(context.Background(), client, nil)
+	report := runInstalledCoreUpdates(context.Background(), client, nil, nil)
 	if len(report.Updated) != 0 || len(report.Errors) != 0 {
 		t.Fatalf("report = %+v, want an up-to-date card", report)
 	}
@@ -179,7 +179,7 @@ func TestRunInstalledCoreUpdatesReportsAnUnreachableIndex(t *testing.T) {
 		server.Close()
 	})
 
-	report := runInstalledCoreUpdates(context.Background(), server.Client(), nil)
+	report := runInstalledCoreUpdates(context.Background(), server.Client(), nil, nil)
 	if report.Checked {
 		t.Fatal("a check that never read the index reported Checked")
 	}
@@ -201,7 +201,7 @@ func TestCoreBackupsStayAtFive(t *testing.T) {
 		archive := zestCoreZip(t, "mgba_libretro.so", body)
 		client := coreIndexServer(t, fmt.Sprintf("2026-10-%02d %s mgba_libretro.so.zip\n", 20+i, crcOf([]byte(body))),
 			map[string][]byte{"mgba_libretro.so.zip": archive})
-		if report := runInstalledCoreUpdates(context.Background(), client, nil); len(report.Errors) != 0 {
+		if report := runInstalledCoreUpdates(context.Background(), client, nil, nil); len(report.Errors) != 0 {
 			t.Fatalf("update %d: %v", i, report.Errors)
 		}
 		// The loop re-points the index/base URLs at a fresh server; the fixture
@@ -410,7 +410,7 @@ func TestRunInstalledCoreUpdatesSkipsARefusedBuild(t *testing.T) {
 	coreRefusalRecord("mgba", crcOf(payload), "2026-11-09", coreCannotLoadReason+"needs GLIBC_2.34")
 	client := coreIndexServer(t, fmt.Sprintf("2026-11-09 %s mgba_libretro.so.zip\n", crcOf(payload)), nil)
 
-	report := runInstalledCoreUpdates(context.Background(), client, nil)
+	report := runInstalledCoreUpdates(context.Background(), client, nil, nil)
 	if report.KnownRefused != 1 || len(report.Updated) != 0 || len(report.Errors) != 0 || len(report.Refused) != 0 {
 		t.Fatalf("report = %+v, want the refused build skipped quietly", report)
 	}
@@ -451,7 +451,7 @@ func TestRunInstalledCoreUpdatesUpdatesTheCoreWhereItLives(t *testing.T) {
 	payload := []byte("the newer mgba build")
 	client := coreIndexServer(t, fmt.Sprintf("2026-11-09 %s mgba_libretro.so.zip\n", crcOf(payload)),
 		map[string][]byte{"mgba_libretro.so.zip": zestCoreZip(t, "mgba_libretro.so", string(payload))})
-	report := runInstalledCoreUpdates(context.Background(), client, nil)
+	report := runInstalledCoreUpdates(context.Background(), client, nil, nil)
 	if len(report.Updated) != 1 || len(report.Errors) != 0 {
 		t.Fatalf("report = %+v", report)
 	}
@@ -492,7 +492,7 @@ func TestRunInstalledCoreUpdatesRefusesABuildThatCannotLoad(t *testing.T) {
 		server.Close()
 	})
 
-	report := runInstalledCoreUpdates(context.Background(), server.Client(), nil)
+	report := runInstalledCoreUpdates(context.Background(), server.Client(), nil, nil)
 	if len(report.Refused) != 1 || len(report.Errors) != 0 || len(report.Updated) != 0 {
 		t.Fatalf("report = %+v, want one refusal and no failure", report)
 	}
@@ -509,7 +509,7 @@ func TestRunInstalledCoreUpdatesRefusesABuildThatCannotLoad(t *testing.T) {
 		t.Errorf("toast = %q", msg)
 	}
 
-	again := runInstalledCoreUpdates(context.Background(), server.Client(), nil)
+	again := runInstalledCoreUpdates(context.Background(), server.Client(), nil, nil)
 	if again.KnownRefused != 1 || fetches.Load() != 1 {
 		t.Fatalf("second pass: %+v after %d fetch(es); the refused build was downloaded again", again, fetches.Load())
 	}
@@ -569,6 +569,178 @@ func TestCoreUpdatesSayTheyStoppedForANearlyFullCard(t *testing.T) {
 	}
 	if got := reports[0].summary(); !strings.Contains(got, "almost full") || strings.Contains(got, "stopped early") {
 		t.Errorf("summary = %q", got)
+	}
+}
+
+// resetCoreCrossMixAskedForTest forgets the in-memory record of the CrossMix
+// builds already named, as a restart does; the file stays.
+func resetCoreCrossMixAskedForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		coreCrossMixAsked.mu.Lock()
+		coreCrossMixAsked.m = nil
+		coreCrossMixAsked.path = ""
+		coreCrossMixAsked.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// resetEmuCRCCacheForTest forgets the in-memory checksums, as a restart does;
+// the file stays.
+func resetEmuCRCCacheForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		emuCRCCache.mu.Lock()
+		emuCRCCache.path = ""
+		emuCRCCache.entries = nil
+		emuCRCCache.dirty = false
+		emuCRCCache.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// An automatic pass leaves MAME's family and FinalBurn Neo to a press, and names
+// a build CrossMix ships once instead of replacing it; a press updates them all.
+func TestCoreAutoUpdateRunnerLeavesArcadeAndCrossMixBuildsToAPress(t *testing.T) {
+	withCoreInstallsAllowed(t, true)
+	old := map[string]string{
+		"mame2003_plus_libretro.so": "the mame build on the card",
+		"fbneo_libretro.so":         "the fbneo build on the card",
+		"mgba_libretro.so":          "the mgba build crossmix ships",
+	}
+	coresDir, _ := installHistoryFixture(t, old)
+	resetCoreRefusalsForTest(t)
+	resetCoreCrossMixAskedForTest(t)
+	resetEmuCRCCacheForTest(t)
+	prev := coreCrossMixShippedCRCs
+	coreCrossMixShippedCRCs = map[string][]string{"mgba": {crcOf([]byte(old["mgba_libretro.so"]))}}
+	t.Cleanup(func() { coreCrossMixShippedCRCs = prev })
+	var index strings.Builder
+	archives := map[string][]byte{}
+	for name := range old {
+		body := "the nightly of " + name
+		fmt.Fprintf(&index, "2026-11-16 %s %s.zip\n", crcOf([]byte(body)), name)
+		archives[name+".zip"] = zestCoreZip(t, name, body)
+	}
+	client := coreIndexServer(t, index.String(), archives)
+
+	auto := coreAutoUpdateRunner(nil)
+	report := auto(context.Background(), client, nil)
+	if len(report.Updated) != 0 || len(report.Errors) != 0 || len(report.Asked) != 1 || report.Asked[0] != "mGBA" {
+		t.Fatalf("automatic pass = %+v, want nothing replaced and mGBA named", report)
+	}
+	for name, body := range old {
+		if data, err := os.ReadFile(filepath.Join(coresDir, name)); err != nil || string(data) != body {
+			t.Errorf("the automatic pass replaced %s (%q, %v)", name, data, err)
+		}
+	}
+	if msg := emuAutoUpdateSummary(report); !strings.Contains(msg, "CrossMix's own build of mGBA kept") {
+		t.Errorf("toast = %q", msg)
+	}
+	// Named once: the record outlives a restart, and the next pass is quiet.
+	resetCoreCrossMixAskedForTest(t)
+	if again := auto(context.Background(), client, nil); len(again.Asked) != 0 || len(again.Updated) != 0 {
+		t.Fatalf("second pass = %+v, want it quiet", again)
+	}
+	if press := runInstalledCoreUpdates(context.Background(), client, nil, nil); len(press.Updated) != 3 || len(press.Errors) != 0 {
+		t.Fatalf("press = %+v, want all three updated", press)
+	}
+	for core, want := range map[string]bool{"mame": true, "mame2010": true, "MAME2003_Plus_libretro": true, "fbneo": true, "fbalpha2012": false, "mgba": false} {
+		if got := coreAutoUpdateNever(core); got != want {
+			t.Errorf("coreAutoUpdateNever(%q) = %v, want %v", core, got, want)
+		}
+	}
+}
+
+// On the handheld a run keeps no pool copy of the build it activated — the .bak
+// beside the core is the way back — and removes nothing else.
+func TestCoreRunOnTheHandheldLeavesNoPoolCopy(t *testing.T) {
+	withCoreInstallsAllowed(t, true)
+	coresDir, poolDir := installHistoryFixture(t, map[string]string{"mgba_libretro.so": "build 0"})
+	resetCoreRefusalsForTest(t)
+	prev := coreKeepActivatedInPool
+	coreKeepActivatedInPool = func() bool { return false }
+	t.Cleanup(func() { coreKeepActivatedInPool = prev })
+	other := filepath.Join(poolDir, "mgba", "2026-10-01")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "mgba_libretro.so"), []byte("fetched by the panel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "build 1"
+	client := coreIndexServer(t, fmt.Sprintf("2026-11-16 %s mgba_libretro.so.zip\n", crcOf([]byte(body))),
+		map[string][]byte{"mgba_libretro.so.zip": zestCoreZip(t, "mgba_libretro.so", body)})
+
+	if report := runInstalledCoreUpdates(context.Background(), client, nil, nil); len(report.Updated) != 1 || len(report.Errors) != 0 {
+		t.Fatalf("report = %+v", report)
+	}
+	if data, err := os.ReadFile(filepath.Join(coresDir, "mgba_libretro.so")); err != nil || string(data) != body {
+		t.Fatalf("active core = %q, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(poolDir, "mgba", "2026-11-16")); !os.IsNotExist(err) {
+		t.Fatalf("the activated build stayed in the pool (%v)", err)
+	}
+	if !regularFile(filepath.Join(other, "mgba_libretro.so")) {
+		t.Fatal("a build the panel fetched was removed from the pool")
+	}
+	if backups, _ := filepath.Glob(filepath.Join(coresDir, "mgba_libretro.so.jukahub-*.bak")); len(backups) != 1 {
+		t.Fatalf("backups = %v, want the replaced build kept", backups)
+	}
+	if err := coreDropPoolBuild(poolDir, coreBuild{Core: "mgba", Pool: true, Path: filepath.Join(coresDir, "mgba_libretro.so")}); err == nil {
+		t.Error("a core outside the pool was accepted for removal")
+	}
+}
+
+// The checksum cache outlives a restart, keyed by path, size and modification
+// time: an unchanged core is not read again, a changed one is, and a forgotten
+// entry does not come back from the file.
+func TestEmuCRCCachePersistsByPathSizeAndTime(t *testing.T) {
+	coresDir, _ := installHistoryFixture(t, map[string]string{"mgba_libretro.so": "build A"})
+	resetEmuCRCCacheForTest(t)
+	core := filepath.Join(coresDir, "mgba_libretro.so")
+	first, err := emuCachedCRC32(core)
+	if err != nil || first != crcOf([]byte("build A")) {
+		t.Fatalf("crc = %q, %v", first, err)
+	}
+	emuCRCCacheFlush()
+	if !regularFile(emuCRCCachePath()) {
+		t.Fatal("the checksums were not written")
+	}
+	info, err := os.Stat(core)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Other bytes of the same size under the same time: only a cache read back
+	// from the file still answers with the first checksum.
+	if err := os.WriteFile(core, []byte("build B"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(core, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	resetEmuCRCCacheForTest(t)
+	if got, _ := emuCachedCRC32(core); got != first {
+		t.Fatalf("after a restart the core was read again (%s), want the stored %s", got, first)
+	}
+	later := info.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(core, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := emuCachedCRC32(core); got != crcOf([]byte("build B")) {
+		t.Fatalf("a core with a new time kept the old checksum %s", got)
+	}
+	emuCRCForget(core)
+	emuCRCCacheFlush()
+	resetEmuCRCCacheForTest(t)
+	emuCRCCache.mu.Lock()
+	emuCRCLoadLocked()
+	_, back := emuCRCCache.entries[core]
+	emuCRCCache.mu.Unlock()
+	if back {
+		t.Error("a forgotten checksum came back from the file")
 	}
 }
 
@@ -744,5 +916,67 @@ func TestEmuRuntimeNotifyPassSaysEachBuildOnce(t *testing.T) {
 	report = emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, list, nil, now.Add(25*time.Hour))
 	if len(report.Available) != 0 {
 		t.Errorf("second pass announced %q again", report.Available)
+	}
+}
+
+// TestEmuRuntimePackLabelsTellUploadsApart: a package's label carries its
+// digest, so CI's second upload under one tag is a new build, and a label
+// stored before labels carried it (the tag alone) neither loops nor reads as
+// "put back by hand".
+func TestEmuRuntimePackLabelsTellUploadsApart(t *testing.T) {
+	c := relPackCandidate{Rel: relPackRelease{TagName: "v1.2"}, Asset: githubAsset{Digest: "sha256:" + strings.Repeat("1A2B3C4D", 8)}}
+	if got := emuRuntimePackLabel(c); got != "v1.2 (1a2b3c4d)" {
+		t.Errorf("label = %q, want v1.2 (1a2b3c4d)", got)
+	}
+	c.Asset.Digest = ""
+	if got := emuRuntimePackLabel(c); got != "v1.2" {
+		t.Errorf("label without a digest = %q, want the tag", got)
+	}
+	for _, tc := range []struct {
+		stored, label string
+		legacy, want  bool
+	}{
+		{"", "v1.2 (1a2b3c4d)", true, false},
+		{"v1.2 (1a2b3c4d)", "v1.2 (1a2b3c4d)", false, true},
+		// CI uploaded the package again under the same tag.
+		{"v1.2 (1a2b3c4d)", "v1.2 (99aa88bb)", true, false},
+		{"v1.2 (1a2b3c4d)", "v1.3 (1a2b3c4d)", true, false},
+		// Stored by its tag: installed once more, announced not again.
+		{"v1.2", "v1.2 (1a2b3c4d)", false, false},
+		{"v1.2", "v1.2 (1a2b3c4d)", true, true},
+		{"v1.1", "v1.2 (1a2b3c4d)", true, false},
+		// Other updaters' labels compare as they always did.
+		{"v2", "v2", false, true},
+		{"v0.1.5", "v0.1.5 (2026-11-10 14:03)", true, false},
+	} {
+		if got := emuRuntimeSameBuild(tc.stored, tc.label, tc.legacy); got != tc.want {
+			t.Errorf("same(%q, %q, legacy %v) = %v, want %v", tc.stored, tc.label, tc.legacy, got, tc.want)
+		}
+	}
+	// Notify me: a build announced by its tag is not announced again under
+	// its digest label, but the record learns the label, so the next upload
+	// under that tag is announced.
+	useTempEmuRuntimeState(t)
+	now := time.Date(2026, 11, 17, 12, 0, 0, 0, time.UTC)
+	label := "v1.2 (1a2b3c4d)"
+	u := emuRuntimeUpdater{
+		Key:       "test:pack",
+		Title:     "Pack",
+		Installed: func() bool { return true },
+		Check:     func(context.Context, *http.Client) (bool, string, error) { return true, label, nil },
+		Install: func(context.Context, *http.Client, func(string)) error {
+			t.Error("Notify mode installed something")
+			return nil
+		},
+	}
+	emuRuntimeUpdateRecord(u.Key, func(r *emuRuntimeRecord) { r.Announced = "v1.2" })
+	report := emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, []emuRuntimeUpdater{u}, nil, now)
+	if len(report.Available) != 0 || emuRuntimeRecordFor(u.Key).Announced != label {
+		t.Fatalf("announced %q, record %q: want nothing announced and the record %q", report.Available, emuRuntimeRecordFor(u.Key).Announced, label)
+	}
+	label = "v1.2 (99aa88bb)"
+	report = emuRunRuntimeUpdaters(context.Background(), coreUpdateNotify, []emuRuntimeUpdater{u}, nil, now.Add(25*time.Hour))
+	if len(report.Available) != 1 || report.Available[0] != "Pack v1.2 (99aa88bb)" {
+		t.Errorf("a second upload under v1.2 announced %q, want Pack v1.2 (99aa88bb)", report.Available)
 	}
 }

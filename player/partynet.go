@@ -750,6 +750,8 @@ var partySession struct {
 	invite      string
 	hosting     bool
 	dismissed   string // URL the user left; do not reopen it until they act or a new video starts
+	opened      string // room URL this device last opened for the room (partyLoadRemote)
+	loadSeq     uint64 // the room's load still preparing here (partyLoadRemote); 0 when none
 }
 
 // partyHost starts a room on this device and joins it locally.
@@ -896,6 +898,7 @@ func partyLeaveSession() {
 	partySession.hosting = false
 	partySession.lastHistory = time.Time{}
 	partySession.dismissed = ""
+	partySession.opened = ""
 	partySession.mu.Unlock()
 
 	if client != nil {
@@ -1024,8 +1027,16 @@ func partyApplyRemote(config *Config) {
 	lastSeek := partySession.lastSeek
 	lastCommand := partySession.lastCommand
 	dismissed := partySession.dismissed
+	opened := partySession.opened
+	loadSeq := partySession.loadSeq
 	partySession.mu.Unlock()
 	if applying {
+		// The room moved on while its previous video is still loading here:
+		// stop that load (which releases applying) so the next frame opens
+		// the new one instead of finishing a download nobody watches.
+		if loadSeq != 0 && snap.Playback.URL != opened {
+			cancelVideoPrepareSeq(loadSeq)
+		}
 		return
 	}
 	// A new command is a real button press from someone; a poll of the same
@@ -1040,10 +1051,29 @@ func partyApplyRemote(config *Config) {
 		if dismissed != "" && dismissed == snap.Playback.URL {
 			return
 		}
+		// The URL came off the network. A JukaHub room only ever holds stream
+		// links (partyRoom.SetPlayback), so anything else — a path on this
+		// card, a scheme ffmpeg would read as a file — is not opened.
+		if !looksLikeStreamURL(snap.Playback.URL) {
+			return
+		}
+		// A video this device is loading or downloading itself (its page is
+		// set, the room does not have it yet) is not cancelled for the room's:
+		// once it plays it becomes the room's video (partyPublishStart). The
+		// room's previous video still loading here is no reason to wait.
+		if localURL != "" && localURL != opened &&
+			(videoPrepareActive() || snapshotVideoState().phase == "downloading") {
+			return
+		}
+		// applying stays set until the load has ended (partyLoadRemote), so
+		// the next frames neither start it again nor correct a player that is
+		// still resolving.
 		partySession.mu.Lock()
 		partySession.dismissed = ""
 		partySession.applying = true
 		partySession.lastSeek = time.Now()
+		partySession.lastCommand = snap.Playback.Command
+		partySession.opened = snap.Playback.URL
 		partySession.mu.Unlock()
 
 		// Remote playback must be visible: switch to the video scene and stop
@@ -1051,16 +1081,11 @@ func partyApplyRemote(config *Config) {
 		musicStopIfPlaying()
 		ensureVideoScene(config)
 		setPlaybackPageURL(snap.Playback.URL)
+		start := 0.0
 		if target > 1 {
-			StartEmbeddedPlaybackAt(config, snap.Playback.URL, target)
-		} else {
-			StartEmbeddedPlayback(config, snap.Playback.URL)
+			start = target
 		}
-
-		partySession.mu.Lock()
-		partySession.applying = false
-		partySession.lastCommand = snap.Playback.Command
-		partySession.mu.Unlock()
+		partyLoadRemote(config, snap.Playback.URL, snap.Playback.Title, start, localURL)
 		return
 	}
 
@@ -1126,6 +1151,73 @@ func partyApplyRemote(config *Config) {
 	partySession.mu.Lock()
 	partySession.applying = false
 	partySession.mu.Unlock()
+}
+
+// partyLoadRemote opens the room's video at startSec through the same load as
+// Play (resolveAndStartPlayback: the stream where ffmpeg can read it, else
+// the download), with the same loading card that B cancels. The room holds the
+// page URL its host played — a YouTube watch page, say — which the decoder
+// cannot open by itself: handed to it directly, as it used to be, a guest got
+// "Couldn't play this stream" for every YouTube room. The resolve runs off the
+// main loop; partySession.applying, set by the caller, is cleared when the
+// load's prepare ends (a start, B, a newer load, or Y sending it to a
+// background download that may run for minutes), so the player's own start is
+// not published back to the room and a long download does not freeze the
+// room. A load that played nothing counts as leaving the video: the polls do
+// not start it again, and Join on the party screen or a new video in the room
+// does. prev is the page of the video that was on screen before, given back
+// to it when the room's load played nothing, so that video is never synced
+// as the room's.
+func partyLoadRemote(config *Config, url, title string, startSec float64, prev string) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = sanitizeLogURL(url)
+	}
+	// The title is the room's word for it, off the network: bounded like a
+	// queued title before it reaches the loading card.
+	title = truncateRunesSuffix(title, partyQueueTitleLimit, "…")
+	// A quality pin belongs to one video, as on Play.
+	syncVideoQualitySource(url)
+	prepareSeq, prepareCtx := beginVideoPrepare(title)
+	partySession.mu.Lock()
+	partySession.loadSeq = prepareSeq
+	partySession.mu.Unlock()
+	// release runs once, when the prepare ends (its context: a start calls
+	// finishVideoPrepare only after startEmbeddedPlayback has begun the room
+	// video's session) or when the resolve returns, whichever is first.
+	release := sync.OnceFunc(func() {
+		s := playbackCurrentSession()
+		started := s != nil && s.pageURL == url
+		if !started {
+			// The room's video did not start here.
+			if snapshotVideoState().phase == "idle" {
+				// Nothing on screen holds the page any more: let it go,
+				// so Join finds the room's video "not open here" and
+				// loads it again.
+				clearPlaybackPageURLIf(url)
+			} else {
+				// The video that was playing before keeps its own page.
+				replacePlaybackPageURLIf(url, prev)
+			}
+		}
+		partySession.mu.Lock()
+		partySession.applying = false
+		if partySession.loadSeq == prepareSeq {
+			partySession.loadSeq = 0
+		}
+		// Set together with applying, so no frame in between reopens a
+		// video the user just cancelled with B.
+		if !started && partySession.client != nil {
+			partySession.dismissed = url
+		}
+		partySession.mu.Unlock()
+	})
+	stop := context.AfterFunc(prepareCtx, release)
+	go func() {
+		resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, startSec, "partyLoadRemote")
+		stop()
+		release()
+	}()
 }
 
 // partyLocalPosition is the local playhead in seconds.

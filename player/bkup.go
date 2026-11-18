@@ -181,6 +181,19 @@ var bkupOtherDataDeny = map[string]bool{
 	audioResumeFileName: true, cfgdocDefaultsFile: true, "icons.json": true,
 }
 
+// bkupDataStoreName reports whether a top-level file in the data folder is one
+// of the stores a backup carries and a restore writes back: a .json store
+// (factoryEraseStoreFile, so not the device's own records the erase keeps)
+// that is not a cache, device state or a store holding credentials.
+func bkupDataStoreName(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasSuffix(lower, ".json") && factoryEraseStoreFile(name) &&
+		!bkupOtherDataDeny[name] && !bkupOtherDataDeny[lower] &&
+		!strings.Contains(lower, "cache") && !strings.Contains(lower, "cookie") &&
+		!strings.Contains(lower, "token") && !strings.Contains(lower, "secret") &&
+		!vpnBackupExcluded(name)
+}
+
 // ── Places ────────────────────────────────────────────────────────────────
 
 // Overrides for tests: the app, data and export folders, the folders a restore
@@ -531,11 +544,7 @@ func bkupCollect(cats map[string]bool, opts bkupOptions) []bkupItem {
 		if entries, err := os.ReadDir(dataDir); err == nil {
 			for _, e := range entries {
 				name := e.Name()
-				lower := strings.ToLower(name)
-				if e.IsDir() || !strings.HasSuffix(lower, ".json") || bkupOtherDataDeny[name] ||
-					strings.Contains(lower, "cache") || strings.Contains(lower, "cookie") ||
-					strings.Contains(lower, "token") || strings.Contains(lower, "secret") ||
-					vpnBackupExcluded(name) {
+				if e.IsDir() || !bkupDataStoreName(name) {
 					continue
 				}
 				info, err := e.Info()
@@ -605,13 +614,20 @@ func bkupAddFile(zw *zip.Writer, it bkupItem) (bkupFile, error) {
 	if err != nil {
 		return bkupFile{}, err
 	}
+	// A backup never lists a file over the cap; an erase's undo file
+	// (factoryreset.go) carries every file whole, so its cap is the size the
+	// file was listed with.
+	limit := int64(bkupMaxFileBytes)
+	if it.Size > limit {
+		limit = it.Size
+	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(w, h), io.LimitReader(in, bkupMaxFileBytes+1))
+	n, err := io.Copy(io.MultiWriter(w, h), io.LimitReader(in, limit+1))
 	if err != nil {
 		return bkupFile{}, err
 	}
-	if n > bkupMaxFileBytes {
-		return bkupFile{}, fmt.Errorf("grew past %s while it was copied", humanBytes(bkupMaxFileBytes))
+	if n > limit {
+		return bkupFile{}, fmt.Errorf("grew past %s while it was copied", humanBytes(limit))
 	}
 	return bkupFile{
 		Path:     name,
@@ -763,6 +779,7 @@ func bkupCreate(ctx context.Context, dir, name string, cats map[string]bool, opt
 
 // bkupPrune keeps the newest keep backups in dir whose names start with prefix
 // and end with suffix+".jkbackup", and deletes the older ones.
+// Test seam (ARCH-8): only tests call it.
 func bkupPrune(dir, prefix, suffix string, keep int) {
 	bkupPruneKeep(dir, prefix, suffix, keep, "")
 }
@@ -876,6 +893,39 @@ func bkupSplitTarget(target string) (string, string, error) {
 		return "", "", err
 	}
 	return token, clean, nil
+}
+
+// bkupAppTargetAllowed reports whether a restore may write rel into JukaHub's
+// own folder: only the settings files a backup takes from there
+// (bkupSources). A backup is a file from anywhere, and that folder also holds
+// the program, launch.sh and the markers the next start acts on.
+func bkupAppTargetAllowed(rel string) bool {
+	for _, src := range bkupSources() {
+		if src.Token == "app" && src.Rel != "" && rel == src.Rel {
+			return true
+		}
+	}
+	return false
+}
+
+// bkupDataTargetAllowed reports whether a restore may write rel into the data
+// folder: a file bkupSources names there, a file inside a folder it names
+// (a .json source is a file, not a folder), or a top-level store
+// (bkupDataStoreName). The data folder also holds emulators, runtimes, Wine
+// and Android packs and other programs a backup never carries.
+func bkupDataTargetAllowed(rel string) bool {
+	for _, src := range bkupSources() {
+		if src.Token != "data" || src.Rel == "" {
+			continue
+		}
+		if rel == src.Rel {
+			return true
+		}
+		if !strings.HasSuffix(strings.ToLower(src.Rel), ".json") && strings.HasPrefix(rel, src.Rel+"/") {
+			return true
+		}
+	}
+	return !strings.Contains(rel, "/") && bkupDataStoreName(rel)
 }
 
 // bkupHashZipFile hashes one archive entry, reading at most want+1 bytes.
@@ -1035,8 +1085,15 @@ func bkupPlanRestore(path string, m bkupManifest, cats map[string]bool) bkupRest
 			rf.Skip = "not chosen"
 		case token == "doc":
 			rf.Skip = "the config document is for reading and importing"
+		case m.Label == factoryEraseLabel:
+			// Written live, the stores in memory would save over it on exit.
+			rf.Skip = "an erase's undo file: Settings → About → Reset → Undo an erase puts it back"
+		case token == "app" && !bkupAppTargetAllowed(rel):
+			rf.Skip = "not a file a backup restores"
 		case vpnBackupExcluded(rel) && (token == "data" || strings.HasPrefix(strings.ToLower(rel), "data/")):
 			rf.Skip = "the VPN configuration stays on its device"
+		case token == "data" && !bkupDataTargetAllowed(rel):
+			rf.Skip = "not a file a backup restores"
 		case f.Platform && plan.CrossPlatform:
 			rf.Skip = "made for " + bkupPlatformLabel(m.Platform)
 		default:
@@ -1346,6 +1403,10 @@ func bkupCopyMap(m map[string]interface{}) map[string]interface{} {
 // the settings in memory: a restore is about to replace the file, and the old
 // save would land on top of it two seconds later.
 func bkupDropPendingUserSave() {
+	// The write lock too: a save already being written finishes before the
+	// restore replaces the file (extras.go).
+	userConfigWriteMutex.Lock()
+	defer userConfigWriteMutex.Unlock()
 	userConfigSaveMutex.Lock()
 	defer userConfigSaveMutex.Unlock()
 	if userConfigSaveTimer != nil {
@@ -1481,6 +1542,7 @@ func bkupReloadStores(config *Config) {
 	musicFavMu.Lock()
 	musicFavData.loaded = false
 	musicFavMu.Unlock()
+	musicHistoryReload()
 	musicPlaylistState.mu.Lock()
 	musicPlaylistState.loaded = false
 	musicPlaylistState.mu.Unlock()

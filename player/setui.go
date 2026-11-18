@@ -99,9 +99,31 @@ type setHubState struct {
 	rowParts    []setCarouselParts
 	rowClip     []uint8
 	listRect    sdl.Rect
+	// The focused row grows to show its whole description when one line
+	// cuts it (setHubDetailLines): expandRow is that row (-1 for none),
+	// expandLines how many description lines its height was laid out for,
+	// and rowBaseH the height of every other row, which sizes the controls.
+	expandRow   int
+	expandLines int
+	rowBaseH    int32
+	// detailWrap is the last setHubDetailLines answer: the focused row's
+	// description is wrapped twice a frame (to lay the row out, then to draw
+	// it) and wrapping allocates, so the same question gets the same lines.
+	detailWrap setHubDetailWrap
 }
 
-var setHub = setHubState{viewSection: -1}
+// setHubDetailWrap is one remembered wrap: the font, text, width and
+// language it was made for, and its lines. Callers must not change lines.
+type setHubDetailWrap struct {
+	font   *ttf.Font
+	detail string
+	width  int32
+	lang   *uiCatalog
+	lines  []string
+	cut    bool
+}
+
+var setHub = setHubState{viewSection: -1, expandRow: -1}
 
 // setHubRefreshMs is how often the rows re-read their values while the page is
 // up: often enough that a probe (Bluetooth, the snap count) lands quickly, rare
@@ -176,6 +198,10 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	setHub.scroll, setHub.target = 0, 0
 	setHub.railScroll = 0
 	setHub.sheet.open = false
+	// A confirmation left up on an earlier visit does not come back with it.
+	if tbxSheet.open && setIsHubScene(tbxSheet.scene) {
+		tbxCloseSheet()
+	}
 	setHub.onSearch = false
 	setSearchReset()
 	// The time-zone picker closes too, unless a deep link opened it for this
@@ -763,6 +789,9 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 	}
 	tzPickerDraw(renderer, c)
 	clockSheetDraw(renderer, c)
+	// The shared confirmation sheet (tbxOpenSheet): "Reset to defaults?" and
+	// the like, opened by a row.
+	tbxRenderSheet(renderer, c)
 	// The footer goes last so its hints stay readable over a sheet's dim.
 	renderFooter(renderer, c)
 }
@@ -907,9 +936,13 @@ func setHubDrawPane(renderer *sdl.Renderer, c *Config, f setHubFonts, pane sdl.R
 	setHub.rowClip = setHub.rowClip[:n]
 
 	// Rows in content space first, so the scroll can keep the focus in view.
+	// The focused row is laid out tall enough for its whole description; it
+	// stays open under a sheet so the page does not shift behind the scrim.
 	y := int32(0)
 	focusTop, focusBottom := int32(-1), int32(-1)
 	rowW := list.W - 12
+	setHub.rowBaseH = rowH
+	setHub.expandRow, setHub.expandLines = -1, 0
 	for i := 0; i < n; i++ {
 		setHub.rowParts[i] = setCarouselParts{}
 		setHub.rowClip[i] = 0
@@ -917,11 +950,29 @@ func setHubDrawPane(renderer *sdl.Renderer, c *Config, f setHubFonts, pane sdl.R
 			setHub.rowRects[i] = sdl.Rect{}
 			continue
 		}
-		setHub.rowRects[i] = sdl.Rect{X: list.X, Y: y, W: rowW, H: rowH}
-		if i == setHub.row {
-			focusTop, focusBottom = y, y+rowH
+		h := rowH
+		if i == setHub.row && setHub.inPane && !chrome {
+			r := sdl.Rect{X: list.X, W: rowW, H: rowH}
+			lines, _ := setHubDetailLines(f.detail, setHub.views[i].detail, setHubDetailWidth(f, i, r))
+			k := int32(len(lines))
+			// Never taller than the list can show: on a short pane (a big
+			// font, a long translation) the row keeps the lines that fit and
+			// the draw ends the last one in an ellipsis.
+			if dh > 0 {
+				k = min(k, max((list.H-lh-24)/dh, 1))
+			}
+			if k > 1 {
+				setHub.expandRow, setHub.expandLines = i, int(k)
+				if tall := lh + 2 + k*dh + 22; tall > h {
+					h = tall
+				}
+			}
 		}
-		y += rowH + gap
+		setHub.rowRects[i] = sdl.Rect{X: list.X, Y: y, W: rowW, H: h}
+		if i == setHub.row {
+			focusTop, focusBottom = y, y+h
+		}
+		y += h + gap
 	}
 	content := y - gap
 	if content < 0 {
@@ -967,7 +1018,7 @@ func setHubDrawPane(renderer *sdl.Renderer, c *Config, f setHubFonts, pane sdl.R
 		if r.Y+r.H < list.Y || r.Y > list.Y+list.H {
 			continue
 		}
-		focused := setHub.inPane && i == setHub.row && !chrome && !setHub.sheet.open
+		focused := setHub.inPane && i == setHub.row && !chrome && !setHub.sheet.open && !tbxSheet.open
 		setHub.rowParts[i] = setHubDrawRow(renderer, f, i, r, focused)
 	}
 	_ = renderer.SetClipRect(nil)
@@ -1001,16 +1052,19 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 	parts := setCarouselParts{}
 	ctrlW := int32(0)
 	clip := uint8(0)
+	// Controls keep the size of an ordinary row in a row grown for its
+	// description, and sit centred on its full height.
+	baseH := setHub.rowBaseH
+	if baseH <= 0 || baseH > r.H {
+		baseH = r.H
+	}
 	switch row.Kind {
 	case setKindToggle:
-		sw, sh := setSwitchSize(r.H)
+		sw, sh := setSwitchSize(baseH)
 		setSwitchDraw(renderer, sdl.Rect{X: right - sw, Y: r.Y + (r.H-sh)/2, W: sw, H: sh}, v.on, v.disabled)
 		ctrlW = sw
 	case setKindChoice:
-		ch := r.H - 16
-		if ch > 40 {
-			ch = 40
-		}
+		ch := setHubCarouselH(baseH)
 		// Sized from the widest stop so the arrows stay put while the value
 		// changes; a stop that would not fit even at the cap is noted.
 		need := setCarouselWidthFor(f.value, v.options, v.value, ch, 150, 0)
@@ -1096,6 +1150,28 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 		drawText(renderer, f.label, label, x, r.Y+(r.H-lh)/2, labelInk, textAlignLeft)
 		return parts
 	}
+	if i == setHub.expandRow && setHub.expandLines > 1 {
+		// The focused row's whole description, word-wrapped into the lines its
+		// height was laid out for.
+		lines, cut := setHubDetailLines(f.detail, v.detail, avail)
+		if len(lines) > setHub.expandLines {
+			// A copy: the wrapped lines are remembered (setHubDetailLines),
+			// and the ellipsis must not end up in the next frame's wrap.
+			lines, cut = append([]string(nil), lines[:setHub.expandLines]...), true
+			lines[len(lines)-1] = ellipsize(f.detail, lines[len(lines)-1]+"…", avail)
+		}
+		if cut {
+			clip |= setClipDetail
+		}
+		setHubNoteClip(i, clip)
+		k := int32(len(lines))
+		ty := r.Y + (r.H-lh-2-k*dh)/2
+		drawText(renderer, f.label, label, x, ty, labelInk, textAlignLeft)
+		for j, line := range lines {
+			drawTextRaw(renderer, f.detail, line, x, ty+lh+2+int32(j)*dh, detailInk, textAlignLeft)
+		}
+		return parts
+	}
 	detail := ellipsize(f.detail, v.detail, avail)
 	if detail != v.detail {
 		clip |= setClipDetail
@@ -1105,6 +1181,76 @@ func setHubDrawRow(renderer *sdl.Renderer, f setHubFonts, i int, r sdl.Rect, foc
 	drawText(renderer, f.label, label, x, ty, labelInk, textAlignLeft)
 	drawText(renderer, f.detail, detail, x, ty+lh+2, detailInk, textAlignLeft)
 	return parts
+}
+
+// setDetailMaxLines is the most lines a focused row's description is wrapped
+// into; a longer one ends in an ellipsis on the last.
+const setDetailMaxLines = 4
+
+// setHubDetailLines word-wraps a row's description into at most
+// setDetailMaxLines lines of width pixels, in the interface language, and
+// reports whether it had to be cut. One line back means it fits as it is.
+// The lines are shared with the next caller asking the same (detailWrap):
+// copy them before changing any.
+func setHubDetailLines(font *ttf.Font, detail string, width int32) ([]string, bool) {
+	if font == nil || detail == "" {
+		return nil, false
+	}
+	lang := uiActive.Load()
+	if c := &setHub.detailWrap; c.font == font && c.detail == detail && c.width == width && c.lang == lang {
+		return c.lines, c.cut
+	}
+	lines, cut := wrapWordsMeasured(uiT(detail), width, setDetailMaxLines, func(s string) int32 {
+		w, _ := measureTextRaw(font, s)
+		return w
+	})
+	setHub.detailWrap = setHubDetailWrap{font: font, detail: detail, width: width, lang: lang, lines: lines, cut: cut}
+	return lines, cut
+}
+
+// setHubCarouselH is the height of a carousel in a row of height rowH.
+func setHubCarouselH(rowH int32) int32 {
+	if ch := rowH - 16; ch < 40 {
+		return ch
+	}
+	return 40
+}
+
+// setHubDetailWidth is how wide row i's description may run in a row shaped
+// like r, beside its control: setHubDrawRow's measurements without drawing,
+// so the layout knows how many lines the focused row's description needs
+// before the row is placed.
+func setHubDetailWidth(f setHubFonts, i int, r sdl.Rect) int32 {
+	const padX = int32(18)
+	row, v := setHub.rows[i], setHub.views[i]
+	ctrlW := int32(0)
+	switch row.Kind {
+	case setKindToggle:
+		ctrlW, _ = setSwitchSize(r.H)
+	case setKindChoice:
+		ctrlW = setCarouselWidthFor(f.value, v.options, v.value, setHubCarouselH(r.H), 150, 0)
+		if limit := r.W * 45 / 100; ctrlW > limit {
+			ctrlW = limit
+		}
+	case setKindAction, setKindText:
+		ctrlW = 12
+		if row.ID == setMoreRowID || row.Kind == setKindText {
+			ctrlW = 20
+		}
+		if v.value != "" {
+			tw, _ := measureText(f.value, ellipsize(f.value, v.value, r.W*40/100))
+			ctrlW += 12 + tw
+		}
+	case setKindInfo:
+		if v.value != "" {
+			ctrlW, _ = measureText(f.value, ellipsize(f.value, v.value, r.W*50/100))
+		}
+	}
+	avail := r.W - 2*padX - ctrlW - 16
+	if avail < 40 {
+		avail = 40
+	}
+	return avail
 }
 
 // The bits of setHubState.rowClip: which of a row's texts the last frame had
@@ -1142,6 +1288,14 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 	}
 	if setHub.sheet.open {
 		setSheetKey(&setHub.sheet, e.Keysym.Sym)
+		return true
+	}
+	if tbxSheetVisible(c) {
+		// A held Enter's repeats must not press the sheet's button the
+		// press that opened it is still holding down.
+		if act := tbxKeyAction(e); act != tbxActConfirm || e.Repeat == 0 {
+			tbxSheetAction(act)
+		}
 		return true
 	}
 	if setHubKeyStartsSearch(e) {
@@ -1210,6 +1364,10 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		setSheetPad(&setHub.sheet, e.Button)
 		return true
 	}
+	if tbxSheetVisible(c) {
+		tbxSheetAction(tbxPadAction(e))
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		setHubAct(c, setActUp)
@@ -1249,6 +1407,10 @@ func setHubMouse(mx, my int32, c *Config) bool {
 	}
 	if setHub.sheet.open {
 		setSheetMouse(&setHub.sheet, mx, my)
+		return true
+	}
+	if tbxSheetVisible(c) {
+		tbxSheetMouse(mx, my)
 		return true
 	}
 	if setHub.searchRect.W > 0 && pointInRect(mx, my, setHub.searchRect) {
@@ -1309,6 +1471,15 @@ func setHubWheel(dy int32) {
 		setSheetWheel(&setHub.sheet, dy)
 		return
 	}
+	if tbxSheetVisible(setHub.cfg) {
+		switch {
+		case dy > 0:
+			tbxSheetAction(tbxActUp)
+		case dy < 0:
+			tbxSheetAction(tbxActDown)
+		}
+		return
+	}
 	setHub.follow = false
 	setHub.target -= float64(dy) * 72
 	if setHub.target < 0 {
@@ -1326,6 +1497,9 @@ func setHubHints() []FooterHint {
 	}
 	if setHub.sheet.open {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
+	}
+	if tbxSheetVisible(setHub.cfg) {
+		return tbxSheetHints()
 	}
 	search := setSearchHint()
 	if !setHub.inPane {

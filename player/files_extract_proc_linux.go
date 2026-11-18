@@ -21,6 +21,12 @@ func feToolProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Pdeathsig = syscall.SIGKILL
 }
 
+// fe7ZipCommandLine has nothing to do here: 7-Zip gets its words as argv,
+// with no shell and no command line to split.
+func fe7ZipCommandLine(*exec.Cmd) bool {
+	return true
+}
+
 // feRenameNoReplace moves from to to only if nothing has the name to: a name
 // found free can be taken again before the move. A filesystem without
 // renameat2's RENAME_NOREPLACE reserves the name first (feRenameByReserving).

@@ -56,7 +56,9 @@ func bootChimeStart(config *Config) {
 // A stop requested by a signal (the firmware powering off) gets no chime: that
 // exit is meant to be quick.
 func shutdownChimeStart(config *Config) {
-	if exitRequestedBySignal.Load() {
+	// The power off a long sleep ends in is silent: the device is in a bag
+	// (quickresume.go).
+	if exitRequestedBySignal.Load() || quickPowerOffSilent() {
 		return
 	}
 	chimeStart(config, chimeStopScore, chimeStopSeconds, chimeStopGain)

@@ -1,0 +1,12 @@
+#!/bin/sh
+# The stock Smart Pro SDL2 fbdev backend calls "setterm -cursor off/on" on
+# video start and quit, but firmware 1.1.0 does not ship setterm. JukaHub's
+# launcher puts its app folder first on PATH, so handle only those two calls.
+# A menu launch has no terminal; there is then no text cursor to change.
+[ "$#" -eq 2 ] && [ "$1" = '-cursor' ] || exit 2
+case "$2" in
+    on)  [ -t 1 ] && printf '\033[?25h' ;;
+    off) [ -t 1 ] && printf '\033[?25l' ;;
+    *) exit 2 ;;
+esac
+exit 0

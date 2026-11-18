@@ -221,6 +221,11 @@ func bgmSetSelectedPath(c *Config, path string) error {
 	if err != nil {
 		return err
 	}
+	// Held below the Files root again, by the value the test returned.
+	clean, err = resolveWithinRoot(feRoot(c), clean)
+	if err != nil {
+		return err
+	}
 	info, err := os.Stat(clean)
 	if err != nil {
 		return err

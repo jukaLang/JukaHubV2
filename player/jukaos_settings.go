@@ -49,6 +49,9 @@ var jukaosFirmwareName = sync.OnceValue(func() string {
 		return "NextUI"
 	case dirExists(filepath.Join(filepath.FromSlash(root), "System", "usr", "trimui")):
 		return "CrossMix"
+	case dirExists(filepath.Join(filepath.FromSlash(root), "spruce")):
+		// spruceOS (Smart Pro, Smart Pro S, Brick) keeps its scripts there.
+		return "spruceOS"
 	}
 	return "TrimUI"
 })
@@ -240,6 +243,13 @@ func jukaosSettingsRows(*Config) []setRow {
 			Get:    func(c *Config) bool { return jukaosUI.state.Enabled && autoStartEnabled(c) },
 			Set:    jukaosSetBoot,
 		},
+		{
+			ID: "jukaosFastBoot", Label: "Skip the stock menu at boot", Kind: setKindToggle,
+			Detail:   setStatic("At power-on the firmware starts JukaHub OS in place of its menu, so " + fw + "'s menu never shows. Off: the menu opens for a moment and is closed (try this if Wi-Fi, brightness or volume are not set up after a boot)"),
+			Disabled: func(c *Config) bool { return !jukaosUI.state.Enabled || !autoStartEnabled(c) },
+			Get:      func(*Config) bool { return jukaosUI.state.jukaosFastBootOn() },
+			Set:      func(_ *Config, on bool) { jukaosSetFastBoot(on) },
+		},
 	}
 	start := setRow{
 		ID: "jukaosStart", Label: "Start OS session now", Kind: setKindAction,
@@ -251,6 +261,13 @@ func jukaosSettingsRows(*Config) []setRow {
 		start.Detail = setStatic("Apply layer changes: JukaHub OS starts again")
 	}
 	rows = append(rows, start)
+	if session {
+		rows = append(rows, setRow{
+			ID: "jukaosApplied", Label: "Applied at this start", Kind: setKindInfo,
+			Value:  func(*Config) string { return jukaosAppliedValue() },
+			Detail: func(*Config) string { return jukaosAppliedDetail() },
+		})
+	}
 	for i := range jukaosUI.layers {
 		rows = append(rows, jukaosLayerRow(jukaosUI.layers[i]))
 	}
@@ -279,12 +296,17 @@ func jukaosLayerRow(l jukaosLayer) setRow {
 		detail = strings.TrimSpace("v" + strings.TrimPrefix(l.Spec.Version, "v") + " · " + detail)
 	}
 	switch {
+	case l.Elsewhere:
+		detail = "Not for this handheld: " + l.Problem
 	case l.Problem != "":
 		detail = "Can't use: " + l.Problem
 	case len(l.Notes) == 1:
 		detail = setOr(detail, name) + " (skipped: " + l.Notes[0] + ")"
 	case len(l.Notes) > 1:
 		detail = setOr(detail, name) + fmt.Sprintf(" (%d parts skipped, first: %s)", len(l.Notes), l.Notes[0])
+	}
+	if l.Problem == "" && l.Absent > 0 {
+		detail = setOr(detail, name) + fmt.Sprintf(" · %d of its values are not on this handheld", l.Absent)
 	}
 	problem := l.Problem != ""
 	return setRow{
@@ -310,24 +332,48 @@ func jukaosStatusValue() string {
 }
 
 // jukaosStatusDetail is the status row's second line: what the session
-// applied, and the kernel the drivers have to match.
+// applied, and the kernel the drivers have to match. Outside a session with
+// OS mode on it says why this start is the app.
 func jukaosStatusDetail() string {
 	kernel := jukaosUI.kernel
 	jukaosLive.mu.Lock()
 	session, guarded := jukaosLive.session, jukaosLive.guarded
-	layers, modules := len(jukaosLive.layers), jukaosLive.modules
+	layers, modules, drivers := len(jukaosLive.layers), jukaosLive.modules, jukaosLive.drivers
+	values, applied, why := jukaosLive.values, jukaosLive.applied, jukaosLive.why
 	info := jukaosLive.info
+	driverLayers, driverValues := jukaosLive.driverLayers, jukaosLive.driverValues
 	jukaosLive.mu.Unlock()
 	if !session {
+		prefix := "JukaHub runs as an app"
 		if jukaosUI.state.Edition == jukaosEditionOS {
-			return "JukaHub OS edition, running as an app this start · kernel " + kernel
+			prefix = "JukaHub OS edition, running as an app this start"
 		}
-		return "JukaHub runs as an app · kernel " + kernel
+		if why != "" {
+			prefix += " (" + why + ")"
+		}
+		return prefix + " · kernel " + kernel
+	}
+	driverPart := fmt.Sprintf("%d of %d driver(s) loaded", modules, drivers)
+	switch {
+	case !applied:
+		driverPart = "drivers and values being applied…"
+	case len(driverLayers) > 0:
+		// A driver layer for this handheld: the firmware's drivers, set up
+		// by the layer (and any modules it brings for this kernel).
+		driverPart = "Drivers: " + jukaosDriverSummary(driverLayers, driverValues)
+		if drivers > 0 {
+			driverPart += fmt.Sprintf(", %d of %d module(s) loaded", modules, drivers)
+		}
+	case drivers == 0:
+		// No layer brings a driver: nothing newer than the firmware's is
+		// running, and the line must not suggest otherwise.
+		driverPart = "no driver layer (the firmware's own drivers)"
 	}
 	parts := []string{
 		fmt.Sprintf("%d layer(s)", layers),
 		fmt.Sprintf("%d file(s) replaced", info.Binds),
-		fmt.Sprintf("%d driver(s) loaded", modules),
+		fmt.Sprintf("%d value(s) set", values),
+		driverPart,
 		"kernel " + kernel,
 	}
 	line := strings.Join(parts, " · ")
@@ -340,6 +386,109 @@ func jukaosStatusDetail() string {
 		line += fmt.Sprintf(" · %d part(s) skipped", len(info.Skipped))
 	}
 	return line
+}
+
+// jukaosDriverSummary is "A523 driver layer (3 values)": the applied driver
+// layers by name and the values they have in force.
+func jukaosDriverSummary(layers []string, values int) string {
+	return fmt.Sprintf("%s (%d value(s))", strings.Join(layers, ", "), values)
+}
+
+// jukaosDriverStatus is the session's driver line for other screens (the
+// device's driver list): "" outside a session or before the apply finished,
+// else what the status row says after "Drivers:".
+func jukaosDriverStatus() string {
+	jukaosLive.mu.Lock()
+	defer jukaosLive.mu.Unlock()
+	switch {
+	case !jukaosLive.session || !jukaosLive.applied:
+		return ""
+	case len(jukaosLive.driverLayers) > 0:
+		return jukaosDriverSummary(jukaosLive.driverLayers, jukaosLive.driverValues)
+	}
+	return "no driver layer (the firmware's own drivers)"
+}
+
+// The Drivers & hardware page's JukaHub OS row: what the session's driver
+// layers applied, or that this start is the app on the firmware's drivers.
+func init() {
+	registerDriverStatus("JukaHub OS", func() driverStatus {
+		if !jukaosSupported() {
+			// Windows, a desktop Linux: no JukaHub OS and no firmware.
+			return driverStatus{State: driverNotUsed}
+		}
+		if s := jukaosDriverStatus(); s != "" {
+			return driverStatus{State: driverOK, Driver: "JukaHub OS session", Detail: s}
+		}
+		return driverStatus{State: driverNotUsed, Detail: "app mode: the firmware's own drivers"}
+	})
+}
+
+// jukaosAppliedValue is the "Applied at this start" read-out: the layers in
+// force, by name.
+func jukaosAppliedValue() string {
+	jukaosLive.mu.Lock()
+	ids := append([]string(nil), jukaosLive.layers...)
+	guarded := jukaosLive.guarded
+	jukaosLive.mu.Unlock()
+	if guarded {
+		return "No layers (OS guard)"
+	}
+	if len(ids) == 0 {
+		return "No layers"
+	}
+	names := make([]string, 0, len(ids))
+	for _, id := range ids {
+		name := id
+		for _, l := range jukaosUI.layers {
+			if l.ID == id {
+				name = setOr(l.Spec.Name, id)
+				break
+			}
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
+}
+
+// jukaosAppliedDetail is what the session start and the background apply
+// left out, and why (errors.txt has every line as "jukaos:").
+func jukaosAppliedDetail() string {
+	jukaosLive.mu.Lock()
+	skipped := append(append([]string(nil), jukaosLive.info.Skipped...), jukaosLive.notes...)
+	nsErr := jukaosLive.info.NamespaceErr
+	jukaosLive.mu.Unlock()
+	if nsErr != "" {
+		skipped = append([]string{"file layers off: " + nsErr}, skipped...)
+	}
+	if len(skipped) == 0 {
+		return "Everything the layers switched on asked for is in force"
+	}
+	line := "Left out: " + strings.Join(skipped[:min(len(skipped), 3)], "; ")
+	if len(skipped) > 3 {
+		line += fmt.Sprintf(" (+%d more in errors.txt)", len(skipped)-3)
+	}
+	return line
+}
+
+// jukaosSetFastBoot switches skipping the stock menu at power-on (the boot
+// hook reads os.json at every boot).
+func jukaosSetFastBoot(on bool) {
+	s := jukaosUI.state
+	if on {
+		s.FastBoot = nil
+	} else {
+		off := false
+		s.FastBoot = &off
+	}
+	if !jukaosSaveUI(s) {
+		return
+	}
+	if on {
+		setToast("From the next power-on JukaHub OS starts without the stock menu")
+	} else {
+		setToast("From the next power-on the stock menu opens first and is then closed")
+	}
 }
 
 // jukaosSaveUI writes the section's state; false (with a toast) on failure.

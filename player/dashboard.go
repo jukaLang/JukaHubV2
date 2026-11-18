@@ -113,21 +113,12 @@ func dashPoll() {
 		}
 	}
 
-	// Temperature.
+	// Temperature: the hottest CPU/GPU zone, the same read as everywhere else
+	// (cpuTempValueC), so the gauge and the fan agree on the A523's clusters.
 	if runtime.GOOS == "linux" {
-		candidates := []string{
-			"/sys/class/thermal/thermal_zone0/temp",
-			"/sys/class/thermal/thermal_zone1/temp",
-		}
-		for _, path := range candidates {
-			if data, err := os.ReadFile(path); err == nil {
-				if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 0 {
-					celsius := float64(v) / 1000.0
-					dash.gauges[2].Value = celsius
-					dash.gauges[2].Current = fmt.Sprintf("%.1f°C", celsius)
-					break
-				}
-			}
+		if celsius, ok := cpuTempValueC(); ok {
+			dash.gauges[2].Value = celsius
+			dash.gauges[2].Current = fmt.Sprintf("%.1f°C", celsius)
 		}
 	}
 

@@ -357,19 +357,31 @@ func TestHeaderTrophyInTheRoomStartsTheVisitOver(t *testing.T) {
 	}
 }
 
-// X1 (Xbox Remote Play) closes the Remote Play group: Right walks PS4 → PS5 →
-// X1 → the pairing code, and with X1 hidden PS5 steps straight onto the code.
+// X1 (Xbox Remote Play) and PC (Moonlight) close the Remote Play group: Right
+// walks PS4 → PS5 → X1 → PC → the pairing code, and with the later pills
+// hidden the last one drawn steps straight onto the code.
 func TestHomeFocusX1ClosesTheRemotePlayGroup(t *testing.T) {
 	f := NewHomeFocusController()
 	f.Set(HomeFocusPS5)
 	if got := f.Move(FocusRight); got != HomeFocusX1 {
 		t.Fatalf("Right from PS5 = %s, want X1", got)
 	}
+	if got := f.Move(FocusRight); got != HomeFocusPC {
+		t.Fatalf("Right from X1 = %s, want PC", got)
+	}
 	if got := f.Move(FocusRight); got != HomeFocusQR {
-		t.Fatalf("Right from X1 = %s, want the pairing code", got)
+		t.Fatalf("Right from PC = %s, want the pairing code", got)
+	}
+	if got := f.Move(FocusLeft); got != HomeFocusPC {
+		t.Fatalf("Left from the pairing code = %s, want PC", got)
+	}
+	f.SetEnabled(HomeFocusPC, false)
+	f.Set(HomeFocusX1)
+	if got := f.Move(FocusRight); got != HomeFocusQR {
+		t.Fatalf("with PC hidden Right from X1 = %s, want the pairing code", got)
 	}
 	if got := f.Move(FocusLeft); got != HomeFocusX1 {
-		t.Fatalf("Left from the pairing code = %s, want X1", got)
+		t.Fatalf("with PC hidden Left from the pairing code = %s, want X1", got)
 	}
 	f.SetEnabled(HomeFocusX1, false)
 	f.Set(HomeFocusPS5)

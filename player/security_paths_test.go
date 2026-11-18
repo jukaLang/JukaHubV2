@@ -306,3 +306,40 @@ func TestAuditExtractTreeConfinesArchiveEntries(t *testing.T) {
 		t.Fatalf("archive traversal wrote %q: %v", escape, err)
 	}
 }
+
+// Juka's file tools reach only the storage roots (aitools.go), as written and
+// after links are followed, and every tool result is scrubbed of credentials
+// before it goes to the model.
+func TestAIToolsPathsStayInRootsAndResultsLoseSecrets(t *testing.T) {
+	dir := t.TempDir()
+	root := filepath.Join(dir, "card")
+	outside := filepath.Join(dir, "outside")
+	for _, d := range []string{filepath.Join(root, "Roms"), outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roots := []string{root}
+	if p, err := aiResolvePath("Roms/game.gba", roots); err != nil || p != filepath.Join(root, "Roms", "game.gba") {
+		t.Fatalf("relative path inside the card: %q, %v", p, err)
+	}
+	for _, bad := range []string{"../outside/x", filepath.Join(outside, "x"), "Roms/../../outside"} {
+		if p, err := aiResolvePath(bad, roots); err == nil {
+			t.Fatalf("%q escaped the card as %q", bad, p)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err == nil {
+		if p, err := aiResolvePath("link/secret.txt", roots); err == nil {
+			t.Fatalf("a link out of the card was followed to %q", p)
+		}
+	}
+
+	stored := "my-romm-token-123456"
+	in := "groq gsk_abcdefghijklmnopqrstuvwx; token=abc123456789; psk=\"hunter22\"; romm " + stored
+	out := aiRedactWith(in, []string{stored})
+	for _, secret := range []string{"gsk_abcdefghijklmnopqrstuvwx", "abc123456789", "hunter22", stored} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("secret %q survived redaction: %q", secret, out)
+		}
+	}
+}

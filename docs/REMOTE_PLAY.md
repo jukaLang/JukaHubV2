@@ -506,18 +506,30 @@ starts the best client on the machine:
 
 - **Handheld:** [GreenOvercast](https://github.com/doomL/GreenOvercast) (the
   xHome build), a PortMaster port. The first press downloads `greenovercast.zip`
-  into PortMaster's `autoinstall` folder and opens PortMaster to install it
-  (PortMaster itself is installed first when missing); later presses launch it
-  from Ports. Sign in inside GreenOvercast with the code it shows, then pick
-  your console. It needs glibc 2.38 or newer: stock TrimUI firmware has 2.33,
-  so X1 warns before launching there. If the download fails, copy
-  `greenovercast.zip` from its releases page into PortMaster's `autoinstall`
-  folder yourself.
+  and installs it through JukaHub's port installer, which uses PortMaster's own
+  installer or leaves it for PortMaster, which opens to finish while Home is
+  still up (PortMaster itself is installed first when missing; press again
+  once it is done); later presses launch it from Ports. Sign in inside
+  GreenOvercast with the code it shows, then pick your console on its Consoles
+  tab (L1/R1). On older TrimUI firmware, JukaHub downloads a checked private
+  compatibility runtime on first launch, then starts GreenOvercast with it;
+  the system library stays unchanged. If the port download fails, copy `greenovercast.zip` from its releases
+  page into PortMaster's `autoinstall` folder yourself. GreenOvercast's other
+  build streams Xbox Cloud Gaming and GeForce NOW but not your console; X1
+  says so, asks for a second press and then starts it anyway. Switch builds
+  in [Cloud Gaming](CLOUD_GAMING.md).
 - **PC:** Greenlight or XStreaming when installed, otherwise
   <https://www.xbox.com/play/consoles> in the browser.
 
 On the console, turn on Settings → Devices & connections → Remote features.
 The pill's dot is lit while a client is installed.
+
+## PC (Moonlight)
+
+The PC pill after X1 streams games and the desktop from a PC running
+Vibepollo, Apollo, Sunshine or GeForce Experience with JukaHub's own Moonlight
+client (`moonlight-stream`, beside the PS helpers in `bin/`). Pairing, the
+games grid, the settings and the controls are in [PC streaming](PC_STREAMING.md).
 
 ## Troubleshooting
 

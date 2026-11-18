@@ -22,6 +22,7 @@ package main
 // can actually buzz.
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -223,17 +224,32 @@ func detectSysfsMotor(root string) *sysfsMotor {
 		levelMin  int
 		exportPin string
 	}
-	layouts := []layout{
-		{gpio: trimuiMotorGPIO5040, level: trimuiMotorVoltage, levelMin: trimuiMotorMinVoltage,
-			levelMax: trimuiMotorMaxVoltage, exportPin: "227"},
-		{gpio: trimuiMotorGPIO5050, level: trimuiMotorLevel, levelMin: 0,
-			levelMax: 65535, exportPin: "236"},
+	l5040 := layout{gpio: trimuiMotorGPIO5040, level: trimuiMotorVoltage, levelMin: trimuiMotorMinVoltage,
+		levelMax: trimuiMotorMaxVoltage, exportPin: "227"}
+	l5050 := layout{gpio: trimuiMotorGPIO5050, level: trimuiMotorLevel, levelMin: 0,
+		levelMax: 65535, exportPin: "236"}
+	// The model picks the layout: GPIO 227 on the A523 (or 236 on the A133P)
+	// is some other pin, and exporting and driving it would be a write to the
+	// wrong hardware. An unidentified board tries both, as before.
+	var layouts []layout
+	switch DetectDevice() {
+	case DeviceTrimuiSmartProS:
+		layouts = []layout{l5050}
+	case DeviceTrimuiSmartPro, DeviceTrimuiBrick, DeviceTrimuiBrickPro, DeviceTrimuiHammer:
+		layouts = []layout{l5040}
+	default:
+		layouts = []layout{l5040, l5050}
 	}
 	for _, l := range layouts {
 		gpioPath := filepath.Join(root, l.gpio)
 		levelPath := filepath.Join(root, l.level)
 		if _, err := os.Stat(levelPath); err != nil {
 			continue
+		}
+		if l.exportPin == "236" {
+			if m := detectMotorEnableNode(root, levelPath); m != nil {
+				return m
+			}
 		}
 		if _, err := os.Stat(gpioPath); err != nil {
 			export := filepath.Join(root, "sys/class/gpio/export")
@@ -260,6 +276,61 @@ func detectSysfsMotor(root string) *sysfsMotor {
 		return &sysfsMotor{gpio: gpioPath, levelPath: levelPath, levelMin: l.levelMin, levelMax: l.levelMax}
 	}
 	return nil
+}
+
+func init() { registerDriverStatus(driverRowRumble, hapticsDriverStatus) }
+
+// hapticsDriverStatus is the Rumble line of Settings → Drivers & hardware. It
+// never opens the motor itself (that may touch SDL, which is the main
+// thread's): it reports what the UI's own detection found, or "not checked".
+func hapticsDriverStatus() driverStatus {
+	hapticsMu.Lock()
+	tried, dev := hapticTried, hapticDev
+	hapticsMu.Unlock()
+	if !tried {
+		return driverStatus{State: driverUnknown, Detail: "not checked yet"}
+	}
+	switch m := dev.(type) {
+	case *sysfsMotor:
+		st := driverStatus{State: driverOK, Driver: "TrimUI motor", Node: m.gpio}
+		if m.levelPath != "" {
+			if m.levelMax > 65535 {
+				st.Detail = fmt.Sprintf("strength %s, up to %.1f V", filepath.Base(m.levelPath), float64(m.levelMax)/1e6)
+			} else {
+				st.Detail = "strength " + filepath.Base(m.levelPath)
+			}
+		}
+		if m.levelBlocked {
+			st.Detail = "strength node refuses writes; default level"
+		}
+		return st
+	case padHaptics:
+		return driverStatus{State: driverOK, Driver: "controller rumble (SDL)"}
+	}
+	if IsTrimuiDevice() {
+		return driverStatus{State: driverMissing, Driver: "TrimUI motor", Detail: "no motor node found"}
+	}
+	return driverStatus{State: driverNotUsed, Detail: "no motor"}
+}
+
+// detectMotorEnableNode is the Smart Pro S's motor when its driver has its
+// own switch (/sys/class/motor/enable beside level, the way NextUI's tg5050
+// PLAT_setRumble drives it): no GPIO is exported then. A level that reads above
+// 16 bits is in microvolts, so it gets the 0.5–3.3 V range instead of 0..65535.
+// nil when there is no such switch.
+func detectMotorEnableNode(root, levelPath string) *sysfsMotor {
+	enable := filepath.Join(root, "sys/class/motor/enable")
+	if !canWriteFile(enable) {
+		return nil
+	}
+	m := &sysfsMotor{gpio: enable, levelPath: levelPath, levelMin: 0, levelMax: 65535}
+	if data, err := os.ReadFile(levelPath); err == nil {
+		if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 65535 {
+			m.levelMin, m.levelMax = trimuiMotorMinVoltage, trimuiMotorMaxVoltage
+		}
+	}
+	_ = writeSysfsInt(enable, 0)
+	return m
 }
 
 // capMotorForDevice applies the per-model voltage ceiling. The Brick Pro's

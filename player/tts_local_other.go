@@ -718,6 +718,7 @@ func ttsPiperWarmWatch() {
 func ttsPiperStreamWarm(ctx context.Context, p *ttsPiperProc, first string, next func(context.Context) (string, bool), clean func(string) string, emit func([]int16, int) bool, boost bool) (emitted int, healthy bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, ttsPiperTimeout+time.Duration(ttsSpokenMax/6)*time.Second)
 	defer cancel()
+	started := time.Now()
 	var sent atomic.Int32
 	var writeFailed atomic.Bool
 	writerDone := make(chan struct{})
@@ -807,6 +808,13 @@ func ttsPiperStreamWarm(ctx context.Context, p *ttsPiperProc, first string, next
 			samples, rate, err := ttsDecodeWAV(data, false)
 			if err != nil {
 				continue
+			}
+			if emitted == 0 && rate > 0 && boost {
+				// How soon Juka's voice starts (a line, not a cache seed).
+				took := time.Since(started)
+				speech := float64(len(samples)) / float64(rate)
+				logInfo("tts", "Piper: first sound after %s (%.1f s of speech, %d Hz; %.2f s waited per second of it)",
+					took.Round(10*time.Millisecond), speech, rate, took.Seconds()/max(speech, 0.1))
 			}
 			emitted++
 			if !emit(samples, rate) {

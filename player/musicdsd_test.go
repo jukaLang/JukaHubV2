@@ -135,3 +135,68 @@ func TestDSDDecoderProducesPCM(t *testing.T) {
 		})
 	}
 }
+
+// TestUSBDACReadings reads what the kernel and ffprobe say about a USB DAC and
+// a lossless track (usbdac.go, usbdac_bitperfect.go): outside data, so odd
+// input must not invent a card, a rate or a bit depth.
+func TestUSBDACReadings(t *testing.T) {
+	cards := parseAsoundCards(" 0 [audiocodec     ]: audiocodec - audiocodec\n" +
+		"                      audiocodec\n" +
+		" 1 [Dongle         ]: USB-Audio - USB-C to 3.5mm Headphone Jack A\n" +
+		"                      Apple Inc. USB-C to 3.5mm Headphone Jack Adapter at usb-xhci-hcd.0-1, high speed\n" +
+		"garbage line\n")
+	if len(cards) != 2 || cards[1].index != 1 || cards[1].id != "Dongle" || cards[1].driver != "USB-Audio" ||
+		cards[1].name != "USB-C to 3.5mm Headphone Jack A" || cards[0].driver != "audiocodec" {
+		t.Fatalf("cards = %+v", cards)
+	}
+	alts := parseUSBStreamPlayback("Apple Inc. USB-C : USB Audio\n\nPlayback:\n  Status: Stop\n  Interface 2\n" +
+		"    Altset 1\n    Format: S16_LE\n    Channels: 2\n    Rates: 44100, 48000\n    Bits: 16\n" +
+		"    Altset 2\n    Format: S24_3LE\n    Channels: 2\n    Rates: 8000 - 192000 (continuous)\n\n" +
+		"Capture:\n    Format: S32_LE\n    Channels: 1\n    Rates: 96000\n")
+	if len(alts) != 2 || alts[0].format != "S16_LE" || alts[0].channels != 2 || !alts[0].playsRate(44100) || alts[0].playsRate(96000) ||
+		alts[1].format != "S24_3LE" || !alts[1].playsRate(96000) || alts[1].playsRate(384000) {
+		t.Fatalf("alts = %+v", alts)
+	}
+	f := parseMusicTrackFormat("codec_name=flac\nsample_rate=96000\nsample_fmt=s32\nchannels=2\nbits_per_sample=0\nbits_per_raw_sample=24\n")
+	if f.codec != "flac" || f.rate != 96000 || f.bits != 24 || f.channels != 2 || f.float || !musicLosslessCodec(f.codec) {
+		t.Fatalf("flac = %+v", f)
+	}
+	f = parseMusicTrackFormat("codec_name=mp3\nsample_rate=44100\nsample_fmt=fltp\nchannels=2\nbits_per_raw_sample=N/A\n")
+	if !f.float || f.bits != 0 || musicLosslessCodec(f.codec) {
+		t.Fatalf("mp3 = %+v", f)
+	}
+	if usbDACPCMIs("bluealsa:SRV=org.bluealsa,DEV=00:11:22:33:44:55,PROFILE=a2dp") || !usbDACPCMIs(usbDACPCMFor("Dongle")) {
+		t.Fatal("a headset PCM read as a DAC, or the other way")
+	}
+}
+
+// TestMusicFFmpegArgsStreamTimeout: a radio or podcast URL (or the https
+// relay's loopback address for one) gets the video decoders' read timeout and
+// reconnect ahead of -i (MED-36); a file on the card gets neither.
+func TestMusicFFmpegArgsStreamTimeout(t *testing.T) {
+	inputOpts := func(args []string) map[string]string {
+		opts := map[string]string{}
+		for i := 0; i+1 < len(args) && args[i] != "-i"; i++ {
+			if len(args[i]) > 1 && args[i][0] == '-' {
+				opts[args[i]] = args[i+1]
+			}
+		}
+		return opts
+	}
+	for _, src := range []string{"http://radio.example/stream", "https://cdn.example/ep.mp3?t=1", "http://127.0.0.1:4040/r/abc"} {
+		opts := inputOpts(musicFFmpegArgs(src, 90, 1, 44100))
+		if opts["-rw_timeout"] != ffmpegReadTimeoutArg() || opts["-reconnect"] != "1" ||
+			opts["-reconnect_delay_max"] != "4" || opts["-ss"] != "90.000" {
+			t.Errorf("%s: input options %v", src, opts)
+		}
+		if _, ok := opts["-user_agent"]; ok {
+			t.Errorf("%s: a podcast or radio link announced a browser: %v", src, opts)
+		}
+	}
+	opts := inputOpts(musicFFmpegArgs("/mnt/SDCARD/Music/a.flac", 0, 1, 44100))
+	for _, k := range []string{"-rw_timeout", "-reconnect", "-reconnect_delay_max"} {
+		if _, ok := opts[k]; ok {
+			t.Errorf("a local file got %s: %v", k, opts)
+		}
+	}
+}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +35,9 @@ func TestMigrateConfig(t *testing.T) {
 	}
 }
 
-// A pre-schema config loads, is stamped, and survives a save/load round trip.
+// A pre-schema config loads and is stamped with the current schema. The save
+// side (saveConfig writes schemaVersion) is TestSaveConfigPersistsDesignDataOnly
+// in config_persist_test.go.
 func TestConfigSchemaRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "jukaconfig.json")
@@ -51,22 +52,6 @@ func TestConfigSchemaRoundTrip(t *testing.T) {
 	}
 	if cfg.SchemaVersion != ConfigSchemaVersion {
 		t.Fatalf("loaded schema = %d, want %d", cfg.SchemaVersion, ConfigSchemaVersion)
-	}
-
-	saved := filepath.Join(dir, "saved.json")
-	if err := SaveConfig(saved, cfg); err != nil {
-		t.Fatalf("SaveConfig: %v", err)
-	}
-	data, err := os.ReadFile(saved)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := raw["schemaVersion"].(float64); int(got) != ConfigSchemaVersion {
-		t.Errorf("saved schemaVersion = %v, want %d", raw["schemaVersion"], ConfigSchemaVersion)
 	}
 }
 

@@ -1,6 +1,6 @@
 package main
 
-// Tests for the second trophy set: its shape (390 trophies, unique ids and
+// Tests for the second trophy set: its shape (391 trophies, unique ids and
 // titles, every old id kept, no retired id back), the event counters and their
 // drain, the lifetime days and runs, a loaded save's quiet catch-up, the clock
 // and the calendar, availability gates, the burst announcement and the room's
@@ -73,8 +73,8 @@ func trophyTestDay(base time.Time, n int) string {
 }
 
 func TestTrophySetShape(t *testing.T) {
-	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 390 {
-		t.Fatalf("the set has %d trophies, declared %d, want 390", len(playtimeAchievements), playtimeAchievementCount)
+	if len(playtimeAchievements) != playtimeAchievementCount || playtimeAchievementCount != 391 {
+		t.Fatalf("the set has %d trophies, declared %d, want 391", len(playtimeAchievements), playtimeAchievementCount)
 	}
 	ids := map[string]int{}
 	titles := map[string]string{}
@@ -133,8 +133,8 @@ func TestTrophySetShape(t *testing.T) {
 	if len(trophyFirstSetIDs) != 101 {
 		t.Fatalf("the first set lists %d ids", len(trophyFirstSetIDs))
 	}
-	if n := len(trophySetTwo()); n != 278 {
-		t.Errorf("the second set's table has %d rows, want 278 (+11 collection rungs = 289)", n)
+	if n := len(trophySetTwo()); n != 279 {
+		t.Errorf("the second set's table has %d rows, want 279 (+11 collection rungs = 290)", n)
 	}
 	// A retired id coming back would read an old save's unlock as its own.
 	for _, id := range trophyRetiredIDs {
@@ -722,7 +722,7 @@ func TestTrophyGroupOptions(t *testing.T) {
 	if len(opts) < 2 || opts[0].Value != "" || opts[0].Label != "All categories" {
 		t.Fatalf("options start %+v", opts[:1])
 	}
-	if opts[0].Note != "1 of 390 earned" {
+	if opts[0].Note != "1 of 391 earned" {
 		t.Errorf("all categories note = %q", opts[0].Note)
 	}
 	if opts[1].Value != "Lifetime" || !strings.HasPrefix(opts[1].Note, "1 of ") {

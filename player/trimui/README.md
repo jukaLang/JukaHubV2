@@ -168,6 +168,13 @@ is written, the power card's Exit becomes **Return to CrossMix**, holding
 and a reboot always comes back to the stock system. Layer format, what is and
 is not touched, and recovery: [docs/JUKAHUB_OS.md](../../docs/JUKAHUB_OS.md).
 
+`make-os-package.sh` writes `JukaHub-OS-Trimui.zip` with the layers in
+[`os-layers/`](os-layers) switched on: `speed`, `drivers-a133` (Smart Pro,
+Brick, Brick Pro, Hammer; kernel 4.9) and `drivers-a523` (Smart Pro S; kernel
+5.15). A driver layer names its models and kernel in `layer.json` and does
+nothing on another handheld, so one card serves all four. Kernel-module packs
+for one exact kernel are built with [`os/drivers`](../../os/drivers).
+
 ---
 
 ## 3. If something goes wrong

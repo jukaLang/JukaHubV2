@@ -4,8 +4,10 @@ name: Remote Play helpers and AndroidRT
 # checks that they will start there, and hands them to the packaging jobs:
 #
 #   * the two PS Remote Play helpers in player/native (chiaki-stream and
-#     chiaki-regist), as the artifact "remote-play-helpers" (the two binaries
-#     plus BUILDINFO.txt), which the packaging jobs put in Apps/JukaHub/bin;
+#     chiaki-regist) and the Moonlight helper moonlight-stream (optional: its
+#     build may fail without costing the other two anything), as the artifact
+#     "remote-play-helpers" (the binaries plus BUILDINFO.txt), which the
+#     packaging jobs put in Apps/JukaHub/bin;
 #   * AndroidRT, the Android-app runtime (player/androidrt), as the artifact
 #     "androidrt-package": JukaHub-AndroidRT-linux-arm64.zip, one androidrt/
 #     folder that every TrimUI archive carries as Apps/JukaHub/androidrt and
@@ -122,7 +124,8 @@ jobs:
           # The default shell is bash -e: nothing below may end the step early.
           set +e
           miss() {
-            rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/BUILDINFO.txt
+            rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/moonlight-stream \
+              player/native/bin/BUILDINFO.txt
             exit 0
           }
           if ! name=$(sh .github/scripts/build-root.sh key helpers); then
@@ -131,13 +134,15 @@ jobs:
           fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "helper sources: $name"
+          # moonlight-stream is in the set: an earlier build whose Moonlight
+          # helper failed is a miss, so this run tries it again.
           if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin \
-              chiaki-stream chiaki-regist BUILDINFO.txt; then
+              chiaki-stream chiaki-regist moonlight-stream BUILDINFO.txt; then
             miss
           fi
           # The binaries must be the ones their BUILDINFO.txt describes, which
           # is what the step summary and the release's helper package show.
-          for bin in chiaki-stream chiaki-regist; do
+          for bin in chiaki-stream chiaki-regist moonlight-stream; do
             want=$(awk -v b="$bin" '$0 == b { f = 1; next } f && $1 == "sha256:" { print $2; exit }' \
               player/native/bin/BUILDINFO.txt)
             have=$(sha256sum "player/native/bin/$bin" | cut -d' ' -f1)
@@ -190,17 +195,17 @@ jobs:
         run: |
           set +e
           dest=player/native/bin/juka-whisper
-          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny.bin" "$dest/BUILDINFO.txt" "$dest/LICENSE.txt" "$dest/vosk-cli" "$dest/libvosk.so" "$dest/vosk-model-small-en-us-0.15.zip" "$dest/VOSK_LICENSE.txt"; exit 0; }
+          miss() { rm -f "$dest/whisper-cli" "$dest/ggml-tiny-q8_0.bin" "$dest/BUILDINFO.txt" "$dest/LICENSE.txt" "$dest/vosk-cli" "$dest/libvosk.so" "$dest/vosk-model-small-en-us-0.15.zip" "$dest/VOSK_LICENSE.txt"; exit 0; }
           if ! name=$(sh .github/scripts/build-root.sh key stt); then miss; fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           if ! timeout 240 bash .github/scripts/go-build-cache.sh fetch "$name" "$dest" \
-              whisper-cli ggml-tiny.bin BUILDINFO.txt LICENSE.txt \
+              whisper-cli ggml-tiny-q8_0.bin BUILDINFO.txt LICENSE.txt \
               vosk-cli libvosk.so vosk-model-small-en-us-0.15.zip VOSK_LICENSE.txt; then miss; fi
           want_model=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_bin=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$dest/BUILDINFO.txt")
           want_vosk_bin=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' "$dest/BUILDINFO.txt")
           [ -n "$want_model" ] && [ -n "$want_bin" ] && [ -n "$want_vosk_bin" ] || miss
-          [ "$(sha256sum "$dest/ggml-tiny.bin" | cut -d' ' -f1)" = "$want_model" ] || miss
+          [ "$(sha256sum "$dest/ggml-tiny-q8_0.bin" | cut -d' ' -f1)" = "$want_model" ] || miss
           [ "$(sha256sum "$dest/whisper-cli" | cut -d' ' -f1)" = "$want_bin" ] || miss
           [ "$(sha256sum "$dest/vosk-cli" | cut -d' ' -f1)" = "$want_vosk_bin" ] || miss
           [ "$(sha256sum "$dest/libvosk.so" | cut -d' ' -f1)" = 0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597 ] || miss
@@ -269,6 +274,17 @@ jobs:
                 echo "Every step's whole log is in the run's \`remote-play-helper-logs\` artifact."
               fi
             fi
+            # The Moonlight helper is optional: say whether it made it.
+            if [ -f player/native/bin/moonlight-stream ]; then
+              echo ""
+              echo "**Moonlight helper:** \`moonlight-stream\` built and verified; the packages carry it beside the PS helpers."
+              if [ -f "$info" ] && grep -q 'NOT PINNED' "$info"; then
+                echo "moonlight-common-c is **not pinned** (its master tip, id in BUILDINFO.txt below): set \`MOONLIGHT_COMMON_COMMIT\` in \`player/native/build-helpers.sh\` to pin it."
+              fi
+            elif [ -n "$REUSED_FROM" ] || [ "$BUILD_OUTCOME" = "success" ]; then
+              echo ""
+              echo "**Moonlight helper:** not built; the packages of this run ship without Moonlight streaming (the PS helpers are not affected). Its logs (\`moonlight-*.log\`) are in the run's \`remote-play-helper-logs\` artifact."
+            fi
             if [ -f "$info" ]; then
               echo ""
               echo '```'
@@ -286,7 +302,9 @@ jobs:
         # failure only in their own config.log, and CMake's configure log
         # records every check. Only a help for the next fix: bounded, and its
         # failure changes nothing.
-        if: ${{ always() && steps.build.outcome == 'failure' }}
+        # Also when the PS helpers built and only the optional moonlight-stream
+        # did not: its moonlight-*.log files are in the same folder.
+        if: ${{ always() && (steps.build.outcome == 'failure' || (steps.build.outcome == 'success' && hashFiles('player/native/bin/moonlight-stream') == '')) }}
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -297,6 +315,7 @@ jobs:
             ${{ env.ROOTFS }}/tmp/jukahub-deps-src/*/config.log
             ${{ env.ROOTFS }}/tmp/jukahub-deps-src/*/ffbuild/config.log
             ${{ env.ROOTFS }}/tmp/jukahub-chiaki-build/CMakeFiles/CMakeConfigureLog.yaml
+            ${{ env.ROOTFS }}/tmp/jukahub-moonlight-build/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: ignore
           retention-days: 14
           overwrite: true
@@ -309,9 +328,12 @@ jobs:
         with:
           name: remote-play-helpers
           # Artifacts do not keep file modes: the packaging jobs set +x again.
+          # moonlight-stream only when it was built (if-no-files-found looks at
+          # the whole list).
           path: |
             player/native/bin/chiaki-stream
             player/native/bin/chiaki-regist
+            player/native/bin/moonlight-stream
             player/native/bin/BUILDINFO.txt
           if-no-files-found: error
           retention-days: 30
@@ -321,8 +343,9 @@ jobs:
 
       - name: Keep the helpers for later runs
         # A fresh build that passed its checks, on a push to main: the only
-        # kind the lookup above accepts. Reused helpers are kept already.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        # kind the lookup above accepts. Reused helpers are kept already. A
+        # set without moonlight-stream would only ever be a miss: not kept.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('player/native/bin/moonlight-stream') != '' }}
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -331,6 +354,7 @@ jobs:
           path: |
             player/native/bin/chiaki-stream
             player/native/bin/chiaki-regist
+            player/native/bin/moonlight-stream
             player/native/bin/BUILDINFO.txt
           if-no-files-found: error
           retention-days: 90

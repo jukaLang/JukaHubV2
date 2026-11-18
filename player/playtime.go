@@ -821,6 +821,9 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	playtime.session += secs
 	trophyCountPeak(d, tkSessionBest, playtime.session)
 	playtime.lastRecordAt = gapEnd
+	// The same measured session counts toward today's challenge when it was
+	// that game (game_daily.go).
+	dailyChallengeCredit(recents[0].Path, secs)
 	// Saved at the next tick: the device may go from the game straight to
 	// sleep, and no in-app second would come to save it.
 	playtime.dirty = true
@@ -1494,9 +1497,9 @@ var playtimeHiddenTrophies = map[string]bool{
 }
 
 // playtimeAchievementCount is what the room's totals and the tests use: the 100
-// trophies of the original set, the 289 of the second (trophy_set2.go) and the
+// trophies of the original set, the 290 of the second (trophy_set2.go) and the
 // platinum.
-const playtimeAchievementCount = 390
+const playtimeAchievementCount = 391
 
 // trophyPlatinumID is the platinum: earned for every other trophy.
 const trophyPlatinumID = "platinum"
@@ -1580,7 +1583,7 @@ func buildPlaytimeAchievements() []playtimeAchievement {
 	// count, and the unlock pass walks the list in order, so each one sees the
 	// unlocks before it. The rungs past 90 came with the second set; the
 	// availability pass drops any a setup offers too few trophies to reach.
-	// The top rung must stay under the 372 trophies that are neither the
+	// The top rung must stay under the 373 trophies that are neither the
 	// platinum nor a bonus one (a rung does not count itself, and no setup
 	// offers them all): after the 2026-11-11 cut a 375 rung was one no setup
 	// could ever offer.

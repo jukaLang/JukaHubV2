@@ -542,7 +542,7 @@ func sysToolNetSync() {
 		v.caption = "Download speed"
 		v.big = sysToolNetMbps(d.downMbps)
 		v.line = sysToolNetRating(d.downMbps)
-		v.status = "Tested " + d.at.Format("15:04")
+		v.status = "Tested " + clockDigits(nil, d.at)
 	case sysToolNetFailed:
 		v.caption, v.big, v.unit = "Speed test", "—", ""
 		v.line = d.err

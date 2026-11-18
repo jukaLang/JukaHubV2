@@ -221,7 +221,21 @@ func mcPeerFileAllowed(rel string) (string, bool) {
 	return "", false
 }
 
-func mcReadJSON(p string, v interface{}) error {
+// mcRegularFileUnder reports whether rel names a regular file below root.
+// cur comes from a peer's request: resolveWithinRoot holds it below root.
+func mcRegularFileUnder(root, rel string) bool {
+	p, err := resolveWithinRoot(root, rel)
+	return err == nil && regularFile(p)
+}
+
+// mcReadJSON decodes the JSON file rel names below the .minecraft at root.
+// rel is built from names a peer sent: resolveWithinRoot holds it below root
+// and the file is opened by what that returned.
+func mcReadJSON(root, rel string, v interface{}) error {
+	p, err := resolveWithinRoot(root, rel)
+	if err != nil {
+		return err
+	}
 	if info, err := os.Lstat(p); err != nil || !info.Mode().IsRegular() {
 		return errors.New("not a regular file")
 	}
@@ -247,7 +261,8 @@ func mcBuildPlan(root, id string) (mcPlan, error) {
 		if rel == "" {
 			return
 		}
-		if _, ok := mcPeerFileAllowed(rel); !ok {
+		allowed, ok := mcPeerFileAllowed(rel)
+		if !ok {
 			return
 		}
 		sha = strings.ToLower(sha)
@@ -265,7 +280,11 @@ func mcBuildPlan(root, id string) (mcPlan, error) {
 		if len(seen) >= mcPlanMaxFiles {
 			return
 		}
-		info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
+		var info os.FileInfo
+		local, err := resolveWithinRoot(root, filepath.FromSlash(allowed))
+		if err == nil {
+			info, err = os.Lstat(local)
+		}
 		if err != nil || !info.Mode().IsRegular() {
 			seen[rel] = -1
 			plan.Missing++
@@ -290,7 +309,7 @@ func mcBuildPlan(root, id string) (mcPlan, error) {
 		}
 		var v mcVersionJSON
 		jsonRel := "versions/" + cur + "/" + cur + ".json"
-		if err := mcReadJSON(filepath.Join(root, filepath.FromSlash(jsonRel)), &v); err != nil {
+		if err := mcReadJSON(root, filepath.FromSlash(jsonRel), &v); err != nil {
 			if depth == 0 {
 				return plan, fmt.Errorf("version %s: %w", cur, err)
 			}
@@ -301,7 +320,7 @@ func mcBuildPlan(root, id string) (mcPlan, error) {
 		add(jsonRel, "", 0)
 		// A loader profile (Forge, Fabric) has no jar of its own: it runs its
 		// parent's.
-		if v.InheritsFrom == "" || v.Downloads.Client.SHA1 != "" || regularFile(filepath.Join(root, "versions", cur, cur+".jar")) {
+		if v.InheritsFrom == "" || v.Downloads.Client.SHA1 != "" || mcRegularFileUnder(root, filepath.Join("versions", cur, cur+".jar")) {
 			add("versions/"+cur+"/"+cur+".jar", v.Downloads.Client.SHA1, v.Downloads.Client.Size)
 		}
 		if v.Jar != "" && mcSafeName(v.Jar) {
@@ -346,7 +365,7 @@ func mcBuildPlan(root, id string) (mcPlan, error) {
 				Size int64  `json:"size"`
 			} `json:"objects"`
 		}
-		if err := mcReadJSON(filepath.Join(root, filepath.FromSlash(indexRel)), &idx); err == nil {
+		if err := mcReadJSON(root, filepath.FromSlash(indexRel), &idx); err == nil {
 			names := make([]string, 0, len(idx.Objects))
 			for name := range idx.Objects {
 				names = append(names, name)
@@ -379,7 +398,7 @@ func mcListVersions(root string) []mcPeerVersion {
 			continue
 		}
 		var v mcVersionJSON
-		if err := mcReadJSON(filepath.Join(root, "versions", id, id+".json"), &v); err != nil {
+		if err := mcReadJSON(root, filepath.Join("versions", id, id+".json"), &v); err != nil {
 			continue
 		}
 		out = append(out, mcPeerVersion{ID: id, Type: v.Type, Inherits: v.InheritsFrom,
@@ -479,26 +498,19 @@ func mcHandlePeerFile(w http.ResponseWriter, r *http.Request, call peerCall) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	full, ok := mcServePath(root, rel)
-	if !ok {
+	if _, ok := mcServePath(root, rel); !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	before, err := os.Lstat(full)
-	if err != nil {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	f, err := os.Open(full)
+	// Opened folder by folder below the .minecraft (steam_ports.go): no link
+	// or Windows junction on the way, and the file opened is the one checked.
+	f, info, err := peerOpenRegularUnder(root, rel)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	defer f.Close()
-	// The file opened must be the one checked: a link swapped in between is
-	// refused.
-	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || !os.SameFile(before, info) || info.Size() > mcPlanMaxBytes {
+	if info.Size() > mcPlanMaxBytes {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

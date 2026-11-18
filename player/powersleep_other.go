@@ -19,6 +19,15 @@ func powerSleepAsleepClock() (time.Duration, bool) { return 0, false }
 // powerRTCWakeIn arms nothing.
 func powerRTCWakeIn(time.Duration) func() { return func() {} }
 
+// powerRTCWakeSet arms nothing.
+func powerRTCWakeSet(int64) bool { return false }
+
+// powerRTCWakeClear has nothing to clear.
+func powerRTCWakeClear() {}
+
+// powerRTCNow has no RTC to read.
+func powerRTCNow() (int64, bool) { return 0, false }
+
 // powerChildGroupStopped cannot tell; nothing is paused here anyway
 // (alarmCanPauseChildren is false on Windows).
 func powerChildGroupStopped(int) bool { return false }

@@ -42,12 +42,25 @@ func renderWeatherSceneBackground(renderer *sdl.Renderer, config *Config, area s
 	if animate {
 		tick = sdl.GetTicks64()
 	}
+	// While it moves, the scene asks the frame-rate governor (adaptive.go) for
+	// the frames it needs, so it is not drawn at the idle cadence: falling rain
+	// and snow as fast as the active cadence goes, the sun's slow pulse and
+	// turning rays at about 15 fps. With motion off nothing is asked.
 	switch weatherSceneCondition(day.Code) {
 	case "sun":
+		if animate {
+			requestFrameEvery(66)
+		}
 		weatherSceneSun(renderer, area, tick, animate)
 	case "rain":
+		if animate {
+			requestFrameEvery(1)
+		}
 		weatherSceneRain(renderer, area, tick)
 	case "snow":
+		if animate {
+			requestFrameEvery(1)
+		}
 		weatherSceneSnow(renderer, area, tick)
 	default:
 		// A soft sky tint keeps cloudy and foggy pages calm.

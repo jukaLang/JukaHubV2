@@ -1,2 +1,3 @@
 plastron-brick-v1
 smartpro-stock-kernel-v1
+jukaos-device-layers-v1

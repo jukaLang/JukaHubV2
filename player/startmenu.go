@@ -105,6 +105,66 @@ var (
 	startMenuItemHits  []startMenuHit
 )
 
+// phoneCompanionEntryName is the Device row that opens the pairing card.
+const phoneCompanionEntryName = "Phone Companion"
+
+// The Games rows beside PS Remote Play for Xbox Remote Play (X1, xremote.go;
+// also the header pill) and the Steam library (steam_ui.go; also an Apps
+// row). Their rows are what an "app:do:" ref names, so a favourite, a
+// collection, the Tabs Home's Games tab and Home search all open them
+// through homeActivateApp.
+const (
+	xboxRemotePlayEntryName = "Xbox Remote Play"
+	steamEntryName          = "Steam"
+)
+
+// startMenuQRRect is the Phone Companion's pairing code under the rail, as
+// drawn this frame: a tap shows it full screen, and Screen Share paints over
+// it (castShareRedactions) because its link carries the PIN. Empty while the
+// menu is closed, no code exists yet or the rail has no room for a readable
+// one. Render/event thread only.
+var startMenuQRRect sdl.Rect
+
+// startMenuQRMinModule is the smallest module, in pixels, the code is drawn
+// with: below it a phone camera across the room cannot read it.
+const startMenuQRMinModule = int32(3)
+
+// startMenuDrawQR draws the pairing code at the foot of the rail, between the
+// last group and the footer, with a caption under it. The code fills the
+// rail's width when the height allows, in whole-pixel modules with a
+// two-module quiet zone, like the Home header's (renderCompanionHeaderQR).
+func startMenuDrawQR(renderer *sdl.Renderer, config *Config, caption *ttf.Font, railX, railW, top, bottom int32) {
+	startMenuQRRect = sdl.Rect{}
+	if renderer == nil || len(companion.qr) == 0 {
+		return
+	}
+	core := companionHeaderQRCore()
+	n := int32(len(core))
+	if n == 0 {
+		return
+	}
+	captionH := int32(0)
+	if caption != nil {
+		captionH = int32(caption.Height()) + 6
+	}
+	side := min32(railW-8, bottom-top-captionH)
+	module := side / (n + 4)
+	if module < startMenuQRMinModule {
+		return
+	}
+	side = module * (n + 4)
+	tile := sdl.Rect{X: railX + (railW-side)/2, Y: top, W: side, H: side}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, tile.X, tile.Y, tile.W, tile.H, max32(6, side/12), sdl.Color{R: 255, G: 255, B: 255, A: 255})
+	drawCompanionQR(renderer, insetRect(tile, module*2), core)
+	startMenuQRRect = tile
+	if caption != nil {
+		label := ellipsize(caption, "Scan: Phone Companion", railW)
+		lw, _ := measureText(caption, label)
+		renderText(renderer, config, caption, label, ColorTextMuted(), railX+(railW-lw)/2, tile.Y+tile.H+6)
+	}
+}
+
 // startMenuSceneEntries lists the config's own scenes in the order people
 // expect them: the main screens first, then everything else. Hidden, utility
 // and maintenance scenes stay out; About is offered by the Device group so it
@@ -197,11 +257,21 @@ func startMenuGroups(config *Config) []startMenuGroup {
 			})
 		}
 	}
+	// The recent games, each where it was left (gameswitcher.go).
+	if gameSwitcherEnabled(config) {
+		games = append(games, startMenuEntry{name: gameSwitcherEntryName, icon: "W", glyph: "games", action: func(c *Config) { gameSwitcherOpen(c) }})
+	}
 	games = append(games, []startMenuEntry{
 		{name: "Emulators", icon: "E", action: func(*Config) { openEmulatorPanel() }},
 		{name: gamesLibraryEntryName, icon: "L", action: func(*Config) { openGameLibraryPanel() }},
 		{name: gameProfilesEntryName, icon: "G", action: func(*Config) { openGameProfilePanel(false) }},
 		{name: "PS Remote Play", icon: "C", action: func(*Config) { openChiakiPanel() }},
+		{name: xboxRemotePlayEntryName, icon: "X", glyph: "xbox", action: func(*Config) { x1TileActivate() }},
+		// A gaming PC through Moonlight (Vibepollo, Apollo, Sunshine; moonlight_ui.go).
+		{name: moonlightEntryName, icon: "P", glyph: "devices", action: func(*Config) { openMoonlightPanel() }},
+		// Xbox Cloud Gaming (Game Pass) and GeForce NOW (cloudgaming*.go).
+		{name: cloudGamingEntryName, icon: "C", glyph: cloudGamingGlyph, action: func(c *Config) { cloudGamingOpen(c) }},
+		{name: steamEntryName, icon: "S", glyph: "gamepad", action: func(*Config) { openSteamPanel() }},
 		{name: "RetroAchievements", icon: "R", action: func(*Config) { openRetroAchievementsPanel() }},
 		{name: "Save Manager", icon: "S", action: func(*Config) { openSaveManagerPanel() }},
 	}...)
@@ -209,7 +279,12 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	games = append(games, startMenuEntry{name: windowsAppsEntryName, icon: "W", action: func(*Config) { openWindowsAppsPanel(false) }})
 	if !IsWindows() {
 		games = append(games, startMenuEntry{name: portMasterEntryName, icon: "P", action: func(*Config) { openPortsPanel(false) }})
+		// Splore with the user's own PICO-8, or what to copy for it (pico8native.go).
+		games = append(games, startMenuEntry{name: pico8SploreEntryName, icon: "8", glyph: "rom", action: func(*Config) { pico8SploreOpen() }})
 	}
+	// PortMaster's catalogue as a store (ports_store*.go). A PC browses it;
+	// the ports themselves install on the handheld.
+	games = append(games, startMenuEntry{name: portsStoreEntryName, icon: "P", glyph: portsStoreGlyph, action: func(c *Config) { portsStoreOpen(c) }})
 	// PCs can inspect and download APKs even though AndroidRT runs on the handheld.
 	games = append(games, startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }})
 	// Every way to play Minecraft here: ports, Bedrock, a PC's launchers.
@@ -218,6 +293,9 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	if !retroAchievementsSupported() {
 		games = withoutStartMenuEntry(games, "RetroAchievements")
 	}
+	if !x1PillSupported() {
+		games = withoutStartMenuEntry(games, xboxRemotePlayEntryName)
+	}
 	if p := compatEntryName; p != "" {
 		games = append(games, startMenuEntry{name: p, icon: "T", action: func(*Config) { openCompatPanel(true) }})
 	}
@@ -225,6 +303,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	tools := []startMenuEntry{
 		{name: "Network tools", icon: "N", action: func(c *Config) { netToolsOpen(c) }},
 		{name: "Downloads", icon: "D", action: func(*Config) { openDownloadsPanel() }},
+		// Mail, with its unread count, and the page that sets up mail and
+		// calendars (mail_*.go, mailcal_ui.go).
+		{name: mailcalAppEntryName, icon: "M", glyph: "mail", badge: mailcalMenuBadge(), action: func(*Config) { mailOpenApp() }},
+		{name: mailcalSettingsEntryName, icon: "E", glyph: "calendar", action: func(c *Config) { mailcalOpenSettings(c) }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
 		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},
@@ -237,6 +319,11 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	if IsTrimuiDevice() || hasPPSSPPInstall(ppssppSearchRoots()) {
 		tools = append(tools, startMenuEntry{name: "Stick Calibration", icon: "K", action: func(c *Config) { openStickCalibrationPanel(c) }})
 	}
+	// Ready-made commands without typing: the Terminal with its Command Deck
+	// open (cmddeck.go).
+	if config != nil && sceneIndexExact(config, "Terminal") >= 0 {
+		tools = append(tools, startMenuEntry{name: "Commands", icon: "C", action: func(c *Config) { cmdDeckOpenFromAnywhere(c, "") }})
+	}
 
 	device := []startMenuEntry{
 		{name: "Quick Settings", icon: "Q", action: func(*Config) { qsToggleOpen() }},
@@ -247,6 +334,9 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Ambient", icon: "D", action: func(c *Config) { ambientEnter(c) }},
 		{name: "Wallpapers", icon: "P", action: func(*Config) { wpOpen = true; initWallpaperPicker() }},
 		{name: "Edit Home", icon: "H", action: func(c *Config) { homeEditOpen(c) }},
+		// The pairing card: the phone types, pastes keys and sends files
+		// (companionui.go). Its code is also under the rail.
+		{name: phoneCompanionEntryName, icon: "C", action: func(*Config) { openCompanionOverlay() }},
 		// Report a bug (bugrep.go): its Submit sends with no typing at all.
 		{name: bugrepEntryName, icon: "B", action: func(c *Config) { bugrepOpenScreen(c) }},
 		{name: "About", icon: "i", scene: "About"},
@@ -326,12 +416,12 @@ var (
 		"Emulators": "emulator", "Games Library": "games", "Game Profiles": "controller",
 		"PS Remote Play": "tv", "RetroAchievements": "trophy", "Save Manager": "saves",
 		"Windows Apps": "apps", "PortMaster Ports": "packages", "APK Store": "phone", "Smart Pro Compatibility": "check",
-		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles",
+		"Network tools": "network", "Downloads": "download", "Curation Hub": "sparkles", "Commands": "terminal",
 		"Audio": "music", "Synth": "synth", "Smart Home": "home", "Screen Share": "tv", "Accessibility": "user",
 		"Stick Calibration": "controller", "Quick Settings": "preferences", "Liquid background": "sparkles", "Voice command": "mic",
 		"Wi-Fi Networks": "wifi", "Screenshot": "camera", "Sleep Screen": "moon",
 		"Ambient": "clock", "Wallpapers": "image", "Edit Home": "edit", "Quit JukaHub": "power",
-		bugrepEntryName: "bug",
+		bugrepEntryName: "bug", phoneCompanionEntryName: "qr",
 		// The rail's groups.
 		"Screens": "grid", "Games": "games", "Tools": "tools", "Plugins": "plugin", "Device": "devices",
 	}
@@ -548,6 +638,7 @@ func startMenuClampScroll(count int) {
 // renderStartMenu draws the Start menu. The focused group (rail) and the
 // focused entry share the highlight, so keys and clicks agree.
 func renderStartMenu(renderer *sdl.Renderer, config *Config) {
+	startMenuQRRect = sdl.Rect{}
 	if !tb.startOpen {
 		return
 	}
@@ -648,6 +739,11 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			renderText(renderer, config, font, ellipsize(font, g.name, rect.W-52),
 				ColorTextPrimary(), rect.X+44, rect.Y+(rect.H-int32(font.Height()))/2)
 		}
+		// The phone's pairing code fills the rail's free space under the
+		// groups, so a phone can pair from the menu itself.
+		railRows := min(len(groups), groupRows)
+		startMenuDrawQR(renderer, config, captionFont, railX, railW,
+			menuY+startMenuHeadNow+int32(railRows)*startMenuGroupH+10, menuY+menuH-startMenuFootH-4)
 
 		// A hairline makes the two panes read as panes rather than one grid.
 		dividerX := railX + railW + 5
@@ -760,6 +856,13 @@ func startMenuIsPointIn(x, y int32) bool {
 // startMenuHandleClick selects a group or activates an entry.
 func startMenuHandleClick(x, y int32, config *Config) {
 	if !tb.startOpen {
+		return
+	}
+	// The pairing code under the rail: shown full screen, brighter, with the
+	// PIN and address for a phone that cannot scan.
+	if startMenuQRRect.W > 0 && pointInRect(x, y, startMenuQRRect) {
+		startMenuDismiss()
+		homeShowPairingQR()
 		return
 	}
 	for _, hit := range startMenuGroupHits {

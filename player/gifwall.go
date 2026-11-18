@@ -142,7 +142,7 @@ func gifWallStillReason(config *Config) string {
 	if currentPowerMode(config) == PowerModeBatterySaver {
 		return "Battery Saver holds it on its first frame"
 	}
-	return "Animate wallpaper is off, so it holds its first frame (Settings → Display & theme)"
+	return "Animate wallpaper is off, so it holds its first frame (Settings → Theme & look)"
 }
 
 // errGifWallCancelled ends a decode whose wallpaper is no longer wanted.
@@ -1489,47 +1489,6 @@ func gifWallFrameNeed(config *Config) uint32 {
 		d = gifWallDefaultDelay
 	}
 	return uint32(max(d/2, 1))
-}
-
-// wallSmooth is the static wallpaper appWallpaperTextureSmooth last looked
-// at: the texture, the path it was loaded from and its renderer.
-var wallSmooth struct {
-	tex      *sdl.Texture
-	path     string
-	renderer *sdl.Renderer
-}
-
-// appWallpaperTextureSmooth is appWallpaperTexture for a picture that is drawn
-// bent: the liquid background's refraction mesh (liquidbg.go), where a ripple
-// acts as a lens and enlarges the picture to twice its size and more. The
-// static wallpaper is loaded with SDL's default filter, nearest, which is
-// exact for the plain 1:1 copy every other screen draws but turned those
-// enlargements into blocks — the "pixelated" water a tester saw. go-sdl2 has
-// no per-texture filter, so the picture is made once more through the same
-// fit as at load (core.go fitBackgroundTexture: a 1:1 copy read back from a
-// scratch target) with the linear hint up, and the new texture takes the old
-// one's place in bgTexture: core.go still owns and frees it, and the 1:1
-// copies look the same with either filter. It runs once per picture; a
-// renderer without render targets keeps the original. A GIF frame already
-// has the filter it should have (pixel art keeps nearest on purpose).
-func appWallpaperTextureSmooth(renderer *sdl.Renderer, config *Config) (*sdl.Texture, *sdl.Rect) {
-	tex, src := appWallpaperTexture(renderer, config)
-	if tex == nil || renderer == nil || tex != bgTexture {
-		return tex, src
-	}
-	if wallSmooth.tex == tex && wallSmooth.renderer == renderer && wallSmooth.path == bgImagePath {
-		return tex, src
-	}
-	prev := sdl.GetHint(sdl.HINT_RENDER_SCALE_QUALITY)
-	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "linear")
-	smooth := fitBackgroundTexture(renderer, tex)
-	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, prev)
-	if smooth != nil && smooth != tex {
-		// fitBackgroundTexture destroyed the original.
-		bgTexture, tex = smooth, smooth
-	}
-	wallSmooth.tex, wallSmooth.path, wallSmooth.renderer = tex, bgImagePath, renderer
-	return tex, src
 }
 
 // gifWallTextureBytes is what the wallpaper holds as textures — an animated

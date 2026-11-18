@@ -389,140 +389,40 @@ static struct {
     unsigned rawFrames;     /* plain eglSwapBuffers on SDL's surface      */
 } S;
 
-static int onStockTrimui(void);
-
 static const char *sdlError(void) {
     const char *e = S.sdl.SDL_GetError ? S.sdl.SDL_GetError() : NULL;
     return e && *e ? e : "no SDL error text";
 }
 
-#define SDL_RESOLVE(field, required)                                    \
-    do {                                                                \
-        *(void **)&S.sdl.field = rt_dlsym(S.sdl.lib, #field);           \
-        if ((required) && !S.sdl.field && !missing) missing = #field;   \
-    } while (0)
+/* The firmware's SDL2 (apak_sdlLoad in surface.c, shared with the
+ * ANDROIDPAK_SURFACE probe): its own paths first on the stock firmware;
+ * ANDROIDPAK_SDL_LIB overrides. */
+static int sdlLoadLocked(void) { return apak_sdlLoad(&S.sdl, apak_gpuOnStockTrimui(), S.why, sizeof S.why); }
 
-/* The firmware's SDL2 first on the stock firmware (a copy another package
- * put on the library path may lack its video driver); ANDROIDPAK_SDL_LIB
- * overrides. Only libSDL2-2.0.so.0 names: a bare libSDL2.so on the path is
- * an SDL game's own bionic build, which glibc cannot load. */
-static int sdlLoadLocked(void) {
-    static const char *const stock[] = {
-        "/usr/lib/libSDL2-2.0.so.0", "libSDL2-2.0.so.0", "/usr/trimui/lib/libSDL2-2.0.so.0", NULL,
-    };
-    static const char *const others[] = {
-        "libSDL2-2.0.so.0", "/usr/lib/libSDL2-2.0.so.0", "/usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0", NULL,
-    };
-    const char *override = getenv("ANDROIDPAK_SDL_LIB");
-    const char *const *paths = onStockTrimui() ? stock : others;
-    const char *missing = NULL;
-    size_t i = 0;
-    if (S.sdl.lib) return 1;
-    if (override && *override) {
-        S.sdl.lib = rt_dlopen(override, 0);
-        if (!S.sdl.lib) {
-            snprintf(S.why, sizeof S.why, "%.200s not loadable: %.250s", override, rt_dlerror());
-            return 0;
-        }
-        apak_strcpy(S.sdl.name, sizeof S.sdl.name, override);
-    }
-    for (i = 0; !S.sdl.lib && paths[i]; i++) {
-        S.sdl.lib = rt_dlopen(paths[i], 0);
-        if (S.sdl.lib) apak_strcpy(S.sdl.name, sizeof S.sdl.name, paths[i]);
-    }
-    if (!S.sdl.lib) {
-        snprintf(S.why, sizeof S.why, "no libSDL2-2.0.so.0 (%zu places tried; ANDROIDPAK_SDL_LIB overrides)", i);
-        return 0;
-    }
-    SDL_RESOLVE(SDL_InitSubSystem, 1);
-    SDL_RESOLVE(SDL_GetError, 1);
-    SDL_RESOLVE(SDL_GL_SetAttribute, 1);
-    SDL_RESOLVE(SDL_CreateWindow, 1);
-    SDL_RESOLVE(SDL_GL_CreateContext, 1);
-    SDL_RESOLVE(SDL_GL_MakeCurrent, 1);
-    SDL_RESOLVE(SDL_GL_SwapWindow, 1);
-    SDL_RESOLVE(SDL_GL_DeleteContext, 1);
-    SDL_RESOLVE(SDL_QuitSubSystem, 0);
-    SDL_RESOLVE(SDL_GetVersion, 0);
-    SDL_RESOLVE(SDL_GetCurrentVideoDriver, 0);
-    SDL_RESOLVE(SDL_GL_LoadLibrary, 0);
-    SDL_RESOLVE(SDL_DestroyWindow, 0);
-    SDL_RESOLVE(SDL_GL_GetCurrentWindow, 0);
-    if (missing) {
-        snprintf(S.why, sizeof S.why, "%.250s lacks %s (not an SDL2 build?)", S.sdl.name, missing);
-        rt_dlclose(S.sdl.lib);
-        memset(&S.sdl, 0, sizeof S.sdl); /* no pointer into the closed library survives */
-        return 0;
-    }
-    return 1;
-}
+/* SDL_VIDEO_GL_DRIVER: ANDROIDPAK_GLES2_LIB, else the GLES library beside
+ * the chosen libEGL — the same file the game's libGLESv2.so is bound to
+ * (bindGlesBesideEgl). The stock firmware ships only /usr/lib/libGLESv2.so,
+ * where SDL's default libGLESv2.so.2 would not load. */
+static const char *sdlGlesLib(char *buf, size_t cap) { return apak_sdlGlesLib(P.gpu.eglName, buf, cap); }
 
-/* The GLES library SDL loads before its EGL (SDL_VIDEO_GL_DRIVER):
- * ANDROIDPAK_GLES2_LIB when set — what bionicld.c binds the game's
- * libGLESv2.so to — else the one beside the chosen libEGL, versioned name
- * first like bionicld.c (the stock firmware ships only /usr/lib/libGLESv2.so,
- * and SDL's default libGLESv2.so.2 would not load there). NULL when libEGL
- * came from the library path: SDL's default searches that same path. */
-static const char *sdlGlesLib(char *buf, size_t cap) {
-    static const char *const names[] = { "libGLESv2.so.2", "libGLESv2.so" };
-    const char *env = getenv("ANDROIDPAK_GLES2_LIB");
-    const char *slash = strrchr(P.gpu.eglName, '/');
-    size_t i;
-    if (env && *env) return env;
-    if (P.gpu.eglName[0] != '/' || !slash) return NULL;
-    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
-        int n = snprintf(buf, cap, "%.*s/%s", (int)(slash - P.gpu.eglName), P.gpu.eglName, names[i]);
-        if (n > 0 && (size_t)n < cap && access(buf, R_OK) == 0) return buf;
-    }
-    return NULL;
-}
-
-/* SDL reads these from the environment (older SDL2 releases only there), so
- * they are set here, at start, while the runner is still single-threaded — a
- * setenv racing a game thread's getenv can crash. Only when SDL may run
- * (ANDROIDPAK_PRESENT=sdl, or auto on the native backend): children and a
- * game's own libSDL2 inherit them. Defaults only: whatever the environment
- * already says wins. */
-static void sdlEnvDefaults(void) {
-    char gles[320];
-    const char *glesLib = sdlGlesLib(gles, sizeof gles);
-    setenv("SDL_VIDEO_EGL_DRIVER", P.gpu.eglName, 0);
-    if (glesLib) setenv("SDL_VIDEO_GL_DRIVER", glesLib, 0);
-    setenv("SDL_NO_SIGNAL_HANDLERS", "1", 0);
-    setenv("SDL_INPUT_LINUX_KEEP_KBD", "1", 0);
-}
+/* SDL reads its variables from the environment (older SDL2 releases only
+ * there), so they are set here, at start, while the runner is still
+ * single-threaded — a setenv racing a game thread's getenv can crash. Only
+ * when SDL may run (ANDROIDPAK_PRESENT=sdl, or auto on the native backend):
+ * children and a game's own libSDL2 inherit them. Defaults only: whatever
+ * the environment already says wins (apak_sdlEnvDefaults). */
+static void sdlEnvDefaults(void) { apak_sdlEnvDefaults(P.gpu.eglName); }
 
 /* Load SDL2 and start its video subsystem, once per process. 1 = up. */
 static int sdlStartLocked(void) {
     ApakGpu *g = &P.gpu;
     ApakSdlVersion v = { 0, 0, 0 };
-    const char *drv;
     if (S.up) return 1;
     if (S.tried) return 0;
     S.tried = 1;
-    if (!g->eglGetCurrentDisplay || !g->eglGetCurrentSurface || !g->eglGetCurrentContext || !g->eglMakeCurrent ||
-        !g->eglCreateContext) {
-        snprintf(S.why, sizeof S.why, "%.250s lacks eglGetCurrent*/eglMakeCurrent/eglCreateContext", g->eglName);
-        return 0;
-    }
-    if (!sdlLoadLocked()) return 0;
     /* the environment SDL reads was prepared at start (sdlEnvDefaults) */
-    if (S.sdl.SDL_InitSubSystem(APAK_SDL_INIT_VIDEO) != 0) {
-        snprintf(S.why, sizeof S.why, "SDL_InitSubSystem(VIDEO) failed: %.400s", sdlError());
+    if (!apak_sdlStart(&S.sdl, g, apak_gpuOnStockTrimui(), S.driver, sizeof S.driver, S.why, sizeof S.why))
         return 0;
-    }
-    S.sdl.SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_PROFILE_MASK, APAK_SDL_GL_CONTEXT_PROFILE_ES);
-    S.sdl.SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-    S.sdl.SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    /* SDL's EGL display, initialised now: a fallback decided at start must
-     * know that SDL's EGL really comes up. */
-    if (S.sdl.SDL_GL_LoadLibrary && S.sdl.SDL_GL_LoadLibrary(NULL) != 0) {
-        snprintf(S.why, sizeof S.why, "SDL_GL_LoadLibrary failed: %.400s", sdlError());
-        if (S.sdl.SDL_QuitSubSystem) S.sdl.SDL_QuitSubSystem(APAK_SDL_INIT_VIDEO);
-        return 0;
-    }
-    drv = S.sdl.SDL_GetCurrentVideoDriver ? S.sdl.SDL_GetCurrentVideoDriver() : NULL;
-    apak_strcpy(S.driver, sizeof S.driver, drv ? drv : "?");
     if (S.sdl.SDL_GetVersion) S.sdl.SDL_GetVersion(&v);
     S.defaultDpy = g->eglGetDisplay(EGL_DEFAULT_DISPLAY);
     S.up = 1;
@@ -1099,13 +999,6 @@ static void *pr_eglGetProcAddress(const char *name) {
 void apak_presentInit(void);
 void apak_presentShutdown(void);
 
-/* The stock TrimUI firmware: JukaHub says so, or its system folder is here. */
-static int onStockTrimui(void) {
-    const char *dev = getenv("ANDROIDPAK_DEVICE");
-    if (dev && *dev) return strncmp(dev, "trimui", 6) == 0;
-    return access("/usr/trimui", F_OK) == 0;
-}
-
 /* The stock firmware of the PowerVR GE8300 models (Smart Pro, Brick, Brick
  * Pro, Hammer — every board but the Smart Pro S, tg5050, whose GPU really is
  * a Mali). Their SDL2 calls its only real video driver "mali" (SDL's generic
@@ -1118,23 +1011,89 @@ static int onStockTrimui(void) {
  * these boards auto starts on the SDL-hosted backend. */
 static int onPowerVrTrimui(void) {
     const ApakDevice *dev;
-    if (!onStockTrimui()) return 0;
+    if (!apak_gpuOnStockTrimui()) return 0;
     dev = apak_device();
     return !(dev && dev->board && strcmp(dev->board, "tg5050") == 0);
 }
 
-void apak_presentInit(void) {
-    static const char *const firmwareEgl[] = {
-        "/usr/lib/libEGL.so", "/usr/lib/libEGL.so.1", "/usr/trimui/lib/libEGL.so", NULL,
+/* The game's libGLESv2.so (libGLESv3.so is the same library) and
+ * libGLESv1_CM.so are the GLES libraries beside the chosen libEGL, named like
+ * it (apak_gpuBesideEgl) — not whatever the search path finds first, which
+ * with a GPU package outside it (ge8300-drivers under /mnt/SDCARD/Apps) is
+ * another driver than the game's EGL, or nothing. ANDROIDPAK_GLES2_LIB and
+ * ANDROIDPAK_GLES1_LIB still win: nothing is bound for them, and bionicld.c
+ * opens what they name. libEGL from the library path binds nothing either: a
+ * soname lookup searches that same path. */
+static void bindGlesBesideEgl(void) {
+    static const struct {
+        const char *stem, *soVersion, *env, *names[2];
+    } kGles[] = {
+        { "libGLESv2", "2", "ANDROIDPAK_GLES2_LIB", { "libGLESv2.so", "libGLESv3.so" } },
+        { "libGLESv1_CM", "1", "ANDROIDPAK_GLES1_LIB", { "libGLESv1_CM.so", NULL } },
     };
+    size_t i, j;
+    for (i = 0; i < sizeof kGles / sizeof kGles[0]; i++) {
+        const char *env = getenv(kGles[i].env), *lib;
+        char path[320];
+        void *h;
+        if (env && *env) continue;
+        lib = apak_gpuBesideEgl(P.gpu.eglName, kGles[i].stem, kGles[i].soVersion, path, sizeof path);
+        if (!lib) continue;
+        h = rt_dlopen(lib, 0);
+        if (!h) {
+            fprintf(stderr, PR_TAG "%s beside the game's libEGL does not load (%s) — its %s is looked up by name\n",
+                    lib, rt_dlerror(), kGles[i].names[0]);
+            continue;
+        }
+        for (j = 0; j < 2 && kGles[i].names[j]; j++) apak_ldSetHostLib(kGles[i].names[j], h, lib);
+        fprintf(stderr, PR_TAG "the game's %s%s%s: %s (beside its libEGL)\n", kGles[i].names[0],
+                kGles[i].names[1] ? "/" : "", kGles[i].names[1] ? kGles[i].names[1] : "", lib);
+    }
+}
+
+/* ANDROIDPAK_SURFACE=1 inside the runner (surface.c's "SDL:" line): SDL2 is
+ * this layer's, so the probe gets what this layer measured instead of a
+ * second video init in a game's process. An SDL2 this run has not started
+ * (gbm, an explicit native, auto's native before any fallback, off) is only
+ * loaded, for its name and version: starting its video driver here would
+ * change the run being measured (a native display that only comes up once
+ * SDL's driver ran would no longer need the fallback). The surface-probe
+ * binary measures that with no game. */
+static void presentSdlProbe(ApakSdlProbe *r) {
+    pthread_mutex_lock(&P.lock);
+    if (S.up) {
+        r->state = APAK_SDLPROBE_UP;
+        r->egl = S.sdl.SDL_GL_LoadLibrary ? 1 : -1;
+    } else if (S.tried || !sdlLoadLocked()) {
+        r->state = APAK_SDLPROBE_NO;
+        apak_strcpy(r->why, sizeof r->why, S.why);
+    } else {
+        r->state = APAK_SDLPROBE_LOADED;
+        snprintf(r->why, sizeof r->why, "this run %s; the surface-probe binary measures them with no game",
+                 !P.gpu.egl                 ? "has no usable libEGL"
+                 : P.backend == BACKEND_GBM ? "presents through gbm"
+                 : P.backend == BACKEND_OFF ? "has the present layer off"
+                 : P.fallback               ? "starts SDL only as the native backend's fallback"
+                                            : "uses the native backend without an SDL fallback");
+    }
+    if (S.sdl.lib) {
+        apak_strcpy(r->name, sizeof r->name, S.sdl.name);
+        if (S.sdl.SDL_GetVersion) S.sdl.SDL_GetVersion(&r->version);
+    }
+    apak_strcpy(r->driver, sizeof r->driver, S.driver);
+    pthread_mutex_unlock(&P.lock);
+}
+
+void apak_presentInit(void) {
     const char *mode = getenv("ANDROIDPAK_PRESENT");
     const char *window = getenv("ANDROIDPAK_EGL_WINDOW");
     const char *scan = getenv("ANDROIDPAK_SCAN");
     const char *eglOverride = getenv("ANDROIDPAK_EGL_LIB");
     char why[512];
-    int layers, want, trimui = onStockTrimui(), fbdev, backend;
+    int layers, want, trimui = apak_gpuOnStockTrimui(), fbdev, backend;
     int sdlAsked = 0, autoSdl = 0, scanRun = scan && *scan && strcmp(scan, "0") != 0;
 
+    apak_surfaceSetSdlProbe(presentSdlProbe); /* ANDROIDPAK_SURFACE asks this layer about SDL */
     if (mode && strcmp(mode, "off") == 0) {
         fprintf(stderr, PR_TAG "disabled (ANDROIDPAK_PRESENT=off): EGL calls go to the host unchanged\n");
         return;
@@ -1152,7 +1111,7 @@ void apak_presentInit(void) {
         /* The firmware's PowerVR libEGL first: a copy some other package put
          * on LD_LIBRARY_PATH may not know this panel. */
         char ewhy[256];
-        if (apak_gpuLoadEglFrom(&P.gpu, firmwareEgl, ewhy, sizeof ewhy) & APAK_GPU_EGL)
+        if (apak_gpuLoadEglFrom(&P.gpu, apak_gpuFirmwareEgl, ewhy, sizeof ewhy) & APAK_GPU_EGL)
             fprintf(stderr, PR_TAG "stock firmware (%s): EGL from %s\n", apak_device()->model, P.gpu.eglName);
         else if (eglOverride && *eglOverride) /* an explicit library never falls back to another */
             fprintf(stderr, PR_TAG "stock firmware (%s): ANDROIDPAK_EGL_LIB %s\n", apak_device()->model, ewhy);
@@ -1166,8 +1125,10 @@ void apak_presentInit(void) {
         return;
     }
     /* The game's libEGL.so is this exact library (not whatever the search
-     * path would find): the interposed calls and the rest share one EGL. */
+     * path would find): the interposed calls and the rest share one EGL —
+     * and its GLES libraries are the ones beside it. */
     apak_ldSetHostLib("libEGL.so", P.gpu.egl, P.gpu.eglName);
+    bindGlesBesideEgl();
     if (want == BACKEND_SDL && scan && *scan && strcmp(scan, "0") != 0) {
         /* an import scan draws nothing: SDL's video init (framebuffer,
          * input devices) is not worth it */

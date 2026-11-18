@@ -1,7 +1,7 @@
 package main
 
 // savemanager_ui.go — the Save Manager overlay: snapshot, browse, restore,
-// prepare Syncthing and export a phone resume bundle.
+// the built-in Syncthing page (syncthing_ui.go) and a phone resume bundle.
 //
 // It is a modal like the Ports and Emulators panels, so it works on every
 // config without a dedicated scene. The panel is intentionally plain: a list
@@ -104,6 +104,7 @@ func closeSaveManagerPanel() {
 	}
 	savePanel = saveManagerPanelState{}
 	saveRowHits = nil
+	syncthingPanelClosed()
 	PlayBackSound()
 }
 
@@ -134,7 +135,7 @@ func clampSaveManagerCursor() {
 }
 
 func saveSnapshotTime(snap saveSnapshot) string {
-	return snap.Manifest.Created.Local().Format("2006-01-02 15:04")
+	return formatDateTime(nil, snap.Manifest.Created.Local())
 }
 
 func saveSnapshotFileCount(snap saveSnapshot) int {
@@ -190,6 +191,10 @@ func joinComma(parts []string) string {
 }
 
 func saveManagerRows() []saveManagerRow {
+	// The Syncthing page is a mode of this panel (syncthing_ui.go).
+	if savePanel.mode == saveModeSyncthing {
+		return syncthingPanelRows()
+	}
 	if savePanel.mode == saveModeSnapshots {
 		if len(savePanel.snapshots) == 0 {
 			return []saveManagerRow{{
@@ -214,10 +219,6 @@ func saveManagerRows() []saveManagerRow {
 	latest := "None"
 	if len(savePanel.snapshots) > 0 {
 		latest = saveSnapshotTime(savePanel.snapshots[0])
-	}
-	syncValue := "Not set up"
-	if savePanel.syncReady {
-		syncValue = pluralizeCount(len(savePanel.sync.Folders), "folder", "folders")
 	}
 	resumeValue := "None"
 	if savePanel.resumeOK {
@@ -261,12 +262,12 @@ func saveManagerRows() []saveManagerRow {
 			enabled: true,
 		},
 		{
-			label:   "Syncthing setup",
-			value:   syncValue,
-			detail:  "Mark each save folder and write the folder IDs to data/save-manager/sync.",
-			hint:    hintLine(FooterHint{"A", "Prepare"}),
+			label:   "Syncthing",
+			value:   syncthingMainRowValue(),
+			detail:  "Built in: sync saves with your phone, PC or another JukaHub.",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  saveActionSync,
-			enabled: len(savePanel.roots) > 0,
+			enabled: true,
 		},
 		{
 			label:   "Phone resume bundle",
@@ -319,6 +320,10 @@ func saveManagerPage(dir int) {
 }
 
 func saveManagerActivate() {
+	if savePanel.mode == saveModeSyncthing {
+		syncthingPanelActivate()
+		return
+	}
 	if savePanel.mode == saveModeSnapshots {
 		if savePanel.cursor < 0 || savePanel.cursor >= len(savePanel.snapshots) {
 			return
@@ -374,13 +379,9 @@ func saveManagerActivate() {
 		refreshSaveManager()
 		ShowToast(saveManagerSummary(savePanel.roots, savePanel.snapshots), ToastKindInfo)
 	case saveActionSync:
-		manifest, err := prepareSaveSync(savePanel.roots)
-		if err != nil {
-			saveManagerError("Could not prepare save sync", err)
-			return
-		}
-		refreshSaveManager()
-		ShowToast("Save sync prepared for "+pluralizeCount(len(manifest.Folders), "folder", "folders")+" — add them in Syncthing", ToastKindSuccess)
+		// The built-in Syncthing marks and shares the folders itself
+		// (syncthing.go), so the row opens its page.
+		syncthingPanelEnter()
 	case saveActionResume:
 		snap, ok := latestSaveSnapshot()
 		if !ok {
@@ -426,6 +427,10 @@ func saveManagerError(prefix string, err error) {
 }
 
 func saveManagerDelete() {
+	if savePanel.mode == saveModeSyncthing {
+		syncthingPanelDismiss()
+		return
+	}
 	if savePanel.mode != saveModeSnapshots {
 		return
 	}
@@ -451,6 +456,10 @@ func saveManagerDelete() {
 }
 
 func saveManagerBack() {
+	if savePanel.mode == saveModeSyncthing {
+		syncthingPanelLeave()
+		return
+	}
 	if savePanel.mode == saveModeSnapshots {
 		savePanel.mode = saveModeMain
 		savePanel.cursor = 0
@@ -572,9 +581,15 @@ func renderSaveManagerPanel(renderer *sdl.Renderer, config *Config) {
 	if savePanel.mode == saveModeSnapshots {
 		title = "Save Manager · Snapshots"
 	}
+	if savePanel.mode == saveModeSyncthing {
+		title = "Save Manager · Syncthing"
+	}
 	sub := saveManagerSummary(savePanel.roots, savePanel.snapshots)
 	if savePanel.mode == saveModeSnapshots {
 		sub = "Newest first · A restores · X deletes"
+	}
+	if savePanel.mode == saveModeSyncthing {
+		sub = syncthingPanelSubtitle()
 	}
 	header := UIPanelHeader(title, sub, "files")
 	headerH := UIPanelHeaderBand(config, header, 14)
@@ -664,6 +679,9 @@ func renderSaveManagerPanel(renderer *sdl.Renderer, config *Config) {
 		} else {
 			hints = []FooterHint{{"A Again", "Restore"}, {"B", "Cancel"}}
 		}
+	}
+	if savePanel.mode == saveModeSyncthing {
+		hints = syncthingPanelHints()
 	}
 	if len(rows) > int(visible) {
 		hints = append([]FooterHint{{Button: "L / R", Label: fmt.Sprintf("Page %d-%d of %d",

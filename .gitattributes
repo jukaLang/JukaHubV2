@@ -22,3 +22,6 @@ os/smartpro/init text eol=lf
 # Converting either one produces a broken icon or a link error.
 *.ico binary
 *.syso binary
+# The Moonlight helper's self-test clip (player/native/moonlight-selftest.h264),
+# embedded into moonlight-stream with .incbin.
+*.h264 binary

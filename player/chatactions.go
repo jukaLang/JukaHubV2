@@ -672,13 +672,13 @@ func chatDayLabel(t time.Time) string {
 	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
 	switch {
 	case day.Equal(today):
-		return "Today"
+		return dateLocaleNow().word(0)
 	case day.Equal(today.AddDate(0, 0, -1)):
-		return "Yesterday"
+		return dateLocaleNow().word(-1)
 	case day.Year() == today.Year():
-		return day.Format("Mon 2 Jan")
+		return formatDateBrief(nil, day)
 	}
-	return day.Format("2 Jan 2006")
+	return formatDate(nil, day)
 }
 
 func chatSameDay(a, b time.Time) bool {

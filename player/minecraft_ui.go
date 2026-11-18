@@ -293,9 +293,9 @@ func mcPortRow(kind mcPortKind) tbxRowSpec {
 			row.subtitle = "Your versions here: " + strings.Join(mcShortList(st.Versions, 4), " · ")
 		}
 		row.pill, row.tone = "Play", tbxToneGood
-		if st.Compat.State == portCompat32BitOnly {
-			row.subtitle = "Its manifest lists no 64-bit ARM build: " + setOr(st.Compat.Note, "32-bit only")
-			row.pill, row.tone = "Wrong CPU", tbxToneBad
+		if portCompatBlocked(st.Compat.State) {
+			row.subtitle = "This build cannot run here: " + setOr(st.Compat.Note, portCompatBadge(st.Compat.State))
+			row.pill, row.tone = portCompatBadge(st.Compat.State), tbxToneBad
 		}
 	case st.Queued != "" && mcScreen.pmLauncher != "":
 		row.subtitle = "Downloaded — PortMaster installs it as soon as it opens"

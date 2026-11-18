@@ -255,7 +255,11 @@ func TestArtworkClosestCover(t *testing.T) {
 		"Street Fighter Alpha 3": "Street Fighter Alpha 2 (USA)",
 		"Aria of Sorrow":         "Castlevania - Aria of Sorrow (USA)",
 		"My Homebrew Game":       "",
-		"Zelda 3":                "",
+		// More pictures beat fewer (2026-11-17): the series' cover for
+		// another number, and a title clearly ahead of the rest.
+		"Zelda 3":               "Legend of Zelda, The - The Minish Cap (USA)",
+		"Castlevania Dracula X": "Castlevania - Aria of Sorrow (USA)",
+		"Of the Game":           "",
 	} {
 		if _, exact := idx.match(stem); exact {
 			t.Errorf("%q matched exactly; pick a stem only the closest step finds", stem)
@@ -291,6 +295,66 @@ func TestArtworkClosestCover(t *testing.T) {
 	order := artworkFetchOrder(roms, "PSP")
 	if len(order) != len(roms) || order[0].System != "PSP" || order[1].System != "NES" || order[artworkOrderChunk+1].System != "SNES" {
 		t.Errorf("artworkFetchOrder: %d games, head %q %q", len(order), order[0].System, order[1].System)
+	}
+}
+
+// data/artwork-aliases.json is the user's file (GAME-7): keys are normalised
+// like the built-in table's, bad entries are dropped rather than failing the
+// file, a newer layout is refused, and the alias with the file's tags is what
+// a fetch looks the game up by.
+func TestArtworkUserAliases(t *testing.T) {
+	got, err := parseArtworkAliases([]byte(`{"aliases": {
+		"Zelda Minish (USA)": "  Legend of Zelda, The - The Minish Cap ",
+		"empty": "   ",
+		"control": "bell\u0007",
+		"": "no key"
+	}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["zelda minish"] != "Legend of Zelda, The - The Minish Cap" {
+		t.Fatalf("parsed %q", got)
+	}
+	if _, err := parseArtworkAliases([]byte(`{"version": 2, "aliases": {}}`)); err == nil {
+		t.Error("a newer layout must be refused")
+	}
+	if _, err := parseArtworkAliases([]byte(`[1, 2]`)); err == nil {
+		t.Error("a file that is not an object must be refused")
+	}
+
+	path := filepath.Join(t.TempDir(), artworkAliasFileName)
+	oldPath := artworkAliasPath
+	artworkAliasPath = func() string { return path }
+	reset := func() {
+		artworkUserAliases.Lock()
+		artworkUserAliases.loaded, artworkUserAliases.broken, artworkUserAliases.byKey = false, false, nil
+		artworkUserAliases.Unlock()
+	}
+	reset()
+	t.Cleanup(func() { artworkAliasPath = oldPath; reset() })
+	if err := os.WriteFile(path, []byte(`{"version": 1, "aliases": {"Pokemon Saphire": "Pokemon - Sapphire Version"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if name := artworkLookupName("Pokemon Saphire (U) [!]"); name != "Pokemon - Sapphire Version (U) [!]" {
+		t.Errorf("lookup name = %q", name)
+	}
+	if name := artworkLookupName("Tetris (USA)"); name != "Tetris (USA)" {
+		t.Errorf("a game with no alias is looked up as %q", name)
+	}
+	if alias, ok := artworkAliasFor("pokemon saphire"); !ok || alias != "Pokemon - Sapphire Version" {
+		t.Errorf("the user's alias is not read before the built-in table: %q %v", alias, ok)
+	}
+
+	// A file that cannot be read is the user's: nothing is written over it.
+	reset()
+	if err := os.WriteFile(path, []byte(`{not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if artworkSetUserAlias("Tetris", "Tetris DX") {
+		t.Error("an alias was stored over a file that could not be read")
+	}
+	if data, _ := os.ReadFile(path); string(data) != `{not json` {
+		t.Errorf("the unreadable file was changed: %q", data)
 	}
 }
 
@@ -381,5 +445,51 @@ func TestFirmwareROMArgAndLauncherOutput(t *testing.T) {
 		if name, _ := firmwareScriptCommand(script, "sh", []string{script, "/r.gba"}); name != "sh" {
 			t.Errorf("missing interpreter: %q, want sh", name)
 		}
+	}
+}
+
+// TestNextUIFolderParse pins how NextUI's outside data is read: "Name (TAG)"
+// folder names the way MinUI's getEmuName reads them, the console a folder
+// holds, the files a TAG folder lists, map.txt names and hiding, recent.txt.
+func TestNextUIFolderParse(t *testing.T) {
+	for name, want := range map[string]string{
+		"Game Boy Advance (GBA)": "GBA",
+		"Game Boy (gb)":          "gb",
+		"Game Boy (GB) Hacks":    "GB",
+		"Arcade (FBN) (2024)":    "2024",
+		"Odd (A (B))":            "B",
+		"Hacks (2024 set)":       "",
+		"GBA":                    "",
+		"Broken (GBA":            "",
+	} {
+		if _, tag, _ := nextuiFolderTag(name); tag != want {
+			t.Errorf("nextuiFolderTag(%q) = %q, want %q", name, tag, want)
+		}
+	}
+	for folder, want := range map[string]string{
+		"Game Boy Advance (GBA)": "Game Boy Advance",
+		"GBA Extra (MGBA)":       "Game Boy Advance",
+		"Virtual Boy (VB)":       "Virtual Boy",
+		"Odd Thing (ZZQ)":        "Odd Thing",
+		"Hacks (2024 set)":       "",
+	} {
+		if system, _, _ := romFolderSystem(folder, nil); system.Name != want {
+			t.Errorf("romFolderSystem(%q) = %q, want %q", folder, system.Name, want)
+		}
+	}
+	for name, want := range map[string]bool{
+		"Wario Land.vb": true, "game.qqq": true, "notes.txt": false,
+		"map.txt": false, "Golden Sun.png": false, "Golden Sun.gba.st9": false, "noext": false,
+	} {
+		if got := nextuiListsFile(name); got != want {
+			t.Errorf("nextuiListsFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+	m := nextuiParseMap([]byte("\ufeffneogeo.zip\t.Neo Geo BIOS\r\nMSlug.zip\tMetal Slug\nno tab here\n"))
+	if len(m) != 2 || m["mslug.zip"] != "Metal Slug" || m["neogeo.zip"] != ".Neo Geo BIOS" {
+		t.Errorf("map.txt parsed as %q", m)
+	}
+	if paths := nextuiParseRecents([]byte("/Roms/Game Boy (GB)/Tetris.gb\tTetris\r\n\n/Roms/PS (PS)/FF7.m3u\n"), 12); len(paths) != 2 || paths[0] != "/Roms/Game Boy (GB)/Tetris.gb" {
+		t.Errorf("recent.txt parsed as %q", paths)
 	}
 }

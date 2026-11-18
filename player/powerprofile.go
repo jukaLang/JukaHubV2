@@ -216,6 +216,88 @@ func cpufreqDirs(root string) []string {
 	return dirs
 }
 
+// cpufreqPolicyDirs lists each cpufreq policy once, in CPU order: cpuN/cpufreq
+// is a link to a policy directory shared by a cluster's cores. The A133P
+// (Smart Pro, Brick, Brick Pro) has one policy for its four cores; the A523
+// (Smart Pro S) has two clusters of four, policy0 and policy4, each with its
+// own frequency table. A CPU that is offline has no cpufreq link and is
+// skipped; its policy still appears through the cluster's other cores.
+func cpufreqPolicyDirs(root string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, dir := range cpufreqDirs(root) {
+		key := dir
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			key = real
+		}
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
+// cpufreqFastestFirst orders policies by their top clock, highest first, and
+// keeps CPU order between equals — so a single-policy chip, or two clusters
+// with the same table, come back exactly as given.
+func cpufreqFastestFirst(dirs []string) []string {
+	out := append([]string(nil), dirs...)
+	tops := make(map[string]int64, len(out))
+	for _, d := range out {
+		tops[d] = advertisedMaxKHz(d)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return tops[out[i]] > tops[out[j]] })
+	return out
+}
+
+// cpufreqScaleKHz maps a clock picked from the reference policy's table (top
+// refTop) to the same share of another policy's range, snapped up to an
+// operating point that policy offers — so "the middle of the fast cluster"
+// is the middle of the slow one too, never a value the slow cluster clamps
+// and reads back differently. A policy whose top is refTop (every
+// single-cluster chip) gets khz unchanged.
+func cpufreqScaleKHz(dir string, khz, refTop int64) int64 {
+	top := advertisedMaxKHz(dir)
+	if khz <= 0 || refTop <= 0 || top <= 0 || top == refTop {
+		return khz
+	}
+	if khz >= refTop {
+		return top
+	}
+	return cpufreqSnapUp(saverAvailableKHz(dir), khz*top/refTop, top)
+}
+
+// cpufreqSnapUp is the lowest point in available at or above want; without a
+// table, want itself (capped at top). Pure.
+func cpufreqSnapUp(available []int64, want, top int64) int64 {
+	best := int64(0)
+	for _, f := range available {
+		if f >= want && (best == 0 || f < best) {
+			best = f
+		}
+	}
+	if best > 0 {
+		return best
+	}
+	if top > 0 && want > top {
+		return top
+	}
+	return want
+}
+
+// cpufreqCurrentKHz is the fastest policy's current clock (the cores the
+// heavy thread runs on), 0 when no policy reports one.
+func cpufreqCurrentKHz(root string) int64 {
+	var best int64
+	for _, dir := range cpufreqPolicyDirs(root) {
+		if v := readKHzFile(filepath.Join(dir, "scaling_cur_freq")); v > best {
+			best = v
+		}
+	}
+	return best
+}
+
 // readKHzFile parses one sysfs frequency file, or 0 when it is missing.
 func readKHzFile(path string) int64 {
 	raw, err := os.ReadFile(path)
@@ -361,7 +443,11 @@ func applyFrequencyCeiling(cfg powerProfileConfig) ([]cpuFrequencySave, int64, e
 		if target <= 0 {
 			continue
 		}
-		ceiling = target
+		// Each policy is capped against its own top (the A523's two
+		// clusters differ); the one reported is the fastest cluster's.
+		if target > ceiling {
+			ceiling = target
+		}
 		path := filepath.Join(dir, "scaling_max_freq")
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -454,6 +540,8 @@ func beginLaunchPowerProfile(config *Config, target string) func() {
 	if strings.TrimSpace(target) != "" {
 		cfg = gameLaunchPowerConfig(cfg, gameOptionsFor(target))
 	}
+	// Auto performance (autoperf.go) follows this game by its ROM path.
+	autoPerfLaunchBegin(target)
 	return beginGamePowerProfileWith(cfg)
 }
 
@@ -464,6 +552,8 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	// this launch records and later restores is the hub's own setting
 	// (voiceboost.go).
 	voiceBoostEnd()
+	// So does the hub's own Auto performance ceiling (autoperf.go).
+	autoPerfYield()
 	if !cfg.Enabled {
 		return func() {}
 	}
@@ -507,6 +597,10 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		// Whatever the restore manages, the launch is over: its crash marker
 		// must not make a later boot "restore" values from before this one.
 		defer bootCPUMarkerClear()
+		// Auto performance's game session goes back first (to this launch's
+		// ceiling), so its compare-and-restore can never land after the
+		// unconditional restore below and leave the launch's value behind.
+		autoPerfLaunchEnd()
 		restoreFrequencyCeiling(ceiling)
 		// Without a configured battery governor the hub gets back exactly the
 		// governor it ran before the launch. Writing the "battery" pick instead
@@ -594,8 +688,15 @@ func captureBootCPUSettings() {
 		return
 	}
 	bootCPUSettings.captured = true
+	// Newest layer first. Auto performance (autoperf.go) writes on top of a
+	// launch's ceiling, and its marker's "original" is that launch's value: it
+	// goes back first (only where the value is still Auto's), then the launch
+	// marker's unconditional restore puts the firmware's value over it. The
+	// other order let Auto's compare match the firmware value the launch had
+	// just restored and write the dead launch's raised ceiling back.
+	autoPerfRecover()
 	// A previous run that died during a game left the performance profile
-	// behind: undo it first, so what is recorded next is the firmware's.
+	// behind: undo it, so what is recorded next is the firmware's.
 	bootCPUMarkerRecover()
 
 	paths := cpuGovernorPaths(cpufreqRoot)
@@ -619,6 +720,8 @@ func captureBootCPUSettings() {
 // line the teardown card shows and the first refusal, if any. A machine with no
 // cpufreq says so instead of pretending it restored something.
 func restoreBootCPUSettings() (string, error) {
+	// Auto performance stops first, so no step of its lands after this.
+	autoPerfStop()
 	bootCPUSettings.mu.Lock()
 	governors := bootCPUSettings.governors
 	ceilings := bootCPUSettings.ceilings

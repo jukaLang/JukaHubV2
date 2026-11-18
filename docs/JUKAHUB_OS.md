@@ -1,7 +1,8 @@
 # JukaHub OS
 
 JukaHub does most of what a handheld's operating system shell does, so on the
-TrimUI (Smart Pro, Brick) it can run **as** the OS: **Settings → JukaHub OS**.
+TrimUI (Smart Pro, Brick, Brick Pro, Smart Pro S) it can run **as** the OS:
+**Settings → JukaHub OS**.
 It is a session mode on top of the app, not a new firmware: nothing on the
 firmware's partitions is ever written, and **a reboot always brings back the
 stock system**.
@@ -18,8 +19,15 @@ together, so the handheld powers on straight into JukaHub OS. **Start OS
 session now** (or **Restart JukaHub OS** inside a session) restarts JukaHub
 through `launch.sh` so a change applies at once.
 
+**Settings → JukaHub OS → Status** reads *OS session* inside one, with what
+it applied (layers, files replaced, values set, drivers); **Applied at this
+start** names the layers in force and anything left out, and why. Outside a
+session with OS mode on, the status line says why this start was the app
+(OS mode off, the stock system chosen for this boot, not started through
+`launch.sh`, …).
+
 In a session the power card's **Exit** becomes **Return to CrossMix** (or
-*TrimUI* / *NextUI*): the session's changes are undone and the firmware's menu
+*TrimUI* / *NextUI* / *spruceOS*): the session's changes are undone and the firmware's menu
 comes back exactly as when leaving the app. The same action is at the bottom
 of Settings → JukaHub OS (press A twice).
 
@@ -31,15 +39,90 @@ JukaHub OS — no need to open the app once and switch anything on.
 
 1. Turn the handheld off and put its SD card in a computer.
 2. Extract everything in the zip to the **root** of the card, merging the
-   `Apps` and `System` folders with the ones already there.
+   `Apps` and `System` folders with the ones already there. Choose
+   **Replace all** for files that exist: an older `launch.sh` or an
+   `os/os.json` with OS mode off, kept from an app install, starts JukaHub
+   as the plain app.
 3. Put the card back and power on.
+
+### How it boots
+
+The stock firmware has no way to boot anything else in place of its menu
+without writing its partitions, which JukaHub OS never does. So it boots the
+firmware's way: the firmware's launcher loop (`runtrimui.sh`) runs the boot
+scripts in `System/starts`, then its menu, then whatever the menu queued in
+`/tmp/cmd_to_run.sh`. The boot hook queues JukaHub there, and in OS mode it
+also bind-mounts a tiny stand-in over `/usr/trimui/bin/MainUI` for this boot
+(a RAM mount, gone at the next boot; no file is written). When the loop runs
+"MainUI" the first time, the stand-in takes itself off and returns at once,
+and the loop starts JukaHub OS through `launch.sh` with the firmware's own
+environment and services — **the stock menu never shows**; the screen goes
+from the firmware's boot logo to JukaHub's boot. Every later run of MainUI
+(after JukaHub exits, or when another app was queued, e.g. a resume at boot)
+is the real menu, so the device can never end up without one. A firmware
+whose loop does not run `/usr/trimui/bin/MainUI`, or without `mount`, gets
+the older way: the menu opens, and the hook closes it once it is up. So does
+a boot where the stand-in has not run within 20 seconds: the hook takes it
+off again.
+**Settings → JukaHub OS → Skip the stock menu at boot** off (`"fastBoot":
+false` in `os/os.json`) chooses the older way on purpose — try it if Wi-Fi,
+brightness or volume are not set up after a boot (the stock menu may set them
+up at its first start).
+
+`Apps/JukaHub/autostart.log` says which way each boot went ("the firmware
+started JukaHub OS in place of the stock menu", or why not), and
+`errors.txt` says "starting JukaHub OS" and then the session's `jukaos:`
+lines — or why the start was the app instead.
+
+When JukaHub starts it also checks the hook: on a card installed from this
+package (`"edition": "os"`) the package's hook is kept even if the settings
+already on the card had *Start JukaHub at login* off. (Before 2026-11-17 those
+settings removed it at the first start, and every later boot was the stock
+menu with JukaHub opened as an app.)
+
+### What it changes — and what it does not
+
+The kernel is the firmware's own, and so are its drivers' code: TrimUI has
+published no kernel source for these handhelds, so no newer kernel module
+ships in the package. What the package does set up is **how those drivers
+run**: a **driver layer** per chip family (below) with driver settings the
+stock kernels already have, plus the Speed layer and the OS session itself
+(the power card's *Return to …*, the escape hatch, the guard). Settings →
+JukaHub OS → Status then reads e.g. "Drivers: A523 driver layer (4 values)";
+without a driver layer it still says "no driver layer (the firmware's own
+drivers)" rather than "0 drivers loaded". A newer kernel module can only come
+as a layer whose `.ko` was built for exactly this kernel (`uname -r`, e.g.
+`4.9.191`) — see *Building a kernel-module pack* below.
+
+**Driver layers.** Both are shipped and switched on; each names its models
+and kernel (`"devices"`, `"kernel"`), so on the other family it reads *Not for
+this handheld* and does nothing, and one card works on all four. Their values
+are `sysfsIfPresent`: a value the handheld has no file for is skipped quietly
+(counted in the layer's line). Each is journaled and put back like any layer
+value. Source: `player/trimui/os-layers/drivers-*/layer.json`, whose `"why"`
+explains every value.
+
+| Value | `drivers-a133` (Smart Pro, Brick, Brick Pro, Hammer; 4.9) | `drivers-a523` (Smart Pro S; 5.15) | Why |
+|---|---|---|---|
+| `usbcore` `autosuspend` | `-1` | `-1` | USB pads and USB Wi-Fi dongles plugged in during the session are never auto-suspended (default 2 s), which old BSP kernels drop them on. |
+| `bluetooth` `disable_ertm` | `Y` | `Y` | Older Xbox One pad firmware connects over Bluetooth (the setting Batocera and RetroPie use; Series pads use Bluetooth LE and do not need it). New connections only. |
+| `usbhid` `jspoll` | `2` | `2` | A USB pad that reports itself as a joystick (many DirectInput pads; not Xbox pads, which `xpad` drives) is polled every 2 ms (500 Hz) instead of its own interval. The parameter came in Linux 4.12, so on the 4.9 kernels it is normally absent and skipped. Taken when a pad is plugged in; the built-in controls are not USB HID. |
+| SD/eMMC `queue/scheduler` | `noop` | `none` | Flash has no seek to schedule around. The name differs between the kernels, which is why it moved here from the Speed layer. |
+| GPU devfreq `max_freq` | — | `600000000` | The Mali-G57 capped at 600 MHz in every mode, as spruceOS does, so the A523 runs cooler and the fan quieter; the device is matched as `/sys/class/devfreq/*gpu*`. |
+
+Left out on purpose: Wi-Fi power save (the AIC8800 / XR829 drivers take it as
+a load-time option or through `iw`, not as a value that can be set and put
+back), zram (it needs `mkswap`/`swapon`, not a value), and the CPU governor
+and clocks (JukaHub's power modes own them). The fan of the Smart Pro S is the
+fan setting's, not a layer's.
 
 | On the card | What it is |
 |---|---|
 | `Apps/JukaHub/` | the app, byte for byte the release's `JukaHub-Trimui` folder; it updates itself like the app |
 | `Apps/JukaHub/os/os.json` | `{"enabled": true, "edition": "os"}`: OS mode on (Settings → JukaHub OS's status names the edition) |
 | `Apps/JukaHub/os/layers/README.txt` | where layers go |
-| `System/starts/jukahub-autostart.sh` | the boot hook, already installed: the exact file *Start JukaHub at login* writes, for `/mnt/SDCARD/Apps/JukaHub` |
+| `Apps/JukaHub/os/layers/speed`, `drivers-a133`, `drivers-a523` | the shipped layers, all switched on (each driver layer acts only on its own family) |
+| `System/starts/jukahub-autostart.sh` | the boot hook, already installed: the exact file *Start JukaHub at login* writes, for `/mnt/SDCARD/Apps/JukaHub`; in OS mode it skips the stock menu (above) |
 | `JukaHub-OS-README.txt` | install and the ways back to the stock menu |
 
 **The Speed layer.** The package ships one layer, switched on:
@@ -47,7 +130,8 @@ JukaHub OS — no need to open the app once and switch anything on.
 the tuning fast handheld systems such as TortOS are known for, done with
 values the stock kernel already has: the SD card and internal storage
 (`mmcblk0`, `mmcblk1`) get the `noop` scheduler (flash has no seek to schedule
-around), 512 KB read-ahead and no entropy or I/O accounting work;
+around; since 2026-11-17 set by the driver layer, as `noop` on 4.9 and `none`
+on 5.15), 512 KB read-ahead and no entropy or I/O accounting work;
 `vm.vfs_cache_pressure` 50 keeps folder listings (ROM lists, box art) cached
 longer; `swappiness` 10 and `stat_interval` 10 cut background work. Every
 value is journaled and put back when the session ends, a missing device or
@@ -81,7 +165,7 @@ optional: a failure warns and the app packages still ship.
 | Files a layer replaces (libraries, configs) | Bind mounts in a **private mount namespace**: only JukaHub and the programs it starts see them. MainUI, the firmware's services and everything outside never do, and the namespace disappears with the last program in it. `/` is made a *slave* mount, so new SD/USB mounts still appear inside, while the session's mounts never leak out. |
 | Libraries for games (`libs`) | Put first on `LD_LIBRARY_PATH` for JukaHub (and, with `"children": true`, for the games it starts). An environment variable — gone with the process. |
 | Kernel drivers (`modules`) | Loaded into the running kernel **only if built for exactly this kernel**, written to a journal in `/tmp/jukaos/journal.json` (RAM) and unloaded when the session ends. |
-| System values (`sysfs`) | A short whitelist (`/proc/sys/vm/*`, `/proc/sys/kernel/sched_*`, a block device's `queue/` scheduler and read-ahead, transparent huge pages, module parameters). The old value is journaled first and put back when the session ends. The CPU governor and clocks are not on the list: JukaHub's power modes own them. |
+| System values (`sysfs`) | A short whitelist (`/proc/sys/vm/*`, `/proc/sys/kernel/sched_*`, a block device's `queue/` scheduler and read-ahead, transparent huge pages, module parameters, and a GPU's devfreq `max_freq` and `governor` — a `/sys/class/devfreq/` device whose name says `gpu`). The old value is journaled first and put back when the session ends. The CPU governor and clocks are not on the list: JukaHub's power modes own them. |
 | Memory | Once the first screen is up the kernel's page cache is freed (`drop_caches`, page cache only) so games start with more free RAM. `"dropCaches": false` in `os/os.json` turns it off. |
 
 The journal is undone, newest first, when JukaHub quits (the teardown shows
@@ -120,12 +204,16 @@ again and switch it on. The id (the folder name) may use letters, digits, `.`,
 |---|---|
 | `name`, `description`, `version` | Shown in Settings. |
 | `arch` | `aarch64`, `armhf`, … or empty/`any`. A layer for another machine is greyed out with the reason (an aarch64 handheld also accepts 32-bit ARM layers; each ELF file is still checked). |
+| `devices` | Optional: the handhelds the layer is for, as model ids (`trimui-smart-pro`, `trimui-brick`, `trimui-brick-pro`, `trimui-hammer`, `trimui-smart-pro-s`) or model codes (`TG5040`, `TG3040`, `TG4040`, `TG5050`). Anywhere else the layer reads *Not for this handheld: built for Smart Pro S, this is Brick* and nothing of it is applied; a handheld whose model cannot be told takes no layer that names models. |
+| `kernel` | Optional: `uname -r` exactly (`4.9.191`) or a prefix ending at a version step (`5.15` fits `5.15.147`, `4.9.1` does not fit `4.9.191`). Same refusal otherwise. |
+| `kind` | `"drivers"` marks a driver layer: the status line names it ("Drivers: A523 driver layer (4 values)"). |
+| `sysfsIfPresent` | Like `sysfs`, but a value whose file this handheld does not have is skipped without a note (a driver layer covers several chips). |
 | `binds` | `src` (inside the layer) is mounted over `dst` (an existing system file or folder of the same kind). Read-only unless `"rw": true` (a bind the kernel will not make read-only is left out). Refused: `src` that leaves the layer (`..`, absolute paths, symlinks pointing out); `dst` under `/proc`, `/sys`, `/dev`, `/tmp`, `/` itself, the SD card's root or anything above it, and JukaHub's own folder; an ELF library built for another machine than the file it covers. |
 | `core` | Binds over the C runtime (`ld-linux*`, `libc.so*`, `libpthread*`, `libdl*`, `libm*`, `librt*`, or a folder holding them) need `"core": true`. A broken C runtime stops every program in the session, JukaHub included — the OS guard (below) is the way out. |
 | `libs` | Folders (inside the layer) put first on JukaHub's library path. |
 | `children` | `true`: the `libs` folders also go first for the games and apps JukaHub starts. |
 | `modules` | `.ko` files, loaded in the order listed (list dependencies first). |
-| `sysfs` | Path → value, from the whitelist above. |
+| `sysfs` | Path → value, from the whitelist above. One part of a path may hold `*` (`/sys/class/devfreq/*gpu*/max_freq`, for a device whose name differs between boards): it is expanded on the handheld (at most 8 files) and every file is checked against the whitelist again. |
 
 A part that fails a check is skipped and named in the layer's line in Settings
 and in `errors.txt`; the rest of the layer still applies. One failing part never
@@ -146,6 +234,56 @@ with "built for kernel X, this is Y". The kernel version is shown in the status
 line of Settings → JukaHub OS. Modules are loaded with `finit_module`
 (`init_module` on kernels without it); a module already loaded is left to the
 system and not unloaded later.
+
+### Building a kernel-module pack
+
+Newer drivers (pads the 4.9 kernel does not know, `uinput` where it is
+missing, USB Wi-Fi dongles) can only be modules built against **the exact
+kernel** of one handheld. The tools are in `os/drivers/`:
+
+1. On the handheld, `sh /mnt/SDCARD/dump-kernel-facts.sh` (read-only; it
+   writes `kernel-facts/<MODEL>-<release>/` to the card): model, `uname -a`,
+   `/proc/version` (the compiler), `/proc/config.gz`, the vermagic and symbol
+   CRCs of a few stock modules, `/proc/modules`, `/lib/modules`, input
+   devices and the kernel log's driver lines.
+2. Commit that folder under `os/drivers/facts/` and run the **OS driver
+   pack** workflow (`.github/workflows/os-drivers.yml`, manual only) with the
+   handheld, the kernel source (git URL + ref) and the facts folder.
+3. `build-driver-pack.sh` configures the tree with the device's own
+   `config.gz`, builds the candidates in `os/drivers/modules.txt`
+   (uinput, xpad, hid-microsoft, hid-sony, hid-playstation on 5.12+,
+   rtl8xxxu, mt7601u; hid-nintendo is out of tree and not built), and writes
+   `drivers-<model>-<release>/` with `layer.json` (`devices`, exact `kernel`,
+   `modules` in load order) — copy it into `Apps/JukaHub/os/layers/`.
+
+The script stops rather than ship a module the kernel would refuse: the tree
+must build exactly the device's release, take its config without changing a
+built-in option, a candidate that would change the built-in kernel is
+skipped, the vermagic must equal the stock modules', and with MODVERSIONS
+every symbol CRC shared with the saved stock modules must match. TrimUI has
+published no kernel source for these models; the closest public trees are
+Allwinner's A133 BSP (linux-4.9, as used by plastron and the Creality Sonic
+Pad SDK) and the A523/A527/T527 linux-5.15 BSP of the board vendors (in one
+tree with its `bsp/` driver folder: `REG-Linux/linux-t527`; or Radxa's
+`radxa/kernel` branch `allwinner-aiot-linux-5.15` with `radxa/allwinner-bsp`
+checked out as `bsp/`, which the workflow's single clone does not do).
+Whether
+either reproduces the firmware's CRCs is exactly what the check finds out —
+until a pack passes on real facts, **no kernel-module pack exists**, and the
+module list stays *candidates*.
+
+## Per handheld
+
+| | Smart Pro (TG5040) | Brick (TG3040) / Hammer | Brick Pro (TG4040) | Smart Pro S (TG5050) |
+|---|---|---|---|---|
+| Driver layer | `drivers-a133` | `drivers-a133` | `drivers-a133` | `drivers-a523` |
+| Kernel | 4.9.191 | 4.9.191 | 4.9 | 5.15.147 |
+| Boot into JukaHub OS | the stock launcher loop (`runtrimui.sh`, `System/starts`, MainUI stand-in) | same | same layout as the Brick on firmware 1.1.1 (unverified) | assumed the same (unverified); without `/usr/trimui/bin/MainUI` the hook closes the stock menu once it is up instead |
+| Standalone image | `os/smartpro` | `os/plastron` | refused (another panel: Brick images show a striped screen) | refused by both builders (A523; `--experimental-model` only, unverified) |
+
+Nothing on the Brick Pro and the Smart Pro S has been tested on hardware yet,
+and neither have the driver layers on any model. `autostart.log` and
+`errors.txt` (`jukaos:` lines) say what each boot did.
 
 ## The escape hatch
 
@@ -171,7 +309,7 @@ layers). The next power-on is JukaHub OS again.
 
 | Path | What |
 |---|---|
-| `Apps/JukaHub/os/os.json` | Mode (`"enabled"`), layers switched on, `"dropCaches"`. |
+| `Apps/JukaHub/os/os.json` | Mode (`"enabled"`), layers switched on, `"dropCaches"`, `"fastBoot"` (skip the stock menu at boot, default on), `"edition"`. |
 | `Apps/JukaHub/os/guard.json` | The OS guard's count. |
 | `Apps/JukaHub/os/layers/<id>/layer.json` | A layer. |
 | `/tmp/jukaos/journal.json` | The session's drivers and values (RAM). |

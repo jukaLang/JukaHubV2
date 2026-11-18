@@ -72,8 +72,10 @@ const (
 	artworkIndexRetry = 10 * time.Minute
 	// artworkIndexMemory is how many consoles' lists stay in memory. A batch
 	// takes the consoles in turns of artworkOrderChunk games (artworkFetchOrder)
-	// and several downloads run at once, so a few lists are in use together.
-	artworkIndexMemory = 6
+	// and several downloads run at once, so a few lists are in use together;
+	// a game with no box art also reads its sister consoles' lists and the
+	// title-screen and in-game picture lists (fetchROMArtworkFor).
+	artworkIndexMemory = 10
 	// artworkIndexDirName is the cache folder beside the covers, so deleting
 	// data/game-art starts everything over.
 	artworkIndexDirName = ".server-index"
@@ -251,7 +253,22 @@ func artworkStripReleaseNumber(name string) (string, bool) {
 // found". Anything else that went wrong is returned as is, so the caller does
 // not file a network hiccup as a missing cover for a month.
 func artworkDownloadCover(ctx context.Context, client *http.Client, base, collection, name string) ([]byte, error) {
-	rel := "/" + url.PathEscape(collection) + "/Named_Boxarts/" + url.PathEscape(name) + ".png"
+	return artworkDownloadFrom(ctx, client, base, collection, artworkBoxarts, name)
+}
+
+// The thumbnail server's three picture folders per console. Box art is the
+// cover; a title screen, then an in-game picture, stand in for a game the
+// box-art folder has nothing for (homebrew, hacks, rare releases): some
+// picture beats none.
+const (
+	artworkBoxarts = "Named_Boxarts"
+	artworkTitles  = "Named_Titles"
+	artworkSnaps   = "Named_Snaps"
+)
+
+// artworkDownloadFrom is artworkDownloadCover for one of the picture folders.
+func artworkDownloadFrom(ctx context.Context, client *http.Client, base, collection, kind, name string) ([]byte, error) {
+	rel := "/" + url.PathEscape(collection) + "/" + kind + "/" + url.PathEscape(name) + ".png"
 	status, data, err := artworkGet(ctx, client, base, rel, artworkImageMaxBytes, artworkImageTimeout)
 	switch {
 	case errors.Is(err, errArtworkTooBig):
@@ -304,6 +321,12 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 	if base == "" || strings.TrimSpace(rom.Collection) == "" || strings.TrimSpace(stem) == "" {
 		return nil, os.ErrNotExist
 	}
+	// A name the user gave this game's covers (Game options → Name for covers,
+	// artwork_choose.go) replaces the file's name in every step below, and the
+	// game database's name is not asked: the user said what the game is.
+	lookup := artworkLookupName(stem)
+	userNamed := lookup != stem
+	stem = lookup
 	// "0381 - 007 - From Russia with Love": a release-list number in front of
 	// the title (PSP and DS ISO sets) is no part of any cover's name. The name
 	// as it is goes first, so "1943 - The Battle of Midway" stays a title.
@@ -319,41 +342,96 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 		}
 		return data, err
 	}
-	name, ok := idx.match(stem)
-	if !ok && numbered {
-		name, ok = idx.match(bare)
+	// The database's No-Intro name, looked up once and only when the file's
+	// own name finds nothing exact.
+	known, knownDone := "", userNamed
+	databaseName := func() string {
+		if !knownDone {
+			knownDone = true
+			look := stem
+			if numbered {
+				look = bare
+			}
+			known = artworkDatabaseName(ctx, rom, look)
+		}
+		return known
 	}
-	known := ""
-	if !ok {
-		look := stem
-		if numbered {
-			look = bare
-		}
-		if known = artworkDatabaseName(ctx, rom, look); known != "" {
-			name, ok = idx.match(known)
-		}
-	}
-	if !ok {
-		// Some picture beats none: the closest title on the list, by the
-		// database's name first (it is the cleaner one), else the file's.
-		if known != "" {
-			name, ok = idx.closest(known)
-		}
+	// exact runs the exact steps on one list: the file's name, the name
+	// without its release number, then the database's.
+	exact := func(list *artworkIndex) (string, bool) {
+		name, ok := list.match(stem)
 		if !ok && numbered {
-			name, ok = idx.closest(bare)
+			name, ok = list.match(bare)
 		}
 		if !ok {
-			name, ok = idx.closest(stem)
+			if db := databaseName(); db != "" {
+				name, ok = list.match(db)
+			}
 		}
+		return name, ok
+	}
+	// closest is the "some picture beats none" step on one list, by the
+	// database's name first (it is the cleaner one), else the file's.
+	closest := func(list *artworkIndex) (string, bool) {
+		var name string
+		ok := false
+		if db := databaseName(); db != "" {
+			name, ok = list.closest(db)
+		}
+		if !ok && numbered {
+			name, ok = list.closest(bare)
+		}
+		if !ok {
+			name, ok = list.closest(stem)
+		}
+		return name, ok
+	}
+
+	// otherErr is the first failure to read another list or picture: when
+	// nothing is found, the ROM is then "no answer", not a miss to remember.
+	var otherErr error
+	other := func(collections, kinds []string, pick func(*artworkIndex) (string, bool)) []byte {
+		data, err := artworkFromOtherLists(ctx, client, base, stem, collections, kinds, pick)
+		if err != nil && !errors.Is(err, os.ErrNotExist) && otherErr == nil {
+			otherErr = err
+		}
+		return data
+	}
+	siblings := artworkSiblingCollections(rom.Collection)
+	pictures := []string{artworkTitles, artworkSnaps}
+
+	name, ok := exact(idx)
+	if !ok {
+		// The same game is often filed under a sister console (a Game Boy
+		// game under Game Boy Color, a Mega Drive one under Sega CD): an
+		// exact title there beats a near one here.
+		if data := other(siblings, []string{artworkBoxarts}, exact); data != nil {
+			return data, nil
+		}
+		name, ok = closest(idx)
 		if ok {
 			logDebug("art", "%s: no exact cover, closest is %q", stem, name)
 		}
 	}
 	if !ok {
+		// A near title on a sister console, then the console's title-screen
+		// and in-game pictures: more pictures, fewer blank cards.
+		if data := other(siblings, []string{artworkBoxarts}, closest); data != nil {
+			return data, nil
+		}
+		if data := other([]string{rom.Collection}, pictures, exact); data != nil {
+			return data, nil
+		}
+		if data := other([]string{rom.Collection}, pictures, closest); data != nil {
+			return data, nil
+		}
 		// A stop during the database look must not be filed as "not found"
 		// for a month.
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if otherErr != nil {
+			return nil, otherErr
 		}
 		return nil, os.ErrNotExist
 	}
@@ -375,10 +453,86 @@ func fetchROMArtworkFor(ctx context.Context, client *http.Client, baseURL string
 		// The list named a cover the server no longer has: the list is out of
 		// date. Not a "not found" to remember for a month; the next fetch reads
 		// a fresh list.
-		artworkForgetIndex(base, rom.Collection, idx)
+		artworkForgetIndex(base, rom.Collection, artworkBoxarts, idx)
 		return nil, fmt.Errorf("cover %q is listed but missing; the list is refreshed", name)
 	}
 	return data, err
+}
+
+// artworkFromOtherLists looks a ROM up with pick in each of the given
+// consoles' lists of each picture folder, in order, and downloads the first
+// picture found. os.ErrNotExist means none had one; any other error (a list
+// or a picture that could not be read) is returned, so the caller does not
+// file a network hiccup as a miss.
+func artworkFromOtherLists(ctx context.Context, client *http.Client, base, stem string, collections, kinds []string, pick func(*artworkIndex) (string, bool)) ([]byte, error) {
+	var firstErr error
+	for _, kind := range kinds {
+		for _, coll := range collections {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			list, err := artworkIndexOf(ctx, client, base, coll, kind)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if list == nil {
+				continue
+			}
+			name, ok := pick(list)
+			if !ok {
+				continue
+			}
+			data, err := artworkDownloadFrom(ctx, client, base, coll, kind, name)
+			if err == nil {
+				logDebug("art", "%s: picture %q from %s/%s", stem, name, coll, kind)
+				return data, nil
+			}
+			if !errors.Is(err, os.ErrNotExist) && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, os.ErrNotExist
+}
+
+// artworkSiblingCollections are the consoles whose covers also fit a game of
+// collection: the same games are often filed under either (Game Boy and Game
+// Boy Color, Master System and Game Gear) or the machine plays the other's
+// games. Nil for a console with none.
+func artworkSiblingCollections(collection string) []string {
+	return artworkSiblings[strings.TrimSpace(collection)]
+}
+
+var artworkSiblings = map[string][]string{
+	"Nintendo - Game Boy":                            {"Nintendo - Game Boy Color"},
+	"Nintendo - Game Boy Color":                      {"Nintendo - Game Boy"},
+	"Nintendo - Nintendo Entertainment System":       {"Nintendo - Family Computer Disk System"},
+	"Sega - Master System - Mark III":                {"Sega - Game Gear"},
+	"Sega - Game Gear":                               {"Sega - Master System - Mark III"},
+	"Sega - Mega Drive - Genesis":                    {"Sega - Mega-CD - Sega CD", "Sega - 32X"},
+	"Sega - Mega-CD - Sega CD":                       {"Sega - Mega Drive - Genesis"},
+	"Sega - 32X":                                     {"Sega - Mega Drive - Genesis"},
+	"SNK - Neo Geo Pocket":                           {"SNK - Neo Geo Pocket Color"},
+	"SNK - Neo Geo Pocket Color":                     {"SNK - Neo Geo Pocket"},
+	"SNK - Neo Geo":                                  {"SNK - Neo Geo CD", "FBNeo - Arcade Games"},
+	"SNK - Neo Geo CD":                               {"SNK - Neo Geo"},
+	"MAME":                                           {"FBNeo - Arcade Games"},
+	"Bandai - WonderSwan":                            {"Bandai - WonderSwan Color"},
+	"Bandai - WonderSwan Color":                      {"Bandai - WonderSwan"},
+	"NEC - PC Engine - TurboGrafx 16":                {"NEC - PC Engine CD - TurboGrafx-CD", "NEC - PC Engine SuperGrafx"},
+	"Atari - 5200":                                   {"Atari - 2600"},
+	"Atari - 7800":                                   {"Atari - 2600"},
+	"Nintendo - GameCube":                            {"Nintendo - Wii"},
+	"Nintendo - Wii":                                 {"Nintendo - GameCube"},
+	"Microsoft - Xbox":                               {"Microsoft - Xbox 360"},
+	"Microsoft - Xbox 360":                           {"Microsoft - Xbox"},
+	"Nintendo - Super Nintendo Entertainment System": {"Nintendo - Satellaview"},
 }
 
 // artworkDatabaseName is the No-Intro title the game database gives a ROM by
@@ -820,18 +974,44 @@ var artworkIndexDir = func() string {
 
 // artworkIndexCachePath is one console's list file, "" with no data folder.
 func artworkIndexCachePath(collection string) string {
+	return artworkIndexCachePathOf(collection, artworkBoxarts)
+}
+
+// artworkIndexCachePathOf is artworkIndexCachePath for one of the picture
+// folders: the box-art list keeps its old name, the others get a suffix.
+func artworkIndexCachePathOf(collection, kind string) string {
 	dir := artworkIndexDir()
 	if dir == "" {
 		return ""
 	}
-	return filepath.Join(dir, artworkServerName(strings.TrimSpace(collection))+".txt")
+	name := artworkServerName(strings.TrimSpace(collection))
+	switch kind {
+	case artworkTitles:
+		name += ".titles"
+	case artworkSnaps:
+		name += ".snaps"
+	}
+	return filepath.Join(dir, name+".txt")
 }
 
 // artworkIndexFor returns one console's cover list. (nil, nil) means the
 // server gave no usable list, and the caller guesses names instead; an error
 // is a network failure, which the caller reports as no answer.
 func artworkIndexFor(ctx context.Context, client *http.Client, base, collection string) (*artworkIndex, error) {
-	key := base + "|" + collection
+	return artworkIndexOf(ctx, client, base, collection, artworkBoxarts)
+}
+
+// artworkIndexKey names one list in memory: server, console and folder.
+func artworkIndexKey(base, collection, kind string) string {
+	if kind == artworkBoxarts {
+		return base + "|" + collection
+	}
+	return base + "|" + collection + "|" + kind
+}
+
+// artworkIndexOf is artworkIndexFor for one of the picture folders.
+func artworkIndexOf(ctx context.Context, client *http.Client, base, collection, kind string) (*artworkIndex, error) {
+	key := artworkIndexKey(base, collection, kind)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -869,7 +1049,7 @@ func artworkIndexFor(ctx context.Context, client *http.Client, base, collection 
 		}
 	}
 
-	idx, err := loadArtworkIndex(ctx, client, base, collection)
+	idx, err := loadArtworkIndex(ctx, client, base, collection, kind)
 
 	artworkIndexes.Lock()
 	defer artworkIndexes.Unlock()
@@ -904,9 +1084,9 @@ func artworkIndexFor(ctx context.Context, client *http.Client, base, collection 
 // stale is the list the caller found out of date: when another download has
 // already put a newer one in its place (several run at once), that one is
 // kept, in memory and on the card.
-func artworkForgetIndex(base, collection string, stale *artworkIndex) {
-	key := base + "|" + collection
-	cache := artworkIndexCachePath(collection)
+func artworkForgetIndex(base, collection, kind string, stale *artworkIndex) {
+	key := artworkIndexKey(base, collection, kind)
+	cache := artworkIndexCachePathOf(collection, kind)
 	artworkIndexes.Lock()
 	if cur, ok := artworkIndexes.byKey[key]; ok && cur != stale {
 		artworkIndexes.Unlock()
@@ -941,8 +1121,8 @@ func artworkForgetIndex(base, collection string, stale *artworkIndex) {
 
 // loadArtworkIndex reads the card's copy of a list while it is fresh, else
 // fetches it (keeping the stale copy when that fails).
-func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection string) (*artworkIndex, error) {
-	cache := artworkIndexCachePath(collection)
+func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection, kind string) (*artworkIndex, error) {
+	cache := artworkIndexCachePathOf(collection, kind)
 	var stale []string
 	if cache != "" {
 		if info, err := os.Stat(cache); err == nil {
@@ -962,7 +1142,7 @@ func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection
 			}
 		}
 	}
-	rel := "/" + url.PathEscape(collection) + "/Named_Boxarts/"
+	rel := "/" + url.PathEscape(collection) + "/" + kind + "/"
 	status, page, err := artworkGet(ctx, client, base, rel, artworkIndexMaxBytes, artworkIndexTimeout)
 	if err == nil && status == http.StatusOK {
 		if names := parseArtworkListing(page); len(names) > 0 {
@@ -971,7 +1151,7 @@ func loadArtworkIndex(ctx context.Context, client *http.Client, base, collection
 					logWarn("art", "cannot keep the cover list for %s: %v", collection, werr)
 				}
 			}
-			logInfo("art", "cover list for %s: %d covers", collection, len(names))
+			logInfo("art", "%s list for %s: %d pictures", kind, collection, len(names))
 			idx := newArtworkIndex(names)
 			idx.fetched = time.Now()
 			return idx, nil
@@ -1008,8 +1188,11 @@ func artworkIndexLines(data []byte) []string {
 
 // romLocalCoverPath is a cover another front end left beside the ROM: the
 // stock firmware's and CrossMix's Imgs folder (<console>/Imgs/<name>.png, or
-// for a game kept in its own folder <console>/Imgs/<folder>.png) and MinUI's
-// .res folder (.res/<file>.png). "" when there is none.
+// for a game kept in its own folder <console>/Imgs/<folder>.png), MinUI's
+// .res folder (.res/<file>.png) and NextUI's / NX Redux's .media folder
+// (.media/<name>.png). Each place is read as .png first, then .jpg/.jpeg,
+// then .webp when this build decodes WebP (NX Redux 2.5 art packs ship
+// .webp). "" when there is none.
 func romLocalCoverPath(rom scannedROM) string {
 	file := filepath.Base(rom.Path)
 	stem := strings.TrimSuffix(file, filepath.Ext(file))
@@ -1017,32 +1200,167 @@ func romLocalCoverPath(rom scannedROM) string {
 		return ""
 	}
 	dir := filepath.Dir(rom.Path)
+	// Extension-less bases: artworkLocalCover adds each image extension.
 	candidates := []string{
-		filepath.Join(dir, "Imgs", stem+".png"),
-		filepath.Join(dir, ".res", file+".png"),
+		filepath.Join(dir, "Imgs", stem),
+		filepath.Join(dir, ".res", file),
+		filepath.Join(dir, ".media", stem),
 	}
 	// A game in its own folder: the console folder's Imgs names it after the
 	// folder. Only for a folder that is one game (the ROM is named after it,
 	// or is a disc sheet): a folder of many ROMs ("Hacks") has a picture of
 	// its own that is no game's cover. Never for a ROM straight in the console
 	// folder, whose parent's Imgs would hold the console's own picture.
+	// NextUI's "Name (TAG)" folders are console folders too: their parent's
+	// .media holds the console's icon, never a game's cover.
 	_, isConsole := romSystemAliases[strings.ToLower(filepath.Base(dir))]
+	if !isConsole {
+		_, _, isConsole = nextuiFolderTag(filepath.Base(dir))
+		isConsole = isConsole && strings.EqualFold(filepath.Base(filepath.Dir(dir)), "Roms")
+	}
 	switch ext := strings.ToLower(filepath.Ext(file)); {
 	case isConsole:
 	case strings.EqualFold(stem, filepath.Base(dir)), ext == ".cue", ext == ".m3u", ext == ".gdi":
 		if parent := filepath.Dir(dir); parent != dir {
-			candidates = append(candidates, filepath.Join(parent, "Imgs", filepath.Base(dir)+".png"))
+			candidates = append(candidates,
+				filepath.Join(parent, "Imgs", filepath.Base(dir)),
+				filepath.Join(parent, ".media", filepath.Base(dir)))
 		}
 	}
-	for _, path := range candidates {
-		if artworkLocalPNG(path) {
+	for _, base := range candidates {
+		if path := artworkLocalCover(base); path != "" {
 			return path
 		}
 	}
 	return ""
 }
 
+// artworkLocalCoverExts are the picture types a cover on the card may be, in
+// the order they are preferred, matched without regard to case (.PNG, .Jpg).
+// ".webp" is only used when webpDecodable says the loaded SDL_image reads it,
+// so a cover never shows up as a broken tile.
+var artworkLocalCoverExts = []string{".png", ".jpg", ".jpeg", ".webp"}
+
+// artworkLocalCover is base+ext for the first extension whose file is a
+// real picture of sane size, or "". The art folder is listed once (cached),
+// so a ROM with no cover costs a map lookup instead of a stat per extension,
+// and the extension's case does not matter on a case-sensitive card.
+func artworkLocalCover(base string) string {
+	names := artworkDirNames(filepath.Dir(base))
+	if len(names) == 0 {
+		return ""
+	}
+	stem := strings.ToLower(filepath.Base(base))
+	for _, ext := range artworkLocalCoverExts {
+		onDisk, ok := names[stem+ext]
+		if !ok {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(base), onDisk)
+		switch ext {
+		case ".webp":
+			// SDL_image's, or a converted copy from the card's ffmpeg (webpdecode.go).
+			if cover := artworkWebPCover(path); cover != "" {
+				return cover
+			}
+		case ".jpg", ".jpeg":
+			if artworkLocalImage(path, artworkIsJPEG) {
+				return path
+			}
+		default:
+			if artworkLocalImage(path, artworkIsPNG) {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+// artworkDirCache remembers for a short while what an art folder holds: a
+// library scan asks once per ROM, and a card of 3,000 ROMs in a dozen console
+// folders would otherwise stat the same missing .media folder thousands of
+// times. The TTL keeps a folder the user just copied over from being ignored
+// for long. The scan runs off the render thread, so every touch is locked.
+var artworkDirCache struct {
+	sync.Mutex
+	seen map[string]artworkDirSeen
+}
+
+type artworkDirSeen struct {
+	names map[string]string // lower-case file name -> name on disk
+	at    time.Time
+}
+
+const (
+	artworkDirCacheTTL = 30 * time.Second
+	// artworkDirCacheMax bounds how many folders are remembered; past it the
+	// cache starts over rather than growing with every folder ever scanned.
+	artworkDirCacheMax = 512
+)
+
+// artworkDirNames lists dir's files by lower-case name, cached for
+// artworkDirCacheTTL. A missing or unreadable folder is cached as empty.
+func artworkDirNames(dir string) map[string]string {
+	now := time.Now()
+	artworkDirCache.Lock()
+	if s, ok := artworkDirCache.seen[dir]; ok && now.Sub(s.at) < artworkDirCacheTTL && now.Sub(s.at) >= 0 {
+		artworkDirCache.Unlock()
+		return s.names
+	}
+	artworkDirCache.Unlock()
+	var names map[string]string
+	if entries, err := os.ReadDir(dir); err == nil {
+		names = make(map[string]string, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			lower := strings.ToLower(e.Name())
+			if _, dup := names[lower]; !dup {
+				names[lower] = e.Name()
+			}
+		}
+	}
+	artworkDirCache.Lock()
+	if artworkDirCache.seen == nil || len(artworkDirCache.seen) >= artworkDirCacheMax {
+		artworkDirCache.seen = make(map[string]artworkDirSeen)
+	}
+	artworkDirCache.seen[dir] = artworkDirSeen{names: names, at: now}
+	artworkDirCache.Unlock()
+	return names
+}
+
+// artworkIsJPEG reports JPEG's start-of-image marker.
+func artworkIsJPEG(data []byte) bool {
+	return len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF
+}
+
+// artworkIsWebP reports a RIFF container of type WEBP.
+func artworkIsWebP(data []byte) bool {
+	return len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+}
+
+// artworkLocalImage reports a regular file of sane size whose first bytes
+// pass magic.
+func artworkLocalImage(path string, magic func([]byte) bool) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 12 || info.Size() > artworkImageMaxBytes {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 12)
+	if _, err := io.ReadFull(f, head); err != nil {
+		return false
+	}
+	return magic(head)
+}
+
 // artworkLocalPNG reports a regular file of sane size that starts like a PNG.
+// Test seam (ARCH-8): only tests call it.
 func artworkLocalPNG(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() < 8 || info.Size() > artworkImageMaxBytes {
@@ -1063,7 +1381,15 @@ func artworkLocalPNG(path string) bool {
 // romCoverPath is the picture to show for a ROM: the downloaded cover when
 // there is one, else one already on the card (romLocalCoverPath), else the
 // download path, so a fetch that fills it later shows up on the next recount.
+// On NextUI the card's own cover goes before the downloaded one.
 func romCoverPath(rom scannedROM, root string) string {
+	// On NextUI the cover the user put in .media (or MinUI's .res) comes
+	// first: it is the one NextUI shows.
+	if nextuiActive() {
+		if local := romLocalCoverPath(rom); local != "" {
+			return local
+		}
+	}
 	art := romArtworkPath(rom, root)
 	if artworkCoverPresent(art) {
 		return art

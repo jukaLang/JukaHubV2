@@ -153,17 +153,10 @@ func sysToolGopsutilMemory() (used, total uint64, ok bool) {
 	return vm.Used, vm.Total, true
 }
 
-// sysToolCPUFreqMHz is the first core's current clock, or 0.
+// sysToolCPUFreqMHz is the fastest cluster's current clock, or 0. cpu0 alone
+// was the slow cluster on the Smart Pro S's two-cluster A523.
 func sysToolCPUFreqMHz() int {
-	data, err := os.ReadFile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-	if err != nil {
-		return 0
-	}
-	khz, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || khz <= 0 {
-		return 0
-	}
-	return khz / 1000
+	return int(cpufreqCurrentKHz(cpufreqRoot) / 1000)
 }
 
 // sysToolUptime is how long the system has been up.

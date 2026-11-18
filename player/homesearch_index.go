@@ -8,7 +8,9 @@ package main
 //   - Screens & settings: every screen, tool and settings page, by title and by
 //     the words people use for it — "wifi" finds the Wi-Fi screen, "ftp" the
 //     Network tools, "theme" the theme presets. The Start menu's own list is
-//     folded in, so a screen added there is searchable without an edit here.
+//     folded in, so a screen added there is searchable without an edit here,
+//     and so are the emulators: the Emulators page's tiles by name and system
+//     ("Dolphin", "GBA") and the pages around them (homeSearchSheetScreens).
 //   - Apps & games: the Apps launcher's entries (built-in ones carry the Juka
 //     badge), recently played games and the ROM library.
 //   - Files: recently opened files plus a bounded index of the media, book and
@@ -207,6 +209,9 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Update and repair", where: "Settings", icon: "update", keys: "update upgrade patch repair version release reinstall", scene: "Patch"},
 		{title: "About", where: "Settings", icon: "info", keys: "about version credits license build", scene: "About"},
 		{title: "Keyboard settings", where: "Settings", icon: "keyboard", keys: "keyboard languages layout typing suggestions autocorrect voice dictation", open: vkOpenSettings},
+		// The page itself (voiceshortcuts_ui.go), not Settings on its row: the
+		// row of the same name is pressed rather than focused (homeSearchScreens).
+		{title: "Voice shortcuts", where: "Voice & AI", icon: "mic", keys: "voice shortcuts teach a word custom voice commands words phrases", open: vscOpen},
 		{title: "Accessibility", where: "Settings", icon: "user", keys: "accessibility text size font size large text bigger contrast reduce motion remap buttons", open: openAccessibilityPanel},
 		{title: "Quick Settings", where: "Device", icon: "settings", keys: "quick settings brightness volume toggles airplane", open: func(*Config) { qsToggleOpen() }},
 		{title: "Wallpapers", where: "Device", icon: "image", keys: "wallpaper wallpapers background picture photo lock screen", open: func(*Config) { wpOpen = true; initWallpaperPicker() }},
@@ -247,7 +252,14 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Emulators", where: "Games", icon: "emulator", keys: "emulators emulator retroarch cores consoles", open: func(*Config) { openEmulatorPanel() }},
 		{title: "Games Library", where: "Games", icon: "gamepad", keys: "games game library roms play", open: func(*Config) { openGameLibraryPanel() }},
 		{title: "PS Remote Play", where: "Games", icon: "gamepad", keys: "ps5 ps4 playstation remote play chiaki stream console", open: func(*Config) { openChiakiPanel() }},
-		{title: "Steam", where: "Apps", icon: "gamepad", keys: "steam valve pc games library store sign in account", open: func(*Config) { openSteamPanel() }},
+		{title: xboxRemotePlayEntryName, where: "Games", icon: "gamepad", keys: "xbox x1 remote play xhome my console series one greenlight stream console", open: func(*Config) { x1TileActivate() }},
+		{title: moonlightEntryName, where: "Games", icon: "devices", keys: "moonlight sunshine apollo vibepollo artemis pc stream streaming gamestream nvidia steam big picture playnite remote play gaming pc", open: func(*Config) { openMoonlightPanel() }},
+		{title: steamEntryName, where: "Apps", icon: "gamepad", keys: "steam valve pc games library store sign in account", open: func(*Config) { openSteamPanel() }},
+		// Mail, its setup page and the clock's calendar, where synced events
+		// show (mailcal_ui.go).
+		{title: mailcalAppEntryName, where: "Apps", icon: "mail", keys: "mail email e-mail inbox gmail outlook hotmail icloud yahoo messages imap smtp write reply compose", open: func(*Config) { mailOpenApp() }},
+		{title: mailcalSettingsEntryName, where: "Settings", icon: "calendar", keys: "email calendar accounts mail account add account app password caldav ics webcal ical google calendar outlook calendar icloud sync reminders", open: mailcalOpenSettings},
+		{title: "Calendar", where: "Clock", icon: "calendar", keys: "calendar events agenda schedule appointments meetings month today upcoming", open: func(*Config) { mailcalOpenCalendar() }},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
 		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
@@ -267,12 +279,20 @@ func homeSearchStoreEntries() []homeSearchEntry {
 		{title: windowsAppsEntryName, where: "Games", icon: "apps", keys: "windows apps wine exe programs pc software box64 desktop", open: func(*Config) { openWindowsAppsPanel(false) }},
 		{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
 		{title: minecraftEntryName, where: "Games", icon: minecraftGlyph, keys: "minecraft mine craft java edition bedrock pocket edition mcpe classicube luanti minetest mineclonia voxel blocks", open: minecraftOpen},
+		{title: portsStoreEntryName, where: "Games", icon: portsStoreGlyph, keys: "ports store port store portmaster port master download ports get ports pc ports free games ready to run rtr new ports update ports harbourmaster", open: portsStoreOpen},
+		{title: cloudGamingEntryName, where: "Games", icon: cloudGamingGlyph, keys: "cloud gaming geforce now gfn nvidia xbox cloud gaming xcloud game pass gamepass ultimate stream streaming greenovercast opennow", open: cloudGamingOpen},
+		{title: gameSwitcherEntryName, where: "Games", icon: "games", keys: "game switcher switch games recent games recently played resume continue save states last played", open: gameSwitcherOpen},
+	}
+	// The handheld's own Wi-Fi network (hotspot.go): only where it can exist.
+	if hotspotSupported() {
+		entries = append(entries, homeSearchEntry{title: "Hotspot", where: "Tools", icon: "radar", keys: "hotspot access point ap softap tether tethering share wifi network netplay router", open: hotspotOpenScreen})
 	}
 	if IsWindows() {
 		return entries
 	}
 	return append(entries,
 		homeSearchEntry{title: portMasterEntryName, where: "Games", icon: "packages", keys: "portmaster port master ports pc games linux ports indie", open: func(*Config) { openPortsPanel(false) }},
+		homeSearchEntry{title: pico8SploreEntryName, where: "Games", icon: "rom", keys: "splore pico 8 pico8 pico-8 fantasy console carts cartridges bbs lexaloffle", open: func(*Config) { pico8SploreOpen() }},
 	)
 }
 
@@ -413,7 +433,21 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 	// ("Date & time") should open that row, not merely the section above it.
 	// The keys carry the id and the detail line too, so "vibration" or "button
 	// hints" finds the switch whose own label does not contain the word.
+	//
+	// An action row named like a screen of the catalog is only that screen's
+	// door ("Emulators", "Voice shortcuts", "Wi-Fi", "Downloads": its press
+	// opens the page the catalog entry opens). Opening Settings on it was a
+	// detour, so it is pressed instead, with the entry's glyph and synonyms
+	// (INP-23). Its title and subtitle stay the row's: the voice catalog files
+	// it as a setting by them (voicecmd_resolve.go), and a voice shortcut finds
+	// it again by them. A disabled row still opens Settings, which says why.
 	if config != nil && sceneIndexExact(config, "Settings") >= 0 {
+		pages := make(map[string]homeSearchEntry, len(catalog))
+		for _, e := range catalog {
+			if e.open != nil || (e.scene != "" && sceneIndexExact(config, e.scene) >= 0) {
+				pages[homeSearchFold(e.title)] = e
+			}
+		}
 		rowSeen := map[string]bool{}
 		for _, section := range setSections() {
 			for _, row := range setSectionRows(config, section) {
@@ -431,7 +465,7 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 					detail = row.Detail(config)
 				}
 				sectionID, rowID, rowLabel := section.ID, row.ID, label
-				out = append(out, homeSearchScreen{
+				s := homeSearchScreen{
 					title: label,
 					where: "Settings · " + setOr(section.Title, section.ID),
 					icon:  setOr(section.Glyph, "settings"),
@@ -439,7 +473,12 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 					action: func(c *Config) {
 						setOpenSettingRow(c, sectionID, rowID, rowLabel)
 					},
-				})
+				}
+				if page, ok := pages[homeSearchFold(label)]; ok && row.Kind == setKindAction && row.Open != nil &&
+					(row.Disabled == nil || !row.Disabled(config)) {
+					s.icon, s.keys, s.action = page.icon, s.keys+" "+page.keys, row.Open
+				}
+				out = append(out, s)
 			}
 		}
 		for _, s := range out {
@@ -462,6 +501,13 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 	if config == nil {
 		return out
 	}
+	// The Command Deck's commands by name ("free space", "ping"), opened in
+	// the Terminal (SHELL-5, cmddeck.go). A title the catalog uses wins.
+	if sceneIndexExact(config, "Terminal") >= 0 {
+		for _, s := range cmdDeckSearchScreens() {
+			add(s)
+		}
+	}
 	for _, app := range getStartMenuApps(config) {
 		s := homeSearchScreen{title: app.name, where: "Start menu", icon: homeSearchSceneIcon(app.scene, app.name), scene: app.scene}
 		if app.action != nil {
@@ -480,6 +526,69 @@ func homeSearchScreens(config *Config) []homeSearchScreen {
 		add(s)
 	}
 	return out
+}
+
+// homeSearchSheetScreens is the search sheet's screen index: homeSearchScreens
+// plus the emulators (voiceemu.go), as a voice command has them — the pages
+// around them (Control profiles, Emulator updates, Core builds) and every tile
+// of the Emulators page under its own name and the systems it plays
+// ("Dolphin", "PPSSPP", "GBA"). A tile opens the way a voice command opens it:
+// a program that starts to its own menu starts, anything else opens the page
+// on its tile; nothing is installed. A title the index already has wins.
+// They are not part of homeSearchScreens because the voice catalog adds them
+// itself, with the kinds its ranking and the saved voice shortcuts read
+// (voicecmd_resolve.go). The tile list is the cached one: when nothing has
+// built it yet (a walk of the card), it is built in the background and the
+// open sheet picks the tiles up when it lands. Render thread.
+func homeSearchSheetScreens(config *Config) []homeSearchScreen {
+	out := homeSearchScreens(config)
+	entries, built := voiceEmuCachedEntries()
+	if !built {
+		homeSearchWarmEmulators()
+		return out
+	}
+	existing := make([]voiceTarget, 0, len(out))
+	for _, s := range out {
+		existing = append(existing, voiceTarget{Title: s.title, Kind: voiceTargetScreen})
+	}
+	for _, t := range voiceEmulatorTargetsFrom(existing, entries) {
+		if t.Action == nil {
+			continue
+		}
+		out = append(out, homeSearchScreen{title: t.Title, where: t.Where, icon: t.Icon, keys: t.Keys, action: t.Action})
+	}
+	return out
+}
+
+// homeSearchEmuWarming is set while the emulator tiles are built for the
+// sheet. Render thread.
+var homeSearchEmuWarming bool
+
+// homeSearchWarmEmulators builds the Emulators page's tile list off the
+// render thread (as the Tabs Home's launcher check does) and, when the sheet
+// is still open, rebuilds its screens with them and has it re-run the query
+// (homeSearchRefreshIfIndexed keeps the highlight where it was).
+func homeSearchWarmEmulators() {
+	if homeSearchEmuWarming {
+		return
+	}
+	homeSearchEmuWarming = true
+	go func() {
+		emulatorEntries()
+		tbxPost(func() {
+			homeSearchEmuWarming = false
+			if !globalSearchOpen || homeSearch.config == nil {
+				return
+			}
+			if _, built := voiceEmuCachedEntries(); !built {
+				// Dropped again meanwhile (the Emulators page opened): the
+				// next open of the sheet asks again.
+				return
+			}
+			homeSearch.screens = homeSearchSheetScreens(homeSearch.config)
+			homeSearchIdx.gen.Add(1)
+		})
+	}()
 }
 
 // homeSearchSceneAction opens a config scene by name.

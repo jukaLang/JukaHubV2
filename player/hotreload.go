@@ -329,6 +329,9 @@ func applyConfigReload(prev, next *Config) *Config {
 	ensureRommScene(next)
 	ensureApkStoreScene(next)
 	mcEnsureScene(next)
+	// The Ports Store and Cloud Gaming (store_scenes.go).
+	storeScenesEnsure(next)
+	gswEnsureScene(next) // the game switcher (gameswitcher.go)
 	// Voice command (voicecmd.go) is injected the same way; a reload while it
 	// is up must not drop the page under the user.
 	ensureVoiceScene(next)

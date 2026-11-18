@@ -108,6 +108,8 @@ const (
 	gaBtnUp                        // the D-pad up: the in-game menu's highlight
 	gaBtnDown                      // the D-pad down
 	gaBtnMenuChord                 // Select + L2 again: the in-game menu, or back to the game from it
+	gaBtnLeft                      // the D-pad left: the in-game menu's Music row, previous track
+	gaBtnRight                     // the D-pad right: next track
 )
 
 // gaMode is what the overlay is for: the assistant listening (Select + R2) or

@@ -9,12 +9,13 @@ package main
 //
 //   - On the handheld (linux/arm64): GreenOvercast, a native Xbox streaming
 //     client for small ARM64 handhelds, in the build that adds xHome (console
-//     streaming) next to Xbox Cloud Gaming. It is a PortMaster port, so it is
-//     installed the PortMaster way: JukaHub downloads greenovercast.zip into
-//     PortMaster's autoinstall folder and opens PortMaster, which installs it
-//     with the runtimes it declares (the same path minecraft.go takes). Once
-//     it is in Ports, X1 launches it directly. Sign-in happens inside
-//     GreenOvercast: it shows a code to enter on a phone.
+//     streaming) next to Xbox Cloud Gaming. It is a PortMaster port; the
+//     builds, the download and the install live in greenovercast.go, shared
+//     with Cloud Gaming, and go through the one port installer
+//     (portsInstallZip). Once it is in Ports, X1 launches whichever build is
+//     there, warning when it is the cloud build, which has no console
+//     streaming. Sign-in happens inside GreenOvercast: it shows a code to
+//     enter on a phone.
 //   - On a PC: Greenlight or XStreaming when installed (both stream an Xbox
 //     console), otherwise xbox.com/play's console page in the browser, which
 //     streams a console from the browser.
@@ -24,10 +25,6 @@ package main
 // happened: that is the client's to report.
 
 import (
-	"archive/zip"
-	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -42,32 +39,14 @@ import (
 const (
 	// x1PillLabel is the pill's name in the Remote Play group.
 	x1PillLabel = "X1"
-	// x1ClientName is the handheld client's name in toasts and the card.
-	x1ClientName = "GreenOvercast"
 	// x1BrowserURL is xbox.com/play's console list: remote play from a
 	// browser on a PC with no Xbox streaming app installed.
 	x1BrowserURL = "https://www.xbox.com/play/consoles"
-	// x1ReleasePage is where a player can fetch the port by hand when the
-	// download fails.
-	x1ReleasePage = "github.com/doomL/GreenOvercast/releases"
-	// x1ZipName is the port zip PortMaster expects in its autoinstall folder.
-	x1ZipName = "greenovercast.zip"
-	// x1GlibcWant is the oldest glibc the GreenOvercast build loads on.
-	x1GlibcWant = "GLIBC_2.38"
 	// x1ScanTTL is how long a client scan answers the pill's dot.
 	x1ScanTTL = 3 * time.Second
-	// x1QueuedGrace is how long a queued zip is left for PortMaster before
-	// X1 decides PortMaster passed over it and downloads it again.
-	x1QueuedGrace = 10 * time.Minute
+	// x1ConsoleTab is where the xHome build lists consoles.
+	x1ConsoleTab = "its Consoles tab (L1/R1)"
 )
-
-// x1ZipURLs are tried in order: the xHome build's newest release, then the
-// release it shipped in. The upstream project streams Xbox Cloud Gaming only,
-// so it is not a fallback for a console.
-var x1ZipURLs = []string{
-	"https://github.com/doomL/GreenOvercast/releases/latest/download/" + x1ZipName,
-	"https://github.com/doomL/GreenOvercast/releases/download/v0.3.0-xhome/" + x1ZipName,
-}
 
 // x1TileRect is this frame's X1 pill; cleared when the pill is not drawn, so
 // a stale rect cannot swallow clicks.
@@ -86,12 +65,6 @@ var x1Scan struct {
 	at     time.Time
 	client x1Client
 	found  bool
-}
-
-// x1Busy guards the one GreenOvercast download that may run.
-var x1Busy struct {
-	mu      sync.Mutex
-	running bool
 }
 
 // x1PillSupported reports whether X1 can do anything here. The browser
@@ -176,10 +149,11 @@ func x1FindDesktopClient() (x1Client, bool) {
 		}
 	}
 	if p, err := exec.LookPath("flatpak"); err == nil && p != "" {
-		for _, dir := range []string{
-			"/var/lib/flatpak/app/io.github.unknownskl.greenlight",
-			filepath.Join(os.Getenv("HOME"), ".local/share/flatpak/app/io.github.unknownskl.greenlight"),
-		} {
+		dirs := []string{"/var/lib/flatpak/app/io.github.unknownskl.greenlight"}
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			dirs = append(dirs, filepath.Join(home, ".local/share/flatpak/app/io.github.unknownskl.greenlight"))
+		}
+		for _, dir := range dirs {
 			if dirExists(dir) {
 				return x1Client{name: "Greenlight", launch: p, args: []string{"run", "io.github.unknownskl.greenlight"}}, true
 			}
@@ -247,17 +221,32 @@ func x1TileActivate() {
 	ShowToast("Xbox Remote Play opens in the browser — install Greenlight for an app", ToastKindInfo)
 }
 
-// x1Launch starts a found client.
+// x1Confirm reports whether this press is the second within the window for
+// what (a launch or an install); the first press arms it.
+var x1Armed struct {
+	what string
+	at   time.Time
+}
+
+func x1Confirm(what string) bool {
+	if x1Armed.what == what && time.Since(x1Armed.at) < 3*time.Second {
+		x1Armed.what = ""
+		return true
+	}
+	x1Armed.what, x1Armed.at = what, time.Now()
+	return false
+}
+
+// x1Launch starts a found client. The handheld port's build and the glibc
+// check read the card, so they run on a goroutine and the decision comes
+// back to the main loop.
 func x1Launch(c x1Client) {
 	if c.port {
-		if have, old := hostGlibcBelow(x1GlibcWant); old {
-			// Say it before the port fails to start, then let it try: a CFW
-			// may ship its own newer runtime beside the port.
-			ShowToast(x1ClientName+" needs glibc 2.38 and this firmware has "+
-				strings.TrimPrefix(have, "GLIBC_")+" — it may not start", ToastKindWarning)
-		}
-		logDebug("xremote", "launch %s (%s)", c.name, c.launch)
-		launchPortScript(c.name, c.launch)
+		go func() {
+			b, _ := goBuildIn(c.launch, goPortDir(c.launch))
+			_, _ = goGlibcOld()
+			tbxPost(func() { x1LaunchPort(c, b) })
+		}()
 		return
 	}
 	logDebug("xremote", "launch %s (%s %v)", c.name, c.launch, c.args)
@@ -274,173 +263,35 @@ func x1Launch(c x1Client) {
 	ShowToast("Starting "+c.name+" for Xbox Remote Play", ToastKindSuccess)
 }
 
-// x1InstallPort gets GreenOvercast onto the handheld through PortMaster.
+// x1LaunchPort starts GreenOvercast once the caveats are known: the cloud
+// build has no console tab (it still starts, a newer upstream may have one).
+// On older TrimUI firmware goLaunch prepares the private C runtime. Main loop.
+func x1LaunchPort(c x1Client, b goBuild) {
+	if gameScreenSuspended() {
+		return
+	}
+	var why []string
+	if !b.hasXHome() {
+		why = append(why, "this "+goClientName+" is the cloud build, without console streaming (switch in Cloud Gaming)")
+	}
+	if len(why) > 0 && !x1Confirm("launch") {
+		PlayToggleSound()
+		ShowToast(hintSentence(capitalizeFirst(strings.Join(why, "; "))+" — press %s again to start it anyway", "A", "Open"), ToastKindWarning)
+		return
+	}
+	warn := ""
+	if !b.hasXHome() {
+		warn = "cloud build: your Xbox may not be listed"
+	}
+	goLaunch(c.name, c.launch, x1ConsoleTab, warn)
+}
+
+// x1InstallPort gets GreenOvercast's xHome build onto the handheld
+// (greenovercast.go). A private C runtime is prepared on first launch when
+// this TrimUI firmware is too old for the port.
+// PortMaster's own app may open to finish the install only while the screen
+// X1 was pressed on is still showing.
 func x1InstallPort() {
-	launcher := portMasterLauncher(portMasterSDRoot)
-	if launcher == "" {
-		if portMasterInstalling() {
-			ShowToast("PortMaster is installing — press X1 again when it is done", ToastKindInfo)
-			return
-		}
-		if installBarActive() {
-			ShowToast("Another download is running — try again when it finishes", ToastKindInfo)
-			return
-		}
-		if err := startPortMasterInstall(); err != nil {
-			PlayErrorSound()
-			ShowToast("X1 needs PortMaster — "+firstLine(err.Error()), ToastKindError)
-			return
-		}
-		PlayActivateSound()
-		ShowToast("Installing PortMaster first — press X1 again when it is done", ToastKindInfo)
-		return
-	}
-	inbox := mcAutoinstallDir(launcher)
-	if inbox == "" {
-		mcOpenPortMaster(launcher, "Copy "+x1ZipName+" from "+x1ReleasePage+" into PortMaster's autoinstall folder")
-		return
-	}
-	if q := filepath.Join(inbox, x1ZipName); regularFile(q) {
-		// Downloaded, not installed yet. A good zip queued a moment ago is
-		// PortMaster's to finish; a broken one, or one PortMaster has already
-		// passed over (it is still here after x1QueuedGrace and no port came
-		// of it), is fetched again rather than reopening PortMaster forever.
-		st, err := os.Stat(q)
-		if err == nil && x1CheckPortZip(q) == nil && time.Since(st.ModTime()) < x1QueuedGrace {
-			mcOpenPortMaster(launcher, "PortMaster is installing "+x1ClientName+" — close it when it is done, then press X1")
-			return
-		}
-		logDebug("xremote", "dropping stale queued %s", q)
-		_ = os.Remove(q)
-	}
-	if !IsOnline() {
-		PlayErrorSound()
-		ShowToast("No internet — connect Wi-Fi, then press X1 again", ToastKindError)
-		return
-	}
-	x1Busy.mu.Lock()
-	if x1Busy.running {
-		x1Busy.mu.Unlock()
-		ShowToast(x1ClientName+" is already downloading", ToastKindInfo)
-		return
-	}
-	if installBarActive() {
-		x1Busy.mu.Unlock()
-		ShowToast("Another download is running — try again when it finishes", ToastKindInfo)
-		return
-	}
-	x1Busy.running = true
-	x1Busy.mu.Unlock()
-
-	PlayActivateSound()
-	ShowToast("Downloading "+x1ClientName+" for Xbox Remote Play", ToastKindInfo)
-	gen, card := installBarBeginRun(x1ClientName)
-	ctx, cancel := mcRunContext(gen, card)
-	go func() {
-		defer cancel()
-		defer func() {
-			x1Busy.mu.Lock()
-			x1Busy.running = false
-			x1Busy.mu.Unlock()
-		}()
-		zipPath, err := x1DownloadZip(ctx, gen, inbox, x1ZipURLs)
-		switch {
-		case err == nil:
-			installBarDoneRun(gen)
-			logDebug("xremote", "%s queued for PortMaster: %s", x1ClientName, zipPath)
-			tbxPost(func() {
-				x1InvalidateScan()
-				if gameScreenSuspended() || !x1HomeOnScreen(appConfig) {
-					ShowToast(x1ClientName+" is downloaded — press X1 to let PortMaster install it", ToastKindSuccess)
-					return
-				}
-				mcOpenPortMaster(launcher, "PortMaster is installing "+x1ClientName+" — close it when it is done, then press X1")
-			})
-		case ctx.Err() != nil:
-			logDebug("xremote", "download cancelled")
-			installBarAbortRun(gen)
-		default:
-			logWarn("xremote", "download failed: %v", err)
-			installBarFailRun(gen, firstLine(err.Error()))
-			tbxPost(func() {
-				ShowToast("Could not download "+x1ClientName+" — get "+x1ZipName+" from "+x1ReleasePage, ToastKindError)
-			})
-		}
-	}()
-}
-
-// x1DownloadZip fetches the port zip into inbox under a hidden name, checks
-// it is the GreenOvercast port, and gives it its real name only then, so
-// PortMaster never sees half a file or the wrong one.
-func x1DownloadZip(ctx context.Context, gen uint64, inbox string, urls []string) (string, error) {
-	if err := os.MkdirAll(inbox, 0o755); err != nil {
-		return "", fmt.Errorf("PortMaster's autoinstall folder: %w", err)
-	}
-	final := filepath.Join(inbox, x1ZipName)
-	part := filepath.Join(inbox, "."+x1ZipName+".part")
-	progress := func(done, total int64) { mcCardUpdate(gen, installPhaseDownload, done, total) }
-	var lastErr error
-	for _, u := range urls {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		mcCardUpdate(gen, installPhaseDownload, 0, 0)
-		if err := downloadFileWithProgressCtx(ctx, u, part, progress); err != nil {
-			_ = os.Remove(part)
-			lastErr = err
-			logDebug("xremote", "download %s: %v", u, err)
-			continue
-		}
-		mcCardUpdate(gen, installPhaseVerify, 0, 0)
-		if err := x1CheckPortZip(part); err != nil {
-			_ = os.Remove(part)
-			lastErr = err
-			continue
-		}
-		if err := mcSyncFile(part); err != nil {
-			_ = os.Remove(part)
-			return "", err
-		}
-		if err := os.Rename(part, final); err != nil {
-			_ = os.Remove(part)
-			return "", err
-		}
-		return final, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no download address")
-	}
-	return "", lastErr
-}
-
-// x1CheckPortZip accepts a readable zip shaped like a PortMaster port that
-// carries GreenOvercast: a launcher script or port.json, and an entry named
-// for it.
-func x1CheckPortZip(p string) error {
-	zr, err := zip.OpenReader(p)
-	if err != nil {
-		return fmt.Errorf("the download is not a zip: %w", err)
-	}
-	defer zr.Close()
-	named, port := false, false
-	for _, f := range zr.File {
-		name := strings.TrimSuffix(f.Name, "/")
-		base := filepath.Base(name)
-		if x1PortName(base) || x1PortName(strings.SplitN(name, "/", 2)[0]) {
-			named = true
-		}
-		if strings.EqualFold(filepath.Ext(base), ".sh") || strings.EqualFold(base, "port.json") {
-			port = true
-		}
-	}
-	if !named || !port {
-		return errors.New("the download is not the " + x1ClientName + " port")
-	}
-	return nil
-}
-
-// x1HomeOnScreen reports whether Home is the scene showing, where the pill
-// was pressed: PortMaster opens itself only there.
-func x1HomeOnScreen(config *Config) bool {
-	return config != nil && currentSceneIndex >= 0 && currentSceneIndex == homeSceneIndex(config)
+	scene := currentSceneIndex
+	goInstall(goBuildXHome, func() bool { return currentSceneIndex == scene }, func(portsInstallResult) { x1InvalidateScan() })
 }

@@ -166,6 +166,7 @@ func inmapHotkeyActive() bool {
 }
 
 // inmapResetEngine forgets every press and the compiled table.
+// Test seam (ARCH-8): only tests call it.
 func inmapResetEngine() {
 	inmapEngine.btn = [inmapButtonCount]inmapBtnState{}
 	inmapEngine.table = inmapTable{}

@@ -43,6 +43,14 @@ var deviceModelCodes = map[DeviceModel]string{
 	DeviceTrimuiBrickPro:  "TG4040",
 }
 
+// deviceModelCodeAliases are other codes seen for the same board. TrimUI's
+// firmware and NextUI call the Brick Pro TG4040, while its store and spec pages
+// say TG4070; both name the one model, so a string carrying both is not a
+// conflict (deviceCodesIn counts models, not codes).
+var deviceModelCodeAliases = map[string]DeviceModel{
+	"TG4070": DeviceTrimuiBrickPro,
+}
+
 // hardwareModelID returns the TG/TR model identifier (e.g. "TG5040").
 func (d DeviceModel) hardwareModelID() string {
 	if d == DeviceTrimuiHammer {
@@ -119,8 +127,15 @@ func logDeviceIdentity(device DeviceModel, source string, id deviceIdentity) {
 	if len(firmware) > 220 {
 		firmware = firmware[:220] + "…"
 	}
-	logInfo("device", "%s: dt model=%q compatible=%q cpuinfo=%q hostname=%q firmware=%q trimui=%v panel=%s env(device=%q platform=%q model=%q)",
-		name, id.Model, id.Compatible, id.CPUInfo, id.Hostname, firmware, id.TrimUI, panel,
+	soc := id.SoC
+	if soc == "" {
+		soc = "unsure"
+	}
+	if id.SoCWhy != "" {
+		soc += " (" + id.SoCWhy + ")"
+	}
+	logInfo("device", "%s: dt model=%q compatible=%q cpuinfo=%q hostname=%q firmware=%q trimui=%v panel=%s soc=%s kernel=%q env(device=%q platform=%q model=%q)",
+		name, id.Model, id.Compatible, id.CPUInfo, id.Hostname, firmware, id.TrimUI, panel, soc, id.Kernel,
 		id.EnvDevice, id.EnvPlatform, id.EnvModel)
 }
 
@@ -183,13 +198,27 @@ func detectDeviceForHardware(goos, model, compatible string) DeviceModel {
 	return found[0]
 }
 
-// deviceCodesIn returns the distinct model codes named in an upper-cased
-// string. Two different codes mean the string contradicts itself.
+// deviceCodesIn returns the distinct models whose codes are named in an
+// upper-cased string. Two different models mean the string contradicts
+// itself; a model's code and its alias (TG4040, TG4070) are one model.
 func deviceCodesIn(s string) []DeviceModel {
 	var found []DeviceModel
+	add := func(device DeviceModel) {
+		for _, f := range found {
+			if f == device {
+				return
+			}
+		}
+		found = append(found, device)
+	}
 	for device, id := range deviceModelCodes {
 		if containsToken(s, id) {
-			found = append(found, device)
+			add(device)
+		}
+	}
+	for code, device := range deviceModelCodeAliases {
+		if containsToken(s, code) {
+			add(device)
 		}
 	}
 	return found
@@ -268,7 +297,7 @@ func DeviceModelForHardwareID(id string) DeviceModel {
 		return DeviceTrimuiSmartProS
 	case "TG3040":
 		return DeviceTrimuiBrick
-	case "TG4040":
+	case "TG4040", "TG4070":
 		return DeviceTrimuiBrickPro
 	default:
 		return DeviceUnknown

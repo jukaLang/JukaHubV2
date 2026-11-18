@@ -2,13 +2,10 @@ package main
 
 // bootlogo_layout.go — where the boot screen's logo, name and progress sit.
 //
-// A power-on shows three pictures of the same screen one after another: the
-// boot logo the firmware draws before Linux starts (bootlogo.go writes it at
-// the panel's resolution), the first frame of the boot animation (bootos.go,
-// on the canvas) and, for anyone flashing by hand, the reference images
-// branding/mkbootlogo.py renders. They only read as one continuous boot if the
-// logo and the wordmark land on the same pixels in all three, so one function
-// places them, in fractions of the screen height, for a screen of any size.
+// A power-on shows the firmware's BMP before the first boot animation frame.
+// Full-screen BMPs can share the animation's tile and name positions, in
+// fractions of the screen height. The stock Smart Pro 1.1.0 BMP is a 396×66
+// banner instead, so bootlogo.go lays that mark out horizontally.
 //
 // Change a constant here and its twin in branding/mkbootlogo.py together.
 

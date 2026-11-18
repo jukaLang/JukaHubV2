@@ -17,9 +17,10 @@ package main
 // folder is the working folder, so no name in a path is read as a pattern;
 // while it runs, the card's free space is watched and the run stopped at the
 // margin; and afterwards what it wrote is walked and held to the built-in
-// readers' rules (feExtractTidy). Windows' tar.exe (RAR only) cannot be asked
-// for a listing it is held to; libarchive refuses to write through links on its
-// own, and the space watch and the walk still apply.
+// readers' rules (feExtractTidy). Windows' tar.exe (RAR only) lists it first
+// too (tar -tv: the entry cap, links, the FAT32 limit and the space, read from
+// its mode and size columns); libarchive also refuses to write through links
+// on its own, and the space watch and the walk still apply.
 
 import (
 	"bufio"
@@ -179,6 +180,57 @@ func (t *feTailBuffer) String() string {
 // fails at once ("Wrong password") instead of waiting for one to be typed.
 const fe7ZipNoPassword = "-pjukahub-no-password"
 
+// fe7ZipPasswordArg is 7-Zip's -p switch: the password typed for an encrypted
+// archive (APP-14), else fe7ZipNoPassword. It is one argument, so nothing in
+// it is read as another switch; on Windows, where 7-Zip splits its command
+// line itself, fe7ZipCommandLine writes that line so it reads the same words.
+// Neither the command line nor this word is ever logged, and with a password
+// typed no 7-Zip message reaches an error (fe7ZipShownDetail).
+func fe7ZipPasswordArg(password string) string {
+	if password == "" {
+		return fe7ZipNoPassword
+	}
+	return "-p" + password
+}
+
+// fe7ZipPasswordRefused is 7-Zip refusing the password it was given, or
+// asking for one: a typed password was wrong, else the archive is encrypted.
+// With a password typed, a complaint about the command line is answered with
+// a fixed error too: the word 7-Zip could not read can be a piece of it.
+func fe7ZipPasswordRefused(output, password string) error {
+	lower := strings.ToLower(output)
+	if password != "" && (strings.Contains(lower, "command line error") || strings.Contains(lower, "unsupported switch")) {
+		return errFePasswordUnread
+	}
+	if !strings.Contains(lower, "wrong password") && !strings.Contains(lower, "can not open encrypted archive") {
+		return nil
+	}
+	if password != "" {
+		return errFeWrongPassword
+	}
+	return errFeArchiveEncrypted
+}
+
+// fe7ZipShownDetail is what an error may quote of 7-Zip's own message: its
+// last useful line, or nothing when a password was typed — the error and the
+// log then say what happened in fixed words, so no piece of a password 7-Zip
+// echoed can reach a toast or the log.
+func fe7ZipShownDetail(output, password string) string {
+	if password != "" {
+		return ""
+	}
+	return emu7zFailure(output)
+}
+
+// feToolSays is ", 7-Zip says: …"-style text for an error: sep and detail, or
+// nothing when there is no detail to show.
+func feToolSays(sep, detail string) string {
+	if detail == "" {
+		return ""
+	}
+	return sep + detail
+}
+
 // --- Listing -------------------------------------------------------------------
 
 // fe7ZipEntry is one item of a 7-Zip listing.
@@ -282,12 +334,16 @@ func fe7ZipParseListing(r io.Reader, max int) ([]fe7ZipEntry, error) {
 }
 
 // feList7Zip lists archive with 7-Zip. An archive whose very listing needs a
-// password (encrypted headers) answers errFeArchiveEncrypted.
-func feList7Zip(ctx context.Context, tool, archive string) ([]fe7ZipEntry, error) {
+// password (encrypted headers) answers errFeArchiveEncrypted, or
+// errFeWrongPassword when password (may be "") was given and is not it.
+func feList7Zip(ctx context.Context, tool, archive, password string) ([]fe7ZipEntry, error) {
 	listCtx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
-	cmd := exec.CommandContext(listCtx, tool, "l", "-slt", "-spd", fe7ZipNoPassword, "--", archive)
+	cmd := exec.CommandContext(listCtx, tool, "l", "-slt", "-spd", fe7ZipPasswordArg(password), "--", archive)
 	feToolProcAttr(cmd)
+	if !fe7ZipCommandLine(cmd) {
+		return nil, errFePasswordQuote
+	}
 	var errOut feTailBuffer
 	cmd.Stderr = &errOut
 	stdout, err := cmd.StdoutPipe()
@@ -307,15 +363,14 @@ func feList7Zip(ctx context.Context, tool, archive string) ([]fe7ZipEntry, error
 	if errors.Is(parseErr, errFe7ZipTooMany) {
 		return nil, fmt.Errorf("%w (the limit is %d)", errFeTooMany, feExtractMaxEntries)
 	}
-	if lower := strings.ToLower(errOut.String()); strings.Contains(lower, "wrong password") ||
-		strings.Contains(lower, "can not open encrypted archive") {
-		return nil, errFeArchiveEncrypted
+	if refused := fe7ZipPasswordRefused(errOut.String(), password); refused != nil {
+		return nil, refused
 	}
 	if waitErr != nil || parseErr != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		detail := emu7zFailure(errOut.String())
+		detail := fe7ZipShownDetail(errOut.String(), password)
 		if detail == "" && waitErr != nil {
 			detail = waitErr.Error()
 		}
@@ -372,13 +427,17 @@ func fe7ZipFollowProgress(r io.Reader, meter *feExtractMeter) {
 // feRun7Zip unpacks archive into out with 7-Zip. "x" keeps the folders; -y
 // answers every prompt; -bso0 -bsp1 leave only the progress meter on stdout;
 // -spd turns wildcards off, and out is the working folder ("-o."), because
-// 7-Zip reads a "*" in an -o path as the archive's name; the dummy password
-// makes an encrypted archive fail at once. Exit code 1 is 7-Zip's "warning":
-// the files were written, and the warning is returned for the toast.
-func feRun7Zip(ctx context.Context, tool, archive, out string, meter *feExtractMeter) (string, error) {
-	cmd := exec.CommandContext(ctx, tool, "x", "-y", "-bso0", "-bsp1", "-spd", fe7ZipNoPassword, "-o.", "--", archive)
+// 7-Zip reads a "*" in an -o path as the archive's name; password is the one
+// typed for an encrypted archive, else the dummy one makes it fail at once.
+// Exit code 1 is 7-Zip's "warning": the files were written, and the warning
+// is returned for the toast.
+func feRun7Zip(ctx context.Context, tool, archive, out, password string, meter *feExtractMeter) (string, error) {
+	cmd := exec.CommandContext(ctx, tool, "x", "-y", "-bso0", "-bsp1", "-spd", fe7ZipPasswordArg(password), "-o.", "--", archive)
 	cmd.Dir = out
 	feToolProcAttr(cmd)
+	if !fe7ZipCommandLine(cmd) {
+		return "", errFePasswordQuote
+	}
 	var errOut feTailBuffer
 	cmd.Stderr = &errOut
 	stdout, err := cmd.StdoutPipe()
@@ -397,7 +456,7 @@ func feRun7Zip(ctx context.Context, tool, archive, out string, meter *feExtractM
 		return "", ctxErr
 	}
 	output := errOut.String()
-	detail := emu7zFailure(output)
+	detail := fe7ZipShownDetail(output, password)
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
 		if detail == "" {
@@ -405,17 +464,18 @@ func feRun7Zip(ctx context.Context, tool, archive, out string, meter *feExtractM
 		}
 		return detail, nil
 	}
+	if refused := fe7ZipPasswordRefused(output, password); refused != nil {
+		return "", refused
+	}
 	lower := strings.ToLower(output)
 	switch {
-	case strings.Contains(lower, "wrong password"), strings.Contains(lower, "can not open encrypted archive"):
-		return "", errFeArchiveEncrypted
 	case strings.Contains(lower, "no space left"), strings.Contains(lower, "not enough space"):
 		return "", errFeCardFull
 	case strings.Contains(lower, "unsupported method"):
-		return "", fmt.Errorf("%w (this 7-Zip cannot unpack its compression: %s)", errFeToolFailed, detail)
+		return "", fmt.Errorf("%w (this 7-Zip cannot unpack its compression%s)", errFeToolFailed, feToolSays(": ", detail))
 	case strings.Contains(lower, "can not open output file") &&
 		(strings.Contains(lower, "invalid argument") || strings.Contains(lower, "illegal byte")):
-		return "", fmt.Errorf("%w (a name in it cannot be stored on this card — 7-Zip: %s)", errFeToolFailed, detail)
+		return "", fmt.Errorf("%w (a name in it cannot be stored on this card%s)", errFeToolFailed, feToolSays(" — 7-Zip: ", detail))
 	}
 	if detail == "" {
 		detail = err.Error()
@@ -447,6 +507,93 @@ func feRunWindowsTar(ctx context.Context, tool, archive, out string) error {
 	return nil
 }
 
+// feWinTarParseListing reads bsdtar's verbose listing (tar -tv): a line per
+// item, "mode links owner group size month day time-or-year name". Only the
+// mode and the size are read — a name may hold spaces, and names are held to
+// the rules afterwards (feExtractTidy). A line without those fields fails the
+// listing, and the archive is not unpacked: what cannot be read is not
+// trusted. It stops with errFe7ZipTooMany past max items.
+func feWinTarParseListing(r io.Reader, max int) ([]fe7ZipEntry, error) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	var entries []fe7ZipEntry
+	for sc.Scan() {
+		line := strings.TrimRight(sc.Text(), "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 9 || len(f[0]) < 10 {
+			return entries, fmt.Errorf("tar printed a line JukaHub cannot read: %q", ellipsizeRunes(line, 60))
+		}
+		e := fe7ZipEntry{Path: f[8]}
+		switch f[0][0] {
+		case 'd':
+			e.Dir = true
+		case 'l':
+			e.Link = true
+		case '-':
+			size, err := strconv.ParseInt(f[4], 10, 64)
+			if err != nil || size < 0 {
+				return entries, fmt.Errorf("tar printed a size JukaHub cannot read: %q", ellipsizeRunes(line, 60))
+			}
+			e.Size = size
+		}
+		// Anything else (a device, a pipe) takes no room; feExtractTidy
+		// removes it if tar writes one.
+		entries = append(entries, e)
+		if len(entries) > max {
+			return entries, errFe7ZipTooMany
+		}
+	}
+	return entries, sc.Err()
+}
+
+// feWinTarPreflight lists archive with Windows' tar.exe (-tv) before it is
+// unpacked, so the entry cap, links, the FAT32 limit and the space check hold
+// for a RAR without a full 7-Zip as they do for 7-Zip (fe7ZipPreflight). An
+// archive tar cannot list is not unpacked.
+func feWinTarPreflight(ctx context.Context, tool, archive, out string) error {
+	listCtx, stop := context.WithTimeout(ctx, 5*time.Minute)
+	defer stop()
+	cmd := exec.CommandContext(listCtx, tool, "-t", "-v", "-f", archive)
+	feToolProcAttr(cmd)
+	var errOut feTailBuffer
+	cmd.Stderr = &errOut
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%w (tar did not start: %v)", errFeToolFailed, err)
+	}
+	entries, parseErr := feWinTarParseListing(stdout, feExtractMaxEntries)
+	if parseErr != nil {
+		stop()
+	}
+	_, _ = io.Copy(io.Discard, stdout)
+	waitErr := cmd.Wait()
+	switch {
+	case errors.Is(parseErr, errFe7ZipTooMany):
+		return fmt.Errorf("%w (the limit is %d)", errFeTooMany, feExtractMaxEntries)
+	case strings.Contains(strings.ToLower(errOut.String()), "encrypt"):
+		return errFeArchiveEncrypted
+	case waitErr != nil || parseErr != nil:
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		detail := emu7zFailure(errOut.String())
+		if detail == "" && parseErr != nil {
+			detail = parseErr.Error()
+		}
+		if detail == "" {
+			detail = waitErr.Error()
+		}
+		return fmt.Errorf("%w — tar could not list what is in it (%s)", errFeToolFailed, detail)
+	}
+	return feToolPlan(entries, out, false)
+}
+
 // feToolSpaceWatch stops a program's run when the card's free space reaches
 // the margin: a listing can understate what an archive unpacks to, and 7-Zip
 // would otherwise write until the card is full to the last byte. It looks four
@@ -473,36 +620,56 @@ func feToolSpaceWatch(ctx context.Context, dir string, stop context.CancelFunc, 
 // for, and links — which 7-Zip would create (and an older 7-Zip could follow
 // to write elsewhere), and which a FAT card cannot hold anyway — stop it. So
 // does a listing 7-Zip cannot give: the listing is the only look at the links
-// before they are written.
-func fe7ZipPreflight(ctx context.Context, tool, archive, out string) error {
-	entries, err := feList7Zip(ctx, tool, archive)
+// before they are written. With a password (may be "") encrypted entries are
+// unpacked; the listing is taken with it, so encrypted headers are read too.
+func fe7ZipPreflight(ctx context.Context, tool, archive, out, password string) error {
+	entries, err := feList7Zip(ctx, tool, archive, password)
 	switch {
-	case errors.Is(err, errFeArchiveEncrypted), errors.Is(err, errFeTooMany), errors.Is(err, context.Canceled):
+	case errors.Is(err, errFeArchiveEncrypted), errors.Is(err, errFeWrongPassword), errors.Is(err, errFeTooMany),
+		errors.Is(err, errFePasswordQuote), errors.Is(err, errFePasswordUnread), errors.Is(err, context.Canceled):
 		return err
 	case err != nil:
 		return fmt.Errorf("%w — 7-Zip could not list what is in it (%v)", errFeToolFailed, err)
 	}
-	var total int64
+	return feToolPlan(entries, out, password != "")
+}
+
+// feToolPlan holds a program's listing of an archive to the rules before it
+// writes anything: no encrypted entry (unless encryptedOK: a password was
+// typed for it), no link, room on the card for every file in whole clusters,
+// and on FAT no file of 4 GiB or more (feSpaceTally).
+func feToolPlan(entries []fe7ZipEntry, out string, encryptedOK bool) error {
+	tally := newFeSpaceTally(feExtractVolume(out))
 	for _, e := range entries {
 		switch {
-		case e.Encrypted:
+		case e.Encrypted && !encryptedOK:
 			return errFeArchiveEncrypted
 		case e.Link:
 			return errFeHasLinks
-		}
-		if !e.Dir && e.Size > 0 {
-			total = satAddBytes(total, e.Size)
+		case e.Dir:
+			tally.dir()
+		default:
+			if err := tally.file(e.Size); err != nil {
+				return err
+			}
 		}
 	}
-	if budget, free := feExtractBudget(out); total > budget {
-		return feNoSpaceError{need: satAddBytes(total, feExtractSpaceMargin), free: free}
+	if budget, free := feExtractBudget(out); tally.total > budget {
+		return feNoSpaceError{need: satAddBytes(tally.total, feExtractSpaceMargin), free: free}
 	}
 	return nil
 }
 
 // feExtractWithTool unpacks archive into out with an external program, then
 // tidies what it wrote to the same rules the built-in readers follow.
-func feExtractWithTool(ctx context.Context, kind feArchiveKind, archive, out string, st *feExtractStats, meter *feExtractMeter) error {
+// password (may be "") is an encrypted archive's, which only 7-Zip takes.
+func feExtractWithTool(ctx context.Context, kind feArchiveKind, archive, out string, st *feExtractStats, meter *feExtractMeter, password string) error {
+	if password != "" && IsWindows() && strings.Contains(password, `"`) {
+		// 7-Zip drops every " from its command line (fe7ZipCommandLine), so
+		// such a password could only reach it altered: refused before anything
+		// runs or is fetched.
+		return errFePasswordQuote
+	}
 	tool := feArchiveToolFor(kind)
 	if tool.Path == "" && kind == feArchive7z && IsWindows() {
 		// The official standalone 7zr.exe, fetched once and checked against
@@ -520,13 +687,25 @@ func feExtractWithTool(ctx context.Context, kind feArchiveKind, archive, out str
 	if tool.Path == "" {
 		return errFeArchiveNeedsTool
 	}
+	if password != "" && tool.Kind != feTool7Zip {
+		// Windows' tar.exe takes no password.
+		return errFePasswordNeeds7z
+	}
 	// A meter the built-in reader started (a zip handed over for its
 	// compression) starts again: the program reports in percent, if at all.
 	meter.setTotal(0, false, false)
 	meter.setDone(0, 0)
 	meter.setPhase("Checking")
-	if tool.Kind == feTool7Zip {
-		if err := fe7ZipPreflight(ctx, tool.Path, archive, out); err != nil {
+	switch tool.Kind {
+	case feTool7Zip:
+		if err := fe7ZipPreflight(ctx, tool.Path, archive, out, password); err != nil {
+			return err
+		}
+	case feToolWinTar:
+		if err := feWinTarPreflight(ctx, tool.Path, archive, out); err != nil {
+			if errors.Is(err, errFeArchiveEncrypted) {
+				return errFePasswordNeeds7z
+			}
 			return err
 		}
 	}
@@ -538,11 +717,14 @@ func feExtractWithTool(ctx context.Context, kind feArchiveKind, archive, out str
 	var runErr error
 	switch tool.Kind {
 	case feTool7Zip:
-		warning, err := feRun7Zip(runCtx, tool.Path, archive, out, meter)
+		warning, err := feRun7Zip(runCtx, tool.Path, archive, out, password, meter)
 		st.Warning = warning
 		runErr = err
 	case feToolWinTar:
 		runErr = feRunWindowsTar(runCtx, tool.Path, archive, out)
+		if errors.Is(runErr, errFeArchiveEncrypted) {
+			runErr = errFePasswordNeeds7z
+		}
 	}
 	stop()
 	if full.Load() {

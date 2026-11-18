@@ -294,25 +294,6 @@ func syncDirectory(dir string) {
 	_ = d.Close()
 }
 
-// SaveConfig marshals config to JSON and writes it atomically.
-func SaveConfig(filename string, config *Config) error {
-	// Same rule as saveConfig: a generated Tools page layout must not reach the
-	// file (menutiles.go).
-	defer menuTilesDetachForSave(config)()
-	config.SchemaVersion = ConfigSchemaVersion
-	data, err := json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		configHealth.RecordSave(filename, fmt.Errorf("marshal config: %w", err))
-		return fmt.Errorf("marshal config: %w", err)
-	}
-	if err := AtomicWrite(filename, data, 0644); err != nil {
-		configHealth.RecordSave(filename, fmt.Errorf("atomic write: %w", err))
-		return fmt.Errorf("atomic write: %w", err)
-	}
-	configHealth.RecordSave(filename, nil)
-	return nil
-}
-
 // configRecoveryNotice is set when the primary config had to be recovered from
 // its backup. It is shown once the render loop is up (main.go) rather than
 // during load, which runs before fonts and audio exist.

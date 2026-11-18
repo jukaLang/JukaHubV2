@@ -529,7 +529,7 @@ func rommConfirmUndo(config *Config) {
 		body += "\n\n" + rommCount(len(run.Deleted), "file it deleted cannot", "files it deleted cannot") + " come back."
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
-		title:    "Undo the organise of " + run.At.Format("2 Jan 15:04") + "?",
+		title:    "Undo the organise of " + formatDateTimeNear(config, run.At, time.Now()) + "?",
 		subtitle: rommCount(len(run.Moves), "file goes back", "files go back"),
 		icon:     "refresh",
 		body:     body,

@@ -26,7 +26,7 @@ package main
 //
 // Menu is read the way the TrimUI's own launchers read it: a tap acts when the
 // button comes up, a hold opens the orb after orbHoldMs, and a press that
-// another button — or the firmware's Menu + volume brightness chord — joins is
+// another button, including a volume key, joins is
 // no voice press at all (the quit chord still counts Menu as Select).
 //
 // The microphone is voicemic.go's, the music and a playing video are paused
@@ -103,8 +103,7 @@ const (
 
 // orbVolumeKeys counts the hardware volume-key presses volumebuttons.go reads
 // off the kernel's input devices (on its own goroutine; SDL never sees those
-// keys). One that lands while Menu is down is the firmware's Menu + volume
-// brightness chord, not a voice press.
+// keys). One that lands while Menu is down makes a chord, not a voice press.
 var orbVolumeKeys atomic.Int64
 
 // voiceOrbNoteVolumeKey is volumebuttons.go's word that a volume key went
@@ -113,13 +112,13 @@ func voiceOrbNoteVolumeKey() { orbVolumeKeys.Add(1) }
 
 const (
 	// orbRadius is the sphere's radius on a 720-line canvas.
-	orbRadius = 34
+	orbRadius = 40
 	// orbMargin keeps the orb off the screen's edge and the footer.
 	orbMargin = 22
 	// orbPad is the bubble's inner margin and orbBubbleRadius its corners.
 	orbPad          = int32(14)
 	orbBubbleRadius = int32(16)
-	orbBubbleMaxW   = int32(540)
+	orbBubbleMaxW   = int32(620)
 	// orbAppearMs and orbFadeMs time the pop-in and the fade-out.
 	orbAppearMs = 260
 	orbFadeMs   = 220
@@ -207,8 +206,7 @@ var voiceOrb struct {
 
 	// A Menu press waiting to be read the way the TrimUI's own launchers read
 	// it (voiceOrbMenuDown): a tap acts when it comes up, a hold opens the orb
-	// to talk while held, and a press another button joins — or the
-	// firmware's Menu + volume brightness chord — is no voice press at all.
+	// to talk while held, and a press another button joins is no voice press.
 	menuDown     bool
 	menuDownAt   uint64
 	menuRoute    orbMenuRoute
@@ -227,6 +225,9 @@ var voiceOrb struct {
 	// groqNudge: this wait has no Groq key behind it, so the bubble offers
 	// "Speed up by providing a Groq key" with a button to Settings.
 	groqNudge bool
+	// typeFocus: "Type instead", under "Add Groq key", has the focus
+	// (voiceOrbTypeShown); each phase starts on the key.
+	typeFocus bool
 
 	// The command waiting out the confirm pause, and the choices.
 	act       func(*Config)
@@ -246,6 +247,7 @@ var voiceOrb struct {
 	bubbleRect sdl.Rect
 	rowRects   [orbMaxChoiceRows]sdl.Rect
 	offerRect  sdl.Rect
+	typeRect   sdl.Rect
 
 	// Wrapped text, kept while the text and the width stay the same.
 	wrapTitle, wrapSub, wrapNudge orbWrap
@@ -272,6 +274,67 @@ func voiceOrbRunGroqNudge(config *Config) {
 	}
 	PlayActivateSound()
 	vkVoiceOpenKeySettings(config)
+}
+
+// orbTypeLabel is the button under "Add Groq key" that asks for the request on
+// the keyboard instead.
+const orbTypeLabel = "Type instead"
+
+// voiceOrbTypeOffered reports whether the bubble shows "Type instead" under
+// its "Add Groq key" button: while it turns speech into words without a key
+// (the nudge, not yet Juka writing an answer: typing skips the recognizer,
+// not the answer), and on an answer whose fix is the key. Not over a paused
+// game (the nudge is not there either). The layout asks this, so the button
+// stays while the bubble fades out; input asks voiceOrbTypeShown.
+func voiceOrbTypeOffered() bool {
+	if gameAssistOverlayActive() {
+		return false
+	}
+	thinking := voiceOrb.groqNudge && voiceOrb.phase == orbThinking && !voiceOrb.ai
+	return thinking || (voiceOrb.phase == orbAnswer && voiceOrb.offer == orbOfferGroqKey)
+}
+
+// voiceOrbTypeShown is voiceOrbTypeOffered on an orb that is up and not going:
+// "Type instead" can be pressed.
+func voiceOrbTypeShown() bool {
+	return voiceOrbActive() && voiceOrbTypeOffered()
+}
+
+// voiceOrbFocusType moves the focus between "Add Groq key" (up) and "Type
+// instead" (down). It reports whether the two buttons are there to move
+// between.
+func voiceOrbFocusType(d int) bool {
+	if !voiceOrbTypeShown() || d == 0 {
+		return false
+	}
+	if f := d > 0; f != voiceOrb.typeFocus {
+		voiceOrb.typeFocus = f
+		PlayNavSound()
+	}
+	return true
+}
+
+// voiceOrbRunType is "Type instead": the wait, or the answer, goes and the
+// keyboard asks for the request (voiceOrbTyped).
+func voiceOrbRunType() {
+	voiceOrbHideNow()
+	PlayActivateSound()
+	tbxOpenPrompt("Ask Juka", "open YouTube · volume 50 · what time is it", "", voiceOrbTyped)
+}
+
+// voiceOrbTyped runs a typed request the way voiceOrbTranscribed runs a heard
+// one: the orb comes back up with what it did, or with Juka's answer.
+func voiceOrbTyped(text string) {
+	text = voiceClip(text)
+	if text == "" || appConfig == nil || voiceOrbBlockingCard() {
+		return
+	}
+	voiceOrbStopCapture()
+	voiceOrbCancelRequest()
+	voiceOrb.heard, voiceOrb.words = "", ""
+	voiceOrb.choices, voiceOrb.act = nil, nil
+	voiceOrb.ai = false
+	voiceOrbCommand(appConfig, text)
 }
 
 // orbAIText is Juka's answer as it streams in: the request goroutine writes
@@ -449,8 +512,21 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 	}
 	switch b {
 	case sdl.CONTROLLER_BUTTON_A:
+		if voiceOrbTypeShown() && voiceOrb.typeFocus {
+			voiceOrbRunType()
+			return true
+		}
 		if voiceOrb.offer != orbOfferNone {
 			voiceOrbRunOffer(config)
+			return true
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		// Between "Add Groq key" and "Type instead", when both are there.
+		d := 1
+		if b == sdl.CONTROLLER_BUTTON_DPAD_UP {
+			d = -1
+		}
+		if voiceOrbFocusType(d) {
 			return true
 		}
 	case sdl.CONTROLLER_BUTTON_B:
@@ -607,7 +683,7 @@ func voiceOrbMenuUp(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 // voiceOrbMenuTick follows a Menu press that is still down, once a frame: a
-// volume key pressed meanwhile is the firmware's brightness chord, and a hold
+// volume key pressed meanwhile makes it a chord, and a hold
 // of orbHoldMs on the orb's route opens the orb to talk while it is held.
 func voiceOrbMenuTick(config *Config) {
 	if !voiceOrb.menuDown {
@@ -629,8 +705,7 @@ func voiceOrbMenuTick(config *Config) {
 	// read, before push-to-talk could: with it on, a tap opens the orb and a
 	// hold saves the screen. The hold arms it (a tick of the motor says it
 	// may be let go); the release takes it, unless a volume key or another
-	// button joined first — the firmware's Menu + volume brightness may come
-	// after a long hold.
+	// button joined first, including a volume key after a long hold.
 	if menuShotEnabled(config) {
 		if orbNow()-voiceOrb.menuDownAt >= menuShotHoldMs {
 			voiceOrb.menuShot = true
@@ -670,7 +745,7 @@ func voiceOrbMenuChord() {
 }
 
 // voiceOrbF4 is the keyboard's voice key: Menu's routes, read at once (a
-// keyboard has no Menu + volume chord). false when nothing can listen here.
+// keyboard has no physical Menu + volume chord). false when nothing can listen here.
 func voiceOrbF4(config *Config) bool {
 	route, ok := voiceOrbRouteFor(config)
 	switch {
@@ -731,8 +806,20 @@ func voiceOrbKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch sym {
 	case sdl.K_RETURN, sdl.K_KP_ENTER:
+		if voiceOrbTypeShown() && voiceOrb.typeFocus && e.Repeat == 0 {
+			voiceOrbRunType()
+			return true
+		}
 		if voiceOrb.offer != orbOfferNone && e.Repeat == 0 {
 			voiceOrbRunOffer(config)
+			return true
+		}
+	case sdl.K_UP:
+		if voiceOrbFocusType(-1) {
+			return true
+		}
+	case sdl.K_DOWN:
+		if voiceOrbFocusType(1) {
 			return true
 		}
 	case sdl.K_ESCAPE:
@@ -785,6 +872,10 @@ func voiceOrbMouse(down bool, mx, my int32, config *Config) bool {
 			}
 		}
 	}
+	if voiceOrb.typeRect.W > 0 && pointInRect(mx, my, voiceOrb.typeRect) && voiceOrbTypeShown() {
+		voiceOrbRunType()
+		return true
+	}
 	if voiceOrb.offerRect.W > 0 && pointInRect(mx, my, voiceOrb.offerRect) {
 		if voiceOrbGroqNudgeShown() {
 			voiceOrbRunGroqNudge(config)
@@ -818,7 +909,9 @@ func voiceOrbConfirmButton(config *Config) {
 	case orbListening:
 		voiceOrbFinish(config)
 	case orbThinking:
-		if voiceOrbGroqNudgeShown() {
+		if voiceOrbTypeShown() && voiceOrb.typeFocus {
+			voiceOrbRunType()
+		} else if voiceOrbGroqNudgeShown() {
 			voiceOrbRunGroqNudge(config)
 		}
 	case orbConfirm:
@@ -828,8 +921,12 @@ func voiceOrbConfirmButton(config *Config) {
 	}
 }
 
-// voiceOrbMove walks the choices.
+// voiceOrbMove walks the choices, or the nudge's two buttons while the orb
+// thinks.
 func voiceOrbMove(d int) {
+	if voiceOrb.phase == orbThinking && voiceOrbFocusType(d) {
+		return
+	}
 	n := len(voiceOrb.choices)
 	if voiceOrb.phase != orbChoices || n == 0 {
 		return
@@ -1284,6 +1381,11 @@ func voiceOrbCommand(config *Config, text string) {
 	if voiceScreenTakeQuestion(config, text) {
 		return
 	}
+	// "Why won't my game start?", "what's filling my card?": Juka checks
+	// the device with its read-only tools (aiagent_view.go).
+	if aiVoiceTake(text) {
+		return
+	}
 	in := voiceParse(text)
 	logDebug("voice", "orb: command understood as intent %d", int(in.Kind))
 	out := voiceExecute(config, in, voiceFromMic)
@@ -1722,6 +1824,7 @@ func voiceOrbSetPhase(p orbPhase) {
 	voiceOrb.phaseAt = now
 	voiceOrb.fadeAt, voiceOrb.hideAt = 0, 0
 	voiceOrb.groqNudge = false // each thinking phase sets its own
+	voiceOrb.typeFocus = false
 }
 
 // voiceOrbCancel is B: stop listening or waiting, drop the command or the
@@ -1759,7 +1862,7 @@ func voiceOrbHideNow() {
 	voiceOrb.offer = orbOfferNone
 	voiceOrb.ai = false
 	voiceOrb.held = false
-	voiceOrb.orbRect, voiceOrb.bubbleRect, voiceOrb.offerRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	voiceOrb.orbRect, voiceOrb.bubbleRect, voiceOrb.offerRect, voiceOrb.typeRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	voiceOrb.rowRects = [orbMaxChoiceRows]sdl.Rect{}
 }
 
@@ -2002,11 +2105,17 @@ func orbHintLine() string {
 		}
 		return orbKeyName("Menu") + " done · " + b + " cancel"
 	case orbThinking:
+		if voiceOrbTypeShown() {
+			return hintKeyFor("D-Pad", "Choose") + " choose · " + b + " cancel"
+		}
 		return b + " cancel"
 	case orbConfirm:
 		return orbKeyName("A") + " now · " + b + " cancel"
 	case orbChoices:
 		return hintKeyFor("D-Pad", "Choose") + " choose · " + orbKeyName("A") + " open · " + b + " cancel"
+	}
+	if voiceOrbTypeOffered() {
+		return hintKeyFor("D-Pad", "Choose") + " choose · " + b + " close"
 	}
 	if voiceOrb.offer != orbOfferNone {
 		return b + " close"
@@ -2118,6 +2227,8 @@ type orbGeom struct {
 	nRows      int
 	offer      sdl.Rect
 	offerLabel string // the button's words, its key in front
+	typeBtn    sdl.Rect
+	typeLabel  string // "Type instead" under "Add Groq key" (voiceOrbTypeShown)
 	nudgeLines []string
 	hint       string
 	hintY      int32
@@ -2141,7 +2252,7 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	if g.cy < g.r+orbMargin {
 		g.cy = g.r + orbMargin
 	}
-	bw := screenWidth * 44 / 100
+	bw := screenWidth * 50 / 100
 	if bw > orbBubbleMaxW {
 		bw = orbBubbleMaxW
 	}
@@ -2149,7 +2260,7 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	// screen: a wider bubble with room for more lines (gameassist.go).
 	overGame := gameAssistOverlayActive()
 	if overGame {
-		bw = screenWidth * 62 / 100
+		bw = screenWidth * 66 / 100
 	}
 	textW := bw - 2*orbPad
 	maxTitle := 2
@@ -2190,8 +2301,21 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 		g.nudgeLines = voiceOrb.wrapNudge.get(fonts.small, orbGroqNudgeText, textW, 2)
 		h += 10 + int32(len(g.nudgeLines))*fonts.smallH
 	}
+	// "Type instead" under "Add Groq key": A's key goes in front of the one
+	// with the focus (D-pad up and down move it).
+	typing := offer && voiceOrbTypeOffered()
+	if typing {
+		g.typeLabel = orbTypeLabel
+		if voiceOrb.typeFocus {
+			g.typeLabel = orbKeyName("A") + "  " + orbTypeLabel
+			g.offerLabel = orbOfferLabel(orbOfferGroqKey)
+		}
+	}
 	if offer {
 		h += 12 + btnH
+		if typing {
+			h += 8 + btnH
+		}
 	}
 	h += 10 + fonts.tinyH + orbPad
 	b := sdl.Rect{X: g.cx - g.r - 14 - bw, Y: g.cy + g.r - h, W: bw, H: h}
@@ -2226,11 +2350,23 @@ func voiceOrbLayout(config *Config, fonts tbxFonts) orbGeom {
 	if offer {
 		y += 12
 		w := tbxButtonWidth(fonts.small, g.offerLabel, 150)
+		if typing {
+			// The two stacked buttons share one width, measured with the
+			// key in front, so moving the focus does not resize them.
+			aKey := orbKeyName("A") + "  "
+			w = max32(tbxButtonWidth(fonts.small, aKey+orbOfferLabel(orbOfferGroqKey), 150),
+				tbxButtonWidth(fonts.small, aKey+orbTypeLabel, 150))
+		}
 		if w > b.W-2*orbPad {
 			w = b.W - 2*orbPad
 		}
 		g.offer = sdl.Rect{X: b.X + orbPad, Y: y, W: w, H: btnH}
 		y += btnH
+		if typing {
+			y += 8
+			g.typeBtn = sdl.Rect{X: b.X + orbPad, Y: y, W: w, H: btnH}
+			y += btnH
+		}
 	}
 	g.hintY = y + 10
 	return g
@@ -2258,7 +2394,7 @@ func voiceOrbRender(renderer *sdl.Renderer, config *Config) {
 	if vis <= 0 {
 		return
 	}
-	fonts, ok := tbxLoadFonts(config)
+	fonts, ok := orbLoadFonts(config)
 	if !ok {
 		return
 	}
@@ -2267,12 +2403,34 @@ func voiceOrbRender(renderer *sdl.Renderer, config *Config) {
 	voiceOrb.bubbleRect = g.bubble
 	voiceOrb.rowRects = g.rows
 	voiceOrb.offerRect = g.offer
+	voiceOrb.typeRect = g.typeBtn
 	// A clip rect a screen left behind would cut the corner off.
 	_ = renderer.SetClipRect(nil)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	voiceOrbDrawBubble(renderer, config, fonts, g, vis)
 	voiceOrbDrawOrb(renderer, g, vis, now)
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
+}
+
+// orbLoadFonts is the toolbox's fonts one step up the type scale: what Juka
+// says (Heading, not Body), the line under it (Body) and the controls (Label)
+// are read at a glance, often from a handheld held at arm's length. A role
+// that does not load keeps the toolbox's size.
+func orbLoadFonts(config *Config) (tbxFonts, bool) {
+	f, ok := tbxLoadFonts(config)
+	if !ok {
+		return f, false
+	}
+	if font := FontForRole(config, TypeHeading); font != nil {
+		f.body, f.bodyH = font, int32(font.Height())
+	}
+	if font := FontForRole(config, TypeBody); font != nil {
+		f.small, f.smallH = font, int32(font.Height())
+	}
+	if font := FontForRole(config, TypeLabel); font != nil {
+		f.tiny, f.tinyH = font, int32(font.Height())
+	}
+	return f, true
 }
 
 // orbTextAlpha steps the text's alpha in three stops while the bubble fades,
@@ -2371,7 +2529,15 @@ func voiceOrbDrawBubble(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	if g.offer.W > 0 {
 		r := g.offer
 		r.X += slide
-		tbxDrawButton(renderer, config, fonts.small, r, g.offerLabel, true, true, false)
+		// With "Type instead" under it, the focused one of the two is the
+		// filled button.
+		on := g.typeBtn.W <= 0 || !voiceOrb.typeFocus
+		tbxDrawButton(renderer, config, fonts.small, r, g.offerLabel, on, on, false)
+	}
+	if g.typeBtn.W > 0 {
+		r := g.typeBtn
+		r.X += slide
+		tbxDrawButton(renderer, config, fonts.small, r, g.typeLabel, voiceOrb.typeFocus, voiceOrb.typeFocus, false)
 	}
 	if g.hint != "" {
 		hint := ellipsize(fonts.tiny, g.hint, b.W-2*orbPad)

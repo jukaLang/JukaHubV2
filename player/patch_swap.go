@@ -151,16 +151,6 @@ func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdat
 	return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
 }
 
-// jukaHubAssetName returns the release asset filename for a supported device
-// target, or an error when the device/platform has no published build.
-func jukaHubAssetName(device DeviceModel, goos, arch string) (string, error) {
-	target, err := jukaHubUpdateTargetFor(device, goos, arch)
-	if err != nil {
-		return "", err
-	}
-	return target.Asset, nil
-}
-
 // findStagedBinary locates the JukaHub executable inside a staged tree.
 func findStagedBinary(staging string) string {
 	var found string

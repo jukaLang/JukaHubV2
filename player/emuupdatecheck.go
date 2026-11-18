@@ -7,8 +7,9 @@ package main
 // badge, and neither may wait on the network or read every core off the card
 // while drawing. One background check answers for both: it reads the
 // buildbot index for this platform's channel and compares it with the CRC32 of
-// every installed core (cached by size and modification time, so a second
-// check reads nothing it already read), and asks each project JukaHub installed
+// every installed core (cached by path, size and modification time, in memory
+// and in core-crc.json, so neither a second check nor the first one after a
+// reboot reads a core it already read), and asks each project JukaHub installed
 // for its newest release: the managed emulators on Windows, hakuX on the
 // handheld. The answer is kept here, guarded by a mutex, and the pages only
 // ever read it.
@@ -24,6 +25,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sort"
@@ -227,10 +229,16 @@ func emuForgetAllUpdates() {
 	emuUpdateState.checkedAt = time.Time{}
 }
 
-// emuCRCCache remembers core checksums by path, size and modification time.
+// emuCRCCache remembers core checksums by path, size and modification time —
+// in memory, and in data/performance/core-crc.json, so the first pass after a
+// boot does not read every installed core again (CrossMix ships about a
+// hundred). path is the file the entries belong to ("" until it is read);
+// dirty marks entries the file does not have yet.
 var emuCRCCache struct {
 	mu      sync.Mutex
+	path    string
 	entries map[string]emuCRCEntry
+	dirty   bool
 }
 
 type emuCRCEntry struct {
@@ -239,14 +247,64 @@ type emuCRCEntry struct {
 	crc  string
 }
 
+// emuCRCFileEntry is one entry as core-crc.json stores it; Mod is the
+// modification time in Unix nanoseconds.
+type emuCRCFileEntry struct {
+	Size int64  `json:"size"`
+	Mod  int64  `json:"mod"`
+	CRC  string `json:"crc"`
+}
+
+// emuCRCFileMax bounds what is read back: emuCRCCacheMax entries take a
+// fraction of it.
+const emuCRCFileMax = 1 << 20
+
+// emuCRCCachePath is the cache's file, beside the refused builds.
+func emuCRCCachePath() string { return filepath.Join(compatDir(), "core-crc.json") }
+
+// emuCRCSaveMu keeps two writes of the file from crossing (writeCompatAtomic
+// stages both in the same .tmp).
+var emuCRCSaveMu sync.Mutex
+
+// emuCRCLoadLocked reads the file the first time, and again when the data
+// folder is another one (a test pointing compatDir elsewhere). An entry whose
+// checksum is not eight hex digits is dropped.
+func emuCRCLoadLocked() {
+	path := emuCRCCachePath()
+	if emuCRCCache.entries != nil && emuCRCCache.path == path {
+		return
+	}
+	emuCRCCache.path = path
+	emuCRCCache.entries = make(map[string]emuCRCEntry, 64)
+	emuCRCCache.dirty = false
+	data, err := os.ReadFile(path)
+	if err != nil || len(data) > emuCRCFileMax {
+		return
+	}
+	stored := map[string]emuCRCFileEntry{}
+	if json.Unmarshal(data, &stored) != nil {
+		return
+	}
+	for p, e := range stored {
+		if len(emuCRCCache.entries) >= emuCRCCacheMax {
+			break
+		}
+		if p == "" || len(e.CRC) != 8 || !isHex(e.CRC) || e.Size < 0 {
+			continue
+		}
+		emuCRCCache.entries[p] = emuCRCEntry{size: e.Size, mod: time.Unix(0, e.Mod), crc: strings.ToLower(e.CRC)}
+	}
+}
+
 // emuCachedCRC32 is coreCRC32File without re-reading a file that has not
-// changed since it was last read.
+// changed since it was last read, in this run or an earlier one.
 func emuCachedCRC32(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
 	}
 	emuCRCCache.mu.Lock()
+	emuCRCLoadLocked()
 	if hit, ok := emuCRCCache.entries[path]; ok && hit.size == info.Size() && hit.mod.Equal(info.ModTime()) {
 		emuCRCCache.mu.Unlock()
 		return hit.crc, nil
@@ -257,10 +315,12 @@ func emuCachedCRC32(path string) (string, error) {
 		return "", err
 	}
 	emuCRCCache.mu.Lock()
-	if emuCRCCache.entries == nil || len(emuCRCCache.entries) >= emuCRCCacheMax {
+	emuCRCLoadLocked()
+	if len(emuCRCCache.entries) >= emuCRCCacheMax {
 		emuCRCCache.entries = make(map[string]emuCRCEntry, 64)
 	}
 	emuCRCCache.entries[path] = emuCRCEntry{size: info.Size(), mod: info.ModTime(), crc: crc}
+	emuCRCCache.dirty = true
 	emuCRCCache.mu.Unlock()
 	return crc, nil
 }
@@ -270,8 +330,47 @@ func emuCachedCRC32(path string) (string, error) {
 // keep the old answer.
 func emuCRCForget(path string) {
 	emuCRCCache.mu.Lock()
-	delete(emuCRCCache.entries, path)
+	emuCRCLoadLocked()
+	if _, ok := emuCRCCache.entries[path]; ok {
+		delete(emuCRCCache.entries, path)
+		emuCRCCache.dirty = true
+	}
 	emuCRCCache.mu.Unlock()
+}
+
+// emuCRCCacheFlush writes the cache when it changed since the last write. The
+// passes call it once they have read every core, so a pass costs one small
+// write rather than one per core; a failed write is tried again at the next
+// flush.
+func emuCRCCacheFlush() {
+	emuCRCSaveMu.Lock()
+	defer emuCRCSaveMu.Unlock()
+	emuCRCCache.mu.Lock()
+	// Entries read for another data folder (a test that moved compatDir) are
+	// never written into this one's file.
+	if !emuCRCCache.dirty || emuCRCCache.path == "" || emuCRCCache.path != emuCRCCachePath() {
+		emuCRCCache.mu.Unlock()
+		return
+	}
+	path := emuCRCCache.path
+	stored := make(map[string]emuCRCFileEntry, len(emuCRCCache.entries))
+	for p, e := range emuCRCCache.entries {
+		stored[p] = emuCRCFileEntry{Size: e.size, Mod: e.mod.UnixNano(), CRC: e.crc}
+	}
+	emuCRCCache.dirty = false
+	emuCRCCache.mu.Unlock()
+	data, err := json.Marshal(stored)
+	if err == nil {
+		err = writeCompatAtomic(path, append(data, '\n'), 0o644)
+	}
+	if err != nil {
+		logDebug("emulators", "could not save the core checksums: %v", err)
+		emuCRCCache.mu.Lock()
+		if emuCRCCache.path == path {
+			emuCRCCache.dirty = true
+		}
+		emuCRCCache.mu.Unlock()
+	}
 }
 
 // emuCompareCores splits the installed cores into those the index has a
@@ -300,6 +399,8 @@ func emuCompareCores(index []coreIndexEntry, active map[string]coreBuild) (stale
 		}
 		stale[entry.Core] = entry
 	}
+	// What the comparison read is kept for the next boot's check.
+	emuCRCCacheFlush()
 	return stale, current
 }
 

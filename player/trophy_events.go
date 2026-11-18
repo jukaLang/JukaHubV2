@@ -52,6 +52,9 @@ const (
 	tkGameRandom trophyKey = "game_random"
 	// tkGameComplete: a game marked Completed (the change to completed only).
 	tkGameComplete trophyKey = "game_complete"
+	// tkDailyChallenge: a day's challenge met, once per day: 15 minutes of
+	// game time credited to that day's game (game_daily.go).
+	tkDailyChallenge trophyKey = "daily_challenge"
 	// tkGameSecs: seconds spent in games launched from JukaHub (the playtime
 	// tracker writes it).
 	tkGameSecs trophyKey = "game_secs"

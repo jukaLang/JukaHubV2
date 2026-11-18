@@ -184,6 +184,15 @@ func androidRTSetLine(line string, running bool) {
 // androidRTInstallProgress drives the install bar and the Runtime tab's line
 // from relpack's progress reports (install goroutine).
 func androidRTInstallProgress(p relPackProgress) {
+	relPackCardProgress(p)
+	androidRTSetLine(p.line(androidRTTitle), p.Phase != relPackDone)
+}
+
+// relPackCardProgress shows one of relpack's progress reports on the install
+// card: its phase, and the bytes while it downloads. An install from a press
+// (androidRTInstallProgress) and the daily pass's (emuRuntimeCard.relPack)
+// show the Windows-app runtime and AndroidRT alike.
+func relPackCardProgress(p relPackProgress) {
 	switch p.Phase {
 	case relPackLooking:
 		installBarPhase(installPhaseResolving)
@@ -198,7 +207,6 @@ func androidRTInstallProgress(p relPackProgress) {
 	case relPackInstalling:
 		installBarPhase(installPhaseExtract)
 	}
-	androidRTSetLine(p.line(androidRTTitle), p.Phase != relPackDone)
 }
 
 // androidRTStopInstall stops the install a press started (Stop on the
@@ -294,6 +302,19 @@ func androidRTForgetCheck() {
 	androidRTUI.mu.Unlock()
 }
 
+// androidRTNoteAnswer records the daily pass's answer to "is there a newer
+// build?" as the Runtime tab's own check would (androidRTCheckUpdate) and has
+// the store redraw its rows: with Emulator updates on Notify me, the tab's
+// update line and its Update button are where the new build waits. Any
+// goroutine.
+func androidRTNoteAnswer(newer bool, tag string) {
+	androidRTUI.mu.Lock()
+	androidRTUI.checked = time.Now()
+	androidRTUI.newer, androidRTUI.newerTag = newer, tag
+	androidRTUI.mu.Unlock()
+	tbxPost(apkStoreRebuildText)
+}
+
 // androidRTCheckUpdate asks GitHub whether a newer build than the downloaded
 // copy exists — only that copy: the bundled one updates with JukaHub, and a
 // copy the user built is theirs. At most once per androidRTCheckEvery unless
@@ -384,10 +405,18 @@ func init() {
 			if err != nil {
 				return false, "", err
 			}
-			return relPackNewer(installed, c), c.Rel.TagName, nil
+			newer := relPackNewer(installed, c)
+			androidRTNoteAnswer(newer, c.Rel.TagName)
+			return newer, emuRuntimePackLabel(c), nil
 		},
+		// The pass's card shows the phase and the bytes (emuRuntimeCardFrom),
+		// as for an install from a press; the APK Store reads where AndroidRT
+		// is again afterwards, so its Runtime tab and its games' rows are
+		// current.
 		Install: func(ctx context.Context, client *http.Client, progress func(line string)) error {
+			card := emuRuntimeCardFrom(ctx)
 			_, err := relPackInstall(ctx, client, androidRTSpec(), androidRuntimeDownloadDirFn(), func(p relPackProgress) {
+				card.relPack(p)
 				if progress != nil {
 					progress(p.line(androidRTTitle))
 				}
@@ -395,6 +424,11 @@ func init() {
 			if err == nil {
 				invalidateGameProfileCache()
 				androidRTForgetCheck()
+			}
+			if !errors.Is(err, errRelPackBusy) {
+				// Not when a press is installing it right now: that install
+				// tells the store itself when it is done.
+				tbxPost(apkStoreRuntimeChanged)
 			}
 			return err
 		},

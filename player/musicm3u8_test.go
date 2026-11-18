@@ -3,8 +3,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // resetMusicPlaylistStore points the JSON store at a temp file for one test.
@@ -136,6 +138,81 @@ func TestIsMusicPlaylistFile(t *testing.T) {
 	} {
 		if got := isMusicPlaylistFile(name); got != want {
 			t.Errorf("isMusicPlaylistFile(%q) = %v", name, got)
+		}
+	}
+}
+
+// TestMusicHistoryRoundTripAndPrune: the listening log (musichistory.go) reads
+// back what it wrote, keeps 400 days and no more than its entry bound.
+func TestMusicHistoryRoundTripAndPrune(t *testing.T) {
+	now := time.Now()
+	if now.Before(clockFloor()) {
+		t.Skip("the clock is not set: the age prune is off by design")
+	}
+	path := filepath.Join(t.TempDir(), musicHistoryFileName)
+	old := musicListen{Path: filepath.Join("music", "old.mp3"), Start: now.AddDate(0, 0, -musicHistoryKeepDays-1).Unix(), Secs: 60}
+	kept := musicListen{Path: filepath.Join("music", "Café", "song.flac"), Title: "Song", Artist: "Ünïcode",
+		Start: now.Add(-time.Hour).Unix(), Secs: 245, Pos: 245.3, Dur: 245.3, Done: true}
+	if err := musicHistoryWriteFile(path, []musicListen{old, kept}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := musicHistoryReadFile(path)
+	if err != nil || len(got) != 2 || got[0] != old || got[1] != kept {
+		t.Fatalf("read back %+v, %v", got, err)
+	}
+	if got = musicHistoryPrune(got, now); len(got) != 1 || got[0] != kept {
+		t.Fatalf("the 400-day prune kept %+v", got)
+	}
+	many := make([]musicListen, musicHistoryMaxEntries+5)
+	for i := range many {
+		many[i] = musicListen{Path: "/m/" + strconv.Itoa(i) + ".mp3", Start: now.Unix(), Secs: 30}
+	}
+	if many = musicHistoryPrune(many, now); len(many) != musicHistoryMaxEntries || many[0].Path != "/m/5.mp3" {
+		t.Fatalf("the entry bound kept %d, oldest %q", len(many), many[0].Path)
+	}
+}
+
+// TestParseFFprobeChapters: ffprobe's chapter list of an .m4b (MED-9) comes back
+// sorted and bounded, with bad entries dropped and an untitled one named; a
+// file with one chapter has no list; Next and Previous step inside it.
+func TestParseFFprobeChapters(t *testing.T) {
+	out := []byte(`{"chapters": [
+		{"id": 1, "time_base": "1/1000", "start": 600000, "start_time": "600.000000", "end": 1200000, "end_time": "1200.000000", "tags": {"title": "Two\tThe Storm"}},
+		{"id": 0, "time_base": "1/1000", "start": 0, "start_time": "0.000000", "end": 600000, "end_time": "600.000000", "tags": {"title": "One"}},
+		{"id": 2, "start_time": "1200.000000", "end_time": "1800.000000"},
+		{"id": 3, "start_time": "NaN", "end_time": "1900.000000", "tags": {"title": "bad"}},
+		{"id": 4, "start_time": "1900.000000", "end_time": "1850.000000", "tags": {"title": "backwards"}}
+	]}`)
+	got := parseFFprobeChapters(out)
+	if len(got) != 3 || got[0].Title != "One" || got[1].Title != "Two The Storm" || got[2].Title != "Chapter 3" ||
+		got[1].Start != 600 || got[2].End != 1800 {
+		t.Fatalf("chapters = %+v", got)
+	}
+	if one := parseFFprobeChapters([]byte(`{"chapters":[{"start_time":"0","end_time":"60"}]}`)); one != nil {
+		t.Errorf("one chapter gave a list: %+v", one)
+	}
+	if bad := parseFFprobeChapters([]byte(`{"chapters": [`)); bad != nil {
+		t.Errorf("broken JSON gave %+v", bad)
+	}
+	long := parseFFprobeChapters([]byte(`{"chapters":[{"start_time":"0","end_time":"1","tags":{"TITLE":"` +
+		strings.Repeat("x", 500) + `"}},{"start_time":"1","end_time":"2"}]}`))
+	if len(long) != 2 || len([]rune(long[0].Title)) > audioChapterTitleRunes {
+		t.Errorf("long title kept: %d runes", len([]rune(long[0].Title)))
+	}
+	for _, c := range []struct {
+		pos    float64
+		delta  int
+		want   int
+		inFile bool
+	}{
+		{10, 1, 1, true},    // into chapter two
+		{1500, 1, 0, false}, // past the last: the playlist's own Next
+		{700, -1, 1, true},  // well into chapter two: its start
+		{601, -1, 0, true},  // its opening seconds: chapter one
+		{1, -1, 0, false},   // chapter one's opening: the previous file
+	} {
+		if i, ok := audioChapterStep(got, c.pos, c.delta); ok != c.inFile || (ok && i != c.want) {
+			t.Errorf("step %+d at %.0f s = %d, %v; want %d, %v", c.delta, c.pos, i, ok, c.want, c.inFile)
 		}
 	}
 }

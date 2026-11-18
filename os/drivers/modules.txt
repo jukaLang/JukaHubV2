@@ -1,0 +1,16 @@
+# Candidate kernel modules for a JukaHub OS driver pack (build-driver-pack.sh).
+#
+# CANDIDATES: none of these has been built or loaded on a TrimUI yet. Each is
+# built only when the kernel tree has it ("since" <= the device's kernel), the
+# device's own kernel does not have it already (built in or as a module), and
+# enabling it changes nothing built into the kernel (the build stops then).
+#
+# module            CONFIG_ symbol           since  why it helps on these handhelds
+uinput              CONFIG_INPUT_UINPUT      2.6    virtual pads for remapping and phone-as-controller; some stock kernels lack it
+xpad                CONFIG_JOYSTICK_XPAD     2.6    Xbox 360 / One / Series pads over USB; a newer tree knows more pad ids than 4.9
+hid-microsoft       CONFIG_HID_MICROSOFT     2.6    Xbox One S / Series pads over Bluetooth (rumble)
+hid-sony            CONFIG_HID_SONY          3.0    DualShock 3 / 4 pads (lightbar, rumble, motion)
+hid-playstation     CONFIG_HID_PLAYSTATION   5.12   DualSense (PS5) pads: rumble, lightbar, touchpad (Smart Pro S only: 4.9 lacks it)
+hid-nintendo        CONFIG_HID_NINTENDO      5.16   Switch Pro / Joy-Con: in no TrimUI kernel's tree; out of tree only (not built here)
+rtl8xxxu            CONFIG_RTL8XXXU          4.4    many cheap Realtek USB Wi-Fi dongles (RTL8188CU/8192CU/8188EU)
+mt7601u             CONFIG_MT7601U           4.2    MediaTek MT7601U USB Wi-Fi dongles

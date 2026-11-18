@@ -91,7 +91,9 @@ func executeCanvasCode(code string) *sdl.Surface {
 	textFont, fontErr := openHomeUIFont(homeUIFontFile, 20)
 	if fontErr == nil {
 		defer textFont.Close()
-		registerFontPath(textFont, "Inter-Regular.ttf")
+		// The face actually opened (a picked font or the legible face), so
+		// the character check reads its map and not Inter's.
+		registerFontPath(textFont, homeUIFontForRole(homeUIFontFile))
 	}
 
 	parseColor := func(s string) sdl.Color {

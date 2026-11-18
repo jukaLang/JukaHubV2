@@ -891,6 +891,7 @@ type hwpClockText struct {
 	minute  int64
 	clock12 bool
 	order   string
+	lang    string
 	alarmOn bool
 	alarmH  int
 	alarmM  int
@@ -907,7 +908,8 @@ type hwpClockText struct {
 var hwpClock hwpClockText
 
 // hwpClockUpdate remakes the clock's strings when the minute, the clock or
-// date setting or the next alarm changed since they were made. In screenshot
+// date setting, the interface language (the day's and month's names) or the
+// next alarm changed since they were made. In screenshot
 // mode the face reads 9:41 on Saturday 14 November and an armed alarm 10:45,
 // like the dock's (shotClock, saverDrawAlarmChip).
 func hwpClockUpdate(config *Config, now time.Time) *hwpClockText {
@@ -916,6 +918,7 @@ func hwpClockUpdate(config *Config, now time.Time) *hwpClockText {
 	minute := shown.Unix() / 60
 	clock12 := clockHour12(config)
 	order := dateOrder(config)
+	lang := uiLanguageCode()
 	alarmOn, alarmH, alarmM := false, 0, 0
 	if next := alarmNextUpcoming(); next != nil {
 		alarmOn, alarmH, alarmM = true, next.Hour, next.Minute
@@ -923,11 +926,11 @@ func hwpClockUpdate(config *Config, now time.Time) *hwpClockText {
 			alarmH, alarmM = 10, 45
 		}
 	}
-	if c.made && c.minute == minute && c.clock12 == clock12 && c.order == order &&
+	if c.made && c.minute == minute && c.clock12 == clock12 && c.order == order && c.lang == lang &&
 		c.alarmOn == alarmOn && c.alarmH == alarmH && c.alarmM == alarmM {
 		return c
 	}
-	c.made, c.minute, c.clock12, c.order = true, minute, clock12, order
+	c.made, c.minute, c.clock12, c.order, c.lang = true, minute, clock12, order, lang
 	c.alarmOn, c.alarmH, c.alarmM = alarmOn, alarmH, alarmM
 	c.digits, c.suffix = hwpSplitClock(clockDigits(config, now))
 	// The widest figures Inter sets (4 is its widest digit), so the face
@@ -936,7 +939,7 @@ func hwpClockUpdate(config *Config, now time.Time) *hwpClockText {
 	if clock12 {
 		c.ref = "10:44"
 	}
-	c.weekday = shown.Weekday().String()
+	c.weekday = formatWeekdayLong(shown)
 	c.short = formatDateShort(config, shown)
 	c.long = formatDayLong(config, now)
 	c.alarm, c.alarmS = "", ""
@@ -1051,6 +1054,7 @@ type hwpCalendarText struct {
 	first   int    // the column of the 1st, Monday = 0
 	days    int
 	rows    int
+	lang    string // the interface language the names are in
 }
 
 var hwpCalendar hwpCalendarText
@@ -1061,9 +1065,6 @@ var hwpDayLabels = [...]string{
 	"11", "12", "13", "14", "15", "16", "17", "18", "19", "20",
 	"21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31",
 }
-
-// hwpWeekInitials head the month grid's columns, Monday first.
-var hwpWeekInitials = [7]string{"M", "T", "W", "T", "F", "S", "S"}
 
 // hwpDayLabel is a day's number as text.
 func hwpDayLabel(d int) string {
@@ -1083,19 +1084,21 @@ func hwpMonthGrid(year int, month time.Month) (first, days, rows int) {
 	return first, days, rows
 }
 
-// hwpCalendarUpdate remakes the calendar's strings when the day changed. In
-// screenshot mode today is Saturday 14 November (shotClock).
+// hwpCalendarUpdate remakes the calendar's strings when the day or the
+// interface language changed. In screenshot mode today is Saturday 14
+// November (shotClock).
 func hwpCalendarUpdate(now time.Time) *hwpCalendarText {
 	c := &hwpCalendar
 	shown := shotClock(now)
 	y, m, d := shown.Date()
-	if c.made && c.year == y && c.month == m && c.day == d {
+	lang := uiLanguageCode()
+	if c.made && c.year == y && c.month == m && c.day == d && c.lang == lang {
 		return c
 	}
-	c.made, c.year, c.month, c.day = true, y, m, d
-	c.weekday = strings.ToUpper(shown.Weekday().String())
-	c.name = m.String()
-	c.title = c.name + " " + strconv.Itoa(y)
+	c.made, c.year, c.month, c.day, c.lang = true, y, m, d, lang
+	c.weekday = strings.ToUpper(formatWeekdayLong(shown))
+	c.name = formatMonthName(m)
+	c.title = formatMonthYear(shown)
 	c.first, c.days, c.rows = hwpMonthGrid(y, m)
 	return c
 }
@@ -1107,18 +1110,31 @@ func (h *HomeLayout) hwpDrawCalendar(renderer *sdl.Renderer, f hwpFonts, b hwpBo
 	c := hwpCalendarUpdate(now)
 	in := b.inner
 	if b.tall {
+		// The month keeps the tile; the next synced event gets a line under
+		// it when there is one (mailcal_ui.go).
+		if next := mailcalNextEventLine(now); next != "" {
+			lineH := int32(f.small.Height())
+			in.H -= lineH + scaleY(6, h.Height)
+			drawText(renderer, f.small, ellipsize(f.small, next, in.W), in.X, in.Y+in.H+scaleY(6, h.Height), ColorTextPrimary(), textAlignLeft)
+		}
 		h.hwpDrawMonth(renderer, f, in, c)
 		return
 	}
 	drawText(renderer, f.small, ellipsize(f.small, c.weekday, in.W), in.X, in.Y, ColorTextAccent(), textAlignLeft)
 	top := in.Y + int32(f.small.Height()) + scaleY(6, h.Height)
 	monthY := in.Y + in.H - int32(f.tile.Height())
+	// The next synced event (mailcal_ui.go) takes the month's place: the
+	// month is the least news on the tile.
+	bottom, bottomInk := c.name, ColorTextMuted()
+	if next := mailcalNextEventLine(now); next != "" {
+		bottom, bottomInk = next, ColorTextPrimary()
+	}
 	v := hwpStat{n: 1, ref: "24"}
 	v.nums[0] = hwpDayLabel(c.day)
 	cands := f.bigCands(false)
 	font := hwpPickPairs(f, cands[:], &v, in.W, monthY-scaleY(8, h.Height)-top)
 	hwpDrawPairs(renderer, f, font, &v, in.X, top, ColorTextPrimary(), ColorTextMuted())
-	drawText(renderer, f.tile, ellipsize(f.tile, c.name, in.W), in.X, monthY, ColorTextMuted(), textAlignLeft)
+	drawText(renderer, f.tile, ellipsize(f.tile, bottom, in.W), in.X, monthY, bottomInk, textAlignLeft)
 }
 
 // hwpDrawMonth is the tall calendar: the month's name, the weekday initials
@@ -1140,7 +1156,8 @@ func (h *HomeLayout) hwpDrawMonth(renderer *sdl.Renderer, f hwpFonts, in sdl.Rec
 		if col >= 5 {
 			ink = ColorTextTertiary()
 		}
-		drawText(renderer, f.meta, hwpWeekInitials[col], x0+(2*col+1)*gridW/14, headY, ink, textAlignCenter)
+		// The columns run Monday first; the initials are the language's.
+		drawText(renderer, f.meta, formatWeekdayInitial(time.Weekday((col+1)%7)), x0+(2*col+1)*gridW/14, headY, ink, textAlignCenter)
 	}
 
 	gridY := headY + int32(f.meta.Height()) + scaleY(6, h.Height)
@@ -1187,7 +1204,7 @@ type hwpWeatherDay struct {
 
 // hwpWeatherText is the weather widget's strings and the inputs they were made
 // from: the switch, the forecast (by identity: a fetch replaces the slice), the
-// unit and the minute, which carries the change of day.
+// unit, the interface language and the minute, which carries the change of day.
 type hwpWeatherText struct {
 	made   bool
 	on     bool
@@ -1196,6 +1213,7 @@ type hwpWeatherText struct {
 	n      int
 	unit   string
 	minute int64
+	lang   string
 	has    bool   // today is in the forecast
 	hi     string // "12°"
 	lo     string // "/ 5°"
@@ -1215,6 +1233,7 @@ func hwpWeatherUpdate(config *Config, now time.Time) *hwpWeatherText {
 	on := weatherEnabledFor(config)
 	unit := weatherUnit(config)
 	minute := now.Unix() / 60
+	lang := uiLanguageCode() // the forecast's day names
 	wxMutex.Lock()
 	ready := weatherReady
 	n := len(weatherDaily)
@@ -1224,10 +1243,10 @@ func hwpWeatherUpdate(config *Config, now time.Time) *hwpWeatherText {
 	}
 	wxMutex.Unlock()
 	if c.made && c.on == on && c.ready == ready && c.data == data && c.n == n &&
-		c.unit == unit && c.minute == minute {
+		c.unit == unit && c.minute == minute && c.lang == lang {
 		return c
 	}
-	c.made, c.on, c.ready, c.data, c.n, c.unit, c.minute = true, on, ready, data, n, unit, minute
+	c.made, c.on, c.ready, c.data, c.n, c.unit, c.minute, c.lang = true, on, ready, data, n, unit, minute, lang
 	c.has, c.nNext = false, 0
 	if !on || !ready {
 		return c
@@ -1294,7 +1313,7 @@ func hwpShortWeekday(date string) string {
 	if err != nil {
 		return ""
 	}
-	return t.Weekday().String()[:3]
+	return formatWeekdayShort(t)
 }
 
 // hwpSkyInk is the sky glyph's colour: the warm accent for the sun, the

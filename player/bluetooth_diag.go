@@ -29,7 +29,7 @@ import (
 // btDiagTools are the programs whose presence and place matter.
 var btDiagTools = []string{
 	"bluetoothctl", "bluetoothd", "hciattach", "rtk_hciattach", "hciconfig", "btmgmt",
-	"rfkill", "rfkill.elf", "bluealsa", "bluealsad", "trimui_btmanager", "dbus-daemon", "dbus-send",
+	"rfkill", "rfkill.elf", "bluealsa", "bluealsad", "trimui_btmanager", "dbus-daemon", "dbus-send", "modprobe",
 }
 
 // btDiagProcesses are the processes whose running matters.
@@ -102,6 +102,16 @@ func btDiagnosticsText() string {
 	if u, ok := btChipUART(board); ok {
 		_, err := os.Stat(filepath.Join("/dev", u.tty))
 		line("Chip port", "/dev/%s %s (%s)", u.tty, map[bool]string{true: "present", false: "missing"}[err == nil], u.proto)
+		chip := btChipLabel(u.chip)
+		if why := btChipMismatch(u); why != "" {
+			chip += " expected, but " + why
+		}
+		line("Chip", "%s", chip)
+	}
+	if _, _, loaded := radioChipModules(); len(loaded) > 0 {
+		line("Chip driver", "%s", strings.Join(loaded, " "))
+	} else {
+		line("Chip driver", "no aic8800/xradio module loaded (built in, or not started)")
 	}
 
 	line("Pad HID", "%s", btDiagPadHID("/"))
@@ -356,6 +366,59 @@ func btLogDiagnosticsOnce() {
 	if !done {
 		btLogDiagnostics("the Bluetooth page opened")
 	}
+}
+
+func init() { registerDriverStatus(driverRowBluetooth, btDriverStatus) }
+
+// btDriverStatus is the Bluetooth row of the Drivers & hardware page
+// (devicedrivers.go): the chip and how it attaches, its port, and whether the
+// adapter is up — "AIC8800 · hciattach 1500000" on /dev/ttyAS1, "hci0 on".
+// Files, /proc and one ioctl; no program started, nothing written.
+func btDriverStatus() driverStatus {
+	if runtime.GOOS != "linux" {
+		return driverStatus{State: driverUnknown, Driver: "system Bluetooth", Detail: "the system drives the radio"}
+	}
+	st := driverStatus{State: driverOK}
+	var detail []string
+	if u, ok := btChipUART(btBoardModel()); ok {
+		how := u.proto
+		if u.speed != "" {
+			how = u.speed
+		}
+		st.Driver = btChipLabel(u.chip) + " · hciattach " + how
+		st.Node = "/dev/" + u.tty
+		if _, err := os.Stat(st.Node); err != nil {
+			st.State = driverMissing
+			detail = append(detail, st.Node+" missing")
+		}
+		if why := btChipMismatch(u); why != "" {
+			st.State = driverProblem
+			detail = append(detail, why)
+		}
+	} else if _, _, loaded := radioChipModules(); len(loaded) > 0 {
+		st.Driver = strings.Join(loaded, " ")
+	}
+	if adapters, _ := btSysfsCount(btSysfsNames(btSysfsRoot)); adapters == 0 {
+		if st.State == driverOK {
+			st.State = driverUnknown
+		}
+		detail = append(detail, "no adapter yet — it starts when Bluetooth is turned on")
+	} else {
+		state := "registered"
+		if up, ok := btHCIUp(); ok {
+			state = map[bool]string{true: "on", false: "off"}[up]
+		}
+		detail = append(detail, "hci0 "+state)
+		if IsTrimuiDevice() && !btDaemonRunningCached() {
+			detail = append(detail, "bluetoothd not running")
+		}
+	}
+	if _, hard := btRfkillBlocked(btRfkillRoot); hard {
+		st.State = driverProblem
+		detail = append(detail, "hardware switch off")
+	}
+	st.Detail = strings.Join(detail, " · ")
+	return st
 }
 
 // btDiagBundleFacts is the description for the diagnostics bundle.

@@ -281,9 +281,6 @@ func TestFetchURLRejectsOversizedBody(t *testing.T) {
 	if _, err := fetchURL(srv.URL, 30*time.Second); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Fatalf("fetchURL over the cap: err = %v, want a size error", err)
 	}
-	if _, err := httpsGetBytes(srv.URL, 30*time.Second); err == nil || !strings.Contains(err.Error(), "larger than") {
-		t.Fatalf("httpsGetBytes over the cap: err = %v, want a size error", err)
-	}
 }
 
 func TestFetchURLSmallBodyStillWorks(t *testing.T) {

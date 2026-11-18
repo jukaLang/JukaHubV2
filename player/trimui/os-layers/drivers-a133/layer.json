@@ -1,0 +1,23 @@
+{
+  "name": "A133 driver layer",
+  "description": "Smart Pro, Brick, Brick Pro, Hammer (A133P, kernel 4.9): the firmware's drivers set up for games. USB pads and dongles stay awake, older Xbox One pads connect over Bluetooth, the SD card skips the disk scheduler. Undone when JukaHub OS ends.",
+  "version": "1",
+  "arch": "aarch64",
+  "kind": "drivers",
+  "devices": ["trimui-smart-pro", "trimui-brick", "trimui-brick-pro", "trimui-hammer", "TG5040", "TG3040", "TG4040"],
+  "kernel": "4.9",
+  "sysfsIfPresent": {
+    "/sys/module/usbcore/parameters/autosuspend": "-1",
+    "/sys/module/bluetooth/parameters/disable_ertm": "Y",
+    "/sys/module/usbhid/parameters/jspoll": "2",
+    "/sys/block/mmcblk0/queue/scheduler": "noop",
+    "/sys/block/mmcblk1/queue/scheduler": "noop"
+  },
+  "why": {
+    "/sys/module/usbcore/parameters/autosuspend": "usbcore: -1 = never auto-suspend a USB device plugged in during the session (default 2 s). Cheap USB pads and USB Wi-Fi dongles drop out after an idle autosuspend on old BSP kernels. Applies to devices plugged in after the value is set; costs battery only while something is plugged in.",
+    "/sys/module/bluetooth/parameters/disable_ertm": "bluetooth (L2CAP): Y = no Enhanced Retransmission Mode, which older Xbox One pad firmware fails to connect or drops with (Batocera and RetroPie set the same; xpadneo documents it). Harmless for pads that do not use ERTM; Xbox Series pads use Bluetooth LE and do not need it. Affects new Bluetooth connections only.",
+    "/sys/module/usbhid/parameters/jspoll": "usbhid: a USB pad that reports itself as a joystick (many DirectInput pads; not Xbox pads, which xpad drives, nor ones that report a game pad) is polled every 2 ms (500 Hz) instead of its own interval. The parameter came in Linux 4.12, so a 4.9 BSP kernel normally lacks it and the value is skipped; it is listed for a kernel that has it backported. Taken when a pad is plugged in, so plug it in after the session starts. The built-in controls are not USB HID.",
+    "/sys/block/mmcblk0/queue/scheduler": "block layer: flash has no seek to schedule around; noop is the single-queue scheduler the 4.9 kernel names this way (moved here from the Speed layer: 5.15 calls it none).",
+    "/sys/block/mmcblk1/queue/scheduler": "as mmcblk0, for the second card/eMMC."
+  }
+}

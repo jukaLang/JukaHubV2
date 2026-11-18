@@ -33,6 +33,7 @@ var ledSettingsModes = []struct {
 }{
 	{ledPolicyCustom, "Colour", "The colour and effect you pick below"},
 	{ledPolicyAudio, "Music", "Pulse with whatever is playing"},
+	{ledPolicyScreen, "Screen colours", "Glow with the colours on screen, in games too"},
 	{ledPolicyMic, "Microphone", "React to sound around you; nothing is recorded"},
 	{ledPolicyBattery, "Battery", "Red when low, green when full"},
 	{ledPolicyCharging, "Charging", "Breathe green while charging"},
@@ -353,6 +354,10 @@ func ledSettingsRows() []setRow {
 		},
 		// The microphone mode's own row (ledmic.go); it shows in that mode only.
 		ledMicSensitivityRow(),
+		// Screen colours' own rows: over games, and for the last game's
+		// console (ledscreen.go).
+		ledScreenGamesRow(),
+		ledScreenSystemRow(),
 		{
 			ID: "ledBrightness", Label: "Brightness", Kind: setKindChoice, Clamp: true,
 			Detail:  setStatic("Off keeps the sticks dark while JukaHub runs"),
@@ -377,6 +382,12 @@ func ledSettingsRows() []setRow {
 				ledSettingsApply(c)
 			},
 		},
+		// The indicators over every mode, with their own brightness
+		// (ledindicators.go).
+		ledIndLowBatteryRow(),
+		ledIndChargingRow(),
+		ledIndStandbyRow(),
+		ledIndBrightnessRow(),
 		// Juka's layer over every mode (ledjuka.go). Shown with the switch off
 		// too: Always lights the sticks for Juka even then.
 		ledJukaRow(),

@@ -8,17 +8,21 @@ package main
 // a plugin that is on is part of the system:
 //
 //   - Switching it on runs its "onEnable" action straight away and shows the
-//     result ("Clock is on: Mon 09 Nov · 18:41"), so the switch answers.
+//     result ("System monitor is on: RAM 412M free · …"), so the switch answers.
 //   - Its "quick" actions (the first action when none are named) are listed in
 //     the Start menu under Plugins, so they can be pressed from any screen;
 //     switching it off takes them out again and says so.
 //   - Its "onStartup" action runs when JukaHub starts — "startupDaily" limits
-//     that to the first start of the day (the quote of the day).
+//     that to the first start of the day (untrustworthy on a handheld without
+//     a clock battery: it boots at the same date until network time arrives),
+//     and "startupQuiet" keeps the result off the toasts unless it is an error
+//     (Save guard's backup at every start).
 //   - Action ids starting with "@" are done by JukaHub itself, on the main
 //     thread, with the plugin's own contributions: "@apply-theme" switches to
 //     its theme, "@apply-pack" applies its experience pack, "@use-profile"
-//     switches to its control profile, "@open-library" opens the game library.
-//     Any plugin can offer them; no script runs.
+//     switches to its control profile, "@open-library" opens the game library,
+//     "@random-game" rolls a game there and lands on it, "@open-saves" opens
+//     the save manager. Any plugin can offer them; no script runs.
 //
 // Every key is optional, so older manifests load as before.
 
@@ -99,9 +103,12 @@ func init() {
 		"@use-profile":     plugUseProfile,
 		"@default-profile": plugDefaultProfile,
 		"@open-library":    plugOpenLibrary,
+		"@random-game":     plugRandomGame,
+		"@open-saves":      plugOpenSaves,
 	}
 	plugBundledUIActions = map[string]plugUIFunc{
-		"notes/add": plugNotesPrompt,
+		"notes/add":   plugNotesPrompt,
+		"notes/clear": plugNotesClearConfirm,
 	}
 }
 
@@ -121,9 +128,6 @@ func plugUIActionFor(info PluginInfo, action string) plugUIFunc {
 // JukaHub action inline, anything else on the plugin goroutine. It reports
 // false only when the plugin is still busy with an earlier action.
 func plugDispatch(c *Config, info PluginInfo, action, label string, vars map[string]interface{}) bool {
-	if c != nil {
-		plugNativeClock12.Store(c.Variables.Clock12)
-	}
 	if fn := plugUIActionFor(info, action); fn != nil {
 		out, toasted := fn(c, info, vars)
 		out = strings.TrimSpace(out)
@@ -264,7 +268,13 @@ func plugRunStartupHooks(c *Config) {
 				continue
 			}
 		}
-		if plugDispatch(c, *info, e.OnStartup, e.Title, snapshotVars(c)) && e.StartupDaily {
+		var ran bool
+		if e.StartupQuiet && plugUIActionFor(*info, e.OnStartup) == nil && !strings.HasPrefix(e.OnStartup, "@") {
+			ran = plugRunAsyncOpt(*info, e.OnStartup, e.Title, snapshotVars(c), true)
+		} else {
+			ran = plugDispatch(c, *info, e.OnStartup, e.Title, snapshotVars(c))
+		}
+		if ran && e.StartupDaily {
 			days[e.Name] = today
 		}
 	}
@@ -365,7 +375,7 @@ func plugRestoreTheme(c *Config, info PluginInfo, _ map[string]interface{}) (str
 	}
 	prev := strings.TrimSpace(coerceString(c.Variables.Custom[plugThemeReturnKey]))
 	if prev == "" {
-		return "No earlier theme to go back to: pick one in Settings › Display & theme › Theme presets", false
+		return "No earlier theme to go back to: pick one in Settings › Theme & look › Theme presets", false
 	}
 	cur := themePresetName(c)
 	if cur == prev {
@@ -482,6 +492,52 @@ func plugDefaultProfile(_ *Config, _ PluginInfo, _ map[string]interface{}) (stri
 func plugOpenLibrary(_ *Config, _ PluginInfo, _ map[string]interface{}) (string, bool) {
 	openGameLibraryPanel()
 	return "", true
+}
+
+// plugRandomGame opens the game library (unless it is open) and rolls one game
+// from the whole library, landing the highlight on it: A plays it, R rolls
+// again. A library that is still scanning rolls when the scan lands.
+func plugRandomGame(_ *Config, _ PluginInfo, _ map[string]interface{}) (string, bool) {
+	if !gameLib.open {
+		openGameLibraryPanel()
+	}
+	gameRandomRollWhenReady()
+	return "", true
+}
+
+// plugOpenSaves opens the save manager, where the snapshots Save guard makes
+// can be restored.
+func plugOpenSaves(_ *Config, _ PluginInfo, _ map[string]interface{}) (string, bool) {
+	openSaveManagerPanel()
+	return "", true
+}
+
+// plugNotesClearAt is when Clear notes was first pressed: a second press
+// within plugNotesClearWindow empties the pad, so one stray press of a Start
+// menu row cannot wipe every note.
+var plugNotesClearAt time.Time
+
+const plugNotesClearWindow = 5 * time.Second
+
+// plugNotesClearConfirm is the notes plugin's "Clear notes".
+func plugNotesClearConfirm(_ *Config, info PluginInfo, _ map[string]interface{}) (string, bool) {
+	dir := filepath.Join(pluginDir, info.Name)
+	n := len(plugNotesLines(dir))
+	if n == 0 {
+		plugNotesClearAt = time.Time{}
+		return "No notes to clear", false
+	}
+	if plugNotesClearAt.IsZero() || time.Since(plugNotesClearAt) > plugNotesClearWindow {
+		plugNotesClearAt = time.Now()
+		ShowToast("Press Clear notes again to delete "+pluralizeCount(n, "note", "notes"), ToastKindWarning)
+		return "", true
+	}
+	plugNotesClearAt = time.Time{}
+	out, err := plugNotesClear(dir)
+	if err != nil {
+		return "Nothing cleared: " + err.Error(), false
+	}
+	return out, false
 }
 
 // plugNotesPrompt is the notes plugin's "Add note": the notes_text variable

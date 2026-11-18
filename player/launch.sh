@@ -73,6 +73,9 @@ HANDOFF="$APP_DIR/.screen-handoff"
 # boot guard reads and removes it). Not cleared below: that start may come from
 # a later launch of this script.
 LAST_EXIT="$APP_DIR/.last-exit"
+# The games JukaHub put on the screen, "<process group> <start time>" per line
+# (crashreport.go): what a crash would leave running (see stop_screen_groups).
+SCREEN_GROUPS="$APP_DIR/.screen-groups"
 # The firmware launcher processes paused for this session, one per line:
 # "<pid> <start time> <name>" (see the header). /tmp is empty at every boot.
 PAUSED=/tmp/jukahub-paused
@@ -84,12 +87,13 @@ sync
 
 # The markers only belong to a process that has just exited. Leftovers from a
 # failed update would make this launch wait for a helper that never arrives.
-rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW" "$HANDOFF"
+rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW" "$HANDOFF" "$SCREEN_GROUPS"
 
 # ------------------------------------------------------------- processes
-# A process's state, parent and start time (fields 3, 4 and 22 of
-# /proc/<pid>/stat) in ST_STATE, ST_PPID and ST_START. The name in brackets
-# may hold spaces, so the fields are read after its last ") ".
+# A process's state, parent, process group, session and start time (fields 3,
+# 4, 5, 6 and 22 of /proc/<pid>/stat) in ST_STATE, ST_PPID, ST_PGRP, ST_SID and
+# ST_START. The name in brackets may hold spaces, so the fields are read after
+# its last ") ".
 stat_of() {
     ST_LINE=""
     read -r ST_LINE 2>/dev/null <"/proc/$1/stat" || return 1
@@ -97,6 +101,8 @@ stat_of() {
     set -- ${ST_LINE##*) }
     ST_STATE="$1"
     ST_PPID="$2"
+    ST_PGRP="$3"
+    ST_SID="$4"
     ST_START="${20}"
     [ -n "$ST_STATE" ]
 }
@@ -250,6 +256,104 @@ drawing_jukahub() {
         fi
     done
     return 1
+}
+
+# A run that did not end with status 0 cannot have stopped the games it
+# started: a panic off JukaHub's main goroutine, the out-of-memory killer and a
+# crash in C code end the process at once, and the menu used to come back over
+# a game that was still running. Each game leads a process group of its own,
+# and JukaHub lists them in $SCREEN_GROUPS ("<group> <leader start time>") as
+# they start and end. A listed group is stopped only while every live member is
+# still one JukaHub could have started: in this script's session (JukaHub's
+# children stay in it — but so may MainUI and the firmware's daemons: stock
+# runtrimui.sh starts MainUI and this script without setsid, so the session
+# alone proves nothing and the name check below must stay), a live leader that
+# is exactly the process JukaHub listed (same start time: its id was not
+# reused), no member older than that game, never MainUI, this script or one of
+# its ancestors. Interrupt is the
+# emulators' save-and-quit (what JukaHub itself sends), Continue wakes one
+# paused under the game assistant, and whatever is left after three seconds
+# is killed. The list goes after every run, so it can never act twice.
+stop_screen_groups() {
+    [ -f "$SCREEN_GROUPS" ] || return 0
+    if ! stat_of $$; then
+        rm -f "$SCREEN_GROUPS"
+        return 0
+    fi
+    SG_SID="$ST_SID"
+    SG_OWN="$ST_PGRP"
+    SG_CAND=" "
+    while read -r SG_G SG_T _; do
+        case "$SG_G" in "" | 0 | 1 | *[!0-9]*) continue ;; esac
+        # A game whose start time JukaHub could not read cannot be told from
+        # a later process that got its id: left alone.
+        case "$SG_T" in "" | 0 | *[!0-9]*) continue ;; esac
+        [ "$SG_G" = "$$" ] && continue
+        [ "$SG_G" = "$SG_OWN" ] && continue
+        case "$ANCESTORS" in *" $SG_G "*) continue ;; esac
+        case "$SG_CAND" in *" $SG_G "*) continue ;; esac
+        SG_CAND="$SG_CAND$SG_G "
+        eval "SG_T_$SG_G=\$SG_T"
+    done <"$SCREEN_GROUPS"
+    rm -f "$SCREEN_GROUPS"
+    [ "$SG_CAND" = " " ] && return 0
+    SG_LIVE=" "
+    SG_BAD=" "
+    for SG_F in /proc/[0-9]*/stat; do
+        SG_P="${SG_F#/proc/}"
+        SG_P="${SG_P%/stat}"
+        stat_of "$SG_P" || continue
+        case "$SG_CAND" in *" $ST_PGRP "*) ;; *) continue ;; esac
+        [ "$ST_STATE" = Z ] && continue
+        eval "SG_T=\$SG_T_$ST_PGRP"
+        SG_C=""
+        read -r SG_C 2>/dev/null <"/proc/$SG_P/comm"
+        SG_WHY=""
+        if [ "$ST_SID" != "$SG_SID" ]; then
+            SG_WHY="another session"
+        elif [ "$SG_C" = MainUI ]; then
+            SG_WHY="MainUI"
+        elif [ "$SG_P" = "$ST_PGRP" ] && [ "$SG_T" != 0 ] && [ "$ST_START" != "$SG_T" ]; then
+            SG_WHY="not the game JukaHub listed (its process id was reused)"
+        elif [ "$ST_START" -lt "$SG_T" ] 2>/dev/null; then
+            SG_WHY="older than the game"
+        else
+            case "$ANCESTORS" in *" $SG_P "*) SG_WHY="this script's parent" ;; esac
+        fi
+        if [ -n "$SG_WHY" ]; then
+            case "$SG_BAD" in *" $ST_PGRP "*) ;; *)
+                SG_BAD="$SG_BAD$ST_PGRP "
+                say "left process group $ST_PGRP alone: $(describe "$SG_P") is $SG_WHY"
+                ;;
+            esac
+        else
+            case "$SG_LIVE" in *" $ST_PGRP "*) ;; *) SG_LIVE="$SG_LIVE$ST_PGRP " ;; esac
+        fi
+    done
+    SG_LIST=""
+    for SG_G in $SG_LIVE; do
+        case "$SG_BAD" in *" $SG_G "*) continue ;; esac
+        SG_LIST="$SG_LIST $SG_G"
+    done
+    [ -n "$SG_LIST" ] || return 0
+    say "JukaHub left a game running (process group$SG_LIST); stopping it before the menu comes back"
+    for SG_G in $SG_LIST; do
+        kill -INT -"$SG_G" 2>/dev/null
+        kill -CONT -"$SG_G" 2>/dev/null
+    done
+    n=0
+    while [ "$n" -lt 3 ]; do
+        SG_UP=""
+        for SG_G in $SG_LIST; do
+            kill -0 -"$SG_G" 2>/dev/null && SG_UP=1
+        done
+        [ -n "$SG_UP" ] || return 0
+        n=$((n + 1))
+        sleep 1
+    done
+    for SG_G in $SG_LIST; do
+        kill -KILL -"$SG_G" 2>/dev/null && say "process group $SG_G ignored the quit request; killed it"
+    done
 }
 
 # This script's ancestors. The launcher loop that ran it (MainUI picked
@@ -408,9 +512,21 @@ export JUKAHUB_ORIG_ENV
 # fbdev EGL — the name is not the GPU) and "dummy", so no SDL_VIDEODRIVER is
 # set here; the app asks for the opengles2 renderer itself and logs what it
 # got ("render pipeline"). If the user dropped copies into ./libs they win.
+# The Smart Pro S (A523, Mali-G57) shows its picture through DRM/KMS with its
+# own SDL in /usr/lib; leaving SDL_VIDEODRIVER unset lets that SDL pick its
+# backend there too, and nothing below assumes /dev/fb0. /usr/trimui/lib is
+# only searched, so a firmware without it loses nothing.
 LD_LIBRARY_PATH="$APP_DIR:$APP_DIR/libs:/usr/trimui/lib:/usr/lib:/lib:$LD_LIBRARY_PATH"
 PATH="$APP_DIR:$APP_DIR/required:$PATH"
 HOME="$APP_DIR"
+# Stock Smart Pro firmware has a usable CA bundle, but its old curl was built
+# with a different default path and rejects the tested HTTPS hosts without
+# SSL_CERT_FILE. Export the firmware's own bundle for curl and other OpenSSL
+# helpers started by JukaHub. Keep an explicit owner-provided path.
+if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+    : "${SSL_CERT_FILE:=/etc/ssl/certs/ca-certificates.crt}"
+    export SSL_CERT_FILE
+fi
 # Read by JukaHub before an update to tell it that this script will do the
 # restarting. Older launchers do not set it, and the app then falls back to the
 # helper's own relaunch path.
@@ -525,11 +641,19 @@ while :; do
     # every pass, so "Start OS session now" (a clean exit with .restart-now)
     # comes back in the new mode. JukaHub checks the file again itself and
     # starts as the app when OS mode cannot run; an older JukaHub ignores the
-    # flag.
-    if grep -q '"enabled": *true' "$APP_DIR/os/os.json" 2>/dev/null; then
-        say "starting JukaHub OS"
+    # flag. The pattern is the boot hook's too (autostart.go): any spacing, and
+    # a file saved on Windows (CRLF) still counts.
+    if grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null; then
+        say "starting JukaHub OS (os/os.json: OS mode on; what it applied follows as \"jukaos:\" lines)"
         "$APP_DIR/JukaHub" --os-session >>"$LOG" 2>&1 &
     else
+        # Why this start is the app, for a report from a card that should
+        # have booted JukaHub OS.
+        if [ -f "$APP_DIR/os/os.json" ]; then
+            say "os/os.json has OS mode off; starting as the app"
+        elif [ -d "$APP_DIR/os" ]; then
+            say "no os/os.json; starting as the app"
+        fi
         "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
     fi
     APP_PID=$!
@@ -566,6 +690,13 @@ while :; do
             fi
             ;;
     esac
+    # A clean quit stopped its games itself; after anything else one may still
+    # hold the screen, and the menu must not come back over it.
+    if [ "$RC" -eq 0 ]; then
+        rm -f "$SCREEN_GROUPS"
+    else
+        stop_screen_groups
+    fi
     # A clean quit already synced in JukaHub's teardown. Syncing every dirty
     # card buffer a second time here delayed the Brick's hand-back most when
     # a download had just been active. Failed runs still flush the exit code
@@ -658,6 +789,16 @@ done
 # the app's display guard — runs again, exactly those processes.
 resume_paused
 
+# Started from NextUI's Tools list (the JukaHub.pak nextui.go writes sets
+# JUKAHUB_HOST; NextUI's launcher exports SHARED_USERDATA_PATH to every pak):
+# NextUI's own loop shows its menu the moment this script returns. The stock
+# MainUI is still on the device, and the watcher below would start it over
+# NextUI's menu: two UIs on one screen.
+if [ "${JUKAHUB_HOST:-}" = nextui ] || [ -n "${SHARED_USERDATA_PATH:-}" ]; then
+    say "started from NextUI; its menu comes back by itself"
+    exit 0
+fi
+
 # Who brings MainUI back. On stock and CrossMix firmware MainUI started this
 # script (through /tmp/cmd_to_run.sh) and exited, and the firmware supervisor,
 # runtrimui.sh, is waiting for this script: it starts MainUI again the moment
@@ -748,6 +889,14 @@ KEEPERS="$ANCESTOR_LOOPS $RESUMED_PIDS"
         [ "$P" = "$$" ] && continue
         stat_of "$P" || continue
         [ "$ST_STATE" = Z ] && continue
+        # The stock OSD service keeps fb0 open for volume/brightness overlays;
+        # it is present beside MainUI too, so it is not a stray renderer.
+        DS_COMM=""
+        read -r DS_COMM 2>/dev/null <"/proc/$P/comm" || :
+        if [ "$DS_COMM" = trimui_osdd ] &&
+            [ "$(readlink "/proc/$P/exe" 2>/dev/null)" = /usr/trimui/osd/trimui_osdd ]; then
+            continue
+        fi
         say "display: still held after JukaHub exited by $(describe "$P"), parent $(describe "$ST_PPID")"
     done
 ) </dev/null >/dev/null 2>&1 &

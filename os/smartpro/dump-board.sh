@@ -42,12 +42,27 @@ trap 'cleanup; exit 1' INT TERM
 
 # ------------------------------------------------------------ which device
 # A Smart Pro is the Allwinner A133P (sun50iw10) with a 1280x720 panel. The
-# Brick shares the chip with a 1024x768 panel; the Smart Pro S is another chip.
+# Brick and Brick Pro share the chip with a 1024x768 panel; the Smart Pro S is
+# another chip (A523, sun55iw3). The model code TrimUI stamps into the device
+# tree (TG5040 Smart Pro, TG3040 Brick, TG4040 Brick Pro, TG5050 Smart Pro S)
+# is recorded as MODEL. JUKAHUB_ANY_MODEL=1 saves another model's files too,
+# for development only: the image builder refuses them without
+# --experimental-model, because only the Smart Pro's boot is known.
+ANY_MODEL=${JUKAHUB_ANY_MODEL:-0}
+MODEL=$( { tr '\0' ' ' < /proc/device-tree/model; tr '\0' ' ' < /proc/device-tree/compatible; cat /etc/hostname; } 2> /dev/null |
+	grep -o -i 'tg[0-9][0-9][0-9][0-9]' | head -n 1 | tr 'a-z' 'A-Z')
 SOC=$(tr '\0' ' ' < /proc/device-tree/compatible 2> /dev/null)
 grep -q 'sun50iw10\|sun50i-a100\|sun50i-a133' /proc/cpuinfo 2> /dev/null && SOC="$SOC sun50iw10"
 case "$SOC" in
 	*sun50iw10*|*sun50i-a100*|*sun50i-a133*) ;;
-	*) fail "this is not an Allwinner A133 device (Smart Pro S and other chips are not supported)" ;;
+	*sun55iw3*|*sun55i-a523*|*sun55i-t527*)
+		[ "$ANY_MODEL" = 1 ] || fail "this is an Allwinner A523 (Smart Pro S); only the Smart Pro (TG5040) is supported"
+		[ -n "$MODEL" ] || MODEL=TG5050 ;;
+	*) [ "$ANY_MODEL" = 1 ] || fail "this is not an Allwinner A133 device (Smart Pro S and other chips are not supported)" ;;
+esac
+case "${MODEL:-TG5040}" in
+	TG5040) ;;
+	*) [ "$ANY_MODEL" = 1 ] || fail "this is a $MODEL; only the Smart Pro (TG5040) is supported" ;;
 esac
 PANEL=""
 for f in /sys/class/graphics/fb0/modes /sys/class/graphics/fb0/virtual_size; do
@@ -58,12 +73,25 @@ for f in /sys/class/graphics/fb0/modes /sys/class/graphics/fb0/virtual_size; do
 	esac
 	[ -n "$PANEL" ] && break
 done
-[ "$PANEL" = 1280x720 ] || fail "panel is '${PANEL:-unknown}', not the Smart Pro's 1280x720"
+[ "$PANEL" = 1280x720 ] || [ "$ANY_MODEL" = 1 ] || fail "panel is '${PANEL:-unknown}', not the Smart Pro's 1280x720"
 FIRMWARE=""
 if [ -r /usr/trimui/bin/MainUI ]; then
 	FIRMWARE=$(grep -a -o 'Trimui Smart Pro S\|Trimui Smart Pro\|Trimui Brick' /usr/trimui/bin/MainUI 2> /dev/null | head -n 1)
 fi
-[ "$FIRMWARE" = "Trimui Smart Pro S" ] && fail "this is a Smart Pro S; only the Smart Pro (TG5040) is supported"
+if [ "$FIRMWARE" = "Trimui Smart Pro S" ]; then
+	[ "$ANY_MODEL" = 1 ] || fail "this is a Smart Pro S; only the Smart Pro (TG5040) is supported"
+	MODEL=TG5050
+fi
+# Every check passed without a code in the device tree: an A133 with the
+# Smart Pro's panel is a Smart Pro, as before.
+[ -n "$MODEL" ] || MODEL=TG5040
+case "$MODEL" in
+	TG5040) DEVICE=trimui-smart-pro ;;
+	TG5050) DEVICE=trimui-smart-pro-s ;;
+	TG3040) DEVICE=trimui-brick ;;
+	TG4040) DEVICE=trimui-brick-pro ;;
+	*) DEVICE=unknown ;;
+esac
 
 # ------------------------------------------------------- disks and the root
 EMMC=""
@@ -181,8 +209,9 @@ dd if="/dev/$ROOT_PART" of="$OUT/root-head.bin" bs=4096 count=1 2> /dev/null
 # --------------------------------------------------------------- facts
 {
 	echo "FORMAT=jukahub-board-v1"
-	echo "DEVICE=trimui-smart-pro"
-	echo "MODEL=TG5040"
+	echo "DEVICE=$DEVICE"
+	echo "MODEL=$MODEL"
+	[ "$ANY_MODEL" = 1 ] && echo "EXPERIMENTAL=1"
 	echo "PANEL=$PANEL"
 	echo "FIRMWARE=$FIRMWARE"
 	echo "KERNEL=$(uname -r)"

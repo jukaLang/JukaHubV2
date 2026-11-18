@@ -224,7 +224,8 @@ func psOpenPanelFor(host string, target int) {
 	// is still finding the console's PIN (psremote_helpers_install.go).
 	psHelpersAutoStart()
 	// Check the stream helper now, off the main thread, so Play does not wait
-	// for its one start (psremote_preflight.go keeps the answer).
+	// for its one start (psremote_preflight.go keeps the answer; Play joins a
+	// check still running off the event thread, psremote_start.go).
 	go psWarmStreamPreflight()
 }
 
@@ -410,8 +411,11 @@ func psPanelPair(host, pin string, target int) {
 	}()
 }
 
-// psPanelPlay starts the native client and releases the display.
-func psPanelPlay(c psConsole) {
+// psPanelPlay starts the native client and releases the display: the last
+// step of Play, on the main loop, once psStreamGetReady (psremote_start.go)
+// has the helper's answer and the address off the event thread. at is c
+// narrowed to that address (psConsoleAt), so psRemoteStream waits for neither.
+func psPanelPlay(c, at psConsole) {
 	if !c.paired() {
 		ShowToast("Pair this console first", ToastKindWarning)
 		return
@@ -429,7 +433,7 @@ func psPanelPlay(c psConsole) {
 	psPanelMu.Lock()
 	settings := psRemoteSettings{Quality: chiakiPanel.quality, Volume: chiakiPanel.volume, Account: chiakiPanel.account}
 	psPanelMu.Unlock()
-	if err := psRemoteStream(c, settings); err != nil {
+	if err := psRemoteStream(at, settings); err != nil {
 		ShowToast("Could not start Remote Play — "+firstLine(err.Error()), ToastKindError)
 		return
 	}

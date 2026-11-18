@@ -361,7 +361,7 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 			if d.Date == today {
 				label = "Today"
 			} else {
-				label = t.Format("Mon")
+				label = formatWeekdayShort(t)
 			}
 		}
 		desc := weatherCodeDesc(d.Code)

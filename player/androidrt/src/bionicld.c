@@ -391,7 +391,10 @@ static int coreVirtual(const VirtualLib *v) {
 }
 
 /* Host libraries chosen by another layer (the EGL present layer binds the
- * game's libEGL.so/libGLESv2.so to the exact stack it drives). */
+ * game's libEGL.so, and libGLESv2.so/libGLESv3.so/libGLESv1_CM.so beside it,
+ * to the exact stack it drives). Bound names win over kVirtual's soname and
+ * its ANDROIDPAK_*_LIB variable, so the present layer binds none of those a
+ * variable names. */
 static struct {
     char name[64];
     void *handle;

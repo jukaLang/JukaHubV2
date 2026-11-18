@@ -117,6 +117,33 @@ var outAudio struct {
 	failedPCM   string
 	holdUntil   time.Time
 	failedTries int
+	// gameMix is the shared (dmix) PCM the music keeps playing on while a
+	// game runs (musicgame.go), "" otherwise. While it is set, mixDev is open
+	// on it and the mixer plays only gameKeep (the music's virtual device),
+	// at gameGain, until an in-game overlay borrows the sound and every
+	// output joins in.
+	gameMix  string
+	gameKeep sdl.AudioDeviceID
+	gameGain float64
+	// exclusive is the bit-perfect DAC device holding the real output
+	// (usbdac_bitperfect.go): every output here is held back, as for a game,
+	// until it lets go.
+	exclusive bool
+}
+
+// outHeldLocked reports whether the outputs are held back: a game owns the
+// sound hardware, or the bit-perfect DAC device does.
+func outHeldLocked() bool {
+	return outAudio.suspended || outAudio.exclusive
+}
+
+// outPlaysLocked reports whether the virtual device id is heard now: always,
+// unless the outputs are held back — then only the music a game keeps.
+func outPlaysLocked(id sdl.AudioDeviceID) bool {
+	if !outHeldLocked() {
+		return true
+	}
+	return outAudio.suspended && outAudio.gameMix != "" && id == outAudio.gameKeep
 }
 
 // audioDevEnvMu serialises every SDL open that may set AUDIODEV (SDL's ALSA
@@ -127,8 +154,35 @@ var audioDevEnvMu sync.Mutex
 // outOpenReal opens a real SDL playback device, on pcm when it is set (via
 // AUDIODEV) and on the default output otherwise.
 func outOpenReal(desired, obtained *sdl.AudioSpec, allowed int, pcm string) (sdl.AudioDeviceID, error) {
+	return outOpenRealConf(desired, obtained, allowed, pcm, "")
+}
+
+// outOpenRealConf is outOpenReal with conf, an ALSA file defining pcm, added
+// to this process's ALSA_CONFIG_PATH for the open only (after the system's
+// alsa.conf, or after what JukaHub already set there). alsa-lib reloads its
+// configuration when that list changes, at this open and again at the next
+// one after it is put back; the open device keeps what it was opened with.
+func outOpenRealConf(desired, obtained *sdl.AudioSpec, allowed int, pcm, conf string) (sdl.AudioDeviceID, error) {
 	audioDevEnvMu.Lock()
 	defer audioDevEnvMu.Unlock()
+	if conf != "" {
+		prev, had := os.LookupEnv("ALSA_CONFIG_PATH")
+		path := prev
+		if path == "" {
+			path = spatialALSABaseConf()
+		}
+		if path == "" {
+			return 0, errors.New("no system alsa.conf to add " + conf + " to")
+		}
+		_ = os.Setenv("ALSA_CONFIG_PATH", path+":"+conf)
+		defer func() {
+			if had {
+				_ = os.Setenv("ALSA_CONFIG_PATH", prev)
+			} else {
+				_ = os.Unsetenv("ALSA_CONFIG_PATH")
+			}
+		}()
+	}
 	if pcm != "" {
 		prev, had := os.LookupEnv("AUDIODEV")
 		_ = os.Setenv("AUDIODEV", pcm)
@@ -169,7 +223,7 @@ func outOpen(desired, obtained *sdl.AudioSpec, allowed int) (sdl.AudioDeviceID, 
 	for {
 		outAudio.mu.Lock()
 		mixed := outAudio.mixDev != 0
-		suspended := outAudio.suspended
+		suspended := outHeldLocked()
 		outAudio.mu.Unlock()
 		if mixed || suspended {
 			// Mixed or handed to a game: keep the caller's own format.
@@ -188,15 +242,16 @@ func outOpen(desired, obtained *sdl.AudioSpec, allowed int) (sdl.AudioDeviceID, 
 			d.real = id
 		}
 		outAudio.mu.Lock()
-		if outAudio.suspended && d.real != 0 {
-			// The game claimed audio while SDL was opening this device.
+		if outHeldLocked() && d.real != 0 {
+			// The game (or the bit-perfect DAC device) claimed audio while SDL
+			// was opening this device.
 			id := d.real
 			d.real = 0
 			outAudio.mu.Unlock()
 			sdl.CloseAudioDevice(id)
 			continue
 		}
-		if !outAudio.suspended && d.real == 0 && outAudio.mixDev == 0 {
+		if !outHeldLocked() && d.real == 0 && outAudio.mixDev == 0 {
 			// The game ended, or the headset route ended, during the open.
 			outAudio.mu.Unlock()
 			continue
@@ -231,7 +286,7 @@ func outQueue(id sdl.AudioDeviceID, data []byte) error {
 	if d == nil {
 		return sdl.QueueAudio(id, data)
 	}
-	if outAudio.suspended {
+	if !outPlaysLocked(id) {
 		return errors.New("audio output is in use by a game")
 	}
 	if d.real != 0 {
@@ -264,7 +319,7 @@ func outQueued(id sdl.AudioDeviceID) uint32 {
 	if d == nil {
 		return sdl.GetQueuedAudioSize(id)
 	}
-	if outAudio.suspended {
+	if !outPlaysLocked(id) {
 		return 0
 	}
 	if d.real != 0 {
@@ -430,6 +485,22 @@ func outMixLoop(stop chan struct{}) {
 			outRouteMu.Lock()
 			outAudio.mu.Lock()
 			still := outAudio.mixStop == stop
+			if still && outAudio.gameMix != "" {
+				// The shared PCM under a game failed: the music pauses, the
+				// game keeps its sound (musicgame.go).
+				dev, held := outGameMixEndLocked()
+				outAudio.mu.Unlock()
+				if dev != 0 {
+					sdl.CloseAudioDevice(dev)
+				}
+				if !held {
+					outToSpeaker() // an overlay had the sound: it gets the speaker
+				}
+				outRouteMu.Unlock()
+				logInfo("audio", "the shared output under the game stopped; music paused")
+				go musicGamePause("the shared output stopped")
+				return
+			}
 			if still {
 				outAudio.failedPCM, outAudio.failedTries = outAudio.pcm, outQuickRetries
 				outAudio.holdUntil = time.Now().Add(outLostHold)
@@ -483,8 +554,8 @@ func outMixStepLocked() (lost bool, drained []sdl.AudioDeviceID) {
 	// had not been queued yet (every start of music, a video or Juka's voice
 	// after a quiet moment, when the whole lead is asked for at once).
 	mixed := 0
-	for _, d := range outAudio.devs {
-		if d.paused || d.draining != 0 || d.real != 0 {
+	for id, d := range outAudio.devs {
+		if d.paused || d.draining != 0 || d.real != 0 || !outPlaysLocked(id) {
 			continue
 		}
 		if n := d.mixInto(acc, frames, rate); n > mixed {
@@ -497,6 +568,10 @@ func outMixStepLocked() (lost bool, drained []sdl.AudioDeviceID) {
 	}
 	acc = acc[:mixed*2]
 	gain := outAudio.gain
+	if outAudio.gameMix != "" {
+		// Music under a game: its own level (musicgame.go), not the header's.
+		gain = outAudio.gameGain
+	}
 	out := outAudio.out[:mixed*4]
 	for i, v := range acc {
 		f := float64(v) * gain
@@ -541,6 +616,11 @@ func outToSpeaker() {
 	}
 	mixDev := outAudio.mixDev
 	outAudio.mixDev, outAudio.pcm = 0, ""
+	// Neither the music's shared PCM nor the bit-perfect DAC device outlives
+	// the route it was on.
+	outAudio.gameMix, outAudio.gameKeep = "", 0
+	wasExclusive := outAudio.exclusive
+	outAudio.exclusive = false
 	var reopen []*outDev
 	for _, d := range outAudio.devs {
 		switch {
@@ -556,6 +636,9 @@ func outToSpeaker() {
 	outAudio.mu.Unlock()
 	if mixDev != 0 {
 		sdl.CloseAudioDevice(mixDev)
+	}
+	if wasExclusive {
+		dacExclusiveDrop()
 	}
 	ids := make([]sdl.AudioDeviceID, len(reopen))
 	for i, d := range reopen {
@@ -717,16 +800,23 @@ func outSetRoute(pcm string, gain float64) bool {
 			time.AfterFunc(outRetryAfter, audioRouteKick)
 		} else if outAudio.failedTries == outQuickRetries {
 			// The quick retries are spent: the whole picture goes to the log
-			// once (it takes outAudio.mu, hence its own goroutine).
+			// once (it takes outAudio.mu, hence its own goroutine). A USB DAC
+			// has no Bluetooth picture; its open error above says it all.
 			outAudio.failedTries++
-			go btLogDiagnostics("the headset's audio would not open")
+			if !usbDACPCMIs(pcm) {
+				go btLogDiagnostics("the headset's audio would not open")
+			}
 		}
 		return false
 	}
 	outToHeadsetLocked(pcm, id, got.Freq)
 	outAudio.failedPCM, outAudio.failedTries = "", 0
-	logInfo("audio", "output route: headset (%s, %d Hz)", pcm, outAudio.mixRate)
-	audioDiagRoute(pcm, fmt.Sprintf("headset opened at %d Hz", outAudio.mixRate))
+	what := "headset"
+	if usbDACPCMIs(pcm) {
+		what = "USB DAC"
+	}
+	logInfo("audio", "output route: %s (%s, %d Hz)", what, pcm, outAudio.mixRate)
+	audioDiagRoute(pcm, fmt.Sprintf("%s opened at %d Hz", what, outAudio.mixRate))
 	return true
 }
 
@@ -771,6 +861,23 @@ func audioRouteUpdate(addr string) {
 		audioDiagSet(func() { audioDiag.a2dpN, audioDiag.a2dpAt = 0, time.Time{} })
 		bluealsaPrestart()
 	}
+	// A USB DAC comes first (usbdac.go): plugging one in is the most explicit
+	// choice of output there is. A DAC that would not open falls through to
+	// the headset or the speaker, and is tried again on the next probe.
+	if dacPCM := usbDACRoutePCM(); dacPCM != "" && !gameScreenSuspended() && audioRouteSDLDriverOK() {
+		gain := 1.0
+		if v, ok := systemVolume(); ok {
+			gain = math.Max(0, math.Min(100, float64(v))) / 100
+		}
+		if outSetRoute(dacPCM, gain) {
+			usbDACRouted(true)
+			// The headset's per-output volume and its codec are not in play.
+			btFollowRoute(addr, false)
+			return
+		}
+		usbDACOpenFailed()
+	}
+	usbDACRouted(false)
 	pcm := ""
 	if addr != "" && !gameScreenSuspended() {
 		// Already on this headset: nothing to check again (a stream that dies
@@ -794,7 +901,8 @@ func audioRouteUpdate(addr string) {
 	outSetRoute(pcm, gain)
 	// Per-output volume, pause when the headset drops, its codec
 	// (bt_audiofollow.go).
-	btFollowRoute(addr, audioRouteChildPCM() != "")
+	cur := audioRouteChildPCM()
+	btFollowRoute(addr, cur != "" && !usbDACPCMIs(cur))
 }
 
 // audioRouteSetVolume applies a volume change (0..100) to the headset at once;
@@ -818,14 +926,25 @@ func audioRouteChildPCM() string {
 // child starts. The virtual ids stay valid, so callers can finish and close
 // normally while the emulator owns ALSA. This includes the always-open UI
 // sound device, which otherwise keeps the Brick's speaker busy.
+//
+// Music that plays at the launch either keeps playing on a shared PCM the
+// game's sound is mixed with (musicgame.go: the device opens here, after
+// every other one is closed and before the game starts), or pauses.
 func audioRouteReleaseForChild() {
 	outRouteMu.Lock()
+	held := musicGameHold()
 	outAudio.mu.Lock()
+	exclusive := outAudio.exclusive
 	ids := outDetachForChildLocked()
 	outAudio.mu.Unlock()
 	for _, id := range ids {
 		sdl.CloseAudioDevice(id)
 	}
+	if exclusive {
+		// The bit-perfect DAC device too, before the game opens the DAC.
+		dacExclusiveDrop()
+	}
+	musicGameAtRelease(held)
 	outRouteMu.Unlock()
 }
 
@@ -836,7 +955,19 @@ func outDetachForChildLocked() []sdl.AudioDeviceID {
 	if outAudio.suspended {
 		return nil
 	}
+	if outAudio.gameMix != "" && outAudio.mixDev != 0 {
+		// An overlay over the game hands the sound back: the music keeps the
+		// shared PCM it plays on, everything else goes quiet again.
+		outAudio.suspended = true
+		for id, d := range outAudio.devs {
+			if id != outAudio.gameKeep {
+				d.fifo, d.head, d.phase = d.fifo[:0], 0, 0
+			}
+		}
+		return nil
+	}
 	outAudio.suspended = true
+	outAudio.exclusive = false
 	if outAudio.mixStop != nil {
 		close(outAudio.mixStop)
 		outAudio.mixStop = nil
@@ -865,14 +996,100 @@ func outDetachForChildLocked() []sdl.AudioDeviceID {
 func audioRouteResumeAfterChild() {
 	outRouteMu.Lock()
 	outAudio.mu.Lock()
-	if !outAudio.suspended {
+	// An overlay may still be up when the game ends: the music's shared PCM
+	// ends with the game all the same.
+	if !outAudio.suspended && outAudio.gameMix == "" {
 		outAudio.mu.Unlock()
 		outRouteMu.Unlock()
 		return
 	}
 	outAudio.suspended = false
 	outAudio.mu.Unlock()
+	// outToSpeaker also closes the music's shared PCM, and hands the music
+	// what it had queued there, so it carries on from the speaker.
 	outToSpeaker()
 	outRouteMu.Unlock()
 	audioRouteKick()
+}
+
+// audioRouteBorrowForOverlay gives JukaHub its sound while an overlay (the
+// in-game menu, an alarm) is up over a paused game. With the music on a
+// shared PCM, every output joins it there — the paused game still holds the
+// card through it — instead of reopening on the speaker.
+func audioRouteBorrowForOverlay() {
+	outRouteMu.Lock()
+	outAudio.mu.Lock()
+	if outAudio.suspended && outAudio.gameMix != "" && outAudio.mixDev != 0 {
+		outAudio.suspended = false
+		outAudio.mu.Unlock()
+		outRouteMu.Unlock()
+		return
+	}
+	outAudio.mu.Unlock()
+	outRouteMu.Unlock()
+	audioRouteResumeAfterChild()
+}
+
+// outGameMixBegin opens the shared PCM pcm while a game holds the outputs
+// and has the mixer play keep (the music's virtual device) on it at gain. It
+// reports whether it did. conf, when set, is the ALSA file that defines pcm
+// (musicgame.go's own dmix), in force for this open only (outOpenRealConf).
+// The caller holds outRouteMu (audioRouteReleaseForChild); the open runs
+// without outAudio.mu, like every other here.
+func outGameMixBegin(pcm, conf string, keep sdl.AudioDeviceID, gain float64) bool {
+	outAudio.mu.Lock()
+	ok := outAudio.suspended && outAudio.mixDev == 0 && outAudio.devs[keep] != nil
+	outAudio.mu.Unlock()
+	if !ok || pcm == "" {
+		return false
+	}
+	want := sdl.AudioSpec{Freq: 48000, Format: sdl.AUDIO_S16SYS, Channels: 2, Samples: 1024}
+	var got sdl.AudioSpec
+	id, err := outOpenRealConf(&want, &got, sdl.AUDIO_ALLOW_FREQUENCY_CHANGE, pcm, conf)
+	if err != nil {
+		logInfo("audio", "music under the game: %s would not open: %v", pcm, err)
+		return false
+	}
+	outAudio.mu.Lock()
+	defer outAudio.mu.Unlock()
+	if !outAudio.suspended || outAudio.mixDev != 0 || outAudio.devs[keep] == nil {
+		sdl.CloseAudioDevice(id)
+		return false
+	}
+	rate := got.Freq
+	if rate <= 0 {
+		rate = 48000
+	}
+	sdl.PauseAudioDevice(id, false)
+	outAudio.mixDev, outAudio.mixRate = id, rate
+	outAudio.gameMix, outAudio.gameKeep, outAudio.gameGain = pcm, keep, gain
+	stop := make(chan struct{})
+	outAudio.mixStop = stop
+	go outMixLoop(stop)
+	logInfo("audio", "music keeps playing under the game on %s (%d Hz, level %.0f%%)", pcm, rate, gain*100)
+	return true
+}
+
+// outGameMixEndLocked stops the mixer on the shared PCM and returns its device
+// for closing outside the lock, with whether a game still holds the outputs.
+func outGameMixEndLocked() (sdl.AudioDeviceID, bool) {
+	if outAudio.mixStop != nil {
+		close(outAudio.mixStop)
+		outAudio.mixStop = nil
+	}
+	dev := outAudio.mixDev
+	outAudio.mixDev = 0
+	if keep := outAudio.devs[outAudio.gameKeep]; keep != nil {
+		keep.fifo, keep.head, keep.phase = keep.fifo[:0], 0, 0
+	}
+	outAudio.gameMix, outAudio.gameKeep = "", 0
+	return dev, outAudio.suspended
+}
+
+// audioRouteGameMixActive reports whether music plays on a shared PCM under a
+// game right now.
+func audioRouteGameMixActive() bool {
+	outAudio.mu.Lock()
+	defer outAudio.mu.Unlock()
+	return outAudio.gameMix != "" && outAudio.mixDev != 0
 }

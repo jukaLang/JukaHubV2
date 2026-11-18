@@ -198,7 +198,7 @@ func apkStoreDrawFDroid(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	y += apkStoreTabH + 18
 	countLine := fmt.Sprintf("%d apps · page %d of %d", len(matches), page+1, pages)
 	if apkStoreUI.fdroidReady {
-		countLine += " · list " + time.UnixMilli(apkStoreUI.fdroid.Timestamp).Format("Jan 2, 2006")
+		countLine += " · list " + formatDate(config, time.UnixMilli(apkStoreUI.fdroid.Timestamp))
 	}
 	y = apkStoreDrawNote(renderer, config, fonts, frame, body, top, y, countLine)
 	if len(matches) == 0 {

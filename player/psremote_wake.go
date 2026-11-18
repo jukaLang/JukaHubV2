@@ -106,9 +106,10 @@ var (
 type psWakeStage int
 
 const (
-	psWakeLooking  psWakeStage = iota // asking the console how it is
-	psWakeWaking                      // the wake signal is out; it is coming up
-	psWakeStarting                    // it is on; Remote Play needs a moment more
+	psWakeLooking    psWakeStage = iota // asking the console how it is
+	psWakeWaking                        // the wake signal is out; it is coming up
+	psWakeStarting                      // it is on; Remote Play needs a moment more
+	psWakeConnecting                    // Play: the helper check and the address (psremote_start.go)
 )
 
 // psWakeOptions tunes one wake. Zero values take the defaults above; tests
@@ -781,8 +782,10 @@ func psNamedAnswers(hosts []psConsole, found []psDiscovered) map[string]string {
 
 // ── The panel's wake ─────────────────────────────────────────────────────
 
-// psWakeRun is the one wake the panel has in flight. host, label, play and
-// started never change after it starts; stage is written under psWakeState.mu.
+// psWakeRun is the one wake the panel has in flight, or the start of a stream
+// that needs none (stage psWakeConnecting from the start: psPanelStartStream).
+// host, label, play and started never change after it starts; stage is
+// written under psWakeState.mu.
 type psWakeRun struct {
 	host    string
 	label   string
@@ -877,19 +880,24 @@ func psWakeCancelRunning() bool {
 	}
 	run.cancel()
 	PlayBackSound()
-	if stage == psWakeLooking {
+	switch stage {
+	case psWakeLooking:
 		ShowToast("Stopped — "+run.label+" was not woken", ToastKindInfo)
-	} else {
+	case psWakeConnecting:
+		ShowToast("Stopped — "+run.label+" will not stream", ToastKindInfo)
+	default:
 		ShowToast("Stopped waiting — "+run.label+" may still turn on", ToastKindInfo)
 	}
 	return true
 }
 
 // psPanelPlayOrWake is A on a paired console. One that answered ready a moment
-// ago streams at once, and so does one a wake found nothing for (the user is
-// asking to connect anyway). Every other console is asked first and woken when
-// it rests; the stream starts by itself once it is up. A on the console being
-// woken only says so.
+// ago streams without a wake, and so does one a wake found nothing for (the
+// user is asking to connect anyway): its row says the stream is starting while
+// the helper check and the address are settled off the event thread
+// (psPanelStartStream). Every other console is asked first and woken when it
+// rests; the stream starts by itself once it is up. A on the console being
+// woken or started only says so.
 func psPanelPlayOrWake(c psConsole) {
 	if !c.paired() {
 		ShowToast("Pair this console first", ToastKindWarning)
@@ -912,7 +920,7 @@ func psPanelPlayOrWake(c psConsole) {
 	if state == psRowMissed || (state == psRowReady && time.Since(at) < psWakeFreshReady) {
 		// psPanelPlay closes the panel itself once the stream is under way: it
 		// reads the quality, volume and Account-ID from the open panel.
-		psPanelPlay(c)
+		psPanelStartStream(c)
 		return
 	}
 	psPanelStartWake(c, true)
@@ -941,14 +949,20 @@ func psPanelWakeFocused() {
 	psPanelStartWake(c, false)
 }
 
-// psWakeBusyToast answers a second press while a wake runs.
+// psWakeBusyToast answers a second press while a wake or a stream start runs.
 func psWakeBusyToast(run psWakeView, c psConsole) {
 	stop := hintSentence("%s stops it", "B", "Stop")
-	if run.host == c.Host {
+	starting := run.stage == psWakeConnecting
+	switch {
+	case run.host == c.Host && starting:
+		ShowToast("Already starting "+run.label+" — "+stop, ToastKindInfo)
+	case run.host == c.Host:
 		ShowToast("Already waking "+run.label+" — "+stop, ToastKindInfo)
-		return
+	case starting:
+		ShowToast("Starting "+run.label+" first — "+stop, ToastKindInfo)
+	default:
+		ShowToast("Waking "+run.label+" first — "+stop, ToastKindInfo)
 	}
-	ShowToast("Waking "+run.label+" first — "+stop, ToastKindInfo)
 }
 
 // psPanelStartWake runs a wake in the background; play starts the stream when
@@ -967,13 +981,16 @@ func psPanelStartWake(c psConsole, play bool) {
 // psWakeReachAway is the silence that means "not at home" for a console with
 // an internet address: the wake then asks at that address (it answers there
 // when the router forwards its discovery port), and the stream goes there
-// (psChooseStreamHost) whether it answered or not.
+// (psStreamHostFor) whether it answered or not.
 const psWakeReachAway = 2500 * time.Millisecond
 
-// psWakeWorker is the goroutine behind psPanelStartWake. The stream itself is
-// started on the main loop (tbxPost): it closes the panel and quits JukaHub,
-// and only when the panel is still up on the console list — a user who closed
-// it or is typing meanwhile gets a toast instead of a screen yanked away.
+// psWakeWorker is the goroutine behind psPanelStartWake. Its first wake asks
+// the home address, so its answer also chooses the stream's address: the
+// stream goes on from here (psStreamGetReady) without asking that address
+// again. The hand-off itself starts on the main loop (tbxPost): it closes the
+// panel and quits JukaHub, and only when the panel is still up on the console
+// list — a user who closed it or is typing meanwhile gets a toast instead of a
+// screen yanked away.
 func psWakeWorker(ctx context.Context, run *psWakeRun, c psConsole) {
 	woke := false
 	opts := psWakeWorkerTimings
@@ -990,6 +1007,9 @@ func psWakeWorker(ctx context.Context, run *psWakeRun, c psConsole) {
 		opts.Reach = psWakeReachAway
 	}
 	_, err := psWakeAndWait(ctx, c, opts)
+	// This console answered at its home address (psWakeSameConsole, the stream
+	// probe's rule too): the stream stays at home.
+	home := err == nil
 	if away && psWakeNotHome(err) {
 		// Not on this network. Where the router forwards the discovery port
 		// (UDP 9302 for a PS5, 987 for a PS4) the console answers at its
@@ -1017,32 +1037,8 @@ func psWakeWorker(ctx context.Context, run *psWakeRun, c psConsole) {
 		// The next Play within a few minutes goes straight to the stream.
 		psMarkMissed(c.Host)
 	}
-	on := err == nil
-	tbxPost(func() {
-		// The run is let go only now: until this frame A and X still find it
-		// running, so no second wake starts in between, and B still stops it.
-		if !psWakeClaim(run) {
-			return
-		}
-		if !chiakiPanel.open || chiakiPanel.page != psPageConsoles || virtualKeyboardActive {
-			switch {
-			case on && chiakiPanel.open:
-				ShowToast(run.label+" is on — "+hintSentence("press %s on it to stream", "A", "Play"), ToastKindSuccess)
-			case on:
-				ShowToast(run.label+" is on — open PS Remote Play to stream", ToastKindSuccess)
-			}
-			return
-		}
-		console, ok := psPanelConsole(c.Host)
-		if !ok || !console.paired() {
-			// Forgotten (Y) while it was waking: not streamed.
-			if on {
-				ShowToast(run.label+" is on", ToastKindSuccess)
-			}
-			return
-		}
-		psPanelPlay(console)
-	})
+	host, remote := psStreamHostFor(c, home)
+	psStreamGetReady(run, psConsoleAt(c, host, remote), c.Host, err == nil)
 }
 
 // psWakeAnnounce is the one toast of a wake that starts no stream: the console
@@ -1135,6 +1131,8 @@ func psWakeRowDetail(run psWakeView, now time.Time) string {
 		if run.play {
 			text = "It is on — starting the stream…"
 		}
+	case psWakeConnecting:
+		text = "Starting the stream…"
 	default:
 		text = "Looking for it on this network…"
 	}
@@ -1151,6 +1149,8 @@ func psPanelConsoleHints(rows []chiakiRow, cursor int) string {
 		// A Play or a PIN prompt waits for the helpers' install
 		// (psremote_helpers_install.go); B lets go of it first.
 		back = FooterHint{"B", "Stop waiting"}
+	case waking && run.stage == psWakeConnecting:
+		back = FooterHint{"B", "Stop"}
 	case waking:
 		back = FooterHint{"B", "Stop waking"}
 	}

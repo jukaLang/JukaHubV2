@@ -271,13 +271,23 @@ func ensureBgParticleTex(renderer *sdl.Renderer) {
 		}
 	}
 	surface.Unlock()
+	// Linear filtering (the hint is read when a texture is made): the dot is
+	// drawn at sub-pixel positions and smaller than its pixels, and nearest
+	// sampling would snap it back to whole texels.
+	prev := sdl.GetHint(sdl.HINT_RENDER_SCALE_QUALITY)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "linear")
 	tex, err := renderer.CreateTextureFromSurface(surface)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, prev)
 	if err != nil {
 		return
 	}
 	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
 	dynbg.particleTex = tex
 }
+
+// dynbgDst is the destination of the living background's blob and particle
+// copies, reused so the per-frame copies allocate nothing. Render thread only.
+var dynbgDst sdl.FRect
 
 // ──────────────────────────────────────────────────────────────────────
 // Wallpaper loading
@@ -609,18 +619,15 @@ func renderAmbientDynamicLayers(renderer *sdl.Renderer, t float64, pal bgPalette
 	for i, b := range visibleBlobs {
 		cx := float64(screenWidth)*b.ox + math.Cos(t*b.speed+b.phase)*float64(screenWidth)*b.rx
 		cy := float64(screenHeight)*b.oy + math.Sin(t*b.speed*0.8+b.phase)*float64(screenHeight)*b.ry
-		sz := b.size * scale * (1 + 0.12*math.Sin(t*0.18+float64(i)*1.7))
-		d := int32(sz)
-		if d < 32 {
-			d = 32
-		}
+		d := math.Max(b.size*scale*(1+0.12*math.Sin(t*0.18+float64(i)*1.7)), 32)
 		cx = clampF64(cx, 0, float64(screenWidth))
 		cy = clampF64(cy, 0, float64(screenHeight))
 		_ = glow.SetColorMod(b.color.R, b.color.G, b.color.B)
 		_ = glow.SetAlphaMod(b.alpha)
-		_ = renderer.Copy(glow, nil, &sdl.Rect{
-			X: int32(cx) - d/2, Y: int32(cy) - d/2, W: d, H: d,
-		})
+		// Sub-pixel position and size: the drift is a few pixels a second, and
+		// whole pixels made it step at any frame rate.
+		dynbgDst = sdl.FRect{X: float32(cx - d/2), Y: float32(cy - d/2), W: float32(d), H: float32(d)}
+		_ = renderer.CopyF(glow, nil, &dynbgDst)
 	}
 
 	// Restore texture state
@@ -656,15 +663,15 @@ func renderBgParticles(renderer *sdl.Renderer, t float64, pal bgPalette) {
 		pc.G = clampByte(int(pc.G) - int(shift/2))
 		pc.B = clampByte(int(pc.B) + int(shift/3))
 
-		sz := int32(p.size * float64(min32(screenWidth, screenHeight)) / 720.0)
-		if sz < 2 {
-			sz = 2
-		}
-		x := int32(p.x * float64(screenWidth))
-		y := int32(p.y * float64(screenHeight))
+		sz := math.Max(p.size*float64(min32(screenWidth, screenHeight))/720.0, 2)
+		x := p.x * float64(screenWidth)
+		y := p.y * float64(screenHeight)
 		_ = dynbg.particleTex.SetColorMod(pc.R, pc.G, pc.B)
 		_ = dynbg.particleTex.SetAlphaMod(alpha)
-		_ = renderer.Copy(dynbg.particleTex, nil, &sdl.Rect{X: x - sz/2, Y: y - sz/2, W: sz, H: sz})
+		// Sub-pixel, like the blobs: a particle drifts well under a pixel a
+		// frame.
+		dynbgDst = sdl.FRect{X: float32(x - sz/2), Y: float32(y - sz/2), W: float32(sz), H: float32(sz)}
+		_ = renderer.CopyF(dynbg.particleTex, nil, &dynbgDst)
 	}
 	// Restore
 	_ = dynbg.particleTex.SetColorMod(255, 255, 255)

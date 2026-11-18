@@ -98,7 +98,7 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 			}
 			art := sdl.Rect{X: rect.X + 8, Y: rect.Y + 8, W: rect.W - 16, H: rect.H - 56}
 			drawGameCoverArt(renderer, system.Games[idx], art)
-			renderText(renderer, config, font, ellipsize(font, system.Games[idx].Label(), rect.W-16), ColorTextPrimary(), rect.X+8, art.Y+art.H+7)
+			titleScrollText(renderer, config, font, system.Games[idx].Label(), ColorTextPrimary(), rect.X+8, art.Y+art.H+7, rect.W-16, selected && gameLib.focus == 1)
 		}
 		renderText(renderer, config, font, "←/→ games · ↑ all consoles", ColorTextTertiary(), x, y+h-int32(font.Height())-4)
 		return
@@ -127,7 +127,7 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 		drawGameCoverArt(renderer, system.Games[idx], art)
 		textX := art.X + art.W + 15
 		textW := rect.X + rect.W - textX - 12
-		renderText(renderer, config, medium, ellipsize(medium, system.Games[idx].Label(), textW), ColorTextPrimary(), textX, rect.Y+18)
+		titleScrollText(renderer, config, medium, system.Games[idx].Label(), ColorTextPrimary(), textX, rect.Y+18, textW, idx == gameLib.cursor && gameLib.focus == 1)
 		renderText(renderer, config, font, ellipsize(font, system.Games[idx].System, textW), ColorTextTertiary(), textX, rect.Y+18+int32(medium.Height())+8)
 	}
 }

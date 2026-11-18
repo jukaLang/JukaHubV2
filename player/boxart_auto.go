@@ -13,18 +13,23 @@ package main
 //     (about twenty seconds in), on a card that has never had one — the first
 //     start fills the library with covers by itself (Juka, 2026-11-12: "auto
 //     scrape artwork on first start"). That pass does not wait for the user
-//     to step away, for an install to finish or for the clock to be set;
+//     to step away or for an install to finish; on a handheld it waits for a
+//     clock it can believe (boxArtClockTrusted: network time has set or
+//     confirmed it, for at most half an hour, and only where JukaHub sets the
+//     time), because the not-found cache and the stamp are dated;
 //   - a pass that is due when JukaHub starts (the daily one, or new games)
 //     does not wait for the user to step away either (emuStartWindow);
 //   - then at most once a day, which is also what asks again about a title the
-//     thumbnail set did not have a month ago (the not-found cache's window);
+//     thumbnail set did not have two weeks ago (the not-found cache's window);
 //   - and early when the ROM folders gained games: every half hour a cheap look
 //     at them (one directory listing per console folder, no walk of the card)
 //     is compared with the one the last pass saw.
 //
-// A pass scans the card once, keeps the games that have no cover and that the
-// thumbnail server has not already answered "not found" for, and hands them to
-// startLibraryArtworkFetch in batches. It waits for a moment that costs the user
+// A pass takes the card's games from the Games Library's last scan when the
+// ROM folders still look the same (romScanCached), else scans the card once,
+// keeps the games that have no cover and that the thumbnail server has not
+// already answered "not found" for, and hands them to startLibraryArtworkFetch
+// in batches. It waits for a moment that costs the user
 // nothing:
 //
 //   - the setting is on (Settings → Games & emulators → Find box art
@@ -56,8 +61,10 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -90,11 +97,14 @@ const (
 	// boxArtMinBattery is the charge (percent) under which a pass waits for the
 	// charger.
 	boxArtMinBattery = 20
-	// boxArtBatch is how many titles one fetch is given. The fetcher saves the
-	// not-found cache when a fetch ends, so a batch bounds what a power cut in
-	// the middle of a first pass over a big library can lose, and the moment is
-	// checked again between batches.
+	// boxArtBatch is how many titles one fetch is given; the moment is checked
+	// again between batches. (The fetcher saves the not-found cache every
+	// artworkMissSaveEvery titles and when a fetch ends, so a power cut loses
+	// little either way.)
 	boxArtBatch = 200
+	// romScanSharedMaxAge is how old the library's scan may be for a pass to
+	// use it instead of walking the card (romScanCached).
+	romScanSharedMaxAge = time.Hour
 	// boxArtBatchLimit stops a batch that is still running after this long.
 	// A healthy batch takes a few minutes; one this slow is a network that
 	// times out on every request, and it backs off like a network error.
@@ -103,6 +113,10 @@ const (
 	boxArtWatchEvery = 2 * time.Second
 	// boxArtRetryFirst is the wait after the first pass that hit network errors.
 	boxArtRetryFirst = 30 * time.Minute
+	// boxArtClockWaitMax caps a handheld's first-pass wait for network time
+	// (boxArtClockWaitOver): it retries after 1, 2, 5 and 10 minutes, so by
+	// then it has had five tries.
+	boxArtClockWaitMax = 30 * time.Minute
 	// boxArtStampFile is the pass stamp. It sits beside the covers and the
 	// not-found cache, so deleting data/game-art starts everything over.
 	boxArtStampFile = ".auto-art.json"
@@ -122,6 +136,122 @@ var boxArtNoStamp atomic.Bool
 // boxArtStarted makes the scheduler a single goroutine however often the start
 // hook runs, so two passes can never stack.
 var boxArtStarted atomic.Bool
+
+// boxArtClockBelieved latches once boxArtClockTrusted has believed the clock.
+var boxArtClockBelieved atomic.Bool
+
+// boxArtClockTrusted is game_daily.go's rule (dailyClockTrusted) for the
+// scheduler goroutine, but it only waits where waiting can end: a PC, or a
+// handheld where JukaHub does not set the time (network time off, or the
+// firmware owns the clock), is believed even before this build existed —
+// nothing here will ever set it, and waiting would mean no automatic covers
+// at all; where JukaHub keeps the time itself, never before this build
+// existed (the power-on default) and only once network time has confirmed or
+// set it (boxArtClockWaitOver caps that wait). It reads clockFloor itself
+// rather than trophyClockSane, whose lazy floor belongs to the render thread.
+func boxArtClockTrusted(now time.Time) bool {
+	if boxArtClockBelieved.Load() {
+		return true
+	}
+	if !netTime.enabled.Load() || !clockSetSupported() {
+		return true
+	}
+	if now.Before(clockFloor()) {
+		return false
+	}
+	trusted := false
+	if clockConfirmCount.Load() > 0 {
+		trusted = true
+	} else if clockJumps.count.Load() > 0 {
+		clockJumps.mu.Lock()
+		trusted = clockJumps.total.clock != 0
+		clockJumps.mu.Unlock()
+	}
+	if trusted {
+		boxArtClockBelieved.Store(true)
+	}
+	return trusted
+}
+
+// boxArtProcessStart anchors boxArtClockWaitOver on the monotonic clock: the
+// wall clock is the thing being waited for.
+var boxArtProcessStart = time.Now()
+
+// boxArtClockWaitBegan is when the wait for network time began (time since
+// boxArtProcessStart, +1 so 0 means "not yet"); boxArtClockWaitLogged says
+// the give-up was logged.
+var (
+	boxArtClockWaitBegan  atomic.Int64
+	boxArtClockWaitLogged atomic.Bool
+)
+
+// boxArtClockWaitOver reports that the first pass has waited
+// boxArtClockWaitMax for network time, counted from the first look while
+// online. A clock still not set by then has no time server it can reach
+// (network time has tried five times); the pass runs, since its dated
+// not-found answers and stamp only expire early on a clock that is off.
+func boxArtClockWaitOver(online bool) bool {
+	since := time.Since(boxArtProcessStart)
+	began := boxArtClockWaitBegan.Load()
+	if began == 0 {
+		if online {
+			boxArtClockWaitBegan.CompareAndSwap(0, int64(since)+1)
+		}
+		return false
+	}
+	if since-time.Duration(began-1) < boxArtClockWaitMax {
+		return false
+	}
+	if boxArtClockWaitLogged.CompareAndSwap(false, true) {
+		logInfo("art", "automatic box art: network time has not set the clock in %s; the first pass runs anyway", boxArtClockWaitMax)
+	}
+	return true
+}
+
+// ── The library's scan, shared ────────────────────────────────────────────
+
+// romScanShared is the last walk of the ROM folders the Games Library (or a
+// pass) made, so a pass soon after uses it instead of walking the card again
+// (LIB-19). It is used only for the same roots, while the folders' signature
+// taken before that walk (boxArtLibrarySignature) still matches, and for
+// romScanSharedMaxAge. Any goroutine; the games are never changed once kept.
+var romScanShared struct {
+	sync.Mutex
+	roots     []string
+	signature string
+	at        time.Time
+	games     []scannedROM
+}
+
+// romScanPublish keeps a copy of a finished walk. signature is the folders'
+// signature taken before it; "" (not taken) is never reused.
+func romScanPublish(roots []string, signature string, games []scannedROM) {
+	if signature == "" {
+		return
+	}
+	kept := append([]scannedROM(nil), games...)
+	romScanShared.Lock()
+	romScanShared.roots = append([]string(nil), roots...)
+	romScanShared.signature = signature
+	romScanShared.at = time.Now()
+	romScanShared.games = kept
+	romScanShared.Unlock()
+}
+
+// romScanCached is the shared walk when it still describes the folders. The
+// slice is shared: callers only read it.
+func romScanCached(roots []string, signature string, now time.Time) ([]scannedROM, bool) {
+	romScanShared.Lock()
+	defer romScanShared.Unlock()
+	if signature == "" || romScanShared.signature != signature || romScanShared.at.IsZero() ||
+		!slices.Equal(romScanShared.roots, roots) {
+		return nil, false
+	}
+	if age := now.Sub(romScanShared.at); age < 0 || age > romScanSharedMaxAge {
+		return nil, false
+	}
+	return romScanShared.games, true
+}
 
 // ── The setting ───────────────────────────────────────────────────────────
 
@@ -231,38 +361,41 @@ func boxArtPassDue(stamp boxArtStamp, have bool, library string, now time.Time) 
 // boxArtConditions is everything the scheduler asks before a pass or a batch,
 // read in one place so the policy below is a pure function.
 type boxArtConditions struct {
-	Enabled    bool          // the Settings switch
-	Network    bool          // safe mode allows background network work
-	Online     bool          // the network monitor's last answer
-	ClockSet   bool          // the clock is past minSaneClock
-	InGame     bool          // a game or emulator owns the screen
-	Fetching   bool          // an artwork fetch is running
-	Installing bool          // the install bar shows a working install
-	Handheld   bool          // battery rules apply even when the level is unknown
-	Battery    int           // percent, -1 when unknown
-	Charging   bool          // on external power
-	Idle       time.Duration // since the last button, key or touch
-	FirstPass  bool          // the card has never finished a pass
-	OnStart    bool          // JukaHub started a few minutes ago (emuStartWindow)
+	Enabled      bool          // the Settings switch
+	Network      bool          // safe mode allows background network work
+	Online       bool          // the network monitor's last answer
+	ClockSet     bool          // the clock is past minSaneClock
+	ClockTrusted bool          // boxArtClockTrusted, or boxArtClockWaitOver gave up waiting
+	InGame       bool          // a game or emulator owns the screen
+	Fetching     bool          // an artwork fetch is running
+	Installing   bool          // the install bar shows a working install
+	Handheld     bool          // battery rules apply even when the level is unknown
+	Battery      int           // percent, -1 when unknown
+	Charging     bool          // on external power
+	Idle         time.Duration // since the last button, key or touch
+	FirstPass    bool          // the card has never finished a pass
+	OnStart      bool          // JukaHub started a few minutes ago (emuStartWindow)
 }
 
 // boxArtConditionsAt reads the live conditions. Every source is safe to read
 // off the main thread.
 func boxArtConditionsAt(now time.Time) boxArtConditions {
+	online := IsOnline()
 	return boxArtConditions{
-		Enabled:    !boxArtAutoOff.Load(),
-		Network:    safeModeAllows(SafeFeatureNetwork),
-		Online:     IsOnline(),
-		ClockSet:   !now.Before(minSaneClock),
-		InGame:     gameScreenSuspended(),
-		Fetching:   artworkFetchRunning(),
-		Installing: installBarActive(),
-		Handheld:   P().IsHandheld(),
-		Battery:    getBatteryPercent(),
-		Charging:   getBatteryCharging(),
-		Idle:       userInputAge(now),
-		FirstPass:  boxArtNoStamp.Load(),
-		OnStart:    emuWaitBeganOnStart(0),
+		Enabled:      !boxArtAutoOff.Load(),
+		Network:      safeModeAllows(SafeFeatureNetwork),
+		Online:       online,
+		ClockSet:     !now.Before(minSaneClock),
+		ClockTrusted: boxArtClockTrusted(now) || boxArtClockWaitOver(online),
+		InGame:       gameScreenSuspended(),
+		Fetching:     artworkFetchRunning(),
+		Installing:   installBarActive(),
+		Handheld:     P().IsHandheld(),
+		Battery:      getBatteryPercent(),
+		Charging:     getBatteryCharging(),
+		Idle:         userInputAge(now),
+		FirstPass:    boxArtNoStamp.Load(),
+		OnStart:      emuWaitBeganOnStart(0),
 	}
 }
 
@@ -271,10 +404,13 @@ func boxArtConditionsAt(now time.Time) boxArtConditions {
 // count (switched off, offline, a game, a battery running low), because the
 // pass already waited for its moment and the fetch slot is its own.
 //
-// A card's first pass does not wait for a set clock (the not-found cache dates
-// its entries; one dated 1970 only means that title is asked again once), for
-// an install (a first boot's helper download can take minutes), or for the user
-// to step away; a pass due on start does not wait for the user either.
+// A card's first pass does not wait for an install (a first boot's helper
+// download can take minutes) or for the user to step away; a pass due on start
+// does not wait for the user either. On a handheld the first pass does wait
+// for a clock it can believe (LIB-19): its not-found answers and its stamp are
+// dated, and a handheld starts at its power-on default until network time
+// sets it — at most boxArtClockWaitMax, and not at all where nothing will set
+// it. A desktop's clock is the system's and needs no wait.
 func boxArtMomentOK(c boxArtConditions, starting bool) (bool, string) {
 	switch {
 	case !c.Enabled:
@@ -285,6 +421,8 @@ func boxArtMomentOK(c boxArtConditions, starting bool) (bool, string) {
 		return false, "offline"
 	case !c.ClockSet && !c.FirstPass:
 		return false, "the clock is not set yet"
+	case c.FirstPass && c.Handheld && !c.ClockTrusted:
+		return false, "waiting for network time to set the clock"
 	case c.InGame:
 		return false, "a game has the screen"
 	case starting && c.Fetching:
@@ -374,7 +512,8 @@ func boxArtLibrarySignature(roots []string) string {
 			if !systemDir.IsDir() || skipScanEntryName(name) {
 				continue
 			}
-			if _, known := romSystemAliases[strings.ToLower(name)]; !known {
+			system, known := romSystemAliases[strings.ToLower(name)]
+			if !known {
 				continue
 			}
 			games, err := os.ReadDir(filepath.Join(root, name))
@@ -399,7 +538,9 @@ func boxArtLibrarySignature(roots []string) string {
 					add("folder", gameName, stamp)
 					continue
 				}
-				if romFileExtensions[strings.ToLower(filepath.Ext(gameName))] {
+				// A Splore favourite copied in is a .p8.png, a game only in a
+				// PICO-8 folder (pico8CartInFolder); it must still count.
+				if romFileExtensions[strings.ToLower(filepath.Ext(gameName))] || pico8CartInFolder(system.Name, gameName) {
 					add("game", gameName)
 				}
 			}
@@ -411,8 +552,7 @@ func boxArtLibrarySignature(roots []string) string {
 // boxArtMissKey is the key the fetcher files a ROM's "not found" under
 // (fetchROMArtworkTracked): its collection and its file stem.
 func boxArtMissKey(rom scannedROM) string {
-	stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
-	return artworkMissKey(rom.Collection, stem)
+	return artworkMissKey(rom.Collection, artworkLookupName(romGameStem(rom.Path)))
 }
 
 // boxArtTitlesToTry drops the games the thumbnail server answered "not found"
@@ -621,13 +761,23 @@ func (s *boxArtScheduler) pass(why string) {
 	// runs make the next look see a change.
 	library := boxArtLibrarySignature(roots)
 	s.library, s.lookedAt = library, started
-	report := scanROMLibrary(roots)
+	// The Games Library's last scan, when the folders still look the way they
+	// did before it; else one walk of the card, kept for the next pass.
+	games, reused := romScanCached(roots, library, started)
+	if !reused {
+		games = scanROMLibrary(roots).Games
+		romScanPublish(roots, library, games)
+	}
 	// Every console in turns (artworkFetchOrder): a pass cut short by a game
 	// must not have spent itself on the first console in path order.
-	todo := artworkFetchOrder(boxArtTitlesToTry(romsMissingArtwork(report.Games, dest), loadArtworkMisses(dest), started), "")
-	logInfo("art", "automatic box art (%s): %d game(s) on the card, %d to look up", why, len(report.Games), len(todo))
+	todo := artworkFetchOrder(boxArtTitlesToTry(romsMissingArtwork(games, dest), loadArtworkMisses(dest), started), "")
+	scan := "scanned the card"
+	if reused {
+		scan = "the library's scan"
+	}
+	logInfo("art", "automatic box art (%s): %d game(s) on the card (%s), %d to look up", why, len(games), scan, len(todo))
 	if len(todo) == 0 {
-		s.finish(library, len(report.Games), 0)
+		s.finish(library, len(games), 0)
 		return
 	}
 	if (!s.haveStamp || s.stamp.LastPass.IsZero()) && !s.toldFirst {
@@ -642,7 +792,7 @@ func (s *boxArtScheduler) pass(why string) {
 		run.found, run.notFound, run.unanswered, boxArtStopWords(run.stop))
 	switch {
 	case run.stop == boxArtRanAll && run.unanswered == 0:
-		s.finish(library, len(report.Games), run.found)
+		s.finish(library, len(games), run.found)
 	case run.stop == boxArtRanAll || run.stop == boxArtStopSlow:
 		// Every batch ran but some titles got no answer: network or server
 		// errors. Their covers are still missing and they are not in the

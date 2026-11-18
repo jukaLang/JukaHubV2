@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"math"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -176,10 +178,11 @@ func qsInit() {
 			// Frees memory when Juka's offline AI needs it (closeall.go).
 			{Label: "Close all apps & games", Icon: "[X]", Action: qsLinkCloseAll},
 		},
-		// The app's idle timer drives the screensaver overlay, not a display
-		// blank, so the row says what it actually controls.
+		// The app's idle timer brings up the lock screen (the clock dock or
+		// the starfield), not a display blank; Settings → Display calls it
+		// "Lock screen after" too.
 		cycles: []qsCycle{
-			{Label: "Screensaver", Icon: "[T]", Value: 25},
+			{Label: "Lock screen", Icon: "[T]", Value: 25},
 			{Label: "Power Mode", Icon: "[P]", Value: qsPowerModeRowIndex()},
 			{Label: "Spatial audio", Icon: "[S]", Value: qsSpatialModeRowIndex(appConfig)},
 			{Label: "LED Mode", Icon: "[R]", Value: ledPolicyIndex(ledPolicyFromConfig(nil))},
@@ -192,6 +195,12 @@ func qsInit() {
 		lastBrightness: -1,
 	}
 	qs.links = qsWithBluetoothLink(qs.links)
+	// Power off after sleeping, one press away (quickresume.go): A turns it
+	// off or back on at the last delay, Left/Right step it. Only where the
+	// RTC can wake the handheld; last, so the rows above keep their indices.
+	if sleepPowerOffQuickAvailable() {
+		qs.cycles = append(qs.cycles, qsCycle{Label: "Auto power off", Icon: "[Z]"})
+	}
 	qsRefreshAvailability()
 	qsLoadPersisted()
 	// The saved brightness waits for the brightness controller to know its
@@ -405,6 +414,8 @@ const (
 	qsCycleRowSpatialMode = 2
 	qsCycleRowLED         = 3
 	qsCycleRowXPack       = 4
+	// qsCycleRowAutoOff exists only where sleepPowerOffQuickAvailable.
+	qsCycleRowAutoOff = 5
 )
 
 // qsSyncFromConfig refreshes the rows whose truth lives in the config, then
@@ -560,18 +571,25 @@ func qsDrainProbe() {
 }
 
 func qsApplyProbe(r qsProbe) {
-	if r.wifiOK {
+	// A switch whose command is still running keeps what the press showed:
+	// this reading may predate the change (qsRadioBusy). Airplane Mode moves
+	// all three radios.
+	airBusy := qsRadioBusy[qsRadioAirplane] > 0
+	wifiBusy := airBusy || qsRadioBusy[qsRadioWifi] > 0
+	if r.wifiOK && !wifiBusy {
 		qs.toggles[0].Value = r.wifi
 	}
-	if r.bluetoothOK {
+	if r.bluetoothOK && !airBusy {
 		qs.toggles[1].Value = r.bluetooth
 	}
-	if r.airplaneOK {
+	if r.airplaneOK && !airBusy {
 		qs.toggles[2].Value = r.airplane
 		if r.airplane {
 			// Whatever the individual daemons think, nothing is transmitting while
 			// every radio is blocked.
-			qs.toggles[0].Value = false
+			if !wifiBusy {
+				qs.toggles[0].Value = false
+			}
 			qs.toggles[1].Value = false
 		}
 	}
@@ -638,6 +656,15 @@ func qsSelect() {
 		return
 	}
 	idx -= len(qs.links)
+	if idx == qsCycleRowAutoOff && idx < len(qs.cycles) {
+		// A is the on/off switch here; Left/Right pick the delay.
+		if appConfig != nil {
+			d := sleepPowerOffToggle(appConfig)
+			ShowToast("Power off after sleeping: "+sleepPowerOffLabel(d), ToastKindInfo)
+		}
+		PlayNavSound()
+		return
+	}
 	qsStepCycle(idx, 1)
 }
 
@@ -736,22 +763,87 @@ func qsToggleRow(i int) {
 	}
 }
 
+// qsRadioMu runs the Wi-Fi and Airplane switches' background commands one at
+// a time. A mutex does not queue its waiters in order, so each press also
+// takes a number (qsRadioSeq): a command whose press is no longer the newest
+// is skipped, and a quick on-off-on always finishes as the last press.
+var qsRadioMu sync.Mutex
+
+const (
+	qsRadioWifi = iota
+	qsRadioAirplane
+)
+
+// qsRadioSeq is the newest press per switch (qsRadioWifi, qsRadioAirplane).
+var qsRadioSeq [2]atomic.Uint64
+
+// qsRadioBusy counts each switch's commands still running. Main thread only:
+// a probe that lands meanwhile read the radio before the change and leaves
+// that switch alone (qsApplyProbe); the probe each command ends with does not.
+var qsRadioBusy [2]int
+
+// qsAirplaneSnap is what the radios were before Airplane Mode blocked them,
+// for unblocking to put back. Guarded by qsRadioMu: the background commands
+// read and write it, so a fast on-off sees the snapshot the "on" just took.
+var qsAirplaneSnap struct {
+	savedWifi, wifiWasOn bool
+	savedBT, btWasOn     bool
+}
+
+// qsSetToggleValue puts a switch back where a failed background change left
+// the radio. Main thread only (called from a tbxPost closure).
+func qsSetToggleValue(action qsAction, value bool) {
+	for i := range qs.toggles {
+		if qs.toggles[i].Action == action {
+			qs.toggles[i].Value = value
+		}
+	}
+}
+
 // qsApplyToggle performs the change behind one switch.
 func qsApplyToggle(t *qsToggle, want bool) error {
 	switch t.Action {
 	case qsActionWifi:
-		if err := setWifiEnabled(want); err != nil {
-			return err
-		}
-		if want {
-			// Saved networks reconnect by themselves again (wifi_keeper.go).
-			wifiKeeperRadioOn()
-		}
+		// nmcli/rfkill take up to seconds: they run off the render thread, as
+		// Bluetooth does below. The switch shows the new state meanwhile; a
+		// failure is a toast and puts it back, and the probe shows the truth.
+		label := t.Label
+		seq := qsRadioSeq[qsRadioWifi].Add(1)
+		qsRadioBusy[qsRadioWifi]++
+		go func() {
+			qsRadioMu.Lock()
+			var err error
+			ran := seq == qsRadioSeq[qsRadioWifi].Load()
+			if ran {
+				err = setWifiEnabled(want)
+			}
+			qsRadioMu.Unlock()
+			tbxPost(func() {
+				qsRadioBusy[qsRadioWifi]--
+				if !ran {
+					// A newer press ran instead and reports; read the radio
+					// again in case its probe landed while this was counted.
+					qsStartProbe()
+					return
+				}
+				if err != nil {
+					ShowToast(label+": "+firstLine(err.Error()), ToastKindWarning)
+					if seq == qsRadioSeq[qsRadioWifi].Load() {
+						qsSetToggleValue(qsActionWifi, !want)
+					}
+				} else if want && seq == qsRadioSeq[qsRadioWifi].Load() {
+					// Saved networks reconnect by themselves again (wifi_keeper.go)
+					// — unless an "off" pressed since is about to follow.
+					wifiKeeperRadioOn()
+				}
+				qsNoteEdit()
+				qsStartProbe()
+				// Home's Wi-Fi tile and the idle screens read the radio again now,
+				// not at their next eight-second refresh (home_quicktiles.go).
+				saverWifiInvalidate()
+			})
+		}()
 		qsNoteEdit()
-		qsStartProbe()
-		// Home's Wi-Fi tile and the idle screens read the radio again now,
-		// not at their next eight-second refresh (home_quicktiles.go).
-		saverWifiInvalidate()
 		return nil
 	case qsActionBluetooth:
 		if want {
@@ -785,32 +877,60 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		qsNoteEdit()
 		return nil
 	case qsActionAirplane:
-		if want {
-			// Snapshot the radios before blocking so unblocking can restore them.
-			if on, ok := wifiEnabled(); ok {
-				qs.airplaneWifiWasOn, qs.airplaneSavedWifi = on, true
+		// rfkill, bluetoothctl and nmcli run off the render thread (several
+		// seconds in all); the panel's own fields are only written back on it.
+		label := t.Label
+		seq := qsRadioSeq[qsRadioAirplane].Add(1)
+		qsRadioBusy[qsRadioAirplane]++
+		go func() {
+			qsRadioMu.Lock()
+			var err error
+			ran := seq == qsRadioSeq[qsRadioAirplane].Load()
+			if ran && want {
+				// Snapshot the radios before blocking so unblocking can restore
+				// them — unless every radio is blocked already (an "on" after
+				// a skipped "off"), when the snapshot would read them all off.
+				if on, ok := airplaneEnabled(); !ok || !on {
+					qsAirplaneSnap.wifiWasOn, qsAirplaneSnap.savedWifi = wifiEnabled()
+					qsAirplaneSnap.btWasOn, qsAirplaneSnap.savedBT = bluetoothEnabled()
+				}
+				err = setAirplaneMode(true)
+			} else if ran {
+				if err = setAirplaneMode(false); err == nil {
+					// rfkill unblocks everything; put back what the user had off.
+					if qsAirplaneSnap.savedWifi && !qsAirplaneSnap.wifiWasOn {
+						_ = setWifiEnabled(false)
+					}
+					if qsAirplaneSnap.savedBT && !qsAirplaneSnap.btWasOn {
+						_ = setBluetoothEnabled(false)
+					}
+					qsAirplaneSnap.savedWifi, qsAirplaneSnap.savedBT = false, false
+				}
 			}
-			if on, ok := bluetoothEnabled(); ok {
-				qs.airplaneBTWasOn, qs.airplaneSavedBT = on, true
-			}
-			if err := setAirplaneMode(true); err != nil {
-				return err
-			}
-		} else {
-			if err := setAirplaneMode(false); err != nil {
-				return err
-			}
-			// rfkill unblocks everything; put back what the user had off.
-			if qs.airplaneSavedWifi && !qs.airplaneWifiWasOn {
-				_ = setWifiEnabled(false)
-			}
-			if qs.airplaneSavedBT && !qs.airplaneBTWasOn {
-				_ = setBluetoothEnabled(false)
-			}
-			qs.airplaneSavedWifi, qs.airplaneSavedBT = false, false
-		}
+			snap := qsAirplaneSnap
+			qsRadioMu.Unlock()
+			tbxPost(func() {
+				qsRadioBusy[qsRadioAirplane]--
+				if !ran {
+					// A newer press ran instead and reports; read the radio
+					// again in case its probe landed while this was counted.
+					qsStartProbe()
+					return
+				}
+				// The panel's copy of the snapshot, for display and diagnostics.
+				qs.airplaneSavedWifi, qs.airplaneWifiWasOn = snap.savedWifi, snap.wifiWasOn
+				qs.airplaneSavedBT, qs.airplaneBTWasOn = snap.savedBT, snap.btWasOn
+				if err != nil {
+					ShowToast(label+": "+firstLine(err.Error()), ToastKindWarning)
+					if seq == qsRadioSeq[qsRadioAirplane].Load() {
+						qsSetToggleValue(qsActionAirplane, !want)
+					}
+				}
+				qsNoteEdit()
+				qsStartProbe()
+			})
+		}()
 		qsNoteEdit()
-		qsStartProbe()
 		return nil
 	case qsActionLedSync:
 		if err := SetLEDSync(want); err != nil {
@@ -972,6 +1092,15 @@ func qsStepCycle(row, dir int) {
 		return
 	}
 	switch row {
+	case qsCycleRowAutoOff:
+		// The next or previous delay, saved at once (quickresume.go).
+		if appConfig != nil {
+			d := sleepPowerOffStep(sleepPowerOffDelay(appConfig), dir)
+			sleepPowerOffSet(appConfig, d)
+			ShowToast("Power off after sleeping: "+sleepPowerOffLabel(d), ToastKindInfo)
+		}
+		PlayNavSound()
+		return
 	case qsCycleRowXPack:
 		// Each step applies the next experience pack at once; it saves itself,
 		// and the gallery's Undo puts the previous setup back (xpack.go).
@@ -1430,6 +1559,13 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 		settings := spatialSettingsFor(config)
 		value = spatialModeValue(config)
 		if settings.Mode != "off" {
+			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
+		}
+	}
+	if row == qsCycleRowAutoOff {
+		d := sleepPowerOffDelay(config)
+		value = sleepPowerOffLabel(d)
+		if d > 0 {
 			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
 		}
 	}

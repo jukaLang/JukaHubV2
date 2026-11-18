@@ -277,3 +277,133 @@ func TestSteamGamesLoginRedirect(t *testing.T) {
 		t.Fatal("ordinary profile redirect was mistaken for a login")
 	}
 }
+
+func TestSteamShortcutsBinaryVDF(t *testing.T) {
+	var b []byte
+	open := func(key string) { b = append(append(append(b, 0x00), key...), 0) }
+	str := func(key, value string) { b = append(append(append(append(append(b, 0x01), key...), 0), value...), 0) }
+	i32 := func(key string, v uint32) {
+		b = append(append(append(b, 0x02), key...), 0, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	}
+	end := func() { b = append(b, 0x08) }
+	open("shortcuts")
+	open("0")
+	i32("appid", 0xDEADBEEF)
+	str("AppName", "RetroArch")
+	str("Exe", `"C:\emu\retroarch.exe"`)
+	i32("IsHidden", 0)
+	i32("LastPlayTime", 1700000000)
+	open("tags")
+	str("0", "Emulators")
+	end()
+	end()
+	open("1")
+	str("appname", "Hidden tool")
+	i32("IsHidden", 1)
+	end()
+	open("2") // no appid: Steam's legacy CRC id
+	str("AppName", "Legacy")
+	str("exe", `"C:\legacy.exe"`)
+	end()
+	end()
+	end()
+
+	list := parseBinaryVDF(b).child("shortcuts")
+	if list == nil || len(list.Order) != 3 {
+		t.Fatalf("shortcuts = %+v", list)
+	}
+	if first := list.child("0"); first.get("appname") != "RetroArch" || first.get("appid") != "-559038737" ||
+		first.child("tags").get("0") != "Emulators" {
+		t.Fatalf("first shortcut = %+v", first)
+	}
+	for n := 0; n < len(b); n++ {
+		_ = parseBinaryVDF(b[:n]) // a truncated file must not panic
+	}
+	if got := parseBinaryVDF([]byte{0x00, 's', 0, 0x09, 'x', 0}).child("s"); got == nil {
+		t.Error("an unknown type dropped what came before it")
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "userdata", "12345", "config")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "shortcuts.vdf"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var raw, legacy uint32 = 0xDEADBEEF, 3327944782
+	games := steamShortcutGames(root, "")
+	if len(games) != 2 || games[0].AppID != int(raw) || games[0].Name != "RetroArch" || !games[0].Installed ||
+		games[0].LastPlayed != 1700000000 || games[1].AppID != int(legacy) {
+		t.Fatalf("shortcut games = %+v", games)
+	}
+	if !steamIsShortcut(int(raw)) || steamIsShortcut(620) || steamIsShortcut(1<<31-1) {
+		t.Error("steamIsShortcut misreads the id range")
+	}
+	for _, action := range []steamAction{steamActRun, steamActInstall} {
+		if got := steamRunURI(int(raw), action); got != "steam://rungameid/16045690981130960896" {
+			t.Errorf("shortcut %s URI = %q", action, got)
+		}
+	}
+	if err := steamLaunchLocal(int(raw), steamActInstall); err == nil {
+		t.Error("installing a non-Steam game was not refused")
+	}
+}
+
+// TestSteamPortMatchAndDeckRating covers two kinds of outside data: the
+// shop links of PortMaster's catalogue (which Steam app a port is for) and
+// the store's Deck compatibility answer.
+func TestSteamPortMatchAndDeckRating(t *testing.T) {
+	raw := []byte(`{"ports": {
+		"stardewvalley.zip": {"name": "stardewvalley.zip", "items": ["Stardew Valley.sh", "stardewvalley/"],
+			"attr": {"title": "Stardew Valley", "rtr": false,
+				"store": [{"name": "Steam", "gameurl": "https://store.steampowered.com/app/413150/Stardew_Valley/"},
+					{"name": "GOG", "gameurl": "https://www.gog.com/game/stardew_valley"}]}},
+		"doom.zip": {"name": "doom.zip", "attr": {"title": "Doom (GZDoom)", "store": ["https://store.steampowered.com/app/2280"]}},
+		"celeste.zip": {"name": "celeste.zip", "attr": {"title": "Celeste", "store": []}},
+		"freegame.zip": {"name": "freegame.zip", "attr": {"title": "The Free Game™", "rtr": true}}
+	}}`)
+	entries := mcParsePortsCatalog(raw)
+	if len(entries) != 4 {
+		t.Fatalf("parsed %d entries", len(entries))
+	}
+	idx := steamBuildPortIndex(entries)
+	all := func(mcCatalogEntry) bool { return true }
+	cases := []struct {
+		appid   int
+		name    string
+		zip     string
+		byStore bool
+	}{
+		{413150, "Stardew Valley", "stardewvalley.zip", true},
+		{2280, "DOOM (1993)", "doom.zip", true},
+		{379720, "DOOM", "", false}, // the port names another Steam app: no match by title
+		{504230, "Celeste", "celeste.zip", false},
+		{1, "Free Game", "freegame.zip", false},
+		{2, "Free Game Deluxe", "", false},
+	}
+	for _, c := range cases {
+		e, byStore, ok := idx.find(c.appid, c.name, all)
+		if ok != (c.zip != "") || (ok && (e.Zip != c.zip || byStore != c.byStore)) {
+			t.Errorf("find(%d, %q) = %q, %v, %v", c.appid, c.name, e.Zip, byStore, ok)
+		}
+	}
+	if got := steamPortNorm("The Binding of Isaac: Rebirth (Steam) "); got != "bindingofisaacrebirth" {
+		t.Errorf("norm = %q", got)
+	}
+
+	for body, want := range map[string]uint8{
+		`{"success":1,"results":{"appid":413150,"resolved_category":3,"resolved_items":[]}}`: steamDeckVerified,
+		`{"success":1,"results":{"resolved_category":2}}`:                                    steamDeckPlayable,
+		`{"success":1,"results":[]}`:                                                         steamDeckUnknown,
+		`{"success":1,"results":{"resolved_category":9}}`:                                    steamDeckUnknown,
+	} {
+		got, err := steamParseDeckRating([]byte(body))
+		if err != nil || got != want {
+			t.Errorf("deck rating of %s = %d, %v", body, got, err)
+		}
+	}
+	if _, err := steamParseDeckRating([]byte("<html>")); err == nil {
+		t.Error("an HTML answer was read as a rating")
+	}
+}

@@ -36,7 +36,12 @@ const setShowAllKey = "settingsShowAll"
 func setEssentialRows() map[string][]string {
 	m := map[string][]string{}
 	m["general"] = []string{"name", "uiLanguage", groqKeyRowID, "weather", "timezone", "clock12"}
-	m["display"] = []string{"themes", "glassStyle", "homeLayout", "wallpaper", "brightness", "textSize"}
+	// The screen page shows everything the owner asked for up front
+	// (displaysettings.go); only the picture's reset, colour temperature, the
+	// lights' door and the text extras fold.
+	m[displaySettingsSection] = []string{"brightness", "screensaver", "display_contrast", "display_saturation",
+		"display_exposure", "displayLedMissing", "displayLed", "displayLedBrightness", "uiFont", "textSize"}
+	m["display"] = []string{"themes", "glassStyle", "homeLayout", "wallpaper", "livebg", "motion"}
 	m[a11ySettingsSection] = []string{"textSize", "contrast", "boldText", "magnifier", "monoAudio", "colorblind", "oneHanded"}
 	m["sound"] = []string{"volume", "uiSounds", "bgMusic", "vibration", "audio"}
 	m["network"] = []string{"wifi", "bluetooth", "btdevices", "airplane", "companion"}
@@ -45,7 +50,7 @@ func setEssentialRows() map[string][]string {
 	m[ledSettingsSection] = []string{"lightsMissing", "ledsync", "ledMode", "ledColor", "ledBrightness"}
 	m["media"] = []string{"resolution", "subtitles", "downloads", "notifyDuringVideo"}
 	m["games"] = []string{"swapAB", "swapXY", "osd", "emulators", "library", "saves"}
-	m["power"] = []string{"powerMode", "batteryNow", "screensaver", "batterySaver", "lowPower"}
+	m["power"] = []string{"powerMode", "batteryNow", "idleScreen", "autoSleep", "batterySaver", "lowPower"}
 	m[brwSettingsSection] = []string{"searchEngine", "homePage", "blockAds"}
 	m["privacy"] = []string{"cookies", "forgetCookies", "diagnostics", "clearCache"}
 	m["about"] = []string{"device", "updates", "updatesCheck", "aboutPage", "bug", setShowAllKey}

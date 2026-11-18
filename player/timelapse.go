@@ -6,8 +6,9 @@ package main
 // owns the framebuffer and JukaHub is only waiting for the process to exit, so a
 // playthrough time-lapse cannot be recorded from our renderer. It is recorded
 // from the device framebuffer instead: every interval a short ffmpeg grab reads
-// /dev/fb0 into one PNG, and when the game exits the bundled ffmpeg assembles
-// those stills into a short mp4 next to the data folder.
+// /dev/fb0 into one JPEG, and when the game exits ffmpeg assembles those stills
+// into a short MP4 next to the data folder. The stock Smart Pro's ffmpeg has
+// MJPEG and MPEG-4 encoders, but no PNG or libx264 encoder.
 //
 // Nothing here talks to the emulator, so any child that draws to the panel is
 // recorded, standalone emulators included. Where the framebuffer cannot be read
@@ -196,6 +197,7 @@ func defaultTimelapseCapture(config *Config, framePath string) (string, []string
 		"-f", "fbdev", "-i", timelapseFBDevice,
 		"-frames:v", "1",
 		"-vf", fmt.Sprintf("scale=%d:-2", timelapseFrameWidth),
+		"-c:v", "mjpeg", "-q:v", "3",
 		"-y", framePath,
 	}, nil
 }
@@ -317,9 +319,9 @@ func startTimelapseWith(config *Config, title string, settings timelapseSettings
 	if !settings.enabled {
 		return nil
 	}
-	// Probe the capture once. A machine without a readable framebuffer must not
-	// start a ticker that fails every twenty seconds for the whole session.
-	if _, _, err := timelapseCapture(config, filepath.Join(os.TempDir(), "timelapse-probe.png")); err != nil {
+	// Check capture prerequisites once. A machine without a readable framebuffer
+	// must not start a ticker that fails throughout the whole session.
+	if _, _, err := timelapseCapture(config, filepath.Join(os.TempDir(), "timelapse-probe.jpg")); err != nil {
 		logWarn("timelapse", "not recording: %v", err)
 		return nil
 	}
@@ -367,7 +369,7 @@ func (r *timelapseRecorder) run(config *Config) {
 // capture grabs one frame. A failed grab is logged once and then ignored: the
 // game keeps running and the rest of the session may still be captured.
 func (r *timelapseRecorder) capture(config *Config) {
-	name := fmt.Sprintf("frame_%04d.png", len(r.frames))
+	name := fmt.Sprintf("frame_%04d.jpg", len(r.frames))
 	path := filepath.Join(r.dir, name)
 	prog, args, err := r.deps.capture(config, path)
 	if err != nil {
@@ -451,10 +453,8 @@ func assembleTimelapseWith(deps timelapseDeps, config *Config, dir, title string
 	args := []string{
 		"-loglevel", "error",
 		"-framerate", strconv.Itoa(timelapseOutputFPS),
-		"-i", filepath.Join(dir, "frame_%04d.png"),
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-crf", "23",
+		"-i", filepath.Join(dir, "frame_%04d.jpg"),
+		"-c:v", "mpeg4", "-q:v", "3",
 		"-pix_fmt", "yuv420p",
 		"-movflags", "+faststart",
 		"-y", out,

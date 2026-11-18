@@ -33,8 +33,14 @@ package main
 // started for another reason) never blocks a stream on a guess. Only answers
 // that settle the question are kept, per helper file (path, size, modification
 // time), for the life of the process; a "cannot tell" is asked again next time.
-// The panel warms the answer up off the main thread as it opens
-// (psWarmStreamPreflight), so Play does not wait for the probe.
+//
+// Nothing here runs on the event thread. The panel warms the answer up as it
+// opens (psWarmStreamPreflight), Play asks again off the event thread while the
+// console's row says the stream is starting (psStreamGetReady in
+// psremote_start.go) and joins a warm-up that is still running instead of
+// starting the helper twice, and psRemoteStream, on the event thread right
+// before the hand-off, only reads the answer those found
+// (psStreamHelperProblem): Play never waits for the probe.
 
 import (
 	"context"
@@ -92,31 +98,67 @@ var (
 
 // psPreflight serialises the checks, so a second caller (the panel's warm-up
 // and a Play press, say) waits for the first answer instead of starting the
-// helper again, and remembers the settled answers per helper file.
+// helper again, and remembers the answers per helper file: the settled ones
+// for good, the newest "cannot tell" until it is asked again.
 var psPreflight struct {
 	run     sync.Mutex
 	mu      sync.Mutex
-	answers map[string]string
+	answers map[string]psPreflightAnswer
+}
+
+// psPreflightAnswer is one check's answer. Only a settled one spares the next
+// check its probe; psStreamHelperProblem reads either kind.
+type psPreflightAnswer struct {
+	text    string
+	settled bool
 }
 
 // psStreamHelperProblem says why chiaki-stream cannot start on this device
-// ("" when it can, or when that cannot be told). psRemoteStream asks it before
-// JukaHub quits for the hand-off.
+// ("" when it can, or when that cannot be told), from the answer the last
+// check of the helper as it is now found. It never starts the helper and never
+// waits for a check that is running, so psRemoteStream asks it on the event
+// thread before JukaHub quits for the hand-off: Play asked
+// psStreamHelperCheckWait first, off the event thread (psStreamGetReady). A
+// helper no check has seen (replaced in between) passes, as a "cannot tell"
+// does: the hand-off's log still says what happened.
 func psStreamHelperProblem(engine psEngine) string {
+	path := strings.TrimSpace(engine.Stream)
+	if path == "" || runtime.GOOS != "linux" {
+		return ""
+	}
+	key, ok := psPreflightKey(path, psStreamHelperLibraryPath(engine))
+	if !ok {
+		return ""
+	}
+	psPreflight.mu.Lock()
+	answer := psPreflight.answers[key]
+	psPreflight.mu.Unlock()
+	return psStreamHelperProblemText(answer.text)
+}
+
+// psStreamHelperCheckWait is psStreamHelperProblem that asks when no settled
+// answer is kept: it starts the helper once, or waits for the check another
+// goroutine is running. Never on the event thread.
+func psStreamHelperCheckWait(engine psEngine) string {
 	path := strings.TrimSpace(engine.Stream)
 	if path == "" {
 		return ""
 	}
-	problem := psNativeHelperProblem(path, psStreamHelperLibraryPath(engine))
+	return psStreamHelperProblemText(psNativeHelperProblem(path, psStreamHelperLibraryPath(engine)))
+}
+
+// psStreamHelperProblemText is a check's clause as psRemoteStream reports it.
+func psStreamHelperProblemText(problem string) string {
 	if problem == "" {
 		return ""
 	}
 	return psStreamHelperLead + problem
 }
 
-// psWarmStreamPreflight asks psStreamHelperProblem ahead of a Play press. The
+// psWarmStreamPreflight asks psStreamHelperCheckWait ahead of a Play press. The
 // panel runs it in a goroutine as it opens; a Play during the warm-up waits
-// for the same answer instead of starting the helper a second time.
+// (off the event thread) for the same answer instead of starting the helper a
+// second time.
 func psWarmStreamPreflight() {
 	if !psRemoteSupported() {
 		return
@@ -128,7 +170,18 @@ func psWarmStreamPreflight() {
 	// The probe cannot start a helper without its execute bits, and that
 	// "cannot tell" would only be asked again at Play.
 	psEnsureExecutable(engine.Stream)
-	psStreamHelperProblem(engine)
+	psStreamHelperCheckWait(engine)
+}
+
+// psPreflightKey names one helper file as it is now (path, size, modification
+// time) with the library path it is started with; false when it is not there.
+func psPreflightKey(path, ldPath string) (string, bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	return path + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" +
+		strconv.FormatInt(info.ModTime().UnixNano(), 10) + "\x00" + ldPath, true
 }
 
 // psNativeHelperProblem is the check for one helper binary started with
@@ -137,26 +190,24 @@ func psNativeHelperProblem(path, ldPath string) string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	key, ok := psPreflightKey(path, ldPath)
+	if !ok {
 		// A missing helper is reported by the engine lookup, not here.
 		return ""
 	}
-	key := path + "\x00" + strconv.FormatInt(info.Size(), 10) + "\x00" +
-		strconv.FormatInt(info.ModTime().UnixNano(), 10) + "\x00" + ldPath
 
 	psPreflight.run.Lock()
 	defer psPreflight.run.Unlock()
 	psPreflight.mu.Lock()
-	answer, known := psPreflight.answers[key]
+	kept, known := psPreflight.answers[key]
 	psPreflight.mu.Unlock()
-	if known {
-		return answer
+	if known && kept.settled {
+		return kept.text
 	}
 
 	static := strings.TrimSpace(psStreamHelperCheck(path, psSplitLibraryPath(ldPath)))
 	probe := psStreamHelperProbe(path, psHelperProbeEnv(os.Environ(), ldPath))
-	answer = psPreflightVerdict(static, probe)
+	answer := psPreflightVerdict(static, probe)
 	if answer != "" {
 		logWarn("psremote", "%s cannot start: %s (probe: ran=%t code=%d %s %v)",
 			filepath.Base(path), answer, probe.ran, probe.code, firstLine(probe.output), probe.err)
@@ -164,14 +215,14 @@ func psNativeHelperProblem(path, ldPath string) string {
 		logInfo("psremote", "%s: the ELF check said %q, but the loader starts it", filepath.Base(path), static)
 	}
 
-	if psPreflightSettled(probe) {
-		psPreflight.mu.Lock()
-		if psPreflight.answers == nil || len(psPreflight.answers) >= 16 {
-			psPreflight.answers = make(map[string]string, 4)
-		}
-		psPreflight.answers[key] = answer
-		psPreflight.mu.Unlock()
+	// Every answer is kept for psStreamHelperProblem; only a settled one
+	// spares the next check its probe.
+	psPreflight.mu.Lock()
+	if psPreflight.answers == nil || len(psPreflight.answers) >= 16 {
+		psPreflight.answers = make(map[string]psPreflightAnswer, 4)
 	}
+	psPreflight.answers[key] = psPreflightAnswer{text: answer, settled: psPreflightSettled(probe)}
+	psPreflight.mu.Unlock()
 	return answer
 }
 

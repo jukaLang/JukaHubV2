@@ -185,6 +185,13 @@ func PrefetchThumbnail(url string) {
 	if thumbnailDataGet(url) != nil {
 		return
 	}
+	// A URL that just failed is not asked for again for a minute: the render
+	// path re-enqueues every visible row each frame.
+	if at, ok := thumbnailFailedAt.Load(url); ok {
+		if t, _ := at.(time.Time); time.Since(t) < thumbnailRetryAfter {
+			return
+		}
+	}
 	select {
 	case thumbnailDownloadCh <- url:
 	default:
@@ -195,6 +202,12 @@ func PrefetchThumbnail(url string) {
 // thumbnailInFlight dedupes concurrent prefetches of the same URL, which is
 // common when a grid re-enqueues its visible rows every frame.
 var thumbnailInFlight sync.Map
+
+// thumbnailFailedAt remembers when a prefetch of a URL last failed (url ->
+// time.Time), so a dead link is retried once a minute, not every frame.
+var thumbnailFailedAt sync.Map
+
+const thumbnailRetryAfter = time.Minute
 
 // thumbnailWorkerCount picks prefetch concurrency. A single worker serialized
 // every thumbnail behind the slowest request, so a grid of YouTube results
@@ -384,6 +397,11 @@ func thumbnailPrefetchWorker() {
 			_, err := fetchThumbnailBytes(url)
 			return err
 		}()
+		if err == nil {
+			thumbnailFailedAt.Delete(url)
+		} else {
+			thumbnailFailedAt.Store(url, time.Now())
+		}
 		if err != nil {
 			// Silent failure — the render path retries on demand. The URL goes
 			// through the log sanitizer like every other one: thumbnail links

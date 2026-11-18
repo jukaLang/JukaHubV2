@@ -22,7 +22,6 @@ import (
 	"io"
 	"math"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -65,20 +64,6 @@ var (
 	reHeading     = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<h[12][^>]*>(.*?)</h[12]>`) })
 	reDocTitleTag = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`) })
 )
-
-// epubOpenFile validates and loads one EPUB from the File Explorer. The path
-// comes from a list row, so it is resolved against the explorer root first.
-func epubOpenFile(path string) pdfDoc {
-	resolved, err := resolveExplorerEntry(appConfig, path)
-	if err != nil {
-		return pdfDoc{Path: path, Format: "EPUB", Loaded: true, Error: "Cannot open file: " + err.Error()}
-	}
-	data, err := os.ReadFile(resolved)
-	if err != nil {
-		return pdfDoc{Path: resolved, Format: "EPUB", Loaded: true, Error: "Cannot open file: " + err.Error()}
-	}
-	return epubParseBytes(data, resolved)
-}
 
 // epubParseBytes turns an EPUB archive into paged chapters.
 func epubParseBytes(data []byte, path string) pdfDoc {

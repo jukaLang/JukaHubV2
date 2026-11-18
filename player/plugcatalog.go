@@ -57,11 +57,13 @@ type plugEntry struct {
 	// ExtLines are the card's lines about each of those, and about any entry
 	// that was skipped and why. Built with the scan.
 	ExtLines []string
-	// OnEnable, OnStartup and StartupDaily are the manifest's hooks, Quick
-	// the actions the Start menu offers while the plugin is on (plughooks.go).
+	// OnEnable, OnStartup, StartupDaily and StartupQuiet are the manifest's
+	// hooks, Quick the actions the Start menu offers while the plugin is on
+	// (plughooks.go).
 	OnEnable     string
 	OnStartup    string
 	StartupDaily bool
+	StartupQuiet bool
 	Quick        []plugAction
 }
 
@@ -125,6 +127,7 @@ func plugEntryFor(config *Config, info PluginInfo) plugEntry {
 	row.OnEnable = plugKnownAction(row.Actions, info.OnEnable)
 	row.OnStartup = plugKnownAction(row.Actions, info.OnStartup)
 	row.StartupDaily = info.StartupDaily
+	row.StartupQuiet = info.StartupQuiet
 	row.Quick = plugQuickActions(row.Actions, info.Quick)
 	return row
 }
@@ -258,6 +261,13 @@ var plugRunner = plugExecute
 // info is the loaded manifest and vars the custom variables, both copied on
 // the main thread so the goroutine shares nothing with it.
 func plugRunAsync(info PluginInfo, action, label string, vars map[string]interface{}) bool {
+	return plugRunAsyncOpt(info, action, label, vars, false)
+}
+
+// plugRunAsyncOpt is plugRunAsync; quiet keeps the result on the Plugins page
+// only, toasting it just when it is an error (a "startupQuiet" plugin's run
+// at startup).
+func plugRunAsyncOpt(info PluginInfo, action, label string, vars map[string]interface{}, quiet bool) bool {
 	name := info.Name
 	plugRunState.mu.Lock()
 	if plugRunState.running == nil {
@@ -285,6 +295,8 @@ func plugRunAsync(info PluginInfo, action, label string, vars map[string]interfa
 		kind := ToastKindInfo
 		if strings.HasPrefix(out, "Plugin error:") {
 			kind = ToastKindWarning
+		} else if quiet {
+			return
 		}
 		first := out
 		if i := strings.IndexByte(first, '\n'); i >= 0 {

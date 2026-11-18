@@ -828,7 +828,7 @@ func netToolsAge(at time.Time) string {
 	case d < time.Hour:
 		return strconv.Itoa(int(d/time.Minute)) + " min ago"
 	}
-	return at.Format("15:04")
+	return clockDigits(nil, at)
 }
 
 // netToolsResultSheet fills the sheet with a probe's last result.

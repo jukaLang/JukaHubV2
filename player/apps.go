@@ -61,6 +61,9 @@ const builtinActionPrefix = "action:"
 //
 // Steam (steam_ui.go) is a panel like PS Remote Play: the user's Steam library,
 // read from the Steam app on this PC and/or the signed-in account.
+//
+// Mail (mail_*.go) is people's first guess for "the email app"; its accounts
+// are set up in Tools → Email & calendar (mailcal_ui.go).
 var builtinApplets = []struct {
 	Name   string
 	Scene  string
@@ -71,6 +74,7 @@ var builtinApplets = []struct {
 	{"Trophies", playtimeSceneName, ""},
 	{"Synth", synthSceneName, ""},
 	{"Steam", "", "steam"},
+	{mailcalAppEntryName, "", "mail"},
 	{"PS Remote Play", "", "chiaki"},
 }
 
@@ -529,6 +533,9 @@ func builtinAppActionSupported(action string) bool {
 		// The library reads on every device; a handheld starts the games on
 		// a paired PC (steam.go).
 		return true
+	case "mail":
+		// Mail (mail_*.go) works wherever there is a network.
+		return true
 	}
 	return false
 }
@@ -543,6 +550,8 @@ func launchBuiltinAppAction(action string) {
 		openChiakiPanel()
 	case "steam":
 		openSteamPanel()
+	case "mail":
+		mailOpenApp()
 	default:
 		logWarn("apps", "unknown built-in app action %q", action)
 	}

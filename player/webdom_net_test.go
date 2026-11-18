@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -1014,7 +1015,9 @@ func TestWebJSNetDocumentCookieHostSpellings(t *testing.T) {
 	set("https://www.xn--bcher-kva.example/",
 		&http.Cookie{Name: "idh", Value: "idsecret", Path: "/", Domain: "xn--bcher-kva.example", HttpOnly: true})
 	// A port-less IPv6 literal and an upper-case Unicode host, which the jar
-	// files under names the records cannot rebuild.
+	// files under names of their own: "[::1]" apart from [::1]:8080's "::1",
+	// and BÜCHER's own punycode apart from bücher's. document.cookie on such a
+	// page reads what the page's own requests carry.
 	set("http://[::1]/", &http.Cookie{Name: "h6", Value: "secret6", Path: "/", HttpOnly: true})
 	set("http://[::1]:8080/", &http.Cookie{Name: "v6", Value: "visible6", Path: "/"})
 	set("https://BÜCHER.example/", &http.Cookie{Name: "uh", Value: "usecret", Path: "/", HttpOnly: true})
@@ -1030,8 +1033,8 @@ func TestWebJSNetDocumentCookieHostSpellings(t *testing.T) {
 		{"https://xn--bcher-kva.example/", "iv=ivisible", []string{"ih=evil", "idh=evil"}},
 		{"https://bücher.example/", "iv=ivisible", []string{"ih=evil", "idh=evil", "idh=evil; Domain=xn--bcher-kva.example"}},
 		{"https://XN--BCHER-KVA.example./", "iv=ivisible", []string{"ih=evil", "idh=evil"}},
-		{"https://BÜCHER.example/", "iv=ivisible", []string{"uh=evil"}},
-		{"http://[::1]/", "v6=visible6", []string{"h6=evil"}},
+		{"https://BÜCHER.example/", "", []string{"uh=evil"}},
+		{"http://[::1]/", "", []string{"h6=evil"}},
 		{"http://[::1]:8080/", "v6=visible6", nil},
 	}
 	// Every read first: the attempts below may legitimately store cookies
@@ -1091,6 +1094,177 @@ func TestWebJSNetDocumentCookieRetiredJar(t *testing.T) {
 	}
 	if jar.webJSNetScriptSetCookie(page, &http.Cookie{Name: "x", Value: "1", Path: "/"}) {
 		t.Error("a retired jar took a script's cookie")
+	}
+}
+
+// TestBrowserCookieRecordsKeyedLikeTheJar: a host-only and a domain cookie of
+// one name, set from one host, are two cookies to the jar and must be two
+// records — keyed by the host that set them, the second wiped the first's
+// HttpOnly, and document.cookie then showed the session token. Both reach the
+// card with their own flags and come back from it, a port-less IPv6 host keeps
+// its brackets, and a file written under the old host keys merges on load.
+func TestBrowserCookieRecordsKeyedLikeTheJar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "browser-cookies.json")
+	jar := newBrowserCookieJar(path)
+	if jar == nil {
+		t.Fatal("no cookie jar")
+	}
+	page := webJSNetTestURL(t, "https://www.example.com/")
+	jar.SetCookies(page, []*http.Cookie{{Name: "sid", Value: "host", Path: "/", Secure: true, HttpOnly: true}})
+	jar.SetCookies(page, []*http.Cookie{{Name: "sid", Value: "site", Path: "/", Domain: "example.com", Secure: true}})
+	v6 := webJSNetTestURL(t, "http://[::1]/")
+	jar.SetCookies(v6, []*http.Cookie{{Name: "h6", Value: "secret6", Path: "/", HttpOnly: true}})
+	if got := jar.webJSNetDocumentCookie(page); got != "sid=site" {
+		t.Errorf("document.cookie = %q, want sid=site (the host-only sid is HttpOnly)", got)
+	}
+	if jar.webJSNetScriptSetCookie(page, &http.Cookie{Name: "sid", Value: "evil", Path: "/", Secure: true}) {
+		t.Error("a script replaced the HttpOnly host-only sid")
+	}
+
+	records, migrated := loadBrowserCookies(path)
+	if migrated {
+		t.Error("a file this build wrote needed a migration")
+	}
+	saved := map[string]browserCookieRecord{}
+	for _, rec := range records {
+		saved[rec.Value] = rec
+	}
+	if len(records) != 3 || !saved["host"].HTTPOnly || saved["site"].HTTPOnly || saved["site"].Domain != "example.com" {
+		t.Fatalf("saved records = %+v, want the HttpOnly host-only sid, the plain domain sid and h6", records)
+	}
+	if got := saved["secret6"].Host; got != "[::1]" {
+		t.Errorf("the IPv6 record's host = %q, want [::1] (the jar files [::1] and ::1 apart)", got)
+	}
+	fresh := newBrowserCookieJar("")
+	if fresh == nil {
+		t.Fatal("no cookie jar")
+	}
+	if n := fresh.restore(records); n != 3 {
+		t.Errorf("restored %d of 3 cookies", n)
+	}
+	if got := fresh.webJSNetDocumentCookie(page); got != "sid=site" {
+		t.Errorf("after a restart document.cookie = %q, want sid=site", got)
+	}
+	if got := fresh.webJSNetDocumentCookie(v6); got != "" {
+		t.Errorf("after a restart document.cookie on [::1] = %q, want nothing", got)
+	}
+
+	// The old keys named a record by its host: a domain cookie set from two
+	// of its hosts was two records for one cookie, and so was a host with and
+	// without its trailing dot.
+	soon := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	later := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	oldPath := filepath.Join(t.TempDir(), "browser-cookies.json")
+	writeBrowserCookies(oldPath, []browserCookieRecord{
+		{Host: "a.example.org", Domain: ".example.org", Path: "/", Name: "t", Value: "1", HTTPOnly: true, Expires: soon, FirstSeen: "2026-01-02T00:00:00Z"},
+		{Host: "b.example.org", Domain: "example.org", Path: "/", Name: "t", Value: "2", Expires: later, FirstSeen: "2026-03-04T00:00:00Z"},
+		{Host: "example.net", Path: "/", Name: "u", Value: "1"},
+		{Host: "example.net.", Path: "/", Name: "u", Value: "2", HTTPOnly: true},
+	})
+	records, migrated = loadBrowserCookies(oldPath)
+	if !migrated || len(records) != 2 {
+		t.Fatalf("migration = %v, %+v; want two merged records", migrated, records)
+	}
+	if got := records[0]; got.Value != "2" || !got.HTTPOnly || got.FirstSeen != "2026-01-02T00:00:00Z" {
+		t.Errorf("merged domain cookie = %+v, want the longer-lived value 2, HttpOnly, the older first-seen", got)
+	}
+	if got := records[1]; got.Value != "2" || !got.HTTPOnly {
+		t.Errorf("merged host cookie = %+v, want the later value 2 and HttpOnly", got)
+	}
+	if again, more := migrateBrowserCookies(records); more || len(again) != 2 {
+		t.Errorf("a second migration changed %+v", again)
+	}
+
+	// Max-Age wins over Expires, as in the jar: with an Expires this clock
+	// thinks has passed, the jar still keeps the cookie, so its HttpOnly record
+	// must stay and the cookie stay hidden. On an IP host, a Domain the jar
+	// refuses (".127.0.0.1") must not rewrite the host-only record's flags.
+	clock := newBrowserCookieJar("")
+	if clock == nil {
+		t.Fatal("no cookie jar")
+	}
+	shop := webJSNetTestURL(t, "https://shop.example/")
+	past := time.Now().Add(-time.Hour)
+	clock.SetCookies(shop, []*http.Cookie{
+		{Name: "sid", Value: "s1", Path: "/", MaxAge: 3600, Expires: past, Secure: true, HttpOnly: true},
+		{Name: "v", Value: "1", Path: "/", MaxAge: 3600, Expires: past, Secure: true},
+	})
+	if len(clock.Cookies(shop)) != 2 {
+		t.Fatalf("the jar holds %v, want sid and v (Max-Age outlives the past Expires)", clock.Cookies(shop))
+	}
+	if got := clock.webJSNetDocumentCookie(shop); got != "v=1" {
+		t.Errorf("document.cookie = %q, want v=1 (sid is HttpOnly)", got)
+	}
+	// The saved record keeps a real expiry, counted from Max-Age at receipt
+	// as the jar does, whether Expires is past, later or absent; without one
+	// the login would be restored as a session cookie that never expires.
+	clock.SetCookies(shop, []*http.Cookie{
+		{Name: "far", Value: "1", Path: "/", MaxAge: 600, Expires: time.Now().Add(48 * time.Hour), Secure: true},
+		{Name: "bare", Value: "1", Path: "/", MaxAge: 600, Secure: true},
+	})
+	clock.mu.Lock()
+	kept := clock.snapshotLocked()
+	clock.mu.Unlock()
+	lifetimes := map[string]time.Duration{"sid": time.Hour, "v": time.Hour, "far": 10 * time.Minute, "bare": 10 * time.Minute}
+	for _, rec := range kept {
+		want, ok := lifetimes[rec.Name]
+		if !ok {
+			continue
+		}
+		delete(lifetimes, rec.Name)
+		left := time.Until(browserCookieExpiry(rec))
+		if left < want-time.Minute || left > want+time.Minute {
+			t.Errorf("record %s expires %q (in %v), want about %v from Max-Age", rec.Name, rec.Expires, left, want)
+		}
+	}
+	if len(lifetimes) != 0 {
+		t.Errorf("no record for %v", lifetimes)
+	}
+	// A Max-Age refresh moves the expiry by however long ago the last one
+	// came: the record, and so the file on the card, follows only a move of
+	// more than an hour — or of more than half the cookie's remaining life,
+	// so a 10-minute cookie is never saved already expired — or new flags.
+	clock.mu.Lock()
+	for _, step := range []struct {
+		maxAge   time.Duration
+		shift    time.Duration
+		httpOnly bool
+		want     bool
+	}{
+		{24 * time.Hour, -30 * time.Minute, false, false},
+		{24 * time.Hour, -2 * time.Hour, false, true},
+		{10 * time.Minute, -4 * time.Minute, false, false},
+		{10 * time.Minute, -6 * time.Minute, false, true},
+		{24 * time.Hour, -time.Minute, true, true},
+	} {
+		cookies := []*http.Cookie{{Name: "bare", Value: "1", Path: "/", MaxAge: int(step.maxAge / time.Second), Secure: true, HttpOnly: step.httpOnly}}
+		key := ""
+		for k, rec := range clock.recs {
+			if rec.Name == "bare" {
+				key = k
+			}
+		}
+		saved := clock.recs[key]
+		saved.Expires = time.Now().Add(step.maxAge + step.shift).UTC().Format(time.RFC3339)
+		clock.recs[key] = saved
+		clock.jar.SetCookies(shop, cookies)
+		if got := clock.trackLocked(shop, cookies); got != step.want {
+			t.Errorf("Max-Age %v refresh %v after the saved expiry: changed = %v, want %v", step.maxAge, -step.shift, got, step.want)
+		}
+		rec := clock.recs[key]
+		if (rec.Expires == saved.Expires) == step.want {
+			t.Errorf("Max-Age %v refresh %v after the saved expiry: the record expires %q (saved %q)", step.maxAge, -step.shift, rec.Expires, saved.Expires)
+		}
+		if left := time.Until(browserCookieExpiry(rec)); step.want && (left < step.maxAge-time.Minute || left > step.maxAge+time.Minute) {
+			t.Errorf("Max-Age %v refresh: the record expires in %v, want its real expiry, about %v", step.maxAge, left, step.maxAge)
+		}
+	}
+	clock.mu.Unlock()
+	ip := webJSNetTestURL(t, "http://127.0.0.1/")
+	clock.SetCookies(ip, []*http.Cookie{{Name: "sid", Value: "same", Path: "/", HttpOnly: true}})
+	clock.SetCookies(ip, []*http.Cookie{{Name: "sid", Value: "same", Path: "/", Domain: ".127.0.0.1"}})
+	if got := clock.webJSNetDocumentCookie(ip); got != "" {
+		t.Errorf("document.cookie on 127.0.0.1 = %q, want nothing (a refused Domain cleared HttpOnly)", got)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -809,23 +810,62 @@ func runRandomBenchmark(config *Config) {
 // liveBuilderShellTriggers).
 func runTerminal(config *Config, cmdStr string) {
 	go func() {
-		var c *exec.Cmd
-		if runtime.GOOS == "windows" {
-			c = exec.Command("cmd", "/d", "/q")
-		} else {
-			c = exec.Command("sh")
-		}
-		c.Stdin = strings.NewReader(cmdStr + "\n")
-		out, err := c.CombinedOutput()
-		if err != nil {
-			out = append(out, []byte("\n"+err.Error())...)
-		}
-		s := string(out)
-		if len(s) > 4000 {
-			s = s[len(s)-4000:]
-		}
-		publishCustom("terminal_text", s)
+		publishCustom("terminal_text", runTerminalCommand(cmdStr, terminalRunTimeout))
 	}()
+}
+
+// terminalRunTimeout bounds one terminal_run / emulator_run command (SEC-14):
+// a command that hung used to live until JukaHub exited.
+const terminalRunTimeout = 2 * time.Minute
+
+// terminalRunMaxOutput is how much of the end of a command's output
+// terminal_text shows, in bytes.
+const terminalRunMaxOutput = 4000
+
+// runTerminalCommand runs cmdStr through the shell on its stdin, under
+// timeout, and returns the end of its combined output with the reason it
+// ended after it. As in runPowerScript, the shell leads its own process group,
+// the timeout stops the whole group (termKillTree: the group here, the process
+// tree on Windows), and WaitDelay stops waiting on an output pipe that a
+// background job still holds.
+func runTerminalCommand(cmdStr string, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var c *exec.Cmd
+	if runtime.GOOS == "windows" {
+		c = exec.CommandContext(ctx, "cmd", "/d", "/q")
+	} else {
+		c = exec.CommandContext(ctx, "sh")
+	}
+	c.Stdin = strings.NewReader(cmdStr + "\n")
+	processGroupConfigure(c)
+	c.Cancel = func() error { return termKillTree(c) }
+	c.WaitDelay = powerScriptWaitDelay
+	// Only the end of the output is kept while the command runs: one that
+	// prints without pause (yes, a device read, a chatty emulator) would fill
+	// memory long before the timeout on a 1 GB handheld.
+	var tail feTailBuffer
+	c.Stdout, c.Stderr = &tail, &tail
+	err := c.Run()
+	out := []byte(tail.String())
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		out = append(out, fmt.Sprintf("\n(stopped after %s)", timeout)...)
+	case errors.Is(err, exec.ErrWaitDelay) && c.ProcessState != nil && c.ProcessState.Success():
+		out = append(out, "\n(a background job is still running; its output is not shown)"...)
+	case err != nil:
+		out = append(out, "\n"+err.Error()...)
+	}
+	s := string(out)
+	if len(s) > terminalRunMaxOutput {
+		cut := len(s) - terminalRunMaxOutput
+		// Start on a whole character, not inside one.
+		for cut < len(s) && s[cut]&0xC0 == 0x80 {
+			cut++
+		}
+		s = s[cut:]
+	}
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -978,7 +1018,7 @@ func weatherScreenText(config *Config) string {
 	for _, d := range days {
 		day := d.Date
 		if t, err := time.Parse("2006-01-02", d.Date); err == nil {
-			day = t.Format("Mon")
+			day = formatWeekdayShort(t)
 		}
 		line := fmt.Sprintf("%s   %.0f° / %.0f°   %s", day, conv(d.TMax), conv(d.TMin), weatherCodeDesc(d.Code))
 		if d.Pop > 0 {

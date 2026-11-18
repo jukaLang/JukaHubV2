@@ -348,6 +348,7 @@ func (sectrustScene) render(r *sdl.Renderer, c *Config) bool {
 		sectrustScreen.nav.scroll = 0
 		sectrustScreen.model.builtAt = time.Time{}
 	}
+	helpDocTakePending() // Settings → Help opens its pages in this reader (helpdoc.go)
 	if sectrustDoc.open {
 		sectrustRenderDoc(r, c)
 		return true

@@ -388,12 +388,14 @@ var voiceSettingSynonyms = [...]voiceSettingSyn{
 	{ID: "motion", Phrase: "transitions", Invert: true, Name: "Transitions"},
 	{ID: "reduceTransparency", Phrase: "transparency", Invert: true, Name: "Transparency"},
 	{ID: "contrast", Phrase: "high contrast mode"},
-	{ID: "textSize", Phrase: "text"}, {ID: "textSize", Phrase: "font size"}, {ID: "textSize", Phrase: "font"},
+	{ID: "textSize", Phrase: "text"}, {ID: "textSize", Phrase: "font size"},
 	{ID: "textSize", Phrase: "text scale"}, {ID: "textSize", Phrase: "letters"},
 	{ID: "screensaver", Phrase: "screen timeout"}, {ID: "screensaver", Phrase: "screensaver"},
 	{ID: "screensaver", Phrase: "screen saver"}, {ID: "screensaver", Phrase: "screensaver timeout"},
 	{ID: "screensaver", Phrase: "display timeout"}, {ID: "screensaver", Phrase: "screen timer"},
 	{ID: "autoSleep", Phrase: "sleep timer"},
+	{ID: "travelLock", Phrase: "travel lock"}, {ID: "travelLock", Phrase: "power button lock"},
+	{ID: "travelLock", Phrase: "fn switch"},
 	{ID: "notifyDuringVideo", Phrase: "notifications during video"},
 	{ID: "notifyDuringVideo", Phrase: "video notifications"},
 	{ID: "clock12", Phrase: "12 hour clock"}, {ID: "clock12", Phrase: "twelve hour clock"},
@@ -559,8 +561,8 @@ func voiceSettingVirtualRows() []voiceSettingCand {
 	return []voiceSettingCand{
 		{Row: quiet, Section: "sound", Where: "Quick Settings", Glyph: "settings", Name: "Quiet Mode"},
 		{Row: magnifier, Section: a11ySettingsSection, Where: "Quick Settings", Glyph: "settings", Name: "Magnifier"},
-		{Row: dark, Section: "display", Where: "Display & theme", Glyph: "palette", NavRow: "themes", Name: "Dark mode"},
-		{Row: theme, Section: "display", Where: "Display & theme", Glyph: "palette", NavRow: "themes", Name: "Theme"},
+		{Row: dark, Section: "display", Where: "Theme & look", Glyph: "palette", NavRow: "themes", Name: "Dark mode"},
+		{Row: theme, Section: "display", Where: "Theme & look", Glyph: "palette", NavRow: "themes", Name: "Theme"},
 		{Row: wifi, Section: "network", Where: "Network", Glyph: "wifi", NavRow: "wifi", Name: "Wi-Fi"},
 	}
 }

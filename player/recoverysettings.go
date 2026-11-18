@@ -134,7 +134,7 @@ func recoveryWhen(t time.Time) string {
 	if t.IsZero() || t.Before(minSaneClock) {
 		return ""
 	}
-	return " · " + t.Format("2 Jan 15:04")
+	return " · " + formatDateShort(nil, t) + " " + clockDigits(nil, t)
 }
 
 // recoverySettingsCats is the one backup category recovery reads and writes.
@@ -380,7 +380,9 @@ func recoverySpawn(self string, args []string, wd string) {
 	// (--boot, JUKAHUB_BOOT) stays behind (bootos.go).
 	cmd := exec.Command(self, bootOSRestartArgs(args)...)
 	cmd.Dir = wd
-	cmd.Env = bootOSRestartEnv(os.Environ())
+	// The new process waits for this one to end before an erase or an undo
+	// (factoryWaitForOldProcess): a late save here could undo its work.
+	cmd.Env = append(bootOSRestartEnv(os.Environ()), fmt.Sprintf("%s=%d", factoryWaitPIDEnv, os.Getpid()))
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		logWarn("recovery", "could not start JukaHub again: %v", err)

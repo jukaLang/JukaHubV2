@@ -1215,7 +1215,15 @@ func fitBackgroundTexture(renderer *sdl.Renderer, tex *sdl.Texture) *sdl.Texture
 	if readErr != nil {
 		return tex
 	}
+	// Linear filtering, fixed when the texture is made (go-sdl2 has no
+	// per-texture scale mode), so the hint is set around the creation only:
+	// the 1:1 copy every screen draws looks the same with either filter, and
+	// the liquid background's ripples, which enlarge the picture (liquidbg.go),
+	// show it smooth instead of as blocks.
+	prevQuality := sdl.GetHint(sdl.HINT_RENDER_SCALE_QUALITY)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, "linear")
 	static, err := renderer.CreateTextureFromSurface(canvas)
+	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, prevQuality)
 	if err != nil || static == nil {
 		return tex
 	}
@@ -2345,25 +2353,26 @@ func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 			return tex
 		}
 
-		// Render-path decode budget: a frame may start only a couple of
-		// thumbnail decodes, so a cold grid cannot spend its whole frame
-		// allowance decoding rows the D-pad just scrolled in. A declined URL
-		// is queued through the prefetch workers and takes the next frame's
-		// slots, so the list fills progressively instead of stuttering once.
-		if !allowThumbnailDecode(frameCount, thumbnailDecodeBudgetPerFrame()) {
-			// Out of slots — the prefetch workers pick the URL up on a later
-			// frame. No log: a cold grid can defer dozens of rows per frame
-			// and those lines are per-frame spam, not diagnostics.
+		// Only the memory cache is read here, on the render thread. The disk
+		// cache and the network (3 tries, 30 s timeout, backoff sleeps) used
+		// to run right here and froze the UI on a slow or dead link; the
+		// prefetch workers now fetch the bytes and a later frame decodes them.
+		// Checked before the decode budget: a row still downloading (or a
+		// dead link) must not take a slot, or two of them at the top of a
+		// grid would starve every row below whose bytes are already here.
+		data := thumbnailDataGet(url)
+		if len(data) == 0 {
 			PrefetchThumbnail(url)
 			continue
 		}
 
-		// Bytes come from memory → disk → network (with retry), so a warm
-		// cache never touches the network and a cold one survives restarts.
-		data, err := fetchThumbnailBytes(url)
-		if err != nil || len(data) == 0 {
-			// Failing URLs are not cached, so this branch can re-enter every
-			// frame for a row that refuses to load; logging would spam.
+		// Render-path decode budget: a frame may start only a couple of
+		// thumbnail decodes, so a cold grid cannot spend its whole frame
+		// allowance decoding rows the D-pad just scrolled in. A declined URL
+		// takes a later frame's slots, so the list fills progressively
+		// instead of stuttering once. No log: a cold grid can defer dozens
+		// of rows per frame and those lines are per-frame spam.
+		if !allowThumbnailDecode(frameCount, thumbnailDecodeBudgetPerFrame()) {
 			continue
 		}
 		rwops, err := sdl.RWFromMem(data)
@@ -3760,6 +3769,16 @@ func clearPlaybackPageURLIf(page string) {
 	currentPlaybackURLMu.Unlock()
 }
 
+// replacePlaybackPageURLIf puts with back as the page while page is still the
+// current one (a Watch Party load that played nothing, partyLoadRemote).
+func replacePlaybackPageURLIf(page, with string) {
+	currentPlaybackURLMu.Lock()
+	if currentPlaybackURL == page {
+		currentPlaybackURL = with
+	}
+	currentPlaybackURLMu.Unlock()
+}
+
 func clearPlaybackPageURL() {
 	currentPlaybackURLMu.Lock()
 	currentPlaybackURL = ""
@@ -3915,7 +3934,7 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		// recently-played list or the playtime figures.
 		outcome := resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, v.Position, "playVideoInfo")
 		if outcome.Played() {
-			recordPlayed(config, url)
+			tbxPost(func() { recordPlayed(config, url) }) // config and its save are the main thread's
 		}
 		// Only a load that really reached the stream says anything about the
 		// link: a missing tool or a cancel is not the channel's fault, and a
@@ -3970,6 +3989,9 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 	hjRelease("the keyboard is up") // nor "Hey Juka" (wakeword.go)
 	exitInput := false
 	for !exitInput {
+		// This modal loop stands in for the main loop: beat the stall
+		// watchdog too (stallwatch.go).
+		stallWatchBeat()
 		// An exit request from outside the loop (a stop signal, the power
 		// key's shutdown path, the companion's Exit) used to wait for the
 		// keyboard to be closed by hand — long enough for the firmware to give
@@ -3986,7 +4008,9 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 			renderScene(renderer, config, config.Scenes[currentSceneIndex])
 		}
 		renderKeyboard(renderer, config)
-		// The software dimmer covers this loop's frames too (brightnessctl.go).
+		// The picture layer and the software dimmer cover this loop's frames
+		// too (displaytune_soft.go, brightnessctl.go).
+		displayTuneSoftRender(renderer)
 		brightnessSoftRender(renderer)
 		renderer.Present()
 
@@ -4185,9 +4209,17 @@ func pushTapClick(px, py int32) {
 // character twice. Real mice never send finger events, which is why the
 // doubling only shows up on touch devices. The app's replay keeps working,
 // and this is safe to call more than once.
+//
+// The opposite direction ("SDL_MOUSE_TOUCH_EVENTS", mouse to synthetic finger)
+// is pinned off too: it defaults to off on desktop, but were it ever on, every
+// mouse click would also arrive as a finger (main.go routes fingers) and click
+// twice.
 func disableSyntheticTouchMouse() {
 	if !sdl.SetHint("SDL_TOUCH_MOUSE_EVENTS", "0") {
 		logDebug("core", "disableSyntheticTouchMouse: SDL_TOUCH_MOUSE_EVENTS hint was not set")
+	}
+	if !sdl.SetHint("SDL_MOUSE_TOUCH_EVENTS", "0") {
+		logDebug("core", "disableSyntheticTouchMouse: SDL_MOUSE_TOUCH_EVENTS hint was not set")
 	}
 }
 
@@ -4260,7 +4292,16 @@ func handleMultiGesture(e *sdl.MultiGestureEvent, config *Config) {
 	}
 }
 
+// handleSwipe hands a finger swipe to the screen that takes swipes. A swipe no
+// screen claims does nothing: it used to jump to the next scene in config
+// order, so a flick over Settings, the Browser or Chat threw the user into an
+// unrelated screen.
 func handleSwipe(direction string, config *Config) {
+	// A modal owns the screen: a swipe must not change anything under it.
+	if alarmFiringActive() || recoveryCard.open || ambientIsActive() || html5GameActive() ||
+		launchFailure.open || videoPrepareActive() || emuPickOpen() {
+		return
+	}
 	// JukaLand (its screen, or played on the browser's offline page) owns the
 	// touch screen: a drag across the world is not "change the scene".
 	if jlandKeysCaptured(config) {
@@ -4294,32 +4335,12 @@ func handleSwipe(direction string, config *Config) {
 	if mediaHubSwipe(direction, config) {
 		return
 	}
-	switch direction {
-	case "up":
-		if currentSceneIndex > 0 {
-			changeSceneTo(config, currentSceneIndex-1)
-		}
-	case "down":
-		if currentSceneIndex < len(config.Scenes)-1 {
-			changeSceneTo(config, currentSceneIndex+1)
-		}
-	case "left":
-		handleSwipeLeft(config)
-	case "right":
-		handleSwipeRight(config)
+	// So does the Tabs Home: sideways changes tab, up and down scroll (hometabs.go).
+	if homeTabsSwipe(direction, config) {
+		return
 	}
-}
-
-func handleSwipeLeft(config *Config) {
-	if currentSceneIndex > 0 {
-		changeSceneTo(config, currentSceneIndex-1)
-	}
-}
-
-func handleSwipeRight(config *Config) {
-	if currentSceneIndex < len(config.Scenes)-1 {
-		changeSceneTo(config, currentSceneIndex+1)
-	}
+	// No other screen takes swipes: a flick over a list must not jump to the
+	// next scene in config order.
 }
 
 func handlePinch(direction string, config *Config) {
@@ -4828,6 +4849,7 @@ func themeGalleryTabWidth(i int) int32 {
 	if i < 0 || i >= len(themeGalleryTabs) {
 		return 0
 	}
+	label := uiT(themeGalleryTabs[i].Label)
 	// Hit-testing asks for a tab's width without a config in hand, so the
 	// global one is used when it exists and the label's own length stands in
 	// when nothing has been loaded yet.
@@ -4836,9 +4858,9 @@ func themeGalleryTabWidth(i int) int32 {
 		font = themeGalleryTabFont(appConfig)
 	}
 	if font == nil {
-		return int32(24 + 9*len(themeGalleryTabs[i].Label))
+		return int32(24 + 9*len(label))
 	}
-	w, _, _ := font.SizeUTF8(themeGalleryTabs[i].Label)
+	w, _, _ := font.SizeUTF8(label)
 	return int32(w) + 32
 }
 
@@ -5076,9 +5098,8 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 }
 
 // renderThemeGalleryTabs draws the gallery's tabs: a pill per tab, the open
-// one filled with the accent. Colour, "Total conversion" and Consoles are
-// different promises, so they are different tabs rather than one long list;
-// the Experience packs screen draws the same strip (themetabs.go).
+// one filled with the accent. Colour, Styles and Experience have separate
+// tabs; the Experience packs screen draws the same strip (themetabs.go).
 func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Element) {
 	themeGalleryCurrentTab()
 	// The community library is the one thing on this screen that is not a
@@ -5665,7 +5686,8 @@ func wrapTextLinesRaw(font *ttf.Font, text string, maxW int32, maxLines int) []s
 	var out []string
 	for _, para := range strings.Split(text, "\n") {
 		cur := ""
-		for _, word := range strings.Fields(para) {
+		// Not at a no-break space: "12 345" in French stays whole.
+		for _, word := range strings.FieldsFunc(para, isLineBreakSpace) {
 			cand := word
 			if cur != "" {
 				cand = cur + " " + word
@@ -6339,7 +6361,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "cycle_screensaver_timeout":
 		// Settings → General and Quick Settings share this step list.
 		next := applyScreensaverTimeout(config, nextScreenTimeout(config.Variables.ScreensaverTimeout))
-		showToast("Screensaver after "+screenTimeoutLabel(next), ToastInfo())
+		showToast("Lock screen after "+screenTimeoutLabel(next), ToastInfo())
 	case "cycle_cookie_retention":
 		// Choosing a window also drops what is already older than it, so the
 		// count on the Browser's Forget chip never promises something the

@@ -31,6 +31,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -68,8 +69,10 @@ const (
 // could not be rebuilt — a Secure cookie restored over http would be dropped,
 // and an expiry would be lost.
 type browserCookieRecord struct {
-	// Host is the request host the cookie was set from. The jar needs a URL,
-	// and this is the one the jar already accepted the cookie for.
+	// Host is the request host the cookie was set from, without its port
+	// (browserCookieRecordHost): the jar needs a URL, and this is the one it
+	// already accepted the cookie for. A port-less IPv6 literal keeps its
+	// brackets, because the jar files "[::1]" and "[::1]:8080" apart.
 	Host     string `json:"host"`
 	Domain   string `json:"domain,omitempty"`
 	Path     string `json:"path"`
@@ -172,11 +175,15 @@ func (j *browserCookieJar) Cookies(u *url.URL) []*http.Cookie {
 	return j.jar.Cookies(u)
 }
 
-// trackLocked mirrors one Set-Cookie batch into the records. The caller holds
-// j.mu. It reports whether anything changed, so an unchanged response does not
-// rewrite the file.
+// trackLocked mirrors one Set-Cookie batch, which the caller has just handed
+// to the jar, into the records. The caller holds j.mu. It reports whether
+// anything changed, so an unchanged response does not rewrite the file.
 func (j *browserCookieJar) trackLocked(u *url.URL, cookies []*http.Cookie) bool {
-	host := strings.ToLower(u.Hostname())
+	if u.Scheme != "http" && u.Scheme != "https" {
+		// The jar ignores every other scheme, so there is nothing to mirror.
+		return false
+	}
+	host := browserCookieRecordHost(u.Host)
 	if host == "" {
 		return false
 	}
@@ -195,19 +202,39 @@ func (j *browserCookieJar) trackLocked(u *url.URL, cookies []*http.Cookie) bool 
 			Secure:   c.Secure,
 			HTTPOnly: c.HttpOnly,
 		}
-		key := browserCookieKey(rec)
+		key, ok := browserCookieKeyOK(rec)
+		if !ok {
+			// A Domain the jar rejects outright ("." or "..x", non-ASCII):
+			// it stored nothing, and the record must not take the key of the
+			// host-only cookie it would otherwise collide with.
+			continue
+		}
 		// A delete is a Set-Cookie with an expiry in the past (MaxAge < 0 is
 		// the same statement). The jar drops it; the records have to as well,
-		// or the next save would put the cookie back.
-		if c.MaxAge < 0 || (!c.Expires.IsZero() && !c.Expires.After(now)) {
+		// or the next save would put the cookie back. Max-Age wins over
+		// Expires exactly as in the jar (cookiejar's newEntry): a cookie with
+		// a positive Max-Age is kept whatever its Expires says, so its record
+		// (and the HttpOnly note on it) must be kept too, even when this
+		// device's clock already thinks the Expires date has passed.
+		if c.MaxAge < 0 || (c.MaxAge == 0 && !c.Expires.IsZero() && !c.Expires.After(now)) {
 			if _, ok := j.recs[key]; ok {
 				delete(j.recs, key)
 				changed = true
 			}
 			continue
 		}
-		if !c.Expires.IsZero() {
-			rec.Expires = c.Expires.UTC().Format(time.RFC3339)
+		// The record's expiry is the jar's: a Max-Age counts from receipt and
+		// wins over Expires, which counts only when Max-Age is absent. Without
+		// it a persistent login would be saved, and restored, as a session
+		// cookie that never expires on the device.
+		if when := browserCookieExpiresAt(c, now); !when.IsZero() {
+			rec.Expires = when.UTC().Format(time.RFC3339)
+		}
+		// Only what the jar took is mirrored: a cookie it refused (a Domain
+		// that does not cover the host, a public suffix) must not leave a
+		// record whose flags would then speak for another cookie.
+		if !j.holdsLocked(rec) {
+			continue
 		}
 		// A cookie that is set again keeps its original first-seen stamp: the
 		// retention policy asks how long the session has existed, and a site
@@ -219,7 +246,7 @@ func (j *browserCookieJar) trackLocked(u *url.URL, cookies []*http.Cookie) bool 
 		if rec.FirstSeen == "" {
 			rec.FirstSeen = now.UTC().Format(time.RFC3339)
 		}
-		if exists && old == rec {
+		if exists && (old == rec || browserCookieOnlyRefreshed(old, rec, now)) {
 			continue
 		}
 		j.recs[key] = rec
@@ -331,8 +358,16 @@ func browserCookieSiteKey(host string) string {
 	host = strings.ToLower(strings.TrimSpace(host))
 	host = strings.TrimPrefix(host, ".")
 	host = strings.TrimPrefix(host, "www.")
-	if i := strings.IndexByte(host, ':'); i > 0 {
-		host = host[:i]
+	// A record keeps a port-less IPv6 literal in brackets ("[::1]") and one
+	// that had a port without ("::1"); on screen both are ::1. Only a single
+	// colon is a port: "fe80::1" is an address, not host fe80.
+	switch {
+	case strings.HasPrefix(host, "["):
+		if end := strings.IndexByte(host, ']'); end > 0 {
+			host = host[1:end]
+		}
+	case strings.Count(host, ":") == 1:
+		host = host[:strings.IndexByte(host, ':')]
 	}
 	return host
 }
@@ -410,14 +445,18 @@ func browserCookieSites() []browserCookieSite {
 
 // holdsLocked asks the jar whether it would still send this record's cookie for
 // the URL it came from. A Secure cookie only matches over https, so the URL is
-// rebuilt with the same scheme the record was saved under.
+// rebuilt with the same scheme the record was saved under. The value has to
+// match as well as the name: a host-only and a domain cookie of one name can
+// both reach that URL, and a record whose cookie was replaced under another
+// spelling of the host (bücher.example and xn--bcher-kva.example are one name
+// to the jar) is stale, not held.
 func (j *browserCookieJar) holdsLocked(rec browserCookieRecord) bool {
 	u := browserCookieURL(rec)
 	if u == nil {
 		return false
 	}
 	for _, c := range j.jar.Cookies(u) {
-		if c != nil && c.Name == rec.Name {
+		if c != nil && c.Name == rec.Name && c.Value == rec.Value {
 			return true
 		}
 	}
@@ -444,6 +483,10 @@ func (j *browserCookieJar) restoreLocked(records []browserCookieRecord) int {
 		if strings.TrimSpace(rec.Name) == "" {
 			continue
 		}
+		key, ok := browserCookieKeyOK(rec)
+		if !ok {
+			continue
+		}
 		u := browserCookieURL(rec)
 		if u == nil {
 			continue
@@ -467,7 +510,7 @@ func (j *browserCookieJar) restoreLocked(records []browserCookieRecord) int {
 		if !j.holdsLocked(rec) {
 			continue
 		}
-		j.recs[browserCookieKey(rec)] = rec
+		j.recs[key] = rec
 		restored++
 	}
 	return restored
@@ -573,23 +616,141 @@ func writeBrowserCookies(path string, records []browserCookieRecord) {
 // loadBrowserCookies reads the saved jar. A missing file is the normal first
 // run; a broken one falls back to the .bak the durable save leaves beside it, so
 // a bad edit or a pulled card costs the newest cookie rather than the session.
-func loadBrowserCookies(path string) []browserCookieRecord {
+// migrated reports that records written under the old host-keyed names were
+// merged, so the caller writes the file back once.
+func loadBrowserCookies(path string) (records []browserCookieRecord, migrated bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
-		return nil
+		return nil, false
 	}
 	var file browserCookieFile
 	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
 			logWarn("browser", "ignoring %s: %v", path, err)
 		}
-		return nil
+		return nil, false
 	}
 	if file.SchemaVersion > browserCookieSchemaVersion {
 		logDebug("browser", "%s is from a newer build (schema %d)", path, file.SchemaVersion)
-		return nil
+		return nil, false
 	}
-	return file.Cookies
+	records, migrated = migrateBrowserCookies(file.Cookies)
+	if migrated {
+		logInfo("browser", "merged %d saved cookie record(s) the jar holds as one", len(file.Cookies)-len(records))
+	}
+	return records, migrated
+}
+
+// migrateBrowserCookies re-keys a file written while records were named by the
+// host that set them (browserCookieKey's old form): records the jar holds as
+// one cookie — a domain cookie set from two of its hosts, or a host spelled
+// with and without its trailing dot — become one. Which of them the jar held
+// last is not on the card, so the one that lives longer wins (the later in the
+// file on a tie); it keeps HttpOnly if either had it, because hiding a cookie
+// from scripts is the safe way to be wrong, and the older first-seen stamp, so
+// the retention clock does not restart. The format itself did not change: a
+// file with nothing to merge comes back as it was and reports false, which
+// makes this safe to run on every load. Records restore would refuse anyway
+// (a Domain the jar rejects) are passed through for it to drop.
+func migrateBrowserCookies(records []browserCookieRecord) ([]browserCookieRecord, bool) {
+	at := make(map[string]int, len(records))
+	out := make([]browserCookieRecord, 0, len(records))
+	merged := false
+	for _, rec := range records {
+		key, ok := browserCookieKeyOK(rec)
+		if !ok {
+			out = append(out, rec)
+			continue
+		}
+		i, dup := at[key]
+		if !dup {
+			at[key] = len(out)
+			out = append(out, rec)
+			continue
+		}
+		merged = true
+		prev := out[i]
+		keep := rec
+		if browserCookieExpiry(prev).After(browserCookieExpiry(rec)) {
+			keep = prev
+		}
+		keep.HTTPOnly = prev.HTTPOnly || rec.HTTPOnly
+		keep.FirstSeen = rec.FirstSeen
+		if a, ok := cookieFirstSeen(prev); ok {
+			if b, ok := cookieFirstSeen(rec); !ok || a.Before(b) {
+				keep.FirstSeen = prev.FirstSeen
+			}
+		}
+		out[i] = keep
+	}
+	return out, merged
+}
+
+// browserCookieMaxAgeCap bounds the lifetime a Max-Age can give a record (the
+// 400 days RFC 6265bis caps cookies at). It also keeps a huge Max-Age from
+// overflowing the Duration or the four-digit year RFC3339 parses back.
+const browserCookieMaxAgeCap = 400 * 24 * time.Hour
+
+// browserCookieExpiresAt is when a cookie received at now expires, worked out
+// as cookiejar's newEntry does: a positive Max-Age counts from now and wins
+// over Expires, which counts only when Max-Age is absent. Zero means a session
+// cookie (or one the caller deletes: Max-Age < 0). Pure.
+func browserCookieExpiresAt(c *http.Cookie, now time.Time) time.Time {
+	switch {
+	case c.MaxAge > 0:
+		age := browserCookieMaxAgeCap
+		if int64(c.MaxAge) < int64(browserCookieMaxAgeCap/time.Second) {
+			age = time.Duration(c.MaxAge) * time.Second
+		}
+		return now.Add(age)
+	case c.MaxAge == 0 && !c.Expires.IsZero():
+		return c.Expires
+	}
+	return time.Time{}
+}
+
+// browserCookieExpirySlack is how far a cookie's expiry may move before its
+// saved record is rewritten.
+const browserCookieExpirySlack = time.Hour
+
+// browserCookieOnlyRefreshed reports whether rec differs from the saved old
+// only by an expiry that moved by an hour or less — and by no more than half
+// of rec's remaining life at now. A Max-Age cookie re-sent with every
+// response moves its expiry by seconds each time; keeping the saved stamp
+// stops every page load rewriting the file on the card. The jar in memory
+// keeps the exact expiry; the file is at most an hour off, and a short-lived
+// cookie (a 10-minute Max-Age) is saved at most half its life stale, so the
+// saved stamp is never already in the past when the file is read back. A new
+// value, new flags or a session cookie turning persistent still save. Pure.
+func browserCookieOnlyRefreshed(old, rec browserCookieRecord, now time.Time) bool {
+	if old.Expires == "" || rec.Expires == "" {
+		return false
+	}
+	same := rec
+	same.Expires = old.Expires
+	if same != old {
+		return false
+	}
+	before, after := browserCookieExpiry(old), browserCookieExpiry(rec)
+	if before.IsZero() || after.IsZero() {
+		return false
+	}
+	slack := browserCookieExpirySlack
+	if half := after.Sub(now) / 2; half < slack {
+		slack = half // a 10-minute cookie is saved at most 5 minutes stale, never expired
+	}
+	moved := after.Sub(before)
+	return moved >= -slack && moved <= slack
+}
+
+// browserCookieExpiry is a record's expiry; zero for a session cookie or one
+// whose stamp does not parse.
+func browserCookieExpiry(rec browserCookieRecord) time.Time {
+	when, err := time.Parse(time.RFC3339, rec.Expires)
+	if err != nil {
+		return time.Time{}
+	}
+	return when
 }
 
 var (
@@ -631,7 +792,7 @@ func browserCookies() http.CookieJar {
 		return nil
 	}
 	browserJar.jar = jar
-	if records := loadBrowserCookies(jar.path); len(records) > 0 {
+	if records, migrated := loadBrowserCookies(jar.path); len(records) > 0 {
 		// The retention policy is applied here, at the one moment the card's
 		// session becomes the live one: a cookie that is older than the chosen
 		// window is not restored, and a stamp added to a pre-policy file is
@@ -645,7 +806,7 @@ func browserCookies() http.CookieJar {
 		if dropped > 0 {
 			logWarn("browser", "retention %s dropped %d saved cookie(s)", cookieRetentionLabel(cookieRetentionDays(appConfig)), dropped)
 		}
-		if stamped || dropped > 0 {
+		if stamped || migrated || dropped > 0 {
 			if dropped > 0 {
 				// The pruned list is the retention policy's output; the backup holds
 				// the pre-prune session, and a damaged read must not undo the drop
@@ -757,7 +918,9 @@ func browserCookiePath(attribute, requestPath string) string {
 }
 
 // browserCookieURL rebuilds the URL a record belongs to. The scheme follows
-// Secure, because that is the only way the jar will hand the cookie back.
+// Secure, because that is the only way the jar will hand the cookie back. The
+// host goes in as the record spells it — brackets and all — so the jar files
+// and finds the cookie under the very name it was set under.
 func browserCookieURL(rec browserCookieRecord) *url.URL {
 	host := strings.TrimSpace(rec.Host)
 	if host == "" {
@@ -770,18 +933,141 @@ func browserCookieURL(rec browserCookieRecord) *url.URL {
 	return &url.URL{Scheme: scheme, Host: host, Path: browserCookiePath(rec.Path, "/")}
 }
 
-// browserCookieKey names a stored cookie the way the jar does: host, path and
-// name together. Two sites can share a cookie name, and one site can keep the
-// same name under two paths.
+// browserCookieKey names a stored cookie the way the jar does: its domain (or,
+// for a host-only cookie, its host), path and name together. Two sites can
+// share a cookie name, one site can keep the same name under two paths, and a
+// host-only and a domain cookie of one name set from the same host are two
+// cookies — keyed by the host that set them, they shared one record, and the
+// second one's flags overwrote the first's HttpOnly.
 func browserCookieKey(rec browserCookieRecord) string {
-	return rec.Host + "\x00" + rec.Path + "\x00" + rec.Name
+	key, _ := browserCookieKeyOK(rec)
+	return key
+}
+
+// browserCookieKeyOK is browserCookieKey, and false for a Domain attribute the
+// jar refuses before it looks any further: "." or "..x" (empty, or a second
+// leading dot), a trailing dot and a non-ASCII domain. Such a record would
+// otherwise be keyed like the host-only cookie of the same name. On an IP
+// address the jar (domainAndType, isIP) takes a Domain only when it is the
+// host spelled exactly — no leading dot dropped — and files the cookie
+// host-only, so "Domain=.127.0.0.1" is refused here too: it must not reach,
+// and rewrite the flags of, the host-only record of the same name.
+func browserCookieKeyOK(rec browserCookieRecord) (string, bool) {
+	scope := browserCookieJarHost(rec.Host)
+	ok := true
+	if rec.Domain != "" && (strings.ContainsAny(scope, ":%") || net.ParseIP(scope) != nil) {
+		ok = rec.Domain == scope
+	} else if rec.Domain != "" {
+		domain := strings.TrimPrefix(rec.Domain, ".")
+		ok = domain != "" && domain[0] != '.' && domain[len(domain)-1] != '.' && browserCookieASCII(domain)
+		scope = browserCookieASCIILower(domain)
+	}
+	return scope + "\x00" + rec.Path + "\x00" + rec.Name, ok
+}
+
+// browserCookieRecordHost is a request's host as a record keeps it: the port
+// cut off by the jar's own rule and ASCII letters lower-cased, nothing else.
+// The jar keeps the brackets of a port-less IPv6 literal and drops them with a
+// port — "[::1]" and "[::1]:8080" are two hosts to it — so this does too, and
+// trailing dots stay, because the jar drops only one ("example.com.." is
+// another name). Handed back to the jar in a URL it names the same host the
+// request did. "" when the jar could not read the host either.
+func browserCookieRecordHost(hostport string) string {
+	host := strings.TrimSpace(hostport)
+	if browserCookieHasPort(host) {
+		h, _, err := net.SplitHostPort(host)
+		if err != nil {
+			return ""
+		}
+		host = h
+	}
+	return browserCookieASCIILower(host)
+}
+
+// browserCookieJarHost is the name the jar files a host-only cookie under (its
+// canonicalHost): the record's host with one trailing dot dropped. The one
+// step left out is punycode: the jar encodes a Unicode label, and since
+// lower-casing the ASCII letters first gives the same encoding, the only names
+// this keeps apart that the jar merges are a Unicode label and its xn-- form —
+// two records for one cookie, which holdsLocked's value check retires.
+func browserCookieJarHost(hostport string) string {
+	return strings.TrimSuffix(browserCookieRecordHost(hostport), ".")
+}
+
+// browserCookieHasPort is the jar's hasPort: one colon is a port, more than one
+// is an IPv6 literal unless it is bracketed and followed by one.
+func browserCookieHasPort(host string) bool {
+	switch strings.Count(host, ":") {
+	case 0:
+		return false
+	case 1:
+		return true
+	}
+	return host[0] == '[' && strings.Contains(host, "]:")
+}
+
+// browserCookieASCII reports whether s is plain ASCII.
+func browserCookieASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// browserCookieASCIILower lower-cases the ASCII letters of s and leaves every
+// other byte alone, as the jar does to a name it has already encoded.
+func browserCookieASCIILower(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 'A' && s[i] <= 'Z' {
+			b := []byte(s)
+			for k := i; k < len(b); k++ {
+				if b[k] >= 'A' && b[k] <= 'Z' {
+					b[k] += 'a' - 'A'
+				}
+			}
+			return string(b)
+		}
+	}
+	return s
 }
 
 // browserHTTPClient builds the client every browser request goes through, so a
 // cookie set by one request is visible to the next — including across a
 // redirect, where the client stores each hop's Set-Cookie before following it.
 //
-// The caller keeps its own timeout and redirect policy; only the jar is shared.
+// The caller keeps its own timeout and redirect policy; the jar and the
+// transport are shared. A transport per client meant every stylesheet and
+// every image paid its own DNS lookup, TCP connect and TLS handshake — on
+// handheld Wi-Fi that pushed a page's pictures past the image pass's deadline,
+// and they drew as grey placeholders. One pooled transport reuses the
+// connection (one HTTP/2 connection per host carries all of a CDN's images).
 func browserHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{Timeout: timeout, Jar: browserCookies(), Transport: browserTransport()}
+	return &http.Client{Timeout: timeout, Jar: browserCookies(), Transport: browserSharedTransport()}
+}
+
+var browserSharedTransportState struct {
+	once sync.Once
+	tr   *http.Transport
+}
+
+// browserSharedTransport is the one pooled transport behind browserHTTPClient.
+func browserSharedTransport() *http.Transport {
+	browserSharedTransportState.once.Do(func() {
+		tr := browserTransport()
+		// Image and stylesheet passes fetch up to six at a time from one host;
+		// over HTTP/1.1 the default of two idle connections per host closed
+		// the rest after every request.
+		tr.MaxIdleConnsPerHost = 8
+		// A pooled connection can die silently with the radio (sleep, a
+		// Wi-Fi or VPN change). Idle ones are dropped sooner than the default
+		// 90 s, an HTTP/2 connection that stops answering pings is closed
+		// rather than holding every request to that host until its timeout,
+		// and netWakeNoted empties the pool on wake.
+		tr.IdleConnTimeout = 30 * time.Second
+		tr.HTTP2 = &http.HTTP2Config{SendPingTimeout: 15 * time.Second, PingTimeout: 10 * time.Second}
+		browserSharedTransportState.tr = tr
+	})
+	return browserSharedTransportState.tr
 }

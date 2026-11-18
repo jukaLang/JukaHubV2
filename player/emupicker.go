@@ -48,10 +48,22 @@ var emuPickUI struct {
 // gameLauncherPinned is the launcher a game was set to always use, or "" when
 // none is set or its file is gone (then the picker asks again).
 func gameLauncherPinned(opts gameOptions) string {
-	if p := strings.TrimSpace(opts.Emulator); p != "" && regularFile(p) {
+	if p := strings.TrimSpace(opts.Emulator); gameLauncherStillUsable(p) {
 		return p
 	}
 	return ""
+}
+
+// gameLauncherStillUsable reports whether a remembered launcher can still
+// start a game: its file is there and, for the official PICO-8, pico8.dat is
+// still beside it. Without that check a PICO-8 whose data file was removed
+// would be started anyway, without the switches that only apply to the real
+// one, and fail.
+func gameLauncherStillUsable(p string) bool {
+	if p == "" || !regularFile(p) {
+		return false
+	}
+	return !pico8NameOnly(p) || pico8NativeIsLauncher(p)
 }
 
 // resolveGameLauncherFor is resolveGameLauncher for one game: the emulator it
@@ -59,7 +71,7 @@ func gameLauncherPinned(opts gameOptions) string {
 // list, the diagnosis and Reset game read the emulator the game really runs
 // in through it. Safe off the main thread.
 func resolveGameLauncherFor(game libraryGame) string {
-	if game.System == androidLibrarySystem || game.System == html5LibrarySystem {
+	if game.System == androidLibrarySystem || game.System == html5LibrarySystem || game.System == portsLibrarySystem {
 		return resolveGameLauncher(game.System)
 	}
 	opts := gameOptionsFor(game.Path)
@@ -69,12 +81,17 @@ func resolveGameLauncherFor(game libraryGame) string {
 	if configured := configuredGameLauncher(game.System, loadGameLauncherOverrides(gameLauncherOverridesPath())); configured != "" {
 		return configured
 	}
-	if last := strings.TrimSpace(opts.LastEmulator); last != "" && regularFile(last) {
+	// On NextUI the game's pak, as chooseGameLauncher starts it (nextui.go).
+	if pak := nextuiPakFor(game.Path); pak != "" {
+		return pak
+	}
+	if last := strings.TrimSpace(opts.LastEmulator); gameLauncherStillUsable(last) {
 		return last
 	}
 	// resolveGameLauncher's catalog step, for this game's own Roms folder:
 	// of several, the one recommended for this hardware (emubest.go).
-	if all := findGameLaunchersFor(game.System, game.Path, emulatorEntries()); len(all) > 0 {
+	// The user's own PICO-8 joins PICO-8's list (pico8native.go).
+	if all := pico8NativeLaunchers(game.System, findGameLaunchersFor(game.System, game.Path, emulatorEntries())); len(all) > 0 {
 		all, _ = emuBestOrder(game.System, all)
 		return all[0].Launch
 	}
@@ -94,7 +111,7 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		// behind it) must not replace the game the sheet is asking about.
 		return
 	}
-	if game.System == androidLibrarySystem || game.System == html5LibrarySystem {
+	if game.System == androidLibrarySystem || game.System == html5LibrarySystem || game.System == portsLibrarySystem {
 		launch(resolveGameLauncher(game.System))
 		return
 	}
@@ -107,7 +124,7 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		launch(configured)
 		return
 	}
-	options := findGameLaunchersFor(game.System, game.Path, emulatorEntries())
+	options := pico8NativeLaunchers(game.System, findGameLaunchersFor(game.System, game.Path, emulatorEntries()))
 	// The emulator recommended for this hardware leads the list, badged, and
 	// takes the highlight unless another was picked last (emubest.go).
 	options, recommended := emuBestOrder(game.System, options)

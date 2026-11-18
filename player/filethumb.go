@@ -295,7 +295,12 @@ func feGenerateThumbnail(path string) ([]byte, error) {
 			return nil, err
 		}
 		// A picture the Go decoders do not know (WebP, TIFF) is still a frame
-		// ffmpeg can read, so it gets one attempt before the row gives up.
+		// ffmpeg can read, so it gets one attempt before the row gives up. A
+		// WebP's size comes from its header first: ffmpeg would allocate a
+		// giant's pixels before the cap could refuse it.
+		if w, h, ok := webpFileSize(path); ok && !feThumbDecodeAllowed(int32(min(w, 1<<30)), int32(min(h, 1<<30))) {
+			return nil, fmt.Errorf("%s is %dx%d: %w", filepath.Base(path), w, h, errFeThumbTooLarge)
+		}
 		if data, fErr := feFFmpegThumbnail(path, false); fErr == nil && len(data) > 0 {
 			return data, nil
 		}

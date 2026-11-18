@@ -106,7 +106,12 @@ func gameDisplayTitle(path string) string {
 	if base == "" || base == "." || base == string(filepath.Separator) {
 		return ""
 	}
-	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	// An extracted Xbox 360 game's default.xex is titled after its folder.
+	stem := romGameStem(strings.TrimSpace(path))
+	// A PICO-8 cart picture has two extensions: "celeste.p8.png" is Celeste.
+	if strings.EqualFold(filepath.Ext(stem), ".p8") && strings.EqualFold(filepath.Ext(base), ".png") {
+		stem = stem[:len(stem)-len(".p8")]
+	}
 	stem = strings.ReplaceAll(stem, "_", " ")
 	stem = strings.TrimSpace(stem)
 	for {
@@ -164,11 +169,17 @@ func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds 
 		// Sort, display title, hidden flag and the rating/year/playtime the
 		// chosen sort reads all come from the existing stores (game_library_view.go).
 		libraryDecorateGames(games, playtimeSeconds)
+		// map.txt names (NextUI/MinUI) for games the user has not renamed.
+		if nextuiApplyMapTitles(games) {
+			sortLibraryGames(games, librarySortMode())
+		}
 		withArt := countCoveredGames(games)
 		lib.Systems = append(lib.Systems, librarySystem{Name: name, Games: games, WithArt: withArt})
 		lib.Total += len(games)
 		lib.WithArt += withArt
 	}
+	// PortMaster's ports join as one more console (LIB-9, ports_library.go).
+	libraryAddPortGames(&lib, playtimeSeconds)
 	sortLibrarySystems(lib.Systems)
 	return lib
 }
@@ -363,7 +374,8 @@ func findGameLauncher(system string, entries []emuEntry) string {
 // match first (findGameLauncher's order), one entry per launcher file: the
 // emulator picker (emupicker.go) offers them when there is more than one.
 func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
-	return findGameLaunchersFor(system, "", entries)
+	// The user's own PICO-8 leads PICO-8's list when it is here (pico8native.go).
+	return pico8NativeLaunchers(system, findGameLaunchersFor(system, "", entries))
 }
 
 // findGameLaunchersFor is findGameLaunchers for the game at romPath. The Emus
@@ -374,6 +386,12 @@ func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
 // alias of the system (Roms/GBA) keeps the usual list, so the picker still
 // offers GBA beside mGBA. With no romPath this is findGameLaunchers.
 func findGameLaunchersFor(system, romPath string, entries []emuEntry) []emuEntry {
+	// On NextUI a game in a "Name (TAG)" folder starts through that TAG's
+	// pak, as from NextUI's own menu, with no question (nextui.go); another
+	// emulator can still be pinned in the game's options.
+	if romPath != "" && nextuiPakFor(romPath) != "" {
+		return nextuiWithPakFirst(romPath, nil)
+	}
 	candidates := gameLauncherCandidates(system)
 	if len(candidates) == 0 {
 		return nil
@@ -523,6 +541,9 @@ func resolveGameLauncher(system string) string {
 	if system == html5LibrarySystem {
 		return html5LibraryLauncher
 	}
+	if system == portsLibrarySystem {
+		return portsLibraryLauncher // a port is its own launcher (ports_library.go)
+	}
 	if launcher := configuredGameLauncher(system, loadGameLauncherOverrides(gameLauncherOverridesPath())); launcher != "" {
 		return launcher
 	}
@@ -541,6 +562,11 @@ func gameLaunchCommand(launcher, romPath string) (string, []string) {
 // go after the ROM path, which is where a stock launch.sh stops reading and a
 // direct emulator binary (PPSSPP, RetroArch) starts parsing its options.
 func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []string) {
+	// The official PICO-8 is a program, not a script: the cart goes after
+	// -run, with the folders JukaHub chose for it (pico8native.go).
+	if own, ok := pico8NativeGameArgs(launcher, romPath); ok {
+		return launcher, append(own, extra...)
+	}
 	ext := strings.ToLower(filepath.Ext(launcher))
 	var name string
 	var args []string
@@ -612,6 +638,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if game.System == html5LibrarySystem {
 		return launchHTML5Game(game)
 	}
+	if game.System == portsLibrarySystem {
+		return launchPortLibraryGame(game) // PortMaster ports (LIB-9, ports_library.go)
+	}
 	if strings.TrimSpace(game.Path) == "" {
 		return fmt.Errorf("no ROM selected")
 	}
@@ -623,6 +652,10 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		// have a specific, actionable answer: what to install, or why this
 		// device cannot run them (emuLibraryLauncherHint).
 		if hint := emuLibraryLauncherHint(game.System); hint != "" {
+			return errors.New(hint)
+		}
+		// A NextUI folder whose TAG has no pak says which pak (nextui.go).
+		if hint := nextuiMissingPakHint(game.Path); hint != "" {
 			return errors.New(hint)
 		}
 		// Which names were looked for, and where, so a report says why. The
@@ -655,6 +688,12 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
 	}
+	// The game's saves come down from Google Drive / RomM first: off this
+	// (render) thread, and the launch runs again once they are here
+	// (savesync_auto.go).
+	if deferred, err := saveSyncDeferLaunch(game, launcher); err != nil || deferred {
+		return err
+	}
 	// xemu without the Xbox firmware opens a window that cannot boot the
 	// disc: what it lacks is said here instead, and files the setup found
 	// but never applied are written into xemu.toml first.
@@ -683,6 +722,13 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if prepareVideoFilter(launcher, game.Path) {
 		prepareShaderSpeedCheck(launcher, game.Path)
 	}
+	// Emulation settings for this launch: audio quality, latency, overlay,
+	// rumble strength, arcade rotation, PAL (ratuning.go).
+	prepareRATuning(launcher, game)
+	// The cheats switched on for this game in its options sheet (cheats.go).
+	prepareCheats(launcher, game)
+	// Save-state screenshots for the game switcher (gameswitcher.go).
+	prepareGameSwitcher(launcher, game)
 	// RetroArch's log for this launch, read if the game quits at once (gamediag.go).
 	diag := prepareGameDiag(game, launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
@@ -717,6 +763,10 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return err
 	}
 	ppssppPrepareManagedLaunch(launcher, cmd)
+	// The official PICO-8: its home folder and environment (pico8native.go).
+	pico8NativePrepareLaunch(launcher, cmd)
+	// A NextUI pak gets NextUI's environment and resume flag (nextui.go).
+	nextuiPrepareLaunch(launcher, game.Path, cmd)
 	cmd.Dir = filepath.Dir(launcher)
 	if strings.EqualFold(filepath.Ext(launcher), ".dll") && name != "" {
 		// A Windows core starts the RetroArch beside it: run from its folder.
@@ -734,6 +784,8 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return err
 	}
 	noteGameChildStarted(cmd)
+	// A NextUI pak's minarch owns the power key while it plays (nextui.go).
+	nextuiPakStarted(launcher, cmd)
 	output.started(true)
 	// A line in JukaHub's log for the start and one for the end, and the stops
 	// JukaHub sends told apart from the game ending by itself
@@ -765,6 +817,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		gameLaunchLogEnd(game, waitErr, time.Since(launchedAt), stopped)
 		restoreProfile()
 		recorder.Stop()
+		// The game and its process group are gone: its saves go up to Google
+		// Drive / RomM in the background (savesync_auto.go).
+		saveSyncAfterExit(game.Path, game.System)
 		// A game that quit within seconds is diagnosed: what is missing, where
 		// it goes (gamediag.go).
 		diag.exited(waitErr)
@@ -775,6 +830,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		if options.MaxFreqKHz > 0 {
 			ShowToast(gameCeilingToast(game, options.MaxFreqKHz), ToastKindInfo)
 		}
+		// minarch powered off in the game: JukaHub powers off, as NextUI's
+		// own loop would (nextui.go).
+		nextuiPakExited(cmd)
 	}()
 	// Two or more Local play seats make this a local multiplayer session.
 	if len(hotseat.players) >= 2 {

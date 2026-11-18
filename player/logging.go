@@ -6,7 +6,8 @@ package main
 // (logRingHandler). Each record becomes a compact line in the in-memory ring
 // (appLog, hardware.go) that the Logs screen, the bug report and the
 // diagnostics export read; records at warning level and above are also copied
-// to stderr, which launch.sh appends to errors.txt on the card. Debug lines on
+// to stderr, which launch.sh appends to errors.txt on the card. Both copies
+// have credentials removed first (redactLogSecrets, logredact.go). Debug lines on
 // a handheld cost one level compare: the printf helpers below do not format a
 // message nobody will see, and the card is never written for routine chatter.
 //
@@ -113,7 +114,7 @@ func logFatal(sys, format string, args ...any) {
 	msg := sys + ": " + fmt.Sprintf(format, args...)
 	logPrintf(slog.LevelError, "", "%s", msg)
 	if !Log().Enabled(context.Background(), slog.LevelError) {
-		fmt.Fprintln(os.Stderr, msg)
+		fmt.Fprintln(os.Stderr, redactLogSecrets(msg))
 	}
 	os.Exit(1)
 }
@@ -160,7 +161,9 @@ func (h *logRingHandler) Handle(_ context.Context, r slog.Record) error {
 		appendLogAttr(&b, h.group, a)
 		return true
 	})
-	line := b.String()
+	// Credentials go before the line reaches the ring or the card
+	// (logredact.go): an error string can echo a request URL or a header.
+	line := redactLogSecrets(b.String())
 	appLog.Append(line)
 	if r.Level >= h.stderr {
 		_, _ = os.Stderr.WriteString(line + "\n")

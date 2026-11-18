@@ -95,3 +95,37 @@ func TestPkgArtLoadsAllCurrentCatalogIcons(t *testing.T) {
 		t.Fatalf("loaded %d/%d icons in %d batches", len(got), count, batches)
 	}
 }
+
+// TestWebPDecoderChoice: SDL_image first, then the card's ffmpeg, else a .webp
+// stays hidden (MED-37); ffmpeg is asked for exactly the size the caller's
+// buffer has, and the header the pixel cap reads gives the picture's size.
+func TestWebPDecoderChoice(t *testing.T) {
+	for _, c := range []struct {
+		sdl, ffmpeg bool
+		want        webpDecoder
+	}{
+		{true, true, webpDecoderSDL},
+		{true, false, webpDecoderSDL},
+		{false, true, webpDecoderFFmpeg},
+		{false, false, webpDecoderNone},
+	} {
+		if got := webpDecoderChoice(c.sdl, c.ffmpeg); got != c.want {
+			t.Errorf("sdl=%v ffmpeg=%v: decoder %d, want %d", c.sdl, c.ffmpeg, got, c.want)
+		}
+	}
+	path := t.TempDir() + string(os.PathSeparator) + "cover.webp"
+	want := fmt.Sprint([]string{"-nostdin", "-v", "error", "-i", path, "-frames:v", "1",
+		"-vf", "scale=512:384:flags=area", "-f", "rawvideo", "-pix_fmt", "rgba", "pipe:1"})
+	if got := fmt.Sprint(webpFFmpegArgs(path, 512, 384)); got != want {
+		t.Errorf("args = %s\nwant   %s", got, want)
+	}
+	if got := webpFFmpegArgs("-x.webp", 1, 1); got[4] != "file:-x.webp" {
+		t.Errorf("a relative name went to ffmpeg as %q", got[4])
+	}
+	if w, h, ok := webpImageSize(webpProbe); !ok || w != 1 || h != 1 {
+		t.Errorf("probe header = %dx%d (%v), want 1x1", w, h, ok)
+	}
+	if _, _, ok := webpImageSize([]byte("RIFF\x00\x00\x00\x00WEBPVP8L")); ok {
+		t.Error("a truncated header gave a size")
+	}
+}

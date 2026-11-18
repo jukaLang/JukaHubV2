@@ -621,24 +621,10 @@ func schedParseCrontab(text, source, group, defaultUser string, withUser bool, n
 
 // schedFormatWhen says when a time is, relative to now: "Today 03:00",
 // "Tomorrow 03:00", "Mon 09:00" within a week, else "12 Dec 03:00".
+// It is formatTimeNear (clockformat.go): the user's clock, date order and
+// language.
 func schedFormatWhen(t, now time.Time) string {
-	y1, m1, d1 := now.Date()
-	y2, m2, d2 := t.Date()
-	today := time.Date(y1, m1, d1, 0, 0, 0, 0, now.Location())
-	day := time.Date(y2, m2, d2, 0, 0, 0, 0, now.Location())
-	days := int(day.Sub(today).Hours() / 24)
-	clock := t.Format("15:04")
-	switch {
-	case days == 0:
-		return "Today " + clock
-	case days == 1:
-		return "Tomorrow " + clock
-	case days > 1 && days < 7:
-		return t.Format("Mon") + " " + clock
-	case t.Year() == now.Year():
-		return t.Format("2 Jan") + " " + clock
-	}
-	return t.Format("2 Jan 2006") + " " + clock
+	return formatTimeNear(nil, t, now)
 }
 
 // ── Windows Task Scheduler ───────────────────────────────────────────────

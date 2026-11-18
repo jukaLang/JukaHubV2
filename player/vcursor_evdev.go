@@ -30,6 +30,10 @@ const (
 	evdevEvKey = 0x01
 	evdevEvRel = 0x02
 	evdevEvAbs = 0x03
+	evdevEvSw  = 0x05
+
+	evdevSwHeadphoneInsert = 0x02
+	evdevSwLineoutInsert   = 0x06
 
 	evdevSynReport  = 0x00
 	evdevSynDropped = 0x03
@@ -301,6 +305,7 @@ type evdevDevice struct {
 	EV      []uint64
 	Key     []uint64
 	Abs     []uint64
+	SW      []uint64
 }
 
 // evdevHas reports whether bit is set in a bitmap.
@@ -367,6 +372,8 @@ func evdevParseDevices(text string) []evdevDevice {
 			cur.Key = evdevParseBitmap(strings.TrimPrefix(line, "B: KEY="))
 		case strings.HasPrefix(line, "B: ABS="):
 			cur.Abs = evdevParseBitmap(strings.TrimPrefix(line, "B: ABS="))
+		case strings.HasPrefix(line, "B: SW="):
+			cur.SW = evdevParseBitmap(strings.TrimPrefix(line, "B: SW="))
 		}
 	}
 	flush()

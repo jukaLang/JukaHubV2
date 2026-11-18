@@ -851,11 +851,13 @@ func needsBox64(path string) bool {
 	return (machine == 0x03 || machine == 0x3E) && !hostRunsX86(machine)
 }
 
-// launchGameProfile starts a profile from the render thread (the Game Profiles
-// panel): it claims the profile's start for the whole launch, so no other
-// Play — the Games Library's, the APK Store's — starts the game a second time
-// meanwhile, and reads the time-lapse settings here, where the config may be
-// read.
+// launchGameProfile starts a profile from the render thread: it claims the
+// profile's start for the whole launch, so no other Play — the Games
+// Library's, the APK Store's — starts the game a second time meanwhile, and
+// reads the time-lapse settings here, where the config may be read. The Game
+// Profiles panel uses it for Wine profiles, whose launch is quick here and
+// runs on a goroutine of its own (wineStart); every other runtime it starts in
+// the background (gameProfilePanelStart).
 func launchGameProfile(entry gameProfileEntry) error {
 	id := entry.Profile.ID
 	if !gameProfileClaimStart(id) {
@@ -871,9 +873,10 @@ func launchGameProfile(entry gameProfileEntry) error {
 // the child's output without exposing environment values. The caller holds
 // the profile's start claim (gameProfileClaimStart) until this returns — the
 // PID is recorded by then, so the running check takes over — and tl is the
-// time-lapse settings it read on the render thread: the Games Library and the
-// APK Store run this in the background (they start AndroidPak profiles only; a
-// Wine profile's launch reads its settings where it runs, the panel).
+// time-lapse settings it read on the render thread: the Games Library, the
+// APK Store and the Game Profiles panel run this in the background (every
+// runtime but Wine: a Wine profile's launch reads its settings where it runs,
+// the panel's render thread, through launchGameProfile).
 func launchGameProfileClaimed(entry gameProfileEntry, tl timelapseSettings) error {
 	id := entry.Profile.ID
 	if pid := gameProfileRunningPID(id); pid > 0 {
@@ -967,7 +970,9 @@ func launchGameProfileClaimed(entry gameProfileEntry, tl timelapseSettings) erro
 // a goroutine, with the progress and failures reported from there. The
 // profile's env wins over the runtime's defaults, its "display" picks the
 // display, and its log is the profile's. It runs on the main thread (the Game
-// Profiles panel), which is where the settings the launch needs are read.
+// Profiles panel), which is where the settings the launch needs are read —
+// the time-lapse's among them: the session records one once the program runs,
+// as an AndroidPak profile does (startGameProfileCommand).
 func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
 	if !IsWindows() && windowsRuntimeInstalling() {
 		// The launch would run on files being replaced.
@@ -981,6 +986,10 @@ func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
 		env["WINEPREFIX"] = filepath.Join(gameProfilesDir(), "wineprefix")
 	}
 	wineLaunchSettingsTake(appConfig)
+	tl := timelapseSettingsFor(appConfig)
+	// The session's time-lapse: Started begins it and Ended stops it. Both run
+	// on the launch's goroutine, one after the other, so it needs no lock.
+	var recorder *timelapseRecorder
 	return wineStart(wineLaunch{
 		Title:   entry.Profile.Title,
 		Key:     "profile:" + id,
@@ -994,8 +1003,17 @@ func launchWineProfile(entry gameProfileEntry, gameDir, exe string) error {
 			gameProfileSetRunning(id, pid)
 			trophyEvent(tkGameLaunch) // a PC game (a Wine profile) started
 			trophyEventDistinct(tkGameTitles, id)
+			recorder = startTimelapseWith(appConfig, id, tl)
 		},
-		Ended: func(error) { gameProfileSetRunning(id, 0) },
+		Ended: func(error) {
+			gameProfileSetRunning(id, 0)
+			if recorder != nil {
+				// Stop waits for the film to be encoded, and wineRun hands the
+				// screen and the launcher back only after Ended: the capture
+				// ends now, the encoding goes on behind.
+				go recorder.Stop()
+			}
+		},
 		// A toast now and the launch-failure dialog once the main loop draws
 		// again (wineShowProfileFailure): this runs on the launch's goroutine.
 		Failed: func(err error, logPath string) { wineProfileLaunchFailed(entry.Profile.Title, err, logPath) },

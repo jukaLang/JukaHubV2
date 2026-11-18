@@ -70,14 +70,19 @@ Example:
 }
 ```
 
-## Console styles
+## Styles and layouts
 
-Theme presets has four tabs: Colour, Total conversion, Consoles and
-Experience. The Consoles tab gathers the console-inspired looks; the Total
-conversion tab keeps the rest. They use colors, tile shapes, the Home
-arrangement and the focus treatment only, with no logos, fonts or artwork. Each
-one also has a plain palette in the Colour tab, which repaints without moving
-any tile.
+Theme presets has three tabs: Colour, Styles and Experience. Colour changes the
+palette without moving Home cards. Home layout is a separate setting under
+Settings → Theme & look, with Tabs, Standard, Hero grid, Carousel and Widgets.
+The first-run tour offers the same five layouts with visual previews.
+
+Styles contains console-inspired looks, Minimal UI and looks with their own
+background glow. These can change colors, tile shapes, the Home arrangement
+and the focus treatment, with no logos, fonts or artwork. Plain palettes stay
+in Colour. Built-in combinations that only repeated a palette and a layout no
+longer fill the gallery; existing saved selections still load. User-authored
+conversion themes remain available in Styles.
 
 | Theme | Palette in the Colour tab | Home | Look |
 |-------|---------------------------|------|------|
@@ -91,15 +96,16 @@ any tile.
 | Super Nintendo Style | Super Nintendo | Hero grid | Lavender grey with purple buttons; the Japanese pad's four colours as status colours. |
 | Nintendo 64 Style | Nintendo 64 | Widgets | Charcoal with the four emblem colours; a yellow ring pulsing to green, 6 px tiles. |
 | GameCube Style | GameCube Indigo | Dashboard | Deep indigo, 14 px tiles. |
-| Game Boy | Game Boy | Hero grid | The four DMG greens. |
 | Xbox Style | Xbox Green | Widgets | Dark charcoal with green highlights and glow. The Widgets grid uses 8 px rounded rectangles with a white focus ring. |
 | Xbox One Style | Xbox One | Hero grid | The 2013 Metro dashboard: near-black backdrop, flat square tiles (2 px corners), lime-green glow and a white focus ring. |
 | Minimal UI | Minimal | Carousel (`text`) | Just text: black page, Home as a plain list of names, the focused one white with a thin bar before it and its description after it. No tiles, art or glows. |
 | Mega Drive Style | Mega Drive | Dashboard | Black, red and gold, square 4 px tiles. |
 | Dreamcast Style | Dreamcast | Carousel, `strip` | White with the swirl's orange, 16 px tiles. |
-| Sega Blue | Sega Blue | Hero grid | Late-90s console blue with orange. |
 
-The fourth tab, Experience, is the Experience packs screen: a pack switches the
+Game Boy and Sega Blue remain available as colour palettes. Choose Hero grid
+separately to recreate their previous Home layout.
+
+The third tab, Experience, is the Experience packs screen: a pack switches the
 theme, Home, sounds and start screen together, with Undo. That screen shows the
 same tabs, so Tab, L1/R1 or a click moves back to the presets.
 
@@ -109,7 +115,7 @@ keys from the table above.
 
 ## Glass style
 
-Settings → Display & theme → **Glass** chooses how JukaHub's glass looks.
+Settings → Theme & look → **Glass** chooses how JukaHub's glass looks.
 *Classic* (the default) is the clear frosted pane with a hairline edge.
 *Realistic* mimics Apple's Liquid Glass: what is behind a card or button is
 blurred and slightly magnified, the top of the pane catches a sheen, a bright

@@ -139,6 +139,7 @@ func componentVersions(config *Config) []componentReportRow {
 	// Installed packages come from the Patch database. The first owned file's
 	// digest identifies the build that was installed; the file count shows how
 	// much of the package is on disk.
+	patchDBEnsureLoaded()
 	patchDBMu.Lock()
 	pkgs := make([]DBInstalledPkg, len(patchDB.Installed))
 	copy(pkgs, patchDB.Installed)

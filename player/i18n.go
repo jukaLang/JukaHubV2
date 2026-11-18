@@ -340,7 +340,8 @@ func (p *uiPattern) apply(s string, exact map[string]string) (string, bool) {
 }
 
 // uiIsNumber accepts the numbers the UI prints: digits with an optional sign
-// and thousands or decimal separators.
+// and thousands or decimal separators, including the no-break space French
+// and Russian group with (formatNumber).
 func uiIsNumber(s string) bool {
 	digits := 0
 	for i := 0; i < len(s); i++ {
@@ -351,6 +352,8 @@ func uiIsNumber(s string) bool {
 			if i != 0 {
 				return false
 			}
+		case b == 0xC2 && i+1 < len(s) && s[i+1] == 0xA0 && i > 0:
+			i++ // U+00A0
 		case b == ',' || b == '.':
 		default:
 			return false
@@ -622,6 +625,10 @@ func uiLanguageApply(config *Config) {
 	// before this setting must not leave the previous language in force.
 	v, _ := customValue(config.Variables.Custom, uiLanguageKey)
 	uiSetLanguage(coerceString(v))
+	// The clock and the date order, for the dates written off the main
+	// thread (dateSeen in clockformat.go), follow the same settings.
+	clockHour12(config)
+	dateOrder(config)
 }
 
 // renderTextRaw is renderText without the interface language: for content

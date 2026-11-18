@@ -19,48 +19,20 @@ import (
 	"testing"
 )
 
-// --- Semantic version comparison ---
+// --- Semantic version parsing (a package manifest's version) ---
 
-func TestCompareSemver(t *testing.T) {
-	cases := []struct {
-		a, b string
-		want int
-	}{
-		{"1.0.0", "1.0.0", 0},
-		{"v1.0.0", "1.0.0", 0},
-		{"0.4.0", "0.4.1", -1},
-		{"0.4.1", "0.4.0", 1},
-		{"1.2.3", "1.10.0", -1},
-		{"1.0.0-rc.1", "1.0.0", -1},
-		{"1.0.0-alpha", "1.0.0-beta", -1},
-		{"1.0.0-alpha.1", "1.0.0-alpha", 1},
-		{"1.0.0", "1.0.0+build5", 0},
-		{"1.2", "1.2.0", 0},
-	}
-	for _, c := range cases {
-		got, err := compareSemver(c.a, c.b)
-		if err != nil {
-			t.Fatalf("compareSemver(%q,%q): %v", c.a, c.b, err)
-		}
-		if got != c.want {
-			t.Errorf("compareSemver(%q,%q)=%d want %d", c.a, c.b, got, c.want)
+func TestParseSemver(t *testing.T) {
+	for _, good := range []string{"1.0.0", "v1.0.0", "1.2", "1.0.0-rc.1", "1.0.0+build5"} {
+		if _, err := parseSemver(good); err != nil {
+			t.Errorf("parseSemver(%q): %v", good, err)
 		}
 	}
 	if _, err := parseSemver("not-a-version"); err == nil {
 		t.Error("expected error for garbage version")
 	}
-	if NewerVersion("0.4.1", "0.4.0") {
-		t.Error("0.4.1 must not be newer than 0.4.0")
-	}
-	if !NewerVersion("0.4.0", "0.4.1") {
-		t.Error("0.4.1 must be newer than 0.4.0")
-	}
-	if NewerVersion("0.4.0", "garbage") {
-		t.Error("garbage candidate must never be newer")
-	}
 }
 
-// --- Manifest parsing ---
+// --- Device detection and the update target ---
 
 func TestDetectDeviceForSystem(t *testing.T) {
 	cases := []struct {
@@ -211,71 +183,6 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 		if target, err := jukaHubUpdateTargetFor(tc.device, tc.goos, tc.arch); err == nil {
 			t.Errorf("unexpected target for %q %s/%s: %+v", tc.device, tc.goos, tc.arch, target)
 		}
-	}
-
-	for _, device := range append(devices, DeviceUnknown) {
-		asset, err := jukaHubAssetName(device, "linux", "arm64")
-		wantAsset := "JukaHub-Trimui.zip"
-		if err != nil || asset != wantAsset {
-			t.Errorf("jukaHubAssetName(%q) = %q, %v; want %q", device, asset, err, wantAsset)
-		}
-	}
-}
-
-func TestParsePatchManifest(t *testing.T) {
-	good := `{
-		"schema": 1,
-		"product": "JukaHub",
-		"version": "v0.4.1",
-		"channel": "stable",
-		"targets": [
-			{"device": "trimui-smart-pro", "os": "linux", "arch": "arm64",
-			 "asset": "JukaHub-trimui-smart-pro-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("ab", 32) + `", "size": 1234},
-			{"device": "trimui-smart-pro-s", "os": "linux", "arch": "arm64",
-			 "asset": "JukaHub-trimui-smart-pro-s-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("bc", 32) + `", "size": 1234},
-			{"device": "trimui-brick", "os": "linux", "arch": "arm64",
-			 "asset": "JukaHub-trimui-brick-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("cd", 32) + `", "size": 1234},
-			{"device": "trimui-brick-pro", "os": "linux", "arch": "arm64",
-			 "asset": "JukaHub-trimui-brick-pro-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("de", 32) + `", "size": 1234},
-			{"device": "trimui-hammer", "os": "linux", "arch": "arm64",
-			 "asset": "JukaHub-trimui-hammer-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("ef", 32) + `", "size": 1234}
-		]
-	}`
-
-	m, err := ParsePatchManifest([]byte(good))
-	if err != nil {
-		t.Fatalf("good manifest rejected: %v", err)
-	}
-	tgt := m.ManifestTargetFor("trimui-smart-pro", "linux", "arm64")
-	if tgt == nil || tgt.Asset == "" {
-		t.Fatal("target lookup failed")
-	}
-	if m.ManifestTargetFor("brick", "linux", "arm64") != nil {
-		t.Fatal("wrong device must not match")
-	}
-	for _, device := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro, DeviceTrimuiHammer} {
-		if manifestTarget := m.ManifestTargetFor(string(device), "linux", "arm64"); manifestTarget == nil || manifestTarget.Asset == "" {
-			t.Errorf("manifest has no target for %q", device)
-		}
-	}
-
-	// Unknown schema fails closed.
-	if _, err := ParsePatchManifest([]byte(`{"schema": 99, "product": "JukaHub", "version": "1.0.0", "targets": []}`)); err == nil {
-		t.Error("unknown schema must be rejected")
-	}
-	// Missing product.
-	if _, err := ParsePatchManifest([]byte(`{"schema": 1, "version": "1.0.0", "targets": [{"asset":"a"}]}`)); err == nil {
-		t.Error("missing product must be rejected")
-	}
-	// Bad sha256 length.
-	bad := `{"schema":1,"product":"JukaHub","version":"1.0.0","targets":[{"asset":"a","sha256":"zz"}]}`
-	if _, err := ParsePatchManifest([]byte(bad)); err == nil {
-		t.Error("bad sha256 must be rejected")
 	}
 }
 

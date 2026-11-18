@@ -159,7 +159,7 @@ func podcastParseDuration(raw string) float64 {
 func podcastEpisodeMeta(ep podcastEpisode) string {
 	parts := []string{}
 	if !ep.Published.IsZero() {
-		parts = append(parts, ep.Published.Format("2 Jan 2006"))
+		parts = append(parts, formatDate(nil, ep.Published))
 	}
 	if ep.Duration > 0 {
 		parts = append(parts, formatMediaDuration(int(ep.Duration)))

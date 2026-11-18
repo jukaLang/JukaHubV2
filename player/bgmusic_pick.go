@@ -117,11 +117,10 @@ func bgmPickChoose(c *Config, path string) bool {
 		return true
 	}
 	root := feRoot(c)
-	var resolved string
-	var err error
-	if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-		resolved, err = existingDirWithin(root, path)
-	} else {
+	// A folder below root is tried first, then a file: the containment test
+	// runs before anything on disk is looked at.
+	resolved, err := existingDirWithin(root, path)
+	if err != nil {
 		resolved, err = regularFileWithin(root, path)
 		if err == nil && !isAudioFile(resolved) {
 			showToast("Choose a music file or folder", ToastInfo())

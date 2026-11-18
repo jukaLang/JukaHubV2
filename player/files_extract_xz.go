@@ -11,7 +11,9 @@ package main
 // library's lzma.Reader2, with the dictionary size this reader chose. The
 // checks (CRC32, CRC64, SHA-256), the header CRCs and the index are verified,
 // as `xz -t` does. Like the library, it reads LZMA2 as a block's only filter;
-// an .xz made with BCJ or delta in front is refused with that reason.
+// an .xz made with BCJ or delta in front is refused with that reason, and
+// handed to 7-Zip instead when one is on the device (feExtractRun). Every
+// LZMA2 chunk header is checked on its way to the decoder (feLzma2Guard).
 
 import (
 	"bytes"
@@ -57,6 +59,11 @@ func (e feXzUnsupportedErr) Error() string { return e.what }
 
 func (e feXzUnsupportedErr) Is(target error) bool { return target == errBadToolArchive }
 
+// errFeXzFilter is an .xz block with a filter (BCJ, delta) in front of its
+// LZMA2: the extraction hands such a file to 7-Zip when one is here
+// (feExtractRun).
+var errFeXzFilter = feXzUnsupportedErr{what: "its xz file uses a filter (BCJ or delta) JukaHub does not unpack"}
+
 // feXzCounter counts the bytes read through it: a block's compressed size is
 // what lzma.Reader2 took between its header and its padding.
 type feXzCounter struct {
@@ -68,6 +75,114 @@ func (c *feXzCounter) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// feLzma2Guard stands between a block's LZMA2 data and the decoder and reads
+// every chunk header on the way. A chunk whose properties have lc + lp > 4 is
+// refused before the decoder sees its header: xz refuses those, and the
+// vendored decoder (vendor/ is not ours to change) accepts them and builds a
+// literal table of up to 6 MiB for every such chunk — minutes per megabyte.
+// The decoder reads exactly what it needs (a header with ReadFull, an LZMA
+// chunk's data a byte at a time through a LimitReader, an uncompressed
+// chunk's to its exact size), so the guard never reads ahead: each read is
+// kept inside the header or the data it is in. An LZMA chunk the decoder
+// ends before its declared size would put the decoder's next header inside
+// what the guard counts as data: the decoder's multi-byte read of that header
+// gives it away, and a stream that ends there is caught at the block's end
+// (feXzReader.endBlock) — either is a damaged archive.
+type feLzma2Guard struct {
+	r    io.Reader
+	hdr  [6]byte
+	have int   // bytes of the current chunk header seen
+	need int   // its length, once its first byte is known (0 before)
+	left int64 // data bytes of the current chunk still to pass
+	lzma bool  // the current chunk's data is LZMA (read a byte at a time)
+}
+
+func (g *feLzma2Guard) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	switch {
+	case g.left > 0:
+		if g.lzma && len(p) > 1 {
+			return 0, errFeXzFormat
+		}
+		if int64(len(p)) > g.left {
+			p = p[:g.left]
+		}
+	case g.need == 0:
+		// The decoder reads a chunk's first byte alone (readChunkHeader). A
+		// longer read here is the rest of a header whose first byte the guard
+		// counted as an LZMA chunk's last data byte: that chunk ended early.
+		if len(p) > 1 {
+			return 0, errFeXzFormat
+		}
+	case len(p) > g.need-g.have:
+		p = p[:g.need-g.have]
+	}
+	n, err := g.r.Read(p)
+	if g.left > 0 {
+		g.left -= int64(n)
+		return n, err
+	}
+	for _, b := range p[:n] {
+		if g.need == 0 {
+			g.need = feLzma2HeaderLen(b)
+		}
+		g.hdr[g.have] = b
+		g.have++
+	}
+	if g.need > 0 && g.have == g.need {
+		if cerr := g.chunk(); cerr != nil {
+			return 0, cerr
+		}
+	}
+	return n, err
+}
+
+// feLzma2HeaderLen is the length of the chunk header that control byte c
+// starts: the end marker, an uncompressed chunk, an LZMA chunk with or without
+// new properties. A byte no chunk starts with counts as a header of one, which
+// the decoder then refuses.
+func feLzma2HeaderLen(c byte) int {
+	switch {
+	case c == 1 || c == 2:
+		return 3
+	case c >= 0xc0:
+		return 6
+	case c >= 0x80:
+		return 5
+	}
+	return 1
+}
+
+// chunk checks a complete chunk header and sets how much data follows it.
+func (g *feLzma2Guard) chunk() error {
+	h := g.hdr[:g.have]
+	g.have, g.need = 0, 0
+	g.lzma = false
+	switch c := h[0]; {
+	case c == 1 || c == 2:
+		g.left = (int64(h[1])<<8 | int64(h[2])) + 1
+	case c >= 0x80:
+		g.lzma = true
+		if c >= 0xc0 && !feLzma2PropsOK(h[5]) {
+			return feXzUnsupportedErr{what: "its xz file uses LZMA settings (lc + lp over 4) that xz itself refuses"}
+		}
+		g.left = (int64(h[3])<<8 | int64(h[4])) + 1
+	}
+	return nil
+}
+
+// feLzma2PropsOK reports an LZMA properties byte xz accepts: a valid code
+// (under 9·5·5) whose literal context and position bits add up to 4 at most.
+func feLzma2PropsOK(b byte) bool {
+	if b >= 9*5*5 {
+		return false
+	}
+	lc, lp := b%9, (b/9)%5
+	return lc+lp <= 4
 }
 
 // feXzRecord is one block as the index must list it.
@@ -94,7 +209,8 @@ type feXzReader struct {
 	allocated int64
 	produced  int64
 
-	// The block being decoded.
+	// The block being decoded, and the guard its LZMA2 data passes through.
+	guard    feLzma2Guard
 	block    *lzma.Reader2
 	sum      hash.Hash
 	hdrLen   int64
@@ -263,7 +379,7 @@ func (g *feXzReader) blockHeader(size byte) error {
 		return errFeXzFormat
 	}
 	if flags&0x03 != 0 {
-		return feXzUnsupportedErr{what: "its xz file uses a filter (BCJ or delta) JukaHub does not unpack"}
+		return errFeXzFilter
 	}
 	p := 2
 	g.wantComp, g.wantUnc = -1, -1
@@ -333,7 +449,8 @@ func (g *feXzReader) blockHeader(size byte) error {
 	default:
 		g.sum = nil
 	}
-	block, err := lzma.Reader2Config{DictCap: int(dict)}.NewReader2(&g.in)
+	g.guard = feLzma2Guard{r: &g.in}
+	block, err := lzma.Reader2Config{DictCap: int(dict)}.NewReader2(&g.guard)
 	if err != nil {
 		return feXzBad(err)
 	}
@@ -344,6 +461,10 @@ func (g *feXzReader) blockHeader(size byte) error {
 // endBlock checks a block once its LZMA2 data has ended: its sizes, its
 // padding and its check.
 func (g *feXzReader) endBlock() error {
+	if g.guard.left != 0 || g.guard.have != 0 {
+		// The decoder's view of the chunks and the guard's parted ways.
+		return errFeXzFormat
+	}
 	comp := g.in.n - g.start
 	if (g.wantComp >= 0 && comp != g.wantComp) || (g.wantUnc >= 0 && g.unc != g.wantUnc) {
 		return errFeXzFormat

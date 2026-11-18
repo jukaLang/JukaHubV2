@@ -22,8 +22,8 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// resolveToolURL returns the download URL for the first release asset whose
-// name matches one of the wanted strings (case-insensitive).
+// allowedToolRepos is the GitHub repos JukaHub downloads tool release assets
+// from (latestReleaseAssets refuses every other repo).
 //
 // IMPORTANT: repo must be a trusted GitHub repo, chosen from a small curated list
 // in this codebase. Arbitrary user-supplied repo names are not safe here because
@@ -50,17 +50,13 @@ var allowedToolRepos = map[string]bool{
 	"projectdiscovery/httpx":  true,
 	"projectdiscovery/dnsx":   true,
 	"projectdiscovery/nuclei": true,
+	// The built-in Syncthing for save files (syncthing.go). Installed only
+	// when the release's sha256sum.txt.asc lists the archive's hash.
+	"syncthing/syncthing": true,
 }
 
-func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
-	asset, err := resolveToolAsset(repo, apiToken, wants...)
-	if err != nil {
-		return "", err
-	}
-	return asset.URL, nil
-}
-
-// resolveToolAsset is resolveToolURL returning the whole asset, size included.
+// resolveToolAsset returns the first asset of a trusted repo's latest release
+// whose name matches one of the wanted names (case-insensitive), size included.
 // The wanted names are a preference order (the GPL ffmpeg build before the LGPL
 // one), so they are tried in turn rather than in the order the API lists the
 // release's files.
@@ -200,23 +196,12 @@ func assetNameMatches(name string, tokens []string) bool {
 	return true
 }
 
-// downloadFile downloads url to dest.
-// It also enforces a modest size cap and refuses obviously truncated files.
-func downloadFile(url, dest string) error {
-	return downloadFileWithProgress(url, dest, nil)
-}
-
-// downloadFileWithProgress downloads url to dest and reports progress in
+// downloadFileWithProgressCtx downloads url to dest and reports progress in
 // bytes (done, total) while streaming. total is <= 0 when the server did not
 // send a Content-Length. The request timeout is generous because helper-tool
-// bundles (ffmpeg) are large; the size cap still applies.
-func downloadFileWithProgress(url, dest string, progress func(done, total int64)) error {
-	return downloadFileWithProgressCtx(context.Background(), url, dest, progress)
-}
-
-// downloadFileWithProgressCtx is downloadFileWithProgress bounded by ctx: a
-// cancelled download stops at the next read instead of running to completion
-// behind a screen the user has already dismissed.
+// bundles (ffmpeg) are large; the size cap still applies. A cancelled ctx
+// stops the download at the next read instead of running to completion behind
+// a screen the user has already dismissed.
 func downloadFileWithProgressCtx(ctx context.Context, url, dest string, progress func(done, total int64)) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -565,8 +550,8 @@ func extractTarMembers(ctx context.Context, archivePath, stage string, want map[
 		if unsafeArchiveName(hdr.Name) {
 			return nil, fmt.Errorf("%w (unsafe archive path %q)", errBadToolArchive, hdr.Name)
 		}
-		base := strings.ToLower(path.Base(hdr.Name))
-		if !want[base] {
+		base, ok := toolArchiveWantedName(want, strings.ToLower(path.Base(hdr.Name)))
+		if !ok {
 			continue
 		}
 		if _, done := staged[base]; done {
@@ -599,6 +584,19 @@ func extractTarMembers(ctx context.Context, archivePath, stage string, want map[
 	return staged, nil
 }
 
+// toolArchiveWantedName returns the installer's own spelling of a wanted
+// member name (a key of want) when an archive member's base name matches it.
+// Only that trusted key is used for the staged file and the path returned,
+// so no byte of the name the archive spelled reaches the file system.
+func toolArchiveWantedName(want map[string]bool, base string) (string, bool) {
+	for name, wanted := range want {
+		if wanted && name == base {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // extractZipMembers writes the wanted entries of a zip archive into stage.
 func extractZipMembers(ctx context.Context, archivePath, stage string, want map[string]bool) (map[string]string, error) {
 	stageRoot, err := os.OpenRoot(stage)
@@ -623,8 +621,8 @@ func extractZipMembers(ctx context.Context, archivePath, stage string, want map[
 		if unsafeArchiveName(f.Name) {
 			return nil, fmt.Errorf("%w (unsafe archive path %q)", errBadToolArchive, f.Name)
 		}
-		base := strings.ToLower(path.Base(filepath.ToSlash(f.Name)))
-		if !want[base] {
+		base, ok := toolArchiveWantedName(want, strings.ToLower(path.Base(filepath.ToSlash(f.Name))))
+		if !ok {
 			continue
 		}
 		if _, done := staged[base]; done {
@@ -740,27 +738,6 @@ func clampInt32(v, min, max int32) int32 {
 		return max
 	}
 	return v
-}
-
-// httpsGetBytes fetches url with the given timeout and returns the body bytes.
-func httpsGetBytes(url string, timeout time.Duration) ([]byte, error) {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchURLMaxBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > fetchURLMaxBytes {
-		return nil, fmt.Errorf("response is larger than %d MiB", fetchURLMaxBytes>>20)
-	}
-	return data, nil
 }
 
 // fileExists reports whether path exists.

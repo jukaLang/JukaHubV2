@@ -164,3 +164,147 @@ func TestMinecraftPortsAndCopyPlan(t *testing.T) {
 		t.Errorf("copy order ends with %q (%d of %d files)", last, len(ordered), len(plan.Files))
 	}
 }
+
+// TestPortManifestParsing reads the two port.json formats PortMaster has
+// shipped (format 2 with nulls, format 4 with lists), the md5 harbourmaster
+// records for an installed port, and a port's gameinfo.xml.
+func TestPortManifestParsing(t *testing.T) {
+	v2 := `{"version": 2, "name": "2048.zip", "items": ["2048.sh", "2048/"], "items_opt": null,
+	 "attr": {"title": "2048", "porter": "Christian_Haitian", "runtime": null, "inst": "Ready to run.", "arch": ["aarch64"]}}`
+	m, ok := parsePortJSON([]byte(v2))
+	if !ok || m.Zip != "2048.zip" || m.Title != "2048" || len(m.Items) != 2 || m.ItemsOpt != nil ||
+		m.Runtime != nil || len(m.Porters) != 1 || m.Inst != "Ready to run." || m.MD5 != "" {
+		t.Fatalf("format 2: %+v ok=%v", m, ok)
+	}
+	v4 := "\ufeff" + `{"version": 4, "name": "defblade.zip", "items": ["Defblade.sh", "defblade"], "items_opt": [],
+	 "attr": {"title": "Defender's Blade", "porter": ["Cebion"], "runtime": ["mono-6.12.0.122-aarch64.squashfs"]},
+	 "status": {"md5": "0123456789abcdef0123456789abcdef", "status": "Installed"}}`
+	m, ok = parsePortJSON([]byte(v4))
+	if !ok || m.Title != "Defender's Blade" || len(m.Runtime) != 1 || m.MD5 != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("format 4: %+v ok=%v", m, ok)
+	}
+	if !portUpdateAvailable(m, mcCatalogEntry{MD5: "ffffffffffffffffffffffffffffffff"}) ||
+		portUpdateAvailable(m, mcCatalogEntry{MD5: strings.ToUpper(m.MD5)}) || portUpdateAvailable(portMeta{}, mcCatalogEntry{MD5: m.MD5}) {
+		t.Fatal("an update needs two different known md5s")
+	}
+	if _, ok := parsePortJSON([]byte(`[1,2]`)); ok {
+		t.Fatal("a list is not a manifest")
+	}
+	xml := `<?xml version="1.0"?><gameList>
+	 <game><path>./Other.sh</path><name>Other</name></game>
+	 <game><path>./Defblade.sh</path><name>Defender's Blade</name><desc>Hack and slash</desc><image>./defblade/screenshot.jpg</image></game>
+	</gameList>`
+	name, desc, pic := parsePortGameInfo([]byte(xml), "/mnt/SDCARD/Roms/PORTS/Defblade.sh")
+	if name != "Defender's Blade" || desc != "Hack and slash" || pic != "./defblade/screenshot.jpg" {
+		t.Fatalf("gameinfo: %q %q %q", name, desc, pic)
+	}
+	if !portVersionNewer("2026.10.18-1234", "2026.9.30") || portVersionNewer("2026.10.18", "2026.10.18") || portVersionNewer("x", "2026.1.1") {
+		t.Fatal("portVersionNewer")
+	}
+}
+
+// TestPortUninstallStaysInPortsFolders is the uninstall's safety rule: only
+// the script and plain names from the manifest found directly in a ports
+// folder are deleted — never a path, "..", PortMaster or a ports folder.
+func TestPortUninstallStaysInPortsFolders(t *testing.T) {
+	card := t.TempDir()
+	roms := filepath.Join(card, "Roms", "PORTS")
+	data := filepath.Join(card, "Data", "ports")
+	for _, d := range []string{filepath.Join(data, "defblade"), filepath.Join(data, "PortMaster"), filepath.Join(card, "Data", "keep"), roms} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(roms, "Defblade.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/bash\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	meta := portMeta{
+		Dir:      filepath.Join(data, "defblade"),
+		Items:    []string{"Defblade.sh", "defblade/", "../keep", "PortMaster", "/etc", ".hidden", ""},
+		ItemsOpt: []string{"ports"},
+	}
+	got := portUninstallTargets(script, meta, []string{roms, data})
+	want := map[string]bool{filepath.Clean(script): true, filepath.Join(data, "defblade"): true}
+	if len(got) != len(want) {
+		t.Fatalf("targets = %v", got)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Fatalf("unexpected target %s in %v", p, got)
+		}
+	}
+}
+
+// TestPortScriptFindsPortMaster follows a port script's own search for
+// PortMaster: the fixed folders, then ${XDG_DATA_HOME:-$HOME/.local/share}.
+func TestPortScriptFindsPortMaster(t *testing.T) {
+	dirs := map[string]bool{}
+	isDir := func(p string) bool { return dirs[filepath.ToSlash(p)] }
+	env := []string{"HOME=/root"}
+	if got := portScriptControlPick(env, isDir); got != portScriptControlFallback {
+		t.Fatalf("nothing there: %s", got)
+	}
+	dirs["/root/.local/share/PortMaster"] = true
+	if got := filepath.ToSlash(portScriptControlPick(env, isDir)); got != "/root/.local/share/PortMaster" {
+		t.Fatalf("HOME: %s", got)
+	}
+	env = append(env, "XDG_DATA_HOME=/x")
+	dirs["/x/PortMaster"] = true
+	if got := filepath.ToSlash(portScriptControlPick(env, isDir)); got != "/x/PortMaster" {
+		t.Fatalf("XDG_DATA_HOME: %s", got)
+	}
+	dirs["/opt/tools/PortMaster"] = true
+	if got := filepath.ToSlash(portScriptControlPick(env, isDir)); got != "/opt/tools/PortMaster" {
+		t.Fatalf("/opt first: %s", got)
+	}
+}
+
+func TestStockPortsLauncherFromConfig(t *testing.T) {
+	card := t.TempDir()
+	emu := filepath.Join(card, "Emus", "PORTS")
+	roms := filepath.Join(card, "Roms", "PORTS")
+	for _, dir := range []string{emu, roms} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	launcher := filepath.Join(emu, "launch_balanced.sh")
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(emu, "config.json"), []byte(`{"launch":"launch_balanced.sh"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := portFirmwareLauncher(card, filepath.Join(roms, "Game.sh")); got != launcher {
+		t.Fatalf("configured launcher = %q, want %q", got, launcher)
+	}
+	if got := portFirmwareLauncher(card, filepath.Join(card, "Data", "ports", "Game.sh")); got != "" {
+		t.Fatalf("Data/ports was sent through firmware launcher: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(emu, "config.json"), []byte(`{"launch":"../../outside.sh"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := portFirmwareLauncher(card, filepath.Join(roms, "Game.sh")); got != "" {
+		t.Fatalf("unsafe configured launcher accepted: %q", got)
+	}
+}
+
+func TestInstalledPortNeedsFirmwareGlibc(t *testing.T) {
+	port := t.TempDir()
+	manifest := []byte(`{"attr":{"arch":["aarch64"],"min_glibc":"2.38"}}`)
+	if err := os.WriteFile(filepath.Join(port, "port.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	need := portManifestMinGlibc(port)
+	if need != "2.38" {
+		t.Fatalf("manifest min_glibc = %q", need)
+	}
+	arm64 := classifyPort([]string{"aarch64"})
+	if got := portCompatWithGlibc(arm64, need, "GLIBC_2.33"); got.State != portCompatNeedsNewerLibc || !portCompatBlocked(got.State) {
+		t.Fatalf("old firmware allowed the port: %+v", got)
+	}
+	if got := portCompatWithGlibc(arm64, need, "GLIBC_2.38"); got.State != portCompatSupported {
+		t.Fatalf("compatible firmware refused the port: %+v", got)
+	}
+}

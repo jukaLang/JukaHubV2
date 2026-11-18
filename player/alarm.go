@@ -35,6 +35,10 @@ type alarmEntry struct {
 	// the future the alarm stays quiet even though it already rang today.
 	SnoozeUntil string `json:"snooze_until,omitempty"`
 	ID          int    `json:"id"`
+	// Once is the only date (2006-01-02) a one-time alarm rings on, "" for
+	// every day. The calendar's "Set alarm" makes these (calsync_remind.go):
+	// an event next Tuesday must not ring every morning until then.
+	Once string `json:"once,omitempty"`
 }
 
 // alarmDate is the key FiredOn is compared with.
@@ -68,7 +72,7 @@ func alarmDue(a alarmEntry, now time.Time) bool {
 			}
 		}
 	}
-	if a.firedToday(now) {
+	if a.firedToday(now) || (a.Once != "" && a.Once != alarmDate(now)) {
 		return false
 	}
 	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
@@ -314,6 +318,10 @@ func alarmToggleFocused() {
 	if alarmUI.tab == alarmTabList && alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
 		a := &alarmStore.Alarms[alarmUI.cursor]
 		a.Enabled = !a.Enabled
+		if a.Enabled && a.Once != "" && a.Once < alarmDate(time.Now()) {
+			// A one-time alarm whose day is gone comes back as a daily one.
+			a.Once = ""
+		}
 		if a.Enabled {
 			// Switched back on a few minutes after its time, it must wait for
 			// tomorrow rather than ring at once through the catch-up window.
@@ -387,8 +395,18 @@ func alarmCheck(config *Config, now time.Time) {
 	// A ring in progress keeps the idle screens away and ends itself if nobody
 	// answers it.
 	alarmRingTick(now)
+	// Calendar reminders ride on the same tick (calsync_remind.go).
+	calRemindTick(now)
 	for i := range alarmStore.Alarms {
 		a := &alarmStore.Alarms[i]
+		// A one-time alarm whose day has passed switches itself off, once a
+		// snooze it carries can no longer ring (one slept through would
+		// otherwise keep it on for ever).
+		if a.Enabled && a.Once != "" && a.Once < alarmDate(now) && alarmSnoozeSpent(*a, now) && !now.Before(clockFloor()) {
+			a.Enabled = false
+			alarmSave()
+			continue
+		}
 		if alarmDue(*a, now) {
 			alarmMarkRang(a, now)
 			alarmSave()
@@ -414,6 +432,10 @@ func alarmMarkRang(a *alarmEntry, now time.Time) {
 }
 
 // --- Rendering ---
+
+// alarmClockDate and alarmMiniCalTitle are the page's date under the clock
+// and the mini calendar's month, each formatted once a minute.
+var alarmClockDate, alarmMiniCalTitle dateMemo
 
 func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	alarmUI.now = time.Now()
@@ -462,7 +484,7 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 			ColorTextPrimary(), tx, ty)
 
 		if smallFont != nil {
-			dateStr := formatDateLong(config, alarmUI.now)
+			dateStr := alarmClockDate.get(config, alarmUI.now, formatDateLong)
 			dw, _, _ := smallFont.SizeUTF8(dateStr)
 			renderText(renderer, config, smallFont, dateStr,
 				WithAlpha(ColorTextTertiary(), 200),
@@ -562,6 +584,12 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 		if smallFont != nil && a.Label != "" {
 			label := a.Label
 			label = truncateRunes(label, 40)
+			if a.Once != "" {
+				// A one-time alarm names its day ("Tue 18 Nov · Standup").
+				if day, err := time.ParseInLocation("2006-01-02", a.Once, time.Local); err == nil {
+					label = formatDateBrief(config, day) + " · " + label
+				}
+			}
 			renderText(renderer, config, smallFont, label,
 				WithAlpha(ColorTextSecondary(), 180),
 				x+160, ry+20)
@@ -696,16 +724,16 @@ func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) 
 		return
 	}
 
-	// Month/year header.
-	monthStr := now.Format("January 2006")
+	// Month/year header, formatted once a minute.
+	monthStr := alarmMiniCalTitle.get(config, now, func(_ *Config, t time.Time) string { return formatMonthYear(t) })
 	mw, _, _ := font.SizeUTF8(monthStr)
 	renderText(renderer, config, font, monthStr,
 		WithAlpha(ColorTextPrimary(), 220),
 		cx+(cardW-int32(mw))/2, cy+calPadY)
 
-	// Day-of-week header: S M T W T F S.
-	days := [7]string{"S", "M", "T", "W", "T", "F", "S"}
-	for i, d := range days {
+	// Day-of-week header, Sunday first: S M T W T F S in the language.
+	for i := 0; i < 7; i++ {
+		d := formatWeekdayInitial(time.Weekday(i))
 		dw, _, _ := font.SizeUTF8(d)
 		dx := cx + calPadX + int32(i)*calCellW + (calCellW-int32(dw))/2
 		dy := cy + headerH
@@ -765,7 +793,7 @@ func alarmNextUpcoming() *alarmEntry {
 	bestDist := 24 * time.Hour
 	for i := range alarmStore.Alarms {
 		a := &alarmStore.Alarms[i]
-		if !a.Enabled {
+		if !a.Enabled || (a.Once != "" && a.Once != alarmDate(time.Now())) {
 			continue
 		}
 		remaining := time.Until(alarmTimeToday(a))

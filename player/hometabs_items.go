@@ -150,25 +150,28 @@ const (
 	homeTabsRecentApps  = 8
 )
 
-// homeTabsRecentItems is Recent: what Continue resumes (unless that is a
-// game, which leads the games anyway), the games played last with their
-// covers, then the apps opened last. The first game or the Continue item is
-// the row view's hero.
+// homeTabsRecentItems is Recent: today's challenge whenever the Continue card
+// of the other layouts would show it (game_daily.go), what Continue resumes
+// (unless that is a game, which leads the games anyway; beside the challenge,
+// never pushed out by it), the games played last with their covers, then the
+// apps opened last. The first item — the challenge, a game or the Continue
+// item — is the row view's hero.
 func homeTabsRecentItems(c *Config) ([]homeTabItem, bool) {
-	out := make([]homeTabItem, 0, homeTabsRecentGames+homeTabsRecentApps+1)
-	if st := homeContinueSnapshot(); st.HasRecent && st.Kind != "game" {
-		title := strings.TrimSpace(st.Title)
-		if title == "" {
-			title = "Continue"
-		}
-		sub := strings.TrimSpace(st.Chip)
-		if sub == "" {
-			sub = "Continue"
-		}
-		out = append(out, homeTabItem{
-			Key: "x:continue", Title: title, Sub: sub, Glyph: "continue",
-			Activate: func(c *Config) { homeTabsOpenCard(c, HomeFocusContinue) },
-		})
+	out := make([]homeTabItem, 0, homeTabsRecentGames+homeTabsRecentApps+2)
+	resume, hasResume := homeContinueItem()
+	if ch, daily := homeContinueDaily(resume, hasResume); daily {
+		out = append(out, homeTabsDailyItem(ch))
+	}
+	// The card of the other layouts shows the challenge in place of a stale
+	// item; here that item keeps its own place. A resumes the item shown, never
+	// the challenge (whose pick may land between this build and the press, when
+	// homeContinueResume would start it instead).
+	if hasResume && resume.Type != "game" {
+		item := resume
+		out = append(out, homeTabsContinueItem(homeContinueStateFor(item), func(c *Config) {
+			homeContinueInvalidate()
+			homePlayRecent(c, item)
+		}))
 	}
 	now := time.Now()
 	for i, g := range recentGames() {
@@ -238,11 +241,47 @@ func homeTabsRecentItems(c *Config) ([]homeTabItem, bool) {
 	return out, hero
 }
 
+// homeTabsDailyItem is today's challenge on Recent: the game with its cover
+// and the minutes still to play; A starts it, as Play on the Continue card
+// does (homeContinueResume).
+func homeTabsDailyItem(ch dailyChallenge) homeTabItem {
+	game := ch.dailyGame()
+	title := strings.TrimSpace(ch.Title)
+	if title == "" {
+		title = "Daily challenge"
+	}
+	it := homeTabItem{
+		Key: "x:daily", Title: title, Sub: ch.dailyRecentLine(), Glyph: "emulator",
+		Activate: func(*Config) {
+			homeContinueInvalidate()
+			playRecentGame(game)
+		},
+	}
+	if job := homeSwArtJobFor(game); job.Key != "" && job.File != "" {
+		it.Art = func() *sdl.Texture { return homeTabsArt(job) }
+	}
+	return it
+}
+
+// homeTabsContinueItem is what Continue resumes, as Recent lists it: the
+// card's title over its chip ("Continue watching"); open resumes it.
+func homeTabsContinueItem(st HomeContinueState, open func(*Config)) homeTabItem {
+	title := strings.TrimSpace(st.Title)
+	if title == "" {
+		title = "Continue"
+	}
+	sub := strings.TrimSpace(st.Chip)
+	if sub == "" {
+		sub = "Continue"
+	}
+	return homeTabItem{Key: "x:continue", Title: title, Sub: sub, Glyph: "continue", Activate: open}
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 // homeTabsMainItems is Main: the apps the hub is for. Settings, both kinds
 // of achievements (JukaHub's Trophies; RetroAchievements where a card can
-// hold its login), Chat, the Browser, the Store (a folder), Tools, Files,
+// hold its login), Chat, Mail, the Browser, the Store (a folder), Tools, Files,
 // and the radios — Bluetooth where it can pair, Wi-Fi where the picker can
 // do something — plus the phone's pairing code while the companion has one:
 // on this Home the top bar has no room for the code the other layouts show.
@@ -258,9 +297,10 @@ func homeTabsMainItems(c *Config) []homeTabItem {
 	add(m.app(homeTileScenePrefix+playtimeSceneName, "Trophies", "JukaHub achievements", "trophy"))
 	add(m.app(homeTileActionPrefix+"RetroAchievements", "", "RetroArch achievements", "trophy"))
 	add(homeTabsCard(c, HomeFocusChat, "", ""))
+	add(m.app(homeTileActionPrefix+mailcalAppEntryName, "", "Your inbox", "mail"))
 	add(homeTabsCard(c, HomeFocusBrowser, "", ""))
 	out = append(out, homeTabItem{
-		Key: "x:store", Title: "Store", Sub: "Android apps, packages and downloads", Glyph: "packages",
+		Key: "x:store", Title: "Store", Sub: "Apps and downloads", Glyph: "packages",
 		Folder: true, FolderView: "store", Children: homeTabsStoreItems,
 	})
 	add(homeTabsCard(c, HomeFocusTools, "", ""))

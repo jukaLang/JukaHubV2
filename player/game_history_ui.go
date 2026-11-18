@@ -148,7 +148,7 @@ func gameHistoryRender(renderer *sdl.Renderer, config *Config) {
 	}
 	for i := gameHistoryUI.scroll; i < len(st.Recent) && i < gameHistoryUI.scroll+visible; i++ {
 		s := st.Recent[i]
-		label := s.Started.Local().Format("Jan 2, 2006 · 3:04 PM")
+		label := formatDateTime(config, s.Started.Local())
 		status := formatPlaytime(s.Seconds)
 		if s.Interrupted {
 			status = "Interrupted · duration unknown"

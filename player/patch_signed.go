@@ -316,14 +316,3 @@ func signedRepoPackageCompatible(p *RepoPkg, device DeviceModel, arch string, wi
 	}
 	return true
 }
-
-// --- helpers reused by the build tooling ---
-
-// packageArchiveSHA computes the sha256 hex of a package archive.
-func packageArchiveSHA(path string) string {
-	s, err := SHA256File(path)
-	if err != nil {
-		return ""
-	}
-	return s
-}

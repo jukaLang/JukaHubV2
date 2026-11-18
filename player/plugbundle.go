@@ -76,6 +76,7 @@ func plugSeedBundled(config *Config, dir string) []string {
 	if config == nil || config.Variables.Custom == nil || dir == "" {
 		return nil
 	}
+	plugRetireBundled(config, dir)
 	seeded := plugSeededSet(config)
 	var wrote []string
 	changed := false
@@ -117,6 +118,97 @@ func plugSeedBundled(config *Config, dir string) []string {
 		config.Variables.Custom[plugSeededKey] = strings.Join(names, ",")
 	}
 	return wrote
+}
+
+// plugRetiredBundled are plugins JukaHub used to ship and has dropped because
+// they were toys nobody came back to: a greeting, dice, a quote of the day,
+// handheld tips, and a clock and a world clock beside the clock the top bar
+// already shows. Their places went to tools that do work (Save guard, Library
+// doctor, System monitor).
+var plugRetiredBundled = []string{"clock", "dice", "hello", "quote", "tips", "worldclock"}
+
+// plugRetiredDir is where retired copies are moved, inside plugins/. The
+// loader skips dot folders, so they leave the Plugins page and the Start
+// menu, but nothing is deleted: moving a folder back brings it back (each
+// name is retired once, see plugRetiredKey).
+const plugRetiredDir = ".retired"
+
+// plugRetiredKey records, in the user config, the retired plugins already
+// dealt with, comma-separated, so one moved back by hand stays.
+const plugRetiredKey = "pluginsRetired"
+
+// plugRetireBundled moves the copies an older JukaHub installed of the
+// retired plugins out of dir, once per name. Only JukaHub's own copies move
+// (author "JukaHub"); a user's plugin that happens to use one of the names
+// stays.
+func plugRetireBundled(config *Config, dir string) {
+	raw, _ := config.Variables.Custom[plugRetiredKey].(string)
+	done := map[string]bool{}
+	for _, name := range strings.Split(raw, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			done[name] = true
+		}
+	}
+	changed := false
+	for _, name := range plugRetiredBundled {
+		if done[name] {
+			continue
+		}
+		if plugRetireOne(dir, name) {
+			done[name] = true
+			changed = true
+		}
+	}
+	if changed {
+		// Recorded in memory, like plugSeededKey: the next settings save
+		// carries it to jukauser.json.
+		names := make([]string, 0, len(done))
+		for name := range done {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		config.Variables.Custom[plugRetiredKey] = strings.Join(names, ",")
+	}
+}
+
+// plugRetireOne moves one retired plugin's folder aside when it is JukaHub's
+// own copy. It reports whether the name is dealt with: moved, absent, or
+// someone else's; false only when a move failed and should be tried again.
+func plugRetireOne(dir, name string) bool {
+	target := filepath.Join(dir, name)
+	data, err := os.ReadFile(filepath.Join(target, "plugin.json"))
+	if err != nil {
+		// Gone is dealt with; a folder that cannot be read is tried again.
+		return os.IsNotExist(err)
+	}
+	var m struct {
+		Author string `json:"author"`
+	}
+	if json.Unmarshal(data, &m) != nil || strings.TrimSpace(m.Author) != plugNativeAuthor {
+		return true
+	}
+	attic := filepath.Join(dir, plugRetiredDir)
+	if err := os.MkdirAll(attic, 0o755); err != nil {
+		LogScene("plugins").Warn("retired plugin not moved", "plugin", name, "err", err)
+		return false
+	}
+	dest := filepath.Join(attic, name)
+	for i := 2; i < 100; i++ {
+		if _, err := os.Lstat(dest); os.IsNotExist(err) {
+			break
+		}
+		dest = filepath.Join(attic, name+"-"+strconv.Itoa(i))
+	}
+	if _, err := os.Lstat(dest); err == nil {
+		LogScene("plugins").Warn("retired plugin not moved: no free name", "plugin", name)
+		return false
+	}
+	if err := os.Rename(target, dest); err != nil {
+		LogScene("plugins").Warn("retired plugin not moved", "plugin", name, "err", err)
+		return false
+	}
+	LogScene("plugins").Info("retired bundled plugin moved aside", "plugin", name, "to", dest)
+	return true
 }
 
 // plugCopyBundled writes one bundled plugin folder to target. Scripts get the

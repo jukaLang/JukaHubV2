@@ -455,7 +455,7 @@ func xpackSyncImportRows() {
 	}
 	for _, it := range items {
 		row := xpackKitRow{Kind: xpackKitItem, ID: it.Path, Label: it.Name,
-			Detail: filepath.Base(it.Path) + " · " + humanBytes(it.Size) + " · " + it.ModTime.Format("Jan 2, 2006")}
+			Detail: filepath.Base(it.Path) + " · " + humanBytes(it.Size) + " · " + formatDate(nil, it.ModTime)}
 		if it.Problem != "" {
 			row.Detail, row.Tone, row.Disabled = "Can't use it: "+it.Problem, xpackKitToneWarn, true
 		}
@@ -1076,6 +1076,31 @@ func xpackDrawPreview(renderer *sdl.Renderer, c *Config, pv xpackPreview, r sdl.
 		tile(cell7(6, 1, 1, 1), false)
 		for col := int32(0); col < 7; col++ {
 			tile(cell7(col, 2, 1, 1), false)
+		}
+		return
+	}
+	if arrangement == homeArrangementTabs {
+		// The Tabs Home (hometabs.go): the tab strip in the top bar between
+		// the brand and the status cluster, the tab on screen lit, and its
+		// page — a hero tile two rows tall, then square tiles in two rows.
+		from := r.X + pad + r.W/5 + 2*gap
+		to := r.X + r.W - pad - 3*(hh*2+3) - 2*gap
+		if pill := min((to-from-3*gap)/4, hh*3); pill >= hh {
+			x := from + (to-from-(4*pill+3*gap))/2
+			for i := int32(0); i < 4; i++ {
+				fill := WithAlpha(text, 70)
+				if i == 0 {
+					fill = accent
+				}
+				fillRoundedRect(renderer, x+i*(pill+gap), r.Y+pad, pill, hh, hh/2, fill)
+			}
+		}
+		side := (body.H - gap) / 2
+		heroW := side * 3 / 2
+		tile(sdl.Rect{X: body.X, Y: body.Y, W: heroW, H: body.H}, true)
+		for x := body.X + heroW + gap; x+side <= body.X+body.W; x += side + gap {
+			tile(sdl.Rect{X: x, Y: body.Y, W: side, H: side}, false)
+			tile(sdl.Rect{X: x, Y: body.Y + side + gap, W: side, H: side}, false)
 		}
 		return
 	}

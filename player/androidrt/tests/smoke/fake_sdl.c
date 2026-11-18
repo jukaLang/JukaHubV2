@@ -23,7 +23,9 @@
  * (mockgpu_sdlVideoUp, for its MOCKGPU_NEEDS_SDL knob — no setenv on a game
  * thread). FAKESDL_DISPLAY=device makes SDL's EGL display one of its own
  * native device (a KMSDRM SDL's gbm device) instead of EGL_DEFAULT_DISPLAY.
- * SDL_GL_LoadLibrary logs the GLES library SDL_VIDEO_GL_DRIVER names.
+ * SDL_GL_LoadLibrary logs the GLES library SDL_VIDEO_GL_DRIVER names; a
+ * second video init (the surface probe must not start one inside the runner)
+ * is logged as "again".
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -124,7 +126,10 @@ EXPORT int SDL_InitSubSystem(uint32_t flags) {
     const char *path = getenv("SDL_VIDEO_EGL_DRIVER");
     void (*videoUp)(void);
     if (!(flags & APAK_SDL_INIT_VIDEO)) return 0;
-    if (F.videoUp) return 0;
+    if (F.videoUp) {
+        LOG("SDL_InitSubSystem(VIDEO) again (video is already up)");
+        return 0;
+    }
     LOG("hints: SDL_NO_SIGNAL_HANDLERS=%s SDL_INPUT_LINUX_KEEP_KBD=%s",
         getenv("SDL_NO_SIGNAL_HANDLERS") ? getenv("SDL_NO_SIGNAL_HANDLERS") : "(unset)",
         getenv("SDL_INPUT_LINUX_KEEP_KBD") ? getenv("SDL_INPUT_LINUX_KEEP_KBD") : "(unset)");

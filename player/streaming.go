@@ -964,9 +964,10 @@ func (o playbackOutcome) Tried() bool { return o != playbackNotTried }
 //
 // Callers begin the modal state before calling this and before resolving any
 // tool, so the whole wait, tool download included, is modal from the press and B
-// cancels all of it. Two callers exist and they must stay in step: Play
-// (playVideoInfo) and the quality switch, which re-resolves the same stream at a
-// new ceiling.
+// cancels all of it. Three callers exist and they must stay in step: Play
+// (playVideoInfo), the quality switch, which re-resolves the same stream at a
+// new ceiling, and a Watch Party room's video (partyLoadRemote), which opens
+// the page the room's host played at the room's position.
 func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) playbackOutcome {
 	// A file on the card (a download played from Media, a resumed Continue
 	// card) needs the decoder only. Resolving yt-dlp first made a downloaded

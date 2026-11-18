@@ -24,6 +24,18 @@ func TestBtAttachCommandsUseXR829StartupBaud(t *testing.T) {
 	}
 }
 
+func TestModulesDepHasReadsModuleNames(t *testing.T) {
+	dep := "kernel/drivers/net/wireless/aic8800/aic8800_fdrv.ko: kernel/drivers/net/wireless/aic8800/aic8800_bsp.ko\n" +
+		"extra/aic8800_btlpm.ko.xz:\n" +
+		"kernel/net/bluetooth/hidp/hidp.ko: kernel/net/bluetooth/bluetooth.ko\n"
+	if !modulesDepHas(dep, "aic8800_btlpm") || !modulesDepHas(dep, "aic8800_fdrv") {
+		t.Fatal("a listed module was missed")
+	}
+	if modulesDepHas(dep, "aic8800_bsp") || modulesDepHas(dep, "aic8800") || modulesDepHas(dep, "bluetooth") {
+		t.Fatal("a dependency or a name prefix counted as a listed module")
+	}
+}
+
 func TestBtWakeChipRestoresFailedAttach(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "btwrite")
 	if err := os.WriteFile(path, []byte("0\n"), 0o644); err != nil {

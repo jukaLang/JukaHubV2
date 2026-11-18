@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName}
+var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -135,6 +135,16 @@ func tbxDisplayName(name string) string {
 		return "Report a bug"
 	case rommCloudSceneName:
 		return "RomM"
+	case usbOtgSceneName:
+		return "USB & OTG"
+	case batteryCalSceneName:
+		return "Battery calibration"
+	case hotspotSceneName:
+		return "Hotspot"
+	case mailcalSceneName:
+		return "Email & calendar"
+	case mailSceneName:
+		return "Mail"
 	}
 	return ""
 }
@@ -1088,7 +1098,8 @@ type tbxSheetState struct {
 
 var tbxSheet tbxSheetState
 
-// tbxOpenSheet shows spec over the current screen.
+// tbxOpenSheet shows spec over the current screen. A sheet that would open on
+// a destructive button opens on its safe answer instead (confirmfocus.go).
 func tbxOpenSheet(config *Config, spec tbxSheetSpec) {
 	tbxSheet = tbxSheetState{
 		open:  true,
@@ -1099,6 +1110,12 @@ func tbxOpenSheet(config *Config, spec tbxSheetSpec) {
 	if tbxSheet.focus < 0 || tbxSheet.focus >= len(spec.buttons) {
 		tbxSheet.focus = 0
 	}
+	tbxSheet.focus = tbxSheetSafeFocus(spec.buttons, tbxSheet.focus)
+}
+
+// tbxSheetSafeFocus applies the confirmation focus rule to a sheet's buttons.
+func tbxSheetSafeFocus(buttons []tbxSheetButton, focus int) int {
+	return confirmSafeFocus(len(buttons), focus, func(i int) string { return buttons[i].label })
 }
 
 // tbxCloseSheet dismisses the sheet.
@@ -1116,7 +1133,7 @@ func tbxUpdateSheet(token, body string, buttons []tbxSheetButton) bool {
 	tbxSheet.scroll = 0
 	if buttons != nil {
 		tbxSheet.spec.buttons = buttons
-		tbxSheet.focus = len(buttons) - 1
+		tbxSheet.focus = tbxSheetSafeFocus(buttons, len(buttons)-1)
 	}
 	return true
 }
@@ -1422,6 +1439,16 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return bugrepSceneClick(mx, my, config)
 	case rommCloudSceneName:
 		return rommCloudClick(mx, my, config)
+	case usbOtgSceneName:
+		return usbOtgSceneClick(mx, my, config)
+	case batteryCalSceneName:
+		return batteryCalSceneClick(mx, my, config)
+	case hotspotSceneName:
+		return hotspotSceneClick(mx, my, config)
+	case mailcalSceneName:
+		return mailcalSceneClick(mx, my, config)
+	case mailSceneName:
+		return mailSceneClick(mx, my, config)
 	}
 	return false
 }
@@ -1464,6 +1491,16 @@ func tbxSceneNav(name string) *tbxNav {
 		return &bugrepScreen.nav
 	case rommCloudSceneName:
 		return &rommCloud.nav
+	case usbOtgSceneName:
+		return &usbOtgScreen.nav
+	case batteryCalSceneName:
+		return &batteryCalScreen.nav
+	case hotspotSceneName:
+		return &hotspotScreen.nav
+	case mailcalSceneName:
+		return &mailcalScreen.nav
+	case mailSceneName:
+		return mailActiveNav()
 	}
 	return nil
 }
@@ -1492,6 +1529,16 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return bugrepSceneHints(), true
 	case rommCloudSceneName:
 		return rommCloudHints(), true
+	case usbOtgSceneName:
+		return usbOtgSceneHints(), true
+	case batteryCalSceneName:
+		return batteryCalSceneHints(), true
+	case hotspotSceneName:
+		return hotspotSceneHints(), true
+	case mailcalSceneName:
+		return mailcalSceneHints(), true
+	case mailSceneName:
+		return mailSceneHints(), true
 	}
 	return nil, false
 }

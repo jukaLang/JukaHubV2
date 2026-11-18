@@ -106,7 +106,7 @@ config):
 
 With `ambientMode: false` the starfield screensaver is the idle screen and its
 `screensaverTimeout` applies; the dock still opens by hand from Start → Ambient.
-The timeout can be changed in Settings → General → **Screensaver after** or from
+The timeout can be changed in Settings → Display → **Lock screen after** or from
 Quick Settings, in steps from 15 seconds up (25 by default). Start → Ambient still opens the dock screen manually in that case.
 
 ## Related

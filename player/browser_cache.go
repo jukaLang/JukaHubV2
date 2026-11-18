@@ -25,8 +25,9 @@ const (
 	// a whole browsing history resident.
 	browserCacheMaxEntries = 8
 	// browserCacheMaxBytes bounds the text and decoded image bytes the cache
-	// may hold. Images dominate; text is capped per page already.
-	browserCacheMaxBytes = 12 << 20
+	// may hold. Images dominate; text is capped per page already. One page
+	// may carry up to webMaxImagesBytes of pictures, so this keeps a few.
+	browserCacheMaxBytes = 32 << 20
 )
 
 // browserCacheEntry is one page plus the bytes it is accounted for.

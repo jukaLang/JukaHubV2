@@ -155,6 +155,7 @@ type bugrepReport struct {
 	Description string `json:"description"`
 	Version     string `json:"version"`
 	Release     string `json:"release,omitempty"`
+	Channel     string `json:"channel,omitempty"`
 	Device      string `json:"device"`
 	Platform    string `json:"platform"`
 	OS          string `json:"os"`
@@ -278,6 +279,7 @@ func bugrepBuild(config *Config, form bugrepForm, now time.Time) bugrepReport {
 		Description: bugrepClip(bugrepScrub(strings.TrimSpace(form.Description)), bugrepDescriptionMax),
 		Version:     version,
 		Release:     release,
+		Channel:     updateChannelFromConfig(config),
 		Device:      deviceDisplayName(DetectDevice()),
 		Platform:    P().Name(),
 		OS:          runtime.GOOS,
@@ -314,6 +316,9 @@ func bugrepPreviewText(r bugrepReport) string {
 	sb.WriteString("JukaHub " + r.Version)
 	if r.Release != "" {
 		sb.WriteString(" (" + r.Release + ")")
+	}
+	if r.Channel != "" {
+		sb.WriteString(" · " + updateChannelLabel(r.Channel) + " channel")
 	}
 	sb.WriteString("\n" + r.Device + " · " + r.Platform + " · " + r.OS + "/" + r.Arch + "\n")
 	// The issue's facts table shows these two as well, so the preview does.
@@ -1082,6 +1087,9 @@ func bugrepIssueURL(r bugrepReport, maxLen int) string {
 		title = strings.ToUpper(category[:1]) + category[1:] + " problem"
 	}
 	facts := "JukaHub " + r.Version + " · " + r.Device + " · " + r.OS + "/" + r.Arch + " · ref " + r.ID
+	if r.Channel != "" {
+		facts += " · " + updateChannelLabel(r.Channel) + " channel"
+	}
 	desc := r.Description
 	build := func(d string) string {
 		body := d + "\n\n" + facts + "\n\n| Field | Value |\n|---|---|\n| Created | " + r.Created + " |"

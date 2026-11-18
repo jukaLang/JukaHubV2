@@ -84,6 +84,11 @@ func chatSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !chatSceneActive(config) || virtualKeyboardActive {
 		return false
 	}
+	// Juka AI's confirmation card and chip strip take the pad first
+	// (aiagent_view.go).
+	if aiStripController(e) {
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		if !chatFocusUp() {
@@ -146,6 +151,10 @@ func chatSceneShoulder(s padShoulder, config *Config) bool {
 	if chatOverlayOpen() {
 		return true // the profile or member card on top owns the pad
 	}
+	// R2 on Juka AI: speak a question (aiagent_view.go).
+	if s == padR2 && aiStripSpeak(config) {
+		return true
+	}
 	switch s {
 	case padL1:
 		chatCycleTab(-1)
@@ -183,6 +192,9 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	if alt {
 		return false
+	}
+	if !ctrl && aiStripKey(sym) {
+		return true
 	}
 	if ctrl {
 		if sym == sdl.K_TAB {
@@ -544,7 +556,7 @@ var chatVoiceFocus bool
 // on a message, a starter question, the waiting files or the top bar, and not
 // typing.
 func chatComposerRowFocused() bool {
-	return chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() &&
+	return chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && aiStripFocus < 0 && chatPadOnContent() &&
 		!chatComposerInline && !(virtualKeyboardActive && vkTarget == vkTargetChat)
 }
 
@@ -685,6 +697,10 @@ func chatFocusUp() bool {
 	view := &chatViews[tab]
 	// Up leaves the composer row from the paperclip as from the text field.
 	chatAttachFocus = false
+	// Juka AI's chips sit right above the composer (aiagent_view.go).
+	if aiStripUp() {
+		return true
+	}
 	if chatSuggestFocus >= 0 {
 		if chatSuggestFocus > 0 {
 			chatSuggestFocus--
@@ -703,7 +719,7 @@ func chatFocusUp() bool {
 		}
 		chatTrayFocus = -1
 		if len(msgs) == 0 {
-			if tab == chatTabAI && chatHasGroqKey() {
+			if tab == chatTabAI && chatHasGroqKey() && !aiToolsOn() {
 				chatSuggestFocus = chatSuggestionCount - 1
 				PlayNavSound()
 				return true
@@ -736,6 +752,9 @@ func chatFocusUp() bool {
 func chatFocusDown() bool {
 	tab := chatActiveTabID()
 	msgs := chatTabMessages(tab)
+	if aiStripDown() {
+		return true
+	}
 	if chatSuggestFocus >= 0 {
 		if chatSuggestFocus < chatSuggestionCount-1 {
 			chatSuggestFocus++
@@ -888,6 +907,9 @@ func chatSceneClick(mx, my int32, config *Config) bool {
 	if handleChatImageClick(mx, my) {
 		return true
 	}
+	if aiStripClick(mx, my, config) {
+		return true
+	}
 	// A file card opens (or saves) its file, like A on it in the file list.
 	if handleChatFileClick(mx, my, config) {
 		return true
@@ -981,6 +1003,9 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 // never names a binding the screen would not answer to.
 func chatFooterHints() []FooterHint {
 	back := FooterHint{Button: "B", Label: "Back"}
+	if hints, ok := aiFooterHints(); ok {
+		return hints
+	}
 	switch {
 	case chatFileSheet.open:
 		// A message's list of files is up (chatOpenFileSheet).
@@ -1055,6 +1080,7 @@ func chatFooterHints() []FooterHint {
 	case chatTabCommunity:
 		hints = append(hints, FooterHint{Button: "Y", Label: "People"})
 	case chatTabAI:
+		hints = append(hints, FooterHint{Button: "R2 / M", Label: "Speak"})
 		if chatHasGroqKey() {
 			hints = append(hints, FooterHint{Button: "Y", Label: "New chat"})
 		} else {

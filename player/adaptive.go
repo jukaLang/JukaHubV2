@@ -32,17 +32,24 @@ type frameProfile struct {
 	Active uint32
 	Idle   uint32
 	Deep   uint32
+	// Burst is the shortest frame a short motion the eye follows may ask
+	// for past Active (requestFrameBurst): the focus ring's bounce.
+	Burst uint32
 }
 
 // frameProfileFor returns the cadence for the target platform. The handheld
 // caps at 30fps: the TSP cannot sustain 60fps while drawing menus, the
 // on-screen keyboard or decoded video, so the extra frames only cost battery
-// and heat and make input feel later than it is.
+// and heat and make input feel later than it is. The one exception is the
+// focus ring's bounce (Burst): a 300 ms move drawn at 30 fps is nine frames,
+// and its overshoot and swing back fall into three of them — the "choppy
+// bounce" Juka saw on the Smart Pro on 2026-11-17. For that third of a second
+// the handheld draws as fast as it can, up to 60 fps.
 func frameProfileFor(handheld bool) frameProfile {
 	if handheld {
-		return frameProfile{Active: 33, Idle: 42, Deep: 66} // ~30 / 24 / 15 fps
+		return frameProfile{Active: 33, Idle: 42, Deep: 66, Burst: 16} // ~30 / 24 / 15 fps, bursts ~60
 	}
-	return frameProfile{Active: 16, Idle: 33, Deep: 50} // ~60 / 30 / 20 fps
+	return frameProfile{Active: 16, Idle: 33, Deep: 50, Burst: 16} // ~60 / 30 / 20 fps
 }
 
 // delayFor returns the sleep for a mode. LowPower caps the cadence at the idle
@@ -98,6 +105,9 @@ type FrameRateController struct {
 	// at its idle cadence (requestFrameEveryPastLowPower): the liquid
 	// background's moving water.
 	backdropPastLowPower bool
+	// backdropBurst is a request that may pass the active cadence too, up
+	// to profile.Burst (requestFrameBurst).
+	backdropBurst bool
 }
 
 // NewFrameRateController creates a controller tuned for the given platform.
@@ -180,22 +190,28 @@ func (fc *FrameRateController) SetVideoActive(on bool) {
 // and an animated wallpaper of 25 frames a second played at 15. pastLowPower
 // lifts that cap for the frame (requestFrameEveryPastLowPower): the moving
 // water's request, which Low Power — the handheld's default — does not cap.
-func (fc *FrameRateController) SetBackdropFrame(ms uint32, pastLowPower bool) {
+// burst lets the request pass the active cadence as well (requestFrameBurst).
+func (fc *FrameRateController) SetBackdropFrame(ms uint32, pastLowPower, burst bool) {
 	fc.mu.Lock()
 	fc.backdropMS = ms
 	fc.backdropPastLowPower = pastLowPower
+	fc.backdropBurst = burst
 	fc.mu.Unlock()
 }
 
 // backdropDelay folds a moving backdrop's request into the delay a mode gave:
-// never faster than the active cadence, never past Low Power's idle cap (the
-// caller passes lowPower false for a request that may pass it), and never
-// slower than the mode already was.
-func (p frameProfile) backdropDelay(delay, want uint32, lowPower bool) uint32 {
+// never faster than the active cadence (Burst for a burst request), never past
+// Low Power's idle cap (the caller passes lowPower false for a request that
+// may pass it), and never slower than the mode already was.
+func (p frameProfile) backdropDelay(delay, want uint32, lowPower, burst bool) uint32 {
 	if want == 0 {
 		return delay
 	}
-	want = max(want, p.Active)
+	floor := p.Active
+	if burst && p.Burst > 0 && p.Burst < floor {
+		floor = p.Burst
+	}
+	want = max(want, floor)
 	if lowPower {
 		want = max(want, p.Idle)
 	}
@@ -214,6 +230,7 @@ func (fc *FrameRateController) Delay() uint32 {
 	video := fc.videoActive
 	backdrop := fc.backdropMS
 	backdropPast := fc.backdropPastLowPower
+	backdropBurst := fc.backdropBurst
 
 	fc.mu.Unlock()
 
@@ -245,7 +262,7 @@ func (fc *FrameRateController) Delay() uint32 {
 		// 30 frames a second judders, and the decoder is the real cost anyway.
 		return fc.profile.Active
 	}
-	return fc.profile.backdropDelay(fc.profile.delayFor(mode, lowPower), backdrop, lowPower && !backdropPast)
+	return fc.profile.backdropDelay(fc.profile.delayFor(mode, lowPower), backdrop, lowPower && !backdropPast, backdropBurst)
 }
 
 // CurrentMode returns the current frame rate mode (for diagnostics).
@@ -292,6 +309,9 @@ var frameWant struct {
 	// pastLowPower: a request of this frame may pass Low Power's cap
 	// (requestFrameEveryPastLowPower).
 	pastLowPower bool
+	// burst: a request of this frame may pass the active cadence too
+	// (requestFrameBurst).
+	burst bool
 }
 
 // requestFrameEvery is how a picture that moves by itself — the liquid
@@ -308,7 +328,7 @@ func requestFrameEvery(ms uint32) {
 	}
 	if frameWant.frame != frameCount {
 		// The frame's first request: what an earlier frame asked is over.
-		frameWant.ms, frameWant.frame, frameWant.pastLowPower = ms, frameCount, false
+		frameWant.ms, frameWant.frame, frameWant.pastLowPower, frameWant.burst = ms, frameCount, false, false
 	} else if frameWant.ms == 0 || ms < frameWant.ms {
 		frameWant.ms = ms
 	}
@@ -326,6 +346,16 @@ func requestFrameEveryPastLowPower(ms uint32) {
 	frameWant.pastLowPower = true
 }
 
+// requestFrameBurst asks for frames as fast as the device can draw them, up to
+// the profile's Burst (60 fps), past both Low Power's cap and the handheld's
+// 30 fps active cadence: only for a short move the eye follows — the focus
+// ring's bounce (homefocusglide.go), a third of a second per step. Battery
+// Saver's frames ask with requestFrameEvery instead and keep their cap.
+func requestFrameBurst() {
+	requestFrameEveryPastLowPower(1)
+	frameWant.burst = true
+}
+
 // adaptiveTick is this file's per-frame work on the main loop, once the
 // frame is drawn and before its sleep is worked out: it hands the governor
 // what the frame's moving pictures asked for, and now and then logs how much
@@ -333,13 +363,13 @@ func requestFrameEveryPastLowPower(ms uint32) {
 // card) present without coming here; what they ask for lands in the frame
 // they return to.
 func adaptiveTick() {
-	want, past := uint32(0), false
+	want, past, burst := uint32(0), false, false
 	if frameWant.frame == frameCount {
-		want, past = frameWant.ms, frameWant.pastLowPower
+		want, past, burst = frameWant.ms, frameWant.pastLowPower, frameWant.burst
 	}
-	frameWant.ms, frameWant.pastLowPower = 0, false
+	frameWant.ms, frameWant.pastLowPower, frameWant.burst = 0, false, false
 	if frameRateCtrl != nil {
-		frameRateCtrl.SetBackdropFrame(want, past)
+		frameRateCtrl.SetBackdropFrame(want, past, burst)
 	}
 	memoryLogTick(time.Now())
 }
@@ -555,6 +585,8 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		clearAppIconCache()
 		clearChatImageCache()
 		clearChatAvatarCache()
+		// The Ports Store's screenshots (ports_store_images.go).
+		pstoreTexClear()
 		// The bytes side: downloaded thumbnail payloads waiting for the renderer,
 		// and the validated feed bodies kept for conditional requests. Both are
 		// refetchable, so dropping them costs a round trip, not state.

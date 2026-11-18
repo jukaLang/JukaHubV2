@@ -867,7 +867,13 @@ const (
 	raHitRecent   = "recent"
 	raHitUsername = "username"
 	raHitAPIKey   = "apiKey"
+	raHitPhone    = "phone"
 )
+
+// raSettingsRowPhone is the settings row that shows the code for the Phone
+// Companion's RetroAchievements card (companion_accounts.go), after USERNAME
+// (0) and WEB API KEY (1).
+const raSettingsRowPhone = 2
 
 func retroAchievementsSupported() bool {
 	if IsTrimuiDevice() || P().IsHandheld() {
@@ -973,9 +979,9 @@ func raPanelMove(delta int) {
 	if raPanel.settings {
 		next := raPanel.cursor + delta
 		if next < 0 {
-			next = 1
+			next = raSettingsRowPhone
 		}
-		if next > 1 {
+		if next > raSettingsRowPhone {
 			next = 0
 		}
 		raPanel.cursor = next
@@ -1052,6 +1058,16 @@ func raSettingsField(cursor int) int {
 		return raEditAPIKey
 	}
 	return raEditUsername
+}
+
+// raSettingsActivate is A on a settings row: the two fields open the
+// keyboard, the last row shows the code that opens the phone's card.
+func raSettingsActivate(cursor int) {
+	if cursor == raSettingsRowPhone {
+		raFromPhone()
+		return
+	}
+	raBeginCredentialEdit(raSettingsField(cursor))
 }
 
 func raBeginCredentialEdit(field int) {
@@ -1147,7 +1163,7 @@ func handleRetroAchievementsKey(e *sdl.KeyboardEvent, config *Config) bool {
 		raToggleSettings()
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if raPanel.settings {
-			raBeginCredentialEdit(raSettingsField(raPanel.cursor))
+			raSettingsActivate(raPanel.cursor)
 		}
 	}
 	return true
@@ -1161,7 +1177,7 @@ func ctrlRetroAchievements(e *sdl.ControllerButtonEvent, config *Config) bool {
 		raPanelMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		if raPanel.settings {
-			raBeginCredentialEdit(raSettingsField(raPanel.cursor))
+			raSettingsActivate(raPanel.cursor)
 		}
 	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_START:
 		raToggleSettings()
@@ -1212,9 +1228,14 @@ func handleRetroAchievementsMouse(mx, my int32, config *Config) bool {
 			raPanel.cursor = hit.index
 			raClampScroll(raAchievementCount())
 		case raHitUsername:
+			raPanel.cursor = 0
 			raBeginCredentialEdit(raEditUsername)
 		case raHitAPIKey:
+			raPanel.cursor = 1
 			raBeginCredentialEdit(raEditAPIKey)
+		case raHitPhone:
+			raPanel.cursor = raSettingsRowPhone
+			raFromPhone()
 		}
 		return true
 	}
@@ -1529,6 +1550,8 @@ func raRenderSettings(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 	}{
 		{raHitUsername, "USERNAME", creds.Username},
 		{raHitAPIKey, "WEB API KEY", raKeyStatus(creds)},
+		// Both fields at once, typed on the phone (companion_accounts.go).
+		{raHitPhone, "FROM YOUR PHONE", "Scan a code, type both on your phone"},
 	}
 	for i, row := range rows {
 		r := sdl.Rect{X: x + 24, Y: firstY + int32(i)*(rowH+8), W: rowW, H: rowH}
@@ -1548,12 +1571,16 @@ func raRenderSettings(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 			value = "Not set"
 		}
 		renderText(renderer, config, med, ellipsize(med, value, r.W-140), ColorTextPrimary(), r.X+16, r.Y+30)
-		a := hintLine(FooterHint{"A", "Edit"})
+		verb := "Edit"
+		if row.kind == raHitPhone {
+			verb = "Show code"
+		}
+		a := hintLine(FooterHint{"A", verb})
 		aw, _, _ := font.SizeUTF8(a)
 		renderText(renderer, config, font, a, ColorTextTertiary(), r.X+r.W-16-int32(aw), r.Y+30)
 	}
 
-	helpY := firstY + 2*(rowH+8) + 12
+	helpY := firstY + int32(len(rows))*(rowH+8) + 12
 	lines := []string{
 		"Create or copy your Web API key at retroachievements.org/settings → Keys.",
 	}
@@ -1565,7 +1592,13 @@ func raRenderSettings(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 		lines = append(lines, "The key is stored only in JukaHub's data folder and is never shown in full.")
 	}
 	for i, line := range lines {
-		renderText(renderer, config, font, ellipsize(font, line, w-48), ColorTextTertiary(), x+24, helpY+int32(i)*int32(font.Height()+4))
+		lineY := helpY + int32(i)*int32(font.Height()+4)
+		// On a short screen the help gives way to the status line at the
+		// bottom rather than running under it.
+		if lineY+int32(font.Height()) > y+h-34 {
+			break
+		}
+		renderText(renderer, config, font, ellipsize(font, line, w-48), ColorTextTertiary(), x+24, lineY)
 	}
 	if creds.complete() {
 		renderText(renderer, config, font, "Ready to sync. Press Y to refresh now.", ColorTextSecondary(), x+24, y+h-30)
@@ -1602,24 +1635,8 @@ func raKeyStatus(creds raCredentials) string {
 	return "Set (32 chars) · " + source
 }
 
-func raNumber(n int) string {
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	s := strconv.Itoa(n)
-	var b strings.Builder
-	for i, r := range s {
-		if i > 0 && (len(s)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(r)
-	}
-	if neg {
-		return "-" + b.String()
-	}
-	return b.String()
-}
+// raNumber is n with thousands grouped (formatNumber).
+func raNumber(n int) string { return formatNumber(int64(n)) }
 
 func raAwardPercent(awarded, possible int) int {
 	if possible <= 0 {
@@ -1681,6 +1698,6 @@ func raRelativeTime(t time.Time) string {
 	case d < 7*24*time.Hour:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	default:
-		return t.Local().Format("Jan 2")
+		return formatDateNear(nil, t.Local(), time.Now())
 	}
 }

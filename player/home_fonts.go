@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -32,12 +33,17 @@ const (
 // homeUIFontForRole is the face every UI role resolves to. Legible reading
 // text replaces the face with the best system face the machine has
 // (legiblefont.go), falling back to the bundled Inter when none is installed;
-// Bold text then prefers that face's bold cut, or the bundled SemiBold. Every
-// role still goes through the normal path/cache/fallback chain in
-// loadCachedFont.
+// next comes the font picked in Settings → Display → Font (uifont.go), when
+// its file is there; Bold text then prefers that face's bold cut, or the
+// bundled SemiBold. Every role still goes through the normal
+// path/cache/fallback chain in loadCachedFont, so a picked file that will not
+// open draws in Inter.
 func homeUIFontForRole(path string) string {
 	if legible := legibleFontFile(); legible != "" {
 		return legible
+	}
+	if chosen := uiFontFile(); chosen != "" {
+		return chosen
 	}
 	if a11y.boldText {
 		return homeUIFontBoldFile
@@ -51,17 +57,29 @@ func homeUIFontForRole(path string) string {
 type homeUIFontSource struct {
 	data   []byte
 	pinner runtime.Pinner
+	// size and mod are the file's when it was read, so a file replaced on the
+	// card under the same name can be told apart (homeUIFontSourceRefresh).
+	size int64
+	mod  time.Time
 }
 
+// homeUIFontSourceCache maps a resolved path to its bytes. retired holds the
+// sources dropped from byPath because their file was replaced or removed: a
+// Font opened from them may still sit in a cache until the next refresh, so
+// their bytes stay pinned until shutdown.
 var homeUIFontSourceCache = struct {
 	sync.Mutex
-	byPath map[string]*homeUIFontSource
+	byPath  map[string]*homeUIFontSource
+	retired []*homeUIFontSource
 }{byPath: make(map[string]*homeUIFontSource)}
 
 // openHomeUIFont opens one size from the shared in-memory source instead of
-// asking SDL_ttf to reopen the font file from the card for every size.
+// asking SDL_ttf to reopen the font file from the card for every size. A
+// picked face much wider or narrower than Inter opens at its scaled size
+// (uiFontScaledSize), so rows laid out for Inter still fit.
 func openHomeUIFont(path string, size int) (*ttf.Font, error) {
-	return openUIFontFile(homeUIFontForRole(path), size)
+	path = homeUIFontForRole(path)
+	return openUIFontFile(path, uiFontScaledSize(path, size))
 }
 
 // openUIFontFile opens exactly the file it is given, with no role substitution.
@@ -81,7 +99,9 @@ func openUIFontFile(path string, size int) (*ttf.Font, error) {
 	return font, err
 }
 
-func homeUIFontSourceFor(path string) (*homeUIFontSource, error) {
+// homeUIFontSourceKey is the cache key for path: resolved like every asset
+// and made absolute.
+func homeUIFontSourceKey(path string) string {
 	resolved := resolvePath(path)
 	if resolved == "" {
 		resolved = homeUIFontFile
@@ -89,6 +109,11 @@ func homeUIFontSourceFor(path string) (*homeUIFontSource, error) {
 	if absolute, err := filepath.Abs(resolved); err == nil {
 		resolved = filepath.Clean(absolute)
 	}
+	return resolved
+}
+
+func homeUIFontSourceFor(path string) (*homeUIFontSource, error) {
+	resolved := homeUIFontSourceKey(path)
 
 	homeUIFontSourceCache.Lock()
 	defer homeUIFontSourceCache.Unlock()
@@ -102,21 +127,86 @@ func homeUIFontSourceFor(path string) (*homeUIFontSource, error) {
 	if len(data) == 0 {
 		return nil, errors.New("font file is empty")
 	}
-	source := &homeUIFontSource{data: data}
+	source := &homeUIFontSource{data: data, size: int64(len(data))}
+	if st, err := os.Stat(resolved); err == nil {
+		source.mod = st.ModTime()
+	}
 	source.pinner.Pin(&source.data[0])
 	homeUIFontSourceCache.byPath[resolved] = source
 	return source, nil
 }
 
+// homeUIFontSourceRetire forgets path's cached bytes, so the next open reads
+// the file again: a downloaded font installed again, or a removed one. The
+// bytes stay pinned (retired) for any Font still opened from them.
+func homeUIFontSourceRetire(path string) {
+	key := homeUIFontSourceKey(path)
+	homeUIFontSourceCache.Lock()
+	if source := homeUIFontSourceCache.byPath[key]; source != nil {
+		homeUIFontSourceCache.retired = append(homeUIFontSourceCache.retired, source)
+		delete(homeUIFontSourceCache.byPath, key)
+	}
+	homeUIFontSourceCache.Unlock()
+}
+
+// homeUIFontSourceRefresh retires path's cached bytes only when the file on
+// the card is no longer the one read (another size or time, or gone): a face
+// applied again keeps its bytes, a face replaced under the same name is read
+// afresh. Retiring on every apply would pin one more copy per Left/Right step.
+func homeUIFontSourceRefresh(path string) {
+	key := homeUIFontSourceKey(path)
+	homeUIFontSourceCache.Lock()
+	source := homeUIFontSourceCache.byPath[key]
+	homeUIFontSourceCache.Unlock()
+	if source == nil {
+		return
+	}
+	if st, err := os.Stat(key); err == nil && st.Size() == source.size && st.ModTime().Equal(source.mod) {
+		return
+	}
+	homeUIFontSourceRetire(path)
+}
+
+// homeUIInterFonts are the bundled Inter at the sizes the JukaHub wordmark is
+// drawn at. Render thread only; kept for the run (font refreshes leave them
+// alone) and closed at shutdown.
+var homeUIInterFonts = map[int]*ttf.Font{}
+
+// homeUIInterFont is the bundled Inter at size whatever face the interface
+// uses: the JukaHub wordmark is the brand and stays Inter, on the boot logo
+// and in the boot animation alike, so the two pictures still match.
+func homeUIInterFont(size int) *ttf.Font {
+	if font := homeUIInterFonts[size]; font != nil {
+		return font
+	}
+	font, err := openUIFontFile(homeUIFontFile, size)
+	if err != nil {
+		logWarn("core", "Error loading the wordmark face at %d px: %v", size, err)
+		return nil
+	}
+	registerFontPath(font, homeUIFontFile)
+	homeUIInterFonts[size] = font
+	return font
+}
+
 // closeHomeUIFontSources releases pinned font bytes after the cached fonts are
 // closed during shutdown. Until then, every SDL_ttf RWops can safely read them.
 func closeHomeUIFontSources() {
+	for size, font := range homeUIInterFonts {
+		font.Close()
+		delete(homeUIInterFonts, size)
+	}
 	homeUIFontSourceCache.Lock()
 	for path, source := range homeUIFontSourceCache.byPath {
 		source.pinner.Unpin()
 		source.data = nil
 		delete(homeUIFontSourceCache.byPath, path)
 	}
+	for _, source := range homeUIFontSourceCache.retired {
+		source.pinner.Unpin()
+		source.data = nil
+	}
+	homeUIFontSourceCache.retired = nil
 	homeUIFontSourceCache.Unlock()
 }
 

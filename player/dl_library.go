@@ -44,6 +44,8 @@ const (
 	dlLibraryVersion = 1
 	// dlKeptLimitDefaultGB is the shipped limit for videos kept after watching.
 	dlKeptLimitDefaultGB = 4
+	// dlKeptLimitMaxGB caps a hand-edited limit (1 PB: no card is bigger).
+	dlKeptLimitMaxGB = 1 << 20
 	// dlKeepMinFreeBytes is the space a kept video copied from another volume
 	// must leave free. A rename on the same card costs no space at all.
 	dlKeepMinFreeBytes = int64(512 << 20)
@@ -277,10 +279,15 @@ func dlSettingsSync(config *Config) {
 	}
 	dlKeepWatchedOn.Store(dlCustomBool(config.Variables.Custom[dlKeepWatchedKey], true))
 	limit := dlCustomInt(config.Variables.Custom[dlKeptLimitKey], dlKeptLimitDefaultGB)
+	// The int32 conversion runs only below the upper bound it was tested
+	// against (a clamp by reassignment merges back unchecked for CodeQL).
 	if limit < 0 {
-		limit = dlKeptLimitDefaultGB
+		dlKeptLimitGB.Store(dlKeptLimitDefaultGB)
+	} else if limit > dlKeptLimitMaxGB {
+		dlKeptLimitGB.Store(dlKeptLimitMaxGB)
+	} else {
+		dlKeptLimitGB.Store(int32(limit))
 	}
-	dlKeptLimitGB.Store(int32(limit))
 	dlToolsPath.Store(strings.TrimSpace(config.Variables.ToolsPath))
 }
 

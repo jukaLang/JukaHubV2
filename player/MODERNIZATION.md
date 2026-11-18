@@ -1,896 +1,579 @@
 # JukaHub engineering backlog
 
-This is the **one task list** for the JukaHub player, the web builder and the
-AndroidRT runtime. It holds only open work. Shipped work is described by the code,
-the docs under [`docs/`](../docs/) and the [CHANGELOG](../CHANGELOG.md); it is not
-tracked here, so nothing in this file is ever "done".
+Open tasks: **287** (audited 2026-11-17).
 
-Last full rewrite: **2026-11-09**, after the November pass (startup/shutdown
-chimes, test cut, legacy log removal, dead-code sweep, perf/GPU pass, AndroidRT
-JNI + Minecraft class pack, hakuX Xbox on the Smart Pro, UX review). The Windows
-build of that pass compiled the same morning; `make check` and the device are
-still ahead — start with [BUILD-1](#build-1--first-compile-of-the-november-pass-p0-s-win).
+This file tracks open work for the player, web builder and AndroidRT, plus a
+small ideas parking lot.
+Completed work belongs in the [changelog](../CHANGELOG.md) and feature docs.
+The [hardware validation log](../docs/HARDWARE_VALIDATION.md) records what the
+stock Smart Pro actually showed; the [release checklist](../docs/RELEASE_CHECKLIST.md)
+is the repeatable device walk. Start with [P0](#p0--build-and-first-hardware-run),
+then the [hardware queue](#hardware-validation-queue) or a subsystem below.
 
-Extended **2026-11-09 (afternoon)** with the
-[North star](#north-star-the-best-handheld-os): a benchmark against the best
-handheld systems of 2026, the defects a whole-code inventory found
-([FIX](#p0p1--defects-found-by-the-2026-11-09-inventory-fix)), and new areas —
-input, shell, power, reliability, accessibility, languages, network, library,
-apps and Windows — 144 new tasks. Sections:
-[P0](#p0--build-and-first-hardware-run) ·
-[FIX](#p0p1--defects-found-by-the-2026-11-09-inventory-fix) ·
-[PERF](#performance-perf) · [GPU](#graphics-and-gpu-gpu) ·
-[ARCH](#architecture-and-build-arch) · [TEST](#tests-and-ci-test) ·
-[UX](#ux-and-design-ux) · [GAME](#games-and-emulation-game) ·
-[PSR](#ps-remote-play-psr) ·
-[XBX](#xbox-and-xbox-360-xbx) · [AND](#android-games-and) ·
-[MED](#media-med) · [SYS](#system-and-connectivity-sys) ·
-[SND](#sound-and-haptics-snd) · [WEB](#web-builder-web) ·
-[SEC](#security-and-privacy-sec) · [DOC](#docs-and-project-doc) ·
-[INP](#input-and-controls-inp) ·
-[SHELL](#shell-multitasking-and-notifications-shell) ·
-[PWR](#power-sleep-and-battery-pwr) ·
-[REL](#reliability-updates-and-recovery-rel) ·
-[A11Y](#accessibility-a11y) · [I18N](#languages-and-locales-i18n) ·
-[NET](#network-and-connectivity-net) ·
-[LIB](#game-library-and-emulation-lib) · [APP](#apps-platform-app) ·
-[DESK](#windows-desktop-desk) · [HW queue](#hardware-validation-queue) ·
-[Parking lot](#ideas-parking-lot).
+## How to use this file
 
-Afternoon pass, part 2 (**2026-11-09**, unbuilt): the boot guard counts failed
-starts instead of trusting the clock, a crash leaves a report the next start
-offers, and the recovery chord opens a recovery card; Settings → Date & time with
-an on-device zone picker and network time; FTP/SFTP with passwords, confined
-shares and auto-stop, and a live builder that is off on the handheld,
-rate-limited and holds risky designs for the owner's approval; `.bat`/`.cmd`
-launches quoted for cmd.exe; verified, staged package installs with a rollback,
-and core updates that notify; hints that follow Accessibility remaps; AndroidRT's
-SDL-hosted present fallback. Every workstream had an independent review whose
-findings were fixed, but none of it is compiled yet —
-[BUILD-1](#build-1--first-compile-of-the-november-pass-p0-s-win) covers it.
-Finished tasks were deleted, partly done ones rewritten, and the follow-ups
-added. A same-day feature sweep of the shipped subsystems (music, recordings,
-the browser, per-game launch options, Wine apps) added seven more — MED-15, MED-17, MED-18, APP-8, APP-9, GAME-13
-(two have since shipped).
+1. Pick the highest-priority task you can verify. **[WIN]** needs a Windows
+   build, **[HW]** a TrimUI device, **[NET]** a network service or download,
+   and **[OWNER]** a product decision. A probe is partial evidence when the
+   task also requires a live screen, input, audio or a second model.
+2. Read the named files and docs. Finish only when the *Done when* outcome and
+   *Verify* step hold. Remove the completed task in the same change, update
+   `[Unreleased]` in the changelog, and add a specific follow-up if needed.
+3. Use P0 for release blockers, P1 for current user pain, P2 for planned value,
+   P3 for lower-priority improvements. S is at most half a day, M at most two
+   days, L at most a week; split XL tasks before implementation.
 
-Evening pass (**2026-11-09**, unbuilt): the TrimUI's X and Y fixed where every
-press enters the app (with a **Swap X and Y** switch), a volume button and card
-in the status corner with a tg5040 codec backend, the charging bolt, a
-selectable Home pairing QR, the PS Remote Play keyboard and four other panel
-keyboards, and YouTube resolution reworked (android client first, yt-dlp that
-updates itself with a rollback, failures that name their cause). Follow-ups:
-MED-19 to MED-25, SND-5, SND-6, INP-15 and INP-16; PWR-4 and INP-13 were
-rewritten for what shipped: 264 tasks in the file.
-
-Night fix (**2026-11-09**, unbuilt): a stream ffmpeg could not open used to
-close the player silently (reported as "YouTube videos open a black canvas for
-a second, but then crash"); a web video now falls back to the download and
-anything else says why (`videorecover.go`), and the decoders ask as the browser
-the stream was resolved for. Follow-ups: MED-26 to MED-29.
-
-Files in chat (**2026-11-09**, unbuilt): the chat sends files — a tray above
-the composer, Files in pick mode (X), real Discord uploads that stream from the
-card, file cards with View / Play / Open, saving into Downloads, and text files
-for Juka AI (`chatfiles.go`, `chatupload.go`, `chatfilesview.go`). Follow-up:
-SYS-14.
-
-Late-night pass (**2026-11-09**, unbuilt): the Browser runs page JavaScript
-against a real DOM (`webdom_*.go`, `webdom/*.js`: a Go HTML parser, an ES-module
-rewrite for goja, a network layer that keeps scripts off the LAN and away from
-other sites' cookies, timers on a virtual clock), switched by Settings → Browser
-→ JavaScript; the reader's CSS matcher now evaluates attribute selectors and
-pseudo-classes instead of assuming they match, honours `hidden`, and no longer
-hangs on a tag with a stray quote. Follow-ups: PERF-15, TEST-12, SEC-25, SEC-26,
-NET-16 and APP-10 to APP-13; PERF-7 was rewritten: 275 tasks in the file.
-
-Archives (**2026-11-10**, unbuilt): **A** on an archive in Files opens its
-sheet, and **Extract** / **Extract here** unpack zip, tar, tar.gz / .xz / .bz2
-and single .gz / .xz / .bz2 files in-process, and 7z and RAR through 7-Zip, on a
-background queue with progress, cancel and a staging folder that is moved into
-place at the end (`files_extract.go`, `files_extract_ui.go`); the old
-unzip-on-A went. Follow-ups: SYS-15, SEC-27, APP-14 and APP-15; APP-4 was
-rewritten.
-
-Remote Play wake and Bluetooth controllers (**2026-11-10**, unbuilt): A on a
-resting PS4 or PS5 wakes it (chiaki-ng's WAKEUP, sent only to the console's
-address with the pairing key as credential), waits until it is up and streams;
-X only wakes; a console that got a new address is followed by its MAC
-(`psremote_wake.go`). Settings → Network → Bluetooth devices pairs controllers
-and headphones through `bluetoothctl` (`bluetooth_devices*.go`); the stream
-helper takes every pad, mid-stream ones too, with a PlayStation pad's touchpad
-(`native/chiaki-stream.c`); and a helper the firmware cannot load is caught
-before JukaHub quits (`psremote_preflight.go`). Follow-ups: the new
-[PSR](#ps-remote-play-psr) section, PSR-1 to PSR-7; SYS-1 was rewritten for
-what is left.
-
-Remote Play controls, display and other networks (**2026-11-10**, unbuilt):
-the helpers are finally built by CI and packed into every TrimUI archive
-(`remote-play-helpers.yml`: an Ubuntu 20.04 root for glibc 2.31, with FFmpeg,
-opus, json-c and OpenSSL linked statically); the stream maps every DualSense
-input (a Menu tap is the PS button and the stream menu's Hold PS (Home) the
-long press, Select the touchpad, Menu combos for Create, swipes, a finger and
-the D-pad as the left stick), draws an on-screen display
-(connecting card, a stream menu on a held Menu, passcode entry, battery
-warnings, an error card), enters a saved login passcode, drives the TrimUI
-motor and writes how it ended for JukaHub's next start (`native/stream_*.c`,
-`psremote_lastrun.go`); a console's options take an internet address and a
-passcode (`psremote_console_opts.go`, `psremote_stream_opts.go`); and JukaHub
-estimates the battery's time left (`battery_eta.go`). Follow-ups: BUILD-4,
-PSR-8 to PSR-11, TEST-13 to TEST-17 and PWR-9; PSR-2 and PSR-6 were rewritten
-for the new helper: 299 tasks in the file.
-
-Tester batch (**2026-11-10**, unbuilt): leaving JukaHub no longer starts a second
-MainUI next to the firmware supervisor's (the "glitchy screen"), and PS Remote
-Play hands the screen over through `launch.sh` and comes back to JukaHub;
-children get the firmware's environment back (`childenv.go`); JukaHub's
-`retroarch.cfg` edits last for its own launch only (`racfgscope.go`); emulator
-cores install themselves by default after an ELF check that they can load
-(`elfcompat.go`); a managed, auto-updating TrimUI PPSSPP (`ppsspp_managed*.go`);
-mouse mode on hold Select + L1 and a uinput mouse for games (`vcursor_*.go`);
-PSN sign-in from the phone for the Account-ID (`psn_signin.go`); WPE Browser
-hand-off, install and a bigger ad filter (`brw_wpe*.go`, `brw_adblock.go`); and
-background box art (`boxart_auto.go`). Follow-ups: HW-2, GAME-14 to GAME-16,
-PSR-12, INP-17, LIB-19 and APP-16.
-
-Liquid background, animated wallpapers and Screen Share (**2026-11-10**,
-unbuilt): Settings → Display & theme → Liquid background turns the backdrop
-into a wave-simulated pool that focus moves, the sticks, the pointer and tilt
-stir, drawn through `SDL_RenderGeometry` (`liquidbg.go`, `liquidbg_motion.go`);
-GIF wallpapers play, decoded frame by frame within a memory budget, and the
-redone picker finally remembers the pick (`gifwall.go`, `wallpaper.go`); and
-Remote Cast became Screen Share — games read from `/dev/fb0`, encoding off the
-render thread, a view-only link token, quality presets and a TV-friendly
-viewer (`castcap*.go`, `companion_cast.go`, `castui.go`). Follow-ups: GPU-5,
-PERF-17, PERF-18 and SYS-18; UX-12 lost `castui.go`: 315 tasks in the file.
-
-Feature pass (**2026-11-10**): promoted encrypted WebDAV/Nextcloud save backups
-and user-directed save-sync conflict resolution from the parking lot to SYS-19
-and SYS-20.
-
-Quick implementation pass (**2026-11-10**): MED-21, MED-32 and DOC-2 are
-shipped and recorded in the [CHANGELOG](../CHANGELOG.md).
-
-Remote Play installs its own helpers (**2026-11-10**, evening, unbuilt): a
-JukaHub without `bin/chiaki-stream` and `bin/chiaki-regist` (every install so
-far) downloads `JukaHub-RemotePlay-linux-arm64.zip` from the newest release that
-has it when PS Remote Play opens, checks it (GitHub's digest, a signed
-`release.json` when there is one, its `SHA256SUMS`, one test start of each
-helper) and installs the missing helpers beside the binary; a PS5 pairing waits
-for it and Play streams afterwards (`psremote_helpers_install.go`).
-`docker-image.yml` and `release.sh` attach the package; the helper lookup now
-starts beside the binary, where an update puts `bin/`; PSR-4 is code-done.
-Follow-ups: PSR-13; BUILD-4 got the first run's
-fix (an empty libavformat for chiaki-ng's configure).
-
-Faster TrimUI release build (**2026-11-10**, evening, not yet run on GitHub):
-the handheld binary compiles in its own job, `build-trimui`, which starts at
-once, runs the pinned toolchain image through `docker run` with no network
-(`.github/scripts/trimui-build.sh`), carries the Go build cache between
-releases like the Windows job and no longer builds six unused C libraries;
-packaging waits for it and for the Remote Play helpers, which are reused when
-their sources did not change (`go-build-cache.sh fetch`). TEST-14 was
-rewritten for what is left. Follow-up: BUILD-5 (one new task).
-
-Remote Play downloads in the background (**2026-11-10**, night, unbuilt): a
-JukaHub without its helpers fetches them about a minute after it starts, when
-it is online, on screen and its clock is past the build's date, waiting 2 to 60
-minutes after a failure the network, GitHub or the clock caused and leaving any
-other until the next start, an Account-ID or Retry (`psremote_helpers_bg.go`);
-a chip on every other screen follows the download and stops it, the panel says
-Downloading or Installing, and Settings → Games &
-emulators → Download Remote Play automatically turns it off. The Phone
-Companion page's PlayStation card sends the PSN Account-ID and follows the
-download (`companion_psremote.go`). Follow-ups: PSR-15 and SEC-28 (two new
-tasks).
-
-Fewer tests, two CI jobs, and libevent for the helpers (**2026-11-10**, night,
-unbuilt; the owner: "Too many tests... reduce them especially for CI"): a push
-now runs `ci.yml`'s two jobs (builder checks; the player's vet, staticcheck and
-tests) besides the release pipeline, instead of eight CI jobs plus a second
-TrimUI and helper build; the race detector, govulncheck, the cold-boot budget,
-the Chromium smoke test and the native Windows tests run weekly (`weekly.yml`,
-which replaced the nightly macOS + Windows run), the SD-card package builds by
-hand only and Scorecard weekly only. The Go suite was cut back to its rule
-(ground rules above): 59 of the 90 test files added since 2026-11-09 and two
-older ones went, four files kept only their security or persistence cases, and
-the security tests among the deleted ones were kept, moved into files that
-stayed or into four one- or two-test files (180 files and 1,675 tests before,
-123 and about 1,005 after). The helper build makes libevent, which
-the pinned chiaki-ng's configure asked for next, and its log shows one line per
-step (BUILD-4). TEST-13 was dropped, TEST-14 is done, and TEST-3, 4, 5, 7, 8,
-9, 11, 12 and 17, SEC-10, INP-12 and INP-18 were rewritten so that no task adds
-a per-push CI job: 320 tasks in the file.
-
-VPN (**2026-11-11**, unbuilt): Settings → Network → VPN sends the whole device
-through a WireGuard tunnel while it is on and a configuration is set
-([docs/VPN.md](../docs/VPN.md)). On the handheld JukaHub runs its own
-WireGuard (`wg_noise.go`, `wg_device.go`) in a root tunnel process that
-outlives the app's process across Remote Play's screen handoff
-(`vpnd_linux.go`: TUN, `/1` routes, `SO_BINDTODEVICE`, `resolv.conf` with crash
-recovery, handshake timestamps that never go backwards); on Windows it is
-WireGuard for Windows' tunnel service, changed through one permission prompt
-(`vpn_windows.go`). Configurations come from the card, from Files or from the
-companion's VPN card; Quick Settings has the switch and the Wi-Fi meter a lock.
-The handshake and transport were checked against the Linux kernel's WireGuard
-in a network namespace (`tmp/wgref`), and `wg_test.go` replays those
-exchanges. NET-8 is now the device check; follow-up NET-17.
-
-A faster Remote Play helper job (**2026-11-11**, not yet run on GitHub; the
-owner: "It now takes too long to get JukaHub-Trimui.zip built"): the Box64
-pack builds in a workflow of its own, `wine-runtime.yml`, on a runner of its
-own, and `attach-wine-runtime` puts it on the release whenever it is ready, so
-the TrimUI archive waits only for the helpers and AndroidRT, which it carries.
-`.github/scripts/build-root.sh` makes the Ubuntu 20.04 root and runs every
-build in it, and the reuse keys hash it instead of the workflow files, which
-every recent push had edited; the helper build's five dependencies build side
-by side while chiaki-ng and miniupnpc download. Follow-ups: BUILD-6 and SEC-29
-(two new tasks).
-
-Windows apps, Android and Xbox (**2026-11-11**, unbuilt; the owner: "Make sure
-that WINE works and can run windows applications whenever possible (especially
-on Trimui Smart pro)… Make sure Android works… xbox emulator can be properly
-downloaded and run… auto update emulators"): on the Smart Pro one press in
-Windows Apps installs Box64 + Wine 10.0, WestonPack and a prepared prefix and
-starts the program with the pad as mouse and keys (`wine_pack.go`,
-`wine_prefix.go`, `wine_display*.go`, `windowsapps.go`); on Windows the same
-screen runs `.exe` and `.bat` files directly. CI builds AndroidRT into every
-TrimUI archive and the Box64 pack for every release (`build-runtimes.sh`); the
-APK Store installs and updates AndroidRT from a release (`relpack.go`,
-`androidrt_install.go`), the Games Library has an Android row, and the stock
-PowerVR models present through SDL. The Emulators page installs Xenia Canary
-for Xbox 360 and sets xemu up on Windows, hakuX got its housekeeping, and the
-daily Emulator updates pass also updates hakuX, the runtimes and, on a PC, the
-emulators JukaHub installed (`emuautoupdate_*.go`). Every workstream was
-reviewed and its findings fixed; Juka's Windows build at 03:36 compiled the
-first round (not the fixes), nothing has run on a handheld, and neither pack
-has come out of a green CI run. AND-16, XBX-6 and TEST-4 are done; AND-14 is
-down to its first green run; AND-1, AND-6, AND-13, AND-17, XBX-1, LIB-17,
-REL-3, TEST-15 and BUILD-2 were rewritten, and BUILD-6 got the Box64 pack's
-checks. Follow-ups: APP-17 to APP-24, AND-19, XBX-7 to XBX-9, LIB-20, LIB-21,
-GAME-18, DESK-12, TEST-18 and TEST-19.
-
-Tester pass (**2026-11-11**, evening, unbuilt; a Smart Pro tester on
-CrossMix): Juka talks — Groq's Orpheus voice, a sentence at a time, with
-Windows' own voice on a PC when Groq's cannot (`tts_*.go`); words taught to
-the voice assistant, and the emulators as voice targets (`voiceshortcuts*.go`,
-`voiceemu.go`); a game assistant that tells Juka the game being played and, on
-a TrimUI, pauses it under the voice orb on Select + R2 (`gameassist*.go`);
-pictures and videos for Juka (`groqvision.go`, `vision_*.go`); R2 as the
-keyboard's voice-typing button (`vkvoice_button.go`) — all on a new Settings →
-Voice & AI page (`voiceai_settings.go`). Leaving JukaHub no longer starts a
-second MainUI beside a slow firmware loop, the loop is paused by process id,
-and the boot hook's hand-over goes through black (`launch.sh`, `autostart.go`,
-`displayguard*.go`); JukaHub notices a wake from sleep within a second and gets
-back online at once (`wake_resume*.go`, `wifi_resume*.go`, `netmon.go`);
-YouTube's download fallback joins picture and sound, shows its progress and
-ends with a native ranged download (`ytdownload*.go`); the liquid background
-is interpolated on a finer mesh at the active frame rate (`liquidbg.go`,
-`adaptive.go`); and JukaHub shows its own memory use (`memstat*.go`). Juka's
-Windows build at 18:29 compiled the Windows side of most of it; the
-Linux-only files and the review fixes are not compiled yet. Follow-ups: HW-3,
-INP-23, SND-14, SND-15, GAME-19, SYS-21, MED-33 to MED-35, NET-18 and
-PERF-19; GPU-5 grew: 321 tasks in the file.
-
-Bluetooth in the top bar and the APK Store in Packages (**2026-11-11**, late
-evening, unbuilt; the owner asked for the APK Store to be easy to find, maybe
-in Packages, for Bluetooth left of the Wi-Fi meter on every page, and for
-connecting and disconnecting devices to work, especially on the Smart Pro): a
-Bluetooth button left of the Wi-Fi meter in every top bar, struck through while
-the radio is off and in the accent while a device is connected, its state read
-from the kernel rather than from `bluetoothctl` (`statusbar_bluetooth.go`,
-`bluetooth_quick.go`); on the Bluetooth page A connects or disconnects a paired
-device and Y opens its sheet (`bluetooth_devices_ui.go`); a step-by-step
-bring-up for a firmware that left Bluetooth stopped, also behind Quick
-Settings' switch (`bluetooth_bringup*.go`); and a **More stores** strip in
-Packages for the APK Store, PortMaster and Windows Apps, which Home search now
-finds too (`pkgstores.go`). Every part was reviewed and its findings fixed;
-nothing is compiled or has run on a handheld. SYS-1 grew; still 321 tasks.
-
-The Groq key from the phone, L2 Edit Home and square tiles (**2026-11-11**,
-night, unbuilt; the owner asked for the Groq key right under Your name in
-General with a phone paste like the VPN's, for L2 to edit Home, and for every
-tile to resize like square tiles): Settings → General → **Groq API key** opens
-a sheet whose **Paste it from your phone** shows a QR code that opens the
-companion page at its Groq card and closes when the key arrives
-(`groqkey_sheet.go`, `companion_phonecard.go`; the VPN's phone option uses it
-too); L2 (Q) opens and closes Edit Home in every layout, going back to Standard
-or the Hero grid when nothing changed (`home_edit.go`, `shoulders.go`); the
-Widgets grid has seven square columns and X resizes any tile a cell at a time
-up to 7 × 3, with a corner handle for the mouse (`home_tiles.go`). HW-4 is new:
-322 tasks.
-
-JukaOS v2 (**2026-11-16**, unbuilt; the owner asked for boot animations —
-Cinematic, Roll, an image or none —, a tabbed Home switched with L1/R1, a Games
-tab that cleans up emulators, collections, better Bluetooth and the best
-standalone emulators): Settings → General → Boot animation with Cinematic (the
-logo crashes onto a cracking floor, with a buzz and a knock) as the new
-default, Roll, Still logo, Classic, Surprise me and None (`bootstyles.go`);
-the Tabs Home — Recent, Main, Games, Entertainment, Favourites, Collections in
-the top bar, five views per tab and folder, an arranging sheet on L2 — now the
-Home of every setup without a saved layout (`hometabs*.go`); a Games tab that
-hides consoles without games and badges those without an emulator, Favourites
-on the library's Favorite tag and collections in `collections.json`
-(`hometabs_games.go`, `hometabs_favourites.go`, `hometabs_collections*.go`);
-Bluetooth that reconnects remembered devices, pauses on a headset drop, keeps
-a volume per output and shows pad battery, order, codec and Identify
-(`bt_*.go`); and a ranked best emulator per console for the picker and the
-Windows Emulators page (`emubest.go`). Each part was statically checked;
-nothing is compiled or has run on a handheld. LIB-3 was rewritten for what
-shipped. Follow-ups: HW-7, SHELL-12, SHELL-13, LIB-22 to LIB-24, SYS-25 and
-SND-17: 339 tasks in the file.
-
-## How to use this file (agents read this first)
-
-1. **Pick** the highest-priority task you can actually verify. Tags tell you what
-   a task needs: **[WIN]** a Windows machine with the Go toolchain
-   (`player\build.bat`), **[HW]** a TrimUI device, **[NET]** internet access,
-   **[OWNER]** a product decision from the owner (Juka) before code.
-2. **Read** the task's *Where* files and the docs it names before writing code.
-   Do not rebuild something that exists — the [map](#map-of-the-player) below
-   says where every subsystem lives.
-3. **Finish** when every *Done when* line holds and the *Verify* step passed.
-   Then, in the same change: delete the task from this file, add a line to
-   `CHANGELOG.md` → `[Unreleased]`, and add follow-up tasks you discovered (with
-   *Why* and *Done when*).
-4. **New ideas** become tasks only with a *Why* and a *Done when*; otherwise put
-   them in the [parking lot](#ideas-parking-lot).
-
-Priorities: **P0** broken or blocks everything · **P1** users feel it now ·
-**P2** clear value, plan it · **P3** nice to have. Sizes: **S** ≤ ½ day ·
-**M** ≤ 2 days · **L** ≤ 1 week · **XL** bigger, split it first.
-
-### Ground rules that apply to every task
-
-- **The device decides.** TrimUI Smart Pro: Allwinner A133P (4× Cortex-A53
-  1.8 GHz), **1 GB RAM**, PowerVR GE8300 (GLES 3.2), 4.96" 1280×720 panel, 30 fps
-  UI cadence. No per-frame allocations, nothing blocking on the render thread,
-  every cache bounded by bytes *and* entries (see `docs/DEVELOPMENT.md`).
-- **Look:** every screen uses Home's glass (`player/ui_glass.go` tokens,
-  `docs/STYLE.md`); text ≥ 14 px at 1280×720 (≥ 12 px on the Brick's 960×720
-  canvas, enforced by `uiLegibleFontSize` in `design.go`).
-- **Logging:** never import `log`. Use `logDebug/logInfo/logWarn/logError(sys,
-  format, args...)` or `Log()/LogScene(...)` (slog) from `logging.go`. Only WARN+
-  reaches `errors.txt` on the device; the Logs screen shows the ring buffer.
-- **Tests and CI (owner rule, 2026-11-10: "too many tests"):** the suite is a
-  lean core: data integrity, security, updater/installers, parsers of files from
-  outside. No tests for a feature's flow or state, rendering, layout, wording,
-  timing or the maths behind an effect; add a case to an existing test file
-  before starting a new one (`CONTRIBUTING.md` → Tests for what you changed).
-  CI is two jobs per push (`ci.yml`); slow checks run weekly (`weekly.yml`); a
-  new check goes there or into a `make` target, never into a new per-push job.
-- **Modules:** never edit `go.mod`/`go.sum` without a Go toolchain (the
-  git-ignored `vendor/` would become inconsistent). With one, finish with
-  `go mod tidy && go mod vendor`.
-- **No toolchain?** `tools/gocheck/gocheck.py --tests player/` catches syntax,
-  undefined names, unused imports and gofmt alignment for linux/arm64 and
-  windows/amd64 ([tools/gocheck/README.md](../tools/gocheck/README.md)). It does
-  not type-check — read the code you call.
-- **Line endings:** `.go/.json/.sh` are LF; most other text files are CRLF on
-  Windows checkouts — preserve what a file has.
-- **Honesty rules:** never fake a license, entitlement or purchase for a game or
-  app (AndroidRT store answers stay "unavailable"); never bundle BIOS files, ROMs
-  or copyrighted assets.
-- **Both input vocabularies (owner rule, 2026-11-09):** when no controller with
-  a D-pad is connected (a PC) or a keyboard is plugged into the handheld, every
-  hint names keyboard keys. Hints go through `inputhints.go`: use `FooterHint`
-  with the shared renderers (they translate), measure a badge you draw yourself
-  with `hintKeyFor(button, label)`, write a pad button with its keyboard twin as
-  `"X / C"` when they differ, and branch wording on `hintsUseKeyboard()` — never
-  on `P().IsHandheld()`. A new key binding needs a keyboard twin (INP-1).
-
-## Map of the player
-
-What exists, by area, so nobody rebuilds it. `player/` is one Go `package main`
-(~600 files) plus `internal/` packages and C code in `androidrt/`.
-
-| Area | Where |
-|---|---|
-| Boot, splash, shutdown, chimes, recovery | `main.go`, `startup.go`, `bootwork.go`, `bootchecks.go`, `splash.go`, `bootos.go` (power-on vs launch boot), `bootarrive.go` (first screen arriving), `bootlogo.go` + `bootlogo_linux.go` (firmware boot logo), `bootlogo_layout.go`, `stageui.go`, `bootliquid.go`, `shutdown.go`, `exitguard.go`, `bootchime.go` (+ `branding/sound/`), `safeboot.go` (recovery chord), `bootguard.go` (failed-start counter, rollback), `crashreport.go`, `recoverycard.go` + `recoverysettings.go` (recovery card) |
-| Render loop, pacing, caches | `main.go`, `adaptive.go` (`FrameRateController.Pace`), `framestats.go`, `textcache.go`, `shapeCache.go`, `iconatlas.go`, `thumbstore.go`, `cachebudget.go` |
-| Design system | `design.go`, `ui_glass.go`, `components.go`, `themes.go`, `themeloader.go`, `motion.go`, `anim.go`; backdrop: `backgroundfx.go`, `dynamicbg.go`, `liquidbg.go` + `liquidbg_motion.go` (liquid background, tilt), `gifwall.go` + `wallpaper.go` (animated wallpapers, picker) |
-| Home and navigation | `home*.go`, `homelayout.go`, `homefocus.go`, `focus.go`, `navrepeat.go`, `navmode.go`, `startmenu.go`, `quicksettings.go`, `globalsearch.go`, `homesearch_*.go` |
-| Input | `controller.go`, `brickkeys.go`, `inputhints.go` (pad or keyboard words in every hint, keyboard detection), `inmap*.go` (input mapping language), `vkeyboard.go`/`vk*.go`, `touchtarget.go`, `exit_chord.go`, `shortcuts.go` (keyboard sheet, global F1/Ctrl+Q), `voicecmd*.go` (Voice command: capture, intent parser, resolver, the companion's `/voice` page) |
-| Voice and Juka AI | `voiceorb.go` + `voicemic.go` (the orb, the shared microphone), `voicecmd*.go`, `voiceshortcuts*.go` (taught words) + `voiceemu.go` (the emulators as voice targets), `tts_*.go` (Juka's voice: Groq's Orpheus, the device's own voice, the duck), `gameassist*.go` (the game assistant: Select + R2 over a paused game), `groqvision.go` + `vision_*.go` (pictures and videos for Juka), `vkvoice*.go` (voice typing; `vkvoice_button.go`: R2), `chat*.go` (the Juka AI tab), `voiceai_settings.go` (Settings → Voice & AI) |
-| Settings | `setmodel.go` (rows), `setui.go` (page), `a11y.go`, `powermode.go`, `powerprofile.go`, `datetime.go` + `tzpicker.go` (Date & time, zone picker) |
-| Games | `game_library*.go`, `emulators.go`, `emu*.go`, `emulatorinstall.go`, `hakux*.go` (Xbox on Smart Pro), `retroachievements.go`, `savemanager*.go`, `savestate_resume.go`, `gamesuspend.go`, `gmeta_*.go`, `romsetup.go`, `romm_*.go`, `ports.go`, `netplay*.go`, `hotseat*.go`, `trophy_*.go`, `playtime.go`, `wrapped.go` |
-| Android games | `androidpak*.go` (Go side) and `androidrt/` (C runtime, `docs/ANDROID.md`, `docs/ANDROID-MINECRAFT.md`); `apkstore*.go` (APK Store: scan, manifest and resource reader, verdicts, profiles, catalogue, Waydroid install); `androidrt_install.go` (AndroidRT from JukaHub's releases, through `relpack.go`), `game_library_androidgames.go` (the library's Android row) |
-| Media | `videoplayer.go` (ffmpeg decode → IYUV texture), `streaming.go`, `musicplayer.go`, `media_hub*.go`, `podcasts.go`, `tvchannels.go`, `ipstreams.go`, `shorts.go`, `youtube*.go`, `playbackqueue.go`; `spatial.go` + `spatial_dsp.go` + `spatial_ui.go` (spatial audio for JukaHub's media, hooked into `QueueVideoAudio`), `spatial_games.go` + `spatialfx/` (the same DSP as a RetroArch filter / LADSPA plugin; `spatialfx/jh_spatial_ref.py` is the spec); `ytdownload*.go` (the download a stream that would not open falls back to, and its progress card) |
-| Web and apps | `browser*.go`, `textbrowser.go`, `webpage*.go`, `webscript.go` + `webdom_*.go` + `webdom/*.js` (page JavaScript on goja: DOM prelude, HTML parser, module rewrite, the scripts' network), `apps.go`, `winbatch*.go` (cmd.exe quoting for `.bat`/`.cmd` launches), `appgrid.go`, `windowsapps*.go` + `wine_*.go` + `windows_runtime_install.go` (Windows apps: the Box64 + Wine pack, prefix, WestonPack display, setup page, launch), `plugx.go`/`plug*.go` (plugins), `toolbox.go`, `xpack*.go` |
-| Files and transfer | `files_*.go`, `fileeditor.go`, `ftp_server.go`, `ssh_server.go`, `sftp_root.go`, `fileserver_guard.go` (FTP/SFTP auto-stop, clients), `filetransfer.go`, `companion*.go` (Phone Companion; `companion_cast.go` serves Screen Share), `castcap*.go` + `castui.go` (Screen Share capture, framebuffer source, panel) |
-| System | `wifi*.go`, `systemcontrol.go`, `audiooutput.go`, `bluetooth_devices*.go` (Bluetooth devices page), `hardware.go`, `systool_*.go`, `sdhealth.go`, `batteryhealth.go`, `ledsync.go`, `haptics.go`, `screensaver*.go`, `alarm*.go`, `sched*.go`, `ntpsync.go` + `clockjump.go` (network time, re-anchoring after a clock jump), `wake_resume*.go` + `wifi_resume*.go` (noticing a wake from sleep, the Wi-Fi nudge after it), `displayguard*.go` (other programs drawing beside JukaHub, the exit report), `memstat*.go` (JukaHub's own memory use) |
-| Social and LAN | `chat*.go` (Discord), `party*.go`, `peer*.go`, `nearby*.go`, `psremote*.go`, `smart_home*.go` |
-| Packages, updates, backup | `patch_*.go`, `packages.go`, `pkg*.go` (`pkgstage.go`/`pkgverify.go`: verified, staged installs with a rollback), `autoupdate.go`, `emulatorautoupdate.go` + `emuautoupdate_*.go` + `corebuilds_history.go` (core updates; hakuX, the runtimes and a PC's emulators in the same pass; build history), `relpack.go` (the release packs JukaHub's CI builds: AndroidRT, Box64), `upch*.go` (offline update channel), `jdelta_update.go`, `bkup*.go`, `ssync*.go` (save sync), `cfgdoc*.go` (config as code) |
-| Config and storage | `config*.go`, `xmlconfig.go`, `jukaconfig.json` + `trimui/jukaconfig.device.json` (device twin), `paths.go`, `platform.go`, `cache.go` (bbolt) |
-| Logging and diagnostics | `logging.go`, `hardware.go` (`appLog` ring), `systool_logs.go`, `diagnostics_bundle.go`, `bugrep*.go`, `telemetry.go` |
-| Web builder | `index.html`, `script.js`, `style.css`, `builder-*.js`, `gallery/`, tests in `tests/web` + `tests/e2e`; the device-side receiver is `player/livebuilder.go` |
-
----
-
-## North star: the best handheld OS
-
-JukaHub is a launcher on a vendor Linux image (TrimUI) and an app on Windows,
-but users judge it as an OS: does it wake instantly, show the right buttons,
-never lose a save, recover from a bad update, read in their language, and stay
-out of the way of games? This part of the file turns that question into work.
-It was written on 2026-11-09 from a code inventory of every subsystem (four
-read-only sweeps) and a benchmark of what the best systems shipped in 2026:
-
-| Reference | What it sets the bar for |
-|---|---|
-| NextUI 6.9 (TrimUI) | Onion-style game switcher, instant deep sleep + light sleep, auto-save on quit and auto-resume, rewind, power-off protection, Paks |
-| muOS 2601 "Jacaranda" | Overlays (brightness, volume, low battery) injected into any SDL/GLES emulator, per-content colour filters, activity tracker with export, inotify instead of polling |
-| Knulli Gladiator II / Scarab (Batocera) | MTP over USB, quick resume into the last game at boot, automatic BT↔speaker audio switching, auto player assignment, assignable TrimUI toggle |
-| TrimUI stock 1.1.1 | OSD hot-function board (Menu+Select), SSH, hotspot, factory reset |
-| SteamOS 3.8 / Xbox full-screen experience | Quick Access Menu, per-game performance profiles, performance overlay, boot straight into the launcher, background work paused while playing, "handheld optimised" compatibility labels |
-| Nintendo Switch 2 (23.x) | Device-to-device system transfer, system-wide text-to-speech, speech-to-text chat |
-| ES-DE 3.5 | Multi-scraper (images, videos, manuals), metadata editor, theme engine, translations |
-| Xbox Accessibility Guidelines 3.2 | Narration of focused UI (XAG 106), every screen usable by keyboard *and* controller alone (XAG 112) |
-| iOS 26 "Liquid Glass" | Reduce Transparency / Increase Contrast / Tinted glass — the accessibility switches a glass UI needs |
-
-### Principles every task below serves
-
-1. **Instant and quiet.** Wake in under a second, idle at near-zero CPU, never
-   poll what can be notified, never work while a game owns the device.
-2. **Never lose anything.** Saves, settings and the install itself survive power
-   loss, bad updates and bad configs; every destructive action is undoable or
-   confirmed.
-3. **The controls you have.** Pad, keyboard, mouse and touch are all first-class;
-   hints name the device in use (see the ground rule above); nothing is pad-only
-   or keyboard-only without a reason.
-4. **Everyone.** Narration, contrast, text size, colour filters and languages
-   are platform features, not per-screen favours.
-5. **Private and safe by default.** Network services are off until asked for,
-   authenticated when on, and switch themselves off; nothing runs unsigned
-   without the user saying so.
-6. **Honest.** No fake notifications, no fake licences, no hint that names a key
-   that does nothing.
-7. **One device, two platforms.** The handheld is the product; Windows is a
-   first-class second home, not a dev harness.
-
-### Where JukaHub stands (2026-11-09)
-
-| Capability | JukaHub today | Task |
-|---|---|---|
-| Game switcher / resume | RetroArch auto-save/load only; no switcher; no resume-at-boot | SHELL-1, LIB-10 |
-| Sleep | No power-button sleep; "screen off" is a black frame with the backlight on | PWR-1, PWR-2 |
-| Overlay over games | Declared impossible; muOS proves injection works | SHELL-2 |
-| Recovery | Boot guard counts failed starts (safe mode after three; one rollback, only with crash evidence), crash reports offered at the next start, a recovery card with previous version / last good settings / reset (Nov 2026, unbuilt) | REL-10, REL-5 |
-| Updates | Signed manifests optional per release; dev key only; no channels | REL-3, REL-4, REL-5 |
-| Packages | Store installs streamed, hash-checked when the catalogue has a hash, staged and swapped with one rollback; the catalogue has no hashes or signature yet; core updates notify by default (Nov 2026, unbuilt) | SEC-16, SEC-21, LIB-17 |
-| Keyboard | Hints follow the device and Accessibility remaps (Nov 2026); a few screens and sentences left | INP-1, INP-2, INP-13 |
-| Accessibility | Text size, palettes, remaps, Reduce Transparency, Increase Contrast and Bold text; no narration | A11Y-1 |
-| Languages | English only, Latin/Cyrillic/Greek glyphs only, no IME | I18N-1 … I18N-6 |
-| Network services | Live builder off on the handheld, rate-limited, risky designs held for approval; FTP/SFTP need a password, share confined folders and stop on their own (Nov 2026, unbuilt); all plaintext on the wire | SEC-19, NET-15, SEC-17 |
-| Clock | Zone picker and network time on the handheld (Nov 2026, unbuilt); whether the device keeps time across a power cycle is unknown | FIX-2, NET-3, NET-12 |
-| Library | Box art only, synchronous rescans, ~25 systems, no smart collections | LIB-1 … LIB-5 |
-| Windows | Console window, no DPI awareness, no installer or signing | DESK-1 … DESK-5 |
-
-### Release trains
-
-The tasks carry their own priorities; this is the order they make sense in.
-
-| Train | Theme | Contents |
-|---|---|---|
-| **0.5 "Trustworthy"** | Nothing breaks, nothing leaks | BUILD-*, HW-1, every FIX-*, REL-3, REL-10, SEC-8, SEC-16, SEC-21, INP-1, INP-2, INP-6, PWR-3, NET-3, NET-11, DESK-1 |
-| **0.6 "Console-grade"** | Feels like a real handheld OS | SHELL-1 … SHELL-6, PWR-1, PWR-2, PWR-4, PWR-6, LIB-1 … LIB-4, LIB-10, A11Y-1, I18N-1, I18N-2, DESK-2 … DESK-4, UX-12 |
-| **0.7 "Platform"** | Others build on it | APP-*, SEC-6, I18N-3 … I18N-6, LIB-5 … LIB-9, MED-6 …, NET-6 … NET-9, SYS-8 … SYS-10, SYS-13, DESK-5 … DESK-10 |
+Shared constraints: keep the 1 GiB Smart Pro responsive; avoid blocking or
+allocating per frame; use the shared design and input hint helpers; use
+`logDebug`/`logInfo`/`logWarn`/`logError` rather than the standard `log`
+package. Add focused tests for data integrity, security, installers and
+external parsers; keep UI and timing tests lean. Do not fake licences or ship
+copyrighted game assets. See [development](../docs/DEVELOPMENT.md) and
+[contributing](../CONTRIBUTING.md) for implementation and test details.
 
 ---
 
 ## P0 — build and first hardware run
 
-### BUILD-1 — First compile of the November pass (P0, S) [WIN]
-**Why.** The 2026-11-08/09 passes changed ~600 files without a Go toolchain
-(statically checked only). Status 2026-11-09: `player\build.bat` produced
-`JukaHub.exe` at 09:29, 11:52, 12:12 and 16:06; every `.go` file is older than
-the 16:06 build, so the Windows build compiles everything up to and including
-the second afternoon pass (boot guard, crash reports and recovery card; Date &
-time and network time; FTP/SFTP and the live builder; `.bat` quoting; verified,
-staged packages and core-update notify; remap-aware hints). Still unknown: the
-tests and vet (`make check` was not reported), the linux/arm64 build (files
-under `_linux`/`!windows` tags such as `clockset_linux.go` and
-`tzdata_linux.go` were never compiled), and the AndroidRT C code on the device
-toolchain (smoke-tested on the host: 186 assertions).
-**Where.** Whole `player/`. Most likely spots for type errors in the second
-afternoon pass: `livebuilder.go`, `pkgstage.go`/`pkgverify.go`/`pkgstate.go`,
-`compat.go` (the new `copyCompatFile`/`coreHistoryNoteReplaced` signatures),
-`bootguard.go`/`crashreport.go`/`recoverycard.go`/`recoverysettings.go`,
-`ntpsync.go`/`datetime.go`/`tzpicker.go`/`clockjump.go`,
-`ftp_server.go`/`ssh_server.go`/`fileserver_guard.go`/`winbatch*.go`/`game_library.go`,
-`inputhints.go`/`browser.go`. Earlier: `bootchime.go`, `logging.go`
-(`logRingHandler`, printf wrappers), `hakux.go`/`hakuxpage.go`,
-`androidpak_titles.go`, `homelayout.go`/`homefocus.go`/`home_continue.go`,
-`game_library_ui.go`, `startmenu.go`, `adaptive.go` (`Pace`), `startup.go`
-(`runDeferredStartupFor`), and files that lost dead code (unused-variable fallout
-the static checker cannot see inside build-tagged files).
-**Done when.** `player\build.bat nolaunch` builds, `make check` (vet + tests +
-lint) passes, `go vet` printf checks pass on the new `log*` helpers.
-**Verify.** Paste the clean `make check` tail in the PR.
+### BUILD-1 — Windows build and `make check` green on one revision (P0, S) [WIN]
+**Why.** Juka builds on Windows daily, but `make check` has not been shown to
+pass on the same revision as a build since the latest no-compiler passes landed.
+**Where.** `player/build.bat`, `Makefile`.
+**Done when.** `player\build.bat nolaunch` and `make check` (vet, player tests,
+web tests, workflow checks, backlog check) pass on the same source revision.
+**Verify.** The clean `make check` tail.
 
-### BUILD-2 — Cross-build and package for the TrimUI image (P0, S) [NET]
-**Why.** The device binary and `AndroidRT` have never been built from this tree.
-**Where.** `.github/workflows/build-sdcard.yml`, `player/package-sdcard.sh`,
-`player/androidrt/build-tsp.sh`.
-**Done when.** CI (or a local TG5040 toolchain, e.g. `ghcr.io/loveretro/tg5040-toolchain`)
-produces the SD-card zip including `Apps/JukaHub/androidrt` (the CI-built
-AndroidRT, AND-14); artifact attached to the run.
-**Verify.** Unzip the artifact; `file JukaHub` reports aarch64;
-`androidrt/loader --version` prints `AndroidRT loader …`.
+### BUILD-6 — The Box64 pack reaches a release (P1, S) [NET]
+**Why.** `wine-runtime.yml` builds the Windows-app runtime's Box64 pack and
+`attach-wine-runtime` attaches it to the push's release, but no release is known
+to carry `JukaHub-Wine-linux-arm64.zip` yet (`ALLOWED_NEEDED` later had to
+admit `libresolv`); APP-17 waits for one.
+**Where.** `.github/workflows/wine-runtime.yml`,
+`.github/workflows/docker-image.yml` (`build-wine-runtime`,
+`attach-wine-runtime`), `player/native/build-runtimes.sh` (`wine`,
+`ALLOWED_NEEDED`), `.github/scripts/build-root.sh`.
+**Done when.** A push's release carries `JukaHub-Wine-linux-arm64.zip` whose
+BUILDINFO shows only `ALLOWED_NEEDED` libraries, no symbol newer than GLIBC 2.31
+and `box64 --version` naming 0.4.4; the advisory step prints `wine-10.0` or its
+log names the next fix; the next push with unchanged inputs says "Reused … from
+run N".
+**Verify.** The run's "Box64 (the Windows-app runtime)" step summary and the
+release's asset list.
 
-### BUILD-3 — Refresh or drop the local `vendor/` tree (P0, S) [WIN]
-**Why.** `player/vendor/` (git-ignored) pins older goja/pprof versions than
-`go.mod` requires; a `go build` that uses it stops with "inconsistent
-vendoring", and API checks against it read the wrong versions.
-**Done when.** Either `go mod vendor` is run (and `make check` passes with
-`-mod=vendor`) or the folder is deleted and builds use the module cache;
-`docs/BUILDING.md` says which.
+### HW-1 — Device checklist: boot, exit, display, Home and themes (P0, M) [HW]
+**Why.** These behaviours have not been seen on a handheld. The release
+checklist covers the basic walk (cold boot, buttons, quitting by Start menu and
+chord); the renderer line (GPU-1), boot logo (SYS-17) and design walk (UX-7)
+have their own [HW] tasks.
+**Where.** Smart Pro and Brick on stock 1.1.x and CrossMix; `errors.txt`,
+`autostart.log`, `framestats`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. Quitting from the power card, and from a JukaHub started over SSH, logs
+   "MainUI is back after N s", leaves exactly one MainUI within 10 s and no
+   display-holder warning (the firmware's OSD daemon is ignored).
+2. With Start at login on, a power-on goes stock menu → black → JukaHub with no
+   flash, and `autostart.log` has one "closed the stock menu" line.
+3. Boot styles: Cinematic's crack layer draws on the GE8300 at the UI frame rate
+   and buzzes and knocks on impact; Roll is smooth at 30 fps; floor and horizon
+   fit the Brick's 4:3 canvas; None goes straight to Home; Reduce motion and
+   Battery Saver show the still logo; an app launch plays the short version.
+4. Tabs Home: a fresh card opens on Tabs and an existing arrangement is kept;
+   the strip fits the Brick with a full top bar; the D-pad moves between strip,
+   page, top bar and power pill; L1/R1 switch tabs; the first
+   Games/Favourites/Collections visit does not freeze Home while the library
+   scans.
+5. L2 opens and closes Edit Home (the arranging sheet on Tabs) on every layout,
+   Q does on a keyboard and the footers say so; on Widgets, X + D-pad grows a
+   tile to 3 × 3 and back with the grid making room, the cells look square on
+   both panels and no widget draws outside its tile.
+6. Glass → Realistic draws the blurred backdrop, sheen and rim on Home cards,
+   Settings rows and buttons with no seams or square corners and never through
+   pictures, at Home's usual frame rate; Classic looks as before.
+7. Theme presets show Colour · Styles · Experience. The first-run tour offers
+   five Home layout previews and saves the chosen layout; duplicate palette and
+   layout pairs are hidden while saved IDs still load. Experience opens
+   the packs with the same tabs and B never bounces between the two.
+8. Settings: Y opens Search and "wifi", "dark mode" and "volume" land on their
+   rows; More settings unfolds without the focus jumping.
+9. Home search finds "emulators" and "voice shortcuts"; Xbox Remote Play and
+   Steam open from Start → Games, a favourite and a collection.
+10. Weather rain and snow move smoothly and still wallpapers are smoothly
+    filtered.
+11. The startup chime plays with the splash (first sound within about 100 ms)
+    and the shutdown chime with the teardown, comfortable at the default UI
+    sound level and without clicks; a gain change goes into `bootchime.go` and
+    the chime reference together (SND-17).
+12. Daily challenge: on a day with a trusted clock, the first look at Home
+    (Standard, Hero or Widgets) offers one library game on the Continue card,
+    the same game after a restart; 15 minutes of play show "Daily challenge
+    met" and award Challenge Accepted; anything played today brings Continue
+    back; before the clock is confirmed no challenge shows.
+13. Settings → About → Reset, on a Smart Pro and on Windows: every choice asks
+    twice with Cancel focused; Erase everything writes its undo file
+    (`JukaHub-erased-….jkbackup` in JukaHub Backups, Downloads on a PC), turns
+    the VPN off (one UAC prompt on Windows), restarts into the first-run tour
+    with an empty library, leaves ROMs, saves and Version history intact, and
+    `.erased-trash` is gone about 30 s later; pulling power during the erase lets
+    the next start finish it; deleting the undo file before the restart gives
+    "Nothing was erased: its undo file … is gone"; B on "Close JukaHub to finish"
+    calls it off; Reset → Undo an erase brings library, notes, trophies and
+    sign-ins back; on Windows the erase starts only after the old process ended.
+**Verify.** Results, firmware and CrossMix versions in
+`docs/HARDWARE_VALIDATION.md`.
 
-### BUILD-4 — First green build of the Remote Play helpers (P0, S) [NET]
-**Why.** No release ever carried `bin/chiaki-stream` and `bin/chiaki-regist`.
-The 2026-11-10 pass added `.github/workflows/remote-play-helpers.yml` (called
-by `docker-image.yml`, `release.yml` and `build-sdcard.yml`) and rewrote the
-stream helper, but neither has met the real chiaki-ng, SDL 2.26.1 and FFmpeg
-6.1 headers. The job may fail without blocking anything: the release then
-ships without `bin/`, and the run says "Remote Play helpers: not built".
-**Where.** `player/native/build-helpers.sh` (native mode),
-`player/native/CMakeLists.txt`, `player/native/*.c`. Likely first fixes:
-chiaki-ng's configure at the pinned commit asking for a dependency or an
-option that is not given; the calls new to the helper
-(`chiaki_session_set_login_pin`, `login_pin_request.pin_incorrect`,
-`chiaki_controller_state_start_touch`, `_set_touch_pos`, `_stop_touch`,
-`CHIAKI_CONTROLLER_BUTTON_TOUCHPAD`); static link order; an unexpected NEEDED
-library (`libatomic`, `libz`); the pip wheels, or nanopb with protobuf 4. The
-script rewrites chiaki-ng's `CURL::libcurl_shared` to `libcurl_static` in
-`lib/CMakeLists.txt` (distribution packages patch the same line) and stops when
-the cache still says `BUILD_SHARED_LIBS=ON`; if chiaki-ng moved that line, the
-log says so.
-**Done when.** The workflow's artifact holds both binaries, `BUILDINFO.txt`
-shows only SDL2 and the C library as NEEDED and no symbol newer than GLIBC
-2.31, the smoke runs pass, `JukaHub-Trimui.zip` contains `bin/`, and the
-release also carries `JukaHub-RemotePlay-linux-arm64.zip` (what a JukaHub
-without `bin/` downloads by itself); PSR-7 and PSR-13 then take them to a
-handheld.
-**Verify.** The run's step summary and an unzip of the release archive.
-**Status 2026-11-10 (evening).** The first run got through every pinned
-dependency and stopped at chiaki-ng's configure: `Could NOT find FFMPEG
-(missing: avformat)` — the pinned commit's `find_package(FFMPEG ...)` names
-avformat, and `CHIAKI_ENABLE_FFMPEG_DECODER=ON` makes that fatal.
-`build_ffmpeg` now also builds libavformat, with no demuxer, muxer or protocol
-in it (a prefix without `libavformat.pc` is rebuilt). Next run: whatever comes
-after the configure.
-**Status 2026-11-10 (night).** The second run (16f03d5) found FFmpeg and
-stopped at `find_package(libevent)` in chiaki-ng's `lib/CMakeLists.txt:182`.
-`build_libevent` now builds libevent 2.1.12-stable (checksum-verified, static,
-its OpenSSL part against the static OpenSSL) and adds `libevent-config.cmake`
-beside libevent's own `LibeventConfig.cmake`, which a case-sensitive
-`find_package(libevent)` cannot see; the configure gets `libevent_DIR`. Every
-step now logs to `LOG_DIR` and prints one line, and a failed configure prints
-the end of its log, the lines of chiaki-ng's CMake files around each error and
-every `find_package`/`pkg_check_modules`/`option` those files contain, so one
-red run shows everything the pinned commit asks for. Next run: whatever comes
-after libevent (the CMake lines after line 182, then the compile).
+### HW-2 — Device checklist: input, controllers and Bluetooth (P1, S) [HW]
+**Why.** Mouse mode, the games mouse and the Bluetooth reconnect and pad code
+have not run on a handheld. The release checklist covers buttons and a USB
+keyboard; keyboard detection, pads in a stream and pairing persistence have
+their own [HW] tasks.
+**Where.** Smart Pro and Brick; a DualSense or DualShock 4 and a Bluetooth
+headset; `/proc/bus/input/devices`, Bluetooth diagnostics.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. Holding Select + L1 turns the pointer on, the D-pad moves it (Brick too) and
+   Select's release does not go Back.
+2. With **Mouse in games and apps** on, ScummVM, DOSBox or a port lists "JukaHub
+   Mouse" in `/proc/bus/input/devices`; the chord, Menu and game exit give the
+   pad back; record whether an SDL app sees a mouse that appears mid-run (INP-17
+   acts on it).
+3. Paired pads and a headset reconnect after a start, a wake and the radio
+   coming on, and stay off after a manual disconnect; a headset dropping pauses
+   video and music; speaker and headset keep their own volumes.
+4. A Bluetooth pad's battery reads on the TSP kernel
+   (`/sys/class/power_supply`); Identify rumbles and blinks it; a headset's
+   codec line shows SBC or AAC.
+**Verify.** Results and firmware versions in `docs/HARDWARE_VALIDATION.md`.
 
-### BUILD-5 — First run of the split TrimUI release build (P0, S) [NET]
-**Why.** The 2026-11-10 evening pass moved the handheld compile out of the
-toolchain container job into `build-trimui`: the same pinned image, started by
-`.github/scripts/trimui-build.sh` through `docker run` without a network, the
-runner's Go and both Go caches mounted at their own paths, and the build cache
-carried by `go-build-cache.sh`. The six C libraries the old job built every
-time are gone. None of it has run on GitHub, and the image's own environment
-(its `SYSROOT`, `PATH`, the user it runs as) was worked out from the old job
-and `build-sdcard.yml`, not inspected.
-**Where.** `.github/workflows/docker-image.yml` (`build-trimui`,
-`build-and-publish-ubuntu`), `.github/scripts/trimui-build.sh`.
-**Done when.** `build-trimui` is green and its check step passes (AArch64,
-`/lib/ld-linux-aarch64.so.1`, SDL2 from the firmware, no glibc symbol newer
-than 2.33); the next push's step summary says the build cache was restored and
-`go build` took well under the first run's time; and the `JukaHub` of that
-release starts on a Smart Pro and a Brick.
-**Verify.** The two runs' step summaries (`go build: N s`, `Go build cache: ...`)
-and a device start.
+### HW-3 — Device checklist: sound, voice and Juka (P1, M) [HW] [NET]
+**Why.** Juka's voice, offline answers, the wake word, voice typing, dmix and
+the USB DAC path have not run on a handheld. The mixer, spatial audio, stick
+lights and microphone proof have their own [HW] tasks; the chimes are HW-1
+step 11.
+**Where.** Smart Pro on stock firmware (Brick and Smart Pro S where named); a
+Groq key; Wi-Fi on and off; a USB-C DAC; a Bluetooth headset; `logs.txt` with
+`JUKAHUB_LOG_LEVEL=debug`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. The offline speech and offline-AI packages install and update once by
+   themselves; with Wi-Fi off an answer's first words come within about 4 s of
+   the end of the question, and the CPU boost ends after it.
+2. Juka's voice: the delay from an orb answer to its first word is recorded
+   (Groq and offline; SND-14 acts on it); no clicks with the liquid background
+   on (else raise `ttsAheadMs` to 120); B silences it at once; music ducks and
+   comes back; an alarm takes over.
+3. On a Groq account that has not accepted the speech model's terms, Hear Juka
+   shows **Turn on Groq's voice**, whose QR opens Groq's page on a phone, and
+   Juka speaks once they are accepted.
+4. Hey Juka opens the orb on Home and the game assistant in RetroArch and
+   PPSSPP; ten minutes of talk, TV and a loud game give no false wake; the mic
+   still works for the orb, voice typing and the stick lights.
+5. "Turn on dark mode", "turn off background music" and "set screen timeout to 5
+   minutes" work; "is Wi-Fi on?" changes nothing.
+6. A word taught on Voice shortcuts is still recognised days later; "RetroArch
+   menu" and "open PPSSPP" open their menus on stock and CrossMix.
+7. R2 on the on-screen keyboard starts voice typing in Chat and the Browser's
+   address bar, also with the pointer up; auto-start voice typing ignores the
+   chime, stops after 7 s of quiet and never starts on the Wi-Fi password field.
+8. With a Groq key, a portrait phone photo, a WebP (on stock firmware once
+   MED-37 lands) and a 60 s phone video sent to Juka arrive upright and get
+   answers; the "Watching the video…" time is recorded and the work folder is
+   gone afterwards.
+9. With a Groq key, "what's this?" on Settings and on a game list describes the
+   screen, with the orb out of the picture and the pairing code blanked; Off
+   sends nothing.
+10. Juka tools on Groq: "why won't my last game start", "what's filling my
+    card", "make games smoother" and a move to trash run through their cards;
+    offline lite answers device questions.
+11. Sleeping 30 s in the middle of an answer gives no error, and the answer
+    arrives once Wi-Fi is back.
+12. Music under a RetroArch game opens `dmix` at 48 kHz on Smart Pro, Brick and
+    Smart Pro S (log "music under the game"); if RetroArch with audio sync lags
+    through dmix, JukaHub's first open gets its own dmix definition with small
+    periods.
+13. A USB-C DAC shows "USB DAC · <name>"; a 24/96 FLAC with Bit-perfect shows
+    96000 and S32_LE or S24_3LE in `/proc/asound/cardN/pcm0p/sub0/hw_params`;
+    unplugging pauses.
+14. A Bluetooth headset connected before and after start takes Home sounds,
+    music, a video, a RetroArch and a PPSSPP game, and a disconnect returns
+    everything to the speaker without a pop; Bluetooth diagnostics show
+    BlueALSA on D-Bus, its streams and the route.
+**Verify.** Results and timings in `docs/HARDWARE_VALIDATION.md` (voice timings
+also in `docs/VOICE.md`).
 
-### BUILD-6 — First run of the split helper and Box64 jobs (P0, S) [NET]
-**Why.** The 2026-11-11 pass moved the Box64 pack out of the Remote Play
-helper job into `wine-runtime.yml` (an arm64 runner of its own;
-`attach-wine-runtime` in `docker-image.yml` attaches the pack and nothing else
-waits for it), moved the build root and every build command into
-`.github/scripts/build-root.sh` (the reuse keys hash it, no longer the
-workflow files) and made `build-helpers.sh` build its five dependencies side by
-side. None of it has run on GitHub, and the times are estimates: a cold helper
-job of about three and a half minutes, against about sixteen with Box64 in it.
-**Where.** `.github/workflows/remote-play-helpers.yml`,
-`.github/workflows/wine-runtime.yml`, `.github/workflows/docker-image.yml`
-(`build-wine-runtime`, `attach-wine-runtime`), `.github/scripts/build-root.sh`,
-`player/native/build-helpers.sh` (`start_part`, `wait_parts`).
-**Done when.** On the first push: the helper job builds both parts (its log
-shows each dependency part's lines after "build side by side"), the Box64 job
-builds its pack, `attach-wine-runtime` attaches `JukaHub-Wine-linux-arm64.zip`
-(before or after the release is published), and `build-and-publish-ubuntu`
-starts once `build-trimui` and the helper job are done, not after Box64. On the
-next push that changes none of a part's key inputs (`build-root.sh key` lists
-them: `player/native` for the helpers, `player/androidrt`'s sources with
-`build-runtimes.sh` for AndroidRT, `build-runtimes.sh` and the Python tool pins
-for Box64, and `build-root.sh` and `.gitattributes` for all three), that part
-says "Reused ... from run N". If the helper job still finishes after
-`build-trimui`, carry the dependency prefix (`/opt/jukahub-deps`, keyed on
-`build-helpers.sh` and `build-root.sh`) between runs as one more
-`go-build-cache.sh fetch` artifact, so a change to the helper sources skips the
-dependency builds. The Box64 pack's own first build (`build-runtimes.sh wine`)
-counts as green when its BUILDINFO shows only C-library NEEDED, GLIBC ≤ 2.31 and
-`box64 --version` naming 0.4.4, and the advisory step prints `wine-10.0` or its
-log names the next fix — likely box64's configure wanting a newer CMake policy
-or Python, the folder its install puts the x86-64 libraries in, or a `libresolv`
-in NEEDED (add it to `ALLOWED_NEEDED`; do not loosen the other checks).
-**Verify.** The runs' job times and step summaries ("Remote Play helpers",
-"AndroidRT", "Box64 (the Windows-app runtime)").
+### HW-4 — Device checklist: network, sync and the phone Companion (P1, M) [HW] [NET]
+**Why.** Wi-Fi after a wake, captive portals, phone hand-offs and the save-sync
+services have not run on a handheld. The release checklist covers joining Wi-Fi
+and a one-minute sleep; the Wi-Fi stack, network time and the VPN have their own
+[HW] tasks.
+**Where.** Smart Pro on stock and CrossMix, a second handheld, a phone; a Google
+account, a RomM 5.2+ server, Syncthing-Fork; `logs.txt` with
+`JUKAHUB_LOG_LEVEL=debug`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. After a one-minute sleep on Wi-Fi with Chat open: `wifi: back online N s
+   after wake` with N under 10, no Offline or Network restored toasts, and Chat
+   goes Reconnecting… → Live by itself; a wake with Wi-Fi off does nothing; the
+   `wifi: after wake:` debug lines go into `docs/WIFI.md`.
+2. Behind a real captive portal, Sign in opens the portal in the Browser, its
+   links and form load, and leaving after signing in shows online within about a
+   second; joining another network shows "checking…", never the old Sign in.
+3. Groq key → **Paste it from your phone**: the phone opens the companion at the
+   Groq card; Save closes the QR and the row reads "Saved · ••••abcd"; the VPN's
+   phone import opens its card the same way.
+4. Google Drive (a "TVs and Limited Input devices" client in the build): the QR
+   sign-in completes; a save made on one handheld is on the other after one
+   launch there; a conflict keeps both; Sign out revokes; if `about?fields=user`
+   is refused with `drive.file` alone, add the `email` scope.
+5. RomM 5.2+: a downloaded and a card-only game both link; launch pulls, exit
+   pushes; Sync all finishes; a 4.x server shows the one-time message; states
+   move to `/api/states` if the server keeps them apart from saves.
+6. Syncthing: the v2 linux-arm64 release runs from the card (SQLite on
+   FAT/exFAT), accepts `serve --home --no-browser --no-restart --no-upgrade
+   --gui-address`, honours `STGUIAPIKEY` and `STNODEFAULTFOLDER` (no default
+   "Sync" folder), pairs with Syncthing-Fork by QR, and leaves no `syncthing`
+   process after JukaHub quits.
+7. FTP (FileZilla) on stock and CrossMix: uploads to ordinary ROM folders (GBA,
+   PSP, PS, NDS) work; Roms/PORTS, any scripts or apps system and Roms/PC answer
+   "…use SFTP"; a game profile imported while FTP runs is read-only within a
+   command or two; on an ext4 card a symlink `Roms/x` → Ports refuses STOR, MKD
+   and RNTO; a session starts without a stall; no ROM folder of a RetroArch or
+   standalone system is locked because its launch.sh uses a helper function or
+   `set --`. A system locked by mistake (or missed) gets a FIX task with its
+   launch script.
+**Verify.** Results and versions in `docs/HARDWARE_VALIDATION.md`.
 
-### HW-1 — First device run of the November pass (P0, M) [HW]
-**Why.** Nothing from this pass has run on a Smart Pro or a Brick.
-**Where.** Device; `startup-bench.sh`, the Logs screen, `errors.txt`.
-**Done when.** On a Smart Pro and a Brick: the startup chime plays with the
-splash and the shutdown chime with the teardown (level comfortable at default
-volume, no clicks); Home shows the Games card and the first-run Continue card;
-the log has a `render pipeline … renderer=opengles2 acceleration=gpu` line; a
-video plays at 30 fps without dropping after 10 s idle; `errors.txt` rotates past
-1 MiB; quitting via Start menu → Quit and via Select+Start works.
-**Verify.** Record results and firmware version in `docs/PERFORMANCE.md`
-(create it; see [PERF-1](#perf-1--measure-the-november-perf-pass-on-hardware-p1-m-hw)).
+### HW-5 — Device checklist: games, ports, Remote Play, Android and Windows apps (P1, M) [HW]
+**Why.** These launch paths have not been seen on a handheld. The release
+checklist covers one RetroArch game, one standalone emulator, one port and one
+app; CrossMix's RetroArch, emulator updates, Remote Play, AndroidRT, hakuX and
+Wine have their own [HW] tasks.
+**Where.** Smart Pro on stock 1.1.x and CrossMix (Brick, Smart Pro S and a
+NextUI card where named); PortMaster; a PS5; `errors.txt`,
+`/proc/<pid>/environ`, `/proc/mounts`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. A GBA game started from JukaHub and from MainUI has the same
+   `LD_LIBRARY_PATH`, `PATH` and `HOME`; after the JukaHub game the
+   `savestate_auto*` values in `retroarch.cfg` are the pre-launch ones and
+   `data/retroarch-launch-scope.json` is gone.
+2. PSP → Install PPSSPP installs the managed `ppsspp-tg5040` build (or falls
+   back to the firmware's PPSSPP); a game starts, saves are shared with the
+   firmware's PPSSPP, `/proc/mounts` keeps no bind after the game or a crash,
+   the pause-menu exit returns to JukaHub; Update all and Go back to the
+   previous build work; the aspect is right on the Brick.
+3. The Games tab and Which emulator?: Install badges and the recommended
+   emulator match what CrossMix's `Emus` scripts launch; Install lands on the
+   right Emulators tile; the collection keyboard names, renames and deletes; a
+   console whose games are only pinned per game loses its Install badge within
+   30 s.
+4. A fresh card with about 100 ROMs on the charger gets covers about 2 minutes
+   after Home, with one "Found box art for N games" toast and no refetch loop.
+5. The game assistant (hold Select + R2) over RetroArch, PPSSPP and a port shows
+   over the paused game without flicker, and the game redraws after B; the game
+   sees none of its presses and nothing stays held (hold R2 through the close);
+   chime, voice and mic work while the game holds ALSA; Select + R2 is free in
+   CrossMix's RetroArch, DraStic and PPSSPP; `kill -9` with it up makes the next
+   start ask the paused game to quit.
+6. PortMaster on stock, CrossMix and JukaHub OS: a native SDL2, a GameMaker, a
+   Mono/FNA, a Godot and a Weston port each start with sound and controls, quit
+   with Select + Start leaving no gptokeyb or weston, and show in Games with
+   cover and playtime; Update, Uninstall and "Why didn't it start?" behave; a
+   port's options sheet shows only its CPU rows.
+7. PS Remote Play: Play shows "Starting the stream…" on its row without a stall
+   and B stops it; a stream ends back in JukaHub (`screen handed to helper pid`
+   in `errors.txt`), and the power key during a stream hands the screen back.
+8. On a NextUI card, Tools → JukaHub opens JukaHub and quitting returns to
+   NextUI's menu; a `Name (TAG)` game starts through its pak with saves in
+   `Saves/<TAG>`; minarch started outside NextUI's loop has volume and
+   brightness keys.
+9. `androidrt/surface-probe` prints its `SDL:` verdict on each model (the Smart
+   Pro S's line goes into `docs/ANDROID.md`); a game with `ANDROIDPAK_SURFACE=1`
+   logs its GLES libraries bound beside its libEGL and still presents.
+10. A Wine profile with the time-lapse on leaves a film that shows the game
+    (else skip the capture for WestonPack sessions with one log line).
+11. A Windows launcher that starts another program and exits keeps WestonPack
+    and the pad until that program exits; quitting a plain game returns to
+    JukaHub within about 6 s with no buzz, and the app log shows
+    `jukahub: the program exited (0)` (proof that `westonwrap.sh` passed the
+    `sh -c` script through intact — if every launch fails instead, run the
+    script from a file); a launcher whose leftover tool never exits buzzes about
+    10 s after the launcher exits; Select + Start during the wait returns to
+    JukaHub and leaves no wine or box64 process (`ps`).
+**Verify.** Results, firmware and CrossMix versions in
+`docs/HARDWARE_VALIDATION.md`.
+
+### HW-6 — Device checklist: media, Browser and YouTube (P1, S) [HW] [NET]
+**Why.** These playback and hand-off paths have not run on a handheld. The
+release checklist covers a local video; yt-dlp, the stream fallback, subtitles
+and Save offline have their own [HW] tasks.
+**Where.** Stock Smart Pro and a second handheld or a PC; `errors.txt`, `free
+-m`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. A video keeps 30 fps past 10 s without input (the idle cadence leaves
+   playback alone).
+2. When a YouTube stream falls back to downloading, the way that won (picture
+   and sound, HLS, single file, native) and why the others lost are recorded; B
+   mid-download leaves no `jukahub-video-*` file and no yt-dlp process.
+3. A YouTube video queued in Downloads arrives as H.264 at or below the playback
+   ceiling.
+4. Watch Party: a YouTube room plays on a guest at the room's position; B on the
+   guest's loading card leaves the video until Join; a new pick by the host
+   while a guest still loads switches the guest.
+5. **Open in WPE Browser** opens the page (does `launch.sh` take the URL as
+   `$1`?); **Get WPE Browser** installs the real release (`extractZipSafe`
+   refuses symlinks — does the zip hold any?); `free -m` with JukaHub parked is
+   recorded.
+6. Thirty minutes each of a YouTube video, a direct .mp4 link and a Live TV
+   channel on the handheld's Wi-Fi, with a 5-minute pause and a walk to the
+   edge of the signal, never log "stream stalled" or stop early; turning the
+   router off mid-video ends it within about a minute ("The stream cut out —
+   downloading the video to carry on" for the web video, "Playback stopped —
+   the connection timed out" for the others); `errors.txt` has no "Option …
+   not found" for `-rw_timeout` or `-reconnect`.
+7. Music → History, on a Smart Pro and on Windows: after three songs (one
+   skipped after 5 s), a one-minute pause, an audiobook stopped part way and a
+   restart, Continue listening holds the audiobook at its place, Recently
+   played the two full songs once each and Top artists the artist; A on each
+   plays the right album or book from the right track; Clear listening history
+   takes two presses and leaves no `musichistory.json.bak`; a later backup
+   holds `musichistory.json`; the chips fit the Brick's canvas.
+**Verify.** Results in `docs/HARDWARE_VALIDATION.md`.
+
+### HW-7 — Device checklist: power, sleep, drivers and the other models (P1, M) [HW]
+**Why.** Sleep and wake, the driver layer for the four TrimUIs, Power off after
+sleeping and the system tools have not run on a handheld; the Smart Pro S and
+Brick Pro have not run JukaHub at all. Brightness (SYS-16), the travel lock
+(PWR-10) and JukaHub OS (SYS-22) have their own [HW] tasks.
+**Where.** Smart Pro, Brick, Smart Pro S and Brick Pro on stock (CrossMix,
+NextUI and spruceOS where named); Settings → About → Drivers & hardware;
+`errors.txt`.
+**Done when.** Each step holds, or a FIX task names what differs:
+1. On each model, Drivers & hardware shows no "not found" for a part the model
+   has, and the log's `device` line names the right model (also on CrossMix,
+   NextUI and spruceOS).
+2. Smart Pro S: the `render pipeline` line names its video driver; under KMSDRM
+   a RetroArch game and a port start with picture and JukaHub comes back
+   (`handover` "DRM master dropped/taken back"); both cpufreq policies follow
+   Auto performance; volume changes speaker and headphones; Fan Quiet and Max
+   take, Auto leaves `hardwareservice` alone and 85 °C forces full; Bluetooth
+   comes up with and without the firmware's script (ttyAS1 at 1500000 baud is a
+   guess); the backlight is off in sleep; the A523 layer's GPU devfreq node
+   (`1800000.gpu`, a guess) exists.
+3. Brick Pro: the `device` line names the Brick Pro (model code TG4040 or
+   TG4070, `deviceModelCodeAliases` in `device.go`; record the code a real unit
+   reports), brightness works (`/dev/disp` first), rumble stays at the 2.5 V
+   cap, the sticks calibrate and Bluetooth (XR829) attaches.
+4. Brick: the top bar and FN-key LEDs follow the light modes; XR829 still
+   attaches when no daemon holds ttyS1.
+5. JukaHub OS: one card boots all four; the other family's driver layer reads
+   "Not for this handheld"; Return to the firmware restores every value.
+6. Power off after sleeping (1 h) with a RetroArch game: after the deadline wake
+   `/sys/class/rtc/rtc0/wakealarm` is empty (if a BSP keeps the old value, drop
+   the "alarm no longer pending" test and rely on time asleep with no power
+   press); the log shows the save request, the exit and the power-off; the next
+   power-on resumes the game without the boot animation; `/sys/power/mem_sleep`
+   and the suspend-state line are recorded per model, and so are both clocks
+   when the wake line notes that BOOTTIME and the RTC disagree.
+7. Inside a minarch game on NextUI (JukaHub the first UI), Power off after
+   sleeping at 15 min: the power key's sleep logs "NextUI game asleep, …
+   saved by minarch" (if not, the marker came too close to the suspend) and
+   `wakealarm` then holds a time 15 min ahead (empty while playing); after the
+   deadline wake the log shows "minarch saved … powering off" and "marker put
+   back", and the next power-on resumes the game from slot 9. Record whether
+   NextUI's suspend script clears the wake alarm (then nothing powers off),
+   that a power press before the deadline wakes normally, and whether minarch
+   writes slot 9 on SIGTERM.
+8. After `kill -9` of JukaHub on the idle dock, the next start logs "CPU
+   settings differed …; put back" and the firmware's governor is back.
+9. The Hardware screen's Memory tile and About's Memory row match `VmRSS` in
+   `/proc/<pid>/status`.
+10. Command Deck: every category runs under the TrimUI busybox; pickers,
+    favourites, macros and chips work with the pad alone.
+11. Sleep and wake on the power key, 20 cycles each on Home, in a RetroArch
+    game and during a video: the picture is back within about a second; the
+    game and the video go on with sound and no stuck button; the clock, Wi-Fi
+    and battery read fresh at once; nothing polls while asleep; an overnight
+    sleep's battery drop goes into `docs/PERFORMANCE.md`.
+12. Screen off (ambient dock, music) really darkens the panel (`bl_power` or
+    brightness 0 under `/sys/class/backlight`, or the display driver's switch)
+    and the level comes back on wake.
+13. Tools → Patch → Install it later, with a release in the update cache: Next
+    start installs it with the install bar over Home and restarts into the new
+    build; When charging installs after 15 untouched minutes on the charger; a
+    game started first holds it until the game ends.
+**Verify.** Results, models and firmware versions in
+`docs/HARDWARE_VALIDATION.md`.
+
+### SYNC-1 — Save sync: first-sync choice, more save folders, safe launch order (P2, M)
+**Why.** A second device's first Drive sync can push its older save over a newer
+one (both kept, but surprising); ports, Android/HTML5 games and netplay get no
+launch/exit sync; RomM covers RetroArch folders only (not PPSSPP, DraStic or
+"sort saves by core" subfolders) and may hash a matched ROM on the launch path
+without a budget; a 409 on push says a copy was kept when none was written;
+relaunching a game while its exit push runs skips the pull.
+**Where.** `savesync_auto.go`, `gdrive_sync.go`, `romm_autosync.go`,
+`romm_server.go`, `ports.go` (early return in `launchLibraryGame`).
+**Done when.** A never-synced device's first sync asks "Use Drive's copy / Keep
+this one / Keep both" per game (with SYS-20's card); ports' and standalone
+emulators' save folders take part; hashing on the launch path is budgeted; the
+409 text is right; a launch waits for that game's running push.
+
+### HW-11 — GreenOvercast on a TrimUI: Cloud Gaming and X1 (P1, S) [HW] [NET]
+**Why.** Cloud Gaming (`cloudgaming.go`) and X1 (`xremote.go`) hand the
+handheld to GreenOvercast through the build manager (`greenovercast.go`). Its
+authors test it on H700 and RK3566 firmwares only, it needs glibc 2.38, and
+both release asset URLs, the build-recognising file names and the build switch
+were written from release notes without a device (session notes-B).
+**Where.** `greenovercast.go`, `cloudgaming.go`, `xremote.go`.
+**Done when.**
+- *Knulli (Smart Pro):* the cloud build and the xHome build each install
+  through `portsInstallZip`, headless and through PortMaster;
+  `data/greenovercast.json` and the folder scan name the right build;
+  switching builds replaces the port with no leftovers.
+- *Streams:* Xbox Cloud Gaming and GeForce NOW sign in with the phone code and
+  play (note the frame rate with software decoding at 720p/30); X1 streams a
+  console on the xHome build and warns on the cloud build.
+- *URLs:* `Producdevity/GreenOvercast` `releases/latest/download/greenovercast.zip`
+  and the doomL `v0.3.0-xhome` asset resolve; fix the lists if not.
+- *Stock firmware / CrossMix:* JukaHub downloads its checked private glibc on
+  first launch and starts only the GreenOvercast binary with the new loader;
+  verify sign-in and a live stream on the device.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### HW-12 — Display page, Hotspot and downloadable fonts on a device (P0, S) [HW] [NET]
+**Why.** The 2026-11-17 night pass (Settings → Display, `displaysettings.go`,
+`displaytune_soft.go`; Tools → Hotspot, `hotspot*.go`; Font, `uifont*.go`) was
+written with no Go toolchain, no device and no web access (session 8700bcfa
+notes-hotspot.md / notes-fonts.md list every guess).
+**Device evidence.** The stock Smart Pro advertises AP mode and has
+`softap_up`, `hostapd`, `udhcpd` and `dnsmasq`. The firmware tool's usage text
+confirms the requested `softap_up` argument order. All 20 font catalogue URLs
+responded, and a verified TTF download worked on the device after exporting
+its existing CA bundle for the firmware's old `curl`. A phone join, Wi-Fi
+restore, picture controls and applying fonts still need a live run.
+**Where.** `displaytune*.go`, `hotspot_linux.go`, `uifont.go`.
+**Done when.**
+- *Display:* on Smart Pro, Brick and Smart Pro S the picture rows move the panel
+  (log has no "could not set enhance_*"); after a sleep the picture is still
+  tuned; on Windows contrast/exposure/colour temperature visibly change JukaHub
+  and Saturation is greyed with its reason; LED lights / LED brightness match the
+  Stick lights page.
+- *Hotspot:* the log's `hotspot: tools: softap_up=… hostapd=…` line says which
+  path the firmware offers; a phone and a second handheld join, get an address,
+  open the Companion and play a LAN netplay room; turning it off (and sleeping,
+  and quitting) rejoins the saved Wi-Fi. Fix the softap_up argument order, AP
+  support on XR829/AIC8800 or the udhcpd applet guess if they differ.
+- *Fonts:* each catalogue face downloads (raw.githubusercontent.com, then
+  jsDelivr), installs into `data/fonts`, applies, survives a restart and
+  removes; Noto Sans JP shows a Japanese ROM name; a 404 shows its toast.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### PORT-HW-2 — Ports Store on a device (P2, S) [HW] [NET]
+**Why.** The store's installer, pictures and download counts were built from
+documentation, not a run (session notes-A).
+**Where.** `ports_store_install.go` (`pstoreHarbourInstall`,
+`pstoreHMExports`), `ports_store_images.go` (`pstoreShotBase`),
+`ports_store.go` (`pstoreStatsURL`).
+**Done when.** On stock TrimUI (PortMaster through TRIMUI_EX), CrossMix and
+Knulli: a Ready to Run port installs headless (`store-install.log` shows exit 0
+and the launcher appears in `Roms/PORTS` or `Ports`) with its runtime; with
+`portsStoreInstaller: portmaster` several ports queue in `autoinstall` and
+PortMaster opens once for all of them; screenshots appear for most cards (else
+fix the address pattern — for example PortMaster-New's images release);
+download counts match portmaster.games; Update all updates a port whose MD5
+changed; the cards and the details fit the Brick's 1024×768.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### STEAM-HW-1 — Steam compatibility pass on a device and a PC (P1, S) [HW] [NET]
+**Why.** The 2026-11-17 evening Steam pass (session 9911e29e) was written with
+no Go toolchain, no device, no Steam and no web access: PortMaster's
+`attr.store` layout, Steam's 64-bit shortcut link, the Flatpak/Snap launchers
+and the ClientComm POST retry are read from documentation, not a run.
+**Where.** `steam_ports.go`, `steam_compat.go`, `steam_shortcuts.go`,
+`steam_other.go`, `steam_remote.go`, `steam_ui.go`.
+**Done when.**
+- *Handheld:* Apps → Steam → Handheld lists owned games that have a port
+  (Stardew Valley or another store-linked port matched "by store link" in its
+  sheet); Install port → PortMaster installs it; Copy files from a paired
+  Windows PC fills `gamedata/`, the card shows progress, cancel leaves *Copy
+  not finished*, resume completes it, and Play here starts the game.
+- *Deck labels:* rows show Deck Verified/Playable/Unsupported for rated games;
+  no 429 burst in the log while scrolling a large library.
+- *PC:* a non-Steam game added in Steam starts from the library and from the
+  handheld; on a Linux desktop the Flatpak and Snap Steam start a game.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
+**Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
+`mail_*.go`, `calsync*.go`, `mailcal_ui.go`, `companion_mailcal.go`,
+`aitools_mailcal.go`; `docs/EMAIL_CALENDAR.md`) replaced the earlier email plan and was written
+without a Go toolchain, a device or a real mailbox. Session notes
+(notes-mail/cal/integ) list every guess.
+**Done when.**
+- *Phone cards:* Tools → Email & calendar → Add an account from your phone
+  opens the companion at the Email card; a Gmail, an iCloud and a Fastmail
+  address fill their servers and show the app-password help; a wrong password
+  comes back as the card's error; a right one closes the code, toasts and the
+  first sync runs. A Google secret iCal address and a Nextcloud CalDAV
+  calendar add from the Calendars card; Remove on the page and on the handheld
+  forgets them (cache files gone).
+- *Mail:* inbox, reader, reply and a new message on Gmail (465/TLS) and an
+  STARTTLS server (587); the unread badge on a pinned Mail tile and in the
+  Start menu follows reads made on the phone after the next sync; new-mail
+  notifications respect the switch.
+- *Microsoft:* with a client ID in the build, Sign in with Microsoft adds an
+  outlook.com account and it syncs and sends (XOAUTH2).
+- *Calendar:* events show in the clock's calendar and on the Calendar widget
+  (small and tall), a reminder pops before an event (and over a RetroArch
+  game), recurring and all-day events land on the right days in the device's
+  zone.
+- *Juka AI:* "anything new in my mail?" and "what's on this week?" run
+  `mail_inbox` and `calendar_agenda`.
+**Verify.** Record in the HW log; file a FIX task for anything that differs.
+
+### MAIL-2 — Calendars that write back (P2, L) [NET]
+**Why.** Calendars are read-only: an event seen on the handheld cannot be
+added, moved or accepted there, and Outlook calendars only come in as a
+published ICS link.
+**Where.** `calsync_caldav.go` (PUT/DELETE of a VEVENT with If-Match),
+`mail_msauth.go` (a Graph `Calendars.ReadWrite` scope), `calendarpopover.go`.
+**Done when.** The clock's calendar can add an event (title, day, time) to a
+CalDAV calendar or a Microsoft account's calendar through Graph, edit and
+delete one it shows, and a conflicting ETag reloads instead of overwriting.
+
+### MAIL-3 — Push mail with IMAP IDLE (P2, M)
+**Why.** Mail arrives on the next poll (every 5–60 min), so a notification can
+be an hour late while battery is spent on polls that find nothing.
+**Where.** `mail_imap.go`, `mail_sync.go`.
+**Done when.** With JukaHub in the foreground and the server advertising IDLE,
+one connection per enabled account waits in IDLE (renewed every 25 min,
+dropped on sleep and restored on wake) and a new message notifies within
+seconds; polling remains the fallback.
+
+### MAIL-4 — HTML mail through the browser engine (P3, M)
+**Why.** HTML mail is flattened to text: newsletters, receipts and tables lose
+their layout and their links.
+**Where.** `mail_ui.go`, `mail_mime.go`, the browser engine (`webdom*.go`,
+`browser.go`).
+**Done when.** A message with an HTML part opens in the reader through the
+browser engine with remote images off by default (one "Show images" press),
+scripts never run, links open in the Browser, and the plain-text view stays
+one press away.
 
 ---
 
-### HW-2 — First device run of the 2026-11-10 tester batch (P0, M) [HW]
-**Why.** A Smart Pro tester on CrossMix reported a glitchy screen after leaving
-JukaHub, RetroArch "being weird", PPSSPP that would not update and pairing that
-needed a Base64 Account-ID; the fixes and the new features (core and PPSSPP
-auto-update, mouse mode, PSN sign-in, WPE Browser hand-off, background box art)
-were written without a device, from search snippets for every third-party fact.
-**Where.** Device (stock 1.1.x and CrossMix), `errors.txt`, `psremote.log`,
-`cat /proc/mounts`, `cat /proc/<pid>/environ`, `cat /proc/bus/input/devices`.
-**Done when.** On a Smart Pro with CrossMix and one with stock firmware:
-(1) leaving JukaHub (Start → Quit, Select+Start, the power card) shows ONE MainUI
-— `pidof MainUI` prints one pid and the log has no "no launcher came back"
-line; a start over SSH still gets MainUI back after 10 s;
-(2) a PS Remote Play stream ends back in JukaHub (`screen handed to helper pid`
-in `errors.txt`), and the power key during a stream hands the screen back;
-(3) a GBA game started from JukaHub and from MainUI has the same
-`LD_LIBRARY_PATH`/`PATH`/`HOME` in `/proc/<ra pid>/environ`, and after the
-JukaHub game exits `grep savestate_auto RetroArch/retroarch.cfg` shows the
-pre-launch values and `data/retroarch-launch-scope.json` is gone;
-(4) a core update pass runs within ~20 min of a fresh start on the charger: which
-cores install, which are refused and why (`needs GLIBC_…`) — if every nightly is
-refused, the buildbot aarch64 channel cannot serve TrimUI and needs a TrimUI-built
-source; CrossMix's own cores come back with Emulators **R1**;
-(5) PSP tile → **X** → Install PPSSPP: the real `PSP.pak.zip` layout matches the
-discovery (binary `PPSSPPSDL_tg5040`, assets, bundled `libstdc++`), a game starts,
-firmware saves are visible both ways, no bind is left in `/proc/mounts` after the
-game or after a crash fallback, and `--pause-menu-exit` returns to JukaHub;
-(6) hold Select + L1: pointer on, D-pad moves it (Brick too), Select's release
-does not go Back; with **Mouse in games and apps** on, ScummVM/DOSBox/a port
-shows "JukaHub Mouse" in `/proc/bus/input/devices` and the pad is given back by
-the chord, Menu and game exit (does an SDL app see a mouse that appears
-mid-run? if not, export `SDL_EVDEV_DEVICES` to the child);
-(7) PSN sign-in from iOS Safari and Android Chrome fills the Account-ID and a
-real PS5 and a PS4 (fw ≥ 7) pair;
-(8) **Open in WPE Browser** opens the page (does `launch.sh` take the URL as
-`$1`?), **Get WPE Browser** installs the real release (does the zip hold
-symlinks? `extractZipSafe` refuses them), `free -m` with JukaHub parked;
-(9) a fresh card with ~100 ROMs on the charger gets covers ~2 min after Home and
-one "Found box art for N games" toast.
-**Verify.** Record results, firmware and CrossMix versions in the HW log; file a
-FIX task for anything that differs.
-
----
-
-### HW-3 — First device run of the 2026-11-11 tester batch (P0, M) [HW]
-**Why.** A Smart Pro tester on CrossMix asked for a talking Juka, voice
-shortcuts, a game assistant, pictures for Juka and a voice-typing button, and
-reported CrossMix glitching after JukaHub, a flicker when JukaHub starts with
-the device, a minute of waiting for Wi-Fi after every wake, YouTube's
-"downloading instead" that never downloaded, and a choppy, pixelated liquid
-background. All of it was written and reviewed without a device, and the voice
-without a Groq account that has accepted Orpheus's terms.
-**Where.** Device (stock 1.1.x and CrossMix), `errors.txt`, `autostart.log`,
-`logs.txt` with `JUKAHUB_LOG_LEVEL=debug`, `ps`, `/proc/<pid>/status`, a phone.
-**Done when.** On a Smart Pro with CrossMix and one with stock firmware, then a
-Brick:
-(1) quitting five times (Exit, Select + Start, the power card) leaves
-`errors.txt` saying "MainUI is back after N s (… runtrimui.sh …)" — never "no
-launcher came back", "2 MainUIs" or a `display:` holder after the exit; `kill
--9` of JukaHub on the idle dock leaves "CPU settings differed …; put back" and
-the firmware's governor; the "started by" line shows whether busybox names
-scripts "sh";
-(2) with Start at login on, a boot shows menu → black → JukaHub fading in, no
-flashes (does writing black to `/dev/fb0` blank the PowerVR panel cleanly?);
-`autostart.log` has one "closed the stock menu" and names the path that
-started JukaHub; the guard's one-time `display:` lines name the firmware
-daemons that keep `/dev/fb0` open — put the harmless ones on its ignore list;
-(3) a sleep of a minute or more on Wi-Fi with Chat open, then a wake: `wake:
-slept …` within a second, `wifi: back online N s after wake (…)` with N under
-about 10 s, no Offline / Network restored toasts, the community tab going
-Reconnecting… → Live by itself with a message sent meanwhile, and a Juka
-question, the orb and voice typing working in the first seconds; a wake with
-Wi-Fi switched off does nothing; record in `docs/WIFI.md` what the debug lines
-`wifi: after wake: <STATE> at N s` show the firmware doing to the supplicant;
-(4) a YouTube video whose stream fails shows "Downloading <title>" with a
-moving bar and then plays — record which way won (picture and sound, HLS,
-single file, native) and why the others lost; **B** mid-download leaves no
-`jukahub-video-*` file and no yt-dlp process; Save offline → Download video
-completes;
-(5) Juka's voice: the time from an orb answer to its first word, and no clicks
-with the liquid background on (else raise `ttsAheadMs` to 120); **B** is
-silent at once and its tap is heard; music ducks and comes back; an alarm takes
-over; on a fresh Groq account **Hear Juka** shows **Turn on Groq's voice**,
-whose QR code opens Groq's page on a phone, and speaks once the terms are
-accepted; Orpheus's daily-limit 429 matches `tts_groq.go`'s wording test and
-sends `Retry-After`; on Windows, the fallback voice's first-word delay;
-(6) the game assistant over RetroArch, PPSSPP and a PortMaster port: JukaHub's
-frames show over the stopped game without flicker and the game redraws
-cleanly after **B**; RetroArch sees none of the presses made in the overlay
-and nothing is stuck after it (hold R2 through the close); the log's `picture:
-true/false` says whether `/dev/fb0` holds the game's frame; the chime, Juka's
-voice and the microphone work while the stopped game holds ALSA; Select + R2
-is free in CrossMix's RetroArch hotkeys, DraStic and PPSSPP (a digital R2 on
-the Brick?); `kill -9` with the overlay up makes the next start ask the paused
-game to quit;
-(7) a word taught by voice on Voice shortcuts is recognised days later on the
-orb and the page; "RetroArch menu" and "open PPSSPP" open their menus on stock
-and CrossMix;
-(8) **R2** on the keyboard in Chat and the browser's address bar, and with the
-pointer up over the keyboard and over the page; **Start voice typing when the
-keyboard opens** ignores the chime, stops quietly after 7 s and never starts
-offline, without a key or on the Wi-Fi password field;
-(9) with a real key: a portrait phone photo (EXIF), a WebP, a 60 s phone video
-with speech and a silent screen recording sent to Juka — upright pictures, the
-"Watching the video…" time on the A133P, the work folder gone afterwards, Qwen
-answering and Muse skipped quietly where the account lacks it;
-(10) the Hardware screen's Memory tile and About's Memory row match `grep
-VmRSS /proc/<pid>/status` (Task Manager's working set on Windows) — write the
-number into the docs; the `[mem]` line is in `logs.txt` a minute after boot and
-every five minutes;
-(11) backgrounds: the moving water holds about 30 fps in `framestats`, with
-Low Power on too (the handheld's default; Battery Saver caps it at 24), and drops back to
-the idle cadence within seconds of calm (two minutes with rain);
-a 25 fps GIF plays at about 30 fps and a 10 fps one at about 20; the screensaver
-and the dock keep their own cadence; ten minutes of battery on Home with
-Gentle water against none is recorded (see GPU-5).
-**Verify.** Record results, firmware and CrossMix versions in the HW log; file a
-FIX task for anything that differs.
-
-### HW-4 — Groq key from the phone, L2 Edit Home and square tiles (P1, S) [HW]
-**Why.** Juka asked (2026-11-11) for the Groq key at the top of General with a
-way to paste it from the phone like the VPN's import, for L2 to edit Home, and
-for every Home tile to resize on square tiles. Written without a device or a
-compiler: `groqkey_sheet.go`, `companion_phonecard.go`, the companion page's
-`#groq` / `#vpn` links, `home_edit.go`'s resize mode and the seven-column grid.
-**Where.** Smart Pro, a Windows PC with and without a pad, an Android and an
-iPhone browser.
-**Done when.** (1) General shows Your name, Groq API key, Weather; A on the key
-row → **Paste it from your phone** → the phone's camera opens the page with the
-Groq card first and the cursor in it; Save closes the code on the handheld and
-the row reads "Saved · ••••abcd"; Remove asks first; Chat's "Add key" and the
-orb's "Add Groq key" land on the sheet; the VPN's phone option opens the VPN
-card the same way. (2) L2 on Home opens Edit Home on all four layouts and L2
-closes it; from Standard with no change Home comes back to Standard; Q does the
-same on a keyboard and the footers say Q there. (3) On Widgets, X then the
-D-pad grows a tile to 3 × 3 and back to 1 × 1 with the grid making room and the
-focus staying on it; the corner handle drags a size with the mouse; the cells
-look square on the 1280 × 720 panel and on the Brick; no painter (Continue at
-7 × 3, a widget at 1 × 3) draws outside its tile.
-**Verify.** Record in the HW log; file a FIX task for anything that differs.
-
-### HW-5 — Voice speed, Hey Juka, voice settings, BT headset, PPSSPP (P0, M) [HW]
-**Why.** Juka asked (2026-11-13) for fast offline answers, a "Hey Juka" wake
-word, settings changed by voice, Bluetooth headphones that actually play, and
-PPSSPP kept current on the Smart Pro. Written without a device or a compiler:
-`stt_stream.go` + `vosk-cli --serve`, `wakeword.go`, `offline_ai_server.go`
-(llama-server), the warm Piper in `tts_local_other.go`, `voiceboost.go`,
-`voicesettings*.go`, `audioroute_bluealsa.go`, `ppsspp_managed.go` and the
-`ppsspp-trimui.yml` workflow (never run).
-**Where.** Smart Pro on stock firmware with the new speech and offline-AI
-packages, a Bluetooth headset, Wi-Fi on and off.
-**Done when.** (1) The speech and offline-AI packages update once by themselves;
-the log shows "offline speech server ready" and llama-server starting while you
-speak; an offline answer's first words appear within about 4 s of the end of
-the question, and the CPU boost ends after it. (2) Hey Juka opens the orb on
-Home and the game assistant in RetroArch and PPSSPP; the log line "Hey Juka
-listens for:" names a spelling of Juka; ten minutes of talk, TV and a loud game
-give no false wake; the mic still works for the orb, voice typing and the
-stick lights. (3) "turn on dark mode", "turn off background music", "set
-screen timeout to 5 minutes", "is Wi-Fi on?" (does not change it) and, with a
-Groq key, a change Juka makes all work. (4) A headset connected before and
-after start plays Home sounds, music, a video, a RetroArch and a PPSSPP game;
-disconnecting returns everything to the speaker; the Bluetooth diagnostics show
-BlueALSA, its streams and the route. (5) After pushing, the PPSSPP workflow
-publishes `ppsspp-tg5040`; the device switches to it within minutes of a start
-and PSP games start; a failed build falls back to the firmware's PPSSPP.
-**Verify.** Record in the HW log; file a FIX task for anything that differs.
-
-### HW-6 — Realistic glass, simpler Settings, Consoles/Experience tabs, screen vision (P0, M) [HW]
-**Why.** Juka asked (2026-11-13) for an Apple-like glass setting, console
-themes, Settings that are easier to find things in, Experience packs inside
-Theme presets and a voice assistant that can see the screen. Written without a
-device or a compiler: `glass_real.go` (RenderGeometry meshes + a 1/16-size
-blurred backdrop), `setessentials.go` + `setsearch.go` (vk target 91),
-`themetabs.go` + `themes_retro.go`, `voicescreen.go` (ReadPixels before the orb
-draws).
-**Where.** Smart Pro and Windows; a still wallpaper, a GIF wallpaper and none.
-**Done when.** (1) Glass → Realistic: Home cards, Settings rows and buttons show
-the blurred backdrop, sheen and rim; no square corners or seams; chips on
-thumbnails and the media, browser and viewer screens show no backdrop through
-pictures; Home stays at its usual frame rate; Classic looks exactly as before.
-(2) Settings opens each section on its essentials; More settings (N) unfolds
-without the focus jumping; Y opens Search, "wifi", "dark mode", "volume" find
-their rows and A lands on them; Date & time and Keyboard rows are in General and
-Controls; Home search, voice and the tour still open the right rows. (3) Theme
-presets shows Colour · Total conversion · Consoles · Experience; every new
-console theme applies and reads well; Experience opens the packs screen with the
-same tabs, L1/R1 go back, B never bounces between the two. (4) With a Groq key,
-"what's this?" on Settings and on a game list describes what is on screen; the
-orb is not in the picture; the pairing code is blanked; Off sends nothing; the
-screen read does not stall the orb noticeably.
-**Verify.** Record in the HW log; file a FIX task for anything that differs.
-
-### HW-7 — JukaOS v2 on a device: boot styles, Tabs Home, Bluetooth, emulators (P0, M) [HW]
-**Why.** Juka asked (2026-11-16) for JukaOS v2: boot animations (Cinematic,
-Roll, Still logo, None), a tabbed Home that is now the default, a Games tab
-that cleans up emulators, collections, better Bluetooth and the best
-emulator per console. Written by four agents without a device or a compiler;
-nothing has been drawn, heard or felt.
-**Where.** Smart Pro and Brick (stock and CrossMix), Windows; a Bluetooth
-headset and a DualSense/DualShock 4 over Bluetooth. `bootstyles.go`,
-`bootos.go`, `bootchime.go` (`chimeThud`); `hometabs*.go`, `homelayout.go`,
-`home.go`, `home_edit.go`, `shoulders.go`; `bt_autoreconnect.go`,
-`bt_audiofollow.go`, `bt_padinfo.go`, `bt_identify_linux.go`; `emubest.go`,
-`emupicker.go`, `game_library.go` (`findGameLauncher`).
-**Done when.** (1) Boot: a power-on in each style; Cinematic's crack layer
-draws on the GE8300 (render target accepted — else the per-frame line
-fallback runs), holds the UI frame rate (else drop the grid, then the cool
-crack copy), buzzes on the impact frame and its knock is audible on the
-speakers; Roll is smooth at 30 fps; the floor and horizon fit the Brick's 4:3
-canvas; the firmware logo hands over without a jump; None starts straight to
-Home; Reduce motion and battery saver show the still logo; an app launch plays
-the short version. (2) Tabs Home: a fresh card opens on Tabs and an existing
-`homeArrangement` is kept; the strip fits on the Brick at 1024×768 with a full
-top-bar cluster (the wordmark yields); Up/Down/Left/Right between the strip,
-the page, the top-bar controls and the power pill; L1/R1 and Tab/PgUp/PgDn;
-L2 opens and closes the arranging sheet; the Start menu over the sheet closes
-it; Recent and Games covers appear without stalls on a full card; the first
-Games/Favourites/Collections visit does not freeze Home while the library
-scans. (3) Games tab: Install badges match what CrossMix's `Emus` folders
-really launch, and Install lands the Emulators page on the right tile; the
-collection keyboard (vk target 130) names, renames and deletes; the item sheet
-fits at 1024×768. (4) Bluetooth: paired pads and a headset reconnect after a
-start, a wake and switching the radio on, and are left alone after a manual
-disconnect; a headset dropping pauses video and music; the speaker and
-headset keep their own volumes; pad battery reads from
-`/sys/class/power_supply` on the TSP kernel; Identify rumbles (EVIOCSFF with a
-48-byte `ff_effect`) and blinks the pad's LEDs; the codec line shows SBC/AAC.
-(5) Emulators: on CrossMix the recognised emulators match `drastic.sh`,
-`ppsspp_*.sh` and the RetroArch scripts, and Which emulator? badges the
-expected one.
-**Verify.** Record in the HW log; file a FIX task for anything that differs.
-
----
-
-## P0/P1 — defects found by the 2026-11-09 inventory (FIX)
+## Defects found by reading (FIX)
 
 Found by reading, not by running: confirm each on a build before fixing, and
 delete the task with the fix. Security defects are under SEC.
 
 ### FIX-2 — Does the handheld keep time across a cold boot? (P2, S) [HW]
-**Why.** The boot guard no longer depends on it (it counts starts,
-`bootguard.go`), and network time now sets the clock once Wi-Fi is up
-(`ntpsync.go`), but release checks, bug-report clock checks, crash-file names and
-anything stamped before the first sync still read the wall clock.
+**Why.** The Smart Pro has an RTC (`sunxi-rtc`, `/dev/rtc0`;
+docs/HARDWARE_VALIDATION.md), but whether it keeps time with the power off, and
+whether the Brick has one, is unknown. Release checks, bug-report clock checks,
+crash-file names and anything stamped before the first network-time sync read
+the wall clock.
+**Where.** `ntpsync.go`, `minSaneClock` users, `docs/DEVICE_TUNING.md`.
 **Done when.** On a Smart Pro and a Brick, `ls /sys/class/rtc` and `hwclock -r`
-after a cold boot with no Wi-Fi are recorded in `docs/DEVICE_TUNING.md`; if there
-is no RTC, the `minSaneClock` users are reviewed and NET-12 is closed as moot.
-
-### FIX-13 — Critical battery saves RetroArch only (P1, M) [HW]
-**Why.** The 3% guard (`lowbattery.go` `protectLowBattery`, ~:412-478) acts only
-while RetroArch runs and saves through its UDP command; PPSSPP, DraStic, hakuX,
-AndroidRT and ports get no save, no sync and no suspend.
-**Done when.** See PWR-3.
+after a cold boot with no Wi-Fi are recorded in `docs/DEVICE_TUNING.md`; where
+the RTC keeps time NET-12 goes ahead, otherwise the `minSaneClock` users are
+reviewed and NET-12 is closed as moot.
 
 ### FIX-14 — Release pipelines disagree (P1, M) [NET]
 **Why.** `release.sh` cross-builds with cgo and no `CC` (release.yml cannot
@@ -905,20 +588,21 @@ tag.
 
 ## Performance (PERF)
 
-### PERF-1 — Measure the November perf pass on hardware (P1, M) [HW]
+### PERF-1 — Device performance numbers in `docs/PERFORMANCE.md` (P1, M) [HW]
 **Why.** Render batching, frame pacing, lazy regexps and deferred boot work were
-estimated, not measured.
-**Where.** On the device: launch JukaHub with `JUKAHUB_STARTUP_BENCH=1` (it
-exits after the first frame) and read the `startup:` line from `errors.txt`;
-`GODEBUG=inittrace=1` adds package-init costs. `startup-bench.sh` is the host
-harness (bash + Go); a `JUKAHUB_BENCH_BIN` option to skip its build would let it
-drive a prebuilt binary. `framestats.go` logs one histogram line a minute.
-**Done when.** `docs/PERFORMANCE.md` records, for Smart Pro and Brick: cold-boot
-median of 5 runs + top package-init costs, warm boot, frame-time histogram while
-navigating Home and while a video plays, idle CPU of JukaHub on Home over 60 s
-(`top -d 5`), RSS after 10 minutes of use — and the same numbers for commit
-`36794cd` as the baseline.
-**Verify.** Numbers + method in the doc; regressions filed as new tasks.
+estimated, not measured, and `docs/PERFORMANCE.md` does not exist; PERF-3 and
+others need a baseline.
+**Where.** On the device: `JUKAHUB_STARTUP_BENCH=1` (exits after the first
+frame; `startup:` line in `errors.txt`), `GODEBUG=inittrace=1` for package-init
+costs, `framestats.go` (one histogram line a minute). `startup-bench.sh` is the
+host harness; a `JUKAHUB_BENCH_BIN` option would let it drive a prebuilt binary.
+**Done when.** `docs/PERFORMANCE.md` records, for Smart Pro and Brick on one
+build: cold-boot median of 5 runs and the top package-init costs, warm boot, the
+frame-time histogram while navigating Home and while a video plays, JukaHub's
+idle CPU on Home over 60 s (`top -d 5`) and RSS after 10 minutes of use; that
+build is the baseline later tasks compare against, and the doc stays the one
+place for device performance numbers.
+**Verify.** Numbers and method in the doc; regressions filed as new tasks.
 
 ### PERF-3 — Dirty-frame presentation (P1, M)
 **Why.** Idle screens still redraw 15–24 times a second; on a handheld that is
@@ -939,30 +623,19 @@ UI textures (nearest kept for pixel art: minigames, JukaLand) or native
 1024×768 rendering; decision recorded in `docs/DEVICE_TUNING.md`.
 **Verify.** Before/after photos of Home and Settings on a Brick.
 
-### PERF-5 — Verify shared UI font loading on the handheld (P2, S) [HW]
-**Why.** UI fonts now open from a shared, pinned in-memory source, but the
-TrimUI still needs a read-count and rendering check across the sizes it uses.
-**Where.** `home_fonts.go`, `core.go` (`getCachedFont`, `getFontSized`),
-`canvas.go`.
-**Done when.** `strace -e openat` shows one read of `Inter-Regular.ttf` for all
-font sizes, and the UI and canvas preview render normally at the 14 px floor,
-the regular role sizes and the larger headings.
-**Verify.** Record the open count and check the fonts on a Smart Pro.
-
 ### PERF-7 — Trim heavy dependencies (P2, L) [WIN]
-**Why.** Compile time, binary size (~36 MB) and page-in time on the SD card.
-**Where.** goja: since the late-night pass of 2026-11-09 it runs every page's
-scripts against the DOM prelude — `webdom_runtime.go` (+ the embedded
-`webdom/*.js`), `webdom_parse.go`, `webdom_module.go`, `webdom_net.go` and the
-legacy pass in `webscript.go`; `processes.go`/`systool_disk.go`/`systool_hw.go`/
-`terminal.go`/`textbrowser.go` (gopsutil), `textbrowser.go` (zeroconf), `chat.go`
-(discordgo).
-**Done when.** goja and the whole DOM pass sit behind a `//go:build !nojs`
-split: the `webdom_*.go` files and `webscript.go` in the full build, and in the
-lite build a stub `webJSRunPageFor` that returns the page as it arrived, with
-Settings → Browser → JavaScript hidden; gopsutil replaced by `/proc` + `statfs`
-on Linux and two Win32 calls; zeroconf replaced by a one-shot mDNS query;
-`go mod tidy && go mod vendor` run; features unchanged.
+**Why.** Compile time, binary size (~36 MB) and page-in time from the SD card.
+**Where.** goja: the Browser's DOM pass (`webdom_runtime.go` with the embedded
+`webdom/*.js`, `webdom_parse.go`, `webdom_module.go`, `webdom_net.go`, the
+legacy pass in `webscript.go`); gopsutil: `processes.go`, `systool_disk.go`,
+`systool_hw.go`, `terminal.go`, `textbrowser.go`, `plugnative.go`; zeroconf:
+`textbrowser.go`, `moonlight_discovery.go`; discordgo: `chat.go`.
+**Done when.** goja and the DOM pass sit behind a `//go:build !nojs` split (in
+the lite build a stub `webJSRunPageFor` returns the page as it arrived and
+Settings → Browser → JavaScript is hidden); gopsutil is replaced by `/proc` +
+`statfs` on Linux and two Win32 calls; zeroconf by a one-shot mDNS query that
+still finds Moonlight hosts; `go mod tidy && go mod vendor` run; features
+unchanged.
 **Verify.** Binary size and cold-cache build time before/after in
 `docs/PERFORMANCE.md`; `make check` green.
 
@@ -1008,80 +681,39 @@ as tests) show 0 allocs/frame on Home, Library and Downloads at rest.
 release builds.
 
 ### PERF-15 — What page scripts cost on the handheld (P1, S) [HW]
-**Why.** The Browser's JavaScript pass has only run under node. On the device the
-550 KB DOM prelude is compiled once per run (estimated at about a second on the
-A133P, started beside the first page's download by `webDOMPreludeWarm`), runs
-again for every page (thousands of accessors), and goja interprets every page
-script on four Cortex-A53 cores inside a 10-second budget.
+**Why.** On the A133P the 550 KB DOM prelude is compiled once per run (started
+beside the first page's download by `webDOMPreludeWarm`), runs again for every
+page, and goja interprets every page script on four Cortex-A53 cores inside a
+10-second budget; none of it has been timed on a device.
 **Where.** `webdom_runtime.go` (`webDOMPrelude`, `webDOMPreludeWarm`, `runPage`,
-the `scripts on …` summary line), `webdom/*.js` (work done while the prelude
-loads), `docs/PERFORMANCE.md`.
+the `scripts on …` summary line), `webdom/*.js`, `docs/PERFORMANCE.md`.
 **Done when.** `docs/PERFORMANCE.md` records, on a Smart Pro and a Brick, the
 prelude compile, the per-page start (prelude run and boot) on a near-empty page,
 and the whole pass on a jQuery site, a framework single-page app and a news
-article with lazy images (add a debug line for compile and start if the
-summary is not enough); the per-page start is under 300 ms, or the interfaces
-pages rarely touch are installed on first use until it is.
+article with lazy images (add a debug line for compile and start if the summary
+is not enough); the per-page start is under 300 ms, or the interfaces pages
+rarely touch are installed on first use until it is.
 **Verify.** The `scripts on …` lines in `logs.txt` with
 `JUKAHUB_LOG_LEVEL=debug`.
 
 ### PERF-17 — Animated wallpapers on the handheld: memory and pacing (P2, S) [HW]
-**Why.** GIF wallpapers (2026-11-10) are decoded frame by frame on a goroutine
-and uploaded a few megabytes per UI frame within a 40 MB budget; the budget,
-the 3 MB-per-frame upload step and the decode time were estimated for the A53
-and the PowerVR driver, not measured, and no device has shown one yet.
-**Where.** `gifwall.go` (log tag `wallpaper`: frames kept, read limits, memory
-short), `wallpaper.go` (picker), `adaptive.go` (`EvictCachesForPressure` keeps
-the first frame under critical pressure), Power tools → memory.
+**Why.** GIF wallpapers are decoded on a goroutine and uploaded a few megabytes
+per UI frame within a 40 MB texture budget; the budget, the 3 MB-per-frame
+upload step and the decode time are estimates for the A53 and the PowerVR
+driver.
+**Where.** `gifwall.go` (log tag `wallpaper`; `gifWallEvict`,
+`gifWallPauseForGame`), `wallpaper.go`, `adaptive.go`
+(`EvictCachesForPressure`), Power tools → memory.
 **Done when.** On a Smart Pro and a Brick: a 1280×720 photo GIF and a 1080p
 100-frame GIF show their first frame within about half a second of being picked
-and animate within a few seconds, with no frame over 50 ms in `framestats`
-while frames upload; textures stay near the 40 MB budget and the big GIF logs
-how many frames it kept; a 160×144 pixel-art GIF is crisp; Battery Saver and
-**Animate wallpaper** off hold the first frame; a restart keeps the pick,
-*None* survives a restart, and an experience pack applied after a pick (and its
-Undo) behaves as the newest choice; critical memory pressure leaves the first
-frame and logs it.
-**Verify.** `framestats` histogram while a GIF loads, Power tools → memory,
-`logs.txt`.
-
-### PERF-18 — Give the animated wallpaper's memory back before big tenants (P2, S) [HW]
-**Why.** An animated wallpaper keeps up to 40 MB of textures for as long as it
-is the wallpaper. Only a wallpaper change or critical memory pressure frees
-them — not the WPE Browser hand-off, not a game, not shutdown — and on a 1 GB
-device the WPE Browser (~260 MB) and the heavy emulators want that memory most.
-**Where.** `gifwall.go` (`gifWallEvict` releases the textures and forgets the
-path, so the next backdrop draw decodes again), `brw_wpe.go`
-(`brwWpeFreeMemory`), `shutdown.go` (`shutdownReleaseTextures`), `main.go` (the
-branch that parks the loop while a game owns the screen). Every call stays on
-the render thread.
-**Done when.** The WPE hand-off and the shutdown card call `gifWallEvict`, and a
-game launch frees all but the first frame (the decoder already sleeps during a
-game) and decodes again after it; Power tools → memory shows the drop on a
-Smart Pro with a 1080p GIF wallpaper.
-**Progress (2026-11-10).** The WPE hand-off (`brwWpeFreeMemory`) and the
-shutdown card (`shutdownReleaseTextures`) call `gifWallEvict`. On game entry,
-the decoder is cancelled and all but the first frame texture are released; on
-return, the retained frame is released and the current wallpaper is decoded
-again. The Smart Pro memory measurement is still open.
-
-### PERF-19 — The weather and living backgrounds' frames (P2, S)
-**Why.** Since 2026-11-11 a moving backdrop asks for the frames it needs
-(`requestFrameEvery`, `adaptive.go`): the liquid water, a playing GIF, the
-living background. The Weather page's animated background
-(`weather_scene_background.go`) asks for none, so its rain and snow fall at the
-idle cadence; the living background (`dynamicbg.go`) draws its blobs and
-particles at whole-pixel positions, so their slow drift steps at any frame
-rate; and wallpapers are created with SDL's default nearest filter
-(`core.go` `fitBackgroundTexture`), which the water works around with a
-one-off conversion (`gifwall.go` `appWallpaperTextureSmooth`).
-**Where.** `weather_scene_background.go` (`renderWeatherSceneBackground`),
-`dynamicbg.go`, `core.go` (`fitBackgroundTexture`), `gifwall.go`.
-**Done when.** The weather background calls `requestFrameEvery(1)` for rain and
-snow and `requestFrameEvery(66)` for the sun while it animates; the living
-background draws with `CopyF` at sub-pixel positions; `fitBackgroundTexture`
-creates its texture with the linear hint (three lines around
-`CreateTextureFromSurface`), and the water's conversion goes.
+and animate within a few seconds, with no frame over 50 ms in `framestats` while
+frames upload; textures stay near the 40 MB budget and the big GIF logs how many
+frames it kept; a 160×144 pixel-art GIF is crisp; Battery Saver and **Animate
+wallpaper** off hold the first frame; the pick, and *None*, survive a restart;
+an experience pack applied after a pick (and its Undo) behaves as the newest
+choice; Power tools → memory shows the textures freed by the WPE Browser
+hand-off, a game launch (all but the first frame) and critical memory pressure.
+**Verify.** `framestats` while a GIF loads, Power tools → memory, `logs.txt`.
 
 ---
 
@@ -1128,41 +760,28 @@ pipe with automatic ffmpeg fallback. Never generalise to the A523 Smart Pro S.
 **Verify.** CPU during 720p H.264 playback before/after.
 
 ### GPU-5 — Liquid background on the stock GE8300 (P1, S) [HW]
-**Why.** The liquid background (2026-11-10) is the first code that draws through
-`SDL_RenderGeometry`, and it was written and reviewed without a device. Whether
-the stock SDL2 (2.26.1 / 2.30.8, `opengles2` on PowerVR) takes a 2,400-vertex
-indexed mesh and an additive glint mesh every frame at 30 fps, and how strong
-the refraction and the glints look on the 5-inch panel, were chosen by
-reasoning.
+**Why.** The liquid background is the first code that draws through
+`SDL_RenderGeometry`: a 129×73-vertex mesh (97×55 under Low Power) plus an
+additive glint mesh, every frame the water moves, and one read-back of a still
+wallpaper on its first draw. Whether the stock SDL2 on PowerVR takes that at 30
+fps, and how strong the refraction and glints look on the panel, is unmeasured.
 **Where.** `liquidbg.go` (log tag `liquidbg`: "the renderer cannot draw the
 water" means the geometry was refused; "the water costs … ms a frame" is the
-perf guard stepping down), `liquidbg_motion.go` ("tilt from …"), Settings →
-Display & theme → Liquid background.
-**Done when.** On a Smart Pro and a Brick with the device defaults (Low Power
-and Reduce Motion on), Gentle and then Lively: a focus move ripples under the
-tile on Home, in Settings and on a module screen; the header band shows no
-seam when a list scrolls under it; with a wallpaper (a still and a GIF) the
-picture bends and the dim and blooms still sit over it; a light theme keeps
-the ripples readable; `framestats` shows the moving water at no more than about
-3 ms a frame over the calm baseline and no step-down line; two idle minutes
-later the rain has stopped and frame cost is back to the no-water baseline. If
-a TrimUI unit with an accelerometer turns up (Smart Pro S?), tilting its right
-edge down piles the water on the right; if the axes come out rotated, apply the
-IIO mount matrix.
-**Verify.** `framestats` before/after and the `liquidbg` lines in `logs.txt`
-with `JUKAHUB_LOG_LEVEL=debug`; retune the refraction and glint strengths in
-`liquidbg.go` from photos of the panel if they read too strong or too weak.
-
-**Grew on 2026-11-11.** The water is now drawn between its 30 Hz steps on a
-mesh twice as fine as its grid — 129×73 = 9,417 vertices and 55,296 indices
-(97×55: 5,335 and 31,104 on the Low Power grid) — every frame it moves, at the
-active cadence, and its first draw over a still wallpaper reads that picture
-back once to filter it linearly (an estimated 10–30 ms hitch). Also done when:
-the moving water holds about 30 fps in `framestats` — with Low Power on too
-(moving water passes Low Power's 24 fps cap; Battery Saver keeps it) — with
-no step-down line; ripples
-show no facets or blocky wallpaper pixels on the panel; the first draw over a
-new wallpaper hitches at most one frame.
+perf guard stepping down), `liquidbg_motion.go`, Settings → Theme & look →
+Liquid background (R2 cycles Off/Slight/Medium/Lively).
+**Done when.** On a Smart Pro and a Brick at Medium and Lively, with Low Power
+on and off: moving water holds about 30 fps in `framestats` with no step-down
+line and costs at most about 3 ms a frame over the calm baseline; a focus move
+ripples under the tile on Home, in Settings and on a module screen with no
+facets, no seam under the header band and no blocky wallpaper pixels; over a
+still and a GIF wallpaper the picture bends, the dim and blooms sit over it, and
+the first draw over a new wallpaper hitches at most one frame; a light theme
+keeps the ripples readable; two idle minutes later frame cost is back to the
+no-water baseline; ten minutes of battery on Home with Medium water against none
+are recorded in `docs/PERFORMANCE.md`. On a model with an accelerometer, tilting
+piles the water downhill (else apply the IIO mount matrix).
+**Verify.** `framestats` and the `liquidbg` debug lines; retune the refraction
+and glint strengths in `liquidbg.go` from photos of the panel.
 
 ---
 
@@ -1199,42 +818,54 @@ RetroAchievements.
 one task per island before starting.
 
 ### ARCH-5 — Shrink the main loop (P2, L) [WIN]
-**Why.** `main.go` (~3.5k lines) still owns the loop, input routing and
-teardown; `core.go` (~7.8k) is referenced by 330 files.
+**Why.** `main.go` (~4.3k lines) still owns the loop, input routing and
+teardown; `core.go` (~7.7k) is referenced by most of the package.
 **Done when.** The loop body is a short sequence of named phases (input, update,
 draw, present, pace) in their own files; `core.go` is split by responsibility
 (render helpers, triggers, video entry points) without behaviour change.
 
 ### ARCH-6 — Context cancellation for the remaining feature fetches (P2, M)
 **Why.** Leaving a screen should stop its network work, not just hide it.
-**Where.** Fetches that still use bare clients (search `http.Get(`,
-`httpClientLong.Get(`); `scenetasks.go` is the pattern.
+**Where.** Bare GETs: `thumbstore.go:91` (`httpClientLong.Get`),
+`chat.go:215,396`, `themecatalog.go:121`, `tools.go:764`; plus the files that
+still build requests with `http.NewRequest` instead of `NewRequestWithContext`
+(grep). `scenetasks.go` is the pattern.
 **Done when.** Every scene-owned fetch runs under the scene context.
-**Verify.** Leaving Podcasts/Weather/Library art mid-fetch closes the request
-(server-side observation in a temporary test).
+**Verify.** Leaving Podcasts, Weather or Library art mid-fetch closes the
+request (server-side observation in a temporary test).
 
-### ARCH-7 — Retire 0.4.0 migrations on a schedule (P3, S) [OWNER]
+### ARCH-7 — Retire the 0.4.0 migrations on 2027-05-01 (P3, S)
 **Why.** Upgrade shims (`home_migrate.go`, `migrateLegacyUserFiles` in
-`extras.go`, `pkgMigrateLegacy`, `setLegacySection`, the Tools hub's legacy
-`Misc` scene, `legacyDecryptionKeys` in `crypto.go`) protect users upgrading from
-0.4.0 and must not go before they have had a release to migrate.
-**Done when.** The owner picks the release after which they go; each shim carries
-a `// remove after vX.Y` comment; the removal is a task with that version.
+`extras.go`, `pkgMigrateLegacy` in `pkgstate.go`, `setLegacySection` in
+`setmodel.go`, the Tools hub's legacy `Misc` scene, `legacyDecryptionKeys` in
+`crypto.go`) protect users upgrading from 0.4.0. Six months of dated releases is
+long enough for every installed copy to have migrated.
+**Done when.** Each shim carries a `// remove after 2027-05-01` comment now; on
+or after that date the shims are removed with their tests and `make check` stays
+green.
 
-### ARCH-8 — Production code only tests use (P3, S)
-**Why.** 29 production functions are referenced only by tests (the dead-code
-scan lists them), e.g. `EncryptWithAuth`/`DecryptWithAuth`, `SaveConfig`,
-`ParsePatchManifest`, `NewerVersion`, `pdfExtractTextFromBytes`, `runBounded`.
-**Done when.** Each is either a deliberate test seam (named `…ForTest` or
-documented) or removed together with its test.
+### ARCH-9 — Retire the dead code behind the test seams (P3, S)
+**Why.** Several functions now marked `// Test seam` lost their production
+caller: `EncryptWithAuth`/`DecryptWithAuth` (`crypto.go`), `SaveConfig`
+(`config_health.go`), the old patch-manifest path (`ParsePatchManifest`,
+`NewerVersion`, `ManifestTargetFor`, `jukaHubAssetName`, `packageArchiveSHA`,
+`loadPatchDB`, `dbIsHeld`, `dbSetHeld`), `resolveToolURL`, `downloadFile` and
+`httpsGetBytes` (`tools.go`), `runBounded`, `epubOpenFile` and
+`probeConnectivity`. `sftpRootHandlers` (`sftp_root.go`) is built only by its
+test, and only tests call `savePSHosts`, `psHandoffScript`, `psHelperPick` and
+`psInstallHelpers`.
+**Where.** The files named and their `_test.go` files; `tests/scripts/`.
+**Done when.** Each is removed with its tests, wired into production, or its
+seam comment says why a test needs it; a scan in `tests/scripts/` (top-level
+functions only `_test.go` files reference, build tags ignored) lists only
+documented seams.
 
 ---
 
 ## Tests and CI (TEST)
 
-CI runs two jobs on a push (`ci.yml`) and the slow checks once a week
-(`weekly.yml`); the owner wants it kept that small (2026-11-10). The tasks
-below add checks only to `weekly.yml` or to `make` targets.
+CI runs two jobs on a push (`ci.yml`) and the slow checks weekly (`weekly.yml`);
+keep it that small: new checks go to `weekly.yml` or to `make` targets.
 
 ### TEST-1 — A scene-dump tool, not a test (P1, M) [WIN]
 **Why.** The visual audit was deleted with the render tests; design work needs
@@ -1247,60 +878,24 @@ renderer) in under a minute.
 **Verify.** The PNGs exist and look right; `docs/DEVELOPMENT.md` documents it.
 
 ### TEST-2 — Tests for the riskiest paths the cut left uncovered (P1, M)
-**Why.** The test cut removed coverage of a few things that hurt silently.
+**Why.** A few silent-failure paths have no test.
 **Done when.** One fast table test each for: the self-update restart handshake
 (`patch_swap.go` markers ↔ `launch.sh` protocol), browser cookie "forget" taking
-the `.bak` with it (`browsercookies*.go`), app launch path refusals
-(`isLaunchableAppPath`, `apps.go`), and the Wi-Fi supplicant socket transport
-(`wifi_ctrl.go`, stubbed socket).
-**Verify.** `go test -run` for the four; total suite time stays under ~10 s.
-
-### TEST-5 — `go vet` for Windows too (P2, S) [NET]
-**Done when.** The weekly Windows job (`weekly.yml`) runs `go vet ./...` before
-its tests, so Windows-only files cannot rot.
+the `.bak` with it (`browsercookies*.go`), and the Wi-Fi supplicant socket
+transport (`wifi_ctrl.go`, stubbed socket). (`isLaunchableAppPath` is covered by
+`paths_test.go`.)
+**Verify.** `go test -run` for the three; total suite time stays under ~10 s.
 
 ### TEST-8 — Fuzz the parsers (P2, M)
+**Why.** The weekly `fuzz` job in `weekly.yml` covers only the update decoders
+(`internal/jdelta`, `internal/releasesign`); the external-file parsers in
+package main have no fuzz target.
+**Where.** `weekly.yml` (`fuzz`, CGO off — parsers in package main need a CGO
+job or a move to `internal/`, see ARCH-3), the parser files.
 **Done when.** `go test -fuzz` targets exist for M3U, CUE/GDI/M3U sheets, the
-PDF and EPUB readers, zip/tar extraction (`extractTarMembers`), package and
-update manifests, `/proc/bus/input/devices` and the XML config; the weekly
-checks run each for 30 s and keep the corpus.
-
-### TEST-9 — gofmt in CI, and the input and download tests under `-race` (P2, S) [NET]
-**Done when.** CI's player job fails on unformatted Go (a `gofmt -l` step, not a
-new job), and the weekly `-race` job (which enables checkptr) also runs the
-input and download tests.
-
-### TEST-10 — A device release checklist (P1, S) [HW]
-**Done when.** `docs/RELEASE_CHECKLIST.md` lists the 20-minute walk before a
-release on a Smart Pro and a Brick (boot, sleep/wake, a game per launcher
-family, video, Wi-Fi join, update + rollback, keyboard plugged in, controller
-on Windows) and the release workflow links it.
-
-### TEST-11 — The backlog checks itself (P2, S) [WIN]
-**Why.** Two review passes drifted the file's own bookkeeping: the header said
-234 tasks while 238 existed, and the recovery row cited a task that had already
-been deleted. A reader cannot see a dangling ID or a stale count.
-**Where.** `player/MODERNIZATION.md`; a dependency-free script under `tools/`
-(Python or Node, like `tests/scripts/docs-links.py`).
-**Done when.** The script fails on a duplicate task ID, an ID named in prose
-that matches no heading, an anchor that matches no heading, and a header count
-that differs from the number of task headings; `make check` runs it beside the
-docs link check (`make docs-links`).
-
-### TEST-12 — First run of the browser-engine tests (P1, S) [WIN]
-**Why.** The Browser's DOM pass (`webdom_runtime.go`, `webdom_parse.go`,
-`webdom_net.go`, `webdom_module.go`) was written without a Go toolchain: its two
-kept test files, `webdom_parse_test.go` (the HTML parser) and
-`webdom_net_test.go` (what page scripts may reach), have never run. The embedded
-prelude is tested under node only (`tests/web/webdom_*.test.mjs`, run by the web
-suite's `npm test` against goja's set of built-ins); nothing compiles it in goja
-before a page does.
-**Where.** The files above, `player/go.mod`
-(`github.com/dlclark/regexp2/v2` is now a direct import).
-**Done when.** `go test ./...` passes on Windows and in CI with those files,
-`go mod tidy && go mod vendor` has been run, and the web job's node run includes
-the two `webdom` suites.
-**Verify.** The `go test` tail and the CI run.
+PDF and EPUB readers, zip/tar extraction (`extractTarMembers`), package
+manifests, `/proc/bus/input/devices` and the XML config; the weekly checks run
+each for 30 s and keep the corpus.
 
 ### TEST-15 — A reproducible build root for the helpers (P3, S) [NET]
 **Why.** The Ubuntu 20.04 root is debootstrapped from the day's focal-updates
@@ -1326,61 +921,47 @@ checksum-verified tarball into `DEPS_PREFIX` and found through
 `-DOPENSSL_ROOT_DIR`; `BUILDINFO.txt` names its version; NEEDED is unchanged.
 
 ### TEST-17 — Every helper dependency from a verified source, offline configure (P2, S) [NET]
-**Why.** miniupnpc comes in through chiaki-ng's external-project flags taken
-over from the original port's build (fetched by full commit id, but handed to
-FetchContent); if chiaki-ng's configure fetches anything itself, that download
-is not checksum-verified (`BUILDINFO.txt` lists anything it fetched). libevent
-is built from a checksum-verified tarball since 2026-11-10.
-**Where.** `player/native/build-helpers.sh`.
+**Why.** miniupnpc reaches chiaki-ng through its external-project flags (fetched
+by full commit id, but handed to FetchContent); if chiaki-ng's configure fetches
+anything itself, that download is not checksum-verified. libevent is pinned at
+2.1.12-stable; 2.1.13-stable (2026-07) carries security fixes in evbuffer,
+bufferevent, evdns and evhttp.
+**Where.** `player/native/build-helpers.sh` (`MINIUPNPC_*`, `LIBEVENT_VERSION`).
 **Done when.** miniupnpc is built statically into `DEPS_PREFIX` like the other
-dependencies, configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON`,
-BUILDINFO lists nothing fetched by configure, and libevent is 2.1.13-stable
-(2026-07, security fixes in evbuffer, bufferevent, evdns and evhttp; chiaki-ng
-1.10.1 moved to it) once its tarball's SHA-256 is checked against its signed
-release — a reviewer found `f7e9383b…` in Buildroot only.
+dependencies; configure runs with `-DFETCHCONTENT_FULLY_DISCONNECTED=ON` and
+BUILDINFO lists nothing fetched by configure; libevent is 2.1.13-stable with its
+tarball's SHA-256 checked against the signed release.
 
 ### TEST-18 — A packager's digest for the Box64 source (P3, S) [NET]
-**Why.** The Box64 pack's source is pinned by commit id (`2f130fab…`, v0.4.4)
-and fetched with `git fetch --depth 1`. When it was pinned no distribution's
-digest for the v0.4.4 tarball could be read (AUR's PKGBUILD was unreachable,
-Debian was at 0.4.3, nixpkgs pins a NAR hash), so nothing outside GitHub vouches
-for that tree.
+**Why.** The Box64 pack's source is pinned by commit id (`BOX64_COMMIT`, v0.4.4)
+and fetched with `git fetch --depth 1`; nothing outside GitHub vouches for that
+tree.
 **Where.** `player/native/build-runtimes.sh` (`BOX64_COMMIT`).
 **Done when.** A packager's digest for the v0.4.4 release tarball (AUR, or
 Debian or Alpine once they reach it) is checked once against the tree at the
 pinned commit, and the comment above `BOX64_COMMIT` names that source.
 
-### TEST-19 — Bounds and order in the runtime jobs (P1, S) [NET]
-**Why.** The review of the AndroidRT and Box64 jobs (2026-11-11) left five
-findings open. `build-and-publish-ubuntu` allows 15 minutes, but its four
-optional 5-minute steps (download and upload of the helpers and of AndroidRT)
-add up to 20, and a timed-out packaging job leaves the release a draft. In
-`remote-play-helpers.yml` and `wine-runtime.yml` a built package is uploaded
-only after an advisory step (the arm64 smoke suite, the Wine start), so a hang
-there runs into the job's timeout and the verified package is lost. The weekly
+### TEST-19 — Upload before the advisory steps, bound the weekly smoke, fix the cross-build docs (P2, S) [NET]
+**Why.** In `remote-play-helpers.yml` (AndroidRT) and `wine-runtime.yml` the
+verified package is uploaded only after an advisory step (the arm64 smoke suite,
+the Wine start), so a failure or hang there can cost the package. The weekly
 AndroidRT smoke step has no bound of its own inside its job's 10 minutes, so a
-few hung cases turn the weekly run red. The helper build's bound fell from 35
-to 20 minutes without a measured time. And `docs/BUILDING.md` and
+few hung cases turn the weekly run red. `docs/BUILDING.md` and
 `build-runtimes.sh` offer `CROSS=aarch64-linux-gnu-` for AndroidRT, which
 today's cross toolchains (glibc 2.34 or newer) always fail at the GLIBC 2.31
 check.
-**Where.** `.github/workflows/docker-image.yml` (`build-and-publish-ubuntu`),
-`.github/workflows/remote-play-helpers.yml`, `.github/workflows/wine-runtime.yml`,
-`.github/workflows/weekly.yml`, `docs/BUILDING.md`,
-`player/native/build-runtimes.sh` (usage text).
-**Done when.** `build-and-publish-ubuntu` has room for every optional bound plus
-its required steps (25 minutes, or 3-minute bounds); each package's upload and
-keep steps run right after its build, before the advisory step; the weekly
-smoke step has `timeout-minutes: 5`; the helper build's bound comes from the
-first cold run's time (BUILD-6); and the docs say a cross build needs a sysroot
-whose glibc is no newer than 2.31.
+**Where.** `.github/workflows/remote-play-helpers.yml`,
+`.github/workflows/wine-runtime.yml`, `.github/workflows/weekly.yml`,
+`docs/BUILDING.md`, `player/native/build-runtimes.sh` (usage text).
+**Done when.** Each package's upload and keep steps run right after its build,
+before the advisory step; the weekly smoke step has `timeout-minutes: 5`; the
+docs say a cross build needs a sysroot whose glibc is no newer than 2.31.
 
 ---
 
 ## UX and design (UX)
 
-The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md) (30
-findings, 21 implemented in November).
+The review behind these is [docs/UX_REVIEW.md](../docs/UX_REVIEW.md).
 
 ### UX-4 — One icon stroke weight (P2, M)
 **Where.** `icondefs.go`, `icondraw.go`, `iconatlas.go`.
@@ -1390,13 +971,6 @@ Packages glyph is a filled 3D box among outlines); atlas re-baked.
 ### UX-5 — Status cluster legibility (P2, S) [HW]
 **Done when.** A connected Wi-Fi meter draws at full contrast (dim only for "no
 signal"); battery/clock/bell readable on both canvases at arm's length.
-
-### UX-6 — Home composition prototype (P2, M) [OWNER]
-**Why.** Ten equal-weight destinations dilute hierarchy on a gaming handheld.
-**Done when.** An HTML mockup in `mockups/` of a content row (Continue + Games +
-Media, large) over a compact system dock (Files, Packages, Apps, Tools,
-Settings) in the glass tokens is approved by the owner; then implemented with
-`homelayout.go` and `homefocus.go` kept in agreement.
 
 ### UX-7 — On-device design walk (P1, S) [HW]
 **Done when.** Home, Start menu, Games library, Exit, Settings, Tools and Media
@@ -1436,13 +1010,16 @@ colours), `pomodoro.go`, `media_hub_render.go` (19 literal sizes),
 `colorNew(`/`sdl.Color{R:` in UI code lists only documented exceptions (art,
 game palettes).
 
-### UX-14 — Destructive confirmations default to safety (P2, S) [OWNER]
+### UX-14 — Destructive confirmations default to safety (P2, S)
 **Why.** UX principle 8 (docs/UX_REVIEW.md) says confirmations open on the safe
-choice; the new Home Exit card focuses Exit on purpose (`home_power.go:55`, see
-its comment at :11-13), so A, A quits. Quitting is a clean shutdown, so the
-owner decides whether Exit is the exception.
-**Done when.** Exit, delete, forget, reset and quit cards open focused on
-Cancel; the choice is remembered nowhere.
+choice. The per-feature confirm cards (grep `func .*[Cc]onfirm`: `setsheet.go`,
+`files_locations.go`, `bluetooth_devices_ui.go`, `media_hub.go`, `patch.go`,
+`wine_setup.go`, …) do not share one rule.
+**Done when.** Delete, forget, reset, uninstall and remove cards open focused on
+Cancel and remember nothing; the Home power card keeps Exit focused (quitting is
+a clean shutdown and the owner asked for the two-press quit), with Sleep,
+Restart and Power off never focused first; `docs/UX_REVIEW.md` names Exit as the
+one exception.
 
 ### UX-15 — A motion system (P3, M)
 **Done when.** Enter, exit, focus and sheet transitions use the curves in
@@ -1450,24 +1027,23 @@ Cancel; the choice is remembered nowhere.
 Start menu, sheets and toasts share one entrance.
 
 ### UX-16 — Trophy set two on a device, and its leftovers (P2, S) [HW]
-**Why.** The 2026-11-10 pass took Trophies from 101 to 401 — 386 after the
-2026-11-11 cut of what a start handed out (`trophy_set2.go`,
-the event API in `trophy_events.go`, about 175 one-line hooks across the
-features) — all from reading, none of it compiled or run. A few counters were
-left short on purpose: RetroAchievements counts at most 12 unlocks per sync
-(`trophyRANewUnlocksMax`), an artist is only known once Media's library was
-opened in the session (`mlibCurrentModel`), WPE Browser page loads are not seen,
-and games marked Completed or JukaLand blocks placed before the update are not
-carried over (`gmeta` milestones, the saved JukaLand stats could seed them).
-**Where.** `trophy_events.go`, `playtime.go`, `trophy_set2.go`, `trophy_room.go`
-and the hook sites (grep `trophyEvent`).
-**Done when.** On a Smart Pro and on Windows: the first start on an old save
+**Why.** About 386 trophies (`trophy_set2.go`, the event API in
+`trophy_events.go`, one-line hooks across the features) have not run on a
+device. Known gaps: games marked Completed and JukaLand blocks placed before the
+update are not carried over; an artist is only known once Media's library was
+opened in the session (`mlibCurrentModel`).
+**Where.** `trophy_events.go`, `playtime.go`, `trophy_set2.go`,
+`trophy_room.go`, `trophy_celebrate.go`, the hook sites (grep `trophyEvent`).
+**Done when.** On a Smart Pro and on Windows the first start on an old save
 records its catch-up quietly (no card, no row, no count on the cup) and a
-restart keeps every trophy and setting the session saved; the
-Category chip lists the groups with their counts; a screenshot, a track, a page
-and a Snake round move their trophies' progress; the platinum's count leaves out
-what the setup cannot award and the bonus trophies; the leftovers above are
-done or written off here.
+restart keeps every trophy and setting; the catch-up seeds Completed games from
+`gmeta` and JukaLand blocks from the saved JukaLand stats; artist trophies count
+from the saved library index without opening Media; the Category chip lists the
+groups with their counts; a screenshot, a track, a page and a Snake round move
+their trophies' progress; the platinum's count leaves out what the setup cannot
+award and the bonus trophies. RetroAchievements' 12 cards per sync
+(`trophyRANewUnlocksMax`) and unseen WPE Browser page loads stay as documented
+limits.
 
 ---
 
@@ -1482,11 +1058,19 @@ launch starts/ends).
 with "restore this moment" (using the existing integrity-checked restore).
 **Verify.** [HW] a RetroArch session's mid-play snapshot restores after exit.
 
-### GAME-3 — Checkpoints and quick switch (P2, XL)
-**Where.** Design in [docs/CHECKPOINTS.md](../docs/CHECKPOINTS.md).
-**Done when.** Split into the design's phases as separate tasks before code; a
-1 GB device cannot hold two suspended emulators, so phase 1 is named per-game
-checkpoints only.
+### GAME-3 — Named checkpoints for RetroArch games (P2, M)
+**Why.** The game switcher (`gameswitcher.go`) already covers quick switching
+through the auto state (the design's Phase 2); there is still no way to keep a
+named moment of a game and go back to it later.
+**Where.** [docs/CHECKPOINTS.md](../docs/CHECKPOINTS.md) (Phases 0 and 1);
+`savestate_resume.go`, `gmeta_states.go`, `savemanager.go` (snapshot format),
+`game_options_ui.go`.
+**Done when.** Phase 0's numbers (state size per core, free RAM during a
+RetroArch session) are in the design doc; the options sheet's **Checkpoints**
+row pins the auto state after a clean exit under a typed name (manifest with a
+SHA-256 per file under `save-manager/checkpoints/<game>/`), and lists, restores
+(verified, before launch), renames and deletes checkpoints; other launchers get
+a one-line explanation. Suspended emulators (Phase 3) stay out.
 
 ### GAME-4 — Per-game controller remaps for RetroArch (P2, M)
 **Where.** `gameoptions.go`, `game_options_ui.go`, `inmap*.go`.
@@ -1494,20 +1078,29 @@ checkpoints only.
 (and `--appendconfig` where needed) from a small editor; standalone emulators
 are explicitly out.
 
-### GAME-5 — Cheats (.cht) per game (P2, M) [NET]
-**Done when.** libretro cheat files install as a package category; the game
-options sheet toggles cheats per game and hands RetroArch the file at launch.
+### GAME-6 — Download RetroArch's shader and overlay assets (P3, S) [NET]
+**Why.** Per-game picture looks (`videofilter.go`) and per-console overlays
+(`ratuning_settings.go`) are offered only when their files are already on the
+card; JukaHub cannot fetch them.
+**Where.** `videofilter.go`, `ratuning.go` (overlay folders), `cheats_db.go`
+(the buildbot download pattern to copy).
+**Done when.** The picture and overlay rows offer a download when nothing is
+found: libretro's buildbot `shaders_glsl.zip` and `overlays.zip` (the host
+`cheats.zip` comes from) download over HTTPS with progress and cancel, unpack
+into the folders RetroArch's config names, and the rows list them afterwards.
 
-### GAME-6 — Shader, bezel and overlay packs (P3, M)
-**Done when.** RetroArch shader/overlay packs install through the package engine
-(new category) and are selectable per system in game options.
-
-### GAME-7 — Box-art: choose image and alias editor (P2, S)
-**Where.** `romsetup.go` (`artworkTitleVariants`), `game_library_ui.go`.
-**Done when.** A "Choose image" action picks a local image or a libretro
-thumbnail candidate list; users can add their own title aliases without a
-rebuild.
-**Deferred 2026-11-11.** Needs an image-picker and alias-editor UX decision, plus a thumbnail candidate source.
+### GAME-7 — Box art: choose a cover and edit the name it is matched by (P2, S)
+**Why.** A wrong or missing cover can only be fixed by renaming files, and title
+aliases are built in (`artworkAliasTitles`, `romsetup.go`), so adding one needs
+a rebuild.
+**Where.** `romsetup.go` (`artworkTitleVariants`, `artworkAliasFor`),
+`artwork_closest.go`, `artwork_match.go`, `game_options_ui.go`.
+**Done when.** The game options sheet has **Choose cover**: the five closest
+thumbnail-server names for the game (the `artwork_closest.go` scores) plus
+images already in the console's `Imgs` folder, previewed one at a time; A saves
+the choice as the game's cover. **Name for covers** opens the on-screen keyboard
+and stores an alias in `data/artwork-aliases.json`, read before the built-in
+table.
 
 ### GAME-8 — Rich metadata provider (P3, M) [NET] [OWNER]
 **Done when.** Descriptions/genres/dates come from a provider with an account
@@ -1521,8 +1114,9 @@ key stored through the secret store.
 can write menu/screenshot/fast-forward hotkeys for those devices only.
 
 ### GAME-10 — Netplay: invites, passwords, plain RetroArch hosts (P3, S)
-**Why.** LAN rooms and the online lobby shipped 2026-11-11 (netplay_rooms.go);
-three gaps remain.
+**Why.** LAN rooms and the online lobby work (`netplay_rooms.go`), but a room
+cannot be shared by link, password rooms are listed and refused, and a PC
+running plain RetroArch is not listed.
 **Where.** `netplay_rooms.go`, `netplay_ui.go`, `companion.go`.
 **Done when.** A hosted game can be shared as a link/QR the phone companion
 forwards to a friend's JukaHub; a password-protected online room asks for the
@@ -1531,60 +1125,36 @@ password (vkTarget, submit-only) and passes it via the host overlay's
 so a PC running plain RetroArch is listed too (read the ad-packet layout from
 RetroArch's `netplay_private.h` first; it changed in 1.10).
 
-### GAME-11 — PC game streaming (Moonlight) tile (P2, M) [NET]
-**Why.** Streaming PC games is one of the best uses of a handheld on home Wi-Fi.
-**Done when.** A Moonlight build for aarch64 (PortMaster's or a pinned
-release) installs from the Apps/Packages flow and launches with the device's
-controls; pairing PIN shown in-app.
+### GAME-11 — Moonlight: first compile, pin moonlight-common-c, device check (P1, S) [HW][NET]
+**Why.** JukaHub's own Moonlight client shipped unbuilt on 2026-11-17
+(moonlight_*.go, player/native/moonlight-stream.c, docs/PC_STREAMING.md). The
+helper was only compiled against stub headers, and build-helpers.sh fetches
+moonlight-common-c's master tip because no full commit id could be checked.
+**Where.** `player/native/build-helpers.sh` (`MOONLIGHT_COMMON_COMMIT`),
+`moonlight-stream.c`, `moonlight_stream.go`, `moonlight_ui.go`.
+**Done when.** The helper job's BUILDINFO.txt has a `moonlight-stream` block
+(its log is `moonlight-*.log` in the helper logs artifact when it fails) and
+`MOONLIGHT_COMMON_COMMIT` holds the 40-hex id it reports; on a Smart Pro and a
+Brick: PC streaming → Check this handheld passes (picture, sound, A press,
+rumble; note `st_p_ms`, `st_upload_ms`, `st_cpu_mhz` and the governor from
+moonlight.log in docs/HARDWARE_VALIDATION.md) and, paired with Vibepollo 2.x,
+the Auto preset streams with `decode_ms` close to the check's, the Brick gets
+a 1024x768 virtual screen without bars, rumble, mouse mode, Disconnect and Quit the game
+on the PC behave as docs/PC_STREAMING.md says, and a Sunshine host streams too.
+Then tag builds can set `MOONLIGHT_REQUIRED=1`.
 
-### GAME-12 — Daily challenge over the library (P3, S)
-**Where.** `game_random.go`, `playtime.go`, `trophy_*.go`.
-**Done when.** A daily pick with a simple goal (play 15 minutes of X) appears on
-Home's Continue card when nothing is in progress; completion earns a trophy.
-
-### GAME-13 — Per-game launch options (P2, M)
-**Why.** `game-launchers.json` sets flags per system, not per game, so one
-troublesome ROM cannot get its own core, flags or environment; the library
-docs list this as the next piece of the same data.
-**Where.** `game_library.go` (`game-launchers.json`), `emulators.go`,
-`gameoptions.go` / `game_options_ui.go`, keyed by content hash like LIB-4.
-**Done when.** The game options sheet edits extra arguments, a core override and
-environment variables for one game; the launch path uses them for RetroArch and
-standalone emulators; the override survives a rename and goes with the game's
-metadata when it is removed; a test pins argument order and that an empty
-override changes nothing.
-
----
-
-### GAME-14 — Core update hygiene on a full CrossMix card (P2, S)
-**Why.** Emulator updates now install by default. CrossMix ships ~100 cores, some
-custom builds, and every update keeps a pool copy (up to 5) plus up to 5 `.bak`
-files; the CRC cache is in memory, so the first pass after every boot re-reads
-every installed core; MAME-family nightlies change the romset version.
-**Where.** emulatorupdates.go (`maxCorePoolBuilds`, refusals), emulatorinstall.go,
-emuupdatecheck.go (`emuCachedCRC32`), cfgdoc.go (inspector reset).
-**Done when.** Auto-pass builds are not also pooled on the handheld (or the pool
-cap is 2); the CRC cache persists by path+size+mtime; `mame*` and `fbneo` are
-never auto-updated (a press still can); a core whose CRC matches a known
-CrossMix-shipped build is asked about once instead of replaced; resetting
-`coreUpdateMode` in the inspector also drops `emuAutoUpdate` and
-`coreUpdateModeChosen`.
-**Verify.** Unit tests for each rule; a device pass on CrossMix (HW-2 step 4).
-
----
-
-### GAME-15 — JukaHub's PPSSPP, second round (P2, S)
-**Why.** The managed PPSSPP (ppsspp_managed.go) shipped without a few pieces.
-**Where.** ppsspp_managed.go, ppsspp_managed_ui.go, emulatorinstall.go.
-**Done when.** Emulators **L1** "Update all" includes JukaHub's PPSSPP; the card has
-"Go back to the previous build"; `state.json` is written before
-`game-launchers.json` so a power cut between them cannot lose the user's original
-PSP pin; save binds left by a SIGKILL are unmounted at JukaHub's next start (not
-only at the next PSP launch), and the mount/process checks resolve symlinks; the
-pak's own extras (Brick aspect ratio, RetroAchievements sync) are considered.
-**Verify.** Unit tests; HW-2 step 5.
-
----
+### GAME-13 — Per-game environment, and options that survive a rename (P2, S)
+**Why.** A game already carries its own arguments, emulator, CPU profile and
+picture (`gameoptions.go`, `data/game-options.json`, applied in
+`game_library.go`), but not environment variables, and the file is keyed by ROM
+path, so a renamed or moved game loses its options.
+**Where.** `gameoptions.go`, `game_options_ui.go`, `game_library.go` (where
+`gameOptionsFor` feeds the launch).
+**Done when.** The options sheet edits environment variables for one game
+(validated names, bounded like `Args`) and the launch passes them to RetroArch
+and standalone emulators; options under a path that no longer exists are
+re-attached to the same content (size and hash) after a rename or move; a test
+pins argument order and that an empty override changes nothing.
 
 ### GAME-16 — What else differs between JukaHub's and CrossMix's RetroArch (P2, S) [HW]
 **Why.** The scoped retroarch.cfg edits and the restored environment fix the two
@@ -1612,42 +1182,79 @@ a launch's targets for all four, and a CrossMix game's RetroArch log shows the
 values.
 
 ### GAME-18 — Device pass for the emulator updates (P1, S) [HW] [WIN]
-**Why.** Since 2026-11-11 the daily pass also updates hakuX, the Windows-app
-runtime, AndroidRT and, on a PC, the emulators JukaHub installed and its
-RetroArch's cores — all from reading: the PC's moment (system-wide idle, no
-full-screen program, mains power), the rollback record, the GitHub hold and the
-Windows process and power calls have not run.
+**Why.** The daily pass that updates hakuX and, on a PC, the emulators and
+RetroArch cores JukaHub installed has not run: the PC's idle moment (system-wide
+idle, no full-screen program, mains power), the rollback record, the GitHub hold
+and the Windows process and power calls are untested.
 **Where.** `emuautoupdate_runtimes.go`, `emuautoupdate_desktop.go`,
-`emuautoupdate_desktop_windows.go`, `emulatorautoupdate.go`; log lines
-`[patch] emulator updates: …`.
+`emuautoupdate_desktop_windows.go`, `emulatorautoupdate.go`; log lines `[patch]
+emulator updates: …`.
 **Done when.** On a Smart Pro: with a newer hakuX release out, about 22 minutes
 after boot on the charger one toast says "Updated hakuX v…"; after R1 the next
-day's pass logs that it was put back by hand and leaves it; the downloaded
-Windows-app runtime and AndroidRT update in the same pass, card and toast; and
-a game started while the card shows "Updating emulators" stops the pass within
-about 2 seconds, the rest following after the game. On Windows: PPSSPP
-installed from the Emulators page, with its manifest's tag edited older, updates
-after about 4 idle minutes (`.backup\PPSSPP` kept, Roll back works, the next
-day's pass leaves it); an emulator started from Explorer is skipped; an
-unplugged laptop, typing in another app or a full-screen game outside JukaHub
-holds the pass, JukaHub itself full screen and idle does not; R1 during an
-update is refused; with only Steam's RetroArch the Core builds page says
-"Updates on demand" and its cores are never touched; Notify me lists new builds
-once and installs nothing; and an unchosen mode with a JukaHub-installed
-emulator shows the one-time notice.
+day's pass logs that it was put back by hand and leaves it; a game started while
+the card shows "Updating emulators" stops the pass within about 2 seconds, the
+rest following after the game. On Windows: PPSSPP installed from the Emulators
+page, with its manifest's tag edited older, updates after about 4 idle minutes
+(`.backup\PPSSPP` kept, Roll back works, the next day's pass leaves it); an
+emulator started from Explorer is skipped; an unplugged laptop, typing in
+another app or a full-screen game outside JukaHub holds the pass, JukaHub itself
+full screen and idle does not; R1 during an update is refused; with only Steam's
+RetroArch the Core builds page says "Updates on demand" and its cores are never
+touched; Notify me lists new builds once and installs nothing; an unchosen mode
+with a JukaHub-installed emulator shows the one-time notice. With Install
+automatically on, the Windows-app runtime and AndroidRT installs show a moving
+byte bar, `emu-autoupdate.json` records `"<tag> (<8 hex>)"`, an old tag-only
+record neither loops nor logs "put back by hand", and on Notify me the APK
+Store's Runtime tab names the new AndroidRT.
 **Verify.** The toasts and the `[patch] emulator updates:` lines, recorded in
 the HW log.
 
 ### GAME-19 — The game assistant, second round (P3, M)
-**Why.** The game assistant (`gameassist*.go`, 2026-11-11) treats every
-question as a new one, shows an answer of up to eight lines, names only games
-started from the library, and on a PC neither sees the game's window nor draws
-over it.
+**Why.** The game assistant (`gameassist*.go`) treats every question as a new
+one, shows an answer of up to eight lines, names only games started from the
+library, and on a PC neither sees the game's window nor draws over it.
 **Where.** `gameassist.go`, `gameassist_linux.go`, `voiceorb.go`.
 **Done when.** A follow-up in the overlay keeps the last exchange; the D-pad
 scrolls a long answer; launches from Apps and ports are named in the prompt; on
-a PC **Juka can see the game screen** captures the game's window, and the
-answer shows in an always-on-top overlay.
+a PC **Juka can see the game screen** captures the game's window, and the answer
+shows in an always-on-top overlay.
+
+### GAME-20 — Fill in CrossMix's shipped core checksums (P2, S) [HW]
+**Why.** A core whose CRC matches a build CrossMix ships is meant to be named
+once and never replaced by the automatic pass, but `coreCrossMixShippedCRCs`
+(`emulatorupdates.go`) is empty: the values must come from a real CrossMix card,
+and a guessed checksum would hold back the wrong core. The "asked once" line is
+also decided before the update plan, so once the table has data a held core may
+be named although the index has no other build.
+**Where.** `emulatorupdates.go` (`coreCrossMixShippedCRCs`),
+`emulatorinstall.go` (the auto runner).
+**Done when.** The table lists the CRC32 of every build the current CrossMix
+release ships in `RetroArch/.retroarch/cores` (lower-case hex, CrossMix version
+in a comment); the held-core line is decided after the plan, only for cores the
+index has a different build of; a CrossMix card's first daily pass names those
+cores once and replaces none.
+
+### GAME-21 — JukaHub's PPSSPP signs in to RetroAchievements with JukaHub's account (P3, S)
+**Why.** minui-psp copies the launcher's RetroAchievements login into PPSSPP
+before each game; JukaHub's PPSSPP only has a login made inside PPSSPP, though
+JukaHub already knows the RetroArch login (`retroachievements.go`).
+**Where.** `ppsspp_managed.go` (`ppssppSeedHome`), `retroachievements.go`.
+**Done when.** Before a managed launch, when JukaHub has a RetroAchievements user
+and token and PPSSPP's `[Achievements]` has no user (or the same one), PPSSPP gets
+that user and token (never a password), hardcore off; a different user signed in
+inside PPSSPP is left alone; a switch on the PPSSPP card opts out; the token never
+reaches a log or a report; a unit test covers the merge rule.
+
+### GAME-22 — Daily challenge on the Tabs Home (P2, S)
+**Why.** Tabs is the default Home, but its Recent row adds the Continue item
+only when it is not a game (`homeTabsRecentItems`, `hometabs_items.go`), so the
+daily challenge (`game_daily.go`) never shows there.
+**Where.** `hometabs_items.go`, `game_daily.go` (`homeContinueDaily`).
+**Done when.** Tabs Home shows today's challenge, with its minutes left, as its
+own first Recent item whenever the Continue card would show it (beside the
+Continue item, never replacing it), and A starts it; the `dailyOnTabsHome` gate
+in `homeContinueDaily` is removed, `daily_1` loses `.bonus()` (`trophy_set2.go`)
+and the "372 non-bonus" comment in `playtime.go` goes back to 373.
 
 ---
 
@@ -1669,182 +1276,116 @@ router forwarding UDP 9302 (PS5) or 987 (PS4) to the console and its Internet
 address set, does it answer discovery from outside its network and wake there?
 Write the answer into `docs/REMOTE_PLAY.md`.
 
-### PSR-2 — Every pad in a real stream (P1, S) [HW]
-**Why.** `chiaki-stream` now opens every controller, merges them and follows
-hotplug; only a harness with faked SDL and chiaki calls has run it.
-**Where.** `native/chiaki-stream.c` (`pad_open`, `pad_close`, `apply_rumble`),
-`psremote.log`.
-**Done when.** On a Smart Pro: the built-in pad works as before (the log lists
-it as added) and Start + Select quits; a Bluetooth DualSense or DualShock 4
-paired before the stream, and one switched on during it, both appear in the
-log, and their buttons, sticks, triggers, touchpad (click and fingers) and
-rumble reach the console; switching a pad off while it holds a button leaves
-nothing held; with two pads, drift on the built-in stick does not override the
-Bluetooth stick; a Switch-layout pad's bottom button is Cross.
+### PSR-2 — Every pad, rumble and motion in a real stream (P1, S) [HW]
+**Why.** `chiaki-stream` opens every controller, merges them, follows hotplug,
+sends the motion pad's gyro, accelerometer and orientation, and sends rumble to
+the pad with the latest input (the handheld's motor only while that is the
+built-in pad); only a harness with faked SDL and chiaki calls has run it, and
+the motor's 30 % floor, its scale and the 10 s safety stop are guesses.
+**Where.** `native/chiaki-stream.c` (`pad_open`, `pad_close`, `push_controller`,
+`rumble_target`, `apply_rumble`), `native/stream_sys.c` (`ss_motion_*`, the
+motor), `psremote_stream_opts.go`, `psremote.log`.
+**Done when.** On a Smart Pro: the built-in pad works (the log lists it as
+added) and Start + Select quits; a Bluetooth DualSense or DualShock 4 paired
+before the stream, and one switched on during it, both appear in the log, and
+their buttons, sticks, triggers and touchpad (click and fingers) reach the
+console; a game that aims or steers with the gyro follows the pad; switching a
+pad off while it holds a button leaves nothing held; with two pads, drift on the
+built-in stick does not override the Bluetooth stick; a Switch-layout pad's
+bottom button is Cross. Rumble: with a Bluetooth pad in hand the pad rumbles and
+the motor stays still, back on the built-in controls the motor takes over; game
+rumble feels like rumble, not a buzz or nothing, on a Smart Pro and a Brick; a
+long rumble stops when the game stops it.
 **Verify.** [HW] a stream for each case, `psremote.log` attached.
 
-### PSR-3 — Motion from a DualShock 4 or DualSense (P2, M)
-**Why.** Some PS4 and PS5 games aim or steer with the pad's gyro; the stream
-sends idle motion.
-**Where.** `native/chiaki-stream.c`; chiaki-ng's `orientation.h` at the pinned
-commit.
-**Done when.** SDL sensor events (gyro, accelerometer in g) fill the merged
-`ChiakiControllerState` through chiaki-ng's orientation tracker for the pad in
-use, written only after `chiaki_orientation_tracker_update`'s signature at the
-pinned commit has been read.
-
-### PSR-4 — Check chiaki-regist before a PS5 pairing (P2, S)
-**Why.** A stream helper the firmware cannot load is stopped before JukaHub
-quits; PS5 pairing still runs `chiaki-regist` unchecked and fails with a loader
-error.
-**Where.** `psremote_preflight.go` (`psNativeHelperProblem`),
-`psremote_regist.go` (`ps5Register`).
-**Done when.** `ps5Register` asks `psNativeHelperProblem` about
-`engine.Regist` with its runtime folder first, and a refusal is the pairing's
-error message.
-**Status 2026-11-10 (evening).** Code done, unbuilt: `ps5Register` asks
-`psNativeHelperProblem` with `psRegistHelperLibraryPath` (the Brick runtime,
-then JukaHub's own library path) and returns "the PS5 pairing helper won't run
-here: …"; the helper installer starts both helpers once before installing them.
-Still to do: a device run that shows the message for a refused helper.
-
-### PSR-5 — The helper check off the render thread (P2, S)
-**Why.** The first Play starts the helper once, up to about two seconds, on
-the main loop before the hand-off; only later presses use the cached answer.
-**Where.** `psremote_preflight.go`, `psremote_ui.go` (`psOpenPanelFor`).
-**Done when.** Opening the panel warms the answer in the background, and Play
-never waits for the probe.
-
-### PSR-6 — Rumble between the pad in use and the handheld's motor, on a device (P3, S) [HW]
-**Why.** Since the 2026-11-10 helper the console's rumble goes to the pad with
-the latest input, the handheld's motor runs only while that is the built-in
-pad (or before anything was pressed), and the Rumble setting stops both. The
-motor's strength floor (30 %), its scale and the 10 s safety stop are guesses.
-**Where.** `native/chiaki-stream.c` (`rumble_target`, `apply_rumble`),
-`native/stream_sys.c` (the motor), `psremote_stream_opts.go` (the motor nodes
-JukaHub passes on).
-**Done when.** On a Smart Pro with a Bluetooth pad in hand the motor stays
-still and the pad rumbles, and back on the built-in controls the motor takes
-over; game rumble feels like rumble, not a buzz or nothing, on a Smart Pro and
-a Brick; a long rumble stops when the game stops it.
-
-### PSR-7 — The CI helpers start on every handheld (P1, S) [HW] [NET]
-**Why.** No release carried `chiaki-stream` and `chiaki-regist` before
-`remote-play-helpers.yml`; they are now built against glibc 2.31 for firmware
-with glibc 2.33, and nothing has started them on a handheld yet.
+### PSR-7 — The bundled helpers start on every handheld (P1, S) [HW] [NET]
+**Why.** `chiaki-stream` and `chiaki-regist` are built against glibc 2.31 for
+firmware with glibc 2.33, and nothing has started them on a handheld.
 **Where.** `.github/workflows/remote-play-helpers.yml`,
 `native/build-helpers.sh`, `psremote_preflight.go`.
-**Done when.** Each TrimUI archive has `bin/` with both helpers, their glibc
-check passes, and on a Smart Pro and a Smart Pro S the panel's check lets them
-run; a refusal names what is missing in the toast and in the log.
+**Done when.** Each TrimUI archive has `bin/` with both helpers, and on a Smart
+Pro and a Smart Pro S the panel's check lets them run; a refusal names what is
+missing in the toast and in the log.
 **Verify.** [HW] install a CI build, open PS Remote Play, start a stream.
 
-### PSR-8 — Remote Play through PSN, without port forwarding (P2, L) [NET] [OWNER]
+### PSR-8 — Remote Play through PSN, without port forwarding (P2, L) [NET]
 **Why.** Away from home, Remote Play needs a router port forward or a VPN
-(`docs/REMOTE_PLAY.md` → Playing away from home). Sony's app and chiaki-ng
-reach a console anywhere through PSN ("remote connection via PSN": a session
-through Sony's servers, then UDP hole punching with UPnP), and testers ask
-whether it works "on a different network".
-**Where.** `psn_signin.go` (the sign-in trades the code for an access token
-and keeps only the Account-ID, by design), `psremote*.go` (consoles from the
-PSN device list, a "through PSN" stream), `native/chiaki-stream.c` (chiaki-ng's
-`lib/include/chiaki/remote/holepunch.h` — session init, UPnP discovery, session
-create and start with the console's device id, the control and data holes —
-handed to the session through `ChiakiConnectInfo`; chiaki-lib at the pinned
-commit already builds the curl and miniupnpc it uses). Read that header at the
-pinned commit before writing a call.
-**Done when.** The owner has decided whether JukaHub may keep a PSN refresh
-token (where, how it is protected, how a sign-out deletes it); with that, a
-paired console streams from another network with no port forward, the token
+(`docs/REMOTE_PLAY.md` → Playing away from home). Sony's app and chiaki-ng reach
+a console anywhere through PSN: a session through Sony's servers, then UDP hole
+punching with UPnP.
+**Where.** `psn_signin.go` (keeps only the Account-ID today), `psremote*.go`
+(consoles from the PSN device list, a "through PSN" stream),
+`native/chiaki-stream.c` (chiaki-ng's `lib/include/chiaki/remote/holepunch.h`:
+session init, UPnP discovery, session create and start with the console's device
+id, the control and data holes, handed to the session through
+`ChiakiConnectInfo`; chiaki-lib at the pinned commit already builds the curl and
+miniupnpc it uses). Read that header at the pinned commit before writing a call.
+**Done when.** The PSN refresh token is kept only after the user turns on **Play
+away from home**: encrypted with the player's key like the other API tokens
+(`EncryptAPIToken`), never logged or put in a report, deleted on sign-out. A
+paired console then streams from another network with no port forward, the token
 renews itself, a refused or expired token says so, and the away-from-home
 section of the docs describes it. Nothing changes for someone who never signs
 in.
 
-### PSR-9 — Choose the home or the internet address off the event thread (P2, S)
-**Why.** With an Internet address saved, Play first asks the home address
-(unicast discovery, up to 700 ms) on the event thread (`psChooseStreamHost`),
-so the panel stops for that long whenever the console is away.
-**Where.** `psremote_stream_opts.go` (`psChooseStreamHost`,
-`psStreamProbeLAN`), `psremote_ui.go` (`psPanelPlay`), `psremote_wake.go` (its
-worker already runs off the event thread and asks the same address); see also
-PSR-5.
-**Done when.** The choice is made in the wake worker or a goroutine of its own
-while the row shows that it is busy, the hand-off starts from there, and a test
-covers the home and the away outcome.
-
-### PSR-10 — The new stream controls and display on a device (P1, S) [HW]
-**Why.** The 2026-11-10 helper (button map, on-screen display, login passcode,
-codec choice, status file) has run only against host fakes
+### PSR-10 — The stream controls and display on a device (P1, S) [HW]
+**Why.** The stream helper's button map, on-screen display, login passcode,
+codec choice and status file have run only against host fakes
 (`native/tests/run-host-tests.sh`).
 **Where.** `native/stream_input.c`, `native/stream_osd.c`,
 `native/chiaki-stream.c`, `psremote_lastrun.go`, `psremote_stream_opts.go`.
 **Done when.** On a Smart Pro and a Brick with a PS5 (and a PS4 if one is at
 hand): Menu reaches the helper as the guide button and a tap opens the PS5's
-control center, while a held Menu opens the stream menu instead and its
-**Hold PS (Home)** reaches the PS5's home screen (the PS4's quick menu); Select clicks
+control center, while a held Menu opens the stream menu instead and its **Hold
+PS (Home)** reaches the PS5's home screen (the PS4's quick menu); Select clicks
 the touchpad and Menu + Select is Create; Menu + D-pad swipes work in a game
 that uses swipes, Menu + right stick moves a finger, and touches land where the
-console expects them (PS5 1919×1079, PS4 1920×942); the display costs no
-visible frames with the stream menu and the stats open; 720p30 in H.264 and in
-H.265 on the A133P confirms the Auto codec choice; the log names the firmware's
-SDL version (2.0.14 or newer enables a PlayStation pad's own touchpad); a
-profile with a login passcode is asked for it and a saved one is entered; a
-failed stream's toast and **Last stream** row appear on the next start; a
-console with an Internet address streams through a port forward or a VPN; the
-battery warnings appear at 15, 10 and 5 %.
+console expects them (PS5 1919×1079, PS4 1920×942); the display costs no visible
+frames with the stream menu and the stats open; 720p30 in H.264 and in H.265 on
+the A133P confirms the Auto codec choice; the log names the firmware's SDL
+version (2.0.14 or newer enables a PlayStation pad's own touchpad); a profile
+with a login passcode is asked for it and a saved one is entered; a failed
+stream's toast and **Last stream** row appear on the next start; a console with
+an Internet address streams through a port forward or a VPN; the battery
+warnings appear at 15, 10 and 5 %.
 **Verify.** [HW] `psremote.log` for each case; anything that is off becomes a
 fix or a task.
 
----
-
-### PSR-13 — The helper install on a handheld (P1, S) [HW] [NET]
-**Why.** A JukaHub without `bin/` now downloads the helpers when PS Remote Play
-opens (`psremote_helpers_install.go`), but no release has carried
-`JukaHub-RemotePlay-linux-arm64.zip` yet, and the install has only run against
-a test server (`psremote_helpers_install_test.go`).
-**Where.** `psremote_helpers_install.go`, `psremote_ui.go` (`psOpenPanelFor`,
-`psPanelPair`, `psPanelPlay`), `psremote_wake.go` (`psPanelPlayOrWake`),
-`.github/workflows/docker-image.yml` (Package Artifacts, Upload the Remote Play
-helper package).
-**Done when.** After BUILD-4, on a Smart Pro with `Apps/JukaHub/bin/` deleted:
-opening PS Remote Play (with **Download Remote Play automatically** off, or
-before the background download's first look, PSR-15) shows *Downloading Remote
-Play…* with a moving percentage, then *Installing Remote Play…*, then the toast
-*PS Remote Play is installed*; `bin/` holds both
-helpers and no `.remote-play-install/`; A on an unpaired PS5 during the
-download says the PIN comes later, and the PIN keyboard opens by itself when
-it ends (and the pairing works with that PIN); Play pressed during the
-download streams when it ends, and B before then stops it; with Wi-Fi off the
-list offers *Install Remote Play* and Retry works once it is back; a download
-cut off mid-way resumes.
-**Verify.** [HW] the steps above; the Logs screen shows `Remote Play helpers
-installed from JukaHub-…`.
-
-### PSR-15 — The background download and the phone's PlayStation card on a handheld (P1, S) [HW] [NET]
-**Why.** The helpers now download by themselves after JukaHub starts, and the
-Phone Companion page has a card that sends the PSN Account-ID and follows that
-download (`psremote_helpers_bg.go`, `companion_psremote.go`), but only a test
-server and jsdom have run them.
-**Where.** `psremote_helpers_bg.go` (`psBgLoop`, `psBgScheduler.tick`,
-`psHelpersActivityItem`), `psremote_helpers_install.go` (`psHelpersStop`),
-`companion_psremote.go`, `companion.go` (the card), `activity.go`,
-`setmodel.go` (the switch).
-**Done when.** After BUILD-4, on a Smart Pro with `Apps/JukaHub/bin/` deleted:
-about a minute after JukaHub starts on Wi-Fi the **Remote Play** chip appears
-with a moving rail and the Logs screen shows `downloading the Remote Play
-helpers in the background`, then `Remote Play helpers installed from …` and the
-toast; started offline, it begins within 30 s of joining Wi-Fi; it does not
-start while a game runs; the chip's ✕ stops it (while the helpers are copied
-into place the chip has no ✕), and the background download does not start it
-again until JukaHub restarts, an Account-ID is saved or the switch is turned
-back on (opening PS Remote Play two minutes later, Retry, Play or the phone's
-Download now still do); with the Settings switch off nothing downloads until
-PS Remote Play opens. On a phone on the same Wi-Fi the
-card says *No PSN Account-ID on the handheld yet*, a pasted Account-ID is saved
-(the handheld toasts *PSN Account-ID saved*) and a *redirect* address is traded
-for one, Sign in to get it opens the sign-in page, and the card shows the
-download's percentage while it runs and *Remote Play is installed on the
-handheld.* after.
+### PSR-13 — Downloading the helpers on a handheld (P1, S) [HW] [NET]
+**Why.** A JukaHub without `bin/` downloads the helpers when PS Remote Play
+opens and in the background after start, and the Phone Companion's PlayStation
+card sends the PSN Account-ID and follows that download; only a test server and
+jsdom have run them, and no release has carried
+`JukaHub-RemotePlay-linux-arm64.zip` yet.
+**Where.** `psremote_helpers_install.go` (`psHelpersStop`),
+`psremote_helpers_bg.go` (`psBgLoop`, `psBgScheduler.tick`,
+`psHelpersActivityItem`), `psremote_ui.go` (`psOpenPanelFor`, `psPanelPair`,
+`psPanelPlay`), `psremote_wake.go` (`psPanelPlayOrWake`),
+`companion_psremote.go`, `companion.go` (the card), `setmodel.go` (the switch);
+`.github/workflows/docker-image.yml` (the helper package upload).
+**Done when.** On a Smart Pro with `Apps/JukaHub/bin/` deleted:
+- *On open* (with **Download Remote Play automatically** off): *Downloading
+  Remote Play…* with a moving percentage, then *Installing Remote Play…*, then
+  the toast *PS Remote Play is installed*; `bin/` holds both helpers and no
+  `.remote-play-install/`; A on an unpaired PS5 during the download says the PIN
+  comes later, and the PIN keyboard opens by itself when it ends (pairing works
+  with that PIN); Play pressed during the download streams when it ends, and B
+  before then stops it; with Wi-Fi off the list offers *Install Remote Play* and
+  Retry works once it is back; a download cut off mid-way resumes; the Logs
+  screen shows `Remote Play helpers installed from JukaHub-…`.
+- *In the background:* about a minute after start on Wi-Fi the **Remote Play**
+  chip appears with a moving rail and the log shows `downloading the Remote Play
+  helpers in the background`; started offline, it begins within 30 s of joining
+  Wi-Fi; it does not start while a game runs; the chip's ✕ stops it (no ✕ while
+  the helpers are copied into place) and the background download does not start
+  again until JukaHub restarts, an Account-ID is saved or the switch is turned
+  back on (opening PS Remote Play, Retry, Play or the phone's Download now still
+  do); with the switch off nothing downloads until PS Remote Play opens.
+- *Phone card* (same Wi-Fi): it says *No PSN Account-ID on the handheld yet*; a
+  pasted Account-ID is saved (the handheld toasts *PSN Account-ID saved*) and a
+  *redirect* address is traded for one; Sign in to get it opens the sign-in
+  page; the card shows the download's percentage while it runs and *Remote Play
+  is installed on the handheld.* after.
 **Verify.** [HW] [NET] the steps above.
 
 ---
@@ -1853,7 +1394,7 @@ handheld.* after.
 
 hakuX runs original-Xbox games on the Smart Pro; on Windows, xemu runs them and
 Xenia Canary runs Xbox 360 games (both installed and updated from the Emulators
-page since 2026-11-11).
+page).
 
 ### XBX-1 — On-device hakuX validation (P1, M) [HW]
 **Where.** `hakux.go`, `hakuxpage.go`.
@@ -1865,83 +1406,74 @@ returns at once and its toast follows; a file the update dropped waits in
 (`Emus/XBOX/.jukahub-hakux.json`) lists every file; with the clock set to 2001,
 X answers "A secure connection could not be made — check the date and time".
 
-### XBX-2 — Settle the port's firmware needs (P2, S) [NET]
-**Done when.** From the port's README: if it needs MCPX/flash/HDD files, their
-paths are added to `hakuxFirmwareRows`; if not, the firmware row is removed.
-
 ### XBX-3 — Reproducible hakuX build (P3, M) [NET]
 **Done when.** If the port documents its build (TrimUI SDK or
 `ghcr.io/loveretro/tg5040-toolchain`), `.github/workflows/hakux.yml`
 (workflow_dispatch, pinned tag) builds the package and attaches its SHA-256. Do
 not guess build steps.
 
-### XBX-4 — Brick Pro model code (P1, S) [HW]
-**Why.** TrimUI's store lists the Brick Pro as TG4070; `device.go` maps it to
-TG4040. Detection (and the hakuX offer) may miss real units.
-**Done when.** The code read from a real Brick Pro is in `device.go`.
-
-### XBX-5 — Per-game hakuX settings in the options sheet (P3, S)
-**Done when.** Once the package's per-title settings layout is known, the game
-options sheet opens it for Xbox games.
-
 ### XBX-7 — Xenia Canary on a Windows PC (P2, S) [WIN] [NET]
-**Why.** Since 2026-11-11 the Emulators page installs and updates Xenia Canary
-and the Games Library starts Xbox 360 games with it — written from its release
-pages and wiki, never run on a PC.
+**Why.** The Emulators page installs and updates Xenia Canary and the Games
+Library starts Xbox 360 games with it, written from its release pages and wiki
+and never run on a PC.
 **Where.** `emuwininstall.go` (the Xenia Canary spec, `emuWinHasVCRuntime`),
 `emuxbox.go` (`emuStandaloneGameArgs`), `emusystems.go`, `game_library.go`.
 **Done when.** On a Windows PC the newest Canary release installs
 (`xenia_canary_windows.7z`; `xenia_canary.exe` found at the top or one folder
 down), the manifest's tag is the release tag, a later build shows as an update
 and R1 restores the one before, an `.iso` in `Roms\XBOX360` starts full screen
-from the Games Library (`--fullscreen=true`), and the Visual C++ hint shows
-only on a PC without the redistributable (also on Windows on ARM).
+from the Games Library (`--fullscreen=true`), as do an extracted game (one
+entry under its folder's name, with its own cover) and a `.zar`, and the Visual
+C++ hint shows only
+on a PC without the redistributable (also on Windows on ARM).
 
 ### XBX-8 — xemu on Windows, end to end (P2, S) [WIN] [NET]
 **Why.** xemu's asset rules, the automatic `xemu.toml` fill and the
-missing-firmware refusal (2026-11-11) have not met a real xemu release.
+missing-firmware refusal have not met a real xemu release.
 **Where.** `emuwininstall.go` (the xemu rules), `emuxbox.go` (`emuXemuScan`,
 `emuXboxApply`, `emuStandaloneLaunchCheck`), `game_library.go`.
 **Done when.** v0.8.139 or newer installs the non-debug build (the ARM64 one
 from a windows/arm64 JukaHub), the HDD image lands in `BIOS\xbox`, BIOS files
 dropped into that folder turn green on the open sheet within seconds, the
-library refuses an ISO with the "xemu needs …" sentence until they are there
-and then starts it full screen with `-dvd_path`, and a portable xemu whose
-`xemu.toml` names its files by relative path launches with that file
-unchanged.
+library refuses an ISO with the "xemu needs …" sentence until they are there and
+then starts it full screen with `-dvd_path`, and a portable xemu whose
+`xemu.toml` names its files by relative path launches with that file unchanged.
 
-### XBX-9 — Xbox 360 library extras (P3, S)
-**Why.** The library scans `Roms/XBOX360` with the global ROM extensions, so a
-`.zip`, `.7z`, `.bin` or `.chd` there becomes an entry Xenia is started with and
-cannot open, while extracted games (`default.xex`) and `.zar` never appear; and
-the ROM manager files a trimmed Xbox 360 ISO under XBOX, since it carries the
-same `MICROSOFT*XBOX*MEDIA` magic as an original-Xbox disc.
-**Where.** `romsetup.go` (`romFileExtensions`), `game_library.go`
-(`gameDisplayTitle`), `romm_detect.go`.
-**Done when.** `.xex` is scanned with a `default.xex` titled after its folder,
-the Xbox 360 row lists only Xenia's formats, the ROM manager tells a 360 ISO
-from an original-Xbox one (`default.xex` or `default.xbe` in its root), and
-Xenia's `.zar` support is confirmed or left out.
+### CLOUD-1 — Validate private glibc in a live stream (P1, S) [HW] [NET]
+**Implemented.** `glibc_runtime.go` downloads the pinned Ubuntu arm64 glibc
+2.39 package, checks its size and SHA-256, extracts bounded library files to
+JukaHub's data folder, and probes its loader. `glibc_port.go` makes a temporary
+copy of GreenOvercast's launcher so PortMaster and firmware helpers stay on
+the stock glibc while only the game binary uses the private loader. The
+private loader resolved JukaHub and GreenOvercast on a stock TrimUI and ran
+the firmware's `curl`; GreenOvercast passed glibc loading in a display-free
+startup test. Archive extraction was tested against that exact package.
+**Still to verify.** Build and deploy this JukaHub version on the TrimUI, then
+sign in and play a live stream. Check video, audio, input, and clean exit.
+The private loader is offered only for GreenOvercast; other ports still use
+their normal compatibility checks. See `docs/PRIVATE_GLIBC.md`.
 
 ---
 
 ## Android games (AND)
 
-### AND-1 — First device run of AndroidRT (P1, M) [HW]
-**Where.** `player/androidrt/src/eglpresent.c` (the stock-TrimUI default),
-`docs/ANDROID.md` (device trial steps and log lines).
-**Done when.** On Smart Pro and Brick, with the runtime the TrimUI archive
-carries (no build step): the aarch64 fake games run, then one real
-NativeActivity NDK game; the log shows `stock firmware (<model>): auto chose the
-SDL-hosted backend`, `SDL2 … video driver mali` and `backend sdl (…)`, and a
-game frame appears on the panel. `sdl` has been the stock-TrimUI default on the
-PowerVR models since 2026-11-11, chosen from other ports' reports (NextOS ports
-issue #1, nx-redux PR #152); if it stays black, the same run with
-`ANDROIDPAK_PRESENT=native` (and `ANDROIDPAK_EGL_WINDOW=null` if EGL refuses the
-window struct) is logged and the default revisited — set `ANDROIDPAK_GLES2_LIB`
-if `SDL_GL_LoadLibrary` fails. With sdl, the hub can still stop the game
-(SIGTERM), the controller still reaches it, and a game that pauses and resumes
-keeps presenting.
+### AND-1 — AndroidRT's present path on the Brick and the rest of the first run (P1, S) [HW]
+**Why.** Penguin Dash has been played on a Smart Pro with AndroidRT
+(`docs/ANDROID.md`), but the Brick, the backend log lines, a stop from the hub
+and a pause/resume have not been checked; `sdl` is the stock-TrimUI default on
+the PowerVR models, chosen from other ports' reports (NextOS ports issue #1,
+nx-redux PR #152).
+**Where.** `player/androidrt/src/eglpresent.c`, `docs/ANDROID.md` (device trial
+steps and log lines).
+**Done when.** On a Smart Pro and a Brick, with the runtime the TrimUI archive
+carries: the aarch64 fake games run, then Penguin Dash; the log shows `stock
+firmware (<model>): auto chose the SDL-hosted backend`, `SDL2 … video driver
+mali` and `backend sdl (…)`, and a frame appears on the panel. If the Brick
+stays black, the same run with `ANDROIDPAK_PRESENT=native` (and
+`ANDROIDPAK_EGL_WINDOW=null` if EGL refuses the window struct) is logged and the
+default revisited; set `ANDROIDPAK_GLES2_LIB` if `SDL_GL_LoadLibrary` fails.
+With sdl, the hub can still stop the game (SIGTERM), and a game that pauses and
+resumes keeps presenting.
 
 ### AND-3 — Minecraft Bedrock first light (P2, L) [HW] [OWNER]
 **Why.** The class pack is built from public knowledge only; it needs an owned
@@ -1960,18 +1492,17 @@ license answers stay honest.
 `openslessim.c` latency is acceptable; an AAudio shim only if FMOD insists.
 
 ### AND-6 — Memory of big APKs (P2, S) [HW]
-**Why.** Since 2026-11-11 a game whose assets unpack to more than 64 MiB keeps
-them in the APK on the card (`androidPakStageAssetsMax`): only its libraries,
-manifest and resources are staged into tmpfs and the runtime reads assets from
-the APK, so the pre-flight counts far less. What such a run really costs in RSS
-and page cache is unknown.
+**Why.** A game whose assets unpack to more than 64 MiB keeps them in the APK on
+the card (`androidPakStageAssetsMax`): only its libraries, manifest and
+resources are staged into tmpfs and the runtime reads assets from the APK, so
+the pre-flight counts far less. What such a run really costs in RSS and page
+cache is unknown.
 **Where.** `androidpak.go` (`androidPakRuntimeOverhead`, preflight floor,
 `androidPakStageAssetsMax`).
-**Done when.** On a Smart Pro a game with more than 64 MiB of assets logs
-`… MiB of assets stay in the APK on the card` and
-`[androidrt] assets: APK indexed …`, its asset reads work, its RSS and
-page-cache pressure are measured, and the preflight refuses runs that cannot
-fit in 1 GB, with a clear message.
+**Done when.** On a Smart Pro a game with more than 64 MiB of assets logs `… MiB
+of assets stay in the APK on the card` and `[androidrt] assets: APK indexed …`,
+its asset reads work, its RSS and page-cache pressure are measured, and the
+preflight refuses runs that cannot fit in 1 GB, with a clear message.
 
 ### AND-7 — Class packs by demand (P3, M)
 **Done when.** SDL2's Java glue (`org/libsdl/app/SDLActivity`) and Unity's
@@ -1982,78 +1513,37 @@ fit in 1 GB, with a clear message.
 **Done when.** A package recipe (PortMaster-style) runs the PC version with FNA +
 Mono on aarch64 from files the user copies; docs explain where they go.
 
-### AND-11 — Bind the game's GLES library next to the chosen libEGL (P3, S)
-**Why.** The present layer binds the game's `libEGL.so` to its exact library
-(`apak_ldSetHostLib`), but `libGLESv2.so`/`libGLESv1_CM.so` are still found
-through the search path; with a GPU package outside it (ge8300-drivers under
-`/mnt/SDCARD/Apps`) the game's GL imports can miss or hit another driver than its
-EGL.
-**Where.** `androidrt/src/eglpresent.c` (`apak_presentInit`), `bionicld.c`
-(`kVirtual`).
-**Done when.** The GLES libraries beside the chosen libEGL (same directory, same
-naming) are bound with `apak_ldSetHostLib`; `ANDROIDPAK_GLES2_LIB` still wins; a
-smoke case proves the binding.
-
-### AND-12 — Surface probe measures the SDL path (P3, S)
-**Why.** `ANDROIDPAK_SURFACE=1` reports the GBM and native layers but not whether
-the firmware SDL2 loads, which video driver it picks and whether its EGL comes up
-— exactly what the first device run needs to choose between `native` and `sdl`.
-**Where.** `androidrt/src/surface.c`, `eglpresent.c` (share `sdlLoadLocked`),
-`tests/smoke`.
-**Done when.** The probe prints an `SDL:` verdict line (library, version, driver,
-EGL display up or why not) without creating a window, and the smoke suite asserts
-it against `fake_sdl.c`.
-
 ### AND-13 — Auto's window fallback adopts a context-first game's context (P3, M)
-**Why.** When `auto` hands over to SDL at the window surface, a game that created
-its GLES context first (GLSurfaceView order) keeps that raw EGL context, so its
-frames bypass `SDL_GL_SwapWindow` — exactly the path the stock-firmware report
-says stays black. Today the log names `ANDROIDPAK_PRESENT=sdl` and the docs say
-so. Since 2026-11-11 the PowerVR TrimUI models start on `sdl`, which owns the
-context from the first `eglCreateContext`, so this is left only where `auto`
-still starts native: the Smart Pro S (tg5050, Mali) and firmware other than
-stock. An `auto` run there that logs "the game made its GLES context before its
-window" decides it.
+**Why.** When `auto` hands over to SDL at the window surface, a game that
+created its GLES context first (GLSurfaceView order) keeps that raw EGL context,
+so its frames bypass `SDL_GL_SwapWindow` and stay black; today the log names
+`ANDROIDPAK_PRESENT=sdl`. The PowerVR TrimUI models start on `sdl` and are not
+affected; this matters where `auto` still starts native: the Smart Pro S
+(tg5050, Mali) and firmware other than stock. An `auto` run there that logs "the
+game made its GLES context before its window" decides it.
 **Where.** `androidrt/src/eglpresent.c` (`pr_eglMakeCurrent`,
 `pr_eglCreateContext`, `pr_eglDestroyContext`), `tests/smoke`
 (`EGLTEST_CONTEXT_FIRST`).
-**Done when.** A raw context that has never been current (so holds no GL objects)
-is mapped to SDL's context at its first `eglMakeCurrent` with SDL's surface
-(destroy and share handled), one that was current with a pbuffer stays raw with
-today's log, and the window-fallback context-first smoke case asserts 5
+**Done when.** A raw context that has never been current (so holds no GL
+objects) is mapped to SDL's context at its first `eglMakeCurrent` with SDL's
+surface (destroy and share handled), one that was current with a pbuffer stays
+raw with today's log, and the window-fallback context-first smoke case asserts 5
 `SDL_GL_SwapWindow` frames.
 
-### AND-14 — The prebuilt AndroidRT, first green run (P1, S) [NET]
-**Why.** Since 2026-11-11 the Remote Play helper job builds, checks and ships
-AndroidRT (`build-runtimes.sh androidrt`): every TrimUI archive carries it at
-`Apps/JukaHub/androidrt`, each release attaches
-`JukaHub-AndroidRT-linux-arm64.zip`, and the APK Store's Runtime tab installs
-and updates it from there. None of it has met focal's gcc 9.4 on aarch64.
-**Where.** `player/native/build-runtimes.sh`, `player/androidrt/build-tsp.sh`,
-`.github/workflows/remote-play-helpers.yml`, `player/androidrt_install.go`.
-**Done when.** The job's *Build AndroidRT* step is green; its BUILDINFO shows
-only C-library NEEDED, GLIBC ≤ 2.31 and `loader --version` answering
-`AndroidRT loader <version> (aarch64, bionic loader)`, and `build-runtimes.sh`
-refuses any other answer, as the device's probe does (today any clean exit
-passes); `JukaHub-Trimui.zip` holds `androidrt/` and the release carries the
-zip; on a fresh Smart Pro card the Runtime row says ready (the device half is
-AND-17). A rebuild from unchanged runtime sources (any edit to
-`build-runtimes.sh` or `build-root.sh` causes one) gives a byte-identical zip —
-the version stamped from the last commit that touched `player/androidrt`,
-BUILDINFO's `built:` line replaced by that commit's date, the tree `touch -d`'d
-to it before `zip -X` — so a downloaded copy is not offered a redundant update.
-**Verify.** The run's step summary ("AndroidRT", "Host smoke suite on arm64")
-and `unzip -l JukaHub-Trimui.zip | grep androidrt/`.
-
-### AND-15 — Verified downloads in the APK Store catalogue (P2, S) [NET]
-**Why.** A catalogue entry may offer a free-software APK with its SHA-256, but
-the built-in list has none: no URL or hash could be checked when it was
-written.
-**Where.** `player/apkstore_catalog.json` and the identical `/apk-catalog.json`
-(served by the builder site), `apkstore_catalog.go`.
-**Done when.** At least one free NDK game whose own GitHub release publishes an
-arm64 APK is listed with its URL, size and SHA-256 checked by hand, and it
-downloads, verifies and shows under Your APKs as a native game to try.
+### AND-14 — The AndroidRT package: strict loader check and reproducible zip (P2, S) [NET]
+**Why.** The CI's AndroidRT step accepts any clean exit of `loader --version`, and the zip changes on every build
+(BUILDINFO's `built:` time, a version taken from the repository's head), so a
+downloaded copy is offered a redundant update.
+**Where.** `player/native/build-runtimes.sh` (`build_androidrt`, `make_zip`),
+`player/androidrt/build-tsp.sh`, `player/androidrt_install.go`.
+**Done when.** `build-runtimes.sh` refuses a `loader --version` answer other
+than `AndroidRT loader <version> (aarch64, bionic loader)`, as the device's
+probe does; the version is stamped from the last commit that touched
+`player/androidrt` or the runtime build scripts, BUILDINFO's `built:` line is
+that commit's date, and the tree is `touch -d`'d to it before `zip -X`, so a
+rebuild from unchanged sources gives a byte-identical zip.
+**Verify.** Two runs on unchanged sources print the same SHA-256 for
+`JukaHub-AndroidRT-linux-arm64.zip`.
 
 ### AND-17 — First APK Store run on a Smart Pro (P1, M) [HW]
 **Done when.** On a fresh card with the new TrimUI package the scan lists the
@@ -2081,36 +1571,22 @@ cannot be added as one game yet.
 version, side by side or inside a bundle), judges them as one app, and
 AndroidPak stages the native libraries from the matching split.
 
-### AND-19 — Android launches from the Game Profiles panel (P3, S)
-**Why.** The APK Store and the Games Library start an Android game on a
-goroutine and offer a one-press AndroidRT install (2026-11-11), but the Game
-Profiles panel still launches AndroidPak profiles on the render thread, where
-staging can take seconds, offers no install for a missing runtime, and cannot
-show a game that is starting.
-**Where.** `gameprofiles_ui.go`, `gameprofiles.go` (`launchGameProfileClaimed`,
-`gameProfileStartingNow`), `androidrt_install.go` (`androidRTStartInstall`),
-`timelapse.go` (`startTimelapseWith`).
-**Done when.** The panel's launch runs on a goroutine, with the starting claim
-taken and the timelapse settings read on the render thread as the library does;
-a missing AndroidRT offers "Install and play"; and the row's status reads
-"Starting" while `gameProfileStartingNow(id)` holds.
-
 ### AND-20 — Minecraft screen, first device run (P1, M) [HW] [NET]
-**Why.** Start → Games → Minecraft (2026-11-13, `minecraft.go`, `minecraft_ui.go`,
-`minecraft_peer.go`, `docs/MINECRAFT.md`) was written without a device or a Go
-toolchain. Three guesses need a real card: PortMaster's `ports.json` layout (the
-reader accepts the dict and list forms), the Java port's folder (`.minecraft`
-inside the port folder or `versions/` directly in it, found through the
-script's `GAMEDIR`), and that a zip in `Apps/PortMaster/PortMaster/autoinstall`
-is installed with its runtimes when JukaHub opens PortMaster on stock TrimUI.
+**Why.** Start → Games → Minecraft (`minecraft.go`, `minecraft_ui.go`,
+`minecraft_peer.go`, `docs/MINECRAFT.md`) has not run on a device. Three guesses
+need a real card: PortMaster's `ports.json` layout (the reader accepts the dict
+and list forms), the Java port's folder (`.minecraft` inside the port folder or
+`versions/` directly in it, found through the script's `GAMEDIR`), and that a
+zip in `Apps/PortMaster/PortMaster/autoinstall` is installed with its runtimes
+when JukaHub opens PortMaster on stock TrimUI.
 **Done when.** On a Smart Pro with PortMaster: Install on ClassiCube, Luanti and
 Java Edition each logs the catalogue entry, downloads and passes the MD5, and
 PortMaster installs it; back in JukaHub the row says Play within a second and
 Play starts the port. A paired Windows PC with 1.12.2 in `.minecraft` shows
-"Copy 1.12.2 from <PC>", the copy lands where the port's launcher looks
-(adjust `mcJavaGameDir` if not) and the port starts the version. The Bedrock row
-finds an owned arm64 APK and opens the APK Store on it (the game itself is
-AND-3). Results and timings go into `docs/MINECRAFT.md`.
+"Copy 1.12.2 from <PC>", the copy lands where the port's launcher looks (adjust
+`mcJavaGameDir` if not) and the port starts the version. The Bedrock row finds
+an owned arm64 APK and opens the APK Store on it (the game itself is AND-3).
+Results and timings go into `docs/MINECRAFT.md`.
 
 ### AND-21 — Minecraft copy: pick only what the port lacks (P3, S)
 **Why.** The PC copy sends every library a version lists for Linux; the port
@@ -2120,14 +1596,22 @@ card.
 loads, the plan skips the ones the port provides (by the port's own file list),
 and the copy row shows the size before A.
 
+### AND-23 — The surface probe loads EGL like the present layer on the stock firmware (P3, S)
+**Why.** On the stock TrimUI firmware `apak_presentInit` loads the firmware's
+`/usr/lib/libEGL.so` first (another package's libEGL on `LD_LIBRARY_PATH` may
+not know the panel), but the probe uses `apak_gpuLoad`'s search order, so its
+EGL, and the `SDL_VIDEO_EGL_DRIVER` its SDL check points SDL at, can differ from
+what a game run uses.
+**Where.** `androidrt/src/surface.c` (`probeStack`), `eglpresent.c`
+(`firmwareEgl` list — share it).
+**Done when.** On the stock firmware the probe calls `apak_gpuLoadEglFrom` with
+the same firmware paths before `apak_gpuLoad`, and the smoke suite asserts the
+probe's `libraries:` line names the firmware libEGL with
+`ANDROIDPAK_DEVICE=trimui-*`.
+
 ---
 
 ## Media (MED)
-
-### MED-1 — Cancellable downloads end to end (P2, M)
-**Where.** `downloads.go`, `downloadsui.go`, `dl_library.go`.
-**Done when.** Cancelling stops the transfer immediately, removes partials, and
-survives a restart (no zombie entries).
 
 ### MED-2 — Jellyfin/Plex client (P2, L) [NET]
 **Done when.** A server can be added (address + login through the secret store),
@@ -2145,30 +1629,41 @@ music player, queued offline.
 
 ### MED-5 — Screenshot gallery by game (P3, S)
 **Where.** `screenshot.go`, `imageviewer.go`, `recordings.go`.
-**Done when.** Screenshots group by game/system in the image viewer.
-**Deferred 2026-11-11.** Needs a screenshot naming/grouping rule and gallery design decision.
+**Done when.** Screenshots open as a gallery with one section per game, newest
+first: JukaHub's own captures and RetroArch's are grouped by the game named in
+the file name, anything else under "Other"; A opens a picture full screen and
+L1/R1 step between games.
 
 ### MED-6 — Audio and subtitle tracks (P2, M)
 **Why.** Only the first embedded subtitle or a sidecar file plays; there is no
 audio-track picker.
 **Done when.** The video settings sheet lists audio and subtitle tracks (from
 ffprobe), remembers the choice per language, and styles subtitles (size,
-background, A11Y-4).
+background).
 
-### MED-7 — Gapless music (P3, M)
-**Done when.** Album playback is gapless (pre-decoding the next track into the
-same stream) with optional crossfade and ReplayGain.
+### MED-7 — Crossfade and ReplayGain (P3, S)
+**Why.** Album playback is already gapless (`musicStartDecodeGapless`,
+`musicplayer.go`); there is no crossfade and no loudness levelling.
+**Where.** `musicplayer.go`, `musicsettings.go`.
+**Done when.** An optional crossfade (0–10 s) overlaps a track's end with the
+next one, and ReplayGain track/album tags (read by ffprobe) set the level when
+switched on; both stay off on the bit-perfect path.
 
 ### MED-8 — Podcasts offline (P2, M)
 **Done when.** Episodes download for offline listening (Downloads queue), OPML
 import/export works, chapters are shown, played episodes clean up.
 
-### MED-9 — Audiobooks (P3, M)
-**Done when.** `.m4b` chapters, a book shelf with covers, per-book speed and
-sleep timer (`audioresume.go` keeps position today).
+### MED-9 — Chapters inside one audiobook file (P3, S)
+**Why.** The Audiobooks shelf (`music_shelf.go`) treats each file as a chapter,
+and speed, sleep timer and position already work; a single `.m4b` with embedded
+chapters is one long track.
+**Where.** `music_shelf.go`, `musicplayer.go`, `audioresume.go`, `mlib.go` (the
+ffprobe pass).
+**Done when.** Chapters embedded in an `.m4b`/`.m4a` (ffprobe `-show_chapters`)
+show as the book's chapter list, next/previous move between them, and the
+remembered position names the chapter.
 
 ### MED-10 — Internet radio directory (P3, M) [NET]
-**Why.** Promoted from the parking lot.
 **Done when.** Stations from radio-browser.info by country, tag and search,
 favourites, buffering state and now-playing metadata.
 
@@ -2184,31 +1679,15 @@ now/next in the channel list.
 **Done when.** DLNA/UPnP servers are discovered (SSDP) and browsable as a Media
 source; a Kodi remote (parking lot) uses JSON-RPC.
 
-### MED-15 — A music library you can browse (P2, M)
-**Why.** The player walks one folder at a time (`musicLoadPlaylist`), so a card
-with 40 GB of music has no artist, album or search view; `docs/MUSIC_PLAYER.md`
-lists the index as the first roadmap phase.
-**Where.** `musicplayer.go` (playlist helpers), `musiclibrary.go` (queue and
-favourites today), `musicuifeatures.go`; a cached index beside the other data
-files.
-**Done when.** A scan of the music root caches path, size, mtime, title, artist,
-album and duration; Audio browses by folder, artist, album and all tracks, with
-search and natural sort; a rescan picks up added or removed files without
-reading every tag again; the cache is bounded like `cachebudget.go` and never
-lives in `jukaconfig.json`.
-**Verify.** 2,000 tracks on a card: first open and a one-file rescan each under
-a second.
-
-### MED-17 — Listening history and continue listening (P3, S)
-**Why.** Playtime exists for games, but music keeps no history: no recently
-played, no top artists, no "continue this album", which the player's roadmap
-lists as phase 5.
-**Where.** `musicplayer.go`, `musiclibrary.go` (the favourites store as the
-pattern), `playtime.go` for the bounded-log shape.
-**Done when.** Plays append to a bounded local log (path, title, artist, start
-and seconds played, 400 days like LIB-13); Audio shows Recently played, Top
-artists and Continue listening; LIB-13's export includes the log and a
-Settings row clears it.
+### MED-15 — Search, tracks and folders in the music library (P3, S)
+**Why.** Music browses the media index (`mlib.go`, `music_shelf.go`) by album,
+artist and audiobook with incremental rescans, but has no search, no list of all
+tracks and no folder view.
+**Where.** `music_shelf.go`, `mlib.go`, `musicplayer.go`.
+**Done when.** The music library has Tracks and Folders tabs with natural sort,
+and a search (on-screen keyboard) over title, artist and album.
+**Verify.** With 2,000 tracks on a Smart Pro, search answers without a visible
+stall.
 
 ### MED-18 — Trim, rename and delete a recording (P2, M)
 **Why.** The Recordings screen only lists and plays captures;
@@ -2224,59 +1703,52 @@ size.
 **Verify.** Trim a 2-minute clip on Windows and on a Smart Pro; the result
 plays and the original is intact until the trim is confirmed.
 
-### MED-19 — A JavaScript runtime for yt-dlp (P1, M) [HW]
+### MED-19 — A JavaScript runtime for yt-dlp on Windows (P1, M) [WIN] [NET]
 **Why.** Since late 2025 yt-dlp needs an external JavaScript runtime (Deno by
 default) for full YouTube support. Without one it is down to the android
 client's 360p single-file format 18, which YouTube may stop serving at any time
 — late-October 2026 reports already disagree on whether it plays without a
-token.
+token. MED-33 covers the smaller QuickJS runtime on the handheld.
 **Where.** `ytdlp_update.go` (the download, SHA-256 check and swap to copy),
 `patch_engine.go` (`helperToolEnv` already puts the tools folder first on
 PATH), `streaming.go` (`streamAttempts`).
-**Done when.** JukaHub installs a pinned, checksum-verified Deno (≥ 2.3) next
-to yt-dlp on Windows and — if the TrimUI's glibc and 1 GB of RAM allow it
-(about 100 MB unpacked) — on the handheld; yt-dlp is pointed at it
-(`--js-runtimes`), the stream attempts prefer yt-dlp's default clients while a
-runtime is present, and the Patch screen shows its version. Anything above
-360p also needs MED-20.
-**Verify.** On a Smart Pro a video resolves through the default clients with
-the runtime, and still plays through format 18 without it.
+**Done when.** JukaHub installs pinned, checksum-verified Deno (≥ 2.3) next to
+yt-dlp on Windows; yt-dlp is pointed at it (`--js-runtimes`), stream attempts
+prefer yt-dlp's default clients while it is present, and the Patch screen shows
+its version. Playback above 360p also needs MED-20.
+**Verify.** On Windows a video resolves through the default clients with Deno,
+and still plays through format 18 without it.
 
-### MED-20 — Two-stream and HLS playback (P1, L) [HW]
-**Why.** The player opens one URL that carries audio and video together, which
-caps YouTube at 360p (format 18) and fails outright the day YouTube drops it.
-The download fallback (`core.go` `playWithTempFile`) stops at five minutes, so
-a long video on slow Wi-Fi cannot play that way either.
-**Where.** `videoplayer.go` (`ffmpegDecoderArgs`, `startFFmpegAudio`),
-`streaming.go` (`resolveStreamSource`, `probePlayableStream`), `ffmpegtls.go`
-(the https relay already rewrites HLS playlists), `core.go`
-(`playWithTempFile`).
-**Done when.** A separate video + audio pair (adaptive formats) plays in sync
-and seeks; an HLS master (`hlsManifestUrl`) plays as one input — yt-dlp's
-visionos client reportedly returns one with muxed H.264 variants (itags 91–96)
-and is the first thing to try when android's format 18 is refused; the
-resolver prefers these over format 18 when they exist; and the download
-fallback's limit follows size and speed instead of a fixed five minutes.
+### MED-20 — Stream the separate picture and sound, and HLS (P1, M) [HW]
+**Why.** YouTube no longer serves this device a single-file stream (format 18 is
+refused without a PO token), so every YouTube play pays for a failed stream
+before the download fallback (`ytdownload.go`) joins the separate picture and
+sound locally. The player already runs one ffmpeg for the picture and one for
+the sound.
+**Where.** `videoplayer.go` (`startEmbeddedPlayback`, `ffmpegDecoderArgs`,
+`startFFmpegAudio`), `streaming.go` (`resolveStreamSource`,
+`probePlayableStream`), `youtubenative.go` (adaptive formats, `hlsManifestUrl`),
+`ffmpegtls.go` (the https relay already rewrites HLS playlists).
+**Done when.** A YouTube video streams from an avc1 video address and an m4a
+audio address in sync, and seeks; an HLS master plays as one input (yt-dlp's
+visionos client reportedly returns one with muxed H.264 variants, itags 91–96);
+the resolver tries these before the download fallback.
 **Verify.** First by hand on a device: `yt-dlp -g -f 91/92/93 --extractor-args
 youtube:player_client=visionos <id>` and play the URL with ffplay. Then a
 10-minute 720p video plays and seeks on a Smart Pro and on Windows.
 
-### MED-22 — Send the stream's own user agent to the player (P2, S) [HW]
-**Why.** The native CDN check decides with the player's identity and, on a
-refusal, logs whether the producing client's own user agent would have been
-accepted ("…HTTP 403 to the player's identity but HTTP 2xx to the ANDROID
-app's own user agent…"). If YouTube ties ANDROID URLs to that agent, the player
-has to send it.
+### MED-22 — Send the stream's own user agent to the player (P3, S) [HW]
+**Why.** The download path already retries a googlevideo URL with the producing
+client's own user agent (`ytdlAgentsFor`, `ytdownload.go`), but the probe, the
+decoders and the relay always send `streamUserAgent`. Needed only once a device
+logs the CDN check's "…HTTP 403 to the player's identity but HTTP 2xx to the
+ANDROID app's own user agent…".
 **Where.** `youtubenative.go` (`ytNativeClientUserAgent`), `videoplayer.go`
-(`ffprobeStream`, `ffmpegDecoderArgs`, `startFFmpegAudio`), `ffmpegtls.go` (the
-relay's default headers).
-**Done when.** For googlevideo URLs whose `c=` names a client (native, or
-yt-dlp `-g` with `player_client=android`), the probe, the decoder and the relay
-send that client's user agent; other hosts are unchanged.
-**Verify.** Needed only once the log line above appears on a device.
-**Note.** Since 2026-11-09 the decoders send `streamUserAgent` like the probe
-(`ffmpegStreamInputArgs`, `videorecover.go`), so this task only changes which
-agent that is.
+(`ffprobeStream`, `ffmpegDecoderArgs`, `startFFmpegAudio`), `videorecover.go`
+(`ffmpegStreamInputArgs`), `ffmpegtls.go` (the relay's default headers).
+**Done when.** For googlevideo URLs whose `c=` names a client the native table
+knows, the probe, the decoders and the relay send that client's user agent;
+other hosts are unchanged.
 
 ### MED-24 — A YouTube client table that updates without a release (P2, M) [NET]
 **Why.** The native path's client names and versions are constants
@@ -2291,60 +1763,31 @@ cached and used ahead of the built-in table; a bad or unverifiable file is
 ignored with a log line.
 
 ### MED-25 — YouTube on a stock Smart Pro (P1, S) [HW]
-**Why.** The evening pass of 2026-11-09 reworked how Media resolves YouTube
-(android client first with a CDN check, yt-dlp auto-update with rollback,
-failure messages that name the cause) from web reports alone; none of it has
-run on a device.
-**Where.** `youtubenative.go`, `streaming.go`, `ytdlp_update.go`,
-`ytfailure.go`; log lines tagged `youtube`, `stream` and `tools`.
+**Why.** How Media resolves YouTube (native client with a CDN check, yt-dlp
+auto-update with rollback, failure messages that name the cause) and the stream
+fallback (`videorecover.go`: a decoder that never delivered a frame becomes a
+download or a message) have not run on a device.
+**Where.** `youtubenative.go`, `streaming.go` (`tryStreamPlayback`),
+`ytdlp_update.go`, `ytfailure.go`, `videorecover.go`, `videoplayer.go`
+(`startFFmpegDecoder`); log tags `youtube`, `stream` and `tools`; errors.txt
+lines starting `decoder for`.
 **Done when.** With the tools folder's yt-dlp deleted, Media installs it and a
-search result streams within a few seconds (not "Downloading…"); an old yt-dlp
-(or one with its mtime set three weeks back) is updated on the next Media visit
-and Patch shows the new version; a failing search names its cause and says no
-API key is needed; a browser link without text gets its title on the Continue
-card; on Windows an update swaps a busy `yt-dlp.exe`. Record whether android's
-format 18 still plays — if it does not, MED-19 and MED-20 become P0.
-
-### MED-26 — The stream fallback on a device (P1, S) [HW]
-**Why.** `videorecover.go` (2026-11-09 night) turns a decoder that never
-delivered a frame into a download or a message, instead of a player that
-closed after a second; it was written from reading alone, for a user report
-("YouTube videos open a black canvas for a second, but then crash").
-**Where.** `videorecover.go`, `videoplayer.go` (`startFFmpegDecoder`),
-`streaming.go` (`tryStreamPlayback`); errors.txt lines starting `decoder for`.
-**Done when.** On a stock Smart Pro: a YouTube result either streams or shows
-"Streaming didn't work — downloading the video instead" and then plays; the
-errors.txt line says why the stream failed (record it here: "Protocol not
-found", "403 Forbidden" or something else decides between the relay, the user
-agent and the client); after two such failures the next video goes straight to
-the download; a live YouTube stream still streams; a video paused for ten
-minutes carries on when resumed (`-reconnect`) instead of ending; closing the
-player during the loading picture shows no message.
-
-### MED-28 — Watch Party guests open the watch page in ffmpeg (P2, S)
-**Why.** `partynet.go` applies the room's video with `StartEmbeddedPlayback`
-on the page URL the host published, so a YouTube room plays nothing on a
-guest; since 2026-11-09 the guest at least sees "Couldn't play this stream".
-**Where.** `partynet.go` (the apply path), `streaming.go`
-(`resolveAndStartPlayback`).
-**Done when.** A page URL from the room goes through the same load as Play
-(stream, else download) at the room's position.
-
-### MED-29 — Decoders have no read timeout (P3, S)
-**Why.** ffprobe gets `-rw_timeout`; the two decoders do not, so a stream that
-stalls without closing is a frozen picture (or the loading picture) forever,
-which nothing can recover from.
-**Where.** `videorecover.go` (`ffmpegStreamInputArgs`), `videoplayer.go`.
-**Done when.** http inputs get a read timeout that `-reconnect` retries
-through, and a stall that outlasts it ends as a failure `mediaRecoverStream`
-handles; checked on handheld Wi-Fi that normal playback never trips it.
+search result plays; an old yt-dlp (or one with its mtime set three weeks back)
+is updated on the next Media visit and Patch shows the new version; a failing
+search names its cause and says no API key is needed; a browser link without
+text gets its title on the Continue card; a stream that fails shows "Streaming
+didn't work — downloading the video instead" and then plays, its errors.txt line
+says why (record it here: "Protocol not found", "403 Forbidden" or other), and
+after two such failures the next video goes straight to the download; a live
+YouTube stream still streams; a video paused for ten minutes carries on when
+resumed (`-reconnect`); closing the player during the loading picture shows no
+message; on Windows an update swaps a busy `yt-dlp.exe`.
 
 ### MED-30 — Subtitles and saves on a device (P1, S) [HW] [NET]
-**Why.** The 2026-11-10 pass (tester: "when subtitles enabled it says no
-subtitles available") rebuilt CC around YouTube's own caption list, with yt-dlp
-as the fallback, and added Save offline / Extract audio — all from reading, none
-of it run. Whether the ANDROID client's caption URLs answer without a
-proof-of-origin token decides whether the fast path ever works.
+**Why.** CC uses YouTube's own caption list with yt-dlp as the fallback, and
+Save offline / Extract audio exist; none of it has run on a device. Whether the
+ANDROID client's caption URLs answer without a proof-of-origin token decides
+whether the fast path ever works.
 **Where.** `ytcaptions.go`, `videosubs.go`, `videosheet.go`, `mediaextract.go`,
 `downloads.go` (the idle-queue subtitle step).
 **Done when.** On a stock Smart Pro: CC on a YouTube video shows "Getting
@@ -2368,115 +1811,86 @@ temp folder is gone.
 
 ### MED-33 — A JavaScript runtime for yt-dlp on the handheld (P1, M) [HW] [NET]
 **Why.** Without one, yt-dlp 2025.11 and later uses only the visionos client
-("some formats may be missing"), and some connections get 403 even there
-(baitd PR #8 fixed that by bundling Deno). yt-dlp supports QuickJS-NG
-(`--js-runtimes quickjs:PATH`), a single small binary, and JukaHub already
-passes it when a `qjs` sits next to yt-dlp (`ytdownload.go`).
-**Where.** `ytdownload.go` (`ytDlpJSRuntimeArgs`), `streaming.go`, the tools
-installer (`patch_engine.go`, `tools.go`).
-**Done when.** The installer fetches and checks a quickjs-ng `qjs` for
-linux-arm64 next to yt-dlp; a video's extraction time with it on the A133P is
-recorded (over about 30 s: decide per use); `yt-dlp -v` shows `[jsc:quickjs]`
-and the tv client in the default set.
+("some formats may be missing"), and some connections get 403 even there.
+JukaHub already names QuickJS-NG to yt-dlp when a `qjs` sits next to it
+(`ytDlpJSRuntimeArgs`, `ytdownload.go`) but installs none. QuickJS-NG is one
+small binary (Deno is about 100 MB unpacked); Windows gets Deno (MED-19).
+**Where.** `ytdownload.go`, `streaming.go` (`streamAttempts`), the tools
+installer (`ytdlp_update.go`, `patch_engine.go`, `tools.go`).
+**Done when.** The installer fetches a pinned, SHA-256-checked quickjs-ng `qjs`
+for linux-arm64 next to yt-dlp and Patch shows its version; while it
+is present the stream attempts prefer yt-dlp's default clients; `yt-dlp -v`
+shows `[jsc:quickjs]` and the tv client in the default set; a video's extraction
+time on the A133P is recorded (over about 30 s: use the runtime for downloads
+only).
+**Verify.** On a Smart Pro a video resolves through the default clients with the
+runtime, and still plays through the fallback without it.
 
-### MED-34 — Stream the separate picture and sound (P2, M)
-**Why.** YouTube no longer serves a single-file stream to this device, so every
-YouTube play pays for a failed stream before the download fallback
-(`ytdownload.go`). The player already runs two ffmpeg processes, one for the
-picture and one for the sound, so a video-only and an audio-only address could
-each feed its own.
-**Where.** `videoplayer.go` (`startEmbeddedPlayback`, `startFFmpegAudio`),
-`streaming.go`, `youtubenative.go` (adaptive formats).
-**Done when.** A YouTube video streams from an avc1 video address and an m4a
-audio address in sync, and seeking works.
+### MED-36 — Radio and podcast streams have no read timeout (P3, S)
+**Why.** The music player's ffmpeg (`musicFFmpegArgs`) opens radio and podcast
+URLs without `-rw_timeout`, so a stream that stops sending leaves the player
+silent with no error; the video decoders give up after 15 s and reconnect
+(`ffmpegReadTimeoutArg`, `videorecover.go`).
+**Where.** `audioresume.go` (`musicFFmpegArgs`), `musicplayer.go`
+(`musicDecodeFinish`).
+**Done when.** An http(s) input gets `ffmpegReadTimeoutArg()` and `-reconnect 1
+-reconnect_delay_max 4`, and a stall ends as "Playback stopped early — press
+Play to resume" (the cut-short path of `musicDecodeFinish`) instead of silence;
+a test covers the arguments.
 
-### MED-35 — The Downloads queue: no AV1, a height cap on the handheld (P2, S)
-**Why.** `downloads.go` asks yt-dlp for `bv*+ba/b`, which can pick AV1 (the
-firmware's ffmpeg has no decoder for it) or 1080p (heavy on the A133P).
-**Where.** `downloads.go`, `ytdownload.go` (`ytdlJoinedFormat`).
-**Done when.** On the handheld the queue prefers avc1 at or below the playback
-ceiling, as the play fallback does.
+### MED-37 — WebP pictures where SDL_image cannot decode them (P2, S)
+**Why.** Stock Smart Pro 1.1.0's SDL_image has no WebP decoder and there is no
+system `libwebp` (docs/HARDWARE_VALIDATION.md, "Image codecs"), so
+`webpDecodable` hides every local .webp from the image viewer, Files and box
+art. The firmware's FFmpeg decodes WebP.
+**Where.** `imageviewer.go` (`webpDecodable`, `isImageExtension`,
+`imgvDecodeFile`), `filethumb.go` (`feFFmpegThumbnail`), `artwork_match.go`.
+**Done when.** Where the SDL_image probe fails but FFmpeg is present, a .webp
+is listed, opens in the image viewer, gets a Files thumbnail and shows as box
+art through one FFmpeg frame decoded to PNG off the render thread (same pixel
+cap); with neither it stays hidden as today; a test covers the decoder choice.
+**Verify.** On a stock Smart Pro a .webp photo opens and a .webp cover shows.
 
 ---
 
 ## System and connectivity (SYS)
 
-### SYS-1 — Bluetooth devices screen on a device (P1, M) [HW]
-**Status 2026-11-10.** Built, unverified on hardware: Settings → Network →
-Bluetooth devices (`bluetooth_devices.go`, `bluetooth_devices_ui.go`; also in
-the Start menu, search and PS Remote Play's Controllers row) scans, pairs,
-trusts, connects, disconnects and forgets through bounded `bluetoothctl`
-sessions (a pseudo-terminal, pipes as the fallback) and calls a pad ready only
-with evidence from `/proc/bus/input/devices`.
-**Status 2026-11-11 (evening).** Also built, unverified on hardware: the top
-bar's Bluetooth button left of the Wi-Fi meter (`statusbar_bluetooth.go`; state
-from the adapters and `hciN:M` links in `/sys/class/bluetooth` and the
-HCIGETDEVLIST ioctl's HCI_UP flag, `bluetooth_quick.go`, with
-`bluetoothctl show` only as the fallback), one-press Connect / Disconnect on
-the page (A; Y = the device sheet; the ring starts on the first paired device;
-the page searches by itself only when nothing is paired and re-reads the list
-when the link count changes), and `btBringUp` (`bluetooth_bringup*.go`) for a
-firmware that left Bluetooth stopped: `/etc/bluetooth/bt_init.sh start` when
-there is no adapter, `bluetoothd` through `/etc/bluetooth/bluetoothd`,
-`/etc/init.d/bluetoothd`, `/etc/init.d/bluetooth` or the binary, an rfkill
-unblock, then power on — the chip and daemon rungs on TrimUI only, each step
-bounded, fixed paths only. Search, Pair, Connect, the page's switch and Quick
-Settings' Bluetooth "on" (off the render thread) all go through it. On TrimUI a
-radio whose `bluetoothd` is not running reads as off. Facts used (spruceOS PRs
-#1757/#1761/#1763/#1765): stock BlueZ 5.54, `bluetoothd` started by
-`runtrimui.sh` with the stock `main.conf` next to `trimui_btmanager`, pairings
-in `/etc/lib/bluetooth`, bondable only while a default agent is registered
-(JukaHub's pairing session registers its own). TrimUI's `system.json`
-Bluetooth key is not written (its meaning is unknown), so the firmware's own
-switch may still read off after JukaHub switched Bluetooth on.
-**Status 2026-11-11 (night).** Juka: "Bluetooth doesn't work on the Smart
-Pro". No device log existed, so the guesses were removed or made observable:
-when no firmware script brings `hci0` up, A133P models attach the XR829 on
-`ttyS1` themselves (`bluetooth_attach.go`: rfkill pulse, `hciattach -n ttyS1
-xradio`, then `rtk_hciattach -n -s 3000000 ttyS1 xradio` — Knulli #453 and the
-Tina XR829 guide); Bluetooth tools are found beyond PATH and run with the
-firmware's environment (`bluetooth_tools.go`); `bluetooth_diag.go` logs the
-whole stack once per run when the page opens and on every failed bring-up,
-and adds it to the diagnostics bundle. **Next step on a device:** open
-Settings → Network → Bluetooth devices once, then send a bug report with the
-log (or export the diagnostics bundle) and read its "Bluetooth" block:
-which tools exist, whether `hci0` is there, which processes run, and whether
-the pairing store holds more than one adapter address (Knulli saw the Brick's
-XR829 take a random address each boot, which orphans every pairing).
-**Why.** The page was written without a device. TrimUI's firmware notes promise
-only "BLE hid", so classic-Bluetooth pads (DualShock 4, DualSense) may connect
-without input, and spruceOS found stock pairings lost after a reboot or a radio
-toggle.
-**Done when.** Audio follows a connected headset (NET-10); pairings survive a
-reboot and a radio toggle where the firmware keeps `/var/lib/bluetooth` in
-tmpfs or changes the adapter address; which pads work on which firmware is
-written in `docs/REMOTE_PLAY.md`.
-**Verify.** [HW] On a Smart Pro and a Brick, stock 1.1.x and CrossMix:
-`bluetoothctl` output arrives line by line in the session, not only at exit;
-`agent NoInputNoOutput` and `default-agent` answer; a search lists a
-DualSense, a DualShock 4, an Xbox pad and an 8BitDo pad in pairing mode within
-10 s; record which get an input device (Bus=0005 with the pad's address) and
-which show **No input**; pairings after a reboot and a radio toggle;
-`bluetoothd` running when the stock menu has Bluetooth off; Remote Play
-stutter with a pad connected against Wi-Fi alone. Since 2026-11-11: with the
-stock switch off, is `hci0` gone from `/sys/class/bluetooth` or only DOWN, and
-does the bar's rune show struck through (a connected pad: an `hci0:N` entry and
-the accent rune; the log shows no fallback to `bluetoothctl show`); which
-bring-up rungs run on stock 1.1.x and CrossMix (the log's `bring-up:` lines —
-does `/etc/bluetooth/bt_init.sh` exist and take `start`, does
-`/etc/bluetooth/bluetoothd` exist); whether `trimui_btmanager` or keymon switch
-the radio back off within about 30 s of JukaHub switching it on; A connects and
-disconnects a paired DualSense, an 8BitDo pad and a headset from the page the
-bar opens, Y → Forget works, and a pad woken with its PS button shows as
-connected within about 2 s; a pairing leaves a LinkKey under
-`/etc/lib/bluetooth/<adapter>/<device>/info` and survives a reboot and a radio
-toggle; what `system.json`'s Bluetooth key, if there is one, does; no new Wi-Fi
-stutter from the bar's two-second reading.
+### SYS-1 — Bluetooth pads and pairings on a device (P1, M) [HW]
+**Why.** The Bluetooth page, the top-bar button and the bring-up
+(`bluetooth_devices*.go`, `statusbar_bluetooth.go`, `bluetooth_quick.go`,
+`bluetooth_bringup*.go`, `bluetooth_attach.go`) were written without a device.
+TrimUI's firmware promises only "BLE hid", so classic pads (DualShock 4,
+DualSense) may connect without input, and spruceOS saw stock pairings lost after
+a reboot or a radio toggle.
+**Where.** The files above; `bluetooth_diag.go` logs the whole stack when the
+page opens and on every failed bring-up (also in the diagnostics bundle).
+**Done when.** On a Smart Pro and a Brick, stock 1.1.x and CrossMix, recorded in
+`docs/REMOTE_PLAY.md` and the HW log (reconnects, headset audio and the other
+two models are HW-2 step 3, HW-3 step 14 and HW-7 steps 2–3):
+- the diagnostics block: which tools exist, whether `hci0` is there, which
+  processes run, which bring-up rungs ran (`bring-up:` lines), and whether the
+  pairing store holds more than one adapter address;
+- `bluetoothctl` output arrives line by line in the session; `agent
+  NoInputNoOutput` and `default-agent` answer;
+- a search lists a DualSense, a DualShock 4, an Xbox pad and an 8BitDo pad in
+  pairing mode within 10 s; which get an input device (Bus=0005 with the pad's
+  address) and which show **No input**;
+- a pairing leaves a LinkKey under `/etc/lib/bluetooth/<adapter>/<device>/info`
+  and survives a reboot and a radio toggle;
+- with the stock switch off: is `hci0` gone or only DOWN, does the bar's rune
+  show struck through, is `bluetoothd` running; whether `trimui_btmanager` or
+  keymon switch the radio back off within about 30 s of JukaHub switching it on;
+  what `system.json`'s Bluetooth key does;
+- no new Wi-Fi stutter from the bar's two-second reading, and Remote Play
+  stutter with a pad connected against Wi-Fi alone.
 
 ### SYS-2 — Wi-Fi verified on both stock images (P1, S) [HW]
+**Why.** The Smart Pro's `wlan0` and `wpa_supplicant` are confirmed
+(`docs/HARDWARE_VALIDATION.md`); the Brick's image and a live join/forget are
+not.
 **Where.** `wifi*.go`, `docs/WIFI.md`.
-**Done when.** Interface name, `wpa_cli`/socket path and DHCP client confirmed on
-Smart Pro and Brick images; join, forget and the diagnostics sheet work.
+**Done when.** The Brick's interface name, `wpa_cli`/socket path and DHCP client
+are confirmed; on both, join, forget and the diagnostics sheet work.
 
 ### SYS-3 — Netplay end to end (P2, S) [HW]
 **Done when.** Through the Netplay panel: a LAN room hosted on one device is
@@ -2486,19 +1900,10 @@ ra64.trimui accepts `--appendconfig` and the `host|port|session` --connect form)
 check whether RetroArch writes the overlay's announce/relay keys back into
 retroarch.cfg on exit.
 
-### SYS-4 — Focus mode with a PIN (P3, M) [OWNER]
+### SYS-4 — Focus mode with a PIN (P3, M)
 **Done when.** A persisted Simple mode shows only Home, Media, Games and
 Settings → Simple; leaving needs a PIN (hashed in the secret store); the setting
 says plainly it is not parental security.
-
-### SYS-6 — Event webhooks (P3, S)
-**Done when.** Opt-in HTTP POSTs for "game launched", "trophy unlocked",
-"install finished" (bounded queue, no secrets in payloads).
-
-### SYS-7 — Suspend/resume behaviour (P2, S) [HW]
-**Done when.** Sleeping and waking the device (power button) with JukaHub on
-screen, in a game and during video is tested; pollers pause, audio resumes, the
-clock and Wi-Fi status refresh on wake.
 
 ### SYS-8 — Storage you can manage (P2, M)
 **Why.** Disk usage is totals per volume; there is no "free up space".
@@ -2519,30 +1924,28 @@ flow, with a summary of what moved.
 playtime, and NextUI/muOS collections where their files are on the card.
 
 ### SYS-14 — Chat files against the real channel (P1, S) [NET] [HW]
-**Why.** Sending files in chat (2026-11-09) uploads with a hand-written
-streaming multipart POST (`chatupload.go`: `payload_json` + `files[n]`, the
-session's `Authorization`/`User-Agent`, `nonce` + `enforce_nonce`), and nothing
-of it has met Discord yet. The limits it assumes (20 MiB a file, 50 / 100 MiB
-on boost tier 2 / 3) changed in 2026 and may change again; text messages still
-go through discordgo without a nonce, so a text post whose answer is lost can
-appear twice.
+**Why.** Chat uploads use a hand-written streaming multipart POST
+(`chatupload.go`: `payload_json` + `files[n]`, the session's
+`Authorization`/`User-Agent`, `nonce` + `enforce_nonce`) that has not met
+Discord. Its limits (20 MiB a file, 50 / 100 MiB on boost tier 2 / 3) may be out
+of date, and text messages still go through discordgo without a nonce, so a text
+post whose answer is lost can appear twice.
 **Where.** `chatupload.go` (`chatDiscordUpload`, `chatUploadAnswer`,
 `chatEchoCandidate`), `chatfiles.go` (downloads, `chatRefreshAttachmentURL`),
 `chatsync.go`; docs/CONTROLS.md → "Sending files".
 **Done when.** From a Smart Pro and from Windows: a picture, a 15 MB zip and a
-log reach the channel with progress and show on the other device and in
-Discord; a file over the server's limit is refused with "too big"; pulling
-Wi-Fi mid-upload resumes without a second post; a picture older than a day
-renews its link; Juka AI answers about an attached log. If a lost text answer
-still duplicates, text posts move to the same raw POST with a nonce.
+log reach the channel with progress and show on the other device and in Discord;
+a file over the server's limit is refused with "too big"; pulling Wi-Fi
+mid-upload resumes without a second post; a picture older than a day renews its
+link; Juka AI answers about an attached log. If a lost text answer still
+duplicates, text posts move to the same raw POST with a nonce.
 
 ### SYS-15 — Archives on the card and on Windows (P1, S) [HW] [WIN]
-**Why.** Extracting archives from Files (2026-11-10) has only been checked
-statically: the in-process zip and tar readers, the `os.Root` writes onto an
-exFAT card, the free-space check, the staging folder's rename into place and
-the hand-off to 7-Zip (`7zz` from JukaCrossMix's `System/bin` on the handheld;
-an installed 7-Zip, the fetched `7zr.exe` or `tar.exe` on Windows) have never
-run.
+**Why.** Extracting archives from Files has only been checked statically: the
+in-process zip and tar readers, `os.Root` writes onto an exFAT card, the
+free-space check, the staging folder's rename into place and the hand-off to
+7-Zip (`7zz` from JukaCrossMix's `System/bin` on the handheld; an installed
+7-Zip, the fetched `7zr.exe` or `tar.exe` on Windows).
 **Where.** `files_extract.go` (`feExtractRun`, `feExtractZip`,
 `feExtractTarStream`, `feExtractFinish`), `files_extract_tools.go`
 (`fe7ZipPreflight`, `feRun7Zip`), `files_extract_ui.go` (the sheet,
@@ -2553,96 +1956,103 @@ lands beside itself; **Extract here** over a folder that has the files asks
 twice and replaces them; a .7z and a .rar unpack through `7zz`; a cancel
 mid-way, and pulled power mid-way, leave no `.jukahub-extract-*` behind (the
 second is swept by the next extraction there); a zip bigger than the free space
-is refused before anything is written; a file over 4 GB on a FAT32 card fails
-with the FAT32 sentence. On Windows: the same zip and a tar.gz, a .7z with and
-without 7-Zip installed (`7zr.exe` fetched once), a .rar through `tar.exe`, and
-`go test -run 'FEExtract|Unzip|FEArchive|FE7Zip'` passes.
+is refused before anything is written. On Windows: the same zip and a tar.gz,
+and a .7z with and without 7-Zip installed (`7zr.exe` fetched once). On the
+exFAT card and on a FAT32 card a debug log of `feVolumeOf` shows the real
+cluster size and FAT flag, and a member of 4 GB or more bound for FAT32 is
+refused before anything is written; on Windows a RAR unpacked with `tar.exe`
+(no 7-Zip) lists and extracts, and one holding a symbolic link is refused.
+Passwords (`7zz` on the handheld, 7-Zip on Windows): an AES zip, a 7z with
+encrypted names (`-mhe`) and an encrypted RAR unpack after **Password…**; a
+wrong password says "the password is wrong" and leaves the folder as it was.
+On Windows a password with spaces, a trailing backslash and `a\b` unpacks, and
+one containing `"` is refused with its message.
 
 ### SYS-16 — Screen brightness on a device (P1, S) [HW]
-**Why.** The header's sun button and every other brightness control now drive
-the TrimUI backlight through the Allwinner display driver's ioctl on
-`/dev/disp` (DISP_LCD_SET/GET_BRIGHTNESS, raw 1..255, linear) in the
-firmware's 10% steps, and write the level to `/mnt/UDISK/system.json`
-"brightness" (assumed 0..10) so keymon's brightness keys carry on from it
-(`brightnessctl.go`, `brightness_disp_linux.go`, `brightness_trimui.go`). The
-ioctl layout, the key, its scale and keymon re-reading the file come from
-MinUI, spruceOS and TriMux, not from a device, and the firmware's own
-level-to-backlight curve is unknown.
+**Why.** Every brightness control drives the TrimUI backlight through the
+display driver's ioctl on `/dev/disp` (DISP_LCD_SET/GET_BRIGHTNESS, raw 1..255)
+in the firmware's 10 % steps, and writes `/mnt/UDISK/system.json` "brightness"
+(0..10) so stock Settings continues from it. The read ioctl, the key and its
+scale were checked on a stock Smart Pro; the full firmware curve and write
+behavior still need a live JukaHub build.
 **Where.** `brightnessctl.go` (`brightnessFindBackend` logs the backend once,
-tag `brightness`, and `trimuiLogBrightnessEvidence` logs the file's
-"brightness" and "lumination" beside the panel's raw level; each step is
-written with the raw level the firmware was seen to use for it,
-`brightnessFirmwareCurve`), `brightness_disp_linux.go`, `brightness_trimui.go`
-(`trimuiSystemBrightnessStep`, `trimuiBrightnessFlush`, the in-place
+tag `brightness`; `trimuiLogBrightnessEvidence`; `brightnessFirmwareCurve`),
+`brightness_disp_linux.go`, `brightness_trimui.go`
+(`trimuiSystemBrightnessStep`, `trimuiBrightnessFlush`,
 `trimuiSystemJSONRewrite`), `qrzoom.go`.
 **Done when.** On a Smart Pro and a Brick the log names the display driver; the
-card's ten steps run from dim-but-readable to full and feel even; the
-firmware's brightness keys (START + L/R, or MENU + volume) carry on from a
-level set in JukaHub and the open card follows them; after sleep and wake, and
-after quitting to the stock UI, the level JukaHub set stays (a firmware curve
-unlike the linear one shows as a jump when keymon re-applies the file — then
-match its curve); the pairing QR goes to full and gives the level back; a
-`system.json` whose "brightness" is not 0..10 is left alone (the log says so);
-and, booted straight into JukaHub with no keymon running, it is decided whether
-JukaHub applies the firmware's saved level itself. If the log shows that
-"brightness" is not the backlight (it does not follow the firmware's keys) or
-not 0..10, stop writing it (only `trimuiBrightnessSyncLater` writes) and keep
-the display-driver path. Also check that keymon still reacts to changes of
-`system.json` after JukaHub wrote it (the file now keeps its inode:
-`ls -i /mnt/UDISK/system.json` before and after).
+ten steps run from dim-but-readable to full and feel even; the firmware's
+stock Settings continues from a level set in JukaHub and the open card follows
+changes made there; after sleep and wake, and after quitting
+to the stock UI, the level JukaHub set stays (a jump when keymon re-applies the
+file means its curve differs: match it); the pairing QR goes to full and gives
+the level back; a `system.json` whose "brightness" is not 0..10 is left alone
+(the log says so); booted straight into JukaHub with no keymon, JukaHub applies
+the firmware's saved level itself. If "brightness" turns out not to be the
+backlight or not 0..10, stop writing it and keep the display-driver path. keymon
+still reacts after JukaHub wrote the file (same inode: `ls -i
+/mnt/UDISK/system.json` before and after).
 
-### SYS-17 — Boot logo and the power-on boot on a device (P1, S) [HW]
-**Why.** The power-on boot (2026-11-10) and the firmware boot logo installer
-have only been checked statically. The installer assumes Allwinner's layouts —
+**Smart Pro evidence, 2026-11-17.** A read-only ARM64 probe using the same
+`DISP_LCD_GET_BRIGHTNESS` ioctl returned raw 112, 133, 155 and 220 at firmware
+steps 5, 6, 7 and 10. The user moved the stock Settings slider between reads;
+there is no stock brightness shortcut on this Smart Pro. JukaHub's fallback
+mapping now caps the unlearned steps at the firmware's measured maximum of
+220. A reversible `DISP_LCD_SET_BRIGHTNESS` probe changed raw 112 to 113,
+read 113 back and restored 112. The rest of the curve, JukaHub's UI path,
+sleep restoration and keymon sync still need a live ARM build.
+
+### SYS-17 — Boot logo installer on a device (P1, S) [HW]
+**Why.** The firmware boot logo installer assumes Allwinner's layouts —
 `bootlogo.bmp` on a FAT `boot-resource`/`bootloader` partition, or a raw
 `bootlogo` partition — found by name through `/dev/by-name`, the kernel's
-`partitions=` and sysfs; TrimUI's actual storage (and what firmware 1.1.x's
-"22 MB boot partition for the boot logo" changed) was never seen. The power-on
-detection leans on the autostart hook's `.autostart-pending` marker and the
-kernel uptime.
+`partitions=` and sysfs. A stock Smart Pro 1.1.0 was found to have a 24 MiB
+FAT `bootloader` partition with a 396×66, 32-bit `bootlogo.bmp`; the installer
+now accepts that exact banner and renders a horizontal mark in it.
 **Where.** `bootlogo.go`, `bootlogo_linux.go` (log tag `bootlogo`: the store,
-its size and depth, every refusal), `bootos.go` (`bootOSDecide`, log line
-`power-on boot (…)`), `bootarrive.go`, `bootlogo_layout.go`; docs/BOOT.md.
+its size and depth, every refusal), `bootlogo_layout.go`; docs/BOOT.md.
 **Done when.** On a Smart Pro and a Brick (stock 1.0.4 and 1.1.x, and CrossMix):
 the Boot logo row names a store or an honest reason; install shows the JukaHub
-logo at the next power-on with nothing cropped or rotated, Restore brings the
-TrimUI logo back, and the backup sits in `Apps/JukaHub/data/bootlogo/`; a
-power-on into JukaHub plays the full boot (log says why) with the firmware's
-picture handing over to the first frame without a visible jump, the bells on
-the blooms and Home arriving card by card; a launch from the stock menu gets
-the quick hello; a restart within the boot does not replay it; and the boot
-holds 30 fps on the Smart Pro with motion on and with reduced motion.
+logo at the next power-on with nothing cropped or rotated; Restore brings the
+TrimUI logo back; the backup sits in `Apps/JukaHub/data/bootlogo/`. The power-on
+boot animation itself is HW-1 step 3.
+
+**Smart Pro evidence, 2026-11-17.** `/dev/by-name/bootloader` resolves to
+`/dev/mmcblk0p1`, a 24 MiB FAT partition. A read-only mount showed
+`bootlogo.bmp` (104600 bytes, 396×66, 32-bit uncompressed); a copy was decoded
+and its header checked. The old screen-height guard refused it. The banner
+exception and an in-place BMP rewrite test now cover that format. Actual
+installation, restore and power-on appearance still need a new ARM build.
 
 ### SYS-18 — Screen Share on the Smart Pro and the Brick (P1, M) [HW]
-**Why.** Screen Share (2026-11-10, formerly Remote Cast) is JukaHub's answer to
-the Smart Pro having no HDMI port, and none of it has run on a device: whether
-`/dev/fb0` carries a game's GLES frames on the stock and CrossMix images (the
-time-lapse recorder rests on the same assumption), which way a portrait
-framebuffer must be turned, what the render-thread readback costs on the
-PowerVR and how fast the pure-Go encoder is on the A53 were all estimated.
+**Why.** Screen Share is JukaHub's answer to the Smart Pro having no HDMI port
+and has not run on a device: whether `/dev/fb0` carries a game's GLES frames on
+the stock and CrossMix images (the time-lapse recorder rests on the same
+assumption), which way a portrait framebuffer must be turned, the render-thread
+readback cost on the PowerVR and the pure-Go encoder's speed on the A53 are
+estimates.
 **Where.** `castcap.go` (UI capture, encoder, supervisor), `castcap_fb.go`
-(framebuffer source, ffmpeg or JukaHub's reader; log tag `cast`: "sharing the
-game from /dev/fb0 …"), `companion_cast.go` (viewer page, `/status`),
-`castui.go`; `timelapse.go` shares the framebuffer assumption.
+(framebuffer source, ffmpeg or JukaHub's reader; log tag `cast`),
+`companion_cast.go` (viewer page, `/status`), `castui.go`; `timelapse.go`.
 **Done when.** On a Smart Pro and a Brick, stock and CrossMix: Smooth to a
 laptop browser keeps the UI at its normal frame rate in `framestats` while
 watched; a RetroArch game started with a viewer connected streams live through
-ffmpeg — not black, not sideways (else record the right `castRotate` per
-device and make it the default) — and again with ffmpeg removed through
-JukaHub's reader, with CPU and fps noted; a game whose picture stays black
-brings up the `/status` note (then `/dev/fb0` does not carry GLES frames on
-that image and the time-lapse is broken the same way); the Brick's 1024×768
-panel under its 960×720 canvas keeps its aspect; a Samsung (Tizen) or LG
-(webOS) TV browser shows the stream or its single-frame fallback, and `&tv=1`
-fills the screen; **Y** cuts the old link off within a second; the LIVE pill
-shows on the handheld and in neither the stream nor a screenshot.
+ffmpeg — not black, not sideways (else record the right `castRotate` per device
+and make it the default) — and again with ffmpeg removed through JukaHub's
+reader, with CPU and fps noted; a game whose picture stays black brings up the
+`/status` note (then `/dev/fb0` does not carry GLES frames on that image and the
+time-lapse is broken the same way); the Brick's 1024×768 panel under its 960×720
+canvas keeps its aspect; a Samsung (Tizen) or LG (webOS) TV browser shows the
+stream or its single-frame fallback, and `&tv=1` fills the screen; **Y** cuts
+the old link off within a second; the LIVE pill shows on the handheld and in
+neither the stream nor a screenshot.
 **Verify.** `framestats` with and without a viewer, `top` during a shared game,
 `logs.txt`, a photo of the TV.
 
-### SYS-19 — Encrypted cloud save backups through WebDAV (P2, M) [NET]
-**Why.** Save Sync can copy saves between paired JukaHubs or export an encrypted
-`.jukasaves` file, but a broken or lost device still depends on someone having
-made and carried that export elsewhere.
+### SYS-19 — Encrypted save backups to your own WebDAV server (P3, M) [NET]
+**Why.** Saves sync to Google Drive (`gdrive_sync.go`) or through Syncthing, or
+leave as an encrypted `.jukasaves` export, but there is no self-hosted target
+such as Nextcloud.
 **Where.** `ssync.go`, `ssyncui.go`, the secret store, and
 `docs/SAVE_MANAGER.md`.
 **Done when.** Save Sync can add a user-selected HTTPS WebDAV target (including
@@ -2666,26 +2076,26 @@ conflict name, and never advances the sync base for an unresolved file.
 
 ### SYS-21 — Juka and pictures, second round (P3, M)
 **Why.** Pictures and videos reach Juka only from Chat's Juka AI tab
-(`vision_chat.go`, 2026-11-11), and a video's sound goes to Whisper as an
-uncompressed 16 kHz WAV (up to about 19 MB).
+(`vision_chat.go`); **Ask Juka** on a Community message sends only its text, and
+a video's sound goes to Whisper as an uncompressed 16 kHz WAV (up to about 19
+MB).
 **Where.** `vision_chat.go`, `vision_video.go`, `chatactions.go`,
 `imageviewer.go`.
-**Done when.** A Community message's actions offer **Ask Juka** for its
-picture (the Discord file is downloaded first); the image viewer sends the
-picture on screen to Juka; the transcript upload is compressed (FLAC or Opus)
-when the firmware's ffmpeg has the encoder, so a ten-minute clip goes faster
-on slow Wi-Fi.
+**Done when.** A Community message's actions offer **Ask Juka** for its picture
+(the Discord file is downloaded first); the image viewer sends the picture on
+screen to Juka; the transcript upload is compressed (FLAC or Opus) when the
+firmware's ffmpeg has the encoder, so a ten-minute clip goes faster on slow
+Wi-Fi.
 
 ### SYS-22 — JukaHub OS on a device (P1, M) [HW]
-**Why.** JukaHub OS (2026-11-14) — a private mount namespace with read-only
-bind-mounted layers, a re-exec into it, kernel drivers loaded only on an exact
-vermagic match and whitelisted sysfs values, journaled in `/tmp/jukaos` and
-undone on quit — was written and reviewed without a device, Go toolchain or the
-TrimUI kernel config.
+**Why.** JukaHub OS — a private mount namespace with read-only bind-mounted
+layers, a re-exec into it, kernel modules loaded only on an exact vermagic match
+and whitelisted sysfs values, journaled in `/tmp/jukaos` and undone on quit —
+has not run on a device or been checked against the TrimUI kernel config.
 **Where.** `jukaos.go` (layer.json checks, journal), `jukaos_linux.go`
 (`jukaosSessionEntry`, namespace, binds, modules), `jukaos_settings.go`
-(Settings → JukaHub OS, escape hatch, OS guard), `launch.sh` (the os.json
-grep), `childenv.go`; log tag `jukaos`; docs/JUKAHUB_OS.md.
+(Settings → JukaHub OS, escape hatch, OS guard), `launch.sh` (the os.json grep),
+`childenv.go`; log tag `jukaos`; docs/JUKAHUB_OS.md.
 **Done when.** On a Smart Pro and a Brick (stock 1.1.x and CrossMix):
 `unshare(CLONE_NEWNS)` works as root (log "OS session: N layer(s), M bind(s)";
 `/proc/<pid>/ns/mnt` differs from MainUI's parent); "/" accepts MS_REC|MS_SLAVE,
@@ -2700,103 +2110,92 @@ with the built-in "JukaHub libraries for games" layer and a newer libSDL2 in
 `libs/` maps it (`/proc/<ra>/maps`); Select/B held through the power-on boot
 gives the stock menu (physical B vs SDL B after the swaps); Return to <firmware>
 brings MainUI back and a reboot is stock; a card made from
-`JukaHub-OS-Trimui.zip` (`trimui/make-os-package.sh`) boots into JukaHub OS
-on its first power-on without the app ever being opened.
+`JukaHub-OS-Trimui.zip` (`trimui/make-os-package.sh`) boots into JukaHub OS on
+its first power-on without the app ever being opened. The per-model driver
+layers are HW-7.
 
 ### SYS-23 — JukaHub OS, second round (P2, M)
-**Why.** The first round (2026-11-14) left out what needed device data.
+**Why.** RetroArch, the firmware's emulators and netplay still guess among
+several cores/system/saves roots, a game a layer fixes still reports a missing
+library, layers install only by hand, and driver or value changes need **Restart
+JukaHub OS**.
 **Where.** `jukaos*.go`, `emulators.go` (`deviceRetroArchCoresDir`),
-`gamelaunch_firmware.go` (`firmwareROMArg`), `elfcompat.go`,
-`ports_catalog.go`, `files_extract_ui.go`, `home_power.go`.
+`gamelaunch_firmware.go` (`firmwareROMArg`), `elfcompat.go`, `ports_catalog.go`,
+`files_extract_ui.go`, `home_power.go`.
 **Done when.** A generated per-firmware paths layer dir-binds one stable tree
 (RetroArch cores/system/saves, `Emus/*/`) so RetroArch, the firmware's emulators
 and netplay stop guessing among five roots and MainUI's `../../Roms` form;
 `elfcompat.go`/`ports_catalog.go` also search the session's
-`JUKAHUB_OS_CHILD_LIBS`, so a game a layer fixes no longer reports a missing
-library; the Files archive sheet offers **Install as JukaHub OS layer** for a zip
-with `layer.json`; driver and value changes apply live where possible instead of
-**Restart JukaHub OS**; a per-session report page lists what was bound, loaded
-and skipped; the power card can restart JukaHub OS.
+`JUKAHUB_OS_CHILD_LIBS`; the Files archive sheet offers **Install as JukaHub OS
+layer** for a zip with `layer.json`; driver and value changes apply live where
+possible; a per-session report page lists what was bound, loaded and skipped;
+the power card can restart JukaHub OS.
 
 ### SYS-24 — JukaHub OS image on plastron, TortOS's Linux (P3, L) [HW]
-**Why.** Juka (2026-11-15): base the drivers on TortOS so the OS gets its
-speed. TortOS 2 boots the Brick to its menu in about
-1.9 s because the card is the whole system: plastron (github.com/tarikbc/plastron,
-now ZyperOS) builds U-Boot + TF-A and Allwinner's 4.9.191 A133 kernel (Creality
-Sonic Pad SDK + patches: mainline exFAT, charger) from source. Their modules
-cannot be JukaHub OS layers on the stock kernel (vermagic/CRCs); the Speed
-layer (`trimui/os-layers/speed`) is the stock-kernel part. Research here was
-from search snippets only: github.com is not on this workspace's egress
-allowlist, so plastron's tree, board files and licence were not read.
-**Where.** New: a `jukaos-image.yml` workflow (manual) that checks plastron out
-at a pinned commit, `make brick-bootloader brick-kernel`, and assembles
-`JukaHub-OS-Brick.img.xz` with JukaHub as the shell; `docs/JUKAHUB_OS.md`.
+**Why.** TortOS 2 boots the Brick to its menu in about 1.9 s because the card is
+the whole system; plastron (github.com/tarikbc/plastron, now ZyperOS) builds
+U-Boot + TF-A and Allwinner's 4.9.191 A133 kernel from source. Its modules
+cannot be JukaHub OS layers on the stock kernel (vermagic/CRCs); the Speed layer
+(`trimui/os-layers/speed`) is the stock-kernel part. The image builders exist
+but have not been boot-tested.
+**Where.** `.github/workflows/plastron-image.yml`, `os/plastron/` (Brick),
+`os/smartpro/` (Smart Pro: the card boots the device's own
+boot0/U-Boot/kernel/rootfs saved by `dump-board.sh`, with `/jukahub/init` as
+process 1; see its README), `docs/JUKAHUB_OS.md`.
 **Done when.** The licences of plastron and TortOS allow redistribution (else
-stop); a Brick boots the image into JukaHub (time it against TortOS's 1.9 s)
-with a working video path for SDL2 — the PowerVR GE8300 userspace copied from
-the owner's own stock firmware at install (as TortOS's PROPRIETARY.txt does),
-or SDL2 KMSDRM/fbdev with software rendering if no GPU is reachable — plus
-Wi-Fi firmware, audio, sticks, LEDs and battery; taking the card out still
-boots the stock system. Builders exist (2026-11-15): `os/plastron/` (Brick) and
-`os/smartpro/` (Smart Pro: plastron has no board for it, so the card boots the
-device's own boot0/U-Boot/kernel/rootfs saved by `dump-board.sh`, with
-`/jukahub/init` as process 1; see its README). Neither is boot-tested: the
-Smart Pro's open questions are whether boot0 copied from the eMMC loads U-Boot
-from the card, whether U-Boot honours the rewritten env `root=PARTUUID=…`, and
-which stock daemons beyond `trimui_inputd` the hardware needs.
+stop); a Brick boots the image into JukaHub (timed against TortOS's 1.9 s) with
+a working SDL2 video path — the PowerVR GE8300 userspace copied from the owner's
+own stock firmware at install, or SDL2 KMSDRM/fbdev with software rendering —
+plus Wi-Fi firmware, audio, sticks, LEDs and battery, and taking the card out
+still boots the stock system. On the Smart Pro: boot0 copied from the eMMC loads
+U-Boot from the card, U-Boot honours the rewritten `root=PARTUUID=…`, and the
+stock daemons the hardware needs beyond `trimui_inputd` are listed.
 
 ### SYS-25 — Bluetooth, third round (P2, M)
-**Why.** The 2026-11-16 pass reconnects remembered devices, pauses on a
-headset drop, keeps a volume per output and shows pad battery, order and the
-headset codec (`bt_autoreconnect.go`, `bt_audiofollow.go`, `bt_padinfo.go`).
-Three things phones do are still missing: the radio is never switched on at
-boot (the loop only reconnects when the firmware or the user switched it on),
-a game that is already running keeps the speaker when a headset connects
-mid-game (ALSA opens its device once), and a headset's own battery is not
-shown.
+**Why.** Remembered devices reconnect, a headset drop pauses, each output keeps
+its volume and pads show battery (`bt_autoreconnect.go`, `bt_audiofollow.go`,
+`bt_padinfo.go`), but the radio is never switched on at boot (the loop only
+reconnects when the firmware or the user switched it on), a running game keeps
+the speaker when a headset connects mid-game (ALSA opens its device once), and a
+headset's own battery is not shown.
 **Where.** `bt_autoreconnect.go`, `bluetooth_bringup*.go`, `audioroute*.go`,
 `bluetooth_devices_ui.go`.
-**Done when.** JukaHub remembers that Bluetooth was on and brings it up at
-start (bounded, off the render thread); a headset that connects during a
-RetroArch game gets its sound, through a BlueALSA-aware ALSA plug or a
-resume-safe restart the user agrees to; and a headset's row and sheet show its
-battery from BlueZ's `Battery1` ("Battery Percentage" in `bluetoothctl info`)
-when it reports one.
+**Done when.** JukaHub remembers that Bluetooth was on and brings it up at start
+(bounded, off the render thread); a headset that connects during a RetroArch
+game gets its sound, through a BlueALSA-aware ALSA plug or a resume-safe restart
+the user agrees to; a headset's row and sheet show its battery from BlueZ's
+`Battery1` ("Battery Percentage" in `bluetoothctl info`) when it reports one.
 
 ---
 
 ## Sound and haptics (SND)
 
-### SND-1 — Chime listening test and level (P1, S) [HW]
-**Where.** `bootchime.go`, `branding/sound/` (C twin + `analyze.py`).
-**Done when.** On both devices the chimes are comfortable at the default UI
-sound level, have no clicks, and do not delay boot (first sound within ~100 ms
-of the splash). Adjust `chimeStartGain`/`chimeStopGain` in both the Go file and
-the C twin together.
-
-### SND-2 — One audio mixer device (P2, M)
-**Why.** UI sounds (mono), chimes (stereo) and video (stereo) each open their own
-SDL device; three ALSA streams on a 1 GB handheld cost memory and wakeups.
-**Where.** `sound.go`, `bootchime.go`, `alarmtone.go`, `trophy_sound.go`.
-**Done when.** One stereo device with a small Go mixer serves all sources, with
-the LED analyser fed from the mix.
+### SND-2 — One audio mixer on the speaker too (P2, M)
+**Why.** On the headset route every JukaHub output already feeds one small mixer
+on a single SDL device (`audioroute.go`), but on the speaker route each output
+(UI sounds, video/music, background music, the synth, the boot chime) still
+opens its own SDL device: up to five ALSA streams on a 1 GB handheld.
+**Where.** `audioroute.go` (the `out*` functions and the mixer), `sound.go`,
+`bootchime.go`, `ledsync.go` (`audioBus`).
+**Done when.** The speaker route uses the same mixer on one stereo device (the
+per-output passthrough is gone), and the LED analyser is fed from the mix.
 
 ### SND-3 — Sound packs (P3, M)
 **Done when.** Chime and UI-sound variants install as a package category
 (scores + constants as data, not samples) and are selectable in Settings.
 
-### SND-4 — A haptic tap on the chime's last bell (P3, S)
-**Done when.** When vibration is on, the startup chime's final bell fires a soft
-pulse through `playHaptic`.
-**Deferred 2026-11-11.** Needs a device with a working haptic motor to verify the pulse.
-
 ### SND-5 — The tg5040 mixer, checked on a device (P1, S) [HW]
-**Why.** Volume on the Smart Pro and the Brick now drives the codec's "digital
-volume" (an attenuation: 0 is loudest, 63 quietest), mutes through "DAC
-Volume" and keeps `/mnt/UDISK/system.json` "vol" in step (`volume_trimui.go`).
-The control names, the curve (raw ≈ −43·log10(pct/100)) and the interplay with
-the firmware's keymon come from MinUI and NextUI reports, not from a device.
-**Where.** `volume_trimui.go` (`trimuiAttenuationFor`; the probe logs the
+**Why.** Volume on the Smart Pro and the Brick drives the codec's "digital
+volume" (an attenuation: 0 is loudest, 63 quietest), mutes through "DAC Volume"
+and keeps `/mnt/UDISK/system.json` "vol" in step (`volume_trimui.go`). The
+control names are confirmed on a Smart Pro (`docs/HARDWARE_VALIDATION.md`).
+Stock 1.1.0 keymon maps step 0 to raw 63 and audible steps 1..20 to
+`floor(48 × (20 − step) / 20)`; live steps 1 and 4 matched raw 45 and 38.
+JukaHub now uses that curve on a stock Smart Pro and keeps the earlier curve
+for NextUI. A reversible `amixer -c audiocodec` write moved raw 38 to 39 and
+back without changing `system.json`. Listening quality and the interplay with
+keymon during JukaHub playback still need a run.
+**Where.** `volume_trimui.go` (`trimuiStockAttenuationFor`; the probe logs the
 controls it found once, tag `volume`), `systemcontrol.go`, `volumectl.go`,
 `alarmvol.go`.
 **Done when.** On both devices 100% is the loudest and 0% is silent, the steps
@@ -2816,6 +2215,20 @@ re-probe already sees headphones and Bluetooth), `volumectl.go`.
 or unplug (reading back, never fighting it), the probe finds the codec's card
 by name instead of assuming card 0, and a USB or Bluetooth output gets the
 generic mixer path or an honest "volume is set on the device" note.
+**Smart Pro evidence, 2026-11-17.** Its wired jack is an evdev switch on the
+`audiocodec sunxi Audio Jack` input device; the sysfs switch and extcon paths
+are absent. The read-only `EVIOCGSW` query changed from unplugged to plugged
+when headphones were inserted, and the audio-output probe now uses it. Volume
+level read-back and USB/Bluetooth handoff are still untested.
+
+**Card-order and stock-curve fixes, 2026-11-17.** The stock codec advertises ALSA ID
+`audiocodec`, and `amixer -c audiocodec` worked on the Smart Pro. The mixer
+now selects that ID from `/proc/asound/cards`, so a USB DAC assigned card 0
+does not redirect built-in speaker volume changes to the DAC. A stock volume
+step 1 read raw 45 and step 4 read raw 38; these matched the stock keymon's
+linear attenuation formula and replaced the old logarithmic curve on this
+model. A live boot with a USB DAC and JukaHub volume changes still need
+checking, as does volume control on the DAC itself.
 
 ### SND-7 — Spatial audio listening test (P1, S) [HW]
 **Why.** The virtual surround is a parametric model (a spherical head, four
@@ -2831,18 +2244,6 @@ the built-in pair are heard with music, a spoken-word track and a game; the
 centre image, the width behind you and the loudness match are judged; the CPU
 cost while a video plays is measured; the defaults are confirmed or tuned; and
 the notes go into `docs/SPATIAL_AUDIO.md`.
-
-### SND-8 — Spatial audio in RetroArch games, on a device (P1, S) [HW]
-**Why.** Games get the effect through a RetroArch audio DSP filter that JukaHub
-ships. Whether the firmware's RetroArch (`ra64.trimui`) and CrossMix's builds
-load filter libraries is unknown.
-**Where.** `spatial_games.go` (the probe and its cache), `player/spatialfx`,
-RetroArch's log (`[DSP]` lines).
-**Done when.** On a Smart Pro the probe's verdict for the firmware's RetroArch
-is recorded; with **Spatial audio in games** on, RetroArch's log shows the
-filter loading and the effect is heard; a demanding core (N64, PSP) keeps full
-speed with it on; and `retroarch.cfg` has the user's own value back after the
-game.
 
 ### SND-9 — The game plugin's interfaces against the real headers (P1, S) [NET]
 **Why.** The RetroArch DSP-filter and LADSPA declarations in
@@ -2876,70 +2277,58 @@ job, `spatial_games.go` (where it looks).
 looks, and a RetroArch game started from the library on Windows plays through
 it.
 
-### SND-13 — Spatial audio for every game and app, on a device (P1, S) [HW]
-**Why.** Built 2026-11-13: `spatial_alsa.go` gives every screen-taking child
-`ALSA_CONFIG_PATH=<alsa.conf>:/tmp/jukahub-audio/asound-spatial.conf` and
-`AUDIODEV=jhspatial` (plug → ladspa `jukahub_spatial` → plug → `sysdefault` or
-the BlueALSA headset), after a probe (`JukaHub --spatial-alsa-probe`: libasound's
-`_snd_pcm_ladspa_open`, then SDL audio through the chain into `null`) passed;
-RetroArch keeps its filter only where its binary is proven to load it. The
-chain was checked against a PC's real alsa-lib, never on the firmware.
-**Where.** `spatial_alsa.go`, `spatial_games.go` (`prepareSpatialAudio`
-arbitration), `screengroup_unix.go`, the log's `spatial` lines.
-**Done when.** On a Smart Pro and a Brick: the probe's verdict is logged; with a
-mode on, PPSSPP standalone, DraStic and RetroArch (stock and CrossMix) are
-heard through the effect on the speakers and on a Bluetooth headset; the
-firmware's `asound.conf`/`.asoundrc` is recorded (a custom `default` falls back
-to SDL-only); a demanding game keeps full speed; Juka's in-game voice still
-plays while a game holds the output.
+### SND-13 — Spatial audio in games and apps, on a device (P1, S) [HW]
+**Why.** Every screen-taking child gets an ALSA chain through the
+`jukahub_spatial` LADSPA plugin (`spatial_alsa.go`: `ALSA_CONFIG_PATH`,
+`AUDIODEV=jhspatial`, after `JukaHub --spatial-alsa-probe` passes), and
+RetroArch keeps its own DSP filter only where its binary is proven to load it
+(`spatial_games.go`). The chain was checked against a PC's alsa-lib only, and
+whether `ra64.trimui` and CrossMix's RetroArch load filter libraries is unknown.
+**Where.** `spatial_alsa.go`, `spatial_games.go` (the probe, its cache,
+`prepareSpatialAudio`), `screengroup_unix.go`, `player/spatialfx`; the log's
+`spatial` lines and RetroArch's `[DSP]` lines.
+**Done when.** On a Smart Pro and a Brick: both probes' verdicts are logged
+(record the firmware RetroArch's here); with a mode on, PPSSPP standalone,
+DraStic and RetroArch (stock and CrossMix) are heard through the effect on the
+speakers and on a Bluetooth headset; the firmware's `asound.conf`/`.asoundrc` is
+recorded (a custom `default` falls back to SDL-only); a demanding core (N64,
+PSP) keeps full speed; `retroarch.cfg` has the user's own value back after the
+game; Juka's in-game voice still plays while a game holds the output.
 
-### SND-14 — Juka's voice, second round (P3, S)
-**Why.** Juka's voice (`tts_*.go`, 2026-11-11) fetches each sentence whole
-before it plays, remembers only the terms and key refusals, plays at unity
-gain, and is English only (Groq's Orpheus English model).
+### SND-14 — Juka's Groq voice, second round (P3, S)
+**Why.** Juka's Groq voice (`tts_groq.go`, `tts_play.go`) fetches each chunk's
+WAV whole before it plays, remembers only the terms and key refusals, plays at
+unity gain, and is English only (Groq's Orpheus English model).
 **Where.** `tts_play.go`, `tts_groq.go`, `tts_settings.go`.
-**Done when.** If the device run (HW-3 step 5) shows that the first-word delay
+**Done when.** If the device run (HW-3 step 2) shows that the first-word delay
 is the download, the WAV body streams into the feeder as it arrives; a 400 or
 404 for the speech model is remembered for the run like the terms; a voice
 volume slider sits under **Voice**; a second language follows INP-18's choice
 where Groq has a voice for it.
 
-### SND-15 — An offline voice for the handheld (P3, M)
-**Why.** On a TrimUI Juka speaks only through Groq (free, a few minutes a
-day); with no key, offline or past the allowance the answer stays on screen,
-because the firmware has no speech engine and JukaHub downloads none.
-**Where.** `tts_local_other.go` (already uses espeak-ng, flite, pico2wave or
-piper from `required/`), the tools installer (`patch_engine.go`, `tools.go`).
-**Done when.** The installer can fetch a small engine and voice for
-linux-arm64 (flite, or a low-quality piper voice) into `required/`, checked
-like the other tools; its real-time factor and memory on the A133P are
-recorded; **This device** then appears in Settings → Voice & AI → Voice.
-
 ### SND-16 — Juka on the stick lights, on a device (P2, S) [HW]
-**Why.** The Juka layer on the stick lights (2026-11-14, `ledjuka.go`, setting
-`led_juka`) changes hue only through dark so the TrimUI `led_anim` rings do not
-blink on a re-arm; whether a re-arm at a near-zero scale is really invisible,
-and whether the firmware lets JukaHub take the rings mid-game, was not seen.
+**Why.** The Juka layer on the stick lights (`ledjuka.go`, setting `led_juka`)
+changes hue only through dark so the TrimUI `led_anim` rings do not blink on a
+re-arm; whether a re-arm at a near-zero scale is really invisible, and whether
+the firmware lets JukaHub take the rings mid-game, has not been seen.
 **Where.** `ledjuka.go`, `ledanim.go` (`applyLEDAnim`), `ledsync.go`.
 **Done when.** On a Smart Pro: listening, thinking, speaking and answer phases
-show without a flash between them (else write the scale before the re-arm);
-with the lights off and **Always**, the rings light for Juka and return to the
-firmware colour; the in-game assistant over a RetroArch game lights them and
-the game-time colour comes back when it closes; levels feel right at the
-default Mic sensitivity.
+show without a flash between them (else write the scale before the re-arm); with
+the lights off and **Always**, the rings light for Juka and return to the
+firmware colour; the in-game assistant over a RetroArch game lights them and the
+game-time colour comes back when it closes; levels feel right at the default Mic
+sensitivity.
 
-### SND-17 — The Cinematic knock in the chime reference (P3, S)
-**Why.** The Cinematic and Roll boot styles (2026-11-16) add knocks to the
-startup chime through a new `chimeThud` voice (`bootchime.go`), but
-`branding/sound/chime_reference.c`, which mirrors the scores for WAV renders
-and listening tests (SND-1), has no thud voice, so the reference renders no
-longer match what the device plays. The thud (a 190 → 95 Hz sine under the
-110 Hz high-pass) may also be mostly inaudible on the handheld's speakers.
-**Where.** `branding/sound/chime_reference.c`, `bootchime.go`
-(`chimeThudNote`).
+### SND-17 — The knock in the chime reference (P3, S)
+**Why.** The Cinematic and Roll boot styles add knocks to the startup chime
+through `chimeThud` (`bootchime.go`), but `branding/sound/chime_reference.c`,
+which mirrors the scores for WAV renders and listening tests, has no thud voice,
+so its renders no longer match what the device plays.
+**Where.** `branding/sound/chime_reference.c`, `branding/sound/analyze.py`,
+`bootchime.go` (`chimeThudNote`, `chimeStartGain`, `chimeStopGain`).
 **Done when.** The reference renders the Cinematic and Roll chimes with their
-knocks; on a Smart Pro the knock is heard at the default volume (else lift its
-noise part or its pitch).
+knocks, and any gain change is made in `bootchime.go` and the reference
+together. Whether the knock is audible on the speakers is HW-1 step 3.
 
 ---
 
@@ -2968,18 +2357,17 @@ type assembly.
 ## Security and privacy (SEC)
 
 ### SEC-1 — One extraction path through `os.Root` (P2, M)
-**Why.** hakuX and the Packages store (`pkgstage.go`, `pkgExtractZip`) extract
-through `os.Root`; the other installers still guard paths by hand.
-**Where.** `tools.go`, `windows_runtime_install.go`, `emu7z.go`,
-`patch_engine.go` (`extractZipSafe`/`extractTarGzSafe`, used by `patch_flow.go`
-and `ports.go`), `upch*.go`, `xpack*.go`.
-**Done when.** Every archive extraction writes through an `os.Root` opened on its
-destination (reusing `pkgExtractZip`'s refusals); traversal tests stay green.
-
-### SEC-2 — Secrets audit after the November pass (P2, S)
-**Done when.** No token, PIN or pairing code is written to `errors.txt`, the Logs
-ring or a diagnostics bundle (grep the new `log*` call sites for secrets), and
-`.livebuilder-code` stays untracked.
+**Why.** hakuX, the Packages store (`pkgExtractZip`), Files, `tools.go`,
+`xpack.go` and the Windows runtime extract through `os.Root`; the other
+extractors still guard paths by hand.
+**Where.** `patch_engine.go` (`extractZipSafe`/`extractTarGzSafe`, used by
+`patch_flow.go`, `ports.go`, `psremote_helpers_install.go`), `emu7z.go`,
+`ports_store_install.go`, `ppsspp_managed.go`, `tts_install.go`,
+`emulatorupdates.go`, `androidpak.go`, `relpack.go`, `ssyncbundle.go`, `bkup.go`
+(restore).
+**Done when.** Every archive extraction writes through an `os.Root` opened on
+its destination (reusing `pkgExtractZip`'s refusals); traversal tests stay
+green.
 
 ### SEC-6 — Plugin permissions and signing (P1, L) [OWNER]
 **Why.** Plugin scripts run with JukaHub's privileges, unsigned
@@ -2991,14 +2379,16 @@ with a minimal environment, a working directory inside the plugin, a timeout and
 signed and sideloaded ones say so.
 
 ### SEC-8 — Secrets that are actually secret (P1, M)
-**Why.** The default key is a public constant (`crypto.go:30-37`), so the secret
-store is obfuscation; `crypto.go:105` logs the first 8 hex characters of
-`JUKAHUB_CRYPTO_KEY`; the RetroAchievements key is plain JSON; Discord login
-accepts user tokens (`chat.go:930`, against Discord's terms).
+**Why.** The default key is a public constant (`crypto.go` `defaultSecretText`),
+so the secret store is obfuscation; the RetroAchievements key is plain JSON;
+Discord login still accepts user tokens (`chat.go` `discordAuthCandidates`,
+against Discord's terms).
+**Where.** `crypto.go`, `retroachievements.go`, `chat.go`.
 **Done when.** The key is device-bound (Windows DPAPI; TrimUI: random key in a
-`0600` file outside the user-visible tree, created on first run), existing
-secrets are re-encrypted, the log line is removed, RA and every API key go
-through the store, and Discord uses bot or OAuth tokens only.
+`0600` file outside the user-visible tree, created on first run); existing
+secrets are re-encrypted; a config copied to another device asks for its secrets
+again instead of failing; RA and every API key go through the store; Discord
+uses bot or OAuth tokens only.
 
 ### SEC-10 — Supply chain in CI (P2, S) [NET]
 **Done when.** The weekly govulncheck is blocking for reachable vulnerabilities,
@@ -3010,16 +2400,16 @@ tarballs are covered by dependabot or a pinned-digest check.
 **Done when.** Settings → Privacy lists every network feature, what it sends,
 where, and whether it is on; "Export my data" writes a zip of every user file.
 
-### SEC-14 — Legacy terminal_run / emulator_run triggers (P2, S) [OWNER]
-**Why.** `runTerminal` (`morefeatures.go` ~:800) runs the `terminal_cmd` /
-`emulator_cmd` custom variables through `cmd /c` / `sh -c` from config triggers
-with no timeout. Its trust comment is in, and the Live Builder holds pushed
-designs that use these triggers for the owner's approval, but a command that
-hangs blocks until JukaHub exits.
+### SEC-14 — A timeout for the terminal_run / emulator_run triggers (P2, S)
+**Why.** `runTerminal` (`morefeatures.go`) pipes the `terminal_cmd` /
+`emulator_cmd` custom variables into `cmd` / `sh` from config triggers with no
+timeout, so a command that hangs lives until JukaHub exits.
 **Where.** `morefeatures.go` (`runTerminal`), `core.go` (`terminal_run`,
 `emulator_run`), `powertools_backend.go` (`runPowerScript`, the pattern).
-**Done when.** Either the triggers are removed (the Terminal scene replaces them)
-or `runTerminal` gets a timeout and a process-group kill like `runPowerScript`.
+**Done when.** The triggers stay (pushed designs that use them already wait for
+approval in the Live Builder); `runTerminal` runs under a timeout with a
+process-group kill like `runPowerScript`, its output still capped at 4 000
+characters, and a test covers a command that hangs.
 
 ### SEC-15 — The update swap helper survives special characters in the install path (P3, S) [WIN]
 **Why.** `patch_swap.go` (~:287) starts the generated `apply-update.bat`
@@ -3045,19 +2435,6 @@ fetching the list (offline keeps the last verified list); once every entry has a
 hash, an entry without one is refused and the "Not verified" path is removed; a
 test feeds a tampered list and a missing hash.
 
-### SEC-17 — FTP's read-only set follows what actually runs (P3, S)
-**Why.** Over FTP only `Roms/Ports` and game-profile folders are read-only; a
-system whose launcher executes the ROM itself (a scripts or apps "system" on some
-firmwares), a symlink already inside a share that points into Ports (ext4 cards;
-FAT has none) and a profile added while FTP runs (covered from the next start)
-are not.
-**Where.** `ftp_server.go` (`ftpPath.protected`, `ftpProfileDirs`), `ports.go`,
-`gameprofiles.go`, `emulators.go`.
-**Done when.** The locked set is derived from the launchers that execute their
-argument and refreshed when the profile cache rebuilds, and writes through
-symlinks inside shares are refused; a test covers each.
-**Deferred 2026-11-11.** Needs a security review of launcher-derived paths and symlink handling before changing the FTP lock set.
-
 ### SEC-19 — The pairing code never crosses the network in clear (P2, M)
 **Why.** The Live Builder is plain HTTP: someone on the same Wi-Fi who sees one
 request learns the code. Risky designs still wait for the owner, but an ordinary
@@ -3081,66 +2458,29 @@ version is unchanged"; a card with less free space than the download is refused
 before any byte is written; an entry with a wrong `sha256` is refused and a
 correct one shows "Verified download".
 
-### SEC-26 — Cookie records keyed like the jar (P2, S)
-**Why.** `browserCookieKey` is host + path + name, while the jar keys a cookie by
-its domain + path + name: a host-only and a domain cookie of one name, set from
-the same host, share one record, so an `HttpOnly` flag can be lost — and with it
-the protection page scripts get through `document.cookie` (`webdom_net.go`).
-The records also rebuild an IPv6 host without its brackets, which is why
-`webJSNetJarURL` exists.
-**Where.** `browsercookies.go` (`browserCookieKey`, `trackLocked`,
-`browserCookieURL`), `webdom_net.go`.
-**Done when.** Records are keyed by domain-or-host + path + name and keep the
-request's host spelling, an existing `browser-cookies.json` migrates on load,
-`webJSNetJarURL` is gone, and a test sets a host-only and a domain cookie of one
-name and keeps both flags.
-
-### SEC-27 — What the archive extraction still trusts (P3, S)
-**Why.** Two reviews of the Files extraction (2026-11-10) left these open. The
-space check counts declared bytes, not clusters (200 000 small files can take
-far more of a 128 KiB-cluster exFAT card), and a member over 4 GiB on a FAT32
-card is only refused when the write fails. The 7zr.exe fetch (`emu7z.go`)
-renames the download into place before it checks the digest. Windows'
-`tar.exe` (RAR without a full 7-Zip) gets no listing first, so no entry cap or
-up-front space check. A Windows cloud placeholder of the same name is kept
-rather than replaced by Extract here. The vendored LZMA2 decoder accepts chunk
-properties with lc + lp > 4, which xz refuses and which make every chunk
-allocate a 6 MiB table — slow (minutes per megabyte) though bounded and
-cancellable; a one-line check in `lzma/reader2.go` `startChunk`, or a check of
-the chunk headers in `files_extract_xz.go`, would close it. An `.xz` made with
-BCJ or delta is refused, where 7-Zip (when present) could unpack it.
-**Where.** `files_extract.go` (`feExtractBudget`, `feZipPlan`),
-`files_extract_xz.go`, `files_extract_tools.go` (`feRunWindowsTar`), `emu7z.go`.
-**Done when.** Each is closed, or accepted in SECURITY.md with the reason, with
-a test where one can be written.
-
 ### SEC-29 — Build the arm64 parts as an unprivileged user inside the build root (P3, S)
-**Why.** `.github/scripts/build-root.sh` runs every third-party build
-(FFmpeg, opus, json-c, libevent, SDL2, chiaki-ng with curl, Box64, the pip
-wheels) as root in a chroot with the runner's `/proc` mounted. Root there can
-read the runner's own processes, and so the token any job holds for uploading
-artifacts: a compromised pinned source could leave a poisoned
-`remote-play-helpers-<hash>` (or `androidrt-pack-`, `wine-runtime-pack-`)
-artifact that later runs reuse. `go-build-cache.sh` reasons that any job of an
-accepted run can already write the release; these two jobs cannot, so the
-artifacts are the weaker spot. Found in the review of the split helper and
-Box64 jobs (2026-11-11); the exposure predates it.
+**Why.** `.github/scripts/build-root.sh` runs every third-party build (FFmpeg,
+opus, json-c, libevent, SDL2, chiaki-ng with curl, Box64, the pip wheels) as
+root in a chroot with the runner's `/proc` mounted, so a compromised pinned
+source can read the runner's artifact token and leave a poisoned
+`remote-play-helpers-<hash>`, `androidrt-pack-` or `wine-runtime-pack-` artifact
+that later runs reuse.
 **Where.** `.github/scripts/build-root.sh` (`in_root`, `build`, `check`),
 `player/native/build-helpers.sh` and `build-runtimes.sh` (the folders they
 write: `DEPS_PREFIX`, `/tmp/jukahub-*`, `player/native/bin` through `/src`).
-**Done when.** `build` and `check` run the scripts as a build user
-(`chroot --userspec`) that owns only the folders they write, `create` and the
-package installs stay root, and the builds still pass.
+**Done when.** `build` and `check` run the scripts as a build user (`chroot
+--userspec`) that owns only the folders they write, `create` and the package
+installs stay root, and the builds still pass.
 **Verify.** One helper and one Box64 run on GitHub, and `id` in a build log.
 
 ### SEC-30 — Startup lock, the remaining paths (P2, M)
-**Why.** The startup lock (2026-11-14, `bootlock*.go`) covers the screen, the
-companion (HTTP 423), FTP/SSH, voice and Quick Settings, but not everything
-that can act on a locked device.
+**Why.** The startup lock (`bootlock*.go`) covers the screen, the companion
+(HTTP 423), FTP/SSH, USB file transfer, voice and Quick Settings, but not
+everything that can act on a locked device.
 **Where.** `peernet.go`, `livebuilder.go`, the Steam OpenID return
-(`/steam/return`), `powersleep.go` and the parked game loop in `main.go`,
-the Reset settings, backup restore and config-history paths, plugin startup
-hooks, `bootlock_ui.go`.
+(`/steam/return`), `powersleep.go` and the parked game loop in `main.go`, the
+Reset settings, backup restore and config-history paths, plugin startup hooks,
+`bootlock_ui.go`.
 **Done when.** Paired devices' save sync and hand-off and the Live Builder are
 refused while locked; a Steam sign-in cannot complete behind the lock; with
 "after sleep" a game paused by the sleep stays paused under the lock instead of
@@ -3150,12 +2490,40 @@ actions wait for the unlock; a PC mouse can click the lock's power choices; the
 PBKDF2 cost is timed on the A133 ("Checking…" under about a second, else lower
 the stored iteration count for new hashes).
 
+### SEC-31 — Exact-value redaction for stored secrets in logs (P3, S)
+**Why.** `redactLogSecrets` (`logredact.go`) works from patterns (`?token=`,
+`password=`, `Bearer`, JWTs), so a secret inside a URL path (an IPTV
+`…/live/<user>/<pass>/1.ts` stream that ffmpeg names in its errors, a calendar
+secret link) or a token pasted into free text gets through. `aiRedactWith`
+(`aitools.go`) already replaces the exact stored values for text sent to the
+model.
+**Where.** `logredact.go`, `aitools.go` (`aiStoredSecrets`), the config save
+path.
+**Done when.** A bounded snapshot of stored secret values (6 characters or more,
+decrypted) is rebuilt on the main thread after a config load or save and read
+lock-free (`atomic.Pointer`) by `redactLogSecrets`, which replaces them wherever
+they appear; a case in `community_test.go` proves an IPTV path password is gone.
+
+### SEC-32 — A Max-Age refresh does not rewrite the cookie file (P3, S)
+**Why.** A cookie's saved expiry is now now + Max-Age, so every response that
+re-sends a Max-Age cookie changes its record and rewrites
+`browser-cookies.json` on the card.
+**Where.** `browsercookies.go` (`trackLocked`, the expiry helper).
+**Done when.** A record's expiry is only rewritten when it moves by more than an
+hour (or the flags change), and a test covers a refresh within the hour.
+
+### SEC-33 — A restore writes only JukaHub's own data files (P2, S)
+**Why.** Restoring a `.jkbackup` limits `app:` entries to JukaHub's settings
+files, but `data:` entries can still land anywhere inside the data folder,
+which also holds runnable emulators and runtimes.
+**Where.** `bkup.go` (`bkupPlanRestore`, `bkupSources`).
+**Done when.** `data:` targets are limited to the top-level stores and the
+folders `bkupSources` names, and `bkup_test.go` shows `data:emulators/x`
+refused.
+
 ---
 
 ## Docs and project (DOC)
-
-### DOC-1 — `docs/PERFORMANCE.md` (P1, S) [HW]
-**Done when.** Created by PERF-1 and kept as the place for every device number.
 
 ### DOC-4 — Decisions recorded (P3, S)
 **Done when.** ADRs exist for the input vocabulary (`inputhints.go`), the
@@ -3166,45 +2534,34 @@ string catalogue (I18N-1), the plugin sandbox (SEC-6) and the overlay approach
 
 ## Input and controls (INP)
 
-The hint layer (`inputhints.go`, November 2026) decides whether hints name the
-pad's buttons or the keyboard's keys and translates where it can do so
-truthfully. These tasks make the rest of the input story match it.
+The hint layer (`inputhints.go`) decides whether hints name the pad's buttons or
+the keyboard's keys; these tasks make the rest of the input match it.
 
 ### INP-1 — Keyboard parity, screen by screen (P1, M)
-**Why.** XAG 112: every screen must be usable by keyboard *and* controller
-alone. The November passes made the browser (Y and / search), the video player
-(X/Y), the Settings option sheet, the Tools pages, Playtime, the config
-inspector, the image viewer, the PDF reader, game details, Local play, keyboard
-languages, Alarm, Chat and Patch match, and `docs/CONTROLS.md` has a "Keyboard
-keys, screen by screen" table. Known gaps left: the Terminal's history list and
-card show "Start Run" in keyboard words with no key behind it (`terminal_ui.go`
-~:667 and the history footer); Core builds' "Start Auto-update" has no key in
-`handleCoreBuildsKey`, and "L1/R1 Filter" should read "L1/R1 / [ ]"
-(`corebuilds_ui.go`).
+**Why.** XAG 112: every screen must be usable by keyboard *and* by controller
+alone. Known gaps: the Terminal's history list and card show "Start Run" with no
+key behind it on a keyboard (`terminal_ui.go`, the history footer); Core builds'
+"Start Auto-update" has no key in `handleCoreBuildsKey`, and "L1/R1 Filter"
+should read "L1/R1 / [ ]" (`corebuilds_ui.go`).
 **Where.** Every `handle*Key` and its `*FooterHints`; `inputhints.go`
-(`hintKeyboardTwin`, the `"pad / key"` badge convention).
+(`hintKeyboardTwin`, the `"pad / key"` badge convention); the "Keyboard keys,
+screen by screen" table in `docs/CONTROLS.md`.
 **Done when.** For each screen in `docs/CONTROLS.md`, every footer hint is
 pressable on a keyboard: either the generic twin is true there or the hint is
-written `"<pad> / <key>"`; the table in CONTROLS.md stays in step.
+written `"<pad> / <key>"`; the table stays in step.
 **Verify.** INP-12's checker reports zero mismatches.
 
 ### INP-2 — Sentences that name buttons (P1, M)
 **Why.** Prose such as "Press Y on any video…" or "A to type" bypasses the hint
 layer and lies on a keyboard. `hintSentence`/`hintSentence2` (`inputhints.go`)
-write such sentences in the hints' words and follow remaps; 27 sentences in 15
-files use them so far. Left (grep
-`'"[^"]*\b(Press|press|Hold|hold) [ABXY]\b'`): `memtool.go`,
-`files_locations.go`, `files_manager.go`, `fileeditor.go`, `netmon.go`,
-`netplay_ui.go`, `partyscene.go`, `auditscene.go`, `bugrep.go`,
-`componentreport.go`, `emuwininstall.go`, `emuxbox.go`, `game_library_ui.go`,
-`game_random.go`, `musicuifeatures.go`, `musicpeq.go`, `patch.go` (decide what
-"Release" means on a keyboard), `patch_engine.go`, `vkui.go` (`vkStripTip`),
-`datetime.go`, and the `inmap*.go` Select+R1 prose (a pad-only chord: remap
-only, no keyboard words). Deliberately physical: hakuX's exit chord, "Press A on
-a controller to join" (hotseat) and the one-handed help text.
-**Where.** The files above; `hintSentence` in `inputhints.go`.
-**Done when.** Each goes through `hintSentence` or is rewritten without a
-button, and the grep lists only the deliberate exceptions.
+write such sentences in the hints' words and follow remaps, but the grep
+`'"[^"]*\b(Press|press|Hold|hold) [ABXY]\b'` still matches literals in about 60
+files.
+**Where.** The files the grep lists; `hintSentence` in `inputhints.go`.
+**Done when.** Each match goes through `hintSentence` or is rewritten without a
+button, and the grep lists only the deliberate physical exceptions: hakuX's exit
+chord, "Press A on a controller to join" (hotseat), the one-handed help text and
+the `inmap*.go` Select+R1 chord (pad-only: remap, no keyboard words).
 
 ### INP-3 — Controller glyph sets (P2, M)
 **Why.** A DualSense or Switch Pro pad on Windows shows Xbox letters; on a
@@ -3258,16 +2615,16 @@ HIDAPI hints enable DualSense/DS4/Switch Pro/8BitDo; a "Controller not
 recognised — map it" flow uses the controller test (`ctrldiag.go`) to write a
 mapping.
 
-### INP-10 — Stick dead zone and repeat timing (P2, S)
-**Where.** `controller.go:513` (fixed UI dead zone), `navrepeat.go`
-(`a11yRepeatMs`: Normal or Slow).
-**Done when.** Settings → Controls has a dead-zone slider (with the live
-calibration view) and repeat delay/rate steps; drifting sticks stop moving focus.
-
-### INP-11 — Players and pad status (P3, M)
-**Done when.** Each connected pad shows its player number (LED where the pad has
-one), battery level (`SDL_JoystickCurrentPowerLevel`) in Quick Settings, and a
-"pad battery low" toast; hotseat reuses the assignment.
+### INP-11 — Players and pad status beyond the Bluetooth page (P3, M)
+**Why.** The Bluetooth page numbers connected pads, shows their battery and
+warns at 15 % (`bt_padinfo.go`, `bt_autoreconnect.go`), but only for Bluetooth
+pads on the handheld and only on that page; USB pads and Windows get nothing.
+**Where.** `bt_padinfo.go`, `quicksettings.go`, `gamepad_hotplug.go`,
+`hotseat.go`.
+**Done when.** Quick Settings lists each connected pad with its player number
+and battery (Bluetooth from `bt_padinfo.go`, others from
+`SDL_JoystickCurrentPowerLevel`, so Windows too); the player LED is set where
+the pad has one; hotseat uses the same numbering.
 
 ### INP-12 — Hint truth checker (P2, M) [WIN]
 **Why.** INP-1 regresses silently unless something checks it.
@@ -3277,31 +2634,16 @@ hint's key through the scene's key handler with a recording stub.
 **Done when.** A `make` target runs it and lists mismatches.
 
 ### INP-15 — The firmware button swap for the built-in pad only (P3, S) [HW]
-**Why.** `applyButtonSwap` (`core.go`) flips A/B and, since 2026-11-09, X/Y for
-every pad on a handheld, so an external Xbox-layout pad on a TrimUI (Local play
-opens extra pads, `hotseat.go`) comes out mirrored on both pairs.
+**Why.** `applyButtonSwap` (`core.go`) flips A/B and X/Y for every pad on a
+handheld, so an external Xbox-layout pad on a TrimUI (Local play opens extra
+pads, `hotseat.go`) comes out mirrored on both pairs.
 **Where.** `core.go` (`applyButtonSwap`, `padFaceButton`), the polling helpers
-that mirror it (`inmapPhysicallyHeld`, `jlandPadHeld`, `vkLogicalHeld`), and
-the synthetic presses (`padRepeatWhich`, `inmapSynthWhich`, the phone remote's
+that mirror it (`inmapPhysicallyHeld`, `jlandPadHeld`, `vkLogicalHeld`), and the
+synthetic presses (`padRepeatWhich`, `inmapSynthWhich`, the phone remote's
 pushes, which use `Which` 0 — also the first real pad's instance).
-**Done when.** The swaps apply to the firmware pad ("TRIMUI Player1",
-045e:028e) and to synthetic presses only, the polling helpers match per pad,
-and an external pad on a Smart Pro reports its printed letters.
-
-### INP-16 — Undo the old X/Y workarounds once (P3, S)
-**Why.** Until 2026-11-09 a TrimUI's X and Y arrived swapped; a user who fixed
-that with Accessibility (the Button layout or an X↔Y remap) or a control
-profile now has them swapped again. The CHANGELOG says to set them back, which
-few will read.
-**Where.** `extras.go` (`migrateHandheldButtonMapping` and its marker key are
-the pattern), `a11y.go` (`a11y_swap_xy`, the per-button keymap), the control
-profiles (`inmap*.go`).
-**Done when.** On a handheld, the first start after the update offers (not
-forces) to clear an X/Y swap or an X↔Y remap it finds, with a marker so it
-asks once.
-
----
-**Deferred 2026-11-11.** Needs a one-time migration prompt design and confirmation wording.
+**Done when.** The swaps apply to the firmware pad ("TRIMUI Player1", 045e:028e)
+and to synthetic presses only, the polling helpers match per pad, and an
+external pad on a Smart Pro reports its printed letters.
 
 ### INP-17 — Mouse mode, second round (P2, S) [HW]
 **Why.** Mouse mode (hold Select + L1) and the games mouse (vcursor_bridge_linux.go)
@@ -3310,10 +2652,10 @@ shipped with known gaps.
 **Done when.** The footer says the D-pad moves the pointer while mouse mode is on;
 the chord works from a second pad; the pointer hides over full-screen video in
 mouse mode; the games mouse honours the Mouse mode switch, offers the right
-stick as a wheel and a speed setting, and — if HW-2 step 6 shows SDL apps miss a
+stick as a wheel and a speed setting, and — if HW-2 step 2 shows SDL apps miss a
 mouse that appears mid-run — is created idle when the child starts or handed to
 it through `SDL_EVDEV_DEVICES`; an LED colour while it is on (ledpanel).
-**Verify.** Unit tests for the state machine; HW-2 step 6.
+**Verify.** Unit tests for the state machine; HW-2 step 2.
 
 ### INP-18 — Voice command in more languages (P2, M)
 **Why.** Voice command understands English only: its phrase tables are English
@@ -3325,34 +2667,32 @@ transcription request); the keyboard layout's language
 the layout or the UI language, and English stays the fallback.
 
 ### INP-19 — Offline voice recognition on Windows (P3, M) [WIN]
-**Why.** The microphone path needs a Groq key and internet. Many Windows PCs
-have an offline recogniser (System.Speech) that understands a fixed grammar —
-which is what a list of command phrases and names is. No recogniser small
-enough for the handheld's 1 GB is known.
-**Where.** `voicecmd.go` (a second recogniser in front of the same intent
-parser), a PowerShell/System.Speech helper probed with
-`InstalledRecognizers()`.
-**Done when.** On a Windows PC with a recogniser installed, Voice command works
-offline with a grammar of the current phrases and names; without one it says
-so and keeps the Groq path.
+**Why.** Offline speech (`stt_local.go`: Vosk with a Whisper fallback, the
+`JukaHub-OfflineSpeech-linux-arm64.zip` pack from `stt_install.go`) runs only on
+the Smart Pro (`sttSupported`); on Windows, Voice command, the orb and
+voice typing need a Groq key and internet.
+**Where.** `stt_local.go`, `stt_install.go`, the release workflow that builds
+the pack, `voicecmd.go`.
+**Done when.** Decision: the same engines, not System.Speech — a
+`JukaHub-OfflineSpeech-windows-amd64.zip` pack is built and published, installs
+like the arm64 one, and on a PC without a Groq key Voice command, the orb and
+voice typing work offline; with the pack missing they say so and keep the Groq
+path.
 
 ### INP-20 — Voice on the handheld's microphone: the hardware proof (P2, S) [HW]
-**Why.** The voice orb, the Voice command page and voice typing share one
-microphone now (`voicemic.go`): SDL's default device, then the kernel's capture
-PCMs through `plughw`, SDL's own list and `arecord`, a 1.2 s silence check that
-moves on, and the tg5040 codec's microphone switches ("ADCL Input MIC1 Boost
-Switch", "ADCR Input MIC2 Boost Switch") turned on before the first recording.
-All of it comes from the Allwinner driver's control names, not from a Smart Pro
-on a desk, and the orb's adaptive end-of-speech thresholds (`orbVAD`) are
-guesses until a real microphone is measured; the page still uses fixed ones.
+**Why.** The orb, Voice command and voice typing share one microphone path
+(`voicemic.go`: SDL's default device, the kernel's capture PCMs through
+`plughw`, SDL's list, `arecord`, a 1.2 s silence check, and the tg5040 codec's
+"ADCL Input MIC1 Boost Switch" / "ADCR Input MIC2 Boost Switch"), built from the
+Allwinner driver's control names; the orb's end-of-speech thresholds (`orbVAD`)
+are guesses and the Voice command page still uses fixed ones.
 **Where.** `voicemic.go` (candidates, mixer, channel choice), `voiceorb.go`
 (`orbVAD`, `orbSilencePeak`), `voicecmd.go` (the page's fixed levels).
 **Done when.** On a Smart Pro and a Brick the log's `mic` lines say which device
-answered and which switches were set; a spoken command is captured and a clip
-ends about a second after the speech without cutting words; the thresholds
-come from measured levels and the page uses `orbVAD` too; if the stock firmware
-has no capture path at all, the orb says so and the docs say which firmware
-does.
+answered and which switches were set; a clip ends about a second after the
+speech without cutting words; the thresholds come from measured levels and the
+page uses `orbVAD` too; if the stock firmware has no capture path at all, the
+orb says so and the docs say which firmware does.
 
 ### INP-22 — The voice orb from a pad on Windows (P3, S) [WIN]
 **Why.** On a PC the orb's key is F4; a couch player with only a pad has no
@@ -3364,50 +2704,41 @@ opens Game Bar first, and a PlayStation pad's PS button is GUIDE too.
 press of Back) open the orb, with the Game Bar caveat in its second line and
 `docs/CONTROLS.md`.
 
-### INP-23 — Home search opens Settings rows instead of screens of the same name (P3, S)
-**Why.** Home search lists the Settings rows first and marks their titles
-taken, so "emulators" and "voice shortcuts" open Settings on those rows
-instead of the Emulators page and the Voice shortcuts page. Voice commands get
-the pages since 2026-11-11 (`voiceemu.go`, `voiceShortcutScreenTarget`); Home
-search does not.
-**Where.** `homesearch_index.go` (`homeSearchScreens`), `voiceemu.go`.
-**Done when.** Home search opens the Emulators page and the Voice shortcuts
-page for their names (a catalogue entry whose action is the row's own wins, or
-the rows are renamed), and the emulator targets are offered in Home search
-too.
-
 ---
 
 ## Shell, multitasking and notifications (SHELL)
 
-### SHELL-1 — Game switcher (P1, L)
-**Why.** NextUI, Onion and nx-redux made the switcher the handheld's signature
-feature: the last games as big cards with their save-state screenshot, resume
-in one press. JukaHub has the parts (recents in `game_library.go`, state PNGs in
-`gmeta_states.go`, the Continue card) but no switcher.
-**Where.** New `switcher.go`; `home_continue.go`, `gmeta_states.go`,
-`savestate_resume.go`; docs/CHECKPOINTS.md for the long-term design (GAME-3).
-**Done when.** Select (short press) on Home or Menu+Select anywhere in JukaHub
-opens a horizontal carousel of the last 10 games with their latest state
-thumbnail, playtime and "Resume / Start fresh / Remove"; resume launches with
-the auto state; only resumable games are listed by default.
-**Verify.** [HW] three RetroArch games resume from the switcher on a Smart Pro.
+### SHELL-1 — Game switcher on a device (P2, S) [HW]
+**Why.** The Game switcher (`gameswitcher.go`, `gameswitcher_ui.go`) turns on
+RetroArch's `savestate_thumbnail_enable` for JukaHub's launches through the
+scoped config edit and shows each recent game's newest state picture; it has not
+run on a handheld.
+**Where.** `gameswitcher.go` (`prepareGameSwitcher`, `gswStates`,
+`gameSwitcherFromGameMenu`), `gamemenu.go`, `racfgscope.go`.
+**Done when.** On a Smart Pro: three RetroArch games played from the library
+show the moment they were left (opened by X on Home and by Start → Games → Game
+switcher); A resumes each where it was; the in-game menu's "Game switcher" row
+quits the game and opens the switcher; the user's own
+`savestate_thumbnail_enable` is back after the game exits; X removes a game and
+keeps its saves; with the switcher off, a state saved in a library game still
+shows its picture on the game page's states strip.
 
-### SHELL-2 — A quick menu over running games (P1, XL) [HW] [OWNER]
-**Why.** SteamOS's Quick Access Menu, TrimUI's own Menu+Select board and muOS
-2601's injected overlays all put brightness, volume, battery, save/quit and
-performance over a game. The "Known impossibles" list said drawing over an
-emulator cannot be done; muOS shows that an `LD_PRELOAD` hook on SDL/GLES swap
-can draw it, and a hotkey daemon can pause the emulator (`SIGSTOP`) and show
-JukaHub instead.
-**Where.** A small C hook library next to `androidrt/` (swap-buffers hook,
-own GLES drawing), a hotkey reader on evdev (`volumebuttons.go` pattern),
-`gamesuspend.go`, `alarm_proc_unix.go` (SIGSTOP precedent).
-**Done when.** Phase 1 (no injection): Menu+Select while a game runs stops the
-emulator, JukaHub draws a quick panel (brightness, volume, save state, load
-state, performance profile, quit game) and resumes it. Phase 2 (injection): a
-volume/brightness/low-battery indicator drawn into RetroArch and one standalone
-emulator. Each phase is its own task before code.
+### SHELL-2 — Indicators drawn inside a running game (P2, XL) [HW]
+**Why.** The in-game menu (`gamemenu.go`, hold Select + L2) pauses any game
+under JukaHub's own overlay (resume, music, save/load state, rewind, fast
+forward, Ask Juka, Game switcher, close background apps, sleep, quit), but it
+has no brightness or performance-profile row, and nothing JukaHub draws is seen
+while a game runs: volume, brightness and low-battery changes are invisible (the
+low-battery LED in `ledindicators.go` is the only sign). muOS draws such
+overlays through an `LD_PRELOAD` hook on SDL/GLES swap.
+**Where.** `gamemenu.go` (`gmItems`), `powerprofile.go`; a small C hook library
+next to `androidrt/` (swap-buffers hook, own GLES drawing); `volumebuttons.go`,
+`lowbattery.go`.
+**Done when.** The in-game menu gains Brightness and Performance profile rows;
+an opt-in hook draws a volume, brightness and low-battery indicator into
+RetroArch and the standalone PPSSPP, with no frame-time cost visible in
+RetroArch's own FPS readout, and a game whose renderer the hook cannot find runs
+unchanged.
 
 ### SHELL-3 — Notifications that can be acted on and survive (P1, M)
 **Why.** The centre (`notifications.go`) keeps 50 entries in memory, has no
@@ -3416,7 +2747,7 @@ is mouse-only.
 **Done when.** Entries persist (bounded file), carry a source and an optional
 action ("Install update", "Open download", "Retry"), group by source, A runs the
 action and X dismisses, Y clears all; toasts queue by priority instead of
-replacing; quiet hours and "while playing" are settings (extends UX-11).
+replacing; quiet hours and "while playing" are settings.
 
 ### SHELL-5 — Commands in global search (P2, M)
 **Done when.** Search understands verbs: "wifi off", "brightness 40",
@@ -3433,38 +2764,26 @@ return (bounded map); Home restores the last focused card after a game.
 **Done when.** Holding Start (or Alt+Tab on a keyboard) shows the last five
 screens as cards; release opens the highlighted one.
 
-### SHELL-8 — Placeable widgets (P2, L)
-**Why.** Promoted from the parking lot. `widgets.go` holds behaviours, not
-widgets; Home's slots are fixed.
-**Done when.** Home layouts expose widget slots; built-in widgets: clock, next
-alarm, battery, now playing, weather, today's playtime, storage; a community
-widget is a sandboxed JSON descriptor (no code), per the parking-lot rule.
-**Progress (2026-11-10).** Done, unbuilt: Home's **Widgets** layout is the
-slots, a six-column grid of tiles the user moves, resizes, adds and removes in
-Edit Home (`home_edit.go`, `home_tiles.go`; stored in `homeTiles`), with
-clock, weather, battery, storage, now playing, calendar and today's playtime
-widgets (`home_widgetdraw.go`); the new **Carousel** layout reads the same
-tile list. Left: the next alarm is folded into the clock widget (its wide
-sizes show it) instead of being a widget of its own, and community widgets as
-sandboxed JSON descriptors are not done.
-
 ### SHELL-9 — Tips and an on-device manual (P2, S)
-**Why.** No tips exist; the manual lives on GitHub. `sectrustdoc.go` already
+**Why.** No tips exist and the manual lives on GitHub; `sectrustdoc.go` already
 renders SECURITY.md in-app.
+**Where.** `sectrustdoc.go` (the renderer), Settings → Help, the Home layouts.
 **Done when.** Settings → Help renders `docs/QUICK_START.md` and
-`docs/CONTROLS.md` offline; Home shows one dismissible tip a day drawn from a
-bounded list (never the same twice in a row).
-**Deferred 2026-11-11.** Needs the on-device manual/tip content and a Home-tip placement decision.
+`docs/CONTROLS.md` offline (embedded); Home shows one tip a day as a dismissible
+line above the footer (Standard, Hero and Tabs layouts; A on it opens the
+matching Help page), drawn from a bounded list of about 30 tips taken from
+QUICK_START.md and never the same twice in a row; Settings → Help → "Show tips"
+turns them off.
 
 ### SHELL-10 — Clock faces and a real standby screen (P3, M)
 **Done when.** The screensaver and dock offer three clock faces (analogue,
 digital, minimal) with OLED-safe pixel shift; the choice is a theme-able token.
 
 ### SHELL-11 — Close all apps & games on a device (P2, S) [HW]
-**Why.** Close all (2026-11-14, `closeall*.go`) finds untracked apps by a
-`/proc` name and folder table and never touches JukaHub's group, its ancestors,
-the paused firmware loops (`/tmp/jukahub-paused`) or the offline AI servers;
-the names were taken from the code, not from a running handheld.
+**Why.** Close all (`closeall*.go`) finds untracked apps by a `/proc` name and
+folder table and never touches JukaHub's group, its ancestors, the paused
+firmware loops (`/tmp/jukahub-paused`) or the offline AI servers; the table was
+written from the code and has not met a running handheld.
 **Where.** `closeall_linux.go` (`closeAllRules`, `closeAllNeverRules`),
 `closeall.go`, `gamemenu.go`.
 **Done when.** On a Smart Pro (stock and CrossMix): Close all over a RetroArch
@@ -3472,91 +2791,49 @@ game, a PortMaster port, a Wine program under Box64 and Remote Play closes each
 (RetroArch saves on the interrupt; an orphan from a killed JukaHub saves on
 SIGTERM) and names them in the toast; no firmware process matches a rule;
 **Close background apps** from the in-game menu leaves the game paused and
-resumable and the paused pids stopped; the 9-row in-game card fits on the
-Brick and the Smart Pro; "Close apps and try again" after an offline-AI memory
-error answers the question.
+resumable and the paused pids stopped; the in-game card fits on the Brick and
+the Smart Pro; "Close apps and try again" after an offline-AI memory error
+answers the question.
 
 ### SHELL-12 — Swipe between the Tabs Home's tabs (P3, S)
-**Why.** The Tabs Home (2026-11-16) changes tab by L1/R1, Tab, PgUp/PgDn, a
-click on the strip and the wheel, but a touch screen has only the tap: Home
-has no shared horizontal-swipe helper, so the tabs agent left it out.
+**Why.** The Tabs Home changes tab by L1/R1, Tab, PgUp/PgDn, a click on the
+strip and the wheel, but a touch screen has only the tap: Home has no
+horizontal-swipe helper.
 **Where.** `hometabs.go` (`homeTabsClick`, `tabsWheel`), the touch path in
-`main.go`; reuse a swipe detector if another screen has one (the browser's
-or the image viewer's).
+`main.go`; reuse a swipe detector if another screen has one (the browser's or
+the image viewer's).
 **Done when.** A horizontal swipe on the page changes tab in the swipe's
-direction with the same slide as L1/R1 (instant under Reduce motion); a
-vertical drag still scrolls; a tap still opens; nothing changes for the pad.
-
-### SHELL-13 — Experience packs and other Start entries on the Tabs Home (P3, S)
-**Why.** Loose ends of the Tabs Home (2026-11-16). The pack validator part is
-DONE the same day (`xpack.go`/`xpackui.go` accept `tabs`; CONFIGURATION.md's
-pack table still to mention it). Left: Xbox Remote Play and Steam have no Start-menu row: their
-`app:do:` refs resolve only through the Games tab's `homeTabsExtraApps`, so a
-favourite or collection item of either opened through `homeActivateApp`
-would say "not available".
-**Where.** `xpack.go`, `xpackui.go`, `hometabs_games.go`
-(`homeTabsExtraApps`), the Start menu groups (`startMenuGroups`).
-**Done when.** A pack with `"homeLayout": "tabs"` applies and its preview
-line names Tabs (docs/CONFIGURATION.md updated); Xbox Remote Play and Steam
-open from a favourite, a collection and Home search alike.
-
----
+direction with the same slide as L1/R1 (instant under Reduce motion); a vertical
+drag still scrolls; a tap still opens; nothing changes for the pad.
 
 ## Power, sleep and battery (PWR)
 
-### PWR-1 — Sleep on the power button (P0, L) [HW]
-**Why.** JukaHub never sleeps the device: the power key quits it, idle only
-dims, and deep sleep exists only in the 3% guard (`lowbattery.go`
-`suspendDevice`). NextUI's instant-on deep sleep is the bar.
-**Where.** evdev reader for KEY_POWER (`volumebuttons.go` pattern),
-`lowbattery.go`, `gamesuspend.go`, `saver_power.go`, `backgroundwork.go`.
-**Done when.** A short press sleeps: a running game is stopped (`SIGSTOP`),
-audio paused, backlight off, Wi-Fi/BT per setting, then `mem` (fallback
-`freeze`) via `/sys/power/state`; any key wakes; the game resumes; the clock,
-Wi-Fi and battery refresh (SYS-7); a long press keeps today's quit. Idle →
-sleep after N minutes is a setting.
-**Verify.** 20 sleep/wake cycles in a game and in a video, battery drop
-overnight recorded in `docs/PERFORMANCE.md`.
-
-### PWR-2 — Backlight-off screen off (P1, S) [HW]
-**Why.** "Screen off" (ambient dock, music) draws a black frame and leaves the
-backlight on (`ambient.go` `ambientDarken`).
-**Done when.** Screen off writes `bl_power`/brightness 0 on
-`/sys/class/backlight/*` and restores it on wake; the panel is really dark.
-
-### PWR-3 — Save every game before the battery dies (P1, M) [HW]
-**Why.** FIX-13. The 3% guard saves RetroArch only.
-**Done when.** Each launcher family has a "save and stop" action (RetroArch
-UDP, PPSSPP's save-on-exit, DraStic's SIGTERM handling, hakuX/AndroidRT/ports:
-`SIGSTOP` + sync, at least never killed mid-write); the guard runs it with a
-grace period, then sleeps (PWR-1) rather than powering off.
-
-### PWR-4 — Charging and battery history (P1, M)
-**Why.** Since 2026-11-09 the gauge shows a bolt while a charger is connected
-(`statusbar_status.go`, the charger input in `widgets.go`), but there is no
-drain history or time-left estimate, and battery health is a diagnostics line.
-**Done when.** The gauge also marks "Full"; Settings →
-Battery shows a 48-hour graph (sampled every 5 minutes into a bounded ring on
-disk), time left at the current drain, health and cycle count.
-
-### PWR-5 — Charge limit (P3, S) [HW]
-**Done when.** If the PMIC exposes `charge_control_end_threshold` (or an AXP
-equivalent), Settings offers "Stop charging at 80%"; otherwise the probe result
-is recorded in `docs/DEVICE_TUNING.md` and the task closes.
+### PWR-3 — Save every kind of game before the battery dies or the power goes (P1, M) [HW]
+**Why.** The 3 % guard (`lowbattery.go` `protectLowBattery`), Power off after sleeping and Power off
+with a game running (`quickresume.go` `quickSaveHeldGame`,
+`quickPowerOffSavesFirst`) save RetroArch only, through its network commands; a
+standalone emulator (PPSSPP, DraStic, Flycast), a port or an Android/Windows app
+is never saved, so the sleep deadline only sleeps again and the low-battery
+guard suspends it unsaved.
+**Where.** `lowbattery.go`, `quickresume.go`, `savestate_resume.go`,
+`ppsspp_managed.go`, `gamesuspend.go`.
+**Done when.** Each launcher family has a "save and stop" action — PPSSPP's
+save-on-exit with auto-load of that state at the next start, DraStic's SIGTERM
+handling, Flycast's auto-save setting; hakuX, AndroidRT and ports: `SIGSTOP` +
+sync, never killed mid-write — and the low-battery guard, Power off after
+sleeping and Power off use it, so those games also come back through Resume game
+at power on (`resume-at-power-on.json`); a test covers each family's choice.
 
 ### PWR-6 — Profiles that follow the situation (P2, M)
-**Status 2026-11-11: started** — per-game CPU profile (Auto / Battery saver / Balanced / Performance) in the options sheet; library, ports, emulators and LAN play launch through `beginLaunchPowerProfile(config, path)`. Open: per-system and per-power-source profiles; `raemu.go`, `brw_wpe.go` still use the global profile.
-**Why.** Per-game CPU caps apply only to launches from the library
-(`emulators.go:870`, `ports.go:468`, `netplay.go:509` use the global profile);
-nothing switches on the charger (SteamOS issue #3034 asks for the same).
-**Done when.** Every launch path goes through one `launchPowerProfile(target)`;
+**Why.** A per-game CPU profile (Auto / Battery saver / Balanced / Performance,
+in the game options sheet) applies to the library, ports, emulators and LAN play
+through `beginLaunchPowerProfile`, but `raemu.go` and `brw_wpe.go` still use the
+global profile (`beginGamePowerProfile`), and nothing changes by system or on
+the charger (SteamOS issue #3034 asks for the same).
+**Where.** `powerprofile.go`, `raemu.go`, `brw_wpe.go`, the game options sheet.
+**Done when.** Every launch path goes through `beginLaunchPowerProfile`;
 profiles exist per game, per system and per power source (battery / charger),
 most specific wins; the game options sheet shows which one applies.
-
-### PWR-8 — Low-battery warning visible in games (P2, S) [HW]
-**Why.** The 5% toast is drawn by JukaHub, which is not on screen during a game.
-**Done when.** The LED pulses red (`ledsync.go`) and, with SHELL-2 phase 2, an
-overlay icon appears; the toast waits for the return.
 
 ### PWR-9 — Battery estimates per activity (P3, M)
 **Why.** `battery_eta.go` learns one drain rate for everything, while the menu,
@@ -3568,6 +2845,22 @@ comes back.
 **Done when.** The learned rate is kept per activity and the estimate uses the
 one that is running; the helper's status file carries the battery level at the
 start and the end of a stream, and JukaHub learns the stream's rate from it.
+
+### PWR-10 — Travel lock on the FN switch: verify on the device (P2, S) [HW]
+**Why.** `travellock.go` reads the Smart Pro's FN switch as gpio243 (PH19, the
+pin spruceOS reads) and takes its position when the setting is turned on as
+"unlocked", so the pin's polarity never had to be guessed; it has not run on a
+device.
+**Where.** `travellock.go`, `powersleep.go` (`travelLockKeepAsleep`, the
+screen-off wait), the boot hook `System/starts/00-jukahub-travel-lock.sh`.
+**Done when.** On a Smart Pro: gpio243 flips with the switch (exported by
+JukaHub when nothing had); a locked sleep ignores power presses and a charger
+plug and still wakes for an alarm; a power-on with the switch locked turns off
+within a few seconds of the boot hook and leaves no stale `.autostart-pending`;
+the stock "FnKey Setting" function (CPU mode, LED, mute) does not get in the
+way. Find the Smart Pro S's switch (the row is hidden there) and, if the AXP717
+can be told to ignore the power key for power-on, use that instead of booting
+and powering off.
 
 ---
 
@@ -3591,9 +2884,13 @@ plus one rotation slot, and an unsigned or expired manifest is refused with a
 clear message (sideload keeps its explicit trust prompt).
 
 ### REL-4 — Update channels (P2, S)
-**Done when.** Settings → Updates offers Stable / Beta; Beta follows
-prereleases; the channel shows in About and in bug reports.
-**Deferred 2026-11-11.** Needs a release-feed and channel-policy decision (which prereleases Beta follows and where the channel is shown).
+**Why.** Every install follows the newest stable GitHub release; testers cannot
+get prereleases in-app.
+**Where.** `autoupdate.go`, `upch.go`, Settings → Updates, About, `bugrep.go`.
+**Done when.** Settings → Updates offers Stable / Beta (Stable by default); Beta
+takes the newest release, prereleases included, Stable skips prereleases;
+switching from Beta to Stable waits for the next stable release instead of
+downgrading; the channel shows in About and in bug reports.
 
 ### REL-5 — Health-checked installs (P2, M)
 **Why.** `patch_swap.go` copies files with a journal; a new binary that starts
@@ -3604,47 +2901,42 @@ build's boots and marks healthy starts: first frame plus 90 s).
 handled" within 20 s and write a health mark; otherwise the next boot rolls
 back automatically and says so.
 
-### REL-6 — Factory reset (P2, S)
-**Done when.** Settings → System → Reset offers "Reset settings" (keeps games,
-saves, media) and "Erase everything JukaHub created"; both make a backup first
-(`bkup.go`) and ask twice.
+### REL-7 — JukaHub as the default shell: crash relaunch and the boot paths (P1, S) [HW]
+**Why.** The TrimUI boot hook (`autostart.go` `trimuiAutostartTemplate`) skips
+MainUI with a stand-in in JukaHub OS mode and otherwise queues JukaHub in
+`/tmp/cmd_to_run.sh` and closes MainUI once it is up. A start that hangs keeps
+the next boot on stock once (`.autostart-pending`), but a crash simply hands
+back to MainUI.
+**Where.** `autostart.go`, `launch.sh`, `crashreport.go`, `docs/BOOT.md`.
+**Done when.** A crash relaunches JukaHub once, then falls back to stock with a
+note at the next JukaHub start; the chord to reach stock is in `docs/BOOT.md`;
+on stock 1.1.x and CrossMix, `Apps/JukaHub/autostart.log` shows which path ran
+(stand-in, queue before the menu, after closing it, or the direct fallback) and
+`docs/BOOT.md` records it.
 
-### REL-7 — JukaHub as the default shell (P1, M) [HW]
-**Why.** The autostart hook (`autostart.go`; on by itself from a TrimUI's first
-start since 2026-11-09, `autostart_firstrun.go`) queues JukaHub in the
-firmware's `/tmp/cmd_to_run.sh` and closes MainUI once it is up (since
-2026-11-10; the first hook never started JukaHub, see CHANGELOG), so MainUI
-still shows for about two seconds where the loop opens it before reading the
-queue. A start that hangs makes the next boot stay on stock once
-(`.autostart-pending`), but a crash simply hands back to MainUI; the
-desktop `.cmd`/`.desktop` do not set the working directory although
-`main.go:83` reads `jukaconfig.json` from it. Device check owed: read
-`Apps/JukaHub/autostart.log` on stock 1.1.x and on CrossMix (which path ran —
-queue before the menu, after closing it, or the direct fallback).
-**Done when.** "Start JukaHub at boot" launches before MainUI, a crash relaunches
-JukaHub once and then falls back to stock with a note, the chord to reach stock
-is documented; desktop autostart sets the working directory (or the config path
-is resolved from the executable).
-
-### REL-8 — One release pipeline (P1, M) [NET]
-**Why.** FIX-14; builds are not reproducible (date stamps, no `-trimpath`,
-unpinned mingw/brew), no SBOM or provenance.
-**Done when.** One `release.yml` builds TrimUI + Windows from a tag, with
-`-trimpath`, `SOURCE_DATE_EPOCH`, pinned toolchains, an SPDX SBOM and SLSA
-provenance attached; asset names match `patch_swap.go`; release notes come from
-the CHANGELOG section of the tag (the in-app changelog reads them).
-
-### REL-9 — Install when it suits the user (P3, S)
-**Done when.** A downloaded update can be set to install at the next boot or
-when idle on the charger (`upch.go` already downloads then); never during a game.
+### REL-8 — Reproducible releases with an SBOM (P1, M) [NET]
+**Why.** `release.yml` builds TrimUI and Windows from a tag, but the builds are
+not reproducible (date stamps, no `-trimpath` in
+`.github/scripts/trimui-build.sh`, `docker-image.yml` or `build.bat`, unpinned
+mingw/brew), release notes are GitHub's generated ones, and no SBOM or
+provenance is attached.
+**Where.** `.github/workflows/release.yml`, `.github/scripts/trimui-build.sh`,
+`.github/workflows/docker-image.yml`, `player/build.bat`, `player/release.sh`.
+**Done when.** Every release build uses `-trimpath` and `SOURCE_DATE_EPOCH`
+instead of the date stamp, toolchains are pinned, an SPDX SBOM and SLSA
+provenance are attached; asset names match `patch_swap.go`; release notes come
+from the tag's CHANGELOG section (the in-app changelog reads them).
 
 ### REL-10 — Prove recovery on a device (P1, S) [HW]
 **Why.** The boot guard, crash reports, the recovery card and the `.restart-now`
-restart were written without a compiler or a device.
+restart have never been exercised on a device.
 **Where.** `bootguard.go`, `crashreport.go`, `recoverycard.go`,
 `recoverysettings.go`, `safeboot.go`, `launch.sh`.
 **Done when.** On a Smart Pro: a forced panic (on the main goroutine and on
-another one) leaves `crash-*.txt` and `errors.txt` shows "JukaHub CRASHED"; the
+another one) leaves `crash-*.txt` and `errors.txt` shows "JukaHub CRASHED"; one
+on another goroutine while a RetroArch game runs logs "JukaHub left a game
+running (process group N)", the game saves and quits and MainUI comes back
+alone; the
 next start shows the crash card; Send report opens a prefilled form; Restart in
 safe mode comes back in safe mode through `launch.sh`; three kills before the
 first frame start safe mode, while three kills after it give safe mode but no
@@ -3656,15 +2948,6 @@ update backup with Restart now; the chord card's choices work with the pad and a
 USB keyboard. On Windows: the respawn after Restart, crash files in
 `%LOCALAPPDATA%\JukaHub\logs`, and `JukaHub.exe.old` gone after the next start.
 
-### REL-11 — A goroutine panic leaves a running game behind (P2, S)
-**Why.** A panic on the main goroutine stops the screen-owning children now; one
-on another goroutine ends the process at once (the runtime has no hook), and
-`launch.sh` then brings MainUI back over a game that is still running.
-**Where.** `player/launch.sh`, `crashreport.go`, the long-lived goroutines.
-**Done when.** `launch.sh` (or a tiny supervisor) stops JukaHub's leftover
-process group after a crash exit before handing the screen back, or the
-long-lived goroutines recover and report instead of dying.
-
 ### REL-12 — Count starts that die in SDL init (P3, S) [HW]
 **Why.** The boot guard now runs right after `img.Init`, but a build that fails
 `sdl.Init`/`ttf.Init`/`img.Init` (logFatal, exit 1) is never recorded: the chord
@@ -3675,10 +2958,10 @@ and amended after the chord check, or REL-10's device run shows it is not worth
 it and the decision is recorded here.
 
 ### REL-13 — Turn on the bug-report service (P1, S) [OWNER] [NET]
-**Why.** Since 2026-11-10 every build posts Report a bug to
-`https://generate.jukalang.com/api/bug-report` (`netlify/functions/bug-report.mjs`),
-which files a public GitHub issue — but only once the site has a token; until
-then devices fall back to the phone code.
+**Why.** Every build posts Report a bug to
+`https://generate.jukalang.com/api/bug-report`
+(`netlify/functions/bug-report.mjs`), which files a public GitHub issue — but
+only once the site has a token; until then devices fall back to the phone code.
 **Where.** Netlify → generate.jukalang.com → Environment variables;
 [docs/BUG_REPORTS.md](../docs/BUG_REPORTS.md).
 **Done when.** `JUKAHUB_GITHUB_TOKEN` (a bot account's token with Issues
@@ -3691,37 +2974,16 @@ with the `from-device` label and the sent sheet shows its number.
 ## Accessibility (A11Y)
 
 ### A11Y-1 — Narration of the focused control (P1, L)
-**Why.** XAG 106 and every 2026 console ship system text-to-speech; JukaHub has
-none. On the handheld this is the difference between usable and not for a
-blind player.
-**Where.** A `narrate(text)` service: Windows SAPI (`ISpVoice` via
-go-ole or a `powershell` fallback), TrimUI `espeak-ng` as a package (Toolbox),
-both off-thread; focus changes in `focus.go`, Home, Settings, lists and toasts.
+**Why.** XAG 106 and every 2026 console ship system text-to-speech; JukaHub
+speaks Juka's answers (`tts_*.go`) but never the interface, which for a blind
+player is the difference between usable and not.
+**Where.** A `narrate(text)` service on the existing voices (`tts_local.go` on
+the handheld, `tts_local_windows.go` on Windows, `tts_play.go`), off-thread;
+focus changes in `focus.go`, Home, Settings, lists and toasts.
 **Done when.** Settings → Accessibility → Narration reads the focused control's
 label, value and hint ("Vibration, on, A toggles"); a new focus interrupts the
 old speech (XAG 106); speed and voice are settings; narration of the settings
 dialog itself works.
-**Status.** Out of scope in this environment: narration needs a platform TTS
-engine (Windows SAPI or TrimUI `espeak-ng`) and an audible device to verify
-interruption and voice settings; neither is available in this build environment.
-
-### A11Y-4a — Interface-sound balance on the mono UI device (P3, S) [out of scope]
-**Why.** A11Y-4 shipped mono audio, stereo balance for video and music, and
-always-on/size/background captions. UI sounds use the separate mono S16 UI
-device; SDL cannot pan a mono device, and changing that device to stereo
-previously made the interface sounds play at the wrong pitch and length.
-**Status.** Out of scope here: a safe fix needs a new stereo UI-output path
-and a hardware listen test, not a flag or a helper. The mono UI path already
-matches the Mono audio setting by construction.
-
-### A11Y-6a — The narration shortcut (P3, S) [out of scope]
-**Why.** A shortcut — hold Select + Start for three seconds, or a
-Win+Ctrl+Enter-like chord — would toggle narration. Narration is
-A11Y-1, which is out of scope in this environment: it needs a platform TTS
-engine (Windows SAPI or TrimUI `espeak-ng`) and an audible device to verify
-interruption and voice settings.
-**Status.** Out of scope for the same reason as A11Y-1; until narration exists
-the shortcut has nothing to toggle.
 
 ### A11Y-8 — Bundle the legible reading font (P3, S)
 **Why.** **Legible reading font** resolves Atkinson Hyperlegible from installed
@@ -3735,15 +2997,18 @@ doc and installer lists name it, and the setting picks it up without a restart.
 
 ## Languages and locales (I18N)
 
-### I18N-1 — A string catalogue (P1, L)
-**Status 2026-11-11: partly done** — `i18n.go` + `player/i18n/*.json` (English text as key, %d/%s patterns), applied centrally in the measure/fit/draw helpers; Settings → General → Language (es, pt-BR, fr, de, it, ru, machine-translated). Open: plural rules, a weekly untranslated-strings report, ~330 direct `SizeUTF8` measurements, OS-locale default.
-**Why.** Every UI string is an English literal; no translation is possible.
-**Where.** New `internal/i18n` (message catalogue in `go:embed` JSON, keys are
-the English source, CLDR plural rules), an extraction tool under `tools/`, and
-`T("…")` at call sites, screen by screen.
-**Done when.** Settings → Language exists; Home, Settings, the Start menu,
-Quick Settings, footers and toasts go through `T`; a CI check lists untranslated
-strings per language; missing translations fall back to English.
+### I18N-1 — The string catalogue, finished (P1, M)
+**Why.** `i18n.go` and `player/i18n/*.json` (English text as key, %d/%s
+patterns) translate centrally in the measure/fit/draw helpers, and Settings →
+General → Language offers es, pt-BR, fr, de, it and ru (machine-translated).
+Missing: plural rules, the OS locale as the default, a report of untranslated
+strings, and about 370 direct `SizeUTF8` measurements that bypass the catalogue.
+**Where.** `i18n.go`, `player/i18n/`, the `SizeUTF8` call sites, a check under
+`tools/`.
+**Done when.** Plurals follow CLDR rules for each shipped language; every
+measurement goes through the translated text; the first start picks the OS or
+firmware locale when a catalogue exists; a CI check lists untranslated strings
+per language; missing translations fall back to English.
 
 ### I18N-2 — Dates, numbers and units (P1, S)
 **Why.** Date layouts are still hard-coded in ~60 files and inconsistent ("2 Jan
@@ -3755,22 +3020,29 @@ Date format setting (used by the alarm clock, the idle dock and Settings).
 `formatBytes` exist; both follow the locale (I18N-1) and the clock setting.
 
 ### I18N-3 — Fonts for every script (P1, M) [HW]
-**Why.** Only Inter ships (`fonts.go` swaps anything else for look-alikes or
-"…"): Chinese, Japanese, Korean, Arabic, Thai and Hindi titles are unreadable.
+**Why.** Only Inter ships, and Settings → Display → Font (`uifont.go`) replaces
+it with one downloaded face at a time; there is no per-glyph fallback, so
+`fonts.go` turns Chinese, Japanese, Korean, Arabic, Thai and Hindi titles into
+look-alikes or "…".
+**Where.** `fonts.go`, `uifont.go`, `cachebudget.go`.
 **Done when.** A fallback chain loads Noto Sans CJK / Arabic / Thai / Devanagari
-subsets on demand (downloaded as a package, never bundled in the binary),
-bounded by `cachebudget.go`; SDL_ttf's HarfBuzz shaping is used if the stock
-library has it (check the firmware's SDL_ttf version first).
+subsets on demand (downloaded like the `uifont.go` faces, never bundled in the
+binary), bounded by `cachebudget.go`; SDL_ttf's HarfBuzz shaping is used if the
+stock library has it (check the firmware's SDL_ttf version first).
 
 ### I18N-4 — Input methods (P2, L)
 **Done when.** The on-screen keyboard has pinyin and kana composition with a
 candidate strip (`vkeyboard.go` already has a suggestion strip); physical
 keyboards get `SDL_TEXTEDITING` handling.
 
-### I18N-5 — First translations (P2, M) [OWNER]
-**Done when.** A translation platform (Weblate/Crowdin, free for OSS) is set up;
-Spanish, Portuguese (Brazil), Russian, German, French, Chinese (Simplified) and
-Japanese reach Home + Settings coverage.
+### I18N-5 — Human translations (P2, M) [OWNER]
+**Why.** Six languages ship machine-translated (`player/i18n/`) and nobody
+reviews them; Chinese and Japanese have no catalogue (they also need I18N-3's
+fonts).
+**Done when.** A translation platform (Weblate or Crowdin, free for OSS) is set
+up on the catalogue; Spanish, Portuguese (Brazil), Russian, German and French
+are reviewed for Home and Settings; Chinese (Simplified) and Japanese reach Home
++ Settings coverage.
 
 ### I18N-6 — Right-to-left layout (P3, L)
 **Done when.** Arabic/Hebrew mirror the Home grid, lists and footers; text uses
@@ -3789,28 +3061,35 @@ HTTP proxy used by every client in `httpclients`; a Wi-Fi QR (`WIFI:T:…;S:…;
 can be shown for sharing and scanned through the phone companion.
 
 ### NET-3 — Verify network time on the device (P1, S) [HW]
-**Why.** Clock sync is implemented (`ntpsync.go`, `clockset_linux.go`) but was
-written without a toolchain or a device.
+**Why.** Clock sync (`ntpsync.go`, `clockset_linux.go`) has not run on a device.
 **Where.** `ntpsync.go`, `clockjump.go`, `datetime.go`, `launch.sh` (TZ block).
 **Done when.** On a Smart Pro and a Brick after a cold boot: joining Wi-Fi sets
 the clock within ~20 s (the Logs show "clock set from …"), Settings → Date &
 time → Clock last set shows it, the process really runs as root (settimeofday
 succeeds), an alarm due in the corrected time rings, blocking UDP 123 falls back
 to the HTTPS date, and with HTTPS blocked a clock more than 10 minutes off is
-left alone (Clock last set says the HTTPS date did not confirm it). The image
-has a CA bundle (system store or one of `bugrepCAPaths`); without one a cold
-boot's clock is set from SNTP alone (errors.txt: "HTTPS confirmation is
-unavailable"), which is recorded here either way.
+left alone (Clock last set says the HTTPS date did not confirm it). Whether the
+image has a CA bundle (system store or one of `bugrepCAPaths`) is recorded here;
+without one a cold boot's clock is set from SNTP alone (errors.txt: "HTTPS
+confirmation is unavailable").
 
 ### NET-5 — Hotspot and tethering (P3, S) [HW]
 **Done when.** The probe for AP mode (`iw list`, hostapd on the image) is
 recorded; if supported, Quick Settings offers a hotspot with a QR to join.
 
-### NET-6 — USB modes: file transfer and networking (P2, M) [HW]
-**Why.** Knulli ships MTP; JukaHub users must pull the card to copy ROMs.
-**Done when.** If the kernel has configfs USB gadget support, connecting to a PC
-offers "File transfer (MTP)" (umtprd as a package) or "Network (RNDIS/ECM)"; the
-probe result is recorded either way.
+### NET-6 — USB file transfer on a device (P2, M) [HW]
+**Why.** USB file transfer (`usbmtp*.go`: JukaHub's own MTP over the kernel's
+USB gadget, on by default, Settings → Network) has not met a computer on real
+hardware. The stock Smart Pro 1.1.0 kernel explicitly lacks ECM and RNDIS
+configfs functions, so USB networking is closed for this image; see
+`docs/USB_FILE_TRANSFER.md`.
+**Where.** `usbmtp.go`, `usbmtp_linux.go`, `usbmtp_proto.go`,
+`docs/USB_FILE_TRANSFER.md`.
+**Done when.** On a Smart Pro with Windows 11, a Mac (OpenMTP) and Linux: the
+card appears, a 2 GB ROM copies both ways, a folder made on the computer shows
+in Files, turning the switch off gives the port back to the firmware's mode
+(ADB), and the startup lock hides the card; the throughput is in
+`docs/USB_FILE_TRANSFER.md`.
 
 ### NET-7 — Network shares in Files and the library (P2, L)
 **Done when.** SMB2/3 (go-smb2) and WebDAV locations can be added in Files
@@ -3818,24 +3097,25 @@ probe result is recorded either way.
 ROM or media source with local caching.
 
 ### NET-8 — Check the VPN on the device (P2, S) [HW]
-**Why.** The VPN (Settings → Network → VPN) was written without a device or a
-toolchain; its protocol was checked against the kernel's WireGuard, its routes
-and sockets in a network namespace, but never on the TrimUI's kernel.
-**Where.** `vpn.go`, `vpn_linux.go`, `vpnd_linux.go`, `wg_*.go`,
-`docs/VPN.md`.
+**Why.** The VPN (Settings → Network → VPN) was checked against the kernel's
+WireGuard, its routes and sockets in a network namespace (`wg_test.go` replays
+the kernel transcripts), but never on the TrimUI's kernel.
+**Where.** `vpn.go`, `vpn_linux.go`, `vpnd_linux.go`, `wg_*.go`, `docs/VPN.md`.
 **Done when.** On a Smart Pro and a Brick: a provider's `.conf` imported from
-the card and from the phone connects within seconds of switching the VPN on
-(the row says Connected; Logs show "connected to …"); the browser shows the
-VPN's address; netplay and a PS Remote Play stream away from home go through
-it while the LAN (companion, FTP, Remote Play at home) stays reachable;
-switching it off restores the routes and `resolv.conf`; a cold boot with the
-clock in the past still connects; `kill -9` of the tunnel process falls back
-to Wi-Fi and the next start restores `resolv.conf`. Whether the firmware has
-`/dev/net/tun` (or the `tun` module) and runs JukaHub as root is recorded here
-either way. On Windows, with WireGuard for Windows installed: one prompt per
-change, a service named JukaHub, the LAN still reachable.
-**Status 2026-11-11.** Code done, unbuilt; `wg_test.go` replays the kernel
-transcripts and is the first thing to run (`go test -run TestWG ./...`).
+the card and from the phone connects within seconds of switching the VPN on (the
+row says Connected; Logs show "connected to …"); the browser shows the VPN's
+address; netplay and a PS Remote Play stream away from home go through it while
+the LAN (companion, FTP, Remote Play at home) stays reachable; switching it off
+restores the routes and `resolv.conf`; a cold boot with the clock in the past
+still connects; `kill -9` of the tunnel process falls back to Wi-Fi and the next
+start restores `resolv.conf`. Whether the firmware has `/dev/net/tun` (or the
+`tun` module) and runs JukaHub as root is recorded here. On Windows, with
+WireGuard for Windows installed: one prompt per change, a service named JukaHub,
+the LAN still reachable.
+
+**Smart Pro prerequisite, 2026-11-17.** `/dev/net/tun` exists on stock 1.1.0
+and JukaHub launches as root. A provider configuration and a live tunnel are
+still needed for this check.
 
 ### NET-17 — A VPN kill switch (P3, S) [HW]
 **Why.** While the VPN is on, a tunnel process that dies takes its routes with
@@ -3847,39 +3127,16 @@ unreachable `0.0.0.0/1` and `128.0.0.0/1` routes at a higher metric than the
 tunnel's, which outlive the tunnel process and go when the VPN is switched off
 (and at boot); the LAN route still wins.
 
-### NET-9 — mDNS discovery (P2, M)
-**Why.** Peers are found by UDP broadcast only; mDNS/DNS-SD is how phones,
-Kodi, Moonlight hosts and printers announce themselves.
-**Done when.** JukaHub announces `_jukahub._tcp` (companion, live builder when
-on, peer port) and browses for Moonlight/Kodi/peers; the one-shot query also
-replaces zeroconf (PERF-7).
-
-### NET-10 — Bluetooth audio that follows the user (P2, M) [HW]
-**Why.** Knulli switches audio between Bluetooth and the speaker by itself and
-reconnects controllers; JukaHub only detects a headset (`audiooutput.go`).
-**Done when.** After SYS-1: a connecting headset takes the audio (video, music,
-UI sounds), a disconnect returns it to the speaker without a pop, paired pads
-reconnect after sleep (PWR-1).
-
-### NET-11 — Re-probe the moment the network or the sign-in page changes (P2, S)
-**Why.** The probe runs every 20 s and while a game owns the screen. After a
-captive-portal sign-in the user returns to JukaHub and waits up to 20 s
-before downloads resume, and switching Wi-Fi networks can leave the old
-verdict on screen.
-**Where.** `netmon.go`, `wifi_ui.go`, `browser.go` (visitor close), the
-Wi-Fi supplicant change callback.
-**Done when.** Joining or leaving a network, and closing the Browser after a
-portal sign-in, each trigger an immediate probe, and a test covers the
-portal-to-online transition without waiting for a tick.
-
-### NET-12 — Keep the corrected time across a power cycle (P3, S) [HW]
-**Why.** Network time only fixes the clock while the device is on; if FIX-2 finds
-an RTC, the next cold boot could start near the right time instead of the stale
-one.
-**Where.** `ntpsync.go` (after `clockSetSystem`), FIX-2's findings.
-**Done when.** When `/dev/rtc0` exists, a network-time set also writes the RTC
-(`RTC_SET_TIME` ioctl, or `hwclock -w` without a shell), logged at Info; with no
-RTC nothing changes.
+### NET-12 — Verify corrected time after a cold boot (P3, S) [HW]
+**Why.** `rtcsync_linux.go` already writes the RTC through `RTC_SET_TIME` after
+network time corrects the system clock, and logs the result. This stock Smart
+Pro has `/dev/rtc0`; its RTC and system time agreed during the SSH inspection.
+The remaining question is whether a correction survives an actual power cycle.
+**Where.** `ntpsync.go`, `rtcsync_linux.go`, `docs/HARDWARE_VALIDATION.md`.
+**Done when.** After deliberately correcting a stale clock through JukaHub's
+network-time path, power off fully and boot without Wi-Fi; the clock starts
+from the corrected RTC value. Repeat on the Brick. A device without an RTC
+continues without a hardware-clock write.
 
 ### NET-15 — FTPS (explicit TLS) for the FTP server (P3, M)
 **Why.** FTP sends the password and files in plaintext; SFTP covers clients that
@@ -3902,51 +3159,71 @@ DNS-rebinding hole the dial-time check closes.
 a page whose server is on the LAN reaches the LAN, a public page still cannot,
 and a test covers both.
 
-### NET-18 — A request in flight when the handheld sleeps (P3, S)
-**Why.** Since 2026-11-11 a new request after a wake waits for the network
-(`netWaitOnline`), but a Juka request already in flight when the device sleeps
-keeps its 90-second client timeout after the wake and holds the AI queue; and
-`IsOnline()` keeps the answer from before the sleep until the first probe, so
-another feature that starts a request in the first second after a wake can
-fail once.
-**Where.** `chatsync.go` (`chatRunAI`, `chatGroqAsk`), `wake_resume.go`,
-`netmon.go`.
-**Done when.** A wake cancels a Juka request that was in flight and asks again
-once the network answers; features that start requests at a wake wait through
-`netWaitOnline`.
+### NET-19 — Quick Settings and the Home Wi-Fi tile count as a network change (P3, S)
+**Why.** The Wi-Fi page's join, disconnect, forget and radio switch mark the
+connectivity verdict stale and probe at once; turning the radio off or on from
+Quick Settings or the Home tile leaves the old verdict up until the next probe
+(5–20 s).
+**Where.** `quicksettings.go`, `home_quicktiles.go`, or once in `setWifiEnabled`
+(`systemcontrol.go`); `netmon.go` (`netNetworkSwitching`).
+**Done when.** Each radio off/on from any place marks the verdict stale and
+probes when it ends (`defer netNetworkSwitching()()` around the call, off the
+main thread).
+
+### NET-20 — Windows notices a network change made outside JukaHub (P3, S) [WIN]
+**Why.** A network picked in Windows' own flyout waits for the 20 s probe tick;
+Windows has no Wi-Fi keeper to nudge the monitor.
+**Where.** `wifi_windows.go`, `netmon.go` (`netNudge`).
+**Done when.** `NotifyIpInterfaceChange` (or `NotifyAddrChange`) calls
+`netNudge()`, and switching networks in Windows updates JukaHub's status within
+about a second.
+
+### NET-21 — Picture and video questions to Juka feel a wake too (P3, S)
+**Why.** A wake cancels a Juka request in flight and asks again once the network
+answers, but a picture or video question takes its context from `visionQuitCtx`,
+so it still waits out `visionChatTimeout` before `chatRunAI` requeues it.
+**Where.** `vision_chat.go` (`visionChatAsk`), `chatsync.go`
+(`chatAIRunContext`).
+**Done when.** Its context also ends with `chatAIRunContext()` (for example
+`stop := context.AfterFunc(chatAIRunContext(), cancel); defer stop()`), so a
+wake requeues it at once.
 
 ---
 
 ## Game library and emulation (LIB)
 
 ### LIB-1 — An incremental library index (P1, M)
-**Why.** FIX-8: every open rescans the card synchronously; `mlib.go` already has
+**Why.** Every open rescans the card synchronously; `mlib.go` already has
 an incremental index pattern.
 **Done when.** A background indexer keeps a bbolt index of ROM paths, sizes,
 mtimes, CRCs (≤ 64 MiB) and metadata; the library opens from it instantly and
 refreshes changed folders after a launch, a copy or a manual "Rescan".
 
 ### LIB-3 — Collections that build themselves (P1, M)
-**Status 2026-11-16.** Partly done, unbuilt: the Tabs Home's Collections tab
-has user collections (`collections.json`: ordered, renamed, deleted, up to
-100 × 500) and the automatic Most played, Recently added and Never played
-(`hometabs_collections.go`). Open: the smart ones from metadata, the
-collections inside the Games library, and a switch to hide the automatic ones.
+**Why.** The Tabs Home's Collections tab has user collections
+(`collections.json`: ordered, renamed, deleted, up to 100 × 500) and the
+automatic Most played, Recently added and Never played
+(`hometabs_collections.go`), but no smart collections from metadata, and the
+Games library does not show any of them.
+**Where.** `hometabs_collections.go`, `gmeta_dat.go`, `game_library_ui.go`.
 **Done when.** Smart collections — by genre, by decade, by player count (from
-`gmeta_dat.go` metadata) — join the automatic three; the Games library shows
-the same collections as Home (one store, `collections.json`); Settings can
-hide the automatic ones; the 32-tag limit becomes a bounded list per
-collection.
+`gmeta_dat.go` metadata) — join the automatic three; the Games library shows the
+same collections as Home (one store, `collections.json`); Settings can hide the
+automatic ones; the 32-tag limit becomes a bounded list per collection.
 
 ### LIB-5 — Rich media per game (P2, M) [NET]
-**Why.** Art is libretro `Named_Boxarts` only.
-**Done when.** Snaps and title screens from libretro-thumbnails, and (with
-GAME-8's account) descriptions, screenshots, videos and manuals from
-ScreenScraper; a manual opens in the PDF reader; everything is bounded by the
-cache budget.
+**Why.** A game has one picture: libretro box art, or a title screen or snap
+when there is no box art (`artwork_match.go`); no descriptions, screenshots,
+videos or manuals.
+**Where.** `artwork_match.go`, `gmeta_ui.go`, the PDF reader, `cachebudget.go`.
+**Done when.** Snaps and title screens from libretro-thumbnails show beside the
+box art, and (with GAME-8's account) descriptions, screenshots, videos and
+manuals come from ScreenScraper; a manual opens in the PDF reader; everything is
+bounded by the cache budget.
 
 ### LIB-6 — Verified dumps (P3, M)
-**Why.** Promoted from the parking lot.
+**Why.** Nothing tells a good dump from a bad one, which is behind many "the
+game does not start" reports.
 **Done when.** No-Intro/Redump DATs install as a package; the library verifies
 CRC/SHA-1 in the background and badges games Verified / Unknown / Bad dump.
 
@@ -3955,30 +3232,6 @@ CRC/SHA-1 in the background and badges games Verified / Unknown / Bad dump.
 never compared).
 **Done when.** A hash table (libretro `System.dat`) covers every system with a
 BIOS; results say which file is missing or wrong and where it goes.
-
-### LIB-8 — Standalone emulators updated on the handheld (P2, M) [HW]
-**Why.** PPSSPP, mGBA, Flycast updates are only downloaded and reported
-(`emulatorupdates.go`).
-**Done when.** They install with the same backup/rollback flow as cores
-(`corebuilds*.go`).
-
-### LIB-9 — Ports are games (P2, M)
-**Where.** `ports.go`, `port_compat.go`.
-**Done when.** PortMaster ports appear in the library, recents, playtime and the
-switcher; the PortMaster catalogue can be browsed inside JukaHub.
-
-### LIB-10 — Resume everywhere, and at boot (P1, M) [HW]
-**Why.** Auto save/load covers RetroArch only (`savestate_resume.go`); Knulli
-boots straight back into the last game.
-**Done when.** Standalone emulators that support it save on exit (PPSSPP,
-DraStic, Flycast settings); an opt-in "Resume last game at boot" starts it after
-the splash with a 3-second "Home instead" prompt.
-
-### LIB-11 — State thumbnails (P2, S)
-**Why.** `gmeta_states.go` shows thumbnails only if the user enabled
-`savestate_thumbnail_enable` in RetroArch.
-**Done when.** JukaHub sets it in the config it manages (`osdpreset.go`
-conventions) and the switcher (SHELL-1) uses the images.
 
 ### LIB-12 — RetroAchievements, all the way (P2, M) [NET]
 **Why.** `retroachievements.go` reads profile, recent unlocks and progress only;
@@ -4006,22 +3259,22 @@ recommended core and profile.
 screenshots, manual, achievements, last played, playtime graph, the save-state
 strip and Play / Resume / Options as the first three actions.
 
-### LIB-17 — Pin core builds the user trusts (P2, S) [HW]
+### LIB-17 — Pin builds the user trusts (P2, S) [HW]
 **Why.** The libretro buildbot has no stable per-core tree for linux/aarch64 and
 states only CRC32 (checked over HTTPS), so "Install automatically" always takes
-the newest nightly. JukaHub records each installed build's SHA-256 and keeps the
-replaced one, but cannot tell a good nightly from a bad one. Since 2026-11-11
-hakuX, the runtimes and a PC's emulators are never reinstalled after a rollback
-(every rollback records the build it gave up, `emuRuntimeRecord.Installed`);
-the cores still are, on the handheld and now on a PC too.
-**Where.** `player/emulatorautoupdate.go`, `player/emulatorinstall.go`
-(`planCoreUpdates`, `startEmulatorRollback`), `player/corebuilds_ui.go`,
-`player/corebuilds_history.go`.
-**Done when.** A core can be pinned on the Core builds page (the automatic pass
-and "Update all" skip it, the badge says "pinned"); every core rollback
-(Emulators R1 and both Core builds page paths) records the CRC32 it gave up in a
-per-core record that the automatic pass skips (not `coreRefusalRecord`, whose
-wording says the core cannot run here); and a test covers both.
+the newest nightly; JukaHub keeps the replaced build but cannot tell a good
+nightly from a bad one. hakuX, the runtimes and a PC's emulators are never
+reinstalled after a rollback (`emuRuntimeRecord.Installed`), but cores still
+are, and a PC's standalone emulator cannot be held at its version.
+**Where.** `emulatorautoupdate.go`, `emulatorinstall.go` (`planCoreUpdates`,
+`startEmulatorRollback`), `corebuilds_ui.go`, `corebuilds_history.go`,
+`emuautoupdate_desktop.go`, `emutiles.go`.
+**Done when.** A core can be pinned on the Core builds page and a PC emulator
+from its tile (the automatic pass and "Update all" skip it, the badge says
+"pinned"); every core rollback (Emulators R1 and both Core builds page paths)
+records the CRC32 it gave up in a per-core record that the automatic pass skips
+(not `coreRefusalRecord`, whose wording says the core cannot run here); a test
+covers both.
 
 ### LIB-18 — Save-state warning on the device (P2, S) [HW]
 **Why.** The game page's "made with another build" line is driven by
@@ -4038,8 +3291,6 @@ made with a sane clock; a replacement JukaHub did not record (a wrong clock, or
 RetroArch's own updater) is labelled "another build", never with the wrong
 build's date.
 
----
-
 ### LIB-19 — Box art: reuse the library's scan (P3, S)
 **Why.** Each automatic box-art pass (boxart_auto.go) walks the card once because
 the Games Library publishes no goroutine-safe cached scan, the tour's button
@@ -4051,61 +3302,42 @@ a fetch ends.
 N titles; the first pass waits for a trusted clock on the handheld.
 **Verify.** Unit tests; time a pass on a 5 000-ROM card.
 
-### LIB-20 — One core-update loop with a filter (P3, S)
-**Why.** `emuDesktopCoreRunner` copies `runInstalledCoreUpdates`' loop to keep a
-PC's automatic pass to the cores of the RetroArch JukaHub manages (an unattended
-pass must not touch Steam's, `C:\RetroArch-Win64` or Program Files' RetroArch).
-**Where.** `emulatorinstall.go`, `emuautoupdate_desktop.go`.
-**Done when.** `runInstalledCoreUpdates` takes a `keep func(coreBuild) bool`
-and the PC runner is a one-liner.
-**Verify.** The existing core tests still pass.
-
-### LIB-21 — The runtimes' automatic updates show progress and reach their pages (P3, S)
-**Why.** The daily pass installs the Windows-app runtime and AndroidRT through
-closures that forward only text, so the card stays on "Resolving download" with
-no bar for a 100 MB pack; AndroidRT's Notify result never reaches the Runtime
-tab, and the APK Store is not told after an automatic install; and both
-updaters label a build with the release tag alone, so a pack CI re-uploads
-under the same release reads as "put back by hand" and waits for the next tag.
-**Where.** `androidrt_install.go` and `wine_pack.go` (their updaters' Check and
-Install), `emuautoupdate_runtimes.go`.
-**Done when.** Both installs drive the card's phase and bytes as
-`androidRTInstallProgress` does; Notify sets the Runtime tab's update line and
-an automatic install calls `apkStoreRuntimeChanged`; and the label carries the
-first 8 characters of the asset's digest.
-
-### LIB-22 — The Games tab's Install badge knows per-game emulators (P3, S)
-**Why.** The Tabs Home's Games tab (2026-11-16) dims a console whose games
-have no launcher (`resolveGameLauncher` empty) with an Install badge. The
-check is per console, so a console whose only emulator is pinned per game
-(game options → Emulator) reads "Install" although its games start.
-**Where.** `hometabs_games.go` (the emulator check), `emupicker.go`
-(`gameLauncherPinned`).
-**Done when.** A console counts as playable when any of its games has a pin
-that is a regular file; the check stays off the render thread and bounded on
-a big card.
-
-### LIB-23 — A "Better" pill on the Emulators page (P3, S) [WIN]
-**Why.** `emuBestDecorate` (2026-11-16, `emubest.go`) marks a better emulator
-the Windows Emulators page can install (`emuEntry.Better`, a Detail line and
-its place after the installed tiles), but the tile itself has no chip, so the
-upgrade is easy to miss in a long grid.
-**Where.** `emutiles.go` `emuTileChip`.
-**Done when.** A missing tile with `Better` set shows a "Better" pill in the
-accent (as "Update" does), translated; nothing changes on the handheld.
-
 ### LIB-24 — The recommended-emulator ranking, measured (P2, S) [HW]
-**Why.** `emubest.go`'s handheld ranking (2026-11-16) comes from CrossMix,
-KNULLI and spruceOS notes and search snippets; standalone Flycast ahead of its
-core, the mGBA core ahead of standalone mGBA, the Saturn order and the order
-of the light cores are judgement calls (docs/GAME_LIBRARY.md lists the
-sources).
+**Why.** `emubest.go`'s handheld ranking comes from CrossMix, KNULLI and
+spruceOS notes and search snippets; standalone Flycast ahead of its core, the
+mGBA core ahead of standalone mGBA, the Saturn order and the order of the light
+cores are judgement calls (docs/GAME_LIBRARY.md lists the sources).
 **Where.** `emubest.go` (`emuBestTable`), docs/GAME_LIBRARY.md.
 **Done when.** On a Smart Pro with CrossMix, two or three demanding games per
 console (DS, PSP, N64, Dreamcast, Saturn, PS1, GBA) are timed in each ranked
 emulator (frame rate or the emulator's own speed readout, audio crackle); the
 table is reordered where a lower-ranked one is clearly better, and the doc's
 table and sources say what was measured.
+
+### LIB-25 — The Windows-app runtime's Notify answer on its page (P3, S)
+**Why.** With Emulator updates on Notify me, a new Windows-app runtime build
+reaches only the pass's toast and the Emulators badge; the Windows Apps setup
+page has no "a newer runtime is out" line or Update action (the APK Store's
+Runtime tab has one for AndroidRT).
+**Where.** `wine_pack.go` (`wineUpdateCheck`, `wineUpdateInstall`),
+`windows_runtime_install.go` and the setup page that shows
+`setWindowsRuntimeStatus`.
+**Done when.** The pass's check records whether a newer pack is out; the setup
+page's runtime row says so with the tag and offers Update, which runs the same
+install as the pass (`wineUpdateInstall`) on the install bar.
+
+### LIB-26 — A core-update source TrimUI's glibc can run (P1, L) [NET] [HW]
+**Why.** On a stock Smart Pro the core-update log refuses most libretro nightly
+cores for needing GLIBC/GLIBCXX newer than the firmware's
+(docs/HARDWARE_VALIDATION.md); the guard keeps the installed cores, so Install
+automatically updates almost nothing on a TrimUI.
+**Where.** `emulatorupdates.go`, `emulatorautoupdate.go`, `emulatorinstall.go`
+(`planCoreUpdates`), `emubest.go`, `.github/workflows/`.
+**Done when.** The cores JukaHub picks by default (`emubest.go`) are built in
+CI against the same glibc 2.31 sysroot as the Remote Play helpers and published
+with a CRC32 index as a release asset; on a TrimUI the pass takes that index
+first and the buildbot only for cores whose nightly passes the guard; a Smart
+Pro's daily pass logs no GLIBC refusal for those cores.
 
 ---
 
@@ -4141,10 +3373,6 @@ in-folder search.
 of the marked rows, Files has a filter-as-you-type search, and copy and move
 run off-thread with progress (the extraction queue in `files_extract.go` is
 the model: one job at a time, a staging folder, a drain on the SDL thread).
-
-### APP-5 — Calendar with events (P3, M)
-**Done when.** The calendar popover (`calendarpopover.go`) shows events from an
-imported `.ics` (CalDAV later), and an event can set an alarm (`alarm*.go`).
 
 ### APP-6 — The phone as a second screen (P2, M)
 **Why.** The companion (`companion.go`) types, acts as a remote, uploads and
@@ -4213,15 +3441,6 @@ range across a change act on the wrong text.
 insert, remove, `splitText` and `normalize` as the DOM standard says, covered by
 the jsdom comparison in `tests/web/webdom_dom.test.mjs`.
 
-### APP-14 — Archives with a password (P3, S)
-**Why.** An encrypted zip, 7z or RAR is refused (`errFeArchiveEncrypted` in
-`files_extract.go`): the standard zip reader cannot decrypt, and 7-Zip is run
-with a password nobody uses so that it fails instead of waiting for one.
-**Done when.** The archive sheet offers **Password…** for an encrypted archive,
-the on-screen keyboard takes it with submit-only semantics (a dedicated
-vkTarget like `vkTargetGroqKey`; never written to the config), and the
-extraction hands it to 7-Zip — or says that an encrypted zip needs 7-Zip.
-
 ### APP-15 — 7z without 7-Zip (P3, M)
 **Why.** A handheld without `7zz` cannot open a .7z at all, although the
 vendored `github.com/ulikunitz/xz/lzma` decodes the LZMA and LZMA2 that most 7z
@@ -4232,51 +3451,47 @@ x86 filter) and whose header is not encrypted unpacks in-process through the
 same staging and `os.Root` rules, with fixtures made by 7-Zip in the tests;
 other coders (BCJ2, PPMd, AES) still go to 7-Zip.
 
----
-
 ### APP-16 — More from WPE Browser (P2, M) [HW]
-**Why.** The tester pointed at [WPE Browser](https://github.com/matweew/wpe-tsp);
-JukaHub now hands pages to it, installs it and grew its ad filter, but WPE has
-more worth taking.
-**Where.** videoplayer.go / browser_youtube.go, browser_engines.go (home page
-choice), browserzoom.go, apps.go, installbar.go, ci.yml.
+**Why.** JukaHub hands pages to [WPE
+Browser](https://github.com/matweew/wpe-tsp), installs it (`brw_wpe_install.go`,
+launches ordered against its swap by `brwWpeGate`) and uses its ad filter; WPE's
+video and YouTube paths are faster than JukaHub's own.
+**Where.** `videoplayer.go`, `browser_youtube.go`, `browser_engines.go` (home
+page choice), `browserzoom.go`, `installbar.go`.
 **Done when.** Videos play through mpv-tsp (A133P hardware H.264) when installed
 (the plan is [docs/VIDEO_VPU_OFFLOAD.md](../docs/VIDEO_VPU_OFFLOAD.md)); YouTube
 streams resolve through WPE's RustyPipe `ytp` when present (≈2 s and ≈28 MB
 instead of ≈9 s and ≈330 MB with yt-dlp, per its release notes); the home page
-choice has "Last page"; zoom is remembered per site; the Apps screen cannot start
-`Apps/WPE` while an update swaps it (`brwWpeGate`); the install bar's "Ready"
-card stops saying "restart JukaHub" after an app install; CI's `RACE_TESTS`
-includes `BrwWpe`.
-**Verify.** Unit tests; HW-2 step 8 for the device parts.
+choice has "Last page"; zoom is remembered per site; the install bar's "Ready"
+card stops saying "restart JukaHub" after an app install.
+**Verify.** Unit tests; HW-6 step 5 for the device parts.
 
 ### APP-17 — The Windows runtime on a stock Smart Pro (P1, M) [HW] [NET]
-**Why.** Box64 + Wine 10.0, WestonPack and the prefix rules (2026-11-11) were
-written from upstream docs and HWSTD's port without a device; the first-run
-time, the unpacked Wine size and the stock firmware's mount, loop and mkfs
-tools are guesses.
+**Why.** Box64 + Wine 10.0, WestonPack and the prefix rules come from upstream
+docs and HWSTD's port and have not run on a device; the first-run time, the
+unpacked Wine size and the stock firmware's mount, loop and mkfs tools are
+guesses.
 **Where.** `wine_pack.go`, `wine_prefix.go`, `windows_runtime_install.go`,
 `wine_setup.go`; `data/windows-runtime/logs/wineboot.log`.
-**Done when.** Once a release carries the Box64 pack (BUILD-6), on a stock Smart
-Pro: Windows Apps → Setup lists the runtime as missing (about 130 MB),
+**Done when.** With a release that carries the `JukaHub-Wine` pack, on a stock
+Smart Pro: Windows Apps → Setup lists the runtime as missing (about 130 MB),
 WestonPack ("from PortMaster" when PortMaster already has it) and DXVK 1.10.3 as
 optional; A on the first row goes from the downloads through "Unpacking Wine
 10.0" and "Preparing Windows (first run, a few minutes)…" to "Windows runtime
 ready", leaving `data/windows-runtime/{pack,wine-10.0,bin}` and
-`/mnt/UDISK/jukahub/wine-prefix` with `system.reg` and `dosdevices/c:`; an
-older Hangover install is gone; Wi-Fi off and a nearly full card give their
-plain errors; after a session on the image prefix nothing is left mounted or
-bound to `prefix.img` (`mount`, `losetup -a`). The first-run time and the
-unpacked size are recorded, and `wineUnpackFactor` and the "about 700 MB" text
-follow them.
+`/mnt/UDISK/jukahub/wine-prefix` with `system.reg` and `dosdevices/c:`; an older
+Hangover install is gone; Wi-Fi off and a nearly full card give their plain
+errors; after a session on the image prefix nothing is left mounted or bound to
+`prefix.img` (`mount`, `losetup -a`). The first-run time and the unpacked size
+are recorded, and `wineUnpackFactor` and the "about 700 MB" text follow them.
 **Verify.** `wineboot.log` and a bug report from the device.
 
 ### APP-18 — The first Windows program on a Smart Pro (P1, M) [HW]
-**Why.** The launch path (WestonPack mounted from its image, udev labelling,
-the pad as mouse and keys, a bounded clean-up) has only been read and reviewed.
-The default display mode, `drm gl kiosk system`, uses Weston's DRM/GBM backend,
-which the stock firmware may not offer, and `docs/WINDOWS_APPS.md` says that
-mode is shown through Crusty, which the Westonpack wiki does not.
+**Why.** The launch path (WestonPack mounted from its image, udev labelling, the
+pad as mouse and keys, a bounded clean-up) has not run on a device. The default
+display mode, `drm gl kiosk system`, uses Weston's DRM/GBM backend, which the
+stock firmware may not offer, and `docs/WINDOWS_APPS.md` says that mode is shown
+through Crusty, which the Westonpack wiki does not.
 **Where.** `windowsapps.go` (`wineRun`), `wine_display.go`,
 `wine_display_linux.go`, `vcursor_bridge_linux.go`, `docs/WINDOWS_APPS.md`.
 **Done when.** A small 32-bit GDI program in `data/windows-apps` (an old Notepad
@@ -4298,15 +3513,12 @@ mode works. On Windows, Windows Apps runs an `.exe` and a `.bat` from
 ### APP-19 — A pinned checksum for WestonPack (P2, S) [NET]
 **Why.** WestonPack is the only executed part of the Windows runtime without a
 checksum: its image is checked by content alone (SquashFS 4 superblock,
-compression id, 20–200 MB), then loop-mounted, and its scripts run as root. No
-full published hash could be read when it was written; nx-redux PR #207 shows
-truncated MD5s (official Westonwrap 0.2.7.1 `0a761c28…`, CrossMix preview
-`91dc57a0…`).
+compression id, 20–200 MB), then loop-mounted, and its scripts run as root.
 **Where.** `windows_runtime_install.go` (`installWestonRuntime`,
 `windowsWestonRuntimeURL`).
 **Done when.** The download URL names a PortMaster-New commit instead of `main`,
-the file's SHA-256 is pinned beside it (read from portmaster.games' runtimes
-page, PortMaster-New's `.md5` files or harbourmaster's runtime index), and
+the file's SHA-256 is pinned beside it (from portmaster.games' runtimes page,
+PortMaster-New's `.md5` files or harbourmaster's runtime index), and
 `wineDownload` checks it before the rename.
 
 ### APP-20 — Unpacking Wine fast enough on the A133P (P3, S) [HW]
@@ -4336,26 +3548,17 @@ already declares keys 1–255), `companion*.go`.
 with a pad chord) reaches the running program as key presses through the
 JukaHub Mouse device, and the pad is the mouse again afterwards.
 
-### APP-23 — Launcher programs that start the real program and exit (P2, S)
-**Why.** A Windows session ends when the program JukaHub started exits, so a
-launcher or setup program that starts the real `.exe` and quits ends the
-session: WestonPack is cleaned up and the real program loses its screen and pad.
-**Where.** `windowsapps.go` (`wineRun`), `wine_prefix.go` (sessions,
-`wineserver -w`).
-**Done when.** The session lasts while Wine user processes remain in the prefix
-(a bounded `wineserver -w`, or the process group), a launcher that starts its
-game keeps WestonPack and the pad until the game exits, and holding Select +
-Start still ends everything.
-
-### APP-24 — Timelapse for Wine sessions (P3, S)
-**Why.** Wine game profiles stopped starting a timelapse when their launch moved
-to a goroutine (2026-11-11): `startTimelapse` reads the config, which only the
-main thread may do.
-**Where.** `gameprofiles.go` (`launchWineProfile`), `windowsapps.go`,
-`timelapse.go` (`startTimelapseWith`).
-**Done when.** `launchWineProfile` reads `timelapseSettingsFor(appConfig)` on
-the main thread and the session starts `startTimelapseWith` once the program
-runs, as Android profiles do.
+### APP-25 — Show the Windows wait hint on screen (P3, M) [HW]
+**Why.** A Windows session waits (up to 12 h) while programs a launcher left
+behind are still running; when only a hidden tool is left the WestonPack screen
+is black and the player gets a buzz but no text, because JukaHub's loop is
+parked and Weston owns the display.
+**Where.** `windowsapps.go` (`wineWaitStarted`), `wine_prefix.go`
+(`wineWaitScript`), `wine_display.go`.
+**Done when.** While the wait runs and no program window is mapped, the screen
+shows "Waiting for <name>'s other Windows programs to finish — hold Select +
+Start to end" (a tiny client inside the session, or the display handed back to
+JukaHub while Weston has no mapped window), and nothing covers a game on screen.
 
 ---
 
@@ -4401,15 +3604,20 @@ warning.
 (`shortcuts.vdf`) with art from `branding/`; JukaHub behaves under Steam Input
 (the virtual X360 pad is the hint vocabulary).
 
-### DESK-7 — Start with Windows that works (P2, S) [WIN]
-**Why.** The autostart `.cmd` (written by `autoStartLauncherFor` in `autostart.go`) flashes a
-console and sets no working directory, while the config path is relative
-(`main.go:83`): "Start with Windows" likely fails with "Failed to load config".
-**Done when.** Autostart writes a `.lnk` (or a `Run` registry value) with the
-working directory set.
+### DESK-7 — Start with Windows (and a desktop login) that works (P2, S) [WIN]
+**Why.** The autostart launcher (`autoStartLauncherFor` in `autostart.go`: a
+`.cmd` on Windows, a `.desktop` file on Linux) sets no working directory, while
+the config path is relative (`main.go`
+`LoadXMLConfigWithFallback("jukaconfig.json")`), so "Start with Windows" likely
+fails with "Failed to load config"; the `.cmd` also flashes a console.
+**Where.** `autostart.go` (`autoStartLauncherFor`), `main.go`, `xmlconfig.go`.
+**Done when.** A relative config path is resolved from the executable's folder
+(covering every launcher at once); Windows autostart writes a `.lnk` (or a `Run`
+registry value) instead of the `.cmd`, with the working directory set and no
+console.
 
 ### DESK-8 — Discord Rich Presence (P3, S) [WIN]
-**Why.** Promoted from the parking lot.
+**Why.** Friends on Discord cannot see what is being played on a PC.
 **Done when.** Opt-in presence over Discord's local IPC pipe shows the game or
 the screen; no account tokens involved.
 
@@ -4422,152 +3630,78 @@ ROM types.
 **Done when.** While the window is minimised, download/alarm/update
 notifications appear as Windows toasts (AUMID set by the installer).
 
-### DESK-11 — Brightness on Windows (P2, S) [WIN]
-**Why.** On Windows the header's sun drives the monitor JukaHub is on over
-DDC/CI (dxva2) — tried first, since a laptop's own panel never answers it —
-else a laptop or handheld panel through WMI (Windows PowerShell's CIM cmdlets
-on the first active instance, one process per read or write; a panel with
-eleven or fewer levels gets a 10% step), else dims JukaHub's own picture
-(`brightness_windows.go`, `brightnessSoftRender` in `brightnessctl.go`). None
-of it has run on a Windows machine.
+### DESK-11 — Brightness on Windows, on real machines (P2, S) [WIN]
+**Why.** On Windows the header's sun (`brightness_windows.go`) tries DDC/CI
+(dxva2) on JukaHub's monitor, then the panel through WMI (one PowerShell CIM
+process per read or write; eleven or fewer levels get a 10 % step), then dims
+JukaHub's own picture (`brightnessSoftRender`, `brightnessctl.go`); none of it
+has run on a Windows machine. The soft dimmer is not drawn on the shutdown card
+or the boot animation (`shutdown.go`, `bootos.go` present their own frames), so
+a dimmed PC flashes to full brightness there.
+**Where.** `brightness_windows.go`, `brightnessctl.go`, `shutdown.go`,
+`bootos.go`.
 **Done when.** On a laptop (and a ROG Ally / Legion Go class handheld) the card
 moves the same level as Windows' slider and follows it while open; on a desktop
 with a DDC/CI monitor it moves the monitor's brightness; with neither (a VM,
 Remote Desktop) the card says it dims JukaHub only and the dim survives a
 restart; no console window flashes; the startup probe does not delay the first
-frame. If a PowerShell run per step feels slow, keep one PowerShell process for
-the session or call WMI through COM. Also open: the software dimmer is not
-drawn on the shutdown card and the boot animation (`shutdown.go`, `bootos.go`
-present their own frames), so a dimmed PC flashes to full brightness there —
+frame; if a PowerShell run per step feels slow, one PowerShell process is kept
+for the session (or WMI is called through COM); `shutdown.go` and `bootos.go`
 call `brightnessSoftRender` before their `Present`.
 
-### DESK-12 — Emulator updates on a PC, round two (P2, S) [WIN]
-**Why.** A PC's daily pass (2026-11-11) restarts a cut-off download from zero
-(RetroArch is about 250 MB), cannot be told to leave one emulator alone, and
-installs `RetroArch.7z`, for which the buildbot publishes no digest, on the
-strength of HTTPS alone.
+### DESK-12 — Emulator downloads on a PC that resume and are checked (P2, S) [WIN]
+**Why.** A PC's daily emulator pass restarts a cut-off download from zero
+(RetroArch is about 250 MB) and installs `RetroArch.7z`, for which the buildbot
+publishes no digest, on the strength of HTTPS alone.
 **Where.** `emuautoupdate_desktop.go`, `emuwininstall.go`, `emulators.go`.
-**Done when.** A cut-off emulator download resumes where it stopped; an
-emulator's version can be pinned from its tile (the pass skips it and the tile
-says so); and `RetroArch.7z` is checked against a second channel before it is
-installed.
+**Done when.** A cut-off emulator download resumes where it stopped;
+`RetroArch.7z` is checked against a second channel before it is installed.
+(Pinning an emulator's version is LIB-17.)
 
 ---
 
 ## Hardware validation queue
 
-Every **[HW]** task in one list, so a device session can work through them:
-HW-1, PERF-1, PERF-4, PERF-8, PERF-9, PERF-10, GPU-1, GPU-4, UX-5, UX-7, UX-10,
-GAME-2 (verify), GAME-9, XBX-1, XBX-4, AND-1, AND-3, AND-5, AND-6, SYS-1
-(verify), SYS-2, SYS-3, SYS-7, SND-1, FIX-13 (with PWR-3), DOC-1; from the North star: INP-5, INP-6,
-SHELL-1 (verify), SHELL-2, PWR-1, PWR-2, PWR-3, PWR-5, PWR-8, REL-7, NET-2,
-NET-5, NET-6, NET-10, LIB-8, LIB-10, LIB-14, I18N-3, TEST-10, APP-9; from the second
-afternoon pass: FIX-2, NET-3, NET-12, REL-10, REL-12, LIB-17, LIB-18, SEC-21;
-from the evening pass: MED-19, MED-20, MED-22, MED-25, SND-5, SND-6, INP-15;
-from the late-night pass: PERF-15; archives: SYS-15; brightness: SYS-16.
-From the Remote Play passes: PSR-1, PSR-2, PSR-6, PSR-7, PSR-10, PSR-13, PSR-15.
-From the liquid background, animated wallpaper and Screen Share pass: GPU-5,
-PERF-17, PERF-18, SYS-18.
-From the APK Store, Voice command and spatial audio pass: AND-17, INP-20,
-SND-7, SND-8, SND-13, GAME-17.
-From the VPN pass: NET-8, NET-17.
-From the Windows apps, Android, Xbox and emulator updates pass: APP-17, APP-18,
-APP-20, APP-21, GAME-18 (AND-1, AND-6, AND-17 and XBX-1 grew).
-From the 2026-11-11 tester pass: HW-3 (with GPU-5) and MED-33.
-From the Groq key, L2 Edit Home and square tiles pass: HW-4.
-From the voice speed, Hey Juka, voice settings, headset and PPSSPP pass: HW-5.
-From the glass, Settings, console themes and screen-vision pass: HW-6.
-From the JukaHub OS, startup lock, close-all and Juka lights pass: SYS-22, SND-16, SHELL-11.
-From the JukaOS v2 pass (boot styles, Tabs Home, Bluetooth, emulators): HW-7, LIB-24.
-Also still open from earlier passes: the browser's touch accuracy and link-mode
-ergonomics on real hardware (`docs/BROWSER.md`).
-
-Device checks of finished work that have no task of their own: the Live Builder
-(switch it on in Settings → Network, push from a laptop's builder at
-`http://localhost`: an ordinary design applies, one with a program waits for
-approval, a second push gets 409 while it waits, New pairing code works; on
-Windows the builder reaches `localhost:8422` and `JUKAHUB_LIVE_LAN=1` opens the
-LAN); FTP with Windows Explorer and FileZilla (sign-in as `juka`, folders listed
-as folders, uploads into a share, `Roms/Ports` refused, idle and network-change
-stop with a toast; started before Wi-Fi at a cold boot, FTP keeps running when
-network time sets the clock and stops 15 minutes after its last use) and SFTP's
-card root and "Share whole system…"; the Date &
-time picker and the first-run Wi-Fi and time-zone buttons on the Brick's 960×720
-canvas; on Windows, `.bat` launchers and ROMs whose names contain `&`, spaces and
-parentheses, and the refusal for `%`. From the evening pass: on a Smart Pro
-and a Brick the Controller test lights X for the printed X (and **Swap X and
-Y** off brings the old mapping back), the phone remote's X and Y do X and Y,
-the charging bolt appears within a second of plugging in and goes when
-unplugged, the volume button and card work by pad and by USB keyboard (and by
-wheel on Windows), the Home pairing QR's preview opens and puts the backlight
-back, and the PS Remote Play pairing keyboard answers the pad and a USB
-keyboard.
-From the CrossMix report: on a CrossMix card the Emulators page shows PSP and
-NDS as Available with the script their `config.json` names (`ppsspp_*.sh`,
-`drastic.sh`), and a PSP and an NDS game start from the Games library through
-it (CrossMix's `common_launcher.sh` gets an absolute ROM path, where MainUI
-passes `Emus/<system>/../../Roms/...`); LAN play finds `ra64.trimui` and
-RetroArch comes up with its own config; Stick Calibration edits the ini of the
-PPSSPP build that is played; the save manager lists the PSP saves under
-`Emus/PSP/PPSSPP_<version>/`.
-From the Brick Pro report: on a Brick Pro with CrossMix a PSP game and a
-RetroArch game start from the Games library; one that does not opens the
-launch card within seconds (the script's last lines, the signal, the memory
-free), and `errors.txt` has its `starting …` and `… ended after` lines.
-From the JavaScript pass: on a Smart Pro and a Brick, a page whose content its
-scripts build (a framework app, a jQuery site, a news page with lazy images)
-draws that content; with **Settings → Browser → JavaScript** off, **Reload**
-draws the same page as its server sent it; a public page cannot fetch from the
-LAN (the debug log names the refusal); and `JUKAHUB_LOG_LEVEL=debug` shows one
-`scripts on …` line per page.
+Device work is every open `[HW]` heading above. The [hardware validation
+log](../docs/HARDWARE_VALIDATION.md) holds the ID inventory and stock Smart Pro
+evidence; walk the [release checklist](../docs/RELEASE_CHECKLIST.md) before tagging.
 
 ---
 
 ## Ideas parking lot
 
-Not tasks yet: each needs a *Why* and a *Done when* before it moves up. Sizes are
-rough.
+Not tasks yet: each needs a *Why* and a *Done when* before it moves up. Sizes
+are rough.
 
-- **Theme from an image** (M): median-cut palette into the 16 theme roles, built
-  on `themeloader.go`.
-- **Seasonal themes by date** (S): the time-of-day hook exists; add a date table.
-- **Time capsule / sealed notes** (S), **secret modes** (S), **playable credits**
-  (S), **virtual pet** (M), **retro OS skin pack** (M), **arcade kiosk** (M).
+- **Theme from an image** (M): median-cut palette into the 16 theme roles, on
+  `themeloader.go`.
+- **Seasonal themes by date** (S): the time-of-day hook exists; add a date
+  table.
+- **Toys** (S–M each): time capsule / sealed notes, secret modes, playable
+  credits, virtual pet, retro OS skin pack, arcade kiosk.
 - **Save forensics** (M): list + diff two snapshots.
 - **Randomizer suite** (L): start with an IPS/BPS patch applier.
 - **Speedrun timer/splits** (M): no auto-split (needs memory reads).
 - **LAN arcade leaderboard** (S–M) for JukaHub's own games.
-- Shipped on 2026-11-10: voice search via the phone, as Voice command's phone
-  page (`docs/VOICE.md`). Not planned: an always-listening wake word (battery,
-  privacy — the microphone opens only when asked).
-- **Home Assistant kiosk** (M), **Steam Deck pairing** (L), **Juka playground** (M),
-  **fantasy console** (XL), **chiptune tracker / pixel editor** (L).
-- Promoted on 2026-11-09: widgets → SHELL-8, internet radio → MED-10, Kodi
-  remote → MED-14, ROM verifier → LIB-6, Discord Rich Presence → DESK-8, QR
-  Wi-Fi → NET-2, manuals → LIB-5.
-- Promoted on 2026-11-10: encrypted cloud save backups → SYS-19 and save-sync
-  conflict resolution → SYS-20.
-- **Per-game colour filters** (S, muOS has them): a colour matrix per content on
+- **Bigger projects**: Steam Deck pairing (L), Juka playground (M), fantasy
+  console (XL), pixel editor (L).
+- **Per-game colour filters** (S, muOS has them): a colour matrix per game on
   top of the accessibility palettes.
-- **Rewind per system** (S): RetroArch rewind on for light cores, off for heavy
-  ones, as a game-options row.
-- **Speech-to-text in chat** (L): needs an on-device model or the phone; Switch 2
-  ships it for voice chat.
-- **"Play style" profile** (S): muOS-style summary of when and what you play,
-  from LIB-13's session log.
-- **Tabs Home extras** (S each, from the 2026-11-16 pass): an unread dot on the
-  tab that holds Chat; a subtle accent tint of the strip's pill per tab; the
-  scroll of each tab kept across restarts; hold A on the strip to open the
-  arranging sheet; a crossfade (not an instant swap) between tabs under Reduce
-  motion.
-- **Screen Share sound** (L): the stock firmware has no ALSA loopback to capture
-  the output from, and a tap in JukaHub's own mixer would only cover its media,
-  never a game.
-
-**Known impossibles** (don't spend time here): live translation and input
-display over a running emulator (drawing *something* over it is possible after
-all — muOS 2601 injects overlays into SDL/GLES content; see SHELL-2), a "last 30
-seconds" clip of emulator play, phone second screens that need game RAM, HDMI couch mode
-(Screen Share puts the screen in a TV's browser instead — see SYS-18),
-OpenCL/Vulkan compute on the GE8300 (no working runtime on these images), and
-anything that fakes a store license.
+- **"Play style" profile** (S): when and what you play, from LIB-13's session
+  log.
+- **Tabs Home extras** (S each): an unread dot on the tab that holds Chat; a
+  per-tab accent tint of the strip's pill; each tab's scroll kept across
+  restarts; hold A on the strip to arrange; a crossfade between tabs under
+  Reduce motion.
+- **Screen Share sound** (L): the stock firmware has no ALSA loopback, and a tap
+  in JukaHub's mixer would cover only its own media, never a game.
+- **Per-game hakuX settings** (S): once the package's per-title settings layout
+  is known, the game options sheet opens it for Xbox games.
+- **Event webhooks** (S): opt-in POSTs for game launched / trophy unlocked /
+  install finished (bounded queue, no secrets in payloads).
+- **Community widgets** (M): a widget for Home's Widgets layout
+  (`home_widgetdraw.go`) as a sandboxed JSON descriptor (text or a number from a
+  local source, refresh interval) delivered as a package; no code.
+- **Xbox 360 digital games** (S): list STFS packages under `Roms/XBOX360`
+  (no extension; `LIVE`, `PIRS` or `CON ` magic), titled from the package
+  header, for Xenia Canary.

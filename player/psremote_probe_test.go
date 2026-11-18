@@ -38,3 +38,32 @@ func TestPSProbeAcceptsOnlyThisConsole(t *testing.T) {
 		})
 	}
 }
+
+// TestPSStreamHostHomeOrAway covers PSR-9: a console that answered at home is
+// streamed there, one that did not goes to its internet address, and the
+// console Play hands to the event thread (psConsoleAt) keeps that choice
+// whatever is asked of it, so nothing there probes again.
+func TestPSStreamHostHomeOrAway(t *testing.T) {
+	both := psConsole{Host: "192.168.0.10", RemoteHost: "203.0.113.7"}
+	cases := []struct {
+		name       string
+		c          psConsole
+		home       bool
+		wantHost   string
+		wantRemote bool
+	}{
+		{name: "home", c: both, home: true, wantHost: "192.168.0.10"},
+		{name: "away", c: both, home: false, wantHost: "203.0.113.7", wantRemote: true},
+		{name: "no internet address", c: psConsole{Host: "192.168.0.10"}, home: false, wantHost: "192.168.0.10"},
+		{name: "home, handed on", c: psConsoleAt(both, "192.168.0.10", false), home: false, wantHost: "192.168.0.10"},
+		{name: "away, handed on", c: psConsoleAt(both, "203.0.113.7", true), home: true, wantHost: "203.0.113.7", wantRemote: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host, remote := psStreamHostFor(tc.c, tc.home)
+			if host != tc.wantHost || remote != tc.wantRemote {
+				t.Fatalf("psStreamHostFor = %q, %v; want %q, %v", host, remote, tc.wantHost, tc.wantRemote)
+			}
+		})
+	}
+}

@@ -687,6 +687,224 @@ func TestFTPLocksGameProfileFolders(t *testing.T) {
 	}
 }
 
+// The locked set follows what runs: a system whose launcher runs the game it
+// is handed, whose config.json lists script extensions or whose name every
+// firmware gives such a system has its ROM folders locked (and the folder its
+// rompath names); an emulator that is handed the game as data does not. Ports,
+// Roms/PC (Windows programs) and the profiles' folders come with them.
+func TestFTPLocksTheFoldersOfSystemsThatRunTheirGames(t *testing.T) {
+	for _, script := range []string{
+		"#!/bin/sh\ncd \"$(dirname \"$0\")\"\n\"$1\"\n",
+		"sh \"$1\"",
+		"exec \"$@\"",
+		"ROM=\"$1\"\n. \"$ROM\"",
+		"nohup bash -c \"$1\" > /dev/null 2>&1 &",
+		"timeout 5 /bin/sh \"$1\"",
+		"GAME=${1}\nenv HOME=/tmp python3 -u $GAME",
+		"chmod +x \"$1\"; cd /x",
+		"if [ -f \"$1\" ]; then busybox sh \"$1\"; fi",
+		// A function that runs its own argument, handed the launcher's; one
+		// that runs a variable set from it.
+		"run() { \"$@\"; }\nrun \"$1\"",
+		"ROM=\"$1\"\nplay() {\n\texec \"$ROM\"\n}\nplay",
+		// A one-line subshell body is a body too; one that runs on past its
+		// line is read as commands.
+		"play() ( exec \"$1\" ); play \"$1\"",
+		"play() (\n\texec \"$1\"\n)\nplay ./drastic",
+		// A first line longer than any line buffer is still read.
+		"exec \"$1\" # " + strings.Repeat("x", 70<<10),
+	} {
+		if !ftpScriptRunsArg(script) {
+			t.Errorf("ftpScriptRunsArg(%q) = false, want true", script)
+		}
+	}
+	for _, script := range []string{
+		"#!/bin/sh\ncd \"$(dirname \"$0\")\"\n./ra64.trimui -L cores/mgba.so \"$1\"\n",
+		"nohup ./PPSSPPSDL \"$1\" > /dev/null 2>&1 &",
+		"env HOME=/tmp ./drastic \"$1\"",
+		"echo \"$1\" >> log.txt",
+		"# sh \"$1\"\n\"$EMU\" \"$1\"",
+		"case \"$1\" in *.zip) unzip \"$1\";; esac",
+		// "$1" and "$@" inside a function are the function's own arguments.
+		"run() { \"$@\" 2>&1 | tee -a \"$LOG\"; }\nrun ./ra64.trimui -L \"$CORE\" \"$1\"",
+		"function log {\n\techo \"$1\" >> x.log\n\t\"$@\"\n}\nlog ./drastic \"$1\"",
+		"start()\n{\n\t\"$1\" \"${2:-}\"\n}\nstart ./PPSSPPSDL \"$1\"",
+		"run() ( \"$@\" 2>&1 | tee -a \"$LOG\" ); run ./ra64.trimui -L \"$CORE\" \"$1\"",
+	} {
+		if ftpScriptRunsArg(script) {
+			t.Errorf("ftpScriptRunsArg(%q) = true, want false", script)
+		}
+	}
+
+	prevDir := gameProfilesDirOverride
+	gameProfilesDirOverride = t.TempDir()
+	invalidateGameProfileCache()
+	t.Cleanup(func() {
+		gameProfilesDirOverride = prevDir
+		invalidateGameProfileCache()
+	})
+	card := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(card, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Emus/MYSCRIPTS/config.json", `{"label":"Scripts","launch":"run.sh","rompath":"../../Roms/Homebrew"}`)
+	write("Emus/MYSCRIPTS/run.sh", "#!/bin/sh\nsh \"$1\"\n")
+	write("Emus/LOVE/config.json", `{"extlist":"love|zip"}`)
+	write("Emus/LOVE/launch.sh", "#!/bin/sh\n./love.elf --fused x\n")
+	write("Emus/PORTS/launch.sh", "#!/bin/sh\necho\n")
+	write("Emus/GBA/config.json", `{"extlist":"gba|zip","rompath":"../../Roms/GBA"}`)
+	write("Emus/GBA/launch.sh", "#!/bin/sh\n./ra64.trimui -L mgba \"$1\"\n")
+	write("Roms/GBA/a.gba", "rom")
+	set, err := openFTPShares([]ftpShare{{name: "Roms", dir: filepath.Join(card, "Roms")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(set.close)
+	set.locked = set.keepInside(set.runDirs())
+	for _, rel := range []string{
+		"Roms/MYSCRIPTS/a.sh", "Roms/Homebrew/x", "Roms/LOVE/g.love", "Roms/PORTS/p.sh", "Roms/Ports/p.sh",
+		"Roms/SCRIPTS/s.sh", "Roms/APPS/a.sh", "Roms/PC/game.exe",
+	} {
+		if !set.lockedPath(filepath.Join(card, filepath.FromSlash(rel))) {
+			t.Errorf("%s is not locked", rel)
+		}
+	}
+	for _, rel := range []string{"Roms/GBA/a.gba", "Roms/MYSCRIPTS2/a.sh", "Roms/new.txt"} {
+		if set.lockedPath(filepath.Join(card, filepath.FromSlash(rel))) {
+			t.Errorf("%s is locked", rel)
+		}
+	}
+}
+
+// A running server's locks are derived again when the game-profile cache is
+// rebuilt (a profile added while it runs), when it is invalidated, and once
+// they are older than ftpLiveLockTTL — not on every command.
+func TestFTPLiveLocksFollowTheProfileCache(t *testing.T) {
+	prevDir := gameProfilesDirOverride
+	gameProfilesDirOverride = t.TempDir()
+	invalidateGameProfileCache()
+	t.Cleanup(func() {
+		gameProfilesDirOverride = prevDir
+		invalidateGameProfileCache()
+	})
+	gameProfileEntries()
+	roms := filepath.Join(string(filepath.Separator), "card", "Roms")
+	game := filepath.Join(roms, "PC", "New Game")
+	var current []string
+	calls := 0
+	set := &ftpShareSet{list: []*ftpShare{{name: "Roms", dir: roms}}}
+	set.live = &ftpLiveLocks{derive: func() []string { calls++; return current }}
+	if set.lockedPath(game) {
+		t.Fatal("locked before any profile")
+	}
+	current = []string{ftpFoldPath(game)}
+	if set.lockedPath(game) || calls != 1 {
+		t.Errorf("derived %d times with nothing changed, want once", calls)
+	}
+	gameProfileCache.mu.Lock()
+	gameProfileCache.entries = []gameProfileEntry{{GameDir: game}}
+	gameProfileCache.built = true
+	gameProfileCache.mu.Unlock()
+	if !set.lockedPath(game) {
+		t.Error("a profile added while the server runs is not locked")
+	}
+	current = nil
+	invalidateGameProfileCache()
+	if set.lockedPath(game) {
+		t.Error("still locked after the profile cache was invalidated")
+	}
+	current = []string{ftpFoldPath(game)}
+	set.live.at = time.Now().Add(-2 * ftpLiveLockTTL)
+	if !set.lockedPath(game) {
+		t.Error("not derived again after ftpLiveLockTTL")
+	}
+}
+
+// A symlink inside a share is followed before a write: one that leads into
+// Ports or a locked folder — the folder, a file in it, a name not made yet, a
+// dangling link to one, the share itself and then Ports — is refused like the
+// folder; one that leads elsewhere in the share is not.
+func TestFTPRefusesWritesThroughSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs extra privileges on Windows")
+	}
+	srv, root := startTestFTP(t)
+	for _, dir := range []string{"PORTS", "GBA", filepath.Join("PC", "My Game")} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{filepath.Join("PORTS", "Game.sh"), filepath.Join("GBA", "a.gba")} {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, target := range map[string]string{
+		"x":        "PORTS",
+		"abs":      filepath.Join(root, "PORTS"),
+		"dangling": filepath.Join("PORTS", "new.sh"),
+		"self":     ".",
+		"gb":       "GBA",
+		"game":     filepath.Join("PC", "My Game"),
+	} {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Skipf("cannot create symlink: %v", err)
+		}
+	}
+	set, err := openFTPShares([]ftpShare{{name: "Roms", dir: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(set.close)
+	set.locked = set.keepInside([]string{ftpFoldPath(filepath.Join(root, "PC", "My Game"))})
+	sess := &ftpSession{shares: set, cwd: "/"}
+	for name, want := range map[string]bool{
+		"/Roms/x": true, "/Roms/x/Game.sh": true, "/Roms/x/new.sh": true, "/Roms/x/new/a.sh": true,
+		"/Roms/abs/Game.sh": true, "/Roms/dangling": true, "/Roms/self/PORTS/Game.sh": true,
+		"/Roms/self/ports/new.sh": true, "/Roms/game/run.exe": true,
+		"/Roms/gb/a.gba": false, "/Roms/gb/new/b.gba": false, "/Roms/GBA/a.gba": false, "/Roms/new.txt": false,
+	} {
+		p, err := sess.resolve(name)
+		if err != nil {
+			t.Fatalf("resolve(%q): %v", name, err)
+		}
+		if p.protected != want {
+			t.Errorf("resolve(%q).protected = %v, want %v", name, p.protected, want)
+		}
+	}
+
+	// Over a session the answer is the read-only one, and nothing reaches Ports.
+	c := newFTPTestClient(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.Port())))
+	defer c.close()
+	c.login(srv)
+	data := c.passive()
+	if resp := c.cmd("STOR /Roms/x/evil.sh"); !strings.HasPrefix(resp, "550") || !strings.Contains(resp, "SFTP") {
+		t.Errorf("STOR through a link into Ports = %q, want a 550 that points at SFTP", resp)
+	}
+	_ = data.Close()
+	if resp := c.cmd("MKD /Roms/x/new"); !strings.HasPrefix(resp, "550") {
+		t.Errorf("MKD through a link into Ports = %q, want 550", resp)
+	}
+	if resp := c.cmd("RNFR /Roms/GBA/a.gba"); !strings.HasPrefix(resp, "350") {
+		t.Fatalf("RNFR = %q", resp)
+	}
+	if resp := c.cmd("RNTO /Roms/x/a.sh"); !strings.HasPrefix(resp, "550") {
+		t.Errorf("RNTO through a link into Ports = %q, want 550", resp)
+	}
+	for _, f := range []string{"evil.sh", "new", "a.sh"} {
+		if _, err := os.Lstat(filepath.Join(root, "PORTS", f)); !os.IsNotExist(err) {
+			t.Errorf("PORTS/%s was made through a link: %v", f, err)
+		}
+	}
+}
+
 // RFC 959: REST applies to the transfer right after it and RNFR to the RNTO
 // right after it; an unrelated command in between drops them.
 func TestFTPDropsAStaleRestartAndRename(t *testing.T) {

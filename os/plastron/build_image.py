@@ -32,6 +32,27 @@ class BuildError(Exception):
     pass
 
 
+# The handhelds a plastron Brick image may be built for. The image carries
+# plastron's Brick device tree and panel init, so the running system cannot
+# tell a Brick Pro from a Brick: the refusal has to happen here.
+PLASTRON_DEVICES = {
+    "trimui-brick": "TrimUI Brick (TG3040)",
+    "trimui-hammer": "TrimUI Hammer (TG3040, the Brick's board)",
+}
+PLASTRON_REFUSED = {
+    "trimui-brick-pro": "the Brick Pro (TG4040) has another panel: Brick images (NextUI, Knulli) "
+                        "show a garbled, striped screen on it, and plastron has no Brick Pro panel init",
+    "trimui-smart-pro-s": "the Smart Pro S (TG5050) is an Allwinner A523; plastron's Brick bootloader "
+                          "and kernel are for the A133P",
+    "trimui-smart-pro": "plastron has no Smart Pro board; os/smartpro builds the Smart Pro image",
+}
+
+
+def check_device(device: str) -> None:
+    need(device in PLASTRON_DEVICES,
+         f"no plastron image for {device}: " + PLASTRON_REFUSED.get(device, "not a known handheld"))
+
+
 def need(condition: bool, message: str) -> None:
     if not condition:
         raise BuildError(message)
@@ -291,6 +312,7 @@ def validate_linkage(root: Path) -> None:
 
 def build_image(args: argparse.Namespace) -> None:
     need(sys.platform.startswith("linux"), "image packing requires Linux")
+    check_device(getattr(args, "device", "trimui-brick"))
     need(os.geteuid() == 0, "run image packing as root to preserve root filesystem ownership")
     for tool in ("unsquashfs", "mksquashfs", "xz", "readelf"):
         require_tool(tool)
@@ -375,6 +397,9 @@ def main() -> int:
     parser.add_argument("--base-sha256", help="expected SHA-256 of the base image")
     parser.add_argument("--output", type=Path, required=True,
                         help="new JukaHub OS .img or .img.xz; must not exist")
+    parser.add_argument("--device", default="trimui-brick",
+                        help="the handheld the card is for: trimui-brick (default) or trimui-hammer; "
+                             "the Brick Pro and the Smart Pro S are refused")
     args = parser.parse_args()
     try:
         build_image(args)

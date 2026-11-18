@@ -195,6 +195,10 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 		{`PAUSED=/tmp/jukahub-paused`, "the paused record launch.sh reads"},
 		{`: >"$MENU" 2>/dev/null`, "noting that the menu was on screen before it was closed"},
 		{`[ -n "$same" ] && break`, "not showing the menu a third time to a loop that ignores the queue"},
+		{`grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json"`, "skipping the menu only in JukaHub OS mode"},
+		{`grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false'`, "the switch that keeps the menu first"},
+		{`on && exec "$L/real/MainUI" "$@"`, "a stand-in that can always reach the real menu (by the name MainUI)"},
+		{"started() {\n\tunshim", "taking the stand-in off once JukaHub started"},
 	} {
 		if !strings.Contains(script, want[0]) {
 			t.Errorf("hook lacks %s (%q)", want[1], want[0])
@@ -202,8 +206,15 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 	}
 	// The launcher loop is never looked up by name: whether pkill exists, and
 	// what the loop's process is called, depends on the busybox build.
-	if strings.Contains(script, "pkill") || strings.Contains(script, "killall") {
-		t.Error("hook controls processes by name")
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.Contains(line, "pkill") || strings.Contains(line, "killall") {
+			t.Error("hook controls processes by name")
+			break
+		}
 	}
 	if strings.Contains(script, "sleep 10") {
 		t.Error("hook waits a fixed ten seconds")
@@ -322,6 +333,50 @@ func TestReconcileRefreshesAStaleTrimuiHook(t *testing.T) {
 	}
 	if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
 		t.Error("a current hook was rewritten")
+	}
+}
+
+// The OS package's boot hook survives settings that had Start at login off
+// (an app install the package was unpacked over); on an app install the old
+// rule stands and a hook the user switched off is removed.
+func TestReconcileKeepsTheOSPackageHook(t *testing.T) {
+	_, appDir, path := trimuiTestCard(t)
+	writeHook := func() {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(mustTrimuiScript(t, appDir)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := func() *Config {
+		cfg := &Config{}
+		cfg.Variables.Custom = map[string]interface{}{"autoStart": "false", autoStartDefaultedKey: true}
+		return cfg
+	}
+
+	writeHook()
+	cfg := off()
+	reconcileAutoStart(cfg)
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("app install: a hook switched off in the settings was kept")
+	}
+
+	if err := os.MkdirAll(filepath.Join(appDir, "os"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "os", "os.json"), []byte("{\n  \"enabled\": true,\n  \"edition\": \"os\"\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeHook()
+	cfg = off()
+	reconcileAutoStart(cfg)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("OS package: its boot hook was removed: %v", err)
+	}
+	if !autoStartEnabled(cfg) {
+		t.Fatal("OS package: Start JukaHub at login was not switched on with the kept hook")
 	}
 }
 

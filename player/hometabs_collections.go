@@ -746,7 +746,7 @@ func homeTabsCollectionItems(c *Config) []homeTabItem {
 	out := []homeTabItem{{
 		Key:      "x:new-collection",
 		Title:    "New collection",
-		Sub:      "A list of your games and apps",
+		Sub:      "Group games and apps",
 		Glyph:    homeTabsGlyph("plus", "add", "folder"),
 		Activate: func(*Config) { homeTabsNewCollection("", "") },
 	}}

@@ -242,6 +242,7 @@ type html5GameServer struct {
 	paths  map[string]string
 }
 
+// newHTML5GameServer is a test seam (ARCH-8): only tests call it.
 func newHTML5GameServer() (*html5GameServer, error) {
 	return newHTML5GameServerAt("127.0.0.1:0")
 }

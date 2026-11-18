@@ -302,3 +302,32 @@ func TestToolboxTerminalCommand(t *testing.T) {
 		t.Fatalf("typed = %q", got)
 	}
 }
+
+// The built-in Syncthing (syncthing.go) installs only the archive for this
+// platform and only with the release's signed SHA-256 list beside it.
+func TestSyncthingReleaseAssets(t *testing.T) {
+	assets := []releaseAsset{
+		{Name: "syncthing-linux-arm-v2.0.11.tar.gz", URL: "arm"},
+		{Name: "syncthing-linux-arm64-v2.0.11.tar.gz", URL: "arm64"},
+		{Name: "syncthing-windows-amd64-v2.0.11.zip", URL: "win"},
+		{Name: "sha1sum.txt.asc", URL: "sha1"},
+		{Name: "sha256sum.txt.asc", URL: "sha256"},
+	}
+	for _, c := range []struct{ goos, goarch, want string }{
+		{"linux", "arm64", "arm64"}, {"linux", "arm", "arm"}, {"windows", "amd64", "win"},
+	} {
+		groups, err := syncthingAssetTokens(c.goos, c.goarch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a, ok := pickToolAsset(assets, groups); !ok || a.URL != c.want {
+			t.Errorf("%s/%s picked %+v", c.goos, c.goarch, a)
+		}
+	}
+	if sum, ok := syncthingChecksumAsset(assets); !ok || sum.URL != "sha256" {
+		t.Fatalf("checksum list = %+v %v", sum, ok)
+	}
+	if _, ok := syncthingChecksumAsset(assets[:4]); ok {
+		t.Fatal("a SHA-1 list was taken for SHA-256")
+	}
+}

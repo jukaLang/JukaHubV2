@@ -994,6 +994,9 @@ func emulatorEntries() []emuEntry {
 		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRetroArchCoresDir())
 		// The PSP tile says which PPSSPP plays PSP games (ppsspp_managed_ui.go).
 		entries = ppssppDecorateCatalog(entries)
+		// On a NextUI card its paks are rows, its Emus/<platform> folder is
+		// not (nextui.go).
+		entries = nextuiDecorateCatalog(entries)
 	}
 	// A better emulator the page can install for a system with games
 	// (emubest.go) says so on its tile.
@@ -1033,6 +1036,12 @@ func emulatorEntries() []emuEntry {
 		// PortMaster is a handheld app; listing it on Windows would only offer
 		// an installer that cannot produce a working runtime there.
 		entries = append(entries, pin(portMasterEmuEntry(), "packages"))
+	}
+	// Splore, PICO-8's cart browser, with the user's own PICO-8: always on the
+	// handheld (it says what to copy where), on a PC once PICO-8 is found
+	// (pico8native.go).
+	if splore := pico8SploreEmuEntry(); !IsWindows() || splore.Status == emuAvailable {
+		entries = append(entries, pin(splore, "rom"))
 	}
 	sortEmulatorEntries(entries)
 	emuCache.entries = entries
@@ -1373,6 +1382,11 @@ func emuPanelActivate(config *Config) {
 	if e.Name == portMasterEntryName {
 		emuPanel.open = false
 		openPortsPanel(true)
+		return
+	}
+	if e.Pinned && e.Name == pico8SploreEntryName {
+		// Splore, or the card saying what PICO-8 needs (pico8native.go).
+		pico8SploreOpen()
 		return
 	}
 	if e.Name == retroAchievementsEntryName {

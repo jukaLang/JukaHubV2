@@ -313,7 +313,7 @@ func emuStatusChipHeight(font *ttf.Font) int32 {
 func emuStatusChipRect(cell sdl.Rect, font *ttf.Font, label string) sdl.Rect {
 	w := int32(0)
 	if font != nil {
-		if tw, _, err := font.SizeUTF8(label); err == nil {
+		if tw, _, err := font.SizeUTF8(uiT(label)); err == nil {
 			w = int32(tw)
 		}
 	}
@@ -375,6 +375,10 @@ func emuTileChip(entry emuEntry) (label string, fill, text sdl.Color) {
 	if emuTileUpdateKnown(entry) {
 		ink := glassAccent()
 		return "Update", WithAlpha(ink, 50), ink
+	}
+	if entry.Status == emuMissing && entry.Better != "" {
+		ink := glassAccent()
+		return "Better", WithAlpha(ink, 50), ink
 	}
 	label, _ = emuStatusLabel(entry.Status)
 	fill, text = emuStatusChipColors(entry.Status)
@@ -835,7 +839,7 @@ func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 	}
 	// A managed emulator is a Windows install JukaHub made, or hakuX on the
 	// handheld: both are part of what L1 updates.
-	if len(emuInstalledCoreSet()) > 0 || emuAnyManaged() {
+	if len(emuInstalledCoreSet()) > 0 || emuAnyManaged() || ppssppUpdatableOnCard() {
 		hints = append(hints, FooterHint{Button: "L1 / U", Label: "Update all"})
 	}
 	// R2 opens the Core builds page. It only appears when there is something to

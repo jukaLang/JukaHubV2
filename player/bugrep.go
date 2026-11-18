@@ -795,7 +795,7 @@ func bugrepClockSheet(config *Config, r bugrepReport) {
 		title:    "Set the date and time first",
 		subtitle: "The device clock is wrong",
 		icon:     "clock",
-		body: "This device thinks it is " + time.Now().Format("2 January 2006") + ". Secure connections check dates, " +
+		body: "This device thinks it is " + formatDateLong(config, time.Now()) + ". Secure connections check dates, " +
 			"so nothing can be sent until the clock is right.\n\nSet the date and time in the system settings (or connect to " +
 			"Wi-Fi so it can set itself). Your report is saved and goes out on its own afterwards.",
 		buttons: []tbxSheetButton{

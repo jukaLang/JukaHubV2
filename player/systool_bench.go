@@ -253,7 +253,7 @@ func sysToolBenchSync() {
 		v.status = "Stopped"
 		v.stepText = ""
 	case !d.at.IsZero():
-		v.status = "Measured " + d.at.Format("15:04")
+		v.status = "Measured " + clockDigits(nil, d.at)
 		v.stepText = ""
 	default:
 		v.status, v.stepText = "", ""

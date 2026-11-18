@@ -348,6 +348,39 @@ func TestTerminalShellRunsTypedCommandFromStdin(t *testing.T) {
 	}
 }
 
+// SEC-14: a terminal_run / emulator_run command that hangs is stopped at its
+// timeout, the pipeline it started with it, and says so; the output keeps
+// its last 4 000 bytes.
+func TestTerminalRunCommandStopsAHangingCommand(t *testing.T) {
+	hang := "echo started; sleep 30 | cat"
+	if IsWindows() {
+		hang = "echo started& ping -n 30 127.0.0.1 >nul"
+	}
+	begin := time.Now()
+	out := runTerminalCommand(hang, 500*time.Millisecond)
+	if took := time.Since(begin); took > 10*time.Second {
+		t.Fatalf("a hanging command held the run for %v", took)
+	}
+	if !strings.Contains(out, "started") || !strings.Contains(out, "(stopped after 500ms)") {
+		t.Errorf("output = %q, want the command's first line and the stop note", out)
+	}
+	if out := runTerminalCommand("echo terminal-run-ok", 10*time.Second); !strings.Contains(out, "terminal-run-ok") || strings.Contains(out, "stopped after") {
+		t.Errorf("a quick command printed %q", out)
+	}
+	long := "echo " + strings.Repeat("x", 5000)
+	if out := runTerminalCommand(long, 10*time.Second); len(out) > terminalRunMaxOutput || !strings.Contains(out, "xxx") {
+		t.Errorf("long output kept %d bytes, want at most %d", len(out), terminalRunMaxOutput)
+	}
+	// Output is kept as a running tail (never all of it in memory): the end
+	// of 20 KB of lines arrives, the start does not.
+	if !IsWindows() {
+		out := runTerminalCommand(`i=0; while [ $i -lt 2000 ]; do i=$((i+1)); echo line-$i; done`, 10*time.Second)
+		if !strings.HasSuffix(strings.TrimSpace(out), "line-2000") || strings.Contains(out, "line-100\n") || len(out) > terminalRunMaxOutput {
+			t.Errorf("20 KB of output kept %d bytes ending %q, want the last lines only", len(out), out[max(0, len(out)-20):])
+		}
+	}
+}
+
 func TestIntegerConversionsStayInRange(t *testing.T) {
 	if got := brightnessRawAtomic(-1); got != 0 {
 		t.Errorf("brightnessRawAtomic(-1) = %d; want 0", got)

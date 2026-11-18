@@ -1,5 +1,8 @@
 name: Release
 
+# Before tagging, run the Smart Pro, Brick and Windows walk in
+# docs/RELEASE_CHECKLIST.md and keep the device logs with the release notes.
+
 on:
   push:
     tags:

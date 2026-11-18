@@ -29,8 +29,11 @@ package main
 // A wake opens a reconnect window in the network monitor (netmon.go): the probe
 // runs at once and every 1.5 s until the internet answers, "offline" is not
 // announced meanwhile, and Chat, the voice orb and voice typing wait for the
-// network instead of failing. On the handheld the radio gets a nudge if it is
-// slow (wifi_resume.go). When the internet answers, Juka's back-off is
+// network instead of failing; IsOnline stays false until the internet answers,
+// so nothing goes out on the pre-sleep answer. A Juka request that was in
+// flight when the device slept is called off and asked again once the network
+// is back (chatAICancelForWake). On the handheld the radio gets a nudge if it
+// is slow (wifi_resume.go). When the internet answers, Juka's back-off is
 // forgotten and the community chat's gateway is reopened at once.
 //
 // Anything else that cares about a wake can subscribeWake (a channel, like
@@ -183,6 +186,9 @@ func wakeNotice(ev wakeEvent) {
 		logInfo("wake", "JukaHub was stopped for %s (the system kept running)", ev.Slept.Round(time.Second))
 	}
 	netWakeNoted()
+	// A Juka request that went out before the sleep is asked again once the
+	// network answers, instead of holding the queue until its timeout.
+	chatAICancelForWake()
 	wifiResumeAfterWake()
 	for _, ch := range subs {
 		select {

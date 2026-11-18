@@ -1,4 +1,6 @@
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -391,6 +393,21 @@ class RootAndCardTests(unittest.TestCase):
             self.assertIn("BASE=smartpro-stock-kernel", marker)
             self.assertTrue((root / "mnt/SDCARD").is_dir())
             self.assertFalse(plan["wifi"])
+
+    def test_board_from_another_model_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            board = Path(temp) / "board"
+            for name in ("COMPLETE", "cmdline.txt", "modules.txt", "filesystems.txt",
+                         "mountinfo.txt", "procs.txt", "partitions.txt", "lead.bin", "rootfs.tar"):
+                write(board / name, b"")
+            facts = "FORMAT=jukahub-board-v1\nPANEL=1280x720\nMACHINE=aarch64\nLEAD_SECTORS=0\n"
+            write(board / "facts.txt", facts + "DEVICE=trimui-smart-pro\nMODEL=TG5040\nKERNEL=4.9.191\n")
+            self.assertEqual(builder.load_board(board)["MODEL"], "TG5040")
+            write(board / "facts.txt", facts + "DEVICE=trimui-smart-pro-s\nMODEL=TG5050\nKERNEL=5.15.147\n")
+            with self.assertRaises(builder.BuildError):
+                builder.load_board(board)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(builder.load_board(board, True)["MODEL"], "TG5050")
 
     def test_root_without_commands_is_refused(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -36,7 +36,7 @@ func TestProbeConnectivityOnline(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	result := probeConnectivity()
+	result := probeConnectivityWithin(0)
 	if !result.online || result.portal != "" || result.reason != "" {
 		t.Fatalf("probe = %+v, want a clean online answer", result)
 	}
@@ -49,7 +49,7 @@ func TestProbeConnectivityCaptivePortalPage(t *testing.T) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html><body>Hotel Wi-Fi — sign in</body></html>"))
 	})
-	result := probeConnectivity()
+	result := probeConnectivityWithin(0)
 	if result.online {
 		t.Fatal("a portal page was counted as internet access")
 	}
@@ -71,7 +71,7 @@ func TestProbeConnectivityPortalRedirect(t *testing.T) {
 		}
 		http.Redirect(w, r, "/login?next=wifi", http.StatusFound)
 	})
-	result := probeConnectivity()
+	result := probeConnectivityWithin(0)
 	if result.online || result.portal != srv.URL+"/login?next=wifi" {
 		t.Fatalf("probe = %+v, want the redirect target %q", result, srv.URL+"/login?next=wifi")
 	}
@@ -83,7 +83,7 @@ func TestProbeConnectivityServerError(t *testing.T) {
 	withProbeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "nope", http.StatusInternalServerError)
 	})
-	result := probeConnectivity()
+	result := probeConnectivityWithin(0)
 	if result.online || result.portal != "" {
 		t.Fatalf("probe = %+v, want offline with no portal", result)
 	}
@@ -103,7 +103,7 @@ func TestProbeConnectivityUnreachable(t *testing.T) {
 	netProbeClient = &http.Client{Timeout: 2 * time.Second}
 	t.Cleanup(func() { netProbeEndpoints, netProbeClient = oldEndpoints, oldClient })
 
-	result := probeConnectivity()
+	result := probeConnectivityWithin(0)
 	if result.online || result.portal != "" || result.reason == "" {
 		t.Fatalf("probe = %+v, want offline", result)
 	}

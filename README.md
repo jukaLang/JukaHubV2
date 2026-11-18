@@ -253,7 +253,7 @@ clock and the notification bell are in the bar itself.
   Wi-Fi**; see [docs/WIFI.md](docs/WIFI.md).
 * **Settings** — playback resolution, weather and 47 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
-  **Display & theme** also holds the wallpaper — a GIF plays, unless
+  **Theme & look** also holds the wallpaper — a GIF plays, unless
   **Animate wallpaper** is off or Battery Saver is on — and **Liquid
   background**, which turns the backdrop under the glass into water that
   ripples where the focus lands and stirs with the sticks.
@@ -261,7 +261,7 @@ clock and the notification bell are in the bar itself.
   on their own: battery saver, which drops to the slowest cadence, stops UI
   motion and switches to the OLED theme below 20% until it is charged again;
   light & dark by time of day (a day theme and a night theme that switch at
-  times you choose, also under Display & theme); and start at login, which a
+  times you choose, also under Theme & look); and start at login, which a
   TrimUI switches on at its first start and a desktop leaves off. A start with
   the device plays a full boot — the logo comes alive and Home builds itself
   card by card — and **General → Boot logo** puts the JukaHub logo into the
@@ -726,8 +726,10 @@ four the same way, with controller hints; see
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
+| [USB file transfer](docs/USB_FILE_TRANSFER.md) | the SD card on a computer over a USB cable (MTP): Windows, Linux, Mac, startup lock, troubleshooting |
 | [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
+| [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
 | [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |

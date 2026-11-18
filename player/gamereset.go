@@ -626,7 +626,8 @@ func gameResetFilesWord(n int) string {
 // render thread (the sheet shows it); the files move on a goroutine, since a
 // copy to another card can take a moment, and the result is a toast.
 func runGameReset(game libraryGame, states bool) {
-	if strings.TrimSpace(game.Path) == "" || game.System == androidLibrarySystem || game.System == html5LibrarySystem {
+	if strings.TrimSpace(game.Path) == "" || game.System == androidLibrarySystem || game.System == html5LibrarySystem ||
+		game.System == portsLibrarySystem {
 		ShowToast("This game has nothing to reset here", ToastKindInfo)
 		return
 	}
@@ -649,6 +650,9 @@ func runGameReset(game libraryGame, states bool) {
 	if gameOptsUI.open && gameOptsUI.game.Path == game.Path {
 		gameOptsUI.opts = gameOptions{}
 	}
+	// The cheats switched on for it go too (cheats.go).
+	cheatsSetRecord(game.Path, cheatsGameRecord{})
+	cheatsFlush()
 	label := game.Label()
 	go func() {
 		defer gameResetBusy.Store(false)

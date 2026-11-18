@@ -77,6 +77,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
+      - name: gofmt -l
+        run: |
+          unformatted=$(find . -path './vendor' -prune -o -name '*.go' -print0 | xargs -0 -r gofmt -l)
+          if [ -n "$unformatted" ]; then
+            printf 'Unformatted Go files:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
       - name: go vet
         run: go vet ./...
 

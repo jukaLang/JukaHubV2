@@ -18,7 +18,13 @@ storage, which is the part the first boot has to prove (see the release gate).
 
 **Never write a Brick image to a Smart Pro card, or this image to a Brick.**
 The builder refuses a board folder that is not from a Smart Pro: the panel
-must be 1280x720 and the device tree the Smart Pro's.
+must be 1280x720 and the device tree the Smart Pro's. `dump-board.sh`
+records the model code (`MODEL=` in `facts.txt`: TG5040 Smart Pro, TG5050
+Smart Pro S, TG3040 Brick, TG4040 Brick Pro) and stops on anything but a
+TG5040; `JUKAHUB_ANY_MODEL=1 sh dump-board.sh` saves another model's files
+for development, and `build_image.py --experimental-model` is the only way
+to build from them. The Smart Pro S (A523) has another boot ROM, boot0
+layout and kernel; nothing about booting it this way has been verified.
 
 ## How it boots
 

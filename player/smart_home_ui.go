@@ -403,7 +403,7 @@ func smartHomePanelSubtitle(config *Config, snap smartHomeSnapshotData) string {
 	if snap.loading {
 		line += " · refreshing"
 	} else if !snap.updatedAt.IsZero() {
-		line += " · " + snap.updatedAt.Format("15:04")
+		line += " · " + clockDigits(config, snap.updatedAt)
 	}
 	return line
 }

@@ -10,7 +10,11 @@ package main
 // band behind the tabs fades to nothing at both ends (one cached 1-pixel-tall
 // ramp texture, stretched), and when the tabs do not all fit the strip
 // scrolls to keep the active one centred, the labels fading out towards the
-// ends.
+// ends. With Tabs position Bottom (homelook.go) the strip has a low bar of
+// its own over the footer instead (tabsBottomBar) and the page ends above it.
+//
+// The look (homelook.go): every cover but the selected one is dimmed, and the
+// page fades at an end of its scroll axis with more past it (listfade.go).
 //
 // Every view is a list of rects in the page's own space (tabsGeom), cached by
 // view, count and size: the D-pad steps by them, the page scrolls along one
@@ -69,8 +73,22 @@ func (h *HomeLayout) tabsBody(lvl *homeTabsLevel) sdl.Rect {
 		top += scaleY(44, h.Height)
 	}
 	bottom := scaleY(664, h.Height) - scaleY(16, h.Height)
+	if homeTabsStripBottom() {
+		// The strip's bar over the footer takes the page's last band.
+		bottom = h.tabsBottomBar().Y - scaleY(10, h.Height)
+	}
 	x := scaleX(40, h.Width)
 	return sdl.Rect{X: x, Y: top, W: max32(h.Width-2*x, 1), H: max32(bottom-top, 1)}
+}
+
+// tabsBottomBar is the bar the strip sits in when Tabs position is Bottom
+// (homelook.go): across the page, just over the footer (drawFooter's band
+// starts at 664 of the 720-high design canvas). It is kept low — one line of
+// tabs — so the 4:3 Brick canvas loses little of the page to it.
+func (h *HomeLayout) tabsBottomBar() sdl.Rect {
+	x := scaleX(40, h.Width)
+	bh := scaleY(44, h.Height)
+	return sdl.Rect{X: x, Y: scaleY(664, h.Height) - scaleY(6, h.Height) - bh, W: max32(h.Width-2*x, 1), H: bh}
 }
 
 // homeTabsScale is the canvas's scale for sizes that stay square: the
@@ -150,22 +168,60 @@ func homeTabsLayout(view string, n int, hero bool, bw, bh int32, k float64, out 
 		}
 		return out, true, int32(n-1)*pitch + side
 	}
-	// Grid and compact: square tiles in as many columns as fit, rows down.
-	target := sz(150)
+	// The default grid gives covers and card metadata room to read.
+	// Compact keeps the old dense layout for people who want more at once.
+	target, capSide := sz(210), sz(260)
 	if view == homeTabViewCompact {
-		target = sz(104)
+		target, capSide = sz(104), 0
 	}
 	cols := (bw + gap) / max32(target+gap, 1)
 	if cols < 1 {
 		cols = 1
 	}
-	side := (bw - (cols-1)*gap) / cols
-	for i := 0; i < n; i++ {
-		r, c := int32(i)/cols, int32(i)%cols
-		out = append(out, sdl.Rect{X: c * (side + gap), Y: r * (side + gap), W: side, H: side})
+	if view == homeTabViewGrid {
+		// Six cards work better as two complete rows of three. Seven and
+		// eight get four columns; fuller pages use the normal five.
+		wanted := int32(n)
+		switch {
+		case n == 6:
+			wanted = 3
+		case n == 7 || n == 8:
+			wanted = 4
+		case n > 8:
+			wanted = 5
+		}
+		cols = min32(cols, wanted)
+	}
+	side := max32(1, (bw-(cols-1)*gap)/cols)
+	if capSide > 0 {
+		side = min32(side, capSide)
 	}
 	rows := (int32(n) + cols - 1) / cols
-	return out, false, rows*(side+gap) - gap
+	if view == homeTabViewGrid && rows <= 2 {
+		// Leave room for the focus ring, including with the tabs at the
+		// bottom where the page is shorter.
+		side = min32(side, max32(1, (bh-(rows-1)*gap-2*sz(14))/rows))
+	}
+	gridW := cols*side + (cols-1)*gap
+	gridH := rows*side + (rows-1)*gap
+	x0, y0 := int32(0), int32(0)
+	if view == homeTabViewGrid {
+		x0 = max32(0, (bw-gridW)/2)
+		if gridH <= bh {
+			y0 = (bh - gridH) / 2
+		}
+	}
+	for i := 0; i < n; i++ {
+		r, c := int32(i)/cols, int32(i)%cols
+		rowX := x0
+		if view == homeTabViewGrid && n <= 10 && r == rows-1 {
+			rowCols := int32(n) - r*cols
+			rowW := rowCols*side + (rowCols-1)*gap
+			rowX = max32(0, (bw-rowW)/2)
+		}
+		out = append(out, sdl.Rect{X: rowX + c*(side+gap), Y: y0 + r*(side+gap), W: side, H: side})
+	}
+	return out, false, y0 + gridH
 }
 
 // homeTabsScrollTarget is where the level's page should be scrolled to: the
@@ -206,8 +262,10 @@ func homeTabsScrollTarget(lvl *homeTabsLevel, view string, g *homeTabsGeom, pad 
 // wordmark yields from the next frame on (tabsBrandYields), and comes back
 // once there is room for both again.
 func (h *HomeLayout) tabsNoteSpan(brandEnd int32, plan []headerPlanItem) {
-	if !h.tabsActive() {
-		homeTabs.brandYield = false
+	if !h.tabsActive() || homeTabsStripBottom() {
+		// With the strip at the bottom (homelook.go) the bar is the
+		// wordmark's and the controls' as on any other Home.
+		homeTabs.brandYield, homeTabs.spanOK = false, false
 		return
 	}
 	right := h.Width - StatusBarMargin
@@ -389,9 +447,20 @@ func (h *HomeLayout) tabsDrawStrip(renderer *sdl.Renderer, fonts HomeFonts, focu
 	if homeTabs.spanOK {
 		left, right = homeTabs.spanL, homeTabs.spanR
 	}
+	// Tabs position Bottom (homelook.go): the strip has a bar of its own over
+	// the footer, as wide as the page.
+	barY := int32(0)
+	bottom := homeTabsStripBottom()
+	if bottom {
+		bar := h.tabsBottomBar()
+		left, right, barY, barH = bar.X, bar.X+bar.W, bar.Y, bar.H
+	}
 	margin := scaleX(16, h.Width)
 	left, right = left+margin, right-margin
 	maxW := min32(right-left, h.Width*55/100)
+	if bottom {
+		maxW = right - left
+	}
 	if maxW < scaleX(120, h.Width) || total <= 0 {
 		return
 	}
@@ -405,7 +474,7 @@ func (h *HomeLayout) tabsDrawStrip(renderer *sdl.Renderer, fonts HomeFonts, focu
 	}
 	fh := int32(f.Height())
 	ph := min32(barH-8, fh+scaleY(14, h.Height))
-	strip := sdl.Rect{X: x0, Y: (barH - ph) / 2, W: sw, H: ph}
+	strip := sdl.Rect{X: x0, Y: barY + (barH-ph)/2, W: sw, H: ph}
 	homeTabs.strip = strip
 	overflow := total > sw
 	fade := min32(scaleX(48, h.Width), sw/4)
@@ -640,6 +709,31 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 		}
 		return
 	}
+	// Dim unselected art (homelook.go): the selected cover in full colour,
+	// easing in as the selection moves; a page sliding out keeps its own.
+	dimOn := homeDimArtOn(appConfig)
+	if dimOn && live {
+		// The depth as well as the key: a folder without a view of its own
+		// shares its parent's key.
+		lvlDepth := 0
+		if p := homeTabsPageOf(homeTabs.cur); p != nil {
+			lvlDepth = len(p.levels) - 1
+		}
+		if homeTabsDimEase.note(lvl.key, lvlDepth, lvl.focus, h.Motion) {
+			homeTabs.anim = true
+		}
+	}
+	dimOf := func(i int) float64 {
+		switch {
+		case !dimOn:
+			return 0
+		case live:
+			return homeTabsDimEase.dim(i)
+		case i == lvl.focus:
+			return 0
+		}
+		return 1
+	}
 	g := h.tabsGeom(view, len(lvl.items), lvl.hero, body)
 	pad := float64(scaleY(14, h.Height))
 	if live {
@@ -664,6 +758,9 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 		clip = glassIntersect(prevClip, clip)
 	}
 	_ = renderer.SetClipRect(&clip)
+	if lvl.key == homeTabCollections && !lvl.folder.Folder && view == homeTabViewGrid && len(g.rects) > 0 {
+		h.tabsDrawCollectionsIntro(renderer, fonts, g, body, dx, alpha)
+	}
 
 	place := func(i int) sdl.Rect {
 		r := g.rects[i]
@@ -677,7 +774,7 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 		return r
 	}
 	if view == homeTabViewList {
-		h.tabsDrawList(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, alpha, live)
+		h.tabsDrawList(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, alpha, live, dimOf)
 	} else {
 		center := float64(body.X+dx) + float64(body.W)/2
 		pitch := float64(1)
@@ -705,7 +802,7 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 				tileLift, tilePress, tileDepth = lift, pressed, depth
 			}
 			fav := i < len(lvl.favs) && lvl.favs[i]
-			h.tabsPaintTile(renderer, fonts, lvl.items[i], r, isFocus, tilePress, tileLift, tileDepth, fav, view == homeTabViewCompact, alpha)
+			h.tabsPaintTile(renderer, fonts, lvl.items[i], r, isFocus, tilePress, tileLift, tileDepth, fav, view == homeTabViewCompact, alpha, dimOf(i))
 			if live {
 				homeTabs.hits = append(homeTabs.hits, homeTabsHit{i: i, r: glassIntersect(r, clip)})
 			}
@@ -720,6 +817,11 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 			drawOne(lvl.focus)
 		}
 	}
+	// Not while the page slides in: a full-strength band over a half-faded
+	// page would show as a stripe.
+	if live && alpha == 255 {
+		h.tabsDrawEdgeFade(renderer, lvl, g, view, body, dx, clip)
+	}
 	if hadClip {
 		_ = renderer.SetClipRect(&prevClip)
 	} else {
@@ -727,9 +829,90 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 	}
 }
 
+// tabsDrawCollectionsIntro uses spare room above the cards to explain the
+// automatic lists. It disappears when the grid needs that room.
+func (h *HomeLayout) tabsDrawCollectionsIntro(renderer *sdl.Renderer, fonts HomeFonts, g *homeTabsGeom, body sdl.Rect, dx int32, alpha uint8) {
+	if fonts.Card == nil || fonts.Helper == nil {
+		return
+	}
+	titleH, lineH := int32(fonts.Card.Height()), int32(fonts.Helper.Height())
+	gap := scaleY(6, h.Height)
+	blockH := titleH + gap + lineH
+	if g.rects[0].Y < blockH+scaleY(36, h.Height) {
+		return
+	}
+	x := body.X + dx + g.rects[0].X
+	y := body.Y + (g.rects[0].Y-blockH)/2
+	room := body.W - g.rects[0].X
+	drawText(renderer, fonts.Card, ellipsize(fonts.Card, "Your collections", room), x, y,
+		homeTabsInk(ColorTextPrimary(), alpha), textAlignLeft)
+	drawText(renderer, fonts.Helper, ellipsize(fonts.Helper, "Your lists, plus ones updated automatically", room), x, y+titleH+gap,
+		homeTabsInk(ColorTextMuted(), alpha), textAlignLeft)
+}
+
+// tabsDrawEdgeFade fades the ends of the page's scroll axis that have more
+// past them (listfade.go), each band kept short of the selected tile so its
+// ring stays crisp. The list view fades its column only, not the preview.
+func (h *HomeLayout) tabsDrawEdgeFade(renderer *sdl.Renderer, lvl *homeTabsLevel, g *homeTabsGeom, view string, body sdl.Rect, dx int32, clip sdl.Rect) {
+	if len(g.rects) == 0 || !listEdgeFadeOn(appConfig) {
+		return
+	}
+	// ro is the selected tile's ring and glow past its rect.
+	ro := homeFocusRingOutset() + scaleY(4, h.Height)
+	area := clip
+	if view == homeTabViewList {
+		area = glassIntersect(clip, sdl.Rect{X: body.X + dx - ro, Y: clip.Y, W: g.rects[0].W + 2*ro, H: clip.H})
+	}
+	viewLen := float64(body.H)
+	if g.horiz {
+		viewLen = float64(body.W)
+	}
+	before := lvl.scroll > 0.5
+	after := lvl.scroll+viewLen < float64(g.extent)-0.5
+	if !before && !after {
+		return
+	}
+	span := area.H
+	if g.horiz {
+		span = area.W
+	}
+	size := listFadeSize(span)
+	near, far := int32(0), int32(0)
+	if before {
+		near = size
+	}
+	if after {
+		far = size
+	}
+	if lvl.focus >= 0 && lvl.focus < len(g.rects) {
+		r := g.rects[lvl.focus]
+		scroll := int32(math.Round(lvl.scroll))
+		if g.horiz {
+			x := r.X + body.X + dx - scroll
+			near = min32(near, max32(x-ro-area.X, 0))
+			far = min32(far, max32(area.X+area.W-(x+r.W+ro), 0))
+		} else {
+			y := r.Y + body.Y - scroll
+			near = min32(near, max32(y-ro-area.Y, 0))
+			far = min32(far, max32(area.Y+area.H-(y+r.H+ro), 0))
+		}
+	}
+	if g.horiz {
+		drawListEdgeFadeSides(renderer, area, near, far)
+	} else {
+		drawListEdgeFadeSized(renderer, area, near, far)
+	}
+}
+
 // homeTabsCopyCover copies tex into dst cropped to dst's shape, the way a
 // cover fills a card.
 func homeTabsCopyCover(renderer *sdl.Renderer, tex *sdl.Texture, dst sdl.Rect, alpha uint8) {
+	homeTabsCopyCoverDim(renderer, tex, dst, alpha, 0)
+}
+
+// homeTabsCopyCoverDim is homeTabsCopyCover dimmed by dim (0 full colour, 1
+// fully dimmed: Dim unselected art, homelook.go).
+func homeTabsCopyCoverDim(renderer *sdl.Renderer, tex *sdl.Texture, dst sdl.Rect, alpha uint8, dim float64) {
 	_, _, tw, th, err := tex.Query()
 	if err != nil || tw <= 0 || th <= 0 || dst.W <= 0 || dst.H <= 0 {
 		return
@@ -743,7 +926,7 @@ func homeTabsCopyCover(renderer *sdl.Renderer, tex *sdl.Texture, dst sdl.Rect, a
 		src.X = (tw - src.W) / 2
 	}
 	_ = tex.SetAlphaMod(alpha)
-	_ = renderer.Copy(tex, &src, &dst)
+	homeLookCopyDim(renderer, tex, &src, dst, dim, alpha)
 	_ = tex.SetAlphaMod(255)
 }
 
@@ -754,9 +937,10 @@ func homeTabsInk(c sdl.Color, alpha uint8) sdl.Color {
 }
 
 // tabsPaintTile paints one tile: the glass, the cover or the glyph, the
-// name (and its line where the tile has room), the badge and the heart.
+// name (and its line where the tile has room), the badge and the heart. dim
+// greys the cover (Dim unselected art, homelook.go).
 func (h *HomeLayout) tabsPaintTile(renderer *sdl.Renderer, fonts HomeFonts, it homeTabItem, base sdl.Rect, focused, pressed bool,
-	lift, depth float64, fav, compact bool, alpha uint8) {
+	lift, depth float64, fav, compact bool, alpha uint8, dim float64) {
 	draw := scaleHomeCard(base, lift)
 	draw.Y += homePressOffset(depth, h.Height)
 	if focused {
@@ -787,19 +971,19 @@ func (h *HomeLayout) tabsPaintTile(renderer *sdl.Renderer, fonts HomeFonts, it h
 	}
 	th := int32(title.Height())
 	if art != nil {
-		homeTabsCopyCover(renderer, art, draw, alpha)
-		from, to := continueScrim(200)
-		fillVerticalScrim(renderer, draw, draw.Y+draw.H*55/100, homeTabsInk(from, alpha), homeTabsInk(to, alpha))
-		white := sdl.Color{R: 255, G: 255, B: 255, A: alpha}
+		homeTabsCopyCoverDim(renderer, art, draw, alpha, dim)
+		from, to := continueScrim(255)
+		fillVerticalScrimUntil(renderer, draw, draw.Y+draw.H*42/100, draw.Y+draw.H*72/100,
+			homeTabsInk(from, alpha), homeTabsInk(to, alpha))
 		y := draw.Y + draw.H - pad - th
 		if sub != nil && it.Sub != "" && draw.H >= scaleY(180, h.Height) {
 			sh := int32(sub.Height())
 			drawText(renderer, sub, ellipsize(sub, it.Sub, textW), draw.X+pad, draw.Y+draw.H-pad-sh,
-				sdl.Color{R: 255, G: 255, B: 255, A: uint8(uint32(alpha) * 200 / 255)}, textAlignLeft)
+				homeTabsInk(subInk, alpha), textAlignLeft)
 			y -= sh + scaleY(2, h.Height)
 		}
 		if textW > 0 {
-			drawText(renderer, title, ellipsize(title, it.Title, textW), draw.X+pad, y, white, textAlignLeft)
+			drawText(renderer, title, ellipsize(title, it.Title, textW), draw.X+pad, y, homeTabsInk(titleInk, alpha), textAlignLeft)
 		}
 	} else {
 		// The glyph over the name, the pair centred in the tile.
@@ -863,9 +1047,10 @@ func (h *HomeLayout) tabsPaintCorner(renderer *sdl.Renderer, fonts HomeFonts, it
 }
 
 // tabsDrawList draws the list view: a line per item on the left, the
-// focused one large in a preview pane on the right.
+// focused one large in a preview pane on the right. dimOf is each line's
+// cover dim (homelook.go); the preview is always in full colour.
 func (h *HomeLayout) tabsDrawList(renderer *sdl.Renderer, fonts HomeFonts, lvl *homeTabsLevel, g *homeTabsGeom, body sdl.Rect, dx, scroll int32,
-	clip sdl.Rect, focused, pressed bool, alpha uint8, live bool) {
+	clip sdl.Rect, focused, pressed bool, alpha uint8, live bool, dimOf func(int) float64) {
 	title, sub := fonts.Tile, fonts.Meta
 	if title == nil {
 		return
@@ -897,7 +1082,7 @@ func (h *HomeLayout) tabsDrawList(renderer *sdl.Renderer, fonts HomeFonts, lvl *
 			art = it.Art()
 		}
 		if art != nil {
-			homeTabsCopyCover(renderer, art, ib, alpha)
+			homeTabsCopyCoverDim(renderer, art, ib, alpha, dimOf(i))
 		} else {
 			glyphBox := drawIconBadge(renderer, ib, isFocus)
 			ink := ColorTextPrimary()

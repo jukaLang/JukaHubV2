@@ -55,7 +55,7 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
-          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|LiveBuilder|Ssync|PatchDownload|RunInstalledCoreUpdates|Telemetry|MediaRelay|FFmpegReadableInput)"
+          RACE_TESTS: "^Test(ConditionalCache|FetchBounded|Semaphore|RunBounded|DecodeImageRGBAHonoursCancellation|DoWithRetry|InstallBar|DebouncedUserConfigSave|ConfigLoadSchedulesNoUserSave|Peer|SSH|ToggleSSHServer|PublishSSHState|SFTP|FTP|Companion|Synthetic|Hint|HeldKeyRepeat|LiveBuilder|Ssync|PatchDownload|Download|BrowserFetchToDir|BrwWpeDownload|RunInstalledCoreUpdates|Telemetry|MediaRelay|FFmpegReadableInput)"
         run: |
           set +e
           go test -race . -run "$RACE_TESTS" -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
@@ -288,6 +288,9 @@ jobs:
           echo "CGO_CFLAGS=-I$sdl/SDL2-2.30.11/x86_64-w64-mingw32/include -I$sdl/SDL2-2.30.11/x86_64-w64-mingw32/include/SDL2 -I$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/include -I$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/include/SDL2 -I$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include -I$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include/SDL2" >> "$GITHUB_ENV"
           echo "CGO_LDFLAGS=-L$sdl/SDL2-2.30.11/x86_64-w64-mingw32/lib -L$sdl/SDL2_image-2.8.4/x86_64-w64-mingw32/lib -L$sdl/SDL2_ttf-2.22.0/x86_64-w64-mingw32/lib" >> "$GITHUB_ENV"
           echo "CC=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+
+      - name: go vet
+        run: go vet ./...
 
       - name: Build
         run: go build -o JukaHub-weekly.exe .

@@ -20,8 +20,10 @@ package main
 // Emulator cleaning (Custom "homeTabsEmuClean", on by default): a console
 // with no games is left out, and a console with games but nothing to run
 // them is shown dimmed with an Install badge whose A opens the Emulators page
-// on that console. Off ("Show all emulators"), every console the device has
-// an emulator for is listed, empty ones reading "0 games".
+// on that console (a game set to always use an emulator of its own counts as
+// something to run them, homeTabsPinnedPlayable). Off ("Show all
+// emulators"), every console the device has an emulator for is listed, empty
+// ones reading "0 games".
 //
 // The library is the Games library's own scan (game_library_ui.go): when the
 // library panel has scanned, Home adopts that result; otherwise Home runs the
@@ -189,7 +191,7 @@ func homeTabsStartScan() {
 		libraryAddAndroidGames(&lib, seconds)
 		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
 		libraryAddBuiltInGames(&lib, builtInScenes, builtInCoverRoot())
-		playable, runnable := homeTabsLaunchers(lib.Systems)
+		playable, runnable := homeTabsLaunchers(lib.Systems, nil)
 		tbxPost(func() {
 			s.scanning = false
 			// A Games library scan that landed meanwhile (and was adopted) is
@@ -215,13 +217,16 @@ func homeTabsStartLauncherCheck() {
 	s.launching = true
 	s.launchAt = time.Now()
 	// Names only: the report's rows may be the Games library's own, which
-	// the render thread updates in place (recountLibraryArtwork).
+	// the render thread updates in place (recountLibraryArtwork). The games'
+	// consoles come from byPath instead: a map of copies, made when the
+	// snapshot was installed and never written after.
 	systems := make([]librarySystem, 0, len(s.report.Systems))
 	for _, system := range s.report.Systems {
 		systems = append(systems, librarySystem{Name: system.Name})
 	}
+	byPath := s.byPath
 	go func() {
-		playable, runnable := homeTabsLaunchers(systems)
+		playable, runnable := homeTabsLaunchers(systems, byPath)
 		tbxPost(func() {
 			s.launching = false
 			if homeTabsSameLaunchers(s.playable, s.runnable, playable, runnable) {
@@ -235,7 +240,9 @@ func homeTabsStartLauncherCheck() {
 
 // homeTabsSystemPlayable reports whether something can start a console's
 // games: the built-in, Android and HTML5 rows always can; a console needs a
-// launcher (a pinned one or a detected emulator). Off the render thread.
+// launcher (one pinned for the console or a detected emulator). A game pinned
+// to an emulator of its own is homeTabsPinnedPlayable's. Off the render
+// thread.
 func homeTabsSystemPlayable(system string) bool {
 	switch system {
 	case builtInLibrarySystem, androidLibrarySystem, html5LibrarySystem:
@@ -245,12 +252,16 @@ func homeTabsSystemPlayable(system string) bool {
 }
 
 // homeTabsLaunchers is homeTabsSystemPlayable for every console of systems,
-// and the consoles the device has an emulator for. Off the render thread.
-func homeTabsLaunchers(systems []librarySystem) (map[string]bool, []string) {
+// with the per-game pins on top (homeTabsPinnedPlayable: byPath names the
+// snapshot's games, nil means systems carry their games), and the consoles
+// the device has an emulator for. Off the render thread; the answer is kept
+// in homeTabsLib and asked again every homeTabsLaunchEvery.
+func homeTabsLaunchers(systems []librarySystem, byPath map[string]libraryGame) (map[string]bool, []string) {
 	playable := make(map[string]bool, len(systems))
 	for _, system := range systems {
 		playable[system.Name] = homeTabsSystemPlayable(system.Name)
 	}
+	homeTabsPinnedPlayable(playable, systems, byPath)
 	names := map[string]bool{}
 	for _, s := range romSystemAliases {
 		if strings.TrimSpace(s.Name) != "" {
@@ -272,6 +283,89 @@ func homeTabsLaunchers(systems []librarySystem) (map[string]bool, []string) {
 	}
 	sort.Strings(runnable)
 	return playable, runnable
+}
+
+// The per-game pins one launcher check reads (LIB-22): at most homeTabsPinsMax
+// games set to always use an emulator (game options → Emulator), and at most
+// homeTabsPinStatMax of their files looked at. The pins are the in-memory game
+// options, not the card, so a card of thousands of games costs a short walk
+// over the few games that have a pin.
+const (
+	homeTabsPinsMax    = 512
+	homeTabsPinStatMax = 32
+)
+
+// homeTabsPinnedPlayable marks playable a console that nothing plays by
+// itself when one of its games is pinned to an emulator whose file is there
+// (gameLauncherPinned, emupicker.go): such a console's games start, so it
+// gets no Install badge. byPath finds a pinned game's console; when it is nil
+// the games of systems are walked instead (a fresh scan, before the snapshot
+// exists). Off the render thread.
+func homeTabsPinnedPlayable(playable map[string]bool, systems []librarySystem, byPath map[string]libraryGame) {
+	unplayable := 0
+	for _, ok := range playable {
+		if !ok {
+			unplayable++
+		}
+	}
+	if unplayable == 0 {
+		return
+	}
+	pins := make(map[string]gameOptions, 8)
+	gameOptionsMu.Lock()
+	ensureGameOptionsLocked()
+	for key, opts := range gameOptionsStore {
+		if strings.TrimSpace(opts.Emulator) == "" {
+			continue
+		}
+		pins[key] = opts
+		if len(pins) >= homeTabsPinsMax {
+			break
+		}
+	}
+	gameOptionsMu.Unlock()
+	if len(pins) == 0 {
+		return
+	}
+	// The console of each pinned game, for the consoles still unplayable.
+	consoleOf := make(map[string]string, len(pins))
+	if byPath != nil {
+		for key := range pins {
+			if g, ok := byPath[key]; ok {
+				consoleOf[key] = g.System
+			}
+		}
+	} else {
+		for _, system := range systems {
+			if ok, known := playable[system.Name]; !known || ok {
+				continue
+			}
+			for _, g := range system.Games {
+				if key := gameOptionsKey(g.Path); key != "" {
+					if _, pinned := pins[key]; pinned {
+						consoleOf[key] = system.Name
+					}
+				}
+			}
+		}
+	}
+	looked := 0
+	for key, system := range consoleOf {
+		if ok, known := playable[system]; !known || ok {
+			continue
+		}
+		if looked >= homeTabsPinStatMax {
+			return
+		}
+		looked++
+		if gameLauncherPinned(pins[key]) != "" {
+			playable[system] = true
+			unplayable--
+			if unplayable == 0 {
+				return
+			}
+		}
+	}
 }
 
 // homeTabsSameLaunchers reports whether a launcher check changed nothing.
@@ -711,46 +805,6 @@ func homeTabsEmuEntryIndex(system string, entries []emuEntry) int {
 	return -1
 }
 
-// homeTabsExtraApp is a games entry that has no Start menu row of its own
-// (Xbox Remote Play lives on a header pill, Steam in the Apps list): its ref
-// is still an "app:do:" ref so it can be favourited and collected.
-type homeTabsExtraApp struct {
-	ref    string
-	title  string
-	sub    string
-	glyphs []string
-	shown  func() bool
-	open   func(c *Config)
-}
-
-var homeTabsExtraApps = []homeTabsExtraApp{
-	{
-		ref:    homeTileActionPrefix + "Xbox Remote Play",
-		title:  "Xbox Remote Play",
-		sub:    "Remote play",
-		glyphs: []string{"xbox", "emu-xbox", "gamepad"},
-		shown:  x1PillSupported,
-		open:   func(*Config) { x1TileActivate() },
-	},
-	{
-		ref:    homeTileActionPrefix + "Steam",
-		title:  "Steam",
-		sub:    "Your Steam library",
-		glyphs: []string{"steam", "gamepad"},
-		open:   func(*Config) { openSteamPanel() },
-	},
-}
-
-// homeTabsExtraAppFor finds an extra entry by ref.
-func homeTabsExtraAppFor(ref string) (homeTabsExtraApp, bool) {
-	for _, e := range homeTabsExtraApps {
-		if strings.EqualFold(e.ref, ref) && (e.shown == nil || e.shown()) {
-			return e, true
-		}
-	}
-	return homeTabsExtraApp{}, false
-}
-
 // homeTabsAppIndex caches the Start menu's entries by ref for one frame:
 // resolving a page of app refs walks the menu once, not once per ref.
 var homeTabsAppIndex struct {
@@ -775,20 +829,10 @@ func homeTabsAppEntry(c *Config, ref string) (startMenuEntry, bool) {
 }
 
 // homeTabsAppItem is an app ref as a tile ("app:scene:…", "app:do:…"),
-// false when nothing on this device answers to it.
+// false when nothing on this device answers to it. Xbox Remote Play and
+// Steam are Start menu rows too (startmenu.go), so their refs
+// resolve here and in homeActivateApp alike.
 func homeTabsAppItem(c *Config, ref, sub string) (homeTabItem, bool) {
-	if e, ok := homeTabsExtraAppFor(ref); ok {
-		if sub == "" {
-			sub = e.sub
-		}
-		open := e.open
-		it := homeTabItem{Key: e.ref, Ref: e.ref, Title: e.title, Sub: sub, Glyph: homeTabsGlyph(e.glyphs...)}
-		it.Activate = func(c *Config) {
-			startMenuCloseOverlays()
-			open(c)
-		}
-		return it, true
-	}
 	entry, ok := homeTabsAppEntry(c, ref)
 	if !ok {
 		return homeTabItem{}, false
@@ -830,9 +874,12 @@ func homeTabsGamesItems(c *Config) []homeTabItem {
 	// Remote play, then the other places games come from, then the tools.
 	rows := []struct{ ref, sub string }{
 		{homeTileActionPrefix + "PS Remote Play", "Remote play"},
-		{homeTileActionPrefix + "Xbox Remote Play", "Remote play"},
-		{homeTileActionPrefix + "Steam", "Your Steam library"},
+		{homeTileActionPrefix + xboxRemotePlayEntryName, "Remote play"},
+		{homeTileActionPrefix + moonlightEntryName, "Your gaming PC"},
+		{homeTileActionPrefix + cloudGamingEntryName, "Game Pass · GeForce NOW"},
+		{homeTileActionPrefix + steamEntryName, "Your Steam library"},
 		{homeTileActionPrefix + minecraftEntryName, "Every way to play"},
+		{homeTileActionPrefix + portsStoreEntryName, "Download ports"},
 		{homeTileActionPrefix + portMasterEntryName, "PC ports"},
 		{homeTileActionPrefix + windowsAppsEntryName, "Windows games"},
 		{homeTileActionPrefix + "Emulators", "Install and update"},

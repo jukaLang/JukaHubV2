@@ -140,6 +140,8 @@ func TestRommServerSaveNegotiationPreservesLocalCopy(t *testing.T) {
 			_, _ = io.WriteString(w, `{"session_id":9,"operations":[{"action":"download","rom_id":7,"save_id":4,"file_name":"Game.srm"}]}`)
 		case "/api/saves/4/content":
 			_, _ = io.WriteString(w, "new save")
+		case "/api/saves/4/downloaded":
+			_, _ = io.WriteString(w, `{}`)
 		case "/api/sync/sessions/9/complete":
 			completed = true
 			_, _ = io.WriteString(w, `{}`)
@@ -251,6 +253,8 @@ func TestRommServerSyncRoutesSaveRAMAndStates(t *testing.T) {
 			_, _ = io.WriteString(w, "server RAM")
 		case "/api/saves/12/content":
 			_, _ = io.WriteString(w, "server state")
+		case "/api/saves/11/downloaded", "/api/saves/12/downloaded":
+			_, _ = io.WriteString(w, `{}`)
 		case "/api/sync/sessions/10/complete":
 			_, _ = io.WriteString(w, `{}`)
 		default:
@@ -272,6 +276,35 @@ func TestRommServerSyncRoutesSaveRAMAndStates(t *testing.T) {
 		got, err := os.ReadFile(path)
 		if err != nil || string(got) != want {
 			t.Errorf("%s = %q, %v", path, got, err)
+		}
+	}
+}
+
+// RomM's ROM JSON (hashes for auto-sync matching), the auto-sync links file
+// (damaged input starts empty) and the save names sync may write.
+func TestRommServerParsesROMHashesAndAutoSyncIndex(t *testing.T) {
+	var page rommServerPage
+	raw := `{"items":[{"id":12,"fs_name":"Game (USA).gba","platform_id":3,"fs_size_bytes":4194304,"crc_hash":"0a1b2c3d","md5_hash":"9e107d9d372bb6826bd81d3542a419d6","sha1_hash":null}],"total":1}`
+	if err := json.Unmarshal([]byte(raw), &page); err != nil || len(page.Items) != 1 {
+		t.Fatalf("page = %+v, %v", page, err)
+	}
+	if g := page.Items[0]; g.PlatformID != 3 || g.Size != 4194304 || g.CRC != "0a1b2c3d" || g.MD5 == "" || g.SHA1 != "" {
+		t.Fatalf("rom = %+v", g)
+	}
+	for _, bad := range []string{"", "{", `{"games":[1,2]}`, `{"games":{"a":{"rom_id":0,"server":"s"},"b":{"rom_id":5}}}`} {
+		idx, _ := rommAutoSyncParseIndex([]byte(bad))
+		if idx.Games == nil || idx.Misses == nil || len(idx.Games) != 0 {
+			t.Errorf("index from %q = %+v", bad, idx)
+		}
+	}
+	idx, err := rommAutoSyncParseIndex([]byte(`{"version":1,"games":{"/r/gba/a.gba":{"rom_id":5,"size":9,"server":"https://romm.example"}},"misses":{"/r/gba/b.gba":{"server":"https://romm.example","size":3,"at":1}}}`))
+	if err != nil || idx.Games["/r/gba/a.gba"].RomID != 5 || len(idx.Misses) != 1 {
+		t.Fatalf("index = %+v, %v", idx, err)
+	}
+	for rest, ok := range map[string]bool{".srm": true, ".state": true, ".state3": true, ".state.auto": true, ".SAV": true,
+		".srm.romm-backup-20261117T120000.000000000": false, ".srm.romm-conflict": false, ".Bros.srm": false, ".gba": false, ".state1234": false} {
+		if rommServerSaveSlotOK(rest) != ok {
+			t.Errorf("save name %q accepted=%v", rest, !ok)
 		}
 	}
 }

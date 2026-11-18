@@ -23,7 +23,9 @@ package main
 //     own switch on the TrimUI) and the disks are synced.
 //  4. The next JukaHub alarm is put in the RTC's wakealarm, so a sleeping
 //     device wakes up in time for it (JukaHub's alarms are its own timers; a
-//     suspended process has none).
+//     suspended process has none) — or, when it comes first, Power off after
+//     sleeping's deadline, whose wake saves the game and powers the device
+//     off, or sleeps again when it cannot (quickresume.go).
 //  5. suspendDevice (lowbattery.go): "mem", else "freeze". The write returns
 //     once the device is awake again.
 //  6. Everything comes back in reverse: the RTC alarm is cleared, the
@@ -89,6 +91,10 @@ var powerSleep struct {
 	// wokeAt is when (monotonic, powerMonoNow) the last sleep ended, for the
 	// power key's wake-press guard (powerkey.go); 0 before the first.
 	wokeAt atomic.Int64
+	// pressAt is when (monotonic, powerMonoNow) the power key was last
+	// pressed during a sleep: the power-off deadline's wake checks that no
+	// press woke the device (quickresume.go).
+	pressAt atomic.Int64
 	// wake is signalled by a power press during the screen-off sleep.
 	wake chan struct{}
 	once sync.Once
@@ -103,6 +109,11 @@ var powerSleepNextAlarm atomic.Int64
 // ("power-button", "game-menu"). A second call while a sleep is running is
 // ignored. Safe from any goroutine; never blocks.
 func sleepNow(source string) {
+	// The power key while music plays darkens the screen instead, and wakes
+	// it again (quickresume.go).
+	if source == "power-button" && quickMusicPowerKey() {
+		return
+	}
 	if !powerSleepSupported() {
 		showToast("Sleep is not available on this device", ToastInfo())
 		return
@@ -127,6 +138,7 @@ func powerSleepActive() bool { return powerSleep.active.Load() }
 // powerSleepWakeFromPress is the power key during the screen-off sleep. It
 // reports whether the press was taken as the wake.
 func powerSleepWakeFromPress() bool {
+	powerSleep.pressAt.Store(int64(powerMonoNow()))
 	if !powerSleep.screenOff.Load() {
 		return false
 	}
@@ -149,6 +161,10 @@ func powerSleepJustWoke(d time.Duration) bool {
 // wake, key, button, stick, touch and mouse presses are dropped. Window,
 // quit and drop events always pass. Main thread.
 func powerSleepDropInput(event sdl.Event) bool {
+	// The music screen-off takes its own buttons (quickresume.go).
+	if quickDarkDropInput(event) {
+		return true
+	}
 	until := powerSleep.muteUntil.Load()
 	if until == 0 || time.Now().UnixNano() >= until {
 		return false
@@ -193,6 +209,9 @@ func powerSleepRun(source string) {
 		// The pollers parked behind the game or the dark screen refresh now
 		// (backgroundwork.go); the wake watcher handles the network.
 		wakeForegroundWork()
+		// A hotspot the sleep turned off gives the radio back to Wi-Fi now
+		// (hotspot.go; a no-op when there was none).
+		hotspotAfterSleep()
 	}()
 
 	logInfo("sleep", "going to sleep (%s)", source)
@@ -203,28 +222,70 @@ func powerSleepRun(source string) {
 	// with a marker that lets the next start undo a light a crash left off.
 	backlightOff(nil)
 	lightOff = true
+	// A hotspot ends before the sleep, with the screen already dark, and Wi-Fi
+	// comes back with the wake (hotspotAfterSleep above; a no-op while off).
+	hotspotBeforeSleep()
 	if err := syncDisks(); err != nil {
 		logWarn("sleep", "sync before sleep failed: %v", err)
 	}
-	clearRTC = powerSleepArmAlarm()
+	// Settings → Power off after sleeping: how long before the device wakes
+	// itself to save the game and power off (quickresume.go). A sleep only
+	// repeats when that wake could not, or need not, power off.
+	deadline := quickSleepDeadline()
+	// left is what remains of it: a wake the travel lock sends back to sleep
+	// re-arms only the rest, so stray presses in a bag never postpone it.
+	left := deadline
+	for {
+		clearRTC()
+		clearRTC = powerSleepArmAlarm(left)
+		// Only an alarm the RTC really holds now can, gone after the wake,
+		// prove the RTC woke the device (quickSleepDeadlineWake).
+		rtcArmed, _ := powerRTCAlarmPending()
 
-	// powerSleepAsleepClock counts only time spent suspended, so the
-	// difference is how long the device really slept.
-	before, haveClocks := powerSleepAsleepClock()
-	err := suspendDevice()
-	slept, measured := time.Duration(0), false
-	if after, ok := powerSleepAsleepClock(); ok && haveClocks {
-		slept, measured = after-before, true
-	}
-	switch {
-	case err != nil:
-		logWarn("sleep", "the kernel did not suspend: %v", err)
-	case measured && slept < powerSleepSpuriousWake:
-		logWarn("sleep", "the device came straight back from suspend")
-	default:
-		logInfo("sleep", "awake after %s", slept.Round(time.Second))
-		powerKeyNoteOwnWake()
-		return
+		// Both clocks that count time asleep, before and after: the
+		// difference is how long the device really slept (powerSleepSlept).
+		from := powerMonoNow()
+		before := powerSleepReadClocks()
+		err := suspendDevice()
+		after := powerSleepReadClocks()
+		slept, measured := powerSleepSlept(before, after)
+		switch {
+		case err != nil:
+			logWarn("sleep", "the kernel did not suspend: %v", err)
+		case measured && slept < powerSleepSpuriousWake:
+			logWarn("sleep", "the device came straight back from suspend")
+		default:
+			logInfo("sleep", "awake after %s%s", slept.Round(time.Second), powerSleepClockNote(before, after))
+			powerKeyNoteOwnWake()
+			// Woken by the power-off deadline, not by a press or an alarm:
+			// the game is saved and the device powers off, or it sleeps on.
+			if measured && quickSleepDeadlineWake(slept, left, from, rtcArmed) {
+				switch quickSleepAtDeadline(&held) {
+				case quickDeadlineSleepAgain:
+					left = deadline
+					continue
+				case quickDeadlinePoweringOff:
+					quickSleepAwaitPowerOff()
+					return
+				}
+			}
+			// The travel lock's re-sleep, here while a power off is due: its
+			// own loop (travelLockKeepAsleep) arms no RTC, so the deadline
+			// would be lost and the held game drained with the battery.
+			if deadline > 0 && travelLockEngagedNow() && !travelLockAlarmNear() && !exitRequested.Load() {
+				logInfo("sleep", "travel lock: woken with the FN switch locked, back to sleep")
+				if left -= slept; left < time.Minute {
+					left = time.Minute
+				}
+				continue
+			}
+			// With the FN switch holding the travel lock, a wake that is not an
+			// alarm's goes straight back to sleep, still dark (travellock.go).
+			if travelLockKeepAsleep() {
+				return
+			}
+		}
+		break
 	}
 	// The kernel could not sleep: a screen-off sleep, if a power press can
 	// end it.
@@ -246,6 +307,10 @@ func powerSleepScreenOffWait() {
 	for {
 		select {
 		case <-powerSleep.wake:
+			if travelLockEngagedNow() {
+				logInfo("sleep", "travel lock: power press ignored, the FN switch is locked")
+				continue
+			}
 			logInfo("sleep", "woken by the power button")
 			return
 		case <-ticker.C:
@@ -322,21 +387,115 @@ func powerSleepRelease(held powerSleepHeld) {
 }
 
 // powerSleepArmAlarm sets the RTC to wake the device shortly before the next
-// JukaHub alarm and returns what clears it again. Nothing is armed without an
-// alarm in the next day.
-func powerSleepArmAlarm() func() {
-	at := powerSleepNextAlarm.Load()
-	if at <= 0 {
+// JukaHub alarm, or after deadline (the power off after sleeping,
+// quickresume.go; 0 for none) when that comes first, and returns what clears
+// it again. Nothing is armed without either in the next day.
+func powerSleepArmAlarm(deadline time.Duration) func() {
+	in, armed := powerSleepWakeIn(deadline)
+	if !armed {
 		return func() {}
-	}
-	in := time.Until(time.Unix(0, at)) - powerSleepAlarmLead
-	if in > powerSleepAlarmHorizon {
-		return func() {}
-	}
-	if in < 5*time.Second {
-		in = 5 * time.Second
 	}
 	return powerRTCWakeIn(in)
+}
+
+// powerSleepWakeIn is when a sleep starting now should wake: shortly before
+// the next JukaHub alarm, or after deadline (0: none) when that comes first.
+// armed is false when neither falls in the next day. Any goroutine.
+func powerSleepWakeIn(deadline time.Duration) (in time.Duration, armed bool) {
+	if at := powerSleepNextAlarm.Load(); at > 0 {
+		in = time.Until(time.Unix(0, at)) - powerSleepAlarmLead
+		armed = in <= powerSleepAlarmHorizon
+		if armed && in < 5*time.Second {
+			in = 5 * time.Second
+		}
+	}
+	if deadline > 0 && (!armed || deadline < in) {
+		in, armed = deadline, true
+	}
+	return in, armed
+}
+
+// rtcSetGen counts JukaHub's own writes of the hardware clock
+// (rtcsync_linux.go bumps it before and after each): time asleep read on the
+// RTC across one of them measures nothing.
+var rtcSetGen atomic.Uint64
+
+// powerSleepClocks is one reading of the clocks that count time asleep.
+type powerSleepClocks struct {
+	asleep   time.Duration // CLOCK_BOOTTIME − CLOCK_MONOTONIC (powerSleepAsleepClock)
+	asleepOK bool
+	rtc      int64 // the waking RTC, whole seconds (powerRTCNow)
+	rtcOK    bool
+	mono     time.Duration // powerMonoNow
+	// genPre and genPost are rtcSetGen just before and just after the RTC
+	// was read: a pair whose first genPre equals its second genPost had no
+	// write of the hardware clock anywhere between its two RTC reads.
+	genPre, genPost uint64
+}
+
+// powerSleepReadClocks reads them. Any goroutine.
+func powerSleepReadClocks() powerSleepClocks {
+	var s powerSleepClocks
+	s.genPre = rtcSetGen.Load()
+	s.asleep, s.asleepOK = powerSleepAsleepClock()
+	s.rtc, s.rtcOK = powerRTCNow()
+	s.mono = powerMonoNow()
+	s.genPost = rtcSetGen.Load()
+	return s
+}
+
+// powerSleepClockSplit is each clock's own answer for the time asleep between
+// two readings. The RTC's is its whole seconds less the monotonic time
+// between the readings, less one second for the rounding of whole seconds, so
+// it never claims a sleep that did not happen; it is dropped across a write
+// of the hardware clock. Pure.
+func powerSleepClockSplit(before, after powerSleepClocks) (boot, rtc time.Duration, bootOK, rtcOK bool) {
+	if before.asleepOK && after.asleepOK {
+		boot, bootOK = after.asleep-before.asleep, true
+		if boot < 0 {
+			boot = 0
+		}
+	}
+	if before.rtcOK && after.rtcOK && before.genPre == after.genPost && after.rtc >= before.rtc {
+		rtc = time.Duration(after.rtc-before.rtc)*time.Second - (after.mono - before.mono) - time.Second
+		if rtc < 0 {
+			rtc = 0
+		}
+		rtcOK = true
+	}
+	return boot, rtc, bootOK, rtcOK
+}
+
+// powerSleepSlept is how long the device slept between two readings: the
+// longer of the two clocks' answers. BOOTTIME only holds a suspend the kernel
+// adds back on resume (from a persistent clock, or the RTC when that is the
+// one it set the time from); a kernel that adds none shows no sleep at all,
+// while the RTC — the clock the wake alarm itself runs on — kept counting.
+// NextUI's Auto Power Off pak moved to the RTC for this (v1.0.1). ok is false
+// when neither clock could be read twice. Pure.
+func powerSleepSlept(before, after powerSleepClocks) (time.Duration, bool) {
+	boot, rtc, bootOK, rtcOK := powerSleepClockSplit(before, after)
+	switch {
+	case bootOK && rtcOK:
+		return max(boot, rtc), true
+	case bootOK:
+		return boot, true
+	case rtcOK:
+		return rtc, true
+	}
+	return 0, false
+}
+
+// powerSleepClockNote is the log's note when the two clocks disagree on a
+// sleep by more than a minute — what a tester on a new kernel needs to see —
+// and "" otherwise.
+func powerSleepClockNote(before, after powerSleepClocks) string {
+	boot, rtc, bootOK, rtcOK := powerSleepClockSplit(before, after)
+	if !bootOK || !rtcOK || (boot-rtc < time.Minute && rtc-boot < time.Minute) {
+		return ""
+	}
+	return " (the clocks disagree: BOOTTIME counted " + boot.Round(time.Second).String() +
+		", the RTC " + rtc.Round(time.Second).String() + "; the longer counts)"
 }
 
 // powerSleepNextAlarmAt is when the next enabled alarm rings (a snooze
@@ -357,6 +516,13 @@ func powerSleepNextAlarmAt(now time.Time) time.Time {
 			if until, err := time.Parse(time.RFC3339, a.SnoozeUntil); err == nil {
 				consider(until)
 			}
+		}
+		if a.Once != "" {
+			// A one-time alarm (a calendar event's) rings on its own date only.
+			if day, err := time.ParseInLocation("2006-01-02", a.Once, now.Location()); err == nil && a.FiredOn != a.Once {
+				consider(time.Date(day.Year(), day.Month(), day.Day(), a.Hour, a.Minute, 0, 0, now.Location()))
+			}
+			continue
 		}
 		at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
 		if a.firedToday(now) || !at.After(now) {

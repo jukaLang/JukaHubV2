@@ -96,9 +96,9 @@ func main() {
 	if err := img.Init(img.INIT_PNG | img.INIT_JPG); err != nil {
 		logFatal("startup", "IMG init error: %v", err)
 	}
-	// WebP box art: best-effort, because a build without libwebp must still
-	// start. Every shipped SDL_image is built with it, so the error is only a
-	// log line if a custom runtime drops the codec.
+	// WebP box art is optional. Stock Smart Pro firmware 1.1.0 ships an
+	// SDL_image without WebP, so the image reader checks actual decoder support
+	// before offering WebP art or requesting it from image hosts.
 	if err := img.Init(img.INIT_WEBP); err != nil {
 		logWarn("main", "WEBP init unavailable: %v", err)
 	}
@@ -234,6 +234,8 @@ func main() {
 	ensureApkStoreScene(config)
 	// Minecraft (Start → Games) likewise (minecraft_ui.go).
 	mcEnsureScene(config)
+	// The Ports Store and Cloud Gaming (Start → Games) likewise (store_scenes.go).
+	storeScenesEnsure(config)
 	// Voice command and Bluetooth were only injected when first opened (or by a
 	// reload), so their trophies came and went from the room mid-run.
 	ensureVoiceScene(config)
@@ -250,6 +252,9 @@ func main() {
 	// Apply the saved "Start JukaHub at login" setting to the platform's
 	// startup folder (only ever our own launcher file).
 	reconcileAutoStart(config)
+	// The travel lock's power-on guard in System/starts follows its setting
+	// the same way (travellock.go).
+	reconcileTravelLock(config)
 
 	// The accent is the theme's (cyan by default), the colour Home's focus ring
 	// and pills use — not $buttonColor, which is a surface colour (slate by
@@ -340,9 +345,15 @@ func main() {
 		InitGameProfiles()
 		InitCompatibility()
 		InitSaveManager()
+		// On a NextUI card: JukaHub in its Tools list, its Recently played
+		// in Continue (nextui.go).
+		nextuiStartup()
 		InitCuration()
 		InitWindowsApps()
 	}()
+	// The built-in Syncthing starts when it is on (syncthing.go): two setting
+	// reads here, everything else on its own goroutine.
+	deferStartupTask("syncthing", func() { syncthingBoot(config) })
 
 	// Show the release notes once on the first launch of a newly installed
 	// build. The notes were cached before the restart, so this works offline.
@@ -359,6 +370,9 @@ func main() {
 	// confirming there.
 	if safeModeAllows(SafeFeatureUpdates) {
 		deferStartupTask("update-check", func() { startAutoUpdateCheck(config) })
+		// Community themes follow their author's new versions (themeupdate.go):
+		// a cheap poll, the gallery fetched at most once a day, online only.
+		deferStartupTask("theme-updates", startThemeUpdateScheduler)
 	}
 	// Automatic emulator-core updates: on the handheld the cores are the
 	// packages that matter, and waiting for someone to open the Emulators page
@@ -388,6 +402,12 @@ func main() {
 	// Box art for games without a cover, found in the background when online;
 	// it picks its own moment and stands down in safe mode (boxart_auto.go).
 	deferStartupTask("boxart-auto", func() { startBoxArtAuto(config) })
+	// Mail and calendar sync (docs/EMAIL_CALENDAR.md): both return at once and
+	// fetch on their own goroutines; with no account or calendar they only
+	// wait. Safe mode keeps them off with the rest of the network.
+	if safeModeAllows(SafeFeatureNetwork) {
+		deferStartupTask("mailcal", func() { mailcalStartup(config) })
+	}
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
@@ -405,6 +425,11 @@ func main() {
 	// Remembered headphones and pads reconnect after a start or a wake, and a
 	// pad's low battery is said once (bt_autoreconnect.go).
 	deferStartupTask("bt-autoreconnect", startBluetoothAutoReconnect)
+	// The USB-C port's saved Host/Device choice and the optional drive
+	// auto-mount (usbotg.go), and a battery calibration run that a shutdown
+	// interrupted or finished (batterycal.go). Both return at once.
+	deferStartupTask("usb-otg", usbOtgApplySavedMode)
+	deferStartupTask("battery-cal", batteryCalStartup)
 
 	// Watch the kernel's CPU thermal limit on the handheld; the poller parks
 	// whenever a game owns the screen or the desktop window is hidden.
@@ -556,6 +581,8 @@ func main() {
 	// and max texture size once at startup (adaptive.go; verifiable in
 	// renderpipeline_test.go).
 	logRenderPipeline(renderer)
+	// A KMSDRM display (Smart Pro S) hands DRM master to games (drmhandoff.go).
+	drmHandoffInit()
 
 	// Mouse and touch arrive in physical window pixels. The handheld canvases
 	// are scaled to their panel (notably 960x720 onto the Brick's 1024x768), so
@@ -596,6 +623,9 @@ func main() {
 	// whatever the budget left (bootos.go). Decided before the queue is built,
 	// so the warm render the first screen arrives from is queued for it too.
 	allotment = bootOSPlanStartup(config, allotment)
+	// A game the last power off saved resumes at once: no boot animation, the
+	// game on the first frames (quickresume.go).
+	allotment = quickResumeBootPlan(config, allotment)
 	// Everything below is real setup that the animation does not need, so it is
 	// queued and executed between splash frames instead of after them
 	// (bootwork.go). The cache handle is the one piece that must not block a
@@ -723,6 +753,15 @@ func main() {
 	if allotment > 0 && !bootOSPowerOnActive() {
 		bootChimeStart(config)
 	}
+	// Under JukaHub OS's own init no boot scripts run, so the travel lock's
+	// power-on guard is here: FN switch locked at power-on, straight back off
+	// (travellock.go).
+	if travelLockBootCheck(config) {
+		return
+	}
+	// Past that check the start goes on: the power-on resume's markers are
+	// used up now, not before (quickresume.go).
+	quickResumeBootCommit()
 	// Whether this start asks for the startup lock, before the boot draws
 	// anything of Home (bootlock.go).
 	bootLockArm(config)
@@ -823,10 +862,14 @@ func main() {
 		// costs up to Present, not just the draw calls. Iterations that park
 		// (a game owns the screen) present nothing and record nothing.
 		frameStart := time.Now()
+		// The stall watchdog's heartbeat: no beat for 1.5 s logs where the
+		// UI thread is stuck (stallwatch.go).
+		stallWatchBeat()
 		if startupGreetingPending && (gameScreenSuspended() || voiceOrbActive()) {
 			startupGreetingPending = false
 		}
 		foreignScreenTick(frameStart)
+		autoPerfFrame(config, frameStart) // Auto performance: which app is in front (autoperf.go)
 		// A game, emulator, port or Wine app owns the screen. JukaHub and the
 		// child share one framebuffer on handheld firmwares (see
 		// launch_handover_test.go for the same fight after a self-update), so
@@ -851,6 +894,9 @@ func main() {
 				}
 			}
 			widgetsTick(config)
+			// A wake while the game ran: the panel's picture nodes are what the
+			// game sees, so they are written again here too (displaytune_soft.go).
+			displayTuneWakeTick()
 			// Nothing listens behind a game: the voice orb goes (voiceorb.go).
 			voiceOrbAway()
 			// Nor do the stick lights: the game gets the microphone (ledmic.go).
@@ -886,6 +932,10 @@ func main() {
 		if wallpaperParkedForGame && !gameScreenSuspended() {
 			gifWallResumeAfterGame()
 			wallpaperParkedForGame = false
+		}
+		// DRM master is back after a game: set the mode again before drawing.
+		if !gameScreenSuspended() {
+			drmHandoffRemodeset(window)
 		}
 		// The game handed the screen back. One summary replaces the burst of
 		// toasts that piled up while no frame was being presented. (An alarm
@@ -1051,7 +1101,7 @@ func main() {
 					}
 					// An arrow or Tab step lets the focus ring bounce
 					// (homefocusglide.go).
-					focusGlideNoteKey(e.Keysym.Sym)
+					focusGlideNoteKey(e.Keysym.Sym, e.Repeat != 0)
 					// The voice orb's keys (voiceorb.go): F4 anywhere, and Enter,
 					// Esc and the arrows while it listens or offers a choice. The
 					// text a taken key would type is dropped with it.
@@ -1253,6 +1303,10 @@ func main() {
 					if steamPanel.open && !virtualKeyboardActive && handleSteamKey(e) {
 						continue
 					}
+					// PC streaming (Moonlight) is modal too (moonlight_ui.go).
+					if mlPanel.open && !virtualKeyboardActive && handleMoonlightKey(e) {
+						continue
+					}
 					// The browser's link picker is modal too.
 					if browserLinkPanel.open && handleBrowserLinksKey(e, config) {
 						continue
@@ -1345,9 +1399,9 @@ func main() {
 						}
 					} else {
 						// The clock popover floats above every scene and owns its own
-						// keys before the chrome or the scene sees them: Left/Right
-						// change month, the month title returns to today, Escape/B
-						// close it.
+						// keys before the chrome or the scene sees them: the arrows
+						// move the selected day, PgUp/PgDn change month, Enter/T
+						// return to today, Escape/B close it (calendarpopover.go).
 						if calendarPopoverKey(e) {
 							continue
 						}
@@ -1845,6 +1899,25 @@ func main() {
 				// Dragging a zoomed picture pans it (imageviewer.go); dragging a
 				// PDF page pans the page.
 				filesMouseMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0)
+			case *sdl.TouchFingerEvent:
+				// A touch screen (Windows tablets and touch laptops; no TrimUI has
+				// one). SDL's touch-to-mouse is off (disableSyntheticTouchMouse): a
+				// tap reaches the mouse pipeline once, as handleTouchGesture's
+				// synthetic click, and that pipeline already routes it to the
+				// alarm, the recovery card, the dock and the other modals. A swipe
+				// goes to handleSwipe, which a modal swallows.
+				if t := sdl.GetTouchDeviceType(e.TouchID); t == sdl.TOUCH_DEVICE_INDIRECT_ABSOLUTE || t == sdl.TOUCH_DEVICE_INDIRECT_RELATIVE {
+					continue // a touchpad: it already moves the pointer
+				}
+				frameRateCtrl.NotifyInput()
+				if e.Type == sdl.FINGERDOWN && screensaverWakeOnPress() {
+					continue // the touch only woke the screen; its FINGERUP then finds no touch
+				}
+				screensaverNotifyInput()
+				handleTouchGesture(e, config)
+			case *sdl.MultiGestureEvent:
+				frameRateCtrl.NotifyInput()
+				handleMultiGesture(e, config)
 			case *sdl.MouseWheelEvent:
 				// Scrolling is input too: the wheel used to leave the idle clock
 				// running, so a long read with the wheel ended in the screensaver.
@@ -1985,6 +2058,10 @@ func main() {
 				}
 				// The APK Store scrolls its tab, or its open sheet.
 				if !virtualKeyboardActive && apkStoreSceneWheel(config, e.Y) {
+					continue
+				}
+				// The Ports Store and Cloud Gaming (store_scenes.go).
+				if !virtualKeyboardActive && storeScenesWheel(config, e.Y) {
 					continue
 				}
 				// Voice command scrolls its choices, or its phone sheet.
@@ -2320,6 +2397,11 @@ func main() {
 							handleSteamMouse(mx, my)
 							break
 						}
+						// PC streaming (Moonlight) is modal the same way.
+						if mlPanel.open {
+							handleMoonlightMouse(mx, my)
+							break
+						}
 						// Browser link picker floats above the browser scene.
 						if browserLinkPanel.open {
 							handleBrowserLinksMouse(mx, my, config)
@@ -2579,6 +2661,11 @@ func main() {
 						}
 						// Minecraft's rows and sheets (minecraft_ui.go).
 						if mcSceneClick(mx, my, config) {
+							break
+						}
+						// The Ports Store's and Cloud Gaming's cards, rows and
+						// sheets (store_scenes.go).
+						if storeScenesClick(mx, my, config) {
 							break
 						}
 						// Voice command's microphone, buttons and choices.
@@ -2941,7 +3028,7 @@ func main() {
 						continue
 					}
 					// A D-pad step lets the focus ring bounce (homefocusglide.go).
-					focusGlideNotePad(e.Button)
+					focusGlideNotePad(e.Button, e.Which == padRepeatWhich)
 				} else if wakeSwallowRelease(wakeInputPad, int32(e.Button)) {
 					continue
 				}
@@ -3543,6 +3630,9 @@ func main() {
 			// Auto sleep keeps counting while the dock is dark (devpower.go):
 			// screensaverAutoTick, which calls it otherwise, is skipped here.
 			autoSleepTick(config, time.Now())
+			// And the low-battery guard, which widgetsTick runs otherwise:
+			// hours of music with the screen dark (quickresume.go).
+			quickDarkBatteryTick(config, time.Now())
 			// A sleep that started in the dark dock wakes to a lit panel, not
 			// to the dock's black frame with nothing presented.
 			if powerSleepJustWoke(time.Second) {
@@ -3729,6 +3819,10 @@ func main() {
 		// Chat: load the history, notice the scene opening and closing, start
 		// the sender for queued messages, persist what arrived (chatstate.go).
 		chatTick(config)
+		// The goodbye in the user's name is made ahead whenever the name
+		// changes, so quitting says it at once (byevoice.go). A clock read
+		// most frames.
+		byeVoiceTick(config)
 		// Bug reports queued while offline go out on their own once the
 		// device is back online (bugrepsend.go); this is a cheap check.
 		bugrepOutboxTick()
@@ -3901,6 +3995,11 @@ func main() {
 			renderSteamPanel(renderer, config)
 		}
 
+		// PC streaming (Moonlight): PCs, pairing, games (moonlight_ui*.go).
+		if mlPanel.open {
+			renderMoonlightPanel(renderer, config)
+		}
+
 		// Browser link picker (anchors extracted from the current page).
 		if browserLinkPanel.open {
 			renderBrowserLinkPanel(renderer, config)
@@ -4056,6 +4155,10 @@ func main() {
 		// before the dimmer, because it copies the finished frame
 		// (magnifier.go).
 		magnifierRender(renderer, config)
+		// Contrast, exposure and colour temperature where the display driver
+		// has none, and the driver's nodes written again after a wake
+		// (displaytune_soft.go): after the captures, before the dimmer.
+		displayTuneSoftRender(renderer)
 		// The brightness controller's main-thread work for the frame (the
 		// probe, a saved level, the header cards a full-screen surface now
 		// covers), then — where no brightness control exists — the software
@@ -4159,6 +4262,7 @@ func main() {
 	// period. A cleanup step that blocks (a child that will not exit, a server
 	// Stop that waits on a connection, a flush on a dying SD card) is the other
 	// half of the "app locked" report, and the watchdog is what bounds it.
+	stallWatchStop()
 	armExitDeadline(exitShutdownGrace)
 	// What follows is a quit, not a panic unwinding (sdlteardown.go).
 	sdlMainLoopEnded.Store(true)
@@ -4174,6 +4278,9 @@ func main() {
 	// graceful exit lands here (window close, Exit button, scene trigger, stop
 	// signal).
 	ShowShutdown(renderer, config)
+	// The teardown's playtime flush may have closed the last game's session;
+	// its history write runs on a goroutine (game_history.go).
+	gameHistoryFlush(time.Second)
 	// The fonts the card itself used close after its last frame, so a glyph
 	// texture is never freed under a frame that is about to draw with it.
 	for _, font := range fontCache {

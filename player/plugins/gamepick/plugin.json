@@ -1,17 +1,17 @@
 {
   "name": "gamepick",
   "title": "Random game",
-  "version": "1.1.0",
-  "description": "Can't decide what to play? Picks one game at random from your Roms folders (custom variable gamepick_dir points elsewhere).",
+  "version": "1.2.0",
+  "description": "Can't decide what to play? Rolls one game from your whole library and lands on it in the Games library: A plays it, R rolls again.",
   "author": "JukaHub",
   "entry": "gamepick.sh",
   "icon": "gamepad",
   "enabled": true,
   "actions": [
-    {"id": "pick", "label": "Pick a game"},
+    {"id": "@random-game", "label": "Pick a game for me"},
     {"id": "count", "label": "Count games"},
     {"id": "@open-library", "label": "Open the library"}
   ],
   "onEnable": "count",
-  "quick": ["pick"]
+  "quick": ["@random-game"]
 }

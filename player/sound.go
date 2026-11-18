@@ -119,8 +119,10 @@ func bootSfxBind(config *Config) {
 		}
 	}
 	bootSfxApply(on, pct)
-	// Spatial audio's settings ride the same bind (spatial.go).
+	// Spatial audio's settings ride the same bind (spatial.go), and so do
+	// the music-in-games ones (musicgame.go).
 	spatialBind(config)
+	musicGameBind(config)
 }
 
 // bootSfxApply sets the live state without touching any config.
@@ -746,6 +748,9 @@ func PauseVideoAudio(paused bool) {
 // ClearVideoAudioQueue discards any still-queued video PCM (used on stop and
 // seek so old audio never bleeds into the next playback position).
 func ClearVideoAudioQueue() {
+	// Music playing bit-perfect queues on its own DAC device: every pause
+	// (alarm, voice, sleep) drops that too (usbdac_bitperfect.go).
+	dacExclusiveClear()
 	videoAudioInitOnce.Do(initVideoAudioDevice)
 	if !videoAudioOK {
 		return

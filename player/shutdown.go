@@ -96,6 +96,7 @@ func shutdownSteps(config *Config) []shutdownStep {
 			homeEditEndForExit(config)
 			playtimeFlush(config)
 			partyHistoryFlush()
+			battGraphFlushNow()
 			saveFavorites()
 			notesFlushOnExit()
 			flushPendingUserConfig()
@@ -117,6 +118,8 @@ func shutdownSteps(config *Config) []shutdownStep {
 			return "cache database closed", nil
 		}},
 	}
+	// A hotspot that is up gets its own first-group row (hotspot.go).
+	steps = hotspotShutdownStepAdd(steps)
 	// JukaHub OS undoes its drivers and values beside the caches, after the
 	// games are gone (jukaos_settings.go; nothing is added in App mode).
 	steps = jukaosShutdownStepAdd(steps)
@@ -456,7 +459,8 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	lastFrame := time.Time{}
 	// With Settings → Your name set, the held card ends on a goodbye by name,
 	// held long enough to read (bootgreet.go).
-	farewell := shutdownFarewellText(bootGreetName(config))
+	name := bootGreetName(config)
+	farewell := shutdownFarewellText(name)
 	hold := shutdownHoldMS
 	if farewell != "" {
 		hold = shutdownFarewellHoldMS
@@ -489,12 +493,25 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	frame()
 	runShutdownStepsUntil(steps, track, frame, deadline)
 
+	// Juka says the farewell too, from the line made when the name was set
+	// (byevoice.go; nil: nothing to say). The card is held while it is said
+	// when the budget has room; the farewell still comes in over the usual
+	// hold (ramp).
+	var voice *byeVoiceLine
+	if farewell != "" {
+		voice = byeVoiceForShutdown(config, name)
+	}
+	ramp := hold
+
 	// Hold the finished card, then dissolve, inside whatever is left of the
 	// budget.
 	holdStart := time.Now()
+	hold = voice.fitHold(hold, holdStart, deadline)
 	holdEnd := holdStart.Add(time.Duration(hold) * time.Millisecond)
 	for time.Now().Before(holdEnd) && time.Now().Before(deadline) {
-		bye = bootClamp01(float64(time.Since(holdStart).Milliseconds()) / hold)
+		held := time.Since(holdStart)
+		bye = bootClamp01(float64(held.Milliseconds()) / ramp)
+		voice.startAt(held, deadline)
 		frame()
 	}
 	bye = 1

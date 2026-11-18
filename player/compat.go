@@ -1321,6 +1321,7 @@ func coreLoadProblemFile(source, target string) string {
 // a build that cannot load is refused before it reaches the pool. target may be
 // "" (a core the card does not have yet); activation checks again with the
 // real one.
+// Test seam (ARCH-8): only tests call it.
 func coreLoadProblemData(data []byte, target string) string {
 	if runtime.GOOS != "linux" || len(data) > elfCheckMaxSize {
 		return ""

@@ -24,11 +24,11 @@ package main
 //     is waiting for it; then SIGTERM, and SIGKILL a second later (MainUI
 //     ignores SIGTERM). A MainUI that keeps coming back is left alone after
 //     three stops: fighting a restarter only makes more flicker;
-//   - any other process holding the display (the framebuffer, or the GPU's
-//     nodes: displayGuardNodes), logged once per process and never touched —
-//     a firmware daemon may keep the framebuffer open for screenshots, and a
-//     CrossMix boot script's splash is gone a moment later. Another JukaHub
-//     drawing is said as such.
+//   - any other process holding the display for writing (the framebuffer, or
+//     the GPU's nodes: displayGuardNodes), logged once per process and never
+//     touched — a read-only framebuffer capture is ignored, and a CrossMix
+//     boot script's splash is gone a moment later. Another JukaHub drawing
+//     is said as such.
 //
 // JukaHub's own children are not judged here (a game, the screen share's
 // capture): the exit report below lists those still alive as the app quits,
@@ -152,6 +152,9 @@ func displayGuardLook() {
 		if !mainUI && node == "" {
 			continue
 		}
+		if displayGuardFirmwareOSD(p, node) {
+			continue
+		}
 		key := strconv.Itoa(p.pid) + " " + p.start
 		displayGuard.mu.Lock()
 		seen := displayGuard.reported[key]
@@ -171,6 +174,18 @@ func displayGuardLook() {
 			logWarn("display", "%s holds %s while JukaHub has the screen", who, node)
 		}
 	}
+}
+
+// The stock firmware's OSD daemon keeps fb0 open for volume and brightness
+// overlays even while MainUI is running. It is not a second full-screen
+// renderer. Check its executable as well as its process name so an unrelated
+// program called trimui_osdd still appears in the conflict report.
+func displayGuardFirmwareOSD(p displayGuardProc, node string) bool {
+	if p.comm != "trimui_osdd" || node != "/dev/fb0" {
+		return false
+	}
+	exe, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(p.pid), "exe"))
+	return err == nil && exe == "/usr/trimui/osd/trimui_osdd"
 }
 
 // displayGuardStopMainUI stops a MainUI that draws beside JukaHub, by the
@@ -327,6 +342,15 @@ func displayGuardHeldNode(pid int) string {
 		target, err := os.Readlink(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
+		}
+		if target == "/dev/fb0" {
+			// A framebuffer screenshot opens fb0 read-only. It can read pixels
+			// but cannot write a competing frame, so it is not a display holder.
+			// FFmpeg's fbdev input on the Smart Pro uses flags 02404000 here.
+			info, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "fdinfo", e.Name()))
+			if err == nil && displayGuardFDInfoReadOnly(string(info)) {
+				continue
+			}
 		}
 		for _, node := range displayGuardNodes {
 			if target == node || (strings.HasSuffix(node, "/") && strings.HasPrefix(target, node)) ||

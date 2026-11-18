@@ -283,6 +283,8 @@ func dateTimeSaveZone() {
 func dateTimeInit(config *Config) {
 	netTimeSetEnabled(netTimeEnabledIn(config))
 	clockRecordLoad()
+	// What the hardware clock held at start, for bug reports (rtcsync_linux.go).
+	go rtcStartupReport()
 	if dateTimeZoneOwner() != tzOwnerJukaHub {
 		return
 	}
@@ -565,16 +567,18 @@ func netTimeEnabledIn(c *Config) bool {
 	return true
 }
 
-// dateFormatOptions are the date orders, each shown on today's date.
+// dateFormatOptions are the date orders, each shown on today's date in the
+// interface language.
 func dateFormatOptions(*Config) []setOption {
 	now := time.Now()
-	auto := dateLayoutsFor(dateOrderForCountry(weatherCountryCode())).Medium
+	l := dateLocaleNow()
+	medium := func(order string) string { return l.format(now, dateLayoutsIn(order, l).Medium) }
 	return []setOption{
-		{Value: dateOrderAuto, Label: "Auto · " + now.Format(auto)},
-		{Value: dateOrderDMY, Label: now.Format(dateLayoutsDMY.Medium)},
-		{Value: dateOrderMDY, Label: now.Format(dateLayoutsMDY.Medium)},
-		{Value: dateOrderYMD, Label: now.Format(dateLayoutsYMD.Medium)},
-		{Value: dateOrderDots, Label: now.Format(dateLayoutsDots.Medium)},
+		{Value: dateOrderAuto, Label: "Auto · " + medium(dateOrderForCountry(weatherCountryCode()))},
+		{Value: dateOrderDMY, Label: medium(dateOrderDMY)},
+		{Value: dateOrderMDY, Label: medium(dateOrderMDY)},
+		{Value: dateOrderYMD, Label: medium(dateOrderYMD)},
+		{Value: dateOrderDots, Label: medium(dateOrderDots)},
 	}
 }
 

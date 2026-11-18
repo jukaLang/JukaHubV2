@@ -439,6 +439,10 @@ func emuBestRankOf(e emuEntry, cands []emuBestCandidate) int {
 // emulator, so a recognised one is only put ahead of an unrecognised entry
 // when it is the system's very best.
 func emuBestPick(system string, list []emuEntry) int {
+	// The user's own PICO-8 plays every cart; fake-08 does not (pico8native.go).
+	if i := pico8NativeIndex(system, list); i >= 0 {
+		return i
+	}
 	cands := emuBestCandidatesFor(system)
 	if len(cands) == 0 || len(list) == 0 {
 		return -1

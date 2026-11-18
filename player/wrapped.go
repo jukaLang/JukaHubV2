@@ -201,7 +201,7 @@ func wrappedBestDayLabel(ins wrappedInsights) string {
 	if ins.BestSeconds <= 0 {
 		return "—"
 	}
-	return ins.BestDay.Format("Mon") + " · " + formatPlaytime(ins.BestSeconds)
+	return formatWeekdayShort(ins.BestDay) + " · " + formatPlaytime(ins.BestSeconds)
 }
 
 // wrappedDaysLabel renders a streak as "1 day" / "12 days".

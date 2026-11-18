@@ -286,7 +286,32 @@ type sectrustDocLine struct {
 	anchor string
 }
 
+// mdDocSpec is one document the reader shows: SECURITY.md here, the Help
+// pages (helpdoc.go) too. The reader holds one document at a time.
+type mdDocSpec struct {
+	name    string // header title, "SECURITY.md"
+	sub     string // header subtitle
+	missing string // subtitle when only the built-in fallback was found
+	icon    string
+	url     string                       // the published copy (X: Online)
+	load    func() (text, source string) // runs off the main thread
+	// back, when set, runs after B closes the reader (Help returns to
+	// Settings instead of to the Security & trust list).
+	back func(config *Config)
+}
+
+// sectrustSecuritySpec is SECURITY.md.
+var sectrustSecuritySpec = mdDocSpec{
+	name:    "SECURITY.md",
+	sub:     "How JukaHub protects your data, and how to report a problem",
+	missing: "Summary · SECURITY.md was not found next to the app",
+	icon:    "shield",
+	url:     sectrustDocURL,
+	load:    sectrustLoadDoc,
+}
+
 type sectrustDocState struct {
+	doc      *mdDocSpec
 	open     bool
 	loading  bool
 	source   string
@@ -305,8 +330,25 @@ type sectrustDocState struct {
 
 var sectrustDoc sectrustDocState
 
-// sectrustOpenDoc opens the reader, at section when it names a heading.
+// sectrustOpenDoc opens the reader on SECURITY.md, at section when it names a
+// heading.
 func sectrustOpenDoc(section string) {
+	mdDocOpen(&sectrustSecuritySpec, section)
+}
+
+// mdDocOpen opens the reader on doc, at section when it names a heading. A
+// different document than the one held is loaded afresh; a load still running
+// for the old one is dropped when it lands.
+func mdDocOpen(doc *mdDocSpec, section string) {
+	if sectrustDoc.doc != doc {
+		sectrustDoc.doc = doc
+		sectrustDoc.blocks = nil
+		sectrustDoc.lines = nil
+		sectrustDoc.headings = sectrustDoc.headings[:0]
+		sectrustDoc.source = ""
+		sectrustDoc.loading = false
+		sectrustDoc.pageText = ""
+	}
 	sectrustDoc.open = true
 	sectrustDoc.toc = false
 	sectrustDoc.pending = section
@@ -316,9 +358,12 @@ func sectrustOpenDoc(section string) {
 	}
 	sectrustDoc.loading = true
 	go func() {
-		text, source := sectrustLoadDoc()
+		text, source := doc.load()
 		blocks := sectrustParseMarkdown(text)
 		tbxPost(func() {
+			if sectrustDoc.doc != doc {
+				return
+			}
 			sectrustDoc.loading = false
 			sectrustDoc.source = source
 			sectrustDoc.blocks = blocks
@@ -372,8 +417,88 @@ func (f sectrustDocFonts) forKind(k sectrustMDKind) *ttf.Font {
 	return f.body
 }
 
+// sectrustAdv is one font's glyph advances, so the reader can lay a long
+// document out without asking SDL_ttf to measure every candidate line: the
+// wrap measured the whole line so far once per word (a C string and a shaping
+// pass each time), which for CONTROLS.md's 26,000 words held the render thread
+// for most of a second on the handheld. Each rune is measured once per font.
+type sectrustAdv struct {
+	ascii [128]int32 // -1 until measured
+	other map[rune]int32
+}
+
+// sectrustAdvOtherMax bounds the non-ASCII advances kept per font.
+const sectrustAdvOtherMax = 4096
+
+// sectrustAdvCache holds the reader fonts' advances. It is dropped whenever
+// the reader's fonts change (a text-size change loads new ones). Main thread.
+var sectrustAdvCache struct {
+	fonts sectrustDocFonts
+	m     map[*ttf.Font]*sectrustAdv
+}
+
+// sectrustAdvFor is font's advance table, made on first use.
+func sectrustAdvFor(font *ttf.Font) *sectrustAdv {
+	if a := sectrustAdvCache.m[font]; a != nil {
+		return a
+	}
+	a := &sectrustAdv{other: map[rune]int32{}}
+	for i := range a.ascii {
+		a.ascii[i] = -1
+	}
+	if sectrustAdvCache.m == nil {
+		sectrustAdvCache.m = map[*ttf.Font]*sectrustAdv{}
+	}
+	sectrustAdvCache.m[font] = a
+	return a
+}
+
+// advance is one rune's advance in font, measured on first use.
+func (a *sectrustAdv) advance(font *ttf.Font, r rune) int32 {
+	if r >= 0 && r < 128 {
+		if v := a.ascii[r]; v >= 0 {
+			return v
+		}
+	} else if v, ok := a.other[r]; ok {
+		return v
+	}
+	var v int32
+	measured := false
+	if r >= 0 && r <= 0xFFFF {
+		// go-sdl2's GlyphMetrics passes a 16-bit code point.
+		if gm, err := font.GlyphMetrics(r); err == nil && gm != nil {
+			v, measured = int32(gm.Advance), true
+		}
+	}
+	if !measured {
+		if w, _, err := font.SizeUTF8(string(r)); err == nil {
+			v = int32(w)
+		}
+	}
+	if r >= 0 && r < 128 {
+		a.ascii[r] = v
+	} else if len(a.other) < sectrustAdvOtherMax {
+		a.other[r] = v
+	}
+	return v
+}
+
+// sectrustMeasure is a line's width from the cached advances, with 2% to
+// spare for kerning, so a line never comes out wider than the column.
+func sectrustMeasure(a *sectrustAdv, font *ttf.Font, s string) int32 {
+	var w int32
+	for _, r := range s {
+		w += a.advance(font, r)
+	}
+	return w + w/50
+}
+
 // sectrustLayoutDoc lays every block out for a column width.
 func sectrustLayoutDoc(f sectrustDocFonts, width int32) {
+	if sectrustAdvCache.fonts != f {
+		sectrustAdvCache.fonts = f
+		sectrustAdvCache.m = nil
+	}
 	lines := sectrustDoc.lines[:0]
 	y := int32(0)
 	add := func(kind sectrustMDKind, text string, x, h int32, first, header bool, anchor string) {
@@ -384,12 +509,9 @@ func sectrustLayoutDoc(f sectrustDocFonts, width int32) {
 		if w < 80 {
 			w = 80
 		}
+		a := sectrustAdvFor(font)
 		return tbxWrapByMeasure(text, w, func(s string) int32 {
-			sw, _, err := font.SizeUTF8(s)
-			if err != nil {
-				return 0
-			}
-			return int32(sw)
+			return sectrustMeasure(a, font, s)
 		})
 	}
 	for _, b := range sectrustDoc.blocks {
@@ -470,18 +592,22 @@ func sectrustRenderDoc(renderer *sdl.Renderer, config *Config) {
 	if !ok {
 		return
 	}
-	sub := "How JukaHub protects your data, and how to report a problem"
-	if sectrustDoc.source == "" && !sectrustDoc.loading {
-		sub = "Summary · SECURITY.md was not found next to the app"
+	doc := sectrustDoc.doc
+	if doc == nil {
+		doc = &sectrustSecuritySpec
 	}
-	header := tbxHeader("SECURITY.md", sub, "shield", sectrustDoc.pageText, ColorTextTertiary())
+	sub := doc.sub
+	if sectrustDoc.source == "" && !sectrustDoc.loading && doc.missing != "" {
+		sub = doc.missing
+	}
+	header := tbxHeader(doc.name, sub, doc.icon, sectrustDoc.pageText, ColorTextTertiary())
 	if sectrustDoc.toc {
-		header = tbxHeader("Contents", "SECURITY.md", "list", "", sdl.Color{})
+		header = tbxHeader("Contents", doc.name, "list", "", sdl.Color{})
 	}
 	frame := tbxBeginFrame(renderer, config, header)
 	body := frame.bodyRect()
 	if sectrustDoc.loading {
-		tbxDrawEmpty(renderer, config, body, "shield", "Opening SECURITY.md…", "")
+		tbxDrawEmpty(renderer, config, body, doc.icon, "Opening "+doc.name+"…", "")
 		tbxEndFrame(renderer, config)
 		return
 	}
@@ -496,7 +622,10 @@ func sectrustRenderDoc(renderer *sdl.Renderer, config *Config) {
 		colW = 940
 	}
 	colX := frame.x + (frame.w-colW)/2
-	if sectrustDoc.lines == nil || sectrustDoc.layoutW != colW || sectrustDoc.layoutF != df.body {
+	// Laid out again when the width or any reader font changes (text size);
+	// the cached glyph advances make that a few milliseconds even for
+	// CONTROLS.md.
+	if sectrustDoc.lines == nil || sectrustDoc.layoutW != colW || sectrustDoc.layoutF != df.body || sectrustAdvCache.fonts != df {
 		sectrustLayoutDoc(df, colW)
 	}
 	nav := &sectrustDoc.nav
@@ -688,6 +817,9 @@ func sectrustDocAction(config *Config, act tbxAction) bool {
 	case tbxActBack:
 		sectrustDoc.open = false
 		PlayBackSound()
+		if d := sectrustDoc.doc; d != nil && d.back != nil {
+			d.back(config)
+		}
 	}
 	return true
 }
@@ -722,18 +854,22 @@ func sectrustDocHints() []FooterHint {
 // sectrustOpenOnline opens the published document: in the browser on a
 // desktop, as a QR code on the handheld.
 func sectrustOpenOnline(config *Config) {
+	doc := sectrustDoc.doc
+	if doc == nil {
+		doc = &sectrustSecuritySpec
+	}
 	if !P().IsHandheld() {
-		if err := openExternalURL(sectrustDocURL); err == nil {
-			ShowToast("Opened SECURITY.md in the browser", ToastKindInfo)
+		if err := openExternalURL(doc.url); err == nil {
+			ShowToast("Opened "+doc.name+" in the browser", ToastKindInfo)
 			return
 		}
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
-		title:    "SECURITY.md online",
+		title:    doc.name + " online",
 		subtitle: "The latest version, on GitHub",
 		icon:     "globe",
-		body:     "Scan the code with a phone to read the latest version of the document:\n\n" + sectrustDocURL,
-		qr:       tbxQRModules(sectrustDocURL),
+		body:     "Scan the code with a phone to read the latest version of the document:\n\n" + doc.url,
+		qr:       tbxQRModules(doc.url),
 		qrLabel:  "Tap it or press Y to enlarge",
 		buttons:  []tbxSheetButton{{label: "Close", primary: true}},
 	})

@@ -65,10 +65,15 @@ var onboardingSteps = []onboardingStep{
 		kind:  "autostart",
 	},
 	{
-		title: "Choose a theme",
-		body:  "Preview a complete palette now. You can change it again any time in Settings > Appearance.",
-		hint:  "Press F or select the button to cycle through the built-in themes.",
+		title: "Choose a colour",
+		body:  "Choose a colour for JukaHub. The next step lets you choose the Home layout.",
+		hint:  "Press F or select the button to preview colours.",
 		kind:  "theme",
+	},
+	{
+		title: "Choose your Home layout",
+		body:  "Pick the Home layout you prefer. You can change it later in Settings.",
+		kind:  "layout",
 	},
 	{
 		title: "Scan your ROMs",
@@ -171,6 +176,7 @@ func onboardingStart() {
 	onboarding.setupAt = 0
 	onboardingLangReset(appConfig)
 	onboardingNameReset()
+	onboardingLayoutReset(appConfig)
 	toolsHubTourReset()
 }
 
@@ -210,6 +216,9 @@ func onboardingAdvance(config *Config) {
 	if onboardingLangStepIs() {
 		onboardingLangCommit(config)
 	}
+	if onboardingLayoutStepIs() {
+		onboardingLayoutCommit(config)
+	}
 	onboarding.step++
 	onboarding.action = sdl.Rect{}
 	onboarding.enter.begin(uiClockMS(), 180)
@@ -217,6 +226,9 @@ func onboardingAdvance(config *Config) {
 	// finished is never shown as still needed.
 	if onboardingStepIsSetup() {
 		onboardingSetupRefresh(config, true)
+	}
+	if onboardingLayoutStepIs() {
+		onboardingLayoutReset(config)
 	}
 	PlayNavSound()
 }
@@ -329,7 +341,7 @@ func onboardingActionLabel(kind string) string {
 		}
 		return "Turn it on"
 	case "theme":
-		return "Preview next theme"
+		return "Preview next colour"
 	case "roms":
 		return "Scan ROM folders"
 	case "artwork":
@@ -353,9 +365,9 @@ func onboardingStatus(config *Config, kind string) string {
 		return onboardingAutoStartStatus(config)
 	case "theme":
 		if name, ok := customString(config.Variables.Custom, "theme_preset"); ok && name != "" {
-			return "Current theme: " + name
+			return "Current theme: " + GetThemePreset(name).Name
 		}
-		return "Current theme: dark"
+		return "Current theme: Hub"
 	case "roms":
 		if onboarding.roms == nil {
 			return "ROM scan has not run yet."
@@ -499,11 +511,14 @@ func onboardingPerformAction(config *Config) {
 	case "autostart":
 		onboarding.info = onboardingAutoStartToggle(config)
 	case "theme":
-		names := ListThemePresets()
+		names := onboardingThemeChoices[:]
 		if len(names) == 0 {
 			return
 		}
 		current, _ := customString(config.Variables.Custom, "theme_preset")
+		if current == "" {
+			current = "hub"
+		}
 		index := 0
 		for i, name := range names {
 			if name == current {
@@ -512,7 +527,7 @@ func onboardingPerformAction(config *Config) {
 			}
 		}
 		applyThemePreset(config, names[index], false)
-		onboarding.info = "Previewing " + names[index] + "."
+		onboarding.info = "Previewing " + GetThemePreset(names[index]).Name + "."
 	case "roms":
 		report := scanROMLibrary(romLibraryRoots())
 		onboarding.roms = &report
@@ -526,8 +541,16 @@ func onboardingPerformAction(config *Config) {
 			onboarding.info = "No supported ROMs found. Scan folders after adding games."
 			return
 		}
-		if startROMArtworkFetch(onboarding.roms.Games) {
-			onboarding.info = "Artwork fetch started in the background."
+		// The library's own path (LIB-19): only the games with no cover yet,
+		// every console in turns, and the not-found cache, so a second press
+		// does not ask the server about the same titles again.
+		missing := romsMissingArtwork(onboarding.roms.Games, romArtworkDir())
+		if len(missing) == 0 {
+			onboarding.info = "Every game already has box art."
+			return
+		}
+		if startLibraryArtworkFetch(artworkFetchOrder(missing, "")) {
+			onboarding.info = "Fetching " + pluralizeCount(len(missing), "missing cover", "missing covers") + " in the background."
 		} else {
 			onboarding.info = "An artwork fetch is already running."
 		}
@@ -553,6 +576,9 @@ func onboardingBack() {
 		}
 		if onboardingLangStepIs() {
 			onboardingLangSync()
+		}
+		if onboardingLayoutStepIs() {
+			onboardingLayoutReset(appConfig)
 		}
 		PlayNavSound()
 	}
@@ -588,6 +614,16 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 			return true
 		}
 	}
+	if onboardingLayoutStepIs() {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			onboardingLayoutMove(-1)
+			return true
+		case sdl.K_DOWN:
+			onboardingLayoutMove(1)
+			return true
+		}
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		if setup {
@@ -602,7 +638,9 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 	case sdl.K_f:
 		onboardingPerformAction(appConfig)
 	case sdl.K_RIGHT:
-		onboardingAdvance(appConfig)
+		if !onboardingLayoutStepIs() {
+			onboardingAdvance(appConfig)
+		}
 	case sdl.K_LEFT:
 		onboardingBack()
 	case sdl.K_ESCAPE, sdl.K_b:
@@ -644,6 +682,16 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 			return true
 		}
 	}
+	if onboardingLayoutStepIs() {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			onboardingLayoutMove(-1)
+			return true
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			onboardingLayoutMove(1)
+			return true
+		}
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
 		if setup {
@@ -656,7 +704,9 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 		}
 		onboardingAdvance(config)
 	case sdl.CONTROLLER_BUTTON_START:
-		onboardingAdvance(config)
+		if !onboardingLayoutStepIs() {
+			onboardingAdvance(config)
+		}
 	case sdl.CONTROLLER_BUTTON_X:
 		if setup {
 			onboardingSetupActivate(config)
@@ -666,7 +716,9 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		onboardingBack()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		onboardingAdvance(config)
+		if !onboardingLayoutStepIs() {
+			onboardingAdvance(config)
+		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		onboardingFinish(config, true)
 		PlayBackSound()
@@ -687,6 +739,9 @@ func handleOnboardingMouse(mx, my int32, config *Config) bool {
 		return true
 	}
 	if onboardingLangStepIs() && onboardingLangClick(mx, my) {
+		return true
+	}
+	if onboardingLayoutStepIs() && onboardingLayoutClick(mx, my) {
 		return true
 	}
 	if pointInRect(mx, my, onboarding.action) {
@@ -742,7 +797,7 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		cardW = screenWidth - 32
 	}
 	cardH := int32(470)
-	if step.kind == "setup" || step.kind == "language" {
+	if step.kind == "setup" || step.kind == "language" || step.kind == "layout" {
 		// The checklist and the language list need a row per entry; the plain
 		// steps do not.
 		cardH = 600
@@ -823,6 +878,15 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 			listY = coinY + coinR + 14
 		}
 		onboardingRenderLanguage(renderer, config, cy, cardH, textX, textW, listY, bodyFont, smallFont, accent)
+	} else if step.kind == "layout" {
+		lines := wrapTextLines(bodyFont, step.body, textW, 2)
+		onboarding.bodyLines = lines
+		lineH := int32(bodyFont.Height()) + 6
+		for i, line := range lines {
+			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
+		}
+		onboardingRenderLayout(renderer, config, cy, cardH, textX, textW,
+			bodyY+int32(len(lines))*lineH+12, bodyFont, smallFont, accent)
 	} else {
 		lines := wrapTextLines(bodyFont, step.body, textW, 2)
 		onboarding.bodyLines = lines
@@ -884,6 +948,8 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	nextLabel := "Next"
 	if onboarding.step == len(onboardingSteps)-1 {
 		nextLabel = "Start exploring"
+	} else if step.kind == "layout" {
+		nextLabel = "Use this layout"
 	}
 	onboarding.next = UIButton(renderer, config, sdl.Rect{X: nextX, Y: nextY, W: btnW, H: btnH}, nextLabel, UIButtonStyle{
 		Variant: UIButtonCustom,
@@ -923,6 +989,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if step.kind == "name" {
 		footer = hintLine(FooterHint{"Left/Right", "Move"}, FooterHint{"A / Enter", onboardingNameAHint(config)},
 			FooterHint{"F / X", "Type name"}, FooterHint{"B", "Skip"})
+	}
+	if step.kind == "layout" {
+		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Use this layout"},
+			FooterHint{"B", "Skip"})
 	}
 	fw, fh, _ := smallFont.SizeUTF8(footer)
 	footerY := cy + cardH + 10

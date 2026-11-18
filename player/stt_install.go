@@ -1,7 +1,7 @@
 package main
 
 // Offline speech for the Smart Pro is not in the app archive (it is about
-// 120 MB, more than the rest of JukaHub-Trimui.zip). It is its own release
+// 90 MB, more than the rest of JukaHub-Trimui.zip). It is its own release
 // asset, JukaHub-OfflineSpeech-linux-arm64.zip, installed into <data>/
 // juka-whisper through the verified release-package path (relpack.go):
 //
@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -38,6 +39,11 @@ const (
 	// sttUnsupportedMark, in the data folder, records that the recognizer
 	// cannot start on this firmware, so startup stops downloading it again.
 	sttUnsupportedMark = ".juka-whisper-unsupported"
+	// sttUpdateFailMark, beside it, holds the JukaHub version whose automatic
+	// replacement of a working package failed for a reason a retry would not
+	// fix: that version stops downloading it at every start (Settings still
+	// can, and clears it).
+	sttUpdateFailMark = ".juka-whisper-update-failed"
 )
 
 // sttAutoTried is the one startup download per run (a reconnect after an
@@ -138,6 +144,26 @@ func sttUnsupportedPath() string {
 	return filepath.Join(data, sttUnsupportedMark)
 }
 
+// sttUpdateFailPath is sttUpdateFailMark's path, "" without a data folder.
+func sttUpdateFailPath() string {
+	data, err := P().DataDir()
+	if err != nil || data == "" {
+		return ""
+	}
+	return filepath.Join(data, sttUpdateFailMark)
+}
+
+// sttUpdateFailedHere reports whether this version already failed to replace
+// the working package by itself.
+func sttUpdateFailedHere() bool {
+	p := sttUpdateFailPath()
+	if p == "" {
+		return false
+	}
+	data, err := os.ReadFile(p)
+	return err == nil && strings.TrimSpace(string(data)) == versionString(nil)
+}
+
 // sttAutoInstallOffline is the startup download, called by the tools check
 // once it has nothing of its own left to fetch (ffmpeg goes first). Any
 // goroutine. It waits for another install card to finish and toasts only when
@@ -172,8 +198,10 @@ func sttAutoInstallOffline() {
 
 // sttServeUpdateChecked: this run has looked for a package that streams.
 // sttServeUpdateDue: an installed package cannot stream (its vosk-cli predates
-// --serve, stt_stream.go) and a newer release is out, so the startup download
-// replaces it once — the installed one keeps working until the new one is in.
+// --serve, stt_stream.go) or still has the full 78 MB Whisper model instead of
+// the 8-bit one (sttLightModel), and a newer release is out, so the startup
+// download replaces it once — the installed one keeps working until the new
+// one is in.
 var (
 	sttServeUpdateChecked atomic.Bool
 	sttServeUpdateDue     atomic.Bool
@@ -183,7 +211,7 @@ var (
 // the streaming update and a different build is published; then the startup
 // download runs as for a first install. Off the main thread.
 func sttServeUpdateCheck() {
-	if !sttServeUpdateChecked.CompareAndSwap(false, true) {
+	if sttUpdateFailedHere() || !sttServeUpdateChecked.CompareAndSwap(false, true) {
 		return
 	}
 	defer func() {
@@ -192,18 +220,22 @@ func sttServeUpdateCheck() {
 		}
 	}()
 	bin, _, sure := sttServeFiles()
+	light := sttLightInstalled()
 	if bin != "" {
 		sttServeProbe.state.Store(sttServeYes)
-		return
+		if light {
+			return
+		}
+	} else {
+		if !sure {
+			// vosk-cli --help was too slow (a busy card at boot): this says
+			// nothing about the package, so neither streaming nor a download
+			// is ruled on; the next tools check or reconnect looks again.
+			sttServeUpdateChecked.Store(false)
+			return
+		}
+		sttServeProbe.state.Store(sttServeNo)
 	}
-	if !sure {
-		// vosk-cli --help was too slow (a busy card at boot): this says
-		// nothing about the package, so neither streaming nor a download is
-		// ruled on; the next tools check or reconnect looks again.
-		sttServeUpdateChecked.Store(false)
-		return
-	}
-	sttServeProbe.state.Store(sttServeNo)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	latest, err := relPackLatest(ctx, relPackClientFn(), sttPackSpec())
@@ -214,10 +246,10 @@ func sttServeUpdateCheck() {
 		return
 	}
 	if installed, ok := relPackRead(sttDownloadedDir()); ok && !relPackNewer(installed, latest) {
-		logInfo("voice", "offline speech: no newer package than %s yet; recognizing after each clip", installed.Tag)
+		logInfo("voice", "offline speech: no newer package than %s yet (streams %v, light Whisper %v)", installed.Tag, bin != "", light)
 		return
 	}
-	logInfo("voice", "offline speech: %s streams; downloading it once", latest.Rel.TagName)
+	logInfo("voice", "offline speech: %s is newer (streams %v, light Whisper %v here); downloading it once", latest.Rel.TagName, bin != "", light)
 	sttServeUpdateDue.Store(true)
 	sttAutoInstallOffline()
 }
@@ -339,8 +371,11 @@ func sttStartInstall(auto bool) bool {
 		if mark != "" {
 			_ = os.Remove(mark)
 		}
+		if p := sttUpdateFailPath(); p != "" {
+			_ = os.Remove(p)
+		}
 	}
-	update := sttLocalReady() // the streaming update of a working package
+	update := sttLocalReady() // the replacement of a working package
 	gen, runCtx := installBarBeginRun("Offline speech")
 	go func() {
 		defer release()
@@ -354,6 +389,11 @@ func sttStartInstall(auto bool) bool {
 			}
 			if auto && !sttSoftFailure(err) {
 				sttAutoHard.Store(true)
+				if update {
+					if p := sttUpdateFailPath(); p != "" {
+						_ = os.WriteFile(p, []byte(versionString(nil)+"\n"), 0o644)
+					}
+				}
 			}
 		}
 		tbxPost(func() {
@@ -374,6 +414,11 @@ func sttStartInstall(auto bool) bool {
 				default:
 					ShowToast("Stopped installing offline speech", ToastKindInfo)
 				}
+			case err != nil && auto && update:
+				// The installed recognizer still works: a failed replacement
+				// by itself is not worth a failure card (the log has it).
+				installBarAbortRun(gen)
+				sttServeUpdateDue.Store(false)
 			case err != nil:
 				msg := relPackFriendly(err)
 				installBarFailRun(gen, installCardDetail(msg))

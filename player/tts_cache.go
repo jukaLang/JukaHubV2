@@ -96,8 +96,8 @@ func ttsCacheLocalID(v ttsLocalVoice, gender string) string {
 			id += "/" + strconv.FormatInt(info.Size(), 10) + "/" + strconv.FormatInt(info.ModTime().Unix(), 10)
 		}
 	}
-	if v.kind == "sapi" || v.kind == "phonon" {
-		id += "/" + gender // both pick a voice by it
+	if v.kind == "sapi" {
+		id += "/" + gender // it picks a voice by it
 	}
 	return id
 }

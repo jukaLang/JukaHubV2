@@ -106,8 +106,27 @@ func castPresetFor(config *Config) castPreset {
 }
 
 // castGamesSupported reports whether a game's picture can be read at all: the
-// framebuffer reader needs the handheld's Linux.
-func castGamesSupported() bool { return runtime.GOOS == "linux" }
+// framebuffer reader needs the handheld's Linux and a /dev/fb0 to read.
+func castGamesSupported() bool { return runtime.GOOS == "linux" && castFBPresent() }
+
+// castFBPresent looks for the framebuffer once and says what it found once.
+// On the A133P boards the games draw into /dev/fb0. The Smart Pro S shows its
+// picture through DRM/KMS: its fb0, when the kernel keeps one, is an
+// emulation a game drawing through KMS may never reach, so the share is still
+// offered there, says so in the log, and the black-picture check
+// (castBlackWindow) tells the viewer when nothing arrives. With no fb0 at all
+// games are not offered: JukaHub's own screens are still shared, and the
+// supervisor no longer retries an open that cannot work every 15 seconds.
+var castFBPresent = sync.OnceValue(func() bool {
+	if _, err := os.Stat(castFBDevice); err != nil {
+		logInfo("cast", "no %s on this display: games are not shared (JukaHub's own screens are)", castFBDevice)
+		return false
+	}
+	if hw := deviceHardwareCurrent(); hw.GPUStack == gpuStackMaliDRM {
+		logInfo("cast", "%s shows its picture through DRM/KMS: a game's picture may not reach %s, and the share says so when it stays black", deviceDisplayName(hw.Model), castFBDevice)
+	}
+	return true
+})
 
 // castGamesFor reads "Games too": on unless turned off, where it can work.
 func castGamesFor(config *Config) bool {
@@ -740,7 +759,7 @@ func castReadFrame(renderer *sdl.Renderer) (w, h, stride int, sx, sy float32, ok
 // castRedactBuf backs castShareRedactions' answer. The render thread fills it
 // only while the encoder is idle (castCaptureFrame), so the encoder never reads
 // it mid-update.
-var castRedactBuf [4]sdl.Rect
+var castRedactBuf [7]sdl.Rect
 
 // castShareRedactions are the parts of this frame viewers must not see, in the
 // captured buffer's pixels (sx, sy: the renderer's logical-to-output scale).
@@ -748,7 +767,9 @@ var castRedactBuf [4]sdl.Rect
 // types on the handheld: Home shows it in its header all the time, and the
 // pairing card shows the PIN in large digits. While the Screen Share panel is
 // open its own code and link are painted over too: after Y they are the new
-// link, which a viewer just shut out must not read off the picture.
+// link, which a viewer just shut out must not read off the picture. The
+// Hotspot screen's password and its join code are covered too: they let a
+// viewer onto the handheld's network.
 // Everything else on screen is shared — the panel's privacy line says so.
 func castShareRedactions(sx, sy float32) []sdl.Rect {
 	scale := func(r sdl.Rect) sdl.Rect {
@@ -764,6 +785,14 @@ func castShareRedactions(sx, sy float32) []sdl.Rect {
 	if companion.open {
 		out = append(out, scale(companionCardLayoutFor(screenWidth, screenHeight, 0, 0).card))
 	}
+	// The same code under the Start menu's rail (startmenu.go). The rect is
+	// the settled one; the menu's entrance slides it up to ~22 px, so the
+	// cover reaches that far above and below.
+	if tb.startOpen && startMenuQRRect.W > 0 {
+		r := startMenuQRRect
+		r.Y, r.H = r.Y-24, r.H+48
+		out = append(out, scale(r))
+	}
 	if castPanel.open {
 		if r := castPanelRects[castFocusQR]; r.W > 0 && r.H > 0 {
 			out = append(out, scale(r))
@@ -771,6 +800,10 @@ func castShareRedactions(sx, sy float32) []sdl.Rect {
 		if r := castPanelInfoRect; r.W > 0 && r.H > 0 {
 			out = append(out, scale(r))
 		}
+	}
+	// The hotspot's password row and its join code (hotspot_ui.go).
+	for _, r := range hotspotShareRedactions() {
+		out = append(out, scale(r))
 	}
 	return out
 }

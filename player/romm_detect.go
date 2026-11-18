@@ -63,6 +63,9 @@ var rommSystems = []rommSystem{
 	{ID: "gc", Name: "GameCube", Folder: "GC"},
 	{ID: "wii", Name: "Wii", Folder: "WII", Exts: []string{".wbfs"}},
 	{ID: "xbox", Name: "Xbox", Folder: "XBOX", Exts: []string{".xiso"}},
+	// Xenia Canary's ZArchive (.zar) is one file. An extracted game's
+	// default.xex is not listed: moved alone it leaves its game behind.
+	{ID: "xbox360", Name: "Xbox 360", Folder: "XBOX360", Exts: []string{".zar"}},
 	{ID: "neogeo", Name: "Neo Geo", Folder: "NEOGEO"},
 }
 
@@ -273,7 +276,8 @@ func rommReadSector(r io.ReaderAt, layout rommDiscLayout, lba int64) ([]byte, er
 
 // rommSniffDisc identifies a CD or DVD image: GameCube and Wii by their disc
 // magic, the Sega consoles by their boot sector, the PlayStations and the PSP
-// by the ISO 9660 volume descriptor, the Xbox by its own file system.
+// by the ISO 9660 volume descriptor, the Xbox and the Xbox 360 by their own
+// file system.
 func rommSniffDisc(r io.ReaderAt, size int64) string {
 	first := make([]byte, 0x60)
 	if n, _ := r.ReadAt(first, 0); n < len(first) {
@@ -339,18 +343,129 @@ func rommSniffDisc(r io.ReaderAt, size int64) string {
 			return "ps1"
 		}
 	}
-	// An Xbox disc keeps its file system 64 KiB into the game partition: at
-	// the start of a trimmed image, or behind the video partition of a full one.
-	for _, base := range []int64{0, 0x18300000} {
-		if base+0x10000+20 > size {
+	return rommSniffXDVDFS(r, size)
+}
+
+// rommXDVDFSMagic opens an Xbox and Xbox 360 volume descriptor.
+const rommXDVDFSMagic = "MICROSOFT*XBOX*MEDIA"
+
+// The game partitions of full Xbox 360 dumps: behind the video partition of
+// an XGD2 disc, and of an XGD3 one.
+const (
+	rommXGD2Base = 0xFD90000
+	rommXGD3Base = 0x2080000
+)
+
+// rommXDVDFSBases are where an image can keep its game partition: at the
+// start of a trimmed image (extract-xiso, Xenia's dumps), behind the video
+// partition of a full original-Xbox dump (XGD1), or of a full Xbox 360 one.
+var rommXDVDFSBases = []int64{0, 0x18300000, rommXGD2Base, rommXGD3Base}
+
+// rommXDVDFSRootMax bounds how much of a root directory is read. A game's
+// root holds a few dozen entries, a few hundred bytes to a few sectors.
+const rommXDVDFSRootMax = 64 << 10
+
+// rommSniffXDVDFS finds the Xbox file system 64 KiB into the game partition
+// and tells the two consoles apart by the boot file in its root: default.xex
+// on an Xbox 360 disc, default.xbe on an original-Xbox one. Both carry the
+// same magic. Every original-Xbox disc boots from default.xbe, so a root read
+// whole that names neither is a 360 disc too (a second disc, an install or
+// content disc). A root that could not be read whole keeps the partition's
+// place as the answer: a full XGD2/XGD3 dump is a 360 disc, anything else the
+// Xbox, as before.
+func rommSniffXDVDFS(r io.ReaderAt, size int64) string {
+	vd := make([]byte, 28)
+	for _, base := range rommXDVDFSBases {
+		if base+0x10000+int64(len(vd)) > size {
 			continue
 		}
-		magic := make([]byte, 20)
-		if n, _ := r.ReadAt(magic, base+0x10000); n == len(magic) && string(magic) == "MICROSOFT*XBOX*MEDIA" {
-			return "xbox"
+		if n, _ := r.ReadAt(vd, base+0x10000); n != len(vd) || string(vd[:20]) != rommXDVDFSMagic {
+			continue
 		}
+		// Then the root directory's sector (counted from the partition's
+		// start) and its size in bytes.
+		sector := int64(binary.LittleEndian.Uint32(vd[20:24]))
+		length := int64(binary.LittleEndian.Uint32(vd[24:28]))
+		boot, whole := rommXDVDFSBoot(r, base, sector, length)
+		switch {
+		case boot == "default.xex":
+			return "xbox360"
+		case boot == "default.xbe":
+			return "xbox"
+		case whole:
+			return "xbox360"
+		}
+		if base == rommXGD2Base || base == rommXGD3Base {
+			return "xbox360"
+		}
+		return "xbox"
 	}
 	return ""
+}
+
+// rommXDVDFSBoot reads an Xbox file system's root directory, bounded, and
+// returns the boot file it holds: "default.xex", "default.xbe" or "". whole
+// reports a root read in full, with at least one entry and every entry walked
+// once: only then does "" mean the root has no boot file. The directory is a
+// binary tree of 4-byte aligned entries — left and right child offsets in
+// 4-byte units, start sector, size, attributes, name length, name — with 0xFF
+// padding where an entry would cross a sector; each offset is visited once,
+// so a looping tree in a damaged image ends (and is not whole).
+func rommXDVDFSBoot(r io.ReaderAt, base, sector, length int64) (boot string, whole bool) {
+	if sector <= 0 || length <= 0 {
+		return "", false
+	}
+	whole = length <= rommXDVDFSRootMax
+	if !whole {
+		length = rommXDVDFSRootMax
+	}
+	dir := make([]byte, length)
+	n, _ := r.ReadAt(dir, base+sector*2048)
+	whole = whole && int64(n) == length
+	dir = dir[:n]
+	found := ""
+	entries := 0
+	seen := make(map[int]bool)
+	stack := []int{0}
+	for len(stack) > 0 && len(seen) < 1024 {
+		off := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if seen[off] {
+			whole = false // a tree reaches each entry once
+			continue
+		}
+		if off+14 > len(dir) {
+			whole = false
+			continue
+		}
+		seen[off] = true
+		left := int(binary.LittleEndian.Uint16(dir[off : off+2]))
+		right := int(binary.LittleEndian.Uint16(dir[off+2 : off+4]))
+		if left == 0xFFFF {
+			continue // padding, not an entry
+		}
+		nameLen := int(dir[off+13])
+		if off+14+nameLen > len(dir) {
+			whole = false
+			continue
+		}
+		entries++
+		switch strings.ToLower(string(dir[off+14 : off+14+nameLen])) {
+		case "default.xex":
+			// A 360 executable settles it.
+			return "default.xex", true
+		case "default.xbe":
+			found = "default.xbe"
+		}
+		if left != 0 {
+			stack = append(stack, left*4)
+		}
+		if right != 0 {
+			stack = append(stack, right*4)
+		}
+	}
+	// A walk cut off at the node bound did not see every entry.
+	return found, whole && entries > 0 && len(stack) == 0
 }
 
 // rommISOHasBoot2 reads SYSTEM.CNF from the root directory: a PlayStation 2

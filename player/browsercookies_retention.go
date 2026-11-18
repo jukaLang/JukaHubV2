@@ -142,7 +142,7 @@ func (j *browserCookieJar) sessionSince() (time.Time, bool) {
 func cookieRetentionRowLabel(days int) string {
 	value := cookieRetentionShortLabel(days)
 	if since, ok := browserSessionSince(); ok {
-		value += " · since " + since.Local().Format("Jan 2")
+		value += " · since " + formatDateNear(nil, since.Local(), time.Now())
 	}
 	return value
 }

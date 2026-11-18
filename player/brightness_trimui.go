@@ -5,20 +5,19 @@ package main
 //
 // The firmware's keymon keeps the backlight level as "brightness" in
 // /mnt/UDISK/system.json, in eleven steps (0..10, the scale MinUI and spruceOS
-// use on these handhelds as well), moves it with its brightness keys, and
+// use on these handhelds as well), moves it through stock Settings, and
 // re-reads the file when it changes: it watches it with inotify, which is how
 // the stock settings reach it. Two things follow for JukaHub:
 //
 //   - a level the user sets here is written back to the file, debounced like
-//     the volume's "vol", so the firmware's next key press continues from it,
+//     the volume's "vol", so the firmware's Settings slider continues from it,
 //     and a reload of the file cannot put the old level back — keymon
 //     re-reading the file after one of JukaHub's volume writes would otherwise
 //     have done exactly that;
 //   - the level shown is the file's while no write of JukaHub's is on its way:
-//     it is what the firmware's keys set, in the firmware's own steps.
+//     it is what the firmware's Settings slider set, in its own steps.
 //
-// The key and its scale come from those ports and from how keymon treats the
-// file, not from a device on this desk. A file whose "brightness" lies outside
+// The key and its 0..10 scale were confirmed on a stock Smart Pro 1.1.0. A file whose "brightness" lies outside
 // 0..10 keeps it on some other scale: it is then neither read nor written for
 // the rest of the session, and the panel's own level is used instead. The
 // probe logs what it found (trimuiLogBrightnessEvidence), so the first bug

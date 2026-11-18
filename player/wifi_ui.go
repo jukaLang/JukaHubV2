@@ -133,6 +133,18 @@ func wifiStartWork(label string, fn func() wifiUpdate) {
 	}()
 }
 
+// wifiStartNetworkWork is wifiStartWork for an action that moves the radio to
+// another network or off one: join, reconnect, disconnect, forget the network
+// in use, radio off. The connectivity verdict of the network being left stops
+// showing at once, and the probe runs the moment the action ends instead of at
+// its next turn (netNetworkSwitching, netmon.go).
+func wifiStartNetworkWork(label string, fn func() wifiUpdate) {
+	wifiStartWork(label, func() wifiUpdate {
+		defer netNetworkSwitching()()
+		return fn()
+	})
+}
+
 // wifiDrainUpdates applies finished work. Called from the page's render.
 func wifiDrainUpdates() {
 	for {
@@ -456,7 +468,7 @@ func wifiDisableRadioAsync() {
 	if wifiPanel.busy {
 		return
 	}
-	wifiStartWork("Turning Wi-Fi off…", func() wifiUpdate {
+	wifiStartNetworkWork("Turning Wi-Fi off…", func() wifiUpdate {
 		if err := setWifiEnabled(false); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
@@ -510,7 +522,7 @@ func wifiJoinAsync(ssid, pass string, secured bool) {
 	if wifiPanel.busy {
 		return
 	}
-	wifiStartWork("Connecting to "+ssid+"…", func() wifiUpdate {
+	wifiStartNetworkWork("Connecting to "+ssid+"…", func() wifiUpdate {
 		res, err := wifiJoin(ssid, pass, secured)
 		if err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
@@ -529,7 +541,7 @@ func wifiSelectSavedAsync(id int) {
 	if wifiPanel.busy {
 		return
 	}
-	wifiStartWork("Reconnecting…", func() wifiUpdate {
+	wifiStartNetworkWork("Reconnecting…", func() wifiUpdate {
 		res, err := wifiSelectSaved(id)
 		if err != nil {
 			u := wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
@@ -585,7 +597,7 @@ func wifiReconnectAsync(ssid string) {
 	if wifiPanel.busy {
 		return
 	}
-	wifiStartWork("Reconnecting to "+ssid+"…", func() wifiUpdate {
+	wifiStartNetworkWork("Reconnecting to "+ssid+"…", func() wifiUpdate {
 		res, err := wifiReconnect()
 		if err != nil {
 			u := wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
@@ -610,7 +622,7 @@ func wifiDisconnectSelected() {
 		ShowToast("Not connected to a network", ToastKindInfo)
 		return
 	}
-	wifiStartWork("Disconnecting…", func() wifiUpdate {
+	wifiStartNetworkWork("Disconnecting…", func() wifiUpdate {
 		if err := wifiDisconnect(); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
@@ -647,7 +659,7 @@ func wifiForgetSelected() {
 	}
 	wifiPanel.confirmForget = ""
 	ssid := n.SSID
-	wifiStartWork("Forgetting "+ssid+"…", func() wifiUpdate {
+	forget := func() wifiUpdate {
 		if err := wifiForget(ssid); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
@@ -656,7 +668,13 @@ func wifiForgetSelected() {
 			u.snap = &snap
 		}
 		return u
-	})
+	}
+	if wifiPanel.status.Connected && wifiPanel.status.SSID == ssid {
+		// Forgetting the network in use drops it (wifiForget).
+		wifiStartNetworkWork("Forgetting "+ssid+"…", forget)
+		return
+	}
+	wifiStartWork("Forgetting "+ssid+"…", forget)
 }
 
 // ── Status ─────────────────────────────────────────────────────────────────

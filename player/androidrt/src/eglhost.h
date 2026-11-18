@@ -274,9 +274,27 @@ int apak_gpuLoad(ApakGpu *g, char *why, size_t cap);
  * one of the paths. APAK_GPU_EGL or 0. */
 int apak_gpuLoadEglFrom(ApakGpu *g, const char *const *paths, char *why, size_t cap);
 
+/* The stock TrimUI firmware's own libEGL paths (NULL-terminated), tried with
+ * apak_gpuLoadEglFrom before apak_gpuLoad by both the present layer and the
+ * surface probe, so the probe measures the EGL a game run uses. The build
+ * flag APAK_FIRMWARE_ROOT (empty on the device) prefixes each path so
+ * tests/smoke can stage a firmware tree. */
+extern const char *const apak_gpuFirmwareEgl[];
+
 /* The DRM card the GPU userspace should modeset: ANDROIDPAK_DRM_NODE, else
  * the first /dev/dri/card* whose driver is "pvr", else the first card.
  * Returns 0 none, 1 fallback card, 2 pvr/override. */
 int apak_gpuDrmNode(char *node, size_t cap);
+
+/* The stock TrimUI firmware: ANDROIDPAK_DEVICE=trimui-* (JukaHub says so),
+ * else its /usr/trimui system folder exists. */
+int apak_gpuOnStockTrimui(void);
+
+/* A GPU library in the chosen libEGL's own directory, named like it: `stem`
+ * versioned (stem.so.<soVersion>) beside libEGL.so.1, unversioned beside
+ * libEGL.so (the stock firmware's /usr/lib/libGLESv2.so), then the other
+ * form. Returns buf, or NULL when libEGL came from the library path (a soname
+ * lookup searches that same path) or nothing readable is there. */
+const char *apak_gpuBesideEgl(const char *eglName, const char *stem, const char *soVersion, char *buf, size_t cap);
 
 #endif /* ANDROIDRT_EGLHOST_H */

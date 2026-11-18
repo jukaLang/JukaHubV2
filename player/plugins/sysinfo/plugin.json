@@ -1,16 +1,17 @@
 {
   "name": "sysinfo",
-  "title": "System info",
-  "version": "1.2.0",
-  "description": "Reports free memory, free disk space and battery level.",
+  "title": "System monitor",
+  "version": "2.0.0",
+  "description": "Everything about the device in one press: free memory and card space, battery with the time left, chip temperature and how long it has been on.",
   "author": "JukaHub",
   "entry": "sysinfo.sh",
   "icon": "cpu",
   "enabled": true,
   "actions": [
-    {"id": "status", "label": "Memory and disk"},
-    {"id": "power", "label": "Battery"}
+    {"id": "status", "label": "Overview"},
+    {"id": "power", "label": "Battery"},
+    {"id": "heat", "label": "Temperature and uptime"}
   ],
   "onEnable": "status",
-  "quick": ["status", "power"]
+  "quick": ["status"]
 }

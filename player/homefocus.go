@@ -38,6 +38,10 @@ const (
 	// pill of the group, right of PS5 and left of the pairing code. Disabled
 	// while it is not drawn.
 	HomeFocusX1 HomeFocusID = "x1"
+	// HomeFocusPC is the PC streaming pill ("PC", moonlight_ui.go), the last
+	// pill of the group, right of X1 and left of the pairing code. Disabled
+	// while it is not drawn.
+	HomeFocusPC HomeFocusID = "pc"
 	// HomeFocusUpdate is the "new release available" download chip in the header's
 	// system corner, immediately left of the trophy room's cup beside the
 	// notification bell — the same place every scene header draws it. It is
@@ -146,12 +150,18 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusClock, Down: HomeFocusMedia,
 		Left: HomeFocusPS4, Right: HomeFocusX1,
 	},
-	// X1 closes the group: Left is PS5 (or, with the PS pills hidden on a PC,
-	// the search pill through PS5's own chain), Right the clock — the pairing
-	// code when it is drawn (neighbor).
+	// X1: Left is PS5 (or, with the PS pills hidden on a PC, the search pill
+	// through PS5's own chain), Right the PC pill.
 	HomeFocusX1: {
 		Up: HomeFocusClock, Down: HomeFocusMedia,
-		Left: HomeFocusPS5, Right: HomeFocusClock,
+		Left: HomeFocusPS5, Right: HomeFocusPC,
+	},
+	// PC closes the group: Left is X1 (or whatever is drawn left of it, through
+	// X1's chain), Right the clock — the pairing code when it is drawn
+	// (neighbor).
+	HomeFocusPC: {
+		Up: HomeFocusClock, Down: HomeFocusMedia,
+		Left: HomeFocusX1, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
 		// Left is the Games card beside it, never a jump over it to the hero.
@@ -251,7 +261,7 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	// they were: PS5 → clock, bell → PS5.
 	HomeFocusQR: {
 		Up: HomeFocusBell, Down: HomeFocusMedia,
-		Left: HomeFocusX1, Right: HomeFocusQR,
+		Left: HomeFocusPC, Right: HomeFocusQR,
 	},
 	// The update download chip is a header button drawn immediately left of the
 	// trophy room's cup, right of the now-playing chip. Its neighbours are the
@@ -511,7 +521,7 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	// had before the code was a control (the clock, the PS5 launcher).
 	if f.IsEnabled(HomeFocusQR) {
 		// The last drawn pill of the Remote Play group steps Right onto it.
-		if direction == FocusRight && (id == HomeFocusX1 || (id == HomeFocusPS5 && !f.IsEnabled(HomeFocusX1))) {
+		if direction == FocusRight && id == f.lastRemotePlayPill() {
 			return HomeFocusQR
 		}
 		if direction == FocusDown && (id == HomeFocusBell || id == HomeFocusBug || id == HomeFocusTrophy) {
@@ -525,12 +535,14 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 		// The header launcher trades Up/Down with the card under it, so the
 		// D-pad never has to guess which column the tile ended up in.
 		if direction == FocusUp && id == f.tileUnder {
-			if !f.IsEnabled(HomeFocusPS5) && f.IsEnabled(HomeFocusX1) {
-				return HomeFocusX1
+			for _, pill := range [...]HomeFocusID{HomeFocusPS5, HomeFocusX1, HomeFocusPC} {
+				if f.IsEnabled(pill) {
+					return pill
+				}
 			}
 			return HomeFocusPS5
 		}
-		if direction == FocusDown && (id == HomeFocusPS5 || id == HomeFocusPS4 || id == HomeFocusX1) {
+		if direction == FocusDown && (id == HomeFocusPS5 || id == HomeFocusPS4 || id == HomeFocusX1 || id == HomeFocusPC) {
 			return f.tileUnder
 		}
 	}
@@ -552,6 +564,17 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	}
 }
 
+// lastRemotePlayPill is the rightmost drawn pill of the Remote Play group
+// (PS5, X1, PC), "" when none is.
+func (f *HomeFocusController) lastRemotePlayPill() HomeFocusID {
+	for _, id := range [...]HomeFocusID{HomeFocusPC, HomeFocusX1, HomeFocusPS5} {
+		if f.IsEnabled(id) {
+			return id
+		}
+	}
+	return ""
+}
+
 // firstEnabled returns the first enabled focus ID in the default order: a
 // dynamic layout's first tile, then the dashboard's order.
 func (f *HomeFocusController) firstEnabled() HomeFocusID {
@@ -565,7 +588,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
 		HomeFocusChat, HomeFocusTools, HomeFocusFiles, HomeFocusSettings,
 		HomeFocusSearch, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
-		HomeFocusUpdate, HomeFocusTrophy, HomeFocusBug, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusExit,
+		HomeFocusUpdate, HomeFocusTrophy, HomeFocusBug, HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusPC, HomeFocusExit,
 		HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusQR,
 	}
 	for _, id := range order {

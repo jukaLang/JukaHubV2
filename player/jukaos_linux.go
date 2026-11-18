@@ -53,10 +53,31 @@ func jukaosUname() (machine, release string) {
 	return unix.ByteSliceToString(u.Machine[:]), unix.ByteSliceToString(u.Release[:])
 }
 
+// jukaosEarly is set while the --os-session start runs: logging does not
+// exist yet, so jukaosModel must not call DetectDevice (whose once-only
+// result and log line belong to the JukaHub that runs afterwards).
+var jukaosEarly bool
+
+// jukaosModel is this handheld's model, for the layers' "devices".
+func jukaosModel() DeviceModel {
+	if !jukaosEarly {
+		return DetectDevice()
+	}
+	if d := DeviceModel(strings.ToLower(strings.TrimSpace(os.Getenv("JUKAHUB_DEVICE_MODEL")))); d.IsTrimui() {
+		return d
+	}
+	d, _ := classifyDevice(readDeviceIdentity())
+	return d
+}
+
 // jukaosHostFor is the host the layers are checked against.
 func jukaosHostFor(appDir string) jukaosHost {
 	machine, release := jukaosUname()
-	return jukaosHost{Machine: machine, Release: release, AppDir: filepath.ToSlash(appDir), SDRoot: jukaosSDRootOf(appDir)}
+	model := jukaosModel()
+	return jukaosHost{
+		Machine: machine, Release: release, Model: string(model), ModelCode: model.hardwareModelID(),
+		AppDir: filepath.ToSlash(appDir), SDRoot: jukaosSDRootOf(appDir),
+	}
 }
 
 // jukaosKernel is the kernel release for the Settings status.
@@ -68,7 +89,7 @@ func jukaosKernel() string {
 // jukaosSay writes one line to stderr, which launch.sh appends to errors.txt;
 // the --os-session start runs before JukaHub's logging exists.
 func jukaosSay(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[%s] jukaos: %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+	fmt.Fprintf(os.Stderr, "[%s] jukaos: %s\n", time.Now().Format("2006-01-02 15:04:05"), redactLogSecrets(fmt.Sprintf(format, args...)))
 }
 
 // jukaosSessionEntry is the --os-session start, the first thing main does.
@@ -84,6 +105,8 @@ func jukaosSessionEntry() {
 		return
 	}
 	os.Args = append(os.Args[:1:1], os.Args[2:]...)
+	jukaosEarly = true
+	defer func() { jukaosEarly = false }()
 	// No variable of an earlier session (a JukaHub started from inside one)
 	// carries over into this one.
 	for _, kv := range os.Environ() {
@@ -93,15 +116,18 @@ func jukaosSessionEntry() {
 	}
 	appDir := jukaosAppDir()
 	if os.Geteuid() != 0 {
+		jukaosEntryNote = "JukaHub OS needs root"
 		jukaosSay("JukaHub OS needs root; starting as the app")
 		return
 	}
 	state := jukaosLoadState(appDir)
 	if !state.Enabled {
-		jukaosSay("OS mode is off; starting as the app")
+		jukaosEntryNote = "OS mode is off in os/os.json"
+		jukaosSay("OS mode is off (%s); starting as the app", filepath.Join(jukaosDir(appDir), jukaosStateName))
 		return
 	}
 	if _, err := os.Stat(filepath.Join(jukaosRunDir, jukaosStockOnceName)); err == nil {
+		jukaosEntryNote = "the stock system was chosen for this boot (Select/B held at power-on, or Return to …)"
 		jukaosSay("the stock system was chosen for this boot; starting as the app")
 		return
 	}
@@ -110,7 +136,7 @@ func jukaosSessionEntry() {
 	layers := jukaosEnabledLayers(all, state)
 	info := jukaosSessionInfo{PID: os.Getpid()}
 	for _, l := range all {
-		if state.Layers[l.ID] && l.Problem != "" {
+		if state.Layers[l.ID] && l.Problem != "" && !l.Elsewhere {
 			info.Skipped = append(info.Skipped, l.ID+": "+l.Problem)
 		}
 	}
@@ -327,11 +353,25 @@ func jukaosInit() {
 		}
 	}
 	ids := jukaosSplitIDs(os.Getenv(jukaosEnvLayers))
+	// OS mode on but no session: say why, in the log and in Settings, so a
+	// card that should have booted JukaHub OS tells what stopped it.
+	why := ""
+	if !session && !jukaosNativeActive() {
+		if state := jukaosLoadState(jukaosAppDir()); state.Enabled {
+			why = jukaosEntryNote
+			if why == "" {
+				why = "JukaHub was not started as JukaHub OS (not through launch.sh, or an older launch.sh without --os-session)"
+			}
+			logWarn("jukaos", "OS mode is on, but this start is the app: %s", why)
+		}
+	}
 	jukaosLive.mu.Lock()
 	jukaosLive.session = session
 	jukaosLive.guarded = os.Getenv(jukaosEnvGuard) == "1"
 	jukaosLive.layers = ids
 	jukaosLive.info = info
+	jukaosLive.why = why
+	jukaosLive.applied = session && len(ids) == 0
 	jukaosLive.mu.Unlock()
 	// A journal a killed or crashed session left behind is put back first,
 	// in App mode too: its changes are still in force until a reboot.
@@ -347,6 +387,18 @@ func jukaosInit() {
 	if len(ids) > 0 {
 		go jukaosApplyGlobal(jukaosAppDir(), ids)
 	}
+}
+
+// jukaosApplyDone records what the background apply did, for Settings:
+// driverLayers names the applied layers of kind "drivers" and driverValues
+// the values they set.
+func jukaosApplyDone(modules, values, drivers int, notes, driverLayers []string, driverValues int) {
+	jukaosLive.mu.Lock()
+	jukaosLive.modules, jukaosLive.values, jukaosLive.drivers = modules, values, drivers
+	jukaosLive.driverLayers, jukaosLive.driverValues = driverLayers, driverValues
+	jukaosLive.notes = notes
+	jukaosLive.applied = true
+	jukaosLive.mu.Unlock()
 }
 
 // jukaosReadSessionInfo is session.json when this process wrote it.
@@ -504,6 +556,7 @@ func jukaosDeviceOps() jukaosRevertOps {
 func jukaosApplyGlobal(appDir string, ids []string) {
 	if !jukaosLockJournal(10 * time.Second) {
 		logWarn("jukaos", "journal busy; drivers and values not applied")
+		jukaosApplyDone(0, 0, 0, []string{"journal busy: drivers and values not applied"}, nil, 0)
 		return
 	}
 	defer jukaosUnlockJournal()
@@ -517,23 +570,37 @@ func jukaosApplyGlobal(appDir string, ids []string) {
 	h := jukaosHostFor(appDir)
 	j := jukaosJournal{PID: os.Getpid(), BootID: bootOSReadBootID()}
 	loaded := jukaosLoadedModules()
-	modules := 0
+	modules, values, drivers, driverValues := 0, 0, 0, 0
+	var notes, driverLayers []string
+	note := func(format string, args ...any) {
+		if len(notes) < 32 {
+			notes = append(notes, fmt.Sprintf(format, args...))
+		}
+	}
+	// Whatever returns below, Settings learns what was done.
+	defer func() { jukaosApplyDone(modules, values, drivers, notes, driverLayers, driverValues) }()
 	layers := jukaosLoadLayers(h, jukaosLayersDir(appDir))
 	for _, l := range layers {
 		if !want[l.ID] || l.Problem != "" {
 			continue
 		}
+		if l.Spec.Kind == jukaosKindDrivers {
+			driverLayers = append(driverLayers, setOr(l.Spec.Name, l.ID))
+		}
+		drivers += len(l.Modules)
 		for _, m := range l.Modules {
 			if jukaosStopping.Load() {
 				return
 			}
 			if loaded[m.Name] {
 				logInfo("jukaos", "driver %s is loaded already; left to the system", m.Name)
+				note("driver %s: the system's own is loaded already", m.Name)
 				continue
 			}
 			if err := jukaosLoadModule(m.Path); err != nil {
 				if !errors.Is(err, unix.EEXIST) {
 					logWarn("jukaos", "driver %s (%s) not loaded: %v", m.Name, l.ID, err)
+					note("driver %s not loaded: %v", m.Name, err)
 				}
 				continue
 			}
@@ -560,6 +627,12 @@ func jukaosApplyGlobal(appDir string, ids []string) {
 		if !want[l.ID] || l.Problem != "" {
 			continue
 		}
+		counted := func() {
+			values++
+			if l.Spec.Kind == jukaosKindDrivers {
+				driverValues++
+			}
+		}
 		for _, w := range l.Sysfs {
 			if jukaosStopping.Load() {
 				return
@@ -567,10 +640,12 @@ func jukaosApplyGlobal(appDir string, ids []string) {
 			old, err := jukaosReadValue(w.Path)
 			if err != nil {
 				logWarn("jukaos", "%s (%s): %v", w.Path, l.ID, err)
+				note("%s: not on this device", w.Path)
 				continue
 			}
 			old = jukaosSysfsCurrent(old)
 			if jukaosSysfsSame(old, w.Value) {
+				counted() // already as the layer wants it
 				continue
 			}
 			if old == "" || len(old) > jukaosSysfsValueMax || strings.ContainsAny(old, "\n\r\x00") {
@@ -585,16 +660,16 @@ func jukaosApplyGlobal(appDir string, ids []string) {
 			}
 			if err := jukaosWriteValue(w.Path, w.Value); err != nil {
 				logWarn("jukaos", "%s (%s) not set: %v", w.Path, l.ID, err)
+				note("%s not set: %v", w.Path, err)
 				j.Entries = j.Entries[:len(j.Entries)-1]
 				_ = jukaosSaveJournal(j)
 				continue
 			}
+			counted()
 			logInfo("jukaos", "%s: %s -> %s (%s)", w.Path, old, w.Value, l.ID)
 		}
 	}
-	jukaosLive.mu.Lock()
-	jukaosLive.modules = modules
-	jukaosLive.mu.Unlock()
+	logInfo("jukaos", "JukaHub OS applied: %d value(s) set, %d of %d driver(s) loaded, %d note(s)", values, modules, drivers, len(notes))
 }
 
 // jukaosRevert undoes this process's journal: at exit, on "Return to …",

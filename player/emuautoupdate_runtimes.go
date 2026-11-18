@@ -755,6 +755,77 @@ func (b *emuAutoBar) finish() {
 	installBarDoneRun(b.gen)
 }
 
+// emuRuntimeCard is the pass's install card as an updater's Install sees it
+// (emuRuntimeCardFrom): the phase and the bytes of what it fetches, shown the
+// way an install from a press shows them (androidRTInstallProgress). Every
+// report is dropped once the card no longer shows the pass's run — cancelled,
+// or taken by another install — so it never writes on the card that replaced
+// it. A nil card (an install outside a pass) drops them all.
+type emuRuntimeCard struct{ gen uint64 }
+
+// emuRuntimeCardKey is the context key the pass's card travels under.
+type emuRuntimeCardKey struct{}
+
+// emuRuntimeWithCard is ctx carrying bar's card, once the card is up.
+func emuRuntimeWithCard(ctx context.Context, bar *emuAutoBar) context.Context {
+	if bar == nil || !bar.begun {
+		return ctx
+	}
+	return context.WithValue(ctx, emuRuntimeCardKey{}, &emuRuntimeCard{gen: bar.gen})
+}
+
+// emuRuntimeWithRun is ctx carrying the card of an install run begun from a
+// press (installBarBeginRun's gen), so an updater's Install started from its
+// own page shows its phase and bytes as it does inside the pass (LIB-25).
+func emuRuntimeWithRun(ctx context.Context, gen uint64) context.Context {
+	return context.WithValue(ctx, emuRuntimeCardKey{}, &emuRuntimeCard{gen: gen})
+}
+
+// emuRuntimeCardFrom is the pass's card in ctx, or nil.
+func emuRuntimeCardFrom(ctx context.Context) *emuRuntimeCard {
+	if ctx == nil {
+		return nil
+	}
+	card, _ := ctx.Value(emuRuntimeCardKey{}).(*emuRuntimeCard)
+	return card
+}
+
+// shown reports whether the card still shows the pass's run.
+func (c *emuRuntimeCard) shown() bool {
+	return c != nil && installBarGeneration() == c.gen
+}
+
+// phase sets the card's phase (installPhaseResolving, installPhaseVerify…).
+func (c *emuRuntimeCard) phase(phase string) {
+	if c.shown() {
+		installBarPhase(phase)
+	}
+}
+
+// bytes shows done of total bytes in phase; total <= 0 is a bar without an
+// end.
+func (c *emuRuntimeCard) bytes(phase string, done, total int64) {
+	if c != nil {
+		installBarUpdateRun(c.gen, phase, done, total)
+	}
+}
+
+// restart empties the bar for a second pass over the same bytes (unpacking
+// what was just downloaded), in phase.
+func (c *emuRuntimeCard) restart(phase string) {
+	if c.shown() {
+		installBarResetProgress()
+		installBarPhase(phase)
+	}
+}
+
+// relPack shows one of relpack's progress reports (relPackCardProgress).
+func (c *emuRuntimeCard) relPack(p relPackProgress) {
+	if c.shown() {
+		relPackCardProgress(p)
+	}
+}
+
 // emuRunRuntimeUpdaters runs list in mode inside a pass. pass is cancelled
 // when a game starts; bar is the pass's card (nil in Notify mode); now is the
 // pass's wall-clock time, for the stamps.
@@ -797,7 +868,7 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 			continue
 		}
 		rec := emuRuntimeRecordFor(u.Key)
-		if label != "" && label == rec.Installed {
+		if emuRuntimeSameBuild(rec.Installed, label, false) {
 			emuRuntimeChecked(u.Key, now)
 			logPatch("emulator updates: %s %s was rolled back (or installed before and put back by hand); it is not installed again", u.Title, label)
 			continue
@@ -806,8 +877,14 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 		if mode != coreUpdateInstall {
 			emuRuntimeChecked(u.Key, now)
 			logPatch("emulator updates: new build of %s (Notify me: nothing installed)", name)
-			if label == "" || label != rec.Announced {
+			switch {
+			case !emuRuntimeSameBuild(rec.Announced, label, true):
 				report.Available = append(report.Available, name)
+				emuRuntimeUpdateRecord(u.Key, func(r *emuRuntimeRecord) { r.Announced = label })
+			case rec.Announced != label:
+				// Announced by its tag before labels carried the digest: the
+				// record learns the digest without a second announcement, so
+				// the next upload under that tag is announced.
 				emuRuntimeUpdateRecord(u.Key, func(r *emuRuntimeRecord) { r.Announced = label })
 			}
 			continue
@@ -835,7 +912,9 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 		stopLink := context.AfterFunc(pass, cancelInstall)
 		logPatch("emulator updates: installing %s", name)
 		title := u.Title
-		err = u.Install(installCtx, client, func(line string) {
+		// The card travels in the context too, for an Install that reports
+		// its phase and bytes on it (emuRuntimeCardFrom).
+		err = u.Install(emuRuntimeWithCard(installCtx, bar), client, func(line string) {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				return
@@ -942,6 +1021,66 @@ func emuRuntimeFriendly(err error) string {
 // emuRuntimeBuildName names a build in a toast: "hakuX v0.1.5".
 func emuRuntimeBuildName(title, label string) string {
 	return strings.TrimSpace(title + " " + label)
+}
+
+// emuRuntimeLabelDigest is how much of a package's digest its label carries.
+const emuRuntimeLabelDigest = 8
+
+// emuRuntimePackLabel names a build of a package JukaHub's CI attaches to its
+// releases (relpack.go: the Windows-app runtime, AndroidRT) for the pass's
+// records and toasts: the release tag and the first characters of the asset's
+// digest, "v1.2 (1a2b3c4d)". CI can upload a package again under the same
+// release; labelled by the tag alone, that new build read as the one the pass
+// had installed ("put back by hand") and waited for the next tag. Without a
+// published digest the label is the tag.
+func emuRuntimePackLabel(c relPackCandidate) string {
+	tag := strings.TrimSpace(c.Rel.TagName)
+	if digest := releaseAssetDigest(c.Asset.Digest); digest != "" {
+		return tag + " (" + digest[:emuRuntimeLabelDigest] + ")"
+	}
+	return tag
+}
+
+// emuRuntimeLabelParts takes a label apart: what names the build ("v1.2") and
+// the digest a package's label carries ("1a2b3c4d"; "" for none — every other
+// updater's label, and a package's stored before labels carried it).
+func emuRuntimeLabelParts(label string) (tag, digest string) {
+	label = strings.TrimSpace(label)
+	n, width := len(label), emuRuntimeLabelDigest+3 // " (" + digest + ")"
+	if n <= width || label[n-1] != ')' || label[n-width:n-width+2] != " (" {
+		return label, ""
+	}
+	digest = label[n-width+2 : n-1]
+	for i := 0; i < len(digest); i++ {
+		if c := digest[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return label, ""
+		}
+	}
+	return strings.TrimSpace(label[:n-width]), digest
+}
+
+// emuRuntimeSameBuild reports whether stored, a label the pass recorded (the
+// build it installed, or the one it announced), names the build label does.
+// Labels of one form must be equal. A package's label stored before labels
+// carried the digest ("v1.2") cannot tell which upload of its tag it was, so
+// legacy answers for it when the tags match: false for Installed — the check
+// found that the copy on the card is not the one published, so it is
+// installed once and the record learns the digest — and true for Announced,
+// whose tag the user has heard of already.
+func emuRuntimeSameBuild(stored, label string, legacy bool) bool {
+	stored, label = strings.TrimSpace(stored), strings.TrimSpace(label)
+	if stored == "" || label == "" {
+		return false
+	}
+	if stored == label {
+		return true
+	}
+	storedTag, storedDigest := emuRuntimeLabelParts(stored)
+	tag, digest := emuRuntimeLabelParts(label)
+	if storedTag != tag || (storedDigest == "") == (digest == "") {
+		return false
+	}
+	return legacy
 }
 
 // emuRuntimeList joins names for a toast, at most three and a count.

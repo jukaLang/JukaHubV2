@@ -436,7 +436,11 @@ func startGameLibraryScan() {
 	// goroutine never falls back to reading the live ledger.
 	seconds := libraryPlaytimeSnapshot()
 	go func() {
+		// The folders' signature before the walk lets the automatic box-art
+		// pass use this scan while nothing changed (LIB-19, boxart_auto.go).
+		signature := boxArtLibrarySignature(roots)
 		report := scanROMLibrary(roots)
+		romScanPublish(roots, signature, report.Games)
 		// Resolved once against the whole scan, so the Android row below gets
 		// no bare-title figure a ROM console already took.
 		seconds := libraryPlaytimeForTitles(seconds, libraryScanTitleConsoles(report.Games))
@@ -456,6 +460,8 @@ func startGameLibraryScan() {
 			if gameLib.focus == 0 && gameLib.system == 0 && (gameLib.query != "" || gmetaFilterTag() != "") {
 				gameLibraryFocusFiltered()
 			}
+			// The Random game plugin's press that opened the library rolls now.
+			gameRandomAfterScan(gen)
 		})
 	}()
 }
@@ -1087,22 +1093,27 @@ func decodeLibraryArt(path string, ctx context.Context) (*image.NRGBA, error) {
 		return nil, err
 	}
 	defer file.Close()
-	config, _, err := image.DecodeConfig(file)
-	if err != nil {
-		return nil, err
-	}
-	if !libraryArtDimensionsAllowed(config.Width, config.Height) {
-		return nil, errLibraryArtDimensions
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	picture, _, err := image.Decode(file)
-	if err != nil {
-		return nil, err
+	var picture image.Image
+	if config, _, cfgErr := image.DecodeConfig(file); cfgErr == nil {
+		if !libraryArtDimensionsAllowed(config.Width, config.Height) {
+			return nil, errLibraryArtDimensions
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if picture, _, err = image.Decode(file); err != nil {
+			return nil, err
+		}
+	} else {
+		// Go has no WebP decoder, and a local cover can be a .webp; SDL_image
+		// reads it (and caps the pixel count itself). The size check below
+		// still applies to what it returns.
+		if picture, err = imgvDecodeSDL(path); err != nil {
+			return nil, cfgErr
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1533,6 +1544,12 @@ func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []lib
 		libraryArtTexture(renderer, wanted)
 	}
 
+	// Dim unselected art (homelook.go): every cover but the focused button's
+	// is greyed, easing as the focus moves.
+	dimOn := homeDimArtOn(config)
+	if dimOn {
+		gameLibDimEase.note("grid", 0, gameLib.system, uiMotionEnabled(config))
+	}
 	for i := first; i < last; i++ {
 		col, line := (i-first)%grid.cols, (i-first)/grid.cols
 		rect := sdl.Rect{
@@ -1541,7 +1558,25 @@ func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []lib
 			W: grid.tileW, H: grid.tileH,
 		}
 		gameLib.systemHits = append(gameLib.systemHits, gameLibRowHit{index: i, rect: rect})
-		drawGameLibrarySystemTile(renderer, config, systems[i], rect, i == gameLib.system)
+		dim := 0.0
+		if dimOn {
+			dim = gameLibDimEase.dim(i)
+		}
+		drawGameLibrarySystemTile(renderer, config, systems[i], rect, i == gameLib.system, dim)
+	}
+	// Rows above or below this screenful: the edge rows fade into the page
+	// (listfade.go), unless the focused button is on that row.
+	if totalRows > grid.rows {
+		shown := sdl.Rect{X: area.X, Y: area.Y, W: area.W, H: int32(grid.rows)*(grid.tileH+grid.gap) - grid.gap}
+		size := listFadeSize(shown.H)
+		near, far := int32(0), int32(0)
+		if gameLib.sysScroll > 0 && row != gameLib.sysScroll {
+			near = size
+		}
+		if gameLib.sysScroll+grid.rows < totalRows && row != gameLib.sysScroll+grid.rows-1 {
+			far = size
+		}
+		drawListEdgeFadeSized(renderer, shown, near, far)
 	}
 
 	// More rows than the page holds: a slim bar in the right margin says
@@ -1562,8 +1597,9 @@ func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []lib
 // drawGameLibrarySystemTile paints one console button in Home's tile language:
 // the glass card with Home's glow and ring when focused, the system's glyph
 // in an icon badge top-left, the name anchored bottom-left over its game count
-// and cover meter, and a cover slot along the right edge.
-func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system librarySystem, rect sdl.Rect, focused bool) {
+// and cover meter, and a cover slot along the right edge. dim greys the cover
+// (Dim unselected art, homelook.go).
+func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system librarySystem, rect sdl.Rect, focused bool, dim float64) {
 	if focused {
 		drawHomeFocusGlow(renderer, rect)
 	}
@@ -1582,7 +1618,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 	slotH := rect.H - 2*pad
 	if slotW := slotH * 3 / 4; rect.W-slotW-3*pad >= 120 {
 		slot := sdl.Rect{X: rect.X + rect.W - pad - slotW, Y: rect.Y + pad, W: slotW, H: slotH}
-		drawGameLibraryTileCover(renderer, config, system, slot, focused)
+		drawGameLibraryTileCover(renderer, config, system, slot, focused, dim)
 		textRight = slot.X - pad
 	}
 	textW := textRight - textX
@@ -1612,7 +1648,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 		}
 		bottom -= 3 + 8
 	}
-	if metaFont := getFontSized(config, "small", 15); metaFont != nil {
+	if metaFont := FontForRole(config, TypeLabel); metaFont != nil {
 		bottom -= int32(metaFont.Height())
 		drawGlassText(renderer, config, metaFont, ellipsize(metaFont, gameLibraryTileMeta(system), textW),
 			ColorTextMuted(), textX, bottom)
@@ -1624,7 +1660,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 		// Too little room under the badge for a line (large text, a small
 		// canvas): the name still shows, on one line over the badge's corner,
 		// rather than leaving a button nobody can read.
-		font = getFontSized(config, "small", 14)
+		font = FontForRole(config, TypeCaption)
 		if font == nil {
 			return
 		}
@@ -1641,7 +1677,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 // cover the console has, once the decoder has it in the cache, else the
 // console's name in the library's bitmap lettering — assembling square by
 // square on the focused button.
-func drawGameLibraryTileCover(renderer *sdl.Renderer, config *Config, system librarySystem, slot sdl.Rect, focused bool) {
+func drawGameLibraryTileCover(renderer *sdl.Renderer, config *Config, system librarySystem, slot sdl.Rect, focused bool, dim float64) {
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRect(renderer, slot.X, slot.Y, slot.W, slot.H, homeIconRadius, homeGlass(12))
 	strokeRoundedRect(renderer, slot.X, slot.Y, slot.W, slot.H, homeIconRadius, 1, homeGlass(18))
@@ -1651,7 +1687,7 @@ func drawGameLibraryTileCover(renderer *sdl.Renderer, config *Config, system lib
 				dst := gaFit(tw, th, slot.W-8, slot.H-8)
 				dst.X += slot.X + 4
 				dst.Y += slot.Y + 4
-				_ = renderer.Copy(tex, nil, &dst)
+				homeLookCopyDim(renderer, tex, nil, dst, dim, 255)
 				return
 			}
 		}
@@ -1902,8 +1938,9 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 			// ring inside the gap between rows.
 			drawGlassSurface(renderer, rect, 12, glassState{Focused: idx == gameLib.cursor, NoLift: true})
 			game := system.Games[idx]
-			renderText(renderer, config, medium, ellipsize(medium, game.Label(), rect.W-28),
-				ColorTextPrimary(), rect.X+14, rect.Y+rows.titleY)
+			// The focused row's long title scrolls (titlescroll.go).
+			titleScrollText(renderer, config, medium, game.Label(), ColorTextPrimary(),
+				rect.X+14, rect.Y+rows.titleY, rect.W-28, idx == gameLib.cursor && gameLib.focus == 1)
 			detail := game.System + " · " + filepath.Base(game.Path)
 			if builtIn, ok := builtInLibraryGameFor(game); ok {
 				detail = builtIn.detail
@@ -1918,6 +1955,20 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 			}
 			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-28),
 				ColorTextTertiary(), rect.X+14, rect.Y+rows.detailY)
+		}
+		// Games above or below the rows on screen: the edge rows fade into
+		// the page (listfade.go), unless the cursor is on that row.
+		if shown := min(visibleGames, len(system.Games)-gameLib.scroll); shown > 0 {
+			area := sdl.Rect{X: gameX, Y: bodyY, W: gameW, H: int32(shown)*gameRowH - gameLibraryRowGap}
+			size := listFadeSize(area.H)
+			near, far := int32(0), int32(0)
+			if gameLib.scroll > 0 && gameLib.cursor != gameLib.scroll {
+				near = size
+			}
+			if gameLib.scroll+visibleGames < len(system.Games) && gameLib.cursor != gameLib.scroll+visibleGames-1 {
+				far = size
+			}
+			drawListEdgeFadeSized(renderer, area, near, far)
 		}
 		if gameLib.scroll > 0 || gameLib.scroll+visibleGames < len(system.Games) {
 			rng := itoa(gameLib.scroll+1) + "-" + itoa(gameLib.scroll+visibleGames) + " of " + itoa(len(system.Games))

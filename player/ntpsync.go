@@ -651,6 +651,8 @@ func netTimeSync(maySet bool) {
 		clockNoteCheck(clockCheck{At: at, Offset: offset, Source: source, Set: true})
 		clockRecordSave(clockRecord{At: at, How: "network time · " + source, OffsetMS: offset.Milliseconds()})
 	}
+	// The hardware clock keeps the corrected time across a power cycle (rtcsync_linux.go).
+	rtcSyncAfterNetTime(action)
 	netTime.failures = 0
 	netTime.synced = true
 }

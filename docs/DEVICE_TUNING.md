@@ -195,6 +195,69 @@ Manifests are sometimes wrong (a port with a 64-bit wrapper that does not list
 `aarch64`). `portIgnoreCompat: true` in `jukauser.json` launches flagged ports
 anyway; the badge stays visible so the decision is deliberate.
 
+## Battery calibration
+
+**Tools → Battery calibration** is for a battery % that jumps around or a
+handheld that dies with charge still showing (the classic "dies at 15%"). It
+runs the cycle ArkOS-style firmwares call calibration — one full charge, one
+full drain — which is how the fuel gauge (the AXP PMIC on the Smart Pro and
+Smart Pro S) relearns the cell's real capacity:
+
+1. **Charge to full.** Plugged in until the battery says Full, or reads 100%
+   with almost no charge current for ten minutes.
+2. **Run it down.** Unplug and play as usual until the handheld switches
+   itself off. A background sampler — not tied to any screen, so it keeps going
+   behind games — logs the raw gauge and the voltage once a minute to
+   `battery_cal_samples.jsonl` in the data folder (appended and fsynced, so a
+   power cut keeps every earlier reading; thinned past 3000 readings).
+3. **Finish.** On the next start JukaHub sees the last reading was 5% or less
+   (or the voltage near the cutoff) and finishes by itself; any other ending
+   gets one question on the screen: "Did it switch itself off?".
+
+From the drain JukaHub also learns how far off the % was. The true charge at a
+reading is the share of the run's use still ahead of it, so the method assumes
+a fairly steady load and the screen says so. Use is counted from monotonic gaps
+capped at five minutes; a longer gap (suspend, reboot, JukaHub not running)
+counts for what the level dropped at the run's own pace, so a wrong wall clock
+before NTP never stretches the run. The readings are binned at gauge 0, 5, …
+100, pooled to be monotonic, and stored as a 21-point table in
+`battery_cal.json`. The result is said in plain words ("Your battery read 14%
+when it actually shut down", "The gauge is accurate within 3% — no correction
+needed"), and **Correct the battery %** turns on by itself when the gauge was
+more than 4 points off and the run was not rough. With it on, every reader of
+the level — the corner, the battery saver, the low-battery warning and guard —
+sees the corrected %, so the warning comes at a true 5% and the guard at a true
+3%.
+
+Honest limits: nothing is written to the PMIC (no register writes, no "reset
+gauge" files — they differ between drivers and a wrong one can stop charging).
+Charging, cancelling or Reset calibration never touch the battery itself. The
+correction is learned on a discharge and applied while charging too, where the
+gauge's curve differs a little. A run that was charged before it ran out goes
+back to step 1. No battery reported (Windows desktops) shows "Not available on
+this device".
+
+## Stock Smart Pro hardware limits
+
+On firmware 1.1.0, the AXP2202 battery exposes charge counters and a
+read-only `constant_charge_current`, but no charging end threshold or writable
+charge-stop control. JukaHub therefore does not offer an 80% charge limit on
+this image. Changing the displayed battery percentage through calibration
+does not stop charging.
+
+The built-in ALSA codec identifies itself as `audiocodec`. JukaHub selects it
+by that ID, so it can find the speaker controls even when a USB DAC takes card
+0 at boot. `amixer -c audiocodec scontrols` worked on the tested Smart Pro;
+volume on an attached USB DAC still needs a live test. Stock 1.1.0 keymon maps
+its 20 audible steps to raw digital attenuation from 45 down to 0, with step 0
+at raw 63; live steps 1 and 4 matched that map. JukaHub now uses the stock map
+on this model. If the built-in codec is absent, it leaves volume alone rather
+than changing an unrelated USB card.
+
+The same firmware has configfs FunctionFS for USB file transfer, but its
+kernel explicitly omits ECM and RNDIS gadget functions. It cannot offer
+networking over USB without a different kernel.
+
 ## Related
 
 - Ports and PortMaster installation: [PORTMASTER.md](PORTMASTER.md)

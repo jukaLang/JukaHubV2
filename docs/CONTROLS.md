@@ -61,12 +61,12 @@ that keeps the screen readable.
 What the slider moves depends on the device. On a TrimUI Smart Pro or Brick it
 is the panel's backlight, through the same display driver the firmware uses,
 in the firmware's own ten steps; the level is written back to the firmware's
-settings, so its brightness keys carry on from it, and the card follows those
-keys. On a Linux PC it is the backlight; on a Windows laptop or handheld the
+settings, so the stock Settings slider and JukaHub stay in sync. The stock
+Smart Pro has no dedicated brightness shortcut. On a Linux PC it is the backlight; on a Windows laptop or handheld the
 panel brightness (the level Windows' own slider shows), and on a Windows desktop
 the monitor's brightness over DDC/CI. Where there is no such control the card
 dims JukaHub's picture instead and says so in its last line. Quick Settings'
-brightness row and **Settings → Display & theme → Brightness** show the same
+brightness row and **Settings → Display → Brightness** show the same
 value, and the full-screen pairing QR still borrows full brightness while it is
 up and gives the level back when it closes.
 
@@ -318,6 +318,7 @@ had nothing to go back to.
 | Select + L1 (hold) | Mouse mode on / off: the pointer stays up and the D-pad and sticks move it (below) |
 | Power (short press, handheld) | Sleep — on Home, any screen or mid-game; the game carries on at wake (Settings → Power & battery → Power button: Sleep, Exit card or Nothing) |
 | Power (hold 1.5 s) on a JukaHub screen | The power card below |
+| FN switch (Smart Pro, with Settings → Power & battery → Travel lock on) | Locks the power button: no wake, and a power-on turns straight back off; slide it back to unlock |
 
 ### Virtual cursor
 
@@ -433,6 +434,7 @@ stays on screen, dimmed, and a small menu opens over it:
 | Ask Juka | The game assistant listens (only with Game assistant on); B comes back to the menu |
 | Sleep | Put the handheld to sleep and resume the game on wake |
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
+| Game switcher | Quits the game as Quit to JukaHub does (RetroArch writes its auto save), then opens the [Game switcher](#game-switcher) (only with Settings → Games & emulators → Game switcher on) |
 
 | Button | Action |
 |--------|--------|
@@ -535,7 +537,7 @@ behaves the same in a menu as it does in a media grid.
 
 ### Liquid background
 
-With **Settings → Display & theme → Liquid background** on (*Gentle* or
+With **Settings → Theme & look → Liquid background** on (*Gentle* or
 *Lively*), the backdrop is a shallow pool and the controls you already use move
 it. It only watches: nothing is taken from the screen in front of it.
 
@@ -555,7 +557,7 @@ Reduce Motion keeps the ripples you make and drops the rain and the slosh.
 
 ### Wallpaper picker
 
-**Settings → Display & theme → Wallpaper** or **Start → Device → Wallpapers**
+**Settings → Theme & look → Wallpaper** or **Start → Device → Wallpapers**
 lists pictures and GIFs (a GIF plays as the wallpaper), folders first, with a
 preview of the highlighted file. It opens in the current wallpaper's folder.
 
@@ -579,9 +581,15 @@ footer names the scene the menu was opened over.
 | Group | Holds |
 |-------|-------|
 | Screens | Home, then Trophies (with how many you have earned, e.g. "12/386"), then every other screen in `jukaconfig.json` — the quickest way to switch screen |
-| Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, APK Store, Smart Pro Compatibility |
+| Games | Emulators, Games Library, Game Profiles, PS Remote Play, Xbox Remote Play, Steam, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, APK Store, Smart Pro Compatibility |
 | Tools | Downloads, Curation Hub, Audio settings, Smart Home, Screen Share, Voice command, Accessibility, Stick Calibration (when the install has one) |
-| Device | Quick Settings, Liquid background, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, About, Quit JukaHub |
+| Device | Quick Settings, Liquid background, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, Edit Home, Phone Companion, About, Quit JukaHub |
+
+Under the groups, the rail shows the **Phone Companion** pairing code whenever
+the handheld has a network address and the menu has room for a readable code:
+scan it straight from the menu, or tap it to fill the screen with it (PIN and
+address underneath). **Device → Phone Companion** opens the pairing card.
+Screen Share paints over the code, as it does on Home.
 
 Settings sub-screens and the maintenance scenes (Patch, Exit) are not listed:
 **Settings** leads to them. Rows whose backend is missing on this device are
@@ -594,7 +602,7 @@ left out rather than shown greyed.
 | A | Open the highlighted entry, or step into its group from the rail |
 | B / Back / Start | Close the menu |
 | L1 / R1 | One window of entries; L2 / R2 jump to the first / last row of the group |
-| Mouse | Click a group, a row to open it, or outside the card to close |
+| Mouse | Click a group, a row to open it, the pairing code to enlarge it, or outside the card to close |
 
 **Start** itself opens this menu on every ordinary screen. The arcade (**Games**)
 and **Ambient** bind Start to their own pause and exit, so the menu stays out of
@@ -607,6 +615,7 @@ their way, and no panel is covered by a menu drawn beneath it.
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
 | Select | Open Quick Settings; press Select or B to close it |
+| X | The [Game switcher](#game-switcher) (Standard and Hero layouts; on the Carousel and Widgets X is Edit Home, on the Tabs Home the item sheet) |
 | D-pad | Move between tiles, the header chips (brightness button, volume button, Bluetooth button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
 | Left (from the Wi-Fi meter) | Move onto the Bluetooth button; **A** opens the Bluetooth page |
@@ -618,11 +627,24 @@ their way, and no panel is covered by a menu drawn beneath it.
 | L2 | Edit Home, in any layout; L2 again is Done ([Edit Home](#edit-home)) |
 | R2 | The liquid background: Off → Slight → Medium → Lively (a toast names the level; the footer shows **R2 Water**, **W** on a keyboard). R2 does the same on every other screen whose footer shows **R2 Water** |
 
+### Game switcher
+
+Recent games side by side, each with a screenshot of where you left it (its save state's picture, else its box art). Open it with X on Home, Start → Games → Game switcher, search, or the in-game menu.
+
+| Button | Action |
+|--------|--------|
+| Left / Right | Previous / next game |
+| L1 / R1 | First / last game |
+| A | Carry on from the auto save |
+| X | Take it off the recent games (its saves stay) |
+| B | Back |
+
 ### Home layouts
 
-**Settings → Display & theme → Home layout** picks one of four layouts:
-**Standard** (your config's dashboard, the layout described above), the **Hero
-grid** (the same cards as equal tiles), the **Carousel** and **Widgets**.
+**Settings → Theme & look → Home layout** picks one of five layouts:
+**Tabs** (sections on separate pages), **Standard** (your config's dashboard,
+the layout described above), the **Hero grid** (the same cards as equal tiles),
+the **Carousel** and **Widgets**.
 Standard and the Hero grid are fixed. The Carousel and Widgets show your own
 list of tiles, which you arrange on the device; how it is stored is in
 [CONFIGURATION.md](CONFIGURATION.md#home-tiles-hometiles).
@@ -672,6 +694,17 @@ screen off; JukaHub carries on where it was when it wakes. Settings → Power �
 default; never while charging, while a game, music, a video, a download or
 Screen Share runs, or while an alarm is set).
 
+A handheld left asleep for long powers itself off safely: after Settings →
+Power & battery → **Power off after sleeping** (6 h by default, 1 h on a
+kernel that only light-sleeps) it wakes with the screen off, saves the
+RetroArch game it was holding (save state, then quit; only RetroArch's exit
+counts as proof) and switches off. On a charger, or with a game it cannot save
+that way, it sleeps on instead. At the next power-on **Resume game at power
+on** skips the boot animation and starts that game where it was; hold **B** to
+skip. While music plays (and no game runs), the power button only turns the
+screen off and the music keeps playing (**Power button while music plays**:
+Screen off or Sleep); see [MUSIC_PLAYER.md](MUSIC_PLAYER.md#screen-off).
+
 When a game closes within seconds of starting, a card says what is missing and where to copy it; **Up/Down** scroll a long card and any other button dismisses it. The game options sheet has **Check why it won't start** to run the same check before playing.
 
 #### Edit Home
@@ -683,7 +716,7 @@ There are six ways in:
 - the **Edit** pill beside the power pill in Home's footer;
 - a right-click on a tile, which starts editing on that tile;
 - **Start → Device → Edit Home**;
-- **Settings → Display & theme → Edit Home**.
+- **Settings → Theme & look → Edit Home**.
 
 The last two work from any screen: they open Home first. On Standard or the
 Hero grid every way in switches to Widgets (a message says so), and leaving
@@ -842,12 +875,12 @@ first result, so a search keeps going instead of stopping after the first batch.
 
 ### Theme gallery
 
-The gallery of theme presets (Settings → Display & theme → Theme presets) has
-four tabs: **Colour**, **Total conversion**, **Consoles** and **Experience**. A
-colour preset repaints the interface; a conversion repaints it *and* rearranges
-the home screen, which is why they are not one list. Consoles holds the
-console-inspired conversions (PS1 to PS5, Super Nintendo to Switch, Mega Drive,
-Dreamcast, Xbox…). Experience opens the Experience packs screen, which shows the
+The gallery of theme presets (Settings → Theme & look → Theme presets) has
+three tabs: **Colour**, **Styles** and **Experience**. A colour preset repaints
+the interface without changing your Home layout. Styles holds distinctive
+looks that also change the Home arrangement (PS1 to PS5, Super Nintendo to
+Switch, Mega Drive, Dreamcast, Xbox and Minimal UI). Experience opens the
+Experience packs screen, which shows the
 same tabs; there L1 / R1 switch tabs too and the D-pad moves between packs, and
 B leaves to wherever the presets were opened from.
 
@@ -1160,6 +1193,11 @@ it was, and after that **A** goes on (so does **Right**: the name is optional).
 It is the same name as **Settings → General → Your name**: Home's greeting, the
 chat and the startup and shutdown animations use it.
 
+The tour then offers a colour palette and asks you to choose a **Home layout**.
+All five layouts have small previews: Tabs, Standard, Hero grid, Carousel and
+Widgets. Use **Up/Down** to highlight one and **A/Enter** to apply it. The
+choice is saved, and Settings → Theme & look → Home layout can change it later.
+
 Its **Get set up** page is a live checklist: Wi-Fi, RetroAchievements, the media
 tools YouTube and IPTV use, Remote Play and the phone companion. Each row shows
 whether it is already done and what is still missing; **Up**/**Down** chooses a
@@ -1418,7 +1456,8 @@ Tapping a row activates it; tapping outside closes the panel.
 ## RomM server
 
 Open **Tools → RomM server**. Under **Connection**, enter your server address
-and Client API Token, then choose **Connect and load games**. The **Games** tab
+and Client API Token (or choose **From your phone** and type both on the Phone
+Companion's **RomM server** card), then choose **Connect and load games**. The **Games** tab
 downloads a single-file game and cover; an installed game also offers **Sync
 saves**. The **BIOS files** tab downloads firmware to the card. See
 [ROMM_SERVER.md](ROMM_SERVER.md) for save conflict handling and multi-file games.
@@ -1591,12 +1630,16 @@ already configured on the card.
 JukaHub reads the username from Spruce or RetroArch and the Web API key from
 `Saves/cheevos/apikey.txt` (or Spruce's saved `webApiKey`). It never edits those
 files. If nothing is configured, use **X** → **A** to enter a username and a
-32-character key from `retroachievements.org/settings → Keys`.
+32-character key from `retroachievements.org/settings → Keys`, or pick **From
+your phone**: its code opens the Phone Companion's **RetroAchievements** card,
+where you type the username and paste the key on the phone. The handheld checks
+them with RetroAchievements before saving, and the code closes when they arrive.
+The card is on the companion page all the time too.
 
 | Button | Action |
 |--------|--------|
 | D-pad Up / Down | Move through recent unlocks |
-| A | Edit the selected account field (setup screen) |
+| A | Edit the selected account field, or show the phone code (setup screen) |
 | X or Start | Account settings |
 | Y | Refresh from RetroAchievements |
 | B | Back / close |
@@ -2091,8 +2134,8 @@ See [VOICE.md](VOICE.md#the-voice-orb).
 | Any other button | Puts a finished answer away and does its own job |
 
 A press of Menu that another button joins is a chord, not a voice press: the
-firmware's **Menu + volume** (brightness) never opens the orb, and **Menu +
-Start** still quits like **Select + Start**. With the on-screen keyboard up,
+**Menu + volume** does not open the orb, and **Menu + Start** still quits like
+**Select + Start**. With the on-screen keyboard up,
 **Menu** (or **F4**) is voice typing into the field instead, and on the Voice
 command page it is that page's own microphone. Over a modal panel, the
 first-run tour, the dock, the arcade, JukaLand, a browser game or a running
@@ -2309,17 +2352,42 @@ Left / Right and previews each one as it lands.
 
 ## Terminal
 
-The built-in shell, useful for diagnostics over the on-screen keyboard.
+The built-in shell, useful for diagnostics. Most commands need no typing:
+see [TERMINAL.md](TERMINAL.md) for the Command Deck, Favorites, macros and the
+keyboard's token chips.
 
-| Input | Action |
-|-------|--------|
-| Typed command | Runs it (saved to the history file, so it survives a restart) |
-| Tab | Complete the command or path; on an empty line, open the on-screen keyboard |
-| Up / Down | Command history |
-| PgUp / PgDn | Scroll the output |
-| Ctrl+L | Clear the output |
-| Esc | Back |
-| `help` | Built-in command list |
+| Pad | Keyboard | Action |
+|-----|----------|--------|
+| A | Typing | Open the on-screen keyboard / type a command |
+| Start | Enter | Run the line (saved to the history file, so it survives a restart) |
+| Select | Ctrl+P | Command Deck: ready-made commands by category, filled in with pickers |
+| Y | Ctrl+R / F7 | Command history (in it: A insert, Start run, Y pin to Favorites, X delete; keyboard Enter, Ctrl+Enter, Ctrl+S, Del) |
+| X | Ctrl+U / Ctrl+C | Clear the line / stop a running command |
+| — | Tab | Complete the command or path; on an empty line, open the on-screen keyboard |
+| D-pad Up / Down | Ctrl+Up / Ctrl+Down | Scroll the output (Up / Down alone recall history on a keyboard) |
+| L1 / R1 | PgUp / PgDn | Page the output |
+| — | Ctrl+L | Clear the output |
+| B | Esc | Back |
+| — | `help` | Built-in command list |
+
+With the on-screen keyboard open, the strip above the keys offers command
+tokens (flags, paths, history); **Select** takes the first one.
+
+**Command Deck** (Select / Ctrl+P, or *Commands* in Tools, the Start menu and
+Home search):
+
+| Pad | Keyboard | In the list | In a form |
+|-----|----------|-------------|-----------|
+| Up / Down | Up / Down | Choose | Choose a blank |
+| Left / Right, L1 / R1 | Left / Right, Tab, PgUp / PgDn | Category | Change the value (L1/R1, PgUp/PgDn: ±10) |
+| A | Enter | Open or run | Pick a value |
+| Start | Ctrl+Enter | Run now | Run |
+| Y | Ctrl+E | Edit in the prompt | Edit in the prompt |
+| X | Ctrl+S | Save to Favorites (in Favorites: remove; also Delete) | Save to Favorites |
+| B / Select | Esc / Ctrl+P | Close | Back |
+
+In a folder picker the first row (or Y / Ctrl+Enter) uses the folder on
+screen and Left goes up. Deleting a file and stopping a process ask first.
 
 ## JukaLand
 

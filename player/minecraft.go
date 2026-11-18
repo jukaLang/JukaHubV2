@@ -437,6 +437,16 @@ type mcCatalogEntry struct {
 	Requirements []string
 	MinGlibc     string
 	Items        []string // launcher scripts installed by the port
+	// The Ports Store's fields (ports_store.go).
+	Genres      []string // attr.genres, lower case
+	RTR         bool     // attr.rtr: "Ready to Run", no game files needed
+	Porters     []string // attr.porter
+	Image       string   // the screenshot's file name in the port's folder ("" unknown)
+	DateAdded   string   // "2021-09-10"
+	DateUpdated string
+	// Stores are attr.store's shop links for the game a port needs: Steam's
+	// name the app id (steam_ports.go matches a Steam library with them).
+	Stores []string
 }
 
 // mcParsePortsCatalog reads PortMaster's ports.json. Its layout has changed
@@ -543,6 +553,15 @@ func mcCatalogFromObject(m map[string]interface{}, key string) (mcCatalogEntry, 
 				}
 			}
 		}
+		for _, g := range portJSONStrings(attr["genres"]) {
+			e.Genres = append(e.Genres, strings.ToLower(g))
+		}
+		e.Porters = portJSONStrings(attr["porter"])
+		e.RTR, _ = attr["rtr"].(bool)
+		e.Image = portStoreImageName(attr["image"])
+		e.DateAdded = mcJSONString(attr, "date_added")
+		e.DateUpdated = mcJSONString(attr, "date_updated")
+		e.Stores = steamPortStoreLinks(attr["store"])
 	}
 	if e.Title == "" {
 		e.Title = mcJSONString(m, "title")
@@ -559,6 +578,12 @@ func mcCatalogFromObject(m map[string]interface{}, key string) (mcCatalogEntry, 
 		}
 		if e.Size == 0 {
 			e.Size = mcJSONInt(src, "download_size", "size")
+		}
+		if e.DateAdded == "" {
+			e.DateAdded = mcJSONString(src, "date_added")
+		}
+		if e.DateUpdated == "" {
+			e.DateUpdated = mcJSONString(src, "date_updated")
 		}
 	}
 	if e.URL == "" {
@@ -947,10 +972,10 @@ func mcPlayPort(kind mcPortKind, st mcPortState) {
 	if !st.Installed || st.Launch == "" {
 		return
 	}
-	if st.Compat.State == portCompat32BitOnly && !portCompatIgnored(appConfig) {
+	if portCompatBlocked(st.Compat.State) && !portCompatIgnored(appConfig) {
 		note := st.Compat.Note
 		if note == "" {
-			note = "32-bit build only"
+			note = portCompatBadge(st.Compat.State)
 		}
 		ShowToast(st.Name+" cannot run here: "+note, ToastKindWarning)
 		return

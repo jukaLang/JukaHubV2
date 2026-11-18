@@ -45,6 +45,16 @@ const (
 	brwWpeReleaseFile = ".jukahub-release"
 	brwWpeStatusTTL   = 5 * time.Second
 	brwWpeMaxURL      = 4096
+	// brwWpeURLEnv carries the address from brwWpeLaunch to the constant
+	// brwWpeLaunchScript, which hands it to launch.sh as $1.
+	brwWpeURLEnv = "JUKAHUB_WPE_URL"
+	// $1 is launch.sh's absolute path (JukaHub's own, so launch.sh's $0 stays
+	// what it was); the address comes from the variable. Both are quoted, so
+	// the shell never splits or expands them; the variable is unset before
+	// launch.sh runs; exec keeps one process (the group leader
+	// screenChildGroupConfigure made).
+	brwWpeLaunchScript = `l="$1"; u="$` + brwWpeURLEnv + `"; unset ` + brwWpeURLEnv + `; ` +
+		`if [ -n "$u" ]; then exec sh -- "$l" "$u"; fi; exec sh -- "$l"`
 )
 
 var brwWpeURLRE = regexp.MustCompile(`^https?://[^\x00-\x20\x7f]+$`)
@@ -371,19 +381,24 @@ func brwWpeLaunch(config *Config, address string) bool {
 	if target != "" && !brwWpeURLRE.MatchString(target) {
 		return false
 	}
-	args := []string{"--", filepath.Join(s.Dir, brwWpeLaunchFile)}
-	if target != "" {
-		args = append(args, target)
-	}
-	// sh reads the launch script; -- ends options and the address is an
-	// operand after it, never code.
-	cmd := exec.Command("sh", args...)
+	// The shell program is a constant: the address never reaches sh's
+	// argument list (where a static analyser must assume it is code). It
+	// travels in the environment, is copied into a local and unset, and
+	// reaches launch.sh as one quoted word, $1, exactly as before. With no
+	// address, launch.sh gets no argument and opens its start page. The
+	// script's path is the one argument ("sh" fills $0): spatial audio's
+	// 32-bit probe (spatialLaunchLooks32) reads it from cmd.Args.
+	cmd := exec.Command("sh", "-c", brwWpeLaunchScript, "sh", filepath.Join(s.Dir, brwWpeLaunchFile))
 	cmd.Dir = s.Dir
 	// Own process group, the emulators' rule: launch.sh may start WebKit's
 	// processes and return, and the screen stays parked until all are gone.
 	// With cmd.Env left nil it also gives WPE the environment the firmware's
 	// menu would have (childenv.go), not JukaHub's library path.
 	screenChildGroupConfigure(cmd)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(childEnvWithout(cmd.Env, brwWpeURLEnv), brwWpeURLEnv+"="+target)
 
 	brwWpeGate.Lock()
 	if brwWpeSwapping.Load() {

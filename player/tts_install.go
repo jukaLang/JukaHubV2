@@ -3,8 +3,9 @@ package main
 // The Smart Pro's offline voice: downloaded once by itself after the startup
 // tools (ffmpeg) and offline speech (stt_install.go) are in place, or from
 // Settings → Voice & AI. Piper's archive and the voice model are pinned by
-// size and SHA-256. The voice's small settings file
-// (en_US-kristin-medium.onnx.json) is not: it is plain data that only tells
+// size and SHA-256 (the voice's through its Git LFS pointer at a pinned
+// commit, ttsVoiceLatestSpec). The voice's small settings file
+// (en_US-lessac-low.onnx.json) is not: it is plain data that only tells
 // Piper the sample rate and phoneme table, so it is checked for exactly that
 // shape instead (a pinned digest of it broke the install on 2026-11-12). The archive is unpacked into a private staging directory; only
 // Piper's English speech dependencies are copied, and the ready directory
@@ -27,6 +28,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,21 +36,45 @@ import (
 )
 
 const (
-	ttsManagedDirName           = "juka-piper"
-	ttsManagedMarker            = ".jukahub-voice"
-	ttsPiperArchiveURL          = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz"
-	ttsPiperArchiveSHA          = "fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb"
-	ttsPiperArchiveSize   int64 = 26004717
-	ttsVoiceModelName           = "en_US-kristin-medium.onnx"
-	ttsVoiceModelURL            = "https://huggingface.co/rhasspy/piper-voices/resolve/2f358b6a560e3a913ebf509b2f3344f20b367f94/en/en_US/kristin/medium/en_US-kristin-medium.onnx"
-	ttsVoiceModelSHA            = "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4"
-	ttsVoiceModelSize     int64 = 63531379
-	ttsVoiceConfigURL           = "https://huggingface.co/rhasspy/piper-voices/resolve/2f358b6a560e3a913ebf509b2f3344f20b367f94/en/en_US/kristin/medium/en_US-kristin-medium.onnx.json"
-	ttsVoiceConfigMax     int64 = 256 << 10 // the real file is about 5 KB
-	ttsVoiceDownloadSpace int64 = 160 << 20 // cache, unpacked engine, model, and a margin
+	ttsManagedDirName         = "juka-piper"
+	ttsManagedMarker          = ".jukahub-voice"
+	ttsPiperArchiveURL        = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_linux_aarch64.tar.gz"
+	ttsPiperArchiveSHA        = "fea0fd2d87c54dbc7078d0f878289f404bd4d6eea6e7444a77835d1537ab88eb"
+	ttsPiperArchiveSize int64 = 26004717
+	// The voice: Piper's Lessac at "low" quality. It is the same size of
+	// network as the "medium" voices but speaks at 16 kHz instead of 22 kHz,
+	// so a second of speech is about a quarter less work — on the A53 that is
+	// the difference between Piper falling behind its own speech and keeping
+	// ahead of it. Its digest and size are read from the Git LFS pointer of the
+	// pinned piper-voices commit (ttsVoiceLatestSpec): that commit fixes the
+	// pointer, and the pointer fixes the file's SHA-256.
+	ttsVoiceRepo             = "https://huggingface.co/rhasspy/piper-voices/"
+	ttsVoiceRev              = "2f358b6a560e3a913ebf509b2f3344f20b367f94"
+	ttsVoiceModelName        = "en_US-lessac-low.onnx"
+	ttsVoiceModelPath        = "en/en_US/lessac/low/" + ttsVoiceModelName
+	ttsVoiceModelURL         = ttsVoiceRepo + "resolve/" + ttsVoiceRev + "/" + ttsVoiceModelPath
+	ttsVoicePointerURL       = ttsVoiceRepo + "raw/" + ttsVoiceRev + "/" + ttsVoiceModelPath
+	ttsVoiceConfigURL        = ttsVoiceModelURL + ".json"
+	ttsVoiceModelMin   int64 = 4 << 20
+	ttsVoiceModelMax   int64 = 120 << 20
+	// The earlier voice, Kristin at "medium" quality (22 kHz, pinned here).
+	// A handheld that has it keeps speaking with it until Lessac is in
+	// (ttsRunVoiceUpgrade), and a first install whose Lessac pointer cannot
+	// be read gets it instead.
+	ttsVoiceLegacyModelName       = "en_US-kristin-medium.onnx"
+	ttsVoiceLegacyModelURL        = ttsVoiceRepo + "resolve/" + ttsVoiceRev + "/en/en_US/kristin/medium/" + ttsVoiceLegacyModelName
+	ttsVoiceLegacyModelSHA        = "5849957f929cbf720c258f8458692d6103fff2f0e3d3b19c8259474bb06a18d4"
+	ttsVoiceLegacyModelSize int64 = 63531379
+	ttsVoiceConfigMax       int64 = 256 << 10 // the real file is about 5 KB
+	ttsVoiceDownloadSpace   int64 = 160 << 20 // cache, unpacked engine, model, and a margin
+	ttsVoiceUpgradeSpace    int64 = 16 << 20  // beside the new model: its settings and a margin
 	// ttsVoiceUnsupportedMark, beside the voice folder, records that Piper
 	// cannot load on this firmware, so startup stops downloading it again.
 	ttsVoiceUnsupportedMark = ".juka-piper-unsupported"
+	// ttsVoiceUpgradeFailMark, beside it, holds the JukaHub version whose
+	// automatic update to Lessac failed for a reason a retry would not fix:
+	// that version does not try again at every start (Settings still does).
+	ttsVoiceUpgradeFailMark = ".juka-piper-upgrade-failed"
 )
 
 var ttsVoiceInstall struct {
@@ -81,37 +107,146 @@ func ttsManagedPath() string {
 }
 
 func ttsManagedVoice() (ttsLocalVoice, bool) {
+	v, _, ok := ttsManagedVoiceState()
+	return v, ok
+}
+
+// ttsManagedVoiceState is the installed voice, and whether it is the older,
+// slower Kristin (legacy: the faster Lessac is due, ttsRunVoiceUpgrade).
+// Lessac wins when both are there.
+func ttsManagedVoiceState() (v ttsLocalVoice, legacy, ok bool) {
 	dir := ttsManagedPath()
-	for _, name := range []string{"piper", "libespeak-ng.so.1", "libpiper_phonemize.so.1", "libonnxruntime.so.1.14.1", ttsVoiceModelName, ttsVoiceModelName + ".json", ttsManagedMarker} {
-		info, err := os.Stat(filepath.Join(dir, name))
-		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
-			return ttsLocalVoice{}, false
+	if !ttsManagedEngineIn(dir) {
+		return ttsLocalVoice{}, false, false
+	}
+	for _, m := range []struct {
+		file, name string
+		legacy     bool
+	}{{ttsVoiceModelName, "Piper · Lessac", false}, {ttsVoiceLegacyModelName, "Piper · Kristin", true}} {
+		if ttsNonEmptyFile(filepath.Join(dir, m.file)) && ttsNonEmptyFile(filepath.Join(dir, m.file+".json")) {
+			return ttsLocalVoice{name: m.name, path: filepath.Join(dir, "piper"), kind: "piper", model: filepath.Join(dir, m.file)}, m.legacy, true
 		}
 	}
-	if info, err := os.Stat(filepath.Join(dir, "espeak-ng-data")); err != nil || !info.IsDir() {
-		return ttsLocalVoice{}, false
+	return ttsLocalVoice{}, false, false
+}
+
+// ttsManagedEngineIn reports whether dir holds a JukaHub-managed Piper
+// (program, libraries, espeak data and the marker), with or without a voice.
+func ttsManagedEngineIn(dir string) bool {
+	for _, name := range []string{"piper", "libespeak-ng.so.1", "libpiper_phonemize.so.1", "libonnxruntime.so.1.14.1", ttsManagedMarker} {
+		if !ttsNonEmptyFile(filepath.Join(dir, name)) {
+			return false
+		}
 	}
-	return ttsLocalVoice{name: "Piper · Kristin", path: filepath.Join(dir, "piper"), kind: "piper", model: filepath.Join(dir, ttsVoiceModelName)}, true
+	info, err := os.Stat(filepath.Join(dir, "espeak-ng-data"))
+	return err == nil && info.IsDir()
+}
+
+func ttsNonEmptyFile(name string) bool {
+	info, err := os.Stat(name)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+}
+
+// ttsVoiceSpec is one voice model to download: its file name, where it and
+// its settings come from, and its pinned digest and size.
+type ttsVoiceSpec struct {
+	file, modelURL, configURL, sha string
+	size                           int64
+}
+
+func ttsVoiceLegacySpec() ttsVoiceSpec {
+	return ttsVoiceSpec{file: ttsVoiceLegacyModelName, modelURL: ttsVoiceLegacyModelURL,
+		configURL: ttsVoiceLegacyModelURL + ".json", sha: ttsVoiceLegacyModelSHA, size: ttsVoiceLegacyModelSize}
+}
+
+// errTTSVoicePointer is a Lessac pointer that could be fetched but not used.
+var errTTSVoicePointer = errors.New("the voice's file pointer is not usable")
+
+// ttsVoiceLatestSpec reads Lessac's digest and size from its Git LFS pointer
+// at the pinned commit (ttsVoicePointerURL).
+func ttsVoiceLatestSpec(ctx context.Context, client *http.Client) (ttsVoiceSpec, error) {
+	ctx, cancel := context.WithTimeout(ctx, ttsVoiceStallMax)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ttsVoicePointerURL, nil)
+	if err != nil {
+		return ttsVoiceSpec{}, err
+	}
+	req.Header.Set("User-Agent", "JukaHub-Voice/"+versionString(nil))
+	resp, err := client.Do(req)
+	if err != nil {
+		return ttsVoiceSpec{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ttsVoiceSpec{}, fmt.Errorf("voice pointer: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+	if err != nil {
+		return ttsVoiceSpec{}, err
+	}
+	sha, size, ok := ttsParseLFSPointer(data)
+	if !ok || size < ttsVoiceModelMin || size > ttsVoiceModelMax {
+		return ttsVoiceSpec{}, errTTSVoicePointer
+	}
+	logInfo("tts", "voice %s: sha256 %s, %d bytes (from the pinned pointer)", ttsVoiceModelName, sha, size)
+	return ttsVoiceSpec{file: ttsVoiceModelName, modelURL: ttsVoiceModelURL, configURL: ttsVoiceConfigURL, sha: sha, size: size}, nil
+}
+
+// ttsParseLFSPointer reads a Git LFS pointer file: its SHA-256 (64 lowercase
+// hex digits) and size. Pure.
+func ttsParseLFSPointer(data []byte) (sha string, size int64, ok bool) {
+	text := string(data)
+	if !strings.HasPrefix(text, "version https://git-lfs.github.com/spec/") {
+		return "", 0, false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "oid sha256:"):
+			sha = strings.TrimPrefix(line, "oid sha256:")
+		case strings.HasPrefix(line, "size "):
+			n, err := strconv.ParseInt(strings.TrimPrefix(line, "size "), 10, 64)
+			if err != nil {
+				return "", 0, false
+			}
+			size = n
+		}
+	}
+	if len(sha) != 64 || size <= 0 {
+		return "", 0, false
+	}
+	for _, r := range sha {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return "", 0, false
+		}
+	}
+	return sha, size, true
 }
 
 func ttsOfflineVoiceValue(*Config) string {
-	if _, ok := ttsManagedVoice(); ok {
-		return "Ready"
-	}
 	ttsVoiceInstall.Lock()
 	running := ttsVoiceInstall.running
 	ttsVoiceInstall.Unlock()
-	if running {
+	_, legacy, ok := ttsManagedVoiceState()
+	switch {
+	case ok && !(legacy && running):
+		return "Ready"
+	case running && legacy:
+		return "Updating…"
+	case running:
 		return "Installing…"
 	}
 	return "Download"
 }
 
 func ttsOfflineVoiceDetail(*Config) string {
-	if _, ok := ttsManagedVoice(); ok {
-		return "Piper's Kristin voice is on the card · works offline with no daily limit"
+	if _, legacy, ok := ttsManagedVoiceState(); ok {
+		if legacy {
+			return "Piper's Kristin voice is on the card · A gets the faster Lessac voice (about 60 MB)"
+		}
+		return "Piper's Lessac voice is on the card · quick on the handheld, works offline with no daily limit"
 	}
-	return "Downloads Piper and Kristin (~90 MB); uses about 105 MB on the card"
+	return "Downloads Piper and its Lessac voice (~90 MB); uses about 105 MB on the card"
 }
 
 // ttsVoiceInstalling reports whether the voice is downloading now.
@@ -137,7 +272,8 @@ func ttsAutoInstallOfflineVoice() {
 	if !ttsOfflineVoiceSupported() || ttsVoiceAutoHard.Load() || !ttsAutoOnline() {
 		return
 	}
-	if _, ok := ttsManagedVoice(); ok {
+	// Kristin on the card is updated to the faster Lessac the same way.
+	if _, legacy, ok := ttsManagedVoiceState(); ok && (!legacy || ttsVoiceUpgradeFailed()) {
 		return
 	}
 	if req := P().RequiredDir(); req != "" {
@@ -150,6 +286,45 @@ func ttsAutoInstallOfflineVoice() {
 	}
 	go ttsAutoVoiceWait()
 }
+
+// ttsVoiceUpgradeFailed reports whether this JukaHub version already failed
+// to update Kristin to Lessac by itself (ttsVoiceUpgradeFailMark).
+func ttsVoiceUpgradeFailed() bool {
+	req := P().RequiredDir()
+	if req == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(req, ttsVoiceUpgradeFailMark))
+	return err == nil && strings.TrimSpace(string(data)) == versionString(nil)
+}
+
+// ttsRemoveNaturalVoice deletes what the optional natural voice (Phonon,
+// 2026-11-16, removed 2026-11-17: on the TrimUI only the lightest, fastest
+// voice is wanted) left in required/: its folder (about 70 MB) and its marks.
+// Once per run, on the tools goroutine; nothing there when it never came.
+func ttsRemoveNaturalVoice() {
+	if !ttsOfflineVoiceSupported() {
+		return
+	}
+	req := P().RequiredDir()
+	if req == "" || !ttsNaturalVoiceSwept.CompareAndSwap(false, true) {
+		return
+	}
+	for _, name := range []string{"juka-voice", "juka-voice" + relPackOldSuffix, "juka-voice" + relPackWorkSuffix, "juka-voice" + relPackStageSuffix,
+		".juka-voice-off", ".juka-voice-unsupported", ".juka-voice-speed"} {
+		p := filepath.Join(req, name)
+		if _, err := os.Lstat(p); err != nil {
+			continue
+		}
+		if err := os.RemoveAll(p); err != nil {
+			logWarn("tts", "could not remove the old natural voice's %s: %v", name, err)
+			continue
+		}
+		logInfo("tts", "removed the old natural voice's %s", name)
+	}
+}
+
+var ttsNaturalVoiceSwept atomic.Bool
 
 // ttsAutoOnline is IsOnline with an address, as the boot tools check asks: a
 // network monitor that has not probed yet reports online.
@@ -214,13 +389,21 @@ func ttsStartVoiceInstall(auto bool) bool {
 	if !ttsOfflineVoiceSupported() {
 		return true
 	}
-	if _, ok := ttsManagedVoice(); ok {
+	_, upgrade, installed := ttsManagedVoiceState()
+	if installed && !upgrade {
 		if auto {
 			return true
 		}
 		ttsLocalRecheck()
 		ttsStore(appConfig, ttsVoiceKey, ttsVoiceDevice)
 		setToast("Offline voice selected — press Hear Juka to try it")
+		return true
+	}
+	if installed && !auto && (!IsOnline() || installBarActive()) {
+		// Kristin still speaks: select her now, the update comes later.
+		ttsLocalRecheck()
+		ttsStore(appConfig, ttsVoiceKey, ttsVoiceDevice)
+		setToast("Offline voice selected — the faster voice downloads when Wi-Fi is free")
 		return true
 	}
 	if !IsOnline() {
@@ -248,6 +431,7 @@ func ttsStartVoiceInstall(auto bool) bool {
 		ttsVoiceAutoHard.Store(false)
 		if req := P().RequiredDir(); req != "" {
 			_ = os.Remove(filepath.Join(req, ttsVoiceUnsupportedMark))
+			_ = os.Remove(filepath.Join(req, ttsVoiceUpgradeFailMark))
 		}
 	}
 	run, ctx := installBarBeginRun("offline voice")
@@ -280,6 +464,15 @@ func ttsStartVoiceInstall(auto bool) bool {
 				if auto && !ttsVoiceSoftFailure(err) {
 					ttsVoiceAutoHard.Store(true)
 				}
+				if auto && upgrade {
+					// Kristin still speaks: a failed update by itself is
+					// not worth a failure card (the log has it).
+					if !ttsVoiceSoftFailure(err) {
+						_ = os.WriteFile(filepath.Join(filepath.Dir(target), ttsVoiceUpgradeFailMark), []byte(versionString(nil)+"\n"), 0o644)
+					}
+					installBarAbortRun(run)
+					return
+				}
 				installBarFailRun(run, installCardDetail(err.Error()))
 			}
 			return
@@ -288,7 +481,11 @@ func ttsStartVoiceInstall(auto bool) bool {
 		installBarDoneRun(run)
 		tbxPost(func() {
 			if auto {
-				setToast("Offline voice ready — Juka can talk without Wi-Fi")
+				if upgrade {
+					setToast("Faster offline voice ready — Juka answers sooner")
+				} else {
+					setToast("Offline voice ready — Juka can talk without Wi-Fi")
+				}
 				return
 			}
 			if appConfig != nil {
@@ -312,6 +509,25 @@ func ttsRunVoiceInstall(ctx context.Context, target string, progress func(string
 	if err := os.MkdirAll(required, 0o755); err != nil {
 		return err
 	}
+	client := ttsVoiceClient()
+	upgrade := ttsManagedEngineIn(target)
+	spec, err := ttsVoiceLatestSpec(ctx, client)
+	switch {
+	case err == nil:
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case upgrade:
+		// Kristin keeps speaking.
+		return fmt.Errorf("faster voice: %w", err)
+	case ttsVoiceSoftFailure(err):
+		return err
+	default:
+		logWarn("tts", "the Lessac voice's pointer could not be used (%v); installing Kristin", err)
+		spec = ttsVoiceLegacySpec()
+	}
+	if upgrade {
+		return ttsRunVoiceUpgrade(ctx, client, target, spec, progress)
+	}
 	if err := pkgCheckFreeSpace(required, ttsVoiceDownloadSpace); err != nil {
 		return err
 	}
@@ -319,7 +535,6 @@ func ttsRunVoiceInstall(ctx context.Context, target string, progress func(string
 	if err := os.MkdirAll(cache, 0o700); err != nil {
 		return err
 	}
-	client := ttsVoiceClient()
 	archive := filepath.Join(cache, "piper_linux_aarch64.tar.gz")
 	progress(installPhaseDownload+" Piper", 0, ttsPiperArchiveSize)
 	if err := ttsFetchPinned(ctx, client, ttsPiperArchiveURL, archive, ttsPiperArchiveSHA, ttsPiperArchiveSize, func(n int64) {
@@ -343,34 +558,98 @@ func ttsRunVoiceInstall(ctx context.Context, target string, progress func(string
 	if problem := nativeLoadProblemWith(filepath.Join(engine, "piper"), []string{engine}); problem != "" {
 		return fmt.Errorf("%w: %s", errTTSVoiceUnsupported, problem)
 	}
-	model := filepath.Join(cache, ttsVoiceModelName)
-	progress(installPhaseDownload+" voice", 0, ttsVoiceModelSize)
-	if err := ttsFetchPinned(ctx, client, ttsVoiceModelURL, model, ttsVoiceModelSHA, ttsVoiceModelSize, func(n int64) {
-		progress(installPhaseDownload+" voice", n, ttsVoiceModelSize)
-	}); err != nil {
-		return fmt.Errorf("voice model download: %w", err)
-	}
-	config := filepath.Join(cache, ttsVoiceModelName+".json")
-	if err := ttsFetchVoiceConfig(ctx, client, ttsVoiceConfigURL, config); err != nil {
-		return fmt.Errorf("voice settings download: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
+	model, config, err := ttsFetchVoiceModel(ctx, client, cache, spec, progress)
+	if err != nil {
 		return err
 	}
 	progress(installPhaseVerify, 0, 0)
-	if err := os.Rename(model, filepath.Join(engine, ttsVoiceModelName)); err != nil {
+	if err := os.Rename(model, filepath.Join(engine, spec.file)); err != nil {
 		return err
 	}
-	if err := os.Rename(config, filepath.Join(engine, ttsVoiceModelName+".json")); err != nil {
+	if err := os.Rename(config, filepath.Join(engine, spec.file+".json")); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(engine, ttsManagedMarker), []byte("Piper 2023.11.14-2; en_US-kristin-medium\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(engine, ttsManagedMarker), []byte(ttsVoiceMarkerText(spec)), 0o644); err != nil {
 		return err
 	}
 	if err := ttsCommitVoiceInstall(engine, target); err != nil {
 		return err
 	}
 	_ = os.RemoveAll(cache)
+	return nil
+}
+
+func ttsVoiceMarkerText(spec ttsVoiceSpec) string {
+	return "Piper 2023.11.14-2; " + strings.TrimSuffix(spec.file, ".onnx") + "\n"
+}
+
+// ttsFetchVoiceModel downloads spec's model (pinned) and its settings file
+// into cache and returns their paths.
+func ttsFetchVoiceModel(ctx context.Context, client *http.Client, cache string, spec ttsVoiceSpec, progress func(string, int64, int64)) (model, config string, err error) {
+	model = filepath.Join(cache, spec.file)
+	progress(installPhaseDownload+" voice", 0, spec.size)
+	if err := ttsFetchPinned(ctx, client, spec.modelURL, model, spec.sha, spec.size, func(n int64) {
+		progress(installPhaseDownload+" voice", n, spec.size)
+	}); err != nil {
+		return "", "", fmt.Errorf("voice model download: %w", err)
+	}
+	config = filepath.Join(cache, spec.file+".json")
+	if err := ttsFetchVoiceConfig(ctx, client, spec.configURL, config); err != nil {
+		return "", "", fmt.Errorf("voice settings download: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", "", err
+	}
+	return model, config, nil
+}
+
+// ttsRunVoiceUpgrade puts the faster voice beside the Piper already in target
+// (Kristin there keeps speaking until then) and removes the older voice. The
+// settings file goes in first and the model last: the voice changes over with
+// that one rename (ttsManagedVoiceState). A warm Piper keeps its open model
+// until it stops; the next line starts one with the new voice (ttsPiperKey).
+func ttsRunVoiceUpgrade(ctx context.Context, client *http.Client, target string, spec ttsVoiceSpec, progress func(string, int64, int64)) error {
+	if spec.file != ttsVoiceModelName {
+		return errors.New("no faster voice to update to")
+	}
+	required := filepath.Dir(target)
+	if err := pkgCheckFreeSpace(required, spec.size+ttsVoiceUpgradeSpace); err != nil {
+		return err
+	}
+	cache := filepath.Join(required, ".juka-voice-download")
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		return err
+	}
+	model, config, err := ttsFetchVoiceModel(ctx, client, cache, spec, progress)
+	if err != nil {
+		return err
+	}
+	progress(installPhaseVerify, 0, 0)
+	// The installed Piper says a word with it before Kristin goes.
+	probe := ttsLocalVoice{path: filepath.Join(target, "piper"), kind: "piper", model: model}
+	if _, _, err := ttsLocalSynth(ctx, probe, "Ready.", ""); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		_ = os.Remove(model)
+		return fmt.Errorf("the faster voice did not speak: %w", err)
+	}
+	if err := os.Rename(config, filepath.Join(target, spec.file+".json")); err != nil {
+		return err
+	}
+	if err := os.Rename(model, filepath.Join(target, spec.file)); err != nil {
+		return err
+	}
+	// The marker only names the voice; a failed rewrite must not empty it
+	// (ttsManagedEngineIn needs it).
+	marker := filepath.Join(target, ttsManagedMarker)
+	if os.WriteFile(marker+".part", []byte(ttsVoiceMarkerText(spec)), 0o644) == nil {
+		_ = os.Rename(marker+".part", marker)
+	}
+	_ = os.Remove(filepath.Join(target, ttsVoiceLegacyModelName))
+	_ = os.Remove(filepath.Join(target, ttsVoiceLegacyModelName+".json"))
+	_ = os.RemoveAll(cache)
+	logInfo("tts", "offline voice updated to %s", spec.file)
 	return nil
 }
 

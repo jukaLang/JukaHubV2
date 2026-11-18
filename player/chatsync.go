@@ -495,6 +495,65 @@ func chatAIRetryDue(now time.Time) bool {
 	return !now.Before(chatAIRetryAt)
 }
 
+// chatAIRun is the Juka request being answered now (chatRunAI; chatAIBusy
+// keeps it to one), so a wake can call it off.
+var chatAIRun struct {
+	mu     sync.Mutex
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+}
+
+// errChatAIWake is the cause a wake gives the Juka request it calls off.
+var errChatAIWake = errors.New("the handheld slept while Juka was answering")
+
+// chatAIRunBegin gives a Juka request the context a wake cancels; the
+// returned func releases it.
+func chatAIRunBegin() (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	chatAIRun.mu.Lock()
+	chatAIRun.ctx, chatAIRun.cancel = ctx, cancel
+	chatAIRun.mu.Unlock()
+	return ctx, func() {
+		chatAIRun.mu.Lock()
+		if chatAIRun.ctx == ctx {
+			chatAIRun.ctx, chatAIRun.cancel = nil, nil
+		}
+		chatAIRun.mu.Unlock()
+		cancel(nil)
+	}
+}
+
+// chatAIRunContext is the context of the Juka request being answered now, or
+// the background one outside a request. The agent's run (aiAgentAnswer) takes
+// its deadline from it, and a picture or video question (visionChatAsk) ends
+// with it, so a wake reaches their Groq rounds, ffmpeg and transcripts too.
+func chatAIRunContext() context.Context {
+	chatAIRun.mu.Lock()
+	defer chatAIRun.mu.Unlock()
+	if chatAIRun.ctx == nil {
+		return context.Background()
+	}
+	return chatAIRun.ctx
+}
+
+// chatAICancelForWake calls off the Juka request in flight when the handheld
+// wakes (wake_resume.go). A request that went out before the sleep died with
+// the radio, and kept its 90-second client timeout after the wake, holding the
+// queue all that time; chatRunAI now keeps the question queued and asks again
+// once the network answers. A run waiting for the user's OK on a change is
+// left alone: it waits for a person, not for the network.
+func chatAICancelForWake() {
+	if _, _, waiting := aiConfirmPending(); waiting {
+		return
+	}
+	chatAIRun.mu.Lock()
+	cancel := chatAIRun.cancel
+	chatAIRun.mu.Unlock()
+	if cancel != nil {
+		cancel(errChatAIWake)
+	}
+}
+
 // chatSyncAI starts an answer for the oldest queued question.
 func chatSyncAI(now time.Time) {
 	if chatAIBusy.Load() {
@@ -506,6 +565,13 @@ func chatSyncAI(now time.Time) {
 	}
 	creds := chatCredsNow()
 	if !creds.valid {
+		return
+	}
+	// No key, or a device question while offline: Juka looks with its
+	// read-only tools instead (aiagent.go, "lite" mode).
+	if len(prompt.Files) == 0 && aiLiteWanted(creds.groqKey, prompt.Text) {
+		chatAIBusy.Store(true)
+		go aiLiteRunChat(prompt)
 		return
 	}
 	if creds.groqKey == "" {
@@ -539,6 +605,14 @@ func chatAIHistoryBefore(promptID string) []ChatMessage {
 // chatRunAI asks Groq one question, streaming the answer into the typing
 // bubble, and files the answer under the question.
 func chatRunAI(key string, models []string, prompt ChatMessage) {
+	again := false
+	defer func() {
+		if again {
+			// After chatAIBusy is down (the defer below runs first), so the
+			// loop can take the question up again.
+			chatWakeSync()
+		}
+	}()
 	defer chatAIBusy.Store(false)
 	defer func() {
 		if r := recover(); r != nil {
@@ -546,6 +620,9 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 			logDebug("groq", "request recovered from: %v", r)
 		}
 	}()
+	// A wake calls the request off (chatAICancelForWake).
+	ctx, release := chatAIRunBegin()
+	defer release()
 	history := chatAIHistoryBefore(prompt.ID)
 	question := strings.TrimSpace(prompt.Text)
 	// A text file attached to the question (or, for a follow-up, earlier in
@@ -569,17 +646,40 @@ func chatRunAI(key string, models []string, prompt ChatMessage) {
 	chatStreamBegin(prompt.ID)
 	var reply string
 	var err error
+	// cutKeeps: this way returns what arrived of a cut stream as the answer,
+	// with no error (chatReadGroqStream).
+	cutKeeps := false
 	if media, earlier := visionChatMedia(prompt, history); len(media) > 0 {
 		// Pictures, videos and recordings are seen and heard (vision_chat.go).
+		// Its context ends with this run's too, and every answer it streams
+		// keeps a cut stream's start (groqVisionChat, chatGroqAskCtx).
+		cutKeeps = true
 		reply, err = visionChatAsk(key, models, prompt.ID, history, question, media, earlier)
+	} else if aiAgentWanted() {
+		// Juka with its device tools (aiagent.go): status lines in the
+		// typing bubble, a card in the chat before any change.
+		reply, err = aiAgentAnswer(key, models, prompt.ID, history, question)
 	} else {
+		cutKeeps = true
 		messages := buildGroqMessagesFrom(history, question)
-		reply, err = chatGroqAsk(key, models, messages, func(partial string) {
+		reply, err = chatGroqAskCtx(ctx, key, models, messages, func(partial string) {
 			chatStreamUpdate(prompt.ID, partial)
 		})
 	}
 	chatStreamEnd()
 	now := time.Now()
+	if context.Cause(ctx) == errChatAIWake && (err != nil || cutKeeps) {
+		// It went out before the handheld slept and died with the radio; what
+		// arrived of the answer is dropped. The question stays queued — no
+		// error under it, no back-off — and goes again once the network
+		// answers: chatSyncAI waits through the wake's reconnect window, and
+		// the probe that finds the internet wakes the loop (chatNetworkBack).
+		// A whole answer the agent's way brought back anyway is kept.
+		logInfo("groq", "the handheld slept during a Juka request: asking again once the network answers")
+		groqStatus = "Groq: waiting for the network"
+		again = true
+		return
+	}
 	if err != nil {
 		logWarn("groq", "request failed: %v", err)
 		if chatIsNetworkError(err) {
@@ -668,10 +768,16 @@ func chatStripThink(s string) string {
 // chatGroqAsk asks each candidate model until one answers, streaming the
 // answer through onDelta as it arrives.
 func chatGroqAsk(key string, models []string, messages []map[string]string, onDelta func(string)) (string, error) {
+	return chatGroqAskCtx(context.Background(), key, models, messages, onDelta)
+}
+
+// chatGroqAskCtx is chatGroqAsk that stops when ctx ends (a Juka chat request
+// a wake calls off: chatAICancelForWake).
+func chatGroqAskCtx(ctx context.Context, key string, models []string, messages []map[string]string, onDelta func(string)) (string, error) {
 	client := &http.Client{Timeout: 90 * time.Second}
 	var lastErr error
 	for _, model := range models {
-		reply, err := chatGroqStreamModel(client, key, model, messages, onDelta)
+		reply, err := chatGroqStreamModel(ctx, client, key, model, messages, onDelta)
 		if err == nil {
 			return reply, nil
 		}
@@ -690,7 +796,7 @@ func chatGroqAsk(key string, models []string, messages []map[string]string, onDe
 }
 
 // chatGroqStreamModel performs one streamed chat completion.
-func chatGroqStreamModel(client *http.Client, key, model string, messages []map[string]string, onDelta func(string)) (string, error) {
+func chatGroqStreamModel(ctx context.Context, client *http.Client, key, model string, messages []map[string]string, onDelta func(string)) (string, error) {
 	payload := map[string]interface{}{
 		"model":                 model,
 		"messages":              messages,
@@ -707,7 +813,7 @@ func chatGroqStreamModel(client *http.Client, key, model string, messages []map[
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequest(http.MethodPost, chatGroqEndpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatGroqEndpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

@@ -95,7 +95,8 @@ func wallpaperStartDirs(config *Config) []string {
 			dirs = append(dirs, phoneDrop)
 			phoneDrop = ""
 		}
-		dirs = append(dirs, "/mnt/SDCARD/Pictures", "/mnt/SDCARD/Screenshots")
+		// JukaHub's own screenshots, then RetroArch's on the card.
+		dirs = append(dirs, "/mnt/SDCARD/Pictures", screenshotAppDir(), "/mnt/SDCARD/Screenshots")
 	}
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -114,6 +115,9 @@ func wallpaperStartDirs(config *Config) []string {
 	}
 	if P().IsHandheld() {
 		dirs = append(dirs, "/mnt/SDCARD")
+	} else {
+		// Where a PC saves screenshots now (screenshot.go screenshotDir).
+		dirs = append(dirs, screenshotAppDir())
 	}
 	return append(dirs, ".")
 }

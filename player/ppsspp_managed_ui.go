@@ -67,7 +67,12 @@ func ppssppTileLine(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, platform
 			line += " · firmware PPSSPP kept"
 		}
 		if ppssppNewer(st.LatestVersion, b.Version) && st.Bad[st.LatestTag] == "" {
-			line += " · " + st.LatestVersion + " available"
+			if _, have := st.build(st.LatestTag); have {
+				// Installed and left (the card's "Go back"): not a download.
+				line += " · " + st.LatestVersion + " installed"
+			} else {
+				line += " · " + st.LatestVersion + " available"
+			}
 		}
 		return line
 	}
@@ -246,6 +251,18 @@ func openPPSSPPCard(e emuEntry) {
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, false) }})
 	}
 
+	if prev, ok := ppssppGoBackTarget(st); ok {
+		active, _ := st.build(st.Active)
+		title := "Go back to the previous build"
+		if prev.Tag == st.RolledBack {
+			// The build the user went back from: choosing it is going forward.
+			title = "Use " + prev.label() + " again"
+		}
+		options = append(options, recoveryOption{icon: "history", title: title,
+			detail: prev.label() + " (" + ppssppSourceName(prev.Tag) + ") · " + active.label() + " stays installed and is not switched back to by itself",
+			run:    func(*Config) { recoveryCardClose(); ppssppStartGoBack(prev.Tag) }})
+	}
+
 	switch {
 	case usingOurs:
 		title := "Use the firmware's PPSSPP"
@@ -262,6 +279,10 @@ func openPPSSPPCard(e emuEntry) {
 		options = append(options, recoveryOption{icon: "check", title: "Use JukaHub's " + newest.label() + " for PSP games",
 			detail: "Saves are shared · the firmware's PPSSPP takes over if it does not start",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartSwitch(true) }})
+	}
+
+	if installed {
+		options = append(options, ppssppRAOption(st))
 	}
 
 	if installed && !usingOurs {
@@ -343,9 +364,10 @@ func ppssppStartInstall(tile string, use bool) {
 
 		st = ppssppSnapshot()
 		// A check or an update switches by the automatic rule, and never to a
-		// build whose launcher already reported that it does not start; only
-		// the first install, asked for in so many words, switches regardless.
-		switchNow := use || (build.usable(st) && ppssppShouldSwitch(st, build, fw.Version, ppssppUserPinnedNow()))
+		// build whose launcher already reported that it does not start or that
+		// the user went back from; only the first install, asked for in so many
+		// words, switches regardless.
+		switchNow := use || (build.usable(st) && build.Tag != st.RolledBack && ppssppShouldSwitch(st, build, fw.Version, ppssppUserPinnedNow()))
 		if _, active := st.build(st.Active); active && st.Active == build.Tag {
 			switchNow = false
 		}
@@ -362,17 +384,21 @@ func ppssppStartInstall(tile string, use bool) {
 		}
 		PlaySuccessSound()
 		st = ppssppSnapshot()
+		kept := ppssppFirmwareLabel(fw)
+		if a, ok := st.build(st.Active); ok {
+			kept = a.label() // a JukaHub build the user went back to, say
+		}
 		switch {
 		case current && st.Active == build.Tag && !switchNow:
 			ShowToast(build.label()+" is the newest build, and PSP games use it", ToastKindSuccess)
 		case current && st.Active == build.Tag:
 			ShowToast(build.label()+" is the newest build · PSP games use it now", ToastKindSuccess)
 		case current:
-			ShowToast(build.label()+" is the newest build · PSP games keep "+ppssppFirmwareLabel(fw), ToastKindInfo)
+			ShowToast(build.label()+" is the newest build · PSP games keep "+kept, ToastKindInfo)
 		case st.Active == build.Tag:
 			ShowToast("PSP games now use "+build.label()+" · saves are shared with the firmware's PPSSPP", ToastKindSuccess)
 		default:
-			ShowToast(build.label()+" installed · PSP games keep "+ppssppFirmwareLabel(fw)+" until you switch", ToastKindSuccess)
+			ShowToast(build.label()+" installed · PSP games keep "+kept+" until you switch", ToastKindSuccess)
 		}
 	}()
 }
@@ -406,6 +432,27 @@ func ppssppStartSwitch(useJukaHub bool) {
 		invalidateEmulatorCache()
 		PlaySuccessSound()
 		ShowToast("PSP games use "+ppssppFirmwareLabel(fw)+" again · JukaHub's build stays installed", ToastKindSuccess)
+	}()
+}
+
+// ppssppStartGoBack is the card's "Go back to the previous build": a launcher
+// and the launcher file are rewritten, so it waits for any install to finish.
+func ppssppStartGoBack(tag string) {
+	if !tryBeginPatchOp() {
+		ShowToast("An update is running — try again when it finishes", ToastKindInfo)
+		return
+	}
+	go func() {
+		defer endPatchOp()
+		fw := ppssppDetectFirmwareNow()
+		from, to, err := ppssppGoBack(tag, fw)
+		if err != nil {
+			ShowToast("PPSSPP: "+err.Error(), ToastKindError)
+			return
+		}
+		invalidateEmulatorCache()
+		PlaySuccessSound()
+		ShowToast("PSP games use "+to.label()+" again · "+from.label()+" stays installed — choose it here to go forward", ToastKindSuccess)
 	}()
 }
 

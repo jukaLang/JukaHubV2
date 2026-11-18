@@ -65,6 +65,9 @@ func gameHistoryLoadLocked() {
 	if path == "" {
 		return
 	}
+	// A (re)load reads what the background writer last wrote (once per run,
+	// so this waits for nothing in practice).
+	gameHistoryWriter.pending.Wait()
 	var saved gameHistoryFile
 	if _, err := readJSONWithBackup(path, &saved); err != nil || saved.Version != gameHistoryVersion {
 		return
@@ -105,16 +108,59 @@ func gameHistoryLoadLocked() {
 	}
 }
 
+// gameHistoryWriter orders the file writes gameHistorySaveLocked hands to a
+// goroutine: the launch and the return from a game both run on the UI
+// thread, and the crash-safe write (fsyncs on the SD card) stalled it there.
+var gameHistoryWriter struct {
+	mu      sync.Mutex
+	seq     uint64 // last snapshot taken (under gameHistoryStore.mu)
+	written uint64 // newest snapshot on disk (under mu)
+	pending sync.WaitGroup
+}
+
 func gameHistorySaveLocked() {
 	path := gameHistoryPath()
 	if path == "" {
 		return
 	}
 	data, err := json.MarshalIndent(gameHistoryStore.data, "", "  ")
-	if err == nil {
-		if err = AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
+	if err != nil {
+		return
+	}
+	gameHistoryWriter.seq++
+	seq := gameHistoryWriter.seq
+	gameHistoryWriter.pending.Add(1)
+	go func() {
+		defer gameHistoryWriter.pending.Done()
+		gameHistoryWriter.mu.Lock()
+		defer gameHistoryWriter.mu.Unlock()
+		if seq <= gameHistoryWriter.written {
+			return // a newer snapshot is already on disk
+		}
+		gameHistoryWriter.written = seq
+		if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
 			logWarn("library", "cannot save game history: %v", err)
 		}
+	}()
+}
+
+// gameHistoryFlush waits, at most limit, for the background writes to land.
+// The exit calls it once the main loop has ended (no more saves are queued
+// after that), so the return from the last game is on the card before the
+// teardown syncs and the process exits. The store lock orders the Wait after
+// every Add (sync.WaitGroup's rule); the writers never take it.
+func gameHistoryFlush(limit time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		gameHistoryStore.mu.Lock()
+		gameHistoryWriter.pending.Wait()
+		gameHistoryStore.mu.Unlock()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		logWarn("library", "game history still being written at exit")
 	}
 }
 

@@ -36,6 +36,8 @@ package main
 //
 //   - a Bluetooth headset JukaHub routes to (audioroute.go): its BlueALSA PCM,
 //     the one audioRouteChildEnv would have given the child;
+//   - while JukaHub's music keeps playing under the game, "jhgameout", the mix
+//     it shares with the music (musicgame.go);
 //   - otherwise ALSA's "sysdefault" — the card's own default, which is what
 //     "default" is unless a system file redefines it. When one does (a
 //     firmware's asound.conf, a desktop's PulseAudio file), that definition
@@ -793,12 +795,18 @@ func spatialALSALaunchConf(mode, room int, strength float64) (string, error) {
 		// SDL programs (AUDIODEV) get the chain, which ends in it.
 		slave, takeDefault, how = "default", false, "the system default (defined in "+file+"; SDL programs only)"
 	}
+	// Music that keeps playing under the game (musicgame.go): the chain ends in
+	// the mix the music shares, whose definition goes on the path first.
+	musicFile := ""
+	if s, file, ok := musicGameSpatialSlave(); ok {
+		slave, takeDefault, how, musicFile = s, true, "the mix JukaHub's music shares", ":"+file
+	}
 	conf, err := spatialALSAWriteFiles(spatialALSAConfName, spatialALSADefaultName, dir, slave, takeDefault, mode, room, strength)
 	if err != nil {
 		return "", err
 	}
 	logInfo("spatial", "spatial audio for this program through ALSA, mode %d, to %s", mode, how)
-	return base + ":" + conf, nil
+	return base + musicFile + ":" + conf, nil
 }
 
 // ── 32-bit programs ───────────────────────────────────────────────────────
@@ -862,6 +870,15 @@ func spatialFileLooks32(path, dir string, depth int, seen map[string]bool) bool 
 		return false
 	}
 	seen[path] = true
+	// A path read out of a launch script is only followed when it is clean
+	// and absolute (safeAbsolutePath); the checks and opens below use what
+	// that returned.
+	// filepath.Clean first: "$EMU_DIR/../RetroArch/ra32" expands absolute
+	// with its ".." still in, and Clean folds that the way the open would.
+	path, err := safeAbsolutePath(filepath.Clean(path))
+	if err != nil || !filepath.IsAbs(path) {
+		return false
+	}
 	// Only regular files are opened: a script names /dev/watchdog, FIFOs and
 	// ttys too, and opening those has effects (or blocks).
 	for _, sys := range []string{"/dev/", "/proc/", "/sys/"} {

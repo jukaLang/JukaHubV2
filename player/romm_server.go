@@ -7,7 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,33 @@ type rommServerSettings struct {
 	URL      string `json:"url"`
 	Token    string `json:"token"`
 	DeviceID string `json:"device_id,omitempty"`
+	// AutoSync is "sync saves when a game starts and ends". nil = on: it
+	// takes effect once a server and a token are set.
+	AutoSync *bool `json:"auto_sync,omitempty"`
+}
+
+// autoSyncOn reports whether launch/exit save sync should run.
+func (s rommServerSettings) autoSyncOn() bool {
+	return strings.TrimSpace(s.URL) != "" && strings.TrimSpace(s.Token) != "" && (s.AutoSync == nil || *s.AutoSync)
+}
+
+// rommServerHTTPError is a non-2xx answer; callers branch on Status (404 =
+// the game or session is gone, 409 = the server has a newer save).
+type rommServerHTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e *rommServerHTTPError) Error() string {
+	return fmt.Sprintf("RomM returned %d: %s", e.Status, e.Body)
+}
+
+func rommServerStatus(err error) int {
+	var httpErr *rommServerHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Status
+	}
+	return 0
 }
 
 var rommServerStore struct {
@@ -142,7 +170,7 @@ func (c *rommServerClient) request(ctx context.Context, method, path string, que
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return nil, fmt.Errorf("RomM returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return nil, &rommServerHTTPError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 	}
 	return resp, nil
 }
@@ -181,6 +209,12 @@ type rommServerGame struct {
 	Missing          bool   `json:"missing_from_fs"`
 	Physical         bool   `json:"is_physical"`
 	Size             int64  `json:"fs_size_bytes"`
+	PlatformID       int    `json:"platform_id"`
+	// RomM hashes the game file (an archive by its contents); empty on
+	// servers that have not hashed it.
+	CRC  string `json:"crc_hash"`
+	MD5  string `json:"md5_hash"`
+	SHA1 string `json:"sha1_hash"`
 }
 
 func (g rommServerGame) title() string {
@@ -206,6 +240,33 @@ func (c *rommServerClient) games(ctx context.Context, offset int) (rommServerPag
 	var page rommServerPage
 	err := c.json(ctx, http.MethodGet, "roms", q, nil, &page)
 	return page, err
+}
+
+type rommServerPlatform struct {
+	ID          int    `json:"id"`
+	Slug        string `json:"slug"`
+	FSSlug      string `json:"fs_slug"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+func (c *rommServerClient) platforms(ctx context.Context) ([]rommServerPlatform, error) {
+	var rows []rommServerPlatform
+	err := c.json(ctx, http.MethodGet, "platforms", nil, nil, &rows)
+	return rows, err
+}
+
+// searchGames looks for term in one platform. platform_ids is RomM 4+,
+// platform_id is 3.x; each version ignores the other's parameter.
+func (c *rommServerClient) searchGames(ctx context.Context, platformID int, term string) ([]rommServerGame, error) {
+	q := url.Values{"search_term": {term}, "limit": {"25"}, "offset": {"0"}, "with_filter_values": {"false"}, "with_rom_id_index": {"false"}, "with_char_index": {"false"}}
+	if platformID > 0 {
+		q.Set("platform_ids", strconv.Itoa(platformID))
+		q.Set("platform_id", strconv.Itoa(platformID))
+	}
+	var page rommServerPage
+	err := c.json(ctx, http.MethodGet, "roms", q, nil, &page)
+	return page.Items, err
 }
 
 func (c *rommServerClient) firmware(ctx context.Context) ([]rommServerFirmware, error) {
@@ -234,14 +295,42 @@ func rommServerSystem(g rommServerGame) (rommSystem, bool) {
 	for _, key := range []string{g.PlatformFS, g.PlatformSlug} {
 		key = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "-", ""), "_", ""))
 		switch key {
-		case "genesis", "megadrive", "segagenesis", "segamegadrive":
+		case "genesis", "megadrive", "segagenesis", "segamegadrive", "genesisslashmegadrive":
 			return rommSystemByID("md")
 		case "psx", "playstation", "sonyplaystation":
 			return rommSystemByID("ps1")
-		case "supernintendo", "supernintendoentertainmentsystem":
+		case "supernintendo", "supernintendoentertainmentsystem", "sfam":
 			return rommSystemByID("snes")
-		case "nintendoentertainmentsystem":
+		case "nintendoentertainmentsystem", "famicom":
 			return rommSystemByID("nes")
+		case "gamegear", "segagamegear":
+			return rommSystemByID("gg")
+		case "mastersystem", "segamastersystem":
+			return rommSystemByID("sms")
+		case "ngc", "gamecube", "nintendogamecube":
+			return rommSystemByID("gc")
+		case "dreamcast", "segadreamcast":
+			return rommSystemByID("dc")
+		case "segasaturn":
+			return rommSystemByID("saturn")
+		case "tg16", "turbografx16", "pcengine", "turbografx161":
+			return rommSystemByID("pce")
+		case "neogeoaes", "neogeomvs":
+			return rommSystemByID("neogeo")
+		case "playstation2", "sonyplaystation2":
+			return rommSystemByID("ps2")
+		case "playstationportable", "sonyplaystationportable":
+			return rommSystemByID("psp")
+		case "nintendods":
+			return rommSystemByID("nds")
+		case "nintendo64":
+			return rommSystemByID("n64")
+		case "gameboy", "nintendogameboy":
+			return rommSystemByID("gb")
+		case "gameboycolor", "nintendogameboycolor":
+			return rommSystemByID("gbc")
+		case "gameboyadvance", "nintendogameboyadvance":
+			return rommSystemByID("gba")
 		}
 	}
 	switch strings.ToLower(g.PlatformSlug) {
@@ -520,16 +609,53 @@ type rommServerNegotiation struct {
 
 type rommServerSyncResult struct{ Uploaded, Downloaded, Conflicts, Skipped int }
 
+// rommServerSaveSlotOK accepts only the RetroArch save names JukaHub syncs:
+// <stem>.srm, <stem>.sav, <stem>.state, <stem>.stateN and <stem>.state.auto.
+// Backups (".romm-backup-…"), conflict copies and other games whose name
+// merely starts with the same stem ("Mario" vs "Mario.Bros") stay out.
+func rommServerSaveSlotOK(rest string) bool {
+	rest = strings.ToLower(rest)
+	switch rest {
+	case ".srm", ".sav", ".state", ".state.auto":
+		return true
+	}
+	digits := strings.TrimPrefix(rest, ".state")
+	if digits == rest || digits == "" || len(digits) > 3 {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func rommServerSaveName(romPath string, op rommServerSyncOp) string {
 	stem := strings.TrimSuffix(filepath.Base(romPath), filepath.Ext(romPath))
-	if strings.HasPrefix(op.Slot, ".") && rommServerSafeName(stem+op.Slot) != "" {
+	if strings.HasPrefix(op.Slot, ".") && rommServerSaveSlotOK(op.Slot) && rommServerSafeName(stem+op.Slot) != "" {
 		return stem + op.Slot
 	}
 	name := rommServerSafeName(op.FileName)
-	if strings.HasPrefix(name, stem+".") {
+	if strings.HasPrefix(name, stem+".") && rommServerSaveSlotOK(name[len(stem):]) {
 		return name
 	}
 	return ""
+}
+
+// rommServerFileMD5 is RomM's save content_hash: MD5 of the bytes, lowercase
+// hex (RomM hashes a zip save by its entries; RetroArch saves are not zips).
+func rommServerFileMD5(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	h := md5.New()
+	if _, err := io.Copy(h, io.LimitReader(file, 128<<20)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func rommServerSaveFiles(romID int, romPath, savesDir string) ([]rommServerLocalSave, error) {
@@ -546,8 +672,7 @@ func rommServerSaveFiles(romID int, romPath, savesDir string) ([]rommServerLocal
 		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasPrefix(entry.Name(), stem+".") || len(out) >= 16 {
 			continue
 		}
-		ext := strings.ToLower(filepath.Ext(entry.Name()))
-		if ext != ".srm" && ext != ".sav" && ext != ".state" && !strings.HasPrefix(ext, ".state") {
+		if !rommServerSaveSlotOK(entry.Name()[len(stem):]) {
 			continue
 		}
 		path := filepath.Join(savesDir, entry.Name())
@@ -555,21 +680,14 @@ func rommServerSaveFiles(romID int, romPath, savesDir string) ([]rommServerLocal
 		if err != nil || info.Size() > 128<<20 {
 			continue
 		}
-		file, err := os.Open(path)
+		sum, err := rommServerFileMD5(path)
 		if err != nil {
 			continue
 		}
-		h := sha256.New()
-		_, err = io.Copy(h, file)
-		file.Close()
-		if err != nil {
-			continue
-		}
-		out = append(out, rommServerLocalSave{RomID: romID, FileName: entry.Name(), Slot: strings.TrimPrefix(entry.Name(), stem), Emulator: "RetroArch", Hash: hex.EncodeToString(h.Sum(nil)), UpdatedAt: info.ModTime().UTC().Format(time.RFC3339Nano), Size: info.Size(), path: path})
+		out = append(out, rommServerLocalSave{RomID: romID, FileName: entry.Name(), Slot: strings.TrimPrefix(entry.Name(), stem), Emulator: "RetroArch", Hash: sum, UpdatedAt: info.ModTime().UTC().Format(time.RFC3339Nano), Size: info.Size(), path: path})
 	}
 	return out, nil
 }
-
 func (c *rommServerClient) registerDevice(ctx context.Context, settings *rommServerSettings) error {
 	if settings.DeviceID != "" {
 		return nil
@@ -584,8 +702,32 @@ func (c *rommServerClient) registerDevice(ctx context.Context, settings *rommSer
 		return errors.New("RomM did not return a device ID")
 	}
 	settings.DeviceID = response.DeviceID
-	return rommServerSettingsSave(*settings)
+	// Store the id into the current settings, not this request's copy: a
+	// launch or "Sync all" may register while the page changes the address,
+	// the token or the auto-sync switch.
+	cur := rommServerSettingsGet()
+	if rommAutoSyncServerKey(cur) != rommAutoSyncServerKey(*settings) || strings.TrimSpace(cur.Token) != strings.TrimSpace(settings.Token) {
+		return nil // the server changed meanwhile: this id belongs to the old one
+	}
+	cur.DeviceID = response.DeviceID
+	return rommServerSettingsSave(cur)
 }
+
+// rommSyncMode picks which of RomM's decisions a sync carries out.
+type rommSyncMode int
+
+const (
+	// rommSyncBoth is the manual sync: uploads and downloads, a conflict
+	// keeps both copies and changes nothing on the server.
+	rommSyncBoth rommSyncMode = iota
+	// rommSyncPull runs before a game starts: downloads only, so the launch
+	// waits on as little as possible. Uploads wait for the game to end.
+	rommSyncPull
+	// rommSyncPush runs after a game ends. Local is what was just played, so
+	// a conflict keeps the server's copy beside the save (and RomM keeps its
+	// own version history) and then uploads the local save over it.
+	rommSyncPush
+)
 
 // syncSaves is used by single-folder clients and tests. The handheld uses
 // syncSavesFromRoots so save RAM and state files keep their own directories.
@@ -611,9 +753,16 @@ func rommServerSaveDestination(name string, roots []saveRoot) string {
 	return ""
 }
 
-// syncSavesFromRoots is a deliberate, per-game action. It uses RomM's
-// negotiation, preserves local copies on replacement, and keeps conflicts.
+// syncSavesFromRoots is the manual, per-game action: RomM's negotiation,
+// local copies preserved on replacement, conflicts kept beside the save.
 func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings rommServerSettings, g rommServerGame, romPath string, roots []saveRoot) (rommServerSyncResult, error) {
+	return c.syncSavesMode(ctx, settings, g, romPath, roots, rommSyncBoth)
+}
+
+// syncSavesMode negotiates one game's saves and carries out the operations
+// mode allows. A local save is never replaced without a ".romm-backup-" copy
+// beside it, and a server-requested delete never removes one.
+func (c *rommServerClient) syncSavesMode(ctx context.Context, settings rommServerSettings, g rommServerGame, romPath string, roots []saveRoot, mode rommSyncMode) (rommServerSyncResult, error) {
 	var result rommServerSyncResult
 	if err := c.registerDevice(ctx, &settings); err != nil {
 		return result, err
@@ -646,6 +795,9 @@ func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings romm
 	}
 	failed := 0
 	for _, op := range negotiation.Ops {
+		if ctx.Err() != nil {
+			break // the session stays open on the server; the next sync starts a new one
+		}
 		if op.RomID != g.ID {
 			result.Skipped++
 			continue
@@ -655,15 +807,23 @@ func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings romm
 			result.Skipped++
 			continue
 		}
+		save, haveLocal := byName[name]
 		switch op.Action {
 		case "upload":
-			if save, ok := byName[name]; ok {
-				if err := c.uploadSave(ctx, negotiation.SessionID, save); err != nil {
-					failed++
-				} else {
-					result.Uploaded++
-				}
-			} else {
+			if mode == rommSyncPull {
+				result.Skipped++
+				continue
+			}
+			if !haveLocal {
+				failed++
+				continue
+			}
+			switch err := c.uploadSave(ctx, negotiation.SessionID, settings.DeviceID, save, false); {
+			case err == nil:
+				result.Uploaded++
+			case rommServerStatus(err) == http.StatusConflict:
+				result.Conflicts++ // the server got a newer save meanwhile; the next sync shows it
+			default:
 				failed++
 			}
 		case "download", "conflict":
@@ -672,7 +832,7 @@ func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings romm
 				continue
 			}
 			dest := rommServerSaveDestination(name, roots)
-			if save, ok := byName[name]; ok {
+			if haveLocal {
 				dest = save.path
 			}
 			if dest == "" {
@@ -680,22 +840,39 @@ func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings romm
 				continue
 			}
 			if op.Action == "conflict" {
-				dest += ".romm-conflict"
+				// Both sides changed. Local stays; the server copy lands beside it.
 				result.Conflicts++
+				if _, err := c.downloadSave(ctx, *op.SaveID, dest+".romm-conflict"); err != nil {
+					failed++
+					continue
+				}
+				if mode == rommSyncPush && haveLocal {
+					if err := c.uploadSave(ctx, negotiation.SessionID, settings.DeviceID, save, true); err != nil {
+						failed++
+					} else {
+						result.Uploaded++
+					}
+				}
+				continue
 			}
-			if err := c.downloadSave(ctx, *op.SaveID, dest); err != nil {
+			sum, err := c.downloadSave(ctx, *op.SaveID, dest)
+			if err != nil {
 				failed++
-			} else {
-				result.Downloaded++
+				continue
 			}
+			result.Downloaded++
+			c.confirmDownload(ctx, *op.SaveID, settings.DeviceID, sum)
 		case "no_op", "delete":
 			result.Skipped++ // never delete a local save without a separate review
 		}
 	}
-	if negotiation.SessionID > 0 {
+	if negotiation.SessionID > 0 && ctx.Err() == nil {
 		if err := c.json(ctx, http.MethodPost, fmt.Sprintf("sync/sessions/%d/complete", negotiation.SessionID), nil, map[string]int{"operations_completed": result.Uploaded + result.Downloaded, "operations_failed": failed}, nil); err != nil {
 			return result, fmt.Errorf("save transfers finished but RomM could not complete the sync: %w", err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 	if failed > 0 {
 		return result, fmt.Errorf("%d save transfers failed", failed)
@@ -703,37 +880,88 @@ func (c *rommServerClient) syncSavesFromRoots(ctx context.Context, settings romm
 	return result, nil
 }
 
-func (c *rommServerClient) downloadSave(ctx context.Context, saveID int, dest string) error {
+// confirmDownload tells RomM this device now holds the save, so the next
+// negotiation compares against it instead of seeing a device with no history
+// (which would download the same save at every launch). Best effort.
+func (c *rommServerClient) confirmDownload(ctx context.Context, saveID int, deviceID, contentHash string) {
+	body := map[string]string{"device_id": deviceID}
+	if contentHash != "" {
+		body["content_hash"] = contentHash
+	}
+	if err := c.json(ctx, http.MethodPost, fmt.Sprintf("saves/%d/downloaded", saveID), nil, body, nil); err != nil {
+		logDebug("romm", "download confirmation for save %d: %s", saveID, firstLine(err.Error()))
+	}
+}
+
+// rommServerBackupsKept bounds the ".romm-backup-" copies per save: with
+// auto-sync a download can happen at every launch.
+const rommServerBackupsKept = 3
+
+func rommServerPruneBackups(dest string) {
+	dir, base := filepath.Dir(dest), filepath.Base(dest)+".romm-backup-"
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var backups []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), base) {
+			backups = append(backups, entry.Name())
+		}
+	}
+	if len(backups) <= rommServerBackupsKept {
+		return
+	}
+	sort.Strings(backups) // the suffix is a UTC timestamp: oldest first
+	for _, name := range backups[:len(backups)-rommServerBackupsKept] {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// downloadSave fetches a save and returns its MD5 (RomM's content_hash).
+func (c *rommServerClient) downloadSave(ctx context.Context, saveID int, dest string) (string, error) {
 	if saveID <= 0 {
-		return errors.New("invalid save ID")
+		return "", errors.New("invalid save ID")
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	// Fetch and finish the new copy before touching an existing local save.
 	staged := dest + ".romm-new"
 	_ = os.Remove(staged)
 	defer os.Remove(staged)
 	if err := c.streamFile(ctx, fmt.Sprintf("saves/%d/content", saveID), staged, 128<<20); err != nil {
-		return err
+		return "", err
+	}
+	sum, _ := rommServerFileMD5(staged)
+	if sum != "" {
+		if old, err := rommServerFileMD5(dest); err == nil && old == sum {
+			return sum, nil // already identical: no backup, no rewrite
+		}
 	}
 	backup := ""
 	if regularFile(dest) {
 		backup = dest + ".romm-backup-" + time.Now().UTC().Format("20060102T150405.000000000")
 		if err := os.Rename(dest, backup); err != nil {
-			return err
+			return "", err
 		}
 	}
 	if err := os.Rename(staged, dest); err != nil {
 		if backup != "" {
 			_ = os.Rename(backup, dest)
 		}
-		return err
+		return "", err
 	}
-	return nil
+	if backup != "" {
+		rommServerPruneBackups(dest)
+	}
+	return sum, nil
 }
 
-func (c *rommServerClient) uploadSave(ctx context.Context, session int, save rommServerLocalSave) error {
+// uploadSave sends one save. device_id and session_id let RomM record this
+// device's sync history; overwrite is only set after a conflict whose server
+// copy is already kept on the card.
+func (c *rommServerClient) uploadSave(ctx context.Context, session int, deviceID string, save rommServerLocalSave, overwrite bool) error {
 	file, err := os.Open(save.path)
 	if err != nil {
 		return err
@@ -751,7 +979,16 @@ func (c *rommServerClient) uploadSave(ctx context.Context, session int, save rom
 	if err := w.Close(); err != nil {
 		return err
 	}
-	q := url.Values{"rom_id": {strconv.Itoa(save.RomID)}, "slot": {save.Slot}, "emulator": {save.Emulator}, "content_hash": {save.Hash}, "session_id": {strconv.Itoa(session)}}
+	q := url.Values{"rom_id": {strconv.Itoa(save.RomID)}, "slot": {save.Slot}, "emulator": {save.Emulator}, "content_hash": {save.Hash}}
+	if session > 0 {
+		q.Set("session_id", strconv.Itoa(session))
+	}
+	if deviceID != "" {
+		q.Set("device_id", deviceID)
+	}
+	if overwrite {
+		q.Set("overwrite", "true")
+	}
 	resp, err := c.request(ctx, http.MethodPost, "saves", q, &body, w.FormDataContentType())
 	if err != nil {
 		return err

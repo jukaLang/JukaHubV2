@@ -42,6 +42,7 @@ var (
 	termInputRect    sdl.Rect
 	termRunRect      sdl.Rect
 	termKeyboardRect sdl.Rect
+	termDeckRect     sdl.Rect
 	termNewRect      sdl.Rect
 	// termInputTextX and termInputFont are where and with what the prompt
 	// text was drawn, so a click can be turned back into a caret position.
@@ -216,6 +217,9 @@ func termRefreshCwdLabels() {
 // termFooterHints is the footer row for the Terminal: what the pad does right
 // now, so X reads Stop while a command runs.
 func termFooterHints() []FooterHint {
+	if cmdDeck.open {
+		return cmdDeckFooterHints()
+	}
 	// On a keyboard the terminal is typed into, so its keys are its own
 	// (handleTermInput, termHistoryKey), not the pad's names translated.
 	if hintsUseKeyboard() {
@@ -224,6 +228,7 @@ func termFooterHints() []FooterHint {
 				{Button: "Up/Down", Label: "Choose"},
 				{Button: "Enter", Label: "Insert"},
 				{Button: "Ctrl+Enter", Label: "Run"},
+				{Button: "Ctrl+S", Label: "Pin"},
 				{Button: "Del", Label: "Delete"},
 				{Button: "Esc", Label: "Close"},
 			}
@@ -236,6 +241,7 @@ func termFooterHints() []FooterHint {
 			{Button: "Enter", Label: "Run"},
 			{Button: "Esc", Label: "Back"},
 			stop,
+			{Button: "Ctrl+P", Label: "Commands"},
 			{Button: "F7", Label: "History"},
 			{Button: "Tab", Label: "Complete"},
 			{Button: "PgUp/PgDn", Label: "Scroll"},
@@ -247,6 +253,7 @@ func termFooterHints() []FooterHint {
 			{Button: "A", Label: "Insert"},
 			{Button: "B", Label: "Close"},
 			{Button: "Start", Label: "Run"},
+			{Button: "Y", Label: "Pin"},
 			{Button: "X", Label: "Delete"},
 		}
 	}
@@ -257,6 +264,7 @@ func termFooterHints() []FooterHint {
 	return []FooterHint{
 		{Button: "D-Pad", Label: "Scroll"},
 		{Button: "A", Label: "Keyboard"},
+		{Button: "Select", Label: "Commands"},
 		{Button: "B", Label: "Back"},
 		{Button: "Start", Label: "Run"},
 		x,
@@ -321,6 +329,9 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	renderFooter(renderer, config)
 	if termHist.open {
 		renderTermHistorySheet(renderer, config, uiFont)
+	}
+	if cmdDeck.open {
+		renderCmdDeck(renderer, config, uiFont, outFont)
 	}
 }
 
@@ -516,6 +527,12 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 	DrawHomeIcon(renderer, "keyboard", insetRect(keyRect, innerH/5), false)
 	termKeyboardRect = keyRect
 
+	// The Command Deck, for a mouse or touch user (Select / Ctrl+P).
+	deckRect := sdl.Rect{X: keyRect.X - 8 - innerH, Y: runRect.Y, W: innerH, H: innerH}
+	drawGlassSurface(renderer, deckRect, innerH/2, glassState{Hovered: pointInRect(mouseX, mouseY, deckRect), NoLift: true})
+	DrawHomeIcon(renderer, "list", insetRect(deckRect, innerH/5), false)
+	termDeckRect = deckRect
+
 	// The folder the command runs in, as a chip at the left end.
 	termRefreshCwdLabels()
 	chipH := innerH - 4
@@ -531,7 +548,7 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 	drawText(renderer, uiFont, base, chipX+10+icon+8, chipY+(chipH-bh)/2, ColorTextSecondary(), textAlignLeft)
 
 	// The command text, scrolled sideways so the caret is always in view.
-	area := sdl.Rect{X: chipX + chipW + 12, Y: field.Y + 4, W: keyRect.X - 12 - (chipX + chipW + 12), H: field.H - 8}
+	area := sdl.Rect{X: chipX + chipW + 12, Y: field.Y + 4, W: deckRect.X - 12 - (chipX + chipW + 12), H: field.H - 8}
 	if area.W < 40 {
 		area.W = 40
 	}
@@ -541,9 +558,9 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 	if term.input == "" {
 		term.inputScroll = 0
 		termInputTextX = area.X
-		placeholder := "Type a command — Enter runs it"
+		placeholder := "Type a command, or Ctrl+P to pick one"
 		if !hintsUseKeyboard() {
-			placeholder = "Type a command — A opens the keyboard"
+			placeholder = "A types a command · Select picks one"
 		}
 		if running {
 			placeholder = "A command is running — X stops it"
@@ -665,7 +682,11 @@ func renderTermHistorySheet(renderer *sdl.Renderer, config *Config, font *ttf.Fo
 	y := UIPageHeaderDraw(renderer, config, header) + 12
 
 	hint := hintLine(FooterHint{Button: "A", Label: "Insert"}, FooterHint{Button: "Start", Label: "Run"},
-		FooterHint{Button: "X", Label: "Delete"}, FooterHint{Button: "B", Label: "Close"})
+		FooterHint{Button: "Y", Label: "Pin"}, FooterHint{Button: "X", Label: "Delete"}, FooterHint{Button: "B", Label: "Close"})
+	if hintsUseKeyboard() {
+		hint = hintLine(FooterHint{Button: "Enter", Label: "Insert"}, FooterHint{Button: "Ctrl+Enter", Label: "Run"},
+			FooterHint{Button: "Ctrl+S", Label: "Pin"}, FooterHint{Button: "Del", Label: "Delete"}, FooterHint{Button: "Esc", Label: "Close"})
+	}
 	hw, hh := measureText(font, hint)
 	hintY := card.Y + card.H - hh - 16
 	drawText(renderer, font, hint, card.X+(card.W-hw)/2, hintY, ColorTextTertiary(), textAlignLeft)

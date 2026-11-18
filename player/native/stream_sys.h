@@ -80,6 +80,15 @@ typedef struct {
 /* Atomically writes the status file (tmp + rename, mode 0600). */
 bool ss_write_status(const char *path, const SsStatus *status);
 
+/* The same atomic write (tmp + rename, mode 0600) for any list of key=value
+ * lines, in order; moonlight-stream's status file has keys of its own. A NULL
+ * value is written as ""; newlines and tabs in a value become spaces. */
+typedef struct {
+    const char *key;
+    const char *value;
+} SsPair;
+bool ss_write_pairs(const char *path, const SsPair *pairs, size_t count);
+
 typedef struct {
     bool valid;
     int percent;

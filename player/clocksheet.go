@@ -366,8 +366,8 @@ func clockSheetDraw(renderer *sdl.Renderer, config *Config) {
 		caption, value string
 	}{
 		{"Year", fmt.Sprintf("%d", clockSheet.year)},
-		{"Month", time.Month(clockSheet.month).String()},
-		{"Day", fmt.Sprintf("%d · %s", clockSheet.day, t.Weekday().String()[:3])},
+		{"Month", formatMonthName(time.Month(clockSheet.month))},
+		{"Day", fmt.Sprintf("%d · %s", clockSheet.day, formatWeekdayShort(t))},
 		{"Hour", hour},
 		{"Minute", fmt.Sprintf("%02d", clockSheet.minute)},
 	}

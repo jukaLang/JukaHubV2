@@ -1,0 +1,93 @@
+name: OS driver pack
+
+# Builds a JukaHub OS kernel-module layer for ONE TrimUI handheld and kernel
+# (os/drivers/build-driver-pack.sh). Manual only: it needs the facts saved on
+# the device by os/drivers/dump-kernel-facts.sh (committed under
+# os/drivers/facts/) and the device's kernel source, which TrimUI has not
+# published. Every check the script makes stops the build rather than ship a
+# module the kernel would refuse; the artifact is a layer folder to copy into
+# Apps/JukaHub/os/layers/ on the card.
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: 'Handheld (must match the facts)'
+        type: choice
+        required: true
+        options:
+          - trimui-smart-pro
+          - trimui-brick
+          - trimui-brick-pro
+          - trimui-smart-pro-s
+      kernel_repo:
+        description: 'Kernel source git URL (the BSP tree for this device: A133 4.9 or A523 5.15)'
+        required: true
+      kernel_ref:
+        description: 'Branch, tag or commit of that tree'
+        required: true
+      facts:
+        description: 'Folder in this repository with dump-kernel-facts.sh output (os/drivers/facts/<MODEL>-<release>)'
+        required: true
+      toolchain_url:
+        description: 'Optional aarch64 cross toolchain tarball (an old kernel may need an older GCC than Ubuntu has, e.g. Linaro GCC 7 for 4.9); empty = Ubuntu gcc-aarch64-linux-gnu'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      DEVICE: ${{ inputs.device }}
+      KERNEL_REPO: ${{ inputs.kernel_repo }}
+      KERNEL_REF: ${{ inputs.kernel_ref }}
+      FACTS: ${{ inputs.facts }}
+      TOOLCHAIN_URL: ${{ inputs.toolchain_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the inputs
+        run: |
+          case "$FACTS" in
+            os/drivers/facts/*) ;;
+            *) echo "facts must be a folder under os/drivers/facts/" >&2; exit 1 ;;
+          esac
+          case "$FACTS" in *..*) echo "facts must not contain .." >&2; exit 1 ;; esac
+          test -f "$FACTS/facts.txt" || { echo "no $FACTS/facts.txt" >&2; exit 1; }
+          got=$(sed -n 's/^DEVICE=//p' "$FACTS/facts.txt" | head -n 1)
+          [ "$got" = "$DEVICE" ] || { echo "the facts are from $got, not $DEVICE" >&2; exit 1; }
+          case "$KERNEL_REPO" in
+            https://*) ;;
+            *) echo "kernel_repo must be an https:// git URL" >&2; exit 1 ;;
+          esac
+      - name: Build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu bc bison flex libssl-dev libelf-dev kmod cpio
+      - name: Cross toolchain
+        if: ${{ inputs.toolchain_url != '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/toolchain"
+          curl -fsSL "$TOOLCHAIN_URL" -o "$RUNNER_TEMP/toolchain.tar"
+          tar -xf "$RUNNER_TEMP/toolchain.tar" -C "$RUNNER_TEMP/toolchain" --strip-components=1
+          echo "$RUNNER_TEMP/toolchain/bin" >> "$GITHUB_PATH"
+      - name: Kernel source
+        run: |
+          git init -q "$RUNNER_TEMP/kernel"
+          git -C "$RUNNER_TEMP/kernel" remote add origin "$KERNEL_REPO"
+          git -C "$RUNNER_TEMP/kernel" fetch -q --depth 1 origin "$KERNEL_REF"
+          git -C "$RUNNER_TEMP/kernel" checkout -q --detach FETCH_HEAD
+      - name: Build the driver pack
+        run: |
+          bash os/drivers/build-driver-pack.sh --facts "$FACTS" \
+            --kernel-src "$RUNNER_TEMP/kernel" --out "$RUNNER_TEMP/pack"
+      - name: Upload the layer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jukahub-os-drivers-${{ inputs.device }}
+          path: ${{ runner.temp }}/pack
+          if-no-files-found: error

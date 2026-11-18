@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -212,6 +213,107 @@ func TestRommSniffCartHeaders(t *testing.T) {
 		if got := rommSniffCart(c.head, int64(len(c.head))); got != c.want {
 			t.Errorf("%s: rommSniffCart = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// rommSparseImage is a disc image that is zero except for one piece at an
+// offset: a full Xbox 360 dump keeps its game partition hundreds of megabytes
+// in, more than a test should allocate.
+type rommSparseImage struct {
+	size  int64
+	at    int64
+	piece []byte
+}
+
+func (s rommSparseImage) ReadAt(p []byte, off int64) (int, error) {
+	if off >= s.size {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if int64(n) > s.size-off {
+		n = int(s.size - off)
+	}
+	clear(p[:n])
+	if lo, hi := max(off, s.at), min(off+int64(n), s.at+int64(len(s.piece))); lo < hi {
+		copy(p[lo-off:hi-off], s.piece[lo-s.at:hi-s.at])
+	}
+	if n < len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+// rommTestXDVDFS is an Xbox game partition: the volume descriptor 64 KiB in
+// and a root directory at sector 40 whose entries are linked through their
+// right-child offsets, as a padded tree.
+func rommTestXDVDFS(names ...string) []byte {
+	const rootSector = 40
+	part := make([]byte, (rootSector+1)*2048)
+	copy(part[0x10000:], rommXDVDFSMagic)
+	binary.LittleEndian.PutUint32(part[0x10000+20:], rootSector)
+	binary.LittleEndian.PutUint32(part[0x10000+24:], 2048)
+	dir := part[rootSector*2048:]
+	for i := range dir {
+		dir[i] = 0xFF
+	}
+	off := 0
+	for i, name := range names {
+		next := (off + 14 + len(name) + 3) &^ 3
+		right := 0
+		if i < len(names)-1 {
+			right = next / 4
+		}
+		binary.LittleEndian.PutUint16(dir[off:], 0)
+		binary.LittleEndian.PutUint16(dir[off+2:], uint16(right))
+		binary.LittleEndian.PutUint32(dir[off+4:], 41)
+		binary.LittleEndian.PutUint32(dir[off+8:], 1)
+		dir[off+12] = 0x20
+		dir[off+13] = byte(len(name))
+		copy(dir[off+14:], name)
+		off = next
+	}
+	return part
+}
+
+// TestRommSniffXboxDiscs: an Xbox 360 image carries the same file system
+// magic as an original-Xbox one, so the boot file in its root decides —
+// trimmed, behind an XGD2 video partition, or behind an XGD1 one.
+func TestRommSniffXboxDiscs(t *testing.T) {
+	x360 := rommTestXDVDFS("$SystemUpdate", "media", "default.xex")
+	xbox := rommTestXDVDFS("default.xbe", "media")
+	bare := rommTestXDVDFS("media")
+	empty := rommTestXDVDFS()
+	looped := rommTestXDVDFS("media", "readme.txt")
+	// The second entry (at byte 20, offset 5) names itself as both children.
+	binary.LittleEndian.PutUint16(looped[40*2048+20:], 5)
+	binary.LittleEndian.PutUint16(looped[40*2048+22:], 5)
+	cases := []struct {
+		name string
+		at   int64
+		part []byte
+		want string
+	}{
+		{"trimmed Xbox 360 image", 0, x360, "xbox360"},
+		{"trimmed Xbox image", 0, xbox, "xbox"},
+		{"full XGD2 Xbox 360 dump", rommXGD2Base, x360, "xbox360"},
+		{"full XGD3 Xbox 360 dump", rommXGD3Base, x360, "xbox360"},
+		{"full XGD1 Xbox dump", 0x18300000, xbox, "xbox"},
+		// No default.xbe in a root read whole: no original-Xbox disc boots
+		// that way (a 360 second disc or content disc does).
+		{"a root naming neither, trimmed", 0, bare, "xbox360"},
+		{"a root naming neither, XGD2", rommXGD2Base, bare, "xbox360"},
+		// A root that cannot be read whole keeps the old answer.
+		{"a root with no entry, trimmed", 0, empty, "xbox"},
+		{"a tree that loops", 0, looped, "xbox"},
+	}
+	for _, c := range cases {
+		img := rommSparseImage{size: c.at + int64(len(c.part)), at: c.at, piece: c.part}
+		if got := rommSniffDisc(img, img.size); got != c.want {
+			t.Errorf("%s: rommSniffDisc = %q, want %q", c.name, got, c.want)
+		}
+	}
+	if got := rommSniffDisc(rommSparseImage{size: 4 << 20}, 4<<20); got != "" {
+		t.Errorf("an empty image = %q, want nothing", got)
 	}
 }
 

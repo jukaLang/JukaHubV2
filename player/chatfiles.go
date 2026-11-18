@@ -172,20 +172,13 @@ func chatMIMEType(name string) string {
 	return "application/octet-stream"
 }
 
-// chatSizeLabel is a file size the way a chat shows it: "512 B", "14 KB",
-// "2.4 MB".
+// chatSizeLabel is a file size the way a chat shows it ("512 B", "14.2 KB",
+// "2.4 MB": formatSize), and nothing for an unknown size.
 func chatSizeLabel(n int64) string {
-	switch {
-	case n < 0:
+	if n < 0 {
 		return ""
-	case n < 1024:
-		return strconv.FormatInt(n, 10) + " B"
-	case n < 1024*1024:
-		return strconv.FormatInt((n+512)/1024, 10) + " KB"
-	case n < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 	}
-	return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
+	return formatSize(n)
 }
 
 // chatFileTypeLabel is the short type a card shows: the extension, upper case.

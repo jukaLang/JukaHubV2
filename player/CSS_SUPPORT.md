@@ -13,6 +13,14 @@ gap, not a silent promise.
   `<style>` blocks. Imports resolve relative to the page or the imported
   sheet, are bounded and cycle-safe, and keep media-qualified wrappers. Their
   `url(...)` references resolve against the imported stylesheet.
+- Up to 12 linked sheets per page (2 MiB together, 1.5 MiB each); a sheet
+  past its share keeps its complete rules up to the limit instead of being
+  dropped. Inline `<style>` blocks always keep at least 1 MiB after them.
+- A link's `media` query is honoured: `media="print"` is not fetched, other
+  queries wrap the sheet in `@media`. `rel="alternate stylesheet"` and
+  `disabled` links are skipped. The async-CSS loaders count as the sheet they
+  become: `rel="preload" as="style" onload="this.rel='stylesheet'"` and
+  `media="print" onload="this.media='all'"`.
 
 ### Selectors and generated content
 

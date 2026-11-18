@@ -54,6 +54,7 @@ var recoveryCard struct {
 	back     func(config *Config) // B / Esc; nil closes the card
 	backText string
 	busy     bool
+	pinned   bool // busy work that must not be hidden (factory erase/undo)
 	wrap     tbxWrapCache
 	rows     []sdl.Rect
 	card     sdl.Rect
@@ -72,6 +73,9 @@ type recoveryCardSpec struct {
 	back                        func(config *Config)
 	backText                    string
 	busy                        bool
+	// pinned keeps a busy card up until its work ends: B does not hide it
+	// (the factory erase and undo restart JukaHub when they finish).
+	pinned bool
 }
 
 // recoveryCardShow replaces whatever the card shows.
@@ -87,6 +91,7 @@ func recoveryCardShow(spec recoveryCardSpec) {
 		recoveryCard.backText = "Close"
 	}
 	recoveryCard.busy = spec.busy
+	recoveryCard.pinned = spec.busy && spec.pinned
 	recoveryCard.focus = 0
 	for i, o := range spec.options {
 		if !o.disabled {
@@ -94,6 +99,15 @@ func recoveryCardShow(spec recoveryCardSpec) {
 			break
 		}
 	}
+	// A confirmation opens on Cancel even if it lists the action first
+	// (confirmfocus.go).
+	opts := spec.options
+	recoveryCard.focus = confirmSafeFocus(len(opts), recoveryCard.focus, func(i int) string {
+		if opts[i].disabled {
+			return ""
+		}
+		return opts[i].title
+	})
 }
 
 // recoveryCardClose puts the card away.
@@ -103,6 +117,7 @@ func recoveryCardClose() {
 	recoveryCard.options = nil
 	recoveryCard.back = nil
 	recoveryCard.busy = false
+	recoveryCard.pinned = false
 }
 
 // recoveryChordName names the recovery chord in this frame's vocabulary.
@@ -118,6 +133,16 @@ func recoveryChordName() string {
 // recoveryCardOpenAtBoot opens the card the launch calls for, if any. main.go
 // calls it once, before the loop starts.
 func recoveryCardOpenAtBoot(config *Config) {
+	// This start carried out "Erase everything JukaHub created" or its undo
+	// (factoryreset.go).
+	if factoryEraseNote != "" {
+		kind := ToastKindSuccess
+		if strings.Contains(factoryEraseNote, "not undone") || strings.Contains(factoryEraseNote, "(see the log)") ||
+			strings.HasPrefix(factoryEraseNote, "Nothing was erased") {
+			kind = ToastKindWarning
+		}
+		ShowToast(factoryEraseNote, kind)
+	}
 	report, at := crashLastReport()
 	switch {
 	case safeboot.Triggered:
@@ -672,8 +697,10 @@ func recoverySendReport(config *Config, report string, at time.Time) {
 // recoveryCardAction applies one action to the open card.
 func recoveryCardAction(config *Config, act tbxAction) {
 	if recoveryCard.busy {
-		if act == tbxActBack {
-			// The work goes on; its result arrives as a toast.
+		if act == tbxActBack && !recoveryCard.pinned {
+			// The work goes on; its result arrives as a toast. A pinned card
+			// stays: its work restarts JukaHub, which must not come out of
+			// the blue while the user does something else.
 			recoveryCardClose()
 			PlayBackSound()
 		}
@@ -835,6 +862,8 @@ func renderRecoveryCard(renderer *sdl.Renderer, config *Config) {
 	if kb := hintStampNow(); recoveryCard.hintsGen != recoveryCard.gen || recoveryCard.hintsKb != kb || recoveryCard.hints == "" {
 		recoveryCard.hintsGen, recoveryCard.hintsKb = recoveryCard.gen, kb
 		switch {
+		case recoveryCard.pinned:
+			recoveryCard.hints = "Please wait"
 		case recoveryCard.busy:
 			recoveryCard.hints = hintLine(FooterHint{Button: "B", Label: recoveryCard.backText})
 		case len(recoveryCard.options) > 1:

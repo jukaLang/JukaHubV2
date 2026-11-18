@@ -1163,6 +1163,14 @@ func audioRouteChildEnv(env []string) []string {
 	// JukaHub's own ALSA_CONFIG_PATH (bluealsaPCMDefine) is not the child's
 	// setting: it goes, and a headset child gets it back inside its own path.
 	env = audioOwnALSAEnvStrip(env)
+	// Music that keeps playing under the game (musicgame.go): the child plays
+	// through the mix it shares, on the speaker card or the USB DAC.
+	if out, ok := musicGameChildEnv(env); ok {
+		if audioThreadSafeSetByUs {
+			out = childEnvWithout(out, "LIBASOUND_THREAD_SAFE")
+		}
+		return out
+	}
 	pcm := audioRouteChildPCM()
 	if pcm == "" {
 		if audioThreadSafeSetByUs {

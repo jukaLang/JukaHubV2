@@ -110,6 +110,8 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		{"OS", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)},
 		{"CPUs", fmt.Sprintf("%d", runtime.NumCPU())},
 		{"Renderer", "SDL2"},
+		// Stable or Beta (autoupdate_channel.go), as bug reports carry it.
+		{"Updates", updateChannelAboutValue()},
 	}
 	// What JukaHub itself holds and what the system has left, read off the
 	// render thread and cached (memstat.go).
@@ -348,6 +350,11 @@ func aboutDeviceRows(model DeviceModel, source string, id deviceIdentity) []abou
 		{"Panel", panel},
 		{"Firmware", firmware},
 	}
+	// The chip is what tells a Smart Pro S (A523) from a Smart Pro (A133P)
+	// when the names and the panel cannot (devicedrivers.go).
+	if id.SoC != "" {
+		rows = append(rows, aboutRow{"Chip", "Allwinner " + id.SoC + " (" + id.SoCWhy + ")"})
+	}
 	if tree := strings.TrimSpace(id.Model); tree != "" {
 		rows = append(rows, aboutRow{"Device tree", tree})
 	}
@@ -360,30 +367,36 @@ func aboutDeviceRows(model DeviceModel, source string, id deviceIdentity) []abou
 // firmwareEvidenceNames lists the model names the image's own files carry, in
 // the specificity order firmwareModelNames defines. A longer name contains the
 // shorter one ("Trimui Smart Pro S" holds "Trimui Smart Pro"), so only the
-// longest name at each site is reported: one model must not read as two.
+// longest name in each evidence string is reported: one model must not read as
+// two. Two strings naming two models (a launcher shared by the Brick and the
+// Brick Pro reports both) both stay.
 func firmwareEvidenceNames(id deviceIdentity) []string {
 	matched := make([]bool, len(firmwareModelNames))
-	for i, name := range firmwareModelNames {
-		for _, text := range id.Names {
-			if strings.Contains(strings.ToLower(text), strings.ToLower(name)) {
+	for _, text := range id.Names {
+		lower := strings.ToLower(text)
+		here := make([]bool, len(firmwareModelNames))
+		for i, name := range firmwareModelNames {
+			here[i] = strings.Contains(lower, strings.ToLower(name))
+		}
+		for i, name := range firmwareModelNames {
+			if !here[i] {
+				continue
+			}
+			contained := false
+			for j, other := range firmwareModelNames {
+				if i != j && here[j] && strings.Contains(other, name) {
+					contained = true
+					break
+				}
+			}
+			if !contained {
 				matched[i] = true
-				break
 			}
 		}
 	}
 	var found []string
 	for i, name := range firmwareModelNames {
-		if !matched[i] {
-			continue
-		}
-		contained := false
-		for j, other := range firmwareModelNames {
-			if i != j && matched[j] && strings.Contains(other, name) {
-				contained = true
-				break
-			}
-		}
-		if !contained {
+		if matched[i] {
 			found = append(found, name)
 		}
 	}

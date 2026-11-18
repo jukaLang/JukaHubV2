@@ -251,6 +251,10 @@ type emuInstallReport struct {
 	// is nearly full ("" when it did not stop for that): the cores it did not
 	// reach keep their builds, and the toast says why.
 	LowSpace string
+	// Asked names the cores an automatic pass found running a build CrossMix
+	// ships and left alone, the first time it found each one
+	// (coreCrossMixAskOnce): the toast asks the user to update them by hand.
+	Asked []string
 }
 
 // summary is the one-line result shown in the toast.
@@ -270,6 +274,9 @@ func (r emuInstallReport) summary() string {
 	}
 	if len(r.Errors) > 0 {
 		parts = append(parts, itoa(len(r.Errors))+" failed")
+	}
+	if len(r.Asked) > 0 {
+		parts = append(parts, coreCrossMixAskNote(r.Asked))
 	}
 	if r.LowSpace != "" {
 		parts = append(parts, coreLowSpaceNote(r.LowSpace))
@@ -447,13 +454,19 @@ func startEmulatorInstall(e emuEntry) {
 // the automatic pass — report through the install bar with one implementation
 // rather than two that can drift.
 //
+// keep, when not nil, limits the run to the installed cores it accepts: a PC's
+// automatic pass keeps to the RetroArch JukaHub installed there, and every
+// automatic pass leaves out what only a press may replace
+// (coreAutoUpdateRunner). Cores it turns down are neither updated nor counted
+// as current. A press passes nil: every installed core.
+//
 // A build this device refused before — it cannot load on this firmware, or it
 // is over the download limit — is not downloaded again: without that, a card
 // whose firmware is older than the buildbot's build image would fetch every
 // stale core every day only to refuse each one. The next build the index lists
 // is fetched and checked as usual. A stop (ctx) ends the run between cores and
 // is reported as Interrupted, not as a failure of the core it interrupted.
-func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
+func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress func(phase, detail string), keep func(coreBuild) bool) emuInstallReport {
 	var report emuInstallReport
 	notify := func(phase, detail string) {
 		if progress != nil {
@@ -467,11 +480,24 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 		return report
 	}
 	report.Checked = true
-	inv := scanCoreInventory()
+	active := scanCoreInventory().Active
+	if keep != nil {
+		kept := make(map[string]coreBuild, len(active))
+		for core, build := range active {
+			if keep(build) {
+				kept[core] = build
+			}
+		}
+		active = kept
+	}
 	// One update per core: several tiles can name the same emulator (a ROM
 	// folder and the core that runs it), and the binary is the same file.
-	planned := planCoreUpdates(index, inv.Active)
-	report.Current = len(inv.Active) - len(planned)
+	planned := planCoreUpdates(index, active)
+	// The checksums the plan read are kept for the next boot's pass, and so is
+	// what the run forgets as it replaces cores.
+	emuCRCCacheFlush()
+	defer emuCRCCacheFlush()
+	report.Current = len(active) - len(planned)
 	if report.Current < 0 {
 		report.Current = 0
 	}
@@ -528,8 +554,43 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 			continue
 		}
 		report.Updated = append(report.Updated, coreConfigDisplayName(upd.Core))
+		if !coreKeepActivatedInPool() {
+			// The build is the active file now and the one it replaced is kept
+			// beside it (.bak): on the handheld a pool copy would be a third
+			// copy of each core a pass brings forward.
+			if err := coreDropPoolBuild(pool, build); err != nil {
+				logDebug("emulators", "kept the pool copy of %s %s: %v", upd.Core, upd.Date, err)
+			}
+		}
 	}
 	return report
+}
+
+// coreAutoUpdateRunner is an automatic pass's core run, in the shape a pass runs
+// it (emuAutoCoreRunner): runInstalledCoreUpdates over the cores scope accepts
+// (nil: every installed core), less the ones only a press replaces — the
+// arcade cores whose nightlies change the romset they expect
+// (coreAutoUpdateNever), and a build CrossMix ships (coreCrossMixShipped),
+// which is named once in the pass's toast (Asked) instead of replaced.
+func coreAutoUpdateRunner(scope func(coreBuild) bool) emuAutoCoreRunner {
+	return func(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
+		var held []coreHeldBuild
+		report := runInstalledCoreUpdates(ctx, client, progress, func(b coreBuild) bool {
+			if scope != nil && !scope(b) {
+				return false
+			}
+			if coreAutoUpdateNever(b.Core) {
+				return false
+			}
+			if crc, shipped := coreCrossMixShipped(b); shipped {
+				held = append(held, coreHeldBuild{Core: b.Core, CRC32: crc})
+				return false
+			}
+			return true
+		})
+		report.Asked = coreCrossMixAskOnce(held)
+		return report
+	}
 }
 
 // coreUpdateFreeFloor is the free space a core update must find on the card
@@ -566,19 +627,20 @@ func emuWinManagedSpecs() []emuWinSpec {
 
 // startEmulatorUpdateInstalled updates every installed core the index has a
 // newer build of — and every standalone emulator JukaHub installed: the managed
-// ones on Windows, hakuX on the handheld — so a card full of emulators is
-// brought forward in one press instead of one tile at a time. Nothing that is
-// not installed is added: this action updates.
+// ones on Windows, hakuX and JukaHub's own PPSSPP on the handheld — so a card
+// full of emulators is brought forward in one press instead of one tile at a
+// time. Nothing that is not installed is added: this action updates.
 func startEmulatorUpdateInstalled() {
 	var standalone []emuWinSpec
 	if IsWindows() {
 		standalone = emuWinManagedSpecs()
 	}
 	hakux := hakuxManagedOnCard()
-	// The build switch covers the cores only; standalone emulators and hakuX
-	// update the same way their tile's X does.
+	ppsspp := ppssppUpdatableOnCard()
+	// The build switch covers the cores only; standalone emulators, hakuX and
+	// PPSSPP update the same way their tile's X does.
 	cores := emuCoreInstallSupported() && len(emuInstalledCoreSet()) > 0
-	if !cores && len(standalone) == 0 && !hakux {
+	if !cores && len(standalone) == 0 && !hakux && !ppsspp {
 		if !emuCoreInstallSupported() {
 			ShowToast("Core updates are switched off in this build", ToastKindInfo)
 		} else {
@@ -594,7 +656,8 @@ func startEmulatorUpdateInstalled() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	if len(standalone) > 0 || hakux {
+	more := len(standalone) > 0 || hakux || ppsspp
+	if more {
 		installBarBeginLabelled("Emulators", "Updating emulators")
 	} else {
 		installBarBeginLabelled("Emulator cores", "Updating emulator cores")
@@ -605,14 +668,14 @@ func startEmulatorUpdateInstalled() {
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
 		timeout := 20 * time.Minute
-		if len(standalone) > 0 || hakux {
+		if more {
 			timeout = emuWinInstallTimeout
 		}
 		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
 		defer cancel()
 		var report emuInstallReport
 		if cores {
-			report = runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
+			report = runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook(), nil)
 		}
 		for _, spec := range standalone {
 			if ctx.Err() != nil {
@@ -649,6 +712,27 @@ func startEmulatorUpdateInstalled() {
 					logInfo("emulators", "hakuX: %d changed file(s) replaced; copies in %s", result.Edited, result.EditedDir)
 					ShowToast(fmt.Sprintf("hakuX: %s you had changed replaced — your copies are in %s", pluralizeCount(result.Edited, "file", "files"), result.EditedDir), ToastKindInfo)
 				}
+			}
+		}
+		if ppsspp && ctx.Err() == nil {
+			installBarResetProgress()
+			installBarDetail("PPSSPP (PSP)")
+			if p := ppssppTileName.Load(); p != nil {
+				emuSetInstalling(*p)
+			}
+			label, err := ppssppRunUpdate(ctx)
+			emuSetInstalling("")
+			switch {
+			case err != nil && label != "":
+				// Installed, but PSP games could not be switched to it.
+				report.Updated = append(report.Updated, label)
+				report.Errors = append(report.Errors, err.Error())
+			case err != nil:
+				report.Errors = append(report.Errors, "PPSSPP: "+emuFriendlyError(err))
+			case label == "":
+				report.Current++
+			default:
+				report.Updated = append(report.Updated, label)
 			}
 		}
 		installBarPhase(installPhaseDone)

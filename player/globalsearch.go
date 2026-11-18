@@ -128,7 +128,7 @@ func homeSearchBegin(config *Config) {
 	homeSearch.config = config
 	homeSearch.scroll = 0
 	homeSearch.hits = homeSearch.hits[:0]
-	homeSearch.screens = homeSearchScreens(config)
+	homeSearch.screens = homeSearchSheetScreens(config)
 	homeSearchRefreshIndex(config)
 	homeSearchRun()
 }

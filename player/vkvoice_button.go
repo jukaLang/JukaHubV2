@@ -76,8 +76,8 @@ func vkVoiceTrigger(config *Config) bool {
 	}
 	vkVoiceAutoState.live = false
 	if vkStripModeNow() == vkStripHidden && vkVoice.phase != vkVoiceRecording && vkVoice.phase != vkVoiceSending {
-		// A password, a key, a command or a number: no voice typing, and no
-		// strip to say so in.
+		// A password, a key, launch arguments or a number: no voice typing,
+		// and no strip to say so in (the Terminal has its token strip).
 		vkPlay(PlayErrorSound)
 		return true
 	}

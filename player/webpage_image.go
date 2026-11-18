@@ -43,19 +43,20 @@ import (
 
 // Collect/fetch limits. webMaxImageBytes keeps a single huge photograph from
 // dominating; the total budget keeps a page of hero banners from doing it via
-// volume instead.
+// volume instead. 16 images and 4 MiB left every picture past the first
+// screenful of a news, shop or gallery page as a grey placeholder.
 const (
-	webMaxImagesPerPage      = 16
-	webMaxImageBytes         = 1 << 20 // 1 MiB per image
-	webMaxImagesBytes        = 4 << 20 // 4 MiB of images per page
-	webMaxVideoThumbsPerPage = 8       // one page never fetches more video thumbnails
+	webMaxImagesPerPage      = 48
+	webMaxImageBytes         = 2 << 20  // 2 MiB per image
+	webMaxImagesBytes        = 10 << 20 // 10 MiB of images per page
+	webMaxVideoThumbsPerPage = 8        // one page never fetches more video thumbnails
 	webImageFetchTimeout     = 8 * time.Second
-	webImageFetchWorkers     = 4 // concurrent image downloads per page
+	webImageFetchWorkers     = 6 // concurrent image downloads per page
 	// webImagePassTimeout bounds the whole image pass, not one image. The page
 	// text is published after this pass, so a page of slow hero banners must
 	// not keep the reader on the loading card for eight seconds each; anything
 	// still in flight when it expires is drawn as a placeholder.
-	webImagePassTimeout = 6 * time.Second
+	webImagePassTimeout = 8 * time.Second
 	webMinImagePx       = 16 // smallest drawable image
 )
 
@@ -300,6 +301,7 @@ func webSizesEntry(entry string) (condition, value string, ok bool) {
 // webSizesTarget picks the rendered image width from a sizes attribute: the
 // first media condition that matches wins, and a bare length is the fallback
 // when no condition does. Zero means no usable size was supplied.
+// Test seam (ARCH-8): only tests call it.
 func webSizesTarget(sizes string, vw, vh float64) float64 {
 	return webSizesTargetIn(sizes, vw, vh, vw, vh)
 }
@@ -962,7 +964,7 @@ func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte 
 	if err != nil {
 		return nil
 	}
-	browserChromeResource(req.Header, "image", browserAcceptImage, browserURL(pageURL), req.URL)
+	browserChromeResource(req.Header, "image", browserImageAccept(), browserURL(pageURL), req.URL)
 	// Images share the page's jar: a picture behind a session cookie (a
 	// private avatar, a captcha-free gallery) otherwise drew as a placeholder.
 	client := browserHTTPClient(webImageFetchTimeout)
@@ -1257,6 +1259,7 @@ func webObjectPositionFraction(value string, boxW, boxH int32) (float64, float64
 
 // webObjectFitBox fits a source size inside a box for contain. The returned
 // rectangle is centred, so a wide photo leaves equal bars above and below.
+// Test seam (ARCH-8): only tests call it.
 func webObjectFitBox(box sdl.Rect, tw, th int32, cover bool) sdl.Rect {
 	return webObjectFitBoxAt(box, tw, th, cover, 0.5, 0.5)
 }

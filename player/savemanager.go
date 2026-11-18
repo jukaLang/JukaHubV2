@@ -8,9 +8,10 @@ package main
 // the thing that fails first. Everything here is deliberately local: a
 // snapshot is a plain directory with a JSON manifest and the same relative
 // paths the emulator used, so it can be inspected, copied to a PC, or restored
-// without this app. Syncthing is not bundled or configured behind the user's
-// back — the panel writes the folder markers and the exact folder list, and
-// the user adds those folders in Syncthing on both devices.
+// without this app. Syncthing is a download the user switches on (Save Manager
+// → Syncthing, syncthing.go): JukaHub's own instance shares the folders this
+// file finds, under the IDs prepareSaveSync gives them, and never touches a
+// Syncthing the user runs themselves.
 
 import (
 	"archive/zip"
@@ -280,6 +281,11 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 
 	if sdRoot != "" {
 		addPPSSPPMemstickRoots(sdRoot, roots, add)
+		// NextUI/MinUI: Saves/<TAG> and the .userdata state folders, where
+		// they already are (nextui.go).
+		for _, r := range nextuiSaveRoots(sdRoot) {
+			add(r.Name, r.Path)
+		}
 	}
 
 	sort.Slice(roots, func(i, j int) bool {
@@ -849,11 +855,10 @@ type saveSyncManifest struct {
 	Folders []saveSyncFolder `json:"folders"`
 }
 
-// prepareSaveSync writes the folder list and the markers Syncthing looks for.
-// It does not download, install or configure Syncthing: that needs a binary
-// and an account/device ID, and silently touching a user's Syncthing config is
-// not acceptable. What it removes is the guesswork about which folders and
-// which IDs to use.
+// prepareSaveSync writes the folder list and the markers Syncthing looks for,
+// and gives each folder its stable ID ("jukahub-<slug>"). The built-in
+// Syncthing (syncthing.go) shares exactly this list; the README and
+// folders.json also let a user's own Syncthing use the same IDs.
 func prepareSaveSync(roots []saveRoot) (saveSyncManifest, error) {
 	if len(roots) == 0 {
 		return saveSyncManifest{}, errors.New("no save folders found yet")
@@ -903,15 +908,17 @@ func prepareSaveSync(roots []saveRoot) (saveSyncManifest, error) {
 	}
 	var readme strings.Builder
 	readme.WriteString("JukaHub save sync\n================\n\n")
-	readme.WriteString("This folder list was written by JukaHub. Install Syncthing on this device\n")
-	readme.WriteString("and on your PC/Steam Deck, then add the folders below with the listed\n")
-	readme.WriteString("Folder ID on both devices and share them with each other.\n\n")
+	readme.WriteString("This folder list was written by JukaHub. Switch on Save Manager ->\n")
+	readme.WriteString("Syncthing and JukaHub shares these folders itself: add this device's ID\n")
+	readme.WriteString("(its QR code) in Syncthing-Fork on Android or Syncthing on your PC, accept\n")
+	readme.WriteString("the pairing request on the handheld, then accept the offered folders.\n")
+	readme.WriteString("Using your own Syncthing instead? Add the folders with these IDs.\n\n")
 	for _, folder := range manifest.Folders {
 		fmt.Fprintf(&readme, "- %s\n  Path: %s\n  Folder ID: %s\n", folder.Name, folder.Path, folder.FolderID)
 	}
 	readme.WriteString("\nThe .stfolder marker in each save folder tells Syncthing the folder is\n")
-	readme.WriteString("ready. JukaHub never edits Syncthing's own configuration: device IDs and\n")
-	readme.WriteString("shared-folder acceptance stay in Syncthing's UI, where they belong.\n")
+	readme.WriteString("ready. JukaHub only configures its own Syncthing (data/syncthing), never\n")
+	readme.WriteString("one you installed yourself.\n")
 	if err := os.WriteFile(filepath.Join(saveManagerSyncDir(), "README.txt"), []byte(readme.String()), 0o644); err != nil {
 		return saveSyncManifest{}, err
 	}

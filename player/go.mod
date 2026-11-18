@@ -8,6 +8,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.5.2
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/grandcat/zeroconf v1.0.0
+	github.com/klauspost/compress v1.20.4
 	github.com/pkg/sftp v1.13.12
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tidwall/gjson v1.20.1

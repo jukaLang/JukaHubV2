@@ -170,6 +170,9 @@ this document. Nothing ships.
 - The switcher must refuse while a game is live and the hub has no exit path
   (for example when the launcher's shell does not forward a quit signal).
 
+Phase 2 has shipped as the **Game switcher** (`gameswitcher.go`): X on Home,
+Start → Games → Game switcher, or the in-game menu's Game switcher row.
+
 **Phase 3 — suspend/resume spike (only if Phase 0 says there is room).**
 One suspended game, RetroArch only, opt-in, with a visible "this may fail on
 your firmware" label. Success means: switch away, play, switch back, audio and

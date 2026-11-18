@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -1633,8 +1634,10 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	ClearIconAtlas()
 	clearHomeTextCache()
 	// The shared snapshot keeps Quick Settings levels and every other persisted
-	// field intact when the theme changes.
-	saveUserConfig(userConfigFromVariables(config))
+	// field intact when the theme changes. Debounced: picking a theme, the
+	// battery saver and the time-of-day switch all run on the UI thread, and a
+	// synchronous write (several fsyncs on the SD card) froze it.
+	saveUserConfigDebounced(userConfigFromVariables(config))
 	if notify {
 		// notify marks a theme the user picked; automatic switches pass false.
 		// Picking the theme already in use is not another change.
@@ -1690,9 +1693,8 @@ func clearThemePreset(config *Config) {
 	clearHomeTextCache()
 }
 
-// themePresetOrder is the canonical, stable display order for the theme
-// gallery. Never derive this from map iteration: Go randomizes map order, so
-// iterating themePresets would make the gallery cards shuffle every frame.
+// themePresetOrder is the canonical, stable order for selectable presets.
+// Legacy conversions stay registered but the picker filters redundant ones.
 var themePresetOrder = []string{
 	// Neutrals first.
 	"dark", "light", "oled", "midnight", "hub", "ocean", "sunset",
@@ -1709,9 +1711,8 @@ var themePresetOrder = []string{
 	"arctic", "ruby", "cobalt", "tangerine", "orchid", "terminal",
 	// The console palettes (their Style conversions lead that tab).
 	"ps5", "ps4", "switch", "switch-dark", "xbox", "xboxone", "minimal",
-	// Total conversions last: they are their own tab, and a list built from
-	// the whole catalogue (onboarding, a config referencing a preset) still
-	// reads colours first.
+	// Legacy palette-plus-layout combinations are filtered from the gallery;
+	// distinctive styles remain visible under Styles.
 	"convert-dashboard", "convert-grid",
 	"convert-ps5", "convert-ps4", "convert-switch", "convert-switch-dark", "convert-xbox",
 	"convert-xboxone", "convert-minimal",
@@ -1729,27 +1730,43 @@ var themePresetOrder = []string{
 type themeTab struct {
 	Kind  ThemePresetKind
 	Label string
-	// Group narrows the tab past its Kind (themetabs.go): the console looks,
+	// Group narrows the tab past its Kind (themetabs.go): the distinctive styles,
 	// or the Experience packs screen. Empty is the rest of the Kind.
 	Group string
 }
 
-// themeGalleryTabs are the gallery's tabs, in order. Colour first: it is what
-// most people come to change, and the conversions are a bigger decision.
+// themeGalleryTabs are the gallery's tabs, in order. Colour and Home layout
+// are independent choices; Styles keeps looks with their own shape or glow.
 // Experience opens the Experience packs screen, which shows the same tabs.
 var themeGalleryTabs = []themeTab{
 	{themeKindColour, "Colour", ""},
-	{themeKindConversion, "Total conversion", ""},
-	{themeKindConversion, "Consoles", themeTabConsole},
+	{themeKindConversion, "Styles", themeTabStyle},
 	{themeKindConversion, "Experience", themeTabExperience},
 }
 
-// ListThemePresetsFor returns the presets of one tab, in the canonical order.
+// themePresetVisible hides built-in combinations that only repeat a palette
+// and a Home layout. A conversion with its own glow is still a distinct look.
+// Hidden IDs remain valid in saved preferences; user themes stay available.
+func themePresetVisible(name string, preset ThemePreset) bool {
+	if preset.Kind != themeKindConversion || themePresetIsStyle(name) {
+		return true
+	}
+	for _, spec := range themeConversionSpecs {
+		if spec.key == name {
+			base := themePresets[spec.palette]
+			return (spec.bloom != "" && !strings.EqualFold(spec.bloom, base.Bloom)) ||
+				(spec.bloom2 != "" && !strings.EqualFold(spec.bloom2, base.Bloom2))
+		}
+	}
+	return true
+}
+
+// ListThemePresetsFor returns selectable presets of one kind, in order.
 func ListThemePresetsFor(kind ThemePresetKind) []string {
 	names := make([]string, 0, len(themePresetOrder))
 	for _, name := range themePresetOrder {
 		preset, ok := themePresets[name]
-		if !ok || preset.Kind != kind {
+		if !ok || preset.Kind != kind || !themePresetVisible(name, preset) {
 			continue
 		}
 		names = append(names, name)
@@ -1757,18 +1774,21 @@ func ListThemePresetsFor(kind ThemePresetKind) []string {
 	return names
 }
 
-// ListThemePresets returns the names of all available theme presets in a
-// stable, deterministic order (the order shown in the gallery).
+// ListThemePresets returns selectable presets in a stable, deterministic order.
 func ListThemePresets() []string {
 	names := make([]string, 0, len(themePresetOrder))
 	for _, name := range themePresetOrder {
-		if _, ok := themePresets[name]; ok {
+		if preset, ok := themePresets[name]; ok && themePresetVisible(name, preset) {
 			names = append(names, name)
 		}
 	}
 	// Safety net: include any preset not in the canonical order (e.g. new
 	// themes added without updating themePresetOrder), still deterministically.
-	for name := range themePresets {
+	extras := make([]string, 0)
+	for name, preset := range themePresets {
+		if !themePresetVisible(name, preset) {
+			continue
+		}
 		found := false
 		for _, n := range names {
 			if n == name {
@@ -1777,8 +1797,10 @@ func ListThemePresets() []string {
 			}
 		}
 		if !found {
-			names = append(names, name)
+			extras = append(extras, name)
 		}
 	}
+	sort.Strings(extras)
+	names = append(names, extras...)
 	return names
 }

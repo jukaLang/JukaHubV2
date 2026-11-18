@@ -173,6 +173,17 @@ func trimuiAppDir() (string, error) {
 //     pauses is written down in /tmp/jukahub-paused, which launch.sh resumes
 //     as it hands the screen back; the log names each process by pid, name
 //     and script, so a report shows how this firmware's loop looks.
+//   - JukaHub OS boots without the menu (2026-11-17): in OS mode, unless
+//     os.json says "fastBoot": false, a stand-in is bind-mounted over
+//     /usr/trimui/bin/MainUI before the hook returns. Its first run with
+//     JukaHub's command queued takes itself off and returns, so the loop runs
+//     the queue in place of the menu; any other run is the real menu (through
+//     a second bind kept for that, named MainUI so pidof still finds the
+//     menu). The hook takes both binds off once JukaHub started, when it
+//     gives up, when the real menu is up, and when the stand-in has not run
+//     within 20 s (a loop that could not exec it). Simulated with
+//     the O-* scenarios of tmp/autostart-sim (loops A, B, C, K, S and a
+//     supervisor that ignores the queue).
 //
 // Go raw string: the script must not contain a backquote.
 const trimuiAutostartTemplate = `#!/bin/sh
@@ -412,11 +423,93 @@ enqueue() {
 	return 3
 }
 
+# JukaHub OS boots without the stock menu. In OS mode (os/os.json) a small
+# stand-in is bind-mounted over the menu's program for this boot only (RAM, no
+# file of the firmware is written): when the launcher loop runs "MainUI" the
+# first time, the stand-in takes itself off again and returns at once, and the
+# loop runs the queue - JukaHub OS - with its own environment and services, as
+# if JukaHub had been picked. Every other run of it (the queue gone, an app
+# queued instead, JukaHub already started) is the real menu, so the loop can
+# never end up without one. A loop that ignores the queue gets the real menu
+# on its next round, and the wait below carries on as without the stand-in.
+MAINUI=/usr/trimui/bin/MainUI
+SHIM="$LOCK/MainUI.jukahub"
+# Named MainUI, so a menu run through it is still "MainUI" to pidof, killall
+# and this hook (its name in /proc is the file's).
+REAL="$LOCK/real/MainUI"
+SKIPPED="$LOCK/skipped"
+# Whether the stand-in is what MAINUI shows now (not a menu another system
+# bound there).
+shim_on() {
+	dd if="$MAINUI" bs=256 count=1 2>/dev/null | grep -q jukahub-mainui-shim
+}
+# Take the stand-in and the real menu's handle off, whatever happened.
+unshim() {
+	if shim_on; then
+		umount -l "$MAINUI" 2>/dev/null || umount "$MAINUI" 2>/dev/null
+		shim_on && say "could not take the stand-in off $MAINUI"
+	fi
+	# Tried whether or not /proc/mounts lists it under this path (a /tmp
+	# reached through a symlink is listed under its real path): umount of a
+	# path that is no mount point only fails.
+	[ -e "$REAL" ] && { umount -l "$REAL" 2>/dev/null || umount "$REAL" 2>/dev/null; }
+	:
+}
+fast_boot() {
+	grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null || return 1
+	if grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false' "$APP_DIR/os/os.json" 2>/dev/null; then
+		say "JukaHub OS is on; the stock menu opens first (Skip the stock menu is off)"
+		return 1
+	fi
+	if [ ! -f "$MAINUI" ] || [ -z "$(command -v mount)" ] || [ -z "$(command -v umount)" ]; then
+		say "JukaHub OS is on, but the stock menu cannot be skipped here (no $MAINUI or no mount); it is closed once it is up"
+		return 1
+	fi
+	shim_on && return 0
+	rm -f "$SHIM"
+	cat >"$SHIM" <<'JUKAHUB_SHIM' || return 1
+#!/bin/sh
+# jukahub-mainui-shim: stands in for the stock menu once at boot (JukaHub OS)
+[ "$1" = --jukahub-probe ] && exit 0
+M=/usr/trimui/bin/MainUI
+L=/tmp/jukahub-autostart.lock
+on() { dd if="$M" bs=256 count=1 2>/dev/null | grep -q jukahub-mainui-shim; }
+on && { umount -l "$M" 2>/dev/null || umount "$M" 2>/dev/null; }
+if [ -e "$L/go" ] && [ ! -e /tmp/jukahub-autostart.ran ] && grep -q jukahub-autostart-cmd /tmp/cmd_to_run.sh 2>/dev/null && mkdir "$L/skipped" 2>/dev/null; then
+	exit 0
+fi
+on && exec "$L/real/MainUI" "$@"
+exec "$M" "$@"
+JUKAHUB_SHIM
+	chmod 755 "$SHIM" 2>/dev/null
+	if ! "$SHIM" --jukahub-probe </dev/null >/dev/null 2>&1; then
+		rm -f "$SHIM"
+		say "JukaHub OS is on, but /tmp cannot run the stand-in, so the stock menu is closed once it is up"
+		return 1
+	fi
+	# The real menu stays reachable however the stand-in ends.
+	mkdir -p "$LOCK/real" 2>/dev/null
+	: >"$REAL" 2>/dev/null
+	if ! mount --bind "$MAINUI" "$REAL" 2>/dev/null && ! mount -o bind "$MAINUI" "$REAL" 2>/dev/null; then
+		rm -f "$REAL" "$SHIM"
+		say "JukaHub OS is on, but mount --bind failed, so the stock menu is closed once it is up"
+		return 1
+	fi
+	if ! { mount --bind "$SHIM" "$MAINUI" 2>/dev/null || mount -o bind "$SHIM" "$MAINUI" 2>/dev/null; } || ! shim_on; then
+		unshim
+		rm -f "$SHIM"
+		say "JukaHub OS is on, but the stand-in could not be put over $MAINUI, so the stock menu is closed once it is up"
+		return 1
+	fi
+	return 0
+}
+
 # Take the start back: no queued copy can start JukaHub any more, and nothing
 # is pending.
 call_off() {
 	rm -f "$GO" "$PENDING"
 	[ "$(queued)" = ours ] && rm -f "$Q"
+	unshim
 }
 
 if [ ! -f "$APP_DIR/launch.sh" ]; then
@@ -479,6 +572,10 @@ case $? in
 	;;
 esac
 say "queued JukaHub for the firmware's launcher"
+# Before the hook returns: the loop runs the menu right after the boot scripts.
+if fast_boot; then
+	say "JukaHub OS: the stock menu is skipped at this boot (a stand-in for $MAINUI until the queue runs)"
+fi
 
 # The rest waits, so it runs in the background and the boot goes on.
 (
@@ -505,7 +602,12 @@ if sleep 0.1 2>/dev/null; then STEP=0.5 PER=2; else STEP=1 PER=1; fi
 nap() { sleep "$STEP" 2>/dev/null || sleep 1; }
 
 started() {
-	say "the firmware started JukaHub${1:+ ($1)}"
+	unshim
+	if [ -e "$SKIPPED" ]; then
+		say "the firmware started JukaHub OS in place of the stock menu"
+	else
+		say "the firmware started JukaHub${1:+ ($1)}"
+	fi
 	exit 0
 }
 give_up() {
@@ -562,9 +664,18 @@ while :; do
 	fi
 	last="$ui"
 	n=$((n + 1))
+	# The stand-in still on after 20 s: the loop has not run MainUI yet, or
+	# could not run the stand-in (it would retry without a menu until the give
+	# up below). It comes off, and the menu is closed once it is up, as without.
+	if [ "$n" -eq $((20 * PER)) ] && shim_on; then
+		unshim
+		say "the firmware did not run the stand-in for $MAINUI within 20 s, so it is taken off"
+	fi
 	[ "$n" -ge $((120 * PER)) ] && give_up "the stock menu did not appear within two minutes, so JukaHub is not started"
 	nap
 done
+# The real menu is up: the stand-in, if there was one, has had its turn.
+unshim
 
 # The menu is up. Close it (it ignores SIGTERM): the loop then runs the queue,
 # as when an app is picked in the menu. If the menu comes back instead, it may
@@ -1085,6 +1196,16 @@ func autoStartClearPending() {
 	}
 }
 
+// trimuiOSEditionCard reports whether JukaHub on this card was installed from
+// the OS package (os/os.json: edition "os") with OS mode on.
+func trimuiOSEditionCard() bool {
+	appDir, err := trimuiAppDir()
+	if err != nil {
+		return false
+	}
+	return jukaosLoadState(appDir).jukaosOSEdition()
+}
+
 // reconcileAutoStart applies the saved setting on startup: if the user enabled
 // it and the launcher is missing (new install, moved SD card), it is written
 // again; if the user disabled it, a leftover launcher is removed. On a TrimUI
@@ -1102,6 +1223,20 @@ func reconcileAutoStart(config *Config) {
 	}
 	want := autoStartEnabled(config)
 	installed := autoStartInstalled()
+	if !want && installed && autostartIsTrimui() && trimuiOSEditionCard() {
+		// The OS package put the boot hook on the card, over settings that
+		// had "Start JukaHub at login" off (an app install that was there
+		// before). Removing the hook here undid the install: the next boot was
+		// the stock menu again. The hook is the newer choice; turning Boot
+		// into JukaHub OS off removes it, and that sticks.
+		if config.Variables.Custom == nil {
+			config.Variables.Custom = map[string]interface{}{}
+		}
+		config.Variables.Custom["autoStart"] = boolString(true)
+		saveUserConfigDebounced(userConfigFromVariables(config))
+		logPatch("autostart: JukaHub OS package: kept its boot hook and switched Start JukaHub at login on (it was off in this card's settings)")
+		want = true
+	}
 	if want && installed && autostartIsTrimui() {
 		if trimuiAutostartHookStale() {
 			// Another build's hook ran at this boot (an older one never left

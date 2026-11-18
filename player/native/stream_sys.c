@@ -298,7 +298,7 @@ static void put_line(FILE *file, const char *key, const char *value)
     fputc('\n', file);
 }
 
-bool ss_write_status(const char *path, const SsStatus *status)
+bool ss_write_pairs(const char *path, const SsPair *pairs, size_t count)
 {
     if(!path || !path[0]) return false;
     char tmp[600];
@@ -319,21 +319,7 @@ bool ss_write_status(const char *path, const SsStatus *status)
         unlink(tmp);
         return false;
     }
-    char number[32];
-    put_line(file, "version", "1");
-    snprintf(number, sizeof(number), "%d", status->rc);
-    put_line(file, "rc", number);
-    put_line(file, "result", status->result ? status->result : "init_failed");
-    put_line(file, "message", status->message);
-    put_line(file, "connected", status->connected ? "1" : "0");
-    snprintf(number, sizeof(number), "%lu", status->seconds);
-    put_line(file, "seconds", number);
-    snprintf(number, sizeof(number), "%llu", status->frames);
-    put_line(file, "frames", number);
-    put_line(file, "quit_reason", status->quit_reason);
-    put_line(file, "host", status->host);
-    put_line(file, "codec", status->codec);
-    put_line(file, "saved_pin_rejected", status->saved_pin_rejected ? "1" : "0");
+    for(size_t i = 0; i < count; i++) put_line(file, pairs[i].key ? pairs[i].key : "", pairs[i].value);
     bool ok = fflush(file) == 0 && fsync(descriptor) == 0;
     if(fclose(file) != 0) ok = false;
     if(!ok || rename(tmp, path) != 0) {
@@ -341,6 +327,28 @@ bool ss_write_status(const char *path, const SsStatus *status)
         return false;
     }
     return true;
+}
+
+bool ss_write_status(const char *path, const SsStatus *status)
+{
+    char rc[32], seconds[32], frames[32];
+    snprintf(rc, sizeof(rc), "%d", status->rc);
+    snprintf(seconds, sizeof(seconds), "%lu", status->seconds);
+    snprintf(frames, sizeof(frames), "%llu", status->frames);
+    const SsPair pairs[] = {
+        {"version", "1"},
+        {"rc", rc},
+        {"result", status->result ? status->result : "init_failed"},
+        {"message", status->message},
+        {"connected", status->connected ? "1" : "0"},
+        {"seconds", seconds},
+        {"frames", frames},
+        {"quit_reason", status->quit_reason},
+        {"host", status->host},
+        {"codec", status->codec},
+        {"saved_pin_rejected", status->saved_pin_rejected ? "1" : "0"},
+    };
+    return ss_write_pairs(path, pairs, sizeof(pairs) / sizeof(pairs[0]));
 }
 
 static void join_path(char *out, size_t size, const char *root, const char *rest)

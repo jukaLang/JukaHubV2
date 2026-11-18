@@ -365,7 +365,7 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 		if !row.ForgetAll {
 			meta = browserCookieCountLabel(row.Count)
 			if !row.Since.IsZero() {
-				meta += " · since " + row.Since.Local().Format("Jan 2")
+				meta += " · since " + formatDateNear(config, row.Since.Local(), time.Now())
 			}
 		}
 		// The name's budget shrinks by the metadata's real width, so the two

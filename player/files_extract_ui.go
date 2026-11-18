@@ -65,6 +65,7 @@ type feArchiveInfo struct {
 	SmartName string // the name Extract would give the result, "" when unknown
 	SmartDir  bool   // SmartName is a folder
 	Encrypted bool
+	PassTool  bool   // 7-Zip is here (or, for a 7z on Windows, fetched) to take its password
 	Links     int    // symbolic links a 7-Zip listing showed
 	Method    string // a zip compression method only 7-Zip reads
 	NeedTool  bool   // the archive needs 7-Zip (or, for RAR on Windows, tar)
@@ -131,6 +132,15 @@ func feArchiveInspect(ctx context.Context, path, dest string) (feArchiveInfo, []
 			items = feArchive7ZipItems(ctx, &info, tool.Path)
 		}
 	}
+	if info.Encrypted && info.Err == "" {
+		// Only 7-Zip takes a password: the standard zip reader cannot decrypt,
+		// and Windows' tar.exe asks for none.
+		tool := feArchiveToolFor(info.Kind)
+		info.PassTool = tool.Kind == feTool7Zip || (tool.Path == "" && info.Kind == feArchive7z && IsWindows())
+		if tool.Kind == feTool7Zip {
+			info.Tool = tool.Path
+		}
+	}
 	rels := feArchiveTally(&info, items)
 	if info.Listed {
 		feArchivePredict(&info)
@@ -169,7 +179,7 @@ func feArchiveZipItems(info *feArchiveInfo) []feArchiveItem {
 // give leaves the archive unlisted rather than blocked: unpacking may still
 // work, and says why when it does not.
 func feArchive7ZipItems(ctx context.Context, info *feArchiveInfo, tool string) []feArchiveItem {
-	entries, err := feList7Zip(ctx, tool, info.Path)
+	entries, err := feList7Zip(ctx, tool, info.Path, "")
 	switch {
 	case errors.Is(err, errFeArchiveEncrypted):
 		info.Encrypted = true
@@ -507,6 +517,11 @@ func feArchiveActions(config *Config) []feAction {
 		case info.Listed && info.TopCount == 0:
 			extract.Detail, here.Detail = "nothing to extract", "nothing to extract"
 			extract.Enabled, here.Enabled = false, false
+		case info.Encrypted:
+			// Either row asks for the password first (feArchiveStart), and the
+			// extraction starts once it is typed.
+			extract.Label, extract.Detail = "Password…", "then extract "+extract.Detail
+			here.Detail = "password first · " + here.Detail
 		}
 	}
 	switch place := feExtractPlace(path); {
@@ -597,8 +612,8 @@ func feArchiveBlocker(info feArchiveInfo) string {
 	switch {
 	case info.Err != "":
 		return info.Err
-	case info.Encrypted:
-		return "it is password-protected (JukaHub cannot ask for passwords yet)"
+	case info.Encrypted && !info.PassTool:
+		return feArchivePasswordToolMissing(info)
 	case info.NeedTool && info.Tool == "" && !(info.Kind == feArchive7z && IsWindows()):
 		return feArchiveToolMissing(info)
 	case info.Links > 0:
@@ -615,6 +630,19 @@ func feArchiveToolMissing(info feArchiveInfo) string {
 	what := "it needs 7-Zip"
 	if info.Method != "" {
 		what = "its " + info.Method + " compression needs 7-Zip"
+	}
+	if IsWindows() {
+		return what + " (7-zip.org)"
+	}
+	return what + " (7zz), which is not on this device"
+}
+
+// feArchivePasswordToolMissing explains an encrypted archive on a device
+// without 7-Zip, the only program here that takes a password.
+func feArchivePasswordToolMissing(info feArchiveInfo) string {
+	what := errFePasswordNeeds7z.Error()
+	if info.Kind == feArchiveZip {
+		what = "it is password-protected, and an encrypted zip needs 7-Zip"
 	}
 	if IsWindows() {
 		return what + " (7-zip.org)"
@@ -765,7 +793,20 @@ func feArchiveStart(config *Config, mode feExtractMode, label string) {
 		}
 		feSheet.armed = ""
 	}
-	place, err := feExtractEnqueue(feExtractJob{Archive: path, Dest: info.Dest, Mode: mode, Kind: info.Kind})
+	job := feExtractJob{Archive: path, Dest: info.Dest, Mode: mode, Kind: info.Kind}
+	if info.Encrypted {
+		// Every check above has run; the job waits for its password.
+		feSheet.armed = ""
+		feArchiveAskPassword(job)
+		return
+	}
+	feArchiveEnqueue(job)
+}
+
+// feArchiveEnqueue queues the sheet's job and puts the sheet on its progress.
+func feArchiveEnqueue(job feExtractJob) {
+	name := filepath.Base(job.Archive)
+	place, err := feExtractEnqueue(job)
 	if err != nil {
 		showToast(err.Error(), ToastInfo())
 		return
@@ -777,6 +818,63 @@ func feArchiveStart(config *Config, mode feExtractMode, label string) {
 	if place > 1 {
 		showToast(name+" waits for "+feCountWord(place-1, "extraction", "extractions")+" ahead of it", ToastInfo())
 	}
+}
+
+// --- The password (APP-14) ---------------------------------------------------------
+
+// feArchivePassVKTarget aims the on-screen keyboard at an encrypted archive's
+// password: submit-only, masked, never learned, copied or saved.
+const feArchivePassVKTarget vkTargetKind = 187
+
+// feArchivePass is the job waiting for its password and the password while it
+// is typed. SDL thread only. Neither reaches the config or a log: the buffer
+// goes when the keyboard closes, and the password leaves with the job on
+// submit (feExtractRun keeps it out of the outcome).
+var feArchivePass struct {
+	job    feExtractJob
+	buffer string
+}
+
+// feArchiveAskPassword opens the keyboard for job's password.
+func feArchiveAskPassword(job feExtractJob) {
+	feArchivePass.job, feArchivePass.buffer = job, ""
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = feArchivePassVKTarget
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+	PlayActivateSound()
+}
+
+// feArchivePassPlaceholder is the empty field's hint (asked every frame: a
+// constant).
+func feArchivePassPlaceholder() string {
+	return "The archive's password, for 7-Zip"
+}
+
+// feArchivePassForget drops the waiting job and the typed text (the keyboard
+// closed).
+func feArchivePassForget() {
+	feArchivePass.job, feArchivePass.buffer = feExtractJob{}, ""
+}
+
+// feArchivePasswordSubmit queues job with the password typed for it. An empty
+// submit extracts nothing.
+func feArchivePasswordSubmit(job feExtractJob, password string) {
+	if job.Archive == "" {
+		return
+	}
+	if password == "" {
+		showToast("No password typed — "+filepath.Base(job.Archive)+" was not extracted", ToastInfo())
+		return
+	}
+	job.Password = password
+	feArchiveEnqueue(job)
 }
 
 // feArchiveExtractAll queues every marked archive for Extract, each beside
@@ -1281,8 +1379,16 @@ func feExtractFriendlyError(err error, st feExtractStats) string {
 		return xzMemory.Error()
 	case errors.As(err, &xzUnsupported):
 		return xzUnsupported.Error()
+	case errors.Is(err, errFePasswordNeeds7z):
+		// Before the plain encrypted case, which it wraps.
+		if IsWindows() {
+			return err.Error() + " — install it from 7-zip.org"
+		}
+		return err.Error() + " — 7zz is not on this device"
 	case errors.Is(err, errFeArchiveEncrypted):
-		return "it is password-protected (JukaHub cannot ask for passwords yet)"
+		return "it is password-protected — open it on its own and choose Password…"
+	case errors.Is(err, errFeWrongPassword), errors.Is(err, errFePasswordQuote), errors.Is(err, errFePasswordUnread):
+		return err.Error()
 	case errors.Is(err, errFeArchiveNeedsTool):
 		if IsWindows() {
 			return err.Error() + " — install it from 7-zip.org"
@@ -1297,7 +1403,7 @@ func feExtractFriendlyError(err error, st feExtractStats) string {
 		}
 		return err.Error()
 	case errors.Is(err, errFeNotArchive), errors.Is(err, errFeCardFull), errors.Is(err, errFeHasLinks),
-		errors.Is(err, errFeTooMany):
+		errors.Is(err, errFeTooMany), errors.Is(err, errFeFATTooBig):
 		return err.Error()
 	case isDiskFullError(err):
 		return "the card is full"

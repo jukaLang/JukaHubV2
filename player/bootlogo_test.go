@@ -241,9 +241,24 @@ func TestBootLogoAcceptable(t *testing.T) {
 	if _, err := bootLogoValidate(ok); err != nil {
 		t.Fatalf("a 400x300 logo was refused: %v", err)
 	}
+	// The actual Smart Pro 1.1.0 file is a 396x66, 32-bit BMP with two
+	// trailing bytes. It is a centred boot banner, not a full-screen image.
+	banner := testBMP(testBMPSpec{w: 396, h: 66, bits: 32, header: 40, trailing: 2})
+	bannerInfo, err := bootLogoValidate(banner)
+	if err != nil || !bootLogoStockBanner(bannerInfo) {
+		t.Fatalf("stock Smart Pro banner refused: %+v, %v", bannerInfo, err)
+	}
+	word := bytes.Repeat([]byte{255}, 120*40)
+	art := bootLogoArtwork{ScreenW: 396, ScreenH: 66, Word: word, WordW: 120, WordH: 40}
+	if pic, err := bootLogoPicture(bannerInfo, art); err != nil {
+		t.Fatalf("stock banner picture: %v", err)
+	} else if patched, err := bmpPatch(banner, bannerInfo, pic); err != nil || len(patched) != len(banner) {
+		t.Fatalf("stock banner rewrite: %d bytes, %v", len(patched), err)
+	}
 	refuse := map[string][]byte{
-		"portrait":  testBMP(testBMPSpec{w: 300, h: 400, bits: 24, header: 40}),
-		"too small": testBMP(testBMPSpec{w: 100, h: 80, bits: 24, header: 40}),
+		"portrait":       testBMP(testBMPSpec{w: 300, h: 400, bits: 24, header: 40}),
+		"too small":      testBMP(testBMPSpec{w: 100, h: 80, bits: 24, header: 40}),
+		"unknown banner": testBMP(testBMPSpec{w: 397, h: 66, bits: 32, header: 40}),
 	}
 	lying := append([]byte(nil), ok...)
 	binary.LittleEndian.PutUint32(lying[2:], 100)

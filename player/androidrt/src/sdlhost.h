@@ -17,6 +17,7 @@
 #ifndef ANDROIDRT_SDLHOST_H
 #define ANDROIDRT_SDLHOST_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct ApakSdlWindow ApakSdlWindow; /* SDL_Window, opaque */
@@ -88,5 +89,58 @@ typedef struct ApakSdl {
     PFN_SDL_DestroyWindow SDL_DestroyWindow;
     PFN_SDL_GL_GetCurrentWindow SDL_GL_GetCurrentWindow;
 } ApakSdl;
+
+/* ── shared by the present layer and the surface probe (surface.c) ──────
+ * The sdl backend (eglpresent.c) and ANDROIDPAK_SURFACE's "SDL:" line load
+ * and start SDL2 through these, so the probe measures the path games take. */
+struct ApakGpu;
+
+/* The firmware's SDL2: ANDROIDPAK_SDL_LIB when set (final: no other copy
+ * stands in), else libSDL2-2.0.so.0 at the stock firmware's paths first
+ * (stockFirst; a copy another package put on the library path may lack its
+ * video driver) or the library path first. Only libSDL2-2.0.so.0 names: a
+ * bare libSDL2.so on the path is an SDL game's own bionic build, which glibc
+ * cannot load. Resolves every entry point above; without the required block
+ * the library is closed again. 1 = loaded; 0 = `why`. Idempotent. */
+int apak_sdlLoad(ApakSdl *s, int stockFirst, char *why, size_t cap);
+
+/* What the sdl backend needs before its window: g's eglGetCurrent* /
+ * eglMakeCurrent / eglCreateContext, the library (apak_sdlLoad), its video
+ * subsystem with GLES 2.0 attributes and SDL's EGL display (SDL_GL_LoadLibrary
+ * when exported). driver = SDL_GetCurrentVideoDriver() once video is up ("?"
+ * when it cannot say; "" before). 1 = up; 0 = `why`, video quit again when the
+ * EGL display failed. SDL reads apak_sdlEnvDefaults' variables, set before. */
+int apak_sdlStart(ApakSdl *s, const struct ApakGpu *g, int stockFirst, char *driver, size_t dcap, char *why,
+                  size_t cap);
+
+/* The GLES library SDL loads before its EGL (SDL_VIDEO_GL_DRIVER):
+ * ANDROIDPAK_GLES2_LIB when set — what the game's libGLESv2.so is bound to —
+ * else libGLESv2 beside the chosen libEGL (apak_gpuBesideEgl), NULL when
+ * there is none: SDL's default then searches the library path. */
+const char *apak_sdlGlesLib(const char *eglName, char *buf, size_t cap);
+
+/* The variables SDL reads, as defaults (whatever the environment already says
+ * wins): SDL_VIDEO_EGL_DRIVER = the game's libEGL and SDL_VIDEO_GL_DRIVER the
+ * GLES library beside it (one EGL instance for SDL and the game),
+ * SDL_NO_SIGNAL_HANDLERS (JukaHub stops games with signals) and
+ * SDL_INPUT_LINUX_KEEP_KBD (the console keyboard is left alone). setenv: only
+ * while the process is single-threaded. */
+void apak_sdlEnvDefaults(const char *eglName);
+
+/* The probe's verdict on the SDL path ("SDL:" line). */
+enum { APAK_SDLPROBE_NO = 0, APAK_SDLPROBE_UP = 1, APAK_SDLPROBE_LOADED = 2 };
+typedef struct {
+    int state;              /* APAK_SDLPROBE_*; LOADED: the library only       */
+    int egl;                /* UP: 1 SDL's EGL display came up, -1 not measured */
+    char name[256];         /* the library, "" when none loaded               */
+    ApakSdlVersion version; /* 0.0.0 without SDL_GetVersion                    */
+    char driver[32];        /* SDL's video driver, "" when video never started */
+    char why[512];          /* NO: why not; LOADED: why video was not started  */
+} ApakSdlProbe;
+
+/* Inside the runner SDL2 belongs to the present layer: it registers this,
+ * and the probe asks it instead of starting a second video init (and leaves
+ * the default EGL display, which the game and SDL share, initialised). */
+void apak_surfaceSetSdlProbe(void (*probe)(ApakSdlProbe *out));
 
 #endif /* ANDROIDRT_SDLHOST_H */

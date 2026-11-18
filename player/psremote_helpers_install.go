@@ -332,6 +332,9 @@ type psHelperRun struct {
 	cancel  context.CancelFunc
 	stopped bool
 	settled bool
+	// moonlight says mlEnsureHelper asked for this install: it runs even
+	// when only moonlight-stream is missing (moonlight_stream.go).
+	moonlight bool
 }
 
 // psHelperJob is the one install at a time. Its fields are written by the
@@ -408,7 +411,16 @@ func psHelperSetView(v psHelperView) {
 // or mode says to leave the last failure be (psHelperStartMode). It reports
 // whether an install is running afterwards.
 func psHelpersStart(mode psHelperStartMode) bool {
-	if !psHelpersNeeded() {
+	return psHelpersStartFor(mode, false)
+}
+
+// psHelpersStartFor is psHelpersStart that, with moonlight, also starts an
+// install when only moonlight-stream is missing (mlEnsureHelper). A refusal
+// of the PS helpers remembered from the last install does not hold such a
+// press back: moonlight-stream was not what the firmware refused.
+func psHelpersStartFor(mode psHelperStartMode, moonlight bool) bool {
+	mlMissing := moonlight && mlHelperMissingHere()
+	if !psHelpersNeeded() && !mlMissing {
 		return false
 	}
 	if mode == psStartRetry {
@@ -424,14 +436,14 @@ func psHelpersStart(mode psHelperStartMode) bool {
 		if mode == psStartAuto && (refused || time.Since(psHelperJob.endedAt) < psHelperAutoRetry) {
 			return false
 		}
-		if mode == psStartPress && refused {
+		if mode == psStartPress && refused && !mlMissing {
 			return false
 		}
 	}
 	// The context is made here, under the lock, so a stop that comes before
 	// the worker's first step still reaches it (psHelpersStop).
 	ctx, cancel := context.WithTimeout(context.Background(), psHelperTimeout)
-	run := &psHelperRun{done: make(chan struct{}), cancel: cancel}
+	run := &psHelperRun{done: make(chan struct{}), cancel: cancel, moonlight: moonlight}
 	psHelperJob.run = run
 	psHelperJob.running = true
 	psHelperJob.view = psHelperView{phase: psHelperLooking}
@@ -464,7 +476,7 @@ func psHelpersStop() bool {
 func psHelpersWorker(ctx context.Context, run *psHelperRun) {
 	defer run.cancel()
 	started := time.Now()
-	tag, err := psInstallHelpers(ctx, psHelperSetView)
+	tag, err := psInstallHelpersFor(ctx, psHelperSetView, run.moonlight)
 	psHelperJob.mu.Lock()
 	stopped := run.stopped
 	run.settled = true
@@ -1073,9 +1085,14 @@ func psHelperUnpackedSize(archive string) (int64, error) {
 	return total, nil
 }
 
-// psHelperFiles are the files of an unpacked package.
+// psHelperFiles are the files of an unpacked package. moonlight
+// (bin/moonlight-stream, Moonlight's stream helper) is optional: a package
+// without it installs the PS helpers as before. moonlightTwice says the
+// package held it more than once, which leaves it out (moonlight "").
 type psHelperFiles struct {
 	stream, regist, buildInfo, sums string
+	moonlight                       string
+	moonlightTwice                  bool
 }
 
 // psHelperFindFiles finds the package's files in its unpacked tree: by name,
@@ -1109,6 +1126,8 @@ func psHelperFindFiles(root string) (psHelperFiles, error) {
 			found.buildInfo = p
 		case "SHA256SUMS":
 			found.sums = p
+		case mlHelperName:
+			found.moonlight = p
 		default:
 			return nil
 		}
@@ -1122,6 +1141,11 @@ func psHelperFindFiles(root string) (psHelperFiles, error) {
 		if seen[name] > 1 {
 			return psHelperFiles{}, fmt.Errorf("%w: the package holds %s more than once", errPSHelpersUnverified, name)
 		}
+	}
+	if seen[mlHelperName] > 1 {
+		// Optional: two copies leave Moonlight's helper out, not the PS
+		// helpers (psInstallHelpersFor decides what that means).
+		found.moonlight, found.moonlightTwice = "", true
 	}
 	if found.stream == "" || found.regist == "" {
 		return psHelperFiles{}, fmt.Errorf("%w: the package has no chiaki-stream or no chiaki-regist", errPSHelpersUnverified)
@@ -1229,6 +1253,17 @@ func psHelperPlace(src, dir, name, want string, mode os.FileMode) error {
 // psInstallHelpers installs the missing helpers and returns the release they
 // came from ("" when nothing was missing).
 func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string, error) {
+	return psInstallHelpersFor(ctx, progress, false)
+}
+
+// psInstallHelpersFor is psInstallHelpers that also installs Moonlight's
+// optional bin/moonlight-stream: from any package that carries it, whenever it
+// is missing, and as the one reason for an install when wantMoonlight
+// (mlEnsureHelper). It is checked like chiaki-stream (SHA256SUMS, the start-it-
+// once probe) and put in place before it; one this firmware refuses is left
+// out without counting as a refusal of Remote Play (mlSetHelperInstallNote
+// says why).
+func psInstallHelpersFor(ctx context.Context, progress func(psHelperView), wantMoonlight bool) (string, error) {
 	if progress == nil {
 		progress = func(psHelperView) {}
 	}
@@ -1250,7 +1285,8 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 	stream, regist := psHelpersPresent()
 	needStream := !stream && !regularFile(filepath.Join(dir, "chiaki-stream"))
 	needRegist := !regist && !regularFile(filepath.Join(dir, "chiaki-regist"))
-	if !needStream && !needRegist {
+	needMoonlight := mlHelperPath() == "" && !regularFile(filepath.Join(dir, mlHelperName))
+	if !needStream && !needRegist && !(wantMoonlight && needMoonlight) {
 		return "", nil
 	}
 	client := psHelperClientFn()
@@ -1335,13 +1371,44 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 		_ = os.RemoveAll(work)
 		return rel.TagName, err
 	}
+	// Moonlight's helper is optional: a problem with it (two copies, not in
+	// or not matching SHA256SUMS, a refusal by this firmware, a failed copy)
+	// leaves it out, is noted for mlEnsureHelper and the PS helpers go on.
+	// Only an install for moonlight-stream alone (mlEnsureHelper's, the PS
+	// helpers all there) fails with it. hold says the package itself is at
+	// fault, so a press within mlHelperNoneRetry gets the note, not another
+	// download.
+	psNeeded := needStream || needRegist
+	moonlightDropped := false
+	moonlightLeftOut := func(err error, hold bool) bool {
+		files.moonlight = ""
+		if !psNeeded {
+			return false
+		}
+		moonlightDropped = true
+		logWarn("psremote", "%s left out of the install from %s: %v", mlHelperName, rel.TagName, err)
+		if needMoonlight {
+			mlSetHelperInstallNote("Moonlight could not be installed · "+psHelpersFailText(err), hold)
+		}
+		return true
+	}
+	if files.moonlightTwice {
+		bad := fmt.Errorf("%w: the package holds %s more than once", errPSHelpersUnverified, mlHelperName)
+		if !moonlightLeftOut(bad, true) {
+			_ = os.RemoveAll(work)
+			return rel.TagName, bad
+		}
+	}
 	hashes := map[string]string{}
-	for name, path := range map[string]string{"chiaki-stream": files.stream, "chiaki-regist": files.regist, "BUILDINFO.txt": files.buildInfo} {
+	for name, path := range map[string]string{"chiaki-stream": files.stream, "chiaki-regist": files.regist, "BUILDINFO.txt": files.buildInfo, mlHelperName: files.moonlight} {
 		if path == "" {
 			continue
 		}
 		sum, err := SHA256File(path)
 		if err != nil {
+			if name == mlHelperName && moonlightLeftOut(err, false) {
+				continue
+			}
 			return rel.TagName, err
 		}
 		hashes[name] = sum
@@ -1357,8 +1424,13 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 				continue
 			}
 			if !ok || !strings.EqualFold(listed, sum) {
+				bad := fmt.Errorf("%w: %s does not match the package's SHA256SUMS", errPSHelpersUnverified, name)
+				if name == mlHelperName && moonlightLeftOut(bad, true) {
+					delete(hashes, name)
+					continue
+				}
 				_ = os.RemoveAll(work)
-				return rel.TagName, fmt.Errorf("%w: %s does not match the package's SHA256SUMS", errPSHelpersUnverified, name)
+				return rel.TagName, bad
 			}
 		}
 	}
@@ -1381,6 +1453,29 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 			refusals = append(refusals, problem)
 			installRegist = false
 		}
+	}
+	// Moonlight's helper is probed like chiaki-stream (same library path); a
+	// refusal leaves it out and is noted for mlEnsureHelper, never saved as a
+	// refusal of Remote Play.
+	installMoonlight := needMoonlight && files.moonlight != ""
+	switch {
+	case installMoonlight:
+		psEnsureExecutable(files.moonlight)
+		if problem := strings.TrimSpace(psHelperProbeFn(files.moonlight, "", dir)); problem != "" {
+			problem = strings.TrimPrefix(problem, "chiaki-stream: ")
+			logWarn("psremote", "%s from %s won't run here: %s", mlHelperName, rel.TagName, problem)
+			mlSetHelperInstallNote("Moonlight won't run on this firmware · "+psHelperCompact(problem), true)
+			installMoonlight = false
+			if !psNeeded {
+				// It was the one thing to install: the install fails with it,
+				// as no refusal of Remote Play. Trying the same archive again
+				// cannot change it.
+				_ = os.RemoveAll(work)
+				return rel.TagName, fmt.Errorf("%w: %s", errMLHelperWontRun, psHelperCompact(problem))
+			}
+		}
+	case needMoonlight && !moonlightDropped:
+		mlSetHelperInstallNote("the Remote Play download of "+rel.TagName+" has no Moonlight helper yet · try after an update", true)
 	}
 
 	// From here the helpers are copied into bin/, and a stop is no longer
@@ -1405,6 +1500,15 @@ func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string,
 	if installRegist {
 		if err := place(files.regist, "chiaki-regist", hashes["chiaki-regist"], 0o755); err != nil {
 			return rel.TagName, err
+		}
+	}
+	if installMoonlight {
+		if err := place(files.moonlight, mlHelperName, hashes[mlHelperName], 0o755); err != nil {
+			if !moonlightLeftOut(err, false) {
+				return rel.TagName, err
+			}
+		} else {
+			mlSetHelperInstallNote("", false)
 		}
 	}
 	if installStream {

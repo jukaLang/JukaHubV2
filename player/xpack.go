@@ -8,7 +8,8 @@ package main
 //
 //   - the theme: a preset or total conversion by id, or a theme file of its own;
 //   - the Home arrangement (your own layout, the dashboard, the hero grid, the
-//     carousel or the widgets — those two show the user's own homeTiles);
+//     carousel or the widgets — those two show the user's own homeTiles — or
+//     the Tabs Home, whose tabs, favourites and collections stay the user's);
 //   - a wallpaper, or "none" for Home's own backdrop;
 //   - the interface sounds (on or off, and how loud);
 //   - the screen JukaHub opens on;

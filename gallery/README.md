@@ -61,6 +61,18 @@ within `themes` and never equal to a built-in palette id (for example `dark`,
 `light`, `oled`). An entry that reuses a built-in id is refused, so a
 contribution can never shadow a shipped palette.
 
+### Publishing a new version
+
+Edit the entry's `theme` object in place and keep its `id`. Handhelds that
+installed the theme notice the change the next time they read this index (when
+the Community themes panel opens, and once a day in the background) and update
+their copy over the air, unless the owner switched off **Update themes
+automatically** or edited the theme file on the device — those only show an
+update tag. The comparison is a hash of the `theme` object, so any colour change
+counts and nothing else is needed. An optional `"updated": "YYYY-MM-DD"` on the
+entry is shown in the panel's byline ("updated 17 Nov 2026"); it is display
+only.
+
 ## Layouts
 
 A layout is a complete `jukaconfig.json` plus gallery metadata, the same shape

@@ -23,6 +23,7 @@ func voiceAISettingsRows() []setRow {
 	var rows []setRow
 	rows = append(rows, ttsSettingsRows()...)
 	rows = append(rows, offlineAISettingsRows()...)
+	rows = append(rows, aiToolsSettingsRows()...)     // Juka's device tools (aitools_settings.go)
 	rows = append(rows, voiceScreenSettingsRows()...) // "Let Juka see the screen" (voicescreen.go)
 	rows = append(rows, voiceShortcutSettingsRows()...)
 	rows = append(rows, gameAssistSettingsRows()...)

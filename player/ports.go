@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -99,6 +100,8 @@ type portEntry struct {
 	Master  bool           // the PortMaster app itself
 	Info    bool           // a hint row with no status label
 	Catalog mcCatalogEntry // a downloadable entry from PortMaster's live catalogue
+	Action  portAction     // a row of an installed port's options (ports_manage.go)
+	Store   bool           // the row that opens the Ports Store (ports_store.go)
 }
 
 // scanPortLaunchers lists top-level .sh scripts in roots, excluding
@@ -131,7 +134,7 @@ func scanPortLaunchers(roots []string) []portEntry {
 			seen[key] = true
 			compat := portCompatForLauncher(path)
 			detail := path
-			if compat.State == portCompat32BitOnly {
+			if portCompatBlocked(compat.State) {
 				// The manifest itself says this build cannot run here; the panel
 				// refuses it rather than letting it fail inside PortMaster.
 				detail = path + " · " + compat.Note
@@ -200,9 +203,30 @@ func portEntries() []portEntry {
 		return portsCache.entries
 	}
 	launcher := portMasterLauncher(portMasterSDRoot)
-	portsCache.entries = buildPortEntries(launcher, portRoots(portMasterSDRoot))
+	portsCache.entries = portsAnnotate(buildPortEntries(launcher, portRoots(portMasterSDRoot)))
 	portsCache.built = true
 	return portsCache.entries
+}
+
+// portsAnnotate adds what the background checks found to the rows: a newer
+// PortMaster, and ports whose catalogue build is newer than the installed one
+// (once the catalogue was read this visit). Main thread, at cache build only.
+func portsAnnotate(entries []portEntry) []portEntry {
+	for i := range entries {
+		e := &entries[i]
+		switch {
+		case e.Master && !e.Info && e.Launch != "":
+			if note := portMasterUpdateNote(); note != "" {
+				e.Detail = note
+			}
+		case !e.Master && !e.Install && e.Launch != "" && len(portsPanel.catalogEntries) > 0:
+			meta := portMetaFor(e.Launch)
+			if c, ok := portCatalogMatch(meta, e.Launch, portsPanel.catalogEntries); ok && portUpdateAvailable(meta, c) {
+				e.Detail = "Update available · " + hintKeyFor("Y", "Options") + " for options · " + e.Detail
+			}
+		}
+	}
+	return entries
 }
 
 func invalidatePortsCache() {
@@ -348,6 +372,13 @@ type portsPanelState struct {
 	catalogLoading    bool
 	catalogErr        string
 	catalogGeneration uint64
+	// An installed port's options (Y; ports_manage.go).
+	opts      bool
+	optsFor   portEntry
+	optsRows  []portEntry
+	optsSub   string
+	optsBack  int
+	confirmAt time.Time
 }
 
 var portsPanel portsPanelState
@@ -371,6 +402,12 @@ func openPortsPanel(returnEmu bool) {
 	portsPanelRect = sdl.Rect{}
 	portRowHits = nil
 	invalidatePortsCache()
+	// Quietly, for the "Update available" lines and a newer PortMaster: the
+	// catalogue is cached for a while, so this is one download per session.
+	if portsLibraryEnabled() && portMasterInstalled() && IsOnline() {
+		portsPanelLoadCatalog()
+		portMasterVersionCheck()
+	}
 	PlayActivateSound()
 }
 
@@ -411,10 +448,19 @@ func portsPanelActivate() {
 		return
 	}
 	e := entries[portsPanel.cursor]
+	if e.Store {
+		PlayActivateSound()
+		portsStoreOpen(appConfig)
+		return
+	}
+	if portsPanel.opts {
+		portsPanelActivateOption(e)
+		return
+	}
 	if portsPanel.catalog {
 		if e.Catalog.Zip != "" {
 			if e.Status == emuAvailable {
-				ShowToast(e.Name+" is already installed — switch to Installed to launch it", ToastKindInfo)
+				ShowToast(e.Name+hintSentence2(" is already installed — %s for Installed, then %s on it to update or remove it", "X", "Installed", "Y", "Options"), ToastKindInfo)
 				return
 			}
 			if err := portCatalogInstallStart(e.Catalog); err != nil {
@@ -455,70 +501,122 @@ func portsPanelActivate() {
 	// reason, which is more useful than a black screen or a missing library.
 	// portIgnoreCompat is the escape hatch for a manifest that is wrong (some
 	// ports ship a 64-bit wrapper the metadata does not mention).
-	if e.Compat.State == portCompat32BitOnly && !portCompatIgnored(appConfig) {
-		note := e.Compat.Note
-		if note == "" {
-			note = "32-bit build only"
-		}
-		ShowToast(e.Name+" cannot run here: "+note, ToastKindWarning)
-		return
-	}
-	portsPanel.open = false
-	launchPortScript(e.Name, e.Launch)
+	portsPanelLaunchInstalled(e)
 }
 
-// launchPortScript starts a PortMaster launcher. PortMaster's scripts assume
-// bash (they source control.txt and use process substitution), so prefer bash
-// when the firmware provides it and fall back to sh otherwise.
+// launchPortScript starts a port, or PortMaster itself (name ==
+// portMasterAppName), and says so. Main thread.
 func launchPortScript(name, path string) {
-	if !regularFile(path) {
-		ShowToast(name+" is no longer installed", ToastKindError)
-		invalidatePortsCache()
+	if privateGlibcPortNeedsRuntime(path) && !privateGlibcReady() {
+		ShowToast("Downloading GreenOvercast's compatibility runtime…", ToastKindInfo)
+		privateGlibcEnsureAsync(func(err error) {
+			if err != nil {
+				ShowToast("Could not prepare GreenOvercast — "+firstLine(err.Error()), ToastKindError)
+				return
+			}
+			launchPortScript(name, path)
+		})
 		return
 	}
-	shell := "sh"
-	if bash, err := exec.LookPath("bash"); err == nil && bash != "" {
-		shell = bash
+	if err := startPortScript(name, path); err != nil {
+		ShowToast(firstLine(err.Error()), ToastKindError)
+		return
 	}
-	logDebug("portmaster", "launching %s (%s via %s)", name, path, shell)
-	cmd := exec.Command(shell, "--", path)
-	cmd.Dir = filepath.Dir(path)
-	// The ALSA workaround and the CPU profile are scoped to this child: the
-	// environment is replaced for the port only, so JukaHub's own audio and the
-	// next launch are untouched even if the port crashes.
-	cmd.Env = append(childEnvWithTZ(os.Environ(), gameChildZone()), portLaunchEnv(appConfig)...)
+	PlaySuccessSound()
+	ShowToast("Launching "+name, ToastKindSuccess)
+}
+
+// startPortScript starts a PortMaster launcher the way the firmware's Ports
+// tab would (the command and environment: ports_env.go) and makes it a game
+// like any other: the screen, audio and input hand-over, the power profile,
+// the in-game menu and Select + Start held (they act on every screen child),
+// the recents, playtime and the game assistant's title (recordGameLaunch),
+// the launch log, a diagnosis when it quits at once, and afterwards the
+// helpers it left behind are ended and the lists are read again. Main thread.
+func startPortScript(name, path string) error {
+	if !regularFile(path) {
+		invalidatePortsCache()
+		return fmt.Errorf("%s is no longer installed", name)
+	}
+	master := name == portMasterAppName
+	var game libraryGame
+	if !master {
+		game = portLibraryGame(path)
+		if err := playtimeAllowGameLaunch(game.Title); err != nil {
+			return err
+		}
+	}
+	plan := portBuildLaunchPlan(appConfig, path, master)
+	shadow, err := privateGlibcPreparePortPlan(&plan, path)
+	if err != nil {
+		return err
+	}
+	logInfo("portmaster", "launching %s: %s %s (PortMaster folder %s%s)", name, plan.Name, strings.Join(plan.Args, " "),
+		setOr(plan.Control, "unknown"), map[string]string{"": "", "link": ", linked", "xdg": ", via XDG_DATA_HOME"}[plan.Fix])
+	cmd := exec.Command(plan.Name, plan.Args...)
+	cmd.Dir = plan.Dir
+	// The environment is the port's alone, so JukaHub's own audio, libraries
+	// and the next launch are untouched even if the port crashes.
+	cmd.Env = plan.Env
+	logFile, logPath := portLogOpen(name, path, plan)
+	if logFile != nil {
+		cmd.Stdout, cmd.Stderr = logFile, logFile
+	}
 	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
-	if err := screenChildStart(cmd); err != nil {
+	err = screenChildStart(cmd)
+	if logFile != nil {
+		_ = logFile.Close() // the child has its own copy
+	}
+	if err != nil {
+		if shadow != "" {
+			_ = os.Remove(shadow)
+		}
 		restoreProfile()
 		logWarn("portmaster", "launch failed for %s: %v", path, err)
-		ShowToast("Could not launch "+name, ToastKindError)
-		return
+		return fmt.Errorf("could not launch %s", name)
 	}
 	noteGameChildStarted(cmd)
-	recorder := startTimelapse(appConfig, name)
+	logDone := portLogWatch(logPath)
+	launchedAt := time.Now()
+	gameLaunchWatchStart(cmd)
 	diag := gameDiagPortStart(name, path) // a port that quits at once is diagnosed (gamediag.go)
+	if !master {
+		gameLaunchLogStart(game, cmd, gameLaunchMemFreeMB())
+	}
+	recorder := startTimelapse(appConfig, name)
 	go func() {
 		waitErr := cmd.Wait()
+		if shadow != "" {
+			_ = os.Remove(shadow)
+		}
 		screenChildReaped(cmd)
+		portLogWatchDone(logDone)
+		stopped := gameLaunchWatchEnd(cmd)
+		diag.noteEnd(time.Now(), stopped)
+		if !master {
+			gameLaunchLogEnd(game, waitErr, time.Since(launchedAt), stopped)
+		}
 		restoreProfile()
 		recorder.Stop()
+		portAfterExit(path, master, time.Since(launchedAt))
 		diag.exited(waitErr)
 	}()
-	if name != portMasterAppName { // a port is a game; PortMaster's own menu is not
-		trophyEvent(tkGameLaunch)
-		trophyEventDistinct(tkGameTitles, name)
-		trophyEventDistinct(tkGameSystems, "PORTS") // the library's name for the ports folder
-	} else {
+	if master {
 		// PortMaster opened: a card that shipped with it never installs it, so
 		// opening it earns the PortMaster trophy too (a best, so once is enough).
 		trophyEventPeak(tkPortMaster, 1)
+		return nil
 	}
-	PlaySuccessSound()
-	ShowToast("Launching "+name, ToastKindSuccess)
+	// A port is a game; PortMaster's own menu is not. recordGameLaunch counts
+	// the launch trophies and writes the recents entry Continue, playtime and
+	// the game assistant read.
+	gmetaNoteLaunch(game)
+	recordGameLaunch(game)
+	return nil
 }
 
 // portCompatIgnored is the escape hatch for a port whose manifest is wrong:
@@ -593,17 +691,43 @@ func ctrlPortsPanel(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		portsPanelActivate()
 	case sdl.CONTROLLER_BUTTON_X:
-		portsPanelToggleCatalog()
+		if !portsPanel.opts {
+			portsPanelToggleCatalog()
+		}
 	case sdl.CONTROLLER_BUTTON_Y:
-		portsPanelToggleMayRun()
+		portsPanelSecondary()
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		if portsPanel.catalog {
+		if portsPanel.catalog && !portsPanel.opts {
 			vkOpenPortsSearch()
 		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		closePortsPanel()
+		portsPanelBack()
 	}
 	return true
+}
+
+// portsPanelSecondary is Y: the May Run filter in the catalogue, an
+// installed port's options in the list.
+func portsPanelSecondary() {
+	switch {
+	case portsPanel.opts:
+	case portsPanel.catalog:
+		portsPanelToggleMayRun()
+	default:
+		entries := portsPanelRows()
+		if portsPanel.cursor >= 0 && portsPanel.cursor < len(entries) {
+			portsPanelOpenOptions(entries[portsPanel.cursor])
+		}
+	}
+}
+
+// portsPanelBack is B: out of a port's options, else the panel.
+func portsPanelBack() {
+	if portsPanel.opts {
+		portsPanelCloseOptions()
+		return
+	}
+	closePortsPanel()
 }
 
 func handlePortsKey(e *sdl.KeyboardEvent) bool {
@@ -618,15 +742,17 @@ func handlePortsKey(e *sdl.KeyboardEvent) bool {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		portsPanelActivate()
 	case sdl.K_TAB, sdl.K_x:
-		portsPanelToggleCatalog()
-	case sdl.K_f, sdl.K_y:
-		portsPanelToggleMayRun()
+		if !portsPanel.opts {
+			portsPanelToggleCatalog()
+		}
+	case sdl.K_f, sdl.K_y, sdl.K_o:
+		portsPanelSecondary()
 	case sdl.K_s, sdl.K_SLASH:
-		if portsPanel.catalog {
+		if portsPanel.catalog && !portsPanel.opts {
 			vkOpenPortsSearch()
 		}
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closePortsPanel()
+		portsPanelBack()
 	}
 	return true
 }
@@ -645,7 +771,7 @@ func handlePortsMouse(mx, my int32) bool {
 	if portsPanelRect.W > 0 && pointInRect(mx, my, portsPanelRect) {
 		return true
 	}
-	closePortsPanel()
+	portsPanelBack()
 	return true
 }
 
@@ -659,7 +785,7 @@ func portsSummary(entries []portEntry) string {
 		}
 		if !e.Master && !e.Install && e.Status == emuAvailable {
 			ports++
-			if e.Compat.State == portCompat32BitOnly {
+			if portCompatBlocked(e.Compat.State) {
 				unsupported++
 			}
 		}
@@ -713,6 +839,9 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 	title, subtitle := "PortMaster Ports", portsSummary(entries)
 	if portsPanel.catalog {
 		title, subtitle = "PortMaster Catalogue", portCatalogSummary()
+	}
+	if portsPanel.opts {
+		title, subtitle = portsPanel.optsFor.Name, portsPanel.optsSub
 	}
 	header := UIPanelHeader(title, subtitle, "packages")
 	headerH := UIPanelHeaderBand(config, header, 14)
@@ -792,8 +921,8 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 			if e.Catalog.Zip != "" && e.Status != emuAvailable {
 				label, labelColor = "Install", installHighlight()
 			}
-			if e.Compat.State == portCompat32BitOnly {
-				label, labelColor = "32-bit only", ColorToastWarn
+			if portCompatBlocked(e.Compat.State) {
+				label, labelColor = portCompatBadge(e.Compat.State), ColorToastWarn
 			}
 			lw, _, _ := font.SizeUTF8(label)
 			statusW = int32(lw)
@@ -809,7 +938,7 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 			// The chip verdict sits next to the (fitted) name, before the title
 			// can push it off the row: it is the first thing to know about a port.
 			badgeColor := ColorTextTertiary()
-			if e.Compat.State == portCompat32BitOnly {
+			if portCompatBlocked(e.Compat.State) {
 				badgeColor = ColorToastWarn
 			}
 			renderText(renderer, config, font, badge, badgeColor, r.X+24+int32(nw), r.Y+10+(medH-smallH)/2)
@@ -823,12 +952,15 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hints := []FooterHint{{"A", "Open"}, {"X", "Catalogue"}, {"B", "Close"}}
+	hints := []FooterHint{{"A", "Open"}, {"Y", "Options"}, {"X", "Catalogue"}, {"B", "Close"}}
 	if len(entries) > 0 && entries[0].Install {
 		hints = []FooterHint{{"A", "Install PortMaster"}, {"X", "Catalogue"}, {"B", "Close"}}
 	}
 	if portsPanel.catalog {
 		hints = []FooterHint{{"A", "Install"}, {"X", "Installed"}, {"Y", "May run"}, {"R1", "Search"}, {"B", "Close"}}
+	}
+	if portsPanel.opts {
+		hints = []FooterHint{{"A", "Select"}, {"B", "Back"}}
 	}
 	if portsPanel.scroll > 0 || portsPanel.scroll+int(visible) < len(entries) {
 		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",

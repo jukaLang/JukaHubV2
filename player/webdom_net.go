@@ -793,36 +793,51 @@ func (c *webJSNetCall) checkRedirect(req *http.Request, via []*http.Request) err
 // webJSNetDocumentCookie is document.cookie for page: the jar's own choice
 // (expiry, path, Secure), with every cookie a server set HttpOnly left out. The
 // standard jar does not remember HttpOnly, so the records it mirrors to the card
-// say which ones were: a jar cookie is hidden when an HttpOnly record with its
-// name and value covers the page's host. Two cookies that share a name and a
-// value are both hidden when either is HttpOnly — the safe way to be wrong.
+// say which ones were: a jar cookie is shown only when a record without
+// HttpOnly, with its name and value, covers the page's host and no HttpOnly one
+// does. Two cookies that share a name and a value are both hidden when either
+// is HttpOnly, and a cookie with no record at all is hidden — the safe way to
+// be wrong.
 // Hosts are compared in webJSNetCookieHost's form, which folds every spelling
-// the jar itself treats as one host (case, a trailing dot, punycode); the jar
-// is asked under webJSNetJarURL's spelling, the one the records can vouch for.
+// the jar itself treats as one host (case, a trailing dot, punycode). The jar
+// is asked for the page's own address, so a script reads what the page's own
+// requests carry; every cookie it holds has a record under the jar's own name
+// for it (browserCookieKey), host spelling included.
 // A retired jar answers nothing: its records are gone, its cookies are not.
 func (j *browserCookieJar) webJSNetDocumentCookie(page *url.URL) string {
 	if j == nil || page == nil {
 		return ""
 	}
-	at := webJSNetJarURL(page)
-	if at == nil {
+	host := webJSNetCookieHost(page.Hostname())
+	if host == "" {
 		return ""
 	}
-	host := webJSNetCookieHost(page.Hostname())
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.forgotten {
 		return ""
 	}
-	hidden := map[string]bool{}
+	// An allow list, not a deny list: a jar cookie is shown only when a
+	// record without HttpOnly vouches for it (same name and value, covering
+	// this host) and no HttpOnly record does. Every cookie the jar takes gets a
+	// record (trackLocked, restoreLocked), so ordinary cookies stay visible;
+	// one whose flags are unknown — no record, for whatever reason — stays
+	// hidden instead of leaking a session token.
+	shown := map[string]bool{}
 	for _, rec := range j.recs {
-		if rec.HTTPOnly && webJSNetRecordCovers(rec, host) {
-			hidden[rec.Name+"\x00"+rec.Value] = true
+		if !webJSNetRecordCovers(rec, host) {
+			continue
+		}
+		key := rec.Name + "\x00" + rec.Value
+		if rec.HTTPOnly {
+			shown[key] = false
+		} else if _, seen := shown[key]; !seen {
+			shown[key] = true
 		}
 	}
 	var b strings.Builder
-	for _, c := range j.jar.Cookies(at) {
-		if c == nil || hidden[c.Name+"\x00"+c.Value] {
+	for _, c := range j.jar.Cookies(page) {
+		if c == nil || !shown[c.Name+"\x00"+c.Value] {
 			continue
 		}
 		if b.Len() > 0 {
@@ -847,17 +862,15 @@ func (j *browserCookieJar) webJSNetDocumentCookie(page *url.URL) string {
 // plant a same-named one that a server might read first. This is SetCookies
 // with that check in front, under one hold of the lock, so a response landing
 // in between cannot slip an HttpOnly cookie past it. The cookie is stored
-// under webJSNetJarURL's spelling of the page, where the records answer for
-// every cookie a script could replace.
+// under the page's own address, as a response to the page would store it.
 func (j *browserCookieJar) webJSNetScriptSetCookie(page *url.URL, c *http.Cookie) bool {
 	if j == nil || page == nil || c == nil {
 		return false
 	}
-	at := webJSNetJarURL(page)
-	if at == nil {
+	host := webJSNetCookieHost(page.Hostname())
+	if host == "" {
 		return false
 	}
-	host := webJSNetCookieHost(page.Hostname())
 	domain := webJSNetCookieDomain(c.Domain)
 	j.mu.Lock()
 	if j.forgotten {
@@ -871,38 +884,13 @@ func (j *browserCookieJar) webJSNetScriptSetCookie(page *url.URL, c *http.Cookie
 		}
 	}
 	cookies := []*http.Cookie{c}
-	j.jar.SetCookies(at, cookies)
-	changed := j.trackLocked(at, cookies)
+	j.jar.SetCookies(page, cookies)
+	changed := j.trackLocked(page, cookies)
 	j.mu.Unlock()
 	if changed {
 		j.save()
 	}
 	return true
-}
-
-// webJSNetJarURL is the page's address as the cookie records spell it: the
-// host lower-cased the way trackLocked stores it, and an explicit port. The
-// standard jar keeps the brackets of a port-less http://[::1]/ in the name it
-// files cookies under ("[::1]"), and encodes an upper-case BÜCHER.example to a
-// punycode of its own, while a record's address, rebuilt from its host, leads
-// to "::1" and to bücher's punycode — and save() drops every record the jar
-// does not answer for at that address. An HttpOnly cookie filed under the
-// first spelling loses the only note that it is HttpOnly. document.cookie
-// reads and writes under the second, where every cookie has its record; for
-// an ordinary host the two are the same.
-func webJSNetJarURL(page *url.URL) *url.URL {
-	host := strings.ToLower(page.Hostname())
-	if host == "" {
-		return nil
-	}
-	port := page.Port()
-	if port == "" {
-		port = "80"
-		if page.Scheme == "https" {
-			port = "443"
-		}
-	}
-	return &url.URL{Scheme: page.Scheme, Host: net.JoinHostPort(host, port), Path: page.Path}
 }
 
 // webJSNetRecordCovers reports whether a stored cookie is sent to host (in

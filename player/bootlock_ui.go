@@ -128,6 +128,9 @@ func bootLockTitle(config *Config) string {
 
 // bootLockPrompt is what to do now.
 func bootLockPrompt() string {
+	if p := bootLockVoicePrompt(); p != "" {
+		return p // the phrase is wanted (bootlock_voice.go)
+	}
 	code := bootLock.kind != bootLockKindPassword
 	switch {
 	case bootLock.mode == bootLockModeLocked && code:
@@ -172,6 +175,9 @@ func twoDigitsLock(n int) string {
 // bootLockHelpLine is the small print: the buttons a code uses, and on the
 // lock screen how to remove a forgotten one.
 func bootLockHelpLine() string {
+	if s := bootLockVoiceHelp(); s != "" {
+		return s
+	}
 	if bootLock.mode == bootLockModeLocked {
 		return bootLockForgotText()
 	}
@@ -204,8 +210,12 @@ func bootLockDrawCard(renderer *sdl.Renderer, config *Config, f bootLockFontSet)
 	help := wrapTextLines(f.small, bootLockHelpLine(), inner, 3)
 	icon := int32(40)
 	dotsH := int32(30)
+	voice := bootLockVoiceLine(config) // Voice unlock's line (bootlock_voice.go)
 	h := pad + icon + 12 + int32(f.title.Height()) + 4 + int32(f.body.Height()) + 18 + dotsH + 14 +
 		int32(f.body.Height()) + 10 + int32(len(help))*(int32(f.small.Height())+2) + pad
+	if voice != "" {
+		h += int32(f.small.Height()) + 8
+	}
 	avail := band.Y - top
 	y := top + (avail-h)/2
 	if y < top+8 {
@@ -232,6 +242,10 @@ func bootLockDrawCard(renderer *sdl.Renderer, config *Config, f bootLockFontSet)
 		drawText(renderer, f.body, ellipsize(f.body, msg, inner), cx, cy, ink, textAlignCenter)
 	}
 	cy += int32(f.body.Height()) + 10
+	if voice != "" {
+		drawText(renderer, f.small, ellipsize(f.small, voice, inner), cx, cy, ColorTextSecondary(), textAlignCenter)
+		cy += int32(f.small.Height()) + 8
+	}
 	for _, line := range help {
 		drawText(renderer, f.small, line, cx, cy, ColorTextTertiary(), textAlignCenter)
 		cy += int32(f.small.Height()) + 2
@@ -242,6 +256,10 @@ func bootLockDrawCard(renderer *sdl.Renderer, config *Config, f bootLockFontSet)
 // code, so the length typed so far is all that shows), or, for a password,
 // the press that opens the keyboard.
 func bootLockDrawEntry(renderer *sdl.Renderer, f bootLockFontSet, cx, y, h int32) {
+	if bootLockVoiceStepActive() {
+		bootLockVoiceDrawPill(renderer, f, cx, y, h)
+		return
+	}
 	if bootLock.kind == bootLockKindPassword {
 		label := "Press A to type"
 		if bootLockWaitLeft() > 0 && (bootLock.mode == bootLockModeLocked || bootLock.step == bootLockStepCurrent) {
@@ -287,6 +305,10 @@ func bootLockDrawAbove(renderer *sdl.Renderer, config *Config, f bootLockFontSet
 	if bootLock.mode == bootLockModeLocked {
 		help = wrapTextLines(f.small, bootLockForgotText(), inner, 2)
 	}
+	if voice := bootLockVoiceLine(config); voice != "" {
+		// Still listening for the phrase while the password is typed.
+		help = append([]string{ellipsize(f.small, voice, inner)}, help...)
+	}
 	h := int32(f.title.Height()) + 4 + int32(f.body.Height()) + 8 + int32(f.body.Height()) +
 		6 + int32(len(help))*(int32(f.small.Height())+2)
 	y := (limit - h) / 2
@@ -313,12 +335,20 @@ func bootLockDrawAbove(renderer *sdl.Renderer, config *Config, f bootLockFontSet
 }
 
 // bootLockHints is the footer for what is on screen.
-func bootLockHints() []FooterHint {
+func bootLockHints(config *Config) []FooterHint {
 	if bootLock.power {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
 	}
+	if hints := bootLockVoiceHints(); hints != nil {
+		return hints
+	}
 	locked := bootLock.mode == bootLockModeLocked
+	// An "either" voice lock: R2 says the phrase (V on a keyboard).
+	speak := locked && bootLockVoiceEitherUp(config) && !bootLockVoice.paused
 	if bootLock.kind == bootLockKindPassword {
+		if locked && speak {
+			return []FooterHint{{Button: "A", Label: "Type"}, {Button: "R2 / V", Label: "Speak"}, {Button: "Menu", Label: "Power"}}
+		}
 		if locked {
 			return []FooterHint{{Button: "A", Label: "Type"}, {Button: "Menu", Label: "Power"}}
 		}
@@ -335,6 +365,9 @@ func bootLockHints() []FooterHint {
 			start.Label = "Save"
 		}
 	}
+	if locked && speak {
+		return []FooterHint{start, sel, {Button: "R2 / V", Label: "Speak"}, {Button: "Menu", Label: "Power"}}
+	}
 	if locked {
 		return []FooterHint{start, sel, {Button: "Menu", Label: "Power"}}
 	}
@@ -345,7 +378,7 @@ func bootLockDrawFooter(renderer *sdl.Renderer, config *Config) {
 	band := sceneFooterBand()
 	drawGlassFooterBand(renderer, band)
 	pad := scaleX(16, screenWidth)
-	plan := cachedFooterPlan(config, bootLockHints(), band.W-2*pad)
+	plan := cachedFooterPlan(config, bootLockHints(config), band.W-2*pad)
 	vkDrawHintPlan(renderer, config, plan, band)
 }
 

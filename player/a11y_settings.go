@@ -59,19 +59,19 @@ func a11ySettingsRows() []setRow {
 		},
 		{
 			ID: "reduceTransparency", Label: "Reduce transparency", Kind: setKindToggle,
-			Detail: setStatic("Makes every glass tile, row, sheet and chip opaque"),
+			Detail: setStatic("Makes every glass tile, row, sheet and chip opaque, so wallpaper and background motion cannot show through them."),
 			Get:    func(*Config) bool { return a11y.reduceTransparency },
 			Set:    setReduceTransparency,
 		},
 		{
 			ID: "increaseContrast", Label: "Increase contrast", Kind: setKindToggle,
-			Detail: setStatic("Stronger edges, wider focus rings, 7:1 text"),
+			Detail: setStatic("Strengthens glass edges, widens focus outlines and keeps text at 7:1 or better on the surfaces it sits on."),
 			Get:    func(*Config) bool { return a11y.increaseContrast },
 			Set:    setIncreaseContrast,
 		},
 		{
 			ID: "boldText", Label: "Bold text", Kind: setKindToggle,
-			Detail: setStatic("Inter SemiBold in every menu, list and Home label"),
+			Detail: setStatic("Draws every menu, list and Home label in Inter SemiBold. Captions stay at the 14 px legibility floor."),
 			Get:    func(*Config) bool { return a11y.boldText },
 			Set:    setBoldText,
 		},
@@ -87,14 +87,14 @@ func a11ySettingsRows() []setRow {
 			"Downmixes video and music to one channel for a single speaker or one-ear listening",
 			func() bool { return a11y.monoAudio }, a11ySetMonoAudio),
 		a11yNumberRow("audioBalance", "Audio balance",
-			"Moves video and music between the left and right channels; UI sounds stay centred",
+			"Moves stereo video and music between the left and right channels. Interface sounds stay centred on the mono UI device.",
 			-100, 100, 10, "%", func() int { return a11y.audioBalance }, a11ySetAudioBalance),
 		a11yToggleRow("captionsAlways", "Captions always on",
 			"Each video starts with its subtitles enabled; CC still turns them off for the current video",
 			func() bool { return a11y.captionsAlways }, a11ySetCaptionsAlways),
 		a11yCaptionSizeSettingRow(),
 		a11yToggleRow("captionBackground", "Caption background",
-			"Draws a dark panel behind cues; off keeps only the text over the picture",
+			"Draws a dark panel behind cues. Turn it off to keep only the text over the picture.",
 			func() bool { return a11y.captionBackground }, a11ySetCaptionBackground),
 		a11yNumberRow("longPress", "Long press",
 			"How long a letter or the globe must be held before its alternate action opens",
@@ -109,7 +109,7 @@ func a11ySettingsRows() []setRow {
 			"How long a message stays on screen before it fades",
 			50, 200, 25, "%", func() int { return a11y.toastPercent }, a11ySetToastPercent),
 		a11yToggleRow("stickyChords", "Sticky chords",
-			"Keeps the chord armed after a direction, so face buttons can follow in sequence",
+			"Leaves the one-handed chord armed after a direction, so several face buttons can be pressed in sequence.",
 			func() bool { return a11y.stickyChords }, a11ySetStickyChords),
 		a11yLayoutSettingRow(),
 	}
@@ -119,7 +119,7 @@ func a11ySettingsRows() []setRow {
 	return append(rows,
 		a11ySelectSettingRow(),
 		a11yToggleRow("oneHanded", "One-handed mode",
-			"Tap the chord button, then a direction, to press A, B, X or Y with one thumb; tap again to cancel",
+			"Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.",
 			func() bool { return a11y.oneHanded }, a11ySetOneHanded),
 		a11yChordSettingRow(),
 		a11ySlowRepeatSettingRow(),
@@ -132,8 +132,13 @@ func a11ySettingsRows() []setRow {
 			Detail: setStatic("Back to 100% text, default colours, centred audio and standard buttons"),
 			Value:  setStatic("Reset"),
 			Open: func(c *Config) {
-				a11yResetDefaults(c)
-				a11ySave(c)
+				setConfirm(c, "Reset accessibility?",
+					"Text size, colours and contrast, captions, the magnifier, audio balance, button remaps, one-handed and switch "+
+						"controls all go back to how JukaHub ships.\n\nYour other settings, games and saves stay.",
+					"refresh", "Reset", func(c *Config) {
+						a11yResetDefaults(c)
+						a11ySave(c)
+					})
 			},
 		},
 	)
@@ -382,7 +387,7 @@ func a11yButtonSettingRow(button uint8) setRow {
 func a11ySelectSettingRow() setRow {
 	return setRow{
 		ID: "selectKey", Label: "Select button", Kind: setKindChoice,
-		Detail: setStatic("Swap Select with Start (both keep working) or turn Select off"),
+		Detail: setStatic("Moves the Select action to Start (both stay reachable), or disables Select entirely. Start keeps opening the menu."),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: a11ySelectDefault, Label: "Default"},
@@ -414,7 +419,7 @@ func a11yChordSettingRow() setRow {
 	}
 	return setRow{
 		ID: "chordButton", Label: "Chord button", Kind: setKindChoice,
-		Detail:  setStatic("The button that arms the one-handed chord; pick one your other hand can reach"),
+		Detail:  setStatic("The button that arms the one-handed chord. Pick one your other hand's index finger can reach."),
 		Options: func(*Config) []setOption { return options },
 		Current: func(*Config) int {
 			for i, option := range a11yChordButtons {
@@ -504,7 +509,7 @@ func a11ySwitchIntervalSettingRow() setRow {
 func a11ySlowRepeatSettingRow() setRow {
 	return setRow{
 		ID: "slowRepeat", Label: "Key repeat", Kind: setKindChoice,
-		Detail: setStatic("How fast a held direction repeats on the keyboard; Slow stops overshooting"),
+		Detail: setStatic("How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key."),
 		Options: func(*Config) []setOption {
 			return []setOption{
 				{Value: "normal", Label: "Normal"},

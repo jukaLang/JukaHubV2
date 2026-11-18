@@ -946,8 +946,9 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 	r.drift = r.motion && r.style.kind != bootStyleImage
 
 	// The wordmark is Inter at the layout's size, without the accessibility
-	// scale, so it is the same word on the same pixels as the boot logo's.
-	font := loadCachedFont(homeUIFontFile, bootLogoWordPx(screenHeight))
+	// scale and whatever font Settings → Display picked (homeUIInterFont), so
+	// it is the same word on the same pixels as the boot logo's.
+	font := homeUIInterFont(bootLogoWordPx(screenHeight))
 	// The liquid kit's glass sheet is never drawn by the boot: a token sheet
 	// keeps the kit's build cheap. Without the kit the boot still plays, on a
 	// flat backdrop with the plain face.
@@ -1412,8 +1413,9 @@ func (r *bootOSRun) drawWord(f *bootOSFrame, fade float64) {
 	if _, ok := bootLiquidDrawWordmark(r.renderer, int32(r.cx), r.layout.WordTop, f.word, fade, f.glint, ink, r.motion); ok {
 		return
 	}
-	// No wordmark textures (the liquid kit was refused): the plain face.
-	font := loadCachedFont(homeUIFontFile, r.layout.WordPx)
+	// No wordmark textures (the liquid kit was refused): the plain face,
+	// Inter like the wordmark textures.
+	font := homeUIInterFont(r.layout.WordPx)
 	if font == nil {
 		return
 	}

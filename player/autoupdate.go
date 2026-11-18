@@ -706,8 +706,9 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	}
 	if assetURL == "" {
 		// The release workflow always publishes these two archive names; fall
-		// back to the stable "latest" URL when the API omits the asset list.
-		assetURL = jukaHubReleaseDownloadBase + target.Asset
+		// back to the release's own download URL when the API omits the asset
+		// list (releases/latest would hand a Beta install the stable build).
+		assetURL = jukaHubReleaseAssetURL(rel, target.Asset)
 	}
 	if expectSHA == "" {
 		// Older releases and the URL fallback carry no digest. Say so in the log

@@ -371,7 +371,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			rightEdge -= 20
 		}
 		if textBrowserLastUpdate > 0 {
-			ts := time.Unix(textBrowserLastUpdate, 0).Format("15:04:05")
+			ts := clockDigitsSeconds(config, time.Unix(textBrowserLastUpdate, 0))
 			tw, _, _ := labelFont.SizeUTF8(ts)
 			tsX := rightEdge - int32(tw)
 			renderText(renderer, config, labelFont, ts, ColorTextMuted(), tsX, textY)
@@ -1230,7 +1230,9 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 
 	// Known to be offline: show the offline card now instead of waiting for
 	// a name lookup to fail. A cached page (above) still opens.
-	if !IsOnline() && !bypassOffline {
+	// A sign-in page (captive portal) means there is a network, and every
+	// load on it reaches the portal: it must open while IsOnline is false.
+	if !IsOnline() && PortalSignInURL() == "" && !bypassOffline {
 		fail := brwNewFailure(brwFailOffline, address, "")
 		config.Variables.Custom[outputVariable] = fail.text()
 		setBrowserLinks(outputVariable, nil)
@@ -1258,7 +1260,7 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 		// the render loop's recover. The page becomes an error message.
 		defer func() {
 			if r := recover(); r != nil {
-				logError("browser", "reader crashed on %s: %v\n%s", pageURL, r, debug.Stack())
+				logError("browser", "reader crashed on %s: %v\n%s", sanitizeLogURL(pageURL), r, debug.Stack())
 				textBrowserRequestMutex.Lock()
 				isCurrent := textBrowserRequestSequence[variable] == id
 				textBrowserRequestMutex.Unlock()
@@ -1665,6 +1667,7 @@ func fetchTextBrowserDocumentRequest(ctx context.Context, client *http.Client, n
 
 // fetchTextBrowserOnce is one request and body read, with the wording the error
 // card shows.
+// Test seam (ARCH-8): only tests call it.
 func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
 	return fetchTextBrowserOnceRequest(ctx, client, browserNavigation{URL: address})
 }
@@ -1713,20 +1716,44 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		// with no Location to follow. Say that instead of a bare status code.
 		return fail(brwFailHTTP, "HTTP "+resp.Status+" — the redirect named no usable target")
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	errorStatus := resp.StatusCode < 200 || resp.StatusCode >= 300
+	if errorStatus {
 		// Google's robot check answers 429 at the end of a redirect: the wall
 		// card, not "HTTP 429" (browser_engines.go).
 		if wall, ok := brwSearchWall(address, resp.Request.URL, nil); ok {
 			return textBrowserDocument{}, &brwFetchError{fail: wall}
 		}
-		return fail(brwFailHTTP, "HTTP "+resp.Status)
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if contentType != "" && !strings.Contains(contentType, "html") {
-		kind := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
-		return fail(brwFailContent, "This address is a "+kind+" file, not a web page.")
+	mediaType := strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])
+	kind := brwDocumentKind(mediaType)
+	if errorStatus && kind != brwDocHTML {
+		return fail(brwFailHTTP, "HTTP "+resp.Status)
 	}
 	limit := textBrowserPageLimitBytes()
+	notPage := func() (textBrowserDocument, error) {
+		return fail(brwFailContent, "This address is a "+mediaType+" file, not a web page.")
+	}
+	if kind != brwDocHTML && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Disposition"))), "attachment") {
+		// The site asks for a download (an "Export CSV" link): the card with
+		// its Download button, not the file drawn as a page.
+		return notPage()
+	}
+	switch kind {
+	case brwDocImage:
+		// A link straight to a picture opens it, as in any browser — when the
+		// image pass can draw it: a format it cannot decode, or a photo past
+		// its per-image limit, keeps the card and its Download button rather
+		// than a grey box. The image pass downloads the picture with an image
+		// request; this response is not read.
+		drawable := webImageTypeSupported(mediaType) || mediaType == "image/x-icon" || mediaType == "image/vnd.microsoft.icon"
+		if !drawable || resp.ContentLength > webMaxImageBytes {
+			return notPage()
+		}
+		return textBrowserDocument{Body: brwImageDocument(resp.Request.URL), URL: resp.Request.URL, Limit: limit}, nil
+	case brwDocOther:
+		return notPage()
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1735,6 +1762,23 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		return fail(brwFailConnect, "The page stopped arriving halfway. Try again.")
 	}
 	body, truncated := truncateTextBrowserBody(body, limit)
+	body = browserDecodeBody(body, contentType, true)
+	if kind == brwDocText {
+		var cut bool
+		body, cut = brwTextDocument(body, resp.Request.URL, mediaType)
+		if cut {
+			truncated, limit = true, brwMaxTextFileBytes // what the note reports
+		}
+	}
+	if errorStatus {
+		// A 404 or 500 that comes with the site's own page shows that page,
+		// as a browser does: it usually says what went wrong and links back
+		// into the site. Only an empty error gets the reader's card.
+		if title, text := extractTextBrowserHTML(string(body)); strings.TrimSpace(title) == "" && strings.TrimSpace(text) == "" {
+			return fail(brwFailHTTP, "HTTP "+resp.Status)
+		}
+		logDebug("browser", "showing the page that came with HTTP %d from %s", resp.StatusCode, webJSLogURL(resp.Request.URL))
+	}
 	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated, Limit: limit}, nil
 }
 
@@ -2450,18 +2494,6 @@ func formatUptime(seconds uint64) string {
 	h := (int64(seconds) % 86400) / 3600
 	m := (int64(seconds) % 3600) / 60
 	return fmt.Sprintf("%dd %dh %dm", d, h, m)
-}
-
-// formatBytes converts bytes to human-readable form.
-func formatBytes(b uint64) string {
-	f := float64(b)
-	units := []string{"B", "KB", "MB", "GB", "TB"}
-	idx := 0
-	for f >= 1024 && idx < len(units)-1 {
-		f /= 1024
-		idx++
-	}
-	return fmt.Sprintf("%.1f %s", f, units[idx])
 }
 
 // formatTextRecords formats zeroconf TXT records for display.

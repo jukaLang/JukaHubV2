@@ -489,7 +489,9 @@ func wineDownload(ctx context.Context, client *http.Client, spec wineTarballSpec
 
 // installWineTree downloads spec's tarball, checks it and unpacks it into its
 // versioned folder, which is replaced as a whole. The tarball is deleted
-// afterwards. progress (may be nil) receives one-line updates.
+// afterwards. progress (may be nil) receives one-line updates; inside the
+// daily updates pass its card shows the phase and the bytes too
+// (emuRuntimeCardFrom).
 func installWineTree(ctx context.Context, client *http.Client, spec wineTarballSpec, progress func(string)) error {
 	if progress == nil {
 		progress = func(string) {}
@@ -517,7 +519,11 @@ func installWineTree(ctx context.Context, client *http.Client, spec wineTarballS
 	if err := wineCheckRoom(base, spec, archive); err != nil {
 		return err
 	}
+	// The bar starts again from zero after the Box64 pack's download.
+	card := emuRuntimeCardFrom(ctx)
+	card.restart(installPhaseDownload)
 	err := wineDownload(ctx, client, spec, archive, func(got, total int64) {
+		card.bytes(installPhaseDownload, got, total)
 		if total > 0 {
 			progress(fmt.Sprintf("Downloading %s · %s of %s", title, formatInstallBytes(got), formatInstallBytes(total)))
 			return
@@ -530,7 +536,9 @@ func installWineTree(ctx context.Context, client *http.Client, spec wineTarballS
 	stage := dest + relPackStageSuffix
 	_ = os.RemoveAll(stage)
 	progress("Unpacking " + title + "…")
+	card.restart(installPhaseExtract)
 	err = wineUnpackTarXz(ctx, archive, stage, func(done, total int64) {
+		card.bytes(installPhaseExtract, done, total)
 		if total > 0 {
 			progress(fmt.Sprintf("Unpacking %s · %d%%", title, done*100/total))
 		}
@@ -546,6 +554,7 @@ func installWineTree(ctx context.Context, client *http.Client, spec wineTarballS
 		return fmt.Errorf("unpacking %s: %w", spec.Asset, err)
 	}
 	progress("Checking " + title + "…")
+	card.phase(installPhaseVerify)
 	tree := runtimeArchiveRoot(stage)
 	if problem := wineTreeProblem(tree); problem != "" {
 		_ = os.RemoveAll(stage)
@@ -912,7 +921,10 @@ func installWindowsRuntimeCore(ctx context.Context, client *http.Client, refresh
 			need = relPackNewer(info, latest)
 		}
 		if need {
+			// Inside the daily pass its card shows the phase and the bytes.
+			card := emuRuntimeCardFrom(ctx)
 			if _, err := relPackInstall(ctx, client, winePackSpecFor(), pack, func(p relPackProgress) {
+				card.relPack(p)
 				progress(p.line(winePackTitle))
 			}); err != nil {
 				return err
@@ -971,9 +983,38 @@ func wineRuntimeInUse() bool {
 	return wineProgramsRunning() || windowsRuntimeInstalling()
 }
 
+// wineUpdateNote is the automatic pass's last answer for the installed pack
+// (wineUpdateCheck), so that with Emulator updates on Notify me the Windows
+// Apps setup page's runtime row can say a newer one is out and offer Update
+// (LIB-25), as the APK Store's Runtime tab does for AndroidRT
+// (androidRTNoteAnswer). Memory only: the next pass answers again.
+var wineUpdateNote struct {
+	mu    sync.Mutex
+	newer bool
+	tag   string // the release tag, or "Wine <version>" for a tree not unpacked yet
+}
+
+// wineNoteUpdate records the pass's answer. Any goroutine.
+func wineNoteUpdate(newer bool, tag string) {
+	wineUpdateNote.mu.Lock()
+	wineUpdateNote.newer, wineUpdateNote.tag = newer, tag
+	wineUpdateNote.mu.Unlock()
+}
+
+// wineUpdateKnown is the setup page's read of that answer: whether a newer
+// pack is out, and its tag. Any goroutine; cheap enough for every frame.
+func wineUpdateKnown() (bool, string) {
+	wineUpdateNote.mu.Lock()
+	defer wineUpdateNote.mu.Unlock()
+	return wineUpdateNote.newer, wineUpdateNote.tag
+}
+
 // wineUpdateCheck is the automatic pass's question: is a newer pack
 // published, or does the installed pack name a Wine that is not unpacked
-// yet?
+// yet? A pack is labelled with its tag and digest (emuRuntimePackLabel), so
+// one CI uploads again under the same release is a new build. The answer is
+// recorded for the setup page (wineNoteUpdate); with no pack installed there
+// is nothing to update, and the page offers the install itself.
 func wineUpdateCheck(ctx context.Context, client *http.Client) (bool, string, error) {
 	if client == nil {
 		client = relPackClientFn()
@@ -984,11 +1025,14 @@ func wineUpdateCheck(ctx context.Context, client *http.Client) (bool, string, er
 		return false, "", err
 	}
 	if !ok || relPackNewer(info, latest) {
-		return true, latest.Rel.TagName, nil
+		wineNoteUpdate(ok, latest.Rel.TagName)
+		return true, emuRuntimePackLabel(latest), nil
 	}
 	if spec, err := readWineTarballSpec(winePackDir()); err == nil && !wineTreeInstalled(spec) {
+		wineNoteUpdate(true, "Wine "+spec.Version)
 		return true, "Wine " + spec.Version, nil
 	}
+	wineNoteUpdate(false, "")
 	return false, "", nil
 }
 
@@ -1021,6 +1065,7 @@ func wineUpdateInstall(ctx context.Context, client *http.Client, progress func(s
 		setWindowsRuntimeStatus("Windows runtime update failed", reason, false)
 		return err
 	}
+	wineNoteUpdate(false, "")
 	setWindowsRuntimeStatus("Windows runtime updated", "", false)
 	return nil
 }

@@ -284,6 +284,10 @@ func peerHandler() http.Handler {
 	mux.HandleFunc(steamPeerRunPath, peerGuard(true, steamHandlePeerRun))
 	// ... and which Steam games it has installed or downloading (steam_remote.go).
 	mux.HandleFunc(steamPeerLibraryPath, peerGuard(true, steamHandlePeerLibrary))
+	// ... and copies an installed game's files for its PortMaster port
+	// (steam_ports.go): only inside that game's own Steam folder.
+	mux.HandleFunc(steamPeerFilesPath, peerGuard(true, steamHandlePeerFiles))
+	mux.HandleFunc(steamPeerFilePath, peerGuard(true, steamHandlePeerFile))
 	// A handheld copies Minecraft: Java Edition versions from this PC
 	// (minecraft_peer.go): game files only, never the account.
 	mux.HandleFunc(mcPeerVersionsPath, peerGuard(true, mcHandlePeerVersions))

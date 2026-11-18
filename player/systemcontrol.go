@@ -495,9 +495,18 @@ func rfkillState(out string) (bool, bool) {
 	return !blocked, true
 }
 
-// setWifiEnabled switches the Wi-Fi radio.
+// setWifiEnabled switches the Wi-Fi radio. Every switch is a network change
+// wherever it comes from (Quick Settings, the Home tile, the Wi-Fi page, a voice
+// command, the hotspot): the connectivity verdict of the network being left
+// stops showing at once and a probe runs the moment the switch ends
+// (netNetworkSwitching, netmon.go). Callers run it off the main thread.
 func setWifiEnabled(on bool) error {
-	switch wifiRadioBackend() {
+	backend := wifiRadioBackend()
+	if backend != "nmcli" && backend != "rfkill" {
+		return errors.New("no Wi-Fi control (nmcli/rfkill) on this device")
+	}
+	defer netNetworkSwitching()()
+	switch backend {
 	case "nmcli":
 		arg := "off"
 		if on {
@@ -510,10 +519,8 @@ func setWifiEnabled(on bool) error {
 			return runRfkill("wifi", on)
 		}
 		return errors.New("nmcli could not change the Wi-Fi radio")
-	case "rfkill":
-		return runRfkill("wifi", on)
 	}
-	return errors.New("no Wi-Fi control (nmcli/rfkill) on this device")
+	return runRfkill("wifi", on)
 }
 
 // bluetoothEnabled reads the Bluetooth radio state.
@@ -595,11 +602,14 @@ func airplaneEnabled() (bool, bool) {
 	return yes > 0 && no == 0, true
 }
 
-// setAirplaneMode blocks or unblocks every radio.
+// setAirplaneMode blocks or unblocks every radio. Wi-Fi goes with them, so it
+// is a network change like setWifiEnabled's (netNetworkSwitching). Callers run
+// it off the main thread.
 func setAirplaneMode(on bool) error {
 	if !airplaneBackend() {
 		return errors.New("no rfkill on this device")
 	}
+	defer netNetworkSwitching()()
 	verb := "unblock"
 	if on {
 		verb = "block"

@@ -1307,18 +1307,30 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"--print", "before_dl:%(uploader)s",
 		"--extractor-args", ytDlpQueueClients,
 		// Video and audio arrive as separate streams on YouTube, so the two
-		// halves are merged rather than downloaded as video-only. H.264 and
-		// AAC at the playback ceiling first, as the download-to-play does
-		// (ytdlJoinedFormat): plain "bv*+ba/b" took the biggest picture there
-		// was — often a 4K AV1 stream that is slow to fetch and join on the
-		// handheld and that its player cannot decode at all. Anything else
-		// still beats no file.
-		"-f", ytdlJoinedFormat(downloadJobHeight(job, config), "") + "/bv*+ba/b",
+		// halves are merged rather than downloaded as video-only
+		// (videoDownloadFormat).
+		"-f", videoDownloadFormat(downloadJobHeight(job, config), IsTrimuiDevice() || P().IsHandheld()),
 		"--merge-output-format", "mp4",
 	}
 	args = append(args, downloadUserAgentArgs(job.URL)...)
 	args = append(args, downloadJobExtra(job, config)...)
 	return append(args, job.URL)
+}
+
+// videoDownloadFormat is the queue's format selector for a video. H.264 and
+// AAC at the playback ceiling come first, the same list the download-to-play
+// uses (ytdlJoinedFormat): plain "bv*+ba/b" took the biggest picture there was
+// — often a 4K AV1 stream that is slow to fetch and join on the handheld and
+// that its firmware's ffmpeg cannot decode at all. When nothing at or below
+// the ceiling exists, a PC still takes the best of anything; the handheld
+// takes the best that is not AV1 (a stream whose codec the site does not name
+// still counts), since a file it cannot play is no better than none. Pure.
+func videoDownloadFormat(height int, handheld bool) string {
+	format := ytdlJoinedFormat(height, "")
+	if handheld {
+		return format + "/bv*[vcodec!^=?av01]+ba/b[vcodec!^=?av01]"
+	}
+	return format + "/bv*+ba/b"
 }
 
 // parseDownloadLine reads one yt-dlp progress line:
@@ -1573,6 +1585,7 @@ var downloadStorageCache struct {
 	mu    sync.Mutex
 	at    time.Time
 	stats downloadStorage
+	busy  bool // a background reading is under way
 }
 
 // downloadStorageRefresh is how long a reading is reused. Walking the download
@@ -1583,14 +1596,34 @@ const downloadStorageRefresh = 10 * time.Second
 // builds on Windows) reports Available=false and the panel says so instead of
 // drawing a bar full of guesses.
 func downloadSpace() downloadStorage {
+	// The panel calls this from its draw. The walk of the download folder (one
+	// lstat per saved track, seconds on a big library and a slow card) runs on
+	// a goroutine; the draw keeps the last reading meanwhile, and before the
+	// first one it shows the card's statfs alone.
 	downloadStorageCache.mu.Lock()
-	if !downloadStorageCache.at.IsZero() && time.Since(downloadStorageCache.at) < downloadStorageRefresh {
-		stats := downloadStorageCache.stats
-		downloadStorageCache.mu.Unlock()
-		return stats
+	fresh := !downloadStorageCache.at.IsZero() && time.Since(downloadStorageCache.at) < downloadStorageRefresh
+	stats, known := downloadStorageCache.stats, !downloadStorageCache.at.IsZero()
+	if !fresh && !downloadStorageCache.busy {
+		downloadStorageCache.busy = true
+		go func() {
+			next := downloadSpaceRead(true)
+			downloadStorageCache.mu.Lock()
+			downloadStorageCache.at = time.Now()
+			downloadStorageCache.stats = next
+			downloadStorageCache.busy = false
+			downloadStorageCache.mu.Unlock()
+		}()
 	}
 	downloadStorageCache.mu.Unlock()
+	if known {
+		return stats
+	}
+	return downloadSpaceRead(false)
+}
 
+// downloadSpaceRead takes one reading: statfs of the data card, and with walk
+// the bytes under the download folder.
+func downloadSpaceRead(walk bool) downloadStorage {
 	stats := downloadStorage{}
 	root, err := P().DataDir()
 	if err == nil && strings.TrimSpace(root) != "" {
@@ -1604,16 +1637,13 @@ func downloadSpace() downloadStorage {
 			stats.Available = true
 		}
 	}
-	stats.Music = dirBytes(downloadsRoot())
+	if walk {
+		stats.Music = dirBytes(downloadsRoot())
+	}
 	stats.Other = stats.Used - stats.Music
 	if stats.Other < 0 {
 		stats.Other = 0
 	}
-
-	downloadStorageCache.mu.Lock()
-	downloadStorageCache.at = time.Now()
-	downloadStorageCache.stats = stats
-	downloadStorageCache.mu.Unlock()
 	return stats
 }
 

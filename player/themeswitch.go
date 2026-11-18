@@ -1219,6 +1219,10 @@ func homeSwArtBuild(path string, key homeSwArtKey) {
 // homeSwDecodeArt decodes a cover after checking its size: a scraped
 // picture is untrusted, and a huge one would take the handheld's memory.
 func homeSwDecodeArt(path string) (image.Image, error) {
+	path, err := safeAbsolutePath(path)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

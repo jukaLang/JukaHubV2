@@ -824,7 +824,7 @@ func TestFEExtractOutcomeMessages(t *testing.T) {
 		{feExtractOutcome{Job: job, Target: filepath.Join("card", "Game"), IsDir: true, Stats: feExtractStats{Files: 3}}, "→ Game/ · 3 files"},
 		{feExtractOutcome{Job: job, Err: context.Canceled}, "Stopped extracting pack.zip"},
 		{feExtractOutcome{Job: job, Err: errFeArchiveEncrypted}, "password-protected"},
-		{feExtractOutcome{Job: job, Err: feNoSpaceError{need: 3 << 30, free: 1 << 30}}, "needs 3.0 GiB and 1.0 GiB is free"},
+		{feExtractOutcome{Job: job, Err: feNoSpaceError{need: 3 << 30, free: 1 << 30}}, "needs 3.0 GB and 1.0 GB is free"},
 		{feExtractOutcome{Job: job, Err: errBadToolArchive}, "damaged or incomplete"},
 		{feExtractOutcome{Job: job, Target: "x", Stats: feExtractStats{Files: 1, Skips: feExtractSkips{Links: 2, Junk: 5}}}, "2 links skipped"},
 	}
@@ -1275,5 +1275,88 @@ func TestFEXzReaderCatchesDamage(t *testing.T) {
 	}
 	if _, err := io.ReadAll(newFeXzReader(context.Background(), bytes.NewReader(nil), feXzMaxDict)); !errors.Is(err, errBadToolArchive) {
 		t.Errorf("an empty file: err = %v, want a damaged archive", err)
+	}
+}
+
+// The space an archive needs is counted in the card's clusters, and a FAT32
+// card refuses a member of 4 GiB or more by its header, before any writing.
+func TestFEExtractCountsClustersAndFAT32(t *testing.T) {
+	if feOnDisk(1, 4096) != 4096 || feOnDisk(0, 4096) != 0 || feOnDisk(8192, 4096) != 8192 || feOnDisk(8193, 4096) != 12288 {
+		t.Fatal("feOnDisk does not round up to whole clusters")
+	}
+	if (feVolume{fatLike: true}).unit() != feClusterGuessFAT || (feVolume{}).unit() != 4096 {
+		t.Fatal("an unreadable cluster is not guessed as documented")
+	}
+	prevFree, prevVol := feExtractFreeSpace, feExtractVolume
+	t.Cleanup(func() { feExtractFreeSpace, feExtractVolume = prevFree, prevVol })
+	feExtractFreeSpace = func(string) (int64, error) { return feExtractSpaceMargin + 1<<20, nil }
+
+	// Twenty 1-byte files: 20 bytes declared, 2.5 MiB on a 128 KiB-cluster
+	// exFAT card, 80 KiB on 4 KiB clusters.
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "small.zip")
+	var entries []feZipTestEntry
+	for i := 0; i < 20; i++ {
+		entries = append(entries, feZipTestEntry{name: fmt.Sprintf("f%02d.txt", i), body: "x"})
+	}
+	feZipTestFile(t, archive, entries...)
+	feExtractVolume = func(string) feVolume { return feVolume{cluster: 128 << 10, fatLike: true} }
+	var space feNoSpaceError
+	if err := feExtractZip(context.Background(), archive, t.TempDir(), &feExtractStats{}, nil); !errors.As(err, &space) {
+		t.Fatalf("128 KiB clusters: err = %v, want the space refused", err)
+	}
+	feExtractVolume = func(string) feVolume { return feVolume{cluster: 4096} }
+	if err := feExtractZip(context.Background(), archive, t.TempDir(), &feExtractStats{}, nil); err != nil {
+		t.Fatalf("4 KiB clusters: %v", err)
+	}
+
+	// A tar member declaring 5 GiB: only its header, no data follows.
+	var buf bytes.Buffer
+	if err := tar.NewWriter(&buf).WriteHeader(&tar.Header{Name: "big.iso", Size: 5 << 30, Mode: 0o644, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		vol     feVolume
+		refused bool
+	}{{feVolume{fat: true, fatLike: true}, true}, {feVolume{fatLike: true}, false}} {
+		root, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = feExtractTarStream(context.Background(), bytes.NewReader(buf.Bytes()), root, 1<<40, 1<<40, c.vol, &feExtractStats{}, nil)
+		_ = root.Close()
+		if got := errors.Is(err, errFeFATTooBig); got != c.refused {
+			t.Errorf("%+v: err = %v, FAT32 refusal %v; want %v", c.vol, err, got, c.refused)
+		}
+	}
+}
+
+// An LZMA2 chunk whose properties have lc + lp > 4 is refused at its header,
+// before the decoder builds a table for it.
+func TestFEXzReaderRefusesLZMA2PropsXzRefuses(t *testing.T) {
+	data := feXzTestBytes(t, bytes.Repeat([]byte("chunk properties "), 2000), 1<<20)
+	chunk := 12 + (int(data[12])+1)*4
+	if data[chunk] < 0xe0 {
+		t.Fatalf("the first LZMA2 chunk does not set its properties (control % x)", data[chunk])
+	}
+	if !feLzma2PropsOK(data[chunk+5]) {
+		t.Fatalf("the writer's own properties %d were refused", data[chunk+5])
+	}
+	bad := append([]byte(nil), data...)
+	bad[chunk+5] = (2*5+4)*9 + 4 // lc 4, lp 4, pb 2
+	_, err := io.ReadAll(newFeXzReader(context.Background(), bytes.NewReader(bad), feXzMaxDict))
+	var unsupported feXzUnsupportedErr
+	if !errors.As(err, &unsupported) || !strings.Contains(unsupported.what, "lc + lp") {
+		t.Fatalf("lc 4 + lp 4: err = %v, want the properties refused", err)
+	}
+	if !errors.Is(err, errBadToolArchive) {
+		t.Fatal("the refusal must read as a damaged archive to the readers above it")
+	}
+	// A chunk the decoder ends one byte early puts the next header inside
+	// what the guard counts as data: the decoder's read of the rest of that
+	// header, longer than one byte at a chunk boundary, gives it away.
+	g := feLzma2Guard{r: bytes.NewReader([]byte{0xe0, 0, 0, 0, 0, 0x5d})}
+	if _, err := g.Read(make([]byte, 6)); !errors.Is(err, errFeXzFormat) {
+		t.Fatalf("a multi-byte read at a chunk boundary: err = %v, want errFeXzFormat", err)
 	}
 }

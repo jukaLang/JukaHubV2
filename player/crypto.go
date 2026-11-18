@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +25,11 @@ type KeyInfo struct {
 
 // Global key info (set at initialization)
 var currentKeyInfo KeyInfo
+
+// currentKeyLegacyID is the ID values written before 2026-11-17 carry for the
+// same 64-hex JUKAHUB_CRYPTO_KEY ("env-" + its first 8 hex characters). It is
+// only compared, never logged: it holds key material.
+var currentKeyLegacyID string
 
 // Default key material. These literals are intentionally public: every copy of
 // the binary derives the same key, which is what lets a config encrypted on a
@@ -102,11 +106,12 @@ var cryptoKey = func() []byte {
 			key, err := hex.DecodeString(envKey)
 			if err == nil && len(key) == 32 {
 				currentKeyInfo = KeyInfo{
-					ID:         "env-" + envKey[:8],
+					ID:         fmt.Sprintf("env-%x", sha256.Sum256(key))[:12], // a fingerprint, never key bytes (SEC-2)
 					CreatedAt:  now,
 					IsDefault:  false,
 					IsEnhanced: true,
 				}
+				currentKeyLegacyID = "env-" + strings.ToLower(envKey[:8])
 				logDebug("crypto", "Using encryption key from JUKAHUB_CRYPTO_KEY env var (key ID: %s, enhanced: %v)", currentKeyInfo.ID, currentKeyInfo.IsEnhanced)
 				return key
 			}
@@ -259,7 +264,8 @@ func DecryptString(token string) (string, error) {
 // running build is not using. Without it, a wrong JUKAHUB_CRYPTO_KEY looks like
 // corrupted data and sends people looking for the wrong problem.
 func keyMismatchHint(keyID string) string {
-	if keyID == "" || keyID == currentKeyInfo.ID {
+	if keyID == "" || keyID == currentKeyInfo.ID ||
+		(currentKeyLegacyID != "" && strings.EqualFold(keyID, currentKeyLegacyID)) {
 		return ""
 	}
 	return fmt.Sprintf("value was encrypted with key %q but this build uses %q; start the app with the JUKAHUB_CRYPTO_KEY (and salt) that created it", keyID, currentKeyInfo.ID)
@@ -341,62 +347,4 @@ func DecryptAPIToken(encrypted string, keyName string) (string, error) {
 		return "", fmt.Errorf("%s: decrypted to empty value", keyName)
 	}
 	return decrypted, nil
-}
-
-// DecryptSecret is a small convenience wrapper for generic config secrets. It uses
-// the same error distinctions as DecryptAPIToken but names the field more neutrally
-// so it is usable for non-API tokens where "API" would be misleading.
-
-// EncryptWithAuth encrypts data and provides an additional HMAC authentication layer.
-// This is useful for high-security scenarios where you want defense in depth.
-// The format is: ENC:AUTH:<keyID>/<hex(nonce+ciphertext+HMAC)>
-func EncryptWithAuth(plaintext string) (string, error) {
-	key := getCryptoKey()
-	encrypted, err := EncryptString(plaintext)
-	if err != nil {
-		return "", err
-	}
-
-	// Additional HMAC over the encrypted value (excluding the ENC: prefix).
-	mac := hmac.New(sha256.New, key)
-	body := encrypted[4:] // "<keyID>/<hex>"
-	mac.Write([]byte(body))
-	hmacValue := mac.Sum(nil)
-
-	// Format: ENC:AUTH:<keyID>/<hex>:<hmac>. DecryptWithAuth parses exactly
-	// this shape, so the AUTH: marker has to sit right after ENC:.
-	return fmt.Sprintf("ENC:AUTH:%s:%s", body, hex.EncodeToString(hmacValue)), nil
-}
-
-// DecryptWithAuth decrypts data that was encrypted with EncryptWithAuth.
-func DecryptWithAuth(encrypted string) (string, error) {
-	if !strings.HasPrefix(encrypted, "ENC:AUTH:") {
-		return "", errors.New("not an authenticated encrypted value")
-	}
-
-	// Parse: ENC:AUTH:<keyID>/<hex>:<hmac>
-	parts := strings.SplitN(encrypted[9:], ":", 2)
-	if len(parts) != 2 {
-		return "", errors.New("invalid authenticated encrypted format")
-	}
-
-	encryptedData := "ENC:" + parts[0]
-	providedMAC, err := hex.DecodeString(parts[1])
-	if err != nil {
-		return "", errors.New("invalid authenticated encrypted format: malformed HMAC")
-	}
-
-	// Verify HMAC first (compare raw bytes, not hex text).
-	key := getCryptoKey()
-	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(encryptedData[4:]))
-	expectedHMAC := mac.Sum(nil)
-
-	if !hmac.Equal(providedMAC, expectedHMAC) {
-		logWarn("crypto", "HMAC verification failed - data may be tampered")
-		return "", errors.New("authentication failed - data may be tampered")
-	}
-
-	// HMAC valid, proceed with decryption
-	return DecryptString(encryptedData)
 }

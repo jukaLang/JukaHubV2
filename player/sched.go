@@ -1107,7 +1107,7 @@ func schedStatusText() (string, sdl.Color) {
 	}
 	if schedUI.statusLabel == "" || !schedUI.statusAt.Equal(schedUI.updated) {
 		schedUI.statusAt = schedUI.updated
-		schedUI.statusLabel = "Updated " + schedUI.updated.Format("15:04")
+		schedUI.statusLabel = "Updated " + clockDigits(nil, schedUI.updated)
 	}
 	return schedUI.statusLabel, ColorTextTertiary()
 }

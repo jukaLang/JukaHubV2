@@ -21,7 +21,6 @@ import (
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"sync"
 )
 
 // semaphore is a counting semaphore with a context-aware Acquire. The zero
@@ -173,17 +172,4 @@ func decodeImageRGBA(ctx context.Context, data []byte) (*image.RGBA, error) {
 		}
 	}
 	return rgba, nil
-}
-
-// runBounded runs fn under a semaphore of n concurrent slots. It is the simple
-// form for a one-shot fan-out that has no context to thread.
-func runBounded(n int, wg *sync.WaitGroup, fn func()) {
-	s := newSemaphore(n)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		s.Acquire(context.Background(), 1)
-		defer s.Release(1)
-		fn()
-	}()
 }

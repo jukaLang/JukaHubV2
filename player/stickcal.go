@@ -35,6 +35,8 @@ package main
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -488,6 +490,47 @@ func stickCalStatusText(c *Config) string {
 		return "Right only"
 	}
 	return "Not yet"
+}
+
+func init() { registerDriverStatus(driverRowSticks, stickDriverStatus) }
+
+// stickDriverStatus is the Sticks line of Settings → Drivers & hardware. The
+// Smart Pro's sticks are serial devices read by TrimUI's trimui_inputd (left
+// on ttyS4, right on ttyS3, powered by GPIO 110) with the firmware's
+// calibration in /mnt/UDISK/joypad*.config; the Smart Pro S and Brick Pro may
+// use other ports, so this only reports what is there and never assumes.
+// Read-only: JukaHub does not touch the sticks' power, ports or files.
+func stickDriverStatus() driverStatus {
+	if !IsTrimuiDevice() {
+		return driverStatus{State: driverUnknown, Detail: "not a TrimUI handheld"}
+	}
+	if !stickHardware() {
+		return driverStatus{State: driverNotUsed, Detail: "no analog sticks on this model"}
+	}
+	st := driverStatus{Driver: "trimui_inputd"}
+	var ports []string
+	for _, tty := range []string{"ttyS3", "ttyS4"} {
+		if _, err := os.Stat("/dev/" + tty); err == nil {
+			ports = append(ports, tty)
+		}
+	}
+	st.Node = strings.Join(ports, ", ")
+	cal, _ := filepath.Glob("/mnt/UDISK/joypad*.config")
+	calText := "no firmware calibration file"
+	if len(cal) > 0 {
+		calText = strconv.Itoa(len(cal)) + " firmware calibration file"
+		if len(cal) > 1 {
+			calText += "s"
+		}
+	}
+	if procNameRunning([]string{"trimui_inputd"}) != "" {
+		st.State, st.Detail = driverOK, "running · "+calText
+		return st
+	}
+	// Some firmware reads the sticks another way (a kernel joystick driver);
+	// without the daemon the state is unknown, not broken.
+	st.State, st.Detail = driverUnknown, "trimui_inputd not running · "+calText
+	return st
 }
 
 // trimuiFirmwareMenuAvailable finds the stock launcher that resumes after

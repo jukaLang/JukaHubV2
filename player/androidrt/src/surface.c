@@ -13,9 +13,13 @@
  * → eglInitialize → an ES2 window config whose EGL_NATIVE_VISUAL_ID is a
  * GBM format → gbm surface → eglCreateWindowSurface — then the fbdev panel
  * and whether a *native* (non-GBM) EGL display initialises, which is the
- * present layer's other backend. It tears everything down and returns 0
- * when the measurement completed (*works = the GBM path produced a window
- * surface); 1 is reserved for an internal surprise.
+ * present layer's other backend, and last the SDL-hosted backend's path: an
+ * "SDL:" line with the firmware's SDL2, its version, the video driver it
+ * picks and whether its EGL display comes up (no window is created). It
+ * tears everything down and returns 0 when the measurement completed
+ * (*works = the GBM path produced a window surface); 1 is reserved for an
+ * internal surprise. Inside the runner SDL2 is the present layer's: the probe
+ * reports what that layer measured and starts no second video init.
  *
  * The runner asks for it with ANDROIDPAK_SURFACE=1; tests/smoke builds the
  * standalone probe binary (-DSURFACE_PROBE_MAIN).
@@ -39,6 +43,7 @@
 
 #include "dlport.h"
 #include "eglhost.h"
+#include "sdlhost.h"
 
 #define SURFACE_TAG "[androidrt][surface] "
 
@@ -104,6 +109,16 @@ static int resolveEgl(ApakGpu *g, char *why, size_t cap) {
     if (why && !why[0]) snprintf(why, cap, "%s lacks core EGL entry points (bionic build? wrong glibc?)", g->eglName);
     return 0;
 }
+
+#ifndef APAK_FIRMWARE_ROOT
+#define APAK_FIRMWARE_ROOT "" /* tests/smoke stages a firmware tree under $WORK */
+#endif
+const char *const apak_gpuFirmwareEgl[] = {
+    APAK_FIRMWARE_ROOT "/usr/lib/libEGL.so",
+    APAK_FIRMWARE_ROOT "/usr/lib/libEGL.so.1",
+    APAK_FIRMWARE_ROOT "/usr/trimui/lib/libEGL.so",
+    NULL,
+};
 
 int apak_gpuLoadEglFrom(ApakGpu *g, const char *const *paths, char *why, size_t cap) {
     const char *override = getenv("ANDROIDPAK_EGL_LIB");
@@ -247,6 +262,142 @@ int apak_gpuDrmNode(char *node, size_t cap) {
     return 0;
 }
 
+int apak_gpuOnStockTrimui(void) {
+    const char *dev = getenv("ANDROIDPAK_DEVICE");
+    if (dev && *dev) return strncmp(dev, "trimui", 6) == 0;
+    return access("/usr/trimui", F_OK) == 0;
+}
+
+const char *apak_gpuBesideEgl(const char *eglName, const char *stem, const char *soVersion, char *buf, size_t cap) {
+    const char *slash = eglName ? strrchr(eglName, '/') : NULL;
+    int dir, versioned, pass;
+    if (!slash || eglName[0] != '/') return NULL;
+    dir = (int)(slash - eglName);
+    versioned = strstr(slash, ".so.") != NULL; /* libEGL.so.1, not libEGL.so */
+    for (pass = 0; pass < 2; pass++) {
+        int n = (pass == 0) == versioned ? snprintf(buf, cap, "%.*s/%s.so.%s", dir, eglName, stem, soVersion)
+                                         : snprintf(buf, cap, "%.*s/%s.so", dir, eglName, stem);
+        if (n > 0 && (size_t)n < cap && access(buf, R_OK) == 0) return buf;
+    }
+    return NULL;
+}
+
+/* ── the firmware's SDL2 (sdlhost.h) ─────────────────────────────────── */
+
+static void (*g_presentSdl)(ApakSdlProbe *out); /* set inside the runner */
+
+void apak_surfaceSetSdlProbe(void (*probe)(ApakSdlProbe *out)) { g_presentSdl = probe; }
+
+static const char *sdlErr(const ApakSdl *s) {
+    const char *e = s->SDL_GetError ? s->SDL_GetError() : NULL;
+    return e && *e ? e : "no SDL error text";
+}
+
+#define SDL_RESOLVE(field, required)                                  \
+    do {                                                              \
+        *(void **)&s->field = rt_dlsym(s->lib, #field);               \
+        if ((required) && !s->field && !missing) missing = #field;    \
+    } while (0)
+
+int apak_sdlLoad(ApakSdl *s, int stockFirst, char *why, size_t cap) {
+    static const char *const stock[] = {
+        "/usr/lib/libSDL2-2.0.so.0", "libSDL2-2.0.so.0", "/usr/trimui/lib/libSDL2-2.0.so.0", NULL,
+    };
+    static const char *const others[] = {
+        "libSDL2-2.0.so.0", "/usr/lib/libSDL2-2.0.so.0", "/usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0", NULL,
+    };
+    const char *override = getenv("ANDROIDPAK_SDL_LIB");
+    const char *const *paths = stockFirst ? stock : others;
+    const char *missing = NULL;
+    size_t i = 0;
+    if (s->lib) return 1;
+    if (override && *override) {
+        s->lib = rt_dlopen(override, 0);
+        if (!s->lib) {
+            snprintf(why, cap, "%.200s not loadable: %.250s", override, rt_dlerror());
+            return 0;
+        }
+        snprintf(s->name, sizeof s->name, "%s", override);
+    }
+    for (i = 0; !s->lib && paths[i]; i++) {
+        s->lib = rt_dlopen(paths[i], 0);
+        if (s->lib) snprintf(s->name, sizeof s->name, "%s", paths[i]);
+    }
+    if (!s->lib) {
+        snprintf(why, cap, "no libSDL2-2.0.so.0 (%zu places tried; ANDROIDPAK_SDL_LIB overrides)", i);
+        return 0;
+    }
+    SDL_RESOLVE(SDL_InitSubSystem, 1);
+    SDL_RESOLVE(SDL_GetError, 1);
+    SDL_RESOLVE(SDL_GL_SetAttribute, 1);
+    SDL_RESOLVE(SDL_CreateWindow, 1);
+    SDL_RESOLVE(SDL_GL_CreateContext, 1);
+    SDL_RESOLVE(SDL_GL_MakeCurrent, 1);
+    SDL_RESOLVE(SDL_GL_SwapWindow, 1);
+    SDL_RESOLVE(SDL_GL_DeleteContext, 1);
+    SDL_RESOLVE(SDL_QuitSubSystem, 0);
+    SDL_RESOLVE(SDL_GetVersion, 0);
+    SDL_RESOLVE(SDL_GetCurrentVideoDriver, 0);
+    SDL_RESOLVE(SDL_GL_LoadLibrary, 0);
+    SDL_RESOLVE(SDL_DestroyWindow, 0);
+    SDL_RESOLVE(SDL_GL_GetCurrentWindow, 0);
+    if (missing) {
+        snprintf(why, cap, "%.250s lacks %s (not an SDL2 build?)", s->name, missing);
+        rt_dlclose(s->lib);
+        memset(s, 0, sizeof *s); /* no pointer into the closed library survives */
+        return 0;
+    }
+    return 1;
+}
+
+int apak_sdlStart(ApakSdl *s, const struct ApakGpu *g, int stockFirst, char *driver, size_t dcap, char *why,
+                  size_t cap) {
+    const char *drv;
+    if (dcap) driver[0] = '\0';
+    if (!g->eglGetCurrentDisplay || !g->eglGetCurrentSurface || !g->eglGetCurrentContext || !g->eglMakeCurrent ||
+        !g->eglCreateContext) {
+        snprintf(why, cap, "%.250s lacks eglGetCurrent*/eglMakeCurrent/eglCreateContext", g->eglName);
+        return 0;
+    }
+    if (!apak_sdlLoad(s, stockFirst, why, cap)) return 0;
+    if (s->SDL_InitSubSystem(APAK_SDL_INIT_VIDEO) != 0) {
+        snprintf(why, cap, "SDL_InitSubSystem(VIDEO) failed: %.400s", sdlErr(s));
+        return 0;
+    }
+    drv = s->SDL_GetCurrentVideoDriver ? s->SDL_GetCurrentVideoDriver() : NULL;
+    snprintf(driver, dcap, "%s", drv ? drv : "?");
+    s->SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_PROFILE_MASK, APAK_SDL_GL_CONTEXT_PROFILE_ES);
+    s->SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    s->SDL_GL_SetAttribute(APAK_SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    /* SDL's EGL display, initialised now: a backend decided at start must
+     * know that SDL's EGL really comes up. */
+    if (s->SDL_GL_LoadLibrary && s->SDL_GL_LoadLibrary(NULL) != 0) {
+        snprintf(why, cap, "SDL_GL_LoadLibrary failed: %.400s", sdlErr(s));
+        if (s->SDL_QuitSubSystem) s->SDL_QuitSubSystem(APAK_SDL_INIT_VIDEO);
+        return 0;
+    }
+    return 1;
+}
+
+const char *apak_sdlGlesLib(const char *eglName, char *buf, size_t cap) {
+    const char *env = getenv("ANDROIDPAK_GLES2_LIB");
+    if (env && *env) return env;
+    return apak_gpuBesideEgl(eglName, "libGLESv2", "2", buf, cap);
+}
+
+void apak_sdlEnvDefaults(const char *eglName) {
+#if !defined(_WIN32)
+    char gles[320];
+    const char *glesLib = apak_sdlGlesLib(eglName, gles, sizeof gles);
+    setenv("SDL_VIDEO_EGL_DRIVER", eglName, 0);
+    if (glesLib) setenv("SDL_VIDEO_GL_DRIVER", glesLib, 0);
+    setenv("SDL_NO_SIGNAL_HANDLERS", "1", 0);
+    setenv("SDL_INPUT_LINUX_KEEP_KBD", "1", 0);
+#else
+    (void)eglName; /* no SDL-hosted backend on Windows */
+#endif
+}
+
 /* ── the probe ───────────────────────────────────────────────────────── */
 
 static const char *fourccName(uint32_t f, char out[5]) {
@@ -286,10 +437,14 @@ static void probeFbdev(void) {
 static void probeNativeDisplay(ApakGpu *g) {
     EGLDisplay dpy = g->eglGetDisplay(EGL_DEFAULT_DISPLAY);
     EGLint maj = 0, min = 0;
+    int wasUp;
     if (!dpy) {
         fprintf(stderr, SURFACE_TAG "native EGL: eglGetDisplay(EGL_DEFAULT_DISPLAY) = EGL_NO_DISPLAY\n");
         return;
     }
+    /* A display nobody initialised answers NULL (EGL_NOT_INITIALIZED). */
+    wasUp = g->eglQueryString(dpy, EGL_VENDOR) != NULL;
+    (void)g->eglGetError();
     if (g->eglInitialize(dpy, &maj, &min) != EGL_TRUE) {
         fprintf(stderr, SURFACE_TAG "native EGL: eglInitialize failed (0x%x) — present backend `native` will not work\n",
                 (unsigned)g->eglGetError());
@@ -297,12 +452,63 @@ static void probeNativeDisplay(ApakGpu *g) {
     }
     fprintf(stderr, SURFACE_TAG "native EGL: default display %d.%d (%s) — present backend `native` can start\n",
             (int)maj, (int)min, g->eglQueryString(dpy, EGL_VENDOR) ? g->eglQueryString(dpy, EGL_VENDOR) : "?");
-    g->eglTerminate(dpy);
+    /* Inside the runner the game — and SDL's EGL, on the mali driver — use
+     * this same display: terminating it would pull it from under them. One
+     * this probe alone brought up is let go again. */
+    if (!g_presentSdl || !wasUp) g->eglTerminate(dpy);
 }
 
-int android_surfaceProbe(int width, int height, int *works) {
-    static ApakGpu gpu;
-    ApakGpu *g = &gpu;
+/* The SDL-hosted backend's path, started the way the present layer starts it
+ * (apak_sdlStart, pointed at the EGL this probe loaded) but with no window:
+ * the library, its video driver and SDL's EGL display; video is quit again.
+ * Inside the runner the present layer answers instead (g_presentSdl). */
+static void probeSdl(ApakGpu *g, int eglOk) {
+    static ApakSdl sdl;
+    ApakSdlProbe r;
+    char lib[300], who[360];
+    memset(&r, 0, sizeof r);
+    if (g_presentSdl) {
+        g_presentSdl(&r);
+    } else if (!eglOk) {
+        snprintf(r.why, sizeof r.why, "not measured: no usable libEGL (the sdl backend shares the game's EGL)");
+    } else {
+        apak_sdlEnvDefaults(g->eglName); /* the standalone probe is single-threaded */
+        if (apak_sdlStart(&sdl, g, apak_gpuOnStockTrimui(), r.driver, sizeof r.driver, r.why, sizeof r.why)) {
+            r.state = APAK_SDLPROBE_UP;
+            r.egl = sdl.SDL_GL_LoadLibrary ? 1 : -1;
+        }
+        if (sdl.lib) {
+            snprintf(r.name, sizeof r.name, "%s", sdl.name);
+            if (sdl.SDL_GetVersion) sdl.SDL_GetVersion(&r.version);
+        }
+        /* not dlclose'd: SDL's thread-local error buffers keep destructors */
+        if (r.state == APAK_SDLPROBE_UP && sdl.SDL_QuitSubSystem) sdl.SDL_QuitSubSystem(APAK_SDL_INIT_VIDEO);
+    }
+    lib[0] = '\0';
+    if (r.name[0] && r.version.major)
+        snprintf(lib, sizeof lib, "%.256s %u.%u.%u", r.name, (unsigned)r.version.major, (unsigned)r.version.minor,
+                 (unsigned)r.version.patch);
+    else if (r.name[0])
+        snprintf(lib, sizeof lib, "%.256s (no SDL_GetVersion)", r.name);
+    if (r.state == APAK_SDLPROBE_UP && r.egl > 0)
+        fprintf(stderr, SURFACE_TAG "SDL: YES — %s, video driver %s, EGL display up — present backend `sdl` can "
+                        "start\n", lib, r.driver);
+    else if (r.state == APAK_SDLPROBE_UP)
+        fprintf(stderr, SURFACE_TAG "SDL: YES — %s, video driver %s; EGL display not measured (no "
+                        "SDL_GL_LoadLibrary: SDL brings it up with its first window)\n", lib, r.driver);
+    else if (r.state == APAK_SDLPROBE_LOADED)
+        fprintf(stderr, SURFACE_TAG "SDL: %s loads; video driver and EGL not measured — %s\n", lib, r.why);
+    else {
+        snprintf(who, sizeof who, "%s%s%s%s", lib, lib[0] && r.driver[0] ? ", " : "",
+                 r.driver[0] ? "video driver " : "", r.driver);
+        fprintf(stderr, SURFACE_TAG "SDL: NO — %s%s%s — present backend `sdl` will not work\n", who,
+                who[0] ? ": " : "", r.why[0] ? r.why : "no reason recorded");
+    }
+}
+
+/* The GBM/KMS chain (and, before it, the libraries, fbdev and the native
+ * display); `gpu` stays loaded for probeSdl. */
+static int probeStack(ApakGpu *g, int width, int height, int *works, int *eglOk) {
     char why[512], node[128], fcc[5];
     int layers, fd, picked, i, vis = 0;
     ApakDrmRes *res;
@@ -320,6 +526,18 @@ int android_surfaceProbe(int width, int height, int *works) {
     };
 
     if (works) *works = 0;
+    if (apak_gpuOnStockTrimui()) {
+        /* apak_presentInit's order: the firmware's own libEGL before the
+         * library path, so this measures (and points SDL_VIDEO_EGL_DRIVER
+         * at) the EGL a game run uses. A failed ANDROIDPAK_EGL_LIB stays
+         * final: apak_gpuLoad below names it. */
+        const char *eglOverride = getenv("ANDROIDPAK_EGL_LIB");
+        char ewhy[256];
+        if (!(apak_gpuLoadEglFrom(g, apak_gpuFirmwareEgl, ewhy, sizeof ewhy) & APAK_GPU_EGL) && !g->egl &&
+            !(eglOverride && *eglOverride))
+            fprintf(stderr, SURFACE_TAG "stock firmware: %s — searching the library path\n",
+                    ewhy[0] ? ewhy : "no libEGL at the firmware's paths");
+    }
     layers = apak_gpuLoad(g, why, sizeof why);
     fprintf(stderr, SURFACE_TAG "libraries: EGL %s (%s), GBM %s (%s), DRM %s (%s)\n",
             (layers & APAK_GPU_EGL) ? "ok" : "NO", g->eglName, (layers & APAK_GPU_GBM) ? "ok" : "NO", g->gbmName,
@@ -330,6 +548,7 @@ int android_surfaceProbe(int width, int height, int *works) {
                 why);
         return 0;
     }
+    *eglOk = 1;
     clientExts = g->eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
     fprintf(stderr, SURFACE_TAG "EGL client extensions: %s\n", clientExts ? clientExts : "(none: EGL 1.4 without client extensions)");
     probeNativeDisplay(g);
@@ -450,6 +669,13 @@ int android_surfaceProbe(int width, int height, int *works) {
     g->gbm_device_destroy(gbm);
     close(fd);
     return 0;
+}
+
+int android_surfaceProbe(int width, int height, int *works) {
+    static ApakGpu gpu;
+    int eglOk = 0, rc = probeStack(&gpu, width, height, works, &eglOk);
+    probeSdl(&gpu, eglOk); /* last: SDL's video init must not disturb the GBM measurement */
+    return rc;
 }
 
 #ifdef SURFACE_PROBE_MAIN

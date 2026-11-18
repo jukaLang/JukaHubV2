@@ -142,10 +142,10 @@ func wifiKeeperRadioOn() {
 }
 
 // wifiKeeperYield reports whether someone else drives the radio right now: a
-// join waiting, a Wi-Fi page operation or its hands-off minute, or the wake
-// watcher.
+// join waiting, a Wi-Fi page operation or its hands-off minute, the wake
+// watcher, or the hotspot (hotspot.go), which holds the radio in AP mode.
 func wifiKeeperYield() bool {
-	return wifiJoinInProgress() || wifiUserOps.Load() > 0 || wifiKeeperHandsOffNow() || wifiResumeRunning.Load() > 0
+	return wifiJoinInProgress() || wifiUserOps.Load() > 0 || wifiKeeperHandsOffNow() || wifiResumeRunning.Load() > 0 || hotspotHoldsRadio()
 }
 
 // wifiKeeperFirmwareAllows reports whether the firmware's Wi-Fi switch lets
@@ -386,6 +386,11 @@ func (k *wifiKeeperState) step(now time.Time) time.Duration {
 	k.missingSince = time.Time{}
 	if st.State == wifiCompleteState {
 		return k.joined(now, iface, st)
+	}
+	if !k.completedAt.IsZero() {
+		// The radio left the network it was on (a join is nudged in joined):
+		// the probe looks now rather than at its next turn (netmon.go).
+		netNudge()
 	}
 	k.good, k.completedAt = false, time.Time{}
 	if st.State == wifiStateDisabled {

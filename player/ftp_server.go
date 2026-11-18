@@ -19,9 +19,11 @@ package main
 //     the card itself, whose Apps, Emus, RetroArch and System folders hold the
 //     programs the device runs. On a computer it is the "shared" folder next
 //     to the app. Every share is an os.Root, so neither ".." nor a symlink can
-//     leave it. Roms/Ports, whose PortMaster scripts the Ports panel runs, and
-//     the game profiles' folders are read-only (ftpPath.protected): changing
-//     those takes SFTP.
+//     leave it. Folders whose files run as programs — Roms/Ports, whose
+//     PortMaster scripts the Ports panel runs, the game profiles' and Windows
+//     programs' folders, and the ROM folders of systems whose launcher runs
+//     its game — are read-only (ftpPath.protected, ftp_server_locks.go), also
+//     through a symlink that leads into one: changing those takes SFTP.
 //   - The server stops itself after 15 idle minutes and when the device
 //     changes network (fileserver_guard.go). JUKAHUB_FTP_ROOT names a folder
 //     that takes the card's place: its user folders are shared.
@@ -80,7 +82,7 @@ var (
 const (
 	ftpTopLevelReply    = "550 Open one of the shared folders first — nothing can be stored at the top level"
 	ftpSharesFixedReply = "550 The shared folders themselves cannot be changed"
-	ftpProtectedReply   = "550 This folder holds programs the device runs (ports, game profiles), so FTP cannot change it — use SFTP"
+	ftpProtectedReply   = "550 This folder holds programs the device runs (ports, scripts, game profiles, Windows programs), so FTP cannot change it — use SFTP"
 )
 
 // errFTPNothingToShare is a start with no folder to share: "/" would be empty.
@@ -279,7 +281,10 @@ func (s *ftpService) startShares(base string, shares []ftpShare, addr string) er
 		return err
 	}
 	if s == ftpSrv {
-		set.locked = set.keepInside(ftpProfileDirs())
+		// Derived on the first command a session sends (a goroutine, not
+		// this one, which may be the render thread), then again whenever the
+		// game-profile cache is rebuilt or a minute has passed.
+		set.live = &ftpLiveLocks{derive: set.runDirs}
 	}
 	password, err := generateSSHPassword()
 	if err != nil {
@@ -665,30 +670,37 @@ const (
 
 // ftpShare is one folder "/" lists. root is opened when the server starts and
 // closed when it stops; every file operation inside the share goes through it.
+// real is dir through its symlinks, worked out when the root is opened; ""
+// for a share that is not on disk (ftpShareSet.lockedThroughLinks).
 type ftpShare struct {
 	name string
 	dir  string
 	root *os.Root
+	real string
 }
 
-// ftpShareSet is one run's shares; it does not change while the server runs.
-// locked are folders inside the shares FTP may read but not change: those of
-// the game profiles (ftpProfileDirs), folded by ftpFoldPath.
+// ftpShareSet is one run's shares; the list does not change while the server
+// runs. locked are folders inside the shares FTP may read but not change —
+// the folders whose files are run as programs (ftpRunDirs), folded by
+// ftpFoldPath; live, set for the running server, derives them again as the
+// card changes (ftp_server_locks.go). Read them through lockedDirs.
 type ftpShareSet struct {
 	list   []*ftpShare
 	locked []string
+	live   *ftpLiveLocks
 }
 
 // lockedPath reports whether abs, a path inside a share, is a locked folder,
 // inside one, or above one — renaming or removing a folder above would swap
 // what the locked path finds.
 func (set *ftpShareSet) lockedPath(abs string) bool {
-	if set == nil || len(set.locked) == 0 {
+	locked := set.lockedDirs()
+	if len(locked) == 0 {
 		return false
 	}
 	key := ftpFoldPath(abs)
 	sep := string(filepath.Separator)
-	for _, dir := range set.locked {
+	for _, dir := range locked {
 		if key == dir || strings.HasPrefix(key, dir+sep) || strings.HasPrefix(dir, key+sep) {
 			return true
 		}
@@ -739,39 +751,6 @@ func ftpFoldPath(p string) string {
 		}
 	}
 	return strings.ToLower(strings.Join(parts, sep))
-}
-
-// ftpProfileDirs lists the game profiles' folders (gameprofiles.go), folded:
-// a profile runs the program in its folder wherever on the card that is, so a
-// folder inside a share is kept as read-only as Roms/Ports. The declared
-// folder counts as well as the resolved one: a folder that is missing now
-// would be run from once someone made it. A profile added while the server
-// runs is covered from its next start.
-func ftpProfileDirs() []string {
-	var out []string
-	add := func(dir string) {
-		if strings.TrimSpace(dir) != "" && dir != "." {
-			out = append(out, ftpFoldPath(dir))
-		}
-	}
-	roots := gameProfileRoots()
-	for _, e := range gameProfileEntries() {
-		add(e.GameDir)
-		if e.Executable != "" {
-			add(filepath.Dir(e.Executable))
-		}
-		dir := filepath.FromSlash(strings.TrimSpace(e.Profile.Dir))
-		switch {
-		case dir == "":
-		case filepath.IsAbs(dir):
-			add(dir)
-		default:
-			for _, root := range roots {
-				add(filepath.Join(root, dir))
-			}
-		}
-	}
-	return out
 }
 
 // find looks a share up by name: exactly first, then in any case.
@@ -901,7 +880,12 @@ func openFTPShares(shares []ftpShare) (*ftpShareSet, error) {
 			logWarn("ftp", "cannot share %s: %v", sh.name, err)
 			continue
 		}
-		set.list = append(set.list, &ftpShare{name: sh.name, dir: sh.dir, root: root})
+		real, err := filepath.EvalSymlinks(sh.dir)
+		if err != nil {
+			// Opened, so it is there: the folder as named stands in for it.
+			real = sh.dir
+		}
+		set.list = append(set.list, &ftpShare{name: sh.name, dir: sh.dir, root: root, real: real})
 	}
 	if len(set.list) == 0 {
 		return nil, errFTPNothingToShare
@@ -2022,7 +2006,10 @@ func (set *ftpShareSet) resolvePath(cwd, name string) (ftpPath, error) {
 	}
 	p.virtual += "/" + rest
 	p.rel = rel
-	p.protected = ftpProtected(share.name, rest) || set.lockedPath(filepath.Join(share.dir, rel))
+	// The name first, then where it really leads: a symlink inside the share
+	// can point into a locked folder under another name.
+	p.protected = ftpProtected(share.name, rest) || set.lockedPath(filepath.Join(share.dir, rel)) ||
+		set.lockedThroughLinks(share, rel)
 	return p, nil
 }
 

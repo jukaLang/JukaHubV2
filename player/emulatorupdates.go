@@ -289,10 +289,11 @@ func coreCRC32File(path string) (string, error) {
 // read-only system partition (coreDirIsSystem): its update could only fail.
 //
 // "Differs" is all the CRC32 can say. On CrossMix, whose image ships its own
-// builds of many cores, that means a shipped core is replaced by the buildbot's
-// nightly the first time the pass runs — the kept .bak and the one-press
-// rollback are what make that acceptable, and a nightly that cannot load here is
-// refused before it replaces anything.
+// builds of many cores, that means a shipped core differs from the buildbot's
+// nightly. A press replaces it; an automatic pass leaves a build it knows
+// CrossMix ships alone and says so once (coreAutoUpdateRunner). Either way the
+// kept .bak and the one-press rollback make a replacement reversible, and a
+// nightly that cannot load here is refused before it replaces anything.
 func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []coreUpdate {
 	updates := make([]coreUpdate, 0, len(entries))
 	for _, entry := range entries {
@@ -625,10 +626,159 @@ func coreRefusalForget(core, crc string) {
 	}
 }
 
+// ── What an automatic pass leaves to a press ─────────────────────────────────
+
+// coreAutoUpdateNever reports a core no automatic pass replaces: MAME's family
+// and FinalBurn Neo. Their nightlies move the romset version the core expects,
+// so an unattended update can stop arcade games that ran the day before on a
+// card whose romsets were built for the installed build. A press on the
+// Emulators page still updates them.
+func coreAutoUpdateNever(core string) bool {
+	core = normalizeCoreName(core)
+	return strings.HasPrefix(core, "mame") || core == "fbneo"
+}
+
+// coreCrossMixShippedCRCs lists, per core, the CRC32 (lower-case hex, as the
+// buildbot index writes it) of the builds CrossMix's image ships: its own builds
+// and the buildbot builds it froze. An automatic pass does not replace a core
+// whose bytes match one; it says so once (coreCrossMixAskOnce) and a press on
+// the Emulators page replaces it. The table is empty until the checksums are
+// read off a CrossMix card (backlog HW-2 step 4): a guessed value would match
+// nothing, or hold back a core it should not. List only cores the buildbot
+// publishes — no other core is ever replaced anyway.
+var coreCrossMixShippedCRCs = map[string][]string{}
+
+// coreCrossMixShipped reports that b's bytes are a build CrossMix ships, and
+// their CRC32. Only a core the table names is read.
+func coreCrossMixShipped(b coreBuild) (string, bool) {
+	known := coreCrossMixShippedCRCs[normalizeCoreName(b.Core)]
+	if len(known) == 0 || b.Path == "" {
+		return "", false
+	}
+	crc, err := emuCachedCRC32(b.Path)
+	if err != nil {
+		return "", false
+	}
+	for _, want := range known {
+		if strings.EqualFold(strings.TrimSpace(want), crc) {
+			return crc, true
+		}
+	}
+	return "", false
+}
+
+// coreHeldBuild is a core an automatic pass left alone because CrossMix ships
+// its build.
+type coreHeldBuild struct {
+	Core  string
+	CRC32 string
+}
+
+// coreCrossMixAsked holds, per core, the CrossMix build the user was already
+// told about, in data/performance/core-crossmix-asked.json, so the pass says it
+// once per build rather than every day.
+var coreCrossMixAsked struct {
+	mu   sync.Mutex
+	path string
+	m    map[string]string
+}
+
+func coreCrossMixAskedPath() string { return filepath.Join(compatDir(), "core-crossmix-asked.json") }
+
+// coreCrossMixAskOnce records held builds the user has not been told about and
+// returns their display names, for the toast; a build named before returns
+// nothing.
+func coreCrossMixAskOnce(held []coreHeldBuild) []string {
+	if len(held) == 0 {
+		return nil
+	}
+	coreCrossMixAsked.mu.Lock()
+	defer coreCrossMixAsked.mu.Unlock()
+	path := coreCrossMixAskedPath()
+	if coreCrossMixAsked.m == nil || coreCrossMixAsked.path != path {
+		coreCrossMixAsked.path = path
+		coreCrossMixAsked.m = map[string]string{}
+		if data, err := os.ReadFile(path); err == nil && len(data) <= 1<<20 {
+			loaded := map[string]string{}
+			if json.Unmarshal(data, &loaded) == nil {
+				for core, crc := range loaded {
+					if core != "" && crc != "" {
+						coreCrossMixAsked.m[core] = crc
+					}
+				}
+			}
+		}
+	}
+	var names []string
+	for _, h := range held {
+		core, crc := normalizeCoreName(h.Core), strings.ToLower(h.CRC32)
+		if core == "" || coreCrossMixAsked.m[core] == crc {
+			continue
+		}
+		coreCrossMixAsked.m[core] = crc
+		names = append(names, coreConfigDisplayName(core))
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	data, err := json.MarshalIndent(coreCrossMixAsked.m, "", "  ")
+	if err == nil {
+		err = writeCompatAtomic(path, append(data, '\n'), 0o644)
+	}
+	if err != nil {
+		logWarn("emulators", "could not save the CrossMix builds already named: %v", err)
+	}
+	logInfo("emulators", "core auto-update: kept CrossMix's own build of %s; a press replaces it", strings.Join(names, ", "))
+	return names
+}
+
+// coreCrossMixAskNote is how a toast asks about the CrossMix builds a pass
+// left alone.
+func coreCrossMixAskNote(names []string) string {
+	if len(names) == 1 {
+		return "CrossMix's own build of " + names[0] + " kept — update it on the Emulators page to replace it"
+	}
+	list := names
+	more := ""
+	if len(list) > 3 {
+		more = fmt.Sprintf(" +%d more", len(list)-3)
+		list = list[:3]
+	}
+	return "CrossMix's own builds of " + strings.Join(list, ", ") + more + " kept — update them on the Emulators page to replace them"
+}
+
+// coreKeepActivatedInPool reports whether a core run keeps a pool copy of the
+// builds it activates. Not on the handheld: the active file and the .bak of
+// the build it replaced are already two copies. A variable so the tests can
+// take the handheld's side.
+var coreKeepActivatedInPool = func() bool { return !IsTrimuiDevice() }
+
+// coreDropPoolBuild removes the pool folder of a build that was just activated
+// (<pool>/<core>/<date>/, its source.json with it), and the core's folder when
+// that leaves it empty. Anything that is not exactly such a folder is refused.
+func coreDropPoolBuild(poolRoot string, b coreBuild) error {
+	dir := filepath.Dir(b.Path)
+	date := filepath.Base(dir)
+	// The folder fetchCoreUpdate filed it under: the core as the index spells it.
+	core := b.Core
+	if !b.Pool || strings.TrimSpace(poolRoot) == "" || core == "" || core == "." || core == ".." || strings.ContainsAny(core, `/\`) || !validCoreIndexDate(date) ||
+		filepath.Clean(dir) != filepath.Join(filepath.Clean(poolRoot), core, date) {
+		return errors.New("not a dated build in the core pool")
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	// Only an empty folder goes; another build of the core keeps it.
+	_ = os.Remove(filepath.Join(poolRoot, core))
+	return nil
+}
+
 // maxCorePoolBuilds is how many fetched builds of one core stay in the pool.
 // Five is enough to activate an older nightly from the compatibility panel after
 // a bad one lands, and small enough that a core's cache cannot become the
-// biggest thing on a 1 GB card.
+// biggest thing on a 1 GB card. On the handheld the builds the Update action and
+// the daily pass activate do not stay in the pool at all
+// (coreKeepActivatedInPool): the .bak beside the core is their way back.
 const maxCorePoolBuilds = 5
 
 // pruneCorePool keeps the newest keep date folders for one core under the pool
@@ -676,6 +826,7 @@ func pruneCorePool(poolRoot, core, newest string, keep int) []string {
 // verifyReleaseDigest checks GitHub's sha256 for a downloaded asset. A release
 // that publishes no digest is fetched anyway; the caller logs that it was not
 // verified rather than pretending it was.
+// Test seam (ARCH-8): only tests call it.
 func verifyReleaseDigest(data []byte, digest string) error {
 	d := strings.TrimSpace(digest)
 	if d == "" {
@@ -741,6 +892,7 @@ func runEmulatorUpdates(ctx context.Context, client *http.Client) emulatorUpdate
 		return report
 	}
 	updates := planCoreUpdates(entries, inv.Active)
+	emuCRCCacheFlush()
 	pool := compatCorePoolDir()
 	for i, upd := range updates {
 		if err := ctx.Err(); err != nil {

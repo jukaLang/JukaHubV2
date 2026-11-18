@@ -125,6 +125,36 @@ func TestClassifyDeviceFromEverySource(t *testing.T) {
 			wantSource: "firmware name",
 		},
 		{
+			name: "a smart pro s named only by its panel is told apart by its chip",
+			id:   deviceIdentity{TrimUI: true, PanelW: 1280, PanelH: 720, SoC: socA523},
+			want: DeviceTrimuiSmartProS, wantSource: "trimui firmware + panel + A523 chip",
+		},
+		{
+			name: "a launcher carrying the smart pro name on an a523 is the pro s",
+			id:   deviceIdentity{Names: []string{"Trimui Smart Pro"}, TrimUI: true, PanelW: 1280, PanelH: 720, SoC: socA523},
+			want: DeviceTrimuiSmartProS, wantSource: "firmware name + A523 chip",
+		},
+		{
+			name: "a pro s name on the a133p is the smart pro",
+			id:   deviceIdentity{Names: []string{"Trimui Smart Pro S"}, TrimUI: true, PanelW: 1280, PanelH: 720, SoC: socA133P},
+			want: DeviceTrimuiSmartPro, wantSource: "firmware name + A133P chip",
+		},
+		{
+			name: "a trimui image on an a523 with no panel",
+			id:   deviceIdentity{TrimUI: true, SoC: socA523},
+			want: DeviceTrimuiSmartProS, wantSource: "trimui firmware + A523 chip",
+		},
+		{
+			name: "the brick pro's store code",
+			id:   deviceIdentity{Hostname: "TG4070"},
+			want: DeviceTrimuiBrickPro, wantSource: "hostname",
+		},
+		{
+			name: "both brick pro codes are one model, not a conflict",
+			id:   deviceIdentity{Compatible: "allwinner,sun50i-a100 tg4040 tg4070"},
+			want: DeviceTrimuiBrickPro, wantSource: "device tree",
+		},
+		{
 			name: "generic kernel with no trimui evidence stays unidentified",
 			id: deviceIdentity{
 				Model:      "sun50iw10",
@@ -198,6 +228,39 @@ func TestMainUIModelNamesReportsOnlyTheLongestName(t *testing.T) {
 	}
 	if got := mainUIModelNames(filepath.Join(t.TempDir(), "missing")); got != nil {
 		t.Fatalf("a missing launcher returned %v, want nil", got)
+	}
+	// A launcher shared by the Brick and the Brick Pro carries both names at
+	// two sites: both are reported, and the Brick is not read as a Pro.
+	shared := filepath.Join(t.TempDir(), "MainUI")
+	if err := os.WriteFile(shared, []byte("\x00Trimui Brick\x00\x00Trimui Brick Pro\x00Trimui Smart Pro Settings\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got = mainUIModelNames(shared)
+	if strings.Join(got, "|") != "Trimui Brick Pro|Trimui Smart Pro|Trimui Brick" {
+		t.Fatalf("mainUIModelNames(shared) = %v", got)
+	}
+}
+
+func TestDeviceSoCFrom(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   deviceSoCEvidence
+		want string
+	}{
+		{"a523 tree", deviceSoCEvidence{Tree: "allwinner,sun55iw3p1 arm,sun55iw3p1"}, socA523},
+		{"a133p tree", deviceSoCEvidence{Tree: "sun50iw10 allwinner,sun50i-a100"}, socA133P},
+		{"a55 cores", deviceSoCEvidence{CPUParts: []string{"0xd05", "0xd05"}}, socA523},
+		{"a53 cores and powervr", deviceSoCEvidence{CPUParts: []string{"0xd03"}, PowerVR: true}, socA133P},
+		{"mali node", deviceSoCEvidence{Mali: true}, socA523},
+		{"conflicting strong signs", deviceSoCEvidence{CPUParts: []string{"0xd03"}, Mali: true}, ""},
+		{"eight cpus on 5.15", deviceSoCEvidence{CPUs: 8, Kernel: "5.15.147"}, socA523},
+		{"four cpus on 4.9", deviceSoCEvidence{CPUs: 4, Kernel: "4.9.191"}, socA133P},
+		{"nothing", deviceSoCEvidence{}, ""},
+	}
+	for _, tc := range cases {
+		if got, why := deviceSoCFrom(tc.ev); got != tc.want {
+			t.Errorf("%s: deviceSoCFrom() = %q (%s), want %q", tc.name, got, why, tc.want)
+		}
 	}
 }
 

@@ -401,6 +401,11 @@ func homeActivate(config *Config) {
 		x1TileActivate()
 		return
 	}
+	// PC: stream a gaming PC through Moonlight (moonlight_ui.go).
+	if id == HomeFocusPC {
+		pcTileActivate()
+		return
+	}
 	// The update chip is the other one: A downloads and installs the release
 	// directly, without opening Patch or any other menu.
 	if id == HomeFocusUpdate {
@@ -699,7 +704,15 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 			homeEditOpen(config)
 			break
 		}
-		if homeLayout.Focus.Current() != HomeFocusNowPlaying || !closeFocusedMiniVideo() {
+		if homeLayout.Focus.Current() == HomeFocusNowPlaying {
+			if !closeFocusedMiniVideo() {
+				return false
+			}
+			break
+		}
+		// Elsewhere on a Standard or Hero Home, X opens the game switcher:
+		// the recent games, each where it was left (gameswitcher.go).
+		if !gameSwitcherFromHome(config) {
 			return false
 		}
 	case sdl.CONTROLLER_BUTTON_B:
@@ -782,6 +795,12 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 		homeLayout.Focus.Set(HomeFocusX1)
 		homeLayout.Focus.Remember()
 		x1TileActivate()
+		return true
+	}
+	if pcTileRect.W > 0 && pointInRect(mx, my, pcTileRect) {
+		homeLayout.Focus.Set(HomeFocusPC)
+		homeLayout.Focus.Remember()
+		pcTileActivate()
 		return true
 	}
 	// PS5 Style's Media tab beside Games opens Media (themeps5hub.go).

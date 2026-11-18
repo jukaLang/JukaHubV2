@@ -2,7 +2,7 @@ package main
 
 // volume_trimui.go — the TrimUI Smart Pro / Brick (tg5040) audio mixer.
 //
-// The generic ALSA path (runAmixerSet) tries Master, then PCM. The tg5040
+// The generic ALSA path tries Master, then PCM. The tg5040
 // codec exposes neither, so on the Smart Pro and the Brick every volume write
 // failed. What the codec does have, as MinUI's and NextUI's tg5040 ports
 // found out the hard way:
@@ -25,10 +25,15 @@ package main
 // with headphones in the firmware keeps a separate "hpvol" there, while the
 // codec always carries whichever level is actually playing.
 //
-// The control names, the curve and the system.json layout come from those
-// ports and their bug reports, not from a device on this desk: everything is
-// probed first and falls back to the generic path when the codec is not the
-// one described above.
+// A stock Smart Pro confirms the control names and system.json's "vol" key.
+// Its keymon maps steps 1..20 to digital attenuation 45..0, and step 0 to
+// 63; steps 1 and 4 were checked against the codec live. Listening quality
+// still needs a hands-on test. Everything is probed first.
+// A codec that is not the one described above — the Smart Pro
+// S's A523 on its 5.15 BSP has its own — gets the first gain control it
+// really lists (trimuiPickGainControl: Master, PCM, the sunxi "DAC Volume"
+// held to its 0 dB point, then the output stages by name), and only a codec
+// with none of them the generic Master/PCM path.
 
 import (
 	"errors"
@@ -36,6 +41,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,9 +64,12 @@ const (
 
 	// trimuiCurveScale shapes the percentage-to-attenuation curve:
 	// raw = -trimuiCurveScale * log10(pct/100). It reproduces the two points
-	// NextUI measured on a tg5040 (20% → 30, 50% → 13), so a level set here
-	// sounds like the same level set by the stock keys.
+	// NextUI measured on a tg5040 (20% → 30, 50% → 13). The stock Smart Pro
+	// curve below is used instead on a Smart Pro without NextUI.
 	trimuiCurveScale = 43.0
+	// Stock Smart Pro keymon uses floor(48 * (20 - step) / 20) for audible
+	// steps. This differs sharply from the NextUI-derived logarithmic curve.
+	trimuiStockAttenuationSpan = 48
 
 	// trimuiSystemSteps is the firmware's own volume scale: "vol" runs 0..20.
 	trimuiSystemSteps = 20
@@ -92,6 +101,125 @@ var trimuiSystemJSONPath = "/mnt/UDISK/system.json"
 // temp dir.
 var trimuiMuteMarkerPath = func() string {
 	return filepath.Join(os.TempDir(), "jukahub-volume-mute")
+}
+
+// USB audio can become ALSA card 0 when it is present at boot. Select the
+// on-board codec by its ALSA ID so volume keys never change the USB card by
+// accident. The ID is stable even if its card number changes.
+func trimuiCodecCardIDFrom(cards string) string {
+	preferred, fallback := "", ""
+	for _, line := range strings.Split(cards, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] < '0' || line[0] > '9' {
+			continue
+		}
+		open := strings.IndexByte(line, '[')
+		close := strings.IndexByte(line, ']')
+		if open < 0 || close <= open {
+			continue
+		}
+		id := strings.TrimSpace(line[open+1 : close])
+		lower := strings.ToLower(id)
+		label := strings.ToLower(line)
+		if id == "" || strings.Contains(label, "usb") || strings.Contains(label, "hdmi") ||
+			strings.Contains(label, "bluetooth") || strings.Contains(label, "dummy") || strings.Contains(label, "loopback") {
+			continue
+		}
+		if lower == "audiocodec" {
+			return id
+		}
+		if preferred == "" && (strings.HasPrefix(lower, "sunxi") || strings.HasPrefix(lower, "sndcodec")) {
+			preferred = id
+		}
+		if fallback == "" {
+			fallback = id
+		}
+	}
+	if preferred != "" {
+		return preferred
+	}
+	return fallback
+}
+
+func trimuiCodecCardID() string {
+	if runtime.GOOS != "linux" || !IsTrimuiDevice() {
+		return ""
+	}
+	cards, err := os.ReadFile("/proc/asound/cards")
+	if err != nil {
+		return ""
+	}
+	return trimuiCodecCardIDFrom(string(cards))
+}
+
+func trimuiAmixer(args ...string) (string, error) {
+	if runtime.GOOS == "linux" && IsTrimuiDevice() {
+		card := trimuiCodecCardID()
+		if card == "" {
+			return "", errors.New("built-in ALSA codec not found")
+		}
+		args = append([]string{"-c", card}, args...)
+	}
+	return systemCommandRunner("amixer", args...)
+}
+
+// The stock Smart Pro's keymon uses the linear attenuation below. NextUI
+// ships a different keymon curve, so its existing logarithmic mapping remains.
+func trimuiStockVolumeCurve(max int) bool {
+	return runtime.GOOS == "linux" && DetectDevice() == DeviceTrimuiSmartPro &&
+		!nextuiActive() && max == trimuiDigitalMaxDefault
+}
+
+func trimuiStockAttenuationFor(pct, max int) int {
+	if pct <= 0 {
+		return max
+	}
+	step := (pct*trimuiSystemSteps + 50) / 100
+	if step > trimuiSystemSteps {
+		step = trimuiSystemSteps
+	}
+	return trimuiStockAttenuationSpan * (trimuiSystemSteps - step) / trimuiSystemSteps
+}
+
+func trimuiStockPercentForAttenuation(raw, max int) int {
+	if raw >= max {
+		return 0
+	}
+	bestStep, bestDistance := 1, max+1
+	for step := 1; step <= trimuiSystemSteps; step++ {
+		want := trimuiStockAttenuationSpan * (trimuiSystemSteps - step) / trimuiSystemSteps
+		distance := want - raw
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance < bestDistance {
+			bestStep, bestDistance = step, distance
+		}
+	}
+	return bestStep * 100 / trimuiSystemSteps
+}
+
+// The generic Master/PCM fallback must use the same built-in card as the
+// tg5040 controls. Otherwise a USB DAC that became card 0 could be changed.
+func trimuiGenericSet(level string) error {
+	if _, err := trimuiAmixer("-q", "sset", "Master", level); err == nil {
+		return nil
+	}
+	if _, err := trimuiAmixer("-q", "sset", "PCM", level); err != nil {
+		return fmt.Errorf("amixer: %w", err)
+	}
+	return nil
+}
+
+func trimuiGenericVolume() (int, bool) {
+	for _, control := range []string{"Master", "PCM"} {
+		if out, err := trimuiAmixer("get", control); err == nil {
+			if pct, ok := parseFirstPercent(out); ok {
+				return pct, true
+			}
+		}
+	}
+	return 0, false
 }
 
 // trimuiWriteMuteMarker records JukaHub's mute and the DAC level to restore.
@@ -135,6 +263,15 @@ type trimuiMixerInfo struct {
 	// Volume" must be written as "Digital Volume".
 	digitalName string
 	dacName     string
+	// gain is the volume control on a codec without "digital volume" (the
+	// Smart Pro S's A523, any other sunxi BSP codec): a plain gain, higher is
+	// louder, picked from what the codec lists (trimuiPickGainControl).
+	// gainCeil is the raw value that counts as 100% when the top of the range
+	// is a boost that only clips (the sunxi "DAC Volume": 0 dB at 160 of
+	// 255); 0 means the control is written as an amixer -M percentage.
+	gain     string
+	gainMax  int
+	gainCeil int
 }
 
 // trimuiMixer is the mixer's state. Every read and write holds mu: the volume
@@ -157,6 +294,9 @@ var trimuiMixer struct {
 	// poll puts the DAC back when they raise the level. A mute JukaHub found
 	// (the firmware's own) is the firmware's to lift.
 	mutedHere bool
+	// gainMuted records that a 0% level switched the gain control's
+	// playback switch off, so the next audible level switches it back on.
+	gainMuted bool
 }
 
 // trimuiProbeLocked asks amixer which controls exist. A probe amixer did not
@@ -169,13 +309,14 @@ func trimuiProbeLocked() trimuiMixerInfo {
 		return trimuiMixer.info
 	}
 	trimuiMixer.probedAt = time.Now()
-	out, err := systemCommandRunner("amixer", "scontrols")
+	out, err := trimuiAmixer("scontrols")
 	if err != nil {
 		logDebug("volume", "amixer scontrols failed: %v", err)
 		return trimuiMixer.info
 	}
 	info := trimuiMixerInfo{digitalMax: trimuiDigitalMaxDefault}
-	for _, name := range parseAmixerSimpleControls(out) {
+	names := parseAmixerSimpleControls(out)
+	for _, name := range names {
 		switch {
 		case strings.EqualFold(name, trimuiDigitalControl):
 			info.digital, info.digitalName = true, name
@@ -183,20 +324,24 @@ func trimuiProbeLocked() trimuiMixerInfo {
 			info.dac, info.dacName = true, name
 		}
 	}
+	if !info.digital {
+		// Not the tg5040 codec: the first gain control the codec really has.
+		trimuiProbeGainLocked(&info, names)
+	}
 	trimuiMixer.attempts++
-	if !info.digital && !info.dac && trimuiMixer.attempts < trimuiProbeAttempts {
+	if !info.digital && !info.dac && info.gain == "" && trimuiMixer.attempts < trimuiProbeAttempts {
 		logDebug("volume", "TrimUI mixer: neither %q nor %q listed yet (attempt %d)", trimuiDigitalControl, trimuiDACControl, trimuiMixer.attempts)
 		return trimuiMixer.info
 	}
 	if info.digital {
-		if out, err := systemCommandRunner("amixer", "get", info.digitalName); err == nil {
+		if out, err := trimuiAmixer("get", info.digitalName); err == nil {
 			if _, max, ok := parseAmixerLevel(out); ok && max > 0 {
 				info.digitalMax = max
 			}
 		}
 	}
-	if info.dac {
-		if out, err := systemCommandRunner("amixer", "get", info.dacName); err == nil {
+	if info.dac && info.digital {
+		if out, err := trimuiAmixer("get", info.dacName); err == nil {
 			if raw, max, ok := parseAmixerLevel(out); ok {
 				info.dacMax = max
 				if raw == 0 {
@@ -221,14 +366,211 @@ func trimuiProbeLocked() trimuiMixerInfo {
 	}
 	trimuiMixer.info = info
 	trimuiMixer.probed = true
-	logInfo("volume", "TrimUI mixer: digital volume=%v (0..%d), DAC Volume=%v", info.digital, info.digitalMax, info.dac)
+	if card := trimuiCodecCardID(); card != "" {
+		logInfo("volume", "using built-in ALSA card %q", card)
+	}
+	logInfo("volume", "TrimUI mixer: %s", trimuiMixerDescribe(info))
 	return info
+}
+
+// trimuiGainPrefs are the gain controls tried on a codec without "digital
+// volume", best first: the usual ALSA master controls, the sunxi BSP codec's
+// digital DAC gain, then the output stages by name. Matched without regard to
+// case; only a control with a volume range (a "Limits:" line) is used, so a
+// plain switch named "Speaker" is passed over.
+var trimuiGainPrefs = []string{
+	"Master", "PCM", "DAC Volume", "DAC", "Digital", "Playback",
+	"Headphone", "Speaker", "LINEOUT Volume", "LINEOUT", "Line Out", "Lineout",
+	"HPOUT Volume", "HPOUT", "SPK", "Line",
+}
+
+// trimuiPickGainControl orders the listed controls by trimuiGainPrefs: exact
+// names first, then names that start with a preferred one ("DAC Playback
+// Volume", "LINEOUT Gain"). Capture and boost controls are never picked. Pure.
+func trimuiPickGainControl(names []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	usable := func(n string) bool {
+		l := strings.ToLower(n)
+		for _, bad := range []string{"capture", "mic", "boost", "adc", "linein", "line in", "loopback"} {
+			if strings.Contains(l, bad) {
+				return false
+			}
+		}
+		return !seen[n]
+	}
+	for _, pass := range []func(n, pref string) bool{
+		strings.EqualFold,
+		func(n, pref string) bool { return strings.HasPrefix(strings.ToLower(n), strings.ToLower(pref)) },
+	} {
+		for _, pref := range trimuiGainPrefs {
+			for _, n := range names {
+				if usable(n) && pass(n, pref) {
+					seen[n] = true
+					out = append(out, n)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// trimuiProbeGainLocked picks the gain control for a codec that is not the
+// tg5040's, asking amixer for each candidate's range. The caller holds
+// trimuiMixer.mu.
+func trimuiProbeGainLocked(info *trimuiMixerInfo, names []string) {
+	for _, name := range trimuiPickGainControl(names) {
+		out, err := trimuiAmixer("get", name)
+		if err != nil {
+			continue
+		}
+		_, max, ok := parseAmixerLevel(out)
+		if !ok || max <= 0 {
+			continue
+		}
+		info.gain, info.gainMax, info.gainCeil = name, max, 0
+		if strings.Contains(strings.ToLower(name), "dac") && max == 255 {
+			// The sunxi DAC gain: -119.25 dB at 0, 0 dB at 160, +71.25 dB
+			// at 255. Above 160 only clips.
+			info.gainCeil = trimuiDACUnmuteDefault
+		}
+		return
+	}
+}
+
+// trimuiMixerDescribe is the chosen controls in words, for the log and the
+// Drivers page.
+func trimuiMixerDescribe(info trimuiMixerInfo) string {
+	switch {
+	case info.digital && info.dac:
+		return fmt.Sprintf("tg5040 codec: %q (attenuation 0..%d) + %q for a silent mute", info.digitalName, info.digitalMax, info.dacName)
+	case info.digital:
+		return fmt.Sprintf("tg5040 codec: %q (attenuation 0..%d), no DAC mute", info.digitalName, info.digitalMax)
+	case info.gain != "" && info.gainCeil > 0:
+		return fmt.Sprintf("%q (gain 0..%d, 100%% = %d, 0 dB)", info.gain, info.gainMax, info.gainCeil)
+	case info.gain != "":
+		return fmt.Sprintf("%q (gain 0..%d, mapped percent)", info.gain, info.gainMax)
+	}
+	return "no known volume control; trying Master, then PCM"
+}
+
+// trimuiMixerStatus is the Drivers page's line: what the probe chose, without
+// running amixer (the probe runs with the first volume read or change).
+func trimuiMixerStatus() (string, bool) {
+	trimuiMixer.mu.Lock()
+	defer trimuiMixer.mu.Unlock()
+	if !trimuiMixer.probed {
+		return "not probed yet", false
+	}
+	info := trimuiMixer.info
+	return trimuiMixerDescribe(info), info.digital || info.gain != ""
+}
+
+// trimuiGainCurveDB and trimuiGainStepDB shape the level on a gain control
+// with a known 0 dB point: alsamixer's mapped volume (60 dB from silent-ish to
+// full, so 50% is about -18 dB, close to the tg5040 curve's -15) over the
+// sunxi DAC's 0.75 dB steps.
+const (
+	trimuiGainCurveDB = 60.0
+	trimuiGainStepDB  = 0.75
+)
+
+// trimuiGainRawFor maps 0..100 to a raw gain whose 100% is ceil. Pure.
+func trimuiGainRawFor(pct, ceil int) int {
+	if pct <= 0 || ceil <= 0 {
+		return 0
+	}
+	if pct >= 100 {
+		return ceil
+	}
+	raw := int(math.Round(float64(ceil) + trimuiGainCurveDB*math.Log10(float64(pct)/100)/trimuiGainStepDB))
+	if raw < 1 {
+		raw = 1 // audible levels never become the mute value
+	}
+	return raw
+}
+
+// trimuiGainPercentFor is trimuiGainRawFor's inverse, snapped to 5% steps;
+// raw 0 reads as 0 (muted). Pure.
+func trimuiGainPercentFor(raw, ceil int) int {
+	if raw <= 0 || ceil <= 0 {
+		return 0
+	}
+	if raw >= ceil {
+		return 100
+	}
+	pct := 100 * math.Pow(10, float64(raw-ceil)*trimuiGainStepDB/trimuiGainCurveDB)
+	snapped := int(math.Round(pct/5)) * 5
+	if snapped < 5 {
+		snapped = 5
+	}
+	return snapped
+}
+
+// trimuiGainSetLocked applies a level to the gain control. 0% also switches
+// the control's playback switch off where it has one (an error from a
+// control without a switch is ignored). The caller holds trimuiMixer.mu.
+func trimuiGainSetLocked(info trimuiMixerInfo, pct int) error {
+	var err error
+	if info.gainCeil > 0 {
+		err = trimuiAmixerSet(info.gain, trimuiGainRawFor(pct, info.gainCeil))
+	} else {
+		level := strconv.Itoa(pct) + "%"
+		if _, err = trimuiAmixer("-q", "-M", "sset", info.gain, level); err != nil {
+			// An amixer without -M (busybox) takes the plain percentage.
+			if _, err = trimuiAmixer("-q", "sset", info.gain, level); err != nil {
+				err = fmt.Errorf("amixer %s: %w", info.gain, err)
+			}
+		}
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case pct <= 0 && !trimuiMixer.gainMuted:
+		if _, e := trimuiAmixer("-q", "sset", info.gain, "mute"); e == nil {
+			trimuiMixer.gainMuted = true
+		}
+	case pct > 0 && trimuiMixer.gainMuted:
+		_, _ = trimuiAmixer("-q", "sset", info.gain, "unmute")
+		trimuiMixer.gainMuted = false
+	}
+	return nil
+}
+
+// trimuiGainReadLocked reads the gain control's level. The caller holds
+// trimuiMixer.mu.
+func trimuiGainReadLocked(info trimuiMixerInfo) (int, bool) {
+	if info.gainCeil > 0 {
+		out, err := trimuiAmixer("get", info.gain)
+		if err != nil {
+			return 0, false
+		}
+		raw, _, ok := parseAmixerLevel(out)
+		if !ok {
+			return 0, false
+		}
+		return trimuiGainPercentFor(raw, info.gainCeil), true
+	}
+	out, err := trimuiAmixer("-M", "get", info.gain)
+	if err != nil {
+		if out, err = trimuiAmixer("get", info.gain); err != nil {
+			return 0, false
+		}
+	}
+	if strings.Contains(out, "[off]") {
+		return 0, true
+	}
+	// Switched back on by someone else (the firmware's keys): the next 0%
+	// switches it off again.
+	trimuiMixer.gainMuted = false
+	return parseFirstPercent(out)
 }
 
 // trimuiReadDACLocked reads the DAC's raw level; ok is false when amixer did
 // not answer. The caller holds trimuiMixer.mu.
 func trimuiReadDACLocked(info trimuiMixerInfo) (int, bool) {
-	out, err := systemCommandRunner("amixer", "get", info.dacName)
+	out, err := trimuiAmixer("get", info.dacName)
 	if err != nil {
 		return 0, false
 	}
@@ -258,7 +600,7 @@ func trimuiRestoreDACLocked(info trimuiMixerInfo) error {
 // trimuiSetVolume applies a 0..100 level the user chose to the codec, and
 // keeps the firmware's own level (system.json) in step with it. Zero is a real
 // mute (the DAC goes to 0 as well); an audible level restores the DAC. A codec
-// without "digital volume" gets the generic Master/PCM path.
+// without "digital volume" gets the built-in card's Master/PCM path.
 func trimuiSetVolume(pct int) error { return trimuiApplyVolume(pct, true) }
 
 // trimuiSetVolumeTransient applies a level that is only borrowed — the alarm
@@ -276,7 +618,16 @@ func trimuiApplyVolume(pct int, persist bool) error {
 	defer trimuiMixer.mu.Unlock()
 	info := trimuiProbeLocked()
 	if !info.digital {
-		return runAmixerSet(strconv.Itoa(pct) + "%")
+		if info.gain == "" {
+			return trimuiGenericSet(strconv.Itoa(pct) + "%")
+		}
+		if err := trimuiGainSetLocked(info, pct); err != nil {
+			return err
+		}
+		if persist {
+			trimuiSystemVolumeSyncLater(pct)
+		}
+		return nil
 	}
 	if pct <= 0 {
 		if info.dac {
@@ -302,7 +653,11 @@ func trimuiApplyVolume(pct int, persist bool) error {
 	} else {
 		// The level first, then the DAC: un-muting at the old, quietest
 		// attenuation and then jumping would be heard.
-		if err := trimuiAmixerSet(info.digitalName, trimuiAttenuationFor(pct, info.digitalMax)); err != nil {
+		raw := trimuiAttenuationFor(pct, info.digitalMax)
+		if trimuiStockVolumeCurve(info.digitalMax) {
+			raw = trimuiStockAttenuationFor(pct, info.digitalMax)
+		}
+		if err := trimuiAmixerSet(info.digitalName, raw); err != nil {
 			return err
 		}
 		if info.dac {
@@ -337,7 +692,7 @@ func trimuiApplyVolume(pct int, persist bool) error {
 // trimuiAmixerSet writes one raw value to one control: an argv call, never a
 // shell line, with the control name as one argument.
 func trimuiAmixerSet(control string, raw int) error {
-	if _, err := systemCommandRunner("amixer", "-q", "sset", control, strconv.Itoa(raw)); err != nil {
+	if _, err := trimuiAmixer("-q", "sset", control, strconv.Itoa(raw)); err != nil {
 		return fmt.Errorf("amixer %s: %w", control, err)
 	}
 	return nil
@@ -358,13 +713,19 @@ func trimuiVolume() (int, bool) {
 	trimuiMixer.mu.Lock()
 	defer trimuiMixer.mu.Unlock()
 	info := trimuiProbeLocked()
-	if !info.digital {
-		if pct, ok := amixerGenericVolume(); ok {
+	if !info.digital && info.gain != "" {
+		if pct, ok := trimuiGainReadLocked(info); ok {
 			return pct, true
 		}
 		return trimuiSystemVolume()
 	}
-	out, err := systemCommandRunner("amixer", "get", info.digitalName)
+	if !info.digital {
+		if pct, ok := trimuiGenericVolume(); ok {
+			return pct, true
+		}
+		return trimuiSystemVolume()
+	}
+	out, err := trimuiAmixer("get", info.digitalName)
 	if err != nil {
 		return trimuiSystemVolume()
 	}
@@ -402,6 +763,9 @@ func trimuiVolume() (int, bool) {
 				return 0, true
 			}
 		}
+	}
+	if trimuiStockVolumeCurve(info.digitalMax) {
+		return trimuiStockPercentForAttenuation(raw, info.digitalMax), true
 	}
 	return trimuiPercentForAttenuation(raw, info.digitalMax), true
 }
@@ -629,6 +993,7 @@ func trimuiSystemVolumeSyncLater(pct int) {
 
 // trimuiSystemSyncState reports whether a level asked for is not on the card
 // yet, and whether the last write failed.
+// Test seam (ARCH-8): only tests call it.
 func trimuiSystemSyncState() (pending, failed bool) {
 	trimuiSystemSync.mu.Lock()
 	defer trimuiSystemSync.mu.Unlock()

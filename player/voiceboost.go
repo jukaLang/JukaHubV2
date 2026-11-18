@@ -111,9 +111,6 @@ func voicePrewarm(config *Config) {
 		}
 		if avail >= need {
 			go ttsPiperPrewarm()
-			// The natural voice when it is the device's voice: it checks
-			// its own (larger) memory need (tts_phonon.go).
-			ttsPhononPrewarm()
 		}
 	}
 }
@@ -252,7 +249,6 @@ func voiceBoostActive() bool {
 func voiceReleaseForGame() {
 	offlineAIServerStop("a game started")
 	ttsPiperWarmStop()
-	ttsPhononWarmStop()
 	voiceBoostEnd()
 }
 
@@ -260,6 +256,5 @@ func voiceReleaseForGame() {
 func voiceReleaseAll() {
 	offlineAIServerStop("JukaHub is closing")
 	ttsPiperWarmStop()
-	ttsPhononWarmStop()
 	voiceBoostEnd()
 }

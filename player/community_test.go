@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -168,6 +170,20 @@ func TestTelemetryCrashRespectsConsent(t *testing.T) {
 }
 
 func TestRedactDiagnosticTextRemovesCredentials(t *testing.T) {
+	// SEC-31: the exact stored values, and their URL-encoded forms, wherever
+	// they are. A path, a sealed ENC: form and a value under six characters
+	// are never kept; a guessed value (a setting named like a credential) is
+	// not kept either when it reads as a word, a label, a number or a keymap.
+	// A known one (a mail app password) is kept even as lower-case words.
+	prev := logStoredSecrets.Load()
+	t.Cleanup(func() { logStoredSecrets.Store(prev) })
+	logStoredSecretsSet([]string{"abcd efgh ijkl mnop", "/home/x/cal.ics"},
+		[]string{" Xq7pLm2Z9 ", "screenshot", "/mnt/SDCARD/cookies.txt", "ENC:k1/00ff", "Ab1!x",
+			"30 days", "Keep · since Oct 30", "select:start,start:select", "20261117"})
+	want := []string{"abcd%20efgh%20ijkl%20mnop", "abcd efgh ijkl mnop", "abcd+efgh+ijkl+mnop", "Xq7pLm2Z9"}
+	if got := logStoredSecrets.Load(); got == nil || strings.Join(*got, "|") != strings.Join(want, "|") {
+		t.Fatalf("stored-value list = %v, want %q", got, want)
+	}
 	tests := []struct {
 		name string
 		in   string
@@ -182,6 +198,21 @@ func TestRedactDiagnosticTextRemovesCredentials(t *testing.T) {
 		{"unix home", "open /home/stepan/.config/jukauser.json", "open ~/.config/jukauser.json"},
 		{"mac home", "open /Users/alice/Library/x", "open ~/Library/x"},
 		{"windows home", `open C:\Users\stepan\AppData\Roaming\x`, `open C:\Users\[user]\AppData\Roaming\x`},
+		// SEC-2 (logredact.go): the shapes an error string echoes.
+		{"url key in an http error", `Get "https://api.example/v2/?key=ABCDEF0123&steamids=7656": timeout`, `Get "https://api.example/v2/?key=[redacted]&steamids=7656": timeout`},
+		{"oauth code in a url", "redirect?code=v3.AbCdEf&cid=x", "redirect?code=[redacted]&cid=x"},
+		{"json token", `{"access_token":"ya29.a0AfH6SMBx1234567890","expires_in":3599}`, `{"access_token":[redacted],"expires_in":3599}`},
+		{"compound name", `cheevos_password = "letmein"`, "cheevos_password = [redacted]"},
+		{"wireguard key", "PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=", "PrivateKey = [redacted]"},
+		{"psn cookie", "Cookie: npsso=AbCdEf123456", "Cookie: [redacted]"},
+		{"pin", "PIN: 12345678", "PIN: [redacted]"},
+		{"key by its shape", "sent gsk_abcdefghijklmnopqrstuvwxyz to the model", "sent [redacted] to the model"},
+		{"stored password in a url path", "ffmpeg: http://tv.example:8080/live/viewer/Xq7pLm2Z9/1234.ts: Server returned 403 Forbidden",
+			"ffmpeg: http://tv.example:8080/live/viewer/[redacted]/1234.ts: Server returned 403 Forbidden"},
+		{"mail app password", "imap: login abcd efgh ijkl mnop rejected", "imap: login [redacted] rejected"},
+		{"query-encoded password", "GET https://cal.example/dav?p=abcd+efgh+ijkl+mnop: 401", "GET https://cal.example/dav?p=[redacted]: 401"},
+		{"path-encoded password", "GET https://cal.example/abcd%20efgh%20ijkl%20mnop/feed.ics: 404", "GET https://cal.example/[redacted]/feed.ics: 404"},
+		{"stored values that are no secret", "screenshot saved, cookies in /mnt/SDCARD/cookies.txt kept 30 days", "screenshot saved, cookies in /mnt/SDCARD/cookies.txt kept 30 days"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,9 +231,33 @@ func TestRedactDiagnosticTextLeavesDiagnosticsAlone(t *testing.T) {
 		"[startup] splash 750ms, first frame 1.9s",
 		"error: could not start RetroArch: executable file not found",
 		"[wifi] wlan0 obtained 192.168.1.24",
+		"input: could not queue a profile key key=13",
+		"ftp: wrong password from 192.168.1.5",
+		"startup lock: wrong code (3 in a row)",
+		"ping 20 ms, mapping 3 inputs, keeping 2, exit code=1",
 	} {
 		if got := redactDiagnosticText(line); got != line {
 			t.Errorf("redact(%q) = %q, want it unchanged", line, got)
 		}
 	}
+}
+
+func TestLogRingHandlerRedactsCredentials(t *testing.T) {
+	// Every log line passes the redaction before the ring and stderr: the
+	// Logs screen, logs.txt and errors.txt never see the key.
+	h := &logRingHandler{level: slog.LevelDebug, stderr: slog.Level(12)}
+	msg := "steam: GET https://api.example/sec2-ring/?key=ABCDEF0123 failed"
+	if err := h.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0)); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ := appLog.Snapshot()
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "sec2-ring") {
+			if strings.Contains(lines[i], "ABCDEF0123") || !strings.Contains(lines[i], "key=[redacted]") {
+				t.Fatalf("ring line = %q", lines[i])
+			}
+			return
+		}
+	}
+	t.Fatal("the line never reached the ring")
 }

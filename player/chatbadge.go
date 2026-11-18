@@ -102,12 +102,13 @@ func homeItemOpensChat(item HomeItem) bool {
 	return item.ID == HomeFocusChat || item.Action == HomeActionChat || item.Icon == "chat"
 }
 
-// homeChatTileUnread returns the unread count for a tile that opens Chat (0
-// for every other tile) and the item with its subtitle swapped for "N new
-// messages" while there are some.
+// homeChatTileUnread returns the unread count for a tile that opens Chat or
+// Mail (0 for every other tile) and the item with its subtitle swapped for "N
+// new messages" while there are some.
 func homeChatTileUnread(item HomeItem) (HomeItem, int) {
 	if !homeItemOpensChat(item) {
-		return item, 0
+		// The Mail tile carries its unread count the same way (mailcal_ui.go).
+		return homeMailTileUnread(item)
 	}
 	n := chatUnreadTotal()
 	// Followed here, on every frame a Chat tile is drawn, so a count that went

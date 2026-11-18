@@ -33,7 +33,10 @@ package main
 //     is swallowed (as is every press during and just after a JukaHub sleep);
 //   - and if the device sleeps again on its own within a few seconds of
 //     waking from a JukaHub sleep, the firmware saw the same press: JukaHub
-//     stands down the same way and says so once.
+//     stands down the same way and says so once;
+//   - a NextUI pak game's minarch reads the key itself (its own sleep and
+//     power off), so while one holds the screen, and a moment after, JukaHub
+//     acts on no press at all (nextuiPakOwnsPowerKey, nextui.go).
 //
 // The watcher is Linux-only; elsewhere powerKeyWatcherLive is false and the
 // Settings row is hidden.
@@ -105,6 +108,10 @@ var (
 	// powerOwnWakeMono is when (monotonic, since powerMonoBase) the last
 	// JukaHub sleep ended; 0 before the first.
 	powerOwnWakeMono atomic.Int64
+	// powerKeyLastDown is when (monotonic) the power key was last pressed,
+	// whoever owns it: a NextUI game's deadline wake checks that no press
+	// woke the device (nextui_sleep.go). 0 before the first.
+	powerKeyLastDown atomic.Int64
 )
 
 // powerMonoNow is the monotonic time since powerMonoBase.
@@ -224,6 +231,9 @@ var powerKey struct {
 // powerKeyEdge feeds one press (down) or release from a device reader.
 func powerKeyEdge(down bool) {
 	off, offOK := powerSleepAsleepClock()
+	if down {
+		powerKeyLastDown.Store(int64(powerMonoNow()))
+	}
 	powerKey.mu.Lock()
 	if down {
 		if powerKey.down {
@@ -240,6 +250,10 @@ func powerKeyEdge(down bool) {
 			// Asleep in JukaHub (or on the way in or out): a press during the
 			// screen-off sleep is the wake; any other press is not acted on.
 			powerSleepWakeFromPress()
+			swallow = true
+		case quickMusicDarkPress():
+			// The screen is dark for music (quickresume.go): this press
+			// lights it, at once.
 			swallow = true
 		case powerSleepJustWoke(powerKeyWakeGuard):
 			swallow = true
@@ -286,7 +300,7 @@ func powerKeyLongDue(gen uint64) {
 	}
 	powerKey.longFired = true
 	powerKey.mu.Unlock()
-	if powerKeyModeNow() == powerKeyNothing || gameScreenSuspended() || powerSleepActive() {
+	if powerKeyModeNow() == powerKeyNothing || gameScreenSuspended() || powerSleepActive() || nextuiPakOwnsPowerKey() {
 		return
 	}
 	logInfo("power", "power key held: Exit card")
@@ -298,6 +312,12 @@ func powerKeyLongDue(gen uint64) {
 func powerKeyShortPress(gen uint64, pressOff time.Duration, pressOK bool) {
 	mode := powerKeyModeNow()
 	if mode == powerKeyNothing {
+		return
+	}
+	// A NextUI pak game: minarch sleeps and powers off on the key itself
+	// (nextui.go). Asked before the firmware wait, so its sleep is not
+	// learned as the firmware's for the rest of the session.
+	if nextuiPakOwnsPowerKey() {
 		return
 	}
 	if powerKeyFirmwareSleeps.Load() && mode == powerKeySleep {
@@ -358,8 +378,8 @@ func powerKeySampler() {
 			powerKey.jumpMono = now
 		}
 		powerKey.mu.Unlock()
-		if !prevOK || off-prevOff < time.Second || powerSleepActive() {
-			continue
+		if !prevOK || off-prevOff < time.Second || powerSleepActive() || nextuiPakOwnsPowerKey() {
+			continue // minarch's own sleep is not the firmware's (nextui.go)
 		}
 		own := time.Duration(powerOwnWakeMono.Load())
 		if own == 0 || own > prevMono {
@@ -397,7 +417,11 @@ func powerKeyTick(config *Config, parked bool) {
 		} else {
 			powerSleepNextAlarm.Store(at.UnixNano())
 		}
+		// The FN switch as the power button's hold switch (travellock.go).
+		travelLockTick(config)
 	}
+	// The power-on resume and the music screen-off (quickresume.go).
+	quickResumeTick(config, parked)
 	if parked {
 		// No card over a running game; a request made just before it took
 		// the screen is dropped rather than popping up after it.
@@ -436,7 +460,11 @@ func powerKeyPickDevices(devs []evdevDevice) []string {
 			continue
 		}
 		name := strings.ToLower(d.Name)
-		if strings.Contains(name, "pek") || strings.Contains(name, "power") {
+		// "pek" is the AXP PMICs' power-enable key (axp2202-pek on the
+		// A133P handhelds; the Smart Pro S's AXP717 BSP driver may name it
+		// differently, hence any "axp" device and the pwrkey spelling).
+		if strings.Contains(name, "pek") || strings.Contains(name, "power") ||
+			strings.Contains(name, "pwrkey") || strings.HasPrefix(name, "axp") {
 			named = append(named, d.Handler)
 		} else {
 			other = append(other, d.Handler)

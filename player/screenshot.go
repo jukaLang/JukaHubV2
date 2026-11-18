@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -47,20 +49,77 @@ func capturePendingScreenshot(renderer *sdl.Renderer) bool {
 	return true
 }
 
-// screenshotDir is where screenshots are saved: the SD card's Screenshots
-// folder on a TrimUI (where RetroArch saves its own, and where Files and the
-// wallpaper picker look), Pictures\JukaHub on a PC. Any goroutine.
+// screenshotDirName is the folder inside JukaHub's own folder that holds
+// screenshots (Juka, 2026-11-17: "the handheld should save to
+// JukaHub/screenshots"): Apps/JukaHub/screenshots on a TrimUI, the same folder
+// beside JukaHub.exe on a PC.
+const screenshotDirName = "screenshots"
+
+// screenshotAppDir is <JukaHub's folder>/screenshots, whether or not it exists.
+func screenshotAppDir() string {
+	return filepath.Join(exeDir(), screenshotDirName)
+}
+
+// screenshotDir is where screenshots are saved. JUKAHUB_SCREENSHOT_DIR wins
+// when set. Otherwise it is the screenshots folder inside JukaHub's own folder,
+// on the handheld and on a PC alike, so the pictures stay with the app (on a PC
+// not in Pictures, which Windows often syncs to OneDrive). When that folder
+// cannot be written (a read-only system image, Program Files) it falls back to
+// the SD card's Screenshots folder on a TrimUI and Pictures\JukaHub on a PC.
+// Any goroutine; the write probe runs once.
 func screenshotDir() string {
+	if d := strings.TrimSpace(os.Getenv("JUKAHUB_SCREENSHOT_DIR")); d != "" {
+		return d
+	}
+	screenshotLocal.once.Do(func() {
+		dir := screenshotAppDir()
+		if screenshotDirWritable(dir) {
+			screenshotLocal.dir = dir
+		}
+	})
+	if screenshotLocal.dir != "" {
+		return screenshotLocal.dir
+	}
 	if IsTrimuiDevice() {
 		if st, err := os.Stat("/mnt/SDCARD"); err == nil && st.IsDir() {
 			return "/mnt/SDCARD/Screenshots"
 		}
 	}
+	return screenshotPicturesDir()
+}
+
+// screenshotLocal caches the app-folder answer: the probe writes a file, and
+// the folder does not move while JukaHub runs.
+var screenshotLocal struct {
+	once sync.Once
+	dir  string
+}
+
+// screenshotPicturesDir is Pictures\JukaHub (~/Pictures/JukaHub elsewhere),
+// the PC fallback and where older versions saved.
+func screenshotPicturesDir() string {
 	home := os.Getenv("HOME")
-	if runtime.GOOS == "windows" {
-		home = os.Getenv("USERPROFILE")
+	if runtime.GOOS == "windows" || home == "" {
+		if up := os.Getenv("USERPROFILE"); up != "" {
+			home = up
+		}
 	}
 	return filepath.Join(home, "Pictures", "JukaHub")
+}
+
+// screenshotDirWritable makes dir and proves a file can be created in it.
+func screenshotDirWritable(dir string) bool {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+	f, err := os.CreateTemp(dir, ".jukahub-write-*")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return true
 }
 
 // screenshotPath is a new file in screenshotDir named prefix and the time,
@@ -143,7 +202,7 @@ func captureScreenshot(renderer *sdl.Renderer) {
 		logInfo("screenshot", "saved %s", path)
 		if gen == 0 {
 			// No preview could be made: say it in words.
-			menuShotNotice("[Screenshot] "+filepath.Base(path), ToastKindSuccess)
+			menuShotNotice("Screenshot saved to "+path, ToastKindSuccess)
 			return
 		}
 		shotPreviewSaved(gen, path)

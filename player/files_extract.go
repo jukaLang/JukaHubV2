@@ -93,6 +93,10 @@ var feExtractFreeSpace = filesFreeSpace
 
 var (
 	errFeArchiveEncrypted = errors.New("it is password-protected")
+	errFeWrongPassword    = errors.New("the password is wrong")
+	errFePasswordQuote    = errors.New(`7-Zip on Windows cannot take a password with a " in it`)
+	errFePasswordUnread   = errors.New("7-Zip could not read the password it was given")
+	errFePasswordNeeds7z  = fmt.Errorf("%w, and only 7-Zip unpacks it with a password", errFeArchiveEncrypted)
 	errFeArchiveNeedsTool = errors.New("it needs 7-Zip")
 	errFeArchiveEmpty     = errors.New("there was nothing in it to extract")
 	errFeNotArchive       = errors.New("it is not an archive JukaHub can open")
@@ -101,6 +105,7 @@ var (
 	errFeCardFull         = errors.New("the card ran out of space while it unpacked")
 	errFeHasLinks         = errors.New("it holds symbolic links, which JukaHub does not unpack here")
 	errFeTooMany          = errors.New("it holds more items than one archive may")
+	errFeFATTooBig        = errors.New("a file in it is 4 GB or larger, more than this card's FAT32 format can hold")
 )
 
 // feNoSpaceError is a card without room for what an archive unpacks to. more
@@ -622,6 +627,85 @@ func feExtractBudget(dir string) (int64, int64) {
 	return budget, free
 }
 
+// feVolume is what the destination's file system means for an archive's plan
+// (feVolumeOf, files_extract_fs_*.go).
+type feVolume struct {
+	cluster int64 // its allocation unit in bytes; 0 when it could not be read
+	fat     bool  // FAT12/16/32: no file may reach 4 GiB
+	fatLike bool  // FAT or exFAT, whose clusters can be large
+}
+
+// feExtractVolume is a test seam over feVolumeOf.
+var feExtractVolume = feVolumeOf
+
+const (
+	// feFATMaxFile is the largest file FAT can hold: 4 GiB less one byte.
+	feFATMaxFile = int64(1)<<32 - 1
+	// feClusterGuessFAT is the cluster counted on a FAT or exFAT card whose
+	// own could not be read: exFAT's default on the cards over 32 GB a
+	// handheld takes.
+	feClusterGuessFAT = int64(128 << 10)
+)
+
+// unit is the size an archive's items are counted in on the volume.
+func (v feVolume) unit() int64 {
+	switch {
+	case v.cluster >= 512 && v.cluster <= 32<<20:
+		return v.cluster
+	case v.fatLike:
+		return feClusterGuessFAT
+	}
+	return 4096
+}
+
+// feOnDisk is what a file of size bytes takes on a volume counted in unit:
+// whole clusters, so a 1-byte file takes a full one.
+func feOnDisk(size, unit int64) int64 {
+	if size <= 0 {
+		return 0
+	}
+	if unit <= 1 {
+		return size
+	}
+	q := size / unit
+	if size%unit != 0 {
+		q++
+	}
+	if q > (1<<63-1)/unit {
+		return 1<<63 - 1
+	}
+	return q * unit
+}
+
+// feSpaceTally adds up what an archive's items take on the destination: each
+// file rounded up to the volume's cluster and a cluster per folder, because
+// 200 000 small files on a 128 KiB-cluster exFAT card take 25 GB whatever
+// their sizes add up to. On FAT a file of 4 GiB or more is refused here,
+// before anything is written, instead of when its write fails.
+type feSpaceTally struct {
+	vol   feVolume
+	unit  int64
+	total int64
+}
+
+func newFeSpaceTally(vol feVolume) feSpaceTally {
+	return feSpaceTally{vol: vol, unit: vol.unit()}
+}
+
+// file counts one file of size bytes.
+func (t *feSpaceTally) file(size int64) error {
+	if t.vol.fat && size > feFATMaxFile {
+		return errFeFATTooBig
+	}
+	t.total = satAddBytes(t.total, feOnDisk(size, t.unit))
+	return nil
+}
+
+// dir counts one folder.
+func (t *feSpaceTally) dir() {
+	t.total = satAddBytes(t.total, t.unit)
+}
+
 // feExtractPerm is the mode a file is created with: executable when the
 // archive says so (a script, a port's binary), otherwise plain.
 func feExtractPerm(mode fs.FileMode) fs.FileMode {
@@ -885,40 +969,50 @@ func feOpenZip(path string) (*zip.ReadCloser, error) {
 }
 
 // feZipPlan checks a zip's directory before anything is written: an
-// encrypted entry or too many entries stop it, and it returns the bytes the
-// entries that will be written declare. A compression method only 7-Zip reads
-// is reported as errFeArchiveNeedsTool after the total, so the space can still
-// be checked before the archive is handed over.
-func feZipPlan(zr *zip.ReadCloser) (int64, error) {
+// encrypted entry, too many entries or (on FAT) a member of 4 GiB or more
+// stop it. It returns the bytes the entries that will be written declare, and
+// what they take on vol in whole clusters (feSpaceTally). A compression method
+// only 7-Zip reads is reported as errFeArchiveNeedsTool after the totals, so
+// the space can still be checked before the archive is handed over.
+func feZipPlan(zr *zip.ReadCloser, vol feVolume) (int64, int64, error) {
 	if len(zr.File) > feExtractMaxEntries {
-		return 0, fmt.Errorf("%w (%d; the limit is %d)", errFeTooMany, len(zr.File), feExtractMaxEntries)
+		return 0, 0, fmt.Errorf("%w (%d; the limit is %d)", errFeTooMany, len(zr.File), feExtractMaxEntries)
 	}
 	var total int64
+	tally := newFeSpaceTally(vol)
 	method := ""
 	for _, f := range zr.File {
 		if f.Flags&0x1 != 0 {
-			return 0, errFeArchiveEncrypted
-		}
-		if f.FileInfo().IsDir() || !f.Mode().IsRegular() {
-			continue
+			return 0, 0, errFeArchiveEncrypted
 		}
 		// What will be skipped neither counts nor needs a method.
 		if rel, why := feExtractRel(feZipEntryName(f)); why != "" || rel == "" {
 			continue
 		}
+		if f.FileInfo().IsDir() {
+			tally.dir()
+			continue
+		}
+		if !f.Mode().IsRegular() {
+			continue
+		}
 		if method == "" && f.Method != zip.Store && f.Method != zip.Deflate {
 			method = feZipMethodName(f.Method)
 		}
-		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), feExtractMaxBytes)
+		size := declaredEntryBytes(f.UncompressedSize64)
+		sum, ok := addDeclaredBytes(total, size, feExtractMaxBytes)
 		if !ok {
-			return 0, fmt.Errorf("it unpacks to more than %s", humanBytes(feExtractMaxBytes))
+			return 0, 0, fmt.Errorf("it unpacks to more than %s", humanBytes(feExtractMaxBytes))
 		}
 		total = sum
+		if err := tally.file(size); err != nil {
+			return 0, 0, err
+		}
 	}
 	if method != "" {
-		return total, fmt.Errorf("%w (for its %s compression)", errFeArchiveNeedsTool, method)
+		return total, tally.total, fmt.Errorf("%w (for its %s compression)", errFeArchiveNeedsTool, method)
 	}
-	return total, nil
+	return total, tally.total, nil
 }
 
 // feExtractZip unpacks a zip into out.
@@ -928,13 +1022,13 @@ func feExtractZip(ctx context.Context, archive, out string, st *feExtractStats, 
 		return err
 	}
 	defer zr.Close()
-	total, planErr := feZipPlan(zr)
+	total, onDisk, planErr := feZipPlan(zr, feExtractVolume(out))
 	if planErr != nil && !errors.Is(planErr, errFeArchiveNeedsTool) {
 		return planErr
 	}
 	budget, free := feExtractBudget(out)
-	if total > budget {
-		return feNoSpaceError{need: total + feExtractSpaceMargin, free: free}
+	if onDisk > budget {
+		return feNoSpaceError{need: satAddBytes(onDisk, feExtractSpaceMargin), free: free}
 	}
 	if planErr != nil {
 		return planErr
@@ -1062,16 +1156,17 @@ func feExtractTar(ctx context.Context, archive, out string, kind feArchiveKind, 
 	}
 	defer root.Close()
 	budget, free := feExtractBudget(out)
+	vol := feExtractVolume(out)
 	switch kind {
 	case feArchiveGz, feArchiveXz, feArchiveBz2:
 		peek := bufio.NewReaderSize(stream, 64<<10)
 		head, _ := peek.Peek(512)
 		if feLooksLikeTar(head) {
-			return feExtractTarStream(ctx, peek, root, budget, free, st, meter)
+			return feExtractTarStream(ctx, peek, root, budget, free, vol, st, meter)
 		}
 		return feExtractSingle(ctx, peek, root, feArchiveStem(archive), budget, free, st, meter)
 	}
-	return feExtractTarStream(ctx, stream, root, budget, free, st, meter)
+	return feExtractTarStream(ctx, stream, root, budget, free, vol, st, meter)
 }
 
 // feExtractSingle writes a decompressed stream as one file.
@@ -1095,11 +1190,15 @@ func feExtractSingle(ctx context.Context, src io.Reader, root *os.Root, name str
 // file when that file came first (a card may not do links at all); symbolic
 // links, devices and pipes are counted and left out. The stream is read to its
 // very end afterwards, because a gzip or xz checksum is only checked there.
-func feExtractTarStream(ctx context.Context, stream io.Reader, root *os.Root, budget, free int64, st *feExtractStats, meter *feExtractMeter) error {
+// The space is counted as it goes, in vol's clusters (feSpaceTally), and on
+// FAT a member of 4 GiB or more is refused by its header, before it is
+// written.
+func feExtractTarStream(ctx context.Context, stream io.Reader, root *os.Root, budget, free int64, vol feVolume, st *feExtractStats, meter *feExtractMeter) error {
 	tr := tar.NewReader(&archiveReader{ctx: ctx, r: stream})
 	buf := make([]byte, feExtractBufSize)
 	written := map[string]int64{}
 	entries := 0
+	tally := newFeSpaceTally(vol)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -1136,20 +1235,25 @@ func feExtractTarStream(ctx context.Context, stream io.Reader, root *os.Root, bu
 			if err := feExtractMkdir(root, rel, st); err != nil {
 				return err
 			}
+			tally.dir()
 		case tar.TypeReg, tar.TypeGNUSparse, tar.TypeCont:
 			if hdr.Size < 0 {
 				return fmt.Errorf("%w (%s declares a negative size)", errBadToolArchive, hdr.Name)
+			}
+			if vol.fat && hdr.Size > feFATMaxFile {
+				return errFeFATTooBig
 			}
 			if old, again := written[rel]; again {
 				// The later copy wins; the earlier one stops counting.
 				if err := root.Remove(rel); err == nil {
 					st.Files--
 					st.Bytes -= old
+					tally.total -= feOnDisk(old, tally.unit)
 					delete(written, rel)
 				}
 			}
-			if hdr.Size > budget-st.Bytes {
-				return feNoSpaceError{need: st.Bytes + hdr.Size + feExtractSpaceMargin, free: free}
+			if need := feOnDisk(hdr.Size, tally.unit); need > budget-tally.total {
+				return feNoSpaceError{need: satAddBytes(satAddBytes(tally.total, need), feExtractSpaceMargin), free: free}
 			}
 			n, err := feExtractTarFile(ctx, root, rel, tr, hdr.Size, feExtractPerm(fs.FileMode(hdr.Mode)), meter, buf, st)
 			if err != nil {
@@ -1157,6 +1261,7 @@ func feExtractTarStream(ctx context.Context, stream io.Reader, root *os.Root, bu
 			}
 			if n >= 0 {
 				written[rel] = n
+				_ = tally.file(n)
 				feExtractStamp(root, rel, hdr.ModTime)
 			}
 		case tar.TypeLink:
@@ -1165,15 +1270,16 @@ func feExtractTarStream(ctx context.Context, stream io.Reader, root *os.Root, bu
 				st.Skips.Links++
 				continue
 			}
-			n, err := feExtractCopyWithin(ctx, root, target, rel, budget-st.Bytes, meter, buf, st)
+			n, err := feExtractCopyWithin(ctx, root, target, rel, budget-tally.total, meter, buf, st)
 			if errors.Is(err, errFeEntryTooBig) {
-				return feNoSpaceError{need: st.Bytes + n + feExtractSpaceMargin, free: free}
+				return feNoSpaceError{need: satAddBytes(satAddBytes(tally.total, n), feExtractSpaceMargin), free: free}
 			}
 			if err != nil {
 				return err
 			}
 			if n >= 0 {
 				written[rel] = n
+				_ = tally.file(n)
 			}
 		case tar.TypeSymlink:
 			st.Skips.Links++
@@ -1661,6 +1767,10 @@ type feExtractJob struct {
 	Dest    string // the folder it is unpacked into (the archive's own)
 	Mode    feExtractMode
 	Kind    feArchiveKind // feArchiveNone: detect when the job runs
+	// Password is an encrypted archive's, as typed (APP-14), for 7-Zip only.
+	// It lives in memory while the job waits and runs, and is never written
+	// to the config, a log or the outcome (feExtractRun drops it).
+	Password string
 }
 
 // feExtractOutcome is how a job ended.
@@ -1678,6 +1788,8 @@ type feExtractOutcome struct {
 // nothing new.
 func feExtractRun(ctx context.Context, job feExtractJob, meter *feExtractMeter) (out feExtractOutcome) {
 	out.Job = job
+	// The outcome goes to the screen and the log: never the password.
+	out.Job.Password = ""
 	defer func() {
 		if r := recover(); r != nil {
 			logWarn("files", "extract %s: %v", job.Archive, r)
@@ -1713,12 +1825,33 @@ func feExtractRun(ctx context.Context, job feExtractJob, meter *feExtractMeter) 
 		if errors.Is(err, errFeArchiveNeedsTool) && feArchiveToolFor(feArchiveZip).Path != "" {
 			// Nothing was written: the plan refuses before the first entry.
 			out.Stats = feExtractStats{}
-			err = feExtractWithTool(ctx, feArchiveZip, job.Archive, unpack, &out.Stats, meter)
+			err = feExtractWithTool(ctx, feArchiveZip, job.Archive, unpack, &out.Stats, meter, job.Password)
+		}
+		if errors.Is(err, errFeArchiveEncrypted) {
+			// The standard zip reader cannot decrypt: 7-Zip can, with the
+			// password typed for it. Nothing was written here either.
+			switch {
+			case feArchiveToolFor(feArchiveZip).Kind != feTool7Zip:
+				err = errFePasswordNeeds7z
+			case job.Password != "":
+				out.Stats = feExtractStats{}
+				err = feExtractWithTool(ctx, feArchiveZip, job.Archive, unpack, &out.Stats, meter, job.Password)
+			}
 		}
 	case feArchiveTar, feArchiveTarGz, feArchiveTarXz, feArchiveTarBz2, feArchiveGz, feArchiveXz, feArchiveBz2:
 		err = feExtractTar(ctx, job.Archive, unpack, kind, &out.Stats, meter)
+		if errors.Is(err, errFeXzFilter) && feArchiveToolFor(kind).Path != "" {
+			// An .xz with a BCJ or delta filter, which 7-Zip reads: what the
+			// built-in reader wrote before the filtered block goes, and 7-Zip
+			// unpacks it from the start. 7-Zip takes one layer at a time, so a
+			// .tar.xz comes out as its .tar, which Files opens in turn.
+			out.Stats = feExtractStats{}
+			if err = feExtractEmpty(unpack); err == nil {
+				err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter, "")
+			}
+		}
 	case feArchive7z, feArchiveRar:
-		err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter)
+		err = feExtractWithTool(ctx, kind, job.Archive, unpack, &out.Stats, meter, job.Password)
 	default:
 		err = errFeNotArchive
 	}
@@ -1744,6 +1877,21 @@ func feExtractRun(ctx context.Context, job feExtractJob, meter *feExtractMeter) 
 	}
 	trophyEvent(tkExtract)
 	return out
+}
+
+// feExtractEmpty removes everything in the folder dir (a staging folder's
+// unpack folder), keeping the folder itself.
+func feExtractEmpty(dir string) error {
+	items, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		if err := os.RemoveAll(filepath.Join(dir, it.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // feExtractRemoveStage deletes a staging folder. A folder 7-Zip restored as

@@ -1,17 +1,18 @@
 {
   "name": "notes",
   "title": "Quick notes",
-  "version": "1.2.0",
-  "description": "Keeps short notes in a text file beside the script: Add note opens the keyboard, and the newest note is a press away in the Start menu.",
+  "version": "1.3.0",
+  "description": "A pad for the cheat code, the boss pattern or the password you need later: Add note opens the keyboard, All notes lists them newest first. Kept in notes.txt in the plugin's folder.",
   "author": "JukaHub",
   "entry": "notes.sh",
   "icon": "edit",
   "enabled": true,
   "actions": [
+    {"id": "add", "label": "Add note", "hint": "Opens the keyboard"},
+    {"id": "all", "label": "All notes"},
     {"id": "last", "label": "Newest note"},
-    {"id": "count", "label": "Count notes"},
-    {"id": "add", "label": "Add note", "hint": "Opens the keyboard"}
+    {"id": "clear", "label": "Clear notes", "hint": "Press twice"}
   ],
-  "onEnable": "count",
-  "quick": ["add", "last"]
+  "onEnable": "all",
+  "quick": ["add", "all"]
 }

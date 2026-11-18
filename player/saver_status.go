@@ -473,6 +473,9 @@ func saverDrawStatusRow(renderer *sdl.Renderer, config *Config, right, y int32, 
 
 // ── Clock ────────────────────────────────────────────────────────────────
 
+// saverClockDate is saverDrawClock's date, formatted once a minute.
+var saverClockDate dateMemo
+
 // saverDrawClock draws the time with the date under it at (x, y), and returns
 // the y just below the date.
 func saverDrawClock(renderer *sdl.Renderer, config *Config, x, y int32, size int, now time.Time) int32 {
@@ -485,7 +488,7 @@ func saverDrawClock(renderer *sdl.Renderer, config *Config, x, y int32, size int
 		bottom = y + h
 	}
 	if dateFont := getFontSized(config, "small", int(saverScaled(24, 15))); dateFont != nil {
-		_, h := renderText(renderer, config, dateFont, formatDayLong(config, now), saverInkDate, x+saverScaled(4, 2), bottom)
+		_, h := renderText(renderer, config, dateFont, saverClockDate.get(config, now, formatDayLong), saverInkDate, x+saverScaled(4, 2), bottom)
 		bottom += h
 	}
 	return bottom

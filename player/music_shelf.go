@@ -13,7 +13,7 @@ import (
 )
 
 type musicShelfRow struct {
-	kind  string // artist, album, book or track
+	kind  string // artist, album, book or track; History's in musichistory.go
 	key   string
 	title string
 	sub   string
@@ -23,14 +23,18 @@ type musicShelfRow struct {
 
 var musicShelf struct {
 	open, fromShelf bool
-	tab             int // albums, artists, audiobooks
+	tab             int // albums, artists, audiobooks, history (musicShelfTabs)
 	artist, album   string
 	cursor, scroll  int
 	gen             uint64
 	progressRev     uint64
+	histRev         uint64 // the musicHistoryRev the History rows were built at
+	histReady       bool   // the listening history has been read
+	histArmed       bool   // Clear listening history was chosen once
+	histArtist      bool   // the open artist came from Top artists: Back returns there
 	rows            []musicShelfRow
 	hits            []sdl.Rect
-	tabs            [3]sdl.Rect
+	tabs            [musicShelfTabs]sdl.Rect
 	back            sdl.Rect
 	up, down        sdl.Rect
 }
@@ -89,6 +93,9 @@ func musicShelfBuildRows(m *mlibModel, tab int, artist, album string) []musicShe
 				sub += " · Finished"
 			} else if progress.Path != "" {
 				sub += " · Continue"
+				if chapter := audioResumeChapter(progress.Path); chapter != "" {
+					sub += " at " + chapter // a chapter inside one file (audiobook_chapters.go)
+				}
 			}
 			rows = append(rows, musicShelfRow{kind: "book", key: g.key, title: g.title, sub: sub, art: g.art})
 		}
@@ -126,6 +133,10 @@ func musicShelfBuildRows(m *mlibModel, tab int, artist, album string) []musicShe
 }
 
 func musicShelfRefresh() {
+	if musicShelf.tab == musicShelfTabHistory {
+		musicShelfRefreshHistory() // works before the library is read, too
+		return
+	}
 	m := mlibCurrentModel()
 	if m == nil {
 		musicShelf.rows = nil
@@ -149,6 +160,7 @@ func musicShelfRefresh() {
 func musicShelfInvalidate() {
 	musicShelf.gen = 0
 	musicShelf.cursor, musicShelf.scroll = 0, 0
+	musicShelf.histArmed = false
 }
 
 func musicShelfPlayGroup(config *Config, key string, book bool, startPath string) {
@@ -213,9 +225,13 @@ func musicShelfChoose(config *Config) {
 	}
 	row := musicShelf.rows[musicShelf.cursor]
 	switch row.kind {
+	case "heading":
+		musicShelfSkipHeading(1) // a tap on a section's name
+		return
 	case "artist":
 		musicShelf.artist = row.key
 		musicShelfInvalidate()
+		musicShelf.histArtist = false
 	case "album":
 		musicShelf.album = row.key
 		musicShelfInvalidate()
@@ -223,6 +239,8 @@ func musicShelfChoose(config *Config) {
 		musicShelfPlayGroup(config, row.key, true, "")
 	case "track":
 		musicShelfPlayGroup(config, row.key, false, row.path)
+	case "listen", "topartist", "clearhistory":
+		musicShelfChooseHistory(config, row)
 	}
 	PlayActivateSound()
 }
@@ -233,6 +251,9 @@ func musicShelfBack(config *Config) {
 		musicShelfInvalidate()
 	} else if musicShelf.artist != "" {
 		musicShelf.artist = ""
+		if musicShelf.histArtist {
+			musicShelf.tab, musicShelf.histArtist = musicShelfTabHistory, false
+		}
 		musicShelfInvalidate()
 	} else {
 		musicShelf.open = false
@@ -247,7 +268,7 @@ func musicShelfBack(config *Config) {
 }
 
 func musicShelfTab(delta int) {
-	musicShelf.tab = (musicShelf.tab + delta + 3) % 3
+	musicShelf.tab = (musicShelf.tab + delta + musicShelfTabs) % musicShelfTabs
 	musicShelf.artist, musicShelf.album = "", ""
 	musicShelfInvalidate()
 	PlayNavSound()
@@ -265,6 +286,8 @@ func musicShelfMove(delta int) {
 	if musicShelf.cursor >= len(musicShelf.rows) {
 		musicShelf.cursor = len(musicShelf.rows) - 1
 	}
+	musicShelfSkipHeading(delta)
+	musicShelfDisarm()
 	PlayNavSound()
 }
 
@@ -356,8 +379,12 @@ func musicShelfWheel(delta int32) bool {
 	if !musicShelf.open {
 		return false
 	}
-	if delta != 0 {
-		musicShelfMove(-int(delta))
+	// One row a notch, whatever the wheel reports (±2 or ±3 on some mice).
+	switch {
+	case delta > 0:
+		musicShelfMove(-1)
+	case delta < 0:
+		musicShelfMove(1)
 	}
 	return true
 }
@@ -384,9 +411,9 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 		title = "Albums by " + musicShelf.artist
 	}
 	renderText(renderer, config, big, ellipsize(big, title, w-48), ColorTextPrimary(), x+22, y+18)
-	labels := [3]string{"Albums", "Artists", "Audiobooks"}
+	labels := [musicShelfTabs]string{"Albums", "Artists", "Audiobooks", "History"}
 	chipY := y + 66
-	chipW := (w - 64) / 3
+	chipW := (w - 44 - 10*(musicShelfTabs-1)) / musicShelfTabs
 	for i, label := range labels {
 		rect := sdl.Rect{X: x + 22 + int32(i)*(chipW+10), Y: chipY, W: chipW, H: 42}
 		musicShelf.tabs[i] = rect
@@ -415,7 +442,9 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 	musicShelf.hits = musicShelf.hits[:0]
 	if len(musicShelf.rows) == 0 {
 		msg := "Scanning your music…"
-		if !mlibScanning.Load() {
+		if musicShelf.tab == musicShelfTabHistory {
+			msg = musicHistoryEmptyLine()
+		} else if !mlibScanning.Load() {
 			switch {
 			case musicShelf.album != "":
 				msg = "No tracks found in this album."
@@ -432,6 +461,12 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 	for i := musicShelf.scroll; i < len(musicShelf.rows) && i < musicShelf.scroll+visible; i++ {
 		row := musicShelf.rows[i]
 		rect := sdl.Rect{X: x + 16, Y: listY + int32(i-musicShelf.scroll)*rowH, W: w - 32, H: rowH - 6}
+		if row.kind == "heading" {
+			// A History section's name, under the rows before it.
+			renderText(renderer, config, big, ellipsize(big, row.title, rect.W-16), ColorTextSecondary(), rect.X+8, rect.Y+rowH-12-int32(big.Height()))
+			musicShelf.hits = append(musicShelf.hits, rect)
+			continue
+		}
 		if i == musicShelf.cursor {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(ColorCardFocus, 255))
 		}

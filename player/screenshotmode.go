@@ -33,7 +33,7 @@ package main
 // On the desktop the window is set to the canvas size, windowed, when the
 // session starts, so a picture is one frame of the 1280x720 canvas. F12 and
 // Start → Screenshot save the next frame as a PNG into --screenshot-dir /
-// JUKAHUB_SCREENSHOT_DIR (default Pictures\JukaHub), with the success chime
+// JUKAHUB_SCREENSHOT_DIR (default: screenshotDir, the screenshots folder beside the app), with the success chime
 // instead of a toast.
 //
 // `JukaHub --screenshot-tour <dir>` turns the mode on, opens the screens the
@@ -149,13 +149,9 @@ func shotTruthy(v string) bool {
 }
 
 // shotDefaultDir is where F12 captures go when no folder is named: the
-// Pictures\JukaHub folder the BMP screenshots use.
+// folder every other screenshot uses (screenshot.go screenshotDir).
 func shotDefaultDir() string {
-	home := os.Getenv("USERPROFILE")
-	if home == "" {
-		home = os.Getenv("HOME")
-	}
-	return filepath.Join(home, "Pictures", "JukaHub")
+	return screenshotDir()
 }
 
 // shotModeOn reports whether this run is a screenshot session.

@@ -213,14 +213,15 @@ func TestEPUBRejectsNonArchive(t *testing.T) {
 }
 
 func TestEPUBOpenFileGuardsExplorerRoot(t *testing.T) {
-	// A path outside the explorer root must not be read, even if it exists.
+	// A path outside the explorer root must not be read, even if it exists:
+	// pdfOpenFile resolves every book (PDF and EPUB) through
+	// resolveExplorerEntry before it reads a byte.
 	dir := t.TempDir()
 	outside := filepath.Join(dir, "book.epub")
 	if err := os.WriteFile(outside, buildTestEPUB(t), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	doc := epubOpenFile(outside)
-	if doc.Error == "" {
+	if _, err := resolveExplorerEntry(appConfig, outside); err == nil {
 		t.Fatal("a file outside the explorer root must be refused")
 	}
 }

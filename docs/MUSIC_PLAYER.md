@@ -23,9 +23,81 @@ remaining gaps are worth closing.
 | Long form | 0.75×–2× speed, sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
 | Lyrics | A `.lrc` file next to the track; the active line and its neighbours are drawn in the artwork square |
 | Visuals | 32-bar smoothed spectrum in the artwork tile and a full-screen visualizer |
-| Background | Audio keeps playing when you leave the screen; starting a video or a Watch Party stream stops it |
+| Background | Audio keeps playing when you leave the screen and, by default, under a game; starting a video or a Watch Party stream stops it |
+| Transitions | Gapless: the next track starts without a gap, and the last second of a track is no longer cut off |
+| USB DAC | Sound moves to a plugged-in USB DAC; Bit-perfect plays lossless tracks at their own rate and bit depth |
 
 Controls are in [CONTROLS.md](CONTROLS.md#music-player).
+
+## USB DAC
+
+Plug a USB-C DAC (a dongle or a desktop DAC) into the handheld. Within about
+two seconds the header shows "USB DAC · <name>", a toast says so, and every
+sound JukaHub plays moves to it. A DAC comes before a Bluetooth headset, which
+comes before the speaker, so a headset left connected does not take the sound
+back. Games and apps you start get the DAC as their output too. Pull the DAC out
+and playback pauses ("USB DAC disconnected — playback paused").
+
+The volume keys move the handheld's own speaker chip, which the DAC never hears,
+so on the DAC JukaHub applies the header volume itself (like a Bluetooth
+headset). Games on the DAC play at full digital level; turn down the DAC or the
+headphones.
+
+If the firmware's kernel has no USB audio driver (`snd-usb-audio`), JukaHub
+tries to load the module once when the kernel ships it, and otherwise says so
+plainly: "USB DAC found, but this firmware's kernel has no USB audio driver
+(snd-usb-audio)". No app can play to a DAC on such a kernel. A DAC that keeps
+failing to open is left alone, with a toast, until it is plugged in again.
+
+**Bit-perfect** (Start → Audio → **Bit-perfect DAC output**). With a USB DAC
+connected, local lossless stereo tracks (FLAC, ALAC, WAV/AIFF and other PCM,
+WavPack, TTA, APE) play at their own sample rate and bit depth, unprocessed and
+unscaled, straight to the DAC: no equaliser, tempo, spatial audio, resampling
+or volume. Now Playing shows what the DAC receives, e.g. "FLAC 24/96 → DAC
+96 kHz". Use the DAC's or the headphones' own volume. UI sounds are muted while
+a track holds the DAC; they come back after about five seconds of pause, or
+when you stop. The DAC is let go at once when a game, a video or an alarm
+starts. Tracks the DAC cannot take at their own rate, mono and multichannel
+files, DSD, lossy files and streams play through the normal 48 kHz path, shown
+as "DAC 48 kHz (mixed)".
+
+## Music in games
+
+**Start → Audio → Keep music playing in games** (on by default). Music that is
+playing when you start a game keeps playing under it, mixed with the game's
+sound on the speaker or the USB DAC (ALSA `dmix`). **Music volume in games**
+(10–100 %, 60 % by default) keeps the game's own sound on top. With no music
+playing at launch, the game starts exactly as before.
+
+The music pauses instead, with a toast saying why, when:
+
+- the sound goes to a Bluetooth headset (it plays one app at a time);
+- the sound card cannot be shared on this firmware (JukaHub tries it before
+  the game starts; the game's own sound never depends on it);
+- the game is a 32-bit program, or brings its own audio configuration.
+
+In a game, hold **Select + L2** for the in-game menu: the **Music** row shows the
+track, **A** plays or pauses it and **Left / Right** change track (a Bluetooth
+pad's D-pad works too).
+
+Before this, music left playing when a game started ran through the whole
+playlist in silence during the game.
+
+## Screen off
+
+The player's own lock screen is **Select** (see
+[CONTROLS.md](CONTROLS.md#screen-off-the-lock-screen)). On the handheld the
+**power button** does the same while music plays: Settings → Power & battery →
+**Power button while music plays** is **Screen off** by default (**Sleep**
+sleeps and pauses the music, the old behaviour). With the screen off the
+backlight is off, nothing is drawn and the CPU drops to the music profile. The
+buttons follow Start → Audio → Screen-off controls, except that *Any key* counts
+as *Controls* here, so a press in a pocket does not light the screen: **X**
+plays or pauses, **R1 / L1** change track, **Left / Right** seek 10 s and
+**Select** wakes; the volume keys keep working. The power button wakes the
+screen at once. If the music stops, or stays paused, for two minutes, the
+handheld goes to sleep as usual. This works while you are not in a game; in a
+game the power button sleeps as before.
 
 ## Compared with NXT Retro Music
 
@@ -39,15 +111,15 @@ about capability, not code: nothing here is copied from it.
 | Favorites | Toggle, list, use as a playlist | Toggle + row marker | Medium — a favorites view |
 | Playlists | Create, rename, reorder, delete, M3U/M3U8 import/export | Named lists saved as JSON, played from Audio settings | M3U8 import/export, rename and reorder |
 | Modes | Shuffle, repeat off/one/all | Same | Done |
-| Transitions | Gapless, crossfade with duration | Track-by-track decoder start | Low — gapless needs a decoder that keeps the PCM stream open |
+| Transitions | Gapless, crossfade with duration | Gapless (the next decoder starts while the last second still plays) | Low — crossfade |
 | Lyrics | LRC, bilingual translation, word timing, offset, full screen | Line-level LRC in the artwork tile | Medium — offset and a full-screen view are local; translation needs a provider |
 | EQ / DSP | 12 presets, 10/15/31-band graphic, 6 parametric filters, limiter | none | **High** — a 5-band biquad in the PCM path is contained and testable |
-| USB DAC / DSD | Bit-perfect PCM, Native DSD, DoP | DSF/DFF decode to SDL PCM | Native DSD/DoP output is out of scope unless a DAC is a target |
+| USB DAC / DSD | Bit-perfect PCM, Native DSD, DoP | USB DAC output, bit-perfect PCM for lossless stereo; DSF/DFF decode to PCM | Native DSD/DoP output |
 | Online | Spotify Premium, SoundCloud, Drive, radio, podcasts | YouTube through yt-dlp, IP radio streams | Medium — one provider at a time |
 | Personalization | 51 themes, 60 fonts, wallpaper, live editor | App-wide themes (25), player follows the theme | Low priority; the app already has a theme system |
 | Spectrum / LED | 21 palettes, 5 styles, reactive LEDs | Fixed bars, two layouts | Low — palettes are easy, LED writes are ROM-specific |
 | Profiles / stats | 16 listeners, listening time, top artists | none | Medium — a single local profile with a small history file |
-| Sleep / screen-off | Timer + mapped controls while dark | Timer | Low |
+| Sleep / screen-off | Timer + mapped controls while dark | Timer, Select or the power button darkens with mapped controls | Done |
 | Transfer / updates | Wi-Fi transfer, OTA | FTP/SFTP, phone companion, signed OTA | Done |
 
 ## Roadmap
@@ -71,7 +143,7 @@ Work is ordered by value per day, and each phase is independently shippable.
    listening" over the library index.
 6. **Spectrum palettes** — a handful of styles on the existing bar data.
 
-Deliberately out of scope: native DSD/DoP USB DAC output (the player mixes through SDL),
+Deliberately out of scope: native DSD/DoP USB DAC output (DSD is decoded to PCM),
 Spotify (needs Premium plus a Web API app), and ROM-specific LED control.
 
 ## Notes on provenance

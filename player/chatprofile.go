@@ -864,7 +864,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 	// Where the account lives, and when it joined.
 	source := chatProfileSource(p)
 	if p.UserID != "" && details.joined.Year() > 1 {
-		source += " · member since " + details.joined.Format("2 Jan 2006")
+		source += " · member since " + formatDate(config, details.joined)
 	}
 	renderText(renderer, config, font, ellipsize(font, source, metaW), ColorTextTertiary(), r.X+pad, rowY)
 	rowY += lineH + 4
@@ -891,7 +891,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 		stat += " · last " + timeSince(p.LastSeen)
 	}
 	if !p.FirstSeen.IsZero() && p.LastSeen.Sub(p.FirstSeen) > 24*time.Hour {
-		stat += " · first seen " + p.FirstSeen.Format("2 Jan 2006")
+		stat += " · first seen " + formatDate(config, p.FirstSeen)
 	}
 	if p.Messages > 0 {
 		renderText(renderer, config, font, ellipsize(font, stat, metaW), ColorTextSecondary(), r.X+pad, rowY)

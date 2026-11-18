@@ -1187,23 +1187,8 @@ func runPowerRsync(source, target string, dryRun bool, timeout time.Duration) (s
 	return text, nil
 }
 
+// powerSyncthingStatus reports JukaHub's own Syncthing (syncthing.go) and,
+// separately, any other Syncthing answering on the default port 8384.
 func powerSyncthingStatus() string {
-	bin, binErr := exec.LookPath("syncthing")
-	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://127.0.0.1:8384/rest/noauth/health")
-	if err != nil {
-		if binErr == nil {
-			return "Syncthing is installed but its web UI is not reachable on port 8384.\nStart Syncthing, then reopen this row."
-		}
-		return "Syncthing is not installed and no local web UI is reachable.\nUse rsync above, or install Syncthing separately."
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Sprintf("Syncthing answered %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-	if binErr == nil {
-		return "Syncthing is running on http://127.0.0.1:8384\nBinary: " + bin
-	}
-	return "Syncthing is running on http://127.0.0.1:8384\n" + strings.TrimSpace(string(body))
+	return syncthingPowerStatus()
 }

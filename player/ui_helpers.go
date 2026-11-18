@@ -115,7 +115,7 @@ func drawChip(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 	renderer.DrawRect(&sdl.Rect{X: rect.X + 1, Y: rect.Y + 1, W: rect.W - 2, H: 1})
 	renderer.DrawRect(&sdl.Rect{X: rect.X + 1, Y: rect.Y + 1, W: 1, H: rect.H - 2})
 	if font != nil && label != "" {
-		lw, lh, _ := font.SizeUTF8(label)
+		lw, lh, _ := font.SizeUTF8(uiT(label))
 		tx := rect.X + (rect.W-int32(lw))/2
 		ty := rect.Y + (rect.H-int32(lh))/2
 		renderText(renderer, config, font, label, textColor, tx, ty)

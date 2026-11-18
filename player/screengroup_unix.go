@@ -47,6 +47,8 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	// JukaHub's own ALSA_CONFIG_PATH (bluealsaPCMDefine) is not a game's: it
 	// goes first, or spatial audio would take it for the game's own.
 	cmd.Env = audioOwnALSAEnvStrip(cmd.Env)
+	// Music kept playing under a 32-bit program: not (musicgame.go).
+	musicGameNoteChild(cmd)
 	cmd.Env = spatialChildEnv(cmd, cmd.Env)
 	cmd.Env = audioRouteChildEnv(cmd.Env)
 }

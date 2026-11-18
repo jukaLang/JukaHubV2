@@ -283,15 +283,16 @@ func filesBuildLocations(config *Config) []filesLocation {
 }
 
 // filesRemovableMounts lists the volumes a Linux desktop mounts for USB sticks
-// and cards (/media/<user>/<label>, /run/media/<user>/<label>). The handheld
-// has none; its card is the first location already.
+// and cards (/media/<user>/<label>, /run/media/<user>/<label>), and on the
+// handheld the USB drives Tools → USB & OTG mounted under /mnt/usb (its eject
+// removes the folder, so every entry there is a live drive).
 func filesRemovableMounts() []filesLocation {
-	user := strings.TrimSpace(os.Getenv("USER"))
-	if user == "" {
-		return nil
+	bases := []string{usbOtgMountRoot}
+	if user := strings.TrimSpace(os.Getenv("USER")); user != "" {
+		bases = append(bases, filepath.Join("/media", user), filepath.Join("/run/media", user))
 	}
 	var out []filesLocation
-	for _, base := range []string{filepath.Join("/media", user), filepath.Join("/run/media", user)} {
+	for _, base := range bases {
 		entries, err := os.ReadDir(base)
 		if err != nil {
 			continue
@@ -693,7 +694,7 @@ func filesComputeUserAreas(config *Config) []string {
 		}
 		return areas
 	}
-	areas = append(areas, "/media", "/run/media", "/mnt/SDCARD")
+	areas = append(areas, "/media", "/run/media", "/mnt/SDCARD", usbOtgMountRoot)
 	return areas
 }
 

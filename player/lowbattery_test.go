@@ -4,6 +4,7 @@ package main
 // when to auto-save and suspend — is verified without a handheld.
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -97,6 +98,13 @@ func TestPickSuspendState(t *testing.T) {
 			t.Errorf("pickSuspendState(%q) = %q, want %q", tc.available, got, tc.want)
 		}
 	}
+	// The kernel's mem_sleep line: the bracketed mode is what "mem" means
+	// (quickresume_linux.go reports "s2idle" as the light sleep it is).
+	for line, want := range map[string]string{"s2idle [deep]": "deep", "[s2idle]": "s2idle", "s2idle deep\n": "", "": ""} {
+		if got := quickMemSleepMode(line); got != want {
+			t.Errorf("quickMemSleepMode(%q) = %q, want %q", line, got, want)
+		}
+	}
 }
 
 func TestLowBatteryGuardEnabledByDefault(t *testing.T) {
@@ -141,5 +149,49 @@ func TestRetroArchPauseParsing(t *testing.T) {
 	}
 	if got := raAudioTrouble("[INFO] [Core]: Unpaused.\n"); len(got) != 0 {
 		t.Fatalf("a quiet log reported %q", got)
+	}
+}
+
+// TestBatteryCalParseAndMapping covers battery calibration's readings file (a
+// damaged line and a torn last line are skipped) and the mapping learned from
+// it: a gauge that reads 14% when the battery gives out maps that reading to
+// about 0, the table never falls, and full stays full.
+func TestBatteryCalParseAndMapping(t *testing.T) {
+	const n = 200
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		truth := 100 * float64(n-1-i) / float64(n-1)
+		pct := int(14 + truth*0.86 + 0.5)
+		b.WriteString(`{"t":` + strconv.Itoa(1700000000+60*i) + `,"a":` + strconv.Itoa(60*i) +
+			`,"p":` + strconv.Itoa(pct) + `,"b":1}` + "\n")
+		if i == 50 {
+			b.WriteString("not json\n")
+		}
+	}
+	b.WriteString(`{"t":1700012000,"a":`)
+	samples := parseBatteryCalSamples([]byte(b.String()))
+	if len(samples) != n {
+		t.Fatalf("parsed %d readings, want %d", len(samples), n)
+	}
+	r, reason := batteryCalCompute(samples)
+	if reason != "" {
+		t.Fatalf("compute refused: %s", reason)
+	}
+	if r.EndPct != 14 || r.MaxErr <= batteryCalTolerance {
+		t.Fatalf("end %d%%, max error %d: want 14%% and a correction", r.EndPct, r.MaxErr)
+	}
+	for g := 1; g < len(r.Table); g++ {
+		if r.Table[g] < r.Table[g-1] {
+			t.Fatalf("table falls at %d: %v", 5*g, r.Table)
+		}
+	}
+	if r.Table[batteryCalGrid-1] != 100 {
+		t.Fatalf("full maps to %d", r.Table[batteryCalGrid-1])
+	}
+	if got := batteryCalApply(r.Table, 14); got > 2 {
+		t.Fatalf("the shutdown reading 14%% maps to %d", got)
+	}
+	if got := batteryCalApply(r.Table, 57); got < 46 || got > 54 {
+		t.Fatalf("57%% maps to %d, want about 50", got)
 	}
 }

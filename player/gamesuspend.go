@@ -62,8 +62,14 @@ func screenChildStart(cmd *exec.Cmd) error {
 		}
 		screenChildAudio.mu.Unlock()
 	}
+	// On a KMSDRM display the game needs DRM master from its first frame
+	// (drmhandoff.go; a no-op on the framebuffer models).
+	drmHandoffRelease()
 	if err := cmd.Start(); err != nil {
 		screenChildAudioDone()
+		if runningGameChildren.Load() == 0 {
+			drmHandoffReacquire()
+		}
 		return err
 	}
 	return nil
@@ -98,7 +104,9 @@ func screenChildAudioOverlayBegin() bool {
 	}
 	screenChildAudio.overlays++
 	if screenChildAudio.overlays == 1 {
-		audioRouteResumeAfterChild()
+		// Music playing under the game keeps its shared output; the overlay
+		// joins it there (musicgame.go).
+		audioRouteBorrowForOverlay()
 	}
 	return true
 }
@@ -123,6 +131,9 @@ func screenChildAudioOverlayEnd() {
 // first frame.
 func noteGameChildStarted(cmd *exec.Cmd) {
 	runningGameChildren.Add(1)
+	// Launch sites that start the child themselves still hand over DRM
+	// master here (drmhandoff.go; only the first call per launch acts).
+	drmHandoffRelease()
 	// A manual core/tool install can still be downloading when the user starts a
 	// game. Stop its transfer before it competes with the game's reads and GPU
 	// work on the handheld; the install can be started again after play.
@@ -140,6 +151,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	bgmHaltForGame()
 	// The voice assistant's model, voice and CPU boost go too (voiceboost.go).
 	voiceReleaseForGame()
+	// Syncthing pauses every device until JukaHub is back (syncthing.go).
+	syncthingKick()
 	if cmd == nil {
 		return
 	}
@@ -149,6 +162,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	}
 	screenChildren.cmds[cmd] = struct{}{}
 	screenChildren.mu.Unlock()
+	// launch.sh stops it if JukaHub dies without doing so (crashreport.go).
+	crashNoteScreenGroups()
 }
 
 // noteGameChildExited records that a screen-taking child is gone. Call from
@@ -175,6 +190,11 @@ func noteGameChildExited(cmd *exec.Cmd) {
 	// deliberately before the registry cleanup below, so the wake does not
 	// depend on the exit having been paired with a command. A wake while another
 	// child still runs is not sent — the count above covers it.
+	if runningGameChildren.Load() == 0 {
+		// DRM master comes back; the render thread re-sets the mode before
+		// its next frame (drmhandoff.go).
+		drmHandoffReacquire()
+	}
 	if !gameScreenSuspended() {
 		wakeForegroundWork()
 		// RetroArch has written its config and gone: the keys JukaHub set for
@@ -187,6 +207,7 @@ func noteGameChildExited(cmd *exec.Cmd) {
 	screenChildren.mu.Lock()
 	delete(screenChildren.cmds, cmd)
 	screenChildren.mu.Unlock()
+	crashNoteScreenGroups()
 }
 
 // The settle delay covers the other half of the blink: the instant the child is

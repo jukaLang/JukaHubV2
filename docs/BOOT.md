@@ -13,13 +13,15 @@ login launcher asks for it.)
 
 ## What a power-on looks like
 
-1. **The firmware's boot logo.** A black screen with the JukaHub tile over its
-   name, from the moment the device powers on until Linux is up. This is a
+1. **The firmware's boot logo.** A black screen with the JukaHub tile and name,
+   from the moment the device powers on until Linux is up. On the stock Smart
+   Pro 1.1.0 the firmware uses a short horizontal banner; other images may use
+   a full-screen picture. This is a
    picture stored on the device itself, so it appears once it has been
    installed with **Settings → General → Boot logo** (below); until then the
    firmware shows its own logo.
-2. **The logo comes alive.** JukaHub's first frame puts the tile and the name
-   on exactly the pixels the firmware's picture had them, so the still logo
+2. **The logo comes alive.** For a full-screen firmware logo JukaHub's first
+   frame puts the tile and name on the same pixels, so the still logo
    seems to wake up rather than be replaced (that is when the boot hook
    started JukaHub and the installed boot logo is JukaHub's; otherwise the
    logo fades in from black). JukaHub's own startup work runs first, while
@@ -41,7 +43,7 @@ After the startup work, the beats take under three seconds and Home's arrival
 about one more. Any button skips straight to step 3, at the quick pace. The
 handheld comes with **Reduce motion** on for its menus, but the boot moves all
 the same; it follows **Reduce motion** once you switch it yourself (Settings →
-Display & theme, or Quick Settings). Switched on by hand, and always in battery
+Theme & look, or Quick Settings). Switched on by hand, and always in battery
 saver, the beats are the same but every change is a fade: nothing travels,
 scales or slides.
 
@@ -100,6 +102,21 @@ the farewell comes in under the wordmark for about a second, and it goes out
 with the light. Without a name the card holds a quarter second, as before. A
 screenshot never shows the name; the phrases follow the interface language,
 the name is drawn as written (`bootgreet.go`).
+
+Juka also says the farewell, as it comes in. Speech made on the way out would
+cost the exit a second or more, so the device's offline voice (Piper on the
+handheld, Windows' own voice on a PC) makes "Goodbye, *name*" and "See you
+soon, *name*" ahead of time, about two seconds after the name was last changed
+and the on-screen keyboard closed (or, for a name already set, once the boot
+has settled), and keeps them as small WAVs in `voice-name/` in the data folder,
+beside the launch greetings made the same way (docs/VOICE.md). On quitting the
+line is already in memory and plays on its own audio device, like the shutdown
+chime, and the card stays up while it is said (when the shutdown's time budget
+has room; a line that could not finish inside it is not said). Nothing is made
+while a game runs or Juka is speaking, nothing is said while Juka's voice is
+Off, in Quiet Mode, on a stop from outside or a long sleep's silent power off,
+a line made for another name is never played, and clearing the name deletes the
+files (`byevoice.go`).
 
 ## Opening JukaHub as an app
 
@@ -165,9 +182,10 @@ unless `JUKAHUB_BOOT=1` is set too, so it keeps measuring the ordinary start.
 
 ### What it writes
 
-The picture is the one above: black, the tile, the name. It is rendered on the
-device at the size and in the pixel format of the firmware's own file, so the
-firmware is handed exactly the kind of file it already reads.
+The picture is black with the tile and name. It is rendered on the device at
+the size and in the pixel format of the firmware's own file, so the firmware
+is handed exactly the kind of file it already reads. The stock Smart Pro
+1.1.0 file is a 396×66 horizontal banner.
 
 ### How it finds the picture
 
@@ -202,7 +220,8 @@ It stops, without writing, when:
 - the FAT partition has no `bootlogo.bmp`;
 - the file is not an uncompressed BMP of 24 or 32 bits per pixel (plain RGB, or
   32-bit bit fields on whole bytes), is taller than it is wide, is smaller than
-  320x240 or larger than 4096x4096, or is over 8 MiB;
+  320x240 (except the exact stock Smart Pro 396×66 banner) or larger than
+  4096x4096, or is over 8 MiB;
 - a raw partition's BMP claims to be longer than the partition.
 
 ### How it writes
@@ -274,16 +293,17 @@ Both are 24-bit uncompressed BMPs (about 2.8 and 2.4 MB).
   reported to boot normally, and JukaHub's write is the smallest one possible
   for exactly that reason.
 
-## Not verified on hardware yet
+## Hardware status
 
-This was written without a TrimUI on the desk, and it says so:
+On a stock Smart Pro 1.1.0, `/dev/by-name/bootloader` points to the internal
+24 MiB FAT partition. A read-only mount found `bootlogo.bmp`, a 396×66,
+32-bit uncompressed BMP of 104600 bytes. The installer now accepts that exact
+banner and keeps the file's original size and header. The partition was not
+written in this inspection; installing, restoring and confirming the image at
+power-on still need a new ARM build and a hands-on run. Other models and older
+firmware remain unverified.
 
-- How TrimUI's own firmware stores its boot logo has not been confirmed. The
-  installer is built on Allwinner's usual layout and probes before it trusts
-  it; on anything it does not recognise it says **Unavailable** and writes
-  nothing.
-- TrimUI's firmware 1.1.0 "increased the boot partition space to 22MB for the
-  boot logo", so 1.0.x and 1.1.x devices may not store it the same way.
+- TrimUI's older 1.0.x images may store the boot logo differently.
 - CrossMix's BootLogo tool says it is not compatible after firmware 1.0.4
   hotfix 6, which points the same way.
 - The black hand-over at boot: whether writing black to `/dev/fb0` blanks the
@@ -297,7 +317,7 @@ was missing; **Tools → Logs** has the details for a report.
 
 | File | What it does |
 | --- | --- |
-| `player/bootlogo_layout.go` | where the tile, the name and the progress line sit, in fractions of the screen height — shared by the firmware picture, the animation's first frame and `mkbootlogo.py` |
+| `player/bootlogo_layout.go` | where the tile, name and progress line sit for full-screen pictures and the animation; the stock Smart Pro banner is laid out in `bootlogo.go` |
 | `player/bootos.go` | the boot sequence: power-on or app launch, the timeline, the chime's timing |
 | `player/bootstyles.go` | the boot animation styles: the drop, the floor and its cracks (grown into a render target), the particles, the roll, the buzzes and the knocks they add to the chime |
 | `player/bootarrive.go` | Home building itself out of the first screen's warm render |
@@ -310,6 +330,6 @@ Change a placement constant in `bootlogo_layout.go` and its twin in
 `mkbootlogo.py` together, with the numbers the script asserts (the sprite, the
 word and the track): the script refuses to run when its own copy drifts from
 those numbers, but nothing compares it with the Go side, so a change to
-`bootlogo_layout.go` alone would let the firmware's logo and the boot
+`bootlogo_layout.go` alone would let a full-screen firmware logo and the boot
 animation's first frame drift apart unnoticed. Rerun it with
 `python3 branding/mkbootlogo.py`; files that did not change are left alone.

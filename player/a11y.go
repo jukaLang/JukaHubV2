@@ -210,6 +210,9 @@ func a11yLoad(config *Config) {
 	a11y.increaseContrast = a11yCustomBool(config, a11yKeyIncreaseContrast)
 	a11y.boldText = a11yCustomBool(config, a11yKeyBoldText)
 	a11y.legibleFont = a11yCustomBool(config, a11yKeyLegibleFont)
+	// The font picked in Settings → Display (uifont.go), read here so the
+	// first frame is drawn in it; a11yInit drops the font caches after.
+	uiFontLoad(config)
 	a11y.monoAudio = a11yCustomBool(config, a11yKeyMonoAudio)
 	a11y.audioBalance = a11yInt(config, a11yKeyAudioBalance, 0, -100, 100)
 	a11y.captionsAlways = a11yCustomBool(config, a11yKeyCaptionsAlways)

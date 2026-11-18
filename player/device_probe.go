@@ -17,7 +17,10 @@ package main
 //  2. model codes in the device tree, /proc/cpuinfo and the hostname,
 //  3. model names in the firmware's own strings and release files,
 //  4. the panel, which separates the 4:3 Brick family from the 16:9 Smart Pro
-//     family but cannot name a variant.
+//     family but cannot name a variant,
+//  5. the chip (devicedrivers.go: the device tree's sun55i/sun50iw10, the CPU
+//     cores, the GPU node), which tells the Smart Pro S's A523 from the
+//     A133P every other model uses — the one variant the panel cannot split.
 //
 // Every path and file is a variable so a test can stand in for a device, the
 // same way the Wi-Fi probes are tested.
@@ -86,7 +89,10 @@ type deviceIdentity struct {
 	Names       []string // model strings found in the firmware
 	PanelW      int32
 	PanelH      int32
-	TrimUI      bool // the image is demonstrably a TrimUI one
+	TrimUI      bool   // the image is demonstrably a TrimUI one
+	SoC         string // the chip the board's evidence names (deviceSoCFrom), "" unsure
+	SoCWhy      string // that evidence in a few words
+	Kernel      string // kernel release
 }
 
 // readDeviceIdentity probes every identity source. It never fails: a source
@@ -106,6 +112,7 @@ func readDeviceIdentity() deviceIdentity {
 	id.Names = fw.Names
 	id.TrimUI = fw.TrimUI
 	id.PanelW, id.PanelH = readPanelSize()
+	id.SoC, id.SoCWhy, id.Kernel = probeDeviceSoC(id.Model + " " + id.Compatible + " " + id.CPUInfo)
 	return id
 }
 
@@ -167,8 +174,15 @@ func probeFirmwareIdentity() firmwareIdentity {
 
 // mainUIModelNames scans the vendor launcher for the model strings it was built
 // with. The file is tens of megabytes on some images, so it is read in chunks
-// with an overlap just short of the longest name — a name that straddles two
+// with an overlap as long as the longest name — a name that straddles two
 // chunks is still found — and never loaded whole.
+//
+// A longer model name starts with a shorter one: "Trimui Smart Pro S" holds
+// "Trimui Smart Pro", and "Trimui Brick Pro" holds "Trimui Brick". Only the
+// longest whole name at each site counts (mainUINameAt), so one model is not
+// read as two — and a launcher shared by the Brick and the Brick Pro, which
+// carries both strings at two sites, reports both, which the panel and
+// pickBaseModel then settle, instead of every Brick reading as a Brick Pro.
 func mainUIModelNames(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -191,50 +205,101 @@ func mainUIModelNames(path string) []string {
 	var carry []byte
 	matches := make([]bool, len(firmwareModelNames))
 	var scanned int64
-	for scanned < maxScan {
+	for {
 		n, readErr := f.Read(buf)
-		if n > 0 {
+		final := readErr != nil || scanned+int64(n) >= maxScan
+		// A read that ends the file with no bytes still judges the overlap:
+		// a name at the very end was left undecided by the last window.
+		if n > 0 || final {
 			scanned += int64(n)
 			window := make([]byte, 0, len(carry)+n)
 			window = append(window, carry...)
 			window = append(window, buf[:n]...)
-			for i, name := range firmwareModelNames {
-				if !matches[i] && bytes.Contains(window, []byte(name)) {
-					matches[i] = true
-				}
-			}
-			keep := longest - 1
+			mainUIMarkNames(window, final, matches)
+			// The overlap is a whole longest name: a site the window ended
+			// too early to judge is judged again with the next chunk.
+			keep := longest
 			if keep > len(window) {
 				keep = len(window)
 			}
 			carry = append(carry[:0], window[len(window)-keep:]...)
 		}
-		if readErr != nil {
+		if final {
 			break
 		}
 	}
 
 	var found []string
 	for i, name := range firmwareModelNames {
-		if !matches[i] {
-			continue
-		}
-		// A longer model name contains the shorter one: "Trimui Smart Pro S"
-		// holds "Trimui Smart Pro", and "Trimui Brick Pro" holds "Trimui
-		// Brick". Keeping both would read one model as two, so only the longest
-		// name at a site counts.
-		contained := false
-		for j, other := range firmwareModelNames {
-			if i != j && matches[j] && strings.Contains(other, name) {
-				contained = true
-				break
-			}
-		}
-		if !contained {
+		if matches[i] {
 			found = append(found, name)
 		}
 	}
 	return found
+}
+
+// mainUIMarkNames marks every model name that stands whole at some site of
+// window. final says no bytes follow the window.
+func mainUIMarkNames(window []byte, final bool, matches []bool) {
+	for i, name := range firmwareModelNames {
+		if matches[i] {
+			continue
+		}
+		needle := []byte(name)
+		for off := 0; off < len(window); {
+			at := bytes.Index(window[off:], needle)
+			if at < 0 {
+				break
+			}
+			at += off
+			if got, ok := mainUINameAt(window, at, final); ok && got == i {
+				matches[i] = true
+				break
+			}
+			off = at + 1
+		}
+	}
+}
+
+// mainUINameAt is the model name at window[at:]: the longest one there that
+// ends the word ("Trimui Smart Pro S" followed by a NUL), else the shortest one
+// there ("Trimui Smart Pro Settings" is a Smart Pro string, not a Pro S). ok
+// is false when no name is there, or when the window ends before that can be
+// told and more bytes follow (the next window, which starts with the overlap,
+// tells).
+func mainUINameAt(window []byte, at int, final bool) (int, bool) {
+	whole, wholeLen := -1, 0
+	first, firstLen := -1, 0
+	for i, name := range firmwareModelNames {
+		end := at + len(name)
+		if end > len(window) {
+			if !final && bytes.HasPrefix([]byte(name), window[at:]) {
+				// This longer name may still be there: undecided.
+				return -1, false
+			}
+			continue
+		}
+		if string(window[at:end]) != name {
+			continue
+		}
+		if first < 0 || len(name) < firstLen {
+			first, firstLen = i, len(name)
+		}
+		if end == len(window) {
+			if !final {
+				return -1, false
+			}
+		} else if isWordByte(window[end]) {
+			continue
+		}
+		if len(name) > wholeLen {
+			whole, wholeLen = i, len(name)
+		}
+	}
+	if whole >= 0 {
+		return whole, true
+	}
+	return first, first >= 0
 }
 
 // readPanelSize reads the framebuffer geometry. A mode list is the panel's own
@@ -381,8 +446,23 @@ func envDeviceName(raw string) DeviceModel {
 // source decided it. The order is by how much each source knows: an exported
 // device name is the device itself, a kernel model code is the board, a model
 // name in the firmware is the image's own label, and the panel only decides the
-// family.
+// family. The chip then settles the one pair a name or the panel can confuse,
+// the Smart Pro and the Smart Pro S (deviceCorrectForSoC).
 func classifyDevice(id deviceIdentity) (DeviceModel, string) {
+	d, source := classifyDeviceNamed(id)
+	if d == DeviceUnknown {
+		// A TrimUI image on an A523 is the Smart Pro S: no other TrimUI model
+		// uses that chip, and no panel was read to say more.
+		if id.TrimUI && id.SoC == socA523 {
+			return DeviceTrimuiSmartProS, "trimui firmware + A523 chip"
+		}
+		return d, source
+	}
+	return deviceCorrectForSoC(d, source, id.SoC)
+}
+
+// classifyDeviceNamed is classifyDevice before the chip's correction.
+func classifyDeviceNamed(id deviceIdentity) (DeviceModel, string) {
 	if d := deviceFromEnvHints(id.EnvDevice, id.EnvPlatform, id.EnvModel); d != DeviceUnknown {
 		return d, "launcher env"
 	}
@@ -493,6 +573,9 @@ func identitySummary(id deviceIdentity) string {
 		firmware = "yes"
 	}
 	summary := fmt.Sprintf(" · dt=%q compat=%q panel=%s firmware=%s", model, compatible, panel, firmware)
+	if id.SoC != "" {
+		summary += " soc=" + id.SoC
+	}
 	if env := strings.TrimSpace(id.EnvDevice + " " + id.EnvPlatform); env != "" {
 		summary += fmt.Sprintf(" env=%q", env)
 	}

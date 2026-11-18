@@ -170,8 +170,26 @@ func rommCloudSettingsRow(id string) tbxRowSpec {
 			sub = "Saved · token hidden"
 		}
 		return tbxRowSpec{icon: "key", title: "Client API token", subtitle: sub}
+	case "phone":
+		// Both fields typed on the phone (companion_accounts.go).
+		return tbxRowSpec{icon: "phone", title: "From your phone", subtitle: "Scan a code, type the address and token on your phone"}
 	case "connect":
 		return tbxRowSpec{icon: "refresh", title: "Connect and load games", subtitle: "Check your server and show its catalogue"}
+	case "autosync":
+		on := rommCloud.settings.AutoSync == nil || *rommCloud.settings.AutoSync
+		spec := tbxRowSpec{icon: "sync", title: "Automatic save sync", subtitle: "Sync saves automatically when a game starts and ends", pill: "Off", tone: tbxToneNeutral}
+		if on {
+			spec.pill, spec.tone = "On", tbxToneGood
+		}
+		if rommCloud.settings.URL == "" || rommCloud.settings.Token == "" {
+			spec.subtitle = "Starts once a server address and token are set"
+		}
+		return spec
+	case "syncall":
+		if busy, line := rommSyncAllStatus(); busy {
+			return tbxRowSpec{icon: "sync", title: "Syncing every save…", subtitle: line, pill: "Stop", tone: tbxToneWarn}
+		}
+		return tbxRowSpec{icon: "sync", title: "Sync all saves now", subtitle: "Every library game that is on your server · keeps running in the background", pill: "Sync", tone: tbxToneAccent}
 	}
 	return tbxRowSpec{}
 }
@@ -187,6 +205,8 @@ func rommCloudRender(renderer *sdl.Renderer, config *Config) {
 	status := rommCloud.note
 	if rommCloud.busy {
 		status = "Working…"
+	} else if busy, line := rommSyncAllStatus(); busy {
+		status = line
 	}
 	frame := tbxBeginFrame(renderer, config, tbxHeader("RomM", "Games, covers, save sync and BIOS from your server", "rom", status, ColorTextTertiary()))
 	body := frame.bodyRect()
@@ -211,7 +231,7 @@ func rommCloudRender(renderer *sdl.Renderer, config *Config) {
 	}
 	y += 10
 	if rommCloud.mode == rommCloudSettings {
-		for _, id := range []string{"address", "token", "connect"} {
+		for _, id := range []string{"address", "token", "phone", "connect", "autosync", "syncall"} {
 			rommCloudDrawRow(renderer, config, fonts, body, y, rowH, rowNum, id, rommCloudSettingsRow(id))
 			y += rowH + 5
 			rowNum++
@@ -306,10 +326,43 @@ func rommCloudAction(config *Config, act tbxAction) bool {
 		rommCloudActivate(config, rommCloud.nav.focus)
 		return true
 	}
+	if act == tbxActBack {
+		if busy, _ := rommSyncAllStatus(); busy {
+			rommCloudConfirmStopAll(config, true)
+			return true
+		}
+	}
 	return tbxNavAction(&rommCloud.nav, act)
 }
 
 func rommCloudActivate(config *Config, id string) {
+	switch id {
+	case "autosync":
+		// A local setting: it does not wait for a running request. From the
+		// saved file, not the page's copy: a background sync may have stored a
+		// device id since the page opened.
+		next := rommServerSettingsGet()
+		on := !(next.AutoSync == nil || *next.AutoSync)
+		next.AutoSync = &on
+		if err := rommServerSettingsSave(next); err != nil {
+			ShowToast("RomM: "+firstLine(err.Error()), ToastKindWarning)
+			return
+		}
+		rommCloud.settings = next
+		if on {
+			ShowToast("RomM saves sync when a game starts and ends", ToastKindSuccess)
+		} else {
+			ShowToast("RomM automatic save sync is off", ToastKindInfo)
+		}
+		return
+	case "syncall":
+		if busy, _ := rommSyncAllStatus(); busy {
+			rommCloudConfirmStopAll(config, false)
+			return
+		}
+		rommSyncAllStart(rommCloud.settings)
+		return
+	}
 	if rommCloud.busy {
 		ShowToast("RomM is still working", ToastKindInfo)
 		return
@@ -332,6 +385,9 @@ func rommCloudActivate(config *Config, id string) {
 	case "token":
 		rommCloud.editToken = true
 		vkOpenRommServer("")
+		return
+	case "phone":
+		rommFromPhone()
 		return
 	case "connect":
 		rommCloud.mode = rommCloudGames
@@ -375,6 +431,24 @@ func rommCloudGameSheet(config *Config, game rommServerGame) {
 	tbxOpenSheet(config, tbxSheetSpec{title: game.title(), subtitle: "Your RomM library", icon: "game", body: text, buttons: buttons, focus: len(buttons) - 1})
 }
 
+// rommCloudConfirmStopAll asks before stopping "Sync all saves now". From B
+// the other choice leaves the page with the job still running.
+func rommCloudConfirmStopAll(config *Config, leaving bool) {
+	keep := tbxSheetButton{label: "Keep syncing"}
+	if leaving {
+		keep = tbxSheetButton{label: "Keep syncing in background", run: func() { goBackScene(config) }}
+	}
+	_, line := rommSyncAllStatus()
+	tbxOpenSheet(config, tbxSheetSpec{
+		title:    "Stop syncing?",
+		subtitle: line,
+		icon:     "sync",
+		body:     "Games already synced stay synced; the rest wait for the next sync. A save is never left half-written.",
+		buttons:  []tbxSheetButton{{label: "Stop", run: rommSyncAllCancel}, keep},
+		focus:    1,
+	})
+}
+
 func rommCloudRun(label string, work func(context.Context, *rommServerClient) error) {
 	client, err := newRommServerClient(rommCloud.settings)
 	if err != nil {
@@ -410,12 +484,15 @@ func rommCloudRun(label string, work func(context.Context, *rommServerClient) er
 }
 
 func rommCloudDownloadGame(g rommServerGame) {
+	server := rommAutoSyncServerKey(rommCloud.settings)
 	rommCloudRun("Game download", func(ctx context.Context, client *rommServerClient) error {
 		_, targets := rommDefaultRoots()
 		path, err := client.downloadGame(ctx, g, targets.Roms)
 		if err != nil {
 			return err
 		}
+		// Auto-sync knows this game without searching for it.
+		rommAutoSyncRemember(path, g.ID, server, true)
 		if g.CoverSmall != "" || g.CoverLarge != "" {
 			_, err = client.downloadCover(ctx, g, path, libraryArtworkRoot())
 		}
@@ -485,7 +562,9 @@ func rommCloudSaveRoots() []saveRoot {
 
 func rommCloudSyncGame(g rommServerGame, romPath string) {
 	settings := rommCloud.settings
+	server := rommAutoSyncServerKey(settings)
 	rommCloudRun("Save sync", func(ctx context.Context, client *rommServerClient) error {
+		rommAutoSyncRemember(romPath, g.ID, server, true)
 		result, err := client.syncSavesFromRoots(ctx, settings, g, romPath, rommCloudSaveRoots())
 		if err != nil {
 			return err
@@ -506,5 +585,9 @@ func rommCloudClick(mx, my int32, config *Config) bool {
 }
 
 func rommCloudHints() []FooterHint {
-	return []FooterHint{{Button: "A", Label: "Open"}, {Button: "X", Label: "Next tab"}, {Button: "Y", Label: "Refresh"}, {Button: "B", Label: "Back"}}
+	back := FooterHint{Button: "B", Label: "Back"}
+	if busy, _ := rommSyncAllStatus(); busy {
+		back.Label = "Stop sync"
+	}
+	return []FooterHint{{Button: "A", Label: "Open"}, {Button: "X", Label: "Next tab"}, {Button: "Y", Label: "Refresh"}, back}
 }

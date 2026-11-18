@@ -146,6 +146,10 @@ func crashSessionHeader(now time.Time) string {
 // initCrashReports archives what the last session left and opens this
 // session's crash output. main calls it right after InitLogging.
 func initCrashReports() {
+	// An "Erase everything JukaHub created" the last session asked for runs
+	// here, before the config or any store is read (factoryreset.go). Logs
+	// and crash reports are never part of it.
+	factoryEraseAtStart()
 	dir, err := crashLogDir()
 	if err != nil || dir == "" {
 		if err == nil {
@@ -446,4 +450,93 @@ func crashOnMainPanic(r any, stack []byte) {
 	}
 	deadline.Stop()
 	panic(r)
+}
+
+// ── Games a crash leaves running ───────────────────────────────────────────
+
+// crashScreenGroupsName is the file in the app's folder where launch.sh finds
+// the games and apps JukaHub put on the screen, one per line: "<process group>
+// <start time of its leader>" (field 22 of /proc/<pid>/stat). Each leads a
+// process group of its own (screengroup_unix.go). A panic on any goroutine but
+// the main one, the out-of-memory killer or a crash in C code ends JukaHub at
+// once, with no chance to stop them, and MainUI then came back over a game that
+// was still running. launch.sh reads the file after a run that did not end
+// with status 0 and stops the groups that are still JukaHub's (REL-11); it
+// removes the file after every run.
+const crashScreenGroupsName = ".screen-groups"
+
+var (
+	crashScreenGroupsKick = make(chan struct{}, 1)
+	crashScreenGroupsOnce sync.Once
+)
+
+// crashNoteScreenGroups asks for the file to be written again with the screen
+// children that are live now. noteGameChildStarted and noteGameChildExited
+// call it the moment a child starts or ends, on whatever thread that is: it
+// never blocks, and the write
+// happens on a goroutine of its own. Only the handheld's launch.sh reads it.
+func crashNoteScreenGroups() {
+	if IsWindows() || !DetectDevice().IsTrimui() {
+		return
+	}
+	crashScreenGroupsOnce.Do(func() { go crashScreenGroupsWriter() })
+	select {
+	case crashScreenGroupsKick <- struct{}{}:
+	default:
+	}
+}
+
+// crashScreenGroupsWriter writes the file for each request: a child starting
+// and a child ending (noteGameChildStarted, noteGameChildExited) both ask, so
+// the list holds only the children live now, and the file goes when none is.
+// A child whose start time cannot be read is left out: launch.sh could not
+// tell it from a later process that got the same id.
+func crashScreenGroupsWriter() {
+	for range crashScreenGroupsKick {
+		dir, err := P().ExecutableDir()
+		if err != nil || dir == "" {
+			continue
+		}
+		var b strings.Builder
+		for _, cmd := range liveScreenChildren() {
+			if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 1 || !screenChildGroupConfigured(cmd) {
+				continue
+			}
+			pid := cmd.Process.Pid
+			if start := crashProcStart(pid); start != "0" {
+				b.WriteString(strconv.Itoa(pid) + " " + start + "\n")
+			}
+		}
+		path := filepath.Join(dir, crashScreenGroupsName)
+		if b.Len() == 0 {
+			_ = os.Remove(path)
+			continue
+		}
+		if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+			logDebug("crash", "the list of running games for launch.sh was not written: %v", err)
+		}
+	}
+}
+
+// crashProcStart is a process's start time in clock ticks after boot, the
+// field launch.sh compares, or "0" when /proc does not say.
+func crashProcStart(pid int) string {
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return "0"
+	}
+	s := string(data)
+	end := strings.LastIndexByte(s, ')')
+	if end < 0 {
+		return "0"
+	}
+	// After the name: state is field 3, so the start time (22) is the 20th.
+	f := strings.Fields(s[end+1:])
+	if len(f) < 20 {
+		return "0"
+	}
+	if _, err := strconv.ParseUint(f[19], 10, 64); err != nil {
+		return "0"
+	}
+	return f[19]
 }

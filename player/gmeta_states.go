@@ -7,7 +7,9 @@ package main
 // exit and loads on start when savestate_auto_load is on — which
 // savestate_resume.go turns on for every RetroArch launch from the library.
 // With savestate_thumbnail_enable each state has a "<state>.png" screenshot
-// beside it. The states live in RetroArch's savestate_directory (savemanager.go
+// beside it; JukaHub turns it on for each RetroArch launch from the library
+// (prepareGameSwitcher, scoped like the other launch keys in racfgscope.go),
+// so states saved in those games have pictures. The states live in RetroArch's savestate_directory (savemanager.go
 // knows where that is on each firmware), optionally sorted into per-core and
 // per-content-folder sub-folders, or beside the ROM itself.
 //
@@ -206,13 +208,13 @@ func gmetaWhen(t, now time.Time) string {
 	case d < time.Hour:
 		return strconv.Itoa(int(d/time.Minute)) + " min ago"
 	case d < 24*time.Hour && t.Day() == now.Day():
-		return "today " + t.Format("15:04")
+		return "today " + clockDigits(nil, t)
 	case d < 48*time.Hour && t.Day() == now.AddDate(0, 0, -1).Day():
-		return "yesterday " + t.Format("15:04")
+		return "yesterday " + clockDigits(nil, t)
 	case t.Year() == now.Year():
-		return t.Format("2 Jan 15:04")
+		return formatDateShort(nil, t) + " " + clockDigits(nil, t)
 	}
-	return t.Format("2 Jan 2006")
+	return formatDate(nil, t)
 }
 
 // gmetaCopyFile copies src over dst through a temporary file, so a reader

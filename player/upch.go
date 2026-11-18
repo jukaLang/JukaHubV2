@@ -92,6 +92,8 @@ type upchEntry struct {
 	FromTag      string `json:"from_tag,omitempty"`
 	DownloadedAt string `json:"downloaded_at,omitempty"`
 	Notes        string `json:"notes,omitempty"`
+	// Prerelease marks a Beta-channel release: Stable never offers it.
+	Prerelease bool `json:"prerelease,omitempty"`
 
 	dir string
 }
@@ -175,6 +177,7 @@ func upchAutoDownloadEnabled(config *Config) bool {
 func upchLoadPrefs(config *Config) {
 	upchAutoOn.Store(upchAutoDownloadEnabled(config))
 	uhistKeep.Store(int32(uhistKeepFromConfig(config)))
+	updateChannelLoad(config)
 }
 
 // upchSetAutoDownload switches the background download on or off and saves
@@ -394,6 +397,8 @@ func upchStartup() {
 	upchState.fromTag, upchState.fromKind = fromTag, fromKind
 	upchState.viewAt = time.Time{}
 	upchState.mu.Unlock()
+	// After the index: the schedule's release must still be in it.
+	upchLoadSchedule(dir, kept)
 	go func() {
 		if len(dropped) > 0 {
 			upchRemoveEntries(dir, dropped)
@@ -437,6 +442,10 @@ func upchBestReady() (upchEntry, bool) {
 	installed, known := installedReleaseTime()
 	for _, e := range entries {
 		if installedReleaseTagIs(e.Tag) || uhistSkipped(e.Tag) {
+			continue
+		}
+		// A prerelease cached on Beta waits while the channel is Stable.
+		if e.Prerelease && !updateChannelBetaOn.Load() {
 			continue
 		}
 		if known && !upchEntryTime(e).After(installed) {
@@ -562,6 +571,11 @@ func upchVerifiedPhrase(verified string) string {
 // upchStartScheduler starts the background download loop once.
 func upchStartScheduler() {
 	upchSchedulerOnce.Do(func() {
+		// An install that waits for the charger (upchSetSchedule starts it
+		// too when the choice is made later).
+		if upchScheduled().When == upchWhenCharging {
+			upchStartWhenLoop()
+		}
 		go func() {
 			time.Sleep(upchStartupDelay)
 			ticker := time.NewTicker(upchPoll)
@@ -716,6 +730,322 @@ func upchWatchGame(ctx context.Context, cancel context.CancelFunc, stop <-chan s
 	}
 }
 
+// ── Install later ────────────────────────────────────────────────────────────
+//
+// A release in the cache can be set to install at the next start or while the
+// device is on the charger and left alone, never over a game (REL-9). The
+// choice is update-cache/when.json, so it outlives a restart; it is dropped
+// once the release is installed, rolled back from or no longer cached. The
+// install itself is the cached install every other path takes, with the
+// install bar over whatever is on screen and the restart at the end.
+
+const (
+	upchWhenNextStart = "next-start"
+	upchWhenCharging  = "charging-idle"
+	upchWhenFileName  = "when.json"
+	// upchWhenIdle is how long nobody must have touched a charging device
+	// before a scheduled install restarts JukaHub.
+	upchWhenIdle = 15 * time.Minute
+	// upchWhenPoll is how often the charger case looks; upchWhenRetry spaces
+	// attempts after one that failed, so a full card is not retried every poll.
+	upchWhenPoll  = time.Minute
+	upchWhenRetry = time.Hour
+	// upchWhenStartDelay lets Home appear before a next-start install begins,
+	// so its progress shows over the screen rather than over nothing.
+	upchWhenStartDelay = 4 * time.Second
+	// upchWhenStartWindow is how long a start keeps looking for a quiet
+	// moment for a next-start install, every upchWhenStartRetry.
+	upchWhenStartWindow = 2 * time.Minute
+	upchWhenStartRetry  = 5 * time.Second
+)
+
+// upchWhenFile is update-cache/when.json.
+type upchWhenFile struct {
+	Tag   string `json:"tag"`
+	When  string `json:"when"`
+	SetAt string `json:"set_at,omitempty"`
+}
+
+// upchWhen is the schedule in memory; the file is written off the main thread.
+var upchWhen struct {
+	mu      sync.Mutex
+	v       upchWhenFile
+	lastTry time.Time
+}
+
+var upchWhenLoopOnce sync.Once
+
+// upchInstallDue is the policy for a scheduled install: never over a game or
+// another install; "next start" only in the first moments of a start;
+// "charging" only on the charger after upchWhenIdle without input.
+func upchInstallDue(when string, atStart, inGame, busy, charging bool, idle time.Duration) bool {
+	if inGame || busy {
+		return false
+	}
+	switch when {
+	case upchWhenNextStart:
+		return atStart
+	case upchWhenCharging:
+		return charging && idle >= upchWhenIdle
+	}
+	return false
+}
+
+// upchScheduled is the current schedule ("" When: none).
+func upchScheduled() upchWhenFile {
+	upchWhen.mu.Lock()
+	defer upchWhen.mu.Unlock()
+	return upchWhen.v
+}
+
+// upchWhenLabel words a schedule for rows and toasts.
+func upchWhenLabel(when string) string {
+	switch when {
+	case upchWhenNextStart:
+		return "at the next start"
+	case upchWhenCharging:
+		if IsWindows() {
+			// A PC: on mains power (a laptop off its battery) and idle.
+			return "while plugged in and idle"
+		}
+		return "while charging and idle"
+	}
+	return "when you choose"
+}
+
+// upchSetSchedule sets (or, with when "", clears) when tag installs. Any
+// thread: the file is written on a goroutine of its own.
+func upchSetSchedule(tag, when string) {
+	v := upchWhenFile{Tag: tag, When: when, SetAt: time.Now().UTC().Format(time.RFC3339)}
+	if when == "" {
+		v = upchWhenFile{}
+	}
+	upchWhen.mu.Lock()
+	upchWhen.v = v
+	upchWhen.lastTry = time.Time{}
+	upchWhen.mu.Unlock()
+	if when == upchWhenCharging {
+		upchStartWhenLoop()
+	}
+	go upchSaveWhen()
+}
+
+// upchWhenWriteMu orders the writes of when.json.
+var upchWhenWriteMu sync.Mutex
+
+// upchSaveWhen writes the schedule as it is in memory when the write's turn
+// comes, not as it was when the write was asked for: two quick changes (next
+// start → off) can never leave the older one on disk, because the last write
+// always carries the newest choice. Off the main thread, or where a short
+// file write is fine.
+func upchSaveWhen() {
+	upchWhenWriteMu.Lock()
+	defer upchWhenWriteMu.Unlock()
+	cur := upchScheduled()
+	dir, err := upchDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(dir, upchWhenFileName)
+	if cur.When == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logPatch("update cache: the install time was not cleared: %v", err)
+		}
+		return
+	}
+	if err := upchWriteJSON(path, cur); err != nil {
+		logPatch("update cache: the install time was not saved: %v", err)
+	}
+}
+
+// upchLoadSchedule reads when.json at start (upchStartup, before the first
+// frame) and keeps it only while its release is cached and not installed.
+// A next-start install begins once Home is up.
+func upchLoadSchedule(dir string, kept []upchEntry) {
+	var v upchWhenFile
+	data, err := os.ReadFile(filepath.Join(dir, upchWhenFileName))
+	if err != nil {
+		return
+	}
+	cached := false
+	if json.Unmarshal(data, &v) == nil && v.Tag != "" {
+		for _, e := range kept {
+			if strings.EqualFold(e.Tag, v.Tag) {
+				cached = true
+				break
+			}
+		}
+	}
+	if !cached || installedReleaseTagIs(v.Tag) || uhistSkipped(v.Tag) ||
+		(v.When != upchWhenNextStart && v.When != upchWhenCharging) {
+		_ = os.Remove(filepath.Join(dir, upchWhenFileName))
+		return
+	}
+	upchWhen.mu.Lock()
+	upchWhen.v = v
+	upchWhen.mu.Unlock()
+	if v.When == upchWhenNextStart {
+		logPatch("update cache: %s was set to install at this start", v.Tag)
+		go upchNextStartLoop(v.Tag)
+	}
+}
+
+// upchNextStartLoop gives a next-start install the first minutes of the start:
+// while the device is busy (another install, a Patch job, a game resumed at
+// power-on, a video or music) it looks again every few seconds. If the moment
+// never comes it says so, and the choice waits for the next start.
+func upchNextStartLoop(tag string) {
+	time.Sleep(upchWhenStartDelay)
+	if safeModeActive() || strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
+		return // updates are off for this start; the choice waits
+	}
+	end := time.Now().Add(upchWhenStartWindow)
+	for {
+		s := upchScheduled()
+		if s.When != upchWhenNextStart || !strings.EqualFold(s.Tag, tag) {
+			return // done, changed or dropped
+		}
+		upchWhen.mu.Lock()
+		tried := !upchWhen.lastTry.IsZero()
+		upchWhen.mu.Unlock()
+		if tried {
+			return // the main thread took it (installing, or the battery said wait)
+		}
+		if !time.Now().Before(end) {
+			logPatch("update cache: %s was due at this start, but JukaHub stayed busy; it waits for the next start", tag)
+			tbxPost(func() {
+				ShowToast("JukaHub "+tag+" did not install at this start: JukaHub was busy. It tries again at the next start",
+					ToastKindInfo)
+			})
+			return
+		}
+		upchRunScheduled(true)
+		time.Sleep(upchWhenStartRetry)
+	}
+}
+
+// upchStartWhenLoop starts the charger check once. It wakes once a minute and
+// reads the battery only while an install waits for the charger.
+func upchStartWhenLoop() {
+	upchWhenLoopOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(upchWhenPoll)
+			defer ticker.Stop()
+			for range ticker.C {
+				if upchScheduled().When == upchWhenCharging {
+					upchRunScheduled(false)
+				}
+			}
+		}()
+	})
+}
+
+// upchRunScheduled starts the scheduled install when its moment has come. The
+// last word is the main thread's: a film or music it plays is not cut off.
+func upchRunScheduled(atStart bool) {
+	s := upchScheduled()
+	if s.When == "" || safeModeActive() || strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
+		return
+	}
+	now := time.Now()
+	upchWhen.mu.Lock()
+	recent := !atStart && !upchWhen.lastTry.IsZero() && now.Sub(upchWhen.lastTry) < upchWhenRetry
+	upchWhen.mu.Unlock()
+	if recent {
+		return
+	}
+	// The handheld reports its charger; Windows its power status (a laptop on
+	// its battery is not charging; a desktop is on mains power); any other
+	// desktop counts as plugged in.
+	var charging bool
+	switch {
+	case IsWindows():
+		charging = !emuDesktopOnBattery()
+	case !IsTrimuiDevice():
+		charging = true
+	default:
+		charging = getBatteryCharging()
+	}
+	busy := installBarActive() || upchPatchOpRunning() || upchMediaPlaying()
+	if !upchInstallDue(s.When, atStart, gameScreenSuspended(), busy, charging, userInputAge(now)) {
+		return
+	}
+	e, ok := upchBestReady()
+	if !ok || !strings.EqualFold(e.Tag, s.Tag) {
+		// Installed, rolled back from, or a newer one is cached: the choice
+		// was for that release, so it goes.
+		upchSetSchedule("", "")
+		return
+	}
+	tbxPost(func() { upchStartScheduledInstall(e, s.When) })
+}
+
+// upchStartScheduledInstall runs the scheduled install (main thread).
+func upchStartScheduledInstall(e upchEntry, when string) {
+	if gameScreenSuspended() || videoFullscreen || upchMediaPlaying() {
+		return
+	}
+	// A start that kept looking may have asked twice; one install runs.
+	if installBarActive() || upchPatchOpRunning() {
+		return
+	}
+	upchWhen.mu.Lock()
+	upchWhen.lastTry = time.Now()
+	upchWhen.mu.Unlock()
+	if err := updateBatteryGate(); err != nil {
+		ShowToast(err.Error()+" — the update waits", ToastKindWarning)
+		return
+	}
+	label := upchTagLabel(e.Tag, e.PublishedAt)
+	ShowToast("Installing JukaHub "+label+" "+upchWhenLabel(when)+", as you chose — JukaHub restarts", ToastKindInfo)
+	RunPatchOp("Installing JukaHub "+label, func(ctx context.Context) error {
+		return upchInstallScheduledOp(ctx, appConfig, e)
+	})
+}
+
+// upchInstallScheduledOp is upchInstallEntry with one more look for a game
+// between the check of the files and the swap.
+func upchInstallScheduledOp(ctx context.Context, config *Config, e upchEntry) error {
+	if gameScreenSuspended() {
+		return errors.New("a game is on screen; the update waits")
+	}
+	dir, err := upchDir()
+	if err != nil {
+		return err
+	}
+	installBarPhase(installPhaseVerify)
+	patchRowStatus(ComponentApp, StatusChecking)
+	upchDiskMu.Lock()
+	err = upchStageEntry(ctx, dir, e)
+	upchDiskMu.Unlock()
+	if err != nil {
+		patchRowStatus(ComponentApp, StatusFailed)
+		return err
+	}
+	if gameScreenSuspended() || upchMediaPlaying() {
+		return errors.New("a game, a video or music started; the update waits for the next good moment")
+	}
+	// The choice is used up once the swap begins: a swap that fails and rolls
+	// back must not run again at every start. Written now, not on a goroutine:
+	// JukaHub restarts soon.
+	upchWhen.mu.Lock()
+	upchWhen.v = upchWhenFile{}
+	upchWhen.mu.Unlock()
+	upchSaveWhen()
+	upchNoteInstallSource(e.Tag, "cache")
+	return OpApplyStagedSwap(ctx, config)
+}
+
+// upchMediaPlaying reports the video player or the music player in use
+// (paused counts): a scheduled install does not cut it off. Safe off the main
+// thread: both are read under their locks, as bgmQuietReason does.
+func upchMediaPlaying() bool {
+	music.mu.Lock()
+	playing := music.playing
+	music.mu.Unlock()
+	return playing || playerPhase() != "idle"
+}
+
 func upchBeginRun(tag string, cancel context.CancelFunc) bool {
 	upchState.mu.Lock()
 	defer upchState.mu.Unlock()
@@ -799,7 +1129,7 @@ func upchPrefetch(ctx context.Context, rel *githubRelease) error {
 		return fmt.Errorf("release verification failed: %w", err)
 	}
 	notes := truncateRunesSuffix(strings.TrimSpace(rel.Body), upchNotesMax, "")
-	entry := upchEntry{Tag: rel.TagName, PublishedAt: releaseStampISO(rel), Asset: target.Asset, Notes: notes}
+	entry := upchEntry{Tag: rel.TagName, PublishedAt: releaseStampISO(rel), Asset: target.Asset, Notes: notes, Prerelease: rel.Prerelease}
 	if derr := upchDownloadDelta(ctx, client, rel, target.Asset, manifest, incoming, &entry); derr != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()

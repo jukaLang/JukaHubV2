@@ -197,14 +197,5 @@ func bootCheckCores(config *Config) {
 	}
 }
 
-// bootFormatBytes renders a card size the way the Tools screen does.
-func bootFormatBytes(n int64) string {
-	const gib = 1 << 30
-	switch {
-	case n >= 10*gib:
-		return fmt.Sprintf("%.0f GB", float64(n)/gib)
-	case n >= gib:
-		return fmt.Sprintf("%.1f GB", float64(n)/gib)
-	}
-	return fmt.Sprintf("%.0f MB", float64(n)/(1<<20))
-}
+// bootFormatBytes renders a card size the way every screen does (formatSize).
+func bootFormatBytes(n int64) string { return formatSize(n) }

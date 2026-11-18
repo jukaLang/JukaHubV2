@@ -4,9 +4,10 @@ package main
 //
 // Three views on one page:
 //
-//   - the start: the paired devices to sync with, "Export encrypted saves"
-//     and "Import a saves file", and the result of the last job;
-//   - a comparison with one device: how many saves are the same, what comes
+//   - the start: Google Drive (cloudsync_ui.go: sign in, compare, automatic
+//     sync, sign out), the paired devices to sync with, "Export encrypted
+//     saves" and "Import a saves file", and the result of the last job;
+//   - a comparison with one device or Google Drive: how many saves are the same, what comes
 //     here, what goes there and what changed on both (both kept), file by file,
 //     with "Sync now" on top;
 //   - the saves files found on this device, for an import.
@@ -119,6 +120,7 @@ type ssyncScreenModel struct {
 	devices   []peerRowModel
 	exportSub string
 	importSub string
+	drive     cloudDriveModel
 }
 
 type ssyncScreenState struct {
@@ -137,6 +139,8 @@ type ssyncScreenState struct {
 	resultLine string
 	// openWith is a device to compare with as soon as the page opens.
 	openWith string
+	// gdriveRemote is Drive's file list behind a Drive comparison on screen.
+	gdriveRemote *gdriveRemote
 }
 
 var ssyncScreen ssyncScreenState
@@ -168,11 +172,13 @@ func ssyncOpenScreen(config *Config) {
 func ssyncHubTile() toolsHubTile {
 	t := toolsHubTile{
 		id: "ssync", label: "Save sync", icon: "sync",
-		value: "Saves the same on all your JukaHubs — no cloud",
+		value: "Saves the same on all your JukaHubs — Google Drive or Wi-Fi",
 	}
 	switch {
 	case ssyncWorkSnapshot().busy:
 		t.value, t.tone = "Working…", toolsHubToneBusy
+	case gdriveSettingsGet().ready():
+		t.value = "Google Drive · " + gdriveSettingsGet().accountLabel()
 	case peerEnabledFlag.Load():
 		if n := peerPairedCount(); n == 1 {
 			t.value = "1 paired device · or export a file"
@@ -214,15 +220,15 @@ func ssyncScreenEnter() {
 
 // ── Model ────────────────────────────────────────────────────────────────
 
-func ssyncBuildModel(now time.Time) ssyncScreenModel {
-	m := ssyncScreenModel{builtAt: now, work: ssyncWorkSnapshot(), enabled: peerEnabledFlag.Load()}
-	subtitle := "Your saves, the same on every JukaHub — over Wi-Fi or with one file"
+func ssyncBuildModel(now time.Time, config *Config) ssyncScreenModel {
+	m := ssyncScreenModel{builtAt: now, work: ssyncWorkSnapshot(), enabled: peerEnabledFlag.Load(), drive: cloudBuildDriveModel(config)}
+	subtitle := "Your saves, the same on every JukaHub — Google Drive, Wi-Fi or one file"
 	status, ink := "", ColorTextTertiary()
 	switch {
 	case m.work.busy:
 		status, ink = m.work.label, glassAccent()
 	case ssyncScreen.mode == ssyncModeCompare && ssyncScreen.cmp != nil:
-		subtitle = "Compared with " + ssyncScreen.cmp.PeerName + " at " + ssyncScreen.cmp.At.Format("15:04")
+		subtitle = "Compared with " + ssyncScreen.cmp.PeerName + " at " + clockDigits(config, ssyncScreen.cmp.At)
 	case ssyncScreen.mode == ssyncModeImport:
 		subtitle = "Choose a saves file to import"
 	}
@@ -290,7 +296,7 @@ func ssyncBuildCompareRows(cmp *ssyncComparison) ([]peerRowModel, string) {
 	summary := fmt.Sprintf("%d the same · %d to get · %d to send · %d changed on both",
 		len(plan.Same), plan.Pull, plan.Push, plan.Conflict)
 	if len(plan.Items) == 0 {
-		summary = fmt.Sprintf("All %d saves are already the same on both devices", len(plan.Same))
+		summary = fmt.Sprintf("All %d saves are already the same on both sides", len(plan.Same))
 	}
 	rows := make([]peerRowModel, 0, len(plan.Items))
 	for i, it := range plan.Items {
@@ -323,7 +329,7 @@ func ssyncRenderScreen(renderer *sdl.Renderer, config *Config) {
 	}
 	now := time.Now()
 	if now.Sub(ssyncScreen.model.builtAt) > 250*time.Millisecond {
-		ssyncScreen.model = ssyncBuildModel(now)
+		ssyncScreen.model = ssyncBuildModel(now, config)
 	}
 	m := &ssyncScreen.model
 	fonts, ok := tbxLoadFonts(config)
@@ -399,6 +405,7 @@ func ssyncRenderHome(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 		y += rowH + 8
 	}
 
+	y, row = cloudRenderDrive(renderer, config, fonts, frame, top, y, row, m.drive)
 	tbxDrawSection(renderer, config, "With a paired device", "sync", x, top+y, w)
 	y += tbxSectionHeight
 	switch {
@@ -443,6 +450,9 @@ func ssyncRenderCompare(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 
 	run := tbxRowSpec{icon: "sync", title: "Sync now", pill: "Sync", tone: tbxToneAccent,
 		subtitle: "Newest wins; both copies are kept when both changed; a safety snapshot is taken first"}
+	if cmp.PeerID == gdrivePeerID {
+		run.subtitle = "Changed on one side is copied; changed on both keeps both; a safety snapshot is taken first"
+	}
 	disabled := len(cmp.Plan.Items) == 0
 	if disabled {
 		run.subtitle, run.pill, run.tone, run.dim = "Nothing to copy", "", tbxToneNeutral, true
@@ -502,7 +512,7 @@ func ssyncRenderImport(renderer *sdl.Renderer, config *Config, fonts tbxFonts, f
 		spec := tbxRowSpec{
 			icon:     "download",
 			title:    b.Name,
-			subtitle: when.Local().Format("Jan 2, 15:04") + " · " + humanBytes(b.Size) + " · " + filepath.Base(filepath.Dir(b.Path)),
+			subtitle: formatDateTimeNear(config, when.Local(), time.Now()) + " · " + humanBytes(b.Size) + " · " + filepath.Base(filepath.Dir(b.Path)),
 			pill:     "Open",
 			tone:     tbxToneAccent,
 		}
@@ -558,6 +568,9 @@ func ssyncScreenClick(mx, my int32, config *Config) bool {
 func ssyncScreenHints() []FooterHint {
 	id := ssyncScreen.nav.focus
 	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}}
+	if h, ok := cloudHint(id); ok && !ssyncWorkSnapshot().busy {
+		return append(hints, h, FooterHint{Button: "B", Label: "Back"})
+	}
 	switch {
 	case ssyncWorkSnapshot().busy:
 		return []FooterHint{{Button: "B", Label: "Stop"}}
@@ -581,6 +594,9 @@ func ssyncScreenHints() []FooterHint {
 func ssyncActivate(config *Config, id string) {
 	if ssyncWorkSnapshot().busy {
 		ShowToast("Wait for the current job to finish (B stops it)", ToastKindInfo)
+		return
+	}
+	if cloudActivate(config, id) {
 		return
 	}
 	switch {
@@ -642,7 +658,7 @@ func ssyncOpenItemSheet(config *Config, id string) {
 		if !has {
 			return "not there"
 		}
-		return humanBytes(f.Size) + ", changed " + time.Unix(f.MTime, 0).Local().Format("Jan 2, 15:04")
+		return humanBytes(f.Size) + ", changed " + formatDateTimeNear(config, time.Unix(f.MTime, 0).Local(), time.Now())
 	}
 	body := "## " + it.Root + "\n" + it.Path + "\n\n" +
 		"## This device\n" + describe(it.Local, it.HasLocal) + "\n\n" +
@@ -653,6 +669,11 @@ func ssyncOpenItemSheet(config *Config, id string) {
 	case ssyncPush:
 		body += "This device's copy goes to " + cmp.PeerName + " (" + it.Reason + ")."
 	case ssyncConflict:
+		if cmp.PeerID == gdrivePeerID {
+			body += "The two copies differ and the last sync cannot say which one changed. This device's copy keeps the name on both sides and Drive's is kept beside it as " +
+				path.Base(it.CopyPath) + ", so nothing is lost."
+			break
+		}
 		body += "Both copies changed since the last sync. The newer one keeps this name on both devices and the other is kept beside it as " +
 			path.Base(it.CopyPath) + ", so nothing is lost."
 	}
@@ -706,6 +727,10 @@ func ssyncStartSync() {
 	cmp := ssyncScreen.cmp
 	if cmp == nil || len(cmp.Plan.Items) == 0 {
 		ShowToast("Nothing to copy — the saves are already the same", ToastKindInfo)
+		return
+	}
+	if cmp.PeerID == gdrivePeerID {
+		gdriveStartSync(*cmp)
 		return
 	}
 	ctx, ok := ssyncWorkStart("Syncing saves with " + cmp.PeerName + "…")
@@ -892,7 +917,7 @@ func ssyncOpenPreviewSheet(config *Config, prev ssyncImportPreview, passphrase s
 	plan := prev.Plan
 	when := prev.Header.Created
 	if t, err := time.Parse(time.RFC3339, when); err == nil {
-		when = t.Local().Format("Jan 2, 2006 15:04")
+		when = formatDateTime(config, t.Local())
 	}
 	body := "## In this file\n" + strconv.Itoa(len(prev.Bundle.Files)) + " saves from " + prev.From + ", exported " + when + "\n\n" +
 		"## What changes here\n" +

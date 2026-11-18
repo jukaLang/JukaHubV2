@@ -15,6 +15,28 @@ const BASE = 'https://example.test/';
 
 function bytes(s) { return new TextEncoder().encode(s); }
 
+// jsLiteral is JSON.stringify made safe to splice into JavaScript source:
+// JSON leaves "<", ">", "/" and the U+2028/U+2029 line separators as they are,
+// and those can end a <script> element or a string literal. The escape set is
+// the one CodeQL's js/bad-code-sanitization help recommends.
+const jsUnsafeChars = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\\': '\\\\',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\n': '\\n',
+  '\r': '\\r',
+  '\t': '\\t',
+  '\0': '\\0',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029',
+};
+function jsLiteral(value) {
+  return JSON.stringify(value).replace(/[<>\b\f\n\r\t\0\u2028\u2029]/g, (x) => jsUnsafeChars[x]);
+}
+
 // A stand-in for webJSTransformModule: line-oriented, enough for the modules in these tests, and producing the
 // same wrapper contract (DESIGN.md "M").
 function mockTransform(src) {
@@ -38,7 +60,7 @@ function mockTransform(src) {
     const def = /^(\w+)\s*(,|$)/.exec(clause);
     if (def) binds.push(`const ${def[1]} = __jh.imp(${i}).default;`);
     const named = /\{([^}]*)\}/.exec(clause);
-    if (named) binds.push(`const { ${names(named[1]).map((p) => `${JSON.stringify(p[0])}: ${p[1] || p[0]}`).join(', ')} } = __jh.imp(${i});`);
+    if (named) binds.push(`const { ${names(named[1]).map((p) => `${jsLiteral(p[0])}: ${p[1] || p[0]}`).join(', ')} } = __jh.imp(${i});`);
     return '';
   });
   body = body.replace(/^[ \t]*import\s+["']([^"']+)["']\s*;?/gm, (m, spec) => { idx(spec); return ''; });
@@ -46,11 +68,11 @@ function mockTransform(src) {
   body = body.replace(/^[ \t]*export\s*\{([^}]*)\}\s*from\s+["']([^"']+)["']\s*;?/gm, (m, list, spec) => {
     const map = {};
     names(list).forEach((p) => { map[p[1] || p[0]] = p[0]; });
-    pre.push(`__jh.reexp(${idx(spec)}, ${JSON.stringify(map)});`);
+    pre.push(`__jh.reexp(${idx(spec)}, ${jsLiteral(map)});`);
     return '';
   });
   body = body.replace(/^[ \t]*export\s*\{([^}]*)\}\s*;?/gm, (m, list) => {
-    names(list).forEach((p) => exps.push(`${JSON.stringify(p[1] || p[0])}: () => ${p[0]}`));
+    names(list).forEach((p) => exps.push(`${jsLiteral(p[1] || p[0])}: () => ${p[0]}`));
     return '';
   });
   body = body.replace(/^([ \t]*)export\s+default\s+(function|class)\s+(\w+)/gm, (m, ws, kw, name) => {
@@ -59,13 +81,14 @@ function mockTransform(src) {
   });
   body = body.replace(/^([ \t]*)export\s+default\s+/gm, (m, ws) => { exps.push('"default": () => __jh_default'); return `${ws}const __jh_default = `; });
   body = body.replace(/^([ \t]*)export\s+(const|let|var|function|class)\s+(\w+)/gm, (m, ws, kw, name) => {
-    exps.push(`${JSON.stringify(name)}: () => ${name}`);
+    exps.push(`${jsLiteral(name)}: () => ${name}`);
     return `${ws}${kw} ${name}`;
   });
   body = body.replace(/\bimport\.meta\b/g, '__jh.meta').replace(/\bimport\s*\(/g, '__jh.dyn(');
   const prologue = (exps.length ? `__jh.exp({ ${exps.join(', ')} });` : '') + pre.join('') + binds.join('');
   // This harness intentionally executes JavaScript supplied by in-repo test fixtures.
-  // codeql[js/bad-code-sanitization]
+  // Names and maps spliced into that code go through jsLiteral, not bare
+  // JSON.stringify, so they cannot close a <script> or end a line.
   return { code: `(function (__jh) { return (async function () { "use strict"; ${prologue}\n${body}\n})(); })`, imports, error: null };
 }
 

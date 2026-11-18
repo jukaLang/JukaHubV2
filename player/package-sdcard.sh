@@ -83,6 +83,14 @@ if [ -n "$HELPERS_DIR" ]; then
     cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$PKG/bin/"
     chmod 755 "$PKG/bin/chiaki-stream" "$PKG/bin/chiaki-regist"
     echo "    Remote Play helpers: $HELPERS_DIR"
+    # The Moonlight helper, optional (its build may fail on its own).
+    if [ -f "$HELPERS_DIR/moonlight-stream" ]; then
+        cp "$HELPERS_DIR/moonlight-stream" "$PKG/bin/"
+        chmod 755 "$PKG/bin/moonlight-stream"
+        echo "    Moonlight helper: $HELPERS_DIR/moonlight-stream"
+    else
+        echo "    (no moonlight-stream in $HELPERS_DIR: the package ships without Moonlight streaming)"
+    fi
 else
     echo "    (no Remote Play helpers in native/bin: the package ships without Remote Play streaming)"
 fi
@@ -91,16 +99,20 @@ fi
 STT_DIR=native/bin/juka-whisper
 STT_BIN_SHA=$(awk '$1 == "binary" && $2 == "sha256" { print $3 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
 STT_VOSK_BIN_SHA=$(awk '$1 == "vosk" && $2 == "binary" && $3 == "sha256" { print $4 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
-if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny.bin" ] && [ -f "$STT_DIR/LICENSE.txt" ] && \
+# Whisper tiny with 8-bit weights, which build-stt.sh made from the pinned
+# model (BUILDINFO.txt names both digests).
+STT_MODEL_SHA=$(awk '$1 == "model" && $2 == "sha256" { print $3 }' "$STT_DIR/BUILDINFO.txt" 2>/dev/null || true)
+if [ -f "$STT_DIR/whisper-cli" ] && [ -f "$STT_DIR/ggml-tiny-q8_0.bin" ] && [ -f "$STT_DIR/LICENSE.txt" ] && \
     [ -f "$STT_DIR/vosk-cli" ] && [ -f "$STT_DIR/libvosk.so" ] && [ -f "$STT_DIR/vosk-model-small-en-us-0.15.zip" ] && [ -f "$STT_DIR/VOSK_LICENSE.txt" ] && \
-    [ -n "$STT_BIN_SHA" ] && [ -n "$STT_VOSK_BIN_SHA" ] && \
+    [ -n "$STT_BIN_SHA" ] && [ -n "$STT_VOSK_BIN_SHA" ] && [ -n "$STT_MODEL_SHA" ] && \
+    grep -q '^source model sha256 be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21$' "$STT_DIR/BUILDINFO.txt" && \
     [ "$(sha256sum "$STT_DIR/whisper-cli" | cut -d' ' -f1)" = "$STT_BIN_SHA" ] && \
     [ "$(sha256sum "$STT_DIR/vosk-cli" | cut -d' ' -f1)" = "$STT_VOSK_BIN_SHA" ] && \
     printf '%s  %s\n' 0e9df29f060a93cf3df3263a4d3635e1b75688a5fd84e86ade1599372e3c9597 "$STT_DIR/libvosk.so" | sha256sum -c - > /dev/null && \
     printf '%s  %s\n' 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498 "$STT_DIR/vosk-model-small-en-us-0.15.zip" | sha256sum -c - > /dev/null && \
-    printf '%s  %s\n' be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21 "$STT_DIR/ggml-tiny.bin" | sha256sum -c - > /dev/null; then
+    printf '%s  %s\n' "$STT_MODEL_SHA" "$STT_DIR/ggml-tiny-q8_0.bin" | sha256sum -c - > /dev/null; then
     mkdir -p "$PKG/juka-whisper"
-    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny.bin" "$STT_DIR/BUILDINFO.txt" "$STT_DIR/LICENSE.txt" \
+    cp "$STT_DIR/whisper-cli" "$STT_DIR/ggml-tiny-q8_0.bin" "$STT_DIR/BUILDINFO.txt" "$STT_DIR/LICENSE.txt" \
         "$STT_DIR/vosk-cli" "$STT_DIR/libvosk.so" "$STT_DIR/VOSK_LICENSE.txt" "$PKG/juka-whisper/"
     unzip -q "$STT_DIR/vosk-model-small-en-us-0.15.zip" -d "$PKG/juka-whisper"
     test -s "$PKG/juka-whisper/vosk-model-small-en-us-0.15/am/final.mdl"
@@ -156,6 +168,7 @@ readelf -d "$PKG/$APP_NAME" | grep NEEDED || true
 say "Staging app files"
 cp -f trimui/Apps/$APP_DIR_NAME/config.json "$PKG/config.json"
 cp -f launch.sh                            "$PKG/launch.sh"
+cp -f trimui/setterm                       "$PKG/setterm"
 cp -f trimui/Apps/$APP_DIR_NAME/icon.png     "$PKG/icon.png"
 cp -f trimui/jukaconfig.device.json          "$PKG/jukaconfig.json"
 cp -f Inter-Regular.ttf                      "$PKG/Inter-Regular.ttf"
@@ -165,7 +178,7 @@ cp -f background.jpg                         "$PKG/background.jpg"
 if [ -f ../SECURITY.md ]; then
     cp -f ../SECURITY.md "$PKG/SECURITY.md"
 fi
-chmod +x "$PKG/launch.sh" "$PKG/$APP_NAME"
+chmod +x "$PKG/launch.sh" "$PKG/setterm" "$PKG/$APP_NAME"
 
 # ------------------------------------------------------------------ 3. tools
 if [ "$WITH_YTDLP" = "1" ]; then

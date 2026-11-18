@@ -32,7 +32,7 @@ package main
 //
 // On the TrimUI the firmware keeps a level of its own: "brightness" in
 // /mnt/UDISK/system.json, eleven steps, which its keymon re-reads when the
-// file changes and its brightness keys move. So there the slider walks the
+// file changes and the stock Settings slider moves. So there the slider walks the
 // firmware's 10% steps, every level the user sets is written back to the file
 // (brightness_trimui.go), each step is written with the panel level the
 // firmware itself was seen to use for it (brightnessFirmwareCurve), and
@@ -86,12 +86,12 @@ const (
 	// the floor was seen this session.
 	brightnessUndimDefault = 60
 
-	// brightnessHardwareKeyDelay gives the firmware time to apply its own
-	// brightness keys before the level is read back.
+	// brightnessHardwareKeyDelay gives firmware variants that use a volume-key
+	// combination time to apply a brightness change before the readback.
 	brightnessHardwareKeyDelay = 300 * time.Millisecond
 
 	// brightnessFirmwareFileCheck is how often the TrimUI's settings file is
-	// looked at for a change made by the firmware (its brightness keys).
+	// looked at for a change made in the firmware's Settings screen.
 	brightnessFirmwareFileCheck = time.Second
 
 	// brightnessFullPct is the top of the scale; the QR card borrows it.
@@ -101,6 +101,9 @@ const (
 	// scale (brightness_disp_linux.go). It lives here so the percentage
 	// mapping builds and is tested on every host.
 	dispBrightnessMax = 255
+	// The stock Smart Pro 1.1.0 Settings slider reports 220 at step 10.
+	// /dev/disp itself accepts 255, but that is above the firmware's maximum.
+	trimuiSmartProFirmwareMax = 220
 )
 
 // brightnessLevel is the cached level. pct is 0..100; known is false until
@@ -176,11 +179,14 @@ var brightnessLastRaw atomic.Int32
 // int32; clamping here prevents a malformed max_brightness from wrapping a
 // value negative when it is stored.
 func brightnessRawAtomic(raw int) int32 {
-	if raw < 0 {
-		raw = 0
+	// Each bound returns: the conversion runs only where both tests passed,
+	// which is the shape CodeQL's integer-conversion check can follow (a
+	// clamped-and-reassigned value merges back unchecked for it).
+	if raw <= 0 {
+		return 0
 	}
 	if raw > math.MaxInt32 {
-		raw = math.MaxInt32
+		return math.MaxInt32
 	}
 	return int32(raw)
 }
@@ -254,10 +260,13 @@ func brightnessRunProbe() {
 
 // brightnessFindBackend picks the backend, best first, and reads the level on
 // the way (ok=false when it cannot say). See the file comment for the order.
-// On the Smart Pro and the Brick the display driver comes first even if a
-// sysfs backlight shows up: it is the path their firmware drives. The newer
-// TrimUI boards (Smart Pro S, Brick Pro) run a newer kernel whose backlight
-// has a sysfs device, which comes first there.
+// On the A133P boards (Smart Pro, Brick, Brick Pro, all on the 4.9 BSP
+// kernel) the display driver comes first even if a sysfs backlight shows up:
+// it is the path their firmware drives. The Smart Pro S (A523, 5.15 kernel,
+// DRM display) has a sysfs backlight device, which comes first there. Either
+// way the other backend is still tried when the first does not answer, and the
+// software dimmer is the last resort, so a wrong guess costs an order, never
+// the control.
 func brightnessFindBackend() (string, brightnessReading) {
 	if b, pct, ok := brightnessPlatformProbe(); b != "" {
 		return b, brightnessReading{pct: pct, ok: ok, step: -1}
@@ -278,14 +287,16 @@ func brightnessFindBackend() (string, brightnessReading) {
 	return b, brightnessRead(b)
 }
 
-// brightnessNewerTrimui reports a TrimUI board on the newer kernel (TG5050,
-// TG4040), where the backlight is a sysfs device.
+// brightnessNewerTrimui reports a TrimUI board whose backlight is a sysfs
+// device first: the model table says so (the Smart Pro S), or the running
+// kernel is 5.x or later, which no /dev/disp-first A133P firmware ships. The
+// Brick Pro used to be listed here as "newer", but it is the Brick's A133P on
+// a 4.9 kernel, whose firmware drives /dev/disp.
 func brightnessNewerTrimui() bool {
-	switch DetectDevice() {
-	case DeviceTrimuiSmartProS, DeviceTrimuiBrickPro:
+	if deviceHardwareCurrent().Backlight == brightnessBackendSysfs {
 		return true
 	}
-	return false
+	return deviceKernelMajor(deviceKernelRelease()) >= 5
 }
 
 // dispBrightnessAnswers reports whether the display driver answers the
@@ -460,10 +471,15 @@ func setScreenBrightnessVia(b string, pct int) error {
 // brightnessRawForLevel is the raw level a percentage is written as on b: on
 // a TrimUI the raw level the firmware itself was seen to use for that step,
 // otherwise the linear mapping (brightnessRawFor), which keeps the floor.
+// On the stock Smart Pro the fallback uses the firmware's measured 220 top,
+// so a step not yet learned does not jump above the stock slider's range.
 func brightnessRawForLevel(b string, pct, max int) int {
 	if brightnessFirmwareSync(b) {
 		if raw := int(brightnessFirmwareCurve[trimuiBrightnessStepFor(pct)].Load()); raw > 0 && raw <= max {
 			return raw
+		}
+		if b == brightnessBackendDisp && DetectDevice() == DeviceTrimuiSmartPro && max > trimuiSmartProFirmwareMax {
+			max = trimuiSmartProFirmwareMax
 		}
 	}
 	return brightnessRawFor(pct, max)
@@ -544,9 +560,8 @@ func brightnessPollInterval(b string, open bool) (interval time.Duration, polls 
 // alarm, Quick Settings), which would otherwise keep the pad while invisible;
 // applies a saved level waiting for the probe; keeps Quick Settings' slider
 // (and the Settings row built on it) on the cached level; and on a TrimUI
-// looks at the firmware's settings file once a second, so its brightness keys
-// (START + L/R, which JukaHub never sees as a brightness key) are read back at
-// once instead of on the next poll.
+// looks at the firmware's settings file once a second, so a change made in
+// stock Settings is read back without waiting for the next idle poll.
 func brightnessFrameTick() {
 	brightnessNoteWindow()
 	b := brightnessCachedBackend()
@@ -678,9 +693,9 @@ func brightnessRefreshNow() {
 }
 
 // brightnessNoteHardwareKey is called by the hardware key watcher
-// (volumebuttons.go): a firmware brightness chord that holds a volume key is
-// applied by the firmware itself, so the level is read back a moment later
-// instead of on the next poll. Only the cheap backends are read for it.
+// (volumebuttons.go). Some firmware variants use volume-key combinations for
+// brightness, so the level is read back a moment later. On stock Smart Pro
+// firmware this extra read just confirms the unchanged level.
 func brightnessNoteHardwareKey() {
 	switch brightnessKnownBackend() {
 	case brightnessBackendDisp, brightnessBackendSysfs:

@@ -789,7 +789,7 @@ func (h *HomeLayout) dynMove(direction FocusDirection) HomeFocusID {
 	// the tile under them.
 	if direction == FocusDown {
 		switch cur {
-		case HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusQR:
+		case HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusPC, HomeFocusQR:
 			if id := h.dynEntryBelow(h.Items[cur].Rect); id != "" && h.Focus.Set(id) {
 				h.Focus.Remember()
 				h.dynEnsureVisible(id)
@@ -1003,7 +1003,7 @@ func (h *HomeLayout) dynHeaderAbove(cur HomeFocusID) HomeFocusID {
 		}
 		return best
 	}
-	if id := pick([]HomeFocusID{HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusQR}); id != "" {
+	if id := pick([]HomeFocusID{HomeFocusSearch, HomeFocusPS4, HomeFocusPS5, HomeFocusX1, HomeFocusPC, HomeFocusQR}); id != "" {
 		return id
 	}
 	return pick([]HomeFocusID{HomeFocusBrightness, HomeFocusVolume, HomeFocusBluetooth, HomeFocusWiFi, HomeFocusWeather,

@@ -180,6 +180,95 @@ var romFileExtensions = map[string]bool{
 	".ws": true, ".wsc": true, ".ngp": true, ".32x": true, ".p8": true,
 }
 
+// romSystemExtensions replaces romFileExtensions for a console whose emulator
+// opens only a few formats. Xenia Canary starts an Xbox 360 disc image, an
+// extracted game's default.xex and a ZArchive (.zar, Canary since 2023); a
+// .zip, .7z, .bin or .chd in Roms/XBOX360 was a game it could not open.
+var romSystemExtensions = map[string]map[string]bool{
+	"Xbox 360": {".iso": true, ".xiso": true, ".xex": true, ".zar": true},
+}
+
+// romXexDefault is the executable an extracted Xbox 360 game starts from.
+const romXexDefault = "default.xex"
+
+// romListsFile reports whether a scan lists the file at path as a game of
+// system, by its lower-case extension ext. Every other .xex of an extracted
+// Xbox 360 game is a module the game loads, not a game: only default.xex and
+// a lone homebrew .xex straight in the console's folder (dir) count.
+func romListsFile(system, dir, path, ext string) bool {
+	allowed, own := romSystemExtensions[system]
+	if !own {
+		return romFileExtensions[ext]
+	}
+	if ext == ".xex" {
+		return strings.EqualFold(filepath.Base(path), romXexDefault) || filepath.Dir(path) == dir
+	}
+	return allowed[ext]
+}
+
+// romGameStem is the name a game file goes by: its name without the
+// extension, or for an extracted Xbox 360 game's default.xex the name of the
+// folder it is in ("Halo 3/default.xex" is Halo 3), with the game's folder in
+// front of a disc's ("Halo 3/Disc 1/default.xex" is "Halo 3 (Disc 1)"). A
+// default.xex straight in the console's folder keeps its own name ("default"),
+// not the console's. Titles and covers use it. No file system access.
+func romGameStem(path string) string {
+	base := filepath.Base(path)
+	if strings.EqualFold(base, romXexDefault) {
+		parent := filepath.Dir(path)
+		if dir := romStemFolder(parent); dir != "" {
+			if romDiscFolder(dir) {
+				if game := romStemFolder(filepath.Dir(parent)); game != "" {
+					return game + " (" + dir + ")"
+				}
+			}
+			return dir
+		}
+	}
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// romStemFolder is the name of the folder at dir when it can name a game: ""
+// for the file system's root and for a console's own folder (Roms/XBOX360,
+// NextUI's "Xbox 360 (XBOX360)").
+func romStemFolder(dir string) string {
+	name := filepath.Base(dir)
+	if name == "" || name == "." || name == string(filepath.Separator) || strings.HasSuffix(name, ":") {
+		return ""
+	}
+	if _, console := romSystemAliases[strings.ToLower(name)]; console {
+		return ""
+	}
+	if _, tag, tagged := nextuiFolderTag(name); tagged {
+		if _, console := nextuiTagSystem(tag); console {
+			return ""
+		}
+	}
+	return name
+}
+
+// romDiscFolder reports a folder named for one disc of a game: "Disc 1",
+// "disc2", "Disk_3".
+func romDiscFolder(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, prefix := range []string{"disc", "disk"} {
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		num := strings.TrimLeft(lower[len(prefix):], " _-")
+		if num == "" || len(num) > 2 {
+			return false
+		}
+		for _, r := range num {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // romSheetMaxBytes bounds how much of a .cue, .gdi or .m3u is read: real sheets
 // are a few hundred bytes, and a mislabelled multi-megabyte file must not be
 // slurped by a library scan.
@@ -370,6 +459,7 @@ func scanROMLibrary(roots []string) romScanReport {
 	report := romScanReport{Roots: append([]string(nil), roots...), Counts: make(map[string]int)}
 	pluginByExt, pluginByFolder := plugxROMFormats()
 	seen := make(map[string]bool)
+	onNextUI := nextuiActive()
 	for _, root := range roots {
 		entries, err := os.ReadDir(root)
 		if err != nil {
@@ -379,14 +469,21 @@ func scanROMLibrary(roots []string) romScanReport {
 			if !systemDir.IsDir() || skipScanEntryName(systemDir.Name()) {
 				continue
 			}
-			system, ok := romSystemAliases[strings.ToLower(systemDir.Name())]
-			if !ok {
+			// "GBA", or NextUI's "Game Boy Advance (GBA)" (nextui.go).
+			system, tagged, ok := romFolderSystem(systemDir.Name(), pluginByFolder)
+			if tagged && !onNextUI {
+				// Elsewhere (CrossMix, stock, Windows) only the folders JukaHub
+				// always read: a "Tools (old)" folder there is no console whose
+				// every file is a game.
 				system, ok = pluginByFolder[romPluginFolderKey(systemDir.Name())]
+				tagged = false
 			}
 			if !ok {
 				continue
 			}
-			_ = filepath.WalkDir(filepath.Join(root, systemDir.Name()), func(path string, entry os.DirEntry, walkErr error) error {
+			maps := nextuiMapCache{}
+			systemPath := filepath.Join(root, systemDir.Name())
+			_ = filepath.WalkDir(systemPath, func(path string, entry os.DirEntry, walkErr error) error {
 				if walkErr != nil || entry == nil {
 					return nil
 				}
@@ -400,11 +497,24 @@ func scanROMLibrary(roots []string) romScanReport {
 				}
 				ext := strings.ToLower(filepath.Ext(entry.Name()))
 				pluginSystem, pluginExt := pluginByExt[ext]
-				if entry.IsDir() || (!romFileExtensions[ext] && !pluginExt) {
+				// In a PICO-8 folder a .p8.png is a cart, not a picture
+				// (pico8native.go): Splore's favourites are copied in as those.
+				// Not in an art folder (Imgs, .media): there it is a box-art
+				// picture named after a cart.
+				if !entry.IsDir() && pico8CartInFolder(system.Name, entry.Name()) &&
+					!plugGameSkipDir[strings.ToLower(filepath.Base(filepath.Dir(path)))] {
+					ext, pluginExt = ".p8", false
+				}
+				if entry.IsDir() || (!romListsFile(system.Name, systemPath, path, ext) && !pluginExt && !(tagged && nextuiListsFile(entry.Name()))) {
 					return nil
 				}
 				clean := filepath.Clean(path)
 				if seen[clean] {
+					return nil
+				}
+				// A map.txt name starting with "." hides the file in NextUI
+				// (an arcade BIOS zip): not a game here either.
+				if tagged && maps.hidden(clean) {
 					return nil
 				}
 				seen[clean] = true
@@ -437,7 +547,7 @@ func romArtworkPath(rom scannedROM, root string) string {
 	if strings.TrimSpace(root) == "" {
 		return ""
 	}
-	stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
+	stem := romGameStem(rom.Path)
 	if stem == "" || stem == "." || stem == string(filepath.Separator) {
 		return ""
 	}
@@ -456,17 +566,19 @@ func artworkCoverPresent(path string) bool {
 }
 
 // artworkMissTTL is how long a "not found" answer is trusted. The thumbnail
-// set gains covers over time, so a miss is retried after a month instead of
+// set gains covers over time, so a miss is retried after a while instead of
 // being permanent — but a library with 200 unmatched homebrew ROMs does not hit
-// the network for all of them on every fetch.
-const artworkMissTTL = 30 * 24 * time.Hour
+// the network for all of them on every fetch. Two weeks, not a month: the
+// server's lists refresh as often (artworkIndexRefresh), and more pictures
+// beat fewer.
+const artworkMissTTL = 14 * 24 * time.Hour
 
 const artworkMissFile = ".missing-art.json"
 
 // artworkMissVersion stamps the not-found cache. It is bumped whenever title
 // matching changes: a title that was "not found" under the old lookup deserves
-// one more try instead of waiting out the 30-day window.
-const artworkMissVersion = 5
+// one more try instead of waiting out the artworkMissTTL window.
+const artworkMissVersion = 6
 
 // artworkVariantLimit caps how many names one ROM asks the thumbnail server
 // for. A library fetch walks every ROM, so a title that generates ten lookups
@@ -629,11 +741,14 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		if taken {
 			return artSkipped
 		}
-		stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
+		stem := romGameStem(rom.Path)
 		if stem == "" {
 			return artMissing
 		}
-		key := artworkMissKey(rom.Collection, stem)
+		// Filed under the name the covers are looked up by: a name the user
+		// gives the game later (Game options → Name for covers) is a new
+		// question, not one the cache already answered.
+		key := artworkMissKey(rom.Collection, artworkLookupName(stem))
 		missesMu.Lock()
 		recent := misses != nil && artworkRecentlyMissing(misses, key, now, ttl)
 		missesMu.Unlock()
@@ -671,7 +786,24 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		done    int
 		next    atomic.Int64
 		wg      sync.WaitGroup
+		// saveMu keeps two interim saves of the not-found cache from writing
+		// the same temporary file at once; each takes its copy under it, so a
+		// later save never writes an older copy.
+		saveMu sync.Mutex
 	)
+	saveMisses := func() {
+		saveMu.Lock()
+		defer saveMu.Unlock()
+		missesMu.Lock()
+		snapshot := make(map[string]time.Time, len(misses))
+		for key, at := range misses {
+			snapshot[key] = at
+		}
+		missesMu.Unlock()
+		if err := saveArtworkMisses(dest, snapshot); err != nil {
+			logWarn("art", "cannot save the not-found cache: %v", err)
+		}
+	}
 	workers := artworkFetchWorkers
 	if workers > len(roms) {
 		workers = len(roms)
@@ -702,7 +834,14 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 				if progress != nil {
 					progress(done)
 				}
+				// Every artworkMissSaveEvery titles the answers so far reach
+				// the card, so a power cut or a crash in a long fetch loses at
+				// most that many "not found"s (the caller saves the rest).
+				saveNow := misses != nil && done%artworkMissSaveEvery == 0 && done < len(roms)
 				countMu.Unlock()
+				if saveNow {
+					saveMisses()
+				}
 			}
 		}()
 	}
@@ -714,6 +853,10 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 
 // artworkFetchWorkers is how many covers are downloaded at once.
 const artworkFetchWorkers = 4
+
+// artworkMissSaveEvery is how many titles a fetch handles between two saves of
+// the not-found cache (LIB-19). A save is one small file rewrite.
+const artworkMissSaveEvery = 50
 
 // artworkOrderChunk is how many games of one console a fetch takes before it
 // moves on to the next console (artworkFetchOrder).
@@ -862,9 +1005,13 @@ var artworkAliasTitles = map[string]string{
 	"zelda 2":  "Zelda II - The Adventure of Link",
 }
 
-// artworkAliasFor looks a name up in the alias table, ignoring dump tags,
-// punctuation and case.
+// artworkAliasFor looks a name up in the alias tables, ignoring dump tags,
+// punctuation and case: the user's own (data/artwork-aliases.json, Game
+// options → Name for covers, artwork_choose.go) first, then the built-in one.
 func artworkAliasFor(name string) (string, bool) {
+	if alias, ok := artworkUserAliasFor(name); ok {
+		return alias, true
+	}
 	alias, ok := artworkAliasTitles[artworkNormalizeTitle(name)]
 	return alias, ok && alias != ""
 }
@@ -1097,10 +1244,6 @@ var artworkFetchState = struct {
 	finished uint64             // bumped on every completion; the library redraws art when it moves
 	cancel   context.CancelFunc // stops the loop between two games
 }{}
-
-func startROMArtworkFetch(roms []scannedROM) bool {
-	return startArtworkFetch(roms, nil, romArtworkDir(), true)
-}
 
 // startLibraryArtworkFetch downloads the covers for a scanned list and keeps the
 // not-found cache, so pressing the action again only asks about new titles.

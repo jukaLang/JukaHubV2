@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,8 +133,8 @@ func TestDownloadFileRejectsTinyBody(t *testing.T) {
 		_, _ = w.Write([]byte("tiny"))
 	}))
 	defer srv.Close()
-	if err := downloadFile(srv.URL, filepath.Join(t.TempDir(), "out.bin")); err == nil {
-		t.Error("downloadFile should reject bodies under 4096 bytes")
+	if err := downloadFileWithProgressCtx(context.Background(), srv.URL, filepath.Join(t.TempDir(), "out.bin"), nil); err == nil {
+		t.Error("downloadFileWithProgressCtx should reject bodies under 4096 bytes")
 	}
 }
 
@@ -148,9 +149,9 @@ func TestGetToolPathNeverReturnsDirectory(t *testing.T) {
 	}
 }
 
-func TestResolveToolURLRejectsUnknownRepo(t *testing.T) {
-	if _, err := resolveToolURL("evil/exfiltrate", "", "x.zip"); err == nil {
-		t.Error("resolveToolURL must reject repos outside the allowlist")
+func TestResolveToolAssetRejectsUnknownRepo(t *testing.T) {
+	if _, err := resolveToolAsset("evil/exfiltrate", "", "x.zip"); err == nil {
+		t.Error("resolveToolAsset must reject repos outside the allowlist")
 	}
 }
 

@@ -311,7 +311,7 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 		// never be drawn through each other.
 		meta := ""
 		if stamp, err := time.Parse(time.RFC3339, mark.Added); err == nil {
-			meta = stamp.Local().Format("Jan 2, 2006")
+			meta = formatDate(config, stamp.Local())
 		}
 		if homeKey != "" && browserBookmarkKey(mark.URL) == homeKey {
 			meta = strings.TrimSuffix("Home · "+meta, " · ")

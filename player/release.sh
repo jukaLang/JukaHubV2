@@ -41,6 +41,15 @@ echo "Packaging JukaHub v${VERSION}"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 BUILD_DATE="${BUILD_TIME:0:10}"
 LDFLAGS="-s -w -X main.buildDate=${BUILD_DATE} -X main.buildTime=${BUILD_TIME}"
+# Google Drive sign-in (docs/CLOUD_SYNC.md): the OAuth client goes in only
+# when JUKAHUB_GOOGLE_CLIENT_ID is set.
+if [ -n "${JUKAHUB_GOOGLE_CLIENT_ID:-}" ]; then
+    LDFLAGS="$LDFLAGS -X main.googleOAuthClientID=${JUKAHUB_GOOGLE_CLIENT_ID} -X main.googleOAuthClientSecret=${JUKAHUB_GOOGLE_CLIENT_SECRET:-}"
+fi
+# Outlook sign-in for Mail (docs/EMAIL_CALENDAR.md), when JUKAHUB_MS_CLIENT_ID is set.
+if [ -n "${JUKAHUB_MS_CLIENT_ID:-}" ]; then
+    LDFLAGS="$LDFLAGS -X main.microsoftOAuthClientID=${JUKAHUB_MS_CLIENT_ID}"
+fi
 
 OUT="dist"
 rm -rf "$OUT"
@@ -77,6 +86,11 @@ for dir in native/bin bin; do
 done
 if [ -n "$HELPERS_DIR" ]; then
     echo "Remote Play helpers: $HELPERS_DIR"
+    # moonlight-stream, the Moonlight helper, is optional: its build may fail
+    # without the PS helpers' failing. Shipped beside them when present.
+    if [ ! -f "$HELPERS_DIR/moonlight-stream" ]; then
+        echo "WARNING: no moonlight-stream in $HELPERS_DIR; the TrimUI archives will ship without Moonlight streaming" >&2
+    fi
     # The helpers on their own as well: a JukaHub that has no bin/ downloads
     # this package by itself when PS Remote Play opens
     # (psremote_helpers_install.go). Same layout as docker-image.yml's.
@@ -85,8 +99,10 @@ if [ -n "$HELPERS_DIR" ]; then
     if ! (
         mkdir -p "$HELPER_PKG/bin" &&
         cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$HELPER_PKG/bin/" &&
+        { [ ! -f "$HELPERS_DIR/moonlight-stream" ] || cp "$HELPERS_DIR/moonlight-stream" "$HELPER_PKG/bin/"; } &&
         { [ ! -f "$HELPERS_DIR/BUILDINFO.txt" ] || cp "$HELPERS_DIR/BUILDINFO.txt" "$HELPER_PKG/bin/"; } &&
         chmod 755 "$HELPER_PKG/bin/chiaki-stream" "$HELPER_PKG/bin/chiaki-regist" &&
+        { [ ! -f "$HELPER_PKG/bin/moonlight-stream" ] || chmod 755 "$HELPER_PKG/bin/moonlight-stream"; } &&
         cd "$HELPER_PKG" && sha256sum bin/* > SHA256SUMS &&
         zip -q -r ../JukaHub-RemotePlay-linux-arm64.zip bin SHA256SUMS
     ); then
@@ -163,8 +179,10 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     mkdir -p "$TARGET_DIR"
     GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$TARGET_DIR/JukaHub" .
     cp Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png "$TARGET_DIR/"
+    cp trimui/setterm "$TARGET_DIR/setterm"
+    chmod 755 "$TARGET_DIR/setterm"
 
-    PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png)
+    PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh setterm config.json JukaPlayer.png)
     # SECURITY.md sits next to the binary for Tools -> Security & trust's reader.
     if [ -f ../SECURITY.md ]; then
         cp ../SECURITY.md "$TARGET_DIR/SECURITY.md"
@@ -176,6 +194,11 @@ for device in "${TRIMUI_DEVICES[@]}"; do
         cp "$HELPERS_DIR/chiaki-stream" "$HELPERS_DIR/chiaki-regist" "$TARGET_DIR/bin/"
         chmod 755 "$TARGET_DIR/bin/chiaki-stream" "$TARGET_DIR/bin/chiaki-regist"
         PKG_FILES+=(bin/chiaki-stream bin/chiaki-regist)
+        if [ -f "$HELPERS_DIR/moonlight-stream" ]; then
+            cp "$HELPERS_DIR/moonlight-stream" "$TARGET_DIR/bin/"
+            chmod 755 "$TARGET_DIR/bin/moonlight-stream"
+            PKG_FILES+=(bin/moonlight-stream)
+        fi
     else
         echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
     fi

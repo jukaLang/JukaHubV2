@@ -171,7 +171,7 @@ var emuDesktopSystems = []emuDesktopSystem{
 		System:   "PlayStation 2",
 		Folders:  []string{"ps2", "playstation 2", "playstation2", "sony - playstation 2"},
 		Emulator: "PCSX2",
-		Reason:   "PlayStation 2 emulation needs a far faster CPU and GPU than the A133P — a PC, or a recent Snapdragon-class phone.",
+		Reason:   "PlayStation 2 emulation needs a far faster CPU and GPU than the TrimUI chips (A133P, A523) — a PC, or a recent Snapdragon-class phone.",
 	},
 	{
 		System:   "PlayStation 3",
@@ -183,25 +183,25 @@ var emuDesktopSystems = []emuDesktopSystem{
 		System:   "Wii U",
 		Folders:  []string{"wiiu", "wii u", "nintendo - wii u"},
 		Emulator: "Cemu",
-		Reason:   "Cemu needs a desktop-class CPU and GPU; the A133P is far too slow for Wii U games.",
+		Reason:   "Cemu needs a desktop-class CPU and GPU; the TrimUI chips (A133P, A523) are far too slow for Wii U games.",
 	},
 	{
 		System:   "PS Vita",
 		Folders:  []string{"psvita", "vita", "psv", "playstation vita", "sony - playstation vita"},
 		Emulator: "Vita3K",
-		Reason:   "Vita3K needs a desktop-class CPU and a Vulkan GPU; the Smart Pro's GPU can't run it.",
+		Reason:   "Vita3K needs a desktop-class CPU and a Vulkan GPU; the TrimUI GPUs can't run it.",
 	},
 	{
 		System:   "GameCube",
 		Folders:  []string{"gc", "gamecube", "ngc", "nintendo - gamecube"},
 		Emulator: "Dolphin",
-		Reason:   "Dolphin needs a much faster CPU and GPU than the A133P; GameCube games would not reach playable speed.",
+		Reason:   "Dolphin needs a much faster CPU and GPU than the TrimUI chips (A133P, A523); GameCube games would not reach playable speed.",
 	},
 	{
 		System:   "Wii",
 		Folders:  []string{"wii", "nintendo - wii"},
 		Emulator: "Dolphin",
-		Reason:   "Dolphin needs a much faster CPU and GPU than the A133P; Wii games would not reach playable speed.",
+		Reason:   "Dolphin needs a much faster CPU and GPU than the TrimUI chips (A133P, A523); Wii games would not reach playable speed.",
 	},
 	{
 		System:  "Switch",

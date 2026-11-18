@@ -53,3 +53,6 @@ player/jukauser.json*
 
 # make os-package output (player/trimui/make-os-package.sh)
 /JukaHub-OS-Trimui.zip
+# Screenshots a run saves beside the app (screenshot.go)
+player/screenshots/
+player/Screenshots/

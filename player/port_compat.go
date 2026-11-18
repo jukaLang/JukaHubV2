@@ -8,9 +8,9 @@ package main
 // curated map below only overrides it where the community has checked a port by
 // hand — for a build that is 32-bit only, or one that is known to work.
 //
-// The states are deliberately three, not five: the panel either shows a badge
-// ("64-bit ready" / "32-bit only") or stays quiet when there is nothing to
-// judge. A guess without a manifest is worse than no badge.
+// The panel shows a badge when architecture or firmware libc decides whether
+// a port can run; otherwise it stays quiet. A guess without a manifest is
+// worse than no badge.
 
 import (
 	"encoding/json"
@@ -18,15 +18,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // portCompatState is the label the Ports panel shows.
 type portCompatState int
 
 const (
-	portCompatUnknown   portCompatState = iota // no manifest to judge by
-	portCompatSupported                        // ships an aarch64 (or arch-independent) build
-	portCompat32BitOnly                        // armhf/i386 only: cannot run here
+	portCompatUnknown        portCompatState = iota // no manifest to judge by
+	portCompatSupported                             // ships an aarch64 (or arch-independent) build
+	portCompat32BitOnly                             // armhf/i386 only: cannot run here
+	portCompatNeedsNewerLibc                        // architecture fits, firmware libc is too old
 )
 
 // portCompat is the verdict for one port folder.
@@ -48,8 +50,17 @@ var curatedPortCompat = map[string]portCompat{
 	"vkquake":     {State: portCompatSupported},
 }
 
-// archClass is what one architecture name means for this device, which is
-// aarch64 with glibc 2.23.
+var portHostGlibc struct {
+	once  sync.Once
+	value string
+}
+
+func portInstalledHostGlibc() string {
+	portHostGlibc.once.Do(func() { portHostGlibc.value = portCatalogHostGlibc() })
+	return portHostGlibc.value
+}
+
+// archClass is what one architecture name means for this ARM64 device.
 type archClass int
 
 const (
@@ -255,12 +266,15 @@ func portCompatForLauncher(launcher string) portCompat {
 		return portCompat{State: portCompatUnknown}
 	}
 	if c := portCompatibility(filepath.Dir(launcher)); c.State != portCompatUnknown {
-		return c
+		return privateGlibcPortCompat(launcher, c)
 	}
-	stem := strings.TrimSuffix(filepath.Base(launcher), filepath.Ext(launcher))
-	sibling := filepath.Join(filepath.Dir(launcher), stem)
-	if c := portCompatibility(sibling); c.State != portCompatUnknown {
-		return c
+	// The folder the script's GAMEDIR names (Data/ports/<name> on TrimUI,
+	// where PortMaster keeps the manifest), then <name>/ beside the script and
+	// in every ports folder (portDataDirCandidates).
+	for _, dir := range portDataDirCandidates(launcher) {
+		if c := portCompatibility(dir); c.State != portCompatUnknown {
+			return privateGlibcPortCompat(launcher, c)
+		}
 	}
 	return portCompat{State: portCompatUnknown}
 }
@@ -276,9 +290,52 @@ func portCompatibility(dir string) portCompat {
 		if len(pinned.Arch) == 0 {
 			pinned.Arch = manifest
 		}
+		if pinned.State == portCompatSupported {
+			return portCompatWithGlibc(pinned, portManifestMinGlibc(dir), portInstalledHostGlibc())
+		}
 		return pinned
 	}
-	return classifyPort(manifest)
+	c := classifyPort(manifest)
+	if c.State == portCompatSupported {
+		if need := portManifestMinGlibc(dir); need != "" {
+			return portCompatWithGlibc(c, need, portInstalledHostGlibc())
+		}
+	}
+	return c
+}
+
+func portCompatWithGlibc(c portCompat, need, have string) portCompat {
+	if c.State != portCompatSupported || need == "" || have == "" {
+		return c
+	}
+	need = strings.TrimPrefix(strings.TrimSpace(need), "GLIBC_")
+	if !elfVersionLess(have, "GLIBC_"+need) {
+		return c
+	}
+	return portCompat{State: portCompatNeedsNewerLibc, Arch: c.Arch,
+		Note: "GLIBC " + need + " (firmware has " + strings.TrimPrefix(have, "GLIBC_") + ")"}
+}
+
+// PortMaster records a port's minimum libc in attr.min_glibc. An installed
+// port can be newer than this stock firmware even when it has an ARM64 build.
+func portManifestMinGlibc(dir string) string {
+	raw, ok := portReadSmall(filepath.Join(dir, "port.json"))
+	if !ok {
+		return ""
+	}
+	var doc struct {
+		Attr struct {
+			MinGlibc string `json:"min_glibc"`
+		} `json:"attr"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return ""
+	}
+	return strings.TrimSpace(doc.Attr.MinGlibc)
+}
+
+func portCompatBlocked(state portCompatState) bool {
+	return state == portCompat32BitOnly || state == portCompatNeedsNewerLibc
 }
 
 // portCompatBadge is the tiny label the Ports panel puts next to a row. Unknown
@@ -289,6 +346,8 @@ func portCompatBadge(state portCompatState) string {
 		return "64-bit ready"
 	case portCompat32BitOnly:
 		return "32-bit only"
+	case portCompatNeedsNewerLibc:
+		return "Newer GLIBC"
 	}
 	return ""
 }

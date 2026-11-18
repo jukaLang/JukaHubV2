@@ -207,10 +207,17 @@ func visionChatMedia(prompt ChatMessage, history []ChatMessage) (files []ChatFil
 // file's excerpt already in it. With no picture left to show — a recording
 // alone, or a follow-up whose files are gone — it goes to the chat models as
 // text. The typing bubble says what Juka is doing until the answer starts.
-// Runs on chatRunAI's goroutine.
+// Runs on chatRunAI's goroutine. A wake calls it off like any Juka request
+// (chatAICancelForWake): ffmpeg, the transcript and the answer stop at once,
+// and chatRunAI keeps the question queued for when the network answers.
 func visionChatAsk(key string, models []string, promptID string, history []ChatMessage, question string, files []ChatFile, earlier bool) (string, error) {
 	ctx, cancel := context.WithTimeout(visionQuitCtx, visionChatTimeout)
 	defer cancel()
+	// runCtx is the one a wake cancels; the text-only ways below take it as
+	// the plain chat does (no six-minute cap: the client's 90 s is theirs).
+	runCtx := chatAIRunContext()
+	stopWake := context.AfterFunc(runCtx, cancel)
+	defer stopWake()
 	var pictures []jukaVisionImage
 	var clips []visionClip
 	nPictures, nVideos, nAudio := 0, 0, 0
@@ -262,7 +269,7 @@ func visionChatAsk(key string, models []string, promptID string, history []ChatM
 	}
 	if len(pictures) == 0 && len(clips) == 0 {
 		// A follow-up whose files are gone: a plain question.
-		return chatGroqAsk(key, models, buildGroqMessagesFrom(history, question), onDelta)
+		return chatGroqAskCtx(runCtx, key, models, buildGroqMessagesFrom(history, question), onDelta)
 	}
 	q := strings.TrimSpace(question)
 	if q == "" {
@@ -295,7 +302,7 @@ func visionChatAsk(key string, models []string, promptID string, history []ChatM
 	}
 	messages := buildGroqMessagesFrom(history, text)
 	if len(images) == 0 {
-		return chatGroqAsk(key, models, messages, onDelta)
+		return chatGroqAskCtx(runCtx, key, models, messages, onDelta)
 	}
 	reply, err := groqVisionChat(ctx, key, messages[:len(messages)-1], text, images, onDelta)
 	if err != nil && ctx.Err() != nil {

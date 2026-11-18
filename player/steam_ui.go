@@ -3,14 +3,16 @@ package main
 // steam_ui.go — Apps → Steam: the library panel, its game sheet and the
 // Account page.
 //
-// The library lists every game of the account with its cover, play time and
-// where it can be played, in three tabs (All, Installed, Downloads; L1/R1),
-// sorted by last played, name or play time (R2) and narrowed by a search
-// (L2 opens the keyboard). A plays the focused game — through the Steam app
-// here, or on a Steam PC of the account or a paired JukaHub PC — or installs
-// it; Y opens the game's sheet (bigger cover, details, Uninstall, which PC,
-// store page). Downloads in progress show a bar and are watched until they
-// finish.
+// The library lists every game of the account with its cover, play time,
+// Steam Deck rating (steam_compat.go) and where it can be played, in tabs
+// (All, Installed, Downloads and, on a handheld, Handheld; L1/R1), sorted by
+// last played, name or play time (R2) and narrowed by a search (L2 opens the
+// keyboard). A plays the focused game — through the Steam app here, on a
+// Steam PC of the account or a paired JukaHub PC, or on the handheld itself
+// through its PortMaster port (steam_ports.go) — or installs it; Y opens the
+// game's sheet (bigger cover, details, Uninstall, which PC, the port's
+// install, file copy and setup notes, store page). Downloads in progress show
+// a bar and are watched until they finish.
 //
 // X opens the Account page: the Steam app's QR sign-in (steam_auth.go) first,
 // then the phone (OpenID, a profile link or a Web API key), this PC's browser,
@@ -47,6 +49,9 @@ const (
 	steamTabAll steamTab = iota
 	steamTabInstalled
 	steamTabDownloads
+	// steamTabHandheld lists the games with a PortMaster port that may run
+	// on this handheld (steam_ports.go); it is skipped elsewhere.
+	steamTabHandheld
 	steamTabCount
 )
 
@@ -56,6 +61,8 @@ func (t steamTab) label() string {
 		return "Installed"
 	case steamTabDownloads:
 		return "Downloads"
+	case steamTabHandheld:
+		return "Handheld"
 	}
 	return "All games"
 }
@@ -107,6 +114,12 @@ const (
 	steamSheetTarget
 	steamSheetStore
 	steamSheetClose
+	// The PortMaster port's rows (steam_ports.go) and playing on a PC when
+	// A plays the port.
+	steamSheetPlayPC
+	steamSheetPortInstall
+	steamSheetPortCopy
+	steamSheetPortNotes
 )
 
 type steamSheetRow struct {
@@ -158,6 +171,18 @@ type steamPanelState struct {
 	pollGen    int
 	lastPoll   time.Time
 	watchUntil time.Time
+
+	// The library's PortMaster ports on a handheld (steam_ports.go): the
+	// last scan, whether one runs, and when the last scan and catalogue
+	// read happened.
+	ports        map[int]steamPortState
+	portsBusy    bool
+	portsGen     int
+	portsScanAt  time.Time
+	portsFetchAt time.Time
+	// notes shows the port's setup notes over the sheet, from notesScroll.
+	notes       bool
+	notesScroll int
 }
 
 var steamPanel steamPanelState
@@ -178,10 +203,15 @@ var (
 	steamTabRects    [steamTabCount]sdl.Rect
 	steamQRRect      sdl.Rect
 	steamVisibleRows int
+	// steamNotesRect is the setup notes' box and steamNotesPage the lines
+	// it shows, for touch scrolling.
+	steamNotesRect sdl.Rect
+	steamNotesPage int
 )
 
 // openSteamPanel opens the library from Apps (or Search).
 func openSteamPanel() {
+	closeMoonlightPanel() // drawn over this one, so it must not stay open
 	qs.open = false
 	toolsPanel.open = false
 	emuPanel.open = false
@@ -207,6 +237,8 @@ func openSteamPanel() {
 	}
 	PlayActivateSound()
 	steamPanelRefresh()
+	// On a handheld: which games have a PortMaster port (steam_ports.go).
+	steamPortsRefresh(true)
 }
 
 func steamResetHits() {
@@ -273,6 +305,7 @@ func steamPanelAccountChanged() {
 	}
 	steamPanel.busy = false
 	steamPanel.polling = false
+	steamPanel.portsScanAt = time.Time{} // the ports of the new list
 	steamPanelRefresh()
 }
 
@@ -334,6 +367,9 @@ func steamPanelApply(gen int, res steamRefreshResult) {
 	}
 	steamPanel.dirty = true
 	steamPanelKeepFocus(focused)
+	// Games the list did not have before may have ports: scan on the next
+	// frame.
+	steamPanel.portsScanAt = time.Time{}
 	if steamPanel.err != "" && len(steamPanel.games) == 0 {
 		ShowToast(steamPanel.err, ToastKindWarning)
 	}
@@ -354,7 +390,11 @@ func steamPanelAnyDownloading() bool {
 // steamPanelTick polls downloads while they run. Main loop, every frame;
 // one time compare when nothing downloads.
 func steamPanelTick() {
-	if !steamPanel.open || steamPanel.polling || steamPanel.busy {
+	if !steamPanel.open {
+		return
+	}
+	steamPortsTick()
+	if steamPanel.polling || steamPanel.busy {
 		return
 	}
 	now := time.Now()
@@ -438,9 +478,11 @@ func steamPanelApplyPoll(gen int, local bool, scanned []steamGame, present map[i
 			g.DlDone, g.DlTotal, g.DlPaused = s.DlDone, s.DlTotal, s.DlPaused
 		}
 		// A manifest that is gone is an uninstalled game; one that could
-		// not be read right now keeps what the list had.
+		// not be read right now keeps what the list had. A non-Steam game
+		// has no manifest: a shortcuts.vdf Steam is rewriting must not
+		// uninstall it until the next refresh.
 		for i := range games {
-			if !seen[games[i].AppID] && !present[games[i].AppID] {
+			if !seen[games[i].AppID] && !present[games[i].AppID] && !steamIsShortcut(games[i].AppID) {
 				games[i].Installed, games[i].Size = false, 0
 				games[i].DlDone, games[i].DlTotal = 0, 0
 			}
@@ -484,11 +526,15 @@ func steamVisibleGames() []steamGame {
 	for _, g := range steamPanel.games {
 		switch steamPanel.tab {
 		case steamTabInstalled:
-			if !g.Installed && !g.Remote.installed {
+			if !g.Installed && !g.Remote.installed && !steamPortReadyHere(g) {
 				continue
 			}
 		case steamTabDownloads:
 			if !g.steamDownloading() && !g.Remote.downloading() {
+				continue
+			}
+		case steamTabHandheld:
+			if _, ok := steamPortFor(g); !ok {
 				continue
 			}
 		}
@@ -567,6 +613,10 @@ func steamPanelMove(delta int) {
 	switch {
 	case steamPanel.page == steamPageQR:
 		return
+	case steamPanel.notes:
+		// Clamped while drawing, where the number of lines is known.
+		steamPanel.notesScroll = max(0, steamPanel.notesScroll+delta)
+		return
 	case steamPanel.sheet:
 		rows := steamSheetRows()
 		if len(rows) > 0 {
@@ -615,7 +665,15 @@ func steamPanelSetTab(t steamTab) {
 	if steamPanel.page != steamPageLibrary || steamPanel.sheet {
 		return
 	}
+	dir := steamTab(1)
+	if t < steamPanel.tab {
+		dir = -1
+	}
 	t = (t%steamTabCount + steamTabCount) % steamTabCount
+	if t == steamTabHandheld && !steamPortsAvailable() {
+		// No ports where Steam itself runs: step past the tab.
+		t = ((t+dir)%steamTabCount + steamTabCount) % steamTabCount
+	}
 	if t == steamPanel.tab {
 		return
 	}
@@ -687,8 +745,20 @@ func steamTargetPC() (steamRemotePC, bool) {
 	return pcs[i], true
 }
 
-// steamPrimaryLabel is what A does to g, as the row and the footer say it.
+// steamPrimaryLabel is what A does to g, as the row and the footer say it:
+// the PortMaster port once it is ready (or its next step on the Handheld
+// tab), else Steam here or on a PC.
 func steamPrimaryLabel(g steamGame) string {
+	if st, ok := steamPortFor(g); ok {
+		if label := steamPortPrimaryLabel(g, st); label != "" {
+			return label
+		}
+	}
+	return steamPCLabel(g)
+}
+
+// steamPCLabel is what playing g through Steam does: here or on a PC.
+func steamPCLabel(g steamGame) string {
 	if steamPanel.local {
 		switch {
 		case g.steamDownloading() && g.DlPaused:
@@ -707,7 +777,8 @@ func steamPrimaryLabel(g steamGame) string {
 	case r.installed:
 		return "Play on " + r.where
 	}
-	if pc, ok := steamTargetPC(); ok {
+	// A non-Steam game is only on the PC it was added on.
+	if pc, ok := steamTargetPC(); ok && !steamIsShortcut(g.AppID) {
 		return "Install on " + pc.name
 	}
 	return "On PC"
@@ -730,8 +801,17 @@ func steamPlayFocused() {
 	steamPlay(g)
 }
 
-// steamPlay starts, installs or reports g, wherever it can run.
+// steamPlay starts, installs or reports g, wherever it can run: its
+// PortMaster port first (steamPortPrimary), else Steam.
 func steamPlay(g steamGame) {
+	if st, ok := steamPortFor(g); ok && steamPortPrimary(g, st) {
+		return
+	}
+	steamPlayPC(g)
+}
+
+// steamPlayPC starts, installs or reports g through Steam: here or on a PC.
+func steamPlayPC(g steamGame) {
 	if steamPanel.local {
 		switch {
 		case g.steamDownloading():
@@ -752,6 +832,10 @@ func steamPlay(g steamGame) {
 		PlayActivateSound()
 		steamRemoteDo(g, r, steamActRun, nil)
 	default:
+		if steamIsShortcut(g.AppID) {
+			ShowToast(g.Name+" is a non-Steam game: it plays only on the PC it was added to Steam on", ToastKindInfo)
+			return
+		}
 		pc, ok := steamTargetPC()
 		if !ok {
 			ShowToast(steamNoPCText(), ToastKindInfo)
@@ -795,6 +879,8 @@ func steamLocalDo(g steamGame, action steamAction) {
 
 func steamPanelActivate() {
 	switch {
+	case steamPanel.notes:
+		steamPanelBack()
 	case steamPanel.page == steamPageQR:
 		steamQRActivate()
 	case steamPanel.sheet:
@@ -817,6 +903,9 @@ func steamPanelShowAccount() {
 // page, the search — and then closes the panel.
 func steamPanelBack() {
 	switch {
+	case steamPanel.notes:
+		steamPanel.notes = false
+		PlayBackSound()
 	case steamPanel.sheet:
 		steamPanel.sheet = false
 		PlayBackSound()
@@ -862,6 +951,7 @@ func steamPanelOpenSheet() {
 	}
 	steamPanel.sheet = true
 	steamPanel.sheetCursor = 0
+	steamPanel.notes = false
 	PlayActivateSound()
 }
 
@@ -870,19 +960,68 @@ func steamSheetRows() []steamSheetRow {
 	if !ok {
 		return nil
 	}
+	// A non-Steam game (steam_shortcuts.go) is only started: no uninstall,
+	// no other PC, no store page.
+	shortcut := steamIsShortcut(g.AppID)
 	rows := []steamSheetRow{{label: steamPrimaryLabel(g), action: steamSheetPrimary}}
-	if steamPanel.local && g.Installed && !g.steamDownloading() {
+	if st, ok := steamPortFor(g); ok {
+		rows = append(rows, steamPortSheetRows(g, st)...)
+	}
+	if steamPanel.local && g.Installed && !g.steamDownloading() && !shortcut {
 		rows = append(rows, steamSheetRow{label: "Uninstall", action: steamSheetUninstall})
 	}
-	if !steamPanel.local && !g.Remote.installed && !g.Remote.downloading() && len(steamPanel.remote.pcs) > 1 {
+	if !steamPanel.local && !shortcut && !g.Remote.installed && !g.Remote.downloading() && len(steamPanel.remote.pcs) > 1 {
 		pc, _ := steamTargetPC()
 		rows = append(rows, steamSheetRow{label: "Install on: " + pc.name + " (change)", action: steamSheetTarget})
 	}
-	store := "Store page"
-	if !steamPanel.local {
-		store = "Store page on your phone (QR)"
+	if !shortcut {
+		store := "Store page"
+		if !steamPanel.local {
+			store = "Store page on your phone (QR)"
+		}
+		rows = append(rows, steamSheetRow{label: store, action: steamSheetStore})
 	}
-	rows = append(rows, steamSheetRow{label: store, action: steamSheetStore}, steamSheetRow{label: "Close", action: steamSheetClose})
+	return append(rows, steamSheetRow{label: "Close", action: steamSheetClose})
+}
+
+// steamPortSheetRows are the port's rows of g's sheet. The first row
+// (steamPrimaryLabel) already plays a ready port, and on the Handheld tab
+// takes the port's next step; then Steam on a PC is offered here instead.
+func steamPortSheetRows(g steamGame, st steamPortState) []steamSheetRow {
+	var rows []steamSheetRow
+	portFirst := steamPortPrimaryLabel(g, st) != ""
+	if portFirst {
+		if pc := steamPCLabel(g); strings.HasPrefix(pc, "Play on ") || strings.HasPrefix(pc, "Install on ") {
+			rows = append(rows, steamSheetRow{label: pc, action: steamSheetPlayPC})
+		}
+	}
+	_, _, copying := steamPortCopyProgress(g.AppID)
+	source, hasSource := steamPortSource(g)
+	switch {
+	case copying:
+	case st.ready() && !st.Entry.RTR && hasSource:
+		label := "Copy game files from " + source.name
+		if st.Copied {
+			label = "Copy game files again from " + source.name
+		}
+		rows = append(rows, steamSheetRow{label: label, action: steamSheetPortCopy})
+	case portFirst:
+	case st.Queued:
+		rows = append(rows, steamSheetRow{label: "Finish installing the port in PortMaster", action: steamSheetPortInstall})
+	case !st.installed():
+		label := "Install the PortMaster port"
+		if st.Entry.Size > 0 {
+			label += " · " + humanBytes(st.Entry.Size)
+		}
+		rows = append(rows, steamSheetRow{label: label, action: steamSheetPortInstall})
+	case st.needsData() && hasSource:
+		rows = append(rows, steamSheetRow{label: "Copy game files from " + source.name, action: steamSheetPortCopy})
+	case st.needsData():
+		rows = append(rows, steamSheetRow{label: "Copy game files from a PC", action: steamSheetPortCopy})
+	}
+	if st.Entry.Instructions != "" || st.Entry.Description != "" {
+		rows = append(rows, steamSheetRow{label: "Port setup notes", action: steamSheetPortNotes})
+	}
 	return rows
 }
 
@@ -924,6 +1063,28 @@ func steamSheetActivate() {
 	case steamSheetClose:
 		steamPanel.sheet = false
 		PlayBackSound()
+	case steamSheetPlayPC:
+		steamPanel.sheet = false
+		steamPlayPC(g)
+	case steamSheetPortInstall:
+		steamPanel.sheet = false
+		if st, ok := steamPortFor(g); ok {
+			steamPortNextStep(g, st)
+		}
+	case steamSheetPortCopy:
+		steamPanel.sheet = false
+		st, ok := steamPortFor(g)
+		if !ok {
+			return
+		}
+		if pc, found := steamPortSource(g); found {
+			steamPortCopyFrom(g, st, pc)
+		} else {
+			ShowToast(steamPortNoSourceText(g), ToastKindInfo)
+		}
+	case steamSheetPortNotes:
+		steamPanel.notes, steamPanel.notesScroll = true, 0
+		PlayActivateSound()
 	}
 }
 
@@ -1192,7 +1353,10 @@ func handleSteamKey(e *sdl.KeyboardEvent) bool {
 		} else {
 			steamPanelSetTab(steamPanel.tab + 1)
 		}
-	case sdl.K_1, sdl.K_2, sdl.K_3:
+	case sdl.K_1, sdl.K_2, sdl.K_3, sdl.K_4:
+		if e.Keysym.Sym == sdl.K_4 && !steamPortsAvailable() {
+			break
+		}
 		steamPanelSetTab(steamTab(e.Keysym.Sym - sdl.K_1))
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
 		steamPanelActivate()
@@ -1224,6 +1388,21 @@ func handleSteamKey(e *sdl.KeyboardEvent) bool {
 func handleSteamMouse(mx, my int32) bool {
 	if !steamPanel.open {
 		return false
+	}
+	if steamPanel.notes {
+		// A tap in the notes' upper or lower half scrolls a page; outside
+		// them it closes them.
+		if r := steamNotesRect; r.W > 0 && pointInRect(mx, my, r) {
+			page := max(1, steamNotesPage-1)
+			if my < r.Y+r.H/2 {
+				page = -page
+			}
+			steamPanel.notesScroll = max(0, steamPanel.notesScroll+page)
+			PlayNavSound()
+			return true
+		}
+		steamPanelBack()
+		return true
 	}
 	if steamPillRect.W > 0 && pointInRect(mx, my, steamPillRect) {
 		switch {
@@ -1335,6 +1514,15 @@ func steamGameDetail(g steamGame) string {
 	if s := steamWhereText(g); s != "" {
 		parts = append(parts, s)
 	}
+	if s := steamPortLabel(g); s != "" {
+		parts = append(parts, s)
+	}
+	// Asking queues the lookup of a game on screen (steam_compat.go).
+	if c, ok := steamDeckRating(g.AppID); ok {
+		if s := steamDeckLabel(c); s != "" {
+			parts = append(parts, s)
+		}
+	}
 	if s := steamPlaytimeText(g.Playtime); s != "" {
 		parts = append(parts, s)
 	}
@@ -1387,6 +1575,9 @@ func steamPanelSubtitle() string {
 	if !steamPanel.local {
 		if n := len(steamPanel.remote.pcs); n > 0 {
 			parts = append(parts, pluralizeCount(n, "PC", "PCs"))
+		}
+		if n := steamPortsCount(); n > 0 {
+			parts = append(parts, strconv.Itoa(n)+" with a port")
 		}
 	}
 	parts = append(parts, steamPanel.sortMode.label())
@@ -1461,6 +1652,9 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	if steamPanel.sheet && len(games) == 0 {
 		steamPanel.sheet = false
+	}
+	if !steamPanel.sheet {
+		steamPanel.notes = false
 	}
 
 	var bodyH int32
@@ -1594,10 +1788,10 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 			switch {
 			case strings.HasPrefix(status, "Play"):
 				statusColor = ToastSuccessInk()
-			case strings.HasPrefix(status, "Install"):
-				statusColor = accentColor
-			case strings.HasPrefix(status, "Downloading"), strings.HasPrefix(status, "Paused"):
+			case strings.HasPrefix(status, "Downloading"), strings.HasPrefix(status, "Paused"), strings.HasPrefix(status, "Copying "):
 				statusColor = WarningInk()
+			case strings.HasPrefix(status, "Install"), strings.HasPrefix(status, "Copy files"), strings.HasPrefix(status, "Finish"):
+				statusColor = accentColor
 			}
 			status = ellipsize(font, status, r.W/3)
 			sw, _, _ := font.SizeUTF8(status)
@@ -1613,6 +1807,9 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		if steamPanel.sheet {
 			steamDrawSheet(renderer, config, font, medium, steamPanelRect)
+			if steamPanel.notes {
+				steamDrawNotes(renderer, config, font, medium, steamPanelRect)
+			}
 		}
 	}
 
@@ -1628,6 +1825,8 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 		hint = hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Library"})
 	case steamPanel.page == steamPageAccount:
 		hint = hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
+	case steamPanel.notes:
+		hint = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"B", "Back"})
 	case steamPanel.sheet:
 		hint = hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	case len(games) == 0:
@@ -1650,21 +1849,31 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, ellipsize(font, hint, panelW-2*padX), ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }
 
-// steamDrawTabs draws All / Installed / Downloads with their counts.
+// steamDrawTabs draws All / Installed / Downloads (and Handheld where ports
+// can run) with their counts.
 func steamDrawTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w int32) {
 	counts := [steamTabCount]int{}
+	ports := steamPortsAvailable()
 	for _, g := range steamPanel.games {
 		counts[steamTabAll]++
-		if g.Installed || g.Remote.installed {
+		if g.Installed || g.Remote.installed || steamPortReadyHere(g) {
 			counts[steamTabInstalled]++
 		}
 		if g.steamDownloading() || g.Remote.downloading() {
 			counts[steamTabDownloads]++
 		}
+		if ports {
+			if _, ok := steamPortFor(g); ok {
+				counts[steamTabHandheld]++
+			}
+		}
 	}
 	h := int32(font.Height()) + 10
 	cx := x
 	for t := steamTab(0); t < steamTabCount; t++ {
+		if t == steamTabHandheld && !ports {
+			continue
+		}
 		label := t.label() + " " + strconv.Itoa(counts[t])
 		tw, _, _ := font.SizeUTF8(label)
 		r := sdl.Rect{X: cx, Y: y + 2, W: int32(tw) + 24, H: h}
@@ -1702,6 +1911,12 @@ func steamDrawEmpty(renderer *sdl.Renderer, config *Config, font, medium *ttf.Fo
 		}
 	case steamPanel.tab == steamTabDownloads:
 		headline, line1 = "Nothing downloading", "Installs started here show their progress in this tab."
+	case steamPanel.tab == steamTabHandheld && steamPanel.portsBusy && steamPanel.ports == nil:
+		headline, line1 = "Looking for PortMaster ports…", "PortMaster's catalogue is matched with your library."
+	case steamPanel.tab == steamTabHandheld:
+		headline = "No PortMaster port for these games yet"
+		line1 = "PortMaster runs many PC games natively with your own game files · the ones you own show here."
+		line2 = "PortMaster's catalogue is read when online; press " + hintKeyFor("Start", "Refresh") + " after adding games."
 	case steamPanel.err != "":
 		headline, line1, line2 = "Could not read the library", steamPanel.err, "Press "+hintKeyFor("Start", "Refresh")+" to try again, or "+hintKeyFor("X", "Account")+" for sign-in options."
 	case steamPanel.account.SteamID != "":
@@ -1757,7 +1972,21 @@ func steamDrawSheet(renderer *sdl.Renderer, config *Config, font, medium *ttf.Fo
 	w := min32(card.W-48, 720)
 	coverW := min32(w/2-24, 360)
 	coverH := coverW * 215 / 460
-	infoH := max32(coverH, medH+6+3*(smallH+6))
+	// Under the cover, across the box: the PortMaster port and the Deck
+	// rating, which are longer than the space beside the cover.
+	var wide []string
+	if s := steamPortSheetLine(g); s != "" {
+		wide = append(wide, s)
+	}
+	deck, deckKnown := steamDeckRating(g.AppID)
+	if s := steamDeckSentence(deck, deckKnown); s != "" {
+		wide = append(wide, s)
+	}
+	topH := max32(coverH, medH+6+3*(smallH+6))
+	infoH := topH
+	if len(wide) > 0 {
+		infoH += 10 + int32(len(wide))*(smallH+6)
+	}
 	h := 20 + infoH + 16 + int32(len(rows))*(rowH+6) + 14
 	if h > card.H-16 {
 		h = card.H - 16
@@ -1787,6 +2016,22 @@ func steamDrawSheet(renderer *sdl.Renderer, config *Config, font, medium *ttf.Fo
 	}
 	if done, total, paused := steamGameProgress(g); total > 0 {
 		steamDrawBar(renderer, sdl.Rect{X: tx, Y: y + 2, W: tw, H: 5}, done, total, paused)
+	} else if done, total, copying := steamPortCopyProgress(g.AppID); copying && total > 0 {
+		steamDrawBar(renderer, sdl.Rect{X: tx, Y: y + 2, W: tw, H: 5}, done, total, false)
+	}
+	y = cover.Y + topH + 10
+	for i, line := range wide {
+		color := ColorTextSecondary()
+		if i == len(wide)-1 && deckKnown && strings.HasPrefix(line, "Steam Deck") {
+			switch deck {
+			case steamDeckVerified:
+				color = ToastSuccessInk()
+			case steamDeckPlayable:
+				color = WarningInk()
+			}
+		}
+		renderText(renderer, config, font, ellipsize(font, line, box.W-40), color, box.X+20, y)
+		y += smallH + 6
 	}
 
 	y = box.Y + 20 + infoH + 16
@@ -1809,6 +2054,59 @@ func steamDrawSheet(renderer *sdl.Renderer, config *Config, font, medium *ttf.Fo
 		renderText(renderer, config, medium, ellipsize(medium, row.label, r.W-28), ColorTextPrimary(), r.X+14, r.Y+7)
 		y += rowH + 6
 	}
+}
+
+// steamDrawNotes draws the focused game's port notes over its sheet: the
+// port's own installation instructions (which files it needs and where they
+// go), then its description, scrolled by Up/Down.
+func steamDrawNotes(renderer *sdl.Renderer, config *Config, font, medium *ttf.Font, card sdl.Rect) {
+	g, ok := steamPanelFocused()
+	st, has := steamPortFor(g)
+	if !ok || !has {
+		steamPanel.notes = false
+		return
+	}
+	smallH := int32(font.Height())
+	medH := int32(medium.Height())
+	box := sdl.Rect{X: card.X + 24, Y: card.Y + 24, W: card.W - 48, H: card.H - 48}
+	if box.W < 200 || box.H < 4*smallH {
+		return
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, card.X, card.Y, card.W, card.H, 18, sdl.Color{R: 0, G: 0, B: 0, A: 120})
+	drawOverlayCard(renderer, box)
+	textW := box.W - 40
+	steamNotesRect = sdl.Rect{}
+	renderText(renderer, config, medium, ellipsize(medium, "Setup notes · "+st.title(), textW), ColorTextPrimary(), box.X+20, box.Y+18)
+	var b strings.Builder
+	if st.Entry.Instructions != "" {
+		b.WriteString(st.Entry.Instructions)
+	}
+	if st.Entry.Description != "" {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(st.Entry.Description)
+	}
+	if st.DataDir != "" && !st.Entry.RTR {
+		b.WriteString("\n\nGame files go in: " + st.DataDir)
+	}
+	// Outside text, drawn as written (no interface translation).
+	lines := wrapTextLinesRaw(font, b.String(), textW, 400)
+	lineH := smallH + 4
+	top := box.Y + 18 + medH + 12
+	visible := int((box.Y + box.H - 14 - top) / lineH)
+	if visible < 1 {
+		return
+	}
+	maxScroll := max(0, len(lines)-visible)
+	steamPanel.notesScroll = min(steamPanel.notesScroll, maxScroll)
+	y := top
+	for _, line := range lines[steamPanel.notesScroll:min(len(lines), steamPanel.notesScroll+visible)] {
+		renderTextRaw(renderer, config, font, line, ColorTextSecondary(), box.X+20, y)
+		y += lineH
+	}
+	steamNotesRect, steamNotesPage = box, visible
 }
 
 // steamDrawQRPage draws the Steam app sign-in: the code on the left, the

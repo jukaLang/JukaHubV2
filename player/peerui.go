@@ -667,7 +667,7 @@ func peerOpenPairedSheet(config *Config, id string) {
 		status = "Last seen " + peerAgo(now, rec.LastSeen)
 	}
 	body := "## Device\n" + setOr(rec.Model, "JukaHub") + " · ID " + peerShortID(rec.ID) + "\n" +
-		"Paired " + rec.PairedAt.Local().Format("Jan 2, 2006") + "\n\n" +
+		"Paired " + formatDate(config, rec.PairedAt.Local()) + "\n\n" +
 		"## What you can do\n" +
 		"• Sync saves: make your saves the same on both devices\n" +
 		"• Continue: what you play here is offered on its Home, and the other way round\n" +

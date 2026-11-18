@@ -11,11 +11,18 @@ package main
 // Up/Down scroll the output and Up at the oldest line steps onto the top bar,
 // exactly like any other page. Left/Right move the caret, A opens the keyboard,
 // Start runs the line, X clears it (or stops a running command), Y opens the
-// command history and L1/R1 page the output. A keyboard types straight into
-// the prompt: Enter runs, Up/Down recall history, PgUp/PgDn page, Tab
-// completes, Ctrl+R opens the history, Ctrl+U clears the line, Ctrl+C stops a
-// command and Ctrl+L clears the screen. The mouse wheel scrolls and a click
-// puts the caret where it lands.
+// command history, Select opens the Command Deck and L1/R1 page the output. A
+// keyboard types straight into the prompt: Enter runs, Up/Down recall
+// history, PgUp/PgDn page, Tab completes, Ctrl+R opens the history, Ctrl+P
+// the Command Deck, Ctrl+U clears the line, Ctrl+C stops a command and Ctrl+L
+// clears the screen. The mouse wheel scrolls and a click puts the caret where
+// it lands.
+//
+// Typing on a handheld is slow, so three things spare it: the Command Deck
+// (cmddeck.go — ready-made commands by category with pickers for their
+// blanks, Favorites and macros, Ask Juka), token chips above the on-screen
+// keyboard (cmddeck_chips.go — Select takes the first) and the history picker,
+// where Y pins a command to the deck's Favorites.
 
 import (
 	"context"
@@ -445,6 +452,11 @@ func termWantsShell(command string, args []string, line string) bool {
 		if strings.HasPrefix(a, "-") {
 			return termHasProgram(command)
 		}
+		// cmd.exe's own switches (dir /b, dir /o-d — the Command Deck uses
+		// both): dir and type are cmd built-ins, not programs on PATH.
+		if runtime.GOOS == "windows" && (command == "dir" || command == "type") && strings.HasPrefix(a, "/") {
+			return true
+		}
 	}
 	return false
 }
@@ -778,6 +790,9 @@ func termInit() {
 	term.caretAt = time.Now()
 	termFollow()
 	termHistoryClose()
+	// Opens the deck when a "Commands" entry asked for it, and starts the
+	// device probe so the deck is ready by the time Select is pressed.
+	cmdDeckTermEntered()
 	if termPendingCommand != "" {
 		termInsertText(termPendingCommand)
 		termPendingCommand = ""
@@ -794,7 +809,11 @@ func termInit() {
 		term.started = time.Now()
 		termAppend("JukaHub Terminal", termKindSystem)
 		termAppend(fmt.Sprintf("%s · %s/%s · shell: %s", P().Name(), runtime.GOOS, runtime.GOARCH, termShellName()), termKindSystem)
-		termAppend("Type help for the commands. A opens the keyboard, Y the history, B leaves.", termKindSystem)
+		if hintsUseKeyboard() {
+			termAppend("Type help for the commands. Ctrl+P picks a ready-made command, Ctrl+R opens the history, Esc leaves.", termKindSystem)
+		} else {
+			termAppend("Type help for the commands. Select picks a ready-made command, A opens the keyboard, Y the history, B leaves.", termKindSystem)
+		}
 		termAppend("", termKindSystem)
 	}
 }
@@ -950,8 +969,9 @@ func termHelp() {
 		"  ssh [on|off|status]  SFTP server for PC file access",
 		"  exit               leave the Terminal",
 		"Anything else runs in the system shell (" + termShellName() + ") for up to " + termDurationText(termCommandTimeout) + ".",
-		"Pad: A keyboard · Start run · X clear / stop · Y history · L1/R1 page · B back",
-		"Keyboard: Enter run · Up/Down history · Tab complete · PgUp/PgDn scroll · Esc back",
+		"Pad: A keyboard · Select commands · Start run · X clear / stop · Y history · L1/R1 page · B back",
+		"Keyboard: Enter run · Ctrl+P commands · Up/Down history · Tab complete · PgUp/PgDn scroll · Esc back",
+		"Commands (Select / Ctrl+P) runs ready-made commands with no typing; Y in the history pins one there.",
 	} {
 		termAppend(line, termKindSystem)
 	}
@@ -1244,7 +1264,7 @@ func termSSHCommand(args []string) {
 // picker is closed and the pad has not stepped up onto the top bar. The caret
 // is only drawn while this holds.
 func termPromptFocused() bool {
-	return !termHist.open && chromeTier(focusEngine.ElementIndex()) == 0
+	return !termHist.open && !cmdDeck.open && chromeTier(focusEngine.ElementIndex()) == 0
 }
 
 // termFocusPrompt brings focus back to the prompt from the top bar.
@@ -1259,6 +1279,7 @@ func termFocusPrompt() {
 // termLeave is B / Escape / exit: a running command stops with the screen.
 func termLeave(config *Config) {
 	termHistoryClose()
+	cmdDeckClose()
 	if term.job != nil {
 		term.job.cancel()
 	}
@@ -1270,6 +1291,10 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return
 	}
+	if cmdDeck.open {
+		cmdDeckKey(e, config)
+		return
+	}
 	if termHist.open {
 		termHistoryKey(e)
 		return
@@ -1278,6 +1303,10 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE:
 		termLeave(config)
+	case sdl.K_p:
+		if ctrl {
+			cmdDeckOpen()
+		}
 	case sdl.K_RETURN, sdl.K_KP_ENTER:
 		termFocusPrompt()
 		termRunInput()
@@ -1358,6 +1387,10 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 // handleTermTextInput processes text input for the terminal.
 func handleTermTextInput(e *sdl.TextInputEvent) {
 	text := e.GetText()
+	if cmdDeck.open {
+		cmdDeckType(text)
+		return
+	}
 	if termHist.open {
 		termHistoryType(text)
 		return
@@ -1371,6 +1404,9 @@ func handleTermTextInput(e *sdl.TextInputEvent) {
 // the click) and the console (which focuses the prompt). Clicks elsewhere —
 // the top bar above all — are left to the shared handlers.
 func handleTermMouseClick(mx, my int32, config *Config) bool {
+	if cmdDeck.open {
+		return cmdDeckClick(mx, my, config)
+	}
 	if termHist.open {
 		return termHistoryClick(mx, my)
 	}
@@ -1389,6 +1425,8 @@ func handleTermMouseClick(mx, my int32, config *Config) bool {
 		termFocusPrompt()
 		PlayActivateSound()
 		vkOpenTerminal()
+	case termDeckRect.W > 0 && pointInRect(mx, my, termDeckRect):
+		cmdDeckOpen()
 	case termNewRect.W > 0 && pointInRect(mx, my, termNewRect):
 		termFollow()
 		PlayNavSound()
@@ -1413,6 +1451,10 @@ func handleTermWheel(dy int32) bool {
 	if dy == 0 {
 		return false
 	}
+	if cmdDeck.open {
+		cmdDeckWheel(dy)
+		return true
+	}
 	if termHist.open {
 		termHistoryMove(-int(dy))
 		return true
@@ -1425,12 +1467,18 @@ func handleTermWheel(dy int32) bool {
 // open, takes the pad before this runs and closes on B), and Up at the oldest
 // line hands the press to the top bar instead of doing nothing.
 func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if cmdDeck.open {
+		return cmdDeckPad(e, config)
+	}
 	if termHist.open {
 		return termHistoryPad(e)
 	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_B:
 		termLeave(config)
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// Select is the Command Deck: ready-made commands, no typing.
+		cmdDeckOpen()
 	case sdl.CONTROLLER_BUTTON_A:
 		// A is how a pad types: without the on-screen keyboard a
 		// controller-only device cannot enter a command at all.

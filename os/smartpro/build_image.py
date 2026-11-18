@@ -96,7 +96,7 @@ def read_kv(path: Path) -> dict[str, str]:
     return values
 
 
-def load_board(board: Path) -> dict[str, str]:
+def load_board(board: Path, experimental_model: bool = False) -> dict[str, str]:
     need(board.is_dir(), f"board folder is missing: {board}")
     need((board / "COMPLETE").is_file(),
          f"{board} is incomplete: dump-board.sh did not finish (see FAILED.txt)")
@@ -105,8 +105,21 @@ def load_board(board: Path) -> dict[str, str]:
         need((board / name).is_file(), f"board folder has no {name}")
     facts = read_kv(board / "facts.txt")
     need(facts.get("FORMAT") == "jukahub-board-v1", "board folder is from another dump format")
-    need(facts.get("DEVICE") == "trimui-smart-pro" and facts.get("PANEL") == "1280x720",
-         "board folder is not from a TrimUI Smart Pro (TG5040)")
+    # Only the Smart Pro's boot chain (boot0 and U-Boot at the A133's offsets,
+    # its device tree and panel) is what this builder knows. A dump from the
+    # Smart Pro S (A523: another boot ROM, boot0 layout and kernel), the Brick
+    # or the Brick Pro (another panel) is refused unless asked for by name,
+    # for development: nothing about those boots has been verified.
+    model = facts.get("MODEL", "TG5040")
+    if not experimental_model:
+        need(model == "TG5040",
+             f"board folder is from a {model}, not a TrimUI Smart Pro (TG5040); "
+             "--experimental-model builds it anyway, unverified")
+        need(facts.get("DEVICE") == "trimui-smart-pro" and facts.get("PANEL") == "1280x720",
+             "board folder is not from a TrimUI Smart Pro (TG5040)")
+    elif model != "TG5040":
+        print(f"build_image: WARNING: board folder is from a {model}; its boot chain is unverified "
+              "and the card may not boot", file=sys.stderr)
     need(facts.get("MACHINE") == "aarch64", "board folder is not from a 64-bit ARM system")
     need(bool(facts.get("KERNEL")), "board folder does not name its kernel")
     need(re.fullmatch(r"[A-Za-z0-9_.+-]+", facts.get("KERNEL", "")) is not None,
@@ -983,12 +996,13 @@ def build_image(args: argparse.Namespace) -> None:
     board = args.board.resolve()
     output = args.output.resolve()
     need(not output.exists(), f"output already exists: {output}")
-    facts = load_board(board)
+    experimental = bool(getattr(args, "experimental_model", False))
+    facts = load_board(board, experimental)
     lead_path = board / "lead.bin"
     lead = lead_path.read_bytes()
     boot0_len = check_boot0(lead)
     package = check_package(lead)
-    if package["panel"] is not None:
+    if package["panel"] is not None and not experimental:
         need(package["panel"] == (1280, 720),
              f"the device tree describes a {package['panel'][0]}x{package['panel'][1]} panel, not the Smart Pro's")
     gpt = parse_gpt(lead)
@@ -1204,6 +1218,9 @@ def main() -> int:
                         help="do not start this stock process at boot (repeatable)")
     parser.add_argument("--output", type=Path, required=True,
                         help="new .img or .img.xz; must not exist")
+    parser.add_argument("--experimental-model", action="store_true",
+                        help="accept a board dump from another model than the Smart Pro (TG5040); "
+                             "development only, its boot chain is unverified")
     args = parser.parse_args()
     try:
         build_image(args)

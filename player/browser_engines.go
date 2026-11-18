@@ -870,15 +870,11 @@ func brwHomeOptions(c *Config) []setOption {
 	for _, address := range stable {
 		listed[browserBookmarkKey(address)] = true
 	}
-	// stable can include every saved bookmark and a typed address. Do not use
-	// its length directly in the capacity: a corrupt, very large list could
-	// otherwise overflow the addition before make runs. append still grows the
-	// slice when there are more stops than this.
-	capacity := len(stable)
-	if capacity > 64 {
-		capacity = 64
-	}
-	out := make([]setOption, 0, capacity+2)
+	// stable can include every saved bookmark and a typed address. Its length
+	// takes no part in the capacity (a corrupt, very large list must not size
+	// an allocation, or overflow a sum before make runs): a fixed guess, and
+	// append grows the slice when there are more stops than this.
+	out := make([]setOption, 0, 66)
 	out = append(out, setOption{Value: "", Label: brwStartPageLabel(c)})
 	seen := map[string]bool{}
 	add := func(address string) {

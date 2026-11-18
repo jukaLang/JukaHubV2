@@ -324,6 +324,9 @@ func saverPicDecode(path string) (image.Image, int, error) {
 			}
 			defer imageDecodeSem.Release(1)
 			pic, sdlErr := saverPicDecodeSDL(path)
+			if sdlErr != nil && webpFFmpegFallback(path) {
+				pic, sdlErr = webpDecodeImage(path, imgvMaxTextureDim(), saverPicMaxPixels("")) // webpdecode.go
+			}
 			return pic, 1, sdlErr
 		}
 		return nil, 1, cfgErr

@@ -7,9 +7,17 @@
  *   cc -O2 -o chime chime_reference.c -lm
  *   ./chime start 48000 startup.wav 1.55
  *   ./chime stop  48000 shutdown.wav 1.50
+ *   ./chime cinematic 48000 cinematic.wav 1.55 [lift]
+ *   ./chime roll 48000 roll.wav 1.55 [WIDTH HEIGHT]
  *
- * The last argument is the master gain (chimeStartGain / chimeStopGain); the
+ * The fourth argument is the master gain (chimeStartGain / chimeStopGain); the
  * program also prints the gain that would put the peak at 0.56 of full scale.
+ * cinematic and roll are the power-on chime of those boot styles
+ * (player/bootstyles.go): the start score pushed back behind the style's
+ * entrance, plus the knocks (chimeThudNote) on its landings. "lift" is the
+ * power-on that starts from the firmware's logo (it leaves through the top
+ * edge first); the roll is laid out for a WIDTH x HEIGHT screen (default
+ * 1280 x 720, the Smart Pro; 1024 768 is the Brick).
  * analyze.py prints level, spectrum and stereo figures and draws a spectrogram.
  */
 #include <math.h>
@@ -44,11 +52,20 @@ static double rcos(double x) {
     return 0.5 - 0.5 * lookup(sinTab, x * 0.5 + 0.25);
 }
 
-enum { PAD, BELL, AIR };
+/* THUD is a knock (chimeThud): freq falls towards half of itself with time
+ * constant indexTau, under a burst of muffled noise at index of the sine's
+ * level. */
+enum { PAD, BELL, AIR, THUD };
 typedef struct {
     int kind;
     double at, freq, length, attack, release, decay, level, pan, index, indexTau;
 } note;
+
+/* thud_note is chimeThudNote: a knock at at seconds. */
+static note thud_note(double at, double freq, double level, double noise) {
+    note n = {THUD, at, freq, 0.55, 0.002, 0.12, 0.11, level, 0, noise, 0.07};
+    return n;
+}
 
 #define DB4 277.1826
 #define AB4 415.3047
@@ -119,8 +136,10 @@ typedef struct {
     uint32_t seed;
 } voice;
 
+#define MAX_VOICES 32 /* the start score's 13 notes and up to 9 knocks */
+
 typedef struct {
-    voice v[16];
+    voice v[MAX_VOICES];
     int nv;
     comb c[2][8];
     allpass a[2][4];
@@ -218,6 +237,23 @@ static void voice_add(chime *c, voice *v, int from, int to) {
             r = (v->hi2 - v->lo2) * 2.2;
             break;
         }
+        case THUD: {
+            /* The sine glides down as its drift decays; the noise is a low
+             * thump (380 Hz) with a little grit above it (to 2 kHz), fading
+             * with the strike partial's quick decay. */
+            e *= v->dec;
+            if (i == 0) v->ah = 1 - exp(-2 * M_PI * 2000 / rate);
+            v->p1 += n->freq * (0.5 + 0.5 * v->drift) / rate;
+            v->drift *= v->kidx;
+            if (v->p1 >= 1) v->p1 -= 1;
+            double nz = noise(&v->seed);
+            v->hi += v->ah * (nz - v->hi);
+            v->lo += v->al * (nz - v->lo);
+            double burst = n->index * v->bar / BAR_LEVEL;
+            l = r = lookup(sinTab, v->p1) + burst * (2.5 * v->lo + 0.6 * (v->hi - v->lo));
+            v->bar *= v->kbar;
+            break;
+        }
         }
         v->dec *= v->kdec;
         c->mixL[f - from] += e * l * v->gl;
@@ -288,9 +324,92 @@ static void wav(const char *path, const int16_t *pcm, int frames, int rate) {
     fclose(f);
 }
 
+/* ── The boot styles' knocks (player/bootstyles.go, bootlogo_layout.go) ── */
+
+#define START_SECONDS 3.30 /* chimeStartSeconds */
+#define OS_CHIME_DELAY 0.40 /* bootOSChimeDelay */
+#define STYLE_MAX_DELAY 2.5 /* bootStyleChimeMaxDelay */
+
+/* style_score is bootStyleRun.chimeScore: the start score pushed back by
+ * min(OS_CHIME_DELAY + lead, STYLE_MAX_DELAY) with the knocks (at their own
+ * times, not delayed) after it. It returns the note count and sets *seconds. */
+static int style_score(note *out, double leadMS, const note *thuds, int nthuds, double *seconds) {
+    double delay = OS_CHIME_DELAY + leadMS / 1000;
+    if (delay > STYLE_MAX_DELAY) delay = STYLE_MAX_DELAY;
+    int n = 0;
+    for (size_t k = 0; k < sizeof startScore / sizeof startScore[0]; k++) {
+        out[n] = startScore[k];
+        out[n].at += delay;
+        n++;
+    }
+    for (int k = 0; k < nthuds && n < MAX_VOICES; k++) out[n++] = thuds[k];
+    *seconds = START_SECONDS + delay;
+    fprintf(stderr, "lead %.1f ms, bells pushed back %.3f s, %d knocks:", leadMS, delay, nthuds);
+    for (int k = 0; k < nthuds; k++) fprintf(stderr, " %.3fs/%.0fHz/%.2f", thuds[k].at, thuds[k].freq, thuds[k].level);
+    fprintf(stderr, "\n");
+    return n;
+}
+
+/* cinematic_score is prepareDrop for the power-on (bootDropPower): a 560 ms
+ * fall (after a 300 ms lift off the firmware's logo when lift is set), then
+ * the impact and two hops, each landing a knock. */
+static int cinematic_score(note *out, int lift, double *seconds) {
+    const double fall = 560, hold = 70, contactMS = 45, air[2] = {230, 120};
+    const double knocks[3][3] = {{190, 0.36, 0.7}, {180, 0.12, 0.4}, {175, 0.06, 0.3}};
+    double impact = (lift ? 300 : 0) + fall;
+    note thuds[3];
+    double at = impact;
+    int n = 0;
+    for (int i = 0;; i++) {
+        double contact = i > 0 ? contactMS : hold;
+        if (n < 3) {
+            thuds[n] = thud_note(at / 1000, knocks[n][0], knocks[n][1], knocks[n][2]);
+            n++;
+        }
+        at += contact;
+        if (i >= 2 || air[i] <= 0) break;
+        at += air[i];
+    }
+    return style_score(out, impact, thuds, n, seconds);
+}
+
+/* logo_round is bootLogoRound for the positive values used here. */
+static double logo_round(double v) { return (double)(int32_t)(v + 0.5); }
+
+/* roll_score is prepareRoll for the power-on: the tile rolls in from beyond
+ * the left edge in quarter-turns, each a little slower than the last; every
+ * landing on screen knocks at 420 Hz, the last one a little louder. */
+static int roll_score(note *out, int w, int h, double *seconds) {
+    double side = logo_round(h * 0.25); /* bootLogoSpriteFrac */
+    if (side > w) side = w;
+    double x = (double)(((int32_t)w - (int32_t)side) / 2);
+    double tile = side * (1 - 2 * 0.055); /* bootLogoTileMargin */
+    double cx = x + side / 2;
+    double rad = tile * 0.25; /* bootLogoTileCorner */
+    double a = (tile - 2 * rad) / 2;
+    double stepD = 2 * a + rad * M_PI / 2;
+    if (stepD <= 0) stepD = tile;
+    int steps = (int)ceil((cx + 0.75 * tile) / stepD);
+    if (steps < 2) steps = 2;
+    if (steps > 9) steps = 9;
+    const double total = 1900, ratio = 1.13;
+    double x0 = cx - steps * stepD;
+    double unit = total * (ratio - 1) / (pow(ratio, steps) - 1);
+    note thuds[9];
+    int n = 0;
+    double acc = 0;
+    for (int i = 0; i < steps; i++) {
+        acc += unit * pow(ratio, i);
+        if (x0 + (i + 1) * stepD + tile / 2 <= 0) continue; /* landed off screen */
+        thuds[n++] = thud_note(acc / 1000, 420, i == steps - 1 ? 0.09 : 0.06, 0.3);
+    }
+    fprintf(stderr, "roll on %dx%d: %d quarter-turns, ", w, h, steps);
+    return style_score(out, acc - 100, thuds, n, seconds);
+}
+
 int main(int argc, char **argv) {
     if (argc < 5) {
-        fprintf(stderr, "usage: %s start|stop RATE OUT.wav GAIN\n", argv[0]);
+        fprintf(stderr, "usage: %s start|stop|cinematic|roll RATE OUT.wav GAIN [lift | WIDTH HEIGHT]\n", argv[0]);
         return 2;
     }
     tab_init();
@@ -298,8 +417,21 @@ int main(int argc, char **argv) {
     double rate = atof(argv[2]);
     double gain = atof(argv[4]);
     static chime c;
-    if (!strcmp(which, "start")) chime_init(&c, startScore, 13, rate, 3.30, gain);
-    else chime_init(&c, stopScore, 6, rate, 2.10, gain);
+    static note score[MAX_VOICES];
+    double seconds;
+    if (!strcmp(which, "start")) chime_init(&c, startScore, 13, rate, START_SECONDS, gain);
+    else if (!strcmp(which, "cinematic")) {
+        int n = cinematic_score(score, argc > 5 && !strcmp(argv[5], "lift"), &seconds);
+        chime_init(&c, score, n, rate, seconds, gain);
+    } else if (!strcmp(which, "roll")) {
+        int w = argc > 6 ? atoi(argv[5]) : 1280, h = argc > 6 ? atoi(argv[6]) : 720;
+        if (w <= 0 || h <= 0) {
+            fprintf(stderr, "roll: bad screen size %dx%d\n", w, h);
+            return 2;
+        }
+        int n = roll_score(score, w, h, &seconds);
+        chime_init(&c, score, n, rate, seconds, gain);
+    } else chime_init(&c, stopScore, 6, rate, 2.10, gain);
     int16_t *pcm = malloc(c.frames * 4);
     int got = 0, n;
     double peak = 0;

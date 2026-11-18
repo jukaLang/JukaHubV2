@@ -22,13 +22,19 @@ import (
 )
 
 const (
-	sttDirName      = "juka-whisper"
+	sttDirName = "juka-whisper"
+	// sttLightModel is Whisper tiny with 8-bit weights (about 44 MB), which
+	// build-stt.sh makes from the pinned model: lighter to load and faster on
+	// the A53. Packages built before it carry the 78 MB sttModelName instead;
+	// they keep working, and stt_install.go replaces them once.
+	sttLightModel   = "ggml-tiny-q8_0.bin"
 	sttModelName    = "ggml-tiny.bin"
 	sttModelSize    = 77691713
 	sttFastModel    = "vosk-model-small-en-us-0.15"
 	sttTimeout      = 120 * time.Second
 	sttGroqWait     = 15 * time.Second // leave time for local recognition if Groq stalls
 	sttMinAvailable = 384 << 20        // model and working memory, with room for JukaHub
+	sttLightAvail   = 320 << 20        // the same with the 8-bit model, 34 MB smaller
 	sttModeKey      = "speechRecognition"
 	sttModeAuto     = "auto"
 	sttModeOffline  = "offline"
@@ -112,11 +118,27 @@ func sttFilesIn(dir string) (string, string, bool) {
 	if dir == "" {
 		return "", "", false
 	}
-	bin, model := filepath.Join(dir, "whisper-cli"), filepath.Join(dir, sttModelName)
+	bin := filepath.Join(dir, "whisper-cli")
 	b, bErr := os.Stat(bin)
+	if bErr != nil || !b.Mode().IsRegular() || b.Mode().Perm()&0o111 == 0 {
+		return bin, "", false
+	}
+	// The package's SHA256SUMS fixed the 8-bit model's bytes when it was
+	// installed; a size in range is enough to tell it is all there.
+	light := filepath.Join(dir, sttLightModel)
+	if m, err := os.Stat(light); err == nil && m.Mode().IsRegular() && m.Size() > 20<<20 && m.Size() < 60<<20 {
+		return bin, light, true
+	}
+	model := filepath.Join(dir, sttModelName)
 	m, mErr := os.Stat(model)
-	return bin, model, bErr == nil && b.Mode().IsRegular() && b.Mode().Perm()&0o111 != 0 &&
-		mErr == nil && m.Mode().IsRegular() && m.Size() == sttModelSize
+	return bin, model, mErr == nil && m.Mode().IsRegular() && m.Size() == sttModelSize
+}
+
+// sttLightInstalled reports whether the offline speech in use has the 8-bit
+// Whisper model (false: none, or an older package with the full one).
+func sttLightInstalled() bool {
+	_, model := sttLocalFiles()
+	return filepath.Base(model) == sttLightModel
 }
 
 func sttLocalFiles() (string, string) {
@@ -348,10 +370,14 @@ func sttLocalTranscribeRun(ctx context.Context, wav []byte, lang, prompt string,
 			logWarn("voice", "fast offline recognition failed; trying Whisper: %v", err)
 		}
 	}
-	if err := sttCheckMemoryFor(sttMinAvailable); err != nil {
+	bin, model := sttLocalFiles()
+	need := int64(sttMinAvailable)
+	if filepath.Base(model) == sttLightModel {
+		need = sttLightAvail
+	}
+	if err := sttCheckMemoryFor(need); err != nil {
 		return "", err
 	}
-	bin, model := sttLocalFiles()
 	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
 	if err != nil && ctx.Err() == nil {
 		logWarn("voice", "offline speech recognition failed: %v", err)
@@ -439,17 +465,17 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 }
 
 func sttLocalArgs(model, lang, prompt string, quick bool) []string {
-	threads := "2"
+	// The Smart Pro has four A53 cores: three workers leave one for the
+	// interface (dictation used two, and waited longer for it).
+	args := []string{"-m", model, "-f", "-", "-t", "3", "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
 	if quick {
-		// The Smart Pro has four A53 cores. Three workers leave one for the
-		// interface; a smaller search cuts the wait after a Menu command.
-		threads = "3"
-	}
-	args := []string{"-m", model, "-f", "-", "-t", threads, "-l", lang, "-ng", "-np", "-nt", "-otxt", "-of", "-"}
-	if quick {
-		// -nf: no temperature fallback. Noise or silence otherwise makes the
-		// tiny model decode the clip up to five more times.
-		args = append(args, "-bs", "3", "-bo", "3", "-nf")
+		// A short command: greedy decoding (one guess per word, not three)
+		// and -nf, no temperature fallback — noise or silence otherwise makes
+		// the tiny model decode the clip up to five more times.
+		args = append(args, "-bs", "1", "-bo", "1", "-nf")
+	} else {
+		// Dictation keeps the fallback but searches two ways, not five.
+		args = append(args, "-bs", "2", "-bo", "2")
 	}
 	if prompt != "" {
 		args = append(args, "--prompt", prompt)

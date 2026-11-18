@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-#  JukaHub OS package for the TrimUI Smart Pro / Brick
+#  JukaHub OS package for the TrimUI Smart Pro, Brick, Brick Pro, Smart Pro S
 #
 #  Turns a built JukaHub app (the JukaHub-Trimui folder or JukaHub-Trimui.zip
 #  the release builds) into JukaHub-OS-Trimui.zip: an SD-card ROOT that boots
@@ -10,8 +10,15 @@
 #      Apps/JukaHub/os/os.json              OS mode on, "edition": "os", shipped layers on
 #      Apps/JukaHub/os/layers/README.txt    where layers go
 #      Apps/JukaHub/os/layers/speed/        storage + memory tuning (os-layers/ here)
+#      Apps/JukaHub/os/layers/drivers-a133/ driver values: Smart Pro, Brick, Brick Pro, Hammer
+#      Apps/JukaHub/os/layers/drivers-a523/ driver values: Smart Pro S
 #      System/starts/jukahub-autostart.sh   the boot hook, already installed
 #      JukaHub-OS-README.txt                install / go back to stock
+#
+#  Every layer is switched on: a driver layer names its models and kernel
+#  ("devices", "kernel" in layer.json), and on any other handheld it reads
+#  "Not for this handheld" and does nothing, so one card works on all four
+#  and picks its own family's layer when moved to another handheld.
 #
 #  The boot hook is the one the app writes itself for "Start JukaHub at login"
 #  (player/autostart.go, trimuiAutostartTemplate), taken from the source so the
@@ -96,6 +103,12 @@ if [ -d "$LAYERS_SRC" ]; then
         case "$id" in
             enabled|.*|*[!A-Za-z0-9._-]*) die "os-layers/$id: not a usable layer id" ;;
         esac
+        # A layer.json that does not parse would only show as "Can't use" on
+        # the device; refuse it here where python3 can tell.
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$l/layer.json" ||
+                die "os-layers/$id/layer.json is not valid JSON"
+        fi
         rm -rf "$APP/os/layers/$id"
         cp -a "$l" "$APP/os/layers/$id"
         ON="$ON${ON:+,}
@@ -124,6 +137,11 @@ Each layer is a folder here with a layer.json inside, for example
       "libs": ["lib"],
       "children": true
     }
+
+A layer may name the handhelds and kernel it is for, e.g.
+    "devices": ["trimui-smart-pro-s"], "kernel": "5.15"
+and is then left alone ("Not for this handheld") everywhere else. The
+drivers-a133 and drivers-a523 layers here work that way.
 
 Switch layers on in Settings -> JukaHub OS, then Restart JukaHub OS. Layers
 only change what JukaHub and its games see while JukaHub runs; nothing on
@@ -167,18 +185,49 @@ chmod 0755 "$HOOK"
 
 # ------------------------------------------------------------- 4. readme
 cat >"$STAGE/JukaHub-OS-README.txt" <<EOF
-JukaHub OS for the TrimUI Smart Pro and Brick
-=============================================
+JukaHub OS for the TrimUI Smart Pro, Brick, Brick Pro and Smart Pro S
+=====================================================================
 
 Install
   1. Turn the handheld off and put its SD card in a computer.
   2. Extract EVERYTHING in this zip to the ROOT of the card, merging the
-     Apps and System folders with the ones already there.
+     Apps and System folders with the ones already there. When asked about
+     files that already exist, choose REPLACE ALL: an older launch.sh or
+     os/os.json kept from an app install starts JukaHub as the plain app.
   3. Put the card back and power on: the handheld starts into JukaHub OS.
+     The firmware runs JukaHub OS in place of its own menu, so the stock
+     menu does not show (Settings -> JukaHub OS -> Skip the stock menu at
+     boot turns that off).
 
 The stock system is not replaced. JukaHub OS runs from the card and makes
-its changes (newer libraries, drivers, settings) only while it runs; a
-reboot always starts from the untouched stock system.
+its changes only while it runs; a reboot always starts from the untouched
+stock system. What this package changes, while JukaHub OS runs:
+  - Speed (os/layers/speed): storage read-ahead and memory tuning.
+  - A driver layer for your handheld's chip (os/layers/drivers-a133 for the
+    Smart Pro, Brick, Brick Pro and Hammer; drivers-a523 for the Smart Pro S):
+    settings of the firmware's own drivers - USB pads and dongles stay
+    awake, older Xbox One pads connect over Bluetooth, no disk scheduler
+    for the SD card, and on the Smart Pro S USB joysticks are read every
+    2 ms and the GPU is capped at 600 MHz to run cooler. Each value is
+    journaled and put back when JukaHub OS ends; a value the handheld does
+    not have is skipped.
+  The other family's layer shows "Not for this handheld" and does nothing.
+The kernel itself is the firmware's: TrimUI has published no kernel source,
+so no newer kernel module ships. A module pack can only be built against
+the exact kernel of your handheld (os/drivers in the JukaHub source; it
+needs the facts os/drivers/dump-kernel-facts.sh saves from the device).
+
+Not yet tested on hardware: the driver layers on every model, and booting
+into JukaHub OS on the Smart Pro S and the Brick Pro. If the handheld boots
+to the stock menu instead, Apps/JukaHub/autostart.log says why.
+
+Is it running as the OS?
+  Settings -> JukaHub OS -> Status says "OS session", and "Applied at this
+  start" lists the layers in force and anything left out. If it says
+  "running as an app", the reason is on the same line. Send these files
+  from Apps/JukaHub if it does not boot into JukaHub OS: autostart.log
+  (what the boot hook did) and errors.txt (lines with "jukaos:" and
+  "starting JukaHub OS").
 
 Go back to the stock menu
   - Once: hold Select (or B) while the JukaHub logo boots.

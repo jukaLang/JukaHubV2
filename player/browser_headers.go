@@ -23,9 +23,24 @@ const (
 const (
 	browserAcceptDocument = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 	browserAcceptStyle    = "text/css,*/*;q=0.1"
-	browserAcceptImage    = "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+	browserAcceptImage    = "image/webp,image/apng,image/png,image/jpeg,image/gif,image/bmp"
 	browserAcceptScript   = "*/*"
+	// browserAcceptImageNoWebP is the image Accept of a build whose SDL_image
+	// cannot decode WebP.
+	browserAcceptImageNoWebP = "image/apng,image/png,image/jpeg,image/gif,image/bmp"
 )
+
+// browserImageAccept is the Accept header an image request sends. It names
+// only formats the reader can draw: image CDNs (Next.js, Cloudflare, Shopify,
+// WordPress optimisers) pick the format from this header, and while it said
+// image/avif — which SDL_image here cannot decode — they answered with AVIF
+// and every such picture drew as a placeholder.
+func browserImageAccept() string {
+	if webpDecodable() {
+		return browserAcceptImage
+	}
+	return browserAcceptImageNoWebP
+}
 
 // browserURL parses an address already known to be http(s); a malformed one
 // yields nil so the header helper simply omits origin-derived values.

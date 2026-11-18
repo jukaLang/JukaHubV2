@@ -537,6 +537,15 @@ func (s *companionServer) handler() http.Handler {
 	// The VPN card: whether a WireGuard configuration is saved (its name,
 	// never its keys), and a new one pasted or picked on the phone (vpn.go).
 	mux.HandleFunc("/api/vpn", s.guard(s.handleVPN))
+	// The RetroAchievements and RomM cards: the account and the server
+	// connection typed on the phone, checked with the service before they are
+	// saved; keys and tokens are never sent back (companion_accounts.go).
+	mux.HandleFunc("/api/retroachievements", s.guard(s.handleRetroAchievements))
+	mux.HandleFunc("/api/romm", s.guard(s.handleRomM))
+	// The Email and Calendars cards: accounts and calendar links checked with
+	// their servers before they are saved; passwords and links are never sent
+	// back (companion_mailcal.go).
+	mux.HandleFunc("/api/mailcal", s.guard(s.handleMailCal))
 	// Steam: the sign-in through Steam's own page (a one-use token, never the
 	// PIN, goes to Steam) and the card's profile link, Web API key and Sign
 	// out (steam_signin.go).
@@ -860,6 +869,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .msg.bad{color:var(--bad)}
 .split{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
 .split .note{margin:0}
+/* The Email and Calendars cards: fields a little apart, the server rows as
+   host and port side by side, and the saved accounts above the form. */
+.mc input,.mc select{margin-top:8px}
+.mc details{margin-top:10px}
+.mc summary{color:var(--dim);font-size:14px;padding:6px 0;cursor:pointer}
+.mc .pair{display:flex;gap:8px}
+.mc .pair input{flex:1 1 auto;min-width:0}
+.mc .pair .port{flex:0 0 92px}
+.mc .pair select{flex:0 0 120px}
+.mclist{margin:0 0 6px}
 .bar{height:6px;margin-top:10px;background:#0f131b;border:1px solid var(--line);border-radius:99px;overflow:hidden}
 .bar>span{display:block;height:100%;width:0;background:var(--accent);transition:width .4s}
 .bar.idle{display:none}
@@ -983,6 +1002,62 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <label class=check><input type=checkbox id=groqShow>Show the key</label>
   <div class=row><button id=sendGroq>Save on handheld</button></div>
   <small id=groqNote>Voice typing, voice commands and the Juka chat use it. Get a free key at <a href="https://console.groq.com/keys" target=_blank rel="noopener noreferrer">console.groq.com/keys</a>, copy it and paste it here. The handheld checks it with Groq and never shows it again.</small>
+</div>
+
+<div class=card id=raCard>
+  <h2>RetroAchievements</h2>
+  <p class=note id=raStatus>Checking the handheld...</p>
+  <input type=text id=raUser placeholder="Username" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=password id=raKey placeholder="Web API key (32 letters or digits)" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <label class=check><input type=checkbox id=raShow>Show the key</label>
+  <div class=row><button id=sendRA>Save on handheld</button></div>
+  <div class=msg id=raMsg></div>
+  <small>Your Web API key is on <a href="https://retroachievements.org/settings" target=_blank rel="noopener noreferrer">retroachievements.org/settings</a> under Keys: copy it and paste it here. The handheld checks the account with RetroAchievements and never shows the key again. Leave a field empty to keep what the handheld has.</small>
+</div>
+
+<div class=card id=rommCard>
+  <h2>RomM server</h2>
+  <p class=note id=rommStatus>Checking the handheld...</p>
+  <input type=url id=rommURL placeholder="http://192.168.1.20:8080" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=password id=rommToken placeholder="Client API token" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <label class=check><input type=checkbox id=rommShow>Show the token</label>
+  <div class=row><button id=sendRomM>Save on handheld</button></div>
+  <div class=msg id=rommMsg></div>
+  <small>Your own RomM server's address, and a client API token with read and write access (made in RomM under your profile). The handheld checks them with the server and never shows the token again. Leave a field empty to keep what the handheld has.</small>
+</div>
+
+<div class="card mc" id=mailCard>
+  <h2>Email</h2>
+  <p class=note id=mailStatus>Checking the handheld...</p>
+  <div class="flist mclist" id=mailList hidden></div>
+  <input type=text inputmode=email id=mailEmail placeholder="you@example.com" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=password id=mailPass placeholder="App password" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <label class=check><input type=checkbox id=mailShow>Show the password</label>
+  <input type=text id=mailName placeholder="Your name on sent mail (optional)" autocomplete=off maxlength=100>
+  <p class=msg id=mailHelp></p>
+  <details id=mailAdv>
+    <summary>Advanced: servers and calendar</summary>
+    <div class=pair><input type=text id=mailImapHost placeholder="IMAP server" autocomplete=off autocapitalize=off spellcheck=false><input type=text class=port id=mailImapPort inputmode=numeric placeholder="993" autocomplete=off><select id=mailImapSec aria-label="IMAP security"><option value=tls>TLS</option><option value=starttls>STARTTLS</option></select></div>
+    <div class=pair><input type=text id=mailSmtpHost placeholder="SMTP server" autocomplete=off autocapitalize=off spellcheck=false><input type=text class=port id=mailSmtpPort inputmode=numeric placeholder="465" autocomplete=off><select id=mailSmtpSec aria-label="SMTP security"><option value=tls>TLS</option><option value=starttls>STARTTLS</option></select></div>
+    <input type=text id=mailUser placeholder="User name, if it is not the address" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+    <input type=url id=mailCalDAV placeholder="CalDAV address (optional), like https://caldav.example.com/" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  </details>
+  <div class=row><button id=sendMail>Add on handheld</button></div>
+  <div class=msg id=mailMsg></div>
+  <small>Most providers want an app password made for this, not your normal password: the handheld says where to make one when you type your address. It checks the login with your mail server and never shows the password again. Add the same address again to change its password or servers.</small>
+</div>
+
+<div class="card mc" id=calCard>
+  <h2>Calendars</h2>
+  <p class=note id=calStatus>Checking the handheld...</p>
+  <div class="flist mclist" id=calList hidden></div>
+  <input type=url id=calURL placeholder="https://... .ics, webcal://... or a CalDAV address" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=text id=calName placeholder="Name (optional)" autocomplete=off maxlength=80>
+  <input type=text id=calUser placeholder="CalDAV user name (empty for a link)" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>
+  <input type=password id=calPass placeholder="CalDAV password (empty for a link)" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <div class=row><button id=sendCal>Add on handheld</button></div>
+  <div class=msg id=calMsg></div>
+  <small>Google Calendar: on a computer, Settings &gt; your calendar &gt; Secret address in iCal format. Outlook: Settings &gt; Calendar &gt; Shared calendars &gt; Publish a calendar &gt; ICS link. The handheld shows calendars read-only and keeps the link to itself.</small>
 </div>
 
 <div class=card id=steamCard>
@@ -1265,6 +1340,281 @@ document.getElementById('sendGroq').onclick = async () => {
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+
+// The RetroAchievements and RomM cards. The handheld sends back the username
+// and the server address, never the key or the token: only whether one is
+// saved and its last four characters.
+function accountSay(id, text, bad) { const el = document.getElementById(id); el.textContent = text || ''; el.className = bad ? 'msg bad' : 'msg'; }
+const raStatusEl = document.getElementById('raStatus');
+function showRA(s) {
+  if (!s || (!s.username && !s.key)) { raStatusEl.textContent = 'No RetroAchievements account is set up on the handheld yet.'; return; }
+  let line = s.username ? 'Account: ' + s.username + '.' : 'No username yet.';
+  if (s.key) line += s.keyTail ? ' A Web API key is saved (it ends in ' + s.keyTail + ').' : ' A Web API key is saved.';
+  else line += ' No Web API key yet.';
+  if (s.keyFrom && s.keyFrom !== 'JukaHub') line += ' The key comes from ' + s.keyFrom + '.';
+  raStatusEl.textContent = line;
+  const user = document.getElementById('raUser');
+  if (s.username && !user.value) user.placeholder = 'Username (now ' + s.username + ')';
+}
+fetch('/api/retroachievements', {headers: hdr(), cache: 'no-store'})
+  .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+  .then(showRA)
+  .catch(() => { raStatusEl.textContent = 'Enter your account to save it on the handheld.'; });
+document.getElementById('raShow').onchange = e => {
+  document.getElementById('raKey').type = e.target.checked ? 'text' : 'password';
+};
+document.getElementById('sendRA').onclick = async () => {
+  const user = document.getElementById('raUser');
+  const key = document.getElementById('raKey');
+  if (!user.value.trim() && !key.value.trim()) { toast('Type your username and paste your key first', true); user.focus(); return; }
+  const btn = document.getElementById('sendRA');
+  btn.disabled = true; btn.textContent = 'Checking with RetroAchievements...';
+  try {
+    const r = await api('/api/retroachievements', {username: user.value.trim(), key: key.value.trim()}, true);
+    user.value = ''; key.value = '';
+    showRA(r);
+    accountSay('raMsg', r.message || 'Saved on the handheld.');
+    toast('Saved on the handheld');
+  } catch (err) {
+    accountSay('raMsg', err.message, true);
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+const rommStatusEl = document.getElementById('rommStatus');
+function showRomM(s) {
+  if (!s || (!s.url && !s.token)) { rommStatusEl.textContent = 'No RomM server is set up on the handheld yet.'; return; }
+  let line = s.url ? 'Server: ' + s.url + '.' : 'No server address yet.';
+  if (s.token) line += s.tokenTail ? ' A token is saved (it ends in ' + s.tokenTail + ').' : ' A token is saved.';
+  else line += ' No token yet.';
+  rommStatusEl.textContent = line;
+  const url = document.getElementById('rommURL');
+  if (s.url && !url.value) url.placeholder = s.url;
+}
+fetch('/api/romm', {headers: hdr(), cache: 'no-store'})
+  .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+  .then(showRomM)
+  .catch(() => { rommStatusEl.textContent = 'Enter your server to save it on the handheld.'; });
+document.getElementById('rommShow').onchange = e => {
+  document.getElementById('rommToken').type = e.target.checked ? 'text' : 'password';
+};
+document.getElementById('sendRomM').onclick = async () => {
+  const url = document.getElementById('rommURL');
+  const token = document.getElementById('rommToken');
+  if (!url.value.trim() && !token.value.trim()) { toast('Type the address or paste a token first', true); url.focus(); return; }
+  const btn = document.getElementById('sendRomM');
+  btn.disabled = true; btn.textContent = 'Checking with the server...';
+  try {
+    const r = await api('/api/romm', {url: url.value.trim(), token: token.value.trim()}, true);
+    url.value = ''; token.value = '';
+    showRomM(r);
+    accountSay('rommMsg', r.message || 'Saved on the handheld.');
+    toast('Saved on the handheld');
+  } catch (err) {
+    accountSay('rommMsg', err.message, true);
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+
+// The Email and Calendars cards (companion_mailcal.go). The handheld lists
+// what it has without a password or a full link, and sends its provider
+// presets, so an address fills the servers here and says where the app
+// password is made. A field the user typed in is never overwritten.
+let mcPresets = [];
+let mcMicrosoft = false;
+const mcAuto = ['mailImapHost', 'mailImapPort', 'mailImapSec', 'mailSmtpHost', 'mailSmtpPort', 'mailSmtpSec', 'mailCalDAV'];
+function mcEl(id) { return document.getElementById(id); }
+function mcPresetFor(email) {
+  const at = email.lastIndexOf('@');
+  if (at <= 0 || at === email.length - 1) return null;
+  const domain = email.slice(at + 1).toLowerCase();
+  for (const p of mcPresets) if ((p.domains || []).indexOf(domain) >= 0) return p;
+  return {key: '', name: domain, imapHost: 'imap.' + domain, imapPort: 993, imapSec: 'tls',
+    smtpHost: 'smtp.' + domain, smtpPort: 465, smtpSec: 'tls', caldav: '', oauth: '', passwordHelp: '', calendarHelp: '', guess: true};
+}
+function mcFill(p) {
+  const values = {mailImapHost: p.imapHost, mailImapPort: String(p.imapPort || ''), mailImapSec: p.imapSec || 'tls',
+    mailSmtpHost: p.smtpHost, mailSmtpPort: String(p.smtpPort || ''), mailSmtpSec: p.smtpSec || 'tls', mailCalDAV: p.caldav || ''};
+  for (const id of mcAuto) {
+    const el = mcEl(id);
+    if (el.dataset.typed === '1') continue;
+    el.value = values[id] || (el.tagName === 'SELECT' ? 'tls' : '');
+  }
+}
+function mcHelp(p) {
+  const el = mcEl('mailHelp');
+  el.replaceChildren();
+  el.className = 'msg';
+  if (!p) return;
+  const lines = [];
+  if (p.oauth === 'microsoft') {
+    lines.push(mcMicrosoft
+      ? 'Outlook addresses sign in with Microsoft: on the handheld, open Email & calendar and choose Sign in with Microsoft. A password only works for a custom setup.'
+      : 'Outlook.com does not take passwords from mail apps, and this build has no Microsoft sign-in. Add your Outlook calendar\'s ICS link in the Calendars card instead.');
+  } else if (p.passwordHelp) {
+    lines.push(p.name + ' needs an app password: ');
+  } else if (p.guess) {
+    lines.push('JukaHub does not know ' + p.name + ': it guessed the servers below (Advanced). Check them with your provider.');
+  }
+  for (const line of lines) el.append(document.createTextNode(line));
+  if (p.oauth !== 'microsoft' && p.passwordHelp) {
+    // "myaccount.google.com/apppasswords (needs 2-Step Verification)": the
+    // first word is the page, the rest stays text.
+    const cut = p.passwordHelp.indexOf(' ');
+    const page = cut > 0 ? p.passwordHelp.slice(0, cut) : p.passwordHelp;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}(\/[A-Za-z0-9\/._-]*)?$/.test(page)) {
+      const a = document.createElement('a');
+      a.href = 'https://' + page; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.textContent = page;
+      el.append(a, document.createTextNode(cut > 0 ? p.passwordHelp.slice(cut) : ''));
+    } else {
+      el.append(document.createTextNode(p.passwordHelp));
+    }
+  }
+  if (p.calendarHelp) el.append(document.createTextNode(' Calendar: ' + p.calendarHelp + ', then add it in the Calendars card.'));
+  else if (p.caldav) el.append(document.createTextNode(' The calendar comes with it (CalDAV).'));
+}
+for (const id of mcAuto) {
+  const el = mcEl(id);
+  el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', () => { el.dataset.typed = el.value ? '1' : ''; });
+}
+function mcEmailChanged() {
+  const p = mcPresetFor(mcEl('mailEmail').value.trim());
+  mcHelp(p);
+  if (p) mcFill(p);
+}
+mcEl('mailEmail').addEventListener('blur', mcEmailChanged);
+mcEl('mailEmail').addEventListener('change', mcEmailChanged);
+mcEl('mailShow').onchange = e => { mcEl('mailPass').type = e.target.checked ? 'text' : 'password'; };
+function mcRow(title, sub, bad, onRemove) {
+  const row = document.createElement('div');
+  row.className = 'frow';
+  const name = document.createElement('div');
+  name.className = 'fname';
+  const b = document.createElement('b');
+  b.textContent = title;
+  const s = document.createElement('span');
+  s.textContent = sub;
+  if (bad) s.style.color = 'var(--bad)';
+  name.append(b, s);
+  const acts = document.createElement('div');
+  acts.className = 'facts';
+  const rm = document.createElement('button');
+  rm.type = 'button'; rm.className = 'ghost'; rm.textContent = 'Remove';
+  rm.onclick = onRemove;
+  acts.append(rm);
+  row.append(name, acts);
+  return row;
+}
+function showMailCal(s) {
+  if (!s) return;
+  mcPresets = s.presets || mcPresets;
+  mcMicrosoft = !!s.microsoft;
+  const accounts = s.accounts || [];
+  const calendars = s.calendars || [];
+  mcEl('mailStatus').textContent = accounts.length
+    ? accounts.length + (accounts.length === 1 ? ' account' : ' accounts') + ' on the handheld (up to ' + s.maxAccounts + ').'
+    : 'No email account on the handheld yet.';
+  const ml = mcEl('mailList');
+  ml.replaceChildren();
+  ml.hidden = !accounts.length;
+  for (const a of accounts) {
+    const parts = [a.provider];
+    if (a.microsoft) parts.push('Microsoft sign-in');
+    if (!a.mail) parts.push('mail off');
+    else if (a.mailError) parts.push(a.mailError);
+    if (a.calendar) parts.push(a.calError ? 'calendar: ' + a.calError : 'calendar ' + (a.calHost || 'on'));
+    ml.append(mcRow(a.email, parts.join(' · '), !!(a.mailError || a.calError), () => mcRemove('removeAccount', a.id, a.email)));
+  }
+  mcEl('calStatus').textContent = calendars.length
+    ? calendars.length + (calendars.length === 1 ? ' calendar' : ' calendars') + ' on the handheld, besides the ones that come with an account.'
+    : 'No calendar link on the handheld yet.';
+  const cl = mcEl('calList');
+  cl.replaceChildren();
+  cl.hidden = !calendars.length;
+  for (const c of calendars) {
+    const parts = [c.kind === 'caldav' ? 'CalDAV' : 'Link'];
+    if (c.host) parts.push(c.host + (c.tail ? ' (ends in ' + c.tail + ')' : ''));
+    if (!c.on) parts.push('off');
+    if (c.error) parts.push(c.error);
+    cl.append(mcRow(c.name || c.host || 'Calendar', parts.join(' · '), !!c.error, () => mcRemove('removeCalendar', c.id, c.name || 'this calendar')));
+  }
+  mcEmailChanged();
+}
+function loadMailCal() {
+  return fetch('/api/mailcal', {headers: hdr(), cache: 'no-store'})
+    .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+    .then(showMailCal);
+}
+loadMailCal().catch(() => {
+  mcEl('mailStatus').textContent = 'Type your address to add it on the handheld.';
+  mcEl('calStatus').textContent = 'Paste a calendar link to add it on the handheld.';
+});
+async function mcRemove(action, id, label) {
+  if (!confirm('Remove ' + label + ' from the handheld? Mail and events it synced are forgotten there; nothing changes on the server.')) return;
+  try {
+    const r = await api('/api/mailcal', {action, id}, true);
+    showMailCal(r);
+    toast(r.message || 'Removed');
+  } catch (err) { toast(err.message, true); }
+}
+// An Advanced field goes to the handheld only when the user typed in it: the
+// filled-in values are the handheld's own preset or guess, and sending them
+// would replace the servers an account was saved with.
+function mcTyped(id) {
+  const el = mcEl(id);
+  return el.dataset.typed === '1' ? el.value.trim() : '';
+}
+mcEl('sendMail').onclick = async () => {
+  const email = mcEl('mailEmail');
+  const pass = mcEl('mailPass');
+  if (!email.value.trim()) { accountSay('mailMsg', 'Type your email address first', true); email.focus(); return; }
+  const btn = mcEl('sendMail');
+  btn.disabled = true; btn.textContent = 'Checking with your mail server...';
+  accountSay('mailMsg', '');
+  try {
+    const r = await api('/api/mailcal', {
+      action: 'addAccount', email: email.value.trim(), password: pass.value, name: mcEl('mailName').value.trim(),
+      imapHost: mcTyped('mailImapHost'), imapPort: mcTyped('mailImapPort'), imapSec: mcTyped('mailImapSec'),
+      smtpHost: mcTyped('mailSmtpHost'), smtpPort: mcTyped('mailSmtpPort'), smtpSec: mcTyped('mailSmtpSec'),
+      username: mcEl('mailUser').value.trim(), caldav: mcTyped('mailCalDAV'),
+    }, true);
+    pass.value = '';
+    showMailCal(r);
+    accountSay('mailMsg', r.message || 'Saved on the handheld.');
+    toast('Added on the handheld');
+  } catch (err) {
+    accountSay('mailMsg', err.message, true);
+    toast('Not added', true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add on handheld';
+  }
+};
+mcEl('sendCal').onclick = async () => {
+  const link = mcEl('calURL');
+  if (!link.value.trim()) { accountSay('calMsg', 'Paste the calendar\'s link first', true); link.focus(); return; }
+  const btn = mcEl('sendCal');
+  btn.disabled = true; btn.textContent = 'Checking the calendar...';
+  accountSay('calMsg', '');
+  try {
+    const r = await api('/api/mailcal', {
+      action: 'addCalendar', url: link.value.trim(), name: mcEl('calName').value.trim(),
+      username: mcEl('calUser').value.trim(), password: mcEl('calPass').value,
+    }, true);
+    link.value = ''; mcEl('calName').value = ''; mcEl('calUser').value = ''; mcEl('calPass').value = '';
+    showMailCal(r);
+    accountSay('calMsg', r.message || 'Saved on the handheld.');
+    toast('Calendar added');
+  } catch (err) {
+    accountSay('calMsg', err.message, true);
+    toast('Not added', true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Add on handheld';
   }
 };
 

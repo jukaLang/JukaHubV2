@@ -19,8 +19,12 @@
 #      Mali Smart Pro S), and the SDL-hosted backend against a fake libSDL2
 #      (explicit, context-first, probe contexts, eglReleaseThread, both
 #      automatic fallbacks, SDL2 missing or failing, a default display that
-#      never comes up)
-#   8. surface probe (host as is, then against the mock GPU)
+#      never comes up), and the game's GLES imports bound to the libraries
+#      beside its libEGL (mock_gles.c, a decoy on the library path)
+#   8. surface probe (host as is, then against the mock GPU), its "SDL:"
+#      verdict against the fake libSDL2, the stock firmware's libEGL first
+#      (a staged firmware tree beats a decoy on the library path), and inside
+#      the runner
 #   9. ALooper + AInputQueue probe
 #  10. OpenSL ES audio probe
 # Windows (MinGW/MSYS): the legacy subset (dlopen lifecycle, surface and
@@ -255,7 +259,10 @@ GFL="-O1 -g -fPIC -fno-builtin -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 $WARN"
 for f in fake_bionic_dep fake_bionic fake_glue fake_egl; do
     $CC $GFL -c "$HERE/$f.c" -o "$WORK/$f.o"
 done
-sh "$HERE/mkstubs.sh" "$WORK/stubs" "$WORK/fake_bionic_dep.o" "$WORK/fake_bionic.o" "$WORK/fake_glue.o" "$WORK/fake_egl.o"
+# the same EGL game with a GLES import (glGetString), for the GLES binding
+$CC $GFL -DEGLTEST_GLES -c "$HERE/fake_egl.c" -o "$WORK/fake_egl_gles.o"
+sh "$HERE/mkstubs.sh" "$WORK/stubs" "$WORK/fake_bionic_dep.o" "$WORK/fake_bionic.o" "$WORK/fake_glue.o" "$WORK/fake_egl.o" \
+    "$WORK/fake_egl_gles.o"
 NDKLINK="-shared -nostdlib -L$WORK/stubs -L$LIBDIR -Wl,--no-as-needed -Wl,--no-undefined"
 RELR=""
 if $CC $NDKLINK -Wl,-z,pack-relative-relocs "$WORK/fake_bionic_dep.o" -lc -o "$WORK/relr-probe.so" 2>/dev/null &&
@@ -267,6 +274,8 @@ $CC $NDKLINK "$WORK/fake_bionic.o" -lfake_dep -lc -lm -ldl -llog -landroid -Wl,-
     -o "$LIBDIR/libfake_bionic.so"
 $CC $NDKLINK "$WORK/fake_glue.o" -lc -llog -landroid -Wl,-soname,libfake_glue.so -o "$LIBDIR/libfake_glue.so"
 $CC $NDKLINK "$WORK/fake_egl.o" -lEGL -lc -llog -landroid -Wl,-soname,libfake_egl.so -o "$LIBDIR/libfake_egl.so"
+$CC $NDKLINK "$WORK/fake_egl_gles.o" -lEGL -lGLESv2 -lc -llog -landroid -Wl,-soname,libfake_eglgles.so \
+    -o "$LIBDIR/libfake_eglgles.so"
 [ -n "$RELR" ] && pass "dependency linked with DT_RELR" || echo "SKIP: linker without -z pack-relative-relocs"
 if readelf -d "$LIBDIR/libfake_bionic.so" | grep -q 'Shared library: \[libc.so\]' &&
     readelf --dyn-syms -W "$LIBDIR/libfake_bionic.so" | grep -q 'pthread_mutex_lock@LIBC'; then
@@ -490,14 +499,48 @@ expect "ANDROIDPAK_GLES2_LIB is SDL's GLES library" "$WORK/present-sdl-release.l
 expect "EGL game checks (sdl, eglReleaseThread)" "$WORK/present-sdl-release.log" "[egl-test] all checks passed"
 # The firmware ships only an unversioned libGLESv2.so beside its libEGL: SDL
 # is pointed at that file (its own default libGLESv2.so.2 would not load).
-mkdir -p "$WORK/gpu"
+# mock_gles.c copies: the firmware's GLES beside the mock libEGL, and a decoy
+# libGLESv2.so.2 on the library path; glGetString(GL_VERSION) names the copy.
+mockgles() { # mockgles <id> <output>
+    $CC -O1 -g -std=gnu11 $WARN -fPIC -shared -fvisibility=hidden "-DMOCKGLES_ID=\"$1\"" "$HERE/mock_gles.c" -o "$2"
+}
+mkdir -p "$WORK/gpu" "$WORK/decoy"
 ln -sf ../libmockgpu.so "$WORK/gpu/libEGL.so"
-: > "$WORK/gpu/libGLESv2.so"
+mockgles beside-libEGL "$WORK/gpu/libGLESv2.so"
+mockgles gles1-beside-libEGL "$WORK/gpu/libGLESv1_CM.so"
+mockgles decoy-on-the-library-path "$WORK/decoy/libGLESv2.so.2"
 run_to "$WORK/present-sdl-gles.log" env ANDROIDPAK_EGL_LIB="$WORK/gpu/libEGL.so" "$FAKESDL" ANDROIDPAK_PRESENT=sdl \
     $STOCK_NO_KMS ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
 expect "SDL loads the GLES library beside the chosen libEGL" "$WORK/present-sdl-gles.log" \
     "[fakesdl] SDL_GL_LoadLibrary: GLES library $WORK/gpu/libGLESv2.so"
 expect "EGL game checks (sdl, firmware GLES name)" "$WORK/present-sdl-gles.log" "[egl-test] all checks passed"
+# The game's own GLES imports: bound to the libraries beside its libEGL (the
+# same file SDL got), not to the libGLESv2.so.2 the library path finds first;
+# the game's glGetString says which one its import reached.
+run_to "$WORK/present-gles.log" env ANDROIDPAK_EGL_LIB="$WORK/gpu/libEGL.so" LD_LIBRARY_PATH="$WORK/decoy" \
+    ANDROIDPAK_PRESENT=native ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_eglgles.so ANDROIDRT_SMOKE_FRAMES=5 \
+    $TO "$LOADER"
+expect_rc "a GLES game on the native backend exits cleanly" 0
+expect "the game's libGLESv2.so/libGLESv3.so are bound beside its libEGL" "$WORK/present-gles.log" \
+    "[androidrt][present] the game's libGLESv2.so/libGLESv3.so: $WORK/gpu/libGLESv2.so (beside its libEGL)"
+expect "the game's libGLESv1_CM.so is bound beside its libEGL" "$WORK/present-gles.log" \
+    "[androidrt][present] the game's libGLESv1_CM.so: $WORK/gpu/libGLESv1_CM.so (beside its libEGL)"
+expect "the game's GL call reaches the GLES beside its libEGL" "$WORK/present-gles.log" \
+    "[egl-test] GL_VERSION OpenGL ES 3.2 mockgles beside-libEGL"
+expect "EGL game checks (GLES beside libEGL)" "$WORK/present-gles.log" "[egl-test] all checks passed"
+# ANDROIDPAK_GLES2_LIB still wins, and nothing is bound for it.
+run_to "$WORK/present-gles-env.log" env ANDROIDPAK_EGL_LIB="$WORK/gpu/libEGL.so" \
+    ANDROIDPAK_GLES2_LIB="$WORK/decoy/libGLESv2.so.2" ANDROIDPAK_PRESENT=native \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_eglgles.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect "ANDROIDPAK_GLES2_LIB still wins over the GLES beside libEGL" "$WORK/present-gles-env.log" \
+    "[egl-test] GL_VERSION OpenGL ES 3.2 mockgles decoy-on-the-library-path"
+expect_not "nothing is bound for a library ANDROIDPAK_GLES2_LIB names" "$WORK/present-gles-env.log" \
+    "the game's libGLESv2.so/libGLESv3.so:"
+# Nothing beside libEGL: the library path decides, as before.
+run_to "$WORK/present-gles-path.log" env "$MOCK" LD_LIBRARY_PATH="$WORK/decoy" ANDROIDPAK_PRESENT=native \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_eglgles.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect "with no GLES beside libEGL the library path decides" "$WORK/present-gles-path.log" \
+    "[egl-test] GL_VERSION OpenGL ES 3.2 mockgles decoy-on-the-library-path"
 # An import scan draws nothing: ANDROIDPAK_PRESENT=sdl does not start SDL.
 run_to "$WORK/present-sdl-scan.log" env "$MOCK" "$FAKESDL" ANDROIDPAK_PRESENT=sdl $STOCK_NO_KMS ANDROIDPAK_SCAN=1 \
     ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so $TO "$LOADER"
@@ -599,14 +642,73 @@ expect "EGL game checks (sdl asked, gbm used)" "$WORK/present-nosdl-gbm.log" "[e
 
 # ── 8. surface probe ──────────────────────────────────────────────────
 echo "== surface probe =="
-$CC -O1 -g -std=gnu11 $WARN -I"$SRC" -DSURFACE_PROBE_MAIN "$SRC/surface.c" "$SRC/dlport.c" -o "$WORK/probe" -ldl
+# APAK_FIRMWARE_ROOT (empty on the device) puts the stock firmware's libEGL
+# paths under $WORK/fw, where the stock-firmware case below stages one.
+$CC -O1 -g -std=gnu11 $WARN -I"$SRC" -DSURFACE_PROBE_MAIN "-DAPAK_FIRMWARE_ROOT=\"$WORK/fw\"" "$SRC/surface.c" \
+    "$SRC/dlport.c" -o "$WORK/probe" -ldl
 run_to "$WORK/probe-host.log" "$WORK/probe"
 expect_rc "probe completes on a GPU-less host" 0
-run_to "$WORK/probe-mock.log" env "$MOCK" ANDROIDPAK_GBM_LIB="$WORK/libmockgpu.so" ANDROIDPAK_DRM_LIB="$WORK/libmockgpu.so" \
-    ANDROIDPAK_DRM_NODE=/dev/null "$WORK/probe"
+expect "probe gives an SDL verdict on a GPU-less host" "$WORK/probe-host.log" "[androidrt][surface] SDL: NO — "
+run_to "$WORK/probe-mock.log" env "$MOCK" "$FAKESDL" ANDROIDPAK_GBM_LIB="$WORK/libmockgpu.so" \
+    ANDROIDPAK_DRM_LIB="$WORK/libmockgpu.so" ANDROIDPAK_DRM_NODE=/dev/null "$WORK/probe"
 expect_rc "probe completes against the mock GPU" 0
 expect "probe reports the GBM/KMS path" "$WORK/probe-mock.log" "status: GBM/KMS path YES 1280x720"
 expect "probe finds the panel mode" "$WORK/probe-mock.log" "KMS: connector 31 mode 1280x720 1280x720@60"
+# The SDL path: the firmware's SDL2 started the way the sdl backend starts it,
+# but with no window — library, version, video driver and SDL's EGL display.
+expect "probe: the SDL verdict names library, version, driver and EGL" "$WORK/probe-mock.log" \
+    "[androidrt][surface] SDL: YES — $WORK/libfakesdl.so 2.0.0, video driver mali, EGL display up"
+expect "probe: SDL is pointed at the probe's libEGL" "$WORK/probe-mock.log" \
+    "[fakesdl] SDL_InitSubSystem(VIDEO): driver mali, EGL from $WORK/libmockgpu.so"
+expect "probe: SDL's EGL display is initialised" "$WORK/probe-mock.log" "[fakesdl] SDL_GL_LoadLibrary: EGL display initialised"
+expect_not "probe: SDL creates no window" "$WORK/probe-mock.log" "[fakesdl] SDL_CreateWindow"
+expect "probe: SDL's video is quit again" "$WORK/probe-mock.log" "[fakesdl] SDL_QuitSubSystem(VIDEO)"
+NO_GBM="ANDROIDPAK_GBM_LIB=/nonexistent/libgbm.so ANDROIDPAK_DRM_LIB=/nonexistent/libdrm.so"
+run_to "$WORK/probe-sdl-noinit.log" env "$MOCK" "$FAKESDL" $NO_GBM FAKESDL_FAIL_INIT=1 "$WORK/probe"
+expect_rc "probe completes when SDL's video init fails" 0
+expect "probe: a failing SDL video init is the verdict" "$WORK/probe-sdl-noinit.log" \
+    "[androidrt][surface] SDL: NO — $WORK/libfakesdl.so 2.0.0: SDL_InitSubSystem(VIDEO) failed: mali-fbdev: Could not open framebuffer device"
+run_to "$WORK/probe-sdl-noegl.log" env "$MOCK" "$FAKESDL" $NO_GBM MOCKGPU_DEFAULT_DOWN=1 "$WORK/probe"
+expect "probe: an EGL display SDL cannot bring up is the verdict" "$WORK/probe-sdl-noegl.log" \
+    "[androidrt][surface] SDL: NO — $WORK/libfakesdl.so 2.0.0, video driver mali: SDL_GL_LoadLibrary failed: Could not initialize EGL"
+# The stock firmware (ANDROIDPAK_DEVICE=trimui-*): the probe loads EGL like the
+# present layer — the firmware's own libEGL first, not the libEGL.so.1 the
+# library path finds first — and points SDL at that same file.
+mkdir -p "$WORK/fw/usr/lib" "$WORK/decoy-egl"
+cp "$WORK/libmockgpu.so" "$WORK/fw/usr/lib/libEGL.so"
+cp "$WORK/libmockgpu.so" "$WORK/decoy-egl/libEGL.so.1"
+run_to "$WORK/probe-trimui.log" env "$FAKESDL" $NO_GBM ANDROIDPAK_DEVICE=trimui-smart-pro \
+    LD_LIBRARY_PATH="$WORK/decoy-egl" "$WORK/probe"
+expect_rc "probe completes on the stock firmware" 0
+expect "probe on the stock firmware: libraries line names the firmware libEGL" "$WORK/probe-trimui.log" \
+    "[androidrt][surface] libraries: EGL ok ($WORK/fw/usr/lib/libEGL.so),"
+expect "probe on the stock firmware: SDL is pointed at the firmware libEGL" "$WORK/probe-trimui.log" \
+    "[fakesdl] SDL_InitSubSystem(VIDEO): driver mali, EGL from $WORK/fw/usr/lib/libEGL.so"
+run_to "$WORK/probe-other.log" env $NO_GBM ANDROIDPAK_DEVICE=generic LD_LIBRARY_PATH="$WORK/decoy-egl" "$WORK/probe"
+expect "probe elsewhere: the library path's libEGL as before" "$WORK/probe-other.log" \
+    "[androidrt][surface] libraries: EGL ok (libEGL.so.1),"
+# Inside the runner (ANDROIDPAK_SURFACE=1) SDL2 is the present layer's: the
+# verdict is what that layer measured, SDL's video is not started a second
+# time, and the display the game and SDL share is not terminated under them.
+run_to "$WORK/probe-runner-sdl.log" env "$MOCK" "$FAKESDL" $STOCK_NO_KMS ANDROIDPAK_SURFACE=1 \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect_rc "the runner's probe on the SDL-hosted default: the game exits cleanly" 0
+expect "the runner's probe reports the present layer's SDL" "$WORK/probe-runner-sdl.log" \
+    "[androidrt][surface] SDL: YES — $WORK/libfakesdl.so 2.0.0, video driver mali, EGL display up"
+expect_not "the runner's probe starts no second SDL video init" "$WORK/probe-runner-sdl.log" \
+    "[fakesdl] SDL_InitSubSystem(VIDEO) again"
+expect_not "the runner's probe leaves the shared EGL display initialised" "$WORK/probe-runner-sdl.log" \
+    "[mockgpu] eglTerminate"
+expect_count "with the probe every frame still goes through SDL (5 of 5)" "$WORK/probe-runner-sdl.log" 5 \
+    "[fakesdl] SDL_GL_SwapWindow frame"
+# auto on the Smart Pro S runs native and keeps SDL as its fallback: the probe
+# names the library but starts no SDL video the run has not started.
+run_to "$WORK/probe-runner-native.log" env "$MOCK" "$FAKESDL" $MALI_NO_KMS ANDROIDPAK_SURFACE=1 \
+    ANDROIDPAK_MAINLIB=lib/arm64-v8a/libfake_egl.so ANDROIDRT_SMOKE_FRAMES=5 $TO "$LOADER"
+expect_rc "the runner's probe on the native backend: the game exits cleanly" 0
+expect "the runner's probe says why SDL's video was not measured" "$WORK/probe-runner-native.log" \
+    "[androidrt][surface] SDL: $WORK/libfakesdl.so 2.0.0 loads; video driver and EGL not measured — this run starts SDL only as the native backend's fallback"
+expect_not "the runner's probe starts no SDL video of its own" "$WORK/probe-runner-native.log" "[fakesdl] SDL_InitSubSystem"
 
 # ── 9. ALooper + AInputQueue probe ────────────────────────────────────
 echo "== looper/input probe =="

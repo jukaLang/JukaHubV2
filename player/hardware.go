@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -158,20 +159,100 @@ func getCPUTempC() string {
 }
 
 // cpuTempValueC is the same read without the display formatting, for callers
-// that map the value (the LED temperature policy) rather than print it.
+// that map the value (the LED temperature policy, the fan curve) rather than
+// print it. It is the hottest of the CPU and GPU zones (cpuTempZones): the
+// Smart Pro S's A523 has a zone per CPU cluster plus the GPU's, and zone0 alone
+// can be the cool little cluster while the big one throttles.
 func cpuTempValueC() (float64, bool) {
-	candidates := []string{
-		"/sys/class/thermal/thermal_zone0/temp",
-		"/sys/class/thermal/thermal_zone1/temp",
-	}
-	for _, c := range candidates {
-		if data, err := os.ReadFile(c); err == nil {
-			if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 0 {
-				return float64(v) / 1000.0, true
-			}
+	best, ok := 0.0, false
+	for _, z := range cpuTempZones() {
+		if v, good := readThermalMilliC(z.path); good && (!ok || v > best) {
+			best, ok = v, true
 		}
 	}
-	return 0, false
+	return best, ok
+}
+
+// thermalZone is one kernel thermal zone the temperature read uses.
+type thermalZone struct {
+	kind string // the zone's type, "cpu_thermal_zone"
+	path string // its temp node
+}
+
+// thermalLegacyZones are what the read used before the types were probed,
+// kept for a kernel whose zones name no CPU or GPU.
+var thermalLegacyZones = []thermalZone{
+	{kind: "zone0", path: "/sys/class/thermal/thermal_zone0/temp"},
+	{kind: "zone1", path: "/sys/class/thermal/thermal_zone1/temp"},
+}
+
+var cpuTempZoneProbe struct {
+	once  sync.Once
+	zones []thermalZone
+}
+
+// cpuTempZones lists, once, the zones whose type names a CPU or GPU sensor.
+// The zones a kernel offers do not change while it runs.
+func cpuTempZones() []thermalZone {
+	cpuTempZoneProbe.once.Do(func() {
+		types, _ := filepath.Glob("/sys/class/thermal/thermal_zone*/type")
+		var found []thermalZone
+		for _, t := range types {
+			data, err := os.ReadFile(t)
+			if err != nil {
+				continue
+			}
+			kind := strings.TrimSpace(string(data))
+			if thermalZoneIsChip(kind) {
+				found = append(found, thermalZone{kind: kind, path: filepath.Join(filepath.Dir(t), "temp")})
+			}
+		}
+		if len(found) == 0 {
+			found = thermalLegacyZones
+		}
+		cpuTempZoneProbe.zones = found
+		if runtime.GOOS == "linux" {
+			kinds := make([]string, 0, len(found))
+			for _, z := range found {
+				kinds = append(kinds, z.kind)
+			}
+			logInfo("thermal", "temperature zones: %s", strings.Join(kinds, ", "))
+		}
+	})
+	return cpuTempZoneProbe.zones
+}
+
+// thermalZoneIsChip reports whether a zone type is a CPU or GPU sensor
+// ("cpu_thermal_zone", "cpul_thermal_zone", "gpu_thermal_zone", "soc_thermal").
+// Battery, charger, DDR and board sensors are not: they run cooler and would
+// only hide the chip's heat. Pure.
+func thermalZoneIsChip(kind string) bool {
+	k := strings.ToLower(kind)
+	for _, skip := range []string{"batt", "axp", "charger", "usb", "ddr", "board", "ntc", "pmic"} {
+		if strings.Contains(k, skip) {
+			return false
+		}
+	}
+	for _, want := range []string{"cpu", "gpu", "soc", "cluster"} {
+		if strings.Contains(k, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// readThermalMilliC reads one temp node (millidegrees). Zero, negative and
+// absurd values are a sensor that is off or broken, not a temperature.
+func readThermalMilliC(path string) (float64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || v <= 0 || v >= 150000 {
+		return 0, false
+	}
+	return float64(v) / 1000.0, true
 }
 
 // getDiskInfo reports the volume JukaHub lives on (the SD card on the

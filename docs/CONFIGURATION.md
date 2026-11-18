@@ -61,8 +61,9 @@ settings such as `search_query` or `stream_url`.
 |-----|------|---------|
 | `buttonColor`, `labelColor`, `inputColor` | `"#rrggbb"` or `{r,g,b}` | palette. `buttonColor` is a light tint under each scene button's glass; focus rings, pills and highlights use the active theme's accent, not this colour |
 | `backgroundImage` | string | your own wallpaper, drawn on every screen (Home included) under the backdrop's dim and colour blooms so glass and text stay readable. Empty or the stock `background.jpg` means Home's procedural backdrop; the stock image is not loaded. A picked image is scaled once to the canvas when it loads. A `.gif` plays: it is decoded frame by frame off the render thread, cropped to the screen's shape and kept within a memory budget (40 MB of frames on the handheld), and pixel art stays sharp at a whole-number scale (see `wallpaperAnimate`) |
-| `wallpaper` | string | the picture picked in **Settings → Display & theme → Wallpaper** (or Start → Device → Wallpapers), kept in `jukauser.json` and put back at start when the design config names the stock `background.jpg`; `none` means no wallpaper. Whichever came last, the pick or an experience pack's wallpaper, wins; a wallpaper named in the design config itself still beats both |
-| `wallpaperAnimate` | bool | Settings → Display & theme → **Animate wallpaper** (on by default): a GIF wallpaper plays; off holds its first frame. Battery Saver holds it too. Plain Reduce Motion does not, because the handheld ships with it on |
+| `wallpaper` | string | the picture picked in **Settings → Theme & look → Wallpaper** (or Start → Device → Wallpapers), kept in `jukauser.json` and put back at start when the design config names the stock `background.jpg`; `none` means no wallpaper. Whichever came last, the pick or an experience pack's wallpaper, wins; a wallpaper named in the design config itself still beats both |
+| `wallpaperAnimate` | bool | Settings → Theme & look → **Animate wallpaper** (on by default): a GIF wallpaper plays; off holds its first frame. Battery Saver holds it too. Plain Reduce Motion does not, because the handheld ships with it on |
+| `themeAutoUpdate` | bool | Settings → Theme & look → **Update themes automatically** (on by default): a theme installed from the gallery (Community themes) gets its author's new version when the gallery index is read — on opening the panel, and once a day in the background while online. A theme on screen repaints itself. A theme file you edited on the device is never replaced automatically: the panel tags it **Edited · A update**, and A asks once more, keeping your file as `themes/<id>.edited.json.bak`. Off: new versions are only tagged **A update** in the panel |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
 | `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. Logical font sizes follow that canvas (0.75× on the compact one) so text keeps its proportion to the layout. |
@@ -76,14 +77,19 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `liquidBg` | `"off"`/`"slight"`/`"medium"`/`"lively"` | Settings → Display & theme → **Liquid background**, or **R2** on any screen whose footer gives R2 no other job (the footer then shows **R2 Water**; **W** on Home with a keyboard), which steps Off → Slight → Medium → Lively (default `off` when unset; the old `gentle` reads as `medium`). Once on, the water is behind every screen: the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile (a step where no focus ring moves still ripples near the highlight), choosing something splashes, going back swells the water up, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. An unrecognised value reads as off. Reduce Motion halves the rain and softens the ripples. The water is drawn between its steps, its light and shadow over the whole backdrop, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld steps down to a coarser one still by itself if the water costs more than 5 ms a frame |
+| `liquidBg` | `"off"`/`"slight"`/`"medium"`/`"lively"` | Settings → Theme & look → **Liquid background**, or **R2** on any screen whose footer gives R2 no other job (the footer then shows **R2 Water**; **W** on Home with a keyboard), which steps Off → Slight → Medium → Lively (default `off` when unset; the old `gentle` reads as `medium`). Once on, the water is behind every screen: the backdrop under the glass becomes a shallow pool that the wallpaper or Home's colours are bent through. Moving the focus drops a ripple under the new tile (a step where no focus ring moves still ripples near the highlight), choosing something splashes, going back swells the water up, the Smart Pro's sticks stir it (the pointer on a Brick in mouse mode, the mouse on a PC), and occasional rain keeps it moving until two minutes after you last touched anything. An unrecognised value reads as off. Reduce Motion halves the rain and softens the ripples. The water is drawn between its steps, its light and shadow over the whole backdrop, and while it moves it asks for the full frame rate; Low Power uses a coarser grid, and the handheld steps down to a coarser one still by itself if the water costs more than 5 ms a frame |
 | `liquidBgResume` | `"slight"`/`"medium"`/`"lively"` | Last active liquid level, saved when **Liquid background** is switched off. Start → Device → **Liquid background** restores it when switched back on; if absent, the switch uses `medium` |
 | `liquidTilt` | bool | **Tilt to slosh** (default on): with the liquid background on, tilting a device that has an accelerometer (Linux IIO under `/sys/bus/iio`, or an SDL sensor on a Windows tablet) sloshes the water. The row appears only where a sensor answered; none is known on the Smart Pro or the Brick |
 | `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `autoSleep` | minutes as text, `"0"`/`"3"`/`"5"`/`"10"`/`"15"`/`"30"` | Settings → Power → **Auto sleep** (handheld only; default `"0"`, Off): suspend the handheld after that many minutes without input — never while a game owns the screen, while charging, while music or a video plays (or is paused), while a download, install, extraction or Screen Share viewer is running, while a panel is open, or while any alarm is enabled (a sleeping device cannot ring). The wake counts as input. |
+| `travelLock` | bool | Settings → Power & battery → **Travel lock** (TrimUI Smart Pro only; default off): the FN switch locks the power button. Turning it on stores the switch's current position as unlocked (`travelLockAt`, bookkeeping: the reading `"0"`/`"1"` that means locked). Locked, a press does not wake the device (each wake but an alarm's goes back to sleep) and a power-on is turned straight back off by the boot hook `<SD>/System/starts/00-jukahub-travel-lock.sh`, which the setting writes and removes (it logs to `travel-lock.log` in the JukaHub folder). Slide the switch back, or delete the hook, to undo. |
+| `sleepPowerOff` | text: whole hours (`"1"`…`"48"`) or minutes with an `m` (`"15m"`, `"30m"`); `"0"` is Off | Settings → Power & battery → **Power off after sleeping**, and Quick Settings → **Auto power off** (handheld only; stops Off, 15 min, 30 min, 1, 2, 4, 6, 8, 12, 24 and 48 h; missing = `"6"`, or `"1"` on a kernel that only light-sleeps; a hand-edited delay over a week is held at a week): after that long asleep the handheld wakes itself on the RTC alarm with the screen off, saves the RetroArch game the sleep was holding (save state + quit through RetroArch's network commands; only RetroArch's exit counts as proof) and powers off. On a charger, or with a game it cannot save that way (a standalone emulator, a port, network commands off, the in-game menu open), it goes back to sleep instead. Time asleep is the longer of BOOTTIME's and the RTC's count (a kernel that leaves the suspend out of BOOTTIME no longer hides the sleep). A NextUI pak game sleeping in minarch gets the same deadline: when minarch saves the game for its sleep (NextUI's `auto_resume.txt` naming the running game, written with its slot-9 state) the RTC alarm is set for the delay, and a wake on that alarm (no power press, no JukaHub alarm due) powers the device off, on a charger too; the marker the wake removed is put back so the next power-on resumes the game. A core without save states, or a marker JukaHub did not see before the suspend, gets no deadline. In Quick Settings, A turns it Off or back on at the last delay (kept in the bookkeeping key `sleepPowerOffLast`) and Left/Right step it. Needs an RTC wake alarm; the row says when there is none |
+| `resumeAtPowerOn` | bool | Settings → Power & battery → **Resume game at power on** (default on): the game that power off saved starts again at the next power-on, boot animation skipped, back at its state through RetroArch's auto-load (needs `savestateResume`). Hold **B** at power-on to skip. The one-shot marker `data/resume-at-power-on.json` is deleted as soon as it is read |
+| `powerKeyMusic` | `"screen-off"`/`"sleep"` | Settings → Power & battery → **Power button while music plays** (handheld only; default `"screen-off"`): with music playing and no game, the power button only turns the screen off and the music keeps playing ([MUSIC_PLAYER.md](MUSIC_PLAYER.md#screen-off)); `"sleep"` sleeps and pauses it |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
+| `usbFileTransfer` | bool | Settings → Network → **USB file transfer** (default on, handheld only): a USB cable to a computer opens the SD card there over MTP; off, the cable only charges. See [USB_FILE_TRANSFER.md](USB_FILE_TRANSFER.md) |
 | `vpnEnabled`, `vpnRoute` | bool, `""`/`"config"` | Settings → Network → **VPN** (default off): send the device's traffic through the WireGuard configuration in `data/vpn.json` (imported in Settings, Files or the phone companion; never stored here), and **Send through the VPN**: everything (`""`) or only the configuration's `AllowedIPs` (`"config"`). On without a configuration does nothing; see [VPN.md](VPN.md) |
 | `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
 | `artAutoFetch` | bool | Settings → Games & emulators → **Find box art automatically** (default on): background box-art passes from the libretro thumbnail set — about 100 s after start on a card that never had one, at most daily, and early when the ROM folders gain games; online only, never during a game, on battery only at 20 % or more and after 90 s without input. Only game titles are sent (GET requests to thumbnails.libretro.com). Off leaves the library's Fill gaps (**L1** / **F**). The pass stamp is `data/game-art/.auto-art.json` ([Games Library → Found automatically](GAME_LIBRARY.md#found-automatically)) |
@@ -114,7 +120,7 @@ else a toggle changes) into `jukauser.json`, which is merged over the design
 defaults at startup. Settings → **Smart Widgets** adds `batterySaver`,
 `timeOfDayTheme` and `autoStart` there, for example.
 
-`timeOfDayTheme` (Settings → Display & theme → **Light & dark by time of
+`timeOfDayTheme` (Settings → Theme & look → **Light & dark by time of
 day**) switches between two colour themes: `themeDay` (default `light`) from
 `themeDayStart` and `themeNight` (default `hub`, JukaHub's own glass) from
 `themeNightStart`, both `"HH:MM"` (07:00 and 19:00 unless set; a window that
@@ -155,9 +161,13 @@ before. On a keyboard F4 opens the orb either way.
 `menuHoldScreenshot` (Settings → Controls → **Hold Menu: screenshot**, on by
 default; handhelds only): holding Menu for 0.7 s and letting go saves the
 screen as a PNG, in JukaHub's menus and in a game it launched. A tap still
-opens the voice orb (or goes back, where Menu means Back). Shots go to `/mnt/SDCARD/Screenshots` on a
-TrimUI (`screenshot_<time>.png` for JukaHub, `game_<time>.png` for a game),
-`Pictures\JukaHub` elsewhere. In a game the picture is the one on screen when
+opens the voice orb (or goes back, where Menu means Back). Shots go to the
+`screenshots` folder inside JukaHub's own folder — `Apps/JukaHub/screenshots` on
+a TrimUI, beside `JukaHub.exe` on a PC (`screenshot_<time>.png` for JukaHub,
+`game_<time>.png` for a game). When that folder is read-only they go to
+`/mnt/SDCARD/Screenshots` on a TrimUI and `Pictures\JukaHub` on a PC;
+`JUKAHUB_SCREENSHOT_DIR` overrides all of them. The preview card
+shows the saved file's path. In a game the picture is the one on screen when
 Menu went down; a button, trigger or volume key pressed with Menu cancels it.
 
 `jukaVoice` (Settings → Voice & AI → **Juka's voice**): `"voice"` (the
@@ -184,6 +194,31 @@ is dropped ([Voice](VOICE.md#your-own-words)).
 handhelds) makes holding **Select + L2** in a game pause it under a menu:
 Resume game, Ask Juka, Quit to JukaHub
 ([Controls](CONTROLS.md#in-game-menu-hold-select--l2)).
+
+`gameSwitcher` (Settings → Games & emulators → **Game switcher**, on by default)
+is the Onion / NextUI-style strip of recent games with save-state pictures: X on
+Home (Standard and Hero layouts), Start → Games, search, and the in-game menu's
+**Game switcher** row (quits the game, then opens the strip). Off hides the
+rows and gives X on Home back.
+
+Settings → **Emulation** writes these custom keys; each value goes into
+`retroarch.cfg` (or the core-options file) for one library launch and is undone
+when RetroArch exits, like `videoFilter`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `raTuningAudio` | `auto` | resampling: `auto` (per console), `best` (sinc, high), `balanced` (sinc, lower), `fast` (cc), `own` |
+| `raTuningLatency` | `auto` | `auto`, `standard` (RetroArch's own), `low` (2 swap images, automatic frame delay, audio ≤ 64 ms), `lowest` (audio ≤ 48 ms, plus 1 frame of run-ahead on light consoles) |
+| `raTuningOverlay` | `own` | `own`, `none`, or the path of an overlay `.cfg` |
+| `raTuningSmooth` | `true` | v-sync, audio sync and rate control on, VRR runloop off |
+| `raTuningRumble` | `own` | `own` or 0–100 (`input_rumble_gain`) |
+| `raTuningRotate` | `upright` | `upright`, `tate` (FBNeo / MAME 2003-Plus vertical mode), `own` |
+| `raTuningPAL` | `false` | the PAL region core option where the core has one |
+| `raTuning.<console>.audio` / `.latency` / `.overlay` | "" | one console's own choice ("Adjust for"); "" follows the all-consoles value |
+
+Cheats switched on in Game options → **Cheats** set `apply_cheats_after_load`,
+`apply_cheats_after_toggle` and (only when empty) `cheat_database_path` for that
+launch, and write the game's cheat file, removed again after RetroArch exits.
 
 `gameAssist` (Settings → Voice & AI → **Game assistant**, on by default) tells
 Juka which library game is being played, or was in the last 30 minutes, and on
@@ -273,6 +308,13 @@ sleep). `startupLockFails` counts wrong tries in a row (5 free, then 30 s
 doubling to 5 minutes, re-imposed after a restart) and `startupLockPending` (bool)
 records a lock that was up and never unlocked, so the next start locks whatever
 `startupLockWhen` says. All four are bookkeeping: never exported, never logged.
+Voice unlock adds three more: `startupLockVoice` is the spoken phrase's hash,
+`jhvoice1$<engine>$<words>$<iterations>$<salt>$<key>` (engine `offline` or
+`groq`, PBKDF2-SHA256 over the folded words; empty means no phrase),
+`startupLockVoiceMode` is `either` (the phrase or the code), `both` (the code,
+then the phrase) or `off`, and `startupLockVoiceMisses` counts misses in a row
+(5 rest the phrase until the right code). Removing `startupLockSecret` turns
+voice unlock off with it. Bookkeeping too: a change needs the code.
 
 JukaHub OS keeps its state outside `jukauser.json`, in `Apps/JukaHub/os/`:
 `os.json` (`enabled` — launch.sh starts `JukaHub --os-session` when it reads
@@ -288,7 +330,7 @@ Quick Settings (`Ctrl+Q`) writes these keys:
 |-----|---------|
 | `volume` (0–100) + `volumeSet` | mixer level; written only after you move the slider |
 | `brightness` (0–100) + `brightnessSet` | screen brightness, same rule; the header's brightness card writes it too |
-| `screensaverTimeout` | idle seconds before the screensaver overlay, cycled by the panel and by Settings → General → Screensaver after |
+| `screensaverTimeout` | idle seconds before the screensaver overlay, cycled by the panel and by Settings → Display → Lock screen after |
 | `lowPower`, `reducedMotion`, `fullscreen` | the remaining switches |
 | `ledSync` | audio-reactive stick/ring LEDs |
 
@@ -423,6 +465,13 @@ stick rings JukaHub checks every 10 s (every 60 s after something else has
 changed them twice) that the firmware has not taken them back; the log's `led`
 scene names the driver state when the rings are taken.
 
+`autoPerformance` (bool, default `true`) is Settings → **Automatic CPU speed**
+on the handheld: the CPU clock ceiling follows the app in front (lower on Home
+and the menus, higher for games, video, the Synth and HTML5 games), steps with
+how busy the CPU is and remembers each app's level in `auto-performance.json`.
+A game's own CPU profile or limit wins; with `powerProfiles` (Full speed while
+playing) off it only ever lowers the clock.
+
 `led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It
 is applied to the RGB value rather than to the sysfs `brightness` file, because
@@ -437,6 +486,46 @@ with the LED sync off (the loop runs only while Juka is up and the firmware's
 ring state is put back after), `on` only while the sync is on and
 `led_brightness` is above 0, `off` never; anything else means `always`.
 `led_brightness` trims Juka's colour too while the lights are on.
+
+`led_policy` also takes `screen` (Settings → Stick lights → **Screen
+colours**): the sticks follow the colours at the left and right edges of the
+picture, read from the framebuffer about twelve times a second (two narrow
+strips, never a whole frame), in JukaHub and over games. A new colour shows once
+it has held for half a second (the TrimUI rings blink on a colour change); the
+brightness follows the scene. `led_screen_games` (bool, default `true`) keeps it
+on over games; `led_screen_off_systems` (comma-separated console names as the
+library spells them) lists consoles whose games keep the firmware's lights —
+**For this console** adds or removes the last game's console.
+
+`led_ind_low_battery` (default `true`), `led_ind_charging` and
+`led_ind_standby` (default `false`) are the stick-light indicators: a slow red
+pulse at 10 % or less while not charging, a green breath while charging, and a
+dim glow while the screen is off or the device sleeps — in that order, over any
+`led_policy`, also over games, while the lights are on. `led_ind_brightness`
+(10–100, default 60) is their brightness; `led_brightness` does not dim them.
+
+`display_contrast` (-4…5), `display_saturation` (-5…5), `display_exposure`
+(-4…5) and `display_colortemp` (-20…20, negative is warmer), all default 0, are
+Settings → Display's picture rows: offsets from the firmware's values of
+the display driver's `enhance_contrast`, `enhance_saturation`, `enhance_bright`
+and `color_temperature` (`/sys/class/disp/disp/attr`). The firmware's values are
+kept in `_display_tune_base` the first time a row moves and written back by
+**Reset picture**. The rows always show: where a node is missing JukaHub draws
+contrast, exposure and colour temperature over its own frames instead
+(`displaytune_soft.go`, JukaHub's screens only), and Saturation stays greyed.
+The nodes are written again after a wake.
+
+`uiFont` is Settings → Display → **Font**: empty or `inter` is the bundled Inter;
+otherwise a downloaded face's id (`atkinson`, `lato`, `firasans`, `ubuntu`,
+`poppins`, `kanit`, `comicneue`, `sharetechmono`, `vt323`, `silkscreen`,
+`pressstart`, `notosansjp`) or `file:<name>` for a .ttf/.otf in the data
+folder's `fonts` folder (TrimUI: `<JukaHub>/data/fonts`; Windows:
+`%APPDATA%\JukaHub\fonts`). Nothing is downloaded until a face is picked, and
+a face whose file is missing draws in Inter.
+
+The hotspot (Tools → Hotspot) keeps its name and password in `_hotspot_ssid`
+and `_hotspot_pass`; the underscore keeps them out of exported settings. See
+[HOTSPOT.md](HOTSPOT.md).
 
 **Quick Settings → LED Style** edits all four keys — mode, effect, colour and
 brightness — with the animation running for a live preview, and writes them
@@ -489,7 +578,7 @@ config-customizable.
 ### Home arrangements and total conversions
 
 The home screen has six arrangements, chosen with the `homeArrangement`
-custom variable. **Settings → Display & theme → Home layout** and the strip at
+custom variable. **Settings → Theme & look → Home layout** and the strip at
 the top of Home's edit mode ([CONTROLS.md](CONTROLS.md#home-layouts)) offer
 five of them: Tabs, Standard, Hero grid, Carousel and Widgets.
 
@@ -518,7 +607,16 @@ The Tabs Home keeps its own state in four more custom variables:
 `homeTabsShown` (the tab IDs in order, comma-separated, `-` before a hidden
 one; a tab it does not name is shown at the end), `homeTabsRemember` (`true`
 by default: open on the last tab; `false` opens on Main) and `homeTabLast` (the
-tab to come back to — bookkeeping, left out of the config document). Its Games
+tab to come back to — bookkeeping, left out of the config document). Three
+more set its look, each a row in Settings → Theme & look and on the Tabs
+Home's arranging sheet (L2): `homeTabsPosition` (`top` by default: the tab
+strip sits in the top bar; `bottom` puts it in a bar of its own over the
+button hints; only the Tabs Home reads it), `homeDimArt` (`true` by default:
+on the Tabs Home and in the Games library every cover but the selected one is
+drawn darker and greyer; `false` shows them all in full colour) and
+`listEdgeFade` (`true` by default: a long list or grid fades into the page at
+an edge with more past it; `false` cuts it off at the edge). Both switches
+read `on`, `off`, `1` and `0` too. Its Games
 tab reads `homeTabsEmuClean` (Settings → Games & emulators → **Hide emulators
 without games**): `auto` (the default) hides consoles with no games and dims a
 console whose games have no emulator with an Install badge; `all` lists every
@@ -527,17 +625,18 @@ console this device has an emulator for, empty ones as "0 games" (`on`, `off`,
 `collections.json` ([Other JSON stores](#other-json-stores)). The keys, tab
 IDs and examples are in [HOME_TABS.md](HOME_TABS.md#settings-keys).
 
-An experience pack's `homeLayout` takes the same values except `tabs` (the pack
-validator drops it today, so such a pack leaves the user's layout alone). A pack picks the
-arrangement, never the tiles: on `carousel` or `widgets` Home shows the user's
-own `homeTiles`.
+An experience pack's `homeLayout` takes the same values, `tabs` included: the
+pack switches to the Tabs Home, and its card reads "Home: Tabs" over a miniature
+of the tab strip. A pack picks the arrangement, never the tiles: on `carousel`
+or `widgets` Home shows the user's own `homeTiles`, on `tabs` the user's own
+tabs, favourites and collections.
 
-The **Total conversion** tab of the theme gallery (Settings → Appearance)
-pairs the Dashboard and the Hero grid with a palette: each preset there is a
-palette *plus* an arrangement, so picking one repaints and rearranges the
-interface in one press. The colour tab holds the palettes, which never move a
-card. A theme file in the themes folder can join the conversion tab by naming
-an arrangement:
+In **Settings → Theme & look**, Colour and Home layout are independent choices.
+Colour presets never move a card. The five Home layouts are Tabs, Standard,
+Hero grid, Carousel and Widgets. Built-in combinations that only paired a
+palette with a layout are hidden from the gallery; saved IDs still work. A
+theme file in the themes folder can still set an arrangement and appear under
+Styles:
 
 ```json
 {"name": "Paper tiles", "arrangement": "grid",
@@ -545,15 +644,15 @@ an arrangement:
 ```
 
 The console-inspired looks (**PS5 Style**, **PS4 Style**, **Switch 2 Style**,
-**Switch 2 Style Dark**, **Xbox Style** and the classic consoles) have their own
-Consoles tab. They also set the tile corners and the focus ring; PS5 Style
+**Switch 2 Style Dark**, **Xbox Style** and the classic consoles) appear under
+Styles. They also set the tile corners and the focus ring; PS5 Style
 turns the Carousel into the console's welcome hub (a row of icon tiles over
 trophy pills and a board of info cards), PS4 Style reshapes the row as a
 top-left *shelf* and the Switch 2 looks as the console's home screen (an
 edge-scrolling *strip* of square tiles led by your recent games, over a line
 of round buttons).
 A theme file can use the same optional keys: `carouselStyle`, `tileRadius`,
-`focusRing` and `focusRing2`. See [THEMES.md](THEMES.md#console-styles).
+`focusRing` and `focusRing2`. See [THEMES.md](THEMES.md#styles-and-layouts).
 
 ### Home tiles (`homeTiles`)
 
@@ -826,10 +925,14 @@ log.
 |------|-------|
 | `favorites.json` | favourites from before they moved into `jukauser.json` (older cards) |
 | `game-options.json` | per-game overrides: CPU ceiling, core, launch flags |
+| `auto-performance.json` | Automatic CPU speed: the clock level each game and screen settled at (safe to delete) |
 | `game-recents.json` | the Continue row |
+| `game-cheats.json` | Game options → Cheats: the cheat file used per game and the switched-on cheats |
+| `cheats-pending.json` | one-launch cheat files not yet removed after RetroArch exited (repair record) |
 | `musicfavorites.json` | starred tracks |
 | `music-playlists.json` | named playlists saved from the audio player |
 | `theme-catalog.json` | cached copy of the community theme index, so the Theme library browses offline |
+| `theme-updates.json` | which installed themes came from the gallery and a hash of what was written, so a new gallery version can be told apart from your own edits (safe to delete: installed themes are re-adopted, and any that differ from the gallery count as edited) |
 | `audioresume.json` | audiobook/podcast positions and playback speed |
 | `game-history.json` | per-game launches, recent sessions and interrupted launches |
 | `ipstreams.json` | the IPTV library you added |

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -282,6 +283,35 @@ func headphoneJackPlugged(readFile func(string) ([]byte, error)) bool {
 		}
 		return true
 	}
+	// Newer kernels (the Smart Pro S's 5.15) may have no switch class at all
+	// and report the jack through extcon: "HEADPHONE=1" in a state file.
+	for i := 0; i < 4; i++ {
+		data, err := readFile(path.Join("/sys/class/extcon", "extcon"+strconv.Itoa(i), "state"))
+		if err != nil {
+			continue
+		}
+		if extconJackPlugged(string(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+// extconJackPlugged reads an extcon state file ("USB=0\nHEADPHONE=1") for a
+// headphone or line-out cable. Pure.
+func extconJackPlugged(state string) bool {
+	for _, line := range strings.Split(state, "\n") {
+		name, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(name)) {
+		case "HEADPHONE", "LINE-OUT", "JACK":
+			if v := strings.TrimSpace(value); v != "" && v != "0" {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -341,13 +371,17 @@ func startAudioOutputMonitor() {
 			if links != lastLinks {
 				linkChangedAt = time.Now()
 			}
+			// A USB DAC plugged in or pulled out (usbdac.go: one small proc
+			// read) moves the sound at once, under the saver too: music plays
+			// on there.
+			dacChanged := usbDACPoll()
 			// A headset's audio is often not ready the instant its link
 			// appears, so under the saver keep probing for a short while after
 			// a change rather than once.
-			if backgroundPaused() && links == lastLinks && time.Since(linkChangedAt) > 3*audioOutputPollInterval {
+			if !dacChanged && backgroundPaused() && links == lastLinks && time.Since(linkChangedAt) > 3*audioOutputPollInterval {
 				continue
 			}
-			if !force && links == lastLinks && time.Since(lastProbe) < audioOutputPollInterval {
+			if !force && !dacChanged && links == lastLinks && time.Since(lastProbe) < audioOutputPollInterval {
 				continue
 			}
 			probeAudioOutput()
@@ -357,20 +391,26 @@ func startAudioOutputMonitor() {
 }
 
 // probeAudioOutput refreshes the cached output name from the host and moves
-// JukaHub's sound to a connected headset (audioroute.go). Bluetooth wins: a
-// headset that is connected is what the user is listening through, and a jack
-// on a device with a radio is usually the fallback.
+// JukaHub's sound to a USB DAC or a connected headset (audioroute.go). A USB
+// DAC wins (usbdac.go), then Bluetooth: a headset that is connected is what
+// the user is listening through, and a jack on a device with a radio is
+// usually the fallback.
 func probeAudioOutput() {
+	usbDACPoll()
 	headset := systemBluetoothAudioDevice()
 	if headset.addr == "" {
 		headset = bluealsaHeldHeadset()
 	}
 	audioRouteUpdate(headset.addr)
+	if dac := usbDACChipName(); dac != "" {
+		rememberAudioOutput(dac)
+		return
+	}
 	if headset.name != "" {
 		rememberAudioOutput(headset.name)
 		return
 	}
-	if headphoneJackPlugged(os.ReadFile) {
+	if headphoneJackPlugged(os.ReadFile) || headphoneJackEvdev() {
 		rememberAudioOutput("Headphones")
 		return
 	}

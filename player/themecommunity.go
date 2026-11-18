@@ -42,6 +42,8 @@ func openThemeCommunityPanel(config *Config) {
 	themeCommunityRowRects = nil
 	themeCommunityPanelRect = sdl.Rect{}
 	startThemeCatalogLoad(false)
+	// The Update tags come from the index already here, so they show offline.
+	go themeUpdateRescan()
 }
 
 func closeThemeCommunityPanel() {
@@ -86,6 +88,10 @@ func themeCommunityActivate(config *Config) {
 		return
 	}
 	entry := rows[themeCommunityPanel.cursor]
+	// A row with a new version waiting updates instead (themeupdate.go).
+	if themeUpdateActivate(config, entry) {
+		return
+	}
 	if err := installCommunityTheme(config, entry); err != nil {
 		ShowToast("Couldn't install that theme: "+err.Error(), ToastKindWarning)
 		return
@@ -174,7 +180,7 @@ func themeCommunityByline(entry communityTheme) string {
 	if author == "" {
 		author = "community"
 	}
-	byline := "by " + author
+	byline := "by " + author + communityThemeUpdatedSuffix(entry)
 	if len(entry.Tags) > 0 {
 		byline += " · " + joinTags(entry.Tags)
 	}
@@ -203,6 +209,9 @@ func themeCommunityRowHint(entry communityTheme) string {
 	// offering the key) would promise something the install refuses.
 	if isBuiltinThemeID(entry.ID) {
 		return "Reserved id"
+	}
+	if hint := themeUpdateRowHint(entry.ID); hint != "" {
+		return hint
 	}
 	if _, ok := themePresets[entry.ID]; ok {
 		return "Installed"

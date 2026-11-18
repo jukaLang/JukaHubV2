@@ -30,6 +30,13 @@ func cleanUserPath(p string) (string, error) {
 // helpers. It accepts both absolute paths and ordinary relative paths (the ROM
 // scan can return a relative Roms root), but rejects a parent component rather
 // than silently resolving to somewhere else.
+//
+// The value returned is the one a guard tested, in a form CodeQL's path rules
+// follow (filepath.IsLocal for a relative path, a root-prefix test for an
+// absolute one): use the result, never the argument. CodeQL 2.26 stopped
+// treating filepath.Rel as a guard, and it cannot see into
+// pathHasParentComponent, so without these tests every caller's sink is
+// reported again.
 func safeAbsolutePath(p string) (string, error) {
 	if pathHasParentComponent(p) {
 		return "", fmt.Errorf("path %q contains a traversal component", p)
@@ -38,7 +45,15 @@ func safeAbsolutePath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return clean, nil
+	// A relative path without a ".." segment stays below the working folder.
+	if filepath.IsLocal(clean) {
+		return clean, nil
+	}
+	// An absolute path starts at its volume's root ("/", `C:\`, `\\host\share\`).
+	if filepath.IsAbs(clean) && strings.HasPrefix(clean, filepath.VolumeName(clean)+string(filepath.Separator)) {
+		return clean, nil
+	}
+	return "", fmt.Errorf("path %q is neither absolute nor below the working folder", p)
 }
 
 // pathHasParentComponent reports whether any path segment is exactly "..".
@@ -96,6 +111,41 @@ func resolveWithinRoot(root, candidate string) (string, error) {
 	}
 	resolved = filepath.Clean(resolved)
 	if !isPathWithin(resolved, cleanRoot) {
+		return "", fmt.Errorf("path %q escapes %q", candidate, root)
+	}
+	// The same rule again as a lexical prefix test on the value returned: the
+	// form CodeQL's path rules follow (they no longer accept filepath.Rel, and
+	// do not look into isPathWithin). Both sides absolute first, the way
+	// isPathWithin compares them.
+	if filepath.IsAbs(resolved) != filepath.IsAbs(cleanRoot) {
+		absRoot, rootErr := filepath.Abs(cleanRoot)
+		absResolved, resErr := filepath.Abs(resolved)
+		if rootErr != nil || resErr != nil {
+			return "", fmt.Errorf("path %q escapes %q", candidate, root)
+		}
+		cleanRoot, resolved = absRoot, absResolved
+	}
+	if resolved == cleanRoot || (filepath.Separator == '\\' && strings.EqualFold(resolved, cleanRoot)) {
+		return cleanRoot, nil
+	}
+	// The working folder as root (Files' default on a PC): filepath.Join
+	// drops the "./", so the test is that the relative path stays local.
+	if cleanRoot == "." {
+		if filepath.IsLocal(resolved) {
+			return resolved, nil
+		}
+		return "", fmt.Errorf("path %q escapes %q", candidate, root)
+	}
+	prefix := cleanRoot
+	if !strings.HasSuffix(prefix, string(filepath.Separator)) {
+		prefix += string(filepath.Separator)
+	}
+	// Windows names are case-insensitive (isPathWithin agreed): spell the
+	// root part the way root does, so the byte-wise test below sees it.
+	if filepath.Separator == '\\' && len(resolved) >= len(prefix) && strings.EqualFold(resolved[:len(prefix)], prefix) {
+		resolved = prefix + resolved[len(prefix):]
+	}
+	if !strings.HasPrefix(resolved, prefix) {
 		return "", fmt.Errorf("path %q escapes %q", candidate, root)
 	}
 	return resolved, nil

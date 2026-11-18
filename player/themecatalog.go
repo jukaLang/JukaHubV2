@@ -45,6 +45,7 @@ type communityTheme struct {
 	Description string    `json:"description"`
 	Tags        []string  `json:"tags"`
 	Theme       themeFile `json:"theme"`
+	Updated     string    `json:"updated,omitempty"`
 }
 
 // communityCatalogFile is the part of gallery/community.json JukaHub reads.
@@ -179,6 +180,9 @@ func startThemeCatalogLoad(force bool) {
 		}
 		themeCatalogState.entries = entries
 		themeCatalogState.err = ""
+		// Installed gallery themes follow their author's new versions
+		// (themeupdate.go). Its own goroutine: this one holds the lock.
+		go themeUpdatesCatalogArrived(entries)
 		if len(skipped) > 0 {
 			logPatch("community themes: %d entries skipped: %s", len(skipped), strings.Join(skipped, "; "))
 		}
@@ -244,38 +248,9 @@ func installCommunityTheme(config *Config, entry communityTheme) error {
 	if config == nil {
 		return errors.New("no configuration is loaded")
 	}
-	id, err := communityThemeSlug(entry.ID)
+	id, err := writeCommunityTheme(entry)
 	if err != nil {
 		return err
-	}
-	file := entry.Theme
-	if strings.TrimSpace(file.Name) == "" {
-		file.Name = strings.TrimSpace(entry.Name)
-	}
-	if _, err := file.toPreset(); err != nil {
-		return err
-	}
-	if isBuiltinThemeID(id) {
-		// Writing themes/<id>.json would shadow a shipped palette for this
-		// session and for every config that names it; refuse instead. A theme
-		// installed on an earlier run is not in the compiled set, so it can
-		// still be updated.
-		return fmt.Errorf("%q is a built-in theme", id)
-	}
-	data, err := json.MarshalIndent(file, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(themeDir, id+".json")
-	if err := AtomicWrite(path, data, 0o644); err != nil {
-		return err
-	}
-	forgetThemePreset(id)
-	if _, failed := LoadThemeFiles(themeDir); failed[path] != nil {
-		return failed[path]
-	}
-	if _, ok := themePresets[id]; !ok {
-		return errors.New("the theme file did not load")
 	}
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = make(map[string]interface{})
@@ -286,6 +261,46 @@ func installCommunityTheme(config *Config, entry communityTheme) error {
 	// (themeschedule.go) instead of being undone at the next switch.
 	themeScheduleNoteManualPick(config, id)
 	return nil
+}
+
+// writeCommunityTheme writes and registers one entry without applying it. The
+// install above and the over-the-air update (themeupdate.go) share it, so an
+// update is validated and tracked exactly like a first install.
+func writeCommunityTheme(entry communityTheme) (string, error) {
+	id, err := communityThemeSlug(entry.ID)
+	if err != nil {
+		return "", err
+	}
+	file := communityThemePayload(entry)
+	if _, err := file.toPreset(); err != nil {
+		return "", err
+	}
+	if isBuiltinThemeID(id) {
+		// Writing themes/<id>.json would shadow a shipped palette for this
+		// session and for every config that names it; refuse instead. A theme
+		// installed on an earlier run is not in the compiled set, so it can
+		// still be updated.
+		return "", fmt.Errorf("%q is a built-in theme", id)
+	}
+	data, err := json.MarshalIndent(file, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(themeDir, id+".json")
+	if err := AtomicWrite(path, data, 0o644); err != nil {
+		return "", err
+	}
+	// Tracked from the moment it is on disk, so the next gallery read can tell
+	// a new version from the owner's own edits (themeupdate.go).
+	themeUpdateNoteInstalled(id, file)
+	forgetThemePreset(id)
+	if _, failed := LoadThemeFiles(themeDir); failed[path] != nil {
+		return "", failed[path]
+	}
+	if _, ok := themePresets[id]; !ok {
+		return "", errors.New("the theme file did not load")
+	}
+	return id, nil
 }
 
 // isBuiltinThemeID reports whether id belongs to a compiled palette. Startup

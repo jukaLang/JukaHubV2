@@ -81,12 +81,21 @@ func emu7zTool(ctx context.Context, client *http.Client) (string, error) {
 		if !strings.EqualFold(strings.TrimSpace(asset.Name), emu7zAsset) {
 			continue
 		}
-		sum, err := emuDownload(ctx, client, asset.BrowserDownloadURL, dest, emu7zMaxBytes, nil)
+		// Downloaded under another name and checked there: 7zr.exe only takes
+		// the name emu7zInstalled finds (and everyone runs) once its digest
+		// matches, so a bad download is never in place, not even for a moment.
+		unverified := dest + ".unverified"
+		sum, err := emuDownload(ctx, client, asset.BrowserDownloadURL, unverified, emu7zMaxBytes, nil)
 		if err != nil {
 			return "", err
 		}
 		if err := emuDigestMatches(sum, asset.Digest); err != nil {
-			_ = os.Remove(dest)
+			_ = os.Remove(unverified)
+			return "", err
+		}
+		_ = os.Remove(dest)
+		if err := os.Rename(unverified, dest); err != nil {
+			_ = os.Remove(unverified)
 			return "", err
 		}
 		return dest, nil

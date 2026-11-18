@@ -42,7 +42,9 @@ func getBatteryPercent() int {
 	}
 	// The same sysfs battery the charging check reads (see batterySysfsDir); -1
 	// means "unknown", which the battery saver treats as "do nothing".
-	pct := batteryPercentIn(batterySysfsDir())
+	// batteryCalCorrect maps the gauge's reading onto the charge a calibration
+	// run measured (batterycal.go); it is the identity until one has finished.
+	pct := batteryCalCorrect(batteryPercentIn(batterySysfsDir()))
 	batteryPercentCache.at = time.Now()
 	batteryPercentCache.pct = pct
 	return pct
@@ -87,6 +89,12 @@ var (
 	// cached user config handed in for its favourites, chat or JukaLand
 	// (saveUserConfigFile).
 	pendingUserConfigSections bool
+	// userConfigWriteMutex serialises the jukauser.json writes themselves
+	// (several fsyncs on the SD card). userConfigSaveMutex only guards the
+	// pending slot above and is never held across a write, so a slider step or
+	// a toggle that queues a save does not wait for one already being written.
+	// Lock order: userConfigWriteMutex, then userConfigSaveMutex.
+	userConfigWriteMutex sync.Mutex
 
 	// userConfigSaveDelay is the debounce window; a variable so tests can
 	// exercise the timer without sleeping two seconds.
@@ -142,6 +150,11 @@ func saveUserConfigDebounced(user *UserConfig) {
 	} else {
 		user = detachUserConfig(user)
 	}
+	if !sections && appConfig != nil {
+		// A full save is the main thread's: the logs' exact-value redaction
+		// follows the settings being saved (SEC-31).
+		logStoredSecretsRebuild(appConfig)
+	}
 	userConfigSaveMutex.Lock()
 	if sections && pendingUserConfig != nil && !pendingUserConfigSections {
 		// A full save waiting in the slot carries this change already — it
@@ -157,31 +170,36 @@ func saveUserConfigDebounced(user *UserConfig) {
 	if userConfigSaveTimer != nil {
 		userConfigSaveTimer.Stop()
 	}
-	userConfigSaveTimer = time.AfterFunc(userConfigSaveDelay, func() {
-		userConfigSaveMutex.Lock()
-		defer userConfigSaveMutex.Unlock()
-		if pendingUserConfig != nil {
-			saveUserConfigFile(pendingUserConfigDir, pendingUserConfig, pendingUserConfigSections)
-			pendingUserConfig = nil
-			pendingUserConfigDir = ""
-		}
-	})
+	userConfigSaveTimer = time.AfterFunc(userConfigSaveDelay, writePendingUserConfig)
 	userConfigSaveMutex.Unlock()
+}
+
+// writePendingUserConfig takes the pending save out of its slot and writes
+// it. The slot lock is released before the write; the write lock, taken
+// first, keeps takes and writes in order, so an older save can never land
+// after a newer one.
+func writePendingUserConfig() {
+	userConfigWriteMutex.Lock()
+	defer userConfigWriteMutex.Unlock()
+	userConfigSaveMutex.Lock()
+	user, dir, sections := pendingUserConfig, pendingUserConfigDir, pendingUserConfigSections
+	pendingUserConfig = nil
+	pendingUserConfigDir = ""
+	userConfigSaveMutex.Unlock()
+	if user != nil {
+		saveUserConfigFile(dir, user, sections)
+	}
 }
 
 // flushPendingUserConfig writes a debounced jukauser.json save now, so the
 // file holds the latest settings for whoever reads it next.
 func flushPendingUserConfig() {
 	userConfigSaveMutex.Lock()
-	defer userConfigSaveMutex.Unlock()
 	if userConfigSaveTimer != nil {
 		userConfigSaveTimer.Stop()
 	}
-	if pendingUserConfig != nil {
-		saveUserConfigFile(pendingUserConfigDir, pendingUserConfig, pendingUserConfigSections)
-		pendingUserConfig = nil
-		pendingUserConfigDir = ""
-	}
+	userConfigSaveMutex.Unlock()
+	writePendingUserConfig()
 }
 
 // reloadUserConfigFromDisk refreshes cached settings from jukauser.json.
@@ -702,6 +720,10 @@ func sceneDisplayName(name string) string {
 		return "ROM manager"
 	case apkStoreSceneName:
 		return apkStoreEntryName
+	case portsStoreSceneName:
+		return portsStoreEntryName
+	case cloudGamingSceneName:
+		return cloudGamingEntryName
 	case voiceSceneName:
 		return "Voice command"
 	case vscSceneName:
@@ -1153,6 +1175,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	// Watch Party, Toolbox, Audit toolkit, Security & trust and Report a bug
 	// follow their focused control and open sheet (tbxui.go).
 	if hints, ok := tbxFooterHints(config, scene.Name); ok {
+		return hints
+	}
+	// The Battery screen: L1/R1 step the range (battgraph_ui.go).
+	if hints, ok := battGraphFooterHints(scene.Name); ok {
 		return hints
 	}
 	// Settings and Plugins name what the focused row or button does
@@ -1926,12 +1952,14 @@ func saveUserConfig(user *UserConfig) {
 		return
 	}
 	sections := user == userConfigCache
+	userConfigWriteMutex.Lock()
+	defer userConfigWriteMutex.Unlock()
 	userConfigSaveMutex.Lock()
-	defer userConfigSaveMutex.Unlock()
 	if pendingUserConfig != nil && (!sections || pendingUserConfigSections) {
 		pendingUserConfig = nil
 		pendingUserConfigDir = ""
 	}
+	userConfigSaveMutex.Unlock()
 	saveUserConfigFile("", user, sections)
 }
 
@@ -2092,6 +2120,8 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	if config == nil {
 		return
 	}
+	// The logs' exact-value redaction follows the config just loaded (SEC-31).
+	defer logStoredSecretsRebuild(config)
 	if user == nil {
 		// Even with no user file, empty colour slots must inherit the theme
 		// instead of rendering as black.

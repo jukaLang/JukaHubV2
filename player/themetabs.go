@@ -1,13 +1,10 @@
 package main
 
-// themetabs.go — the theme gallery's four tabs: Colour, Total conversion,
-// Consoles and Experience.
+// themetabs.go — the theme gallery's three tabs: Colour, Styles and Experience.
 //
-// Consoles is not a kind of preset — a console look is a total conversion like
-// any other, and everything that checks Kind == themeKindConversion (the
-// schedule, plugins, the packs, the previews) keeps treating it as one. The tab
-// is a filter over the conversions instead (themePresetIsConsole), and Total
-// conversion shows the rest.
+// Styles holds console looks, Minimal UI, and user-authored conversions. The
+// built-in palette-plus-layout combinations remain loadable for saved configs
+// but no longer crowd the picker.
 //
 // Experience is not a list of presets at all: it is the Experience packs
 // screen (xpackui.go), which draws the same tab strip under its header with
@@ -26,46 +23,33 @@ import (
 // Tab groups (themeTab.Group). Empty is every preset of the tab's Kind that
 // no other tab claims.
 const (
-	themeTabConsole    = "console"
+	themeTabStyle      = "style"
 	themeTabExperience = "experience"
 )
 
 // themeTabPresets is the list a tab's grid draws, in the canonical order.
-// ListThemePresetsFor keeps meaning "every preset of a kind" for its other
-// callers (the schedule, voice settings).
 func themeTabPresets(tab themeTab) []string {
 	switch tab.Group {
 	case themeTabExperience:
 		return nil
-	case themeTabConsole:
-		return themeConsolePresets()
+	case themeTabStyle:
+		return themeStylePresets()
 	}
-	names := ListThemePresetsFor(tab.Kind)
-	if tab.Kind != themeKindConversion {
-		return names
-	}
-	out := names[:0]
-	for _, name := range names {
-		if !themePresetIsConsole(name) {
-			out = append(out, name)
-		}
-	}
-	return out
+	return ListThemePresetsFor(tab.Kind)
 }
 
-// themeConsolePresets is the Consoles tab: themeConsoleTabOrder first, then
-// any other console conversion in the catalogue's order.
-func themeConsolePresets() []string {
-	names := make([]string, 0, len(themeConsoleTabOrder)+4)
-	seen := make(map[string]bool, len(themeConsoleTabOrder))
-	for _, name := range themeConsoleTabOrder {
+// themeStylePresets puts the curated styles first, then glow looks and user themes.
+func themeStylePresets() []string {
+	names := make([]string, 0, len(themeStyleTabOrder)+4)
+	seen := make(map[string]bool, len(themeStyleTabOrder))
+	for _, name := range themeStyleTabOrder {
 		if p, ok := themePresets[name]; ok && p.Kind == themeKindConversion && !seen[name] {
 			names = append(names, name)
 			seen[name] = true
 		}
 	}
 	for _, name := range ListThemePresetsFor(themeKindConversion) {
-		if !seen[name] && themePresetIsConsole(name) {
+		if !seen[name] {
 			names = append(names, name)
 			seen[name] = true
 		}
@@ -163,8 +147,9 @@ func drawThemeTabStrip(renderer *sdl.Renderer, config *Config, element Element, 
 		if !open {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, glassChipEdge())
 		}
-		tw, th, _ := font.SizeUTF8(tab.Label)
-		drawText(renderer, font, tab.Label, rect.X+(rect.W-int32(tw))/2,
+		label := uiT(tab.Label)
+		tw, th, _ := font.SizeUTF8(label)
+		drawTextRaw(renderer, font, label, rect.X+(rect.W-int32(tw))/2,
 			rect.Y+(rect.H-int32(th))/2, ink, textAlignLeft)
 	}
 	if hint == "" {

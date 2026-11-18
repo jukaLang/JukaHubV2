@@ -2,8 +2,13 @@
 
 The original Smart Pro can hear voice commands without a Groq key. Its four
 Cortex-A53 CPU cores run a compact Vosk recognizer for English. A
-multilingual Whisper model handles other languages and a Vosk startup failure.
-Both come in a roughly 120 MB package that JukaHub downloads by itself after
+multilingual Whisper model handles other languages and a Vosk startup failure:
+Whisper tiny with 8-bit weights (about 44 MB instead of 78, made by the build
+from the pinned model) — the smallest Whisper model, at 8 bits rather than 4
+or 5 because the A53 has no fast way to unpack those and tiny loses words
+below 8. A package from before it is replaced once, by itself,
+when a newer release is out. Both come in a roughly 90 MB package that
+JukaHub downloads by itself after
 ffmpeg (it is not part of the app download; see [VOICE.md](VOICE.md)).
 **Settings → Voice & AI → Speech recognition → Automatic** uses Groq when a
 key and connection are available, then falls back to the local recognizer.
@@ -102,3 +107,9 @@ so the app archives never wait for it; a release that goes out without it
 makes JukaHub install the model from the newest release that has one.
 JukaHub stores an installed copy in its data folder as `juka-llm/`.
 Once installed, it can be used entirely offline.
+
+Offline, Chat's Juka AI tab can still check the device: without a Groq key,
+or without internet for a question about storage, a game that won't start,
+Wi-Fi, battery or settings, Juka runs its read-only tools and shows what they
+found ("Offline — Juka can look but not change things"). The model above is
+too small to call tools itself; see [AI_TOOLS.md](AI_TOOLS.md).

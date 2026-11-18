@@ -188,12 +188,12 @@ func volumeButtonPress(dir int, down bool) {
 	}
 	// The OS just changed the level (on the press, and while held): the
 	// header's speaker reads it back now instead of on its next poll. The
-	// firmware's brightness chord holds a volume key too, so the sun does the
-	// same (brightnessctl.go).
+	// some firmware variants use a volume-key brightness chord, so the sun
+	// also checks for a panel change (brightnessctl.go).
 	volumeNoteHardwareKey()
 	brightnessNoteHardwareKey()
-	// Menu + volume is the firmware's brightness chord: the voice orb must not
-	// take that Menu press for itself (voiceorb.go).
+	// Menu + volume is a chord: the voice orb must not take that Menu press
+	// for itself (voiceorb.go).
 	if down {
 		voiceOrbNoteVolumeKey()
 	}

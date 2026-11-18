@@ -9,7 +9,6 @@ import (
 	"image/png"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -159,18 +158,5 @@ func TestDecodeImageRGBAHonoursCancellation(t *testing.T) {
 	cancel()
 	if _, err := decodeImageRGBA(ctx, pngBytes(t, 2, 2)); err == nil {
 		t.Fatal("cancelled decode reported no error")
-	}
-}
-
-// TestRunBoundedJoins: the one-shot helper actually runs the work and waits.
-func TestRunBoundedJoins(t *testing.T) {
-	var ran int64
-	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		runBounded(2, &wg, func() { atomic.AddInt64(&ran, 1) })
-	}
-	wg.Wait()
-	if ran != 8 {
-		t.Fatalf("ran %d jobs, want 8", ran)
 	}
 }

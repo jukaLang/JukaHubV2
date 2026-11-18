@@ -232,7 +232,7 @@ func sysToolLogsSave() {
 		if len(data) > 0 {
 			lines = strings.Count(string(data), "\n") + 1
 		}
-		note := fmt.Sprintf("Saved %d lines to %s at %s", lines, path, time.Now().Format("15:04"))
+		note := fmt.Sprintf("Saved %d lines to %s at %s", lines, path, clockDigits(nil, time.Now()))
 		sysToolLogExport.mu.Lock()
 		sysToolLogExport.note = note
 		sysToolLogExport.mu.Unlock()

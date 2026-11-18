@@ -34,6 +34,10 @@ cmake -S "$SRC" -B "$WORK/build" -G Ninja \
 BUILD_JOBS=${JOBS:-4}
 if [ "$BUILD_JOBS" -gt 4 ]; then BUILD_JOBS=4; fi
 cmake --build "$WORK/build" --target whisper-cli --parallel "$BUILD_JOBS"
+# whisper.cpp's quantizer makes the handheld's lighter model below.
+cmake --build "$WORK/build" --target whisper-quantize --parallel "$BUILD_JOBS"
+QUANTIZE="$WORK/build/bin/whisper-quantize"
+test -x "$QUANTIZE"
 BIN="$WORK/build/bin/whisper-cli"
 test -s "$BIN"
 file "$BIN" | grep -q 'ELF 64-bit.*ARM aarch64'
@@ -57,8 +61,21 @@ curl -fL --retry 3 --connect-timeout 15 --max-time 1200 \
 test "$(wc -c < "$WORK/ggml-tiny.bin")" -eq "$MODEL_SIZE"
 printf '%s  %s\n' "$MODEL_SHA" "$WORK/ggml-tiny.bin" | sha256sum -c -
 
+# The handheld gets the tiny model with 8-bit weights: about 44 MB instead of
+# 78, less to read from the card and to hold in its 1 GB, and integer maths
+# the A53 does faster than the half-precision weights it would otherwise
+# convert one by one. The output is fixed by the pinned model and source.
+"$QUANTIZE" "$WORK/ggml-tiny.bin" "$WORK/ggml-tiny-q8_0.bin" q8_0 > "$WORK/quantize.log" 2>&1 || {
+    tail -n 20 "$WORK/quantize.log" >&2
+    exit 1
+}
+# The range stt_local.go accepts (20 to 60 MiB); the file is about 43 MB.
+test "$(wc -c < "$WORK/ggml-tiny-q8_0.bin")" -gt 20971520
+test "$(wc -c < "$WORK/ggml-tiny-q8_0.bin")" -lt 62914560
+rm -f "$WORK/ggml-tiny.bin"
+
 # A known English clip proves the binary, model and WAV path work together.
-"$BIN" -m "$WORK/ggml-tiny.bin" -f - \
+"$BIN" -m "$WORK/ggml-tiny-q8_0.bin" -f - \
     -t 2 -l en -ng -np -nt -otxt -of - \
     < "$SRC/samples/jfk.wav" > "$WORK/smoke.txt" 2> /dev/null
 test -s "$WORK/smoke.txt"
@@ -118,12 +135,14 @@ rm -rf "$WORK/vosk-model" "$WORK/jfk.pcm" "$WORK/serve.out" "$WORK/libvosk.so"
 OUT=/src/player/native/bin/juka-whisper
 mkdir -p "$OUT"
 install -m 755 "$BIN" "$OUT/whisper-cli"
-install -m 644 "$WORK/ggml-tiny.bin" "$OUT/ggml-tiny.bin"
+rm -f "$OUT/ggml-tiny.bin"
+install -m 644 "$WORK/ggml-tiny-q8_0.bin" "$OUT/ggml-tiny-q8_0.bin"
 install -m 644 "$SRC/LICENSE" "$OUT/LICENSE.txt"
 install -m 755 "$WORK/vosk-cli" "$VOSK/libvosk.so" "$OUT/"
 install -m 644 "$WORK/vosk-model-small-en-us-0.15.zip" "$WORK/VOSK_LICENSE.txt" "$OUT/"
-printf 'whisper.cpp %s\nmodel %s\nsource sha256 %s\nmodel sha256 %s\n' \
-    "$WHISPER_COMMIT" "$MODEL_REV" "$SOURCE_SHA" "$MODEL_SHA" > "$OUT/BUILDINFO.txt"
+printf 'whisper.cpp %s\nmodel %s\nsource sha256 %s\nsource model sha256 %s\nmodel sha256 %s\n' \
+    "$WHISPER_COMMIT" "$MODEL_REV" "$SOURCE_SHA" "$MODEL_SHA" \
+    "$(sha256sum "$OUT/ggml-tiny-q8_0.bin" | cut -d' ' -f1)" > "$OUT/BUILDINFO.txt"
 printf 'binary sha256 %s\n' "$(sha256sum "$OUT/whisper-cli" | cut -d' ' -f1)" >> "$OUT/BUILDINFO.txt"
 printf 'vosk archive sha256 %s\nvosk library sha256 %s\nvosk model-archive sha256 %s\nvosk binary sha256 %s\n' \
     "$VOSK_ARCHIVE_SHA" "$VOSK_LIB_SHA" "$VOSK_MODEL_SHA" \

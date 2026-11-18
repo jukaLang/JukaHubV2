@@ -530,6 +530,7 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 		HomeFocusPS4:        false,
 		HomeFocusPS5:        false,
 		HomeFocusX1:         false,
+		HomeFocusPC:         false,
 		// The search pill is a fixed control under the greeting.
 		HomeFocusSearch: false,
 		// The menu cards + the Exit chip are fully config-driven.
@@ -895,6 +896,7 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 // overlapping cards: empty rects, rects outside the viewport, and interactive
 // items that overlap each other. The header clock is excluded from the overlap
 // check because its rect is replaced with the measured status text each frame.
+// Test seam (ARCH-8): only tests call it.
 func (h *HomeLayout) BoundsViolations() []string {
 	if h == nil {
 		return []string{"nil layout"}
@@ -1045,7 +1047,7 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			if h.Focus.IsEnabled(HomeFocusEditPill) {
 				h.drawEditPill(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 			}
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusWiFi,
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusPC, HomeFocusNowPlaying, HomeFocusBell, HomeFocusBug, HomeFocusWiFi,
 			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
@@ -1088,6 +1090,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	x1TileRect = sdl.Rect{}
+	pcTileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
 	headerTrophyClear()
 	headerBugClear()
@@ -1111,8 +1114,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	// The build date belongs beside the wordmark on Home alone.
 	caption := ""
-	if data.BuildDate != "" && !h.tabsActive() {
-		// Not on the Tabs Home: the bar's middle is the tabs' (hometabs.go).
+	if data.BuildDate != "" && (!h.tabsActive() || homeTabsStripBottom()) {
+		// Not on the Tabs Home: the bar's middle is the tabs' (hometabs.go),
+		// unless they sit at the bottom (homelook.go).
 		caption = " · " + data.BuildDate
 	}
 	// The Switch Home has the user's picture there (themeswitch.go). On a
@@ -1264,7 +1268,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	bandY := scaleY(78, h.Height)
 	bandH := scaleY(44, h.Height)
 	companionHeaderRect = sdl.Rect{}
-	ps4TileRect, ps5TileRect, x1TileRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	ps4TileRect, ps5TileRect, x1TileRect, pcTileRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	bandRight := h.Width - scaleX(homeSideMargin, h.Width)
 	// The pairing code takes the band's right end at the largest size the band
 	// has room for: from just under the system corner to just above the first
@@ -1288,7 +1292,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		// bell above it. Disabling it first would throw the focus to the
 		// Continue card at the other end of the screen and forget where Home
 		// was.
-		if !h.Focus.Set(HomeFocusX1) && !h.Focus.Set(HomeFocusPS5) {
+		if !h.Focus.Set(HomeFocusPC) && !h.Focus.Set(HomeFocusX1) && !h.Focus.Set(HomeFocusPS5) {
 			h.Focus.Set(HomeFocusBell)
 		}
 	}
@@ -1313,25 +1317,30 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// PlayStation Remote Play only runs on the handheld build
 	// (psRemoteSupported); elsewhere its pills could only answer with a
 	// warning, so they are not drawn and the D-pad walks past them. X1 (Xbox,
-	// xremote.go) has a client or the browser everywhere. The group says what
+	// xremote.go) has a client or the browser everywhere, and PC (Moonlight,
+	// moonlight_ui.go) pairs and lists games everywhere. The group says what
 	// it is ("Remote Play") when the band has room for the caption, and drops
 	// the caption before the pills. Edit Home's strip has the band while Home
 	// is being edited.
-	withPS, withX1 := psRemoteSupported(), x1PillSupported()
+	withPS, withX1, withPC := psRemoteSupported(), x1PillSupported(), pcPillSupported()
 	// The Switch Home's round buttons stand in for the pills (themeswitch.go);
 	// the Tabs Home's page starts under the bar, Remote Play is in Games.
-	if (withPS || withX1) && !homeEditActive() && !h.switchChrome() && !h.tabsActive() {
+	if (withPS || withX1 || withPC) && !homeEditActive() && !h.switchChrome() && !h.tabsActive() {
 		label := psPillGroupLabel
-		group, p4, p5, px1 := psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
+		group, p4, p5, px1, ppc := psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1, withPC)
 		if group.W > 0 && group.X < minGroupX {
 			label = ""
-			group, p4, p5, px1 = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
+			group, p4, p5, px1, ppc = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1, withPC)
 		}
-		// X1 goes before the PS pills it joined: a band that held PS4 and
-		// PS5 keeps them.
+		// The newest pills go first on a narrow band, PC before X1: a band
+		// that held PS4 and PS5 keeps them.
+		if group.W > 0 && group.X < minGroupX && withPC && (withPS || withX1) {
+			withPC = false
+			group, p4, p5, px1, ppc = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1, withPC)
+		}
 		if group.W > 0 && group.X < minGroupX && withPS && withX1 {
 			withX1 = false
-			group, p4, p5, px1 = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1)
+			group, p4, p5, px1, ppc = psPillRects(fonts, groupRight, groupY, bandH, label, withPS, withX1, withPC)
 		}
 		if group.W > 0 && group.X >= minGroupX {
 			v := psPillVisual{
@@ -1346,30 +1355,37 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			if withX1 {
 				v.X1On = x1TileOn()
 			}
-			renderPSPillGroup(renderer, fonts, group, p4, p5, px1, v)
-			ps4TileRect, ps5TileRect, x1TileRect = p4, p5, px1
+			if withPC {
+				v.PCOn = pcTileOn()
+			}
+			renderPSPillGroup(renderer, fonts, group, p4, p5, px1, ppc, v)
+			ps4TileRect, ps5TileRect, x1TileRect, pcTileRect = p4, p5, px1, ppc
 		}
 	}
 	h.Focus.SetEnabled(HomeFocusPS4, ps4TileRect.W > 0)
 	h.Focus.SetEnabled(HomeFocusPS5, ps5TileRect.W > 0)
 	h.Focus.SetEnabled(HomeFocusX1, x1TileRect.W > 0)
+	h.Focus.SetEnabled(HomeFocusPC, pcTileRect.W > 0)
 	// The pills are not cards, but the tile layouts step Down from them, and
 	// Up onto them, by their item rects (home_dynbody.go): give them this
 	// frame's.
 	for _, p := range [...]struct {
 		id HomeFocusID
 		r  sdl.Rect
-	}{{HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}} {
+	}{{HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}, {HomeFocusPC, pcTileRect}} {
 		item := h.Items[p.id]
 		item.Rect = p.r
 		h.Items[p.id] = item
 	}
 	// Link the launcher with whichever card sits under it, so Up reaches it and
 	// Down comes back: the D-pad follows the layout instead of a guess.
-	if ps5TileRect.W > 0 {
+	switch {
+	case ps5TileRect.W > 0:
 		h.Focus.SetTileLink(h.CardUnderTile(ps5TileRect))
-	} else {
+	case x1TileRect.W > 0:
 		h.Focus.SetTileLink(h.CardUnderTile(x1TileRect))
+	default:
+		h.Focus.SetTileLink(h.CardUnderTile(pcTileRect))
 	}
 
 	// The network slot and the battery are the two gauged parts — signal bars
@@ -1521,7 +1537,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusBug,
+		case HomeFocusPS5, HomeFocusPS4, HomeFocusX1, HomeFocusPC, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusBug,
 			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit, HomeFocusSearch, HomeFocusUpdate,
 			HomeFocusVolume, HomeFocusBrightness, HomeFocusQR, HomeFocusTrophy, HomeFocusBluetooth:
 			continue
@@ -2166,6 +2182,7 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	if fonts.Small == nil {
 		return
 	}
+	homeTipDraw(renderer, fonts, footer, h.Width, h.Height) // tip of the day above the band (helpdoc.go)
 
 	// The hint sets are fixed arrays: slicing one costs nothing, where building
 	// the list with append allocated on every frame Home was on screen. A copy

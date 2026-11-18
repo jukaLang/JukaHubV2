@@ -391,9 +391,13 @@ func ytdlBgSettle(seq uint64, path, failMsg string, cancelled bool) {
 func ytdlBgFile(tempPath, pageURL string, meta VideoInfo) (string, error) {
 	dlLibraryLoadNow()
 	if e, ok := dlLibraryFindSource(pageURL, true); ok {
-		if _, err := os.Stat(e.Path); err == nil {
-			removeTempVideoArtifacts(tempPath)
-			return e.Path, nil
+		// The library file is data on the card: its path is used only when
+		// it is clean and absolute with no ".." segment.
+		if have, err := safeAbsolutePath(e.Path); err == nil {
+			if _, err := os.Stat(have); err == nil {
+				removeTempVideoArtifacts(tempPath)
+				return have, nil
+			}
 		}
 	}
 	info, err := os.Stat(tempPath)

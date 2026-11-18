@@ -271,6 +271,9 @@ type ppssppBinaryScan struct {
 //     the one active before it ("" = the firmware's), the way back when Active
 //     does not start.
 //   - Choice: what the user picked (ppssppChoice*).
+//   - RolledBack: the build the user went back from with the card's "Go back
+//     to the previous build"; nothing switches PSP games forward to it by
+//     itself (a newer release, or the user's own pick, still does).
 //   - Override: game-launchers.json holds JukaHub's PSP entry; Replaced: the
 //     raw JSON of the PSP entries it replaced, by key; FileExisted: whether the
 //     file was there before JukaHub first wrote it.
@@ -285,6 +288,7 @@ type ppssppState struct {
 	Builds        []ppssppBuild     `json:"builds,omitempty"`
 	Active        string            `json:"active,omitempty"`
 	Previous      string            `json:"previous,omitempty"`
+	RolledBack    string            `json:"rolled_back,omitempty"`
 	Choice        string            `json:"choice,omitempty"`
 	Override      bool              `json:"override,omitempty"`
 	Replaced      map[string]string `json:"replaced,omitempty"`
@@ -297,6 +301,7 @@ type ppssppState struct {
 	Bad           map[string]string `json:"bad,omitempty"`
 	FallbackSeen  string            `json:"fallback_seen,omitempty"`
 	FirmwareScan  ppssppBinaryScan  `json:"firmware_scan"`
+	RANoSignIn    bool              `json:"ra_no_sign_in,omitempty"` // the card's RetroAchievements switch is off (ppsspp_managed_ra.go)
 }
 
 // ppssppFirmwareInfo is the firmware's PPSSPP as JukaHub would run it without
@@ -1202,6 +1207,62 @@ func ppssppMountPointsWithin(mounts, dir string) []string {
 	return out
 }
 
+// ppssppResolvePath is p with its symbolic links resolved, as far as p exists
+// (the rest is joined back unchanged): the kernel's mount table and
+// /proc/<pid>/exe name real paths, so a data folder reached through a link — a
+// card root or an app folder that is one — would never match them. A path
+// nothing of which resolves stays as it is.
+func ppssppResolvePath(p string) string {
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	clean := filepath.Clean(p)
+	rest := ""
+	for dir := clean; ; {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			if rest == "" {
+				return resolved
+			}
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return clean
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+}
+
+// ppssppPathForms is dir as given and, when it differs, with its links
+// resolved: the two spellings a mount point or a process path may match.
+func ppssppPathForms(dir string) []string {
+	if dir == "" {
+		return nil
+	}
+	forms := []string{dir}
+	if resolved := ppssppResolvePath(dir); resolved != "" && filepath.Clean(resolved) != filepath.Clean(dir) {
+		forms = append(forms, resolved)
+	}
+	return forms
+}
+
+// ppssppMountPointsFor is ppssppMountPointsWithin for dir under either of its
+// spellings (ppssppPathForms), each mount point once.
+func ppssppMountPointsFor(mounts, dir string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, form := range ppssppPathForms(dir) {
+		for _, mp := range ppssppMountPointsWithin(mounts, form) {
+			if !seen[mp] {
+				seen[mp] = true
+				out = append(out, mp)
+			}
+		}
+	}
+	return out
+}
+
 // ppssppMountsWithin reads the live mount table.
 func ppssppMountsWithin(dir string) []string {
 	data, err := os.ReadFile("/proc/self/mounts")
@@ -1210,7 +1271,17 @@ func ppssppMountsWithin(dir string) []string {
 			return nil
 		}
 	}
-	return ppssppMountPointsWithin(string(data), dir)
+	return ppssppMountPointsFor(string(data), dir)
+}
+
+// ppssppPathWithinAny reports p inside any of dirs.
+func ppssppPathWithinAny(p string, dirs []string) bool {
+	for _, d := range dirs {
+		if isPathWithin(p, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // ppssppSavesWithin returns a SAVEDATA or PPSSPP_STATE folder under dir that is
@@ -1303,17 +1374,44 @@ func ppssppCleanLeftovers() {
 }
 
 // ppssppManagedProcessRunning reports whether a process runs a binary from the
-// manager's folder (Linux /proc only).
+// manager's folder, or is a shell running one of its launcher scripts — which
+// binds the saves before PPSSPP starts (Linux /proc only). Both spellings of
+// root count (ppssppPathForms): /proc names real paths.
 func ppssppManagedProcessRunning(root string) bool {
 	entries, err := os.ReadDir("/proc")
 	if err != nil || root == "" {
 		return false
 	}
+	forms := ppssppPathForms(root)
 	for _, e := range entries {
 		if !e.IsDir() || strings.Trim(e.Name(), "0123456789") != "" {
 			continue
 		}
-		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && isPathWithin(exe, root) {
+		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && ppssppPathWithinAny(exe, forms) {
+			return true
+		}
+		if ppssppRunsScriptIn(filepath.Join("/proc", e.Name(), "cmdline"), forms) {
+			return true
+		}
+	}
+	return false
+}
+
+// ppssppRunsScriptIn reports a process whose command line (the NUL-separated
+// /proc/<pid>/cmdline at file) names one of the manager's launcher scripts
+// inside dirs among its first arguments: "sh …/jukahub-ppsspp.sh ROM".
+func ppssppRunsScriptIn(file string, dirs []string) bool {
+	f, err := os.Open(file)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	data, _ := io.ReadAll(io.LimitReader(f, 4<<10))
+	for i, arg := range strings.Split(string(data), "\x00") {
+		if i > 2 {
+			break
+		}
+		if strings.EqualFold(filepath.Base(arg), ppssppScriptName) && ppssppPathWithinAny(arg, dirs) {
 			return true
 		}
 	}
@@ -1333,13 +1431,14 @@ func ppssppProcessesIn(dir string) []int {
 	if err != nil || dir == "" {
 		return nil
 	}
+	forms := ppssppPathForms(dir)
 	var out []int
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid <= 1 {
 			continue
 		}
-		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && isPathWithin(exe, dir) {
+		if exe, err := os.Readlink(filepath.Join("/proc", e.Name(), "exe")); err == nil && ppssppPathWithinAny(exe, forms) {
 			out = append(out, pid)
 		}
 	}
@@ -1425,10 +1524,24 @@ func ppssppNoteForceQuit() {
 	}
 }
 
+// ppssppStaleMountsMu keeps the start-up cleanup and the scheduler's from
+// unmounting the same bind twice; ppssppStaleMountWarned (under it) keeps a
+// bind that will not come down to one warning, not one every wake.
+var (
+	ppssppStaleMountsMu    sync.Mutex
+	ppssppStaleMountWarned = map[string]bool{}
+)
+
 // ppssppCleanStaleMounts takes down the binds a killed launch left behind, so
 // nothing in JukaHub's data folder leads into the firmware's saves. It stands
-// aside while one of the builds is running.
+// aside while one of the builds — or a launcher script, which binds before
+// PPSSPP starts — is running. It runs at start (ppssppAutoUpdateLoop's first
+// look, never over a game a resume at boot started) and at every scheduler
+// wake outside a game, so a force quit's binds do not wait for the next
+// launch.
 func ppssppCleanStaleMounts() {
+	ppssppStaleMountsMu.Lock()
+	defer ppssppStaleMountsMu.Unlock()
 	root := ppssppManagedRootFn()
 	mounts := ppssppMountsWithin(root)
 	if len(mounts) == 0 || ppssppManagedProcessRunning(root) {
@@ -1438,8 +1551,12 @@ func ppssppCleanStaleMounts() {
 	sort.Slice(mounts, func(i, j int) bool { return len(mounts[i]) > len(mounts[j]) })
 	for _, mp := range mounts {
 		if err := ppssppUnmount(mp); err != nil {
-			logWarn("ppsspp", "could not unmount %s: %v", mp, err)
+			if !ppssppStaleMountWarned[mp] && len(ppssppStaleMountWarned) < 64 {
+				ppssppStaleMountWarned[mp] = true
+				logWarn("ppsspp", "could not unmount %s: %v", mp, err)
+			}
 		} else {
+			delete(ppssppStaleMountWarned, mp)
 			logInfo("ppsspp", "unmounted %s, left behind by a launch that was stopped", mp)
 		}
 	}
@@ -2030,6 +2147,12 @@ func ppssppPointPSPLocked(st *ppssppState, launcher string) error {
 		}
 		delete(m, k)
 	}
+	quoted, err := json.Marshal(launcher)
+	if err != nil {
+		return err
+	}
+	m[ppssppLibrarySystem] = quoted
+	prevOverride, prevReplaced, prevExisted := st.Override, st.Replaced, st.FileExisted
 	if !st.Override {
 		st.Replaced = foreign
 		st.FileExisted = existed
@@ -2039,15 +2162,29 @@ func ppssppPointPSPLocked(st *ppssppState, launcher string) error {
 	if len(st.Replaced) == 0 {
 		st.Replaced = nil
 	}
-	quoted, err := json.Marshal(launcher)
-	if err != nil {
-		return err
-	}
-	m[ppssppLibrarySystem] = quoted
-	if err := ppssppWriteOverrides(file, m); err != nil {
-		return err
-	}
 	st.Override = true
+	undo := func() {
+		st.Override, st.Replaced, st.FileExisted = prevOverride, prevReplaced, prevExisted
+	}
+	// state.json is written first: it then holds the PSP entry the user had
+	// before the file that held it loses it, so a power cut between the two
+	// writes cannot leave that entry only in memory. With the file unchanged,
+	// a state that says JukaHub's entry is there is harmless: putting PSP games
+	// back finds no entry of JukaHub's and the user's one where it was.
+	if st == &ppssppMgr.state {
+		if err := ppssppSaveLocked(); err != nil {
+			undo()
+			ppssppPublishLocked()
+			return fmt.Errorf("could not save PPSSPP's state before changing %s: %w", filepath.Base(file), err)
+		}
+	}
+	if err := ppssppWriteOverrides(file, m); err != nil {
+		undo()
+		if st == &ppssppMgr.state {
+			_ = ppssppSaveLocked()
+		}
+		return err
+	}
 	return nil
 }
 
@@ -2472,6 +2609,71 @@ func ppssppSeedHome(b ppssppBuild, fwStick string) {
 		})
 	}
 	ppssppPrepareTrimuiHome(sys, b.Platform)
+	ppssppApplyDeviceAspect(sys, ppssppDevice())
+}
+
+// ppssppDeviceAspect is the display aspect ratio minui-psp's launcher gives
+// PPSSPP on a model ([Graphics] DisplayAspectRatio): 0.848 on the Brick, whose
+// panel is 4:3, and PPSSPP's own 1.0 on the Smart Pro and Smart Pro S; "" on a
+// model the pak does not name, which is left alone.
+func ppssppDeviceAspect(device DeviceModel) string {
+	switch device {
+	case DeviceTrimuiBrick:
+		return "0.848000"
+	case DeviceTrimuiSmartPro, DeviceTrimuiSmartProS:
+		return "1.000000"
+	}
+	return ""
+}
+
+// ppssppAspectNeedsSet decides whether the stored ratio cur (found: the key is
+// there) is replaced by want: only a value one of the pak's two would be —
+// missing, 0.848 or 1.0 — so a ratio the user chose in PPSSPP stays. Missing
+// needs nothing for 1.0, PPSSPP's default. Pure.
+func ppssppAspectNeedsSet(cur string, found bool, want string) bool {
+	wantF, err := strconv.ParseFloat(want, 64)
+	if err != nil {
+		return false
+	}
+	norm := func(f float64) string { return strconv.FormatFloat(f, 'f', 3, 64) }
+	cur = strings.TrimSpace(cur)
+	if !found || cur == "" {
+		return norm(wantF) != "1.000"
+	}
+	f, err := strconv.ParseFloat(cur, 64)
+	if err != nil || norm(f) == norm(wantF) {
+		return false
+	}
+	return norm(f) == "0.848" || norm(f) == "1.000"
+}
+
+// ppssppApplyDeviceAspect gives the shared HOME's ppsspp.ini this model's ratio,
+// as minui-psp's launcher does before every game: the HOME is shared by every
+// build and goes with the card, so a card moved from a Brick to a Smart Pro —
+// or a minui-psp package whose shipped settings carry the Brick's ratio — would
+// otherwise stretch the picture.
+func ppssppApplyDeviceAspect(sys string, device DeviceModel) {
+	want := ppssppDeviceAspect(device)
+	ini := filepath.Join(sys, "ppsspp.ini")
+	if want == "" || sys == "" || !regularFile(ini) {
+		return
+	}
+	raw, err := os.ReadFile(ini)
+	if err != nil {
+		return
+	}
+	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
+	cur, found := ppssppINIValue(lines, "Graphics", "DisplayAspectRatio")
+	if !ppssppAspectNeedsSet(cur, found, want) {
+		return
+	}
+	if err := writePPSSPPControls(ini, func(lines []string) []string {
+		return ppssppSetSectionValue(lines, "Graphics", "DisplayAspectRatio", want)
+	}); err != nil {
+		logWarn("ppsspp", "could not set the display aspect ratio for this model: %v", err)
+		return
+	}
+	logInfo("ppsspp", "display aspect ratio set to %s for %s", want, device)
 }
 
 // ppssppWriteManifest records where a build came from, beside it.
@@ -2670,6 +2872,9 @@ func ppssppRecordBuildLocked(st *ppssppState, b ppssppBuild) {
 		if st.Previous == old.Tag {
 			st.Previous = ""
 		}
+		if st.RolledBack == old.Tag {
+			st.RolledBack = ""
+		}
 		logInfo("ppsspp", "removed old build %s", old.Tag)
 	}
 	st.Builds = builds
@@ -2684,12 +2889,19 @@ func ppssppUseBuildLocked(st *ppssppState, b ppssppBuild, fw ppssppFirmwareInfo)
 	if err := ppssppWriteScript(b, fw); err != nil {
 		return err
 	}
-	if err := ppssppPointPSPLocked(st, b.script()); err != nil {
-		return err
-	}
+	// Active moves before the launcher file is written, so the state the
+	// pointing saves first already names the build the file is about to.
+	prevActive, prevPrevious := st.Active, st.Previous
 	if st.Active != b.Tag {
 		st.Previous = st.Active
 		st.Active = b.Tag
+	}
+	if err := ppssppPointPSPLocked(st, b.script()); err != nil {
+		st.Active, st.Previous = prevActive, prevPrevious
+		if st == &ppssppMgr.state {
+			_ = ppssppSaveLocked()
+		}
+		return err
 	}
 	return nil
 }
@@ -2729,11 +2941,61 @@ func ppssppSwitchToBuild(tag, choice string, fw ppssppFirmwareInfo) (ppssppBuild
 		}
 		_ = os.Remove(filepath.Join(b.Dir, ppssppBadName))
 		st.Choice = choice
+		// Picked on purpose: no longer a build the user went back from.
+		if st.RolledBack == b.Tag {
+			st.RolledBack = ""
+		}
 	}
 	if err := ppssppUseBuildLocked(st, b, fw); err != nil {
 		return ppssppBuild{}, err
 	}
 	return b, ppssppSaveLocked()
+}
+
+// ppssppGoBackTarget is the build the card's "Go back to the previous build"
+// returns to while PSP games use a JukaHub build: the other installed build
+// that still starts — the one used before (Previous) when it is that — or
+// false. The manager keeps one build besides the newest (ppssppRecordBuildLocked).
+func ppssppGoBackTarget(st ppssppState) (ppssppBuild, bool) {
+	if _, ok := st.build(st.Active); !ok {
+		return ppssppBuild{}, false
+	}
+	if prev, ok := st.build(st.Previous); ok && prev.Tag != st.Active && prev.usable(st) {
+		return prev, true
+	}
+	for _, b := range st.Builds {
+		if b.Tag != st.Active && b.usable(st) {
+			return b, true
+		}
+	}
+	return ppssppBuild{}, false
+}
+
+// ppssppGoBack is the card's "Go back to the previous build": PSP games use the
+// installed build tag again, and the build they leave is remembered
+// (RolledBack) so neither the daily check (ppssppAutoAdopt) nor a check from the
+// card switches forward to it by itself. It returns the build left and the one
+// gone back to.
+func ppssppGoBack(tag string, fw ppssppFirmwareInfo) (from, to ppssppBuild, err error) {
+	ppssppMgr.mu.Lock()
+	defer ppssppMgr.mu.Unlock()
+	st := ppssppLockedState()
+	from, ok := st.build(st.Active)
+	if !ok {
+		return ppssppBuild{}, ppssppBuild{}, errors.New("PSP games do not use JukaHub's PPSSPP right now")
+	}
+	to, ok = st.build(tag)
+	if !ok || to.Tag == from.Tag || !to.usable(*st) {
+		return ppssppBuild{}, ppssppBuild{}, errors.New("that build is no longer installed")
+	}
+	prevRolledBack := st.RolledBack
+	st.RolledBack = from.Tag
+	if err := ppssppUseBuildLocked(st, to, fw); err != nil {
+		st.RolledBack = prevRolledBack
+		_ = ppssppSaveLocked()
+		return ppssppBuild{}, ppssppBuild{}, err
+	}
+	return from, to, ppssppSaveLocked()
 }
 
 // ppssppSwitchToFirmware is "Use the firmware's PPSSPP".
@@ -3090,7 +3352,9 @@ func ppssppAutoAdopt(fw ppssppFirmwareInfo) {
 	ppssppMgr.mu.Lock()
 	st := ppssppLockedState()
 	b, ok := st.newestGood()
-	if !ok || st.Active == b.Tag || st.Choice == ppssppChoiceFirmware || !b.usable(*st) ||
+	// A build the user went back from (the card's "Go back") is not switched
+	// to again by itself.
+	if !ok || st.Active == b.Tag || b.Tag == st.RolledBack || st.Choice == ppssppChoiceFirmware || !b.usable(*st) ||
 		!ppssppShouldSwitch(*st, b, fw.Version, ppssppUserPinnedLocked()) {
 		ppssppMgr.mu.Unlock()
 		return
@@ -3175,10 +3439,11 @@ func ppssppRefreshActiveScript() {
 
 // ppssppPrepareManagedLaunch readies the build a PSP game is about to start in,
 // even when the game starts before the background look has refreshed it: the
-// shared HOME is seeded, and a launcher an older JukaHub wrote is written again
-// with the firmware's PPSSPP as last detected. It never sets cmd.Env — it runs
-// before screenChildGroupConfigure, which fills in the firmware's HOME, PATH and
-// LD_LIBRARY_PATH only while cmd.Env is nil. Setting it here (os.Environ() plus
+// shared HOME is seeded, PPSSPP is signed in to RetroAchievements with
+// JukaHub's account (ppsspp_managed_ra.go), and a launcher an older JukaHub
+// wrote is written again with the firmware's PPSSPP as last detected. It never
+// sets cmd.Env — it runs before screenChildGroupConfigure, which fills in the
+// firmware's HOME, PATH and LD_LIBRARY_PATH only while cmd.Env is nil. Setting it here (os.Environ() plus
 // SDL_VIDEODRIVER, 2026-11-14) gave the script, and so the firmware's PPSSPP it
 // falls back to, JukaHub's own HOME and libraries. The video driver is set in
 // the script, on PPSSPP's command alone. Other emulator launches are untouched.
@@ -3193,6 +3458,11 @@ func ppssppPrepareManagedLaunch(launcher string, cmd *exec.Cmd) {
 	if _, ok := ppssppFirmwareCached(); !ok {
 		ppssppDetectFirmwareNow()
 	}
+	// JukaHub's RetroAchievements login (GAME-21), read before the lock.
+	raUser, raToken := "", ""
+	if !ppssppSnapshot().RANoSignIn {
+		raUser, raToken = ppssppRALoginFn()
+	}
 	ppssppMgr.mu.Lock()
 	defer ppssppMgr.mu.Unlock()
 	st := ppssppLockedState()
@@ -3203,6 +3473,9 @@ func ppssppPrepareManagedLaunch(launcher string, cmd *exec.Cmd) {
 	fw, known := ppssppFirmwareCached()
 	fw = ppssppSanitizeFirmware(fw)
 	ppssppSeedHome(b, fw.Stick)
+	if outcome := ppssppRASignIn(b.memstick(), st.RANoSignIn, raUser, raToken); outcome != "" {
+		ppssppRALast.Store(&outcome)
+	}
 	if !known || !regularFile(b.binary()) {
 		// No detection (it failed to publish): the script on the card keeps
 		// the fallback it was written with rather than losing it.
@@ -3337,6 +3610,7 @@ func ppssppAutoUpdateLoop() {
 	for {
 		now := time.Now()
 		if !gameScreenSuspended() {
+			ppssppCleanStaleMounts()
 			ppssppReviewLastRun()
 			if now.Sub(lastRefresh) >= ppssppFirmwareTTL {
 				lastRefresh = now
@@ -3612,6 +3886,71 @@ func ppssppRunAutoInstall(rel ppssppRelease, platform string, fw ppssppFirmwareI
 	}
 	logPatch("ppsspp auto-update: installed %s (switched %v)", build.label(), switched)
 	return ppssppAutoInstalled
+}
+
+// ppssppUpdatableOnCard reports a JukaHub PPSSPP the Emulators page's "Update
+// all" brings forward: the handheld has a build for its model and one is
+// installed (that action updates, it never adds).
+func ppssppUpdatableOnCard() bool {
+	if !ppssppManagedEnabled() {
+		return false
+	}
+	if platform, _ := ppssppPlatform(); platform == "" {
+		return false
+	}
+	return len(ppssppSnapshot().Builds) > 0
+}
+
+// ppssppRunUpdate is JukaHub's PPSSPP's share of "Update all": the newest
+// release, installed when it is worth having over the newest build that starts
+// (ppssppWorthOver) and switched to by the automatic rule, through the install
+// card the batch has begun. It returns the new build's label ("" when there was
+// nothing newer). The caller holds the patch slot.
+func ppssppRunUpdate(ctx context.Context) (string, error) {
+	platform, _ := ppssppPlatform()
+	if platform == "" {
+		return "", nil
+	}
+	rel, err := ppssppFetchRelease(ctx, newEmulatorUpdateClient())
+	if err != nil {
+		return "", err
+	}
+	st := ppssppRecordLatest(rel)
+	ppssppStampCheck(time.Now())
+	invalidateEmulatorCache()
+	if len(st.Builds) == 0 || rel.Tag == "" || st.Bad[rel.Tag] != "" {
+		return "", nil
+	}
+	if _, have := st.build(rel.Tag); have {
+		return "", nil
+	}
+	if cur, ok := st.newestGood(); ok && !ppssppWorthOver(rel.Tag, rel.Version, cur) {
+		return "", nil
+	}
+	fw := ppssppDetectFirmwareNow()
+	build, err := ppssppInstall(ctx, emuWinClient(), rel, platform, fw, emuInstallBarReport)
+	if err != nil {
+		if errors.Is(err, errPPSSPPUnusable) && ctx.Err() == nil {
+			ppssppMarkBad(rel.Tag, err.Error())
+		}
+		return "", err
+	}
+	ppssppMgr.mu.Lock()
+	cur := ppssppLockedState()
+	var serr error
+	if build.usable(*cur) && ppssppShouldSwitch(*cur, build, fw.Version, ppssppUserPinnedLocked()) {
+		serr = ppssppUseBuildLocked(cur, build, fw)
+		if err := ppssppSaveLocked(); err != nil && serr == nil {
+			serr = err
+		}
+	}
+	ppssppMgr.mu.Unlock()
+	invalidateEmulatorCache()
+	if serr != nil {
+		return build.label(), fmt.Errorf("%s is installed, but PSP games could not be switched to it: %w", build.label(), serr)
+	}
+	logPatch("ppsspp: %s installed from Update all", build.label())
+	return build.label(), nil
 }
 
 // ppssppUnmount takes one mount point down with the system's umount, lazily

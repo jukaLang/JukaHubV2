@@ -959,6 +959,43 @@ func TestPSHelperFindFilesRefusesTwoCopies(t *testing.T) {
 	}
 }
 
+// Moonlight's helper is optional in the package: installed (verified by
+// SHA256SUMS) when it is there; its absence, or a copy SHA256SUMS does not
+// list, changes nothing for PS.
+func TestPSHelpersInstallMoonlightWhenThePackageHasIt(t *testing.T) {
+	const moonlight = "#!/bin/sh\necho 'usage: moonlight-stream SESSION_FILE' >&2\nexit 2\n"
+	for _, pkg := range []string{"listed", "absent", "unlisted"} {
+		t.Run("moonlight="+pkg, func(t *testing.T) {
+			s := psHelperTestEnv(t)
+			t.Setenv(mlHelperEnv, "")
+			files := psHelperTestPackage()
+			if pkg != "absent" {
+				files["bin/"+mlHelperName] = moonlight
+			}
+			if pkg == "listed" {
+				files["SHA256SUMS"] += shaOf(moonlight) + "  bin/" + mlHelperName + "\n"
+			}
+			withMoonlight := pkg == "listed"
+			a := s.asset(psHelperTestTag, psHelperTestZip(t, files), "")
+			s.releases(t, []psHelperRelease{{TagName: psHelperTestTag, PublishedAt: "2026-11-10T12:05:00Z", Assets: []githubAsset{a}}})
+			if _, err := psInstallHelpers(context.Background(), nil); err != nil {
+				t.Fatalf("install: %v", err)
+			}
+			bin := psHelperInstallDir()
+			if got, _ := os.ReadFile(filepath.Join(bin, "chiaki-stream")); string(got) != psHelperTestStream {
+				t.Errorf("chiaki-stream = %q, want the packaged one", got)
+			}
+			got, err := os.ReadFile(filepath.Join(bin, mlHelperName))
+			if withMoonlight && string(got) != moonlight {
+				t.Errorf("%s = %q, %v; want the packaged one", mlHelperName, got, err)
+			}
+			if !withMoonlight && err == nil {
+				t.Errorf("%s was installed from a package with it %s", mlHelperName, pkg)
+			}
+		})
+	}
+}
+
 func TestPSHelperNetErrSaysWhatToDo(t *testing.T) {
 	cases := []struct {
 		err  error

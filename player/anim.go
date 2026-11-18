@@ -175,7 +175,8 @@ func uiAnimating() bool {
 	return tb.enter.active || nc.enter.active || qs.enter.active ||
 		(homeEdit.sheet.open && homeEdit.sheet.enter.active) ||
 		(homePowerConfirm.open && homePowerConfirm.enter.active) ||
-		homeLayoutAnimating() || synthAnimating() || homeFocusGlide.animating()
+		homeLayoutAnimating() || synthAnimating() || homeFocusGlide.animating() ||
+		gameLibDimEase.animating()
 }
 
 // ── Layer compositing ─────────────────────────────────────────────────

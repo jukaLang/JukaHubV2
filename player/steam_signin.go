@@ -307,8 +307,13 @@ func (s *companionServer) handleSteamReturn(w http.ResponseWriter, r *http.Reque
 }
 
 var (
-	steamProfileIDRe   = regexp.MustCompile(`steamcommunity\.com/profiles/(7656119[0-9]{10})`)
-	steamProfileNameRe = regexp.MustCompile(`steamcommunity\.com/id/([A-Za-z0-9_-]{2,32})`)
+	// A pasted profile link, anchored at both ends: an optional scheme and
+	// "www." or "m.", Steam's own host, then the profile, then nothing or a
+	// path, query or fragment. "evil.example/?steamcommunity.com/id/x" is no
+	// match. steamResolveProfile tries each word of the paste, so a link
+	// shared with text around it still counts.
+	steamProfileIDRe   = regexp.MustCompile(`^(?:https?://)?(?:www\.|m\.)?steamcommunity\.com/profiles/(7656119[0-9]{10})(?:[/?#].*)?$`)
+	steamProfileNameRe = regexp.MustCompile(`^(?:https?://)?(?:www\.|m\.)?steamcommunity\.com/id/([A-Za-z0-9_-]{2,32})(?:[/?#].*)?$`)
 	steamVanityRe      = regexp.MustCompile(`^[A-Za-z0-9_-]{2,32}$`)
 	steamXMLIDRe       = regexp.MustCompile(`<steamID64>\s*(7656119[0-9]{10})\s*</steamID64>`)
 	steamAPIKeyRe      = regexp.MustCompile(`^[0-9A-Fa-f]{32}$`)
@@ -321,13 +326,23 @@ func steamResolveProfile(ctx context.Context, raw string) (string, error) {
 	if steamValidID(in) {
 		return in, nil
 	}
-	if m := steamProfileIDRe.FindStringSubmatch(in); m != nil {
-		return m[1], nil
+	words := strings.Fields(in)
+	for i, w := range words {
+		words[i] = strings.Trim(w, "\"'`<>()[],")
+	}
+	for _, w := range words {
+		if m := steamProfileIDRe.FindStringSubmatch(w); m != nil {
+			return m[1], nil
+		}
 	}
 	vanity := ""
-	if m := steamProfileNameRe.FindStringSubmatch(in); m != nil {
-		vanity = m[1]
-	} else if steamVanityRe.MatchString(in) {
+	for _, w := range words {
+		if m := steamProfileNameRe.FindStringSubmatch(w); m != nil {
+			vanity = m[1]
+			break
+		}
+	}
+	if vanity == "" && steamVanityRe.MatchString(in) {
 		vanity = in
 	}
 	if vanity == "" {

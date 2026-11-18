@@ -233,6 +233,46 @@ func TestJukaosLayerChecks(t *testing.T) {
 		t.Fatal("a broken layer.json was usable")
 	}
 
+	// A driver layer for one model and kernel: anywhere else unusable with the
+	// reason; its values only where the file exists, a "*" expanded and
+	// checked again.
+	jukaosTestWrite(t, sys("/sys/module/usbcore/parameters/autosuspend"), []byte("2"))
+	jukaosTestWrite(t, sys("/sys/class/devfreq/1800000.gpu/max_freq"), []byte("696000000"))
+	jukaosTestWrite(t, filepath.Join(layer, "layer.json"), []byte(`{"name": "A523 driver layer", "kind": "drivers",
+  "devices": ["trimui-smart-pro-s"], "kernel": "5.15",
+  "sysfsIfPresent": {"/sys/module/usbcore/parameters/autosuspend": "-1",
+                     "/sys/module/bluetooth/parameters/disable_ertm": "Y",
+                     "/sys/class/devfreq/*gpu*/max_freq": "600000000",
+                     "/sys/class/devfreq/*/max_freq": "1"}}`))
+	hs := h
+	hs.Model, hs.ModelCode, hs.Release = "trimui-smart-pro-s", "TG5050", "5.15.147"
+	l = jukaosLoadLayer(hs, "drivers-a523", layer)
+	if l.Problem != "" || len(l.Sysfs) != 2 || l.Absent != 1 || len(l.Notes) != 1 ||
+		l.Sysfs[0].Path != "/sys/class/devfreq/1800000.gpu/max_freq" || l.Spec.Kind != jukaosKindDrivers {
+		t.Fatalf("driver layer = problem %q, values %+v, absent %d, notes %q", l.Problem, l.Sysfs, l.Absent, l.Notes)
+	}
+	for _, c := range []struct {
+		model, code, release string
+		want                 string
+	}{
+		{"trimui-brick", "TG3040", "5.15.147", "built for Smart Pro S, this is Brick"},
+		{"unknown", "", "5.15.147", "could not be told"},
+		{"trimui-smart-pro-s", "TG5050", "5.150.1", "built for kernel 5.15"},
+		{"trimui-smart-pro-s", "TG5050", "4.9.191", "built for kernel 5.15"},
+	} {
+		hc := hs
+		hc.Model, hc.ModelCode, hc.Release = c.model, c.code, c.release
+		if l := jukaosLoadLayer(hc, "drivers-a523", layer); !strings.Contains(l.Problem, c.want) {
+			t.Errorf("driver layer on %s %s = problem %q, want %q", c.model, c.release, l.Problem, c.want)
+		}
+	}
+	if why := jukaosDeviceFits([]string{"tg3040"}, jukaosHost{Model: "trimui-hammer", ModelCode: "TG3040"}); why != "" {
+		t.Errorf("a TG3040 layer on the Hammer: %s", why)
+	}
+	if spec, err := jukaosDecodeLayerSpec([]byte(`{"devices": [" "]}`)); err != nil || jukaosDeviceFits(spec.Devices, hs) == "" {
+		t.Errorf("a blank devices list widened the layer: %+v %v", spec, err)
+	}
+
 	for p, ok := range map[string]bool{
 		"/proc/sys/vm/swappiness":                               true,
 		"/proc/sys/vm/drop_caches":                              false,
@@ -325,5 +365,19 @@ func TestJukaosJournalAndState(t *testing.T) {
 	again, err := jukaosEncodeState(pkg)
 	if err != nil || !bytes.Contains(again, []byte(`"edition": "os"`)) {
 		t.Fatalf("package os.json re-saved = %s, %v", again, err)
+	}
+	// Skip the stock menu: on unless os.json says `"fastBoot": false`, the
+	// form the boot hook greps for (trimuiAutostartTemplate).
+	if !pkg.jukaosFastBootOn() {
+		t.Fatal("fastBoot is off without being set")
+	}
+	no := false
+	pkg.FastBoot = &no
+	slow, err := jukaosEncodeState(pkg)
+	if err != nil || !bytes.Contains(slow, []byte(`"fastBoot": false`)) {
+		t.Fatalf("os.json with fastBoot off = %s, %v", slow, err)
+	}
+	if back, err := jukaosDecodeState(slow); err != nil || back.jukaosFastBootOn() {
+		t.Fatalf("fastBoot off did not survive a save: %+v, %v", back, err)
 	}
 }

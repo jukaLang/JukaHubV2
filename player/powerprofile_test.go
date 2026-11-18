@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeCPU creates <root>/cpuN/cpufreq/{scaling_governor,scaling_available_governors},
@@ -419,5 +420,77 @@ func TestRestoreBootCPUSettingsWithoutCpufreq(t *testing.T) {
 	}
 	if !strings.Contains(detail, "no cpufreq") {
 		t.Fatalf("detail = %q, want an honest no-cpufreq line", detail)
+	}
+}
+
+// A two-cluster chip (the Smart Pro S's A523): a level from the fast
+// policy's table becomes the same share of the slow one's, on a point it
+// offers; a policy with the same top keeps the value as it is.
+func TestCpufreqScaleKHzTwoClusters(t *testing.T) {
+	root := t.TempDir()
+	slow := filepath.Dir(fakeCPUWithFreq(t, root, 0, "1416000", "1416000", true))
+	if err := os.WriteFile(filepath.Join(slow, "scaling_available_frequencies"), []byte("408000 720000 1008000 1200000 1416000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fast := filepath.Dir(fakeCPUWithFreq(t, root, 4, "2000000", "2000000", true))
+	if got := cpufreqFastestFirst(cpufreqPolicyDirs(root)); len(got) != 2 || got[0] != fast {
+		t.Fatalf("policies = %v, want the fast one first", got)
+	}
+	for _, c := range []struct{ khz, want int64 }{{1_000_000, 720_000}, {2_000_000, 1_416_000}, {408_000, 408_000}} {
+		if got := cpufreqScaleKHz(slow, c.khz, 2_000_000); got != c.want {
+			t.Fatalf("%d on the slow cluster = %d, want %d", c.khz, got, c.want)
+		}
+	}
+	if got := cpufreqScaleKHz(fast, 1_200_000, 2_000_000); got != 1_200_000 {
+		t.Fatalf("same-top policy changed %d to %d", 1_200_000, got)
+	}
+}
+
+// TestAutoPerfLoadAndSteps covers Auto performance's pure parts: /proc/stat
+// load (one busy core counts), the level table under a limit, and the step
+// rule — up at once, down only after quiet samples and never inside the hold.
+func TestAutoPerfLoadAndSteps(t *testing.T) {
+	a := parseAutoPerfProcStat([]byte("cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0\ncpu1 50 0 50 400 0 0 0 0\nintr 1 2 3\n"))
+	b := parseAutoPerfProcStat([]byte("cpu  200 0 100 900 0 0 0 0 0 0\ncpu0 140 0 50 410 0 0 0 0\ncpu1 60 0 50 490 0 0 0 0\n"))
+	maxBusy, allBusy, ok := autoPerfBusy(a, b)
+	if !ok || maxBusy < 89 || maxBusy > 91 || allBusy < 49 || allBusy > 51 {
+		t.Fatalf("busy = %.1f/%.1f ok=%v, want 90/50", maxBusy, allBusy, ok)
+	}
+
+	dir := filepath.Dir(fakeCPU(t, t.TempDir(), 0, "schedutil", "schedutil", true))
+	if err := os.WriteFile(filepath.Join(dir, "scaling_available_frequencies"), []byte("1800000 600000 1200000 2000000 1200000\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := autoPerfLevelTable(dir, 1_900_000); len(got) != 3 || got[0] != 600_000 || got[2] != 1_800_000 {
+		t.Fatalf("levels = %v, want 600000 1200000 1800000", got)
+	}
+
+	spec := autoPerfSpec(autoPerfClassGame)
+	var st autoPerfAdapt
+	now := time.Unix(1000, 0)
+	if got := autoPerfNext(1, 0, 3, 97, 60, spec, false, now, &st); got != 3 {
+		t.Fatalf("pegged core: level %d, want 3 (two steps)", got)
+	}
+	if got := autoPerfNext(2, 0, 3, 90, 60, spec, true, now, &st); got != 2 {
+		t.Fatalf("hot chip stepped up to %d", got)
+	}
+	idx := 3
+	for i := 0; i < autoPerfDownSamples; i++ {
+		now = now.Add(autoPerfTick)
+		idx = autoPerfNext(idx, 0, 3, 10, 5, spec, false, now, &st)
+	}
+	if idx != 3 {
+		t.Fatalf("stepped down inside the hold: %d", idx)
+	}
+	now = now.Add(autoPerfBounceHold)
+	for i := 0; i < autoPerfDownSamples; i++ {
+		now = now.Add(autoPerfTick)
+		idx = autoPerfNext(idx, 0, 3, 10, 5, spec, false, now, &st)
+	}
+	if idx != 2 {
+		t.Fatalf("quiet CPU: level %d, want one step down to 2", idx)
+	}
+	if got := autoPerfSettled(map[int64]time.Duration{600_000: 50 * time.Second, 1_800_000: 20 * time.Second, 2_000_000: 5 * time.Second}); got != 1_800_000 {
+		t.Fatalf("settled = %d, want the highest level with a quarter of the time", got)
 	}
 }

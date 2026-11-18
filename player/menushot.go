@@ -9,8 +9,8 @@ package main
 //
 // The hold arms it (a light tick of the motor: let go now) and the release
 // takes it, so a button, a trigger or a volume key joining Menu at any point
-// — an emulator hotkey, the firmware's Menu + volume brightness, which may
-// come late in a long hold — means no screenshot.
+// — an emulator hotkey or Menu + volume, which may come late in a long hold
+// — means no screenshot.
 //
 // In JukaHub the orb's Menu reader times the hold (voiceOrbMenuTick) and, on
 // the release, asks the frame loop for a screenshot (requestScreenshot), so
@@ -47,7 +47,7 @@ const (
 	// menuShotKey is the Custom setting behind "Hold Menu: screenshot".
 	menuShotKey = "menuHoldScreenshot"
 	// menuShotHoldMs is how long Menu is held for a screenshot: longer than a
-	// tap, and long enough that a Menu + volume brightness chord or an
+	// tap, and long enough that a Menu + volume chord or an
 	// emulator hotkey has its second button down first.
 	menuShotHoldMs = 700
 	menuShotHold   = menuShotHoldMs * time.Millisecond

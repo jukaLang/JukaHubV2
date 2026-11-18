@@ -121,7 +121,19 @@ func TestA11YAccessibilityRowsChangeLiveState(t *testing.T) {
 		t.Fatal("sticky chords row did not reach the chord layer")
 	}
 
+	// Reset asks first: Keep changes nothing, Reset resets.
+	previousSheet := tbxSheet
+	defer func() { tbxSheet = previousSheet }()
 	find("a11yReset").Open(cfg)
+	if !tbxSheet.open || len(tbxSheet.spec.buttons) != 2 || tbxSheet.spec.buttons[0].label != "Keep" {
+		t.Fatalf("reset did not ask first: %+v", tbxSheet.spec.buttons)
+	}
+	tbxSheetActivate(0)
+	if !a11y.monoAudio || !a11y.stickyChords {
+		t.Fatal("Keep reset the settings anyway")
+	}
+	find("a11yReset").Open(cfg)
+	tbxSheetActivate(1)
 	if a11y.monoAudio || a11y.oneHanded || a11y.stickyChords || a11y.longPressMs != 450 {
 		t.Fatalf("reset left state behind: %+v", a11y)
 	}

@@ -428,6 +428,7 @@ func (fe *FocusEngine) SceneName() string {
 }
 
 // NodeCount returns how many nodes the installed graph has (0 if none).
+// Test seam (ARCH-8): only tests call it.
 func (fe *FocusEngine) NodeCount() int {
 	fe.mu.RLock()
 	defer fe.mu.RUnlock()

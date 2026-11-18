@@ -1338,7 +1338,7 @@ func mediaCardFromEntry(e dlLibraryEntry, over map[string]bool, ctx mediaCardCon
 	}
 	parts := []string{humanBytes(e.Size)}
 	if !e.Added.IsZero() {
-		parts = append(parts, e.Added.Format("2 Jan 2006"))
+		parts = append(parts, formatDate(nil, e.Added))
 	}
 	if e.Kept {
 		parts = append(parts, "Kept after watching")
@@ -1956,7 +1956,7 @@ func mediaHubAskRemove(card mediaCard) {
 		title: "Remove this download?",
 		body:  dlShortTitle(card.title, 60) + " — frees " + humanBytes(size) + " on the card.",
 		ok:    "Remove",
-		focus: 1,
+		focus: 0, // Cancel first (UX-14): a second A by habit removes nothing
 		freed: size,
 		back:  mediaHub.zone,
 	}
@@ -1986,7 +1986,7 @@ func mediaHubAskRemoveOldest() {
 		title: fmt.Sprintf("Remove the %d oldest watched videos?", len(ids)),
 		body:  "They are the ones over your " + dlKeptLimitLabel(dlKeptLimitGBValue()) + " limit; this frees " + humanBytes(freed) + ".",
 		ok:    "Remove",
-		focus: 1,
+		focus: 0, // Cancel first (UX-14)
 		freed: freed,
 		back:  mediaHub.zone,
 	}

@@ -5,8 +5,10 @@ package main
 // When Settings → Your name is set (userName, chat.go), the boot shows
 // "Welcome back, <name>" under the wordmark as it comes into focus, and the
 // shutdown card ends on "Goodbye, <name>" ("See you soon, <name>" for a
-// restart) before the light goes out. With no name set both look exactly as
-// they did. A screenshot never carries the name (screenshotmode.go).
+// restart) before the light goes out — said aloud too, from a line the
+// offline voice made when the name was set (byevoice.go). With no name set
+// both look exactly as they did. A screenshot never carries the name
+// (screenshotmode.go).
 
 import (
 	"math"
@@ -84,10 +86,17 @@ func shutdownFarewellText(name string) string {
 	if name == "" {
 		return ""
 	}
-	if devPowerAction(devPowerPending.Load()) == devPowerReboot {
+	if shutdownRestarting() {
 		return uiT("See you soon") + ", " + name
 	}
 	return uiT("Goodbye") + ", " + name
+}
+
+// shutdownRestarting reports whether this teardown ends in a restart (Home's
+// power card asked for one), which the farewell and its voice (byevoice.go)
+// see off with "See you soon" rather than a goodbye.
+func shutdownRestarting() bool {
+	return devPowerAction(devPowerPending.Load()) == devPowerReboot
 }
 
 // bootGreetFit is text as drawn in maxW: whole when it fits, else cut with an

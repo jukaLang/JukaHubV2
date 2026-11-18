@@ -1062,6 +1062,7 @@ func (t *apkxTable) iconPath(id uint32) string {
 }
 
 // apkxResolveLabel opens a table and follows a label reference in it.
+// Test seam (ARCH-8): only tests call it.
 func apkxResolveLabel(arsc []byte, id uint32) string {
 	t, err := apkxOpenTable(arsc)
 	if err != nil {
@@ -1071,6 +1072,7 @@ func apkxResolveLabel(arsc []byte, id uint32) string {
 }
 
 // apkxResolveIconPath opens a table and follows an icon reference in it.
+// Test seam (ARCH-8): only tests call it.
 func apkxResolveIconPath(arsc []byte, id uint32) string {
 	t, err := apkxOpenTable(arsc)
 	if err != nil {

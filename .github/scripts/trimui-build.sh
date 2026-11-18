@@ -110,6 +110,16 @@ host_go() {
 		GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go list -tags dynamic -deps . > /dev/null); then
 		die "could not fetch the Go modules"
 	fi
+	# The Help pages (player/helpdoc.go) embed copies of docs/CONTROLS.md and
+	# docs/QUICK_START.md from player/helpdocs/, because go:embed cannot reach
+	# ../docs: refresh them (LF) from docs/ before the build. Without docs/ the
+	# committed copies are built in.
+	for f in QUICK_START.md CONTROLS.md; do
+		[ -f "$repo/docs/$f" ] && [ -d "$repo/player/helpdocs" ] || continue
+		tr -d '\r' < "$repo/docs/$f" > "$repo/player/helpdocs/$f.tmp" &&
+			mv -f "$repo/player/helpdocs/$f.tmp" "$repo/player/helpdocs/$f" ||
+			die "could not copy docs/$f into player/helpdocs"
+	done
 	hand_back=$(owner)
 	status_file=$(mktemp)
 	{
@@ -124,6 +134,9 @@ host_go() {
 			-e GOROOT="$goroot" -e GOMODCACHE="$gomodcache" -e GOCACHE="$gocache" \
 			-e GOTOOLCHAIN=local -e GOPROXY=off \
 			-e BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%d)}" \
+			-e JUKAHUB_GOOGLE_CLIENT_ID="${JUKAHUB_GOOGLE_CLIENT_ID:-}" \
+			-e JUKAHUB_GOOGLE_CLIENT_SECRET="${JUKAHUB_GOOGLE_CLIENT_SECRET:-}" \
+			-e JUKAHUB_MS_CLIENT_ID="${JUKAHUB_MS_CLIENT_ID:-}" \
 			-e OWNER="$hand_back" \
 			-v "$repo:$repo" \
 			-v "$goroot:$goroot:ro" \
@@ -236,8 +249,18 @@ inside_go() {
 	# stamp, and git in the image would refuse a checkout owned by another
 	# user. go-sdl2 links SDL dynamically unless built with -tags static;
 	# "dynamic" names that default and selects nothing.
+	# Google Drive sign-in (docs/CLOUD_SYNC.md): the OAuth client is stamped
+	# in only when the job has one (repository secrets).
+	google=
+	if [ -n "${JUKAHUB_GOOGLE_CLIENT_ID:-}" ]; then
+		google=" -X main.googleOAuthClientID=$JUKAHUB_GOOGLE_CLIENT_ID -X main.googleOAuthClientSecret=${JUKAHUB_GOOGLE_CLIENT_SECRET:-}"
+	fi
+	# Outlook sign-in for Mail (docs/EMAIL_CALENDAR.md), the same way.
+	if [ -n "${JUKAHUB_MS_CLIENT_ID:-}" ]; then
+		google="$google -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID"
+	fi
 	run_stoppable go build -v -buildvcs=false -tags dynamic \
-		-ldflags "-s -w -X main.buildDate=$BUILD_DATE" \
+		-ldflags "-s -w -X main.buildDate=$BUILD_DATE$google" \
 		-o "$out/JukaHub" .
 }
 

@@ -30,7 +30,10 @@ const (
 	gameOptionsRowSpeed
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
+	gameOptionsRowCheats
 	gameOptionsRowDiagnose
+	gameOptionsRowChooseCover
+	gameOptionsRowCoverName
 	gameOptionsRowCovers
 	gameOptionsRowReset
 	gameOptionsRowCount
@@ -105,8 +108,14 @@ func gameOptionsRowName(row int) string {
 		return "Extra arguments"
 	case gameOptionsRowOpenIn:
 		return "Open in…"
+	case gameOptionsRowCheats:
+		return "Cheats"
 	case gameOptionsRowDiagnose:
 		return "Check why it won't start"
+	case gameOptionsRowChooseCover:
+		return "Choose cover"
+	case gameOptionsRowCoverName:
+		return "Name for covers"
 	case gameOptionsRowCovers:
 		return "Clean up covers"
 	case gameOptionsRowReset:
@@ -144,8 +153,14 @@ func gameOptionsRowHint(row int) string {
 		return "Added after the ROM path, for launchers that read options"
 	case gameOptionsRowOpenIn:
 		return "Hand this game to its tool: profile, compatibility or emulator"
+	case gameOptionsRowCheats:
+		return "RetroArch cheats from libretro's database, on for this game only"
 	case gameOptionsRowDiagnose:
 		return "Missing BIOS, core or game files, and where to copy them"
+	case gameOptionsRowChooseCover:
+		return "The closest box art on the server or in the Imgs folder"
+	case gameOptionsRowCoverName:
+		return "The title box art is looked up by, if the file name differs"
 	case gameOptionsRowCovers:
 		return "Find downloaded box art no game in the library uses"
 	case gameOptionsRowReset:
@@ -181,6 +196,12 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			// game-launchers.json pins the console: no question is asked.
 			return filepath.Base(gameOptsUI.systemLauncher) + " (console setting)"
 		}
+		if opts.Emulator == "" {
+			// NextUI starts it through its pak without asking (nextui.go).
+			if pak := nextuiPakFor(gameOptsUI.game.Path); pak != "" {
+				return "Automatic · " + nextuiPakLabel(pak)
+			}
+		}
 		return gameEmulatorLabel(opts.Emulator, gameOptsUI.emulators)
 	case gameOptionsRowCPUProfile:
 		return gameCPUProfileLabel(opts.CPUProfile)
@@ -198,8 +219,14 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return strings.TrimSpace(opts.Args)
 	case gameOptionsRowOpenIn:
 		return "→"
+	case gameOptionsRowCheats:
+		return cheatsOptionsValue(gameOptsUI.game.Path)
 	case gameOptionsRowDiagnose:
 		return "Check"
+	case gameOptionsRowChooseCover:
+		return "→"
+	case gameOptionsRowCoverName:
+		return artworkAliasRowValue(gameOptsUI.game)
 	case gameOptionsRowCovers:
 		if gameOptsUI.coverWait || artCleanupBusy() {
 			return "Looking…"
@@ -261,10 +288,13 @@ func openGameOptionsChoice(choice int) {
 	gameOptsUI.mainCursor = gameOptsUI.cursor
 	gameOptsUI.mainScroll = gameOptsUI.scroll
 	gameOptsUI.choice = choice
-	// The first answer is the highlighted one: "Reset settings" keeps the
-	// states, and "Move to the trash" is what the user just asked for — the
-	// trash keeps the covers, so nothing is lost on a slip.
-	gameOptsUI.cursor = 0
+	// Cancel, the last answer, is the highlighted one: a reset or a removal
+	// opens on the safe choice (confirmfocus.go), so an A pressed by habit
+	// changes nothing.
+	gameOptsUI.cursor = gameOptionsChoiceRows() - 1
+	if gameOptsUI.cursor < 0 {
+		gameOptsUI.cursor = 0
+	}
 	gameOptsUI.scroll = 0
 	PlayActivateSound()
 }
@@ -358,6 +388,8 @@ func openGameOptions() bool {
 	if game.ContentKey == "" {
 		libraryDecorateGame(&game)
 	}
+	cheatsClose(false) // a Cheats sheet left from a sheet closed elsewhere (cheats_ui.go)
+	artChooseClose(false)
 	gameOptsUI.open = true
 	gameOptsUI.game = game
 	gameOptsUI.cursor = 0
@@ -370,8 +402,9 @@ func openGameOptions() bool {
 	gameOptsUI.coverWait = false
 	gameOptsUI.emulators = nil
 	gameOptsUI.systemLauncher = ""
-	if game.System != androidLibrarySystem && game.System != html5LibrarySystem {
-		gameOptsUI.emulators = findGameLaunchers(game.System, emulatorEntries())
+	if game.System != androidLibrarySystem && game.System != html5LibrarySystem && game.System != portsLibrarySystem {
+		// On NextUI the game's own pak leads the ladder (nextui.go).
+		gameOptsUI.emulators = nextuiWithPakFirst(game.Path, findGameLaunchers(game.System, emulatorEntries()))
 		gameOptsUI.systemLauncher = configuredGameLauncher(game.System, loadGameLauncherOverrides(gameLauncherOverridesPath()))
 	}
 	PlayActivateSound()
@@ -386,6 +419,8 @@ func closeGameOptions() {
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
 	gameOptsUI.choice = gameOptionsChoiceNone
 	gameOptsUI.coverFiles = nil
+	cheatsClose(false)
+	artChooseClose(false)
 	PlayBackSound()
 }
 
@@ -400,7 +435,35 @@ func gameOptionsRows() int {
 		// launch options and reset controls do not apply to browser games.
 		return gameOptionsRowShowHidden + 1
 	}
+	if gameOptsUI.game.System == portsLibrarySystem {
+		return len(gameOptionsPortRows)
+	}
 	return gameOptionsRowCount
+}
+
+// gameOptionsPortRows are the rows a PortMaster port shows: the library's own,
+// the CPU profile and limit its launch applies (ports.go startPortScript →
+// beginLaunchPowerProfile), its own checks (gamediag.go → portWhyRun) and the
+// covers cleanup. Emulator, video filter, shader speed, extra arguments,
+// Open in…, cheats and reset are for emulated games: a port's script starts
+// its own engine and reads none of them.
+var gameOptionsPortRows = [...]int{
+	gameOptionsRowTitle, gameOptionsRowHidden, gameOptionsRowSort, gameOptionsRowLayout,
+	gameOptionsRowShowHidden, gameOptionsRowCPUProfile, gameOptionsRowCeiling,
+	gameOptionsRowDiagnose, gameOptionsRowCovers,
+}
+
+// gameOptionsRowAt is the row shown at position pos: the cursor and the hit
+// boxes count positions, which are the rows themselves except for a port. -1
+// is no row.
+func gameOptionsRowAt(pos int) int {
+	if gameOptsUI.game.System == portsLibrarySystem {
+		if pos >= 0 && pos < len(gameOptionsPortRows) {
+			return gameOptionsPortRows[pos]
+		}
+		return -1
+	}
+	return pos
 }
 
 // gameOptionsMove keeps the highlight on a real row.
@@ -432,7 +495,7 @@ func adjustGameOptions(delta int) {
 	if delta == 0 || gameOptsUI.choice != gameOptionsChoiceNone {
 		return
 	}
-	switch gameOptsUI.cursor {
+	switch gameOptionsRowAt(gameOptsUI.cursor) {
 	case gameOptionsRowEmulator:
 		next := cycleGameEmulator(gameOptsUI.opts.Emulator, gameOptsUI.emulators, delta)
 		if next == gameOptsUI.opts.Emulator {
@@ -499,7 +562,7 @@ func activateGameOptionsRow() {
 		activateGameOptionsChoice()
 		return
 	}
-	switch gameOptsUI.cursor {
+	switch gameOptionsRowAt(gameOptsUI.cursor) {
 	case gameOptionsRowTitle:
 		vkOpenGameTitle()
 	case gameOptionsRowHidden:
@@ -542,11 +605,17 @@ func activateGameOptionsRow() {
 		ShowToast("Shader speed: "+label+" · "+detail, ToastKindInfo)
 	case gameOptionsRowOpenIn:
 		openGameLibraryHandoffFromSheet()
+	case gameOptionsRowCheats:
+		openCheatsSheet(gameOptsUI.game)
 	case gameOptionsRowDiagnose:
 		// The answer opens as the launch-failure card (gamediag.go).
 		game := gameOptsUI.game
 		closeGameOptions()
 		gameDiagRunManual(game)
+	case gameOptionsRowChooseCover:
+		openArtChoose() // artwork_choose.go
+	case gameOptionsRowCoverName:
+		vkOpenArtworkAlias()
 	case gameOptionsRowCovers:
 		if gameOptsUI.coverWait || artCleanupBusy() {
 			ShowToast("Still looking for unused covers…", ToastKindInfo)
@@ -596,6 +665,12 @@ func resetGameOptions() {
 // handleGameOptionsKey consumes every key while the sheet is open, so the list
 // behind it neither scrolls nor launches anything.
 func handleGameOptionsKey(e *sdl.KeyboardEvent) bool {
+	if cheatsSheetOpen() && gameOptsUI.open {
+		return handleCheatsKey(e) // the Cheats sheet sits on this one (cheats_ui.go)
+	}
+	if artChooseIsOpen() && gameOptsUI.open {
+		return handleArtChooseKey(e) // so does Choose cover (artwork_choose.go)
+	}
 	if e == nil || e.Type != sdl.KEYDOWN || !gameOptsUI.open {
 		return false
 	}
@@ -627,6 +702,12 @@ func gameOptionsBack() {
 }
 
 func ctrlGameOptions(e *sdl.ControllerButtonEvent) bool {
+	if cheatsSheetOpen() && gameOptsUI.open {
+		return handleCheatsController(e)
+	}
+	if artChooseIsOpen() && gameOptsUI.open {
+		return handleArtChooseController(e)
+	}
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !gameOptsUI.open {
 		return false
 	}
@@ -656,6 +737,12 @@ func handleGameOptionsMouse(mx, my int32) bool {
 	if !gameOptsUI.open {
 		return false
 	}
+	if cheatsSheetOpen() {
+		return handleCheatsMouse(mx, my)
+	}
+	if artChooseIsOpen() {
+		return handleArtChooseMouse(mx, my)
+	}
 	for _, hit := range gameOptsUI.rowHits {
 		if pointInRect(mx, my, hit.rect) {
 			gameOptsUI.cursor = hit.index
@@ -675,6 +762,8 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameOptsUI.open || renderer == nil {
 		return
 	}
+	defer renderCheatsSheet(renderer, config) // drawn over the sheet when open (cheats_ui.go)
+	defer renderArtChooseSheet(renderer, config)
 	gameOptionsPollCovers()
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
@@ -785,6 +874,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 				rect.X+14, rect.Y+8+medH+2)
 			continue
 		}
+		// From here idx is the row shown at this position (a port skips the
+		// emulator rows, gameOptionsRowAt).
+		idx = gameOptionsRowAt(idx)
 		renderText(renderer, config, medium, gameOptionsRowName(idx), ColorTextPrimary(),
 			rect.X+14, rect.Y+8)
 		// Leave room for the right-aligned value instead of letting a long hint
@@ -809,6 +901,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 			valueColor = focusColor
 		}
 		if idx == gameOptionsRowArgs && strings.TrimSpace(gameOptsUI.opts.Args) != "" {
+			valueColor = focusColor
+		}
+		if idx == gameOptionsRowCheats && cheatsEnabledCount(gameOptsUI.game.Path) > 0 {
 			valueColor = focusColor
 		}
 		// Ladders and toggles show which way they move; a static value would

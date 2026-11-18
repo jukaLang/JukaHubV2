@@ -8,7 +8,9 @@ package main
 //     another place on the strip, A or B puts it down;
 //   - Left/Right step the tab's view (Grid, Rows, List, Carousel, Compact);
 //   - Y (Delete) hides or shows the tab — one always stays;
-//   - the last two rows switch "Remember last tab" and the Home layout;
+//   - the rows after the tabs switch "Remember last tab", the look's three
+//     (Tabs position, Dim unselected art, List edge fade — homelook.go) and
+//     the Home layout;
 //   - B, L2 (Esc, Q) close it.
 //
 // Every change is stored at once (homeTabsShown, homeTabViews); the sheet
@@ -33,8 +35,8 @@ var homeTabsEdit struct {
 }
 
 // homeTabsEditRows is how many rows the sheet has: the tabs, then Remember
-// last tab and Home layout.
-func homeTabsEditRows() int { return len(homeTabsEdit.order) + 2 }
+// last tab, the look's rows and Home layout (homeTabsEditRemember…Layout).
+func homeTabsEditRows() int { return len(homeTabsEdit.order) + homeTabsEditExtraRows }
 
 // homeTabsEditToggle opens the sheet, or closes it when it is open (L2 is
 // both). Edit Home's way in (homeEditBegin) lands here on the Tabs Home.
@@ -111,12 +113,15 @@ func homeTabsEditChange(c *Config, step int) {
 			p.levels[0].placed = false
 		}
 		PlayNavSound()
-	case e.idx == len(e.order):
+	case e.idx == len(e.order)+homeTabsEditRemember:
 		on := !homeTabsRemember(c)
 		homeTabsWrite(c, homeTabsRememberKey, boolString(on))
 		if on {
 			homeTabsNoteLast(c, homeTabs.cur)
 		}
+		PlayNavSound()
+	case e.idx < len(e.order)+homeTabsEditLayout:
+		homeLookEditChange(c, e.idx-len(e.order))
 		PlayNavSound()
 	default:
 		n := len(homeArrangementChoiceList)
@@ -388,8 +393,10 @@ func homeTabsEditDrawRow(renderer *sdl.Renderer, fonts HomeFonts, c *Config, i i
 		if e.hidden[id] {
 			note, muted = "Hidden", true
 		}
-	case i == len(e.order):
+	case i == len(e.order)+homeTabsEditRemember:
 		label, value = "Remember last tab", setOnOff(homeTabsRemember(c))
+	case i < len(e.order)+homeTabsEditLayout:
+		label, value = homeLookEditRow(c, i-len(e.order))
 	default:
 		label, value = "Home layout", homeArrangementChoiceLabel(homeArrangement(c))
 	}

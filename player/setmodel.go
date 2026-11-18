@@ -508,7 +508,7 @@ func setTextSizeOptions(*Config) []setOption {
 func setPowerModeRow() setRow {
 	return setRow{
 		ID: "powerMode", Label: "Power mode", Kind: setKindChoice,
-		Detail: setStatic("Battery Saver slows the interface to stretch a charge"),
+		Detail: setStatic("One setting for battery vs speed: Battery Saver slows the frame and cuts motion, Performance keeps both full, Default lets the Low Power and Reduced Motion toggles decide."),
 		Options: func(*Config) []setOption {
 			out := make([]setOption, 0, len(powerModeOrder))
 			for _, m := range powerModeOrder {
@@ -532,7 +532,7 @@ func setPowerModeRow() setRow {
 func setVibrationLevelRow() setRow {
 	return setRow{
 		ID: "vibrationLevel", Label: "Vibration strength", Kind: setKindChoice,
-		Detail:   setStatic("How hard the motor pulses"),
+		Detail:   setStatic("How hard the motor pulses. Soft is for playing in bed, Strong is easier to feel through a case. The Vibration switch in Settings still turns feedback off entirely."),
 		Visible:  func(*Config) bool { return hapticsAvailable() },
 		Disabled: func(c *Config) bool { return !hapticsConfiguredOn(c) },
 		Options: func(*Config) []setOption {
@@ -763,6 +763,62 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
+			// The screen itself: backlight, lock-screen time, the panel's picture,
+			// the LED lights and the typeface (displaysettings.go).
+			ID: displaySettingsSection, Title: "Display", Glyph: "sun",
+			Subtitle: "Brightness, lock screen, picture, lights and font",
+			Rows: setJoinRows(
+				[]setRow{
+					setSliderRow("brightness", "Brightness", "The screen's backlight", 1),
+					lockScreenAfterRow(),
+					// The panel's own picture: the display driver's enhancement,
+					// or JukaHub's layer where the driver has none (displaytune.go).
+					displayTuneRow("display_contrast"),
+					displayTuneRow("display_saturation"),
+					displayTuneRow("display_exposure"),
+					displayTuneRow("display_colortemp"),
+					displayTuneResetRow(),
+				},
+				// The LED lights: the Stick lights page's rows under their own ids.
+				displayLEDRows(),
+				// The typeface: Inter, or a font downloaded on request (uifont.go).
+				uiFontSettingsRows(),
+				[]setRow{
+					{
+						ID: "textSize", Label: "Text size", Kind: setKindChoice, Clamp: true,
+						Detail:  setStatic("Every label in JukaHub, Home included"),
+						Options: setTextSizeOptions,
+						Current: func(*Config) int { return a11yScaleIndex() },
+						// The Accessibility page's setter (a11y_settings.go): it
+						// confirms the size with a toast, like every other row
+						// here, and skips the save when nothing changed.
+						Choose: func(c *Config, value string) {
+							f, err := strconv.ParseFloat(value, 64)
+							if err != nil {
+								return
+							}
+							if a11ySetScale(f) {
+								a11ySave(c)
+							}
+						},
+					},
+					{
+						ID: "boldText", Label: "Bold text", Kind: setKindToggle,
+						Detail: setStatic("Draws every menu, list and Home label in the font's bold cut (Inter SemiBold by default). Captions stay at the 14 px legibility floor."),
+						Get:    func(*Config) bool { return a11y.boldText },
+						Set:    setBoldText,
+					},
+					{
+						ID: "fullscreen", Label: "Full screen", Kind: setKindToggle, Quiet: true,
+						Detail:  setStatic("Fill the monitor instead of a window"),
+						Visible: func(*Config) bool { return !setHandheld() },
+						Get:     func(c *Config) bool { return c.Variables.Fullscreen },
+						Set:     setQSWrite(qsActionFullscreen),
+					},
+				},
+			),
+		},
+		{
 			// Network time, the zone, 12/24 h and the date format
 			// (datetime.go). The 12-hour switch lived under Display & theme.
 			ID: "datetime", Title: "Date & time", Glyph: "clock",
@@ -770,8 +826,11 @@ func setBuildSections() []setSection {
 			Rows:     dateTimeSettingsRows(),
 		},
 		{
-			ID: "display", Title: "Display & theme", Glyph: "palette",
-			Subtitle: "Themes, colours, text size and motion",
+			// The looks: themes, Home, wallpaper, glass, colours and motion. Its
+			// id stays "display" for the old links; the screen itself has its
+			// own Display page above (displaysettings.go).
+			ID: "display", Title: "Theme & look", Glyph: "palette",
+			Subtitle: "Themes, Home, wallpaper, colours and motion",
 			Rows: []setRow{
 				{
 					ID: "themes", Label: "Theme presets", Kind: setKindAction,
@@ -804,6 +863,11 @@ func setBuildSections() []setSection {
 				// on that layout, where they stand in for Edit Home.
 				homeTabsSettingsRow(),
 				homeTabsRememberRow(),
+				// NX Redux 2.5's main-menu look (homelook.go): the tab strip's
+				// place, greyed covers but the selected one, edge fades.
+				homeTabsPositionRow(),
+				homeDimArtRow(),
+				listEdgeFadeRow(),
 				{
 					// Home's edit mode from here (home_edit.go): it opens Home
 					// first, switching to Widgets when Home is not a tile layout.
@@ -822,6 +886,8 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Browse and install themes from the gallery"),
 					Open:   openThemeCommunityPanel,
 				},
+				// Installed gallery themes follow new versions (themeupdate.go).
+				themeAutoUpdateRow(),
 				{
 					ID: "wallpaper", Label: "Wallpaper", Kind: setKindAction,
 					Detail: setStatic("A picture under the glass on every screen"),
@@ -833,25 +899,6 @@ func setBuildSections() []setSection {
 				},
 				// A GIF wallpaper plays unless this is off (gifwall.go).
 				wallpaperAnimateRow(),
-				setSliderRow("brightness", "Brightness", "The screen's backlight", 1),
-				{
-					ID: "textSize", Label: "Text size", Kind: setKindChoice, Clamp: true,
-					Detail:  setStatic("Every label in JukaHub, Home included"),
-					Options: setTextSizeOptions,
-					Current: func(*Config) int { return a11yScaleIndex() },
-					// The Accessibility page's setter (a11y_settings.go): it
-					// confirms the size with a toast, like every other row
-					// here, and skips the save when nothing changed.
-					Choose: func(c *Config, value string) {
-						f, err := strconv.ParseFloat(value, 64)
-						if err != nil {
-							return
-						}
-						if a11ySetScale(f) {
-							a11ySave(c)
-						}
-					},
-				},
 				{
 					ID: "contrast", Label: "High contrast", Kind: setKindToggle,
 					Detail: setStatic("Black and white with a yellow focus ring"),
@@ -860,21 +907,15 @@ func setBuildSections() []setSection {
 				},
 				{
 					ID: "reduceTransparency", Label: "Reduce transparency", Kind: setKindToggle,
-					Detail: setStatic("Opaque glass; the wallpaper cannot show through"),
+					Detail: setStatic("Makes every glass tile, row, sheet and chip opaque, so wallpaper and background motion cannot show through them."),
 					Get:    func(*Config) bool { return a11y.reduceTransparency },
 					Set:    setReduceTransparency,
 				},
 				{
 					ID: "increaseContrast", Label: "Increase contrast", Kind: setKindToggle,
-					Detail: setStatic("Stronger edges, wider focus rings, 7:1 text"),
+					Detail: setStatic("Strengthens glass edges, widens focus outlines and keeps text at 7:1 or better on the surfaces it sits on."),
 					Get:    func(*Config) bool { return a11y.increaseContrast },
 					Set:    setIncreaseContrast,
-				},
-				{
-					ID: "boldText", Label: "Bold text", Kind: setKindToggle,
-					Detail: setStatic("Inter SemiBold in every menu, list and Home label"),
-					Get:    func(*Config) bool { return a11y.boldText },
-					Set:    setBoldText,
 				},
 				{
 					ID: "motion", Label: "Reduce motion", Kind: setKindToggle, Quiet: true,
@@ -907,17 +948,12 @@ func setBuildSections() []setSection {
 				themeScheduleThemeRow(false),
 				themeScheduleTimeRow(true),
 				themeScheduleTimeRow(false),
+				// The panel's picture (contrast, saturation, exposure, colour
+				// temperature) moved to Display (displaysettings.go).
 				// The 12-hour clock moved to Date & time (datetime.go).
 				setColourRow("buttonColor", "Button colour", "A tint under every button · A types a colour"),
 				setColourRow("labelColor", "Label colour", "Text on buttons and labels · A types a colour"),
 				setColourRow("inputColor", "Input colour", "The wash under text fields · A types a colour"),
-				{
-					ID: "fullscreen", Label: "Full screen", Kind: setKindToggle, Quiet: true,
-					Detail:  setStatic("Fill the monitor instead of a window"),
-					Visible: func(*Config) bool { return !setHandheld() },
-					Get:     func(c *Config) bool { return c.Variables.Fullscreen },
-					Set:     setQSWrite(qsActionFullscreen),
-				},
 				{
 					ID: "a11y", Label: "More accessibility", Kind: setKindAction,
 					Detail: setStatic("Button remapping, one-handed mode, colour filters"),
@@ -1121,6 +1157,8 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Networks, passwords and signal"),
 					Open:   wifiScrOpen,
 				},
+				// The handheld's own Wi-Fi network (hotspot.go): Tools → Hotspot.
+				hotspotSettingsRow(),
 				// The WireGuard VPN (vpn.go): the switch, the configuration,
 				// what goes through it, and how the tunnel is doing.
 				vpnToggleRow(),
@@ -1160,6 +1198,16 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Type, send files and control JukaHub from your phone"),
 					Open:   func(*Config) { openCompanionOverlay() },
 				},
+				{
+					// Mail accounts and calendar links (mailcal_ui.go): the
+					// same page as Tools → Email & calendar.
+					ID: "mailcal", Label: "Email & calendar", Kind: setKindAction,
+					Detail: setStatic("Mail accounts, calendars and reminders"),
+					Open:   mailcalOpenSettings,
+				},
+				// A cable to a computer opens the SD card there (MTP,
+				// usbmtp.go). Handheld only.
+				usbMtpSettingRow(),
 				{
 					ID: "nettools", Label: "Servers & network tools", Kind: setKindAction,
 					Detail: setStatic("FTP and SSH servers, speed test and lookups"),
@@ -1413,6 +1461,8 @@ func setBuildSections() []setSection {
 						}
 					},
 				},
+				// Recent games side by side, each where it was left (gameswitcher.go).
+				gameSwitcherSettingsRow(),
 				{
 					ID: "snaps", Label: "Video snaps", Kind: setKindToggle,
 					Detail: func(*Config) string {
@@ -1503,6 +1553,20 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// The clock follows the app in front and learns what each
+					// one needs (autoperf.go).
+					ID: "autoPerformance", Label: "Automatic CPU speed", Kind: setKindToggle,
+					Detail:  autoPerfSettingDetail,
+					Visible: func(*Config) bool { return setHandheld() },
+					Get:     autoPerfEnabled,
+					Set: func(c *Config, on bool) {
+						autoPerfSetEnabled(c, on)
+						setToast("Automatic CPU speed: " + setOnOff(on))
+					},
+				},
+				// "Fan": the Smart Pro S only (fan.go).
+				fanSettingsRow(),
+				{
 					ID: "emulators", Label: "Emulators", Kind: setKindAction,
 					Detail: setStatic("Install, update and check emulators and cores"),
 					Open:   func(*Config) { openEmulatorPanel() },
@@ -1567,6 +1631,13 @@ func setBuildSections() []setSection {
 			},
 		},
 		{
+			// RetroArch's audio quality, latency, overlay, rumble, arcade
+			// rotation and PAL mode for library launches (ratuning_settings.go).
+			ID: raTuneSettingsSection, Title: "Emulation", Glyph: "emulator",
+			Subtitle: "Audio quality, latency, overlays, rumble and rotation",
+			Rows:     raTuneSettingsRows(),
+		},
+		{
 			ID: "power", Title: "Power & battery", Glyph: "battery",
 			Subtitle: "Battery life, sleep and the idle screen",
 			Rows: []setRow{
@@ -1582,30 +1653,15 @@ func setBuildSections() []setSection {
 					Detail:  batteryETASettingsDetail,
 				},
 				{
-					ID: "screensaver", Label: "Screensaver after", Kind: setKindChoice,
-					Detail: setStatic("Idle time before the idle screen starts"),
-					Options: func(*Config) []setOption {
-						out := make([]setOption, 0, len(screenTimeoutSteps))
-						for _, s := range screenTimeoutSteps {
-							out = append(out, setOption{Value: strconv.Itoa(s), Label: screenTimeoutLabel(s)})
-						}
-						return out
-					},
-					Current: func(c *Config) int {
-						for i, s := range screenTimeoutSteps {
-							if s == c.Variables.ScreensaverTimeout {
-								return i
-							}
-						}
-						return -1
-					},
-					Value: func(c *Config) string { return screenTimeoutLabel(c.Variables.ScreensaverTimeout) },
-					Choose: func(c *Config, value string) {
-						if n, err := strconv.Atoi(value); err == nil {
-							applyScreensaverTimeout(c, n)
-						}
-					},
+					// The level over the last hours, charging spans and the
+					// screen-on drain (battgraph.go, battgraph_ui.go).
+					ID: "batteryHistory", Label: "Battery history", Kind: setKindAction,
+					Detail:  setStatic("A graph of the last 2, 8 or 24 hours"),
+					Visible: func(*Config) bool { return getBatteryPercent() >= 0 },
+					Open:    battGraphOpen,
 				},
+				// "Lock screen after" (the screensaver timeout) moved to Display
+				// (displaysettings.go).
 				{
 					ID: "idleScreen", Label: "Idle screen", Kind: setKindChoice,
 					Detail: setStatic("The clock dock shows the time, the weather and what is playing"),
@@ -1628,8 +1684,16 @@ func setBuildSections() []setSection {
 				},
 				// Off until chosen; handheld only (devpower.go).
 				autoSleepSettingsRow(),
+				// A long sleep saves the game and powers off; the next power-on
+				// resumes it (quickresume.go).
+				sleepPowerOffSettingsRow(),
+				resumeAtPowerOnSettingsRow(),
 				// What the hardware power key does (powerkey.go).
 				powerButtonSettingsRow(),
+				// ...and while music plays: screen off or sleep (quickresume.go).
+				powerKeyMusicSettingsRow(),
+				// The FN switch locks the power button (travellock.go).
+				travelLockSettingsRow(),
 				{
 					ID: "batterySaver", Label: "Battery saver at 20%", Kind: setKindToggle,
 					Detail: setStatic("Low battery: slower cadence, no motion, OLED theme"),
@@ -1676,7 +1740,7 @@ func setBuildSections() []setSection {
 					ID: "cookies", Label: "Keep browser sign-ins", Kind: setKindChoice,
 					Detail: func(*Config) string {
 						if since, ok := browserSessionSince(); ok {
-							return "The saved session began " + since.Local().Format("Jan 2")
+							return "The saved session began " + formatDateShort(nil, since.Local())
 						}
 						return "No sign-ins are saved right now"
 					},
@@ -1754,6 +1818,8 @@ func setBuildSections() []setSection {
 				},
 				// Startup lock: a button code or a password (bootlock.go).
 				bootLockTypeRow(), bootLockWhenRow(), bootLockChangeRow(),
+				// Voice unlock: a spoken phrase beside it (bootlock_voice.go).
+				bootLockVoiceRow(), bootLockVoiceChangeRow(),
 			},
 		},
 		{
@@ -1774,17 +1840,33 @@ func setBuildSections() []setSection {
 			Rows: []setRow{
 				{
 					ID: "device", Label: "Device", Kind: setKindInfo,
-					Value: func(*Config) string { return deviceDisplayName(DetectDevice()) },
+					Detail: setStatic("The handheld or computer JukaHub found itself running on"),
+					Value:  func(*Config) string { return deviceDisplayName(DetectDevice()) },
+				},
+				{
+					// Every part of the handheld and its driver (devicedrivers_ui.go).
+					ID: "drivers", Label: "Drivers & hardware", Kind: setKindAction,
+					Detail: setStatic("What drives the screen, sound, radios and lights"),
+					Open:   driversOpenSheet,
 				},
 				{
 					ID: "system", Label: "System", Kind: setKindInfo,
-					Value: setStatic(runtime.GOOS + " · " + runtime.GOARCH),
+					Detail: setStatic("Operating system and processor type; worth quoting in a bug report"),
+					Value:  setStatic(runtime.GOOS + " · " + runtime.GOARCH),
 				},
 				{
 					// The update channel's state in one line (upch.go).
 					ID: "updates", Label: "Updates", Kind: setKindAction,
 					Detail: func(*Config) string { return upchStatusView().Line },
 					Open:   setOpenScene("Patch"),
+				},
+				{
+					// Stable or Beta (autoupdate_channel.go).
+					ID: "updatesChannel", Label: "Update channel", Kind: setKindChoice,
+					Detail:  updateChannelDetail,
+					Options: func(*Config) []setOption { return updateChannelOptions() },
+					Current: updateChannelIndex,
+					Choose:  updateChannelChoose,
 				},
 				{
 					ID: "updatesAuto", Label: "Download updates on Wi-Fi", Kind: setKindToggle,
@@ -1826,11 +1908,11 @@ func setBuildSections() []setSection {
 					Open:   bkupOpenScreen,
 				},
 				{
-					ID: "restoreDefaults", Label: "Restore all defaults", Kind: setKindAction,
-					Detail: setStatic("Reset settings and Home layout; keep games and saves"),
-					Open: func(c *Config) {
-						recoveryConfirmReset(c, func(*Config) { recoveryCardClose() })
-					},
+					// Reset settings, or erase everything JukaHub created;
+					// both back up first and ask twice (factoryreset.go).
+					ID: "restoreDefaults", Label: "Reset", Kind: setKindAction,
+					Detail: setStatic("Reset settings, or erase everything JukaHub created; games and saves stay"),
+					Open:   factoryResetOpen,
 				},
 				{
 					ID: "bug", Label: "Report a bug", Kind: setKindAction,
@@ -1846,6 +1928,31 @@ func setBuildSections() []setSection {
 					ID: "tour", Label: "Replay the welcome tour", Kind: setKindAction,
 					Detail: setStatic("The first-run walkthrough, again"),
 					Open:   func(*Config) { onboardingStart() },
+				},
+				{
+					// Help: the manual, embedded, and Home's tip of the day (helpdoc.go).
+					ID: "helpControls", Label: "Controls", Kind: setKindAction,
+					Detail: setStatic("Every button on every screen · works offline"),
+					Open:   helpOpenControls,
+				},
+				{
+					ID: "helpQuickStart", Label: "Quick start", Kind: setKindAction,
+					Detail: setStatic("Build, run and change JukaHub · works offline"),
+					Open:   helpOpenQuickStart,
+				},
+				{
+					ID: "homeTips", Label: "Show tips", Kind: setKindToggle,
+					Detail: helpTipsDetail,
+					Get:    helpTipsEnabled,
+					Set: func(c *Config, on bool) {
+						helpSetTipsEnabled(c, on)
+						setToast("Tips on Home: " + setOnOff(on))
+					},
+				},
+				{
+					ID: "homeTipHide", Label: "Hide today's tip", Kind: setKindAction,
+					Detail: setStatic("A new one comes tomorrow"),
+					Open:   helpHideTodaysTip,
 				},
 			},
 		},

@@ -36,6 +36,30 @@ func TestPortCatalogMetadataAndBrickFilter(t *testing.T) {
 	}
 }
 
+// The Ports Store's fields: genres, Ready to Run, porters (a list or one
+// name), the screenshot from an image object (a path is refused), dates, and
+// port_stats.json's download counter.
+func TestPortCatalogStoreFieldsAndStats(t *testing.T) {
+	raw := []byte(`{"ports":{"a.zip":{"attr":{"title":"A","genres":["Puzzle","action"],"rtr":true,"porter":["X","Y"],"image":{"screenshot":"screenshot.png","cover":"cover.jpg"},"date_added":"2021-09-10","date_updated":"2025-01-02"}},` +
+		`"b.zip":{"attr":{"title":"B","rtr":false,"porter":"Z","image":"../evil.png"}}}}`)
+	entries := mcParsePortsCatalog(raw)
+	if len(entries) != 2 {
+		t.Fatalf("parsed %d ports", len(entries))
+	}
+	a, b := entries[0], entries[1]
+	if !a.RTR || len(a.Genres) != 2 || a.Genres[0] != "puzzle" || len(a.Porters) != 2 || a.Image != "screenshot.png" ||
+		a.DateAdded != "2021-09-10" || a.DateUpdated != "2025-01-02" {
+		t.Fatalf("store fields lost: %+v", a)
+	}
+	if b.RTR || len(b.Porters) != 1 || b.Porters[0] != "Z" || b.Image != "" {
+		t.Fatalf("second entry: %+v", b)
+	}
+	stats := pstoreParseStats([]byte(`{"ports":{"A.zip":102785,"b.zip":0,"notes":"x"}}`))
+	if stats["a.zip"] != 102785 || len(stats) != 1 {
+		t.Fatalf("download counter = %v", stats)
+	}
+}
+
 func TestPortCatalogRejectsNewerGlibcAndIncompatibleArch(t *testing.T) {
 	for _, entry := range []mcCatalogEntry{
 		{Arch: []string{"armhf"}},

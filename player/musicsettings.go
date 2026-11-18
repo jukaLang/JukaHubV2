@@ -28,6 +28,8 @@ const (
 	msRowPEQ
 	msRowPlaylists
 	msRowShortcuts
+	msRowGameMusic
+	msRowGameLevel
 )
 
 type musicSettingsRow struct {
@@ -58,7 +60,9 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowArtOpacity, "Cover art opacity", "How strongly the artwork tile and its spectrum show through the card."},
 		{msRowScreenMode, "Screen-off controls", "What still works while the panel is dark: any key wakes, Controls keeps transport and volume, Select only ignores stray presses."},
 		{msRowBackground, "Background playback", "Keep playing when you leave the player. In the player, Y + Left toggles it too."},
-		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio so decoded samples reach the DAC unprocessed."},
+		{msRowGameMusic, "Keep music playing in games", "Music that plays when you start a game carries on under it, mixed with the game's sound (speaker or USB DAC). A Bluetooth headset plays one app at a time, so there the music pauses."},
+		{msRowGameLevel, "Music volume in games", "How loud the music plays under a game, so the game's own sound stays on top."},
+		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio. With a USB DAC, lossless tracks play at their own rate and bit depth, unscaled (use the DAC's volume); UI sounds are muted while they do."},
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz. Open it with G in the player."},
 		{msRowSpatialMode, "Spatial audio", spatialModeHint},
 		{msRowSpatialStrength, "Spatial strength", spatialStrengthHint},
@@ -114,6 +118,10 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 			return "On"
 		}
 		return "Off"
+	case msRowGameMusic:
+		return onOff(musicGameKeepEnabled(config))
+	case msRowGameLevel:
+		return fmt.Sprintf("%d%%", musicGameLevel(config))
 	case msRowPEQ:
 		return musicPEQStatus()
 	case msRowPlaylists:
@@ -168,6 +176,20 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 		on := !musicBackgroundEnabled(config)
 		musicSetBackgroundEnabled(config, on)
 		showToast("Background playback: "+onOff(on), ToastInfo())
+	case msRowGameMusic:
+		on := !musicGameKeepEnabled(config)
+		musicGameSetKeep(config, on)
+		showToast("Keep music playing in games: "+onOff(on), ToastInfo())
+	case msRowGameLevel:
+		pct := musicGameLevel(config) + 10*dir
+		if pct < 10 {
+			pct = 10
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		musicGameSetLevel(config, pct)
+		showToast(fmt.Sprintf("Music volume in games: %d%%", pct), ToastInfo())
 	case msRowBitPerfect:
 		musicSetBitPerfect(!musicEQ.bitPerfect, config)
 		if musicEQ.bitPerfect {

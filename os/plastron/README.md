@@ -13,6 +13,14 @@ installs JukaHub's own. It may reuse the image's separately licensed libretro
 cores with their notices. The final image still needs plastron's closed Brick
 GPU libraries and XR829 firmware, obtained as described in plastron's README.
 
+**Brick (and Hammer) only.** The builder refuses `--device trimui-brick-pro`
+and `--device trimui-smart-pro-s`: Brick images (NextUI, Knulli) show a
+garbled, striped screen on the Brick Pro (TG4040), whose panel needs another
+init, and the Smart Pro S (TG5050) is an Allwinner A523, not the A133P
+plastron's bootloader and kernel are built for. The running image carries
+plastron's Brick device tree, so it cannot tell a Brick Pro itself: never
+write a Brick image to a Brick Pro or Smart Pro S card.
+
 ## Build a Brick image
 
 Use a Linux machine with Python 3, `squashfs-tools`, `xz-utils` and `binutils`.

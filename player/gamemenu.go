@@ -69,6 +69,8 @@ const (
 	gmRewind
 	gmFast
 	gmCloseBg // close background apps, keep the game (closeall.go)
+	gmMusic   // JukaHub's music: A play/pause, Left/Right previous/next (musicgame.go)
+	gmSwitch  // quit to the game switcher (gameswitcher.go)
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -99,6 +101,11 @@ func gameMenuSettingsRow() setRow {
 // on.
 func gmItems(config *Config) []gmItem {
 	items := []gmItem{gmResume}
+	if _, _, ok := musicGameMenuState(); ok {
+		// Music from JukaHub plays (or was paused for the game): its row comes
+		// right under Resume.
+		items = append(items, gmMusic)
+	}
 	if gmStatesAvailable() {
 		items = append(items, gmSave, gmLoad)
 		if rewind, _ := retroTransportAvailable(); rewind {
@@ -108,6 +115,9 @@ func gmItems(config *Config) []gmItem {
 	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
+	}
+	if gameSwitcherEnabled(config) {
+		items = append(items, gmSwitch)
 	}
 	return append(items, gmCloseBg, gmSleep, gmQuit)
 }
@@ -135,6 +145,15 @@ func gmLabel(it gmItem) (string, string) {
 		return "Fast forward", "Run the game faster until you switch it off"
 	case gmCloseBg:
 		return "Close background apps", closeAllMenuSub()
+	case gmSwitch:
+		return "Game switcher", "Quit, then pick up another recent game"
+	case gmMusic:
+		title, paused, _ := musicGameMenuState()
+		sub := orbKeyName("A") + " pause · Left/Right previous / next"
+		if paused {
+			sub = "Paused · " + orbKeyName("A") + " play · Left/Right previous / next"
+		}
+		return "Music: " + title, sub
 	}
 	return "Resume game", ""
 }
@@ -177,8 +196,20 @@ func gmPress(config *Config, b gaButton) {
 		if gameAssistEnabled(config) {
 			gmAskJuka(config)
 		}
+	case gaBtnLeft, gaBtnRight:
+		// Only the Music row has a sideways meaning: the track. No shoulder
+		// or hotkey is needed for it.
+		if items[gaOverlay.sel] == gmMusic {
+			if b == gaBtnLeft {
+				musicPrev()
+			} else {
+				musicNext()
+			}
+		}
 	case gaBtnA:
 		switch items[gaOverlay.sel] {
+		case gmMusic:
+			musicTogglePause()
 		case gmResume:
 			PlayBackSound()
 			gaClose("the player resumed", true)
@@ -186,6 +217,9 @@ func gmPress(config *Config, b gaButton) {
 			gmAskJuka(config)
 		case gmQuit:
 			gmQuitGame()
+		case gmSwitch:
+			// Quit to JukaHub, and the switcher once the screen is back.
+			gameSwitcherFromGameMenu()
 		case gmSave, gmLoad:
 			PlayActivateSound()
 			gmPickOpen(items[gaOverlay.sel] == gmSave)
@@ -323,6 +357,10 @@ func gmController(button uint8) (gaButton, bool) {
 		return gaBtnUp, true
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		return gaBtnDown, true
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		return gaBtnLeft, true
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		return gaBtnRight, true
 	}
 	return 0, false
 }

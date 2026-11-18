@@ -380,6 +380,13 @@ func drawContinueThumb(renderer *sdl.Renderer, rect sdl.Rect) {
 // fillVerticalScrim ramps from top to bottom inside a rounded card, starting at
 // fromY: square where it begins, following the card's radius at the bottom.
 func fillVerticalScrim(renderer *sdl.Renderer, card sdl.Rect, fromY int32, top, bottom sdl.Color) {
+	fillVerticalScrimUntil(renderer, card, fromY, card.Y+card.H, top, bottom)
+}
+
+// fillVerticalScrimUntil holds the final colour below untilY. Cover cards
+// use that flatter base so lettering printed in their artwork cannot show
+// through the title and subtitle.
+func fillVerticalScrimUntil(renderer *sdl.Renderer, card sdl.Rect, fromY, untilY int32, top, bottom sdl.Color) {
 	if renderer == nil || card.W <= 0 || fromY >= card.Y+card.H {
 		return
 	}
@@ -398,7 +405,10 @@ func fillVerticalScrim(renderer *sdl.Renderer, card sdl.Rect, fromY int32, top, 
 		if y+sh > span {
 			sh = span - y
 		}
-		t := float32(y) / float32(span)
+		t := float32(y) / float32(max32(untilY-fromY, 1))
+		if t > 1 {
+			t = 1
+		}
 		inset := homeCornerInset(homeTileRadius, min32(span-1-y, card.H-1-(start+y)))
 		setDrawColor(renderer, lerpColorRGBA(top, bottom, t))
 		_ = renderer.FillRect(&sdl.Rect{

@@ -243,9 +243,12 @@ part_sources() {
     case "$1" in
         helpers)
             # player/native: the helper sources, CMakeLists.txt, build-helpers.sh
-            # with its pinned versions and checksums, the Python tool pins;
-            # not its host tests, its READMEs or build-runtimes.sh (the
-            # runtime packages).
+            # with its pinned versions and checksums, the Python tool pins, and
+            # the Moonlight helper (moonlight-stream.c, its self-test clip
+            # moonlight-selftest.h264 and its CMake project
+            # player/native/moonlight/, all under player/native, so listed by
+            # the same pathspec); not its host tests, its READMEs or
+            # build-runtimes.sh (the runtime packages).
             git -C "$REPO" ls-files -s -- player/native ':(exclude)player/native/tests' \
                 ':(exclude)player/native/*.md' ':(exclude)player/native/build-runtimes.sh' \
                 ':(exclude)player/native/build-stt.sh' ':(exclude)player/native/build-llm.sh' \

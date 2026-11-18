@@ -18,7 +18,10 @@ package main
 //     parked while anything the launch started still runs;
 //   - each app writes its own log: the runtime, the display, the exact command
 //     line (secret values hidden) and the program's output;
-//   - when the program exits, `westonwrap.sh cleanup` runs, the runtime puts
+//   - the session lasts while Windows programs remain in the prefix, so a
+//     launcher that starts the real program and quits keeps WestonPack and
+//     the pad for it (wineWaitScript); Select + Start held ends everything;
+//   - when the session ends, `westonwrap.sh cleanup` runs, the runtime puts
 //     its things away (plan.After), leftovers are stopped, the WestonPack image
 //     is unmounted — each step bounded, so nothing keeps the screen parked.
 //
@@ -26,6 +29,7 @@ package main
 // files through cmd.exe, in the program's own folder.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -597,12 +601,15 @@ type wineLaunch struct {
 // the one session that owns the screen and the pad (busy, named busyTitle),
 // the last Windows Apps launch that failed after A returned, for the panel
 // to show (windowsAppsTakeFailure), and the last Wine game profile launch
-// that did, for the main loop to show (wineShowProfileFailure).
+// that did, for the main loop to show (wineShowProfileFailure). waiting is the
+// busy session's hint once its program has exited and it waits for the
+// prefix's other Windows programs (wineWaitStarted), "" otherwise.
 var wineLaunches struct {
 	mu            sync.Mutex
 	phase         map[string]string
 	busy          string
 	busyTitle     string
+	waiting       string
 	failed        *windowsAppFailure
 	profileFailed *windowsAppFailure
 }
@@ -653,8 +660,45 @@ func wineLaunchEnded(key string) {
 	defer wineLaunches.mu.Unlock()
 	delete(wineLaunches.phase, key)
 	if wineLaunches.busy == key {
-		wineLaunches.busy, wineLaunches.busyTitle = "", ""
+		wineLaunches.busy, wineLaunches.busyTitle, wineLaunches.waiting = "", "", ""
 	}
+}
+
+// wineLaunchWaiting is the hint of the session under key while it waits for
+// the prefix's other Windows programs, "" when it does not. Any goroutine.
+func wineLaunchWaiting(key string) string {
+	wineLaunches.mu.Lock()
+	defer wineLaunches.mu.Unlock()
+	if wineLaunches.busy != key {
+		return ""
+	}
+	return wineLaunches.waiting
+}
+
+// wineWaitHint is what the player is told while a session waits for the
+// other Windows programs title's program left running.
+func wineWaitHint(title string) string {
+	return "Waiting for " + title + "'s other Windows programs to finish — hold " +
+		hintKeyFor("Select", "End") + " + " + hintKeyFor("Start", "End") + " to end"
+}
+
+// wineWaitStarted is called (from the output watcher's goroutine) when the
+// session under key starts waiting for the prefix's other Windows programs
+// (wineWaitScript): the screen may now show nothing at all, a hidden tool
+// being all that is left. JukaHub draws nothing during a session, so it says
+// so the way the session's pad bridge gives feedback — the vibration motor —
+// and keeps the hint for every place that names the session (the busy
+// answer to another launch, the app's status), and in the logs.
+func wineWaitStarted(key, title string, log wineLog) {
+	hint := wineWaitHint(title)
+	wineLaunches.mu.Lock()
+	if wineLaunches.busy == key {
+		wineLaunches.waiting = hint
+	}
+	wineLaunches.mu.Unlock()
+	log.printf("waiting: %s (at most %s)\n", hint, wineWaitLimit)
+	logInfo("windowsapps", "%s", hint)
+	playHaptic(hapticErrorPulse)
 }
 
 // wineStart checks a launch and runs it on a goroutine (wineRun). An error
@@ -670,6 +714,9 @@ func wineStart(l wineLaunch) error {
 	wineLaunches.mu.Lock()
 	defer wineLaunches.mu.Unlock()
 	if wineLaunches.busy != "" {
+		if wineLaunches.waiting != "" {
+			return errors.New(wineLaunches.waiting)
+		}
 		if wineLaunches.busy == l.Key {
 			return fmt.Errorf("%s is already starting", l.Title)
 		}
@@ -761,6 +808,10 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		return
 	}
 
+	// watchR reads the waiting shell's error output (plan.Waits), whose
+	// wineWaitMarker line says the program has exited and Windows programs
+	// have kept the session waiting for wineWaitNotice.
+	var watchR, watchW *os.File
 	cmd, err := disp.command(l.Dir)
 	if err == nil {
 		log.printf("runtime: %s\n", plan.Flavor)
@@ -795,13 +846,30 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		if log.f != nil {
 			cmd.Stdout, cmd.Stderr = log.f, log.f
 		}
+		// A pipe of JukaHub's own, not an io.Writer: exec would copy that
+		// output itself and make Wait hold until every Windows program that
+		// inherited it had exited. wineWatchOutput copies it to the log.
+		if plan.Waits {
+			if r, w, perr := os.Pipe(); perr == nil {
+				watchR, watchW = r, w
+				cmd.Stderr = w
+			}
+		}
 		configureGameChild(cmd)
 		// The program leads its own process group, so whatever the wrapper
 		// starts in the background keeps the screen parked until it is gone.
 		screenChildGroupConfigure(cmd)
 		err = screenChildStart(cmd)
+		if watchW != nil {
+			// The child has its own copy; the pipe ends when the last
+			// process holding one does.
+			watchW.Close()
+		}
 	}
 	if err != nil {
+		if watchR != nil {
+			watchR.Close()
+		}
 		stopInput()
 		disp.stop(log)
 		wineBounded(log, "the runtime's clean-up", wineAfterLimit, after)
@@ -810,6 +878,9 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		return
 	}
 	running.Store(cmd)
+	if watchR != nil {
+		go wineWatchOutput(watchR, log.f, func() { wineWaitStarted(l.Key, l.Title, log) })
+	}
 	started := time.Now()
 	noteGameChildStarted(cmd)
 	wineInputLive()
@@ -909,9 +980,45 @@ func wineDrainGroup(cmd *exec.Cmd, log wineLog) {
 	}
 }
 
+// wineWatchOutput copies a session's error output from r to the log (out may
+// be nil) and calls onWait once, when wineWaitMarker passes. It reads until
+// every process holding the pipe has closed it, then closes r. Nothing stops
+// the copy — a long line, a chatty program — so no writer ever blocks: the
+// output is read in chunks and the marker looked for across their edges.
+func wineWatchOutput(r, out *os.File, onWait func()) {
+	defer r.Close()
+	marker := []byte(wineWaitMarker)
+	buf := make([]byte, 32<<10)
+	var tail []byte
+	seen := false
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if out != nil {
+				_, _ = out.Write(buf[:n])
+			}
+			if !seen {
+				hay := make([]byte, 0, len(tail)+n)
+				hay = append(append(hay, tail...), buf[:n]...)
+				if bytes.Contains(hay, marker) {
+					seen = true
+					onWait()
+				} else {
+					tail = hay[max(0, len(hay)-len(marker)+1):]
+				}
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 // wineQuit ends a session's program from the pad (Select + Start held, after
 // Alt+F4 did not close it): an interrupt to its process group, then a kill.
-// The session's own goroutine does the rest of the clean-up.
+// That also ends the wait for programs a launcher left (wineWaitScript); the
+// session's own goroutine does the rest of the clean-up, and its wineserver -k
+// (plan.After) stops Windows programs that left the group.
 func wineQuit(cmd *exec.Cmd, log wineLog) {
 	if cmd == nil || cmd.Process == nil {
 		return
@@ -1004,6 +1111,9 @@ func wineShowProfileFailure() {
 }
 
 func windowsAppStatus(entry windowsAppEntry, runtime windowsRuntimeStatus) string {
+	if wineLaunchWaiting(entry.Path) != "" {
+		return "Waiting for its other programs"
+	}
 	if windowsAppRunningPID(entry.Path) > 0 {
 		return "Running"
 	}

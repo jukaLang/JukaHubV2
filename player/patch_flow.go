@@ -558,11 +558,19 @@ func opRemoveSigned(ctx context.Context, config *Config, idx *SignedRepoIndex, i
 		if p == nil {
 			return nil
 		}
+		// db.json keeps each file's resolved absolute path; RemovePackage
+		// joins what it is given to the install root, so hand it the
+		// root-relative form (all of them checked before anything is deleted).
+		root := packageInstallRoot()
 		files := make([]PackageFile, 0, len(p.Files))
 		for _, f := range p.Files {
-			files = append(files, PackageFile{Src: f.Path, Dest: f.Path})
+			rel, err := patchInstalledRelPath(root, f.Path)
+			if err != nil {
+				return fmt.Errorf("remove %s: %w", name, err)
+			}
+			files = append(files, PackageFile{Src: rel, Dest: rel})
 		}
-		pp := &PatchPackage{ID: name, Name: p.Title, Version: p.Version, Files: files}
+		pp := &PatchPackage{ID: name, Name: p.Title, Version: p.Version, DestRoot: root, Files: files}
 		return RemovePackage(c, pp, files)
 	}
 	if err := runTransaction(ctx, plan, "remove:"+id, nil, removeStep); err != nil {
@@ -578,6 +586,46 @@ func opRemoveSigned(ctx context.Context, config *Config, idx *SignedRepoIndex, i
 	})
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
+}
+
+// patchInstalledRelPath maps a file recorded in db.json to the root-relative,
+// slash-separated form RemovePackage resolves (resolvePackageDest joins it to
+// the install root). applySignedPackage records the resolved absolute path
+// (/mnt/SDCARD/JukaHub/x, C:\…\JukaHub\x); handed back as it was, it was joined
+// to the root a second time (/mnt/SDCARD/mnt/SDCARD/…), counted as "already
+// absent", and Remove deleted nothing yet dropped the record. A record in the
+// manifest's own form (/JukaHub/x or JukaHub/x) is root-relative already. The
+// root itself, a path climbing out of it, and a path on another drive or share
+// are refused: Remove never deletes outside the install root.
+func patchInstalledRelPath(root, path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("an installed file has no path")
+	}
+	root = filepath.Clean(root)
+	p := filepath.Clean(filepath.FromSlash(path))
+	outside := func(rel string) bool {
+		return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	if filepath.IsAbs(p) {
+		rel, err := filepath.Rel(root, p)
+		if err == nil && rel == "." {
+			return "", fmt.Errorf("installed file %q is the install root itself", path)
+		}
+		if err == nil && !outside(rel) {
+			return filepath.ToSlash(rel), nil
+		}
+		if filepath.VolumeName(p) != "" {
+			// C:\elsewhere or \\server\share: never a root-relative record.
+			return "", fmt.Errorf("installed file %q is outside the install root %q", path, root)
+		}
+		// On Linux /JukaHub/x is both absolute and the manifest's
+		// root-relative form; outside the root it can only be the latter.
+	}
+	rel := strings.TrimLeft(p, `/\`)
+	if rel == "" || rel == "." || outside(rel) || filepath.VolumeName(rel) != "" {
+		return "", fmt.Errorf("installed file %q is outside the install root %q", path, root)
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 // OpRollbackTx rolls back the most recent committed transaction with a backup
@@ -645,19 +693,9 @@ func findPackageByID(id string) (*PatchPackage, *PackageRepo, error) {
 	return nil, nil, fmt.Errorf("package %q not found in packages.json", id)
 }
 
-// humanBytes formats a byte count compactly.
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
-}
+// humanBytes formats a byte count compactly: formatSize (clockformat.go), the
+// one size format every screen shows.
+func humanBytes(n int64) string { return formatSize(n) }
 
 // sanitizeFileName makes an asset name safe for use as a local filename.
 func sanitizeFileName(name string) string {

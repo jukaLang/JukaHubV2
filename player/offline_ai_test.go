@@ -89,8 +89,8 @@ func TestOfflineAICleanStopsAtTurnEnd(t *testing.T) {
 func TestOfflineSpeechCommandUsesShorterSearch(t *testing.T) {
 	quick := strings.Join(sttLocalArgs("model", "en", "JukaHub", true), " ")
 	dictation := strings.Join(sttLocalArgs("model", "en", "", false), " ")
-	if !strings.Contains(quick, "-t 3") || !strings.Contains(quick, "-bs 3 -bo 3") ||
-		!strings.Contains(dictation, "-t 2") || strings.Contains(dictation, "-bs") {
+	if !strings.Contains(quick, "-t 3") || !strings.Contains(quick, "-bs 1 -bo 1 -nf") ||
+		!strings.Contains(dictation, "-t 3") || !strings.Contains(dictation, "-bs 2 -bo 2") || strings.Contains(dictation, "-nf") {
 		t.Fatalf("quick=%q dictation=%q", quick, dictation)
 	}
 }

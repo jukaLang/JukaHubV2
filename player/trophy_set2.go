@@ -1,8 +1,8 @@
 package main
 
-// trophy_set2.go — the second trophy set: 278 trophies here and 11 more
-// collection rungs in playtime.go, 289 in all, which take the room from 101 to
-// 390.
+// trophy_set2.go — the second trophy set: 279 trophies here and 11 more
+// collection rungs in playtime.go, 290 in all, which take the room from 101 to
+// 391.
 //
 // The first set reads only the clock. This one reads it more finely (the hour
 // of the day, the days of the year, the longest runs) and counts things done:
@@ -204,6 +204,7 @@ func trophySetTwo() []playtimeAchievement {
 		t2Count("complete_5", "Credits Roll", "Mark 5 games as completed", "Games", trophySilver, tkGameComplete, 5, "games"),
 		t2Count("complete_10", "Finisher", "Mark 10 games as completed", "Games", trophyGold, tkGameComplete, 10, "games"),
 		t2Count("random_1", "Feeling Lucky", "Start a random game", "Games", trophyBronze, tkGameRandom, 1, "games"),
+		t2Count("daily_1", "Challenge Accepted", "Meet a daily challenge on Home", "Games", trophyBronze, tkDailyChallenge, 1, "challenges"),
 		t2Count("netplay_1", "Link Cable", "Host or join a netplay game", "Games", trophyBronze, tkNetplay, 1, "sessions"),
 		t2Count("local_play_1", "Couch Co-op", "Start a local multiplayer session", "Games", trophyBronze, tkLocalPlay, 1, "sessions").needs(hotseatScene).bonus(),
 		t2Count("remote_play_1", "Remote Control", "Stream a PlayStation with Remote Play", "Games", trophyBronze, tkRemotePlay, 1, "streams").gated("psremote").bonus(),

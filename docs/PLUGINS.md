@@ -17,19 +17,21 @@ Settings → **Plugins** lists every plugin folder with an on/off switch (X).
 A plugin that is on is part of JukaHub, not just a row on that page:
 
 - **Switching it on answers.** The manifest's `onEnable` action runs at once
-  and its first line is the toast ("Clock is on: Mon 09 Nov · 18:41").
+  and its first line is the toast ("System monitor is on: RAM 412M free · …").
   Switching it off says what went with it (its theme, ROM formats, Start menu
   buttons).
 - **Its buttons are in the Start menu**, in a **Plugins** group, so they work
   from any screen (and from Home search). `quick` names which actions; with
   none named, the first action is listed. **Manage plugins** at the end of the
   group opens the Plugins page.
-- **It can greet you at start-up.** `onStartup` runs an action when JukaHub
-  starts; with `"startupDaily": true` only on the first start of the day (the
-  Daily quote plugin does this).
-- **Theme, pack and control-profile plugins can be used in one press.** Action
-  ids that start with `@` are done by JukaHub itself with the plugin's own
-  contributions, no script involved:
+- **It can run at start-up.** `onStartup` runs an action when JukaHub starts.
+  `"startupDaily": true` limits that to the first start of the day — but a
+  handheld without a clock battery boots at the same date until network time
+  arrives, so do not rely on it there. `"startupQuiet": true` keeps the
+  start-up result off the toasts unless it is an error (Save guard backs up
+  quietly at every start this way).
+- **JukaHub can do the work.** Action ids that start with `@` are done by
+  JukaHub itself with the plugin's own contributions, no script involved:
 
   | Action id | What JukaHub does |
   |-----------|-------------------|
@@ -40,6 +42,8 @@ A plugin that is on is part of JukaHub, not just a row on that page:
   | `@use-profile` | Switches to the plugin's (first) control profile. |
   | `@default-profile` | Back to the Default controls. |
   | `@open-library` | Opens the game library. |
+  | `@random-game` | Opens the game library, rolls one game from all of it and lands on it (A plays it, R rolls again). |
+  | `@open-saves` | Opens the save manager (snapshots, restore). |
 
 ```json
 {
@@ -50,102 +54,100 @@ A plugin that is on is part of JukaHub, not just a row on that page:
   "onEnable": "about",
   "quick": ["@apply-theme"],
   "onStartup": "about",
-  "startupDaily": true
+  "startupQuiet": true
 }
 ```
 
-All four keys are optional; a hook that names an action the plugin does not
-have is ignored.
+All of these keys are optional; a hook that names an action the plugin does
+not have is ignored.
 
-**The bundled plugins work everywhere.** The thirteen plugins that ship with
-JukaHub also exist in Go (`player/plugnative.go`), so they run on Windows,
-which has no `sh`, and without starting a shell on the handheld. The Go
-version is used while the plugin's script is the one JukaHub shipped (or
-cannot run here); edit the script and, wherever `sh` exists, your script runs
-instead. A copy installed by an older JukaHub is upgraded in place when its
-`version` is older, keeping files you added (such as the notes plugin's
-`notes.txt`).
+## The plugins that ship with JukaHub
 
-## Try the example plugin
+They are copied into `plugins/` on the first scan and are on by default.
 
-The repository ships a few examples in [`player/plugins/`](../player/plugins).
-This section walks through `hello`: [`player/plugins/hello/hello.sh`](../player/plugins/hello/hello.sh)
-with its required [`plugin.json`](../player/plugins/hello/plugin.json). It prints
-`Hello, friend!` for the `greet` action, or uses the optional custom variable
-`plugin_name` for the greeting. It does not modify files or use the network.
-No example is automatically included in release packages: copy the plugin's
-folder (both files) to your installation as follows:
+| Plugin | Buttons | What it does |
+|--------|---------|--------------|
+| **Save guard** (`saveguard`) | Back up saves now, Last backup, Restore a backup | Snapshots every emulator save folder through the save manager each time JukaHub starts (quietly), but only when a save actually changed — files are compared byte for byte, not by date. Keeps its own last five snapshots; the save manager keeps ten in all, so it can still push out manual snapshots past five. |
+| **Library doctor** (`librarydoctor`) | Check my games, Remove junk files, Set duplicates aside | Finds the same game twice in one console folder, zips that do not open, empty files, and Mac/Windows litter (`._` twins, `.DS_Store`, `Thumbs.db`, `desktop.ini`, `__MACOSX`). Remove junk files deletes only that litter. Set duplicates aside compares copies whole and moves the extra ones to `Roms/.duplicates/` (the copy with saves stays); it never deletes a game, never touches BIOS files, and leaves disc sets (anything beside a `.cue` or `.m3u`) and copies in two different consoles alone. |
+| **System monitor** (`sysinfo`) | Overview, Battery, Temperature and uptime | Free memory and card space with totals, battery with the time left, chip temperature and how long the device has been on. |
+| **Random game** (`gamepick`) | Pick a game for me, Count games, Open the library | Rolls one game from the whole library and lands on it in the Games library. |
+| **Quick notes** (`notes`) | Add note, All notes, Newest note, Clear notes | A pad in `notes.txt` in the plugin's folder; Add note opens the keyboard, Clear notes asks for a second press. |
+| **Pocket Classic pack** (`classicpack`) | What it changes, Apply it now, Undo | An experience pack: Game Boy palette, hero-tile Home, Gaming controls, Arcade Corner. |
+| **Neon Grid theme** (`neontheme`) | About the theme, Use it now, Back to my theme | A theme preset. |
+| **Pad profiles** (`padprofiles`) | What it maps, Use Couch remote, Use default controls | A control profile for playing docked on a TV. |
+| **Retro formats** (`retroformats`) | Formats it adds, Open the library | Teaches the library Pokémon mini, Supervision, Vectrex, Lynx, Arduboy and WASM-4 files. |
+
+**They work everywhere.** Each also exists in Go (`player/plugnative.go`,
+`player/plugnative_tools.go`), so they run on Windows, which has no `sh`, and
+without starting a shell on the handheld. The Go version is used while the
+plugin's script is the one JukaHub shipped (or cannot run here); edit the
+script and, wherever `sh` exists, your script runs instead. A copy installed by
+an older JukaHub is upgraded in place when its `version` is older, keeping
+files you added (such as `notes.txt`).
+
+**Retired plugins.** Hello, Dice, Daily quote, Clock, World clock and Handheld
+tips no longer ship. A copy an older JukaHub installed is moved to
+`plugins/.retired/` once (nothing is deleted); move a folder back into
+`plugins/` to keep using it — on Windows it then needs `sh`, as their Go
+versions are gone.
+
+## Write your own
+
+A plugin is a folder in `plugins/` with a `plugin.json` and an entry script. A
+loose script directly in `plugins/` is not discovered. This one shows the free
+space on the card:
 
 ```text
 Apps/JukaHub/                 # or the desktop player's working directory
 └── plugins/
-    └── hello/                # triggerTarget is this directory name
+    └── cardspace/            # the folder name is the plugin's id
         ├── plugin.json
-        └── hello.sh
+        └── cardspace.sh
 ```
 
-1. Copy the example's `hello` folder to `plugins/` as shown. A loose script
-   directly in `plugins/` is not discovered. A shell interpreter named `sh`
-   must be available on PATH; on Windows this may require installing one.
-2. In your `jukaconfig.json` (or the web builder), add the following buttons to
-   an existing scene's `elements` array. Adjust the coordinates to leave room
-   for existing elements, then save and reload the config or restart JukaHub:
-
-   ```json
-   {
-     "type": "button", "text": "Refresh plugins",
-     "x": 60, "y": 550, "width": "220", "height": "45",
-     "trigger": "plugin_refresh"
-   },
-   {
-     "type": "button", "text": "Say hello",
-     "x": 300, "y": 550, "width": "220", "height": "45",
-     "trigger": "plugin_action", "triggerTarget": "hello", "triggerValue": "greet"
-   }
-   ```
-
-3. Press **Refresh plugins** before **Say hello**. The greeting appears as a
-   toast. The shipped Plugins scene has its own Refresh button, but its list is
-   informational: selecting an entry does not run an action.
-4. Optionally add `"plugin_name": "Alex"` inside the top-level `variables`
-   object of `jukaconfig.json`; after reloading, the greeting is `Hello, Alex!`.
-   If the variable is missing or empty, the script uses `friend`.
-
-To check the script independently from a terminal, run it from its own folder:
+```json
+{
+  "name": "cardspace",
+  "title": "Card space",
+  "version": "1.0.0",
+  "description": "Free space on the SD card.",
+  "author": "Me",
+  "entry": "cardspace.sh",
+  "icon": "disk",
+  "enabled": true,
+  "actions": [{"id": "free", "label": "Free space"}],
+  "onEnable": "free"
+}
+```
 
 ```sh
-cd plugins/hello
-sh hello.sh greet '--plugin_name=Alex'
-# Hello, Alex!
-sh hello.sh greet
-# Hello, friend!
+#!/bin/sh
+case "$1" in
+    free) df -h /mnt/SDCARD 2>/dev/null | awk 'NR==2 {print $4 " free of " $2}' ;;
+    *) echo "Unknown action: $1" >&2; exit 1 ;;
+esac
 ```
 
-An unknown action prints an error and exits nonzero. This terminal check tests
-the script, not discovery or the JukaHub button; use the refresh and action
-buttons to check the complete path.
+Press Refresh on the Plugins page (or reopen it), switch the plugin on, and its
+Free space button is on the page and in the Start menu. The first line a script
+prints is the toast; the Plugins page shows the rest. A shell interpreter named
+`sh` must be on PATH (the handheld has one; on Windows install Git for Windows).
 
-## The other examples
+A config button can run any action too:
 
-Every example is a folder with a manifest and one `sh` script, installed the
-same way: copy the folder into `plugins/` and add a button whose `triggerTarget`
-is the folder name.
+```json
+{
+  "type": "button", "text": "Card space",
+  "x": 300, "y": 550, "width": "220", "height": "45",
+  "trigger": "plugin_action", "triggerTarget": "cardspace", "triggerValue": "free"
+}
+```
 
-| Example | Actions | What it does |
-|---------|---------|--------------|
-| [`clock`](../player/plugins/clock/clock.sh) | `now`, `date`, `both`, `uptime` | The time, the date, or how long the device has been up. Pass `--clock_24h=0` for a 12-hour clock. |
-| [`dice`](../player/plugins/dice/dice.sh) | `roll`, `coin`, `pick` | A die roll (`--dice_sides=N`, 2 to 1000), a coin flip, or one entry picked from `--dice_list=a,b,c`. |
-| [`notes`](../player/plugins/notes/notes.sh) | `add`, `last`, `count`, `clear` | A one-line-at-a-time scratchpad kept in `notes.txt` beside the script. `add` takes `--notes_text=...`. |
-| [`sysinfo`](../player/plugins/sysinfo/sysinfo.sh) | `status`, `memory`, `disk`, `power` | Free memory, free disk space and battery level; anything the system does not report is said plainly instead of failing. |
-
-`notes` is the only example that writes a file, and it writes inside its own
-folder: deleting `notes.txt` empties the pad. `sysinfo` reads `/proc/meminfo` and
-`/sys/class/power_supply`, so on a desktop it reports only what that system
-exposes — `Memory info unavailable` there is a correct answer, not an error.
-
-All of them print one short line, which is what a toast can show. The scripts are
-plain POSIX `sh` with no network use; the only external commands are `date`,
-`awk`, `cut`, `tail` and `wc`, in the actions that need them.
+To check the script from a terminal, run it from its own folder
+(`sh cardspace.sh free`). Custom variables arrive as `--name=value` arguments
+(see the action contract below). The bundled scripts in
+[`player/plugins/`](../player/plugins) are plain POSIX `sh` and make good
+starting points.
 
 ## Manifest and discovery
 
@@ -154,11 +156,11 @@ Each immediate subdirectory of `plugins/` is scanned for a readable, valid
 
 ```json
 {
-  "name": "hello",
+  "name": "cardspace",
   "version": "1.0.0",
-  "description": "Example greeting plugin for JukaHub.",
-  "author": "JukaHub",
-  "entry": "hello.sh",
+  "description": "Free space on the SD card.",
+  "author": "Me",
+  "entry": "cardspace.sh",
   "enabled": true
 }
 ```
@@ -174,7 +176,7 @@ Each immediate subdirectory of `plugins/` is scanned for a readable, valid
 | `title`, `icon` | Name and glyph on the Plugins page and in the Start menu. |
 | `actions` | Buttons: `[{"id": "now", "label": "Time"}]`; ids starting with `@` are JukaHub's own (above). |
 | `romParsers` | ROM formats for the game library: `[{"name": "Pokémon mini", "system": "pokemini", "extensions": [".min"]}]`. |
-| `onEnable`, `onStartup`, `startupDaily`, `quick` | What switching the plugin on does (above). |
+| `onEnable`, `onStartup`, `startupDaily`, `startupQuiet`, `quick` | What switching the plugin on does (above). |
 
 `plugin.json` is unrelated to the package `manifest.json` described in
 [Packages](PACKAGES.md). The root `plugins/` directory is relative to the
@@ -249,7 +251,7 @@ JukaHub can. Avoid symlinks and untrusted plugins.
 |---------|-------|
 | Plugin is missing from the list | Check the folder layout, valid JSON, `"enabled": true`, the working directory and safe mode; then press Refresh. |
 | Disabled or removed plugin still appears | Restart JukaHub, then refresh: a normal scan retains earlier entries. |
-| `Plugin "hello" not found` | Press Refresh first and check `triggerTarget` matches the folder name exactly. |
+| `Plugin "cardspace" not found` | Press Refresh first and check `triggerTarget` matches the folder name exactly. |
 | `Plugin entry ... not found` or unsafe entry path | Check `entry` names an existing file inside the plugin folder. |
 | `Plugin error` | Check the action, script output and that `sh` or `python3` is on PATH; run the script from a terminal. |
 | A message says an action executed but nothing happened | Check that the entry extension is lowercase `.sh` or `.py`; other extensions are not run. |

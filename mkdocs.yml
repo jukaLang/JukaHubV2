@@ -55,6 +55,7 @@ nav:
       - Offline AI options: LOCAL_AI.md
       - Recordings: RECORDINGS.md
       - Wi-Fi network picker: WIFI.md
+      - USB file transfer: USB_FILE_TRANSFER.md
       - Browser: BROWSER.md
       - Game library: GAME_LIBRARY.md
       - Game profiles: GAME_PROFILES.md
@@ -62,6 +63,9 @@ nav:
       - Emulator compatibility: COMPATIBILITY.md
       - PortMaster: PORTMASTER.md
       - LAN play (Remote Play, watch party): REMOTE_PLAY.md
+      - Cloud gaming (Game Pass, GeForce NOW): CLOUD_GAMING.md
+      - PC streaming (Moonlight, Vibepollo): PC_STREAMING.md
+      - Email and calendar: EMAIL_CALENDAR.md
       - Smart home: SMART_HOME.md
       - Windows apps: WINDOWS_APPS.md
       - Android games and the APK Store: ANDROID.md

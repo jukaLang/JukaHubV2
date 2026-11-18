@@ -110,7 +110,7 @@ You can also set `JUKAHUB_CRYPTO_SALT`. If unset, the player uses a built-in sal
 
 ### Key ID recorded in the config
 
-When a custom environment key is used, the config stores a key ID like `env-<prefix>` or `env-derived`. When the built-in key is used, the ID is `default-v3-enhanced`. That ID is embedded in every encrypted value so the player can route decryption to the right key family in the future.
+When a custom environment key is used, the config stores a key ID like `env-<8 hex of sha256(key)>` (a fingerprint, never key bytes; values written before 2026-11-17 carry the key's first 8 hex characters until they are saved again) or `env-derived`. When the built-in key is used, the ID is `default-v3-enhanced`. That ID is embedded in every encrypted value so the player can route decryption to the right key family in the future.
 
 ### Key Requirements
 
@@ -631,21 +631,36 @@ or accepted by design.
   exactly the bytes it declares. A zip's central directory is walked header
   by header before archive/zip reads it (the way archive/zip will, so a count
   the end record understates is still seen), capping entries at 200 000 and
-  the directory at 64 MB; the declared total must fit the card's free space
-  less 32 MB; and an `.xz` is not given to the library's xz reader, which
+  the directory at 64 MB; the declared total, rounded up to the destination's
+  clusters (statfs on Linux, `GetDiskFreeSpaceW` on Windows; 128 KiB assumed
+  on a FAT/exFAT volume whose cluster cannot be read), must fit the card's free
+  space less 32 MB, and on FAT a member of 4 GiB or more is refused before
+  anything is written when the archive declares its size (a lone
+  `.gz`/`.xz`/`.bz2` does not, and is refused only when the card refuses the
+  write); and an `.xz` is not given to the library's xz reader, which
   allocates whatever LZMA2 dictionary a block header asks for: JukaHub reads
   the container itself (`files_extract_xz.go`: header CRCs, checks, index and
   footer verified), refuses a dictionary over 128 MB (and a file whose blocks
   ask for far more dictionary than they unpack to), and hands each block's
-  LZMA2 data to `lzma.Reader2` with the size it chose. 7z and RAR
+  LZMA2 data to `lzma.Reader2` with the size it chose, through a guard that
+  reads every chunk header first and refuses properties xz itself refuses
+  (lc + lp > 4). An `.xz` whose blocks use the BCJ or delta filters goes to
+  7-Zip when one is installed (a `.tar.xz` then comes out as its `.tar`) and is
+  refused otherwise. 7z and RAR
   go to 7-Zip (`files_extract_tools.go`) with wildcards off (`-spd`) and the
   output folder as the working folder; 7-Zip lists the archive first, and
   encrypted entries, too many items, more than the free space, symbolic links
   or a listing it cannot give stop it there; the free space is watched while
   it runs; and what it wrote is walked afterwards and held to the same rules.
-  Windows' `tar.exe` (RAR, when no full 7-Zip is installed) is not listed
-  first; libarchive refuses to write through links by itself, and the space
-  watch and the walk apply. The sweep of crashed staging folders only removes
+  Windows' `tar.exe` (RAR, when no full 7-Zip is installed) lists the archive
+  first (`tar -tv`) and is held to the same entry cap, link refusal, FAT limit
+  and space check; a listing it cannot give stops it. The 7zr.exe fetched on
+  Windows is checked against the SHA-256 digest GitHub publishes before it
+  takes its name. Extract here never replaces a Windows cloud placeholder (a
+  OneDrive/Dropbox Files On-Demand file) of the same name: replacing it would
+  delete the cloud copy through the sync client, so the archive's file is kept
+  aside and reported. The clusters a folder's own entries take as it grows are
+  not counted; the 32 MB margin and the space watch cover them. The sweep of crashed staging folders only removes
   folders that carry its marker file, and no archive entry may be named like
   one. Extract never replaces an existing file; Extract here replaces regular
   files of the same name after a second press, and never the archive itself.
@@ -707,6 +722,47 @@ or accepted by design.
   query-string spelling of a key (`?key=`, `&api_key=`) while leaving the rest
   of the URL readable (`diagnostics_bundle.go`). Thumbnail prefetch failures log
   a sanitized URL like every other log line (`thumbstore.go`).
+- Every log line is cleaned of credentials before it reaches the Logs ring,
+  logs.txt, errors.txt, a diagnostics bundle or a bug report
+  (`redactLogSecrets` in `logredact.go`, called from `logging.go`): tokens and
+  keys in URL queries and JSON, `user:pass@` in URLs, Authorization/Bearer
+  values, passwords, PINs, pairing codes, WireGuard keys, cookies and tokens
+  recognisable by their shape. The updater's (`logPatch`), JukaHub OS's and
+  ffmpeg's direct writes to errors.txt go through it too. Not covered: a secret
+  inside a URL path (SEC-31) and Go's own crash output.
+
+- November 2026 pass. CodeQL 2.26.2 stopped treating `filepath.Rel` as a path
+  guard, so the root helpers now end in a test it follows on the value they
+  return: `resolveWithinRoot` adds a lexical root-prefix test (the working
+  folder as root uses `filepath.IsLocal`), and `safeAbsolutePath` returns its
+  path only from an `IsLocal` (relative) or volume-root prefix (absolute)
+  branch. Callers use the returned value: box art (`homeSwDecodeArt`),
+  launch-script probing (`spatialFileLooks32`), the Downloads library copy
+  (`ytdlBgFile`), background music (`bgmPickChoose` resolves before it looks
+  at the disk, `bgmSetSelectedPath` re-confines to the Files root) and the
+  Minecraft peer's version files (`mcReadJSON`, `mcRegularFileUnder`, the
+  plan's `Lstat`), whose names a peer sends.
+- WPE Browser's address no longer reaches `sh`'s argument list: a constant
+  `sh -c` program reads it from `JUKAHUB_WPE_URL`, unsets it and passes it to
+  `launch.sh` as one quoted `$1` (`brwWpeLaunchScript` in `brw_wpe.go`).
+- Tool-archive members are staged under the installer's own spelling of the
+  wanted name (`toolArchiveWantedName` in `tools.go`), so nothing the archive
+  spelled reaches a path.
+- Allocation capacities no longer add to a length (`hometabs.go`,
+  `browser_engines.go`, `themes_retro.go`, `header_arrange.go`), integer
+  narrowing happens only inside the branch that tested the bound
+  (`brightnessRawAtomic`, `dlSettingsSync`, `pdfvGlyphRune` refuses values
+  above `utf8.MaxRune`), and the Steam profile-link patterns are anchored.
+
+**Accepted as false positives (dismiss in the Security tab)**
+
+- `go/weak-sensitive-data-hashing` on `ttsCachePath`, `html5SavePath`,
+  `html5PreferredPort` and `androidLibraryArtPath`: SHA-256 there names a
+  cache file, a save file, a port or a cover from a path or phrase. Nothing is
+  stored that must resist guessing, and the names must stay stable (changing
+  the port would move an HTML5 game's browser origin and lose its saves). The
+  rule fires on any fast hash its name heuristics link to a password-like
+  identifier upstream.
 
 **Guarded and tested (re-reported because the guard is a helper call)**
 

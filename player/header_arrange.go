@@ -295,7 +295,7 @@ type headerPlanItem struct {
 // else cornerGap.
 func headerPlan(config *Config, parts []string, partW func(string) int32, corner *[hsCount]int32, partGap, cornerGap, right int32) []headerPlanItem {
 	a := headerArrangementCurrent(config)
-	items := make([]headerPlanItem, 0, len(parts)+4)
+	items := make([]headerPlanItem, 0, len(parts)) // append adds the corner buttons
 	// Every part belongs to exactly one slot and every slot is on the order,
 	// so each part is placed once.
 	for _, s := range a.order {
@@ -435,7 +435,7 @@ func homeHeaderNeighbor(f *HomeFocusController, id HomeFocusID, dir FocusDirecti
 		for _, c := range [...]struct {
 			id HomeFocusID
 			r  sdl.Rect
-		}{{HomeFocusQR, companionHeaderRect}, {HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}} {
+		}{{HomeFocusQR, companionHeaderRect}, {HomeFocusPS4, ps4TileRect}, {HomeFocusPS5, ps5TileRect}, {HomeFocusX1, x1TileRect}, {HomeFocusPC, pcTileRect}} {
 			if c.r.W <= 0 || !f.IsEnabled(c.id) {
 				continue
 			}

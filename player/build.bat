@@ -59,6 +59,7 @@ call :ensure_sdl || goto failed
 call :ensure_icon || goto failed
 if /i "%MODE%"=="nobuild" goto done
 
+call :helpdocs
 call :build      || goto failed
 call :stage_dlls || goto failed
 
@@ -314,6 +315,24 @@ exit /b 0
 
 
 REM ============================================================================
+REM  HELP PAGES
+REM  Settings -> About -> Controls and Quick start (helpdoc.go) embed copies of
+REM  docs\CONTROLS.md and docs\QUICK_START.md from helpdocs\, because go:embed
+REM  cannot reach ..\docs. They are refreshed (LF line endings) before every
+REM  build, so the manual on the device is the one in docs\. Without docs\
+REM  (player\ copied on its own), or when the copy fails, the committed copies
+REM  are built in.
+REM ============================================================================
+:helpdocs
+if not exist "%ROOT%..\docs\CONTROLS.md" exit /b 0
+if not exist "%ROOT%..\docs\QUICK_START.md" exit /b 0
+set "JH_DOCS=%ROOT%..\docs"
+set "JH_HELPDOCS=%ROOT%helpdocs"
+%PS% -NoProfile -Command "$ErrorActionPreference='Stop'; foreach ($f in 'QUICK_START.md','CONTROLS.md') { $t = [IO.File]::ReadAllText((Join-Path $env:JH_DOCS $f)) -replace [char]13, ''; [IO.File]::WriteAllText((Join-Path $env:JH_HELPDOCS $f), $t) }" && echo [ok] help pages refreshed from docs\ || echo [warn] Could not refresh helpdocs\ from docs\ - the committed copies are built in.
+exit /b 0
+
+
+REM ============================================================================
 REM  BUILD / STAGE / LAUNCH
 REM ============================================================================
 :build
@@ -346,12 +365,20 @@ for /f "delims=" %%T in ('%PS% -NoProfile -Command "[DateTime]::UtcNow.ToString(
 if not defined BUILD_TIME (set "ERR=Could not read the current time for the build stamp." & exit /b 1)
 set "BUILD_DATE=%BUILD_TIME:~0,10%"
 
+REM Google Drive sign-in (docs/CLOUD_SYNC.md): the OAuth client is stamped in
+REM only when JUKAHUB_GOOGLE_CLIENT_ID is set; without it the Save sync page
+REM says this build has no Google sign-in.
+set "GOOGLE_LDFLAGS="
+if defined JUKAHUB_GOOGLE_CLIENT_ID set "GOOGLE_LDFLAGS= -X main.googleOAuthClientID=%JUKAHUB_GOOGLE_CLIENT_ID% -X main.googleOAuthClientSecret=%JUKAHUB_GOOGLE_CLIENT_SECRET%"
+REM Outlook sign-in for Mail (docs/EMAIL_CALENDAR.md): the Microsoft app
+REM registration, likewise only when JUKAHUB_MS_CLIENT_ID is set.
+if defined JUKAHUB_MS_CLIENT_ID set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.microsoftOAuthClientID=%JUKAHUB_MS_CLIENT_ID%"
 echo.
 echo Building %OUT% ...
 echo   NOTE: the FIRST build compiles the SDL2 cgo bindings and can take
 echo   3-10 minutes. Later builds use the Go cache and take seconds.
 echo.
-"%GO_EXE%" build -v -ldflags "-s -w -X main.buildDate=%BUILD_DATE% -X main.buildTime=%BUILD_TIME%" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
+"%GO_EXE%" build -v -ldflags "-s -w -X main.buildDate=%BUILD_DATE% -X main.buildTime=%BUILD_TIME%%GOOGLE_LDFLAGS%" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
 if not exist "%OUT%" (set "ERR=go build reported success but %OUT% is missing." & exit /b 1)
 exit /b 0
 

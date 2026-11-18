@@ -111,14 +111,16 @@ func (s *companionServer) registerFileRoutes(mux *http.ServeMux) {
 }
 
 // openCompanionFileShares opens this request's shares; the caller closes
-// them. The game profiles' folders inside them are locked as FTP locks them.
+// them. The folders whose files run as programs are locked as FTP locks them
+// (ftpShareSet.runDirs: the answer the FTP server uses too, cached for at most
+// ftpLiveLockTTL and until the game profiles change).
 func openCompanionFileShares(w http.ResponseWriter) (*ftpShareSet, bool) {
 	set, err := openFTPShares(companionFileShares())
 	if err != nil {
 		http.Error(w, "Nothing to share: no user folders were found on the card.", http.StatusServiceUnavailable)
 		return nil, false
 	}
-	set.locked = set.keepInside(ftpProfileDirs())
+	set.locked = set.keepInside(set.runDirs())
 	return set, true
 }
 

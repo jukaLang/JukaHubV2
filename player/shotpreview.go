@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -39,6 +40,11 @@ var shotFX struct {
 	texGen  uint64
 	shownAt uint64
 	rect    sdl.Rect // the card's hit area this frame (click → viewer)
+	// The path line under the caption, fitted once per saved path.
+	pathFor   string
+	pathFont  *ttf.Font // a text-size change brings a new font: refit
+	pathLabel string
+	pathW     int32
 
 	// Shared with the saving goroutines.
 	mu     sync.Mutex
@@ -236,13 +242,27 @@ func shotPreviewRender(renderer *sdl.Renderer, config *Config, now uint64, calm 
 		lineH = int32(font.Height())
 		capW, _ = measureText(font, caption)
 	}
+	// Where it went, under the caption: the whole path when it fits in
+	// about half the screen, else its tail (folder and file name).
+	pathLabel, pathW := "", int32(0)
+	if font != nil && path != "" {
+		if shotFX.pathFor != path || shotFX.pathFont != font {
+			shotFX.pathFor, shotFX.pathFont = path, font
+			shotFX.pathLabel = shotPathFit(font, path, max(screenWidth*45/100, 200))
+			shotFX.pathW, _ = measureText(font, shotFX.pathLabel)
+		}
+		pathLabel, pathW = shotFX.pathLabel, shotFX.pathW
+	}
 
-	// The card: the picture in a white frame, the caption under it.
+	// The card: the picture in a white frame, the caption and path under it.
 	tw, th := shotFX.texW, shotFX.texH
-	cardW := max(tw+2*shotThumbFrame, capW) + 2*shotCardPad
+	cardW := max(tw+2*shotThumbFrame, capW, pathW) + 2*shotCardPad
 	cardH := th + 2*shotThumbFrame + 2*shotCardPad
 	if lineH > 0 {
 		cardH += lineH + 6
+		if pathLabel != "" {
+			cardH += lineH + 2
+		}
 	}
 	x := screenWidth - toastMarginRight - cardW
 	y := screenHeight - HomeFooterH - 16 - cardH
@@ -306,7 +326,14 @@ func shotPreviewRender(renderer *sdl.Renderer, config *Config, now uint64, calm 
 	if font != nil && cardA > 0 {
 		c := ColorTextPrimary()
 		c.A = cardA
-		renderText(renderer, config, font, caption, c, x+(cardW-capW)/2, endY+th+shotThumbFrame+6)
+		capY := endY + th + shotThumbFrame + 6
+		renderText(renderer, config, font, caption, c, x+(cardW-capW)/2, capY)
+		if pathLabel != "" {
+			pc := ColorTextSecondary()
+			pc.A = cardA
+			// Raw: a path is not a catalogue string to translate.
+			renderTextRaw(renderer, config, font, pathLabel, pc, x+(cardW-pathW)/2, capY+int32(font.Height())+2)
+		}
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
 
@@ -334,4 +361,21 @@ func shotPreviewClick(config *Config, mx, my int32) bool {
 	}
 	openImageViewer(config, path)
 	return true
+}
+
+// shotPathFit is path as one line no wider than maxW: whole when it fits,
+// else "…" and as much of its end as fits, so the file name and the folder
+// holding it stay readable.
+func shotPathFit(font *ttf.Font, path string, maxW int32) string {
+	if w, _ := measureText(font, path); w <= maxW {
+		return path
+	}
+	runes := []rune(path)
+	for i := 1; i < len(runes); i++ {
+		s := "…" + string(runes[i:])
+		if w, _ := measureText(font, s); w <= maxW {
+			return s
+		}
+	}
+	return "…" + string(runes[len(runes)-1:])
 }

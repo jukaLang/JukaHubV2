@@ -336,8 +336,9 @@ var (
 )
 
 var chatDayCache struct {
-	today  int
-	labels map[int]string
+	today       int
+	lang, order string
+	labels      map[int]string
 }
 
 func chatDayKey(t time.Time) int {
@@ -346,11 +347,14 @@ func chatDayKey(t time.Time) int {
 }
 
 // chatDayLabelCached is chatDayLabel for the device's local day, memoised for
-// the current date.
+// the current date, the interface language and the date order (the labels'
+// words and layout follow both).
 func chatDayLabelCached(t time.Time) string {
 	today := chatDayKey(time.Now())
-	if chatDayCache.labels == nil || chatDayCache.today != today || len(chatDayCache.labels) > 128 {
-		chatDayCache.today = today
+	lang, order := uiLanguageCode(), dateOrder(nil)
+	if chatDayCache.labels == nil || chatDayCache.today != today || chatDayCache.lang != lang ||
+		chatDayCache.order != order || len(chatDayCache.labels) > 128 {
+		chatDayCache.today, chatDayCache.lang, chatDayCache.order = today, lang, order
 		chatDayCache.labels = make(map[int]string, 16)
 	}
 	local := t.Local()
@@ -602,6 +606,16 @@ func chatRenderArea(renderer *sdl.Renderer, config *Config, area sdl.Rect) {
 	compH := chatPx(52)
 	composer := sdl.Rect{X: area.X, Y: area.Y + area.H - compH, W: area.W, H: compH}
 	bottom := composer.Y - gap
+	// Juka AI's chips, or the card a change waits on (aiagent_view.go).
+	aiStripHits.visible = false
+	aiRect := sdl.Rect{}
+	if !chatSelectionBar.open && aiStripShown() {
+		aiH := aiStripHeight()
+		aiRect = sdl.Rect{X: area.X, Y: bottom - aiH, W: area.W, H: aiH}
+		bottom = aiRect.Y - chatPx(6)
+	} else {
+		aiStripFocus = -1
+	}
 	trayRect := sdl.Rect{}
 	if trayH > 0 {
 		trayRect = sdl.Rect{X: area.X, Y: bottom - trayH, W: area.W, H: trayH}
@@ -626,6 +640,9 @@ func chatRenderArea(renderer *sdl.Renderer, config *Config, area sdl.Rect) {
 	}
 	if trayH > 0 {
 		chatDrawTray(renderer, config, fonts.meta, trayRect, tab)
+	}
+	if aiRect.H > 0 {
+		aiDrawStrip(renderer, config, fonts, aiRect)
 	}
 	if chatSelectionBar.open {
 		drawChatSelectionBar(renderer, config, fonts.meta, composer)
@@ -1681,6 +1698,9 @@ func chatDrawIntro(renderer *sdl.Renderer, config *Config, fonts chatFonts, list
 func chatIntroText(tab chatTab) (string, string) {
 	switch tab {
 	case chatTabAI:
+		if aiToolsOn() {
+			return "Juka AI", "Juka checks this device to answer; what it finds goes to Groq with your question."
+		}
 		return "Juka AI", "Answers come from Groq. Juka only sees this conversation."
 	case chatTabSaved:
 		return "Saved", "Notes, links and files for yourself. Only this device sees them."
@@ -1695,6 +1715,9 @@ func chatDrawEmpty(renderer *sdl.Renderer, config *Config, fonts chatFonts, list
 	switch tab {
 	case chatTabAI:
 		title, body = "Ask Juka anything", "Tips, help with settings — or attach a picture, a video or a log."
+		if aiToolsOn() {
+			body = "Juka can check games, storage, logs, Wi-Fi and settings — and fix them with your OK."
+		}
 	case chatTabSaved:
 		title, body = "Notes to self", "Save links, files and ideas. Only this device can see them."
 	default:
@@ -1706,7 +1729,9 @@ func chatDrawEmpty(renderer *sdl.Renderer, config *Config, fonts chatFonts, list
 	chipH := chatPx(40)
 	chipGap := chatPx(8)
 	total := badge + chatPx(14) + int32(fonts.title.Height()) + chatPx(6) + int32(fonts.meta.Height())
-	showChips := tab == chatTabAI && chatHasGroqKey()
+	// With device tools on, the starters live in the strip above the
+	// composer (aiagent_view.go).
+	showChips := tab == chatTabAI && chatHasGroqKey() && !aiToolsOn()
 	if showChips {
 		total += chatPx(20) + int32(chatSuggestionCount)*(chipH+chipGap) - chipGap
 	}
@@ -1902,7 +1927,7 @@ func chatDrawComposer(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 	}
 	chatInputRect = input
 	typing := chatComposerInline || (virtualKeyboardActive && vkTarget == vkTargetChat)
-	focused := !typing && !attachFocused && !micFocused && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && chatPadOnContent() && chatWasVisible
+	focused := !typing && !attachFocused && !micFocused && chatSelected < 0 && chatSuggestFocus < 0 && chatTrayFocus < 0 && aiStripFocus < 0 && chatPadOnContent() && chatWasVisible
 	if focused {
 		drawGlassFocusGlow(renderer, input)
 	}

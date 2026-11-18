@@ -913,3 +913,62 @@ func (s *wineSession) close() {
 		}
 	})
 }
+
+// wineWaitScript is the shell around a Wine program ("$@"). A launcher or a
+// setup program often starts the real program and quits; the session (the
+// display, WestonPack and the pad) must outlast it. So once the program exits
+// the shell runs `wineserver -w`, which returns when the prefix's wineserver
+// ends — Wine ends it a few seconds after the last Windows program there exits
+// (its services and other system processes do not count), at once when none
+// runs. A program JukaHub stopped (an interrupt, a termination or a kill:
+// Select + Start held) skips the wait; the session's clean-up then stops what
+// is left (wineSession.close, wineserver -k). The wait ends with the session's
+// quit paths too, which stop this shell's whole process group. %s is the
+// quoted wineserver command line, the first %d wineWaitNotice and the second
+// the wait's cap (wineWaitLimit), both in seconds: the wait runs in the
+// background, polled every second, and is stopped at the cap (a background
+// command of a script ignores an interrupt, so on Select + Start the group
+// kill that follows ends it, and wineDrainGroup any straggler). The shell
+// exits with the program's status (kept in $1; $2 is the wait's pid, $3 the
+// seconds waited). It logs "jukahub: the program exited (N)" when the wait
+// begins (the device check looks for that line), and wineWaitMarker only once
+// the wait has lasted wineWaitNotice — a normal exit, whose wineserver lingers
+// a few seconds, never prints it. wineRun watches for the marker to tell the
+// player. The script has no "=": westonwrap.sh reads NAME=VALUE words as the
+// program's environment.
+const wineWaitScript = `"$@"; set -- $?; case $1 in 130|137|143) exit $1 ;; esac; ` +
+	`echo "jukahub: the program exited ($1); the session lasts while Windows programs remain in the prefix" >&2; ` +
+	`%s -w & set -- $1 $! 0; ` +
+	`while kill -0 $2 2>/dev/null; do sleep 1; set -- $1 $2 $(($3+1)); ` +
+	`if [ $3 -eq %d ]; then echo "` + wineWaitMarker + ` (after $3 s)" >&2; fi; ` +
+	`if [ $3 -ge %d ]; then echo "jukahub: still waiting after $3 s; stopping the wait" >&2; kill $2; break; fi; done; ` +
+	`exit $1`
+
+// wineWaitMarker starts the line wineWaitScript prints once the program has
+// exited and the wait for the prefix's other Windows programs has lasted
+// wineWaitNotice: something really remains, so the player is told.
+const wineWaitMarker = "jukahub: still waiting for other Windows programs"
+
+// wineWaitNotice is how long the wait runs before wineWaitMarker is printed.
+// Wine ends an idle prefix's wineserver about 3 s after its last program, so
+// a game that simply exited never reaches it.
+const wineWaitNotice = 10 * time.Second
+
+// wineWaitLimit caps that wait. It is generous on purpose: what a launcher
+// leaves running is often the game itself, played for hours; the cap only
+// ends a session that a hidden tray or updater tool would keep forever.
+const wineWaitLimit = 12 * time.Hour
+
+// wineWaitArgs is the shell's argument list that runs command with args and
+// then waits as wineWaitScript says. args stay the last words, so a logged
+// command line hides the caller's arguments the same way. Pure.
+func wineWaitArgs(server []string, command string, args []string) []string {
+	quoted := make([]string, len(server))
+	for i, word := range server {
+		quoted[i] = shellQuote(word)
+	}
+	out := make([]string, 0, len(args)+4)
+	script := fmt.Sprintf(wineWaitScript, strings.Join(quoted, " "), int(wineWaitNotice/time.Second), int(wineWaitLimit/time.Second))
+	out = append(out, "-c", script, "jukahub-wine", command)
+	return append(out, args...)
+}

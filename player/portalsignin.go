@@ -16,7 +16,14 @@ func openPortalSignIn(config *Config) bool {
 		ShowToast("No Wi-Fi sign-in page was detected", ToastKindInfo)
 		return false
 	}
-	if config != nil && browserOpenURL(config, link) {
+	// A PC's own browser runs the script-heavy portals the reader cannot.
+	if !IsTrimuiDevice() {
+		if err := openExternalURL(link); err == nil {
+			ShowToast("Sign-in page opened in your browser", ToastKindInfo)
+			return true
+		}
+	}
+	if config != nil && openBrowserAtURL(config, link) { // switches to the Browser scene; leaving it probes (netPortalWatch)
 		ShowToast("Finish signing in, then come back to Wi-Fi", ToastKindInfo)
 		return true
 	}

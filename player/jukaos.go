@@ -102,9 +102,15 @@ type jukaosState struct {
 	DropCaches *bool `json:"dropCaches,omitempty"`
 	// Edition is "os" on a card made from JukaHub-OS-Trimui.zip
 	// (trimui/make-os-package.sh): JukaHub was installed as the OS, with OS mode
-	// and the boot hook already on. Only shown; switching OS mode off works the
-	// same as on an app install.
+	// and the boot hook already on. Switching OS mode off works the same as on
+	// an app install; the edition only keeps the boot hook the package put on
+	// the card from being removed by an older "Start at login: off"
+	// (reconcileAutoStart).
 	Edition string `json:"edition,omitempty"`
+	// FastBoot lets the boot hook skip the stock menu at power-on in OS mode
+	// (nil = on): the firmware's launcher runs JukaHub OS in place of its first
+	// MainUI (trimuiAutostartTemplate). The hook greps `"fastBoot": false`.
+	FastBoot *bool `json:"fastBoot,omitempty"`
 }
 
 // jukaosEditionOS is os.json's edition value for the OS package.
@@ -117,19 +123,33 @@ type jukaosGuardState struct {
 	Told   bool `json:"told,omitempty"`
 }
 
-// jukaosLayerSpec is a layer.json as written by a layer's author.
+// jukaosLayerSpec is a layer.json as written by a layer's author. Devices
+// (model ids as in device.go, "trimui-smart-pro-s", or model codes, "TG5050")
+// and Kernel (uname -r exactly, or a prefix of it ending at a version step:
+// "5.15" fits "5.15.147") make a layer for one handheld family: on any other
+// it is unusable with the reason, never half applied. Empty fits every one.
+// Kind "drivers" marks a driver layer for the status line. SysfsIfPresent
+// are values set only where the file exists (a driver layer covers several
+// chips), skipped without a note elsewhere.
 type jukaosLayerSpec struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Version     string            `json:"version"`
-	Arch        string            `json:"arch"`
-	Binds       []jukaosBindSpec  `json:"binds"`
-	Libs        []string          `json:"libs"`
-	Children    bool              `json:"children"`
-	Modules     []string          `json:"modules"`
-	Sysfs       map[string]string `json:"sysfs"`
-	Core        bool              `json:"core"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Version        string            `json:"version"`
+	Arch           string            `json:"arch"`
+	Devices        []string          `json:"devices"`
+	Kernel         string            `json:"kernel"`
+	Kind           string            `json:"kind"`
+	Binds          []jukaosBindSpec  `json:"binds"`
+	Libs           []string          `json:"libs"`
+	Children       bool              `json:"children"`
+	Modules        []string          `json:"modules"`
+	Sysfs          map[string]string `json:"sysfs"`
+	SysfsIfPresent map[string]string `json:"sysfsIfPresent"`
+	Core           bool              `json:"core"`
 }
+
+// jukaosKindDrivers is layer.json's "kind" of a driver layer.
+const jukaosKindDrivers = "drivers"
 
 // jukaosBindSpec is one bind: a file or folder of the layer over a system
 // path. RW leaves the mount writable (a folder of settings an emulator saves
@@ -173,19 +193,27 @@ type jukaosLayer struct {
 	LibDirs []string
 	Modules []jukaosModule
 	Sysfs   []jukaosSysfsWrite
+	Absent  int // sysfsIfPresent values this handheld has no file for
 	Problem string
-	Notes   []string
+	// Elsewhere: the layer is for another model or kernel ("devices",
+	// "kernel"). The OS package ships every family's driver layer switched
+	// on, so a card moved to another handheld picks its own; the others are
+	// not "skipped parts" of the session.
+	Elsewhere bool
+	Notes     []string
 }
 
 // jukaosHost is what the checks compare a layer with. Root is "" on the
 // device; the tests point it at a folder that stands in for "/". AppDir and
 // SDRoot are system paths (forward slashes).
 type jukaosHost struct {
-	Root    string
-	Machine string // uname -m: "aarch64"
-	Release string // uname -r: "4.9.191"
-	AppDir  string
-	SDRoot  string
+	Root      string
+	Machine   string // uname -m: "aarch64"
+	Release   string // uname -r: "4.9.191"
+	Model     string // DeviceModel: "trimui-smart-pro-s" ("" or "unknown": not told)
+	ModelCode string // "TG5050"
+	AppDir    string
+	SDRoot    string
 }
 
 // jukaosSessionInfo is /tmp/jukaos/session.json: what the --os-session start
@@ -300,6 +328,13 @@ func jukaosSaveState(appDir string, s jukaosState) error {
 // jukaosDropCachesOn is the DropCaches option with its default.
 func (s jukaosState) jukaosDropCachesOn() bool { return s.DropCaches == nil || *s.DropCaches }
 
+// jukaosFastBootOn is the FastBoot option with its default.
+func (s jukaosState) jukaosFastBootOn() bool { return s.FastBoot == nil || *s.FastBoot }
+
+// jukaosOSEdition reports whether the card was installed from the OS package
+// and has OS mode on.
+func (s jukaosState) jukaosOSEdition() bool { return s.Enabled && s.Edition == jukaosEditionOS }
+
 // jukaosLoadGuard reads <app>/os/guard.json.
 func jukaosLoadGuard(appDir string) jukaosGuardState {
 	var g jukaosGuardState
@@ -410,14 +445,95 @@ func jukaosDecodeLayerSpec(data []byte) (jukaosLayerSpec, error) {
 		return jukaosLayerSpec{}, fmt.Errorf("layer.json: %v", err)
 	}
 	if len(spec.Binds) > jukaosLayerItemsMax || len(spec.Libs) > jukaosLayerItemsMax ||
-		len(spec.Modules) > jukaosLayerItemsMax || len(spec.Sysfs) > jukaosLayerItemsMax {
+		len(spec.Modules) > jukaosLayerItemsMax || len(spec.Sysfs) > jukaosLayerItemsMax ||
+		len(spec.SysfsIfPresent) > jukaosLayerItemsMax || len(spec.Devices) > 16 {
 		return jukaosLayerSpec{}, errors.New("layer.json lists too many entries")
 	}
 	spec.Name = jukaosOneLine(spec.Name, 64)
-	spec.Description = jukaosOneLine(spec.Description, 200)
+	spec.Description = jukaosOneLine(spec.Description, 300)
 	spec.Version = jukaosOneLine(spec.Version, 32)
 	spec.Arch = strings.ToLower(jukaosOneLine(spec.Arch, 32))
+	spec.Kernel = jukaosOneLine(spec.Kernel, 64)
+	spec.Kind = strings.ToLower(jukaosOneLine(spec.Kind, 16))
+	devices := spec.Devices[:0]
+	for _, d := range spec.Devices {
+		if d = strings.ToLower(jukaosOneLine(d, 40)); d != "" {
+			devices = append(devices, d)
+		}
+	}
+	if len(spec.Devices) > 0 && len(devices) == 0 {
+		// Only blanks: a list meant to narrow the layer must not widen it.
+		devices = append(devices, "none")
+	}
+	spec.Devices = devices
 	return spec, nil
+}
+
+// jukaosModelLabel is a model id or code as the user knows it: "Smart Pro S".
+func jukaosModelLabel(id string) string {
+	name := deviceDisplayName(DeviceModel(strings.ToLower(id)))
+	if name == deviceDisplayName(DeviceUnknown) {
+		for m, code := range deviceModelCodes {
+			if strings.EqualFold(code, id) {
+				name = deviceDisplayName(m)
+			}
+		}
+	}
+	if name == deviceDisplayName(DeviceUnknown) || name == deviceDisplayName(DeviceDevBuild) {
+		return id
+	}
+	name = strings.TrimPrefix(name, "TrimUI ")
+	if i := strings.Index(name, " ("); i > 0 {
+		name = name[:i]
+	}
+	return name
+}
+
+// jukaosDeviceFits says why a layer for devices does not suit this handheld,
+// "" when it does. A handheld whose model could not be told takes no layer
+// that names models: a driver value for the wrong board is worse than none.
+func jukaosDeviceFits(devices []string, h jukaosHost) string {
+	if len(devices) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(devices))
+	for _, d := range devices {
+		if strings.EqualFold(d, h.Model) || (h.ModelCode != "" && strings.EqualFold(d, h.ModelCode)) {
+			return ""
+		}
+		if label := jukaosModelLabel(d); len(labels) < 4 && !jukaosHasString(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	built := "built for " + strings.Join(labels, ", ")
+	if h.Model == "" || h.Model == string(DeviceUnknown) {
+		return built + "; this handheld's model could not be told"
+	}
+	return built + ", this is " + jukaosModelLabel(h.Model)
+}
+
+// jukaosHasString reports whether list holds s.
+func jukaosHasString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// jukaosKernelFits says why a layer for kernel does not suit this release,
+// "" when it does: kernel is the release itself or a prefix of it ending
+// where the release has ".", "-" or "+" next ("4.9" fits "4.9.191", "4.9.1"
+// does not).
+func jukaosKernelFits(kernel, release string) string {
+	if kernel == "" || kernel == release {
+		return ""
+	}
+	if release != "" && strings.HasPrefix(release, kernel) && strings.ContainsRune(".-+", rune(release[len(kernel)])) {
+		return ""
+	}
+	return fmt.Sprintf("built for kernel %s, this is %s", kernel, setOr(release, "unknown"))
 }
 
 // jukaosOneLine keeps a display string to one line of at most max runes.
@@ -491,6 +607,14 @@ func jukaosCheckLayer(h jukaosHost, l *jukaosLayer) {
 		l.Problem = fmt.Sprintf("built for %s, this handheld is %s", l.Spec.Arch, h.Machine)
 		return
 	}
+	if why := jukaosDeviceFits(l.Spec.Devices, h); why != "" {
+		l.Problem, l.Elsewhere = why, true
+		return
+	}
+	if why := jukaosKernelFits(l.Spec.Kernel, h.Release); why != "" {
+		l.Problem, l.Elsewhere = why, true
+		return
+	}
 	base, err := filepath.EvalSymlinks(l.Dir)
 	if err != nil {
 		l.Problem = "layer folder unreadable: " + err.Error()
@@ -525,26 +649,99 @@ func jukaosCheckLayer(h jukaosHost, l *jukaosLayer) {
 		}
 		l.Modules = append(l.Modules, m)
 	}
-	keys := make([]string, 0, len(l.Spec.Sysfs))
-	for k := range l.Spec.Sysfs {
+	jukaosCheckValues(h, l, l.Spec.Sysfs, false)
+	jukaosCheckValues(h, l, l.Spec.SysfsIfPresent, true)
+	if len(l.Binds)+len(l.LibDirs)+len(l.Modules)+len(l.Sysfs) == 0 {
+		switch {
+		case len(l.Notes) > 0:
+			l.Problem = "nothing in it can be used here (" + l.Notes[0] + ")"
+		case l.Absent > 0:
+			l.Problem = "nothing it sets exists on this handheld"
+		default:
+			l.Problem = "the layer is empty"
+		}
+	}
+}
+
+// jukaosGlobMax bounds what one value's "*" may expand to.
+const jukaosGlobMax = 8
+
+// jukaosCheckValues checks one of a layer's value lists into l.Sysfs. A path
+// with "*" in one of its parts ("/sys/class/devfreq/*gpu*/max_freq": the
+// device's name differs between boards) is expanded on this machine, and each
+// file it finds is checked again. ifPresent values whose file this handheld
+// does not have are counted in l.Absent instead of noted; plain values are
+// noted as "not on this device" at apply time, as before. A path already set
+// by an earlier entry keeps that one.
+func jukaosCheckValues(h jukaosHost, l *jukaosLayer, values map[string]string, ifPresent bool) {
+	keys := make([]string, 0, len(values))
+	for k := range values {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		v := l.Spec.Sysfs[k]
+		v := strings.TrimSpace(values[k])
 		if err := jukaosCheckSysfs(k, v); err != nil {
 			l.Notes = append(l.Notes, fmt.Sprintf("value %s: %v", jukaosOneLine(k, 80), err))
 			continue
 		}
-		l.Sysfs = append(l.Sysfs, jukaosSysfsWrite{Path: k, Value: strings.TrimSpace(v)})
-	}
-	if len(l.Binds)+len(l.LibDirs)+len(l.Modules)+len(l.Sysfs) == 0 {
-		if len(l.Notes) > 0 {
-			l.Problem = "nothing in it can be used here (" + l.Notes[0] + ")"
-		} else {
-			l.Problem = "the layer is empty"
+		paths := []string{k}
+		if strings.Contains(k, "*") {
+			paths = h.jukaosGlobSystem(k)
+			if len(paths) == 0 {
+				if ifPresent {
+					l.Absent++
+				} else {
+					l.Notes = append(l.Notes, fmt.Sprintf("value %s: not on this device", jukaosOneLine(k, 80)))
+				}
+				continue
+			}
+		} else if ifPresent {
+			if _, err := os.Stat(h.jukaosReal(k)); err != nil {
+				l.Absent++
+				continue
+			}
+		}
+		for _, p := range paths {
+			if !jukaosSysfsAllowed(p) {
+				l.Notes = append(l.Notes, fmt.Sprintf("value %s: not one of the values a layer may set", jukaosOneLine(p, 80)))
+				continue
+			}
+			seen := false
+			for _, w := range l.Sysfs {
+				seen = seen || w.Path == p
+			}
+			if !seen {
+				l.Sysfs = append(l.Sysfs, jukaosSysfsWrite{Path: p, Value: v})
+			}
 		}
 	}
+}
+
+// jukaosGlobSystem expands a system path pattern on this machine: the system
+// paths it matches, sorted, at most jukaosGlobMax.
+func (h jukaosHost) jukaosGlobSystem(pattern string) []string {
+	matches, err := filepath.Glob(h.jukaosReal(pattern))
+	if err != nil {
+		return nil
+	}
+	sort.Strings(matches)
+	var out []string
+	for _, m := range matches {
+		if len(out) >= jukaosGlobMax {
+			break
+		}
+		p := filepath.ToSlash(m)
+		if h.Root != "" {
+			rel, err := filepath.Rel(h.Root, m)
+			if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			p = "/" + filepath.ToSlash(rel)
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // jukaosArchFits reports whether a layer built for arch suits machine. An
@@ -966,10 +1163,14 @@ func jukaosCheckModule(h jukaosHost, base, rel string) (jukaosModule, error) {
 
 // jukaosSysfsAllowed reports whether a layer may set this value: the memory
 // manager's tunables, the scheduler's, a block device's queue, transparent
-// huge pages and module parameters. The CPU governor and clocks are not on
-// the list — JukaHub's power modes own them and would undo a layer's choice.
+// huge pages, module parameters, and a GPU's devfreq ceiling and governor
+// (a device under /sys/class/devfreq whose name says "gpu": the A523's Mali
+// runs cooler capped, as spruceOS does). The CPU governor and clocks are not
+// on the list — JukaHub's power modes own them and would undo a layer's
+// choice. A path here is always a real one: patterns ("*") are checked by
+// jukaosCheckSysfs and expanded first.
 func jukaosSysfsAllowed(p string) bool {
-	if p != path.Clean(p) || !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t\n\x00\\") {
+	if p != path.Clean(p) || !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t\n\x00\\*?[]") {
 		return false
 	}
 	parts := strings.Split(strings.TrimPrefix(p, "/"), "/")
@@ -987,13 +1188,24 @@ func jukaosSysfsAllowed(p string) bool {
 		return parts[4] == "enabled" || parts[4] == "defrag"
 	case len(parts) == 5 && parts[0] == "sys" && parts[1] == "module" && parts[3] == "parameters":
 		return true
+	case len(parts) == 5 && parts[0] == "sys" && parts[1] == "class" && parts[2] == "devfreq" &&
+		strings.Contains(strings.ToLower(parts[3]), "gpu"):
+		return parts[4] == "max_freq" || parts[4] == "governor"
 	}
 	return false
 }
 
-// jukaosCheckSysfs checks one path and value of a layer's "sysfs".
+// jukaosCheckSysfs checks one path and value of a layer's "sysfs". The path
+// may hold "*" in one of its parts; it must fit the list with the "*" read as
+// a name, and every file it expands to is checked again.
 func jukaosCheckSysfs(p, value string) error {
-	if !jukaosSysfsAllowed(p) {
+	pattern := 0
+	for _, part := range strings.Split(p, "/") {
+		if strings.Contains(part, "*") {
+			pattern++
+		}
+	}
+	if pattern > 1 || strings.ContainsAny(p, "?[]") || !jukaosSysfsAllowed(strings.ReplaceAll(p, "*", "x")) {
 		return errors.New("not one of the values a layer may set")
 	}
 	v := strings.TrimSpace(value)
@@ -1131,15 +1343,26 @@ func jukaosRevertEntries(entries []jukaosJournalEntry, ops jukaosRevertOps) []st
 // jukaosLive is this process's view of the session. Fields after init are
 // guarded by mu.
 var jukaosLive struct {
-	mu        sync.Mutex
-	session   bool // this JukaHub runs as JukaHub OS
-	guarded   bool // the OS guard left the layers out
-	layers    []string
-	info      jukaosSessionInfo
-	modules   int // modules this session loaded
-	healthy   *time.Timer
-	escapeArm time.Time // "Return to …" row's first press
+	mu           sync.Mutex
+	session      bool // this JukaHub runs as JukaHub OS
+	guarded      bool // the OS guard left the layers out
+	layers       []string
+	info         jukaosSessionInfo
+	modules      int      // modules this session loaded
+	values       int      // sysfs/proc values this session set
+	drivers      int      // drivers the applied layers carry for this kernel
+	driverLayers []string // the applied layers of kind "drivers", by name
+	driverValues int      // the values those layers have in force
+	applied      bool     // the background apply has finished
+	notes        []string // what the background apply could not do
+	why          string   // outside a session with OS mode on: why not
+	healthy      *time.Timer
+	escapeArm    time.Time // "Return to …" row's first press
 }
+
+// jukaosEntryNote is why the --os-session start carried on as the app (set
+// before logging exists; jukaosInit logs it and Settings shows it).
+var jukaosEntryNote string
 
 // jukaosSessionActive reports whether this JukaHub runs as JukaHub OS.
 func jukaosSessionActive() bool {

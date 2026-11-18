@@ -10,6 +10,40 @@ import (
 	"time"
 )
 
+func TestTrimuiCodecCardIDPrefersBuiltInOverUSB(t *testing.T) {
+	cards := " 0 [Headset        ]: USB-Audio - USB Headset\n" +
+		"                      USB Headset\n" +
+		" 1 [audiocodec     ]: audiocodec - audiocodec\n" +
+		"                      audiocodec\n"
+	if got := trimuiCodecCardIDFrom(cards); got != "audiocodec" {
+		t.Fatalf("codec ID = %q, want audiocodec", got)
+	}
+	if got := trimuiCodecCardIDFrom(" 0 [USB            ]: USB-Audio\n"); got != "" {
+		t.Fatalf("USB-only card was selected as codec: %q", got)
+	}
+	otherCodec := " 0 [Device         ]: USB-Audio - USB DAC\n" +
+		" 1 [A523Codec      ]: A523 sound card - internal audio\n"
+	if got := trimuiCodecCardIDFrom(otherCodec); got != "A523Codec" {
+		t.Fatalf("unknown internal codec ID = %q, want A523Codec", got)
+	}
+}
+
+func TestTrimuiStockSmartProVolumeCurve(t *testing.T) {
+	// Stock 1.1.0 keymon maps 0 to mute and steps 1..20 through a
+	// 48-step attenuation span. Steps 1 and 4 were also read on the device.
+	for _, sample := range []struct{ step, raw int }{
+		{0, 63}, {1, 45}, {4, 38}, {10, 24}, {20, 0},
+	} {
+		pct := sample.step * 5
+		if got := trimuiStockAttenuationFor(pct, 63); got != sample.raw {
+			t.Errorf("stock step %d writes raw %d, want %d", sample.step, got, sample.raw)
+		}
+		if got := trimuiStockPercentForAttenuation(sample.raw, 63); got != pct {
+			t.Errorf("stock raw %d reads %d%%, want %d%%", sample.raw, got, pct)
+		}
+	}
+}
+
 // fakeAmixer answers the commands trimuiSetVolume and trimuiVolume run, keeps
 // the two controls' raw values, and records every call. scontrols overrides
 // the control list; failGet makes every `amixer get` fail.
@@ -88,8 +122,28 @@ func resetTrimuiMixerForTest() {
 	trimuiMixer.mu.Lock()
 	trimuiMixer.probed, trimuiMixer.probedAt, trimuiMixer.attempts = false, time.Time{}, 0
 	trimuiMixer.info, trimuiMixer.savedDAC, trimuiMixer.dacMuted = trimuiMixerInfo{}, 0, false
-	trimuiMixer.mutedHere = false
+	trimuiMixer.mutedHere, trimuiMixer.gainMuted = false, false
 	trimuiMixer.mu.Unlock()
+}
+
+// A codec without "digital volume" (the Smart Pro S's sunxi BSP codec lists
+// only a DAC gain) gets that gain, with 100% at its 0 dB point (160), not the
+// Master/PCM path it does not have.
+func TestTrimuiGainFallbackDACOnlyCodec(t *testing.T) {
+	fake := withFakeTrimuiMixer(t, 160)
+	fake.scontrols = "Simple mixer control 'ADC Volume',0\nSimple mixer control 'DAC Volume',0\nSimple mixer control 'LINEOUT Switch',0\n"
+	if err := trimuiSetVolume(50); err != nil {
+		t.Fatal(err)
+	}
+	if fake.dac != 136 {
+		t.Fatalf("50%% wrote DAC %d, want 136", fake.dac)
+	}
+	if pct, ok := trimuiVolume(); !ok || pct != 50 {
+		t.Fatalf("read back %d (%v), want 50", pct, ok)
+	}
+	if err := trimuiSetVolume(100); err != nil || fake.dac != 160 {
+		t.Fatalf("100%% wrote DAC %d (%v), want the 0 dB point 160", fake.dac, err)
+	}
 }
 
 // A JukaHub mute survives a restart as JukaHub's: the next run's hardware keys

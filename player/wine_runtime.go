@@ -40,7 +40,10 @@ import (
 // wineRuntimePlan is the runtime half of one launch.
 type wineRuntimePlan struct {
 	// Command and Args start the program: Args carries the exe and the
-	// caller's arguments after whatever the runtime puts first.
+	// caller's arguments after whatever the runtime puts first, and ends with
+	// them (the caller's arguments are always the last words). Under Wine
+	// the command is a shell that, after the program, waits while Windows
+	// programs remain in the prefix (wineWaitArgs).
 	Command string
 	Args    []string
 	// Env holds every variable the launch sets: the caller's own (a game
@@ -52,6 +55,10 @@ type wineRuntimePlan struct {
 	Flavor string
 	// Prefix is the WINEPREFIX the launch uses ("" on Windows).
 	Prefix string
+	// Waits is set when Command is the shell that waits for the prefix's
+	// other Windows programs; it prints wineWaitMarker on its error output
+	// once that wait has lasted wineWaitNotice.
+	Waits bool
 	// After runs once the program, and the display around it, have exited:
 	// it stops a lingering wineserver and releases anything the plan set up
 	// (a mounted prefix image). Never nil; call it also when the start
@@ -88,12 +95,20 @@ func planWineRuntime(ctx context.Context, exe string, args []string, env map[str
 		return wineRuntimePlan{}, err
 	}
 	applyWineCompatibilityEnv(out)
+	command, cmdArgs := rt.Command, rt.args(append([]string{exe}, args...)...)
+	if len(rt.Server) > 0 {
+		// A launcher or setup program that starts the real program and quits
+		// must not end the session: the command lasts while Windows programs
+		// remain in the prefix (wineWaitArgs).
+		command, cmdArgs = wineShell(exec.LookPath), wineWaitArgs(rt.Server, command, cmdArgs)
+	}
 	return wineRuntimePlan{
-		Command: rt.Command,
-		Args:    rt.args(append([]string{exe}, args...)...),
+		Command: command,
+		Args:    cmdArgs,
 		Env:     out,
 		Flavor:  rt.Flavor,
 		Prefix:  wineEnvValue(out, "WINEPREFIX"),
+		Waits:   len(rt.Server) > 0,
 		After:   session.close,
 	}, nil
 }

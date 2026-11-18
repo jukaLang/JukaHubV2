@@ -17,10 +17,12 @@
  * pbuffer-only config (an engine's capability probe);
  * EGLTEST_RELEASE_THREAD=1 ends with eglReleaseThread, eglMakeCurrent again
  * and a 6th frame. A failed eglInitialize or eglCreateWindowSurface logs the
- * eglGetError() code the game reads. Linked NDK-style against stub
- * libEGL.so/libandroid.so/liblog.so; the runner binds the EGL imports to its
- * present layer (eglpresent.c), which drives the mock GPU userspace
- * (mock_gpu.c), directly or through the fake SDL2 (fake_sdl.c).
+ * eglGetError() code the game reads. Built with -DEGLTEST_GLES (and linked
+ * against a stub libGLESv2.so too) it also logs glGetString(GL_VERSION), so
+ * the smoke test sees which GLES library its import was bound to. Linked
+ * NDK-style against stub libEGL.so/libandroid.so/liblog.so; the runner binds
+ * the EGL imports to its present layer (eglpresent.c), which drives the mock
+ * GPU userspace (mock_gpu.c), directly or through the fake SDL2 (fake_sdl.c).
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -67,6 +69,9 @@ extern void ANativeActivity_finish(ANativeActivity *activity);
 extern int __android_log_print(int prio, const char *tag, const char *fmt, ...);
 extern void _exit(int code) __attribute__((noreturn));
 extern char *getenv(const char *name);
+#ifdef EGLTEST_GLES
+extern const unsigned char *glGetString(unsigned name);
+#endif
 
 static int g_failures;
 
@@ -142,6 +147,12 @@ static void onWindowCreated(ANativeActivity *activity, void *window) {
               eglQuerySurface(dpy, surface, 0x3056 /* EGL_HEIGHT */, &h) == 1 && w > 0 && h > 0,
           "eglQuerySurface gives the surface size");
     __android_log_print(4, "EglTest", "[egl-test] drawing to a %dx%d surface", (int)w, (int)h);
+#ifdef EGLTEST_GLES
+    {
+        const unsigned char *version = glGetString(0x1F02 /* GL_VERSION */);
+        __android_log_print(4, "EglTest", "[egl-test] GL_VERSION %s", version ? (const char *)version : "(null)");
+    }
+#endif
     for (i = 0; i < 5; i++) swaps += eglSwapBuffers(dpy, surface) == 1;
     check(swaps == 5, "5 frames presented");
     if (getenv("EGLTEST_RELEASE_THREAD")) {

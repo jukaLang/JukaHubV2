@@ -258,7 +258,7 @@ func bkupBuildRows(c *Config, s bkupSnapshot) []xpackKitRow {
 			Detail: "Backups are saved in " + bkupWhere(s)})
 	}
 	for _, it := range s.list {
-		row := xpackKitRow{Kind: xpackKitItem, ID: "file:" + it.Path, Label: it.ModTime.Format("Jan 2, 2006 · 15:04")}
+		row := xpackKitRow{Kind: xpackKitItem, ID: "file:" + it.Path, Label: formatDateTime(c, it.ModTime)}
 		if it.Problem != "" {
 			row.Detail, row.Tone, row.Disabled = it.Name+" · can't use it: "+it.Problem, xpackKitToneWarn, true
 		} else {
@@ -280,7 +280,7 @@ func bkupBuildRows(c *Config, s bkupSnapshot) []xpackKitRow {
 // bkupRestoreRows lists the restore of the chosen backup: its check, its
 // categories with switches, and the button row.
 func bkupRestoreRows(s bkupSnapshot) []xpackKitRow {
-	rows := []xpackKitRow{{Kind: xpackKitHeading, Label: "Restore " + bkupUI.file.ModTime.Format("Jan 2 · 15:04")}}
+	rows := []xpackKitRow{{Kind: xpackKitHeading, Label: "Restore " + formatDateTimeNear(nil, bkupUI.file.ModTime, time.Now())}}
 	check := xpackKitRow{Kind: xpackKitItem, ID: "check", Label: "Checking every file…", Detail: bkupUI.file.Name, Disabled: true}
 	switch {
 	case s.verifyErr != "":
@@ -907,7 +907,7 @@ func bkupPaneText(id string, s bkupSnapshot) (string, string, []string) {
 			m = s.manifest
 		}
 		body := []string{
-			"Made " + bkupUI.file.ModTime.Format("Monday, Jan 2 2006 at 15:04") + " on " + m.DeviceName + ".",
+			"Made " + formatDateLong(nil, bkupUI.file.ModTime) + " at " + clockDigits(nil, bkupUI.file.ModTime) + " on " + m.DeviceName + ".",
 			"",
 		}
 		if m.Platform != P().Name() {
@@ -932,7 +932,7 @@ func bkupPaneText(id string, s bkupSnapshot) (string, string, []string) {
 				return "Backup", it.Name, body
 			}
 			m := it.Manifest
-			body = append(body, "Made "+it.ModTime.Format("Jan 2 2006, 15:04")+" on "+m.DeviceName+".")
+			body = append(body, "Made "+formatDateTime(nil, it.ModTime)+" on "+m.DeviceName+".")
 			var cats []string
 			for _, cat := range m.Categories {
 				cats = append(cats, bkupCategoryLabel(cat))

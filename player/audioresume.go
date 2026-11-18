@@ -42,6 +42,9 @@ type audioResumeEntry struct {
 	Position float64 `json:"position"`
 	Duration float64 `json:"duration,omitempty"`
 	Updated  string  `json:"updated,omitempty"`
+	// Chapter names the chapter Position is in, for a file with chapters
+	// inside (audiobook_chapters.go).
+	Chapter string `json:"chapter,omitempty"`
 }
 
 type audioPrefsData struct {
@@ -191,6 +194,16 @@ func audioResumePosition(path string) float64 {
 	return audioPrefs.entries[key].Position
 }
 
+// audioResumeChapter names the chapter a file's saved place is in, "" when it
+// has none (no saved place, or no chapters inside the file).
+func audioResumeChapter(path string) string {
+	key := audioResumeKey(path)
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	return audioPrefs.entries[key].Chapter
+}
+
 // audioRememberPosition stores the current position, pruning the oldest
 // entries so the file stays bounded.
 func audioRememberPosition(path string, position, duration float64) {
@@ -198,6 +211,7 @@ func audioRememberPosition(path string, position, duration float64) {
 		return
 	}
 	key := audioResumeKey(path)
+	chapter := audioChapterTitleAt(path, position) // before audioPrefs.mu: its own lock
 	audioPrefs.mu.Lock()
 	defer audioPrefs.mu.Unlock()
 	audioPrefsLoadLocked()
@@ -205,6 +219,7 @@ func audioRememberPosition(path string, position, duration float64) {
 		Position: position,
 		Duration: duration,
 		Updated:  time.Now().UTC().Format(time.RFC3339),
+		Chapter:  chapter,
 	}
 	pruneAudioPrefsLocked()
 	_ = audioPrefsSaveLocked()
@@ -275,7 +290,8 @@ func audioClampSpeed(speed float64) float64 {
 
 // musicFFmpegArgs builds the decoder command line. The filter graph carries the
 // 31-band PEQ and the atempo filter that keeps the pitch when the speed changes;
-// both are dropped on the bit-perfect path, which leaves the samples alone.
+// both are dropped on the bit-perfect path, which leaves the samples alone. path
+// is what ffmpeg opens (ffmpegReadableInput's answer).
 func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string {
 	if rate <= 0 {
 		rate = 44100
@@ -285,6 +301,11 @@ func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string 
 	if startSec > 0.05 {
 		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
 	}
+	// An http(s) input (a podcast, a radio stream, or the relay's loopback
+	// address for one) gets the video decoders' read timeout and reconnect
+	// (ffmpegStreamInputArgs, videorecover.go): a stream that stopped sending
+	// used to leave the player silent, with no error, for good.
+	args = append(args, ffmpegStreamInputArgs(path, "")...)
 	args = append(args,
 		"-i", path,
 		"-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2",

@@ -10,6 +10,8 @@ package main
 // outside the card to close without changing anything.
 
 import (
+	"strings"
+
 	"github.com/veandco/go-sdl2/sdl"
 )
 
@@ -173,6 +175,43 @@ func setSheetWheel(s *setSheetState, dy int32) {
 	case dy < 0:
 		setSheetMove(s, 3)
 	}
+}
+
+// setConfirm asks before a row throws a whole group of settings away: the
+// shared sheet (tbxOpenSheet, which the hub draws and routes) with Keep
+// focused, so a second A press by habit changes nothing. The page re-reads
+// its values after the action runs.
+func setConfirm(c *Config, title, body, icon, action string, run func(c *Config)) {
+	tbxOpenSheet(c, tbxSheetSpec{
+		title:    title,
+		subtitle: "This can't be undone",
+		icon:     icon,
+		body:     setConfirmBody(body),
+		buttons: []tbxSheetButton{
+			{label: "Keep"},
+			{label: action, primary: true, run: func() {
+				run(c)
+				setHub.dirty = true
+			}},
+		},
+	})
+}
+
+// setConfirmBody is a confirmation's text in the interface language, one
+// paragraph at a time. The sheet wraps the body as it is given and the draw
+// only translates whole lines, so an untranslated paragraph that wraps would
+// stay in English; the paragraphs are the catalogue's keys.
+func setConfirmBody(body string) string {
+	if uiActive.Load() == nil {
+		return body
+	}
+	paras := strings.Split(body, "\n")
+	for i, p := range paras {
+		if strings.TrimSpace(p) != "" {
+			paras[i] = uiT(p)
+		}
+	}
+	return strings.Join(paras, "\n")
 }
 
 // setSheetDraw paints the sheet over whatever is on screen.

@@ -104,6 +104,119 @@ func TestUpchMoment(t *testing.T) {
 	}
 }
 
+// TestUpchInstallDue pins when a scheduled install may run (REL-9): never over
+// a game or another install, "next start" only at a start, "charging" only on
+// the charger after the idle time.
+func TestUpchInstallDue(t *testing.T) {
+	cases := []struct {
+		name    string
+		when    string
+		atStart bool
+		inGame  bool
+		busy    bool
+		plug    bool
+		idle    time.Duration
+		want    bool
+	}{
+		{"next start, at start", upchWhenNextStart, true, false, false, false, 0, true},
+		{"next start, mid-session", upchWhenNextStart, false, false, false, true, time.Hour, false},
+		{"next start, game on screen", upchWhenNextStart, true, true, false, false, 0, false},
+		{"next start, another install", upchWhenNextStart, true, false, true, false, 0, false},
+		{"charging and idle", upchWhenCharging, false, false, false, true, upchWhenIdle, true},
+		{"charging, in use", upchWhenCharging, false, false, false, true, upchWhenIdle - time.Second, false},
+		{"idle on battery", upchWhenCharging, false, false, false, false, time.Hour, false},
+		{"charging, idle, game on screen", upchWhenCharging, false, true, false, true, time.Hour, false},
+		{"charging, at start, untouched", upchWhenCharging, true, false, false, true, 0, false},
+		{"nothing scheduled", "", true, false, false, true, time.Hour, false},
+		{"unknown choice", "tuesday", true, false, false, true, time.Hour, false},
+	}
+	for _, tc := range cases {
+		if got := upchInstallDue(tc.when, tc.atStart, tc.inGame, tc.busy, tc.plug, tc.idle); got != tc.want {
+			t.Errorf("%s: upchInstallDue = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestUpchLoadScheduleKeepsOnlyACachedRelease: the saved choice survives a
+// restart while its release is in the cache, and is dropped (file and all)
+// once it is not.
+func TestUpchLoadScheduleKeepsOnlyACachedRelease(t *testing.T) {
+	t.Cleanup(func() {
+		upchWhen.mu.Lock()
+		upchWhen.v = upchWhenFile{}
+		upchWhen.mu.Unlock()
+	})
+	dir := t.TempDir()
+	path := filepath.Join(dir, upchWhenFileName)
+	const tag = "JukaHub-20991231120000"
+	write := func(v upchWhenFile) {
+		t.Helper()
+		data, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(upchWhenFile{Tag: tag, When: upchWhenCharging})
+	upchLoadSchedule(dir, []upchEntry{{Tag: tag}})
+	if got := upchScheduled(); got.Tag != tag || got.When != upchWhenCharging {
+		t.Fatalf("cached release: schedule = %+v, want %s %s", got, tag, upchWhenCharging)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("cached release: when.json should stay: %v", err)
+	}
+
+	upchWhen.mu.Lock()
+	upchWhen.v = upchWhenFile{}
+	upchWhen.mu.Unlock()
+	write(upchWhenFile{Tag: tag, When: upchWhenNextStart})
+	upchLoadSchedule(dir, []upchEntry{{Tag: "JukaHub-20990101000000"}})
+	if got := upchScheduled(); got.When != "" {
+		t.Fatalf("release no longer cached: schedule = %+v, want none", got)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("release no longer cached: when.json should be gone, stat err = %v", err)
+	}
+
+	write(upchWhenFile{Tag: tag, When: "sometime"})
+	upchLoadSchedule(dir, []upchEntry{{Tag: tag}})
+	if got := upchScheduled(); got.When != "" {
+		t.Fatalf("unknown choice: schedule = %+v, want none", got)
+	}
+
+	// A write that waited its turn carries the newest choice, not the one it
+	// was asked for: "next start" then "off" never leaves next start on disk.
+	origFn := patchStateDirFn
+	state := t.TempDir()
+	patchStateDirFn = func() (string, error) { return state, nil }
+	t.Cleanup(func() { patchStateDirFn = origFn })
+	saved := filepath.Join(state, "update-cache", upchWhenFileName)
+	upchWhen.mu.Lock()
+	upchWhen.v = upchWhenFile{Tag: tag, When: upchWhenNextStart}
+	upchWhen.mu.Unlock()
+	upchSaveWhen()
+	if _, err := os.Stat(saved); err != nil {
+		t.Fatalf("next start was not saved: %v", err)
+	}
+	upchWhenWriteMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		upchSaveWhen()
+		close(done)
+	}()
+	upchWhen.mu.Lock()
+	upchWhen.v = upchWhenFile{}
+	upchWhen.mu.Unlock()
+	upchWhenWriteMu.Unlock()
+	<-done
+	if _, err := os.Stat(saved); !os.IsNotExist(err) {
+		t.Fatalf("turned off, but when.json is still there (stat err %v)", err)
+	}
+}
+
 func TestUpchExpectedDigestNeverDowngrades(t *testing.T) {
 	sum := strings.Repeat("ab", 32)
 	other := strings.Repeat("cd", 32)

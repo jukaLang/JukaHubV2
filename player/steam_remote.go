@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -101,23 +102,21 @@ func steamClientComm(ctx context.Context, method, token string, params url.Value
 	}
 	params.Set("access_token", token)
 	params.Set("format", "json")
-	var req *http.Request
-	var err error
-	if post {
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, steamClientCommAPI+method+"/v1/", strings.NewReader(params.Encode()))
-		if err == nil {
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	asPost := post || steamClientCommPostOnly.Load()
+	resp, err := steamClientCommSend(ctx, method, params, asPost)
+	if err == nil && !asPost && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+		// The API reference lists the ClientComm methods as POST ones: a GET
+		// Steam does not route is sent again the documented way, and once
+		// that works every later call goes straight to POST.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		resp.Body.Close()
+		resp, err = steamClientCommSend(ctx, method, params, true)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			steamClientCommPostOnly.Store(true)
 		}
-	} else {
-		req, err = http.NewRequestWithContext(ctx, http.MethodGet, steamClientCommAPI+method+"/v1/?"+params.Encode(), nil)
 	}
 	if err != nil {
 		return err
-	}
-	req.Header.Set("User-Agent", "okhttp/4.9.2")
-	resp, err := steamHTTPClient().Do(req)
-	if err != nil {
-		return steamRequestError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -138,6 +137,34 @@ func steamClientComm(ctx context.Context, method, token string, params url.Value
 		return nil
 	}
 	return json.Unmarshal(wrap.Response, out)
+}
+
+// steamClientCommPostOnly is set once a ClientComm GET was refused and the
+// same call worked as a POST.
+var steamClientCommPostOnly atomic.Bool
+
+// steamClientCommSend sends one ClientComm call, as a form POST or a GET.
+// The access token is in the body or the query: errors carry no URL.
+func steamClientCommSend(ctx context.Context, method string, params url.Values, post bool) (*http.Response, error) {
+	var req *http.Request
+	var err error
+	if post {
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, steamClientCommAPI+method+"/v1/", strings.NewReader(params.Encode()))
+		if err == nil {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+	} else {
+		req, err = http.NewRequestWithContext(ctx, http.MethodGet, steamClientCommAPI+method+"/v1/?"+params.Encode(), nil)
+	}
+	if err != nil {
+		return nil, steamRequestError(err)
+	}
+	req.Header.Set("User-Agent", "okhttp/4.9.2")
+	resp, err := steamHTTPClient().Do(req)
+	if err != nil {
+		return nil, steamRequestError(err)
+	}
+	return resp, nil
 }
 
 // steamListSteamPCs lists the account's computers signed in to Steam now,
@@ -189,7 +216,32 @@ type steamClientApp struct {
 func steamListSteamPCApps(ctx context.Context, token, instance string) []steamRemoteApp {
 	seen := map[int]int{}
 	var apps []steamRemoteApp
-	for _, filter := range []string{"installed", "changing"} {
+	add := func(a steamClientApp) {
+		// Steam apps only: a non-Steam game's id never reaches a Steam call.
+		if a.AppID <= 0 || a.AppID > 1<<31-1 || len(apps) >= steamPeerLibraryMax {
+			return
+		}
+		if a.AppType != "" && !strings.EqualFold(a.AppType, "game") && !strings.EqualFold(a.AppType, "demo") {
+			return
+		}
+		ra := steamRemoteApp{appid: a.AppID, name: steamCleanText(a.Name, 120), installed: a.Installed, paused: a.Paused}
+		if total := int64(a.Total); total > 0 && int64(a.Done) < total {
+			ra.dlDone, ra.dlTotal = int64(a.Done), total
+		} else if a.Changing && !a.Installed {
+			// Queued, no byte count yet: a bar at 0%.
+			ra.dlTotal = 1
+		}
+		if i, ok := seen[a.AppID]; ok {
+			if ra.dlTotal > 0 {
+				apps[i].dlDone, apps[i].dlTotal, apps[i].paused = ra.dlDone, ra.dlTotal, ra.paused
+			}
+			apps[i].installed = apps[i].installed || ra.installed
+			return
+		}
+		seen[a.AppID] = len(apps)
+		apps = append(apps, ra)
+	}
+	list := func(filter string) ([]steamClientApp, error) {
 		var body struct {
 			Apps []steamClientApp `json:"apps"`
 		}
@@ -200,31 +252,31 @@ func steamListSteamPCApps(ctx context.Context, token, instance string) []steamRe
 		params.Set("language", "english")
 		if err := steamClientComm(ctx, "GetClientAppList", token, params, false, &body); err != nil {
 			logDebug("steam", "app list of PC %s (%s): %v", instance, filter, err)
+			return nil, err
+		}
+		return body.Apps, nil
+	}
+	failed := 0
+	for _, filter := range []string{"installed", "changing"} {
+		found, err := list(filter)
+		if err != nil {
+			failed++
 			continue
 		}
-		for _, a := range body.Apps {
-			if a.AppID <= 0 || len(apps) >= steamPeerLibraryMax {
-				continue
-			}
-			if a.AppType != "" && !strings.EqualFold(a.AppType, "game") && !strings.EqualFold(a.AppType, "demo") {
-				continue
-			}
-			ra := steamRemoteApp{appid: a.AppID, name: steamCleanText(a.Name, 120), installed: a.Installed, paused: a.Paused}
-			if total := int64(a.Total); total > 0 && int64(a.Done) < total {
-				ra.dlDone, ra.dlTotal = int64(a.Done), total
-			} else if a.Changing && !a.Installed {
-				// Queued, no byte count yet: a bar at 0%.
-				ra.dlTotal = 1
-			}
-			if i, ok := seen[a.AppID]; ok {
-				if ra.dlTotal > 0 {
-					apps[i].dlDone, apps[i].dlTotal, apps[i].paused = ra.dlDone, ra.dlTotal, ra.paused
+		for _, a := range found {
+			add(a)
+		}
+	}
+	if failed == 2 && ctx.Err() == nil {
+		// Both filtered lists were refused (a filter this Steam does not
+		// take): the unfiltered list once, keeping what is installed,
+		// changing or has bytes to download.
+		if found, err := list("none"); err == nil {
+			for _, a := range found {
+				if a.Installed || a.Changing || a.Total > 0 {
+					add(a)
 				}
-				apps[i].installed = apps[i].installed || ra.installed
-				continue
 			}
-			seen[a.AppID] = len(apps)
-			apps = append(apps, ra)
 		}
 	}
 	return apps
@@ -232,6 +284,9 @@ func steamListSteamPCApps(ctx context.Context, token, instance string) []steamRe
 
 // steamSteamPCAction installs or starts appid on a Steam PC.
 func steamSteamPCAction(ctx context.Context, instance string, appid int, action steamAction) error {
+	if steamIsShortcut(appid) {
+		return errSteamShortcutRunOnly
+	}
 	token, _, err := steamAccessToken(ctx)
 	if err != nil {
 		return err
@@ -271,8 +326,9 @@ type steamPeerLibrary struct {
 }
 
 // steamHandlePeerLibrary lists the games the Steam app on this computer has
-// installed or is downloading, for a paired handheld. Only paired devices
-// reach it (peerGuard).
+// installed or is downloading, and its non-Steam games (ids above 2^31,
+// steam_shortcuts.go; older handhelds just list them), for a paired
+// handheld. Only paired devices reach it (peerGuard).
 func steamHandlePeerLibrary(w http.ResponseWriter, r *http.Request, call peerCall) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET only", http.StatusMethodNotAllowed)

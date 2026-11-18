@@ -844,8 +844,9 @@ func voiceShortcutPromptWords() string {
 }
 
 // voiceShortcutScreenTarget is the Voice shortcuts page in the voice catalog.
-// Home search reaches the page through its Settings row; a voice command only
-// focuses a row, so "open voice shortcuts" gets the page itself here.
+// Home search and the voice catalogue press the Settings row of this name
+// (homeSearchScreens); this screen target is what a "screen" voice shortcut
+// and the ranking's screen preference find.
 func voiceShortcutScreenTarget() voiceTarget {
 	return voiceTarget{Title: "Voice shortcuts", Where: "Voice & AI", Icon: "mic",
 		Keys: "voice shortcuts teach a word custom voice commands words phrases", Kind: voiceTargetScreen,

@@ -15,6 +15,10 @@ package main
 //   - a password typed on the on-screen keyboard (a real one on a PC), through
 //     its own submit-only target (bootLockVKTarget), masked like the Wi-Fi key.
 //
+// Either can have a spoken phrase beside it (Voice unlock, bootlock_voice.go):
+// the phrase or the code ("either"), or the code and then the phrase ("both").
+// Never the phrase alone: speech recognition can let its owner down.
+//
 // When it locks (Settings → Privacy & data → Lock when): at power-on (the
 // default: bootOSPowerOnActive), every time JukaHub opens, or every start and
 // after the device slept (a JukaHub sleep flags it as it begins, powersleep.go;
@@ -218,6 +222,7 @@ func bootLockWhenFrom(m map[string]interface{}) string {
 
 // bootLockStoreFails sets the attempt counter in a Custom map (a JSON number,
 // as a reload reads it back).
+// Test seam (ARCH-8): only tests call it.
 func bootLockStoreFails(m map[string]interface{}, n int) {
 	m[bootLockFailsKey] = float64(n)
 }
@@ -293,6 +298,11 @@ var bootLock struct {
 
 	checking bool
 	result   chan bootLockResult
+	// checkFor is what the running check is for: a phrase's check leaves the
+	// code free to type (bootLockCodeFree), and a code submitted meanwhile is
+	// queued until it ends.
+	checkFor bootLockPurpose
+	queued   string
 
 	// waitUntil is the SDL tick (monotonic ms) before which no attempt counts.
 	waitUntil uint64
@@ -432,9 +442,13 @@ func bootLockReset() {
 	}
 	bootLock.entry = bootLock.entry[:0]
 	bootLock.first = ""
+	bootLock.queued = ""
 	bootLock.note, bootLock.warn = "", false
 	bootLock.power = false
 	bootLock.wantKeyboard = false
+	// The microphone, a phrase on its way and a voice setup go too
+	// (bootlock_voice.go).
+	bootLockVoiceReset()
 }
 
 // bootLockClose takes the overlay down.
@@ -489,6 +503,12 @@ func bootLockTick(config *Config) {
 		default:
 		}
 	}
+	if !bootLock.checking && bootLock.queued != "" {
+		// A code submitted while a phrase was being checked goes now.
+		s := bootLock.queued
+		bootLock.queued = ""
+		bootLockSubmit(config, s)
+	}
 	if bootLock.mode == bootLockModeOff {
 		return
 	}
@@ -513,6 +533,8 @@ func bootLockTick(config *Config) {
 		bootLock.wantKeyboard = false
 		bootLockOpenKeyboard()
 	}
+	// Voice unlock: listening, its answers, its checks (bootlock_voice.go).
+	bootLockVoiceTick(config)
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────
@@ -555,6 +577,11 @@ func bootLockCancel() {
 
 // bootLockSubmit is one complete entry: the code's presses or the password.
 func bootLockSubmit(config *Config, secret string) {
+	if bootLockCodeFree() && secret != "" {
+		// A heard phrase is being checked: this code is next (bootLockTick).
+		bootLock.queued = secret
+		return
+	}
 	if bootLock.checking || config == nil || bootLock.mode == bootLockModeOff {
 		return
 	}
@@ -642,7 +669,7 @@ func bootLockTooShort(kind, secret string) string {
 // bootLockRun does the slow part on its own goroutine; the frame picks the
 // result up (bootLockTick).
 func bootLockRun(purpose bootLockPurpose, work func() bootLockResult) {
-	bootLock.checking = true
+	bootLock.checking, bootLock.checkFor = true, purpose
 	ch := make(chan bootLockResult, 1)
 	bootLock.result = ch
 	go func() {
@@ -659,11 +686,21 @@ func bootLockRun(purpose bootLockPurpose, work func() bootLockResult) {
 
 // bootLockFinish applies a check's or a hash's result. Main thread.
 func bootLockFinish(config *Config, r bootLockResult) {
+	// A phrase's check or hash (bootlock_voice.go) leaves a code being typed
+	// alone.
+	if bootLockVoiceFinish(config, r) {
+		return
+	}
 	bootLockClearEntry()
 	switch r.purpose {
 	case bootLockForUnlock, bootLockForCurrent:
 		if !r.ok {
 			bootLockWrong(config)
+			return
+		}
+		// A "both" voice lock asks for the phrase next, with the "never
+		// unlocked" mark still set (bootlock_voice.go).
+		if r.purpose == bootLockForUnlock && bootLockVoiceSecondStep(config) {
 			return
 		}
 		if bootLockFailsFrom(config.Variables.Custom) != 0 || bootLockPendingFrom(config.Variables.Custom) {
@@ -685,7 +722,14 @@ func bootLockFinish(config *Config, r bootLockResult) {
 		if bootLock.mode != bootLockModeSetup {
 			return
 		}
+		if bootLockVoice.setup {
+			// Voice unlock's setup: off, a mode, or the phrase twice.
+			bootLockVoiceAfterCurrent(config)
+			return
+		}
 		if bootLock.target == "" {
+			// The phrase only ever goes with a code.
+			bootLockVoiceForget(config)
 			bootLockWrite(config, bootLockSecretKey, "")
 			logInfo("lock", "startup lock: turned off")
 			bootLockClose()
@@ -706,6 +750,11 @@ func bootLockFinish(config *Config, r bootLockResult) {
 			PlayErrorSound()
 			ShowToast("Startup lock: the code could not be saved", ToastKindWarning)
 			return
+		}
+		if _, had := bootLockParse(bootLockSecretFrom(config.Variables.Custom)); !had {
+			// A phrase left from a lock removed by hand (the forgot hint) must
+			// not come back with a new code.
+			bootLockVoiceForget(config)
 		}
 		bootLockWrite(config, bootLockSecretKey, r.hash)
 		if bootLockPendingFrom(config.Variables.Custom) {
@@ -824,7 +873,10 @@ func bootLockEvent(config *Config, event sdl.Event) bool {
 				vkHandlePointerDown(kmx, kmy, vkHoldMouse, config)
 			}
 		}
-	case *sdl.TextEditingEvent, *sdl.ControllerAxisEvent, *sdl.JoyButtonEvent, *sdl.JoyAxisEvent,
+	case *sdl.ControllerAxisEvent:
+		// R2 is "say the phrase" (bootlock_voice.go); nothing behind sees it.
+		bootLockAxis(config, e)
+	case *sdl.TextEditingEvent, *sdl.JoyButtonEvent, *sdl.JoyAxisEvent,
 		*sdl.JoyHatEvent, *sdl.JoyBallEvent, *sdl.MouseMotionEvent, *sdl.MouseWheelEvent,
 		*sdl.TouchFingerEvent, *sdl.MultiGestureEvent, *sdl.DollarGestureEvent, *sdl.DropEvent:
 		// Input nothing behind the lock may see.
@@ -896,7 +948,14 @@ func bootLockPad(config *Config, e *sdl.ControllerButtonEvent) {
 		}
 		return
 	}
-	if bootLock.checking {
+	if bootLock.checking && !bootLockCodeFree() {
+		return
+	}
+	if bootLockVoiceStepActive() {
+		// The phrase is wanted, not the code (bootlock_voice.go).
+		if e.Which != padRepeatWhich {
+			bootLockVoicePad(config, b)
+		}
 		return
 	}
 	if bootLock.kind == bootLockKindPassword {
@@ -955,7 +1014,7 @@ func bootLockKey(config *Config, e *sdl.KeyboardEvent) {
 		}
 		return
 	}
-	if bootLock.checking {
+	if bootLock.checking && !bootLockCodeFree() {
 		return
 	}
 	if bootLockTyping() {
@@ -968,6 +1027,15 @@ func bootLockKey(config *Config, e *sdl.KeyboardEvent) {
 		return
 	}
 	if e.Repeat != 0 {
+		return
+	}
+	if bootLockVoiceStepActive() {
+		bootLockVoiceKeyPress(config, sym)
+		return
+	}
+	if sym == sdl.K_v && bootLockVoiceEitherUp(config) {
+		// V is R2's keyboard twin: say the phrase (no code key uses it).
+		bootLockVoicePress(config)
 		return
 	}
 	if bootLock.kind == bootLockKindPassword {
@@ -1062,7 +1130,7 @@ func bootLockBackspace() {
 // bootLockOpenKeyboard opens the on-screen keyboard for the password. It
 // starts empty and never shows what was typed.
 func bootLockOpenKeyboard() {
-	if bootLock.mode == bootLockModeOff || bootLock.checking {
+	if bootLock.mode == bootLockModeOff || (bootLock.checking && !bootLockCodeFree()) || bootLockVoiceStepActive() {
 		return
 	}
 	if (bootLock.mode == bootLockModeLocked || bootLock.step == bootLockStepCurrent) && bootLockWaitLeft() > 0 {

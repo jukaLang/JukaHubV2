@@ -37,13 +37,22 @@ const (
 	// ttsFirstChunk avoids joining short sentences into a long first request.
 	ttsFirstChunk = 30
 	// Even a single long sentence starts with a small piece, so Piper can
-	// play it while the rest of the line is being rendered.
-	ttsFirstChunkMax = 64
+	// play it while the rest of the line is being rendered. Piper hands a
+	// piece back only when all of it is made, so the first sound waits for the
+	// whole first piece: about six words (a pause such as a comma preferred)
+	// is under two seconds of speech. A first sentence of at most
+	// ttsFirstChunkWhole bytes stays whole: cutting "…Miyamoto" from "in
+	// 1981." saves little and sounds broken.
+	ttsFirstChunkMax   = 40
+	ttsFirstChunkWhole = 56
 	// ttsPiperLineMax is the longest line Piper is given (ttsPiperLines). On
-	// the Smart Pro Piper renders about as fast as it speaks, and it hands a
-	// line back only when all of it is made: a piece much longer than the one
-	// playing leaves a silence while it is still being rendered.
-	ttsPiperLineMax = 80
+	// the Smart Pro Piper renders not much faster than it speaks, and it hands
+	// a line back only when all of it is made: a piece much longer than the
+	// one playing leaves a silence while it is still being rendered. So the
+	// first line of a chunk is at most ttsPiperFirstLineMax: after the short
+	// first chunk the lines grow in steps the voice can keep ahead of.
+	ttsPiperLineMax      = 80
+	ttsPiperFirstLineMax = 56
 	// ttsInlineCodeMax is the longest inline code that is still read out.
 	ttsInlineCodeMax = 40
 	// ttsRestOnScreen is said when an answer was cut short.
@@ -273,7 +282,7 @@ func ttsChunks(sentences []string, max int) []string {
 // ttsSplitFirst caps only the first piece of a long opening sentence.
 // Later pieces retain the normal size to avoid unnecessary voice requests.
 func ttsSplitFirst(s string, max int) []string {
-	if len(s) <= ttsFirstChunkMax || max <= ttsFirstChunkMax {
+	if len(s) <= ttsFirstChunkWhole || max <= ttsFirstChunkMax {
 		return ttsSplitLong(s, max)
 	}
 	firstPieces := ttsSplitLong(s, ttsFirstChunkMax)
@@ -287,10 +296,19 @@ func ttsSplitFirst(s string, max int) []string {
 
 // ttsPiperLines cuts a chunk into the lines Piper is given, one sound each:
 // its sentences, and a long sentence at a pause (or a space) so no line is
-// longer than ttsPiperLineMax bytes. Nothing is dropped. Pure.
+// longer than ttsPiperLineMax bytes — the chunk's first line no longer than
+// ttsPiperFirstLineMax. Nothing is dropped. Pure.
 func ttsPiperLines(chunk string) []string {
 	var out []string
 	for _, s := range ttsSentences(chunk) {
+		if s = strings.TrimSpace(s); len(out) == 0 && len(s) > ttsPiperFirstLineMax {
+			// Not when it would leave a scrap of two or three words.
+			first := ttsSplitLong(s, ttsPiperFirstLineMax)[0]
+			if rest := strings.TrimSpace(strings.TrimPrefix(s, first)); len(rest) >= 16 {
+				out = append(out, first)
+				s = rest
+			}
+		}
 		out = append(out, ttsSplitLong(s, ttsPiperLineMax)...)
 	}
 	if len(out) == 0 && strings.TrimSpace(chunk) != "" {

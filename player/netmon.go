@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,15 @@ type netMonitor struct {
 	// probed is closed when a probe finishes, waking netWaitOnline's callers;
 	// the next waiter makes a fresh one.
 	probed chan struct{}
+	// stale is set while the verdict belongs to a network the radio is
+	// leaving or has just left (netNetworkSwitching): IsOnline answers false
+	// and NetworkStatus "checking..." until a probe that started after the
+	// move answers. switching counts the moves under way, and switchGen
+	// counts their starts and ends, so a probe that ran across one is known
+	// for what it is and its answer dropped.
+	stale     bool
+	switching int
+	switchGen uint64
 }
 
 // netWakeWindow is the minute after a wake in which the device is expected to
@@ -88,11 +98,22 @@ var netProbeNudge = make(chan struct{}, 1)
 // IsOnline returns whether the last connectivity probe succeeded. Before the
 // first probe completes it returns true (optimistic) so the app doesn't
 // show an offline banner during startup.
+//
+// An answer from before a sleep or from the network the radio just left is
+// not repeated: inside a wake's reconnect window (until the internet answers)
+// and while the radio moves to another network (netNetworkSwitching) it is
+// false, so a feature that starts a request in the first second after a wake
+// or a join does not send it into a radio that is still coming back. Callers
+// that can wait for the reconnect use netWaitOnline; netReconnecting tells
+// "reconnecting" from "offline".
 func IsOnline() bool {
 	netMon.mu.RLock()
 	defer netMon.mu.RUnlock()
 	if !netMon.checked {
 		return true
+	}
+	if netMon.stale || (netMon.wake.open && time.Since(netMon.wake.at) < netWakeWindowLen) {
+		return false
 	}
 	return netMon.online
 }
@@ -101,17 +122,19 @@ func IsOnline() bool {
 func NetworkStatus() string {
 	netMon.mu.RLock()
 	defer netMon.mu.RUnlock()
-	if !netMon.checked {
+	if !netMon.checked || netMon.stale {
 		return "checking..."
-	}
-	if netMon.online {
-		return "online"
 	}
 	if netMon.portal != "" {
 		return "sign-in required"
 	}
 	if netMon.wake.open && time.Since(netMon.wake.at) < netWakeWindowLen {
+		// Before the wake's first probe the last answer is the pre-sleep
+		// one: not "online" yet.
 		return "reconnecting…"
+	}
+	if netMon.online {
+		return "online"
 	}
 	if netMon.reason != "" {
 		return "offline (" + netMon.reason + ")"
@@ -156,12 +179,10 @@ var netProbeClient = &http.Client{
 	},
 }
 
-// probeConnectivity performs one connectivity check against the first endpoint
-// that answers, and reports a portal's sign-in page when it finds one.
-func probeConnectivity() netProbeResult { return probeConnectivityWithin(0) }
-
-// probeConnectivityWithin is probeConnectivity with the whole check bounded by
-// budget (0: each endpoint has the client's own timeout). Inside a wake's
+// probeConnectivityWithin performs one connectivity check against the first
+// endpoint that answers, and reports a portal's sign-in page when it finds one.
+// The whole check is bounded by budget (0: each endpoint has the client's own
+// timeout). Inside a wake's
 // reconnect window a link that is still down must not hold the probe for
 // twelve seconds — three endpoints times four — while the radio comes back
 // underneath it: the next probe is 1.5 s away anyway.
@@ -261,10 +282,22 @@ const (
 // lock, so two probes finishing together still close a window, log a wake or
 // show a toast once.
 func (m *netMonitor) update() {
+	m.mu.RLock()
+	gen := m.switchGen
+	m.mu.RUnlock()
 	result := probeConnectivityWithin(m.probeBudget())
 	now := time.Now()
 
 	m.mu.Lock()
+	if m.switching > 0 || m.switchGen != gen {
+		// The radio moved to another network, or off one, while this probe
+		// ran: its answer may be about the network that was left, and an
+		// "Offline" toast in the middle of a join is noise. It is dropped;
+		// the move's end asks for the probe that counts (netNetworkSwitching).
+		m.mu.Unlock()
+		return
+	}
+	m.stale = false
 	firstCheck := !m.checked
 	prevPortal := m.portal
 	changed := m.checked && result.online != m.online
@@ -343,6 +376,10 @@ func (m *netMonitor) update() {
 	// Network time follows the connection (ntpsync.go): on every connect and
 	// hourly while online. A captive portal is not online.
 	netTimeAfterProbe(result.online, result.online && (firstCheck || changed))
+	if result.portal != "" {
+		// While a sign-in is wanted, leaving the Browser probes at once.
+		netPortalWatch()
+	}
 
 	switch notice {
 	case netNoticePortal:
@@ -453,6 +490,90 @@ func netNudge() {
 	}
 }
 
+// netNetworkSwitching marks the connectivity verdict stale while the radio
+// moves to another network or off one (the Wi-Fi page's join, reconnect,
+// disconnect and forget: wifi_ui.go; every radio or airplane switch, from any
+// place: setWifiEnabled and setAirplaneMode). Until a probe that starts
+// after the move answers, IsOnline is false, NetworkStatus says
+// "checking...", and the sign-in page of the network being left is forgotten,
+// so the Wi-Fi page no longer offers a portal that belongs to another network.
+// The returned func ends the move and asks for that probe at once. Before the
+// monitor's first probe (it is not running, or has not answered yet) nothing
+// is marked: the move only asks for a probe. Any goroutine; use as
+// `defer netNetworkSwitching()()`.
+func netNetworkSwitching() func() {
+	netMon.mu.Lock()
+	marked := netMon.checked
+	if marked {
+		netMon.switching++
+		netMon.switchGen++
+		netMon.stale = true
+		netMon.portal = ""
+	}
+	netMon.mu.Unlock()
+	if marked {
+		publishCustom("network_status", NetworkStatus())
+	}
+	return func() {
+		if marked {
+			netMon.mu.Lock()
+			netMon.switching--
+			netMon.switchGen++
+			netMon.mu.Unlock()
+		}
+		netNudge()
+	}
+}
+
+// netPortalWatchPoll is how often the portal watcher looks whether the
+// sign-in is still wanted while no screen changes.
+const netPortalWatchPoll = 15 * time.Second
+
+// netPortalWatching is set while netPortalWatch's goroutine runs.
+var netPortalWatching atomic.Bool
+
+// netPortalWatch probes the moment the Browser is left while a captive portal
+// wants a sign-in: the user has just signed in (or given up), and downloads,
+// updates and Chat should not wait for the probe's next turn to find out. It
+// follows the scene-work scope (scenetasks.go), whose context ends the instant
+// a screen is left, so it sleeps between screen changes; it ends with the
+// portal. One at a time; any goroutine.
+func netPortalWatch() {
+	if !netPortalWatching.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer netPortalWatching.Store(false)
+		poll := time.NewTimer(netPortalWatchPoll)
+		defer poll.Stop()
+		for PortalSignInURL() != "" {
+			ctx := sceneWorkContext()
+			scene := currentSceneWorkName()
+			if ctx.Err() != nil || sceneWorkContext() != ctx {
+				// Between screens: the next one's scope starts when its
+				// fade ends.
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			if !poll.Stop() {
+				select {
+				case <-poll.C:
+				default:
+				}
+			}
+			poll.Reset(netPortalWatchPoll)
+			select {
+			case <-ctx.Done():
+				if scene == browserSceneName {
+					logInfo("net", "the Browser closed while Wi-Fi wanted a sign-in: checking the connection now")
+					netNudge()
+				}
+			case <-poll.C:
+			}
+		}
+	}()
+}
+
 // netWakeNoted opens the reconnect window for a wake (wake_resume.go) and asks
 // for a probe now. A device that was offline before it slept has nothing to
 // reconnect to: it is probed at once all the same, but nothing waits for it.
@@ -465,6 +586,8 @@ func netWakeNoted() {
 	// radio; reused, it would hold the first probe for its whole budget
 	// instead of dialling afresh.
 	netProbeClient.CloseIdleConnections()
+	// The browser's pooled connections died the same way (browsercookies.go).
+	browserSharedTransport().CloseIdleConnections()
 	netNudge()
 }
 
@@ -708,8 +831,8 @@ func refreshToolHealth() {
 		// voice, which waits for it.
 		sttAutoInstallOffline()
 		ttsAutoInstallOfflineVoice()
-		// The natural voice comes after Piper (tts_phonon_install.go).
-		ttsPhononAutoInstall()
+		// The natural voice is gone (2026-11-17): its files leave the card.
+		ttsRemoveNaturalVoice()
 	}
 }
 

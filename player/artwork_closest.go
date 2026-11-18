@@ -9,8 +9,14 @@ package main
 // the cover whose title shares the most words with the ROM's is taken, as
 // long as it shares enough of them that it is plausibly the same game (or at
 // least the same series).
+//
+// 2026-11-17 (Juka: "better to get more pics than less"): the bar is lower,
+// a title that is clearly the best on the list is taken even below it, a
+// sequel's cover stands in for another number of the same series, and
+// "game"/"games" count as little as "of".
 
 import (
+	"sort"
 	"strings"
 )
 
@@ -19,17 +25,25 @@ import (
 var artworkStopWords = map[string]bool{
 	"of": true, "in": true, "on": true, "to": true, "for": true, "vs": true,
 	"de": true, "la": true, "le": true, "no": true, "at": true, "with": true,
+	"game": true, "games": true, "from": true, "by": true,
 }
 
 const (
 	// artworkClosestMinScore and artworkClosestMinCover are how alike the best
 	// title must be: its overall score, and the share of the ROM's own words
 	// it contains.
-	artworkClosestMinScore = 0.45
-	artworkClosestMinCover = 0.5
+	artworkClosestMinScore = 0.32
+	artworkClosestMinCover = 0.34
+	// A title below that bar is still taken when it is clearly the best on
+	// the list: at least these, artworkClosestLead ahead of the next other
+	// title, and sharing a real word of artworkClosestLeadWord letters.
+	artworkClosestLeadScore = 0.22
+	artworkClosestLeadCover = 0.25
+	artworkClosestLead      = 0.15
+	artworkClosestLeadWord  = 4
 	// artworkClosestMinLoose is the shortest run of letters a joined-up name
 	// ("SuperMarioWorld2") may be matched on by its start alone.
-	artworkClosestMinLoose = 6
+	artworkClosestMinLoose = 5
 )
 
 // artworkClosestWords are a title's comparable words without the loose drop
@@ -64,7 +78,7 @@ func artworkIsNumber(w string) bool {
 }
 
 // artworkWordsAlike reports how well two different words match: 0.6 when one
-// starts the other and is at most four letters longer ("bros" / "brothers"), 0.8 for a one-letter slip in a long
+// starts the other and is at most five letters longer ("bros" / "brothers"), 0.8 for a one-letter slip in a long
 // word ("saphire" / "sapphire"), else 0. Numbers must be equal.
 func artworkWordsAlike(a, b string) float64 {
 	if artworkIsNumber(a) || artworkIsNumber(b) {
@@ -76,7 +90,7 @@ func artworkWordsAlike(a, b string) float64 {
 	}
 	// Only a few letters longer: "super" does not start "supermarioworld2"
 	// in this sense (closestJoined handles joined-up names).
-	if len(short) >= 4 && len(long)-len(short) <= 4 && strings.HasPrefix(long, short) {
+	if len(short) >= 4 && len(long)-len(short) <= 5 && strings.HasPrefix(long, short) {
 		return 0.6
 	}
 	if len(short) >= 5 && len(long)-len(short) <= 1 && artworkOneEdit(a, b) {
@@ -168,12 +182,12 @@ func artworkClosestScore(rom, cand []string) (score, cover float64) {
 			}
 		}
 		if !shared {
-			score -= 0.3
+			score -= 0.2
 		}
 	case len(romNums) > 0:
-		score -= 0.1
-	case len(candNums) > 0:
 		score -= 0.05
+	case len(candNums) > 0:
+		score -= 0.03
 	}
 	return score, cover
 }
@@ -212,7 +226,17 @@ func (idx *artworkIndex) closest(stem string) (string, bool) {
 		romTokens = artworkMatchTokens(alias)
 	}
 	rom := artworkClosestWords(romTokens)
-	if len(rom) == 0 {
+	// Stop words alone ("Of the Game") never pick a cover: not by the score,
+	// and not by closestJoined, whose 5-letter run "ofgame" would otherwise
+	// start some title.
+	realWord := false
+	for _, w := range rom {
+		if !artworkStopWords[w] {
+			realWord = true
+			break
+		}
+	}
+	if !realWord {
 		return "", false
 	}
 	idx.closestSetup()
@@ -248,13 +272,21 @@ func (idx *artworkIndex) closest(stem string) (string, bool) {
 	}
 
 	bestI, bestScore, bestTag := -1, 0.0, 0
+	// The best title under the bar, and the best score of any other title,
+	// for the "clearly ahead" rule.
+	lowI, lowScore, lowTag, lowCover := -1, 0.0, 0, 0.0
 	for i := range cands {
 		cand := artworkClosestWords(strings.Fields(idx.keys[i]))
 		score, cover := artworkClosestScore(rom, cand)
+		tag := artworkCandidateScore(tags, idx.names[i])
 		if cover < artworkClosestMinCover || score < artworkClosestMinScore {
+			if cover >= artworkClosestLeadCover && score >= artworkClosestLeadScore && artworkSharesRealWord(rom, cand) &&
+				(lowI < 0 || score > lowScore+1e-9 ||
+					(score > lowScore-1e-9 && (tag > lowTag || (tag == lowTag && artworkNameBefore(idx.names[i], idx.names[lowI]))))) {
+				lowI, lowScore, lowTag, lowCover = i, score, tag, cover
+			}
 			continue
 		}
-		tag := artworkCandidateScore(tags, idx.names[i])
 		if bestI < 0 || score > bestScore+1e-9 ||
 			(score > bestScore-1e-9 && (tag > bestTag || (tag == bestTag && artworkNameBefore(idx.names[i], idx.names[bestI])))) {
 			bestI, bestScore, bestTag = i, score, tag
@@ -263,13 +295,48 @@ func (idx *artworkIndex) closest(stem string) (string, bool) {
 	if bestI >= 0 {
 		return idx.names[bestI], true
 	}
-	return idx.closestJoined(rom, tags)
+	if name, ok := idx.closestJoined(rom, tags); ok {
+		return name, true
+	}
+	if lowI >= 0 && lowCover > 0 {
+		// Clearly ahead: no other title (other releases of the same title
+		// aside) comes within artworkClosestLead of it.
+		runnerUp := 0.0
+		for i := range cands {
+			if idx.keys[i] == idx.keys[lowI] {
+				continue
+			}
+			score, _ := artworkClosestScore(rom, artworkClosestWords(strings.Fields(idx.keys[i])))
+			runnerUp = max(runnerUp, score)
+		}
+		if lowScore-runnerUp >= artworkClosestLead {
+			return idx.names[lowI], true
+		}
+	}
+	return "", false
+}
+
+// artworkSharesRealWord reports whether rom and cand share a word that is not
+// a stop word and has at least artworkClosestLeadWord letters, so a title is
+// never taken for sharing "of" or "3D".
+func artworkSharesRealWord(rom, cand []string) bool {
+	for _, w := range rom {
+		if len(w) < artworkClosestLeadWord || artworkStopWords[w] || artworkIsNumber(w) {
+			continue
+		}
+		for _, c := range cand {
+			if c == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // closestJoined matches a name typed without spaces ("SuperMarioWorld2") by
 // the start of the joined-up titles: the cover whose joined title and the
 // ROM's share the longest start, at least artworkClosestMinLoose letters and
-// most of the shorter one.
+// 70 % of the shorter one.
 func (idx *artworkIndex) closestJoined(rom, tags []string) (string, bool) {
 	joined := strings.Join(rom, "")
 	if len(joined) < artworkClosestMinLoose {
@@ -288,7 +355,7 @@ func (idx *artworkIndex) closestJoined(rom, tags []string) (string, bool) {
 		}
 		// The shorter of the two must be (nearly) all shared: "supermario"
 		// in "supermarioworld2", not "superm" of "supermetroid".
-		if n < artworkClosestMinLoose || n*10 < short*8 {
+		if n < artworkClosestMinLoose || n*10 < short*7 {
 			continue
 		}
 		switch {
@@ -302,4 +369,83 @@ func (idx *artworkIndex) closestJoined(rom, tags []string) (string, bool) {
 		return "", false
 	}
 	return idx.best(best, tags), true
+}
+
+// closestN is the Choose cover list (GAME-7, artwork_choose.go): up to n cover
+// names most like stem, best first. The cover match would take comes first;
+// then every title that shares a word with the ROM's, exactly or nearly,
+// ordered by artworkClosestScore with no bar — the user looks at each one, so
+// a weak candidate is still worth showing. The releases of one title count
+// once, as the release that suits the ROM's tags.
+func (idx *artworkIndex) closestN(stem string, n int) []string {
+	stem = strings.TrimSpace(stem)
+	if idx == nil || len(idx.names) == 0 || stem == "" || n <= 0 {
+		return nil
+	}
+	out := make([]string, 0, n)
+	taken := map[string]bool{}
+	if name, ok := idx.match(stem); ok {
+		out = append(out, name)
+		if i, ok := idx.exact[strings.ToLower(name)]; ok {
+			taken[idx.keys[i]] = true
+		}
+	}
+	romTokens := artworkMatchTokens(stem)
+	if alias, ok := artworkAliasFor(stem); ok {
+		romTokens = artworkMatchTokens(alias)
+	}
+	rom := artworkClosestWords(romTokens)
+	idx.closestSetup()
+	byKey := map[string][]int{}
+	add := func(list []int) {
+		for _, i := range list {
+			if key := idx.keys[i]; key != "" && !taken[key] {
+				byKey[key] = append(byKey[key], i)
+			}
+		}
+	}
+	for _, w := range rom {
+		if artworkStopWords[w] {
+			continue
+		}
+		add(idx.byWord[w])
+		for word, list := range idx.byWord {
+			if word != w && artworkWordsAlike(w, word) > 0 {
+				add(list)
+			}
+		}
+	}
+	type scored struct {
+		key   string
+		score float64
+	}
+	ranked := make([]scored, 0, len(byKey))
+	for key, list := range byKey {
+		// add may file one cover twice (an exact word and an alike one).
+		seen := map[int]bool{}
+		kept := list[:0]
+		for _, i := range list {
+			if !seen[i] {
+				seen[i] = true
+				kept = append(kept, i)
+			}
+		}
+		byKey[key] = kept
+		score, _ := artworkClosestScore(rom, artworkClosestWords(strings.Fields(key)))
+		ranked = append(ranked, scored{key, score})
+	}
+	sort.Slice(ranked, func(a, b int) bool {
+		if ranked[a].score != ranked[b].score {
+			return ranked[a].score > ranked[b].score
+		}
+		return ranked[a].key < ranked[b].key
+	})
+	tags := artworkTags(stem)
+	for _, r := range ranked {
+		if len(out) >= n {
+			break
+		}
+		out = append(out, idx.best(byKey[r.key], tags))
+	}
+	return out
 }

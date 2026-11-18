@@ -3,10 +3,10 @@ package main
 // plugnative.go — the bundled plugins, written in Go.
 //
 // Every plugin that ships with JukaHub is a shell script, and Windows has no
-// sh unless Git for Windows happens to be installed. So on Windows nine of the
-// thirteen bundled plugins said "Can't run here", their buttons were greyed
-// out, and switching one on or off visibly changed nothing. The same scripts
-// on the handheld also paid a fork of sh (plus awk, sed, date…) per press.
+// sh unless Git for Windows happens to be installed. So on Windows most of the
+// bundled plugins said "Can't run here", their buttons were greyed out, and
+// switching one on or off visibly changed nothing. The same scripts on the
+// handheld also paid a fork of sh (plus awk, sed, date…) per press.
 //
 // Each bundled plugin's actions now also exist here. The runner (plugExecute)
 // uses the Go version when the plugin is a stock JukaHub one and either its
@@ -17,7 +17,8 @@ package main
 //
 // Nothing here touches the interface: these run on the plugin goroutine and
 // only return text. Actions that change JukaHub itself (apply a theme, open
-// the game library…) are in plughooks.go and run on the main thread.
+// the game library…) are in plughooks.go and run on the main thread. The two
+// bigger tools — Save guard and Library doctor — are in plugnative_tools.go.
 
 import (
 	"errors"
@@ -29,7 +30,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/host"
@@ -37,7 +37,7 @@ import (
 )
 
 // plugNativeAuthor is the author every bundled manifest carries. A user's own
-// plugin that happens to share a bundled folder name ("clock") is not taken
+// plugin that happens to share a bundled folder name ("notes") is not taken
 // over by the Go version unless it also claims to be JukaHub's.
 const plugNativeAuthor = "JukaHub"
 
@@ -51,26 +51,17 @@ var plugNativeRunners map[string]plugNativeFunc
 
 func init() {
 	plugNativeRunners = map[string]plugNativeFunc{
-		"classicpack":  plugNativeClassicPack,
-		"clock":        plugNativeClock,
-		"dice":         plugNativeDice,
-		"gamepick":     plugNativeGamePick,
-		"hello":        plugNativeHello,
-		"neontheme":    plugNativeNeonTheme,
-		"notes":        plugNativeNotes,
-		"padprofiles":  plugNativePadProfiles,
-		"quote":        plugNativeQuote,
-		"retroformats": plugNativeRetroFormats,
-		"sysinfo":      plugNativeSysinfo,
-		"tips":         plugNativeTips,
-		"worldclock":   plugNativeWorldClock,
+		"classicpack":   plugNativeClassicPack,
+		"gamepick":      plugNativeGamePick,
+		"librarydoctor": plugNativeLibraryDoctor,
+		"neontheme":     plugNativeNeonTheme,
+		"notes":         plugNativeNotes,
+		"padprofiles":   plugNativePadProfiles,
+		"retroformats":  plugNativeRetroFormats,
+		"saveguard":     plugNativeSaveGuard,
+		"sysinfo":       plugNativeSysinfo,
 	}
 }
-
-// plugNativeClock12 mirrors the user's 12-hour clock setting for the plugin
-// goroutine, which must not read the config. The main thread stores it every
-// time it starts an action (plugDispatch).
-var plugNativeClock12 atomic.Bool
 
 // plugNativeFor returns the Go version of a plugin, or nil when it has none.
 func plugNativeFor(info PluginInfo) plugNativeFunc {
@@ -143,42 +134,9 @@ func plugVar(vars map[string]interface{}, key string) string {
 	return strings.TrimSpace(fmt.Sprint(v))
 }
 
-// plugVarOff reports whether a variable is set to an "off" word.
-func plugVarOff(vars map[string]interface{}, key string) bool {
-	switch strings.ToLower(plugVar(vars, key)) {
-	case "0", "false", "no", "off":
-		return true
-	}
-	return false
-}
-
-// plugVarOn reports whether a variable is set to an "on" word.
-func plugVarOn(vars map[string]interface{}, key string) bool {
-	switch strings.ToLower(plugVar(vars, key)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
 // plugUnknown is the error for an action a plugin does not have.
 func plugUnknown(action, try string) error {
 	return fmt.Errorf("unknown action %q (try %s)", action, try)
-}
-
-// plugClockLayout is the time layout for a plugin: the user's clock setting,
-// unless the plugin's own variable (clock_24h, worldclock_24h) says otherwise.
-func plugClockLayout(vars map[string]interface{}, key string) string {
-	h12 := plugNativeClock12.Load()
-	if plugVarOff(vars, key) {
-		h12 = true
-	} else if plugVarOn(vars, key) {
-		h12 = false
-	}
-	if h12 {
-		return "3:04 PM"
-	}
-	return "15:04"
 }
 
 // plugHumanBytes turns a byte count into a short size: 2.0G, 512M, 80K.
@@ -196,93 +154,21 @@ func plugHumanBytes(b uint64) string {
 	}
 }
 
-// ── Clock ─────────────────────────────────────────────────────────────────
-
-func plugNativeClock(action string, vars map[string]interface{}, _ string) (string, error) {
-	now := time.Now()
-	layout := plugClockLayout(vars, "clock_24h")
-	switch action {
-	case "now":
-		return now.Format(layout), nil
-	case "date":
-		return now.Format("Mon 02 Jan 2006"), nil
-	case "both":
-		return now.Format("Mon 02 Jan · " + layout), nil
-	case "uptime":
-		up, err := plugUptime()
-		if err != nil || up <= 0 {
-			return "Uptime unavailable on this system", nil
-		}
-		return "Up " + plugDuration(up), nil
+// plugClip shortens s to n runes with an ellipsis.
+func plugClip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
 	}
-	return "", plugUnknown(action, "now, date, both, uptime")
-}
-
-// plugUptime asks gopsutil, which can panic on unusual systems.
-func plugUptime() (d time.Duration, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			d, err = 0, fmt.Errorf("uptime: %v", r)
-		}
-	}()
-	secs, err := host.Uptime()
-	if err != nil {
-		return 0, err
-	}
-	return time.Duration(secs) * time.Second, nil
-}
-
-// plugDuration prints "2d 3h 4m", "3h 4m" or "4m".
-func plugDuration(d time.Duration) string {
-	mins := int(d / time.Minute)
-	days, hours, m := mins/1440, (mins%1440)/60, mins%60
-	switch {
-	case days > 0:
-		return fmt.Sprintf("%dd %dh %dm", days, hours, m)
-	case hours > 0:
-		return fmt.Sprintf("%dh %dm", hours, m)
-	}
-	return fmt.Sprintf("%dm", m)
-}
-
-// ── Dice ──────────────────────────────────────────────────────────────────
-
-func plugNativeDice(action string, vars map[string]interface{}, _ string) (string, error) {
-	switch action {
-	case "roll":
-		sides := 6
-		if s := plugVar(vars, "dice_sides"); s != "" {
-			n, err := strconv.Atoi(s)
-			if err != nil {
-				return "", fmt.Errorf("sides must be a number, not %s", s)
-			}
-			sides = n
-		}
-		if sides < 2 || sides > 1000 {
-			return "", errors.New("sides must be between 2 and 1000")
-		}
-		return fmt.Sprintf("Rolled %d of %d", rand.IntN(sides)+1, sides), nil
-	case "coin":
-		if rand.IntN(2) == 0 {
-			return "Heads", nil
-		}
-		return "Tails", nil
-	case "pick":
-		list := plugVar(vars, "dice_list")
-		if list == "" {
-			list = "heads,tails"
-		}
-		items := strings.Split(list, ",")
-		chosen := strings.TrimSpace(items[rand.IntN(len(items))])
-		if chosen == "" {
-			chosen = "(empty entry)"
-		}
-		return "Picked: " + chosen, nil
-	}
-	return "", plugUnknown(action, "roll, coin, pick")
+	return string(r[:n-1]) + "…"
 }
 
 // ── Random game ───────────────────────────────────────────────────────────
+//
+// "Pick a game for me" is a JukaHub action (@random-game, plughooks.go): it
+// rolls in the library itself and lands the highlight on the pick, so A plays
+// it. What is left here is the count, and the old toast-only pick for config
+// buttons that still name it.
 
 // plugGameSkipExt are files in a Roms folder that are not games.
 var plugGameSkipExt = map[string]bool{
@@ -291,8 +177,9 @@ var plugGameSkipExt = map[string]bool{
 	".bak": true, ".nfo": true, ".md": true, ".dat": true, ".webp": true, ".gif": true,
 }
 
-// plugGameSkipDir are artwork and metadata folders inside a system folder.
-var plugGameSkipDir = map[string]bool{"imgs": true, "media": true, "images": true, "boxart": true, "snap": true, "snaps": true}
+// plugGameSkipDir are artwork and metadata folders inside a system folder,
+// by lower-case name (".media" is NextUI's, ".res" MinUI's).
+var plugGameSkipDir = map[string]bool{"imgs": true, "media": true, ".media": true, ".res": true, "images": true, "boxart": true, "snap": true, "snaps": true}
 
 // plugGameScanCap bounds the walk on a huge card.
 const plugGameScanCap = 60000
@@ -329,7 +216,7 @@ func plugNativeGamePick(action string, vars map[string]interface{}, _ string) (s
 		}
 		return fmt.Sprintf("Try: %s (%s)", chosen.Name, chosen.System), nil
 	}
-	return "", plugUnknown(action, "pick, count")
+	return "", plugUnknown(action, "count, pick")
 }
 
 // plugGameRoots is where games are looked for: the variable when it is set,
@@ -386,7 +273,7 @@ func plugWalkSystem(dir, system string, depth int, visit func(plugGame), budget 
 	n := 0
 	for _, e := range entries {
 		name := e.Name()
-		if strings.HasPrefix(name, ".") {
+		if skipScanEntryName(name) {
 			continue
 		}
 		if e.IsDir() {
@@ -410,32 +297,13 @@ func plugWalkSystem(dir, system string, depth int, visit func(plugGame), budget 
 	return n
 }
 
-// ── Hello ─────────────────────────────────────────────────────────────────
-
-func plugNativeHello(action string, vars map[string]interface{}, _ string) (string, error) {
-	if action != "greet" {
-		return "", plugUnknown(action, "greet")
-	}
-	name := plugVar(vars, "plugin_name")
-	if name == "" {
-		name = "friend"
-	}
-	greeting := "Hello"
-	switch h := time.Now().Hour(); {
-	case h >= 5 && h < 12:
-		greeting = "Good morning"
-	case h >= 12 && h < 18:
-		greeting = "Good afternoon"
-	case h >= 18 && h < 23:
-		greeting = "Good evening"
-	}
-	return greeting + ", " + name + "!", nil
-}
-
 // ── Notes ─────────────────────────────────────────────────────────────────
 
 // plugNotesFile is the pad inside the plugin's folder.
 func plugNotesFile(dir string) string { return filepath.Join(dir, "notes.txt") }
+
+// plugNotesShown is how many notes "All notes" lists, newest first.
+const plugNotesShown = 12
 
 // plugNotesLines reads the saved notes, oldest first.
 func plugNotesLines(dir string) []string {
@@ -452,7 +320,7 @@ func plugNotesLines(dir string) []string {
 	return out
 }
 
-// plugNotesAdd appends one note with the time it was written.
+// plugNotesAdd appends one note with the date and time it was written.
 func plugNotesAdd(dir, text string) (string, error) {
 	text = strings.Join(strings.Fields(text), " ")
 	if text == "" {
@@ -462,7 +330,7 @@ func plugNotesAdd(dir, text string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not open the notes file: %v", err)
 	}
-	_, werr := fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("15:04"), text)
+	_, werr := fmt.Fprintf(f, "[%s] %s\n", time.Now().Format("Jan 2 15:04"), text)
 	cerr := f.Close()
 	if werr != nil || cerr != nil {
 		return "", errors.New("could not save the note")
@@ -470,13 +338,23 @@ func plugNotesAdd(dir, text string) (string, error) {
 	return "Saved: " + plugClip(text, 38), nil
 }
 
-// plugClip shortens s to n runes with an ellipsis.
-func plugClip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+// plugNotesCount is "No notes yet", "1 note saved", "4 notes saved".
+func plugNotesCount(n int) string {
+	switch n {
+	case 0:
+		return "No notes yet"
+	case 1:
+		return "1 note saved"
 	}
-	return string(r[:n-1]) + "…"
+	return fmt.Sprintf("%d notes saved", n)
+}
+
+// plugNotesClear empties the pad.
+func plugNotesClear(dir string) (string, error) {
+	if err := os.WriteFile(plugNotesFile(dir), nil, 0o644); err != nil {
+		return "", fmt.Errorf("could not clear the notes: %v", err)
+	}
+	return "Notes cleared", nil
 }
 
 func plugNativeNotes(action string, vars map[string]interface{}, dir string) (string, error) {
@@ -486,94 +364,82 @@ func plugNativeNotes(action string, vars map[string]interface{}, dir string) (st
 	case "last":
 		lines := plugNotesLines(dir)
 		if len(lines) == 0 {
-			return "No notes yet", nil
+			return "No notes yet · Add note opens the keyboard", nil
 		}
 		return plugClip(lines[len(lines)-1], 60), nil
+	case "all":
+		// The count is the first line, so it is what the toast says; the
+		// Plugins page shows the list under it, newest first.
+		lines := plugNotesLines(dir)
+		if len(lines) == 0 {
+			return "No notes yet · Add note opens the keyboard", nil
+		}
+		out := []string{plugNotesCount(len(lines)) + ", newest first"}
+		for i := len(lines) - 1; i >= 0 && len(out) <= plugNotesShown; i-- {
+			out = append(out, plugClip(lines[i], 80))
+		}
+		if len(lines) > plugNotesShown {
+			out = append(out, fmt.Sprintf("…and %d older (notes.txt in the plugin's folder has them all)", len(lines)-plugNotesShown))
+		}
+		return strings.Join(out, "\n"), nil
 	case "count":
-		switch n := len(plugNotesLines(dir)); n {
-		case 0:
-			return "No notes yet", nil
-		case 1:
-			return "1 note saved", nil
-		default:
-			return fmt.Sprintf("%d notes saved", n), nil
-		}
+		return plugNotesCount(len(plugNotesLines(dir))), nil
 	case "clear":
-		if err := os.WriteFile(plugNotesFile(dir), nil, 0o644); err != nil {
-			return "", fmt.Errorf("could not clear the notes: %v", err)
-		}
-		return "Notes cleared", nil
+		return plugNotesClear(dir)
 	}
-	return "", plugUnknown(action, "add, last, count, clear")
+	return "", plugUnknown(action, "add, last, all, count, clear")
 }
 
-// ── Daily quote ───────────────────────────────────────────────────────────
+// ── System monitor ────────────────────────────────────────────────────────
 
-// plugQuotes are public-domain, one toast line each (quote.sh has the same).
-var plugQuotes = []string{
-	"Well begun is half done. — Aristotle",
-	"The journey of a thousand miles begins with one step. — Lao Tzu",
-	"It does not matter how slowly you go, as long as you do not stop. — Confucius",
-	"Fortune favours the bold. — Virgil",
-	"Knowledge is power. — Francis Bacon",
-	"Patience is bitter, but its fruit is sweet. — Jean-Jacques Rousseau",
-	"The best way out is always through. — Robert Frost",
-	"Fall seven times, stand up eight. — Japanese proverb",
-	"Energy and persistence conquer all things. — Benjamin Franklin",
-	"Well done is better than well said. — Benjamin Franklin",
-	"Lost time is never found again. — Benjamin Franklin",
-	"One today is worth two tomorrows. — Benjamin Franklin",
-	"Waste no more time arguing what a good person should be. Be one. — Marcus Aurelius",
-	"Dwell on the beauty of life. — Marcus Aurelius",
-	"No great thing is created suddenly. — Epictetus",
-	"First say to yourself what you would be; then do what you have to do. — Epictetus",
-	"All that glitters is not gold. — William Shakespeare",
-	"A merry heart goes all the day. — William Shakespeare",
-	"Hope is the thing with feathers. — Emily Dickinson",
-	"The only way to have a friend is to be one. — Ralph Waldo Emerson",
-	"The harder the conflict, the more glorious the triumph. — Thomas Paine",
-	"Turn your face to the sun and the shadows fall behind you. — Maori proverb",
-	"Game over is just a long loading screen. Press Start. — JukaHub",
-}
-
-// plugQuoteOfDay is the same quote all day, as quote.sh picks it.
-func plugQuoteOfDay(t time.Time) string {
-	return plugQuotes[t.YearDay()%len(plugQuotes)]
-}
-
-func plugNativeQuote(action string, _ map[string]interface{}, _ string) (string, error) {
-	switch action {
-	case "today":
-		return plugQuoteOfDay(time.Now()), nil
-	case "random":
-		return plugQuotes[rand.IntN(len(plugQuotes))], nil
-	}
-	return "", plugUnknown(action, "today, random")
-}
-
-// ── System info ───────────────────────────────────────────────────────────
-
-// plugFreeRAM is the available memory in bytes, 0 when unknown.
-func plugFreeRAM() (b uint64) {
+// plugMemory is the available and total memory in bytes, 0s when unknown.
+func plugMemory() (free, total uint64) {
 	defer func() {
 		if recover() != nil {
-			b = 0
+			free, total = 0, 0
 		}
 	}()
 	vm, err := mem.VirtualMemory()
 	if err != nil || vm == nil {
-		return 0
+		return 0, 0
 	}
-	return vm.Available
+	return vm.Available, vm.Total
 }
 
-// plugFreeDisk is the free space where JukaHub lives, 0 when unknown.
-func plugFreeDisk() uint64 {
-	_, free, err := sysToolVolumeUsage(sysToolAppVolumePath())
+// plugDisk is the free and total space where JukaHub lives, 0s when unknown.
+func plugDisk() (free, total uint64) {
+	total, free, err := sysToolVolumeUsage(sysToolAppVolumePath())
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	return free
+	return free, total
+}
+
+// plugUptime asks gopsutil, which can panic on unusual systems.
+func plugUptime() (d time.Duration, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			d, err = 0, fmt.Errorf("uptime: %v", r)
+		}
+	}()
+	secs, err := host.Uptime()
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(secs) * time.Second, nil
+}
+
+// plugDuration prints "2d 3h 4m", "3h 4m" or "4m".
+func plugDuration(d time.Duration) string {
+	mins := int(d / time.Minute)
+	days, hours, m := mins/1440, (mins%1440)/60, mins%60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh %dm", days, hours, m)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, m)
+	}
+	return fmt.Sprintf("%dm", m)
 }
 
 // plugBatteryLine is "Battery 80%", "Battery 80% · charging", with the time
@@ -587,169 +453,80 @@ func plugBatteryLine() string {
 	return batteryETALevelLine(pct, getBatteryCharging(), "charging", "on cable", batteryETA(), nil)
 }
 
-func plugNativeSysinfo(action string, _ map[string]interface{}, _ string) (string, error) {
-	switch action {
-	case "memory":
-		if ram := plugFreeRAM(); ram > 0 {
-			return "RAM " + plugHumanBytes(ram) + " free", nil
-		}
-		return "Memory info unavailable", nil
-	case "disk":
-		if disk := plugFreeDisk(); disk > 0 {
-			return "Disk " + plugHumanBytes(disk) + " free", nil
-		}
-		return "Disk info unavailable", nil
-	case "power":
-		return plugBatteryLine(), nil
-	case "status":
-		ram, disk := plugFreeRAM(), plugFreeDisk()
+// plugUsedLine is "RAM 412M free of 1.0G (60% used)".
+func plugUsedLine(label string, free, total uint64) string {
+	if total == 0 || free > total {
+		return label + " " + plugHumanBytes(free) + " free"
+	}
+	used := int((total - free) * 100 / total)
+	return fmt.Sprintf("%s %s free of %s (%d%% used)", label, plugHumanBytes(free), plugHumanBytes(total), used)
+}
+
+// plugHeatLine is the chip temperature and how long the device has been on.
+func plugHeatLine() string {
+	var parts []string
+	if c, ok := cpuTempValueC(); ok {
+		note := ""
 		switch {
-		case ram > 0 && disk > 0:
-			return "RAM " + plugHumanBytes(ram) + " free | Disk " + plugHumanBytes(disk) + " free", nil
-		case ram > 0:
-			return "RAM " + plugHumanBytes(ram) + " free", nil
-		case disk > 0:
-			return "Disk " + plugHumanBytes(disk) + " free", nil
+		case c >= 80:
+			note = " · hot: a lighter Power mode cools it down"
+		case c >= 70:
+			note = " · warm"
 		}
-		return "System info unavailable", nil
+		parts = append(parts, fmt.Sprintf("CPU %.0f °C%s", c, note))
 	}
-	return "", plugUnknown(action, "status, memory, disk, power")
-}
-
-// ── Tips ──────────────────────────────────────────────────────────────────
-
-var plugTips = []string{
-	"Settings › Power & battery: the battery saver steps in by itself at 20%.",
-	"Settings › Display & theme: lower the brightness to make a charge last longer.",
-	"Settings › Display & theme: Reduce motion is calmer and lighter on the battery.",
-	"Settings › General: switch Weather off if you never look at it, and nothing polls.",
-	"Theme presets › Total conversion repaints and rearranges the whole interface.",
-	"Settings › Network › Phone companion lets you type on your phone instead.",
-	"Settings › Games & emulators: Video snaps preview your games in the library.",
-	"Plugins you switch on put their buttons in the Start menu, under Plugins.",
-	"Settings › Power & battery: a shorter screensaver delay saves the most power.",
-	"Settings › Privacy & data: saved browser sign-ins can expire on their own.",
-}
-
-// plugBatteryAdvice is the tips plugin's battery line for a reading.
-func plugBatteryAdvice(pct int, charging bool) string {
-	switch {
-	case pct < 0:
-		return "No battery here: plugged in for good, nothing to save."
-	case charging:
-		return fmt.Sprintf("Battery %d%% and charging: a good time for updates.", pct)
-	case pct <= 15:
-		return fmt.Sprintf("Battery %d%%: save your game and plug in soon.", pct)
-	case pct <= 30:
-		return fmt.Sprintf("Battery %d%%: Power mode › Battery Saver buys you time.", pct)
-	case pct <= 60:
-		return fmt.Sprintf("Battery %d%%: dim the screen a step to stretch it.", pct)
+	if up, err := plugUptime(); err == nil && up > 0 {
+		parts = append(parts, "on for "+plugDuration(up))
 	}
-	return fmt.Sprintf("Battery %d%%: plenty left. Enjoy!", pct)
-}
-
-func plugNativeTips(action string, _ map[string]interface{}, _ string) (string, error) {
-	switch action {
-	case "tip":
-		return plugTips[rand.IntN(len(plugTips))], nil
-	case "battery":
-		return plugBatteryAdvice(getBatteryPercent(), getBatteryCharging()), nil
-	}
-	return "", plugUnknown(action, "tip, battery")
-}
-
-// ── World clock ───────────────────────────────────────────────────────────
-
-// plugTZRule is a POSIX daylight-saving transition "Mm.w.d/h": the w-th
-// weekday d (0 = Sunday; w 5 = the last) of month m, at h o'clock local time.
-type plugTZRule struct {
-	Month time.Month
-	Week  int
-	Day   time.Weekday
-	Hour  int
-}
-
-// plugTZ is one city's zone as a POSIX TZ rule, so no time zone database is
-// needed (Windows builds have none unless Go's own is installed).
-type plugTZ struct {
-	City       string
-	Std, Dst   int // offsets east of UTC, in hours
-	Start, End *plugTZRule
-}
-
-var (
-	plugTZEurope = [2]plugTZRule{{time.March, 5, time.Sunday, 2}, {time.October, 5, time.Sunday, 3}}
-	plugTZUS     = [2]plugTZRule{{time.March, 2, time.Sunday, 2}, {time.November, 1, time.Sunday, 2}}
-	plugTZZones  = map[string]plugTZ{
-		"Tokyo":       {City: "Tokyo", Std: 9, Dst: 9},
-		"Berlin":      {City: "Berlin", Std: 1, Dst: 2, Start: &plugTZEurope[0], End: &plugTZEurope[1]},
-		"London":      {City: "London", Std: 0, Dst: 1, Start: &plugTZRule{time.March, 5, time.Sunday, 1}, End: &plugTZRule{time.October, 5, time.Sunday, 2}},
-		"New York":    {City: "New York", Std: -5, Dst: -4, Start: &plugTZUS[0], End: &plugTZUS[1]},
-		"Los Angeles": {City: "Los Angeles", Std: -8, Dst: -7, Start: &plugTZUS[0], End: &plugTZUS[1]},
-		"Sydney":      {City: "Sydney", Std: 10, Dst: 11, Start: &plugTZRule{time.October, 1, time.Sunday, 2}, End: &plugTZRule{time.April, 1, time.Sunday, 3}},
-		"UTC":         {City: "UTC"},
-	}
-)
-
-// plugTZDate is the day of month a rule falls on in year y.
-func plugTZDate(y int, r plugTZRule) int {
-	first := time.Date(y, r.Month, 1, 0, 0, 0, 0, time.UTC)
-	day := 1 + (int(r.Day)-int(first.Weekday())+7)%7 + (r.Week-1)*7
-	last := time.Date(y, r.Month+1, 0, 0, 0, 0, 0, time.UTC).Day()
-	for day > last {
-		day -= 7
-	}
-	return day
-}
-
-// plugTZAt is the instant a rule fires in year y, given the offset (hours)
-// in force just before it.
-func plugTZAt(y int, r plugTZRule, before int) time.Time {
-	return time.Date(y, r.Month, plugTZDate(y, r), r.Hour, 0, 0, 0, time.UTC).Add(-time.Duration(before) * time.Hour)
-}
-
-// In returns t on the zone's wall clock.
-func (z plugTZ) In(t time.Time) time.Time {
-	off := z.Std
-	if z.Start != nil && z.End != nil {
-		y := t.UTC().Year()
-		start := plugTZAt(y, *z.Start, z.Std)
-		end := plugTZAt(y, *z.End, z.Dst)
-		var dst bool
-		if start.Before(end) {
-			dst = !t.Before(start) && t.Before(end)
-		} else {
-			// Southern hemisphere: summer spans the new year.
-			dst = !t.Before(start) || t.Before(end)
-		}
-		if dst {
-			off = z.Dst
-		}
-	}
-	return t.In(time.FixedZone(z.City, off*3600))
-}
-
-// plugWorldLine prints "Tokyo 08:41 · Berlin 00:41 …" for the given cities.
-func plugWorldLine(t time.Time, layout string, cities ...string) string {
-	parts := make([]string, 0, len(cities))
-	for _, c := range cities {
-		parts = append(parts, c+" "+plugTZZones[c].In(t).Format(layout))
+	if len(parts) == 0 {
+		return "Temperature and uptime are not reported here"
 	}
 	return strings.Join(parts, " · ")
 }
 
-func plugNativeWorldClock(action string, vars map[string]interface{}, _ string) (string, error) {
-	layout := plugClockLayout(vars, "worldclock_24h")
-	now := time.Now()
+func plugNativeSysinfo(action string, _ map[string]interface{}, _ string) (string, error) {
 	switch action {
-	case "cities":
-		return plugWorldLine(now, layout, "Tokyo", "Berlin", "London", "New York"), nil
-	case "pacific":
-		return plugWorldLine(now, layout, "Sydney", "Tokyo", "Los Angeles"), nil
-	case "utc":
-		return plugWorldLine(now, layout, "UTC"), nil
+	case "memory":
+		if free, total := plugMemory(); free > 0 {
+			return plugUsedLine("RAM", free, total), nil
+		}
+		return "Memory info unavailable", nil
+	case "disk":
+		if free, total := plugDisk(); free > 0 {
+			return plugUsedLine("Card", free, total), nil
+		}
+		return "Disk info unavailable", nil
+	case "power":
+		return plugBatteryLine(), nil
+	case "heat", "uptime":
+		return plugHeatLine(), nil
+	case "status":
+		// The first line is the toast, so it carries the short form of
+		// everything; the Plugins page shows the detail lines under it.
+		ram, ramTotal := plugMemory()
+		disk, diskTotal := plugDisk()
+		var short, long []string
+		if ram > 0 {
+			short = append(short, "RAM "+plugHumanBytes(ram)+" free")
+			long = append(long, plugUsedLine("RAM", ram, ramTotal))
+		}
+		if disk > 0 {
+			short = append(short, "Card "+plugHumanBytes(disk)+" free")
+			long = append(long, plugUsedLine("Card", disk, diskTotal))
+		}
+		if pct := getBatteryPercent(); pct >= 0 {
+			short = append(short, fmt.Sprintf("Battery %d%%", pct))
+		}
+		if c, ok := cpuTempValueC(); ok {
+			short = append(short, fmt.Sprintf("%.0f °C", c))
+		}
+		if len(short) == 0 {
+			return "System info unavailable", nil
+		}
+		long = append(long, plugBatteryLine(), plugHeatLine())
+		return strings.Join(short, " · ") + "\n" + strings.Join(long, "\n"), nil
 	}
-	return "", plugUnknown(action, "cities, pacific, utc")
+	return "", plugUnknown(action, "status, power, heat, memory, disk")
 }
 
 // ── The extension plugins' descriptions ──────────────────────────────────

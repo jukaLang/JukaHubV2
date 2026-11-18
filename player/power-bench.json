@@ -34,6 +34,14 @@
   {
     "device": "Development build",
     "kind": "sequential",
+    "write": 775.7805332780918,
+    "read": 3733.473855115396,
+    "at": "2026-11-17T22:06:27Z",
+    "version": "0.4.0"
+  },
+  {
+    "device": "Development build",
+    "kind": "sequential",
     "write": 748.9507592531749,
     "read": 4821.526775122081,
     "at": "2026-11-02T07:23:52Z",

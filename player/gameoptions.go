@@ -74,7 +74,10 @@ func (o gameOptions) empty() bool {
 //
 // The profile is the coarse choice and the ceiling ladder above the fine one.
 // "" (Auto) is what every launch did before profiles existed: the performance
-// governor under the global powerProfileMaxFreq. The others map onto the same
+// governor under the global powerProfileMaxFreq — and, with Automatic CPU
+// speed on, a ceiling that follows the game's load and is remembered per game
+// (autoperf.go); any other profile or a CPU limit keeps Auto's hands off that
+// game. The others map onto the same
 // machinery in powerprofile.go — a governor for the launch and a
 // scaling_max_freq ceiling, both put back when the game exits.
 

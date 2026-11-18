@@ -665,7 +665,7 @@ func pkgAgo(t, now time.Time) string {
 	case d < 30*24*time.Hour:
 		return strconv.Itoa(int(d/(24*time.Hour))) + " days ago"
 	}
-	return t.Format("Jan 2, 2006")
+	return formatDate(nil, t)
 }
 
 // ── Model ────────────────────────────────────────────────────────────────
@@ -830,7 +830,7 @@ func pkgNewItem(kind pkgItemKind, e pkgEntry, key string, in pkgModelInput) *pkg
 		it.SizeText = formatInstallBytes(it.Size)
 	}
 	if it.HasDate {
-		it.DateText = it.Date.Format("Jan 2, 2006")
+		it.DateText = formatDate(nil, it.Date)
 	}
 	second := it.SizeText
 	if second == "" {

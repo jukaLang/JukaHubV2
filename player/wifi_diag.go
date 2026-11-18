@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -149,10 +150,14 @@ func wifiInterfaceSource() string {
 		return "JUKAHUB_WIFI_IFACE"
 	}
 	if names, err := sysfsNetdevs(wifiSysfsNetRoot); err == nil {
+		var marked []string
 		for _, name := range names {
 			if isWirelessNetdev(wifiSysfsNetRoot, name) {
-				return "sysfs marker in " + filepath.Join(wifiSysfsNetRoot, name)
+				marked = append(marked, name)
 			}
+		}
+		if len(marked) > 0 {
+			return "sysfs marker in " + filepath.Join(wifiSysfsNetRoot, stationIfacesFirst(marked)[0])
 		}
 	}
 	if data, err := os.ReadFile(wifiProcWirelessPath); err == nil {
@@ -194,6 +199,240 @@ func wifiStationSummary(st wifiStatus) string {
 	return line
 }
 
+// wifiChipFacts is what the kernel says about the radio behind an interface.
+type wifiChipFacts struct {
+	Iface   string
+	Chip    string // "AIC8800", "XR829", … or "" when nothing names it
+	Module  string // kernel module of the interface's driver ("aic8800_fdrv")
+	Driver  string // bus driver bound to the device ("aicwf_sdio")
+	Up      bool   // the interface is administratively up (IFF_UP)
+	Guess   bool   // Chip comes from the model's table, not from the kernel
+	Bands   string // what the chip can use, for people
+	FiveGHz bool   // the chip can use 5 GHz channels
+}
+
+// wifiChipName names the chip a driver or module belongs to, "" when unknown.
+// Pure.
+func wifiChipName(names ...string) string {
+	for _, n := range names {
+		n = strings.ToLower(n)
+		switch {
+		case n == "":
+		case strings.HasPrefix(n, "aic8800"), strings.HasPrefix(n, "aicwf"), strings.HasPrefix(n, "aicbsp"):
+			return "AIC8800"
+		case strings.HasPrefix(n, "xradio"), strings.HasPrefix(n, "xr829"):
+			return "XR829"
+		case strings.HasPrefix(n, "xr819"):
+			return "XR819"
+		case strings.HasPrefix(n, "rtl"), strings.HasPrefix(n, "8189"), strings.HasPrefix(n, "8723"), strings.HasPrefix(n, "8821"), strings.HasPrefix(n, "88x2"):
+			return "Realtek"
+		case strings.HasPrefix(n, "brcmfmac"), strings.HasPrefix(n, "bcmdhd"):
+			return "Broadcom"
+		}
+	}
+	return ""
+}
+
+// wifiChipBands is what a chip can use, for people, and whether that includes
+// 5 GHz. The Brick Pro's store page lists 802.11 b/g/n only; the Smart Pro S's
+// AIC8800D80 is Wi-Fi 6 on both bands.
+func wifiChipBands(chip string) (string, bool) {
+	switch chip {
+	case "AIC8800":
+		return "Wi-Fi 6 · 2.4 and 5 GHz", true
+	case "XR829", "XR819":
+		return "802.11 b/g/n · 2.4 GHz", false
+	}
+	return "", false
+}
+
+// wifiReadChip reads the radio's chip and driver: the driver bound to the
+// interface's device and its module first, then which combo driver the kernel
+// has loaded, then the model's table (marked a guess). Files only, no program
+// started; it still walks sysfs, so it runs on a worker.
+func wifiReadChip(iface string) wifiChipFacts {
+	f := wifiChipFacts{Iface: iface}
+	if iface != "" {
+		dev := filepath.Join(wifiSysfsNetRoot, iface, "device")
+		if p, err := filepath.EvalSymlinks(filepath.Join(dev, "driver")); err == nil {
+			f.Driver = filepath.Base(p)
+		}
+		if p, err := filepath.EvalSymlinks(filepath.Join(dev, "driver", "module")); err == nil {
+			f.Module = filepath.Base(p)
+		}
+		if b, err := os.ReadFile(filepath.Join(wifiSysfsNetRoot, iface, "flags")); err == nil {
+			hex := strings.TrimPrefix(strings.TrimSpace(string(b)), "0x")
+			if v, err := strconv.ParseUint(hex, 16, 32); err == nil {
+				f.Up = v&1 != 0
+			}
+		}
+	}
+	f.Chip = wifiChipName(f.Module, f.Driver)
+	if f.Chip == "" {
+		aic, xradio, loaded := radioChipModules()
+		switch {
+		case aic && !xradio:
+			f.Chip = "AIC8800"
+		case xradio && !aic:
+			f.Chip = "XR829"
+		}
+		if f.Chip != "" && f.Module == "" {
+			for _, m := range loaded {
+				if wifiChipName(m) == f.Chip && !strings.Contains(m, "btlpm") && !strings.HasSuffix(m, "_bsp") {
+					f.Module = m
+					break
+				}
+			}
+		}
+	}
+	if f.Chip == "" {
+		if u, ok := btChipUART(btBoardModel()); ok {
+			f.Chip, f.Guess = btChipLabel(u.chip), true
+		}
+	}
+	f.Bands, f.FiveGHz = wifiChipBands(f.Chip)
+	return f
+}
+
+// summary is the chip in one line: "AIC8800 (aic8800_fdrv) · wlan0 up · Wi-Fi 6
+// · 2.4 and 5 GHz".
+func (f wifiChipFacts) summary() string {
+	parts := make([]string, 0, 3)
+	chip := f.Chip
+	if chip == "" {
+		chip = "unknown chip"
+	}
+	if f.Guess {
+		chip += " (expected for this model; no driver named it)"
+	}
+	switch {
+	case f.Module != "":
+		chip += " (" + f.Module + ")"
+	case f.Driver != "":
+		chip += " (" + f.Driver + ")"
+	}
+	parts = append(parts, chip)
+	if f.Iface != "" {
+		state := "down"
+		if f.Up {
+			state = "up"
+		}
+		parts = append(parts, f.Iface+" "+state)
+	} else {
+		parts = append(parts, "no interface")
+	}
+	if f.Bands != "" {
+		parts = append(parts, f.Bands)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func init() { registerDriverStatus(driverRowWiFi, wifiDriverStatus) }
+
+// wifiDriverStatus is the Wi-Fi row of the Drivers & hardware page
+// (devicedrivers.go): "AIC8800 (aic8800_fdrv)" on wlan0, "up · Wi-Fi 6 · 2.4
+// and 5 GHz". File reads only: the interface comes from sysfs, /proc and the
+// supplicant's socket directory, never from wpa_cli (the page's functions
+// must not start a process that can hang).
+func wifiDriverStatus() driverStatus {
+	if winWifiActive() {
+		return driverStatus{State: driverUnknown, Driver: "Windows Wi-Fi", Detail: "the system drives the radio"}
+	}
+	iface := ""
+	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WIFI_IFACE")); validIfaceName(override) {
+		iface = override
+	} else if names := wifiIfacesFromFiles(); len(names) > 0 {
+		iface = names[0]
+	}
+	f := wifiReadChip(iface)
+	st := driverStatus{State: driverOK, Node: iface}
+	switch {
+	case f.Module != "" && f.Chip != "" && !f.Guess:
+		st.Driver = f.Chip + " (" + f.Module + ")"
+	case f.Chip != "":
+		st.Driver = f.Chip
+		if f.Guess {
+			st.Driver += " (expected)"
+		}
+	case f.Driver != "":
+		st.Driver = f.Driver
+	}
+	detail := make([]string, 0, 2)
+	if iface == "" {
+		if f.Chip == "" {
+			return driverStatus{State: driverNotUsed}
+		}
+		st.State = driverMissing
+		detail = append(detail, "no wireless interface — Wi-Fi may be switched off")
+	} else if f.Up {
+		detail = append(detail, "up")
+	} else {
+		detail = append(detail, "down")
+	}
+	if f.Bands != "" {
+		detail = append(detail, f.Bands)
+	}
+	st.Detail = strings.Join(detail, " · ")
+	return st
+}
+
+// wifiIfacesFromFiles is wirelessInterfaceNames without its one forking
+// source (asking wpa_cli): sysfs markers, /proc/net/wireless, the supplicant's
+// socket directory, then the naming convention.
+func wifiIfacesFromFiles() []string {
+	names, _ := sysfsNetdevs(wifiSysfsNetRoot)
+	var marked, conventional []string
+	for _, name := range names {
+		if isWirelessNetdev(wifiSysfsNetRoot, name) {
+			marked = append(marked, name)
+		} else if looksLikeWirelessName(name) {
+			conventional = append(conventional, name)
+		}
+	}
+	if len(marked) > 0 {
+		return stationIfacesFirst(marked)
+	}
+	if data, err := os.ReadFile(wifiProcWirelessPath); err == nil {
+		if listed := parseWirelessProcIfaces(string(data)); len(listed) > 0 {
+			return stationIfacesFirst(listed)
+		}
+	}
+	if viaSupplicant := supplicantInterfaceNames(supplicantControlDirs()); len(viaSupplicant) > 0 {
+		return viaSupplicant
+	}
+	return stationIfacesFirst(conventional)
+}
+
+// parseSupplicantCountry reads the country= line out of a wpa_supplicant config
+// ("country=US", optionally quoted), "" when it has none. Pure.
+func parseSupplicantCountry(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(strings.TrimRight(line, "\r")), "=")
+		if !ok || strings.TrimSpace(key) != "country" {
+			continue
+		}
+		cc := strings.ToUpper(strings.Trim(strings.TrimSpace(value), `"`))
+		if len(cc) == 2 && cc[0] >= 'A' && cc[0] <= 'Z' && cc[1] >= 'A' && cc[1] <= 'Z' {
+			return cc
+		}
+	}
+	return ""
+}
+
+// wifiSupplicantCountry is the regulatory country the image's supplicant config
+// sets, "" when it sets none.
+func wifiSupplicantCountry() string {
+	cfg := wifiSupplicantConfigPath()
+	if cfg == "" {
+		return ""
+	}
+	data, err := os.ReadFile(cfg)
+	if err != nil {
+		return ""
+	}
+	return parseSupplicantCountry(string(data))
+}
+
 // collectWiFiDiagnostics reads every fact the sheet shows. It runs on a worker
 // (some probes fork) and never fails: a source that cannot be read becomes a
 // row that says so.
@@ -213,6 +452,17 @@ func collectWiFiDiagnostics() wifiDiagReport {
 		add("Interface", iface, wifiDiagOK)
 	}
 	add("Found by", wifiInterfaceSource(), wifiDiagInfo)
+	if !winWifiActive() {
+		chip := wifiReadChip(iface)
+		add("Chip", chip.summary(), wifiDiagInfo)
+		if chip.FiveGHz {
+			if cc := wifiSupplicantCountry(); cc != "" {
+				add("Country", cc+" (sets the 5 GHz channels)", wifiDiagOK)
+			} else {
+				add("Country", "not set in the supplicant config — the driver's default decides the 5 GHz channels", wifiDiagInfo)
+			}
+		}
+	}
 
 	backend := wifiCommandBackend()
 	switch backend {

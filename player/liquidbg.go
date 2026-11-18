@@ -38,7 +38,7 @@ package main
 //     requestFrameEvery); it used to idle down to 15 fps under the user.
 //   - In space: the cells' diagonals alternate so no grain runs one way
 //     across the screen, and the wallpaper is sampled with
-//     linear filtering (gifwall.go appWallpaperTextureSmooth): a ripple is a
+//     linear filtering (core.go fitBackgroundTexture): a ripple is a
 //     lens that enlarges the picture locally, and nearest sampling showed
 //     its pixels as blocks.
 //
@@ -1855,8 +1855,9 @@ func liquidBackdropBase(renderer *sdl.Renderer, config *Config, w, h int32) liqu
 	var src *sdl.Texture
 	var srcRect *sdl.Rect
 	if wall {
-		// Linear filtering: the ripples enlarge the picture (gifwall.go).
-		src, srcRect = appWallpaperTextureSmooth(renderer, config)
+		// Made with linear filtering (core.go fitBackgroundTexture): the
+		// ripples enlarge the picture.
+		src, srcRect = appWallpaperTexture(renderer, config)
 	}
 	if src == nil {
 		wall = false

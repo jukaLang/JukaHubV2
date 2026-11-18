@@ -114,7 +114,7 @@ func upchSceneFrame() {
 // upchPatchActions are the channel's rows, which lead the Patch list.
 func upchPatchActions() []patchAction {
 	v := upchStatusView()
-	out := make([]patchAction, 0, 4)
+	out := make([]patchAction, 0, 5)
 	out = append(out, patchAction{ID: "channel", Label: "Update channel", Sub: v.Line})
 	if v.Ready {
 		out = append(out, patchAction{
@@ -122,6 +122,7 @@ func upchPatchActions() []patchAction {
 			Label: "Install now — no internet needed",
 			Sub:   "JukaHub " + v.ReadyLabel + " · " + v.Verified + " · restarts JukaHub",
 		})
+		out = append(out, patchAction{ID: "install-when", Label: "Install it later", Sub: upchWhenRowLine(v.ReadyTag)})
 	}
 	out = append(out, patchAction{ID: "versions", Label: "Version history", Sub: uhistSummaryLine()})
 	out = append(out, patchAction{ID: "fromfile", Label: "Install from file…", Sub: "From the SD card, a USB stick or Downloads — no internet needed"})
@@ -153,10 +154,48 @@ func upchActivateAction(config *Config, action string) {
 		}
 	case "offline-install":
 		upchConfirmCachedInstall()
+	case "install-when":
+		// Each press moves on: next start, charging and idle, then off.
+		v := upchStatusView()
+		if !v.Ready {
+			ShowToast("No update is waiting in the cache", ToastKindInfo)
+			return
+		}
+		next := upchWhenNextStart
+		if s := upchScheduled(); strings.EqualFold(s.Tag, v.ReadyTag) {
+			switch s.When {
+			case upchWhenNextStart:
+				next = upchWhenCharging
+			case upchWhenCharging:
+				next = ""
+			}
+		}
+		upchScheduleWithToast(v.ReadyTag, v.ReadyLabel, next)
 	case "versions":
 		upchOpenHistory(config)
 	case "fromfile":
 		upchOpenFiles()
+	}
+}
+
+// upchWhenRowLine is the line under "Install it later".
+func upchWhenRowLine(readyTag string) string {
+	if s := upchScheduled(); s.When != "" && strings.EqualFold(s.Tag, readyTag) {
+		return "Set: installs " + upchWhenLabel(s.When) + " · never during a game · press to change"
+	}
+	return "At the next start, or while charging and left alone · never during a game"
+}
+
+// upchScheduleWithToast saves when the cached release installs and says so.
+func upchScheduleWithToast(tag, label, when string) {
+	upchSetSchedule(tag, when)
+	switch when {
+	case upchWhenNextStart:
+		ShowToast("JukaHub "+label+" installs the next time JukaHub starts", ToastKindSuccess)
+	case upchWhenCharging:
+		ShowToast("JukaHub "+label+" installs while charging after 15 minutes untouched — never during a game", ToastKindSuccess)
+	default:
+		ShowToast("JukaHub "+label+" waits until you install it", ToastKindInfo)
 	}
 }
 
@@ -238,7 +277,7 @@ func upchLastCheckLine() string {
 	if latest.IsZero() {
 		return "Asks for the newest JukaHub release"
 	}
-	return "Last checked " + latest.Local().Format("Jan 2, 15:04")
+	return "Last checked " + formatDateTimeNear(nil, latest.Local(), time.Now())
 }
 
 // ── Sheets ───────────────────────────────────────────────────────────────────
@@ -270,7 +309,7 @@ func upchSetHistory() {
 		}
 		sub := humanBytes(e.Bytes)
 		if t, ok := parseReleaseTimestamp(e.SavedAt); ok {
-			sub = "Replaced " + t.Local().Format("Jan 2, 15:04") + " · " + sub
+			sub = "Replaced " + formatDateTimeNear(nil, t.Local(), time.Now()) + " · " + sub
 		}
 		if note := upchFirstNote(e.Notes); note != "" {
 			sub += " · " + note
@@ -347,7 +386,7 @@ func upchSetFiles(files []upchFileCandidate) {
 		if f.Kind == upchKindDelta {
 			icon, badge = "update", "Delta"
 		}
-		sub := f.Folder + " · " + formatInstallBytes(f.Size) + " · " + f.ModTime.Local().Format("Jan 2, 15:04")
+		sub := f.Folder + " · " + formatInstallBytes(f.Size) + " · " + formatDateTimeNear(nil, f.ModTime.Local(), time.Now())
 		upchUI.icons = append(upchUI.icons, icon)
 		upchUI.titles = append(upchUI.titles, f.Name)
 		upchUI.subs = append(upchUI.subs, sub)

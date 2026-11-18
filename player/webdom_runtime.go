@@ -274,6 +274,7 @@ func (s *webJSSession) stop(reason string) {
 
 // webJSRunPage runs a page's scripts against a DOM and returns the markup the
 // renderer should draw, with the whole budget and the current generation.
+// Test seam (ARCH-8): only tests call it.
 func webJSRunPage(source string, base *url.URL) webJSPageResult {
 	return webJSRunPageFor(source, base, webJSLoadGeneration(), time.Time{})
 }

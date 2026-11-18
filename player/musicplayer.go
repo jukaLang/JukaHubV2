@@ -38,7 +38,7 @@ const (
 // ffmpeg can demux on the handheld: lossless FLAC/WAV/AIFF, DSD (DSF/DFF,
 // decoded to PCM) and the usual lossy formats.
 var audioFileExtensions = []string{
-	".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".wma",
+	".mp3", ".wav", ".ogg", ".m4a", ".m4b", ".flac", ".aac", ".opus", ".wma",
 	".aiff", ".aif", ".aifc", // AIFF / AIFF-C, including 24-bit files
 	".dsf", ".dff", // DSD streams inside a DSF/DFF container
 }
@@ -100,8 +100,11 @@ type musicState struct {
 	proc     *exec.Cmd // running ffmpeg decoder
 	pcmStart float64   // decode offset in seconds
 	pcmBytes int64     // bytes decoded since pcmStart
-	rate     int32     // device sample rate of the running decoder
-	failRun  int       // tracks in a row that ended without any audio
+	// pcmLead is what the previous track still had queued when this one
+	// started gapless: the position counts from where the listener is.
+	pcmLead int64
+	rate    int32 // device sample rate of the running decoder
+	failRun int   // tracks in a row that ended without any audio
 }
 
 var music = musicState{current: -1, volume: 0.8}
@@ -207,7 +210,8 @@ func musicLoadPlaylist(dir, startPath string) int {
 	music.queueLen = 0
 	music.mu.Unlock()
 	musicKillDecoder(prev)
-	audioRememberPosition(previousPath, previousPos, previousDur)
+	musicRememberPosition(previousPath, previousPos, previousDur)
+	musicHistoryEnd(previousPath, previousPos, previousDur, false)
 	return start
 }
 
@@ -282,7 +286,8 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 	music.queueLen = 0
 	music.mu.Unlock()
 	musicKillDecoder(prev)
-	audioRememberPosition(previousPath, previousPos, previousDur)
+	musicRememberPosition(previousPath, previousPos, previousDur)
+	musicHistoryEnd(previousPath, previousPos, previousDur, false)
 	musicShelf.open = false
 	musicShelf.fromShelf = false
 	return true
@@ -422,7 +427,24 @@ func musicPlayTrack(index int) {
 	musicPlayTrackNow(index)
 }
 
-func musicPlayTrackNow(index int) {
+// musicPlayTrackNext is the step to the next track when one ended by itself:
+// gapless, without the click (musicPlayTrackAt).
+func musicPlayTrackNext(index int) {
+	if musicPlayTrackHook != nil {
+		musicPlayTrackHook(index)
+		return
+	}
+	musicPlayTrackAt(index, true)
+}
+
+func musicPlayTrackNow(index int) { musicPlayTrackAt(index, false) }
+
+// musicPlayTrackAt starts track index. gapless is the step after a track
+// that ended by itself: what it still has queued plays out instead of being
+// dropped, the next decoder starts behind it at once (ffmpeg starts well
+// within the second the queue holds, so the two meet without a gap), and no
+// UI click sounds between them.
+func musicPlayTrackAt(index int, gapless bool) {
 	music.mu.Lock()
 	if index < 0 || index >= len(music.tracks) {
 		music.mu.Unlock()
@@ -456,7 +478,7 @@ func musicPlayTrackNow(index int) {
 			}
 		}
 	}
-	resume := audioStartPosition(audioResumePosition(track.Path), track.Duration)
+	resume := audioStartPosition(musicResumePosition(track.Path), track.Duration)
 	if bookKey != "" {
 		saved := audioResumePosition(track.Path)
 		if saved >= 5 && (track.Duration <= 0 || saved < track.Duration-audioResumeTailSeconds) {
@@ -469,15 +491,30 @@ func musicPlayTrackNow(index int) {
 	music.mu.Unlock()
 
 	if previousPath != "" && !sameAudioPath(previousPath, track.Path) {
-		audioRememberPosition(previousPath, previousPos, previousDur)
+		musicRememberPosition(previousPath, previousPos, previousDur)
 	}
 	if bookKey != "" {
 		audioBookRemember(bookKey, track.Path, false)
 	}
+	// Listening history: the previous listen ends here, this one begins.
+	musicHistoryBegin(previousPath, previousPos, previousDur, track.Path, track.Name, resume)
 
-	musicStartDecode(track.Path, resume)
-	PlayActivateSound()
-	go musicProbeDuration(track.Path)
+	if gapless && resume <= 0.05 {
+		musicStartDecodeGapless(track.Path)
+	} else {
+		musicStartDecode(track.Path, resume)
+		PlayActivateSound()
+	}
+	// Chapters inside one book file (audiobook_chapters.go). A long .m4a or
+	// .mp3 outside a book usually has no length yet (0 until ffprobe answers),
+	// so it is asked about once the duration probe finds it long.
+	longForm := bookKey != "" || track.Duration >= audioResumeLongFormSeconds
+	go func(path string) {
+		if dur := musicProbeDuration(path); !longForm && dur >= audioResumeLongFormSeconds {
+			musicProbeChapters(path, true)
+		}
+	}(track.Path)
+	go musicProbeChapters(track.Path, longForm)
 	// Trophies: a new local track (Play on a stopped one resumes it; podcasts and
 	// radio are remote), with its artist when the media library knows the file.
 	if !isHTTPMediaURL(track.Path) && (previousPath == "" || !sameAudioPath(previousPath, track.Path)) {
@@ -490,23 +527,24 @@ func musicPlayTrackNow(index int) {
 	}
 }
 
-// musicProbeDuration fills in the track length once ffprobe answers. It never
-// triggers a download: a missing ffprobe only leaves the duration blank.
-func musicProbeDuration(path string) {
+// musicProbeDuration fills in the track length once ffprobe answers, and
+// returns it (0 when unknown). It never triggers a download: a missing
+// ffprobe only leaves the duration blank.
+func musicProbeDuration(path string) float64 {
 	cfg := appConfig
 	if cfg == nil {
 		cfg = &Config{}
 	}
 	probePath := getToolPath("ffprobe", cfg)
 	if probePath == "" {
-		return
+		return 0
 	}
 	if info, err := os.Stat(probePath); err != nil || info.Size() == 0 {
-		return
+		return 0
 	}
 	_, _, _, dur := probeVideoInfo(probePath, path)
 	if dur <= 0 {
-		return
+		return 0
 	}
 	music.mu.Lock()
 	defer music.mu.Unlock()
@@ -514,13 +552,42 @@ func musicProbeDuration(path string) {
 		sameAudioPath(music.tracks[music.current].Path, path) {
 		music.tracks[music.current].Duration = dur
 		music.duration = dur
-		return
+		return dur
 	}
 	for i := range music.tracks {
 		if sameAudioPath(music.tracks[i].Path, path) {
 			music.tracks[i].Duration = dur
 		}
 	}
+	return dur
+}
+
+// musicRememberPosition is audioRememberPosition for the player, except for a
+// live stream: an http(s) source with no length has no place to come back to,
+// and a saved one made Play after Stop `-ss` that many seconds into the live
+// stream. A podcast's place is saved once ffprobe has told its length.
+func musicRememberPosition(path string, position, duration float64) {
+	if duration <= 0 && isHTTPMediaURL(path) {
+		return
+	}
+	audioRememberPosition(path, position, duration)
+}
+
+// musicResumePosition is audioResumePosition, except that an http(s) place
+// kept without a length is ignored: a live stream's, which builds before
+// 2026-11-17 saved every ten seconds, so Play starts the stream live.
+func musicResumePosition(path string) float64 {
+	if !isHTTPMediaURL(path) {
+		return audioResumePosition(path)
+	}
+	key := audioResumeKey(path)
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	if e := audioPrefs.entries[key]; e.Duration > 0 {
+		return e.Position
+	}
+	return 0
 }
 
 // musicDecodeHook, when set, replaces the ffmpeg decoder. Tests install one so
@@ -530,10 +597,30 @@ var musicDecodeHook func(path string, startSec float64, gen int)
 // musicStartDecode runs one ffmpeg decoder for path from startSec. It stops
 // whatever was playing before.
 func musicStartDecode(path string, startSec float64) {
+	musicStartDecodeKeep(path, startSec, false)
+}
+
+// musicStartDecodeGapless starts path from its top behind what the previous
+// track still has queued (musicPlayTrackAt).
+func musicStartDecodeGapless(path string) {
+	musicStartDecodeKeep(path, 0, true)
+}
+
+// musicStartDecodeKeep is musicStartDecode; keep leaves the queue (and the
+// bit-perfect device's) alone, so the previous track's tail plays out first.
+func musicStartDecodeKeep(path string, startSec float64, keep bool) {
+	lead := int64(0)
+	if keep {
+		if _, _, queued, _, _, ok := videoAudioClock(); ok {
+			lead = queued
+		}
+		lead += dacExclusiveLeadBytes()
+	}
 	music.mu.Lock()
 	music.gen++
 	gen := music.gen
 	music.pcmBytes = 0
+	music.pcmLead = lead
 	music.pcmStart = startSec
 	music.position = startSec
 	prev := music.proc
@@ -543,7 +630,10 @@ func musicStartDecode(path string, startSec float64) {
 	if prev != nil && prev.Process != nil {
 		_ = prev.Process.Kill()
 	}
-	ClearVideoAudioQueue()
+	if !keep {
+		ClearVideoAudioQueue()
+		dacExclusiveClear()
+	}
 	// The device is shared with the video player, which pauses it while a
 	// video is paused; a song queued into a paused device never plays.
 	PauseVideoAudio(false)
@@ -568,6 +658,14 @@ func musicDecode(path string, startSec float64, gen int) {
 		showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 		return
 	}
+	// Bit-perfect on a USB DAC: the track's own rate and bits, straight to
+	// the DAC (usbdac_bitperfect.go). Anything it cannot take plays below.
+	if bp, ok := dacBitPerfectPlan(path); ok && musicDecodeBitPerfect(ffmpegPath, path, startSec, gen, bp) {
+		return
+	}
+	// The normal route must not be held for a bit-perfect device a previous
+	// track left open: nothing would pace this decoder.
+	dacExclusiveYieldIfHeld()
 	rate := GetVideoAudioRate()
 	if rate <= 0 {
 		rate = 44100
@@ -587,6 +685,9 @@ func musicDecode(path string, startSec float64, gen int) {
 		return
 	}
 	cmd.Stderr = nil
+	// A stream's stderr is kept, and copied to errors.txt as the video
+	// decoders' is: it says whether one that ended had timed out (musicstream.go).
+	stream := musicNewStreamWatch(path, cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		logError("musicplayer", "musicDecode: stdout pipe: %v", err)
@@ -618,9 +719,12 @@ func musicDecode(path string, startSec float64, gen int) {
 	// plays for hours.
 	pcm := make([]byte, len(buf))
 	var savePos, saveDur float64
+	stream.start()
 loop:
 	for {
+		stream.begin()
 		n, readErr := stdout.Read(buf)
+		stream.end()
 		if n > 0 {
 			var vol float64
 			for {
@@ -643,7 +747,11 @@ loop:
 			music.mu.Lock()
 			if gen == music.gen {
 				music.pcmBytes += int64(n)
-				elapsed := musicMediaElapsed(music.pcmStart, music.pcmBytes, rate, speed)
+				heard := music.pcmBytes - music.pcmLead
+				if heard < 0 {
+					heard = 0
+				}
+				elapsed := musicMediaElapsed(music.pcmStart, heard, rate, speed)
 				if music.duration <= 0 || elapsed < music.duration {
 					music.position = elapsed
 				} else {
@@ -658,7 +766,7 @@ loop:
 			}
 			music.mu.Unlock()
 			if savePos > 0 {
-				audioRememberPosition(path, savePos, saveDur)
+				musicRememberPosition(path, savePos, saveDur)
 				savePos = 0
 			}
 		}
@@ -666,9 +774,22 @@ loop:
 			break
 		}
 	}
-
+	stream.stop()
 	waitErr := cmd.Wait()
+	musicDecodeEnded(waitErr, path, gen, stream.stalled(gen))
+}
 
+// musicDecodeFinish reaps a decoder whose stream ended and moves on: the next
+// track (gapless), a saved place for a cut-short one, or the end of the list.
+func musicDecodeFinish(cmd *exec.Cmd, path string, gen int) {
+	musicDecodeEnded(cmd.Wait(), path, gen, false)
+}
+
+// musicDecodeEnded is musicDecodeFinish once the decoder is reaped. stalled is
+// an http(s) input that went quiet until ffmpeg's read timeout (or the stall
+// watch) ended it (musicstream.go): ffmpeg exits cleanly after a broken input,
+// so without it a podcast cut off at minute 30 counted as finished.
+func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 	music.mu.Lock()
 	finished := gen == music.gen && music.playing
 	reachedEnd, cutShort, silent := false, false, false
@@ -690,8 +811,12 @@ loop:
 		// A track that played nothing did not reach its end either: marking
 		// it finished forgot the saved place of an episode that could not
 		// even open (offline), and of each one after it as the list advanced.
-		if music.duration > 0 && waitErr != nil && !silent &&
+		if music.duration > 0 && (waitErr != nil || stalled) && !silent &&
 			music.position < music.duration-audioResumeTailSeconds {
+			cutShort = true
+		} else if music.duration <= 0 && stalled && !silent {
+			// A live stream (no length) that went quiet: stopped, not over,
+			// so the list does not move on to the next station.
 			cutShort = true
 		} else if music.duration > 0 && !silent {
 			music.position = music.duration
@@ -730,7 +855,13 @@ loop:
 		return
 	}
 	if cutShort {
-		audioRememberPosition(path, stoppedAt, stoppedDur)
+		if stoppedDur > 0 {
+			musicRememberPosition(path, stoppedAt, stoppedDur)
+		} else {
+			// A live stream has no place to return to: Play picks it up at its
+			// live edge (from a saved place ffmpeg would first skip that much).
+			audioForgetPosition(path)
+		}
 		showToast("Playback stopped early — press Play to resume", ToastWarn())
 	}
 	if reachedEnd {
@@ -741,13 +872,24 @@ loop:
 		}
 	}
 	if advance {
-		musicPlayTrack(nextIdx)
+		if waitErr == nil && !silent {
+			// The track played to its end: the next one joins it without a gap.
+			musicPlayTrackNext(nextIdx)
+		} else {
+			musicPlayTrack(nextIdx)
+		}
 		return
 	}
+	// Listening history: the list ran out, or this track stopped short.
+	musicHistoryEnd(path, stoppedAt, stoppedDur, reachedEnd)
 	if silent && !advance {
 		showToast("Could not play this track", ToastError())
 	}
-	ClearVideoAudioQueue()
+	// The end of the list: its last second, still queued, plays out (it used
+	// to be cut off here). A failed track's leftovers do not.
+	if silent || cutShort {
+		ClearVideoAudioQueue()
+	}
 }
 
 // musicStop halts playback and clears the audio queue.
@@ -772,9 +914,14 @@ func musicStop() {
 		_ = proc.Process.Kill()
 	}
 	ClearVideoAudioQueue()
+	// A bit-perfect DAC device goes quiet now and gives the outputs back (a
+	// video may be starting); the reopen runs off this thread.
+	dacExclusiveClear()
+	go dacExclusiveYieldIfHeld()
 	// Keep the place for long-form audio; short music is forgotten by the
 	// resume rule when it is played again.
-	audioRememberPosition(path, pos, dur)
+	musicRememberPosition(path, pos, dur)
+	musicHistoryEnd(path, pos, dur, false)
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -922,6 +1069,10 @@ func musicStopIfPlaying() {
 	music.mu.Unlock()
 	if playing {
 		musicStop()
+	} else {
+		// A bit-perfect DAC device still open after the last track (dacExIdle)
+		// lets go now, so the video's sound is not held back.
+		go dacExclusiveYieldIfHeld()
 	}
 }
 
@@ -944,8 +1095,9 @@ func musicTogglePause() {
 	}
 	music.mu.Unlock()
 	if paused {
-		audioRememberPosition(path, pos, dur)
+		musicRememberPosition(path, pos, dur)
 	}
+	musicHistoryPaused(paused, path, pos, dur)
 
 	// Pausing is done by the decoder (it stops queueing) plus dropping what is
 	// still buffered, so no audio trails after the tap. The shared SDL device is
@@ -953,6 +1105,7 @@ func musicTogglePause() {
 	// full queue would deadlock both goroutines.
 	if paused {
 		ClearVideoAudioQueue()
+		dacExclusiveClear()
 		PlayBackSound()
 	} else {
 		PlayActivateSound()
@@ -1063,6 +1216,9 @@ func musicVolumeFeedback() {
 // musicNext advances the transport: the play-next queue first, then the
 // shuffled or folder order. A manual Next always wraps, even with repeat off.
 func musicNext() {
+	if musicChapterStep(1) {
+		return // the next chapter of this book file
+	}
 	music.mu.Lock()
 	if len(music.tracks) == 0 {
 		music.mu.Unlock()
@@ -1081,6 +1237,9 @@ func musicNext() {
 }
 
 func musicPrev() {
+	if musicChapterStep(-1) {
+		return // this chapter's start, or the one before
+	}
 	music.mu.Lock()
 	if len(music.tracks) == 0 {
 		music.mu.Unlock()
@@ -1507,6 +1666,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		title = tracks[cur].Name
 		title = strings.TrimSuffix(title, filepath.Ext(title))
 		meta = fmt.Sprintf("Track %d of %d", cur+1, len(tracks))
+		if chapterMeta := musicChapterMeta(tracks[cur].Path, position); chapterMeta != "" {
+			meta = chapterMeta // audiobook_chapters.go
+		}
 		if dir != "" {
 			meta += "   ·   " + dir
 		}
@@ -1538,6 +1700,13 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			status += "   ·   Lyrics on"
 		} else {
 			status += "   ·   Lyrics ready"
+		}
+	}
+	// What the DAC is really fed: "FLAC 24/96 → DAC 96 kHz" bit-perfect, else
+	// the route's own rate (usbdac_bitperfect.go).
+	if playing && cur >= 0 && cur < len(tracks) {
+		if out := musicOutputLabel(); out != "" {
+			status += "   ·   " + out
 		}
 	}
 	statusY := cardY + 30 + int32(bigFont.Height()) + 8 + int32(font.Height()) + 6
@@ -1740,6 +1909,13 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			header += "s"
 		}
 	}
+	// A one-file book lists its own chapters instead (audiobook_chapters.go).
+	var chapters []audioChapter
+	if len(tracks) == 1 && cur == 0 {
+		if chapters = audioChaptersFor(tracks[0].Path); len(chapters) > 0 {
+			header = fmt.Sprintf("Chapters   ·   %d", len(chapters))
+		}
+	}
 	renderText(renderer, config, font, ellipsize(font, header, cardW-240), ColorTextSecondary(), cardX+24, listY+16)
 
 	// Search and the auto-exit timer live in the list header: the transport row
@@ -1776,7 +1952,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		end = len(tracks)
 	}
 	musicRects.rowStart = start
-	if len(tracks) == 0 {
+	if len(chapters) > 0 {
+		renderMusicChapterRows(renderer, config, font, chapters, position, cardX, cardW, rowsTop, visible)
+	} else if len(tracks) == 0 {
 		empty := "No audio files here. Open Files, enter a folder and pick a song."
 		ew, _, _ := font.SizeUTF8(empty)
 		renderText(renderer, config, font, ellipsize(font, empty, cardW-48), ColorTextTertiary(),

@@ -98,6 +98,11 @@ var (
 	wifiDrivenName  string
 	wifiDrivenAt    time.Time
 	wifiDrivenKnown bool
+	// wifiDrivenRefreshing marks a background re-probe of an expired answer;
+	// wifiDrivenGen is bumped by a reset so a re-probe that started before it
+	// does not store its answer over the reset.
+	wifiDrivenRefreshing bool
+	wifiDrivenGen        uint64
 	// wifiDrivenNow is the cache clock, swappable so a test can age the answer
 	// without sleeping a minute.
 	wifiDrivenNow = time.Now
@@ -548,16 +553,44 @@ func wifiCtrlDirCached(iface string) string {
 // Discovery is read while the status bar draws, so an uncached probe would fork
 // wpa_cli on every frame — and a negative answer has to be remembered too, or a
 // device with no radio would pay for a process per frame forever.
+//
+// Only the first answer (and the first after a reset) is probed in line. An
+// expired answer is re-probed on a goroutine while the old one is returned:
+// the probe forks wpa_cli up to five times (seconds on a slow card), and it
+// used to run here, on the render thread, once a minute — with the lock
+// held, so every other caller waited too.
 func supplicantDrivenInterfaceCached() string {
 	wifiDrivenMu.Lock()
-	defer wifiDrivenMu.Unlock()
-	if wifiDrivenKnown && wifiDrivenNow().Sub(wifiDrivenAt) < wifiDrivenTTL {
-		return wifiDrivenName
+	if wifiDrivenKnown {
+		name := wifiDrivenName
+		if wifiDrivenNow().Sub(wifiDrivenAt) >= wifiDrivenTTL && !wifiDrivenRefreshing {
+			wifiDrivenRefreshing = true
+			gen := wifiDrivenGen
+			go func() {
+				fresh := wpaCliDrivenInterface()
+				wifiDrivenMu.Lock()
+				if gen == wifiDrivenGen {
+					wifiDrivenName = fresh
+					wifiDrivenAt = wifiDrivenNow()
+				}
+				wifiDrivenRefreshing = false
+				wifiDrivenMu.Unlock()
+			}()
+		}
+		wifiDrivenMu.Unlock()
+		return name
 	}
-	wifiDrivenName = wpaCliDrivenInterface()
-	wifiDrivenAt = wifiDrivenNow()
-	wifiDrivenKnown = true
-	return wifiDrivenName
+	gen := wifiDrivenGen
+	wifiDrivenMu.Unlock()
+	fresh := wpaCliDrivenInterface()
+	wifiDrivenMu.Lock()
+	if gen == wifiDrivenGen {
+		wifiDrivenName = fresh
+		wifiDrivenAt = wifiDrivenNow()
+		wifiDrivenKnown = true
+	}
+	wifiDrivenMu.Unlock()
+	return fresh
 }
 
 // resetSupplicantInterfaceCache forgets the remembered answer so the next
@@ -568,6 +601,7 @@ func resetSupplicantInterfaceCache() {
 	wifiDrivenName = ""
 	wifiDrivenAt = time.Time{}
 	wifiDrivenKnown = false
+	wifiDrivenGen++
 	wifiDrivenMu.Unlock()
 
 	// The control directory is resolved from the same moment's facts.
@@ -596,11 +630,39 @@ func looksLikeWirelessName(name string) bool {
 	return false
 }
 
+// stationIfacesFirst orders radio names so the station interface leads: wlan*
+// (and the systemd wlp*/wlx* names) first, a P2P or soft-AP companion last,
+// each group keeping its sorted order. Vendor full-MAC drivers such as the
+// Smart Pro S's AIC8800 can register a "p2p0" beside "wlan0", both with the
+// cfg80211 marker, and "p2p0" sorts first — every command would have gone to
+// an interface that cannot scan or join. Pure.
+func stationIfacesFirst(names []string) []string {
+	rank := func(name string) int {
+		switch {
+		case strings.HasPrefix(name, "wlan"), strings.HasPrefix(name, "wlp"), strings.HasPrefix(name, "wlx"):
+			return 0
+		case strings.HasPrefix(name, "p2p"), strings.HasPrefix(name, "ap"):
+			return 2
+		}
+		return 1
+	}
+	out := make([]string, 0, len(names))
+	for r := 0; r <= 2; r++ {
+		for _, name := range names {
+			if rank(name) == r {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
 // wirelessInterfaceNames names every candidate radio, strongest evidence first:
 // a sysfs wireless marker, then the kernel's own /proc list, then a
 // wpa_supplicant control socket, then the supplicant's own answer, then the
-// naming convention. Each source is sorted, so a device with two radios always
-// resolves to the same one.
+// naming convention. Each source is sorted, station names first
+// (stationIfacesFirst), so a device with two radios always resolves to the
+// same one.
 func wirelessInterfaceNames() []string {
 	names, _ := sysfsNetdevs(wifiSysfsNetRoot)
 	var marked, conventional []string
@@ -614,11 +676,11 @@ func wirelessInterfaceNames() []string {
 		}
 	}
 	if len(marked) > 0 {
-		return marked
+		return stationIfacesFirst(marked)
 	}
 	if data, err := os.ReadFile(wifiProcWirelessPath); err == nil {
 		if listed := parseWirelessProcIfaces(string(data)); len(listed) > 0 {
-			return listed
+			return stationIfacesFirst(listed)
 		}
 	}
 	if viaSupplicant := supplicantInterfaceNames(supplicantControlDirs()); len(viaSupplicant) > 0 {
@@ -709,6 +771,11 @@ func wifiCommandBackend() string {
 func wifiControlAvailable() bool {
 	if winWifiActive() {
 		return winWifiControlAvailable()
+	}
+	// The hotspot holds the radio in AP mode (hotspot.go): no station to
+	// drive until it is off, and wifiUnavailableReason says so.
+	if hotspotHoldsRadio() {
+		return false
 	}
 	return wifiCommandBackend() != ""
 }
@@ -830,9 +897,12 @@ func tempSupplicantDir() string { return filepath.Join(os.TempDir(), "wpa_suppli
 // startSupplicantFor starts wpa_supplicant for one interface with the arguments
 // the TG5040 images use: daemonise, nl80211, this interface, this config, this
 // control directory. It is the same command MinUI and NextUI's own Wi-Fi
-// packages run on this hardware.
+// packages run on this hardware. "nl80211,wext" is a list the supplicant tries
+// in order: nl80211 wins wherever it did before (the XR829's and the Smart Pro
+// S's AIC8800 drivers are cfg80211 ones), and a build or vendor driver without
+// it falls back to wireless extensions instead of refusing to start.
 func startSupplicantFor(iface, config, ctrlDir string) (string, error) {
-	args := []string{"-B", "-D", "nl80211", "-i", iface, "-c", config, "-O", ctrlDir}
+	args := []string{"-B", "-D", "nl80211,wext", "-i", iface, "-c", config, "-O", ctrlDir}
 	return wifiRunner(supplicantStartTimeout, "", wifiToolCommand("wpa_supplicant"), args...)
 }
 
@@ -855,8 +925,19 @@ func ensureWifiBackendRetry(again bool) bool {
 	if winWifiActive() {
 		return false
 	}
+	// The hotspot holds the radio in AP mode (hotspot.go); a supplicant now
+	// would fight hostapd for it. Turning the hotspot off starts it again.
+	if hotspotHoldsRadio() {
+		return false
+	}
 	ensureWifiBackendMu.Lock()
 	defer ensureWifiBackendMu.Unlock()
+	// Again under the lock: the hotspot takes it around its station-off step
+	// (hotspot_linux.go), so a start that began first finishes before the
+	// hotspot looks, and one that waited here sees the hotspot now.
+	if hotspotHoldsRadio() {
+		return false
+	}
 	// wpa_cli counts as a backend whether or not a supplicant is running, so
 	// on the TrimUI the supplicant itself is asked; without this a dead
 	// supplicant there was never started again (wifi_keeper.go). Elsewhere a
@@ -948,6 +1029,8 @@ func wifiUnavailableReason() string {
 		return winWifiUnavailableReason()
 	}
 	switch {
+	case hotspotHoldsRadio():
+		return "The hotspot is using the radio — turn it off in Tools → Hotspot to use Wi-Fi"
 	case wifiInterface() == "":
 		if wifiHardwarePresent() {
 			return "Wi-Fi is off — turn the radio on, then reopen this list"
@@ -2046,6 +2129,11 @@ func wifiDisconnect() error {
 	if winWifiActive() {
 		return winWifiDisconnect()
 	}
+	// The hotspot holds the radio: nothing to disconnect, and tearing it down
+	// here would be behind the user's back (Tools → Hotspot turns it off).
+	if hotspotHoldsRadio() {
+		return errors.New(wifiUnavailableReason())
+	}
 	// The keeper must not undo a Disconnect the user pressed; the next join
 	// lifts this.
 	defer wifiUserOpBegin()()
@@ -2098,6 +2186,9 @@ func wifiReconnect() (wifiJoinResult, error) {
 func wifiForget(ssid string) error {
 	if winWifiActive() {
 		return winWifiForget(ssid)
+	}
+	if hotspotHoldsRadio() {
+		return errors.New(wifiUnavailableReason())
 	}
 	// The keeper's minute of hands-off starts here too.
 	defer wifiUserOpBegin()()

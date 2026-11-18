@@ -227,6 +227,7 @@ func ambientEntryBlockReason(config *Config) string {
 		{"Windows apps panel", winAppsPanel.open},
 		{"ports panel", portsPanel.open},
 		{"Steam panel", steamPanel.open},
+		{"PC streaming panel", mlPanel.open},
 		{"save manager", savePanel.open},
 		{"curation panel", curationPanel.open},
 		{"remote play panel", chiakiPanel.open},
@@ -246,7 +247,10 @@ func ambientEntryBlockReason(config *Config) string {
 			return b.name + " is open"
 		}
 	}
-	if retroArchRunning() {
+	// Off the UI thread (lowbattery.go). An answer not recent yet (the
+	// first check after a panel closed) blocks for that tick: the idle
+	// screen must not cover a game it has not looked for.
+	if running, fresh := retroArchRunningCachedFresh(); running || !fresh {
 		return "a game is running"
 	}
 	return ""

@@ -352,3 +352,75 @@ func TestWiFiResumeParsers(t *testing.T) {
 		}
 	}
 }
+
+// The regulatory country is read out of the supplicant's config for the
+// diagnostics sheet (wifi_diag.go); a comment or a malformed value is no country.
+func TestParseSupplicantCountry(t *testing.T) {
+	cfg := "ctrl_interface=/etc/wifi/sockets\r\n#country=GB\nupdate_config=1\n country=\"de\"\n"
+	if got := parseSupplicantCountry(cfg); got != "DE" {
+		t.Fatalf("country = %q, want DE", got)
+	}
+	if got := parseSupplicantCountry("country=USA\nnetwork={\n}\n"); got != "" {
+		t.Fatalf("malformed country = %q, want none", got)
+	}
+}
+
+// The hotspot reads the firmware's hostapd config, the kernel's ARP table and
+// DHCP packets from the air (hotspot.go): outside data, so the parsers are
+// pinned here.
+func TestHotspotParsers(t *testing.T) {
+	ssid, pass := hotspotParseHostapdConf("# stock\ninterface=wlan0\nssid=TrimUI-AP\r\nwpa_passphrase=12345678\n#ssid=old\n")
+	if ssid != "TrimUI-AP" || pass != "12345678" {
+		t.Fatalf("hostapd conf = %q %q", ssid, pass)
+	}
+	arp := "IP address       HW type     Flags       HW address            Mask     Device\n" +
+		"192.168.43.12    0x1         0x2         AA:BB:CC:DD:EE:01     *        wlan0\n" +
+		"192.168.43.11    0x1         0x0         00:00:00:00:00:00     *        wlan0\n" +
+		"192.168.1.1      0x1         0x2         aa:bb:cc:dd:ee:09     *        eth0\n" +
+		"192.168.43.10    0x1         0x2         aa:bb:cc:dd:ee:02     *        wlan0\n"
+	got := hotspotParseARP(arp, "wlan0")
+	if len(got) != 2 || got[0].IP != "192.168.43.10" || got[1].MAC != "aa:bb:cc:dd:ee:01" {
+		t.Fatalf("arp = %+v", got)
+	}
+	if q := hotspotWiFiQR(`Juka;Hub`, `pa:ss"1`); q != `WIFI:T:WPA;S:Juka\;Hub;P:pa\:ss\"1;;` {
+		t.Fatalf("qr = %q", q)
+	}
+	// A DISCOVER gets an OFFER from the pool; the REQUEST for it an ACK; a
+	// REQUEST for an address outside the pool a NAK.
+	req := make([]byte, 240)
+	req[0], req[1], req[2] = 1, 1, 6
+	copy(req[28:34], []byte{2, 0, 0, 0, 0, 1})
+	copy(req[236:240], hsDHCPMagic)
+	disc := append(append([]byte(nil), req...), 53, 1, hsDHCPDiscover, 12, 4, 'p', 'h', 'o', 'n', 255)
+	p, ok := hsDHCPParse(disc)
+	if !ok || p.msgType != hsDHCPDiscover || p.hostname != "phon" || p.mac != "02:00:00:00:00:01" {
+		t.Fatalf("parse = %+v %v", p, ok)
+	}
+	pool := newHSDHCPPool()
+	offer := pool.handle(p)
+	if len(offer) < 300 || offer[0] != 2 || offer[16] != 192 || offer[19] != hotspotPoolFirst {
+		t.Fatalf("offer = %v", offer)
+	}
+	reqPkt := append(append([]byte(nil), req...), 53, 1, hsDHCPRequest, 50, 4, 192, 168, 43, byte(hotspotPoolFirst), 255)
+	p2, _ := hsDHCPParse(reqPkt)
+	if ack := pool.handle(p2); ack == nil || ack[242] != hsDHCPAck {
+		t.Fatalf("ack = %v", ack)
+	}
+	bad := append(append([]byte(nil), req...), 53, 1, hsDHCPRequest, 50, 4, 10, 0, 0, 5, 255)
+	p3, _ := hsDHCPParse(bad)
+	if nak := pool.handle(p3); nak == nil || nak[242] != hsDHCPNak {
+		t.Fatalf("nak = %v", nak)
+	}
+	if names := pool.namesByMAC(); names["02:00:00:00:00:01"] != "phon" {
+		t.Fatalf("names = %v", names)
+	}
+	// A stock config's shared factory password is never adopted.
+	for _, p := range []string{"12345678", "Password", "aaaaaaaa", "short"} {
+		if !hotspotWeakPass(p) {
+			t.Fatalf("hotspotWeakPass(%q) = false", p)
+		}
+	}
+	if hotspotWeakPass("kq7wd2xm") {
+		t.Fatal("a random password counted as weak")
+	}
+}

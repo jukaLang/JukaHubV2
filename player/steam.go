@@ -7,7 +7,9 @@ package main
 //   - The Steam app on this computer (Windows, or a Linux desktop): its
 //     libraryfolders.vdf and appmanifest_*.acf files list the installed games,
 //     loginusers.vdf names the account signed in there, and localconfig.vdf
-//     has each game's play time. No sign-in is needed for any of it.
+//     has each game's play time. No sign-in is needed for any of it. The
+//     non-Steam games added to that Steam app (shortcuts.vdf,
+//     steam_shortcuts.go) are listed with them and start the same way.
 //   - The account the user signed in with (steam_signin.go: Steam's own
 //     OpenID page, opened on the phone or the PC's browser; JukaHub only ever
 //     learns the 17-digit Steam ID, never a password). Its whole library is
@@ -560,6 +562,11 @@ func steamRefreshLibrary(ctx context.Context) steamRefreshResult {
 			logWarn("steam", "reading the library of %s failed: %v", acct.SteamID, err)
 			if cached := steamLoadLibrary(); cached.SteamID == acct.SteamID {
 				for _, g := range cached.Games {
+					// A non-Steam game is this PC's, not the account's: the
+					// local scan lists it again when it is still there.
+					if steamIsShortcut(g.AppID) {
+						continue
+					}
 					g.Installed = false
 					web = append(web, g)
 				}
@@ -745,7 +752,11 @@ func steamRoot() string {
 
 // steamFindLocalUser is the account the Steam app last signed in with.
 func steamFindLocalUser() (steamLocalUser, bool) {
-	root := steamRoot()
+	return steamFindLocalUserIn(steamRoot())
+}
+
+// steamFindLocalUserIn is steamFindLocalUser for the Steam app at root.
+func steamFindLocalUserIn(root string) (steamLocalUser, bool) {
 	if root == "" {
 		return steamLocalUser{}, false
 	}
@@ -832,8 +843,9 @@ func steamSkipLocalApp(appid int, name string) bool {
 }
 
 // steamInstalledGames lists the games the Steam app has installed or is
-// downloading; withPlaytime adds play time and last-played dates from the
-// account's localconfig.vdf (a large file: the download polls skip it).
+// downloading, then its non-Steam games; withPlaytime adds play time and
+// last-played dates from the account's localconfig.vdf (a large file: the
+// download polls skip it).
 func steamInstalledGames(root, steamID string, withPlaytime bool) []steamGame {
 	var games []steamGame
 	seen := map[int]bool{}
@@ -861,6 +873,18 @@ func steamInstalledGames(root, steamID string, withPlaytime bool) []steamGame {
 			}
 			seen[appid] = true
 			games = append(games, steamManifestGame(appid, name, st))
+		}
+	}
+	// The non-Steam games of the account this Steam app uses
+	// (steam_shortcuts.go): always installed, started like Steam's own.
+	user, _ := steamFindLocalUserIn(root)
+	for _, g := range steamShortcutGames(root, user.SteamID) {
+		if len(games) >= steamMaxGames {
+			break
+		}
+		if !seen[g.AppID] {
+			seen[g.AppID] = true
+			games = append(games, g)
 		}
 	}
 	if !withPlaytime {
@@ -986,7 +1010,12 @@ const (
 // steamRunURI is the steam:// link for action on appid: start it, open its
 // install dialog, or its uninstall confirmation. appid is a number and the
 // action one of three words, so the link is never anything but these forms.
+// A non-Steam game (steamIsShortcut) can only be started: its link is
+// rungameid with the 64-bit shortcut game id, whatever the action.
 func steamRunURI(appid int, action steamAction) string {
+	if steamIsShortcut(appid) {
+		return "steam://rungameid/" + strconv.FormatUint(steamShortcutGameID(appid), 10)
+	}
 	switch action {
 	case steamActInstall:
 		return "steam://install/" + strconv.Itoa(appid)
@@ -998,10 +1027,16 @@ func steamRunURI(appid int, action steamAction) string {
 
 var errSteamNoClient = errors.New("Steam is not installed here")
 
+// errSteamShortcutRunOnly refuses installing or uninstalling a non-Steam game.
+var errSteamShortcutRunOnly = errors.New("a non-Steam game can only be started from here · add or remove it in Steam")
+
 // steamLaunchLocal hands a game to the Steam app on this computer.
 func steamLaunchLocal(appid int, action steamAction) error {
 	if appid <= 0 {
 		return errors.New("no game")
+	}
+	if steamIsShortcut(appid) && action != steamActRun {
+		return errSteamShortcutRunOnly
 	}
 	if !steamClientPresent() {
 		return errSteamNoClient
@@ -1449,6 +1484,17 @@ func steamArtLooksLikeImage(b []byte) bool {
 // device cannot verify the CDN's certificate — it is a public picture).
 func steamFetchArt(appid int) error {
 	var data []byte
+	if steamIsShortcut(appid) {
+		// A non-Steam game has only the picture set in Steam on this PC; the
+		// CDN knows nothing of it.
+		if data = steamShortcutArt(steamRoot(), appid); data == nil {
+			return errors.New("no picture set in Steam")
+		}
+		if err := os.MkdirAll(steamArtDir(), 0o755); err != nil {
+			return err
+		}
+		return AtomicWrite(steamArtPath(appid), data, 0o644)
+	}
 	if root := steamRoot(); root != "" {
 		cache := filepath.Join(root, "appcache", "librarycache")
 		id := strconv.Itoa(appid)
@@ -1513,7 +1559,10 @@ func steamHandlePeerRun(w http.ResponseWriter, r *http.Request, call peerCall) {
 	if !peerDecodeBody(w, r, 4<<10, &req) {
 		return
 	}
-	if req.AppID <= 0 || req.AppID > 1<<31-1 {
+	// A non-Steam game's id (steam_shortcuts.go) lies above every Steam app
+	// id; anything else that high is refused.
+	shortcut := steamIsShortcut(req.AppID)
+	if req.AppID <= 0 || (req.AppID > 1<<31-1 && !shortcut) {
 		http.Error(w, "bad app id", http.StatusBadRequest)
 		return
 	}
@@ -1526,16 +1575,30 @@ func steamHandlePeerRun(w http.ResponseWriter, r *http.Request, call peerCall) {
 		http.Error(w, "unknown action", http.StatusBadRequest)
 		return
 	}
+	if shortcut && action != steamActRun {
+		http.Error(w, "a non-Steam game can only be started", http.StatusBadRequest)
+		return
+	}
 	if !steamClientPresent() {
 		http.Error(w, "Steam is not installed on this device", http.StatusConflict)
 		return
+	}
+	name := steamCleanText(req.Name, 80)
+	if shortcut {
+		// Only one of this PC's own shortcuts: the link starts whatever
+		// program the id names.
+		g, ok := steamShortcutListed(steamRoot(), req.AppID)
+		if !ok {
+			http.Error(w, "that game is not on this device", http.StatusNotFound)
+			return
+		}
+		name = g.Name
 	}
 	if err := steamOpenURI(steamRunURI(req.AppID, action)); err != nil {
 		logWarn("steam", "%s %d for %s failed: %v", action, req.AppID, call.rec.Name, err)
 		http.Error(w, "Steam could not be started", http.StatusConflict)
 		return
 	}
-	name := steamCleanText(req.Name, 80)
 	if name == "" {
 		name = "a Steam game"
 	}

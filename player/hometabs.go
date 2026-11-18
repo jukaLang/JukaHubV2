@@ -19,6 +19,10 @@ package main
 // tab comes back where it was left. The D-pad walks the page by its drawn
 // geometry; Up from its top row reaches the strip, Down from its bottom row
 // the power pill. On the strip Left/Right change tab and A changes the view.
+// With Tabs position Bottom (homelook.go) the strip sits over the footer
+// instead: Down from the bottom row reaches it, Up from it goes back into the
+// page, Down from it to the power pill, and Up from the page's top row to the
+// nearest top bar control.
 //
 // Buttons: L1/R1 (Tab / Shift+Tab, PgUp/PgDn) change tab and wrap round; A
 // opens; a folder (the Store, a collection) opens as a sub-page that B leaves;
@@ -316,7 +320,7 @@ func homeTabsSetView(c *Config, key, view string) {
 		return
 	}
 	m := homeTabsViewsMap(c)
-	next := make(map[string]string, len(m)+1)
+	next := make(map[string]string, len(m))
 	for k, v := range m {
 		next[k] = v
 	}
@@ -919,6 +923,36 @@ func (h *HomeLayout) tabsHeaderRight() HomeFocusID {
 	return best
 }
 
+// tabsHeaderNear is the top bar control nearest above the selected tile —
+// where Up from the page's top row goes when the strip is at the bottom
+// (homelook.go). "" when the bar has none.
+func (h *HomeLayout) tabsHeaderNear() HomeFocusID {
+	cx := homeTabs.body.X + homeTabs.body.W/2
+	if lvl := homeTabsLevelNow(); lvl != nil {
+		for _, hit := range homeTabs.hits {
+			if hit.i == lvl.focus && hit.r.W > 0 {
+				cx = hit.r.X + hit.r.W/2
+				break
+			}
+		}
+	}
+	best, bestD := HomeFocusID(""), int32(math.MaxInt32)
+	for _, id := range homeTabsHeaderIDs {
+		r := h.Items[id].Rect
+		if !h.Focus.IsEnabled(id) || r.W <= 0 {
+			continue
+		}
+		d := r.X + r.W/2 - cx
+		if d < 0 {
+			d = -d
+		}
+		if d < bestD {
+			best, bestD = id, d
+		}
+	}
+	return best
+}
+
 // tabsPageOrStrip focuses the page, or the strip when the page is empty.
 func (h *HomeLayout) tabsPageOrStrip() {
 	if lvl := homeTabsLevelNow(); lvl != nil && len(lvl.items) > 0 {
@@ -948,16 +982,27 @@ func (h *HomeLayout) tabsMove(direction FocusDirection) HomeFocusID {
 				return cur
 			}
 		}
-		switch direction {
-		case FocusUp:
+		bottom := homeTabsStripBottom()
+		switch {
+		case direction == FocusUp && bottom:
+			// The strip is under the page (Tabs position Bottom,
+			// homelook.go): Up from the top row reaches the top bar.
+			if id := h.tabsHeaderNear(); id != "" {
+				h.Focus.Set(id)
+			}
+		case direction == FocusUp:
 			h.Focus.Set(homeTabsStripID)
 			homeTabs.autoStrip = false
-		case FocusDown:
+		case direction == FocusDown && bottom:
+			h.Focus.Set(homeTabsStripID)
+			homeTabs.autoStrip = false
+		case direction == FocusDown:
 			if h.Focus.IsEnabled(HomeFocusExit) {
 				h.Focus.Set(HomeFocusExit)
 			}
 		}
 	case homeTabsStripID:
+		bottom := homeTabsStripBottom()
 		switch direction {
 		case FocusLeft, FocusRight:
 			vis := homeTabsVisible(appConfig)
@@ -973,13 +1018,29 @@ func (h *HomeLayout) tabsMove(direction FocusDirection) HomeFocusID {
 				PlayNavSound()
 				return cur
 			}
-			if direction == FocusRight {
+			if direction == FocusRight && !bottom {
 				if id := h.tabsHeaderRight(); id != "" {
 					h.Focus.Set(id)
 				}
 			}
-		case FocusDown:
+		case FocusUp:
+			// At the bottom the page is above the strip: back into it, or
+			// on to the top bar when it is empty.
+			if !bottom {
+				break
+			}
 			if lvl := homeTabsLevelNow(); lvl != nil && len(lvl.items) > 0 {
+				h.Focus.Set(homeTabsPageID)
+				homeTabs.autoStrip = false
+			} else if id := h.tabsHeaderNear(); id != "" {
+				h.Focus.Set(id)
+			}
+		case FocusDown:
+			if bottom {
+				if h.Focus.IsEnabled(HomeFocusExit) {
+					h.Focus.Set(HomeFocusExit)
+				}
+			} else if lvl := homeTabsLevelNow(); lvl != nil && len(lvl.items) > 0 {
 				h.Focus.Set(homeTabsPageID)
 				homeTabs.autoStrip = false
 			} else if h.Focus.IsEnabled(HomeFocusExit) {
@@ -987,19 +1048,22 @@ func (h *HomeLayout) tabsMove(direction FocusDirection) HomeFocusID {
 			}
 		}
 	case HomeFocusExit:
-		if direction == FocusUp {
+		switch {
+		case direction == FocusUp && homeTabsStripBottom():
+			h.Focus.Set(homeTabsStripID)
+		case direction == FocusUp:
 			h.tabsPageOrStrip()
-		} else {
+		default:
 			h.Focus.Move(direction)
 		}
 	default:
 		// A top bar control: Down drops into the page; Left past the first
-		// one comes back to the strip.
+		// one comes back to the strip when it is in the bar.
 		if direction == FocusDown {
 			h.tabsPageOrStrip()
 			break
 		}
-		if next := h.Focus.Move(direction); next == cur && direction == FocusLeft {
+		if next := h.Focus.Move(direction); next == cur && direction == FocusLeft && !homeTabsStripBottom() {
 			h.Focus.Set(homeTabsStripID)
 		}
 	}
@@ -1117,26 +1181,76 @@ func (h *HomeLayout) tabsWheel(dy int32) bool {
 	if homeTabsEdit.open {
 		return true
 	}
+	if dy != 0 {
+		h.tabsScroll(dy > 0, 1)
+	}
+	return true
+}
+
+// tabsScroll walks the page up to steps items along the axis its view
+// scrolls, back towards the start or on (the wheel, a vertical swipe). The
+// page follows the focus; one step sound for the walk.
+func (h *HomeLayout) tabsScroll(back bool, steps int) {
 	lvl := homeTabsLevelNow()
-	if lvl == nil || len(lvl.items) == 0 || dy == 0 {
-		return true
+	if lvl == nil || len(lvl.items) == 0 {
+		return
 	}
 	view := homeTabsViewFor(appConfig, lvl.key)
 	horiz := view == homeTabViewRow || view == homeTabViewCarousel
 	dir := FocusDown
 	switch {
-	case dy > 0 && horiz:
+	case back && horiz:
 		dir = FocusLeft
-	case dy < 0 && horiz:
+	case horiz:
 		dir = FocusRight
-	case dy > 0:
+	case back:
 		dir = FocusUp
 	}
-	if next, leave := h.tabsStepFrom(lvl, dir); !leave && next != lvl.focus {
+	moved := false
+	for ; steps > 0; steps-- {
+		next, leave := h.tabsStepFrom(lvl, dir)
+		if leave || next == lvl.focus {
+			break
+		}
 		lvl.focus = next
+		moved = true
+	}
+	if moved {
 		lvl.hover = false
 		h.Focus.Set(homeTabsPageID)
 		PlayNavSound()
+	}
+}
+
+// homeTabsSwipeSteps is how far a vertical swipe walks the page: a flick
+// passes a few items where a wheel notch passes one.
+const homeTabsSwipeSteps = 3
+
+// homeTabsSwipe is a finger swipe over the Tabs Home (handleSwipe, core.go:
+// the touch screen's swipe detector, where a short touch is a tap and arrives
+// as a click). Sideways changes tab as L1/R1 does — the new page slides in
+// from the side the finger moved away from, at once under Reduce motion — and
+// up or down scrolls the page along its view's axis, as the wheel does. The
+// pad is not involved. It reports false off the Tabs Home; on it a swipe never
+// changes the screen.
+func homeTabsSwipe(direction string, c *Config) bool {
+	if !homeTabsOn() {
+		return false
+	}
+	if homeTabsItemSheetActive() || homeTabsEdit.open || !homeOwnsPointer() {
+		// A sheet, a menu or a panel over Home keeps the swipe from the page,
+		// and the screen behind it stays where it is.
+		return true
+	}
+	switch direction {
+	case "left":
+		homeTabsStepTab(c, 1)
+	case "right":
+		homeTabsStepTab(c, -1)
+	case "up":
+		homeLayout.tabsScroll(false, homeTabsSwipeSteps)
+	case "down":
+		homeLayout.tabsScroll(true, homeTabsSwipeSteps)
 	}
 	return true
 }
