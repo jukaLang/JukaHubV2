@@ -8,9 +8,13 @@ package main
 // RetroArch video filter (videofilter.go) and extra arguments for its
 // launcher. Nothing here writes to the emulator or the firmware
 // directly — the sheet stores a small JSON record and the launch path
-// (game_library.go) applies it for that child only.
+// (game_library.go) applies it for that child only. The file rows are the
+// exception, each behind a keyboard's Rename or a question that opens on
+// Cancel: Rename file (game_rename.go), Remove cover (artwork_nocover.go) and
+// Delete game (game_delete.go) change the card.
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -19,11 +23,14 @@ import (
 
 const (
 	gameOptionsRowTitle = iota
+	gameOptionsRowFileName
 	gameOptionsRowHidden
 	gameOptionsRowSort
 	gameOptionsRowLayout
+	gameOptionsRowConsoleLook // game_library_pixel_look.go
 	gameOptionsRowShowHidden
 	gameOptionsRowEmulator
+	gameOptionsRowDisc // discpage.go: only for a game on more than one disc
 	gameOptionsRowCPUProfile
 	gameOptionsRowCeiling
 	gameOptionsRowVideo
@@ -31,11 +38,15 @@ const (
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
 	gameOptionsRowCheats
+	gameOptionsRowButtons // racontrols_ui.go
+	gameOptionsRowTurbo   // racontrols_ui.go
 	gameOptionsRowDiagnose
 	gameOptionsRowChooseCover
+	gameOptionsRowRemoveCover
 	gameOptionsRowCoverName
 	gameOptionsRowCovers
 	gameOptionsRowReset
+	gameOptionsRowDelete
 	gameOptionsRowCount
 )
 
@@ -46,6 +57,8 @@ const (
 	gameOptionsChoiceNone = iota
 	gameOptionsChoiceReset
 	gameOptionsChoiceCovers
+	gameOptionsChoiceRemoveCover // artwork_nocover.go
+	gameOptionsChoiceDelete      // game_delete.go
 )
 
 var gameOptsUI struct {
@@ -70,12 +83,25 @@ var gameOptsUI struct {
 	coverFiles []artCleanupFile
 	coverBytes int64
 	coverWait  bool
+	// coverCard is the card's own picture Remove cover may also take
+	// (gameCoverCardPicture); deleteFiles and deleteBytes are what Delete
+	// game would remove (gameDeleteFiles). Both are read when the question
+	// opens.
+	coverCard   string
+	deleteFiles []string
+	deleteBytes int64
 	// emulators are the ones that can play the game (findGameLaunchers), read
 	// when the sheet opens for the Emulator row.
 	emulators []emuEntry
 
 	// systemLauncher is the console's game-launchers.json pin, if any.
 	systemLauncher string
+	// systemClearable: Left on the Emulator row may remove that pin
+	// (emuConsoleLauncherClearable), worked out when it changes, not per frame.
+	systemClearable bool
+	// moreCores counts the cores X on the Emulator row would fetch for the
+	// console (emumorecores.go), worked out on open.
+	moreCores int
 }
 
 // gameArgsBuffer is what the on-screen keyboard edits for the arguments row.
@@ -85,17 +111,23 @@ var gameArgsBuffer string
 func gameOptionsRowName(row int) string {
 	switch row {
 	case gameOptionsRowTitle:
-		return "Display title"
+		return "Rename title"
+	case gameOptionsRowFileName:
+		return "Rename file"
 	case gameOptionsRowHidden:
 		return "Visibility"
 	case gameOptionsRowSort:
 		return "Library sort"
 	case gameOptionsRowLayout:
 		return "Library view"
+	case gameOptionsRowConsoleLook:
+		return "Console look"
 	case gameOptionsRowShowHidden:
 		return "Show hidden"
 	case gameOptionsRowEmulator:
 		return "Emulator"
+	case gameOptionsRowDisc:
+		return "Disc"
 	case gameOptionsRowCPUProfile:
 		return "CPU profile"
 	case gameOptionsRowCeiling:
@@ -110,18 +142,36 @@ func gameOptionsRowName(row int) string {
 		return "Open in…"
 	case gameOptionsRowCheats:
 		return "Cheats"
+	case gameOptionsRowButtons:
+		return "Buttons"
+	case gameOptionsRowTurbo:
+		return "Turbo"
 	case gameOptionsRowDiagnose:
 		return "Check why it won't start"
 	case gameOptionsRowChooseCover:
 		return "Choose cover"
+	case gameOptionsRowRemoveCover:
+		if gameOptionsNoCover() {
+			return "Restore cover"
+		}
+		return "Remove cover"
 	case gameOptionsRowCoverName:
 		return "Name for covers"
 	case gameOptionsRowCovers:
 		return "Clean up covers"
 	case gameOptionsRowReset:
 		return "Reset game…"
+	case gameOptionsRowDelete:
+		return "Delete game…"
 	}
 	return ""
+}
+
+// gameOptionsNoCover reports the sheet's game's cover as removed
+// (artwork_nocover.go). A cached folder lookup, cheap per frame.
+func gameOptionsNoCover() bool {
+	rom, ok := gameCoverROM(gameOptsUI.game)
+	return ok && artworkNoCover(rom, libraryArtworkRoot())
 }
 
 // gameOptionsRowHint is the second line under a row label, explaining what the
@@ -130,16 +180,40 @@ func gameOptionsRowHint(row int) string {
 	switch row {
 	case gameOptionsRowTitle:
 		return "Shown in the library; the ROM file keeps its name"
+	case gameOptionsRowFileName:
+		return "Renames the ROM on the card with its saves, states and covers"
 	case gameOptionsRowHidden:
 		return "Hide this game; Show hidden brings it back"
 	case gameOptionsRowSort:
 		return "Order of every console's games"
 	case gameOptionsRowLayout:
 		return "List, a 3D shelf, or a vertical cover column"
+	case gameOptionsRowConsoleLook:
+		return gameOptionsConsoleLookHint()
 	case gameOptionsRowShowHidden:
 		return "Reveal games hidden from the library"
 	case gameOptionsRowEmulator:
-		return "Which emulator plays it, or ask each time when several can"
+		if gameOptsUI.opts.Emulator == "" && gameOptsUI.systemClearable {
+			// Set for the whole console (the picker's X, emuchoices.go).
+			left := "Left asks again"
+			if emuPickAskModeNow() == emuAskNever {
+				left = "Left goes back to Automatic"
+			}
+			return "Set for every " + gameOptsUI.game.System + " game · " + left + ", Right picks one for this game"
+		}
+		if gameOptsUI.moreCores > 0 {
+			// The console's other cores, one press away (emumorecores.go).
+			return fmt.Sprintf("Which emulator plays it · X gets %s for %s",
+				pluralizeCount(gameOptsUI.moreCores, "more core", "more cores"), gameOptsUI.game.System)
+		}
+		if gameOptsUI.opts.Emulator == "" && gameOptsUI.systemLauncher == "" && len(gameOptsUI.emulators) > 1 &&
+			!emuPickAsks(gameOptsUI.emulators) {
+			// Ask which emulator: Never — this row is where the others are.
+			return fmt.Sprintf("Starts in the best one · Right picks one of %d", len(gameOptsUI.emulators))
+		}
+		return "Which emulator plays it, or ask when several can"
+	case gameOptionsRowDisc:
+		return discOptionsHint()
 	case gameOptionsRowCPUProfile:
 		return "Battery saver, Balanced or Performance while this game runs"
 	case gameOptionsRowCeiling:
@@ -154,17 +228,28 @@ func gameOptionsRowHint(row int) string {
 	case gameOptionsRowOpenIn:
 		return "Hand this game to its tool: profile, compatibility or emulator"
 	case gameOptionsRowCheats:
-		return "RetroArch cheats from libretro's database, on for this game only"
+		return "Cheats from libretro's database (RetroArch or NextUI), on for this game only"
+	case gameOptionsRowButtons:
+		return gameControlsSheetHint(gameOptsUI.game, false)
+	case gameOptionsRowTurbo:
+		return gameControlsSheetHint(gameOptsUI.game, true)
 	case gameOptionsRowDiagnose:
 		return "Missing BIOS, core or game files, and where to copy them"
 	case gameOptionsRowChooseCover:
 		return "The closest box art on the server or in the Imgs folder"
+	case gameOptionsRowRemoveCover:
+		if gameOptionsNoCover() {
+			return "No picture is shown or fetched for it · A brings covers back"
+		}
+		return "Show no picture for this game, and fetch none again"
 	case gameOptionsRowCoverName:
 		return "The title box art is looked up by, if the file name differs"
 	case gameOptionsRowCovers:
 		return "Find downloaded box art no game in the library uses"
 	case gameOptionsRowReset:
 		return "Settings, core overrides, remaps, DIP switches, high scores"
+	case gameOptionsRowDelete:
+		return "Removes the game's files from the card; saves and states stay"
 	}
 	return ""
 }
@@ -177,6 +262,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			return title
 		}
 		return "Default"
+	case gameOptionsRowFileName:
+		return gameRenameRowValue(gameOptsUI.game)
 	case gameOptionsRowHidden:
 		if gameOptsUI.game.Hidden {
 			return "Hidden"
@@ -186,6 +273,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return librarySortLabel()
 	case gameOptionsRowLayout:
 		return libraryLayoutLabel()
+	case gameOptionsRowConsoleLook:
+		return libraryConsoleLookLabel()
 	case gameOptionsRowShowHidden:
 		if libraryShowHidden() {
 			return "Shown"
@@ -194,7 +283,15 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 	case gameOptionsRowEmulator:
 		if opts.Emulator == "" && gameOptsUI.systemLauncher != "" {
 			// game-launchers.json pins the console: no question is asked.
-			return filepath.Base(gameOptsUI.systemLauncher) + " (console setting)"
+			// Named as the picker names it when it is one of the choices.
+			name := filepath.Base(gameOptsUI.systemLauncher)
+			for _, e := range gameOptsUI.emulators {
+				if strings.EqualFold(filepath.Clean(e.Launch), filepath.Clean(gameOptsUI.systemLauncher)) {
+					name = e.Name
+					break
+				}
+			}
+			return name + " (console setting)"
 		}
 		if opts.Emulator == "" {
 			// NextUI starts it through its pak without asking (nextui.go).
@@ -203,6 +300,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			}
 		}
 		return gameEmulatorLabel(opts.Emulator, gameOptsUI.emulators)
+	case gameOptionsRowDisc:
+		return discOptionsValue()
 	case gameOptionsRowCPUProfile:
 		return gameCPUProfileLabel(opts.CPUProfile)
 	case gameOptionsRowCeiling:
@@ -221,10 +320,22 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return "→"
 	case gameOptionsRowCheats:
 		return cheatsOptionsValue(gameOptsUI.game.Path)
+	case gameOptionsRowButtons:
+		return gameButtonsSheetValue(gameOptsUI.game)
+	case gameOptionsRowTurbo:
+		return gameTurboSheetValue(gameOptsUI.game)
 	case gameOptionsRowDiagnose:
 		return "Check"
 	case gameOptionsRowChooseCover:
 		return "→"
+	case gameOptionsRowRemoveCover:
+		switch {
+		case gameOptionsNoCover():
+			return "Removed"
+		case !artworkCoverPresent(gameOptsUI.game.Art):
+			return "None"
+		}
+		return "Choose…"
 	case gameOptionsRowCoverName:
 		return artworkAliasRowValue(gameOptsUI.game)
 	case gameOptionsRowCovers:
@@ -232,7 +343,7 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			return "Looking…"
 		}
 		return "→"
-	case gameOptionsRowReset:
+	case gameOptionsRowReset, gameOptionsRowDelete:
 		return "Choose…"
 	}
 	return ""
@@ -241,9 +352,14 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 // gameOptionsChoiceRows is the number of answers the open second step offers.
 func gameOptionsChoiceRows() int {
 	switch gameOptsUI.choice {
-	case gameOptionsChoiceReset:
+	case gameOptionsChoiceReset, gameOptionsChoiceDelete:
 		return 3
 	case gameOptionsChoiceCovers:
+		return 2
+	case gameOptionsChoiceRemoveCover:
+		if gameOptsUI.coverCard != "" {
+			return 3
+		}
 		return 2
 	}
 	return 0
@@ -268,8 +384,35 @@ func gameOptionsChoiceText(row int) (string, string) {
 		case 1:
 			return "Cancel", "Keep every cover"
 		}
+	case gameOptionsChoiceRemoveCover:
+		if row == gameOptionsChoiceRows()-1 {
+			return "Cancel", "Keep the cover"
+		}
+		switch row {
+		case 0:
+			return "Remove the cover", "No picture and none fetched again; JukaHub's copy goes to the trash"
+		case 1:
+			return "Also remove the card's picture",
+				gameCoverCardLabel(gameOptsUI.coverCard) + " goes to the trash too, so the firmware shows none"
+		}
+	case gameOptionsChoiceDelete:
+		size := gameResetFilesWord(len(gameOptsUI.deleteFiles)) + ", " + humanBytes(gameOptsUI.deleteBytes)
+		switch row {
+		case 0:
+			return "Move to the trash", size + " to reset-trash; saves and states stay"
+		case 1:
+			return "Delete for good", "Frees " + humanBytes(gameOptsUI.deleteBytes) + " now; saves and states stay"
+		case 2:
+			return "Cancel", "Keep the game"
+		}
 	}
 	return "", ""
+}
+
+// gameCoverCardLabel names a card picture by its folder and file
+// ("Imgs/Tetris.png").
+func gameCoverCardLabel(path string) string {
+	return filepath.Base(filepath.Dir(path)) + "/" + filepath.Base(path)
 }
 
 // gameOptionsChoiceNote is the line under the answers.
@@ -279,6 +422,10 @@ func gameOptionsChoiceNote() string {
 		return "The ROM, battery saves and playtime stay; removed files go to reset-trash."
 	case gameOptionsChoiceCovers:
 		return "Only JukaHub's own game-art folder; the trash keeps them for a while."
+	case gameOptionsChoiceRemoveCover:
+		return "Restore cover or Choose cover brings a picture back."
+	case gameOptionsChoiceDelete:
+		return "The trash keeps the " + itoa(resetTrashKeepDeleted) + " newest deleted games; Reset game removes saves."
 	}
 	return ""
 }
@@ -306,6 +453,9 @@ func closeGameOptionsChoice(sound bool) {
 	gameOptsUI.scroll = gameOptsUI.mainScroll
 	gameOptsUI.coverFiles = nil
 	gameOptsUI.coverBytes = 0
+	gameOptsUI.coverCard = ""
+	gameOptsUI.deleteFiles = nil
+	gameOptsUI.deleteBytes = 0
 	if sound {
 		PlayBackSound()
 	}
@@ -313,10 +463,28 @@ func closeGameOptionsChoice(sound bool) {
 
 // activateGameOptionsChoice runs the highlighted answer.
 func activateGameOptionsChoice() {
-	choice, row := gameOptsUI.choice, gameOptsUI.cursor
+	choice, row, rows := gameOptsUI.choice, gameOptsUI.cursor, gameOptionsChoiceRows()
 	files := gameOptsUI.coverFiles
+	card, doomed := gameOptsUI.coverCard, gameOptsUI.deleteFiles
 	closeGameOptionsChoice(false)
 	switch choice {
+	case gameOptionsChoiceRemoveCover:
+		if row == rows-1 {
+			PlayBackSound()
+			return
+		}
+		PlayActivateSound()
+		if row == 0 {
+			card = ""
+		}
+		runGameCoverRemove(gameOptsUI.game, card) // artwork_nocover.go
+	case gameOptionsChoiceDelete:
+		if row > 1 {
+			PlayBackSound()
+			return
+		}
+		PlayActivateSound()
+		runGameDelete(gameOptsUI.game, doomed, row == 1) // game_delete.go
 	case gameOptionsChoiceReset:
 		switch row {
 		case 0:
@@ -396,17 +564,30 @@ func openGameOptions() bool {
 	gameOptsUI.scroll = 0
 	gameOptsUI.visible = 0
 	gameOptsUI.opts = gameOptionsFor(game.Path)
+	discOptionsOpen(game) // the Disc row's discs and start disc (discpage.go)
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
 	gameOptsUI.choice = gameOptionsChoiceNone
 	gameOptsUI.coverFiles = nil
 	gameOptsUI.coverWait = false
+	gameOptsUI.coverCard, gameOptsUI.deleteFiles, gameOptsUI.deleteBytes = "", nil, 0
 	gameOptsUI.emulators = nil
 	gameOptsUI.systemLauncher = ""
 	if game.System != androidLibrarySystem && game.System != html5LibrarySystem && game.System != portsLibrarySystem {
 		// On NextUI the game's own pak leads the ladder (nextui.go).
-		gameOptsUI.emulators = nextuiWithPakFirst(game.Path, findGameLaunchers(game.System, emulatorEntries()))
+		entries := emulatorEntries()
+		launchers := findGameLaunchers(game.System, entries)
+		// A Color cartridge on the Game Boy shelf is offered the Game Boy
+		// Color emulators, as its start is (gbcsort.go).
+		if nextuiPakFor(game.Path) == "" && gbcLaunchAsColor(game.System, game.Path) {
+			if color := findGameLaunchers(gbcLibrarySystem, entries); len(color) > 0 {
+				launchers = color
+			}
+		}
+		gameOptsUI.emulators = nextuiWithPakFirst(game.Path, launchers)
 		gameOptsUI.systemLauncher = configuredGameLauncher(game.System, loadGameLauncherOverrides(gameLauncherOverridesPath()))
 	}
+	gameOptsUI.systemClearable = emuConsoleLauncherClearable(gameOptsUI.systemLauncher)
+	gameOptsUI.moreCores = emuMoreCoresAvailableFor(game.System, len(gameOptsUI.emulators) > 0)
 	PlayActivateSound()
 	return true
 }
@@ -419,6 +600,7 @@ func closeGameOptions() {
 	gameOptsUI.rowHits = gameOptsUI.rowHits[:0]
 	gameOptsUI.choice = gameOptionsChoiceNone
 	gameOptsUI.coverFiles = nil
+	gameOptsUI.coverCard, gameOptsUI.deleteFiles, gameOptsUI.deleteBytes = "", nil, 0
 	cheatsClose(false)
 	artChooseClose(false)
 	PlayBackSound()
@@ -431,14 +613,20 @@ func gameOptionsRows() int {
 		return n
 	}
 	if gameOptsUI.game.System == html5LibrarySystem {
-		// The first five rows are title, visibility, sort and view. Emulator
-		// launch options and reset controls do not apply to browser games.
-		return gameOptionsRowShowHidden + 1
+		return len(gameOptionsHTML5Rows)
 	}
 	if gameOptsUI.game.System == portsLibrarySystem {
 		return len(gameOptionsPortRows)
 	}
-	return gameOptionsRowCount
+	return gameOptionsDefaultRows() // discpage.go: the Disc row is for multi-disc games
+}
+
+// gameOptionsHTML5Rows are a browser game's rows: title, visibility, sort and
+// view. Its files belong to its folder (no Rename file or Delete game), and
+// emulator launch options and reset controls do not apply to it.
+var gameOptionsHTML5Rows = [...]int{
+	gameOptionsRowTitle, gameOptionsRowHidden, gameOptionsRowSort, gameOptionsRowLayout,
+	gameOptionsRowConsoleLook, gameOptionsRowShowHidden,
 }
 
 // gameOptionsPortRows are the rows a PortMaster port shows: the library's own,
@@ -446,24 +634,31 @@ func gameOptionsRows() int {
 // beginLaunchPowerProfile), its own checks (gamediag.go → portWhyRun) and the
 // covers cleanup. Emulator, video filter, shader speed, extra arguments,
 // Open in…, cheats and reset are for emulated games: a port's script starts
-// its own engine and reads none of them.
+// its own engine and reads none of them. Its files belong to its folder, so
+// Rename file and Delete game are not offered; Remove cover is.
 var gameOptionsPortRows = [...]int{
 	gameOptionsRowTitle, gameOptionsRowHidden, gameOptionsRowSort, gameOptionsRowLayout,
-	gameOptionsRowShowHidden, gameOptionsRowCPUProfile, gameOptionsRowCeiling,
-	gameOptionsRowDiagnose, gameOptionsRowCovers,
+	gameOptionsRowConsoleLook, gameOptionsRowShowHidden, gameOptionsRowCPUProfile, gameOptionsRowCeiling,
+	gameOptionsRowDiagnose, gameOptionsRowRemoveCover, gameOptionsRowCovers,
 }
 
 // gameOptionsRowAt is the row shown at position pos: the cursor and the hit
-// boxes count positions, which are the rows themselves except for a port. -1
-// is no row.
+// boxes count positions, which are the rows themselves except for a port and
+// a browser game. -1 is no row.
 func gameOptionsRowAt(pos int) int {
-	if gameOptsUI.game.System == portsLibrarySystem {
-		if pos >= 0 && pos < len(gameOptionsPortRows) {
-			return gameOptionsPortRows[pos]
-		}
-		return -1
+	var rows []int
+	switch gameOptsUI.game.System {
+	case portsLibrarySystem:
+		rows = gameOptionsPortRows[:]
+	case html5LibrarySystem:
+		rows = gameOptionsHTML5Rows[:]
+	default:
+		return gameOptionsDefaultRowAt(pos) // discpage.go
 	}
-	return pos
+	if pos >= 0 && pos < len(rows) {
+		return rows[pos]
+	}
+	return -1
 }
 
 // gameOptionsMove keeps the highlight on a real row.
@@ -496,7 +691,30 @@ func adjustGameOptions(delta int) {
 		return
 	}
 	switch gameOptionsRowAt(gameOptsUI.cursor) {
+	case gameOptionsRowDisc:
+		if !discOptionsStep(delta) {
+			return
+		}
 	case gameOptionsRowEmulator:
+		if delta < 0 && gameOptsUI.opts.Emulator == "" && gameOptsUI.systemClearable {
+			// Left of the console's own choice (the picker's X) takes it back:
+			// the console's games ask again (emuchoices.go).
+			system := gameOptsUI.game.System
+			if err := emuConsoleLauncherSet(system, ""); err != nil {
+				ShowToast(err.Error(), ToastKindWarning)
+				return
+			}
+			gameOptsUI.systemLauncher = configuredGameLauncher(system, loadGameLauncherOverrides(gameLauncherOverridesPath()))
+			gameOptsUI.systemClearable = emuConsoleLauncherClearable(gameOptsUI.systemLauncher)
+			if emuPickAskModeNow() == emuAskNever {
+				// Ask which emulator is Never: nothing asks (emupicker.go).
+				ShowToast(system+" games are back on Automatic", ToastKindInfo)
+			} else {
+				ShowToast(system+" games ask which emulator again", ToastKindInfo)
+			}
+			PlayNavSound()
+			return
+		}
 		next := cycleGameEmulator(gameOptsUI.opts.Emulator, gameOptsUI.emulators, delta)
 		if next == gameOptsUI.opts.Emulator {
 			return
@@ -532,6 +750,11 @@ func adjustGameOptions(delta int) {
 			o.VideoFilter = next
 			return o
 		})
+	case gameOptionsRowButtons, gameOptionsRowTurbo:
+		// Left/Right stop at the ends (racontrols_ui.go).
+		if !gameControlsSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowTurbo, delta, false) {
+			return
+		}
 	case gameOptionsRowSort:
 		cycleLibrarySort(delta)
 		refreshLibraryView()
@@ -540,6 +763,8 @@ func adjustGameOptions(delta int) {
 		cycleLibraryLayout(delta)
 		gameLib.scroll = 0
 		ShowToast("Library view: "+libraryLayoutLabel(), ToastKindInfo)
+	case gameOptionsRowConsoleLook:
+		stepLibraryConsoleLook(delta)
 	case gameOptionsRowShowHidden:
 		setLibraryShowHidden(delta > 0)
 		refreshLibraryView()
@@ -565,6 +790,8 @@ func activateGameOptionsRow() {
 	switch gameOptionsRowAt(gameOptsUI.cursor) {
 	case gameOptionsRowTitle:
 		vkOpenGameTitle()
+	case gameOptionsRowFileName:
+		vkOpenGameFileName() // game_rename.go
 	case gameOptionsRowHidden:
 		toggleGameHidden()
 	case gameOptionsRowSort:
@@ -575,6 +802,8 @@ func activateGameOptionsRow() {
 		cycleLibraryLayout(1)
 		gameLib.scroll = 0
 		ShowToast("Library view: "+libraryLayoutLabel(), ToastKindInfo)
+	case gameOptionsRowConsoleLook:
+		stepLibraryConsoleLook(1)
 	case gameOptionsRowShowHidden:
 		setLibraryShowHidden(!libraryShowHidden())
 		refreshLibraryView()
@@ -583,7 +812,7 @@ func activateGameOptionsRow() {
 		} else {
 			ShowToast("Hidden games concealed", ToastKindInfo)
 		}
-	case gameOptionsRowCeiling, gameOptionsRowCPUProfile, gameOptionsRowVideo:
+	case gameOptionsRowCeiling, gameOptionsRowCPUProfile, gameOptionsRowVideo, gameOptionsRowDisc:
 		adjustGameOptions(1)
 	case gameOptionsRowEmulator:
 		// A walks the list and wraps back to "Ask each time" at its end, so
@@ -607,6 +836,11 @@ func activateGameOptionsRow() {
 		openGameLibraryHandoffFromSheet()
 	case gameOptionsRowCheats:
 		openCheatsSheet(gameOptsUI.game)
+	case gameOptionsRowButtons, gameOptionsRowTurbo:
+		// A goes round, so one button reaches every choice (racontrols_ui.go).
+		if gameControlsSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowTurbo, 1, true) {
+			PlayNavSound()
+		}
 	case gameOptionsRowDiagnose:
 		// The answer opens as the launch-failure card (gamediag.go).
 		game := gameOptsUI.game
@@ -614,6 +848,8 @@ func activateGameOptionsRow() {
 		gameDiagRunManual(game)
 	case gameOptionsRowChooseCover:
 		openArtChoose() // artwork_choose.go
+	case gameOptionsRowRemoveCover:
+		gameOptionsRemoveCover()
 	case gameOptionsRowCoverName:
 		vkOpenArtworkAlias()
 	case gameOptionsRowCovers:
@@ -631,7 +867,28 @@ func activateGameOptionsRow() {
 			return
 		}
 		openGameOptionsChoice(gameOptionsChoiceReset)
+	case gameOptionsRowDelete:
+		gameDeleteAsk(gameOptsUI.game) // game_delete.go: counts, then asks
 	}
+}
+
+// gameOptionsRemoveCover is A on Remove cover: the question, or for a cover
+// already removed, Restore cover (artwork_nocover.go).
+func gameOptionsRemoveCover() {
+	game := gameOptsUI.game
+	rom, ok := gameCoverROM(game)
+	if !ok {
+		ShowToast("This game's picture comes from its app, not from a cover", ToastKindInfo)
+		return
+	}
+	if artworkNoCover(rom, libraryArtworkRoot()) {
+		runGameCoverRestore(game)
+		return
+	}
+	// Set before the question opens: it adds an answer, and the question opens
+	// on its last one, Cancel.
+	gameOptsUI.coverCard = gameCoverCardPicture(rom)
+	openGameOptionsChoice(gameOptionsChoiceRemoveCover)
 }
 
 // applyGameArgs commits the keyboard buffer to the highlighted game.
@@ -685,9 +942,31 @@ func handleGameOptionsKey(e *sdl.KeyboardEvent) bool {
 		adjustGameOptions(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		activateGameOptionsRow()
+	case sdl.K_x:
+		gameOptionsMoreCores()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		gameOptionsBack()
 	}
+	return true
+}
+
+// gameOptionsMoreCoresHere reports whether X fetches the console's other
+// cores now: the highlight is on the Emulator row and there are some.
+func gameOptionsMoreCoresHere() bool {
+	return gameOptsUI.choice == gameOptionsChoiceNone && gameOptsUI.moreCores > 0 &&
+		gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowEmulator
+}
+
+// gameOptionsMoreCores is X on the Emulator row: the sheet closes and the
+// console's other cores download (emumorecores.go). It reports whether it
+// acted.
+func gameOptionsMoreCores() bool {
+	if !gameOptsUI.open || !gameOptionsMoreCoresHere() {
+		return false
+	}
+	system := gameOptsUI.game.System
+	closeGameOptions()
+	emuMoreCoresStart(system)
 	return true
 }
 
@@ -722,6 +1001,8 @@ func ctrlGameOptions(e *sdl.ControllerButtonEvent) bool {
 		adjustGameOptions(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		activateGameOptionsRow()
+	case sdl.CONTROLLER_BUTTON_X:
+		return gameOptionsMoreCores()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		gameOptionsBack()
 	default:
@@ -793,6 +1074,11 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	case gameOptionsChoiceCovers:
 		title = "Clean up covers"
 		subtitle = "Box art no game in the library uses"
+	case gameOptionsChoiceRemoveCover:
+		title = "Remove cover"
+	case gameOptionsChoiceDelete:
+		title = "Delete game"
+		subtitle = filepath.Base(gameOptsUI.game.Path)
 	}
 	header := UIPanelHeader(title, subtitle, "gamepad")
 	rows := gameOptionsRows()
@@ -892,6 +1178,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		if idx == gameOptionsRowHidden && gameOptsUI.game.Hidden {
 			valueColor = focusColor
 		}
+		if idx == gameOptionsRowRemoveCover && gameOptionsNoCover() {
+			valueColor = focusColor
+		}
 		if idx == gameOptionsRowCeiling && gameOptsUI.opts.MaxFreqKHz > 0 {
 			valueColor = focusColor
 		}
@@ -906,11 +1195,16 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		if idx == gameOptionsRowCheats && cheatsEnabledCount(gameOptsUI.game.Path) > 0 {
 			valueColor = focusColor
 		}
+		buttonsRow := idx == gameOptionsRowButtons || idx == gameOptionsRowTurbo
+		if buttonsRow && gameControlsSheetOwn(gameOptsUI.game, idx == gameOptionsRowTurbo) {
+			valueColor = focusColor
+		}
 		// Ladders and toggles show which way they move; a static value would
 		// leave Left/Right undiscoverable.
-		if selected && (idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
+		if selected && (buttonsRow || idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
 			idx == gameOptionsRowVideo || idx == gameOptionsRowSort || idx == gameOptionsRowLayout ||
-			idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden || idx == gameOptionsRowEmulator) {
+			idx == gameOptionsRowConsoleLook || idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden ||
+			idx == gameOptionsRowEmulator) {
 			value = "‹  " + value + "  ›"
 		}
 		value = ellipsize(font, value, innerW/2)
@@ -932,6 +1226,10 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 
 	hint := hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Change"},
 		FooterHint{"B", "Back"})
+	if gameOptionsMoreCoresHere() {
+		hint = hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Change"},
+			FooterHint{"X", "More cores"}, FooterHint{"B", "Back"})
+	}
 	if choosing {
 		hint = hintLine(FooterHint{"D-Pad", "Row"}, FooterHint{"A", "Choose"},
 			FooterHint{"B", "Cancel"})

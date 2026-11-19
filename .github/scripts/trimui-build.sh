@@ -196,6 +196,22 @@ check() {
 	size=$(($(wc -c < "$bin") / 1048576))
 	say "$bin: AArch64, $interp, glibc up to $max (limit $GLIBC_MAX), $size MiB"
 	say "needs: $needed"
+	# jukaboot beside it must be a static AArch64 program: build_image.py
+	# would leave it out (and boot the card with the shell init) otherwise.
+	boot="$(dirname "$bin")/jukaboot"
+	if [ -f "$boot" ]; then
+		case "$(readelf -h "$boot" 2> /dev/null | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" in
+		*AArch64*) ;;
+		*) die "$boot is not an AArch64 program" ;;
+		esac
+		if readelf -l "$boot" | grep -q 'Requesting program interpreter'; then
+			die "$boot asks for a program interpreter: it must be built with CGO_ENABLED=0"
+		fi
+		if readelf -l "$boot" | grep -q '^[[:space:]]*DYNAMIC[[:space:]]'; then
+			die "$boot has a dynamic section: it must be built with CGO_ENABLED=0 -buildmode=exe"
+		fi
+		say "$boot: static AArch64, $(($(wc -c < "$boot") / 1024)) KiB"
+	fi
 	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 		printf -- '- binary: %s MiB, glibc up to %s (limit %s), needs %s\n' \
 			"$size" "$max" "$GLIBC_MAX" "$needed" >> "$GITHUB_STEP_SUMMARY"
@@ -262,6 +278,12 @@ inside_go() {
 	run_stoppable go build -v -buildvcs=false -tags dynamic \
 		-ldflags "-s -w -X main.buildDate=$BUILD_DATE$google" \
 		-o "$out/JukaHub" .
+	# jukaboot (player/cmd/jukaboot): JukaHub OS's own process 1 on the Smart
+	# Pro image, which os/smartpro/build_image.py takes from the package. Pure
+	# Go and static (no cgo, no loader): the kernel starts it before anything
+	# else is there. -v for go-build-cache.sh, as above.
+	run_stoppable env CGO_ENABLED=0 go build -v -buildvcs=false -trimpath -buildmode=exe \
+		-ldflags "-s -w" -o "$out/jukaboot" ./cmd/jukaboot
 }
 
 inside_spatial() {
@@ -277,7 +299,7 @@ inside() {
 	# OWNER is uid:gid of whoever started the container, or empty when nothing
 	# needs handing back (see owner()).
 	case "$mode" in
-	go) trap '[ -z "${OWNER:-}" ] || chown -R "$OWNER" "$GOCACHE" "$out/JukaHub" 2> /dev/null || true' EXIT ;;
+	go) trap '[ -z "${OWNER:-}" ] || chown -R "$OWNER" "$GOCACHE" "$out/JukaHub" "$out/jukaboot" 2> /dev/null || true' EXIT ;;
 	spatial) trap '[ -z "${OWNER:-}" ] || chown -R "$OWNER" "$out/lib" 2> /dev/null || true' EXIT ;;
 	esac
 	toolchain_env

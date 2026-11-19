@@ -50,6 +50,10 @@ const (
 	portActCheck
 	portActWhy
 	portActUninstall
+	// PortMaster's own row (Y on it).
+	portActOpenPM
+	portActRepairPM
+	portActWhyPM
 )
 
 const (
@@ -68,9 +72,25 @@ var portsLibraryRefresh = func() {}
 
 func init() { portsLibraryRefresh = refreshGameLibrary }
 
-// portsPanelOpenOptions shows the options of an installed port.
+// portsPanelOpenOptions shows the options of an installed port, or of
+// PortMaster itself.
 func portsPanelOpenOptions(e portEntry) {
-	if e.Launch == "" || e.Master || e.Install || e.Info {
+	if e.Launch == "" || e.Install || e.Info {
+		return
+	}
+	if e.Master {
+		portsPanel.opts = true
+		portsPanel.optsFor = e
+		portsPanel.optsBack = portsPanel.cursor
+		portsPanel.cursor, portsPanel.scroll = 0, 0
+		portsPanel.confirmAt = time.Time{}
+		portsPanel.optsRows = []portEntry{
+			{Name: "Open PortMaster", Detail: "Browse, install and update ports", Info: true, Action: portActOpenPM},
+			{Name: "Repair PortMaster", Detail: "Downloads it again (Wi-Fi) and replaces its program files; ports, runtimes and settings stay", Info: true, Action: portActRepairPM},
+			{Name: "Why didn't it open?", Detail: "Checks Python, bash and its launcher on this firmware, and shows its log", Info: true, Action: portActWhyPM},
+		}
+		portsPanel.optsSub = setOr(portMasterLocalVersion(), "PortMaster")
+		PlayActivateSound()
 		return
 	}
 	portsPanel.opts = true
@@ -96,6 +116,9 @@ func portsPanelCloseOptions() {
 // portsPanelBuildOptions fills the option rows (main thread).
 func portsPanelBuildOptions() {
 	e := portsPanel.optsFor
+	if e.Master {
+		return // PortMaster's own rows do not change with the catalogue
+	}
 	meta := portMetaFor(e.Launch)
 	rows := make([]portEntry, 0, 5)
 	play := "Start the port"
@@ -187,7 +210,80 @@ func portsPanelActivateOption(e portEntry) {
 		portsPanel.confirmAt = time.Time{}
 		portUninstallStart(port.Name, port.Launch)
 		portsPanelCloseOptions()
+	case portActOpenPM:
+		portsPanel.opts = false
+		portsPanel.optsRows = nil
+		portsPanel.cursor, portsPanel.scroll = portsPanel.optsBack, 0
+		portsPanel.open = false
+		launchPortScript(portMasterAppName, port.Launch)
+	case portActRepairPM:
+		if portMasterInstalling() {
+			ShowToast("The PortMaster installer is already running", ToastKindInfo)
+			return
+		}
+		if err := startPortMasterRepair(); err != nil {
+			ShowToast(firstLine(err.Error()), ToastKindWarning)
+			return
+		}
+		portsPanelCloseOptions()
+	case portActWhyPM:
+		PlayActivateSound()
+		portMasterWhyRun(port.Launch)
 	}
+}
+
+// portMasterWhyRun checks the firmware again (bash, python3) and shows what
+// keeps PortMaster from opening. Main thread; the check runs off it.
+func portMasterWhyRun(launcher string) {
+	env := portFirmwareEnv(appConfig)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logWarn("portmaster", "checking PortMaster failed: %v", r)
+			}
+		}()
+		if pmRuntimeApplies() {
+			c := pmRuntimeProbe(env, launcher)
+			pmRuntime.mu.Lock()
+			if !pmRuntime.running {
+				pmRuntime.check = c
+			}
+			pmRuntime.mu.Unlock()
+		}
+		gameDiagPost(portMasterWhyReport(launcher))
+	}()
+}
+
+// portMasterWhyReport is what can be said about PortMaster without opening it.
+// Off the main thread.
+func portMasterWhyReport(launcher string) gameDiagReport {
+	report := gameDiagReport{Title: "PortMaster: why it may not open"}
+	if portRealControlFolder() == "" {
+		report.Issues = append(report.Issues, launchIssue{
+			Level:  int(gameDiagSure),
+			Title:  "PortMaster's folder has no control.txt",
+			Where:  filepath.Dir(launcher),
+			Detail: "The install is incomplete or damaged. Y → Repair PortMaster downloads it again and keeps your ports.",
+		})
+	}
+	if p := portMasterLaunchProblem(launcher); p != "" {
+		report.Issues = append(report.Issues, launchIssue{Level: int(gameDiagLikely), Title: "Its launcher needs TRIMUI_EX", Detail: p})
+	}
+	report.Issues = append(report.Issues, pmRuntimeIssues(true)...)
+	if p := portLogPath(portMasterAppName, launcher); p != "" {
+		if lines := gameDiagReadTail(p, time.Time{}); len(lines) > 0 {
+			report.LogLines, report.LogPath = portLastLines(lines, 12), p
+		}
+	}
+	switch {
+	case len(report.Issues) == 0 && len(report.LogLines) == 0:
+		report.Summary = "Python, bash and its launcher are in order, and PortMaster has not written a log yet."
+	case len(report.Issues) == 0:
+		report.Summary = "Python, bash and its launcher are in order. The last lines of its log are below."
+	default:
+		report.Summary = "Found " + pluralizeCount(len(report.Issues), "thing", "things") + " to look at:"
+	}
+	return report
 }
 
 // portsPanelLaunchInstalled starts an installed port from the panel, refusing
@@ -258,6 +354,7 @@ func portWhyReport(name, script string) gameDiagReport {
 			Detail: "Every port runs on PortMaster's files (control.txt, its runtimes). Install PortMaster from the first row of the Ports panel.",
 		})
 	}
+	issues = append(issues, pmRuntimeIssues(false)...)
 	if c := portCompatForLauncher(script); portCompatBlocked(c.State) {
 		detail := "Its manifest lists " + setOr(c.Note, "32-bit builds only") + "; this handheld runs 64-bit ARM (aarch64) programs."
 		if c.State == portCompatNeedsNewerLibc {
@@ -459,6 +556,8 @@ func portAfterExit(script string, master bool, ran time.Duration) {
 	if master && ran < portMasterQuickExit+screenSettleDelay {
 		quick = "PortMaster closed at once — its output is in gamediag/ports/PortMaster.log"
 		if p := portMasterLaunchProblem(script); p != "" {
+			quick = p
+		} else if p := pmRuntimeQuickExit(); p != "" {
 			quick = p
 		}
 		logWarn("portmaster", "PortMaster ended after %s: %s", ran.Round(100*time.Millisecond), quick)

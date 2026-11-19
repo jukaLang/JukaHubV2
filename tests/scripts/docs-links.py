@@ -6,7 +6,8 @@ files then pile up (TEST-7 in MODERNIZATION.md). This replaces it: standard
 library only, no build step, so `make check` can run it wherever Python 3 is.
 
 Rules:
-  - every ``*.md`` outside node_modules/, vendor/, .git/, tmp/ and .sdl2/
+  - every ``*.md`` outside node_modules/, vendor/, .git/, tmp/ and .sdl2/, and
+    outside player/helpdocs/ (build copies of docs/ pages)
   - links inside fenced code blocks and inline code are ignored, so an example
     path in a code sample is not a link
   - ``http(s):``, ``mailto:``, ``data:``, ``tel:`` and bare ``#anchor`` links are
@@ -38,9 +39,18 @@ LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 ABSOLUTE = ("#", "http://", "https://", "mailto:", "data:", "tel:")
 
 
+# Build copies of docs/ pages (go:embed for the in-app Help pages): their links
+# are relative to docs/, where the originals are checked.
+SKIP_PATHS = {os.path.join("player", "helpdocs")}
+
+
 def markdown_files(root: str):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS
+            and os.path.relpath(os.path.join(dirpath, d), root) not in SKIP_PATHS
+        ]
         for name in filenames:
             if name.lower().endswith(".md"):
                 yield os.path.join(dirpath, name)

@@ -26,6 +26,8 @@ package main
 //     so a broken upload never leaves half a file under the real name and a
 //     video never sits in RAM or the handheld's small tmpfs. It replaces a
 //     file of the same name only when the page asked to (after confirm()).
+//     The drop card (companion_drop.go) stores its files the same way
+//     (companionFilesStore), in the folder the handheld chose for each.
 //   - Delete removes one file or one EMPTY folder; a folder with anything in
 //     it is refused, so a mistap cannot wipe a game library.
 //   - A downloaded file is always an attachment of type octet-stream with
@@ -108,6 +110,10 @@ func (s *companionServer) registerFileRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/files/mkdir", s.guard(s.handleFilesMkdir))
 	mux.HandleFunc("/api/files/rename", s.guard(s.handleFilesRename))
 	mux.HandleFunc("/api/files/delete", s.guard(s.handleFilesDelete))
+	// The drop card: each file goes where it belongs (companion_drop.go).
+	mux.HandleFunc("/api/drop/plan", s.guard(s.handleDropPlan))
+	mux.HandleFunc("/api/drop", s.guard(s.handleDrop))
+	mux.HandleFunc("/api/drop/done", s.guard(s.handleDropDone))
 }
 
 // openCompanionFileShares opens this request's shares; the caller closes
@@ -443,14 +449,32 @@ func (s *companionServer) handleFilesUpload(w http.ResponseWriter, r *http.Reque
 		http.Error(w, companionFilesReadOnlyMsg, http.StatusForbidden)
 		return
 	}
-	// Streamed, never ParseMultipartForm: that spools big parts to the
-	// handheld's RAM-backed tmpfs (see handleUpload).
+	file, ok := companionFilesFilePart(w, r)
+	if !ok {
+		return
+	}
+	defer file.Close()
+
+	name := sanitizeUploadName(file.FileName())
+	target, written, ok := companionFilesStore(w, set, dir, name, file, replace)
+	if !ok {
+		return
+	}
+	logInfo("companion", "files: uploaded %s (%d bytes)", target.display(), written)
+	s.sink(companionEvent{Kind: companionEventUpload, Text: name})
+	trophyEvent(tkFileTransfer)
+	writeCompanionJSON(w, map[string]interface{}{"ok": true, "name": name, "size": written})
+}
+
+// companionFilesFilePart finds the request's multipart "file" part, answering
+// the request when there is none. It is streamed, never ParseMultipartForm:
+// that spools big parts to the handheld's RAM-backed tmpfs (see handleUpload).
+func companionFilesFilePart(w http.ResponseWriter, r *http.Request) (*multipart.Part, bool) {
 	mr, err := r.MultipartReader()
 	if err != nil {
 		http.Error(w, "upload too large or malformed", http.StatusBadRequest)
-		return
+		return nil, false
 	}
-	var file *multipart.Part
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
@@ -458,45 +482,46 @@ func (s *companionServer) handleFilesUpload(w http.ResponseWriter, r *http.Reque
 		}
 		if err != nil {
 			http.Error(w, "upload too large or malformed", http.StatusRequestEntityTooLarge)
-			return
+			return nil, false
 		}
 		if part.FormName() == "file" {
-			file = part
-			break
+			return part, true
 		}
 		part.Close()
 	}
-	if file == nil {
-		http.Error(w, "missing file field", http.StatusBadRequest)
-		return
-	}
-	defer file.Close()
+	http.Error(w, "missing file field", http.StatusBadRequest)
+	return nil, false
+}
 
-	name := sanitizeUploadName(file.FileName())
+// companionFilesStore writes file into the existing folder dir as name: under
+// a hidden temporary name first, renamed when complete, replacing a file of
+// that name only when replace is set. It answers the request itself when it
+// cannot, and reports the file's place and size when it did.
+func companionFilesStore(w http.ResponseWriter, set *ftpShareSet, dir ftpPath, name string, file io.Reader, replace bool) (ftpPath, int64, bool) {
 	target, err := set.resolvePath(dir.virtual, name)
 	if err != nil || target.share != dir.share {
 		http.Error(w, "That file name cannot be used here.", http.StatusBadRequest)
-		return
+		return ftpPath{}, 0, false
 	}
 	if !companionFilesWritable(w, target) {
-		return
+		return ftpPath{}, 0, false
 	}
 	root := target.share.root
 	if info, err := root.Lstat(target.rel); err == nil {
 		if info.IsDir() {
 			http.Error(w, "A folder named "+name+" is already here.", http.StatusConflict)
-			return
+			return ftpPath{}, 0, false
 		}
 		if !replace {
 			http.Error(w, name+" is already here.", http.StatusConflict)
-			return
+			return ftpPath{}, 0, false
 		}
 	}
 	tmpRel, out, err := companionFilesCreateTemp(root, dir.rel)
 	if err != nil {
 		logWarn("companion", "files: cannot write in %s: %v", dir.display(), err)
 		http.Error(w, "Cannot write in this folder.", http.StatusInternalServerError)
-		return
+		return ftpPath{}, 0, false
 	}
 	written, copyErr := io.Copy(out, file)
 	closeErr := out.Close()
@@ -512,14 +537,14 @@ func (s *companionServer) handleFilesUpload(w http.ResponseWriter, r *http.Reque
 			logWarn("companion", "files: upload of %q to %s failed: %v %v", name, dir.display(), copyErr, closeErr)
 			http.Error(w, "upload interrupted", http.StatusInternalServerError)
 		}
-		return
+		return ftpPath{}, 0, false
 	}
 	// A file of that name may have appeared while this one was arriving.
 	if !replace {
 		if _, err := root.Lstat(target.rel); err == nil {
 			_ = root.Remove(tmpRel)
 			http.Error(w, name+" is already here.", http.StatusConflict)
-			return
+			return ftpPath{}, 0, false
 		}
 	}
 	if err := root.Rename(tmpRel, target.rel); err != nil {
@@ -532,13 +557,10 @@ func (s *companionServer) handleFilesUpload(w http.ResponseWriter, r *http.Reque
 			_ = root.Remove(tmpRel)
 			logWarn("companion", "files: cannot save %s: %v", target.display(), err)
 			http.Error(w, "Cannot save the file.", http.StatusInternalServerError)
-			return
+			return ftpPath{}, 0, false
 		}
 	}
-	logInfo("companion", "files: uploaded %s (%d bytes)", target.display(), written)
-	s.sink(companionEvent{Kind: companionEventUpload, Text: name})
-	trophyEvent(tkFileTransfer)
-	writeCompanionJSON(w, map[string]interface{}{"ok": true, "name": name, "size": written})
+	return target, written, true
 }
 
 // companionFilesCreateTemp creates a new hidden file in dir (relative to

@@ -650,7 +650,14 @@ func gswResume(config *Config) {
 	gswLoad.mu.Unlock()
 	gswDropTextures()
 	goBackScene(config)
-	playRecentGame(g)
+	if g.Path == "" || !regularFile(g.Path) {
+		playRecentGame(g) // says the ROM is missing
+		return
+	}
+	// The switcher resumes a game where it was left: in the emulator it last
+	// ran in, without asking "Which emulator?" again (emupicker.go).
+	game := libraryGame{Path: g.Path, System: g.System, Title: g.Title}
+	chooseGameLauncherResume(game, func(l string) { playRecentGameWith(g, game, l) })
 }
 
 // gswRemove takes the highlighted game off the recent games.

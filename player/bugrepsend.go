@@ -279,7 +279,7 @@ func bugrepBuild(config *Config, form bugrepForm, now time.Time) bugrepReport {
 		Description: bugrepClip(bugrepScrub(strings.TrimSpace(form.Description)), bugrepDescriptionMax),
 		Version:     version,
 		Release:     release,
-		Channel:     updateChannelFromConfig(config),
+		Channel:     updateChannelNow(), // the atomic mirror: a phone report builds with a nil config
 		Device:      deviceDisplayName(DetectDevice()),
 		Platform:    P().Name(),
 		OS:          runtime.GOOS,

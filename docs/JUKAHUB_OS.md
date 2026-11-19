@@ -51,8 +51,9 @@ The stock firmware has no way to boot anything else in place of its menu
 without writing its partitions, which JukaHub OS never does. So it boots the
 firmware's way: the firmware's launcher loop (`runtrimui.sh`) runs the boot
 scripts in `System/starts`, then its menu, then whatever the menu queued in
-`/tmp/cmd_to_run.sh`. The boot hook queues JukaHub there, and in OS mode it
-also bind-mounts a tiny stand-in over `/usr/trimui/bin/MainUI` for this boot
+`/tmp/cmd_to_run.sh`. The boot hook queues JukaHub there, and (in OS mode
+since 2026-11-17, for the plain app too since 2026-11-18) it also
+bind-mounts a tiny stand-in over `/usr/trimui/bin/MainUI` for this boot
 (a RAM mount, gone at the next boot; no file is written). When the loop runs
 "MainUI" the first time, the stand-in takes itself off and returns at once,
 and the loop starts JukaHub OS through `launch.sh` with the firmware's own
@@ -67,12 +68,23 @@ off again.
 **Settings → JukaHub OS → Skip the stock menu at boot** off (`"fastBoot":
 false` in `os/os.json`) chooses the older way on purpose — try it if Wi-Fi,
 brightness or volume are not set up after a boot (the stock menu may set them
-up at its first start).
+up at its first start). **Settings → General → Skip the stock menu at boot**
+(below **Start JukaHub at login**) is the same choice for every boot, the app's
+and JukaHub OS's: off, it leaves `.autostart-keep-menu` in the JukaHub folder,
+the hook lets the menu open first, and the JukaHub OS switch greys out.
 
 `Apps/JukaHub/autostart.log` says which way each boot went ("the firmware
 started JukaHub OS in place of the stock menu", or why not), and
 `errors.txt` says "starting JukaHub OS" and then the session's `jukaos:`
-lines — or why the start was the app instead.
+lines — or why the start was the app instead. Once Home is up the log also
+has a `boot times` line (when the firmware's launcher started, when the hook
+ran, when the loop reached the menu's place, when `launch.sh` and JukaHub
+started, when Home appeared), so the stock firmware's share of the boot can be
+told from JukaHub's. `System/starts` is the earliest point the stock boot runs
+anything from the card (it waits for the card to be mounted, about 6 s into a
+Brick's boot as others measured it); booting sooner needs the SD card images
+([Standalone image development](#standalone-image-development)), which bring
+their own boot.
 
 When JukaHub starts it also checks the hook: on a card installed from this
 package (`"edition": "os"`) the package's hook is kept even if the settings
@@ -337,3 +349,21 @@ saved from the device by `dump-board.sh`, with JukaHub's own process 1 in
 place of the stock startup and menu; the internal storage is never written.
 The package described above is still the stock-firmware session edition; it
 is a different install.
+
+**Boot time.** The target is Home within two seconds of power-on, the time
+TortOS 2 reaches on plastron. That speed comes from booting a small
+bootloader and kernel from the card, not from flashing an `.awimg` (TrimUI's
+format for rewriting the internal firmware), which JukaHub OS never does. On
+the images JukaHub boots with no animation unless one is picked, the launcher
+shows the picture of Home kept at the last power-off as soon as the card is
+mounted, and Wi-Fi and Bluetooth start after JukaHub's first frame. Each boot
+is measured: `.userdata/jukahub/boot.log` has U-Boot's timings and when the
+launcher, the picture and JukaHub started; JukaHub's `startup:` log line splits
+the boot into the system's part and its own; Settings → JukaHub OS shows
+**Last boot**. On the Smart Pro card process 1 is JukaHub's own compiled
+booter, `jukaboot` (`player/cmd/jukaboot`): it starts JukaHub as soon as the
+card is mounted, loads the drivers in parallel, writes a step timeline to
+`os.log` and the kernel's log to `boot-dmesg.txt`, and hands over to the
+start-up script if anything goes wrong; and the bootloader itself shows the
+saved Home from power-on (**Show Home from power-on**). Both READMEs have the
+details.

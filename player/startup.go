@@ -15,15 +15,24 @@ package main
 // path can be timed headless in CI or on a device over SSH.
 // JUKAHUB_STARTUP_TARGET_MS overrides the budget (a slower card may prefer more
 // splash, not less).
+//
+// The whole boot is measured too, not only JukaHub's part of it: on Linux the
+// kernel's uptime at the process's own start (exec) and at the first frame say
+// how much of "power to Home" was the system and how much was JukaHub. The
+// first frame is announced in /tmp/jukahub-first-frame ("<uptime seconds>\n"),
+// which JukaHub OS's launcher waits for before it starts the radios
+// (os/plastron/launch.sh): that path and format are a contract.
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -52,7 +61,16 @@ var startupClock = struct {
 	mu    sync.Mutex
 	began time.Time
 	marks []startupMark
-}{began: time.Now()}
+	// bootAtBegan is the kernel's uptime (the clock /proc/uptime reads) when
+	// began was taken; procStart is the uptime at which this process was
+	// executed (/proc/self/stat). Both are seconds, 0 where unknown.
+	bootAtBegan float64
+	procStart   float64
+	// firstFrame is the uptime at the first presented frame and firstFrameAt
+	// the wall time of it; zero before (startupFirstFrameReached).
+	firstFrame   float64
+	firstFrameAt time.Time
+}{began: time.Now(), bootAtBegan: startupBootClock(), procStart: startupProcStart()}
 
 // startupMarkNow records a phase boundary relative to process start.
 func startupMarkNow(name string) {
@@ -128,7 +146,328 @@ func startupReport() string {
 	}
 	total := time.Since(startupClock.began)
 	fmt.Fprintf(&b, " total=%dms target=%dms", total.Milliseconds(), startupTarget().Milliseconds())
+	// The whole boot, where the kernel's clock is readable: how long the
+	// system took to start JukaHub, and JukaHub from its exec (Go runtime and
+	// package init included, which total= is not) to the first frame.
+	if kernel, own, ok := startupBootShares(); ok {
+		fmt.Fprintf(&b, " kernel→start=%.2fs start→first-frame=%.2fs", kernel, own)
+	}
+	// What the boot prefetch read ahead for this start (bootprefetch_record_*.go):
+	// " prefetch=14.2MB/412ms", "=9.1/14.2MB" while it still reads, "=off",
+	// "=none", or nothing on a start that is not a cold one.
+	b.WriteString(bootPrefetchReportField())
+	// How much of the first frame came ready from the last start's
+	// (startup_framecache.go): "labels=41/44 icons=12/12".
+	if s := frameCacheSummary(); s != "" {
+		b.WriteString(" " + s)
+	}
 	return b.String()
+}
+
+// startupBootShares reports, for this process, the kernel's uptime at its exec
+// and the time from there to the first frame, in seconds. ok is false before
+// the first frame or where the kernel's clock is unknown (not Linux).
+func startupBootShares() (kernel, own float64, ok bool) {
+	startupClock.mu.Lock()
+	start, first := startupClock.procStart, startupClock.firstFrame
+	startupClock.mu.Unlock()
+	if start <= 0 || first <= 0 || first < start {
+		return 0, 0, false
+	}
+	return start, first - start, true
+}
+
+// ── The first frame ───────────────────────────────────────────────────────
+
+var startupFirstFrameOnce sync.Once
+
+// startupFirstFrameReached is the main loop's call right after its first
+// Present. It records the kernel's uptime there, hands the collector back
+// (startupGCRelease), and on Linux announces the frame in
+// /tmp/jukahub-first-frame and in this boot's timing record. Once per process.
+func startupFirstFrameReached() {
+	startupFirstFrameOnce.Do(func() {
+		up := startupBootClock()
+		startupClock.mu.Lock()
+		startupClock.firstFrame = up
+		startupClock.firstFrameAt = time.Now()
+		start := startupClock.procStart
+		startupClock.mu.Unlock()
+		// The labels and icons this frame drew are kept for the next start
+		// (startup_framecache.go); the file is written beside the loop.
+		frameCacheFirstFrame()
+		startupGCRelease()
+		bootPrefetchFirstFrame() // log this start's prefetch, record the next (bootprefetch_record_linux.go)
+		// A bench run exits right after this frame: it is not Home coming up,
+		// so it announces nothing and leaves the boot's record alone. The two
+		// small files are written beside the loop, not on the render thread.
+		if up > 0 && !startupBenchEnabled() {
+			go func() {
+				startupAnnounceFirstFrame(up)
+				startupRecordBootTiming(start, up)
+			}()
+		}
+	})
+}
+
+// startupFirstFrameSince is how long ago the first frame was presented, and
+// false before it.
+func startupFirstFrameSince() (time.Duration, bool) {
+	startupClock.mu.Lock()
+	at := startupClock.firstFrameAt
+	startupClock.mu.Unlock()
+	if at.IsZero() {
+		return 0, false
+	}
+	return time.Since(at), true
+}
+
+// ── Power to Home ─────────────────────────────────────────────────────────
+//
+// The boot's own numbers live in a record in /tmp (a fresh tmpfs every boot),
+// written by the first JukaHub of the boot to reach its first frame and tied
+// to the kernel's boot id, so a relaunch later in the same boot (a setting
+// that restarts JukaHub, an update) still reports the boot, not itself.
+
+const (
+	startupFirstFramePath  = "/tmp/jukahub-first-frame"
+	startupBootTimingPath  = "/tmp/jukahub-boot-timing"
+	startupBootTimingStart = 60.0 // seconds: a later first start was not a boot
+)
+
+// startupBootTiming is one boot's record: the uptime at the exec of the first
+// JukaHub and at its first frame.
+type startupBootTiming struct {
+	BootID     string
+	Start      float64
+	FirstFrame float64
+}
+
+// startupClockTicks is the kernel's USER_HZ, which /proc reports times in. It
+// is 100 on every Linux architecture JukaHub runs on.
+const startupClockTicks = 100.0
+
+// parseProcStatStart reads starttime (seconds since boot) out of a
+// /proc/<pid>/stat line, 0 when it is not there. The command name (field 2)
+// is in parentheses and may hold spaces and ')', so the fields are counted
+// from the last ')'.
+func parseProcStatStart(stat string) float64 {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return 0
+	}
+	fields := strings.Fields(stat[end+1:])
+	// fields[0] is field 3 (state); starttime is field 22.
+	const startField = 22 - 3
+	if len(fields) <= startField {
+		return 0
+	}
+	ticks, err := strconv.ParseUint(fields[startField], 10, 64)
+	if err != nil || ticks == 0 {
+		return 0
+	}
+	return float64(ticks) / startupClockTicks
+}
+
+func formatStartupBootTiming(t startupBootTiming) string {
+	return fmt.Sprintf("%s %.3f %.3f\n", t.BootID, t.Start, t.FirstFrame)
+}
+
+func parseStartupBootTiming(text string) (startupBootTiming, bool) {
+	fields := strings.Fields(text)
+	if len(fields) != 3 {
+		return startupBootTiming{}, false
+	}
+	start, err1 := strconv.ParseFloat(fields[1], 64)
+	first, err2 := strconv.ParseFloat(fields[2], 64)
+	// Written as "not (in range)" so a NaN, which ParseFloat accepts and
+	// every comparison rejects, is refused too.
+	if err1 != nil || err2 != nil || !(start > 0) || !(first >= start) || first > 1e7 {
+		return startupBootTiming{}, false
+	}
+	return startupBootTiming{BootID: fields[0], Start: start, FirstFrame: first}, true
+}
+
+// startupRecordBootTiming writes this boot's record unless an earlier JukaHub
+// of the same boot already did. Best-effort: /tmp missing or read-only only
+// costs the Settings line.
+func startupRecordBootTiming(start, first float64) {
+	if !startupBootClockKnown() || start <= 0 || first < start {
+		return
+	}
+	id := strings.TrimSpace(bootOSBootIDFn())
+	if id == "" || strings.ContainsAny(id, " \t\n") {
+		return
+	}
+	if data, ok := startupReadTmpFile(startupBootTimingPath); ok {
+		if prev, ok := parseStartupBootTiming(data); ok && prev.BootID == id {
+			return
+		}
+	}
+	_ = startupWriteTmpFile(startupBootTimingPath, formatStartupBootTiming(startupBootTiming{BootID: id, Start: start, FirstFrame: first}))
+}
+
+// startupAnnounceFirstFrame writes /tmp/jukahub-first-frame: the uptime at the
+// first frame, in /proc/uptime's own form ("12.34\n"), replaced atomically so
+// a reader never sees half a number.
+func startupAnnounceFirstFrame(up float64) {
+	if !startupBootClockKnown() {
+		return
+	}
+	if err := startupWriteTmpFile(startupFirstFramePath, strconv.FormatFloat(up, 'f', 2, 64)+"\n"); err != nil {
+		logWarn("startup", "first-frame marker not written: %v", err)
+	}
+}
+
+// startupWriteTmpFile replaces a small file in /tmp atomically. AtomicWrite is
+// not used: it keeps a .bak and syncs, which a per-boot tmpfs file does not
+// need. JukaHub runs as root on the handheld and /tmp is open to everyone, so
+// the new file is created under a fresh random name that must not exist yet
+// (os.CreateTemp: O_EXCL, never through a link someone left there), and the
+// rename replaces whatever stood at path instead of writing through it.
+func startupWriteTmpFile(path, text string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	_, err = f.WriteString(text)
+	if err == nil {
+		err = f.Chmod(0o644) // CreateTemp makes it 0600; the launcher only reads it
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp)
+	}
+	return err
+}
+
+// startupBootSummary is the current boot in one line for Settings → JukaHub
+// OS, e.g. "Power to Home 2.31 s · system 1.70 s · JukaHub 0.61 s" (with a
+// bootloader share first where U-Boot left one in the device tree). It is
+// empty where it is unknown: not Linux, no first frame recorded this boot, or
+// JukaHub was first started well after the boot (opened from another menu).
+func startupBootSummary() string {
+	if !startupBootClockKnown() {
+		return ""
+	}
+	t, ok := startupBootTimingNow()
+	if !ok || t.Start > startupBootTimingStart {
+		return ""
+	}
+	own := t.FirstFrame - t.Start
+	if loader := startupBootloaderSeconds(); loader > 0 {
+		return fmt.Sprintf("Power to Home %.2f s · bootloader %.2f s · system %.2f s · JukaHub %.2f s",
+			loader+t.FirstFrame, loader, t.Start, own)
+	}
+	return fmt.Sprintf("Power to Home %.2f s · system %.2f s · JukaHub %.2f s", t.FirstFrame, t.Start, own)
+}
+
+// startupBootTimingNow is this boot's record: the file when it belongs to this
+// boot, else this process's own numbers once its first frame is up.
+func startupBootTimingNow() (startupBootTiming, bool) {
+	id := strings.TrimSpace(bootOSBootIDFn())
+	if data, ok := startupReadTmpFile(startupBootTimingPath); ok && id != "" {
+		if t, ok := parseStartupBootTiming(data); ok && t.BootID == id {
+			return t, true
+		}
+	}
+	start, own, ok := startupBootShares()
+	if !ok {
+		return startupBootTiming{}, false
+	}
+	return startupBootTiming{BootID: id, Start: start, FirstFrame: start + own}, true
+}
+
+// ── The collector during start-up ─────────────────────────────────────────
+//
+// Start-up allocates a lot that lives (the config, the scenes, fonts, label
+// caches) and little that dies, so collections before the first frame mostly
+// re-mark the same live heap on the core the boot is waiting for. The collector
+// is off from the start of the app's own start-up (main.go, after the commands
+// that run as their own short or background processes: the VPN daemon, `apt`)
+// until the first frame, under a soft memory cap so a runaway start still
+// collects, and the device's own settings (perf.go applyGCForDevice) are what
+// comes back. GOGC/GOMEMLIMIT in the environment leave it alone, as
+// applyGCForDevice does.
+
+const (
+	// startupGCHoldCap is the heap at which the collector runs anyway.
+	startupGCHoldCap = 256 << 20
+	// startupGCHoldMax gives the collector back even if no frame is ever
+	// presented (a power-on that resumes a game at once, a wedged start).
+	startupGCHoldMax = 8 * time.Second
+)
+
+var startupGC struct {
+	mu      sync.Mutex
+	held    bool
+	done    bool
+	percent int
+	limit   int64
+}
+
+// startupGCHold switches the collector off for the start-up. main.go, once.
+func startupGCHold() {
+	if testing.Testing() || os.Getenv("GOGC") != "" || os.Getenv("GOMEMLIMIT") != "" {
+		return
+	}
+	startupGC.mu.Lock()
+	defer startupGC.mu.Unlock()
+	if startupGC.held || startupGC.done {
+		return
+	}
+	startupGC.held = true
+	startupGCTakeLocked()
+	time.AfterFunc(startupGCHoldMax, startupGCRelease)
+}
+
+// startupGCTakeLocked remembers the settings in force as the ones to give back
+// and turns the collector off under the cap.
+func startupGCTakeLocked() {
+	startupGC.percent = debug.SetGCPercent(-1)
+	startupGC.limit = debug.SetMemoryLimit(-1) // a negative value only reads it
+	debug.SetMemoryLimit(min(startupGC.limit, startupGCHoldCap))
+}
+
+// startupGCApply is how applyGCForDevice installs the device's settings.
+// During the hold they become what the release restores (only the cap may
+// tighten now) and the collector stays off; after it they apply at once. Both
+// under the one lock: the 8 s release on its timer goroutine cannot land
+// between "set" and "adopt" and put the stock settings back for the session,
+// and the collector is never switched on and off again here (SetGCPercent(-1)
+// waits for a collection the brief switch-on would have started).
+func startupGCApply(percent int, limit int64) {
+	startupGC.mu.Lock()
+	defer startupGC.mu.Unlock()
+	if startupGC.held && !startupGC.done {
+		startupGC.percent, startupGC.limit = percent, limit
+		debug.SetMemoryLimit(min(limit, startupGCHoldCap))
+		return
+	}
+	debug.SetGCPercent(percent)
+	debug.SetMemoryLimit(limit)
+}
+
+// startupGCRelease gives the collector back. Once; any goroutine.
+func startupGCRelease() {
+	startupGC.mu.Lock()
+	defer startupGC.mu.Unlock()
+	if startupGC.done {
+		return
+	}
+	startupGC.done = true
+	if !startupGC.held {
+		return
+	}
+	startupGC.held = false
+	debug.SetGCPercent(startupGC.percent)
+	debug.SetMemoryLimit(startupGC.limit)
 }
 
 // startupLog writes the report once. It is called after the first frame, so the
@@ -312,6 +651,36 @@ func deferStartupTask(name string, fn func()) {
 // before the rest wait for the next one.
 const deferredStartupFrameBudget = 8 * time.Millisecond
 
+// startupNativeWarmupDelay is how long the queued work waits after the first
+// frame on JukaHub OS. Its launcher only starts the radios once that frame is
+// up, so the network half of the queue could not get anywhere sooner, and the
+// first presses on Home get the CPU instead of the update check, the box-art
+// fetch and the plugin scan.
+const startupNativeWarmupDelay = 3 * time.Second
+
+// startupDeferredHeld reports whether the queue still waits. A power-on that
+// resumes a game waits for the queue (quickresume.go), so it is not held then.
+// Main thread.
+func startupDeferredHeld() bool {
+	return !quickBoot.pending && startupWarmupHeld()
+}
+
+// startupWarmupHeld reports whether optional warm-up (the queue above, the
+// "Hey Juka" microphone) still waits on JukaHub OS: until the first frame and
+// startupNativeWarmupDelay after it. Elsewhere it never waits.
+func startupWarmupHeld() bool {
+	if !jukaosNativeActive() {
+		return false
+	}
+	since, ok := startupFirstFrameSince()
+	if !ok {
+		// No frame yet. A start that never presents one (a game took the
+		// screen first) is not held for the whole session.
+		return startupElapsed() < startupGCHoldMax+startupNativeWarmupDelay
+	}
+	return since < startupNativeWarmupDelay
+}
+
 // runDeferredStartupFor runs queued tasks on the main thread, in order, until
 // budget is spent (always at least one) and reports whether any are left. The
 // loop calls it once per frame after the first one: run back to back, the
@@ -320,6 +689,9 @@ const deferredStartupFrameBudget = 8 * time.Millisecond
 // task that takes long enough to be interesting is logged, because "boot felt
 // slow" is usually one of these, not the renderer.
 func runDeferredStartupFor(budget time.Duration) bool {
+	if startupDeferredHeld() {
+		return true
+	}
 	start := time.Now()
 	for {
 		deferredStartup.mu.Lock()

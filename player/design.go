@@ -364,6 +364,9 @@ func trackSwatch() sdl.Color {
 // entire UI (backgrounds, surfaces, text, borders, accents) reflects the
 // chosen theme.
 func ApplyThemeColors(p ThemePreset) {
+	// Settings → Theme & look → Menu colour replaces the preset's accent
+	// (menucolour.go), so every theme, schedule and pack keeps the user's pick.
+	p = menuColourOverride(p)
 	ColorBackground = hexRGBA(p.Background)
 	ColorSurface = hexRGBA(p.Surface)
 	ColorSurfaceAlt = hexRGBA(p.SurfaceAlt)

@@ -290,10 +290,17 @@ func vpnWriteDurable(path string, data []byte) error {
 
 // vpnBackupExcluded reports whether a data-folder file is the VPN's own: the
 // configuration (its private key) and the DNS settings the tunnel keeps aside
-// stay on their device, out of backups and restores (bkup.go).
+// stay on their device, out of backups and restores (bkup.go). So do the
+// network's DNS settings the DNS choice keeps aside (dnschanger_linux.go):
+// restored on another day or device they would name another network's
+// servers.
 func vpnBackupExcluded(name string) bool {
 	name = strings.ToLower(filepath.Base(filepath.FromSlash(name)))
-	return name == vpnProfileFile || name == vpnProfileFile+".tmp" || name == "vpn-resolv.json"
+	switch name {
+	case vpnProfileFile, vpnProfileFile + ".tmp", "vpn-resolv.json", dnsBackupFile, dnsBackupFile + ".tmp":
+		return true
+	}
+	return false
 }
 
 // vpnCleanName is a short display name: the file's name, or the server.

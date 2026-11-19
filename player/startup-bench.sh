@@ -107,6 +107,12 @@ for i in $(seq 1 "$runs"); do
   values+=("$total")
   echo "run $i: ${total}ms"
   echo "         $line"
+  # On Linux the line also carries the process's own exec-to-first-frame time,
+  # which counts the Go runtime and package init that total= starts after.
+  exec_ff="$(grep -o 'start→first-frame=[0-9.]*s' "$log" | tail -1 || true)"
+  if [ -n "$exec_ff" ]; then
+    echo "         exec to first frame: ${exec_ff#*=}"
+  fi
 done
 
 sorted="$(printf '%s\n' "${values[@]}" | sort -n)"

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -321,7 +322,16 @@ func launchFailureParagraphs(st *launchFailureState) []launchFailureLine {
 			}
 		}
 		if issue.Where != "" {
-			add(launchLineDim, "Copy to:")
+			// The folder the missing files go in. A finding about one file
+			// (a core that cannot load, a game file) names that file, and
+			// "Copy to: …/mgba_libretro.so" read as an instruction; a file is
+			// told from a folder by its extension (the card is drawn every
+			// frame, so nothing is asked of the disk).
+			if len(issue.Files) == 0 && filepath.Ext(issue.Where) != "" {
+				add(launchLineDim, "Location:")
+			} else {
+				add(launchLineDim, "Copy to:")
+			}
 			add(launchLinePath, issue.Where)
 		}
 		add(launchLineBody, issue.Detail)

@@ -206,6 +206,7 @@ type pkgState struct {
 	meta        map[string]pkgInstalledMeta
 	sizes       map[string]int64
 	icons       map[string]string
+	launches    map[string]string
 	art         map[string]string
 	localReady  bool
 	appUpdate   string
@@ -298,6 +299,9 @@ func pkgEnsureMaps() {
 	if st.icons == nil {
 		st.icons = map[string]string{}
 	}
+	if st.launches == nil {
+		st.launches = map[string]string{}
+	}
 	if st.art == nil {
 		st.art = map[string]string{}
 	}
@@ -349,6 +353,7 @@ type pkgEvent struct {
 	meta      map[string]pkgInstalledMeta
 	sizes     map[string]int64
 	icons     map[string]string
+	launches  map[string]string
 	rollbacks map[string]string
 }
 
@@ -471,6 +476,7 @@ func pkgApplyEvent(ev pkgEvent) (rescan bool) {
 		st.meta = ev.meta
 		st.sizes = ev.sizes
 		st.icons = ev.icons
+		st.launches = ev.launches
 		if ev.rollbacks != nil {
 			st.rollbacks = ev.rollbacks
 		}
@@ -493,6 +499,7 @@ func pkgApplyEvent(ev pkgEvent) (rescan bool) {
 			delete(st.meta, ev.key)
 			delete(st.sizes, ev.key)
 			delete(st.icons, ev.key)
+			delete(st.launches, ev.key)
 			delete(st.rollbacks, ev.key)
 		}
 		st.dirty = true
@@ -624,6 +631,7 @@ func pkgLoadLocal(ctx context.Context) {
 	meta := pkgLoadInstalledMeta()
 	sizes := make(map[string]int64, len(installed))
 	icons := make(map[string]string, len(installed))
+	launches := make(map[string]string, len(installed))
 	root := packageInstallDir()
 	for key := range installed {
 		if ctx.Err() != nil {
@@ -634,7 +642,16 @@ func pkgLoadLocal(ctx context.Context) {
 		// walk holds inside a folder makes a swap's rename of it fail, and
 		// this way a swap waits for one folder's walk at most.
 		pkgOpMu.Lock()
-		if icon := iconInFolder(dir); icon != "" {
+		icon := iconInFolder(dir)
+		// The program Run starts (pkglaunch.go). An app kept one folder down
+		// (<Name>/ or Apps/<Name>/) lends the card its icon too.
+		if t, ok := pkgFindInstalledLaunch(dir, key); ok {
+			launches[key] = t.Path
+			if icon == "" {
+				icon = t.Icon
+			}
+		}
+		if icon != "" {
 			icons[key] = icon
 		}
 		sizes[key] = pkgFolderSize(dir, 20000)
@@ -644,7 +661,7 @@ func pkgLoadLocal(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	pkgPost(pkgEvent{kind: pkgEvLocal, installed: installed, meta: meta, sizes: sizes, icons: icons, rollbacks: rollbacks})
+	pkgPost(pkgEvent{kind: pkgEvLocal, installed: installed, meta: meta, sizes: sizes, icons: icons, launches: launches, rollbacks: rollbacks})
 }
 
 // ── Refresh ──────────────────────────────────────────────────────────────
@@ -797,6 +814,7 @@ func pkgRebuild() {
 		Art:       st.art,
 		Device:    DetectDevice(),
 		Rollbacks: st.rollbacks,
+		Launches:  st.launches,
 		AppUpdate: st.appUpdate,
 	})
 	pkgModelSerial++
@@ -1149,9 +1167,9 @@ func pkgStartRemove(it *pkgItem) {
 	}()
 }
 
-// pkgOpenFolder shows an installed package's files in Files. Launching a
-// downloaded script from the packages folder is deliberately not offered:
-// apps.go only starts programs inside the app folders, and that rule stands.
+// pkgOpenFolder shows an installed package's files in Files. Starting the
+// package is pkgRun (pkglaunch.go): apps.go still only starts programs inside
+// the app folders, and an installed package's own folder is one of them.
 func pkgOpenFolder(config *Config, it *pkgItem) {
 	if config == nil || it == nil || !it.Installed || it.Kind == pkgKindApp {
 		return

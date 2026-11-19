@@ -10,9 +10,11 @@ dump-board.sh, and replaces only the startup and the menu with JukaHub:
     the device tree) and every partition in front of the system are copied to
     the same sectors and partition numbers on the card;
   * the system is rebuilt from the saved files as a read-only image, with
-    JukaHub's own process 1 (init) and launcher added;
+    JukaHub's own process 1 (the compiled jukaboot when the package has it,
+    and the shell init, its fallback) and launcher added;
   * U-Boot's environment on the card points the kernel at that image by
-    PARTUUID, read-only, with init=/jukahub/init. It is only changed after
+    PARTUUID, read-only, with init=/jukahub/jukaboot (or /jukahub/init). It
+    is only changed after
     checking that the stock environment really produced the stock command
     line, so the bootloader is known to take root= and init= from it;
   * a JUKAHUB exFAT (or FAT32) partition holds JukaHub, games and saves.
@@ -56,6 +58,10 @@ TOC1_MAGIC = 0x89119800
 DATA_NAME = "JUKAHUB"
 DATA_TYPE = uuid.UUID("EBD0A0A2-B9E5-4433-87C0-68B6B72699C7")
 INIT_PATH = "/jukahub/init"
+# The compiled process 1 (player/cmd/jukaboot), used in place of the shell init
+# when the package carries a static AArch64 build of it; the shell init stays
+# beside it as its fallback.
+BOOTER_PATH = "/jukahub/jukaboot"
 CAPABILITY = "smartpro-stock-kernel-v1"
 ALIGN = 2048  # 1 MiB in sectors
 BOOTLOGO = REPO / "branding" / "bootlogo" / "jukahub-bootlogo-1280x720.bmp"
@@ -433,41 +439,70 @@ def bootimg_cmdline(raw: bytes) -> str:
     return raw[BOOTIMG_CMDLINE].split(b"\0", 1)[0].decode("latin-1")
 
 
-def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str) -> bytes:
+def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str, init: str = INIT_PATH) -> bytes:
     """U-Boot appends the boot image's own command line; if that names the
     system, it would win over the environment, so it is pointed at the card too."""
     text = bootimg_cmdline(raw)
     if not any(arg_count(text, k) for k in ("root", "init", "rdinit", "rootfstype", "rw")):
         return raw
-    new = rewrite_args(text, partuuid, fstype).encode("latin-1")
+    new = rewrite_args(text, partuuid, fstype, init=init).encode("latin-1")
     need(len(new) < 512, "the boot image's command line has no room for the change")
     out = bytearray(raw)
     out[BOOTIMG_CMDLINE] = new.ljust(512, b"\0")
     return bytes(out)
 
 
-def rewrite_args(args: str, partuuid: str, fstype: str) -> str:
+# Boot time: the stock line prints every kernel message (loglevel=8) to the
+# 115200-baud serial console, and printk waits for the UART, which costs
+# seconds. The image boots "quiet" (warnings and worse only); lpj= skips the
+# delay-loop calibration where the stock kernel ran one (dump-board.sh).
+SPEED_KEYS = ("loglevel", "quiet", "lpj")
+# --boot-profile and --initcall-blacklist: never taken over from the stock
+# line, only added when asked for.
+PROFILE_KEYS = ("initcall_debug", "printk.time", "log_buf_len", "initcall_blacklist")
+# --boot-profile: every kernel start-up call with its time, in a buffer big
+# enough to keep them all until jukaboot saves it as boot-dmesg.txt. "quiet"
+# stays: it only keeps the messages off the serial console, whose waits would
+# slow the very boot being measured; the kernel's buffer still gets them all.
+PROFILE_ARGS = ("initcall_debug", "printk.time=1", "log_buf_len=1M")
+# The longest kernel command line the card's U-Boot is assumed to pass whole
+# when extra arguments are asked for: U-Boot's console buffer on Allwinner
+# boards (CONFIG_SYS_CBSIZE) is 1024 in mainline, and the kernel's own limit
+# (arm64) is 2048.
+CMDLINE_LIMIT = 1024
+INITCALL_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
+
+
+def rewrite_args(args: str, partuuid: str, fstype: str, lpj: str | None = None,
+                 init: str = INIT_PATH, extra: tuple[str, ...] = ()) -> str:
     words, seen = [], set()
     for word in args.split():
         key = word.partition("=")[0]
+        if key in SPEED_KEYS or key in PROFILE_KEYS:
+            continue  # set once, at the end
         if key in ("root", "rootfstype", "init", "rdinit", "rw", "ro", "rootwait"):
             if key in seen or key == "rdinit":
                 continue
             seen.add(key)
             word = {"root": f"root=PARTUUID={partuuid}", "rootfstype": f"rootfstype={fstype}",
-                    "init": f"init={INIT_PATH}", "rw": "ro", "ro": "ro",
+                    "init": f"init={init}", "rw": "ro", "ro": "ro",
                     "rootwait": "rootwait"}[key]
             if key in ("rw", "ro"):
                 seen.update(("rw", "ro"))
         words.append(word)
     for key, word in (("root", f"root=PARTUUID={partuuid}"), ("rootfstype", f"rootfstype={fstype}"),
-                      ("init", f"init={INIT_PATH}"), ("ro", "ro"), ("rootwait", "rootwait")):
+                      ("init", f"init={init}"), ("ro", "ro"), ("rootwait", "rootwait")):
         if key not in seen and not (key == "ro" and "rw" in seen):
             words.append(word)
+    words.append("quiet")
+    if lpj:
+        words.append(f"lpj={lpj}")
+    words.extend(extra)
     return " ".join(words)
 
 
-def rewrite_env(env: Env, partuuid: str, fstype: str) -> Env:
+def rewrite_env(env: Env, partuuid: str, fstype: str, lpj: str | None = None,
+                init: str = INIT_PATH, extra: tuple[str, ...] = ()) -> Env:
     values = dict(env.values)
     for name in env.names:
         segments = values[name].split(";")
@@ -477,19 +512,60 @@ def rewrite_env(env: Env, partuuid: str, fstype: str) -> Env:
             if len(words) >= 2 and words[0] == "setenv" and words[1] == "bootargs":
                 lead = segment[:len(segment) - len(segment.lstrip())]
                 args = words[2] if len(words) > 2 else ""
-                segments[n] = f"{lead}setenv bootargs {rewrite_args(args, partuuid, fstype)}"
+                segments[n] = f"{lead}setenv bootargs {rewrite_args(args, partuuid, fstype, lpj, init, extra)}"
                 changed = True
         if changed:
             values[name] = ";".join(segments)
     if "bootargs" in values:
-        values["bootargs"] = rewrite_args(values["bootargs"], partuuid, fstype)
+        values["bootargs"] = rewrite_args(values["bootargs"], partuuid, fstype, lpj, init, extra)
     # Variables the templates may read, set as well, in case the bootloader
     # rebuilds the line from them.
-    for key, value in (("mmc_root", f"PARTUUID={partuuid}"), ("init", INIT_PATH),
+    for key, value in (("mmc_root", f"PARTUUID={partuuid}"), ("init", init),
                        ("rootfstype", fstype)):
         if key in values:
             values[key] = value
-    return replace(env, values=values)
+    # No wait for a key press at U-Boot's prompt.
+    names = env.names if "bootdelay" in values else env.names + ["bootdelay"]
+    values["bootdelay"] = "0"
+    return replace(env, names=names, values=values)
+
+
+def profile_args(boot_profile: bool, blacklist: str | None) -> tuple[str, ...]:
+    """The extra kernel arguments of --boot-profile and --initcall-blacklist.
+    Blacklist names are C function names (from boot-dmesg.txt's "initcall NAME"
+    lines), each at most once."""
+    extra = list(PROFILE_ARGS) if boot_profile else []
+    if blacklist:
+        names = [n.strip() for n in blacklist.split(",") if n.strip()]
+        need(bool(names), "--initcall-blacklist names no function")
+        need(len(names) <= 32, "--initcall-blacklist names more than 32 functions")
+        for name in names:
+            need(INITCALL_NAME.fullmatch(name) is not None,
+                 f"--initcall-blacklist: {name!r} is not a kernel function name")
+        need(len(set(names)) == len(names), "--initcall-blacklist names a function twice")
+        extra.append("initcall_blacklist=" + ",".join(names))
+    return tuple(extra)
+
+
+def check_cmdline_length(old: Env, new: Env, cmdline: str, extra: tuple[str, ...]) -> int:
+    """The kernel command line the card's U-Boot will build: the stock one plus
+    what the rewrite added to the longest template. With extra arguments asked
+    for, it must stay within CMDLINE_LIMIT, or the end of the line (the extra
+    arguments themselves) could be cut off unseen."""
+    def longest(env: Env) -> int:
+        return max((len(expand(t, env.values)) for t in bootargs_templates(env)), default=0)
+    total = len(cmdline) + max(0, longest(new) - longest(old))
+    if extra:
+        need(total <= CMDLINE_LIMIT,
+             f"the kernel command line would be {total} bytes with {' '.join(extra)}, more than "
+             f"{CMDLINE_LIMIT}: name fewer functions in --initcall-blacklist")
+    return total
+
+
+def board_lpj(facts: dict[str, str]) -> str | None:
+    """The stock kernel's calibrated loops_per_jiffy, when dump-board.sh found one."""
+    value = facts.get("LPJ", "").strip()
+    return value if re.fullmatch(r"[1-9][0-9]{0,11}", value) else None
 
 
 # -------------------------------------------------------------- boot.img
@@ -588,6 +664,32 @@ def module_plan(text: str, root: Path, release: str) -> tuple[list[str], list[st
         else:
             early.append(path)
     return early, radio, missing
+
+
+def module_deps(text: str, root: Path, release: str, early: list[str]) -> dict[str, list[str]]:
+    """For each early module (by name), the early modules it needs loaded
+    first: the stock /proc/modules' "used by" column (a module names who uses
+    it) and the system's modules.dep. jukaboot loads the modules side by side
+    along these (board.env MODULE_DEPS); the shell init ignores them."""
+    names = [norm_module(Path(p).stem) for p in early]
+    wanted = set(names)
+    deps: dict[str, set[str]] = {n: set() for n in names}
+    for used, users in module_users(text).items():
+        for user in users:
+            if user in deps and used in wanted and used != user:
+                deps[user].add(used)
+    dep_file = root / "lib" / "modules" / release / "modules.dep"
+    if dep_file.is_file():
+        for line in dep_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            target, sep, rest = line.partition(":")
+            name = norm_module(Path(target.strip()).name.split(".ko")[0])
+            if not sep or name not in deps:
+                continue
+            for dep in rest.split():
+                needed = norm_module(Path(dep).name.split(".ko")[0])
+                if needed in wanted and needed != name:
+                    deps[name].add(needed)
+    return {n: sorted(d) for n, d in deps.items()}
 
 
 def daemon_plan(text: str, root: Path, start: set[str], skip: set[str]) -> tuple[list[str], list[str]]:
@@ -752,12 +854,64 @@ def elf_aarch64(path: Path) -> None:
          f"not a little-endian AArch64 binary: {path}")
 
 
+PT_DYNAMIC = 2
+PT_INTERP = 3
+
+
+def check_booter(path: Path) -> None:
+    """jukaboot must start as process 1 with nothing else loaded: a static
+    little-endian AArch64 executable that asks for no program interpreter and
+    has no dynamic section (no libraries to load, no relocations a loader
+    would do: a dynamic one would need a loader and libraries before the root
+    is ready, and a kernel that cannot start init= panics)."""
+    need(path.is_file() and not path.is_symlink(), f"no jukaboot at {path}")
+    size = path.stat().st_size
+    need(64 <= size <= 64 << 20, f"{path} has an odd size for jukaboot ({size} bytes)")
+    with path.open("rb") as stream:
+        data = stream.read(min(size, 1 << 20))
+    need(data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1,
+         f"{path} is not a 64-bit little-endian ELF program")
+    e_type, e_machine = struct.unpack_from("<HH", data, 16)
+    need(e_machine == 183, f"{path} is not built for AArch64")
+    need(e_type in (2, 3), f"{path} is not an executable")
+    phoff, = struct.unpack_from("<Q", data, 32)
+    phentsize, phnum = struct.unpack_from("<HH", data, 54)
+    need(phentsize >= 56 and 0 < phnum <= 64 and phoff + phnum * phentsize <= len(data),
+         f"{path} has no readable program headers")
+    for i in range(phnum):
+        p_type, = struct.unpack_from("<I", data, phoff + i * phentsize)
+        need(p_type != PT_INTERP,
+             f"{path} is linked dynamically (it asks for a loader); build it with CGO_ENABLED=0")
+        need(p_type != PT_DYNAMIC,
+             f"{path} is linked dynamically (it has a dynamic section); build it with CGO_ENABLED=0 "
+             "-buildmode=exe")
+
+
+def choose_booter(app: Path, given: Path | None, shell_init: bool) -> Path | None:
+    """The jukaboot to install: --jukaboot PATH (must pass check_booter), else
+    the package's own when it passes, else none (the shell init boots)."""
+    if shell_init:
+        return None
+    if given is not None:
+        check_booter(given)
+        return given
+    candidate = app / "jukaboot"
+    if not candidate.exists():
+        return None
+    try:
+        check_booter(candidate)
+    except BuildError as error:
+        print(f"note: the package's jukaboot is not used ({error}); the shell init boots the card")
+        return None
+    return candidate
+
+
 def has_command(root: Path, name: str) -> bool:
     return any(os.path.lexists(root / d / name) for d in ("bin", "sbin", "usr/bin", "usr/sbin"))
 
 
 def transform_root(root: Path, board: Path, facts: dict[str, str], data_fs: str,
-                   start: set[str], skip: set[str]) -> dict:
+                   start: set[str], skip: set[str], booter: Path | None = None) -> dict:
     missing = [c for c in REQUIRED_COMMANDS if not has_command(root, c)]
     need(not missing, f"the stock system lacks {', '.join(missing)}")
     need((root / "etc").is_dir() and not (root / "etc").is_symlink(), "the stock system has no /etc")
@@ -768,7 +922,9 @@ def transform_root(root: Path, board: Path, facts: dict[str, str], data_fs: str,
              f"the stock /{name} is not a folder")
         path.mkdir(parents=True, exist_ok=True)
     release = facts["KERNEL"]
-    early, radio, absent = module_plan((board / "modules.txt").read_text(encoding="utf-8"), root, release)
+    modules_text = (board / "modules.txt").read_text(encoding="utf-8")
+    early, radio, absent = module_plan(modules_text, root, release)
+    deps = module_deps(modules_text, root, release, early)
     daemons, ignored = daemon_plan((board / "procs.txt").read_text(encoding="utf-8", errors="replace"),
                                    root, start, skip)
     gpio = gpio_plan((board / "gpio.txt").read_text(encoding="utf-8")) if (board / "gpio.txt").is_file() else []
@@ -789,12 +945,18 @@ def transform_root(root: Path, board: Path, facts: dict[str, str], data_fs: str,
     shutil.copy2(HERE / "launch.sh", j / "launch.sh")
     (j / "init").chmod(0o755)
     (j / "launch.sh").chmod(0o755)
+    if booter is not None:
+        # The kernel's init= (build_image picks it): the shell init above stays
+        # as its fallback and for BOOTER=0 in boot.env.
+        shutil.copyfile(booter, j / "jukaboot")
+        (j / "jukaboot").chmod(0o755)
     (j / "board.env").write_text(
         "# Written by os/smartpro/build_image.py from this device's board folder.\n"
         f"DATA_NAME={DATA_NAME}\n"
         f"DATA_FSTYPE={data_fs}\n"
         f"MODULES={shlex.quote(' '.join(early))}\n"
         f"RADIO_MODULES={shlex.quote(' '.join(radio))}\n"
+        f"MODULE_DEPS={shlex.quote(' '.join(n + ':' + ','.join(d) for n, d in deps.items()))}\n"
         f"WIFI={1 if wifi else 0}\n",
         encoding="utf-8")
     (j / "daemons.list").write_text("".join(line + "\n" for line in daemons), encoding="utf-8")
@@ -805,6 +967,7 @@ def transform_root(root: Path, board: Path, facts: dict[str, str], data_fs: str,
         "JUKAHUB_OS_NATIVE=1\nBASE=smartpro-stock-kernel\nDEVICE=trimui-smart-pro\n"
         f"KERNEL={release}\n", encoding="utf-8")
     return {"modules": early, "radio_modules": radio, "modules_not_found": absent,
+            "module_deps": {n: d for n, d in deps.items() if d},
             "daemons": daemons, "processes_not_started": ignored, "gpio": gpio, "wifi": wifi}
 
 
@@ -962,14 +1125,28 @@ def replace_logo(image: Path) -> str:
             if not logo.is_file():
                 return "kept the stock boot logo (no bootlogo.bmp)"
             old = logo.read_bytes()
-            new = bmp_like(old, BOOTLOGO.read_bytes())
+            ours = BOOTLOGO.read_bytes()
+            new = bmp_like(old, ours)
+            label = "JukaHub boot logo"
             if new is None:
-                return "kept the stock boot logo (different size or depth)"
+                # Firmware 1.1.x keeps a small banner (396x66), not a full
+                # screen. JukaHub later writes the saved Home over this file
+                # in place at the same length (bootframe_ubootlogo*.go), which
+                # needs a full-screen 1280x720 24-bit picture here, the size
+                # NextUI and CrossMix use for this U-Boot.
+                # A portrait logo means a bootloader that draws it turned: a
+                # landscape one there would show sideways, so it stays.
+                stock = bmp_info(old)
+                if (stock is None or bmp_info(ours) is None or (stock[0], abs(stock[1])) == (1280, 720)
+                        or stock[0] < abs(stock[1])):
+                    return "kept the stock boot logo (different size or depth)"
+                new = ours
+                label = "JukaHub boot logo (1280x720, full screen)"
             space = os.statvfs(mount)
             if len(new) > len(old) + space.f_bavail * space.f_frsize - (64 << 10):
                 return "kept the stock boot logo (no room for the JukaHub one)"
             logo.write_bytes(new)
-            return "JukaHub boot logo"
+            return label
         finally:
             run("sync")
             run("umount", str(mount))
@@ -1044,6 +1221,12 @@ def build_image(args: argparse.Namespace) -> None:
     data_fs = choose_data_fs(fs_text, shutil.which("mkfs.exfat") is not None)
     require_tool("mkfs.exfat" if data_fs == "exfat" else "mkfs.vfat")
     cmdline = (board / "cmdline.txt").read_text(encoding="utf-8").strip()
+    # Process 1: jukaboot when the package (or --jukaboot) has a static AArch64
+    # build of it, else the shell init, as before.
+    booter = choose_booter(args.app.resolve(), getattr(args, "jukaboot", None),
+                           bool(getattr(args, "shell_init", False)))
+    init_path = BOOTER_PATH if booter is not None else INIT_PATH
+    extra = profile_args(bool(getattr(args, "boot_profile", False)), getattr(args, "initcall_blacklist", None))
 
     with tempfile.TemporaryDirectory(prefix="jukahub-smartpro-") as tmp:
         work = Path(tmp)
@@ -1058,7 +1241,7 @@ def build_image(args: argparse.Namespace) -> None:
         root.mkdir()
         run("tar", "--numeric-owner", "-xpf", str(board / "rootfs.tar"), "-C", str(root))
         plan = transform_root(root, board, facts, data_fs, set(args.start_daemon or []),
-                              set(args.skip_daemon or []))
+                              set(args.skip_daemon or []), booter)
         root_img = work / "root.img"
         make_root_image(root, root_fs, root_img, compressor)
         shutil.rmtree(root)
@@ -1068,6 +1251,7 @@ def build_image(args: argparse.Namespace) -> None:
         data = next(p for p in parts if p.name == DATA_NAME)
 
         envs = {}
+        cmdline_bytes = 0
         for part in env_parts:
             raw = (board / "parts" / f"{part.name}.img").read_bytes()
             try:
@@ -1077,9 +1261,11 @@ def build_image(args: argparse.Namespace) -> None:
                     continue  # never written: U-Boot ignores a copy that fails its CRC
                 raise
             check_env_controls_root(env, cmdline)
-            envs[part.name] = env_bytes(rewrite_env(env, new_root.partuuid, root_fs), raw)
+            new_env = rewrite_env(env, new_root.partuuid, root_fs, board_lpj(facts), init_path, extra)
+            cmdline_bytes = max(cmdline_bytes, check_cmdline_length(env, new_env, cmdline, extra))
+            envs[part.name] = env_bytes(new_env, raw)
         need(bool(envs), "no U-Boot environment to point at the card")
-        boot_new = rewrite_bootimg_cmdline(boot_stripped, new_root.partuuid, root_fs)
+        boot_new = rewrite_bootimg_cmdline(boot_stripped, new_root.partuuid, root_fs, init_path)
 
         logo = "kept the stock boot logo"
         images = {}
@@ -1130,6 +1316,11 @@ def build_image(args: argparse.Namespace) -> None:
         "boot_package_checksum_ok": package["checksum_ok"],
         "boot_image_ramdisk_dropped": boot_info["ramdisk_size"] > 0,
         "boot_logo": logo,
+        "kernel_lpj": board_lpj(facts),
+        "init": init_path,
+        "jukaboot_sha256": sha256(booter) if booter is not None else None,
+        "kernel_extra_args": list(extra),
+        "kernel_cmdline_bytes": cmdline_bytes,
         "partitions": [{"number": p.index + 1, "name": p.name, "first_lba": p.first,
                         "sectors": p.sectors} for p in parts],
         "jukahub_binary_sha256": sha256(args.app / "JukaHub"),
@@ -1144,6 +1335,10 @@ def build_image(args: argparse.Namespace) -> None:
         print("note: the boot package's checksum did not verify; it is copied unchanged")
     if plan["modules_not_found"]:
         print("note: modules not found in the system files: " + ", ".join(plan["modules_not_found"]))
+    print(f"process 1: {init_path}" + (" (jukaboot; the shell init is its fallback)" if booter else
+                                        " (the shell init; the package has no usable jukaboot)"))
+    if extra:
+        print("kernel arguments added: " + " ".join(extra))
     print("daemons started at boot: " + (", ".join(line.rsplit("|", 1)[1] for line in plan["daemons"]) or "none"))
     if plan["processes_not_started"]:
         print("stock processes NOT started (add with --start-daemon NAME if the hardware needs one): "
@@ -1218,6 +1413,17 @@ def main() -> int:
                         help="do not start this stock process at boot (repeatable)")
     parser.add_argument("--output", type=Path, required=True,
                         help="new .img or .img.xz; must not exist")
+    parser.add_argument("--jukaboot", type=Path,
+                        help="the jukaboot process 1 to install (default: the one in --app, when it is a "
+                             "static AArch64 build)")
+    parser.add_argument("--shell-init", action="store_true",
+                        help="boot with the shell process 1 (os/smartpro/init) even when jukaboot is there")
+    parser.add_argument("--boot-profile", action="store_true",
+                        help="time every kernel start-up call (initcall_debug, printk.time=1, log_buf_len=1M); "
+                             "jukaboot saves them in .userdata/jukahub/boot-dmesg.txt")
+    parser.add_argument("--initcall-blacklist", metavar="NAME,NAME",
+                        help="kernel start-up calls to skip (initcall_blacklist=), named from a "
+                             "--boot-profile boot's boot-dmesg.txt")
     parser.add_argument("--experimental-model", action="store_true",
                         help="accept a board dump from another model than the Smart Pro (TG5040); "
                              "development only, its boot chain is unverified")

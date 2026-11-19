@@ -57,15 +57,15 @@ func flexAutoCross(b webBlock) (start, end bool) {
 	return b.Style.MarginTopAuto, b.Style.MarginBotAuto
 }
 
-// webFlexContainerHeight returns the definite block size a flex column can
-// distribute. A percentage height has no resolved parent height in this
-// reader, so it stays content-sized; a min-height is a definite floor and can
-// be used as the container's block size.
+// webFlexContainerHeight returns the block size a flex column can distribute.
+// Percentage heights have already been resolved against a definite parent;
+// an unresolved percentage stays content-sized. A min-height is a usable
+// floor for the container's distribution.
 func webFlexContainerHeight(st webStyle) float64 {
 	if st.Height > 0 {
-		return st.Height
+		return webDefiniteContentHeight(st)
 	}
-	return st.MinHeight
+	return webHeightContentTarget(st, st.MinHeight)
 }
 
 func flexAutoCount(items []webFlexItem) int {
@@ -158,6 +158,7 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 	if sub == nil {
 		return
 	}
+	dy := rowOffset * l.rowH
 	ensureRows := func(last int32) {
 		for int32(len(l.layout.Rows)) <= last && len(l.layout.Rows) < webMaxRows {
 			idx := int32(len(l.layout.Rows))
@@ -172,13 +173,20 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 		}
 		for _, run := range row.Runs {
 			run.X += x
+			if run.HasClip {
+				run.Clip.X += x
+				run.Clip.Y += dy
+			}
 			l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
 		}
 	}
-	dy := rowOffset * l.rowH
 	for _, rect := range sub.Rects {
 		rect.Rect.X += x
 		rect.Rect.Y += dy
+		if rect.HasClip {
+			rect.Clip.X += x
+			rect.Clip.Y += dy
+		}
 		l.layout.Rects = append(l.layout.Rects, rect)
 	}
 	for _, bg := range sub.Backgrounds {
@@ -189,16 +197,96 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 	for _, im := range sub.Images {
 		im.Rect.X += x
 		im.Rect.Y += dy
+		if im.HasClip {
+			im.Clip.X += x
+			im.Clip.Y += dy
+		}
 		l.layout.Images = append(l.layout.Images, im)
 	}
 	for _, video := range sub.Videos {
 		video.Rect.X += x
 		video.Rect.Y += dy
+		if video.HasClip {
+			video.Clip.X += x
+			video.Clip.Y += dy
+		}
 		l.layout.Videos = append(l.layout.Videos, video)
 	}
 	for _, float := range sub.Floats {
 		float.X += x
 		float.Y += dy
+		l.layout.Floats = append(l.layout.Floats, float)
+	}
+}
+
+// mergeFlexSubLayoutAtY merges a measured sublayout at an exact pixel Y. The
+// ordinary merge snaps to the text-row grid, which would round a 40px grid
+// track up to two 29px rows; explicit grid tracks need their authored pixel
+// edges, so their rows and paint layers keep the measured offset here.
+func (l *webLayouter) mergeFlexSubLayoutAtY(sub *webLayout, x, y int32) {
+	if sub == nil {
+		return
+	}
+	for _, row := range sub.Rows {
+		targetY := y + row.Y
+		target := -1
+		for i := len(l.layout.Rows) - 1; i >= 0; i-- {
+			if l.layout.Rows[i].Y == targetY {
+				target = i
+				break
+			}
+			if l.layout.Rows[i].Y < targetY {
+				break
+			}
+		}
+		if target < 0 {
+			target = len(l.layout.Rows)
+			l.layout.Rows = append(l.layout.Rows, webRow{Y: targetY})
+		}
+		for _, run := range row.Runs {
+			run.X += x
+			if run.HasClip {
+				run.Clip.X += x
+				run.Clip.Y += y
+			}
+			l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
+		}
+	}
+	for _, rect := range sub.Rects {
+		rect.Rect.X += x
+		rect.Rect.Y += y
+		if rect.HasClip {
+			rect.Clip.X += x
+			rect.Clip.Y += y
+		}
+		l.layout.Rects = append(l.layout.Rects, rect)
+	}
+	for _, bg := range sub.Backgrounds {
+		bg.Rect.X += x
+		bg.Rect.Y += y
+		l.layout.Backgrounds = append(l.layout.Backgrounds, bg)
+	}
+	for _, im := range sub.Images {
+		im.Rect.X += x
+		im.Rect.Y += y
+		if im.HasClip {
+			im.Clip.X += x
+			im.Clip.Y += y
+		}
+		l.layout.Images = append(l.layout.Images, im)
+	}
+	for _, video := range sub.Videos {
+		video.Rect.X += x
+		video.Rect.Y += y
+		if video.HasClip {
+			video.Clip.X += x
+			video.Clip.Y += y
+		}
+		l.layout.Videos = append(l.layout.Videos, video)
+	}
+	for _, float := range sub.Floats {
+		float.X += x
+		float.Y += y
 		l.layout.Floats = append(l.layout.Floats, float)
 	}
 }
@@ -232,7 +320,7 @@ func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock
 			blocks[0].MarginTop = 0
 		}
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
 			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
 		subLayouter.primeItemContainerWidths(blocks, contentW)
@@ -332,6 +420,18 @@ func webItemVisible(b webBlock) bool {
 // the fallback for a flex row that cannot fit side-by-side columns on a small
 // screen: a 20px column of wrapped text is worse than losing the row.
 func (l *webLayouter) layoutBlocksFlat(blocks []webBlock, padX, contentW int32) {
+	oldSkip := l.constraintSkip
+	if len(blocks) > 0 && l.doc != nil {
+		group, item := blocks[0].FlexGroup, blocks[0].FlexItem
+		depth := l.doc.FlexBoxDepth[group]
+		if itemDepth := l.doc.FlexItemBoxDepth[group][item]; itemDepth > depth {
+			depth = itemDepth
+		}
+		if depth > l.constraintSkip {
+			l.constraintSkip = depth
+		}
+	}
+	defer func() { l.constraintSkip = oldSkip }()
 	flat := make([]webBlock, len(blocks))
 	copy(flat, blocks)
 	if len(flat) > 0 {
@@ -558,6 +658,67 @@ func (l *webLayouter) intrinsicContainerWidth(blocks []webBlock) int32 {
 	return widest + int32(24*scale)
 }
 
+// intrinsicMinContentWidth measures the narrowest width at which an item's
+// text can still wrap without breaking a word. It is the min-content floor a
+// flex item's automatic minimum size asks for. The measurement reuses the same
+// font objects and SizeUTF8 path as intrinsicContainerWidth; it only chooses
+// words instead of whole runs, so a long label keeps its word intact in a
+// shrinking row.
+func (l *webLayouter) intrinsicMinContentWidth(blocks []webBlock) int32 {
+	if l.fontAt == nil || l.baseSize <= 0 {
+		return 0
+	}
+	scale := l.baseSize / 16
+	widest := int32(0)
+	for _, b := range blocks {
+		padding := int32((b.Indent + b.Style.IndentRight) * scale)
+		for _, run := range b.Runs {
+			text := strings.TrimSpace(run.Text)
+			if text == "" {
+				continue
+			}
+			font := l.fontAt(run.Style.FontPx)
+			if font == nil {
+				continue
+			}
+			chunks := strings.Fields(text)
+			if !webWhiteSpaceWraps(run.Style.WhiteSpace) || run.Style.Pre {
+				chunks = strings.Split(text, "\n")
+			}
+			for _, chunk := range chunks {
+				chunk = strings.TrimSpace(chunk)
+				if chunk == "" {
+					continue
+				}
+				// anywhere and break-all create legal break points between
+				// glyphs. Their min-content floor is the widest glyph, not the
+				// whole identifier. break-word keeps the unbroken min-content
+				// size, as CSS specifies for intrinsic track sizing.
+				if webWhiteSpaceWraps(run.Style.WhiteSpace) &&
+					(run.Style.WordBreak == 1 || run.Style.OverflowWrap == 1) && len(chunk) <= 8192 {
+					for _, r := range chunk {
+						w, _, err := font.SizeUTF8(string(r))
+						if err == nil {
+							if width := int32(w) + padding; width > widest {
+								widest = width
+							}
+						}
+					}
+					continue
+				}
+				w, _, err := font.SizeUTF8(chunk)
+				if err != nil {
+					continue
+				}
+				if width := int32(w) + padding; width > widest {
+					widest = width
+				}
+			}
+		}
+	}
+	return widest
+}
+
 // setContainerWidth overwrites one measured container width and resolves its
 // nested containers from it. This is how a flex track makes cqw/cqi agree with
 // the column the reader actually drew.
@@ -729,11 +890,18 @@ func (l *webLayouter) paintContainerBoxes() {
 		left := int32(info.style.Indent * scale)
 		x, y := span.minX-left, span.minY-top
 		h := span.maxY - span.minY + top + bottom
-		// A wrapper's own min-height/height belongs to its box, not to the
-		// child runs that happen to define its top and bottom. Without this a
-		// 300px hero with only a heading and a paragraph collapsed to the
-		// text height, and its background image never covered the hero.
-		if minH := int32(math.Round(max(info.style.MinHeight, info.style.Height) * scale)); minH > h {
+		// A definite height sizes the wrapper's painted box even when its
+		// children overflow it. The descendant union is only the size of an
+		// auto-height wrapper; using it for a fixed-height navigation bar can
+		// turn a 40px background into a full-screen panel.
+		if info.style.Height > 0 {
+			h = int32(math.Round(info.style.Height * scale))
+			if info.style.BoxSizing == 0 {
+				h += int32(math.Round((info.style.PadTop + info.style.PadBot) * scale))
+			}
+		}
+		// min-height remains a floor for either kind of wrapper.
+		if minH := int32(math.Round(info.style.MinHeight * scale)); minH > h {
 			h = minH
 		}
 		// A card at the top of the page can have padding above its first line;
@@ -763,16 +931,36 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 		return padX, contentW
 	}
 	scale := l.baseSize / 16
-	for _, id := range block.Boxes {
+	start := min(l.constraintSkip, len(block.Boxes))
+	end := len(block.Boxes)
+	nestedItemPadding := false
+	if depth, ok := l.doc.FlexBoxDepth[block.FlexGroup]; ok && depth < end {
+		if start < depth {
+			end = depth
+		} else if len(block.Runs) > 0 {
+			// A flex/grid item already received its root width from the track.
+			// Text inside it still needs the padding of nested wrappers. Keep
+			// image and empty wrapper geometry on the existing track path.
+			nestedItemPadding = true
+		} else {
+			end = start
+		}
+	}
+	if end < start {
+		end = start
+	}
+	for _, id := range block.Boxes[start:end] {
 		info, ok := l.doc.Boxes[id]
 		if !ok {
 			continue
 		}
 		// A block whose style is the same element style already had its own
-		// padding and width applied by the ordinary block pass. Only an
-		// ancestor wrapper contributes here; otherwise a card's direct text
-		// would receive its padding twice.
-		if block.BoxOwner == id {
+		// padding and width applied by the ordinary block pass. A box owner
+		// with different padding is still an ancestor wrapper for this text;
+		// skipping it lets an article line run beyond its card border.
+		if block.BoxOwner == id &&
+			math.Abs(block.Indent-info.style.Indent) < 0.01 &&
+			math.Abs(block.Style.IndentRight-info.style.IndentRight) < 0.01 {
 			// This is the element that owns the box. Its own width, padding and
 			// auto margins were already applied by the ordinary block pass;
 			// applying them again here centred a flex column item twice (once
@@ -789,20 +977,22 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 			right = 0
 		}
 		target := contentW
-		if st.WidthPct > 0 {
-			target = min32(target, int32(math.Round(float64(contentW)*st.WidthPct/100)))
-		} else if st.Width > 0 {
-			target = min32(target, int32(math.Round(st.Width*scale)))
-		}
-		if st.MaxWidthPct > 0 {
-			target = min32(target, int32(math.Round(float64(contentW)*st.MaxWidthPct/100)))
-		} else if st.MaxWidth > 0 {
-			target = min32(target, int32(math.Round(st.MaxWidth*scale)))
-		}
-		if st.MinWidthPct > 0 {
-			target = max(target, int32(math.Round(float64(contentW)*st.MinWidthPct/100)))
-		} else if st.MinWidth > 0 {
-			target = max(target, int32(math.Round(st.MinWidth*scale)))
+		if !nestedItemPadding {
+			if st.WidthPct > 0 {
+				target = min32(target, int32(math.Round(float64(contentW)*st.WidthPct/100)))
+			} else if st.Width > 0 {
+				target = min32(target, int32(math.Round(st.Width*scale)))
+			}
+			if st.MaxWidthPct > 0 {
+				target = min32(target, int32(math.Round(float64(contentW)*st.MaxWidthPct/100)))
+			} else if st.MaxWidth > 0 {
+				target = min32(target, int32(math.Round(st.MaxWidth*scale)))
+			}
+			if st.MinWidthPct > 0 {
+				target = max(target, int32(math.Round(float64(contentW)*st.MinWidthPct/100)))
+			} else if st.MinWidth > 0 {
+				target = max(target, int32(math.Round(st.MinWidth*scale)))
+			}
 		}
 		if target < 32 {
 			target = 32
@@ -815,7 +1005,7 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 			left, right, inner = 0, 0, target
 		}
 		x := padX + left
-		if free := contentW - target; free > 0 && (st.MarginLeftAuto || st.MarginRightAuto) {
+		if free := contentW - target; !nestedItemPadding && free > 0 && (st.MarginLeftAuto || st.MarginRightAuto) {
 			switch {
 			case st.MarginLeftAuto && st.MarginRightAuto:
 				x += free / 2
@@ -988,95 +1178,1151 @@ func (l *webLayouter) paintWebBox(info webBoxInfo, rect sdl.Rect) {
 	}
 	sl.layoutBlocks([]webBlock{box}, 0, rect.W)
 	for _, r := range boxLayout.Rects {
+		if r.BackgroundFill && r.Rect.Y+r.Rect.H > rect.H {
+			r.Rect.H = max(0, rect.H-r.Rect.Y)
+		}
 		r.Rect.X += rect.X
 		r.Rect.Y += rect.Y
 		l.layout.Rects = append(l.layout.Rects, r)
 	}
 	for _, bg := range boxLayout.Backgrounds {
+		if bg.Rect.Y+bg.Rect.H > rect.H {
+			bg.Rect.H = max(0, rect.H-bg.Rect.Y)
+		}
 		bg.Rect.X += rect.X
 		bg.Rect.Y += rect.Y
 		l.layout.Backgrounds = append(l.layout.Backgrounds, bg)
 	}
 }
 
-// gridTrackWidths resolves an explicit grid-template-columns list into the
-// actual pixel width of each track. A fixed track keeps its width; the fr
-// tracks split what is left in proportion to their factors. Returning nil
-// keeps the historical equal-column path for a bare `display:grid`.
-func (l *webLayouter) gridTrackWidths(first webBlock, cols int, contentW, gap int32) []int32 {
-	if cols <= 0 || first.GridCols <= 0 || cols > len(first.GridWeights) {
-		return nil
+// gridColumnSpecs expands an auto-fill/auto-fit definition to the used column
+// count, or returns the explicit specs. A legacy block with only weights/bases
+// is translated into a spec so the sizing path has one code path.
+func (l *webLayouter) gridColumnSpecs(first webBlock, cols int) []webGridTrackSpec {
+	specs := make([]webGridTrackSpec, cols)
+	if first.GridAutoRepeat != 0 {
+		for i := range specs {
+			specs[i] = first.GridAutoTrack
+		}
+		return specs
 	}
+	for i := 0; i < cols; i++ {
+		explicit := first.GridCols
+		if explicit <= 0 && first.GridAreas != nil {
+			explicit = first.GridAreas.Cols
+		}
+		if i < explicit && i < len(first.GridTrackSpecs) && first.GridTrackSpecs[i] != (webGridTrackSpec{}) {
+			specs[i] = first.GridTrackSpecs[i]
+			continue
+		}
+		if i >= explicit && first.GridAutoColCount > 0 {
+			specs[i] = first.GridAutoColSpecs[(i-explicit)%first.GridAutoColCount]
+			continue
+		}
+		if i < len(first.GridBases) && first.GridBases[i] > 0 {
+			specs[i] = webGridTrackSpec{Min: first.GridBases[i], Max: first.GridBases[i]}
+		}
+		if i < len(first.GridWeights) && first.GridWeights[i] > 0 {
+			specs[i].MaxFr = first.GridWeights[i]
+		}
+		if specs[i] == (webGridTrackSpec{}) {
+			specs[i] = webGridTrackSpec{MinAuto: true, MaxAuto: true}
+		}
+	}
+	return specs
+}
+
+func (l *webLayouter) gridColumnSpecPx(spec webGridTrackSpec, basis, contentMin int32) (min, maxPx int32, flexible bool) {
 	scale := l.baseSize / 16
 	if scale <= 0 {
 		scale = 1
 	}
-	trackSpace := contentW - gap*int32(cols-1)
-	if trackSpace <= 0 {
+	min = int32(math.Round(spec.Min * scale))
+	if spec.MinPct > 0 {
+		min = max(min, int32(math.Round(float64(basis)*spec.MinPct/100)))
+	}
+	maxPx = int32(math.Round(spec.Max * scale))
+	if spec.MaxPct > 0 {
+		maxPx = max(maxPx, int32(math.Round(float64(basis)*spec.MaxPct/100)))
+	}
+	if spec.MinAuto && contentMin > min {
+		min = contentMin
+	}
+	if spec.MinAuto && maxPx > 0 && min > maxPx {
+		min = maxPx
+	}
+	if spec.MaxFr > 0 || spec.MaxAuto || (spec.Max <= 0 && spec.MaxPct <= 0 && !spec.MinAuto) {
+		flexible = true
+	}
+	if min < 0 {
+		min = 0
+	}
+	if maxPx < min {
+		maxPx = min
+	}
+	return min, maxPx, flexible
+}
+
+// gridColumnWidths resolves explicit tracks and minmax bounds. Fixed tracks
+// reserve their definite width first; flexible tracks then share the remaining
+// space in proportion to their fr factors, with each track never shrinking
+// below its min. A minmax(220px, 1fr) track therefore contributes 220px before
+// receiving its share, instead of being counted twice as a fixed and a
+// flexible track.
+func (l *webLayouter) gridColumnWidths(first webBlock, cols int, contentW, gap int32, used []bool, contentMins []int32) []int32 {
+	if cols <= 0 || cols > 6 {
 		return nil
 	}
-	widths := make([]int32, cols)
-	fixed := int32(0)
-	totalWeight := 0.0
-	hasExplicit := false
-	for i := 0; i < cols; i++ {
-		if first.GridBases[i] > 0 {
-			widths[i] = int32(math.Round(first.GridBases[i] * scale))
-			if widths[i] < 1 {
-				widths[i] = 1
-			}
-			fixed += widths[i]
-			hasExplicit = true
-		}
-		if first.GridWeights[i] > 0 {
-			totalWeight += first.GridWeights[i]
+	// A table row and a bare grid have no authored column track list. Keep
+	// their historical content/equal-column paths out of the explicit sizing
+	// code; only a real template or an auto repeat needs track specs.
+	if first.GridCols <= 0 && first.GridAutoRepeat == 0 && first.GridMin <= 0 && first.GridAutoColCount == 0 {
+		return nil
+	}
+	specs := l.gridColumnSpecs(first, cols)
+	hasExplicit := first.GridAutoRepeat != 0 || first.GridAutoColCount != 0
+	for _, spec := range specs {
+		if spec != (webGridTrackSpec{}) {
 			hasExplicit = true
 		}
 	}
 	if !hasExplicit {
 		return nil
 	}
+	active := 0
+	for i := 0; i < cols; i++ {
+		if gridTrackActive(used, i) {
+			active++
+		}
+	}
+	if active == 0 {
+		return make([]int32, cols)
+	}
+	trackSpace := contentW - gap*int32(active-1)
+	if trackSpace <= 0 {
+		return nil
+	}
+	widths := make([]int32, cols)
+	mins := make([]int32, cols)
+	flex := make([]bool, cols)
+	fixed := int32(0)
+	for i, spec := range specs {
+		if !gridTrackActive(used, i) {
+			continue
+		}
+		min, max, flexible := l.gridColumnSpecPx(spec, contentW, contentMins[i])
+		mins[i], flex[i] = min, flexible
+		if flexible {
+			widths[i] = min
+			continue
+		}
+		if spec.MinAuto && !flexible {
+			widths[i] = min
+			fixed += widths[i]
+			continue
+		}
+		if max < min {
+			max = min
+		}
+		widths[i] = max
+		fixed += widths[i]
+	}
 	if fixed > trackSpace {
-		// The author's fixed tracks cannot fit the page measure. Keep their
-		// proportional shape rather than overflowing the content column.
+		// The authored minimum/definite tracks cannot fit the page measure.
+		// Preserve their proportions rather than overflowing the column.
 		for i := range widths {
 			widths[i] = int32(float64(widths[i]) * float64(trackSpace) / float64(fixed))
 			if widths[i] < 1 {
 				widths[i] = 1
 			}
 		}
-		fixed = 0
-		for _, w := range widths {
-			fixed += w
-		}
+		return widths
 	}
-	left := trackSpace - fixed
-	if left < 0 {
-		left = 0
+	free := trackSpace - fixed
+	if free <= 0 {
+		return widths
 	}
-	remainingWeight := totalWeight
-	for i := 0; i < cols; i++ {
-		weight := first.GridWeights[i]
-		if weight <= 0 {
+	flexMin := int32(0)
+	totalFr := 0.0
+	for i := range specs {
+		if !flex[i] || !gridTrackActive(used, i) {
 			continue
 		}
-		share := int32(0)
-		if remainingWeight > 0 {
-			share = int32(math.Round(float64(left) * weight / remainingWeight))
-		}
-		widths[i] += share
-		left -= share
-		remainingWeight -= weight
+		flexMin += mins[i]
+		totalFr += webGridTrackFr(specs[i])
 	}
-	// A grid whose tracks are all fixed but do not fill the row leaves the
-	// remaining room as the row's free space (justify-content handles it).
+	if fixed+flexMin > trackSpace {
+		for i := range widths {
+			widths[i] = int32(float64(widths[i]) * float64(trackSpace) / float64(fixed+flexMin))
+			if widths[i] < 1 {
+				widths[i] = 1
+			}
+		}
+		return widths
+	}
+	remaining := free - flexMin
+	if remaining < 0 {
+		remaining = 0
+	}
+	if totalFr <= 0 {
+		return widths
+	}
+	remainingWeight := totalFr
+	for i := range specs {
+		if !flex[i] || !gridTrackActive(used, i) || remainingWeight <= 0 {
+			continue
+		}
+		share := int32(math.Round(float64(remaining) * webGridTrackFr(specs[i]) / remainingWeight))
+		widths[i] += share
+		remaining -= share
+		remainingWeight -= webGridTrackFr(specs[i])
+	}
 	return widths
+}
+
+func gridTrackActive(used []bool, i int) bool {
+	return used == nil || (i >= 0 && i < len(used) && used[i])
+}
+
+func gridTrackOffsets(tracks []int32, gap int32, used []bool) []int32 {
+	offsets := make([]int32, len(tracks)+1)
+	pos := int32(0)
+	for i := range tracks {
+		offsets[i] = pos
+		if !gridTrackActive(used, i) {
+			continue
+		}
+		pos += tracks[i]
+		for next := i + 1; next < len(tracks); next++ {
+			if gridTrackActive(used, next) {
+				pos += gap
+				break
+			}
+		}
+	}
+	offsets[len(tracks)] = pos
+	return offsets
+}
+
+func gridTrackSpan(tracks []int32, gap int32, used []bool, start, end int) int32 {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(tracks) {
+		end = len(tracks)
+	}
+	span, first := int32(0), true
+	for i := start; i < end; i++ {
+		if !gridTrackActive(used, i) {
+			continue
+		}
+		if !first {
+			span += gap
+		}
+		span += tracks[i]
+		first = false
+	}
+	return span
+}
+
+// webGridTrackFr gives plain auto tracks a share weight so a bare `auto 1fr`
+// still fills a row, while a minmax with a definite max does not.
+func webGridTrackFr(spec webGridTrackSpec) float64 {
+	if spec.MaxFr > 0 {
+		return spec.MaxFr
+	}
+	if spec.MaxAuto {
+		return 1
+	}
+	return 0
+}
+
+func (l *webLayouter) gridRowSpecs(first webBlock, rows int) []webGridTrackSpec {
+	specs := make([]webGridTrackSpec, rows)
+	if first.GridRowAutoRepeat != 0 {
+		for i := range specs {
+			specs[i] = first.GridRowAutoTrack
+		}
+		return specs
+	}
+	for i := 0; i < rows; i++ {
+		explicit := first.GridRows
+		if explicit <= 0 && first.GridAreas != nil {
+			explicit = first.GridAreas.Rows
+		}
+		if i >= explicit && first.GridAutoRowCount > 0 {
+			specs[i] = first.GridAutoRowSpecs[(i-explicit)%first.GridAutoRowCount]
+			continue
+		}
+		if i < 6 {
+			if first.GridRowTrackSpecs[i] != (webGridTrackSpec{}) {
+				specs[i] = first.GridRowTrackSpecs[i]
+				continue
+			}
+			if first.GridRowBases[i] > 0 {
+				specs[i] = webGridTrackSpec{Min: first.GridRowBases[i], Max: first.GridRowBases[i]}
+			}
+			if first.GridRowWeights[i] > 0 {
+				specs[i].MaxFr = first.GridRowWeights[i]
+			}
+		}
+		if specs[i] == (webGridTrackSpec{}) {
+			specs[i] = webGridTrackSpec{MinAuto: true, MaxAuto: true}
+		}
+	}
+	return specs
+}
+
+func (l *webLayouter) gridRowSpecPx(spec webGridTrackSpec, basis int32) (min, maxPx int32, flexible, grow bool) {
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	min = int32(math.Round(spec.Min * scale))
+	if spec.MinPct > 0 {
+		min = max(min, int32(math.Round(float64(basis)*spec.MinPct/100)))
+	}
+	maxPx = int32(math.Round(spec.Max * scale))
+	if spec.MaxPct > 0 {
+		maxPx = max(maxPx, int32(math.Round(float64(basis)*spec.MaxPct/100)))
+	}
+	if maxPx < min {
+		maxPx = min
+	}
+	flexible = spec.MaxFr > 0
+	grow = spec.MaxAuto || flexible || spec.MinAuto || (maxPx > min && maxPx > 0)
+	return min, maxPx, flexible, grow
+}
+
+func (l *webLayouter) gridAutoRepeatCount(spec webGridTrackSpec, available, gap int32) int {
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	basisCSS := float64(available) / scale
+	definite := webGridTrackDefinitePx(spec, basisCSS)
+	if definite <= 0 {
+		return 1
+	}
+	px := int32(math.Round(definite * scale))
+	if px < 1 || available < px {
+		return 1
+	}
+	n := int((available + gap) / (px + gap))
+	if n < 1 {
+		n = 1
+	}
+	if n > 6 {
+		n = 6
+	}
+	return n
+}
+
+// layoutGridItems lays explicit grid tracks and placements. It is separate
+// from the flex row path because a grid item belongs to a named track, can
+// span several tracks, and leaves empty tracks when the author started it on
+// a later line. A grid also keeps its empty trailing tracks instead of
+// stretching the last card across the page.
+func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int32) {
+	if len(grouped) == 0 || contentW <= 0 {
+		return
+	}
+	first := grouped[0].blocks[0]
+	gap := int32(first.FlexGapX * l.baseSize / 16)
+	if gap < 0 {
+		gap = 0
+	}
+	if limit := contentW / 8; gap > limit {
+		gap = limit
+	}
+	cols := first.GridCols
+	if cols <= 0 && first.GridAutoRepeat != 0 {
+		cols = l.gridAutoRepeatCount(first.GridAutoTrack, contentW, gap)
+	} else if cols <= 0 && first.GridAreas != nil {
+		cols = first.GridAreas.Cols
+	} else if cols <= 0 && first.GridMin > 0 {
+		track := int32(first.GridMin * l.baseSize / 16)
+		if track < 1 {
+			track = 1
+		}
+		if track > contentW {
+			track = contentW
+		}
+		cols = int((contentW + gap) / (track + gap))
+		if cols > len(grouped) {
+			cols = len(grouped)
+		}
+	}
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > len(first.GridWeights) {
+		cols = len(first.GridWeights)
+	}
+
+	type gridPlacement struct {
+		item, row, col, rowSpan, colSpan int
+	}
+	rowGap := int32(first.FlexGapY * l.baseSize / 16)
+	if rowGap < 0 {
+		rowGap = 0
+	}
+	explicitRows := first.GridRows
+	if explicitRows <= 0 && first.GridAreas != nil {
+		explicitRows = first.GridAreas.Rows
+	}
+	if explicitRows > len(first.GridRowBases) {
+		explicitRows = len(first.GridRowBases)
+	}
+	occupied := make([][6]bool, 0, 2)
+	ensureRow := func(row int) {
+		for len(occupied) <= row {
+			occupied = append(occupied, [6]bool{})
+		}
+	}
+	fits := func(row, col, rowSpan, colSpan int) bool {
+		if col < 0 || colSpan < 1 || row < 0 || rowSpan < 1 || col+colSpan > cols {
+			return false
+		}
+		ensureRow(row + rowSpan - 1)
+		for r := row; r < row+rowSpan; r++ {
+			for c := col; c < col+colSpan; c++ {
+				if occupied[r][c] {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	type gridCandidate struct {
+		item, rowStart, rowEnd, rowSpan, colStart, colEnd, colSpan int
+		area                                                       bool
+	}
+	candidates := make([]gridCandidate, 0, len(grouped))
+	for i, item := range grouped {
+		b := item.blocks[0]
+		areaRowStart, areaRowEnd, areaColStart, areaColEnd := 0, 0, 0, 0
+		areaOK := false
+		if name := strings.TrimSpace(b.Style.GridArea); name != "" && first.GridAreas != nil {
+			areaRowStart, areaRowEnd, areaColStart, areaColEnd, areaOK = first.GridAreas.bounds(name)
+		}
+		start := b.Style.GridColumnStart
+		end := b.Style.GridColumnEnd
+		span := b.Style.GridColumnSpan
+		if areaOK {
+			start, end, span = areaColStart, areaColEnd, 0
+		}
+		if span <= 0 && start > 0 && end > 0 {
+			span = end - start
+		}
+		if span <= 0 && start > 0 && end < 0 {
+			span = cols - start + 1
+		}
+		if start < 0 {
+			start = cols + start + 1
+		}
+		// An explicit line past the authored tracks creates implicit columns
+		// (up to the reader's cap) instead of being folded back onto the last
+		// declared track.
+		if start > cols && start <= 6 {
+			cols = start
+		}
+		if start > cols {
+			start = cols
+		}
+		if span <= 0 && start <= 0 && end > 0 {
+			start = end - 1
+			if start < 1 {
+				start = 1
+			}
+			span = 1
+		}
+		if span <= 0 {
+			span = 1
+		}
+		if span > 6 {
+			span = 6
+		}
+		if start <= 0 && span > cols {
+			cols = span
+		}
+		if start > 0 && start+span-1 > cols {
+			need := start + span - 1
+			if need <= 6 {
+				cols = need
+			} else {
+				span = cols - start + 1
+				if span < 1 {
+					span, start = 1, cols
+				}
+			}
+		}
+
+		rowStart := b.Style.GridRowStart
+		rowEnd := b.Style.GridRowEnd
+		rowSpan := b.Style.GridRowSpan
+		if areaOK {
+			rowStart, rowEnd, rowSpan = areaRowStart, areaRowEnd, 0
+		}
+		if rowSpan <= 0 && rowStart > 0 && rowEnd > 0 {
+			rowSpan = rowEnd - rowStart
+		}
+		if rowSpan <= 0 && rowStart > 0 && rowEnd < 0 {
+			if explicitRows >= rowStart {
+				rowSpan = explicitRows - rowStart + 1
+			}
+		}
+		if rowStart < 0 {
+			rowStart = explicitRows + rowStart + 1
+			if rowStart < 1 {
+				rowStart = 1
+			}
+		}
+		if rowSpan <= 0 && rowStart <= 0 && rowEnd > 0 {
+			rowStart = rowEnd - 1
+			if rowStart < 1 {
+				rowStart = 1
+			}
+			rowSpan = 1
+		}
+		if rowSpan <= 0 {
+			rowSpan = 1
+		}
+		candidates = append(candidates, gridCandidate{
+			item: i, rowStart: rowStart, rowEnd: rowEnd, rowSpan: rowSpan,
+			colStart: start, colEnd: end, colSpan: span, area: areaOK,
+		})
+	}
+	// CSS places items with an authored line before fully automatic ones: an
+	// item pinned to a row (row flow) or a column (column flow) claims its cells
+	// first, even when the other axis is still automatic. Without this, `grid-
+	// row: 1 / 3` beside a `grid-row: span 2` sibling started on the next row.
+	flowRank := func(c gridCandidate) int {
+		switch {
+		case c.rowStart > 0 && c.colStart > 0:
+			return 0
+		case first.GridAutoFlow == 1 && c.colStart > 0:
+			return 1
+		case first.GridAutoFlow != 1 && c.rowStart > 0:
+			return 1
+		case c.rowStart > 0 || c.colStart > 0:
+			return 2
+		default:
+			return 3
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return flowRank(candidates[i]) < flowRank(candidates[j]) })
+
+	placements := make([]gridPlacement, 0, len(candidates))
+	place := func(c gridCandidate, row, col int) {
+		if row < 0 {
+			row = 0
+		}
+		if col < 0 {
+			col = 0
+		}
+		if c.colSpan > cols-col {
+			c.colSpan = cols - col
+		}
+		if c.colSpan < 1 {
+			c.colSpan, col = 1, cols-1
+		}
+		ensureRow(row + c.rowSpan - 1)
+		for r := row; r < row+c.rowSpan; r++ {
+			for cc := col; cc < col+c.colSpan; cc++ {
+				occupied[r][cc] = true
+			}
+		}
+		placements = append(placements, gridPlacement{item: c.item, row: row, col: col, rowSpan: c.rowSpan, colSpan: c.colSpan})
+	}
+
+	// Definite row/column pairs are placed first. This is what lets dense
+	// packing (and a later auto item) see the real holes instead of treating a
+	// pinned sibling as if it did not exist yet.
+	for _, c := range candidates {
+		if c.rowStart > 0 && c.colStart > 0 {
+			place(c, c.rowStart-1, c.colStart-1)
+		}
+	}
+	rowLimit := explicitRows
+	if first.GridRowAutoRepeat != 0 && rowLimit <= 0 {
+		available := int32(0)
+		if first.FlexHeight > 0 {
+			available = int32(math.Round(first.FlexHeight * l.baseSize / 16))
+		}
+		rowLimit = l.gridAutoRepeatCount(first.GridRowAutoTrack, available, rowGap)
+	}
+	if rowLimit < 1 {
+		rowLimit = 1
+	}
+	// A pinned row span also establishes usable rows for column flow even
+	// when the author did not declare a row template.
+	for _, c := range candidates {
+		if c.rowStart > 0 && c.rowStart+c.rowSpan-1 > rowLimit {
+			rowLimit = c.rowStart + c.rowSpan - 1
+		}
+	}
+	if rowLimit > 128 {
+		rowLimit = 128
+	}
+	columnFlow := first.GridAutoFlow == 1
+	if columnFlow {
+		// Column flow keeps filling a column until the block axis is exhausted.
+		// With no authored rows, derive enough implicit rows for every placed
+		// item instead of forcing them into a single row.
+		neededRows := (len(candidates) + cols - 1) / cols
+		if neededRows > rowLimit {
+			rowLimit = neededRows
+		}
+	}
+	if rowLimit > 128 {
+		rowLimit = 128
+	}
+	autoRow, autoCol := 0, 0
+	for _, c := range candidates {
+		if c.rowStart > 0 && c.colStart > 0 {
+			continue
+		}
+		fixedRow, fixedCol := c.rowStart > 0, c.colStart > 0
+		startRow, startCol := 0, 0
+		if fixedRow {
+			startRow = c.rowStart - 1
+		}
+		if fixedCol {
+			startCol = c.colStart - 1
+		} else if fixedRow {
+			// A row-pinned item can start in any column of that row.
+			startCol = 0
+		}
+		if !fixedRow && !fixedCol {
+			if first.GridDense {
+				startRow, startCol = 0, 0
+			} else {
+				startRow, startCol = autoRow, autoCol
+			}
+		}
+		// Column flow grows implicit columns when its cursor passes the
+		// authored tracks; row flow does the equivalent through implicit rows.
+		if columnFlow && !fixedCol && startCol+c.colSpan > cols {
+			cols = min(len(first.GridWeights), startCol+c.colSpan)
+		}
+		startCol = max(startCol, 0)
+		row, col, found := -1, -1, false
+		if columnFlow {
+			for cc := startCol; cc < cols && !found; cc++ {
+				if fixedCol && cc != startCol {
+					continue
+				}
+				firstRow := 0
+				if fixedRow {
+					firstRow = startRow
+				} else if cc == startCol {
+					firstRow = startRow
+				}
+				for rr := firstRow; rr < rowLimit; rr++ {
+					if fixedRow && rr != startRow {
+						continue
+					}
+					if fits(rr, cc, c.rowSpan, c.colSpan) {
+						row, col, found = rr, cc, true
+						break
+					}
+				}
+			}
+		} else {
+			for rr := startRow; rr < 128 && !found; rr++ {
+				firstCol := 0
+				if rr == startRow {
+					firstCol = startCol
+				}
+				for cc := firstCol; cc+c.colSpan <= cols; cc++ {
+					if fixedCol && cc != startCol {
+						continue
+					}
+					if fixedRow && rr != startRow {
+						continue
+					}
+					if fits(rr, cc, c.rowSpan, c.colSpan) {
+						row, col, found = rr, cc, true
+						break
+					}
+				}
+			}
+		}
+		// Dense column flow may need a new implicit column even when its
+		// search starts at column zero; grow the track list and retry the
+		// new columns before falling back to the next implicit row.
+		for columnFlow && !found && !fixedCol && cols < len(first.GridWeights) {
+			next := cols
+			cols++
+			for cc := next; cc < cols && !found; cc++ {
+				firstRow := 0
+				if fixedRow {
+					firstRow = startRow
+				}
+				for rr := firstRow; rr < rowLimit; rr++ {
+					if fixedRow && rr != startRow {
+						continue
+					}
+					if fits(rr, cc, c.rowSpan, c.colSpan) {
+						row, col, found = rr, cc, true
+						break
+					}
+				}
+			}
+		}
+		if !found {
+			row, col = len(occupied), 0
+		}
+		place(c, row, col)
+		if !fixedRow && !fixedCol {
+			if columnFlow {
+				autoRow = row + c.rowSpan
+				if autoRow >= rowLimit {
+					autoRow, autoCol = 0, col+c.colSpan
+				}
+			} else {
+				autoRow, autoCol = row, col+c.colSpan
+				if autoCol >= cols {
+					autoRow, autoCol = row+1, 0
+				}
+			}
+		}
+	}
+	sort.SliceStable(placements, func(i, j int) bool { return placements[i].item < placements[j].item })
+
+	var usedCols []bool
+	if first.GridAutoRepeat == 2 {
+		usedCols = make([]bool, cols)
+		for _, p := range placements {
+			for c := p.col; c < p.col+p.colSpan && c < cols; c++ {
+				usedCols[c] = true
+			}
+		}
+	}
+	// Auto minima in columns use the same intrinsic text measurement that a
+	// flex item uses for its min-content floor. Distribute a spanning item's
+	// floor across the tracks it covers so no single column is over-constrained.
+	contentMins := make([]int32, cols)
+	for _, p := range placements {
+		minWidth := l.intrinsicMinContentWidth(grouped[p.item].blocks)
+		if minWidth <= 0 || p.colSpan <= 0 {
+			continue
+		}
+		per := (minWidth + int32(p.colSpan) - 1) / int32(p.colSpan)
+		for c := p.col; c < p.col+p.colSpan && c < cols; c++ {
+			if usedCols != nil && !usedCols[c] {
+				continue
+			}
+			if per > contentMins[c] {
+				contentMins[c] = per
+			}
+		}
+	}
+	tracks := l.gridColumnWidths(first, cols, contentW, gap, usedCols, contentMins)
+	if len(tracks) == 0 {
+		tracks = make([]int32, cols)
+		trackW := int32(0)
+		if cols > 0 {
+			trackW = (contentW - gap*int32(cols-1)) / int32(cols)
+		}
+		if trackW < 1 {
+			trackW = 1
+		}
+		for i := range tracks {
+			tracks[i] = trackW
+		}
+	}
+	// justify-content aligns the grid's column tracks inside its content box
+	// when fixed tracks leave space over. fr tracks already consume that space,
+	// so this is a no-op for the common fluid grid.
+	gapForTracks := gap
+	leading := int32(0)
+	activeTracks := 0
+	for i := range tracks {
+		if gridTrackActive(usedCols, i) {
+			activeTracks++
+		}
+	}
+	if total := gridTrackSpan(tracks, gap, usedCols, 0, len(tracks)); total < contentW && activeTracks > 0 {
+		extra := contentW - total
+		switch first.FlexJustify {
+		case webJustifyCenter:
+			leading = extra / 2
+		case webJustifyEnd:
+			leading = extra
+		case webJustifyBetween:
+			if activeTracks > 1 {
+				gapForTracks += extra / int32(activeTracks-1)
+			}
+		case webJustifyAround:
+			per := extra / int32(activeTracks)
+			gapForTracks += per
+			leading = per / 2
+		}
+	}
+	offsets := gridTrackOffsets(tracks, gapForTracks, usedCols)
+
+	type gridCell struct {
+		placement gridPlacement
+		sub       *webLayout
+		width     int32
+		contentH  int32
+		align     int
+		justify   int
+	}
+	cells := make([]gridCell, 0, len(placements))
+	for _, p := range placements {
+		item := grouped[p.item]
+		b := item.blocks[0]
+		spanW := gridTrackSpan(tracks, gap, usedCols, p.col, p.col+p.colSpan)
+		if spanW < 1 {
+			spanW = 1
+		}
+		justify := b.JustifyItems
+		if b.JustifySelf >= 0 {
+			justify = b.JustifySelf
+		}
+		itemW := l.itemWidth(b, spanW)
+		// A centred or end-aligned item shrinks to its content instead of
+		// filling the area, as justify-items/justify-self require. Stretch (the
+		// default) keeps the full area.
+		if itemW <= 0 && justify != webItemStretch {
+			itemW = l.intrinsicContainerWidth(item.blocks)
+			if itemW < 1 {
+				itemW = spanW
+			}
+		}
+		if itemW <= 0 || itemW > spanW {
+			itemW = spanW
+		}
+		sub := &webLayout{RowH: l.rowH}
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
+			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
+		subLayouter.primeItemContainerWidths(item.blocks, itemW)
+		subLayouter.layoutBlocksFlat(item.blocks, 0, itemW)
+		l.absorbContainerRows(subLayouter.containerRows)
+		if id := l.itemContainerID(item.blocks); id != 0 && l.baseSize > 0 {
+			if size := l.containerSizes[id]; size.Height <= 0 {
+				size.Height = float64(len(sub.Rows)) * float64(l.rowH) * 16 / l.baseSize
+				l.containerSizes[id] = size
+			}
+		}
+		align := b.FlexAlign
+		if b.AlignSelf >= 0 {
+			align = b.AlignSelf
+		}
+		cells = append(cells, gridCell{placement: p, sub: sub, width: itemW, contentH: int32(len(sub.Rows)) * l.rowH, align: align, justify: justify})
+	}
+
+	// Explicit row tracks reserve their authored heights even when no item
+	// lands in them. Auto tracks take the tallest single-row item (or share a
+	// spanning item's content need), so a dashboard row is never shorter than
+	// the card it contains.
+	if first.GridRowAutoRepeat != 0 && explicitRows <= 0 {
+		available := int32(0)
+		if first.FlexHeight > 0 {
+			available = int32(math.Round(first.FlexHeight * l.baseSize / 16))
+		}
+		explicitRows = l.gridAutoRepeatCount(first.GridRowAutoTrack, available, rowGap)
+	}
+	rowCount := max(len(occupied), explicitRows)
+	if rowCount < 1 {
+		rowCount = 1
+	}
+	if rowCount > 128 {
+		rowCount = 128
+	}
+	var usedRows []bool
+	if first.GridRowAutoRepeat == 2 {
+		usedRows = make([]bool, rowCount)
+		for _, cell := range cells {
+			for r := cell.placement.row; r < cell.placement.row+cell.placement.rowSpan && r < rowCount; r++ {
+				usedRows[r] = true
+			}
+		}
+	}
+	activeRows := 0
+	for i := 0; i < rowCount; i++ {
+		if gridTrackActive(usedRows, i) {
+			activeRows++
+		}
+	}
+	if activeRows == 0 {
+		activeRows = 1
+	}
+	rowSpecs := l.gridRowSpecs(first, rowCount)
+	rowTracks := make([]int32, rowCount)
+	autoNeed := make([]int32, rowCount)
+	rowGrow := make([]bool, rowCount)
+	rowFlex := make([]bool, rowCount)
+	rowMax := make([]int32, rowCount)
+	blockBasis := int32(0)
+	if first.FlexHeight > 0 {
+		blockBasis = int32(math.Round(first.FlexHeight * l.baseSize / 16))
+	}
+	for i := 0; i < rowCount; i++ {
+		if !gridTrackActive(usedRows, i) {
+			continue
+		}
+		spec := webGridTrackSpec{}
+		if i < len(rowSpecs) {
+			spec = rowSpecs[i]
+		}
+		min, max, flex, grow := l.gridRowSpecPx(spec, blockBasis)
+		rowTracks[i], rowMax[i] = min, max
+		rowGrow[i], rowFlex[i] = grow, flex
+	}
+	for _, cell := range cells {
+		p := cell.placement
+		if p.row >= rowCount {
+			continue
+		}
+		span := min(p.rowSpan, rowCount-p.row)
+		base := int32(0)
+		growCount := 0
+		for r := p.row; r < p.row+span; r++ {
+			base += rowTracks[r]
+			if rowGrow[r] {
+				growCount++
+			}
+		}
+		if growCount == 0 {
+			continue
+		}
+		needed := cell.contentH - rowGap*int32(span-1) - base
+		if needed < 0 {
+			needed = 0
+		}
+		per := (needed + int32(growCount) - 1) / int32(growCount)
+		for r := p.row; r < p.row+span; r++ {
+			if !rowGrow[r] {
+				continue
+			}
+			target := rowTracks[r] + per
+			if target > autoNeed[r] {
+				autoNeed[r] = target
+			}
+		}
+	}
+	for i := range rowTracks {
+		if !rowGrow[i] {
+			continue
+		}
+		target := max(rowTracks[i], autoNeed[i])
+		if rowMax[i] > 0 && target > rowMax[i] {
+			target = rowMax[i]
+		}
+		if target < rowTracks[i] {
+			target = rowTracks[i]
+		}
+		rowTracks[i] = target
+	}
+	// An explicitly sized grid with fr rows can distribute its definite
+	// block height over the flexible tracks, just as fr columns do. The
+	// minmax floor stays in rowTracks before the free space is shared.
+	if first.FlexHeight > 0 {
+		totalWeight := 0.0
+		fixed := int32(0)
+		for i := range rowTracks {
+			if rowFlex[i] {
+				totalWeight += webGridTrackFr(rowSpecs[i])
+			} else if i < len(first.GridRowWeights) {
+				totalWeight += first.GridRowWeights[i]
+			}
+			fixed += rowTracks[i]
+		}
+		free := blockBasis - fixed - rowGap*int32(activeRows-1)
+		if totalWeight > 0 && free > 0 {
+			remaining := free
+			remainingWeight := totalWeight
+			for i := range rowTracks {
+				weight := 0.0
+				if rowFlex[i] {
+					weight = webGridTrackFr(rowSpecs[i])
+				} else if i < len(first.GridRowWeights) {
+					weight = first.GridRowWeights[i]
+				}
+				if weight <= 0 {
+					continue
+				}
+				add := int32(math.Round(float64(remaining) * weight / remainingWeight))
+				rowTracks[i] += add
+				remaining -= add
+				remainingWeight -= weight
+			}
+		}
+	}
+	// align-content positions (or stretches) the whole row set inside a grid
+	// container with a definite block size. Track gaps are enlarged for the
+	// space-* values; stretch grows only auto-sized rows, leaving fixed and fr
+	// tracks alone as the track-sizing algorithm requires.
+	rowGapForTracks := rowGap
+	rowLeading := int32(0)
+	if first.FlexHeight > 0 {
+		total := gridTrackSpan(rowTracks, rowGap, usedRows, 0, rowCount)
+		if free := blockBasis - total; free > 0 {
+			switch first.AlignContent {
+			case webContentCenter:
+				rowLeading = free / 2
+			case webContentEnd:
+				rowLeading = free
+			case webContentBetween:
+				if activeRows > 1 {
+					rowGapForTracks += free / int32(activeRows-1)
+				}
+			case webContentAround:
+				per := free / int32(activeRows)
+				rowGapForTracks += per
+				rowLeading = per / 2
+			case webContentEvenly:
+				per := free / int32(activeRows+1)
+				rowGapForTracks += per
+				rowLeading = per
+			case webContentStretch:
+				stretchRows := make([]int, 0, rowCount)
+				for i := range rowTracks {
+					if gridTrackActive(usedRows, i) && rowSpecs[i].MaxAuto {
+						stretchRows = append(stretchRows, i)
+					}
+				}
+				if len(stretchRows) > 0 {
+					add := free / int32(len(stretchRows))
+					rem := free - add*int32(len(stretchRows))
+					for n, i := range stretchRows {
+						rowTracks[i] += add
+						if int32(n) < rem {
+							rowTracks[i]++
+						}
+					}
+				}
+			}
+		}
+	}
+	rowOffsets := gridTrackOffsets(rowTracks, rowGapForTracks, usedRows)
+	gridHeight := int32(0)
+	if rowCount > 0 {
+		gridHeight = rowOffsets[rowCount]
+	}
+	if blockBasis > gridHeight {
+		gridHeight = blockBasis
+	}
+
+	rowCells := make([][]int, rowCount)
+	for ci := range cells {
+		p := cells[ci].placement
+		if p.row < rowCount {
+			rowCells[p.row] = append(rowCells[p.row], ci)
+		}
+	}
+	baseY := int32(len(l.layout.Rows)) * l.rowH
+	endY := baseY + gridHeight
+	for r := 0; r < rowCount; r++ {
+		for _, ci := range rowCells[r] {
+			cell := cells[ci]
+			p := cell.placement
+			b := grouped[p.item].blocks[0]
+			endRow := p.row + p.rowSpan
+			if endRow > rowCount {
+				endRow = rowCount
+			}
+			areaH := gridTrackSpan(rowTracks, rowGapForTracks, usedRows, p.row, endRow)
+			free := areaH - cell.contentH
+			startAuto, endAuto := flexAutoCross(b)
+			if free > 0 && cell.align == webItemStretch && !startAuto && !endAuto && b.Style.Height <= 0 {
+				stretchGridItemBackgrounds(cell.sub, cell.contentH, areaH)
+			}
+			drop := int32(0)
+			switch {
+			case startAuto && endAuto:
+				drop = free / 2
+			case startAuto:
+				drop = free
+			default:
+				switch cell.align {
+				case webItemCenter:
+					drop = free / 2
+				case webItemEnd:
+					drop = free
+				}
+			}
+			x := padX + leading + offsets[p.col]
+			spanW := gridTrackSpan(tracks, gapForTracks, usedCols, p.col, p.col+p.colSpan)
+			spanFree := spanW - cell.width
+			startMain, endMain := flexAutoMain(b)
+			switch {
+			case spanFree > 0 && startMain && endMain:
+				x += spanFree / 2
+			case spanFree > 0 && startMain:
+				x += spanFree
+			case spanFree > 0 && cell.justify == webItemCenter:
+				x += spanFree / 2
+			case spanFree > 0 && cell.justify == webItemEnd:
+				x += spanFree
+			}
+			y := baseY + rowLeading + rowOffsets[p.row] + drop
+			l.mergeFlexSubLayoutAtY(cell.sub, x, y)
+			if bottom := y + cell.contentH; bottom > endY {
+				endY = bottom
+			}
+		}
+	}
+	// The row grid is the flow's clock. Add blank rows until the next ordinary
+	// block starts at or below the grid's exact pixel bottom, so fixed-height
+	// rows cannot make following content overlap them.
+	for int32(len(l.layout.Rows))*l.rowH < endY && len(l.layout.Rows) < webMaxRows {
+		l.layout.Rows = append(l.layout.Rows, webRow{Y: int32(len(l.layout.Rows)) * l.rowH})
+	}
+}
+
+// stretchGridItemBackgrounds gives the grid item's own surface the full grid
+// area height. A background on a child at the top of the item must retain its
+// measured height (for example, a small button above several paragraphs).
+func stretchGridItemBackgrounds(sub *webLayout, contentH, areaH int32) {
+	if sub == nil || contentH <= 0 || areaH <= contentH {
+		return
+	}
+	for i := range sub.Backgrounds {
+		bg := &sub.Backgrounds[i]
+		if bg.Rect.W > 0 && bg.Rect.H >= contentH && bg.Rect.Y == 0 && bg.Rect.H < areaH {
+			bg.Rect.H = areaH
+		}
+	}
+	for i := range sub.Rects {
+		rect := &sub.Rects[i]
+		if rect.BackgroundFill && rect.Rect.W > 0 && rect.Rect.H >= contentH && rect.Rect.Y == 0 && rect.Rect.H < areaH {
+			rect.Rect.H = areaH
+		}
+	}
 }
 
 // layoutFlexRow lays one container's items out side by side: widths from
 // width/flex-basis, the rest shared by flex-grow, then justify-content places
 // the resulting columns.
 func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
+	l.layoutFlexRowItems(items, padX, contentW, true, 0)
+}
+
+// A nowrap row inside a fixed-height bar must keep its inline flow. Stacking
+// excess items would turn an overflowing navigation strip into a tall page
+// section, despite the ancestor's definite height.
+func (l *webLayouter) flexInFixedHeightBox(first webBlock) bool {
+	if l == nil || l.doc == nil {
+		return false
+	}
+	for _, id := range first.Boxes {
+		if info, ok := l.doc.Boxes[id]; ok && info.style.Height > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// layoutFlexRowItems is layoutFlexRow with the single-item special case made
+// explicit. A one-item flex container fills its measure, but a one-item line
+// produced by flex-wrap must keep that item's basis and min-content floor.
+func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32, singleFull bool, cardCap int32) {
 	if len(items) == 0 {
 		return
 	}
@@ -1085,10 +2331,16 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		return
 	}
 	first := grouped[0].blocks[0]
+	if first.GridCols > 0 || first.GridMin > 0 || first.GridAreas != nil ||
+		first.GridAutoRepeat != 0 || first.GridRowAutoRepeat != 0 || first.GridAutoFlow != 0 || first.GridDense {
+		l.layoutGridItems(grouped, padX, contentW)
+		return
+	}
 	n := int32(len(grouped))
 	gridMode := first.GridCols > 0 || first.GridMin > 0
+	keepRow := !first.FlexWrap && l.flexInFixedHeightBox(first)
 	autoCount := flexAutoCount(grouped)
-	if n == 1 && autoCount == 0 {
+	if singleFull && n == 1 && autoCount == 0 {
 		l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
 		return
 	}
@@ -1110,6 +2362,42 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	if tableRow {
 		// A table cell is not a card: a 40px column is a legitimate width.
 		minCol = 1
+	}
+	// A flex item's automatic minimum size is its min-content width. Measure
+	// each item once, then use that floor for wrapping, shrinking and the
+	// final columns; this is the same font measurement the content-sized
+	// container path already uses. An explicit min-width replaces it.
+	minWidths := make([]int32, len(grouped))
+	if !gridMode && !tableRow {
+		for i, item := range grouped {
+			b := item.blocks[0]
+			if !b.Style.MinWidthAuto || b.Style.MinWidth > 0 || b.Style.MinWidthPct > 0 {
+				continue
+			}
+			floor := l.intrinsicMinContentWidth(item.blocks)
+			// The automatic minimum is clamped by a smaller max-width, just
+			// as the item's own used width is; otherwise a narrow badge with
+			// a long word would keep a floor wider than its declared maximum.
+			if maxW := webConstraintLength(b.Style.MaxWidth, b.Style.MaxWidthPct, contentW, l.baseSize/16); maxW > 0 {
+				if limit := int32(math.Round(maxW * l.baseSize / 16)); floor > limit {
+					floor = limit
+				}
+			}
+			minWidths[i] = floor
+		}
+	}
+	minFor := func(i int) int32 {
+		floor := minWidths[i]
+		if tableRow {
+			if floor < 1 {
+				floor = 1
+			}
+			return floor
+		}
+		if floor < 24 {
+			floor = 24
+		}
+		return floor
 	}
 	var rowEnds []int
 	gridCols := first.GridCols
@@ -1151,6 +2439,9 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 		rowWidth := int32(0)
 		for i, item := range grouped {
 			basis := l.itemWidth(item.blocks[0], contentW)
+			if minWidths[i] > basis {
+				basis = minWidths[i]
+			}
 			if basis < minCol {
 				basis = minCol
 			}
@@ -1181,18 +2472,18 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 					l.layout.Rows = append(l.layout.Rows, webRow{Y: int32(len(l.layout.Rows)) * l.rowH})
 				}
 			}
-			l.layoutFlexRow(webFlattenFlexItems(grouped[start:end]), padX, contentW)
+			l.layoutFlexRowItems(webFlattenFlexItems(grouped[start:end]), padX, contentW, false, 0)
 			start = end
 		}
 		return
 	}
 	avail := contentW - gap*(n-1)
-	if !tableRow && avail < n*minCol {
+	if !tableRow && !keepRow && avail < n*minCol {
 		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
 		return
 	}
 
-	gridWidths := l.gridTrackWidths(first, int(n), contentW, gap)
+	gridWidths := l.gridColumnWidths(first, int(n), contentW, gap, nil, nil)
 	widths := make([]int32, n)
 	containerIDs := make([]int, n)
 	fixed := int32(0)
@@ -1217,6 +2508,9 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			continue
 		}
 		w := l.itemWidth(b, avail)
+		if cardCap > 0 && w > cardCap {
+			w = cardCap
+		}
 		if w <= 0 && containerIDs[i] != 0 && b.FlexGrow <= 0 {
 			// A content-sized containment container is shrink-to-fit: its
 			// own text decides the column, and cqw/cqi inside it then use that
@@ -1241,6 +2535,11 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			w = 24
 			if b.FlexGrow <= 0 {
 				w = max(minCol, 110)
+			}
+		}
+		if w > 0 || b.FlexGrow > 0 || b.FlexBasis >= 0 || b.BasisPct > 0 {
+			if floor := minWidths[i]; floor > w {
+				w = floor
 			}
 		}
 		widths[i] = w
@@ -1279,11 +2578,60 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 					shrink = 0
 				}
 				cut := int32(math.Round(float64(excess) * float64(widths[i]) * shrink / totalWeight))
-				widths[i] -= cut
-				if widths[i] < 24 {
-					widths[i] = 24
+				if floor := minFor(i); widths[i]-cut < floor {
+					cut = max(widths[i]-floor, 0)
 				}
+				widths[i] -= cut
 				fixed += widths[i]
+			}
+			// Items that hit their min-content floor leave part of the excess
+			// for the remaining items. Reclaim it once, proportionally to the
+			// room still above each floor, so the row ends at or under the
+			// available width instead of overflowing by the frozen share.
+			if over := fixed - avail; over > 0 {
+				totalCap := int32(0)
+				for i := range widths {
+					if cap := widths[i] - minFor(i); cap > 0 {
+						totalCap += cap
+					}
+				}
+				if totalCap > 0 {
+					fixed = 0
+					for i := range widths {
+						cap := widths[i] - minFor(i)
+						cut := int32(0)
+						if cap > 0 {
+							cut = int32(math.Round(float64(over) * float64(cap) / float64(totalCap)))
+							if cut > cap {
+								cut = cap
+							}
+						}
+						widths[i] -= cut
+						fixed += widths[i]
+					}
+					// Rounding can leave a few pixels; take them from the first
+					// item that still has room rather than stacking the row.
+					for left := fixed - avail; left > 0; {
+						moved := false
+						for i := range widths {
+							cap := widths[i] - minFor(i)
+							if cap <= 0 {
+								continue
+							}
+							cut := min(cap, left)
+							widths[i] -= cut
+							left -= cut
+							fixed -= cut
+							moved = true
+							if left == 0 {
+								break
+							}
+						}
+						if !moved {
+							break
+						}
+					}
+				}
 			}
 		} else {
 			fixed = 0
@@ -1318,6 +2666,9 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			remaining := left
 			for i, idx := range auto {
 				share := remaining / int32(len(auto)-i)
+				if floor := minWidths[idx]; floor > share {
+					share = floor
+				}
 				widths[idx] = share
 				remaining -= share
 			}
@@ -1334,7 +2685,55 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	for _, w := range widths {
 		totalW += w
 	}
-	if !tableRow && totalW > contentW {
+	if !tableRow && !keepRow && totalW > contentW {
+		// A no-shrink carousel can be wider than the reader viewport. The
+		// reader scrolls vertically, so flow its fixed-width cards into as
+		// many columns as fit instead of shrinking every headline to dots or
+		// stretching each card to a full-page row.
+		fixedCards := !gridMode && len(grouped) > 1 && l.doc != nil && l.doc.FlexScrollX[first.FlexGroup]
+		for i, item := range grouped {
+			if item.blocks[0].FlexShrink != 0 || widths[i] <= 0 {
+				fixedCards = false
+				break
+			}
+		}
+		if fixedCards {
+			// At reading zoom a 400 CSS-px carousel card can consume most of
+			// the panel. Keep two columns when each remains at least 280px wide.
+			cardCap := contentW
+			if len(grouped) >= 3 && contentW >= 560+gap {
+				cardCap = (contentW - gap) / 2
+			}
+			start, rowW := 0, int32(0)
+			addRow := func(end int) {
+				if start == end {
+					return
+				}
+				if start > 0 {
+					gapRows := int(math.Ceil(first.FlexGapY * l.baseSize / 16 / float64(l.rowH)))
+					for j := 0; j < min(gapRows, 3) && len(l.layout.Rows) < webMaxRows; j++ {
+						l.layout.Rows = append(l.layout.Rows, webRow{Y: int32(len(l.layout.Rows)) * l.rowH})
+					}
+				}
+				l.layoutFlexRowItems(webFlattenFlexItems(grouped[start:end]), padX, contentW, false, cardCap)
+				start = end
+			}
+			for i, w := range widths {
+				if w > cardCap {
+					w = cardCap
+				}
+				if rowW > 0 && rowW+gap+w > contentW {
+					addRow(i)
+					rowW = 0
+				}
+				if rowW > 0 {
+					rowW += gap
+				}
+				rowW += w
+			}
+			addRow(len(grouped))
+			return
+		}
 		// The minimum column widths overflow the page: stack instead of
 		// painting text past the right edge.
 		l.layoutBlocksFlat(webFlattenFlexItems(grouped), padX, contentW)
@@ -1439,7 +2838,7 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	for i, item := range grouped {
 		b := item.blocks[0]
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
 			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
 		subLayouter.primeItemContainerWidths(item.blocks, widths[i])
@@ -1509,50 +2908,9 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 	}
 	pageH := int32(len(l.layout.Rows)) * l.rowH
 	for _, b := range blocks {
-		w := contentW
-		switch {
-		case b.WidthPct > 0:
-			w = int32(float64(contentW) * b.WidthPct / 100)
-		case b.Width > 0:
-			w = int32(b.Width * scale)
-		case b.BasisPct > 0:
-			w = int32(float64(contentW) * b.BasisPct / 100)
-		case b.FlexBasis > 0:
-			w = int32(b.FlexBasis * scale)
-		default:
-			// An auto-width layer has no intrinsic width in a text reader.
-			// A caption-sized column reads better than a full-bleed strip.
-			w = int32(l.baseSize * 18)
-			if w < 140 {
-				w = 140
-			}
-			if w > contentW {
-				w = contentW
-			}
-		}
-		if w < 60 {
-			w = 60
-		}
-		if w > contentW {
-			w = contentW
-		}
-
-		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
-			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
-			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
-		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
-		l.absorbContainerRows(subLayouter.containerRows)
-		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
-			continue
-		}
-		h := int32(len(sub.Rows)) * l.rowH
-
-		// Find the nearest positioned ancestor. `top:20px` is measured from
-		// that box, not from the document, or an overlay lands under the
-		// sticky site header. No positioned ancestor means the page is the
-		// containing block, which is what an absolutely positioned banner
-		// directly under <body> expects.
+		// Find the nearest positioned ancestor before choosing a width:
+		// `left` plus `right` stretch an inset overlay across that box instead
+		// of leaving it at the reader's caption-sized default.
 		anchor := sdl.Rect{X: padX, Y: 0, W: contentW, H: pageH}
 		if b.Style.Position == webPositionFixed {
 			// fixed: the viewport is the containing block, so right:0 and
@@ -1570,6 +2928,53 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 				break
 			}
 		}
+		autoWidth := b.WidthPct <= 0 && b.Width <= 0 && b.BasisPct <= 0 && b.FlexBasis <= 0
+		w := contentW
+		switch {
+		case b.WidthPct > 0:
+			w = int32(float64(contentW) * b.WidthPct / 100)
+		case b.Width > 0:
+			w = int32(b.Width * scale)
+		case b.BasisPct > 0:
+			w = int32(float64(contentW) * b.BasisPct / 100)
+		case b.FlexBasis > 0:
+			w = int32(b.FlexBasis * scale)
+		case autoWidth && b.HasLeft && b.HasRight:
+			w = anchor.W - int32(b.PosLeft*scale) - int32(b.PosRight*scale)
+		case autoWidth:
+			// An auto-width layer has no intrinsic width in a text reader.
+			// A caption-sized column reads better than a full-bleed strip.
+			w = int32(l.baseSize * 18)
+			if w < 140 {
+				w = 140
+			}
+			if w > contentW {
+				w = contentW
+			}
+		}
+		if w < 60 {
+			if autoWidth && b.HasLeft && b.HasRight {
+				if w < 1 {
+					w = 1
+				}
+			} else {
+				w = 60
+			}
+		}
+		if w > contentW && !(autoWidth && b.HasLeft && b.HasRight) {
+			w = contentW
+		}
+
+		sub := &webLayout{RowH: l.rowH}
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
+			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
+		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
+		l.absorbContainerRows(subLayouter.containerRows)
+		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
+			continue
+		}
+		h := int32(len(sub.Rows)) * l.rowH
 		x := anchor.X
 		switch {
 		case b.HasLeft:

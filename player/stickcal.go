@@ -623,5 +623,7 @@ func stickCalSettingsRows() []setRow {
 	out = append(out, voiceOrbSettingsRows()...)
 	// "Hold Menu: screenshot" (menushot.go), a handheld's row.
 	out = append(out, menuShotSettingsRow())
+	// "Select + R1: screenshot" in a game (menushot.go), a TrimUI's row.
+	out = append(out, gameShotChordSettingsRow())
 	return append(out, rows[1:]...)
 }

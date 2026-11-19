@@ -13,6 +13,10 @@ package main
 // shared header, a focus list that scrolls, and the shared sheet for the two
 // questions it asks. The scan is scene work, so leaving the page stops it; an
 // organise that has started finishes even if the page is left.
+//
+// Under the summary card, "More for your games" (romm_extras.go) moves the
+// Game Boy Color cartridges out of Game Boy, combines multi-disc games, and
+// opens the RomM server, Syncthing and the homebrew store.
 
 import (
 	"context"
@@ -210,6 +214,8 @@ func rommStartScan() {
 	started := runSceneTask(func(context.Context) {
 		defer cancel()
 		plan := rommScan(ctx, roots, targets, rommLiveSet)
+		// The Game Boy shelf's Color cartridges, for their row (gbcsort.go).
+		gbc, stay := gbcScanShelf(ctx, romLibraryRoots())
 		runs := rommUndoable(journal)
 		tbxPost(func() {
 			if gen != rommUI.gen {
@@ -217,6 +223,7 @@ func rommStartScan() {
 			}
 			rommUI.cancel = nil
 			rommUI.undoRuns = runs
+			rommExtras.gbc, rommExtras.stay = gbc, stay
 			rommSetPlan(plan)
 		})
 	})
@@ -614,6 +621,9 @@ func rommActivate(config *Config, id string) {
 		openGameLibraryPanel()
 		return
 	}
+	if rommExtrasActivate(config, id) {
+		return
+	}
 	for i, sec := range rommUI.sections {
 		if sec.id == id {
 			rommToggleSection(i)
@@ -725,6 +735,9 @@ func rommConfirmLabel() string {
 		return "Games library"
 	case "":
 		return ""
+	}
+	if label := rommExtrasLabel(rommUI.nav.focus); label != "" {
+		return label
 	}
 	if si := rommFocusedSection(); si >= 0 {
 		if rommUI.sections[si].kind == rommKindUnknown {
@@ -942,6 +955,8 @@ func rommDrawPlan(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame 
 		buttons = append(buttons, rommButton{id: "undo", label: "Undo last organise"})
 	}
 	y := rommDrawCard(renderer, config, fonts, frame, top, 0, icon, title, sub, -1, buttons)
+	row := 1
+	y, row = rommDrawExtras(renderer, config, fonts, frame, body, top, y, row)
 	if len(plan.Items) == 0 {
 		y += 16
 		hint := "Copy games anywhere — Downloads, the card's root, another console's folder — and this page files them."
@@ -951,7 +966,6 @@ func rommDrawPlan(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame 
 	}
 	secH := tbxRowHeight(fonts)
 	itemH := rommItemRowH(fonts)
-	row := 1
 	for _, sec := range rommUI.sections {
 		y += 16
 		rect := sdl.Rect{X: frame.x, Y: y, W: frame.w, H: secH}

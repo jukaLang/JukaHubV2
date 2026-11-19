@@ -9,9 +9,11 @@ package main
 //	         while a video is playing
 //	L2 / R2  bigger jump: previous / next results page (fetching when needed),
 //	         previous / next video while playing, first / last row in a list;
-//	         on Home L2 opens Edit Home (and is Done there); R2 steps the
+//	         on Home L2 opens Edit Home (and is Done there), in Quick
+//	         Settings it edits the panel (qs_edit.go); R2 steps the
 //	         liquid background on every screen that has no R2 job of its
-//	         own; on Smart Pro Packages they switch stores
+//	         own; on Smart Pro Packages they switch stores; on a console's
+//	         page of the Games library they jump by letter
 //
 // Analog triggers report a stream of axis values, so they are latched into
 // discrete presses here instead of paging on every sample.
@@ -119,6 +121,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	// Apps → Steam: L2 searches, R2 changes the sort (steam_ui.go).
 	if steamPanel.open && !virtualKeyboardActive {
 		steamPanelTrigger(s)
+		return true
+	}
+	// The Games library's triggers jump by letter through a console's games
+	// (game_library_scrub.go); elsewhere in it they are swallowed below.
+	if gameLibraryTrigger(s) {
 		return true
 	}
 	// Panels that draw their own modal list own the pad; a trigger must not
@@ -258,7 +265,16 @@ func modalPanelBlocksShoulders() bool {
 // shoulders are free. The audits that report "a modal from another test is
 // still open" print it, so a leaked panel names itself instead of costing a
 // debug session.
-func modalPanelBlockReason() string {
+func modalPanelBlockReason() string { return modalPanelReason(false) }
+
+// modalPanelBesideLibrary names a modal panel open besides the Games library,
+// "" when the library is all there is: its letter scrubbing takes the
+// triggers only then (game_library_scrub.go), whatever this list's order.
+func modalPanelBesideLibrary() string { return modalPanelReason(true) }
+
+// modalPanelReason is modalPanelBlockReason, with the Games library left out
+// when skipLibrary is set.
+func modalPanelReason(skipLibrary bool) string {
 	open := []struct {
 		name string
 		yes  bool
@@ -289,7 +305,7 @@ func modalPanelBlockReason() string {
 		{"PC streaming panel", mlPanel.open},
 		{"Tools panel", toolsPanel.open},
 		{"netplay panel", netplayPanel.open},
-		{"game library", gameLib.open},
+		{"game library", gameLib.open && !skipLibrary},
 		{"emulator panel", emuPanel.open},
 		{"on-screen keyboard", kbPanel.open},
 		{"downloads panel", dlPanel.open},
@@ -380,36 +396,12 @@ func clipShoulder(s padShoulder) {
 	PlayNavSound()
 }
 
-// qsShoulder pages Quick Settings. On a slider L1/R1 nudge the value, which is
-// what they have always done there; on every other row they move a window of
-// rows, and the triggers jump to the first and last row.
+// qsShoulder is a shoulder or trigger in Quick Settings: L2 edits the panel
+// (Done while editing), R2 jumps to the last button, and L1/R1 move a
+// focused slider's level, step a grid's mode row or page the list
+// (qs_layout.go qsShoulderPress; L1/R1 switch the layout while editing).
 func qsShoulder(s padShoulder) {
-	total := qsRowCount()
-	if total == 0 {
-		return
-	}
-	if idx := qs.cursor - len(qs.toggles); idx >= 0 && idx < len(qs.sliders) {
-		switch s {
-		case padL1:
-			qsNavigateSlider(-5)
-			return
-		case padR1:
-			qsNavigateSlider(5)
-			return
-		}
-	}
-	switch s {
-	case padL1:
-		qs.cursor -= qsPageRows
-	case padR1:
-		qs.cursor += qsPageRows
-	case padL2:
-		qs.cursor = 0
-	case padR2:
-		qs.cursor = total - 1
-	}
-	qs.cursor = clampIndex(qs.cursor, total)
-	PlayNavSound()
+	qsShoulderPress(s)
 }
 
 // qsPageRows is how many rows one shoulder press moves in Quick Settings.

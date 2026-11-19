@@ -880,6 +880,7 @@ func homeTabsGamesItems(c *Config) []homeTabItem {
 		{homeTileActionPrefix + steamEntryName, "Your Steam library"},
 		{homeTileActionPrefix + minecraftEntryName, "Every way to play"},
 		{homeTileActionPrefix + portsStoreEntryName, "Download ports"},
+		{homeTileActionPrefix + homebrewEntryName, "New games from itch.io"},
 		{homeTileActionPrefix + portMasterEntryName, "PC ports"},
 		{homeTileActionPrefix + windowsAppsEntryName, "Windows games"},
 		{homeTileActionPrefix + "Emulators", "Install and update"},

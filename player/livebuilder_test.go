@@ -856,6 +856,8 @@ func TestLiveBuilderSensitiveKeys(t *testing.T) {
 		"mqtt_host":            true,
 		"mqtt_port":            true,
 		"pihole_url":           true,
+		"dnsMode":              true,
+		"dnsServers":           true,
 		"router_host":          true,
 		"description":          false,
 		"subscriptions":        false,

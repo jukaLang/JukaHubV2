@@ -5,7 +5,8 @@ package main
 // The section gathers what the pad does: the control profile in use (a
 // carousel; A lists them all), whether screens switch their own profile on,
 // the hold Select + R1 hotkey, the Control profiles screen, the D-pad mode of
-// each kind of content (navmode.go) and Local play. Every row calls the
+// each kind of content (navmode.go), Local play, and the buttons and turbo of
+// RetroArch games per console (racontrols_ui.go). Every row calls the
 // feature's own setter, which applies the change and saves it.
 
 import (
@@ -75,7 +76,7 @@ func inmapSettingsRows() []setRow {
 	for a := navArea(0); a < navAreaCount; a++ {
 		rows = append(rows, navmodeSettingsRow(a))
 	}
-	return append(rows,
+	rows = append(rows,
 		setRow{
 			ID: "navModeWrap", Label: "D-pad wraps around", Kind: setKindToggle,
 			Detail: setStatic("Grid and List carry on from the far edge"),
@@ -92,6 +93,8 @@ func inmapSettingsRows() []setRow {
 			Open:   hotseatOpen,
 		},
 	)
+	// What A, B, X and Y do in RetroArch games, and turbo (racontrols_ui.go).
+	return append(rows, gameControlsSettingsRows()...)
 }
 
 // inmapChosenName is the chosen profile's name.

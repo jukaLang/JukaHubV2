@@ -48,17 +48,17 @@ const (
 	// sheet is often well past 256 KiB: the old limits (3 sheets, and a larger
 	// sheet dropped whole) left most pages unstyled. A sheet past the cap keeps
 	// its complete rules up to the cap (webCSSBudgetPrefix).
-	webMaxStylesheets = 12
-	webSheetByteCap   = 1536 << 10
+	webMaxStylesheets = 64
+	webSheetByteCap   = 4 << 20
 	// webMaxLinkedCSSBytes is the share of webMaxCSSBytes linked sheets may
 	// take, so the page's own <style> blocks — often its critical layout CSS —
 	// always keep room after them.
-	webMaxLinkedCSSBytes = 2 << 20
-	webMaxCSSBytes       = 3 << 20
+	webMaxLinkedCSSBytes = 16 << 20
+	webMaxCSSBytes       = 24 << 20
 	// A linked sheet may @import its base sheet. Keep the chain short: imports
 	// are real requests too.
-	webMaxStyleImports     = 8
-	webMaxStyleImportDepth = 3
+	webMaxStyleImports     = 16
+	webMaxStyleImportDepth = 4
 	// webMaxRows bounds the laid-out row count (each row is one text line).
 	webMaxRows = 12000
 )
@@ -188,6 +188,19 @@ const (
 	webJustifyAround
 )
 
+// Content alignment is the block-axis counterpart of justify-content. It
+// needs its own values because space-evenly and stretch are distinct grid
+// behaviours, not aliases for space-around or start.
+const (
+	webContentStart = iota
+	webContentCenter
+	webContentEnd
+	webContentBetween
+	webContentAround
+	webContentEvenly
+	webContentStretch
+)
+
 const webMaxBackgroundLayers = 4
 
 // webWhiteSpace is the CSS white-space mode. Normal collapses runs of spaces
@@ -225,6 +238,52 @@ func webWhiteSpacePreservesSpaces(mode int) bool {
 
 func webWhiteSpaceWraps(mode int) bool {
 	return mode != webWhiteSpaceNowrap && mode != webWhiteSpacePre
+}
+
+func webOverflowWrapValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "anywhere":
+		return 1
+	case "break-word":
+		return 2
+	default:
+		return 0
+	}
+}
+
+// webWordPrefixThatFits finds a UTF-8 boundary for an emergency line break.
+// The first rune is always kept so even an unusually wide glyph makes progress.
+func webWordPrefixThatFits(word string, width int32, measure func(string) int32) (string, string) {
+	if word == "" || width <= 0 {
+		return "", word
+	}
+	boundaries := make([]int, 0, min(len(word), 256))
+	for i := range word {
+		if i > 0 {
+			boundaries = append(boundaries, i)
+		}
+	}
+	boundaries = append(boundaries, len(word))
+	lo, hi := 0, len(boundaries)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if measure(word[:boundaries[mid]]) <= width {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	idx := max(0, lo-1)
+	end := boundaries[idx]
+	return word[:end], word[end:]
+}
+
+func webClipWordToWidth(word string, width int32, measure func(string) int32) string {
+	prefix, _ := webWordPrefixThatFits(word, width, measure)
+	if measure(prefix) > width {
+		return ""
+	}
+	return prefix
 }
 
 // webPreWrapTokens splits a preserved line into measured chunks. Each run of
@@ -316,6 +375,11 @@ type webStyle struct {
 	Link        bool
 	Align       int
 	WhiteSpace  int
+	// OverflowWrap and WordBreak are inherited CSS text break controls.
+	// OverflowWrap: 0 normal, 1 anywhere, 2 break-word. WordBreak: 0 normal,
+	// 1 break-all. Long runs use them before the reader's ellipsis fallback.
+	OverflowWrap int
+	WordBreak    int
 	// Pre is retained for code that only needs "preserve authored text". New
 	// layout uses WhiteSpace, which distinguishes pre, pre-wrap and pre-line.
 	Pre    bool
@@ -330,12 +394,16 @@ type webStyle struct {
 	VerticalAlign   int
 	VerticalAlignPx float64
 	// OverflowX/Y: 0 visible, 1 hidden, 2 clip.
-	OverflowX  int
-	OverflowY  int
-	Indent     float64
-	TextIndent float64
-	MarginTop  float64
-	MarginBot  float64
+	OverflowX int
+	OverflowY int
+	ScrollX   bool
+	// TextOverflow: 0 reader fallback, 1 clip, 2 ellipsis. Unlike word
+	// breaking it belongs to the box and does not inherit.
+	TextOverflow int
+	Indent       float64
+	TextIndent   float64
+	MarginTop    float64
+	MarginBot    float64
 	// PadTop/PadBot are the vertical padding part of MarginTop/MarginBot.
 	// The flow still reserves the combined top/bottom inset, but the painted
 	// box must extend over the padding while leaving the margin outside it.
@@ -441,6 +509,12 @@ type webStyle struct {
 	// DOM, so the parser marks each direct child as one flex item and the
 	// layout stacks those items into columns.
 	Display int
+	// DisplayContents removes this element's layout box while its children
+	// remain direct participants in the parent flex or grid container.
+	DisplayContents bool
+	// DisplayInline lets CSS turn a normally block-level heading or container
+	// into inline content (Wikipedia's welcome heading uses this for its comma).
+	DisplayInline bool
 	// DisplayBlock records an explicit block-level display (block, flow-root,
 	// flex, grid, table). Default display is block for every element, so the
 	// parser cannot otherwise tell a styled <label> or <span> from an inline
@@ -451,6 +525,11 @@ type webStyle struct {
 	FlexReverse  bool
 	Justify      int
 	AlignItems   int
+	AlignContent int
+	// JustifyItems is the inline-axis item default (justify-items), and
+	// JustifySelf is the item's own override (-1 means inherit).
+	JustifyItems int
+	JustifySelf  int
 	GapX, GapY   float64
 	FlexWrap     bool
 	GridCols     int
@@ -465,6 +544,51 @@ type webStyle struct {
 	// a sidebar was as wide as the article beside it.
 	GridWeights [6]float64
 	GridBases   [6]float64
+	// GridRows and GridRowWeights/GridRowBases keep explicit
+	// `grid-template-rows` tracks. A fixed row track has its CSS height in
+	// GridRowBases; an auto/fr track stays content-sized.
+	GridRows       int
+	GridRowWeights [6]float64
+	GridRowBases   [6]float64
+	// GridTrackSpecs/GridRowTrackSpecs keep the full minmax bounds. They are
+	// populated for explicit tracks and are used by the sizing pass; the older
+	// weights/bases arrays remain the compact fallback for simple tracks.
+	GridTrackSpecs    [6]webGridTrackSpec
+	GridRowTrackSpecs [6]webGridTrackSpec
+	// GridAutoRepeat is 1 for repeat(auto-fill, …) and 2 for
+	// repeat(auto-fit, …). The repeated definition lives in GridAutoTrack and
+	// its row counterpart; the repetition count is computed from the
+	// container measure during layout.
+	GridAutoRepeat    int
+	GridAutoTrack     webGridTrackSpec
+	GridRowAutoRepeat int
+	GridRowAutoTrack  webGridTrackSpec
+	// GridAutoColSpecs/GridAutoRowSpecs size implicit tracks created by
+	// placement beyond the explicit templates. The list cycles, as CSS does.
+	GridAutoColSpecs [6]webGridTrackSpec
+	GridAutoColCount int
+	GridAutoRowSpecs [6]webGridTrackSpec
+	GridAutoRowCount int
+	// GridAutoFlow is 0 for row flow and 1 for column flow. GridDense asks the
+	// auto-placement pass to restart its search for every unpositioned item.
+	GridAutoFlow int
+	GridDense    bool
+	// GridColumnStart/End/Span place this element inside its parent grid's
+	// column tracks. Start and End are 1-based grid lines; Span counts tracks.
+	// End == -1 means the last line, and Span == -1 fills from Start to the
+	// last line.
+	GridColumnStart int
+	GridColumnEnd   int
+	GridColumnSpan  int
+	// GridRowStart/End/Span are the block-axis counterparts.
+	GridRowStart int
+	GridRowEnd   int
+	GridRowSpan  int
+	// GridAreas is the parent grid's named-area map from
+	// `grid-template-areas`. GridArea names the area this item asks for with
+	// `grid-area: header`; both are resolved by the grid layouter.
+	GridAreas *webGridAreas
+	GridArea  string
 	// FlexGrow/Shrink/Basis describe the element as a flex item. Basis is -1
 	// when the author did not state one (auto), which is different from 0px.
 	FlexGrow   float64
@@ -478,15 +602,18 @@ type webStyle struct {
 	// Width/WidthPct size a flex item explicitly, the way a card with
 	// `width: 33%` or `width: 240px` does. On an ordinary block they bound
 	// the text measure and the painted box in layoutBlocks.
-	Width       float64
-	WidthPct    float64
-	Height      float64
-	MinWidth    float64
-	MaxWidth    float64
-	MinWidthPct float64
-	MaxWidthPct float64
-	MinHeight   float64
-	MaxHeight   float64
+	Width    float64
+	WidthPct float64
+	Height   float64
+	MinWidth float64
+	// MinWidthAuto keeps `min-width: auto` distinct from an explicit
+	// `min-width: 0`, which disables a flex item's content-based minimum.
+	MinWidthAuto bool
+	MaxWidth     float64
+	MinWidthPct  float64
+	MaxWidthPct  float64
+	MinHeight    float64
+	MaxHeight    float64
 	// BoxSizing is 1 for border-box: an explicit width includes the
 	// horizontal padding the parser folded into Indent/IndentRight.
 	BoxSizing int
@@ -577,15 +704,38 @@ type webStyle struct {
 	CQ *webCQContext
 }
 
+// webGridAreas is the small named-area matrix a grid container declares.
+// The fixed bound matches the grid track cap; an area is resolved to the
+// bounding box of its cells when an item asks for it by name.
+type webGridAreas struct {
+	Rows, Cols int
+	Names      [6][6]string
+}
+
+// webGridTrackSpec keeps the authored bounds of one grid track. Min is the
+// definite floor (px), while MinAuto asks for a content-based floor. Max is a
+// definite px cap, MaxPct a container-relative cap, MaxFr a flexible maximum,
+// and MaxAuto lets the track grow to its content. Keeping these separate is
+// what lets minmax(220px, 1fr) keep its 220px floor while still sharing free
+// space, instead of treating the floor as a second fixed base.
+type webGridTrackSpec struct {
+	Min, Max       float64
+	MinPct, MaxPct float64
+	MaxFr          float64
+	MinAuto        bool
+	MaxAuto        bool
+}
+
 // webCQContext is the unresolved half of one element's style: the cascaded
 // declarations before var()/cq* substitution, the style they cascade onto,
 // and the custom properties in force. The streaming parser resolves a first
 // approximation against its modelled container; layout replays this context
 // when it has the container's real used size.
 type webCQContext struct {
-	base  webStyle
-	decls map[string]string
-	vars  *webVarScope
+	base         webStyle
+	decls        map[string]string
+	vars         *webVarScope
+	parentHeight float64
 }
 
 // webVarScope is one element's view of the custom properties: the ones it
@@ -676,18 +826,43 @@ type webBlock struct {
 	// sidebar keeps its width instead of becoming another equal column.
 	GridWeights [6]float64
 	GridBases   [6]float64
+	// GridRows/GridRowWeights/GridRowBases retain explicit row tracks so a
+	// card can reserve a fixed header, body or empty trailing row.
+	GridRows          int
+	GridRowWeights    [6]float64
+	GridRowBases      [6]float64
+	GridTrackSpecs    [6]webGridTrackSpec
+	GridRowTrackSpecs [6]webGridTrackSpec
+	GridAutoRepeat    int
+	GridAutoTrack     webGridTrackSpec
+	GridRowAutoRepeat int
+	GridRowAutoTrack  webGridTrackSpec
+	// GridAutoColSpecs/GridAutoRowSpecs size implicit tracks created by
+	// placement beyond the explicit templates. The list cycles, as CSS does.
+	GridAutoColSpecs [6]webGridTrackSpec
+	GridAutoColCount int
+	GridAutoRowSpecs [6]webGridTrackSpec
+	GridAutoRowCount int
+	GridAutoFlow     int
+	GridDense        bool
+	// GridAreas is the container's named-area map, copied to every direct
+	// grid item so `grid-area: header` can resolve without a DOM/stack.
+	GridAreas *webGridAreas
 	// FlexTrail holds nested container memberships after the outermost one.
 	// Each sub-layout consumes one entry, so an inner row stays inside its
 	// parent card instead of being measured across the full page width.
-	FlexTrail  []webFlexMembership
-	FlexGrow   float64
-	FlexShrink float64
-	FlexBasis  float64
-	BasisPct   float64
-	Order      int
-	Width      float64
-	WidthPct   float64
-	AlignSelf  int
+	FlexTrail    []webFlexMembership
+	FlexGrow     float64
+	FlexShrink   float64
+	FlexBasis    float64
+	BasisPct     float64
+	Order        int
+	Width        float64
+	WidthPct     float64
+	AlignSelf    int
+	AlignContent int
+	JustifyItems int
+	JustifySelf  int
 	// Float marks an absolutely or fixed-positioned block: it is measured on
 	// its own and painted over the flow in ZIndex order.
 	Float     bool
@@ -758,6 +933,8 @@ type webBlock struct {
 // paths stay cheap; only nested flex/grid descendants allocate a trail.
 type webFlexMembership struct {
 	group, item, dir, justify, align int
+	alignContent                     int
+	justifyItems                     int
 	gapX, gapY                       float64
 	height                           float64
 	wrap                             bool
@@ -766,33 +943,69 @@ type webFlexMembership struct {
 	gridMin                          float64
 	gridWeights                      [6]float64
 	gridBases                        [6]float64
+	gridRows                         int
+	gridRowWeights                   [6]float64
+	gridRowBases                     [6]float64
+	gridTrackSpecs                   [6]webGridTrackSpec
+	gridRowTrackSpecs                [6]webGridTrackSpec
+	gridAutoRepeat                   int
+	gridAutoTrack                    webGridTrackSpec
+	gridRowAutoRepeat                int
+	gridRowAutoTrack                 webGridTrackSpec
+	gridAutoColSpecs                 [6]webGridTrackSpec
+	gridAutoColCount                 int
+	gridAutoRowSpecs                 [6]webGridTrackSpec
+	gridAutoRowCount                 int
+	gridAutoFlow                     int
+	gridDense                        bool
+	gridAreas                        *webGridAreas
 	grow, shrink, basis, basisPct    float64
 	order                            int
 	width, widthPct                  float64
 	alignSelf                        int
+	justifySelf                      int
 }
 
 func webFlexMembershipFromFrame(f *webFlexFrame) webFlexMembership {
 	return webFlexMembership{
-		group: f.group, item: f.item, dir: f.dir, justify: f.justify, align: f.align,
+		group: f.group, item: f.item, dir: f.dir, justify: f.justify, align: f.align, alignContent: f.alignContent, justifyItems: f.justifyItems,
 		gapX: f.gapX, gapY: f.gapY, wrap: f.wrap, gridCols: f.gridCols, gridMin: f.gridMin,
 		gridWeights: f.gridWeights, gridBases: f.gridBases,
-		height:  f.height,
-		reverse: f.reverse,
-		grow:    f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
+		gridRows: f.gridRows, gridRowWeights: f.gridRowWeights, gridRowBases: f.gridRowBases,
+		gridTrackSpecs: f.gridTrackSpecs, gridRowTrackSpecs: f.gridRowTrackSpecs,
+		gridAutoRepeat: f.gridAutoRepeat, gridAutoTrack: f.gridAutoTrack,
+		gridRowAutoRepeat: f.gridRowAutoRepeat, gridRowAutoTrack: f.gridRowAutoTrack,
+		gridAutoColSpecs: f.gridAutoColSpecs, gridAutoColCount: f.gridAutoColCount,
+		gridAutoRowSpecs: f.gridAutoRowSpecs, gridAutoRowCount: f.gridAutoRowCount,
+		gridAutoFlow: f.gridAutoFlow, gridDense: f.gridDense,
+		gridAreas: f.gridAreas,
+		height:    f.height,
+		reverse:   f.reverse,
+		grow:      f.itemStyle.FlexGrow, shrink: f.itemStyle.FlexShrink, basis: f.itemStyle.FlexBasis, basisPct: f.itemStyle.BasisPct,
 		order: f.itemStyle.Order, width: f.itemStyle.Width, widthPct: f.itemStyle.WidthPct, alignSelf: f.itemStyle.AlignSelf,
+		justifySelf: f.itemStyle.JustifySelf,
 	}
 }
 
 func (b *webBlock) setFlexMembership(m webFlexMembership) {
 	b.FlexGroup, b.FlexItem = m.group, m.item
 	b.FlexDir, b.FlexReverse, b.FlexJustify, b.FlexAlign = m.dir, m.reverse, m.justify, m.align
+	b.AlignContent = m.alignContent
 	b.FlexGapX, b.FlexGapY, b.FlexWrap, b.GridCols, b.GridMin = m.gapX, m.gapY, m.wrap, m.gridCols, m.gridMin
 	b.GridWeights, b.GridBases = m.gridWeights, m.gridBases
+	b.GridRows, b.GridRowWeights, b.GridRowBases = m.gridRows, m.gridRowWeights, m.gridRowBases
+	b.GridTrackSpecs, b.GridRowTrackSpecs = m.gridTrackSpecs, m.gridRowTrackSpecs
+	b.GridAutoRepeat, b.GridAutoTrack = m.gridAutoRepeat, m.gridAutoTrack
+	b.GridRowAutoRepeat, b.GridRowAutoTrack = m.gridRowAutoRepeat, m.gridRowAutoTrack
+	b.GridAutoColSpecs, b.GridAutoColCount = m.gridAutoColSpecs, m.gridAutoColCount
+	b.GridAutoRowSpecs, b.GridAutoRowCount = m.gridAutoRowSpecs, m.gridAutoRowCount
+	b.GridAutoFlow, b.GridDense = m.gridAutoFlow, m.gridDense
+	b.GridAreas = m.gridAreas
 	b.FlexHeight = m.height
 	b.FlexGrow, b.FlexShrink, b.FlexBasis, b.BasisPct = m.grow, m.shrink, m.basis, m.basisPct
 	b.Order = m.order
 	b.Width, b.WidthPct, b.AlignSelf = m.width, m.widthPct, m.alignSelf
+	b.JustifyItems, b.JustifySelf = m.justifyItems, m.justifySelf
 }
 
 // Hidden reports a block a closed <details> section keeps out of the layout. It
@@ -821,8 +1034,18 @@ type webDocument struct {
 	// the stable ID carried on descendant blocks. HasContainerUnits records
 	// whether any style actually used cq*; pages without one skip the extra
 	// layout pass entirely.
-	Containers        map[int]webContainerInfo
-	Boxes             map[int]webBoxInfo
+	Containers map[int]webContainerInfo
+	Boxes      map[int]webBoxInfo
+	// FlexBoxDepth marks how many ancestor boxes belong to a flex/grid
+	// container. Item sublayouts start after that prefix so the same padding
+	// and width constraints are not applied at every nesting level.
+	FlexBoxDepth map[int]int
+	// FlexItemBoxDepth adds a direct item's own box to the resolved prefix.
+	// Its width was already chosen by the parent flex/grid track.
+	FlexItemBoxDepth map[int]map[int]int
+	// FlexScrollX marks a horizontally scrolling row. This reader scrolls
+	// vertically, so fixed cards in such a row flow into readable rows.
+	FlexScrollX       map[int]bool
 	HasContainerUnits bool
 	Paper             sdl.Color
 	// PaperGradient is a body/html background ramp: the page under the text is
@@ -1350,22 +1573,40 @@ type webContainerSize struct {
 // webFlexFrame is one open flex container while parsing. item counts its
 // direct children so every block can be tagged with the item it belongs to.
 type webFlexFrame struct {
-	group       int
-	item        int
-	depth       int
-	itemStyle   webStyle
-	dir         int
-	justify     int
-	align       int
-	gapX        float64
-	gapY        float64
-	height      float64
-	wrap        bool
-	reverse     bool
-	gridCols    int
-	gridMin     float64
-	gridWeights [6]float64
-	gridBases   [6]float64
+	group             int
+	item              int
+	depth             int
+	itemStyle         webStyle
+	dir               int
+	justify           int
+	align             int
+	alignContent      int
+	justifyItems      int
+	gapX              float64
+	gapY              float64
+	height            float64
+	wrap              bool
+	reverse           bool
+	gridCols          int
+	gridMin           float64
+	gridWeights       [6]float64
+	gridBases         [6]float64
+	gridRows          int
+	gridRowWeights    [6]float64
+	gridRowBases      [6]float64
+	gridTrackSpecs    [6]webGridTrackSpec
+	gridRowTrackSpecs [6]webGridTrackSpec
+	gridAutoRepeat    int
+	gridAutoTrack     webGridTrackSpec
+	gridRowAutoRepeat int
+	gridRowAutoTrack  webGridTrackSpec
+	gridAutoColSpecs  [6]webGridTrackSpec
+	gridAutoColCount  int
+	gridAutoRowSpecs  [6]webGridTrackSpec
+	gridAutoRowCount  int
+	gridAutoFlow      int
+	gridDense         bool
+	gridAreas         *webGridAreas
 }
 
 // webListState tracks <ul>/<ol> numbering.
@@ -1435,16 +1676,24 @@ func webMediaBlockApplies(query string) bool {
 	return webMediaQueryApplies(query, w, h)
 }
 
-// webMediaViewport is the size media queries are judged against: the screen the
-// reader draws on, which is also what page scripts get as innerWidth and
-// innerHeight (webdom_runtime.go's configJSON), so a script's matchMedia and
-// the sheet agree.
+// webMediaViewport is the screen size in CSS pixels. The reader paints a CSS
+// 16px base at 24 physical pixels (and scales it again for browser zoom), so
+// using the physical width for media queries can select a two-column layout
+// that does not fit the rendered text. Page scripts receive the same size.
 func webMediaViewport() (float64, float64) {
 	w, h := float64(screenWidth), float64(screenHeight)
 	if w <= 0 || h <= 0 {
 		w, h = 1280, 720
 	}
-	return w, h
+	return w / webViewportPixelScale(), h / webViewportPixelScale()
+}
+
+func webViewportPixelScale() float64 {
+	scale := webBaseFontSize(nil, "body") * browserZoomScale() / 16
+	if scale <= 0 {
+		return 1
+	}
+	return scale
 }
 
 // webMediaQueryApplies evaluates a media query list (with or without its
@@ -2328,42 +2577,203 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 			}
 			continue
 		}
+		// CSS nesting puts child rules inside the parent's declaration block.
+		// Modern component CSS uses it heavily; reading the block as only
+		// declarations dropped every nested rule. Keep the fast path for the
+		// ordinary flat sheet.
+		if strings.IndexByte(body, '{') >= 0 {
+			if webEmitNestedCSSBody(body, webSplitSelectorList(selectorText), depth, order, rules, containers) {
+				continue
+			}
+		}
 		decls, important := parseWebDeclsSplit(body)
 		if len(decls) == 0 && len(important) == 0 {
 			continue
 		}
-		hides := webDeclsHide(decls) || webDeclsHide(important)
-		reveals := webDeclsReveal(decls) || webDeclsReveal(important)
-		// Split on top-level commas only: `:is(.a, .b)` and `[title="a,b"]`
-		// are one selector each, and a plain Split cut them into broken halves.
-		for _, selector := range webSplitSelectorList(selectorText) {
-			selector = strings.TrimSpace(selector)
-			if selector == "" {
-				continue
+		webAppendCSSRule(webSplitSelectorList(selectorText), decls, important, order, rules, containers)
+	}
+}
+
+// webCSSNestedBlock is one nested selector (or conditional at-rule) inside a
+// declaration block. body is the inside of its braces.
+type webCSSNestedBlock struct {
+	selector string
+	body     string
+}
+
+// webSplitCSSNestedBody separates declarations from nested rules at one level
+// of a declaration block. Parentheses, brackets, strings and comments are
+// skipped, so a data URI or a selector attribute containing braces cannot cut
+// a rule in half.
+func webSplitCSSNestedBody(body string) (declText string, nested []webCSSNestedBlock) {
+	var decls strings.Builder
+	start := 0
+	var quote byte
+	paren, bracket := 0, 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if quote != 0 {
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
 			}
-			if len(*rules) >= webCSSMaxRules {
-				break
-			}
-			sel, specificity := webCompileSelector(selector)
-			if sel.never {
-				// A ::before/::after/::marker rule styles a generated box, never
-				// an element. Icon fonts ship a thousand of them; dropping them
-				// here keeps them out of every element's matching loop.
-				continue
-			}
-			*rules = append(*rules, webRule{
-				selector:    selector,
-				specificity: specificity,
-				order:       *order,
-				decls:       decls,
-				important:   important,
-				sel:         sel,
-				hides:       hides,
-				reveals:     reveals,
-				containers:  containers,
-			})
-			*order++
+			continue
 		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			paren++
+		case ')':
+			if paren > 0 {
+				paren--
+			}
+		case '[':
+			bracket++
+		case ']':
+			if bracket > 0 {
+				bracket--
+			}
+		case ';':
+			if paren == 0 && bracket == 0 {
+				decls.WriteString(body[start : i+1])
+				start = i + 1
+			}
+		case '{':
+			if paren != 0 || bracket != 0 {
+				continue
+			}
+			selector := strings.TrimSpace(body[start:i])
+			close := webCSSBlockEnd(body, i)
+			if close < 0 {
+				continue
+			}
+			if selector != "" {
+				nested = append(nested, webCSSNestedBlock{selector: selector, body: body[i+1 : close]})
+			}
+			i = close
+			start = close + 1
+		}
+	}
+	decls.WriteString(body[start:])
+	return decls.String(), nested
+}
+
+// webEmitNestedCSSBody processes a parent declaration block that also holds
+// nested rules. It reports whether it found any nested block, so a flat body
+// can stay on the parser's original, cheaper path.
+func webEmitNestedCSSBody(body string, parents []string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery) bool {
+	return webEmitNestedCSSBodyAt(body, parents, depth, order, rules, containers, false)
+}
+
+// webEmitNestedCSSBodyAt is the recursive worker. force is set for any body
+// reached through a nested selector or at-rule: such a body may contain only
+// declarations for its parent, while the top-level fast path may not.
+func webEmitNestedCSSBodyAt(body string, parents []string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery, force bool) bool {
+	declText, nested := webSplitCSSNestedBody(body)
+	if len(nested) == 0 && !force {
+		return false
+	}
+	if depth >= webCSSMaxNesting {
+		return true
+	}
+	if decls, important := parseWebDeclsSplit(declText); len(decls) > 0 || len(important) > 0 {
+		webAppendCSSRule(parents, decls, important, order, rules, containers)
+	}
+	for _, block := range nested {
+		selector := strings.TrimSpace(block.selector)
+		if selector == "" {
+			continue
+		}
+		if strings.HasPrefix(selector, "@") {
+			lower := strings.ToLower(selector)
+			switch {
+			case strings.HasPrefix(lower, "@media"):
+				if webMediaBlockApplies(selector) {
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+				}
+			case strings.HasPrefix(lower, "@supports"):
+				if webSupportsApplies(selector) {
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+				}
+			case strings.HasPrefix(lower, "@container"):
+				query := webParseContainerQuery(selector)
+				if query != nil {
+					next := append(append([]*webContainerQuery(nil), containers...), query)
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, next, true)
+				}
+			case strings.HasPrefix(lower, "@layer"):
+				webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+			}
+			continue
+		}
+		combined := webCombineNestedSelectors(parents, selector)
+		if len(combined) > 0 {
+			webEmitNestedCSSBodyAt(block.body, combined, depth+1, order, rules, containers, true)
+		}
+	}
+	return true
+}
+
+// webCombineNestedSelectors resolves CSS nesting's relative selectors. A
+// nested `&` stands for each parent selector; a selector without one is a
+// descendant of the parent, and a leading combinator stays adjacent to it.
+func webCombineNestedSelectors(parents []string, nested string) []string {
+	parts := webSplitSelectorList(nested)
+	out := make([]string, 0, len(parents)*len(parts))
+	for _, parent := range parents {
+		parent = strings.TrimSpace(parent)
+		if parent == "" {
+			continue
+		}
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if strings.Contains(part, "&") {
+				out = append(out, strings.ReplaceAll(part, "&", parent))
+				continue
+			}
+			out = append(out, parent+" "+part)
+		}
+	}
+	return out
+}
+
+// webAppendCSSRule compiles one selector list against a declaration block and
+// appends the resulting rules in source order.
+func webAppendCSSRule(selectors []string, decls, important map[string]string, order *int, rules *[]webRule, containers []*webContainerQuery) {
+	hides := webDeclsHide(decls) || webDeclsHide(important)
+	reveals := webDeclsReveal(decls) || webDeclsReveal(important)
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if len(*rules) >= webCSSMaxRules {
+			break
+		}
+		sel, specificity := webCompileSelector(selector)
+		if sel.never {
+			// A ::before/::after/::marker rule styles a generated box, never
+			// an element. Icon fonts ship a thousand of them; dropping them
+			// here keeps them out of every element's matching loop.
+			continue
+		}
+		*rules = append(*rules, webRule{
+			selector:    selector,
+			specificity: specificity,
+			order:       *order,
+			decls:       decls,
+			important:   important,
+			sel:         sel,
+			hides:       hides,
+			reveals:     reveals,
+			containers:  containers,
+		})
+		*order++
 	}
 }
 
@@ -2372,17 +2782,23 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 // answer: @supports exists to select fallbacks, and claiming a property we
 // ignore would make the fallback styling win over the one that actually works.
 var webSupportedProperties = map[string]bool{
-	"align-items": true, "align-self": true, "aspect-ratio": true,
+	"align-content": true, "align-items": true, "align-self": true, "aspect-ratio": true,
 	"background": true, "background-clip": true, "background-color": true, "background-image": true,
 	"border": true, "border-bottom": true, "border-color": true,
 	"border-left": true, "border-radius": true, "border-right": true,
 	"border-top": true, "border-width": true, "color": true,
 	"column-gap": true, "container": true, "container-name": true, "container-type": true,
-	"display": true, "flex": true, "flex-basis": true, "flex-direction": true,
+	"display": true, "flex": true, "flex-basis": true, "flex-direction": true, "flex-flow": true,
 	"float": true, "clear": true,
 	"flex-grow": true, "flex-wrap": true, "font": true, "font-size": true,
 	"font-style": true, "font-weight": true, "gap": true,
-	"grid-template-columns": true, "height": true, "inset": true,
+	"grid-template-columns": true, "grid-column": true, "grid-column-start": true,
+	"grid-column-end": true, "grid-template-rows": true, "grid-row": true,
+	"grid-row-start": true, "grid-row-end": true, "grid-template-areas": true,
+	"grid-area": true, "grid-auto-flow": true, "grid-auto-columns": true,
+	"grid-auto-rows": true, "justify-items": true, "justify-self": true,
+	"place-self": true, "place-content": true, "height": true, "inset": true,
+	"inset-block": true, "inset-inline": true,
 	"inset-block-start": true, "inset-block-end": true,
 	"inset-inline-start": true, "inset-inline-end": true,
 	"justify-content": true, "line-height": true, "margin": true,
@@ -2391,6 +2807,7 @@ var webSupportedProperties = map[string]bool{
 	"order": true, "padding": true, "padding-block": true,
 	"padding-bottom": true, "padding-left": true, "padding-right": true,
 	"padding-top": true, "place-items": true, "position": true,
+	"overflow-wrap": true, "word-wrap": true, "word-break": true, "text-overflow": true,
 	"row-gap": true, "text-align": true, "text-indent": true,
 	"text-transform": true, "visibility": true, "white-space": true,
 	"width": true, "z-index": true, "table-layout": true,
@@ -2708,21 +3125,64 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 		return webSupportsEnum(lower, "none", "uppercase", "lowercase", "capitalize"), true
 	case "white-space":
 		return webSupportsEnum(lower, "normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"), true
+	case "overflow-wrap", "word-wrap":
+		return webSupportsEnum(lower, "normal", "anywhere", "break-word"), true
+	case "word-break":
+		return webSupportsEnum(lower, "normal", "keep-all", "break-all", "break-word"), true
+	case "text-overflow":
+		return webSupportsEnum(lower, "clip", "ellipsis"), true
 	case "flex-direction":
 		return webSupportsEnum(lower, "row", "row-reverse", "column", "column-reverse"), true
 	case "flex-wrap":
 		return webSupportsEnum(lower, "nowrap", "wrap", "wrap-reverse"), true
+	case "flex-flow":
+		fields := webCSSSpaceFields(lower)
+		if len(fields) == 0 || len(fields) > 2 {
+			return false, true
+		}
+		for _, field := range fields {
+			if !webSupportsEnum(field, "row", "row-reverse", "column", "column-reverse", "nowrap", "wrap", "wrap-reverse") {
+				return false, true
+			}
+		}
+		return true, true
 	case "justify-content":
 		return webSupportsEnum(lower, "start", "end", "left", "right", "center", "flex-start", "flex-end", "space-between", "space-around", "space-evenly"), true
 	case "align-items", "align-self":
-		return webSupportsEnum(lower, "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end"), true
+		return webSupportsEnum(lower, "normal", "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end"), true
+	case "justify-items", "justify-self":
+		return webSupportsEnum(lower, "normal", "start", "end", "center", "stretch", "left", "right", "flex-start", "flex-end", "self-start", "self-end"), true
+	case "align-content":
+		return webSupportsEnum(lower, "normal", "start", "end", "center", "stretch", "flex-start", "flex-end", "space-between", "space-around", "space-evenly"), true
+	case "place-content":
+		fields := webCSSSpaceFields(lower)
+		if len(fields) == 0 || len(fields) > 2 {
+			return false, true
+		}
+		for _, field := range fields {
+			if !webSupportsEnum(field, "normal", "start", "end", "center", "stretch", "flex-start", "flex-end", "space-between", "space-around", "space-evenly") {
+				return false, true
+			}
+		}
+		return true, true
+	case "place-self":
+		fields := webCSSSpaceFields(lower)
+		if len(fields) == 0 || len(fields) > 2 {
+			return false, true
+		}
+		for _, field := range fields {
+			if !webSupportsEnum(field, "auto", "normal", "start", "end", "center", "stretch", "flex-start", "flex-end") {
+				return false, true
+			}
+		}
+		return true, true
 	case "place-items":
 		fields := webCSSSpaceFields(lower)
 		if len(fields) == 0 || len(fields) > 2 {
 			return false, true
 		}
 		for _, field := range fields {
-			if !webSupportsEnum(field, "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end") {
+			if !webSupportsEnum(field, "normal", "start", "end", "center", "stretch", "baseline", "flex-start", "flex-end") {
 				return false, true
 			}
 		}
@@ -2778,7 +3238,18 @@ func webSupportsParsedValue(name, value string) (supported, handled bool) {
 		}
 		_, ok := webMediaRatio(lower)
 		return ok, true
-	case "grid-template-columns":
+	case "grid-template-columns", "grid-template-rows":
+		return webSupportsGridTemplate(lower), true
+	case "grid-column", "grid-column-start", "grid-column-end",
+		"grid-row", "grid-row-start", "grid-row-end":
+		return webSupportsGridPlacement(lower), true
+	case "grid-template-areas":
+		return webSupportsGridAreas(value), true
+	case "grid-area":
+		return webSupportsGridArea(lower), true
+	case "grid-auto-flow":
+		return webSupportsGridAutoFlow(lower), true
+	case "grid-auto-columns", "grid-auto-rows":
 		return webSupportsGridTemplate(lower), true
 	case "border-width":
 		return webSupportsBoxTokens(lower, false), true
@@ -3439,6 +3910,9 @@ func webSubstituteCalcContainer(value string, em, vw, vh, cw, ch float64) string
 	if em <= 0 {
 		em = 16
 	}
+	if vw <= 0 || vh <= 0 {
+		vw, vh = webMediaViewport()
+	}
 	lower := asciiLower(value)
 	var out strings.Builder
 	out.Grow(len(value))
@@ -3526,6 +4000,7 @@ func (ctx *webCQContext) resolve(current webStyle, cw, ch float64) webStyle {
 		}
 	}
 	applyWebDecls(&st, decls)
+	webResolvePercentageHeights(&st, decls, ctx.parentHeight)
 	st.Href, st.Link, st.Hidden, st.Control = current.Href, current.Link, current.Hidden, current.Control
 	return st
 }
@@ -3668,6 +4143,9 @@ type webCalcParser struct {
 	em     float64
 	vw, vh float64
 	cw, ch float64
+	// percentBase is only set for a length whose percentage reference is
+	// definite, such as height inside an explicitly sized containing block.
+	percentBase float64
 }
 
 func webEvalCalc(expr string, em float64) (float64, bool) {
@@ -3684,7 +4162,14 @@ func webEvalCalcViewport(expr string, em, vw, vh float64) (float64, bool) {
 // webEvalCalcContainer is webEvalCalcViewport with the nearest query container
 // dimensions available for cqw/cqh/cqi/cqb/cqmin/cqmax.
 func webEvalCalcContainer(expr string, em, vw, vh, cw, ch float64) (float64, bool) {
-	p := &webCalcParser{src: expr, em: em, vw: vw, vh: vh, cw: cw, ch: ch}
+	return webEvalCalcContainerPercent(expr, em, vw, vh, cw, ch, 0)
+}
+
+func webEvalCalcContainerPercent(expr string, em, vw, vh, cw, ch, percentBase float64) (float64, bool) {
+	if vw <= 0 || vh <= 0 {
+		vw, vh = webMediaViewport()
+	}
+	p := &webCalcParser{src: expr, em: em, vw: vw, vh: vh, cw: cw, ch: ch, percentBase: percentBase}
 	value, ok := p.sum()
 	if !ok {
 		return 0, false
@@ -3815,19 +4300,23 @@ func (p *webCalcParser) factor() (webCalcValue, bool) {
 		return webCalcValue{px: number * p.em}, true
 	case "rem":
 		return webCalcValue{px: number * 16}, true
-	case "vw":
+	case "%":
+		if p.percentBase > 0 {
+			return webCalcValue{px: number * p.percentBase / 100}, true
+		}
+	case "vw", "vi", "svw", "svi", "dvw", "dvi", "lvw", "lvi":
 		if p.vw > 0 {
 			return webCalcValue{px: number * p.vw / 100}, true
 		}
-	case "vh":
+	case "vh", "vb", "svh", "svb", "dvh", "dvb", "lvh", "lvb":
 		if p.vh > 0 {
 			return webCalcValue{px: number * p.vh / 100}, true
 		}
-	case "vmin":
+	case "vmin", "svmin", "dvmin", "lvmin":
 		if p.vw > 0 && p.vh > 0 {
 			return webCalcValue{px: number * min(p.vw, p.vh) / 100}, true
 		}
-	case "vmax":
+	case "vmax", "svmax", "dvmax", "lvmax":
 		if p.vw > 0 && p.vh > 0 {
 			return webCalcValue{px: number * max(p.vw, p.vh) / 100}, true
 		}
@@ -3873,7 +4362,7 @@ func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) 
 	}
 	inner := p.src[open+1 : close]
 	eval := func(expr string) (float64, bool) {
-		return webEvalCalcContainer(expr, p.em, p.vw, p.vh, p.cw, p.ch)
+		return webEvalCalcContainerPercent(expr, p.em, p.vw, p.vh, p.cw, p.ch, p.percentBase)
 	}
 	if name == "calc" {
 		px, valid := eval(inner)
@@ -4082,10 +4571,12 @@ const (
 	webPseudoHas
 	webPseudoFirstChild
 	webPseudoLastChild
+	webPseudoOnlyChild
 	webPseudoNthChild
 	webPseudoNthLastChild
 	webPseudoNthOfType
 	webPseudoNthLastOfType
+	webPseudoOnlyOfType
 )
 
 // webSelMaxDepth bounds nested :not()/:is() arguments, so a hostile sheet
@@ -4606,6 +5097,26 @@ func (p *webSelParser) pseudo(c *webSelCompound) bool {
 			return false
 		}
 		s.op = webPseudoLastChild
+	case "only-child":
+		if hasArgs {
+			return false
+		}
+		s.op = webPseudoOnlyChild
+	case "first-of-type":
+		if hasArgs {
+			return false
+		}
+		s.op, s.nthB = webPseudoNthOfType, 1
+	case "last-of-type":
+		if hasArgs {
+			return false
+		}
+		s.op, s.nthB = webPseudoNthLastOfType, 1
+	case "only-of-type":
+		if hasArgs {
+			return false
+		}
+		s.op = webPseudoOnlyOfType
 	case "nth-child":
 		if !hasArgs {
 			return false
@@ -4835,7 +5346,9 @@ func webSelectorUsesTree(sel *webSelector) bool {
 			s := &sel.compounds[i].simples[j]
 			if s.kind == webSelPseudo {
 				switch s.op {
-				case webPseudoHas, webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild, webPseudoNthLastChild, webPseudoNthOfType, webPseudoNthLastOfType:
+				case webPseudoHas, webPseudoFirstChild, webPseudoLastChild, webPseudoOnlyChild,
+					webPseudoNthChild, webPseudoNthLastChild, webPseudoNthOfType,
+					webPseudoNthLastOfType, webPseudoOnlyOfType:
 					return true
 				}
 			}
@@ -5271,7 +5784,7 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 			return webSelNo
 		}
 		return webSelBool(s.hasMatches(el.node, mode))
-	case webPseudoFirstChild, webPseudoLastChild, webPseudoNthChild, webPseudoNthLastChild:
+	case webPseudoFirstChild, webPseudoLastChild, webPseudoOnlyChild, webPseudoNthChild, webPseudoNthLastChild:
 		var position, siblings int
 		var ok bool
 		if len(s.nthOf) > 0 {
@@ -5290,12 +5803,14 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 			return webSelBool(position == 1)
 		case webPseudoLastChild:
 			return webSelBool(position == siblings)
+		case webPseudoOnlyChild:
+			return webSelBool(position == 1 && siblings == 1)
 		case webPseudoNthLastChild:
 			return webSelBool(webSelNthMatches(s.nthA, s.nthB, siblings-position+1))
 		default:
 			return webSelBool(webSelNthMatches(s.nthA, s.nthB, position))
 		}
-	case webPseudoNthOfType, webPseudoNthLastOfType:
+	case webPseudoNthOfType, webPseudoNthLastOfType, webPseudoOnlyOfType:
 		var position, siblings int
 		var ok bool
 		if len(s.nthOf) > 0 {
@@ -5308,6 +5823,9 @@ func (s *webSelSimple) pseudoTest(chain []webElement, idx int, mode webSelMode) 
 		}
 		if position == 0 {
 			return webSelNo
+		}
+		if s.op == webPseudoOnlyOfType {
+			return webSelBool(position == 1 && siblings == 1)
 		}
 		if s.op == webPseudoNthLastOfType {
 			position = siblings - position + 1
@@ -6106,6 +6624,41 @@ func webHexByte(text string) (uint8, bool) {
 	return uint8(n), true
 }
 
+// webViewportLength resolves viewport-relative units. The reader draws on a
+// real screen, so vw/vh and the modern svh/dvh/lvh aliases describe that screen
+// rather than being dropped: `min-height: 100dvh` is a common full-panel
+// section, and dropping it collapsed those sections to their text height.
+var webViewportUnitSuffixes = [...]string{
+	"svmin", "dvmin", "lvmin", "svmax", "dvmax", "lvmax", "vmin", "vmax",
+	"svw", "dvw", "lvw", "svi", "dvi", "lvi", "vw", "vi",
+	"svh", "dvh", "lvh", "svb", "dvb", "lvb", "vh", "vb",
+}
+
+func webViewportLength(value string) (float64, bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	for _, unit := range webViewportUnitSuffixes {
+		if !strings.HasSuffix(v, unit) {
+			continue
+		}
+		n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(v, unit)), 64)
+		if err != nil {
+			return 0, false
+		}
+		w, h := webMediaViewport()
+		switch unit {
+		case "svmin", "dvmin", "lvmin", "vmin":
+			return n * min(w, h) / 100, true
+		case "svmax", "dvmax", "lvmax", "vmax":
+			return n * max(w, h) / 100, true
+		case "svh", "dvh", "lvh", "vh", "svb", "dvb", "lvb", "vb":
+			return n * h / 100, true
+		default:
+			return n * w / 100, true
+		}
+	}
+	return 0, false
+}
+
 // webLength converts a CSS length to px. Percentages resolve against rel.
 func webLength(value string, rel float64) float64 {
 	v := strings.ToLower(strings.TrimSpace(value))
@@ -6113,6 +6666,9 @@ func webLength(value string, rel float64) float64 {
 		return 0
 	}
 	if px, ok := webMathLength(v, rel); ok {
+		return px
+	}
+	if px, ok := webViewportLength(v); ok {
 		return px
 	}
 	mult := 1.0
@@ -6139,8 +6695,6 @@ func webLength(value string, rel float64) float64 {
 		mult = rel / 2
 	case strings.HasSuffix(v, "vw"), strings.HasSuffix(v, "vh"),
 		strings.HasSuffix(v, "vmin"), strings.HasSuffix(v, "vmax"):
-		// Viewport units describe the page's own window; the reader has no
-		// such window, so they must not turn into indentation.
 		return 0
 	}
 	n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
@@ -6150,15 +6704,42 @@ func webLength(value string, rel float64) float64 {
 	return n * mult
 }
 
-// webHeightLength ignores percentage heights: the flow has no parent height to
-// resolve them against, and treating 50% as 0.5em made a percentage height
-// silently become a tiny pixel height. CSS_SUPPORT.md documents the gap.
+// webHeightLength leaves percentages for webResolvePercentageHeights, which
+// can use the containing block's height instead of the element's font size.
 func webHeightLength(value string, rel float64) float64 {
 	v := strings.TrimSpace(value)
 	if strings.HasSuffix(v, "%") {
 		return 0
 	}
 	return webLength(v, rel)
+}
+
+// webResolvePercentageHeights replaces only declarations containing a percent.
+// The general declaration parser cannot resolve them because its relative
+// length argument is the font size. Leaving an indefinite percentage at zero
+// preserves CSS's auto-height behaviour for content-sized ancestors.
+func webResolvePercentageHeights(st *webStyle, decls map[string]string, parentHeight float64) {
+	for _, property := range [...]struct {
+		name   string
+		target *float64
+	}{
+		{"height", &st.Height},
+		{"min-height", &st.MinHeight},
+		{"max-height", &st.MaxHeight},
+	} {
+		value, ok := decls[property.name]
+		if !ok || !strings.Contains(value, "%") {
+			continue
+		}
+		*property.target = 0
+		if parentHeight <= 0 {
+			continue
+		}
+		vw, vh := webMediaViewport()
+		if px, valid := webEvalCalcContainerPercent(strings.TrimSpace(value), st.FontPx, vw, vh, vw, vh, parentHeight); valid && px > 0 {
+			*property.target = px
+		}
+	}
 }
 
 // webMathLength evaluates the CSS math functions modern layouts use for fluid
@@ -6825,6 +7406,14 @@ func webOverflowValue(value string) int {
 	return 0
 }
 
+func webOverflowScrolls(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto", "scroll":
+		return true
+	}
+	return false
+}
+
 func webPaintOpacity(style webStyle) float64 {
 	if !style.HasOpacity {
 		return 1
@@ -7044,7 +7633,7 @@ func webColorInValue(value string) (sdl.Color, bool) {
 // --- Style resolution -----------------------------------------------------
 
 func webBaseStyle() webStyle {
-	return webStyle{FontPx: 16, FlexShrink: 1}
+	return webStyle{FontPx: 16, FlexShrink: 1, MinWidthAuto: true}
 }
 
 // applyWebTagDefaults gives the reader its browser-ish baseline: headings are
@@ -7298,17 +7887,29 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["overflow"]; ok {
 		fields := strings.Fields(v)
-		st.OverflowX = webOverflowValue(v)
-		st.OverflowY = st.OverflowX
+		if len(fields) > 0 {
+			st.OverflowX = webOverflowValue(fields[0])
+			st.ScrollX = webOverflowScrolls(fields[0])
+			st.OverflowY = st.OverflowX
+		}
 		if len(fields) > 1 {
 			st.OverflowY = webOverflowValue(fields[1])
 		}
 	}
 	if v, ok := decls["overflow-x"]; ok {
 		st.OverflowX = webOverflowValue(v)
+		st.ScrollX = webOverflowScrolls(v)
 	}
 	if v, ok := decls["overflow-y"]; ok {
 		st.OverflowY = webOverflowValue(v)
+	}
+	if v, ok := decls["text-overflow"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "clip":
+			st.TextOverflow = 1
+		case "ellipsis":
+			st.TextOverflow = 2
+		}
 	}
 	if v, ok := decls["text-indent"]; ok {
 		st.TextIndent = webLength(v, st.FontPx)
@@ -7316,6 +7917,22 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["white-space"]; ok {
 		st.WhiteSpace = webWhiteSpaceValue(v)
 		st.Pre = webWhiteSpacePreservesSpaces(st.WhiteSpace)
+	}
+	if v, ok := decls["word-wrap"]; ok {
+		st.OverflowWrap = webOverflowWrapValue(v)
+	}
+	if v, ok := decls["overflow-wrap"]; ok {
+		st.OverflowWrap = webOverflowWrapValue(v)
+	}
+	if v, ok := decls["word-break"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "break-all":
+			st.WordBreak = 1
+		case "break-word":
+			st.WordBreak, st.OverflowWrap = 0, 1
+		case "normal", "keep-all":
+			st.WordBreak = 0
+		}
 	}
 	if v, ok := decls["display"]; ok {
 		if strings.EqualFold(strings.TrimSpace(v), "none") {
@@ -7719,7 +8336,12 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		if alias, valid := webUnprefixedValueAlias("display", v); valid {
 			lower = alias
 		}
+		st.DisplayContents = lower == "contents"
+		st.DisplayInline = lower == "inline"
 		switch lower {
+		case "contents":
+			st.Display = webDisplayBlock
+			st.DisplayBlock = false
 		case "flex", "inline-flex":
 			st.Display = webDisplayFlex
 			st.DisplayBlock = lower == "flex"
@@ -7781,9 +8403,73 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["grid-template-columns"]; ok && st.Display == webDisplayGrid {
 		st.GridCols, st.GridMin = webGridTemplate(v)
-		weights, bases, count := webGridTracks(v)
-		if count > 0 {
-			st.GridCols, st.GridWeights, st.GridBases = count, weights, bases
+		specs, count, repeat, auto := webGridTrackList(v)
+		weights, bases, _ := webGridTracks(v)
+		st.GridTrackSpecs, st.GridAutoRepeat, st.GridAutoTrack = specs, repeat, auto
+		st.GridCols, st.GridWeights, st.GridBases = count, weights, bases
+	}
+	if v, ok := decls["grid-auto-columns"]; ok && st.Display == webDisplayGrid {
+		specs, count, repeat, auto := webGridTrackList(v)
+		if repeat == 0 {
+			st.GridAutoColSpecs, st.GridAutoColCount = specs, count
+		} else {
+			st.GridAutoColSpecs, st.GridAutoColCount = [6]webGridTrackSpec{auto}, 1
+		}
+	}
+	if v, ok := decls["grid-auto-rows"]; ok && st.Display == webDisplayGrid {
+		specs, count, repeat, auto := webGridTrackList(v)
+		if repeat == 0 {
+			st.GridAutoRowSpecs, st.GridAutoRowCount = specs, count
+		} else {
+			st.GridAutoRowSpecs, st.GridAutoRowCount = [6]webGridTrackSpec{auto}, 1
+		}
+	}
+	if v, ok := decls["grid-column"]; ok {
+		webApplyGridColumn(st, v)
+	}
+	if v, ok := decls["grid-column-start"]; ok {
+		webApplyGridColumnStart(st, v)
+	}
+	if v, ok := decls["grid-column-end"]; ok {
+		webApplyGridColumnEnd(st, v)
+	}
+	if v, ok := decls["grid-template-rows"]; ok && st.Display == webDisplayGrid {
+		specs, count, repeat, auto := webGridTrackList(v)
+		weights, bases, _ := webGridTracks(v)
+		st.GridRowTrackSpecs, st.GridRowAutoRepeat, st.GridRowAutoTrack = specs, repeat, auto
+		st.GridRows, st.GridRowWeights, st.GridRowBases = count, weights, bases
+	}
+	if v, ok := decls["grid-row"]; ok {
+		webApplyGridRow(st, v)
+	}
+	if v, ok := decls["grid-row-start"]; ok {
+		webApplyGridRowStart(st, v)
+	}
+	if v, ok := decls["grid-row-end"]; ok {
+		webApplyGridRowEnd(st, v)
+	}
+	if v, ok := decls["grid-template-areas"]; ok && st.Display == webDisplayGrid {
+		st.GridAreas = webGridTemplateAreas(v)
+	}
+	if v, ok := decls["grid-area"]; ok {
+		webApplyGridArea(st, v)
+	}
+	if v, ok := decls["grid-auto-flow"]; ok {
+		webApplyGridAutoFlow(st, v)
+	}
+	if v, ok := decls["flex-flow"]; ok {
+		for _, field := range webCSSSpaceFields(v) {
+			lower := strings.ToLower(field)
+			switch lower {
+			case "row", "row-reverse", "column", "column-reverse":
+				st.FlexDir = webFlexRow
+				if strings.HasPrefix(lower, "column") {
+					st.FlexDir = webFlexColumn
+				}
+				st.FlexReverse = strings.HasSuffix(lower, "-reverse")
+			case "nowrap", "wrap", "wrap-reverse":
+				st.FlexWrap = strings.HasPrefix(lower, "wrap")
+			}
 		}
 	}
 	if v, ok := decls["flex-direction"]; ok {
@@ -7804,11 +8490,44 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["align-items"]; ok {
 		st.AlignItems = webAlignValue(v)
 	}
-	// place-items is `align-items justify-items`; the reader has no separate
-	// inline axis for items, so its first value is the useful one here.
+	if v, ok := decls["align-content"]; ok {
+		st.AlignContent = webContentAlignValue(v)
+	}
+	// place-content is align-content followed by justify-content.
+	if v, ok := decls["place-content"]; ok {
+		if fields := webCSSSpaceFields(v); len(fields) > 0 {
+			st.AlignContent = webContentAlignValue(fields[0])
+			justify := fields[0]
+			if len(fields) > 1 {
+				justify = fields[1]
+			}
+			st.Justify = webJustifyValue(justify)
+		}
+	}
+	if v, ok := decls["justify-items"]; ok {
+		st.JustifyItems = webAlignValue(v)
+	}
+	// place-items is `align-items justify-items`.
 	if v, ok := decls["place-items"]; ok {
 		if fields := webCSSSpaceFields(v); len(fields) > 0 {
 			st.AlignItems = webAlignValue(fields[0])
+			if len(fields) > 1 {
+				st.JustifyItems = webAlignValue(fields[1])
+			}
+		}
+	}
+	if v, ok := decls["justify-self"]; ok {
+		st.JustifySelf = webAlignValue(v)
+	}
+	// place-self is `align-self justify-self`; auto leaves the axis inherited.
+	if v, ok := decls["place-self"]; ok {
+		if fields := webCSSSpaceFields(v); len(fields) > 0 {
+			if !strings.EqualFold(fields[0], "auto") {
+				st.AlignSelf = webAlignValue(fields[0])
+			}
+			if len(fields) > 1 && !strings.EqualFold(fields[1], "auto") {
+				st.JustifySelf = webAlignValue(fields[1])
+			}
 		}
 	}
 	if v, ok := decls["order"]; ok {
@@ -7867,6 +8586,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["min-width"]; ok {
+		st.MinWidthAuto = webCSSAuto(v)
 		if pct, valid := webPercentValue(v); valid {
 			st.MinWidthPct = pct
 		} else if px := webLength(v, st.FontPx); px > 0 {
@@ -7969,6 +8689,31 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = true, true, true, true
 		}
 	}
+	// The logical two-axis shorthands (inset-block/inset-inline) are common
+	// on absolutely positioned overlays. Their two-value form is start then end,
+	// unlike the physical top/right/bottom/left shorthand.
+	if v, ok := decls["inset-block"]; ok {
+		fields := webCSSSpaceFields(v)
+		if len(fields) > 0 {
+			end := fields[0]
+			if len(fields) > 1 {
+				end = fields[1]
+			}
+			st.Top, st.HasTop = webLength(fields[0], st.FontPx), !webCSSAuto(fields[0])
+			st.Bottom, st.HasBottom = webLength(end, st.FontPx), !webCSSAuto(end)
+		}
+	}
+	if v, ok := decls["inset-inline"]; ok {
+		fields := webCSSSpaceFields(v)
+		if len(fields) > 0 {
+			end := fields[0]
+			if len(fields) > 1 {
+				end = fields[1]
+			}
+			st.Left, st.HasLeft = webLength(fields[0], st.FontPx), !webCSSAuto(fields[0])
+			st.Right, st.HasRight = webLength(end, st.FontPx), !webCSSAuto(end)
+		}
+	}
 	for _, edge := range []struct {
 		key  string
 		val  *float64
@@ -8040,32 +8785,11 @@ func webCSSSpaceFields(value string) []string {
 // recipe (`repeat(auto-fit, minmax(220px, 1fr))`); its count is not known until
 // the layout measures the page.
 func webGridTemplate(value string) (int, float64) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || value == "none" || value == "subgrid" {
-		return 0, 0
+	_, count, repeat, auto := webGridTrackList(value)
+	if repeat > 0 {
+		return 0, webGridTrackDefinitePx(auto, 0)
 	}
-	if strings.HasPrefix(value, "repeat(") {
-		open := len("repeat")
-		if end := webCSSParenEnd(value, open); end > open {
-			parts := webSplitTopLevel(value[open+1:end], ',')
-			if len(parts) >= 2 {
-				count := strings.TrimSpace(parts[0])
-				min := webGridTrackMin(strings.TrimSpace(parts[1]))
-				if count == "auto-fit" || count == "auto-fill" {
-					return 0, min
-				}
-				if n, err := strconv.Atoi(count); err == nil && n >= 1 && n <= 6 {
-					return n, min
-				}
-			}
-		}
-		return 0, 0
-	}
-	tracks := len(webCSSSpaceFields(value))
-	if tracks >= 1 && tracks <= 6 {
-		return tracks, 0
-	}
-	return 0, 0
+	return count, 0
 }
 
 // webGridTracks reads the used width and fr weight of each explicit grid
@@ -8074,66 +8798,174 @@ func webGridTemplate(value string) (int, float64) {
 // Percentages and content-sized tracks have no width until layout, so they
 // are treated as one fr.
 func webGridTracks(value string) (weights, bases [6]float64, count int) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" || value == "none" || value == "subgrid" {
+	specs, count, repeat, _ := webGridTrackList(value)
+	if repeat > 0 {
 		return weights, bases, 0
 	}
-	appendTrack := func(track string) {
-		if count >= 6 {
-			return
-		}
-		weight, base := webGridTrackSpec(track)
-		if weight == 0 && base == 0 {
-			weight = 1
-		}
-		weights[count], bases[count] = weight, base
-		count++
-	}
-	if strings.HasPrefix(value, "repeat(") {
-		open := len("repeat")
-		if end := webCSSParenEnd(value, open); end > open {
-			parts := webSplitTopLevel(value[open+1:end], ',')
-			if len(parts) >= 2 {
-				if n, err := strconv.Atoi(strings.TrimSpace(parts[0])); err == nil && n >= 1 && n <= 6 {
-					for i := 0; i < n; i++ {
-						appendTrack(parts[1])
-					}
-				}
-			}
-		}
-		return weights, bases, count
-	}
-	for _, track := range webCSSSpaceFields(value) {
-		appendTrack(track)
+	for i := 0; i < count; i++ {
+		weights[i], bases[i] = webGridTrackWeightBase(specs[i])
 	}
 	return weights, bases, count
 }
 
-// webGridTrackSpec resolves one track to an fr weight and a fixed pixel base.
-func webGridTrackSpec(track string) (weight, base float64) {
+// webGridTrackList reads a full track list, expanding fixed repeats and
+// keeping an auto-fill/auto-fit repeat as a single definition for the sizing
+// pass. A page can combine a fixed repeat with ordinary tracks; both use the
+// same six-track cap as the rest of the reader.
+func webGridTrackList(value string) (tracks [6]webGridTrackSpec, count, repeat int, auto webGridTrackSpec) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" || value == "none" || value == "subgrid" {
+		return tracks, 0, 0, webGridTrackSpec{}
+	}
+	appendTrack := func(track string) {
+		if count >= len(tracks) {
+			return
+		}
+		tracks[count] = webGridTrackFromValue(track)
+		count++
+	}
+	for _, field := range webCSSSpaceFields(value) {
+		field = strings.TrimSpace(field)
+		if !strings.HasPrefix(field, "repeat(") {
+			appendTrack(field)
+			continue
+		}
+		open := len("repeat")
+		end := webCSSParenEnd(field, open)
+		if end <= open {
+			continue
+		}
+		parts := webSplitTopLevel(field[open+1:end], ',')
+		if len(parts) < 2 {
+			continue
+		}
+		countText := strings.TrimSpace(parts[0])
+		repeated := webGridTrackFromValue(parts[1])
+		if countText == "auto-fill" || countText == "auto-fit" {
+			repeat, auto = 1, repeated
+			if countText == "auto-fit" {
+				repeat = 2
+			}
+			continue
+		}
+		n, err := strconv.Atoi(countText)
+		if err != nil || n < 1 {
+			continue
+		}
+		for i := 0; i < n; i++ {
+			if count >= len(tracks) {
+				break
+			}
+			tracks[count] = repeated
+			count++
+		}
+	}
+	return tracks, count, repeat, auto
+}
+
+// webGridTrackFromValue parses one track, including the minmax forms modern
+// responsive grids use. Plain lengths are both the min and max; an fr track
+// has an automatic minimum and a flexible maximum.
+func webGridTrackFromValue(track string) webGridTrackSpec {
 	track = strings.ToLower(strings.TrimSpace(track))
+	if track == "" {
+		return webGridTrackSpec{MinAuto: true, MaxAuto: true}
+	}
 	if strings.HasPrefix(track, "minmax(") {
 		open := len("minmax")
-		if end := webCSSParenEnd(track, open); end > open {
+		end := webCSSParenEnd(track, open)
+		if end > open {
 			parts := webSplitTopLevel(track[open+1:end], ',')
-			if len(parts) >= 2 {
-				base = webGridTrackMin(parts[0])
-				weight = webGridFr(parts[1])
-				if base == 0 && weight == 0 {
-					weight = 1
-				}
-				return weight, base
+			if len(parts) == 2 {
+				return webGridMinMaxSpec(parts[0], parts[1])
 			}
 		}
-		return 0, 0
+		return webGridTrackSpec{MinAuto: true, MaxAuto: true}
 	}
-	if weight = webGridFr(track); weight > 0 {
-		return weight, 0
+	if strings.HasPrefix(track, "fit-content(") {
+		open := len("fit-content")
+		if end := webCSSParenEnd(track, open); end > open {
+			inner := strings.TrimSpace(track[open+1 : end])
+			spec := webGridTrackSpec{MinAuto: true}
+			spec.Max, spec.MaxPct = webGridLengthBounds(inner)
+			return spec
+		}
+	}
+	if fr := webGridFr(track); fr > 0 {
+		return webGridTrackSpec{MinAuto: true, MaxFr: fr}
 	}
 	if track == "auto" || track == "min-content" || track == "max-content" {
+		return webGridTrackSpec{MinAuto: true, MaxAuto: true}
+	}
+	px, pct := webGridLengthBounds(track)
+	if px <= 0 && pct <= 0 {
+		return webGridTrackSpec{MinAuto: true, MaxAuto: true}
+	}
+	return webGridTrackSpec{Min: px, Max: px, MinPct: pct, MaxPct: pct}
+}
+
+func webGridMinMaxSpec(minValue, maxValue string) webGridTrackSpec {
+	minValue = strings.ToLower(strings.TrimSpace(minValue))
+	maxValue = strings.ToLower(strings.TrimSpace(maxValue))
+	spec := webGridTrackSpec{}
+	if minValue == "auto" || minValue == "min-content" || minValue == "max-content" {
+		spec.MinAuto = true
+	} else {
+		spec.Min, spec.MinPct = webGridLengthBounds(minValue)
+	}
+	if maxValue == "auto" || maxValue == "min-content" || maxValue == "max-content" {
+		spec.MaxAuto = true
+	} else if fr := webGridFr(maxValue); fr > 0 {
+		spec.MaxFr = fr
+	} else {
+		spec.Max, spec.MaxPct = webGridLengthBounds(maxValue)
+	}
+	return spec
+}
+
+// webGridLengthBounds returns a length as px or percentage. calc() values
+// that can be resolved without a container are handled by webLength.
+func webGridLengthBounds(value string) (px, pct float64) {
+	value = strings.TrimSpace(value)
+	if p, ok := webPercentValue(value); ok {
+		return 0, p
+	}
+	return webLength(value, 16), 0
+}
+
+// webGridTrackWeightBase keeps the compact legacy representation in sync with
+// a spec. The full spec is authoritative for layout; these arrays remain the
+// fallback for callers that only know about (weight, base).
+func webGridTrackWeightBase(spec webGridTrackSpec) (weight, base float64) {
+	if spec.MaxFr > 0 {
+		return spec.MaxFr, spec.Min
+	}
+	if spec.MinAuto && spec.MaxAuto {
 		return 1, 0
 	}
-	return 0, webGridTrackMin(track)
+	if spec.MinAuto && spec.Max > 0 {
+		return 0, spec.Max
+	}
+	return 0, math.Max(spec.Min, spec.Max)
+}
+
+// webGridTrackDefinitePx is the definite (non-fr) size used to count an
+// auto-fill/auto-fit repetition. An fr-only track intentionally falls back to
+// its minimum; when that minimum is automatic the track occupies one slot.
+func webGridTrackDefinitePx(spec webGridTrackSpec, basis float64) float64 {
+	if spec.MinPct > 0 && basis > 0 {
+		return basis * spec.MinPct / 100
+	}
+	if spec.Min > 0 {
+		return spec.Min
+	}
+	if spec.MinAuto && spec.Max > 0 && !spec.MaxAuto {
+		return spec.Max
+	}
+	if spec.MaxPct > 0 && basis > 0 {
+		return basis * spec.MaxPct / 100
+	}
+	return 0
 }
 
 func webGridFr(track string) float64 {
@@ -8168,6 +9000,334 @@ func webGridTrackMin(track string) float64 {
 		return 0
 	}
 	return webLength(track, 16)
+}
+
+// webGridLine reads one grid placement line: `3`, `-1`, `auto`, or
+// `span 2`. A span returns (0, n); a line returns (n, 0).
+func webGridLine(value string) (line, span int) {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 2 && fields[0] == "span" {
+		if n, err := strconv.Atoi(fields[1]); err == nil && n > 0 {
+			return 0, n
+		}
+		return 0, 0
+	}
+	if len(fields) == 1 && fields[0] != "auto" {
+		if n, err := strconv.Atoi(fields[0]); err == nil && n != 0 {
+			return n, 0
+		}
+	}
+	return 0, 0
+}
+
+func webGridPlacementParts(value string) []string {
+	parts := webSplitTopLevel(strings.TrimSpace(value), '/')
+	if len(parts) > 2 {
+		return nil
+	}
+	return parts
+}
+
+// webGridAreaStrings extracts the quoted row strings of
+// `grid-template-areas`. CSS area names are case-sensitive, so this keeps the
+// authored casing while ignoring the whitespace and line breaks between rows.
+func webGridAreaStrings(value string) []string {
+	var rows []string
+	for i := 0; i < len(value) && len(rows) < 6; i++ {
+		quote := value[i]
+		if quote != '"' && quote != '\'' {
+			continue
+		}
+		start := i + 1
+		j := start
+		for ; j < len(value); j++ {
+			if value[j] == '\\' {
+				j++
+				continue
+			}
+			if value[j] == quote {
+				break
+			}
+		}
+		if j <= len(value) {
+			rows = append(rows, value[start:j])
+		}
+		i = j
+	}
+	return rows
+}
+
+// webGridTemplateAreas parses a `grid-template-areas` matrix. The reader caps
+// grids at six tracks, so a larger authored matrix is truncated rather than
+// growing the page layout budget.
+func webGridTemplateAreas(value string) *webGridAreas {
+	if strings.EqualFold(strings.TrimSpace(value), "none") {
+		return nil
+	}
+	rows := webGridAreaStrings(value)
+	if len(rows) == 0 {
+		return nil
+	}
+	areas := &webGridAreas{Rows: len(rows)}
+	for r, row := range rows {
+		fields := strings.Fields(row)
+		for c, name := range fields {
+			if c >= 6 {
+				break
+			}
+			if strings.Trim(name, ".") == "" {
+				name = ""
+			}
+			areas.Names[r][c] = name
+			if c+1 > areas.Cols {
+				areas.Cols = c + 1
+			}
+		}
+	}
+	if areas.Cols == 0 {
+		return nil
+	}
+	return areas
+}
+
+// webGridAreaBounds resolves one named area to inclusive 0-based cells turned
+// into 1-based grid lines. CSS requires named areas to be rectangular; taking
+// the bounding box also keeps a malformed matrix from dropping the item.
+func (g *webGridAreas) bounds(name string) (rowStart, rowEnd, colStart, colEnd int, ok bool) {
+	if g == nil || name == "" {
+		return 0, 0, 0, 0, false
+	}
+	minR, maxR := g.Rows, -1
+	minC, maxC := g.Cols, -1
+	for r := 0; r < g.Rows; r++ {
+		for c := 0; c < g.Cols; c++ {
+			if g.Names[r][c] != name {
+				continue
+			}
+			if r < minR {
+				minR = r
+			}
+			if r > maxR {
+				maxR = r
+			}
+			if c < minC {
+				minC = c
+			}
+			if c > maxC {
+				maxC = c
+			}
+		}
+	}
+	if maxR < 0 || maxC < 0 {
+		return 0, 0, 0, 0, false
+	}
+	return minR + 1, maxR + 2, minC + 1, maxC + 2, true
+}
+
+// webApplyGridArea reads `grid-area`. A single custom identifier names a
+// `grid-template-areas` cell; the four-line form is the row-start /
+// column-start / row-end / column-end shorthand.
+func webApplyGridArea(st *webStyle, value string) {
+	st.GridArea = ""
+	st.GridRowStart, st.GridRowEnd, st.GridRowSpan = 0, 0, 0
+	st.GridColumnStart, st.GridColumnEnd, st.GridColumnSpan = 0, 0, 0
+	parts := webSplitTopLevel(strings.TrimSpace(value), '/')
+	if len(parts) == 1 {
+		name := strings.TrimSpace(parts[0])
+		line, span := webGridLine(name)
+		if name != "" && line == 0 && span == 0 && !strings.EqualFold(name, "auto") {
+			st.GridArea = name
+			return
+		}
+		st.GridRowStart, st.GridRowEnd, st.GridRowSpan = line, 0, span
+		return
+	}
+	if len(parts) != 4 {
+		return
+	}
+	rowStart, rowSpan := webGridLine(parts[0])
+	colStart, colSpan := webGridLine(parts[1])
+	rowEnd, rowEndSpan := webGridLine(parts[2])
+	colEnd, colEndSpan := webGridLine(parts[3])
+	st.GridRowStart, st.GridColumnStart = rowStart, colStart
+	st.GridRowEnd, st.GridColumnEnd = rowEnd, colEnd
+	if rowSpan == 0 {
+		rowSpan = rowEndSpan
+	}
+	if colSpan == 0 {
+		colSpan = colEndSpan
+	}
+	st.GridRowSpan, st.GridColumnSpan = rowSpan, colSpan
+}
+
+// webApplyGridAutoFlow reads row/column flow and the optional dense packing
+// hint. Both axes use the same occupancy map; only the search order changes.
+func webApplyGridAutoFlow(st *webStyle, value string) {
+	st.GridAutoFlow, st.GridDense = 0, false
+	for _, field := range strings.Fields(strings.ToLower(strings.TrimSpace(value))) {
+		switch field {
+		case "column":
+			st.GridAutoFlow = 1
+		case "dense":
+			st.GridDense = true
+		case "row":
+			st.GridAutoFlow = 0
+		}
+	}
+}
+
+func webSupportsGridAutoFlow(value string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 || len(fields) > 2 {
+		return false
+	}
+	seenAxis, seenDense := false, false
+	for _, field := range fields {
+		switch field {
+		case "row", "column":
+			if seenAxis || seenDense {
+				return false
+			}
+			seenAxis = true
+		case "dense":
+			if seenDense {
+				return false
+			}
+			seenDense = true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func webSupportsGridAreas(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.EqualFold(value, "none") || len(webGridAreaStrings(value)) > 0
+}
+
+func webSupportsGridArea(value string) bool {
+	parts := webSplitTopLevel(strings.TrimSpace(value), '/')
+	if len(parts) == 1 {
+		return true
+	}
+	if len(parts) != 4 {
+		return false
+	}
+	for _, part := range parts {
+		if !webSupportsGridPlacement(part) {
+			return false
+		}
+	}
+	return true
+}
+
+// webApplyGridColumn reads the `grid-column` shorthand. It keeps the three
+// forms card CSS uses: `span 2`, a start line, and `start / end` or
+// `start / span n`.
+func webApplyGridColumn(st *webStyle, value string) {
+	st.GridColumnStart, st.GridColumnEnd, st.GridColumnSpan = 0, 0, 0
+	parts := webGridPlacementParts(value)
+	if len(parts) == 0 || len(parts) > 2 {
+		return
+	}
+	start, startSpan := webGridLine(parts[0])
+	st.GridColumnStart = start
+	if startSpan > 0 {
+		st.GridColumnSpan = startSpan
+	}
+	if len(parts) == 1 {
+		return
+	}
+	end, endSpan := webGridLine(parts[1])
+	st.GridColumnEnd = end
+	if endSpan > 0 {
+		st.GridColumnSpan = endSpan
+	}
+}
+
+func webApplyGridColumnStart(st *webStyle, value string) {
+	line, span := webGridLine(value)
+	if span > 0 {
+		st.GridColumnStart, st.GridColumnEnd, st.GridColumnSpan = 0, 0, span
+		return
+	}
+	st.GridColumnStart = line
+}
+
+// webApplyGridRow mirrors the column shorthand on the block axis.
+func webApplyGridRow(st *webStyle, value string) {
+	st.GridRowStart, st.GridRowEnd, st.GridRowSpan = 0, 0, 0
+	parts := webGridPlacementParts(value)
+	if len(parts) == 0 || len(parts) > 2 {
+		return
+	}
+	start, startSpan := webGridLine(parts[0])
+	st.GridRowStart = start
+	if startSpan > 0 {
+		st.GridRowSpan = startSpan
+	}
+	if len(parts) == 1 {
+		return
+	}
+	end, endSpan := webGridLine(parts[1])
+	st.GridRowEnd = end
+	if endSpan > 0 {
+		st.GridRowSpan = endSpan
+	}
+}
+
+func webApplyGridRowStart(st *webStyle, value string) {
+	line, span := webGridLine(value)
+	if span > 0 {
+		st.GridRowStart, st.GridRowEnd, st.GridRowSpan = 0, 0, span
+		return
+	}
+	st.GridRowStart = line
+}
+
+func webApplyGridRowEnd(st *webStyle, value string) {
+	line, span := webGridLine(value)
+	if span > 0 {
+		st.GridRowSpan = span
+		return
+	}
+	st.GridRowEnd = line
+}
+
+func webApplyGridColumnEnd(st *webStyle, value string) {
+	line, span := webGridLine(value)
+	if span > 0 {
+		st.GridColumnSpan = span
+		return
+	}
+	st.GridColumnEnd = line
+}
+
+func webSupportsGridPlacement(value string) bool {
+	parts := webGridPlacementParts(value)
+	if len(parts) == 0 || len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		fields := strings.Fields(strings.ToLower(strings.TrimSpace(part)))
+		if len(fields) == 2 && fields[0] == "span" {
+			if n, err := strconv.Atoi(fields[1]); err == nil && n > 0 {
+				continue
+			}
+			return false
+		}
+		if len(fields) != 1 {
+			return false
+		}
+		if fields[0] == "auto" {
+			continue
+		}
+		if n, err := strconv.Atoi(fields[0]); err != nil || n == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // webFlexBasis reads flex-basis, keeping a percentage unresolved: the layout
@@ -8284,12 +9444,33 @@ func webAlignValue(value string) int {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "center":
 		return webItemCenter
-	case "flex-end", "end":
+	case "flex-end", "end", "right", "self-end":
 		return webItemEnd
-	case "stretch":
+	case "stretch", "normal":
 		return webItemStretch
 	}
 	return webItemStart
+}
+
+// webContentAlignValue maps align-content's block-axis distribution. `normal`
+// behaves as `stretch` for a grid container, and flex-start/flex-end are the
+// flow-relative aliases of start/end.
+func webContentAlignValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "center":
+		return webContentCenter
+	case "end", "flex-end":
+		return webContentEnd
+	case "space-between":
+		return webContentBetween
+	case "space-around":
+		return webContentAround
+	case "space-evenly":
+		return webContentEvenly
+	case "normal", "stretch":
+		return webContentStretch
+	}
+	return webContentStart
 }
 
 // --- HTML parsing ---------------------------------------------------------
@@ -8407,23 +9588,34 @@ type webTableParse struct {
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
 //
-// Every style sheet is in force for the whole document, as in a browser: the
-// linked sheets (extraCSS) and the page's own <style> blocks are gathered
-// before the walk and parsed once. The walk used to add each <style> block
+// Every style sheet is in force for the whole document, as in a browser. The
+// linked sheets and the page's own <style> blocks are gathered before the
+// walk and parsed once. The walk used to add each <style> block
 // when it reached it, so nothing before a block saw it — not even <html>, so
 // a `:root { --accent: … }` in the head reached no element — and re-parsed the
 // whole accumulated sheet at every block, which on a page with dozens of them
 // was quadratic.
 func parseWebPage(source, extraCSS, baseURL string) *webDocument {
+	return parseWebPageWithLinkedSheets(source, extraCSS, baseURL, nil)
+}
+
+func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []webFetchedSheet) *webDocument {
 	doc := &webDocument{
-		URL:        baseURL,
-		Paper:      sdl.Color{R: 250, G: 251, B: 253, A: 255},
-		Text:       sdl.Color{R: 28, G: 32, B: 38, A: 255},
-		Containers: make(map[int]webContainerInfo),
+		URL:              baseURL,
+		Paper:            sdl.Color{R: 250, G: 251, B: 253, A: 255},
+		Text:             sdl.Color{R: 28, G: 32, B: 38, A: 255},
+		Containers:       make(map[int]webContainerInfo),
+		FlexBoxDepth:     make(map[int]int),
+		FlexItemBoxDepth: make(map[int]map[int]int),
+		FlexScrollX:      make(map[int]bool),
 	}
 	p := &webParser{doc: doc}
 	p.css.WriteString(extraCSS)
-	webCollectInlineCSS(source, &p.css)
+	if len(sheets) > 0 {
+		webCollectOrderedCSS(source, sheets, &p.css)
+	} else {
+		webCollectInlineCSS(source, &p.css)
+	}
 	if p.css.Len() > 0 {
 		p.rules = parseWebCSS(p.css.String())
 	}
@@ -8464,58 +9656,82 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 // makes most real pages look like themselves; a sheet or set of sheets past the
 // budget contributes its complete leading rules.
 func fetchWebStylesheets(source string, base *url.URL) string {
+	var out strings.Builder
+	for _, sheet := range fetchWebStylesheetBlocks(source, base) {
+		out.WriteString(sheet.css)
+	}
+	return out.String()
+}
+
+// webFetchedSheet keeps a linked sheet at its source position so it can be
+// combined with inline style blocks in the same cascade order as the page.
+type webFetchedSheet struct {
+	start int
+	css   string
+}
+
+func fetchWebStylesheetBlocks(source string, base *url.URL) []webFetchedSheet {
 	if base == nil {
-		return ""
+		return nil
 	}
 	sheets := webLinkedStylesheets(source, base)
 	if len(sheets) == 0 {
-		return ""
+		return nil
 	}
-	// Fetch the sheets side by side. One slow sheet used to hold up the whole
-	// page load, and on handheld wifi three sequential timeouts could keep the
-	// reader on "Loading ..." for the better part of a minute.
-	bodies := make([]string, len(sheets))
-	var wg sync.WaitGroup
+	// Fetch in bounded batches. A modern page may link dozens of sheets; all
+	// of their full bodies at once would briefly use much more memory than the
+	// CSS we can apply. Stop scheduling after the CSS budget or deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	pageURL := base.String()
-	for i, sheet := range sheets {
-		wg.Add(1)
-		go func(i int, address string) {
-			defer wg.Done()
-			// Each sheet is cut to the whole budget as it lands, so twelve
-			// sheets with their imports are never all held at full size.
-			bodies[i] = webCSSBudgetPrefix(fetchWebStylesheet(pageURL, address), webMaxLinkedCSSBytes)
-		}(i, sheet.url)
+	var result []webFetchedSheet
+	used := 0
+	const batchSize = 8
+	for first := 0; first < len(sheets) && ctx.Err() == nil && used < webMaxLinkedCSSBytes; first += batchSize {
+		last := min(first+batchSize, len(sheets))
+		bodies := make([]string, last-first)
+		var wg sync.WaitGroup
+		for i := first; i < last; i++ {
+			wg.Add(1)
+			go func(i int, address string) {
+				defer wg.Done()
+				bodies[i-first] = webCSSBudgetPrefix(fetchWebStylesheetContext(ctx, pageURL, address), webMaxLinkedCSSBytes)
+			}(i, sheets[i].url)
+		}
+		wg.Wait()
+		for offset, css := range bodies {
+			remaining := webMaxLinkedCSSBytes - used - 1
+			if css == "" || remaining <= 0 {
+				continue
+			}
+			i := first + offset
+			media := sheets[i].media
+			if media != "" {
+				// The wrapper's own bytes come out of the same budget.
+				remaining -= len(media) + 16
+			}
+			// A sheet that does not fit whole still gives its complete leading
+			// rules: the base and layout rules sit at the top of a theme.
+			css = webCSSBudgetPrefix(css, remaining)
+			if css == "" {
+				continue
+			}
+			var out strings.Builder
+			if media != "" {
+				out.WriteString("@media ")
+				out.WriteString(media)
+				out.WriteString(" {\n")
+				out.WriteString(css)
+				out.WriteString("\n}\n")
+			} else {
+				out.WriteString(css)
+				out.WriteString("\n")
+			}
+			result = append(result, webFetchedSheet{start: sheets[i].start, css: out.String()})
+			used += out.Len()
+		}
 	}
-	wg.Wait()
-	var out strings.Builder
-	for i, css := range bodies {
-		remaining := webMaxLinkedCSSBytes - out.Len() - 1
-		if css == "" || remaining <= 0 {
-			continue
-		}
-		media := sheets[i].media
-		if media != "" {
-			// The wrapper's own bytes come out of the same budget.
-			remaining -= len(media) + 16
-		}
-		// A sheet that does not fit whole still gives its complete leading
-		// rules: the base and layout rules sit at the top of a theme.
-		css = webCSSBudgetPrefix(css, remaining)
-		if css == "" {
-			continue
-		}
-		if media != "" {
-			out.WriteString("@media ")
-			out.WriteString(media)
-			out.WriteString(" {\n")
-			out.WriteString(css)
-			out.WriteString("\n}\n")
-			continue
-		}
-		out.WriteString(css)
-		out.WriteString("\n")
-	}
-	return out.String()
+	return result
 }
 
 // webLinkedSheet is one <link> stylesheet: its absolute address and the media
@@ -8523,6 +9739,7 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 type webLinkedSheet struct {
 	url   string
 	media string
+	start int
 }
 
 // webLinkedStylesheets lists the page's linked stylesheets in document order,
@@ -8613,7 +9830,7 @@ func webLinkedStylesheets(source string, base *url.URL) []webLinkedSheet {
 			continue
 		}
 		seen[abs.String()] = true
-		sheets = append(sheets, webLinkedSheet{url: abs.String(), media: media})
+		sheets = append(sheets, webLinkedSheet{url: abs.String(), media: media, start: start})
 	}
 	return sheets
 }
@@ -8632,7 +9849,11 @@ func webLinkScanRawTag(source string, start int) string {
 }
 
 func fetchWebStylesheet(pageURL, address string) string {
-	return fetchWebStylesheetDepth(pageURL, address, map[string]bool{}, 0)
+	return fetchWebStylesheetContext(context.Background(), pageURL, address)
+}
+
+func fetchWebStylesheetContext(parent context.Context, pageURL, address string) string {
+	return fetchWebStylesheetDepth(parent, pageURL, address, map[string]bool{}, 0)
 }
 
 // fetchWebStylesheetDepth fetches one sheet and folds in the sheets it imports.
@@ -8640,9 +9861,9 @@ func fetchWebStylesheet(pageURL, address string) string {
 // left those pages with only their last sheet. Imports go before the importing
 // sheet's own rules, as the cascade requires, and a media-qualified import is
 // wrapped in @media so the reader's existing media evaluation applies.
-func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, depth int) string {
+func fetchWebStylesheetDepth(parent context.Context, pageURL, address string, seen map[string]bool, depth int) string {
 	address = strings.TrimSpace(address)
-	if address == "" || seen[address] || depth > webMaxStyleImportDepth || len(seen) >= webMaxStyleImports {
+	if parent.Err() != nil || address == "" || seen[address] || depth > webMaxStyleImportDepth || len(seen) >= webMaxStyleImports {
 		return ""
 	}
 	// A stylesheet from an ad or analytics host is never part of what the
@@ -8652,7 +9873,7 @@ func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, dept
 		return ""
 	}
 	seen[address] = true
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
@@ -8667,6 +9888,7 @@ func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, dept
 		return ""
 	}
 	defer resp.Body.Close()
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ""
 	}
@@ -8685,13 +9907,13 @@ func fetchWebStylesheetDepth(pageURL, address string, seen map[string]bool, dept
 		return ""
 	}
 	css = webRebaseCSSURLs(css, resp.Request.URL)
-	return webExpandCSSImports(css, resp.Request.URL, pageURL, seen, depth)
+	return webExpandCSSImports(parent, css, resp.Request.URL, pageURL, seen, depth)
 }
 
 // webExpandCSSImports prepends the sheets imported by css. It is shared by
 // linked stylesheets and inline <style> blocks so both follow the same ad
 // blocking, redirects, cookies, depth and cycle rules.
-func webExpandCSSImports(css string, base *url.URL, pageURL string, seen map[string]bool, depth int) string {
+func webExpandCSSImports(parent context.Context, css string, base *url.URL, pageURL string, seen map[string]bool, depth int) string {
 	if base == nil || depth >= webMaxStyleImportDepth || len(seen) >= webMaxStyleImports {
 		return css
 	}
@@ -8711,7 +9933,15 @@ func webExpandCSSImports(css string, base *url.URL, pageURL string, seen map[str
 		if imported.Len() >= webMaxLinkedCSSBytes {
 			break // the page could not use more than this anyway
 		}
-		child := fetchWebStylesheetDepth(pageURL, abs.String(), seen, depth+1)
+		child := fetchWebStylesheetDepth(parent, pageURL, abs.String(), seen, depth+1)
+		if child == "" {
+			continue
+		}
+		remaining := webMaxLinkedCSSBytes - imported.Len() - 1
+		if imp.media != "" {
+			remaining -= len(imp.media) + 16
+		}
+		child = webCSSBudgetPrefix(child, remaining)
 		if child == "" {
 			continue
 		}
@@ -8995,6 +10225,9 @@ func (p *webParser) addPlaceholderBlock(name, attrs string) {
 		return
 	}
 	style := p.computeStyle(webNewElement(name, attrs), attrs)
+	if style.Hidden {
+		return
+	}
 	w := htmlTagAttributeFloat(attrs, "width")
 	h := htmlTagAttributeFloat(attrs, "height")
 	if style.Width <= 0 && style.WidthPct <= 0 && w > 0 {
@@ -9033,7 +10266,7 @@ func (p *webParser) addPlaceholderBlock(name, attrs string) {
 
 func webBlockElement(tag string) bool {
 	switch tag {
-	case "body", "p", "div", "section", "article", "main", "header", "footer",
+	case "html", "body", "p", "div", "section", "article", "main", "header", "footer",
 		"aside", "nav", "form", "fieldset", "figure", "figcaption", "address",
 		"dl", "dt", "dd", "li", "tr", "details", "summary", "blockquote", "pre",
 		"h1", "h2", "h3", "h4", "h5", "h6", "table", "caption", "thead",
@@ -9062,6 +10295,31 @@ func webCollectInlineCSS(source string, b *strings.Builder) {
 		if inner != "" {
 			b.WriteString("\n")
 			b.WriteString(inner)
+		}
+	}
+}
+
+// webCollectOrderedCSS combines linked and inline CSS at their positions in
+// the source. Rules with equal specificity then follow the page's cascade
+// instead of giving every inline block priority over every linked sheet.
+func webCollectOrderedCSS(source string, sheets []webFetchedSheet, b *strings.Builder) {
+	inline := webInlineCSSBlocks(source)
+	for i, j := 0, 0; i < len(inline) || j < len(sheets); {
+		var css string
+		if j < len(sheets) && (i >= len(inline) || sheets[j].start < inline[i].start) {
+			css = sheets[j].css
+			j++
+		} else {
+			css = inline[i].css
+			i++
+		}
+		if b.Len()+1 >= webMaxCSSBytes {
+			break
+		}
+		css = webCSSBudgetPrefix(css, webMaxCSSBytes-b.Len()-1)
+		if css != "" {
+			b.WriteString("\n")
+			b.WriteString(css)
 		}
 	}
 }
@@ -9140,7 +10398,7 @@ func webExpandInlineCSSImports(source string, pageURL *url.URL) string {
 		// Each block gets the same fresh budget a linked sheet gets, so one
 		// block's imports cannot starve another's.
 		seen := make(map[string]bool)
-		expanded := webExpandCSSImports(block.css, pageURL, pageURL.String(), seen, 0)
+		expanded := webExpandCSSImports(context.Background(), block.css, pageURL, pageURL.String(), seen, 0)
 		out.WriteString(source[last:block.start])
 		out.WriteString(expanded)
 		last = block.end
@@ -9250,6 +10508,15 @@ func (p *webParser) walk(source string) {
 			p.endTag(name)
 			continue
 		}
+		// Raw elements bypass startTag. When their parent is hidden, consume
+		// their bodies without creating a placeholder or a media card.
+		if p.topStyle().Hidden && (name == "title" || name == "style" || webRawTextElement(name)) {
+			_, i, _ = webRawElement(source, i, name)
+			continue
+		}
+		if p.topStyle().Hidden && webPlaceholderElement(name) {
+			continue
+		}
 		if webPlaceholderElement(name) {
 			p.addPlaceholderBlock(name, attrs)
 			if !selfClose && !webVoidElement(name) {
@@ -9301,9 +10568,6 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "body" || name == "html" {
 		p.inHead = false
 	}
-	if name == "picture" {
-		p.pictures = append(p.pictures, webPictureFrame{})
-	}
 	el := webNewElement(name, attrs)
 	if p.selTreePos < len(p.selTree) {
 		el.node = p.selTree[p.selTreePos]
@@ -9311,6 +10575,24 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	}
 	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
+	// A hidden subtree has no layout boxes or controls. Keeping only its
+	// element frames lets matching end tags restore the visible parent, while
+	// descendants (including form fields) cannot leak into the page.
+	if style.Hidden {
+		p.pendingBefore, p.pendingBeforeStyle = "", webStyle{}
+		// Hidden inputs still travel with a visible form submission even when
+		// a site parks them inside a display:none wrapper.
+		if name == "input" && strings.EqualFold(strings.TrimSpace(htmlTagAttribute(attrs, "type")), "hidden") && p.form.ID != 0 {
+			p.addControlFromInput(attrs, style)
+		}
+		if !selfClose && !webVoidElement(name) {
+			p.stack = append(p.stack, webFrame{el: el, style: style, kind: "skip", attrs: attrs})
+		}
+		return
+	}
+	if name == "picture" {
+		p.pictures = append(p.pictures, webPictureFrame{})
+	}
 	p.prepareTableStyle(name, &style, attrs)
 	// Counter operations belong to the element that declares them and must be
 	// in force before its ::before/::marker content is resolved. Increments
@@ -9522,7 +10804,14 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		p.push(el, style, "block", attrs)
 		return
 	}
-	if webBlockElement(name) || style.DisplayBlock || style.Display >= webDisplayTable {
+	if style.DisplayContents {
+		p.push(el, style, "contents", attrs)
+		if selfClose {
+			p.endTag(name)
+		}
+		return
+	}
+	if (webBlockElement(name) && !style.DisplayInline) || style.DisplayBlock || style.Display >= webDisplayTable {
 		p.flush()
 		p.push(el, style, "block", attrs)
 		if selfClose {
@@ -9701,6 +10990,24 @@ func (p *webParser) endTableColGroup() {
 }
 
 func (p *webParser) endTag(name string) {
+	if len(p.stack) > 0 && p.topStyle().Hidden {
+		for i := len(p.stack) - 1; i >= 0; i-- {
+			if p.stack[i].el.tag != name {
+				continue
+			}
+			if p.stack[i].style.Hidden {
+				p.stack = p.stack[:i]
+				return
+			}
+			// A malformed hidden subtree may end at an outer visible tag.
+			// Drop its inert frames, then close that visible tag normally.
+			p.stack = p.stack[:i+1]
+			break
+		}
+		if p.topStyle().Hidden {
+			return
+		}
+	}
 	if name == "colgroup" {
 		p.endTableColGroup()
 	}
@@ -9761,7 +11068,7 @@ func (p *webParser) endTag(name string) {
 				p.addTextStyled(generated.Text, generated.Style)
 			}
 		}
-		if p.stack[i].kind == "block" || p.stack[i].kind == "list" {
+		if p.stack[i].kind == "block" || p.stack[i].kind == "list" || p.stack[i].kind == "contents" {
 			p.flush()
 		}
 		if name == "head" {
@@ -9841,35 +11148,68 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 	// its items; nested elements belong to the same item. Text-only children
 	// are tagged by ensureBlock instead, which is why the counter starts at
 	// zero rather than one.
-	if kind != "skip" && len(p.flexStack) > 0 {
+	if kind != "skip" && kind != "contents" && len(p.flexStack) > 0 {
 		// The container was pushed at its own depth, so its direct children
 		// are pushed one level deeper. Comparing equal depths never matched,
 		// which left every item in one column.
-		if top := &p.flexStack[len(p.flexStack)-1]; top.depth+1 == depth {
+		if top := &p.flexStack[len(p.flexStack)-1]; p.flexDirectChild(top, depth) {
 			p.flush()
 			top.item++
 			top.itemStyle = style
+			if boxID != 0 {
+				if p.doc.FlexItemBoxDepth[top.group] == nil {
+					p.doc.FlexItemBoxDepth[top.group] = make(map[int]int)
+				}
+				p.doc.FlexItemBoxDepth[top.group][top.item] = len(p.boxPath()) + 1
+			}
 		}
 	}
 	group := 0
 	if (kind == "block" || kind == "list") && (style.Display == webDisplayFlex || style.Display == webDisplayGrid || style.Display == webDisplayTableRow) {
 		p.flexSeq++
 		group = p.flexSeq
+		if p.doc.FlexBoxDepth == nil {
+			p.doc.FlexBoxDepth = make(map[int]int)
+		}
+		boxDepth := len(p.boxPath())
+		if boxID != 0 {
+			boxDepth++
+		}
+		p.doc.FlexBoxDepth[group] = boxDepth
+		p.doc.FlexScrollX[group] = style.ScrollX
 		p.flexStack = append(p.flexStack, webFlexFrame{
-			group:       group,
-			depth:       depth,
-			dir:         style.FlexDir,
-			justify:     style.Justify,
-			align:       style.AlignItems,
-			gapX:        style.GapX,
-			gapY:        style.GapY,
-			height:      webFlexContainerHeight(style),
-			wrap:        style.FlexWrap,
-			reverse:     style.FlexReverse,
-			gridCols:    style.GridCols,
-			gridMin:     style.GridMin,
-			gridWeights: style.GridWeights,
-			gridBases:   style.GridBases,
+			group:             group,
+			depth:             depth,
+			dir:               style.FlexDir,
+			justify:           style.Justify,
+			align:             style.AlignItems,
+			alignContent:      style.AlignContent,
+			justifyItems:      style.JustifyItems,
+			gapX:              style.GapX,
+			gapY:              style.GapY,
+			height:            webFlexContainerHeight(style),
+			wrap:              style.FlexWrap,
+			reverse:           style.FlexReverse,
+			gridCols:          style.GridCols,
+			gridMin:           style.GridMin,
+			gridWeights:       style.GridWeights,
+			gridBases:         style.GridBases,
+			gridRows:          style.GridRows,
+			gridRowWeights:    style.GridRowWeights,
+			gridRowBases:      style.GridRowBases,
+			gridTrackSpecs:    style.GridTrackSpecs,
+			gridRowTrackSpecs: style.GridRowTrackSpecs,
+			gridAutoRepeat:    style.GridAutoRepeat,
+			gridAutoTrack:     style.GridAutoTrack,
+			gridRowAutoRepeat: style.GridRowAutoRepeat,
+			gridRowAutoTrack:  style.GridRowAutoTrack,
+			gridAutoColSpecs:  style.GridAutoColSpecs,
+			gridAutoColCount:  style.GridAutoColCount,
+			gridAutoRowSpecs:  style.GridAutoRowSpecs,
+			gridAutoRowCount:  style.GridAutoRowCount,
+			gridAutoFlow:      style.GridAutoFlow,
+			gridDense:         style.GridDense,
+			gridAreas:         style.GridAreas,
 		})
 	}
 	frame := webFrame{
@@ -9895,7 +11235,7 @@ func (p *webParser) beginFlexLeaf(style webStyle) {
 		return
 	}
 	top := &p.flexStack[len(p.flexStack)-1]
-	if top.depth+1 != len(p.stack) {
+	if !p.flexDirectChild(top, len(p.stack)) {
 		return
 	}
 	p.flush()
@@ -9903,11 +11243,65 @@ func (p *webParser) beginFlexLeaf(style webStyle) {
 	top.itemStyle = style
 }
 
+// flexDirectChild treats display:contents wrappers as transparent to the
+// parent's item counter. The wrapper itself has no flex item box; each child
+// becomes one item just as if the wrapper were absent.
+func (p *webParser) flexDirectChild(top *webFlexFrame, depth int) bool {
+	if top == nil || depth <= top.depth {
+		return false
+	}
+	for i := top.depth + 1; i < depth; i++ {
+		if i >= len(p.stack) || !p.stack[i].style.DisplayContents {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *webParser) topStyle() webStyle {
 	if len(p.stack) == 0 {
 		return webBaseStyle()
 	}
 	return p.stack[len(p.stack)-1].style
+}
+
+// A percentage block size needs a definite containing block. An auto-height
+// parent does not make its own parent's height available to descendants.
+func (p *webParser) webContainingBlockHeight(el webElement) float64 {
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		frame := p.stack[i]
+		if frame.kind == "block" || frame.kind == "list" {
+			return webDefiniteContentHeight(frame.style)
+		}
+	}
+	if el.tag == "html" {
+		_, height := webMediaViewport()
+		return height
+	}
+	return 0
+}
+
+func webDefiniteContentHeight(st webStyle) float64 {
+	if st.Height <= 0 {
+		return 0
+	}
+	height := st.Height
+	if st.MaxHeight > 0 && height > st.MaxHeight {
+		height = st.MaxHeight
+	}
+	if height < st.MinHeight {
+		height = st.MinHeight
+	}
+	return webHeightContentTarget(st, height)
+}
+
+// Height constraints target the content rows. For border-box sizing, padding
+// is inside the authored height rather than extra space around those rows.
+func webHeightContentTarget(st webStyle, height float64) float64 {
+	if st.BoxSizing == 1 {
+		height -= st.PadTop + st.PadBot
+	}
+	return max(0, height)
 }
 
 // nearestBlockStyle is the style of the block element the text belongs to.
@@ -9950,15 +11344,20 @@ func webResetElementStyle(st *webStyle) {
 	st.BorderStyle, st.Outline, st.OutlineOffset = webBorderSolid, false, 0
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
-	st.Display, st.DisplayBlock, st.FlexDir = webDisplayBlock, false, webFlexRow
+	st.Display, st.DisplayBlock, st.DisplayContents, st.DisplayInline, st.FlexDir = webDisplayBlock, false, false, false, webFlexRow
 	st.FlexReverse = false
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
+	st.AlignContent = webContentStretch
+	st.JustifyItems, st.JustifySelf = webItemStretch, -1
 	st.GapX, st.GapY, st.FlexWrap, st.GridCols, st.GridMin = 0, 0, false, 0, 0
+	st.GridAutoColSpecs, st.GridAutoColCount = [6]webGridTrackSpec{}, 0
+	st.GridAutoRowSpecs, st.GridAutoRowCount = [6]webGridTrackSpec{}, 0
 	st.GridWeights, st.GridBases = [6]float64{}, [6]float64{}
 	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
 	st.Order = 0
 	st.Width, st.WidthPct, st.Height = 0, 0, 0
 	st.MinWidth, st.MaxWidth, st.MinWidthPct, st.MaxWidthPct = 0, 0, 0, 0
+	st.MinWidthAuto = true
 	st.MinHeight, st.MaxHeight = 0, 0
 	st.BoxSizing, st.FloatSide, st.Clear = 0, 0, 0
 	st.AspectRatio = 0
@@ -9976,9 +11375,54 @@ func webResetElementStyle(st *webStyle) {
 	st.DecorationThickness = 0
 	st.DecorationStyle = 0
 	st.VerticalAlign, st.VerticalAlignPx = 0, 0
-	st.OverflowX, st.OverflowY = 0, 0
+	st.OverflowX, st.OverflowY, st.ScrollX = 0, 0, false
+	st.TextOverflow = 0
 	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
 	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
+}
+
+// Keep the last width declaration this renderer can actually measure. A
+// browser discards an unsupported CSS value before it participates in the
+// cascade; otherwise a newer round()/unresolved calc() can erase an earlier
+// usable card width and collapse a no-shrink carousel into tiny columns.
+func webSupportedWidthValue(name, value string, em float64) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "0" || webSupportsZeroLength(v) {
+		return true
+	}
+	if v == "auto" || name == "max-width" && v == "none" {
+		return true
+	}
+	if pct, ok := webPercentValue(v); ok {
+		return pct >= 0
+	}
+	// The length parser has no containing block at this stage, so a
+	// percentage inside a function cannot be resolved as a width.
+	if strings.Contains(v, "%") {
+		return false
+	}
+	px := webLength(v, em)
+	return px > 0 && !math.IsNaN(px) && !math.IsInf(px, 0)
+}
+
+func webCascadedSupportedWidth(name string, matched []*webRule, inlineDecls, inlineImportant map[string]string, supported func(string) bool) (string, bool) {
+	if value, ok := inlineImportant[name]; ok && supported(value) {
+		return value, true
+	}
+	for i := len(matched) - 1; i >= 0; i-- {
+		if value, ok := matched[i].important[name]; ok && supported(value) {
+			return value, true
+		}
+	}
+	if value, ok := inlineDecls[name]; ok && supported(value) {
+		return value, true
+	}
+	for i := len(matched) - 1; i >= 0; i-- {
+		if value, ok := matched[i].decls[name]; ok && supported(value) {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
@@ -10090,10 +11534,27 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 			em = px
 		}
 	}
+	for _, name := range [...]string{"width", "min-width", "max-width"} {
+		if _, present := merged[name]; !present {
+			continue
+		}
+		value, ok := webCascadedSupportedWidth(name, matched, inlineDecls, inlineImportant, func(value string) bool {
+			resolved := p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
+			return webSupportedWidthValue(name, resolved, em)
+		})
+		if ok {
+			merged[name], rawDecls[name] = value, value
+		} else {
+			delete(merged, name)
+			delete(rawDecls, name)
+		}
+	}
 	for name, value := range merged {
 		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 	}
+	parentHeight := p.webContainingBlockHeight(el)
 	applyWebDecls(&st, merged)
+	webResolvePercentageHeights(&st, merged, parentHeight)
 	if st.BackgroundImage != "" {
 		st.BackgroundImage = p.webImageURL(st.BackgroundImage)
 		if st.BackgroundImage == "" {
@@ -10120,7 +11581,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		st.Backdrop, st.HasBackdrop = webGradientAverage(*st.Gradient), true
 	}
 	if needsCQ {
-		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars}
+		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars, parentHeight: parentHeight}
 		p.hasContainerUnits = true
 	}
 	// The anchor target is not a CSS property and is never inherited from a
@@ -10147,6 +11608,13 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 			"material-symbols-outlined", "material-symbols-rounded", "material-symbols-sharp":
 			st.Hidden = true
 		}
+	}
+	// An invisible fixed/absolute panel is outside normal flow. The reader
+	// cannot lay out an entire offscreen menu as a separate document layer,
+	// so letting its children occupy page rows creates a blank first screen
+	// (Wikipedia's closed navigation drawer is one example).
+	if st.Invisible && (st.Position == webPositionFixed || st.Position == webPositionAbsolute) {
+		st.Hidden = true
 	}
 	return st
 }
@@ -11045,7 +12513,7 @@ func (p *webParser) addText(raw string) {
 // of the element stack. Generated content uses the style it resolved for the
 // pseudo-element; everything else goes through addText above.
 func (p *webParser) addTextStyled(raw string, style webStyle) {
-	if p.inHead || raw == "" {
+	if p.inHead || raw == "" || style.Hidden {
 		return
 	}
 	// A field's own text belongs to the field, not to the page: a textarea's
@@ -11063,9 +12531,6 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 		if p.buttonText.Len() < 512 {
 			p.buttonText.WriteString(htmlstd.UnescapeString(raw))
 		}
-		return
-	}
-	if style.Hidden {
 		return
 	}
 	if p.textLen >= webMaxTextBytes || len(p.blocks) >= webMaxBlocks {
@@ -11558,7 +13023,10 @@ type webLayouter struct {
 	layout   *webLayout
 	rowH     int32
 	baseSize float64
-	fontAt   func(float64) *ttf.Font
+	// constraintSkip is the ancestor box prefix already resolved by the
+	// parent flex/grid layout before this item's sublayout was measured.
+	constraintSkip int
+	fontAt         func(float64) *ttf.Font
 	// fontAtStyle resolves a face including its synthetic italic style. It is
 	// separate from fontAt so metrics-only callers stay cheap.
 	fontAtStyle func(webStyle) *ttf.Font
@@ -12316,7 +13784,14 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if limit := float64(rowH * 3); lh > limit {
 					lh = limit
 				}
-				slotH = int32(lh)
+				// Rows are discrete. A line-height only slightly larger
+				// than one row should keep one row when the glyphs fit;
+				// rounding it to two rows doubles ordinary article spacing.
+				if lh <= float64(rowH)*1.25 && lineFontH+4 <= rowH {
+					slotH = rowH - 4
+				} else {
+					slotH = int32(lh)
+				}
 			}
 			emit(line, slotH)
 			firstLine = false
@@ -12385,18 +13860,27 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				// Inserting one at every style boundary pushed punctuation
 				// away from the word it belongs to ("price , bold ,").
 				leadingSpace := !preserveSpaces && (strings.HasPrefix(segment, " ") || strings.HasPrefix(segment, "\t"))
-				for wi, word := range words {
+				continuation := make([]bool, len(words))
+				transformedPart := make([]bool, len(words))
+				breakParts := 0
+				for wi := 0; wi < len(words); wi++ {
+					word := words[wi]
 					if word == "" {
 						continue
 					}
 					if lineClipped {
 						continue
 					}
+					if continuation[wi] && len(line) > 0 {
+						flushLine(false)
+					}
 					font := fontAtStyle(run.Style)
 					if font == nil {
 						continue
 					}
-					word = webTransformWord(word, run.Style.Transform)
+					if !transformedPart[wi] {
+						word = webTransformWord(word, run.Style.Transform)
+					}
 					text := l.sanitizedWord(font, word)
 					if text == "" {
 						continue
@@ -12424,6 +13908,49 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						return total
 					}
 					wordW := measure(text)
+					// CSS overflow-wrap and word-break preserve a long token by
+					// breaking it at glyph boundaries. The old fallback replaced
+					// every such URL or identifier with an ellipsis. Bound the
+					// expansion so hostile megabyte tokens cannot allocate one row
+					// per character or turn insertion into quadratic work.
+					if wrap && !preserveSpaces && run.Style.Control == nil &&
+						(run.Style.OverflowWrap != 0 || run.Style.WordBreak != 0) &&
+						len(text) <= 8192 && breakParts < 256 {
+						breakWidth := avail
+						if len(line) > 0 && (wordW > avail || run.Style.WordBreak != 0) {
+							gap := int32(0)
+							if wi > 0 || leadingSpace {
+								gap = l.spaceWidth(font) + int32(math.Round(run.Style.WordSpacing*baseSize/16)) + letterSpacing
+								if gap < 0 {
+									gap = 0
+								}
+							}
+							if remaining := lineRight - x - gap; remaining > 0 && wordW > remaining {
+								breakWidth = remaining
+							}
+						}
+						prefix, suffix := text, ""
+						if wordW > breakWidth && (wordW > avail || run.Style.WordBreak != 0) {
+							prefix, suffix = webWordPrefixThatFits(text, breakWidth, measure)
+							if len(line) > 0 && (prefix == "" || measure(prefix) > breakWidth) {
+								flushLine(false)
+								prefix, suffix = webWordPrefixThatFits(text, avail, measure)
+							}
+						}
+						if suffix != "" && prefix != "" {
+							words = append(words, "")
+							copy(words[wi+2:], words[wi+1:])
+							words[wi+1] = suffix
+							continuation = append(continuation, false)
+							copy(continuation[wi+2:], continuation[wi+1:])
+							continuation[wi+1] = true
+							transformedPart = append(transformedPart, false)
+							copy(transformedPart[wi+2:], transformedPart[wi+1:])
+							transformedPart[wi+1] = true
+							text, wordW = prefix, measure(prefix)
+							breakParts++
+						}
+					}
 					boxW, boxH := int32(0), int32(0)
 					if ctrl := run.Style.Control; ctrl != nil && (ctrl.Kind == "text" || ctrl.Kind == "textarea") {
 						boxW = int32(ctrl.Width * baseSize / 16)
@@ -12481,21 +14008,32 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						flushLine(false)
 					}
 					if boxW == 0 && wordW > avail {
-						text = ellipsize(font, text, avail)
+						if block.Style.TextOverflow == 1 {
+							text = webClipWordToWidth(text, avail, measure)
+						} else {
+							text = ellipsize(font, text, avail)
+						}
 						wordW = measure(text)
 					}
 					if boxW == 0 && !wrap && x+wordW > lineRight {
 						// nowrap/pre keeps one line: clip the overflowing tail with
-						// an ellipsis instead of silently wrapping or painting over
-						// the next block.
+						// the requested text-overflow mode. Older pages without a
+						// mode retain the reader's ellipsis fallback.
 						remaining := lineRight - x
 						if remaining <= 0 {
 							lineClipped = true
 							continue
 						}
-						text = ellipsize(font, text, remaining)
+						if block.Style.TextOverflow == 1 {
+							text = webClipWordToWidth(text, remaining, measure)
+						} else {
+							text = ellipsize(font, text, remaining)
+						}
 						wordW = measure(text)
 						lineClipped = true
+						if text == "" {
+							continue
+						}
 					}
 					color := webResolveColor(run.Style, d)
 					if run.Style.Control != nil && run.Style.Control.PlaceholderShown() {
@@ -12583,17 +14121,32 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		endGrid := int32(len(layout.Rows))
 		// A pixel height is a floor for the flow box: short content pads out,
 		// taller content keeps its rows (CSS overflow is not clipped).
-		if minBoxH := block.Style.Height * baseSize / 16; minBoxH > 0 {
+		if minBoxH := webHeightContentTarget(block.Style, block.Style.Height) * baseSize / 16; minBoxH > 0 {
 			rows := int32(math.Ceil(minBoxH / float64(rowH)))
 			if endGrid-startGrid < rows {
 				skipRows(rows - (endGrid - startGrid))
 				endGrid = int32(len(layout.Rows))
 			}
 		}
+		// An explicit width and aspect-ratio is a definite box even when the
+		// element has little text: the modern `aspect-video`/skeleton card
+		// reserves its ratio. Padding belongs to the border box, so subtract
+		// it from the target height. An explicit height wins over the ratio.
+		if ratio := block.Style.AspectRatio; ratio > 0 && block.Style.Height <= 0 && block.Style.MinHeight <= 0 && paintW > 0 {
+			target := float64(paintW)/ratio - float64(padTop+padBot)
+			if target > 0 {
+				rows := int32(math.Ceil(target / float64(rowH)))
+				if rows > 0 && endGrid-startGrid < rows {
+					skipRows(rows - (endGrid - startGrid))
+					endGrid = int32(len(layout.Rows))
+				}
+			}
+		}
 		// max-height clips the block's own rows; min-height pads it out. Both
 		// are expressed in CSS px and rounded on the row grid, so a box never
 		// ends up with a negative or fractional height.
-		if maxH := block.Style.MaxHeight * baseSize / 16; maxH > 0 {
+		if block.Style.MaxHeight > 0 {
+			maxH := webHeightContentTarget(block.Style, block.Style.MaxHeight) * baseSize / 16
 			rows := int32(math.Ceil(maxH / float64(rowH)))
 			if rows < 1 {
 				rows = 1
@@ -12605,7 +14158,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				}
 			}
 		}
-		if minH := block.Style.MinHeight * baseSize / 16; minH > 0 {
+		if minH := webHeightContentTarget(block.Style, block.Style.MinHeight) * baseSize / 16; minH > 0 {
 			rows := int32(math.Ceil(minH / float64(rowH)))
 			if endGrid-startGrid < rows {
 				skipRows(rows - (endGrid - startGrid))

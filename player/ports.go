@@ -9,7 +9,9 @@ package main
 // Emulators screen instead of only through the firmware's own Ports tab.
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,55 +291,185 @@ func startPortMasterInstall() error {
 		ShowToast("PortMaster installed — open Ports to add games", ToastKindSuccess)
 		noteAwayToolInstalled("PortMaster")
 		trophyEvent(tkPortMaster)
+		// What a stock TrimUI lacks for it (Python, a full bash) is fetched
+		// now, so the first open does not wait.
+		tbxPost(pmRuntimePrefetch)
 	}()
 	return nil
 }
 
-// installPortMaster performs the download and atomic extraction. The staging
-// folder lives on the SD card so the final rename does not cross filesystems.
-func installPortMaster(sdRoot, downloadURL string) error {
+// startPortMasterRepair downloads the official TrimUI package again and writes
+// its files over the installed PortMaster, which mends a damaged or
+// half-updated install (CrossMix #119: "replace your app with
+// trimui.portmaster.zip"). Ports, the runtimes in libs/, themes and settings
+// are not in the package and stay as they are.
+func startPortMasterRepair() error {
+	if IsWindows() {
+		return fmt.Errorf("PortMaster runs on the handheld, not on Windows")
+	}
+	target := filepath.Join(portMasterSDRoot, "Apps", "PortMaster")
+	if !dirExists(target) {
+		if portMasterLauncher(portMasterSDRoot) == "" {
+			return startPortMasterInstall()
+		}
+		return fmt.Errorf("this PortMaster is not the TrimUI app in Apps/PortMaster; update it from its own menu")
+	}
+	portMasterInstallState.mu.Lock()
+	if portMasterInstallState.running {
+		portMasterInstallState.mu.Unlock()
+		return fmt.Errorf("the PortMaster installer is already running")
+	}
+	portMasterInstallState.running = true
+	portMasterInstallState.mu.Unlock()
+
+	installBarBegin(portMasterAppName)
+	if !IsOnline() {
+		setPortMasterInstalling(false)
+		installBarFail("No internet — connect WiFi, then try again")
+		return fmt.Errorf("no internet connection")
+	}
+	go func() {
+		defer setPortMasterInstalling(false)
+		if err := repairPortMaster(portMasterSDRoot, portMasterInstallURL); err != nil {
+			logWarn("portmaster", "repair failed: %v", err)
+			installBarFail(firstLine(err.Error()))
+			tbxPost(func() { ShowToast("Could not repair PortMaster — "+firstLine(err.Error()), ToastKindError) })
+			return
+		}
+		installBarDone()
+		logInfo("portmaster", "repaired %s from %s", target, portMasterInstallURL)
+		tbxPost(func() {
+			ShowToast("PortMaster repaired — its program files are fresh, your ports are untouched", ToastKindSuccess)
+			invalidatePortsCache()
+			invalidateEmulatorCache()
+			portMasterVersionForget()
+			pmRuntimeForget()
+			pmRuntimePrefetch()
+		})
+	}()
+	return nil
+}
+
+// portMasterDownloadPackage downloads and unpacks the TrimUI package into a
+// staging folder on the card (so the final move does not cross filesystems)
+// and returns its Apps/PortMaster tree and the stage to remove afterwards.
+func portMasterDownloadPackage(sdRoot, downloadURL string) (string, string, error) {
 	if strings.TrimSpace(sdRoot) == "" {
-		return fmt.Errorf("SD card path is unknown")
+		return "", "", fmt.Errorf("SD card path is unknown")
 	}
 	if err := os.MkdirAll(sdRoot, 0o755); err != nil {
-		return fmt.Errorf("SD card is not writable: %w", err)
+		return "", "", fmt.Errorf("SD card is not writable: %w", err)
 	}
 	stage, err := os.MkdirTemp(sdRoot, ".portmaster-install-*")
 	if err != nil {
-		return fmt.Errorf("cannot create staging folder: %w", err)
+		return "", "", fmt.Errorf("cannot create staging folder: %w", err)
 	}
-	defer os.RemoveAll(stage)
-
 	archive := filepath.Join(stage, "trimui.portmaster.zip")
 	installBarPhase(installPhaseDownload)
 	// The transfer and the unpack both run on the card's run token: the strip's
 	// X on this chip stops them instead of only hiding the bar.
 	ctx := installBarRunContext()
 	if err := downloadFileWithProgressCtx(ctx, downloadURL, archive, installBarProgress); err != nil {
-		return err
+		os.RemoveAll(stage)
+		return "", "", err
 	}
-
 	installBarPhase(installPhaseExtract)
 	unpacked := filepath.Join(stage, "unpack")
 	if err := extractZipSafe(ctx, archive, unpacked, 4096, 512<<20); err != nil {
-		return fmt.Errorf("unpack PortMaster: %w", err)
+		os.RemoveAll(stage)
+		return "", "", fmt.Errorf("unpack PortMaster: %w", err)
 	}
-	return installPortMasterFromStage(unpacked, sdRoot)
+	inner, err := portMasterPackageTree(unpacked)
+	if err != nil {
+		os.RemoveAll(stage)
+		return "", "", err
+	}
+	return inner, stage, nil
 }
 
-// installPortMasterFromStage moves an extracted Apps/PortMaster tree into
-// place. Extraction is atomic: a failed download or unpack never leaves a
-// half-written app behind. An existing install is never overwritten, so ports
-// and PortMaster's own settings survive a reinstall attempt.
-func installPortMasterFromStage(unpacked, sdRoot string) error {
+// portMasterPackageTree is the Apps/PortMaster folder of an unpacked package.
+func portMasterPackageTree(unpacked string) (string, error) {
 	inner := filepath.Join(unpacked, "Apps", "PortMaster")
 	if !regularFile(filepath.Join(inner, "launch.sh")) {
 		// Tolerate a future package that drops the Apps/ prefix.
 		inner = filepath.Join(unpacked, "PortMaster")
 	}
 	if !regularFile(filepath.Join(inner, "launch.sh")) {
-		return fmt.Errorf("the download does not contain Apps/PortMaster/launch.sh")
+		return "", fmt.Errorf("the download does not contain Apps/PortMaster/launch.sh")
 	}
+	if !regularFile(filepath.Join(inner, "PortMaster", "control.txt")) {
+		return "", fmt.Errorf("the download does not contain PortMaster/control.txt")
+	}
+	return inner, nil
+}
+
+// installPortMaster performs the download and atomic extraction.
+func installPortMaster(sdRoot, downloadURL string) error {
+	inner, stage, err := portMasterDownloadPackage(sdRoot, downloadURL)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	return installPortMasterTree(inner, sdRoot)
+}
+
+// repairPortMaster writes a fresh package over Apps/PortMaster.
+func repairPortMaster(sdRoot, downloadURL string) error {
+	inner, stage, err := portMasterDownloadPackage(sdRoot, downloadURL)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stage)
+	installBarPhase(installPhaseExtract)
+	target := filepath.Join(sdRoot, "Apps", "PortMaster")
+	if err := portMasterOverlay(inner, target); err != nil {
+		return fmt.Errorf("write PortMaster's files: %w", err)
+	}
+	_ = os.Chmod(filepath.Join(target, "launch.sh"), 0o755)
+	portMasterEnsureDataDirs(sdRoot)
+	if err := syncDisks(); err != nil {
+		logWarn("portmaster", "%v", err)
+	}
+	return nil
+}
+
+// portMasterOverlay copies every file of src over dst, each through a
+// temporary file and a rename, so an interrupted repair leaves whole files.
+// Nothing in dst that src lacks is touched.
+func portMasterOverlay(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil || rel == "." {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		tmp := to + ".jukahub-new"
+		if err := copyFileStream(p, tmp, 0o755); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, to); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		return nil
+	})
+}
+
+// installPortMasterTree moves an extracted Apps/PortMaster tree into place.
+// Extraction is atomic: a failed download or unpack never leaves a
+// half-written app behind. An existing install is never overwritten, so ports
+// and PortMaster's own settings survive a reinstall attempt.
+func installPortMasterTree(inner, sdRoot string) error {
 	appsDir := filepath.Join(sdRoot, "Apps")
 	target := filepath.Join(appsDir, "PortMaster")
 	if _, err := os.Stat(target); err == nil {
@@ -353,6 +485,9 @@ func installPortMasterFromStage(unpacked, sdRoot string) error {
 	}
 	if err := os.Chmod(filepath.Join(target, "launch.sh"), 0o755); err != nil {
 		logWarn("portmaster", "warn: cannot make launch.sh executable: %v", err)
+	}
+	for _, note := range portMasterEnsureDataDirs(sdRoot) {
+		logInfo("portmaster", "%s", note)
 	}
 	return nil
 }
@@ -407,6 +542,8 @@ func openPortsPanel(returnEmu bool) {
 	if portsLibraryEnabled() && portMasterInstalled() && IsOnline() {
 		portsPanelLoadCatalog()
 		portMasterVersionCheck()
+		// A newer Ubuntu build of the private runtime, at most weekly.
+		privateGlibcRefreshAsync()
 	}
 	PlayActivateSound()
 }
@@ -519,7 +656,9 @@ func launchPortScript(name, path string) {
 		return
 	}
 	if err := startPortScript(name, path); err != nil {
-		ShowToast(firstLine(err.Error()), ToastKindError)
+		if !errors.Is(err, errPortPreparing) {
+			ShowToast(firstLine(err.Error()), ToastKindError)
+		}
 		return
 	}
 	PlaySuccessSound()
@@ -546,11 +685,24 @@ func startPortScript(name, path string) error {
 			return err
 		}
 	}
+	// On a TrimUI, the firmware's bash and python3 are checked once a session
+	// and what PortMaster lacks is downloaded first (portmaster_runtime.go);
+	// the launch then starts again by itself.
+	if err := pmRuntimeGate(master, func() { launchPortScript(name, path) }); err != nil {
+		return err
+	}
 	plan := portBuildLaunchPlan(appConfig, path, master)
 	shadow, err := privateGlibcPreparePortPlan(&plan, path)
 	if err != nil {
 		return err
 	}
+	if master && shadow == "" && plan.Mode == portLaunchDirect && len(plan.Args) == 2 && plan.Args[1] == path {
+		// PortMaster's launch.sh without TRIMUI_EX runs as a patched copy.
+		run, copyPath, notes := pmMasterLauncher(path)
+		plan.Args[1], shadow = run, copyPath
+		plan.Notes = append(plan.Notes, notes...)
+	}
+	plan.Notes = append(plan.Notes, pmRuntimeNotes(master)...)
 	logInfo("portmaster", "launching %s: %s %s (PortMaster folder %s%s)", name, plan.Name, strings.Join(plan.Args, " "),
 		setOr(plan.Control, "unknown"), map[string]string{"": "", "link": ", linked", "xdg": ", via XDG_DATA_HOME"}[plan.Fix])
 	cmd := exec.Command(plan.Name, plan.Args...)

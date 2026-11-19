@@ -36,9 +36,9 @@ package main
 // handheld's out-of-box default (bootOSMotion).
 //
 // What the logo does is the user's choice (Settings → General → Boot
-// animation, bootstyles.go): the cinematic crash onto a cracking floor (the
-// default), the roll, the still image, this glass light ("classic"), a random
-// one, or none at all.
+// animation, bootstyles.go): the cinematic crash onto a cracking floor, the
+// roll, the still image, this glass light ("classic"), a random one, or none
+// at all (the default: Home as soon as it is ready, the chime rising with it).
 
 import (
 	"math"
@@ -422,13 +422,17 @@ func bootOSPlanStartup(config *Config, allotment time.Duration) time.Duration {
 	powerOn, reason := bootOSDecide(bootOSLiveInputs(config, time.Now()))
 	bootOS.reason = reason
 	if bootStyleSetting(config) == bootStyleNone {
-		// Boot animation "None": no boot and no hello. A power-on is still
-		// one (the startup lock and the OS escape read it); the queue runs
-		// straight after, and the first screen comes up as soon as it can.
+		// Boot animation "None" (the default): no boot and no hello. A
+		// power-on is still one (the startup lock and the OS escape read it);
+		// the queue runs straight after, and the first screen comes up as soon
+		// as it can. A start that would have had the startup chime (a power-on,
+		// or a cold launch with time for the hello) gets it with Home's first
+		// frame instead, so the sound never holds the screen up.
 		bootOS.mode = bootOSModeNone
 		if powerOn {
 			bootOS.mode = bootOSModePowerOn
 		}
+		bootChimeOverHomePending = powerOn || allotment > 0
 		logInfo("startup", "boot animation off (bootStyle none): straight to the first screen")
 		return 0
 	}

@@ -176,7 +176,7 @@ func uiAnimating() bool {
 		(homeEdit.sheet.open && homeEdit.sheet.enter.active) ||
 		(homePowerConfirm.open && homePowerConfirm.enter.active) ||
 		homeLayoutAnimating() || synthAnimating() || homeFocusGlide.animating() ||
-		gameLibDimEase.animating()
+		gameLibDimEase.animating() || gameLibraryScrubAnimating()
 }
 
 // ── Layer compositing ─────────────────────────────────────────────────

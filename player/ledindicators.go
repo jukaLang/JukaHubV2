@@ -9,7 +9,8 @@ package main
 // them: a warning dimmed to Off would be no warning):
 //
 //   - Low battery (on by default): at 10% or less and not charging, a slow red
-//     pulse, whatever the lights were showing.
+//     pulse (a breath that never goes near dark), whatever the lights were
+//     showing, until the charge is back at 13%.
 //   - Charging: the Charging mode's slow green breath (steady green once
 //     full) while plugged in, whatever mode is picked.
 //   - Standby: a dim, slow breath in the theme's accent while the screen is
@@ -18,8 +19,12 @@ package main
 //     then is what they keep while the device sleeps).
 //
 // The order is that one too: low battery wins over charging, charging over
-// standby. Juka's layer (ledjuka.go) still wins over all of them while the orb
-// is up, because the user is looking at it.
+// standby. A change of indicator (or back to none) waits until it has been due
+// for ledIndSettle, and the charger reading for ledChargeSettle, so a reading
+// that wobbles never switches the rings back and forth; standby, the screen's
+// own state, comes and goes at once. Juka's layer
+// (ledjuka.go) still wins over all of them while the orb is up, because the
+// user is looking at it.
 //
 // They are layers of the LED loop, not a second LED stack: ledLayersNow
 // decides once a frame what is due, ledsync.go's loop asks it whether to keep
@@ -58,7 +63,66 @@ const (
 	// ledIndStandbyLevel is the standby glow's peak, before the indicator
 	// brightness: it is meant to be seen in a dark room, not across one.
 	ledIndStandbyLevel = 0.35
+	// ledIndLowClearPct is the charge at which a low-battery warning that
+	// is showing goes away again.
+	ledIndLowClearPct = 13
+	// ledIndSettle is how long a new indicator (or none) must be due before
+	// the rings change to it, and ledChargeSettle how long the charger must
+	// read differently before the lights believe it. A charger that tops off
+	// at full flips "charging" every few seconds; each flip switched the
+	// rings between green and the user's colour (dark, in the Charging mode).
+	ledIndSettle    = 2 * time.Second
+	ledChargeSettle = 5 * time.Second
 )
+
+// ledSettled is a value that only changes once a new one has held for a
+// while. Locked: a loop started right after a stop may overlap the old one.
+type ledSettled[T comparable] struct {
+	mu    sync.Mutex
+	shown T
+	set   bool
+	cand  T
+	since time.Time
+}
+
+// settleFor returns what to show for want at now: want once it has been
+// wanted for hold. The first value shows at once.
+func (s *ledSettled[T]) settleFor(want T, now time.Time, hold time.Duration) T {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.set || want == s.shown {
+		s.shown, s.set = want, true
+		s.cand = want
+		return s.shown
+	}
+	if want != s.cand || now.Before(s.since) {
+		s.cand, s.since = want, now
+	}
+	if now.Sub(s.since) >= hold {
+		s.shown = want
+	}
+	return s.shown
+}
+
+// current is what shows now.
+func (s *ledSettled[T]) current() T {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shown
+}
+
+var (
+	// ledIndShown is the indicator the rings show. LED loop.
+	ledIndShown ledSettled[ledIndicator]
+	// ledChargeShown is the settled charger reading. LED loop.
+	ledChargeShown ledSettled[bool]
+)
+
+// ledChargingSteady is getBatteryCharging once it has held ledChargeSettle.
+// LED loop.
+func ledChargingSteady(now time.Time) bool {
+	return ledChargeShown.settleFor(getBatteryCharging(), now, ledChargeSettle)
+}
 
 // ledIndicator is what the indicator layer shows.
 type ledIndicator int
@@ -162,11 +226,17 @@ func ledStandbyNow() bool {
 	return powerSleepActive() || powerSleep.screenOff.Load() || saverLowPowerEngaged() || ambientIsScreenOff()
 }
 
-// ledIndicatorFor picks the indicator due under x for a battery reading. Pure
-// apart from standby, which is passed in.
-func ledIndicatorFor(x ledExtrasSettings, pct int, charging, standby bool) ledIndicator {
+// ledIndicatorFor picks the indicator due under x for a battery reading. low
+// is whether the low-battery warning shows now: once on it stays until the
+// charge is ledIndLowClearPct, so a reading that wobbles between 10 and 11%
+// does not switch the rings between red and the user's colour. Pure.
+func ledIndicatorFor(x ledExtrasSettings, pct int, charging, standby, low bool) ledIndicator {
+	lowLimit := ledIndLowBatteryPct
+	if low {
+		lowLimit = ledIndLowClearPct - 1
+	}
 	switch {
-	case x.lowBattery && !charging && pct >= 0 && pct <= ledIndLowBatteryPct:
+	case x.lowBattery && !charging && pct >= 0 && pct <= lowLimit:
 		return ledIndLowBattery
 	case x.charging && charging:
 		return ledIndCharging
@@ -202,10 +272,22 @@ func ledLayersNow(s ledLoopSettings, now time.Time, overGame bool) ledLayers {
 	x := currentLEDExtras()
 	l := ledLayers{x: x}
 	standby := ledStandbyNow()
+	want := ledIndNone
 	if x.lowBattery || x.charging || x.standby {
-		// Both readings are cached for a second (extras.go, widgets.go).
-		l.ind = ledIndicatorFor(x, getBatteryPercent(), getBatteryCharging(), standby)
+		// Both readings are cached for a second (extras.go, widgets.go); the
+		// charger's is settled on top (ledChargingSteady).
+		want = ledIndicatorFor(x, getBatteryPercent(), ledChargingSteady(now), standby, ledIndShown.current() == ledIndLowBattery)
 	}
+	hold := ledIndSettle
+	if want == ledIndStandby || ledIndShown.current() == ledIndStandby {
+		// The screen going off or on is the device's own state, not a
+		// reading that wobbles: the glow follows it at once, so it is up
+		// before a kernel suspend freezes the rings, and the idle low-power
+		// state (a background pause) does not hand them to the firmware for
+		// the settle's two seconds first.
+		hold = 0
+	}
+	l.ind = ledIndShown.settleFor(want, now, hold)
 	if overGame && s.policy == ledPolicyScreen && s.brightness > 0 && !standby {
 		l.screen = ledScreenOverGame(x, now)
 	}

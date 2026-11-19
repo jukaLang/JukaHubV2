@@ -182,6 +182,10 @@ func auditBuildModel(now time.Time) auditModel {
 		default:
 			if row.spec.pill == "" {
 				switch {
+				case r.Kind == auditKindScript && !st.hasInt && auditCanInstallInterpreter():
+					// The install press brings the interpreter too.
+					row.spec.pill, row.spec.tone = "Install", tbxToneAccent
+					row.spec.note = "+ " + auditInterpreterLabel(r.Needs)
 				case r.Kind == auditKindScript && !st.hasInt:
 					row.spec.pill, row.spec.tone = "Needs "+auditInterpreterLabel(r.Needs), tbxToneWarn
 				case r.Kind == auditKindManual:
@@ -324,12 +328,19 @@ func auditRecipeText(t secAuditTool, r auditRecipe, st auditStatus) string {
 	case auditKindScript:
 		text := "Downloads the current source from " + strings.TrimSuffix(strings.TrimPrefix(r.URL, "https://"), "/archive/refs/heads/master.zip") +
 			" and runs it with " + auditInterpreterLabel(r.Needs) + "."
-		if st.hasInt && len(st.interp) > 0 {
+		switch {
+		case st.hasInt && len(st.interp) > 0:
 			text += " " + auditInterpreterLabel(r.Needs) + " was found at " + st.interp[0] + "."
-		} else {
+		case auditCanInstallInterpreter():
+			text += " The firmware has no " + auditInterpreterLabel(r.Needs) + ", so Install first brings Ubuntu's " +
+				auditInterpreterLabel(r.Needs) + " (" + strings.Join(auditInterpreterPackages(r.Needs), ", ") +
+				") through Linux packages: Ubuntu's signed arm64 packages, each download checked against the SHA-256 in that signed index, kept on the card. The firmware is not changed."
+		default:
 			text += " " + auditInterpreterLabel(r.Needs) + " is not installed on this system."
 		}
 		return text
+	case auditKindLinuxPkg:
+		return "Installs Ubuntu 24.04's arm64 package " + strings.Join(r.Packages, ", ") + " (and what it needs) through Linux packages. Ubuntu signs its package index, JukaHub accepts only Ubuntu's archive key, and every download must match the SHA-256 in that index. It runs from the card with Ubuntu's own C library; the firmware is not changed."
 	case auditKindManual:
 		text := "Install it from the official page: " + r.Page
 		if r.Hint != "" {
@@ -360,6 +371,8 @@ func auditOpenToolSheet(config *Config, id string) {
 			} else {
 				body.WriteString("Installed by JukaHub.\n")
 			}
+		} else if r.Kind == auditKindLinuxPkg {
+			body.WriteString("Installed with Linux packages (Tools → Linux packages, or apt in the Terminal).\n")
 		} else {
 			body.WriteString("Installed outside JukaHub — update or remove it the way it was installed.\n")
 		}
@@ -391,7 +404,7 @@ func auditOpenToolSheet(config *Config, id string) {
 	case busy:
 		buttons = []tbxSheetButton{{label: "Close", primary: true}}
 	case st.path != "":
-		canManage := st.ours || r.Kind == auditKindWinget
+		canManage := st.ours || r.Kind == auditKindWinget || r.Kind == auditKindLinuxPkg
 		if canManage {
 			buttons = append(buttons,
 				tbxSheetButton{label: "Remove", run: func() { auditConfirmRemove(config, t, r) }},
@@ -425,7 +438,7 @@ func auditOpenToolSheet(config *Config, id string) {
 			page := r.Page
 			buttons = append(buttons, tbxSheetButton{label: "Download page", primary: true, run: func() { auditOpenPage(config, t.Name, page) }})
 		}
-	case r.Kind == auditKindScript && !st.hasInt:
+	case r.Kind == auditKindScript && !st.hasInt && !auditCanInstallInterpreter():
 		buttons = append(buttons, tbxSheetButton{label: "Close"})
 		if platform == auditPlatformWindows {
 			needs := r.Needs

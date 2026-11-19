@@ -133,6 +133,8 @@ var raCoop struct {
 // raCoopPauseFor plus one answer; any failure leaves the game to be frozen as
 // it is.
 func raCoopPause(why string) raCoopState {
+	// The shader speed check leaves the paused stretch out (shader_speed.go).
+	shaderSpeedFreezeNote()
 	port := raLibraryPort()
 	if port == 0 {
 		return raCoopState{}
@@ -190,6 +192,7 @@ func raCoopPause(why string) raCoopState {
 // last freeze holding RetroArch's pause, a worker goroutine unpauses it; the
 // log check for the audio driver giving up follows either way.
 func raCoopResume(st raCoopState, why string) {
+	shaderSpeedFreezeNote()
 	if st.port == 0 {
 		return
 	}

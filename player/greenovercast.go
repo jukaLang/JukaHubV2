@@ -681,7 +681,9 @@ func goLaunch(name, launch, service, warn string) {
 	}
 	logDebug("greenovercast", "launch %s (%s) for %s", name, launch, service)
 	if err := startPortScript(name, launch); err != nil {
-		ShowToast(firstLine(err.Error()), ToastKindError)
+		if !errors.Is(err, errPortPreparing) {
+			ShowToast(firstLine(err.Error()), ToastKindError)
+		}
 		return
 	}
 	msg := "Starting " + goClientName + " — choose " + service + "; sign in with the code it shows, on your phone"

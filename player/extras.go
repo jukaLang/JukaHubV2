@@ -722,6 +722,8 @@ func sceneDisplayName(name string) string {
 		return apkStoreEntryName
 	case portsStoreSceneName:
 		return portsStoreEntryName
+	case homebrewSceneName:
+		return homebrewEntryName
 	case cloudGamingSceneName:
 		return cloudGamingEntryName
 	case voiceSceneName:

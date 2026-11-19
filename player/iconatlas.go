@@ -265,7 +265,11 @@ func (a *iconAtlas) bakeLocked(renderer *sdl.Renderer, key iconAtlasKey) (sdl.Re
 	} else {
 		a.mask = a.mask[:n]
 	}
-	iconRasterize(key.name, size, a.mask, &a.canvas, &a.path)
+	// Before the first frame the last start's first frame may have it
+	// rasterised already, on another core (startup_framecache.go).
+	if !frameCacheIconMask(key, a.mask) {
+		iconRasterize(key.name, size, a.mask, &a.canvas, &a.path)
+	}
 
 	c := int(cell)
 	if n := c * c; cap(a.pixels) < n {

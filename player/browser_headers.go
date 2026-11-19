@@ -1,23 +1,27 @@
 package main
 
 import (
+	"math"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// The Internet browser presents one coherent desktop Chrome identity. The
-// User-Agent is reduced the way Chrome reduces it: the platform and engine are
-// frozen, and only the major version changes. The low-entropy client hints are
+// The Internet browser presents a reduced Chrome identity. Most sites receive
+// the desktop variant; Wikipedia receives its mobile variant so its mobile
+// hostname's redirect keeps the mobile skin. The low-entropy client hints are
 // the headers Chrome sends before a site asks for anything more.
 //
 // Keep these values in step: a UA saying one version beside a hint saying
 // another is a stronger fingerprint than either header alone.
 const (
-	browserChromeMajor     = "157"
-	browserChromeUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + browserChromeMajor + ".0.0.0 Safari/537.36"
-	browserChromeBrands    = `"Not-A.Brand";v="99", "Google Chrome";v="` + browserChromeMajor + `", "Chromium";v="` + browserChromeMajor + `"`
+	browserChromeMajor           = "157"
+	browserChromeUserAgent       = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + browserChromeMajor + ".0.0.0 Safari/537.36"
+	browserChromeMobileUserAgent = "Mozilla/5.0 (Linux; Android 12; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + browserChromeMajor + ".0.0.0 Mobile Safari/537.36"
+	browserChromeBrands          = `"Not-A.Brand";v="99", "Google Chrome";v="` + browserChromeMajor + `", "Chromium";v="` + browserChromeMajor + `"`
 )
 
 const (
@@ -61,6 +65,143 @@ func browserChromeIdentity(h http.Header) {
 	h.Set("Sec-CH-UA-Platform", `"Windows"`)
 }
 
+// Wikipedia's mobile hostname redirects to the canonical desktop hostname.
+// Its skin is then chosen from the browser identity, so a desktop identity
+// leaves a handheld reader with Vector's wide sidebars and offscreen menus.
+func browserWikipediaPage(page, target *url.URL) bool {
+	for _, u := range []*url.URL{page, target} {
+		if u == nil {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if host == "wikipedia.org" || strings.HasSuffix(host, ".wikipedia.org") {
+			return true
+		}
+	}
+	return false
+}
+
+func browserChromePageIdentity(h http.Header, page, target *url.URL) {
+	browserChromeIdentity(h)
+	if browserWikipediaPage(page, target) {
+		h.Set("User-Agent", browserChromeMobileUserAgent)
+		h.Set("Sec-CH-UA-Mobile", "?1")
+		h.Set("Sec-CH-UA-Platform", `"Android"`)
+	}
+}
+
+// browserClientHintSet is one origin's Accept-CH opt-in. Device hints are
+// high-entropy: a browser sends them only after the origin asks for them, so
+// they are kept per origin rather than added to every request.
+type browserClientHintSet struct {
+	viewportWidth  bool
+	viewportHeight bool
+	dpr            bool
+}
+
+func (s browserClientHintSet) any() bool {
+	return s.viewportWidth || s.viewportHeight || s.dpr
+}
+
+var browserClientHints = struct {
+	sync.Mutex
+	origins map[string]browserClientHintSet
+}{origins: make(map[string]browserClientHintSet)}
+
+// browserClientHintsSecure follows the Client Hints secure-context rule and
+// still permits loopback HTTP, where local development servers legitimately
+// negotiate them.
+func browserClientHintsSecure(u *url.URL) bool {
+	if u == nil {
+		return false
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return true
+	}
+	if !strings.EqualFold(u.Scheme, "http") {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func browserClientHintOrigin(u *url.URL) string {
+	if u == nil || u.Host == "" {
+		return ""
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host)
+}
+
+// browserClientHintsNote records the device hints an origin asked for in an
+// Accept-CH response. Unknown tokens are ignored: this reader only has the
+// viewport and DPR values it can report honestly.
+func browserClientHintsNote(h http.Header, u *url.URL) {
+	if h == nil || !browserClientHintsSecure(u) {
+		return
+	}
+	origin := browserClientHintOrigin(u)
+	if origin == "" {
+		return
+	}
+	var add browserClientHintSet
+	for _, value := range h.Values("Accept-CH") {
+		for _, token := range strings.Split(value, ",") {
+			switch strings.ToLower(strings.TrimSpace(token)) {
+			case "sec-ch-viewport-width", "viewport-width":
+				add.viewportWidth = true
+			case "sec-ch-viewport-height", "viewport-height":
+				add.viewportHeight = true
+			case "sec-ch-dpr", "dpr":
+				add.dpr = true
+			}
+		}
+	}
+	if !add.any() {
+		return
+	}
+	browserClientHints.Lock()
+	defer browserClientHints.Unlock()
+	set := browserClientHints.origins[origin]
+	set.viewportWidth = set.viewportWidth || add.viewportWidth
+	set.viewportHeight = set.viewportHeight || add.viewportHeight
+	set.dpr = set.dpr || add.dpr
+	if len(browserClientHints.origins) >= 128 {
+		for old := range browserClientHints.origins {
+			if old != origin {
+				delete(browserClientHints.origins, old)
+				break
+			}
+		}
+	}
+	browserClientHints.origins[origin] = set
+}
+
+// browserClientHintsApply adds the negotiated hints to a request. Values come
+// from the same viewport the layout and page scripts use, so a server and the
+// CSS media queries agree about the page width.
+func browserClientHintsApply(h http.Header, target *url.URL) {
+	if h == nil || !browserClientHintsSecure(target) {
+		return
+	}
+	origin := browserClientHintOrigin(target)
+	browserClientHints.Lock()
+	set := browserClientHints.origins[origin]
+	browserClientHints.Unlock()
+	if !set.any() {
+		return
+	}
+	w, height := webMediaViewport()
+	if set.viewportWidth {
+		h.Set("Sec-CH-Viewport-Width", strconv.Itoa(int(math.Ceil(w))))
+	}
+	if set.viewportHeight {
+		h.Set("Sec-CH-Viewport-Height", strconv.Itoa(int(math.Ceil(height))))
+	}
+	if set.dpr {
+		h.Set("Sec-CH-DPR", strconv.FormatFloat(webViewportPixelScale(), 'f', -1, 64))
+	}
+}
+
 // browserChromeNavigate sets a top-level document navigation's headers,
 // including the Fetch Metadata Chrome sends for a user-typed or opened load.
 func browserChromeNavigate(h http.Header) {
@@ -72,6 +213,14 @@ func browserChromeNavigate(h http.Header) {
 	h.Set("Sec-Fetch-User", "?1")
 	h.Set("Sec-Fetch-Dest", "document")
 	h.Set("Priority", "u=0, i")
+}
+
+// browserChromeNavigateURL is a navigation to a known origin, including any
+// device client hints that origin negotiated on an earlier response.
+func browserChromeNavigateURL(h http.Header, target *url.URL) {
+	browserChromeNavigate(h)
+	browserChromePageIdentity(h, nil, target)
+	browserClientHintsApply(h, target)
 }
 
 // A form navigation comes from the page on screen, so its Referer and fetch
@@ -96,7 +245,8 @@ func browserChromeFormNavigate(h http.Header, source, target *url.URL, method st
 // document that asked for it and target is the resource; the pair supplies the
 // Referer and Sec-Fetch-Site values a browser derives from the origin.
 func browserChromeResource(h http.Header, dest, accept string, page, target *url.URL) {
-	browserChromeIdentity(h)
+	browserChromePageIdentity(h, page, target)
+	browserClientHintsApply(h, target)
 	if accept != "" {
 		h.Set("Accept", accept)
 	}
@@ -113,7 +263,8 @@ func browserChromeResource(h http.Header, dest, accept string, page, target *url
 // browserChromeFetch sets the browser-vouched headers on a page script's fetch
 // or XHR after hopHeaders has settled that hop's Origin and Referer.
 func browserChromeFetch(h http.Header, mode string, page, target *url.URL) {
-	browserChromeIdentity(h)
+	browserChromePageIdentity(h, page, target)
+	browserClientHintsApply(h, target)
 	h.Set("Sec-Fetch-Dest", "empty")
 	if mode == "" {
 		mode = "cors"

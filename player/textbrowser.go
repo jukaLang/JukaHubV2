@@ -98,10 +98,16 @@ type browserNavigation struct {
 	Referrer    string
 }
 
+// browserPageProgress publishes a usable page before its image pass finishes.
+// The load goroutine calls it once the document is parsed; the loader applies
+// it only while this request is still current.
+type browserPageProgress func(browserPage)
+
 // browserPageFetcher loads one page. It is a variable so the browser's load
 // path (cache, stale-request guard, history) can be tested without a network.
 // The second argument is the load's script-pass generation, read on the main
-// thread when the load began (webJSLoadGeneration).
+// thread when the load began (webJSLoadGeneration). The optional callback lets
+// a page reach the screen before its slow subresources have all arrived.
 //
 // A load runs on its own goroutine, so the seam is read under a lock: assigning
 // the variable directly races with a fetch that is still on the wire, which the
@@ -121,7 +127,7 @@ var browserFetches sync.WaitGroup
 const browserFetchWait = 10 * time.Second
 
 // currentBrowserPageFetcher returns the fetch function a new load should use.
-func currentBrowserPageFetcher() func(browserNavigation, uint64) browserPage {
+func currentBrowserPageFetcher() func(browserNavigation, uint64, ...browserPageProgress) browserPage {
 	browserPageFetcherMu.RLock()
 	defer browserPageFetcherMu.RUnlock()
 	return browserPageFetcher
@@ -1272,7 +1278,21 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 				}
 			}
 		}()
-		page := fetch(request, scriptGen)
+		// The parsed page is drawn before its images finish downloading. A
+		// late image never replaces newer content: the request sequence is
+		// checked again in the callback, just as it is for the final page.
+		publishPartial := func(page browserPage) {
+			textBrowserRequestMutex.Lock()
+			current := textBrowserRequestSequence[variable] == id
+			textBrowserRequestMutex.Unlock()
+			if !current {
+				return
+			}
+			setBrowserLinks(variable, page.Links)
+			setBrowserDocument(variable, page.Doc)
+			publishCustom(variable, page.Text)
+		}
+		page := fetch(request, scriptGen, publishPartial)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
@@ -1403,7 +1423,11 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 // browseWebPageResult loads and prepares one page. gen is the script-pass
 // generation browserLoadURL read when this load began: a newer load moves it
 // on, which is how this load's script pass knows to stop (webdom_runtime.go).
-func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
+func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserPageProgress) browserPage {
+	var publishProgress browserPageProgress
+	if len(progress) > 0 {
+		publishProgress = progress[0]
+	}
 	// Every subresource this load requests is counted here, so the reader can
 	// say how much advertising it kept off the wire.
 	resetBrowserAdBlockCount()
@@ -1427,7 +1451,7 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 	// out.
 	client := browserHTTPClient(timeout)
 	client.CheckRedirect = textBrowserRedirectPolicy
-	fetched, err := fetchTextBrowserDocumentRequest(ctx, client, nav)
+	fetched, err := fetchTextBrowserDocumentWithRetry(ctx, client, nav)
 	if err != nil {
 		var fetchErr *brwFetchError
 		if errors.As(err, &fetchErr) {
@@ -1527,10 +1551,6 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 	}
 	pageText = capTextBrowserText(pageText)
 	links := extractBrowserLinks(source, pageURL)
-	// Linked stylesheets carry most of a real page's look. Fetching a few small
-	// ones is cheap; the parser then applies the presentation subset it can
-	// draw, and the plain text above remains the fallback for everything else.
-	pageCSS := fetchWebStylesheets(source, pageURL)
 	if truncated {
 		// Say so on the drawn page itself: the reader shows the styled document
 		// rather than the plain text, so a note only in the text would be
@@ -1541,17 +1561,35 @@ func browseWebPageResult(nav browserNavigation, gen uint64) browserPage {
 	// stylesheet. Expand them against the page URL before the parser collects
 	// inline CSS, so each block keeps its own cascade position.
 	source = webExpandInlineCSSImports(source, pageURL)
-	doc := parseWebPage(source, pageCSS, pageURL.String())
+	// Keep linked sheets at their positions relative to <style> blocks. A late
+	// linked sheet can override an earlier block, just as it does on the web.
+	pageSheets := fetchWebStylesheetBlocks(source, pageURL)
+	doc := parseWebPageWithLinkedSheets(source, "", pageURL.String(), pageSheets)
 	doc.Favicon = browserFaviconURL(source, pageURL)
-	// Images load with the page: one bounded concurrent pass stores the bytes
-	// and natural sizes the reader paints from (webpage_image.go).
-	fetchWebImages(doc)
 	if doc.Title == "" {
 		doc.Title = title
 	}
 	if len(doc.Blocks) == 0 {
 		doc = nil
 	}
+	// Give the screen the parsed page before the image pass. A hero image on
+	// handheld Wi-Fi can take seconds; waiting for all of them made a readable
+	// article show "Loading" with nothing on it. The image pass updates this
+	// same document as pictures arrive, and the final result below replaces
+	// it with the completed page (and its cache weight).
+	if publishProgress != nil {
+		publishProgress(browserPage{
+			Text: browserReaderText(title, pageURL.String(), len(links), pageText,
+				browserBlockedRequests(), browserAdBlockOff(pageURL.String()), truncated, pageLimit),
+			Links:    links,
+			FinalURL: pageURL.String(),
+			Doc:      doc,
+			Blocked:  browserBlockedRequests(),
+		})
+	}
+	// Images load with the page: one bounded concurrent pass stores the bytes
+	// and natural sizes the reader paints from (webpage_image.go).
+	fetchWebImages(doc)
 	// The reader text is assembled last: the blocked count and truncation state
 	// are only final once the stylesheet and image passes have run.
 	text := browserReaderText(title, pageURL.String(), len(links), pageText,
@@ -1647,6 +1685,27 @@ func fetchTextBrowserDocument(ctx context.Context, client *http.Client, address 
 	return fetchTextBrowserDocumentRequest(ctx, client, browserNavigation{URL: address})
 }
 
+// A dropped first connection can leave an otherwise reachable page on an
+// error card. Repeat one safe navigation within the original time budget.
+func fetchTextBrowserDocumentWithRetry(ctx context.Context, client *http.Client, nav browserNavigation) (textBrowserDocument, error) {
+	doc, err := fetchTextBrowserDocumentRequest(ctx, client, nav)
+	if nav.Method == http.MethodPost || ctx.Err() != nil {
+		return doc, err
+	}
+	var fetchErr *brwFetchError
+	if !errors.As(err, &fetchErr) || fetchErr.fail.Kind != brwFailConnect {
+		return doc, err
+	}
+	wait := time.NewTimer(400 * time.Millisecond)
+	defer wait.Stop()
+	select {
+	case <-wait.C:
+		return fetchTextBrowserDocumentRequest(ctx, client, nav)
+	case <-ctx.Done():
+		return doc, err
+	}
+}
+
 func fetchTextBrowserDocumentRequest(ctx context.Context, client *http.Client, nav browserNavigation) (textBrowserDocument, error) {
 	current := nav
 	for hop := 0; ; hop++ {
@@ -1690,7 +1749,7 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return fail(brwFailOther, "That address can't be opened.")
 	}
-	browserChromeNavigate(req.Header)
+	browserChromeNavigateURL(req.Header, req.URL)
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", nav.ContentType)
 	}
@@ -1711,6 +1770,7 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		return textBrowserDocument{}, &brwFetchError{fail: brwClassifyError(address, err, timedOut, online)}
 	}
 	defer resp.Body.Close()
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		// The client follows every redirect it can, so a 3xx here is a reply
 		// with no Location to follow. Say that instead of a bare status code.

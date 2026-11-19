@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -361,7 +362,10 @@ func portEnsureCover(script string) {
 		return
 	}
 	rom := scannedROM{Path: script, System: portsLibrarySystem}
-	if artworkCoverPresent(romCoverPath(rom, root)) {
+	// A picture taken while the port played (playshot_cover.go) is not a
+	// cover: the port's own picture still goes in ahead of it.
+	// A port whose cover the user removed gets none (artwork_nocover.go).
+	if artworkCoverPresent(romArtworkPath(rom, root)) || romLocalCoverPath(rom) != "" || artworkNoCover(rom, root) {
 		return
 	}
 	src := portCoverSource(portMetaFor(script))
@@ -438,5 +442,8 @@ func launchPortLibraryGame(game libraryGame) error {
 		})
 		return nil
 	}
-	return startPortScript(name, game.Path)
+	if err := startPortScript(name, game.Path); !errors.Is(err, errPortPreparing) {
+		return err // nil when it started
+	}
+	return nil // it starts by itself once PortMaster's runtime is ready
 }

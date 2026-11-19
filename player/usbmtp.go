@@ -31,6 +31,7 @@ type usbMtpStartConfig struct {
 	locked    func() bool   // the startup lock is up
 	connected func(on bool) // a computer came or went (any goroutine)
 	restart   func()        // start over, e.g. on a gadget of its own (any goroutine)
+	net       bool          // add the network function too ("Browser over USB", usbnet.go)
 }
 
 // usbMtp is the service's state. mu guards it; usbMtpOpMu serialises the
@@ -45,6 +46,8 @@ var usbMtp struct {
 	connected bool
 	lastToast time.Time
 	gen       int
+	wantNet   bool // the "Browser over USB" switch, copied on the main thread
+	netUsed   bool // what the running instance was started with
 }
 
 var usbMtpOpMu sync.Mutex
@@ -54,6 +57,7 @@ func init() {
 	// read (startup.go); the gadget is set up on a goroutine after that.
 	deferStartupTask("usb-file-transfer", func() {
 		if usbMtpSupported() && usbMtpEnabled(appConfig) {
+			usbMtpNoteNetSwitch(appConfig)
 			usbMtpApply(true)
 		}
 	})
@@ -69,11 +73,14 @@ func usbMtpSupported() bool { return runtime.GOOS == "linux" && IsTrimuiDevice()
 // usbMtpEnabled reports the Settings switch (main thread). It is on unless
 // turned off; only an explicit off counts, so a garbled value keeps the
 // default.
-func usbMtpEnabled(config *Config) bool {
+func usbMtpEnabled(config *Config) bool { return usbSwitchOn(config, usbMtpSettingKey) }
+
+// usbSwitchOn reads a USB switch that is on unless turned off (main thread).
+func usbSwitchOn(config *Config, key string) bool {
 	if config == nil {
 		return true
 	}
-	v, ok := customValue(config.Variables.Custom, usbMtpSettingKey)
+	v, ok := customValue(config.Variables.Custom, key)
 	if !ok || v == nil {
 		return true
 	}
@@ -90,7 +97,17 @@ func usbMtpEnabled(config *Config) bool {
 // usbMtpSetEnabled stores the switch and starts or stops the service.
 func usbMtpSetEnabled(config *Config, on bool) {
 	setStoreBool(config, usbMtpSettingKey, on)
+	usbMtpNoteNetSwitch(config)
 	usbMtpApply(on)
+}
+
+// usbMtpNoteNetSwitch copies the "Browser over USB" switch for the next
+// start (main thread; the start runs on a goroutine).
+func usbMtpNoteNetSwitch(config *Config) {
+	on := usbNetEnabled(config)
+	usbMtp.mu.Lock()
+	usbMtp.wantNet = on
+	usbMtp.mu.Unlock()
 }
 
 // usbMtpApply asks for the service on or off; the work happens on a
@@ -131,6 +148,7 @@ func usbMtpStartNow() {
 		usbMtp.starting = false
 		usbMtp.err = msg
 		usbMtp.mu.Unlock()
+		usbNetSetStatus(usbNetOff, "", "")
 		logWarn("usbmtp", "USB file transfer not started: %s", msg)
 	}
 	root := fileServerCardRoot()
@@ -143,7 +161,13 @@ func usbMtpStartNow() {
 	// later is only for this instance, not one the switch made since.
 	usbMtp.mu.Lock()
 	gen := usbMtp.gen + 1
+	withNet := usbMtp.wantNet
 	usbMtp.mu.Unlock()
+	if withNet {
+		usbNetSetStatus(usbNetStarting, "", "")
+	} else {
+		usbNetSetStatus(usbNetOff, "", "")
+	}
 	srv, stop, err := usbMtpPlatformStart(usbMtpStartConfig{
 		root:      root,
 		name:      usbMtpDeviceName,
@@ -151,19 +175,28 @@ func usbMtpStartNow() {
 		locked:    startupLocked,
 		connected: usbMtpNoteConnected,
 		restart:   func() { usbMtpRestart(gen) },
+		net:       withNet,
 	})
 	if err != nil {
 		fail(firstLine(err.Error()))
 		return
 	}
+	unavailable := usbNetUnavailable()
 	usbMtp.mu.Lock()
 	usbMtp.starting = false
 	usbMtp.running = true
 	usbMtp.stop = stop
 	usbMtp.gen = gen
+	usbMtp.netUsed = withNet
+	// "Browser over USB" was switched while this start was under way (and
+	// the link can be had here at all).
+	again := usbMtp.wantNet != withNet && !unavailable
 	usbMtp.mu.Unlock()
 	logInfo("usbmtp", "USB file transfer ready, sharing %s", root)
 	go usbMtpWatchLock(srv, gen)
+	if again {
+		usbMtpRestart(gen)
+	}
 }
 
 func usbMtpStopNow() {
@@ -178,6 +211,7 @@ func usbMtpStopNow() {
 	if stop != nil {
 		stop()
 	}
+	usbNetSetStatus(usbNetOff, "", "")
 	logInfo("usbmtp", "USB file transfer off")
 }
 

@@ -48,8 +48,8 @@ snapped to whole pixels, so the stem and the rim are single sharp steps.
 
 | File | Size | Used by |
 |------|------|---------|
-| `player/JukaPlayer.png` | 300 px | the running window's icon (`windowicon.go`, `go:embed`), the About screen (`brandlogo.go`), and the Apps-menu icon of a release folder (`player/config.json`) |
-| `player/trimui/Apps/JukaHub/icon.png` | 300 px | the Apps-menu icon of the SD-card package (`package-sdcard.sh`) |
+| `player/JukaPlayer.png` | 300 px | the running window's icon (`windowicon.go`, `go:embed`) and the About screen (`brandlogo.go`) |
+| `player/trimui/Apps/JukaHub/icon.png` | 300 px, logo 176 px | the TrimUI Apps-menu icon of the SD-card package (`package-sdcard.sh`) and of every release folder (`release.sh` and the release workflow copy it as `icon.png`, which `player/config.json` names). MainUI stretches `"icon"` over the whole grid cell and prints the label across its lower part, so the logo sits where a stock-sized icon does: 58% of the cell, centred, 8% from the top (`APP_TILE`, `APP_TILE_TOP`) |
 | `player/JukaHub.ico` | 16, 20, 24, 32 (mark); 40, 48, 64, 128, 256 (logo) | Explorer, the taskbar, Alt-Tab, the Start menu |
 | `player/rsrc_windows_amd64.syso` | | the `.ico` compiled into the executable (see `JukaHub.rc`) |
 | `favicon.svg`, `favicon.png` | vector, 48 px | the web builder's tab and app bar |

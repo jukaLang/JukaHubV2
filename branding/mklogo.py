@@ -27,9 +27,10 @@ It writes:
 
   branding/jukahub-logo.svg, jukahub-mark.svg   vector exports
   branding/jukahub-logo-1024.png                the full-size render
-  player/JukaPlayer.png                         window icon (go:embed) and the
-                                                release folder's TrimUI icon
-  player/trimui/Apps/JukaHub/icon.png           SD-card package's TrimUI icon
+  player/JukaPlayer.png                         window icon (go:embed), About
+  player/trimui/Apps/JukaHub/icon.png           the TrimUI Apps-menu icon (SD-card
+                                                package and release folder): the
+                                                logo set inside a 300 px cell
   player/JukaHub.ico                            Windows icon, 16-256 px
   player/rsrc_windows_amd64.syso                the .ico as a COFF resource,
                                                 laid out exactly as windres does
@@ -95,6 +96,17 @@ ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 ICO_PNG_FROM = 64
 MARK_UP_TO = 32
 SNAP_UP_TO = 64  # sizes whose edges are snapped to whole pixels
+
+# The TrimUI Apps-menu icon. MainUI stretches config.json's "icon" over the
+# whole grid cell (Brick firmware 1.0.0 on, Smart Pro alike) and prints the
+# label over the cell's lower fifth, so a logo that fills the canvas comes out
+# far bigger than its neighbours with the name written across it (Brick,
+# 2026-11-18). This canvas keeps the official 300 px and puts the tile where a
+# stock-sized icon sits in that cell (PortMaster's, measured on the device): a
+# side of 58% of the cell, centred across, its top 8% down, clear of the label.
+APP_ICON_SIZE = 300
+APP_TILE = 0.58
+APP_TILE_TOP = 0.08
 
 
 def rgb(hexstr):
@@ -315,6 +327,17 @@ def render_mark(size, opaque=False, bleed=False):
 def render_icon(size):
     """The right drawing for an icon of this size."""
     return render_mark(size) if size <= MARK_UP_TO else render_logo(size)
+
+
+def render_app_icon(size=APP_ICON_SIZE):
+    """The TrimUI Apps-menu icon: the logo drawn at the size its tile needs
+    (so the edges stay exact, not a downscale) on a transparent canvas, the
+    tile APP_TILE of the canvas wide and APP_TILE_TOP below its top edge."""
+    inner = round(size * APP_TILE / (1 - 2 * TILE_MARGIN))
+    logo = render_logo(inner)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.paste(logo, ((size - inner) // 2, round(size * APP_TILE_TOP - TILE_MARGIN * inner)))
+    return canvas
 
 
 # ── SVG exports ───────────────────────────────────────────────────────────
@@ -594,7 +617,7 @@ def build_assets():
         "branding/jukahub-logo.svg": svg_logo().encode(),
         "branding/jukahub-mark.svg": svg_mark().encode(),
         "player/JukaPlayer.png": app300,
-        "player/trimui/Apps/JukaHub/icon.png": app300,
+        "player/trimui/Apps/JukaHub/icon.png": png_bytes(render_app_icon()),
         "player/JukaHub.ico": ico,
         "player/rsrc_windows_amd64.syso": syso_bytes(ico),
         "favicon.png": png_bytes(render_mark(48, bleed=True)),

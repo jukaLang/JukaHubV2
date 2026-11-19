@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -36,6 +38,23 @@ func TestBrowserChromeNavigationHeaders(t *testing.T) {
 	}
 	if wantUA := "Chrome/157.0.0.0"; !strings.Contains(browserChromeUserAgent, wantUA) {
 		t.Errorf("User-Agent %q does not carry the reduced Chrome major %q", browserChromeUserAgent, wantUA)
+	}
+}
+
+func TestBrowserWikipediaUsesMobileSkinIdentity(t *testing.T) {
+	page, _ := url.Parse("https://en.m.wikipedia.org/")
+	article, _ := url.Parse("https://en.wikipedia.org/wiki/Main_Page")
+	for _, target := range []*url.URL{page, article} {
+		h := http.Header{}
+		browserChromeNavigateURL(h, target)
+		if h.Get("User-Agent") != browserChromeMobileUserAgent || h.Get("Sec-CH-UA-Mobile") != "?1" || h.Get("Sec-CH-UA-Platform") != `"Android"` {
+			t.Fatalf("Wikipedia navigation did not request its mobile skin: %v", h)
+		}
+	}
+	h := http.Header{}
+	browserChromeResource(h, "style", browserAcceptStyle, article, &url.URL{Scheme: "https", Host: "upload.wikimedia.org"})
+	if h.Get("User-Agent") != browserChromeMobileUserAgent {
+		t.Fatal("Wikipedia subresource changed browser identity")
 	}
 }
 
@@ -122,5 +141,52 @@ func TestBrowserTransportNegotiatesHTTP2(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.ProtoMajor != 2 {
 		t.Fatalf("negotiated %s, want HTTP/2", resp.Proto)
+	}
+}
+
+func TestBrowserClientHintsFollowAcceptCH(t *testing.T) {
+	origin := &url.URL{Scheme: "https", Host: "hints.example.test", Path: "/page"}
+	other := &url.URL{Scheme: "https", Host: "other.example.test", Path: "/page"}
+	// Keep the process-wide hint store from leaking into another test.
+	browserClientHints.Lock()
+	delete(browserClientHints.origins, browserClientHintOrigin(origin))
+	delete(browserClientHints.origins, browserClientHintOrigin(other))
+	browserClientHints.Unlock()
+	defer func() {
+		browserClientHints.Lock()
+		delete(browserClientHints.origins, browserClientHintOrigin(origin))
+		browserClientHints.Unlock()
+	}()
+
+	first := http.Header{}
+	browserClientHintsApply(first, origin)
+	if first.Get("Sec-CH-Viewport-Width") != "" || first.Get("Sec-CH-Viewport-Height") != "" {
+		t.Fatal("viewport hints were sent before the origin opted in")
+	}
+	response := http.Header{}
+	response.Set("Accept-CH", "Sec-CH-VIEWPORT-WIDTH, Sec-CH-Viewport-Height, Sec-CH-DPR, Sec-CH-UA-Arch")
+	browserClientHintsNote(response, origin)
+
+	next := http.Header{}
+	browserClientHintsApply(next, origin)
+	w, h := webMediaViewport()
+	wantW, wantH := strconv.Itoa(int(math.Ceil(w))), strconv.Itoa(int(math.Ceil(h)))
+	if got := next.Get("Sec-CH-Viewport-Width"); got != wantW {
+		t.Errorf("Sec-CH-Viewport-Width = %q, want %q", got, wantW)
+	}
+	if got := next.Get("Sec-CH-Viewport-Height"); got != wantH {
+		t.Errorf("Sec-CH-Viewport-Height = %q, want %q", got, wantH)
+	}
+	if got, want := next.Get("Sec-CH-DPR"), strconv.FormatFloat(webViewportPixelScale(), 'f', -1, 64); got != want {
+		t.Errorf("Sec-CH-DPR = %q, want %q", got, want)
+	}
+	if got := next.Get("Sec-CH-UA-Arch"); got != "" {
+		t.Errorf("unsupported Accept-CH hint was echoed: %q", got)
+	}
+
+	foreign := http.Header{}
+	browserClientHintsApply(foreign, other)
+	if foreign.Get("Sec-CH-Viewport-Width") != "" {
+		t.Fatal("an origin inherited another origin's client hints")
 	}
 }

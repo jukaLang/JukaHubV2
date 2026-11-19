@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName}
+var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -145,6 +145,8 @@ func tbxDisplayName(name string) string {
 		return "Email & calendar"
 	case mailSceneName:
 		return "Mail"
+	case linuxPkgSceneName:
+		return "Linux packages"
 	}
 	return ""
 }
@@ -1449,6 +1451,8 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return mailcalSceneClick(mx, my, config)
 	case mailSceneName:
 		return mailSceneClick(mx, my, config)
+	case linuxPkgSceneName:
+		return linuxPkgSceneClick(mx, my, config)
 	}
 	return false
 }
@@ -1501,6 +1505,8 @@ func tbxSceneNav(name string) *tbxNav {
 		return &mailcalScreen.nav
 	case mailSceneName:
 		return mailActiveNav()
+	case linuxPkgSceneName:
+		return &linuxPkgScreen.nav
 	}
 	return nil
 }
@@ -1539,6 +1545,8 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return mailcalSceneHints(), true
 	case mailSceneName:
 		return mailSceneHints(), true
+	case linuxPkgSceneName:
+		return linuxPkgSceneHints(), true
 	}
 	return nil, false
 }

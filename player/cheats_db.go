@@ -449,6 +449,8 @@ type cheatsLoadResult struct {
 	Problem  string // why the list is empty although a file was found
 	NotRA    string // the emulator, when the game does not start in RetroArch
 	UserFile string // RetroArch's own game-specific file, which wins
+	Minarch  bool   // the game starts through a NextUI pak (minarch reads the cheats)
+	NoTag    bool   // ... from a path minarch files no cheats under
 }
 
 // cheatsLoadFor finds the game's cheats: the forced file (picked in the
@@ -461,9 +463,18 @@ func cheatsLoadFor(game libraryGame, forced cheatRef) cheatsLoadResult {
 		res.OwnZip = true
 	}
 	if launcher := resolveGameLauncherFor(game); launcher != "" {
-		if !retroArchLauncher(launcher) {
+		switch {
+		case cheatsMinarchLauncher(launcher):
+			res.Minarch = true
+			file, legacy := cheatsMinarchPaths(game.Path)
+			res.NoTag = file == ""
+			res.UserFile = cheatsMinarchUserFile(file, legacy)
+		case !retroArchLauncher(launcher):
 			res.NotRA = strings.TrimSuffix(filepath.Base(launcher), filepath.Ext(launcher))
-		} else {
+			if nextuiIsPakLauncher(launcher) {
+				res.NotRA = nextuiPakTag(launcher) + ".pak's own emulator" // not "launch"
+			}
+		default:
 			res.UserFile = cheatsUserFileFor(launcher, game)
 		}
 	}

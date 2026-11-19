@@ -48,6 +48,18 @@ package main
 //
 // With no cheat switched on, nothing at all is written or changed. Standalone
 // emulators are skipped; the PPSSPP core does not read .cht files.
+//
+// A game that starts through a NextUI pak (nextui.go) runs in minarch, not
+// RetroArch: NextUI's front end reads Cheats/<TAG>/<ROM file name>.cht on the
+// card itself (its docs; an older NextUI took the name without the ROM's
+// extension) and lists it in the game menu → Options → Cheats. Such a launch
+// gets that file instead (prepareCheatsMinarch), in the database's own layout
+// with no marker line (an old minarch read "cheats = N" off the first line)
+// and the switched-on cheats first: minarch handed only enabled cheats to the
+// core, at their own numbers, which PCSX-ReARMed drops past a gap (NextUI
+// issue 841). It is the same one-launch file, recorded and removed after the
+// game the same way; with no marker, the fingerprint alone says it is
+// JukaHub's. Nothing in retroarch.cfg is touched for it.
 
 import (
 	"crypto/sha256"
@@ -464,6 +476,12 @@ func prepareCheats(launcher string, game libraryGame) {
 	if !ok || len(rec.On) == 0 {
 		return
 	}
+	// A NextUI pak's launch.sh names "_libretro.so" and so passes for a
+	// RetroArch launcher below: it is checked first.
+	if cheatsMinarchLauncher(launcher) {
+		prepareCheatsMinarch(launcher, game, rec)
+		return
+	}
 	if !retroArchLauncher(launcher) {
 		logDebug("cheats", "%s does not start RetroArch; its cheats are not applied", filepath.Base(launcher))
 		return
@@ -517,6 +535,187 @@ func prepareCheats(launcher string, game libraryGame) {
 			Log().Info("cheats applied for this launch", "file", path, "config", cfg)
 		}
 	}
+}
+
+// ── NextUI (minarch) ─────────────────────────────────────────────────────
+
+// cheatsMinarchScanLimit bounds how much of a pak's launch.sh is read to see
+// what it runs (NextUI's are a few hundred bytes).
+const cheatsMinarchScanLimit = 16 << 10
+
+// cheatsMinarchLauncher reports whether launcher is a NextUI pak that plays
+// the game in minarch. A pak that runs something else (a standalone emulator
+// someone packed) is not one.
+func cheatsMinarchLauncher(launcher string) bool {
+	if !nextuiIsPakLauncher(launcher) {
+		return false
+	}
+	f, err := os.Open(launcher)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head, err := io.ReadAll(io.LimitReader(f, cheatsMinarchScanLimit))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(head)), "minarch")
+}
+
+// cheatsMinarchTag is the TAG minarch files a game's cheats under, worked out
+// the way MinUI's getEmuName does it: for a game under the card's Roms, the
+// last "(…)" of its console folder (the folder's own name when it has none);
+// anywhere else, the last "(…)" of the whole path. "" when that gives no
+// usable folder name.
+func cheatsMinarchTag(romPath string) string {
+	p := filepath.ToSlash(filepath.Clean(romPath))
+	roms := strings.TrimSuffix(filepath.ToSlash(nextuiCardRoot()), "/") + "/Roms/"
+	name := p
+	inRoms := len(p) > len(roms) && strings.EqualFold(p[:len(roms)], roms)
+	if inRoms {
+		name = p[len(roms):]
+		if i := strings.IndexByte(name, '/'); i >= 0 {
+			name = name[:i]
+		}
+	}
+	tag := ""
+	if open := strings.LastIndexByte(name, '('); open >= 0 {
+		rest := name[open+1:]
+		end := strings.IndexByte(rest, ')')
+		if end < 0 {
+			return ""
+		}
+		tag = rest[:end] // untrimmed, as minarch takes it
+	} else if inRoms {
+		tag = name
+	}
+	if strings.TrimSpace(tag) == "" || tag == "." || tag == ".." || strings.ContainsAny(tag, "/\\\x00") {
+		return ""
+	}
+	return tag
+}
+
+// cheatsMinarchPaths are the cheat file minarch looks for first,
+// Cheats/<TAG>/<ROM file name>.cht, and the older name it still finds (the
+// ROM's name without its extension; "" when there is no extension).
+func cheatsMinarchPaths(romPath string) (path, legacy string) {
+	tag := cheatsMinarchTag(romPath)
+	base := filepath.Base(filepath.Clean(romPath))
+	if tag == "" || base == "" || base == "." || base == string(filepath.Separator) {
+		return "", ""
+	}
+	dir := filepath.Join(nextuiCardRoot(), "Cheats", tag)
+	path = filepath.Join(dir, base+".cht")
+	if stem := strings.TrimSuffix(base, filepath.Ext(base)); stem != "" && stem != base {
+		legacy = filepath.Join(dir, stem+".cht")
+	}
+	return path, legacy
+}
+
+// cheatsMinarchUserFile is a cheat file for the game the user keeps in
+// NextUI's Cheats folder (from a cheat downloader pak, or their own), "" when
+// there is none. minarch reads it, so JukaHub writes nothing over it — nor a
+// file under the newer name, which minarch would read instead.
+func cheatsMinarchUserFile(path, legacy string) string {
+	for _, p := range []string{path, legacy} {
+		if p != "" && regularFile(p) && cheatsUserFile(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+// cheatsOnFirst puts the switched-on cheats with a code first, then the
+// switched-on ones without (RetroArch memory cheats, which minarch does not
+// hand to the core), then the rest, each group in its own order.
+func cheatsOnFirst(cheats []chtCheat) []chtCheat {
+	rank := func(c chtCheat) int {
+		switch {
+		case c.Enable && strings.TrimSpace(c.Code) != "":
+			return 0
+		case c.Enable:
+			return 1
+		}
+		return 2
+	}
+	out := make([]chtCheat, 0, len(cheats))
+	for r := 0; r <= 2; r++ {
+		for _, c := range cheats {
+			if rank(c) == r {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// chtFormatMinarch writes cheats the way libretro's database files are
+// written — "cheats = N" on the first line, numbers and switches bare — which
+// every minarch reads. No marker line (see the header).
+func chtFormatMinarch(cheats []chtCheat) string {
+	var b strings.Builder
+	b.WriteString("cheats = " + strconv.Itoa(len(cheats)) + "\n\n")
+	for i, c := range cheats {
+		p := "cheat" + strconv.Itoa(i) + "_"
+		b.WriteString(p + "desc = \"" + chtQuote(c.Desc) + "\"\n")
+		b.WriteString(p + "code = \"" + chtQuote(c.Code) + "\"\n")
+		b.WriteString(p + "enable = " + strconv.FormatBool(c.Enable) + "\n")
+		for _, f := range c.Extra {
+			b.WriteString(p + f.Key + " = " + chtBareOrQuoted(f.Value) + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// chtBareOrQuoted is a value bare when it is one plain word (a number, a
+// switch), as the database writes those, else quoted.
+func chtBareOrQuoted(v string) string {
+	if v == "" {
+		return `""`
+	}
+	for _, r := range v {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '.', r == '-', r == '+', r == '_':
+		default:
+			return "\"" + chtQuote(v) + "\""
+		}
+	}
+	return v
+}
+
+// prepareCheatsMinarch is prepareCheats for a game a NextUI pak starts: the
+// game's file in NextUI's Cheats folder, for this launch only.
+func prepareCheatsMinarch(launcher string, game libraryGame, rec cheatsGameRecord) {
+	path, legacy := cheatsMinarchPaths(game.Path)
+	if path == "" {
+		logWarn("cheats", "cannot tell which NextUI cheat folder %s uses; launching without cheats", game.Path)
+		return
+	}
+	if user := cheatsMinarchUserFile(path, legacy); user != "" {
+		logInfo("cheats", "%s is the user's own NextUI cheat file; it is kept and used for this launch", user)
+		return
+	}
+	data, err := cheatsReadRef(cheatRef{Source: rec.Source, Entry: rec.Entry})
+	if err != nil {
+		logWarn("cheats", "cannot read the cheat file %s: %v; launching without cheats", rec.Entry, err)
+		return
+	}
+	cheats := parseCht(data)
+	if cheatsApplyRecord(cheats, rec.On) == 0 {
+		logWarn("cheats", "the cheats switched on for %s are no longer in %s; launching without cheats", game.Path, rec.Entry)
+		return
+	}
+	cheats = cheatsOnFirst(cheats)
+	if cheatsWriteGameFile(path, chtFormatMinarch(cheats), cheatsFingerprint(cheats)) {
+		Log().Info("cheats applied for this launch", "file", path, "emulator", nextuiPakLabel(launcher))
+	}
+}
+
+// cheatsKeepsFolder reports whether a one-launch file's folder stays when it
+// is empty: NextUI's Cheats/<TAG> is the card's own, whoever made it.
+func cheatsKeepsFolder(path string) bool {
+	return filepath.Clean(filepath.Dir(filepath.Dir(path))) == filepath.Clean(filepath.Join(nextuiCardRoot(), "Cheats"))
 }
 
 // ── The one-launch game-specific file ────────────────────────────────────
@@ -636,16 +835,18 @@ func cheatsUserFile(path string) bool {
 // to clean up rather than cheats on every firmware launch after.
 func cheatsWriteGameFile(path, text, fp string) bool {
 	if cheatsUserFile(path) {
-		logInfo("cheats", "%s is the user's own RetroArch cheat file; it is kept and used for this launch", path)
+		logInfo("cheats", "%s is the user's own game-specific cheat file; it is kept and used for this launch", path)
 		return false
 	}
 	cheatsPending.mu.Lock()
 	defer cheatsPending.mu.Unlock()
 	files := cheatsPendingLoadLocked()
+	// A path already recorded with other cheats gets a second entry rather
+	// than a new fingerprint: should this write fail, the file still there is
+	// still known as JukaHub's (a NextUI file has no marker line to say so).
 	listed := false
 	for i := range files {
-		if strings.EqualFold(filepath.Clean(files[i].Path), filepath.Clean(path)) {
-			files[i].Fingerprint = fp
+		if strings.EqualFold(filepath.Clean(files[i].Path), filepath.Clean(path)) && files[i].Fingerprint == fp {
 			listed = true
 		}
 	}
@@ -697,7 +898,7 @@ func cheatsCleanupLocked() {
 			continue
 		}
 		if !cheatsOurFile(raw, e.Fingerprint) {
-			logInfo("cheats", "%s was changed in RetroArch; it is the user's now and stays", e.Path)
+			logInfo("cheats", "%s was changed in the emulator's menu; it is the user's now and stays", e.Path)
 			continue
 		}
 		if err := os.Remove(e.Path); err != nil && !os.IsNotExist(err) {
@@ -705,7 +906,9 @@ func cheatsCleanupLocked() {
 			keep = append(keep, e)
 			continue
 		}
-		_ = os.Remove(filepath.Dir(e.Path)) // only succeeds when empty
+		if !cheatsKeepsFolder(e.Path) {
+			_ = os.Remove(filepath.Dir(e.Path)) // only succeeds when empty
+		}
 		logDebug("cheats", "removed the one-launch cheat file %s", e.Path)
 	}
 	if err := cheatsPendingSaveLocked(keep); err != nil {
@@ -757,7 +960,21 @@ func cheatsWatchExit() {
 	}
 }
 
+// cheatsCleanupAtExit removes the one-launch files as JukaHub quits, unless a
+// game still runs: a power off minarch asks for at the end of a game
+// (nextuiPakExited) comes before the watcher's next look, and the file must
+// not be there for a game NextUI starts after the next power-on.
+func cheatsCleanupAtExit() {
+	if gameScreenSuspended() || retroArchRunning() {
+		return
+	}
+	cheatsPending.mu.Lock()
+	defer cheatsPending.mu.Unlock()
+	cheatsCleanupLocked()
+}
+
 func init() {
 	// After the first frame, beside the video filter's preset repair.
 	deferStartupTask("cheats", func() { go cheatsCleanup() })
+	Cleanup = append(Cleanup, cheatsCleanupAtExit)
 }

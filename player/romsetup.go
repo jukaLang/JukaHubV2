@@ -316,7 +316,8 @@ func romSheetReferences(sheet string) []string {
 		}
 		return s[start+1 : start+1+end], true
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	// A sheet saved by a Windows editor can start with a byte-order mark.
+	for _, line := range strings.Split(strings.TrimPrefix(string(data), "\ufeff"), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -324,6 +325,11 @@ func romSheetReferences(sheet string) []string {
 		switch ext {
 		case ".m3u":
 			if !strings.HasPrefix(line, "#") {
+				// RetroArch's "disc.cue|Label" gives a disc a label; FAT
+				// cannot hold a "|" in a name.
+				if bar := strings.IndexByte(line, '|'); bar >= 0 {
+					line = line[:bar]
+				}
 				add(line)
 			}
 		case ".cue":
@@ -456,6 +462,12 @@ func plugxROMFormats() (byExt, byFolder map[string]romSystem) {
 }
 
 func scanROMLibrary(roots []string) romScanReport {
+	// Loose discs become one game (an .m3u) on their own goroutine; what it
+	// writes shows in the next scan, which it asks for (disctools.go). Only
+	// for the library's own roots, never blocking this walk.
+	if hook := romScanStartHook; hook != nil {
+		hook(roots)
+	}
 	report := romScanReport{Roots: append([]string(nil), roots...), Counts: make(map[string]int)}
 	pluginByExt, pluginByFolder := plugxROMFormats()
 	seen := make(map[string]bool)
@@ -730,6 +742,10 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		// A cover another front end left on the card (Imgs, .res) is shown
 		// as it is; asking the server would only replace the user's choice.
 		if artworkCoverPresent(path) || romLocalCoverPath(rom) != "" {
+			return artSkipped
+		}
+		// Nor is a game whose cover the user removed (artwork_nocover.go).
+		if artworkNoCover(rom, dest) {
 			return artSkipped
 		}
 		// Two ROMs can share one cover file (Game.sfc in USA/ and in Hacks/);
@@ -1361,6 +1377,10 @@ func romsMissingArtwork(roms []scannedROM, artRoot string) []scannedROM {
 			continue
 		}
 		if romLocalCoverPath(rom) != "" {
+			continue
+		}
+		// The user removed its cover (artwork_nocover.go): not missing.
+		if artworkNoCover(rom, artRoot) {
 			continue
 		}
 		missing = append(missing, rom)

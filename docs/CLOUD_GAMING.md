@@ -99,5 +99,5 @@ paid memberships get priority access and play longer at higher quality.
 | Path | What |
 | --- | --- |
 | `data/greenovercast.json` | The GreenOvercast build JukaHub installed (build, address, MD5) |
-| `data/private-glibc/` | The checked package and private glibc used by GreenOvercast on older TrimUI firmware |
+| `data/private-glibc/` | The private glibc 2.39 runtime (Ubuntu's signed packages) used by GreenOvercast, and by PortMaster's bash, on older TrimUI firmware |
 | `data/ports-store/incoming/` | Where the download waits for the port installer |

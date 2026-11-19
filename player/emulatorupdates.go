@@ -304,7 +304,12 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 		// The checksum cache is keyed by size and modification time, so a core
 		// read by the last check (or the Core builds page) is not read again.
 		sum, err := emuCachedCRC32(build.Path)
-		if err != nil || sum == entry.CRC32 {
+		if err != nil {
+			// Not a silent skip: a core that cannot be read is never updated.
+			logWarn("emulators", "core %s not compared with the index: cannot read %s: %v", entry.Core, build.Path, err)
+			continue
+		}
+		if sum == entry.CRC32 {
 			continue
 		}
 		updates = append(updates, coreUpdate{
@@ -689,6 +694,13 @@ func coreCrossMixAskedPath() string { return filepath.Join(compatDir(), "core-cr
 // returns their display names, for the toast; a build named before returns
 // nothing.
 func coreCrossMixAskOnce(held []coreHeldBuild) []string {
+	return coreHeldAskOnce(held, "CrossMix's own build")
+}
+
+// coreHeldAskOnce is coreCrossMixAskOnce for any build an automatic pass holds
+// back (the GPU cores of coreGPUAutoHold too): one record per core and build,
+// so each is named once; what names the kind of build for the log.
+func coreHeldAskOnce(held []coreHeldBuild, what string) []string {
 	if len(held) == 0 {
 		return nil
 	}
@@ -728,7 +740,7 @@ func coreCrossMixAskOnce(held []coreHeldBuild) []string {
 	if err != nil {
 		logWarn("emulators", "could not save the CrossMix builds already named: %v", err)
 	}
-	logInfo("emulators", "core auto-update: kept CrossMix's own build of %s; a press replaces it", strings.Join(names, ", "))
+	logInfo("emulators", "core auto-update: kept %s of %s; a press replaces it", what, strings.Join(names, ", "))
 	return names
 }
 

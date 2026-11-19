@@ -485,6 +485,33 @@ bool ss_battery_read(const char *root, SsBattery *battery)
     return true;
 }
 
+/* ---- the network ---- */
+
+bool ss_net_up(const char *root)
+{
+    char path[512];
+    join_path(path, sizeof(path), root, "proc/net/route");
+    FILE *file = fopen(path, "r");
+    if(!file) return true;
+    char line[256];
+    bool header = true;
+    bool up = false;
+    while(fgets(line, sizeof(line), file)) {
+        if(header) { /* "Iface Destination Gateway Flags ..." */
+            header = false;
+            continue;
+        }
+        char iface[64], destination[16], gateway[16];
+        unsigned int flags = 0;
+        if(sscanf(line, "%63s %15s %15s %x", iface, destination, gateway, &flags) != 4) continue;
+        if(strcmp(destination, "00000000") != 0 || !(flags & 1u) || !strcmp(iface, "lo")) continue;
+        up = true;
+        break;
+    }
+    fclose(file);
+    return up;
+}
+
 /* ---- the built-in pad ---- */
 
 static bool contains_ci(const char *text, const char *word)

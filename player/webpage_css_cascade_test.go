@@ -62,6 +62,64 @@ func webTestStyleForText(doc *webDocument, text string) (webStyle, bool) {
 	return webStyle{}, false
 }
 
+func TestWebCSSAspectRatioReservesBlockHeight(t *testing.T) {
+	legibleTestInitFonts(t)
+	doc := parseWebPage(`<style>.box{width:320px;aspect-ratio:2/1;background:#eef}</style><div class="box">Body</div>`, "", "https://example.com/")
+	layout := doc.computeLayout(&Config{}, Element{Font: "body"}, 800)
+	if len(layout.Backgrounds) == 0 {
+		t.Fatal("aspect-ratio block painted no background")
+	}
+	bg := layout.Backgrounds[0].Rect
+	if bg.H <= layout.RowH*2 {
+		t.Fatalf("aspect-ratio block did not reserve height: %+v row=%d", bg, layout.RowH)
+	}
+	if ratio := float64(bg.W) / float64(bg.H); ratio < 1.55 || ratio > 2.45 {
+		t.Fatalf("aspect-ratio block has ratio %.2f, want about 2:1 (%+v)", ratio, bg)
+	}
+}
+
+func TestWebCSSNestingAppliesNestedRules(t *testing.T) {
+	source := `<style>.card { color:#111111; .title { color:#cc0000 } }</style>` +
+		`<div class="card"><p class="title">Nested title</p></div>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Nested title")
+	if !ok || !style.HasColor || style.Color.R != 0xcc || style.Color.G != 0 || style.Color.B != 0 {
+		t.Fatalf("nested descendant rule did not apply: %+v", style.Color)
+	}
+}
+
+func TestWebCSSNestingResolvesAmpersandAgainstEachParent(t *testing.T) {
+	source := `<style>.card, .panel { & .title { color:#00cc00 } }</style>` +
+		`<div class="panel"><p class="title">Ampersand title</p></div>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Ampersand title")
+	if !ok || !style.HasColor || style.Color.R != 0 || style.Color.G != 0xcc || style.Color.B != 0 {
+		t.Fatalf("nested & rule did not resolve against its parent selector: %+v", style.Color)
+	}
+}
+
+func TestWebCSSNestingKeepsConditionalAtRules(t *testing.T) {
+	source := `<style>.card { @media (min-width: 1px) { .title { color:#0000cc } color:#0000cc } }</style>` +
+		`<div class="card"><p class="title">Conditional title</p>Conditional parent</div>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	for _, text := range []string{"Conditional title", "Conditional parent"} {
+		style, ok := webTestStyleForText(doc, text)
+		if !ok || !style.HasColor || style.Color.R != 0 || style.Color.G != 0 || style.Color.B != 0xcc {
+			t.Fatalf("nested @media rule did not apply to %q: %+v", text, style.Color)
+		}
+	}
+}
+
+func TestWebCSSNestingKeepsParentDeclarations(t *testing.T) {
+	source := `<style>.card { padding: 12px; .title { font-weight: 700 } }</style>` +
+		`<div class="card">Parent padding</div>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	style, ok := webTestStyleForText(doc, "Parent padding")
+	if !ok || style.PadTop != 12 {
+		t.Fatalf("parent declaration was lost when the rule also had a nested child: pad=%v", style.PadTop)
+	}
+}
+
 func TestWebFunctionalPseudoClassMatching(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -471,12 +529,12 @@ func TestWebCSSUnsupportedConstructsAreDocumented(t *testing.T) {
 	doc := string(data)
 	for _, construct := range []string{
 		"font-family", "Percentage heights",
-		"aspect-ratio on an ordinary block",
+		"aspect-ratio on a wrapper with no direct block",
 		"block/inline conversion", "Width/min-width/max-width on a flex/grid container",
 		"position: sticky",
 		"text-overflow", "transform",
-		"transition", "animation", "filter", "clip-path", "grid-template-rows",
-		"grid-row", "grid-column", "grid-area",
+		"transition", "animation", "filter", "clip-path",
+		"non-rectangular `grid-template-areas` matrices",
 		"list-style-image", "list-style-position",
 		"::first-line", "::first-letter", "::selection", "::placeholder", "::backdrop",
 		"content: url", "@font-face", "@keyframes", "@page", "@layer",
@@ -499,7 +557,7 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 	}
 	classified := map[string]bool{}
 	for _, name := range []string{
-		"align-items", "align-self", "aspect-ratio", "background", "background-color",
+		"align-content", "align-items", "align-self", "aspect-ratio", "background", "background-color",
 		"background-image", "background-size", "background-position", "background-repeat", "border", "border-bottom", "border-bottom-left-radius",
 		"border-bottom-right-radius", "border-bottom-width", "border-color", "border-left",
 		"border-left-width", "border-radius", "border-right", "border-right-width",
@@ -508,9 +566,13 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		"table-layout", "border-collapse", "border-spacing",
 		"container", "container-name", "container-type", "content", "counter-increment",
 		"counter-reset", "counter-set", "display", "flex",
-		"flex-basis", "flex-direction", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-size",
-		"font-style", "font-weight", "gap", "grid-template-columns", "height", "inset",
-		"inset-block-start", "inset-block-end", "inset-inline-start", "inset-inline-end",
+		"flex-basis", "flex-direction", "flex-flow", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-size",
+		"font-style", "font-weight", "gap", "grid-template-columns", "grid-column",
+		"grid-column-start", "grid-column-end", "grid-template-rows", "grid-row",
+		"grid-row-start", "grid-row-end", "grid-template-areas", "grid-area",
+		"grid-auto-flow", "grid-auto-columns", "grid-auto-rows", "justify-items", "justify-self", "place-self", "place-content", "height", "inset",
+		"inset-block", "inset-block-start", "inset-block-end",
+		"inset-inline", "inset-inline-start", "inset-inline-end",
 		"justify-content", "left", "letter-spacing", "line-height", "list-style", "list-style-type", "margin", "margin-block",
 		"margin-block-end", "margin-block-start", "margin-bottom", "margin-inline",
 		"margin-inline-end", "margin-inline-start", "margin-left", "margin-right", "margin-top",
@@ -520,7 +582,8 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		"padding-inline-start", "padding-left", "padding-right", "padding-top", "place-items",
 		"position", "right", "row-gap", "text-align", "text-decoration", "text-decoration-color", "text-decoration-thickness",
 		"text-decoration-line", "text-decoration-style", "text-indent", "text-shadow", "text-transform", "top",
-		"overflow", "overflow-x", "overflow-y", "vertical-align", "visibility", "white-space", "width", "word-spacing", "z-index",
+		"overflow", "overflow-x", "overflow-y", "overflow-wrap", "word-wrap", "word-break", "text-overflow",
+		"vertical-align", "visibility", "white-space", "width", "word-spacing", "z-index",
 	} {
 		classified[name] = true
 	}
@@ -923,6 +986,25 @@ func TestWebCSSBudgetKeepsCompleteNestedRules(t *testing.T) {
 	if len(rules) != 1 || rules[0].selector != ".lead" {
 		t.Fatalf("complete rule in a large @media block was lost: %+v", rules)
 	}
+}
+
+func TestWebLargeInlineSheetKeepsLatePageStyles(t *testing.T) {
+	// CNN puts its homepage component rules near the end of a style block
+	// larger than 3 MiB. Losing that tail leaves the page mostly unstyled.
+	source := `<style>.early{color:#111}` + strings.Repeat(" ", 3<<20) +
+		`.headline{color:#c00}</style><h1 class="headline">Late styled headline</h1>`
+	doc := parseWebPage(source, "", "https://example.com/")
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			if strings.Contains(run.Text, "Late styled headline") {
+				if !run.Style.HasColor || run.Style.Color.R != 0xcc || run.Style.Color.G != 0 || run.Style.Color.B != 0 {
+					t.Fatalf("late inline rule was lost: %+v", run.Style.Color)
+				}
+				return
+			}
+		}
+	}
+	t.Fatal("headline was not parsed")
 }
 
 func TestWebCSSGridGroupsWholeCards(t *testing.T) {

@@ -214,8 +214,12 @@ func pkgBuildStoreLinks(windows bool) []pkgStoreLink {
 	if windows {
 		sub = "Programs on this PC"
 	}
+	// Get Homebrew comes last: the Smart Pro's L2/R2 loop (pkgHub*) counts
+	// the first three pills by position.
 	return append(links, pkgStoreLink{title: windowsAppsEntryName, sub: sub, glyph: "apps",
-		open: func(*Config) { openWindowsAppsPanel(false) }})
+		open: func(*Config) { openWindowsAppsPanel(false) }},
+		pkgStoreLink{title: homebrewEntryName, sub: "New games from itch.io", glyph: homebrewGlyph, screen: true,
+			open: homebrewStoreOpen})
 }
 
 // pkgStoresOnly reports a model with no packages in it (no list yet, nothing
@@ -246,7 +250,7 @@ func pkgStoresHasPad() bool {
 // opened. The mark is spent either way, so it can never carry over to a later,
 // unrelated visit.
 func pkgStoresOnEnter() {
-	back := pkgStores.leftFor && pkgStores.leftScene == apkStoreSceneName
+	back := pkgStores.leftFor && (pkgStores.leftScene == apkStoreSceneName || pkgStores.leftScene == homebrewSceneName)
 	pkgStores.leftFor = false
 	if !back {
 		pkgStores.focus = false

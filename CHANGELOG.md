@@ -13,6 +13,484 @@ For anything older, the git log and the
 
 ### Added
 
+- **A look for every console, chosen for you** (Juka, 2026-11-18). Settings →
+  Emulation now has a **Look** row per console next to the overlay: CRT, LCD
+  grid, scanlines, sharp or smooth pixels, and SkyWalker541's **Pixel
+  transparency** (PT), the Game Boy screen whose bright pixels let the backing
+  show through, made for the TrimUI Brick. The new **Auto** choice gives the
+  three Game Boys PT, the TV consoles a CRT and the other handhelds an LCD
+  grid, and leaves PSP, N64, DS, Saturn, Dreamcast and Jaguar clean so they
+  keep full speed. Auto is what everyone gets who never picked a look; it only
+  uses shaders (never a slow CPU filter) and does nothing on a card without
+  the files. A game can still choose its own look in its options, which wins
+  over its console's, which wins over all consoles. **Download looks** fetches
+  the PT, CRT and LCD shaders from libretro (with RetroArch's full shader pack
+  as a fallback) and SkyWalker541's Brick overlays into RetroArch's folders,
+  so the overlay list shows them; run it again to update, and a file you
+  changed yourself is never replaced. **Tune look** lists a look's own
+  settings (scanline strength, PT's grid or LCD dots, backing colour …) with
+  Left/Right and a Reset, saved per console. **Crop overscan** per console
+  cuts the border a TV hid, or keeps the whole picture. When PT slows a game
+  down, the shader speed check now suggests the faster Grid effect. Not yet
+  built. `player/shader_looks.go`, `shader_looks_tune.go`,
+  `shader_looks_download.go`, `videofilter.go`, `ratuning.go`,
+  `ratuning_settings.go`, `shader_speed.go`; docs/LOOKS.md.
+
+- **Get Homebrew: new games from itch.io** (Juka, 2026-11-18). Start → Games →
+  **Get Homebrew** (also on the Games tab, in Home's Store folder, on
+  Packages' More stores strip, in Home search and the ROM manager) lists new
+  homebrew from itch.io for ten consoles — Game Boy, Game Boy Color, Game Boy
+  Advance, NES, SNES, Mega Drive, Master System, Game Gear, PC Engine and
+  PICO-8 — in one list you can filter by console, sort (Popular, Newest, Top
+  rated, Free, Yours) and search. Each game has a page with its cover, author,
+  price and description. With your own itch.io API key, sent from the phone's
+  companion page or typed on the handheld, free games and the ones you bought
+  install straight onto their console's shelf with their cover; JukaHub checks
+  them for updates when the store opens and once a day, and an update keeps
+  the file name so saves still match. Delete removes the game and its cover,
+  never its saves. A paid game you don't own shows a code to buy it on
+  itch.io; nothing is downloaded around a payment. Lists are kept for 12 hours
+  and still show offline. Not yet built. `player/homebrew_store.go`,
+  `homebrew_store_itch.go`, `homebrew_store_install.go`,
+  `homebrew_store_key.go`, `homebrew_store_images.go`, `homebrew_store_ui.go`;
+  docs/HOMEBREW.md.
+
+- **Game Boy Color games on the Game Boy shelf play in color** (Juka,
+  2026-11-18). Many indie Game Boy Color games come as `.gb` files and end up
+  under Game Boy. JukaHub now reads each cartridge's header and starts those
+  games with your Game Boy Color emulator, so they play in color (a game's own
+  emulator choice and NextUI paks still win). The first time the library finds
+  some it says so once, and the ROM manager can move them to Game Boy Color
+  together with their saves, save states, play time, covers, options, buttons
+  and favourites. Nothing is overwritten: a game whose name is taken there
+  stays where it is. Not yet built. `player/gbcsort.go`, `game_library.go`,
+  `romm_extras.go`; docs/GAME_LIBRARY.md.
+
+- **Multi-disc games become one game by themselves, with a Disc row**
+  (Juka, 2026-11-18). Copy "Game (Disc 1)" and "Game (Disc 2)" files, or
+  "Disc 1" / "Disc 2" folders, into your PlayStation, Saturn, Sega CD or PC
+  Engine CD folder and the library makes them one game (a playlist) when it
+  scans, with .chd, .cue, .pbp, .iso and .bin discs alike; your own playlists
+  and cue sheets are never changed, and NextUI's own folders are left alone
+  unless you ask. A multi-disc game's options have a **Disc** row ("Starts on
+  disc 2 of 3") that RetroArch follows, and the in-game menu (hold Select +
+  L2) has a **Disc** row to put in another disc while you play. Not yet
+  built. `player/disctools.go`, `discpage.go`, `romsetup.go`,
+  `game_options_ui.go`, `gamemenu.go`; docs/GAME_LIBRARY.md, docs/CONTROLS.md.
+
+- **More in the ROM manager** (Juka, 2026-11-18). Under its summary, "More for
+  your games": move Game Boy Color games out of Game Boy, combine multi-disc
+  games now, and one press to your RomM server (games, saves and BIOS),
+  Syncthing (saves kept the same on all your devices) and Get Homebrew; each
+  says when it needs setting up first. Not yet built. `player/romm_extras.go`,
+  `romm_ui.go`.
+
+- **Game buttons and turbo** (Juka, 2026-11-18). RetroArch games can swap A
+  and B, X and Y, or both, and make A or B fire by itself while you hold it, at
+  a Fast, Normal or Slow speed. Set it per console in Settings → Controls →
+  **Game buttons for**, or per game with the **Buttons** and **Turbo** rows of
+  its options in the library. It applies to that start only and is gone when
+  RetroArch closes, so games started from the firmware keep RetroArch's own
+  settings, and a remap file you saved yourself in RetroArch is never
+  replaced (the row says so). Resetting, renaming, moving or deleting a game
+  takes its choice along or clears it. Not yet built.
+  `player/racontrols.go`, `racontrols_remap.go`, `racontrols_turbo.go`,
+  `racontrols_ui.go`, `game_options_ui.go`, `inmap_settings.go`;
+  docs/CONTROLS.md.
+
+- **Cheats in the in-game menu** (Juka, 2026-11-18). A RetroArch game started
+  with cheats switched on in its options now has a **Cheats** row in the
+  in-game menu (hold Select + L2): the game's whole list of Game Genie, Action
+  Replay and GameShark codes from libretro's cheat database, with On/Off
+  switches. Changes take effect as soon as the game carries on and are kept
+  for its next start; if RetroArch cannot be reached, the list says they apply
+  from the next start. Not yet built. `player/gamemenu_cheats.go`,
+  `gamemenu.go`; docs/CONTROLS.md.
+
+- **Letter scrubbing in the Games library** (Juka, 2026-11-18). On a console's
+  page L2 and R2 jump to the previous and next letter (PgUp / PgDn on a
+  keyboard, Right in the list and the cover column); holding a trigger keeps
+  going, and the letter shows big over the games for a moment. The jump
+  follows the sort you chose: decades for Year, stars for Rating, play-time
+  bands, or months for Last played and Recently added. Not yet built.
+  `player/game_library_scrub.go`, `game_library_ui.go`, `shoulders.go`,
+  `navrepeat.go`; docs/GAME_LIBRARY.md.
+
+- **Menu colour** (Juka, 2026-11-18). Settings → Theme & look → **Menu
+  colour** changes only the highlight colour (focus rings, pills, bars) to one
+  of ten colours — Sky, Mint, Lime, Amber, Coral, Rose, Violet, Indigo, Teal or
+  White — while keeping the theme, and it stays when the theme changes on a
+  schedule, with Battery Saver or from a pack. Theme's own brings the theme's
+  colour back. Not yet built. `player/menucolour.go`, `design.go`;
+  docs/THEMES.md.
+
+- **JukaHub's own booter, and Home from the moment the Smart Pro powers on**
+  (Juka, 2026-11-18: "maybe we can have our own booter that's faster"). The
+  Smart Pro JukaHub OS card now starts with `jukaboot`, a small compiled
+  process 1 in place of the start-up script: it mounts the card and starts
+  JukaHub at once, then loads the kernel's drivers several at a time along
+  their dependencies instead of one command after another, keeps a millisecond
+  timeline of every step in `os.log`, and saves the kernel's own log to
+  `boot-dmesg.txt` once Home is up. Anything it cannot do hands the boot to
+  the old script, which stays on the card (`BOOTER=0` in `boot.env` picks it
+  on purpose, `MODULES_PARALLEL=0` loads drivers one at a time). The card's
+  bootloader logo becomes a full-screen JukaHub picture, and from then on
+  JukaHub writes the saved Home over it at power-off, so the bootloader itself
+  shows Home (Settings → JukaHub OS → **Show Home from power-on**; the startup
+  lock or a boot animation puts the logo back). The image builder gains
+  `--boot-profile` and `--initcall-blacklist` for trimming the kernel from a
+  measured boot, and `--shell-init`. On stock firmware the boot hook is
+  already the earliest place a card can start anything without changing the
+  device; its log now splits each boot into the firmware's share and JukaHub's
+  and keeps a copy of the firmware's start-up script. Not yet built or booted.
+  `player/cmd/jukaboot/`, `bootframe_ubootlogo.go`,
+  `bootframe_ubootlogo_linux.go`, `jukaos_settings.go`, `autostart.go`;
+  `os/smartpro/build_image.py`; `.github/scripts/trimui-build.sh`, `Makefile`.
+
+- **Select + R1 takes a screenshot in a game** (Juka, 2026-11-18). In any
+  game, emulator or port JukaHub started on a TrimUI, pressing Select + R1
+  together saves the screen as a PNG at once: the picture from the moment both
+  buttons were down, no hold, into the same folder as Hold Menu's game shots
+  (`game_<time>.png`). Each press is one picture (at most one a second), the
+  motor buzzes when it is written and "While you were playing" counts it.
+  Settings → Controls → **Select + R1: screenshot** (on by default) turns it
+  off for a game that uses the pair; JukaHub's menus keep Select + R1 for the
+  next control profile. `player/gameassist_linux.go`, `menushot.go`.
+
+- **Boot prefetch.** On a cold start JukaHub records which parts of its
+  program and libraries it touched before its first frame
+  (`data/boot-prefetch.list`); at the next start a small loader asks the
+  kernel for exactly those, in order and a little at a time, while the Go
+  runtime is still starting, so the card reads them in long runs instead of
+  one page fault at a time. The `startup:` line's `prefetch=` field shows what
+  it read; `data/boot-prefetch.off` or `JUKAHUB_BOOT_PREFETCH=0` turns it off.
+  `player/internal/bootprefetch`, `bootprefetch_record_linux.go`.
+
+- **Home's first frame comes ready from the last start.** The labels and icons
+  Home's first frame draws are kept in `data/first-frame.cache` and uploaded
+  at the next start instead of being rasterised again (a theme, language,
+  font, text-size, screen or build change just misses); the `startup:` line
+  shows `labels=H/N icons=H/N` and `JUKAHUB_FRAME_CACHE=0` turns it off. Also
+  off the start's critical path now: the stock firmware's scan of the whole
+  MainUI program for the model (remembered per firmware in
+  `data/device-probe.json`), the boot guard's card flushes (its record is
+  still written before anything can crash), the second read of the Inter font,
+  icon parsing and the old crash-report clean-up.
+  `player/startup_framecache.go`, `startup_preload.go`,
+  `device_probe_cache.go`, `bootguard.go`, `crashreport.go`.
+
+- **JukaHub OS shows Home almost at once when it boots** (Juka, 2026-11-18:
+  "can we get down to <2 seconds boot time"). On the SD-card JukaHub OS images
+  (the Brick on plastron, the Smart Pro on its own kernel) JukaHub keeps a
+  picture of Home whenever Home sits untouched, and the image's launcher puts
+  it on the screen as soon as the card is mounted, before JukaHub has started;
+  JukaHub's first frame then takes over. No picture is kept while a startup
+  lock is set or when you picked a boot animation, and turning the lock on
+  deletes it. Wi-Fi and Bluetooth start after JukaHub's first frame and come
+  back the way they were switched in JukaHub (`boot.env`); the Smart Pro image
+  boots with `quiet` and no bootloader delay and loads its radio drivers last.
+  `boot.log` records U-Boot's own timings and when the launcher, the picture
+  and JukaHub started, and Settings → JukaHub OS shows **Last boot**. TortOS's
+  two-second boot comes from its own bootloader and kernel on the card, not
+  from an `.awimg`; JukaHub OS works the same way and still never writes the
+  handheld's internal storage. Not yet boot-tested. `player/bootframe.go`,
+  `bootframe_linux.go`, `jukaos_native.go`, `jukaos_settings.go`,
+  `systemcontrol.go`, `bluetooth_bringup.go`, `bootlock.go`;
+  `os/plastron/launch.sh`, `os/smartpro/` (`init`, `launch.sh`,
+  `build_image.py`, `dump-board.sh`).
+
+- **JukaHub reaches Home sooner, and the log says where the boot went.** On
+  JukaHub OS the boot animation is off unless you pick one, so the device goes
+  straight to Home, and update checks, box-art fetches, plugin scans and "Hey
+  Juka" wait three seconds after Home appears. Everywhere, the design file
+  loads while the screen starts, the card reads the fonts and settings ahead,
+  the garbage collector waits for the first frame (8 s at most, under a memory
+  cap), and a free-space read and an SSH random-number read no longer hold up
+  the start. The `startup:` log line ends with `kernel→start` and
+  `start→first-frame`, and JukaHub writes `/tmp/jukahub-first-frame` for the
+  OS image's scripts. `player/startup.go`, `startup_linux.go`,
+  `startup_config.go`, `bootstyles.go`, `perf.go`, `main.go`, `ssh_server.go`,
+  `hardware.go`, `quicksettings.go`, `wakeword.go`.
+
+- **Console look: Pixel names and Pixel cards.** The Games library's console
+  buttons can now be the console's name in big pixel letters, or a
+  cartridge-style card with the name on a pixel label, the system icon and the
+  game count. Landing on a console, or coming back to the buttons from its
+  page, makes its letters fly together square by square in about half a second
+  (in place with Reduce motion or Battery Saver). **X** on the console buttons
+  switches the look; it is also in a game's options and in Settings → Games &
+  emulators, saved as `console_look` in `game-library.json`. Names with
+  accents and `& ' ! : , ( )` now spell out instead of showing "?".
+  `player/game_library_pixel.go`, `game_library_pixel_look.go`,
+  `game_library_ui.go`, docs/GAME_LIBRARY.md.
+
+- **Drop games, covers and music from any browser, and each file goes where it
+  belongs.** The Phone Companion page opens with a **Send to the handheld**
+  card: drop files on it (or anywhere on the page) or tap it to pick several
+  on a phone. Games land in their console's folder in `Roms` (this card's
+  layout, NextUI's included), discs and zips are recognised from their first
+  bytes or their file list, and a `.chd` or `.7z` asks which console it is
+  for; a picture named after a game becomes its cover; songs and videos go to
+  Music and Videos; BIOS files to BIOS (`Bios/<TAG>` on NextUI); anything else
+  to PhoneDrop. Each file shows where it is going and its progress, a file
+  already there is only replaced after you confirm, and when the batch is done
+  the handheld says "Phone sent 3 games, 1 cover and 12 songs" and the library
+  rescans. Untick **Put each file where it belongs** for the old PhoneDrop
+  behaviour. `player/companion_drop.go`, `companion_drop_route.go`,
+  `companion_files.go`, `companion.go`; README.
+
+- **Browser over USB** (Settings → Network, under USB file transfer, on by
+  default). Where the firmware's kernel has a USB network function (RNDIS, ECM
+  or NCM), the cable also carries a small network of its own: open
+  http://10.73.73.1 on the computer, type the PIN and use the same page as
+  over Wi-Fi. Windows and Linux use drivers they already have; a Mac is
+  switched to ECM after 20 quiet seconds. The computer keeps its own internet
+  (no router or DNS is handed out), USB file transfer always comes first (if
+  the port cannot fit both, the line says so), and every change to the
+  firmware's USB setup is put back on exit or after a crash. The stock TrimUI
+  4.9 kernels checked so far have none of these functions: the row then says
+  so and USB file transfer works as before. `player/usbnet.go`,
+  `usbnet_dhcp.go`, `usbnet_linux.go`, `usbmtp.go`, `usbmtp_linux.go`;
+  docs/USB_FILE_TRANSFER.md.
+
+- **Rename file, Remove cover and Delete game** (2026-11-18). The game options
+  sheet (**Start** / **O** on a console's page) manages the game itself, not
+  only how the library shows it. **Rename file** renames the ROM on the card
+  (on-screen keyboard, extension kept) together with everything named after
+  it — same-name files beside it (a `.cue`'s `.bin`, with the sheet's lines
+  rewritten), its pictures (`Imgs`, `.media`, `.res`, JukaHub's cover), its
+  RetroArch saves, states, core override, options and remap, NextUI's saves —
+  and moves JukaHub's records along: game options, cheats, recents,
+  collections, Home's rows, the RomM link, the quick-resume marker, Name for
+  covers and, when the title the file gives changes, playtime, the game page
+  and its history. Nothing is overwritten (a taken name, or one another game
+  already has, stops it before a file moves), a failure beside the ROM puts
+  everything back, files another game of the same name shares are copied, and
+  arcade sets keep their names. **Remove
+  cover** shows the lettered tile for good: the fetch, gameplay pictures and a
+  port's own picture skip the game (a marker in `data/game-art/.nocover/`),
+  JukaHub's copies go to the reset trash and, when asked, the card's own
+  `Imgs` picture too; the row then reads **Restore cover**. **Delete game…**
+  takes the ROM, the tracks and discs its sheet lists, its same-name disc
+  parts, patches and manuals and JukaHub's pictures — to the reset trash (the
+  three newest are kept, restore.txt written as each file lands) or for good;
+  saves and states stay. Both questions open on Cancel. **Display
+  title** is now called **Rename title**
+  ([Game library](docs/GAME_LIBRARY.md#renaming-and-deleting-a-game)). Not yet
+  built.
+
+- **Covers from gameplay** (2026-11-18). A game the box-art lookup finds no
+  cover for — homebrew, a hack, a translation, an oddly named dump — no longer
+  stays a lettered tile: two minutes into playing it (time it really runs, not
+  paused under the in-game menu, an alarm or the sleep), JukaHub reads the
+  screen and keeps the picture as the game's cover in the library, Continue
+  and Home. Black bars around a game that does not fill the screen are
+  trimmed; a black, white or flat frame is never kept, nor one read within
+  30 s of **Menu** (the emulator's menu may be open) or while a library
+  RetroArch says it is paused, nor — for the first four minutes — one that is
+  not moving (a pause screen) or dark nearly all over (a loading line; games
+  on black get theirs after four minutes); it tries again every 20 s of play
+  up to eight minutes. On the handheld it reads the framebuffer the way
+  Hold Menu: screenshot does; on Windows the game's own window, only while it
+  is in front. The picture is saved apart from the downloaded covers
+  (`data/game-art/.gameplay/`), so the background fetch still looks for real
+  box art and one found later, or picked in Choose cover, replaces it; Clean up
+  covers also takes those of games that are gone or have a real cover now. The return banner says "1
+  cover taken from the game". **Settings → Games & emulators → Covers from
+  gameplay** stops new pictures (`gameplayCovers`, on by default)
+  ([Game library](docs/GAME_LIBRARY.md#covers-from-gameplay)). Not yet built.
+
+- **DNS changer** (2026-11-18). Settings → Network → **DNS** picks the servers
+  that turn names into addresses: Automatic (the network's own, as before),
+  Cloudflare, Google, Quad9, AdGuard (blocks ads and trackers), Cloudflare for
+  Families or OpenDNS, or up to three of your own — a Pi-hole at home — typed
+  on the keyboard (**Custom DNS servers**). On the handheld the choice covers
+  the whole system — games, ports, Android apps and JukaHub — through
+  `resolv.conf`, written back every time DHCP renews the address and put back
+  on Automatic, in safe mode, at quit and after a crash; on Windows it covers
+  JukaHub's own requests. A VPN whose configuration names DNS servers takes
+  over while it runs. The row says where the choice applies and warns when
+  the servers do not answer on the current network, and **Find the fastest
+  DNS** times every choice from where you are and lists them fastest first
+  ([DNS](docs/DNS.md)). Not yet built.
+
+- **Linux packages: apt for the TrimUI** (2026-11-18). The handheld can now
+  install Ubuntu 24.04's arm64 programs — Python 3, Perl, git, curl, htop, nano,
+  rsync, the OpenSSH client, Nmap, John the Ripper, Aircrack-ng, SQLite and the
+  rest of Ubuntu's main and universe — onto the SD card, and keep them up to
+  date. Use the new Tools → **Linux packages** page (status, Check for updates /
+  Update all, search, one-press installs, Remove), `apt update | upgrade |
+  install | remove | search | show | list | clean` in the Terminal, or
+  `<JukaHub>/data/linux/bin/apt` from an SSH shell. Downloads are checked the
+  way apt checks them, with only Ubuntu's archive key trusted: the signed
+  Release, then the SHA-256 of every index and package. Programs run from the
+  card with Ubuntu's own C library (glibc 2.39) through small wrappers; the
+  firmware and its libraries are not changed, and nothing runs as a service
+  ([LINUX_PACKAGES](docs/LINUX_PACKAGES.md)). Not yet built.
+- **Get more cores** (2026-11-18). One press — Settings → Games & emulators →
+  **Get more cores**, a tile on the Emulators page, the last row of **Which
+  emulator?**, or X on a game's options → Emulator — downloads, for every
+  console that has games on the card, the RetroArch cores worth having that are
+  not installed yet: the ranked cores for the consoles JukaHub ranks, and a
+  short list of the cores the TrimUI firmwares ship for the others (Master
+  System, Game Gear, PC Engine, Arcade, Neo Geo Pocket, WonderSwan, Atari,
+  Lynx…). Each goes through the Emulators page's own install (checksum, size
+  limit, "can this firmware load it", the free space a core update needs).
+  Cores that draw with the GPU (N64, Dreamcast, PSP, Saturn 3D) are fetched only
+  for a console with no emulator at all and otherwise stay one press each on the
+  Emulators page, whose row now warns that the build may not run here. With
+  Emulator updates on Install automatically, the daily pass does it by itself
+  once per console (`emu-morecores.json` remembers which, so a core you delete
+  is not fetched again). Not yet built.
+- **Google Drive sign-in you can set up from your phone, and WebDAV save sync**
+  (2026-11-18). A build without the project's Google client no longer
+  dead-ends: Tools → Save sync → **Set up Google sign-in** shows a code that
+  opens the Phone Companion's new **Cloud save sync** page, which walks through
+  making a free "TVs and Limited Input devices" client in Google Cloud Console;
+  pick the downloaded JSON on the phone (or paste the ID and secret), the
+  handheld checks it with Google (Desktop and Web clients are refused with the
+  type to make), keeps the secret encrypted, and the sign-in starts at once with
+  the code shown on the phone. With no Google project at all: **WebDAV** save
+  sync (Nextcloud, ownCloud, Koofr, InfiniCLOUD, a NAS), with the address and an
+  app password typed on the phone, HTTPS required except on the home network,
+  the same rules as Drive (no clock decides, both copies kept on a conflict),
+  JukaHub's own checksum file on the server and conditional uploads, so nothing
+  changed on the server is overwritten. The automatic before/after-game sync
+  uses Drive or, when Drive is not signed in, WebDAV. The page also explains
+  reaching Google Drive through a computer (Syncthing into Google Drive for
+  desktop) ([CLOUD_SYNC](docs/CLOUD_SYNC.md)). Not yet built.
+- **A new core build is on probation until a game runs** (2026-11-18). Every
+  core build JukaHub activates — the daily pass, Update on the Emulators page,
+  the compatibility panel — is watched through its first game. If that game
+  cannot start because of the core (RetroArch could not open it, the content or
+  GPU context failed, it crashed or exited with an error within seconds, and no
+  missing game file or BIOS explains it), the build before it is put back, the
+  new one is remembered so no automatic pass downloads it again, and one toast
+  says "The new N64 core (Mupen64Plus-Next) didn't start here — went back to the
+  one that worked". The device log now names the core build every RetroArch game
+  runs (file, checksum, GPU library, where it came from) and each update pass's
+  counts, and the "didn't start" card says when a core build needs desktop
+  OpenGL. Not yet built.
+- **Packages: Run installed apps** (2026-11-18). An installed package only
+  offered **Open folder**, so starting an app meant finding its `launch.sh`
+  in Files. Its page and the banner now lead with **Run** (**Play** for a
+  game), and Open folder follows it. The program is found once per scan of
+  the card (`pkglaunch.go`): a TrimUI app folder whose `config.json` names
+  its launch script, at the top of the package or up to four folders down
+  (`<Name>/`, `Apps/<Name>/`), else a file named like the entry's
+  `mainfilename`, which the folder's `.jukahub-package.json` now keeps. A
+  bundle of several apps, none named like the package, gets no Run and lists
+  each app on the Apps screen instead. It starts through the Apps screen's
+  guarded launcher, which accepts a package's installed folder but never its
+  staging, rollback or trash copies — on a TrimUI too, where the packages
+  folder sits inside `/mnt/SDCARD/Apps` and used to pass that folder's
+  blanket rule. Installed apps are listed on the **Apps** screen too, and an
+  app kept one folder down now lends its card its own icon. `launch.sh` is
+  offered only on arm64 Linux, a PC offers Run only for Windows programs; the
+  package page's buttons squeeze on a short screen instead of losing the last
+  one.
+
+- **Quick Settings: Tiles, Compact and List layouts, and L2 to edit it**
+  (2026-11-18). The panel Select opens on Home was a narrow list of
+  twenty-five rows with text marks for icons. It now opens as **Tiles**: a
+  four-column grid of glass tiles with the shell's icons, where a switch that
+  is on lights up in its own colour, Volume and Brightness show their level as
+  a bar, and the mode rows show their value. **Compact** fits every button on
+  one screen as a six-column grid of icon buttons, naming the focused one under
+  the title; **List** keeps the old rows (now with icons). **L2** (Q, or the
+  pencil in the title with a mouse) edits the panel the way Edit Home edits
+  Home: L1/R1 switch the layout, A picks a button up and the D-pad carries it,
+  **X resizes a tile a cell at a time** (Volume and Brightness from 2×1,
+  anything up to the grid's width and two rows), Y hides a button or shows it
+  again, B or L2 is Done, and Reset puts the default buttons back. On a grid the D-pad only moves the focus: A on a slider
+  starts adjusting it (Left/Right, then A or B), and L1/R1 move a focused
+  slider or step a focused mode row at any time. A new **Power** button opens
+  the power card (Sleep, Restart, Power off) from any screen, and Airplane Mode
+  has an airplane icon. Stored as `quickSettingsLayout` and
+  `quickSettingsTiles` ([CONFIGURATION](docs/CONFIGURATION.md#quick-settings-quicksettingslayout-quicksettingstiles),
+  [CONTROLS](docs/CONTROLS.md#quick-settings)).
+- **Every emulator a console has, offered when its game starts** (2026-11-18).
+  TrimUI owners asked how to play a game in another core: the stock OS and
+  CrossMix keep a console's other emulators behind Select on the game list (the
+  `launchlist` of `Emus/<system>/config.json`), and a core copied into
+  RetroArch's cores folder has no launch script, so nothing ever starts it.
+  Game options → **Emulator** (and **Which emulator?** when it opens) now list,
+  after the console's own launchers, every other script its launchlist names
+  ("N64 · Mupen64Plus Standalone") and, on the handheld, every installed
+  RetroArch core that plays the console and no script already starts — one
+  installed from the Emulators page included. A core picked there starts
+  directly: the RetroArch that owns it loads it with `-L` from its own folder,
+  as the firmware's scripts do; a core built for another chip (a 32-bit core
+  beside `ra64.trimui`) is not offered. Nothing changes by itself: the question
+  still opens only for a console with two or more launchers of its own, and a
+  console keeps starting where it did until another emulator is picked (the
+  Emulator row's hint says how many more there are). Each row of the question
+  says what its kind means — RetroArch: save slots, Continue, achievements;
+  standalone: no JukaHub save slots or Continue — and **X** makes the
+  highlighted one the emulator for every game of that console (not offered for
+  Arcade, whose CPS/MAME folders each need their own; Game options →
+  **Emulator**, Left, asks again). An N64, Dreamcast or PSP core
+  started this way that has never run here begins with the handheld's speed
+  settings (N64 at 320×240, Dreamcast at 640×480 with threaded rendering, PSP at
+  its native resolution), written as its options file only when it has none.
+  Not yet built.
+- **Touch screens work outside the keyboard, and the Tabs Home takes swipes**
+  (2026-11-18, backlog SHELL-12). On a Windows touch screen a tap now clicks
+  whatever it lands on, exactly once; a sideways swipe over the Tabs Home
+  changes tab with the L1/R1 slide and an up or down swipe scrolls it; the
+  picture viewer and the Media screen take swipes again. A swipe no screen takes
+  now does nothing — it no longer jumps to the next screen of the design — and
+  none reaches past an alarm, the recovery card or a game. Touchpads only move
+  the pointer; the TrimUI handhelds have no touch screen. Not yet built.
+- **The manual on the device, and a tip a day** (2026-11-18, backlog SHELL-9).
+  Settings → About → Controls and Quick start open docs/CONTROLS.md and
+  docs/QUICK_START.md offline in the SECURITY.md reader; the build copies them
+  from docs/, and the long Controls page lays out without freezing the screen.
+  Home shows one tip a day above the footer (Standard, Hero and Tabs), never the
+  same two days running and only tips true for the device: keys on a keyboard
+  (F10, PgUp / PgDn, Alt+F4), buttons on a pad, nothing about sticks or the
+  Power button where there are none. Settings → About → Show tips and Hide
+  today's tip turn them off; the tip cannot be selected yet. Not yet built.
+- **Update channels: Stable and Beta** (2026-11-18, backlog REL-4). Settings →
+  About → Update channel picks Stable (the default: tested releases only) or
+  Beta (the newest release, prereleases included). Every update path follows it
+  — the startup check, Check for updates, the offline update cache and Install
+  update — and going back to Stable never downgrades: a device on a beta waits
+  for the next stable release. The channel shows on the About screen and in bug
+  reports (an issue the report service files does not show it yet). Not yet
+  built.
+- **JukaHub's PPSSPP signs in to RetroAchievements with your account**
+  (2026-11-18, backlog GAME-21). Before each PSP game, JukaHub's own PPSSPP is
+  signed in with the RetroAchievements account RetroArch uses — the account name
+  and RetroArch's login token, never a password — with hardcore off. An account
+  you signed in with inside PPSSPP is left alone, and a "RetroAchievements
+  sign-in" switch on the PPSSPP card turns it off. The token is kept only in
+  PPSSPP's own token file, never in a log or a bug report. PPSSPP's setting and
+  file names were written from memory and wait for a device check. Not yet
+  built.
+- **Update the Windows app runtime from its setup page** (2026-11-18, backlog
+  LIB-25). When the daily Emulator updates check finds a newer Windows-app
+  runtime pack (with Notify me, or after an automatic install failed), the
+  Windows Apps setup page's runtime row says which build is out and A updates
+  it, running the same install as the automatic pass with its progress on the
+  install card. The answer is kept in memory only, so after a restart the row
+  offers it again after the next check. Not yet built.
+- **Choose a game's cover, and the name its covers are found by** (2026-11-18,
+  backlog GAME-7). Game options has **Choose cover**: the five closest box-art
+  names on the thumbnail server and the closest pictures in the console's Imgs
+  folder, each previewed, and A saves it as the game's cover (an Imgs photo is
+  scaled to cover size first; the Imgs files are only read). **Name for covers**
+  types the title the game's box art is looked up by; it is kept in
+  `data/artwork-aliases.json`, read before the built-in aliases, and the game is
+  looked up again at once. Not yet built.
+- **Chapters inside one audiobook file** (2026-11-18, backlog MED-9). An .m4b
+  (now recognised as audio at all) or a long .m4a/.mp3 with embedded chapters
+  shows its chapter list in the player, Next and Previous move between chapters
+  (Previous restarts the current one first), and the now-playing line names the
+  chapter. The remembered place keeps the chapter's name, so the Audiobooks
+  shelf says "Continue at <chapter>". Chapters are read once with ffprobe, off
+  the render thread and bounded; the list-first (Stock OS) layout does not show
+  them yet. Not yet built.
 - **Auto power off after sleep: 15 minutes to 48 hours, NextUI games too**
   (Juka, 2026-11-17, relaying the post for lmerriam's NextUI Auto Power Off
   pak). Not yet built or tried on hardware.
@@ -57,13 +535,15 @@ For anything older, the git log and the
   played and Top artists. Clear listening history (choose it twice) forgets it
   all; backups carry the log. Radio and podcasts are not logged, nor is a song
   playing when JukaHub crashes. Not yet built.
-- **Daily challenge** (2026-11-17, backlog GAME-12). Once the clock is known to
-  be right, Home's Continue card offers one library game a day with a goal: play
-  it for 15 minutes of real play, for the new bonus trophy Challenge Accepted.
-  The day's game is drawn from the whole library, skipping hidden games and
-  systems with no emulator. It stands in for a Continue item only when that
-  item is from before today and more than 8 hours old (still one press away in
-  the game switcher). Not on the Tabs Home yet (GAME-22). Not yet built.
+- **Daily challenge** (2026-11-17, backlog GAME-12, GAME-22). Once the clock is
+  known to be right, Home's Continue card offers one library game a day with a
+  goal: play it for 15 minutes of real play, for the new trophy Challenge
+  Accepted, which the platinum counts. The day's game is drawn from the whole
+  library, skipping hidden games and systems with no emulator. It stands in for
+  a Continue item only when that item is from before today and more than 8 hours
+  old (still one press away in the game switcher). On the Tabs Home the
+  challenge is Recent's first item, with its cover and minutes left, beside the
+  Continue item; A starts it. Not yet built.
 - **Passwords for encrypted archives** (2026-11-17, backlog APP-14). The archive
   sheet in Files offers **Password…** for a protected zip, 7z or RAR: typed on a
   masked keyboard field and handed to 7-Zip for that one extraction, never saved
@@ -1518,6 +1998,115 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Cheats work for NextUI games too** (Juka, 2026-11-18: "any cheat support,
+  and is it compatible with the Brick Pro?"). Game options → Cheats used to
+  apply only when a game starts in RetroArch, so on a NextUI card (the Brick,
+  Brick Pro and Smart Pro all run NextUI's tg5040 build) the switched-on cheats
+  were silently not used: a NextUI pak's `launch.sh` names a `_libretro.so`,
+  passed for RetroArch, and the file went to a RetroArch folder minarch never
+  reads. A game that starts through a NextUI pak now gets
+  `Cheats/<TAG>/<ROM file>.cht` on the card, where minarch looks (TAG worked
+  out as minarch does), written in the database's own layout with the
+  switched-on cheats first (older NextUI handed PCSX-ReARMed only those, at
+  their numbers) and removed after the game like the RetroArch one (and as
+  JukaHub quits, so a power off minarch asks for cannot leave it for a NextUI
+  launch after the next power-on); a cheat
+  file of the user's own there (also under the older name without the ROM's
+  extension) wins, and the sheet says so. Nothing in `retroarch.cfg` changes
+  for such a launch, and NextUI's own Cheats folders are never removed. The
+  game also lists them in NextUI's menu → Options → Cheats. Brick Pro: the
+  RetroArch path was already the same on every TrimUI model.
+  `player/cheats.go`, `cheats_db.go`, `cheats_ui.go`, `game_options_ui.go`.
+
+- **Boot as fast as possible: no boot animation and no stock menu by default**
+  (Juka, 2026-11-18: "we need it as fast as possible"). The boot animation now
+  defaults to **None** on every device and the PC, so Home appears as soon as
+  it is ready and the startup chime plays over it; a style you picked (or
+  Startup animation: Full every time) still plays. On stock firmware **Start
+  JukaHub at login** now skips the stock menu by default (Settings → General →
+  **Skip the stock menu at boot**): the one-boot stand-in JukaHub OS used goes
+  over MainUI, so the firmware starts JukaHub instead of opening the menu,
+  waiting for it to settle and closing it, which cost several seconds every
+  boot. A start that hangs still makes the next boot stay on the stock menu.
+  The boot hook and `launch.sh` start far fewer processes and no longer sync
+  first. On the Smart Pro image JukaHub starts while the display and sound
+  drivers are still loading and waits only right before it opens the screen;
+  both images raise the SD card's read-ahead to 1 MB (`READAHEAD_KB=0` in
+  `boot.env` keeps the kernel's). `player/bootstyles.go`, `bootchime.go`,
+  `bootos.go`, `autostart.go`, `launch.sh`, `startup_displaywait.go`,
+  `setmodel.go`; `os/smartpro/init`, `os/smartpro/launch.sh`,
+  `os/plastron/launch.sh`.
+
+- **"Which emulator?" asks whenever a game has more than one** (2026-11-18).
+  Installed cores and a folder's other launchers now count, so a game with one
+  launcher and an installed core asks. New setting Settings → Games &
+  emulators → **Ask which emulator**: First time per game (the default — A
+  plays and remembers it for that game, Y plays just once), Every launch (A
+  plays, Y always uses it), or Never (the one used last, else the recommended
+  one). X still sets the whole console. Save-state starts, the power-on resume,
+  save-sync relaunches and the game switcher never ask. Not yet built.
+- **Audit toolkit installs what its tools need on the handheld** (2026-11-18).
+  On a TrimUI, installing sqlmap or Nikto now installs Ubuntu's Python 3 or Perl
+  (with the TLS modules Nikto uses) first, on the same install bar, instead of
+  refusing; Nmap, John the Ripper and Aircrack-ng (analysis only — the Wi-Fi
+  chip has no monitor mode) can now be installed there too, through Linux
+  packages. Not yet built.
+- **Logs hide the exact secrets kept in JukaHub's settings** (2026-11-18,
+  backlog SEC-31). Besides the `password=`/`token=`/Bearer patterns, every log
+  line (Logs screen, logs.txt, errors.txt, bug reports) now has the exact values
+  of the secrets kept in JukaHub's settings removed, also URL-encoded: the Groq
+  key, the Discord token, other settings named as credentials, mail and calendar
+  passwords (app passwords included) and secret calendar links. The list is
+  rebuilt when the settings are loaded or saved; Steam, Drive,
+  RetroAchievements, RomM, PSN, Wi-Fi and VPN secrets live in their own stores
+  and are not in it. Not yet built.
+- **Dates, numbers and sizes follow your language and clock** (2026-11-18,
+  backlog I18N-2). Dates on every screen, the Home clock, calendar and weather
+  widgets included, follow Settings → Date & time's order and 12-hour clock, and
+  in Spanish, Portuguese, French, German, Italian and Russian the month and
+  weekday names, "Today"/"Yesterday" and number separators follow the language
+  ("lunes, 9 de noviembre de 2026", "12 345"), switching at once. Sizes read one
+  way everywhere ("512 B", "1.5 MB", "3.0 GB"): screens that said MiB now say
+  MB, still counted in 1024s. Mail, the calendars, the Ports store and Steam
+  keep English dates for now. Not yet built.
+- **Confirmations open on the safe answer** (2026-11-18, backlog UX-14). Every
+  card that asks before deleting, forgetting, resetting, uninstalling or
+  removing something now opens with Cancel (or Keep) focused, so an A pressed by
+  habit changes nothing. Media's "Remove this download?" and a game's "Reset
+  settings" and "Clean up covers", which opened on the destructive answer, are
+  fixed, and the Browser row in Security & trust opens on Close instead of
+  Forget cookies. The Home power card keeps Exit focused, the one exception. Not
+  yet built.
+- **Radio switches refresh the network status at once** (2026-11-18, backlog
+  NET-19). Turning Wi-Fi or airplane mode on or off from Quick Settings, the
+  Home Wi-Fi tile, a voice command, the Settings row or the hotspot now counts
+  as a network change, as the Wi-Fi page's own actions already did: the old
+  "online" or "offline" gives way to "checking…" at once and the connectivity
+  probe runs the moment the switch ends, instead of 5–20 seconds later. Not yet
+  built.
+- **Automatic box art reuses the library's scan** (2026-11-18, backlog LIB-19).
+  A background box-art pass now takes the games from the Games Library's last
+  scan when the ROM folders have not changed, instead of walking the card again;
+  the tour's Fetch game artwork asks only about games without a cover and
+  remembers "not found" answers; a long fetch saves those answers every 50
+  games; and on a handheld where JukaHub keeps the time, the very first pass
+  waits up to half an hour for network time to set the clock. Not yet built.
+- **Dead code behind the test seams removed** (2026-11-18, backlog ARCH-9).
+  Twenty functions that only tests still called are gone — the
+  authenticated-encryption wrapper, the old update-manifest path, a second
+  config saver and several download and probe wrappers — and their tests now
+  exercise the production functions instead. `tests/scripts/deadcode-scan.py`
+  lists what only tests call and fails on any function whose comment does not
+  say why a test needs it (five remain, so it is not in `make check` yet). Not
+  yet built.
+- **The chime reference plays the boot styles' knocks** (2026-11-18, backlog
+  SND-17). `branding/sound/chime_reference.c` now renders the Cinematic and Roll
+  power-on chimes as the device plays them: the startup chime pushed back behind
+  the style's entrance plus a knock on every landing, the same voice as
+  `chimeThudNote` in `bootchime.go`. `./chime cinematic … [lift]` and `./chime
+  roll … [WIDTH HEIGHT]` print each knock's time, pitch and level; the knocks
+  leave the peak under the start chime's, so the gain is unchanged. Not yet
+  built.
 - **FTP keeps every folder that holds programs read-only** (2026-11-17, backlog
   SEC-17). FTP and the Phone Companion's Files card also refuse changes, even
   through a symlink, to the ROM folders of systems whose launcher runs the game
@@ -1944,6 +2533,227 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **The in-game menu fits short screens** (2026-11-18). With Music,
+  Rewind, Disc, Cheats, Ask Juka and the game switcher all on, its rows ran off
+  a 720-pixel screen; they now scroll with the selection, with small arrows
+  where more rows hide. Not yet built. `player/gamemenu.go`.
+
+- **Game Boy, Game Boy Color and GBA games start again when a core update
+  broke mGBA** (Juka, 2026-11-18, photos of the card on a stock Smart Pro:
+  "004 Pokemon Fire Red didn't start … mgba_libretro.so needs GLIBC_2.35; this
+  firmware's libm.so.6 has up to GLIBC_2.32"). The libretro buildbot builds its
+  aarch64 nightlies on a newer Ubuntu than the firmware; JukaHub's own updates
+  refuse such builds, but RetroArch's Online Updater installs them with no
+  check, and stock firmware runs all three Game Boy consoles on mGBA. A core
+  RetroArch cannot open here is now replaced: by a build of it the card kept
+  (the card's original first), else by JukaHub's own build for the device. A
+  new workflow compiles those weekly from upstream libretro sources in the
+  Ubuntu 20.04 (glibc 2.31) arm64 build root and publishes them as the rolling
+  release `cores-aarch64` in the buildbot's index format (mGBA, Gambatte, gpSP,
+  Snes9x, Snes9x 2005, FCEUmm, Nestopia, PicoDrive, Genesis Plus GX,
+  PCSX-ReARMed, Beetle PCE Fast, WonderSwan and NeoPop, FinalBurn Neo), so the
+  download takes the usual checks. The fix runs after a game that fails this
+  way (the card's first finding says JukaHub is fixing the core, a toast says
+  when to start the game again) and a minute after every start over the cores
+  that changed since the last look, where it acts only on a sure finding (the
+  wrong architecture or a glibc symbol version the firmware lacks) and
+  downloads only when Emulator updates is Install automatically. The broken
+  build is kept as a `.bak`. JukaHub's Beta channel no longer takes the
+  repository's emulator releases (`cores-aarch64`, `ppsspp-tg5040`) for
+  JukaHub updates.
+  The card also drops RetroArch's harmless `Couldn't find any input driver
+  named "sdl"` line, and a file named under a finding with nothing missing
+  (the core itself) is labelled "Location:" rather than "Copy to:". Not yet
+  built; JukaHub's builds
+  exist once `retroarch-cores.yml` has run. `player/corefix.go`, `gamediag.go`,
+  `launch_errors.go`, `emulatorautoupdate.go`, `autoupdate_channel.go`;
+  `player/native/build-cores.sh`,
+  `.github/workflows/retroarch-cores.yml`, `.github/scripts/build-root.sh`;
+  docs/COMPATIBILITY.md ("A core that is already broken").
+
+- **JukaHub's icon in the TrimUI Apps menu is the size of the others**
+  (Juka, 2026-11-18, photo of the Apps page: "too large"). MainUI stretches a
+  config.json `"icon"` over the whole grid cell and prints the name across the
+  cell's lower part, and the logo filled its 300 px canvas, so the tile came
+  out about half again as wide as PortMaster's with "JukaHub" written over the
+  J. `player/trimui/Apps/JukaHub/icon.png` now keeps the 300 px canvas but
+  draws the logo 176 px wide, centred and 8% from the top, where a stock-sized
+  icon sits, clear of the label; release folders ship it as `icon.png` too and
+  `player/config.json` names it instead of `JukaPlayer.png` (still shipped,
+  still the window icon). An update brings both; MainUI shows the new icon
+  the next time it lists Apps. `branding/mklogo.py` (`render_app_icon`).
+
+- **PS4/PS5 Remote Play reconnects after the handheld sleeps** (Juka,
+  2026-11-18: "if I press power it turns off the screen, and when I turn it on
+  the application is stuck — it should try to reconnect, and if it cannot,
+  exit"). JukaHub is not running during a stream, so the power key is the
+  firmware's: it suspends the handheld (Wi-Fi off) and the console drops the
+  session; the helper then sat on the last picture for good. `chiaki-stream`
+  now notices the pause (`CLOCK_BOOTTIME` jumped), gives the stream 5 s to
+  show fresh picture or sound and otherwise shows **Reconnecting to …**: it
+  closes the dead session and opens new ones with the same pairing once Wi-Fi has a
+  route again, 20 s per try, entering a login passcode the console already
+  took. Picture and sound gone for 15 s without a sleep, or an error ending
+  right after a pause or a silence, reconnect the same way; an ending while
+  the picture still flows (rest mode, another device) still just ends. After
+  a minute it gives up with the error card (`connection_lost`, rc 11) and
+  JukaHub comes back with "The stream from … dropped … and could not be
+  reconnected". Start + Select stops it at any time. Needs the next helper
+  build. `player/native/chiaki-stream.c`, `stream_sys.c/.h` (`ss_net_up`),
+  `player/psremote_lastrun.go`, docs/REMOTE_PLAY.md, native/README.md.
+
+- **The shader speed check measures something now.** It asked RetroArch's
+  command port for a frame counter and a fast-forward flag RetroArch does not
+  have, so every check ended "Unavailable". On the handheld it now counts the
+  screen's page flips over about 16 seconds of clean play (skipping loading,
+  pauses, JukaHub's menus, sleep and fast-forward); where flips cannot be
+  seen, and on a PC, it reads RetroArch's own frame timing from the game's log
+  after it closes. A game's options say Full speed or Below full speed with
+  the FPS reached, and a new verdict shows once when JukaHub is back ("CRT
+  keeps this game at full speed — 59.9 of 60 FPS."). Handheld systems are
+  judged against 60 FPS whatever the region, the Virtual Boy against 50.
+  `player/shader_speed.go`, `shader_speed_linux.go`, `shader_speed_other.go`,
+  `gamediag.go`, `gamepause_ra.go`.
+
+- **Stick lights no longer blink** (2026-11-18). The TrimUI rings went dark
+  for a moment on every colour change, because a new colour was put in by
+  switching the ring's effect off and on again while it was lit. JukaHub now
+  never does that on a lit ring: where the driver allows it the colour goes
+  straight to the LEDs (through the driver's own frame, or a static effect
+  written without the off step — each used only after reading back that it
+  really took), and otherwise the brightness slips down to dark for a fraction
+  of a second, the colour changes there, and it comes back up. In steady light
+  nothing is rewritten any more; when TrimUI's own service changes the rings,
+  JukaHub paints them once more, and stops after two such changes instead of
+  repainting every minute. The Music mode keeps a soft glow between songs
+  instead of going dark and flashing at every menu click, and its colour
+  follows the music calmly; Rainbow and Screen colours change colour less often
+  where every change costs a dip. A low-battery warning or charging light no
+  longer flickers on and off when the battery reading wobbles. The log (scene
+  "led") now says which way the colour reaches the rings and why each change
+  was written. Not yet built.
+- **N64 (and other GPU cores) no longer broken by the automatic core update**
+  (2026-11-18). The daily core update replaced every core whose bytes differed
+  from the libretro buildbot's nightly, including the GPU-rendered ones —
+  Mupen64Plus-Next, ParaLLEl N64, Flycast, PPSSPP — whose generic linux/aarch64
+  builds are made for desktop OpenGL, while the handheld's RetroArch draws with
+  OpenGL ES only: such a build cannot be opened, or asks for a GPU context
+  RetroArch cannot make, and the game is back in the menu a second after A. A
+  build that needs desktop OpenGL's libGL.so.1 is now refused before it
+  replaces anything; the automatic pass leaves a GPU core on the firmware's or
+  CrossMix's own build and says so once (a press still installs the buildbot
+  build, with a warning); and on its first start this build gives such a core,
+  replaced by an earlier JukaHub update, its kept firmware build back once, with
+  a toast (R1 on the Emulators page undoes it). The build the card came with is
+  no longer pruned from the kept builds, and core-history.json remembers it
+  however often the core is updated. Spatial audio also leaves alone a game
+  that brings its own ALSA library (a standalone emulator's), whose sound could
+  otherwise fail to open. Not yet built.
+- **Boost no longer resets a game's other core options** (2026-11-18). A game's
+  own `.opt` is the only options file RetroArch reads for it, so Boost's
+  two-line override switched every other option of the core back to its
+  default; it now carries the options RetroArch read for the game before. Not
+  yet built.
+- **PortMaster opens on a stock TrimUI Smart Pro** (2026-11-18, backlog
+  PORT-HW-3). PortMaster's TrimUI package is written for TRIMUI_EX (which
+  CrossMix includes): its `launch.sh` sources `System/etc/ex_config`, its menu
+  needs `python3`, its scripts need a real bash, and pysdl2 needs
+  `PYSDL2_DLL_PATH` — on stock firmware, where `/bin/bash` is BusyBox and there
+  is no Python, it closed the moment it opened. On an ARM64 TrimUI JukaHub now
+  checks the firmware's bash and python3 once a session, in the port's own
+  environment, and supplies what fails from its own folder for PortMaster,
+  its ports and harbourmaster only: a python-build-standalone CPython 3.11
+  (runs on the firmware's glibc; the archive must match its SHA-256 in the
+  release's `SHA256SUMS`; `portmaster_python.go`) and Ubuntu's bash on the
+  private C runtime, plus links to the firmware's SDL2 for pysdl2, and
+  `/usr/trimui/lib` and the firmware CA bundle when missing
+  (`portmaster_runtime.go`). When `launch.sh` reads an `ex_config` the card
+  does not have, a copy beside it (`.jukahub-launch.sh`) runs instead, with
+  that line made conditional. The first open downloads what is missing with
+  the install card and then opens PortMaster by itself; installing PortMaster
+  fetches it at once. Installing now checks the package has
+  `PortMaster/control.txt` and creates `Data/home` and `Data/ports`. **Y on
+  the PortMaster row** adds **Repair PortMaster** (downloads the package again
+  and writes its files over the install; ports, `libs/` and settings stay) and
+  **Why didn't it open?**; a PortMaster that closes at once says the likeliest
+  reason, and each launch log names the bash and Python used.
+- **The private glibc is Ubuntu's newest signed build, with bash and the C++
+  runtime** (2026-11-18). It was one pinned `libc6` 2.39-0ubuntu8.12. JukaHub
+  now installs the newest noble `libc6`, `libgcc-s1`, `libstdc++6`,
+  `libtinfo6` and `bash` through apt's trust chain (Ubuntu's archive key on
+  the `Release`, the `Release`'s SHA-256 on the `main` index, the index's
+  SHA-256 on every `.deb`; an older `Release` than one already accepted is
+  refused), probes its loader and bash on the device, and switches
+  `data/private-glibc/current` to it. It looks for a newer build at most
+  weekly when the Ports panel opens online. The pinned package stays as the
+  fallback when the signed index cannot be read (`glibc_runtime.go`,
+  `docs/PRIVATE_GLIBC.md`).
+- **Quick Settings ignored the mouse, and L2/R2 never reached it**
+  (2026-11-18). A click while the panel was open went to the screen behind it,
+  and the triggers were swallowed by the overlay guard before the panel saw
+  them. The panel is modal now (a click outside closes it, the wheel walks its
+  buttons) and takes the triggers first.
+- **The Patch manager remembers installed packages, and Remove deletes them**
+  (2026-11-18, backlog ARCH-9). The package database (`db.json`) was written on
+  every install but never read back, so after a restart Remove did not know
+  earlier packages, History was empty and the next install rewrote the file
+  without them; it is now read on first use. Remove of a package from an earlier
+  session now deletes its files (it looked for them under the install folder
+  twice over, found nothing and dropped the record) and refuses a file outside
+  that folder; a db.json that cannot be read is never overwritten. Not yet
+  built.
+- **A restore writes only JukaHub's own data files** (2026-11-18, backlog
+  SEC-33). Restoring a `.jkbackup` now writes into the data folder only the
+  top-level stores a backup carries and the folders it names (the curation
+  lists), so a backup changed by hand can no longer place a program among the
+  emulators, runtimes and packs that live there; anything else is listed as
+  skipped. Backups no longer carry the battery calibration (`battery_cal.json`)
+  or the VPN's DNS copy (`vpn-resolv.json`), which describe this device; in an
+  older backup they are listed as skipped. Not yet built.
+- **Browser cookies: fewer writes to the card** (2026-11-18, backlog SEC-32). A
+  site that re-sends a Max-Age cookie with every response no longer rewrites
+  `browser-cookies.json` each time: a saved cookie's expiry is only updated when
+  it moves by more than an hour (or by more than half the time a short-lived
+  cookie has left, so a 10-minute session cookie is never saved already
+  expired), or when the cookie's value or flags change. Not yet built.
+- **Scene Terminal commands stop after two minutes** (2026-11-18, backlog
+  SEC-14). A command run by a design's Terminal or emulator button
+  (`terminal_run`, `emulator_run`) is now stopped after two minutes with
+  everything it started, ending "(stopped after 2m0s)"; before, a hung one ran
+  until JukaHub exited. An emulator started that way is stopped too: the trigger
+  runs commands, it does not launch games. Only the end of the output is held
+  while it runs (the last 4 000 characters are shown), so a chatty command can
+  no longer fill the memory. Not yet built.
+- **Radio and podcasts no longer go silent for good when the stream stops**
+  (2026-11-18, backlog MED-36). The music player's ffmpeg now gets the same
+  15-second read timeout and reconnect the video player uses, so a short Wi-Fi
+  drop plays on and a stream that stays quiet ends with "Playback stopped early
+  — press Play to resume" instead of silence. A podcast cut off part way keeps
+  its place instead of counting as finished, an HLS stream whose reads hang is
+  stopped after 90 s, and a live station no longer remembers a place, so Play
+  after Stop starts it live. Not yet built.
+- **WebP pictures open on the stock Smart Pro** (2026-11-18, backlog MED-37).
+  Where SDL_image has no WebP decoder (stock firmware 1.1.0, the Windows build)
+  but ffmpeg is installed, .webp files show in Files with a thumbnail, open in
+  the picture viewer, work as the lock screen and in the photo frame, and NX
+  Redux-style .webp covers show as box art after the next library refresh;
+  ffmpeg decodes them off the render thread after a size check. Covers are
+  converted once into a cache capped at 256 MB, and one ffmpeg cannot read no
+  longer blocks a downloaded cover. Chat cannot show a .webp yet. Not yet built.
+- **Picture and video questions to Juka survive a sleep** (2026-11-18, backlog
+  NET-21). A question with a picture, video or recording that was in flight when
+  the handheld slept used to wait out its six-minute limit before it was asked
+  again; it is now called off at the wake like any other Juka question (ffmpeg
+  and the transcript stop too) and asked again once the network answers. Half an
+  answer cut by the sleep is no longer kept as the reply. Not yet built.
+- **The surface probe measures the EGL a game run uses on the stock firmware**
+  (2026-11-18, backlog AND-23). On a stock TrimUI the AndroidRT surface probe
+  now loads the firmware's own `/usr/lib/libEGL.so` first, like the present
+  layer, instead of whatever libEGL the library path finds first, and points its
+  SDL check at that same file. Both share one firmware path list
+  (`apak_gpuFirmwareEgl`), and the smoke suite checks the probe's `libraries:`
+  line against a staged firmware tree with a decoy on the library path. Not yet
+  built.
 - **A stream that stops sending no longer freezes the player** (2026-11-17,
   backlog MED-29). The video decoders reconnect, then give up, when an http(s)
   stream sends nothing for 15 seconds, so a short Wi-Fi drop plays on and a dead

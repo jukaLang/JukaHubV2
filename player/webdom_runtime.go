@@ -36,6 +36,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/url"
 	"os"
 	"runtime"
@@ -95,9 +96,8 @@ const (
 	// original is drawn instead.
 	webJSTextLossMin    = 2000
 	webJSTextLossFactor = 3
-	// webJSUserAgent is what navigator.userAgent reports. It matches the
-	// header every browser request sends, so a site's server-side and
-	// script-side checks agree.
+	// webJSUserAgent is the default navigator.userAgent. configJSON selects
+	// the same mobile variant as the request headers for Wikipedia pages.
 	webJSUserAgent = browserChromeUserAgent
 	// webJSRegexpTimeout bounds one regular-expression match (see init).
 	webJSRegexpTimeout = 2 * time.Second
@@ -1116,18 +1116,20 @@ func (s *webJSSession) perfNow() float64 {
 
 // configJSON is what boot() learns about the device and the reader.
 func (s *webJSSession) configJSON() string {
-	w, h := int(screenWidth), int(screenHeight)
-	if w <= 0 || h <= 0 {
-		w, h = 1280, 720
+	vw, vh := webMediaViewport()
+	w, h := int(math.Round(vw)), int(math.Round(vh))
+	userAgent, platform := webJSUserAgent, webJSPlatform()
+	if browserWikipediaPage(s.page, nil) {
+		userAgent, platform = browserChromeMobileUserAgent, "Linux armv8l"
 	}
 	cfg := map[string]interface{}{
-		"userAgent": webJSUserAgent,
+		"userAgent": userAgent,
 		"language":  "en-US",
 		"languages": []string{"en-US", "en"},
 		"width":     w,
 		"height":    h,
 		"timeZone":  webJSTimeZone(),
-		"platform":  webJSPlatform(),
+		"platform":  platform,
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {

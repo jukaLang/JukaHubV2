@@ -42,17 +42,21 @@ const (
 func storeScenesEnsure(config *Config) {
 	portsStoreEnsureScene(config)
 	cloudGamingEnsureScene(config)
+	// Get Homebrew (homebrew_store*.go) shares the hooks.
+	homebrewEnsureScene(config)
 }
 
 // storeScenesClick routes a click or tap on either screen; a miss is left for
 // the bars.
 func storeScenesClick(mx, my int32, config *Config) bool {
-	return portsStoreSceneClick(mx, my, config) || cloudGamingSceneClick(mx, my, config)
+	return portsStoreSceneClick(mx, my, config) || cloudGamingSceneClick(mx, my, config) ||
+		homebrewSceneClick(mx, my, config)
 }
 
 // storeScenesWheel scrolls whichever of the two is on screen.
 func storeScenesWheel(config *Config, y int32) bool {
-	return portsStoreSceneWheel(config, y) || cloudGamingSceneWheel(config, y)
+	return portsStoreSceneWheel(config, y) || cloudGamingSceneWheel(config, y) ||
+		homebrewSceneWheel(config, y)
 }
 
 // ── The shared port installer ────────────────────────────────────────────

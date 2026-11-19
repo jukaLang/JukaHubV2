@@ -440,40 +440,11 @@ func ctrlGlobalSearch(e *sdl.ControllerButtonEvent, config *Config) bool {
 
 // ── Quick Settings ──
 
+// ctrlQuickSettings hands the pad to the panel, which owns every button
+// while it is up: its layouts walk differently and L2's editor has keys of
+// its own (qs_layout.go qsPad, qs_edit.go).
 func ctrlQuickSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
-	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		qsNavigate(-1)
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		qsNavigate(1)
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		qsNavigateSlider(-5)
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		qsNavigateSlider(5)
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		qsShoulder(padL1)
-	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		qsShoulder(padR1)
-	case sdl.CONTROLLER_BUTTON_A:
-		qsSelect()
-		PlayActivateSound()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		qsToggleOpen()
-		PlayBackSound()
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		// F2 on a Brick opened the panel, and the same key puts it away.
-		if brickHasFunctionKeys() {
-			qsToggleOpen()
-			PlayBackSound()
-		}
-	default:
-		return true
-	}
-	return true
+	return qsPad(e, config)
 }
 
 // ── Wallpaper picker ──
@@ -527,6 +498,11 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 			if inmapTriggerPress(inmapBtnL2, config) {
 				return true
 			}
+			// Quick Settings has trigger bindings (L2 edits it), so it
+			// takes them before the overlays that only swallow them.
+			if qsTriggerPress(padL2) {
+				return true
+			}
 			if triggerOwnedByOverlay() {
 				return true
 			}
@@ -541,6 +517,9 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 				return true
 			}
 			if inmapTriggerPress(inmapBtnR2, config) {
+				return true
+			}
+			if qsTriggerPress(padR2) {
 				return true
 			}
 			if triggerOwnedByOverlay() {

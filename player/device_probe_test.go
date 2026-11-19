@@ -10,6 +10,7 @@ package main
 // environment and finally the panel are consulted.
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,5 +358,91 @@ func TestReadPanelSize(t *testing.T) {
 	devicePanelFiles = []string{filepath.Join(dir, "absent")}
 	if w, h := readPanelSize(); w != 0 || h != 0 {
 		t.Fatalf("readPanelSize(missing) = %dx%d, want 0x0", w, h)
+	}
+}
+
+// The boot clock's two outside inputs: the process's own start in
+// /proc/self/stat, whose command name may hold spaces and ')', and the boot's
+// timing record in /tmp, which a damaged or foreign file must not turn into a
+// Settings line.
+func TestStartupBootClockParsers(t *testing.T) {
+	stat := "1234 (Juka Hub) x) S 1 1234 1234 0 -1 4194560 100 0 0 0 1 2 0 0 20 0 3 0 173 100000 50 18446744073709551615"
+	if got := parseProcStatStart(stat); got != 1.73 {
+		t.Fatalf("parseProcStatStart = %v, want 1.73", got)
+	}
+	for _, bad := range []string{"", "1234 (JukaHub", "1234 (JukaHub) S 1 2", "1234 (JukaHub) S 1 1 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 abc"} {
+		if got := parseProcStatStart(bad); got != 0 {
+			t.Fatalf("parseProcStatStart(%q) = %v, want 0", bad, got)
+		}
+	}
+
+	rec := startupBootTiming{BootID: "4f1c-77", Start: 1.7, FirstFrame: 2.31}
+	got, ok := parseStartupBootTiming(formatStartupBootTiming(rec))
+	if !ok || got.BootID != rec.BootID || got.Start != rec.Start || got.FirstFrame != rec.FirstFrame {
+		t.Fatalf("boot timing round trip = %+v, %v", got, ok)
+	}
+	for _, bad := range []string{"", "id 1.0", "id 2.0 1.0", "id x 2.0", "id 0 2.0", "id 1 2 3", "id NaN NaN", "id 1 NaN"} {
+		if _, ok := parseStartupBootTiming(bad); ok {
+			t.Fatalf("parseStartupBootTiming(%q) accepted", bad)
+		}
+	}
+}
+
+// The launcher's remembered names (data/device-probe.json) are read back only
+// for the very file they describe and the names this build searches for, and a
+// record naming anything else is refused.
+func TestDeviceProbeCacheRecord(t *testing.T) {
+	path, stamp, searched := "/usr/trimui/bin/MainUI", "4096:17:18:19:20", deviceProbeSearched()
+	good := `{"version":1,"path":"/usr/trimui/bin/MainUI","file":"4096:17:18:19:20","searched":"` + searched + `","names":["Trimui Brick"]}`
+	if got, ok := parseDeviceProbeCache([]byte(good), path, stamp, searched); !ok || len(got) != 1 || got[0] != "Trimui Brick" {
+		t.Fatalf("good record = %v, %v", got, ok)
+	}
+	none := strings.Replace(good, `["Trimui Brick"]`, `[]`, 1)
+	if got, ok := parseDeviceProbeCache([]byte(none), path, stamp, searched); !ok || len(got) != 0 {
+		t.Fatalf("a scan that found nothing = %v, %v", got, ok)
+	}
+	for name, bad := range map[string]string{
+		"garbled":     good[:20],
+		"version":     strings.Replace(good, `"version":1`, `"version":2`, 1),
+		"other file":  strings.Replace(good, `4096:17`, `4097:17`, 1),
+		"other path":  strings.Replace(good, `/usr/trimui/bin/MainUI`, `/tmp/MainUI`, 1),
+		"other names": strings.Replace(good, `"searched":"`, `"searched":"x|`, 1),
+		"foreign":     strings.Replace(good, `Trimui Brick"]`, `Steam Deck"]`, 1),
+	} {
+		if got, ok := parseDeviceProbeCache([]byte(bad), path, stamp, searched); ok {
+			t.Fatalf("%s record accepted: %v", name, got)
+		}
+	}
+}
+
+// The first-frame cache (startup_framecache.go) reads back what it wrote for
+// the same build, and refuses another build's file, a cut-off file and
+// anything that is not one.
+func TestFrameCacheFileRoundTrip(t *testing.T) {
+	label := &frameCacheLabel{w: 3, h: 2, ink: 0x112233, clear: 0, alpha: []byte{0, 128, 255, 255, 64, 0}}
+	icons := []iconAtlasKey{{name: "home", size: 24}}
+	var buf bytes.Buffer
+	if err := writeFrameCache(&buf, "build A", []string{"face|h20|cffffffff|Games"}, map[string]*frameCacheLabel{"face|h20|cffffffff|Games": label}, icons); err != nil {
+		t.Fatal(err)
+	}
+	data, err := readFrameCache(bytes.NewReader(buf.Bytes()), "build A")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	got := data.labels["face|h20|cffffffff|Games"]
+	if got == nil || got.w != 3 || got.h != 2 || got.ink != 0x112233 || !bytes.Equal(got.alpha, label.alpha) {
+		t.Fatalf("label = %+v", got)
+	}
+	if len(data.iconKeys) != 1 || data.iconKeys[0] != icons[0] {
+		t.Fatalf("icons = %v", data.iconKeys)
+	}
+	if _, err := readFrameCache(bytes.NewReader(buf.Bytes()), "build B"); err == nil {
+		t.Fatal("another build's file was used")
+	}
+	if _, err := readFrameCache(bytes.NewReader(buf.Bytes()[:buf.Len()/2]), "build A"); err == nil {
+		t.Fatal("a cut-off file was used")
+	}
+	if _, err := readFrameCache(strings.NewReader("JHFF1\nnot deflate at all"), "build A"); err == nil {
+		t.Fatal("garbage was used")
 	}
 }

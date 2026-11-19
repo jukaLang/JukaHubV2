@@ -42,7 +42,9 @@ package main
 //
 // It also reads Menu held alone, without taking the pad, for Hold Menu:
 // screenshot (menushot.go): the game keeps Menu (its menu still opens), and
-// the screen read at the press is saved when the hold lands.
+// the screen read at the press is saved when the hold lands. Select + R1
+// pressed together saves the screen at once, read the moment the pair is
+// down (Select + R1: screenshot, menushot.go); the game sees that press too.
 //
 // And Select + Start held for gmForceQuitHold (3 s) ends the game whatever it
 // is doing (gameForceQuit, gamemenu.go): no overlay, no grab — the way out of a
@@ -108,6 +110,10 @@ const (
 	// gaRecoverGrace is how long a stopped game found at start gets to quit
 	// before it is killed.
 	gaRecoverGrace = 3 * time.Second
+	// gaShotChordGap is the least time between two Select + R1 screenshots:
+	// a bouncing contact is one picture, and two files never share a name
+	// (screenshotPath counts in seconds).
+	gaShotChordGap = time.Second
 )
 
 // gaPad is the watcher's lifetime: one goroutine per game, started from the
@@ -126,6 +132,8 @@ var gaPad struct {
 	wantMenu atomic.Bool
 	// wantShot: Menu held alone saves the game's screen (menushot.go).
 	wantShot atomic.Bool
+	// wantShotChord: Select + R1 pressed saves it at once (menushot.go).
+	wantShotChord atomic.Bool
 	// wantQuit: Select + Start held ends the game (gameForceQuit).
 	wantQuit atomic.Bool
 }
@@ -135,16 +143,18 @@ var gaPad struct {
 func gameAssistSupported() bool { return IsTrimuiDevice() }
 
 // gaPadSync runs on the main thread, from the parked loop: it mirrors which
-// chords are wanted — the Menu hold for a screenshot and the Select + Start
-// hold that ends the game too — and starts one watcher per game while any is.
-func gaPadSync(config *Config, ask, menu, shot, quit bool) {
-	want := ask || menu || shot || quit
-	if shot {
+// chords are wanted — the Menu hold and the Select + R1 press for a
+// screenshot, and the Select + Start hold that ends the game too — and starts
+// one watcher per game while any is.
+func gaPadSync(config *Config, ask, menu, shot, shotChord, quit bool) {
+	want := ask || menu || shot || shotChord || quit
+	if shot || shotChord {
 		gameShotSync(config)
 	}
 	gaPad.wantAsk.Store(ask)
 	gaPad.wantMenu.Store(menu)
 	gaPad.wantShot.Store(shot)
+	gaPad.wantShotChord.Store(shotChord)
 	gaPad.wantQuit.Store(quit)
 	gaPad.want.Store(want)
 	if !want {
@@ -239,6 +249,15 @@ type gaPadSession struct {
 	shotVolume int64
 	shotFrame  gameShotFrame
 	shotBuf    []byte
+
+	// Select + R1 while the game plays: a screenshot at once (menushot.go).
+	// shotPair is the two down together — a picture is taken when they come
+	// down, so one press is one picture — shotPairAt when the last was, and
+	// shotPairFrame that picture until the read it came in is done
+	// (shotPairSettle).
+	shotPair      bool
+	shotPairAt    time.Time
+	shotPairFrame gameShotFrame
 }
 
 // gaPadRun is the goroutine: it watches for the chord while the game runs and
@@ -328,7 +347,7 @@ func (s *gaPadSession) open(now time.Time) error {
 	s.resync(now)
 	// A chord already held when the watch starts does not fire from it.
 	s.resetChords()
-	logInfo("gameassist", "watching %q (%s) for Select + R2, Select + L2 and Select + Start held", dev.Name, path)
+	logInfo("gameassist", "watching %q (%s) for Select + R2, Select + L2 and Select + Start held, and Select + R1", dev.Name, path)
 	return nil
 }
 
@@ -339,6 +358,7 @@ func (s *gaPadSession) resetChords() {
 	s.ask.reset(sel && s.r2)
 	s.menu.reset(sel && s.l2)
 	s.quit.reset(sel && s.eng.key(evdevBtnStart))
+	s.shotPair = s.shotPairDown()
 }
 
 // resync reads the pad whole — the buttons held, each axis's range and value
@@ -352,6 +372,9 @@ func (s *gaPadSession) resync(now time.Time) {
 		// Menu's release was among the dropped events.
 		s.shotCancel()
 	}
+	// A Select + R1 press among them is not taken late: the picture would be
+	// whatever the game drew since.
+	s.shotPair = s.shotPairDown()
 	info := make([]byte, evdevAbsInfoSize)
 	for _, axis := range [...]uint16{evdevAbsX, evdevAbsY, evdevAbsZ, evdevAbsRX, evdevAbsRY, evdevAbsRZ, evdevAbsHat0X, evdevAbsHat0Y} {
 		if mbridgeIoctlBuf(s.fd, evdevGetAbs(axis), info) != nil {
@@ -408,6 +431,9 @@ func (s *gaPadSession) step(now time.Time) error {
 		if n < len(s.buf) {
 			break
 		}
+	}
+	if s.shotPairFrame.raw != nil {
+		s.shotPairSettle(now)
 	}
 	switch {
 	case s.held:
@@ -472,7 +498,14 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 		case evdevBtnSelect, evdevBtnStart:
 			s.chord(now)
 		}
+		if ev.Code == evdevBtnSelect || ev.Code == evdevBtnTR {
+			s.shotPairFollow(now)
+		}
 		if !s.held && down != was {
+			if ev.Code == evdevBtnMode && down {
+				// The game's menu may be opening (playshot_cover.go).
+				gaLink.menuAt.Store(max(int64(powerMonoNow()), 1))
+			}
 			s.shotKey(ev.Code, down)
 		}
 		if !s.held || down == was {
@@ -685,6 +718,66 @@ func (s *gaPadSession) shotSave() {
 	}
 	logInfo("gameassist", "Menu held in %q: saving the game's screen", s.name)
 	go gameShotSave(fr, time.Now())
+}
+
+// shotPairFollow follows Select + R1 for "Select + R1: screenshot"
+// (menushot.go) while the game has the pad: the two coming down together,
+// in either order, save the screen at once, read before anything the game
+// does with the press is drawn. One press is one picture — R1 let go and
+// pressed again with Select still held is the next — at most one per
+// gaShotChordGap. Never while the pad is held for the overlay, nor with Menu
+// down (Menu + Select + R1 is an emulator's hotkey). The picture waits in
+// shotPairFrame for shotPairSettle, at the end of this read.
+func (s *gaPadSession) shotPairFollow(now time.Time) {
+	down := s.shotPairDown()
+	was := s.shotPair
+	s.shotPair = down
+	if !down || was || s.held || !gaPad.wantShotChord.Load() || s.eng.key(evdevBtnMode) {
+		return
+	}
+	if !s.shotPairAt.IsZero() && now.Sub(s.shotPairAt) < gaShotChordGap {
+		return
+	}
+	s.shotPairAt = now
+	// A buffer of its own: the saving goroutine owns it (the Menu hold's is
+	// reused from press to press).
+	fr, err := gameShotGrab(nil)
+	if err != nil {
+		s.note("screenshot: could not read the screen: " + err.Error())
+		playHaptic(hapticErrorPulse)
+		gameShotTell("", err)
+		return
+	}
+	s.shotPairFrame = fr
+}
+
+// shotPairSettle saves the Select + R1 picture once every event read with the
+// press has been followed. The pad is asked first, as take and forceQuit do:
+// a Select (or R1) the events still hold down that the pad says is up is a
+// release that went missing — to the games mouse while it held the pad — so
+// the "pair" was a plain press, and the pad is read whole instead. It is
+// asked only now, not at the press, because a quick tap of the pair is let go
+// before a read 25 ms apart sees it: its releases are in the same read, and
+// the events and the pad agree again.
+func (s *gaPadSession) shotPairSettle(now time.Time) {
+	fr := s.shotPairFrame
+	s.shotPairFrame = gameShotFrame{}
+	bitmap := make([]byte, evdevKeyBitmapSize)
+	if mbridgeIoctlBuf(s.fd, evdevGetKey(evdevKeyBitmapSize), bitmap) == nil &&
+		((s.eng.key(evdevBtnSelect) && !evdevKeyBit(bitmap, evdevBtnSelect)) ||
+			(s.eng.key(evdevBtnTR) && !evdevKeyBit(bitmap, evdevBtnTR))) {
+		s.note("Select + R1: a button the pad no longer holds; no screenshot")
+		s.resync(now)
+		return
+	}
+	logInfo("gameassist", "Select + R1 in %q: saving the game's screen", s.name)
+	// Named by the press, which the gap spaces a second apart.
+	go gameShotSave(fr, s.shotPairAt)
+}
+
+// shotPairDown reports Select and R1 both down.
+func (s *gaPadSession) shotPairDown() bool {
+	return s.eng.key(evdevBtnSelect) && s.eng.key(evdevBtnTR)
 }
 
 // gaChord is one chord's hold: since when Select and its trigger have both
@@ -953,6 +1046,7 @@ func (s *gaPadSession) close() {
 	s.menuDown = false
 	s.shotCancel()
 	s.shotFrame, s.shotBuf = gameShotFrame{}, nil
+	s.shotPair, s.shotPairFrame = false, gameShotFrame{}
 }
 
 // write writes events in one write(), the way the kernel reads them.

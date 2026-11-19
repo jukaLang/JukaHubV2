@@ -3,7 +3,8 @@
 // The Apps screen lists launchable applications discovered from the platform:
 // on Windows the Start Menu plus an "apps" folder next to the executable, on
 // TrimUI the SD-card Apps folder (/mnt/SDCARD/Apps), and on every platform the
-// built-in JukaHub applets (JukaLand, Weather, ...). Entries are published to
+// apps installed from Packages (pkglaunch.go) and the built-in JukaHub
+// applets (JukaLand, Weather, ...). Entries are published to
 // the "app_entries" list variable so the generic dynamiclist element renders
 // them; activating an entry either launches a binary or opens a built-in scene.
 
@@ -166,9 +167,10 @@ func scanInstalledApps(config *Config) {
 }
 
 // collectAppEntries merges the app sources in priority order: portable apps
-// folder first, then system app folders, then built-in applets. Display names
-// are de-duplicated case-insensitively so a shortcut and a portable copy of
-// the same program do not appear twice.
+// folder first, then system app folders, then the apps installed from
+// Packages (pkglaunch.go), then built-in applets. Display names are
+// de-duplicated case-insensitively so a shortcut and a portable copy of the
+// same program do not appear twice.
 func collectAppEntries(config *Config, appsFolder string, systemDirs []string) []FileEntry {
 	entries := scanAppsFolder(appsFolder)
 	seen := make(map[string]bool, len(entries)+len(builtinApplets))
@@ -187,6 +189,17 @@ func collectAppEntries(config *Config, appsFolder string, systemDirs []string) [
 			seen[key] = true
 			entries = append(entries, e)
 		}
+	}
+	for _, e := range pkgAppEntries() {
+		if len(entries) >= maxAppEntries {
+			break
+		}
+		key := strings.ToLower(e.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		entries = append(entries, e)
 	}
 	for _, e := range builtinAppEntries(config) {
 		key := strings.ToLower(e.Name)
@@ -559,8 +572,16 @@ func launchBuiltinAppAction(action string) {
 
 // isLaunchableAppPath reports whether path lives below one of the folders the
 // Apps list is scanned from. Every launcher row is produced from those folders,
-// so a tampered or stale row cannot start an arbitrary executable.
+// so a tampered or stale row cannot start an arbitrary executable. An app
+// installed from Packages counts too, inside its own package folder only
+// (pkgLaunchablePath: never a staging, rollback or trash copy). The packages
+// folder is judged first, however the path spells it: on a TrimUI it sits
+// inside /mnt/SDCARD/Apps, whose blanket rule would otherwise accept those
+// copies.
 func isLaunchableAppPath(path string) bool {
+	if pkgUnderLaunchRoot(path) {
+		return pkgLaunchablePath(path)
+	}
 	for _, root := range append([]string{appsFolder()}, systemAppDirs()...) {
 		if isPathWithin(path, root) {
 			return true

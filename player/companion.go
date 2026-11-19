@@ -542,10 +542,18 @@ func (s *companionServer) handler() http.Handler {
 	// saved; keys and tokens are never sent back (companion_accounts.go).
 	mux.HandleFunc("/api/retroachievements", s.guard(s.handleRetroAchievements))
 	mux.HandleFunc("/api/romm", s.guard(s.handleRomM))
+	// The itch.io card: Get Homebrew's API key, checked with itch.io before
+	// it is saved and never sent back (homebrew_store_key.go).
+	mux.HandleFunc("/api/itch-key", s.guard(s.handleItchKey))
 	// The Email and Calendars cards: accounts and calendar links checked with
 	// their servers before they are saved; passwords and links are never sent
 	// back (companion_mailcal.go).
 	mux.HandleFunc("/api/mailcal", s.guard(s.handleMailCal))
+	// Cloud save sync: the page that sets up Google sign-in (a client file
+	// from Google Cloud Console) or a WebDAV server, checked before they are
+	// saved; secrets are never sent back (companion_cloud.go).
+	mux.HandleFunc("/cloud", s.handleCloudPage)
+	mux.HandleFunc("/api/cloud", s.guard(s.handleCloud))
 	// Steam: the sign-in through Steam's own page (a one-use token, never the
 	// PIN, goes to Steam) and the card's profile link, Web API key and Sign
 	// out (steam_signin.go).
@@ -902,6 +910,20 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .filedrop{border:2px dashed var(--line);border-radius:10px;padding:12px;margin:8px 0;color:var(--dim);text-align:center;font-size:14px}
 .filedrop.active{border-color:var(--accent);background:rgba(111,134,255,.12);color:var(--ink)}
 @media (max-width:420px){.frow{flex-wrap:wrap}.facts{width:100%;justify-content:flex-end}}
+/* The drop card (companion_drop.go): a big target that is also a button,
+   then one row per file with where it goes and its progress. */
+.filedrop.big{padding:24px 12px;margin:0;font-size:16px;color:var(--ink);cursor:pointer;-webkit-user-select:none;user-select:none}
+.filedrop.big small{margin-top:4px}
+.dlist{margin-top:6px}
+.drow{border-top:1px solid var(--line);padding:8px 0}
+.drow:first-child{border-top:0}
+.drow>b{display:block;font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drow>span{display:block;color:var(--dim);font-size:13px;overflow-wrap:anywhere}
+.drow.bad>span{color:var(--bad)}
+.drow.ok>span{color:var(--ok)}
+.drow .bar{margin-top:6px}
+.drow .row{margin-top:6px}
+.drow select{flex:1 1 100%}
 /* A phone on its side has little height: the screen moves to a column of its
    own on the left and the cards scroll on the right. */
 @media (orientation:landscape) and (max-height:540px){
@@ -916,6 +938,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class=row><button class="ghost shotonly" id=shotScreen>Refresh</button><button class="ghost shotonly" id=autoScreen>Live: off</button><button class=ghost id=pinScreen>Hide screen</button></div>
 </div>
 
+<div class=card id=dropCard>
+  <h2>Send to the handheld</h2>
+  <div class="filedrop big" id=dropZone role=button tabindex=0>Drop games, covers, music…<small>or tap to choose files</small></div>
+  <input type=file id=dropPick multiple hidden>
+  <label class=check><input type=checkbox id=dropSort checked>Put each file where it belongs</label>
+  <div class=msg id=dropMsg aria-live=polite></div>
+  <div class=dlist id=dropList></div>
+  <small>Games go to their console's folder in Roms, covers beside their game, songs to Music, BIOS files to BIOS and anything else to PhoneDrop. Works over Wi-Fi or a USB network connection.</small>
+</div>
+
 <div class=card>
   <h2>Type</h2>
   <textarea id=text placeholder="Type here, it appears on the handheld"></textarea>
@@ -927,6 +959,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <h2>Voice</h2>
   <div class=row><button id=voicePage>Say what to open</button></div>
   <small>Your keyboard's microphone sends commands like "open YouTube" or "volume 50".</small>
+</div>
+
+<div class=card id=cloudCard>
+  <h2>Cloud save sync</h2>
+  <div class=row><button id=cloudPage>Google Drive or WebDAV</button></div>
+  <small>Set up Google sign-in with a client of your own, or connect Nextcloud, Koofr or a NAS, so saves follow you to every JukaHub.</small>
 </div>
 
 <div class=card id=bugCard>
@@ -960,13 +998,6 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <input type=url id=url placeholder="https://youtu.be/...">
   <div class=row><button id=sendURL>Play on handheld</button></div>
   <small>YouTube, direct video links and live streams open in the player.</small>
-</div>
-
-<div class=card>
-  <h2>Send a file</h2>
-  <input type=file id=file>
-  <div class=row><button id=sendFile>Upload</button></div>
-  <small id=fileName>Files land in the PhoneDrop folder on the SD card.</small>
 </div>
 
 <div class=card id=filesCard>
@@ -1024,6 +1055,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class=row><button id=sendRomM>Save on handheld</button></div>
   <div class=msg id=rommMsg></div>
   <small>Your own RomM server's address, and a client API token with read and write access (made in RomM under your profile). The handheld checks them with the server and never shows the token again. Leave a field empty to keep what the handheld has.</small>
+</div>
+
+<div class=card id=itchCard>
+  <h2>itch.io</h2>
+  <p class=note id=itchStatus>Checking the handheld...</p>
+  <input type=password id=itchKey placeholder="API key" autocomplete=off autocapitalize=off autocorrect=off spellcheck=false data-lpignore=true data-1p-ignore data-bwignore>
+  <label class=check><input type=checkbox id=itchShow>Show the key</label>
+  <div class=row><button id=sendItch>Save on handheld</button></div>
+  <div class=msg id=itchMsg></div>
+  <small>Get Homebrew downloads free games and the ones you bought with your own itch.io account. Make a key on <a href="https://itch.io/user/settings/api-keys" target=_blank rel="noopener noreferrer">itch.io/user/settings/api-keys</a> (Generate new API key), copy it and paste it here. The handheld checks it with itch.io and never shows it again.</small>
 </div>
 
 <div class="card mc" id=mailCard>
@@ -1132,6 +1173,7 @@ async function sendText() {
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
+document.getElementById('cloudPage').onclick = () => { location.href = '/cloud?p=' + encodeURIComponent(pin); };
 
 // A report typed on the phone keeps its reference across a retry, so a lost
 // response cannot create a second issue. Saved device reports have the same
@@ -1213,29 +1255,204 @@ document.getElementById('sendURL').onclick = () => {
   api('/api/open', {url}, true).then(() => { toast('Opening on handheld'); el.value = ''; refreshSoon(); })
     .catch(e => toast(e.message, true));
 };
-document.getElementById('file').onchange = e => {
-  const f = e.target.files[0];
-  document.getElementById('fileName').textContent = f ? f.name + ' - ' + (f.size / 1048576).toFixed(1) + ' MB' : '';
-};
-document.getElementById('sendFile').onclick = async () => {
-  const input = document.getElementById('file');
-  if (!input.files.length) { toast('Pick a file first', true); return; }
-  const fd = new FormData();
-  fd.append('file', input.files[0]);
-  const btn = document.getElementById('sendFile');
-  btn.disabled = true; btn.textContent = 'Uploading...';
-  try {
-    await api('/api/upload', fd, false);
-    toast('Uploaded');
-    refreshSoon();
-    input.value = '';
-    document.getElementById('fileName').textContent = 'Files land in the PhoneDrop folder on the SD card.';
-  } catch (err) {
-    toast(err.message, true);
-  } finally {
-    btn.disabled = false; btn.textContent = 'Upload';
+// The drop card (companion_drop.go). Each file is asked about first: its name
+// and size, then the start of a disc image or the end of a zip when the
+// handheld asks for them. A console or a game to pick shows under the file's
+// row. Then the file is sent once, to the place the handheld chose. The files
+// of one disc game (tracks, cue sheet, playlist) follow the first answer.
+// After the last file the handheld shows one line for the batch.
+const dropListEl = document.getElementById('dropList');
+const dropMsgEl = document.getElementById('dropMsg');
+const dropZoneEl = document.getElementById('dropZone');
+const dropPickEl = document.getElementById('dropPick');
+const dropQueue = [];
+let dropBusy = false;
+let dropBatch = '';
+function dropSay(text, bad) { dropMsgEl.textContent = text || ''; dropMsgEl.className = bad ? 'msg bad' : 'msg'; }
+function dropRow(file) {
+  const row = document.createElement('div');
+  row.className = 'drow';
+  const title = document.createElement('b');
+  title.textContent = file.name;
+  const line = document.createElement('span');
+  line.textContent = 'Waiting...';
+  const bar = document.createElement('div');
+  bar.className = 'bar idle';
+  const fill = document.createElement('span');
+  bar.append(fill);
+  row.append(title, line, bar);
+  dropListEl.append(row);
+  return {
+    row: row,
+    say(text, cls) { line.textContent = text; row.className = cls ? 'drow ' + cls : 'drow'; },
+    pct(p) { bar.classList.toggle('idle', p < 0); fill.style.width = (p < 0 ? 0 : p) + '%'; }
+  };
+}
+// A disc game's files share a name once "(Track 2)" or "(Disc 1)" is set
+// aside: the console found or chosen for one goes for the rest.
+function dropGroup(name) {
+  const m = /^(.*)\.(bin|cue|img|ccd|sub|m3u|chd|iso|gdi|raw|cdi)$/i.exec(name);
+  return m ? m[1].replace(/\s*\((track|disc|cd)\s*\d+\)/gi, '').trim().toLowerCase() : '';
+}
+// Pictures go last, so a cover finds a game sent with it; sheets after the
+// tracks they name, so a track's header answers for them.
+function dropOrder(name) {
+  if (/\.(png|jpe?g|webp)$/i.test(name) && !/\.p8\.png$/i.test(name)) return 2;
+  if (/\.(cue|m3u|ccd|sub)$/i.test(name)) return 1;
+  return 0;
+}
+async function dropPlan(file, extra, body) {
+  const res = await fetch('/api/drop/plan?name=' + encodeURIComponent(file.name) + '&size=' + file.size +
+    '&batch=' + dropBatch + (extra || ''),
+    {method: 'POST', headers: hdr(body ? {'Content-Type': 'application/octet-stream'} : null), body: body || null});
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  return res.json();
+}
+async function dropDecide(file, extra) {
+  const plan = await dropPlan(file, extra);
+  if (plan.kind !== 'need') return plan;
+  const n = Math.min(plan.bytes || 0, file.size);
+  const part = plan.need === 'tail' ? file.slice(file.size - n) : file.slice(0, n);
+  return dropPlan(file, (extra || '') + '&part=' + encodeURIComponent(plan.need), part);
+}
+function dropAsk(r, plan) {
+  return new Promise(resolve => {
+    const box = document.createElement('div');
+    box.className = 'row';
+    const sel = document.createElement('select');
+    sel.setAttribute('aria-label', plan.pick === 'game' ? 'Game' : 'Console');
+    for (const c of plan.choices || []) {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = c.label;
+      sel.append(o);
+    }
+    const done = value => { box.remove(); resolve(value); };
+    if (sel.options.length) {
+      box.append(sel, filesButton(plan.pick === 'game' ? 'Use as its cover' : 'Send it there', '',
+        () => done('&' + plan.pick + '=' + encodeURIComponent(sel.value))));
+    }
+    box.append(filesButton('PhoneDrop', 'ghost', () => done('&to=drop')), filesButton('Skip', 'ghost', () => done(null)));
+    r.row.append(box);
+    r.say(plan.note || 'Where does it go?');
+  });
+}
+function dropSend(file, plan, r, where) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/drop?plan=' + encodeURIComponent(plan.token) + (plan.exists ? '&replace=1' : ''));
+    xhr.setRequestHeader('X-Companion-Pin', pin);
+    xhr.upload.onprogress = ev => {
+      if (!ev.lengthComputable) return;
+      const p = Math.floor(ev.loaded * 100 / ev.total);
+      r.pct(p);
+      r.say('Sending to ' + where + ': ' + p + '%');
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      reject(new Error((xhr.responseText || '').trim() || ('Error ' + xhr.status)));
+    };
+    xhr.onerror = () => reject(new Error('The connection to the handheld was lost.'));
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+async function dropOne(item, groups) {
+  const f = item.file;
+  const r = item.r;
+  const key = dropGroup(f.name);
+  let extra = '';
+  if (!document.getElementById('dropSort').checked) extra = '&to=drop';
+  else if (key && groups[key]) extra = '&system=' + encodeURIComponent(groups[key]);
+  r.say('Checking where it goes...');
+  let plan = await dropDecide(f, extra);
+  while (plan.kind === 'ask') {
+    const pick = await dropAsk(r, plan);
+    if (pick === null) { r.say('Skipped'); return; }
+    r.say('Checking where it goes...');
+    plan = await dropDecide(f, pick);
   }
+  if (key && plan.kind === 'game' && plan.system) groups[key] = plan.system;
+  const where = (plan.dest || '').replace(/^\//, '');
+  if (plan.exists && !confirm(plan.confirm || (f.name + ' is already there. Replace it?'))) {
+    r.say('Kept the copy on the handheld');
+    return;
+  }
+  r.say('Sending to ' + where + '...');
+  r.pct(0);
+  await dropSend(f, plan, r, where);
+  r.pct(-1);
+  r.say([plan.label, where, plan.note].filter(Boolean).join(' · '), 'ok');
+}
+async function dropFiles(selection) {
+  const files = Array.from(selection || []);
+  if (!files.length) return;
+  files.map((f, i) => ({f: f, i: i}))
+    .sort((a, b) => (dropOrder(a.f.name) - dropOrder(b.f.name)) || (a.i - b.i))
+    .forEach(x => dropQueue.push({file: x.f, r: dropRow(x.f)}));
+  if (dropBusy) return;
+  dropBusy = true;
+  dropBatch = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  dropSay('');
+  const groups = {};
+  let failed = 0;
+  try {
+    while (dropQueue.length) {
+      const item = dropQueue.shift();
+      try {
+        await dropOne(item, groups);
+      } catch (e) {
+        item.r.pct(-1);
+        item.r.say(e.message, 'bad');
+        failed++;
+      }
+    }
+  } finally {
+    dropBusy = false;
+  }
+  let text = '';
+  try { text = (await api('/api/drop/done?batch=' + dropBatch)).text || ''; } catch (e) { /* each row already says what arrived */ }
+  const missed = failed ? (failed === 1 ? '1 file was not sent.' : failed + ' files were not sent.') : '';
+  dropSay([text, missed].filter(Boolean).join(' '), failed > 0);
+  if (text) toast(text);
+  refreshSoon();
+  if (filesPath !== '/' && !filesBusy) filesLoad(filesPath).catch(() => {});
+}
+dropZoneEl.onclick = () => dropPickEl.click();
+dropZoneEl.onkeydown = ev => {
+  if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); dropPickEl.click(); }
 };
+dropPickEl.onchange = () => {
+  const picked = Array.from(dropPickEl.files || []);
+  dropPickEl.value = '';
+  dropFiles(picked);
+};
+for (const eventName of ['dragenter', 'dragover']) {
+  dropZoneEl.addEventListener(eventName, ev => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+    dropZoneEl.classList.add('active');
+  });
+}
+dropZoneEl.addEventListener('dragleave', () => dropZoneEl.classList.remove('active'));
+dropZoneEl.addEventListener('drop', ev => {
+  ev.preventDefault();
+  dropZoneEl.classList.remove('active');
+  dropFiles(ev.dataTransfer.files);
+});
+// Files dropped anywhere else on the page go the same way, instead of the
+// browser leaving the page to open them. The Files card's own target keeps
+// its folder: its handler has taken the drop first.
+function dropHasFiles(ev) { return !!(ev.dataTransfer && Array.from(ev.dataTransfer.types || []).indexOf('Files') >= 0); }
+document.addEventListener('dragover', ev => {
+  if (dropHasFiles(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; }
+});
+document.addEventListener('drop', ev => {
+  if (ev.defaultPrevented || !dropHasFiles(ev)) return;
+  ev.preventDefault();
+  dropFiles(ev.dataTransfer.files);
+});
 // The screen pinned at the top. Each picture is a capture on the handheld, so
 // it is fetched on demand: Refresh, Live (every 1.2 s while this page is in
 // view), and a moment after every remote press, text, link or upload, so the
@@ -1415,6 +1632,40 @@ document.getElementById('sendRomM').onclick = async () => {
     toast('Saved on the handheld');
   } catch (err) {
     accountSay('rommMsg', err.message, true);
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Save on handheld';
+  }
+};
+// The itch.io card (homebrew_store_key.go): whether a key is saved, its last
+// four characters and the account it belongs to, never the key.
+const itchStatusEl = document.getElementById('itchStatus');
+function showItch(s) {
+  if (!s || !s.set) { itchStatusEl.textContent = 'No itch.io key is saved on the handheld yet.'; return; }
+  let line = s.account ? 'Signed in as ' + s.account + '.' : 'A key is saved.';
+  if (s.tail) line += ' The key ends in ' + s.tail + '.';
+  itchStatusEl.textContent = line;
+}
+fetch('/api/itch-key', {headers: hdr(), cache: 'no-store'})
+  .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+  .then(showItch)
+  .catch(() => { itchStatusEl.textContent = 'Paste your key to save it on the handheld.'; });
+document.getElementById('itchShow').onchange = e => {
+  document.getElementById('itchKey').type = e.target.checked ? 'text' : 'password';
+};
+document.getElementById('sendItch').onclick = async () => {
+  const key = document.getElementById('itchKey');
+  if (!key.value.trim()) { toast('Paste your API key first', true); key.focus(); return; }
+  const btn = document.getElementById('sendItch');
+  btn.disabled = true; btn.textContent = 'Checking with itch.io...';
+  try {
+    const r = await api('/api/itch-key', {key: key.value.trim()}, true);
+    key.value = '';
+    showItch(r);
+    accountSay('itchMsg', r.message || 'Saved on the handheld.');
+    toast('Saved on the handheld');
+  } catch (err) {
+    accountSay('itchMsg', err.message, true);
     toast(err.message, true);
   } finally {
     btn.disabled = false; btn.textContent = 'Save on handheld';

@@ -370,6 +370,7 @@ func (n *webJSNet) fetch(ctx context.Context, req webJSRequest, kind webJSNetKin
 
 // respond turns a response into what the script may see of it.
 func (n *webJSNet) respond(call *webJSNetCall, asked *url.URL, resp *http.Response, kind webJSNetKind, method string) webJSResponse {
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	call.mu.Lock()
 	crossed, sent, hops, manual := call.crossed, call.sent, call.hops, call.manual
 	call.mu.Unlock()

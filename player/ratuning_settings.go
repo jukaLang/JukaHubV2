@@ -2,13 +2,19 @@ package main
 
 // ratuning_settings.go — Settings → Emulation: the rows behind ratuning.go.
 //
-// The first row picks what the next three change: "All consoles", or one
-// console that then gets its own Audio quality, Latency and Overlay (a Game
-// Boy border is no use on a PlayStation game, and a PSP game wants the cheap
-// resampler while the NES gets the best one). Each per-console row starts
-// with "Default · …", which follows the all-consoles choice and shows what
-// that is for this console. The picked console is remembered for this run of
-// the app only; it is a view, not a setting.
+// The first row picks what the scoped rows change: "All consoles", or one
+// console that then gets its own Audio quality, Latency, Overlay, Look and
+// Crop overscan (a Game Boy border is no use on a PlayStation game, a PSP game
+// wants the cheap resampler while the NES gets the best one, and the Game Boy
+// wants SkyWalker541's PT screen where the NES wants a CRT). Each per-console
+// row starts with "Default · …", which follows the all-consoles choice and
+// shows what that is for this console. The picked console is remembered for
+// this run of the app only; it is a view, not a setting.
+//
+// Under Look, Tune look / Value / Reset look change the knobs of the scope's
+// look (shader_looks_tune.go), and Download looks fetches the PT, CRT and LCD
+// shaders and SkyWalker541's Brick overlays (shader_looks_download.go). The
+// all-consoles Look is the same setting as the Games page's Video filter.
 //
 // Smooth motion, Rumble strength, Arcade rotation and PAL mode are one choice
 // for every console. Every row stores its value in the custom map through
@@ -308,11 +314,147 @@ func raTuneOverlayRow() setRow {
 	}
 }
 
+// ── Look ─────────────────────────────────────────────────────────────────
+
+// raTuneLookOptions is the Look ladder: Auto for All consoles, "Default · …"
+// for a console, then every mode the card offers (videoFilterChoices).
+func raTuneLookOptions(c *Config) []setOption {
+	modes := videoFilterChoices()
+	out := make([]setOption, 0, len(modes)+1)
+	if raTuneScope == "" {
+		out = append(out, setOption{Value: videoFilterAuto, Label: "Auto", Note: videoFilterAutoNote})
+	} else {
+		label := videoFilterModeLabel(videoFilterForConfig(c))
+		if videoFilterForConfig(c) == videoFilterAuto {
+			label = "Auto · " + videoFilterModeLabel(videoFilterAutoMode(raTuneScope, videoFilterUIHas))
+		}
+		out = append(out, setOption{Value: "", Label: "Default · " + label, Note: raTuneDefaultNote})
+	}
+	for _, m := range modes {
+		out = append(out, setOption{Value: m, Label: videoFilterModeLabel(m), Note: videoFilterChoiceNote(m)})
+	}
+	return out
+}
+
+func raTuneLookStored(c *Config) string {
+	if raTuneScope == "" {
+		return videoFilterForConfig(c)
+	}
+	return videoFilterConsoleLook(c, raTuneScope)
+}
+
+func raTuneLookRow() setRow {
+	return setRow{
+		ID: "raTuneLook", Label: "Look", Kind: setKindChoice,
+		Detail: func(*Config) string {
+			what := "A shader over the game: CRT, LCD, PT"
+			if raTuneScope != "" {
+				what = raTuneScope + " games only"
+			}
+			probe, ok := videoFilterUIProbe()
+			switch {
+			case !ok:
+				return what + " · looking for shaders…"
+			case len(probe.Looks) == 0:
+				return what + " · no looks on the card: Download looks below"
+			}
+			return what + " · a game can choose its own (Start in the library)"
+		},
+		Options:    raTuneLookOptions,
+		Sheet:      raTuneLookOptions,
+		SheetValue: raTuneLookStored,
+		SheetTitle: "Look",
+		Current:    func(c *Config) int { return raTuneOptionIndex(raTuneLookOptions(c), raTuneLookStored(c)) },
+		Value: func(c *Config) string {
+			v := raTuneLookStored(c)
+			label := videoFilterModeLabel(v)
+			if videoFilterMissing(v) {
+				label += " · not installed"
+			}
+			return label
+		},
+		Choose: func(c *Config, value string) {
+			lookTuneSel = ""
+			if raTuneScope == "" {
+				videoFilterSettingChoose(c, value)
+				raTuneScopedToast("Look", videoFilterModeLabel(normaliseVideoFilterMode(value)))
+				return
+			}
+			value = normaliseGameVideoFilter(value)
+			if value == videoFilterAuto {
+				value = ""
+			}
+			setStoreString(c, raTuneConsoleKey(raTuneScope, "look"), value)
+			label := videoFilterModeLabel(value)
+			if value == "" {
+				label = "Default"
+			}
+			raTuneScopedToast("Look", label)
+		},
+	}
+}
+
+// ── Crop overscan ────────────────────────────────────────────────────────
+
+func raTuneCropLabel(v string) string {
+	switch v {
+	case "on":
+		return "On"
+	case "off":
+		return "Off"
+	case "":
+		return "Default"
+	}
+	return "RetroArch's own"
+}
+
+func raTuneCropOptions(c *Config) []setOption {
+	out := make([]setOption, 0, 3)
+	if raTuneScope == "" {
+		out = append(out, setOption{Value: raTuneOwn, Label: "RetroArch's own", Note: "Leave RetroArch's setting (it crops unless told not to)"})
+	} else {
+		out = append(out, setOption{Value: "", Label: "Default · " + raTuneCropLabel(raTuneCropSetting(c)), Note: raTuneDefaultNote})
+	}
+	return append(out,
+		setOption{Value: "on", Label: "On", Note: "Drop the border a TV hid, where the emulator follows RetroArch"},
+		setOption{Value: "off", Label: "Off", Note: "Keep the whole picture, borders included"})
+}
+
+func raTuneCropStored(c *Config) string {
+	if raTuneScope == "" {
+		return raTuneCropSetting(c)
+	}
+	return raTuneConsoleCrop(c, raTuneScope)
+}
+
+func raTuneCropRow() setRow {
+	return setRow{
+		ID: "raTuneCrop", Label: "Crop overscan", Kind: setKindChoice,
+		Detail: func(*Config) string {
+			if raTuneScope == "" {
+				return "Cut the edge a TV hid (NES, SNES and other TV consoles), or keep it"
+			}
+			return raTuneScope + " games only"
+		},
+		Options: raTuneCropOptions,
+		Current: func(c *Config) int { return raTuneOptionIndex(raTuneCropOptions(c), raTuneCropStored(c)) },
+		Choose: func(c *Config, value string) {
+			v := raTuneCropWord(value)
+			if raTuneScope == "" && v == "" {
+				v = raTuneOwn
+			}
+			setStoreString(c, raTuneScopedKey(raTuneCropKey, "crop"), v)
+			raTuneScopedToast("Crop overscan", raTuneCropLabel(v))
+		},
+	}
+}
+
 // ── The console picker ───────────────────────────────────────────────────
 
 // raTuneConsoleHasOwn reports whether a console has any choice of its own.
 func raTuneConsoleHasOwn(c *Config, name string) bool {
-	return raTuneConsoleAudio(c, name) != "" || raTuneConsoleLatency(c, name) != "" || raTuneConsoleOverlay(c, name) != ""
+	return raTuneConsoleAudio(c, name) != "" || raTuneConsoleLatency(c, name) != "" || raTuneConsoleOverlay(c, name) != "" ||
+		videoFilterConsoleLook(c, name) != "" || raTuneConsoleCrop(c, name) != ""
 }
 
 func raTuneConsoleOptions(c *Config) []setOption {
@@ -333,9 +475,9 @@ func raTuneConsoleRow() setRow {
 		ID: "raTuneConsole", Label: "Adjust for", Kind: setKindChoice,
 		Detail: func(*Config) string {
 			if raTuneScope == "" {
-				return "Pick a console to give it its own audio, latency and overlay"
+				return "Pick a console to give it its own audio, latency, overlay, look and crop"
 			}
-			return "The next three rows change " + raTuneScope + " games only"
+			return "Audio, latency, overlay, look and crop below change " + raTuneScope + " games only"
 		},
 		Options:    raTuneConsoleOptions,
 		Sheet:      raTuneConsoleOptions,
@@ -377,7 +519,7 @@ func raTuneRotateOptions(*Config) []setOption {
 
 // raTuneSettingsRows is the Emulation page.
 func raTuneSettingsRows() []setRow {
-	return []setRow{
+	rows := []setRow{
 		{
 			ID: "raTuneNoRA", Label: "RetroArch", Kind: setKindInfo,
 			Detail:  setStatic("Not found yet: these settings apply once RetroArch is installed"),
@@ -388,6 +530,11 @@ func raTuneSettingsRows() []setRow {
 		raTuneAudioRow(),
 		raTuneLatencyRow(),
 		raTuneOverlayRow(),
+		raTuneLookRow(),
+	}
+	rows = append(rows, lookTuneRows()...)
+	rows = append(rows, raTuneCropRow(), looksDownloadRow())
+	return append(rows, []setRow{
 		{
 			ID: "raTuneSmooth", Label: "Smooth motion", Kind: setKindToggle,
 			Detail: func(c *Config) string {
@@ -444,5 +591,5 @@ func raTuneSettingsRows() []setRow {
 				setToast("PAL mode: " + setOnOff(on))
 			},
 		},
-	}
+	}...)
 }

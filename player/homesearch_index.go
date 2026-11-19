@@ -260,6 +260,8 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: mailcalAppEntryName, where: "Apps", icon: "mail", keys: "mail email e-mail inbox gmail outlook hotmail icloud yahoo messages imap smtp write reply compose", open: func(*Config) { mailOpenApp() }},
 		{title: mailcalSettingsEntryName, where: "Settings", icon: "calendar", keys: "email calendar accounts mail account add account app password caldav ics webcal ical google calendar outlook calendar icloud sync reminders", open: mailcalOpenSettings},
 		{title: "Calendar", where: "Clock", icon: "calendar", keys: "calendar events agenda schedule appointments meetings month today upcoming", open: func(*Config) { mailcalOpenCalendar() }},
+		// Save sync and its clouds (ssyncui.go, cloudsync_ui.go).
+		{title: "Save sync", where: "Tools", icon: "sync", keys: "save sync saves cloud google drive gdrive webdav nextcloud owncloud koofr infinicloud nas backup saves across devices oauth client", open: ssyncOpenScreen},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
 		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
@@ -280,12 +282,17 @@ func homeSearchStoreEntries() []homeSearchEntry {
 		{title: apkStoreEntryName, where: "Games", icon: apkStoreGlyph, keys: "apk apks android android games play store google play sideload install apk minecraft aptoide f droid fdroid", open: apkStoreOpen},
 		{title: minecraftEntryName, where: "Games", icon: minecraftGlyph, keys: "minecraft mine craft java edition bedrock pocket edition mcpe classicube luanti minetest mineclonia voxel blocks", open: minecraftOpen},
 		{title: portsStoreEntryName, where: "Games", icon: portsStoreGlyph, keys: "ports store port store portmaster port master download ports get ports pc ports free games ready to run rtr new ports update ports harbourmaster", open: portsStoreOpen},
+		{title: homebrewEntryName, where: "Games", icon: homebrewGlyph, keys: "get homebrew homebrew itch itch.io itchio indie new games roms download roms game boy gb studio gbc gba nes snes mega drive genesis master system game gear pc engine pico-8 pico8 free games", open: homebrewStoreOpen},
 		{title: cloudGamingEntryName, where: "Games", icon: cloudGamingGlyph, keys: "cloud gaming geforce now gfn nvidia xbox cloud gaming xcloud game pass gamepass ultimate stream streaming greenovercast opennow", open: cloudGamingOpen},
 		{title: gameSwitcherEntryName, where: "Games", icon: "games", keys: "game switcher switch games recent games recently played resume continue save states last played", open: gameSwitcherOpen},
 	}
 	// The handheld's own Wi-Fi network (hotspot.go): only where it can exist.
 	if hotspotSupported() {
 		entries = append(entries, homeSearchEntry{title: "Hotspot", where: "Tools", icon: "radar", keys: "hotspot access point ap softap tether tethering share wifi network netplay router", open: hotspotOpenScreen})
+	}
+	// Ubuntu's arm64 programs on the handheld (linuxpkg_ui.go): only there.
+	if linuxPkgSupported() {
+		entries = append(entries, homeSearchEntry{title: "Linux packages", where: "Tools", icon: "packages", keys: "linux packages apt apt-get install ubuntu debian deb python python3 perl git curl htop nano rsync ssh nmap john aircrack sqlite programs command line", open: linuxPkgOpenScreen})
 	}
 	if IsWindows() {
 		return entries

@@ -56,9 +56,11 @@ const (
 	ledScreenRiseSec = 0.12
 	ledScreenFallSec = 0.35
 	// ledScreenHueHold is how long a new colour must hold before the rings
-	// take it, and ledScreenHueGap the least time between two hue changes.
-	ledScreenHueHold = 500 * time.Millisecond
-	ledScreenHueGap  = 1200 * time.Millisecond
+	// take it, and ledScreenHueGap the least time between two hue changes
+	// (ledScreenHueGapCostly where every change is a dip, ledanim.go).
+	ledScreenHueHold      = 500 * time.Millisecond
+	ledScreenHueGap       = 1200 * time.Millisecond
+	ledScreenHueGapCostly = 4 * time.Second
 	// ledScreenHueTolerance is how far (per channel, at full value) the
 	// picture's colour may wander before it counts as a new one: wider than
 	// the rings' own re-arm tolerance (ledAnimHueTolerance), so a colour that
@@ -173,7 +175,12 @@ func ledScreenTakeSample(avg [3]float64, now time.Time) {
 		st.cand, st.candSince, st.candSet = hue, now, true
 		return
 	}
-	if now.Sub(st.candSince) >= ledScreenHueHold && now.Sub(st.hueAt) >= ledScreenHueGap {
+	gap := ledScreenHueGap
+	if ledAnimHueCostly.Load() {
+		// Each change is a dip on rings that can only re-arm.
+		gap = ledScreenHueGapCostly
+	}
+	if now.Sub(st.candSince) >= ledScreenHueHold && now.Sub(st.hueAt) >= gap {
 		st.hue, st.hueAt, st.candSet = hue, now, false
 	}
 }

@@ -84,7 +84,7 @@ func cheatsOptionsValue(romPath string) string {
 func openCheatsSheet(game libraryGame) {
 	switch game.System {
 	case androidLibrarySystem, html5LibrarySystem, portsLibrarySystem:
-		ShowToast("Cheats are for games that start in RetroArch", ToastKindInfo)
+		ShowToast("Cheats are for games that start in RetroArch or NextUI", ToastKindInfo)
 		return
 	}
 	cheatsUI.open = true
@@ -277,7 +277,11 @@ func cheatsNote() string {
 	case cheatsUI.picking:
 		return "Files in the cheat database whose name is close to this game's"
 	case res.NotRA != "":
-		return "This game starts in " + res.NotRA + "; cheats apply only to RetroArch games"
+		return "This game starts in " + res.NotRA + "; cheats apply only to RetroArch and NextUI games"
+	case res.Minarch && res.NoTag:
+		return "NextUI files cheats by the game's Roms/Name (TAG) folder; outside one they are not applied"
+	case res.UserFile != "" && res.Minarch:
+		return "NextUI's Cheats folder has its own file for this game; it is used instead"
 	case res.UserFile != "":
 		return "RetroArch has its own cheat file for this game; it is used instead"
 	case !res.DB:
@@ -286,6 +290,12 @@ func cheatsNote() string {
 		return "No cheats found for this game · " + res.Problem
 	case len(res.Cheats) == 0:
 		return "No cheats found for this game"
+	}
+	if res.Minarch {
+		// minarch lists the file in its own menu too; whether it switches the
+		// marked cheats on by itself is NextUI's to decide.
+		return strconv.Itoa(cheatsOnCount()) + " of " + strconv.Itoa(len(res.Cheats)) +
+			" on · in game also under Menu → Options → Cheats (NextUI)"
 	}
 	return strconv.Itoa(cheatsOnCount()) + " of " + strconv.Itoa(len(res.Cheats)) +
 		" on · applied when the game starts in RetroArch"

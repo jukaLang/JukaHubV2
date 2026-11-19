@@ -98,6 +98,11 @@ typedef struct {
 /* root is "" (or NULL) on the device, a fake sysfs tree in tests. */
 bool ss_battery_read(const char *root, SsBattery *battery);
 
+/* Whether the handheld has a default route (Wi-Fi joined and given an address)
+ * in root's proc/net/route; the loopback does not count. No such file counts
+ * as up, so a system without one never waits for nothing. */
+bool ss_net_up(const char *root);
+
 /* The handheld's own pad, "TRIMUI Player1", is a uinput device with the USB id
  * of a wired Xbox 360 pad, so SDL names it "Xbox 360 Controller" like a real
  * one. ss_builtin_pad says whether a pad SDL opened is that pad: SDL's name

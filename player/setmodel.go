@@ -720,6 +720,16 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// The TrimUI boot hook starts JukaHub in place of the
+					// stock menu, or lets the menu open first (autostart.go).
+					ID: "autostartSkipMenu", Label: "Skip the stock menu at boot", Kind: setKindToggle,
+					Detail:   autoStartSkipMenuDetail,
+					Visible:  autoStartSkipMenuVisible,
+					Disabled: func(c *Config) bool { return !autoStartEnabled(c) },
+					Get:      autoStartSkipMenuOn,
+					Set:      autoStartSetSkipMenu,
+				},
+				{
 					// The full boot at power-on, on every start, or never
 					// (bootos.go).
 					ID: "startupAnimation", Label: "Startup animation", Kind: setKindChoice,
@@ -842,6 +852,8 @@ func setBuildSections() []setSection {
 					Value:  setThemeName,
 					Open:   setOpenScene("ThemePresets"),
 				},
+				// The accent alone, over any theme (menucolour.go).
+				menuColourRow(),
 				{
 					// Which Home: the shipped dashboard, the Hero grid, or one of
 					// the two that read the homeTiles list — a carousel and the
@@ -1165,6 +1177,12 @@ func setBuildSections() []setSection {
 				vpnProfileRow(),
 				vpnRouteRow(),
 				vpnStatusRow(),
+				// Which servers turn names into addresses (dnschanger.go): the
+				// network's own, a public service or servers of your own, and
+				// a timing of each from here.
+				dnsChoiceRow(),
+				dnsCustomRow(),
+				dnsFastestRow(),
 				{
 					ID: "bluetooth", Label: "Bluetooth", Kind: setKindToggle, Quiet: true,
 					Detail:  setStatic("Headphones and controllers"),
@@ -1208,6 +1226,9 @@ func setBuildSections() []setSection {
 				// A cable to a computer opens the SD card there (MTP,
 				// usbmtp.go). Handheld only.
 				usbMtpSettingRow(),
+				// The same cable carries a little network to the Phone
+				// Companion page (usbnet.go); shown while file transfer is on.
+				usbNetSettingRow(),
 				{
 					ID: "nettools", Label: "Servers & network tools", Kind: setKindAction,
 					Detail: setStatic("FTP and SSH servers, speed test and lookups"),
@@ -1530,6 +1551,10 @@ func setBuildSections() []setSection {
 					Current: coreUpdateModeIndex,
 					Choose:  func(c *Config, value string) { setToast(coreUpdateModeChoose(c, value)) },
 				},
+				// "Ask which emulator" (emupicker.go) and "Get more cores"
+				// (emumorecores.go).
+				emuPickAskSettingsRow(),
+				emuMoreCoresSettingsRow(),
 				{
 					// PS Remote Play's helpers, fetched in the background
 					// while they are missing (psremote_helpers_bg.go).
@@ -1576,6 +1601,8 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Every game on the card, by system"),
 					Open:   func(*Config) { openGameLibraryPanel() },
 				},
+				// Covers, Pixel names or Pixel cards (game_library_pixel_look.go).
+				libraryConsoleLookRow(),
 				{
 					// The Tabs Home's Games tab (hometabs_games.go): consoles
 					// without games left out, ones without an emulator dimmed.
@@ -1619,6 +1646,22 @@ func setBuildSections() []setSection {
 					Set: func(c *Config, on bool) {
 						boxArtSetAutoEnabled(c, on)
 						setToast("Find box art automatically: " + setOnOff(on))
+					},
+				},
+				{
+					// A picture from two minutes into a game that has no cover
+					// (playshot_cover.go).
+					ID: "gameplayCovers", Label: "Covers from gameplay", Kind: setKindToggle,
+					Detail: func(c *Config) string {
+						if playShotEnabled(c) {
+							return "A game with no box art gets a picture of itself, two minutes in"
+						}
+						return "Off: no new pictures are taken from games"
+					},
+					Get: playShotEnabled,
+					Set: func(c *Config, on bool) {
+						setStoreBool(c, playShotKey, on)
+						setToast("Covers from gameplay: " + setOnOff(on))
 					},
 				},
 				playtimeDailyLimitRow(),

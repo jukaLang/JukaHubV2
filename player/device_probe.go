@@ -108,9 +108,15 @@ func readDeviceIdentity() deviceIdentity {
 	if runtime.GOOS == "linux" {
 		id.Model, id.Compatible = deviceTreeIdentity()
 	}
-	fw := probeFirmwareIdentity()
+	fw := probeFirmwareFiles()
 	id.Names = fw.Names
 	id.TrimUI = fw.TrimUI
+	if id.TrimUI {
+		// The launcher binary is the big read: skipped when a cheaper source
+		// already named the board, and remembered per launcher file otherwise
+		// (device_probe_cache.go).
+		id.Names = append(id.Names, deviceLauncherNames(id)...)
+	}
 	id.PanelW, id.PanelH = readPanelSize()
 	id.SoC, id.SoCWhy, id.Kernel = probeDeviceSoC(id.Model + " " + id.Compatible + " " + id.CPUInfo)
 	return id
@@ -148,8 +154,20 @@ type firmwareIdentity struct {
 
 // probeFirmwareIdentity reads the launcher binary and the release files. The
 // binary scan only happens when a TrimUI file is present, so a desktop Linux
-// build never reads a large file to find nothing.
+// build never reads a large file to find nothing. Start-up goes through
+// probeFirmwareFiles and deviceLauncherNames instead, which skip or remember
+// the scan.
 func probeFirmwareIdentity() firmwareIdentity {
+	out := probeFirmwareFiles()
+	if out.TrimUI {
+		out.Names = append(out.Names, mainUIModelNames(deviceMainUIPath)...)
+	}
+	return out
+}
+
+// probeFirmwareFiles is probeFirmwareIdentity without the launcher binary: the
+// firmware folders and the small release files.
+func probeFirmwareFiles() firmwareIdentity {
 	var out firmwareIdentity
 	for _, dir := range deviceFirmwareDirs {
 		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
@@ -165,9 +183,6 @@ func probeFirmwareIdentity() firmwareIdentity {
 		if strings.Contains(strings.ToUpper(text), "TRIMUI") {
 			out.TrimUI = true
 		}
-	}
-	if out.TrimUI {
-		out.Names = append(out.Names, mainUIModelNames(deviceMainUIPath)...)
 	}
 	return out
 }
@@ -461,8 +476,11 @@ func classifyDevice(id deviceIdentity) (DeviceModel, string) {
 	return deviceCorrectForSoC(d, source, id.SoC)
 }
 
-// classifyDeviceNamed is classifyDevice before the chip's correction.
-func classifyDeviceNamed(id deviceIdentity) (DeviceModel, string) {
+// classifyDeviceDirect is the part of classifyDeviceNamed that comes before
+// any firmware name: a source that names the board by itself. When it answers,
+// the names (and the launcher binary they may come from) cannot change the
+// result (deviceLauncherNames).
+func classifyDeviceDirect(id deviceIdentity) (DeviceModel, string) {
 	if d := deviceFromEnvHints(id.EnvDevice, id.EnvPlatform, id.EnvModel); d != DeviceUnknown {
 		return d, "launcher env"
 	}
@@ -474,6 +492,14 @@ func classifyDeviceNamed(id deviceIdentity) (DeviceModel, string) {
 	}
 	if d := detectDeviceForHardware("linux", id.Hostname, ""); d != DeviceUnknown {
 		return d, "hostname"
+	}
+	return DeviceUnknown, ""
+}
+
+// classifyDeviceNamed is classifyDevice before the chip's correction.
+func classifyDeviceNamed(id deviceIdentity) (DeviceModel, string) {
+	if d, source := classifyDeviceDirect(id); d != DeviceUnknown {
+		return d, source
 	}
 
 	var candidates []deviceCandidate

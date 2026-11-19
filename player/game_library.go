@@ -392,6 +392,14 @@ func findGameLaunchersFor(system, romPath string, entries []emuEntry) []emuEntry
 	if romPath != "" && nextuiPakFor(romPath) != "" {
 		return nextuiWithPakFirst(romPath, nil)
 	}
+	// A cartridge on the Game Boy shelf whose header asks for the Color gets
+	// the Game Boy Color shelf's emulators, so it plays in colour; with none
+	// on the card it keeps the Game Boy's (gbcsort.go).
+	if gbcLaunchAsColor(system, romPath) {
+		if out := findGameLaunchersFor(gbcLibrarySystem, "", entries); len(out) > 0 {
+			return out
+		}
+	}
 	candidates := gameLauncherCandidates(system)
 	if len(candidates) == 0 {
 		return nil
@@ -476,7 +484,11 @@ func findGameLaunchersFor(system, romPath string, entries []emuEntry) []emuEntry
 	if len(out) == 0 {
 		collect(0, folders)
 	}
-	return out
+	// Then every other emulator the card has for the console: the folders'
+	// launchlist alternatives and, on the handheld, installed RetroArch cores
+	// no launcher starts (emuchoices.go). They follow, never lead, and they
+	// count for the question: two choices of any kind ask (emuPickAsks).
+	return emuWithExtras(system, out, entries, !IsWindows())
 }
 
 // gameLauncherOverridesPath is where a user can pin a launcher per system when
@@ -583,6 +595,12 @@ func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []
 		// A libretro core on Windows (the Emulators page installs RetroArch
 		// and its cores): the RetroArch beside it loads it with -L.
 		name, args = emuRetroArchForCore(launcher), []string{"-L", launcher, romPath}
+	case ".so":
+		// A core picked on the handheld that no launch script starts
+		// (emuchoices.go): the RetroArch that owns its cores folder loads it
+		// with -L, as the firmware's scripts do. launchLibraryGame refuses
+		// the launch first when there is none (emuCoreLaunchCheck).
+		name, args = coreRetroArchBinary(filepath.Dir(launcher)), []string{"-L", launcher, romPath}
 	default:
 		name, args = launcher, []string{romPath}
 		// xemu boots a disc image only through -dvd_path, and xemu and Xenia
@@ -688,6 +706,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
 	}
+	// A core started directly needs the RetroArch beside it, built for the
+	// same chip (emuchoices.go).
+	if err := emuCoreLaunchCheck(launcher); err != nil {
+		return err
+	}
 	// The game's saves come down from Google Drive / RomM first: off this
 	// (render) thread, and the launch runs again once they are here
 	// (savesync_auto.go).
@@ -712,6 +735,8 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// The previous auto save, and the in-game menu's save slots (savestate_resume.go).
 	prepareGameMenuStates(launcher, game.Path)
 	prepareRetroTransport(launcher, game.Path, game.System)
+	// A multi-disc game's start disc, and its discs for the in-game menu (discpage.go).
+	prepareDiscStart(launcher, game)
 	// The in-game OSD is the emulator's, so its preset is written to the same
 	// config just before the launch, beside the save-state switches.
 	prepareOSDPreset(launcher)
@@ -722,15 +747,25 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if prepareVideoFilter(launcher, game.Path) {
 		prepareShaderSpeedCheck(launcher, game.Path)
 	}
+	// A core started directly that never ran here gets the handheld's speed
+	// settings for N64, Dreamcast and PSP (emuchoices.go).
+	emuCoreChoiceSeedOptions(launcher, game)
 	// Emulation settings for this launch: audio quality, latency, overlay,
 	// rumble strength, arcade rotation, PAL (ratuning.go).
 	prepareRATuning(launcher, game)
 	// The cheats switched on for this game in its options sheet (cheats.go).
 	prepareCheats(launcher, game)
+	// Buttons and turbo for this launch, and the in-game menu's cheat list (racontrols.go).
+	prepareGameControls(launcher, game)
 	// Save-state screenshots for the game switcher (gameswitcher.go).
 	prepareGameSwitcher(launcher, game)
 	// RetroArch's log for this launch, read if the game quits at once (gamediag.go).
 	diag := prepareGameDiag(game, launcher)
+	// Which core build the game is about to run, where it came from and the
+	// GPU library it links, for the device log (corebuilds_probation.go).
+	if retroArchLauncher(launcher) {
+		go coreLaunchNote(launcher, game.System)
+	}
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)
@@ -768,13 +803,17 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// A NextUI pak gets NextUI's environment and resume flag (nextui.go).
 	nextuiPrepareLaunch(launcher, game.Path, cmd)
 	cmd.Dir = filepath.Dir(launcher)
-	if strings.EqualFold(filepath.Ext(launcher), ".dll") && name != "" {
-		// A Windows core starts the RetroArch beside it: run from its folder.
+	if ext := strings.ToLower(filepath.Ext(launcher)); (ext == ".dll" || ext == ".so") && name != "" {
+		// A core starts the RetroArch that owns it: run from its folder.
 		cmd.Dir = filepath.Dir(name)
 	}
 	// Own process group: a stock launch.sh that starts RetroArch and returns
 	// must not hand the framebuffer back while the game is still drawing.
 	screenChildGroupConfigure(cmd)
+	// A handheld core started directly: HOME at RetroArch's folder, as the
+	// firmware's scripts start it (emuchoices.go). After the line above, which
+	// gives the child the firmware's environment.
+	emuCoreChoicePrepareLaunch(launcher, cmd)
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
@@ -799,7 +838,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		home, _ := childEnvLookup(cmd.Env, "HOME")
 		path, _ := childEnvLookup(cmd.Env, "PATH")
 		libs, _ := childEnvLookup(cmd.Env, "LD_LIBRARY_PATH")
-		logInfo("library", "launch script environment: HOME=%q PATH=%q LD_LIBRARY_PATH=%q", home, path, libs)
+		// The sound routes JukaHub adds (spatial audio, a Bluetooth headset)
+		// too: a standalone emulator with its own libasound may not open them.
+		audioDev, _ := childEnvLookup(cmd.Env, "AUDIODEV")
+		alsaConf, _ := childEnvLookup(cmd.Env, "ALSA_CONFIG_PATH")
+		logInfo("library", "launch script environment: HOME=%q PATH=%q LD_LIBRARY_PATH=%q AUDIODEV=%q ALSA_CONFIG_PATH=%q", home, path, libs, audioDev, alsaConf)
 	}
 	// The time-lapse covers exactly this child's life: it starts when the game
 	// does and is assembled when the game exits. A machine with no readable

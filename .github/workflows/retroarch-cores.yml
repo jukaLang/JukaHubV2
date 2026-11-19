@@ -1,0 +1,241 @@
+name: RetroArch cores for TrimUI (aarch64, glibc 2.31)
+
+# RetroArch cores the TrimUI firmware can open, built from upstream libretro
+# sources and published as the rolling release "cores-aarch64" of this
+# repository: one <core>_libretro.so.zip per core, and index-extended.txt in
+# the libretro buildbot's own index format ("<date> <crc32> <file>"), which
+# JukaHub already reads (emulatorupdates.go parseCoreIndex).
+#
+# Why: the buildbot builds its linux/aarch64 nightlies on a newer Ubuntu than
+# the handheld runs (November 2026: mgba_libretro.so needs GLIBC_2.35; the
+# stock Smart Pro has glibc 2.33 and its libm stops at GLIBC_2.32). RetroArch's
+# own Online Updater installs them without a check, and stock firmware runs
+# Game Boy, Game Boy Color and Game Boy Advance all on mGBA: one "Update
+# Installed Cores" and three consoles quit to the menu a second after A.
+# JukaHub's guard refuses those builds before they replace anything, and now,
+# when a core on the card cannot load, it puts back a build the card kept or
+# installs this release's (player/corefix.go). MODERNIZATION LIB-26.
+#
+# How: four arm64 runners side by side (build-cores.sh groups: the Game Boy
+# cores, the small cores, PCSX-ReARMed, FinalBurn Neo), each in the Ubuntu
+# 20.04 build root the Remote Play helpers and PPSSPP use
+# (.github/scripts/build-root.sh build cores → player/native/build-cores.sh,
+# which checks every build: aarch64, only libraries the firmware has, glibc <=
+# 2.31, libstdc++ no newer than the TrimUI SDK's when it is linked at all,
+# opens with the dynamic loader and answers retro_api_version). A core that
+# fails costs only itself: its runner keeps what did build, and the publish
+# job merges the new builds into the release's index, so a core that failed
+# this week keeps last week's build (its zip and its index line).
+#
+# Weekly, on a press (Actions → this workflow → Run, optionally naming some
+# cores, which then build on one runner), and on a push to main that changes
+# this file or build-cores.sh. Never on other pushes (the CI rule: two jobs per
+# push). Only main publishes. The release is created with --latest=false, so
+# GitHub's "latest release" stays the newest JukaHub build, and JukaHub's Beta
+# channel skips it by its tag (autoupdate_channel.go jukaHubReleaseTag). The
+# zips are uploaded before the index, so a handheld that looks in between finds
+# either the old index (whose builds it can still fetch, or whose checksum no
+# longer matches and is refused) or the new one, never an index line naming a
+# file that is not there yet.
+
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/retroarch-cores.yml
+      - player/native/build-cores.sh
+  workflow_dispatch:
+    inputs:
+      cores:
+        description: "Cores to build, space-separated (empty: every core in build-cores.sh)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retroarch-cores
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Which cores
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      groups: ${{ steps.list.outputs.groups }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: List the cores
+        id: list
+        env:
+          WANT: ${{ inputs.cores }}
+        run: |
+          set -eu
+          all=$(sh player/native/build-cores.sh list)
+          # Named cores (deduplicated) build on one runner; none named, the
+          # script's groups on one runner each.
+          want=$(printf '%s\n' ${WANT:-} | awk 'NF && !seen[$0]++')
+          if [ -n "$want" ]; then
+            for core in $want; do
+              printf '%s\n' "$all" | grep -qxF -- "$core" || { echo "::error::'$core' is not a core build-cores.sh knows"; exit 1; }
+            done
+            groups=$(echo $want)
+          else
+            groups=$(sh player/native/build-cores.sh groups)
+          fi
+          json=$(printf '%s\n' "$groups" | python3 -c 'import json, sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          echo "groups=$json" >> "$GITHUB_OUTPUT"
+          printf 'Runners:\n%s\n' "$groups"
+
+  build:
+    name: ${{ matrix.cores }}
+    needs: plan
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        cores: ${{ fromJSON(needs.plan.outputs.groups) }}
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create the build root
+        run: sh .github/scripts/build-root.sh create
+
+      - name: Build ${{ matrix.cores }}
+        env:
+          CORES: ${{ matrix.cores }}
+        run: sh .github/scripts/build-root.sh build cores
+
+      # What did build is kept even when another core of the group failed.
+      - name: Keep the builds
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cores-${{ strategy.job-index }}
+          path: player/native/bin/cores/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Unmount the build root
+        if: always()
+        run: sh .github/scripts/build-root.sh release
+
+  publish:
+    name: Publish the cores-aarch64 release
+    needs: [plan, build]
+    # Whatever built: one core that broke upstream does not hold back the
+    # rest. Only main publishes; a run on another branch only builds.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write   # create or update the cores-aarch64 release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: cores-aarch64
+    steps:
+      - name: Collect the builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: cores-*
+          path: cores
+          merge-multiple: true
+
+      - name: Write the index
+        run: |
+          set -eu
+          ls cores/*_libretro.so.zip > /dev/null 2>&1 || { echo "::error::no core built"; exit 1; }
+          old="$RUNNER_TEMP/old-index.txt"
+          : > "$old"
+          # The release's index, when it has one: a failure to read it stops
+          # the run, since an index of this run's cores alone would drop every
+          # other core from it.
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
+            if printf '%s\n' "$assets" | grep -qxF index-extended.txt; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern index-extended.txt \
+                --output "$old" --clobber
+            fi
+          fi
+          # New lines for what built now; the old release's lines for the rest
+          # (their zips stay in the release, untouched).
+          python3 - "$old" cores <<'PY'
+          import datetime, os, re, sys
+          old_path, folder = sys.argv[1], sys.argv[2]
+          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+          lines = {}
+          line_re = re.compile(r"^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8}) ([a-z0-9_]+)_libretro\.so\.zip$")
+          for raw in open(old_path, encoding="utf-8", errors="replace"):
+              m = line_re.match(raw.strip())
+              if m:
+                  lines[m.group(3)] = raw.strip()
+          built = []
+          for name in sorted(os.listdir(folder)):
+              if not name.endswith(".crc32"):
+                  continue
+              core = name[: -len(".crc32")]
+              crc = open(os.path.join(folder, name)).read().strip().lower()
+              if not re.fullmatch(r"[a-z0-9_]+", core) or not re.fullmatch(r"[0-9a-f]{8}", crc) or not os.path.exists(os.path.join(folder, core + "_libretro.so.zip")):
+                  print("::warning::skipping %s: its build output is incomplete" % core)
+                  continue
+              lines[core] = "%s %s %s_libretro.so.zip" % (today, crc, core)
+              built.append(core)
+          if not built:
+              sys.exit("no complete core build to publish")
+          with open(os.path.join(folder, "built.txt"), "w", encoding="utf-8") as out:
+              out.write("\n".join(built) + "\n")
+          with open(os.path.join(folder, "index-extended.txt"), "w", encoding="utf-8", newline="\n") as out:
+              for core in sorted(lines):
+                  out.write(lines[core] + "\n")
+          print("built now: " + " ".join(built))
+          print("index: %d cores" % len(lines))
+          PY
+          cat cores/*.buildinfo > cores/BUILDINFO.txt
+          cat cores/index-extended.txt
+          {
+            echo "### RetroArch cores for TrimUI (aarch64, glibc 2.31)"
+            echo '```'
+            cat cores/index-extended.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish
+        run: |
+          set -eu
+          title="RetroArch cores for TrimUI (aarch64, glibc 2.31)"
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            echo "RetroArch cores built by JukaHub from upstream libretro sources for handhelds whose firmware has an older glibc than the libretro buildbot's nightlies need (the TrimUI Smart Pro, Brick and Hammer: glibc 2.33)."
+            echo "JukaHub installs one by itself when a core on the card cannot load (a kept build of the card's own comes first)."
+            echo "To install one by hand: unzip it into RetroArch/.retroarch/cores/ over the core of the same name."
+            echo "This release is rebuilt weekly from each core's newest upstream commit. The builds of the latest run and their source commits are below; a core that did not build in that run keeps its earlier build and index line."
+            echo
+            echo '```'
+            cat cores/BUILDINFO.txt
+            echo '```'
+          } > "$notes"
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \
+              --notes-file "$notes" --latest=false --target "$GITHUB_SHA"
+          fi
+          # The zips first, the index last (see the top of this file).
+          zips=$(sed 's/$/_libretro.so.zip/; s/^/cores\//' cores/built.txt)
+          # shellcheck disable=SC2086 # one argument per zip
+          gh release upload "$RELEASE_TAG" $zips --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$RELEASE_TAG" cores/BUILDINFO.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload "$RELEASE_TAG" cores/index-extended.txt --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \
+            --notes-file "$notes" --latest=false --draft=false --prerelease=false
+          echo "Published $(wc -l < cores/built.txt) core(s) to $RELEASE_TAG: $(echo $(cat cores/built.txt))"

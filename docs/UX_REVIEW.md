@@ -37,7 +37,10 @@ friction or inconsistency a user notices; P3 is polish.
 7. **Speak the player's language.** "Games", not "Emulator"; "Screens", not "Scenes";
    "3 games", not "3 game(s)"; never a path placeholder like `Roms/<system>/`.
 8. **Destructive actions ask.** Quitting, deleting and resetting are never one stray
-   press away and never dressed as a hint.
+   press away and never dressed as a hint. A confirmation opens on its safe answer
+   (Cancel or Keep; `confirmfocus.go`); the one exception is the Home power card,
+   which keeps Exit focused because quitting is a clean shutdown and the quit is
+   still two presses.
 
 ## Home
 

@@ -49,7 +49,6 @@ if something failed.
 ## Known flakes
 
 `TestVideoFullscreenHidesControlBar` crashes intermittently inside
-`SDL_RenderReadPixels`; `TestDecryptWithAuthRoundTrip` and
-`TestKeyboardCachedFrameIsCheaperThanFullRedraw` have each failed once without a
-clear cause. If one of those is your only failure, say so and re-run rather than
+`SDL_RenderReadPixels`; `TestKeyboardCachedFrameIsCheaperThanFullRedraw` has
+failed once without a clear cause. If one of those is your only failure, say so and re-run rather than
 digging — see [CONTRIBUTING.md](../CONTRIBUTING.md).

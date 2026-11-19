@@ -17,8 +17,10 @@ package main
 // Which OAuth client signs in: JUKAHUB_GOOGLE_CLIENT_ID/SECRET in the
 // environment, else google_client_id/google_client_secret in the config,
 // else the values the build stamped in with -ldflags "-X
-// main.googleOAuthClientID=…". A build with none says so on the Save sync
-// page instead of offering a sign-in that cannot work.
+// main.googleOAuthClientID=…". A build with none offers "Set up Google
+// sign-in": the player makes a free client of their own in Google Cloud
+// Console and sends its file from the phone (companion_cloud.go), which lands
+// in the config keys (the secret encrypted).
 
 import (
 	"context"
@@ -57,12 +59,119 @@ const (
 )
 
 var (
-	errGdriveNoClient    = errors.New("this build has no Google sign-in set up")
+	errGdriveNoClient    = errors.New("no Google sign-in is set up yet — Tools → Save sync → Set up Google sign-in")
 	errGdriveSignedOut   = errors.New("not signed in to Google Drive")
 	errGdriveExpired     = errors.New("the Google Drive sign-in expired — sign in again in Tools → Save sync")
-	errGdriveDenied      = errors.New("the sign-in was declined on the phone")
+	errGdriveDenied      = errors.New("the sign-in was declined on the phone — if Google said the app is still being tested, add your account as a test user or publish the app")
 	errGdriveCodeExpired = errors.New("the code expired before it was entered — start again")
 )
+
+const (
+	// gdriveClientIDSuffix ends every Google OAuth client ID.
+	gdriveClientIDSuffix = ".apps.googleusercontent.com"
+	// gdriveClientFileLimit bounds the client file the phone sends (Google's
+	// is under 1 KB).
+	gdriveClientFileLimit = 16 << 10
+)
+
+// gdriveCleanClientID checks a client ID pasted or read from a file (outside
+// data): "<project number>-<letters and digits>.apps.googleusercontent.com".
+func gdriveCleanClientID(raw string) (string, error) {
+	id := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "\"'`"))
+	if id == "" {
+		return "", errors.New("paste the Client ID first")
+	}
+	prefix, ok := strings.CutSuffix(strings.ToLower(id), gdriveClientIDSuffix)
+	num, rest, dash := strings.Cut(prefix, "-")
+	if !ok || !dash || len(id) > 200 || num == "" || rest == "" {
+		return "", errors.New("that is not a Google OAuth Client ID — it ends in .apps.googleusercontent.com")
+	}
+	for _, r := range num {
+		if r < '0' || r > '9' {
+			return "", errors.New("that is not a Google OAuth Client ID — it starts with your project's number")
+		}
+	}
+	for _, r := range rest {
+		if !(r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return "", errors.New("the Client ID has characters a Google client ID never has — copy it again")
+		}
+	}
+	return strings.ToLower(id), nil
+}
+
+// gdriveCleanClientSecret checks a client secret (outside data). A "TVs and
+// Limited Input devices" client always has one ("GOCSPX-…").
+func gdriveCleanClientSecret(raw string) (string, error) {
+	secret := strings.TrimSpace(strings.Trim(strings.TrimSpace(raw), "\"'`"))
+	if secret == "" {
+		return "", errors.New("paste the Client secret too — a TVs and Limited Input devices client has one")
+	}
+	if len(secret) < 10 || len(secret) > 100 {
+		return "", errors.New("that does not look like a Google client secret — copy it again")
+	}
+	for _, r := range secret {
+		if r <= ' ' || r > '~' {
+			return "", errors.New("the Client secret has spaces or unusual characters in it — copy it again")
+		}
+	}
+	return secret, nil
+}
+
+// gdriveParseClientJSON reads the file Google Cloud Console downloads for an
+// OAuth client (outside data): {"installed": {"client_id", "client_secret",
+// …}}. A Web application client ({"web": …}) and a service-account key are
+// refused with the type to make instead: neither can sign in a device.
+func gdriveParseClientJSON(data []byte) (id, secret string, err error) {
+	if len(data) > gdriveClientFileLimit {
+		return "", "", errors.New("that file is far larger than a Google client file")
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", "", errors.New("that is not the client file from Google Cloud Console (client_secret_….json)")
+	}
+	if _, ok := doc["web"]; ok {
+		return "", "", errors.New("this is a Web application client — create one of type TVs and Limited Input devices")
+	}
+	if raw, ok := doc["type"]; ok && strings.Contains(string(raw), "service_account") {
+		return "", "", errors.New("this is a service-account key — create an OAuth client of type TVs and Limited Input devices")
+	}
+	raw, ok := doc["installed"]
+	if !ok {
+		return "", "", errors.New("that is not the client file from Google Cloud Console (client_secret_….json)")
+	}
+	var inner struct {
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+	}
+	if err := json.Unmarshal(raw, &inner); err != nil {
+		return "", "", errors.New("the client file is damaged — download it again")
+	}
+	if id, err = gdriveCleanClientID(inner.ClientID); err != nil {
+		return "", "", err
+	}
+	if secret, err = gdriveCleanClientSecret(inner.ClientSecret); err != nil {
+		return "", "", err
+	}
+	return id, secret, nil
+}
+
+// gdriveClientSourceOf says where the client in force comes from
+// ("environment", "config", "build", or "" for none) and its ID, without
+// decrypting anything. Main thread (it reads the config).
+func gdriveClientSourceOf(config *Config) (source, id string) {
+	if v := strings.TrimSpace(os.Getenv("JUKAHUB_GOOGLE_CLIENT_ID")); v != "" {
+		return "environment", v
+	}
+	if config != nil && config.Variables.Custom != nil {
+		if v, _ := config.Variables.Custom["google_client_id"].(string); strings.TrimSpace(v) != "" {
+			return "config", strings.TrimSpace(v)
+		}
+	}
+	if v := strings.TrimSpace(googleOAuthClientID); v != "" {
+		return "build", v
+	}
+	return "", ""
+}
 
 // gdriveClient is the OAuth client a sign-in uses.
 type gdriveClient struct {
@@ -90,19 +199,6 @@ func gdriveClientFrom(config *Config) gdriveClient {
 		}
 	}
 	return gdriveClient{ID: strings.TrimSpace(googleOAuthClientID), Secret: strings.TrimSpace(googleOAuthClientSecret), Source: "build"}
-}
-
-// gdriveClientConfigured reports whether any OAuth client is set, without
-// decrypting anything (the page asks a few times a second). Main thread.
-func gdriveClientConfigured(config *Config) bool {
-	if strings.TrimSpace(os.Getenv("JUKAHUB_GOOGLE_CLIENT_ID")) != "" || strings.TrimSpace(googleOAuthClientID) != "" {
-		return true
-	}
-	if config == nil || config.Variables.Custom == nil {
-		return false
-	}
-	id, _ := config.Variables.Custom["google_client_id"].(string)
-	return strings.TrimSpace(id) != ""
 }
 
 // ── Stored sign-in ──────────────────────────────────────────────────────────
@@ -270,6 +366,16 @@ func gdriveErrorText(err error) string {
 		return ""
 	}
 	msg := err.Error()
+	var oe *gdriveOAuthError
+	if errors.As(err, &oe) && (oe.Code == "invalid_client" || oe.Code == "unauthorized_client") {
+		// A Desktop or Web client, a wrong secret, or a client deleted in
+		// Google Cloud Console.
+		why := ""
+		if d := firstLine(oe.Description); d != "" && len(d) < 120 {
+			why = " (" + d + ")"
+		}
+		return "Google does not accept this OAuth client" + why + " — it must be a TVs and Limited Input devices client with its secret"
+	}
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return "Google Drive did not answer in time"

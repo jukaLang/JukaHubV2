@@ -13,9 +13,11 @@ gap, not a silent promise.
   `<style>` blocks. Imports resolve relative to the page or the imported
   sheet, are bounded and cycle-safe, and keep media-qualified wrappers. Their
   `url(...)` references resolve against the imported stylesheet.
-- Up to 12 linked sheets per page (2 MiB together, 1.5 MiB each); a sheet
-  past its share keeps its complete rules up to the limit instead of being
-  dropped. Inline `<style>` blocks always keep at least 1 MiB after them.
+- Up to 64 linked sheets per page (16 MiB together, 4 MiB per source file),
+  fetched eight at a time within a 20-second pass. A sheet past its share
+  keeps complete leading rules instead of being dropped. Linked and inline
+  rules share a 24 MiB budget and apply in page order; inline `<style>` blocks
+  retain at least 8 MiB when linked sheets fill their allowance.
 - A link's `media` query is honoured: `media="print"` is not fetched, other
   queries wrap the sheet in `@media`. `rel="alternate stylesheet"` and
   `disabled` links are skipped. The async-CSS loaders count as the sheet they
@@ -25,10 +27,16 @@ gap, not a silent promise.
 ### Selectors and generated content
 
 - Type, class, id, attribute, descendant/child/sibling selectors.
+- Native CSS nesting, including `&` parent references, relative descendant
+  selectors and nested `@media`, `@supports`, `@container` and `@layer`
+  blocks.
 - `:root`, `:link`, `:visited`, `:hover`, `:focus`, `:target`, `:checked`,
   `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`,
   `:placeholder-shown`, `:empty`, `:defined`, `:lang()`, `:dir()`.
 - `:not()`, `:is()`, `:where()`, `:has()`, `:first-child`, `:last-child`,
+  `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`,
+  `:is()` contributes the specificity of its most specific argument and
+  `:where()` contributes none,
   `:nth-child()` with `odd`, `even`, integers and `An+B`.
 - `::before`, `::after` and `::marker` with text `content`.
 - `content` strings (including CSS escapes and concatenation), `attr()`,
@@ -41,23 +49,49 @@ gap, not a silent promise.
 
 ### Box and layout
 
-- `display: block`, `flex`, `grid` (including explicit columns and
-  `repeat(auto-fit/auto-fill, minmax(...))`), and the table display modes
+- `display: block`, `flex`, `grid` (including explicit
+  `grid-template-columns`/`grid-template-rows` tracks,
+  `minmax(0, 1fr)`, `minmax(220px, 1fr)` and `minmax(auto, 300px)`,
+  `repeat(auto-fit/auto-fill, ...)` with container-relative repetition
+  counts (auto-fit collapses unused tracks and their gaps, auto-fill keeps
+  them), named `grid-template-areas` with `grid-area: header`, item
+  placement with `grid-column`/`grid-column-start`/`grid-column-end` and
+  `grid-row`/`grid-row-start`/`grid-row-end` (`span 2`, `2 / 4`, `1 / 3` and
+  `1 / -1`), `grid-auto-flow: row|column|dense`, implicit-track sizing with
+  `grid-auto-columns`/`grid-auto-rows`, and `justify-items`/`justify-self`
+  (`place-self` too) on top of `align-items`/`align-self`, plus
+  `justify-content` and `align-content` track distribution). Column
+  `minmax(auto, <length>)` minima come from the placed items' measured
+  min-content width and remain clamped by the maximum; row auto minima come
+  from content height. The table display modes
   `table`, `table-row`, `table-cell`, `table-header-group`, `table-row-group`,
   `table-footer-group`, `table-caption`.
-- Flex direction, wrap, justify, align, gap, grow, shrink, basis, order.
-- Width (lengths and percentages), pixel `height`, `min-width`/`max-width`,
-  `min-height`/`max-height`, `box-sizing: content-box/border-box` (horizontal
-  width; vertical padding is not folded into height), aspect ratio on
+- Flex direction, wrap, justify, align, gap, grow, shrink, basis, order,
+  including `flex-flow` and `place-content` shorthands.
+  `min-width: auto` gives each item a min-content floor measured from its
+  longest unbreakable word; the floor participates in basis resolution,
+  wrapping and the shrink pass, while `min-width: 0` disables it.
+- Width (lengths and percentages), `height`/`min-height`/`max-height` in
+  pixels and percentages against a definite parent height, `min-width`/`max-width`,
+  `box-sizing: content-box/border-box` (padding is included in border-box
+  width and height), aspect ratio on
   replaced media, margins, paddings, logical margin/padding variants, auto
   margins on width-constrained blocks and on flex/grid items (main and cross
   axes), text indent, border radius.
+- Viewport units `vw`, `vh`, `vmin`, `vmax`, their logical aliases `vi`/`vb`,
+  and the modern `sv*`, `dv*` and `lv*` forms (`svh`, `dvh`, `lvh`, ...). They
+  resolve against the reader's screen, including inside `calc()`, `min()`,
+  `max()` and `clamp()`.
 - `float: left/right` and the logical `inline-start`/`inline-end` spellings (a
   following block is narrowed beside it; `clear: left/right/both` and the
   logical spellings move a block below the float). Floats shrink to their
   widest run when no width is given.
-- `position: relative/absolute/fixed`, physical and logical inset properties,
-  z-index.
+- `position: relative/absolute/fixed`, physical and logical inset properties
+  including the `inset-block`/`inset-inline` two-axis shorthands, z-index. An
+  absolutely positioned auto-width box with both inline edges set stretches
+  between them instead of keeping its caption-sized default.
+- `calc()` over `px`, `em`, `rem`, percentages and viewport units, plus
+  `min()`, `max()` and `clamp()` in ordinary lengths.
 - Container queries and container-relative units.
 - Images, video, forms and details/summary layout.
 - Tables: row/cell flow, `colspan`/`rowspan` (clamped to 32 tracks and the
@@ -80,6 +114,15 @@ gap, not a silent promise.
   preserve both and still wrap; `pre-line` preserves newlines while collapsing
   spaces. Justified text stretches inter-word gaps on every line except the
   last, so non-final lines reach the right content edge.
+- `overflow-wrap: anywhere`/`break-word`, the `word-wrap` alias, and
+  `word-break: break-all`/`break-word` break long tokens into full-width text
+  runs instead of replacing them with an ellipsis. `anywhere` and `break-all`
+  also lower flex/grid min-content widths; `overflow-wrap: break-word` keeps
+  the unbroken intrinsic floor. A single token can create at most 256
+  fragments, and tokens over 8 KiB use the bounded fallback.
+- `text-overflow: clip` and `ellipsis` choose how a non-wrapping block's last
+  visible line ends. Without either declaration the reader keeps its existing
+  ellipsis fallback.
 - `text-decoration` underline/strikethrough, `text-decoration-color`, pixel
   `text-decoration-thickness`, and `solid`/`double`/`dotted`/`dashed`/`wavy`
   `text-decoration-style`.
@@ -154,15 +197,14 @@ mistaken for working CSS.
 | Construct | Current behaviour |
 | --- | --- |
 | `font-family` | Accepted; the reader uses its one bundled face. |
-| `display: contents` and block/inline conversion | Accepted; the reader’s block flow is chosen by the HTML tag, so only `flex`/`grid`/table display modes on block tags change container behaviour. |
+| `display: inline-block` and block/inline conversion | `display: contents` and `display: inline` participate in flow, but inline-block dimensions and every block/inline conversion are not yet modelled as browser box generation. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
-| Percentage heights (`height: 50%`, `min-height`, `max-height`) | Accepted; percentage heights are ignored because the parent height is not known while the flow is measured. Use a pixel height. |
-| aspect-ratio on an ordinary block | Accepted; only replaced media uses it, because the reader has no implicit content box ratio for text flow. |
-| `position: sticky` | Accepted; treated as fixed/absolute, because the reader has no scrolling sticky state. |
+| Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
+| aspect-ratio on a wrapper with no direct block | Accepted for ordinary blocks; a wrapper that only colours its children reserves its ratio through its box, not through a text row. |
+| `position: sticky` | Kept in normal flow and pinned as a copy once it scrolls past its inset; nested scroll containers are not modelled. |
 | `box-shadow` blur, spread, inset; `text-shadow` blur | Accepted; only the first offset/colour is painted. |
-| `text-overflow` | Accepted; the page uses its own ellipsis. |
 | `transform`, `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. |
-| `grid-template-rows`, `grid-row`, `grid-column`, `grid-area` | Accepted; only explicit columns and auto-fit rows are modelled. |
+| non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |

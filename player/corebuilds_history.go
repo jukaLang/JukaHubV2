@@ -45,10 +45,15 @@ type coreHistoryEntry struct {
 	From  string `json:"from,omitempty"`
 }
 
-// coreHistoryFile is core-history.json.
+// coreHistoryFile is core-history.json. Originals keeps, per core, the CRC32 of
+// the build the card had before JukaHub first replaced it (the firmware's or
+// CrossMix's). Its entry in Cores is the first to go once a core has been
+// replaced coreHistoryMaxEntries times, and the prune guard and the one-time
+// GPU repair (corebuilds_probation.go) must still know it then.
 type coreHistoryFile struct {
-	Schema int                           `json:"schema"`
-	Cores  map[string][]coreHistoryEntry `json:"cores"`
+	Schema    int                           `json:"schema"`
+	Cores     map[string][]coreHistoryEntry `json:"cores"`
+	Originals map[string]string             `json:"originals,omitempty"`
 }
 
 var coreHistoryMu sync.Mutex
@@ -77,7 +82,24 @@ func coreHistoryLoadLocked(path string) coreHistoryFile {
 		return h
 	}
 	h.Cores = f.Cores
+	h.Originals = f.Originals
 	return h
+}
+
+// coreHistoryOriginal is the CRC32 (lower case) of the build core had before
+// JukaHub first replaced it, "" when none was recorded. It outlives the trim
+// of the history list.
+func coreHistoryOriginal(core string) string {
+	coreHistoryMu.Lock()
+	defer coreHistoryMu.Unlock()
+	h := coreHistoryLoadLocked(coreHistoryPathFn())
+	if crc := h.Originals[core]; crc != "" {
+		return strings.ToLower(crc)
+	}
+	if list := h.Cores[core]; len(list) > 0 && list[0].From == "" {
+		return strings.ToLower(list[0].CRC32)
+	}
+	return ""
 }
 
 // coreHistoryFor is one core's recorded builds, oldest first.
@@ -205,6 +227,16 @@ func coreHistoryRecord(path, core, oldCRC, newCRC, label string, at time.Time) {
 	}
 	if n := len(list); n == 0 || list[n-1].CRC32 != newCRC {
 		list = append(list, coreHistoryEntry{CRC32: newCRC, Build: label, From: at.UTC().Format(time.RFC3339)})
+	}
+	// The card's own build is remembered apart from the list before the trim
+	// can drop it.
+	if len(list) > 0 && list[0].From == "" {
+		if h.Originals == nil {
+			h.Originals = map[string]string{}
+		}
+		if h.Originals[core] == "" {
+			h.Originals[core] = strings.ToLower(list[0].CRC32)
+		}
 	}
 	if len(list) > coreHistoryMaxEntries {
 		list = list[len(list)-coreHistoryMaxEntries:]

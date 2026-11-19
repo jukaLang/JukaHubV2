@@ -180,4 +180,9 @@ func TestRecentlyAddedSortAndCoverLayoutValues(t *testing.T) {
 	if libraryLayoutValue("unknown") != libraryLayoutList || libraryLayoutValue(libraryLayoutVertical) != libraryLayoutVertical {
 		t.Fatal("cover layout normalization failed")
 	}
+	// game-library.json's console_look: an unknown or empty value is Covers.
+	if libraryConsoleLookValue("") != libraryLookCovers || libraryConsoleLookValue("Pixel") != libraryLookCovers ||
+		libraryConsoleLookValue(libraryLookPixelCards) != libraryLookPixelCards {
+		t.Fatal("console look normalization failed")
+	}
 }

@@ -106,6 +106,7 @@ var emuCoreSystems = []emuCoreSystem{
 	{"prosystem", "Atari 7800", emuFamilyOther},
 	{"handy", "Atari Lynx", emuFamilyOther},
 	{"beetle_lynx", "Atari Lynx", emuFamilyOther},
+	{"mednafen_lynx", "Atari Lynx", emuFamilyOther},
 	{"virtualjaguar", "Atari Jaguar", emuFamilyOther},
 	{"dosbox", "DOS", emuFamilyOther},
 	{"scummvm", "ScummVM", emuFamilyOther},

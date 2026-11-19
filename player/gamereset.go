@@ -24,6 +24,7 @@ package main
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -480,65 +481,110 @@ func resetTrashNewDir(suffix string) (string, error) {
 // resetTrashMove moves src to dst: a rename on the same card, otherwise a
 // copy (through a temporary file) and then the original's removal.
 func resetTrashMove(src, dst string) error {
+	_, err := resetTrashMoveTo(src, dst)
+	return err
+}
+
+// resetTrashMoveTo is resetTrashMove reporting where the file went: dst, or
+// "<name>~N<ext>" beside it when dst was taken.
+func resetTrashMoveTo(src, dst string) (string, error) {
 	var err error
 	if src, err = safeAbsolutePath(src); err != nil {
-		return err
+		return "", err
 	}
 	if dst, err = safeAbsolutePath(dst); err != nil {
-		return err
+		return "", err
 	}
 	if pathHasParentComponent(src) || pathHasParentComponent(dst) {
-		return os.ErrInvalid
+		return "", os.ErrInvalid
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	// Two states folders can both hold "<rom>.state1": the second is kept
 	// beside the first as "<rom>~2.state1" rather than over it.
 	ext := filepath.Ext(dst)
 	base := strings.TrimSuffix(dst, ext)
 	for i := 2; ; i++ {
-		if _, err := os.Lstat(dst); os.IsNotExist(err) {
+		if _, err := os.Lstat(dst); err != nil {
+			if !os.IsNotExist(err) {
+				return "", err // a name too long for the card, say: not a free name
+			}
 			break
 		}
 		dst = base + "~" + strconv.Itoa(i) + ext
 	}
 	if err := os.Rename(src, dst); err == nil {
-		return nil
+		return dst, nil
 	}
 	if err := gmetaCopyFile(src, dst); err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Remove(src); err != nil {
 		_ = os.Remove(dst)
-		return err
+		return "", err
 	}
-	return nil
+	return dst, nil
 }
 
-// resetTrashMoveAll moves files into dir/<sub>/<kind>/ and writes restore.txt.
-// It returns how many moved and how many could not be.
+// resetTrashMoveAll moves files into dir/<sub>/ and adds a line per file to
+// dir's restore.txt as it lands — the name it really got — synced every few
+// files and at the end, so a power cut in the middle of a long copy still
+// leaves the record of what moved. Called again on the same folder it adds to
+// the record. It returns how many moved and how many could not be; a folder
+// that holds no file at all is removed.
 func resetTrashMoveAll(dir string, files []gameResetFile, sub func(gameResetFile) string) (moved, failed int) {
-	var manifest strings.Builder
-	manifest.WriteString("# Moved by JukaHub on " + time.Now().Format(time.RFC1123) + ".\n")
-	manifest.WriteString("# To undo, move a file back to the path on its left.\n")
+	manifestPath := filepath.Join(dir, "restore.txt")
+	var manifest *os.File
 	for _, f := range files {
-		dst := filepath.Join(dir, sub(f), filepath.Base(f.Path))
-		if err := resetTrashMove(f.Path, dst); err != nil {
+		dst, err := resetTrashMoveTo(f.Path, filepath.Join(dir, sub(f), filepath.Base(f.Path)))
+		if err != nil {
 			logWarn("library", "cannot move %s to the trash: %v", f.Path, err)
 			failed++
 			continue
 		}
 		moved++
-		manifest.WriteString(f.Path + "  ->  " + dst + "\n")
+		if manifest == nil {
+			_, statErr := os.Stat(manifestPath)
+			if manifest, err = os.OpenFile(manifestPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err != nil {
+				manifest = nil
+				logWarn("library", "cannot write the trash's restore.txt: %v", err)
+			} else if os.IsNotExist(statErr) {
+				_, _ = manifest.WriteString("# Moved by JukaHub on " + time.Now().Format(time.RFC1123) + ".\n" +
+					"# To undo, move a file back to the path on its left.\n")
+			}
+		}
+		if manifest != nil {
+			_, _ = manifest.WriteString(f.Path + "  ->  " + dst + "\n")
+			if moved%16 == 1 {
+				_ = manifest.Sync() // the first line at once, then every 16
+			}
+		}
 	}
-	if moved > 0 {
-		_ = os.WriteFile(filepath.Join(dir, "restore.txt"), []byte(manifest.String()), 0o644)
-	} else {
-		// Nothing arrived: the fresh folder holds at most empty sub-folders.
+	if manifest != nil {
+		_ = manifest.Sync()
+		_ = manifest.Close()
+	}
+	if moved == 0 && !resetTrashHasFile(dir) {
+		// Nothing ever arrived: the fresh folder holds at most empty sub-folders.
 		_ = os.RemoveAll(dir)
 	}
 	return moved, failed
+}
+
+// resetTrashHasFile reports whether a trash folder holds any file (a moved
+// one, or restore.txt), so a folder an earlier call filled is never removed
+// — not even when its restore.txt could not be written.
+func resetTrashHasFile(dir string) bool {
+	found := false
+	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			found = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // resetTrashCovers reports a cover cleanup's trash folder ("<stamp>-covers",
@@ -547,9 +593,20 @@ func resetTrashCovers(name string) bool {
 	return strings.Contains(name, "-covers")
 }
 
+// resetTrashKeepDeleted is how many Delete game folders stay: they hold whole
+// games, often discs of hundreds of megabytes, so fewer than the others.
+const resetTrashKeepDeleted = 3
+
+// resetTrashDeleted reports a Delete game trash folder ("<stamp>-deleted",
+// game_delete.go), pruned apart from the resets' and the covers' folders.
+func resetTrashDeleted(name string) bool {
+	return strings.Contains(name, "-deleted")
+}
+
 // pruneResetTrash keeps the newest resetTrashKeep reset folders and, apart
-// from them, the newest resetTrashKeep cover-cleanup folders, so cleanups never
-// push a reset's save states out. keep is the folder just filled: it is never
+// from them, the newest resetTrashKeep cover-cleanup folders and the newest
+// resetTrashKeepDeleted deleted games, so cleanups never push a reset's save
+// states out. keep is the folder just filled: it is never
 // removed, whatever its age looks like. Age is the folder's modification time,
 // not its date-stamped name — a TrimUI has no clock battery, so a stamp can be
 // years off and a fresh folder can sort oldest by name.
@@ -563,14 +620,16 @@ func pruneResetTrash(keep string) {
 		return
 	}
 	keepName := ""
-	if strings.TrimSpace(keep) != "" {
+	// A kept folder resetTrashMoveAll removed again (nothing arrived) takes no
+	// place, or one old folder too many would go.
+	if strings.TrimSpace(keep) != "" && dirExists(keep) {
 		keepName = filepath.Base(filepath.Clean(keep))
 	}
 	type trashDir struct {
 		name string
 		mod  time.Time
 	}
-	var resets, covers []trashDir
+	var resets, covers, deleted []trashDir
 	for _, e := range entries {
 		if !e.IsDir() || e.Name() == keepName {
 			continue
@@ -580,19 +639,28 @@ func pruneResetTrash(keep string) {
 			mod = info.ModTime()
 		}
 		d := trashDir{e.Name(), mod}
-		if resetTrashCovers(e.Name()) {
+		switch {
+		case resetTrashCovers(e.Name()):
 			covers = append(covers, d)
-		} else {
+		case resetTrashDeleted(e.Name()):
+			deleted = append(deleted, d)
+		default:
 			resets = append(resets, d)
 		}
 	}
 	keepCovers := resetTrashCovers(keepName)
+	keepDeleted := !keepCovers && resetTrashDeleted(keepName)
 	for _, group := range []struct {
 		dirs []trashDir
 		mine bool
-	}{{resets, keepName != "" && !keepCovers}, {covers, keepName != "" && keepCovers}} {
+		keep int
+	}{
+		{resets, keepName != "" && !keepCovers && !keepDeleted, resetTrashKeep},
+		{covers, keepName != "" && keepCovers, resetTrashKeep},
+		{deleted, keepName != "" && keepDeleted, resetTrashKeepDeleted},
+	} {
 		dirs := group.dirs
-		room := resetTrashKeep
+		room := group.keep
 		if group.mine {
 			room-- // the folder just filled takes one of the places
 		}
@@ -653,6 +721,8 @@ func runGameReset(game libraryGame, states bool) {
 	// The cheats switched on for it go too (cheats.go).
 	cheatsSetRecord(game.Path, cheatsGameRecord{})
 	cheatsFlush()
+	// And its own Buttons and Turbo (racontrols.go).
+	gameControlsForget(game.Path)
 	label := game.Label()
 	go func() {
 		defer gameResetBusy.Store(false)

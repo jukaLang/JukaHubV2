@@ -2,12 +2,15 @@ package main
 
 // savesync_auto.go — saves follow the player with no button pressed.
 //
-// Before a library game starts, its saves come down from Google Drive (and
-// from RomM, when that is set up: rommAutoSyncGame in romm_autosync.go),
-// within six seconds all told; offline, signed out or switched off, nothing
-// waits at all. When the game has ended, its saves go up, and half a minute
-// later — unless another game started — everything else is synced in the
-// background. Nothing ever syncs while a game holds the screen.
+// Before a library game starts, its saves come down from the cloud — Google
+// Drive, or the WebDAV server when Drive is not signed in — and from RomM,
+// when that is set up (rommAutoSyncGame in romm_autosync.go), within six
+// seconds all told; offline, signed out or switched off, nothing waits at
+// all. When the game has ended, its saves go up, and half a minute later —
+// unless another game started — everything else is synced in the
+// background. Nothing ever syncs while a game holds the screen. Only one
+// cloud does the automatic syncs: two would play the same saves against each
+// other, so with both connected Drive does them and WebDAV syncs on Compare.
 //
 // launchLibraryGame runs on the render thread, so the pull cannot simply
 // block it: saveSyncDeferLaunch takes the launch over, runs the pull on a
@@ -58,6 +61,32 @@ func saveSyncRommConfigured() bool {
 	return rommServerSettingsGet().autoSyncOn()
 }
 
+// saveSyncCloud is the cloud the automatic syncs use: its name for the
+// toasts, short ("Drive") where a sentence names it twice, and its calls.
+type saveSyncCloud struct {
+	name     string
+	short    string
+	logTag   string
+	syncGame func(ctx context.Context, romPath string, pull bool) (ssyncResult, error)
+	syncAll  func(ctx context.Context) (ssyncResult, error)
+	note     func(line string)
+	errText  func(err error) string
+}
+
+// saveSyncActiveCloud is Google Drive when it is signed in with its switch
+// on, else the WebDAV server when it is connected with its switch on.
+func saveSyncActiveCloud() (saveSyncCloud, bool) {
+	switch {
+	case gdriveAutoReady():
+		return saveSyncCloud{name: gdrivePeerName, short: "Drive", logTag: "gdrive",
+			syncGame: gdriveSyncGame, syncAll: gdriveSyncAll, note: gdriveNoteResult, errText: gdriveErrorText}, true
+	case webdavAutoReady():
+		return saveSyncCloud{name: "the WebDAV server", short: "the server", logTag: "webdav",
+			syncGame: webdavSyncGame, syncAll: webdavSyncAll, note: webdavNoteResult, errText: webdavErrorText}, true
+	}
+	return saveSyncCloud{}, false
+}
+
 // saveSyncDeferLaunch is called by launchLibraryGame (render thread) once the
 // game is known to be startable. deferred is true when the launch was taken
 // over: the saves are fetched in the background and launchLibraryGame runs
@@ -67,7 +96,8 @@ func saveSyncDeferLaunch(game libraryGame, launcher string) (deferred bool, err 
 		saveSyncAuto.resume = ""
 		return false, nil
 	}
-	drive := gdriveAutoReady() && IsOnline()
+	_, cloud := saveSyncActiveCloud()
+	drive := cloud && IsOnline()
 	if !drive && !saveSyncRommConfigured() {
 		return false, nil
 	}
@@ -103,7 +133,7 @@ func saveSyncDeferLaunch(game libraryGame, launcher string) (deferred bool, err 
 }
 
 // saveSyncBeforeLaunch brings one game's saves to this device before it
-// starts: Google Drive first, then RomM, within saveSyncLaunchBudget. Called
+// starts: the cloud first, then RomM, within saveSyncLaunchBudget. Called
 // off the render thread, before the emulator starts.
 func saveSyncBeforeLaunch(romPath, system string) {
 	// A background sync must not be writing files under the game.
@@ -112,22 +142,22 @@ func saveSyncBeforeLaunch(romPath, system string) {
 	defer cancel()
 	var notes []string
 	kind := ToastKindSuccess
-	if gdriveAutoReady() && IsOnline() {
-		res, err := gdriveSyncGame(ctx, romPath, true)
+	if c, ok := saveSyncActiveCloud(); ok && IsOnline() {
+		res, err := c.syncGame(ctx, romPath, true)
 		switch {
 		case err != nil:
 			if saveSyncWarnDue(err) {
-				notes = append(notes, "Saves not checked on Google Drive ("+gdriveErrorText(err)+") — the saves here are used")
+				notes = append(notes, "Saves not checked on "+c.name+" ("+c.errText(err)+") — the saves here are used")
 				kind = ToastKindWarning
 			}
-			logInfo("gdrive", "before %s: %v", ssyncGameStem(romPath), err)
+			logInfo(c.logTag, "before %s: %v", ssyncGameStem(romPath), err)
 		default:
-			if line := saveSyncResultLine(res, true); line != "" {
+			if line := saveSyncResultLine(c, res, true); line != "" {
 				notes = append(notes, line)
 				if res.Failed > 0 || res.Conflicts > 0 {
 					kind = ToastKindWarning
 				}
-				gdriveNoteResult(line)
+				c.note(line)
 			}
 		}
 	}
@@ -150,23 +180,23 @@ func saveSyncAfterExit(romPath, system string) {
 		defer cancel()
 		var notes []string
 		kind := ToastKindSuccess
-		drive := gdriveAutoReady()
+		c, drive := saveSyncActiveCloud()
 		if drive && IsOnline() {
-			res, err := gdriveSyncGame(ctx, romPath, false)
+			res, err := c.syncGame(ctx, romPath, false)
 			switch {
 			case err != nil:
 				if saveSyncWarnDue(err) {
-					notes = append(notes, "Saves not sent to Google Drive ("+gdriveErrorText(err)+") — they go up next time")
+					notes = append(notes, "Saves not sent to "+c.name+" ("+c.errText(err)+") — they go up next time")
 					kind = ToastKindWarning
 				}
-				logInfo("gdrive", "after %s: %v", ssyncGameStem(romPath), err)
+				logInfo(c.logTag, "after %s: %v", ssyncGameStem(romPath), err)
 			default:
-				if line := saveSyncResultLine(res, false); line != "" {
+				if line := saveSyncResultLine(c, res, false); line != "" {
 					notes = append(notes, line)
 					if res.Failed > 0 || res.Conflicts > 0 {
 						kind = ToastKindWarning
 					}
-					gdriveNoteResult(line)
+					c.note(line)
 				}
 			}
 		}
@@ -183,19 +213,23 @@ func saveSyncAfterExit(romPath, system string) {
 	}()
 }
 
-// saveSyncResultLine says what a game's sync did, or "" when it did nothing
-// worth a toast.
-func saveSyncResultLine(res ssyncResult, pull bool) string {
+// saveSyncResultLine says what a game's sync with cloud c did, or "" when it
+// did nothing worth a toast.
+func saveSyncResultLine(c saveSyncCloud, res ssyncResult, pull bool) string {
 	var parts []string
 	switch {
 	case pull && res.Pulled > 0:
-		parts = append(parts, "Saves updated from Google Drive")
+		parts = append(parts, "Saves updated from "+c.name)
 	case !pull && res.Pushed > 0:
-		parts = append(parts, "Saves backed up to Google Drive")
+		parts = append(parts, "Saves backed up to "+c.name)
 	}
 	if res.Conflicts > 0 {
-		parts = append(parts, pluralizeCount(res.Conflicts, "save changed here and on Drive", "saves changed here and on Drive")+
-			" — both kept, Drive's as \"(from Google Drive)\"")
+		label := gdrivePeerName
+		if c.logTag == "webdav" {
+			label = webdavPeerName
+		}
+		parts = append(parts, pluralizeCount(res.Conflicts, "save changed here and on "+c.short, "saves changed here and on "+c.short)+
+			" — both kept, the cloud's as \"(from "+label+")\"")
 	}
 	if res.Failed > 0 {
 		msg := pluralizeCount(res.Failed, "save", "saves") + " not copied"
@@ -213,7 +247,7 @@ func saveSyncWarnDue(err error) bool {
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
-	if errors.Is(err, errGdriveExpired) {
+	if errors.Is(err, errGdriveExpired) || errors.Is(err, errWebdavRefused) {
 		return true
 	}
 	saveSyncAuto.mu.Lock()
@@ -264,10 +298,11 @@ func saveSyncCancelFull() {
 	}
 }
 
-// saveSyncRunFull is the background sync of every save folder with Drive.
-// gen is the schedule that started it (a cancel since then wins).
+// saveSyncRunFull is the background sync of every save folder with the
+// cloud. gen is the schedule that started it (a cancel since then wins).
 func saveSyncRunFull(gen uint64) {
-	if gameScreenSuspended() || !gdriveAutoReady() || !IsOnline() {
+	c, ok := saveSyncActiveCloud()
+	if gameScreenSuspended() || !ok || !IsOnline() {
 		// The next game's exit schedules it again.
 		return
 	}
@@ -312,25 +347,25 @@ func saveSyncRunFull(gen uint64) {
 			}
 		}
 	}()
-	res, err := gdriveSyncAll(ctx)
+	res, err := c.syncAll(ctx)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
-			logInfo("gdrive", "background sync: %v", err)
+			logInfo(c.logTag, "background sync: %v", err)
 			if saveSyncWarnDue(err) {
-				saveSyncToast([]string{"Saves not synced with Google Drive: " + gdriveErrorText(err)}, ToastKindWarning)
+				saveSyncToast([]string{"Saves not synced with " + c.name + ": " + c.errText(err)}, ToastKindWarning)
 			}
 		}
 		return
 	}
-	logInfo("gdrive", "background sync: %d down, %d up, %d both kept, %d failed", res.Pulled, res.Pushed, res.Conflicts, res.Failed)
+	logInfo(c.logTag, "background sync: %d down, %d up, %d both kept, %d failed", res.Pulled, res.Pushed, res.Conflicts, res.Failed)
 	if res.Pulled+res.Pushed+res.Conflicts+res.Failed == 0 {
 		return
 	}
-	gdriveNoteResult(ssyncResultText(res))
+	c.note(ssyncResultText(res))
 	switch {
 	case res.Failed > 0 || res.Conflicts > 0:
-		saveSyncToast([]string{"Google Drive sync: " + ssyncResultText(res)}, ToastKindWarning)
+		saveSyncToast([]string{"Sync with " + c.name + ": " + ssyncResultText(res)}, ToastKindWarning)
 	case res.Pulled > 0:
-		saveSyncToast([]string{fmt.Sprintf("%s updated from Google Drive", pluralizeCount(res.Pulled, "save", "saves"))}, ToastKindSuccess)
+		saveSyncToast([]string{fmt.Sprintf("%s updated from %s", pluralizeCount(res.Pulled, "save", "saves"), c.name)}, ToastKindSuccess)
 	}
 }

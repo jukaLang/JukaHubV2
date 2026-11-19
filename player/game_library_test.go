@@ -232,6 +232,62 @@ func TestGameResetStateFile(t *testing.T) {
 	}
 }
 
+// Rename file (game_rename.go) takes only the ROM's own companions, refuses
+// names a FAT card cannot hold, and rewrites only the sheet lines that name a
+// renamed file in the sheet's own folder.
+func TestGameRenameNamesAndSheets(t *testing.T) {
+	for name, want := range map[string]int{
+		"Zelda.srm":        5,
+		"zelda.BIN":        5,
+		"Zelda.state1.png": 5,
+		"Zelda.gba.sav":    9,
+		"Zelda.gba":        -1,
+		"Zelda II.srm":     -1,
+		"Zelda.v2.gba":     -1,
+		"Zelda":            -1,
+	} {
+		cut, ok := gameCompanionCut(name, "Zelda.gba", "Zelda")
+		if !ok {
+			cut = -1
+		}
+		if cut != want {
+			t.Errorf("gameCompanionCut(%q) = %d, want %d", name, cut, want)
+		}
+	}
+	for text, want := range map[string]string{
+		"Final Fantasy VI (USA)": "Final Fantasy VI (USA)",
+		"Tetris.gb":              "Tetris",
+		"  Tetris.  ":            "Tetris",
+		"Pokémon":                "Pokémon",
+		"a/b":                    "",
+		"Star*":                  "",
+		"con.txt":                "",
+		".hidden":                "",
+		"..":                     "",
+	} {
+		got, err := gameRenameCleanName(text, ".gb")
+		if err != nil {
+			got = ""
+		}
+		if got != want {
+			t.Errorf("gameRenameCleanName(%q) = %q (%v), want %q", text, got, err, want)
+		}
+	}
+	names := map[string]string{"zelda.bin": "Link.bin", "zelda (disc 1).cue": "Link (Disc 1).cue", "track02.bin": "t2.bin"}
+	for _, c := range []struct{ ext, in, want string }{
+		{".cue", "FILE \"Zelda.bin\" BINARY\r\n  TRACK 01 MODE1/2352\r\n", "FILE \"Link.bin\" BINARY\r\n  TRACK 01 MODE1/2352\r\n"},
+		{".cue", "FILE Zelda.bin BINARY\n", "FILE Link.bin BINARY\n"},
+		{".cue", "\ufeffFILE \"Zelda.bin\" BINARY\n", "\ufeffFILE \"Link.bin\" BINARY\n"},
+		{".m3u", "./Zelda (Disc 1).cue|Disc 1\r\n", "./Link (Disc 1).cue|Disc 1\r\n"},
+		{".m3u", "#EXTM3U\nZelda (Disc 1).cue\nsub/Zelda.bin\nOther.cue", "#EXTM3U\nLink (Disc 1).cue\nsub/Zelda.bin\nOther.cue"},
+		{".gdi", "2\n1 0 4 2352 \"Zelda.bin\" 0\n2 450 0 2352 track02.bin 0\n", "2\n1 0 4 2352 \"Link.bin\" 0\n2 450 0 2352 t2.bin 0\n"},
+	} {
+		if got, _ := gameRenameSheetText(c.in, c.ext, names); got != c.want {
+			t.Errorf("gameRenameSheetText(%s %q) = %q, want %q", c.ext, c.in, got, c.want)
+		}
+	}
+}
+
 // A ROM whose name matches no cover exactly still gets the closest one: the
 // same game under its full title, or at least the same series, never an
 // unrelated title.
@@ -491,5 +547,42 @@ func TestNextUIFolderParse(t *testing.T) {
 	}
 	if paths := nextuiParseRecents([]byte("/Roms/Game Boy (GB)/Tetris.gb\tTetris\r\n\n/Roms/PS (PS)/FF7.m3u\n"), 12); len(paths) != 2 || paths[0] != "/Roms/Game Boy (GB)/Tetris.gb" {
 		t.Errorf("recent.txt parsed as %q", paths)
+	}
+}
+
+// A console folder's config.json comes off the card: its launchlist is read
+// with the names it carries, odd entries are skipped, and an alternative must
+// be a .sh inside the folder that is not the folder's own launcher.
+func TestEmuFolderAlternatives(t *testing.T) {
+	dir := t.TempDir()
+	folder := filepath.Join(dir, "N64")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"launch.sh", "m64p.sh", "parallel_n64.sh", "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(folder, name), []byte("#!/bin/sh\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "evil.sh"), []byte("#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := `{"launch":"launch.sh","launchlist":[
+		{"name":"Mupen64Plus-Next","launch":"launch.sh"},
+		{"name":"Mupen64Plus Standalone","launch":"m64p.sh"},
+		"parallel_n64.sh", {"label":"no launch"}, 7, "notes.txt", "../evil.sh", "m64p.sh"]}`
+	if err := os.WriteFile(filepath.Join(folder, "config.json"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	own := emuEntry{Name: "N64", Launch: filepath.Join(folder, "launch.sh"), Folder: folder, Status: emuAvailable}
+	alts := emuFolderAlternatives(own)
+	if len(alts) != 2 {
+		t.Fatalf("alternatives = %+v, want m64p.sh and parallel_n64.sh", alts)
+	}
+	if alts[0].Name != "N64 · Mupen64Plus Standalone" || filepath.Base(alts[0].Launch) != "m64p.sh" || alts[0].Extra != emuChoiceAlt {
+		t.Errorf("first alternative = %+v", alts[0])
+	}
+	if alts[1].Name != "N64 · Parallel n64" || filepath.Base(alts[1].Launch) != "parallel_n64.sh" {
+		t.Errorf("second alternative = %+v", alts[1])
 	}
 }

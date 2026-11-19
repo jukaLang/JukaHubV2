@@ -453,22 +453,35 @@ func (s *sshService) serveSession(channel ssh.Channel, reqs <-chan *ssh.Request,
 // password is generated for this run and never written to disk, so there is no
 // stored hash to attack offline; salting it here also means a digest that leaks
 // out of one session cannot be replayed against the next one.
-var sshPasswordSalt = func() [32]byte {
-	var salt [32]byte
-	if _, err := rand.Read(salt[:]); err != nil {
-		// rand.Read only fails on a broken system RNG. Keep the service usable
-		// by deriving the salt from the clock instead of starting with zeros.
-		binary.BigEndian.PutUint64(salt[:8], uint64(time.Now().UnixNano()))
-	}
-	return salt
-}()
+//
+// It is drawn on first use, not at package init: crypto/rand blocks until the
+// kernel's random pool is ready, and on a fast power-on (JukaHub OS starts it
+// about a second after the kernel) that wait came before main() even ran.
+var (
+	sshPasswordSalt     [32]byte
+	sshPasswordSaltOnce sync.Once
+)
+
+func sshPasswordSaltKey() []byte {
+	sshPasswordSaltOnce.Do(func() {
+		if sshPasswordSalt != ([32]byte{}) {
+			return // set by a test
+		}
+		if _, err := rand.Read(sshPasswordSalt[:]); err != nil {
+			// rand.Read only fails on a broken system RNG. Keep the service
+			// usable by deriving the salt from the clock instead of zeros.
+			binary.BigEndian.PutUint64(sshPasswordSalt[:8], uint64(time.Now().UnixNano()))
+		}
+	})
+	return sshPasswordSalt[:]
+}
 
 // sshPasswordDigest is HMAC-SHA256 of the password under that salt. An
 // unsalted SHA-256 of a password is the weak-password-hash pattern static
 // analysis flags, and it is also useless here: nothing is persisted, and the
 // digest is only ever compared inside this process.
 func sshPasswordDigest(password string) []byte {
-	mac := hmac.New(sha256.New, sshPasswordSalt[:])
+	mac := hmac.New(sha256.New, sshPasswordSaltKey())
 	mac.Write([]byte(password))
 	return mac.Sum(nil)
 }

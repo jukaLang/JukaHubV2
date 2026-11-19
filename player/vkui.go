@@ -227,7 +227,7 @@ func vkStripTip() string {
 func vkLiveFilterTarget() bool {
 	switch vkTarget {
 	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget,
-		setSearchVKTarget:
+		setSearchVKTarget, homebrewSearchVKTarget:
 		return true
 	}
 	return false

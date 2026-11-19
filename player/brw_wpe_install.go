@@ -913,6 +913,6 @@ func brwWpeReportInstall(ctx context.Context, gen uint64, tag string, err error)
 	default:
 		// The success toast plays the chime itself.
 		installBarDoneRun(gen)
-		ShowToast(brwWpeName+" "+tag+" is ready · the Browser menu opens pages in it", ToastKindSuccess)
+		ShowToast(brwWpeName+" "+tag+" is ready · new Browser pages open in it", ToastKindSuccess)
 	}
 }

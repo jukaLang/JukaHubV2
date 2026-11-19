@@ -8,7 +8,9 @@
 
 USB networking is unavailable on this stock image: its kernel config has
 `CONFIG_USB_CONFIGFS_ECM` and `CONFIG_USB_CONFIGFS_RNDIS` disabled. This does
-not prevent MTP file transfer through FunctionFS.
+not prevent MTP file transfer through FunctionFS. **Browser over USB** (below)
+therefore says "This firmware's kernel has no USB network function" there;
+it works on a firmware whose kernel has RNDIS, ECM or NCM.
 
 Plug the handheld into a computer with a USB-C data cable and its SD card
 opens there, the way a phone's storage does. Copy ROMs, BIOS files, saves,
@@ -42,6 +44,74 @@ interrupted copy are cleaned up the next time that folder is opened.
 Things JukaHub writes while the computer is connected (a new screenshot, a
 download) show up after you refresh the folder on the computer (F5 in
 Explorer).
+
+## Open JukaHub in your browser over the cable
+
+The same cable also carries a small network of its own, so the computer's
+browser can open the Phone Companion page — drag games, covers and music in
+from any browser, exactly as over Wi-Fi, with no Wi-Fi at all.
+
+1. Leave **Settings → Network → Browser over USB** on (it is on by default
+   and sits under USB file transfer, which it needs).
+2. Plug the handheld into the computer.
+3. Open **http://10.73.73.1** in the computer's browser and type the PIN.
+   The line under the switch shows the address and the PIN, and says
+   "Connected" once the computer has its address.
+
+The handheld is always `10.73.73.1`; the computer gets an address from
+`10.73.73.2` to `10.73.73.6` from the handheld's own DHCP server. That answer
+names no router and no DNS server, so the computer keeps using its own
+network for the internet — only the handheld's page goes over the cable.
+While the startup lock is up the page says JukaHub is locked.
+
+- **Windows 10 and 11** — the handheld shows up as a network adapter
+  ("Remote NDIS") using Windows' own driver; nothing to install. Windows may
+  call it an unidentified network without internet: that is expected.
+- **Linux** — NetworkManager and most distributions pick it up by themselves.
+- **macOS** — macOS has no driver for the Windows kind of USB network. When
+  the computer stays silent on it for about 20 seconds, the handheld switches
+  to the kind macOS understands (ECM) and the port re-connects once; the
+  page opens after that. The next computer that stays silent switches it
+  back.
+
+### When it is not available
+
+The line under the switch says why:
+
+- **"This firmware's kernel has no USB network function"** — the kernel was
+  built without RNDIS, ECM and NCM (the stock Smart Pro 1.1.0 kernel, see
+  above). Use the page over Wi-Fi, or USB file transfer.
+- **"Not enough USB endpoints next to adb and file transfer — file transfer
+  only"** — the USB controller has a fixed number of endpoints, and the
+  firmware's ADB, file transfer and the network did not all fit. File
+  transfer is kept, and JukaHub does not try again until the handheld
+  restarts.
+- **"Phone companion is off …"** — the page belongs to the Phone Companion,
+  which starts by itself once the handheld has an address (safe mode keeps it
+  off).
+
+### How it works
+
+`player/usbnet_linux.go` adds a network function to the USB gadget that file
+transfer sets up, in the same configuration (Windows only gives each part of
+a device its own driver when the device has a single configuration, so a
+second configuration would cost file transfer and ADB on Windows). RNDIS
+comes first, with Microsoft OS descriptors (`os_desc`: vendor code `0xcd`,
+`MSFT100`; `interface.rndis` compatible ID `RNDIS`, sub-compatible
+`5162001`) and the interface-association device class `EF/02/01`, so
+Windows 10/11 bind their in-box driver; Linux binds `rndis_host`. When the
+computer sets the device up but sends nothing over the network for 20
+seconds, the function is swapped for ECM (NCM when ECM is not built). The
+handheld's addresses are fixed (from the USB serial number), so the computer
+sees the same network adapter every time.
+
+If the port will not bind with the network function, it is taken out and
+the port is bound exactly as before. Whatever JukaHub changed on the
+firmware's gadget (device class, revision, OS descriptors) is saved to
+`data/jukahub-usbnet.state` first and put back when file transfer stops,
+JukaHub quits, or the next start after a crash. `player/usbnet_dhcp.go` is
+the DHCP server (DISCOVER/OFFER, REQUEST/ACK/NAK, RELEASE, DECLINE, INFORM;
+subnet mask and a 10-minute lease only).
 
 ## Startup lock
 

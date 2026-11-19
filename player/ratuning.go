@@ -62,6 +62,16 @@ package main
 //	PAL mode        the region core option of the cores that have one
 //	                (Genesis Plus GX, PicoDrive, FCEUmm, Nestopia, Snes9x,
 //	                PCSX-ReARMed), forcing 50 Hz European timing.
+//	Crop overscan   video_crop_overscan true (On) or false (Off): RetroArch
+//	                asks the core to drop the border a TV hid, or to keep the
+//	                whole picture. Unset leaves RetroArch's own value (true by
+//	                default, config.def.h). It is a hint that only some cores
+//	                follow; the cores' own overscan options are left alone:
+//	                FCEUmm and Nestopia replaced their on/off switches with
+//	                per-edge pixel counts, and their defaults already crop.
+//
+// The look (shader) is chosen on the same page, per console too, but written
+// by videofilter.go (shader_looks.go decides which one).
 //
 // Core options live in another file than retroarch.cfg. RetroArch reads, in
 // order: a game's own options (config/<Core>/<game>.opt), the content
@@ -73,9 +83,9 @@ package main
 // global file on exit, copying JukaHub's value into a file nobody restores, so
 // that one case is skipped (and logged) rather than written.
 //
-// Audio quality, latency and the overlay can differ per console (stored as
-// raTuning.<console>.audio / .latency / .overlay); the rest is one choice for
-// every console.
+// Audio quality, latency, the overlay, the look and overscan cropping can
+// differ per console (stored as raTuning.<console>.audio / .latency /
+// .overlay / .look / .crop); the rest is one choice for every console.
 
 import (
 	"os"
@@ -95,17 +105,19 @@ const (
 	raTuneRumbleKey  = "raTuningRumble"
 	raTuneRotateKey  = "raTuningRotate"
 	raTunePALKey     = "raTuningPAL"
+	raTuneCropKey    = "raTuningCrop"
 
 	// raTuneConsolePrefix starts a per-console key:
-	// raTuning.<console slug>.audio | .latency | .overlay.
+	// raTuning.<console slug>.audio | .latency | .overlay | .look | .crop.
 	raTuneConsolePrefix = "raTuning."
 
 	// The overlay scan is bounded like the shader scan: RetroArch's overlay
 	// pack is a few hundred files, and a card full of something else must not
-	// stall the settings page's background probe.
-	raTuneOverlayDepth    = 3
-	raTuneOverlayScanMax  = 4000
-	raTuneOverlayListMax  = 150
+	// stall the settings page's background probe. SkyWalker541's Brick pack
+	// (shader_looks_download.go) sits a few folders down, under its own tree.
+	raTuneOverlayDepth    = 5
+	raTuneOverlayScanMax  = 6000
+	raTuneOverlayListMax  = 400
 	raTuneOverlayOpacity  = "1.000000"
 	raTuneLowAudioMs      = "64"
 	raTuneLowestAudioMs   = "48"
@@ -431,6 +443,41 @@ func raTunePALOn(c *Config) bool {
 	return c != nil && customBool(c.Variables.Custom, raTunePALKey, false)
 }
 
+// raTuneCropWord reads a stored crop choice: "on", "off", or "" for neither.
+func raTuneCropWord(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true":
+		return "on"
+	case "off", "false":
+		return "off"
+	}
+	return ""
+}
+
+// raTuneCropSetting is the all-consoles Crop overscan choice: "on", "off",
+// or "own" (unset: RetroArch's own setting, which crops by default).
+func raTuneCropSetting(c *Config) string {
+	if v := raTuneCropWord(raTuneRaw(c, raTuneCropKey)); v != "" {
+		return v
+	}
+	return raTuneOwn
+}
+
+// raTuneConsoleCrop is one console's own crop choice: "on", "off", or ""
+// when it follows All consoles.
+func raTuneConsoleCrop(c *Config, system string) string {
+	return raTuneCropWord(raTuneRaw(c, raTuneConsoleKey(system, "crop")))
+}
+
+// raTuneCropFor is a launch's crop choice: "on", "off" or "own".
+func raTuneCropFor(c *Config, system string) string {
+	sys, _ := raTuneSystemFor(system)
+	if v := raTuneConsoleCrop(c, sys.Name); v != "" {
+		return v
+	}
+	return raTuneCropSetting(c)
+}
+
 // ── The plan for one launch ──────────────────────────────────────────────
 
 // raTunePlan is what one launch writes: retroarch.cfg values, numbers that
@@ -552,6 +599,15 @@ func raTunePlanFor(c *Config, system, core string) raTunePlan {
 			p.Core = append(p.Core, opt)
 			p.What = append(p.What, "PAL")
 		}
+	}
+
+	switch raTuneCropFor(c, system) {
+	case "on":
+		p.Config = append(p.Config, raScopeValue{Key: "video_crop_overscan", Value: "true"})
+		p.What = append(p.What, "crop overscan")
+	case "off":
+		p.Config = append(p.Config, raScopeValue{Key: "video_crop_overscan", Value: "false"})
+		p.What = append(p.What, "no overscan crop")
 	}
 	return p
 }
@@ -799,6 +855,10 @@ var raTuneOverlayProbe struct {
 	list    []raTuneOverlay
 	done    bool
 	running bool
+	// gen moves on when the list is dropped (raTuneOverlaysForget); stale
+	// keeps the old list on show until the new scan is in.
+	gen   int
+	stale bool
 }
 
 // raTuneOverlays is the list for the menus; ok is false while the scan runs
@@ -811,17 +871,34 @@ func raTuneOverlays() ([]raTuneOverlay, bool) {
 	}
 	if !raTuneOverlayProbe.running {
 		raTuneOverlayProbe.running = true
+		gen := raTuneOverlayProbe.gen
 		go func() {
 			var list []raTuneOverlay
 			if targets := raScopeTargets(raTuneCandidates()); len(targets) > 0 {
 				list = raTuneScanOverlays(targets[0])
 			}
 			raTuneOverlayProbe.mu.Lock()
-			raTuneOverlayProbe.list = list
-			raTuneOverlayProbe.done = true
+			if gen == raTuneOverlayProbe.gen {
+				raTuneOverlayProbe.list = list
+				raTuneOverlayProbe.done = true
+				raTuneOverlayProbe.stale = false
+			}
 			raTuneOverlayProbe.running = false
 			raTuneOverlayProbe.mu.Unlock()
 		}()
 	}
+	if raTuneOverlayProbe.stale {
+		return raTuneOverlayProbe.list, true // the old list until the rescan is in
+	}
 	return nil, false
+}
+
+// raTuneOverlaysForget makes the menus scan the overlay folders again
+// (overlays were downloaded). Safe from any goroutine.
+func raTuneOverlaysForget() {
+	raTuneOverlayProbe.mu.Lock()
+	raTuneOverlayProbe.gen++
+	raTuneOverlayProbe.stale = raTuneOverlayProbe.done || raTuneOverlayProbe.stale
+	raTuneOverlayProbe.done = false
+	raTuneOverlayProbe.mu.Unlock()
 }

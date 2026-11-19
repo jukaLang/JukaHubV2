@@ -1207,6 +1207,12 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 		return "", backup, err
 	}
 	logDebug("compat", "activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
+	// The first game this build starts is watched, and a build that cannot
+	// start it is put back (corebuilds_probation.go). A first install has no
+	// build to go back to, so nothing is watched.
+	if backup != "" {
+		coreProbationStart(build.Core, target, backup, build.Version)
+	}
 	return target, backup, nil
 }
 
@@ -1301,6 +1307,10 @@ func coreDirIsSystem(dir string) bool {
 // about to become target — "" when it may. A core is loaded by RetroArch, not
 // by JukaHub, so it must match RetroArch's architecture (coreLoadEnv); on
 // Windows, and for anything that is not an ELF file, there is nothing to check.
+// A build that links desktop OpenGL where this RetroArch has OpenGL ES only
+// cannot be opened either (coreGLLoadProblem, corerisk.go): the generic check
+// stands aside for libraries RetroArch might bring, and libGL is one this
+// firmware's RetroArch does not.
 func coreLoadProblemFile(source, target string) string {
 	if runtime.GOOS != "linux" {
 		return ""
@@ -1314,7 +1324,15 @@ func coreLoadProblemFile(source, target string) string {
 		return ""
 	}
 	defer f.Close()
-	return elfLoadProblemFrom(f, coreLoadEnv(target))
+	env := coreLoadEnv(target)
+	if problem := elfLoadProblemFrom(f, env); problem != "" || env.archOnly {
+		return problem
+	}
+	retroArch := ""
+	if strings.TrimSpace(target) != "" {
+		retroArch = coreRetroArchBinary(filepath.Dir(target))
+	}
+	return coreGLLoadProblem(f, env, retroArch)
 }
 
 // coreLoadProblemData is coreLoadProblemFile for a download still in memory, so
@@ -1644,6 +1662,18 @@ func applyBoost(assessment gameAssessment) (boostResult, error) {
 				// Boosting a game that is already boosted: the file on disk is
 				// JukaHub's, so the user's own options come from the kept copy.
 				content = mergeCompatOptions(content, original, assessment.Plan.Options)
+			} else {
+				// A game's own .opt is the only options file RetroArch reads
+				// for it: every option it lacks goes back to the core's
+				// default, not to the core's (or the folder's) own file. A
+				// boost that wrote two N64 render sizes alone turned off the
+				// rest of what the firmware tuned for this GPU. So the options
+				// RetroArch would otherwise read for this game come along,
+				// under the boost's own values.
+				if inherited := compatInheritedOptions(dir, display, assessment.ROM.Path); len(inherited) > 0 {
+					content = mergeCompatOptionsAs(content, inherited, assessment.Plan.Options,
+						"# The options RetroArch read for this game before the boost (they stay after revert):\n")
+				}
 			}
 			if err := writeCompatAtomic(target, content, 0o644); err != nil {
 				return result, fmt.Errorf("write RetroArch override: %w", err)
@@ -1676,9 +1706,32 @@ const (
 	compatOptBackupSuffix = ".jukahub-orig"
 )
 
+// compatInheritedOptions is the options file RetroArch reads for a game that
+// has no .opt of its own: its content folder's (<Core>/<folder>.opt), else the
+// core's (<Core>/<Core>.opt). nil when there is neither.
+func compatInheritedOptions(coreDir, display, romPath string) []byte {
+	for _, name := range []string{filepath.Base(filepath.Dir(romPath)), display} {
+		if name == "" || name == "." || name == string(filepath.Separator) {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(coreDir, name+".opt"))
+		if err == nil && len(data) <= 256<<10 && !strings.HasPrefix(string(data), compatBoostHeader) {
+			return data
+		}
+	}
+	return nil
+}
+
 // mergeCompatOptions appends the user's own options that the boost does not
 // set, so boosting a game does not switch its other per-game options off.
 func mergeCompatOptions(boost, user []byte, options map[string]string) []byte {
+	return mergeCompatOptionsAs(boost, user, options, "# Your own options for this game (your original file comes back on revert):\n")
+}
+
+// mergeCompatOptionsAs is mergeCompatOptions under another heading line: the
+// options inherited from the folder's or core's file are not the user's own
+// per-game file.
+func mergeCompatOptionsAs(boost, user []byte, options map[string]string, heading string) []byte {
 	var extra strings.Builder
 	for _, line := range strings.Split(string(user), "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -1698,7 +1751,7 @@ func mergeCompatOptions(boost, user []byte, options map[string]string) []byte {
 		return boost
 	}
 	out := append([]byte(nil), boost...)
-	out = append(out, "# Your own options for this game (your original file comes back on revert):\n"...)
+	out = append(out, heading...)
 	return append(out, extra.String()...)
 }
 

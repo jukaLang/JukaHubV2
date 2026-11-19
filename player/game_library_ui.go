@@ -6,10 +6,13 @@ package main
 // in two levels. The first is a grid of glass buttons, one per console (with a
 // leading Continue button built from the recents file): each carries the
 // system's glyph, its name, a game count, a cover meter and the first cover it
-// has. A (or a click) opens a console's page: its games (list, 3D shelf or
+// has; the Pixel names and Pixel cards looks (X on the grid) make the name in
+// pixel letters the art instead (game_library_pixel_look.go). A (or a click)
+// opens a console's page: its games (list, 3D shelf or
 // cover column) beside a large box-art preview. On that page A opens a game,
 // X opens LAN play (netplay_ui.go), E hands the selected game to its tool
-// (handoff.go: profiles, compatibility or the emulator page); B goes back to
+// (handoff.go: profiles, compatibility or the emulator page), L2 / R2 (and
+// Right in a column) jump by letter (game_library_scrub.go); B goes back to
 // the consoles. L1 fetches missing covers and Y rescans on both levels; B on
 // the grid closes. It is a modal overlay like the Emulators panel, so it
 // works on every config, including the desktop one with no Roms folder.
@@ -94,6 +97,9 @@ type gameLibraryPanel struct {
 	gameHits   []gameLibRowHit
 	// artRect is the preview frame, filled by the renderer for click tests.
 	artRect sdl.Rect
+	// listRect is the games column of a console's page as last drawn: the
+	// letter-scrub bubble sits over its middle (game_library_scrub.go).
+	listRect sdl.Rect
 }
 
 type libraryArtDecodeResult struct {
@@ -386,6 +392,7 @@ func closeGameLibraryPanel() {
 	// So can a game's page, its tag sheet and the tag filter's chooser; the
 	// page's screenshots are textures and go with it.
 	gmetaCloseAll()
+	gameLibraryScrubReset()
 	gameLib.open = false
 	// A scan that finishes after this must not write into a closed panel or a
 	// later visit that has already started its own scan.
@@ -629,6 +636,12 @@ func gameLibraryMove(dx, dy int) {
 		PlayNavSound()
 		return
 	}
+	if dx > 0 {
+		// A column has no row to the right: Right jumps to the next letter
+		// (game_library_scrub.go).
+		gameLibraryScrub(1)
+		return
+	}
 	system, ok := selectedLibrarySystem()
 	if !ok || len(system.Games) == 0 {
 		return
@@ -689,10 +702,17 @@ func fetchMissingLibraryArtwork() {
 // they run once per completed fetch rather than on every frame.
 func recountLibraryArtwork() {
 	total, with := 0, 0
+	root := libraryArtworkRoot()
 	for i := range gameLib.lib.Systems {
 		system := &gameLib.lib.Systems[i]
 		for j := range system.Games {
-			system.Games[j].HasArt = artworkCoverPresent(system.Games[j].Art)
+			g := &system.Games[j]
+			if playShotIsCover(g.Art) {
+				// A picture from the game gives way to a cover found since
+				// (playshot_cover.go).
+				g.Art = romCoverPath(scannedROM{Path: g.Path, System: g.System}, root)
+			}
+			g.HasArt = artworkCoverPresent(g.Art)
 		}
 		system.WithArt = countCoveredGames(system.Games)
 		total += len(system.Games)
@@ -729,6 +749,11 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		gameLibraryMove(-1, 0)
 	case sdl.K_RIGHT:
 		gameLibraryMove(1, 0)
+	case sdl.K_PAGEUP:
+		// L2 / R2's twins: the previous / next letter (game_library_scrub.go).
+		gameLibraryScrub(-1)
+	case sdl.K_PAGEDOWN:
+		gameLibraryScrub(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		// A game opens its page (box art, details, tags, save states) with
 		// Play focused; a console opens its list.
@@ -748,6 +773,8 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_x:
 		if gameLib.focus == 1 {
 			libraryOpenNetplay()
+		} else {
+			gameLibraryLookPress() // the next Console look
 		}
 	case sdl.K_f:
 		fetchMissingLibraryArtwork()
@@ -800,6 +827,8 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_X:
 		if gameLib.focus == 1 {
 			libraryOpenNetplay()
+		} else {
+			gameLibraryLookPress() // the next Console look
 		}
 	case sdl.CONTROLLER_BUTTON_START:
 		openGameOptions()
@@ -1540,7 +1569,8 @@ func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []lib
 			}
 		}
 	}
-	if wanted != "" {
+	// The pixel looks show no covers, so they load none.
+	if wanted != "" && libraryConsoleLookMode() == libraryLookCovers {
 		libraryArtTexture(renderer, wanted)
 	}
 
@@ -1562,8 +1592,11 @@ func renderGameLibraryGrid(renderer *sdl.Renderer, config *Config, systems []lib
 		if dimOn {
 			dim = gameLibDimEase.dim(i)
 		}
-		drawGameLibrarySystemTile(renderer, config, systems[i], rect, i == gameLib.system, dim)
+		// In the saved Console look (game_library_pixel_look.go).
+		drawGameLibraryConsoleButton(renderer, config, systems[i], rect, i == gameLib.system, dim)
 	}
+	// A pixel look's focused name flies in over every button.
+	drawGameLibraryPixelFlight(renderer, area)
 	// Rows above or below this screenful: the edge rows fade into the page
 	// (listfade.go), unless the focused button is on that row.
 	if totalRows > grid.rows {
@@ -1726,7 +1759,12 @@ func gameLibraryFooterHints(config *Config) []FooterHint {
 		if netplayEnabled(config) {
 			hints = append(hints, FooterHint{"X", "LAN Play"})
 		}
-		return append(hints, FooterHint{"Start / O", "Options"}, FooterHint{"R / R3", "Random"},
+		hints = append(hints, FooterHint{"Start / O", "Options"})
+		// L2 / R2 jump by letter (game_library_scrub.go).
+		if scrub, ok := gameLibraryScrubHint(); ok {
+			hints = append(hints, scrub)
+		}
+		return append(hints, FooterHint{"R / R3", "Random"},
 			FooterHint{"S / R1", "Search"}, FooterHint{"L3 / T", "Tags"}, artHint,
 			FooterHint{"Y", "Rescan"})
 	}
@@ -1734,8 +1772,9 @@ func gameLibraryFooterHints(config *Config) []FooterHint {
 	if gameLib.query != "" || gmetaFilterTag() != "" {
 		back = FooterHint{"B", "Show All"}
 	}
+	// X steps the Console look (game_library_pixel_look.go).
 	return []FooterHint{{"A", "Open"}, back, {"S / R1", "Search"}, {"L3 / T", "Tags"},
-		{"R / R3", "Random"}, artHint, {"Y", "Rescan"}}
+		{"R / R3", "Random"}, {"X", "Look"}, artHint, {"Y", "Rescan"}}
 }
 
 // renderGameLibraryPanel draws the library page: Home's backdrop under the top
@@ -1836,7 +1875,12 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		renderGameLibraryGrid(renderer, config, systems, body)
 	} else {
 		gameLib.systemHits = gameLib.systemHits[:0]
+		// Back on the grid, however it gets there, the focused console's
+		// letters fly in again (game_library_pixel_look.go).
+		gameLib.logoSystem = ""
 		renderGameLibraryGames(renderer, config, system, body)
+		// The letter a jump landed on, over the games (game_library_scrub.go).
+		drawGameLibraryScrubBubble(renderer, config, gameLib.listRect)
 	}
 
 	peerDrawFooter(renderer, config, gameLibraryFooterHints(config))
@@ -1879,6 +1923,7 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 	gameX := body.X
 	artX := gameX + gameW + gap
 	bodyY, bodyH := body.Y, body.H
+	gameLib.listRect = sdl.Rect{X: gameX, Y: bodyY, W: gameW, H: bodyH}
 
 	// The "System · file" line under each title is secondary, so it is set a
 	// step smaller than the title; the row is measured from both fonts.

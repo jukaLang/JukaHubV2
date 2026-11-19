@@ -2,7 +2,8 @@ package main
 
 // usbmtp_test.go — the MTP responder against what a computer sends: names
 // that try to leave the card, a dataset it must read to the end, and one
-// copy-in/rename/delete round trip over a fake USB pipe.
+// copy-in/rename/delete round trip over a fake USB pipe. Also the DHCP
+// server of "Browser over USB" (usbnet_dhcp.go) against malformed requests.
 
 import (
 	"encoding/binary"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // mtpFakeUSB plays the computer: in holds the transfers it sends, writes
@@ -249,5 +251,111 @@ func TestMTPLockedDrainsData(t *testing.T) {
 	}
 	if ids := replies[2].body; len(ids) != 4 || binary.LittleEndian.Uint32(ids) != 0 {
 		t.Fatalf("storage IDs while locked = %v", ids)
+	}
+}
+
+// usbNetTestRequest is a DHCP request of type typ from hardware address
+// 02:00:00:00:00:<mac>, with the extra options given.
+func usbNetTestRequest(typ, mac byte, opts ...byte) []byte {
+	b := make([]byte, usbNetDHCPMinLen)
+	b[0], b[1], b[2] = 1, 1, 6
+	b[4] = 0x42
+	b[28], b[33] = 0x02, mac
+	binary.BigEndian.PutUint32(b[236:], usbNetDHCPCookie)
+	b = append(b, 53, 1, typ)
+	b = append(b, opts...)
+	return append(b, 255)
+}
+
+// usbNetTestOptions reads a reply's options; a router or DNS server in it
+// fails the test, since the computer must keep its own internet route.
+func usbNetTestOptions(t *testing.T, reply []byte) map[byte][]byte {
+	t.Helper()
+	if len(reply) < usbNetDHCPMinLen || reply[0] != 2 || binary.BigEndian.Uint32(reply[236:240]) != usbNetDHCPCookie {
+		t.Fatalf("not a DHCP reply: % x", reply)
+	}
+	opts := map[byte][]byte{}
+	if !usbNetDHCPOptions(reply[usbNetDHCPMinLen:], func(code byte, val []byte) { opts[code] = val }) {
+		t.Fatal("reply options run past the end")
+	}
+	if _, ok := opts[3]; ok {
+		t.Error("reply names a router")
+	}
+	if _, ok := opts[6]; ok {
+		t.Error("reply names DNS servers")
+	}
+	return opts
+}
+
+// The DHCP server on the USB cable's network reads what the computer sends:
+// a malformed request is dropped whole, and answers carry an address and a
+// mask but never a router or DNS server.
+func TestUSBNetDHCP(t *testing.T) {
+	edit := func(b []byte, i int, v byte) []byte {
+		b[i] = v
+		return b
+	}
+	noType := append(usbNetTestRequest(usbNetDHCPDiscover, 1)[:usbNetDHCPMinLen], 255)
+	for name, b := range map[string][]byte{
+		"short":            usbNetTestRequest(usbNetDHCPDiscover, 1)[:200],
+		"reply":            edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 0, 2),
+		"long hw address":  edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 2, 16),
+		"relayed":          edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 24, 10),
+		"cookie":           edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 236, 0),
+		"no hw address":    edit(edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 28, 0), 33, 0),
+		"option overrun":   usbNetTestRequest(usbNetDHCPDiscover, 1, 50, 200, 10),
+		"type length":      edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 241, 2),
+		"unknown type":     edit(usbNetTestRequest(usbNetDHCPDiscover, 1), 242, 9),
+		"requested length": usbNetTestRequest(usbNetDHCPRequest, 1, 50, 3, 10, 73, 73),
+		"no type":          noType,
+		"oversized":        append(usbNetTestRequest(usbNetDHCPDiscover, 1), make([]byte, usbNetDHCPMaxLen)...),
+	} {
+		if _, ok := usbNetDHCPParse(b); ok {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	pool := newUSBNetDHCPPool()
+	now := time.Unix(1800000000, 0)
+	handle := func(b []byte) ([]byte, [4]byte) {
+		t.Helper()
+		req, ok := usbNetDHCPParse(b)
+		if !ok {
+			t.Fatalf("request refused: % x", b)
+		}
+		return pool.handle(req, now)
+	}
+	offer, _ := handle(usbNetTestRequest(usbNetDHCPDiscover, 1))
+	opts := usbNetTestOptions(t, offer)
+	var got [4]byte
+	copy(got[:], offer[16:20])
+	if len(opts[53]) != 1 || opts[53][0] != usbNetDHCPOffer || !usbNetInPool(got) {
+		t.Fatalf("DISCOVER answered %v with %v", opts[53], got)
+	}
+	if mask := opts[1]; len(mask) != 4 || mask[3] != 248 {
+		t.Errorf("mask = %v", mask)
+	}
+	ask := append([]byte{50, 4}, got[:]...)
+	ask = append(ask, 54, 4)
+	ask = append(ask, usbNetDeviceAddr[:]...)
+	ack, _ := handle(usbNetTestRequest(usbNetDHCPRequest, 1, ask...))
+	if o := usbNetTestOptions(t, ack); len(o[53]) != 1 || o[53][0] != usbNetDHCPAck || len(o[51]) != 4 {
+		t.Fatalf("REQUEST answered %v", o)
+	}
+	// Another computer asking for the same address is refused; one that took
+	// another server's offer gets no answer.
+	nak, _ := handle(usbNetTestRequest(usbNetDHCPRequest, 2, ask...))
+	if o := usbNetTestOptions(t, nak); len(o[53]) != 1 || o[53][0] != usbNetDHCPNak {
+		t.Errorf("REQUEST for a held address answered %v", o)
+	}
+	if r, _ := handle(usbNetTestRequest(usbNetDHCPRequest, 3, 50, 4, got[0], got[1], got[2], got[3], 54, 4, 192, 168, 1, 1)); r != nil {
+		t.Error("answered a REQUEST meant for another server")
+	}
+	// INFORM: straight to the computer's own address, with no lease.
+	inform := usbNetTestRequest(usbNetDHCPInform, 1)
+	copy(inform[12:16], got[:])
+	reply, to := handle(inform)
+	if o := usbNetTestOptions(t, reply); to != got || len(o[51]) != 0 || binary.BigEndian.Uint32(reply[16:20]) != 0 {
+		t.Errorf("INFORM answered %v to %v", o, to)
 	}
 }

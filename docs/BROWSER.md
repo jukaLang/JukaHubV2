@@ -1,15 +1,20 @@
 # Browser
 
 The stock TrimUI firmware has no web browser, so links in the app (GitHub
-issues, release notes, documentation) had nowhere to open. **Browser** is a
-small text browser built into JukaHub. It needs no X11, Wayland, WebKit or
-Chromium: it fetches a page over HTTPS, runs the page's own scripts against a
-small document model of its own, extracts the readable text, and draws it with
-the same SDL renderer as the rest of the app.
+issues, release notes, documentation) had nowhere to open. **Browser** opens
+full web pages by default: WPE WebKit on a handheld with WPE Browser installed,
+or the computer's web browser on a PC. When WPE is absent or cannot start,
+JukaHub opens its light reader instead. The reader needs no X11, Wayland,
+WebKit or Chromium; it fetches a page over HTTPS and draws it with JukaHub's
+SDL renderer. **Settings → Browser → Open pages with** selects the light reader
+even when a full browser is available.
 
 Open it from **Apps → Browser** or **Start → Browser**.
 
 ## Full screen and the Select menu
+
+This section describes the light reader used when WPE is unavailable or chosen
+in Settings.
 
 The page fills the screen. There is no address bar, toolbar, chip row, top bar
 or footer around it: on the Smart Pro's 720-line panel those took nearly half of
@@ -70,8 +75,8 @@ they were, and Select still opens the menu. The choice is the
   can switch modes without the keyboard. Full screen, a **Link mode** pill in
   the top-right corner says the same, and the menu's **Link mode** row switches.
 * Go **Back** through visited pages and **Reload** the current one. Back and
-  Forward are served from an in-memory page cache (up to eight pages, about
-  12 MB of text and images), so returning to a page is instant instead of
+  Forward are served from an in-memory page cache (up to eight pages, 32 MiB
+  of text and images), so returning to a page is instant instead of
   re-downloading it. **Reload** always asks the server again and replaces that
   cached copy.
 * Open on the home page: out of the box DuckDuckGo Lite
@@ -94,9 +99,28 @@ they were, and Select still opens the menu. The choice is the
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and absolutely positioned or fixed layers painted
   over the text in `z-index` order. Flex rows wrap at each card's stated
-  width or basis, share spare space according to `flex-grow`, and keep nested
-  rows inside their parent cards. Adjacent images directly under a flex row
-  occupy separate cells. A card with several paragraphs stays one item.
+  width, basis or min-content floor, share spare space according to `flex-grow`,
+  shrink down only to the longest unbreakable word unless `min-width: 0`
+  removes that floor, and keep nested rows inside their parent cards. CSS grids keep their empty trailing columns
+  and rows, reserve explicit `grid-template-rows` heights, and let items span
+  or be placed across either axis (`grid-column: span 2`, `grid-row: 1 / 3`,
+  `grid-row: 2`). Named `grid-template-areas` place cards by name
+  (`grid-area: header`). `minmax()` floors and caps tracks; column
+  `minmax(auto, <length>)` floors use the placed items' measured min-content
+  width, and `repeat(auto-fit/auto-fill, ...)` computes its repetition count
+  from the container measure. `grid-auto-columns` and `grid-auto-rows` size
+  implicit tracks, and `justify-items`/`justify-self` align items across the
+  inline axis as `align-items`/`align-self` do down the block axis.
+  `align-content` distributes or stretches rows inside a taller grid
+  container; `justify-content` does the same for columns. `space-between`,
+  `space-around`, `space-evenly`, `stretch`, start, end and center all keep
+  item alignment inside the resulting row areas.
+  `grid-auto-flow: column` and `dense` fill columns and earlier holes instead
+  of only appending rows. Row and column gaps count
+  inside a multi-track span, and auto-placement walks into free cells around
+  pinned items. Adjacent
+  images directly under a flex row occupy separate cells. A card with several
+  paragraphs stays one item.
 * Read the typography and box properties real sheets actually use: `font-size`,
   the `font` shorthand (`font: italic 700 18px/1.8 Georgia, serif` sets the
   size, weight, style and leading in one declaration; the family is the one part
@@ -105,7 +129,8 @@ they were, and Select still opens the menu. The choice is the
   `text-decoration`, `white-space`, `color`, `background-color`,
   `background-image` gradients, the `padding`/`margin` shorthands plus their
   per-side longhands, the logical spacing forms (`margin-inline`,
-  `padding-block`, `margin-inline-start`, ...), `border` shorthands with their
+  `padding-block`, `margin-inline-start`, ...), two-axis logical inset
+  shorthands (`inset-block`, `inset-inline`), `border` shorthands with their
   widths and colours, `border-radius`, `opacity`, and `list-style-type`
   (`decimal`, letters, roman numerals, `disc`, `circle`, `square`, `none`).
 * Draw each border on the edge the sheet named: `border-left` and
@@ -129,25 +154,35 @@ they were, and Select still opens the menu. The choice is the
   [Cookies](#cookies).
 * Resolve the value layer most sites build their theme on: custom properties
   (`:root { --brand: #0af }`, `var(--brand, #fff)`), `!important`, and `calc()`
-  over `px`, `em` and `rem`. A page whose palette lives in `--custom`
-  properties keeps its colours instead of falling back to the reader's paper.
-* Apply the stylesheet rules that describe a screen. Large inline sheets are
-  read through a bounded 1 MiB prefix of complete rules, so a site that puts
-  all its component CSS in one multi-megabyte `<style>` block still contributes
-  its first usable styles instead of losing that entire block. Every `<style>` block
-  applies to the whole page, as in a browser, together with the linked sheets.
-  `@media` width, height, orientation and aspect-ratio queries are answered for
-  the handheld's own screen — the same size page scripts see — so a site's
-  paired "phone" and "desktop" copies of a block keep exactly one; other
+  over `px`, `em`, `rem` and viewport units. A page whose palette lives in
+  `--custom` properties keeps its colours instead of falling back to the
+  reader's paper.
+* Break long words and URLs when a page uses `overflow-wrap`, `word-wrap`, or
+  `word-break`, and honour `text-overflow: clip` or `ellipsis` for one-line text.
+  `flex-flow` and `place-content` shorthands control card wrapping and alignment.
+* Apply the stylesheet rules that describe a screen. Linked sheets and inline
+  `<style>` blocks share a 24 MiB allowance and follow their order in the page.
+  Large sheets contribute complete rules up to that allowance instead of being
+  discarded. Every `<style>` block applies to the whole page, as in a browser.
+  `@media` width, height, orientation and aspect-ratio queries are answered in
+  CSS pixels after the reader's text scaling. Page scripts see the same size,
+  so a site's paired "phone" and "desktop" copies of a block keep exactly one; other
   feature queries apply. Blocks that only target `print` or `speech` are
   dropped: a print sheet hides the navigation with `display: none` and repaints
   the page for paper, which on screen reads as a page with its menu missing.
   `@supports` and `@layer` blocks are kept, because this reader does implement
   the properties they gate.
+* Read native CSS nesting: a component rule can hold its own child rules,
+  `&` refers to each parent selector, and nested `@media`/`@supports`/
+  `@container`/`@layer` blocks keep their conditions. This is the form modern
+  component CSS is written in, so a card's internal rules no longer disappear
+  with the parent's declarations.
 * Match selectors where it decides what is shown. Attribute selectors
   (`[hidden]`, `[data-theme=dark]`, Vue's `[v-cloak]`, Alpine's `[x-cloak]`) are
   evaluated, and so are the pseudo-classes a static page can answer (`:root`,
-  `:link`, `:checked`, `:disabled`, `:not()`, `:is()`, `:target` …). `:hover` and
+  `:link`, `:checked`, `:disabled`, `:not()`, `:is()`, `:where()`, `:target` …).
+  `:is()` takes the specificity of its most specific argument even when that
+  argument is the one that does not match, while `:where()` adds none. `:hover` and
   `:focus` never hold for styling, but a rule that *reveals* content through
   them (a CSS-only sub-menu or tooltip) still applies, since the handheld has
   no pointer to hover with. Rules for `::before`/`::after` boxes are skipped
@@ -169,8 +204,12 @@ they were, and Select still opens the menu. The choice is the
   follows the outer section: a closed one keeps an open section inside it
   hidden too.
 
-Pages are capped at 8 MiB and 20 seconds; anything past 8 MiB is drawn partially
-from what arrived, with a note at the top of the page.
+The HTML allowance scales with free memory from 8 to 64 MiB, with a matching
+20 to 76-second download timeout. Anything past the chosen allowance is drawn
+partially with a note at the top. The parsed page is shown before its image
+pass finishes: each picture appears in place as its bytes arrive. The image
+pass considers up to 256 page images and keeps 16 to 64 MiB of encoded image
+data, chosen from available memory, with an 8 MiB limit for one image.
 
 ### Redirects
 
@@ -284,6 +323,13 @@ content and fails to rebuild it should not cost you the article. When the pass
 cannot start at all, the old `document.write`-only pass runs instead, so a page
 that defeats the new engine still shows what it showed before.
 
+Browser requests carry a current Chrome identity. Device client hints stay
+opt-in: after a secure origin sends `Accept-CH` for `Sec-CH-Viewport-Width`,
+`Sec-CH-Viewport-Height` or `Sec-CH-DPR`, later requests to that origin send
+the negotiated values. The viewport width and height are the same CSS-pixel
+size the page's media queries and `innerWidth`/`innerHeight` use, so a server
+and the layout do not disagree.
+
 ### What a page cannot do
 
 The reader runs other people's code on whatever network the handheld is on, so
@@ -359,6 +405,11 @@ web** row in Home search (its second line names the engine too), and the
 | Mojeek | `www.mojeek.com/search?q=` | Results |
 | Wikipedia | `en.m.wikipedia.org/w/index.php?search=` | Opens the article when a title matches |
 | Custom | the address you type | Whatever that site serves without scripts |
+
+Wikipedia redirects its mobile address to `en.wikipedia.org`. The reader keeps
+a mobile browser identity for that site so the redirect still returns its
+mobile layout; closed navigation drawers stay out of the page's reading flow.
+Its main-page cards use the single-column breakpoint at handheld text sizes.
 
 Search engines change what they send a small browser without notice. JukaHub
 recognizes Startpage's current verification page and offers Brave Search or a
@@ -458,7 +509,10 @@ the text reader can paint. On the Smart Pro, Brick and Brick Pro there is one �
 WebKit for these handhelds with GPU rendering, hardware video and a gamepad
 pointer. JukaHub does not try to be it; it hands pages to it.
 
-* **Open in WPE Browser** in the Select menu opens the page on screen there.
+* Browser entries and links elsewhere in JukaHub open in WPE Browser by
+  default once it is installed.
+  **Open in WPE Browser** in the light reader's Select menu also opens the page
+  on screen there.
   JukaHub steps aside the way it does for a game: WPE Browser has the screen and
   the buttons until you quit it, and then you are back in the reader on the same
   page. Before it starts, JukaHub lets go of everything it can rebuild (cached
@@ -499,8 +553,9 @@ a game) is running. The installed release is recorded in
 way; it has no recorded release, so JukaHub offers no update for it until you
 update it once from Settings.
 
-On a PC none of this is shown: the menu row is **Open in web browser**, which
-hands the page to the desktop's own browser.
+On a PC, Browser entries open the desktop's own browser by default. With the
+light reader selected, its menu row is **Open in web browser**, which hands the
+current page to the desktop browser.
 
 ## Ads and trackers
 
@@ -888,18 +943,21 @@ cannot upload a file or complete sign-ins that depend on browser features
 outside its page model (see
 [Forms](#forms)). Cookies survive a relaunch (see [Cookies](#cookies)); a session
 is only saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
-(`calc(100% - 20px)`) is left unresolved, and `vh`/`vw` say nothing about a
-reader with no window, so they are ignored rather than guessed. `float`,
-`grid` and `columns` still lay out as plain blocks: the reader stacks content
-one column deep, so a two-up card grid reads as a list. `letter-spacing` is
+(`calc(100% - 20px)`) is left unresolved; viewport units (`vw`, `vh`, and the
+modern `svh`/`dvh`/`lvh` forms) resolve against the reader's own screen, so a
+full-height hero does not collapse to its text. `columns` still lays out as a
+plain block: the reader stacks content one column deep. `letter-spacing` is
 ignored (the text is drawn as measured words, not per-glyph advances), a
 diagonal gradient is drawn on its dominant axis instead of at its real angle,
 and inline `<span>`/`<a>` backgrounds stay flat fills rather than ramps.
-`@container` queries are skipped rather than approximated: which container an
-`@container` rule is asking about is exactly the structure the reader does not
-keep, so applying those rules everywhere would restyle the whole page. A font
-family is kept only as far as "the app's one face", so a monospace `font-family`
-does not make a code block monospaced.
+`@container` queries are answered against the nearest modelled size container;
+when a page's container structure depends on layout the reader does not model,
+it can still pick the wrong branch. Column flow grows implicit rows when the
+block axis is indefinite, and `auto-fit` removes the gaps belonging to
+tracks it collapses. A non-rectangular `grid-template-areas` matrix still uses
+the bounding box of its cells. A font family is kept only as far as "the
+app's one face", so a monospace `font-family` does not make a code block
+monospaced.
 GitHub issue pages and
 release pages work, and so do most pages that render their content with
 JavaScript; a page whose scripts need more than the reader has (a canvas, a live

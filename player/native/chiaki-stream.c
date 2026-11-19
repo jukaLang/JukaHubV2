@@ -14,7 +14,11 @@
  *
  * Signals: SIGINT, SIGTERM, SIGHUP and SIGQUIT end the stream normally (status
  * file included), SIGPIPE is ignored, and a crash first switches the rumble
- * motor off (stream_sys.c ss_motor_crash_guard). */
+ * motor off (stream_sys.c ss_motor_crash_guard).
+ *
+ * A stream the handheld's sleep (the power key) or a Wi-Fi drop cut off is
+ * connected again by itself, and given up after a minute ("sleep and
+ * reconnect" below). */
 #include <SDL2/SDL.h>
 #include <chiaki/controller.h>
 #include <chiaki/ffmpegdecoder.h>
@@ -37,6 +41,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "stream_input.h"
 #include "stream_osd.h"
@@ -81,6 +86,17 @@ extern __typeof__(SDL_GameControllerGetSensorDataRate) SDL_GameControllerGetSens
 #define ERROR_CARD_MS 8000u
 #define ERROR_CARD_GRACE_MS 400u
 #define BATTERY_POLL_MS 30000u
+/* Sleep and reconnect (the section of that name). */
+#define SLEEP_GAP_MS 3000u           /* the loop missed this much time: the handheld slept or this helper was stopped */
+#define WAKE_SETTLE_MS 1500u         /* pictures this soon after a wake may be old ones still queued */
+#define WAKE_CHECK_MS 5000u          /* after a wake the stream has this long to show it is alive */
+#define WAKE_SUSPECT_MS 60000u       /* an error ending this soon after a wake is the sleep's doing */
+#define STALL_MS 15000u              /* no picture and no sound for this long: the connection is gone */
+#define STALL_QUIT_MS 5000u          /* an error ending after this much silence is the network's */
+#define RECONNECT_BUDGET_MS 60000u   /* then the stream is given up */
+#define RECONNECT_ATTEMPT_MS 20000u  /* one try, to its first picture */
+#define RECONNECT_RETRY_MS 3000u     /* between tries */
+#define RECONNECT_NET_POLL_MS 500u   /* while Wi-Fi is still coming back */
 
 _Static_assert(sizeof(((ChiakiConnectInfo *)0)->regist_key) == SS_REGIST_KEY_SIZE, "regist_key size");
 _Static_assert(sizeof(((ChiakiConnectInfo *)0)->morning) == SS_MORNING_SIZE, "morning size");
@@ -219,6 +235,28 @@ typedef struct {
     uint32_t battery_at;
     int battery_warned;
 
+    /* sleep and reconnect */
+    ChiakiConnectInfo connect_info; /* kept for reconnecting; cleanup wipes its secrets */
+    uint64_t wall_ms;               /* CLOCK_BOOTTIME at the last loop pass */
+    uint32_t last_frame_at;
+    uint32_t last_audio_at;
+    atomic_bool audio_seen;         /* sound came since the last loop pass */
+    uint32_t woke_at;               /* when the last pause was noticed (0: none) */
+    bool wake_check;                /* the stream has yet to show it lived through the pause */
+    bool reconnecting;
+    int reconnect_attempts;
+    uint32_t reconnect_started;
+    uint32_t reconnect_next_at;
+    uint32_t attempt_started;
+    bool attempt_connected;         /* this session (first or a reconnect) said CONNECTED */
+    char reconnect_cause[240];
+    char reconnect_reason[200];     /* why the last try failed */
+    bool pin_sent;                  /* a passcode went to this session */
+    uint8_t sent_pin[4];
+    bool good_pin_set;              /* a passcode the console took, entered again on a reconnect */
+    uint8_t good_pin[4];
+    bool pin_reused;                /* this session's saved_pin is good_pin */
+
     /* the outcome, for the status file */
     int rc;
     const char *result;
@@ -353,6 +391,7 @@ static void audio_settings(uint32_t channels, uint32_t rate, void *user)
 static void audio_frame(int16_t *samples, size_t samples_count, void *user)
 {
     StreamApp *app = user;
+    if(samples_count) atomic_store(&app->audio_seen, true); /* the console is still there (watch_stream) */
     if(!app->audio_device || !samples_count) return;
     if(SDL_GetQueuedAudioSize(app->audio_device) > 48000) SDL_ClearQueuedAudio(app->audio_device);
     size_t count = samples_count * (app->audio_channels ? app->audio_channels : 2);
@@ -706,7 +745,8 @@ static StreamPad *pad_find(StreamApp *app, SDL_JoystickID id)
 }
 
 /* Test seams (tests/test_stream_e2e.c): the root pad identification reads sysfs
- * under ("" = the device's own), and a stand-in for SDL_JoystickPath. */
+ * under, and the reconnect its proc/net/route ("" = the device's own), and a
+ * stand-in for SDL_JoystickPath. */
 const char *stream_sysfs_root = "";
 const char *(*stream_joystick_path_hook)(SDL_Joystick *joystick) = NULL;
 
@@ -1056,7 +1096,7 @@ static void menu_change(StreamApp *app, int delta, uint32_t now)
 
 static void menu_open(StreamApp *app, uint32_t now)
 {
-    if(app->pin_open || app->show_error) return;
+    if(app->pin_open || app->show_error || app->reconnecting) return;
     app->menu_open = true;
     app->menu_controls = false;
     app->menu_cursor = ROW_RESUME;
@@ -1126,6 +1166,8 @@ static void pin_submit(StreamApp *app)
     uint8_t pin[4];
     for(int i = 0; i < 4; i++) pin[i] = (uint8_t)app->pin_digits[i];
     if(app->session_initialized) chiaki_session_set_login_pin(&app->session, pin, sizeof(pin));
+    memcpy(app->sent_pin, pin, sizeof(app->sent_pin));
+    app->pin_sent = true;
     ss_wipe(pin, sizeof(pin));
     app->pin_checking = true;
     app->pin_wrong = false;
@@ -1333,6 +1375,10 @@ static void handle_input_events(StreamApp *app, uint32_t now)
     }
 }
 
+static void reconnect_begin(StreamApp *app, uint32_t now, const char *cause);
+static bool quit_after_pause(const StreamApp *app, uint32_t now);
+static void note_pause(StreamApp *app, uint32_t now);
+
 static void connect_message(StreamApp *app, char *out, size_t size)
 {
     const SsConfig *config = app->config;
@@ -1346,9 +1392,21 @@ static void connect_message(StreamApp *app, char *out, size_t size)
 
 static void handle_session(StreamApp *app, uint32_t now)
 {
-    if(!app->connected_seen && atomic_load(&app->connected)) {
-        app->connected_seen = true;
-        app->connected_at = now;
+    if(!app->attempt_connected && atomic_load(&app->connected)) {
+        /* Every session, the first and each reconnect: the passcode that got
+         * it through is the one a reconnect enters again. */
+        app->attempt_connected = true;
+        if(app->pin_sent) {
+            memcpy(app->good_pin, app->sent_pin, sizeof(app->good_pin));
+            app->good_pin_set = true;
+        }
+        if(!app->connected_seen) {
+            app->connected_seen = true;
+            app->connected_at = now;
+        }
+        /* A passcode typed on screen may have taken longer than a try: the
+         * try's time for its first picture starts now. */
+        if(app->reconnecting) app->attempt_started = now;
         if(app->pin_open) {
             app->pin_open = false;
             update_modal(app, now);
@@ -1362,10 +1420,15 @@ static void handle_session(StreamApp *app, uint32_t now)
             uint8_t pin[4];
             app->saved_pin_tried = true;
             memcpy(pin, app->saved_pin, 4);
-            ss_wipe(app->saved_pin, sizeof(app->saved_pin)); /* tried once, never again */
+            /* Tried once, never again — unless the console took it, and asks
+             * again on a reconnect (reconnect_tick). */
+            ss_wipe(app->saved_pin, sizeof(app->saved_pin));
             if(app->session_initialized) chiaki_session_set_login_pin(&app->session, pin, sizeof(pin));
+            memcpy(app->sent_pin, pin, sizeof(app->sent_pin));
+            app->pin_sent = true;
             ss_wipe(pin, sizeof(pin));
-            fprintf(stdout, "[native] entered the saved login passcode\n");
+            fprintf(stdout, app->pin_reused ? "[native] entered the login passcode again for the reconnect\n"
+                                            : "[native] entered the saved login passcode\n");
             fflush(stdout);
             set_status(app, "Entering the saved login passcode");
         } else {
@@ -1378,15 +1441,23 @@ static void handle_session(StreamApp *app, uint32_t now)
             }
             app->pin_checking = false;
             app->pin_wrong = incorrect || app->saved_pin_tried;
-            if(app->saved_pin_tried) app->saved_pin_rejected = true;
+            if(app->saved_pin_tried && !app->pin_reused) app->saved_pin_rejected = true;
             set_status(app, "Waiting for the login passcode");
             update_modal(app, now);
         }
     }
     if(atomic_exchange(&app->rumble_dirty, false)) apply_rumble(app, now);
-    if(atomic_load(&app->quit_received) && !app->quit_handled) {
+    /* While reconnecting, reconnect_tick reads each try's ending itself. */
+    if(atomic_load(&app->quit_received) && !app->quit_handled && !app->reconnecting) {
         app->quit_handled = true;
         bool error = atomic_load(&app->quit_error);
+        note_pause(app, now); /* a sleep since this pass began counts too */
+        if(!app->result && error && app->first_frame_at && quit_after_pause(app, now)) {
+            char cause[240];
+            textf(cause, sizeof(cause), "The connection dropped (%s)", app->quit_reason);
+            reconnect_begin(app, now, cause);
+            return;
+        }
         if(!app->result) {
             char text[300];
             if(!app->connected_seen && !app->first_frame_at && app->pin_prompted) {
@@ -1575,6 +1646,13 @@ static void draw_overlays(StreamApp *app, uint32_t now)
 {
     Osd *osd = &app->osd;
     if(!app->osd_ready) return;
+    if(app->reconnecting && !app->pin_open) {
+        char title[160];
+        textf(title, sizeof(title), "Reconnecting to %s", app->config->name);
+        OsdConnectView view = {title, app->reconnect_cause, app->status_line, (now - app->reconnect_started) / 1000u, now,
+                               "Hold START + SELECT to stop"};
+        osd_draw_connect(osd, &view);
+    }
     if(!app->first_frame_at && !app->pin_open) {
         char title[160], detail[300];
         textf(title, sizeof(title), "Connecting to %s", app->config->name);
@@ -1584,7 +1662,7 @@ static void draw_overlays(StreamApp *app, uint32_t now)
                                "Hold START + SELECT to cancel"};
         osd_draw_connect(osd, &view);
     }
-    if(app->first_frame_at && app->stats_visible) osd_draw_stats(osd, app->stats_line);
+    if(app->first_frame_at && app->stats_visible && !app->reconnecting) osd_draw_stats(osd, app->stats_line);
     uint16_t tx, ty;
     if(si_synthetic_touch(&app->input, now, &tx, &ty))
         osd_draw_touch(osd, tx, ty, app->input.touch_max_x, app->input.touch_max_y);
@@ -1632,7 +1710,7 @@ static void present(StreamApp *app, uint32_t now)
 static bool animating(const StreamApp *app, uint32_t now)
 {
     uint16_t x, y;
-    return !app->first_frame_at || app->toast_until || app->hint_until ||
+    return !app->first_frame_at || app->reconnecting || app->toast_until || app->hint_until ||
            si_quit_progress(&app->input, now) > 0.0f || si_synthetic_touch(&app->input, now, &x, &y);
 }
 
@@ -1702,6 +1780,304 @@ static void stop_session(StreamApp *app)
     app->session_started = false;
 }
 
+/* ---- sleep and reconnect ----
+ *
+ * JukaHub is not running during a stream, so the power key is the firmware's:
+ * a short press suspends the handheld (the stock image switches Wi-Fi off for
+ * the sleep too) or freezes the program on the screen. Either way the console
+ * hears nothing for that long and drops the session, and on waking this helper
+ * used to sit on the last picture with nothing more coming. Now:
+ *
+ *   - a pause is seen at the top of every loop pass (note_pause): CLOCK_BOOTTIME,
+ *     which keeps counting through a suspend (and through a freeze, like any
+ *     clock), moved SLEEP_GAP_MS or more since the last pass;
+ *   - after a pause the stream has WAKE_CHECK_MS to show it lived through it — a
+ *     picture or sound at least WAKE_SETTLE_MS after the wake, as the first ones
+ *     may be old ones still queued — else it reconnects (watch_stream);
+ *   - a stream with neither picture nor sound for STALL_MS reconnects too (Wi-Fi
+ *     gone without a sleep);
+ *   - an error ending soon after a pause, or after STALL_QUIT_MS of silence,
+ *     reconnects instead of ending (handle_session); one while the picture
+ *     still flowed is the console's own decision (rest mode, another device
+ *     took over) and ends the stream as before;
+ *   - reconnecting closes the old session and opens new ones with the same
+ *     pairing until a picture comes: no try while there is no default route
+ *     (Wi-Fi still coming back), RECONNECT_ATTEMPT_MS per try, a passcode the
+ *     console took entered again by itself, for RECONNECT_BUDGET_MS in all.
+ *     Then it gives up: the error card, rc 11 "connection_lost", and JukaHub
+ *     comes back. Start + Select held stops it at any time. */
+
+/* Milliseconds on a clock that keeps counting while the handheld is suspended. */
+static uint64_t wall_ms(void)
+{
+    struct timespec ts;
+#ifdef CLOCK_BOOTTIME
+    if(clock_gettime(CLOCK_BOOTTIME, &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+#endif
+    if(clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
+        return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+    return 0;
+}
+
+/* When the console was last heard from: the later of the last picture and the
+ * last sound. */
+static uint32_t media_at(const StreamApp *app)
+{
+    uint32_t at = app->last_frame_at;
+    if(app->last_audio_at && (!at || (int32_t)(app->last_audio_at - at) > 0)) at = app->last_audio_at;
+    return at;
+}
+
+/* An error ending a pause or a dead connection explains (handle_session). */
+static bool quit_after_pause(const StreamApp *app, uint32_t now)
+{
+    if(app->wake_check || (app->woke_at && now - app->woke_at < WAKE_SUSPECT_MS)) return true;
+    return now - media_at(app) >= STALL_QUIT_MS;
+}
+
+/* Opens a session with the kept connect info and starts it: the first time,
+ * and again for each reconnect. *stage says what failed (7 init, 8 start); an
+ * initialised session is the caller's to close. */
+static ChiakiErrorCode session_open(StreamApp *app, int *stage)
+{
+    const SsConfig *config = app->config;
+    ChiakiErrorCode error = chiaki_session_init(&app->session, &app->connect_info, &app->log);
+    /* Opening blocks this thread (the name lookup can take seconds): that wait
+     * is no pause of the handheld's (note_pause). */
+    app->wall_ms = wall_ms();
+    if(error != CHIAKI_ERR_SUCCESS) {
+        *stage = 7;
+        return error;
+    }
+    if(!config->ps5 && (config->target == 800 || config->target == 900 || config->target == 1000)) {
+        app->session.target = (ChiakiTarget)config->target;
+        fprintf(stdout, "[native] session target=%u rp_version=%s\n",
+                config->target,
+                config->target == 800 ? "8.0" :
+                config->target == 900 ? "9.0" : "10.0");
+        fflush(stdout);
+    }
+    app->session_initialized = true;
+    ChiakiAudioSink audio_sink;
+    chiaki_opus_decoder_get_sink(&app->opus, &audio_sink);
+    chiaki_session_set_audio_sink(&app->session, &audio_sink);
+    chiaki_session_set_video_sample_cb(&app->session, chiaki_ffmpeg_decoder_video_sample_cb, &app->decoder);
+    chiaki_session_set_event_cb(&app->session, session_event, app);
+    chiaki_controller_state_set_idle(&app->controller_state);
+    for(int i = 0; i < SI_MAX_TOUCHES; i++) {
+        app->touch_active[i] = false;
+        app->touch_ids[i] = -1;
+    }
+    app->output_valid = false; /* a new session starts idle: the next pass sends the whole pad */
+    error = chiaki_session_start(&app->session);
+    app->wall_ms = wall_ms();
+    if(error != CHIAKI_ERR_SUCCESS) {
+        *stage = 8;
+        return error;
+    }
+    app->session_started = true;
+    return CHIAKI_ERR_SUCCESS;
+}
+
+/* Stops and frees a session and forgets what it said, so the next one starts
+ * clean. No chiaki thread runs after it. */
+static void session_close(StreamApp *app, uint32_t now)
+{
+    stop_session(app);
+    if(app->session_initialized) {
+        chiaki_session_fini(&app->session);
+        ss_wipe(&app->session, sizeof(app->session)); /* its copy of the pairing keys */
+    }
+    app->session_initialized = false;
+    app->wall_ms = wall_ms(); /* the join's wait is no pause either */
+    /* No chiaki thread runs now: nothing may keep buzzing with no console to
+     * stop it, and no picture of the old session is waiting. */
+    atomic_store(&app->rumble_left, 0);
+    atomic_store(&app->rumble_right, 0);
+    atomic_store(&app->rumble_dirty, false);
+    apply_rumble(app, now);
+    atomic_store(&app->frame_ready, false);
+    atomic_store(&app->connected, false);
+    atomic_store(&app->pin_requested, false);
+    atomic_store(&app->quit_received, false);
+    atomic_store(&app->quit_error, false);
+    app->quit_handled = false;
+    app->attempt_connected = false;
+    app->pin_sent = false;
+    ss_wipe(app->sent_pin, sizeof(app->sent_pin));
+    app->pin_checking = false;
+    if(app->pin_open) {
+        app->pin_open = false;
+        update_modal(app, now);
+    }
+}
+
+/* The top of every loop pass: did time pass without the helper? */
+static void note_pause(StreamApp *app, uint32_t now)
+{
+    uint64_t wall = wall_ms();
+    uint64_t gap = app->wall_ms && wall > app->wall_ms ? wall - app->wall_ms : 0;
+    app->wall_ms = wall;
+    if(gap < SLEEP_GAP_MS) return;
+    fprintf(stdout, "[native] nothing ran for %llu s (the handheld slept, or this helper was stopped)\n",
+            (unsigned long long)(gap / 1000u));
+    fflush(stdout);
+    app->woke_at = now ? now : 1;
+    if(app->reconnecting) {
+        /* The sleep cut the try under way short too, and the minute starts
+         * again: that try is given up and the next follows. */
+        app->reconnect_started = now;
+        if(app->session_started) app->attempt_started = now - RECONNECT_ATTEMPT_MS;
+        return;
+    }
+    if(app->first_frame_at && !app->result) {
+        app->wake_check = true;
+        set_status(app, "Checking the connection");
+    }
+}
+
+/* Leaves the dropped session for new ones (reconnect_tick). */
+static void reconnect_begin(StreamApp *app, uint32_t now, const char *cause)
+{
+    fprintf(stdout, "[native] reconnecting to %s: %s\n", app->config->name, cause);
+    fflush(stdout);
+    app->reconnecting = true;
+    app->wake_check = false;
+    app->reconnect_started = now;
+    app->reconnect_next_at = now;
+    app->reconnect_attempts = 0;
+    app->reconnect_reason[0] = '\0';
+    textf(app->reconnect_cause, sizeof(app->reconnect_cause), "%s", cause);
+    if(app->menu_open) menu_close(app, now);
+    set_status(app, "Closing the dropped connection");
+    present(app, now); /* the card is up before the join below, which can take a moment */
+    session_close(app, now); /* the rumble stops there */
+    if(app->audio_device) SDL_ClearQueuedAudio(app->audio_device);
+}
+
+/* Out of tries: the stream ends with the error card. */
+static void reconnect_give_up(StreamApp *app)
+{
+    char text[300];
+    bool net = ss_net_up(stream_sysfs_root);
+    if(!net)
+        textf(text, sizeof(text), "The handheld's Wi-Fi did not come back within %u s, so the stream from %s could "
+              "not go on.", RECONNECT_BUDGET_MS / 1000u, app->config->name);
+    else if(app->reconnect_reason[0])
+        textf(text, sizeof(text), "The connection to %s dropped and %d tries to connect again failed (%s). Check that it "
+              "is still on, then start Remote Play again.", app->config->name, app->reconnect_attempts,
+              app->reconnect_reason);
+    else
+        textf(text, sizeof(text), "The connection to %s dropped and could not be made again. Check that it is still "
+              "on, then start Remote Play again.", app->config->name);
+    fprintf(stdout, "[native] giving up reconnecting: %s\n", text);
+    fflush(stdout);
+    /* No chiaki thread runs (session_close): the status file's reason is set here. */
+    textf(app->quit_reason, sizeof(app->quit_reason), "%s", net ? app->reconnect_reason : "Wi-Fi did not come back");
+    app->reconnecting = false;
+    fail_with_card(app, 11, "connection_lost", "Couldn't reconnect", text);
+    atomic_store(&app->running, false);
+}
+
+/* Every loop pass while reconnecting: watch the try under way, or start the
+ * next one. */
+static void reconnect_tick(StreamApp *app, uint32_t now, bool new_frame)
+{
+    if(!app->reconnecting || !atomic_load(&app->running)) return;
+    if(app->session_started) {
+        if(new_frame && app->attempt_connected) {
+            fprintf(stdout, "[native] reconnected to %s after %u s (try %d)\n", app->config->name,
+                    (now - app->reconnect_started) / 1000u, app->reconnect_attempts);
+            fflush(stdout);
+            app->reconnecting = false;
+            app->woke_at = 0;
+            app->last_frame_at = now;
+            set_status(app, "Streaming");
+            char text[140];
+            textf(text, sizeof(text), "Reconnected to %s", app->config->name);
+            toast(app, text, OSD_TOAST_GOOD, TOAST_SHORT_MS);
+            return;
+        }
+        bool ended = atomic_load(&app->quit_received);
+        bool timed_out = !app->pin_open && now - app->attempt_started >= RECONNECT_ATTEMPT_MS;
+        if(!ended && !timed_out) return;
+        if(ended) textf(app->reconnect_reason, sizeof(app->reconnect_reason), "%s", app->quit_reason);
+        else textf(app->reconnect_reason, sizeof(app->reconnect_reason), "no picture within %u s",
+                   RECONNECT_ATTEMPT_MS / 1000u);
+        fprintf(stdout, "[native] reconnect try %d failed: %s\n", app->reconnect_attempts, app->reconnect_reason);
+        fflush(stdout);
+        session_close(app, now);
+        app->reconnect_next_at = now + RECONNECT_RETRY_MS;
+    }
+    if(now - app->reconnect_started >= RECONNECT_BUDGET_MS) {
+        reconnect_give_up(app);
+        return;
+    }
+    if((int32_t)(now - app->reconnect_next_at) < 0) return;
+    if(!ss_net_up(stream_sysfs_root)) {
+        set_status(app, "Waiting for Wi-Fi");
+        app->reconnect_next_at = now + RECONNECT_NET_POLL_MS;
+        return;
+    }
+    app->reconnect_attempts++;
+    char status[64];
+    if(app->reconnect_attempts == 1) textf(status, sizeof(status), "Connecting");
+    else textf(status, sizeof(status), "Connecting, try %d", app->reconnect_attempts);
+    set_status(app, status);
+    /* The passcode the console took before goes in again if it asks; a typed
+     * one is asked for on screen as at the start. */
+    app->saved_pin_tried = false;
+    app->pin_reused = app->good_pin_set;
+    if(app->good_pin_set) {
+        memcpy(app->saved_pin, app->good_pin, sizeof(app->good_pin));
+        app->saved_pin[sizeof(app->good_pin)] = '\0';
+    }
+    fprintf(stdout, "[native] reconnect try %d to %s\n", app->reconnect_attempts, app->config->host);
+    fflush(stdout);
+    present(app, now); /* "Connecting" is up before the open, which can block for a while */
+    int stage = 0;
+    ChiakiErrorCode error = session_open(app, &stage);
+    now = SDL_GetTicks();
+    if(error != CHIAKI_ERR_SUCCESS) {
+        textf(app->reconnect_reason, sizeof(app->reconnect_reason), "%s", chiaki_error_string(error));
+        fprintf(stdout, "[native] reconnect try %d could not start: %s\n", app->reconnect_attempts, app->reconnect_reason);
+        fflush(stdout);
+        session_close(app, now);
+        app->reconnect_next_at = now + RECONNECT_RETRY_MS;
+        return;
+    }
+    app->attempt_started = now;
+}
+
+/* After the picture is updated: the pause check and the stall watch. */
+static void watch_stream(StreamApp *app, uint32_t now, bool new_frame)
+{
+    bool new_sound = atomic_exchange(&app->audio_seen, false);
+    if(new_frame) app->last_frame_at = now;
+    if(new_sound) app->last_audio_at = now;
+    if(!app->first_frame_at || app->reconnecting || app->pin_open || app->result || !atomic_load(&app->running)) return;
+    if(app->wake_check) {
+        if((new_frame || new_sound) && now - app->woke_at >= WAKE_SETTLE_MS) {
+            /* It lived through the pause: an ending from here on is judged
+             * as if there had been none. */
+            app->wake_check = false;
+            app->woke_at = 0;
+            set_status(app, "Streaming");
+            fprintf(stdout, "[native] the stream carried on after the pause\n");
+            fflush(stdout);
+        } else if(now - app->woke_at >= WAKE_CHECK_MS) {
+            reconnect_begin(app, now, "The handheld was asleep and the stream stopped");
+        }
+        return;
+    }
+    if(now - media_at(app) >= STALL_MS) {
+        char cause[96];
+        textf(cause, sizeof(cause), "No picture or sound for %u s", STALL_MS / 1000u);
+        reconnect_begin(app, now, cause);
+    }
+}
+
 /* ---- setup ---- */
 
 static bool init_sdl(StreamApp *app)
@@ -1763,11 +2139,16 @@ static void cleanup(StreamApp *app)
     stop_session(app);
     if(app->session_initialized) chiaki_session_fini(&app->session);
     app->session_initialized = false;
+    ss_wipe(&app->session, sizeof(app->session)); /* chiaki's copy of the pairing keys */
     if(app->opus_initialized) chiaki_opus_decoder_fini(&app->opus);
     if(app->decoder_initialized) chiaki_ffmpeg_decoder_fini(&app->decoder);
     ss_motor_off(&app->motor);
     ss_wipe(app->saved_pin, sizeof(app->saved_pin));
     ss_wipe(app->pin_digits, sizeof(app->pin_digits));
+    ss_wipe(app->sent_pin, sizeof(app->sent_pin));
+    ss_wipe(app->good_pin, sizeof(app->good_pin));
+    ss_wipe(app->connect_info.regist_key, sizeof(app->connect_info.regist_key));
+    ss_wipe(app->connect_info.morning, sizeof(app->connect_info.morning));
     if(app->audio_device) SDL_CloseAudioDevice(app->audio_device);
     if(app->converted) av_frame_free(&app->converted);
     if(app->sws) sws_freeContext(app->sws);
@@ -1865,6 +2246,7 @@ int main(int argc, char **argv)
     atomic_init(&app->rumble_dirty, false);
     atomic_init(&app->fec_failures, 0);
     atomic_init(&app->suppressed_logs, 0);
+    atomic_init(&app->audio_seen, false);
     app->verbose_logs = config.verbose;
     app->rumble_enabled = config.rumble;
     app->battery_warned = 101;
@@ -1934,20 +2316,22 @@ int main(int argc, char **argv)
     app->opus_initialized = true;
     chiaki_opus_decoder_set_cb(&app->opus, audio_settings, audio_frame, app);
 
-    ChiakiConnectInfo connect_info;
-    memset(&connect_info, 0, sizeof(connect_info));
-    connect_info.ps5 = config.ps5;
-    connect_info.host = config.host;
-    memcpy(connect_info.regist_key, config.regist_key, sizeof(connect_info.regist_key));
-    memcpy(connect_info.morning, config.morning, sizeof(connect_info.morning));
-    connect_info.video_profile.width = config.width;
-    connect_info.video_profile.height = config.height;
-    connect_info.video_profile.max_fps = config.fps;
-    connect_info.video_profile.bitrate = config.bitrate;
-    connect_info.video_profile.codec = codec;
-    connect_info.video_profile_auto_downgrade = true;
-    connect_info.packet_loss_max = 0.1;
-    connect_info.enable_idr_on_fec_failure = true;
+    /* Kept in the app for reconnecting (reconnect_tick): the pairing secrets
+     * live in this one copy until cleanup wipes it. */
+    ChiakiConnectInfo *connect_info = &app->connect_info;
+    memset(connect_info, 0, sizeof(*connect_info));
+    connect_info->ps5 = config.ps5;
+    connect_info->host = config.host;
+    memcpy(connect_info->regist_key, config.regist_key, sizeof(connect_info->regist_key));
+    memcpy(connect_info->morning, config.morning, sizeof(connect_info->morning));
+    connect_info->video_profile.width = config.width;
+    connect_info->video_profile.height = config.height;
+    connect_info->video_profile.max_fps = config.fps;
+    connect_info->video_profile.bitrate = config.bitrate;
+    connect_info->video_profile.codec = codec;
+    connect_info->video_profile_auto_downgrade = true;
+    connect_info->packet_loss_max = 0.1;
+    connect_info->enable_idr_on_fec_failure = true;
 
     fprintf(stdout, "[native] starting stream host=%s remote=%d profile=%ux%u@%u %ukbps codec=%s target=%u rp_version=%s\n",
             config.host, config.remote, config.width, config.height, config.fps, config.bitrate,
@@ -1959,10 +2343,9 @@ int main(int argc, char **argv)
     ss_wipe(config.regist_key, sizeof(config.regist_key));
     ss_wipe(config.morning, sizeof(config.morning));
 
-    error = chiaki_session_init(&app->session, &connect_info, &app->log);
-    ss_wipe(connect_info.regist_key, sizeof(connect_info.regist_key));
-    ss_wipe(connect_info.morning, sizeof(connect_info.morning));
-    if(error != CHIAKI_ERR_SUCCESS) {
+    int stage = 0;
+    error = session_open(app, &stage);
+    if(error != CHIAKI_ERR_SUCCESS && stage == 7) {
         char text[200];
         fprintf(stderr, "[native] session init failed: %s\n", chiaki_error_string(error));
         textf(text, sizeof(text), "Remote Play could not start: %s.", chiaki_error_string(error));
@@ -1972,23 +2355,6 @@ int main(int argc, char **argv)
         cleanup(app);
         return 7;
     }
-    if(!config.ps5 && (config.target == 800 || config.target == 900 || config.target == 1000)) {
-        app->session.target = (ChiakiTarget)config.target;
-        fprintf(stdout, "[native] session target=%u rp_version=%s\n",
-                config.target,
-                config.target == 800 ? "8.0" :
-                config.target == 900 ? "9.0" : "10.0");
-        fflush(stdout);
-    }
-    app->session_initialized = true;
-    ChiakiAudioSink audio_sink;
-    chiaki_opus_decoder_get_sink(&app->opus, &audio_sink);
-    chiaki_session_set_audio_sink(&app->session, &audio_sink);
-    chiaki_session_set_video_sample_cb(&app->session, chiaki_ffmpeg_decoder_video_sample_cb, &app->decoder);
-    chiaki_session_set_event_cb(&app->session, session_event, app);
-    chiaki_controller_state_set_idle(&app->controller_state);
-
-    error = chiaki_session_start(&app->session);
     if(error != CHIAKI_ERR_SUCCESS) {
         char text[200];
         fprintf(stderr, "[native] session start failed: %s\n", chiaki_error_string(error));
@@ -1999,7 +2365,6 @@ int main(int argc, char **argv)
         cleanup(app);
         return 8;
     }
-    app->session_started = true;
     battery_tick(app, SDL_GetTicks());
 
     bool sdl_touchpad = false;
@@ -2014,6 +2379,7 @@ int main(int argc, char **argv)
     SDL_Event event;
     while(atomic_load(&app->running)) {
         uint32_t now = SDL_GetTicks();
+        note_pause(app, now);
         while(SDL_PollEvent(&event)) handle_event(app, &event, now, sdl_touchpad);
         si_tick(&app->input, now);
         handle_input_events(app, now);
@@ -2034,6 +2400,8 @@ int main(int argc, char **argv)
             if(config.hints) app->hint_until = now + HINT_MS;
             set_status(app, "Streaming");
         }
+        watch_stream(app, now, new_frame);
+        reconnect_tick(app, now, new_frame);
         if(app->menu_open) {
             uint32_t second = (now - app->first_frame_at) / 1000u;
             if(second != app->menu_second) {

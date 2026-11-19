@@ -38,6 +38,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -58,6 +60,12 @@ const (
 	trimuiAutostartPendingFile = ".autostart-pending"
 	// trimuiAutostartLogFile is where the boot hook says what it did.
 	trimuiAutostartLogFile = "autostart.log"
+	// trimuiAutostartKeepMenuFile sits in the app folder while Skip the stock
+	// menu at boot is off: the hook then lets the stock menu open first and
+	// closes it once it is up (its KEEP_MENU). A file, not a value written into
+	// the hook, so the hook stays the same text for every choice (the OS
+	// package ships it ready-made, and reconcileAutoStart compares it whole).
+	trimuiAutostartKeepMenuFile = ".autostart-keep-menu"
 	// trimuiAutostartStagingFile is the hook's next version while it is being
 	// written, in <SD>/System: the same card as System/starts, so the rename is
 	// atomic, but never inside it, because the firmware may run every file
@@ -173,8 +181,10 @@ func trimuiAppDir() (string, error) {
 //     pauses is written down in /tmp/jukahub-paused, which launch.sh resumes
 //     as it hands the screen back; the log names each process by pid, name
 //     and script, so a report shows how this firmware's loop looks.
-//   - JukaHub OS boots without the menu (2026-11-17): in OS mode, unless
-//     os.json says "fastBoot": false, a stand-in is bind-mounted over
+//   - Every boot skips the menu (JukaHub OS since 2026-11-17, the app too
+//     since 2026-11-18): unless Settings → General → Skip the stock menu at
+//     boot is off (the app folder then holds .autostart-keep-menu) or, in OS
+//     mode, os.json says "fastBoot": false, a stand-in is bind-mounted over
 //     /usr/trimui/bin/MainUI before the hook returns. Its first run with
 //     JukaHub's command queued takes itself off and returns, so the loop runs
 //     the queue in place of the menu; any other run is the real menu (through
@@ -182,8 +192,30 @@ func trimuiAppDir() (string, error) {
 //     menu). The hook takes both binds off once JukaHub started, when it
 //     gives up, when the real menu is up, and when the stand-in has not run
 //     within 20 s (a loop that could not exec it). Simulated with
-//     the O-* scenarios of tmp/autostart-sim (loops A, B, C, K, S and a
-//     supervisor that ignores the queue).
+//     the O-* and F-* scenarios of tmp/autostart-sim (loops A, B, C, K, S
+//     and a supervisor that ignores the queue; F-* without OS mode).
+//   - The path to JukaHub is short: before it returns the hook forks only
+//     what the queue and the stand-in need (one date for its log lines, no
+//     command substitution for the boot id or the tool checks); the log's
+//     size check and the flush that makes the pending marker durable run in
+//     the background copy. Nothing on that path sleeps or polls.
+//   - Each boot is measured (2026-11-18): the hook, the stand-in and the
+//     queued command note the uptime in the lock (t-slot, t-launch; reads and
+//     builtins only), and once JukaHub has written its record
+//     (/tmp/jukahub-boot-timing, startup.go) the background copy logs one
+//     indented "boot times" line from the firmware launcher's start to Home,
+//     and who ran the hook. The firmware's launcher script, its init.d order
+//     and the card's mount line are copied into the log once per log, after
+//     Home (never while JukaHub starts and the card is busy).
+//   - Why System/starts and nothing earlier: it is the first point at which
+//     the stock boot runs anything from the card (runtrimui.sh runs it once
+//     the card is mounted, about 6 s into a Brick's boot as Slot measured).
+//     .tmp_update/updater is read only by the runtrimui.sh that MinUI,
+//     NextUI and TortOS 1.x put on the eMMC in place of the stock one, and
+//     an .awimg is a firmware flash: both write the device. The card's
+//     trimui/app/MainUI (reported for the Brick Pro's stock runtrimui.sh)
+//     takes the menu's place in the loop, the same moment the stand-in
+//     already takes, and belongs to MinUI/NextUI/CrossMix cards.
 //
 // Go raw string: the script must not contain a backquote.
 const trimuiAutostartTemplate = `#!/bin/sh
@@ -199,10 +231,11 @@ const trimuiAutostartTemplate = `#!/bin/sh
 #
 # JukaHub is started the way the stock menu starts an app: a command queued in
 # /tmp/cmd_to_run.sh, which the firmware's launcher loop runs with its own
-# environment and services, bringing the menu back when JukaHub exits. A loop
-# that reads the queue before it opens the menu starts JukaHub straight away;
-# otherwise the menu is closed once it is up, and the loop then runs the queue
-# exactly as if JukaHub had been picked in it.
+# environment and services, bringing the menu back when JukaHub exits. A
+# stand-in for the menu's program lets the loop run the queue at once, so the
+# menu never shows (fast_boot). Where that cannot be, or Skip the stock menu at
+# boot is off, the menu is closed once it is up, and the loop then runs the
+# queue exactly as if JukaHub had been picked in it.
 (
 set +e +u +f
 unset IFS
@@ -227,11 +260,36 @@ TAG=jukahub-autostart-cmd
 # time> <name>") for launch.sh, which resumes exactly those as it hands the
 # screen back (its paused record).
 PAUSED=/tmp/jukahub-paused
+# Left in the app folder by Settings -> General -> Skip the stock menu at boot
+# switched off: the stock menu then opens first at every boot and is closed
+# once it is up (also in JukaHub OS mode).
+KEEP_MENU="$APP_DIR/.autostart-keep-menu"
+# What the log calls the start: "JukaHub OS" in OS mode (fast_boot).
+WHAT=JukaHub
+# JukaHub's own record of this boot, written once it has drawn Home: the boot
+# id, then the uptime at JukaHub's start and at its first frame.
+TIMING=/tmp/jukahub-boot-timing
 
+# One log line. SAY_DATE, while set, is the time for every line (the part
+# before the hook returns runs in a moment, and each date is a fork on the
+# boot's path); the background copy reads the clock for each line. SAY_TO,
+# while set, is a file in /tmp the lines go to first: the lines said before
+# the hook returns are copied to the card by the background copy (or at once
+# when JukaHub is not started), because on a card mounted "sync" (the Brick's)
+# every line written there is a wait for the card.
+SAY_TO=
 say() {
 	up=
 	read -r up _ 2>/dev/null </proc/uptime
-	printf '[%s boot+%ss] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "${up:-?}" "$*" >>"$LOG" 2>/dev/null
+	printf '[%s boot+%ss] %s\n' "${SAY_DATE:-$(date '+%Y-%m-%d %H:%M:%S')}" "${up:-?}" "$*" >>"${SAY_TO:-$LOG}" 2>/dev/null
+}
+# Copy the lines kept in /tmp to the log; later lines go straight there.
+flush_said() {
+	if [ -n "$SAY_TO" ]; then
+		[ -s "$SAY_TO" ] && cat "$SAY_TO" >>"$LOG" 2>/dev/null
+		rm -f "$SAY_TO"
+		SAY_TO=
+	fi
 }
 
 # A process's state, parent and start time (st_state, st_ppid, st_start) from
@@ -246,6 +304,15 @@ stat_of() {
 	st_start="${20}"
 }
 
+# A start time in clock ticks (st_start) as seconds since the kernel started:
+# /proc counts in hundredths on every Linux JukaHub runs on.
+secs() {
+	case "$1" in
+	"" | *[!0-9]*) printf '?' ;;
+	*) printf '%d.%02d' $(($1 / 100)) $(($1 % 100)) ;;
+	esac
+}
+
 # One process for the log: its pid, its name and, for a shell, the script it
 # runs (a busybox may name every script it runs plain "sh").
 who() {
@@ -253,7 +320,7 @@ who() {
 	read -r wn 2>/dev/null <"/proc/$1/comm"
 	wa=
 	case "$wn" in
-	sh | ash | bash | dash | busybox) wa=" $(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | cut -c1-100)" ;;
+	sh | ash | bash | dash | busybox) wa=" $(tr '\0\n\r\t' '    ' <"/proc/$1/cmdline" 2>/dev/null | cut -c1-100)" ;;
 	esac
 	printf '%s %s%s' "$1" "${wn:-?}" "${wa% }"
 }
@@ -387,6 +454,9 @@ queue_ours() {
 #!/bin/sh
 # jukahub-autostart-cmd: queued at boot by SDCARD/System/starts/jukahub-autostart.sh
 if [ -e /tmp/jukahub-autostart.lock/go ] && mkdir /tmp/jukahub-autostart.ran 2>/dev/null; then
+	# When the firmware ran this, for the boot times in autostart.log.
+	read -r JUKAHUB_UP JUKAHUB_REST </proc/uptime 2>/dev/null && printf '%s\n' "$JUKAHUB_UP" >/tmp/jukahub-autostart.lock/t-launch 2>/dev/null || :
+	unset JUKAHUB_UP JUKAHUB_REST
 	rm -f /tmp/cmd_to_run.sh
 	# Black, not the closed menu's last picture, until JukaHub draws.
 	if [ -e /tmp/jukahub-autostart.lock/menu ]; then
@@ -423,15 +493,17 @@ enqueue() {
 	return 3
 }
 
-# JukaHub OS boots without the stock menu. In OS mode (os/os.json) a small
+# JukaHub boots without the stock menu. Unless Skip the stock menu at boot is
+# off (KEEP_MENU, or "fastBoot": false in os/os.json in OS mode), a small
 # stand-in is bind-mounted over the menu's program for this boot only (RAM, no
 # file of the firmware is written): when the launcher loop runs "MainUI" the
 # first time, the stand-in takes itself off again and returns at once, and the
-# loop runs the queue - JukaHub OS - with its own environment and services, as
-# if JukaHub had been picked. Every other run of it (the queue gone, an app
-# queued instead, JukaHub already started) is the real menu, so the loop can
-# never end up without one. A loop that ignores the queue gets the real menu
-# on its next round, and the wait below carries on as without the stand-in.
+# loop runs the queue - JukaHub, or JukaHub OS - with its own environment and
+# services, as if JukaHub had been picked. Every other run of it (the queue
+# gone, an app queued instead, JukaHub already started) is the real menu, so
+# the loop can never end up without one. A loop that ignores the queue gets
+# the real menu on its next round, and the wait below carries on as without
+# the stand-in.
 MAINUI=/usr/trimui/bin/MainUI
 SHIM="$LOCK/MainUI.jukahub"
 # Named MainUI, so a menu run through it is still "MainUI" to pidof, killall
@@ -443,11 +515,17 @@ SKIPPED="$LOCK/skipped"
 shim_on() {
 	dd if="$MAINUI" bs=256 count=1 2>/dev/null | grep -q jukahub-mainui-shim
 }
-# Take the stand-in and the real menu's handle off, whatever happened.
+# Take the stand-in and the real menu's handle off, whatever happened; 1 when
+# the stand-in would not come off (the handle then stays for it).
 unshim() {
 	if shim_on; then
 		umount -l "$MAINUI" 2>/dev/null || umount "$MAINUI" 2>/dev/null
-		shim_on && say "could not take the stand-in off $MAINUI"
+		if shim_on; then
+			# Still on: its later runs need the real menu's handle, or the
+			# loop would run a stand-in with no menu to hand over to.
+			say "could not take the stand-in off $MAINUI"
+			return 1
+		fi
 	fi
 	# Tried whether or not /proc/mounts lists it under this path (a /tmp
 	# reached through a symlink is listed under its real path): umount of a
@@ -456,23 +534,34 @@ unshim() {
 	:
 }
 fast_boot() {
-	grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null || return 1
-	if grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false' "$APP_DIR/os/os.json" 2>/dev/null; then
-		say "JukaHub OS is on; the stock menu opens first (Skip the stock menu is off)"
+	if [ -f "$APP_DIR/os/os.json" ] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null; then
+		WHAT="JukaHub OS"
+		if grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false' "$APP_DIR/os/os.json" 2>/dev/null; then
+			say "JukaHub OS is on; the stock menu opens first (Skip the stock menu is off)"
+			return 1
+		fi
+	fi
+	if [ -e "$KEEP_MENU" ]; then
+		say "the stock menu opens first and is closed once it is up (Skip the stock menu at boot is off)"
 		return 1
 	fi
-	if [ ! -f "$MAINUI" ] || [ -z "$(command -v mount)" ] || [ -z "$(command -v umount)" ]; then
-		say "JukaHub OS is on, but the stock menu cannot be skipped here (no $MAINUI or no mount); it is closed once it is up"
+	# dd and grep tell the stand-in from the menu (shim_on, and the stand-in's
+	# own check): without them it could not take itself off.
+	if [ ! -f "$MAINUI" ] || ! command -v mount >/dev/null 2>&1 || ! command -v umount >/dev/null 2>&1 ||
+		! command -v dd >/dev/null 2>&1 || ! command -v grep >/dev/null 2>&1; then
+		say "the stock menu cannot be skipped here (no $MAINUI, mount, dd or grep); it is closed once it is up"
 		return 1
 	fi
 	shim_on && return 0
 	rm -f "$SHIM"
 	cat >"$SHIM" <<'JUKAHUB_SHIM' || return 1
 #!/bin/sh
-# jukahub-mainui-shim: stands in for the stock menu once at boot (JukaHub OS)
+# jukahub-mainui-shim: stands in for the stock menu once at boot (Start JukaHub at login)
 [ "$1" = --jukahub-probe ] && exit 0
 M=/usr/trimui/bin/MainUI
 L=/tmp/jukahub-autostart.lock
+# When the launcher loop reached the menu, for the boot times in autostart.log.
+[ -e "$L/t-slot" ] || { read -r t _ </proc/uptime && printf '%s\n' "$t" >"$L/t-slot"; } 2>/dev/null
 on() { dd if="$M" bs=256 count=1 2>/dev/null | grep -q jukahub-mainui-shim; }
 on && { umount -l "$M" 2>/dev/null || umount "$M" 2>/dev/null; }
 if [ -e "$L/go" ] && [ ! -e /tmp/jukahub-autostart.ran ] && grep -q jukahub-autostart-cmd /tmp/cmd_to_run.sh 2>/dev/null && mkdir "$L/skipped" 2>/dev/null; then
@@ -484,7 +573,7 @@ JUKAHUB_SHIM
 	chmod 755 "$SHIM" 2>/dev/null
 	if ! "$SHIM" --jukahub-probe </dev/null >/dev/null 2>&1; then
 		rm -f "$SHIM"
-		say "JukaHub OS is on, but /tmp cannot run the stand-in, so the stock menu is closed once it is up"
+		say "/tmp cannot run the stand-in, so the stock menu is closed once it is up"
 		return 1
 	fi
 	# The real menu stays reachable however the stand-in ends.
@@ -492,13 +581,13 @@ JUKAHUB_SHIM
 	: >"$REAL" 2>/dev/null
 	if ! mount --bind "$MAINUI" "$REAL" 2>/dev/null && ! mount -o bind "$MAINUI" "$REAL" 2>/dev/null; then
 		rm -f "$REAL" "$SHIM"
-		say "JukaHub OS is on, but mount --bind failed, so the stock menu is closed once it is up"
+		say "mount --bind failed, so the stock menu is closed once it is up"
 		return 1
 	fi
 	if ! { mount --bind "$SHIM" "$MAINUI" 2>/dev/null || mount -o bind "$SHIM" "$MAINUI" 2>/dev/null; } || ! shim_on; then
 		unshim
 		rm -f "$SHIM"
-		say "JukaHub OS is on, but the stand-in could not be put over $MAINUI, so the stock menu is closed once it is up"
+		say "the stand-in could not be put over $MAINUI, so the stock menu is closed once it is up"
 		return 1
 	fi
 	return 0
@@ -519,23 +608,37 @@ fi
 # Once per boot, however often this file is run. /tmp starts empty at every
 # boot; a lock an earlier boot left (a /tmp that survives a reboot) carries
 # that boot's id and is cleared.
-BOOT="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+BOOT=
+read -r BOOT 2>/dev/null </proc/sys/kernel/random/boot_id
 if ! mkdir "$LOCK" 2>/dev/null; then
-	old="$(cat "$LOCK/boot" 2>/dev/null)"
+	old=
+	read -r old 2>/dev/null <"$LOCK/boot"
 	{ [ -n "$BOOT" ] && [ -n "$old" ] && [ "$old" != "$BOOT" ]; } || exit 0
 	rm -rf "$LOCK" "$RAN"
 	mkdir "$LOCK" 2>/dev/null || exit 0
 fi
 printf '%s\n' "$BOOT" >"$LOCK/boot" 2>/dev/null
+# For the boot times logged once JukaHub is up: when this hook started, and
+# the processes above it with their start times ("pid:ticks"; one read each,
+# no program run), named later by the background copy.
+HOOK_UP=
+read -r HOOK_UP _ 2>/dev/null </proc/uptime
+CHAIN=
+p=$$
+i=0
+while [ "$i" -lt 6 ] && [ "$p" -gt 1 ] 2>/dev/null && stat_of "$p"; do
+	CHAIN="$CHAIN $p:$st_start"
+	p="$st_ppid"
+	i=$((i + 1))
+done
 
-if [ -f "$LOG" ]; then
-	size="$(wc -c <"$LOG" 2>/dev/null | tr -d ' ')"
-	[ "${size:-0}" -gt 65536 ] 2>/dev/null && mv -f "$LOG" "$LOG.1" 2>/dev/null
-fi
+SAY_TO="$LOCK/said"
+SAY_DATE="$(date '+%Y-%m-%d %H:%M:%S')"
 say "boot hook started (run as $0)"
 
-if [ -z "$(command -v pidof)$(command -v pgrep)" ]; then
+if ! command -v pidof >/dev/null 2>&1 && ! command -v pgrep >/dev/null 2>&1; then
 	say "cannot see running programs (no pidof or pgrep), so JukaHub is not started"
+	flush_said
 	exit 0
 fi
 # Left behind by a start that hung (JukaHub deletes it once it has been up a
@@ -545,10 +648,12 @@ if [ -f "$PENDING" ]; then
 	rm -f "$PENDING"
 	[ "$(queued)" = ours ] && rm -f "$Q"
 	say "JukaHub did not finish starting after the last boot, so this boot stays on the stock menu; the next boot tries again"
+	flush_said
 	exit 0
 fi
 if [ -n "$(pids JukaHub)" ]; then
 	say "JukaHub is already running"
+	flush_said
 	exit 0
 fi
 : >"$PENDING" 2>/dev/null
@@ -558,28 +663,41 @@ case $? in
 1)
 	call_off
 	say "JukaHub was already started at this boot"
+	flush_said
 	exit 0
 	;;
 2)
 	call_off
 	say "another app is already queued to start (resume at boot?), so JukaHub is not started"
+	flush_said
 	exit 0
 	;;
 3)
 	call_off
 	say "could not queue JukaHub in /tmp, so it is not started"
+	flush_said
 	exit 0
 	;;
 esac
 say "queued JukaHub for the firmware's launcher"
 # Before the hook returns: the loop runs the menu right after the boot scripts.
 if fast_boot; then
-	say "JukaHub OS: the stock menu is skipped at this boot (a stand-in for $MAINUI until the queue runs)"
+	say "$WHAT: the stock menu is skipped at this boot (a stand-in for $MAINUI until the queue runs)"
 fi
+# The moment the boot goes on (for the boot times).
+RET_UP=
+read -r RET_UP _ 2>/dev/null </proc/uptime
 
 # The rest waits, so it runs in the background and the boot goes on.
 (
 cd / 2>/dev/null
+SAY_DATE=
+if [ -f "$LOG" ]; then
+	size="$(wc -c <"$LOG" 2>/dev/null | tr -d ' ')"
+	[ "${size:-0}" -gt 65536 ] 2>/dev/null && mv -f "$LOG" "$LOG.1" 2>/dev/null
+fi
+# The lines said before the hook returned, onto the card.
+flush_said
 # Told to stop before JukaHub started: call the start off.
 withdraw() {
 	if [ ! -e "$RAN" ]; then
@@ -589,31 +707,94 @@ withdraw() {
 	exit 0
 }
 trap withdraw TERM INT
-sync
-# How this firmware starts apps (once per log), for a report if JukaHub does
-# not open.
-if [ -f /usr/trimui/bin/runtrimui.sh ] && ! grep -q 'runtrimui.sh:' "$LOG" 2>/dev/null; then
-	grep -n -e starts -e cmd_to_run -e MainUI /usr/trimui/bin/runtrimui.sh 2>/dev/null |
-		head -n 16 | sed 's/^/    runtrimui.sh:/' >>"$LOG" 2>/dev/null
-fi
+# The pending marker must be on the card before JukaHub could hang. Only the
+# card's file system where busybox can (sync -f); elsewhere sync ignores the
+# name and flushes everything, as before.
+sync -f "$PENDING" 2>/dev/null || sync
 
 # Steps per second: busybox sleeps in fractions only when it was built to.
 if sleep 0.1 2>/dev/null; then STEP=0.5 PER=2; else STEP=1 PER=1; fi
 nap() { sleep "$STEP" 2>/dev/null || sleep 1; }
 
+# Indented lines are notes, not steps: JukaHub's report of the hook's last
+# line (errors.txt) skips them.
+note() {
+	printf '    %s\n' "$*" >>"$LOG" 2>/dev/null
+}
+# How this firmware boots and starts apps, once per log: its launcher script,
+# the order of its boot services and how the SD card is mounted (a "sync"
+# card writes slowly). For a report if JukaHub does not open, and to see what
+# runs before this hook. Written once JukaHub is up or not started, never
+# while it is starting (the card is busy then).
+boot_setup() {
+	grep -q '^    boot setup:' "$LOG" 2>/dev/null && return 0
+	{
+		echo "    boot setup: the firmware's launcher script, boot services and SD card mount (once per log)"
+		grep -n '' /usr/trimui/bin/runtrimui.sh 2>/dev/null | head -n 300 | cut -c1-160 | sed 's/^/    runtrimui.sh:/'
+		grep -H 'START=' /etc/init.d/* 2>/dev/null | head -n 80 | cut -c1-160 | sed 's/^/    init.d:/'
+		grep ' /mnt/SDCARD ' /proc/mounts 2>/dev/null | head -n 2 | cut -c1-200 | sed 's/^/    card:/'
+	} >>"$LOG" 2>/dev/null
+}
+# The processes above this hook that still run, nearest first, with their
+# start times. FW_UP becomes the firmware launcher's (runtrimui.sh) start.
+FW_UP=
+chain() {
+	out=
+	for e in $CHAIN; do
+		# Gone, or the pid is another process's now.
+		stat_of "${e%%:*}" && [ "$st_start" = "${e#*:}" ] || continue
+		t="$(secs "${e#*:}")"
+		w="$(who "${e%%:*}")"
+		case "$w" in
+		*" ?") continue ;;
+		*runtrimui*) [ -n "$FW_UP" ] || FW_UP="$t" ;;
+		esac
+		out="$out < $w from $t s"
+	done
+	[ -n "$out" ] && note "run by: ${out# < }"
+}
+# This boot's times in one line, in seconds since the kernel started, once
+# JukaHub has drawn Home (a minute at most): the firmware's launcher script
+# starting, this hook from its start to handing the boot back, the loop
+# reaching the menu's place (the stand-in ran there), the queued command
+# starting launch.sh, and JukaHub's own start and first frame (its record in
+# /tmp). The gaps between them are the stock boot's share; "-" did not happen.
+boot_times() {
+	i=0
+	while [ ! -s "$TIMING" ] && [ "$i" -lt $((60 * PER)) ]; do
+		nap
+		i=$((i + 1))
+	done
+	chain
+	slot=
+	launch=
+	id=
+	jstart=
+	jhome=
+	read -r slot _ 2>/dev/null <"$LOCK/t-slot"
+	read -r launch _ 2>/dev/null <"$LOCK/t-launch"
+	read -r id jstart jhome _ 2>/dev/null <"$TIMING"
+	[ "$id" = "$BOOT" ] || { jstart= jhome=; }
+	note "boot times (seconds since the kernel started): firmware launcher ${FW_UP:--}, this hook ${HOOK_UP:-?} to ${RET_UP:-?}, menu's place ${slot:--}, launch.sh ${launch:--}, JukaHub ${jstart:--}, Home ${jhome:--}"
+	boot_setup
+}
+
 started() {
 	unshim
 	if [ -e "$SKIPPED" ]; then
-		say "the firmware started JukaHub OS in place of the stock menu"
+		say "the firmware started $WHAT in place of the stock menu"
 	else
 		say "the firmware started JukaHub${1:+ ($1)}"
 	fi
+	boot_times
 	exit 0
 }
 give_up() {
 	[ -e "$RAN" ] && started
 	call_off
 	say "$*"
+	chain
+	boot_setup
 	exit 0
 }
 requeue() {
@@ -668,8 +849,7 @@ while :; do
 	# could not run the stand-in (it would retry without a menu until the give
 	# up below). It comes off, and the menu is closed once it is up, as without.
 	if [ "$n" -eq $((20 * PER)) ] && shim_on; then
-		unshim
-		say "the firmware did not run the stand-in for $MAINUI within 20 s, so it is taken off"
+		unshim && say "the firmware did not run the stand-in for $MAINUI within 20 s, so it is taken off"
 	fi
 	[ "$n" -ge $((120 * PER)) ] && give_up "the stock menu did not appear within two minutes, so JukaHub is not started"
 	nap
@@ -771,10 +951,13 @@ trap 'rm -f "$PENDING"; resume; say "JukaHub exited (the hook was told to stop)"
 pw=
 for p in $paused; do pw="$pw; $(who "$p")"; done
 say "the firmware did not run the queue, so JukaHub is started directly${pw:+ (paused the launcher loop: ${pw#; })}"
+up=
+read -r up _ 2>/dev/null </proc/uptime && printf '%s\n' "$up" >"$LOCK/t-launch" 2>/dev/null
 /bin/sh "$APP_DIR/launch.sh" >>"$LOG" 2>&1 || :
 rm -f "$PENDING"
 resume
 say "JukaHub exited"
+boot_times
 ) </dev/null >/dev/null 2>&1 &
 ) </dev/null >/dev/null 2>&1
 `
@@ -1100,7 +1283,9 @@ func readFileHead(path string, limit int64) ([]byte, error) {
 }
 
 // lastLogLine returns the last non-empty line of a log, read from its last
-// 4 KiB, without the timestamp prefix the boot hook writes.
+// 16 KiB, without the timestamp prefix the boot hook writes. Indented lines
+// are the hook's notes (its boot times, the firmware's boot setup), not a
+// step it took, and are skipped.
 func lastLogLine(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1111,7 +1296,7 @@ func lastLogLine(path string) string {
 	if err != nil {
 		return ""
 	}
-	const tail = 4 << 10
+	const tail = 16 << 10
 	start := info.Size() - tail
 	if start < 0 {
 		start = 0
@@ -1122,8 +1307,15 @@ func lastLogLine(path string) string {
 		return ""
 	}
 	lines := strings.Split(strings.TrimRight(string(buf[:n]), "\r\n"), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // read from the middle of a line
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
+		raw := lines[i]
+		if raw != "" && (raw[0] == ' ' || raw[0] == '\t') {
+			continue
+		}
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "runtrimui.sh:") {
 			continue
 		}
@@ -1196,6 +1388,101 @@ func autoStartClearPending() {
 	}
 }
 
+// autoStartSkipMenuKey is the Custom setting behind Settings → General → Skip
+// the stock menu at boot (TrimUI): on unless switched off.
+const autoStartSkipMenuKey = "autoStartSkipMenu"
+
+// autoStartSkipMenuOn reads it: at power-on the boot hook starts JukaHub in
+// place of the stock menu (its fast_boot), in OS mode and as the app alike.
+func autoStartSkipMenuOn(c *Config) bool {
+	if c != nil {
+		if v, ok := customValue(c.Variables.Custom, autoStartSkipMenuKey); ok {
+			return coerceBool(v)
+		}
+	}
+	return true
+}
+
+// autoStartSkipMenuVisible shows the switch where the TrimUI boot hook runs:
+// stock firmware, not JukaHub OS's own images (no stock menu there).
+func autoStartSkipMenuVisible(*Config) bool {
+	return autostartIsTrimui() && !jukaosNativeActive()
+}
+
+// autoStartSkipMenuDetail is the line under the switch.
+func autoStartSkipMenuDetail(c *Config) string {
+	switch {
+	case !autoStartEnabled(c):
+		return "Turn Start JukaHub at login on to use it"
+	case autoStartSkipMenuOn(c):
+		return "At power-on the firmware starts JukaHub in place of its menu, so the menu never shows"
+	}
+	return "The stock menu opens for a moment at power-on and is then closed. Try this if Wi-Fi, brightness or volume are not set up after a boot"
+}
+
+// autoStartSetSkipMenu is the switch: the choice is stored at once and the
+// hook's marker follows on a goroutine (the card is slow).
+func autoStartSetSkipMenu(c *Config, on bool) {
+	setStoreBool(c, autoStartSkipMenuKey, on)
+	trimuiKeepMenuApply(!on, true)
+	if on {
+		setToast("From the next power-on JukaHub starts without the stock menu")
+	} else {
+		setToast("From the next power-on the stock menu opens first and is then closed")
+	}
+}
+
+// trimuiKeepMenu serialises the marker's writes; want is the newest choice, so
+// two quick flips of the switch can never land in the wrong order.
+var trimuiKeepMenu struct {
+	mu   sync.Mutex
+	want atomic.Bool
+}
+
+// trimuiKeepMenuText is what the marker says to someone who finds it.
+const trimuiKeepMenuText = "Written by JukaHub: Settings > General > Skip the stock menu at boot is off,\n" +
+	"so the stock menu opens first at power-on. The switch writes and removes this file.\n"
+
+// trimuiKeepMenuApply leaves the hook's marker in the app folder (keep) or
+// takes it away, on a goroutine when async.
+func trimuiKeepMenuApply(keep, async bool) {
+	trimuiKeepMenu.want.Store(keep)
+	if async {
+		go trimuiKeepMenuSync()
+		return
+	}
+	trimuiKeepMenuSync()
+}
+
+// trimuiKeepMenuSync makes the marker match the newest choice. The folder is
+// flushed after a change: the hook reads the marker at the very next boot.
+func trimuiKeepMenuSync() {
+	trimuiKeepMenu.mu.Lock()
+	defer trimuiKeepMenu.mu.Unlock()
+	appDir, err := trimuiAppDir()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(appDir, trimuiAutostartKeepMenuFile)
+	keep := trimuiKeepMenu.want.Load()
+	_, statErr := os.Stat(path)
+	switch {
+	case keep && statErr != nil:
+		if err := os.WriteFile(path, []byte(trimuiKeepMenuText), 0o644); err != nil {
+			logPatch("autostart: could not keep the stock menu at boot (%v)", err)
+			return
+		}
+	case !keep && statErr == nil:
+		if err := os.Remove(path); err != nil {
+			logPatch("autostart: could not stop keeping the stock menu at boot (%v)", err)
+			return
+		}
+	default:
+		return
+	}
+	syncDirectory(appDir)
+}
+
 // trimuiOSEditionCard reports whether JukaHub on this card was installed from
 // the OS package (os/os.json: edition "os") with OS mode on.
 func trimuiOSEditionCard() bool {
@@ -1220,6 +1507,11 @@ func reconcileAutoStart(config *Config) {
 	// in a toast once the tour is out of the way (it can be skipped early).
 	if applyAutoStartFirstRunDefault(config) {
 		autoStartNoticePending = true
+	}
+	// The hook's KEEP_MENU marker follows Skip the stock menu at boot (a
+	// restored backup, a card moved between devices): one stat when it agrees.
+	if autostartIsTrimui() {
+		trimuiKeepMenuApply(!autoStartSkipMenuOn(config), false)
 	}
 	want := autoStartEnabled(config)
 	installed := autoStartInstalled()

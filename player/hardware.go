@@ -302,9 +302,11 @@ func sceneHasPieChart(config *Config) bool {
 }
 
 func startDiskPieAutoRefresh() {
-	// One reading at startup so the first frame that needs the chart has data.
-	refreshDiskPie()
 	go func() {
+		// One reading at startup so the screen with the chart has data. It is
+		// taken here, not on the main thread: the first statfs of a FAT32 card
+		// can read the whole allocation table, which held up the first frame.
+		refreshDiskPie()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {

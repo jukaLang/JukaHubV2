@@ -749,6 +749,12 @@ func spatialChildEnv(cmd *exec.Cmd, env []string) []string {
 		spatialLogOnce("alsa-32:"+cmd.Path+" "+strings.Join(cmd.Args, " "), "spatial audio skips %s: it runs a 32-bit program, which cannot load the 64-bit plugin", strings.Join(cmd.Args, " "))
 		return env
 	}
+	if cmd != nil {
+		if lib := spatialLaunchBundledALSA(cmd); lib != "" {
+			spatialLogOnce("alsa-own-lib:"+lib, "spatial audio skips %s: it brings its own ALSA library (%s), which may not know the plugin the chain needs", strings.Join(cmd.Args, " "), lib)
+			return env
+		}
+	}
 	path, err := spatialALSALaunchConf(mode, spatialRoomIndex(s.Room), s.Strength)
 	if err != nil {
 		logWarn("spatial", "cannot prepare spatial audio for this program: %v", err)
@@ -861,6 +867,63 @@ func spatialResolve(p, dir string) string {
 		return p
 	}
 	return filepath.Join(dir, p)
+}
+
+// spatialLaunchBundledALSA returns the libasound a launch brings along — in
+// its working folder, beside its program or launch script, or in a lib/ or
+// libs/ folder there or one level below (a standalone emulator's own
+// libraries, put first by its script's LD_LIBRARY_PATH) — or "" when there is
+// none. Such a copy may predate the ladspa PCM, and with ALSA_CONFIG_PATH
+// naming the chain the program's sound would not open at all: a standalone
+// Mupen64Plus or PPSSPP that brings its own ALSA plays without spatial audio
+// instead.
+func spatialLaunchBundledALSA(cmd *exec.Cmd) string {
+	// dirs maps a folder to whether the folders one level below it are looked
+	// at too: the working folder, the program's and a launch script's are; the
+	// folder of any other file an argument names — the game itself — is looked
+	// at only on its own level. A ROM folder holds hundreds of entries, and
+	// "*/lib" there is a stat of each on the card, on the launch path.
+	dirs := map[string]bool{}
+	if cmd.Dir != "" && filepath.IsAbs(cmd.Dir) {
+		dirs[filepath.Clean(cmd.Dir)] = true
+	}
+	cands := []string{cmd.Path}
+	if len(cmd.Args) > 1 {
+		cands = append(cands, cmd.Args[1:]...)
+	}
+	for i, c := range cands {
+		p := spatialResolve(c, cmd.Dir)
+		if p == "" || !filepath.IsAbs(p) {
+			continue
+		}
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			dir := filepath.Dir(filepath.Clean(p))
+			dirs[dir] = dirs[dir] || i == 0 || strings.HasSuffix(strings.ToLower(p), ".sh")
+		}
+	}
+	for dir, deep := range dirs {
+		// The firmware's own library folders are the system ALSA, not a
+		// bundled one.
+		if dir == "/" || strings.HasPrefix(dir, "/usr/") || strings.HasPrefix(dir, "/lib") {
+			continue
+		}
+		patterns := []string{
+			filepath.Join(dir, "libasound.so*"),
+			filepath.Join(dir, "lib", "libasound.so*"),
+			filepath.Join(dir, "libs", "libasound.so*"),
+		}
+		if deep {
+			patterns = append(patterns,
+				filepath.Join(dir, "*", "lib", "libasound.so*"),
+				filepath.Join(dir, "*", "libs", "libasound.so*"))
+		}
+		for _, pattern := range patterns {
+			if hits, _ := filepath.Glob(pattern); len(hits) > 0 {
+				return hits[0]
+			}
+		}
+	}
+	return ""
 }
 
 // spatialFileLooks32 checks one file: an ELF answers by its class and machine;

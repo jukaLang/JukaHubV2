@@ -25,7 +25,7 @@ import (
 	"sync"
 )
 
-// Result tokens. The helper writes the first ten; psLastRunStarted is
+// Result tokens. The helper writes the first eleven; psLastRunStarted is
 // JukaHub's own note, and the last three are what a note still saying
 // "started" (or a bare exit code) turns into.
 const (
@@ -34,6 +34,7 @@ const (
 	psLastRunPINCancelled   = "login_pin_cancelled"
 	psLastRunConnectFailed  = "connect_failed"
 	psLastRunConsoleQuit    = "console_quit"
+	psLastRunConnectionLost = "connection_lost" // the stream dropped (a sleep, Wi-Fi) and a minute of reconnecting failed
 	psLastRunDecoderFailed  = "decoder_failed"
 	psLastRunVideoFailed    = "video_failed"
 	psLastRunSDLFailed      = "sdl_failed"
@@ -388,6 +389,9 @@ func psLastRunToast(run psLastRun, name string) (string, ToastKind, bool) {
 			return capitalizeFirst(name) + " ended the stream.", kind, true
 		}
 		return capitalizeFirst(name) + " ended the stream" + reason + ".", kind, true
+	case psLastRunConnectionLost:
+		return "The stream from " + name + " dropped (the handheld slept, or Wi-Fi went) and could not be " +
+			"reconnected" + reason + ". Start it again in PS Remote Play.", ToastKindWarning, true
 	case psLastRunDecoderFailed, psLastRunVideoFailed:
 		return "Remote Play could not show the video from " + name + ". " + psLastRunVideoAdvice(run), ToastKindError, true
 	case psLastRunSDLFailed:

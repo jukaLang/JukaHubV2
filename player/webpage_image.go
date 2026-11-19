@@ -11,7 +11,9 @@ package main
 //     URL or the data: URI) and keeps alt text only when nothing can be drawn;
 //   * the page-load pass fetches the images once, concurrently and under
 //     strict per-page and per-byte limits, and records the natural sizes the
-//     layout needs;
+//     layout needs. The parsed page is already on screen, so each image is
+//     committed to the document as it arrives instead of holding the first
+//     paint behind the slowest hero banner;
 //   * the layout reserves row slots for every image, like the rule and rects
 //     it already reserved space for;
 //   * draw paints each image through the shared texture cache, falling back
@@ -41,24 +43,39 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// Collect/fetch limits. webMaxImageBytes keeps a single huge photograph from
-// dominating; the total budget keeps a page of hero banners from doing it via
-// volume instead. 16 images and 4 MiB left every picture past the first
-// screenful of a news, shop or gallery page as a grey placeholder.
+// Collect/fetch limits. The 1 GB handheld shares its RAM with the system and
+// decoded textures, so the encoded image budget scales with free memory. The
+// count still bounds requests from pages with thousands of tiny images.
 const (
-	webMaxImagesPerPage      = 48
-	webMaxImageBytes         = 2 << 20  // 2 MiB per image
-	webMaxImagesBytes        = 10 << 20 // 10 MiB of images per page
-	webMaxVideoThumbsPerPage = 8        // one page never fetches more video thumbnails
-	webImageFetchTimeout     = 8 * time.Second
-	webImageFetchWorkers     = 6 // concurrent image downloads per page
+	webMaxImagesPerPage      = 256
+	webMaxImageBytes         = 8 << 20  // 8 MiB per image
+	webMinImagesBytes        = 16 << 20 // floor when little free memory is reported
+	webMaxImagesBytes        = 64 << 20 // ceiling for encoded images on one page
+	webMaxVideoThumbsPerPage = 24
+	webImageFetchTimeout     = 10 * time.Second
+	webImageFetchWorkers     = 8 // concurrent image downloads per page
 	// webImagePassTimeout bounds the whole image pass, not one image. The page
-	// text is published after this pass, so a page of slow hero banners must
-	// not keep the reader on the loading card for eight seconds each; anything
-	// still in flight when it expires is drawn as a placeholder.
-	webImagePassTimeout = 8 * time.Second
+	// is already readable when this pass starts, so slow hero banners must not
+	// keep the loading card up; anything still in flight when it expires is
+	// drawn as a placeholder and the next visit can try again.
+	webImagePassTimeout = 20 * time.Second
 	webMinImagePx       = 16 // smallest drawable image
 )
+
+func webImagePageBudgetFor(availableMB uint64) int64 {
+	mb := availableMB / 6
+	if mb < webMinImagesBytes>>20 {
+		return webMinImagesBytes
+	}
+	if mb > webMaxImagesBytes>>20 {
+		return webMaxImagesBytes
+	}
+	return int64(mb) << 20
+}
+
+func webImagePageBudgetBytes() int64 {
+	return webImagePageBudgetFor(freeMemoryMB())
+}
 
 // webImageMeta is one image's decoded-at-fetch natural size. No HasSize means
 // "we could not read the pixel size", and the layout falls back to ratios.
@@ -639,6 +656,23 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 		ratio = float64(meta.H) / float64(meta.W)
 	}
 	aspect := b.Style.AspectRatio
+	// An image filling a clipped aspect-ratio wrapper takes the wrapper's
+	// visible shape. The HTML width/height attributes often describe the
+	// source file (a square CNN thumbnail), while CSS crops it into a 16:9
+	// card. Reserving the source ratio instead leaves a huge blank square.
+	if aspect <= 0 && b.Style.WidthPct >= 99 && doc != nil {
+		for i := len(b.Boxes) - 1; i >= 0; i-- {
+			info, ok := doc.Boxes[b.Boxes[i]]
+			if !ok {
+				continue
+			}
+			st := info.style
+			if st.AspectRatio > 0 && (st.OverflowX != 0 || st.OverflowY != 0) {
+				aspect = st.AspectRatio
+				break
+			}
+		}
+	}
 	cssW, cssH := int32(0), int32(0)
 	if b.Style.WidthPct > 0 {
 		cssW = int32(float64(contentW) * b.Style.WidthPct / 100)
@@ -865,18 +899,49 @@ func fetchWebImages(doc *webDocument) {
 
 	images := make(map[string][]byte, len(srcs))
 	fetched := make(map[string]webImageMeta, len(srcs))
-	var budget int64 = webMaxImagesBytes
+	// The page may already be on screen when this pass runs. Publish each
+	// picture into its document as it arrives, then invalidate the cached
+	// layout only when the natural size changes, so a late image does not
+	// rewrite every row on the page. Holds imageMu only for the map writes;
+	// invalidateFormState takes the document lock, and taking both in the
+	// other order would deadlock a concurrent layout pass.
+	commitDoc := func(src string, body []byte, m webImageMeta) {
+		doc.imageMu.Lock()
+		if doc.Images == nil {
+			doc.Images = make(map[string][]byte)
+		}
+		if doc.ImageMeta == nil {
+			doc.ImageMeta = make(map[string]webImageMeta)
+		}
+		if len(body) > 0 {
+			doc.Images[src] = body
+		}
+		doc.ImageMeta[src] = m
+		doc.imageMu.Unlock()
+		if m.HasSize {
+			doc.invalidateFormState()
+		}
+	}
+	budget := webImagePageBudgetBytes()
 	var mu sync.Mutex
+	available := sync.NewCond(&mu)
+	inFlight := 0
 	var wg sync.WaitGroup
 	ctx, cancel := context.WithTimeout(context.Background(), webImagePassTimeout)
 	defer cancel()
 
 	var remote []string
 	for _, src := range srcs {
-		// Data URIs decode inline: no network, no budget.
+		// Data URIs need no network but still occupy the page's image budget.
 		if data, m, ok := decodeWebImageDataURI(src); ok {
-			images[src] = data
-			fetched[src] = m
+			if int64(len(data)) <= budget {
+				budget -= int64(len(data))
+				images[src] = data
+				fetched[src] = m
+				commitDoc(src, data, m)
+			} else {
+				fetched[src] = webImageMeta{}
+			}
 			continue
 		}
 		remote = append(remote, src)
@@ -885,7 +950,7 @@ func fetchWebImages(doc *webDocument) {
 	// it downloads and handing back what the image did not use. The budget
 	// used to be read only when a fetch was scheduled — and every fetch was
 	// scheduled before the first one finished, so all of them ran and the
-	// 4 MiB page cap never held.
+	// page cap never held.
 	queue := make(chan string)
 	for i := 0; i < webImageFetchWorkers; i++ {
 		wg.Add(1)
@@ -893,6 +958,13 @@ func fetchWebImages(doc *webDocument) {
 			defer wg.Done()
 			for src := range queue {
 				mu.Lock()
+				// Reservations are temporary. Wait for the in-flight images to
+				// return their unused bytes before deciding that the page has
+				// spent its allowance. Otherwise the sixth worker can drain the
+				// queue as placeholders while five tiny images are downloading.
+				for budget < webMaxImageBytes && inFlight > 0 {
+					available.Wait()
+				}
 				reserve := int64(webMaxImageBytes)
 				if budget < reserve {
 					reserve = budget
@@ -905,23 +977,24 @@ func fetchWebImages(doc *webDocument) {
 					continue
 				}
 				budget -= reserve
+				inFlight++
 				mu.Unlock()
 
-				body := fetchWebImageBytes(ctx, doc.URL, src)
-				if int64(len(body)) > reserve {
-					body = nil // larger than what was left for this page
-				}
+				body := fetchWebImageBytes(ctx, doc.URL, src, reserve)
 				var m webImageMeta
 				if len(body) > 0 {
 					m = decodeWebImageMeta(body)
 				}
 				mu.Lock()
+				inFlight--
 				budget += reserve - int64(len(body))
 				if len(body) > 0 {
 					images[src] = body
 				}
 				fetched[src] = m
+				available.Broadcast()
 				mu.Unlock()
+				commitDoc(src, body, m)
 			}
 		}()
 	}
@@ -951,7 +1024,13 @@ func fetchWebImages(doc *webDocument) {
 // and only accepts bytes the device can decode as an image, so an HTML error
 // page never reaches the decoder and a text response never eats the budget.
 // The caller's context bounds the whole pass; this one only caps one request.
-func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte {
+func fetchWebImageBytes(parent context.Context, pageURL, address string, maxBytes int64) []byte {
+	if maxBytes <= 0 {
+		return nil
+	}
+	if maxBytes > webMaxImageBytes {
+		maxBytes = webMaxImageBytes
+	}
 	// Ad images and tracking pixels are dropped before a connection is opened:
 	// a 1x1 pixel still costs a TLS handshake on handheld Wi-Fi. A page the
 	// user excepted fetches its images too.
@@ -973,6 +1052,7 @@ func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte 
 		return nil
 	}
 	defer resp.Body.Close()
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil
 	}
@@ -980,10 +1060,10 @@ func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte 
 		return nil
 	}
 	buf := &bytes.Buffer{}
-	if _, err := io.Copy(buf, io.LimitReader(resp.Body, webMaxImageBytes+1)); err != nil {
+	if _, err := io.Copy(buf, io.LimitReader(resp.Body, maxBytes+1)); err != nil {
 		return nil
 	}
-	if buf.Len() == 0 || buf.Len() > webMaxImageBytes {
+	if buf.Len() == 0 || int64(buf.Len()) > maxBytes {
 		return nil
 	}
 	return buf.Bytes()

@@ -43,25 +43,16 @@ func TestChildEnvWithTZReplacesInheritedZone(t *testing.T) {
 }
 
 func TestGameChildZoneFollowsCurrentLocation(t *testing.T) {
-	old := time.Local
-	defer func() { time.Local = old }()
-
-	time.Local = time.FixedZone("Europe/Berlin", 3600)
-	if zone := gameChildZone(); zone != "Europe/Berlin" {
+	if zone := gameChildZoneFor(time.FixedZone("Europe/Berlin", 3600)); zone != "Europe/Berlin" {
 		t.Fatalf("gameChildZone = %q, want Europe/Berlin", zone)
 	}
-	time.Local = time.FixedZone("Local", 0)
-	if zone := gameChildZone(); zone != "" {
+	if zone := gameChildZoneFor(time.FixedZone("Local", 0)); zone != "" {
 		t.Fatalf("gameChildZone = %q, want no TZ for the system zone", zone)
 	}
 }
 
 func TestScreenChildEnvCarriesCurrentZone(t *testing.T) {
-	old := time.Local
-	defer func() { time.Local = old }()
-	time.Local = time.FixedZone("America/New_York", -4*3600)
-
-	got := screenChildEnv([]string{"PATH=/bin", "TZ=Europe/Paris"})
+	got := screenChildEnvWithZone([]string{"PATH=/bin", "TZ=Europe/Paris"}, childEnvAppDir(), "America/New_York")
 	if zones := childEnvTZValues(got); len(zones) != 1 || zones[0] != "America/New_York" {
 		t.Fatalf("screen child TZ = %v, want [America/New_York]", zones)
 	}

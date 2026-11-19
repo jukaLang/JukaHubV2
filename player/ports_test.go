@@ -1,6 +1,10 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,5 +310,129 @@ func TestInstalledPortNeedsFirmwareGlibc(t *testing.T) {
 	}
 	if got := portCompatWithGlibc(arm64, need, "GLIBC_2.38"); got.State != portCompatSupported {
 		t.Fatalf("compatible firmware refused the port: %+v", got)
+	}
+}
+
+// PortMaster's Python comes from python-build-standalone's SHA256SUMS: the
+// chosen line decides both the file and the hash it must match.
+func TestPortMasterPythonPick(t *testing.T) {
+	h := func(c string) string { return strings.Repeat(c, 64) }
+	sums := h("1") + "  cpython-3.11.17+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz\n" +
+		h("2") + "  cpython-3.11.18+20261026-aarch64-unknown-linux-gnu-install_only.tar.gz\n" +
+		h("3") + " *cpython-3.11.18+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz\n" +
+		h("4") + "  cpython-3.11.18+20261026-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz\n" +
+		h("5") + "  cpython-3.11.18+20261026-aarch64-unknown-linux-musl-install_only_stripped.tar.gz\n" +
+		h("6") + "  cpython-3.12.12+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz\n" +
+		h("7") + "  cpython-3.11.18+20261026-aarch64-unknown-linux-gnu-debug-full.tar.zst\n" +
+		"nothex  cpython-3.11.99+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz\n"
+	a, ok := pmPythonPick([]byte(sums))
+	if !ok || a.SHA256 != h("3") || a.Tag != "20261026" || a.Minor != 11 || a.Patch != 18 || !a.Stripped ||
+		a.Name != "cpython-3.11.18+20261026-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz" {
+		t.Fatalf("picked %+v, %v", a, ok)
+	}
+	if a, ok := pmPythonPick([]byte(h("6") + "  cpython-3.12.12+20261026-aarch64-unknown-linux-gnu-install_only.tar.gz\n")); !ok || a.Minor != 12 {
+		t.Fatalf("3.12 fallback: %+v, %v", a, ok)
+	}
+	if _, ok := pmPythonPick([]byte(h("8") + "  cpython-3.14.1+20261026-aarch64-unknown-linux-gnu-install_only.tar.gz\n")); ok {
+		t.Fatal("an untested Python version was accepted")
+	}
+}
+
+// Without TRIMUI_EX, PortMaster's launcher runs as a copy in which only the
+// ex_config line is conditional and TRIMUI_EX's python3 (the whole path word)
+// names the Python in use.
+func TestPortMasterLauncherPatch(t *testing.T) {
+	const py = "/mnt/SDCARD/Apps/JukaHub/data/portmaster-runtime/python/bin/python3"
+	src := "#!/bin/bash\r\n" +
+		"source /mnt/SDCARD/System/etc/ex_config\r\n" +
+		"  . \"/mnt/SDCARD/System/etc/ex_config\"; # TRIMUI_EX\r\n" +
+		"[ -x /mnt/SDCARD/System/bin/python3 ] && /mnt/SDCARD/System/bin/python3 ./pugwash $PORTMASTER_CMDS\r\n" +
+		"ls /mnt/SDCARD/System/bin/python3.11\r\n" +
+		"source $(cat /x)/System/etc/ex_config\r\n" +
+		"source /mnt/SDCARD/System/etc/ex_config &\r\n" +
+		"echo done\r\n"
+	out, changed := pmPatchLauncher([]byte(src), py)
+	want := "#!/bin/bash\r\n" +
+		"if [ -f \"/mnt/SDCARD/System/etc/ex_config\" ]; then source /mnt/SDCARD/System/etc/ex_config; fi\r\n" +
+		"  if [ -f \"/mnt/SDCARD/System/etc/ex_config\" ]; then . \"/mnt/SDCARD/System/etc/ex_config\"; fi\r\n" +
+		"[ -x " + py + " ] && " + py + " ./pugwash $PORTMASTER_CMDS\r\n" +
+		"ls /mnt/SDCARD/System/bin/python3.11\r\n" +
+		"source $(cat /x)/System/etc/ex_config\r\n" +
+		"source /mnt/SDCARD/System/etc/ex_config &\r\n" +
+		"echo done\r\n"
+	if !changed || string(out) != want {
+		t.Fatalf("patched launcher:\n%q\nwant\n%q", out, want)
+	}
+	if _, changed := pmPatchLauncher([]byte("#!/bin/sh\nexec ./pugwash\n"), py); changed {
+		t.Fatal("a launcher without TRIMUI_EX lines was changed")
+	}
+	if out, _ := pmPatchLauncher([]byte("/mnt/SDCARD/System/bin/python3 x\n"), ""); string(out) != "/mnt/SDCARD/System/bin/python3 x\n" {
+		t.Fatalf("no Python chosen, yet the path changed: %q", out)
+	}
+}
+
+// The Python archive is unpacked without links (FAT card): bin links become
+// small scripts, other links copies, the test suite is left out, and a path
+// out of the folder stops the install.
+func TestPortMasterPythonExtract(t *testing.T) {
+	build := func(entries []tar.Header, bodies map[string]string) string {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		for _, h := range entries {
+			body := bodies[h.Name]
+			h.Size = int64(len(body))
+			if h.Typeflag != tar.TypeReg {
+				h.Size = 0
+			}
+			if err := tw.WriteHeader(&h); err != nil {
+				t.Fatal(err)
+			}
+			if h.Size > 0 {
+				if _, err := tw.Write([]byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(t.TempDir(), "py.tar.gz")
+		if err := os.WriteFile(p, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	good := build([]tar.Header{
+		{Name: "python/", Typeflag: tar.TypeDir, Mode: 0o755},
+		{Name: "python/bin/python3.11", Typeflag: tar.TypeReg, Mode: 0o755},
+		{Name: "python/bin/python3", Typeflag: tar.TypeSymlink, Linkname: "python3.11"},
+		{Name: "python/lib/libpython3.11.so.1.0", Typeflag: tar.TypeReg, Mode: 0o755},
+		{Name: "python/lib/libpython3.11.so", Typeflag: tar.TypeSymlink, Linkname: "libpython3.11.so.1.0"},
+		{Name: "python/lib/python3.11/os.py", Typeflag: tar.TypeReg, Mode: 0o644},
+		{Name: "python/lib/python3.11/test/test_os.py", Typeflag: tar.TypeReg, Mode: 0o644},
+	}, map[string]string{
+		"python/bin/python3.11": "ELF", "python/lib/libpython3.11.so.1.0": "LIB",
+		"python/lib/python3.11/os.py": "import sys", "python/lib/python3.11/test/test_os.py": "x",
+	})
+	dest := t.TempDir()
+	if err := pmPythonExtract(context.Background(), good, dest); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "bin", "python3")); err != nil || !strings.Contains(string(b), `exec "$(dirname "$0")/python3.11" "$@"`) {
+		t.Fatalf("bin/python3: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "lib", "libpython3.11.so")); err != nil || string(b) != "LIB" {
+		t.Fatalf("library link copy: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "lib", "python3.11", "test")); !os.IsNotExist(err) {
+		t.Fatal("the test suite was unpacked")
+	}
+	bad := build([]tar.Header{{Name: "python/../../escape", Typeflag: tar.TypeReg, Mode: 0o644}}, map[string]string{"python/../../escape": "x"})
+	if err := pmPythonExtract(context.Background(), bad, t.TempDir()); err == nil {
+		t.Fatal("a path out of the folder was accepted")
 	}
 }

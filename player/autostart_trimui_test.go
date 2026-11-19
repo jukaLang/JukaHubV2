@@ -195,8 +195,10 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 		{`PAUSED=/tmp/jukahub-paused`, "the paused record launch.sh reads"},
 		{`: >"$MENU" 2>/dev/null`, "noting that the menu was on screen before it was closed"},
 		{`[ -n "$same" ] && break`, "not showing the menu a third time to a loop that ignores the queue"},
-		{`grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json"`, "skipping the menu only in JukaHub OS mode"},
-		{`grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false'`, "the switch that keeps the menu first"},
+		{`grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json"`, "telling JukaHub OS mode from the app"},
+		{`grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false'`, "the JukaHub OS switch that keeps the menu first"},
+		{`if [ -e "$KEEP_MENU" ]; then`, "the Settings switch that keeps the menu first (the app folder's marker)"},
+		{`KEEP_MENU="$APP_DIR/` + trimuiAutostartKeepMenuFile + `"`, "the marker's name matching the Go side"},
 		{`on && exec "$L/real/MainUI" "$@"`, "a stand-in that can always reach the real menu (by the name MainUI)"},
 		{"started() {\n\tunshim", "taking the stand-in off once JukaHub started"},
 	} {
@@ -236,6 +238,7 @@ func TestTrimuiHookUsesTheFirmwareQueue(t *testing.T) {
 		{"/bin/sh '/mnt/SDCARD/Apps/JukaHub/launch.sh' || :", "runs launch.sh without failing a set -e loop"},
 		{"rm -f '/mnt/SDCARD/Apps/JukaHub/.autostart-pending'", "drops the marker once JukaHub exits"},
 		{"dd if=/dev/zero of=/dev/fb0 bs=65536 count=512 2>/dev/null || :", "blanks the closed menu without failing a set -e loop"},
+		{">/tmp/jukahub-autostart.lock/t-launch 2>/dev/null || :", "notes the time without failing a set -e loop"},
 	} {
 		if !strings.Contains(queued, want[0]) {
 			t.Errorf("the queued command no longer %s:\n%s", want[1], queued)
@@ -468,7 +471,12 @@ func TestLastLogLine(t *testing.T) {
 		"[2026-11-10 08:00:00 boot+9.2s] queued JukaHub for the firmware's launcher\n" +
 		"    runtrimui.sh:42:for f in /mnt/SDCARD/System/starts/*.sh; do\n" +
 		"[2026-11-10 08:00:03 boot+12.4s] the firmware started JukaHub (after the menu was closed)\n" +
-		"    runtrimui.sh:57:    ./MainUI\n\n"
+		"    run by: 812 runtrimui.sh from 5.13 s\n" +
+		"    boot times (seconds since the kernel started): firmware launcher 5.13, this hook 6.21 to 6.26\n" +
+		"    boot setup: the firmware's launcher script, boot services and SD card mount (once per log)\n" +
+		"    runtrimui.sh:57:    ./MainUI\n" +
+		"    init.d:/etc/init.d/runtrimui:START=99\n" +
+		"\t card:/dev/mmcblk1p1 /mnt/SDCARD exfat rw,sync 0 0\n\n"
 	if err := os.WriteFile(log, []byte(text), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -477,5 +485,13 @@ func TestLastLogLine(t *testing.T) {
 	}
 	if got := lastLogLine(filepath.Join(t.TempDir(), "missing.log")); got != "" {
 		t.Fatalf("a missing log gave %q", got)
+	}
+	// Only the tail is read: a line cut by its start is not a line.
+	cut := filepath.Join(t.TempDir(), trimuiAutostartLogFile)
+	if err := os.WriteFile(cut, []byte(strings.Repeat("x", 20<<10)+"\n    runtrimui.sh:1:#!/bin/sh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := lastLogLine(cut); got != "" {
+		t.Fatalf("a line cut by the tail gave %q", got)
 	}
 }

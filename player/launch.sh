@@ -44,7 +44,16 @@
 # Use this script's installed folder even when an older Apps/JukaHub folder
 # exists. Remote Play once needed that folder for its log, and choosing it
 # merely because it exists can leave a renamed install without its binary.
-APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+# (Shell builtins only: every fork before JukaHub starts is on the boot's path.)
+case "$0" in
+    */*) APP_DIR="${0%/*}" ;;
+    *) APP_DIR=. ;;
+esac
+if [ -n "$APP_DIR" ] && cd "$APP_DIR" 2>/dev/null; then
+    APP_DIR="$PWD"
+else
+    APP_DIR=""
+fi
 [ -f "$APP_DIR/JukaHub" ] || APP_DIR=/mnt/SDCARD/Apps/JukaHub
 
 cd "$APP_DIR" || exit 1
@@ -82,8 +91,10 @@ PAUSED=/tmp/jukahub-paused
 
 say "=== JukaHub launched from $APP_DIR ==="
 
-# Flush card writes first: FAT32 is slow and SDL reads the assets right away.
-sync
+# No sync here (2026-11-18): reads never wait for unwritten data, and a flush
+# of every dirty buffer at a boot put the card's writes in front of the very
+# reads JukaHub starts with. The paths that need their writes on the card (a
+# failed run's exit code, an update swap, a restart) still sync below.
 
 # The markers only belong to a process that has just exited. Leftovers from a
 # failed update would make this launch wait for a helper that never arrives.
@@ -361,17 +372,28 @@ stop_screen_groups() {
 # the script to finish, so it can bring nothing back meanwhile, and it is never
 # paused — a paused ancestor would stay paused if this script were killed.
 ANCESTORS=" $$ "
-CHAIN=""
+CHAIN_PIDS=""
 AN_P=$$
 AN_N=0
 while [ "$AN_N" -lt 32 ] && stat_of "$AN_P"; do
     case "$ST_PPID" in "" | 0 | 1 | *[!0-9]*) break ;; esac
     AN_P="$ST_PPID"
     ANCESTORS="$ANCESTORS$AN_P "
-    [ "$AN_N" -lt 3 ] && CHAIN="${CHAIN:+$CHAIN < }$(describe "$AN_P")"
+    [ "$AN_N" -lt 3 ] && CHAIN_PIDS="$CHAIN_PIDS $AN_P"
     AN_N=$((AN_N + 1))
 done
-say "started by ${CHAIN:-init}"
+# "started by ..." for the log, written once JukaHub is on its way (below):
+# naming a shell's script forks two tools per ancestor.
+STARTED_BY_TOLD=0
+say_started_by() {
+    [ "$STARTED_BY_TOLD" = 1 ] && return 0
+    STARTED_BY_TOLD=1
+    CHAIN=""
+    for AN_P in $CHAIN_PIDS; do
+        CHAIN="${CHAIN:+$CHAIN < }$(describe "$AN_P")"
+    done
+    say "started by ${CHAIN:-init}"
+}
 
 # ------------------------------------------------------- stop from outside
 # The firmware's power handling (and any supervisor) stops an app by signalling
@@ -406,6 +428,7 @@ while [ -n "$OTHER" ] && [ "$n" -lt 5 ]; do
     OTHER="$(drawing_jukahub)"
 done
 if [ -n "$OTHER" ]; then
+    say_started_by
     say "JukaHub is already on the screen ($(describe "$OTHER")); not starting a second one"
     exit 0
 fi
@@ -454,6 +477,7 @@ for UP in $UI_PID; do
     fi
 done
 
+UI_SEEN="$UI_PID"
 if [ -n "$UI_PID" ]; then
     say "stopping stock launcher (pid $UI_PID)"
     kill $UI_PID 2>/dev/null
@@ -465,8 +489,14 @@ fi
 # Verify, don't assume. A refused kill used to be ignored, and JukaHub then
 # started next to the stock launcher: both drew to the same framebuffer and the
 # screen alternated between them. If MainUI will not die, hand the screen back
-# instead of starting a second UI.
-if command -v pidof >/dev/null 2>&1 || command -v pgrep >/dev/null 2>&1; then
+# instead of starting a second UI. With no MainUI to stop (the usual start: the
+# menu queued JukaHub and exited, or the boot hook never let it open) there is
+# nothing to verify.
+if ! command -v pidof >/dev/null 2>&1 && ! command -v pgrep >/dev/null 2>&1; then
+    # Nothing can inspect the process list, so wait out the handover instead
+    # of guessing that the display is free.
+    sleep 1
+elif [ -n "$UI_SEEN" ]; then
     n=0
     while [ -n "$(ui_pid)" ] && [ "$n" -lt 8 ]; do
         n=$((n + 1))
@@ -476,14 +506,11 @@ if command -v pidof >/dev/null 2>&1 || command -v pgrep >/dev/null 2>&1; then
         sleep 1
     done
     if [ -n "$(ui_pid)" ]; then
+        say_started_by
         say "FATAL: MainUI still holds the display after $n attempts; not starting JukaHub"
         resume_paused
         exit 1
     fi
-else
-    # Nothing can inspect the process list, so wait out the handover instead
-    # of guessing that the display is free.
-    sleep 1
 fi
 
 # ------------------------------------------------------------- environment
@@ -596,7 +623,9 @@ cpu_snapshot() {
     for CS_D in $(cpu_dirs); do
         for CS_K in scaling_governor scaling_min_freq scaling_max_freq; do
             [ -f "$CS_D/$CS_K" ] || continue
-            CS_V="$(cat "$CS_D/$CS_K" 2>/dev/null)"
+            # read, not cat: a fork per value is on the start's path.
+            CS_V=""
+            read -r CS_V 2>/dev/null <"$CS_D/$CS_K"
             case "$CS_V" in "" | *[!A-Za-z0-9_]*) continue ;; esac
             CPU_SNAP="$CPU_SNAP$CS_D/$CS_K $CS_V
 "
@@ -611,7 +640,8 @@ cpu_restore() {
     for CR_PASS in 1 2; do
         while read -r CR_F CR_V; do
             [ -n "$CR_F" ] || continue
-            CR_NOW="$(cat "$CR_F" 2>/dev/null)"
+            CR_NOW=""
+            read -r CR_NOW 2>/dev/null <"$CR_F"
             [ "$CR_NOW" = "$CR_V" ] && continue
             echo "$CR_V" >"$CR_F" 2>/dev/null
             if [ "$CR_PASS" = 1 ]; then
@@ -643,7 +673,7 @@ while :; do
     # starts as the app when OS mode cannot run; an older JukaHub ignores the
     # flag. The pattern is the boot hook's too (autostart.go): any spacing, and
     # a file saved on Windows (CRLF) still counts.
-    if grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null; then
+    if [ -f "$APP_DIR/os/os.json" ] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null; then
         say "starting JukaHub OS (os/os.json: OS mode on; what it applied follows as \"jukaos:\" lines)"
         "$APP_DIR/JukaHub" --os-session >>"$LOG" 2>&1 &
     else
@@ -657,6 +687,8 @@ while :; do
         "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
     fi
     APP_PID=$!
+    # Who started this script, now that JukaHub is on its way (first pass).
+    say_started_by
     wait "$APP_PID"
     RC=$?
     # A stop signal interrupts wait, not the app. Wait again so the display is

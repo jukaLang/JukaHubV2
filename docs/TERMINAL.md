@@ -12,6 +12,43 @@ the on-screen keyboard.
 
 Code: `player/terminal*.go`, `player/cmddeck*.go`.
 
+## apt (Linux packages on the handheld)
+
+On a TrimUI, `apt` (also `apt-get` and `jpkg`) is a built-in: the package
+manager of [Linux packages](LINUX_PACKAGES.md), which installs Ubuntu 24.04's
+arm64 programs onto the card.
+
+```
+apt update                 # Ubuntu's signed package index (about 20 MB the first time)
+apt install python3 git    # what they need comes along
+apt search sqlite          # name and description
+apt show nmap
+apt list --installed       # or --upgradable
+apt upgrade                # newer versions of what is installed
+apt remove git             # and apt autoremove for leftovers
+apt clean                  # delete downloaded .deb files
+```
+
+It runs as a Terminal job: its lines stream in, **X** / **Ctrl+C** stops it
+(the next install repairs a package that was half unpacked), and it may run
+for up to two hours instead of the five minutes a shell command gets. Leaving
+the Terminal stops it, as it stops any command. A command that brings in
+packages you did not name, or an upgrade, prints what it would do and changes
+nothing: the Terminal cannot answer a question while a command runs, so the
+same command with `-y` is typed into the prompt for you — press **Start** to
+go ahead.
+
+Every other command the Terminal runs has `<data>/linux/bin` first on its
+`PATH`, so installed programs (`python3`, `perl`, `git`, `nmap` …) are found by
+name; firmware tools keep the firmware's libraries. A line with shell syntax
+(`apt search x | grep y`) goes to the shell, where `<data>/linux/bin/apt` runs
+`JukaHub apt …`. The same `apt` works in an SSH shell on the device (call
+`<data>/linux/bin/apt`, or `. <data>/linux/env.sh` first to get the programs on
+`PATH`); there it asks *Do you want to continue? [Y/n]* like apt.
+
+On Windows and on a Linux PC, `apt` says it is the handheld's package manager;
+a PC with its own `apt` on `PATH` runs that one instead.
+
 ## Command Deck
 
 Open it with **Select** in the Terminal (**Ctrl+P** on a keyboard, or the list

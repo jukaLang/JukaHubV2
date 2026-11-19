@@ -995,6 +995,9 @@ func pkgHeroButtons(mode int, it *pkgItem, live pkgLive) (primary, secondary str
 	status, frac := pkgStatusOf(it, live)
 	switch status {
 	case pkgStatusInstalled:
+		if it.Launch != "" {
+			return pkgRunLabel(it), "Details", false
+		}
 		return "Open folder", "Details", false
 	case pkgStatusUpdate:
 		return "Update", "Details", !pkgUI.online
@@ -1512,6 +1515,13 @@ func pkgSheetButtons(it *pkgItem, live pkgLive) []pkgSheetBtn {
 		removeLabel = "Press again to remove"
 	}
 	_, _, hasSource := pkgSourceURL(it)
+	// An installed package that can start here leads with Run (Play for a
+	// game); Open folder follows it (pkglaunch.go).
+	openKind := pkgBtnPrimary
+	if it.Launch != "" {
+		openKind = pkgBtnGlass
+	}
+	run := pkgSheetBtn{ID: "run", Label: pkgRunLabel(it), Kind: pkgBtnPrimary, Frac: -1}
 	switch {
 	case it.Kind == pkgKindApp:
 		switch status {
@@ -1533,20 +1543,31 @@ func pkgSheetButtons(it *pkgItem, live pkgLive) []pkgSheetBtn {
 		}
 		out = append(out, pkgSheetBtn{ID: "busy", Label: busy, Kind: pkgBtnGlass, Disabled: true, Frac: -1})
 	case it.Kind == pkgKindLocal:
-		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnPrimary, Frac: -1})
+		if it.Launch != "" {
+			out = append(out, run)
+		}
+		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: openKind, Frac: -1})
 		if it.HasRollback {
 			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
 		}
 		out = append(out, pkgSheetBtn{ID: "remove", Label: removeLabel, Kind: pkgBtnDanger, Frac: -1})
 	case status == pkgStatusUpdate:
 		out = append(out, pkgSheetBtn{ID: "update", Label: "Update to " + pkgVersionLabel(it.Pkg.Version), Kind: pkgBtnPrimary, Disabled: offline, Frac: -1})
+		if it.Launch != "" {
+			// The installed version still starts while the update waits.
+			run.Kind = pkgBtnGlass
+			out = append(out, run)
+		}
 		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnGlass, Frac: -1})
 		if it.HasRollback {
 			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
 		}
 		out = append(out, pkgSheetBtn{ID: "remove", Label: removeLabel, Kind: pkgBtnDanger, Frac: -1})
 	case status == pkgStatusInstalled:
-		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: pkgBtnPrimary, Frac: -1})
+		if it.Launch != "" {
+			out = append(out, run)
+		}
+		out = append(out, pkgSheetBtn{ID: "open", Label: "Open folder", Kind: openKind, Frac: -1})
 		out = append(out, pkgSheetBtn{ID: "reinstall", Label: "Reinstall", Kind: pkgBtnGlass, Disabled: offline, Frac: -1})
 		if it.HasRollback {
 			out = append(out, pkgSheetBtn{ID: "rollback", Label: it.RollbackLabel, Kind: pkgBtnGlass, Frac: -1})
@@ -1782,7 +1803,17 @@ func pkgDrawSheet(renderer *sdl.Renderer, config *Config, ft *pkgType, body sdl.
 	btns := pkgSheetButtons(it, live)
 	st.sheet.btn = pkgSheetClampButton(btns, st.sheet.btn)
 	by := tile.Y + tile.H + 18
-	btnH := int32(42)
+	btnH, gap := int32(42), int32(10)
+	// Up to six buttons (Update, Run, Open folder, Roll back, Remove, Source
+	// page): on a short screen they squeeze before the last one is cut off.
+	if n := int32(len(btns)); n > 0 {
+		if avail := s.Y + s.H - 16 - by; n*(btnH+gap)-gap > avail {
+			gap = 6
+			if h := (avail+gap)/n - gap; h < btnH {
+				btnH = max(h, 30)
+			}
+		}
+	}
 	for i, b := range btns {
 		r := sdl.Rect{X: colX, Y: by, W: colW, H: btnH}
 		if r.Y+r.H > s.Y+s.H-16 {
@@ -1806,7 +1837,7 @@ func pkgDrawSheet(renderer *sdl.Renderer, config *Config, ft *pkgType, body sdl.
 			pkgDrawActionButton(renderer, config, ft, r, b.Label, kind, b.Disabled, focused, b.Frac)
 		}
 		pkgAddHit(pkgHit{Kind: pkgHitSheetButton, Rect: r, Index: i})
-		by += btnH + 10
+		by += btnH + gap
 	}
 	if pkgSheetNeedsNet(btns) && by+pkgFontH(ft.meta) < s.Y+s.H-12 {
 		note := ellipsize(ft.meta, "Needs internet — connect Wi-Fi to download.", colW)

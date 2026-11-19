@@ -179,6 +179,8 @@ func ssyncHubTile() toolsHubTile {
 		t.value, t.tone = "Working…", toolsHubToneBusy
 	case gdriveSettingsGet().ready():
 		t.value = "Google Drive · " + gdriveSettingsGet().accountLabel()
+	case webdavSettingsGet().ready():
+		t.value = "WebDAV · " + webdavSettingsGet().label()
 	case peerEnabledFlag.Load():
 		if n := peerPairedCount(); n == 1 {
 			t.value = "1 paired device · or export a file"
@@ -670,7 +672,9 @@ func ssyncOpenItemSheet(config *Config, id string) {
 		body += "This device's copy goes to " + cmp.PeerName + " (" + it.Reason + ")."
 	case ssyncConflict:
 		if cmp.PeerID == gdrivePeerID {
-			body += "The two copies differ and the last sync cannot say which one changed. This device's copy keeps the name on both sides and Drive's is kept beside it as " +
+			// Drive and WebDAV both compare as the cloud peer; PeerName says
+			// which one this is.
+			body += "The two copies differ and the last sync cannot say which one changed. This device's copy keeps the name on both sides and " + cmp.PeerName + "'s is kept beside it as " +
 				path.Base(it.CopyPath) + ", so nothing is lost."
 			break
 		}

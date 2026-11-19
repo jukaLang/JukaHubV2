@@ -17,7 +17,10 @@ package main
 // the computer then sees one device with both ADB and MTP, as Android phones
 // do. With no gadget bound, JukaHub makes its own ("jukahub"). Stopping takes
 // out only what was added and binds the firmware's gadget again; a start
-// first clears whatever a crashed run left behind.
+// first clears whatever a crashed run left behind. With "Browser over USB"
+// on, a network function joins MTP in the same configuration
+// (usbnet_linux.go); it is dropped again whenever the port will not bind
+// with it, so file transfer never depends on it.
 //
 // Endpoint reads and writes block in the kernel, and Go cannot interrupt a
 // blocking read on such a file. Each I/O loop therefore runs on a thread of
@@ -102,7 +105,13 @@ type mtpFFS struct {
 	packet   atomic.Int32 // bulk packet size at the speed the port came up at
 	giveUp   atomic.Bool  // the firmware gadget would not bind: try once on teardown
 
-	// bindMu keeps the watchdog's bind and stop's unbind from crossing.
+	// net is the "Browser over USB" network function next to MTP
+	// (usbnet_linux.go), nil when there is none. Set before the threads
+	// start and cleared only after they end.
+	net *usbNetLink
+
+	// bindMu keeps the watchdog's bind, a network swap and stop's unbind
+	// from crossing.
 	bindMu sync.Mutex
 }
 
@@ -345,26 +354,29 @@ func mtpUnbind(gadget string) {
 }
 
 // mtpClearStale removes what an earlier run left in any gadget: the link,
-// the mount, the function, and our own gadget. A firmware gadget that held
-// our function is bound again, so ADB comes back.
+// the mount, the function, and our own gadget — and the network function
+// with the gadget settings it changed (usbnet_linux.go). A firmware gadget
+// that held our functions is bound again, so ADB comes back.
 func mtpClearStale() {
 	type rebind struct{ gadget, udc string }
 	var again []rebind
 	for _, g := range mtpGadgets() {
 		links, _ := filepath.Glob(filepath.Join(g, "configs", "*", mtpFFSFunction))
+		touched := len(links) > 0 || len(usbNetStaleLinks(g)) > 0 || usbNetSavedFor(g)
 		fn := filepath.Join(g, "functions", mtpFFSFunction)
 		own := filepath.Base(g) == mtpOwnGadget
-		if len(links) == 0 && !dirExists(fn) && !own {
+		if !touched && !dirExists(fn) && !own {
 			continue
 		}
 		udc := mtpReadAttr(filepath.Join(g, "UDC"))
-		if len(links) > 0 || own {
+		if touched || own {
 			mtpUnbind(g)
 		}
 		for _, l := range links {
 			_ = os.Remove(l)
 		}
-		if !own && len(links) > 0 {
+		usbNetClearStale(g)
+		if !own && touched {
 			again = append(again, rebind{g, udc})
 		}
 	}
@@ -389,8 +401,16 @@ func mtpClearStale() {
 }
 
 // mtpRemoveGadgetTree takes our own gadget apart, innermost first: configfs
-// directories go away with rmdir only.
+// directories go away with rmdir only, and a configuration only once the
+// OS-descriptor link to it is gone.
 func mtpRemoveGadgetTree(g string) {
+	if ods, err := os.ReadDir(filepath.Join(g, "os_desc")); err == nil {
+		for _, l := range ods {
+			if l.Type()&os.ModeSymlink != 0 {
+				_ = os.Remove(filepath.Join(g, "os_desc", l.Name()))
+			}
+		}
+	}
 	cfgs, _ := filepath.Glob(filepath.Join(g, "configs", "*"))
 	for _, c := range cfgs {
 		links, _ := os.ReadDir(c)
@@ -510,7 +530,30 @@ func (f *mtpFFS) attach(cfg usbMtpStartConfig) error {
 	if err := os.Symlink(fn, filepath.Join(f.cfg, mtpFFSFunction)); err != nil && !os.IsExist(err) {
 		return fmt.Errorf("could not add MTP to the USB gadget: %w", err)
 	}
-	if err := mtpBind(f.gadget, f.udc); err != nil {
+	if cfg.net {
+		f.net = usbNetJoin(f.gadget, f.cfg, f.own, cfg.serial)
+	}
+	if f.net != nil {
+		err := mtpBind(f.gadget, f.udc)
+		if err == nil {
+			f.net.bound()
+			if !f.own {
+				logInfo("usbmtp", "MTP and the USB network added to the firmware's USB gadget %s", filepath.Base(f.gadget))
+			}
+			return nil
+		}
+		// File transfer is never lost to the network function: take it out
+		// and bind exactly what was there before. Most likely the controller
+		// ran out of endpoints; this boot does not try again.
+		logWarn("usbnet", "the USB port would not start with the network function (%v); file transfer only", err)
+		mtpUnbind(f.gadget)
+		f.net.leave()
+		f.net = nil
+		if err := mtpBind(f.gadget, f.udc); err != nil {
+			return fmt.Errorf("could not switch the USB port on: %w", err)
+		}
+		usbNetNoteNoRoom(f.gadget, f.own)
+	} else if err := mtpBind(f.gadget, f.udc); err != nil {
 		return fmt.Errorf("could not switch the USB port on: %w", err)
 	}
 	if !f.own {
@@ -571,6 +614,9 @@ wait:
 	if f.gadget != "" && f.cfg != "" {
 		mtpUnbind(f.gadget)
 		_ = os.Remove(filepath.Join(f.cfg, mtpFFSFunction))
+		if f.net != nil {
+			f.net.leave()
+		}
 		if !f.own && f.udc != "" {
 			_ = mtpBind(f.gadget, f.udc)
 		}
@@ -602,6 +648,10 @@ func (f *mtpFFS) teardown() {
 	}
 	if f.gadget != "" && f.cfg != "" {
 		_ = os.Remove(filepath.Join(f.cfg, mtpFFSFunction))
+	}
+	if f.net != nil {
+		f.net.leave()
+		f.net = nil
 	}
 	f.closeFiles()
 	_ = syscall.Unmount(mtpFFSMount, syscall.MNT_DETACH)
@@ -704,11 +754,17 @@ func (f *mtpFFS) handleEvent(cfg usbMtpStartConfig, ev []byte) {
 		if cfg.connected != nil {
 			cfg.connected(true)
 		}
+		if f.net != nil {
+			f.net.hostCame(f)
+		}
 	case ffsEventDisable, ffsEventUnbind:
 		was := f.enabled.Swap(false)
 		f.srv.reset.Store(true)
 		if was && cfg.connected != nil {
 			cfg.connected(false)
+		}
+		if was && f.net != nil {
+			f.net.hostLeft()
 		}
 		// Whatever the computer wrote is flushed to the card now, not
 		// whenever the kernel gets round to it.

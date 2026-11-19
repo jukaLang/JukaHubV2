@@ -11,9 +11,9 @@ package main
 // in exactly <SD>/Apps/WPE and is started by its launch.sh, which takes an
 // address as its first argument (its start page otherwise).
 //
-// So the reader hands over instead of failing: "Open in WPE Browser" in the
-// Browser menu, and first on the "needs a full web browser" card when WPE is
-// installed. WPE runs as a screen-taking child exactly like an emulator
+// Browser entries hand pages over by default when WPE is installed. The light
+// reader also has "Open in WPE Browser" in its menu and on the "needs a full
+// web browser" card. WPE runs as a screen-taking child exactly like an emulator
 // (launchEmulatorEntry): its own process group, the main loop parked while it
 // draws, the reaper handing the screen back when it exits — and the reader is
 // still on the same page, because nothing about the page was torn down.
@@ -609,7 +609,7 @@ func brwWpeSettingsRow() setRow {
 func brwWpeSettingsDetail(s brwWpeStatus) string {
 	switch {
 	case s.Installed:
-		return "Pages open in it from the Browser menu · choose to check for an update"
+		return "Full pages open here by default · choose to check for an update"
 	case s.Supported:
 		return "A full WebKit browser for sites the reader can't show · choose to install"
 	}

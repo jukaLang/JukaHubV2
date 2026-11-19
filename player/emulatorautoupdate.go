@@ -464,7 +464,7 @@ func coreAutoUpdateLastCheck() string {
 func emuAutoUpdateSummary(report emuInstallReport) string {
 	n := len(report.Updated)
 	if n == 0 {
-		if len(report.Refused) > 0 && len(report.Errors) == 0 && report.LowSpace == "" && len(report.Asked) == 0 {
+		if len(report.Refused) > 0 && len(report.Errors) == 0 && report.LowSpace == "" && len(report.Asked) == 0 && len(report.HeldGPU) == 0 {
 			return coreRefusedSummary(report)
 		}
 		return report.summary()
@@ -489,8 +489,14 @@ func emuAutoUpdateSummary(report emuInstallReport) string {
 	if len(report.Asked) > 0 {
 		msg += " · " + coreCrossMixAskNote(report.Asked)
 	}
+	if len(report.HeldGPU) > 0 {
+		msg += " · " + coreGPUHeldNote(report.HeldGPU)
+	}
 	if report.LowSpace != "" {
 		msg += " · " + coreLowSpaceNote(report.LowSpace)
+	}
+	if report.Current > 0 {
+		msg += fmt.Sprintf(" · %d already current", report.Current)
 	}
 	return msg
 }
@@ -584,6 +590,16 @@ func startCoreAutoUpdate(config *Config) {
 		// PC whose user never chose is told once (emuDesktopNotice).
 		startDesktopEmuAutoUpdate(IsWindows() && mode == coreUpdateInstall && !chosen)
 		return
+	}
+	// Whatever the mode, a GPU core an earlier build's automatic pass swapped
+	// for a generic buildbot build gets the firmware's build back, once
+	// (corebuilds_probation.go): N64 games quit at once on such a build.
+	if emuCoreInstallSupported() {
+		startCoreGPURepair()
+		// And a core this firmware cannot open at all (one RetroArch's own
+		// updater installed while JukaHub was closed) gets a build that runs
+		// here (corefix.go).
+		startCoreFixScan()
 	}
 	if !coreAutoUpdateAllowed(coreAutoUpdateDisabled(), emuCoreInstallSupported(), IsTrimuiDevice(), true) {
 		return
@@ -829,7 +845,7 @@ func coreAutoUpdateSettle(now time.Time, report emuInstallReport, timedOut, stop
 		emuForgetAllUpdates()
 		coreBuildsRequestReload()
 	}
-	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" && len(report.Asked) == 0 {
+	if len(report.Updated) == 0 && len(report.Errors) == 0 && len(report.Refused) == 0 && report.LowSpace == "" && len(report.Asked) == 0 && len(report.HeldGPU) == 0 {
 		switch {
 		case !report.Interrupted:
 			logPatch("core auto-update: %d core(s) checked, all current", report.Current)

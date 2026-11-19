@@ -3,8 +3,9 @@ package main
 // gamemenu.go — the in-game menu: hold Select + L2 in any game or emulator
 // JukaHub started (RetroArch, PPSSPP, a port) and the game pauses under a
 // small glass menu: Resume game, Save state and Load state (a RetroArch game
-// the library started: six slots with pictures, gamemenu_states.go), Ask
-// Juka (with the game assistant on), Sleep and Quit to JukaHub.
+// the library started: six slots with pictures, gamemenu_states.go), Cheats
+// (the same game with cheats switched on: gamemenu_cheats.go), Ask Juka (with
+// the game assistant on), Sleep and Quit to JukaHub.
 //
 // It is the game assistant's overlay in another mode, so it inherits all of
 // its machinery and guard rails (gameassist.go): the pad watcher sees the
@@ -71,6 +72,8 @@ const (
 	gmCloseBg // close background apps, keep the game (closeall.go)
 	gmMusic   // JukaHub's music: A play/pause, Left/Right previous/next (musicgame.go)
 	gmSwitch  // quit to the game switcher (gameswitcher.go)
+	gmCheats  // the game's cheats, switched on and off (gamemenu_cheats.go)
+	gmDisc    // a multi-disc game's disc: Left/Right pick, A puts it in (discpage.go)
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -112,6 +115,12 @@ func gmItems(config *Config) []gmItem {
 			items = append(items, gmRewind)
 		}
 		items = append(items, gmFast)
+		if gmDiscAvailable() {
+			items = append(items, gmDisc)
+		}
+		if gmCheatsAvailable() {
+			items = append(items, gmCheats)
+		}
 	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
@@ -147,6 +156,10 @@ func gmLabel(it gmItem) (string, string) {
 		return "Close background apps", closeAllMenuSub()
 	case gmSwitch:
 		return "Game switcher", "Quit, then pick up another recent game"
+	case gmCheats:
+		return "Cheats", gmCheatsSub()
+	case gmDisc:
+		return gmDiscLabel()
 	case gmMusic:
 		title, paused, _ := musicGameMenuState()
 		sub := orbKeyName("A") + " pause · Left/Right previous / next"
@@ -177,6 +190,10 @@ func gmPress(config *Config, b gaButton) {
 		gmPickPress(b)
 		return
 	}
+	if gmCheatsActive() {
+		gmCheatsPress(b)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1
@@ -197,14 +214,17 @@ func gmPress(config *Config, b gaButton) {
 			gmAskJuka(config)
 		}
 	case gaBtnLeft, gaBtnRight:
-		// Only the Music row has a sideways meaning: the track. No shoulder
-		// or hotkey is needed for it.
+		// The Music row's sideways meaning is the track, the Disc row's the
+		// disc. No shoulder or hotkey is needed for them.
 		if items[gaOverlay.sel] == gmMusic {
 			if b == gaBtnLeft {
 				musicPrev()
 			} else {
 				musicNext()
 			}
+		}
+		if items[gaOverlay.sel] == gmDisc {
+			gmDiscStep(b == gaBtnRight)
 		}
 	case gaBtnA:
 		switch items[gaOverlay.sel] {
@@ -231,6 +251,10 @@ func gmPress(config *Config, b gaButton) {
 		case gmFast:
 			PlayActivateSound()
 			retroTransportCommand(false)
+		case gmCheats:
+			gmCheatsOpen()
+		case gmDisc:
+			gmDiscApply()
 		case gmCloseBg:
 			// The game stays paused here; the row's line shows the result.
 			PlayActivateSound()
@@ -374,6 +398,10 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 		gmPickDraw(renderer, fonts)
 		return
 	}
+	if gmCheatsActive() {
+		gmCheatsDraw(renderer, fonts)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1
@@ -428,6 +456,29 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 			}
 		}
 	}
+	// Still too tall (Music, Rewind, Disc, Cheats, Ask Juka and the game
+	// switcher all on a 720-px screen): show a window of rows that follows
+	// the selection, with a small arrow where more rows hide.
+	first, visible := 0, len(items)
+	if h > screenHeight-2*pad && len(items) > 0 {
+		per := fonts.bodyH + 2*pad + rowGap
+		fixed := h - int32(len(items))*per
+		visible = int((screenHeight - 2*pad - fixed) / per)
+		if visible < 1 {
+			visible = 1
+		}
+		if visible > len(items) {
+			visible = len(items)
+		}
+		first = gaOverlay.sel - visible/2
+		if first > len(items)-visible {
+			first = len(items) - visible
+		}
+		if first < 0 {
+			first = 0
+		}
+		h = fixed + int32(visible)*per
+	}
 
 	card := sdl.Rect{X: (screenWidth - w) / 2, Y: (screenHeight - h) / 2, W: w, H: h}
 	fill := glassSheetFill()
@@ -447,7 +498,17 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	y += pad
 
 	accent := glassAccent()
+	// The arrows are drawn, not typed: the bundled fonts may lack ▲ and ▼.
+	arrowR := max32(4, fonts.smallH/4)
+	arrowX := card.X + card.W - pad - arrowR
+	if first > 0 {
+		ay := y - pad/2 - arrowR
+		fillTriangleFilled(renderer, pt{arrowX - arrowR, ay + arrowR}, pt{arrowX + arrowR, ay + arrowR}, pt{arrowX, ay - arrowR/2}, ColorTextSecondary())
+	}
 	for i, it := range items {
+		if i < first || i >= first+visible {
+			continue
+		}
 		label, sub := gmLabel(it)
 		rh := rowH(it)
 		row := sdl.Rect{X: card.X + pad/2, Y: y, W: card.W - pad, H: rh}
@@ -463,6 +524,10 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 			drawText(renderer, fonts.small, ellipsize(fonts.small, sub, inner-pad), row.X+pad, ty+fonts.bodyH+2, ColorTextSecondary(), textAlignLeft)
 		}
 		y += rh + rowGap
+	}
+	if first+visible < len(items) {
+		ay := y - rowGap + pad/2 + arrowR/2
+		fillTriangleFilled(renderer, pt{arrowX - arrowR, ay - arrowR}, pt{arrowX + arrowR, ay - arrowR}, pt{arrowX, ay + arrowR/2}, ColorTextSecondary())
 	}
 	y += pad / 2
 	drawText(renderer, fonts.small, ellipsize(fonts.small, hint, inner), card.X+card.W/2, y, ColorTextSecondary(), textAlignCenter)

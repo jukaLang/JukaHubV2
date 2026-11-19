@@ -86,7 +86,16 @@ func coverageFor(path string) ([]runeRange, bool) {
 		return cached, cached != nil
 	}
 
-	ranges, err := parseCMAP(resolvePath(path))
+	// The bytes the font cache already holds for this face (home_fonts.go)
+	// when it has them: the file is the same, and reading it a second time
+	// cost a whole-file read on the first label's frame.
+	var ranges []runeRange
+	var err error
+	if data := homeUIFontSourceBytes(path); len(data) > 0 {
+		ranges, err = parseCMAPData(data)
+	} else {
+		ranges, err = parseCMAP(resolvePath(path))
+	}
 	if err != nil {
 		// Remember the failure so a broken/missing font is not re-read per rune.
 		coverageMu.Lock()
@@ -127,6 +136,11 @@ func parseCMAP(path string) ([]runeRange, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseCMAPData(data)
+}
+
+// parseCMAPData is parseCMAP for a font already in memory. data is only read.
+func parseCMAPData(data []byte) ([]runeRange, error) {
 	if len(data) < 12 {
 		return nil, errShortFont
 	}

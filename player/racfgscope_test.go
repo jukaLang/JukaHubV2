@@ -389,3 +389,83 @@ func TestRetroArchConfigCandidatesPreferTheBinaryFolder(t *testing.T) {
 		t.Fatalf("first candidates = %q", cands)
 	}
 }
+
+// TestRaRemapFormat checks the one-launch remap file (racontrols_remap.go)
+// against RetroArch's remap format: input_player1_btn_<button> = the RetroPad
+// number the core is handed, quoted or bare, the first line for a key winning,
+// and a file RetroArch saved again (no marker, other players' keys) still
+// recognised by its buttons.
+func TestRaRemapFormat(t *testing.T) {
+	buttons := raRemapPreset(gameButtonsSwapBoth)
+	text := raRemapText(buttons, []raScopeValue{{Key: "input_turbo_enable", Value: "true"}})
+	for _, want := range []string{
+		raRemapMarker + "\n",
+		"input_remap_port_p1 = \"0\"\n",
+		"input_player1_btn_b = \"8\"\n",
+		"input_player1_btn_y = \"9\"\n",
+		"input_player1_btn_a = \"0\"\n",
+		"input_player1_btn_x = \"1\"\n",
+		"input_turbo_enable = \"true\"\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("remap text lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "btn_start") {
+		t.Fatalf("an unchanged button was written:\n%s", text)
+	}
+	got := raRemapParse([]byte(text))
+	if len(got) != 4 || got["a"] != 0 || got["b"] != 8 || got["x"] != 1 || got["y"] != 9 {
+		t.Fatalf("parsed %v", got)
+	}
+	fp := raRemapFingerprint(buttons)
+	if fp != "a=0,b=8,x=1,y=9" || raRemapFingerprint(got) != fp {
+		t.Fatalf("fingerprint %q, parsed %q", fp, raRemapFingerprint(got))
+	}
+	if !raRemapOurs([]byte(text), "") {
+		t.Fatal("the marker is not recognised")
+	}
+
+	// As RetroArch saves it: bare and quoted values, other players, a
+	// duplicate (the first counts), an unknown button and an identity entry.
+	saved := "input_libretro_device_p1 = \"1\"\r\n" +
+		"input_player1_btn_a = 0\r\n" +
+		"input_player1_btn_b = \"8\"\r\n" +
+		"input_player1_btn_b = \"3\"\r\n" +
+		"input_player1_btn_x = \"1\"\r\n" +
+		"input_player1_btn_y = \"9\"\r\n" +
+		"input_player1_btn_start = \"3\"\r\n" +
+		"input_player1_btn_turbo = \"2\"\r\n" +
+		"input_player2_btn_a = \"0\"\r\n" +
+		"input_remap_port_p1 = \"0\"\r\n"
+	if !raRemapOurs([]byte(saved), fp) {
+		t.Fatalf("RetroArch's re-save not recognised: %v", raRemapParse([]byte(saved)))
+	}
+	if raRemapOurs([]byte(saved), "a=0,b=8") {
+		t.Fatal("a different mapping was taken for JukaHub's")
+	}
+	user := "input_player1_btn_l = \"12\"\ninput_player1_btn_l2 = \"-1\"\n"
+	if raRemapOurs([]byte(user), fp) {
+		t.Fatal("the user's own remap was taken for JukaHub's")
+	}
+	if p := raRemapParse([]byte(user)); p["l"] != 12 || p["l2"] != -1 {
+		t.Fatalf("parsed %v", p)
+	}
+
+	// Where RetroArch looks: the game, the content folder, the core.
+	dir := filepath.Join("remaps")
+	cands := raRemapCandidates(dir, "Snes9x", filepath.Join("Roms", "SFC", "Super Mario World (USA).sfc"))
+	want := []string{
+		filepath.Join(dir, "Snes9x", "Super Mario World (USA).rmp"),
+		filepath.Join(dir, "Snes9x", "SFC.rmp"),
+		filepath.Join(dir, "Snes9x", "Snes9x.rmp"),
+	}
+	if len(cands) != len(want) {
+		t.Fatalf("candidates %q", cands)
+	}
+	for i := range want {
+		if cands[i] != want[i] {
+			t.Fatalf("candidates %q, want %q", cands, want)
+		}
+	}
+}

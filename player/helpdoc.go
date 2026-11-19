@@ -128,9 +128,10 @@ type helpTip struct {
 }
 
 // helpTips is the bounded list (taken from CONTROLS.md; every control named
-// there is real). A chord is one token, "[Select + L1]", so it keeps the
-// physical names under an Accessibility remap and the quit chord turns into
-// the PC's Alt+F4.
+// there is real). A chord is one token, "[Select + L1]", so the hint
+// vocabulary sees the whole chord: the quit and mouse-mode chords keep their
+// physical names under an Accessibility remap, and the quit chord becomes the
+// PC's Alt+F4.
 var helpTips = [...]helpTip{
 	{"Press [Start|Start menu] anywhere for the Start menu: screens, games, tools and the device", "Start menu", tipKeyboardOK},
 	{"[B] goes back one screen; [Select] falls back to Home", "Everywhere", tipPadOnly},

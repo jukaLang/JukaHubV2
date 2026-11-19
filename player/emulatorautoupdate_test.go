@@ -980,3 +980,66 @@ func TestEmuRuntimePackLabelsTellUploadsApart(t *testing.T) {
 		t.Errorf("a second upload under v1.2 announced %q, want Pack v1.2 (99aa88bb)", report.Available)
 	}
 }
+
+// resetCoreProbationForTest forgets the probation file's in-memory copy, as a
+// restart does; the file stays.
+func resetCoreProbationForTest(t *testing.T) {
+	t.Helper()
+	reset := func() {
+		coreProbations.mu.Lock()
+		coreProbations.f = nil
+		coreProbations.path = ""
+		coreProbations.mu.Unlock()
+	}
+	reset()
+	t.Cleanup(reset)
+}
+
+// A build an update activates is on probation until a game has run with it,
+// across a restart: one that cannot start its first game is rolled back and
+// refused by its checksum, so the next pass does not fetch it again; one that
+// runs a game ends its probation and stays.
+func TestCoreProbationRollsBackABuildThatCannotStartAGame(t *testing.T) {
+	withCoreInstallsAllowed(t, true)
+	oldBody, badBody, goodBody := "the build that worked", "a nightly that cannot start a game", "the next nightly"
+	coresDir, _ := installHistoryFixture(t, map[string]string{"mgba_libretro.so": oldBody})
+	resetCoreRefusalsForTest(t)
+	resetCoreProbationForTest(t)
+	resetEmuCRCCacheForTest(t)
+	active := filepath.Join(coresDir, "mgba_libretro.so")
+	serve := func(body string) *http.Client {
+		return coreIndexServer(t, fmt.Sprintf("2026-11-17 %s mgba_libretro.so.zip\n", crcOf([]byte(body))),
+			map[string][]byte{"mgba_libretro.so.zip": zestCoreZip(t, "mgba_libretro.so", body)})
+	}
+	bad := serve(badBody)
+	if report := runInstalledCoreUpdates(context.Background(), bad, nil, nil); len(report.Updated) != 1 {
+		t.Fatalf("report = %+v, want the nightly installed", report)
+	}
+	resetCoreProbationForTest(t)
+	if w, ok := coreProbationFor("mgba"); !ok || w.CRC32 != crcOf([]byte(badBody)) {
+		t.Fatalf("watch = %+v %v, want the new build watched after a restart", w, ok)
+	}
+	if note := coreProbationJudge("mgba", active, coreRunFailed, "test"); note == "" {
+		t.Fatal("a failed first game left no note for the card")
+	}
+	if data, err := os.ReadFile(active); err != nil || string(data) != oldBody {
+		t.Fatalf("active core = %q, %v; want the build that worked back", data, err)
+	}
+	if _, refused := coreBuildRefused("mgba", crcOf([]byte(badBody))); !refused {
+		t.Fatal("the build that failed was not refused")
+	}
+	if again := runInstalledCoreUpdates(context.Background(), bad, nil, nil); again.KnownRefused != 1 || len(again.Updated) != 0 {
+		t.Fatalf("second pass = %+v, want the refused build left alone", again)
+	}
+	resetEmuCRCCacheForTest(t)
+	if report := runInstalledCoreUpdates(context.Background(), serve(goodBody), nil, nil); len(report.Updated) != 1 {
+		t.Fatalf("report = %+v, want the next nightly installed", report)
+	}
+	coreProbationJudge("mgba", "", coreRunProven, "")
+	if _, ok := coreProbationFor("mgba"); ok {
+		t.Fatal("a build that ran a game is still on probation")
+	}
+	if data, err := os.ReadFile(active); err != nil || string(data) != goodBody || !coreBuildProven("mgba", crcOf([]byte(goodBody))) {
+		t.Fatalf("active core = %q, %v; want the build that ran kept and remembered", data, err)
+	}
+}

@@ -186,6 +186,7 @@ and why.
 | Menu: the voice orb (hold it to talk) | F4 anywhere (hold it to talk) |
 | Menu held: screenshot (in a game too) | F12 |
 | L2 on Home (Edit Home) · R2 (liquid background level) | Q · W (Home only) |
+| L2 in Quick Settings (Edit Quick Settings) | Q (or Home) |
 | Select + L1 held (mouse mode) | F6 |
 
 A shoulder that does something else on a screen (seeks a video, clears the
@@ -251,6 +252,7 @@ no footer names may have no key.
 | PDF reader | L1 / R1 page (or chapter) · L2 / R2 zoom or text size · X text · Y options | PgUp / PgDn (or [ / ]) · - / + · X or T · Y, O or Tab |
 | Playtime & achievements | L1 / R1 tabs · X sort · Y RetroAchievements | Tab / Shift+Tab · X · Y |
 | Game details | Start options · X favourite · Y look up again | O · X or F · Y |
+| Games library, a console's page | L2 / R2 previous / next letter (hold to keep going) · Right next letter in a column | PgUp / PgDn · → |
 | Local play | L1 / R1 move a player · Y remove · X end game | PgUp / PgDn · Y or Del · X |
 | Keyboard languages | L1 / R1 move · X remove · Y add | [ / ] · X or Del · Y |
 | Config inspector | L1 / R1 view · X reset · Y export | Tab / Shift+Tab · X or Del · Y or E |
@@ -316,6 +318,7 @@ had nothing to go back to.
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
 | Right stick | Move the virtual cursor (below); L2 / R2 scroll under it |
 | Select + L1 (hold) | Mouse mode on / off: the pointer stays up and the D-pad and sticks move it (below) |
+| Select + R1 in a game (TrimUI) | Screenshot of the game's screen ([below](#screenshot-in-a-game-select--r1)) |
 | Power (short press, handheld) | Sleep — on Home, any screen or mid-game; the game carries on at wake (Settings → Power & battery → Power button: Sleep, Exit card or Nothing) |
 | Power (hold 1.5 s) on a JukaHub screen | The power card below |
 | FN switch (Smart Pro, with Settings → Power & battery → Travel lock on) | Locks the power button: no wake, and a power-on turns straight back off; slide it back to unlock |
@@ -402,6 +405,25 @@ keys and a few buttons type Enter, Esc, Tab and Space, and Select + Start
 closes the window (held, it ends the program). The table is under
 [Windows apps](#windows-apps).
 
+#### Screenshot in a game (Select + R1)
+
+On a TrimUI handheld, press **Select + R1** together in any game, emulator or
+port JukaHub started and the screen is saved as a PNG: the picture as it was
+the moment both buttons were down, before the game has drawn anything for the
+press. There is no hold. Each press is one picture (keep Select down and press
+R1 again for the next), at most one a second. The motor gives a firm pulse
+once the file is written, and the "While you were playing" note back in
+JukaHub counts the shots. They go where **Hold Menu** game shots go
+(`game_<time>.png` in JukaHub's `screenshots` folder; see
+`menuHoldScreenshot` in [Configuration](CONFIGURATION.md)).
+
+The game sees Select and R1 too, so a game or emulator that has a job for the
+pair does it as well: turn the chord off with **Settings → Controls → Select +
+R1: screenshot** if that gets in the way. Pressed with Menu held it is left to
+the emulator's hotkeys, and while the games mouse has the pad it is not seen.
+In JukaHub's own menus, holding Select and pressing R1 still steps through the
+control profiles.
+
 #### End a stuck game (hold Select + Start)
 
 On a TrimUI handheld, hold **Select + Start** for three seconds in any game,
@@ -431,6 +453,8 @@ stays on screen, dimmed, and a small menu opens over it:
 | Save state / Load state | For a RetroArch game started from the library: choose one of six slots, shown three at a time with screenshots and dates |
 | Rewind | On lighter RetroArch systems, step back through recent gameplay; the launch enables RetroArch's rewind only for that game |
 | Fast forward / Normal speed | Toggle RetroArch's faster play, then return to normal speed from the same row |
+| Disc | For a multi-disc RetroArch game started from the library: "Disc 1 of 3"; Left/Right pick another disc, A puts it in and the game carries on ([Games library](GAME_LIBRARY.md#which-disc-a-game-starts-on)) |
+| Cheats | For a RetroArch game started from the library with cheats switched on in its options: the whole cheat list with On/Off switches (see below) |
 | Ask Juka | The game assistant listens (only with Game assistant on); B comes back to the menu |
 | Sleep | Put the handheld to sleep and resume the game on wake |
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
@@ -452,6 +476,48 @@ the game itself saved. Holding Select + L2 over the assistant switches to the
 menu. **Up/Down** moves through all six save slots, changing page after slot
 three. **A** saves or loads the highlighted slot; saving over an occupied slot
 asks for a second **A**.
+
+**Cheats** lists every cheat of the file chosen in the game's options
+(**Start → Cheats** in the library), in RetroArch's order. **A** switches the
+highlighted cheat on or off, **Left/Right** jump a page. **B** with nothing
+changed goes back to the menu; **B** after a change gives the game back and has
+RetroArch switch those cheats at once (it shows its own "Cheat #… [ON]"
+message for each). The choice is also kept for the game's next start, as if it
+had been made in the options. The row only shows when JukaHub wrote the
+game's cheat file for this start: a cheat file you saved yourself in RetroArch,
+or a NextUI pak game, keeps RetroArch's (or NextUI's) own cheat menu. If
+RetroArch's cheat menu or cheat hotkeys were used in the same game, or a
+command could not be sent, the list says that changes apply from the next
+start.
+
+#### Game buttons and turbo (RetroArch games)
+
+**Settings → Controls → Game buttons for** picks *All consoles* or one
+console; the **Buttons** and **Turbo** rows under it then change that
+console's games (a console starts at *Default*, which follows All consoles).
+A single game can choose its own in the library: **Start** on the game →
+**Buttons** / **Turbo** (*Default · …* follows its console).
+
+| Choice | What it does |
+|--------|--------------|
+| Buttons: Normal | Every button does what its letter says |
+| Buttons: Swap A and B | A does what B does in the game, and B what A does |
+| Buttons: Swap X and Y | The same for X and Y |
+| Buttons: Swap both | A/B and X/Y swapped: the Xbox layout |
+| Turbo: A or B | Holding that button fires it over and over |
+| Turbo speed | Fast, Normal or Slow (about 15, 10 or 6 presses a second), for every console |
+
+They apply to RetroArch games started from the library, for that start only:
+JukaHub writes a remap file for the game and sets RetroArch's Turbo Fire, and
+both are removed when RetroArch closes, so games started from the firmware's
+own menu keep RetroArch's settings. RetroArch's own menu and hotkeys are not
+swapped. A remap file you saved yourself in RetroArch (for the game, its
+folder or its core) is never replaced: that game keeps your file, and the
+Buttons row says so. Turbo works out of the box on RetroArch 1.21 and newer;
+on older RetroArch it needs the pad's A and B buttons in RetroArch's controls
+(the Turbo row says so when they are missing), and another button pressed
+while the turbo button is held fires repeatedly too. Standalone emulators and
+NextUI paks keep their own controls.
 
 #### Ask Juka in a game (hold Select + R2)
 
@@ -531,7 +597,7 @@ behaves the same in a menu as it does in a media grid.
 | Wallpaper picker | Five rows | First / last row |
 | Image viewer | Previous / next image | Jump ten images back / forward |
 | Notification centre, clipboard history, global search | One window of rows | First / last row |
-| Quick Settings | Five rows, or ±5 on a slider | First / last row |
+| Quick Settings | ±5 on a focused slider; on Tiles and Compact the previous / next value of a focused mode row; on the List, five rows. While editing: the layout | L2: Edit Quick Settings (L2 again is Done) · R2: the last button |
 | Start menu | One window of the open group | First / last row of the open group |
 | Home | — | L2: Edit Home (L2 again is Done) · R2: liquid background Off → Slight → Medium → Lively |
 
@@ -614,7 +680,7 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
-| Select | Open Quick Settings; press Select or B to close it |
+| Select | Open [Quick Settings](#quick-settings); press Select or B to close it |
 | X | The [Game switcher](#game-switcher) (Standard and Hero layouts; on the Carousel and Widgets X is Edit Home, on the Tabs Home the item sheet) |
 | D-pad | Move between tiles, the header chips (brightness button, volume button, Bluetooth button, Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5, pairing QR) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
@@ -808,6 +874,65 @@ Carousel, drag the middle card sideways: every half card of travel moves it
 one place. Click a strip chip to choose it, and the strip's **Done** to
 finish. The wheel and a right-click only reach Home when nothing (a menu, a
 popover, a panel) is open over it.
+
+### Quick Settings
+
+**Select** on Home opens Quick Settings; so do **F2** on a Brick, **Start →
+Device → Quick Settings** and **Ctrl+Q**. **Select**, **B** or a click outside
+the card closes it. It has three layouts, which **L2** switches (below):
+
+- **Tiles** (the default): a four-column grid of tiles. A switch that is on
+  lights up in its own colour, **Volume** and **Brightness** show their level
+  as a bar, and the mode rows (Power Mode, Lock screen, Spatial audio, LED
+  Mode, Experience, Auto power off) show their value, in the accent while a
+  named mode is in force;
+- **Compact**: a six-column grid of icon buttons that fits everything on one
+  screen; the line under the title names the focused button and its state;
+- **List**: one row per button, the panel's old look.
+
+| Pad | Keyboard | In Quick Settings |
+|-----|----------|-------------------|
+| D-pad | Arrow keys | Move between the buttons. On the List, Left / Right adjust the focused slider or mode row |
+| A | Enter | Switch, open, or step a mode row to its next value. On a Tiles or Compact slider: start adjusting it — Left / Right then move the level, and **A** or **B** stop |
+| L1 / R1 | PgUp / PgDn | ±5 on a focused slider; on Tiles and Compact the previous / next value of a focused mode row (and nothing elsewhere, so a run of presses never lands on a setting and changes it); on the List, five rows back / forward |
+| L2 | Q or Home | [Edit Quick Settings](#edit-quick-settings) |
+| R2 | End | The last button |
+| B, Select | Esc | Close (**B** first stops adjusting a slider) |
+
+With a mouse, click a button to use it, or a slider's bar to set the level
+there (a click elsewhere on a slider focuses it and, on Tiles and Compact,
+starts adjusting it); the wheel moves between the buttons, and the pencil in
+the title's corner opens Edit. **Power** opens the power card —
+Sleep, Restart and Power off on the handheld, Exit on a desktop — from any
+screen (JukaHub goes Home first).
+
+#### Edit Quick Settings
+
+**L2** (**Q**) in the panel swaps the title for a strip: a chip for each
+layout (the one in force tinted), **Reset** and **Done**. The keys are
+[Edit Home](#edit-home)'s:
+
+| Pad | Keyboard | In edit mode |
+|-----|----------|--------------|
+| D-pad | Arrow keys | Move between the buttons and up to the strip. Holding a button, move it: Left / Right one place earlier / later, Up / Down to the place of the button above / below |
+| A | Enter | Pick the button up, or put it down. On the strip: that chip |
+| X | X or R | Resize (Tiles and Compact): the D-pad grows the tile (Right a column, Down a row) or shrinks it (Left, Up) a cell at a time, from one cell (two across for Volume and Brightness) to the grid's width and two rows; **A**, **B** or **X** finish |
+| Y | Y, Delete or Backspace | Hide the button, or show a hidden one again. Hidden buttons stay on the grid, faded, while editing, and are gone outside it |
+| L1 / R1 | Shift+Tab / Tab, PgUp / PgDn | The previous / next layout: Tiles, Compact, List |
+| B | Esc | Holding a button: put it down. Resizing: keep the size. Otherwise: Done |
+| Select | — | Nothing on its own, so the Select chords still work |
+| L2 | Q or Home | Done |
+
+The focused button wears a hide badge in its top-right corner (a minus; a
+plus on a hidden one) and, on Tiles and Compact, its size ("2×1") on a tab at
+its bottom edge; the line under the strip names it. The order and the hidden
+buttons are shared by the three layouts, the sizes by the two grids (a tile
+wider than the Tiles grid fills its width there). Every finished change is
+saved at once. **Reset**, pressed twice within three seconds, puts the
+default buttons back and keeps the layout. With a mouse: click a strip chip to
+press it; click a button to focus it and again to pick it up, then click the
+button whose place it should take; click the badge to hide or show it, and
+the size tab to step through 1×1, 2×1, 3×1, 2×2, 4×1, 6×1, 4×2 and 6×2.
 
 ## Media
 
@@ -1479,6 +1604,11 @@ between packages while a sheet is open; `[` / `]` on a keyboard), **L2** /
 **R2** jump to the first and last row on other devices or in a package sheet,
 and in the grid and the list `s` changes
 the sort and **Tab** walks the filter chips; **B** closes the sheet, then leaves.
+
+An installed package that can start on this device leads its sheet and the
+banner with **Run** (**Play** for a game), which starts it the way the Apps
+screen does; **Open folder** follows it. Installed apps are listed on the Apps
+screen too ([PACKAGES.md](PACKAGES.md#the-packages-store-jukalang-registry)).
 
 Under the toolbar, in every view and even while the list is empty or offline,
 the **More stores** strip opens the [APK Store](#apk-store), PortMaster's
@@ -2439,8 +2569,11 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | Shift+Left / Shift+Right | Skip −10 / +10 s in the video player |
 | N / P | Next / previous video in the player's list (also Shift+Down / Shift+Up) |
 
-Mouse and touch work as well: clicking activates a card or tile, and hovering
-highlights the card under the pointer.
+Mouse and touch work as well: clicking or tapping activates a card or tile, and
+hovering highlights the card under the pointer. On a touch screen a sideways
+swipe changes the Tabs Home's tab and an up or down swipe scrolls it; the
+picture viewer and the Media screen take swipes too, and pinching zooms a
+picture. A swipe anywhere else does nothing. A touchpad only moves the pointer.
 
 ---
 

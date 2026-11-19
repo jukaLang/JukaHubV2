@@ -215,17 +215,19 @@ func TestHTML5GameOptionsOnlyShowLibrarySettings(t *testing.T) {
 	t.Cleanup(func() { gameOptsUI.game, gameOptsUI.choice = priorGame, priorChoice })
 	gameOptsUI.game.System = html5LibrarySystem
 	gameOptsUI.choice = gameOptionsChoiceNone
-	if got := gameOptionsRows(); got != 5 {
-		t.Fatalf("HTML5 options show %d rows, want 5", got)
+	if got := gameOptionsRows(); got != 6 {
+		t.Fatalf("HTML5 options show %d rows, want 6", got)
 	}
-	for i, want := range []string{"Display title", "Visibility", "Library sort", "Library view", "Show hidden"} {
-		if got := gameOptionsRowName(i); got != want {
+	for i, want := range []string{"Rename title", "Visibility", "Library sort", "Library view", "Console look", "Show hidden"} {
+		if got := gameOptionsRowName(gameOptionsRowAt(i)); got != want {
 			t.Errorf("HTML5 option %d is %q, want %q", i, got, want)
 		}
 	}
 	gameOptsUI.game.System = "NES"
-	if got := gameOptionsRows(); got != gameOptionsRowCount {
-		t.Errorf("ROM options show %d rows, want %d", got, gameOptionsRowCount)
+	// Every row but Disc, which only a game on more than one disc has
+	// (discpage.go).
+	if got := gameOptionsRows(); got != gameOptionsRowCount-1 {
+		t.Errorf("ROM options show %d rows, want %d", got, gameOptionsRowCount-1)
 	}
 }
 

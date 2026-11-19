@@ -114,6 +114,14 @@ JukaHub never edits a global emulator config. The override starts with a
 `# JukaHub boost mode` header; **X** removes only overrides with that header and
 the matching recipe, leaving a user-authored `.opt` alone.
 
+A game's own `.opt` is the only options file RetroArch reads for that game:
+every option missing from it falls back to the core's default, not to the
+core's or the content folder's `.opt`. So the override carries the options
+RetroArch would otherwise have read for the game (the content folder's
+`<folder>.opt`, else the core's `<Core>.opt`) under the boost's own values; a
+boost that changes the N64 render size does not also switch off what the
+firmware tuned for the GPU.
+
 The core options use libretro's documented keys, for example:
 
 | Core | Option |
@@ -204,6 +212,59 @@ streamed to the card, including MAME's build, which exceeds the old 96 MB
 limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused
 and remembered the same way.
 
+#### A core that is already broken
+
+The check above stops JukaHub's own installs, but RetroArch's **Online Updater**
+("Update Installed Cores", "Core Downloader") fetches the same buildbot nightlies
+with no check at all, and so does a core copied over by hand. On a stock Smart
+Pro that is enough to stop three consoles: the firmware runs Game Boy, Game Boy
+Color and Game Boy Advance all on mGBA, and the November 2026 nightly of
+`mgba_libretro.so` needs `GLIBC_2.35` from `libm.so.6`, which stops at
+`GLIBC_2.32` on this firmware, so every game quits a second after **A** with
+`version 'GLIBC_2.35' not found` in RetroArch's log.
+
+JukaHub now puts a build that loads in place of such a core
+(`player/corefix.go`), from the first of:
+
+1. a build of it the card kept beside it (`*.jukahub-<time>.bak`) that passes
+   the same load check — the build the card had before JukaHub's first update
+   (the firmware's or CrossMix's) first, else the newest, never one a
+   probation rolled back for not starting a game;
+2. JukaHub's own build for the device: the rolling release
+   [`cores-aarch64`](https://github.com/jukaLang/JukaHubV2/releases/tag/cores-aarch64),
+   which `.github/workflows/retroarch-cores.yml` compiles every week from each
+   core's newest upstream libretro commit in the Ubuntu 20.04 (glibc 2.31)
+   arm64 build root (`player/native/build-cores.sh`: mGBA, Gambatte, gpSP,
+   Snes9x, Snes9x 2005, FCEUmm, Nestopia, PicoDrive, Genesis Plus GX,
+   PCSX-ReARMed, Beetle PCE Fast, Beetle WonderSwan, Beetle NeoPop and
+   FinalBurn Neo). Its `index-extended.txt` has the buildbot's own format, so
+   the download goes through the usual checks: allowlisted hosts, the index's
+   CRC32, and the load check against this firmware.
+
+That happens at two moments. After a game that did not start because its core
+cannot load, the diagnosis card's first finding is "JukaHub is fixing the … core"
+and a toast says when to start the game again; the fix acts on the file the
+finding names. A minute after JukaHub starts, it looks over every active
+libretro core outside the firmware's own folders — that catches what
+RetroArch's updater changed while JukaHub was closed — and fixes the ones that
+are surely broken: built for another architecture, or asking the firmware's C
+library (libc, libm, libpthread, libdl, librt) for a symbol version it does not
+have. Anything less certain (a newer libstdc++, desktop OpenGL) is only logged
+there and left for a game that fails to prove it. That look remembers the files
+that loaded, by size and time, in `data/performance/core-loadcheck.json`, so a
+start reads only the cores that changed (a firmware update, which changes the
+system libraries, makes it read them all again). Unless **Emulator updates** is
+**Install automatically**, the look only puts back kept builds and downloads
+nothing; a game that fails still fetches JukaHub's build
+(`JUKAHUB_NO_CORE_AUTOUPDATE` stops that download too). The broken build is
+kept as a `.bak` like any replaced build, and no install path will take it
+back: every one runs the load check. A core with nothing to replace it is named
+in one toast per broken build, then only logged.
+
+To do the same by hand: download the core's zip from the `cores-aarch64`
+release and unzip it into `RetroArch/.retroarch/cores/` over the file of the
+same name.
+
 ### Core updates and your save states
 
 A save state is a snapshot of the core's memory in that core's own format, so
@@ -243,7 +304,48 @@ nightly whenever the bytes differ. The shipped build is the `.bak` beside it,
 **R1** on the Emulators page puts it back, and a nightly that cannot load on the
 firmware is refused before it replaces anything. Cores the buildbot does not
 carry, and cores on the firmware's read-only partition (`/usr/trimui/…`), are
-left alone.
+left alone. Every pass writes one line to the device log with its counts
+(installed, updated, current, refused, failed, held for a press, on the
+firmware partition, not published for this device).
+
+#### GPU cores, probation and automatic rollback
+
+Cores that draw with the GPU — Mupen64Plus-Next and ParaLLEl N64, Flycast,
+PPSSPP, the "HW" PlayStation core and the other entries in `player/corerisk.go`
+— are a special case on the handheld. Its RetroArch draws with OpenGL ES only
+(the PowerVR GE8300 has no desktop OpenGL), and the buildbot's generic
+`linux/aarch64` builds are made for desktop Linux. A build that links
+`libGL.so.1` cannot even be opened there, and one that asks RetroArch for a
+desktop OpenGL context gets refused; either way the game is back at JukaHub a
+second after **A**, while the build the firmware or CrossMix shipped worked.
+(That is what broke N64 in November 2026.) So:
+
+- **A build that links desktop OpenGL is refused** before it replaces anything,
+  like a build that needs a newer glibc, on a press too.
+- **The automatic pass leaves a GPU core on the firmware's build.** It names it
+  once in its toast; a press on the Emulators page still installs the buildbot
+  build, with a warning. A GPU core JukaHub already moved to the buildbot's builds
+  keeps following them.
+- **Every new build is on probation until a game has run with it.** If the first
+  game that uses it fails at once — RetroArch could not open the core, the
+  content or the GPU context failed, it crashed, or it exited with an error
+  within seconds, and nothing else (a missing game file or BIOS) explains it —
+  the build before it is put back, the new build is remembered as refused so no
+  automatic pass downloads it again, and a toast says so: "The new N64 core
+  (Mupen64Plus-Next) didn't start here — went back to the one that worked". A
+  game that runs past the first seconds ends the probation. The watch lives in
+  `data/performance/core-probation.json`, so a reboot changes nothing.
+- **A one-time repair.** On the first start of this build, a GPU core that an
+  earlier automatic pass replaced — or whose active file cannot be opened here —
+  gets the firmware's kept build back, once per replaced build, with a toast;
+  **R1** on the Emulators page undoes it.
+- **The build the card came with is never pruned.** The five newest `.bak`
+  files are kept as before, plus the firmware's or CrossMix's own build.
+
+The launch log names the core build each RetroArch game runs (file, checksum,
+the GPU library it links, and whether it is the firmware's build, a JukaHub
+update or on probation), and the "didn't start" card says when a core build
+needs desktop OpenGL.
 
 A pass stops while the card still has room. Every update stores the archive,
 writes the new build twice (the pool copy and the active file), and keeps the

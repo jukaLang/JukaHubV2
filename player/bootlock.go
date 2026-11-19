@@ -757,6 +757,8 @@ func bootLockFinish(config *Config, r bootLockResult) {
 			bootLockVoiceForget(config)
 		}
 		bootLockWrite(config, bootLockSecretKey, r.hash)
+		// JukaHub OS's boot frame would show Home before the lock (bootframe.go).
+		bootFrameForget()
 		if bootLockPendingFrom(config.Variables.Custom) {
 			// Left by a lock whose code was removed by hand (the forgot hint).
 			bootLockWrite(config, bootLockPendingKey, false)

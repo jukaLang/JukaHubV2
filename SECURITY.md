@@ -24,7 +24,6 @@ JukaHub implements several security measures to protect sensitive credentials st
 - **Configurable encryption keys and salt** via `JUKAHUB_CRYPTO_KEY` and `JUKAHUB_CRYPTO_SALT` environment variables
 - **Key derivation** for custom environment-variable keys using an HKDF-like HMAC-SHA256 expansion, instead of naive padding/truncation
 - **Key versioning** for future rotation support (`ENC:<keyID>/<hex ciphertext>`)
-- **HMAC-authenticated encryption wrapper** available for defense-in-depth (`EncryptWithAuth` / `DecryptWithAuth`)
 - **Encrypted data verification** without exposing plaintext (`VerifyEncryptedData`)
 - **Automatic detection** of plaintext secrets with startup warnings (`ConfigValidator.SecurityCheck`)
 - **Input validation and sanitization** for custom config strings (`ValidateCustomString` / `SanitizeCustomString`)
@@ -148,13 +147,6 @@ decrypted, err := DecryptString(encrypted)
 
 // Decrypt with audit logging
 decrypted, err := DecryptAPIToken(encrypted, "groq_api_key")
-
-// Authenticated encryption wrapper (defense-in-depth)
-encrypted, err := EncryptWithAuth("my-secret-api-key")
-// Result: "ENC:default-v3-enhanced/<hex>:AUTH:<hmac>"
-
-// Authenticated decryption wrapper
-decrypted, err := DecryptWithAuth(encrypted)
 
 // Verify encrypted data without exposing plaintext
 valid := VerifyEncryptedData(encrypted)
@@ -399,7 +391,9 @@ computer only (`127.0.0.1` and `[::1]`), where the builder usually runs;
   receiver itself, every name the settings export treats as a secret, and
   the settings that say where the smart-home tokens and passwords go:
   `ha_url`, `ha_insecure`, `mqtt_host`, `mqtt_port`, `pihole_url`,
-  `router_host` — names are compared the way the player compares them, and
+  `router_host`, and the DNS choice that says where every name is looked
+  up: `dnsMode`, `dnsServers` — names are compared the way the player
+  compares them, and
   any name with a non-ASCII letter counts as protected); change where tools
   run, where the file browser starts or the chat channel; or load anything
   from a network share (`\\host\share`, `//host`, `\??\UNC\host\share`,

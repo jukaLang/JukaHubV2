@@ -164,13 +164,13 @@ func fetchNewestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
 	return rel, nil
 }
 
-// pickNewestJukaHubRelease picks the newest published, non-draft release with
-// a tag from the list; the list order breaks a tie.
+// pickNewestJukaHubRelease picks the newest published, non-draft release of
+// JukaHub itself (jukaHubReleaseTag) from the list; the list order breaks a tie.
 func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool) {
 	best := -1
 	for i := range list {
 		r := &list[i]
-		if r.Draft || strings.TrimSpace(r.TagName) == "" {
+		if r.Draft || !jukaHubReleaseTag(r.TagName) {
 			continue
 		}
 		t, ok := releasePublishedTime(&r.githubRelease)
@@ -190,6 +190,19 @@ func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool)
 	}
 	rel := list[best].githubRelease
 	return &rel, true
+}
+
+// jukaHubReleaseTag reports a tag of a JukaHub build: the main-branch builds'
+// JukaHub-<time> (JukaGUI-<time> before the rename) and the versioned v1.2.3
+// releases. The repository's rolling emulator releases (ppsspp-tg5040,
+// cores-aarch64) carry no JukaHub, and the first publish of one would
+// otherwise be the newest release a Beta handheld is offered.
+func jukaHubReleaseTag(tag string) bool {
+	tag = strings.TrimSpace(tag)
+	if strings.HasPrefix(tag, "JukaHub-") || strings.HasPrefix(tag, "JukaGUI-") {
+		return true
+	}
+	return len(tag) > 1 && (tag[0] == 'v' || tag[0] == 'V') && tag[1] >= '0' && tag[1] <= '9'
 }
 
 // jukaHubReleaseAssetURL is where a release's asset downloads when the API

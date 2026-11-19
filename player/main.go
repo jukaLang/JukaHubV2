@@ -66,8 +66,19 @@ func main() {
 	if handled, code := handleSpatialCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// `JukaHub apt …` is the handheld's package manager for an SSH shell
+	// (linuxpkg_cli.go); it needs no display.
+	if handled, code := handleLinuxPkgCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	// The collector stays off from here to the first frame (startup.go); the
+	// commands above are processes of their own and keep it on.
+	startupGCHold()
 
 	InitLogging()
+	// The first frame's font, icons and labels are read on the idle cores
+	// from here, while SDL and the GPU driver start (startup_preload.go).
+	startupPreload()
 	// What the last session's crash left is filed as a report, and this
 	// session's crash output is opened (crashreport.go).
 	initCrashReports()
@@ -76,7 +87,12 @@ func main() {
 	// the default handler, the app would leave a running game over the display.
 	installExitSignalHandler()
 	startupMarkNow("pre-sdl")
+	// The design config decodes on its own goroutine while SDL, safe mode and
+	// the boot guard start; it is taken below where it used to be loaded, and a
+	// panic in it is re-raised there, after the boot guard (startup_config.go).
+	takeConfig := startupLoadConfigAsync("jukaconfig.json")
 
+	startupWaitDisplay() // JukaHub OS on the Smart Pro: its drivers load beside this start (startup_displaywait.go)
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
 		logFatal("startup", "SDL init error: %v", err)
 	}
@@ -104,7 +120,8 @@ func main() {
 	}
 
 	// Safe mode, the recovery chord and the boot guard run before the config is
-	// loaded, so a start that dies loading or applying it is counted too. None
+	// taken (it decodes beside them, and a crash in it surfaces at the hand-over
+	// below), so a start that dies loading or applying it is counted too. None
 	// of them reads the config: the flag file is looked up in the folder
 	// JukaHub runs in, the chord reads the pad SDL has just opened, and the
 	// boot record lives in the Patch state folder, which depends only on the
@@ -146,7 +163,7 @@ func main() {
 	defer runCleanupHooks()
 
 	// Try XML config first (exported by the web editor), then fall back to JSON.
-	config, configPath, err := LoadXMLConfigWithFallback("jukaconfig.json")
+	config, configPath, err := takeConfig()
 	if err != nil {
 		logFatal("startup", "Failed to load config: %v", err)
 	}
@@ -266,6 +283,8 @@ func main() {
 	if presetName, ok := config.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
 		ApplyThemeColors(GetThemePreset(presetName))
 	}
+	// A chosen Menu colour, also without a preset (menucolour.go).
+	menuColourSync(config)
 
 	// Default reduced-motion and low-power on handheld targets
 	// (e.g. Trimui Smart Pro) for a safer out-of-box experience. Windows
@@ -533,6 +552,9 @@ func main() {
 	// panel size is known so its address bar, page area and toolbar scale to
 	// that display instead of assuming the 1280x720 design size.
 	ensureBrowserScene(config)
+	// The boot guard's record is flushed beside the start; it is on the card
+	// before the GPU driver starts (bootguard.go writeBootGuardStart).
+	bootGuardWaitSynced()
 	window, err := sdl.CreateWindow(config.Title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, screenWidth, screenHeight, uint32(windowFlags))
 	mainWindow = window
 	if err != nil {
@@ -908,6 +930,9 @@ func main() {
 			// The game assistant: another watches for Select + R2, and the
 			// overlay opens over the paused game (gameassist.go).
 			gameAssistParkedTick(config)
+			// A game with no cover gets a picture of itself 2 minutes in
+			// (playshot_cover.go).
+			playShotTick(config)
 			// "Hey Juka" in a game opens the same overlay (wakeword.go).
 			hjTick(config, true)
 			// The power key's main-loop half; no Exit card over a game.
@@ -1952,6 +1977,10 @@ func main() {
 					wallpaperWheel(e.Y)
 					continue
 				}
+				// Quick Settings walks its buttons under the wheel.
+				if qsWheel(e.Y) {
+					continue
+				}
 				// The wheel is a volume knob while the volume card is up, and
 				// over the speaker button in the header (volumepopover.go); a
 				// brightness knob the same way for the sun's card
@@ -2274,6 +2303,12 @@ func main() {
 							if openFull {
 								notifOpenOn(toastMsg)
 							}
+							break
+						}
+						// Quick Settings is modal: a click presses its buttons
+						// (or Edit's chips and badges), a click outside closes
+						// it, and nothing behind it is pressed (qs_layout.go).
+						if qsMouseDown(mx, my, config) {
 							break
 						}
 						// LED style panel is modal the same way.
@@ -4184,6 +4219,9 @@ func main() {
 		if !startupReported {
 			startupReported = true
 			startupMarkNow("first-frame")
+			// The kernel's uptime now, /tmp/jukahub-first-frame for JukaHub
+			// OS's launcher, and the collector back on (startup.go).
+			startupFirstFrameReached()
 			startupLog()
 			// Remember this successful boot so a relaunch inside the warm window
 			// can skip the splash. Best-effort; a read-only card still boots.

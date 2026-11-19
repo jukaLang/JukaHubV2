@@ -547,3 +547,87 @@ func TestRommMovesNeverOverwrite(t *testing.T) {
 		t.Errorf("rommFreeName with the name promised = %q", got)
 	}
 }
+
+// TestGBCCartridgeColorFlag: the Game Boy Color sort (gbcsort.go) reads the
+// CGB flag at 0x143 behind the Nintendo logo, in a file and in a zip of one
+// cartridge, and nothing else.
+func TestGBCCartridgeColorFlag(t *testing.T) {
+	cart := func(flag byte) []byte {
+		rom := make([]byte, 0x8000)
+		copy(rom[0x104:], rommGBLogo)
+		copy(rom[0x134:], "INDIE GAME")
+		rom[0x143] = flag
+		return rom
+	}
+	noLogo := cart(0xC0)
+	noLogo[0x104] = 0
+	cases := []struct {
+		name string
+		head []byte
+		want bool
+	}{
+		{"Game Boy", cart(0x00), false},
+		{"Color-enhanced", cart(0x80), true},
+		{"Color only", cart(0xC0), true},
+		{"a title byte, not the flag", cart(0x84), false},
+		{"no logo", noLogo, false},
+		{"cut before the flag", cart(0xC0)[:0x143], false},
+		{"nothing", nil, false},
+	}
+	for _, c := range cases {
+		if got := gbcCartColor(c.head); got != c.want {
+			t.Errorf("%s: gbcCartColor = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	dir := t.TempDir()
+	files := map[string]bool{
+		"Color.gb":   true,
+		"Grey.gb":    false,
+		"Zipped.zip": true,
+		"Two.zip":    false,
+		"Color.txt":  false,
+	}
+	rommWriteFile(t, filepath.Join(dir, "Color.gb"), cart(0xC0))
+	rommWriteFile(t, filepath.Join(dir, "Grey.gb"), cart(0x00))
+	rommWriteFile(t, filepath.Join(dir, "Color.txt"), cart(0xC0))
+	rommTestZip(t, filepath.Join(dir, "Zipped.zip"), map[string][]byte{"game.gbc": cart(0x80), "readme.txt": []byte("hi")})
+	rommTestZip(t, filepath.Join(dir, "Two.zip"), map[string][]byte{"a.gb": cart(0xC0), "b.gb": cart(0xC0)})
+	for name, want := range files {
+		if got := gbcROMColor(filepath.Join(dir, name)); got != want {
+			t.Errorf("gbcROMColor(%s) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// TestDiscIndexRecordMatchesRetroArch: the Disc row writes RetroArch's .ldci
+// record (discpage.go) the way RetroArch reads it, reads one RetroArch wrote,
+// and names a disc the way the core reports it.
+func TestDiscIndexRecordMatchesRetroArch(t *testing.T) {
+	got := string(discIndexEncode(discIndexRecord{ImageIndex: 1, ImagePath: "/Roms/PS/Tom & Jerry (Disc 2).cue"}))
+	want := "{\n  \"image_index\": 1,\n  \"image_path\": \"/Roms/PS/Tom & Jerry (Disc 2).cue\"\n}\n"
+	if got != want {
+		t.Errorf("discIndexEncode = %q, want %q", got, want)
+	}
+	rec, ok := discIndexDecode([]byte(`{ "version": "1.0", "image_index": 2, "image_path": "M:\\Games\\D (USA) (Disc 3).cue" }`))
+	if !ok || rec.ImageIndex != 2 || rec.ImagePath != `M:\Games\D (USA) (Disc 3).cue` || rec.Version != "1.0" {
+		t.Errorf("discIndexDecode = %+v, %v", rec, ok)
+	}
+	if !strings.Contains(string(discIndexEncode(rec)), `"version": "1.0"`) {
+		t.Error("a record RetroArch wrote with a version lost it")
+	}
+	if _, ok := discIndexDecode([]byte("not json")); ok {
+		t.Error("discIndexDecode took a broken record")
+	}
+
+	// The core joins the playlist's folder, as RetroArch was given it, with the line.
+	sep := string(filepath.Separator)
+	if got := discImagePath("/mnt/SDCARD/Emus/PS/../../Roms/PS/Game.m3u", "Game (Disc 2).cue"); got != "/mnt/SDCARD/Emus/PS/../../Roms/PS"+sep+"Game (Disc 2).cue" {
+		t.Errorf("discImagePath = %q", got)
+	}
+	m3u := filepath.Join(t.TempDir(), "Game.m3u")
+	rommWriteFile(t, m3u, []byte("\ufeff#EXTM3U\r\nGame (Disc 1).cue\r\n\r\nDisc 2/game.chd|Second disc\r\n"))
+	if got := discM3UEntries(m3u); len(got) != 2 || got[0] != "Game (Disc 1).cue" || got[1] != "Disc 2/game.chd" {
+		t.Errorf("discM3UEntries = %q", got)
+	}
+}

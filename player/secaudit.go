@@ -13,10 +13,13 @@ package main
 //     button that opens the official download page.
 //   - The handheld (TrimUI, Linux arm64, no desktop): static arm64 releases
 //     where the project publishes them (verified against the release's
-//     checksum list), Python and Perl tools only when the firmware actually has
-//     the interpreter, and an honest "Not available on this device" with the
-//     reason for everything else — a Java desktop app or a GPU cracker cannot
-//     run there, and a button that pretends otherwise is worse than none.
+//     checksum list); Ubuntu's arm64 packages through Linux packages
+//     (linuxpkg_*.go: Ubuntu's signed index, every download checked against
+//     it) for Nmap, John the Ripper and Aircrack-ng, and for the Python and
+//     Perl a script tool needs, installed first as part of its install press;
+//     and an honest "Not available on this device" with the reason for
+//     everything else — a Java desktop app or a GPU cracker cannot run there,
+//     and a button that pretends otherwise is worse than none.
 //   - Desktop Linux: the distribution's packages, with the command to copy.
 //
 // Nothing here is installed without a press, nothing is started with a target,
@@ -62,6 +65,9 @@ const (
 	auditKindScript
 	// auditKindManual: the user installs it from Page (or with Hint).
 	auditKindManual
+	// auditKindLinuxPkg: Ubuntu's arm64 Packages through Linux packages on
+	// the handheld; Entry is the program's name in <data>/linux/bin.
+	auditKindLinuxPkg
 )
 
 // auditRecipe is one platform's way in.
@@ -76,6 +82,8 @@ type auditRecipe struct {
 	Entry string
 	// Needs is the interpreter a script needs: "python" or "perl".
 	Needs string
+	// Packages are the Ubuntu package names an auditKindLinuxPkg installs.
+	Packages []string
 	// Page is the official download page.
 	Page string
 	// Hint is a command to copy (a package manager line).
@@ -163,6 +171,11 @@ func (t secAuditTool) GUI() bool { return len(t.Version) == 0 }
 // Recipe is the tool's recipe for p; a missing entry means not available.
 func (t secAuditTool) Recipe(p auditPlatform) auditRecipe {
 	if r, ok := t.Recipes[p]; ok {
+		if r.Kind == auditKindLinuxPkg && !linuxPkgSupported() {
+			// "Handheld" is every Linux to the platform layer; Ubuntu's
+			// arm64 packages are for the TrimUI only.
+			return auditRecipe{Kind: auditKindNone, Reason: t.Name + " installs here through Linux packages, which run on an ARM64 TrimUI handheld only. Use this system's own package manager."}
+		}
 		return r
 	}
 	return auditRecipe{Kind: auditKindNone, Reason: "There is no build of " + t.Name + " for this system."}
@@ -298,8 +311,8 @@ func secAuditCatalog() []secAuditTool {
 			Recipes: map[auditPlatform]auditRecipe{
 				auditPlatformWindows: {Kind: auditKindWinget, WingetID: "Insecure.Nmap", Page: "https://nmap.org/download.html",
 					Note: "Raw scans use Npcap, which the Nmap installer offers."},
-				auditPlatformHandheld: {Kind: auditKindNone,
-					Reason: "Nmap publishes no ARM64 Linux build. For port scans on the handheld, install naabu from the Toolbox."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"nmap"}, Entry: "nmap",
+					Note: "Ubuntu's Nmap runs as root on the handheld, so SYN scans and OS detection are available. Its scripts and data come with it."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://nmap.org/download.html", Hint: "sudo apt install nmap"},
 			},
 		},
@@ -339,8 +352,8 @@ func secAuditCatalog() []secAuditTool {
 					URL:  "https://download.aircrack-ng.org/aircrack-ng-1.7-win.zip",
 					Page: "https://www.aircrack-ng.org/downloads.html",
 					Note: "On Windows it analyses captures you already have; capturing needs Linux and a monitor-mode Wi-Fi adapter."},
-				auditPlatformHandheld: {Kind: auditKindNone,
-					Reason: "No ARM64 build is published, and the handheld's Wi-Fi chip cannot capture in monitor mode."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"aircrack-ng"}, Entry: "aircrack-ng",
+					Note: "Analysis only: the handheld's Wi-Fi chip cannot capture in monitor mode, so aircrack-ng works on captures you copy to the card from another device."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.aircrack-ng.org/downloads.html", Hint: "sudo apt install aircrack-ng"},
 			},
 		},
@@ -400,8 +413,8 @@ func secAuditCatalog() []secAuditTool {
 				auditPlatformWindows: {Kind: auditKindArchive, Entry: "john.exe",
 					URL:  "https://www.openwall.com/john/k/john-1.9.0-jumbo-1-win64.zip",
 					Page: "https://www.openwall.com/john/"},
-				auditPlatformHandheld: {Kind: auditKindNone,
-					Reason: "Openwall publishes no ARM64 Linux build; it has to be compiled from source on a PC."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"john"}, Entry: "john",
+					Note: "This is Ubuntu's John the Ripper (the core edition, CPU only), not the larger \"jumbo\" build with its many extra hash formats."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.openwall.com/john/", Hint: "sudo apt install john"},
 			},
 		},
@@ -443,6 +456,10 @@ func secAuditResolve(t secAuditTool) (string, bool) {
 			if abs, absErr := filepath.Abs(path); absErr == nil {
 				return abs, true
 			}
+			return path, true
+		}
+		// What Linux packages installed is not on the app's own PATH.
+		if path := linuxPkgWrapperPath(name); path != "" {
 			return path, true
 		}
 	}
@@ -532,6 +549,10 @@ func auditInterpreter(needs string) ([]string, bool) {
 				return []string{p}, true
 			}
 		}
+		// Ubuntu's Python from Linux packages (the handheld).
+		if p := linuxPkgWrapperPath("python3"); p != "" {
+			return []string{p}, true
+		}
 	case "perl":
 		if p, err := exec.LookPath("perl"); err == nil && !auditIsStoreStub(p) {
 			return []string{p}, true
@@ -541,8 +562,27 @@ func auditInterpreter(needs string) ([]string, bool) {
 				return []string{p}, true
 			}
 		}
+		if p := linuxPkgWrapperPath("perl"); p != "" {
+			return []string{p}, true
+		}
 	}
 	return nil, false
+}
+
+// auditInterpreterPackages are the Ubuntu packages that give a script tool
+// its interpreter on the handheld: Perl with the TLS modules Nikto uses for
+// HTTPS targets.
+func auditInterpreterPackages(needs string) []string {
+	if needs == "perl" {
+		return []string{"perl", "libnet-ssleay-perl", "libio-socket-ssl-perl"}
+	}
+	return []string{"python3"}
+}
+
+// auditCanInstallInterpreter reports whether a missing interpreter is
+// installed as part of a script tool's install (Linux packages, handheld).
+func auditCanInstallInterpreter() bool {
+	return auditCurrentPlatform() == auditPlatformHandheld && linuxPkgSupported()
 }
 
 // auditIsStoreStub reports the Windows "app execution alias" placeholders.
@@ -769,8 +809,38 @@ func auditInstall(t secAuditTool, r auditRecipe) (string, error) {
 		return auditInstallGitHub(t, r)
 	case auditKindArchive, auditKindScript:
 		return auditInstallArchive(t, r)
+	case auditKindLinuxPkg:
+		return auditInstallLinuxPkg(t, r, false)
 	}
 	return "", fmt.Errorf("%s cannot be installed from here", t.Name)
+}
+
+// auditInstallLinuxPkg installs a tool from Ubuntu's arm64 packages (Linux
+// packages); refresh checks the index first, which is what Update needs.
+func auditInstallLinuxPkg(t secAuditTool, r auditRecipe, refresh bool) (report string, err error) {
+	if !IsOnline() {
+		return "", errToolsOffline
+	}
+	run, ctx := installBarBeginRun(t.Name)
+	defer func() {
+		if err != nil {
+			installBarFailRun(run, installCardDetail(err.Error()))
+		}
+	}()
+	if err := linuxPkgEnsure(ctx, r.Packages, refresh, linuxPkgBarIO(run)); err != nil {
+		return "", fmt.Errorf("%s: %w", t.Name, err)
+	}
+	path := linuxPkgWrapperPath(r.Entry)
+	if path == "" {
+		return "", fmt.Errorf("%s was installed, but its program %s was not found", t.Name, r.Entry)
+	}
+	version := linuxPkgInstalledVersion(r.Packages[0])
+	auditSaveRecord(t.ID, auditRecord{Kind: "linuxpkg", Path: path, Version: linuxPkgShortVersion(version), Verified: true,
+		At: time.Now().UTC().Format(time.RFC3339)})
+	secAuditForget()
+	linuxPkgSummaryForget()
+	installBarDoneRun(run)
+	return t.Name + " " + version + " installed from Ubuntu's arm64 packages.\n\nUbuntu's package index is signed with its archive key, and every download matched the SHA-256 listed there.", nil
 }
 
 // auditUpdate brings an installed tool to the latest version.
@@ -786,6 +856,9 @@ func auditUpdate(t secAuditTool, r auditRecipe) (string, error) {
 		}
 		return out, err
 	}
+	if r.Kind == auditKindLinuxPkg {
+		return auditInstallLinuxPkg(t, r, true)
+	}
 	return auditInstall(t, r)
 }
 
@@ -796,6 +869,14 @@ func auditRemove(t secAuditTool, r auditRecipe) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 		return auditWingetRun(ctx, "uninstall", "--id", r.WingetID, "--exact")
+	}
+	if r.Kind == auditKindLinuxPkg {
+		if err := linuxPkgRemoveNames(r.Packages, &linuxPkgIO{}); err != nil {
+			return "", fmt.Errorf("remove %s: %w", t.Name, err)
+		}
+		auditForgetRecord(t.ID)
+		linuxPkgSummaryForget()
+		return t.Name + " removed.", nil
 	}
 	root := auditInstallRoot()
 	if root == "" {
@@ -898,9 +979,13 @@ func auditInstallArchive(t secAuditTool, r auditRecipe) (report string, err erro
 	if root == "" {
 		return "", fmt.Errorf("tools folder unavailable")
 	}
+	needInterpreter := false
 	if r.Kind == auditKindScript {
 		if _, ok := auditInterpreter(r.Needs); !ok {
-			return "", fmt.Errorf("%s needs %s, which is not installed", t.Name, auditInterpreterLabel(r.Needs))
+			if !auditCanInstallInterpreter() {
+				return "", fmt.Errorf("%s needs %s, which is not installed", t.Name, auditInterpreterLabel(r.Needs))
+			}
+			needInterpreter = true
 		}
 	}
 	if !IsOnline() {
@@ -915,6 +1000,19 @@ func auditInstallArchive(t secAuditTool, r auditRecipe) (report string, err erro
 			installBarFailRun(run, installCardDetail(err.Error()))
 		}
 	}()
+	if needInterpreter {
+		// The handheld's firmware has no Python or Perl: Ubuntu's comes first
+		// from Linux packages, on this same install bar.
+		label := auditInterpreterLabel(r.Needs)
+		logInfo("audit", "%s needs %s; installing it through Linux packages", t.Name, label)
+		if err := linuxPkgEnsure(ctx, auditInterpreterPackages(r.Needs), false, linuxPkgBarIO(run)); err != nil {
+			return "", fmt.Errorf("install %s for %s: %w", label, t.Name, err)
+		}
+		linuxPkgSummaryForget()
+		if _, ok := auditInterpreter(r.Needs); !ok {
+			return "", fmt.Errorf("%s was installed, but its program was not found", label)
+		}
+	}
 	tmp, err := os.CreateTemp(root, ".download-*.zip")
 	if err != nil {
 		return "", err

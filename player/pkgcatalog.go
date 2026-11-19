@@ -691,7 +691,8 @@ const pkgAppInstallTool = "JukaHub update"
 // with a rollback copy (pkgstage.go); RollbackLabel is its sheet button,
 // RollbackVersion the copy's version ("" when it does not say), and
 // RollbackNewer says the copy is newer than the installed version (after a
-// rollback the same button goes forward again).
+// rollback the same button goes forward again). Launch is the program Run
+// starts ("" when nothing in the folder can start here; pkglaunch.go).
 type pkgItem struct {
 	Kind             pkgItemKind
 	Pkg              Package
@@ -701,6 +702,7 @@ type pkgItem struct {
 	CategoryTitle    string
 	CategoryIcon     string
 	Installed        bool
+	Launch           string
 	InstalledVersion string
 	HasUpdate        bool
 	HasRollback      bool
@@ -776,6 +778,9 @@ type pkgModelInput struct {
 	Art       map[string]string
 	Device    DeviceModel
 	Rollbacks map[string]string
+	// Launches is the program each installed folder starts with
+	// (pkglaunch.go); a folder with none is not in it.
+	Launches map[string]string
 	// AppUpdate is the label of the JukaHub release the header advertises,
 	// "" when there is none.
 	AppUpdate string
@@ -788,6 +793,9 @@ func pkgNewItem(kind pkgItemKind, e pkgEntry, key string, in pkgModelInput) *pkg
 	it.Installed = in.Installed[key]
 	if meta, ok := in.Meta[key]; ok && it.Installed {
 		it.InstalledVersion = meta.Version
+	}
+	if it.Installed && kind != pkgKindApp {
+		it.Launch = in.Launches[key]
 	}
 	if kind == pkgKindPackage && it.Installed && it.InstalledVersion != "" && p.Version != "" &&
 		pkgCompareVersions(p.Version, it.InstalledVersion) > 0 {

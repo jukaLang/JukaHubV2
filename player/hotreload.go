@@ -375,6 +375,9 @@ func applyConfigReload(prev, next *Config) *Config {
 	activeElementIndex = -1
 
 	appConfig = next
+	// The reloaded Menu colour, now that ApplyThemeColors reads this config
+	// (menucolour.go).
+	menuColourSync(next)
 	// In-memory injections are lost with the replaced scene list, so the
 	// Vibration row and its saved value are re-applied here.
 	hapticsBind(next)
@@ -388,6 +391,8 @@ func applyConfigReload(prev, next *Config) *Config {
 	// And the VPN's switch and route, which its worker reads from a copy
 	// (vpn.go).
 	vpnPublish(next, false)
+	// And the DNS choice, which its worker reads from a copy (dnschanger.go).
+	dnsPublish(next, false)
 	showToast("Config reloaded", ColorToastSuccess)
 	return next
 }

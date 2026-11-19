@@ -2474,16 +2474,12 @@ func drawTextRaw(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32
 		texture = cached.texture
 		tw, th = cached.w, cached.h
 	} else {
-		surface, err := font.RenderUTF8Blended(text, color)
-		if err != nil || surface == nil {
-			return
-		}
-		defer surface.Free()
-		texture, err = renderer.CreateTextureFromSurface(surface)
+		// Before the first frame possibly the last start's (startup_framecache.go).
+		var err error
+		texture, tw, th, err = renderLabelTexture(renderer, font, text, color)
 		if err != nil || texture == nil {
 			return
 		}
-		tw, th = surface.W, surface.H
 		homeTextCache.put(key, texture, tw, th)
 	}
 

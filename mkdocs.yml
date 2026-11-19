@@ -49,6 +49,7 @@ nav:
       - Bug reports from the device: BUG_REPORTS.md
   - Software:
       - Toolbox: TOOLBOX.md
+      - Linux packages: LINUX_PACKAGES.md
       - Video and music: MUSIC_PLAYER.md
       - Spatial audio: SPATIAL_AUDIO.md
       - Voice command: VOICE.md

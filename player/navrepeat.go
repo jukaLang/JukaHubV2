@@ -103,6 +103,14 @@ func padDirectionButton(dx, dy int) (uint8, bool) {
 // queued a repeat press, so the caller can count it as input and keep the idle
 // frame cadence from stalling the repeat.
 func padTickRepeat() bool {
+	// A held L2 / R2 keeps jumping by letter in the Games library
+	// (game_library_scrub.go); it reads the trigger, not the D-pad.
+	scrubbed := gameLibraryScrubTick()
+	return padTickRepeatDPad() || scrubbed
+}
+
+// padTickRepeatDPad is padTickRepeat for the held D-pad.
+func padTickRepeatDPad() bool {
 	// The on-screen keyboard moves its own highlight while a direction is held;
 	// queueing a press as well would move twice per tick.
 	if virtualKeyboardActive {

@@ -93,9 +93,10 @@ from a file next to it, so JukaHub's own icon is linked in from these files in
 | `JukaHub.ico` | multi-size icon: 16-32 px are the simplified mark drawn for their pixel grid, 40-256 px the full logo |
 | `JukaHub.rc` | resource script that attaches the icon to the binary |
 | `rsrc_windows_amd64.syso` | compiled resource, linked automatically by Go |
-| `JukaPlayer.png` | the 300 px logo: the running window's icon (embedded with `go:embed`) and the Apps-menu icon of a TrimUI release folder |
+| `JukaPlayer.png` | the 300 px logo: the running window's icon (embedded with `go:embed`) and the About screen |
+| `trimui/Apps/JukaHub/icon.png` | the TrimUI Apps-menu icon (`config.json`'s `"icon"`) of the SD-card package and of every release folder: the logo set inside a 300 px grid cell, the size of the stock icons, clear of the label MainUI prints over the cell |
 
-These files, and every other copy of the logo (the SD-card package's
+These files, and every other copy of the logo (the Apps-menu
 `trimui/Apps/JukaHub/icon.png`, the web builder's favicons, the README image),
 are rendered by `branding/mklogo.py` from one construction; see
 [branding/README.md](../branding/README.md). To change the logo, edit that

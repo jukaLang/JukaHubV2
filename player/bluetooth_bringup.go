@@ -125,6 +125,9 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 	// stopped daemon is the owner's choice, and a PID namespace or hidepid can
 	// hide a running one from /proc, so bluetoothctl's own answer decides there.
 	daemonOK := func() bool { return !firmware || btDaemonRunning() }
+	// JukaHub OS keeps Bluetooth on for its next boot and, on plastron, starts
+	// the image's own service first (jukaos_native.go).
+	jukaosNativeBluetoothOn(ctx)
 	// btRadioIsOn asks the kernel, or bluetoothctl where the kernel cannot be
 	// asked: a radio that is on is never powered "on" again.
 	if btAdapterPresent() && daemonOK() && btRadioIsOn() {

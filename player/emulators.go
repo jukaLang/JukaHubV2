@@ -79,6 +79,17 @@ type emuEntry struct {
 	// Better is the system this missing tile is the better emulator for
 	// (emubest.go): the tile says so and sorts first among the missing.
 	Better string
+	// Folder is the Emus folder a handheld folder entry stands for (and of
+	// each launchlist alternative it offers, emuchoices.go).
+	Folder string
+	// CorePath is a core row's file: on the handheld a game can start in it
+	// directly, through the RetroArch beside it (emuchoices.go). The row's own
+	// tile is unchanged — Launch stays empty there.
+	CorePath string
+	// Extra marks a game-start choice beyond the console's own launchers:
+	// emuChoiceAlt or emuChoiceCore (emuchoices.go). Never the automatic
+	// pick while the console has a launcher of its own (emuBestPick).
+	Extra string
 }
 
 // ── Windows catalog ──────────────────────────────────────────────────────
@@ -752,11 +763,12 @@ func emuCoreEntries(coresDir string) ([]emuEntry, map[string]bool) {
 			detail = system + " · RetroArch core — " + filepath.Join(coresDir, file)
 		}
 		rows = append(rows, emuEntry{
-			Name:   name,
-			Detail: detail,
-			Status: emuAvailable,
-			Core:   name,
-			Glyph:  emuGlyphFor(name, name),
+			Name:     name,
+			Detail:   detail,
+			Status:   emuAvailable,
+			Core:     name,
+			Glyph:    emuGlyphFor(name, name),
+			CorePath: filepath.Join(coresDir, file),
 		})
 	}
 	return rows, installed
@@ -777,6 +789,12 @@ func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, exi
 		detail := "Downloadable RetroArch core · " + entry.Date
 		if system, _ := emuCoreInfo(entry.Core); system != "" {
 			detail = system + " · " + detail
+		}
+		if coreNeedsGPU(entry.Core) {
+			// The one-line warning of a per-core press: "Get more cores"
+			// leaves these here for a console that plays already
+			// (emumorecores.go).
+			detail += " · draws with the GPU: this build may not run here"
 		}
 		rows = append(rows, emuEntry{
 			Name:   entry.Core,
@@ -834,6 +852,7 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				Detail:   folder,
 				Glyph:    emuGlyphFor(de.Name(), defaultCoreForSystem(de.Name())),
 				IconPath: emuFolderIconFrom(folder, fields),
+				Folder:   folder,
 			}
 			// The launcher is the script config.json names (launch.sh on the
 			// stock firmware, the default emulator's own script on CrossMix),
@@ -1029,6 +1048,11 @@ func emulatorEntries() []emuEntry {
 	entries = append(entries, pin(gamesLibraryEmuEntry(), "rom"))
 	entries = append(entries, pin(gameProfilesEmuEntry(), "list"))
 	entries = append(entries, pin(compatibilityEmuEntry(), "speed"))
+	if emuMoreCoresSupported() {
+		// The other cores for every console with games, in one press
+		// (emumorecores.go).
+		entries = append(entries, pin(emuMoreCoresEmuEntry(), "emulator"))
+	}
 	// Windows Apps runs .exe files through Wine on the handheld and directly
 	// on Windows (windowsapps.go).
 	entries = append(entries, pin(windowsAppsEmuEntry(), "apps"))
@@ -1374,6 +1398,12 @@ func emuPanelActivate(config *Config) {
 		openCompatPanel(true)
 		return
 	}
+	if e.Pinned && e.Name == emuMoreCoresEntryName {
+		// The page stays: the install bar shows the downloads and the tiles
+		// of the new cores appear when they are in.
+		emuMoreCoresStart("")
+		return
+	}
 	if e.Name == windowsAppsEntryName {
 		emuPanel.open = false
 		openWindowsAppsPanel(true)
@@ -1457,6 +1487,10 @@ func emuPanelInstall() {
 	// core — what X installed on this tile before.
 	if ppssppTileOpensCard(e) {
 		openPPSSPPCard(e)
+		return
+	}
+	if e.Pinned && e.Name == emuMoreCoresEntryName {
+		emuMoreCoresStart("")
 		return
 	}
 	startEmulatorInstall(e)

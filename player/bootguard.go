@@ -66,6 +66,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -469,7 +470,12 @@ func initBootGuard() {
 		Log().Warn("boot guard: no patch state directory", "err", err)
 		return
 	}
+	// The start's record is flushed beside the start on Linux (see
+	// writeBootGuardStart); tests calling applyBootGuard keep the flushes.
+	bootGuardSyncLater = runtime.GOOS == "linux" && !bootGuardSyncInline()
 	applyBootGuard(dir, bootGuardVersionStamp(), time.Now())
+	bootGuardSyncLater = false
+	startupMarkNow("bootguard")
 	// The settings this start reads, kept until the health mark proves them
 	// (bootGuardSaveLastGood). Not in safe mode: a start that skips plugins and
 	// network proves nothing about the settings a normal start chokes on. Read
@@ -539,9 +545,131 @@ func applyBootGuard(dir, version string, now time.Time) bootGuardVerdict {
 	bootGuardLive.dir, bootGuardLive.state, bootGuardLive.ok = dir, v.Next, true
 	// The end of a safe-mode start proves nothing about the build.
 	bootGuardLive.keepReverts = safeMode.Active
-	writeBootGuardFile(dir, v.Next)
+	writeBootGuardStart(dir, v.Next)
 	bootGuardLive.mu.Unlock()
 	return v
+}
+
+// ── The start's own record, synced beside the start ───────────────────────
+//
+// The record a start writes about itself is what counts it, so it has to be
+// in place before anything that could crash runs. A crashed process leaves its
+// writes in the kernel's page cache, and the next start reads them back from
+// there; only a power cut (or a kernel that stops) can lose data that has not
+// reached the card yet. So on Linux the record is written and renamed into
+// place here, synchronously, and the two flushes to the card (the file and its
+// folder: 10 to 100+ ms on an SD card) run on a goroutine beside the rest of
+// the start. bootGuardWaitSynced waits for them, bounded, before the window
+// and the GPU driver start (main.go), the step most likely to take the kernel
+// down with it, so a start that hangs the machine there is still counted.
+// A power cut inside that window can leave the old record (this start not
+// counted) or, on FAT, an unreadable one, which the guard reads as no record:
+// it never starts safe mode by mistake.
+//
+// JUKAHUB_BOOTGUARD_SYNC=1, Windows and desktops keep the flushes in line.
+
+// bootGuardSyncLater is set by initBootGuard (main thread, before the write)
+// when the start's record may be flushed beside the start.
+var bootGuardSyncLater bool
+
+// bootGuardSyncDone is closed when the deferred flush is over; nil when none
+// is pending. Main thread only (initBootGuard sets it, bootGuardWaitSynced
+// reads it).
+var bootGuardSyncDone chan struct{}
+
+// bootGuardSyncWaitMax bounds the wait before the window: a card that takes
+// longer than this to flush is not allowed to hold up the start.
+const bootGuardSyncWaitMax = 300 * time.Millisecond
+
+// bootGuardSyncInline reports whether JUKAHUB_BOOTGUARD_SYNC asks for the
+// flushes in line, as before.
+func bootGuardSyncInline() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("JUKAHUB_BOOTGUARD_SYNC"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// writeBootGuardStart writes the start's record: durably in line, or (see
+// above) written and renamed now and flushed on a goroutine.
+func writeBootGuardStart(dir string, s bootGuardFileState) {
+	if !bootGuardSyncLater {
+		writeBootGuardFile(dir, s)
+		return
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return
+	}
+	f, err := bootGuardWriteUnsynced(filepath.Join(dir, bootGuardFile), append(data, '\n'))
+	if err != nil {
+		logWarn("bootguard", "the boot record could not be written: %v", err)
+		return
+	}
+	done := make(chan struct{})
+	bootGuardSyncDone = done
+	go func() {
+		defer close(done)
+		started := time.Now()
+		err := f.Sync()
+		_ = f.Close()
+		syncDirectory(dir)
+		if err != nil {
+			logWarn("bootguard", "the boot record could not be flushed: %v", err)
+			return
+		}
+		logInfo("bootguard", "boot record flushed in %d ms, beside the start", time.Since(started).Milliseconds())
+	}()
+}
+
+// bootGuardWriteUnsynced is bootGuardWriteDurable without the flushes: the
+// temp file is written and renamed over path, and returned still open so the
+// flush reaches exactly the file that was put in place.
+func bootGuardWriteUnsynced(path string, data []byte) (*os.File, error) {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(0o600)
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return nil, err
+	}
+	return f, nil
+}
+
+// bootGuardWaitSynced waits, at most bootGuardSyncWaitMax, for the start's
+// record to reach the card. main.go calls it once, right before the window is
+// created. Usually the flush finished long before.
+func bootGuardWaitSynced() {
+	done := bootGuardSyncDone
+	if done == nil {
+		return
+	}
+	bootGuardSyncDone = nil
+	select {
+	case <-done:
+		return
+	default:
+	}
+	started := time.Now()
+	timer := time.NewTimer(bootGuardSyncWaitMax)
+	defer timer.Stop()
+	select {
+	case <-done:
+		logInfo("bootguard", "waited %d ms for the boot record to reach the card", time.Since(started).Milliseconds())
+	case <-timer.C:
+		logWarn("bootguard", "the boot record was not on the card after %d ms; starting anyway", bootGuardSyncWaitMax.Milliseconds())
+	}
 }
 
 // bootGuardStartRollbackIfDue runs the rollback initBootGuard decided on. It is

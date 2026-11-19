@@ -346,6 +346,7 @@ func libraryCoverChanged(rom scannedROM) {
 	}
 	closeGameLibraryArt()
 	recountLibraryArtwork()
+	gameLibraryEdited() // Home shows the new picture too (game_rename.go)
 }
 
 // ── Choose cover ──────────────────────────────────────────────────────────
@@ -712,6 +713,7 @@ func artChooseApply() {
 				return
 			}
 			logInfo("art", "%s: cover chosen by hand (%s)", rom.Path, cand.name)
+			artworkClearNoCover(rom) // a removed cover is wanted again (artwork_nocover.go)
 			libraryCoverChanged(rom)
 			if artChoose.gen == gen {
 				artChooseClose(false)
@@ -797,6 +799,11 @@ func artworkAliasSubmit(text string) {
 	if !named {
 		ShowToast("Covers are matched by the file name again", ToastKindInfo)
 		return
+	}
+	// Naming the covers asks for one: a removed cover is wanted again
+	// (artwork_nocover.go).
+	if artworkClearNoCover(rom) {
+		libraryCoverChanged(rom)
 	}
 	// A cover the firmware or the user put on the card is theirs: the fetcher
 	// never replaces it, and neither does this.

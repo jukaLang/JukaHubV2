@@ -114,14 +114,15 @@ var factoryEraseDataFiles = []string{
 // factoryEraseKeepData are top-level data files the erase leaves: the boot
 // guard's record (it counts starts, and the erase is one), the stamp that says
 // which release is installed (updates and Version history read it), the
-// battery calibration (it describes the device), and the VPN's copy of the
-// DNS settings it replaced (the tunnel daemon puts them back from it after a
-// power cut).
+// battery calibration (it describes the device), and the copies of the
+// network's DNS settings the VPN and the DNS choice replaced (the tunnel
+// daemon and the next start put them back from them after a power cut).
 var factoryEraseKeepData = map[string]bool{
 	"bootguard.json": true, "bootguard.json.bak": true,
 	"release-info.json": true, "release-info.json.bak": true,
 	batteryCalStateFile: true, batteryCalStateFile + ".bak": true, batteryCalStateFile + ".tmp": true,
 	"vpn-resolv.json": true, "vpn-resolv.json.bak": true, "vpn-resolv.json.tmp": true,
+	dnsBackupFile: true, dnsBackupFile + ".tmp": true,
 }
 
 // factoryEraseStoreFile reports whether a top-level data file is one of

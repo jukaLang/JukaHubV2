@@ -1214,7 +1214,10 @@ func (r *vpndDNS) restore() {
 	}
 	r.active = false
 	if cur, err := os.ReadFile(r.path); err == nil && vpndResolvOurs(cur) {
-		if vpndWriteInPlace(r.path, r.original) != nil {
+		// A file the DNS choice wrote is not put back as such: the network's
+		// own goes back, and JukaHub, while it runs, writes its choice again
+		// (dnschanger_linux.go).
+		if vpndWriteInPlace(r.path, dnsOwnFileFor(r.stateDir, r.path, r.original)) != nil {
 			return // the saved copy stays for vpndRecoverDNS
 		}
 	}
@@ -1243,7 +1246,7 @@ func vpndRecoverDNS(stateDir string) bool {
 	}
 	cur, err := os.ReadFile(path)
 	if err == nil && vpndResolvOurs(cur) {
-		if vpndWriteInPlace(path, []byte(saved.Original)) != nil {
+		if vpndWriteInPlace(path, dnsOwnFileFor(stateDir, path, []byte(saved.Original))) != nil {
 			return false
 		}
 		_ = os.Remove(backup)

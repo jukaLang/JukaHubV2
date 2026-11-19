@@ -32,13 +32,15 @@ interrupted operation is rolled back at the next launch.
   action here, and the home header gets a download chip next to the weather
   that installs the release in one press. Nothing is downloaded until one of
   those is pressed. The same check runs at most once a day at launch and only
-  ever advertises.
+  ever advertises. It follows **Settings → About → Update channel**: Stable
+  (the default) looks at the latest stable release, Beta at the newest release,
+  prereleases included; going back to Stable never offers an older build.
 - **Export diagnostics** — a redacted report.
 - **JukaHub bundled assets** starter package — restores the app's own fonts,
   background and default config.
 
-> Installed-package holds (`dbSetHeld`) exist in the package database but are
-> not exposed as a menu action yet.
+> The package database records a hold flag (`held`) for installed packages,
+> but nothing sets it yet: there is no Hold action.
 
 ### Where the state lives
 
@@ -55,6 +57,11 @@ with:
 <state>/reports/            diagnostics exports
 <state>/packages.json       the editable local package index
 ```
+
+`db.json` is read the first time the Patch manager needs it, so installed
+packages and History survive a restart. A db.json JukaHub cannot read (a newer
+schema, a read error) is left untouched and nothing is recorded that session; a
+damaged one is moved aside as `db.json.corrupt-<time>`.
 
 ---
 
@@ -440,6 +447,24 @@ the signed Patch repository above. An install there works like this:
   cut short never leaves half a copy behind. **Reinstall** no longer
   empties the folder first: it is an install like any other, so a failed
   reinstall leaves the package working.
+- **Run.** An installed package that holds a program this device can start
+  gets **Run** (**Play** for a game) as its first button on the package page
+  and on the banner; **Open folder** follows it. The program is a TrimUI app
+  folder's (`config.json` naming its launch script, at the top of the package
+  or up to four folders down, such as `<Name>/` or `Apps/<Name>/`; the one
+  named like the package wins; `Emus/`, `Roms/`, `Imgs/` and `BIOS/` are not
+  searched), else a file named like the entry's `"mainfilename"` (kept in
+  `.jukahub-package.json` at install; `launch.sh` when it names none). A
+  bundle of several apps, none named like the package, gets no Run: the Apps
+  screen lists each of its apps instead. The program starts through the Apps
+  screen's launcher with its own folder as the working directory, and that
+  launcher accepts a package's installed folder only — never a copy in
+  staging, rollback or trash, nor a loose file in `packages/`. Installed apps
+  are listed on the **Apps** screen too (after the device's own apps, so an
+  app installed both ways is listed once). `launch.sh` runs only on an arm64
+  Linux device; a PC offers Run only for Windows programs. A script that
+  hard-codes `/mnt/SDCARD/Apps/<Name>` instead of its own folder expects to be
+  installed there and may not work from `packages/`.
 
 The registry has no signature yet. Publishing hashes in the registry, then
 signing it and making hashes mandatory, is tracked in

@@ -82,6 +82,11 @@ func retroArchLauncher(launcher string) bool {
 	if base == "retroarch" || base == "retroarch.exe" {
 		return true
 	}
+	// A handheld core started directly (emuchoices.go) runs in RetroArch
+	// wherever its folder is. (A Windows .dll keeps the rules below.)
+	if strings.HasSuffix(base, "_libretro.so") {
+		return true
+	}
 	// A firmware keeps the emulator in its own folder (Emus/RetroArch/), but a
 	// ROM or download called "retroarch-demo" must not count.
 	for _, segment := range strings.Split(lowerPath, "/") {

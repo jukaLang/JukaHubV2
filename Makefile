@@ -60,7 +60,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build helpdocs run test test-web e2e vet fmt fmt-check lint bench web \
-        release os-package clean check coverage workflows docs-links backlog-check test-scripts test-spatialfx
+        release os-package jukaboot clean check coverage workflows docs-links backlog-check test-scripts test-spatialfx
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -144,6 +144,10 @@ release: ## Package the release artifacts into player/dist
 APP ?= JukaHub-Trimui.zip
 os-package: ## JukaHub OS SD-card zip from a TrimUI build: make os-package APP=JukaHub-Trimui.zip
 	bash $(PLAYER)/trimui/make-os-package.sh "$(APP)" JukaHub-OS-Trimui.zip
+
+# jukaboot is pure Go (no cgo, no SDL), so this works from any OS, Windows too.
+jukaboot: ## JukaHub OS's process 1 for the Smart Pro image: player/jukaboot (static linux/arm64)
+	cd $(PLAYER) && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -buildmode=exe -ldflags="-s -w" -o jukaboot ./cmd/jukaboot
 
 clean: ## Remove build outputs (Windows also removes the local SDL copy)
 	$(CLEAN)

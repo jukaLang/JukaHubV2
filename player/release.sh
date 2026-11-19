@@ -172,6 +172,9 @@ if ! sh native/package-stt.sh native/bin/juka-whisper "$OUT/JukaHub-OfflineSpeec
     echo "ERROR: verified offline speech is required for the release (JukaHub-OfflineSpeech-linux-arm64.zip)" >&2
     exit 1
 fi
+# jukaboot (cmd/jukaboot): JukaHub OS's own process 1 on the Smart Pro SD image,
+# which os/smartpro/build_image.py takes from the package. Pure Go and static.
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildmode=exe -ldflags "-s -w" -o "$OUT/jukaboot" ./cmd/jukaboot
 TARGETS_JSON=""
 for device in "${TRIMUI_DEVICES[@]}"; do
     echo "Building TrimUI target ${device} (Linux arm64, CGO + SDL2)..."
@@ -179,10 +182,15 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     mkdir -p "$TARGET_DIR"
     GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$TARGET_DIR/JukaHub" .
     cp Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png "$TARGET_DIR/"
+    # The Apps-menu icon config.json names: the logo inside a stock-sized cell
+    # (branding/mklogo.py). JukaPlayer.png stays for an older config.json.
+    cp trimui/Apps/JukaHub/icon.png "$TARGET_DIR/icon.png"
     cp trimui/setterm "$TARGET_DIR/setterm"
     chmod 755 "$TARGET_DIR/setterm"
+    cp "$OUT/jukaboot" "$TARGET_DIR/jukaboot"
+    chmod 755 "$TARGET_DIR/jukaboot"
 
-    PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh setterm config.json JukaPlayer.png)
+    PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh setterm config.json JukaPlayer.png icon.png jukaboot)
     # SECURITY.md sits next to the binary for Tools -> Security & trust's reader.
     if [ -f ../SECURITY.md ]; then
         cp ../SECURITY.md "$TARGET_DIR/SECURITY.md"

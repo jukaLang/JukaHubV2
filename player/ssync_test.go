@@ -625,3 +625,140 @@ func TestGdriveReadsDriveAnswers(t *testing.T) {
 		t.Fatalf("got %+v, %v", ans, err)
 	}
 }
+
+// TestGdriveClientFileFromPhone checks the OAuth client file the phone sends:
+// Google's "installed" file is read, a Web client and a service-account key
+// are refused, and IDs and secrets that cannot be Google's are caught.
+func TestGdriveClientFileFromPhone(t *testing.T) {
+	good := `{"installed":{"client_id":"123456789012-AbCd09.apps.googleusercontent.com","project_id":"jukahub",` +
+		`"auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","client_secret":"GOCSPX-abcdefghijklmnop"}}`
+	id, secret, err := gdriveParseClientJSON([]byte(good))
+	if err != nil || id != "123456789012-abcd09.apps.googleusercontent.com" || secret != "GOCSPX-abcdefghijklmnop" {
+		t.Fatalf("got %q %q %v", id, secret, err)
+	}
+	for name, body := range map[string]string{
+		"web client":      `{"web":{"client_id":"1-a.apps.googleusercontent.com","client_secret":"GOCSPX-abcdefghij"}}`,
+		"service account": `{"type":"service_account","client_id":"1234","private_key":"-----BEGIN"}`,
+		"not json":        `client_id=1-a.apps.googleusercontent.com`,
+		"other id":        `{"installed":{"client_id":"my-app","client_secret":"GOCSPX-abcdefghij"}}`,
+		"no secret":       `{"installed":{"client_id":"1-a.apps.googleusercontent.com"}}`,
+		"huge":            `{"installed":{"client_id":"` + strings.Repeat("1", gdriveClientFileLimit) + `"}}`,
+	} {
+		if _, _, err := gdriveParseClientJSON([]byte(body)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := gdriveCleanClientID(` "42-x.apps.googleusercontent.com" `); err != nil {
+		t.Errorf("a quoted ID was refused: %v", err)
+	}
+	for _, bad := range []string{"42.apps.googleusercontent.com", "ab-x.apps.googleusercontent.com", "42-x y.apps.googleusercontent.com", "42-x.example.com"} {
+		if _, err := gdriveCleanClientID(bad); err == nil {
+			t.Errorf("client ID %q accepted", bad)
+		}
+	}
+	if _, err := gdriveCleanClientSecret("GOCSPX-has space"); err == nil {
+		t.Error("a secret with a space was accepted")
+	}
+}
+
+// TestWebdavReadsServerAnswers checks what WebDAV sync takes from a server:
+// the address rules (https unless on the home network, no user name or
+// query in it), the PROPFIND multistatus (hrefs outside the folder or with
+// "..", broken sizes and 404 propstats left out, any namespace prefix), and
+// the manifest joined with a listing (a changed ETag is not trusted).
+func TestWebdavReadsServerAnswers(t *testing.T) {
+	base, err := webdavCleanURL(" cloud.example.com/remote.php/dav/files/u ")
+	if err != nil || base.String() != "https://cloud.example.com/remote.php/dav/files/u/" {
+		t.Fatalf("got %v, %v", base, err)
+	}
+	for _, ok := range []string{"http://192.168.1.20:5005/dav", "http://nas.local/webdav/", "http://nas/dav/", "http://100.101.102.103/", "davs://app.koofr.net/dav/Koofr"} {
+		if u, err := webdavCleanURL(ok); err != nil || !strings.HasSuffix(u.Path, "/") {
+			t.Errorf("%q refused: %v", ok, err)
+		}
+	}
+	if _, err := webdavCleanURL("http://cloud.example.com/dav/"); !errors.Is(err, errWebdavNotLAN) {
+		t.Errorf("plain http to the internet: got %v", err)
+	}
+	for _, bad := range []string{"http://8.8.8.8/dav/", "https://u:pw@cloud.example.com/", "https://cloud.example.com/dav?x=1", "https://h/a/../b/", "ftp://h/", ""} {
+		if _, err := webdavCleanURL(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+
+	conn, err := webdavNewConn(base, "u", "pw", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+ <d:response><d:href>/remote.php/dav/files/u/JukaHub%20Saves/</d:href>
+  <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  <d:propstat><d:prop><d:getcontentlength/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/</d:href>
+  <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>https://proxy.internal/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/Zelda%20%28USA%29.srm</d:href>
+  <d:propstat><d:prop><d:resourcetype/><d:getcontentlength>8192</d:getcontentlength><d:getetag>"e1"</d:getetag>
+  <d:getlastmodified>Mon, 16 Nov 2026 10:00:00 GMT</d:getlastmodified></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/%2e%2e/x.srm</d:href>
+  <d:propstat><d:prop><d:getcontentlength>1</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/files/other/Secret.srm</d:href>
+  <d:propstat><d:prop><d:getcontentlength>1</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/Bad.srm</d:href>
+  <d:propstat><d:prop><d:getcontentlength>-1</d:getcontentlength></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+ <d:response><d:href>/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/Gone.srm</d:href>
+  <d:propstat><d:prop><d:getcontentlength/></d:prop><d:status>HTTP/1.1 404 Not Found</d:status></d:propstat></d:response>
+</d:multistatus>`)
+	items, err := webdavParseMultistatus(body, conn.top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 || items[0].Rel != "" || !items[0].Dir || items[1].Rel != "retroarch-saves" || !items[1].Dir {
+		t.Fatalf("got %+v", items)
+	}
+	z := items[2]
+	if z.Rel != "retroarch-saves/Zelda (USA).srm" || z.Dir || z.Size != 8192 || z.ETag != `"e1"` || z.LastMod == "" {
+		t.Fatalf("Zelda read as %+v", z)
+	}
+	apache := []byte(`<multistatus xmlns="DAV:"><response><href>/remote.php/dav/files/u/JukaHub%20Saves/a-b/c.srm</href>` +
+		`<propstat><prop><getcontentlength>3</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>`)
+	if got, err := webdavParseMultistatus(apache, conn.top); err != nil || len(got) != 1 || got[0].Rel != "a-b/c.srm" || got[0].Size != 3 {
+		t.Fatalf("default namespace: got %+v, %v", got, err)
+	}
+	if _, err := webdavParseMultistatus([]byte(`<html><body>Log in</body></html>`), conn.top); err == nil {
+		t.Fatal("a web page was read as a folder list")
+	}
+
+	sha := strings.Repeat("cd", 32)
+	rec, err := webdavParseRecord([]byte(`{"v":1,"files":{
+	 "retroarch-saves/Zelda (USA).srm":{"sha256":"` + strings.ToUpper(sha) + `","size":8192,"mtime":1762000000,"etag":"\"e1\""},
+	 "retroarch-saves/../x.srm":{"sha256":"` + sha + `","size":1},
+	 "retroarch-saves/NoSum.srm":{"sha256":"zz","size":1}}}`))
+	if err != nil || len(rec.Files) != 1 {
+		t.Fatalf("got %+v, %v", rec, err)
+	}
+	r, need := webdavBuildRemote(conn, items, rec, true, "")
+	if f, ok := r.files["retroarch-saves/Zelda (USA).srm"]; !ok || f.SHA != sha || f.MTime != 1762000000 || len(need) != 0 {
+		t.Fatalf("a file the manifest vouches for: %+v, need %d", r.files, len(need))
+	}
+	if !r.dirs[gdriveTopKey] || !r.dirs["retroarch-saves"] {
+		t.Fatalf("folders: %+v", r.dirs)
+	}
+	changed := append([]webdavItem(nil), items...)
+	changed[2].ETag = `"e2"`
+	if r, need := webdavBuildRemote(conn, changed, rec, true, ""); len(r.files) != 0 || len(need) != 1 {
+		t.Fatalf("a file changed on the server was trusted: %+v", r.files)
+	}
+	r.buildManifest()
+	if len(r.manifest.Files) != 1 || r.manifest.Files[0].MTime != 0 {
+		t.Fatalf("the server's time must not reach the rules: %+v", r.manifest.Files)
+	}
+	if _, err := webdavParseRecord([]byte(`{"v":2,"files":{}}`)); err == nil {
+		t.Fatal("a manifest from a newer JukaHub must not be overwritten")
+	}
+	if rec, err := webdavParseRecord([]byte(`not json`)); err != nil || len(rec.Files) != 0 {
+		t.Fatalf("a broken manifest: %+v, %v", rec, err)
+	}
+	if got := conn.keyURL("retroarch-saves/Zelda (from WebDAV).srm", false); got != "https://cloud.example.com/remote.php/dav/files/u/JukaHub%20Saves/retroarch-saves/Zelda%20%28from%20WebDAV%29.srm" {
+		t.Fatalf("file address %s", got)
+	}
+}

@@ -2,16 +2,27 @@
 
 When a TrimUI starts straight into JukaHub, it should feel like the handheld
 runs JukaHub, not like an app opening on top of another launcher. Three pieces
-do that: the **boot logo** the firmware shows while Linux starts, the **boot
-animation** that brings that logo to life, and **Home building itself** at the
-end. Opening JukaHub from the stock launcher, or from a shortcut on a PC, keeps
-a short version of the same thing, because a fast start is worth more than a
-long greeting. (A PC that starts JukaHub at login gets the full boot too: the
+do that: the **boot logo** the firmware shows while Linux starts, an optional
+**boot animation** that brings that logo to life, and **Home building itself**
+at the end.
+
+**Since 2026-11-18 the default is the fastest start:** no boot animation
+(**Boot animation → None**) on every device, the PC included, and on stock
+firmware the boot hook starts JukaHub in place of the stock menu (**Skip the
+stock menu at boot**, below). Home appears as soon as it is ready, straight
+after the firmware's logo; the startup chime, when **Startup & shutdown sound**
+is on, starts with Home's first frame instead of with an animation, and the
+spoken greeting follows it, so neither holds the screen up. Pick a style under
+**Boot animation** to get the animation back: everything below then applies
+as before. (A PC that starts JukaHub at login then gets the full boot too: the
 login launcher asks for it.)
 
 <p><img src="assets/jukahub-boot-sheet.png" alt="The JukaHub boot logo at 1280x720, a mock of the animation's later beat with the backdrop's lights up and the progress line running, and the boot logo at 1024x768"></p>
 
 ## What a power-on looks like
+
+With the default (**None**) a power-on is step 1, then Home. With a style
+picked:
 
 1. **The firmware's boot logo.** A black screen with the JukaHub tile and name,
    from the moment the device powers on until Linux is up. On the stock Smart
@@ -26,8 +37,8 @@ login launcher asks for it.)
    started JukaHub and the installed boot logo is JukaHub's; otherwise the
    logo fades in from black). JukaHub's own startup work runs first, while
    that still frame holds, so nothing stutters once it moves. Then the logo
-   makes its entrance in the style chosen under **Boot animation** (below; by
-   default it crashes down onto a cracking floor), and the rest follows as in
+   makes its entrance in the style chosen under **Boot animation** (below;
+   Cinematic crashes down onto a cracking floor), and the rest follows as in
    the **Classic** style: a light
    runs once around the glass pane's rim, the backdrop's four lights come up
    one after another with the four bells of the startup chime, the name
@@ -49,9 +60,18 @@ scales or slides.
 
 On stock and CrossMix firmware JukaHub is started by its boot hook through the
 firmware's own launcher queue (see **Start JukaHub at login** in
-[CONFIGURATION.md](CONFIGURATION.md)). Depending on how that firmware's
-launcher loop reads its queue, the stock launcher can still show for a moment
-between the boot logo and JukaHub. When it does, the hook leaves `menu` in
+[CONFIGURATION.md](CONFIGURATION.md)). By default the hook also puts a tiny
+stand-in over `/usr/trimui/bin/MainUI` for that one boot (a RAM bind mount; no
+file of the firmware is written), so the launcher loop runs the queue in place
+of the stock menu: the menu never opens, and the seconds it took to start and
+settle before the hook could close it are gone. Every later run of MainUI is
+the real menu, the stand-in comes off once JukaHub started (or after 20 s if
+the loop never ran it), and a start that hung still makes the next boot stay on
+the stock menu. **Settings → General → Skip the stock menu at boot** off (the
+app folder then holds `.autostart-keep-menu`) goes back to the older way, and
+so does a firmware without `mount` or MainUI. Then, depending on how that
+firmware's launcher loop reads its queue, the stock launcher can show for a
+moment between the boot logo and JukaHub. When it does, the hook leaves `menu` in
 `/tmp/jukahub-autostart.lock` as it closes the menu, the queued command puts
 black on `/dev/fb0` before `launch.sh` runs (instead of leaving the menu's last
 picture frozen on the screen), and the boot fades in from that black rather
@@ -70,13 +90,20 @@ one, vibration included.
 
 | Style | `bootStyle` | What you see |
 | --- | --- | --- |
-| **Cinematic** (default) | `cinematic` | The camera sits just above a dark floor with a faint glow on the horizon in the theme's accent. The logo drops in from above the screen, stretching with its speed, and crashes onto the floor: one hard buzz of the vibration motor on the frame it lands, the picture shakes for under half a second, a short flash, dust and sparks burst sideways along the floor and cracks race out from the impact, glowing in the accent and cooling to dark — a different pattern every boot. The logo squashes, bounces twice (a weaker buzz and a quieter knock in the startup chime on each landing) and settles; then the name, the colours and the progress line come up. When the firmware's logo is already on screen, it first leaves through the top of the screen and then comes crashing back. |
+| **Cinematic** | `cinematic` | The camera sits just above a dark floor with a faint glow on the horizon in the theme's accent. The logo drops in from above the screen, stretching with its speed, and crashes onto the floor: one hard buzz of the vibration motor on the frame it lands, the picture shakes for under half a second, a short flash, dust and sparks burst sideways along the floor and cracks race out from the impact, glowing in the accent and cooling to dark — a different pattern every boot. The logo squashes, bounces twice (a weaker buzz and a quieter knock in the startup chime on each landing) and settles; then the name, the colours and the progress line come up. When the firmware's logo is already on screen, it first leaves through the top of the screen and then comes crashing back. |
 | **Roll** | `roll` | The rounded logo tumbles in from the left, rolling over its rounded corners, landing on each side with a small squash and a light tick, slowing step by step until it stops upright in the middle — exactly where the firmware's logo sits. About two seconds. |
 | **Still logo** | `image` | The logo upright and still where the firmware's logo is (so a power-on shows no jump), the name and the progress line. Nothing moves; the quickest boot that still shows one. |
 | **Classic** | `classic` | The glass boot described above: a light runs round the pane, the lights come up with the chime's bells. |
 | **Surprise me** | `random` | Cinematic, Roll or Classic, a different one each time. |
-| **None** | `none` | No boot animation at all, and no short one when you open JukaHub either: the startup work runs and Home appears as soon as it is ready, without building itself. The fastest start. **Startup animation** has nothing left to choose and is greyed out. |
+| **None** (default) | `none` | No boot animation at all, and no short one when you open JukaHub either: the startup work runs and Home appears as soon as it is ready, without building itself. The fastest start. The startup chime (if on) starts with Home's first frame. **Startup animation** has nothing left to choose and is greyed out. |
 
+- **None is the default everywhere** (2026-11-18; before, only on the JukaHub
+  OS card images, and Cinematic elsewhere). A style you picked before keeps
+  playing: only a device that never chose one changes. On the JukaHub OS card
+  images the launcher can also show the picture of Home kept at the last
+  power-off before JukaHub has even started (`bootframe.go`; see
+  [`os/plastron/README.md`](../os/plastron/README.md)); with a style picked
+  there, no Home picture is kept.
 - **Any button** skips to Home building itself, in every style (as before; Select
   or B held through a JukaHub OS power-on still starts the stock menu, and the
   startup lock still comes first).
@@ -120,7 +147,8 @@ files (`byevoice.go`).
 
 ## Opening JukaHub as an app
 
-From the stock launcher's Apps list, or from a shortcut on a PC, the same logo
+With the default (**None**), Home simply appears. With a style picked: from
+the stock launcher's Apps list, or from a shortcut on a PC, the same logo
 and name come up over black and Home builds itself, compressed into the time
 the app needs to start anyway: the logo part stays inside the existing
 two-second startup budget and gets out of the way as soon as the startup work
@@ -132,12 +160,13 @@ the budget is already spent.
 
 ## Settings
 
-Four rows in **Settings → General**, after **Start JukaHub at login**:
+Five rows in **Settings → General**, after **Start JukaHub at login**:
 
 | Row | What it does |
 | --- | --- |
+| Skip the stock menu at boot | TrimUI stock firmware only, with **Start JukaHub at login** on. **On** (default): the boot hook starts JukaHub in place of the stock menu, which never opens. **Off**: the menu opens for a moment and is closed once it is up (try it if Wi-Fi, brightness or volume are not set up after a boot). Saved as `autoStartSkipMenu`; off leaves `.autostart-keep-menu` in the JukaHub folder for the hook. Off also keeps the menu in JukaHub OS mode, whose own switch (Settings → JukaHub OS) then greys out. |
 | Startup animation | **Full at power-on** (default): the full boot when the device starts into JukaHub, the short one when you open it. **Full every time**: the full boot on every start. **Always quick**: never the full one. Saved as `startupAnimation` = `power`, `always` or `quick`. |
-| Boot animation | What the logo does: **Cinematic** (default), **Roll**, **Still logo**, **Classic**, **Surprise me** or **None** (see [Boot animation styles](#boot-animation-styles)). Saved as `bootStyle` = `cinematic`, `roll`, `image`, `classic`, `random` or `none`. |
+| Boot animation | What the logo does: **Cinematic**, **Roll**, **Still logo**, **Classic**, **Surprise me** or **None** (default; see [Boot animation styles](#boot-animation-styles)). Saved as `bootStyle` = `cinematic`, `roll`, `image`, `classic`, `random` or `none`. |
 | Boot logo | TrimUI only. Says what the device shows at power-on: **JukaHub**, **Original** (the picture that was there before JukaHub's), **Custom** (another tool changed it), **Restore needed** (a write was cut short, by a power loss say) or **Unavailable** (the second line says why); **Checking…** while it looks and **Writing…** while it writes. Press **A** twice to install the JukaHub logo — the first press arms it and says what will happen, the second within four seconds does it. When the JukaHub logo is installed (or a restore is needed), the same two presses put the previous picture back. |
 | Watch the boot animation | Plays the power-on sequence in the chosen style now, over the screen you are on, and comes back to it. The progress line is simulated, since nothing is starting. With **None** it only says the animation is off. |
 

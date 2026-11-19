@@ -399,7 +399,7 @@ func browserFetchToDir(ctx context.Context, client *http.Client, address, dir, n
 	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 		return "", "", fmt.Errorf("only http and https addresses can be downloaded")
 	}
-	browserChromeNavigate(req.Header)
+	browserChromeNavigateURL(req.Header, req.URL)
 	// A save is not a page load: let the server answer with the file itself
 	// rather than negotiating for HTML.
 	req.Header.Set("Accept", "*/*")
@@ -413,6 +413,7 @@ func browserFetchToDir(ctx context.Context, client *http.Client, address, dir, n
 		return "", "", browserDownloadNetError(err, ctx)
 	}
 	defer resp.Body.Close()
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", "", fmt.Errorf("the server answered %s", resp.Status)
 	}

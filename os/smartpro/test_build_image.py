@@ -34,6 +34,20 @@ def arm64_elf() -> bytes:
     return bytes(data)
 
 
+def arm64_exec(interp: bool = False, machine: int = 183, dynamic: bool = False) -> bytes:
+    """An ELF64 header with two program headers; the first PT_INTERP when
+    interp, the second PT_DYNAMIC when dynamic."""
+    head = bytearray(64)
+    head[:6] = b"\x7fELF\x02\x01"
+    struct.pack_into("<HH", head, 16, 2, machine)
+    struct.pack_into("<Q", head, 32, 64)
+    struct.pack_into("<HH", head, 54, 56, 2)
+    phdrs = bytearray(112)
+    struct.pack_into("<I", phdrs, 0, 3 if interp else 1)
+    struct.pack_into("<I", phdrs, 56, 2 if dynamic else 1)
+    return bytes(head + phdrs)
+
+
 def add_sum(data: bytearray, at: int) -> None:
     struct.pack_into("<I", data, at, STAMP)
     total = sum(w for (w,) in struct.iter_unpack("<I", bytes(data))) & 0xFFFFFFFF
@@ -230,10 +244,52 @@ class EnvTests(unittest.TestCase):
         self.assertIn("ro", words)
         self.assertNotIn("rw", words)
         self.assertEqual(words.count("rootwait"), 1)
+        # Boot time: no console chatter, no wait at U-Boot's prompt.
+        self.assertIn("quiet", words)
+        self.assertFalse(any(w.startswith("loglevel=") for w in words))
+        self.assertEqual(reread.values["bootdelay"], "0")
         nand = reread.values["setargs_nand"]
         self.assertIn("root=PARTUUID=1234-uuid", nand)
         self.assertEqual(reread.values["boot_normal"], STOCK_ENV["boot_normal"])
         self.assertEqual(len(new), len(raw))
+
+    def test_fast_boot_arguments(self):
+        values = {k: v for k, v in STOCK_ENV.items() if k != "bootdelay"}
+        raw = env_image(values)
+        env = builder.parse_env(raw)
+        builder.check_env_controls_root(env, STOCK_CMDLINE)
+        new = builder.parse_env(builder.env_bytes(builder.rewrite_env(env, "u", "squashfs", "4800000"), raw))
+        self.assertEqual(new.values["bootdelay"], "0")
+        words = new.values["setargs_mmc"].split()
+        self.assertEqual(words.count("quiet"), 1)
+        self.assertIn("lpj=4800000", words)
+        self.assertEqual(builder.board_lpj({"LPJ": "4800000"}), "4800000")
+        self.assertIsNone(builder.board_lpj({"LPJ": "48 init=/bin/sh"}))
+        self.assertIsNone(builder.board_lpj({}))
+
+    def test_booter_and_profile_arguments(self):
+        env = builder.parse_env(env_image(STOCK_ENV))
+        extra = builder.profile_args(True, "sunxi_disp_init, slow_probe")
+        self.assertEqual(extra, ("initcall_debug", "printk.time=1", "log_buf_len=1M",
+                                 "initcall_blacklist=sunxi_disp_init,slow_probe"))
+        new = builder.rewrite_env(env, "u", "squashfs", None, builder.BOOTER_PATH, extra)
+        words = builder.expand(new.values["setargs_mmc"].split("bootargs ", 1)[1], new.values).split()
+        self.assertIn("init=/jukahub/jukaboot", words)
+        self.assertIn("quiet", words)  # kept: the kernel's buffer gets every message anyway
+        self.assertIn("initcall_blacklist=sunxi_disp_init,slow_probe", words)
+        self.assertEqual(new.values["init"], "/jukahub/jukaboot")
+        self.assertGreater(builder.check_cmdline_length(env, new, STOCK_CMDLINE, extra), len(STOCK_CMDLINE))
+        # Never taken over from a stock line, only added when asked for.
+        plain = builder.rewrite_args("root=/dev/x initcall_debug log_buf_len=4M", "u", "ext4").split()
+        self.assertNotIn("initcall_debug", plain)
+        self.assertIn("init=/jukahub/init", plain)
+        for bad in ("a b", "x;reboot", "init=/bin/sh", "a,a", ","):
+            with self.assertRaises(builder.BuildError):
+                builder.profile_args(False, bad)
+        many = builder.profile_args(False, ",".join(f"f{i}_" + "x" * 60 for i in range(30)))
+        too_long = builder.rewrite_env(env, "u", "squashfs", None, builder.BOOTER_PATH, many)
+        with self.assertRaisesRegex(builder.BuildError, "bytes"):
+            builder.check_cmdline_length(env, too_long, STOCK_CMDLINE, many)
 
     def test_redundant_env(self):
         raw = env_image(STOCK_ENV, size=0x10000, redundant=True)
@@ -294,6 +350,12 @@ class PlanTests(unittest.TestCase):
             dep = "early_user 1 0 - Live 0x0\ncfg80211 1 1 early_user, Live 0x0\n"
             write(root / "lib/modules/4.9.191/cfg80211.ko", b"")
             write(root / "lib/modules/4.9.191/early_user.ko", b"")
+            # jukaboot's MODULE_DEPS: "used by" plus modules.dep, early modules only.
+            write(root / "lib/modules/4.9.191/modules.dep",
+                  "kernel/early_user.ko: kernel/cfg80211.ko kernel/absent.ko\n")
+            e3, _, _ = builder.module_plan(dep + "pvrsrvkm 1 0 - Live 0x0\n", root, "4.9.191")
+            self.assertEqual(builder.module_deps(dep, root, "4.9.191", e3),
+                             {"pvrsrvkm": [], "cfg80211": [], "early_user": ["cfg80211"]})
             e2, r2, _ = builder.module_plan(dep, root, "4.9.191")
             self.assertEqual(e2, ["/lib/modules/4.9.191/cfg80211.ko", "/lib/modules/4.9.191/early_user.ko"])
             self.assertEqual(r2, [])
@@ -381,9 +443,12 @@ class RootAndCardTests(unittest.TestCase):
                 write(root / "bin" / cmd, b"")
             write(root / "lib/modules/4.9.191/pvrsrvkm.ko", b"")
             write(root / "etc/hostname", "TrimUI\n")
+            write(tmp / "jukaboot", arm64_exec())
             plan = builder.transform_root(root, self.fake_board(tmp), {"KERNEL": "4.9.191"},
-                                          "exfat", set(), set())
+                                          "exfat", set(), set(), tmp / "jukaboot")
             self.assertTrue(os.access(root / "jukahub/init", os.X_OK))
+            self.assertTrue(os.access(root / "jukahub/jukaboot", os.X_OK))
+            self.assertIn("MODULE_DEPS=pvrsrvkm:\n", (root / "jukahub/board.env").read_text())
             env = (root / "jukahub/board.env").read_text()
             self.assertIn("DATA_FSTYPE=exfat", env)
             self.assertIn("MODULES=/lib/modules/4.9.191/pvrsrvkm.ko", env)
@@ -393,6 +458,28 @@ class RootAndCardTests(unittest.TestCase):
             self.assertIn("BASE=smartpro-stock-kernel", marker)
             self.assertTrue((root / "mnt/SDCARD").is_dir())
             self.assertFalse(plan["wifi"])
+
+    def test_booter_must_be_static_aarch64(self):
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            app = tmp / "app"
+            write(app / "jukaboot", arm64_exec())
+            self.assertEqual(builder.choose_booter(app, None, False), app / "jukaboot")
+            self.assertIsNone(builder.choose_booter(app, None, True))
+            write(tmp / "dynamic", arm64_exec(interp=True))
+            with self.assertRaisesRegex(builder.BuildError, "dynamically"):
+                builder.choose_booter(app, tmp / "dynamic", False)
+            write(tmp / "pie", arm64_exec(dynamic=True))
+            with self.assertRaisesRegex(builder.BuildError, "dynamic section"):
+                builder.check_booter(tmp / "pie")
+            write(tmp / "x86", arm64_exec(machine=62))
+            with self.assertRaisesRegex(builder.BuildError, "AArch64"):
+                builder.check_booter(tmp / "x86")
+            # The package's own, when unusable: the shell init boots, with a note.
+            write(app / "jukaboot", arm64_exec(interp=True))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertIsNone(builder.choose_booter(app, None, False))
+            self.assertIsNone(builder.choose_booter(tmp / "no-app", None, False))
 
     def test_board_from_another_model_is_refused(self):
         with tempfile.TemporaryDirectory() as temp:

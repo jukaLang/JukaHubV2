@@ -81,6 +81,10 @@ func systemLegendRows() []FooterHint {
 	if inmapHotkeyEnabled() {
 		rows = append(rows, FooterHint{Button: "Select + R1", Label: "Next control profile"})
 	}
+	// Select + R1 in a game: a screenshot (menushot.go).
+	if row, ok := gameShotChordLegendRow(); ok {
+		rows = append(rows, row)
+	}
 	// Hold Select + L1: mouse mode (vcursor_mode.go).
 	if row, ok := vcursorLegendRow(false); ok {
 		rows = append(rows, row)

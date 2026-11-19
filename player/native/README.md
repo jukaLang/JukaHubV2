@@ -240,9 +240,28 @@ saved_pin_rejected=0
 passcode was then typed on screen, or not). `result` is one of `ok` (quit after the video started), `cancelled` (quit
 before), `login_pin_cancelled`, `login_pin_failed` (the console asked for the
 passcode, then ended the connection; rc 11), `connect_failed`, `console_quit`
-(the console ended a running stream), `decoder_failed`, `video_failed`,
+(the console ended a running stream), `connection_lost` (the stream dropped and
+a minute of reconnecting failed; rc 11, `quit_reason` is the last try's reason
+or `Wi-Fi did not come back`), `decoder_failed`, `video_failed`,
 `sdl_failed`, `invalid_session`, `init_failed`. A JukaHub that does not know a
 token shows the `message`.
+
+### Sleep and reconnecting
+
+JukaHub is not running during a stream, so the power key is the firmware's: it
+suspends the handheld (switching Wi-Fi off) or freezes the program on the
+screen, and the console drops the session meanwhile. The helper notices the
+pause (`CLOCK_BOOTTIME` ran 3 s or more past one pass of its loop: log line
+`nothing ran for N s`) and gives the stream 5 s to show fresh picture or
+sound. Without that, after 15 s with neither picture nor sound, or after an error ending soon
+after a pause or a silence, it shows **Reconnecting to …**, closes the session
+and opens new ones with the same pairing: no try while `/proc/net/route` has no
+default route (Wi-Fi still coming back), 20 s per try, 3 s between tries, a
+login passcode the console took entered again by itself. After a minute it
+gives up with `connection_lost`, and JukaHub comes back. An error ending while
+the picture still flows (rest mode, another device took over) ends the stream
+as before. The pairing keys stay in memory for the reconnects and are wiped
+when the helper exits.
 
 Exit codes: 0 ok, 2 usage, 3 invalid session, 4 chiaki init, 5 SDL init,
 6 decoder init, 7 session init, 8 session start, 10 video failure, 11 the

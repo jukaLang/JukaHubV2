@@ -175,7 +175,8 @@ func jlandInputBlocked() bool {
 
 // jlandKeysCaptured reports whether JukaLand owns the keyboard and the touch
 // screen, so the desktop's Q / E scene-switch keys (E builds in JukaLand) and
-// the scene-switch swipes (core.go handleSwipe) must stay quiet.
+// the swipes core.go's handleSwipe hands to other screens must stay quiet (a
+// swipe no screen claims does nothing).
 func jlandKeysCaptured(config *Config) bool {
 	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return false

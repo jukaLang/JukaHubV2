@@ -393,17 +393,13 @@ func homeTabsLabel(renderer *sdl.Renderer, font *ttf.Font, text string, color sd
 	if strings.TrimSpace(s) == "" {
 		return homeTabsLabelTex{}
 	}
-	surface, err := font.RenderUTF8Blended(s, sdl.Color{R: color.R, G: color.G, B: color.B, A: 255})
-	if err != nil || surface == nil {
-		return homeTabsLabelTex{}
-	}
-	defer surface.Free()
-	tex, err := renderer.CreateTextureFromSurface(surface)
+	// Before the first frame possibly the last start's (startup_framecache.go).
+	tex, tw, th, err := renderLabelTexture(renderer, font, s, sdl.Color{R: color.R, G: color.G, B: color.B, A: 255})
 	if err != nil || tex == nil {
 		return homeTabsLabelTex{}
 	}
 	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-	t := homeTabsLabelTex{tex: tex, w: surface.W, h: surface.H}
+	t := homeTabsLabelTex{tex: tex, w: tw, h: th}
 	c.m[key] = t
 	return t
 }

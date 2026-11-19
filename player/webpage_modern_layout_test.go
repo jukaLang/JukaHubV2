@@ -437,8 +437,9 @@ func TestWebCSSContainerUnitsUseNearestContainerOrViewport(t *testing.T) {
 	if indents["Nearest"] != 30 {
 		t.Fatalf("nearest container cqw = %g, want 30", indents["Nearest"])
 	}
-	if indents["Viewport"] != 128 {
-		t.Fatalf("cqw without a container = %g, want viewport fallback 128", indents["Viewport"])
+	vw, _ := webMediaViewport()
+	if math.Abs(indents["Viewport"]-vw*0.1) > 0.01 {
+		t.Fatalf("cqw without a container = %g, want viewport fallback %g", indents["Viewport"], vw*0.1)
 	}
 }
 

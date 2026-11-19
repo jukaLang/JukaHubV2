@@ -158,6 +158,9 @@ type termJob struct {
 	left     bool
 	timedOut bool
 	exitCode int
+	// limit is the run's own timeout when it is not termCommandTimeout (the
+	// apt built-in, linuxpkg_cli.go).
+	limit time.Duration
 }
 
 func (j *termJob) Write(p []byte) (int, error) {
@@ -269,7 +272,11 @@ func termDrainJob() {
 		j.partial = ""
 	}
 	err, stopped, left, timedOut, code := j.err, j.stopped, j.left, j.timedOut, j.exitCode
+	limit := j.limit
 	j.mu.Unlock()
+	if limit <= 0 {
+		limit = termCommandTimeout
+	}
 	for _, l := range lines {
 		termAppend(l.text, termKindOutput)
 	}
@@ -290,7 +297,7 @@ func termDrainJob() {
 	case stopped:
 		// Stop already said so when it was pressed.
 	case timedOut:
-		termAppend("Stopped after "+termDurationText(termCommandTimeout)+".", termKindError)
+		termAppend("Stopped after "+termDurationText(limit)+".", termKindError)
 	case err != nil && code > 0:
 		termAppend(fmt.Sprintf("Exited with code %d.", code), termKindError)
 	case err != nil:
@@ -375,6 +382,31 @@ func termLaunch(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, l
 	}()
 }
 
+// termLaunchFunc runs fn as the terminal's job: work done inside JukaHub (the
+// apt built-in) with the same streamed output, Stop and leave handling as a
+// program, and its own timeout limit.
+func termLaunchFunc(ctx context.Context, cancel context.CancelFunc, label string, limit time.Duration, fn func(ctx context.Context, w io.Writer) error) {
+	job := &termJob{cancel: cancel, started: time.Now(), command: label, limit: limit}
+	term.job = job
+	term.liveLine = ""
+	go func() {
+		defer cancel()
+		err := fn(ctx, job)
+		job.mu.Lock()
+		defer job.mu.Unlock()
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
+			job.timedOut = true
+		case errors.Is(ctx.Err(), context.Canceled):
+			if !job.stopped {
+				job.left = true
+			}
+			err = nil
+		}
+		job.done, job.err = true, err
+	}()
+}
+
 // termRunExternal runs a command line outside the app: through the platform
 // shell (sh / cmd.exe), so pipes, quotes, wildcards and the shell's own
 // commands work, or directly when the system has no shell to ask.
@@ -413,7 +445,9 @@ func termRunExternal(line string) {
 		cmd = exec.CommandContext(ctx, binPath, fields[1:]...)
 	}
 	cmd.Dir = term.cwd
-	cmd.Env = append(os.Environ(), "TERM=dumb")
+	// On the handheld, the programs Linux packages installed come first
+	// (linuxpkg_runtime.go); nothing changes anywhere else.
+	cmd.Env = linuxPkgShellEnv(append(os.Environ(), "TERM=dumb"))
 	termLaunch(ctx, cancel, cmd, line)
 }
 
@@ -945,6 +979,11 @@ func termExecute(input string) {
 	case "ssh":
 		termSSHCommand(args)
 
+	case "apt", "apt-get", "jpkg":
+		// Linux packages on the handheld (linuxpkg_cli.go); a PC's own apt
+		// runs as a program.
+		termLinuxPkg(command, cmdline, args)
+
 	case "exit", "quit":
 		termLeave(appConfig)
 
@@ -967,6 +1006,7 @@ func termHelp() {
 		"  date · uptime · whoami · hostname · sysinfo · neofetch",
 		"  calc <expression>  evaluate maths, e.g. calc 2+2*3",
 		"  ssh [on|off|status]  SFTP server for PC file access",
+		"  apt <command>      Linux packages on the handheld: update, install, remove, search",
 		"  exit               leave the Terminal",
 		"Anything else runs in the system shell (" + termShellName() + ") for up to " + termDurationText(termCommandTimeout) + ".",
 		"Pad: A keyboard · Select commands · Start run · X clear / stop · Y history · L1/R1 page · B back",

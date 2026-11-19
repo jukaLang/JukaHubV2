@@ -388,6 +388,10 @@ func amixerGenericVolume() (int, bool) {
 
 // wifiBackend names how Wi-Fi is switched on this device.
 func wifiBackend() string {
+	// JukaHub OS on plastron: its supplicant service is the switch (jukaos_native.go).
+	if jukaosNativeWifiService() {
+		return "service"
+	}
 	if commandExists("nmcli") {
 		return "nmcli"
 	}
@@ -462,6 +466,9 @@ func rfkillBlocked(out string) (blocked bool, ok bool) {
 var wifiRadioBackend = wifiBackend
 
 func wifiEnabled() (bool, bool) {
+	if on, known, native := jukaosNativeWifiState(); native {
+		return on, known
+	}
 	switch wifiRadioBackend() {
 	case "nmcli":
 		out, err := systemCommandRunner("nmcli", "radio", "wifi")
@@ -501,6 +508,11 @@ func rfkillState(out string) (bool, bool) {
 // stops showing at once and a probe runs the moment the switch ends
 // (netNetworkSwitching, netmon.go). Callers run it off the main thread.
 func setWifiEnabled(on bool) error {
+	// JukaHub OS keeps the choice for its next boot; on plastron the service
+	// is the radio (jukaos_native.go).
+	if handled, err := jukaosNativeSetWifi(on); handled {
+		return err
+	}
 	backend := wifiRadioBackend()
 	if backend != "nmcli" && backend != "rfkill" {
 		return errors.New("no Wi-Fi control (nmcli/rfkill) on this device")
@@ -557,6 +569,8 @@ func bluetoothEnabled() (bool, bool) {
 
 // setBluetoothEnabled switches the Bluetooth radio.
 func setBluetoothEnabled(on bool) error {
+	// JukaHub OS starts Bluetooth at its next boot as it is left (jukaos_native.go).
+	jukaosNativeRadioIntent("BLUETOOTH", on)
 	if !on {
 		if handled, err := btSwitchOffWithoutDaemon(); handled {
 			return err

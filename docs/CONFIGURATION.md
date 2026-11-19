@@ -90,9 +90,14 @@ settings such as `search_query` or `stream_url`.
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
 | `usbFileTransfer` | bool | Settings → Network → **USB file transfer** (default on, handheld only): a USB cable to a computer opens the SD card there over MTP; off, the cable only charges. See [USB_FILE_TRANSFER.md](USB_FILE_TRANSFER.md) |
+| `usbBrowserLink` | bool | Settings → Network → **Browser over USB** (default on, handheld only, shown while USB file transfer is on): the cable also carries a small network, so the computer's browser opens the Phone Companion page at `http://10.73.73.1`; needs RNDIS, ECM or NCM in the firmware's kernel. Switching it re-connects the port. See [USB_FILE_TRANSFER.md](USB_FILE_TRANSFER.md#open-jukahub-in-your-browser-over-the-cable) |
 | `vpnEnabled`, `vpnRoute` | bool, `""`/`"config"` | Settings → Network → **VPN** (default off): send the device's traffic through the WireGuard configuration in `data/vpn.json` (imported in Settings, Files or the phone companion; never stored here), and **Send through the VPN**: everything (`""`) or only the configuration's `AllowedIPs` (`"config"`). On without a configuration does nothing; see [VPN.md](VPN.md) |
+| `dnsMode`, `dnsServers` | `""`/`"cloudflare"`/`"google"`/`"quad9"`/`"adguard"`/`"family"`/`"opendns"`/`"custom"`, text | Settings → Network → **DNS** (default `""`, Automatic: the network's own servers): the servers that turn names into addresses — a public service, or `"custom"` with up to three IPv4/IPv6 addresses in `dnsServers` separated by spaces or commas (**Custom DNS servers**). On the handheld (as root) for the whole system through `resolv.conf`, kept after every DHCP lease and put back on Automatic, in safe mode and at quit; on Windows for JukaHub's own lookups. A VPN configuration with `DNS =` wins while it runs. Protected from pushed designs; see [DNS.md](DNS.md) |
 | `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
-| `artAutoFetch` | bool | Settings → Games & emulators → **Find box art automatically** (default on): background box-art passes from the libretro thumbnail set — about 100 s after start on a card that never had one, at most daily, and early when the ROM folders gain games; online only, never during a game, on battery only at 20 % or more and after 90 s without input. Only game titles are sent (GET requests to thumbnails.libretro.com). Off leaves the library's Fill gaps (**L1** / **F**). The pass stamp is `data/game-art/.auto-art.json` ([Games Library → Found automatically](GAME_LIBRARY.md#found-automatically)) |
+| `emuPickAsk` | `"first"`/`"always"`/`"never"` | Settings → Games & emulators → **Ask which emulator**: how often a game whose console has more than one emulator or core (its own launchers, the other scripts its `Emus` folder lists, installed RetroArch cores that play it) asks **Which emulator?** — `first` (default: once per game; A plays and remembers it for that game, Y plays just once), `always` (every launch; Y always uses the one picked), `never` (the one used last, else the recommended one). A game's or console's pin always wins. Settings → Games & emulators → **Get more cores** sits beside it (handheld; which consoles were done is kept in `emu-morecores.json` beside the patch state, not in the config) |
+| `google_client_id`, `google_client_secret` | string, string (`ENC:`…) | Your own Google OAuth client ("TVs and Limited Input devices") for Drive save sync, set from the phone (Tools → Save sync → **Set up Google sign-in**); used when `JUKAHUB_GOOGLE_CLIENT_ID` is not in the environment, before the client stamped into the build. The secret is encrypted with the device's key; neither is exported with settings. WebDAV keeps its sign-in in `data/webdav.json`, not the config. See [Cloud save sync](CLOUD_SYNC.md) |
+| `artAutoFetch` | bool | Settings → Games & emulators → **Find box art automatically** (default on): background box-art passes from the libretro thumbnail set — about 100 s after start on a card that never had one (on a handheld where JukaHub keeps the time, once network time has set the clock or after half an hour), at most daily, and early when the ROM folders gain games; online only, never during a game, on battery only at 20 % or more and after 90 s without input. Only game titles are sent (GET requests to thumbnails.libretro.com). Off leaves the library's Fill gaps (**L1** / **F**). The pass stamp is `data/game-art/.auto-art.json` ([Games Library → Found automatically](GAME_LIBRARY.md#found-automatically)) |
+| `gameplayCovers` | bool | Settings → Games & emulators → **Covers from gameplay** (default on): a library game with no cover at all gets a picture of itself read from the screen two minutes into play (handheld framebuffer; on Windows the game's window while it is in front), black bars trimmed, saved as `data/game-art/.gameplay/<System>/<rom stem>.png`. Black, white or flat frames, those within 30 s of Menu or while a library RetroArch reports PAUSED, and (before minute 4) still or mostly dark ones are skipped and retried every 20 s of play up to 8 minutes. Any real cover found later replaces it; the box-art fetch keeps looking. Off stops new pictures; taken ones stay. Nothing leaves the device. |
 | `remotePlayAutoDownload` | bool | Settings → Games & emulators → **Download Remote Play automatically** (default on; shown only where Remote Play runs): while `bin/chiaki-stream` or `bin/chiaki-regist` is missing, JukaHub downloads them in the background about a minute after it starts — online, on screen (not behind a game or the idle screen) and with a clock past the build's date — and tries again after 2 to 60 minutes when the network, GitHub or the clock failed it. Off, they download when PS Remote Play opens. See [REMOTE_PLAY.md](REMOTE_PLAY.md#installing-the-helpers). |
 | `ssh_readonly`, `ssh_full_root` | bool | the SFTP server refuses every write; or it shares the whole Linux file system instead of the SD card (like `JUKAHUB_SSH_FULL_ROOT=1`, while the **Share whole system…** switch on its panel lasts one run). A design pushed through the Live Builder that sets either waits for approval on the device |
 | `castQuality` | `"smooth"`/`"balanced"`/`"sharp"` | Screen Share's picture: Smooth (640 px, 20 fps; the handheld's default), Balanced (960 px, 15 fps; a PC's default) or Sharp (full size, 10 fps). The handheld captures its menus at most about 12 times a second (fewer when the GPU readback is slow) and re-sends a screen that is not changing once a second |
@@ -170,6 +175,14 @@ a TrimUI, beside `JukaHub.exe` on a PC (`screenshot_<time>.png` for JukaHub,
 shows the saved file's path. In a game the picture is the one on screen when
 Menu went down; a button, trigger or volume key pressed with Menu cancels it.
 
+`selectR1Screenshot` (Settings → Controls → **Select + R1: screenshot**, on by
+default; the row is shown on TrimUI handhelds only): pressing Select + R1
+together in a game JukaHub launched saves the screen at once, no hold, as a
+`game_<time>.png` in the same folder; each press is one picture, at most one a
+second ([Controls](CONTROLS.md#screenshot-in-a-game-select--r1)). The game
+sees the press too. In JukaHub's own menus the pair stays the control-profile
+switch.
+
 `jukaVoice` (Settings → Voice & AI → **Juka's voice**): `"voice"` (the
 default) speaks the voice assistant's answers — the orb, the Voice command
 page, the game assistant — `"all"` Chat's Juka AI replies as well, and `"off"`
@@ -214,11 +227,16 @@ when RetroArch exits, like `videoFilter`:
 | `raTuningRumble` | `own` | `own` or 0–100 (`input_rumble_gain`) |
 | `raTuningRotate` | `upright` | `upright`, `tate` (FBNeo / MAME 2003-Plus vertical mode), `own` |
 | `raTuningPAL` | `false` | the PAL region core option where the core has one |
-| `raTuning.<console>.audio` / `.latency` / `.overlay` | "" | one console's own choice ("Adjust for"); "" follows the all-consoles value |
+| `raTuningCrop` | `own` | Crop overscan: `on` (`video_crop_overscan = true` for the launch), `off` (`false`: the whole picture), `own` (RetroArch's own value, which crops by default) |
+| `videoFilter` | `auto` | the look (also Games & emulators → Video filter): `auto` (by console), `unmanaged` (RetroArch's own), `sharp`, `smooth`, `pixel`, `scanlines`, `lcd`, `crt`, `pt` ([Looks](LOOKS.md)) |
+| `raTuning.<console>.audio` / `.latency` / `.overlay` / `.look` / `.crop` | "" | one console's own choice ("Adjust for"); "" follows the all-consoles value; `.crop` is `on` or `off` |
 
 Cheats switched on in Game options → **Cheats** set `apply_cheats_after_load`,
 `apply_cheats_after_toggle` and (only when empty) `cheat_database_path` for that
 launch, and write the game's cheat file, removed again after RetroArch exits.
+A game that starts through a NextUI pak gets `Cheats/<TAG>/<ROM file>.cht` on
+the card instead (minarch reads it; nothing in `retroarch.cfg` changes), also
+removed after the game; a file of the user's own there wins.
 
 `gameAssist` (Settings → Voice & AI → **Game assistant**, on by default) tells
 Juka which library game is being played, or was in the last 30 minutes, and on
@@ -250,9 +268,14 @@ final and a value set beforehand is never overridden:
 
 The handheld hook is a `#!/bin/sh` script that never holds the firmware's boot
 up and is as safe sourced as it is run. It starts JukaHub the way the stock
-menu starts an app: it queues JukaHub in `/tmp/cmd_to_run.sh` and, once the
+menu starts an app: it queues JukaHub in `/tmp/cmd_to_run.sh`. With
+`autoStartSkipMenu` on (Settings → General → **Skip the stock menu at boot**,
+the default since 2026-11-18) it also puts a one-boot stand-in over
+`/usr/trimui/bin/MainUI`, so the firmware's loop runs the queue instead of
+opening the stock menu; the switch writes or removes
+`Apps/JukaHub/.autostart-keep-menu`, which the hook reads. With it off, once the
 stock launcher (MainUI) has been up for two seconds and has stopped writing
-(eight seconds at most), closes it, so the
+(eight seconds at most), the hook closes it, so the
 firmware's launcher loop runs `launch.sh` with its own environment and brings
 MainUI back when JukaHub exits (a loop that reads the queue first starts
 JukaHub before MainUI ever shows; when the menu did show, the queued command
@@ -268,7 +291,18 @@ hangs leaves `Apps/JukaHub/.autostart-pending` behind (it goes when JukaHub
 exits or has been up for 15 s), and the next boot then stays on the stock menu
 once. Each boot is logged to
 `Apps/JukaHub/autostart.log`, and a hook written by an older build is replaced
-the next time JukaHub starts. Other files in `System/starts` are never touched,
+the next time JukaHub starts. Once JukaHub has drawn Home the log gets an
+indented `boot times` line, in seconds since the kernel started: when the
+firmware's launcher script (`runtrimui.sh`) started, this hook's start and
+return, when the loop reached the menu's place (the stand-in ran there), when
+the queued command started `launch.sh`, and JukaHub's own start and first frame
+(from its `/tmp/jukahub-boot-timing`); the gaps are the stock boot's share. Once
+per log it also copies the firmware's launcher script, its `/etc/init.d` start
+order and the card's mount line (`boot setup:`), for a report. `System/starts`
+is the earliest place the stock boot runs anything from the card without the
+device's own storage being changed: it runs once the card is mounted, and
+`.tmp_update` (MinUI, NextUI, TortOS 1.x) only works after those systems have
+replaced `runtrimui.sh` on the device. Other files in `System/starts` are never touched,
 and if the SD card cannot be located the toggle stays off and says why rather
 than writing somewhere arbitrary.
 
@@ -403,6 +437,12 @@ address typed for it, kept so the row can still offer it after another choice.
 Settings → **Browser** writes all four (a typed value only when it is usable);
 see [Browser → Search engine and home page](BROWSER.md#search-engine-and-home-page).
 
+`browserRenderMode` (string, default `"full"`) opens Browser entries with WPE
+WebKit on a handheld where it is installed, or the computer's browser on a PC.
+`"reader"` keeps pages in JukaHub's light reader. If WPE is unavailable, full
+mode falls back to the reader. Settings → Browser → **Open pages with** changes
+this choice.
+
 `browserJavaScript` (bool, default true) lets the Browser run page scripts.
 Off, every page is drawn as its server sent it; `false`, `0`, `"false"`,
 `"0"`, `"no"` and `"off"` all mean off, and a missing key means on. Settings → Browser
@@ -437,10 +477,12 @@ stick or ring lights. The colour comes from the RMS level and zero-crossing
 frequency of the PCM the video and music path is already handing to SDL (the
 `mic` mode below is the only one that listens), and the audio thread is never
 blocked by the lights. The TrimUI stick rings are not in the LED class: they
-are driven through `/sys/class/led_anim` (`effect_rgb_hex_lr` for the colour,
-re-armed as effect `static` at most every 300 ms, and `max_scale_lr` or
-`max_scale` for the level), and what the rings showed before is put back when
-the sync stops or a game takes the screen.
+are driven through `/sys/class/led_anim`: a colour goes through `frame_hex`, or
+straight into `effect_rgb_hex_lr` with the `static` effect, when a read-back
+proves the driver takes it that way; otherwise the brightness (`max_scale_lr`
+or `max_scale`) dips to 0, the effect is re-armed in the dark and the
+brightness comes back. The level is always the scale node, and what the rings
+showed before is put back when the sync stops or a game takes the screen.
 Frames are quantised to 32 steps and unchanged frames are skipped, so the loop
 runs at 25 fps without hammering sysfs. Stopping the sync, or quitting the app,
 blanks the LEDs instead of leaving the last frame lit. With no addressable LED
@@ -461,9 +503,13 @@ from the thermal zone, cached for two seconds). Custom uses `led_color`
 six-second glow between about half and full brightness, eased so it never looks
 like a blink; Charging breathes on the same curve), `pulse` (two-second
 breathing) or `rainbow` (a full hue turn every twelve seconds). On the TrimUI
-stick rings JukaHub checks every 10 s (every 60 s after something else has
-changed them twice) that the firmware has not taken them back; the log's `led`
-scene names the driver state when the rings are taken.
+stick rings JukaHub checks every 10 s whether the driver still reports what it
+reported after JukaHub's own write; a real outside change (TrimUI's service on
+charge or wake) is painted over once, softly, and after two such changes in a
+session JukaHub leaves the rings alone until the lights are switched off and
+on. The log's `led` scene names the driver state when the rings are taken and
+the reason for every colour written. `audio` keeps a soft glow with nothing
+playing.
 
 `autoPerformance` (bool, default `true`) is Settings → **Automatic CPU speed**
 on the handheld: the CPU clock ceiling follows the app in front (lower on Home
@@ -503,6 +549,9 @@ pulse at 10 % or less while not charging, a green breath while charging, and a
 dim glow while the screen is off or the device sleeps — in that order, over any
 `led_policy`, also over games, while the lights are on. `led_ind_brightness`
 (10–100, default 60) is their brightness; `led_brightness` does not dim them.
+The low-battery warning stays on until 13 %, and the indicators and the charger
+reading change only after holding for a few seconds, so a wobbling reading does
+not flicker the rings.
 
 `display_contrast` (-4…5), `display_saturation` (-5…5), `display_exposure`
 (-4…5) and `display_colortemp` (-20…20, negative is warmer), all default 0, are
@@ -757,6 +806,39 @@ shipped order. A control is still only drawn while it has something to show
 (no forecast, nothing playing, no release offered), and a crowded bar drops
 parts the usual way.
 
+### Quick Settings (`quickSettingsLayout`, `quickSettingsTiles`)
+
+Edit Quick Settings (**L2** in the panel, [CONTROLS](CONTROLS.md#edit-quick-settings))
+writes two custom variables:
+
+- `quickSettingsLayout`: `tiles` (the default: a four-column grid), `compact`
+  (six columns of icon buttons) or `list` (one row per button). Anything else
+  is `tiles`.
+- `quickSettingsTiles`: the buttons in order, joined by `;`, each with an
+  optional `@WxH` size in grid cells, and a leading `-` on a hidden one:
+
+```
+wifi;bluetooth;-airplane;vpn;volume@4x1;brightness@4x1;lowpower;quiet;music
+```
+
+| Id | Button | Default size |
+|----|--------|--------------|
+| `wifi`, `bluetooth`, `airplane`, `vpn` | the radio switches | 1×1 |
+| `volume`, `brightness` | the sliders | 2×1 |
+| `lowpower`, `quiet`, `music`, `magnifier`, `ledsync`, `motion`, `fullscreen`, `lanplay` | Low Power, Quiet Mode, Background music, Magnifier, LED Sync, Reduced Motion, Fullscreen, LAN Play | 1×1 |
+| `powermode`, `lock`, `spatial`, `ledmode`, `experience`, `autooff` | Power Mode, Lock screen, Spatial audio, LED Mode, Experience, Auto power off | 2×1 |
+| `networks`, `btdevices`, `ledstyle`, `legend`, `closeall`, `power` | Wi-Fi Networks, Bluetooth Devices, LED Style, Controller Legend, Close all apps & games, Power | 1×1 |
+
+Sizes run from one cell (two across for the sliders) to six across and two
+rows; the four-column Tiles grid draws anything wider than four across its
+whole width, and the List ignores sizes. Missing or blank is the default
+order above with nothing hidden, and Reset stores it that way. Ids are read
+without regard to case; unknown ones and repeats are skipped, and a button the
+list does not name goes back after the one that comes before it in the default
+order. A button this device does not have (Bluetooth Devices without
+bluetoothctl, Auto power off without an RTC wake-up) keeps its place in the
+list and is simply not drawn.
+
 ### Background music (`bgMusic`, `bgMusicSource`, `bgMusicVolume`, `bgMusicSelectedPath`)
 
 Settings → Sound & haptics writes the background-music custom variables.
@@ -928,6 +1010,7 @@ log.
 | `auto-performance.json` | Automatic CPU speed: the clock level each game and screen settled at (safe to delete) |
 | `game-recents.json` | the Continue row |
 | `game-cheats.json` | Game options → Cheats: the cheat file used per game and the switched-on cheats |
+| `artwork-aliases.json` | Game options → Name for covers: the title each game's box art is looked up by, read before the built-in aliases. Hand edits are fine; a file JukaHub cannot read is never overwritten ([Games Library → Choosing a cover by hand](GAME_LIBRARY.md#choosing-a-cover-by-hand)) |
 | `cheats-pending.json` | one-launch cheat files not yet removed after RetroArch exited (repair record) |
 | `musicfavorites.json` | starred tracks |
 | `music-playlists.json` | named playlists saved from the audio player |

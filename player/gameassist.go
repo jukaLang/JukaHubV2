@@ -253,6 +253,11 @@ var gaLink struct {
 	// loop ends the game (gameForceQuit, gamemenu.go) if it is fresh, so a
 	// hold the game outran never ends the next one.
 	forceQuitAt atomic.Int64
+
+	// menuAt: when Menu last went down while the game had the pad
+	// (powerMonoNow, 0 = not yet): its menu may be open, so no gameplay cover
+	// is read for a while (playshot_cover.go).
+	menuAt atomic.Int64
 }
 
 // gaPush queues a press for the main loop. Any goroutine.
@@ -321,11 +326,15 @@ func gameAssistParkedTick(config *Config) {
 	// A game quitting from the in-game menu is left alone: pausing it now
 	// would stop it mid-save, and the quit watch would kill it stopped.
 	can := gameAssistSupported() && !wineInputActive() && !alarmFiringActive() && !gmQuitting.Load()
-	// Hold Menu: screenshot reads the same pad (menushot.go), and so does the
-	// Select + Start hold that ends a game which shows nothing or ignores the
-	// pad (gameForceQuit) — always on, it is the way out.
+	// Hold Menu: screenshot and Select + R1: screenshot read the same pad
+	// (menushot.go), and so does the Select + Start hold that ends a game
+	// which shows nothing or ignores the pad (gameForceQuit) — always on, it
+	// is the way out.
 	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config),
-		can && P().IsHandheld() && menuShotEnabled(config), can && P().IsHandheld() && !powerSleepActive())
+		can && P().IsHandheld() && menuShotEnabled(config),
+		// Two buttons are easy to press in a pocket: not while asleep.
+		can && P().IsHandheld() && gameShotChordEnabled(config) && !powerSleepActive(),
+		can && P().IsHandheld() && !powerSleepActive())
 	if at := gaLink.forceQuitAt.Swap(0); at != 0 && time.Since(time.Unix(0, at)) < time.Second {
 		gameForceQuit()
 	}

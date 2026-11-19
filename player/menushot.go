@@ -26,6 +26,13 @@ package main
 // game's menu has been drawn, and saved on the release of an armed hold. The
 // PNG is written on a goroutine, the motor says when it is, and the "While
 // you were playing" summary counts them on the way back to JukaHub.
+//
+// In a game, Select + R1 pressed together is a screenshot too (Settings →
+// Controls → "Select + R1: screenshot", on unless turned off; Juka,
+// 2026-11-18): no hold, the picture is read the moment both are down and
+// saved the same way. In JukaHub's menus the pair keeps its job, the next
+// control profile (inmap_runtime.go): the parked main loop reads no buttons
+// while a game runs, so the two never meet.
 
 import (
 	"bytes"
@@ -46,6 +53,8 @@ import (
 const (
 	// menuShotKey is the Custom setting behind "Hold Menu: screenshot".
 	menuShotKey = "menuHoldScreenshot"
+	// gameShotChordKey is the one behind "Select + R1: screenshot".
+	gameShotChordKey = "selectR1Screenshot"
 	// menuShotHoldMs is how long Menu is held for a screenshot: longer than a
 	// tap, and long enough that a Menu + volume chord or an
 	// emulator hotkey has its second button down first.
@@ -101,6 +110,46 @@ func menuShotLegendRow() (FooterHint, bool) {
 		return FooterHint{Button: "Hold Menu", Label: "Screenshot (in a game too)"}, true
 	}
 	return FooterHint{Button: "Hold Menu", Label: "Screenshot"}, true
+}
+
+// gameShotChordEnabled reports Settings → Controls → "Select + R1:
+// screenshot" (on unless it is false).
+func gameShotChordEnabled(config *Config) bool {
+	if config == nil {
+		return true
+	}
+	return customBool(config.Variables.Custom, gameShotChordKey, true)
+}
+
+// gameShotChordSettingsRow is its switch, shown where the pad watcher runs
+// beside a game (Settings → Controls, under "Hold Menu: screenshot":
+// stickcal.go).
+func gameShotChordSettingsRow() setRow {
+	return setRow{
+		ID: gameShotChordKey, Label: "Select + R1: screenshot", Kind: setKindToggle,
+		Detail:  setStatic("Press Select + R1 in a game to save the screen"),
+		Visible: func(*Config) bool { return gameAssistSupported() },
+		Get:     gameShotChordEnabled,
+		Set: func(c *Config, on bool) {
+			if c == nil {
+				return
+			}
+			if c.Variables.Custom == nil {
+				c.Variables.Custom = map[string]interface{}{}
+			}
+			c.Variables.Custom[gameShotChordKey] = on
+			saveUserConfigDebounced(userConfigFromVariables(c))
+			setToast("Select + R1: screenshot " + setOnOff(on))
+		},
+	}
+}
+
+// gameShotChordLegendRow is the controller card's row for it.
+func gameShotChordLegendRow() (FooterHint, bool) {
+	if !gameAssistSupported() || !gameShotChordEnabled(appConfig) {
+		return FooterHint{}, false
+	}
+	return FooterHint{Button: "Select + R1", Label: "Screenshot (in a game)"}, true
 }
 
 // menuShotOwnsGuide reports whether a Menu press is read for the hold here:

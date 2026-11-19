@@ -21,7 +21,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"runtime/debug"
 )
 
 // gcSettings is one device's Go runtime tuning.
@@ -81,8 +80,10 @@ func applyGCForDevice() {
 		logDebug("perf", "GC: stock settings (no memory constraint detected)")
 		return
 	}
-	debug.SetGCPercent(settings.Percent)
-	debug.SetMemoryLimit(settings.MemoryLimit)
+	// Before the first frame the collector stays off and these settings are
+	// what comes back with it; after it they apply at once (startup.go
+	// startupGCApply).
+	startupGCApply(settings.Percent, settings.MemoryLimit)
 	logDebug("perf", "GC: GOGC=%d memlimit=%d MB (handheld=%v)", settings.Percent, settings.MemoryLimit>>20, handheld)
 }
 

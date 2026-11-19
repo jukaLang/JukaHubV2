@@ -585,8 +585,10 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		clearAppIconCache()
 		clearChatImageCache()
 		clearChatAvatarCache()
-		// The Ports Store's screenshots (ports_store_images.go).
+		// The Ports Store's screenshots (ports_store_images.go) and Get
+		// Homebrew's covers (homebrew_store_images.go).
 		pstoreTexClear()
+		homebrewTexClear()
 		// The bytes side: downloaded thumbnail payloads waiting for the renderer,
 		// and the validated feed bodies kept for conditional requests. Both are
 		// refetchable, so dropping them costs a round trip, not state.

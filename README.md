@@ -440,8 +440,10 @@ the phone opens a small page with:
 * **Remote** — D-pad, A/B/X/Y, Start, Back and the shoulder buttons.
 * **Send a link** — paste a YouTube, direct-video or stream link and it starts
   playing on the handheld.
-* **Send a file** — uploads land in the `PhoneDrop` folder of the shared folder
-  (the same one FTP publishes), ready for the file browser or player.
+* **Send to the handheld** — the big target at the top: drop files on it (or
+  anywhere on the page), or tap it to choose several on a phone, and each file
+  goes where it belongs (see *Drop anything* below), with its own progress.
+  Untick **Put each file where it belongs** to send everything to `PhoneDrop`.
 * **Files** — browse the shared folders, drag games, covers or music into the
   open folder, upload and download files, and make or rename folders from a
   phone or computer browser.
@@ -457,6 +459,25 @@ the phone opens a small page with:
   Sony's sign-in. The card also follows Remote Play's own download on the
   handheld, with **Download now** when it is missing (the page only learns the
   Account-ID's first and last characters).
+
+### Drop anything: where files go
+
+The handheld decides for each file, and the card shows where it went:
+
+| File | Goes to |
+|------|---------|
+| A game (`.gba`, `.sfc`, `.nes` …) | its console's folder in `Roms`: the one the Games library reads on this card (`Roms/GB` on the stock firmware and CrossMix, `Roms/Game Boy (GB)` on NextUI), else a new folder with the firmware's name |
+| A `.bin`, `.iso` or `.zip` | the same, once the handheld has read the file's first bytes or the zip's list of files; a PortMaster port waits in `PhoneDrop` (install it with PortMaster) |
+| A `.chd`, `.7z`, `.cue` or a file it cannot tell | the card asks which console it is for; a disc game's tracks, cue sheet and playlist follow the first answer |
+| A picture named after a game (`Pokemon Red.png`, `Pokemon Red (USA).jpg`) | that game's cover, beside it in `Imgs` (`.media` on NextUI); a name that fits no game offers the closest titles |
+| Music and videos | the card's `Music` and `Videos` folders the media library reads (JukaHub's own music and video folders on a PC) |
+| A BIOS file the BIOS doctor knows (`scph5501.bin`, `gba_bios.bin` …) | `BIOS` |
+| Anything else | `PhoneDrop` |
+
+A file of the same name is replaced only after you confirm. When the last
+file is in, the handheld says what arrived ("Phone sent 3 games, 1 cover and
+12 songs") and an open Games library rescans. The **Files** card's own drop
+target still puts files in the folder it has open.
 
 The pairing card shows the device's IP address (for example
 `http://192.168.1.42`). If port 80 is unavailable, the address includes the
@@ -728,7 +749,10 @@ four the same way, with controller hints; see
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [USB file transfer](docs/USB_FILE_TRANSFER.md) | the SD card on a computer over a USB cable (MTP): Windows, Linux, Mac, startup lock, troubleshooting |
 | [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
+| [DNS](docs/DNS.md) | Settings → Network → DNS: Cloudflare, Google, Quad9, AdGuard, family filtering or your own servers (a Pi-hole), Find the fastest DNS, where the choice applies |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
+| [Looks](docs/LOOKS.md) | per-console picture looks (CRT, LCD, SkyWalker541's pixel transparency), Download looks, Tune look, overlays, overscan |
+| [Get Homebrew](docs/HOMEBREW.md) | new games from itch.io for ten consoles: browsing, the itch.io key, installs onto the shelves, updates |
 | [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
 | [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |

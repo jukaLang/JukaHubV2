@@ -269,6 +269,7 @@ func fetchWebScript(base *url.URL, ref string, limit int, deadline time.Time) st
 		return ""
 	}
 	defer resp.Body.Close()
+	browserClientHintsNote(resp.Header, resp.Request.URL)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return ""
 	}

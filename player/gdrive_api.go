@@ -99,7 +99,7 @@ func (e *gdriveAPIError) Error() string {
 	case e.Status == http.StatusNotFound:
 		return "the file is no longer on Google Drive"
 	case e.Reason == "accessNotConfigured", e.Reason == "SERVICE_DISABLED":
-		return "the Google Drive API is not enabled for this build's Google Cloud project (docs/CLOUD_SYNC.md)"
+		return "the Google Drive API is not switched on in this client's Google Cloud project (APIs & Services → Library → Google Drive API → Enable)"
 	case e.Message != "":
 		return fmt.Sprintf("Google Drive answered HTTP %d: %s", e.Status, firstLine(e.Message))
 	}

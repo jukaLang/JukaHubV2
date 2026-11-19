@@ -94,6 +94,9 @@ func shutdownSteps(config *Config) []shutdownStep {
 			// Edit Home left open saves its tiles (home_edit.go); the save
 			// below writes them out.
 			homeEditEndForExit(config)
+			// So does Edit Quick Settings: a button carried or resized
+			// mid-edit (qs_edit.go).
+			qsEditClose(config)
 			playtimeFlush(config)
 			partyHistoryFlush()
 			battGraphFlushNow()
@@ -123,6 +126,9 @@ func shutdownSteps(config *Config) []shutdownStep {
 	// JukaHub OS undoes its drivers and values beside the caches, after the
 	// games are gone (jukaos_settings.go; nothing is added in App mode).
 	steps = jukaosShutdownStepAdd(steps)
+	// A DNS choice in resolv.conf gives the network's own servers back
+	// (dnschanger.go; added only while a choice is set or ours is in place).
+	steps = dnsShutdownStepAdd(steps)
 	if shutdownSyncs() {
 		steps = append(steps, shutdownStep{label: "Writing everything to the card", group: 3, timeout: 1500 * time.Millisecond, fn: func() (string, error) {
 			bootSyncFilesystems()

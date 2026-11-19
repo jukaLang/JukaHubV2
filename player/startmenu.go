@@ -285,6 +285,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	// PortMaster's catalogue as a store (ports_store*.go). A PC browses it;
 	// the ports themselves install on the handheld.
 	games = append(games, startMenuEntry{name: portsStoreEntryName, icon: "P", glyph: portsStoreGlyph, action: func(c *Config) { portsStoreOpen(c) }})
+	// New homebrew for ten consoles from itch.io (homebrew_store*.go).
+	games = append(games, startMenuEntry{name: homebrewEntryName, icon: "H", glyph: homebrewGlyph, action: func(c *Config) { homebrewStoreOpen(c) }})
 	// PCs can inspect and download APKs even though AndroidRT runs on the handheld.
 	games = append(games, startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }})
 	// Every way to play Minecraft here: ports, Bedrock, a PC's launchers.

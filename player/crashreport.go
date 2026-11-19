@@ -159,7 +159,10 @@ func initCrashReports() {
 		return
 	}
 	archived, at := crashCollect(dir)
-	crashPrune(dir, crashKeep, archived)
+	// Old reports beyond crashKeep go beside the start: a second listing of
+	// the app folder (on the handheld, the card) that nothing before the first
+	// frame needs. The session file and the report just made stay in line.
+	go crashPrune(dir, crashKeep, archived)
 	if archived != "" {
 		logWarn("crash", "the last session crashed; its report is %s", archived)
 	}

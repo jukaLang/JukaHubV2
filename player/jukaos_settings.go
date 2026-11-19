@@ -131,8 +131,13 @@ func jukaosEscapeCheck() {
 // bootGuardHealthyAfter clears the count), a start the guard ran without
 // layers says so once, and the page cache is freed for the games.
 func jukaosFirstFrame() {
+	// With the boot animation off (the default) the startup chime rises with
+	// Home instead (bootchime.go); every platform, not only JukaHub OS.
+	bootChimeOverHome()
 	if jukaosNativeActive() {
 		logInfo("jukaos", "standalone first frame at %s seconds since boot", jukaosNativeBootSeconds())
+		// Home's picture is kept for the next power-on (bootframe.go).
+		bootFrameStart()
 	}
 	jukaosLive.mu.Lock()
 	session, guarded := jukaosLive.session, jukaosLive.guarded
@@ -176,9 +181,20 @@ func jukaosResetGuard(appDir string) {
 	}
 }
 
-// jukaosShutdownStepAdd is the teardown's row for an OS session (shutdown.go
-// appends it to the "Closing caches" group); steps unchanged outside one.
+// jukaosShutdownStepAdd is the teardown's row for an OS session, and the
+// standalone image's boot-frame row (shutdown.go appends them to the "Closing
+// caches" group, before the sync); steps unchanged otherwise.
 func jukaosShutdownStepAdd(steps []shutdownStep) []shutdownStep {
+	// The standalone image keeps the last settled Home for the next power-on,
+	// taken before the power card and this card were drawn (bootframe.go).
+	if jukaosNativeActive() && bootFrameDirty() && !bootFrameLockOn(appConfig) {
+		// Longer on the Smart Pro image, which writes the bootloader's
+		// picture after it (bootframe_ubootlogo.go).
+		steps = append(steps, shutdownStep{label: "Keeping Home for the next start", group: 2, timeout: bootFrameShutdownWait(appConfig), fn: bootFrameShutdownStep})
+	}
+	if step, ok := bootFrameUbootShutdownStep(appConfig); ok {
+		steps = append(steps, step)
+	}
 	if !jukaosSessionActive() {
 		return steps
 	}
@@ -211,11 +227,16 @@ func jukaosShutdownStep() (string, error) {
 // one switch per layer, where layers go, and the way back.
 func jukaosSettingsRows(*Config) []setRow {
 	if jukaosNativeActive() {
-		return []setRow{{
+		rows := []setRow{{
 			ID: "jukaosStatus", Label: "Status", Kind: setKindInfo,
 			Value:  setStatic("Standalone OS"),
 			Detail: setStatic(jukaosNativeBaseLabel() + " · kernel " + setOr(jukaosKernel(), "unknown")),
-		}}
+		}, jukaosBootTimeRow(startupBootSummary())}
+		if bootFrameUbootSupported() {
+			// Smart Pro image: Home as the bootloader's picture.
+			rows = append(rows, bootFrameUbootSettingsRow())
+		}
+		return rows
 	}
 	appDir := jukaosAppDir()
 	jukaosUI.state = jukaosLoadState(appDir)
@@ -245,11 +266,21 @@ func jukaosSettingsRows(*Config) []setRow {
 		},
 		{
 			ID: "jukaosFastBoot", Label: "Skip the stock menu at boot", Kind: setKindToggle,
-			Detail:   setStatic("At power-on the firmware starts JukaHub OS in place of its menu, so " + fw + "'s menu never shows. Off: the menu opens for a moment and is closed (try this if Wi-Fi, brightness or volume are not set up after a boot)"),
-			Disabled: func(c *Config) bool { return !jukaosUI.state.Enabled || !autoStartEnabled(c) },
+			Detail: func(c *Config) string {
+				// Settings → General's switch of the same name holds the
+				// menu for every boot, JukaHub OS's too (autostart.go).
+				if !autoStartSkipMenuOn(c) {
+					return "Off in Settings → General → Skip the stock menu at boot, which keeps " + fw + "'s menu at every boot"
+				}
+				return "At power-on the firmware starts JukaHub OS in place of its menu, so " + fw + "'s menu never shows. Off: the menu opens for a moment and is closed (try this if Wi-Fi, brightness or volume are not set up after a boot)"
+			},
+			Disabled: func(c *Config) bool { return !jukaosUI.state.Enabled || !autoStartEnabled(c) || !autoStartSkipMenuOn(c) },
 			Get:      func(*Config) bool { return jukaosUI.state.jukaosFastBootOn() },
 			Set:      func(_ *Config, on bool) { jukaosSetFastBoot(on) },
 		},
+	}
+	if summary := startupBootSummary(); summary != "" {
+		rows = append(rows, jukaosBootTimeRow(summary))
 	}
 	start := setRow{
 		ID: "jukaosStart", Label: "Start OS session now", Kind: setKindAction,
@@ -284,6 +315,27 @@ func jukaosSettingsRows(*Config) []setRow {
 		})
 	}
 	return rows
+}
+
+// jukaosBootTimeRow shows how long the last boot took to reach Home, as the
+// start-up measured it (startupBootSummary, e.g. "Power to Home 1.84 s ·
+// system 1.21 s · JukaHub 0.63 s"): its first part as the value, all of it
+// underneath. Read once, when the section opens.
+func jukaosBootTimeRow(summary string) setRow {
+	summary = strings.TrimSpace(summary)
+	value, detail := "Not measured yet", "Measured at the next start"
+	if summary != "" {
+		value, _, _ = strings.Cut(summary, " · ")
+		detail = summary
+	}
+	if jukaosNativeActive() {
+		detail += " · details in .userdata/jukahub/boot.log"
+	}
+	return setRow{
+		ID: "jukaosBootTime", Label: "Last boot", Kind: setKindInfo,
+		Value:  setStatic(value),
+		Detail: setStatic(detail),
+	}
 }
 
 // jukaosLayerRow is one layer's switch. A layer that cannot be used here is

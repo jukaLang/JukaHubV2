@@ -2,11 +2,16 @@ package main
 
 // videofilter.go — the picture RetroArch draws for games started from JukaHub:
 // sharp pixels, smoothed, pixel perfect, or a look (scanlines, an LCD grid, a
-// CRT) when the files for it are on the card.
+// CRT, SkyWalker541's PT pixel transparency) when the files for it are on the
+// card.
 //
 // Settings → the games page has the global choice ("videoFilter" in the custom
-// map); the game options sheet (game_options_ui.go) can override it per game,
-// stored in data/game-options.json as "video_filter". Nothing is written for
+// map; unset is Auto, which picks a look by console), Settings → Emulation the
+// same choice per console, and the game options sheet (game_options_ui.go) can
+// override both per game, stored in data/game-options.json as "video_filter".
+// Which one wins, and Auto's picks, are in shader_looks.go; the knobs a look
+// has are tuned in shader_looks_tune.go and the files fetched by
+// shader_looks_download.go. Nothing is written for
 // good: like the OSD preset (osdpreset.go), every value goes into
 // retroarch.cfg through raScopeApply (racfgscope.go) just before a library
 // launch, and the user's own values come back when RetroArch exits. RetroArch
@@ -33,7 +38,9 @@ package main
 //     "config" beside retroarch.cfg). So a look writes
 //     <config dir>/global.glslp (global.slangp on the glcore/vulkan/d3d
 //     drivers) for this launch only: a marker line and `#reference "<preset>"`
-//     (RetroArch's "simple preset" form), with video_shader_enable and
+//     (RetroArch's "simple preset" form), then a `NAME = "value"` line for
+//     each knob tuned away from the preset's own value, with
+//     video_shader_enable and
 //     auto_shaders_enable set to true through the scoped edit. The file is
 //     removed once RetroArch has exited, and at the next start if JukaHub died
 //     mid-game; only a file still carrying the marker is ever removed, and a
@@ -87,7 +94,7 @@ const (
 // filter on the card.
 var (
 	videoFilterBasicModes = []string{"unmanaged", "sharp", "smooth", "pixel"}
-	videoFilterLookModes  = []string{"scanlines", "lcd", "crt"}
+	videoFilterLookModes  = []string{"scanlines", "lcd", "crt", "pt"}
 )
 
 // videoFilterCandidates is a variable so tests could point at a temporary
@@ -103,8 +110,8 @@ func videoFilterIsLook(mode string) bool {
 	return false
 }
 
-// normaliseVideoFilterMode maps a stored value onto a known mode; anything
-// else leaves RetroArch alone.
+// normaliseVideoFilterMode maps a stored value onto a known mode (Auto
+// included); anything else leaves RetroArch alone.
 func normaliseVideoFilterMode(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	for _, m := range videoFilterBasicModes {
@@ -112,7 +119,7 @@ func normaliseVideoFilterMode(v string) string {
 			return v
 		}
 	}
-	if videoFilterIsLook(v) {
+	if videoFilterIsLook(v) || v == videoFilterAuto {
 		return v
 	}
 	return "unmanaged"
@@ -143,29 +150,33 @@ func videoFilterModeLabel(mode string) string {
 		return "LCD grid"
 	case "crt":
 		return "CRT"
+	case "pt":
+		return "Pixel transparency"
+	case videoFilterAuto:
+		return "Auto"
 	}
 	return "RetroArch's own"
 }
 
-// videoFilterForConfig is the global choice; a missing key leaves RetroArch's
-// picture alone, as every build before this one did.
+// videoFilterForConfig is the global choice, possibly Auto. A missing key is
+// Auto: it picks a look by console only where the files are on the card, so
+// a card without shaders keeps RetroArch's own picture, as before. A choice
+// the user made (RetroArch's own included) is kept.
 func videoFilterForConfig(config *Config) string {
 	if config == nil {
-		return "unmanaged"
+		return videoFilterAuto
 	}
-	if v, ok := customValue(config.Variables.Custom, videoFilterConfigKey); ok {
+	if v, ok := customValue(config.Variables.Custom, videoFilterConfigKey); ok && strings.TrimSpace(coerceString(v)) != "" {
 		return normaliseVideoFilterMode(coerceString(v))
 	}
-	return "unmanaged"
+	return videoFilterAuto
 }
 
 // videoFilterForGame is the mode a launch of romPath uses: the game's own
-// choice, else the global one.
+// choice, else its console's, else the global one, with Auto resolved for its
+// console (shader_looks.go). Never "auto".
 func videoFilterForGame(romPath string) string {
-	if own := gameOptionsFor(romPath).VideoFilter; own != "" {
-		return normaliseVideoFilterMode(own)
-	}
-	return videoFilterForConfig(appConfig)
+	return videoFilterResolve(appConfig, gameOptionsFor(romPath).VideoFilter, lookSystemForROM(romPath), videoFilterUIHas)
 }
 
 // ── Probe: which looks this RetroArch has ────────────────────────────────
@@ -200,6 +211,11 @@ var videoFilterProbes struct {
 	ui        videoFilterProbe
 	uiDone    bool
 	uiRunning bool
+	// gen moves on when the probes are dropped (videoFilterProbesForget): a
+	// scan that started before then does not keep its answer, and ui (from
+	// scan uiGen) is scanned again.
+	gen   int
+	uiGen int
 }
 
 // videoFilterExpandDir resolves a retroarch.cfg directory value: ":" is the
@@ -244,6 +260,9 @@ var (
 		"scanlines": {"scanline", "scanlines", "zfast-scanlines", "scanline-fract"},
 		"lcd":       {"zfast-lcd", "zfast_lcd", "lcd3x", "lcd-grid-v2", "lcd-grid", "lcd1x", "dot"},
 		"crt":       {"zfast-crt", "zfast_crt", "crt-pi", "fakelottes", "crt-easymode", "crt-aperture", "crt-geom"},
+		// SkyWalker541's single-pass GLES shader (libretro glsl-shaders
+		// handheld/PT_SkyWalker541.glslp; his own repo spells it with a dash).
+		"pt": {"pt_skywalker541", "pt-skywalker541"},
 	}
 	videoFilterFilterPrefs = map[string][]string{
 		"scanlines": {"scanline2x"},
@@ -277,6 +296,10 @@ func videoFilterGenericMatch(look, base string, filter bool) bool {
 			}
 		}
 		return true
+	case "pt":
+		// Only SkyWalker541's: the older pixel_transparency preset is another
+		// shader, with other knobs.
+		return !filter && strings.Contains(base, "skywalker541")
 	}
 	return false
 }
@@ -417,28 +440,33 @@ func videoFilterProbeFor(cfgPath string) videoFilterProbe {
 		videoFilterProbes.mu.Unlock()
 		return p
 	}
+	gen := videoFilterProbes.gen
 	videoFilterProbes.mu.Unlock()
 	p := videoFilterProbeConfig(cfgPath)
 	videoFilterProbes.mu.Lock()
-	if videoFilterProbes.byCf == nil {
-		videoFilterProbes.byCf = map[string]videoFilterProbe{}
+	if gen == videoFilterProbes.gen {
+		if videoFilterProbes.byCf == nil {
+			videoFilterProbes.byCf = map[string]videoFilterProbe{}
+		}
+		videoFilterProbes.byCf[cfgPath] = p
 	}
-	videoFilterProbes.byCf[cfgPath] = p
 	videoFilterProbes.mu.Unlock()
 	return p
 }
 
 // videoFilterUIProbe is the default install's probe for the menus. The first
 // call starts the scan in the background and answers "not ready"; the rows
-// show the plain modes until it is done.
+// show the plain modes until it is done. After the probes were dropped the
+// old answer stands until the new scan is in.
 func videoFilterUIProbe() (videoFilterProbe, bool) {
 	videoFilterProbes.mu.Lock()
 	defer videoFilterProbes.mu.Unlock()
-	if videoFilterProbes.uiDone {
+	if videoFilterProbes.uiDone && videoFilterProbes.uiGen == videoFilterProbes.gen {
 		return videoFilterProbes.ui, true
 	}
 	if !videoFilterProbes.uiRunning {
 		videoFilterProbes.uiRunning = true
+		gen := videoFilterProbes.gen
 		go func() {
 			p := videoFilterProbe{Ext: "glslp", Looks: map[string]videoFilterLook{}}
 			if targets := raScopeTargets(videoFilterCandidates()); len(targets) > 0 {
@@ -447,11 +475,24 @@ func videoFilterUIProbe() (videoFilterProbe, bool) {
 			videoFilterProbes.mu.Lock()
 			videoFilterProbes.ui = p
 			videoFilterProbes.uiDone = true
+			videoFilterProbes.uiGen = gen
 			videoFilterProbes.uiRunning = false
 			videoFilterProbes.mu.Unlock()
 		}()
 	}
+	if videoFilterProbes.uiDone {
+		return videoFilterProbes.ui, true
+	}
 	return videoFilterProbe{}, false
+}
+
+// videoFilterProbesForget drops every probe: looks were downloaded, so the
+// next menu or launch scans the card again. Safe from any goroutine.
+func videoFilterProbesForget() {
+	videoFilterProbes.mu.Lock()
+	videoFilterProbes.gen++
+	videoFilterProbes.byCf = nil
+	videoFilterProbes.mu.Unlock()
 }
 
 // videoFilterChoices is the modes a menu offers: the plain ones always, a look
@@ -479,9 +520,14 @@ func videoFilterChoiceNote(mode string) string {
 		return "Bilinear smoothing, no shader"
 	case "pixel":
 		return "Whole-number scaling with sharp pixels"
+	case videoFilterAuto:
+		return videoFilterAutoNote
 	}
 	if probe, ok := videoFilterUIProbe(); ok {
 		if look, has := probe.Looks[mode]; has {
+			if mode == "pt" {
+				return "SkyWalker541's Game Boy screen · Grid is the fast pixel effect"
+			}
 			return look.note()
 		}
 	}
@@ -511,13 +557,19 @@ func videoFilterSettingDetail(*Config) string {
 	case !ok:
 		return what + " · looking for shaders…"
 	case len(probe.Looks) == 0:
-		return what + " · no shaders or filters found for looks"
+		return what + " · no looks on the card yet: Settings → Emulation → Download looks"
 	}
-	return what
+	return what + " · per console in Settings → Emulation"
+}
+
+// videoFilterGlobalChoices is the all-consoles ladder: Auto, then every mode
+// the menus offer.
+func videoFilterGlobalChoices() []string {
+	return append([]string{videoFilterAuto}, videoFilterChoices()...)
 }
 
 func videoFilterSettingOptions(*Config) []setOption {
-	modes := videoFilterChoices()
+	modes := videoFilterGlobalChoices()
 	out := make([]setOption, 0, len(modes))
 	for _, m := range modes {
 		out = append(out, setOption{Value: m, Label: videoFilterModeLabel(m), Note: videoFilterChoiceNote(m)})
@@ -527,7 +579,7 @@ func videoFilterSettingOptions(*Config) []setOption {
 
 func videoFilterSettingIndex(c *Config) int {
 	cur := videoFilterForConfig(c)
-	for i, m := range videoFilterChoices() {
+	for i, m := range videoFilterGlobalChoices() {
 		if m == cur {
 			return i
 		}
@@ -580,10 +632,17 @@ func cycleGameVideoFilter(cur string, delta int) string {
 	return choices[idx]
 }
 
-// gameVideoFilterValue is the sheet's right-hand value.
+// gameVideoFilterValue is the sheet's right-hand value. Default names what the
+// open game's console gets: its own look, or the all-consoles one with Auto
+// resolved ("Default · Auto · CRT").
 func gameVideoFilterValue(own string) string {
 	if own == "" {
-		return "Default · " + videoFilterModeLabel(videoFilterForConfig(appConfig))
+		system := lookSystemForROM(gameOptsUI.game.Path)
+		mode := videoFilterSystemMode(appConfig, system)
+		if mode == videoFilterAuto {
+			return "Default · Auto · " + videoFilterModeLabel(videoFilterAutoMode(system, videoFilterUIHas))
+		}
+		return "Default · " + videoFilterModeLabel(mode)
 	}
 	label := videoFilterModeLabel(own)
 	if videoFilterMissing(own) {
@@ -615,10 +674,14 @@ func videoFilterPlainValues(mode string) []raScopeValue {
 // the game starts with RetroArch's own picture. Standalone emulators are
 // skipped.
 func prepareVideoFilter(launcher, romPath string) bool {
+	videoFilterNoteApplied(romPath, "")
 	if !retroArchLauncher(launcher) {
 		return false
 	}
-	mode := videoFilterForGame(romPath)
+	system := lookSystemForROM(romPath)
+	// Auto is resolved against this launch's own RetroArch below, not the
+	// menus' probe.
+	mode, auto := videoFilterResolveAuto(appConfig, gameOptionsFor(romPath).VideoFilter, system, nil)
 	if mode == "unmanaged" {
 		return false
 	}
@@ -633,10 +696,16 @@ func prepareVideoFilter(launcher, romPath string) bool {
 		look, ok := probe.Looks[mode]
 		switch {
 		case !ok:
-			logWarn("video", "%s look chosen, but this RetroArch has no shader or filter for it; launching with its own picture", mode)
+			// The plain picture, said only in the log: Auto on a card without
+			// this look's files is the normal case, not a fault.
+			logInfo("video", "%s look for %s, but this RetroArch has no shader or filter for it; launching with its own picture", mode, setOr(system, "this game"))
+			return false
+		case auto && look.Shader == "":
+			// Auto never turns on a CPU filter (videoFilterResolveAuto).
+			logInfo("video", "Auto's %s look for %s has only a CPU filter on this card; launching with RetroArch's own picture", mode, setOr(system, "this game"))
 			return false
 		case look.Shader != "":
-			if !videoFilterWritePreset(probe, look.Shader) {
+			if !videoFilterWritePreset(probe, look.Shader, lookLaunchParams(system, mode, look.Shader)) {
 				return false
 			}
 			values = []raScopeValue{
@@ -674,6 +743,9 @@ func prepareVideoFilter(launcher, romPath string) bool {
 		if changed {
 			Log().Info("video filter applied for this launch", "mode", mode, "config", path)
 		}
+	}
+	if configured && videoFilterIsLook(mode) {
+		videoFilterNoteApplied(romPath, mode)
 	}
 	return configured
 }
@@ -756,15 +828,23 @@ func videoFilterOurPreset(raw []byte) bool {
 }
 
 // videoFilterPresetText is the auto preset for a shader: RetroArch's simple
-// preset form, which loads the referenced preset as if it were this one.
-func videoFilterPresetText(shader string) string {
-	return videoFilterPresetMarker + "\n#reference \"" + filepath.ToSlash(shader) + "\"\n"
+// preset form, which loads the referenced preset as if it were this one and
+// then applies the knob values after it (shader_looks_tune.go).
+func videoFilterPresetText(shader string, params []lookParamValue) string {
+	var b strings.Builder
+	b.WriteString(videoFilterPresetMarker + "\n#reference \"" + filepath.ToSlash(shader) + "\"\n")
+	for _, p := range params {
+		if lookParamNameOK(p.Name) {
+			b.WriteString(p.Name + " = \"" + lookFormatValue(p.Value) + "\"\n")
+		}
+	}
+	return b.String()
 }
 
 // videoFilterWritePreset writes the global auto preset for one launch. It is
 // recorded before it is written, so a power cut in between leaves something
 // to clean up rather than a shader on every firmware launch after.
-func videoFilterWritePreset(probe videoFilterProbe, shader string) bool {
+func videoFilterWritePreset(probe videoFilterProbe, shader string, params []lookParamValue) bool {
 	if probe.ConfigDir == "" || shader == "" {
 		return false
 	}
@@ -793,7 +873,7 @@ func videoFilterWritePreset(probe videoFilterProbe, shader string) bool {
 		return false
 	}
 	tmp := path + ".jukahub-tmp"
-	if err := writeFileSynced(tmp, []byte(videoFilterPresetText(shader)), 0o644); err != nil {
+	if err := writeFileSynced(tmp, []byte(videoFilterPresetText(shader, params)), 0o644); err != nil {
 		_ = os.Remove(tmp)
 		logWarn("video", "cannot write %s: %v", path, err)
 		return false

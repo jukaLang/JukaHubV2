@@ -1025,17 +1025,12 @@ func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, process
 		return entry.width, entry.height
 	}
 
-	// Cache miss: render and cache
-	surface, err := font.RenderUTF8Blended(processed, color)
+	// Cache miss: render and cache (before the first frame, possibly from the
+	// last start's first frame: startup_framecache.go)
+	texture, w, h, err := renderLabelTexture(renderer, font, processed, color)
 	if err != nil {
 		return 0, 0
 	}
-	defer surface.Free()
-	texture, err := renderer.CreateTextureFromSurface(surface)
-	if err != nil {
-		return 0, 0
-	}
-	_, _, w, h, _ := texture.Query()
 	if w > 0 && h > 0 {
 		renderer.Copy(texture, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
 	}

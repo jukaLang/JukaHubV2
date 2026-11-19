@@ -75,12 +75,8 @@ Building plastron itself also needs Docker and its Brick hardware inputs.
    Removing the card boots the device's original firmware.
 
 The first boot copies the app and emulator to the new partition and will be
-slower. Later boots start JukaHub directly. The launcher records its start
-time in `.userdata/jukahub/boot.log`; JukaHub records the first drawn frame
-in its log. **No JukaHub first-frame boot time has been measured on hardware
-yet.** The image uses JukaHub's short startup greeting to keep the first
-screen on the fast path. Plastron's reported roughly two-second TortOS shelf
-time does not establish JukaHub's startup time.
+slower. Later boots copy and scan nothing: they start JukaHub directly (see
+[Boot time](#boot-time)).
 
 RetroArch's binary and configuration live in `RetroArch/`. Its cores are in
 `RetroArch/.retroarch/cores`, BIOS in `Bios/`, saves in
@@ -88,9 +84,88 @@ RetroArch's binary and configuration live in `RetroArch/`. Its cores are in
 launcher passes that same configuration to RetroArch. The JukaHub RetroArch
 menu tile does too. The image includes only systems for which a core exists.
 
-Wi-Fi and Bluetooth startup can be requested in
-`.userdata/jukahub/boot.env` with `WIFI=1` and `BLUETOOTH=1`, one per line.
-They start after the splash, so they do not delay the first screen.
+Wi-Fi and Bluetooth start at boot when `.userdata/jukahub/boot.env` says
+`WIFI=1` and `BLUETOOTH=1`, one per line. JukaHub writes these lines itself
+whenever Wi-Fi or Bluetooth is switched on or off in it, keeping any other
+line, so the next boot starts the radios the way they were left; the file can
+also be edited by hand. On this image JukaHub switches Wi-Fi with plastron's
+own service (`/etc/init.d/wpa_supplicant`, `wpa_cli -i wlan0`, `udhcpc`) and
+starts `/etc/init.d/bluetooth` before Bluetooth's usual bring-up. The radios
+start only after JukaHub's first frame, so they never delay it.
+
+## Boot time
+
+TortOS shows its shelf about two seconds after power-on. That speed comes
+from plastron itself: its own U-Boot and TF-A built from source, a trimmed
+Allwinner 4.9 kernel and a small root, all on the SD card. It does not come
+from an `.awimg`: that is TrimUI's firmware-flash format, written to the
+internal storage with POWER + VOL DOWN. TortOS 2.0 writes nothing to the
+device, and neither does JukaHub OS: the image lives on the card, so taking
+the card out always boots the untouched stock firmware, a bad image can never
+leave the handheld unbootable, and nobody needs TrimUI's flashing tool.
+Flashing would only change where the same bootloader and kernel are read from.
+
+JukaHub OS uses the same fast boot chain and keeps JukaHub's own start short:
+
+- **Boot frame.** JukaHub keeps a copy of the screen as it showed Home (the
+  last time Home was on screen and left alone, taken before the power card or
+  the goodbye card) in `.userdata/jukahub/bootframe.fb`, described by
+  `bootframe.info` (`width height bits-per-pixel stride`). At the next
+  power-on, as soon as the card is mounted, `launch.sh` stops plastron's
+  splash and writes that picture to every page of the framebuffer, before
+  JukaHub is started. Home is on screen at once; JukaHub's first frame
+  replaces the same picture. It is only shown when its size, depth and stride
+  match `/sys/class/graphics/fb0` exactly, otherwise the splash stays. With
+  the startup lock on there is no boot frame (turning the lock on deletes it):
+  Home must not show before the code is asked.
+- **Nothing optional first.** Normal boots copy and scan nothing; seeding runs
+  only when `seeded-v1` is missing. JukaHub starts before anything else, and
+  Wi-Fi and Bluetooth wait for its first frame (twenty seconds at most).
+- **Only the pages JukaHub uses are read ahead.** Reading the whole binary
+  ahead (`cat > /dev/null`) is left out: there is no idle time on the card
+  before JukaHub starts, so it would mostly read pages JukaHub never touches.
+  Instead JukaHub records, on a cold start, which parts of its program and
+  libraries it actually touched before its first frame
+  (`Apps/JukaHub/data/boot-prefetch.list`), and at the next start a small
+  loader asks the kernel for exactly those, in order and a little at a time,
+  while the Go runtime is still starting (`player/internal/bootprefetch`).
+  `data/boot-prefetch.off` or `JUKAHUB_BOOT_PREFETCH=0` turns it off; the
+  `startup:` log line's `prefetch=` field shows what it read.
+- **Bigger reads from the card.** `launch.sh` raises the read-ahead of the
+  card's disk (the one `/mnt/SDCARD` is on, and only when sysfs calls it an SD
+  card) to 1024 KB before anything else, never lowering it; `READAHEAD_KB=` in
+  `boot.env` picks another size, `0` leaves the kernel's. JukaHub's binary is
+  tens of megabytes read by page faults, and each fault then reads a larger
+  piece around it in one request: an SD card's cost is per request (about a
+  millisecond each), not per byte.
+- **No forks it can avoid before JukaHub starts.** The launcher makes its
+  folders only on the first boot, reads `boot.env` with shell builtins, and
+  logs U-Boot's bootstage timings after JukaHub's first frame instead of
+  before it starts (they come from the device tree, so nothing is lost).
+- **Where the service starts.** plastron's `inittab` runs its `::sysinit`
+  entries one after another; JukaHub's service takes TortOS's place and
+  returns at once (the launcher runs in the background). `build_image.py`
+  prints and records in `.build.json` (`sysinit_before_jukahub`) every entry
+  that runs before it, so a device boot can show whether one of them is slow
+  enough to be worth moving JukaHub ahead of it. Nothing is reordered blind:
+  an entry before it may be what sets up the controls or the sound.
+
+What is measured, and where (`.userdata/jukahub/boot.log`, renamed to
+`boot.log.1` at each boot):
+
+- `bootstage NAME mark N us`: U-Boot's own timings, in microseconds since the
+  power button, from `/proc/device-tree/bootstage` (plastron's U-Boot records
+  them; the lines are missing if a build does not).
+- `launcher at Ns since boot`: the kernel's uptime when the card was mounted
+  and `launch.sh` began; `read-ahead of mmcblkN 128 -> 1024 KB` when it was
+  raised; `boot frame on screen at Ns` when the picture went up.
+- `JukaHub starting at Ns since boot`: uptime when JukaHub was started.
+- `JukaHub first frame at Ns since boot`: from `/tmp/jukahub-first-frame`,
+  which JukaHub writes once its first frame is drawn.
+
+Uptime starts when the kernel starts; add U-Boot's last bootstage mark for
+time since power-on. Settings → JukaHub OS → Last boot shows the same numbers.
+**No boot time has been measured on hardware yet.**
 
 ## Smart Pro
 
@@ -103,7 +178,10 @@ written to a Smart Pro card, nor the Smart Pro image to a Brick.
 ## Release gate
 
 Before distributing an image, boot and test it on a Brick: first boot,
-subsequent boot and first-frame timing; controls and screen orientation;
+subsequent boot and first-frame timing (boot.log); the boot frame (Home at
+once on the second boot, no black flash before JukaHub's first frame, none
+with the startup lock on); Wi-Fi and Bluetooth switched in JukaHub coming
+back after a restart; controls and screen orientation;
 speaker/headphones; a RetroArch game, BIOS, save and resume; Wi-Fi and
 Bluetooth; clean power-off; and recovery by removing the card. Publish the
 matching JukaHub, plastron, RetroArch and libretro-core sources and notices

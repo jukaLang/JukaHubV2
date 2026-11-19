@@ -39,7 +39,8 @@ const (
 	// keeps sysfs traffic low.
 	ledFrameInterval = 40 * time.Millisecond
 	// ledSilenceAfter is how long an audio sample stays valid. When playback
-	// stops the lights fall dark instead of freezing on the last frame.
+	// stops the Music mode settles to its rest glow (ledMusicRest) instead of
+	// freezing on the last frame.
 	ledSilenceAfter = 220 * time.Millisecond
 	// ledAnalysisFrames caps how much PCM one publish inspects.
 	ledAnalysisFrames = 2048
@@ -236,6 +237,88 @@ func ledColorFor(level, hz float64) (uint8, uint8, uint8) {
 	return hsvToRGB(hueForFrequency(hz), 1, 0.25+0.75*level)
 }
 
+const (
+	// ledMusicRest is the Music mode's glow with nothing playing. The mode
+	// used to go dark between sounds, so every menu click lit the sticks for
+	// a fifth of a second: a blink per button press.
+	ledMusicRest = 0.25
+	// ledMusicAttackSec and ledMusicReleaseSec ease the level like the
+	// Microphone mode's: a beat swells the glow, a pause lets it settle.
+	ledMusicAttackSec  = 0.06
+	ledMusicReleaseSec = 0.45
+	// ledMusicBandHold is how long a new frequency band must hold before the
+	// colour follows it, ledMusicBandGap the least time between two changes:
+	// the band of a single buffer flipped the colour several times a second.
+	ledMusicBandHold = 1500 * time.Millisecond
+	ledMusicBandGap  = 3 * time.Second
+)
+
+// ledMusic is the Music mode's eased level and settled colour band. LED loop
+// (locked: a loop started right after a stop may overlap the old one).
+var ledMusic struct {
+	mu        sync.Mutex
+	at        time.Time
+	level     float64
+	band      float64
+	bandSet   bool
+	bandAt    time.Time
+	cand      float64
+	candSet   bool
+	candSince time.Time
+}
+
+// ledMusicColor is one frame of the Music mode: a steady glow that swells with
+// whatever plays, in the colour of the music's settled band — or, on TrimUI
+// rings where a colour change costs a dip (ledAnimHueCostly), in one colour:
+// the one picked under Colour, else the cool blue. LED loop.
+func ledMusicColor(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
+	sample := currentAudioSample()
+	target, hz := 0.0, 0.0
+	if age := now.Sub(sample.At); age >= 0 && age <= ledSilenceAfter {
+		target, hz = levelFromRMS(sample.RMS), sample.Freq
+	}
+	m := &ledMusic
+	m.mu.Lock()
+	dt := now.Sub(m.at).Seconds()
+	m.at = now
+	if dt < 0 || dt > 1 {
+		dt = 1 // the first frame, or after a pause: no slow fade from stale state
+	}
+	tau := ledMusicReleaseSec
+	if target > m.level {
+		tau = ledMusicAttackSec
+	}
+	m.level += (target - m.level) * (1 - math.Exp(-dt/tau))
+	if target > 0 && hz > 0 {
+		band := hueForFrequency(hz)
+		switch {
+		case !m.bandSet:
+			m.band, m.bandSet, m.bandAt = band, true, now
+		case band == m.band:
+			m.candSet = false
+		case !m.candSet || band != m.cand:
+			m.cand, m.candSet, m.candSince = band, true, now
+		case now.Sub(m.candSince) >= ledMusicBandHold && now.Sub(m.bandAt) >= ledMusicBandGap:
+			m.band, m.bandAt, m.candSet = band, now, false
+		}
+	}
+	band, level := hueForFrequency(0), m.level
+	if m.bandSet {
+		band = m.band
+	}
+	m.mu.Unlock()
+	v := ledMusicRest + (1-ledMusicRest)*level
+	if ledAnimHueCostly.Load() {
+		if s.r != 0 || s.g != 0 || s.b != 0 {
+			hue, _ := ledAnimSplit(s.r, s.g, s.b)
+			ch := func(c uint8) uint8 { return uint8(math.Round(float64(c) * v)) }
+			return ch(hue[0]), ch(hue[1]), ch(hue[2])
+		}
+		band = hueForFrequency(0)
+	}
+	return hsvToRGB(band, 1, v)
+}
+
 // ── Policies ───────────────────────────────────────────────────────────────
 //
 // Audio sync is one policy, not the whole feature. The others are device
@@ -430,6 +513,12 @@ func ledPolicyColor(policy string, batteryPct int, charging bool, tempC float64,
 			level := ledPulse(now)
 			return uint8(float64(r) * level), uint8(float64(g) * level), uint8(float64(b) * level)
 		case "rainbow":
+			if ledAnimHueCostly.Load() {
+				// The TrimUI rings would dip for every step of a turning
+				// wheel: a colour at a time instead, each fading through dark
+				// into the next.
+				return ledRainbowSteps(now)
+			}
 			// One full turn every twelve seconds: a glow, not a strobe.
 			phase := math.Mod(float64(now.UnixMilli())/12000.0, 1)
 			if phase < 0 {
@@ -440,6 +529,35 @@ func ledPolicyColor(policy string, batteryPct int, charging bool, tempC float64,
 		return r, g, b
 	}
 	return 0, 0, 0
+}
+
+const (
+	// ledRainbowStepMs is how long the stepped Rainbow holds each of its six
+	// colours, ledRainbowEdgeMs how long it takes to fade out of one (and into
+	// the next).
+	ledRainbowStepMs = 6000
+	ledRainbowEdgeMs = 600
+)
+
+// ledRainbowSteps is the Rainbow effect where a colour change costs the rings
+// a dip: six pure colours in turn, each held, the change made at dark so the
+// rings never re-arm a lit colour. Pure.
+func ledRainbowSteps(now time.Time) (uint8, uint8, uint8) {
+	ms := math.Mod(float64(now.UnixMilli()), 6*ledRainbowStepMs)
+	if ms < 0 {
+		ms += 6 * ledRainbowStepMs
+	}
+	step := math.Floor(ms / ledRainbowStepMs)
+	in := ms - step*ledRainbowStepMs
+	edge := math.Min(in, ledRainbowStepMs-in)
+	level := 0.9
+	if edge < ledRainbowEdgeMs {
+		e := edge / ledRainbowEdgeMs
+		level *= e * e * (3 - 2*e)
+	}
+	// Whole sixths of the wheel are pure colours, whose hue no level rounds
+	// away.
+	return hsvToRGB(step/6, 1, level)
 }
 
 // ── LED devices ────────────────────────────────────────────────────────────
@@ -790,12 +908,7 @@ func ledFrameColor(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 // ledFrameColorRaw is the colour before the style panel's brightness trim.
 func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 	if s.policy == ledPolicyAudio {
-		sample := currentAudioSample()
-		level := 0.0
-		if time.Since(sample.At) <= ledSilenceAfter {
-			level = levelFromRMS(sample.RMS)
-		}
-		return ledColorFor(level, sample.Freq)
+		return ledMusicColor(s, now)
 	}
 	if s.policy == ledPolicyScreen {
 		if s.brightness <= 0 {
@@ -817,7 +930,9 @@ func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
 	if s.policy == ledPolicyTemperature {
 		temp = ledTemperatureC()
 	}
-	return ledPolicyColor(s.policy, getBatteryPercent(), getBatteryCharging(), temp, s.effect, s.r, s.g, s.b, now)
+	// The charger reading settled (ledChargingSteady): one that flaps at a
+	// full battery made the Charging mode blink dark and green.
+	return ledPolicyColor(s.policy, getBatteryPercent(), ledChargingSteady(now), temp, s.effect, s.r, s.g, s.b, now)
 }
 
 // runLEDLoop animates the lights until stop is closed, then blanks them (the
@@ -896,8 +1011,8 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 					// The rings' writer splits hue from level and skips what
 					// did not change itself; it gets the colour before
 					// quantising (a quantised dim colour has a different hue)
-					// and every frame, so a hue change it held back for the
-					// re-arm limit still lands once the colour holds.
+					// and every frame: its dips, read-backs and steady check
+					// run on this clock.
 					err = applyLED(dev, rawR, rawG, rawB)
 					lastKey[dev.Dir] = "anim"
 				} else {

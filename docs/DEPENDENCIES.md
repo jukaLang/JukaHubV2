@@ -45,7 +45,7 @@ update. These deliberately track upstream:
 
 Two guardrails apply to all of them:
 
-1. **An allowlist, not a free-form repo argument.** `resolveToolURL` in
+1. **An allowlist, not a free-form repo argument.** `latestReleaseAssets` in
    [player/tools.go](../player/tools.go) refuses any repository outside
    `allowedToolRepos`, because the GitHub API can be used to probe release
    metadata and a future code path might over-trust the returned URL.

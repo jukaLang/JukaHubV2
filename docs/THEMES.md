@@ -113,6 +113,23 @@ To get the same look in your own theme file, set the matching
 `arrangement`, `carouselStyle`, `tileRadius`, `focusRing` and `focusRing2`
 keys from the table above.
 
+## Menu colour
+
+Settings → Theme & look → **Menu colour** keeps the theme (its backgrounds,
+surfaces and text) and changes only its accent: the focus ring, pills, progress
+bars and highlights. *Theme's own* (the default) leaves the theme's colour;
+the ten others are Sky, Mint, Lime, Amber, Coral, Rose, Violet, Indigo, Teal
+and White, mid tones that read on dark and light themes. A console look's own
+focus ring (Switch, PlayStation…) follows the pick too.
+
+The colour stays through everything that repaints the theme: picking another
+preset, the light & dark schedule, Battery Saver's OLED theme, plugins,
+experience packs, restoring a backup and a config reload. The usual readability
+rules still apply, so a colour too close to the background (White on Light) is
+darkened for the ring and for accent text rather than disappearing. It is
+stored as `"menuColour": "theme" | "sky" | "mint" | "lime" | "amber" | "coral" |
+"rose" | "violet" | "indigo" | "teal" | "white"` in the custom variables.
+
 ## Glass style
 
 Settings → Theme & look → **Glass** chooses how JukaHub's glass looks.

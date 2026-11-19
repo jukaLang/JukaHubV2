@@ -26,8 +26,12 @@ var confirmDestructiveVerbs = [...]string{
 }
 
 // confirmSafeVerbs start the label of an answer that leaves everything as it
-// is.
-var confirmSafeVerbs = [...]string{"cancel", "keep", "not now", "no", "back", "close"}
+// is ("Cancel", "Keep it", "Not now").
+var confirmSafeVerbs = [...]string{"cancel", "keep", "not now"}
+
+// confirmSafeWhole are safe answers only as the whole label: "Close JukaHub",
+// "Close all apps" and "Back up first" are actions, not the way out.
+var confirmSafeWhole = [...]string{"no", "back", "close"}
 
 // confirmLabelHas reports whether label starts with one of verbs as a whole
 // word ("Remove", "Remove 3 files", "Forget cookies"; not "Removed" or
@@ -55,6 +59,12 @@ func confirmIsDestructive(label string) bool {
 // confirmIsSafe reports whether a button label is the way out that changes
 // nothing.
 func confirmIsSafe(label string) bool {
+	l := strings.ToLower(strings.TrimSpace(label))
+	for _, w := range confirmSafeWhole {
+		if l == w {
+			return true
+		}
+	}
 	return confirmLabelHas(label, confirmSafeVerbs[:])
 }
 

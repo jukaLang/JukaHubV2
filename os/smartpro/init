@@ -2,7 +2,10 @@
 # JukaHub OS on the TrimUI Smart Pro: process 1.
 #
 # The kernel booted the system copy on the SD card read-only with
-# init=/jukahub/init. The bootloader, kernel, drivers and libraries are the
+# init=/jukahub/init. On an image with jukaboot (player/cmd/jukaboot, the
+# compiled process 1 doing the same faster) the kernel starts that instead,
+# and this script is its fallback and BOOTER=0's: keep the two alike. The
+# bootloader, kernel, drivers and libraries are the
 # device's own (dump-board.sh copied them); this replaces only the stock
 # startup and menu. The internal eMMC is never mounted or written: only
 # partitions on the SD card ("SD" in sysfs) are used.
@@ -11,6 +14,7 @@
 # ran: kernel modules, GPIO lines, hardware daemons, the card's file system.
 J=${JUKAHUB_ROOT:-/jukahub}
 SYS=${JUKAHUB_SYS:-/sys}
+INPUT=${JUKAHUB_INPUT:-/dev/input}
 CARD=/mnt/SDCARD
 DATA_NAME=JUKAHUB
 DATA_FSTYPE=vfat
@@ -18,6 +22,16 @@ MODULES=""
 RADIO_MODULES=""
 WIFI=0
 RW=/tmp/.jukahub-rw
+# JukaHub starts as soon as the card is mounted, while the display, GPU, input
+# and sound drivers still load; it waits for this marker right before it opens
+# the display (player/startup_displaywait.go). EARLY_START=0 in boot.env loads
+# the drivers first, as before (for an A/B on the device).
+DISPLAY_READY=/tmp/jukahub-display-ready
+EARLY_START=1
+# The card disk's read-ahead in KB while JukaHub OS runs (card_readahead);
+# READAHEAD_KB=0 in boot.env leaves the kernel's.
+READAHEAD_KB=1024
+LAUNCHER=""
 PATH=/usr/sbin:/usr/bin:/sbin:/bin:/usr/trimui/bin
 export PATH
 CR=$(printf '\r')
@@ -28,9 +42,10 @@ log() {
 	[ -n "${BOOTLOG:-}" ] && echo "$*" >> "$BOOTLOG" 2> /dev/null
 }
 
-uptime_s() {
+# uptime_f: seconds since boot to the hundredth, for os.log.
+uptime_f() {
 	read -r UP REST < /proc/uptime
-	echo "${UP%%.*}"
+	echo "$UP"
 }
 
 # rw_copy DIR: a writable copy of a read-only directory, in memory.
@@ -40,23 +55,98 @@ rw_copy() {
 }
 
 # card_part NAME: the /dev node of the SD card partition with that GPT name.
+# Shell builtins only (it runs before JukaHub starts; a grep per partition was
+# a fork each).
 card_part() {
 	for u in "$SYS"/class/block/*/uevent; do
-		grep -qx "PARTNAME=$1" "$u" 2> /dev/null || continue
+		hit=""
+		while IFS= read -r line || [ -n "$line" ]; do
+			[ "$line" = "PARTNAME=$1" ] && hit=1
+		done 2> /dev/null < "$u"
+		[ -n "$hit" ] || continue
 		dev=${u%/uevent}
 		dev=${dev##*/}
 		# The link leads into the disk's folder; ".." is its disk.
-		[ "$(cat "$SYS/class/block/$dev/../device/type" 2> /dev/null)" = SD ] || continue
+		kind=""
+		read -r kind 2> /dev/null < "$SYS/class/block/$dev/../device/type"
+		[ "$kind" = SD ] || continue
 		echo "/dev/$dev"
 		return 0
 	done
 	return 1
 }
 
+# card_readahead DEV: a larger read-ahead for the disk that partition is on,
+# only upwards and only for the SD card (card_part proved it is one). JukaHub's
+# binary is tens of megabytes read by page faults; each fault then reads a
+# bigger piece around it in one card request instead of several (the card's
+# cost is per request, not per byte). Says what it did in RA_NOTE.
+card_readahead() {
+	RA_NOTE=""
+	case "$READAHEAD_KB" in "" | 0 | *[!0-9]*) return 0 ;; esac
+	disk=${1#/dev/}
+	case "$disk" in
+		mmcblk[0-9]*p[0-9]*) disk=${disk%p*} ;;
+		*) return 0 ;;
+	esac
+	q=$SYS/block/$disk/queue/read_ahead_kb
+	[ -w "$q" ] || return 0
+	cur=""
+	read -r cur 2> /dev/null < "$q"
+	case "$cur" in "" | *[!0-9]*) return 0 ;; esac
+	[ "$cur" -lt "$READAHEAD_KB" ] || return 0
+	echo "$READAHEAD_KB" > "$q" 2> /dev/null && RA_NOTE="read-ahead of $disk ${cur} -> ${READAHEAD_KB} KB"
+}
+
 load_modules() {
 	for m in $1; do
 		insmod "$m" 2> /dev/null
 	done
+}
+
+# load_drivers: the stock system's modules but the radios' (display, GPU,
+# input, sound and the rest), its GPIO lines and its mixer.
+load_drivers() {
+	load_modules "$MODULES"
+	replay_gpio
+	[ -f "$J/asound.state" ] && command -v alsactl > /dev/null 2>&1 &&
+		alsactl -f "$J/asound.state" restore 2> /dev/null
+	:
+}
+
+# input_count: how many input devices the kernel has made, in N.
+input_count() {
+	N=0
+	for e in "$INPUT"/event*; do
+		[ -e "$e" ] && N=$((N + 1))
+	done
+}
+
+# input_settle BEFORE: the stock stick daemon makes the pad JukaHub reads (a
+# virtual input device) a moment after it starts, and SDL looks for pads when
+# JukaHub opens the display, right after the marker. So the marker waits for
+# one input device more than BEFORE: 0.4 s at most, and only when the daemon
+# is in the plan. Says how long in SETTLE_NOTE.
+input_settle() {
+	SETTLE_NOTE=""
+	grep -q '^hardware|.*trimui_inputd' "$J/daemons.list" 2> /dev/null || return 0
+	i=0
+	while [ "$i" -lt 20 ]; do
+		input_count
+		if [ "$N" -gt "$1" ]; then
+			SETTLE_NOTE="stick pad up after $((i * 20)) ms"
+			return 0
+		fi
+		sleep 0.02 2> /dev/null || return 0
+		i=$((i + 1))
+	done
+	SETTLE_NOTE="no new input device 0.4 s after the stick daemon"
+}
+
+# launch: JukaHub's launcher, told which marker to wait for.
+launch() {
+	JUKAHUB_WAIT_DISPLAY=$DISPLAY_READY sh "$J/launch.sh" < /dev/null > /dev/null 2>&1 &
+	LAUNCHER=$!
 }
 
 replay_gpio() {
@@ -111,7 +201,21 @@ users_left() {
 	return 1
 }
 
+# radios: the Wi-Fi and Bluetooth modules and the Wi-Fi daemons, once
+# JukaHub's first frame is up (it writes "<uptime>" to /tmp/jukahub-first-frame),
+# so they never compete with its start; twenty seconds at most.
 radios() {
+	i=0
+	while [ "$i" -lt 100 ] && [ ! -f /tmp/jukahub-first-frame ]; do
+		nap
+		i=$((i + 1))
+	done
+	if [ -f /tmp/jukahub-first-frame ]; then
+		read -r FF REST < /tmp/jukahub-first-frame
+		log "JukaHub first frame at ${FF}s; radios at $(uptime_f)s"
+	else
+		log "no JukaHub first frame after 20 s; radios at $(uptime_f)s"
+	fi
 	load_modules "$RADIO_MODULES"
 	[ "$WIFI" = 1 ] || return 0
 	wifi_conf_in
@@ -169,7 +273,7 @@ main() {
 	mount -t devpts devpts /dev/pts
 	mount -t tmpfs tmpfs /dev/shm
 	mount -t tmpfs -o mode=1777 tmpfs /tmp
-	START=$(uptime_s)
+	START=$(uptime_f)
 	log "process 1 at ${START}s"
 	# busybox halt/poweroff/reboot signal process 1 with these.
 	trap 'shutdown halt' USR1
@@ -183,11 +287,8 @@ main() {
 	mkdir -p /var/run /var/log /var/lock 2> /dev/null
 	[ -f /etc/hostname ] && hostname -F /etc/hostname 2> /dev/null
 
-	load_modules "$MODULES"
-	replay_gpio
-	[ -f "$J/asound.state" ] && command -v alsactl > /dev/null 2>&1 &&
-		alsactl -f "$J/asound.state" restore 2> /dev/null
-
+	# The card first: the SD host and its partitions are in the kernel (the
+	# system copy on it is the root), so JukaHub can start before the drivers.
 	i=0
 	DEV=""
 	while [ "$i" -lt 50 ]; do
@@ -196,12 +297,19 @@ main() {
 		i=$((i + 1))
 	done
 	[ -n "$DEV" ] || fatal "the $DATA_NAME partition is not on the SD card"
-	mount -t "$DATA_FSTYPE" -o rw,noatime "$DEV" "$CARD" || fatal "cannot mount $DEV ($DATA_FSTYPE)"
+	DRIVERS=0
+	if ! mount -t "$DATA_FSTYPE" -o rw,noatime "$DEV" "$CARD" 2> /dev/null; then
+		# The card's file system is a module (exFAT, say): drivers first.
+		load_drivers
+		DRIVERS=1
+		mount -t "$DATA_FSTYPE" -o rw,noatime "$DEV" "$CARD" || fatal "cannot mount $DEV ($DATA_FSTYPE)"
+	fi
 	mkdir -p "$CARD/.userdata/jukahub" "$CARD/.userdata/smartpro/udisk"
 	BOOTLOG=$CARD/.userdata/jukahub/os.log
 	[ -f "$BOOTLOG" ] && mv -f "$BOOTLOG" "$BOOTLOG.1"
-	: > "$BOOTLOG"
-	log "process 1 at ${START}s, card mounted at $(uptime_s)s"
+	# A card the kernel made read-only must not end process 1 (see DISPLAY_READY).
+	true > "$BOOTLOG"
+	log "process 1 at ${START}s, card ready at $(uptime_f)s"
 	# The stock input daemon reads its stick calibration from /mnt/UDISK.
 	mount -o bind "$CARD/.userdata/smartpro/udisk" /mnt/UDISK
 
@@ -212,13 +320,36 @@ main() {
 			VALUE=${VALUE%"$CR"}
 			case "$KEY:$VALUE" in
 				WIFI:0|WIFI:1) WIFI=$VALUE ;;
+				EARLY_START:0|EARLY_START:1) EARLY_START=$VALUE ;;
+				READAHEAD_KB:0) READAHEAD_KB=0 ;;
+				READAHEAD_KB:[1-9]|READAHEAD_KB:[1-9][0-9]|READAHEAD_KB:[1-9][0-9][0-9]|READAHEAD_KB:[1-9][0-9][0-9][0-9]) READAHEAD_KB=$VALUE ;;
 			esac
 		done < "$CARD/.userdata/jukahub/boot.env"
 	fi
+	card_readahead "$DEV"
+	[ -n "$RA_NOTE" ] && log "$RA_NOTE"
 
+	# JukaHub starts now, beside the drivers, and waits for DISPLAY_READY only
+	# just before it opens the display; the radios follow its first frame
+	# (radios). EARLY_START=0, or a card whose file system needed the modules,
+	# starts it after the drivers, as before.
+	if [ "$EARLY_START" = 1 ] && [ "$DRIVERS" = 0 ]; then
+		log "JukaHub starts at $(uptime_f)s, beside the drivers"
+		launch
+	fi
+	[ "$DRIVERS" = 1 ] || load_drivers
+	input_count
+	INPUTS=$N
 	start_daemons hardware
-	sh "$J/launch.sh" < /dev/null > /dev/null 2>&1 &
-	LAUNCHER=$!
+	input_settle "$INPUTS"
+	# true, not ":": a failed redirection on a special builtin ends the shell,
+	# and this shell is process 1.
+	true > "$DISPLAY_READY"
+	log "display, input and sound ready at $(uptime_f)s${SETTLE_NOTE:+ ($SETTLE_NOTE)}"
+	if [ -z "$LAUNCHER" ]; then
+		log "JukaHub starts at $(uptime_f)s, after the drivers"
+		launch
+	fi
 	radios &
 
 	# Process 1 reaps every orphan while it waits for the launcher.

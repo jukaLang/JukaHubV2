@@ -425,11 +425,18 @@ func raScopeTargets(candidates []string) []string {
 
 // raLaunchCandidates puts the config of the RetroArch a launcher starts first
 // when JukaHub knows it: a Windows core runs the retroarch.exe above its cores
-// folder, which keeps retroarch.cfg beside itself.
+// folder, which keeps retroarch.cfg beside itself; a handheld core started
+// directly (emuchoices.go) runs the RetroArch that owns its cores folder, with
+// HOME there, so its configs are the ones that folder holds (raConfigsIn).
 func raLaunchCandidates(launcher string, candidates []string) []string {
 	if strings.EqualFold(filepath.Ext(launcher), ".dll") {
 		if exe := emuRetroArchForCore(launcher); exe != "" {
 			return append([]string{filepath.Join(filepath.Dir(exe), "retroarch.cfg")}, candidates...)
+		}
+	}
+	if emuIsCoreLaunch(launcher) {
+		if bin := coreRetroArchBinary(filepath.Dir(launcher)); bin != "" {
+			return append(raConfigsIn(filepath.Dir(bin)), candidates...)
 		}
 	}
 	return candidates

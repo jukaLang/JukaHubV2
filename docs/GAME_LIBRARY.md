@@ -2,7 +2,8 @@
 
 The Games Library lists ROMs, Android games and local HTML5 games in one place,
 with covers and a Continue row. It opens from **Emulators → Games Library** (the
-pinned row above Game Profiles).
+pinned row above Game Profiles). New homebrew for ten of its consoles comes
+from itch.io through [Get Homebrew](HOMEBREW.md), straight onto the shelves.
 
 It is a full-screen page in Home's glass style, under the top bar, in two
 levels. The first is a grid of buttons, one per console (Continue first): each
@@ -12,6 +13,32 @@ card). **A** — or a click — opens a console's page: its games (as a list, 3D
 shelf or cover column) beside a large preview of the highlighted game's box art
 or video snap. **B** goes back to the consoles, and **B** on the consoles
 closes the library.
+
+### Console look
+
+How the console buttons look is a saved choice, **Covers** by default:
+
+- **Covers** — the buttons above: icon, name, game count, cover meter and the
+  first cover.
+- **Pixel names** — each button *is* the console's name in big pixel letters,
+  with its game count small underneath. Only the highlighted button is a glass
+  card; the others are a faint plate.
+- **Pixel cards** — a card per console like a cartridge: the name in pixel
+  letters on an inset label, the system's icon and game count above it, and a
+  grip along the bottom edge.
+
+When you land on a console its letters fly together square by square: every
+square starts somewhere across the button (and a little past it), and they set
+off left to right and settle in about half a second. **Reduce motion** (and
+Battery Saver) shows them in place. Names use a 5×7 pixel face; accented
+letters are spelled plain (Pokémon is POKEMON) and `& ' ! : , ( )` have their
+own letters.
+
+**X** on the console buttons steps to the next look. It is also the game
+options sheet's **Console look** row and **Settings → Games & emulators →
+Console look**. It is saved in `game-library.json` as `console_look`
+(`covers`, `pixel_names` or `pixel_cards`). The pixel looks load no covers for
+the buttons; a console's page is the same in every look.
 
 ## What it reads
 
@@ -74,12 +101,15 @@ Network errors are not cached — only a real 404 is.
 
 Covers are also found without a press. About a minute and a half after JukaHub
 starts on a card that has never had a pass, and then at most once a day, a
-background pass scans the card once and asks the thumbnail set for the games
-that still have no cover, skipping the titles it already answered "not found"
-for within the 14 days above. Every half hour it also looks at the ROM folders
+background pass takes the games from the library's last scan when the ROM
+folders have not changed since (else it scans the card once) and asks the
+thumbnail set for the games that still have no cover, skipping the titles it
+already answered "not found" for within the 14 days above. Every half hour it also looks at the ROM folders
 — the names in each console folder and the time of a game's sub-folder, not a
 walk of the card — so games copied onto the card get their covers within about
-half an hour instead of the next day.
+half an hour instead of the next day. On a handheld where JukaHub keeps the
+time, the very first pass waits up to half an hour for network time to set the
+clock, because the not-found answers and the pass stamp are dated.
 
 It only runs at a moment that costs nothing: online, never while a game or an
 emulator has the screen (a game that starts stops the pass after the cover it
@@ -101,29 +131,153 @@ is what **L1** / **F** sends: game titles, as plain GET requests to
 Find box art automatically** turns it off (`artAutoFetch`, on by default), and
 safe mode skips it for that launch.
 
+### Covers from gameplay
+
+A game no cover is found for — homebrew, a hack, a translation, a dump named
+unlike any box art — gets a picture of itself instead of a lettered tile. Two
+minutes into playing it (counting only the time it runs: not while it is
+paused under the in-game menu or Juka, an alarm or the screen-off sleep),
+JukaHub reads the screen — the framebuffer on the handheld, as **Hold Menu**
+screenshots do; on Windows the game's own window, only while that window is in
+front — and keeps the picture as the game's cover in the library, Continue and
+Home. The return banner says so ("1 cover taken from the game").
+
+The black bars around a game that does not fill the screen are trimmed and the
+picture is scaled to at most 640×480. A frame that is black, white or one flat
+colour is never kept, nor one read within 30 seconds of **Menu** going down
+(the emulator's menu may be open), while a library RetroArch says it is
+paused, or in the 5 seconds after a pause or an alarm. For the first four
+minutes neither is one that did not move in under a second (a pause screen)
+nor one dark nearly all over (a loading line); a game played on black — most
+shoot-'em-ups — gets its picture after four minutes. Each is tried again
+after 20 more seconds of play, up to eight minutes; a game that already has
+any cover, or a picture from an earlier session, is left alone.
+
+The picture is saved as `data/game-art/.gameplay/<console>/<game>.png`, apart
+from the downloaded covers: the box-art fetch still looks for a real cover for
+the game, and one it finds later — or one picked in **Choose cover** — takes
+its place. **Clean up covers** also takes the pictures of games that are gone
+and of games a downloaded cover shows for now. **Settings → Games & emulators
+→ Covers from gameplay** stops new pictures (`gameplayCovers`, on by default;
+those already taken stay until a cover replaces them). A game in exclusive full screen on a PC can
+read as black; it then keeps its tile.
+
+### Choosing a cover by hand
+
+When a game's cover is wrong or missing, **Game options → Choose cover** lists
+the five box-art names on the thumbnail server closest to the game's, then the
+closest pictures already in the console's `Imgs` folder. The highlighted one is
+shown beside the list; **A** saves it as the game's cover in `data/game-art`
+(an `Imgs` picture is scaled to cover size and saved as PNG; the files in
+`Imgs` are only read).
+
+**Game options → Name for covers** sets the title the game's box art is looked
+up by, for a file named differently from the game ("Zelda Minish" →
+"Legend of Zelda, The - The Minish Cap"). It is kept in
+`data/artwork-aliases.json`, read before the built-in aliases; the file's own
+tags such as `(USA)` still pick the release. Saving it looks the game up again
+at once (a cover the firmware or you put on the card is left alone); an empty
+name goes back to the file name. The file can be edited by hand —
+`{"version": 1, "aliases": {"Zelda Minish": "Legend of Zelda, The - The Minish Cap"}}` —
+and one JukaHub cannot read is left as it is, never overwritten.
+
+### Removing a cover
+
+**Game options → Remove cover** takes a game's picture away for good: the
+library, Continue and Home show its lettered tile, and nothing brings a
+picture back on its own — the box-art fetch, **Covers from gameplay** and a
+port's own picture all skip it. The question opens on **Cancel**; **Remove the
+cover** moves JukaHub's copies (the downloaded cover and a picture from the
+game) to the reset trash. When the firmware or another front end keeps a
+picture beside the ROM (`Imgs`, `.media`, MinUI's `.res`), **Also remove the
+card's picture** moves that one too, so the stock menu shows none either;
+otherwise it stays on the card and is only hidden in JukaHub. The choice is a
+small marker, `data/game-art/.nocover/<console>/<game>.off`, which follows the
+game through **Rename file**. The row then reads **Restore cover**: **A**
+removes the marker, shows the card's picture if there is one and otherwise
+looks the game's cover up at once. **Choose cover** and **Name for covers**
+also bring covers back.
+
 ## Disc-based systems
 
 A PlayStation or Sega CD rip is only half a game as far as the emulator is
 concerned: a bare `.bin` needs a cue sheet before RetroArch will open it, and a
 set spread over `Game (Disc 1).chd` and `Game (Disc 2).chd` needs an `.m3u`
-before the disc-switch menu has anything to switch.
+before the disc-switch menu has anything to switch — and before the library
+shows it as one game instead of one row per disc.
 
-**Tools → Disc helpers** adds both, in place, to the folders that need them
-(`PSX`, `PS1`, `PlayStation`, `Saturn`, `Sega CD`, `PC Engine CD`, and their
-`Sega - …` spellings):
+The library adds both by itself. Every library scan starts a small pass on its
+own thread over the disc consoles' folders (`PS`, `PSX`, `PS1`,
+`PlayStation`, `Saturn`, `Sega CD`, `PC Engine CD` and their `Sega - …`
+spellings; NextUI's own `Name (TAG)` folders only on request, below). It only reads
+a folder whose modification time moved since the last look, so a scan with
+nothing new costs a stat per game folder; what it writes is logged, and an
+open library rescans once so the discs show as one game. It makes:
 
-- a one-track `.cue` next to every `.bin` that has no sheet of its own, using
-  the sector mode the system uses — `MODE2/2352` on PlayStation,
-  `MODE1/2352` on the Sega and NEC CD systems;
-- one `.m3u` per multi-disc set, listing the discs in order and preferring the
-  `.cue` over the `.bin` it describes.
+- a one-track `.cue` next to every `.bin` of 1 MiB or more that no sheet
+  names, using the sector mode the system uses — `MODE2/2352` on PlayStation,
+  `MODE1/2352` on the Sega and NEC CD systems (a smaller `.bin` is a BIOS,
+  not a disc);
+- one `.m3u` per multi-disc set of loose discs — `(Disc 1)`, `[CD 2]`,
+  `- Disc 3` — in the console's folder or in a game's own folder, listing the
+  discs in order and preferring the `.cue` over the `.bin` it describes
+  (`.chd`, `.cue`, `.pbp`, `.iso`, `.img` and `.bin` discs alike);
+- one `.m3u` for a game kept in disc folders, `Game/Disc 1/…` and
+  `Game/Disc 2/…`: named after the game's folder, beside the disc folders,
+  naming each disc's `.cue` (else its `.chd`, `.pbp`, `.iso` or `.img`, else a
+  lone `.bin`, which gets its cue first). A disc folder still being copied is
+  looked at again on the next scan.
 
-Nothing is overwritten. An existing sheet or playlist — including a
-hand-written one with audio tracks — is left exactly as it is, and files named
-`(Track 1)` are skipped because they already belong to a multi-track sheet.
-Cartridge folders are not touched at all: a `.bin` in `Roms/GBA` is a game
-file, not a disc image. The action reports what it added, so pressing it again
-on an already-fixed card says so instead of writing anything.
+Nothing is overwritten. Files are created only where none exists, an existing
+sheet or playlist — including a hand-written one with audio tracks, or a
+playlist under another name that already lists the discs — is left exactly as
+it is, and files named `(Track 1)` are skipped because they already belong to
+a multi-track sheet. Cartridge folders are not touched at all: a `.bin` in
+`Roms/GBA` is a game file, not a disc image. A disc added to a set that
+already has its playlist is not added to it. **Tools → Disc helpers** and the
+ROM manager's **Combine multi-disc games** run the same pass over everything
+at once — on NextUI its tagged disc folders too — and say what they added.
+
+### Which disc a game starts on
+
+A multi-disc game's options (**Start** in the library) have a **Disc** row:
+*Disc 1 of 3*, or *Starts on disc 2 of 3*. **Left/Right** (or **A**) picks
+the disc RetroArch starts it on. JukaHub writes RetroArch's own record for it,
+`<game>.ldci` in the folder RetroArch keeps the game's saves in
+(`savefile_directory`, sorted by content folder and core when RetroArch sorts
+saves, else beside the `.m3u`): `{"image_index": 1, "image_path": "…"}`, the
+index counting from 0 and the path the one the core reports for that disc.
+RetroArch hands it to cores that take a first disc (PCSX-ReARMed, Beetle PSX
+and others) and updates it itself whenever the disc changes, so the row then
+shows the last disc played. Another emulator starts on disc 1; the row says
+so. Each launch puts the record's path right for the launcher in use (a
+firmware script is given the game as `Emus/<system>/../../Roms/…`).
+
+In the game, the in-game menu (hold **Select + L2**) has a **Disc** row for a
+multi-disc RetroArch game the library started: *Disc 1 of 3*. **Left/Right**
+picks another disc, **A** puts it in (with the row on the current disc, the
+next one): the game carries on and RetroArch is sent what its own hotkeys do —
+eject, next or previous disc once per step, close — and shows its own message.
+JukaHub tracks the disc from the one the game started on.
+
+## ROM manager: more for your games
+
+**Settings → Games & emulators → ROM manager** (also in Tools) files loose
+games, BIOS files and duplicates. Under its summary card, **More for your
+games** has, one press each:
+
+- **Move N Color games out of Game Boy** — only when the Game Boy shelf has
+  Game Boy Color cartridges ([below](#game-boy-color-games-on-the-game-boy-shelf));
+  it asks once, listing them.
+- **Combine multi-disc games** — the disc pass above, now, with a toast that
+  says what it added.
+- **RomM server** — games, covers, saves and BIOS from your own RomM server
+  ([ROMM_SERVER.md](ROMM_SERVER.md)); without an address and API key the row
+  says to set it up first and the page opens on its settings.
+- **Syncthing** — the Save Manager's Syncthing page, which keeps your saves
+  the same on all your paired devices ([SAVE_MANAGER.md](SAVE_MANAGER.md));
+  off or not installed, the row says to set it up first.
+- **Get Homebrew** — the homebrew store.
 
 ## Android games
 
@@ -208,25 +362,51 @@ write; manuals and screenshots are not fetched.
 Pressing **A** on a game (in the library, on Continue, or on a ROM in Files)
 resolves the emulator in this order:
 
-1. the game's own **Emulator** (Game options, or **Y · Always use** in the
-   picker below), if its file still exists;
+1. the game's own **Emulator** (Game options, or the one remembered from
+   **Which emulator?** below), if its file still exists;
 2. `data/game-launchers.json`, if it names a launcher for that console and the
    file still exists;
 3. the Emulators catalog: every available row whose name matches the console's
    aliases exactly (`GBA`, `mGBA` for Game Boy Advance), then whose bracketed
-   part or a whole word does (`RetroArch GBA`). One match starts at once; two
-   or more open **Which emulator?**, listing each with its kind and folder —
-   the one [recommended for this hardware](#the-recommended-emulator) first,
-   with a **Recommended** badge:
-   **A** plays with the highlighted one (it is highlighted again next time),
-   **Y** always uses it for that game, **B** cancels. Game options →
-   **Emulator** sets a game back to *Ask each time*;
+   part or a whole word does (`RetroArch GBA`), followed by the console's
+   [other emulators](#other-emulators-for-a-console) — the other scripts its
+   `Emus` folder lists and, on the handheld, every installed RetroArch core
+   that plays it. One choice starts at once; two or more open
+   **Which emulator?**, listing each with its kind, what that kind means for
+   the game (RetroArch: JukaHub's save slots, Continue and RetroAchievements;
+   standalone: no JukaHub save slots or Continue) and its folder — the one
+   [recommended for this hardware](#the-recommended-emulator) first, with a
+   **Recommended** badge. The highlight starts on the one picked last, else the
+   recommended one. How often it asks is Settings → Games & emulators →
+   **Ask which emulator**:
+   - *First time per game* (the default): **A** plays and remembers that
+     emulator for the game, so its next start goes straight in;
+     **Y · Just once** plays without remembering, so it asks again.
+   - *Every launch*: **A** plays (and is highlighted next time); **Y · Always
+     use** remembers it for that game.
+   - *Never — use the best one*: no question; the game starts in the one
+     picked last, else the recommended one.
+
+   In both asking modes **X** uses it for every game of that console (written
+   to `game-launchers.json`, step 2; not offered for a console split over
+   three or more folders of its own, like Arcade's CPS1, CPS2 and MAME sets),
+   **B** cancels, and when the buildbot has cores for the console that are not
+   on the card, a last row **Get more cores for …** downloads them
+   ([More cores](#more-cores)). Game options → **Emulator** changes the
+   remembered one or sets a game back to asking (*Ask next time* / *Ask each
+   time*); while the console has an entry in `game-launchers.json` (from **X**
+   or written by hand), Left there removes it and its games ask again;
 4. nothing — the panel toasts which console has no emulator instead of starting
    something random.
 
-Starting from a save state on the game page does not ask: it uses the emulator
-the states were listed for (the game's pinned one, else the one picked last,
-else the console's first), and says so when that is not RetroArch.
+Starts that already know their emulator never ask: a save state on the game
+page uses the emulator the states were listed for (the game's remembered one,
+else the console's, else the one picked last, else the recommended one) and
+says so when that is not RetroArch; the resume after power-on uses the
+launcher it recorded; a relaunch after a save sync uses the one it was
+started with; the game switcher resumes in the emulator the game last ran in.
+Continue goes through the same question as the library, with the highlight on
+the emulator the game ran in, so continuing is one press of **A**.
 
 On the handheld, an `Emus/<system>/` folder's launcher is the script its
 `config.json` names in `"launch"`, which is what the firmware's own menu
@@ -299,6 +479,82 @@ start it (from its folder, with `HOME` there). **A** on a core row opens this
 library searched for the console that core plays (the first **B** clears the
 search).
 
+### Other emulators for a console
+
+The firmware's own menu keeps a console's other emulators behind Select on the
+game list: the rest of its `"launchlist"` (two entries on the stock OS, more on
+CrossMix). JukaHub lists them in Game options → **Emulator**, and in
+**Which emulator?** when it opens, right after the folder's launcher, named the
+way the launchlist names them (`{"name": "…", "launch": "…"}`; a plain string
+entry is named after its script): *N64 · Mupen64Plus Standalone*. Each must be
+a `.sh` script inside the folder. A game in a folder that has an `Emus` folder
+of the same name (`Roms/CPS2`) still starts in that folder's launcher without a
+question.
+
+On the handheld the list then holds every RetroArch core in RetroArch's cores
+folder that plays the console and that none of those scripts already starts —
+a core installed from the Emulators page, or one copied there by hand. Picked,
+such a core starts directly: the RetroArch that owns the cores folder
+(`ra64.trimui`) runs from its folder with `HOME` there and loads the core with
+`-L`, the way the firmware's scripts start it, with the firmware's environment.
+A core whose ELF header says it was built for another chip than that RetroArch
+(a 32-bit ARM core beside the 64-bit RetroArch) is left out of the list, and a
+core that cannot load for another reason (a library or glibc version the
+firmware lacks) is named on the card JukaHub shows when the game stops at once.
+
+These extra choices count for the question: a console with one launcher of
+its own and one installed core asks which (by default the first time per
+game, see [Launching](#launching)). They are never the recommended or
+automatic one while the console has a launcher of its own, so the highlight,
+and a start with **Ask which emulator** set to *Never*, stay on the console's
+own emulator. A console that has no launcher at all (games in `Roms/N64`, no
+`Emus/N64`, a Mupen64Plus-Next core installed) starts in its core, and asks
+when it has two.
+
+A core started directly gets none of the per-core settings a firmware ships
+with its own cores. For the consoles this chip only just runs, a core of
+Mupen64Plus-Next, Flycast or PPSSPP that has no options file yet (no
+`config/<Core>/<Core>.opt`, no options for that game or folder, nothing for it
+in `retroarch-core-options.cfg`) starts with the handheld's speed settings —
+N64 at 320×240, Dreamcast at 640×480 with threaded rendering, PSP at its native
+480×272 — written as `config/<Core>/<Core>.opt`. RetroArch reads it as one it
+wrote itself; changing a core option in RetroArch's own menu replaces it. With
+RetroArch's global core options switched on, nothing is written.
+
+### More cores
+
+On the handheld, **Get more cores** downloads, for every console that has
+games on the card, the RetroArch cores worth having that are not installed
+yet: for a console in the [ranking](#the-recommended-emulator), its cores in
+rank order; for the others a short list of the cores the TrimUI firmwares ship
+for them (Master System and Game Gear: Genesis Plus GX, PicoDrive, Gearsystem,
+SMS Plus; PC Engine: Beetle PCE Fast, Beetle PCE; Arcade: FBNeo, MAME 2003-Plus;
+Neo Geo Pocket: Beetle NeoPop, RACE; Atari 2600: Stella 2014, Stella; Lynx:
+Handy, Beetle Lynx; and so on). It is in Settings → Games & emulators, a tile
+on the Emulators page, and, for one console, the last row of
+**Which emulator?** and **X** on Game options → **Emulator**.
+
+A core is downloaded only when the buildbot's aarch64 index lists it, it is not
+on the card, and that exact build was not refused here before. Each goes
+through the Emulators page's own install: the CRC32 the index states, the size
+limit, the check that this firmware can load it (a build that needs a newer
+glibc is refused before anything is written), and the free-space floor of a
+core update (256 MB plus room for the core). Cores that draw with the GPU —
+Mupen64Plus-Next and ParaLLEl N64, Flycast, PPSSPP, YabaSanshiro — are
+downloaded this way only for a console with no emulator at all: the
+buildbot's generic builds of them may load and show nothing under TrimUI's
+OpenGL ES RetroArch. For a console that plays already they stay one press each
+on the Emulators page, whose row says *draws with the GPU: this build may not
+run here*, and the summary names them. One toast says what was installed; the
+next start of a game of that console asks which emulator to use.
+
+With **Emulator updates** on *Install automatically*, the daily pass does the
+same by itself, once per console, at its usual quiet moment (never over a
+game). The consoles it has done are recorded in `emu-morecores.json` beside the
+patch state, so a core you delete is not downloaded again, and a console whose
+first games arrive later gets its cores at a later pass. *Notify me* and *Off*
+download nothing.
+
 ### The recommended emulator
 
 CrossMix and the other TrimUI firmwares ship more than one emulator for the
@@ -318,8 +574,9 @@ for a Windows PC, and uses it in three places — never against a choice you mad
   *Better emulator available: DuckStation plays PlayStation better than the
   PCSX-ReARMed (RetroArch) you use now* — and lists it right after the
   installed ones. Nothing installs until you press Install. The handheld shows
-  no such tile: its firmware's launch scripts choose the core, so installing a
-  core would not change what a game starts in.
+  no such tile: its firmware's launch scripts choose the core a game starts in
+  by default, and an installed core is
+  [one more choice](#other-emulators-for-a-console), not the default.
 
 JukaHub recognises which emulator an `Emus` folder starts from its launcher's
 name (`drastic.sh`, `ppsspp_1.17.1_gl.sh`), the one core a RetroArch launch
@@ -355,12 +612,16 @@ at full speed on this chip.
 ### Per-game launch options
 
 **Start** (or **O** on a keyboard) opens the options sheet for the highlighted
-game. The first five rows are saved library view settings; the rest apply to
-that launch only:
+game. The first rows are its name and the saved library view settings, the
+launch rows apply to that launch only, and the last rows manage its files
+(*Renaming and deleting a game* below; **Remove cover** is under *Removing a
+cover* above):
 
-- **Display title** — the name shown in the library. It is stored beside the
+- **Rename title** — the name shown in the library. It is stored beside the
   game, not written into the ROM filename, so the file stays exactly as it is.
   Leave it empty to go back to the name derived from the file.
+- **Rename file** — renames the ROM on the card, keeping its extension (see
+  below). The row shows the file's current name.
 - **Visibility** — hide this game, or make it visible again. Hidden games are
   left out of the console lists, Continue, search and tag filters until
   **Show hidden** is on.
@@ -370,10 +631,19 @@ that launch only:
 - **Library view** — List, 3D shelf or Cover column. The shelf uses left/right
   to browse games and up to return to the console buttons; Cover column keeps
   the list's up/down navigation. The choice is saved for the next visit.
-- **Shader speed** — after playing with a shader look, shows the rendered frames
-  RetroArch reported during that game and whether they met the 50 or 60 FPS
-  target. Builds that cannot report a frame counter say **Unavailable** instead
-  of guessing. The check ignores paused and fast-forwarded intervals.
+- **Console look** — Covers, Pixel names or Pixel cards for the console
+  buttons (*Console look* above). Saved for every visit.
+- **Shader speed** — after playing with a look (Scanlines, LCD grid, CRT,
+  Pixel transparency — see [Looks](LOOKS.md)),
+  says whether the game held full speed with it: **Full speed** at 97 % of its
+  50 or 60 FPS or better, else **Below full speed**, with the frames per second
+  measured. On the handheld it counts the frames the game really put on screen
+  (the framebuffer's page flips) over about 16 seconds of play, leaving out
+  loading, pauses, JukaHub's in-game menu and fast-forward; where the screen
+  cannot be counted (and on a PC) it reads RetroArch's own frame timing from
+  its log after the game, which needs about a minute of play and threaded
+  video off. A game that ends with a new verdict says it in a toast once
+  JukaHub is back. **Unavailable** says why instead of guessing.
 - **Show hidden** — reveal the games hidden from the library; turn it off to
   tuck them away again.
 - **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the
@@ -395,6 +665,14 @@ global `powerProfileMaxFreq`; any other value caps the clock for this game's  la
   one argument: with extra arguments RetroArch is handed a ROM path that does
   not exist. Local play's player order is therefore not passed to those scripts
   either.
+- **Buttons** and **Turbo** — for a RetroArch game: swap A and B, X and Y or
+  both, and a button that fires by itself while held (A or B). *Default · …*
+  follows the console's choice in **Settings → Controls → Game buttons for**
+  (see [Controls](CONTROLS.md#game-buttons-and-turbo-retroarch-games)); A steps
+  through the choices and goes round. They are written for that start only and
+  stored in `Apps/JukaHub/data/game-controls.json`. When the last start could
+  not apply them (your own RetroArch remap file was there, or an older
+  RetroArch lacks the pad's buttons for turbo), the row's line says so.
 - **Reset** — clears both rows for the game and puts it back on the defaults.
 - **Open in…** — hands this game straight to the tool that owns its next step
   (see *Handing a game to its tool* below), the same as **E** in the library.
@@ -414,8 +692,9 @@ path; only games that differ from the defaults are written:
 }
 ```
 
-Because the key is the path, moving or renaming a ROM returns it to the defaults
-rather than inheriting another game's settings. A broken file reads as "no
+Because the key is the path, moving or renaming a ROM outside JukaHub returns
+it to the defaults rather than inheriting another game's settings; **Rename
+file** takes them along. A broken file reads as "no
 overrides" — the library still opens. The clock is applied through the same
 profile code as the global setting, so a firmware with a read-only
 `scaling_max_freq` logs one line and runs the game at its own clock instead.
@@ -433,12 +712,78 @@ renaming the file keeps its name and hidden state:
   "show_hidden": false,
   "games": {
     "9c1f...": { "display_title": "My Zelda", "hidden": true }
-  }
+  },
+  "console_look": "pixel_cards"
 }
 ```
 
+`console_look` is the consoles grid's look (*Console look* above); it is not
+per game.
+
 The launch options above remain keyed by path because they belong to one
 launcher's invocation; the view state follows the cartridge instead.
+
+### Renaming and deleting a game
+
+**Game options → Rename file** opens the on-screen keyboard on the ROM's name
+without its extension (typing the extension too is fine; it is kept either
+way). **Rename** renames the file and everything named after it, so the game
+keeps its saves, states, settings and cover:
+
+- beside the ROM: files of the same name with one extension (`Game.bin`,
+  `Game.srm`, CloneCD's `.img`/`.sub`), its save states and their pictures,
+  and files named after the whole file (`Game.gba.sav`) — never a file that is
+  a library game itself or a part another game's sheet lists. A `.cue`, `.gdi`
+  or `.m3u` among them has its lines that name a renamed file rewritten;
+- its pictures: `Imgs/<name>` and `.media/<name>` beside it, MinUI's
+  `.res/<file>.png`, JukaHub's cover, picture from the game and **Remove
+  cover** marker in `data/game-art`, and its video snap in `data/game-snaps`;
+- RetroArch's battery saves and save states (at the top of its saves and states
+  folders and in the game's core and content sub-folders), its per-game core
+  override, core options and input remap; on NextUI the saves and states it
+  names after the whole file, in the game's own console folders
+  (`Saves/<TAG>/`, `.userdata/…/<TAG>-<core>/`); DraStic's for a DS game and
+  Flycast's for a Dreamcast game;
+- JukaHub's records: game options, cheats, recents, collections and
+  favourites, Home's console rows, the RomM link, the quick-resume marker,
+  **Name for covers** and — when the title the file gives changes ("Kart" →
+  "Mario Kart") — its playtime, game page (tags, rating, notes) and session
+  history. A title another game of the console shares ("Kart (USA)" and
+  "Kart (Europe)") keeps those where they are.
+
+Nothing is overwritten: a name already taken stops the rename before any file
+moves (a cover already there under the new name is kept instead), and so does
+a name another library game already has on any console — RetroArch keeps saves
+by name, so the two games would share one. A sheet that would still name an
+old file afterwards (a line written in a way the rewrite does not know) puts
+everything back too. While the library is scanning, wait for it. The files
+beside the ROM go first, and if one of them cannot be renamed every one is put
+back; a file elsewhere that cannot be renamed keeps its old name and the toast
+counts it. When another game has the same name — `USA/Game.sfc` and
+`Hacks/Game.sfc` share one RetroArch save — the shared files are copied rather
+than moved, and a save at the top of RetroArch's shared folders is left alone.
+Names a FAT card cannot hold (`\ / : * ? " < > |`, a leading dot, device names
+such as `CON`) are refused. Arcade sets keep their names (the emulator finds the
+set by it: use **Rename title**), an extracted Xbox 360 game is named after its
+folder (rename that in Files), and Android, browser and PortMaster games are
+not files the library renames. Saves a standalone emulator keeps under another
+name (PPSSPP's by game ID) need nothing.
+
+**Game options → Delete game…** removes a game from the card. It takes the
+ROM, the files its sheet lists when they are inside its folder and no other
+game in that folder lists them (a `.cue`'s tracks, an `.m3u`'s discs and
+theirs), the files beside it of the same name that are disc parts, patches,
+manuals or pictures (`.bin`, `.img`, `.sub`, `.ips`, `.txt`, `.png`…), and
+JukaHub's pictures of it; a folder named after the game that is left empty
+goes too. The ROM goes first: if it cannot, nothing else is touched. Saves
+and save states stay — they are your progress, and **Reset game** is where
+they go. The question opens on **Cancel**: **Move to the trash** puts
+everything in `data/reset-trash/<date>-deleted/`, the discs' sub-folders kept,
+with a `restore.txt` naming where each file came from, written as each file
+lands (the three newest deleted games are kept); **Delete for good** frees the
+space at once. The game then leaves
+the library, Continue, Home's console rows and its game options and cheats; a
+collection keeps its entry under the title it was added with.
 
 ### Resume and auto-save
 
@@ -499,7 +844,41 @@ If your card uses folder names the catalog does not recognise, create
 
 Keys are console names as the library shows them (case-insensitive). A path
 that no longer exists is ignored, so detection takes over again instead of
-failing.
+failing. **X** in **Which emulator?** writes the same entry for you (a core
+path is fine: `".../RetroArch/.retroarch/cores/parallel_n64_libretro.so"`),
+keeping the file's other entries and their order.
+
+### Game Boy Color games on the Game Boy shelf
+
+Homebrew and indie Game Boy Color games are often published as `.gb` files,
+so they land in `Roms/GB`. The cartridge header says what each one is: the
+Nintendo logo at `0x104` and the CGB flag at `0x143` — `0x80` (uses the
+Color's features, also runs on a Game Boy) or `0xC0` (Game Boy Color only).
+JukaHub reads those 336 bytes (of a `.gb`, a `.gbc`, or the one cartridge in a
+`.zip`), cached by file size and time, and:
+
+- **starts them in colour** — such a game on the Game Boy shelf is offered the
+  Game Boy Color shelf's emulators (the same list, the same **Which
+  emulator?**). A card with no Game Boy Color emulator keeps the Game Boy one.
+  A game's own **Emulator**, a `game-launchers.json` pin for Game Boy and a
+  NextUI pak (whose Gambatte reads the flag itself) are left as they are;
+- **says so once** — the first library visit that finds them shows one toast
+  pointing at the ROM manager (`gbcSortNoticed` in the user config keeps it
+  from repeating);
+- **moves them on request** — the ROM manager's **Move N Color games out of
+  Game Boy** files them in the card's Game Boy Color folder (the one the
+  library already reads, else `GBC`, or `Game Boy Color (GBC)` on NextUI),
+  keeping any sub-folder. Each game takes along its saves and states beside
+  it, its `Imgs`/`.media`/`.res` pictures, JukaHub's cover, gameplay picture,
+  Remove-cover marker and video snap, RetroArch saves and states sorted by
+  content folder (`saves/GB/…` → `saves/GBC/…`, also under a core's folder),
+  NextUI's `Saves/GB` and `GB-<core>` states, its options, cheats, recents,
+  collections, favourites, RomM link and resume marker, and its play time,
+  game page and history (kept by console and title; left in place when a Game
+  Boy game that stays has the same title). Nothing is overwritten: a game
+  whose name is already in the Game Boy Color folder stays where it is, and a
+  cover already there is kept. RetroArch's per-game core settings and the
+  firmware's launchers are never touched; every move is logged.
 
 ## On NextUI
 
@@ -636,8 +1015,10 @@ reconnect.
 | D-pad | move between the console buttons; on a console's page, up/down move in its games |
 | D-pad left (list, cover column) / up (3D shelf) | from a console's games back to the console buttons |
 | **A** | open the highlighted console's page, or a game's page; **Play** on that page launches the game |
-| **Start** / **O** | on a console's page, open the game options sheet: display title, visibility, library sort and view, launch options |
-| **X** | Netplay for the highlighted game (host or join, on the LAN or online) |
+| **L2** / **R2** (**PgUp** / **PgDn**) | on a console's page, jump to the previous / next letter; hold to keep jumping (see [Letter scrubbing](#letter-scrubbing)) |
+| D-pad right (list, cover column) | on a console's page, jump to the next letter |
+| **Start** / **O** | on a console's page, open the game options sheet: rename title or file, visibility, library sort and view, launch options, covers, reset and delete |
+| **X** | Netplay for the highlighted game (host or join, on the LAN or online); on the console buttons, the next Console look |
 | **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
@@ -649,6 +1030,26 @@ reconnect.
 A search or tag filter shows only the consoles with hits, each button counting
 its matches; when every hit is on one console, that console's page opens
 straight away.
+
+### Letter scrubbing
+
+On a console's page **L2** and **R2** jump to the previous and next letter of
+the list, in every view (list, 3D shelf, cover column); **Right** does the same
+forward in the list and the cover column, where it had nothing to do, and a
+keyboard uses **PgUp** / **PgDn**. Holding a trigger keeps jumping, after the
+same first pause as a held D-pad (Accessibility's repeat delay). Each jump shows
+the letter big over the games for about half a second.
+
+A "letter" follows the sort chosen in the options sheet, so a jump always lands
+at the start of a block the list really has: the first letter of the title
+(digits and symbols are one **#** group; accented and non-Latin letters are
+their own group, where the sort puts them), the decade for **Year**, the stars
+for **Rating**, 10h+ / 1h+ / under 1h / not played for **Play time**, and the
+month of the date for **Last played** and **Recently added** (the date's own
+month, never "today", so a handheld that started before its clock was set does
+not mislabel anything). Back from the middle of a block goes to its first game,
+and from there to the block before. At either end nothing moves. The Continue
+row, which is in play order, does not scrub.
 
 On a game's page, **History** (or **H** / **Select**) shows launch count,
 completed sessions, longest session, the last 7 and 30 days, and a scrollable
@@ -803,6 +1204,5 @@ pieces that fit the same data:
 | Next | Why it is not in this version |
 |------|-------------------------------|
 | Create and manage save states in JukaHub | The game page lists RetroArch's existing auto and numbered states and can start from one. Saving a new state or stepping to an exact frame still uses RetroArch's own menu. |
-| Cheats from the libretro database | Needs a downloaded cheat catalogue per core and a `.cht` writer. The covered consoles are the ones the catalog reports, so it can reuse `findGameLauncher`. |
 | Curated collections | Favorites and custom tags already filter the library. A separate collection editor with its own saved order is not included. |
 | Managed emulator overlays and hotkey profiles | Per-game extra arguments and the player-order setting cover some launch needs, but JukaHub does not create or manage RetroArch overlay layouts and named hotkey profiles. |

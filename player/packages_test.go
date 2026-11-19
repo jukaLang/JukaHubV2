@@ -105,6 +105,75 @@ func TestPackageDirNameCannotLeaveTheFolder(t *testing.T) {
 	}
 }
 
+// Run (pkglaunch.go) starts only the installed folder's own program: an app
+// kept under Apps/<Name>/ is found through its config.json, a copy in the
+// store's staging, rollback or trash folder (or a loose file in the packages
+// folder) is never launchable, a folder with no program offers no Run, and a
+// bundle of apps offers each one on the Apps screen instead of guessing.
+func TestPkgRunStaysInTheInstalledFolder(t *testing.T) {
+	root := t.TempDir()
+	old, oldScripts := pkgInstallDirOverride, pkgRunScripts
+	pkgInstallDirOverride, pkgRunScripts = root, true
+	t.Cleanup(func() { pkgInstallDirOverride, pkgRunScripts = old, oldScripts })
+	write := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("Blips/Apps/Blips/config.json", `{"label":"Blips","launch":"launch.sh"}`)
+	write("Blips/Apps/Blips/launch.sh", "#!/bin/sh\n")
+	write("Blips/Apps/Blips/lib/launch.sh", "#!/bin/sh\n")
+	write("Bundle/Apps/One/config.json", `{"label":"One"}`)
+	write("Bundle/Apps/One/launch.sh", "#!/bin/sh\n")
+	write("Bundle/Apps/Two/config.json", `{"label":"Two"}`)
+	write("Bundle/Apps/Two/launch.sh", "#!/bin/sh\n")
+	write("Docs/README.txt", "")
+	write("loose.sh", "#!/bin/sh\n")
+
+	want := filepath.Join(root, "Blips", "Apps", "Blips", "launch.sh")
+	if !pkgLaunchablePath(want) {
+		t.Fatal("an installed package's program was refused")
+	}
+	for _, dot := range []string{pkgStagingDir, pkgRollbackDir, pkgTrashDir} {
+		if p := filepath.Join(root, dot, "Blips", "launch.sh"); pkgLaunchablePath(p) {
+			t.Errorf("%q in the store's own folder was launchable", p)
+		}
+	}
+	if pkgLaunchablePath(root) || pkgLaunchablePath(filepath.Join(root, "loose.sh")) ||
+		pkgLaunchablePath(filepath.Join(root, "..", "evil.sh")) {
+		t.Error("the packages folder, a loose file in it or a path out of it was launchable")
+	}
+	if _, ok := pkgFindInstalledLaunch(filepath.Join(root, "Docs"), "Docs"); ok {
+		t.Error("a folder with no program offered Run")
+	}
+	if _, ok := pkgFindInstalledLaunch(filepath.Join(root, "Bundle"), "Bundle"); ok {
+		t.Error("a bundle of apps offered Run for one of them")
+	}
+	got, ok := pkgFindInstalledLaunch(filepath.Join(root, "Blips"), "Blips")
+	if !pkgRunnableHere(want) {
+		// Windows: a TrimUI app's launch.sh starts arm64 Linux programs.
+		if ok {
+			t.Errorf("Run offered %q on this system", got.Path)
+		}
+		return
+	}
+	if !ok || got.Path != want {
+		t.Fatalf("Run starts %q (ok %v), want %q", got.Path, ok, want)
+	}
+	var names []string
+	for _, e := range pkgAppEntries() {
+		names = append(names, e.Name)
+	}
+	if strings.Join(names, ",") != "Blips,One,Two" {
+		t.Errorf("Apps rows = %v, want Blips, One, Two", names)
+	}
+}
+
 // ── Download ─────────────────────────────────────────────────────────────
 
 // pkgDownloadTo refuses an error page instead of saving it as the package, and

@@ -502,7 +502,12 @@ func rommCloudDownloadGame(g rommServerGame) {
 
 func rommCloudDownloadCover(g rommServerGame, path string) {
 	rommCloudRun("Cover download", func(ctx context.Context, client *rommServerClient) error {
-		_, err := client.downloadCover(ctx, g, path, libraryArtworkRoot())
+		root := libraryArtworkRoot()
+		dest, err := client.downloadCover(ctx, g, path, root)
+		if err == nil {
+			// Asked for by hand: a removed cover is wanted again (artwork_nocover.go).
+			artworkClearNoCoverFor(root, dest)
+		}
 		return err
 	})
 }

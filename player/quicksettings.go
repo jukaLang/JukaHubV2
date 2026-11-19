@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
-	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -20,6 +19,11 @@ import (
 // through one allowlisted sysfs device, and the rest through the config that is
 // saved to jukauser.json. Rows whose backend is missing on this machine render
 // dimmed and explain themselves instead of pretending to work.
+//
+// This file owns the switches and what they do. How they are laid out — the
+// Tiles, Compact and List layouts, the order, sizes and hidden buttons, and
+// the walk of the cursor — is qs_layout.go; L2's editor is qs_edit.go and
+// the drawing qs_draw.go.
 
 type qsAction int
 
@@ -88,6 +92,9 @@ const (
 	qsLinkBluetooth
 	// Close all apps & games (closeall.go): a two-step press, not a panel.
 	qsLinkCloseAll
+	// Power: the Exit card (Sleep, Restart, Power off), from any screen —
+	// NextUI's quick menu had the switch-off a tester missed.
+	qsLinkPower
 )
 
 type qsLink struct {
@@ -177,6 +184,7 @@ func qsInit() {
 			{Label: "LED Style", Icon: "[R]", Action: qsLinkLEDPanel},
 			// Frees memory when Juka's offline AI needs it (closeall.go).
 			{Label: "Close all apps & games", Icon: "[X]", Action: qsLinkCloseAll},
+			{Label: "Power", Icon: "[O]", Action: qsLinkPower},
 		},
 		// The app's idle timer brings up the lock screen (the clock dock or
 		// the starfield), not a display blank; Settings → Display calls it
@@ -201,7 +209,12 @@ func qsInit() {
 	if sleepPowerOffQuickAvailable() {
 		qs.cycles = append(qs.cycles, qsCycle{Label: "Auto power off", Icon: "[Z]"})
 	}
+	// JukaHub OS brings its radios up after the first frame, so a Wi-Fi probe
+	// here could only fork wpa_cli to find nothing (and remember that); the
+	// panel probes again every time it opens.
+	qsBootSkipWifiProbe = jukaosNativeActive()
 	qsRefreshAvailability()
+	qsBootSkipWifiProbe = false
 	qsLoadPersisted()
 	// The saved brightness waits for the brightness controller to know its
 	// backend, and is only pushed where JukaHub owns the level
@@ -237,6 +250,10 @@ func qsWithBluetoothLink(links []qsLink) []qsLink {
 	out = append(out, qsLink{Label: "Bluetooth Devices", Icon: "[B]", Action: qsLinkBluetooth})
 	return append(out, links[at:]...)
 }
+
+// qsBootSkipWifiProbe is set by qsInit around its first availability pass on
+// JukaHub OS (main thread only).
+var qsBootSkipWifiProbe bool
 
 // qsRefreshAvailability probes which backends exist. It only looks for binaries
 // (cheap) — reading their state happens when the panel opens.
@@ -274,7 +291,7 @@ func qsRefreshAvailability() {
 			// Reachable, not merely live: with the radio off the picker is what
 			// turns it on, so the row must not go dim just because nothing is
 			// listening on the control socket yet.
-			l.Available = wifiEntryReachable()
+			l.Available = qsBootSkipWifiProbe || wifiEntryReachable()
 			// The row is 400 px wide; the full reason lives in the picker's
 			// header and in the toast, so the row only says there is no backend.
 			l.Detail = "Unavailable"
@@ -292,7 +309,7 @@ func qsRefreshAvailability() {
 			// since leaves the row dim instead of opening an empty page.
 			l.Available = btDevicesAvailable()
 			l.Detail = "Unavailable"
-		case qsLinkCloseAll:
+		case qsLinkCloseAll, qsLinkPower:
 			l.Available = true
 		}
 	}
@@ -401,9 +418,9 @@ func clampQSPercent(v int) float64 {
 	return float64(v) / 100
 }
 
-// qsRowCount is the number of interactive rows: toggles, sliders, links, then
-// the timeout and mode cycles.
-func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + len(qs.links) + len(qs.cycles) }
+// qsRowCount is the number of buttons the panel shows: the arrangement's
+// buttons this device has, less the hidden ones outside Edit (qs_layout.go).
+func qsRowCount() int { return len(qsLay.slots) }
 
 // The cycle rows, in row order. The screensaver row owns arrays and labels
 // via the shared helper sets; named indices keep later rows from silently
@@ -607,9 +624,15 @@ func qsToggleOpen() {
 		return
 	}
 	qs.open = !qs.open
+	// An edit left open when a screen closed the panel by clearing qs.open
+	// is saved and ended here, on the way in as on the way out (qs_edit.go).
+	qsEditClose(appConfig)
+	qsLay.adjusting = false
 	if qs.open {
 		trophyEvent(tkQuickSettings)
 		qs.cursor = 0
+		qs.scroll = 0
+		qsLay.wantCol = 0
 		qs.enter.begin(uiClockMS(), uiPanelEnterMS)
 		// The top-bar cards would otherwise stay open under the panel: a
 		// control profile can open it while one is up, and then the pad went
@@ -622,6 +645,10 @@ func qsToggleOpen() {
 		} else {
 			qsRefreshAvailability()
 		}
+		// The first button of this layout's arrangement takes the focus.
+		qsLay.slots = qsLay.slots[:0]
+		qsLayoutSync(appConfig)
+		qs.cursor = 0
 	}
 }
 
@@ -640,32 +667,44 @@ func qsNavigate(dr int) {
 	PlayNavSound()
 }
 
+// qsSelect is A on the focused button (qs_layout.go keeps the list of
+// buttons the cursor walks).
 func qsSelect() {
-	if qs.cursor < len(qs.toggles) {
-		qsToggleRow(qs.cursor)
+	s, ok := qsFocused()
+	if !ok {
 		return
 	}
-	idx := qs.cursor - len(qs.toggles)
-	if idx < len(qs.sliders) {
-		qsStepSlider(idx, 10)
-		return
-	}
-	idx -= len(qs.sliders)
-	if idx < len(qs.links) {
-		qsOpenLink(qs.links[idx])
-		return
-	}
-	idx -= len(qs.links)
-	if idx == qsCycleRowAutoOff && idx < len(qs.cycles) {
-		// A is the on/off switch here; Left/Right pick the delay.
-		if appConfig != nil {
-			d := sleepPowerOffToggle(appConfig)
-			ShowToast("Power off after sleeping: "+sleepPowerOffLabel(d), ToastKindInfo)
+	switch s.Kind {
+	case qsKindToggle:
+		qsToggleRow(s.Idx)
+	case qsKindSlider:
+		if qsLay.cols > 0 {
+			// On a grid A starts adjusting the slider (Left/Right move it,
+			// A or B end), so the D-pad can keep walking the grid.
+			if s.Idx >= 0 && s.Idx < len(qs.sliders) && !qs.sliders[s.Idx].Available {
+				qsStepSlider(s.Idx, 0) // says why
+				return
+			}
+			qsLay.adjusting = !qsLay.adjusting
+			return
 		}
-		PlayNavSound()
-		return
+		qsStepSlider(s.Idx, 10)
+	case qsKindLink:
+		if s.Idx >= 0 && s.Idx < len(qs.links) {
+			qsOpenLink(qs.links[s.Idx])
+		}
+	case qsKindCycle:
+		if s.Idx == qsCycleRowAutoOff && s.Idx < len(qs.cycles) {
+			// A is the on/off switch here; Left/Right pick the delay.
+			if appConfig != nil {
+				d := sleepPowerOffToggle(appConfig)
+				ShowToast("Power off after sleeping: "+sleepPowerOffLabel(d), ToastKindInfo)
+			}
+			PlayNavSound()
+			return
+		}
+		qsStepCycle(s.Idx, 1)
 	}
-	qsStepCycle(idx, 1)
 }
 
 // qsOpenLink opens the panel behind a link row. It is a no-op with a reason on
@@ -701,6 +740,11 @@ func qsOpenLink(l qsLink) {
 		// The panel stays: the toast names what would close, the second
 		// press closes it (closeall.go).
 		closeAllArmPress("qs", hintKeyFor("A", ""), false, nil)
+	case qsLinkPower:
+		// The power key's Exit card: the main loop opens it, going Home
+		// first from another screen (powerkey.go powerKeyTick).
+		qs.open = false
+		powerKeyCardRequested.Store(true)
 	}
 }
 
@@ -708,26 +752,22 @@ func qsOpenLink(l qsLink) {
 // percentage step (the controller sends ±5, the keyboard ±5); on the cycles
 // it moves one step in that direction.
 func qsNavigateSlider(dr int) {
-	if dr == 0 {
+	s, ok := qsFocused()
+	if dr == 0 || !ok {
 		return
 	}
-	idx := qs.cursor - len(qs.toggles)
-	if idx >= 0 && idx < len(qs.sliders) {
-		qsStepSlider(idx, dr)
-		return
+	switch s.Kind {
+	case qsKindSlider:
+		qsStepSlider(s.Idx, dr)
+	case qsKindCycle:
+		// Left/Right walk a cycle row one step at a time; dr carries the ±5
+		// the sliders use, so only its sign matters here.
+		step := 1
+		if dr < 0 {
+			step = -1
+		}
+		qsStepCycle(s.Idx, step)
 	}
-	idx -= len(qs.sliders)
-	if idx < 0 {
-		return
-	}
-	// Left/Right walk a cycle row one step at a time; dr carries the ±5 the
-	// sliders use, so only its sign matters here.
-	step := 1
-	if dr < 0 {
-		step = -1
-	}
-	idx -= len(qs.links)
-	qsStepCycle(idx, step)
 }
 
 // qsToggleRow flips one switch and reverts it when the host refuses.
@@ -1207,404 +1247,7 @@ func qsPersist(config *Config) {
 	saveUserConfigDebounced(user)
 }
 
-// ── Rendering ──────────────────────────────────────────────────────────────
-
-const (
-	qsPadX      = int32(16)
-	qsHeaderH   = int32(56)
-	qsFooterH   = int32(66)
-	qsItemGap   = int32(4)
-	qsPanelWide = int32(400)
-)
-
-func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
-	if !qs.open {
-		return
-	}
-	// Pick up a finished radio/level probe before drawing this frame, and the
-	// brightness controller's level (its poll, the firmware's keys).
-	qsDrainProbe()
-	qsSyncBrightnessFromController()
-
-	font, _ := getCachedFont(config, "small")
-	medFont, _ := getCachedFont(config, "medium")
-	if font == nil {
-		return
-	}
-
-	// Entrance keyframes: the scrim fades and the panel rises into place as a
-	// single layer, so the whole overlay settles instead of popping.
-	progress := 1.0
-	if uiMotionEnabled(config) {
-		progress = qs.enter.progress(uiClockMS())
-	} else {
-		qs.enter.cancel()
-	}
-	fade := uiFadeIn.at(progress)
-	slide := int32(math.Round(uiPanelRise.at(progress)))
-
-	// The shared overlay dim (the backdrop's navy), faded in with the panel.
-	drawOverlayScrimFade(renderer, uiScrimProgress(progress, uiPanelEnterMS))
-
-	panelW := qsPanelWide
-	if maxW := screenWidth - 24; panelW > maxW {
-		panelW = maxW
-	}
-
-	// The panel grows with the row list and shrinks the rows before it would
-	// run off a 480p screen. The floor of 30 keeps all seventeen rows on a
-	// 720-line panel.
-	rows := qsRowCount()
-	itemH := int32(44)
-	panelH := qsPanelHeight(rows, itemH)
-	maxH := screenHeight - 24
-	for panelH > maxH && itemH > 30 {
-		itemH--
-		panelH = qsPanelHeight(rows, itemH)
-	}
-	// The tenth toggle no longer fits a 720-line screen at the old floor:
-	// cap the card and scroll the rows instead of running the title and the
-	// footer off the glass.
-	if panelH > maxH {
-		panelH = maxH
-	}
-	panelX := (screenWidth - panelW) / 2
-	panelY := (screenHeight - panelH) / 2
-	listH := panelH - qsHeaderH - qsFooterH
-	if listH < 0 {
-		listH = 0
-	}
-	contentH := int32(rows) * (itemH + qsItemGap)
-	maxScroll := contentH - listH
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
-	// Keep the focused row in view: the cursor is the only thing that moves
-	// the list.
-	cursorTop := int32(qs.cursor) * (itemH + qsItemGap)
-	if cursorTop < qs.scroll {
-		qs.scroll = cursorTop
-	}
-	if cursorTop+itemH > qs.scroll+listH {
-		qs.scroll = cursorTop + itemH - listH
-	}
-	if qs.scroll > maxScroll {
-		qs.scroll = maxScroll
-	}
-	if qs.scroll < 0 {
-		qs.scroll = 0
-	}
-
-	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, func() {
-		// The shared overlay sheet: Home's glass, made opaque.
-		drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
-
-		if medFont != nil {
-			title := "Quick Settings"
-			tw, _ := measureText(medFont, title)
-			renderText(renderer, config, medFont, title, ColorTextPrimary(),
-				panelX+(panelW-int32(tw))/2, panelY+16)
-		}
-
-		itemX := panelX + qsPadX
-		itemW := panelW - 2*qsPadX
-		y := panelY + qsHeaderH - qs.scroll
-
-		// Rows that scroll past the list area stop at its edges, so none of
-		// them draws over the title or the footer.
-		prevClip := renderer.GetClipRect()
-		if listH > 0 {
-			listClip := sdl.Rect{X: panelX, Y: panelY + qsHeaderH, W: panelW, H: listH}
-			_ = renderer.SetClipRect(&listClip)
-		}
-
-		for i := range qs.toggles {
-			drawQSToggleRow(renderer, config, font, itemX, y, itemW, itemH, &qs.toggles[i], qs.cursor == i)
-			y += itemH + qsItemGap
-		}
-		for i := range qs.sliders {
-			drawQSSliderRow(renderer, config, font, itemX, y, itemW, itemH, &qs.sliders[i],
-				qs.cursor == len(qs.toggles)+i)
-			y += itemH + qsItemGap
-		}
-		for i := range qs.links {
-			drawQSLinkRow(renderer, config, font, itemX, y, itemW, itemH, &qs.links[i],
-				qs.cursor == len(qs.toggles)+len(qs.sliders)+i)
-			y += itemH + qsItemGap
-		}
-		for i := range qs.cycles {
-			drawQSCycleRow(renderer, config, font, i, itemX, y, itemW, itemH,
-				qs.cursor == len(qs.toggles)+len(qs.sliders)+len(qs.links)+i)
-			y += itemH + qsItemGap
-		}
-		_ = renderer.SetClipRect(&prevClip)
-
-		// System info at the bottom: battery on the left, connectivity right.
-		// Both lines are positioned from the font height rather than fixed
-		// offsets: with a large UI scale the footer used to sit on the panel's
-		// bottom edge and the connectivity line touched it.
-		smallH := int32(font.Height())
-		footerY := panelY + panelH - smallH - 8
-		infoY := footerY - smallH - 8
-		if bat := getBatteryPercent(); bat >= 0 {
-			// The level, the cable and the time left (battery_eta.go), in the
-			// longest form that leaves the connectivity label its room.
-			netW, _ := measureText(font, "! Offline")
-			room := panelW - 2*qsPadX - int32(netW) - 16
-			line := batteryETALevelLine(bat, getBatteryCharging(), "Charging", "On cable", batteryETA(), func(s string) bool {
-				w, _, _ := font.SizeUTF8(s)
-				return int32(w) <= room
-			})
-			renderText(renderer, config, font, line,
-				WithAlpha(ColorTextSecondary(), 200), panelX+qsPadX, infoY)
-		}
-		netStr := "Online"
-		if !IsOnline() {
-			netStr = "! Offline"
-		}
-		nw, _ := measureText(font, netStr)
-		renderText(renderer, config, font, netStr,
-			WithAlpha(ColorTextSecondary(), 200),
-			panelX+panelW-int32(nw)-qsPadX, infoY)
-
-		hint := hintLine(FooterHint{"A", "Change"}, FooterHint{"Left/Right", "Adjust"}, FooterHint{"B", "Close"})
-		hw, _ := measureText(font, hint)
-		renderText(renderer, config, font, hint,
-			WithAlpha(ColorTextTertiary(), 190),
-			panelX+(panelW-int32(hw))/2, footerY)
-	})
-}
-
-// qsLabelWidth is the room left for a row label after the icon column and the
-// right-aligned detail (a missing backend, a level or "Open >"). Measuring the
-// detail instead of reserving a fixed strip keeps "Airplane Mode" whole while
-// still stopping "Bluetooth" from running into "bluetoothctl/rfkill" on dev
-// builds where every backend is missing.
-func qsLabelWidth(font *ttf.Font, rowW int32, detail string) int32 {
-	reserve := int32(0)
-	if detail != "" {
-		if dw, _ := measureText(font, detail); dw > 0 {
-			reserve = int32(dw) + 24
-		}
-	}
-	w := rowW - 52 - 12 - reserve
-	if w < 60 {
-		w = 60
-	}
-	return w
-}
-
-func qsPanelHeight(rows int, itemH int32) int32 {
-	return qsHeaderH + int32(rows)*(itemH+qsItemGap) + qsFooterH
-}
-
-func qsRowBackground(renderer *sdl.Renderer, x, y, w, h int32, focused bool) {
-	if !focused {
-		return
-	}
-	// The focused row is a selected list row: Home's glass, an accent wash and
-	// the accent ring (UIListRow), so the cursor reads the same here as in
-	// every list.
-	UIListRow(renderer, sdl.Rect{X: x, Y: y, W: w, H: h}, 12, true, false)
-}
-
-func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, t *qsToggle, focused bool) {
-	qsRowBackground(renderer, x, y, w, h, focused)
-
-	labelCol := WithAlpha(ColorTextSecondary(), 220)
-	iconCol := WithAlpha(ColorTextPrimary(), 220)
-	detail := ""
-	if !t.Available {
-		// A row with no backend is dimmed; the switch is not drawn because
-		// there is nothing for it to represent. The specific reason
-		// ("no nmcli/rfkill") is too long for a 400 px row and is shown in the
-		// toast when A is pressed, so the row says only what the state is.
-		labelCol = WithAlpha(ColorTextTertiary(), 180)
-		iconCol = labelCol
-		detail = "Unavailable"
-	}
-
-	renderText(renderer, config, font, t.Icon, iconCol, x+8, y+10)
-	renderText(renderer, config, font, ellipsize(font, t.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+10)
-	if detail != "" {
-		dw, _ := measureText(font, detail)
-		renderText(renderer, config, font, detail,
-			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+10)
-		return
-	}
-
-	swW := int32(44)
-	swH := int32(24)
-	swX := x + w - swW - 8
-	swY := y + (h-swH)/2
-	swFill := t.OffColor
-	if t.Value {
-		swFill = t.OnColor
-	}
-	fillRoundedRect(renderer, swX, swY, swW, swH, swH/2, swFill)
-
-	knobR := int32(8)
-	knobX := swX + knobR + 4
-	if t.Value {
-		knobX = swX + swW - knobR - 4
-	}
-	fillCircle(renderer, knobX, swY+swH/2, knobR, sdl.Color{R: 255, G: 255, B: 255, A: 240})
-}
-
-func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, s *qsSlider, focused bool) {
-	qsRowBackground(renderer, x, y, w, h, focused)
-
-	labelCol := WithAlpha(ColorTextSecondary(), 220)
-	iconCol := WithAlpha(ColorTextPrimary(), 220)
-	if !s.Available {
-		labelCol = WithAlpha(ColorTextTertiary(), 180)
-		iconCol = labelCol
-	}
-
-	detail := ""
-	if !s.Available {
-		// See drawQSToggleRow: the full reason belongs in the toast, not in a
-		// row that also has to fit its label.
-		detail = "Unavailable"
-	}
-	renderText(renderer, config, font, s.Icon, iconCol, x+8, y+6)
-	renderText(renderer, config, font, ellipsize(font, s.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+6)
-
-	if detail != "" {
-		dw, _ := measureText(font, detail)
-		renderText(renderer, config, font, detail,
-			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+6)
-		return
-	}
-
-	pct := int(math.Round(s.Value * 100))
-	valStr := fmt.Sprintf("%d%%", pct)
-	vw, _ := measureText(font, valStr)
-	renderText(renderer, config, font, valStr,
-		WithAlpha(ColorTextSecondary(), 200), x+w-int32(vw)-12, y+6)
-
-	trackW := w - 130
-	trackX := x + 100
-	trackY := y + h - 16
-	trackH := int32(6)
-	fillRoundedRect(renderer, trackX, trackY, trackW, trackH, 3,
-		glassChipFill())
-
-	frac := 0.0
-	if s.Max > s.Min {
-		frac = (s.Value - s.Min) / (s.Max - s.Min)
-	}
-	if frac < 0 {
-		frac = 0
-	}
-	if frac > 1 {
-		frac = 1
-	}
-	fillW := int32(float64(trackW) * frac)
-	if fillW > 0 {
-		fillRoundedRect(renderer, trackX, trackY, fillW, trackH, 3,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200})
-	}
-	fillCircle(renderer, trackX+fillW, trackY+trackH/2, 6,
-		WithAlpha(ColorTextPrimary(), 240))
-}
-
-func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, l *qsLink, focused bool) {
-	qsRowBackground(renderer, x, y, w, h, focused)
-
-	labelCol := WithAlpha(ColorTextSecondary(), 220)
-	iconCol := WithAlpha(ColorTextPrimary(), 220)
-	if !l.Available {
-		labelCol = WithAlpha(ColorTextTertiary(), 180)
-		iconCol = labelCol
-	}
-	right := "Open >"
-	if !l.Available {
-		right = l.Detail
-	}
-	renderText(renderer, config, font, l.Icon, iconCol, x+8, y+10)
-	renderText(renderer, config, font, ellipsize(font, l.Label, qsLabelWidth(font, w, right)), labelCol, x+52, y+10)
-	rw, _ := measureText(font, right)
-	renderText(renderer, config, font, right,
-		WithAlpha(ColorTextTertiary(), 190), x+w-int32(rw)-12, y+10)
-}
-
-// drawQSCycleRow renders a cycler row (timeout steps, Power Mode). Its label
-// gets the same measured treatment as the toggles: a translated label in a
-// localized UI would otherwise run under the right-aligned value.
-func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row int, x, y, w, h int32, focused bool) {
-	qsRowBackground(renderer, x, y, w, h, focused)
-
-	c := &qs.cycles[row]
-	renderText(renderer, config, font, c.Icon,
-		WithAlpha(ColorTextPrimary(), 220), x+8, y+10)
-
-	value := screenTimeoutLabel(c.Value)
-	valCol := WithAlpha(ColorTextSecondary(), 220)
-	if row == qsCycleRowLED {
-		value = ledPolicyLabel(ledPolicyOrder[c.Value].key)
-	}
-	if row == qsCycleRowXPack {
-		value = xpackQSLabel()
-	}
-	if row == qsCycleRowPowerMode {
-		value = powerModeLabel(powerModeOrder[c.Value])
-		if c.Value != powerModeIndex(PowerModeDefault) {
-			// A named mode is live: tint the value with the accent so the
-			// override reads as "on", the way a coloured switch does.
-			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
-		}
-	}
-	if row == qsCycleRowSpatialMode {
-		settings := spatialSettingsFor(config)
-		value = spatialModeValue(config)
-		if settings.Mode != "off" {
-			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
-		}
-	}
-	if row == qsCycleRowAutoOff {
-		d := sleepPowerOffDelay(config)
-		value = sleepPowerOffLabel(d)
-		if d > 0 {
-			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
-		}
-	}
-	labeled := ellipsize(font, c.Label, qsLabelWidth(font, w, value))
-	renderText(renderer, config, font, labeled,
-		WithAlpha(ColorTextSecondary(), 220), x+52, y+10)
-
-	vw, _ := measureText(font, value)
-	renderText(renderer, config, font, value, valCol, x+w-int32(vw)-12, y+10)
-}
-
+// handleQSInput is the keyboard while the panel is open (qs_layout.go qsKey).
 func handleQSInput(e *sdl.KeyboardEvent, config *Config) {
-	if e == nil || e.Type != sdl.KEYDOWN || !qs.open {
-		return
-	}
-
-	switch e.Keysym.Sym {
-	case sdl.K_UP:
-		qsNavigate(-1)
-	case sdl.K_DOWN:
-		qsNavigate(1)
-	case sdl.K_LEFT:
-		qsNavigateSlider(-5)
-	case sdl.K_RIGHT:
-		qsNavigateSlider(5)
-	case sdl.K_RETURN, sdl.K_SPACE:
-		qsSelect()
-	case sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END:
-		// The keyboard twins of the pad's shoulders (inputhints.go).
-		qsShoulder(keyShoulder(e.Keysym.Sym))
-	case sdl.K_ESCAPE, sdl.K_b:
-		qs.open = false
-		PlayBackSound()
-	case sdl.K_q:
-		// Ctrl+Q opened the panel; the same chord puts it away (not its
-		// key repeats, which would shut the panel the press just opened).
-		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 && e.Repeat == 0 {
-			qs.open = false
-			PlayBackSound()
-		}
-	}
+	qsKey(e, config)
 }

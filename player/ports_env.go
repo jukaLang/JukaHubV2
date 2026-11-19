@@ -261,9 +261,16 @@ func portEnsureControl(env []string) ([]string, string, string, []string) {
 	return env, real, "xdg", notes
 }
 
-// portBaseEnv is the firmware's environment for a port: screenChildEnv
-// without JukaHub's own variables, plus the audio pin and the udevadm guard.
+// portBaseEnv is a port's environment: the firmware's (portFirmwareEnv) with,
+// on a TrimUI, what PortMaster needs and the firmware lacks
+// (portmaster_runtime.go).
 func portBaseEnv(config *Config) []string {
+	return pmRuntimeEnv(portFirmwareEnv(config))
+}
+
+// portFirmwareEnv is the firmware's environment for a port: screenChildEnv
+// without JukaHub's own variables, plus the audio pin and the udevadm guard.
+func portFirmwareEnv(config *Config) []string {
 	env := screenChildEnv(os.Environ())
 	out := make([]string, 0, len(env)+4)
 	for _, kv := range env {
@@ -341,20 +348,34 @@ func portBuildLaunchPlan(config *Config, script string, master bool) portLaunchP
 	return plan
 }
 
-// portMasterExConfig is the CrossMix file some builds of PortMaster's TrimUI
-// launch.sh source (reported in repohubtool PR #23; unverified here).
+// portMasterExConfig is TRIMUI_EX's settings file (CrossMix includes
+// TRIMUI_EX), which PortMaster's TrimUI launch.sh sources (repohubtool PR #23,
+// OS-Trimux PR #14).
 const portMasterExConfig = "System/etc/ex_config"
 
 // portMasterPreflight prepares what PortMaster's TrimUI launch.sh is reported
 // to stop without — the card's Data/home and Data/ports folders, which
-// JukaHub creates (empty folders, harmless) — and names what it cannot fix:
-// a launch.sh that sources CrossMix's ex_config on a card without it.
+// JukaHub creates (empty folders, harmless) — and names what it cannot fix.
+// A launch.sh that sources TRIMUI_EX's ex_config on a card without it runs as
+// a patched copy on a TrimUI handheld (pmMasterLauncher).
 func portMasterPreflight(launcher string) []string {
 	var notes []string
 	if !IsTrimuiDevice() {
 		return nil
 	}
-	for _, d := range []string{filepath.Join(portMasterSDRoot, "Data", "home"), filepath.Join(portMasterSDRoot, "Data", "ports")} {
+	notes = append(notes, portMasterEnsureDataDirs(portMasterSDRoot)...)
+	if problem := portMasterLaunchProblem(launcher); problem != "" {
+		notes = append(notes, problem)
+		logWarn("portmaster", "%s", problem)
+	}
+	return notes
+}
+
+// portMasterEnsureDataDirs creates the card's Data/home and Data/ports, which
+// PortMaster's TrimUI launcher expects; the notes say what was done.
+func portMasterEnsureDataDirs(sdRoot string) []string {
+	var notes []string
+	for _, d := range []string{filepath.Join(sdRoot, "Data", "home"), filepath.Join(sdRoot, "Data", "ports")} {
 		if !dirExists(d) {
 			if err := os.MkdirAll(d, 0o755); err != nil {
 				notes = append(notes, "cannot create "+d+": "+err.Error())
@@ -363,23 +384,19 @@ func portMasterPreflight(launcher string) []string {
 			}
 		}
 	}
-	if problem := portMasterLaunchProblem(launcher); problem != "" {
-		notes = append(notes, problem)
-		logWarn("portmaster", "%s", problem)
-	}
 	return notes
 }
 
-// portMasterLaunchProblem is a reason launch.sh will stop at once, or "".
+// portMasterLaunchProblem is a reason launch.sh will stop at once, or "". On
+// an ARM64 TrimUI the missing ex_config is handled (pmMasterLauncher).
 func portMasterLaunchProblem(launcher string) string {
-	head, err := gameDiagReadHead(launcher)
-	if err != nil || !strings.Contains(string(head), portMasterExConfig) {
+	if pmRuntimeApplies() || !pmLauncherReadsExConfig(launcher) {
 		return ""
 	}
 	if regularFile(filepath.Join(portMasterSDRoot, filepath.FromSlash(portMasterExConfig))) {
 		return ""
 	}
-	return filepath.Base(launcher) + " reads " + portMasterExConfig + ", which only CrossMix has; PortMaster may close at once on this firmware"
+	return filepath.Base(launcher) + " reads " + portMasterExConfig + ", which only TRIMUI_EX and CrossMix have; PortMaster may close at once on this firmware"
 }
 
 // portShell is bash from the child's PATH (port scripts are bash: they use

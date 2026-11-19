@@ -179,6 +179,9 @@ var bkupOtherDataDeny = map[string]bool{
 	"startup-state.json": true, "retroachievements.json": true, "retroachievements-cache.json": true,
 	"browser-cookies.json": true, "psremote.json": true, "bootguard.json": true,
 	audioResumeFileName: true, cfgdocDefaultsFile: true, "icons.json": true,
+	// Cloud save sync sign-ins: encrypted with this device's key, which no
+	// other device can open.
+	"gdrive.json": true, "webdav.json": true,
 }
 
 // bkupDataStoreName reports whether a top-level file in the data folder is one
@@ -1091,7 +1094,7 @@ func bkupPlanRestore(path string, m bkupManifest, cats map[string]bool) bkupRest
 		case token == "app" && !bkupAppTargetAllowed(rel):
 			rf.Skip = "not a file a backup restores"
 		case vpnBackupExcluded(rel) && (token == "data" || strings.HasPrefix(strings.ToLower(rel), "data/")):
-			rf.Skip = "the VPN configuration stays on its device"
+			rf.Skip = "the VPN configuration and DNS settings stay on their device"
 		case token == "data" && !bkupDataTargetAllowed(rel):
 			rf.Skip = "not a file a backup restores"
 		case f.Platform && plan.CrossPlatform:

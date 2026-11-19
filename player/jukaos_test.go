@@ -381,3 +381,78 @@ func TestJukaosJournalAndState(t *testing.T) {
 		t.Fatalf("fastBoot off did not survive a save: %+v, %v", back, err)
 	}
 }
+
+// TestJukaosBootEnvRewrite: a radio switched in JukaHub OS rewrites only its
+// own key in boot.env (read by the image's launcher), keeping other lines and
+// a Windows line ending, dropping duplicates the launcher would let win, and
+// appending a key the file did not have.
+func TestJukaosBootEnvRewrite(t *testing.T) {
+	cases := []struct{ old, key, value, want string }{
+		{"", "WIFI", "1", "WIFI=1\n"},
+		{"# mine\nBLUETOOTH=1\n", "WIFI", "0", "# mine\nBLUETOOTH=1\nWIFI=0\n"},
+		{"WIFI=0\r\nFOO=bar\r\nWIFI=1\r\n", "WIFI", "1", "WIFI=1\r\nFOO=bar\r\n"},
+		{"BLUETOOTH=0", "BLUETOOTH", "1", "BLUETOOTH=1\n"},
+		{"WIFIX=1\n", "WIFI", "1", "WIFIX=1\nWIFI=1\n"},
+	}
+	for _, c := range cases {
+		if got := jukaosBootEnvWith(c.old, c.key, c.value); got != c.want {
+			t.Errorf("jukaosBootEnvWith(%q, %s=%s) = %q, want %q", c.old, c.key, c.value, got, c.want)
+		}
+	}
+}
+
+// TestJukaosUbootLogoStoreAndRecord: the Smart Pro image writes Home only into
+// the FAT logo partition of the SD card it booted from — never the eMMC's
+// partition of the same name, never a disk it is unsure of — and its record
+// tells the image's logo, its own picture, a cut write and an outside change
+// apart (bootframe_ubootlogo.go).
+func TestJukaosUbootLogoStoreAndRecord(t *testing.T) {
+	const root, data = 179<<8 | 5, 179<<8 | 6
+	card := bootFrameUbootPart{Name: "bootloader", Dev: "mmcblk0p1", Disk: "mmcblk0", Num: 179<<8 | 1}
+	emmc := bootFrameUbootPart{Name: "bootloader", Dev: "mmcblk1p1", Disk: "mmcblk1", Num: 179<<8 | 33}
+	parts := []bootFrameUbootPart{emmc, card, {Name: "env", Dev: "mmcblk0p2", Disk: "mmcblk0", Num: 179<<8 | 2}}
+	if p, err := bootFrameUbootPick(root, data, "mmcblk0", "mmcblk0", "SD", parts); err != nil || p != card {
+		t.Fatalf("pick = %+v, %v; want the card's bootloader", p, err)
+	}
+	refuse := map[string]struct {
+		rootDisk, dataDisk, kind string
+		parts                    []bootFrameUbootPart
+	}{
+		"system on the eMMC":            {"mmcblk1", "mmcblk1", "MMC", parts},
+		"system and data apart":         {"mmcblk0", "mmcblk1", "SD", parts},
+		"no disk for the system":        {"", "", "SD", parts},
+		"a USB disk":                    {"sda", "sda", "SD", parts},
+		"two FAT logos on the card":     {"mmcblk0", "mmcblk0", "SD", append([]bootFrameUbootPart{{Name: "boot-resource", Dev: "mmcblk0p3", Disk: "mmcblk0", Num: 179<<8 | 3}}, parts...)},
+		"a raw logo on the card":        {"mmcblk0", "mmcblk0", "SD", append([]bootFrameUbootPart{{Name: "bootlogo", Dev: "mmcblk0p4", Disk: "mmcblk0", Num: 179<<8 | 4}}, parts...)},
+		"a logo sysfs cannot place":     {"mmcblk0", "mmcblk0", "SD", append([]bootFrameUbootPart{{Name: "bootloader", Dev: "mmcblk9p1"}}, parts...)},
+		"only the eMMC has a logo":      {"mmcblk0", "mmcblk0", "SD", []bootFrameUbootPart{emmc}},
+		"the logo name on the system's": {"mmcblk0", "mmcblk0", "SD", []bootFrameUbootPart{{Name: "bootloader", Dev: "mmcblk0p5", Disk: "mmcblk0", Num: root}}},
+	}
+	for name, c := range refuse {
+		if p, err := bootFrameUbootPick(root, data, c.rootDisk, c.dataDisk, c.kind, c.parts); err == nil {
+			t.Errorf("%s: picked %+v, want a refusal", name, p)
+		}
+	}
+
+	st := bootFrameUbootState{Part: "bootloader", Size: 100, OriginalSHA: "orig", OursSHA: "ours"}
+	classes := []struct {
+		st   bootFrameUbootState
+		part string
+		size int
+		sum  string
+		want string
+	}{
+		{bootFrameUbootState{}, "bootloader", 100, "x", bootFrameUbootNew},
+		{st, "bootloader", 100, "orig", bootFrameUbootOriginal},
+		{st, "bootloader", 100, "ours", bootFrameUbootOurs},
+		{st, "bootloader", 100, "x", bootFrameUbootOther},
+		{bootFrameUbootState{Part: "bootloader", Size: 100, OriginalSHA: "orig", OursSHA: "ours", Interrupted: true}, "bootloader", 100, "x", bootFrameUbootCut},
+		{st, "bootloader", 99, "orig", bootFrameUbootOther},
+		{st, "boot-resource", 100, "orig", bootFrameUbootOther},
+	}
+	for i, c := range classes {
+		if got := bootFrameUbootClassify(c.st, c.part, c.size, c.sum); got != c.want {
+			t.Errorf("case %d: classify = %s, want %s", i, got, c.want)
+		}
+	}
+}

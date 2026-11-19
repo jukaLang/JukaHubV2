@@ -105,9 +105,10 @@ WINE_URL="${WINE_URL:-https://github.com/Kron4ek/Wine-Builds/releases/download/1
 WINE_SHA256="${WINE_SHA256:-aeebbbf239e548f0136f1cd72a2e109dd9a572a8f703da3c09fa40d74d5c255f}"
 
 # Libraries a binary in either package may need: the C library and its parts
-# (including glibc's DNS resolver, which Box64 uses), the loader and libgcc_s,
-# which every handheld has. Anything else would mean a dependency was linked
-# dynamically.
+# (including glibc's DNS resolver), the loader and libgcc_s. Box64 also links
+# glibc's libutil; only its check admits that additional dependency. JukaHub
+# starts the staged Box64 on the handheld before installing the pack, so a
+# missing native library is caught there.
 ALLOWED_NEEDED="libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libresolv.so.2 libgcc_s.so.1 ld-linux-aarch64.so.1"
 
 usage() {
@@ -236,8 +237,12 @@ check_elf() {
     [ "$ce_interp" = /lib/ld-linux-aarch64.so.1 ] ||
         die "$ce_name asks for the loader '${ce_interp:-none}', not /lib/ld-linux-aarch64.so.1"
     ce_needed="$(needed_libs "$ce_file" | tr '\n' ' ' | sed 's/ $//')"
+    ce_allowed="$ALLOWED_NEEDED"
+    if [ "$ce_name" = box64/box64 ]; then
+        ce_allowed="$ce_allowed libutil.so.1"
+    fi
     for ce_lib in $ce_needed; do
-        case " $ALLOWED_NEEDED " in
+        case " $ce_allowed " in
             *" $ce_lib "*) ;;
             *) die "$ce_name needs $ce_lib, which the handheld may not have: a dependency was linked dynamically" ;;
         esac

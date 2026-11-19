@@ -476,6 +476,19 @@ What happens around the stream depends on the launcher that started JukaHub:
   come back after ten seconds, so two menus never share the framebuffer. Open
   JukaHub from the stock menu afterwards.
 
+### Sleeping during a stream
+
+The power key puts the handheld to sleep as usual (the firmware also turns
+Wi-Fi off), and the console drops the stream while it sleeps. When the
+handheld wakes, the stream checks itself: if the picture carries on, nothing
+else happens; if not, it shows **Reconnecting to …** and connects again with
+the same pairing as soon as Wi-Fi is back, entering a login passcode the
+console already took. A stream that loses its picture and sound for 15 seconds
+without a sleep (Wi-Fi gone) does the same. If a minute of trying does not
+bring the picture back (the console went to rest mode, or Wi-Fi did not
+return), the stream ends with *Couldn't reconnect* and JukaHub comes back.
+Hold `START + SELECT` to stop trying at any time.
+
 ## Files
 
 These paths use `JukaHub` for the app folder name. If the folder was renamed,
@@ -557,6 +570,7 @@ games grid, the settings and the controls are in [PC streaming](PC_STREAMING.md)
 | `Remote Play could not show the video …` | The decoder could not keep up: the toast names the other **Video codec** to try (H.264 after H.265, H.265 after H.264 on a PS5) or a lower **Quality**; a PS4 only sends H.264 |
 | `The login passcode saved for … was refused` | The passcode was changed on the console: change or remove it under the console's options (Start on its row) |
 | `Remote Play stopped unexpectedly (code N)` | The helper crashed or was stopped; `psremote.log` has its last lines |
+| `The stream from … dropped (the handheld slept, or Wi-Fi went) and could not be reconnected` | A minute of reconnecting after a sleep or a Wi-Fi drop failed ([Sleeping during a stream](#sleeping-during-a-stream)): the console went to rest mode or off, or Wi-Fi did not come back. Start the stream again |
 | `… did not answer — press A to connect anyway. To wake it, turn on Enable Turning On PS5 from Network …` | The console is shut down (not in rest mode), on another network, or its rest-mode network switches are off ([Waking the console](#waking-the-console)); A again connects anyway |
 | `… did not come out of rest mode within a minute` | **Enable Turning On PS5/PS4 from Network** is off, or the console is busy, for example installing an update |
 | `… is not at 192.168.1.51 any more — looking for it on this network` | Something else answers at the console's old address: the router gave the console a new one. JukaHub scans, and the pairing moves to the new address when the console answers there. The wake signal is never sent to a device that is not this console |

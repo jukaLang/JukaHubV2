@@ -346,8 +346,9 @@ func pkgHeroActivate(config *Config, btn int) {
 	pkgPrimaryAction(config, it)
 }
 
-// pkgPrimaryAction is the one-press action of a package: get it, update it, or
-// open its folder; while it is busy, the sheet that manages it.
+// pkgPrimaryAction is the one-press action of a package: get it, update it,
+// run it (pkglaunch.go), or open its folder when nothing in it can start here;
+// while it is busy, the sheet that manages it.
 func pkgPrimaryAction(config *Config, it *pkgItem) {
 	if it != nil && pkgBusyKey(it.Key) {
 		// Rolling back or being removed: the sheet says so, and nothing else
@@ -358,6 +359,10 @@ func pkgPrimaryAction(config *Config, it *pkgItem) {
 	status, _ := pkgStatusOf(it, pkgLiveNow())
 	switch status {
 	case pkgStatusInstalled:
+		if it.Launch != "" {
+			pkgRun(config, it)
+			return
+		}
 		pkgOpenFolder(config, it)
 	case pkgStatusUpdate, pkgStatusGet:
 		pkgStartInstall(config, it, false)
@@ -671,6 +676,8 @@ func pkgSheetRun(config *Config, it *pkgItem, b pkgSheetBtn) {
 		pkgStartInstall(config, it, false)
 	case "reinstall":
 		pkgStartInstall(config, it, true)
+	case "run":
+		pkgRun(config, it)
 	case "open":
 		pkgOpenFolder(config, it)
 	case "rollback":

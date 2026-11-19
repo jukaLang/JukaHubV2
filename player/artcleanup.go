@@ -247,6 +247,20 @@ func startArtCleanupScan() bool {
 			why = "A games folder could not be read (" + missing + "), so every cover stays"
 		} else {
 			files = artCleanupFind(root, scanned, used, time.Now())
+			// Pictures from the games (playshot_cover.go) of ROMs that are gone,
+			// and of games a downloaded cover shows for now; trashed apart from
+			// the covers of the same names.
+			seen := map[string]bool{}
+			for _, f := range artCleanupFind(filepath.Join(root, playShotDirName), scanned, used, time.Now()) {
+				f.System += " gameplay"
+				seen[f.Path] = true
+				files = append(files, f)
+			}
+			for _, f := range playShotSuperseded(root, time.Now()) {
+				if !seen[f.Path] {
+					files = append(files, f)
+				}
+			}
 		}
 		var total int64
 		for _, f := range files {

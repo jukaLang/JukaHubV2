@@ -24,6 +24,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"net"
 	"net/url"
 	"strings"
@@ -203,7 +204,8 @@ func brwClassifyError(address string, err error, timedOut, online bool) brwFailu
 		return brwNewFailure(brwFailTLS, address, "")
 	case strings.Contains(lower, "refused"):
 		return brwNewFailure(brwFailConnect, address, "The site refused the connection or isn't running right now.")
-	case strings.Contains(lower, "reset"), strings.Contains(lower, "broken pipe"):
+	case strings.Contains(lower, "reset"), strings.Contains(lower, "broken pipe"),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 		return brwNewFailure(brwFailConnect, address, "The connection was cut off. Try again.")
 	case strings.Contains(lower, "redirect"):
 		f := brwNewFailure(brwFailOther, address, brwFriendlyNetError(err))

@@ -1383,6 +1383,10 @@ func artworkLocalPNG(path string) bool {
 // download path, so a fetch that fills it later shows up on the next recount.
 // On NextUI the card's own cover goes before the downloaded one.
 func romCoverPath(rom scannedROM, root string) string {
+	// Game options → Remove cover: no picture at all (artwork_nocover.go).
+	if artworkNoCover(rom, root) {
+		return ""
+	}
 	// On NextUI the cover the user put in .media (or MinUI's .res) comes
 	// first: it is the one NextUI shows.
 	if nextuiActive() {
@@ -1396,6 +1400,11 @@ func romCoverPath(rom scannedROM, root string) string {
 	}
 	if local := romLocalCoverPath(rom); local != "" {
 		return local
+	}
+	// Last, a picture taken while the game played (playshot_cover.go): any
+	// cover above replaces it as soon as there is one.
+	if shot := playShotCoverPath(rom, root); shot != "" {
+		return shot
 	}
 	return art
 }

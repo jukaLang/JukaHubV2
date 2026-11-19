@@ -142,6 +142,11 @@ Environment variables:
 | `JUKAHUB_BENCH_WARM=1` | with bench mode, use the warm path instead of forcing cold |
 | `JUKAHUB_STARTUP_STATE` | override the marker path (the bench uses a temp file) |
 | `JUKAHUB_BENCH_RUNS`, `JUKAHUB_BENCH_LIMIT_MS` | sample count and threshold for `startup-bench.sh` |
+| `JUKAHUB_BOOT_PREFETCH=0` | turn the recorded boot prefetch off (also: a `data/boot-prefetch.off` file); `=1` forces it on after `drop_caches` for a bench |
+| `JUKAHUB_FRAME_CACHE=0` | draw Home's first frame without `data/first-frame.cache` |
+| `JUKAHUB_DEVICE_PROBE_CACHE=0` | detect the model from scratch instead of `data/device-probe.json` |
+| `JUKAHUB_BOOTGUARD_SYNC=1` | flush the boot guard's record in line, as before 2026-11-18 |
+| `JUKAHUB_WAIT_DISPLAY=<file>` | wait (8 s at most) for that file before starting SDL; set by the Smart Pro image while its display drivers load |
 
 `startup-bench.sh` builds once, deletes the marker before every sample and
 fails on a median over the limit. CI runs it with a 5 s limit (the runner is

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"io"
@@ -195,7 +196,7 @@ func TestCompanionPageRequiresPIN(t *testing.T) {
 		t.Fatalf("paired page status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"JukaHub Companion", "Send text", "/api/upload", "data-key=up"} {
+	for _, want := range []string{"JukaHub Companion", "Send text", "/api/drop/plan", "data-key=up"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("companion page is missing %q", want)
 		}
@@ -579,5 +580,110 @@ func TestMailCalPhoneInputValidation(t *testing.T) {
 	}
 	if _, err := mailcalCleanSecret("line\nbreak"); err == nil {
 		t.Error("mailcalCleanSecret accepted a line break")
+	}
+}
+
+// The drop card's routing (companion_drop_route.go) decides from what a phone
+// sends: file names, a file's first bytes and a zip's directory.
+func TestCompanionDropRoute(t *testing.T) {
+	zipOf := func(names ...string) []byte {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for _, n := range names {
+			w, err := zw.Create(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasSuffix(n, "/") {
+				_, _ = w.Write([]byte("x"))
+			}
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return buf.Bytes()
+	}
+	var many []string
+	for i := 0; i < 400; i++ {
+		many = append(many, strings.Repeat("track", 30)+itoa(i)+".bin")
+	}
+	bigZip := zipOf(many...)
+	gbHead := make([]byte, 0x150)
+	copy(gbHead[0x104:], rommGBLogo)
+	psISO := make([]byte, companionDropHeadBytes)
+	copy(psISO[16*2048:], "\x01CD001")
+	copy(psISO[16*2048+8:], "PLAYSTATION")
+	single := zipOf("Pokemon Blue.gb", "readme.txt")
+	port := zipOf("Celeste.sh", "celeste/", "celeste/port.json")
+	neogeo := zipOf("201-p1.p1", "201-c1.c1", "201-m1.m1")
+	ff7 := "/Roms/PS/Final Fantasy VII/Final Fantasy VII (Disc 1).cue"
+	base := companionDropEnv{
+		Roms: "/Roms", RomsDirs: []string{"GB", "Game Boy Advance (GBA)", "PS", "Ports"},
+		BIOS: "/BIOS", Music: "/Music", Video: "/Videos", Drop: "/PhoneDrop",
+		Games: []companionDropGame{
+			{Path: "/Roms/GB/Pokemon Red.gb", Stem: "Pokemon Red", System: "Game Boy"},
+			{Path: "/Roms/GB/Tetris.gb", Stem: "Tetris", System: "Game Boy"},
+			{Path: ff7, Stem: "Final Fantasy VII (Disc 1)", System: "PlayStation"},
+		},
+	}
+	for _, c := range []struct {
+		in     companionDropIn
+		nextui bool
+		noRoms bool
+		kind   string
+		dir    string
+		file   string
+		first  string // an "ask" answer's first choice, or a "need" answer's part
+	}{
+		{in: companionDropIn{Name: "Pokemon Blue.gb"}, kind: "game", dir: "/Roms/GB", file: "Pokemon Blue.gb"},
+		{in: companionDropIn{Name: "Zelda.gba"}, kind: "game", dir: "/Roms/GBA"},
+		{in: companionDropIn{Name: "Zelda.gba"}, nextui: true, kind: "game", dir: "/Roms/Game Boy Advance (GBA)"},
+		{in: companionDropIn{Name: "Mario.gbc"}, kind: "game", dir: "/Roms/GB"},
+		{in: companionDropIn{Name: "Zelda.gba"}, noRoms: true, kind: "drop", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "Pitfall.a26"}, kind: "drop", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "Pokemon Blue.gb", Plain: true}, kind: "drop", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "song.mp3"}, kind: "music", dir: "/Music"},
+		{in: companionDropIn{Name: "clip.mp4"}, kind: "video", dir: "/Videos"},
+		{in: companionDropIn{Name: "notes.txt"}, kind: "drop", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "README.md", Head: []byte("# notes")}, kind: "drop", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "scph5501.bin", Size: 512 << 10}, kind: "bios", dir: "/BIOS"},
+		{in: companionDropIn{Name: "dc_boot.bin", Size: 2 << 20}, kind: "bios", dir: "/BIOS/dc"},
+		{in: companionDropIn{Name: "neocd_f.rom", Size: 512 << 10}, kind: "bios", dir: "/BIOS/neocd"},
+		{in: companionDropIn{Name: "bios7.bin", Size: 2 << 20}, kind: "need", first: "head"},
+		{in: companionDropIn{Name: "game.bin", Size: 32 << 10, Head: gbHead}, kind: "game", dir: "/Roms/GB"},
+		{in: companionDropIn{Name: "game.iso", Size: 4 << 30, Head: psISO}, kind: "game", dir: "/Roms/PS2"},
+		{in: companionDropIn{Name: "game.iso", Size: 600 << 20, Head: psISO}, kind: "ask", first: "ps1"},
+		{in: companionDropIn{Name: "game.chd"}, kind: "ask", first: "ps1"},
+		{in: companionDropIn{Name: "game.chd", System: "ps1"}, kind: "game", dir: "/Roms/PS"},
+		{in: companionDropIn{Name: "game.zip"}, kind: "need", first: "tail"},
+		{in: companionDropIn{Name: "blue.zip", Size: int64(len(single)), Tail: single}, kind: "game", dir: "/Roms/GB", file: "blue.zip"},
+		{in: companionDropIn{Name: "celeste.zip", Size: int64(len(port)), Tail: port}, kind: "port", dir: "/PhoneDrop"},
+		{in: companionDropIn{Name: "mslug.zip", Size: int64(len(neogeo)), Tail: neogeo}, kind: "game", dir: "/Roms/NEOGEO"},
+		{in: companionDropIn{Name: "big.zip", Size: int64(len(bigZip)), Tail: bigZip[len(bigZip)-10000:]}, kind: "ask", first: "nes"},
+		{in: companionDropIn{Name: "Pokemon Red (USA).png"}, kind: "cover", dir: "/Roms/GB/Imgs", file: "Pokemon Red.png"},
+		{in: companionDropIn{Name: "tetris.JPG"}, nextui: true, kind: "cover", dir: "/Roms/GB/.media", file: "Tetris.jpg"},
+		{in: companionDropIn{Name: "Pokemon Rd.png"}, kind: "ask", first: "/Roms/GB/Pokemon Red.gb"},
+		{in: companionDropIn{Name: "ff7.webp", Game: ff7}, kind: "cover", dir: "/Roms/PS/Final Fantasy VII/Imgs", file: "Final Fantasy VII (Disc 1).webp"},
+	} {
+		env := base
+		env.NextUI = c.nextui
+		if c.noRoms {
+			env.Roms, env.RomsDirs = "", nil
+		}
+		got := companionDropRoute(c.in, env)
+		if got.Kind != c.kind || got.Dir != c.dir || (c.file != "" && got.Name != c.file) {
+			t.Errorf("%s: got %s %q %q, want %s %q %q", c.in.Name, got.Kind, got.Dir, got.Name, c.kind, c.dir, c.file)
+			continue
+		}
+		switch c.kind {
+		case "ask":
+			if len(got.Choices) == 0 || got.Choices[0].ID != c.first {
+				t.Errorf("%s: choices %+v, want %s first", c.in.Name, got.Choices, c.first)
+			}
+		case "need":
+			if got.Need != c.first || got.NeedBytes <= 0 {
+				t.Errorf("%s: need %q (%d bytes), want %s", c.in.Name, got.Need, got.NeedBytes, c.first)
+			}
+		}
 	}
 }

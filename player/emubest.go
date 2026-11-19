@@ -259,6 +259,9 @@ type emuBestScript struct {
 	// tokens are the standalone tokens of the whole table the script spells
 	// out ("drastic" in "./drastic \"$1\"").
 	tokens map[string]bool
+	// text is the head that was read, lower-cased: emuchoices.go looks in it
+	// for a core a script names only through a variable (CORE=parallel_n64).
+	text string
 }
 
 // emuBestScripts caches emuBestScript per launcher path.
@@ -290,6 +293,7 @@ func emuBestReadScript(launcher string) emuBestScript {
 			head, _ := io.ReadAll(io.LimitReader(f, emuBestScriptScan))
 			f.Close()
 			text := strings.ToLower(string(head))
+			s.text = text
 			s.cores = coreNamesIn(text)
 			s.retroArch = len(s.cores) > 0 || retroArchLauncher(launcher)
 			squashed := normaliseLauncherName(text)
@@ -447,9 +451,25 @@ func emuBestPick(system string, list []emuEntry) int {
 	if len(cands) == 0 || len(list) == 0 {
 		return -1
 	}
+	// The extra choices (a launchlist alternative, a core started directly:
+	// emuchoices.go) are offered, never picked for the user, while the
+	// console has a launcher of its own: they are left unranked, and skipped
+	// below where an unrecognised entry would hold the recommendation back
+	// (a folder's alternatives sit right after it, between two own entries).
+	ownLauncher := false
+	for _, e := range list {
+		if e.Extra == "" {
+			ownLauncher = true
+			break
+		}
+	}
 	best, bestRank := -1, len(cands)
 	ranks := make([]int, len(list))
 	for i, e := range list {
+		if ownLauncher && e.Extra != "" {
+			ranks[i] = -1
+			continue
+		}
 		ranks[i] = emuBestRankOf(e, cands)
 		if ranks[i] >= 0 && ranks[i] < bestRank {
 			best, bestRank = i, ranks[i]
@@ -460,7 +480,7 @@ func emuBestPick(system string, list []emuEntry) int {
 	}
 	if bestRank > 0 {
 		for j := 0; j < best; j++ {
-			if ranks[j] < 0 {
+			if ranks[j] < 0 && !(ownLauncher && list[j].Extra != "") {
 				return -1
 			}
 		}
@@ -501,10 +521,11 @@ func emuBestInstalledRank(system string, entries []emuEntry, cands []emuBestCand
 // makes it play the system's games, or -1. On a PC that is a Windows emulator
 // the page can download, or a missing core tile (a core file there is its own
 // launcher). Not on the handheld: there the firmware's Emus launch scripts
-// pick the core, so installing a core would not change what a game starts in,
-// and the standalone emulators come with the firmware (PSP's PPSSPP has its
-// own card, ppsspp_managed_ui.go) — the page claims no upgrade it cannot
-// deliver.
+// pick the core a game starts in by default — an installed core is one more
+// choice (emuchoices.go), the automatic one only for a console with no
+// launcher at all — and the standalone emulators come with the firmware (PSP's
+// PPSSPP has its own card, ppsspp_managed_ui.go), so the page claims no upgrade
+// it cannot deliver.
 func emuBestInstallTile(c emuBestCandidate, entries []emuEntry) int {
 	if !IsWindows() {
 		return -1

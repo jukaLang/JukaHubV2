@@ -6,10 +6,13 @@ package main
 // Anything JukaHub installs and can bring forward on its own — hakuX on the
 // Smart Pro, the Windows emulators it manages on a PC, the Windows-app runtime
 // (Box64 + Wine), a downloaded AndroidRT — registers one emuRuntimeUpdater from
-// an init() function in its own file. The automatic pass in
-// emulatorautoupdate.go walks the registered updaters under the same Emulator
-// updates setting as the cores (Off / Notify me / Install automatically) and
-// the same rule about the moment (never over a game or another install; on
+// an init() function in its own file. So does one thing that is not an
+// update: the handheld's "extra cores" (emumorecores.go), which in Install
+// automatically fetches the cores worth having for each console with games
+// once, at the same quiet moment; its Supported is false in the other modes.
+// The automatic pass in emulatorautoupdate.go walks the registered updaters
+// under the same Emulator updates setting as the cores (Off / Notify me /
+// Install automatically) and the same rule about the moment (never over a game or another install; on
 // the charger or after the user stepped away, unless long overdue).
 //
 // The contract an updater keeps:

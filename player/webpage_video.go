@@ -177,6 +177,10 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	if p.inHead {
 		return
 	}
+	videoStyle := p.computeStyle(webNewElement(name, attrs), attrs)
+	if videoStyle.Hidden {
+		return
+	}
 	var src string
 	switch name {
 	case "video":
@@ -200,7 +204,6 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	title = strings.Join(strings.Fields(title), " ")
 	p.flush()
 	block := p.ensureBlock()
-	videoStyle := p.computeStyle(webNewElement(name, attrs), attrs)
 	block.Style = videoStyle
 	block.Align = videoStyle.Align
 	block.Indent = videoStyle.Indent

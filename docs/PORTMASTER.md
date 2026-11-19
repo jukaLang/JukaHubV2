@@ -118,10 +118,67 @@ JukaHub aims for parity with the firmware's own Ports tab:
 
 PortMaster itself runs its own `launch.sh` directly, as MainUI runs apps.
 Before it starts JukaHub creates `Data/home` and `Data/ports` if they are
-missing (PortMaster's TrimUI launcher is reported to stop without them), and
-warns when that launcher reads CrossMix's `System/etc/ex_config` on a card
-without it. When PortMaster closes, JukaHub reads the ports again, so a port
-it installed is in the panel and in Games at once.
+missing (PortMaster's TrimUI launcher is reported to stop without them). When
+PortMaster closes, JukaHub reads the ports again, so a port it installed is in
+the panel and in Games at once.
+
+## On a stock TrimUI
+
+PortMaster's TrimUI package is written for firmware with TRIMUI_EX (the
+bootstrap from the PortMaster team that CrossMix includes). On a stock Smart
+Pro or Brick, or under JukaHub OS, it used to close the moment it opened:
+
+- its `launch.sh` sources `System/etc/ex_config`, TRIMUI_EX's file, and stops
+  there without it;
+- its menu (`pugwash`) and installer (`harbourmaster`) need `python3`, which
+  the firmware does not have;
+- the firmware's `/bin/bash` is BusyBox, and PortMaster's scripts use bash
+  arrays;
+- the Python SDL2 binding finds SDL2 only through `PYSDL2_DLL_PATH`.
+
+So on an ARM64 TrimUI JukaHub checks, once a session and in the environment
+the port gets, whether the firmware's bash runs a bash array and a process
+substitution and whether its `python3` can import what PortMaster needs.
+Whatever fails is supplied first on `PATH` for PortMaster, its ports and
+harbourmaster only:
+
+| Missing | What JukaHub adds | Where |
+|---------|-------------------|-------|
+| `python3` | python-build-standalone CPython 3.11 for `aarch64-unknown-linux-gnu` (3.12 or 3.13 if the latest release has no 3.11). It runs on the firmware's glibc. The archive is the one listed in that release's `SHA256SUMS` and must match its SHA-256 there; the test suite, Tk, IDLE, pip and headers are left out (about 30 MB download) | `data/portmaster-runtime/python/` |
+| a real `bash` | the firmware's own real bash when one is further down `PATH` (CrossMix's `System/bin`), through a one-line shim; else Ubuntu's bash on JukaHub's [private C runtime](PRIVATE_GLIBC.md) (glibc 2.39, the newest signed Ubuntu build) | `/tmp/jukahub-port-runtime/bash` or `data/private-glibc/` |
+| `PYSDL2_DLL_PATH` | links in tmpfs to the firmware's SDL2 libraries under the names pysdl2 tries (not with TRIMUI_EX's Python, whose `ex_config` sets it) | `/tmp/jukahub-port-runtime/sdl2` |
+
+With JukaHub's Python, `SSL_CERT_FILE` names the firmware's CA bundle and an
+inherited `PYTHONHOME`/`PYTHONPATH` is dropped. `/usr/trimui/lib` is appended
+to `LD_LIBRARY_PATH` when it is missing, and `/dev/fd` is linked to
+`/proc/self/fd` when the firmware did not make it (bash's process
+substitution needs it; it lives in RAM until the next boot). When `launch.sh`
+reads `ex_config` and the card has none, JukaHub runs a copy beside it,
+`Apps/PortMaster/.jukahub-launch.sh`, in which that line runs only if the file
+exists and TRIMUI_EX's `/mnt/SDCARD/System/bin/python3` names the Python in
+use; the copy is deleted when PortMaster closes. PortMaster's own files are
+not edited. A card with TRIMUI_EX or CrossMix, whose bash and Python work, is
+left as it is. A script a port starts by its own `#!/bin/bash` line still gets
+the firmware's `/bin/bash`; JukaHub does not replace it.
+
+The first open downloads what is missing (Wi-Fi) with the install card up,
+then PortMaster opens by itself — unless the card's X stopped the download or
+a game was started meanwhile. Installing or repairing PortMaster fetches it
+at once. Offline, PortMaster without any Python says why instead of opening;
+without a full bash it starts with the firmware's shell and says so once. Each
+launch log (`data/gamediag/ports/<script>.log`) names the bash and Python the
+launch used.
+
+**Y on the PortMaster row** has **Open PortMaster**, **Repair PortMaster** and
+**Why didn't it open?** (checks the firmware again and lists what is missing,
+with the last lines of PortMaster's log). A PortMaster that closes within
+seconds says the likeliest reason.
+
+> **Unverified on a device:** PortMaster's menu on the downloaded Python and
+> the firmware's SDL2, Ubuntu's bash running PortMaster's scripts, and the
+> exact `ex_config` line in the current `launch.sh`. PortMaster 2026.09.19+
+> also counts no analog sticks on TrimUI (NX Redux PR #142); JukaHub does not
+> change that yet.
 
 ## Installing PortMaster
 
@@ -130,8 +187,15 @@ official TrimUI package (`trimui.portmaster.zip`, about 24 MB, Wi-Fi) from the
 [PortMaster GUI releases](https://github.com/PortsMaster/PortMaster-GUI/releases)
 and unpacks it to `SDCARD/Apps/PortMaster/` (`launch.sh`, `config.json`,
 `icon.png`, `PortMaster/`). It is staged on the card and moved into place only
-after a complete download and unpack. An existing `Apps/PortMaster` is never
-overwritten; to repair one, remove it with Files or FTP first.
+after a complete download and unpack that contains `launch.sh` and
+`PortMaster/control.txt`. An existing `Apps/PortMaster` is never replaced by an
+install. `Data/home` and `Data/ports` are created, and on a TrimUI the Python
+and bash PortMaster needs are fetched right after.
+
+**Repair PortMaster** (Y on its row) downloads the same package again and
+writes its files over `Apps/PortMaster`, each through a temporary file and a
+rename. It mends a damaged or half-updated install; ports, the runtimes in
+`libs/`, themes and settings are not in the package and stay.
 
 ## Where ports live
 
@@ -158,7 +222,8 @@ glibc). **A** queues the port in the same install queue the store uses.
 
 **Start → Games → Ports Store** (also Home search: "ports store", "ready to
 run"; the Games tab; the catalogue's first row) is PortMaster's whole
-catalogue as a store:
+catalogue as a store (new games for the consoles themselves — Game Boy, NES,
+Mega Drive, PICO-8 … — come from [Get Homebrew](HOMEBREW.md) instead):
 
 - **Discover** — shelves of the most downloaded *Ready to Run* ports (free
   games that need no files), new ports, recently updated ones, popular ports

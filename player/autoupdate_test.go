@@ -446,3 +446,23 @@ func TestReleaseAssetDigest(t *testing.T) {
 		}
 	}
 }
+
+// The Beta channel's pick: the repository's rolling emulator releases
+// (cores-aarch64, ppsspp-tg5040) are never a JukaHub update, however new.
+func TestPickNewestJukaHubReleaseSkipsEmulatorReleases(t *testing.T) {
+	list := []githubReleaseListed{
+		{githubRelease: githubRelease{TagName: "cores-aarch64", PublishedAt: "2026-11-20T05:00:00Z"}},
+		{githubRelease: githubRelease{TagName: "ppsspp-tg5040", PublishedAt: "2026-11-19T06:00:00Z"}},
+		{githubRelease: githubRelease{TagName: "JukaHub-20261118120000", PublishedAt: "2026-11-18T12:00:00Z"}},
+		{githubRelease: githubRelease{TagName: "v1.4.0-beta.1", PublishedAt: "2026-11-17T12:00:00Z"}},
+	}
+	rel, ok := pickNewestJukaHubRelease(list)
+	if !ok || rel.TagName != "JukaHub-20261118120000" {
+		t.Fatalf("picked %+v, %v; want the JukaHub build", rel, ok)
+	}
+	for tag, want := range map[string]bool{"JukaHub-1": true, "JukaGUI-2": true, "v1.2.3": true, "cores-aarch64": false, "ppsspp-tg5040": false, "": false, "v": false, "vx": false} {
+		if got := jukaHubReleaseTag(tag); got != want {
+			t.Errorf("jukaHubReleaseTag(%q) = %v, want %v", tag, got, want)
+		}
+	}
+}

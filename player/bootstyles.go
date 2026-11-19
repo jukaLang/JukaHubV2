@@ -6,7 +6,7 @@ package main
 // bootos.go decides WHEN the full boot plays (startupAnimation) and runs it;
 // this file decides WHAT it looks like:
 //
-//   - cinematic (the default): the camera sits a little above a dark floor
+//   - cinematic: the camera sits a little above a dark floor
 //     with a faint horizon glow in the theme's accent. The glass logo drops in
 //     from above the top edge, stretching with its speed, and crashes onto the
 //     floor: the motor gives one hard buzz on the exact frame of the impact,
@@ -25,9 +25,10 @@ package main
 //     a power-on shows no jump; the wordmark, the progress line, no motion.
 //   - classic: the glass light running round the pane (bootos.go), unchanged.
 //   - random: cinematic, roll or classic, a different one each boot.
-//   - none: no boot animation and no quick hello at all (bootOSPlanStartup):
-//     the queued startup work runs and the first screen appears as soon as it
-//     can, with no arrival. The fastest start.
+//   - none (the default since 2026-11-18): no boot animation and no quick
+//     hello at all (bootOSPlanStartup): the queued startup work runs and the
+//     first screen appears as soon as it can, with no arrival. The fastest
+//     start.
 //
 // Reduced motion and Battery Saver (bootOSMotion) turn cinematic and roll into
 // the still image: no shake, no particles, no flash. The quick hello of an app
@@ -247,7 +248,10 @@ func (s *bootStyleRun) animated() bool {
 
 // ── The setting ─────────────────────────────────────────────────────────
 
-// bootStyleSetting is the stored boot animation, cinematic unless chosen.
+// bootStyleSetting is the stored boot animation, bootStyleDefault unless chosen.
+// Someone who never picked a style but asked for the full boot on every start
+// (Startup animation → Full every time) asked for an animation, so they keep
+// the one that was the default when they asked.
 func bootStyleSetting(c *Config) string {
 	if c != nil {
 		if v, ok := customString(c.Variables.Custom, bootStyleKey); ok {
@@ -256,8 +260,22 @@ func bootStyleSetting(c *Config) string {
 				return s
 			}
 		}
+		if bootOSAnimationSetting(c) == bootOSAnimationAlways {
+			return bootStyleCinematic
+		}
 	}
-	return bootStyleCinematic
+	return bootStyleDefault()
+}
+
+// bootStyleDefault is the boot animation nobody chose: none, everywhere
+// (2026-11-18, "as fast as possible"). The device has shown its own logo since
+// power-on, JukaHub OS's launcher may already show the Home picture kept at
+// the last power off (bootframe.go), and a two-second animation would be most
+// of a boot that should take under two (startup.go): Home comes up as soon as
+// it is ready, and the startup chime, if on, rises with it (bootChimeOverHome).
+// A style picked in Settings still plays, on every platform.
+func bootStyleDefault() string {
+	return bootStyleNone
 }
 
 // bootStyleOptions are the Settings row's stops.

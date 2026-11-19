@@ -65,6 +65,10 @@ type libraryViewFile struct {
 	Layout     string                     `json:"layout,omitempty"`
 	ShowHidden bool                       `json:"show_hidden,omitempty"`
 	Games      map[string]libraryGameView `json:"games,omitempty"`
+
+	// ConsoleLook is how the consoles grid draws a console: covers,
+	// pixel_names or pixel_cards (game_library_pixel_look.go).
+	ConsoleLook string `json:"console_look,omitempty"`
 }
 
 var libraryViewStore struct {

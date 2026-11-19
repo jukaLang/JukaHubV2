@@ -317,7 +317,8 @@ func vkActionLabel() string {
 		return "Run"
 	case setSearchVKTarget:
 		return "Search"
-	case vkTargetTV, vkTargetGameSearch, vkTargetPortsSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget:
+	case vkTargetTV, vkTargetGameSearch, vkTargetPortsSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget,
+		homebrewSearchVKTarget:
 		return "Search"
 	case vkTargetWiFi, vkTargetNetplay:
 		return "Join"
@@ -337,8 +338,10 @@ func vkActionLabel() string {
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
-		artworkAliasVKTarget:
+		artworkAliasVKTarget, homebrewKeyVKTarget:
 		return "Save"
+	case gameFileNameVKTarget:
+		return "Rename"
 	case mlAddrVKTarget:
 		return mlVKActionLabel()
 	case bootLockVKTarget:
@@ -907,12 +910,18 @@ func vkCurrentText() string {
 		return homeTabsNameBuffer
 	case artworkAliasVKTarget:
 		return artworkAliasBuffer
+	case gameFileNameVKTarget:
+		return gameRenameBuffer
 	case mlAddrVKTarget:
 		return mlVKText()
 	case mailComposeVKTarget:
 		return mailComposeBuffer
 	case vkTargetGroqKey:
 		return vkGroqKeyBuffer
+	case homebrewKeyVKTarget:
+		return homebrewKeyBuffer
+	case homebrewSearchVKTarget:
+		return hb.query
 	case bootLockVKTarget:
 		return bootLockBuffer
 	case feArchivePassVKTarget:
@@ -998,6 +1007,9 @@ func vkSetText(text string, config *Config) {
 	case artworkAliasVKTarget:
 		// The name covers are matched by is stored on Save only (artwork_choose.go).
 		artworkAliasBuffer = text
+	case gameFileNameVKTarget:
+		// The ROM is renamed on Rename only (game_rename.go).
+		gameRenameBuffer = text
 	case mlAddrVKTarget:
 		// A PC's address is asked or saved on Done only (moonlight_ui.go).
 		mlVKSetText(text)
@@ -1044,6 +1056,13 @@ func vkSetText(text string, config *Config) {
 		// The key is saved on submit only, so a half-pasted key never replaces
 		// a working one.
 		vkGroqKeyBuffer = text
+	case homebrewKeyVKTarget:
+		// The itch.io key, the same rule: saved on submit only
+		// (homebrew_store_key.go).
+		homebrewKeyBuffer = text
+	case homebrewSearchVKTarget:
+		// Get Homebrew's grid narrows on every key.
+		homebrewSetQuery(text)
 	case bootLockVKTarget:
 		// The startup lock's password: checked on submit only (bootlock.go).
 		bootLockBuffer = text
@@ -1212,6 +1231,8 @@ func vkTitle() string {
 		return homeTabsNameKeyboardTitle()
 	case artworkAliasVKTarget:
 		return "NAME FOR COVERS"
+	case gameFileNameVKTarget:
+		return "RENAME FILE"
 	case mlAddrVKTarget:
 		return mlVKTitle()
 	case mailComposeVKTarget:
@@ -1282,6 +1303,10 @@ func vkTitle() string {
 		return "DEVICE ADDRESS"
 	case vkTargetGroqKey:
 		return "GROQ API KEY"
+	case homebrewKeyVKTarget:
+		return "ITCH.IO API KEY"
+	case homebrewSearchVKTarget:
+		return "SEARCH HOMEBREW"
 	case bootLockVKTarget:
 		return bootLockKeyboardTitle()
 	case feArchivePassVKTarget:
@@ -1359,6 +1384,8 @@ func vkPlaceholder() string {
 		return "Couch co-op, RPGs to finish…"
 	case artworkAliasVKTarget:
 		return "Legend of Zelda, The - The Minish Cap"
+	case gameFileNameVKTarget:
+		return "Final Fantasy VI (USA)"
 	case mlAddrVKTarget:
 		return mlVKPlaceholder()
 	case mailComposeVKTarget:
@@ -1434,6 +1461,10 @@ func vkPlaceholder() string {
 		return "user@192.168.1.7:2222/roms"
 	case vkTargetGroqKey:
 		return "Paste your key from console.groq.com"
+	case homebrewKeyVKTarget:
+		return "Your key from itch.io/user/settings/api-keys"
+	case homebrewSearchVKTarget:
+		return "Game or author: tobu"
 	case bootLockVKTarget:
 		return bootLockKeyboardPlaceholder()
 	case feArchivePassVKTarget:
@@ -1972,6 +2003,10 @@ func vkCloseKeyboard() {
 		// A pasted key must not outlive the field that asked for it.
 		vkGroqKeyBuffer = ""
 	}
+	if vkTarget == homebrewKeyVKTarget {
+		// Nor the itch.io key; a submit has read it already.
+		homebrewKeyBuffer = ""
+	}
 	if vkTarget == bootLockVKTarget {
 		// Nor a typed startup password (bootlock.go).
 		bootLockBuffer = ""
@@ -1998,6 +2033,9 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == artworkAliasVKTarget {
 		artworkAliasBuffer = ""
+	}
+	if vkTarget == gameFileNameVKTarget {
+		gameRenameBuffer = ""
 	}
 	if vkTarget == mlAddrVKTarget {
 		mlVKClear()
@@ -2520,6 +2558,13 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetRommServer:
 		vkCloseKeyboard()
 		rommCloudApplyEdit(text)
+	case homebrewSearchVKTarget:
+		// Get Homebrew's grid narrowed while typing.
+		vkCloseKeyboard()
+	case homebrewKeyVKTarget:
+		// Read before closing: closing clears the buffer.
+		vkCloseKeyboard()
+		homebrewKeySubmit(text)
 	case vkTargetGroqKey:
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
@@ -2571,6 +2616,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// And the game's name for covers (artwork_choose.go).
 		vkCloseKeyboard()
 		artworkAliasSubmit(text)
+	case gameFileNameVKTarget:
+		// And the ROM's file name: nothing on the card moves until here
+		// (game_rename.go).
+		vkCloseKeyboard()
+		gameRenameSubmit(text)
 	case mlAddrVKTarget:
 		// And a PC's address: nothing is asked or saved until here.
 		vkCloseKeyboard()

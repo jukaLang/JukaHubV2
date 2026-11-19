@@ -132,6 +132,28 @@ different trust decision from an app that starts a scanner's version report. The
 list is `secAuditCatalog` in `player/secaudit.go`; adding a tool there is one
 entry, because nothing is fetched.
 
+### On the handheld (TrimUI)
+
+The stock firmware has no Python and no Perl, and the projects publish no
+ARM64 Linux builds of Nmap, John the Ripper or Aircrack-ng. On a TrimUI those
+come from [Linux packages](LINUX_PACKAGES.md) — Ubuntu 24.04's own arm64
+packages, verified against Ubuntu's signed index and run from the card with
+Ubuntu's C library, without touching the firmware:
+
+| Tool | On the handheld |
+|---|---|
+| sqlmap | **Install** first installs Ubuntu's `python3` (if no Python is found), then sqlmap's source from GitHub, all on the same install bar |
+| Nikto | **Install** first installs `perl`, `libnet-ssleay-perl` and `libio-socket-ssl-perl` (HTTPS targets need the last two), then Nikto's source |
+| Nmap | Ubuntu's `nmap` package; JukaHub runs as root, so SYN scans and OS detection are available |
+| John the Ripper | Ubuntu's `john` package (the core edition, CPU only — not the "jumbo" build) |
+| Aircrack-ng | Ubuntu's `aircrack-ng` package, **analysis only**: the handheld's Wi-Fi chip has no monitor mode, so it works on captures copied to the card |
+| Burp Suite, ZAP, Metasploit, Wireshark, Hashcat | Still not available, with the reason on the row (desktop/Java applications, Ruby and a full system, a GPU with OpenCL) |
+
+**Update** on a Linux-packages tool checks Ubuntu's index first and installs a
+newer version when there is one; **Remove** deletes the package and the
+dependencies nothing else needs. The same packages can be managed with `apt` in
+the Terminal or on the **Tools → Linux packages** page.
+
 ## Using a tool from the rest of the app
 
 Installed tools are placed on `PATH` for **Power tools → Script snippets**, so a

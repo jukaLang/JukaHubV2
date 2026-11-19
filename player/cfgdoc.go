@@ -308,6 +308,10 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// The FN switch reading that means "locked" (travellock.go): another
 	// device's switch may read the other way round.
 	travelLockAtKey: true,
+	// The Google OAuth client sent from the phone (companion_cloud.go): its
+	// secret never leaves the device, and the ID alone would bring a client
+	// that cannot sign in.
+	"google_client_id": true, "google_client_secret": true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a
@@ -1040,6 +1044,8 @@ func cfgdocRefresh(config *Config) {
 	psBgBind(config)
 	// The VPN's switch and route, which its worker reads from a copy (vpn.go).
 	vpnPublish(config, false)
+	// The DNS choice, likewise (dnschanger.go).
+	dnsPublish(config, false)
 }
 
 // ── Importing ─────────────────────────────────────────────────────────────

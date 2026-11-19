@@ -233,6 +233,20 @@ def transform_root(root: Path, app: Path, retroarch: Path,
     return systems
 
 
+def sysinit_before(inittab: str, service: str) -> list[str]:
+    """The ::sysinit commands busybox init runs, one after another, before the
+    one naming service: what JukaHub's start waits behind at every boot."""
+    before = []
+    for line in inittab.splitlines():
+        fields = line.split(":", 3)
+        if len(fields) != 4 or fields[2].strip() != "sysinit":
+            continue
+        if service in fields[3]:
+            return before
+        before.append(fields[3].strip())
+    return before
+
+
 def root_partition(raw: Path) -> tuple[int, int]:
     with raw.open("rb") as image:
         image.seek(SECTOR)
@@ -343,6 +357,10 @@ def build_image(args: argparse.Namespace) -> None:
         systems = transform_root(root, args.app.resolve(), args.retroarch.resolve(),
                                  args.cores.resolve() if args.cores else None)
         validate_linkage(root)
+        # Reported, not reordered: what plastron runs before JukaHub's service
+        # decides whether it could start earlier (os/plastron/README.md).
+        before = sysinit_before((root / "etc" / "inittab").read_text(encoding="utf-8"),
+                                "/etc/init.d/jukahub")
         repacked = work / "new.squashfs"
         subprocess.run(["mksquashfs", str(root), str(repacked), "-comp", "lz4", "-Xhc",
                         "-b", "131072", "-noappend", "-no-xattrs", "-all-root", "-quiet"],
@@ -375,6 +393,7 @@ def build_image(args: argparse.Namespace) -> None:
         "retroarch_binary_sha256": sha256(args.retroarch / "retroarch"),
         "output_sha256": sha256(output),
         "systems": systems,
+        "sysinit_before_jukahub": before,
     }
     output.with_name(output.name + ".build.json").write_text(
         json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
@@ -382,6 +401,7 @@ def build_image(args: argparse.Namespace) -> None:
     print(f"JukaHub OS image: {output}")
     print(f"SHA-256: {manifest['output_sha256']}")
     print(f"RetroArch systems: {', '.join(systems)}")
+    print(f"Runs before JukaHub at boot: {'; '.join(before) or 'nothing'}")
 
 
 def main() -> int:

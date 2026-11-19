@@ -213,6 +213,10 @@ func hjBlocked(config *Config, inGame bool, now time.Time) string {
 	switch {
 	case !hjEnabled(config):
 		return "off"
+	case startupWarmupHeld():
+		// JukaHub OS: the microphone and the speech model wait a few
+		// seconds past the first frame (startup.go).
+		return "starting up"
 	case !sttSupported():
 		return "not this device"
 	case !hjLook(now):

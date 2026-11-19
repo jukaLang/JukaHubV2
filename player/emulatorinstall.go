@@ -255,6 +255,28 @@ type emuInstallReport struct {
 	// ships and left alone, the first time it found each one
 	// (coreCrossMixAskOnce): the toast asks the user to update them by hand.
 	Asked []string
+	// HeldGPU names the GPU-rendered cores an automatic pass left on the
+	// firmware's own build (coreGPUAutoHold, corerisk.go), the first time it
+	// left each build: the toast says a press installs them.
+	HeldGPU []string
+	// The run's log line counts what it did not look at: installed cores only
+	// a press replaces (Held), cores on the firmware's read-only partition
+	// (Firmware), and cores the buildbot publishes no build of for this device
+	// (NotPublished). None of them is counted as Current.
+	Held, Firmware, NotPublished int
+}
+
+// logLine is the one line a run leaves in the device log, with every count,
+// so a report shows what an update pass did and what it left alone and why.
+func (r emuInstallReport) logLine(installed int) string {
+	stopped := ""
+	if r.Interrupted || r.LowSpace != "" {
+		stopped = ", stopped early"
+	}
+	return fmt.Sprintf("%d installed: %d updated, %d current, %d refused now, %d refused before, %d failed; "+
+		"left alone: %d held for a press, %d on the firmware partition, %d not published for this device%s",
+		installed, len(r.Updated), r.Current, len(r.Refused), r.KnownRefused, len(r.Errors),
+		r.Held, r.Firmware, r.NotPublished, stopped)
 }
 
 // summary is the one-line result shown in the toast.
@@ -277,6 +299,9 @@ func (r emuInstallReport) summary() string {
 	}
 	if len(r.Asked) > 0 {
 		parts = append(parts, coreCrossMixAskNote(r.Asked))
+	}
+	if len(r.HeldGPU) > 0 {
+		parts = append(parts, coreGPUHeldNote(r.HeldGPU))
 	}
 	if r.LowSpace != "" {
 		parts = append(parts, coreLowSpaceNote(r.LowSpace))
@@ -433,12 +458,24 @@ func startEmulatorInstall(e emuEntry) {
 			if needRetroArch {
 				note = "RetroArch and the " + note
 			}
+			if system, _ := emuCoreInfo(plan.Core); system != "" && !IsWindows() {
+				// On the handheld a new core is one more choice for a game,
+				// not the console's default (emuchoices.go). Whether a game
+				// asks depends on Ask which emulator and its pin (emupicker.go),
+				// so the toast names the place that always lists it.
+				note += " · " + system + " games can use it (Game options → Emulator)"
+			}
 			ShowToast(note, ToastKindSuccess)
 			return
 		}
 		note := coreConfigDisplayName(plan.Core) + " core updated · " + build.Version
 		if backup != "" {
 			note += " · previous build kept"
+			if coreNeedsGPU(plan.Core) && !IsWindows() {
+				// The buildbot's generic build of a GPU core may not draw
+				// here; its first game decides (corebuilds_probation.go).
+				note += " · it draws with the GPU: if its next game does not start, the previous build comes back by itself"
+			}
 		}
 		ShowToast(note, ToastKindSuccess)
 	}()
@@ -481,14 +518,35 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 	}
 	report.Checked = true
 	active := scanCoreInventory().Active
+	installed := len(active)
+	published := make(map[string]bool, len(index))
+	for _, entry := range index {
+		published[entry.Core] = true
+	}
 	if keep != nil {
+		// keep is asked only about cores the plan could replace: one with no
+		// build for this device, or on the firmware's read-only partition, is
+		// never replaced anyway, and must not be named in a toast as held
+		// for a press that could not update it either.
 		kept := make(map[string]coreBuild, len(active))
 		for core, build := range active {
-			if keep(build) {
+			if !published[core] || coreDirIsSystem(filepath.Dir(build.Path)) || keep(build) {
 				kept[core] = build
 			}
 		}
 		active = kept
+	}
+	report.Held = installed - len(active)
+	// What the plan leaves alone without a word is counted, so the log says
+	// why a core was not brought forward: no build for this device, or the
+	// firmware's own read-only copy.
+	for core, build := range active {
+		switch {
+		case !published[core]:
+			report.NotPublished++
+		case coreDirIsSystem(filepath.Dir(build.Path)):
+			report.Firmware++
+		}
 	}
 	// One update per core: several tiles can name the same emulator (a ROM
 	// folder and the core that runs it), and the binary is the same file.
@@ -497,10 +555,11 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 	// what the run forgets as it replaces cores.
 	emuCRCCacheFlush()
 	defer emuCRCCacheFlush()
-	report.Current = len(active) - len(planned)
+	report.Current = len(active) - len(planned) - report.NotPublished - report.Firmware
 	if report.Current < 0 {
 		report.Current = 0
 	}
+	defer func() { logInfo("emulators", "core updates: %s", report.logLine(installed)) }()
 	updates := make([]coreUpdate, 0, len(planned))
 	for _, upd := range planned {
 		if reason, refused := coreBuildRefused(upd.Core, upd.CRC32); refused {
@@ -570,11 +629,16 @@ func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress 
 // it (emuAutoCoreRunner): runInstalledCoreUpdates over the cores scope accepts
 // (nil: every installed core), less the ones only a press replaces — the
 // arcade cores whose nightlies change the romset they expect
-// (coreAutoUpdateNever), and a build CrossMix ships (coreCrossMixShipped),
-// which is named once in the pass's toast (Asked) instead of replaced.
+// (coreAutoUpdateNever), a build CrossMix ships (coreCrossMixShipped), which is
+// named once in the pass's toast (Asked) instead of replaced, and a GPU-rendered
+// core still on the build the firmware or CrossMix made for this GPU
+// (coreGPUAutoHold, corerisk.go), named once the same way (HeldGPU). The
+// buildbot's generic build of such a core is made for desktop OpenGL and may
+// not draw under the handheld's OpenGL ES RetroArch; the N64 core it replaced
+// in November 2026 left N64 games quitting at once.
 func coreAutoUpdateRunner(scope func(coreBuild) bool) emuAutoCoreRunner {
 	return func(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
-		var held []coreHeldBuild
+		var held, heldGPU []coreHeldBuild
 		report := runInstalledCoreUpdates(ctx, client, progress, func(b coreBuild) bool {
 			if scope != nil && !scope(b) {
 				return false
@@ -586,9 +650,21 @@ func coreAutoUpdateRunner(scope func(coreBuild) bool) emuAutoCoreRunner {
 				held = append(held, coreHeldBuild{Core: b.Core, CRC32: crc})
 				return false
 			}
+			if crc, hold := coreGPUAutoHold(b); hold {
+				heldGPU = append(heldGPU, coreHeldBuild{Core: b.Core, CRC32: crc})
+				return false
+			}
 			return true
 		})
 		report.Asked = coreCrossMixAskOnce(held)
+		report.HeldGPU = coreHeldAskOnce(heldGPU, "the firmware's own GPU build")
+		if len(heldGPU) > 0 {
+			names := make([]string, 0, len(heldGPU))
+			for _, h := range heldGPU {
+				names = append(names, h.Core)
+			}
+			logInfo("emulators", "core auto-update: GPU cores kept on the build made for this device (a press updates them): %s", strings.Join(names, ", "))
+		}
 		return report
 	}
 }
@@ -965,6 +1041,13 @@ func pruneCoreBackups(target string, keep int) []string {
 	}
 	removed := make([]string, 0, len(backups)-keep)
 	for _, backup := range backups[keep:] {
+		// The build the card had before JukaHub's first update — the
+		// firmware's or CrossMix's — is the one known to work here, and the
+		// oldest, so it was the first to go after five updates: it stays.
+		if coreBackupIsOriginal(core, backup.Path) {
+			logDebug("emulators", "kept %s beyond the newest %d: it is the build the card came with", filepath.Base(backup.Path), keep)
+			continue
+		}
 		if err := os.Remove(backup.Path); err != nil {
 			logWarn("emulators", "could not prune backup %q: %v", backup.Path, err)
 			continue

@@ -93,6 +93,14 @@ class PlastronImageTests(unittest.TestCase):
             image.write_bytes(data)
             self.assertEqual(builder.root_partition(image), (8 * 512, 16 * 512))
 
+    def test_sysinit_before_jukahub(self):
+        inittab = ("# comment\n::sysinit:/bin/mount -a\n::sysinit:/etc/init.d/datapart start\n"
+                   "::respawn:/sbin/getty\n::sysinit:/etc/init.d/jukahub start\n"
+                   "::sysinit:/etc/init.d/late start\n::shutdown:/etc/init.d/jukahub stop\n")
+        self.assertEqual(builder.sysinit_before(inittab, "/etc/init.d/jukahub"),
+                         ["/bin/mount -a", "/etc/init.d/datapart start"])
+        self.assertEqual(builder.sysinit_before("::sysinit:/a\n", "/etc/init.d/jukahub"), ["/a"])
+
     def test_splash_is_plastron_brick_format(self):
         data = (HERE / "frames-brick.bin").read_bytes()
         magic, width, height, frames, fps, offset = struct.unpack_from("<4sHHHHI", data)

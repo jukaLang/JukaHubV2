@@ -72,8 +72,9 @@ session.
 ## What is in a report
 
 The report is the device's `bugrepReport` (player/bugrepsend.go): your
-category, title and description, the JukaHub version and release, the device
-model, platform, OS and architecture, the time, a reference such as
+category, title and description, the JukaHub version and release, the update
+channel (Stable or Beta; the service does not put it in the issue yet), the
+device model, platform, OS and architecture, the time, a reference such as
 `JH-7K2Q9M`, and — when you leave the switches on — the redacted diagnostics
 report and the last few hundred log lines.
 

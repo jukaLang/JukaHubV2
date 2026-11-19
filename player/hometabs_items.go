@@ -329,6 +329,7 @@ func homeTabsStoreItems(c *Config) []homeTabItem {
 	add(m.app(homeTileActionPrefix+apkStoreEntryName, "Android apps", "APK Store", ""))
 	add(homeTabsCard(c, HomeFocusPackages, "", "Apps, games and emulators"))
 	add(m.app(homeTileActionPrefix+portMasterEntryName, "PortMaster", "Ports for the handheld", ""))
+	add(m.app(homeTileActionPrefix+homebrewEntryName, "", "New games from itch.io", ""))
 	add(m.app(homeTileActionPrefix+windowsAppsEntryName, "", "Programs and installers", ""))
 	add(m.app(homeTileActionPrefix+"Downloads", "", "Queue and saved files", ""))
 	if c != nil && sceneIndexExact(c, "ThemePresets") >= 0 {

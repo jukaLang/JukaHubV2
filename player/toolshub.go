@@ -427,6 +427,10 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		security.tone = toolsHubToneWarn
 	}
 	tiles = append(tiles, toolbox, audit, security)
+	// Ubuntu's arm64 programs on the handheld (linuxpkg_ui.go): only there.
+	if linuxPkgSupported() {
+		tiles = append(tiles, linuxPkgHubTile())
+	}
 
 	// CONNECTIVITY
 	network := toolsHubTile{
@@ -661,6 +665,8 @@ func toolsHubActivate(config *Config, idx int) {
 		auditOpenScreen(config)
 	case "sectrust":
 		sectrustOpenScreen(config)
+	case "linuxpkg":
+		linuxPkgOpenScreen(config)
 	case "nettools":
 		netToolsOpen(config)
 	case "wifi":

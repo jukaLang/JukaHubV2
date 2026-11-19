@@ -1,7 +1,7 @@
 #!/bin/sh
 # The Ubuntu 20.04 (glibc 2.31) arm64 build root in which the release builds
-# JukaHub's handheld-native parts, and the commands that build them there. Two
-# workflows run it, each on an arm64 runner of its own, side by side:
+# JukaHub's handheld-native parts, and the commands that build them there. These
+# workflows run it, each on arm64 runners of its own, side by side:
 #
 #   remote-play-helpers.yml  the PS Remote Play helpers and AndroidRT, which
 #                            every TrimUI archive carries
@@ -9,6 +9,8 @@
 #                            release asset of its own
 #   ppsspp-trimui.yml        JukaHub's own PPSSPP for the tg5040 handhelds,
 #                            checked daily, the rolling release "ppsspp-tg5040"
+#   retroarch-cores.yml      RetroArch cores the firmware's glibc can open, on
+#                            four runners, the rolling release "cores-aarch64"
 #
 # Why an arm64 runner, why a 20.04 root and why debootstrap rather than a
 # container image: see remote-play-helpers.yml.
@@ -22,6 +24,9 @@
 #   build-root.sh build ppsspp      player/native/build-ppsspp.sh for the tag in
 #                                   PPSSPP_TAG (GL_DIR: the TrimUI SDK's GLES
 #                                   libraries, inside the checkout)
+#   build-root.sh build cores       player/native/build-cores.sh for the cores
+#                                   named in CORES (default: all), into
+#                                   player/native/bin/cores
 #   build-root.sh check androidrt   advisory: AndroidRT's host smoke suite
 #   build-root.sh check box64       advisory: the pinned Wine under the new Box64
 #   build-root.sh key PART          the name of the artifact an earlier run kept
@@ -55,7 +60,7 @@ if [ -z "${JOBS:-}" ]; then
 fi
 
 usage() {
-    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|stt|llm | check androidrt|box64 | key helpers|androidrt|box64|stt|llm | release" >&2
+    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|cores|stt|llm | check androidrt|box64 | key helpers|androidrt|box64|stt|llm | release" >&2
     exit 2
 }
 
@@ -209,6 +214,11 @@ build() {
                 SOURCE_COMMIT="$(source_commit)" OUT_DIR=/src/player/native/bin \
                 LOG_DIR=/tmp/jukahub-ppsspp-logs /bin/sh /src/player/native/build-ppsspp.sh
             ;;
+        cores)
+            in_root JOBS="$JOBS" CORES="${CORES:-}" SOURCE_COMMIT="$(source_commit)" \
+                OUT_DIR=/src/player/native/bin/cores LOG_DIR=/tmp/jukahub-cores-logs \
+                /bin/sh /src/player/native/build-cores.sh
+            ;;
         stt)
             in_root JOBS="$JOBS" /bin/sh /src/player/native/build-stt.sh
             ;;
@@ -247,12 +257,14 @@ part_sources() {
             # the Moonlight helper (moonlight-stream.c, its self-test clip
             # moonlight-selftest.h264 and its CMake project
             # player/native/moonlight/, all under player/native, so listed by
-            # the same pathspec); not its host tests, its READMEs or
-            # build-runtimes.sh (the runtime packages).
+            # the same pathspec); not its host tests, its READMEs,
+            # build-runtimes.sh (the runtime packages) or the PPSSPP and
+            # RetroArch-core builds, which are releases of their own.
             git -C "$REPO" ls-files -s -- player/native ':(exclude)player/native/tests' \
                 ':(exclude)player/native/*.md' ':(exclude)player/native/build-runtimes.sh' \
                 ':(exclude)player/native/build-stt.sh' ':(exclude)player/native/build-llm.sh' \
                 ':(exclude)player/native/package-llm.sh' \
+                ':(exclude)player/native/build-ppsspp.sh' ':(exclude)player/native/build-cores.sh' \
                 .github/scripts/build-root.sh .gitattributes
             ;;
         stt)

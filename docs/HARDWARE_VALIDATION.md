@@ -70,7 +70,7 @@ still needed before changing ALSA buffering.
 
 ### Backlog coverage
 
-There are 100 open headings tagged `[HW]` in `player/MODERNIZATION.md`. This SSH
+There are 101 open headings tagged `[HW]` in `player/MODERNIZATION.md`. This SSH
 session contributes evidence to **HW-1, HW-2, HW-3, HW-4, HW-5, HW-7, FIX-2,
 SYS-1, SYS-2, SYS-16, SYS-17, SND-5, SND-6, INP-6, NET-3, NET-5, NET-6, NET-12, GAME-18, LIB-26,
 MED-37** and **GPU-1**.
@@ -86,12 +86,12 @@ For a complete inventory, the tagged headings are:
 | Mail and fixes | MAIL-1, FIX-2 |
 | Performance and graphics | PERF-1, PERF-4, PERF-8, PERF-9, PERF-10, PERF-15, PERF-17, GPU-1, GPU-4, GPU-5 |
 | Design | UX-5, UX-7, UX-10, UX-16 |
-| Games and Remote Play | GAME-9, GAME-11, GAME-16, GAME-17, GAME-18, GAME-20, PORT-HW-2, STEAM-HW-1, PSR-1, PSR-2, PSR-7, PSR-10, PSR-13, XBX-1 |
+| Games and Remote Play | GAME-9, GAME-11, GAME-16, GAME-17, GAME-18, GAME-20, PORT-HW-2, PORT-HW-3, STEAM-HW-1, PSR-1, PSR-2, PSR-7, PSR-10, PSR-13, XBX-1 |
 | Android and media | AND-1, AND-3, AND-5, AND-6, AND-17, AND-20, MED-20, MED-22, MED-25, MED-30, MED-33 |
 | System and sound | SYS-1, SYS-2, SYS-3, SYS-14, SYS-15, SYS-16, SYS-17, SYS-18, SYS-22, SYS-24, SND-5, SND-6, SND-7, SND-13, SND-16 |
 | Security and documentation | SEC-21 |
 | Input, shell and power | INP-5, INP-6, INP-15, INP-17, INP-20, SHELL-1, SHELL-2, SHELL-11, PWR-3, PWR-10 |
-| Reliability, languages and network | REL-7, REL-10, REL-12, I18N-3, NET-2, NET-3, NET-5, NET-6, NET-8, NET-12, NET-17 |
+| Reliability, languages and network | REL-7, REL-10, REL-12, I18N-3, NET-2, NET-3, NET-5, NET-6, NET-8, NET-12, NET-17, NET-22 |
 | Library and apps | LIB-14, LIB-17, LIB-18, LIB-24, LIB-26, APP-9, APP-16, APP-17, APP-18, APP-20, APP-21 |
 | Cloud gaming | CLOUD-1 |
 

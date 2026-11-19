@@ -952,7 +952,8 @@ func mediaHubWheel(config *Config, dy int32) bool {
 }
 
 // mediaHubSwipe maps touch swipes: sideways changes the tab, vertical scrolls.
-// Without it a swipe changed the whole scene (handleSwipe's default).
+// Without it a swipe here would do nothing (handleSwipe ignores a swipe no
+// screen claims).
 func mediaHubSwipe(direction string, config *Config) bool {
 	if !mediaHubIsCurrent(config) {
 		return false

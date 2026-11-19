@@ -66,6 +66,9 @@ echo "    CC          = $CC"
 echo "    SYSROOT     = $SYSROOT"
 go version
 go build -trimpath -ldflags "-s -w" -o "$PKG/$APP_NAME" .
+# jukaboot: JukaHub OS's own process 1 on the Smart Pro SD image
+# (os/smartpro/build_image.py takes it from the package). Pure Go and static.
+CGO_ENABLED=0 go build -trimpath -buildmode=exe -ldflags "-s -w" -o "$PKG/jukaboot" ./cmd/jukaboot
 
 # Remote Play helpers, when native/build-helpers.sh (in CI the
 # remote-play-helpers workflow) has produced them; this script does not build

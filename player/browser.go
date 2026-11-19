@@ -1,6 +1,7 @@
 package main
 
-// browser.go — a small, controller-first web browser for the handheld.
+// browser.go — the controller-first light reader used when a full browser is
+// unavailable or explicitly selected in Settings.
 //
 // The device has no system browser, no X11 and no window manager, so a support
 // link or a GitHub issue is otherwise unreachable. This browser turns the
@@ -8,10 +9,9 @@ package main
 // browser: an address bar, back/forward history, a link picker for anchors on
 // the page, and quick links to the JukaHub repository and issue tracker.
 //
-// It is text-only on purpose. Rendering modern HTML/CSS/JS needs WebKit or
-// Chromium, which the stock firmware does not carry. GitHub and most docs sites
-// serve readable server-rendered HTML, which is enough for reading issues,
-// release notes and documentation.
+// Full pages use WPE WebKit on a handheld with WPE installed, or the OS browser
+// on a PC (browser_full_engine.go). This reader still handles offline pages and
+// hardware where the full engine is unavailable.
 
 import (
 	"bytes"
@@ -284,10 +284,14 @@ func findBrowserElementByVariable(config *Config, variable string) (Element, boo
 	return Element{}, false
 }
 
-// openBrowserHome opens the Browser scene on its start page. The scene is
-// injected on demand, so a config that predates the browser still works.
+// openBrowserHome opens the preferred browser on its start page. When the full
+// engine is unavailable, the light reader's scene is injected on demand.
 func openBrowserHome(config *Config) {
 	if config == nil {
+		return
+	}
+	home := brwHomeURL(config)
+	if brwTryOpenFullEngine(config, home) {
 		return
 	}
 	ensureBrowserScene(config)
@@ -299,7 +303,6 @@ func openBrowserHome(config *Config) {
 	browserHomeLoaded = false
 	browserPendingURL = ""
 	// The home page the user chose, or the search engine's start page.
-	home := brwHomeURL(config)
 	config.Variables.Custom[textBrowserURLVariable] = home
 	changeSceneTo(config, idx)
 	if currentSceneIndex == idx {
@@ -311,9 +314,8 @@ func openBrowserHome(config *Config) {
 	}
 }
 
-// openBrowserAtURL opens the in-app browser on a specific page. Chat links use
-// it, so a URL in a message is one click away from being read instead of only
-// being copied out of the bubble.
+// openBrowserAtURL opens the preferred browser on a specific page. Chat links
+// use it, so a URL in a message is one click away from being opened.
 func openBrowserAtURL(config *Config, rawURL string) bool {
 	if config == nil {
 		return false
@@ -322,6 +324,9 @@ func openBrowserAtURL(config *Config, rawURL string) bool {
 	if err != nil {
 		showToast("Cannot open that link: "+err.Error(), ToastError())
 		return false
+	}
+	if brwTryOpenFullEngine(config, address) {
+		return true
 	}
 	// A YouTube video goes straight to the player: the reader cannot show its
 	// page, and opening the browser first only to leave it again would cost

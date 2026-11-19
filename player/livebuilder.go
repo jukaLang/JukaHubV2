@@ -1659,11 +1659,13 @@ var liveBuilderProtectedPhrases = []string{"apikey", "fullroot", "toolspath", "l
 // liveBuilderProtectedNames say where a stored credential is sent, or whether
 // the host it goes to is checked: the Home Assistant, MQTT and Pi-hole tokens
 // and passwords and the router probe (smart_home.go). Changing one hands the
-// credential to another host. They are compared as lower-case words joined by
-// "_", so HA_URL and haUrl count too.
+// credential to another host. So do the DNS choice and its servers
+// (dnschanger.go), which decide where every name the device looks up is sent.
+// They are compared as lower-case words joined by "_", so HA_URL and haUrl
+// count too.
 var liveBuilderProtectedNames = map[string]bool{
 	"ha_url": true, "ha_insecure": true, "mqtt_host": true, "mqtt_port": true,
-	"pihole_url": true, "router_host": true,
+	"pihole_url": true, "router_host": true, "dns_mode": true, "dns_servers": true,
 }
 
 // liveBuilderSensitiveKey reports whether a variable name is protected. A name

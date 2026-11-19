@@ -207,6 +207,11 @@ umount "$BIND" && rmdir "$BIND"
 dd if="/dev/$ROOT_PART" of="$OUT/root-head.bin" bs=4096 count=1 2> /dev/null
 
 # --------------------------------------------------------------- facts
+# The delay loop the stock kernel calibrated at boot, if it did ("skipped"
+# means a timer gave it, which costs nothing): lpj= on the image's command
+# line saves the calibration. Only while the boot messages are still in dmesg.
+LPJ=$(dmesg 2> /dev/null | grep 'Calibrating delay loop' | grep -v skipped |
+	grep -o 'lpj=[0-9]*' | head -n 1 | sed 's/^lpj=//')
 {
 	echo "FORMAT=jukahub-board-v1"
 	echo "DEVICE=$DEVICE"
@@ -223,6 +228,7 @@ dd if="/dev/$ROOT_PART" of="$OUT/root-head.bin" bs=4096 count=1 2> /dev/null
 	echo "ROOT_FSTYPE=$ROOT_FSTYPE"
 	echo "FIRST_LBA=$FIRST"
 	echo "LEAD_SECTORS=$FIRST"
+	[ -n "$LPJ" ] && echo "LPJ=$LPJ"
 } > "$OUT/facts.txt"
 cat /proc/cmdline > "$OUT/cmdline.txt"
 cat /proc/modules > "$OUT/modules.txt"

@@ -61,6 +61,8 @@ type homeUIFontSource struct {
 	// card under the same name can be told apart (homeUIFontSourceRefresh).
 	size int64
 	mod  time.Time
+	// key is the resolved path the bytes were read from (homeUIFontSourceKey).
+	key string
 }
 
 // homeUIFontSourceCache maps a resolved path to its bytes. retired holds the
@@ -96,7 +98,37 @@ func openUIFontFile(path string, size int) (*ttf.Font, error) {
 	}
 	font, err := ttf.OpenFontRW(rw, 1, size)
 	runtime.KeepAlive(source)
+	if err == nil {
+		// Until the first frame, labels drawn in this face can come from the
+		// last start's first frame (startup_framecache.go).
+		frameCacheFontOpened(font, source, size)
+	}
 	return font, err
+}
+
+// homeUIFontPreload reads path's bytes into the shared source and parses its
+// character map, on a goroutine at start (startup_preload.go): the first
+// frame's first open and first character check then find both in memory
+// instead of reading the card on the main thread. Opening a size is left to
+// the main thread.
+func homeUIFontPreload(path string) {
+	if _, err := homeUIFontSourceFor(path); err != nil {
+		return
+	}
+	coverageFor(path)
+}
+
+// homeUIFontSourceBytes is the bytes the shared source holds for path, nil
+// when it has not read them. They are never written to, so a reader may use
+// them from any goroutine.
+func homeUIFontSourceBytes(path string) []byte {
+	key := homeUIFontSourceKey(path)
+	homeUIFontSourceCache.Lock()
+	defer homeUIFontSourceCache.Unlock()
+	if source := homeUIFontSourceCache.byPath[key]; source != nil {
+		return source.data
+	}
+	return nil
 }
 
 // homeUIFontSourceKey is the cache key for path: resolved like every asset
@@ -127,7 +159,7 @@ func homeUIFontSourceFor(path string) (*homeUIFontSource, error) {
 	if len(data) == 0 {
 		return nil, errors.New("font file is empty")
 	}
-	source := &homeUIFontSource{data: data, size: int64(len(data))}
+	source := &homeUIFontSource{data: data, size: int64(len(data)), key: resolved}
 	if st, err := os.Stat(resolved); err == nil {
 		source.mod = st.ModTime()
 	}

@@ -54,7 +54,14 @@ var childEnvAppDir = exeDir
 // app's own, os.Environ()) with the firmware's HOME, PATH and LD_LIBRARY_PATH
 // put back and JukaHub's markers removed. See the file comment.
 func screenChildEnv(environ []string) []string {
-	env := screenChildEnvFor(environ, childEnvAppDir())
+	return screenChildEnvWithZone(environ, childEnvAppDir(), gameChildZone())
+}
+
+// screenChildEnvWithZone is screenChildEnv with the zone passed in, so tests
+// can exercise a fixed zone without mutating process-global time.Local while
+// background companion/cast goroutines are reading the clock.
+func screenChildEnvWithZone(environ []string, appDir, zone string) []string {
+	env := screenChildEnvFor(environ, appDir)
 	if IsTrimuiDevice() {
 		env = childEnvFirmwareDirs(env, childEnvFirmwareCard())
 	}
@@ -64,7 +71,7 @@ func screenChildEnv(environ []string) []string {
 	// JukaHub's own ALSA_CONFIG_PATH (a BlueALSA definition only it needs,
 	// audioroute_bluealsa.go) stays with JukaHub.
 	env = audioOwnALSAEnvStrip(env)
-	return childEnvWithTZ(env, gameChildZone())
+	return childEnvWithTZ(env, zone)
 }
 
 // childEnvFirmwareCard is the card the firmware's tools live on.
@@ -142,7 +149,17 @@ func childEnvAppendDirs(list string, dirs []string) string {
 // without waiting for JukaHub to restart (NET-14). "Local" is the system's
 // zone, which a child already inherits, so it is not written as TZ.
 func gameChildZone() string {
-	zone := dateTimeTZName(time.Local.String())
+	return gameChildZoneFor(time.Local)
+}
+
+// gameChildZoneFor is gameChildZone for an explicit location. Keeping the
+// lookup pure lets tests cover a chosen zone without replacing time.Local,
+// which would race with clock reads in other goroutines.
+func gameChildZoneFor(loc *time.Location) string {
+	if loc == nil {
+		return ""
+	}
+	zone := dateTimeTZName(loc.String())
 	if zone == "Local" {
 		return ""
 	}

@@ -208,6 +208,8 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	if d == nil {
 		return
 	}
+	// The shader speed check reads this launch's log now (shader_speed.go).
+	shaderSpeedGameEnded(d.game.Path, d.logPath, d.started)
 	ran := time.Since(d.started)
 	if !d.ended.IsZero() {
 		// When the game's process group was gone, by the reaper's clock: the
@@ -216,6 +218,18 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		ran = d.ended.Sub(d.started)
 	}
 	if ran > gameDiagQuickExit+screenSettleDelay {
+		// A game that got going proves the core build it ran: a build on
+		// probation stays (corebuilds_probation.go). Unless RetroArch's log
+		// says the core never started it: RetroArch can sit in its own menu
+		// after a core it could not open, and a player who leaves that menu
+		// late has not proven anything.
+		if d.port == "" {
+			if core, path := d.coreUsed(); core != "" {
+				if outcome, why := d.longRunOutcome(core); outcome != coreRunUnclear {
+					coreProbationJudge(core, path, outcome, why)
+				}
+			}
+		}
 		return
 	}
 	code := gameDiagExitCode(waitErr)
@@ -253,6 +267,31 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		// PortMaster scripts often end on a command that returns non-zero
 		// after a normal quit, so a port's exit code proves nothing.
 		code = 0
+	}
+	// The first game of a core build JukaHub just activated: a build that
+	// could not start it is put back (corebuilds_probation.go), and the card
+	// says so first.
+	probation := false
+	if ownGame {
+		if outcome, why := gameDiagCoreOutcome(report, failed, code, sig); outcome != coreRunUnclear {
+			core, path := d.coreUsed()
+			if note := coreProbationJudge(core, path, outcome, why); note != "" {
+				report.Issues = append([]launchIssue{{Level: int(gameDiagSure), Title: "A core build JukaHub just installed could not start it", Detail: note}}, report.Issues...)
+				strong = true
+				// A rollback that failed (coreProbationFailedNote) leaves the
+				// build in place, and the fix below may still replace it.
+				probation = !strings.Contains(note, "putting the build before it back failed")
+			}
+		}
+	}
+	// A core build this firmware cannot open at all (RetroArch's own core
+	// updater installs such nightlies): JukaHub puts one that runs here in its
+	// place (corefix.go), and the card says so first.
+	if ownGame && !probation {
+		if fix, ok := coreFixAfterGame(report.Issues); ok {
+			report.Issues = append([]launchIssue{fix}, report.Issues...)
+			strong = true
+		}
 	}
 	if !strong && code == 0 && !failed && !killed && !brief {
 		// A clean exit with a quiet log: the player quit.
@@ -448,6 +487,9 @@ func gameDiagCoreIssues(launcher, system string) (core string, known bool, issue
 		if problem := coreLoadProblemFile(launcher, launcher); problem != "" {
 			issues = append(issues, gameDiagCoreLoadIssue(core, launcher, problem))
 		}
+		if is, ok := coreReplacedIssue(core, launcher); ok {
+			issues = append(issues, is)
+		}
 		return core, true, issues
 	}
 	head, err := gameDiagReadHead(launcher)
@@ -479,7 +521,168 @@ func gameDiagCoreIssues(launcher, system string) (core string, known bool, issue
 	if problem := coreLoadProblemFile(path, path); problem != "" {
 		issues = append(issues, gameDiagCoreLoadIssue(core, path, problem))
 	}
+	// A GPU core JukaHub's update replaced: said as a "maybe", so a report
+	// shows it beside whatever else stopped the game.
+	if is, ok := coreReplacedIssue(core, path); ok {
+		issues = append(issues, is)
+	}
 	return core, known, issues
+}
+
+// gameDiagCoreOutcome is what a quick exit says about the core build the game
+// ran, for its probation (corebuilds_probation.go): failed when a finding names
+// the core, or — with nothing else (a missing game file or BIOS) to explain it
+// — when it crashed, its log says loading failed, or it exited with an error.
+// A quick, clean, quiet exit is unclear: a player who changed their mind.
+func gameDiagCoreOutcome(report gameDiagReport, failed bool, code, sig int) (coreRunOutcome, string) {
+	// RetroArch's own words about the GPU context or libGL name the build
+	// whatever else is wrong. Any other finding about the core counts only
+	// when nothing else (a missing game file or BIOS, a launch script that
+	// failed) explains the exit: the issues are sorted by level, so a missing
+	// ROM can come before it.
+	other, coreTitle := false, ""
+	for _, is := range report.Issues {
+		if is.Level >= int(gameDiagMaybe) {
+			continue
+		}
+		switch {
+		case strings.Contains(strings.ToLower(is.Title), "needs desktop opengl"):
+			return coreRunFailed, is.Title
+		case gameDiagCoreIssueTitle(is.Title):
+			if coreTitle == "" {
+				coreTitle = is.Title
+			}
+		default:
+			other = true
+		}
+	}
+	if other {
+		return coreRunUnclear, ""
+	}
+	if coreTitle != "" {
+		return coreRunFailed, coreTitle
+	}
+	switch {
+	case sig == 4 || sig == 6 || sig == 7 || sig == 8 || sig == 11:
+		return coreRunFailed, "it crashed (signal " + strconv.Itoa(sig) + ")"
+	case failed:
+		return coreRunFailed, "RetroArch's log says loading failed"
+	case code > 0:
+		return coreRunFailed, "it exited with code " + strconv.Itoa(code)
+	}
+	return coreRunUnclear, ""
+}
+
+// gameDiagCoreIssueTitle reports a finding about the core build itself (not
+// its absence, not the game file).
+func gameDiagCoreIssueTitle(title string) bool {
+	lower := strings.ToLower(title)
+	for _, mark := range []string{"cannot load on this device", "could not open the core", "needs desktop opengl"} {
+		if strings.Contains(lower, mark) {
+			return true
+		}
+	}
+	return false
+}
+
+// gameDiagLogCoreRe finds the core RetroArch loaded, or could not open, in its
+// log: `Loading dynamic libretro core from: "/…/mupen64plus_next_libretro.so"`.
+var gameDiagLogCoreRe = regexp.MustCompile(`(?i)(?:loading dynamic libretro core from|failed to open libretro core)[^"/\\\r\n]*"?([^"\r\n]*?_libretro\.(?:so|dll))`)
+
+// coreUsed is the core a library launch ran, and its file when that is known:
+// the one RetroArch's log names, else the core file itself, else — only when
+// no log was set up for the launch — the one core a RetroArch launch script
+// names; "" when it cannot be told (a script naming several cores). A log that
+// was set up and names no core means RetroArch never loaded one: a launch
+// script that runs a standalone emulator (CrossMix's N64 script can run either)
+// or failed before RetroArch started says nothing about the core it names.
+func (d *gameDiagLaunch) coreUsed() (core, path string) {
+	if d == nil {
+		return "", ""
+	}
+	if d.logPath != "" {
+		if head, err := gameDiagReadHead(d.logPath); err == nil {
+			if m := gameDiagLogCoreRe.FindSubmatch(head); m != nil {
+				file := strings.TrimSpace(string(m[1]))
+				if name, _ := parseCoreFile(filepath.Base(strings.ReplaceAll(file, `\`, "/"))); name != "" {
+					if !filepath.IsAbs(file) {
+						file = ""
+					}
+					return name, file
+				}
+			}
+		}
+	}
+	if ext := strings.ToLower(filepath.Ext(d.launcher)); ext == ".so" || ext == ".dll" {
+		name, _ := parseCoreFile(filepath.Base(d.launcher))
+		return name, d.launcher
+	}
+	if d.logPath != "" || !retroArchLauncher(d.launcher) {
+		return "", ""
+	}
+	if head, err := gameDiagReadHead(d.launcher); err == nil {
+		if names := coreNamesIn(string(head)); len(names) == 1 {
+			return names[0], ""
+		}
+	}
+	return "", ""
+}
+
+// longRunOutcome is what a game that stayed past the quick-exit window says
+// about core, the build it ran: proven, unless RetroArch's log says that core
+// was never opened or could not get its GPU context (failed), or that loading
+// failed for a reason that may be the game's (unclear). A core the player
+// loaded later from RetroArch's menu is not this one.
+func (d *gameDiagLaunch) longRunOutcome(core string) (coreRunOutcome, string) {
+	if d.logPath == "" {
+		return coreRunProven, ""
+	}
+	lines := gameDiagReadTail(d.logPath, time.Time{})
+	if gpu, ok := gameDiagGPULogIssue(lines); ok {
+		return coreRunFailed, gpu.Title
+	}
+	for _, line := range lines {
+		if !strings.Contains(strings.ToLower(line), "failed to open libretro core") {
+			continue
+		}
+		if m := gameDiagLogCoreRe.FindStringSubmatch(line); m != nil {
+			if name, _ := parseCoreFile(filepath.Base(strings.ReplaceAll(m[1], `\`, "/"))); name != "" && name != normalizeCoreName(core) {
+				continue
+			}
+		}
+		return coreRunFailed, "RetroArch could not open the core"
+	}
+	if _, failed := gameDiagExcerpt(lines); failed {
+		return coreRunUnclear, ""
+	}
+	return coreRunProven, ""
+}
+
+// gameDiagGPULogIssue reads RetroArch's log for the two ways a core built for
+// desktop OpenGL fails under this device's OpenGL ES RetroArch: the core cannot
+// be opened at all (it links libGL.so.1, which the firmware does not have), or
+// it opens and asks for a desktop OpenGL context RetroArch cannot make.
+func gameDiagGPULogIssue(lines []string) (launchIssue, bool) {
+	const fix = " The firmware's own build of this core draws with OpenGL ES: roll the core back on the Emulators page (R1) or in Core builds."
+	for _, line := range lines {
+		lower := strings.ToLower(line)
+		switch {
+		case strings.Contains(lower, "compiled against opengles") || strings.Contains(lower, "cannot use hw context") ||
+			strings.Contains(lower, "verification of hw context failed") || strings.Contains(lower, "verify hw context failed"):
+			return launchIssue{
+				Level:  int(gameDiagSure),
+				Title:  "This core build needs desktop OpenGL",
+				Detail: "RetroArch on this device draws with OpenGL ES only, and the core asked it for a desktop OpenGL context, so the game could not start." + fix,
+			}, true
+		case strings.Contains(lower, "libgl.so") && (strings.Contains(lower, "cannot open shared object") || strings.Contains(lower, "no such file")):
+			return launchIssue{
+				Level:  int(gameDiagSure),
+				Title:  "This core build needs desktop OpenGL (libGL.so.1)",
+				Detail: "This device has OpenGL ES only, so RetroArch could not open the core at all." + fix,
+			}, true
+		}
+	}
+	return launchIssue{}, false
 }
 
 func gameDiagCoreLoadIssue(core, path, problem string) launchIssue {
@@ -858,6 +1061,14 @@ var gameDiagExcerptMarkers = []string{
 	"unable", "bios", "firmware", "no such file", "segmentation", "abort",
 }
 
+// gameDiagExcerptNoise are error lines RetroArch logs on every start of a
+// working game, so the card leaves them out: TrimUI's stock retroarch.cfg asks
+// for an "sdl" input driver its ra64.trimui does not have, and RetroArch then
+// goes on with the first input driver it does have.
+var gameDiagExcerptNoise = []string{
+	"couldn't find any input driver named",
+}
+
 // gameDiagFailMarkers are lines that mean loading failed outright.
 var gameDiagFailMarkers = []string{
 	"failed to load content", "failed to open libretro core", "failed to load core", "could not load content",
@@ -897,7 +1108,7 @@ func gameDiagExcerpt(lines []string) ([]string, bool) {
 		if gameDiagHasAny(lower, gameDiagFailMarkers) || strings.Contains(line, "NOT FOUND") {
 			failed = true
 		}
-		if !gameDiagHasAny(lower, gameDiagExcerptMarkers) {
+		if !gameDiagHasAny(lower, gameDiagExcerptMarkers) || gameDiagHasAny(lower, gameDiagExcerptNoise) {
 			continue
 		}
 		if r := []rune(line); len(r) > 220 {
@@ -1040,6 +1251,11 @@ func gameDiagLogFindings(lines []string, romPath, sysDir string) (issues []launc
 			Title:  "RetroArch could not open the core",
 			Detail: coreProblem,
 		})
+	}
+	// A core built for desktop OpenGL, named first: it is the whole answer.
+	if gpu, ok := gameDiagGPULogIssue(lines); ok {
+		issues = append([]launchIssue{gpu}, issues...)
+		failed = true
 	}
 	return issues, excerpt, failed
 }

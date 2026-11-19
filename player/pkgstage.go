@@ -214,6 +214,9 @@ type pkgMarker struct {
 	Verified    bool   `json:"verified,omitempty"`
 	InstalledAt string `json:"installed_at,omitempty"`
 	Origin      string `json:"origin,omitempty"`
+	// Main is the registry's "mainfilename" at install: the program Run starts
+	// (pkglaunch.go). Empty in folders installed before it was kept.
+	Main string `json:"main,omitempty"`
 	// Listed says Files is the complete list of the package's own files
 	// (slash paths). A marker written for a folder installed before markers
 	// existed is not listed.
@@ -423,6 +426,7 @@ func pkgInstallFrom(ctx context.Context, root string, p Package, phase func(stri
 		Verified:    dl.Verified,
 		InstalledAt: time.Now().UTC().Format(time.RFC3339),
 		Origin:      pkgOriginInstall,
+		Main:        strings.TrimSpace(p.MainFilename),
 		Listed:      true,
 		Files:       files,
 		// A rollback copy whose swap is still journalled holds the user's

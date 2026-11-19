@@ -52,6 +52,27 @@ func bootChimeStart(config *Config) {
 	chimeStart(config, chimeStartScore, chimeStartSeconds, chimeStartGain)
 }
 
+// bootChimeOverHomePending is set by bootOSPlanStartup when the boot animation
+// is off (the default) on a start that would have had the startup chime. Main
+// thread.
+var bootChimeOverHomePending bool
+
+// bootChimeOverHome plays that start's chime once Home's first frame is on the
+// screen (jukaosFirstFrame, right after the first Present), so the sound comes
+// with Home and never holds it up: the synthesis and the audio device's open
+// run on the chime's own goroutine. Not over a game the power-on resumes, and
+// not in the startup bench, which exits at its first frame. Main thread.
+func bootChimeOverHome() {
+	if !bootChimeOverHomePending {
+		return
+	}
+	bootChimeOverHomePending = false
+	if quickBoot.pending || startupBenchEnabled() || gameScreenSuspended() || exitRequested.Load() {
+		return
+	}
+	bootChimeStart(appConfig)
+}
+
 // shutdownChimeStart plays the shutdown chime as the teardown card appears.
 // A stop requested by a signal (the firmware powering off) gets no chime: that
 // exit is meant to be quick.
