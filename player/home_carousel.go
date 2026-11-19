@@ -115,6 +115,9 @@ func (h *HomeLayout) carOffset(i int) float64 {
 
 // carSettled reports whether the row has stopped on the focused card.
 func (h *HomeLayout) carSettled() bool {
+	if homeRetroStyle(homeConsoleLook.carousel) {
+		return true
+	}
 	if homeConsoleLook.carousel == homeCarouselHub {
 		return math.Abs(float64(h.dyn.carIdx)-homeHub.pos) < 0.02
 	}
@@ -197,6 +200,10 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 	if homeConsoleLook.carousel == homeCarouselText {
 		// Minimal Style: names only (thememinimal.go).
 		h.textRender(renderer, fonts, data, focused)
+		return
+	}
+	if homeRetroStyle(homeConsoleLook.carousel) {
+		h.retroRender(renderer, fonts, data, focused)
 		return
 	}
 	if n == 0 {

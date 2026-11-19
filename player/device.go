@@ -83,10 +83,11 @@ func deviceIdentityReport() (DeviceModel, string, deviceIdentity) {
 }
 
 var (
-	deviceModelOnce     sync.Once
-	deviceModelCache    DeviceModel
-	deviceSourceCache   string
-	deviceEvidenceCache deviceIdentity
+	deviceModelOnce       sync.Once
+	deviceIdentityLogOnce sync.Once
+	deviceModelCache      DeviceModel
+	deviceSourceCache     string
+	deviceEvidenceCache   deviceIdentity
 )
 
 // detectDeviceIdentity is detectDevice plus the source and evidence it used.
@@ -104,8 +105,23 @@ func detectDeviceIdentity() (DeviceModel, string, deviceIdentity) {
 	}
 	id := readDeviceIdentity()
 	device, source := classifyDevice(id)
-	logDeviceIdentity(device, source, id)
 	return device, source, id
+}
+
+// logDetectedDeviceIdentity runs after logging is ready. Detection can happen
+// before InitLogging (for example in the OS session or a display-free command),
+// so logging from inside deviceModelOnce would re-enter DetectDevice while its
+// lock is still held and hang the process before startup.
+func logDetectedDeviceIdentity() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	deviceIdentityLogOnce.Do(func() {
+		DetectDevice()
+		if deviceSourceCache != "override" {
+			logDeviceIdentity(deviceModelCache, deviceSourceCache, deviceEvidenceCache)
+		}
+	})
 }
 
 // logDeviceIdentity records how the board was named, with the raw strings it was

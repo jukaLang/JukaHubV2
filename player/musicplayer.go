@@ -790,6 +790,10 @@ func musicDecodeFinish(cmd *exec.Cmd, path string, gen int) {
 // watch) ended it (musicstream.go): ffmpeg exits cleanly after a broken input,
 // so without it a podcast cut off at minute 30 counted as finished.
 func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
+	// A station of the dock's internet radio (saverradio.go): one that plays
+	// nothing is skipped for the next even under repeat-one, since the list
+	// exists to find one that is on the air. Read before music.mu (lock order).
+	radio := saverRadioListed(path)
 	music.mu.Lock()
 	finished := gen == music.gen && music.playing
 	reachedEnd, cutShort, silent := false, false, false
@@ -814,9 +818,10 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 		if music.duration > 0 && (waitErr != nil || stalled) && !silent &&
 			music.position < music.duration-audioResumeTailSeconds {
 			cutShort = true
-		} else if music.duration <= 0 && stalled && !silent {
+		} else if music.duration <= 0 && stalled && !silent && !radio {
 			// A live stream (no length) that went quiet: stopped, not over,
-			// so the list does not move on to the next station.
+			// so the list does not move on to the next station. The dock's
+			// radio does move on: nobody may be awake to press Play.
 			cutShort = true
 		} else if music.duration > 0 && !silent {
 			music.position = music.duration
@@ -836,11 +841,11 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 	switch {
 	case cutShort:
 		// Stay on the interrupted track; its place is kept below.
-	case silent && (repeatOne || music.failRun >= len(music.tracks)):
+	case silent && ((repeatOne && !radio) || music.failRun >= len(music.tracks)):
 		// Nothing played: a dead link or an unreadable file. Restarting it,
 		// or walking a list in which every entry fails, relaunched ffmpeg
 		// every few hundred milliseconds for as long as the app ran.
-	case repeatOne:
+	case repeatOne && !(silent && radio):
 		nextIdx, advance = music.current, true
 	default:
 		if idx, ok := music.musicPopQueueLocked(); ok {
@@ -872,8 +877,10 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 		}
 	}
 	if advance {
-		if waitErr == nil && !silent {
+		if (waitErr == nil && !silent) || radio {
 			// The track played to its end: the next one joins it without a gap.
+			// The next radio station does too, without the click: a dead link
+			// is skipped quietly, often at night.
 			musicPlayTrackNext(nextIdx)
 		} else {
 			musicPlayTrack(nextIdx)
@@ -882,7 +889,17 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 	}
 	// Listening history: the list ran out, or this track stopped short.
 	musicHistoryEnd(path, stoppedAt, stoppedDur, reachedEnd)
-	if silent && !advance {
+	switch {
+	case radio && !cutShort:
+		// The dock's radio list ran out: its next Play tunes in to fresh
+		// stations (saverradio.go).
+		saverRadioMarkDeadEnd()
+		if silent {
+			showToast("No radio station answered — press Play to try others", ToastError())
+		} else {
+			showToast("The radio stopped — press Play to tune in again", ToastInfo())
+		}
+	case silent && !advance:
 		showToast("Could not play this track", ToastError())
 	}
 	// The end of the list: its last second, still queued, plays out (it used

@@ -17,7 +17,8 @@ package main
 // narrow for it. The PS pills are not drawn where PlayStation Remote Play
 // cannot run (psRemoteSupported): on the desktop each only answered with a
 // warning. X1 (Xbox Remote Play, xremote.go) follows them and is drawn
-// wherever Home is, since a PC has the browser to fall back on. PC (a gaming
+// wherever Home is, since a PC has the browser to fall back on; its dot is
+// lit only while an Xbox answers on the network. PC (a gaming
 // PC through Moonlight, moonlight_ui.go) closes the group on the right, lit
 // once a PC is paired.
 
@@ -102,9 +103,9 @@ func psPillRects(fonts HomeFonts, right, y, height int32, label string, withPS, 
 }
 
 // renderPSPillGroup draws the group. The container is the design's
-// translucent capsule; a paired console (or, for X1, an installed client)
-// lights its own pill (PC: a paired PC), and the focused pill carries the
-// home focus ring.
+// translucent capsule; a paired console (or, for X1, an Xbox answering on
+// this network) lights its own pill (PC: a paired PC), and the focused pill
+// carries the home focus ring.
 func renderPSPillGroup(renderer *sdl.Renderer, fonts HomeFonts, group, ps4, ps5, x1, pc sdl.Rect, v psPillVisual) {
 	if renderer == nil || fonts.Small == nil || group.W <= 0 {
 		return

@@ -725,6 +725,13 @@ func dlLibrarySnapshot() ([]dlLibraryEntry, uint64, bool) {
 	return append([]dlLibraryEntry(nil), dlLibrary.entries...), dlLibrary.gen, dlLibrary.loaded
 }
 
+// dlLibraryCount supplies the tab badge without copying every saved file.
+func dlLibraryCount() int {
+	dlLibrary.mu.Lock()
+	defer dlLibrary.mu.Unlock()
+	return len(dlLibrary.entries)
+}
+
 // dlLibraryGen is the change counter alone, cheap enough to poll every frame.
 func dlLibraryGen() uint64 {
 	dlLibrary.mu.Lock()

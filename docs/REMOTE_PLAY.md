@@ -535,7 +535,10 @@ starts the best client on the machine:
   <https://www.xbox.com/play/consoles> in the browser.
 
 On the console, turn on Settings → Devices & connections → Remote features.
-The pill's dot is lit while a client is installed.
+The pill's dot is lit while an Xbox on this network is on and answers
+(SmartGlass discovery on UDP 5050, asked every 10 seconds while Home shows the
+pill). A console that is off or asleep, has Remote features off, or is on
+another network leaves it dark, and X1 still opens your client.
 
 ## PC (Moonlight)
 

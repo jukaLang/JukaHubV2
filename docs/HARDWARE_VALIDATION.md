@@ -1,5 +1,90 @@
 # Hardware validation log
 
+## 2026-11-19 — Smart Pro stock firmware, JukaHub OS boot
+
+The active OS package at `/mnt/SDCARD/Apps/JukaHub-Trimui` was checked over
+SSH and with a user button test. Before the boot change, the firmware launched
+at 5.85 seconds, reached the card's boot hook at 7.84 seconds, started JukaHub
+at 8.89 seconds, and showed Home at 14.51 seconds. Two boots after the change
+reached JukaHub at 8.91 and 9.32 seconds, then Home at 13.89 and 14.49 seconds.
+JukaHub's part of boot was 5.62 seconds before and 4.98–5.17 seconds after;
+the total power-to-Home time still varied with firmware startup. These few
+boots suggest a modest improvement, not a stable benchmark. The stock firmware
+still determines the roughly 8-second delay before anything on the card can run.
+
+During the new OS session, the launcher raised only the SD card's read-ahead
+from 128 to 1024 KB; internal eMMC stayed at 128 KB. Stopping the verified
+`/usr/trimui/osd/trimui_osdd` service made the unwanted TrimUI quick menu
+disappear on A and D-pad presses. The user confirmed this both in the live
+service test and after a reboot with the final launcher. On a clean JukaHub
+exit, the launcher restored SD read-ahead to 128 KB and the OSD service, and
+the firmware returned to one MainUI. The installed launcher was backed up at
+`/mnt/SDCARD/Apps/JukaHub-Trimui/.launch.sh.pre-bootfix-20261119`.
+
+Later that day the stock 396×66, 32-bit `bootlogo.bmp` was copied to
+`Apps/JukaHub-Trimui/data/bootlogo/before-fc453f0ee982.bmp` on the SD card
+and to a local build folder. Its SHA-256 was
+`fc453f0ee982c51490f863a7b85133df0e69b842497568bb81d5d565549c64c8`.
+Only the pixels were changed; the 104600-byte length and BMP header were kept.
+The JukaHub replacement's SHA-256 is
+`f9e7f065c2ccd46ed9cd1e61de07008455b5aaef914c5534653c9b007fb7c130`.
+It read back identically after a fresh read-only mount, and the user confirmed
+the JukaHub picture and Home appeared on restart. The SD card's
+`data/bootlogo/state.json` records the restore path. The app's Settings
+install and restore actions themselves were not exercised in this run.
+
+The stock kernel has no `/proc/self/pagemap`, so the installed app could not
+record a boot read-ahead list. A one-time ARM helper used `mincore` after a
+fresh first frame to make a valid 32 MiB list for the installed binary; the
+temporary recording hook was then removed. Two boots without the list reached
+Home at 12.607 and 12.890 seconds after kernel start; two with it reached
+Home at 12.468 and 12.585 seconds. JukaHub's own start-to-Home share fell
+from 3.90/3.71 to 3.46/3.58 seconds. The list remains on the SD card because
+these tests showed no regression and a possible gain of roughly 0.2–0.3
+seconds. More boots would be needed to separate that small gain from normal
+variation. Source now has a `mincore` fallback for future builds, but the
+installed binary was not replaced in this run.
+
+The stock-card fast-boot pass then measured where the remaining delay came
+from. The kernel saw the SD partition at about 3.4 seconds, but the stock
+startup did not mount it until about 7.2 seconds. A reversible init hook at
+`S41` mounted it at 5.2–5.7 seconds, before the stock launcher. The stock
+`runtrimui` init script's second splash draw was skipped; U-Boot had already
+shown the JukaHub picture. The installed `TRIMUI_EX` startup script was
+wrapped so its completed update checks, SSH and SFTP setup run after
+JukaHub's first frame. Pending updates, a previous failed JukaHub start, OS
+mode off, or a request to show the stock menu run the original script
+synchronously. The original startup files were saved before replacement.
+No bootloader code, kernel or partition table was changed in this pass.
+
+Before these hooks, one boot reached Home at 14.51 seconds after kernel start.
+Two with early SD mount, splash skip and deferred `TRIMUI_EX` reached Home at
+9.311 and 10.082 seconds. A short `performance` governor window around
+JukaHub's process then reached Home at 10.422, 9.522, 9.693 and 9.498 seconds. Each
+window ended at first frame, and the governor was `ondemand` afterwards.
+The last boot had JukaHub running, no `trimui_osdd`, a mounted SD card and
+the installed hook status. The boot-speed installer was also exercised with
+restore, status, re-install and status on the live card; all returned
+success. A simulated failed start then booted into one stock MainUI with its
+OSD service, no JukaHub process, working SSH, and a cleared recovery marker.
+The following reboot returned directly to JukaHub Home at 9.498 seconds.
+These are kernel-to-Home times. The user could not time the full
+power-button-to-Home path, which also includes U-Boot, so the under-10-second
+end-to-end goal is not yet verified. Under five seconds is not supported by
+these stock-kernel timings.
+
+For a separate SD boot image, the Smart Pro's boot area and system were read
+from internal storage and saved on the card, then copied to a private build
+folder. Its U-Boot environment says `mmc_root=/dev/mmcblk0p7`, while the
+running kernel used `root=/dev/mmcblk0p5`; U-Boot rewrites the root at boot.
+The original image builder therefore refused a direct-root image. An SD
+initramfs loader now finds the card's `rootfs` itself before running
+`jukaboot`. An 8 GB experimental image was built with this path and a FAT32
+data partition. Its GPT, boot image, initramfs contents, JukaHub boot logo,
+root filesystem and compressed-file integrity were checked after packing.
+The image has **not** been booted on hardware because no spare card was
+available; its boot time and input, audio and Wi-Fi behavior remain unknown.
+
 ## 2026-11-17 — stock TrimUI Smart Pro, firmware 1.1.0
 
 This session inspected one Smart Pro over local SSH. Port 22 answered as

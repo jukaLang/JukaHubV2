@@ -23,7 +23,7 @@ func openPortalSignIn(config *Config) bool {
 			return true
 		}
 	}
-	if config != nil && openBrowserAtURL(config, link) { // WPE when installed; the reader otherwise (netPortalWatch also polls).
+	if config != nil && openBrowserAtURL(config, link) { // the built-in Browser (netPortalWatch also polls).
 		ShowToast("Finish signing in, then come back to Wi-Fi", ToastKindInfo)
 		return true
 	}

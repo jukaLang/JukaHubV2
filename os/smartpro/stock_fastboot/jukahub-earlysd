@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+# Mount the removable card as soon as the stock fstab step has run. If this
+# attempt cannot mount it, stock hotplug and runtrimui keep their normal path.
+START=41
+boot() {
+    read -r begin _ </proc/uptime 2>/dev/null
+    if grep -q ' /mnt/SDCARD ' /proc/mounts 2>/dev/null; then
+        printf '%s already-mounted\n' "$begin" >/tmp/jukahub-earlysd.log
+        return 0
+    fi
+    [ -b /dev/mmcblk1p1 ] || { printf '%s no-card\n' "$begin" >/tmp/jukahub-earlysd.log; return 0; }
+    [ "$(cat /sys/block/mmcblk1/device/type 2>/dev/null)" = SD ] || return 0
+    mkdir -p /mnt/SDCARD
+    if mount -t exfat -o rw,relatime,fmask=0022,dmask=0022,iocharset=utf8,errors=remount-ro /dev/mmcblk1p1 /mnt/SDCARD 2>/dev/null; then
+        read -r end _ </proc/uptime 2>/dev/null
+        printf '%s mounted %s\n' "$begin" "$end" >/tmp/jukahub-earlysd.log
+    else
+        read -r end _ </proc/uptime 2>/dev/null
+        printf '%s mount-failed %s\n' "$begin" "$end" >/tmp/jukahub-earlysd.log
+    fi
+    return 0
+}

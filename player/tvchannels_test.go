@@ -68,3 +68,34 @@ func TestParseM3UInfoLineHandlesQuotedCommas(t *testing.T) {
 		t.Fatalf("attrs = %v", attrs)
 	}
 }
+
+// TestSaverRadioParseKeepsPlayableStations: the dock radio's station list from
+// GitHub keeps only links ffmpeg can open (no playlist files, no other
+// schemes), each once, in the list's order, with a readable name.
+func TestSaverRadioParseKeepsPlayableStations(t *testing.T) {
+	got := saverRadioParse("#EXTM3U\r\n" +
+		"#EXTINF:-1 tvg-logo=\"http://x/logo.png\",1.FM - Chillout Lounge\r\n" +
+		"http://strm112.1.fm/chilloutlounge_mobile_mp3\r\n" +
+		"#EXTINF:-1,Playlist Station\r\n" +
+		"http://example.com/listen.pls?id=4\r\n" +
+		"#EXTINF:-1,RTMP Station\r\n" +
+		"rtmp://example.com/live\r\n" +
+		"#EXTINF:-1,HLS Music\r\n" +
+		"https://example.com/music/index.m3u8\r\n" +
+		"#EXTINF:-1,Again\r\n" +
+		"http://strm112.1.fm/chilloutlounge_mobile_mp3\r\n" +
+		"https://stream.example.org/live\r\n")
+	want := []IPStream{
+		{Name: "1.FM - Chillout Lounge", URL: "http://strm112.1.fm/chilloutlounge_mobile_mp3"},
+		{Name: "HLS Music", URL: "https://example.com/music/index.m3u8"},
+		{Name: "stream.example.org", URL: "https://stream.example.org/live"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("kept %d stations, want %d: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("station %d = %+v, want %+v", i, got[i], w)
+		}
+	}
+}

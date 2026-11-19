@@ -293,6 +293,9 @@ func ambientEnter(config *Config) {
 	saverDockFlash.at = time.Time{}
 	// The status chips are re-read as the dock appears.
 	saverWifiInvalidate()
+	// A card with no music gets the radio station list ready for Play, in the
+	// background and at most once a week (saverradio.go).
+	saverRadioPrefetch(config)
 }
 
 // ambientLeave returns to the normal UI and drops the photo textures.
@@ -815,13 +818,22 @@ func ambientNextPhoto() {
 
 // ambientTogglePlayback is the dock's Play button. It always does something:
 // pause or resume the current track, replay a stopped one, start a loaded list,
-// or find the music on the card and start that. The old button only knew the
-// first two, and on a device whose Files root held no audio files of its own it
-// silently did nothing.
+// or find the music on the card and start that — and with no music on the card,
+// internet radio (saverradio.go). The old button only knew the first two, and
+// on a device whose Files root held no audio files of its own it silently did
+// nothing.
 func ambientTogglePlayback() {
 	_, _, _, playing, paused := ambientNowPlaying()
 	if playing || paused {
 		musicTogglePause()
+		return
+	}
+	// A radio list that ran out tunes in to new stations rather than retrying
+	// the last dead link; offline there is nothing to tune in to.
+	if saverRadioNeedsRetune() {
+		if !saverRadioPlay(appConfig) {
+			showToast("No internet — connect to Wi-Fi to play radio", ToastInfo())
+		}
 		return
 	}
 	music.mu.Lock()
@@ -843,7 +855,13 @@ func ambientTogglePlayback() {
 	}
 	dir := saverFindMusicDir(appConfig)
 	if dir == "" {
-		showToast("No music found — copy songs into a Music folder to play them here", ToastInfo())
+		// Nothing on the card: music radio from the IPStream library and a
+		// station list on GitHub instead of a dead end.
+		if saverRadioPlay(appConfig) {
+			showToast("No music on this device — playing internet radio", ToastInfo())
+			return
+		}
+		showToast("No music found — copy songs into a Music folder, or connect to Wi-Fi for internet radio", ToastInfo())
 		return
 	}
 	idx := musicLoadPlaylist(dir, "")
@@ -1150,7 +1168,11 @@ func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, bottom int32)
 	if !ambientShowNowPlaying(title, playing, paused) {
 		return bottom
 	}
-	title = strings.TrimSuffix(title, filepath.Ext(title))
+	if isAudioFile(title) {
+		// A file name loses its extension; a station name such as "1.FM -
+		// Chillout" keeps everything after its dot.
+		title = strings.TrimSuffix(title, filepath.Ext(title))
+	}
 	margin := saverDockMargin()
 	w := saverScaled(480, 260)
 	if limit := screenWidth - 2*margin - saverScaled(240, 120); w > limit {
@@ -1207,6 +1229,9 @@ func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, bottom int32)
 		state = "Paused"
 	case playing:
 		state = "Playing"
+	}
+	if radio := saverRadioStateText(); radio != "" {
+		state = radio
 	}
 	if smallFont != nil {
 		drawText(renderer, smallFont, state, textX, y, g.muted, textAlignLeft)

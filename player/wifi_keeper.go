@@ -30,7 +30,9 @@ package main
 //   - no supplicant answering for 20 s (well after boot): start it the way the
 //     Wi-Fi page does (ensureWifiBackend), at most three times per wake,
 //     unless the radio is switched off, one is running but not answering, or
-//     system.json has Wi-Fi off and Wi-Fi was not switched on in JukaHub;
+//     system.json has Wi-Fi off and Wi-Fi was not switched on in JukaHub. On a
+//     stock Smart Pro OS boot, begin looking just after Home and use a short
+//     grace, through this same process guard, to join sooner;
 //   - joined with a route but no internet for minutes on an old lease: ask
 //     DHCP again (the one-shot udhcpc never renews).
 //
@@ -58,6 +60,11 @@ import (
 
 const (
 	wifiKeeperFirstLook   = 8 * time.Second
+	wifiKeeperFastLook    = 500 * time.Millisecond
+	wifiKeeperFastPoll    = time.Second
+	wifiKeeperFastGrace   = 2 * time.Second
+	wifiKeeperFastQuiet   = 3 * time.Second
+	wifiKeeperFastWindow  = 20 * time.Second
 	wifiKeeperBusyPoll    = 5 * time.Second
 	wifiKeeperQuietPoll   = 30 * time.Second
 	wifiKeeperIdleGrace   = 15 * time.Second
@@ -87,6 +94,18 @@ const (
 	wifiKeeperStaleNet = 3 * time.Minute
 	wifiKeeperLeaseAge = 30 * time.Minute
 )
+
+// On a stock Smart Pro boot into JukaHub OS, the firmware has already run its
+// Wi-Fi init step before JukaHub's launcher. Look sooner, but keep the same
+// single-supplicant process check and user-operation guard as every other
+// keeper start. The separate shell starter could race this check.
+func wifiKeeperFastBootWindow() bool {
+	if DetectDevice() != DeviceTrimuiSmartPro || !jukaosSessionActive() || startupElapsed() >= wifiKeeperFastWindow {
+		return false
+	}
+	kernelStart, _, ok := startupBootShares()
+	return ok && kernelStart < 30
+}
 
 var (
 	wifiKeeperStarted atomic.Bool
@@ -312,7 +331,11 @@ type wifiKeeperState struct {
 func wifiKeeperRun() {
 	logInfo("wifi", "keeper started: saved networks are rejoined and DHCP follows every join")
 	var k wifiKeeperState
-	timer := time.NewTimer(wifiKeeperFirstLook)
+	firstLook := wifiKeeperFirstLook
+	if wifiKeeperFastBootWindow() {
+		firstLook = wifiKeeperFastLook
+	}
+	timer := time.NewTimer(firstLook)
 	defer timer.Stop()
 	for {
 		select {
@@ -339,7 +362,11 @@ func (k *wifiKeeperState) safeStep(now time.Time) (wait time.Duration) {
 			wait = wifiKeeperQuietPoll
 		}
 	}()
-	return k.step(now)
+	wait = k.step(now)
+	if wifiKeeperFastBootWindow() && wait > wifiKeeperFastPoll {
+		return wifiKeeperFastPoll
+	}
+	return wait
 }
 
 // fresh forgets the back-off and the one-time lines: a wake is a new start.
@@ -442,7 +469,12 @@ func (k *wifiKeeperState) joined(now time.Time, iface string, st wifiStatus) tim
 		return wifiKeeperQuietPoll
 	}
 	k.good = false
-	if now.Sub(k.completedAt) < wifiKeeperDHCPGrace || now.Before(k.nextDHCP) {
+	dhcpGrace := wifiKeeperDHCPGrace
+	if wifiKeeperFastBootWindow() {
+		// MainUI is absent in this session: no stock UI is about to run DHCP.
+		dhcpGrace = 0
+	}
+	if now.Sub(k.completedAt) < dhcpGrace || now.Before(k.nextDHCP) {
 		return wifiKeeperBusyPoll
 	}
 	if wifiKeeperYield() {
@@ -659,7 +691,11 @@ func (k *wifiKeeperState) supplicantMissing(now time.Time, iface string) time.Du
 		resetWiFiInterfaceCache()
 		return wifiKeeperBusyPoll
 	}
-	if now.Sub(k.missingSince) < wifiKeeperStartGrace || startupElapsed() < wifiKeeperBootQuiet || now.Before(k.nextStart) {
+	startGrace, bootQuiet := wifiKeeperStartGrace, wifiKeeperBootQuiet
+	if wifiKeeperFastBootWindow() {
+		startGrace, bootQuiet = wifiKeeperFastGrace, wifiKeeperFastQuiet
+	}
+	if now.Sub(k.missingSince) < startGrace || startupElapsed() < bootQuiet || now.Before(k.nextStart) {
 		return wifiKeeperBusyPoll
 	}
 	if k.starts >= wifiKeeperMaxStarts {

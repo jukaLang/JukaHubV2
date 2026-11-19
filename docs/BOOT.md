@@ -328,9 +328,11 @@ On a stock Smart Pro 1.1.0, `/dev/by-name/bootloader` points to the internal
 24 MiB FAT partition. A read-only mount found `bootlogo.bmp`, a 396×66,
 32-bit uncompressed BMP of 104600 bytes. The installer now accepts that exact
 banner and keeps the file's original size and header. The partition was not
-written in this inspection; installing, restoring and confirming the image at
-power-on still need a new ARM build and a hands-on run. Other models and older
-firmware remain unverified.
+written in the initial inspection. On 2026-11-19, the original was backed up
+and a JukaHub banner with the same header and length was written in place,
+verified through a fresh read-only mount, and seen by the user at power-on.
+The app's own Settings install and restore actions still need a new ARM build
+and a hands-on check. Other models and older firmware remain unverified.
 
 - TrimUI's older 1.0.x images may store the boot logo differently.
 - CrossMix's BootLogo tool says it is not compatible after firmware 1.0.4

@@ -49,12 +49,13 @@ const (
 	// shutdownBudget bounds the whole teardown, card included. It stays under
 	// exitShutdownGrace so the watchdog never has to cut it short.
 	shutdownBudget = 5 * time.Second
-	// shutdownGroupMin keeps each group on screen long enough to be read.
-	shutdownGroupMin = 140 * time.Millisecond
+	// Keep each group visible for two handheld frames when its work finishes
+	// immediately. Longer work still keeps the card up until it completes.
+	shutdownGroupMin = 65 * time.Millisecond
 	// shutdownHoldMS is how long the finished card is held, and
 	// shutdownDissolveMS the wordmark dissolving and the light fading out.
-	shutdownHoldMS     = 260.0
-	shutdownDissolveMS = 360.0
+	shutdownHoldMS     = 120.0
+	shutdownDissolveMS = 180.0
 )
 
 // errShutdownTimeout marks a step that did not finish in time.
@@ -119,6 +120,12 @@ func shutdownSteps(config *Config) []shutdownStep {
 			// (shutdownReleaseTextures): a frame drawn after clearing them
 			// would only fill them again.
 			return "cache database closed", nil
+		}},
+		{label: "Finishing game history", group: 2, timeout: 1200 * time.Millisecond, fn: func() (string, error) {
+			if gameHistoryFlush(time.Second) {
+				return "history written", nil
+			}
+			return "still writing", errShutdownTimeout
 		}},
 	}
 	// A hotspot that is up gets its own first-group row (hotspot.go).

@@ -1641,6 +1641,9 @@ func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data 
 	if h.hubDrawTabs(renderer, fonts) {
 		return
 	}
+	if h.retroDrawHeading(renderer, fonts) {
+		return
+	}
 	greeting := strings.TrimSpace(data.Greeting)
 	if greeting == "" {
 		greeting = defaultGreeting(time.Now())

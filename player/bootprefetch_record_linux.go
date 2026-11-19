@@ -7,15 +7,15 @@ package main
 // (internal/bootprefetch, whose init runs before this package's) can ask the
 // card for them at the next cold start.
 //
-// What a start read is taken from /proc/self/pagemap, not mincore: a page is
-// present in this process's page tables once the process touched it (or the
-// kernel mapped it around a touched one), while mincore says what is in the
-// page cache, and after a start that ran the list that is the whole list
-// whether or not the start used it, so each recording would keep the last
-// one's ranges forever. The page tables are looked at twice: on a goroutine
-// from this file's init, once every package variable is initialised (phase 0,
-// what the next start needs first; the init functions of the files after this
-// one run beside it), and after the first frame (phase 1). The two
+// Where available, /proc/self/pagemap records pages present in this process's
+// page tables: pages this start touched (or the kernel mapped around one it
+// touched). Stock Smart Pro kernels omit that file, so mincore records the
+// executable pages in the page cache instead. The first cold start gives a
+// useful list there; later lists may retain pages read by the previous
+// prefetch. The mappings are looked at twice: on a goroutine from this file's
+// init, once every package variable is initialised (phase 0, what the next
+// start needs first; the init functions of the files after this one run beside
+// it), and after the first frame (phase 1). The two
 // sets become ranges of the files they belong to, merged across small gaps
 // (one larger read beats two small ones on an SD card), capped, and saved in
 // the data folder only when they changed: the files on disk (an update
@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 
@@ -247,11 +248,10 @@ func bootPrefetchSnapshot() *bpSnapshot {
 	if err != nil {
 		return nil
 	}
-	pm, err := os.Open("/proc/self/pagemap")
-	if err != nil {
-		return nil
+	pm, _ := os.Open("/proc/self/pagemap")
+	if pm != nil {
+		defer pm.Close()
 	}
-	defer pm.Close()
 	page := int64(os.Getpagesize())
 	snap := &bpSnapshot{exe: exe, order: []string{exe}, files: make(map[string]*bpFile)}
 	buf := make([]byte, 8*4096)
@@ -271,12 +271,38 @@ func bootPrefetchSnapshot() *bpSnapshot {
 			continue
 		}
 		f.code = f.code || m.exec
-		bootPrefetchReadPagemap(pm, buf, m, page, f)
+		if pm != nil {
+			bootPrefetchReadPagemap(pm, buf, m, page, f)
+		} else {
+			bootPrefetchReadMincore(m, page, f)
+		}
 	}
 	if f := snap.files[exe]; f == nil || len(f.ranges) == 0 {
 		return nil
 	}
 	return snap
+}
+
+// bootPrefetchReadMincore records cached file pages on kernels without
+// /proc/self/pagemap (including stock Smart Pro firmware). The mapping was
+// already present in this process; mincore only inspects its page-cache state
+// and does not touch the file's contents or pull new pages into memory.
+func bootPrefetchReadMincore(m bpMapping, page int64, f *bpFile) {
+	pages := int64(m.end-m.start) / page
+	if pages <= 0 {
+		return
+	}
+	vec := make([]byte, pages)
+	_, _, errno := unix.Syscall(unix.SYS_MINCORE, uintptr(m.start), uintptr(m.end-m.start), uintptr(unsafe.Pointer(&vec[0])))
+	if errno != 0 {
+		return // the mapping may have gone away since /proc/self/maps was read
+	}
+	for i, resident := range vec {
+		if resident&1 != 0 {
+			off := m.off + int64(i)*page
+			f.add(off, off+page)
+		}
+	}
 }
 
 // bootPrefetchReadPagemap adds the touched pages of one mapping to f, as

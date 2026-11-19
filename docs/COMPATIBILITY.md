@@ -207,7 +207,18 @@ reason — "the 2026-11-09 build cannot load on this firmware: needs GLIBC_2.34;
 this firmware's libc.so.6 has up to GLIBC_2.33" — the installed core stays, and
 that exact build (by its checksum) is remembered in
 `data/performance/core-refused.json` so the daily check does not download it
-again; the next build the index lists is checked as usual. Archives are
+again; the next build the index lists is checked as usual.
+
+On the 64-bit TrimUI handhelds a symbol version the firmware lacks is no
+longer the end of it: with Settings → Games & emulators → **RetroArch's C
+library** on **Automatic** (the default), RetroArch starts on JukaHub's
+private glibc 2.39 for a core that needs it ([PRIVATE_GLIBC](PRIVATE_GLIBC.md#retroarch)).
+A build whose only problem is such a gap in libc, libm, libpthread, libdl,
+librt, libstdc++ or libgcc_s gets that runtime installed and RetroArch probed
+first, then the check reads the runtime's libraries before the firmware's — so
+the newest nightlies install. Builds refused only for that are fetched again
+once a RetroArch passes the probe. **Firmware's only** restores the strict
+check above. Archives are
 streamed to the card, including MAME's build, which exceeds the old 96 MB
 limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused
 and remembered the same way.
@@ -223,7 +234,12 @@ Color and Game Boy Advance all on mGBA, and the November 2026 nightly of
 `GLIBC_2.32` on this firmware, so every game quits a second after **A** with
 `version 'GLIBC_2.35' not found` in RetroArch's log.
 
-JukaHub now puts a build that loads in place of such a core
+Where RetroArch can start on JukaHub's private glibc (above), such a core is
+not broken: the start-up look installs that runtime for it (when it may
+download, as below) and leaves the newer build in place, and a game of it
+starts RetroArch on the runtime. Otherwise — the setting on **Firmware's only**,
+a RetroArch that failed the probe, a gap the runtime does not close either —
+JukaHub puts a build that loads in place of such a core
 (`player/corefix.go`), from the first of:
 
 1. a build of it the card kept beside it (`*.jukahub-<time>.bak`) that passes

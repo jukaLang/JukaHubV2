@@ -1,4 +1,5 @@
 import contextlib
+import gzip
 import importlib.util
 import io
 import os
@@ -170,6 +171,19 @@ def bootimg(ramdisk=b"", cmdline=b"") -> bytes:
 
 
 class BootAreaTests(unittest.TestCase):
+    def test_backup_gpt_after_non_sector_aligned_table(self):
+        # The stock Smart Pro has ten 128-byte GPT entries (2.5 sectors).
+        # The backup header belongs in the final sector, after padding.
+        gpt = builder.Gpt(34, 2, 10, 128, [])
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "card.img"
+            builder.assemble_image(raw, bytes(4096), gpt, [], {}, 100)
+            with raw.open("rb") as image:
+                image.seek(-SECTOR, 2)
+                backup = image.read(SECTOR)
+            self.assertEqual(backup[:8], b"EFI PART")
+            self.assertEqual(struct.unpack_from("<Q", backup, 24)[0], 99)
+
     def test_boot0_and_package_checks(self):
         lead, _ = emmc_lead()
         self.assertEqual(builder.check_boot0(lead), 64 * 1024)
@@ -280,8 +294,10 @@ class EnvTests(unittest.TestCase):
         self.assertEqual(new.values["init"], "/jukahub/jukaboot")
         self.assertGreater(builder.check_cmdline_length(env, new, STOCK_CMDLINE, extra), len(STOCK_CMDLINE))
         # Never taken over from a stock line, only added when asked for.
-        plain = builder.rewrite_args("root=/dev/x initcall_debug log_buf_len=4M", "u", "ext4").split()
+        plain = builder.rewrite_args("root=/dev/x initcall_debug log_buf_len=4M "
+                                     "earlyprintk=sunxi-uart,0x05000000", "u", "ext4").split()
         self.assertNotIn("initcall_debug", plain)
+        self.assertFalse(any(word.startswith("earlyprintk=") for word in plain))
         self.assertIn("init=/jukahub/init", plain)
         for bad in ("a b", "x;reboot", "init=/bin/sh", "a,a", ","):
             with self.assertRaises(builder.BuildError):
@@ -331,6 +347,29 @@ class BootImageTests(unittest.TestCase):
         self.assertNotIn("rw", builder.bootimg_cmdline(out).split())
         plain = bootimg(cmdline=b"quiet")
         self.assertEqual(builder.rewrite_bootimg_cmdline(plain, "abc", "squashfs"), plain)
+        forced = builder.rewrite_bootimg_cmdline(plain, "abc", "ext4", force=True, sd_initramfs=True)
+        self.assertIn("rdinit=/rdinit", builder.bootimg_cmdline(forced))
+        self.assertIn("root=PARTUUID=abc", builder.bootimg_cmdline(forced))
+
+    def test_sd_initramfs_replaces_stock_ramdisk(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sdinit = Path(temp) / "sdinit"
+            write(sdinit, arm64_exec())
+            root = builder.Part(4, b"", b"", 0, 0, 0, "rootfs")
+            ramdisk = builder.make_sd_initramfs(sdinit, root, "ext4", builder.BOOTER_PATH)
+            unpacked = gzip.decompress(ramdisk)
+            self.assertTrue(unpacked.startswith(b"070701"))
+            self.assertIn(b"ROOT_PARTN=5\nROOT_NAME=rootfs\nROOT_FSTYPE=ext4", unpacked)
+            self.assertIn(b"rdinit\0", unpacked)
+            self.assertIn(b"TRAILER!!!\0", unpacked)
+            raw = bootimg(ramdisk=b"R" * 5000)
+            info = builder.check_bootimg(raw, "4.9.191")
+            out = builder.replace_ramdisk(raw, info, ramdisk)
+            self.assertEqual(builder.check_bootimg(out, "4.9.191")["ramdisk_size"], len(ramdisk))
+            kernel_end = info["page"] + builder.align_up(info["kernel_size"], info["page"])
+            self.assertEqual(out[kernel_end:kernel_end + len(ramdisk)], ramdisk)
+            self.assertEqual(out[info["page"]:info["page"] + info["kernel_size"]],
+                             raw[info["page"]:info["page"] + info["kernel_size"]])
 
 
 class PlanTests(unittest.TestCase):
@@ -403,6 +442,15 @@ class PlanTests(unittest.TestCase):
         self.assertIsNone(builder.squashfs_compressor(b"\0" * 64, None))
         self.assertEqual(builder.choose_data_fs(fs, True), "exfat")
         self.assertEqual(builder.choose_data_fs(fs, False), "vfat")
+        self.assertEqual(builder.choose_data_fs(fs, True, "vfat"), "vfat")
+        self.assertEqual(builder.choose_data_fs(fs, True, "exfat"), "exfat")
+        with self.assertRaises(builder.BuildError):
+            builder.choose_data_fs("\tvfat\n", True, "exfat")
+        with self.assertRaises(builder.BuildError):
+            builder.choose_data_fs(fs, False, "exfat")
+        self.assertTrue(builder.smartpro_panel((720, 1280)))
+        self.assertTrue(builder.smartpro_panel((1280, 720)))
+        self.assertFalse(builder.smartpro_panel((1024, 768)))
         with self.assertRaises(builder.BuildError):
             builder.choose_root_fs("nodev\tproc\n", [], "squashfs", "xz")
         self.assertEqual(builder.parse_size("64G"), 64 * 10**9)

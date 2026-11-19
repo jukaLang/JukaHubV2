@@ -240,12 +240,12 @@ type themeRetroConversion struct {
 
 // themeRetroConversions are the console conversions, grouped within Styles.
 var themeRetroConversions = []themeRetroConversion{
-	{key: "convert-ps1", name: "PS1 Style", palette: "ps1", arrangement: homeArrangementGrid,
-		summary: "Hero tile · grey shell, four symbols", radius: 6, ring: "#2f5fc4", ring2: "#c8407a"},
+	{key: "convert-ps1", name: "PS1 Style", palette: "ps1", arrangement: homeArrangementCarousel,
+		summary: "System menu · grey bevels and blue focus", carousel: homeCarouselPS1, radius: 6, ring: "#2f5fc4", ring2: "#c8407a"},
 	{key: "convert-ps2", name: "PS2 Style", palette: "ps2", arrangement: homeArrangementCarousel,
-		summary: "Carousel · black and blue glow", radius: 10, ring: "#6f9bff"},
+		summary: "Browser · indigo list and blue orbit", carousel: homeCarouselPS2, radius: 10, ring: "#6f9bff"},
 	{key: "convert-psp", name: "PSP Style", palette: "psp", arrangement: homeArrangementCarousel,
-		summary: "Icon row · wave blue", carousel: homeCarouselShelf, radius: 12, ring: "#ffffff"},
+		summary: "Crossbar · floating icons and blue waves", carousel: homeCarouselPSP, radius: 12, ring: "#ffffff"},
 	{key: "convert-snes", name: "Super Nintendo Style", palette: "snes", arrangement: homeArrangementGrid,
 		summary: "Hero tile · grey and purple", radius: 10, ring: "#5b47a8"},
 	{key: "convert-n64", name: "Nintendo 64 Style", palette: "n64", arrangement: homeArrangementWidgets,

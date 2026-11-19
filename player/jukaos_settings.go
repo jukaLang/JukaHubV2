@@ -254,13 +254,13 @@ func jukaosSettingsRows(*Config) []setRow {
 		},
 		{
 			ID: "jukaosMode", Label: "JukaHub OS mode", Kind: setKindToggle,
-			Detail: setStatic("JukaHub runs as the handheld's OS, with the layers below. Nothing on the system changes for good; a reboot is always the stock system. Hold Select or B through the boot animation to start " + fw + " instead, once."),
+			Detail: setStatic("JukaHub runs as the handheld's OS, with the layers below. On verified stock Smart Pro firmware, Boot into JukaHub OS also installs reversible speed hooks. Hold Select or B through the boot animation to start " + fw + " instead, once."),
 			Get:    func(*Config) bool { return jukaosUI.state.Enabled },
-			Set:    func(_ *Config, on bool) { jukaosSetMode(on) },
+			Set:    jukaosSetMode,
 		},
 		{
 			ID: "jukaosBoot", Label: "Boot into JukaHub OS", Kind: setKindToggle,
-			Detail: setStatic("Turn the handheld on straight into JukaHub OS (also switches on Start JukaHub at login)"),
+			Detail: setStatic("Turn the handheld on straight into JukaHub OS (also switches on Start JukaHub at login). On verified stock Smart Pro firmware, this speeds up startup and saves the stock boot files for restoration when switched off."),
 			Get:    func(c *Config) bool { return jukaosUI.state.Enabled && autoStartEnabled(c) },
 			Set:    jukaosSetBoot,
 		},
@@ -554,7 +554,7 @@ func jukaosSaveUI(s jukaosState) bool {
 }
 
 // jukaosSetMode switches OS mode on or off for the next start.
-func jukaosSetMode(on bool) {
+func jukaosSetMode(c *Config, on bool) {
 	s := jukaosUI.state
 	s.Enabled = on
 	if !jukaosSaveUI(s) {
@@ -565,6 +565,7 @@ func jukaosSetMode(on bool) {
 	} else {
 		setToast("JukaHub OS is off: JukaHub starts as an app from the next start")
 	}
+	jukaosStockFastBootReport(on && autoStartEnabled(c))
 }
 
 // jukaosSetBoot drives the login setting: on turns OS mode and "Start
@@ -582,6 +583,13 @@ func jukaosSetBoot(c *Config, on bool) {
 	widgetToggleSideEffect(c, "autoStart", on)
 	if on {
 		setToast("The handheld will start into JukaHub OS")
+	}
+	jukaosStockFastBootReport(on && jukaosUI.state.Enabled)
+}
+
+func jukaosStockFastBootReport(on bool) {
+	if err := jukaosStockFastBootSwitch(on); err != nil {
+		ShowToast("JukaHub OS boot speed: "+err.Error(), ToastKindError)
 	}
 }
 

@@ -13,9 +13,9 @@ package main
 //
 // What closes:
 //   - JukaHub's own screen children (gamesuspend.go): games, emulators, ports,
-//     Wine sessions, Android games, the WPE browser engine, LAN-play
-//     emulators. Each gets the interrupt the exit path sends (RetroArch and
-//     PPSSPP save and quit on it), plus a continue for one paused under the
+//     Wine sessions, Android games, LAN-play emulators. Each gets the
+//     interrupt the exit path sends (RetroArch and PPSSPP save and quit on
+//     it), plus a continue for one paused under the
 //     alarm or the in-game overlay; whatever is left after closeAllChildGrace
 //     loses its whole process group.
 //   - The video player, the Terminal's running command, the library's video

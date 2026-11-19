@@ -445,8 +445,15 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		return coreBuild{}, err
 	}
 	// The bytes are the build the index promised; whether this firmware can
-	// load them is a separate question, asked before the pool is changed.
-	if problem := coreLoadProblemFile(binary.Name(), upd.Active); problem != "" {
+	// load them is a separate question, asked before the pool is changed. A
+	// build that only needs a newer glibc than the firmware's gets RetroArch's
+	// own (ra_glibc.go: JukaHub's private glibc installed and probed), then is
+	// asked again.
+	problem := coreLoadProblemFile(binary.Name(), upd.Active)
+	if problem != "" && raGlibcEnsureForCore(ctx, problem, upd.Active) {
+		problem = coreLoadProblemFile(binary.Name(), upd.Active)
+	}
+	if problem != "" {
 		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}
 

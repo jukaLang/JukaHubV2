@@ -118,6 +118,12 @@ func normalizeCarouselStyle(s string) string {
 		return homeCarouselStrip
 	case homeCarouselHub, "ps5", "welcome":
 		return homeCarouselHub
+	case homeCarouselPS1, "playstation":
+		return homeCarouselPS1
+	case homeCarouselPS2:
+		return homeCarouselPS2
+	case homeCarouselPSP:
+		return homeCarouselPSP
 	case homeCarouselText, "minimal", "list":
 		return homeCarouselText
 	}
@@ -285,6 +291,8 @@ func (h *HomeLayout) carStyleRect(i int, o float64) (sdl.Rect, bool) {
 		return h.hubRowRect(o)
 	case homeCarouselText:
 		return h.textRowRect(i)
+	case homeCarouselPS1, homeCarouselPS2, homeCarouselPSP:
+		return h.retroTileRect(i)
 	}
 	if math.Abs(o) > homeCarReach {
 		return sdl.Rect{}, false
@@ -435,6 +443,9 @@ func drawThemeSketchFor(renderer *sdl.Renderer, p ThemePreset, x, y, w, h int32,
 		style = normalizeCarouselStyle(p.CarouselStyle)
 	}
 	if drawSwitchHomeSketch(renderer, p, style, x, y, w, h, ink, accent) {
+		return
+	}
+	if drawRetroHomeSketch(renderer, style, x, y, w, h, ink, accent) {
 		return
 	}
 	if style == homeCarouselCentred || w <= 8 || h <= 8 {

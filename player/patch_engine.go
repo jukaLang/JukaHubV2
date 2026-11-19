@@ -1616,7 +1616,6 @@ const (
 	patchHTTPTimeout = 25 * time.Second
 	patchMaxDownload = 512 << 20 // 512 MiB hard cap for any single artifact
 	patchMaxMetadata = 8 << 20   // 8 MiB for JSON metadata
-	githubReleaseAPI = "https://api.github.com/repos/jukaLang/JukaHubV2/releases/latest"
 )
 
 // patchDownloadTimeout bounds one archive transfer as a whole; see
@@ -1855,26 +1854,11 @@ type githubRelease struct {
 	Prerelease  bool          `json:"prerelease"`
 }
 
-// FetchLatestJukaHubRelease returns the latest JukaHub release metadata: the
-// newest stable release, or on the Beta update channel the newest release
-// with prereleases included (autoupdate_channel.go).
+// FetchLatestJukaHubRelease returns the newest JukaHub app release for the
+// selected channel. The repository's other releases (RetroArch cores and
+// emulator runtimes) are excluded by tag before they can be advertised.
 func FetchLatestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
-	if updateChannelBetaOn.Load() {
-		return fetchNewestJukaHubRelease(ctx)
-	}
-	client := newPatchClient()
-	data, err := fetchBounded(ctx, client, githubReleaseAPI, patchMaxMetadata)
-	if err != nil {
-		return nil, err
-	}
-	var rel githubRelease
-	if err := json.Unmarshal(data, &rel); err != nil {
-		return nil, err
-	}
-	if rel.TagName == "" {
-		return nil, errors.New("release metadata missing tag")
-	}
-	return &rel, nil
+	return fetchJukaHubRelease(ctx, updateChannelBetaOn.Load())
 }
 
 // FindManifestAsset returns the release asset whose name matches the manifest

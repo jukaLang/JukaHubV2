@@ -2493,6 +2493,25 @@ func clearMediaSearchCancel(resultVar string, gen uint64) {
 	mediaSearchMu.Unlock()
 }
 
+// cancelMediaSearch stops work for a feed the user has left. Bumping its
+// generation also prevents a result already in flight from replacing the
+// visible list after cancellation.
+func cancelMediaSearch(resultVar string) bool {
+	mediaSearchMu.Lock()
+	cancel := mediaSearchCancel[resultVar]
+	if cancel != nil {
+		mediaSearchGen[resultVar]++
+		delete(mediaSearchCancel, resultVar)
+	}
+	mediaSearchMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	markMediaPageSettled(resultVar, false)
+	return true
+}
+
 // sanitizeSearchVars removes the characters that would break the search
 // command. The query is pasted into a double-quoted yt-dlp argument, so a
 // literal quote would unbalance the tokenizer and search for the wrong text;

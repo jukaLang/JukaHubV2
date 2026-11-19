@@ -145,11 +145,11 @@ func gameHistorySaveLocked() {
 }
 
 // gameHistoryFlush waits, at most limit, for the background writes to land.
-// The exit calls it once the main loop has ended (no more saves are queued
-// after that), so the return from the last game is on the card before the
-// teardown syncs and the process exits. The store lock orders the Wait after
-// every Add (sync.WaitGroup's rule); the writers never take it.
-func gameHistoryFlush(limit time.Duration) {
+// The exit calls it after the playtime flush has queued its last save, alongside
+// the cache and OS cleanup and before the final card sync. The store lock
+// orders the Wait after every Add (sync.WaitGroup's rule); the writers never
+// take it. It reports whether every write finished before the limit.
+func gameHistoryFlush(limit time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		gameHistoryStore.mu.Lock()
@@ -159,8 +159,10 @@ func gameHistoryFlush(limit time.Duration) {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-time.After(limit):
 		logWarn("library", "game history still being written at exit")
+		return false
 	}
 }
 

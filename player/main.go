@@ -269,6 +269,21 @@ func main() {
 	// Apply the saved "Start JukaHub at login" setting to the platform's
 	// startup folder (only ever our own launcher file).
 	reconcileAutoStart(config)
+	// A card that already had OS boot on before this release gets the stock
+	// Smart Pro speed hooks after its first frame. The settings switches also
+	// apply them immediately; this queued task never holds up Home.
+	if autostartIsTrimui() {
+		deferStartupTask("stock-fastboot", func() {
+			go func() {
+				if !jukaosLoadState(jukaosAppDir()).Enabled || !autoStartInstalled() {
+					return
+				}
+				if err := jukaosStockFastBootSwitch(true); err != nil {
+					logPatch("JukaHub OS boot speed: %v", err)
+				}
+			}()
+		})
+	}
 	// The travel lock's power-on guard in System/starts follows its setting
 	// the same way (travellock.go).
 	reconcileTravelLock(config)
@@ -4148,6 +4163,7 @@ func main() {
 		timelapseDrainNotice()
 		renderHTML5GameInApp(renderer, config)
 		renderToast(renderer, config)
+		renderVolumeHUD(renderer, config)
 		renderInstallBar(renderer, config)
 		// The activity strip sits with the installer card so it is drawn over
 		// every scene the way the toasts are, and it can echo the card's own
@@ -4316,9 +4332,6 @@ func main() {
 	// graceful exit lands here (window close, Exit button, scene trigger, stop
 	// signal).
 	ShowShutdown(renderer, config)
-	// The teardown's playtime flush may have closed the last game's session;
-	// its history write runs on a goroutine (game_history.go).
-	gameHistoryFlush(time.Second)
 	// The fonts the card itself used close after its last frame, so a glyph
 	// texture is never freed under a frame that is about to draw with it.
 	for _, font := range fontCache {

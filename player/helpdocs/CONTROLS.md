@@ -389,7 +389,7 @@ goes, and a long one if it could not. Hold **Select + L1** again, or press
 back too.
 
 **Only programs that draw their own pointer show one**: ScummVM, DOSBox, PC
-ports through PortMaster, a WPE browser. Most emulated games have no use for a
+ports through PortMaster. Most emulated games have no use for a
 mouse and ignore it, and a program that only looks for input devices when it
 starts may not notice a mouse that appears later. The game sees Select and L1
 go down before the mouse takes over, so in a game that uses them they do their

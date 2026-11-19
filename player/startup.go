@@ -232,6 +232,7 @@ func startupFirstFrameSince() (time.Duration, bool) {
 const (
 	startupFirstFramePath  = "/tmp/jukahub-first-frame"
 	startupBootTimingPath  = "/tmp/jukahub-boot-timing"
+	startupReportPath      = "/tmp/jukahub-startup-report"
 	startupBootTimingStart = 60.0 // seconds: a later first start was not a boot
 )
 
@@ -475,6 +476,11 @@ func startupGCRelease() {
 func startupLog() {
 	report := startupReport()
 	logInfo("startup", "%s", strings.TrimPrefix(report, "startup: "))
+	// Keep the phase split available over SSH on a handheld. It is written
+	// after Present on tmpfs, so diagnosing a slow start cannot delay Home.
+	if IsTrimuiDevice() {
+		go func() { _ = startupWriteTmpFile(startupReportPath, report+"\n") }()
+	}
 	// The bench (startup-bench.sh, or a device run with JUKAHUB_STARTUP_BENCH=1
 	// that reads errors.txt) reads the line from stderr, which only warnings
 	// reach on the handheld or under a quiet log level, so in bench mode it is

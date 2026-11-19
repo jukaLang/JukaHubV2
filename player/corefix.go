@@ -35,6 +35,13 @@ package main
 // JukaHub starts, which catches what RetroArch's updater broke while JukaHub
 // was closed. That look remembers the cores that loaded, by size and time, so a
 // start reads only the files that changed.
+//
+// Since 2026-11-19 RetroArch may start on JukaHub's private glibc 2.39
+// (ra_glibc.go, setting "RetroArch's C library", Automatic by default): the
+// load check then reads that runtime's libraries first, so a nightly that only
+// needs a newer glibc loads and is not "broken" here. The look installs the
+// runtime for such cores when it may download, and fixes them as above only
+// when RetroArch cannot start on it (the setting is off, a probe refused it).
 
 import (
 	"context"
@@ -498,6 +505,9 @@ func coreFixLibStamp() string {
 			}
 		}
 	}
+	// And whether RetroArch starts on JukaHub's private C library, which the
+	// load check then reads first (ra_glibc.go).
+	parts = append(parts, "glibc="+raGlibcStamp())
 	return strings.Join(parts, ";")
 }
 
@@ -603,7 +613,16 @@ func coreFixScan() {
 	for gameScreenSuspended() {
 		time.Sleep(10 * time.Second)
 	}
+	// A RetroArch never asked under the current private C library is probed
+	// first, so the answers below rest on a probe (ra_glibc.go).
+	raGlibcProbeAll()
 	broken := coreFixFindBroken(gameScreenSuspended)
+	// A core that only needs a newer glibc than the firmware's keeps its build
+	// when RetroArch can start on JukaHub's: that runtime is installed (only
+	// when this look may download, as below) and the cores are asked again.
+	if len(broken) > 0 && raGlibcRescue(broken, emuCoreUpdateModeNow() == coreUpdateInstall && !coreAutoUpdateDisabled() && IsOnline()) {
+		broken = coreFixFindBroken(gameScreenSuspended)
+	}
 	if len(broken) == 0 {
 		return
 	}

@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **296** (audited 2026-11-17).
+Open tasks: **297** (audited 2026-11-17).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -412,10 +412,9 @@ and Save offline have their own [HW] tasks.
 4. Watch Party: a YouTube room plays on a guest at the room's position; B on the
    guest's loading card leaves the video until Join; a new pick by the host
    while a guest still loads switches the guest.
-5. **Open in WPE Browser** opens the page (does `launch.sh` take the URL as
-   `$1`?); **Get WPE Browser** installs the real release (`extractZipSafe`
-   refuses symlinks — does the zip hold any?); `free -m` with JukaHub parked is
-   recorded.
+5. The Browser's Select menu → **Open on your phone** shows a QR code a phone
+   camera opens on the same page; on a card that still has `Apps/WPE`, Home →
+   Browser and a chat link open the built-in browser, never WPE.
 6. Thirty minutes each of a YouTube video, a direct .mp4 link and a Live TV
    channel on the handheld's Wi-Fi, with a 5-minute pause and a walk to the
    edge of the signal, never log "stream stalled" or stop early; turning the
@@ -974,6 +973,41 @@ triggers do nothing. Menu colour: each colour on a dark theme and on Light
 look, Battery Saver and a reboot; Theme's own brings the theme's colour back.
 **Verify.** Record in the HW log; file a FIX task for anything that differs.
 
+### RAGLIBC-HW-1 — RetroArch on JukaHub's glibc 2.39 on a device (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-19: "use the latest private glibc instead of the TrimUI
+glibc to run retrocores, so we can get latest updates". `player/ra_glibc.go`
+starts RetroArch through the private runtime's loader (docs/PRIVATE_GLIBC.md
+"RetroArch") in the game's own mount namespace — a wrapper bind-mounted over
+`ra64.trimui`, the loader seen as `<data>/private-glibc/ra/ns/v<i>/ra64.trimui` —
+for cores that need a newer glibc (setting **RetroArch's C library**, Automatic
+by default), and the load check then accepts buildbot nightlies up to
+GLIBC_2.39 / GLIBCXX_3.4.33. Written without a Go toolchain or a device: the
+wrapper, setup script and probe parser were run off-device (x86-64 host
+loader, dash, busybox 1.30, a fake `mount`); unsharing, the bind mounts on the
+card, the PowerVR/Mali libraries and `ra64.trimui` under glibc 2.39 never ran.
+**Where.** `ra_glibc.go`, `ra_glibc_linux.go`, `compat.go`
+(`coreLoadEnvWith`), `emulatorupdates.go` (`fetchCoreUpdate`), `corefix.go`
+(`coreFixScan`), `game_library.go`, `netplay.go`, `raemu.go`,
+`gamelaunch_firmware.go`; `data/private-glibc/ra/probe.json`, the JukaHub log
+(`emulators` lines "starts on JukaHub's glibc", "stays on the firmware's").
+**Done when.** On a stock Smart Pro (then a Brick and a Smart Pro S): 1. With
+no runtime installed and the GLIBC_2.35 buildbot mGBA active, a GBA game
+toasts "Getting JukaHub's newer C library…", then starts by itself with sound,
+saves and the in-game menu; the log shows the probe passing and "RetroArch
+starts on JukaHub's glibc 2.39"; `/proc/<pid>/comm` of the game is
+`ra64.trimui`. 2. `probe.json` holds `"ok": true` for `ra64.trimui`; a
+restart's core look logs no `core fix:` line for mGBA. 3. The daily pass
+installs buildbot nightlies it used to refuse for GLIBC (`core updates: N
+installed`), and the N64/PSX GPU cores still pass LIB-27's probation. 4.
+RetroArch's tile opens its menu and loads a nightly core. 5. **Firmware's
+only** brings back kept builds at once (toast), **JukaHub's glibc 2.39** runs a
+core that does not need it. 6. A game from MainUI with a 2.35 core still fails
+(expected; noted in the HW log). If the probe refuses: record its `why` here;
+if the namespace cannot be made (not root, no `mount`), record the setup
+script's `jukahub:` line from the launcher output.
+**Verify.** Record in the HW log; update LIB-26 with what the daily pass now
+installs.
+
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
 `mail_*.go`, `calsync*.go`, `mailcal_ui.go`, `companion_mailcal.go`,
@@ -1186,8 +1220,8 @@ frames upload; textures stay near the 40 MB budget and the big GIF logs how many
 frames it kept; a 160×144 pixel-art GIF is crisp; Battery Saver and **Animate
 wallpaper** off hold the first frame; the pick, and *None*, survive a restart;
 an experience pack applied after a pick (and its Undo) behaves as the newest
-choice; Power tools → memory shows the textures freed by the WPE Browser
-hand-off, a game launch (all but the first frame) and critical memory pressure.
+choice; Power tools → memory shows the textures freed by a game launch (all
+but the first frame) and critical memory pressure.
 **Verify.** `framestats` while a GIF loads, Power tools → memory, `logs.txt`.
 
 ---
@@ -1501,8 +1535,7 @@ from the saved library index without opening Media; the Category chip lists the
 groups with their counts; a screenshot, a track, a page and a Snake round move
 their trophies' progress; the platinum's count leaves out what the setup cannot
 award and the bonus trophies. RetroAchievements' 12 cards per sync
-(`trophyRANewUnlocksMax`) and unseen WPE Browser page loads stay as documented
-limits.
+(`trophyRANewUnlocksMax`) stay a documented limit.
 
 ### UX-17 — Two confirmations that still open on the action (P2, S)
 **Why.** Confirmations open on their safe answer (`confirmfocus.go`, for the
@@ -3236,10 +3269,10 @@ at power on (`resume-at-power-on.json`); a test covers each family's choice.
 ### PWR-6 — Profiles that follow the situation (P2, M)
 **Why.** A per-game CPU profile (Auto / Battery saver / Balanced / Performance,
 in the game options sheet) applies to the library, ports, emulators and LAN play
-through `beginLaunchPowerProfile`, but `raemu.go` and `brw_wpe.go` still use the
-global profile (`beginGamePowerProfile`), and nothing changes by system or on
-the charger (SteamOS issue #3034 asks for the same).
-**Where.** `powerprofile.go`, `raemu.go`, `brw_wpe.go`, the game options sheet.
+through `beginLaunchPowerProfile`, but `raemu.go` still uses the global
+profile (`beginGamePowerProfile`), and nothing changes by system or on the
+charger (SteamOS issue #3034 asks for the same).
+**Where.** `powerprofile.go`, `raemu.go`, the game options sheet.
 **Done when.** Every launch path goes through `beginLaunchPowerProfile`;
 profiles exist per game, per system and per power source (battery / charger),
 most specific wins; the game options sheet shows which one applies.
@@ -3756,9 +3789,9 @@ load-check cache), and a C++ core of the release (Gambatte, Snes9x) is accepted
 by the device's GLIBCXX check or the refusal is recorded here. 3. The daily
 pass and Get more cores take the release's build for a core whose buildbot
 nightly the guard refuses, so a Smart Pro's daily pass logs no GLIBC refusal for
-those cores. **Alternative to measure first (Juka, 2026-11-18: "make sure cores
-get updated to latest versions").** Start RetroArch itself through Ubuntu's
-glibc 2.39 loader, the way GreenOvercast and Linux packages run
+those cores. **Built 2026-11-19 as the default (RAGLIBC-HW-1 measures it; Juka,
+2026-11-18: "make sure cores get updated to latest versions").** Start
+RetroArch itself through Ubuntu's glibc 2.39 loader, the way GreenOvercast and Linux packages run
 (docs/PRIVATE_GLIBC.md, docs/LINUX_PACKAGES.md): then the buildbot's nightlies
 would load as published and the guard could accept anything up to GLIBC_2.39
 for that RetroArch. It needs the firmware's PowerVR GLES/EGL libraries to run
@@ -3913,20 +3946,18 @@ x86 filter) and whose header is not encrypted unpacks in-process through the
 same staging and `os.Root` rules, with fixtures made by 7-Zip in the tests;
 other coders (BCJ2, PPMd, AES) still go to 7-Zip.
 
-### APP-16 — More from WPE Browser (P2, M) [HW]
-**Why.** JukaHub hands pages to [WPE
-Browser](https://github.com/matweew/wpe-tsp), installs it (`brw_wpe_install.go`,
-launches ordered against its swap by `brwWpeGate`) and uses its ad filter; WPE's
-video and YouTube paths are faster than JukaHub's own.
+### APP-16 — Ideas borrowed from WPE Browser (P2, M) [HW]
+**Why.** JukaHub no longer opens or installs [WPE
+Browser](https://github.com/matweew/wpe-tsp) (2026-11-19: the Browser is
+built-in only), but WPE showed where JukaHub's own video and browsing paths are
+slower or clumsier; these are the parts worth having in the built-in ones.
 **Where.** `videoplayer.go`, `browser_youtube.go`, `browser_engines.go` (home
 page choice), `browserzoom.go`, `installbar.go`.
 **Done when.** Videos play through mpv-tsp (A133P hardware H.264) when installed
-(the plan is [docs/VIDEO_VPU_OFFLOAD.md](../docs/VIDEO_VPU_OFFLOAD.md)); YouTube
-streams resolve through WPE's RustyPipe `ytp` when present (≈2 s and ≈28 MB
-instead of ≈9 s and ≈330 MB with yt-dlp, per its release notes); the home page
-choice has "Last page"; zoom is remembered per site; the install bar's "Ready"
-card stops saying "restart JukaHub" after an app install.
-**Verify.** Unit tests; HW-6 step 5 for the device parts.
+(the plan is [docs/VIDEO_VPU_OFFLOAD.md](../docs/VIDEO_VPU_OFFLOAD.md)); the
+home page choice has "Last page"; zoom is remembered per site; the install
+bar's "Ready" card stops saying "restart JukaHub" after an app install.
+**Verify.** Unit tests; on the device, a video through mpv-tsp.
 
 ### APP-17 — The Windows runtime on a stock Smart Pro (P1, M) [HW] [NET]
 **Why.** Box64 + Wine 10.0, WestonPack and the prefix rules come from upstream

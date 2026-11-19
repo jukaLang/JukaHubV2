@@ -13,6 +13,56 @@ For anything older, the git log and the
 
 ### Added
 
+- **RetroArch on JukaHub's glibc 2.39, so the newest cores install and run**
+  (Juka, 2026-11-19). The libretro buildbot's aarch64 nightlies need a newer
+  glibc than TrimUI's 2.33 (mGBA needed GLIBC_2.35), so the core updater
+  refused them and RetroArch's own updater broke GB/GBC/GBA. RetroArch can now
+  start on the private Ubuntu 24.04 runtime JukaHub already keeps for
+  PortMaster and GreenOvercast (glibc 2.39, libstdc++ of GCC 14):
+  Settings → Games & emulators → **RetroArch's C library** — **Automatic**
+  (default: only games whose core needs it, and RetroArch's own menu once the
+  runtime is installed), **JukaHub's glibc 2.39** (every RetroArch game) or
+  **Firmware's only**. The game runs in a mount namespace of its own where a
+  small wrapper is bind-mounted over `ra64.trimui`, so the firmware's
+  `launch.sh` starts RetroArch through the private loader; the card's
+  RetroArch, the firmware and everything outside the game are unchanged, and
+  RetroArch still sees itself as `ra64.trimui` in its own folder. The load
+  check reads the runtime's libraries first, so the daily pass installs the
+  newest nightlies (builds refused only for glibc are fetched again), and the
+  start-up core look no longer swaps them for old builds. The runtime is
+  downloaded the first time a core needs it and the game then starts by
+  itself; offline, games start on the firmware's glibc as before. Each
+  RetroArch is probed first (its libraries listed and bound by the firmware's
+  loader and through the namespace and private loader, `data/private-glibc/ra/probe.json`);
+  one that fails, or a game that stops in the loader, stays on the firmware's
+  glibc and its cores get builds that run there. Games started from the
+  firmware's own menu keep the firmware's glibc. Untested on a device
+  (RAGLIBC-HW-1). See docs/PRIVATE_GLIBC.md.
+  (`player/ra_glibc.go`, `ra_glibc_linux.go`, `compat.go`, `corefix.go`,
+  `emulatorupdates.go`, `game_library.go`, `netplay.go`, `raemu.go`,
+  `gamelaunch_firmware.go`)
+
+- **Internet radio on the idle screen when the card has no music** (Juka,
+  2026-11-19). Play on the dock/idle screen used to end in "No music found".
+  With no songs on the card it now plays music radio: up to three of the
+  IPStream library's own music or radio channels first, then a random pick of
+  popular stations from a public radio playlist on GitHub
+  (junguler/m3u-radio-music-playlists, one calm genre chosen at random, or the
+  iptv-org music channels when no genre list answers), then a few long-running
+  built-in stations (SomaFM, Radio Paradise, Radio Swiss Jazz, FIP), so the
+  first Play works before the list has downloaded. The list downloads in the
+  background when the idle screen opens with nothing to play, and is kept for
+  a week (`saverradio.json` in the data folder). A station that does not play
+  is skipped for the next one on its own, even with repeat-one on, and one
+  that goes quiet while playing moves on too (repeat-one reconnects it), since
+  nobody may be awake to press Play, and each skip is silent (no click); R1
+  picks another station by hand, and when the list runs out, Play tunes in to
+  a fresh random set. The card says "Tuning in…"
+  until the sound starts, then "Live radio", and a station named like
+  "1.FM - Chillout" keeps its whole name. Offline, the toast says to connect
+  to Wi-Fi. Not yet built. `player/saverradio.go`, `ambient.go`,
+  `musicplayer.go`.
+
 - **A look for every console, chosen for you** (Juka, 2026-11-18). Settings →
   Emulation now has a **Look** row per console next to the overlay: CRT, LCD
   grid, scanlines, sharp or smooth pixels, and SkyWalker541's **Pixel
@@ -1998,6 +2048,23 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The Browser is JukaHub's built-in browser again, on every device — no WPE**
+  (Juka, 2026-11-19: "For browser, do not use WPE... use the built in that we
+  have always... especially on TrimuiSmartPro"). The 2026-11-18 change that
+  made Browser entries open WPE Browser on a handheld where it was installed
+  (and the desktop's browser on a PC) is undone: Home, Start, chat links and
+  Wi-Fi sign-in pages always open the built-in browser, and Settings → Browser
+  no longer has **Open pages with** (a saved `browserRenderMode` is ignored).
+  JukaHub no longer starts, offers, installs or updates WPE Browser at all: the
+  Select menu's **Open in WPE Browser** / **Get WPE Browser** row, the Google
+  card's WPE buttons and Settings → Browser → **WPE Browser** went with
+  `brw_wpe.go`, `brw_wpe_install.go` and `browser_full_engine.go`. The menu row
+  is now **Open on your phone** on a handheld (the page's address as a
+  full-screen QR code) and stays **Open in web browser** on a PC
+  ([player/brw_elsewhere.go](player/brw_elsewhere.go),
+  [docs/BROWSER.md](docs/BROWSER.md#taking-a-page-elsewhere)). A WPE Browser
+  already in `Apps/WPE` stays on the card untouched; JukaHub just never opens it.
+
 - **Cheats work for NextUI games too** (Juka, 2026-11-18: "any cheat support,
   and is it compatible with the Brick Pro?"). Game options → Cheats used to
   apply only when a game starts in RetroArch, so on a NextUI card (the Brick,
@@ -2532,6 +2599,44 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **The X1 pill is green only while an Xbox is actually there** (Juka,
+  2026-11-19: "XBOX1 on main menu showing green even though it's not
+  connected....or no available devices"). The dot was lit whenever an Xbox
+  streaming client was installed (GreenOvercast on the handheld, Greenlight or
+  XStreaming on a PC), so it read as "connected" with no console on and nothing
+  to stream. It now lights only while an Xbox on this network answers
+  SmartGlass discovery (a 16-byte request to UDP 5050, the plain-text part of
+  the protocol, so no crypto): Home asks every 10 seconds while the pill is
+  drawn, on a goroutine, and the dot goes dark 25 seconds after the last answer
+  or as soon as the handheld wakes from sleep. A console that is off or asleep,
+  has Remote features off, or is on another network leaves it dark; pressing X1
+  still opens the client, which can wake and stream it over the internet
+  (`player/xremote_discovery.go`, `player/xremote.go`,
+  `docs/REMOTE_PLAY.md`).
+
+- **Quick Settings' Wi-Fi and Airplane Mode switches work without a working
+  `rfkill` program** (Juka, 2026-11-19: "it shows wifi off, bluetooth off, and
+  airplane off. When i click Wifi it gives rfkill unlock wifi: exit status
+  127"). The switches ran the `rfkill` found on PATH, and this handheld's
+  cannot run (127 is a BusyBox without the applet or a library that would not
+  load), so every reading failed too and the panel drew Wi-Fi and Airplane Mode
+  off whatever they were. The radios are now read from the kernel's own
+  `/sys/class/rfkill` files with no process, and switched the way the rfkill
+  programs do it — one "change all" event written to `/dev/rfkill` — or
+  through each switch's `soft` file (`state` on old kernels), read back after
+  the write (a hardware block says so; Airplane Mode off still succeeds). On
+  the handhelds, off and Airplane Mode move a radio's own stack switch (`phy0`,
+  `hci0`) and never the board's Bluetooth power switch (`sunxi-bt`) while
+  `hci0` is registered: cutting the XR829's power under an attached adapter
+  left Bluetooth dead until a restart. The program is only the fallback: found
+  beyond PATH (`rfkill.elf` too), run with the firmware's environment and the
+  `wlan` type BusyBox understands, its own message in the error, and set aside
+  for the session once it cannot run. Bluetooth's rfkill fallback and bring-up
+  unblock use the same path. Bluetooth reading off is the kernel's answer (no
+  adapter, or no bluetoothd on the handheld); its switch starts it. Not yet
+  built. `player/rfkill_sysfs.go`, `player/systemcontrol.go`,
+  `player/bluetooth_bringup.go`.
 
 - **The in-game menu fits short screens** (2026-11-18). With Music,
   Rewind, Disc, Cheats, Ask Juka and the game switcher all on, its rows ran off
@@ -4153,7 +4258,7 @@ For anything older, the git log and the
   WPE freed every cache the low-memory path frees except an animated
   wallpaper's frames, up to 40 MB on the handheld; they are let go as well
   now and decoded again when JukaHub is back, and the shutdown card releases
-  them with the other textures ([player/brw_wpe.go](player/brw_wpe.go),
+  them with the other textures (`player/brw_wpe.go`, removed 2026-11-19;
   [player/shutdown.go](player/shutdown.go)).
 - **A release offer that is gone no longer answers a tap.** The top bar's
   update pill kept its last rect after it stopped being drawn (the release
@@ -4613,9 +4718,8 @@ For anything older, the git log and the
   unpacked into `Apps/WPE`, and an update keeps `settings.conf` and everything
   you or WPE Browser added to its folder (the old folder is only deleted once
   they are across). On a PC the menu row opens the page in the desktop's
-  browser ([player/brw_wpe.go](player/brw_wpe.go),
-  [player/brw_wpe_install.go](player/brw_wpe_install.go),
-  [docs/BROWSER.md](docs/BROWSER.md#wpe-browser)).
+  browser (`player/brw_wpe.go` and `player/brw_wpe_install.go`, both removed
+  on 2026-11-19 when the Browser went back to built-in only).
 
 - **The Browser blocks far more ads and trackers, and says how many.** The
   filter's host list grew from about 65 to about 370 entries — JukaHub's own

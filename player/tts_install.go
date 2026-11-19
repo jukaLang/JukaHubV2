@@ -775,7 +775,7 @@ func ttsFetchPinnedWatched(ctx context.Context, client *http.Client, raw, dest, 
 		offset = 0
 		h.Reset()
 	case http.StatusPartialContent:
-		if !brwWpeRangeStartsAt(resp.Header.Get("Content-Range"), offset) {
+		if !ttsRangeStartsAt(resp.Header.Get("Content-Range"), offset) {
 			return errors.New("download resumed at the wrong byte")
 		}
 	default:
@@ -858,6 +858,21 @@ func ttsFileMatches(file string, size int64, sha string) bool {
 	}
 	got, err := SHA256File(file)
 	return err == nil && strings.EqualFold(got, sha)
+}
+
+// ttsRangeStartsAt reports whether a Content-Range header ("bytes
+// 100-999/1000") continues at offset.
+func ttsRangeStartsAt(contentRange string, offset int64) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(contentRange), "bytes ")
+	if !ok {
+		return false
+	}
+	start, _, ok := strings.Cut(rest, "-")
+	if !ok {
+		return false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(start), 10, 64)
+	return err == nil && n == offset
 }
 
 // ttsFetchVoiceConfig downloads the voice's settings file and keeps it only

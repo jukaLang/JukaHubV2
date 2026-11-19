@@ -711,6 +711,13 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if err := emuCoreLaunchCheck(launcher); err != nil {
 		return err
 	}
+	// A core that needs a newer glibc than the firmware's starts RetroArch on
+	// JukaHub's private one (ra_glibc.go); when that is not installed yet, it is
+	// fetched first and the launch runs again from the main loop.
+	ragPlan, ragDeferred := raGlibcPrepareLibraryLaunch(game, launcher)
+	if ragDeferred {
+		return nil
+	}
 	// The game's saves come down from Google Drive / RomM first: off this
 	// (render) thread, and the launch runs again once they are here
 	// (savesync_auto.go).
@@ -814,6 +821,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// firmware's scripts start it (emuchoices.go). After the line above, which
 	// gives the child the firmware's environment.
 	emuCoreChoicePrepareLaunch(launcher, cmd)
+	// Last before the start: the game in a mount namespace of its own whose
+	// RetroArch runs on JukaHub's C library, when the plan above said so.
+	raGlibcApply(cmd, ragPlan)
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)

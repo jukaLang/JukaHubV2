@@ -110,6 +110,9 @@ func launchRetroArchMenu(e emuEntry) {
 	// is the environment the firmware's menu would give it.
 	cmd.Env = append(screenChildEnv(os.Environ()), "HOME="+dir)
 	screenChildGroupConfigure(cmd)
+	// Its menu may load any core: on JukaHub's private glibc once that is
+	// installed and this RetroArch starts on it (ra_glibc.go).
+	raGlibcPrepareMenu(cmd, bin)
 	restoreProfile := beginGamePowerProfile(appConfig)
 	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()

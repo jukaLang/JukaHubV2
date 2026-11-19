@@ -1,5 +1,22 @@
 # JukaHub OS on the TrimUI Smart Pro
 
+## Faster boot on the existing stock card
+
+For a Smart Pro still running stock firmware, **Boot into JukaHub OS** can use
+the [reversible stock startup hooks](stock_fastboot/stock-fastboot.sh) instead
+of this separate image. They mount the SD card early, skip the repeated stock
+splash, read up to 32 MiB of JukaHub in parallel with stock startup (bounded
+to one second), let completed TRIMUI_EX setup finish after Home, and briefly
+boost the CPU until Home. They preserve the stock launcher and its
+failed-start fallback.
+The installer checks the exact firmware files tested on one TG5040 and leaves
+other versions untouched. It does not change U-Boot or the kernel. See
+[JukaHub OS boot](../../docs/JUKAHUB_OS.md#how-it-boots) for measured times and
+restoration. The image below is a different, still unbooted experiment.
+On the tested stock card, the early read reduced kernel-start-to-Home from
+9.39 to 8.86 seconds. It can be disabled by creating
+`Apps/JukaHub/data/boot-prefetch.off` on the card.
+
 This builds an **experimental SD-card image** that boots the TrimUI Smart Pro
 (TG5040, Allwinner A133P) straight into JukaHub. It has **not been boot-tested
 on hardware yet**; the first boot on a real Smart Pro is the release gate
@@ -18,7 +35,8 @@ storage, which is the part the first boot has to prove (see the release gate).
 
 **Never write a Brick image to a Smart Pro card, or this image to a Brick.**
 The builder refuses a board folder that is not from a Smart Pro: the panel
-must be 1280x720 and the device tree the Smart Pro's. `dump-board.sh`
+must have a 1280x720 framebuffer (the device tree may describe its physical
+panel as 720x1280) and the device tree must be the Smart Pro's. `dump-board.sh`
 records the model code (`MODEL=` in `facts.txt`: TG5040 Smart Pro, TG5050
 Smart Pro S, TG3040 Brick, TG4040 Brick Pro) and stops on anything but a
 TG5040; `JUKAHUB_ANY_MODEL=1 sh dump-board.sh` saves another model's files
@@ -32,18 +50,19 @@ layout and kernel; nothing about booting it this way has been verified.
    same sectors as on the internal storage (the card's partition table keeps
    every stock partition in front of the system at its stock sector and
    number).
-2. U-Boot reads the card's copy of its environment. The changes there:
-   `root=PARTUUID=<the card's system partition> rootwait ro`,
-   `init=/jukahub/jukaboot` (or `init=/jukahub/init`, see
-   [The booter](#the-booter)), and for a faster boot `quiet`, `bootdelay=0` and,
-   when known, `lpj=` (see [Boot time](#boot-time)). The builder makes these
-   changes only after checking that the stock environment produces the stock
-   kernel command line, so the bootloader is known to take `root=` and `init=` from it. The boot image's
-   ramdisk, if it has one, is dropped so the kernel mounts that partition
-   itself.
-3. The stock kernel mounts the system copy (squashfs, read-only) and runs
-   JukaHub OS's process 1: the compiled [booter](#the-booter), or the shell
-   [`init`](init) it falls back to. It mounts the `JUKAHUB` partition at
+2. U-Boot reads the card's copy of its boot image. On the stock 1.1.0 Smart
+   Pro inspected on 2026-11-19, U-Boot rewrites `root=` at runtime; the saved
+   environment does not reproduce the measured kernel command line. Build
+   with `--sdinit` for this firmware. The boot image then carries a small
+   initramfs whose `/rdinit` finds the **SD** disk by device type, verifies
+   the card's `rootfs` partition number and GPT name, and mounts that root
+   read-only. The card's U-Boot environment and boot image command line also
+   request the card root where the bootloader honours them. Earlier firmware
+   whose environment passes the builder's strict check can still use the
+   original direct `root=PARTUUID` path.
+3. The stock kernel runs JukaHub OS's process 1 from that system copy: the
+   compiled [booter](#the-booter), or the shell [`init`](init) it falls back
+   to. It mounts the `JUKAHUB` partition at
    `/mnt/SDCARD` and starts JukaHub at once (the shell init through
    [`launch.sh`](launch.sh), the booter through the same loop of its own); while JukaHub
    starts, it loads the kernel modules the stock system had loaded, sets the
@@ -92,6 +111,7 @@ On a Linux computer with Python 3, GNU tar, `squashfs-tools`, `exfatprogs` (or
 sudo python3 os/smartpro/build_image.py \
   --board /path/to/JukaHub-SmartPro-board \
   --app /path/to/JukaHub-Trimui \
+  --sdinit /path/to/sdinit \
   --stock-card /path/to/a-copy-of-your-current-card \
   --card-size 64G \
   --output JukaHub-OS-SmartPro.img.xz
@@ -101,14 +121,30 @@ sudo python3 os/smartpro/build_image.py \
 from a build that has `smartpro-stock-kernel-v1` in its
 `native-os-capability.txt`. `--stock-card` is optional: it reuses your card's
 `RetroArch`, `Emus` and `Bios` folders, which were built for this system.
+Build the static AArch64 SD loader before using `--sdinit`:
+
+```sh
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -buildmode=exe \
+  -ldflags '-s -w' -o sdinit os/smartpro/sdinit/main.go
+```
+
+The loader is needed on the observed stock 1.1.0 firmware. Without it the
+builder refuses that firmware's dynamic `root=` setting; it will not produce
+an image that silently falls back to the internal system. This remains an
+experimental SD boot until its first hardware boot is observed.
 `--card-size` is the size printed on the card; the `JUKAHUB` partition fills
 96 % of it, so a card slightly smaller than its label still fits.
+`--card-filesystem vfat` builds a FAT32 `JUKAHUB` partition when the build
+computer cannot mount exFAT images (for example, WSL's standard kernel). The
+Smart Pro kernel supports FAT32. Files on that partition must each be under
+4 GB; the default `auto` uses exFAT when the build tools have it.
 
 The builder checks, and stops on, anything it cannot vouch for: a board
 folder that is incomplete, from another device or fails its checksums; boot0
 with a bad checksum; no U-Boot package at 16400 KiB; a GPT that disagrees with
 what the kernel reported; an environment that does not produce the stock
-command line; a kernel that needs its ramdisk to mount a system; a missing
+command line unless the verified static SD loader is supplied; a kernel
+without gzip initramfs support in that mode; a missing
 `devtmpfs`; a stock system without the commands process 1 uses. It reads the
 finished image back (boot0, U-Boot, both partition tables) before writing the
 output, and leaves a `.build.json` beside it listing the modules, daemons and
@@ -146,11 +182,12 @@ find or start the system on the card.
 
 The image keeps the Smart Pro's own boot chain, so its speed is the stock
 bootloader's and kernel's plus JukaHub's start. The builder trims what it
-safely can in the card's copy of U-Boot's environment, after the same check
-that the environment produces the stock command line: `bootdelay=0` (no wait
+can in the card's copy of U-Boot's environment; on firmware that rewrites
+`root=` at runtime, `/rdinit` is the independent way to reach the SD root.
+It sets `bootdelay=0` (no wait
 at U-Boot's prompt), `quiet` in place of the stock `loglevel=8` (every kernel
 message printed to the 115200-baud serial console makes the kernel wait for
-the UART, which costs seconds), and `lpj=` with the stock kernel's own
+the UART, which costs time), removes `earlyprintk`, and sets `lpj=` with the stock kernel's own
 delay-loop value when `dump-board.sh` found one in the boot messages (`LPJ=`
 in `facts.txt`; an A133 kernel that takes it from the timer, "skipped" in
 dmesg, has none to save). `.build.json` lists `kernel_lpj`.
@@ -278,11 +315,12 @@ most:
 
 The first boots belong on a Smart Pro with a serial console on its RX/TX/GND
 pads (115200 baud), to confirm what cannot be checked without hardware: boot0
-copied from the eMMC loads U-Boot from the card; U-Boot says it booted from
-the card and reads the card's environment (not the eMMC's); the kernel command
-line shows `root=PARTUUID=` of the card's system partition and
-`init=/jukahub/jukaboot` (or `/jukahub/init`); nothing on the eMMC is mounted
-(`/proc/mounts`).
+copied from the eMMC loads U-Boot from the card; U-Boot loads the card's boot
+image; with `--sdinit`, the kernel runs `/rdinit` from that image, which mounts
+the SD `rootfs` before `/jukahub/jukaboot`; nothing on the eMMC is mounted
+(`/proc/mounts`). On a direct-root image, the kernel command line instead
+shows `root=PARTUUID=` of the card's system partition and
+`init=/jukahub/jukaboot` (or `/jukahub/init`).
 
 Then, before anyone else gets this, on a real Smart Pro: first boot to JukaHub and
 its time (os.log, boot.log); the boot frame on the second boot (Home at once,

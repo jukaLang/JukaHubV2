@@ -10,10 +10,12 @@ package main
 //     it, so a hand-edited config can never redirect it at another sysfs file;
 //   - every binary is one of a small fixed set (pactl, amixer, nmcli, rfkill,
 //     bluetoothctl). A command is chosen from that list, never composed from
-//     user input;
-//   - every probe and write is bounded by systemCommandTimeout and its failure
-//     is reported to the caller, which turns it into a visible message instead
-//     of a silent no-op;
+//     user input. The radio switches are the kernel's own /dev/rfkill and
+//     /sys/class/rfkill files first and the rfkill program only after them
+//     (rfkill_sysfs.go);
+//   - every command is bounded by systemCommandTimeout (a sysfs or /dev/rfkill
+//     write is one system call) and every failure is reported to the caller,
+//     which turns it into a visible message instead of a silent no-op;
 //   - unavailable hardware is a normal state, not an error: the panel dims the
 //     row and says so on this device.
 //
@@ -395,20 +397,22 @@ func wifiBackend() string {
 	if commandExists("nmcli") {
 		return "nmcli"
 	}
-	if commandExists("rfkill") {
+	// The kernel's switch files, or an rfkill program that runs
+	// (rfkill_sysfs.go).
+	if rfkillAvailable(rfkillWlan) {
 		return "rfkill"
 	}
 	return ""
 }
 
-// btRfkillTool picks the system's rfkill command. The TrimUI images used by
-// NextUI and NX Redux name it rfkill.elf.
+// btRfkillTool picks the system's rfkill program. The TrimUI images used by
+// NextUI and NX Redux name it rfkill.elf. One that could not run this session
+// (rfkillToolRun) is passed over.
 func btRfkillTool() string {
-	if btToolExists("rfkill") {
-		return "rfkill"
-	}
-	if btToolExists("rfkill.elf") {
-		return "rfkill.elf"
+	for _, name := range []string{"rfkill", "rfkill.elf"} {
+		if rfkillToolUsable(name) && btToolExists(name) {
+			return name
+		}
 	}
 	return ""
 }
@@ -416,32 +420,26 @@ func btRfkillTool() string {
 // bluetoothBackend names how Bluetooth is switched on this device. The tools
 // are found beyond PATH as well and run with the firmware's environment
 // (bluetooth_tools.go): a launcher's PATH can miss where a handheld keeps them.
+// Without bluetoothctl the radio's rfkill switch is the switch ("rfkill"):
+// the kernel's file, or the program (rfkill_sysfs.go).
 func bluetoothBackend() string {
 	if btToolExists("bluetoothctl") {
 		return "bluetoothctl"
 	}
-	return btRfkillTool()
+	if rfkillAvailable(rfkillBluetooth) {
+		return "rfkill"
+	}
+	return ""
 }
 
-// btRfkillSet switches the Bluetooth radio with rfkill (runRfkill's verbs:
-// on is "unblock").
+// btRfkillSet switches the Bluetooth radio's rfkill switch: on unblocks it.
 func btRfkillSet(on bool) error {
-	tool := btRfkillTool()
-	if tool == "" {
-		return errors.New("no rfkill command on this device")
-	}
-	verb := "block"
-	if on {
-		verb = "unblock"
-	}
-	if _, err := btToolRun(tool, verb, "bluetooth"); err != nil {
-		return fmt.Errorf("%s %s bluetooth: %w", tool, verb, err)
-	}
-	return nil
+	return rfkillSetRadio(rfkillBluetooth, on)
 }
 
-// airplaneBackend reports whether rfkill can block every radio at once.
-func airplaneBackend() bool { return commandExists("rfkill") }
+// airplaneBackend reports whether every radio can be blocked at once: the
+// kernel lists a switch, or an rfkill program runs.
+func airplaneBackend() bool { return rfkillAvailable(rfkillAnyKind) }
 
 // rfkillBlocked reports whether rfkill's output contains a soft block. The
 // second result is false when rfkill printed nothing usable, which keeps "no
@@ -483,11 +481,7 @@ func wifiEnabled() (bool, bool) {
 		}
 		return false, false
 	case "rfkill":
-		out, err := systemCommandRunner("rfkill", "list", "wifi")
-		if err != nil {
-			return false, false
-		}
-		return rfkillState(out)
+		return rfkillRadioOn(rfkillWlan)
 	}
 	return false, false
 }
@@ -527,12 +521,12 @@ func setWifiEnabled(on bool) error {
 		if _, err := systemCommandRunner("nmcli", "radio", "wifi", arg); err == nil {
 			return nil
 		}
-		if commandExists("rfkill") {
-			return runRfkill("wifi", on)
+		if rfkillAvailable(rfkillWlan) {
+			return rfkillSetRadio(rfkillWlan, on)
 		}
 		return errors.New("nmcli could not change the Wi-Fi radio")
 	}
-	return runRfkill("wifi", on)
+	return rfkillSetRadio(rfkillWlan, on)
 }
 
 // bluetoothEnabled reads the Bluetooth radio state.
@@ -557,12 +551,8 @@ func bluetoothEnabled() (bool, bool) {
 			return false, true
 		}
 		return false, false
-	case "rfkill", "rfkill.elf":
-		out, err := btToolRun(backend, "list", "bluetooth")
-		if err != nil {
-			return false, false
-		}
-		return rfkillState(out)
+	case "rfkill":
+		return rfkillRadioOn(rfkillBluetooth)
 	}
 	return false, false
 }
@@ -585,22 +575,29 @@ func setBluetoothEnabled(on bool) error {
 		if _, err := btToolRun("bluetoothctl", "power", arg); err == nil {
 			return nil
 		}
-		if btRfkillTool() != "" {
+		if rfkillAvailable(rfkillBluetooth) {
 			return btRfkillSet(on)
 		}
 		return errors.New("bluetoothctl could not change the radio")
-	case "rfkill", "rfkill.elf":
+	case "rfkill":
 		return btRfkillSet(on)
 	}
 	return errors.New("no Bluetooth control (bluetoothctl/rfkill) on this device")
 }
 
-// airplaneEnabled reports whether every radio is soft-blocked.
+// airplaneEnabled reports whether every radio is soft-blocked: the kernel's
+// switch files first, the rfkill program where the kernel lists none
+// (rfkill_sysfs.go).
 func airplaneEnabled() (bool, bool) {
-	if !airplaneBackend() {
+	if on, ok := rfkillAirplaneOn(); ok {
+		return on, true
+	}
+	// The program only where the kernel lists no switch at all: on the
+	// handhelds the board's power switches are not Airplane Mode's.
+	if len(rfkillSysfsNames(btRfkillRoot)) > 0 || btRfkillTool() == "" {
 		return false, false
 	}
-	out, err := systemCommandRunner("rfkill", "list")
+	out, err := rfkillToolRun("list")
 	if err != nil {
 		return false, false
 	}
@@ -624,29 +621,8 @@ func setAirplaneMode(on bool) error {
 		return errors.New("no rfkill on this device")
 	}
 	defer netNetworkSwitching()()
-	verb := "unblock"
-	if on {
-		verb = "block"
-	}
-	if _, err := systemCommandRunner("rfkill", verb, "all"); err != nil {
-		return fmt.Errorf("rfkill %s all: %w", verb, err)
-	}
-	return nil
-}
-
-func runRfkill(kind string, on bool) error {
-	// rfkill's argument is a block verb, not an on/off flag: switching a radio
-	// ON is "unblock". These two were swapped, so on an image whose only radio
-	// control is rfkill — every TrimUI handheld, which ships no nmcli — the
-	// Wi-Fi switch turned the radio off every time it was asked to turn it on.
-	verb := "block"
-	if on {
-		verb = "unblock"
-	}
-	if _, err := systemCommandRunner("rfkill", verb, kind); err != nil {
-		return fmt.Errorf("rfkill %s %s: %w", verb, kind, err)
-	}
-	return nil
+	// Airplane Mode on switches every radio off.
+	return rfkillSetRadio(rfkillAnyKind, !on)
 }
 
 // ── Screen timeout ─────────────────────────────────────────────────────────

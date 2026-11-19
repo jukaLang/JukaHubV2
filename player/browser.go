@@ -1,7 +1,6 @@
 package main
 
-// browser.go — the controller-first light reader used when a full browser is
-// unavailable or explicitly selected in Settings.
+// browser.go — JukaHub's built-in, controller-first web browser.
 //
 // The device has no system browser, no X11 and no window manager, so a support
 // link or a GitHub issue is otherwise unreachable. This browser turns the
@@ -9,9 +8,10 @@ package main
 // browser: an address bar, back/forward history, a link picker for anchors on
 // the page, and quick links to the JukaHub repository and issue tracker.
 //
-// Full pages use WPE WebKit on a handheld with WPE installed, or the OS browser
-// on a PC (browser_full_engine.go). This reader still handles offline pages and
-// hardware where the full engine is unavailable.
+// It is the only browser JukaHub opens, on every device: no WebKit, no WPE and
+// no hand-off to a desktop browser. Every Browser entry (Home, chat links,
+// sign-in portals) lands here, so the same pages, controls and memory budget
+// hold on a Smart Pro and on a PC.
 
 import (
 	"bytes"
@@ -284,16 +284,13 @@ func findBrowserElementByVariable(config *Config, variable string) (Element, boo
 	return Element{}, false
 }
 
-// openBrowserHome opens the preferred browser on its start page. When the full
-// engine is unavailable, the light reader's scene is injected on demand.
+// openBrowserHome opens the built-in Browser on its start page. The scene is
+// injected on demand, so a config that predates the browser still works.
 func openBrowserHome(config *Config) {
 	if config == nil {
 		return
 	}
 	home := brwHomeURL(config)
-	if brwTryOpenFullEngine(config, home) {
-		return
-	}
 	ensureBrowserScene(config)
 	idx := sceneIndexExact(config, browserSceneName)
 	if idx < 0 {
@@ -314,8 +311,9 @@ func openBrowserHome(config *Config) {
 	}
 }
 
-// openBrowserAtURL opens the preferred browser on a specific page. Chat links
-// use it, so a URL in a message is one click away from being opened.
+// openBrowserAtURL opens the built-in Browser on a specific page. Chat links
+// use it, so a URL in a message is one click away from being read instead of
+// only being copied out of the bubble.
 func openBrowserAtURL(config *Config, rawURL string) bool {
 	if config == nil {
 		return false
@@ -324,9 +322,6 @@ func openBrowserAtURL(config *Config, rawURL string) bool {
 	if err != nil {
 		showToast("Cannot open that link: "+err.Error(), ToastError())
 		return false
-	}
-	if brwTryOpenFullEngine(config, address) {
-		return true
 	}
 	// A YouTube video goes straight to the player: the reader cannot show its
 	// page, and opening the browser first only to leave it again would cost

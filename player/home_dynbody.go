@@ -834,6 +834,9 @@ func (h *HomeLayout) dynStepFrom(cur HomeFocusID, direction FocusDirection) (Hom
 			// Minimal Style's list walks Up and Down (thememinimal.go).
 			return h.textStepFrom(cur, i, direction)
 		}
+		if homeRetroStyle(homeConsoleLook.carousel) {
+			return h.retroStepFrom(cur, i, direction)
+		}
 		n := len(h.dyn.tiles)
 		switch direction {
 		case FocusLeft:
@@ -1060,7 +1063,7 @@ func (h *HomeLayout) dynWheel(dy int32) bool {
 			i = h.dyn.carIdx
 		}
 		next := (i + step + n) % n
-		if homeConsoleLook.carousel == homeCarouselHub {
+		if homeConsoleLook.carousel == homeCarouselHub || homeRetroStyle(homeConsoleLook.carousel) {
 			// The welcome hub's row ends at both sides (themeps5hub.go).
 			if next = min(max(i+step, 0), n-1); next == i {
 				return true

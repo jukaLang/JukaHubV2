@@ -343,7 +343,14 @@ func deviceCorrectForSoC(d DeviceModel, source, soc string) (DeviceModel, string
 	case d == DeviceTrimuiSmartProS && soc == socA133P:
 		return DeviceTrimuiSmartPro, source + " + A133P chip"
 	case deviceFamily(d) == DeviceTrimuiBrick && soc == socA523:
-		logWarn("device", "%s named by %s, but the chip looks like an A523; kept as named", d, source)
+		// Only once logging exists: this runs inside DetectDevice's sync.Once,
+		// and a first log line there would start InitLogging, which asks
+		// DetectDevice for the level and waits on that Once forever (the
+		// 2026-11-19 start-up hang). The identity line logged after
+		// InitLogging carries the chip either way.
+		if logger != nil {
+			logWarn("device", "%s named by %s, but the chip looks like an A523; kept as named", d, source)
+		}
 	}
 	return d, source
 }

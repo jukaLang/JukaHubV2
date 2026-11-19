@@ -22,10 +22,10 @@
 #
 #  The boot hook is the one the app writes itself for "Start JukaHub at login"
 #  (player/autostart.go, trimuiAutostartTemplate), taken from the source so the
-#  two can never differ, with the card's fixed paths filled in. Nothing of the
-#  firmware is replaced: the stock system stays on the device's own storage,
-#  and deleting the hook (or Settings -> JukaHub OS -> Boot into JukaHub OS off)
-#  gives the stock menu back. docs/JUKAHUB_OS.md explains the OS session.
+#  two can never differ, with the card's fixed paths filled in. The stock
+#  bootloader, kernel and system stay on the device's own storage. Verified
+#  stock Smart Pro firmware also gets reversible startup speed hooks after
+#  its first Home; see docs/JUKAHUB_OS.md for recovery and the OS session.
 #
 #  Usage:
 #      make-os-package.sh <JukaHub-Trimui folder | JukaHub-Trimui.zip> [out.zip]
@@ -199,9 +199,11 @@ Install
      menu does not show (Settings -> JukaHub OS -> Skip the stock menu at
      boot turns that off).
 
-The stock system is not replaced. JukaHub OS runs from the card and makes
-its changes only while it runs; a reboot always starts from the untouched
-stock system. What this package changes, while JukaHub OS runs:
+The stock bootloader and kernel are kept. On verified stock Smart Pro TG5040
+firmware, JukaHub installs reversible startup speed hooks after the first
+Home; they apply from the next power-on. The original startup files are saved
+and restored when Boot into JukaHub OS is switched off. On other firmware the
+stock startup is left alone. While JukaHub OS runs it also applies:
   - Speed (os/layers/speed): storage read-ahead and memory tuning.
   - A driver layer for your handheld's chip (os/layers/drivers-a133 for the
     Smart Pro, Brick, Brick Pro and Hammer; drivers-a523 for the Smart Pro S):
@@ -232,14 +234,17 @@ Is it running as the OS?
 Go back to the stock menu
   - Once: hold Select (or B) while the JukaHub logo boots.
   - Now: Power -> Return to <firmware> (Settings -> JukaHub OS has it too).
-  - For good: Settings -> JukaHub OS -> Boot into JukaHub OS -> off,
-    or delete System/starts/jukahub-autostart.sh on the card.
+  - For good: Settings -> JukaHub OS -> Boot into JukaHub OS -> off.
+    If the app cannot open, deleting System/starts/jukahub-autostart.sh on
+    the card gets the stock menu back. On a Smart Pro, the optional speed
+    hooks can then be removed with stock_fastboot/stock-fastboot.sh restore.
   JukaHub itself stays in Apps -> JukaHub either way.
 
 Paths on the card
   $APP_REL/                  JukaHub (updates itself like the app)
   $APP_REL/os/os.json        OS mode switch
   $APP_REL/os/layers/        layers (see the README there)
+  $APP_REL/stock_fastboot/   Smart Pro startup speed and restore script
   System/starts/jukahub-autostart.sh   the boot hook
 EOF
 

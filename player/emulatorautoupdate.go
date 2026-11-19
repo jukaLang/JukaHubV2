@@ -565,6 +565,9 @@ func coreAutoUpdateRanRecently() bool {
 // device that is not a TrimUI handheld — a PC — gets the desktop scheduler
 // (emuautoupdate_desktop.go) instead, under the same setting.
 func startCoreAutoUpdate(config *Config) {
+	// RetroArch's C library (ra_glibc.go) for the load check, corefix and the
+	// updater's goroutines.
+	raGlibcSyncMode(config)
 	if config != nil && IsTrimuiDevice() && coreUpdateModeNeedsMigration(config.Variables.Custom) {
 		// LIB-16 stored "notify" for every card whose user never chose. It is
 		// rewritten once as the new default, and the scheduler says so.

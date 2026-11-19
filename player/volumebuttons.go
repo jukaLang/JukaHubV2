@@ -34,8 +34,9 @@ const (
 
 // volumeButtonEvent is one volume-key edge decoded from an input device.
 type volumeButtonEvent struct {
-	dir  int // +1 volume up, -1 volume down
-	down bool
+	dir    int // +1 volume up, -1 volume down
+	down   bool
+	repeat bool
 }
 
 // parseInputEvent decodes one input_event record. The layout is a timeval
@@ -96,8 +97,9 @@ func volumeEventsFromBuffer(buf []byte) []volumeButtonEvent {
 			events = append(events, volumeButtonEvent{dir: dir, down: true})
 		case 0:
 			events = append(events, volumeButtonEvent{dir: dir, down: false})
+		case 2:
+			events = append(events, volumeButtonEvent{dir: dir, repeat: true})
 		}
-		// value 2 is an autorepeat; the hold timer already covers it.
 	}
 	return events
 }
@@ -273,6 +275,12 @@ func volumeDeviceLoop(file *os.File) {
 		n, err := file.Read(buf)
 		if n > 0 {
 			for _, ev := range volumeEventsFromBuffer(buf[:n]) {
+				if ev.repeat {
+					// Keep the card up during a hold without restarting the
+					// skip timer or scheduling a mixer read per repeat.
+					volumeHUDNoteKey()
+					continue
+				}
 				volumeButtonPress(ev.dir, ev.down)
 			}
 		}

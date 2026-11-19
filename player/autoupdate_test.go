@@ -5,6 +5,7 @@ package main
 // directories; no network and no real installation is touched.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -143,6 +144,10 @@ func TestAvailableUpdateIsAdvertisedWithoutStaging(t *testing.T) {
 	clearAvailableUpdate()
 	if availableUpdateTag() != "" {
 		t.Fatal("clearAvailableUpdate left the tag behind")
+	}
+	markUpdateAvailable(&githubRelease{TagName: "cores-aarch64", PublishedAt: "2026-11-20T05:00:00Z"})
+	if availableUpdateTag() != "" {
+		t.Fatal("a RetroArch core release was advertised as a JukaHub update")
 	}
 	for _, a := range patchActions() {
 		if a.ID == "install" {
@@ -464,5 +469,28 @@ func TestPickNewestJukaHubReleaseSkipsEmulatorReleases(t *testing.T) {
 		if got := jukaHubReleaseTag(tag); got != want {
 			t.Errorf("jukaHubReleaseTag(%q) = %v, want %v", tag, got, want)
 		}
+	}
+}
+
+func TestStableUpdateSkipsRollingCoresAndPrereleases(t *testing.T) {
+	list := []githubReleaseListed{
+		{githubRelease: githubRelease{TagName: "cores-aarch64", Name: "RetroArch cores for TrimUI (aarch64, glibc 2.31)", PublishedAt: "2026-11-20T05:00:00Z"}},
+		{githubRelease: githubRelease{TagName: "v1.5.0-beta.1", PublishedAt: "2026-11-19T05:00:00Z", Prerelease: true}},
+		{githubRelease: githubRelease{TagName: "JukaHub-20261118120000", PublishedAt: "2026-11-18T12:00:00Z"}},
+		{githubRelease: githubRelease{TagName: "JukaHub-20261120120000", PublishedAt: "2026-11-20T12:00:00Z"}, Draft: true},
+	}
+	rel, ok := pickJukaHubRelease(list, false)
+	if !ok || rel.TagName != "JukaHub-20261118120000" {
+		t.Fatalf("stable picked %+v, %v; want the published app release", rel, ok)
+	}
+	if releaseIsNewerThanInstalled(&list[0].githubRelease) {
+		t.Fatal("a newer RetroArch core release was treated as a JukaHub app update")
+	}
+}
+
+func TestStageRejectsRetroArchCoreRelease(t *testing.T) {
+	err := StageJukaHubUpdate(context.Background(), nil, &githubRelease{TagName: "cores-aarch64"})
+	if err == nil || !strings.Contains(err.Error(), "not a JukaHub app release") {
+		t.Fatalf("staging a cores release: %v", err)
 	}
 }

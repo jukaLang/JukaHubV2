@@ -455,6 +455,8 @@ jobs:
           cp player/jukaconfig.json JukaHub-Trimui/
           cp player/Inter-Regular.ttf JukaHub-Trimui/
           cp player/launch.sh JukaHub-Trimui/
+          cp -a os/smartpro/stock_fastboot JukaHub-Trimui/
+          chmod 755 JukaHub-Trimui/stock_fastboot/stock-fastboot.sh
           cp player/trimui/setterm JukaHub-Trimui/
           chmod 755 JukaHub-Trimui/setterm
           cp player/config.json JukaHub-Trimui/

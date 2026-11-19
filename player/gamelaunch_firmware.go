@@ -292,6 +292,11 @@ func (d *gameDiagLaunch) addLauncherOutput(report *gameDiagReport) {
 		return
 	}
 	issues, excerpt := launcherOutputFindings(lines, d.launcher)
+	// RetroArch started on JukaHub's private C library and stopped in the
+	// loader: back on the firmware's from now on (ra_glibc.go).
+	if is, ok := raGlibcLauncherIssue(lines); ok {
+		issues = append([]launchIssue{is}, issues...)
+	}
 	if len(issues) > 0 {
 		report.Issues = append(issues, report.Issues...)
 	}

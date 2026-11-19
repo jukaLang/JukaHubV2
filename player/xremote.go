@@ -20,9 +20,11 @@ package main
 //     console), otherwise xbox.com/play's console page in the browser, which
 //     streams a console from the browser.
 //
-// The pill's dot is lit when a client is installed, as a PS pill's is when a
-// console is paired. Nothing here claims a console was found or a sign-in
-// happened: that is the client's to report.
+// The pill's dot is lit only while an Xbox answers on this network
+// (xremote_discovery.go): an installed client alone lit it until 2026-11-19,
+// and a green X1 with no console on and nothing to stream read as
+// "connected". Nothing here claims a sign-in happened or that streaming will
+// work: that is the client's to report.
 
 import (
 	"os"
@@ -42,7 +44,7 @@ const (
 	// x1BrowserURL is xbox.com/play's console list: remote play from a
 	// browser on a PC with no Xbox streaming app installed.
 	x1BrowserURL = "https://www.xbox.com/play/consoles"
-	// x1ScanTTL is how long a client scan answers the pill's dot.
+	// x1ScanTTL is how long a client scan answers a press.
 	x1ScanTTL = 3 * time.Second
 	// x1ConsoleTab is where the xHome build lists consoles.
 	x1ConsoleTab = "its Consoles tab (L1/R1)"
@@ -82,8 +84,8 @@ func x1PortName(name string) bool {
 }
 
 // x1FindPort returns GreenOvercast's launcher script under roots. It reads
-// names only (no manifest probe, unlike scanPortLaunchers), since the pill's
-// dot asks from the render path.
+// names only (no manifest probe, unlike scanPortLaunchers), since a press
+// asks on the main loop.
 func x1FindPort(roots []string) (portEntry, bool) {
 	for _, root := range roots {
 		items, err := os.ReadDir(root)
@@ -173,7 +175,8 @@ func x1FindClient() (x1Client, bool) {
 	return x1FindDesktopClient()
 }
 
-// x1CachedClient is the scan the pill draws from, refreshed every x1ScanTTL.
+// x1CachedClient is the client scan a press acts on, refreshed every
+// x1ScanTTL.
 func x1CachedClient() (x1Client, bool) {
 	x1Scan.mu.Lock()
 	defer x1Scan.mu.Unlock()
@@ -191,11 +194,8 @@ func x1InvalidateScan() {
 	x1Scan.mu.Unlock()
 }
 
-// x1TileOn is the pill's lit dot: a client is installed.
-func x1TileOn() bool {
-	_, ok := x1CachedClient()
-	return ok
-}
+// x1TileOn is the pill's lit dot: an Xbox is on and answering here.
+func x1TileOn() bool { return x1ConsoleSeen() }
 
 // x1TileActivate is A on the pill (or a click): play, or get a client.
 func x1TileActivate() {

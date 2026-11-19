@@ -3,9 +3,11 @@
 JukaHub does most of what a handheld's operating system shell does, so on the
 TrimUI (Smart Pro, Brick, Brick Pro, Smart Pro S) it can run **as** the OS:
 **Settings → JukaHub OS**.
-It is a session mode on top of the app, not a new firmware: nothing on the
-firmware's partitions is ever written, and **a reboot always brings back the
-stock system**.
+It is a session mode on top of the app and keeps the stock bootloader and
+kernel. Leaving the session brings back the stock menu, and a reboot clears
+the session's driver and library changes. On verified stock Smart Pro
+firmware, *Boot into JukaHub OS* also saves and changes writable startup files
+to make later boots faster; switching it off restores them.
 
 ## Modes
 
@@ -47,9 +49,8 @@ JukaHub OS — no need to open the app once and switch anything on.
 
 ### How it boots
 
-The stock firmware has no way to boot anything else in place of its menu
-without writing its partitions, which JukaHub OS never does. So it boots the
-firmware's way: the firmware's launcher loop (`runtrimui.sh`) runs the boot
+The stock bootloader and kernel still run. JukaHub OS uses the firmware's
+launcher loop (`runtrimui.sh`), which runs the boot
 scripts in `System/starts`, then its menu, then whatever the menu queued in
 `/tmp/cmd_to_run.sh`. The boot hook queues JukaHub there, and (in OS mode
 since 2026-11-17, for the plain app too since 2026-11-18) it also
@@ -80,11 +81,69 @@ lines — or why the start was the app instead. Once Home is up the log also
 has a `boot times` line (when the firmware's launcher started, when the hook
 ran, when the loop reached the menu's place, when `launch.sh` and JukaHub
 started, when Home appeared), so the stock firmware's share of the boot can be
-told from JukaHub's. `System/starts` is the earliest point the stock boot runs
-anything from the card (it waits for the card to be mounted, about 6 s into a
-Brick's boot as others measured it); booting sooner needs the SD card images
-([Standalone image development](#standalone-image-development)), which bring
-their own boot.
+told from JukaHub's. `System/starts` is the first point the stock launcher runs
+anything from the card. The verified Smart Pro speed hook mounts that card
+earlier in the stock init sequence. A separate SD image
+([Standalone image development](#standalone-image-development)) would have its
+own init sequence, but remains untested on hardware.
+
+On stock Smart Pro firmware, the boot hook was reached about 7.9 seconds after
+kernel start in a hardware check. `launch.sh` raises read-ahead on the mounted
+SD card from the stock 128 KB to 1024 KB before loading the JukaHub binary,
+then restores the old value when JukaHub exits. It leaves internal eMMC
+untouched. This read-ahead change alone helps after the firmware reaches the
+card. The launcher also
+closes the verified TrimUI quick-menu service (`trimui_osdd`) while JukaHub OS
+owns the screen, so ordinary pad buttons cannot bring up TrimUI's menu over
+JukaHub. JukaHub draws its own volume level when the hardware volume buttons
+are pressed. It restarts that service when the stock menu returns. OS mode also
+rejoins saved Wi-Fi in the background after Home, starts one supplicant if the
+firmware has not started it, and obtains an address without opening Wi-Fi
+Settings. These changes apply to OS sessions started through `launch.sh`,
+including the OS package's boot path.
+
+On the verified stock Smart Pro TG5040 firmware, **Boot into JukaHub OS** also
+installs a reversible speed path. An early init hook mounts the SD card; the
+next hook reads up to 32 MiB of JukaHub into the kernel's file cache while
+other stock services start (limited to one second so slow cards do not hold
+up boot); the stock launcher skips a second splash draw after U-Boot has
+already shown the
+boot logo; completed TRIMUI_EX setup and network services finish after
+JukaHub's first frame; and a brief CPU boost ends at that frame or after a
+timeout. Pending firmware updates still run before JukaHub, and a previous
+failed JukaHub start leaves this boot on the stock menu. The installer accepts
+only the inspected stock startup files, saves originals, and restores them
+when OS boot is switched off. For an OS package installed with boot already on,
+the hooks are installed after its first Home and apply from the next power-on.
+Its manual recovery command is
+`sh /mnt/SDCARD/Apps/JukaHub/stock_fastboot/stock-fastboot.sh restore` (use
+`Apps/JukaHub-Trimui` for an app installed under that name). It changes the
+firmware's writable startup overlay and the SD card, not U-Boot or the kernel.
+On one device, six optimized boots showed Home 9.31–10.42 seconds after the
+**kernel** began. On a fresh 2026-11-19 reboot, the A133's generic timer
+measured 3.806 seconds before the kernel; the stock kernel mounted its root
+at 4.182 seconds, JukaHub started at 7.410 seconds, and Home drew at 9.695
+seconds after kernel start. That is approximately **13.5 seconds from chip
+reset to usable Home** on this boot. The delay from pressing Power to chip
+reset was not measured. In a later paired check on the
+same card, Home appeared 9.39 seconds after kernel start without early file
+read-ahead and 8.86 seconds with it. This is a small measured gain, not a
+sub-10-second power-on result: the time before the kernel still applies.
+One boot with a second boot-time Wi-Fi starter repeatedly disconnected during
+association; removing that starter let JukaHub's connection keeper join the
+saved network automatically with one supplicant running on two consecutive
+reboots. Those boots drew Home at 9.17 and 9.23 seconds after kernel start.
+The keeper now checks sooner on Smart Pro OS boots, using that same
+single-supplicant guard. On two reboots with this change, Home drew at 9.17
+and 8.94 seconds after kernel start, and the device became reachable over
+Wi-Fi 24.6 and 23.4 seconds after the restart request. Create
+`Apps/JukaHub/data/boot-prefetch.off` to disable the early file read, or
+delete that file to enable it again. TortOS's approximately two-second Brick
+boot
+uses a different, minimal device-specific boot chain. Reaching that range on
+Smart Pro would require a separate bootloader, kernel, and small system built
+and tested for this board; the stock boot hook cannot skip the time before its
+own Linux kernel starts.
 
 When JukaHub starts it also checks the hook: on a card installed from this
 package (`"edition": "os"`) the package's hook is kept even if the settings
@@ -134,6 +193,7 @@ fan setting's, not a layer's.
 | `Apps/JukaHub/os/os.json` | `{"enabled": true, "edition": "os"}`: OS mode on (Settings → JukaHub OS's status names the edition) |
 | `Apps/JukaHub/os/layers/README.txt` | where layers go |
 | `Apps/JukaHub/os/layers/speed`, `drivers-a133`, `drivers-a523` | the shipped layers, all switched on (each driver layer acts only on its own family) |
+| `Apps/JukaHub/stock_fastboot/` | version-checked stock Smart Pro startup acceleration and its restore command; inactive on other handhelds |
 | `System/starts/jukahub-autostart.sh` | the boot hook, already installed: the exact file *Start JukaHub at login* writes, for `/mnt/SDCARD/Apps/JukaHub`; in OS mode it skips the stock menu (above) |
 | `JukaHub-OS-README.txt` | install and the ways back to the stock menu |
 
@@ -173,7 +233,9 @@ optional: a failure warns and the app packages still ship.
 
 | | |
 |---|---|
-| Firmware partitions, `/usr`, `/lib`, `/etc` on disk | **Never written.** |
+| Bootloader, kernel, firmware base files in `/usr` and `/lib` | Kept as shipped; the bootloader picture is a separately restorable image. |
+| Writable `/etc` startup overlay on verified stock Smart Pro | An early SD hook and a one-line splash skip are installed with backups, then restored when OS boot is turned off. |
+| SD card startup files on verified stock Smart Pro | A backed-up `TRIMUI_EX` script is wrapped to defer routine work, and a short CPU boost hook is added. Both are restored when OS boot is turned off. |
 | Files a layer replaces (libraries, configs) | Bind mounts in a **private mount namespace**: only JukaHub and the programs it starts see them. MainUI, the firmware's services and everything outside never do, and the namespace disappears with the last program in it. `/` is made a *slave* mount, so new SD/USB mounts still appear inside, while the session's mounts never leak out. |
 | Libraries for games (`libs`) | Put first on `LD_LIBRARY_PATH` for JukaHub (and, with `"children": true`, for the games it starts). An environment variable — gone with the process. |
 | Kernel drivers (`modules`) | Loaded into the running kernel **only if built for exactly this kernel**, written to a journal in `/tmp/jukaos/journal.json` (RAM) and unloaded when the session ends. |
@@ -350,10 +412,11 @@ place of the stock startup and menu; the internal storage is never written.
 The package described above is still the stock-firmware session edition; it
 is a different install.
 
-**Boot time.** The target is Home within two seconds of power-on, the time
-TortOS 2 reaches on plastron. That speed comes from booting a small
-bootloader and kernel from the card, not from flashing an `.awimg` (TrimUI's
-format for rewriting the internal firmware), which JukaHub OS never does. On
+**Boot time.** Home within two seconds is a development target inspired by
+TortOS 2 on plastron; it has **not** been measured on a Smart Pro. The Smart
+Pro image still uses TrimUI's bootloader and kernel, so it cannot promise that
+time. It boots from the card without flashing an `.awimg` (TrimUI's format for
+rewriting the internal firmware), which JukaHub OS never does. On
 the images JukaHub boots with no animation unless one is picked, the launcher
 shows the picture of Home kept at the last power-off as soon as the card is
 mounted, and Wi-Fi and Bluetooth start after JukaHub's first frame. Each boot

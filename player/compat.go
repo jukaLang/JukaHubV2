@@ -1311,7 +1311,17 @@ func coreDirIsSystem(dir string) bool {
 // cannot be opened either (coreGLLoadProblem, corerisk.go): the generic check
 // stands aside for libraries RetroArch might bring, and libGL is one this
 // firmware's RetroArch does not.
+//
+// Where RetroArch starts on JukaHub's private C library (ra_glibc.go), that
+// runtime's libraries are read first: a build that needs a newer glibc than
+// the firmware's then loads.
 func coreLoadProblemFile(source, target string) string {
+	return coreLoadProblemFileWith(source, target, true)
+}
+
+// coreLoadProblemFileWith is coreLoadProblemFile; withRuntime false asks about
+// the firmware's C library alone (ra_glibc.go, which core needs the runtime).
+func coreLoadProblemFileWith(source, target string, withRuntime bool) string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
@@ -1324,7 +1334,7 @@ func coreLoadProblemFile(source, target string) string {
 		return ""
 	}
 	defer f.Close()
-	env := coreLoadEnv(target)
+	env := coreLoadEnvWith(target, withRuntime)
 	if problem := elfLoadProblemFrom(f, env); problem != "" || env.archOnly {
 		return problem
 	}
@@ -1355,7 +1365,12 @@ func coreLoadProblemData(data []byte, target string) string {
 // cores would stop every game that core runs while "loading on this device".
 // The symbol-version check runs only when that architecture is this process's
 // own, whose libraries are the ones in the system folders.
-func coreLoadEnv(target string) elfLoadEnv {
+func coreLoadEnv(target string) elfLoadEnv { return coreLoadEnvWith(target, true) }
+
+// coreLoadEnvWith is coreLoadEnv; with withRuntime, the libraries of JukaHub's
+// private C library come first where target's RetroArch starts on it
+// (ra_glibc.go).
+func coreLoadEnvWith(target string, withRuntime bool) elfLoadEnv {
 	hostClass, hostMachine := elfHostArch(runtime.GOARCH)
 	env := elfHostEnv(nil)
 	if strings.TrimSpace(target) == "" {
@@ -1376,6 +1391,11 @@ func coreLoadEnv(target string) elfLoadEnv {
 	}
 	env.class, env.machine = class, machine
 	env.archOnly = class != hostClass || machine != hostMachine
+	if withRuntime && !env.archOnly {
+		if dir := raGlibcLoadDir(target); dir != "" {
+			env.libDirs = append([]string{dir}, env.libDirs...)
+		}
+	}
 	return env
 }
 

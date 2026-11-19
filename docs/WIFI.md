@@ -359,7 +359,7 @@ it is open. **A** re-reads it immediately.
 | **Searched** | every directory `Ctrl dir` was resolved from, in order |
 | **Supplicant config** | the config file the image ships, or `none found` |
 | **Supplicant start** | what happened when JukaHub started the supplicant itself: `not attempted`, `started by JukaHub (ctrl_interface …)`, `started, but no control socket appeared in …`, or `failed: …` |
-| **Radio** | `on`/`off` and whether that came from `rfkill` or `nmcli`; `unknown` when the image has neither |
+| **Radio** | `on`/`off` and whether that came from `rfkill` or `nmcli`; `unknown` when the image has neither. `rfkill` is the kernel's `/sys/class/rfkill` switch files first and the `rfkill` program only where the kernel lists no Wi-Fi switch |
 | **Station** | `wpa_state` with the SSID and IP, straight from the supplicant |
 | **Last error** | the most recent failure, the phase it came from (`command`, `supplicant start`) and how long ago it was |
 

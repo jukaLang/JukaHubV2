@@ -1,0 +1,32 @@
+#!/bin/sh /etc/rc.common
+# Read JukaHub into the page cache while stock services finish starting.
+# This is bounded to one second and runs outside init's critical path.
+START=42
+boot() {
+    (
+        APP=@APP_DIR@
+        [ "$(cat /etc/model 2>/dev/null)" = TG5040 ] || exit 0
+        [ "$(cat /sys/block/mmcblk1/device/type 2>/dev/null)" = SD ] || exit 0
+        n=0
+        while [ ! -r "$APP/JukaHub" ] && [ "$n" -lt 20 ]; do
+            sleep 0.1
+            n=$((n + 1))
+        done
+        [ -r "$APP/JukaHub" ] || exit 0
+        grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP/os/os.json" 2>/dev/null || exit 0
+        grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false' "$APP/os/os.json" 2>/dev/null && exit 0
+        [ ! -e "$APP/.autostart-pending" ] && [ ! -e "$APP/.autostart-keep-menu" ] || exit 0
+        [ ! -e "$APP/data/boot-prefetch.off" ] || exit 0
+        [ ! -e /tmp/jukahub-first-frame ] || exit 0
+        pidof JukaHub >/dev/null 2>&1 && exit 0
+        read -r begin _ </proc/uptime
+        if timeout 1 dd if="$APP/JukaHub" of=/dev/null bs=1048576 count=32 2>/dev/null; then
+            result=complete
+        else
+            result=partial
+        fi
+        read -r end _ </proc/uptime
+        printf '%s to %s 32 MiB %s\n' "$begin" "$end" "$result" >/tmp/jukahub-earlyprefetch.log
+    ) </dev/null >/dev/null 2>&1 &
+    return 0
+}

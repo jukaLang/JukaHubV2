@@ -162,11 +162,13 @@ identical — a test rejects the build if they differ.
 `launch.sh` starts `JukaHub --os-session` when `Apps/JukaHub/os/os.json` says
 `"enabled": true`, and JukaHub applies the layers you switched on (newer
 libraries for games, drivers built for this kernel, a few system values) in a
-private mount namespace and a RAM journal. Nothing on the firmware's partitions
-is written, the power card's Exit becomes **Return to CrossMix**, holding
-**Select or B** through the boot animation starts the stock menu for that boot,
-and a reboot always comes back to the stock system. Layer format, what is and
-is not touched, and recovery: [docs/JUKAHUB_OS.md](../../docs/JUKAHUB_OS.md).
+private mount namespace and a RAM journal. The power card's Exit becomes
+**Return to CrossMix**, and holding **Select or B** through the boot animation
+starts the stock menu for that boot. On verified stock Smart Pro firmware,
+**Boot into JukaHub OS** also installs reversible speed hooks in the writable
+startup files; turning it off restores them. The stock bootloader and kernel
+remain. Layer format, what is touched, and recovery:
+[docs/JUKAHUB_OS.md](../../docs/JUKAHUB_OS.md).
 
 `make-os-package.sh` writes `JukaHub-OS-Trimui.zip` with the layers in
 [`os-layers/`](os-layers) switched on: `speed`, `drivers-a133` (Smart Pro,

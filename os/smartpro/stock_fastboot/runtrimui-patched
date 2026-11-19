@@ -1,0 +1,11 @@
+#!/bin/sh /etc/rc.common
+
+# JukaHub OS: U-Boot has already shown the boot logo; skip the redundant stock splash draw.
+# /usr/sbin/pic2fb /etc/splash.png
+
+START=99
+PROG=/usr/trimui/bin/runtrimui.sh
+
+start() {
+	$PROG
+}

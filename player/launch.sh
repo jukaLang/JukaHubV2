@@ -158,6 +158,21 @@ ui_pid() {
     echo "$UI_LIST"
 }
 
+# Wait only while MainUI still owns the display. On the Smart Pro it can ignore
+# TERM altogether, so the first wait is short before KILL; the second allows
+# the driver more time to release the display. Older firmware without
+# fractional sleep keeps the former one-second wait.
+wait_ui_gone() {
+    WG_MAX="${1:-10}"
+    WG_N=0
+    while [ "$WG_N" -lt "$WG_MAX" ]; do
+        [ -z "$(ui_pid)" ] && return 0
+        WG_N=$((WG_N + 1))
+        sleep 0.1 2>/dev/null || { sleep 1; break; }
+    done
+    [ -z "$(ui_pid)" ]
+}
+
 # The firmware's launcher loops, found by their command line, which names the
 # script even where the shell running it shows up as plain "sh" (a busybox
 # built to prefer its own applets names every script it runs that way, so
@@ -481,9 +496,13 @@ UI_SEEN="$UI_PID"
 if [ -n "$UI_PID" ]; then
     say "stopping stock launcher (pid $UI_PID)"
     kill $UI_PID 2>/dev/null
-    sleep 1
-    UI_PID="$(ui_pid)"
-    [ -n "$UI_PID" ] && kill -9 $UI_PID 2>/dev/null
+    if ! wait_ui_gone 4; then
+        UI_PID="$(ui_pid)"
+        if [ -n "$UI_PID" ]; then
+            kill -9 $UI_PID 2>/dev/null
+            wait_ui_gone || :
+        fi
+    fi
 fi
 
 # Verify, don't assume. A refused kill used to be ignored, and JukaHub then
@@ -503,7 +522,7 @@ elif [ -n "$UI_SEEN" ]; then
         say "MainUI still running; kill -9 attempt $n"
         # One argument per pid: pidof can name more than one MainUI.
         kill -9 $(ui_pid) 2>/dev/null
-        sleep 1
+        wait_ui_gone || :
     done
     if [ -n "$(ui_pid)" ]; then
         say_started_by
@@ -654,6 +673,84 @@ EOF
     [ -n "$CR_FIXED" ] && say "CPU settings differed from before the start; put back:$CR_FIXED"
 }
 
+# JukaHub OS reads a large executable from the SD card before its first frame.
+# The stock Smart Pro leaves that card at 128 KB read-ahead. Raise only the SD
+# disk (never the eMMC) while this OS session runs, then put its old value back
+# when the firmware's menu returns. The standalone image does the same in init.
+CARD_RA_PATH=""
+CARD_RA_OLD=""
+card_readahead_start() {
+    [ -z "$CARD_RA_PATH" ] || return 0
+    RA_DEV=""
+    while read -r RA_SOURCE RA_MOUNT RA_REST; do
+        if [ "$RA_MOUNT" = /mnt/SDCARD ]; then
+            RA_DEV="$RA_SOURCE"
+            break
+        fi
+    done </proc/mounts
+    case "$RA_DEV" in /dev/mmcblk[0-9]*p[0-9]*) ;; *) return 0 ;; esac
+    RA_DISK="${RA_DEV#/dev/}"
+    RA_DISK="${RA_DISK%p*}"
+    RA_TYPE=""
+    read -r RA_TYPE 2>/dev/null <"/sys/block/$RA_DISK/device/type" || return 0
+    [ "$RA_TYPE" = SD ] || return 0
+    RA_PATH="/sys/block/$RA_DISK/queue/read_ahead_kb"
+    RA_OLD=""
+    read -r RA_OLD 2>/dev/null <"$RA_PATH" || return 0
+    case "$RA_OLD" in "" | *[!0-9]*) return 0 ;; esac
+    [ "$RA_OLD" -lt 1024 ] || return 0
+    if printf '1024\n' >"$RA_PATH" 2>/dev/null; then
+        CARD_RA_PATH="$RA_PATH"
+        CARD_RA_OLD="$RA_OLD"
+        say "SD card read-ahead: $RA_DISK $RA_OLD -> 1024 KB for JukaHub OS"
+    fi
+}
+card_readahead_restore() {
+    [ -n "$CARD_RA_PATH" ] || return 0
+    if printf '%s\n' "$CARD_RA_OLD" >"$CARD_RA_PATH" 2>/dev/null; then
+        say "SD card read-ahead restored to $CARD_RA_OLD KB"
+    fi
+    CARD_RA_PATH=""
+    CARD_RA_OLD=""
+}
+
+# Stock firmware starts trimui_osdd just before MainUI. Its input listener can
+# put the TrimUI quick menu over JukaHub OS when a pad button is pressed; it
+# also holds the framebuffer and ALSA playback device open. JukaHub OS has its
+# own controls, so close only the verified firmware OSD during an OS session.
+# The firmware restarts it on its next loop; restore it ourselves as well for a
+# launch from SSH or a firmware whose loop does not return to MainUI.
+OSD_RESTART_EXE=""
+OSD_RESTART_LIBS="${JUKAHUB_ORIG_LD_LIBRARY_PATH:-/usr/trimui/lib}"
+quiet_firmware_osd() {
+    [ -z "$OSD_RESTART_EXE" ] || return 0
+    for OSD_P in $(pidof trimui_osdd 2>/dev/null || pgrep -x trimui_osdd 2>/dev/null); do
+        OSD_EXE="$(readlink "/proc/$OSD_P/exe" 2>/dev/null)"
+        case "$OSD_EXE" in
+            /usr/trimui/osd/trimui_osdd | /mnt/SDCARD/trimui/osd/trimui_osdd | /mnt/UDISK/trimui/osd/trimui_osdd) ;;
+            *) continue ;;
+        esac
+        if kill -KILL "$OSD_P" 2>/dev/null; then
+            OSD_RESTART_EXE="$OSD_EXE"
+            say "paused TrimUI's quick menu for JukaHub OS"
+        fi
+    done
+}
+restore_firmware_osd() {
+    [ -n "$OSD_RESTART_EXE" ] || return 0
+    OSD_EXE="$OSD_RESTART_EXE"
+    OSD_RESTART_EXE=""
+    [ -x "$OSD_EXE" ] || return 0
+    [ -z "$(pidof trimui_osdd 2>/dev/null || pgrep -x trimui_osdd 2>/dev/null)" ] || return 0
+    (
+        cd "${OSD_EXE%/*}" || exit 1
+        LD_LIBRARY_PATH="$OSD_RESTART_LIBS"
+        export LD_LIBRARY_PATH
+        exec "$OSD_EXE"
+    ) </dev/null >/dev/null 2>&1 &
+    say "TrimUI's quick menu restored for the stock menu"
+}
+
 # --------------------------------------------------------------- run it
 if [ ! -x "$APP_DIR/JukaHub" ]; then
     say "FATAL: binary $APP_DIR/JukaHub not found or not executable"
@@ -674,9 +771,13 @@ while :; do
     # flag. The pattern is the boot hook's too (autostart.go): any spacing, and
     # a file saved on Windows (CRLF) still counts.
     if [ -f "$APP_DIR/os/os.json" ] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP_DIR/os/os.json" 2>/dev/null; then
+        card_readahead_start
+        quiet_firmware_osd
         say "starting JukaHub OS (os/os.json: OS mode on; what it applied follows as \"jukaos:\" lines)"
         "$APP_DIR/JukaHub" --os-session >>"$LOG" 2>&1 &
     else
+        card_readahead_restore
+        restore_firmware_osd
         # Why this start is the app, for a report from a card that should
         # have booted JukaHub OS.
         if [ -f "$APP_DIR/os/os.json" ]; then
@@ -817,6 +918,8 @@ while :; do
 done
 
 # --------------------------------------------------- give the screen back
+card_readahead_restore
+restore_firmware_osd
 # Everything paused for this session — by this script, by the boot hook, or by
 # the app's display guard — runs again, exactly those processes.
 resume_paused

@@ -62,11 +62,9 @@ func logLevelFromEnv() slog.Level {
 // (package initialisers, tests, the secret CLI).
 func InitLogging() {
 	if logger == nil {
-		// A bootstrap logger first. Choosing the real level asks which device
-		// this is, and device detection logs what it found from inside its
-		// sync.Once: without a logger already in place that line would call
-		// back into InitLogging, re-enter the Once on the same goroutine and
-		// hang the boot on every Linux device.
+		// Keep a bootstrap logger available while choosing the real level.
+		// Device detection can happen here; its identity is logged only after
+		// the final handler is installed below.
 		logger = slog.New(&logRingHandler{level: slog.LevelInfo, stderr: slog.LevelWarn})
 	}
 	level := logLevelFromEnv()
@@ -79,6 +77,7 @@ func InitLogging() {
 	slog.SetDefault(logger)
 	// Anything a dependency still prints through the log package is chatter.
 	slog.SetLogLoggerLevel(slog.LevelDebug)
+	logDetectedDeviceIdentity()
 }
 
 // Log returns the structured logger.

@@ -1,0 +1,29 @@
+#!/bin/sh
+# JukaHub stock-boot acceleration. The unchanged original is beside this file.
+REAL=/mnt/SDCARD/System/starts/ex_init.jukahub-original
+APP=@APP_DIR@
+[ -x "$REAL" ] || exit 0
+# Updates and recovery work keep their original ordering.
+for f in /mnt/SDCARD/System/updates/update_*.sh; do
+    id=${f##*/}; id=${id#update_}; id=${id%.sh}
+    [ -f "/etc/ex_update/$id" ] || exec "$REAL"
+done
+for f in /mnt/SDCARD/TRIMUI_EX.zip /mnt/SDCARD/trimui.portmaster.zip /mnt/SDCARD/Apps/PortMaster/PortMaster/.trimui-refresh; do
+    [ ! -e "$f" ] || exec "$REAL"
+done
+[ -f "$APP/os/os.json" ] && grep -q '"enabled"[[:space:]]*:[[:space:]]*true' "$APP/os/os.json" 2>/dev/null || exec "$REAL"
+[ -f "$APP/JukaHub" ] && [ -f "$APP/launch.sh" ] || exec "$REAL"
+[ -f /mnt/SDCARD/System/starts/jukahub-autostart.sh ] || exec "$REAL"
+[ ! -e "$APP/.autostart-pending" ] || exec "$REAL"
+[ ! -e "$APP/.autostart-keep-menu" ] || exec "$REAL"
+grep -q '"fastBoot"[[:space:]]*:[[:space:]]*false' "$APP/os/os.json" 2>/dev/null && exec "$REAL"
+(
+    trap '' HUP
+    n=0
+    while [ ! -s /tmp/jukahub-first-frame ] && [ "$n" -lt 60 ]; do
+        sleep 0.2
+        n=$((n + 1))
+    done
+    exec "$REAL"
+) </dev/null >/dev/null 2>&1 &
+exit 0

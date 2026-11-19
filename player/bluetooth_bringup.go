@@ -420,7 +420,9 @@ func btSwitchOffWithoutDaemon() (handled bool, err error) {
 		return true, nil
 	}
 	if IsTrimuiDevice() && !btDaemonRunning() {
-		if btRfkillTool() != "" {
+		// hci0's own switch, never the board's power switch: a chip cut off
+		// while hci0 stays registered is not attached again (rfkill_sysfs.go).
+		if rfkillAvailable(rfkillBluetooth) {
 			return true, btRfkillSet(false)
 		}
 		return true, nil
@@ -697,9 +699,10 @@ func btProcStatLive(stat string) bool {
 	return true
 }
 
-// btUnblockRfkill lifts a soft block from the Bluetooth radio switches: rfkill
-// (or TrimUI's rfkill.elf) when the firmware ships it, the switches' own sysfs
-// files otherwise. A hard block is a switch only a hand can move.
+// btUnblockRfkill lifts a soft block from the Bluetooth radio switches:
+// btRfkillSet (/dev/rfkill, the switches' files, then an rfkill program), and
+// each switch's state file for whatever that left blocked. A hard block is a
+// switch only a hand can move.
 func btUnblockRfkill() error {
 	soft, hard := btRfkillBlocked(btRfkillRoot)
 	if hard {
@@ -708,18 +711,15 @@ func btUnblockRfkill() error {
 	if len(soft) == 0 {
 		return nil
 	}
-	if btRfkillTool() != "" {
-		err := btRfkillSet(true)
-		if err == nil {
-			// A tool that exits 0 is not proof (TrimUI's rfkill.elf is not
-			// the util-linux one): only switches still blocked go on to sysfs.
-			if soft, _ = btRfkillBlocked(btRfkillRoot); len(soft) == 0 {
-				return nil
-			}
-			logDebug("bluetooth", "bring-up: %s unblock left %v blocked", btRfkillTool(), soft)
-		} else {
-			logDebug("bluetooth", "bring-up: %v", err)
+	// /dev/rfkill, the switches' files, then the program (rfkill_sysfs.go).
+	if err := btRfkillSet(true); err == nil {
+		// Read back here too: only switches still blocked go on below.
+		if soft, _ = btRfkillBlocked(btRfkillRoot); len(soft) == 0 {
+			return nil
 		}
+		logDebug("bluetooth", "bring-up: unblock left %v blocked", soft)
+	} else {
+		logDebug("bluetooth", "bring-up: unblock: %v", err)
 	}
 	for _, name := range soft {
 		dir := filepath.Join(btRfkillRoot, name)

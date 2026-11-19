@@ -736,9 +736,11 @@ or accepted by design.
   at the disk, `bgmSetSelectedPath` re-confines to the Files root) and the
   Minecraft peer's version files (`mcReadJSON`, `mcRegularFileUnder`, the
   plan's `Lstat`), whose names a peer sends.
-- WPE Browser's address no longer reaches `sh`'s argument list: a constant
-  `sh -c` program reads it from `JUKAHUB_WPE_URL`, unsets it and passes it to
-  `launch.sh` as one quoted `$1` (`brwWpeLaunchScript` in `brw_wpe.go`).
+- WPE Browser's address no longer reached `sh`'s argument list: a constant
+  `sh -c` program read it from `JUKAHUB_WPE_URL`, unset it and passed it to
+  `launch.sh` as one quoted `$1`. Since 2026-11-19 JukaHub does not start WPE
+  at all (`brw_wpe.go` was removed; the Browser is built-in only), so the
+  alert's code path is gone.
 - Tool-archive members are staged under the installer's own spelling of the
   wanted name (`toolArchiveWantedName` in `tools.go`), so nothing the archive
   spelled reaches a path.

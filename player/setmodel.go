@@ -717,6 +717,7 @@ func setBuildSections() []setSection {
 					Set: func(c *Config, on bool) {
 						setStoreBool(c, "autoStart", on)
 						widgetToggleSideEffect(c, "autoStart", on)
+						jukaosStockFastBootReport(on && jukaosLoadState(jukaosAppDir()).Enabled)
 					},
 				},
 				{
@@ -1551,6 +1552,9 @@ func setBuildSections() []setSection {
 					Current: coreUpdateModeIndex,
 					Choose:  func(c *Config, value string) { setToast(coreUpdateModeChoose(c, value)) },
 				},
+				// RetroArch on JukaHub's private glibc for the newest cores
+				// (ra_glibc.go); 64-bit TrimUI handhelds only.
+				raGlibcSettingsRow(),
 				// "Ask which emulator" (emupicker.go) and "Get more cores"
 				// (emumorecores.go).
 				emuPickAskSettingsRow(),
@@ -1768,12 +1772,12 @@ func setBuildSections() []setSection {
 		{
 			// The search engine and the home page (browser_engines.go), the
 			// page-script switch (webdom_runtime.go), the full-screen layout
-			// (brw_fullscreen.go), the ad and tracker filter (brw_adblock.go) and,
-			// on the handheld, WPE Browser (brw_wpe.go). It sits beside Privacy &
-			// data, whose first rows are the Browser's sign-ins.
+			// (brw_fullscreen.go) and the ad and tracker filter (brw_adblock.go).
+			// It sits beside Privacy & data, whose first rows are the Browser's
+			// sign-ins.
 			ID: "browser", Title: "Browser", Glyph: "browser",
 			Subtitle: "Search engine, home page, JavaScript, full screen and ads",
-			Rows:     append(brwSettingsRows(), webJSSettingsRow(), brwFullScreenSettingsRow(), brwAdBlockSettingsRow(), brwWpeSettingsRow()),
+			Rows:     append(brwSettingsRows(), webJSSettingsRow(), brwFullScreenSettingsRow(), brwAdBlockSettingsRow()),
 		},
 		{
 			ID: "privacy", Title: "Privacy & data", Glyph: "shield",

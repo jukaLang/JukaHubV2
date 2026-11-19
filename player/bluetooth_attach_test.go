@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -103,6 +104,113 @@ func TestBtRfkillPulseUsesFirmwareStateFile(t *testing.T) {
 	if steps != 2 || read("rfkill0", "state") != "1" || read("rfkill0", "soft") != "0" ||
 		read("rfkill1", "state") != "1" || read("rfkill2", "soft") != "0" {
 		t.Fatal("rfkill pulse did not restore the Bluetooth switches while leaving Wi-Fi alone")
+	}
+}
+
+// The radio switches without the rfkill program (rfkill_sysfs.go): a device
+// whose rfkill exits 127 is read and switched through these files alone.
+func TestRfkillSysfsSwitchesByKind(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]map[string]string{
+		// A board's own switch: the Bluetooth chip's power.
+		"rfkill0": {"type": "bluetooth\n", "name": "sunxi-bt\n", "soft": "0", "hard": "0"},
+		"rfkill1": {"type": "wlan\n", "name": "phy0\n", "soft": "0", "hard": "0"},
+		// An old kernel: state only.
+		"rfkill2": {"type": "wlan\n", "state": "1"},
+		"rfkill3": {"type": "bluetooth\n", "name": "hci0\n", "soft": "0", "hard": "0"},
+		// Not a switch name.
+		"rfkillx": {"type": "wlan\n", "soft": "1"},
+	}
+	for name, attrs := range files {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for attr, value := range attrs {
+			if err := os.WriteFile(filepath.Join(dir, attr), []byte(value), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	soft := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(root, name, "soft"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if blocked, ok := rfkillSysfsBlocked(root, rfkillWlan); !ok || blocked {
+		t.Fatalf("wlan before = blocked %v, ok %v; want on", blocked, ok)
+	}
+	if err := rfkillSysfsSet(root, rfkillWlan, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, ok := rfkillSysfsBlocked(root, rfkillWlan); !ok || !blocked {
+		t.Fatalf("wlan after block = blocked %v, ok %v; want off", blocked, ok)
+	}
+	if blocked, _ := rfkillSysfsBlocked(root, rfkillBluetooth); blocked {
+		t.Fatal("blocking Wi-Fi blocked Bluetooth too")
+	}
+	if on, ok := rfkillSysfsAirplane(root, false); !ok || on {
+		t.Fatalf("airplane with Bluetooth on = %v, %v; want off", on, ok)
+	}
+	if err := rfkillSysfsSet(root, rfkillAnyKind, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if on, _ := rfkillSysfsAirplane(root, false); !on {
+		t.Fatal("every switch blocked does not read as Airplane Mode")
+	}
+	if err := rfkillSysfsSet(root, rfkillAnyKind, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, _ := rfkillSysfsBlocked(root, rfkillAnyKind); blocked {
+		t.Fatal("unblocking every switch left one blocked")
+	}
+	if err := rfkillSysfsSet(t.TempDir(), rfkillWlan, false, false); !errors.Is(err, errRfkillNoSwitch) {
+		t.Fatalf("no switches = %v; want errRfkillNoSwitch", err)
+	}
+	// The handhelds: off through the stack switches alone, the chip powered.
+	if err := rfkillSysfsSet(root, rfkillBluetooth, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if soft("rfkill0") != "0" || soft("rfkill3") != "1" {
+		t.Fatalf("stack-only Bluetooth off: power %q, hci0 %q; want 0, 1", soft("rfkill0"), soft("rfkill3"))
+	}
+	if err := rfkillSysfsSet(root, rfkillAnyKind, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if on, _ := rfkillSysfsAirplane(root, true); !on {
+		t.Fatal("stack switches blocked do not read as the handheld's Airplane Mode")
+	}
+	if err := rfkillSysfsSet(root, rfkillAnyKind, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if soft("rfkill1") != "0" || soft("rfkill3") != "0" {
+		t.Fatal("stack-only Airplane Mode off left a stack switch blocked")
+	}
+	// No hci0 registered: nothing is attached, and the power switch moves.
+	if err := os.RemoveAll(filepath.Join(root, "rfkill3")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rfkillSysfsSet(root, rfkillBluetooth, true, true); err != nil || soft("rfkill0") != "1" {
+		t.Fatalf("Bluetooth off with no stack switch = %v, power %q; want nil, 1", err, soft("rfkill0"))
+	}
+	if err := rfkillSysfsSet(root, rfkillBluetooth, false, false); err != nil {
+		t.Fatal(err)
+	}
+	// A physical switch: Wi-Fi on cannot be done, Airplane Mode off can.
+	if err := os.WriteFile(filepath.Join(root, "rfkill1", "hard"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, _ := rfkillSysfsBlocked(root, rfkillWlan); !blocked {
+		t.Fatal("a hard-blocked radio reads on")
+	}
+	if err := rfkillSysfsSet(root, rfkillWlan, false, false); !errors.Is(err, errRfkillHard) {
+		t.Fatalf("unblocking a hard-blocked radio = %v; want errRfkillHard", err)
+	}
+	if err := rfkillSysfsSet(root, rfkillAnyKind, false, false); err != nil {
+		t.Fatalf("Airplane Mode off with a hard block = %v; want nil", err)
 	}
 }
 

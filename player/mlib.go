@@ -37,6 +37,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -799,32 +800,52 @@ func mlibRunScan(ctx context.Context, ticket uint64, extra []string, toolsPath s
 		mlibState.mu.Lock()
 		old := append([]mlibItem(nil), mlibState.items...)
 		mlibState.mu.Unlock()
-		files, done := mlibWalkRoot(ctx, root, known, mlibFilesByDir(old), dirs, budget)
+		// Reconcile only this root. The other roots can hold thousands of
+		// songs, and copying and indexing all of them for each of the six
+		// default folders made a Library visit grow with unrelated files.
+		oldRoot := make([]mlibItem, 0)
+		for _, it := range old {
+			if isPathWithin(it.Path, root) {
+				oldRoot = append(oldRoot, it)
+			}
+		}
+		rootDirs := make(map[string]mlibDirState)
+		files, done := mlibWalkRoot(ctx, root, known, mlibFilesByDir(oldRoot), rootDirs, budget)
 		if !done {
 			return
 		}
-		fresh := mlibReconcile(old, files)
+		fresh := mlibReconcile(oldRoot, files)
+		changed := !slices.Equal(oldRoot, fresh)
 		budget -= len(files)
 		mlibState.mu.Lock()
-		mlibState.items = mlibReplaceRoot(mlibState.items, root, fresh)
-		for k, v := range dirs {
+		if changed {
+			mlibState.items = mlibReplaceRoot(mlibState.items, root, fresh)
+		}
+		for k, v := range rootDirs {
+			dirs[k] = v
 			mlibState.dirs[k] = v
 		}
 		mlibState.found += len(files)
 		mlibState.mu.Unlock()
-		mlibRebuildModel()
+		if changed {
+			mlibRebuildModel()
+		}
 		if budget <= 0 {
 			whole = false
 			break
 		}
 	}
 	mlibState.mu.Lock()
-	mlibState.items = mlibKeepUnder(mlibState.items, roots)
+	kept := mlibKeepUnder(mlibState.items, roots)
+	removed := len(kept) != len(mlibState.items)
+	mlibState.items = kept
 	if whole {
 		mlibState.dirs = dirs
 	}
 	mlibState.mu.Unlock()
-	mlibRebuildModel()
+	if removed {
+		mlibRebuildModel()
+	}
 	mlibSave()
 	if !mlibEnrich(ctx, toolsPath) {
 		return

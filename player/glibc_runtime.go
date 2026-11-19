@@ -3,9 +3,10 @@ package main
 // A private C runtime for AArch64 programs that need newer glibc symbols than
 // TrimUI's firmware provides (glibc 2.33). The firmware's /lib is never
 // changed, and only selected child processes start through this runtime's
-// loader: GreenOvercast's game command (glibc_port.go) and the bash PortMaster
+// loader: GreenOvercast's game command (glibc_port.go), the bash PortMaster
 // and its ports run on when the firmware's bash is BusyBox
-// (portmaster_runtime.go).
+// (portmaster_runtime.go), and RetroArch when a core needs a newer glibc than
+// the firmware's (ra_glibc.go, in the game's own mount namespace).
 //
 // What is installed: Ubuntu 24.04 ("noble") arm64 libc6 — glibc 2.39 — with
 // libgcc-s1, libstdc++6 and libtinfo6 beside it and Ubuntu's bash, copied into
@@ -20,7 +21,8 @@ package main
 // already accepted is refused, so an old signed index cannot roll the card
 // back. A new build replaces the old one only after its loader and its bash
 // have started on this device. JukaHub looks for a newer build at most once a
-// week, in the background, when the Ports panel or PortMaster opens online.
+// week, in the background, when the Ports panel or PortMaster opens online, or
+// when a core update needs the runtime (ra_glibc.go).
 //
 // When the signed index cannot be read, a first install falls back to the one
 // libc6 build whose size and SHA-256 are pinned below (glibc only, no bash) —

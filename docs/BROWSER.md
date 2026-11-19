@@ -1,20 +1,15 @@
 # Browser
 
 The stock TrimUI firmware has no web browser, so links in the app (GitHub
-issues, release notes, documentation) had nowhere to open. **Browser** opens
-full web pages by default: WPE WebKit on a handheld with WPE Browser installed,
-or the computer's web browser on a PC. When WPE is absent or cannot start,
-JukaHub opens its light reader instead. The reader needs no X11, Wayland,
-WebKit or Chromium; it fetches a page over HTTPS and draws it with JukaHub's
-SDL renderer. **Settings → Browser → Open pages with** selects the light reader
-even when a full browser is available.
+issues, release notes, documentation) had nowhere to open. **Browser** is
+JukaHub's own built-in browser, on the handheld and on a PC alike. It needs no
+X11, Wayland, WebKit or Chromium, and it does not use WPE: it fetches a page
+over HTTPS and draws it with JukaHub's SDL renderer. Every Browser entry and
+every link elsewhere in JukaHub (chat, Wi-Fi sign-in pages) opens here.
 
 Open it from **Apps → Browser** or **Start → Browser**.
 
 ## Full screen and the Select menu
-
-This section describes the light reader used when WPE is unavailable or chosen
-in Settings.
 
 The page fills the screen. There is no address bar, toolbar, chip row, top bar
 or footer around it: on the Smart Pro's 720-line panel those took nearly half of
@@ -25,8 +20,9 @@ a sheet opens at the right, with the page still in view beside it.
 Across its top are **Back**, **Forward**, **Reload** and **Home**. Under them, in
 this order: **Go to address**, **Search the web** (with the engine's name),
 **Links on this page** (with their count), **Find on this page**, **Zoom**,
-**Link mode**, **Save this page**, **Saved pages**, **Open in WPE Browser**
-(see [WPE Browser](#wpe-browser)), **Site info**, **Ad &
+**Link mode**, **Save this page**, **Saved pages**, **Open on your phone**
+(**Open in web browser** on a PC; see
+[Taking a page elsewhere](#taking-a-page-elsewhere)), **Site info**, **Ad &
 tracker filter**, **Signed-in sites**, **Forget sign-ins**, **Full-screen
 pages**, **Browser settings**, **JukaHub issues** and **Close browser**. The rows
 never move: one that cannot act on the page on screen (Back with no history,
@@ -456,9 +452,8 @@ that response. The reader detects it before running page scripts and shows a
 card instead. **Open Brave Search** opens Brave's start page from a challenged
 Startpage home page; **Search on Brave Search** carries over the words from a
 challenged Startpage search. **Always use Brave Search** changes the search
-engine. A PC can open Startpage in its web browser; a handheld can try WPE
-Browser when installed. Reload asks Startpage again in case its response
-changes.
+engine. A PC can open Startpage in its web browser. Reload asks Startpage
+again in case its response changes.
 
 ### Google needs a full web browser
 
@@ -480,10 +475,6 @@ the same wall — and shows a card instead:
 * On a PC, **Open in web browser** hands the search to the desktop's own
   browser, which runs Google's scripts; **Search on Brave Search** and **Change
   engine** follow it.
-* On a handheld with [WPE Browser](#wpe-browser) installed, **Open in WPE
-  Browser** comes first and tries the search there;
-  **Search on Brave Search** and **Change engine** follow it. Where WPE Browser can
-  be installed but is not, **Get WPE Browser** takes Change engine's place.
 
 Google stays on the list because its home page loads (so it works as a home
 page) and because the PC path makes it useful there. The card is never cached:
@@ -500,62 +491,27 @@ not follow at all, so on Bing this is what makes a result open. A destination
 that is not an `http` or `https` page with a host (a `javascript:` link) is not
 followed, and a wrapped YouTube link still plays in Media.
 
-## WPE Browser
+## Taking a page elsewhere
 
-Some sites only work in a full browser: Google's robot check, web apps, sites
-built entirely in script, and large news sites whose layouts use more CSS than
-the text reader can paint. On the Smart Pro, Brick and Brick Pro there is one —
-[WPE Browser](https://github.com/matweew/wpe-tsp), a community build of WPE
-WebKit for these handhelds with GPU rendering, hardware video and a gamepad
-pointer. JukaHub does not try to be it; it hands pages to it.
+Some sites only work in a full desktop-class browser: Google's robot check, web
+apps, sites built entirely in script. JukaHub does not hand them to another
+browser on the handheld — the built-in Browser is the only one it opens, and it
+never starts WPE. The Select menu's row after **Saved pages** gives the page a
+way out instead:
 
-* Browser entries and links elsewhere in JukaHub open in WPE Browser by
-  default once it is installed.
-  **Open in WPE Browser** in the light reader's Select menu also opens the page
-  on screen there.
-  JukaHub steps aside the way it does for a game: WPE Browser has the screen and
-  the buttons until you quit it, and then you are back in the reader on the same
-  page. Before it starts, JukaHub lets go of everything it can rebuild (cached
-  text and icon textures, the back/forward page cache, a page script still
-  running), because WebKit wants most of the handheld's 1 GB of memory — so Back
-  loads the previous page again afterwards.
-* On the [Google card](#google-needs-a-full-web-browser), **Open in WPE Browser**
-  comes first and runs the search there.
-* Only web addresses are handed over (`http://` or `https://` with a host, no
-  user name or password in them); anything else opens WPE Browser on its own
-  start page.
+* On a handheld it reads **Open on your phone**: the page's address fills the
+  screen as a QR code, at full backlight like JukaHub's other QR cards, so a
+  phone camera can open the page there. The caption names only the site (a
+  search address carries what was searched for). **A** or **B** closes the card
+  and you are back on the same page. An address too long for one QR code says
+  so instead.
+* On a PC it reads **Open in web browser** and hands the current page to the
+  desktop's own browser.
 
-WPE Browser has to live in exactly `Apps/WPE` on the SD card
-(`/mnt/SDCARD/Apps/WPE`). JukaHub recognises it there by its `launch.sh` and
-starts that script with the page's address as its first argument, with the
-environment the stock launcher would have given it (not JukaHub's own library
-path).
+The row is dimmed until a page is on screen.
 
-### Getting and updating it
-
-Where WPE Browser is not installed, the menu row reads **Get WPE Browser** and
-the Google card offers it too. **Settings → Browser → WPE Browser** (handheld
-only) shows the installed version and installs or updates it; when a newer
-release is out it reads **Update: v…** (JukaHub asks GitHub at most every six
-hours, and only while the row, the menu or the Google card is on screen).
-
-The install takes the latest release from GitHub and refuses a package without
-a SHA-256 checksum. It needs about three times the package's size free on the
-card (the download and the unpacked app: several hundred megabytes), streams the
-download to the card with progress on the install bar — cancel it there, and the
-next try continues where it stopped — unpacks it in `Apps/.wpe-install`, and
-moves the app into `Apps/WPE`. An update keeps `settings.conf` and everything WPE
-Browser or you added to its folder (favorites, data); the old folder is removed
-only once the new one is in place, and nothing is replaced while WPE Browser (or
-a game) is running. The installed release is recorded in
-`Apps/WPE/.jukahub-release` and the package's file list in
-`Apps/WPE/.jukahub-files`. A WPE Browser you copied over by hand opens the same
-way; it has no recorded release, so JukaHub offers no update for it until you
-update it once from Settings.
-
-On a PC, Browser entries open the desktop's own browser by default. With the
-light reader selected, its menu row is **Open in web browser**, which hands the
-current page to the desktop browser.
+A WPE Browser already on the SD card (`Apps/WPE`) is left alone: it is a
+separate app, and JukaHub no longer opens, offers, installs or updates it.
 
 ## Ads and trackers
 

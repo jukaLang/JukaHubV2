@@ -280,6 +280,9 @@ func installedBuildDate() string {
 // releaseIsNewerThanInstalled reports whether the release should be installed.
 // An unknown installed stamp means an old build worth updating.
 func releaseIsNewerThanInstalled(rel *githubRelease) bool {
+	if rel == nil || !jukaHubReleaseTag(rel.TagName) {
+		return false
+	}
 	relTime, ok := releasePublishedTime(rel)
 	if !ok {
 		return false
@@ -349,7 +352,7 @@ func storeReleaseNotes(rel *githubRelease) {
 }
 
 func markUpdateAvailable(rel *githubRelease) {
-	if rel == nil {
+	if rel == nil || !jukaHubReleaseTag(rel.TagName) {
 		return
 	}
 	asset := ""
@@ -446,12 +449,12 @@ func advertisedUpdateIsStale() bool {
 // before a boot announcement so the header chip and the toast never offer a
 // release the device already has.
 func pruneStaleUpdateAdvertisement() bool {
-	if availableUpdateTag() == "" || !advertisedUpdateIsStale() {
+	tag := availableUpdateTag()
+	if tag == "" || (jukaHubReleaseTag(tag) && !advertisedUpdateIsStale()) {
 		return false
 	}
-	tag := availableUpdateTag()
 	clearAvailableUpdate()
-	logPatch("auto-update: dropped stale advertisement for %s; the installed build is %s", tag, versionString(nil))
+	logPatch("auto-update: dropped stale or unrelated advertisement for %s; the installed build is %s", tag, versionString(nil))
 	return true
 }
 
@@ -680,6 +683,9 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	if rel == nil {
 		return errors.New("missing release metadata")
 	}
+	if !jukaHubReleaseTag(rel.TagName) {
+		return fmt.Errorf("%s is not a JukaHub app release", rel.TagName)
+	}
 	// Persist the notes before the swap: after the restart they are the only
 	// copy on the device, and they power the "What's new" screen.
 	storeReleaseNotes(rel)
@@ -705,9 +711,11 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		}
 	}
 	if assetURL == "" {
-		// The release workflow always publishes these two archive names; fall
-		// back to the release's own download URL when the API omits the asset
-		// list (releases/latest would hand a Beta install the stable build).
+		// An asset list without this platform's app archive is not an app update.
+		// Only fall back to the release's URL when the API omitted the list.
+		if len(rel.Assets) > 0 {
+			return fmt.Errorf("release %s has no %s archive", rel.TagName, target.Asset)
+		}
 		assetURL = jukaHubReleaseAssetURL(rel, target.Asset)
 	}
 	if expectSHA == "" {

@@ -379,6 +379,7 @@ var mediaHub = struct {
 	backOnlineAt  uint64
 	offlineLanded bool
 	deferLoad     bool
+	ytdlpChecked  bool
 
 	sheet   mediaSheet
 	confirm mediaConfirm
@@ -509,6 +510,8 @@ func mediaHubEnter(config *Config) {
 	mediaHubLoadRecentSearches(config)
 	mediaHub.online = IsOnline()
 	mediaHub.onlineKnown = true
+	mediaHub.ytdlpChecked = false
+	mediaHub.deferLoad = false
 	mediaHub.sheet = mediaSheet{}
 	mediaHub.confirm = mediaConfirm{}
 	mediaHub.builtAt = 0
@@ -538,14 +541,13 @@ func mediaHubEnter(config *Config) {
 		mediaHub.deferLoad = true
 		return
 	}
-	mediaHubLoadTrending(config, false)
+	if mediaHubWantsTrending(mediaHub.tab) {
+		mediaHubLoadTrending(config, false)
+	}
 	if mediaHub.tab == mediaTabShorts {
 		mediaHubLoadShorts(config)
 	}
-	// An old yt-dlp is the usual reason YouTube stops loading videos. Opening
-	// Media is when to look, in the background and at most twice a day
-	// (ytdlp_update.go); the native search above needs no helper meanwhile.
-	go requestYtDlpUpdate(config, ytdlpTriggerRoutine, nil)
+	mediaHubCheckYtDlp(config)
 }
 
 // mediaHubTabShown is the tab on screen while Media is up, -1 while it is not.
@@ -593,10 +595,13 @@ func mediaHubTick(config *Config) {
 			// Back online: the rows that need the network load by themselves,
 			// with no button to press.
 			mediaHub.backOnlineAt = sdl.GetTicks64()
-			mediaHubLoadTrending(config, false)
+			if mediaHubWantsTrending(mediaHub.tab) {
+				mediaHubLoadTrending(config, false)
+			}
 			if mediaHub.tab == mediaTabShorts {
 				mediaHubLoadShorts(config)
 			}
+			mediaHubCheckYtDlp(config)
 			if mediaHub.offlineLanded && mediaHub.tab == mediaTabDownloads && mediaHub.zone != mediaZoneContent {
 				mediaHubSelectTab(config, mediaTabForYou, false)
 			}
@@ -641,10 +646,13 @@ func mediaHubTick(config *Config) {
 	}
 	if mediaHub.deferLoad && !mediaHubPlayerOnScreen() && !videoPrepareActive() {
 		mediaHub.deferLoad = false
-		mediaHubLoadTrending(config, false)
+		if mediaHubWantsTrending(mediaHub.tab) {
+			mediaHubLoadTrending(config, false)
+		}
 		if mediaHub.tab == mediaTabShorts {
 			mediaHubLoadShorts(config)
 		}
+		mediaHubCheckYtDlp(config)
 	}
 	if frameCount%30 == 0 {
 		dlSettingsSync(config)
@@ -701,6 +709,10 @@ func mediaHubSelectTab(config *Config, t mediaTab, sound bool) {
 		if sound {
 			PlayNavSound()
 		}
+		if !mediaHubWantsTrending(t) && cancelMediaSearch(mediaTrendingVar) {
+			// A refresh stopped mid-flight is still due when the user returns.
+			mediaTrendingLoadedAt = time.Time{}
+		}
 	}
 	if i := mediaHubTabIndex(t); i >= 0 {
 		mediaHub.tabFocus = i
@@ -716,6 +728,13 @@ func mediaHubSelectTab(config *Config, t mediaTab, sound bool) {
 	}
 	if t == mediaTabLibrary && changed {
 		mlibEnterTab(config)
+	}
+	if changed && mediaHubWantsTrending(t) && config != nil && mediaHubIsCurrent(config) &&
+		!mediaHub.deferLoad && !videoPrepareActive() && playerPhase() == "idle" {
+		mediaHubLoadTrending(config, false)
+	}
+	if changed && config != nil && mediaHubIsCurrent(config) && !mediaHub.deferLoad {
+		mediaHubCheckYtDlp(config)
 	}
 	if changed && config != nil {
 		// Build the new tab now rather than at the next frame: the press that
@@ -784,6 +803,24 @@ func mediaHubCommand(config *Config, query string) string {
 
 // mediaTrendingLoadedAt is when the Trending list was last requested.
 var mediaTrendingLoadedAt time.Time
+
+// mediaHubWantsTrending reports whether the selected tab displays that feed.
+func mediaHubWantsTrending(t mediaTab) bool {
+	return t == mediaTabForYou || t == mediaTabTrending
+}
+
+// mediaHubCheckYtDlp leaves local tabs to the SD card. Online feeds check the
+// helper once per Media visit, in the background and at most twice a day.
+func mediaHubCheckYtDlp(config *Config) {
+	if mediaHub.ytdlpChecked || config == nil || !IsOnline() {
+		return
+	}
+	if !mediaHubWantsTrending(mediaHub.tab) && mediaHub.tab != mediaTabShorts && mediaHub.tab != mediaTabSearch {
+		return
+	}
+	mediaHub.ytdlpChecked = true
+	go requestYtDlpUpdate(config, ytdlpTriggerRoutine, nil)
+}
 
 // mediaHubLoadTrending fetches the Trending list unless it is fresh. Never
 // offline: the offline state is drawn instead.
@@ -1072,6 +1109,11 @@ func mediaFavSignature() [4]int64 {
 
 // mediaHubBuildKey snapshots everything the visible list depends on.
 func mediaHubBuildKey(config *Config) mediaBuildKey {
+	if mediaHub.tab == mediaTabLibrary {
+		// A feed result or favourite update cannot change the Library's
+		// rows. Keep its first frame independent of online work settling.
+		return mediaBuildKey{tab: mediaTabLibrary, libGen: dlLibraryGen(), mlib: mlibGen()}
+	}
 	return mediaBuildKey{
 		tab:      mediaHub.tab,
 		libGen:   dlLibraryGen(),
@@ -1128,7 +1170,15 @@ func mediaQueueSignature() int64 {
 
 // mediaHubRebuild turns the data behind the visible tab into cards.
 func mediaHubRebuild(config *Config) {
-	ctx := mediaNewCardContext()
+	// Library rows come from mlib's immutable model. Building a full card
+	// context here would copy the downloads and all favourites just to draw
+	// the Downloads tab's count, blocking the first Library frame.
+	ctx := mediaCardContext{}
+	if mediaHub.tab == mediaTabLibrary {
+		ctx.libCount = dlLibraryCount()
+	} else {
+		ctx = mediaNewCardContext()
+	}
 	switch mediaHub.tab {
 	case mediaTabForYou:
 		// The ring stays on the same kind of row: a row appearing above it

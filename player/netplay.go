@@ -615,6 +615,12 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
+	// A core that needs a newer glibc than the firmware's: RetroArch on
+	// JukaHub's private one (ra_glibc.go), or a download started and a retry.
+	if err := raGlibcPrepareDirect(cmd, plan.Core, plan.RetroArch); err != nil {
+		restoreProfile()
+		return err
+	}
 	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
 		return fmt.Errorf("could not start RetroArch: %w", err)

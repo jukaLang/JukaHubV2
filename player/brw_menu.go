@@ -46,7 +46,7 @@ const (
 	brwMenuSave
 	brwMenuDownload
 	brwMenuSaved
-	brwMenuWPE
+	brwMenuElsewhere
 	brwMenuInfo
 	brwMenuFilter
 	brwMenuSignIns
@@ -161,11 +161,11 @@ func brwMenuItems(config *Config) []brwMenuItem {
 	if marks > 0 {
 		items[brwMenuSaved].Value = strconv.Itoa(marks)
 	}
-	// The page in a full browser: WPE Browser on the handheld (or getting
-	// it), the desktop's own browser on a PC (brw_wpe.go).
-	var wpe brwMenuItem
-	wpe.Label, wpe.Icon, wpe.Value, wpe.Tone, wpe.Disabled = brwWpeMenuEntry(page != "")
-	items[brwMenuWPE] = wpe
+	// The page somewhere else: the desktop's own browser on a PC, a QR code
+	// for a phone on the handheld (brw_elsewhere.go). Nothing opens WPE.
+	away := brwMenuItem{Disabled: page == ""}
+	away.Label, away.Icon, away.Value = brwElsewhereEntry()
+	items[brwMenuElsewhere] = away
 
 	info := brwMenuItem{Label: "Site info", Icon: "info", Key: "I", KeyOnly: true, Disabled: page == ""}
 	if page != "" {
@@ -234,8 +234,6 @@ func brwMenuDisabledNote(id brwMenuID) string {
 		return "No links on this page"
 	case brwMenuSaved:
 		return "No saved pages yet"
-	case brwMenuWPE:
-		return brwWpeMenuDisabledNote()
 	case brwMenuSignIns, brwMenuDropSignIns:
 		return "No sign-ins are saved"
 	case brwMenuLayout:
@@ -497,8 +495,8 @@ func brwMenuActivate(renderer *sdl.Renderer, config *Config, i int) {
 		browserDownloadCurrentPage(config)
 	case brwMenuSaved:
 		openBrowserBookmarkPanel(config)
-	case brwMenuWPE:
-		brwWpeMenuActivate(config)
+	case brwMenuElsewhere:
+		brwElsewhereActivate(config)
 	case brwMenuInfo:
 		brwInfoOpenFor(config)
 	case brwMenuFilter:

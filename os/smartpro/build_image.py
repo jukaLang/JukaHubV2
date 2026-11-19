@@ -12,11 +12,12 @@ dump-board.sh, and replaces only the startup and the menu with JukaHub:
   * the system is rebuilt from the saved files as a read-only image, with
     JukaHub's own process 1 (the compiled jukaboot when the package has it,
     and the shell init, its fallback) and launcher added;
-  * U-Boot's environment on the card points the kernel at that image by
-    PARTUUID, read-only, with init=/jukahub/jukaboot (or /jukahub/init). It
-    is only changed after
-    checking that the stock environment really produced the stock command
-    line, so the bootloader is known to take root= and init= from it;
+  * U-Boot's environment on the card requests that system by PARTUUID,
+    read-only, with init=/jukahub/jukaboot (or /jukahub/init). Where the
+    stock environment produces the measured command line, that is the
+    direct-root boot path. On firmware that rewrites root= itself, --sdinit
+    adds a small initramfs loader to the boot image; it finds the SD root
+    before the kernel's dynamic root= value is used;
   * a JUKAHUB exFAT (or FAT32) partition holds JukaHub, games and saves.
 
 Nothing is written to the device's internal storage, at build time or at
@@ -205,6 +206,11 @@ def fdt_panel(blob: bytes) -> tuple[int, int] | None:
         if found:
             return found
     return None
+
+
+def smartpro_panel(panel: tuple[int, int]) -> bool:
+    """The TG5040's physical panel is portrait, but its framebuffer is landscape."""
+    return panel in ((720, 1280), (1280, 720))
 
 
 def _fdt_lcd(fdt: bytes, struct_off: int, strings_off: int) -> tuple[int, int] | None:
@@ -439,13 +445,15 @@ def bootimg_cmdline(raw: bytes) -> str:
     return raw[BOOTIMG_CMDLINE].split(b"\0", 1)[0].decode("latin-1")
 
 
-def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str, init: str = INIT_PATH) -> bytes:
+def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str, init: str = INIT_PATH,
+                            force: bool = False, sd_initramfs: bool = False) -> bytes:
     """U-Boot appends the boot image's own command line; if that names the
     system, it would win over the environment, so it is pointed at the card too."""
     text = bootimg_cmdline(raw)
-    if not any(arg_count(text, k) for k in ("root", "init", "rdinit", "rootfstype", "rw")):
+    if not force and not any(arg_count(text, k) for k in ("root", "init", "rdinit", "rootfstype", "rw")):
         return raw
-    new = rewrite_args(text, partuuid, fstype, init=init).encode("latin-1")
+    extra = ("rdinit=/rdinit",) if sd_initramfs else ()
+    new = rewrite_args(text, partuuid, fstype, init=init, extra=extra).encode("latin-1")
     need(len(new) < 512, "the boot image's command line has no room for the change")
     out = bytearray(raw)
     out[BOOTIMG_CMDLINE] = new.ljust(512, b"\0")
@@ -456,7 +464,7 @@ def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str, init: str = 
 # 115200-baud serial console, and printk waits for the UART, which costs
 # seconds. The image boots "quiet" (warnings and worse only); lpj= skips the
 # delay-loop calibration where the stock kernel ran one (dump-board.sh).
-SPEED_KEYS = ("loglevel", "quiet", "lpj")
+SPEED_KEYS = ("loglevel", "quiet", "lpj", "earlyprintk")
 # --boot-profile and --initcall-blacklist: never taken over from the stock
 # line, only added when asked for.
 PROFILE_KEYS = ("initcall_debug", "printk.time", "log_buf_len", "initcall_blacklist")
@@ -607,6 +615,56 @@ def strip_ramdisk(raw: bytes, info: dict) -> bytes:
     out[576:576 + 32] = digest.digest().ljust(32, b"\0")
     kernel_end = page + -(-info["kernel_size"] // page) * page
     out[kernel_end:] = bytes(len(out) - kernel_end)
+    return bytes(out)
+
+
+def make_sd_initramfs(sdinit: Path, root: Part, fstype: str, init: str) -> bytes:
+    """Small gzip cpio: a static rdinit and the SD root partition to find.
+
+    The stock U-Boot on this Smart Pro rewrites root= itself. A kernel
+    initramfs runs before that root is mounted, so rdinit can find the card's
+    rootfs by SD device type, partition number and GPT name without relying
+    on the bootloader's dynamic root= argument.
+    """
+    check_booter(sdinit)  # the same static AArch64 ELF rules as jukaboot
+    config = (f"ROOT_PARTN={root.index + 1}\nROOT_NAME={root.name}\n"
+              f"ROOT_FSTYPE={fstype}\nINIT={init}\n").encode("ascii")
+    archive = bytearray()
+
+    def entry(name: str, mode: int, data: bytes = b"") -> None:
+        name_bytes = name.encode("ascii") + b"\0"
+        fields = (1, mode, 0, 0, 2 if stat.S_ISDIR(mode) else 1, 0, len(data),
+                  0, 0, 0, 0, len(name_bytes), 0)
+        archive.extend(b"070701" + b"".join(f"{value:08x}".encode("ascii") for value in fields))
+        archive.extend(name_bytes)
+        archive.extend(bytes(-len(archive) % 4))
+        archive.extend(data)
+        archive.extend(bytes(-len(archive) % 4))
+
+    for name in ("proc", "sys", "dev", "newroot"):
+        entry(name, stat.S_IFDIR | 0o755)
+    entry("rdinit", stat.S_IFREG | 0o755, sdinit.read_bytes())
+    entry("jukahub-root", stat.S_IFREG | 0o644, config)
+    entry("TRAILER!!!", 0)
+    return gzip.compress(bytes(archive), compresslevel=9, mtime=0)
+
+
+def replace_ramdisk(raw: bytes, info: dict, ramdisk: bytes) -> bytes:
+    """Replace an Android v0 boot image's ramdisk, keeping the kernel intact."""
+    need(info["second_size"] == 0 and info["header_version"] == 0,
+         "the boot image has an unsupported second stage or header")
+    page = info["page"]
+    kernel_end = page + align_up(info["kernel_size"], page)
+    need(kernel_end + len(ramdisk) <= len(raw), "the SD initramfs does not fit the boot partition")
+    out = bytearray(len(raw))
+    out[:kernel_end] = raw[:kernel_end]
+    out[kernel_end:kernel_end + len(ramdisk)] = ramdisk
+    struct.pack_into("<I", out, 16, len(ramdisk))
+    digest = hashlib.sha1()
+    for blob in (raw[page:page + info["kernel_size"]], ramdisk, b""):
+        digest.update(blob)
+        digest.update(struct.pack("<I", len(blob)))
+    out[576:576 + 32] = digest.digest().ljust(32, b"\0")
     return bytes(out)
 
 
@@ -801,8 +859,15 @@ def choose_root_fs(fs_text: str, modules: list[str], stock_fstype: str,
     raise BuildError("the stock kernel has neither ext4 nor a squashfs whose compression is known built in")
 
 
-def choose_data_fs(fs_text: str, have_exfat: bool) -> str:
+def choose_data_fs(fs_text: str, have_exfat: bool, requested: str = "auto") -> str:
     known = filesystems(fs_text)
+    if requested == "vfat":
+        need("vfat" in known, "the stock kernel cannot read FAT32 cards")
+        return "vfat"
+    if requested == "exfat":
+        need("exfat" in known, "the stock kernel cannot read exFAT cards")
+        need(have_exfat, "mkfs.exfat is required for an exFAT card")
+        return "exfat"
     if "exfat" in known and have_exfat:
         return "exfat"
     need("vfat" in known, "the stock kernel reads neither exFAT nor FAT32 cards")
@@ -1180,7 +1245,7 @@ def build_image(args: argparse.Namespace) -> None:
     boot0_len = check_boot0(lead)
     package = check_package(lead)
     if package["panel"] is not None and not experimental:
-        need(package["panel"] == (1280, 720),
+        need(smartpro_panel(package["panel"]),
              f"the device tree describes a {package['panel'][0]}x{package['panel'][1]} panel, not the Smart Pro's")
     gpt = parse_gpt(lead)
     need(gpt.entry_lba * SECTOR + gpt.count * gpt.entry_size <= BOOT0_OFFSET,
@@ -1218,7 +1283,8 @@ def build_image(args: argparse.Namespace) -> None:
     config = gzip.decompress(config_path.read_bytes()).decode("latin-1") if config_path.is_file() else None
     compressor = squashfs_compressor(head_path.read_bytes() if head_path.is_file() else None, config)
     root_fs = choose_root_fs(fs_text, modules, facts.get("ROOT_FSTYPE", ""), compressor)
-    data_fs = choose_data_fs(fs_text, shutil.which("mkfs.exfat") is not None)
+    data_fs = choose_data_fs(fs_text, shutil.which("mkfs.exfat") is not None,
+                             args.card_filesystem)
     require_tool("mkfs.exfat" if data_fs == "exfat" else "mkfs.vfat")
     cmdline = (board / "cmdline.txt").read_text(encoding="utf-8").strip()
     # Process 1: jukaboot when the package (or --jukaboot) has a static AArch64
@@ -1227,6 +1293,13 @@ def build_image(args: argparse.Namespace) -> None:
                            bool(getattr(args, "shell_init", False)))
     init_path = BOOTER_PATH if booter is not None else INIT_PATH
     extra = profile_args(bool(getattr(args, "boot_profile", False)), getattr(args, "initcall_blacklist", None))
+    sdinit = args.sdinit.resolve() if args.sdinit else None
+    if sdinit is not None:
+        check_booter(sdinit)
+        need(config is not None and "CONFIG_BLK_DEV_INITRD=y" in config.splitlines() and
+             "CONFIG_RD_GZIP=y" in config.splitlines(),
+             "the stock kernel cannot start a gzip SD initramfs")
+    boot_extra = extra + (("rdinit=/rdinit",) if sdinit is not None else ())
 
     with tempfile.TemporaryDirectory(prefix="jukahub-smartpro-") as tmp:
         work = Path(tmp)
@@ -1251,6 +1324,7 @@ def build_image(args: argparse.Namespace) -> None:
         data = next(p for p in parts if p.name == DATA_NAME)
 
         envs = {}
+        env_control_proven = True
         cmdline_bytes = 0
         for part in env_parts:
             raw = (board / "parts" / f"{part.name}.img").read_bytes()
@@ -1260,12 +1334,23 @@ def build_image(args: argparse.Namespace) -> None:
                 if part.name == "env-redund":
                     continue  # never written: U-Boot ignores a copy that fails its CRC
                 raise
-            check_env_controls_root(env, cmdline)
-            new_env = rewrite_env(env, new_root.partuuid, root_fs, board_lpj(facts), init_path, extra)
-            cmdline_bytes = max(cmdline_bytes, check_cmdline_length(env, new_env, cmdline, extra))
+            try:
+                check_env_controls_root(env, cmdline)
+            except BuildError:
+                if sdinit is None:
+                    raise
+                env_control_proven = False
+            new_env = rewrite_env(env, new_root.partuuid, root_fs, board_lpj(facts), init_path, boot_extra)
+            cmdline_bytes = max(cmdline_bytes, check_cmdline_length(env, new_env, cmdline, boot_extra))
             envs[part.name] = env_bytes(new_env, raw)
         need(bool(envs), "no U-Boot environment to point at the card")
-        boot_new = rewrite_bootimg_cmdline(boot_stripped, new_root.partuuid, root_fs, init_path)
+        if sdinit is not None:
+            ramdisk = make_sd_initramfs(sdinit, new_root, root_fs, init_path)
+            boot_new = replace_ramdisk(boot_stripped, boot_info, ramdisk)
+            boot_new = rewrite_bootimg_cmdline(boot_new, new_root.partuuid, root_fs, init_path,
+                                               force=True, sd_initramfs=True)
+        else:
+            boot_new = rewrite_bootimg_cmdline(boot_stripped, new_root.partuuid, root_fs, init_path)
 
         logo = "kept the stock boot logo"
         images = {}
@@ -1296,6 +1381,10 @@ def build_image(args: argparse.Namespace) -> None:
         images[DATA_NAME] = data_img
         assemble_image(raw, lead, gpt, parts, images, total)
         verify_image(raw, lead, boot0_len, package["length"], parts)
+        with raw.open("rb") as assembled:
+            assembled.seek(by_name["boot"].first * SECTOR)
+            need(assembled.read(len(boot_new)) == boot_new,
+                 "the assembled boot image differs from the prepared SD boot")
         output.parent.mkdir(parents=True, exist_ok=True)
         staged_output = work / output.name
         if output.suffix == ".xz":
@@ -1314,12 +1403,16 @@ def build_image(args: argparse.Namespace) -> None:
         "root_partuuid": new_root.partuuid,
         "card_filesystem": data_fs,
         "boot_package_checksum_ok": package["checksum_ok"],
-        "boot_image_ramdisk_dropped": boot_info["ramdisk_size"] > 0,
+        "boot_image_ramdisk_dropped": boot_info["ramdisk_size"] > 0 and sdinit is None,
+        "stock_boot_image_ramdisk_replaced": boot_info["ramdisk_size"] > 0 and sdinit is not None,
+        "boot_image_sd_initramfs": sdinit is not None,
+        "sdinit_sha256": sha256(sdinit) if sdinit is not None else None,
+        "environment_root_control_proven": env_control_proven,
         "boot_logo": logo,
         "kernel_lpj": board_lpj(facts),
         "init": init_path,
         "jukaboot_sha256": sha256(booter) if booter is not None else None,
-        "kernel_extra_args": list(extra),
+        "kernel_extra_args": list(boot_extra),
         "kernel_cmdline_bytes": cmdline_bytes,
         "partitions": [{"number": p.index + 1, "name": p.name, "first_lba": p.first,
                         "sectors": p.sectors} for p in parts],
@@ -1337,6 +1430,10 @@ def build_image(args: argparse.Namespace) -> None:
         print("note: modules not found in the system files: " + ", ".join(plan["modules_not_found"]))
     print(f"process 1: {init_path}" + (" (jukaboot; the shell init is its fallback)" if booter else
                                         " (the shell init; the package has no usable jukaboot)"))
+    if sdinit is not None:
+        print("SD initramfs: /rdinit finds the card's rootfs; U-Boot's dynamic root= is bypassed")
+        if not env_control_proven:
+            print("note: this firmware rewrites root= at boot; SD boot still needs a hardware test")
     if extra:
         print("kernel arguments added: " + " ".join(extra))
     print("daemons started at boot: " + (", ".join(line.rsplit("|", 1)[1] for line in plan["daemons"]) or "none"))
@@ -1369,6 +1466,7 @@ def assemble_image(raw: Path, lead: bytes, gpt: Gpt, parts: list[Part],
             write_at(image, part.first * SECTOR, source)
         image.seek((total - 1 - entry_sectors) * SECTOR)
         image.write(entries)
+        image.write(bytes(entry_sectors * SECTOR - len(entries)))
         image.write(gpt_header(gpt, disk_guid, total, entries, backup=True))
 
 
@@ -1405,6 +1503,8 @@ def main() -> int:
                         help="a copy of your current Smart Pro card: its RetroArch, Emus and Bios are reused")
     parser.add_argument("--card-size", default="8G",
                         help="size of the microSD card the image is for (e.g. 32G, 128G); default 8G")
+    parser.add_argument("--card-filesystem", choices=("auto", "exfat", "vfat"), default="auto",
+                        help="filesystem for the JUKAHUB partition (default auto: exFAT when available, else FAT32)")
     parser.add_argument("--keep-stock-logo", action="store_true",
                         help="leave the stock boot logo on the card's copy of the boot partition")
     parser.add_argument("--start-daemon", action="append", metavar="NAME",
@@ -1416,6 +1516,9 @@ def main() -> int:
     parser.add_argument("--jukaboot", type=Path,
                         help="the jukaboot process 1 to install (default: the one in --app, when it is a "
                              "static AArch64 build)")
+    parser.add_argument("--sdinit", type=Path,
+                        help="static AArch64 SD loader for a firmware that rewrites root= at boot; "
+                             "places it in the boot image's initramfs")
     parser.add_argument("--shell-init", action="store_true",
                         help="boot with the shell process 1 (os/smartpro/init) even when jukaboot is there")
     parser.add_argument("--boot-profile", action="store_true",

@@ -729,16 +729,6 @@ func brwOpenSettings(config *Config) {
 func brwSettingsRows() []setRow {
 	return []setRow{
 		{
-			ID: "browserRenderMode", Label: "Open pages with", Kind: setKindChoice,
-			Detail:  brwRenderModeDetail,
-			Options: brwRenderModeOptions,
-			Current: brwRenderModeCurrent,
-			Value: func(c *Config) string {
-				return brwRenderModeOptions(c)[brwRenderModeCurrent(c)].Label
-			},
-			Choose: brwChooseRenderMode,
-		},
-		{
 			ID: "searchEngine", Label: "Search engine", Kind: setKindChoice,
 			Detail:     brwEngineDetail,
 			Options:    brwEngineOptions,

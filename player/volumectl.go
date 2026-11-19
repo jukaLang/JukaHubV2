@@ -110,7 +110,7 @@ func volumeCurrent() (int, bool) {
 	volumeLevel.mu.Lock()
 	defer volumeLevel.mu.Unlock()
 	interval := volumePollIdle
-	if volumePopoverOpen {
+	if volumePopoverOpen || volumeHUDVisible() {
 		interval = volumePollOpen
 	}
 	if !volumeLevel.polling && (volumeLevel.pollAt.IsZero() || now.Sub(volumeLevel.pollAt) >= interval) && volumeControlAvailable() {
@@ -149,6 +149,7 @@ func volumeRefreshNow() {
 // (volumebuttons.go): the firmware applies the press itself, so the glyph
 // reads the new level back a moment later instead of up to five seconds later.
 func volumeNoteHardwareKey() {
+	volumeHUDNoteKey()
 	time.AfterFunc(volumeHardwareKeyDelay, volumeRefreshNow)
 }
 

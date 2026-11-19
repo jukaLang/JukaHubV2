@@ -11,6 +11,58 @@ other game keep the firmware's own libraries. Nothing in `/lib` is replaced.
 |---------|-------------------------|
 | GreenOvercast | A temporary copy of its PortMaster launcher starts only the game binary through the private loader |
 | PortMaster and its ports | When the firmware's bash cannot run a bash array, `bash` on their `PATH` is a two-line wrapper that starts Ubuntu's bash through the private loader (see [PortMaster](PORTMASTER.md#on-a-stock-trimui)) |
+| RetroArch | A game whose libretro core needs a newer glibc than the firmware's (the buildbot's newest nightlies) starts RetroArch through the private loader, in the game's own mount namespace (see [RetroArch](#retroarch) below) |
+
+## RetroArch
+
+A libretro core is loaded into RetroArch's own process, so it can only use the
+C library RetroArch started on. The libretro buildbot builds its
+`linux/aarch64` nightlies on a newer Ubuntu than TrimUI's: in November 2026
+`mgba_libretro.so` needed `GLIBC_2.35`. Before this, JukaHub's core updater
+refused such builds and the newest cores never reached the handheld.
+
+Settings → Games & emulators → **RetroArch's C library** (`retroArchGlibc`):
+
+| Choice | What happens |
+|--------|--------------|
+| **Automatic** (default) | Only a game whose core cannot load on the firmware's glibc and can on this runtime starts RetroArch on it (RetroArch's own menu too, once the runtime is installed, since it can load any core). The core updater and the start-up core check read this runtime's libraries first, so the newest nightlies install and are not "fixed" back |
+| **JukaHub's glibc 2.39** | Every RetroArch game JukaHub starts runs on it |
+| **Firmware's only** | Never; a build that needs a newer glibc is refused, and one already on the card is put back ([COMPATIBILITY](COMPATIBILITY.md#a-core-that-is-already-broken)) |
+
+The runtime is downloaded the first time a core needs it (the game starts by
+itself when it is ready); offline, the game starts on the firmware's glibc as
+before.
+
+How, without changing the firmware or the card's RetroArch
+(`player/ra_glibc.go`): the game runs in a mount namespace of its own. A setup
+script there bind-mounts a small wrapper over the RetroArch binary, so the
+firmware's `launch.sh`, which calls `$RA_DIR/ra64.trimui` by path, starts the
+wrapper; it execs the private loader with this runtime first on the library
+path, then `LD_LIBRARY_PATH` as the launch script set it, then the firmware's
+`/etc/ld.so.conf` folders and system folders, and the real binary as the
+program. Two more bind mounts of RetroArch's folder under
+`data/private-glibc/ra/ns/` keep its view of itself: the loader appears as a
+file named `ra64.trimui` among RetroArch's own files, so `/proc/self/exe`, the
+process name and RetroArch's `:` paths stay right. RetroArch's children
+(anything it runs) use the firmware's loader and libraries as before. The
+mounts exist only inside that game's namespace and end with it; JukaHub,
+MainUI and the Emulators page see the card unchanged.
+
+Before a RetroArch first runs on a runtime build, JukaHub probes it: its
+libraries are listed and bound (as `ldd -r` does) once by the firmware's
+loader and once through the same namespace, wrapper and private loader a game
+uses. A library or symbol only the second run cannot find — or no mount
+namespace, no `mount`, no `readlink` — keeps that RetroArch on the firmware's
+glibc. The answer is kept per RetroArch build, runtime build and library path
+in `data/private-glibc/ra/probe.json` (a refusal is asked again after a week).
+A game on the runtime that stops in the loader (`symbol lookup error`,
+`GLIBC_PRIVATE`) marks it too: the card says so, and cores that needed the
+runtime get builds that run on the firmware.
+
+Not covered: a game started from the firmware's own menu runs RetroArch on the
+firmware's glibc, so a core that needs the runtime does not load there. On the
+runtime, RetroArch's own **Restart RetroArch** closes it instead of restarting
+(it re-runs `/proc/self/exe`, which is the private loader).
 
 ## What is installed
 
@@ -40,9 +92,10 @@ printed its version and its bash ran a bash array on this device.
 
 ## Updates
 
-When the **Ports** panel opens online and a runtime is installed, JukaHub asks
-Ubuntu for a newer build in the background — once a session and at most once
-a week (`data/private-glibc/checked`). A newer one is downloaded, checked and
+When the **Ports** panel opens online and a runtime is installed, or a core
+update needs the runtime, JukaHub asks Ubuntu for a newer build in the
+background — once a session and at most once a week
+(`data/private-glibc/checked`). A newer one is downloaded, checked and
 probed in a new folder, then `current` points at it; the old folder stays
 until the panel first opens in a later session (a port started meanwhile may
 still use it). A build older than the installed one, or than the pinned
@@ -71,3 +124,9 @@ stutters.
 
 Other ports keep the firmware compatibility check: a port whose manifest needs
 a newer glibc than the firmware's is still refused unless it is GreenOvercast.
+
+RetroArch on this runtime (above) is untested on a device: the wrapper,
+bind-mount setup and probe parsing were exercised off-device with a host
+loader and busybox/dash; mount namespaces, the PowerVR/Mali GPU libraries and
+the TrimUI RetroArch builds under glibc 2.39 remain to be checked on the
+handhelds.

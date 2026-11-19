@@ -3,10 +3,11 @@ package main
 // autoupdate_channel.go — the update channel (backlog REL-4). Settings →
 // About & updates → "Update channel" offers Stable (the default) and Beta:
 //
-//   - Stable follows GitHub's newest release that is not a prerelease
-//     (releases/latest), which is what every build followed before.
-//   - Beta follows the newest published release, prereleases included
-//     (the releases list, newest first; drafts never count).
+//   - Stable follows the newest published JukaHub app release that is not a
+//     prerelease.
+//   - Beta also includes JukaHub app prereleases. Both channels use the
+//     releases list because releases/latest can name a rolling emulator-core
+//     release that has no JukaHub app archive.
 //
 // FetchLatestJukaHubRelease (patch_engine.go) asks updateChannelBetaOn, so the
 // startup check, Patch → Check for updates, the offline update cache (upch.go)
@@ -30,9 +31,9 @@ const (
 	updateChannelSetting = "updateChannel"
 	updateChannelStable  = "stable"
 	updateChannelBeta    = "beta"
-	// jukaHubReleasesListAPI is the newest releases, prereleases included,
-	// newest first. Twenty is plenty: the newest published one wins.
-	jukaHubReleasesListAPI = "https://api.github.com/repos/jukaLang/JukaHubV2/releases?per_page=20"
+	// jukaHubReleasesListAPI includes the rolling emulator releases as well as
+	// app builds. Pick only an app release from the latest page.
+	jukaHubReleasesListAPI = "https://api.github.com/repos/jukaLang/JukaHubV2/releases?per_page=50"
 	// jukaHubReleaseTagDownloadBase is one release's download folder; the tag
 	// follows. Unlike releases/latest/download it also reaches a prerelease.
 	jukaHubReleaseTagDownloadBase = "https://github.com/jukaLang/JukaHubV2/releases/download/"
@@ -146,9 +147,10 @@ type githubReleaseListed struct {
 	Draft bool `json:"draft"`
 }
 
-// fetchNewestJukaHubRelease is the Beta channel's release: the newest
-// published release, prereleases included.
-func fetchNewestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
+// fetchJukaHubRelease selects an app release from the repository's release
+// list. GitHub's releases/latest is unsuitable: a rolling cores-aarch64
+// release can be newer than the app and contain no installable app archive.
+func fetchJukaHubRelease(ctx context.Context, includePrerelease bool) (*githubRelease, error) {
 	data, err := fetchBounded(ctx, newPatchClient(), jukaHubReleasesListAPI, patchMaxMetadata)
 	if err != nil {
 		return nil, err
@@ -157,20 +159,20 @@ func fetchNewestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
 	}
-	rel, ok := pickNewestJukaHubRelease(list)
+	rel, ok := pickJukaHubRelease(list, includePrerelease)
 	if !ok {
 		return nil, errors.New("no published JukaHub release")
 	}
 	return rel, nil
 }
 
-// pickNewestJukaHubRelease picks the newest published, non-draft release of
-// JukaHub itself (jukaHubReleaseTag) from the list; the list order breaks a tie.
-func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool) {
+// pickJukaHubRelease picks the newest published app release for a channel;
+// list order breaks a tie.
+func pickJukaHubRelease(list []githubReleaseListed, includePrerelease bool) (*githubRelease, bool) {
 	best := -1
 	for i := range list {
 		r := &list[i]
-		if r.Draft || !jukaHubReleaseTag(r.TagName) {
+		if r.Draft || !jukaHubReleaseTag(r.TagName) || (!includePrerelease && r.Prerelease) {
 			continue
 		}
 		t, ok := releasePublishedTime(&r.githubRelease)
@@ -190,6 +192,12 @@ func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool)
 	}
 	rel := list[best].githubRelease
 	return &rel, true
+}
+
+// pickNewestJukaHubRelease is the Beta channel's selection, including
+// prereleases. Keep it separate so channel behavior is explicit at call sites.
+func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool) {
+	return pickJukaHubRelease(list, true)
 }
 
 // jukaHubReleaseTag reports a tag of a JukaHub build: the main-branch builds'
