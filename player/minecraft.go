@@ -17,13 +17,13 @@ package main
 //   - On a PC: the Minecraft Launcher, Minecraft for Windows (Bedrock) and
 //     Prism Launcher where installed (minecraft_windows.go, minecraft_other.go).
 //
-// Installing a port is PortMaster's job and stays PortMaster's: JukaHub finds
-// the port in PortMaster's own catalogue (ports.json from its release), checks
-// the download against the MD5 the catalogue lists, drops the zip in
-// PortMaster's autoinstall folder and opens PortMaster, which installs it with
-// the runtimes it declares — the same path TRIMUI_EX documents for hand-copied
-// zips. When the catalogue cannot be read, PortMaster opens on its own with
-// the name to search for.
+// JukaHub finds the port in PortMaster's own catalogue (ports.json from its
+// release), checks the download against the MD5 the catalogue lists and
+// installs it itself with the runtimes it declares, through the shared install
+// queue (ports_native_install.go) — no Python, no PortMaster menu. The zip is
+// downloaded into the queue's staging folder; one the queue leaves to
+// PortMaster goes on to PortMaster's autoinstall folder. When the catalogue
+// cannot be read, PortMaster opens on its own with the name to search for.
 //
 // Nothing here reports a purchase, a licence or a sign-in that did not happen.
 
@@ -795,9 +795,11 @@ func mcSyncFile(p string) error {
 	return serr
 }
 
-// mcStartPortInstall fetches kind's port into PortMaster's autoinstall folder
-// and, when the player is still on the Minecraft screen, opens PortMaster to
-// install it. done runs on the UI thread once the transfer settled.
+// mcStartPortInstall downloads kind's port and hands it to the shared install
+// queue, where JukaHub installs it itself (ports_native_install.go); only a
+// zip JukaHub leaves to PortMaster opens PortMaster, and then only while the
+// player is still on the Minecraft screen. The transfer slot stays taken until
+// the install settled, and done runs on the UI thread once, then.
 func mcStartPortInstall(kind mcPortKind, done func()) error {
 	if kind < 0 || kind >= mcPortCount {
 		return errors.New("unknown port")
@@ -806,13 +808,6 @@ func mcStartPortInstall(kind mcPortKind, done func()) error {
 	launcher := portMasterLauncher(portMasterSDRoot)
 	if launcher == "" {
 		return errors.New("install PortMaster first")
-	}
-	inbox := mcAutoinstallDir(launcher)
-	if inbox == "" {
-		// No autoinstall folder: PortMaster itself is the way, with the name
-		// to look for.
-		mcOpenPortMaster(launcher, "Search for "+spec.search+" in PortMaster and install it")
-		return nil
 	}
 	if !IsOnline() {
 		return errors.New("no internet — connect Wi-Fi, then try again")
@@ -825,17 +820,39 @@ func mcStartPortInstall(kind mcPortKind, done func()) error {
 	ctx, cancel := mcRunContext(gen, card)
 	go func() {
 		defer cancel()
-		zipPath, err := mcDownloadPort(ctx, gen, kind, inbox)
+		// The queue's staging folder, as its contract asks: PortMaster's
+		// autoinstall folder would let PortMaster (or the Ports panel's
+		// sweep) take the same zip while the queue installs it.
+		zipPath, err := mcDownloadPort(ctx, gen, kind, portsStagingDir())
+		handed := false
 		switch {
 		case err == nil:
 			installBarDoneRun(gen)
-			logDebug("minecraft", "port %s queued for PortMaster: %s", spec.id, zipPath)
+			logDebug("minecraft", "port %s downloaded: %s", spec.id, zipPath)
+			handed = true
+			title := spec.title
 			tbxPost(func() {
-				if mcOnScreen(appConfig) && !gameScreenSuspended() {
-					mcOpenPortMaster(launcher, "PortMaster is installing "+spec.title+" — close it when it is done to come back")
-				} else {
-					ShowToast(spec.title+" is downloaded — open Minecraft and press A to let PortMaster install it", ToastKindSuccess)
-				}
+				openPM := mcOnScreen(appConfig) && !gameScreenSuspended()
+				portsInstallZip(portsInstallRequest{
+					Name:           title,
+					Zip:            zipPath,
+					OpenPortMaster: openPM,
+					Done: func(res portsInstallResult) {
+						switch {
+						case res.Installed:
+							PlaySuccessSound()
+							ShowToast(title+" is installed", ToastKindSuccess)
+						case res.Queued && !openPM:
+							ShowToast(title+" waits in PortMaster's install folder — open PortMaster to finish", ToastKindInfo)
+						case res.Err != nil && !errors.Is(res.Err, pstoreErrCancelled):
+							ShowToast("Could not install "+title+" — "+firstLine(res.Err.Error()), ToastKindError)
+						}
+						mcTransferRelease()
+						if done != nil {
+							done()
+						}
+					},
+				})
 			})
 		case ctx.Err() != nil:
 			// The player cancelled it from the card: nothing to report.
@@ -858,6 +875,9 @@ func mcStartPortInstall(kind mcPortKind, done func()) error {
 				ShowToast("Could not download "+spec.title+" — "+firstLine(err.Error()), ToastKindError)
 			})
 		}
+		if handed {
+			return // the queue's Done releases the slot
+		}
 		// Released once the card is settled, so the next claim does not see
 		// this run still working.
 		mcTransferRelease()
@@ -870,9 +890,10 @@ func mcStartPortInstall(kind mcPortKind, done func()) error {
 
 var errMcNotInCatalog = errors.New("not in PortMaster's catalogue")
 
-// mcDownloadPort downloads kind's zip into inbox and returns its path. The
-// zip is written under a hidden name and renamed only once complete, checked
-// and flushed, so PortMaster never sees half a file.
+// mcDownloadPort downloads kind's zip into inbox (the install queue's staging
+// folder) and returns its path. The zip is written under a hidden name and
+// renamed only once complete, checked and flushed, so nothing ever sees half
+// a file.
 func mcDownloadPort(ctx context.Context, gen uint64, kind mcPortKind, inbox string) (string, error) {
 	mcCardUpdate(gen, installPhaseResolving, 0, 0)
 	entries, err := mcPortsCatalog(ctx)
@@ -884,7 +905,7 @@ func mcDownloadPort(ctx context.Context, gen uint64, kind mcPortKind, inbox stri
 		return "", errMcNotInCatalog
 	}
 	if err := os.MkdirAll(inbox, 0o755); err != nil {
-		return "", fmt.Errorf("PortMaster's autoinstall folder: %w", err)
+		return "", fmt.Errorf("the download folder: %w", err)
 	}
 	final := filepath.Join(inbox, entry.Zip)
 	part := filepath.Join(inbox, "."+entry.Zip+".part")

@@ -9,6 +9,7 @@ package main
 // Emulators screen instead of only through the firmware's own Ports tab.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -291,8 +292,9 @@ func startPortMasterInstall() error {
 		ShowToast("PortMaster installed — open Ports to add games", ToastKindSuccess)
 		noteAwayToolInstalled("PortMaster")
 		trophyEvent(tkPortMaster)
-		// What a stock TrimUI lacks for it (Python, a full bash) is fetched
-		// now, so the first open does not wait.
+		// What a stock TrimUI lacks for ports (a full bash) is fetched now, so
+		// the first port does not wait; Python only when PortMaster's own menu
+		// is opened (portmaster_runtime.go).
 		tbxPost(pmRuntimePrefetch)
 	}()
 	return nil
@@ -339,7 +341,7 @@ func startPortMasterRepair() error {
 		installBarDone()
 		logInfo("portmaster", "repaired %s from %s", target, portMasterInstallURL)
 		tbxPost(func() {
-			ShowToast("PortMaster repaired — its program files are fresh, your ports are untouched", ToastKindSuccess)
+			ShowToast("PortMaster is on its latest release — its program files are fresh, your ports are untouched", ToastKindSuccess)
 			invalidatePortsCache()
 			invalidateEmulatorCache()
 			portMasterVersionForget()
@@ -352,8 +354,19 @@ func startPortMasterRepair() error {
 
 // portMasterDownloadPackage downloads and unpacks the TrimUI package into a
 // staging folder on the card (so the final move does not cross filesystems)
-// and returns its Apps/PortMaster tree and the stage to remove afterwards.
+// and returns its Apps/PortMaster tree and the stage to remove afterwards. It
+// reports on the install card's current run and stops with it.
 func portMasterDownloadPackage(sdRoot, downloadURL string) (string, string, error) {
+	installBarPhase(installPhaseDownload)
+	// The transfer and the unpack both run on the card's run token: the strip's
+	// X on this chip stops them instead of only hiding the bar.
+	return portMasterDownloadPackageCtx(installBarRunContext(), sdRoot, downloadURL, installBarProgress, installBarPhase)
+}
+
+// portMasterDownloadPackageCtx is portMasterDownloadPackage on ctx, with its
+// own progress and phase reports (the automatic update's card,
+// portmaster_autoupdate.go).
+func portMasterDownloadPackageCtx(ctx context.Context, sdRoot, downloadURL string, progress func(done, total int64), phase func(string)) (string, string, error) {
 	if strings.TrimSpace(sdRoot) == "" {
 		return "", "", fmt.Errorf("SD card path is unknown")
 	}
@@ -365,15 +378,12 @@ func portMasterDownloadPackage(sdRoot, downloadURL string) (string, string, erro
 		return "", "", fmt.Errorf("cannot create staging folder: %w", err)
 	}
 	archive := filepath.Join(stage, "trimui.portmaster.zip")
-	installBarPhase(installPhaseDownload)
-	// The transfer and the unpack both run on the card's run token: the strip's
-	// X on this chip stops them instead of only hiding the bar.
-	ctx := installBarRunContext()
-	if err := downloadFileWithProgressCtx(ctx, downloadURL, archive, installBarProgress); err != nil {
+	phase(installPhaseDownload)
+	if err := downloadFileWithProgressCtx(ctx, downloadURL, archive, progress); err != nil {
 		os.RemoveAll(stage)
 		return "", "", err
 	}
-	installBarPhase(installPhaseExtract)
+	phase(installPhaseExtract)
 	unpacked := filepath.Join(stage, "unpack")
 	if err := extractZipSafe(ctx, archive, unpacked, 4096, 512<<20); err != nil {
 		os.RemoveAll(stage)
@@ -435,9 +445,12 @@ func repairPortMaster(sdRoot, downloadURL string) error {
 
 // portMasterOverlay copies every file of src over dst, each through a
 // temporary file and a rename, so an interrupted repair leaves whole files.
-// Nothing in dst that src lacks is touched.
+// PortMaster's version file goes last: an update cut short still reads as the
+// old version, and the next check brings it forward again. Nothing in dst that
+// src lacks is touched.
 func portMasterOverlay(src, dst string) error {
-	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+	var last []string
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -452,17 +465,36 @@ func portMasterOverlay(src, dst string) error {
 		if !d.Type().IsRegular() {
 			return nil
 		}
-		tmp := to + ".jukahub-new"
-		if err := copyFileStream(p, tmp, 0o755); err != nil {
-			_ = os.Remove(tmp)
-			return err
+		if strings.EqualFold(filepath.ToSlash(rel), "PortMaster/version") {
+			last = append(last, rel)
+			return nil
 		}
-		if err := os.Rename(tmp, to); err != nil {
-			_ = os.Remove(tmp)
-			return err
-		}
-		return nil
+		return portMasterOverlayFile(p, to)
 	})
+	if err != nil {
+		return err
+	}
+	for _, rel := range last {
+		if err := portMasterOverlayFile(filepath.Join(src, rel), filepath.Join(dst, rel)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// portMasterOverlayFile writes one file over to (a temporary file, then a
+// rename).
+func portMasterOverlayFile(from, to string) error {
+	tmp := to + ".jukahub-new"
+	if err := copyFileStream(from, tmp, 0o755); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, to); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // installPortMasterTree moves an extracted Apps/PortMaster tree into place.
@@ -544,6 +576,16 @@ func openPortsPanel(returnEmu bool) {
 		portMasterVersionCheck()
 		// A newer Ubuntu build of the private runtime, at most weekly.
 		privateGlibcRefreshAsync()
+	}
+	// No PortMaster yet: its files are installed now, online
+	// (portmaster_autoupdate.go). Port zips waiting in its autoinstall folder
+	// are installed by JukaHub, without opening PortMaster
+	// (ports_native_install.go).
+	if portsLibraryEnabled() {
+		pmAutoInstallOnOpen()
+		if portMasterInstalled() {
+			pnAutoinstallSweep()
+		}
 	}
 	PlayActivateSound()
 }
@@ -691,6 +733,14 @@ func startPortScript(name, path string) error {
 	if err := pmRuntimeGate(master, func() { launchPortScript(name, path) }); err != nil {
 		return err
 	}
+	if !master {
+		// A runtime the port declares and libs/ lacks is downloaded first: its
+		// script would ask harbourmaster, which needs Python
+		// (ports_native_install.go).
+		if err := pnRuntimeGate(name, path, func() { launchPortScript(name, path) }); err != nil {
+			return err
+		}
+	}
 	plan := portBuildLaunchPlan(appConfig, path, master)
 	shadow, err := privateGlibcPreparePortPlan(&plan, path)
 	if err != nil {
@@ -756,14 +806,34 @@ func startPortScript(name, path string) error {
 		gameLaunchLogStart(game, cmd, gameLaunchMemFreeMB())
 	}
 	recorder := startTimelapse(appConfig, name)
+	var splash *pmSplashWatch
+	if master {
+		// PortMaster's splash must neither cover its menu nor outlive it
+		// (portmaster_splash.go).
+		splash = pmSplashWatchStart(cmd)
+	}
 	go func() {
 		waitErr := cmd.Wait()
+		splashKind, endNote := splash.stop()
+		// What the launcher left that only served it (PortMaster's splash, a
+		// key mapper) ends now: the hand-back below waits for the whole group.
+		if left := portEndOrphanHelpers(cmd); len(left) > 0 {
+			note := portOrphanNote(left)
+			if master && splashKind != pmSplashGaveUp && pmSplashLeft(left) {
+				splashKind = pmSplashOrphaned
+				pmSplashRecord(splashKind, note)
+			}
+			endNote = strings.TrimPrefix(endNote+"; "+note, "; ")
+		}
+		if master && splashKind == pmSplashNone {
+			pmSplashForget() // this PortMaster needed no help: an older note no longer applies
+		}
 		if shadow != "" {
 			_ = os.Remove(shadow)
 		}
 		screenChildReaped(cmd)
 		portLogWatchDone(logDone)
-		portLogNoteEnd(logPath, waitErr, time.Since(launchedAt))
+		portLogNoteEnd(logPath, waitErr, time.Since(launchedAt), endNote)
 		stopped := gameLaunchWatchEnd(cmd)
 		diag.noteEnd(time.Now(), stopped)
 		if !master {
@@ -772,7 +842,7 @@ func startPortScript(name, path string) error {
 		restoreProfile()
 		boost.end()
 		recorder.Stop()
-		portAfterExit(path, master, time.Since(launchedAt))
+		portAfterExit(path, master, time.Since(launchedAt), splashKind)
 		diag.exited(waitErr)
 	}()
 	if master {

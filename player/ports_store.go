@@ -323,6 +323,12 @@ func pstoreEnter() {
 		pstoreLoad()
 	}
 	pstoreScanInstalled()
+	// PortMaster's files when the card has none (portmaster_autoupdate.go),
+	// and zips waiting in its autoinstall folder (ports_native_install.go).
+	pmAutoInstallOnOpen()
+	if portMasterInstalled() {
+		pnAutoinstallSweep()
+	}
 }
 
 // pstoreLoad reads the catalogue (the network, else the saved copy), the
@@ -952,12 +958,15 @@ func pstoreOpenSearch() {
 	vkOpenPortsSearch()
 }
 
-// pstoreInstallerMode reads portsStoreInstaller: "auto" or "portmaster".
+// pstoreInstallerMode reads portsStoreInstaller: "auto", "jukahub",
+// "harbourmaster" or "portmaster" (ports_store_install.go).
 func pstoreInstallerMode() string {
 	if c := appConfig; c != nil {
-		if v, ok := customString(c.Variables.Custom, pstoreInstallerKey); ok &&
-			strings.EqualFold(strings.TrimSpace(v), "portmaster") {
-			return "portmaster"
+		if v, ok := customString(c.Variables.Custom, pstoreInstallerKey); ok {
+			switch v = strings.ToLower(strings.TrimSpace(v)); v {
+			case "jukahub", "harbourmaster", "portmaster":
+				return v
+			}
 		}
 	}
 	return "auto"

@@ -23,8 +23,9 @@ package main
 //
 // The PortMaster row says when a newer PortMaster is out (its GitHub release
 // against the version file in its folder; both must be readable — the file
-// name is unverified on a device). PortMaster updates itself inside its own
-// menu; JukaHub only says so.
+// name is unverified on a device); its options then offer Update PortMaster,
+// the same download as Repair, so PortMaster's menu is not needed for that
+// either.
 
 import (
 	"context"
@@ -84,9 +85,16 @@ func portsPanelOpenOptions(e portEntry) {
 		portsPanel.optsBack = portsPanel.cursor
 		portsPanel.cursor, portsPanel.scroll = 0, 0
 		portsPanel.confirmAt = time.Time{}
+		repair := portEntry{Name: "Repair PortMaster", Detail: "Downloads it again (Wi-Fi) and replaces its program files; ports, runtimes and settings stay", Info: true, Action: portActRepairPM}
+		if portMasterUpdateNote() != "" {
+			// The same download is the update: PortMaster's own self-update runs
+			// in its menu, which JukaHub no longer needs to open.
+			repair.Name = "Update PortMaster"
+			repair.Detail = "Downloads the new release (Wi-Fi) and replaces its program files; ports, runtimes and settings stay"
+		}
 		portsPanel.optsRows = []portEntry{
-			{Name: "Open PortMaster", Detail: "Browse, install and update ports", Info: true, Action: portActOpenPM},
-			{Name: "Repair PortMaster", Detail: "Downloads it again (Wi-Fi) and replaces its program files; ports, runtimes and settings stay", Info: true, Action: portActRepairPM},
+			{Name: "Open PortMaster", Detail: "PortMaster's own menu — not needed to install or play ports", Info: true, Action: portActOpenPM},
+			repair,
 			{Name: "Why didn't it open?", Detail: "Checks Python, bash and its launcher on this firmware, and shows its log", Info: true, Action: portActWhyPM},
 		}
 		portsPanel.optsSub = setOr(portMasterLocalVersion(), "PortMaster")
@@ -270,6 +278,8 @@ func portMasterWhyReport(launcher string) gameDiagReport {
 		report.Issues = append(report.Issues, launchIssue{Level: int(gameDiagLikely), Title: "Its launcher needs TRIMUI_EX", Detail: p})
 	}
 	report.Issues = append(report.Issues, pmRuntimeIssues(true)...)
+	// Its splash outlived or covered the menu (portmaster_splash.go).
+	report.Issues = append(report.Issues, pmSplashIssue()...)
 	if p := portLogPath(portMasterAppName, launcher); p != "" {
 		if lines := gameDiagReadTail(p, time.Time{}); len(lines) > 0 {
 			report.LogLines, report.LogPath = portLastLines(lines, 12), p
@@ -389,7 +399,7 @@ func portWhyReport(name, script string) gameDiagReport {
 					Title:  "A runtime it needs is missing",
 					Files:  []string{rt},
 					Where:  filepath.Join(control, "libs"),
-					Detail: "PortMaster downloads it when it installs the port. Open PortMaster with Wi-Fi on, or reinstall the port (Y → Update).",
+					Detail: "JukaHub downloads it from PortMaster's catalogue before the port starts — start it with Wi-Fi on, or reinstall the port (Y → Update).",
 				})
 			}
 		}
@@ -574,8 +584,10 @@ const portMasterQuickExit = 5 * time.Second
 // portAfterExit runs on the reaper goroutine once the port's group is gone:
 // the helpers it left are ended, and after PortMaster itself the lists are
 // read again (it may have installed, updated or removed ports). A PortMaster
-// that closed at once says why, when that can be known.
-func portAfterExit(script string, master bool, ran time.Duration) {
+// that closed at once says why, when that can be known, and so does one whose
+// splash JukaHub had to end (splash: pmSplashOrphaned or pmSplashGaveUp,
+// portmaster_splash.go).
+func portAfterExit(script string, master bool, ran time.Duration, splash int) {
 	if labels := portCleanupLeftovers(); len(labels) > 0 {
 		logInfo("portmaster", "ended %d leftover helper(s)", len(labels))
 	}
@@ -590,6 +602,12 @@ func portAfterExit(script string, master bool, ran time.Duration) {
 			quick = p
 		}
 		logWarn("portmaster", "PortMaster ended after %s: %s", ran.Round(100*time.Millisecond), quick)
+	}
+	if master && (quick == "" || splash == pmSplashGaveUp) {
+		if p := pmSplashExitToast(splash); p != "" {
+			quick = p
+			logWarn("portmaster", "PortMaster ended after %s: %s", ran.Round(100*time.Millisecond), quick)
+		}
 	}
 	tbxPost(func() {
 		if quick != "" {
@@ -688,18 +706,35 @@ func portMasterUpdateNote() string {
 	if local == "" || latest == "" || !portVersionNewer(latest, local) {
 		return ""
 	}
-	return "PortMaster " + latest + " is out (you have " + local + ") — it updates itself when opened"
+	// The release the update pass installed (its tag and the version file
+	// may be written differently, portmaster_autoupdate.go).
+	if emuRuntimeSameBuild(emuRuntimeRecordFor(pmAutoKey).Installed, latest, false) {
+		return ""
+	}
+	if emuCoreUpdateModeNow() == coreUpdateInstall {
+		// The daily Emulator updates pass brings it forward by itself
+		// (portmaster_autoupdate.go).
+		return "PortMaster " + latest + " is out (you have " + local + ") — it updates by itself at the next quiet moment, or " +
+			hintKeyFor("Y", "Options") + " → Update PortMaster now"
+	}
+	return "PortMaster " + latest + " is out (you have " + local + ") — " + hintKeyFor("Y", "Options") + " → Update PortMaster"
 }
 
 // portMasterLatestTag reads the tag of PortMaster's latest release.
 func portMasterLatestTag(ctx context.Context) (string, error) {
+	return portMasterLatestTagWith(ctx, &http.Client{Timeout: 20 * time.Second})
+}
+
+// portMasterLatestTagWith is portMasterLatestTag on client (the automatic
+// update pass hands its own, which shares GitHub answers and holds).
+func portMasterLatestTagWith(ctx context.Context, client *http.Client) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, portMasterReleaseAPI, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "JukaHub-Ports/1.0")
 	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

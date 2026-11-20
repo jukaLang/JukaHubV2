@@ -526,6 +526,14 @@ NextUI and spruceOS where named); Settings → About → Drivers & hardware;
 16. Tools → Patch: a package installed before a restart is still listed as
     installed after it, History shows the earlier sessions, and Remove deletes
     its files from the card.
+17. One press to sleep and one to wake in a RetroArch game, a PPSSPP game and
+    a port, with Power button on Sleep and again on Nothing (the firmware's
+    sleep): only the game is on screen at the wake, no second picture takes
+    turns with it. Record the `display` line written 3 s after each press and
+    wake ("the display is held by: …"), any "MainUI … is drawing beside the
+    game" line and what started that MainUI, and whether "firmware handles the
+    power key" appears (on a kernel whose BOOTTIME misses the suspend, the RTC
+    now catches it).
 **Verify.** Results, models and firmware versions in
 `docs/HARDWARE_VALIDATION.md`.
 
@@ -614,12 +622,25 @@ restore, picture controls and applying fonts still need a live run.
 ### PORT-HW-2 — Ports Store on a device (P2, S) [HW] [NET]
 **Why.** The store's installer, pictures and download counts were built from
 documentation, not a run (session notes-A).
-**Where.** `ports_store_install.go` (`pstoreHarbourInstall`,
+**Where.** `ports_native_install.go` (`pnInstall`, `pnParseRuntimes`,
+`pnRuntimeGate`), `ports_store_install.go` (`pstoreHarbourInstall`,
 `pstoreHMExports`), `ports_store_images.go` (`pstoreShotBase`),
 `ports_store.go` (`pstoreStatsURL`).
-**Done when.** On stock TrimUI (PortMaster through TRIMUI_EX), CrossMix and
-Knulli: a Ready to Run port installs headless (`store-install.log` shows exit 0
-and the launcher appears in `Roms/PORTS` or `Ports`) with its runtime; with
+**Done when.** On stock TrimUI (with and without TRIMUI_EX), CrossMix and
+Knulli: a Ready to Run port installs through JukaHub's own installer
+(`ports_native_install.go`; `store-install.log` shows "JukaHub's own
+installer" and where the files went) with its runtime in PortMaster's `libs/`,
+starts, and shows as installed in PortMaster's own menu and the firmware's
+Ports tab; a port whose runtime was deleted downloads it again before it
+starts; a zip copied into `autoinstall` installs when the Ports panel opens;
+**Y → Update PortMaster** appears for a newer release and leaves ports and
+`libs/` alone; the Emulator updates pass updates PortMaster by itself on the
+charger (`emu-autoupdate.json` has a `portmaster` record; its `version` file
+matches the release, or the pass stops after one install when the tag and the
+file are written differently) and installs it on a card with ports and no
+`Apps/PortMaster`; opening the Ports Store on a card without PortMaster
+installs it once; with `portsStoreInstaller: harbourmaster` a port installs
+headless (exit 0, launcher in a ports folder); with
 `portsStoreInstaller: portmaster` several ports queue in `autoinstall` and
 PortMaster opens once for all of them; screenshots appear for most cards (else
 fix the address pattern — for example PortMaster-New's images release);
@@ -654,6 +675,12 @@ keeps `libs/` and the ports; a CrossMix card is left on its own bash and
 Python. Also check that `data/private-glibc/current` names a `runtime-2.39-…`
 folder and GreenOvercast still starts through it, and whether PortMaster
 2026.09.19+ reports the Smart Pro's analog sticks (NX Redux PR #142).
+Testers on a Brick were also left on PortMaster's splash (2026-11-20, a photo;
+`portmaster_splash.go`): check with `ps` while the splash shows that it is a
+`love.<arch>` process on `utils/pmsplash` and which `/dev` display nodes
+pugwash opens (`ls -l /proc/<pid>/fd`); that a pugwash killed by hand brings
+JukaHub back within a few seconds with the "closed before its menu appeared"
+toast; and that a working PortMaster is never cut short by the splash watch.
 **Verify.** Record in the HW log with the PortMaster log; file a FIX task for
 anything that differs (for example the `PYSDL2_DLL_PATH` names or the
 `launch.sh` line forms).

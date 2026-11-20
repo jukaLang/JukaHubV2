@@ -252,6 +252,9 @@ func portMasterDiagnosticsRaw(config *Config) string {
 		}
 		sb.WriteString("PM checked   : " + checked + "\n")
 	}
+	if _, note, at := pmSplashLastNote(pmReportRecent); note != "" {
+		sb.WriteString("PM splash    : " + note + ", " + timeAgo(at) + "\n")
+	}
 	if newest == "" {
 		return sb.String()
 	}
@@ -336,6 +339,15 @@ func pmOwnLogFindings(lines []string) []launchIssue {
 			add(gameDiagLikely, "PortMaster could not start Python 3", line)
 		case strings.Contains(low, "importerror") || strings.Contains(low, "modulenotfounderror"):
 			add(gameDiagLikely, "PortMaster's Python is missing a module", line)
+		case strings.Contains(low, "keyerror") && strings.Contains(low, "primary_arch"):
+			// ArkOS #1281: pugwash dies at start when its device check
+			// (device_info.txt) gave no CPU architecture, with the splash up.
+			add(gameDiagLikely, "PortMaster could not tell what handheld this is",
+				line+". Its device check (device_info.txt) gave no CPU architecture; that check runs under bash, so the launch log's first lines say which bash it got.")
+		case strings.Contains(low, "kmsdrm not available") || strings.Contains(low, "no available video device") ||
+			strings.Contains(low, "couldn't initialize video") || strings.Contains(low, "could not initialize egl"):
+			add(gameDiagLikely, "PortMaster's menu could not open the screen",
+				line+". Another program had the screen — on a DRM display that is PortMaster's own splash (REG-Linux PortMaster-GUI #2).")
 		}
 	}
 	return issues

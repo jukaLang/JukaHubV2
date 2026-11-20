@@ -79,6 +79,10 @@ type portsInstallRequest struct {
 	// left queued and PortMaster installs it the next time it opens; a caller
 	// that wants to decide itself passes false and acts in Done.
 	OpenPortMaster bool
+	// Keep marks a zip the installer only borrows (one the player put in
+	// PortMaster's autoinstall folder): it is removed once installed, never
+	// when the install fails.
+	Keep bool
 	// Done, when set, is called once on the main loop with the outcome.
 	Done func(portsInstallResult)
 }

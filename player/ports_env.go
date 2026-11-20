@@ -553,14 +553,18 @@ const portLogEndPrefix = "# JukaHub: the launch ended"
 
 // portLogNoteEnd adds how long the launch ran and how it ended to its log, so
 // a bug report or the diagnosis can tell a launch that died at once from one
-// that ran. Off the main thread.
-func portLogNoteEnd(path string, waitErr error, ran time.Duration) {
+// that ran. note, when set, says what JukaHub ended after the launcher
+// (portmaster_splash.go). Off the main thread.
+func portLogNoteEnd(path string, waitErr error, ran time.Duration, note string) {
 	if path == "" {
 		return
 	}
 	how := "exit status 0"
 	if waitErr != nil {
 		how = waitErr.Error()
+	}
+	if note != "" {
+		how += "); (" + note
 	}
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {

@@ -472,14 +472,16 @@ func pmRuntimeFinish(failure error, downloaded, cancelled bool) {
 	})
 }
 
-// pmRuntimePrefetch gets PortMaster's runtime ready in the background right
-// after PortMaster was installed or repaired, so the first open does not wait.
-// Main thread.
+// pmRuntimePrefetch gets what ports need from the firmware (a full bash) ready
+// in the background right after PortMaster was installed, repaired or updated,
+// so the first port does not wait. Python is PortMaster's own menu's alone —
+// JukaHub installs and runs ports without it (ports_native_install.go) — so it
+// is fetched only when that menu is opened. Main thread.
 func pmRuntimePrefetch() {
 	if !pmRuntimeApplies() || !IsOnline() || portMasterLauncher(portMasterSDRoot) == "" {
 		return
 	}
-	pmRuntimeStart(portFirmwareEnv(appConfig), portMasterLauncher(portMasterSDRoot), true, true, nil)
+	pmRuntimeStart(portFirmwareEnv(appConfig), portMasterLauncher(portMasterSDRoot), false, true, nil)
 }
 
 // pmBashShimDir is a tmpfs folder whose `bash` runs good — a real bash the

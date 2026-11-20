@@ -26,9 +26,13 @@ package main
 // device on the power key by itself (wake_resume.go was written for exactly
 // that). JukaHub must not sleep a second time on top of it, so:
 //   - a short press is acted on only after powerKeyFirmwareWait; if the
-//     device slept in that time (CLOCK_BOOTTIME ran ahead of CLOCK_MONOTONIC),
-//     the firmware did it, JukaHub stands down and remembers that for the
-//     session (powerKeyFirmwareSleeps): later presses are left to the firmware;
+//     device slept in that time (CLOCK_BOOTTIME ran ahead of CLOCK_MONOTONIC,
+//     or the RTC did on a kernel that adds no suspend to BOOTTIME:
+//     powerSleepSlept), the firmware did it, JukaHub stands down and
+//     remembers that for the session (powerKeyFirmwareSleeps): later presses
+//     are left to the firmware. Measured on BOOTTIME alone, such a kernel
+//     showed no sleep at all, and JukaHub slept the device a second time the
+//     moment the firmware's wake brought it back;
 //   - a press whose read finds the device just slept is the wake press, and
 //     is swallowed (as is every press during and just after a JukaHub sleep);
 //   - and if the device sleeps again on its own within a few seconds of
@@ -70,6 +74,11 @@ const (
 	powerKeySampleTick = 500 * time.Millisecond
 	// powerKeyCardWait bounds the wait for Home after a long press elsewhere.
 	powerKeyCardWait = 3 * time.Second
+	// powerKeyRTCSure is the least time asleep the RTC alone must show before
+	// JukaHub stands down for the session (powerKeySleptSure): far beyond its
+	// whole-second rounding, and beyond a small correction something outside
+	// JukaHub (an NTP hook running hwclock) could write into it.
+	powerKeyRTCSure = 3 * time.Second
 )
 
 // powerKeyMode is what a short press does.
@@ -112,6 +121,11 @@ var (
 	// whoever owns it: a NextUI game's deadline wake checks that no press
 	// woke the device (nextui_sleep.go). 0 before the first.
 	powerKeyLastDown atomic.Int64
+	// powerKeySleepsSeen counts the sleeps the key's sampler (or a wake
+	// press) noticed, whoever slept the device and on either clock: the
+	// display guard watches the wake that follows (displayguard_linux.go),
+	// also where the wake watcher's BOOTTIME-only count misses it.
+	powerKeySleepsSeen atomic.Uint64
 )
 
 // powerMonoNow is the monotonic time since powerMonoBase.
@@ -215,24 +229,42 @@ var powerKey struct {
 	gen       uint64
 	swallow   bool // this press was the wake press
 	longFired bool
-	pressOff  time.Duration // time asleep when the press came
-	pressOK   bool
-	// lastOff and lastOffOK are the sampler's latest time-asleep reading;
-	// lastMono is when (monotonic) it was taken.
-	lastOff   time.Duration
-	lastOffOK bool
-	lastMono  time.Duration
+	// press is the time-asleep clocks (BOOTTIME and the RTC,
+	// powerSleepReadClocks) read when the press came.
+	press powerSleepClocks
+	// last is the sampler's latest reading of them, or a press's when that
+	// came later (its mono is when it was taken); lastOK once there is one.
+	last   powerSleepClocks
+	lastOK bool
 	// jumpMono is when (monotonic) the sampler last saw the device had
 	// slept; a press soon after is the wake press even when the sampler ran
 	// before the press was read.
 	jumpMono time.Duration
 }
 
+// powerKeySleptBetween reports whether the device slept more than least
+// between two readings of the time-asleep clocks: the longer of BOOTTIME's
+// and the RTC's answers (powerSleepSlept). Pure.
+func powerKeySleptBetween(before, after powerSleepClocks, least time.Duration) bool {
+	slept, ok := powerSleepSlept(before, after)
+	return ok && slept > least
+}
+
+// powerKeySleptSure is powerKeySleptBetween for the one decision that lasts
+// the session, JukaHub standing down for the firmware: BOOTTIME's answer
+// counts from least, the RTC's alone only from powerKeyRTCSure, since only
+// JukaHub's own writes of the hardware clock are fenced off (rtcSetGen).
+// Pure.
+func powerKeySleptSure(before, after powerSleepClocks, least time.Duration) bool {
+	boot, rtc, bootOK, rtcOK := powerSleepClockSplit(before, after)
+	return (bootOK && boot > least) || (rtcOK && rtc > max(least, powerKeyRTCSure))
+}
+
 // powerKeyEdge feeds one press (down) or release from a device reader.
 func powerKeyEdge(down bool) {
-	off, offOK := powerSleepAsleepClock()
+	now := powerSleepReadClocks()
 	if down {
-		powerKeyLastDown.Store(int64(powerMonoNow()))
+		powerKeyLastDown.Store(int64(now.mono))
 	}
 	powerKey.mu.Lock()
 	if down {
@@ -257,19 +289,18 @@ func powerKeyEdge(down bool) {
 			swallow = true
 		case powerSleepJustWoke(powerKeyWakeGuard):
 			swallow = true
-		case offOK && powerKey.lastOffOK && off-powerKey.lastOff > powerKeySleptMin:
+		case powerKey.lastOK && powerKeySleptBetween(powerKey.last, now, powerKeySleptMin):
 			// The device slept since the sampler last looked (the firmware's
 			// sleep, or an RTC wake): this press woke it.
 			swallow = true
-		case powerKey.jumpMono != 0 && powerMonoNow()-powerKey.jumpMono < powerKeyWakeGuard:
+			powerKeySleepsSeen.Add(1)
+		case powerKey.jumpMono != 0 && now.mono-powerKey.jumpMono < powerKeyWakeGuard:
 			// The sampler got there first after the same wake.
 			swallow = true
 		}
 		powerKey.swallow = swallow
-		powerKey.pressOff, powerKey.pressOK = off, offOK
-		if offOK {
-			powerKey.lastOff, powerKey.lastOffOK, powerKey.lastMono = off, true, powerMonoNow()
-		}
+		powerKey.press = now
+		powerKey.last, powerKey.lastOK = now, true
 		powerKey.mu.Unlock()
 		if swallow {
 			logDebug("power", "power key: wake press swallowed")
@@ -284,10 +315,10 @@ func powerKeyEdge(down bool) {
 	}
 	powerKey.down = false
 	act := !powerKey.swallow && !powerKey.longFired
-	gen, pressOff, pressOK := powerKey.gen, powerKey.pressOff, powerKey.pressOK
+	gen, press := powerKey.gen, powerKey.press
 	powerKey.mu.Unlock()
 	if act {
-		go powerKeyShortPress(gen, pressOff, pressOK)
+		go powerKeyShortPress(gen, press)
 	}
 }
 
@@ -308,8 +339,9 @@ func powerKeyLongDue(gen uint64) {
 }
 
 // powerKeyShortPress acts on a short press once the firmware has had its
-// chance. Its own goroutine.
-func powerKeyShortPress(gen uint64, pressOff time.Duration, pressOK bool) {
+// chance; press is the time-asleep clocks read at the press. Its own
+// goroutine.
+func powerKeyShortPress(gen uint64, press powerSleepClocks) {
 	mode := powerKeyModeNow()
 	if mode == powerKeyNothing {
 		return
@@ -330,11 +362,16 @@ func powerKeyShortPress(gen uint64, pressOff time.Duration, pressOK bool) {
 	if newer {
 		return
 	}
-	if pressOK {
-		if off, ok := powerSleepAsleepClock(); ok && off-pressOff > powerKeySleptMin {
-			powerKeyLearnFirmware("the device slept on the press without JukaHub")
-			return
-		}
+	after := powerSleepReadClocks()
+	if powerKeySleptSure(press, after, powerKeySleptMin) {
+		powerKeyLearnFirmware("the device slept on the press without JukaHub")
+		return
+	}
+	if powerKeySleptBetween(press, after, powerKeySleptMin) {
+		// A short sleep only the RTC saw: not enough to stand down for the
+		// session, but this press was the firmware's.
+		logInfo("power", "the device slept on the press without JukaHub (seen on the RTC only); this press is left to the firmware")
+		return
 	}
 	switch mode {
 	case powerKeySleep:
@@ -366,26 +403,26 @@ func powerKeySampler() {
 	ticker := time.NewTicker(powerKeySampleTick)
 	defer ticker.Stop()
 	for range ticker.C {
-		off, ok := powerSleepAsleepClock()
-		if !ok {
-			continue
-		}
-		now := powerMonoNow()
+		now := powerSleepReadClocks()
 		powerKey.mu.Lock()
-		prevOff, prevOK, prevMono := powerKey.lastOff, powerKey.lastOffOK, powerKey.lastMono
-		powerKey.lastOff, powerKey.lastOffOK, powerKey.lastMono = off, true, now
-		if prevOK && off-prevOff > powerKeySleptMin {
-			powerKey.jumpMono = now
+		prev, prevOK := powerKey.last, powerKey.lastOK
+		powerKey.last, powerKey.lastOK = now, true
+		jumped := prevOK && powerKeySleptBetween(prev, now, powerKeySleptMin)
+		if jumped {
+			powerKey.jumpMono = now.mono
 		}
 		powerKey.mu.Unlock()
-		if !prevOK || off-prevOff < time.Second || powerSleepActive() || nextuiPakOwnsPowerKey() {
+		if jumped {
+			powerKeySleepsSeen.Add(1)
+		}
+		if !jumped || !powerKeySleptSure(prev, now, time.Second) || powerSleepActive() || nextuiPakOwnsPowerKey() {
 			continue // minarch's own sleep is not the firmware's (nextui.go)
 		}
 		own := time.Duration(powerOwnWakeMono.Load())
-		if own == 0 || own > prevMono {
+		if own == 0 || own > prev.mono {
 			continue // no JukaHub sleep yet, or this gap was JukaHub's own
 		}
-		if prevMono-own < powerKeyDoubleWindow && powerKeyModeNow() == powerKeySleep && !powerKeyFirmwareSleeps.Load() {
+		if prev.mono-own < powerKeyDoubleWindow && powerKeyModeNow() == powerKeySleep && !powerKeyFirmwareSleeps.Load() {
 			powerKeyLearnFirmware("it slept again right after JukaHub's sleep")
 			showToast("The firmware sleeps on the power button itself — JukaHub leaves it to it", ToastInfo())
 		}

@@ -3,9 +3,11 @@
 JukaHub installs [PortMaster](https://portmaster.games/), lists the ports it
 manages, and runs them as games: in the **Games** library (console **Ports**),
 in **Continue**, in playtime and trophies, with the in-game menu and the game
-assistant. PortMaster itself still installs, updates and runs the ports' own
-machinery; JukaHub's job is to start each port exactly as the firmware's Ports
-tab would, and to look after it around that.
+assistant. JukaHub browses PortMaster's catalogue, installs and updates ports
+and their runtimes, and starts each port exactly as the firmware's Ports tab
+would — PortMaster's own app (its menu, which needs Python) is optional. The
+ports still run on PortMaster's folder of shared files (`control.txt`, its key
+mapper, the runtimes in `libs/`), which JukaHub installs.
 
 > **Status:** stock Smart Pro 1.1.0 paths and manifest fields were checked over
 > SSH on 2026-11-17. Port launch, controls, sound, update and uninstall still
@@ -53,7 +55,8 @@ in Games) shows:
 - PortMaster missing, the port's build is 32-bit only, or its required GLIBC
   is newer than the firmware's;
 - a runtime its `port.json` names (Mono, Godot, Java, WestonPack…) that is not
-  in PortMaster's `libs/` folder — open PortMaster with Wi-Fi, or **Update**;
+  in PortMaster's `libs/` folder — JukaHub downloads it before the port starts
+  (Wi-Fi), or **Update**;
 - the game's own data folder empty — many ports need files you own (a Steam
   or GOG copy); the port's install note and `README.md` say which;
 - the last lines of the port's `log.txt`, or of JukaHub's own launch log for
@@ -64,15 +67,87 @@ in Games) shows:
 | Option | What it does |
 |--------|--------------|
 | Play | Starts it, or shows the reason when the manifest requires another architecture or newer GLIBC |
-| Update | Shown when PortMaster's catalogue has the port. *A newer build is in the catalogue* when the md5 PortMaster recorded at install differs from the catalogue's; otherwise it downloads the same build again. Either way the verified zip goes to PortMaster's `autoinstall` folder and PortMaster opens to install it |
+| Update | Shown when PortMaster's catalogue has the port. *A newer build is in the catalogue* when the md5 PortMaster recorded at install differs from the catalogue's; otherwise it downloads the same build again. Either way JukaHub installs the verified zip itself; files the zip does not have (saves, your game files) stay |
 | Check for updates | Shown before the catalogue is read (needs Wi-Fi) |
 | Why didn't it start? | The diagnosis card above |
 | Uninstall | **Press A twice.** Deletes the launcher script and what its `port.json` lists (`items`, `items_opt`) from the ports folders — the port's folder, **saves inside it included**. A name with a path in it, `..`, or PortMaster itself is never touched |
 
 Rows of ports with a newer catalogue build say **Update available**. The
 PortMaster row says when a newer PortMaster is released (compared with the
-`version` file in PortMaster's folder — confirmed on stock Smart Pro 1.1.0); PortMaster
-updates itself when opened.
+`version` file in PortMaster's folder — confirmed on stock Smart Pro 1.1.0); its
+options (Y) then offer **Update PortMaster**, which downloads the new release
+and writes its program files over the old ones (ports, runtimes and settings
+stay), so PortMaster's menu is not needed for that either. JukaHub also does
+it by itself — see [Installing and updating PortMaster](#installing-and-updating-portmaster).
+
+## Without PortMaster's app
+
+PortMaster's app is a Python menu (`pugwash`) with a Python installer
+(`harbourmaster`). A stock TrimUI has no Python, and the menu is where testers
+on a Brick were left on its splash. JukaHub does without both:
+
+- **Browse:** the Ports Store and the Ports panel read PortMaster's catalogue
+  (`ports.json` from PortMaster-New's latest release) themselves.
+- **Install and update:** JukaHub downloads the port's zip, checks the MD5 the
+  catalogue lists and unpacks it the way `harbourmaster install` does. The
+  zip is checked first: a path that could land outside its folder (`..`, an
+  absolute path, a drive letter), PortMaster's own update, or more than
+  100,000 files or 16 GB refuse it before anything is written; links and stray
+  files at its top are left out, and the card must have room. Folders go to
+  PortMaster's ports folder and launcher scripts to its scripts folder —
+  `HM_PORTS_DIR` / `HM_SCRIPTS_DIR` when PortMaster's launcher sets them, else
+  where the card's installed ports are, else `Data/ports` (PortMaster's TrimUI
+  default for both); an update goes where the port already is, and a script
+  with copies in several ports folders is updated in each. Each file is
+  written beside its target and renamed over it, and files the zip does not
+  have (saves, game files you copied in) stay. `port.json` gets the `status`
+  block harbourmaster writes (`source`, the zip's `md5`, `Installed`), so
+  PortMaster, **Update available** and **Uninstall** treat the port as
+  PortMaster installed it.
+- **Runtimes:** each runtime a port declares (`attr.runtime`) that is not in
+  PortMaster's `libs/` folder is downloaded from where the catalogue lists it
+  (its `utils` section) and must match the MD5 listed there — at install, and
+  again before the port starts if it is still missing (a port's script would
+  otherwise call harbourmaster's `runtime_check`, which needs Python). Each
+  runtime is tried once a session; offline the port starts as it is.
+- **Hand-copied zips:** a port zip in PortMaster's `autoinstall` folder is
+  installed the same way when the Ports panel or the Ports Store opens. A zip
+  that is not a port (PortMaster's own update) stays there for PortMaster.
+- **Play:** a port starts from its own script with PortMaster's shared files,
+  as before; PortMaster's app is never started for it.
+
+**Open PortMaster** stays on PortMaster's row for its own menu (themes, its
+own settings, a port JukaHub left to it). Python and its other needs are only
+fetched when that menu is opened; after PortMaster is installed from the
+Ports screens or repaired, JukaHub prefetches only what ports need (a full bash
+on firmware without one), and otherwise a port's first start fetches it.
+
+### Installing and updating PortMaster
+
+- **Installing:** opening the Ports panel or the Ports Store online on a card
+  without PortMaster installs PortMaster's TrimUI package (`trimui.portmaster.zip`,
+  about 24 MB) by itself, once a session; installing a port does too. A card
+  that has ports but lost PortMaster (its folder deleted, a card from another
+  firmware) gets it from the daily Emulator updates pass, on the charger or
+  once you stepped away.
+- **Updating:** PortMaster is part of **Settings → Games & emulators → Emulator
+  updates**. With *Install automatically* (the default) the daily pass compares
+  the `version` file in `Apps/PortMaster/PortMaster` with PortMaster's latest
+  release and, when it is newer, downloads the package and writes its files over
+  `Apps/PortMaster` — each beside its target and renamed over it, the `version`
+  file last, so an update cut short is redone next time. Ports, runtimes,
+  themes and PortMaster's settings are not in the package and stay. It never
+  runs while a game, a port or PortMaster is open or a port is installing, and
+  waits for the charger or a couple of idle minutes like the emulator updates.
+  *Notify me* only says a new release is out; *Off* leaves it to **Y → Update
+  PortMaster**. Only the TrimUI app in `Apps/PortMaster` is written; a
+  PortMaster a custom firmware keeps elsewhere keeps updating itself.
+
+> **Unverified on a device:** the runtime entries' fields in the catalogue's
+> `utils` section (JukaHub reads several layouts and needs an `https` link and
+> an MD5), where the firmware's Ports tab lists scripts JukaHub put in
+> `Data/ports`, and a port installed this way showing as installed in
+> PortMaster's own menu.
 
 ## How a port is started
 
@@ -194,29 +269,54 @@ launch was in the last day — the last lines of its launch log and of
 PortMaster's `log.txt`, scrubbed like the rest of the report. A report sent
 right after PortMaster failed therefore says why without a description.
 
+**PortMaster's splash** (the "PM — Your Ultimate Handheld Linux Port
+Manager" picture) is a LÖVE program PortMaster's launcher starts in the
+background while its menu loads; the menu ends it once it has a window. A
+menu that died first used to leave the splash on the screen for good, since
+JukaHub hands the screen back only when everything a launch started has
+ended. Now, when a launcher (PortMaster's or a port's) ends and all it left
+running are helpers that served it — the splash, a key mapper, `sdl2imgshow`,
+`portmsg`, shells waiting for those — JukaHub ends them and is back at once,
+with a toast naming the cause PortMaster's `log.txt` gives. Anything else left
+running (a game a script started in the background) keeps the screen as
+before. While PortMaster runs, the splash is ended when it is still drawing
+5 seconds after another program of the launch has opened the screen, and the
+whole launch is ended when the splash has been up for 4 minutes with nothing
+else on the screen (PortMaster's device check gives up after 60 seconds; time
+stopped by the in-game menu, an alarm or sleep does not count). What JukaHub
+ended is on the launch log's last line, in **Why didn't it open?** and in a
+bug report's PortMaster section.
+
 > **Unverified on a device:** PortMaster's menu on the downloaded Python and
 > the firmware's SDL2, Ubuntu's bash running PortMaster's scripts, the
-> per-launch `/bin/bash` (bind mounts in a launch's own namespace), and the
-> exact `ex_config` line in the current `launch.sh`. PortMaster 2026.09.19+
+> per-launch `/bin/bash` (bind mounts in a launch's own namespace), the
+> exact `ex_config` line in the current `launch.sh`, and the splash's process
+> (`love.<arch>` on `utils/pmsplash`) and the display devices the menu opens,
+> which the splash handling looks for. PortMaster 2026.09.19+
 > also counts no analog sticks on TrimUI (NX Redux PR #142); JukaHub does not
 > change that yet.
 
 ## Installing PortMaster
 
-On a fresh card the first row is **PortMaster • Install**. **A** downloads the
-official TrimUI package (`trimui.portmaster.zip`, about 24 MB, Wi-Fi) from the
+On a fresh card, opening the Ports panel or the Ports Store online installs
+PortMaster by itself (once a session); otherwise the first row is
+**PortMaster • Install**, and **A** downloads the official TrimUI package (`trimui.portmaster.zip`, about 24 MB, Wi-Fi) from the
 [PortMaster GUI releases](https://github.com/PortsMaster/PortMaster-GUI/releases)
 and unpacks it to `SDCARD/Apps/PortMaster/` (`launch.sh`, `config.json`,
 `icon.png`, `PortMaster/`). It is staged on the card and moved into place only
 after a complete download and unpack that contains `launch.sh` and
 `PortMaster/control.txt`. An existing `Apps/PortMaster` is never replaced by an
-install. `Data/home` and `Data/ports` are created, and on a TrimUI the Python
-and bash PortMaster needs are fetched right after.
+install. `Data/home` and `Data/ports` are created, and on a TrimUI a full bash
+is fetched right after when the firmware lacks one (Python only when
+PortMaster's own menu is opened).
 
 **Repair PortMaster** (Y on its row) downloads the same package again and
 writes its files over `Apps/PortMaster`, each through a temporary file and a
-rename. It mends a damaged or half-updated install; ports, the runtimes in
-`libs/`, themes and settings are not in the package and stay.
+rename, PortMaster's `version` file last. It mends a damaged or half-updated
+install; ports, the runtimes in `libs/`, themes and settings are not in the
+package and stay. When a newer release is out the row is **Update PortMaster**,
+and the daily Emulator updates pass does the same by itself
+([Installing and updating PortMaster](#installing-and-updating-portmaster)).
 
 ## Where ports live
 
@@ -276,14 +376,18 @@ start?**.
 **Installing.** Ports go through one queue (several can wait; the status strip
 shows each download). JukaHub downloads the zip into
 `data/ports-store/incoming`, checks the MD5 PortMaster's catalogue lists and
-then lets PortMaster's own installer put it on the card: first headless —
-PortMaster's `harbourmaster --no-check install <zip>`, run with `control.txt`
-sourced and the `HM_*` paths PortMaster's launcher exports, logged to
-`data/gamediag/ports/store-install.log` — and, when that cannot run, by moving
-the zip into PortMaster's `autoinstall` folder and opening PortMaster once the
-queue is empty. PortMaster is installed first when the card has none. Set
-`portsStoreInstaller` to `portmaster` in `jukauser.json` to always use the
-PortMaster app.
+installs it itself — no Python, and PortMaster's app is not opened (see
+[Without PortMaster's app](#without-portmasters-app)). Only a zip JukaHub
+does not install itself (PortMaster's own update, an unsafe path) goes on to
+PortMaster's installer: first headless — PortMaster's `harbourmaster
+--no-check install <zip>`, run with `control.txt` sourced and the `HM_*` paths
+PortMaster's launcher exports — and, when that cannot run, by moving the zip
+into PortMaster's `autoinstall` folder and opening PortMaster once the queue
+is empty. Every install is logged to `data/gamediag/ports/store-install.log`.
+PortMaster is installed first when the card has none. `portsStoreInstaller` in
+`jukauser.json` picks the route: `auto` (the default, as above), `jukahub`
+(JukaHub's installer only), `harbourmaster` (PortMaster's installer, then its
+app) or `portmaster` (always the app).
 
 **Where the data comes from.** The catalogue is PortMaster's `ports.json`
 (saved in `data/ports-store/ports.json` for offline browsing), download counts

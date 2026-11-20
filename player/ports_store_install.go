@@ -11,26 +11,30 @@ package main
 //     first and the queue waits for that.
 //  2. A catalogue port is downloaded into portsStagingDir() and checked
 //     against the MD5 PortMaster's catalogue lists (portCatalogDownload).
-//  3. PortMaster's own installer puts it on the card. Headless first: the
-//     PortMaster folder's harbourmaster, run the way PortMaster's launcher
-//     would run it (control.txt sourced, PortMaster's own HM_* paths), with
+//  3. JukaHub installs it itself (ports_native_install.go): the zip's
+//     folders and scripts where PortMaster puts them, harbourmaster's status
+//     block in port.json, the runtimes the port declares from PortMaster's
+//     catalogue. No Python, no PortMaster app. A zip it refuses as not a port
+//     it installs (PortMaster's own update, an unsafe path) goes on to 4.
+//  4. PortMaster's own installer, headless: the PortMaster folder's
+//     harbourmaster, run the way PortMaster's launcher would run it
+//     (control.txt sourced, PortMaster's own HM_* paths), with
 //     `--no-check install <zip>` — the documented way to install a local zip.
-//     It fetches the runtimes the port declares and records it as PortMaster
-//     does. It counts as installed only when it exits 0 and the port's
-//     launcher is in a ports folder afterwards.
-//  4. Otherwise the zip goes into PortMaster's autoinstall folder, and once
+//     It counts as installed only when it exits 0 and the port's launcher is
+//     in a ports folder afterwards.
+//  5. Otherwise the zip goes into PortMaster's autoinstall folder, and once
 //     the queue is empty PortMaster is opened once to install everything
 //     waiting there (when the caller allows it and no game holds the
 //     screen) — the path PortMaster documents for hand-copied zips.
 //
-// Custom setting portsStoreInstaller: "auto" (the default, as above) or
-// "portmaster" (always step 4). Every headless run is logged to
-// data/gamediag/ports/store-install.log.
+// Custom setting portsStoreInstaller: "auto" (the default, as above),
+// "jukahub" (3 only), "harbourmaster" (4, then 5) or "portmaster" (always 5).
+// Every install is logged to data/gamediag/ports/store-install.log.
 //
 // None of this has run on a handheld yet (harbourmaster needs Python: on
 // stock TrimUI firmware PortMaster brings its own through TRIMUI_EX; CrossMix
 // and Knulli ship one). A harbourmaster that cannot start just leads to
-// step 4.
+// step 5.
 
 import (
 	"archive/zip"
@@ -82,6 +86,7 @@ type pstoreJob struct {
 	zip    string         // … or a zip already downloaded
 	store  bool           // a catalogue port queued from a screen
 	openPM bool           // the fallback may open PortMaster whatever is on screen
+	keep   bool           // the zip is borrowed: removed only once installed
 	done   func(portsInstallResult)
 	state  pstoreJobState
 	note   string // what it waits for, or why it failed
@@ -198,7 +203,9 @@ func pstoreCancel(zipName string) bool {
 // environment from the live config. req.Done runs on the main loop.
 func portsInstallZip(req portsInstallRequest) {
 	if runtime.GOOS != "linux" {
-		_ = os.Remove(req.Zip)
+		if !req.Keep {
+			_ = os.Remove(req.Zip)
+		}
 		if req.Done != nil {
 			done := req.Done
 			tbxPost(func() { done(portsInstallResult{Err: errors.New("ports install on the handheld")}) })
@@ -208,7 +215,7 @@ func portsInstallZip(req portsInstallRequest) {
 	name := setOr(req.Name, strings.TrimSuffix(filepath.Base(req.Zip), filepath.Ext(req.Zip)))
 	pstoreAddJob(&pstoreJob{
 		key: strings.ToLower(filepath.Base(req.Zip)), name: name, zip: req.Zip,
-		openPM: req.OpenPortMaster, done: req.Done,
+		openPM: req.OpenPortMaster, keep: req.Keep, done: req.Done,
 		mode: pstoreInstallerMode(), env: portBaseEnv(appConfig),
 	})
 }
@@ -350,9 +357,10 @@ func pstoreRunGuarded(j *pstoreJob) (res portsInstallResult) {
 			if j.gen != 0 {
 				installBarFailRun(j.gen, "internal error")
 			}
-			if j.path != "" {
+			// A borrowed zip (j.keep) stays where the player put it.
+			if j.path != "" && !j.keep {
 				_ = os.Remove(j.path)
-			} else if j.zip != "" {
+			} else if j.zip != "" && !j.keep {
 				_ = os.Remove(j.zip)
 			}
 		}
@@ -363,7 +371,7 @@ func pstoreRunGuarded(j *pstoreJob) (res portsInstallResult) {
 // pstoreRunJob does one job.
 func pstoreRunJob(j *pstoreJob) portsInstallResult {
 	fail := func(err error) portsInstallResult {
-		if j.zip != "" {
+		if j.zip != "" && !j.keep {
 			_ = os.Remove(j.zip)
 		}
 		return portsInstallResult{Err: err}
@@ -510,13 +518,49 @@ func pstoreEnsurePortMaster(j *pstoreJob) (string, error) {
 	return "", errors.New("PortMaster's install took too long")
 }
 
-// pstoreInstallFile hands a checked zip to PortMaster's installer: headless,
-// else the autoinstall folder. The zip is consumed either way. card is the
+// pstoreInstallFile installs a checked zip: JukaHub's own installer, else
+// PortMaster's headless, else the autoinstall folder. The zip is consumed
+// either way (a borrowed one, j.keep, only once installed). card is the
 // status-strip run's token, so the strip's X stops the installer too.
 func pstoreInstallFile(j *pstoreJob, launcher, zipPath string, card context.Context) portsInstallResult {
 	name := j.name
 	scripts := pstoreZipScripts(zipPath)
-	if j.mode != "portmaster" {
+	// drop removes the zip on a failure — not one the job only borrows.
+	drop := func() {
+		if !j.keep {
+			_ = os.Remove(zipPath)
+		}
+	}
+	// JukaHub's own installer first: no Python, no PortMaster app
+	// (ports_native_install.go). Only a zip it leaves to PortMaster goes on.
+	if j.mode == "auto" || j.mode == "jukahub" {
+		ctx, cancel := mcRunContext(j.gen, card)
+		res, err := pnInstall(ctx, j.gen, zipPath, j.entry.Zip)
+		stopped := ctx.Err() != nil
+		cancel()
+		switch {
+		case err == nil:
+			_ = os.Remove(zipPath)
+			if res.RuntimeErr != nil {
+				msg := name + " is installed, but a runtime it needs could not be downloaded (" + firstLine(res.RuntimeErr.Error()) +
+					") — JukaHub tries again when you start it"
+				tbxPost(func() { ShowToast(msg, ToastKindWarning) })
+			}
+			return portsInstallResult{Installed: true}
+		case stopped:
+			drop()
+			return portsInstallResult{Err: pstoreErrCancelled}
+		case j.mode == "jukahub" || !errors.Is(err, errPnNotAPort):
+			// A failure halfway (the card, the network) is not one PortMaster's
+			// installer would get past.
+			drop()
+			return portsInstallResult{Err: err}
+		}
+		logInfo("portsstore", "%s: JukaHub's installer leaves it to PortMaster (%v)", name, err)
+	}
+	// A borrowed zip already waits in PortMaster's autoinstall folder, and
+	// harbourmaster may delete it: PortMaster's app takes it from there.
+	if j.mode != "portmaster" && !j.keep {
 		ok, err := pstoreHarbourInstall(zipPath, scripts, j.env, j.gen, card)
 		if ok {
 			_ = os.Remove(zipPath)
@@ -524,7 +568,7 @@ func pstoreInstallFile(j *pstoreJob, launcher, zipPath string, card context.Cont
 			return portsInstallResult{Installed: true}
 		}
 		if errors.Is(err, pstoreErrCancelled) {
-			_ = os.Remove(zipPath)
+			drop()
 			return portsInstallResult{Err: pstoreErrCancelled}
 		}
 		logInfo("portsstore", "%s: headless install not used (%v); handing it to the PortMaster app", name, err)
@@ -534,11 +578,11 @@ func pstoreInstallFile(j *pstoreJob, launcher, zipPath string, card context.Cont
 	}
 	inbox := mcAutoinstallDir(launcher)
 	if inbox == "" {
-		_ = os.Remove(zipPath)
+		drop()
 		return portsInstallResult{Err: errors.New("PortMaster has no autoinstall folder; install the port from PortMaster")}
 	}
 	if err := pstoreMoveFile(zipPath, inbox); err != nil {
-		_ = os.Remove(zipPath)
+		drop()
 		return portsInstallResult{Err: fmt.Errorf("PortMaster's autoinstall folder: %w", err)}
 	}
 	return portsInstallResult{Queued: true}

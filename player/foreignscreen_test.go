@@ -13,21 +13,40 @@ func TestForeignGameDisplayOwner(t *testing.T) {
 		{pid: 3, name: "minarch.elf", state: "S"},
 		{pid: 4, name: "activities", state: "S"},
 		{pid: 5, name: "ra64.trimui", state: "R"},
-		{pid: 6, name: "minarch.elf", state: "T"},
+		{pid: 6, name: "minarch.elf", state: "T", start: "60"},
 	}
 	held := map[int]string{1: "/dev/fb0", 2: "/dev/fb0", 4: "/dev/fb0", 5: "/dev/dri/card0", 6: "/dev/fb0"}
 	lookup := func(pid int) string { return held[pid] }
-	if got, node := foreignGameDisplayOwner(procs, lookup); got.pid != 5 || node != "/dev/dri/card0" {
+	none := foreignScreenProcess{}
+	asleep := foreignScreenProcess{pid: 6, name: "minarch.elf", state: "R", start: "60"}
+	if got, node := foreignGameDisplayOwner(procs, lookup, none); got.pid != 5 || node != "/dev/dri/card0" {
 		t.Fatalf("owner = %+v, %q; want the live RetroArch display", got, node)
 	}
+	// A running emulator wins over the stopped owner a sleep keeps, whichever
+	// comes first in /proc.
+	if got, _ := foreignGameDisplayOwner(procs, lookup, asleep); got.pid != 5 {
+		t.Fatalf("owner = %+v; a live display must win over a kept stopped one", got)
+	}
+	if got, _ := foreignGameDisplayOwner([]foreignScreenProcess{procs[5], procs[4]}, lookup, asleep); got.pid != 5 {
+		t.Fatalf("owner = %+v; a live display listed after the kept one must still win", got)
+	}
 	held[3] = "/dev/fb0"
-	if got, node := foreignGameDisplayOwner(procs, lookup); got.pid != 3 || node != "/dev/fb0" {
+	if got, node := foreignGameDisplayOwner(procs, lookup, none); got.pid != 3 || node != "/dev/fb0" {
 		t.Fatalf("owner = %+v, %q; want the first live emulator display", got, node)
 	}
 	delete(held, 3)
 	delete(held, 5)
-	if got, node := foreignGameDisplayOwner(procs, lookup); got.pid != 0 || node != "" {
-		t.Fatalf("owner = %+v, %q; helpers and zombies must not take the screen", got, node)
+	if got, node := foreignGameDisplayOwner(procs, lookup, none); got.pid != 0 || node != "" {
+		t.Fatalf("owner = %+v, %q; helpers, zombies and a stopped stranger must not take the screen", got, node)
+	}
+	// The owner seen running, stopped by a sleep, keeps the screen; a reused
+	// pid (another start time) does not.
+	if got, node := foreignGameDisplayOwner(procs, lookup, asleep); got.pid != 6 || node != "/dev/fb0" {
+		t.Fatalf("owner = %+v, %q; the game a sleep stopped must keep the screen", got, node)
+	}
+	asleep.start = "61"
+	if got, _ := foreignGameDisplayOwner(procs, lookup, asleep); got.pid != 0 {
+		t.Fatalf("owner = %+v; a reused pid must not keep the screen", got)
 	}
 }
 

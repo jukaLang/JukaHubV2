@@ -9,9 +9,11 @@ package main
 // session of their own. A port that crashed, or that the player ended with
 // Select + Start, never reaches those last lines: the mapper keeps turning
 // the pad into keys for nobody (and into keys for JukaHub), and a compositor
-// left running keeps the display. The reaper calls this once no screen child
-// is alive; only these helper names are touched, never JukaHub's own group,
-// its ancestors or a firmware loop launch.sh paused.
+// left running keeps the display; so does PortMaster's LÖVE splash when its
+// launcher started it outside the launch's group (portmaster_splash.go). The
+// reaper calls this once no screen child is alive; only these helpers are
+// touched, never JukaHub's own group, its ancestors or a firmware loop
+// launch.sh paused.
 
 import (
 	"os"
@@ -94,7 +96,15 @@ func portCleanupLeftovers() []string {
 			continue
 		}
 		data, _ := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
-		label, ok := portLeftoverLabel(st.comm, closeAllSplitCmdline(data))
+		argv := closeAllSplitCmdline(data)
+		label, ok := portLeftoverLabel(st.comm, argv)
+		if !ok && strings.HasPrefix(strings.ToLower(st.comm), "love") {
+			// PortMaster's splash, started in a session of its own: it would
+			// go on drawing over JukaHub (portmaster_splash.go).
+			if exe, cwd := pmProcLinks(pid); pmSplashMatch(st.comm, argv, exe, cwd) {
+				label, ok = pmSplashLabel, true
+			}
+		}
 		if !ok || (wine && label != "gptokeyb" && label != "gptokeyb2" && label != "oga_controls") {
 			continue
 		}

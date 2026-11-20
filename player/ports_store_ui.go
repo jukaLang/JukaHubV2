@@ -1246,11 +1246,15 @@ func pstoreOptionsSpec(config *Config) (string, []tbxSheetButton) {
 		b.WriteString("## May run here: off\nEvery port is listed; the ones whose manifest rules this handheld out are dimmed.\n\n")
 	}
 	b.WriteString("## Installing\n")
-	if pstoreInstallerMode() == "portmaster" {
+	switch pstoreInstallerMode() {
+	case "portmaster":
 		b.WriteString("Through the PortMaster app (setting portsStoreInstaller: portmaster): JukaHub downloads and checks the port, then opens PortMaster to finish.")
-	} else {
-		b.WriteString("JukaHub downloads and checks the port, then runs PortMaster's own installer without its menu; " +
-			"when that cannot start, PortMaster opens to finish. Set portsStoreInstaller to portmaster to always use the app.")
+	case "harbourmaster":
+		b.WriteString("Through PortMaster's own installer (setting portsStoreInstaller: harbourmaster), which needs Python; " +
+			"when that cannot start, PortMaster opens to finish.")
+	default:
+		b.WriteString("JukaHub downloads and checks the port and installs it itself, with the runtimes it needs — " +
+			"no Python, and PortMaster's app is not opened. Only a zip JukaHub does not install itself (PortMaster's own update) goes to PortMaster.")
 	}
 	mayRun := "May run here: On"
 	if !pstore.mayRun {

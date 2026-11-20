@@ -7,6 +7,12 @@ package main
 // park the UI. A launcher that exits before a detached emulator does the same.
 // Look for known emulator processes that actually hold a display device; only
 // then let the game own the framebuffer. The probe is off the render thread.
+//
+// A sleep stops the game (state T) without it leaving the display: the owner
+// last seen running keeps the screen while JukaHub's sleep runs and for
+// foreignScreenStoppedHold of awake time after (foreignGameDisplayOwner), so
+// Home is not drawn under a paused game and left to take turns with it after
+// the wake.
 
 import (
 	"os"
@@ -18,6 +24,11 @@ import (
 const (
 	foreignScreenProbeEvery = 250 * time.Millisecond
 	foreignScreenSettle     = 350 * time.Millisecond
+	// foreignScreenStoppedHold is how long a stopped owner keeps the screen,
+	// counted on the monotonic clock (which a suspend does not move): a
+	// sleep's way in and out, with room to spare, but not a game stopped for
+	// good.
+	foreignScreenStoppedHold = 2 * time.Minute
 )
 
 var foreignScreen struct {
@@ -26,6 +37,10 @@ var foreignScreen struct {
 	probing  bool
 	lastSeen time.Time
 	active   atomic.Bool
+	// owner is the emulator last seen running with the display, and
+	// ownerRunAt when that was.
+	owner      foreignScreenProcess
+	ownerRunAt time.Time
 }
 
 func foreignScreenSuspended() bool { return foreignScreen.active.Load() }
@@ -59,10 +74,17 @@ func foreignScreenProbe() {
 	self := os.Getpid()
 	for _, p := range procs {
 		if p.pid != self {
-			view = append(view, foreignScreenProcess{pid: p.pid, name: p.comm, state: p.state})
+			view = append(view, foreignScreenProcess{pid: p.pid, name: p.comm, state: p.state, start: p.start})
 		}
 	}
-	owner, node := foreignGameDisplayOwner(view, displayGuardHeldNode)
+	// The owner a sleep stopped still holds the screen (the header).
+	var keep foreignScreenProcess
+	foreignScreen.mu.Lock()
+	if foreignScreen.owner.pid > 0 && (powerSleepActive() || time.Since(foreignScreen.ownerRunAt) < foreignScreenStoppedHold) {
+		keep = foreignScreen.owner
+	}
+	foreignScreen.mu.Unlock()
+	owner, node := foreignGameDisplayOwner(view, displayGuardHeldNode, keep)
 	now := time.Now()
 	foreignScreen.mu.Lock()
 	wasActive := foreignScreen.active.Load()
@@ -70,8 +92,12 @@ func foreignScreenProbe() {
 	case owner.pid != 0:
 		foreignScreen.lastSeen = now
 		foreignScreen.active.Store(true)
+		if owner.state != "T" && owner.state != "t" {
+			foreignScreen.owner, foreignScreen.ownerRunAt = owner, now
+		}
 	case wasActive && now.Sub(foreignScreen.lastSeen) >= foreignScreenSettle:
 		foreignScreen.active.Store(false)
+		foreignScreen.owner = foreignScreenProcess{}
 	}
 	isActive := foreignScreen.active.Load()
 	foreignScreen.mu.Unlock()

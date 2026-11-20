@@ -13,6 +13,46 @@ For anything older, the git log and the
 
 ### Added
 
+- **Ports without PortMaster's app** (Juka, 2026-11-20: "Can we try to bypass
+  PortMaster? … download required files directly via PortMaster API … launch
+  the apps directly without needing to use PortMaster?"). Ports already started
+  from their own scripts; now JukaHub also installs and updates them itself,
+  with no Python and without opening PortMaster's menu. The Ports Store, the
+  Ports panel's catalogue, **Update** and the Minecraft screen download the
+  port from PortMaster's catalogue, check its MD5 and unpack it the way
+  PortMaster's `harbourmaster install` does: the zip is checked first (a path
+  that could land outside its folder, PortMaster's own update, or more than
+  100,000 files or 16 GB refuse it before anything is written); folders and
+  scripts go where PortMaster puts them on this card (its `HM_PORTS_DIR` /
+  `HM_SCRIPTS_DIR`, else where installed ports are, else `Data/ports`); each
+  file is written beside its target and renamed over it, and saves or game
+  files the zip does not have stay; `port.json` gets harbourmaster's `status`
+  block so PortMaster, **Update available** and **Uninstall** see the port as
+  PortMaster installed it. Each runtime a port declares is downloaded from
+  where the catalogue lists it and checked against its MD5 — at install, and
+  before the port starts if it is still missing (its script would otherwise
+  call harbourmaster, which needs Python). Port zips in PortMaster's
+  `autoinstall` folder are installed the same way when the Ports panel or the
+  Ports Store opens, and **Y → Update PortMaster** replaces PortMaster's
+  self-update. Only a zip JukaHub does not install itself goes to PortMaster's
+  installer or app; `portsStoreInstaller` (`auto`, `jukahub`, `harbourmaster`,
+  `portmaster`) picks the route. See
+  [Without PortMaster's app](docs/PORTMASTER.md#without-portmasters-app)
+  ([player/ports_native_install.go](player/ports_native_install.go)).
+- **PortMaster installs and updates itself** (Juka, 2026-11-20: "can we pretty
+  much do everything including installing PortMaster? and auto updating it?").
+  Opening the Ports panel or the Ports Store online on a card without
+  PortMaster installs it by itself, and a card with ports but no PortMaster
+  gets it from the daily Emulator updates pass. That pass now keeps PortMaster
+  current too, under the same setting and rules (Install automatically by
+  default; never over a game or port; on the charger or when idle): it compares
+  PortMaster's `version` file with its latest release and writes the new
+  package over `Apps/PortMaster`, `version` last, keeping ports, runtimes and
+  settings (a release whose tag and `version` file are written differently is
+  fetched at most once). Repair and Update PortMaster also write `version` last
+  now, and after an install JukaHub prefetches only what ports need — Python
+  waits until PortMaster's own menu is opened
+  ([player/portmaster_autoupdate.go](player/portmaster_autoupdate.go)).
 - **Tested on this device** (Juka, 2026-11-19: "Show whether a game, port,
   emulator or app has actually been tested for launch, controls, sound, sleep
   and return on the user's model. Include the tested version and any known
@@ -3375,6 +3415,29 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **A game and another screen taking turns after a sleep** (Juka, 2026-11-20:
+  "when the emulator goes to sleep … one press powerbutton … during wake up
+  emulator and stock screen shows up at same time and they blink each
+  other"). Three ways a second picture could come back at the wake are
+  closed. An emulator JukaHub found by its display (one it did not start, or
+  whose launcher ended before it) stopped counting as on screen the moment a
+  sleep paused it, so JukaHub drew Home under the paused game and the two took
+  turns once the game ran again; the emulator last seen running now keeps the
+  screen while a sleep (JukaHub's or the firmware's) has it paused, for up to
+  two minutes of awake time. The check that stops a stock MainUI drawing
+  beside JukaHub was off while a game ran, so a MainUI that came back at the
+  wake was left drawing beside the emulator; every power press and every wake
+  now opens that check for a minute, in games too (the game itself is never
+  touched), and three seconds later the log names every process holding the
+  display (`after the power key or a wake, the display is held by: …`), so a
+  report says who drew. And JukaHub told the firmware's own power-key sleep
+  from none by `CLOCK_BOOTTIME` alone: on a kernel that adds no suspend time
+  to it, JukaHub saw no sleep, put the device to sleep a second time right
+  after the firmware's wake and took the wake press for a new press. It now
+  reads the RTC as well, as its own sleep's timing already does
+  ([player/foreignscreen_linux.go](player/foreignscreen_linux.go),
+  [player/displayguard_linux.go](player/displayguard_linux.go),
+  [player/powerkey.go](player/powerkey.go)).
 - **The exit status after a stop** (launch.sh). When JukaHub was asked to stop
   (the power key, a shutdown) and quit at once, `.last-exit` could record 143 or
   127 instead of JukaHub's own status, so the next start's boot guard could
@@ -3394,6 +3457,30 @@ For anything older, the git log and the
   tiles; a move that just slid them brought none, so the board ran dry after
   a couple of turns. Every move that changes the board now adds one
   ([player/games.go](player/games.go)).
+
+- **PortMaster stuck on its splash** (Juka, 2026-11-20: testers on a TrimUI
+  Brick left on the "PM — Your Ultimate Handheld Linux Port Manager" picture).
+  That picture is PortMaster's own splash, a LÖVE program its launcher starts
+  in the background while its Python menu (pugwash) loads; pugwash ends it once
+  it has a window. When pugwash died first, its launcher ended but the splash
+  went on running in the launch's process group, and JukaHub kept the screen
+  parked until that group was gone — so the splash stayed until the handheld
+  was switched off. Now, the moment a port's or PortMaster's launcher ends,
+  JukaHub looks at what is left: when it is only helpers that served the
+  launch (PortMaster's splash, a key mapper, `sdl2imgshow`, `portmsg`, shells
+  waiting for those) they are ended and JukaHub is back at once, with a toast
+  that names the cause from PortMaster's `log.txt`; a game a script left
+  running in the background keeps the screen as before. While PortMaster
+  runs, JukaHub ends the splash when it is still drawing 5 seconds after
+  PortMaster's menu has the screen, and ends the launch when the splash has
+  been up for 4 minutes with nothing else on the screen (time paused by the
+  in-game menu, an alarm or sleep does not count). A splash started outside
+  the launch's group is ended with the other leftovers. **Why didn't it
+  open?**, the launch log's end line and the bug report's PortMaster section
+  say what JukaHub ended, and PortMaster's `log.txt` is now also read for a
+  device check that found no CPU architecture (`KeyError: 'primary_arch'`)
+  and for a menu that could not open the screen
+  ([player/portmaster_splash.go](player/portmaster_splash.go)).
 
 - **PortMaster on a stock Brick or Smart Pro, again** (report JH-QCKJ9M,
   2026-11-20: "Fix PortMaster", TrimUI Brick, no description). Three gaps the

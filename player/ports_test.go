@@ -2,11 +2,14 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -323,7 +326,7 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(header+"Starting\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	portLogNoteEnd(logPath, nil, 2*time.Second)
+	portLogNoteEnd(logPath, nil, 2*time.Second, "")
 	notes, output := gameDiagPortJukaLog(logPath, time.Time{})
 	if len(notes) != 1 || !strings.HasPrefix(notes[0], "bash: none usable") || len(output) == 0 || output[0] != "Starting" {
 		t.Fatalf("launch log split: notes %q output %q", notes, output)
@@ -341,6 +344,8 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 		{"ImportError: could not find any library for SDL2 (PYSDL2_DLL_PATH: /usr/lib)", "PortMaster's Python could not find SDL2"},
 		{`/mnt/SDCARD/Apps/PortMaster/PortMaster/device_info.txt: line 915: syntax error: unexpected "("`, "A PortMaster script ran under BusyBox's sh"},
 		{"env: can't execute 'python3': No such file or directory", "PortMaster could not start Python 3"},
+		{"KeyError: 'primary_arch'", "PortMaster could not tell what handheld this is"},
+		{"SDL_Init failed: kmsdrm not available", "PortMaster's menu could not open the screen"},
 		{"Starting PortMaster", ""},
 	} {
 		var got []string
@@ -385,6 +390,141 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 	good := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39) — /bin/bash cannot run bash arrays"}
 	if issues, _, _ := gameDiagPortLogFindings(good, []string{`/x/device_info.txt: line 12: syntax error: unexpected "("`}, script); len(issues) != 0 {
 		t.Errorf("BusyBox blamed under a working bash: %+v", issues)
+	}
+}
+
+// What a launcher leaves in its group (read from /proc, outside data) is
+// ended only when all of it is helpers: PortMaster's splash and shells
+// waiting for it go, a LÖVE port or any other game keeps the screen.
+func TestPortOrphanPick(t *testing.T) {
+	pm := "/mnt/SDCARD/Apps/PortMaster/PortMaster"
+	splash := portOrphan{pid: 20, ppid: 10, comm: "love.aarch64", argv: []string{pm + "/utils/love.aarch64", pm + "/utils/pmsplash/"}}
+	// JukaHub's bash on the private glibc: /proc shows the loader's command line.
+	rt := "/mnt/SDCARD/JukaHub/data/private-glibc/current"
+	wrapper := portOrphan{pid: 10, ppid: 1, comm: "ld-linux-aarch6", argv: []string{rt + "/ld-linux-aarch64.so.1", "--inhibit-cache",
+		"--library-path", rt, "--argv0", "/tmp/jukahub-port-runtime/bash/bash", rt + "/usr/bin/bash", "launch.sh"}}
+	mapper := portOrphan{pid: 30, ppid: 1, comm: "gptokeyb"}
+	lovePort := portOrphan{pid: 40, ppid: 1, comm: "love.aarch64", argv: []string{"./love.aarch64", "gamedata"}, cwd: "/mnt/SDCARD/Data/ports/balatro"}
+	idle := portOrphan{pid: 50, ppid: 1, comm: "sh"}
+	byCwd := portOrphan{pid: 60, ppid: 1, comm: "love.aarch64", argv: []string{"./love.aarch64", "."}, cwd: pm + "/utils/pmsplash"}
+	for _, c := range []struct {
+		name string
+		left []portOrphan
+		want int
+	}{
+		{"splash, its shell and a key mapper", []portOrphan{splash, wrapper, mapper}, 3},
+		{"splash known by its folder", []portOrphan{byCwd}, 1},
+		{"a LÖVE port is a game", []portOrphan{lovePort}, 0},
+		{"a game beside the splash keeps everything", []portOrphan{splash, wrapper, lovePort}, 0},
+		{"a shell with nothing under it is not a helper", []portOrphan{splash, wrapper, idle}, 0},
+		{"a shell whose child left the group is not a helper", []portOrphan{splash, func() portOrphan { w := wrapper; w.outKids = 1; return w }()}, 0},
+		{"nothing left", nil, 0},
+	} {
+		procs, labels := portOrphanPick(c.left)
+		if len(procs) != c.want || (c.want > 0 && !pmSplashLeft(labels)) {
+			t.Errorf("%s: %d to end (%q), want %d", c.name, len(procs), labels, c.want)
+		}
+	}
+	if !pmFdInfoCloexec([]byte("pos:\t0\nflags:\t02100002\nmnt_id:\t21\n")) || pmFdInfoCloexec([]byte("pos:\t0\nflags:\t0100002\n")) {
+		t.Error("fdinfo close-on-exec flag misread")
+	}
+}
+
+// JukaHub's own port installer reads zips and PortMaster's catalogue (outside
+// data): an entry that could land outside its folder, or PortMaster's own
+// update, refuses the zip before anything is written; port.json keeps its
+// fields and gets harbourmaster's status block; runtimes are found by the
+// names port.json uses, aarch64 builds and https links with an MD5 only.
+func TestPortNativeInstallPlan(t *testing.T) {
+	mk := func(entries map[string]string, links ...string) []*zip.File {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		names := make([]string, 0, len(entries))
+		for n := range entries {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			w, err := zw.Create(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(entries[n]))
+		}
+		for _, l := range links {
+			h := &zip.FileHeader{Name: l}
+			h.SetMode(os.ModeSymlink | 0o777)
+			w, err := zw.CreateHeader(h)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte("../../../etc"))
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		if zr == nil {
+			t.Fatalf("zip: %v", err)
+		}
+		return zr.File
+	}
+	p, err := pnPlanZip(mk(map[string]string{
+		"Balatro.sh": "#!/bin/bash\n", "balatro/port.json": `{"name":"balatro.zip"}`,
+		"balatro/game/data.bin": "x", "README.md": "stray", "balatro/saves/": "",
+	}, "balatro/lib/libz.so"))
+	if err != nil || len(p.scripts) != 1 || p.scripts[0].rel != "Balatro.sh" || strings.Join(p.dirs, ",") != "balatro" ||
+		p.manifest != "balatro/port.json" || len(p.files) != 2 || p.skipped != 2 || strings.Join(p.empty, ",") != "balatro/saves" {
+		t.Fatalf("plan: %+v, %v", p, err)
+	}
+	if !pnPathWithin("/mnt/SDCARD/Apps/PortMaster/PortMaster", "/mnt/SDCARD/apps/portmaster/portmaster/libs") ||
+		pnPathWithin("/mnt/SDCARD/Data/ports", "/mnt/SDCARD/Data/ports2") {
+		t.Error("pnPathWithin")
+	}
+	for _, bad := range []map[string]string{
+		{"../evil.sh": "x"},
+		{"Port.sh": "x", "port/../../x": "x"},
+		{"Port.sh": "x", "/abs/x": "x"},
+		{"Port.sh": "x", `port\..\..\x`: "x"},
+		{"Port.sh": "x", "C:/x": "x"},
+		{"PortMaster.sh": "x", "PortMaster/control.txt": "x"},
+		{"Port.sh": "x", "PortMaster./control.txt": "x"},
+		{"Port.sh": "x", "Imgs/Port.png": "x"},
+		{"port/only.txt": "x"},
+	} {
+		if _, err := pnPlanZip(mk(bad)); !errors.Is(err, errPnNotAPort) {
+			t.Errorf("%v: got %v, want the zip refused", bad, err)
+		}
+	}
+	sum := strings.Repeat("ab", 16)
+	out, err := pnStatusJSON([]byte(`{"version":2,"name":"balatro.zip","attr":{"title":"Balatro","runtime":["love_11.5.squashfs"],"desc":"<b>"},"status":{"note":"kept"}}`),
+		"balatro.zip", strings.ToUpper(sum), nil)
+	meta, ok := parsePortJSON(out)
+	if err != nil || !ok || meta.MD5 != sum || meta.Title != "Balatro" || len(meta.Runtime) != 1 ||
+		!strings.Contains(string(out), `"note": "kept"`) || !strings.Contains(string(out), `"source": "PortMaster"`) || !strings.Contains(string(out), `"<b>"`) {
+		t.Fatalf("status block: %s", out)
+	}
+	out, _ = pnStatusJSON(nil, "Foo.zip", sum, []string{"Foo.sh", "foo/"})
+	if meta, ok := parsePortJSON(out); !ok || meta.Zip != "foo.zip" || len(meta.Items) != 2 || meta.MD5 != sum {
+		t.Fatalf("made-up manifest: %s", out)
+	}
+	h := func(c string) string { return strings.Repeat(c, 32) }
+	idx := pnParseRuntimes([]byte(`{"ports":{},"utils":{
+		"mono-6.12.0.122-aarch64.squashfs":{"md5":"` + h("1") + `","url":"https://github.com/PortsMaster/x/mono-6.12.0.122-aarch64.squashfs"},
+		"frt_3.7.x86_64.squashfs":{"runtime_name":"frt_3.7","runtime_arch":"x86_64","md5":"` + h("2") + `","url":"https://x/frt_3.7.x86_64.squashfs"},
+		"frt_3.7.aarch64.squashfs":{"runtime_name":"frt_3.7","runtime_arch":"aarch64","md5":"` + h("3") + `","url":"https://x/frt_3.7.aarch64.squashfs"},
+		"plain.squashfs":{"md5":"` + h("4") + `","url":"http://x/plain.squashfs"},
+		"short.squashfs":{"md5":"123","url":"https://x/short.squashfs"}}}`))
+	for name, want := range map[string]string{
+		"mono-6.12.0.122-aarch64.squashfs": h("1"), "mono-6.12.0.122-aarch64": h("1"), "frt_3.7": h("3"), "plain": "", "short.squashfs": "",
+	} {
+		r, ok := pnRuntimeLookup(idx, name)
+		if (want == "") == ok || (ok && r.MD5 != want) {
+			t.Errorf("runtime %q: %+v, %v", name, r, ok)
+		}
+	}
+	if pnRuntimeFile("frt_3.7") != "frt_3.7.squashfs" || pnRuntimeFile("../x") != "" || pnRuntimeFile("mono.squashfs") != "mono.squashfs" {
+		t.Error("runtime file names")
 	}
 }
 

@@ -33,6 +33,15 @@ package main
 // JukaHub's own children are not judged here (a game, the screen share's
 // capture): the exit report below lists those still alive as the app quits,
 // and stops the ones that hold the display or a Bluetooth session.
+//
+// A power press or a wake opens the window again, and that window is also
+// watched while a game owns the screen (2026-11-20, Juka: "when the emulator
+// goes to sleep … during wake up emulator and stock screen show up at the
+// same time and they blink each other"). A MainUI that comes back at the wake
+// is stopped by the same rules; a known emulator outside JukaHub's children is
+// the game itself (foreignscreen.go), never a second drawer. A few seconds
+// after the press or wake, one line lists every process that holds the
+// display (the game included), so the next report says who drew.
 
 import (
 	"fmt"
@@ -54,6 +63,9 @@ const (
 	displayGuardMaxStops = 3
 	// displayGuardPausedRecord is launch.sh's paused record (its header).
 	displayGuardPausedRecord = "/tmp/jukahub-paused"
+	// displayGuardSummaryDelay is how long after a power press or a wake the
+	// in-game holders line is written: the wake's own drawing has settled.
+	displayGuardSummaryDelay = 3 * time.Second
 )
 
 // displayGuardNodes are the device nodes a process that draws holds open: the
@@ -91,31 +103,70 @@ var displayGuard struct {
 	stops    int
 	reported map[string]bool
 	paused   []displayGuardPaused
+	// wakeUntil is the window a power press or a wake opened, the one that
+	// is also watched while a game owns the screen; summaryAt is when its
+	// holders line is due (zero: none).
+	wakeUntil time.Time
+	summaryAt time.Time
+	// The last power press, JukaHub wake, wake-watcher count and power-key
+	// sampler sleep count seen.
+	pressSeen, sleepSeen   int64
+	wakeSeen, keySleepSeen uint64
 }
 
 // displayGuardTick runs from widgetsTick (once a second, also while a game
-// runs): it opens the window at the first tick and again when a game ends,
-// and starts one look when the window is open and no look is running.
+// runs): it opens the window at the first tick, again when a game ends and
+// again at a power press or a wake — the one window also watched while a game
+// owns the screen — and starts one look when the window is open and no look
+// is running.
 func displayGuardTick() {
 	if !IsTrimuiDevice() {
 		return
 	}
 	now := time.Now()
 	game := gameScreenSuspended()
+	press, slept := powerKeyLastDown.Load(), powerSleep.wokeAt.Load()
+	woke, keySlept := wakeCount(), powerKeySleepsSeen.Load()
 	displayGuard.mu.Lock()
 	if !displayGuard.started {
 		displayGuard.started = true
 		displayGuard.until = now.Add(displayGuardWindow)
 		displayGuard.reported = make(map[string]bool)
+		displayGuard.pressSeen, displayGuard.sleepSeen = press, slept
+		displayGuard.wakeSeen, displayGuard.keySleepSeen = woke, keySlept
 		Cleanup = append(Cleanup, displayGuardExit)
+	}
+	if press != displayGuard.pressSeen || slept != displayGuard.sleepSeen ||
+		woke != displayGuard.wakeSeen || keySlept != displayGuard.keySleepSeen {
+		// A power press (whoever acts on it), a JukaHub sleep that ended, or
+		// a sleep the wake watcher or the power key's clocks saw (the RTC
+		// too, powerkey.go): what wakes up may draw again.
+		displayGuard.pressSeen, displayGuard.sleepSeen = press, slept
+		displayGuard.wakeSeen, displayGuard.keySleepSeen = woke, keySlept
+		displayGuard.wakeUntil = now.Add(displayGuardWindow)
+		if displayGuard.until.Before(displayGuard.wakeUntil) {
+			displayGuard.until = displayGuard.wakeUntil
+		}
+		displayGuard.summaryAt = now.Add(displayGuardSummaryDelay)
 	}
 	if displayGuard.wasGame && !game {
 		displayGuard.until = now.Add(displayGuardWindow)
 	}
 	displayGuard.wasGame = game
-	if game || displayGuard.scanning || now.After(displayGuard.until) || now.Sub(displayGuard.last) < displayGuardEvery {
+	window := displayGuard.until
+	if game {
+		window = displayGuard.wakeUntil
+	}
+	if displayGuard.scanning || now.After(window) || now.Sub(displayGuard.last) < displayGuardEvery {
 		displayGuard.mu.Unlock()
 		return
+	}
+	// The holders line is for a game's screen only; on JukaHub's own screen
+	// the look already names anything else that draws.
+	summary := false
+	if !displayGuard.summaryAt.IsZero() && !now.Before(displayGuard.summaryAt) {
+		summary = game
+		displayGuard.summaryAt = time.Time{}
 	}
 	displayGuard.scanning = true
 	displayGuard.last = now
@@ -129,12 +180,14 @@ func displayGuardTick() {
 			displayGuard.scanning = false
 			displayGuard.mu.Unlock()
 		}()
-		displayGuardLook()
+		displayGuardLook(game, summary)
 	}()
 }
 
-// displayGuardLook is one look at what else is alive.
-func displayGuardLook() {
+// displayGuardLook is one look at what else is alive. game is set while a
+// game owns the screen; summary asks for the line that lists every display
+// holder, JukaHub's own game included.
+func displayGuardLook(game, summary bool) {
 	self := os.Getpid()
 	procs := displayGuardProcs()
 	byPid := make(map[int]displayGuardProc, len(procs))
@@ -143,8 +196,16 @@ func displayGuardLook() {
 	}
 	ancestors := displayGuardAncestors(self, byPid)
 	ours := displayGuardDescendants(self, procs)
+	beside := "JukaHub"
+	if game {
+		beside = "the game"
+	}
+	var holders []string
+	// spare is what the guard never stops or pauses under a game: JukaHub's
+	// ancestors and every parent of the game (filled at the first MainUI).
+	var spare map[int]bool
 	for _, p := range procs {
-		if p.pid == self || p.state == "Z" || ours[p.pid] || ancestors[p.pid] {
+		if p.pid == self || p.state == "Z" || ancestors[p.pid] || (ours[p.pid] && !summary) {
 			continue
 		}
 		mainUI := p.comm == "MainUI"
@@ -152,7 +213,15 @@ func displayGuardLook() {
 		if !mainUI && node == "" {
 			continue
 		}
-		if displayGuardFirmwareOSD(p, node) {
+		if summary {
+			holders = append(holders, displayGuardHolderNote(p, node, ours[p.pid]))
+		}
+		if ours[p.pid] || displayGuardFirmwareOSD(p, node) {
+			continue
+		}
+		// Under a game, a known emulator outside JukaHub's children is that
+		// game (a launcher that ended before it, foreignscreen.go).
+		if game && !mainUI && foreignGameProcessName(p.comm) {
 			continue
 		}
 		key := strconv.Itoa(p.pid) + " " + p.start
@@ -164,16 +233,71 @@ func displayGuardLook() {
 		switch {
 		case mainUI:
 			if !seen {
-				logWarn("display", "%s is drawing beside JukaHub", who)
+				logWarn("display", "%s is drawing beside %s", who, beside)
 			}
-			displayGuardStopMainUI(p, byPid, ancestors)
+			if spare == nil {
+				spare = ancestors
+				if game {
+					spare = displayGuardGameAncestors(procs, byPid, ours)
+					for pid := range ancestors {
+						spare[pid] = true
+					}
+				}
+			}
+			if spare[p.pid] {
+				// This MainUI started the game: stopping it ends the game too.
+				break
+			}
+			displayGuardStopMainUI(p, byPid, spare)
 		case seen:
 		case p.comm == "JukaHub":
 			logWarn("display", "another JukaHub, %s, holds %s beside this one", who, node)
+		case game:
+			logWarn("display", "%s holds %s beside the game", who, node)
 		default:
 			logWarn("display", "%s holds %s while JukaHub has the screen", who, node)
 		}
 	}
+	if summary {
+		if len(holders) == 0 {
+			holders = append(holders, "none found")
+		}
+		logInfo("display", "after the power key or a wake, the display is held by: %s", strings.Join(holders, "; "))
+	}
+}
+
+// displayGuardGameAncestors is every parent of a known emulator that holds the
+// display outside JukaHub's children — the game, under a game
+// (foreignscreen.go): a launcher shell there is waiting for it, and pausing it
+// would leave the game unreaped.
+func displayGuardGameAncestors(procs []displayGuardProc, byPid map[int]displayGuardProc, ours map[int]bool) map[int]bool {
+	out := make(map[int]bool)
+	for _, p := range procs {
+		if ours[p.pid] || p.state == "Z" || !foreignGameProcessName(p.comm) || displayGuardHeldNode(p.pid) == "" {
+			continue
+		}
+		for pid := range displayGuardAncestors(p.pid, byPid) {
+			out[pid] = true
+		}
+	}
+	return out
+}
+
+// displayGuardHolderNote is one process in the holders line: "ra64.trimui
+// pid 812 (started by JukaHub) on /dev/fb0", "MainUI pid 640 paused, no display
+// node".
+func displayGuardHolderNote(p displayGuardProc, node string, ours bool) string {
+	s := displayGuardName(p) + " pid " + strconv.Itoa(p.pid)
+	if ours {
+		s += " (started by JukaHub)"
+	}
+	if p.state == "T" || p.state == "t" {
+		s += " paused"
+	}
+	if node == "" {
+		return s + ", no display node"
+	}
+	return s + " on " + node
 }
 
 // The stock firmware's OSD daemon keeps fb0 open for volume and brightness

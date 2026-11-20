@@ -2,8 +2,9 @@ package main
 
 // The Ports panel reads PortMaster's own catalogue. A selected port goes into
 // the shared install queue (ports_store_install.go): verified against the
-// catalogue's MD5, then installed by PortMaster's own installer, which fetches
-// the runtimes the port declares. The first row opens the Ports Store.
+// catalogue's MD5, then installed by JukaHub itself with the runtimes the
+// port declares (ports_native_install.go). The first row opens the Ports
+// Store.
 
 import (
 	"context"
@@ -199,7 +200,7 @@ func portCatalogRow(e mcCatalogEntry, installed bool) portEntry {
 		detail = e.Description
 	}
 	if detail == "" {
-		detail = "PortMaster installs the port and its declared runtimes"
+		detail = "JukaHub installs the port and the runtimes it declares"
 	}
 	status := emuMissing
 	if installed {

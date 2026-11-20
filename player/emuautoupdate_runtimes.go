@@ -1248,7 +1248,7 @@ func emuAutoUpdateCoverageLoad() {
 			if u.Supported != nil && !u.Supported() {
 				continue
 			}
-			if u.Key == "hakux" {
+			if u.Key == "hakux" || u.Key == "portmaster" {
 				add(u.Title, u.Title)
 				continue
 			}
