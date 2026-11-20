@@ -20,12 +20,13 @@ remaining gaps are worth closing.
 | Transport | Play/pause, next/previous, stop, seek ±10 s, seek by tapping the rail, volume ±10 % |
 | Modes | Shuffle (every track once before wrapping), repeat off / all / one, a play-next queue |
 | Favorites | Toggled per track, marked in the list, stored in `musicfavorites.json` |
-| Long form | 0.75×–2× speed, sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
+| Long form | 0.75×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
 | Lyrics | A `.lrc` file next to the track; the active line and its neighbours are drawn in the artwork square |
 | Visuals | 32-bar smoothed spectrum in the artwork tile and a full-screen visualizer |
 | Background | Audio keeps playing when you leave the screen and, by default, under a game; starting a video or a Watch Party stream stops it |
 | Transitions | Gapless: the next track starts without a gap, and the last second of a track is no longer cut off |
 | USB DAC | Sound moves to a plugged-in USB DAC; Bit-perfect plays lossless tracks at their own rate and bit depth |
+| Game soundtracks | NSF, SPC, GBS, VGM/VGZ, GYM, HES, KSS, AY, SAP and C64 SID tunes, plus MOD/XM/S3M/IT modules: one row per song, the game's cover, the console and the song number in Now Playing (see [Game soundtracks](#game-soundtracks)) |
 
 Controls are in [CONTROLS.md](CONTROLS.md#music-player).
 
@@ -98,6 +99,20 @@ plays or pauses, **R1 / L1** change track, **Left / Right** seek 10 s and
 screen at once. If the music stops, or stays paused, for two minutes, the
 handheld goes to sleep as usual. This works while you are not in a game; in a
 game the power button sleeps as before.
+
+## Game soundtracks
+
+Game music files play in the same player: NES (NSF, NSFE), SNES (SPC), Game
+Boy (GBS), Sega (VGM, VGZ, GYM), PC Engine (HES), MSX (KSS), ZX Spectrum (AY),
+Atari 8-bit (SAP) and Commodore 64 (SID) tunes, and tracker modules (MOD, XM,
+S3M, IT). A file that holds a whole soundtrack opens as an album with one row
+per song; Now Playing shows the console, "Song 3 of 24" and the game, and the
+artwork tile shows the game's cover from the Games library or the folder's
+picture. Looping songs play for the length the file gives (else 2:30) and fade
+out. The console formats go through ffmpeg's libgme and the modules through
+libopenmpt; an ffmpeg without them says so once. SID tunes play on JukaHub's
+own small C64 emulation, cheap enough to run with the screen off. Formats,
+limits and the SID details are in [SOUNDTRACKS.md](SOUNDTRACKS.md).
 
 ## Compared with NXT Retro Music
 

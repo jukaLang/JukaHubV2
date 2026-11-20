@@ -1,10 +1,11 @@
 package main
 
 // homebrew_store.go — Get Homebrew (Start → Games → Get Homebrew): new games
-// for ten consoles from itch.io, in one list.
+// for twelve consoles from itch.io, in one list.
 //
 // Homebrew is alive on itch.io: Game Boy games made with GB Studio, NES and
-// Mega Drive releases with cartridge runs, PICO-8 carts. JukaHub's Games
+// Mega Drive releases with cartridge runs, PICO-8 and TIC-80 carts, RPG Maker
+// 2000/2003 games for EasyRPG (homebrew_tic80.go, homebrew_easyrpg.go). JukaHub's Games
 // library plays them all, but getting one onto a shelf meant a PC, a browser
 // and a card reader. This screen is the shop window and the delivery:
 //
@@ -12,7 +13,7 @@ package main
 //     their RSS twins (homebrew_store_itch.go) — several tags per console
 //     ("tag-game-boy", "made-with-gb-studio" …) merged and de-duplicated by
 //     game page, so a game tagged twice shows once. Console chips (All and
-//     the ten), a sort (Popular, Newest, Top rated, Free, Yours — the games
+//     the twelve), a sort (Popular, Newest, Top rated, Free, Yours — the games
 //     the player bought or installed) and a search over what is loaded. The
 //     Newest, Top rated and Free lists are itch.io's own orderings, fetched
 //     the first time that sort is picked. Feeds are saved under
@@ -82,10 +83,10 @@ type hbConsole struct {
 	// https://itch.io/games/<sort>/<filter>.xml.
 	feeds []string
 	exts  []string // ROM extensions, lower case
-	romm  string   // rommSystems id (its Roms folder name); "" is PICO-8
+	romm  string   // rommSystems id (its Roms folder name); "" is PICO-8 or hbFolderConsoles
 }
 
-// hbConsoles are the ten consoles. The index is a bit in hbItem.consoles.
+// hbConsoles are the twelve consoles. The index is a bit in hbItem.consoles.
 var hbConsoles = []hbConsole{
 	{"gb", "Game Boy", "Game Boy", "emu-gb", []string{"tag-game-boy", "tag-gameboy", "made-with-gb-studio"}, []string{".gb"}, "gb"},
 	{"gbc", "Game Boy Color", "GB Color", "emu-gbc", []string{"tag-game-boy-color", "tag-gameboy-color", "tag-gbc"}, []string{".gbc"}, "gbc"},
@@ -97,6 +98,10 @@ var hbConsoles = []hbConsole{
 	{"gg", "Game Gear", "Game Gear", "emu-gg", []string{"tag-game-gear", "tag-sega-game-gear", "tag-gamegear"}, []string{".gg"}, "gg"},
 	{"pce", "PC Engine", "PC Engine", "emu-pce", []string{"tag-pc-engine", "tag-turbografx-16", "tag-pcengine"}, []string{".pce"}, "pce"},
 	{"pico8", pico8SystemName, "PICO-8", "rom", []string{"tag-pico-8", "made-with-pico-8"}, []string{".p8.png", ".p8"}, ""},
+	// Fantasy-console carts and RPG Maker 2000/2003 folders
+	// (homebrew_tic80.go, homebrew_easyrpg.go).
+	{hbTIC80ID, hbTIC80System, "TIC-80", "rom", []string{"made-with-tic-80", "tag-tic-80", "tag-tic80"}, []string{".tic"}, ""},
+	{hbEasyRPGID, hbEasyRPGSystem, "RPG Maker", "rom", []string{"made-with-easyrpg", "tag-rpg-maker-2003", "tag-rpg-maker-2000", "tag-rm2k3"}, []string{".easyrpg"}, ""},
 }
 
 // hbSort orders (and for Free and Yours, filters) the list.

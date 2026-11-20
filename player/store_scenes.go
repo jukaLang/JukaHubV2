@@ -42,21 +42,23 @@ const (
 func storeScenesEnsure(config *Config) {
 	portsStoreEnsureScene(config)
 	cloudGamingEnsureScene(config)
-	// Get Homebrew (homebrew_store*.go) shares the hooks.
+	// Get Homebrew (homebrew_store*.go) shares the hooks, and so does Get
+	// WASM-4 carts (wasm4_carts_ui.go).
 	homebrewEnsureScene(config)
+	wasm4CartsEnsureScene(config)
 }
 
 // storeScenesClick routes a click or tap on either screen; a miss is left for
 // the bars.
 func storeScenesClick(mx, my int32, config *Config) bool {
 	return portsStoreSceneClick(mx, my, config) || cloudGamingSceneClick(mx, my, config) ||
-		homebrewSceneClick(mx, my, config)
+		homebrewSceneClick(mx, my, config) || wasm4CartsSceneClick(mx, my, config)
 }
 
 // storeScenesWheel scrolls whichever of the two is on screen.
 func storeScenesWheel(config *Config, y int32) bool {
 	return portsStoreSceneWheel(config, y) || cloudGamingSceneWheel(config, y) ||
-		homebrewSceneWheel(config, y)
+		homebrewSceneWheel(config, y) || wasm4CartsSceneWheel(config, y)
 }
 
 // ── The shared port installer ────────────────────────────────────────────

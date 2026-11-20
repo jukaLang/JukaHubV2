@@ -15,8 +15,11 @@ package main
 //     where the project publishes them (verified against the release's
 //     checksum list); Ubuntu's arm64 packages through Linux packages
 //     (linuxpkg_*.go: Ubuntu's signed index, every download checked against
-//     it) for Nmap, John the Ripper and Aircrack-ng, and for the Python and
-//     Perl a script tool needs, installed first as part of its install press;
+//     it) for Nmap, John the Ripper and Aircrack-ng (without the helper
+//     programs it brings for uses the handheld does not have, SkipDeps), and
+//     for the Python and Perl a script tool needs with its modules (Modules),
+//     installed as part of its install press, before it opens when one is
+//     missing, and at a quiet moment by the daily pass (audit_interp_auto.go);
 //     and an honest "Not available on this device" with the reason for
 //     everything else — a Java desktop app or a GPU cracker cannot run there,
 //     and a button that pretends otherwise is worse than none.
@@ -41,6 +44,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -84,6 +88,15 @@ type auditRecipe struct {
 	Needs string
 	// Packages are the Ubuntu package names an auditKindLinuxPkg installs.
 	Packages []string
+	// SkipDeps are dependencies of Packages left out on this platform: the
+	// helper programs a package brings for uses the device does not have
+	// (linuxPkgEnsureSkipping).
+	SkipDeps []string
+	// Modules are the Ubuntu packages a script tool needs beside its
+	// interpreter (Perl or Python modules); on the handheld they come with the
+	// interpreter on every Install and Update, and when the tool is opened
+	// with one missing.
+	Modules []string
 	// Page is the official download page.
 	Page string
 	// Hint is a command to copy (a package manager line).
@@ -263,10 +276,15 @@ func secAuditCatalog() []secAuditTool {
 			Install:      "apt install nikto",
 			SendsTraffic: true,
 			Recipes: map[auditPlatform]auditRecipe{
+				// Nikto stops at start ("Required module not found") without
+				// XML::Writer and JSON. Strawberry Perl ships JSON; cpanm, which
+				// it also ships, adds XML::Writer.
 				auditPlatformWindows: {Kind: auditKindScript, Needs: "perl", Entry: "program/nikto.pl",
-					URL: "https://github.com/sullo/nikto/archive/refs/heads/master.zip"},
+					URL:  "https://github.com/sullo/nikto/archive/refs/heads/master.zip",
+					Note: "Nikto needs the Perl modules XML::Writer and JSON. If it stops with \"Required module not found\", run cpanm XML::Writer JSON in a command prompt (Strawberry Perl includes cpanm)."},
 				auditPlatformHandheld: {Kind: auditKindScript, Needs: "perl", Entry: "program/nikto.pl",
-					URL: "https://github.com/sullo/nikto/archive/refs/heads/master.zip"},
+					URL:     "https://github.com/sullo/nikto/archive/refs/heads/master.zip",
+					Modules: []string{"libxml-writer-perl", "libjson-perl"}},
 				auditPlatformLinux: {Kind: auditKindScript, Needs: "perl", Entry: "program/nikto.pl",
 					URL: "https://github.com/sullo/nikto/archive/refs/heads/master.zip"},
 			},
@@ -352,8 +370,15 @@ func secAuditCatalog() []secAuditTool {
 					URL:  "https://download.aircrack-ng.org/aircrack-ng-1.7-win.zip",
 					Page: "https://www.aircrack-ng.org/downloads.html",
 					Note: "On Windows it analyses captures you already have; capturing needs Linux and a monitor-mode Wi-Fi adapter."},
+				// The analysis programs link libhwloc, libnl, libpcap and the
+				// crypto libraries, which come along; the package's helper
+				// programs for adapter set-up (airmon-ng's ethtool, iw, rfkill,
+				// usbutils, wireless-tools), hwloc's lstopo (with cairo, X11
+				// and fonts behind it) and Python for its scripts serve nothing
+				// on a chip that cannot capture, and are left out.
 				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"aircrack-ng"}, Entry: "aircrack-ng",
-					Note: "Analysis only: the handheld's Wi-Fi chip cannot capture in monitor mode, so aircrack-ng works on captures you copy to the card from another device."},
+					SkipDeps: []string{"ethtool", "hwloc", "iw", "python3", "rfkill", "usbutils", "wireless-tools"},
+					Note:     "Analysis only: the handheld's Wi-Fi chip cannot capture in monitor mode, so aircrack-ng works on captures you copy to the card from another device. Its adapter set-up helpers are not installed."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.aircrack-ng.org/downloads.html", Hint: "sudo apt install aircrack-ng"},
 			},
 		},
@@ -585,6 +610,153 @@ func auditCanInstallInterpreter() bool {
 	return auditCurrentPlatform() == auditPlatformHandheld && linuxPkgSupported()
 }
 
+// auditScriptPackages are the Ubuntu packages a script tool runs on in the
+// handheld: its interpreter's, then its modules.
+func auditScriptPackages(r auditRecipe) []string {
+	out := append([]string{}, auditInterpreterPackages(r.Needs)...)
+	for _, m := range r.Modules {
+		if !slices.Contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// auditUsesLinuxPkgInterpreter reports whether a script tool runs (or will
+// run) on Ubuntu's interpreter from Linux packages: the handheld has no other
+// one, or the one found is that wrapper. An interpreter the firmware brings
+// gets nothing installed beside it — Ubuntu's modules would not load into it.
+// It walks PATH, so it is asked on a goroutine, never on the frame loop.
+func auditUsesLinuxPkgInterpreter(needs string) bool {
+	if !auditCanInstallInterpreter() {
+		return false
+	}
+	interp, ok := auditInterpreter(needs)
+	if !ok {
+		return true
+	}
+	name := "python3"
+	if needs == "perl" {
+		name = "perl"
+	}
+	wrapper := linuxPkgWrapperPath(name)
+	return wrapper != "" && len(interp) > 0 && interp[0] == wrapper
+}
+
+// auditScriptMissing lists the packages a script tool JukaHub installed at
+// path still needs on the handheld (its interpreter, or a module added since
+// it was installed — Nikto's XML::Writer and JSON); nil when nothing is
+// missing or the tool is not one of those. It reads the card: off the frame
+// loop.
+func auditScriptMissing(t secAuditTool, path string) []string {
+	r := t.Recipe(auditCurrentPlatform())
+	if r.Kind != auditKindScript || path == "" {
+		return nil
+	}
+	if rec, ok := auditRecordFor(t.ID); !ok || rec.Path != path {
+		return nil
+	}
+	if !auditUsesLinuxPkgInterpreter(r.Needs) {
+		return nil
+	}
+	return linuxPkgMissing(auditScriptPackages(r))
+}
+
+// auditSkipDepsFor is the handheld recipe's SkipDeps for an Ubuntu package
+// the Audit toolkit installs, so the Linux packages page installs it the same
+// way.
+func auditSkipDepsFor(pkg string) []string {
+	for _, t := range secAuditCatalog() {
+		r := t.Recipes[auditPlatformHandheld]
+		if r.Kind == auditKindLinuxPkg && len(r.Packages) == 1 && r.Packages[0] == pkg {
+			return r.SkipDeps
+		}
+	}
+	return nil
+}
+
+// auditLinuxPkgBusy is the error for a Linux packages change already running
+// (the daily pass installing Python and Perl, another tool's install, apt in
+// the Terminal), asked before the install bar is taken: a second begin would
+// cancel the running one's download, and this install would stop on the
+// package lock all the same.
+func auditLinuxPkgBusy() error {
+	if busy := linuxPkgBusyLabel(); busy != "" {
+		return fmt.Errorf("Linux packages are busy (%s); try again when that is done", busy)
+	}
+	return nil
+}
+
+// auditRepairScript installs what a JukaHub-installed script tool is missing
+// (auditScriptMissing) through Linux packages on the install bar, before the
+// tool is opened or asked for its version. It blocks: callers run it on a
+// goroutine. report is the last lines Linux packages printed, for a failure's
+// sheet.
+func auditRepairScript(t secAuditTool, missing []string) (report string, err error) {
+	if len(missing) == 0 {
+		return "", nil
+	}
+	if !IsOnline() {
+		return "", errToolsOffline
+	}
+	if err := auditLinuxPkgBusy(); err != nil {
+		return "", err
+	}
+	logInfo("audit", "%s is missing %s; installing through Linux packages before it opens", t.ID, strings.Join(missing, ", "))
+	run, ctx := installBarBeginRun(t.Name)
+	tail := &linuxPkgTail{}
+	if err := linuxPkgEnsure(ctx, missing, false, linuxPkgBarIOTail(run, tail)); err != nil {
+		installBarFailRun(run, installCardDetail(err.Error()))
+		logWarn("audit", "%s repair failed: %v", t.ID, err)
+		return tail.text(), fmt.Errorf("install %s for %s: %w", strings.Join(missing, ", "), t.Name, err)
+	}
+	auditInterpAutoRemember(missing)
+	linuxPkgSummaryForget()
+	secAuditForget()
+	installBarDoneRun(run)
+	return "", nil
+}
+
+// auditMissingModuleHint turns a Perl "module not found" in a script tool's
+// output into the command that installs it on this system ("" when there is
+// none): Nikto's own "Required module not found: XML::Writer" and Perl's
+// "Can't locate XML/Writer.pm in @INC".
+func auditMissingModuleHint(text string) string {
+	var mods []string
+	add := func(m string) {
+		m = strings.Trim(strings.TrimSpace(m), ".:;,'\"()")
+		if m != "" && len(m) <= 80 && !strings.ContainsAny(m, " \t/\\") && !slices.Contains(mods, m) {
+			mods = append(mods, m)
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if _, rest, ok := strings.Cut(line, "Required module not found"); ok {
+			add(strings.TrimLeft(rest, ": "))
+		}
+		if _, rest, ok := strings.Cut(line, "Can't locate "); ok {
+			if f, _, ok := strings.Cut(rest, ".pm"); ok {
+				add(strings.ReplaceAll(f, "/", "::"))
+			}
+		}
+	}
+	if len(mods) == 0 {
+		return ""
+	}
+	debs := make([]string, len(mods))
+	for i, m := range mods {
+		// Debian's name for a Perl module's package: XML::Writer is
+		// libxml-writer-perl.
+		debs[i] = "lib" + strings.ToLower(strings.ReplaceAll(m, "::", "-")) + "-perl"
+	}
+	switch auditCurrentPlatform() {
+	case auditPlatformWindows:
+		return "Missing Perl modules: " + strings.Join(mods, ", ") + ". Install them in a command prompt with: cpanm " + strings.Join(mods, " ") + " (Strawberry Perl includes cpanm)."
+	case auditPlatformHandheld:
+		return "Missing Perl modules: " + strings.Join(mods, ", ") + ". Install them in the Terminal with: apt install -y " + strings.Join(debs, " ")
+	}
+	return "Missing Perl modules: " + strings.Join(mods, ", ") + ". Install them with: sudo apt install " + strings.Join(debs, " ") + " (or cpanm " + strings.Join(mods, " ") + ")."
+}
+
 // auditIsStoreStub reports the Windows "app execution alias" placeholders.
 func auditIsStoreStub(path string) bool {
 	return strings.Contains(strings.ToLower(path), `\windowsapps\`)
@@ -808,31 +980,58 @@ func auditInstall(t secAuditTool, r auditRecipe) (string, error) {
 	case auditKindGitHub:
 		return auditInstallGitHub(t, r)
 	case auditKindArchive, auditKindScript:
-		return auditInstallArchive(t, r)
+		return auditInstallArchive(t, r, false)
 	case auditKindLinuxPkg:
 		return auditInstallLinuxPkg(t, r, false)
 	}
 	return "", fmt.Errorf("%s cannot be installed from here", t.Name)
 }
 
+// auditLogName is how a failure log line names what was being installed: the
+// Ubuntu packages of a Linux packages recipe, else the tool's ID.
+func auditLogName(t secAuditTool, r auditRecipe) string {
+	if r.Kind == auditKindLinuxPkg && len(r.Packages) > 0 {
+		return strings.Join(r.Packages, " ")
+	}
+	return t.ID
+}
+
 // auditInstallLinuxPkg installs a tool from Ubuntu's arm64 packages (Linux
-// packages); refresh checks the index first, which is what Update needs.
+// packages); refresh checks the index first, which is what Update needs. On a
+// failure report is the last lines Linux packages printed (what it was
+// fetching or unpacking), for the sheet.
 func auditInstallLinuxPkg(t secAuditTool, r auditRecipe, refresh bool) (report string, err error) {
 	if !IsOnline() {
 		return "", errToolsOffline
 	}
+	if err := auditLinuxPkgBusy(); err != nil {
+		return "", err
+	}
 	run, ctx := installBarBeginRun(t.Name)
+	tail := &linuxPkgTail{}
 	defer func() {
 		if err != nil {
 			installBarFailRun(run, installCardDetail(err.Error()))
+			report = tail.text()
 		}
 	}()
-	if err := linuxPkgEnsure(ctx, r.Packages, refresh, linuxPkgBarIO(run)); err != nil {
+	if err := linuxPkgEnsureSkipping(ctx, r.Packages, r.SkipDeps, refresh, linuxPkgBarIOTail(run, tail)); err != nil {
 		return "", fmt.Errorf("%s: %w", t.Name, err)
 	}
 	path := linuxPkgWrapperPath(r.Entry)
 	if path == "" {
-		return "", fmt.Errorf("%s was installed, but its program %s was not found", t.Name, r.Entry)
+		// Installed, but the run that unpacked it ended before its wrapper
+		// was written (installing again then changes nothing): write them
+		// again from what is installed.
+		werr := linuxPkgRebuildRuntime()
+		if path = linuxPkgWrapperPath(r.Entry); path == "" {
+			why := linuxPkgProgramMissing(r.Entry)
+			if werr != nil {
+				why += " (" + werr.Error() + ")"
+			}
+			return "", fmt.Errorf("%s was installed, but its program %s cannot be started: %s", t.Name, r.Entry, why)
+		}
+		logInfo("audit", "%s: its program wrappers were missing and are written again", t.ID)
 	}
 	version := linuxPkgInstalledVersion(r.Packages[0])
 	auditSaveRecord(t.ID, auditRecord{Kind: "linuxpkg", Path: path, Version: linuxPkgShortVersion(version), Verified: true,
@@ -858,6 +1057,11 @@ func auditUpdate(t secAuditTool, r auditRecipe) (string, error) {
 	}
 	if r.Kind == auditKindLinuxPkg {
 		return auditInstallLinuxPkg(t, r, true)
+	}
+	if r.Kind == auditKindArchive || r.Kind == auditKindScript {
+		// Update refreshes the package index too, so the interpreter and
+		// its modules come up to date with the script.
+		return auditInstallArchive(t, r, true)
 	}
 	return auditInstall(t, r)
 }
@@ -974,18 +1178,21 @@ func auditInstallGitHub(t secAuditTool, r auditRecipe) (report string, err error
 
 // auditInstallArchive unpacks a portable zip (or a script project) into the
 // tool's own folder, replacing an older copy only after the new one unpacked.
-func auditInstallArchive(t secAuditTool, r auditRecipe) (report string, err error) {
+// On the handheld a script tool's interpreter and modules come first from
+// Linux packages, on every Install and Update (nothing is fetched when they
+// are installed and current); refresh, for Update, checks the package index
+// for newer versions first. On a failure there, report is the last lines
+// Linux packages printed.
+func auditInstallArchive(t secAuditTool, r auditRecipe, refresh bool) (report string, err error) {
 	root := auditInstallRoot()
 	if root == "" {
 		return "", fmt.Errorf("tools folder unavailable")
 	}
-	needInterpreter := false
+	ensure := false
 	if r.Kind == auditKindScript {
-		if _, ok := auditInterpreter(r.Needs); !ok {
-			if !auditCanInstallInterpreter() {
-				return "", fmt.Errorf("%s needs %s, which is not installed", t.Name, auditInterpreterLabel(r.Needs))
-			}
-			needInterpreter = true
+		ensure = auditUsesLinuxPkgInterpreter(r.Needs)
+		if _, ok := auditInterpreter(r.Needs); !ok && !ensure {
+			return "", fmt.Errorf("%s needs %s, which is not installed", t.Name, auditInterpreterLabel(r.Needs))
 		}
 	}
 	if !IsOnline() {
@@ -994,23 +1201,40 @@ func auditInstallArchive(t secAuditTool, r auditRecipe) (report string, err erro
 	if err := os.MkdirAll(root, PermDir); err != nil {
 		return "", err
 	}
+	if ensure {
+		if err := auditLinuxPkgBusy(); err != nil {
+			return "", err
+		}
+	}
 	run, ctx := installBarBeginRun(t.Name)
 	defer func() {
 		if err != nil {
 			installBarFailRun(run, installCardDetail(err.Error()))
 		}
 	}()
-	if needInterpreter {
+	if ensure {
 		// The handheld's firmware has no Python or Perl: Ubuntu's comes first
-		// from Linux packages, on this same install bar.
+		// from Linux packages, with the modules the tool needs, on this same
+		// install bar.
 		label := auditInterpreterLabel(r.Needs)
-		logInfo("audit", "%s needs %s; installing it through Linux packages", t.Name, label)
-		if err := linuxPkgEnsure(ctx, auditInterpreterPackages(r.Needs), false, linuxPkgBarIO(run)); err != nil {
-			return "", fmt.Errorf("install %s for %s: %w", label, t.Name, err)
+		pkgs := auditScriptPackages(r)
+		logInfo("audit", "%s runs on %s; making sure of %s through Linux packages", t.ID, label, strings.Join(pkgs, ", "))
+		tail := &linuxPkgTail{}
+		if err := linuxPkgEnsure(ctx, pkgs, refresh, linuxPkgBarIOTail(run, tail)); err != nil {
+			return tail.text(), fmt.Errorf("install %s for %s: %w", label, t.Name, err)
 		}
+		auditInterpAutoRemember(pkgs)
 		linuxPkgSummaryForget()
 		if _, ok := auditInterpreter(r.Needs); !ok {
-			return "", fmt.Errorf("%s was installed, but its program was not found", label)
+			// Installed by an earlier run that ended before the wrappers.
+			_ = linuxPkgRebuildRuntime()
+		}
+		if _, ok := auditInterpreter(r.Needs); !ok {
+			name := "python3"
+			if r.Needs == "perl" {
+				name = "perl"
+			}
+			return tail.text(), fmt.Errorf("%s was installed, but it cannot be started: %s", label, linuxPkgProgramMissing(name))
 		}
 	}
 	tmp, err := os.CreateTemp(root, ".download-*.zip")
@@ -1282,6 +1506,9 @@ func secAuditProbe(id string, timeout time.Duration) (string, error) {
 	cmd.WaitDelay = powerScriptWaitDelay
 	out, err := cmd.CombinedOutput()
 	text := truncatePowerOutput(string(out))
+	if hint := auditMissingModuleHint(string(out)); hint != "" {
+		text = strings.TrimRight(text, "\n") + "\n\n" + hint
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return text + fmt.Sprintf("\n(stopped after %s)", timeout), ctx.Err()
 	}

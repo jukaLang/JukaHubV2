@@ -563,6 +563,12 @@ func (s *companionServer) handler() http.Handler {
 	// The Files card: the FTP server's shares, browsed and changed from the
 	// page, every route behind the PIN (companion_files.go).
 	s.registerFileRoutes(mux)
+	// The Tasks card: lists and tasks typed, ticked and deleted from the
+	// phone, behind the PIN (companion_tasks.go).
+	s.registerTaskRoutes(mux)
+	// The Game Boy Printer scrapbook card: the prints, read-only, behind the
+	// PIN (gbprinter_companion.go).
+	s.registerGBPrinterRoutes(mux)
 	return mux
 }
 
@@ -924,6 +930,19 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 .drow .bar{margin-top:6px}
 .drow .row{margin-top:6px}
 .drow select{flex:1 1 100%}
+/* The Tasks card (companion_tasks.go): the list, then day and time side by
+   side, then one row per task with its checkbox and Delete. */
+.tk select{margin-top:8px}
+.tk input[type=date],.tk input[type=time]{width:100%;min-width:0;background:#0f131b;border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font:16px/1.4 system-ui,-apple-system,sans-serif;color-scheme:dark}
+.tk .pair{display:flex;gap:8px;margin-top:8px}
+.tk .pair>*{flex:1 1 0}
+.tk .flist{margin-top:10px}
+.tkrow{display:flex;align-items:center;gap:10px;padding:6px 10px;border-top:1px solid var(--line)}
+.tkrow:first-child{border-top:0}
+.tkrow input{width:22px;height:22px;flex:0 0 auto;accent-color:var(--accent)}
+.tkrow .fname{cursor:pointer}
+.tkrow.done b{text-decoration:line-through;color:var(--dim)}
+.tkrow .late{color:var(--bad)}
 /* A phone on its side has little height: the screen moves to a column of its
    own on the left and the cards scroll on the right. */
 @media (orientation:landscape) and (max-height:540px){
@@ -940,12 +959,14 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 
 <div class=card id=dropCard>
   <h2>Send to the handheld</h2>
-  <div class="filedrop big" id=dropZone role=button tabindex=0>Drop games, covers, music…<small>or tap to choose files</small></div>
+  <div class="filedrop big" id=dropZone role=button tabindex=0>Drop games, covers, music, folders…<small>or tap to choose files</small></div>
   <input type=file id=dropPick multiple hidden>
+  <input type=file id=dropPickDir webkitdirectory multiple hidden>
+  <div class=row><button class=ghost id=dropDirBtn type=button>Send a folder</button></div>
   <label class=check><input type=checkbox id=dropSort checked>Put each file where it belongs</label>
   <div class=msg id=dropMsg aria-live=polite></div>
   <div class=dlist id=dropList></div>
-  <small>Games go to their console's folder in Roms, covers beside their game, songs to Music, BIOS files to BIOS and anything else to PhoneDrop. Works over Wi-Fi or a USB network connection.</small>
+  <small>Games go to their console's folder in Roms, covers beside their game, songs to Music, BIOS files to BIOS and anything else to PhoneDrop. A folder keeps its structure: books to Books, albums to Music, pictures to Pictures, disc, DOS and ScummVM games to Roms. Works over Wi-Fi or a USB network connection.</small>
 </div>
 
 <div class=card>
@@ -953,6 +974,18 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <textarea id=text placeholder="Type here, it appears on the handheld"></textarea>
   <label class=check><input type=checkbox id=enter checked>Press Enter after sending</label>
   <div class=row><button id=sendText>Send text</button><button class=ghost id=clearText>Clear</button></div>
+</div>
+
+<div class="card tk" id=tasksCard>
+  <h2>Tasks</h2>
+  <p class=note id=tkStatus>Checking the handheld...</p>
+  <input type=text id=tkText placeholder="New task, like Buy milk" maxlength=300 autocomplete=off enterkeyhint=done>
+  <select id=tkList aria-label="List"></select>
+  <div class=pair><input type=date id=tkDate aria-label="Due day"><input type=time id=tkTime aria-label="Due time" step=300></div>
+  <div class=row><button id=tkAdd>Add on handheld</button><button class=ghost id=tkNewList>New list</button></div>
+  <div class=msg id=tkMsg aria-live=polite></div>
+  <div class=flist id=tkItems hidden></div>
+  <small>Leave the day and time empty for a plain checklist item; a task with a time reminds you on the handheld. Ring as alarm, repeats and edits are in Tasks on the handheld.</small>
 </div>
 
 <div class=card>
@@ -1010,6 +1043,16 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class=msg id=filesMsg aria-live=polite></div>
   <div class=flist id=filesList><div class=fempty>Loading...</div></div>
   <small>Open a destination folder first. Use this page over Wi-Fi or an active USB network connection. Roms/Ports is read-only here. Delete removes a file or an empty folder only.</small>
+</div>
+
+<div class=card id=gbprintCard>
+  <h2>Game Boy Printer scrapbook</h2>
+  <style>.gbprow{display:flex;gap:12px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}.gbprow:first-child{border-top:0}.gbprow img{width:96px;height:auto;image-rendering:pixelated;background:#fff;border-radius:4px;flex:0 0 auto}.gbpinfo{flex:1 1 auto;min-width:0}.gbpinfo b,.gbpinfo span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.gbpinfo span{color:var(--dim);font-size:12px}.gbpbtn{display:inline-block;padding:6px 12px;margin:6px 6px 0 0;border:1px solid var(--line);border-radius:8px;background:#1d2330;color:var(--ink);text-decoration:none;font-size:13px}</style>
+  <div id=gbprintList><div class=fempty>Loading...</div></div>
+  <div class=msg id=gbprintMsg aria-live=polite></div>
+  <div class=row><button class=ghost id=gbprintRefresh>Refresh</button></div>
+  <small>What your Game Boy games printed on the handheld, newest first. Save keeps a print as it is; 2× and 4× are bigger copies with sharp pixels, for printing on paper.</small>
+  <script defer src="/gbprint.js"></script>
 </div>
 
 <div class=card id=psCard>
@@ -1320,7 +1363,7 @@ function dropAsk(r, plan) {
     const box = document.createElement('div');
     box.className = 'row';
     const sel = document.createElement('select');
-    sel.setAttribute('aria-label', plan.pick === 'game' ? 'Game' : 'Console');
+    sel.setAttribute('aria-label', plan.pick === 'game' ? 'Game' : plan.pick === 'as' ? 'Where it goes' : 'Console');
     for (const c of plan.choices || []) {
       const o = document.createElement('option');
       o.value = c.id;
@@ -1385,12 +1428,223 @@ async function dropOne(item, groups) {
   r.pct(-1);
   r.say([plan.label, where, plan.note].filter(Boolean).join(' · '), 'ok');
 }
-async function dropFiles(selection) {
+// Whole folders (companion_dropdir.go): "Send a folder", or folders dropped
+// on the page. The folder's list of files goes first and the handheld answers
+// one place for all of it ("Books/Asimov", "Roms/PS/Final Fantasy VII") or
+// asks; then each file goes to its own path under that place, named by its
+// number in the list, with one progress line and a Cancel for the folder.
+// Hidden and system files (.DS_Store, Thumbs.db, __MACOSX) stay behind.
+const dropDirPickEl = document.getElementById('dropPickDir');
+const dropDirMax = 5000;
+const dropDirDepth = 12;
+function dropJunk(rel) {
+  return rel.split('/').some(p => p.charAt(0) === '.' || /^(__macosx|thumbs\.db|desktop\.ini)$/i.test(p));
+}
+// A folder picker's files by their top folder; a file with none goes the
+// single-file way.
+function dropPickedFolders(list) {
+  const groups = new Map();
+  const loose = [];
+  for (const f of list) {
+    const rel = f.webkitRelativePath || '';
+    const cut = rel.indexOf('/');
+    if (cut <= 0) { loose.push(f); continue; }
+    const top = rel.slice(0, cut);
+    if (!groups.has(top)) groups.set(top, []);
+    groups.get(top).push({file: f, path: rel.slice(cut + 1)});
+  }
+  return {loose: loose, folders: Array.from(groups, g => ({name: g[0], files: g[1]}))};
+}
+function dropEntryFile(entry) { return new Promise((resolve, reject) => entry.file(resolve, reject)); }
+// One folder's entries: readEntries answers in batches until an empty one.
+// A folder with more than dropDirMax entries is cut short and marked (cut),
+// so the walk refuses it instead of sending part of it.
+function dropEntryList(dir) {
+  const reader = dir.createReader();
+  const all = [];
+  return new Promise((resolve, reject) => {
+    const next = () => reader.readEntries(batch => {
+      if (!batch.length) { resolve(all); return; }
+      all.push(...batch);
+      if (all.length > dropDirMax) { all.cut = true; resolve(all); return; }
+      next();
+    }, reject);
+    next();
+  });
+}
+// A dropped folder's files with their paths, bounded: more than dropDirMax
+// files stops the walk (the folder is refused); folders deeper than
+// dropDirDepth are left out.
+async function dropWalk(dir) {
+  const files = [];
+  let over = false;
+  const walk = async (d, prefix, depth) => {
+    const list = await dropEntryList(d);
+    if (list.cut) { over = true; return; }
+    for (const e of list) {
+      if (over) return;
+      if (dropJunk(e.name)) continue;
+      if (e.isDirectory) {
+        if (depth < dropDirDepth) await walk(e, prefix + e.name + '/', depth + 1);
+        continue;
+      }
+      if (files.length >= dropDirMax) { over = true; return; }
+      try { files.push({file: await dropEntryFile(e), path: prefix + e.name}); } catch (_) { /* unreadable: left out */ }
+    }
+  };
+  await walk(dir, '', 1);
+  return {files: files, over: over};
+}
+// A drop with folders in it: each folder's walk starts now, while the browser
+// still allows it, and the folder is queued; loose files go the single-file
+// way. A drop with no folder is the plain file list.
+function dropTake(dt) {
+  const items = Array.from((dt && dt.items) || []);
+  const entries = items.map(it => (it.kind === 'file' && it.webkitGetAsEntry) ? it.webkitGetAsEntry() : null);
+  if (!entries.some(e => e && e.isDirectory)) { dropFiles(dt && dt.files); return; }
+  const folders = [];
+  const loose = [];
+  for (const e of entries) {
+    if (e && e.isDirectory) folders.push({name: e.name, walk: dropWalk(e).catch(err => ({files: [], error: err}))});
+    else if (e && e.isFile) loose.push(dropEntryFile(e).catch(() => null));
+  }
+  Promise.all(loose).then(files => dropFiles(files.filter(Boolean), folders));
+}
+async function dropFolderPlan(query, body, list) {
+  const type = list ? 'application/json' : (body ? 'application/octet-stream' : '');
+  const res = await fetch('/api/drop/folder' + query, {method: 'POST', headers: hdr(type ? {'Content-Type': type} : null),
+    body: list ? JSON.stringify(list) : (body || null)});
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  return res.json();
+}
+function dropFolderSend(item, id, i, file, replace, progress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    item.xhr = xhr;
+    xhr.open('POST', '/api/drop/folder/file?id=' + encodeURIComponent(id) + '&i=' + i + (replace ? '&replace=1' : ''));
+    xhr.setRequestHeader('X-Companion-Pin', pin);
+    xhr.upload.onprogress = ev => { if (ev.lengthComputable) progress(Math.min(ev.loaded, file.size)); };
+    const fail = (text, fatal) => { const e = new Error(text); e.fatal = fatal; reject(e); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      // A full card, a forgotten folder, a refused PIN or a locked handheld
+      // end the folder; anything else costs this file only.
+      fail((xhr.responseText || '').trim() || ('Error ' + xhr.status), [401, 403, 410, 423, 429, 507].indexOf(xhr.status) >= 0);
+    };
+    xhr.onerror = () => fail('The connection to the handheld was lost.', true);
+    xhr.onabort = () => fail('Cancelled', true);
+    const fd = new FormData();
+    fd.append('file', file);
+    xhr.send(fd);
+  });
+}
+// dropFolderOne sends one folder and returns how many of its files were not
+// sent (0 when the player skipped or cancelled it).
+async function dropFolderOne(item) {
+  const r = item.r;
+  const d = item.folder;
+  const tooMany = 'More than ' + dropDirMax + ' files: send its folders one at a time.';
+  let files = d.files || [];
+  if (d.walk) {
+    r.say('Reading the folder...');
+    const got = await d.walk;
+    if (got.error) throw got.error;
+    if (got.over) throw new Error(tooMany);
+    files = got.files;
+  }
+  files = files.filter(x => !dropJunk(x.path));
+  if (!files.length) { r.say('Nothing to send in this folder', 'bad'); return 0; }
+  if (files.length > dropDirMax) throw new Error(tooMany);
+  r.say('Checking where it goes...');
+  let plan = await dropFolderPlan('', null, {name: d.name, batch: dropBatch,
+    to: document.getElementById('dropSort').checked ? '' : 'drop',
+    files: files.map(x => ({path: x.path, size: x.file.size}))});
+  const id = plan.id;
+  const again = extra => '?id=' + encodeURIComponent(id) + (extra || '');
+  for (let round = 0; plan.kind === 'need' || plan.kind === 'ask'; round++) {
+    if (round > 8) throw new Error('The handheld could not tell where this folder goes.');
+    if (plan.kind === 'need') {
+      const f = files[plan.file] && files[plan.file].file;
+      if (!f) throw new Error('The handheld asked for a file that is not in the folder.');
+      const n = Math.min(plan.bytes || 0, f.size);
+      plan = await dropFolderPlan(again('&part=' + encodeURIComponent(plan.need)), plan.need === 'tail' ? f.slice(f.size - n) : f.slice(0, n));
+      continue;
+    }
+    const pick = await dropAsk(r, plan);
+    if (pick === null) { r.say('Skipped'); return 0; }
+    r.say('Checking where it goes...');
+    plan = await dropFolderPlan(again(pick));
+  }
+  const where = (plan.dest || '').replace(/^\//, '');
+  const skip = new Set((plan.skip || []).map(s => s.i));
+  const told = (plan.skip || []).filter(s => !s.quiet);
+  const exists = new Set(plan.exists || []);
+  let replace = false;
+  if (exists.size) {
+    replace = confirm(exists.size === 1 ? '1 of these files is already in ' + where + '. Replace it?' :
+      exists.size + ' of these files are already in ' + where + '. Replace them?');
+  }
+  const todo = [];
+  files.forEach((x, i) => { if (!skip.has(i) && (replace || !exists.has(i))) todo.push(i); });
+  const kept = replace ? 0 : exists.size;
+  const leftOut = !told.length ? '' : told.length === 1 ? '1 file left out (' + told[0].why + ')' :
+    told.length + ' files left out (' + told[0].why + ', …)';
+  if (!todo.length) {
+    r.say([kept ? 'Kept the copies on the handheld' : 'Nothing to send', where, leftOut].filter(Boolean).join(' · '), kept ? '' : 'bad');
+    return 0;
+  }
+  const total = todo.reduce((n, i) => n + files[i].file.size, 0) || 1;
+  const box = document.createElement('div');
+  box.className = 'row';
+  item.cancel = false;
+  box.append(filesButton('Cancel', 'ghost', () => { item.cancel = true; if (item.xhr) item.xhr.abort(); }));
+  r.row.append(box);
+  let sent = 0, done = 0, failed = 0, stopped = '', firstErr = '';
+  r.pct(0);
+  r.say('Sending to ' + where + '...');
+  try {
+    for (const i of todo) {
+      if (item.cancel) break;
+      const f = files[i].file;
+      try {
+        await dropFolderSend(item, id, i, f, replace && exists.has(i), loaded => {
+          const p = Math.min(100, Math.floor((sent + loaded) * 100 / total));
+          r.pct(p);
+          r.say('Sending to ' + where + ': ' + (done + failed + 1) + ' of ' + todo.length + ' files, ' + p + '%');
+        });
+        done++;
+      } catch (e) {
+        if (item.cancel) break;
+        failed++;
+        if (!firstErr) firstErr = files[i].path + ': ' + e.message;
+        if (e.fatal) { stopped = e.message; break; }
+      }
+      sent += f.size;
+    }
+  } finally {
+    box.remove();
+    item.xhr = null;
+  }
+  r.pct(-1);
+  if (item.cancel) {
+    r.say('Cancelled: ' + done + ' of ' + todo.length + ' files sent to ' + where);
+    return 0;
+  }
+  const unsent = todo.length - done;
+  if (unsent) {
+    r.say(done + ' of ' + todo.length + ' files sent to ' + where + ' · ' + (stopped || firstErr), 'bad');
+    return unsent;
+  }
+  r.say([plan.label, where, done === 1 ? '1 file' : done + ' files', plan.note, kept ? kept + ' kept' : '', leftOut].filter(Boolean).join(' · '), 'ok');
+  return 0;
+}
+async function dropFiles(selection, folders) {
   const files = Array.from(selection || []);
-  if (!files.length) return;
+  if (!files.length && !(folders && folders.length)) return;
   files.map((f, i) => ({f: f, i: i}))
     .sort((a, b) => (dropOrder(a.f.name) - dropOrder(b.f.name)) || (a.i - b.i))
     .forEach(x => dropQueue.push({file: x.f, r: dropRow(x.f)}));
+  for (const d of folders || []) dropQueue.push({folder: d, r: dropRow({name: d.name + '/'})});
   if (dropBusy) return;
   dropBusy = true;
   dropBatch = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -1401,7 +1655,8 @@ async function dropFiles(selection) {
     while (dropQueue.length) {
       const item = dropQueue.shift();
       try {
-        await dropOne(item, groups);
+        if (item.folder) failed += await dropFolderOne(item);
+        else await dropOne(item, groups);
       } catch (e) {
         item.r.pct(-1);
         item.r.say(e.message, 'bad');
@@ -1428,6 +1683,12 @@ dropPickEl.onchange = () => {
   dropPickEl.value = '';
   dropFiles(picked);
 };
+document.getElementById('dropDirBtn').onclick = () => dropDirPickEl.click();
+dropDirPickEl.onchange = () => {
+  const picked = dropPickedFolders(Array.from(dropDirPickEl.files || []));
+  dropDirPickEl.value = '';
+  dropFiles(picked.loose, picked.folders);
+};
 for (const eventName of ['dragenter', 'dragover']) {
   dropZoneEl.addEventListener(eventName, ev => {
     ev.preventDefault();
@@ -1439,7 +1700,7 @@ dropZoneEl.addEventListener('dragleave', () => dropZoneEl.classList.remove('acti
 dropZoneEl.addEventListener('drop', ev => {
   ev.preventDefault();
   dropZoneEl.classList.remove('active');
-  dropFiles(ev.dataTransfer.files);
+  dropTake(ev.dataTransfer);
 });
 // Files dropped anywhere else on the page go the same way, instead of the
 // browser leaving the page to open them. The Files card's own target keeps
@@ -1451,7 +1712,7 @@ document.addEventListener('dragover', ev => {
 document.addEventListener('drop', ev => {
   if (ev.defaultPrevented || !dropHasFiles(ev)) return;
   ev.preventDefault();
-  dropFiles(ev.dataTransfer.files);
+  dropTake(ev.dataTransfer);
 });
 // The screen pinned at the top. Each picture is a capture on the handheld, so
 // it is fetched on demand: Refresh, Live (every 1.2 s while this page is in
@@ -2305,6 +2566,123 @@ filesDropEl.addEventListener('drop', ev => {
   filesUploadSelection(ev.dataTransfer.files);
 });
 filesOpen('/');
+
+// The Tasks card (companion_tasks.go): the handheld's lists and the chosen
+// list's tasks. A task typed here is added there at once; the tick and
+// Delete change it there too. Dates come back written the handheld's way.
+let tkData = null;
+function tkEl(id) { return document.getElementById(id); }
+function tkSay(msg, bad) {
+  const el = tkEl('tkMsg');
+  el.textContent = msg || '';
+  el.className = bad ? 'msg bad' : 'msg';
+}
+function tkShow(s) {
+  if (!s || !Array.isArray(s.lists)) return;
+  tkData = s;
+  const sel = tkEl('tkList');
+  const keep = Number(sel.value) || (s.lists[0] ? s.lists[0].id : 0);
+  sel.replaceChildren();
+  for (const l of s.lists) {
+    const o = document.createElement('option');
+    o.value = String(l.id);
+    o.textContent = l.name + (l.open ? ' (' + l.open + ')' : '');
+    sel.append(o);
+  }
+  if (s.lists.some(l => l.id === keep)) sel.value = String(keep);
+  tkRender();
+}
+function tkRender() {
+  const s = tkData;
+  if (!s) return;
+  const list = Number(tkEl('tkList').value);
+  const items = (s.items || []).filter(t => t.list === list);
+  const total = s.lists.reduce((n, l) => n + (l.open || 0), 0);
+  tkEl('tkStatus').textContent = total
+    ? total + (total === 1 ? ' open task' : ' open tasks') + ' on the handheld.'
+    : 'Nothing open on the handheld.';
+  const box = tkEl('tkItems');
+  box.replaceChildren();
+  box.hidden = !items.length;
+  for (const t of items) {
+    const row = document.createElement('div');
+    row.className = t.done ? 'tkrow done' : 'tkrow';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!t.done;
+    cb.setAttribute('aria-label', t.done ? 'Not done' : 'Done');
+    cb.onchange = () => tkPost({action: 'toggle', id: t.id});
+    const name = document.createElement('div');
+    name.className = 'fname';
+    const b = document.createElement('b');
+    b.textContent = t.text;
+    name.append(b);
+    const parts = [];
+    if (t.label) parts.push((t.overdue ? 'Overdue · ' : '') + t.label);
+    if (t.repeat === 'daily') parts.push('Every day');
+    if (t.repeat === 'weekly') parts.push('Every week');
+    if (t.alarm) parts.push('Alarm');
+    else if (t.remind) parts.push('Reminder');
+    if (parts.length) {
+      const sub = document.createElement('span');
+      sub.textContent = parts.join(' · ');
+      if (t.overdue) sub.className = 'late';
+      name.append(sub);
+    }
+    name.onclick = () => { cb.checked = !cb.checked; tkPost({action: 'toggle', id: t.id}); };
+    const acts = document.createElement('div');
+    acts.className = 'facts';
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'ghost';
+    rm.textContent = 'Delete';
+    rm.onclick = () => { if (confirm('Delete "' + t.text + '" from the handheld?')) tkPost({action: 'delete', id: t.id}); };
+    acts.append(rm);
+    row.append(cb, name, acts);
+    box.append(row);
+  }
+}
+function tkLoad() {
+  return fetch('/api/tasks', {headers: hdr(), cache: 'no-store'})
+    .then(res => res.ok ? res.json() : Promise.reject(new Error(res.statusText)))
+    .then(tkShow);
+}
+async function tkPost(body) {
+  try {
+    const r = await api('/api/tasks', body, true);
+    tkShow(r);
+    tkSay('');
+    if (r.message) toast(r.message);
+    return r;
+  } catch (err) {
+    tkSay(err.message, true);
+    toast('Not changed', true);
+    tkLoad().catch(() => {});
+    return null;
+  }
+}
+tkEl('tkList').onchange = tkRender;
+tkEl('tkAdd').onclick = async () => {
+  const text = tkEl('tkText');
+  if (!text.value.trim()) { tkSay('Type the task first', true); text.focus(); return; }
+  const btn = tkEl('tkAdd');
+  btn.disabled = true;
+  const r = await tkPost({action: 'add', text: text.value.trim(), list: Number(tkEl('tkList').value) || 0,
+    date: tkEl('tkDate').value, time: tkEl('tkTime').value});
+  btn.disabled = false;
+  if (r) { text.value = ''; tkEl('tkTime').value = ''; text.focus(); }
+};
+tkEl('tkText').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); tkEl('tkAdd').click(); }
+});
+tkEl('tkNewList').onclick = async () => {
+  const name = prompt('Name of the new list');
+  if (!name || !name.trim()) return;
+  const r = await tkPost({action: 'addList', name: name.trim()});
+  if (r && r.added) { tkEl('tkList').value = String(r.added); tkRender(); }
+};
+tkLoad().catch(() => { tkEl('tkStatus').textContent = 'Type a task to add it on the handheld.'; });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) tkLoad().catch(() => {}); });
 
 stateEl.textContent = pin ? 'paired' : 'no PIN';
 // A code on the handheld that asks for one card ("#groq", "#vpn") opens the

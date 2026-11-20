@@ -217,6 +217,10 @@ func termRefreshCwdLabels() {
 // termFooterHints is the footer row for the Terminal: what the pad does right
 // now, so X reads Stop while a command runs.
 func termFooterHints() []FooterHint {
+	// An interactive session has controls of its own (termpty_ui.go).
+	if termPtyShowing() {
+		return termPtyFooterHints()
+	}
 	if cmdDeck.open {
 		return cmdDeckFooterHints()
 	}
@@ -237,7 +241,17 @@ func termFooterHints() []FooterHint {
 		if term.job != nil {
 			stop = FooterHint{Button: "Ctrl+C", Label: "Stop"}
 		}
-		return []FooterHint{
+		if termTakesInput() {
+			// A program reads what is typed (javaterm.go).
+			return []FooterHint{
+				{Button: "Enter", Label: "Send"},
+				{Button: "Ctrl+D", Label: "End input"},
+				stop,
+				{Button: "Esc", Label: "Back"},
+				{Button: "PgUp/PgDn", Label: "Scroll"},
+			}
+		}
+		hints := []FooterHint{
 			{Button: "Enter", Label: "Run"},
 			{Button: "Esc", Label: "Back"},
 			stop,
@@ -246,6 +260,11 @@ func termFooterHints() []FooterHint {
 			{Button: "Tab", Label: "Complete"},
 			{Button: "PgUp/PgDn", Label: "Scroll"},
 		}
+		// A session left running (termpty_ui.go) comes first.
+		if h, ok := termPtyResumeHint(); ok {
+			hints = append([]FooterHint{h}, hints[:len(hints)-1]...)
+		}
+		return hints
 	}
 	if termHist.open {
 		return []FooterHint{
@@ -261,12 +280,26 @@ func termFooterHints() []FooterHint {
 	if term.job != nil {
 		x = FooterHint{Button: "X", Label: "Stop"}
 	}
+	if termTakesInput() {
+		return []FooterHint{
+			{Button: "A", Label: "Type"},
+			{Button: "Start", Label: "Send"},
+			x,
+			{Button: "B", Label: "Back"},
+			{Button: "D-Pad", Label: "Scroll"},
+		}
+	}
+	// On an empty line Start resumes a session left running.
+	start := FooterHint{Button: "Start", Label: "Run"}
+	if h, ok := termPtyResumeHint(); ok && strings.TrimSpace(term.input) == "" {
+		start = h
+	}
 	return []FooterHint{
 		{Button: "D-Pad", Label: "Scroll"},
 		{Button: "A", Label: "Keyboard"},
 		{Button: "Select", Label: "Commands"},
 		{Button: "B", Label: "Back"},
-		{Button: "Start", Label: "Run"},
+		start,
 		x,
 		{Button: "Y", Label: "History"},
 		{Button: "L1/R1", Label: "Page"},
@@ -286,6 +319,13 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 	// A background command's output joins the scrollback before it is drawn.
 	termDrainJob()
+	// An interactive session (termpty_ui.go): its per-frame work, and its
+	// own screen while it is the one shown.
+	termPtyTick(config)
+	if termPtyShowing() {
+		renderTermPty(renderer, config)
+		return
+	}
 
 	outFont := termOutputFont(config)
 	uiFont := termUIFont(config)
@@ -323,6 +363,7 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	}
 	termConsoleRect = console
 	renderTermConsole(renderer, outFont, uiFont, console)
+	renderTermPtyResume(renderer, uiFont, console)
 	renderTermPrompt(renderer, config, outFont, uiFont, prompt)
 
 	renderStatusBar(renderer, config)
@@ -424,6 +465,10 @@ func renderTermConsole(renderer *sdl.Renderer, font, uiFont *ttf.Font, card sdl.
 				if line.kind == termKindEcho && ri == 0 && strings.HasPrefix(row, termPrompt) {
 					drawText(r, font, termPrompt, text.X, y, accent, textAlignLeft)
 					drawText(r, font, row[len(termPrompt):], text.X+promptW, y, primary, textAlignLeft)
+				} else if line.kind == termKindEcho && ri == 0 && strings.HasPrefix(row, termInputPrompt) {
+					// A line typed to a running program.
+					drawText(r, font, termInputPrompt, text.X, y, accent, textAlignLeft)
+					drawText(r, font, row[len(termInputPrompt):], text.X+termTextWidth(font, termInputPrompt), y, primary, textAlignLeft)
 				} else {
 					drawText(r, font, row, text.X, y, col, textAlignLeft)
 				}
@@ -540,11 +585,17 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 	chipY := field.Y + (field.H-chipH)/2
 	icon := chipH - 12
 	base := ellipsize(uiFont, termLabelCache.cwdBase, 170)
+	chipIcon := "folder"
+	feeding := termTakesInput()
+	if feeding {
+		// The line goes to the running program, not the shell.
+		base, chipIcon = "Input", "keyboard"
+	}
 	bw, bh := measureText(uiFont, base)
 	chipW := 10 + icon + 8 + bw + 12
 	fillRoundedRect(renderer, chipX, chipY, chipW, chipH, chipH/2, glassA(16))
 	strokeRoundedRect(renderer, chipX, chipY, chipW, chipH, chipH/2, 1, glassA(26))
-	DrawHomeIcon(renderer, "folder", sdl.Rect{X: chipX + 10, Y: chipY + (chipH-icon)/2, W: icon, H: icon}, false)
+	DrawHomeIcon(renderer, chipIcon, sdl.Rect{X: chipX + 10, Y: chipY + (chipH-icon)/2, W: icon, H: icon}, false)
 	drawText(renderer, uiFont, base, chipX+10+icon+8, chipY+(chipH-bh)/2, ColorTextSecondary(), textAlignLeft)
 
 	// The command text, scrolled sideways so the caret is always in view.
@@ -566,6 +617,12 @@ func renderTermPrompt(renderer *sdl.Renderer, config *Config, font, uiFont *ttf.
 			placeholder = "A command is running — X stops it"
 			if hintsUseKeyboard() {
 				placeholder = "A command is running — Ctrl+C stops it"
+			}
+		}
+		if feeding {
+			placeholder = hintSentence2("The program waits for input: %s types, %s sends", "A", "Type", "Start", "Send")
+			if hintsUseKeyboard() {
+				placeholder = "The program waits for input: type, then Enter · Ctrl+D ends input"
 			}
 		}
 		drawText(renderer, font, ellipsize(font, placeholder, area.W), area.X, textY, ColorTextTertiary(), textAlignLeft)

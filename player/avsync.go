@@ -34,6 +34,15 @@ package main
 // seconds, read from what the device has consumed (videoAudioClock). Without
 // sound — none in the file, its decoder ended, a device that stopped taking
 // data — the picture runs on the wall clock as before.
+//
+// Playback speed (Juka 2026-11-19: "2x … is not working" — it was a label
+// only) is done inside the two decoders, so this clock never sees it: the
+// picture's timestamps are divided by the speed (setpts) before the fps filter
+// pins its rate, and the sound goes through atempo. Both then come out in
+// output time — frame n still at n / fps, the sound still at the device's
+// pace — and media time is start + speed × output time (videoAdvanceProgress).
+// At 2× the fps filter drops every other decoded frame, so the pipe, the
+// scale and the GPU upload stay at the source rate; only the decode doubles.
 
 import (
 	"context"
@@ -66,11 +75,19 @@ const (
 	// that misread the stream, and 30 is used.
 	avSyncMinFPS = 1.0
 	avSyncMaxFPS = 120.0
+	// The speeds the decoders are run at; the presets are 0.5–2×. atempo of
+	// older ffmpeg takes 0.5–2 per instance, so a speed past that is a chain.
+	avSpeedMin = 0.25
+	avSpeedMax = 4.0
 )
 
 // avFiltersOff is raised when the ffmpeg in use lacks the fps or aresample
 // filter (or their options): the decoders then run without them, as before.
 var avFiltersOff atomic.Bool
+
+// avSpeedOff is raised when the ffmpeg in use lacks setpts or atempo: every
+// video then plays at 1× (videoSpeedUnavailable).
+var avSpeedOff atomic.Bool
 
 // avSync is one playback session's clock.
 type avSync struct {
@@ -88,6 +105,7 @@ type avSync struct {
 	lastMove     time.Time // when the device last took data
 	lastAdjust   time.Time // when the clock was last pulled to the sound
 	following    bool      // the clock was on the sound at the last read
+	late         float64   // how late (s) wait let the last frame through; 0 on time
 }
 
 // avClampFPS is the rate the picture is decoded and timed at.
@@ -104,44 +122,126 @@ func avRateArg(fps float64) string {
 	return strconv.FormatFloat(fps, 'f', 6, 64)
 }
 
-// avVideoFilters is the picture decoder's filters: the scale when there is one
-// (first, so a repeated frame is not scaled again), then the pinned rate,
-// starting at the seek point. A live stream (no duration) is not padded to its
-// start: one odd stream (a timed-ID3 track, a timestamp wrap) could make that
-// pad any length, played as a frozen picture.
-func avVideoFilters(fps float64, scale string, live bool) string {
-	var f []string
-	if scale != "" {
-		f = append(f, scale)
+// avSpeedFactor is the speed a decoder runs at: 1 for anything unset, not a
+// number or within a hair of 1, else clamped to avSpeedMin..avSpeedMax.
+func avSpeedFactor(speed float64) float64 {
+	switch {
+	case math.IsNaN(speed) || speed <= 0 || math.Abs(speed-1) < 0.005:
+		return 1
+	case speed < avSpeedMin:
+		return avSpeedMin
+	case speed > avSpeedMax:
+		return avSpeedMax
 	}
+	return speed
+}
+
+// avNumArg writes a speed factor for a filter: "2", "1.25", "0.75".
+func avNumArg(v float64) string {
+	return strconv.FormatFloat(math.Round(v*10000)/10000, 'f', -1, 64)
+}
+
+// avVideoFilters is the picture decoder's filters: the scale when there is one,
+// the speed (setpts) when it is not 1×, and the pinned rate, starting at the
+// seek point. The rate comes after the speed, so the frames leave at the
+// source's rate at any speed. Faster, the scale goes last, after the rate has
+// dropped the frames the screen will not show; otherwise it goes first, so a
+// repeated frame is not scaled again. A live stream (no duration) is not padded
+// to its start: one odd stream (a timed-ID3 track, a timestamp wrap) could make
+// that pad any length, played as a frozen picture.
+func avVideoFilters(fps float64, scale string, live bool, speed float64) string {
+	rate := ""
 	if !avFiltersOff.Load() {
 		if live {
-			f = append(f, "fps="+avRateArg(fps))
+			rate = "fps=" + avRateArg(fps)
 		} else {
-			f = append(f, "fps="+avRateArg(fps)+":start_time=0")
+			rate = "fps=" + avRateArg(fps) + ":start_time=0"
+		}
+	}
+	speed = avSpeedFactor(speed)
+	parts := [3]string{scale, rate}
+	if speed > 1 {
+		parts = [3]string{"setpts=PTS/" + avNumArg(speed), rate, scale}
+	} else if speed < 1 {
+		parts = [3]string{scale, "setpts=PTS/" + avNumArg(speed), rate}
+	}
+	f := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			f = append(f, p)
 		}
 	}
 	return strings.Join(f, ",")
 }
 
+// avTempoChain is the sound's speed change: atempo, chained when the speed is
+// outside the 0.5–2 one instance of an older ffmpeg takes. "" at 1×.
+func avTempoChain(speed float64) string {
+	speed = avSpeedFactor(speed)
+	if speed == 1 {
+		return ""
+	}
+	var f []string
+	for speed > 2 {
+		f = append(f, "atempo=2")
+		speed /= 2
+	}
+	for speed < 0.5 {
+		f = append(f, "atempo=0.5")
+		speed *= 2
+	}
+	return strings.Join(append(f, "atempo="+avNumArg(speed)), ",")
+}
+
 // avAudioFilter is the sound decoder's filter: silence up to the seek point
 // (not for a live stream, as above) and over any gap in the stream, so its
-// samples line up with the picture's frames. "" when the filters are off.
-func avAudioFilter(live bool) string {
+// samples line up with the picture's frames, then the speed (avTempoChain),
+// which works on the padded sound. "" when there is nothing to do.
+func avAudioFilter(live bool, speed float64) string {
+	base := ""
 	switch {
 	case avFiltersOff.Load():
-		return ""
 	case live:
-		return "aresample=async=1"
+		base = "aresample=async=1"
+	default:
+		base = "aresample=async=1:first_pts=0"
 	}
-	return "aresample=async=1:first_pts=0"
+	tempo := avTempoChain(speed)
+	switch {
+	case base == "":
+		return tempo
+	case tempo == "":
+		return base
+	}
+	return base + "," + tempo
+}
+
+// avSpeedFilterMissing reports whether ffmpeg's stderr says this build has no
+// setpts or atempo filter.
+func avSpeedFilterMissing(stderr string) bool {
+	return strings.Contains(stderr, "No such filter: 'setpts'") ||
+		strings.Contains(stderr, "No such filter: 'atempo'")
+}
+
+// avNoteSpeedMissing turns playback speed off for good when stderr, from a run
+// at a speed other than 1×, says a speed filter is missing, and reports
+// whether the run failed that way: the caller then plays the video on at 1×.
+func avNoteSpeedMissing(stderr string, speed float64) bool {
+	if avSpeedFactor(speed) == 1 || !avSpeedFilterMissing(stderr) {
+		return false
+	}
+	if !avSpeedOff.Swap(true) {
+		logWarn("video", "this ffmpeg has no setpts/atempo filter; videos play at 1x")
+	}
+	return true
 }
 
 // avFilterMissing reports whether ffmpeg's stderr says a filter (or an option
-// of one) used here does not exist in this build.
+// of one) used here does not exist in this build. A missing speed filter is
+// avNoteSpeedMissing's, not a reason to drop the sync filters.
 func avFilterMissing(stderr string) bool {
 	if strings.Contains(stderr, "No such filter") {
-		return true
+		return !avSpeedFilterMissing(stderr)
 	}
 	if !strings.Contains(stderr, "not found") {
 		return false
@@ -282,6 +382,10 @@ func (c *avSync) wait(ctx context.Context, due float64, paused func() bool) bool
 		now := time.Now()
 		ahead := due - c.now(now)
 		if ahead <= 0.002 {
+			c.late = 0
+			if ahead < 0 {
+				c.late = -ahead
+			}
 			if !c.following && -ahead > avSyncWallLate {
 				// No sound to catch up with: carry on from here.
 				c.origin = now.Add(-time.Duration(due * float64(time.Second)))

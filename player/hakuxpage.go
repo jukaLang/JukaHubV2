@@ -149,6 +149,10 @@ func hakuxXboxEntry(folder, romsRoot string, device DeviceModel) emuEntry {
 		}
 		e.Status = emuMissing
 		e.Detail = "hakuX (experimental) · A shows what it needs, X installs it from GitHub"
+		if hakuxAutoPending() {
+			// Emulator updates installs it by itself (hakux_auto.go).
+			e.Detail = "hakuX (experimental) · Emulator updates installs it by itself · X installs it now"
+		}
 		if support.Untested != "" {
 			e.Detail += " · untested on this model"
 		}
@@ -239,35 +243,50 @@ func hakuxActivate(e emuEntry) {
 // hakuxOpenGames opens the Games Library on its Xbox row. With no Xbox games on
 // the card the library still opens, and the toast says where they go.
 func hakuxOpenGames() {
-	openGameLibraryPanel()
-	for i, system := range currentGameSystems() {
-		if system.Name == emuXboxEntryName && len(system.Games) > 0 {
-			gameLib.system = i
-			gameLib.cursor, gameLib.scroll = 0, 0
-			gameLib.focus = 1
-			return
-		}
-	}
-	ShowToast("No Xbox games yet — put .iso (XISO) images in "+hakuxRomsDir(deviceRomsRoot), ToastKindInfo)
+	// The shelf is picked when the library's scan lands: the first open after
+	// boot has no list yet (openGameLibraryOnSystem).
+	openGameLibraryOnSystem(emuXboxEntryName, "No Xbox games yet — put .iso (XISO) images in "+hakuxRomsDir(deviceRomsRoot))
 }
 
 // hakuxStartInstall installs or updates hakuX off the event thread, reporting
 // through the install bar, the tile's "Installing…" pill and a toast.
 func hakuxStartInstall() {
+	hakuxStartInstallRun(hakuxInstallRun{})
+}
+
+// hakuxInstallRun is what one install started from a press says and does
+// besides hakuxStartInstall's own reports (an Xbox game's start, hakux_auto.go).
+type hakuxInstallRun struct {
+	// Begin is a toast as the install starts ("" for none: the bar says it).
+	Begin string
+	// Busy replaces "An update is already running" when another install
+	// holds the slot ("" keeps it).
+	Busy string
+	// After runs on the install's goroutine once hakuxFinish has reported.
+	After func(result hakuxInstallResult, err error)
+}
+
+// hakuxStartInstallRun is hakuxStartInstall with run's extras. It reports
+// whether the install started.
+func hakuxStartInstallRun(run hakuxInstallRun) bool {
 	device := hakuxDevice()
 	support := hakuxSupportFor(device)
 	if IsWindows() || !support.Offer {
 		PlayNavSound()
 		ShowToast("Xbox is not supported here — "+support.Reason, ToastKindInfo)
-		return
+		return false
 	}
 	if !IsOnline() {
 		ShowToast("No internet connection — connect to install hakuX", ToastKindWarning)
-		return
+		return false
 	}
 	if !tryBeginPatchOp() {
-		ShowToast("An update is already running", ToastKindInfo)
-		return
+		busy := "An update is already running"
+		if run.Busy != "" {
+			busy = run.Busy
+		}
+		ShowToast(busy, ToastKindInfo)
+		return false
 	}
 	paths := hakuxDevicePaths()
 	// The same question hakuxInstall asks: an Xbox launcher on the card itself.
@@ -278,6 +297,9 @@ func hakuxStartInstall() {
 	}
 	installBarPhase(installPhaseResolving)
 	emuSetInstalling(emuXboxEntryName)
+	if run.Begin != "" {
+		ShowToast(run.Begin, ToastKindInfo)
+	}
 	go func() {
 		defer endPatchOp()
 		defer emuSetInstalling("")
@@ -285,7 +307,11 @@ func hakuxStartInstall() {
 		defer cancel()
 		result, err := hakuxInstall(ctx, emuWinClient(), paths, device, emuInstallBarReport)
 		hakuxFinish(result, err)
+		if run.After != nil {
+			run.After(result, err)
+		}
 	}()
+	return true
 }
 
 // hakuxFinish reports one install's outcome.
@@ -679,6 +705,9 @@ func hakuxSheetReport() emuXboxReport {
 	report.Files = append([]emuXboxFile{pkg, games}, hakuxFirmwareRows(folder, m, managed, &report)...)
 	if release, ok := emuWinUpdateKnown(emuXboxEntryName); ok && report.Installed {
 		report.Notes = append(report.Notes, "Update available: "+release.Tag+" — X installs it, R1 on the tile undoes it")
+	}
+	if folder == "" && hakuxAutoPending() {
+		report.Notes = append(report.Notes, "Emulator updates installs hakuX by itself at its next quiet moment (on the charger, or after 2 idle minutes) · A on an Xbox game in Games installs it at once")
 	}
 	report.Notes = append(report.Notes, hakuxControls, hakuxCaveat)
 	if support.Untested != "" {

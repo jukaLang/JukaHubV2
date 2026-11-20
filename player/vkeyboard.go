@@ -338,10 +338,13 @@ func vkActionLabel() string {
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
-		artworkAliasVKTarget, homebrewKeyVKTarget:
+		artworkAliasVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
 		return "Save"
 	case gameFileNameVKTarget:
 		return "Rename"
+	case osPromptVKTarget:
+		// An everyday app's field names its own Done (osapps.go).
+		return osPromptActionLabel()
 	case mlAddrVKTarget:
 		return mlVKActionLabel()
 	case bootLockVKTarget:
@@ -912,6 +915,8 @@ func vkCurrentText() string {
 		return artworkAliasBuffer
 	case gameFileNameVKTarget:
 		return gameRenameBuffer
+	case osPromptVKTarget:
+		return osPrompt.buffer
 	case mlAddrVKTarget:
 		return mlVKText()
 	case mailComposeVKTarget:
@@ -920,6 +925,8 @@ func vkCurrentText() string {
 		return vkGroqKeyBuffer
 	case homebrewKeyVKTarget:
 		return homebrewKeyBuffer
+	case nasPassVKTarget:
+		return nasPassBuffer
 	case homebrewSearchVKTarget:
 		return hb.query
 	case bootLockVKTarget:
@@ -1010,6 +1017,9 @@ func vkSetText(text string, config *Config) {
 	case gameFileNameVKTarget:
 		// The ROM is renamed on Rename only (game_rename.go).
 		gameRenameBuffer = text
+	case osPromptVKTarget:
+		// An everyday app's field acts on Done only (osapps.go).
+		osPromptSetText(text)
 	case mlAddrVKTarget:
 		// A PC's address is asked or saved on Done only (moonlight_ui.go).
 		mlVKSetText(text)
@@ -1060,6 +1070,9 @@ func vkSetText(text string, config *Config) {
 		// The itch.io key, the same rule: saved on submit only
 		// (homebrew_store_key.go).
 		homebrewKeyBuffer = text
+	case nasPassVKTarget:
+		// A network drive's password: kept on submit only (nas_ui.go).
+		nasPassBuffer = text
 	case homebrewSearchVKTarget:
 		// Get Homebrew's grid narrows on every key.
 		homebrewSetQuery(text)
@@ -1233,6 +1246,8 @@ func vkTitle() string {
 		return "NAME FOR COVERS"
 	case gameFileNameVKTarget:
 		return "RENAME FILE"
+	case osPromptVKTarget:
+		return osPrompt.title
 	case mlAddrVKTarget:
 		return mlVKTitle()
 	case mailComposeVKTarget:
@@ -1305,6 +1320,8 @@ func vkTitle() string {
 		return "GROQ API KEY"
 	case homebrewKeyVKTarget:
 		return "ITCH.IO API KEY"
+	case nasPassVKTarget:
+		return "NETWORK DRIVE PASSWORD"
 	case homebrewSearchVKTarget:
 		return "SEARCH HOMEBREW"
 	case bootLockVKTarget:
@@ -1386,6 +1403,8 @@ func vkPlaceholder() string {
 		return "Legend of Zelda, The - The Minish Cap"
 	case gameFileNameVKTarget:
 		return "Final Fantasy VI (USA)"
+	case osPromptVKTarget:
+		return osPrompt.placeholder
 	case mlAddrVKTarget:
 		return mlVKPlaceholder()
 	case mailComposeVKTarget:
@@ -1463,6 +1482,8 @@ func vkPlaceholder() string {
 		return "Paste your key from console.groq.com"
 	case homebrewKeyVKTarget:
 		return "Your key from itch.io/user/settings/api-keys"
+	case nasPassVKTarget:
+		return "The password of your user on the drive"
 	case homebrewSearchVKTarget:
 		return "Game or author: tobu"
 	case bootLockVKTarget:
@@ -2007,6 +2028,10 @@ func vkCloseKeyboard() {
 		// Nor the itch.io key; a submit has read it already.
 		homebrewKeyBuffer = ""
 	}
+	if vkTarget == nasPassVKTarget {
+		// Nor a network drive's password (nas_ui.go).
+		nasPassBuffer = ""
+	}
 	if vkTarget == bootLockVKTarget {
 		// Nor a typed startup password (bootlock.go).
 		bootLockBuffer = ""
@@ -2036,6 +2061,11 @@ func vkCloseKeyboard() {
 	}
 	if vkTarget == gameFileNameVKTarget {
 		gameRenameBuffer = ""
+	}
+	if vkTarget == osPromptVKTarget {
+		// B (or another keyboard taking over) drops the text and the callback.
+		osPrompt.buffer = ""
+		osPrompt.submit = nil
 	}
 	if vkTarget == mlAddrVKTarget {
 		mlVKClear()
@@ -2565,6 +2595,10 @@ func vkSubmit(config *Config, askAI bool) {
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
 		homebrewKeySubmit(text)
+	case nasPassVKTarget:
+		// Read before closing: closing clears the buffer.
+		vkCloseKeyboard()
+		nasPassSubmit(text)
 	case vkTargetGroqKey:
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
@@ -2621,6 +2655,12 @@ func vkSubmit(config *Config, askAI bool) {
 		// (game_rename.go).
 		vkCloseKeyboard()
 		gameRenameSubmit(text)
+	case osPromptVKTarget:
+		// And an everyday app's field. The callback is taken first: the close
+		// drops it, as B does (osapps.go).
+		submit := osPromptTake()
+		vkCloseKeyboard()
+		osPromptRun(submit, text)
 	case mlAddrVKTarget:
 		// And a PC's address: nothing is asked or saved until here.
 		vkCloseKeyboard()
@@ -2642,7 +2682,8 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetTerm:
 		vkSetText("", config)
 		vkCloseKeyboard()
-		if text != "" {
+		// An empty line is an answer too when a program reads input.
+		if text != "" || termTakesInput() {
 			termExecute(text)
 		}
 	case vkTargetPlaylist:

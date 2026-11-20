@@ -29,23 +29,38 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 		t.Errorf("Start menu has %d JukaLand rows, want one", startRows)
 	}
 
-	// The library lists JukaLand and the Synth under "Built-in games", each
-	// with its embedded cover installed as a file the cover views can load.
+	// The library lists JukaLand, the Synth, Solitaire and the six arcade
+	// minigames under "Built-in games", each with its embedded cover
+	// installed as a file the cover views can load.
 	var lib gameLibraryReport
 	coverRoot := t.TempDir()
 	libraryAddBuiltInGames(&lib, func(string) bool { return true }, coverRoot)
-	if lib.Total != 2 || len(lib.Systems) != 1 || lib.Systems[0].Name != builtInLibrarySystem ||
-		len(lib.Systems[0].Games) != 2 {
+	if lib.Total != len(builtInLibraryGames) || len(lib.Systems) != 1 || lib.Systems[0].Name != builtInLibrarySystem ||
+		len(lib.Systems[0].Games) != 9 {
 		t.Fatalf("built-in library entries = %+v", lib)
 	}
-	for i, want := range []string{"JukaLand", synthSceneName} {
+	for i, want := range []string{"JukaLand", synthSceneName, solitaireSceneName} {
 		game := lib.Systems[0].Games[i]
 		builtIn, ok := builtInLibraryGameFor(game)
 		if !ok || builtIn.scene != want || !game.HasArt || !artworkLocalPNG(game.Art) {
 			t.Errorf("built-in game %d = %+v (scene %q), want %s with a PNG cover", i, game, builtIn.scene, want)
 		}
-		if builtInSceneCover(want) == nil {
+		if builtInCoverData(builtInMenuCover(gameEntry{scene: want})) == nil {
 			t.Errorf("%s has no embedded cover", want)
+		}
+	}
+	for _, game := range lib.Systems[0].Games[3:] {
+		if builtIn, ok := builtInLibraryGameFor(game); !ok || builtIn.arcade == gameNone || !game.HasArt || !artworkLocalPNG(game.Art) {
+			t.Errorf("arcade game %+v has no PNG cover or no game to start", game)
+		}
+	}
+	if builtInMenuCover(gameEntry{scene: "Games"}) != "" {
+		t.Error("the Games screen took an arcade game's cover as its own")
+	}
+	// Every card on the Games screen draws a cover.
+	for _, g := range gameList {
+		if builtInCoverData(builtInMenuCover(g)) == nil {
+			t.Errorf("Games screen card %s has no embedded cover", g.name)
 		}
 	}
 	if with, total := libraryCoverTotals(lib); with != 0 || total != 0 {
@@ -54,9 +69,10 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 	if found := filterLibrarySystems(lib.Systems, "jukaland"); len(found) != 1 || len(found[0].Games) != 1 {
 		t.Errorf("searching for JukaLand found %+v", found)
 	}
+	// JukaLand and the Games screen's six arcade games, no Synth or Solitaire.
 	var onlyJukaLand gameLibraryReport
 	libraryAddBuiltInGames(&onlyJukaLand, builtInScenesPresent(config), "")
-	if onlyJukaLand.Total != 1 || onlyJukaLand.Systems[0].Games[0].Path != jukaLandLibraryPath || onlyJukaLand.Systems[0].Games[0].HasArt {
+	if onlyJukaLand.Total != 7 || onlyJukaLand.Systems[0].Games[0].Path != jukaLandLibraryPath || onlyJukaLand.Systems[0].Games[0].HasArt {
 		t.Errorf("config without the Synth scene lists %+v", onlyJukaLand)
 	}
 

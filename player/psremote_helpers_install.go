@@ -790,15 +790,6 @@ func psHelperCandidates(releases []psHelperRelease) []psHelperCandidate {
 	return out
 }
 
-// psHelperPick is the release the install tries first.
-func psHelperPick(releases []psHelperRelease) (psHelperRelease, githubAsset, bool) {
-	cands := psHelperCandidates(releases)
-	if len(cands) == 0 {
-		return psHelperRelease{}, githubAsset{}, false
-	}
-	return cands[0].rel, cands[0].asset, true
-}
-
 // psHelperOutOfSpace reports whether err is a full card.
 func psHelperOutOfSpace(err error) bool {
 	if err == nil {
@@ -1251,7 +1242,8 @@ func psHelperPlace(src, dir, name, want string, mode os.FileMode) error {
 }
 
 // psInstallHelpers installs the missing helpers and returns the release they
-// came from ("" when nothing was missing).
+// came from ("" when nothing was missing). Tests use this PS-only entry point
+// to exercise the installer without Moonlight's optional path.
 func psInstallHelpers(ctx context.Context, progress func(psHelperView)) (string, error) {
 	return psInstallHelpersFor(ctx, progress, false)
 }

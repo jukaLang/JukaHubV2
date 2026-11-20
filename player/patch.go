@@ -26,6 +26,7 @@ type FooterHint struct {
 var (
 	patchRowRects    []sdl.Rect
 	patchMenuRects   []sdl.Rect
+	patchModalCard   sdl.Rect
 	patchConfirmRect sdl.Rect
 	patchCancelRect  sdl.Rect
 )
@@ -491,6 +492,7 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 		return
 	}
 	layout := layoutPatchModal(font, m.Body)
+	patchModalCard = layout.card
 	x, y, w, h := layout.card.X, layout.card.Y, layout.card.W, layout.card.H
 
 	// Scrim.
@@ -606,6 +608,32 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 
 // --- Input ---
 
+// patchCloseModal dismisses the active modal. B, Escape and a click outside a
+// menu all end here, so no menu carries a "Cancel" row saying the same thing.
+func patchCloseModal() {
+	if patchModal == nil {
+		return
+	}
+	patchModal = nil
+	patchHoldActive = false
+	PlayBackSound()
+}
+
+// patchMenuMove moves the modal menu's focus by delta, kept in range.
+func patchMenuMove(delta int) {
+	if patchModal == nil || len(patchModal.Menu) == 0 {
+		return
+	}
+	focus := patchModal.MenuFocus + delta
+	if focus < 0 {
+		focus = 0
+	}
+	if focus >= len(patchModal.Menu) {
+		focus = len(patchModal.Menu) - 1
+	}
+	patchModal.MenuFocus = focus
+}
+
 // handlePatchMouse handles clicks on the Patch list and modals. It returns true
 // when the click was consumed.
 func handlePatchMouse(mx, my int32, config *Config) bool {
@@ -619,7 +647,11 @@ func handlePatchMouse(mx, my int32, config *Config) bool {
 					return true
 				}
 			}
-			return true // modal swallows every click behind it
+			// No "Cancel" row: a click outside the card is the way out.
+			if patchModalCard.W > 0 && !pointInRect(mx, my, patchModalCard) {
+				patchCloseModal()
+			}
+			return true // the rest of the modal swallows clicks behind it
 		}
 		if patchConfirmRect.W > 0 && pointInRect(mx, my, patchConfirmRect) {
 			PlayActivateSound()
@@ -627,9 +659,7 @@ func handlePatchMouse(mx, my int32, config *Config) bool {
 			return true
 		}
 		if patchCancelRect.W > 0 && pointInRect(mx, my, patchCancelRect) {
-			patchModal = nil
-			patchHoldActive = false
-			PlayBackSound()
+			patchCloseModal()
 			return true
 		}
 		return true
@@ -659,27 +689,19 @@ func handlePatchKey(e *sdl.KeyboardEvent, config *Config) bool {
 		if len(patchModal.Menu) > 0 {
 			switch e.Keysym.Sym {
 			case sdl.K_UP:
-				if patchModal.MenuFocus > 0 {
-					patchModal.MenuFocus--
-				}
+				patchMenuMove(-1)
 			case sdl.K_DOWN:
-				if patchModal.MenuFocus < len(patchModal.Menu)-1 {
-					patchModal.MenuFocus++
-				}
+				patchMenuMove(1)
 			case sdl.K_RETURN, sdl.K_SPACE:
 				patchConfirmModal()
 			case sdl.K_ESCAPE, sdl.K_b:
-				patchModal = nil
-				patchHoldActive = false
-				PlayBackSound()
+				patchCloseModal()
 			}
 			return true
 		}
 		switch e.Keysym.Sym {
 		case sdl.K_ESCAPE, sdl.K_b:
-			patchModal = nil
-			patchHoldActive = false
-			PlayBackSound()
+			patchCloseModal()
 			return true
 		case sdl.K_RETURN, sdl.K_SPACE:
 			if patchModal.HighRisk {
@@ -729,27 +751,19 @@ func handlePatchController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		if len(patchModal.Menu) > 0 {
 			switch e.Button {
 			case sdl.CONTROLLER_BUTTON_DPAD_UP:
-				if patchModal.MenuFocus > 0 {
-					patchModal.MenuFocus--
-				}
+				patchMenuMove(-1)
 			case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-				if patchModal.MenuFocus < len(patchModal.Menu)-1 {
-					patchModal.MenuFocus++
-				}
+				patchMenuMove(1)
 			case sdl.CONTROLLER_BUTTON_A:
 				patchConfirmModal()
 			case sdl.CONTROLLER_BUTTON_B:
-				patchModal = nil
-				patchHoldActive = false
-				PlayBackSound()
+				patchCloseModal()
 			}
 			return true
 		}
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_B:
-			patchModal = nil
-			patchHoldActive = false
-			PlayBackSound()
+			patchCloseModal()
 			return true
 		case sdl.CONTROLLER_BUTTON_A:
 			if patchModal.HighRisk {
@@ -833,18 +847,9 @@ func patchConfirmModal() {
 				Confirm:  "Roll back",
 				HighRisk: true,
 			}
-		case "Install", "Update", "Reinstall":
-			// Reinstall is the same install over a current copy; it had no case,
-			// so choosing it only closed the menu.
-			patchModal = &patchModalState{
-				ID:        "confirm-install",
-				Title:     "Install " + m.PackageName + "?",
-				Body:      "Installs the package's files with automatic backup and rollback.",
-				Confirm:   "Install",
-				HighRisk:  false,
-				PackageID: m.PackageID,
-			}
-			patchConfirmModal()
+		case "Update", "Reinstall":
+			// Reinstall is the same install over a current copy.
+			patchRunInstall(m.PackageID)
 		case "Remove":
 			patchModal = &patchModalState{
 				ID:        "confirm-remove",
@@ -854,8 +859,6 @@ func patchConfirmModal() {
 				HighRisk:  true,
 				PackageID: m.PackageID,
 			}
-		case "Cancel":
-			// nothing
 		}
 		return
 	}
@@ -897,6 +900,15 @@ func patchConfirmModal() {
 		// Confirmations raised by the update channel's sheets (upch_ui.go).
 		upchModalConfirmed(m.ID)
 	}
+}
+
+// patchRunInstall installs (or reinstalls) a package now. The press on the row
+// or the menu is the confirmation: an install only adds files under JukaHub's
+// own folders, and every transaction keeps a backup set to roll back to.
+func patchRunInstall(pkgID string) {
+	RunPatchOp("Installing package", func(ctx context.Context) error {
+		return OpInstallPackage(ctx, appConfig, pkgID)
+	})
 }
 
 // openPatchHistory shows the transaction history and offers a rollback action
@@ -1023,22 +1035,23 @@ func patchActivate(config *Config) {
 		if !known {
 			installed, current = packageStatusProbe(p)
 		}
-		menu := []string{"Cancel"}
 		if !installed {
-			menu = append([]string{"Install"}, menu...)
-		} else {
-			if !current {
-				menu = append([]string{"Update"}, menu...)
-			} else {
-				menu = append([]string{"Reinstall"}, menu...)
-			}
-			menu = append(menu, "Remove")
+			// The row already says what A does, and an install is backed up and
+			// reversible: no one-entry menu asking the same question again.
+			patchRunInstall(p.ID)
+			return
+		}
+		// Only an installed package has a choice to make. B, Escape or a click
+		// outside the menu closes it, so there is no "Cancel" row.
+		primary := "Update"
+		if current {
+			primary = "Reinstall"
 		}
 		patchModal = &patchModalState{
 			ID:          "pkg-menu",
 			Title:       p.Name + "  v" + p.Version,
 			Body:        p.Description,
-			Menu:        menu,
+			Menu:        []string{primary, "Remove"},
 			MenuFocus:   0,
 			PackageID:   p.ID,
 			PackageName: p.Name,

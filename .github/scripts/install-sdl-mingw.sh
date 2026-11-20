@@ -10,9 +10,9 @@
 #
 #   usage: install-sdl-mingw.sh <dest-dir>
 #
-# The tarballs are downloaded into <dest-dir>, verified against the digest
-# below, extracted there and deleted. Installing the extracted tree is the
-# caller's business, because the two jobs install into different places.
+# The tarballs are downloaded together into <dest-dir>, verified against the
+# digests below, extracted there and deleted. Installing the extracted tree is
+# the caller's business, because the two jobs install into different places.
 #
 # SDL_MINGW_ARCHIVES=<file> replaces the built-in list with one in the same
 # `file digest url` format. Only the test uses it, to drive the verification
@@ -60,20 +60,41 @@ LIST
 mkdir -p "$dest"
 cd "$dest"
 
-# file <space> sha256 <space> url
-count=0
+# Fetch independent archives together. Verify all of them before extracting
+# any, so a failed download or checksum cannot leave a partial SDL install.
+files=()
+digests=()
+pids=()
 while read -r file digest url; do
   [ -n "${file:-}" ] || continue
-  count=$((count + 1))
   echo "fetching $file"
-  curl -fsSLO "$url"
-  echo "$digest  $file" | verify
-  tar -xzf "$file"
-  rm -f "$file"
+  files+=("$file")
+  digests+=("$digest")
+  curl -fsSL --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 90 \
+    -o "$file" "$url" &
+  pids+=("$!")
 done < <(archives)
 
 # An empty list would otherwise look like a successful install of nothing.
-if [ "$count" -eq 0 ]; then
+if [ "${#files[@]}" -eq 0 ]; then
   echo "no archives listed; refusing to report success" >&2
   exit 1
 fi
+
+failed=0
+for i in "${!pids[@]}"; do
+  if ! wait "${pids[i]}"; then
+    echo "could not download ${files[i]}" >&2
+    failed=1
+  fi
+done
+[ "$failed" -eq 0 ] || exit 1
+
+for i in "${!files[@]}"; do
+  printf '%s  %s\n' "${digests[i]}" "${files[i]}" | verify
+done
+
+for file in "${files[@]}"; do
+  tar -xzf "$file"
+  rm -f "$file"
+done

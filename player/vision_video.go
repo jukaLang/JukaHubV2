@@ -56,6 +56,9 @@ const (
 	// visionWhisperMaxBytes is Groq's upload limit for a transcription, with
 	// a margin.
 	visionWhisperMaxBytes = 24 << 20
+	// A frame is scaled to 1024 px before encoding. Refuse an abnormal ffmpeg
+	// output before os.ReadFile could pull it all into the Go heap.
+	visionFrameReadMaxBytes = 16 << 20
 	// visionTranscriptMax bounds what is said, as it goes into the question:
 	// every word counts against the account's tokens a minute.
 	visionTranscriptMax = 8000
@@ -337,6 +340,29 @@ func visionFrameScale(w, h int) string {
 	return fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease", visionMaxSide, visionMaxSide)
 }
 
+func visionReadFrame(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > visionFrameReadMaxBytes {
+		return nil, errVisionTooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(f, visionFrameReadMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > visionFrameReadMaxBytes {
+		return nil, errVisionTooLarge
+	}
+	return data, nil
+}
+
 // visionGrabFrame takes the frame at `at` seconds as the vision model is sent
 // it. JPEG first; PNG when this ffmpeg cannot write JPEG.
 func visionGrabFrame(ctx context.Context, ffmpeg, path string, at float64, probe visionProbe, dir string, n int) (jukaVisionImage, error) {
@@ -362,7 +388,10 @@ func visionGrabFrame(ctx context.Context, ffmpeg, path string, at float64, probe
 			lastErr = err
 			continue
 		}
-		data, err := os.ReadFile(out)
+		data, err := visionReadFrame(out)
+		if errors.Is(err, errVisionTooLarge) {
+			return jukaVisionImage{}, err
+		}
 		if err != nil || len(data) == 0 {
 			// ffmpeg found no frame there (a seek past the end): another
 			// format would not find one either.

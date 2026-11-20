@@ -34,7 +34,9 @@ package main
 //     way the video filter's shader preset and the cheats' file are. A remap
 //     file the user saved in RetroArch for the game, its folder or its core is
 //     never overwritten, deleted or shadowed: that launch keeps the user's own
-//     remap, the log says so and the sheet's Buttons row shows it.
+//     remap, the log says so and the sheet's Buttons row shows it. The game's
+//     control layout (ctrllayout_apply.go) puts its buttons in the same file,
+//     winning over the Buttons choice for the buttons it sets.
 //   - Turbo other than Off sets RetroArch's Turbo Fire keys in retroarch.cfg
 //     through raScopeApply (racfgscope.go), put back when RetroArch exits
 //     (racontrols_turbo.go explains the two generations of those keys).
@@ -335,6 +337,7 @@ func gameControlsSet(romPath string, g gameControlsGame) {
 // the file is written only when it had some. Main thread.
 func gameControlsForget(romPath string) {
 	gameControlsSetNote(romPath, "")
+	ctrlLayoutForgetGame(romPath) // its control layout (ctrllayout_store.go)
 	if own := gameControlsFor(romPath); own.Buttons != "" || own.Turbo != "" {
 		gameControlsSet(romPath, gameControlsGame{})
 	}
@@ -348,6 +351,7 @@ func gameControlsMove(oldPath, newPath string) {
 		return
 	}
 	gameControlsSetNote(oldPath, "")
+	ctrlLayoutMoveGame(oldPath, newPath) // its control layout (ctrllayout_store.go)
 	gameControlsStore.mu.Lock()
 	gameControlsLoadLocked()
 	own, ok := gameControlsStore.games[oldKey]
@@ -451,7 +455,11 @@ func prepareGameControls(launcher string, game libraryGame) {
 	}
 	buttons := gameButtonsForGame(appConfig, game)
 	turbo := gameTurboForGame(appConfig, game)
-	if buttons == gameButtonsDefault && turbo == gameTurboOff {
+	// The game's control layout shares this one remap file: its buttons win
+	// over the Buttons choice for the buttons it sets (ctrllayout_apply.go).
+	layout, _ := ctrlLayoutLaunchFor(launcher, game)
+	remap := ctrlLayoutMergeRemap(raRemapPreset(buttons), layout)
+	if len(remap) == 0 && turbo == gameTurboOff {
 		gameControlsSetNote(game.Path, "")
 		return
 	}
@@ -495,8 +503,8 @@ func prepareGameControls(launcher string, game libraryGame) {
 			notes = append(notes, "Turbo not applied last time: "+why)
 		}
 	}
-	if buttons != gameButtonsDefault {
-		if note := raRemapPrepare(launcher, game, targets, buttons, turboRemap); note != "" {
+	if len(remap) > 0 {
+		if note := raRemapPrepare(launcher, game, targets, remap, ctrlLayoutRemapLabel(buttons, layout), turboRemap); note != "" {
 			notes = append(notes, note)
 		}
 	}

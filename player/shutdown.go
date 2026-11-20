@@ -103,6 +103,9 @@ func shutdownSteps(config *Config) []shutdownStep {
 			battGraphFlushNow()
 			saveFavorites()
 			notesFlushOnExit()
+			// Paint's drawing, the Solitaire game, the task lists and the
+			// stopwatch (osapps.go).
+			osAppsFlushAll()
 			flushPendingUserConfig()
 			return "state written", nil
 		}},
@@ -113,6 +116,11 @@ func shutdownSteps(config *Config) []shutdownStep {
 			// main.go recorded it when the loop ended; this call only waits for
 			// that write (and writes nothing more) — a backstop.
 			clearBootGuard()
+			// What was seen to work and the saves confirmed in the last
+			// seconds reach the card now, not after their save delay
+			// (verified.go, saveledger.go).
+			_ = vfFlush()
+			saveLedgerFlushOnExit()
 			clearThumbnailDataCache()
 			conditionalCache.clear()
 			closeSharedCache()
@@ -164,6 +172,9 @@ func shutdownStopChildren() (string, error) {
 // thread: the video player retires its frame textures there, and the
 // Terminal's job is main-loop state.
 func shutdownStopPlayback() (string, error) {
+	// A voice memo being recorded is finished and kept, and a memo playing
+	// stops, while the audio device is still open (voicememo.go).
+	voiceMemoFlush()
 	musicStopIfPlaying()
 	StopEmbeddedPlayback()
 	termStopJob()

@@ -125,24 +125,26 @@ func savestateResumeValues() []raScopeValue {
 	}
 }
 
-// savestateSRAMFlushInterval is how often, in seconds, RetroArch writes a
-// changed battery save (SRAM) while the game runs. RetroArch's default is 0 —
+// savestateSRAMFlushKey is RetroArch's setting for how often, in seconds, it
+// writes a changed battery save (SRAM) while the game runs. RetroArch's default is 0 —
 // SRAM only on exit — so a crash, a dead battery or a forced power-off lost
 // every in-game save since the game started. Mosaik 0.9.18 writes it every 10
 // seconds; JukaHub asks RetroArch for the same through autosave_interval,
-// which only writes when the save actually changed.
-const (
-	savestateSRAMFlushKey      = "autosave_interval"
-	savestateSRAMFlushInterval = "10"
-)
+// which only writes when the save actually changed. The seconds are the
+// saveFlushSeconds setting (saveledger.go; 10 by default, 0 = RetroArch's own).
+const savestateSRAMFlushKey = "autosave_interval"
 
 // savestateSRAMFlushValue is the periodic SRAM flush as a scoped launch value:
 // a floor (RaiseOnly), so a user who set their own nonzero interval keeps it,
 // and like the resume switches it is put back when the game exits. It rides
 // on the same savestateResume switch: one opt-out for "JukaHub touches my
-// RetroArch saves".
-func savestateSRAMFlushValue() raScopeValue {
-	return raScopeValue{Key: savestateSRAMFlushKey, Value: savestateSRAMFlushInterval, RaiseOnly: true}
+// RetroArch saves". ok is false when saveFlushSeconds is 0. Main thread.
+func savestateSRAMFlushValue() (raScopeValue, bool) {
+	secs := saveFlushSeconds()
+	if secs <= 0 {
+		return raScopeValue{}, false
+	}
+	return raScopeValue{Key: savestateSRAMFlushKey, Value: strconv.Itoa(secs), RaiseOnly: true}, true
 }
 
 // savestateMenuValues are what the in-game menu's Save state and Load state
@@ -263,8 +265,12 @@ func prepareSavestateResume(launcher string) bool {
 		return false
 	}
 	configured := false
+	values := savestateResumeValues()
+	if flush, ok := savestateSRAMFlushValue(); ok {
+		values = append(values, flush)
+	}
 	for _, path := range raScopeTargets(raLaunchCandidates(launcher, savestateResumeCandidates())) {
-		changed, err := raScopeApply(path, append(savestateResumeValues(), savestateSRAMFlushValue()))
+		changed, err := raScopeApply(path, values)
 		if err != nil {
 			logWarn("resume", "cannot enable save-state resume in %s: %v", path, err)
 			continue

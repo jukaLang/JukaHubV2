@@ -1360,3 +1360,65 @@ func TestFEXzReaderRefusesLZMA2PropsXzRefuses(t *testing.T) {
 		t.Fatalf("a multi-byte read at a chunk boundary: err = %v, want errFeXzFormat", err)
 	}
 }
+
+// TestFEZipRoundTrip: a ZIP Create ZIP writes (files_zip.go) unpacks through
+// JukaHub's own Extract to the same tree, an empty folder included; a picture
+// is stored and text deflated; and a link to a file outside the folder is left
+// out rather than followed, with no hidden file left behind.
+func TestFEZipRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	feWriteTestFile(t, filepath.Join(outside, "secret.txt"), "secret")
+	feWriteTestFile(t, filepath.Join(dir, "Game", "a.txt"), strings.Repeat("alpha ", 200))
+	feWriteTestFile(t, filepath.Join(dir, "Game", "sub", "b.png"), "png bytes")
+	if err := os.MkdirAll(filepath.Join(dir, "Game", "empty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linked := os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(dir, "Game", "link.txt")) == nil
+	o := feZipRun(context.Background(), feZipJob{Dir: dir, Items: []string{filepath.Join(dir, "Game")}, Name: "Game.zip"}, nil)
+	if o.Err != nil {
+		t.Fatal(o.Err)
+	}
+	if want := filepath.Join(dir, "Game.zip"); o.Target != want || o.Files != 2 {
+		t.Fatalf("target %q with %d files, want %q with 2", o.Target, o.Files, want)
+	}
+	if linked && o.Links != 1 {
+		t.Fatalf("links left out = %d, want 1", o.Links)
+	}
+	unzipTestOnly(t, dir, "Game", "Game.zip")
+	zr, err := zip.OpenReader(o.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	methods := map[string]uint16{}
+	for _, f := range zr.File {
+		methods[f.Name] = f.Method
+	}
+	_ = zr.Close()
+	if methods["Game/sub/b.png"] != zip.Store || methods["Game/a.txt"] != zip.Deflate {
+		t.Fatalf("methods = %v, want the picture stored and the text deflated", methods)
+	}
+	if _, ok := methods["Game/link.txt"]; ok {
+		t.Fatal("the link went into the ZIP")
+	}
+	out := t.TempDir()
+	moved := filepath.Join(out, "Game.zip")
+	if err := os.Rename(o.Target, moved); err != nil {
+		t.Fatal(err)
+	}
+	if res := unzipTestRun(moved, feExtractSmart); res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if got := feReadTestFile(t, filepath.Join(out, "Game", "sub", "b.png")); got != "png bytes" {
+		t.Fatalf("Game/sub/b.png = %q", got)
+	}
+	if got := feReadTestFile(t, filepath.Join(out, "Game", "a.txt")); got != strings.Repeat("alpha ", 200) {
+		t.Fatal("Game/a.txt did not come back whole")
+	}
+	if fi, err := os.Stat(filepath.Join(out, "Game", "empty")); err != nil || !fi.IsDir() {
+		t.Fatalf("the empty folder did not come back: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(out, "Game", "link.txt")); !os.IsNotExist(err) {
+		t.Fatalf("link.txt came back: %v", err)
+	}
+}

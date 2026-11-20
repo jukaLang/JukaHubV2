@@ -399,13 +399,19 @@ the same rule in place.
 | library box art (`game_library_ui.go`) | bytes | 32 / 96 MB |
 | `appIconTextures` (`appicons.go`) | entries + bytes | 8 / 32 MB |
 | `chatImages` (`chat.go`) | entries + bytes | 24 / 64 MB |
+| pending chat image download (`chat.go`) | one active or queued image, at most 32 MB encoded | 32 MB |
 | `chatAvatars` (`chat.go`) | entries + bytes | 4 MB |
+| pending avatar downloads (`chat.go`) | four active or queued images, at most 1 MB each | 4 MB |
 | `thumbnailDataCache` (`thumbstore.go`) | entries + bytes | 16 / 48 MB |
 | `conditionalCache` bodies (`httpcache.go`) | entries + bytes | 8 / 16 MB |
+| AI vision media (`vision_chat.go`) | entries + bytes | 8 / 12 MB |
 | `iconAtlas` (`iconatlas.go`) | one fixed strip | 256 KB |
 | `ambientGlowCache` (`backgroundfx.go`) | one fixed texture | 256 KB |
 | video overlay / UI layer (`vkeyboard.go`) | one layer per canvas | freed with the renderer |
 | `textBrowserWrapCache`, `lyricCache` | exactly one entry | no growth |
+
+Avatar images also refuse headers above 4 MP before decoding their 64 px crop.
+AI video frames are limited to 16 MB before loading the generated file.
 
 The remaining count-bounded maps hold short strings with a hard length limit
 (text measurement, sanitize and fit caches at `maxTextFitLen` = 240 bytes, the

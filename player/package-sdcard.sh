@@ -65,6 +65,13 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
 echo "    CC          = $CC"
 echo "    SYSROOT     = $SYSROOT"
 go version
+# go:embed reads player/helpdocs, not ../docs. Refresh both pages before the
+# device binary is built so this package contains the current Help text.
+mkdir -p helpdocs
+for f in GETTING_STARTED.md CONTROLS.md; do
+    tr -d '\r' < "../docs/$f" > "helpdocs/$f.tmp"
+    mv -f "helpdocs/$f.tmp" "helpdocs/$f"
+done
 go build -trimpath -ldflags "-s -w" -o "$PKG/$APP_NAME" .
 # jukaboot: JukaHub OS's own process 1 on the Smart Pro SD image
 # (os/smartpro/build_image.py takes it from the package). Pure Go and static.

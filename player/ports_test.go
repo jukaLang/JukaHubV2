@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPortsRowNameWidthReservesChipAndStatus is the Ports row's layout
@@ -313,6 +314,80 @@ func TestInstalledPortNeedsFirmwareGlibc(t *testing.T) {
 	}
 }
 
+// A port that stops at once is explained from what it printed (outside
+// text): JukaHub's launch log splits into notes and output, and each known
+// failure line lands in its cause — and only there.
+func TestPortQuickExitLogFindings(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "SuperTuxKart.log")
+	header := "# JukaHub port launch x\n# note: bash: none usable — /bin/bash cannot run bash arrays (BusyBox's sh)\n" + portLogOutputMarker + "\n"
+	if err := os.WriteFile(logPath, []byte(header+"Starting\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	portLogNoteEnd(logPath, nil, 2*time.Second)
+	notes, output := gameDiagPortJukaLog(logPath, time.Time{})
+	if len(notes) != 1 || !strings.HasPrefix(notes[0], "bash: none usable") || len(output) == 0 || output[0] != "Starting" {
+		t.Fatalf("launch log split: notes %q output %q", notes, output)
+	}
+	for _, line := range output {
+		if strings.Contains(line, "launch ended") {
+			t.Fatalf("JukaHub's end line counted as the script's output: %q", output)
+		}
+	}
+	if end := pmLaunchEnd(pmTailLines(logPath, 5)); end != "after 2s (exit status 0)" {
+		t.Fatalf("end line: %q", end)
+	}
+	// PortMaster's own log.txt: pugwash's errors name their cause.
+	for _, c := range []struct{ line, want string }{
+		{"ImportError: could not find any library for SDL2 (PYSDL2_DLL_PATH: /usr/lib)", "PortMaster's Python could not find SDL2"},
+		{`/mnt/SDCARD/Apps/PortMaster/PortMaster/device_info.txt: line 915: syntax error: unexpected "("`, "A PortMaster script ran under BusyBox's sh"},
+		{"env: can't execute 'python3': No such file or directory", "PortMaster could not start Python 3"},
+		{"Starting PortMaster", ""},
+	} {
+		var got []string
+		for _, is := range pmOwnLogFindings([]string{c.line}) {
+			got = append(got, is.Title)
+		}
+		if strings.Join(got, "|") != c.want {
+			t.Errorf("log.txt %q: got %q, want %q", c.line, got, c.want)
+		}
+	}
+	script := "/mnt/SDCARD/Data/ports/SuperTuxKart.sh"
+	titles := func(lines ...string) string {
+		issues, _, _ := gameDiagPortLogFindings(nil, lines, script)
+		var out []string
+		for _, is := range issues {
+			out = append(out, is.Title)
+		}
+		return strings.Join(out, "|")
+	}
+	for _, c := range []struct{ line, want string }{
+		{`/mnt/SDCARD/Apps/PortMaster/PortMaster/device_info.txt: line 12: syntax error: unexpected "("`, "It ran under BusyBox's sh, not bash"},
+		{`run.sh: 4: Syntax error: "(" unexpected`, "It ran under BusyBox's sh, not bash"},
+		{"./supertuxkart: /lib/libc.so.6: version `GLIBC_2.34' not found (required by ./supertuxkart)", "Built for a newer C library than this firmware's"},
+		{"./supertuxkart: error while loading shared libraries: libGLESv2.so.2: cannot open shared object file: No such file or directory", "A library it needs is not on this handheld"},
+		{"SDL_Init failed: No available video device", "Its graphics did not start"},
+		{"line 40:  1234 Killed                  ./supertuxkart", "The system stopped it, likely for memory"},
+		{"line 38: ./supertuxkart: not found", "Its game program could not be run"},
+		{script + ": line 38: ./supertuxkart: No such file or directory", "Its game program could not be run"},
+		{`line 5: 10 / : syntax error: operand expected (error token is "/ ")`, ""},
+		{"line 9: gptokeyb: command not found", "Commands this firmware does not have"},
+		{"ALC: could not create context", ""},
+		{"sh: setterm: not found", ""},
+		{"data/level1.pak: not found", ""},
+		{"line 3: syntax error near unexpected token `('", ""},
+	} {
+		if got := titles(c.line); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.line, got, c.want)
+		}
+	}
+	// Under a working bash a sourced PortMaster file's syntax error is not
+	// BusyBox's.
+	good := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39) — /bin/bash cannot run bash arrays"}
+	if issues, _, _ := gameDiagPortLogFindings(good, []string{`/x/device_info.txt: line 12: syntax error: unexpected "("`}, script); len(issues) != 0 {
+		t.Errorf("BusyBox blamed under a working bash: %+v", issues)
+	}
+}
+
 // PortMaster's Python comes from python-build-standalone's SHA256SUMS: the
 // chosen line decides both the file and the hash it must match.
 func TestPortMasterPythonPick(t *testing.T) {
@@ -430,6 +505,16 @@ func TestPortMasterPythonExtract(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "lib", "python3.11", "test")); !os.IsNotExist(err) {
 		t.Fatal("the test suite was unpacked")
+	}
+	// The install adds the PYSDL2_DLL_PATH guard beside the standard library;
+	// a second call leaves it as it is.
+	for i := 0; i < 2; i++ {
+		if err := pmPythonEnsureSite(dest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(dest, "lib", "python3.11", "site-packages", "sitecustomize.py")); err != nil || string(b) != pmPythonSiteText {
+		t.Fatalf("sitecustomize.py: %v", err)
 	}
 	bad := build([]tar.Header{{Name: "python/../../escape", Typeflag: tar.TypeReg, Mode: 0o644}}, map[string]string{"python/../../escape": "x"})
 	if err := pmPythonExtract(context.Background(), bad, t.TempDir()); err == nil {

@@ -198,6 +198,9 @@ func loadPSHosts() psHostsFile {
 // undo a Forget that another writer saved in between.
 var psHostsMu sync.Mutex
 
+// savePSHosts lets tests exercise a stand-alone atomic save. Production
+// load-change-save writers hold psHostsMu across both steps and call the
+// locked form below.
 func savePSHosts(state psHostsFile) error {
 	psHostsMu.Lock()
 	defer psHostsMu.Unlock()
@@ -703,7 +706,8 @@ const psFallbackLogPath = "/tmp/psremote.log"
 // firmware UI stopped and brings JukaHub back afterwards (the screen-handoff
 // protocol above), so the script only makes sure no MainUI is up. Without it
 // (an older launch.sh) the script stops the firmware UI itself and restores the
-// menu when the stream ends.
+// menu when the stream ends. Tests use this PS-only form to pin the generated
+// script while production shares psHandoffScriptWith with other screen helpers.
 func psHandoffScript(pid int, engine psEngine, sessionPath, label string, launcherWaits bool) string {
 	return psHandoffScriptWith(psHandoffSpecPS(), pid, engine, sessionPath, label, launcherWaits)
 }

@@ -110,6 +110,8 @@ var emuCoreSystems = []emuCoreSystem{
 	{"virtualjaguar", "Atari Jaguar", emuFamilyOther},
 	{"dosbox", "DOS", emuFamilyOther},
 	{"scummvm", "ScummVM", emuFamilyOther},
+	{"tic80", "TIC-80", emuFamilyOther},
+	{"easyrpg", "EasyRPG", emuFamilyOther},
 	{"vecx", "Vectrex", emuFamilyOther},
 	{"fuse", "ZX Spectrum", emuFamilyOther},
 	{"vice", "Commodore 64", emuFamilyOther},
@@ -161,6 +163,11 @@ type emuDesktopSystem struct {
 // xemu), but the handheld never shows its reason: the Xbox tile there comes
 // from hakuxXboxEntry, which offers the hakuX port on the Smart Pro and says
 // per model why another handheld has none.
+//
+// GameCube and Wii rows count only while the handheld does not play them
+// (emuDesktopSystemFor): the Smart Pro S does by default, in RetroArch's
+// Dolphin core, and an A133P model does when its player asks to try
+// (dolphin.go).
 var emuDesktopSystems = []emuDesktopSystem{
 	{
 		System:   "Xbox",
@@ -196,13 +203,13 @@ var emuDesktopSystems = []emuDesktopSystem{
 		System:   "GameCube",
 		Folders:  []string{"gc", "gamecube", "ngc", "nintendo - gamecube"},
 		Emulator: "Dolphin",
-		Reason:   "Dolphin needs a much faster CPU and GPU than the TrimUI chips (A133P, A523); GameCube games would not reach playable speed.",
+		Reason:   "On the A133P (Smart Pro, Brick, Brick Pro) most GameCube games run at half speed or less; the Smart Pro S plays the lighter ones. Settings → Games & emulators → GameCube & Wii turns them on.",
 	},
 	{
 		System:   "Wii",
 		Folders:  []string{"wii", "nintendo - wii"},
 		Emulator: "Dolphin",
-		Reason:   "Dolphin needs a much faster CPU and GPU than the TrimUI chips (A133P, A523); Wii games would not reach playable speed.",
+		Reason:   "Wii games are heavier than GameCube ones: on the A133P (Smart Pro, Brick, Brick Pro) they do not reach playable speed, and on the Smart Pro S only a few do. Settings → Games & emulators → GameCube & Wii turns them on.",
 	},
 	{
 		System:  "Switch",
@@ -215,24 +222,36 @@ var emuDesktopSystems = []emuDesktopSystem{
 		Emulator: emuXeniaName,
 		Reason:   "Xbox 360 games run in Xenia Canary on a Windows PC: it needs a 64-bit x86 CPU with AVX and a Direct3D 12 or Vulkan GPU, far beyond the A133P.",
 	},
+	{
+		System:   "Nintendo 3DS",
+		Folders:  []string{"3ds", "n3ds", "nintendo 3ds", "nintendo - nintendo 3ds"},
+		Emulator: "Azahar",
+		Reason:   "3DS games play in Azahar on a PC: the TrimUI chips (A133P, A523) are far too slow to emulate a 3DS.",
+	},
 }
 
 // emuDesktopSystemFor finds the desktop-only console a Roms/ folder or system
-// name belongs to.
+// name belongs to. GameCube and Wii are not desktop-only on a handheld that
+// plays them now (dolphinPlaysSystemHere).
 func emuDesktopSystemFor(name string) (emuDesktopSystem, bool) {
 	key := strings.ToLower(strings.TrimSpace(name))
 	if key == "" {
 		return emuDesktopSystem{}, false
 	}
 	for _, sys := range emuDesktopSystems {
-		if strings.EqualFold(sys.System, key) {
-			return sys, true
-		}
+		match := strings.EqualFold(sys.System, key)
 		for _, folder := range sys.Folders {
 			if folder == key {
-				return sys, true
+				match = true
 			}
 		}
+		if !match {
+			continue
+		}
+		if dolphinPlaysSystemHere(sys.System) {
+			return emuDesktopSystem{}, false
+		}
+		return sys, true
 	}
 	return emuDesktopSystem{}, false
 }
@@ -251,9 +270,18 @@ const emuXeniaName = "Xenia Canary"
 // how this device plays it (hakuX on the Smart Pro, xemu on Windows); for a
 // console only a desktop runs, the Windows emulator JukaHub installs for it,
 // or on a handheld the reason it cannot run there. "" for any other console.
+// (For the Xbox on a handheld, hakuxInstallForGame answers most starts through
+// chooseGameLauncher: it installs hakuX and starts the game, says why this
+// model has none, or — at a start nobody pressed for, the resume at power-on —
+// shows this hint. It leaves the caller's own message when an Xbox launcher
+// folder is on the card but the catalog offered nothing for the game. This is
+// also the answer of the other ways in.)
 func emuLibraryLauncherHint(system string) string {
 	if strings.EqualFold(strings.TrimSpace(system), emuXboxEntryName) {
 		return xboxLibraryLauncherHintFor(hakuxDevice())
+	}
+	if strings.EqualFold(strings.TrimSpace(system), godotSystemName) {
+		return godotLauncherHint() // the Godot port's install (godot.go)
 	}
 	sys, ok := emuDesktopSystemFor(system)
 	if !ok {

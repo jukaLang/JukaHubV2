@@ -269,6 +269,26 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 	mode := emuPickAskModeNow()
 	switch {
 	case len(options) == 0:
+		// An Xbox game before hakuX is on the card installs it and starts
+		// once it is in (hakux_auto.go).
+		if hakuxInstallForGame(game, launch) {
+			return
+		}
+		// A J2ME game starts in the FreeJ2ME-Plus core once Java, the core
+		// and its jar are there, set up first when not (j2me.go).
+		if j2meLauncherForGame(game, launch) {
+			return
+		}
+		// A GameCube or Wii game on a handheld that plays them starts in
+		// the Dolphin core once it and its system files are in; on one that
+		// does not, it says why (dolphin.go).
+		if dolphinLauncherForGame(game, launch) {
+			return
+		}
+		// A WASM-4 game installs the WASM-4 core first, then plays (wasm4.go).
+		if wasm4LauncherForGame(game, launch) {
+			return
+		}
 		launch("")
 		return
 	case len(options) == 1:
@@ -346,7 +366,9 @@ func chooseGameLauncherResume(game libraryGame, launch func(launcher string)) {
 }
 
 // emuPickOpen reports whether the sheet is up (main.go routes input to it).
-func emuPickOpen() bool { return emuPickUI.open }
+// The "Open with" sheet (openwith_ui.go) rides the same hooks: while it is up
+// the handlers below hand over to it.
+func emuPickOpen() bool { return emuPickUI.open || owPickOpen() }
 
 func emuPickClose() {
 	emuPickUI.open = false
@@ -456,6 +478,10 @@ func emuPickAlt() {
 }
 
 func emuPickMove(delta int) {
+	if owPickOpen() {
+		owPickMove(delta)
+		return
+	}
 	n := emuPickRows()
 	if n == 0 || delta == 0 {
 		return
@@ -476,6 +502,9 @@ func emuPickMove(delta int) {
 
 // handleEmuPickKey owns every key while the sheet is up.
 func handleEmuPickKey(e *sdl.KeyboardEvent) bool {
+	if owPickOpen() {
+		return owPickKey(e)
+	}
 	if e == nil || !emuPickUI.open {
 		return false
 	}
@@ -501,6 +530,9 @@ func handleEmuPickKey(e *sdl.KeyboardEvent) bool {
 
 // handleEmuPickController owns the pad while the sheet is up.
 func handleEmuPickController(e *sdl.ControllerButtonEvent) bool {
+	if owPickOpen() {
+		return owPickController(e)
+	}
 	if e == nil || !emuPickUI.open {
 		return false
 	}
@@ -526,6 +558,9 @@ func handleEmuPickController(e *sdl.ControllerButtonEvent) bool {
 
 // handleEmuPickMouse: a row starts the game, a click off the card cancels.
 func handleEmuPickMouse(mx, my int32) bool {
+	if owPickOpen() {
+		return owPickMouse(mx, my)
+	}
 	if !emuPickUI.open {
 		return false
 	}
@@ -621,9 +656,12 @@ func cycleGameEmulator(pinned string, choices []emuEntry, delta int) string {
 // emuPickEatRelease reports (once) whether a left-button release belongs to
 // the sheet: it is up, or the press that closed it was on it.
 func emuPickEatRelease() bool {
+	// The Open-with sheet (openwith_ui.go) shares this release; the picker's
+	// own flag is still consumed so a stale one cannot eat a later release.
+	ow := owPickEatRelease()
 	eat := emuPickUI.open || emuPickUI.eatUp
 	emuPickUI.eatUp = false
-	return eat
+	return ow || eat
 }
 
 // emuPickDetail is the line under an emulator's name: what kind it is, what
@@ -668,6 +706,10 @@ func emuPickMoreText() (name, line string) {
 
 // renderEmuPick draws the sheet above whatever screen started the game.
 func renderEmuPick(renderer *sdl.Renderer, config *Config) {
+	if owPickOpen() {
+		renderOwPick(renderer, config)
+		return
+	}
 	if !emuPickUI.open || renderer == nil || config == nil {
 		return
 	}

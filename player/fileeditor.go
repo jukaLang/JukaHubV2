@@ -125,7 +125,7 @@ var fileEditorAutoExts = map[string]bool{
 // fileEditorSheetExts are the formats the Files action sheet offers "Edit" for
 // even though A already does something else with them: a script's A runs it,
 // and a page's A opens it in the sandbox, so editing needs its own entry.
-var fileEditorSheetExts = map[string]bool{".sh": true, ".js": true, ".html": true, ".css": true}
+var fileEditorSheetExts = map[string]bool{".sh": true, ".js": true, ".html": true, ".css": true, ".java": true}
 
 // fileEditorCanEdit reports whether the action sheet may open a path here.
 func fileEditorCanEdit(path string) bool {
@@ -905,6 +905,8 @@ func fileEditorMenuRows() {
 		}
 		rows = append(rows, filesMenuRow{ID: "hex", Label: label, Enabled: true})
 	}
+	// Every other way to open the file (openwith.go).
+	rows = append(rows, filesMenuRow{ID: "openwith", Label: "Open with…", Enabled: fileEditor.path != ""})
 	if filesSystemOpenAvailable() {
 		rows = append(rows, filesMenuRow{ID: "system", Label: "Open with Windows", Enabled: true})
 	}
@@ -941,6 +943,9 @@ func fileEditorMenuApply(in filesMenuInput) {
 	case "hex":
 		fileEditor.menu.open = false
 		filesViewerToggleHexText()
+	case "openwith":
+		fileEditor.menu.open = false
+		owOpenPicker(appConfig, fileEditor.path, FileEntry{}, "editor")
 	case "system":
 		fileEditor.menu.open = false
 		filesOpenWithSystem(fileEditor.path)

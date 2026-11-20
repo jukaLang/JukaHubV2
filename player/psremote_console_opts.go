@@ -5,9 +5,8 @@ package main
 //
 // Start on a console row opens its options page: Play (or Pair), the internet
 // address for playing away from home, the PS login passcode the console may
-// ask for, and Forget. The page is a third view of the same panel (beside the
-// console list and the Account-ID card), so it draws with the panel's own card,
-// rows and footer and goes back with B like the Account-ID card does.
+// ask for, and Forget. Its confirmation page uses the panel's own card, rows
+// and footer too, and B returns to the options.
 //
 // The console list itself gains three stream rows — Video codec, Select button
 // and Rumble — stored with the other stream settings in psremote.json and
@@ -24,8 +23,11 @@ import (
 	"strings"
 )
 
-// psPageConsoleOptions is the options page of the console psOptsHost names.
-const psPageConsoleOptions psPanelPage = 200
+// These pages belong to one console rather than the console list.
+const (
+	psPageConsoleOptions psPanelPage = 200 + iota
+	psPageConsoleConfirm
+)
 
 // The two keyboard fields of the options page.
 const (
@@ -46,6 +48,8 @@ const (
 	psActionOptsForget
 	psActionOptsBack
 	psActionLastRunOpen
+	psActionOptsConfirm
+	psActionOptsKeep
 )
 
 // psOptsHost is the console the options page is about (its key in the list).
@@ -151,6 +155,108 @@ func psConsoleOptsRows() []chiakiRow {
 		rows = append(rows, chiakiRow{label: "Forget this console", detail: "Deletes its pairing keys from this handheld", status: "Forget", action: psActionOptsForget})
 	}
 	return append(rows, chiakiRow{label: "Back", action: psActionOptsBack})
+}
+
+// psPanelAskConsoleConfirm keeps both the options rows and Y's quick Forget
+// behind the same question. The shared focus rule puts Keep on the first A.
+func psPanelAskConsoleConfirm(host string, action psPanelAction) {
+	if chiakiPanel.page != psPageConsoles && chiakiPanel.page != psPageConsoleOptions {
+		return
+	}
+	c, ok := psPanelConsole(host)
+	if !ok || !c.paired() {
+		return
+	}
+	if action != psActionOptsForget && (action != psActionOptsClearPIN || !psLoginPINValid(c.LoginPIN)) {
+		return
+	}
+	chiakiPanel.confirmHost = host
+	chiakiPanel.confirmAction = action
+	chiakiPanel.confirmReturnPage = chiakiPanel.page
+	chiakiPanel.confirmReturnCursor = chiakiPanel.cursor
+	psPanelShowPage(psPageConsoleConfirm)
+	rows := psConsoleConfirmRows()
+	chiakiPanel.cursor = confirmSafeFocus(len(rows), 0, func(i int) string { return rows[i].label })
+	PlayActivateSound()
+}
+
+var psConfirmClearPINRows = []chiakiRow{
+	{label: "Remove saved passcode", detail: "The console will ask for it again", status: "Remove", action: psActionOptsConfirm},
+	{label: "Keep it", detail: "Leave the saved passcode in place", action: psActionOptsKeep},
+}
+
+var psConfirmForgetRows = []chiakiRow{
+	{label: "Forget this console", detail: "Delete its pairing keys from this handheld", status: "Forget", action: psActionOptsConfirm},
+	{label: "Keep it", detail: "Leave the console paired", action: psActionOptsKeep},
+}
+
+// psConsoleConfirmRows names exactly what the second press would remove.
+func psConsoleConfirmRows() []chiakiRow {
+	if chiakiPanel.confirmAction == psActionOptsClearPIN {
+		return psConfirmClearPINRows
+	}
+	return psConfirmForgetRows
+}
+
+func psConsoleConfirmHeader() UIPageHeader {
+	c, ok := psPanelConsole(chiakiPanel.confirmHost)
+	if !ok {
+		return UIPanelHeader("Console no longer available", "Keep it to return", "gamepad")
+	}
+	if chiakiPanel.confirmAction == psActionOptsClearPIN {
+		return UIPanelHeader("Remove saved passcode?", c.label(), "gamepad")
+	}
+	return UIPanelHeader("Forget this console?", c.label(), "gamepad")
+}
+
+func psPanelCancelConsoleConfirm() {
+	if chiakiPanel.page != psPageConsoleConfirm {
+		return
+	}
+	page, cursor := chiakiPanel.confirmReturnPage, chiakiPanel.confirmReturnCursor
+	psPanelShowPage(page)
+	if page == psPageConsoleOptions {
+		chiakiPanel.cursor = cursor
+	}
+	chiakiPanel.confirmHost = ""
+	chiakiPanel.confirmAction = psActionNone
+}
+
+func psPanelConfirmConsoleAction() {
+	if chiakiPanel.page != psPageConsoleConfirm {
+		return
+	}
+	host := chiakiPanel.confirmHost
+	c, ok := psPanelConsole(host)
+	if !ok || !c.paired() {
+		psPanelCancelConsoleConfirm()
+		return
+	}
+	switch chiakiPanel.confirmAction {
+	case psActionOptsClearPIN:
+		if err := psUpdateConsole(host, func(c *psConsole) { c.LoginPIN = "" }); err != nil {
+			ShowToast("Could not change the console — "+err.Error(), ToastKindError)
+			return
+		}
+		psPanelCancelConsoleConfirm()
+		// The Remove row is gone now; leave focus on the passcode field.
+		for i, row := range psConsoleOptsRows() {
+			if row.action == psActionOptsLoginPIN {
+				chiakiPanel.cursor = i
+				break
+			}
+		}
+		PlayActivateSound()
+		ShowToast("Saved passcode removed", ToastKindInfo)
+	case psActionOptsForget:
+		removePSConsole(host)
+		psPanelReload()
+		psPanelShowPage(psPageConsoles)
+		chiakiPanel.confirmHost = ""
+		chiakiPanel.confirmAction = psActionNone
+		PlayActivateSound()
+		ShowToast("Forgot "+c.label(), ToastKindInfo)
+	}
 }
 
 // psConsoleOptsHeader is the options page's title band: the console, where
@@ -288,21 +394,14 @@ func psPanelActivateExtra(chosen chiakiRow) {
 	case psActionOptsLoginPIN:
 		psOptsKeyboard(psEditLoginPIN, "")
 	case psActionOptsClearPIN:
-		if err := psUpdateConsole(psOptsHost, func(c *psConsole) { c.LoginPIN = "" }); err != nil {
-			ShowToast("Could not change the console — "+err.Error(), ToastKindError)
-			return
-		}
-		PlayActivateSound()
-		ShowToast("Saved passcode removed", ToastKindInfo)
+		psPanelAskConsoleConfirm(psOptsHost, psActionOptsClearPIN)
 	case psActionOptsForget:
-		c, ok := psPanelConsole(psOptsHost)
-		if !ok {
-			return
-		}
-		removePSConsole(c.Host)
-		psPanelReload()
-		psPanelShowPage(psPageConsoles)
-		ShowToast("Forgot "+c.label(), ToastKindInfo)
+		psPanelAskConsoleConfirm(psOptsHost, psActionOptsForget)
+	case psActionOptsConfirm:
+		psPanelConfirmConsoleAction()
+	case psActionOptsKeep:
+		psPanelCancelConsoleConfirm()
+		PlayBackSound()
 	case psActionOptsBack:
 		psPanelBack()
 	case psActionLastRunOpen:

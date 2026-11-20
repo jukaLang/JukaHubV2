@@ -275,6 +275,21 @@ func portMasterWhyReport(launcher string) gameDiagReport {
 			report.LogLines, report.LogPath = portLastLines(lines, 12), p
 		}
 	}
+	// PortMaster's launcher sends its output to its own log.txt once it is
+	// running: pugwash's Python traceback is there, not in JukaHub's launch
+	// log (portmaster_report.go).
+	if own := pmOwnLogPath(); own != "" {
+		if info, err := os.Stat(own); err == nil && time.Since(info.ModTime()) <= pmReportRecent {
+			lines := pmTailLines(own, 12)
+			report.Issues = append(report.Issues, pmOwnLogFindings(lines)...)
+			if len(lines) > 0 {
+				report.LogLines = append(append(report.LogLines, "— PortMaster's log.txt —"), lines...)
+				if report.LogPath == "" {
+					report.LogPath = own
+				}
+			}
+		}
+	}
 	switch {
 	case len(report.Issues) == 0 && len(report.LogLines) == 0:
 		report.Summary = "Python, bash and its launcher are in order, and PortMaster has not written a log yet."
@@ -379,7 +394,19 @@ func portWhyReport(name, script string) gameDiagReport {
 			}
 		}
 	}
-	report.Issues = append(issues, report.Issues...)
+	// The port's log can name the same cause as the checks above ("This
+	// firmware has no full bash"): once is enough.
+	have := map[string]bool{}
+	for _, is := range issues {
+		have[is.Title] = true
+	}
+	for _, is := range report.Issues {
+		if !have[is.Title] {
+			have[is.Title] = true
+			issues = append(issues, is)
+		}
+	}
+	report.Issues = issues
 	if meta.Inst != "" {
 		detail := meta.Inst
 		if readme := filepath.Join(meta.Dir, "README.md"); meta.Dir != "" && regularFile(readme) {
@@ -558,6 +585,8 @@ func portAfterExit(script string, master bool, ran time.Duration) {
 		if p := portMasterLaunchProblem(script); p != "" {
 			quick = p
 		} else if p := pmRuntimeQuickExit(); p != "" {
+			quick = p
+		} else if p := pmOwnLogQuickExit(); p != "" {
 			quick = p
 		}
 		logWarn("portmaster", "PortMaster ended after %s: %s", ran.Round(100*time.Millisecond), quick)

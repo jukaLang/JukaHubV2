@@ -43,7 +43,9 @@ package main
 // snapshots, patches and build instructions; JukaHub installs the published
 // package), touch Roms/XBOX beyond creating it, or run anything from the package.
 // Games start through the package's own launcher like every Emus/ folder; the
-// page side (the Xbox tile, its actions and the setup sheet) is hakuxpage.go.
+// page side (the Xbox tile, its actions and the setup sheet) is hakuxpage.go,
+// and the install the daily pass or an Xbox game's start makes by itself (once
+// per card) is hakux_auto.go.
 
 import (
 	"archive/zip"
@@ -1222,6 +1224,7 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		result.Current = true
 		result.Tag = installed.Tag
 		result.Launcher = hakuxLauncherIn(folder)
+		hakuxAutoRemember(p, "hakuX "+installed.Tag+" found in "+folder)
 		return result, nil
 	}
 	// The newest release is installed but files it laid down are gone: a
@@ -1434,6 +1437,9 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 	if strings.TrimSpace(p.Roms) != "" {
 		_ = os.MkdirAll(hakuxRomsDir(p.Roms), 0o755)
 	}
+	// This card has had hakuX: the daily pass never installs it by itself
+	// again, so deleting it later is respected (hakux_auto.go).
+	hakuxAutoRemember(p, "hakuX "+release.Tag+" installed")
 	result.Updated = hadInstall && !repair
 	result.Launcher = filepath.Join(p.SDRoot, hakuxOS(plan.Launcher))
 	logInfo("emulators", "hakuX %s merged into %s: %d added, %d replaced, %d unchanged, %d dropped and set aside, skipped %v, verified by %q",

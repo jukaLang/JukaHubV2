@@ -316,9 +316,12 @@ func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string 
 	return append(args, "pipe:1")
 }
 
-// musicMediaElapsed converts decoded PCM bytes into media seconds. With atempo
-// the decoder produces speed times as much audio per media second, so the byte
-// count has to be divided by the speed as well as the sample rate.
+// musicMediaElapsed converts decoded PCM bytes into media seconds. atempo=s
+// plays s seconds of the track in each second of output, so the seconds of
+// PCM (bytes over the sample rate and 4 bytes a stereo frame) are multiplied by
+// the speed. It used to divide: at 2× the position crawled at a quarter of the
+// real rate, and every speed change or resume restarted the track that far
+// back.
 func musicMediaElapsed(pcmStart float64, pcmBytes int64, rate int32, speed float64) float64 {
 	if rate <= 0 {
 		rate = 44100
@@ -326,5 +329,5 @@ func musicMediaElapsed(pcmStart float64, pcmBytes int64, rate int32, speed float
 	if speed <= 0 {
 		speed = 1
 	}
-	return pcmStart + float64(pcmBytes)/(float64(rate)*4*speed)
+	return pcmStart + float64(pcmBytes)*speed/(float64(rate)*4)
 }

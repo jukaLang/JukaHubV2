@@ -1,14 +1,8 @@
 name: CI
 
-# Every push to main and every pull request: two jobs, only what has to hold
-# on each of them. The builder scripts parse, pass ESLint and their jsdom
-# tests; the player passes go vet, staticcheck and its test suite.
-#
-# The slow checks run once a week instead (weekly.yml, or by hand from the
-# Actions tab): the race detector, the Go vulnerability scan, the cold-boot
-# budget, the builder's Chromium smoke test, the CI helper scripts' and the
-# game-audio plugin's own tests (`make test-scripts`, `make test-spatialfx`)
-# and the player's tests on native Windows.
+# Keep the per-push check short. The release workflow compiles the player on
+# main, and weekly.yml runs the larger test suites. Builder syntax and workflow
+# pins are checked here because neither is covered by the player build.
 
 on:
   push:
@@ -18,121 +12,22 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch makes the older run pointless.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  web:
-    name: Web builder checks
+  quick:
+    name: Quick source checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Scorecard's Pinned-Dependencies check, kept green by CI rather than by a
-      # weekly reminder: a tag is mutable, so `uses: owner/action@v7` lets the
-      # code CI runs change without a commit here.
-      - name: Workflow actions, images and downloads are pinned
-        # The script `make check` runs too, so a workflow edit that breaks a
-        # rule fails locally instead of on the push that follows it.
+      - name: Check workflow pins
         run: bash .github/scripts/check-workflows.sh
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-      - name: Syntax check builder scripts and the config
+      - name: Check builder syntax and config
         run: |
           for f in builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js; do
             node --check "$f"
           done
           node -e "JSON.parse(require('fs').readFileSync('player/jukaconfig.json','utf8'))"
-      - name: Browser-free smoke and security tests (jsdom)
-        working-directory: tests/web
-        run: |
-          npm ci --no-audit --no-fund
-          npm test
-      - name: Lint builder scripts (undefined names, duplicate keys, unreachable code)
-        run: >
-          tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs
-          builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
-
-  player:
-    name: Player vet, staticcheck and tests
-    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
-    # ubuntu-latest label is moving to Ubuntu 26.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: player
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: player/go.mod
-          cache-dependency-path: player/go.sum
-      - name: Install SDL2 headers
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-
-      - name: gofmt -l
-        run: |
-          unformatted=$(find . -path './vendor' -prune -o -name '*.go' -print0 | xargs -0 -r gofmt -l)
-          if [ -n "$unformatted" ]; then
-            printf 'Unformatted Go files:\n%s\n' "$unformatted"
-            exit 1
-          fi
-
-      - name: go vet
-        run: go vet ./...
-
-      - name: staticcheck
-        # The backlog is triaged in player/staticcheck.conf (unused scene
-        # helpers, player-facing error wording, and the deliberate CFB/math-rand
-        # deprecations are off); every other check fails the run. It runs even
-        # when vet failed, so one push reports both.
-        if: ${{ !cancelled() }}
-        run: |
-          # The module version (v0.8.2 = release 2026.2.2), not the release
-          # name: Scorecard counts only a full semver or commit as pinned, and
-          # go.sum's checksum database makes a semver immutable.
-          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
-          "$(go env GOPATH)/bin/staticcheck" ./...
-
-      - name: go test
-        # The suite is the lean core (persistence, security, update engine,
-        # parsers, input): no test opens a window or a renderer. The dummy
-        # drivers only keep any incidental SDL call headless.
-        if: ${{ !cancelled() }}
-        env:
-          SDL_VIDEODRIVER: dummy
-          SDL_AUDIODRIVER: dummy
-        run: |
-          set +e
-          go test ./... -count=1 -timeout 10m 2>&1 | tee "$RUNNER_TEMP/gotest.log"
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            # Put the failures where a reviewer looks: the step summary and
-            # annotations on the run, not 25 s of scrollback.
-            {
-              echo "### go test failed"
-              echo '```'
-              grep -E '^\s*(--- FAIL|FAIL|panic:)' "$RUNNER_TEMP/gotest.log" | head -60
-              # The cause, not just the test name: a failing assertion is the
-              # indented file:line: message line.
-              grep -E '^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/gotest.log" | head -40
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            # The two lines after a FAIL header are usually the test's own Logf
-            # output, not the assertion. Grepping the assertion lines instead is
-            # what makes the annotation diagnosable (a memory-test failure once
-            # reached a report showing only its warm-up logs).
-            excerpt=$(grep -E '^\s*--- FAIL|^panic:|^FAIL|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/gotest.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error title=go test failed::${excerpt}"
-            grep -E '^\s*--- FAIL' "$RUNNER_TEMP/gotest.log" | head -9 | while IFS= read -r line; do
-              echo "::error title=Failing test::${line}"
-            done
-          fi
-          exit "$status"

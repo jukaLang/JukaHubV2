@@ -27,7 +27,10 @@ package main
 // Only a program that draws its own pointer shows one (ScummVM, DOSBox, PC
 // ports, a WPE browser); others ignore the mouse, and a program whose SDL
 // finds devices only when it starts (no udev hotplug) may not see a mouse
-// that appears later. Settings → Controls → Mouse in games and apps (off by
+// that appears later. JukaHub draws no pointer here, so the ten-second hide of
+// its own pointers (pointerIdleHide, mousehide.go) cannot reach this one: the
+// mouse is relative, and only the program knows where its pointer is or
+// whether to hide it. Settings → Controls → Mouse in games and apps (off by
 // default) turns this on; it is the game-side half of mouse mode
 // (vcursor_mode.go), and the pure half — structures, ioctl numbers, the device
 // list and the engine — is vcursor_evdev.go.
@@ -113,8 +116,10 @@ func vcursorBridgeSupported() bool { return IsTrimuiDevice() }
 // game owns the screen. It mirrors the switch for the goroutine and starts
 // one per game while the switch is on; the goroutine ends with the game.
 func vcursorBridgeTick(config *Config) {
-	// A Windows-app session has the pad already (wineInputStart).
-	want := vcursorGamesEnabled(config) && vcursorBridgeSupported() && !wineInputActive()
+	// A Windows-app session has the pad already (wineInputStart); a light gun
+	// aims with it, and the chord's grab would take Start from the game
+	// (lightgun_linux.go).
+	want := vcursorGamesEnabled(config) && vcursorBridgeSupported() && !wineInputActive() && !lightgunActive()
 	mbridge.want.Store(want)
 	if !want {
 		return

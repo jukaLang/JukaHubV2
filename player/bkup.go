@@ -164,6 +164,7 @@ func bkupSources() []bkupSource {
 		{bkupCatLibrary, "data", ipStreamLibraryFileName, false},
 		{bkupCatLibrary, "data", partyFriendsFileName, false},
 		{bkupCatLibrary, "data", curationDirName, false},
+		{bkupCatLibrary, "data", tasksFileName, false},
 		{bkupCatLibrary, "patch", "db/db.json", true},
 		{bkupCatThemes, "themes", "", false},
 		{bkupCatPlugins, "plugins", "", false},
@@ -1435,6 +1436,8 @@ func bkupCurrentUserConfig(config *Config) *UserConfig {
 	if cached != nil {
 		current.Favorites, current.Chat, current.JukaLand = cached.Favorites, cached.Chat, cached.JukaLand
 	}
+	// A backup is the owner's, whoever is playing (profiles_switch.go).
+	profilesOwnerView(current)
 	return detachUserConfig(current)
 }
 
@@ -1529,6 +1532,9 @@ func bkupReloadStores(config *Config) {
 	if notes.storePath != "" {
 		notesLoad()
 	}
+	// The task lists, after the alarms their Ring-as-alarm links point at
+	// (tasks_store.go).
+	tasksReload()
 	browserBookmarks.mu.Lock()
 	browserBookmarks.loaded, browserBookmarks.list = false, nil
 	browserBookmarks.mu.Unlock()

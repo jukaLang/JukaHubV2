@@ -108,6 +108,14 @@ var (
 		"neo geo":                       "Neo Geo",
 		"arcade":                        "Arcade",
 		"mame":                          "Arcade",
+		"gc":                            "GameCube",
+		"ngc":                           "GameCube",
+		"gamecube":                      "GameCube",
+		"nintendo gamecube":             "GameCube",
+		"nintendo - gamecube":           "GameCube",
+		"wii":                           "Wii",
+		"nintendo wii":                  "Wii",
+		"nintendo - wii":                "Wii",
 	}
 )
 
@@ -705,6 +713,16 @@ func defaultCoreForSystem(system string) string {
 		return "picodrive"
 	case "DOS":
 		return "dosbox"
+	case "ScummVM":
+		return "scummvm"
+	case "TIC-80":
+		return "tic80"
+	case "EasyRPG":
+		return "easyrpg"
+	// The handheld plays these only where dolphin.go says so; elsewhere
+	// emuDesktopSystemFor answers for them first.
+	case "GameCube", "Wii":
+		return "dolphin"
 	default:
 		return ""
 	}
@@ -896,6 +914,10 @@ func addSystemBoostOptions(options map[string]string, core string, plan boostPla
 		if plan.FrameSkip > 0 {
 			options["pcsx_rearmed_frameskip"] = strconv.Itoa(plan.FrameSkip)
 		}
+	case "dolphin":
+		// Native resolution is the core's default; what costs these GPUs is
+		// the stall at each new shader (dolphin_video.go).
+		dolphinBoostOptions(options)
 	}
 }
 
@@ -1577,6 +1599,10 @@ func coreConfigDisplayName(core string) string {
 		return "mGBA"
 	case "genesis_plus_gx":
 		return "Genesis Plus GX"
+	case "dolphin":
+		// The core's library name: RetroArch's folder for its options and
+		// override (dolphin_video.go).
+		return dolphinCoreConfigName
 	default:
 		return core
 	}

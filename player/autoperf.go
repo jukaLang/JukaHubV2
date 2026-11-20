@@ -345,7 +345,9 @@ func autoPerfLaunchBegin(target string) {
 	key, label := "", ""
 	if target != "" {
 		opts := gameOptionsFor(target)
-		manual = normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0
+		// Xbox boost holds an Xbox game at the launch's top clock
+		// (xboxboost.go): a game waiting on its GPU must not read as quiet.
+		manual = normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0 || xboxBoostHolds(target)
 		key = "game:" + gameOptionsKey(target)
 		label = strings.TrimSuffix(filepath.Base(target), filepath.Ext(target))
 	}
@@ -563,7 +565,11 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 		autoPerfRestoreWrites(s.writes)
 		autoPerfRemoveMarker()
 		s.writes = nil
-		autoPerfSetLine(label + " · its own CPU setting")
+		if xboxBoostLive.Load() && class == autoPerfClassGame {
+			autoPerfSetLine(label + " · Xbox boost")
+		} else {
+			autoPerfSetLine(label + " · its own CPU setting")
+		}
 		return
 	}
 	s.dirs = autoPerfPolicyDirs()

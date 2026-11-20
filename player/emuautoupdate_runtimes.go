@@ -131,6 +131,9 @@ var emuRuntimeState struct {
 	installFails map[string]int
 	hold         time.Time
 	notes        []string
+	// fresh holds the keys whose last Install put their program on the card
+	// for the first time (emuRuntimeNoteFirstInstall).
+	fresh map[string]bool
 }
 
 // emuRuntimeStatePath is where the record lives; a variable so a test can use
@@ -320,6 +323,29 @@ func emuRuntimeLeaveNote(line string) {
 	emuRuntimeState.mu.Lock()
 	emuRuntimeState.notes = append(emuRuntimeState.notes, line)
 	emuRuntimeState.mu.Unlock()
+}
+
+// emuRuntimeNoteFirstInstall lets an updater's Install say that it put its
+// program on the card for the first time rather than bringing it forward, so
+// the pass's toast says "installed" (hakuX's one install by itself). An
+// updater that never calls it is reported as updated, as before.
+func emuRuntimeNoteFirstInstall(key string) {
+	emuRuntimeState.mu.Lock()
+	if emuRuntimeState.fresh == nil {
+		emuRuntimeState.fresh = map[string]bool{}
+	}
+	emuRuntimeState.fresh[key] = true
+	emuRuntimeState.mu.Unlock()
+}
+
+// emuRuntimeTakeFirstInstall reports whether key's last Install was a first
+// install, and forgets it.
+func emuRuntimeTakeFirstInstall(key string) bool {
+	emuRuntimeState.mu.Lock()
+	defer emuRuntimeState.mu.Unlock()
+	fresh := emuRuntimeState.fresh[key]
+	delete(emuRuntimeState.fresh, key)
+	return fresh
 }
 
 // emuRuntimeTakeNotes returns the notes left so far and forgets them.
@@ -678,9 +704,11 @@ func emuRuntimesOverdue(list []emuRuntimeUpdater, now time.Time, waited time.Dur
 
 // emuRuntimeReport is what the updaters did in one pass.
 type emuRuntimeReport struct {
-	// Updated names the builds installed ("hakuX v0.1.5"); Available, in
-	// Notify mode, the new builds not announced before.
+	// Updated names the builds installed ("hakuX v0.1.5"); Installed, those
+	// put on the card for the first time (emuRuntimeNoteFirstInstall);
+	// Available, in Notify mode, the new builds not announced before.
 	Updated   []string
+	Installed []string
 	Available []string
 	// Failed names the updaters whose install failed for the first time in a
 	// row (later failures are logged only); FailedNote is the first one's
@@ -929,11 +957,16 @@ func emuRunRuntimeUpdaters(pass context.Context, mode coreUpdateMode, list []emu
 		tokenStopped := errors.Is(installCtx.Err(), context.Canceled) && pass.Err() == nil
 		stopLink()
 		cancelInstall()
+		fresh := emuRuntimeTakeFirstInstall(u.Key)
 		switch {
 		case err == nil:
 			emuRuntimeChecked(u.Key, now)
 			emuRuntimeUpdateRecord(u.Key, func(r *emuRuntimeRecord) { r.Installed = label })
-			report.Updated = append(report.Updated, name)
+			if fresh {
+				report.Installed = append(report.Installed, name)
+			} else {
+				report.Updated = append(report.Updated, name)
+			}
 			logPatch("emulator updates: %s installed", name)
 		case errors.Is(err, errEmuUpdaterCurrent):
 			emuRuntimeChecked(u.Key, now)
@@ -1095,6 +1128,9 @@ func emuRuntimeList(names []string) string {
 // lower case so it can follow the cores' share ("" when there is no news).
 func emuRuntimeSummary(r emuRuntimeReport) string {
 	var parts []string
+	if len(r.Installed) > 0 {
+		parts = append(parts, "installed "+emuRuntimeList(r.Installed))
+	}
 	if len(r.Updated) > 0 {
 		parts = append(parts, "updated "+emuRuntimeList(r.Updated))
 	}
@@ -1125,7 +1161,7 @@ func emuAutoPassToast(core *emuInstallReport, extras emuRuntimeReport) {
 	}
 	if s := emuRuntimeSummary(extras); s != "" {
 		parts = append(parts, s)
-		updated = updated || len(extras.Updated) > 0
+		updated = updated || len(extras.Updated) > 0 || len(extras.Installed) > 0
 		if len(extras.Failed) > 0 {
 			kind = ToastKindWarning
 		}

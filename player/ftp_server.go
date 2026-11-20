@@ -653,11 +653,12 @@ func ftpRootDir() string {
 // System (boot hooks) — hold programs the device runs, and writing those over
 // a plaintext protocol would hand the network a way to run code on it.
 // PhoneDrop is where the Phone Companion saves what a phone sends
-// (companionDropDir), so a PC can collect it.
+// (companionDropDir), so a PC can collect it. VoiceMemos holds Voice Memos'
+// recordings (voicememo*.go), which a phone downloads from the Files card.
 var ftpShareNames = []string{
 	"Roms", "BIOS", "Saves", "States", "Screenshots", "Imgs", "Collections",
 	"Music", "Videos", "Movies", "Pictures", "Photos", "Images", "Books",
-	"Documents", "Downloads", "Recordings", "Media", companionDropDir,
+	"Documents", "Downloads", "Recordings", "Media", companionDropDir, "VoiceMemos",
 }
 
 const (

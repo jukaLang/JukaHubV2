@@ -158,6 +158,11 @@ func aiFindGame(title, path string) (libraryGame, bool) {
 	var best libraryGame
 	bestScore := 0
 	for _, s := range lib.Systems {
+		// A built-in game has no ROM or emulator to diagnose; its title
+		// (Tetris, Pong…) must not win over a ROM of the same name.
+		if s.Name == builtInLibrarySystem {
+			continue
+		}
 		for _, g := range s.Games {
 			if path != "" && filepath.Clean(g.Path) == filepath.Clean(path) {
 				return g, true

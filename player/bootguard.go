@@ -457,6 +457,15 @@ var bootGuardPrevExit = func() bootGuardLastExit {
 	return bootGuardReadLastExit(dir)
 }
 
+// bootGuardRescuedPID is the process whose failed update start launch.sh has
+// already undone (updrescue.go), 0 when none. A variable so tests can say so.
+var bootGuardRescuedPID = func() int {
+	if r, ok := updRescuePending(); ok {
+		return r.PID
+	}
+	return 0
+}
+
 // initBootGuard reads how the previous boot ended, decides, and records this
 // boot. main.go runs it right after SDL is up, before the config is loaded,
 // so a start that dies loading it is counted too; it needs only the Patch
@@ -495,7 +504,19 @@ func initBootGuard() {
 // given, so every rule is testable with a temp dir.
 func applyBootGuard(dir, version string, now time.Time) bootGuardVerdict {
 	prev, had := readBootGuardFile(dir)
-	v := bootGuardDecide(prev, had, version, now, bootGuardPrevCrashed(), bootGuardPrevExit())
+	crashed, exit := bootGuardPrevCrashed(), bootGuardPrevExit()
+	// The start that record is about was an update launch.sh stopped and undid
+	// (updrescue.go): settled, so it is not a failed start of the build that
+	// runs again, and it was this loop's automatic rollback.
+	if pid := bootGuardRescuedPID(); pid > 0 && had && prev.PID == pid && prev.Running {
+		prev.Running = false
+		crashed, exit = false, bootGuardLastExit{}
+		if prev.Reverts < bootGuardStreakCap {
+			prev.Reverts++
+		}
+		Log().Info("boot guard: the previous start was an update launch.sh undid; not counted as a failed start")
+	}
+	v := bootGuardDecide(prev, had, version, now, crashed, exit)
 	v.Next.Recovery = safeboot.Triggered
 	v.Next.PID = os.Getpid()
 	// Safe mode asked for by a flag, the environment or the command line is a

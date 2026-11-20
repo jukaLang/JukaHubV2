@@ -783,6 +783,7 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 	chrome := chromeTier(focusEngine.ElementIndex()) != 0
 	setHubDrawRail(renderer, c, f, rail, chrome)
 	setHubDrawPane(renderer, c, f, pane, chrome)
+	narrateSettingsFrame(c, chrome) // spoken navigation (narrate_hooks.go)
 	renderStatusBar(renderer, c)
 	if setHub.sheet.open {
 		setSheetDraw(renderer, c, &setHub.sheet)

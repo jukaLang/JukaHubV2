@@ -160,6 +160,45 @@ running.
 Background on the TSP's shared policy, the stock `cpufreq.sh` defaults and the
 2 GHz heat trade-off: <https://github.com/guiopen/tsp-optimization>.
 
+### Xbox boost
+
+An Xbox game (hakuX on the Smart Pro) or an Xbox stream (GreenOvercast, started
+from the X1 pill, Cloud Gaming or the library's Ports row) gets more than the
+launch profile: on 1 GB of RAM and four A53 cores neither has a frame to spare.
+Settings → Games & emulators → **Xbox boost** (`xboxBoost`, on by default) does
+this for that launch only:
+
+- the launch profile at full speed even with `powerProfiles` off (a
+  `powerProfileMaxFreq` cap and the game's own CPU options still apply), and
+  Automatic CPU speed stands aside, so the clock never steps down while the
+  game waits on its GPU;
+- every parked core online (`cpuN/online` reading `0`);
+- the GPU's devfreq node (a name containing `gpu` under `/sys/class/devfreq`)
+  on its `performance` governor, or with `min_freq` raised to `max_freq` where
+  it has none;
+- JukaHub's memory: its textures and byte caches are emptied before the start,
+  then the Go heap is handed back, the warm speech recognizer, the media
+  library scan and the video link prefetch stop, and the page cache is dropped
+  and compacted (every game start already stops the offline AI and the Piper
+  voice);
+- the game's process group at nice −5, ahead of background work;
+- "Hey Juka" closed for the game;
+- streams only: Wi-Fi power saving off (`iw`, else `iwconfig`), as the
+  Moonlight hand-off does.
+
+Everything is put back when the game's process group is gone, and only where
+the value is still the one written, so a launch script's own change wins. A
+marker in the temp directory lets the next start put back what a crash left.
+The log's `xbox` lines name each change (`boost on for Halo: …`, `boost off
+after 42m0s of Halo: 3 of 3 values put back`), and the Settings row shows what
+the last session got.
+
+What the boost cannot do is make hakuX itself faster. In a game, **Menu** opens
+hakuX's settings: a lower render scale (0.5× is the default) and display frame
+skip matter most, and both are kept per game ("Apply settings" and a restart
+for the scale). For a stream that stutters, pick 720p and 30 fps in
+GreenOvercast's settings.
+
 ## PortMaster audio, per launch
 
 Some ports start silent or crackly because they autodetect an SDL audio driver

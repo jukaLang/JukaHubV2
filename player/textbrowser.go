@@ -87,6 +87,7 @@ const textBrowserAutoRefreshInterval = 5 * time.Second
 var textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
 var textBrowserAutoRefreshMutex sync.Mutex
 var textBrowserRequestSequence = make(map[string]uint64)
+var textBrowserRequestCancels = make(map[string]context.CancelFunc)
 
 // browserNavigation is one top-level request. POST bodies live only for this
 // load; history, the address bar and the page cache retain just URL strings.
@@ -96,6 +97,7 @@ type browserNavigation struct {
 	Body        []byte
 	ContentType string
 	Referrer    string
+	Context     context.Context // cancels the page and its subresources on navigation or scene exit
 }
 
 // browserPageProgress publishes a usable page before its image pass finishes.
@@ -134,6 +136,22 @@ func currentBrowserPageFetcher() func(browserNavigation, uint64, ...browserPageP
 }
 
 var textBrowserRequestMutex sync.Mutex
+
+// stopTextBrowserRequest prevents a page that is still loading from filling
+// the reader again after its scene has released the page.
+func stopTextBrowserRequest(variable string) {
+	if variable == "" {
+		return
+	}
+	textBrowserRequestMutex.Lock()
+	textBrowserRequestSequence[variable]++
+	if cancel := textBrowserRequestCancels[variable]; cancel != nil {
+		cancel()
+		delete(textBrowserRequestCancels, variable)
+	}
+	textBrowserRequestMutex.Unlock()
+}
+
 var textBrowserAddressEditing bool
 var textBrowserAddressSubmitted bool
 
@@ -1202,6 +1220,10 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 	// variable: a cached page must not be replaced a second later by an older
 	// request the user already navigated away from.
 	textBrowserRequestMutex.Lock()
+	if cancel := textBrowserRequestCancels[outputVariable]; cancel != nil {
+		cancel()
+		delete(textBrowserRequestCancels, outputVariable)
+	}
 	textBrowserRequestSequence[outputVariable]++
 	requestID := textBrowserRequestSequence[outputVariable]
 	textBrowserRequestMutex.Unlock()
@@ -1256,9 +1278,26 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 	// The seam is read once, here: a load keeps the fetcher it started with even
 	// if a test swaps it while the request is still running.
 	fetch := currentBrowserPageFetcher()
+	parent := nav.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	loadCtx, cancel := context.WithCancel(parent)
+	nav.Context = loadCtx
+	textBrowserRequestMutex.Lock()
+	textBrowserRequestCancels[outputVariable] = cancel
+	textBrowserRequestMutex.Unlock()
 	browserFetches.Add(1)
 	go func(variable string, request browserNavigation, id uint64) {
 		defer browserFetches.Done()
+		defer func() {
+			textBrowserRequestMutex.Lock()
+			if textBrowserRequestSequence[variable] == id {
+				delete(textBrowserRequestCancels, variable)
+			}
+			textBrowserRequestMutex.Unlock()
+			cancel()
+		}()
 		pageURL := request.URL
 		// The fetch parses whatever the network sends — HTML, CSS, scripts —
 		// and a parser bug on one hostile or broken page must not take the
@@ -1268,14 +1307,13 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 			if r := recover(); r != nil {
 				logError("browser", "reader crashed on %s: %v\n%s", sanitizeLogURL(pageURL), r, debug.Stack())
 				textBrowserRequestMutex.Lock()
-				isCurrent := textBrowserRequestSequence[variable] == id
-				textBrowserRequestMutex.Unlock()
-				if isCurrent {
+				if textBrowserRequestSequence[variable] == id {
 					fail := brwNewFailure(brwFailOther, pageURL, "The reader hit an internal error on this page.")
 					fail.Title = "This page could not be shown"
 					brwSetFailure(variable, &fail)
 					publishCustom(variable, "This page could not be shown: the reader hit an internal error on it.")
 				}
+				textBrowserRequestMutex.Unlock()
 			}
 		}()
 		// The parsed page is drawn before its images finish downloading. A
@@ -1283,9 +1321,8 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 		// checked again in the callback, just as it is for the final page.
 		publishPartial := func(page browserPage) {
 			textBrowserRequestMutex.Lock()
-			current := textBrowserRequestSequence[variable] == id
-			textBrowserRequestMutex.Unlock()
-			if !current {
+			defer textBrowserRequestMutex.Unlock()
+			if request.Context.Err() != nil || textBrowserRequestSequence[variable] != id {
 				return
 			}
 			setBrowserLinks(variable, page.Links)
@@ -1293,46 +1330,51 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 			publishCustom(variable, page.Text)
 		}
 		page := fetch(request, scriptGen, publishPartial)
-		textBrowserRequestMutex.Lock()
-		isCurrent := textBrowserRequestSequence[variable] == id
-		textBrowserRequestMutex.Unlock()
-		if !isCurrent {
-			return
-		}
-		// A redirect that ended on a YouTube video publishes and caches
-		// nothing: the render pass plays it and puts the page back.
-		if brwQueueLanding(variable, pageURL, back, recordHistory, id, page.FinalURL) {
-			return
-		}
-		// Remember the page for Back/Forward before publishing it: the next
-		// visit to the same address is then a map lookup instead of a download.
-		if !post {
-			browserCachePage(pageURL, page)
-		}
-		// A redirect (HTTP or the page's own meta refresh) landed somewhere
-		// else. The render pass moves the address bar and the history entry
-		// there; doing it from here would race with someone typing a new
-		// address, and Back would then step through a URL that was only a hop.
-		if page.FinalURL != "" && page.FinalURL != pageURL {
-			browserRememberLandedURL(pageURL, page.FinalURL)
-			// Cache the landing URL too, so Back to the corrected entry is a map
-			// lookup instead of a second walk through the redirect.
-			if !post {
-				browserCachePage(page.FinalURL, page)
-			} else {
-				browserForgetPage(page.FinalURL)
+		published := func() bool {
+			textBrowserRequestMutex.Lock()
+			defer textBrowserRequestMutex.Unlock()
+			if request.Context.Err() != nil || textBrowserRequestSequence[variable] != id {
+				return false
 			}
+			// A redirect that ended on a YouTube video publishes and caches
+			// nothing: the render pass plays it and puts the page back.
+			if brwQueueLanding(variable, pageURL, back, recordHistory, id, page.FinalURL) {
+				return false
+			}
+			// Remember the page for Back/Forward before publishing it: the next
+			// visit to the same address is then a map lookup instead of a download.
+			if !post {
+				browserCachePage(pageURL, page)
+			}
+			// A redirect (HTTP or the page's own meta refresh) landed somewhere
+			// else. The render pass moves the address bar and the history entry
+			// there; doing it from here would race with someone typing a new
+			// address, and Back would then step through a URL that was only a hop.
+			if page.FinalURL != "" && page.FinalURL != pageURL {
+				browserRememberLandedURL(pageURL, page.FinalURL)
+				// Cache the landing URL too, so Back to the corrected entry is a map
+				// lookup instead of a second walk through the redirect.
+				if !post {
+					browserCachePage(page.FinalURL, page)
+				} else {
+					browserForgetPage(page.FinalURL)
+				}
+			}
+			setBrowserAdBlockView(variable, browserAdBlockView{
+				Site:    browserAdBlockSiteKey(page.FinalURL),
+				Blocked: page.Blocked,
+				Off:     browserAdBlockOff(page.FinalURL),
+			})
+			setBrowserLinks(variable, page.Links)
+			setBrowserDocument(variable, page.Doc)
+			// A failure draws its card (brw_offline.go); a page clears the last one.
+			brwSetFailure(variable, page.Fail)
+			publishCustom(variable, page.Text)
+			return true
+		}()
+		if !published {
+			return
 		}
-		setBrowserAdBlockView(variable, browserAdBlockView{
-			Site:    browserAdBlockSiteKey(page.FinalURL),
-			Blocked: page.Blocked,
-			Off:     browserAdBlockOff(page.FinalURL),
-		})
-		setBrowserLinks(variable, page.Links)
-		setBrowserDocument(variable, page.Doc)
-		// A failure draws its card (brw_offline.go); a page clears the last one.
-		brwSetFailure(variable, page.Fail)
-		publishCustom(variable, page.Text)
 		trophyEventN(tkAdsBlocked, int64(page.Blocked))
 		if page.Fail == nil && (recordHistory || (useCache && pageURL != back)) { // not Reload
 			trophyEvent(tkPageVisit)
@@ -1444,7 +1486,11 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	}
 	nav.URL = address
 	timeout := textBrowserFetchTimeoutFor(textBrowserPageLimitBytes())
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parent := nav.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	// The jar travels with the client, so a cookie a redirect sets is already
 	// in hand when the next hop — and the page's stylesheets and images — go
@@ -1541,6 +1587,9 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 		html = stripBlockedWebScripts(string(body), pageURL)
 		scripted = webJSRunPageFor(html, pageURL, gen, deadline)
 	}
+	if ctx.Err() != nil {
+		return browserPage{}
+	}
 	source := scripted.HTML
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
@@ -1560,10 +1609,13 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	// Inline <style> blocks can import their base sheet just like a linked
 	// stylesheet. Expand them against the page URL before the parser collects
 	// inline CSS, so each block keeps its own cascade position.
-	source = webExpandInlineCSSImports(source, pageURL)
+	source = webExpandInlineCSSImportsContext(ctx, source, pageURL)
 	// Keep linked sheets at their positions relative to <style> blocks. A late
 	// linked sheet can override an earlier block, just as it does on the web.
-	pageSheets := fetchWebStylesheetBlocks(source, pageURL)
+	pageSheets := fetchWebStylesheetBlocksContext(ctx, source, pageURL)
+	if ctx.Err() != nil {
+		return browserPage{}
+	}
 	doc := parseWebPageWithLinkedSheets(source, "", pageURL.String(), pageSheets)
 	doc.Favicon = browserFaviconURL(source, pageURL)
 	if doc.Title == "" {
@@ -1589,7 +1641,10 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	}
 	// Images load with the page: one bounded concurrent pass stores the bytes
 	// and natural sizes the reader paints from (webpage_image.go).
-	fetchWebImages(doc)
+	fetchWebImagesContext(ctx, doc)
+	if ctx.Err() != nil {
+		return browserPage{}
+	}
 	// The reader text is assembled last: the blocked count and truncation state
 	// are only final once the stylesheet and image passes have run.
 	text := browserReaderText(title, pageURL.String(), len(links), pageText,

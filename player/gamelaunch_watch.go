@@ -73,6 +73,7 @@ func gameLaunchNoteStop(cmd *exec.Cmd) {
 	if cmd == nil {
 		return
 	}
+	vfoNoteStop(cmd) // any screen child, apps too (verified_observe.go)
 	gameLaunchWatch.mu.Lock()
 	if _, ok := gameLaunchWatch.cmds[cmd]; ok {
 		gameLaunchWatch.cmds[cmd] = true
@@ -84,6 +85,7 @@ func gameLaunchNoteStop(cmd *exec.Cmd) {
 // JukaHub, for a stop that does not go through its process (RetroArch's own
 // QUIT command).
 func gameLaunchNoteStopAll() {
+	vfoNoteStopAll() // verified_observe.go
 	gameLaunchWatch.mu.Lock()
 	for cmd := range gameLaunchWatch.cmds {
 		gameLaunchWatch.cmds[cmd] = true
@@ -136,6 +138,8 @@ func gameLaunchLogStart(game libraryGame, cmd *exec.Cmd, freeMB int) {
 	if cmd == nil {
 		return
 	}
+	// The session is this game's or port's, not an app's (verified_observe.go).
+	vfoGameStarted(game, cmd)
 	pid := 0
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid

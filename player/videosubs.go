@@ -749,13 +749,11 @@ func ytdlpSubtitles(ctx context.Context, r subtitleRequest) ([]subtitleCue, stri
 	}
 	cmd := exec.CommandContext(ctx, ytDlpPath, subtitleDownloadArgs(dir, r.page, r.lang, extra)...)
 	cmd.Env = helperToolEnv(ytDlpPath)
-	// yt-dlp on the handheld is a one-file bundle: the process started here
-	// unpacks the real one and runs it as its child. Cancelling used to kill
-	// only the first, and the second went on fetching into a folder being
-	// deleted. The run now leads its own process group, and a cancel or the
-	// timeout stops all of it (as Power Tools snippets are stopped).
+	// yt-dlp is a one-file bundle: the process started here unpacks the real
+	// one and runs it as its child. Stop the whole group on POSIX and the whole
+	// tree through taskkill on Windows before removing the temp folder.
 	processGroupConfigure(cmd)
-	cmd.Cancel = func() error { return screenChildKill(cmd) }
+	cmd.Cancel = func() error { return termKillTree(cmd) }
 	cmd.WaitDelay = 3 * time.Second
 	out, runErr := cmd.CombinedOutput()
 	if runErr != nil && ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -1308,6 +1306,8 @@ func subtitleTextAt(seconds float64) string {
 
 // renderVideoSubtitles draws the active cue centred above the bottom edge.
 // bottomInset is the distance from the element's bottom to the text baseline.
+// seconds is media time (progress × duration), which videoAdvanceProgress
+// already moves at the playback speed, so cues keep to the picture at 2× too.
 func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int32, seconds float64, bottomInset int32) {
 	text := subtitleTextAt(seconds)
 	if text == "" || renderer == nil {

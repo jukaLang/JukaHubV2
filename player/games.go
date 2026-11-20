@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -56,6 +57,9 @@ var gameList = []gameEntry{
 	{name: "JukaLand", icon: "[J]", desc: "Build and explore a block world", scene: "JukaLand"},
 	// The pocket groovebox (synth.go), also a tile in the Tools hub.
 	{name: "Synth", icon: "[S]", desc: "Make beats on the groovebox", scene: synthSceneName},
+	// Klondike with undo and a saved game (solitaire*.go), also on the Apps
+	// screen.
+	{name: "Solitaire", icon: "[S]", desc: "Klondike with undo and resume", scene: solitaireSceneName},
 }
 
 var gameMenuCursor int
@@ -98,17 +102,23 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 	tw, _, _ := titleFont.SizeUTF8(title)
 	drawText(renderer, titleFont, title, (screenWidth-int32(tw))/2, 40, getAccentColor(config), textAlignLeft)
 
-	// The built-in collection fits in two rows on the 720p screen.
 	games := gameMenuEntries(config)
 	if gameMenuCursor >= len(games) {
 		gameMenuCursor = len(games) - 1
 	}
 	const gameCols = gameMenuCols
 	cardW := (screenWidth - 52 - 20*(gameCols-1)) / gameCols
-	cardH := int32(190)
 	gap := int32(20)
 	startX := (screenWidth - (cardW*gameCols + gap*(gameCols-1))) / 2
 	startY := int32(142)
+	// The cards share the height between the heading and the footer line, so
+	// a third row (nine games and more) still ends above the footer instead
+	// of running off a 720p screen at a fixed 190 px.
+	rows := int32((len(games) + gameCols - 1) / gameCols)
+	cardH := int32(190)
+	if rows > 0 {
+		cardH = min(cardH, max((screenHeight-56-startY-gap*(rows-1))/rows, 72))
+	}
 	if smallFont != nil {
 		drawText(renderer, smallFont, "Built-in games", startX, 107, ColorTextSecondary(), textAlignLeft)
 	}
@@ -127,17 +137,21 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 		}
 		fillRoundedRect(renderer, cx, cy, cardW, cardH, 12, bgColor)
 
-		// A built-in scene game (JukaLand, the Synth) shows its cover across
-		// the card, under a dark band for the name; the cover's own title
-		// band takes the place of the "Press A" hint.
+		// Every game shows its embedded cover across the card (the arcade
+		// minigames as well as JukaLand, the Synth and Solitaire;
+		// builtin_games.go), its picture without the cover's title pill. The
+		// name sits on a dark band along the bottom, so the picture above
+		// stays clear; the band takes the place of the "Press A" hint.
 		covered := false
-		if g.scene != "" {
-			if tex := builtInCoverTexture(renderer, g.scene); tex != nil {
-				covered = drawCoverFill(renderer, tex, sdl.Rect{X: cx + 4, Y: cy + 4, W: cardW - 8, H: cardH - 8})
-			}
-			if covered {
-				fillRoundedRect(renderer, cx+4, cy+4, cardW-8, 82, 0, WithAlpha(sdl.Color{R: 8, G: 12, B: 22, A: 255}, 190))
-			}
+		if tex := builtInCoverTexture(renderer, builtInMenuCover(g)); tex != nil {
+			covered = drawCoverTopFill(renderer, tex, sdl.Rect{X: cx + 4, Y: cy + 4, W: cardW - 8, H: cardH - 8}, builtInCoverArtShare)
+		}
+		textY := cy + 24 // the name's top; the description sits 32 px lower
+		if covered {
+			bandH := min(74, cardH-8)
+			bandY := cy + cardH - 4 - bandH
+			fillRoundedRect(renderer, cx+4, bandY, cardW-8, bandH, 0, WithAlpha(sdl.Color{R: 8, G: 12, B: 22, A: 255}, 200))
+			textY = bandY + 10
 		}
 
 		if focused {
@@ -161,7 +175,7 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 			if focused {
 				nameCol = getAccentColor(config)
 			}
-			drawText(renderer, bodyFont, g.name, nameX, cy+24, nameCol, textAlignLeft)
+			drawText(renderer, bodyFont, g.name, nameX, textY, nameCol, textAlignLeft)
 		}
 
 		// Description
@@ -171,11 +185,12 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 				descX, descCol = cx+20, sdl.Color{R: 214, G: 222, B: 236, A: 255}
 			}
 			desc := ellipsize(smallFont, g.desc, cardW-(descX-cx)-20)
-			drawText(renderer, smallFont, desc, descX, cy+56, descCol, textAlignLeft)
+			drawText(renderer, smallFont, desc, descX, textY+32, descCol, textAlignLeft)
 		}
 
-		// "Press A to play" hint
-		if focused && smallFont != nil && !covered {
+		// "Press A to play" hint, on a card tall enough to keep it clear of
+		// the description.
+		if focused && smallFont != nil && !covered && cardH >= 120 {
 			hint := hintSentence("Press %s to play", "A", "Play")
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, cx+cardW-int32(hw)-20, cy+cardH-32, getAccentColor(config), textAlignLeft)
@@ -207,7 +222,8 @@ func handleGamesMenuInput(event *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DOWN:
 		if gameMenuCursor+gameMenuCols < len(games) {
 			gameMenuCursor += gameMenuCols
-		} else if gameMenuCursor < gameMenuCols && len(games) > gameMenuCols {
+		} else if gameMenuCursor/gameMenuCols < (len(games)-1)/gameMenuCols {
+			// The row below is shorter: land on its last card.
 			gameMenuCursor = len(games) - 1
 		}
 		PlayNavSound()
@@ -240,7 +256,54 @@ func handleGamesMenuInput(event *sdl.KeyboardEvent, config *Config) bool {
 // open the loop waits here instead of ticking.
 var minigameWake = make(chan struct{}, 1)
 
+// minigameMu guards the arcade games' state between the UI thread (input,
+// drawing, starting a game) and that tick goroutine. Without it a gravity
+// tick could move or place a Tetris piece while a frame was drawing it, or
+// place the same piece a second time when it met a hard drop.
+var minigameMu sync.Mutex
+
+// gameStartQueued is an arcade game the library opened
+// (openBuiltInLibraryGame). It starts on the Games screen's first frame after
+// the scene fade, so Flappy's bird does not fall and Snake does not crawl
+// under the fade; gameStartQueuedAt drops a request whose switch never came.
+var (
+	gameStartQueued   gameID
+	gameStartQueuedAt uint64
+)
+
+// queueGameStart opens id on the Games screen once the switch there has
+// finished, with the cursor on its card for when the game is left.
+func queueGameStart(config *Config, id gameID) {
+	minigameMu.Lock()
+	activeGame = gameNone
+	gameOver = false
+	minigameMu.Unlock()
+	gameStartQueued, gameStartQueuedAt = id, sdl.GetTicks64()
+	for i, g := range gameMenuEntries(config) {
+		if g.scene == "" && g.id == id {
+			gameMenuCursor = i
+			break
+		}
+	}
+}
+
+// startQueuedGame runs on the Games screen's frames: a queued game starts
+// once no fade is under way.
+func startQueuedGame() {
+	if gameStartQueued == gameNone || transitionPhase != "none" {
+		return
+	}
+	id := gameStartQueued
+	gameStartQueued = gameNone
+	if sdl.GetTicks64()-gameStartQueuedAt < 5000 {
+		startGame(id)
+	}
+}
+
 func startGame(id gameID) {
+	minigameMu.Lock()
+	defer minigameMu.Unlock()
+	gameStartQueued = gameNone
 	activeGame = id
 	select {
 	case minigameWake <- struct{}{}:
@@ -276,6 +339,8 @@ func renderActiveGame(renderer *sdl.Renderer, config *Config) {
 	if activeGame == gameNone {
 		return
 	}
+	minigameMu.Lock()
+	defer minigameMu.Unlock()
 
 	// Background
 	renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
@@ -301,6 +366,8 @@ func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
 	if activeGame == gameNone {
 		return false
 	}
+	minigameMu.Lock()
+	defer minigameMu.Unlock()
 	switch event.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_q:
 		activeGame = gameNone
@@ -325,6 +392,8 @@ func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
 }
 
 func tickActiveGame() {
+	minigameMu.Lock()
+	defer minigameMu.Unlock()
 	if activeGame == gameNone || gameOver {
 		return
 	}
@@ -576,8 +645,12 @@ func initTetris() {
 	tetrisLines = 0
 	tetrisTick = 0
 	tetrisDAS = 0
-	spawnTetrisPiece()
+	// The preview comes first: spawnTetrisPiece takes it as the new piece. In
+	// the other order the first piece after start-up was an empty shape, which
+	// "fit" at every depth, so the ghost-piece loop in renderTetris never
+	// ended and the UI froze the first time Tetris opened.
 	tetrisNextPiece, tetrisNextColor = randomTetrisShape()
+	spawnTetrisPiece()
 }
 
 func randomTetrisShape() ([4][4]int, sdl.Color) {
@@ -593,10 +666,14 @@ func spawnTetrisPiece() {
 	tetrisNextPiece, tetrisNextColor = randomTetrisShape()
 }
 
+// tetrisCanPlace reports whether shape fits at (px, py). An empty shape never
+// fits: it would fit at every depth and the drop loops would never end.
 func tetrisCanPlace(shape [4][4]int, px, py int) bool {
+	cells := 0
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
 			if shape[y][x] != 0 {
+				cells++
 				bx := px + x
 				by := py + y
 				if bx < 0 || bx >= tetrisW || by >= tetrisH {
@@ -608,7 +685,7 @@ func tetrisCanPlace(shape [4][4]int, px, py int) bool {
 			}
 		}
 	}
-	return true
+	return cells > 0
 }
 
 func tetrisPlace() {
@@ -655,14 +732,46 @@ func tetrisPlace() {
 	}
 }
 
-func tetrisRotate() [4][4]int {
-	var rotated [4][4]int
+// tetrisShapeSize is the side of the square a shape turns in: 2 for O, 3 for
+// J L S T Z, 4 for I. Every shape starts in the top-left corner and turning
+// inside that square keeps it touching the square's far edge.
+func tetrisShapeSize(shape [4][4]int) int {
+	n := 0
 	for y := 0; y < 4; y++ {
 		for x := 0; x < 4; x++ {
-			rotated[x][3-y] = tetrisPiece.shape[y][x]
+			if shape[y][x] != 0 {
+				n = max(n, x+1, y+1)
+			}
+		}
+	}
+	return n
+}
+
+// tetrisRotate turns the piece a quarter clockwise inside its own square.
+// Turning the whole 4×4 grid walked the O block two columns sideways and the
+// three-wide pieces a column or more on every turn.
+func tetrisRotate() [4][4]int {
+	n := tetrisShapeSize(tetrisPiece.shape)
+	var rotated [4][4]int
+	for y := 0; y < n; y++ {
+		for x := 0; x < n; x++ {
+			rotated[x][n-1-y] = tetrisPiece.shape[y][x]
 		}
 	}
 	return rotated
+}
+
+// tetrisTryRotate turns the piece when the turn fits, nudging it up to two
+// columns away from a wall or the stack when it does not fit where it is.
+func tetrisTryRotate() {
+	rotated := tetrisRotate()
+	for _, dx := range [...]int{0, -1, 1, -2, 2} {
+		if tetrisCanPlace(rotated, tetrisPiece.x+dx, tetrisPiece.y) {
+			tetrisPiece.shape = rotated
+			tetrisPiece.x += dx
+			return
+		}
+	}
 }
 
 func handleTetrisInput(event *sdl.KeyboardEvent) bool {
@@ -681,10 +790,7 @@ func handleTetrisInput(event *sdl.KeyboardEvent) bool {
 			gameScore++
 		}
 	case sdl.K_UP:
-		rotated := tetrisRotate()
-		if tetrisCanPlace(rotated, tetrisPiece.x, tetrisPiece.y) {
-			tetrisPiece.shape = rotated
-		}
+		tetrisTryRotate()
 	case sdl.K_SPACE:
 		// Hard drop
 		for tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x, tetrisPiece.y+1) {
@@ -954,7 +1060,7 @@ func handle2048Input(event *sdl.KeyboardEvent) bool {
 		}
 		return true
 	}
-	scoreBefore := gameScore
+	before := g2048Board
 	switch event.Keysym.Sym {
 	case sdl.K_LEFT:
 		gameScore += g2048MoveLeft()
@@ -970,14 +1076,21 @@ func handle2048Input(event *sdl.KeyboardEvent) bool {
 	default:
 		return false
 	}
-	if gameScore != scoreBefore {
+	g2048AfterMove(before)
+	return true
+}
+
+// g2048AfterMove adds the new tile after a move that changed the board. It
+// used to follow only a move that scored, so a plain slide with no merge
+// brought no tile and the game ran dry after a couple of turns.
+func g2048AfterMove(before [g2048Grid][g2048Grid]int) {
+	if g2048Board != before {
 		place2048Tile()
 		PlayNavSound()
 		if !g2048HasMoves() {
 			gameOver = true
 		}
 	}
-	return true
 }
 
 var g2048Colors = map[int]sdl.Color{
@@ -1254,7 +1367,8 @@ func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		if gameMenuCursor+gameMenuCols < len(games) {
 			gameMenuCursor += gameMenuCols
-		} else if gameMenuCursor < gameMenuCols && len(games) > gameMenuCols {
+		} else if gameMenuCursor/gameMenuCols < (len(games)-1)/gameMenuCols {
+			// The row below is shorter: land on its last card.
 			gameMenuCursor = len(games) - 1
 		}
 		PlayNavSound()
@@ -1280,6 +1394,8 @@ func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
+	minigameMu.Lock()
+	defer minigameMu.Unlock()
 	// Universal game controls: B always leaves the game and returns to the
 	// game list. It used to work only on the Game Over screen, so a running
 	// game could not be exited with the back button at all.
@@ -1351,10 +1467,7 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 				gameScore++
 			}
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
-			rotated := tetrisRotate()
-			if tetrisCanPlace(rotated, tetrisPiece.x, tetrisPiece.y) {
-				tetrisPiece.shape = rotated
-			}
+			tetrisTryRotate()
 		case sdl.CONTROLLER_BUTTON_A:
 			if gameOver {
 				initTetris()
@@ -1377,7 +1490,7 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 		if gameOver {
 			return true
 		}
-		scoreBefore := gameScore
+		before := g2048Board
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 			gameScore += g2048MoveLeft()
@@ -1390,13 +1503,7 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 		default:
 			return true
 		}
-		if gameScore != scoreBefore {
-			place2048Tile()
-			PlayNavSound()
-			if !g2048HasMoves() {
-				gameOver = true
-			}
-		}
+		g2048AfterMove(before)
 	case gamePong:
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -1890,7 +1997,7 @@ func ensureGamesScene(config *Config) {
 	config.Scenes = append(config.Scenes, SceneConfig{
 		Name:        "Games",
 		Icon:        "G",
-		Description: "Snake, Tetris, 2048, Pong, Minesweeper and Flappy",
+		Description: "Snake, Tetris, 2048, Minesweeper, Solitaire and more",
 		Background:  "#0B0F17",
 	})
 }
@@ -1900,6 +2007,7 @@ func ensureGamesScene(config *Config) {
 type gamesScene struct{ sceneBase }
 
 func (gamesScene) render(r *sdl.Renderer, c *Config) bool {
+	startQueuedGame()
 	if activeGame != gameNone {
 		renderActiveGame(r, c)
 	} else {

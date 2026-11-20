@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -329,6 +331,96 @@ func TestCompanionRejectsUnpairedAPI(t *testing.T) {
 	}
 	if len(*events) != 0 {
 		t.Fatalf("unpaired request queued an event: %+v", *events)
+	}
+}
+
+// The Game Boy Printer card serves only the files the scrapbook lists, from
+// inside the scrapbook folder, behind the PIN: a crafted id or an edited list
+// reaches nothing else, and the list names no paths.
+func TestGBPrintCompanionServesOnlyScrapbookFiles(t *testing.T) {
+	root := t.TempDir()
+	prevRoot := gbpRootDir
+	gbpRootDir = func() string { return root }
+	gbpStore.mu.Lock()
+	gbpStore.loaded = false
+	gbpStore.mu.Unlock()
+	t.Cleanup(func() {
+		gbpRootDir = prevRoot
+		gbpStore.mu.Lock()
+		gbpStore.loaded, gbpStore.index = false, gbpIndex{}
+		gbpStore.mu.Unlock()
+	})
+	var pic bytes.Buffer
+	if err := png.Encode(&pic, image.NewGray(image.Rect(0, 0, 160, 16))); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		filepath.Join(root, gbpScrapbookDirName, "game-abc123", "0001.png"): pic.Bytes(),
+		filepath.Join(root, "secret.png"):                                   []byte("not for the phone"),
+	}
+	for name, data := range files {
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	index := `{"version":1,"next":5,"prints":[
+		{"id":"p1","file":"game-abc123/0001.png","game":"Pokemon Yellow","rom":"/mnt/SDCARD/Roms/GB/Yellow.gb","order":1,"w":160,"h":16},
+		{"id":"p2","file":"../secret.png","order":2},
+		{"id":"p3","file":"/etc/passwd","order":3},
+		{"id":"../p4","file":"game-abc123/0001.png","order":4}]}`
+	if err := os.WriteFile(filepath.Join(root, gbpIndexName), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := newTestCompanion(t)
+	h := srv.handler()
+	get := func(target, pin string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, companionRequest(http.MethodGet, target, pin, nil))
+		return rec
+	}
+	if rec := get("/api/gbprint/image?id=p1", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unpaired picture: status %d, want 401", rec.Code)
+	}
+	if rec := get("/api/gbprint/image?id=p1", "123456"); rec.Code != http.StatusOK ||
+		rec.Header().Get("Content-Type") != "image/png" || !bytes.Equal(rec.Body.Bytes(), pic.Bytes()) {
+		t.Fatalf("print p1: status %d, type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	for _, id := range []string{"p2", "p3", "p4", "../secret.png", "p1/../../secret.png", "%2e%2e%2fsecret.png", "/etc/passwd"} {
+		if rec := get("/api/gbprint/image?id="+id, "123456"); rec.Code == http.StatusOK || strings.Contains(rec.Body.String(), "not for the phone") {
+			t.Errorf("id %q: status %d, body %q", id, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := get("/api/gbprint/image?id=p1&scale=3", "123456"); rec.Code != http.StatusBadRequest {
+		t.Errorf("scale 3: status %d, want 400", rec.Code)
+	}
+	rec := get("/api/gbprint/image?id=p1&scale=4&dl=1", "123456")
+	if !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "attachment") {
+		t.Errorf("4x download disposition %q", rec.Header().Get("Content-Disposition"))
+	}
+	big, err := png.Decode(rec.Body)
+	if rec.Code != http.StatusOK || err != nil || big.Bounds().Dx() != 640 || big.Bounds().Dy() != 64 {
+		t.Fatalf("4x: status %d, err %v", rec.Code, err)
+	}
+	rec = get("/api/gbprint", "123456")
+	var list struct {
+		Prints []gbpCompanionPrint `json:"prints"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || len(list.Prints) != 1 || list.Prints[0].ID != "p1" {
+		t.Fatalf("list: %s", rec.Body.String())
+	}
+	if body := rec.Body.String(); strings.Contains(body, "Roms") || strings.Contains(body, "secret") || strings.Contains(body, root) {
+		t.Fatalf("the list names paths: %s", body)
+	}
+	for rel, want := range map[string]bool{
+		"game-1a2b3c/0001.png": true, "0001.png": true, "../x.png": false, "a/b/c.png": false,
+		`a\b.png`: false, ".hidden/x.png": false, "/x.png": false, "C:x.png": false, "a/./b.png": false, "a/b.txt": false,
+	} {
+		if got := gbpSafeRel(rel); got != want {
+			t.Errorf("gbpSafeRel(%q) = %v, want %v", rel, got, want)
+		}
 	}
 }
 
@@ -685,5 +777,125 @@ func TestCompanionDropRoute(t *testing.T) {
 				t.Errorf("%s: need %q (%d bytes), want %s", c.in.Name, got.Need, got.NeedBytes, c.first)
 			}
 		}
+	}
+}
+
+// A whole folder (companion_dropdir.go) is filed by what is inside it, from
+// its listing alone.
+func TestCompanionDropDirRoute(t *testing.T) {
+	gbHead := make([]byte, 0x150)
+	copy(gbHead[0x104:], rommGBLogo)
+	env := companionDropDirEnv{
+		companionDropEnv: companionDropEnv{
+			Roms: "/Roms", RomsDirs: []string{"GB", "GBA", "PS", "DOS", "Ports"},
+			BIOS: "/BIOS", Music: "/Music", Video: "/Videos", Drop: "/PhoneDrop",
+		},
+		Books: "/Books", Pictures: "/Pictures",
+	}
+	for _, c := range []struct {
+		name  string
+		paths []string
+		as    string
+		head  bool
+		kind  string
+		dir   string
+		first string // an "ask" answer's first choice ("" none), or a "need" answer's part
+	}{
+		{name: "Asimov", paths: []string{"Foundation.epub", "I, Robot.epub", "cover.jpg"}, kind: "books", dir: "/Books/Asimov"},
+		{name: "Books", paths: []string{"a.epub", "b.cbz"}, kind: "books", dir: "/Books"},
+		{name: "Abbey Road", paths: []string{"01 Come Together.flac", "02 Something.flac", "Abbey Road.cue", "Abbey Road.log", "booklet.pdf", "cover.jpg"}, kind: "music", dir: "/Music/Abbey Road"},
+		{name: "Live", paths: []string{"Live.wav", "Live.cue"}, kind: "music", dir: "/Music/Live"},
+		{name: "Holiday", paths: []string{"IMG_1.jpg", "IMG_2.heic", "IMG_3.png", "notes.txt"}, kind: "pictures", dir: "/Pictures/Holiday"},
+		{name: "Series", paths: []string{"S01/ep1.mkv", "S01/ep1.srt", "S01/ep2.mkv"}, kind: "video", dir: "/Videos/Series"},
+		{name: "Mix", paths: []string{"a.mp3", "b.mp3", "c.mp4", "d.mp4"}, kind: "ask", first: "music"},
+		{name: "Final Fantasy VII", paths: []string{"FF7 (Disc 1).cue", "FF7 (Disc 1).bin", "FF7 (Disc 2).cue", "FF7 (Disc 2).bin", "FF7.m3u"}, kind: "need", first: "head"},
+		{name: "Final Fantasy VII", paths: []string{"FF7 (Disc 1).cue", "FF7 (Disc 1).bin"}, as: "ps1", kind: "game", dir: "/Roms/PS/Final Fantasy VII"},
+		{name: "Crash (USA)", paths: []string{"Crash.chd"}, kind: "ask", first: "ps1"},
+		{name: "PS", paths: []string{"Crash.chd", "Spyro.chd"}, kind: "game", dir: "/Roms/PS"},
+		{name: "Shenmue", paths: []string{"Shenmue.gdi", "track01.bin", "track02.raw", "track03.bin"}, kind: "game", dir: "/Roms/DC/Shenmue"},
+		{name: "Homebrew", paths: []string{"a.bin", "b.bin"}, head: true, kind: "game", dir: "/Roms/GB/Homebrew"},
+		{name: "GBA", paths: []string{"Zelda.gba", "Metroid.gba"}, kind: "game", dir: "/Roms/GBA"},
+		{name: "Pokemon Hacks", paths: []string{"a.gba", "b.gba", "Imgs/a.png", "readme.txt"}, kind: "game", dir: "/Roms/GBA/Pokemon Hacks"},
+		{name: "Pocket", paths: []string{"a.gb", "b.gbc"}, kind: "game", dir: "/Roms/GB/Pocket"},
+		{name: "Mixed", paths: []string{"a.gba", "b.nes"}, kind: "ask", first: ""},
+		{name: "DOOM", paths: []string{"DOOM.EXE", "DOOM.WAD", "SETUP.EXE", "DEFAULT.CFG", "music/e1m1.mid"}, kind: "dos", dir: "/Roms/DOS/DOOM"},
+		{name: "Prince", paths: []string{"PRINCE.EXE", "dosboxPrince.conf", "DOSBOX/DOSBox.exe", "DOSBOX/SDL.dll"}, kind: "dos", dir: "/Roms/DOS/Prince"},
+		{name: "King's Quest IV", paths: []string{"SIERRA.EXE", "RESOURCE.MAP", "RESOURCE.001"}, kind: "scummvm", dir: "/Roms/SCUMMVM/King's Quest IV"},
+		{name: "Steel Sky", paths: []string{"sky.dnr", "sky.dsk", "readme.txt"}, kind: "scummvm", dir: "/Roms/SCUMMVM/Steel Sky"},
+		{name: "Celeste", paths: []string{"Celeste.sh", "celeste/port.json", "celeste/gamedata/data.bin"}, kind: "port", dir: "/PhoneDrop/Celeste"},
+		{name: "Tool", paths: []string{"tool.so", "readme.txt"}, kind: "drop", dir: "/PhoneDrop/Tool"},
+		{name: "Windows Game", paths: []string{"game.exe", "engine.dll", "data.pak"}, kind: "drop", dir: "/PhoneDrop/Windows Game"},
+		{name: "Stuff", paths: []string{"a.docx", "b.xlsx"}, kind: "drop", dir: "/PhoneDrop/Stuff"},
+		{name: "Papers", paths: []string{"a.pdf", "b.pdf"}, as: "books", kind: "books", dir: "/Books/Papers"},
+		{name: "Papers", paths: []string{"a.pdf", "b.pdf"}, as: "drop", kind: "drop", dir: "/PhoneDrop/Papers"},
+	} {
+		var listing []companionDropDirFile
+		for _, p := range c.paths {
+			listing = append(listing, companionDropDirFile{Path: p, Size: 1 << 20})
+		}
+		in := companionDropDirIn{Name: c.name, Files: companionDropDirCheck(listing), As: c.as}
+		if c.head {
+			in.Head = gbHead
+		}
+		got := companionDropDirRoute(in, env)
+		if got.Kind != c.kind || got.Dir != c.dir {
+			t.Errorf("%s: got %s %q, want %s %q", c.name, got.Kind, got.Dir, c.kind, c.dir)
+			continue
+		}
+		switch c.kind {
+		case "ask":
+			first := ""
+			if len(got.Choices) > 0 {
+				first = got.Choices[0].ID
+			}
+			if first != c.first {
+				t.Errorf("%s: choices %+v, want %q first", c.name, got.Choices, c.first)
+			}
+		case "need":
+			if got.Need != c.first || got.NeedBytes <= 0 || !strings.HasSuffix(in.Files[got.NeedFile].Rel, ".bin") {
+				t.Errorf("%s: need %q of file %d (%d bytes), want the %s of a .bin", c.name, got.Need, got.NeedFile, got.NeedBytes, c.first)
+			}
+		}
+	}
+	if got := companionDropDirSummary("3 games", []companionDropDirDone{{Name: "Asimov", Kind: "books", Count: 42, Files: 43}}); got != "3 games and the folder Asimov (42 books)" {
+		t.Errorf("summary: %q", got)
+	}
+}
+
+// A folder's relative paths stay inside the folder and are names the card's
+// FAT holds.
+func TestCompanionDropRelPath(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"Foundation.epub", "Foundation.epub"},
+		{"Disc 1/Track 01.flac", "Disc 1/Track 01.flac"},
+		{`Sub\file.txt`, "Sub/file.txt"},
+		{"./a//b/./c.txt", "a/b/c.txt"},
+		{"notes 10:15.txt", "notes 10_15.txt"},
+		{"name. /x.", "name/x"},
+		{"CON.txt", "_CON.txt"},
+		{"saves/aux", "saves/_aux"},
+		{"com1.bin", "_com1.bin"},
+		{"COM10.bin", "COM10.bin"},
+		{"../etc/passwd", ""},
+		{"a/../../b", ""},
+		{"/etc/passwd", ""},
+		{`C:\Windows\x.dll`, ""},
+		{"c:x", ""},
+		{"a\x00b", ""},
+		{"a\tb", ""},
+		{".DS_Store", ""},
+		{"__MACOSX/._a.jpg", ""},
+		{"Pics/Thumbs.db", ""},
+		{"...", ""},
+		{"", ""},
+		{strings.Repeat("d/", 12) + "f", ""},
+	} {
+		if got, _, _ := companionDropRelPath(c.in); got != c.want {
+			t.Errorf("companionDropRelPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	got := companionDropDirCheck([]companionDropDirFile{{Path: "A.txt"}, {Path: "a.txt"}, {Path: "x"}, {Path: "x/y"}, {Path: ".hidden"}})
+	if got[0].Rel != "A.txt" || got[1].Rel != "" || got[2].Rel != "" || got[3].Rel != "x/y" || got[4].Rel != "" || !got[4].Quiet {
+		t.Errorf("companionDropDirCheck: %+v", got)
 	}
 }

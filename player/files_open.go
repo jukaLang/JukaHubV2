@@ -34,6 +34,7 @@ var filesROMExtSystem = map[string]string{
 	".z64": "n64",
 	".v64": "n64",
 	".nds": "nds",
+	".pck": "godot", // a Godot game, through the Godot port (godot.go)
 }
 
 // filesROMSystem names the console a file is a game for, or "" when it is not
@@ -44,6 +45,11 @@ func filesROMSystem(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	if !romFileExtensions[ext] {
 		if _, unique := filesROMExtSystem[ext]; !unique {
+			// A .jar (or .kjx) is a phone game only in a J2ME folder
+			// (romsetup.go); anywhere else a .jar is a Java program (javarun.go).
+			if romSystemExtensions[j2meLibrarySystem][ext] && j2meInGamesFolder(path) {
+				return j2meLibrarySystem
+			}
 			return ""
 		}
 	}
@@ -99,6 +105,9 @@ func filesOpenROM(config *Config, entry FileEntry) bool {
 			showToast("Cannot start "+game.Title+": "+err.Error(), ToastError())
 			return
 		}
+		if gameLaunchWasHeld(game.Path) {
+			return // a card asks first (gamelaunch_hooks.go)
+		}
 		recordPlayed(config, path)
 		PlayActivateSound()
 		showToast("Starting "+game.Title, ToastSuccess())
@@ -116,6 +125,10 @@ func filesHasDedicatedViewer(path string) bool {
 	case isImageExtension(ext), isAudioFile(path), isMediaFile(path), hasMediaExtension(path):
 		return true
 	case ext == ".pdf" || ext == ".epub" || ext == ".sh" || ext == ".html" || ext == ".js":
+		return true
+	case javaIsFile(path):
+		// Java programs run (javarun.go); the action sheet's Edit opens a
+		// .java file's text.
 		return true
 	case feArchiveKindOf(path) != feArchiveNone:
 		// Archives open their sheet (files_extract_ui.go).

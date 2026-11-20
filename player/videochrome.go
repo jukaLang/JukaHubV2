@@ -452,12 +452,29 @@ func vcPlayButton(renderer *sdl.Renderer, r sdl.Rect, playing, focused bool) {
 	drawHomeGlyphTinted(renderer, icon, sdl.Rect{X: cx - g/2 + nudge, Y: cy - g/2, W: g, H: g}, vcHandle)
 }
 
-// vcSpeedLabel is the speed pill's text: "1×", "1.25×", "0.5×".
+// vcSpeedLabel is the speed pill's text: "1×", "1.25×", "0.5×". The speed is
+// the one the decoders really play at (SetPlaybackSpeed).
 func vcSpeedLabel(speed float64) string {
 	if speed <= 0 {
 		speed = 1
 	}
 	return strconv.FormatFloat(math.Round(speed*100)/100, 'f', -1, 64) + "×"
+}
+
+// vcSpeedText keeps the last label made by vcSpeedLabel: the pill and the
+// settings row are drawn every frame, and the text only changes with the
+// speed. Main thread.
+var vcSpeedText struct {
+	speed float64
+	label string
+}
+
+// vcSpeedLabelCached is vcSpeedLabel without a new string per frame.
+func vcSpeedLabelCached(speed float64) string {
+	if vcSpeedText.label == "" || vcSpeedText.speed != speed {
+		vcSpeedText.speed, vcSpeedText.label = speed, vcSpeedLabel(speed)
+	}
+	return vcSpeedText.label
 }
 
 // vcFormatClock is a playback time the way players write it: m:ss, or h:mm:ss
@@ -595,7 +612,8 @@ func vcDrawVolume(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy int32
 	}
 }
 
-// vcDrawSpeed is the speed pill: the current rate, pressed to step it.
+// vcDrawSpeed is the speed pill: the rate the video plays at, pressed to step
+// it (cyclePlaybackSpeed restarts both decoders at the new rate).
 func vcDrawSpeed(renderer *sdl.Renderer, font *ttf.Font, r sdl.Rect, speed float64, focused bool) {
 	if r.W <= 0 {
 		return
@@ -614,7 +632,7 @@ func vcDrawSpeed(renderer *sdl.Renderer, font *ttf.Font, r sdl.Rect, speed float
 	if font == nil {
 		return
 	}
-	label := vcSpeedLabel(speed)
+	label := vcSpeedLabelCached(speed)
 	if lw, _ := measureText(font, label); lw > r.W-12 {
 		label = ellipsize(font, label, r.W-12)
 	}

@@ -1,13 +1,11 @@
 # The slow checks, once a week rather than on every push.
 #
-# ci.yml stays at two jobs per push (builder checks; player vet, staticcheck
-# and tests). What costs more than it catches per push runs here, Mondays and
-# by hand (Actions -> Weekly checks -> Run workflow): the race detector over
-# the tests that run real goroutines, the Go vulnerability scan, fuzzing of
-# the self-updater's decoders, the
-# cold-boot budget, the builder's Chromium smoke test, the CI helper scripts',
-# the game-audio plugin's and AndroidRT's host tests, and the player built and
-# tested on native Windows (the release pipeline only cross-compiles it).
+# ci.yml only checks source syntax and workflow pins on each push. The larger
+# checks run here on Mondays or by hand (Actions -> Weekly checks -> Run
+# workflow): the race detector, staticcheck, Go vulnerability scan, updater
+# fuzzing, cold-boot budget, builder jsdom tests, ESLint and Chromium smoke
+# test, CI helper scripts, game-audio and AndroidRT host tests, and the player
+# built and tested on native Windows (the release pipeline cross-compiles it).
 # Nothing waits for this workflow; a red run means main broke something these
 # catch, so triage it like a failing check.
 name: Weekly checks
@@ -70,6 +68,12 @@ jobs:
             { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
+
+      - name: staticcheck
+        if: ${{ !cancelled() }}
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
 
   govulncheck:
     name: Go vulnerability scan
@@ -182,7 +186,7 @@ jobs:
         run: bash ./startup-bench.sh
 
   web-e2e:
-    name: Web builder smoke test (Chromium)
+    name: Web builder tests and smoke test (Chromium)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
@@ -195,6 +199,15 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: tests/e2e/package-lock.json
+      - name: Browser-free builder tests and lint
+        working-directory: .
+        run: |
+          cd tests/web
+          npm ci --no-audit --no-fund
+          npm test
+          cd ../..
+          tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs \
+            builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
       - name: Install Playwright and Chromium
         run: |
           npm ci --no-audit --no-fund

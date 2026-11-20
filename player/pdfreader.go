@@ -92,10 +92,21 @@ func pdfvEnsureScene(config *Config) {
 	})
 }
 
-// pdfvOpenDocument opens a PDF or EPUB and shows it in the reader. It reports
-// whether the reader is on its way; the scene is found by its exact name, so a
-// config without it can never send the user somewhere else.
+// pdfvOpenDocument opens a PDF or EPUB and shows it in the reader — or, with
+// Settings → "Open books with: KOReader", in KOReader (koreader.go). It
+// reports whether the book is on its way.
 func pdfvOpenDocument(config *Config, path string) bool {
+	if koreaderOpenBook(config, path) {
+		return true
+	}
+	return pdfvOpenDocumentHere(config, path)
+}
+
+// pdfvOpenDocumentHere opens a PDF or EPUB in JukaHub's own reader, whatever
+// "Open books with" says: for the places the reader was picked by name. It
+// reports whether the reader is on its way; the scene is found by its exact
+// name, so a config without it can never send the user somewhere else.
+func pdfvOpenDocumentHere(config *Config, path string) bool {
 	if config == nil || !pdfIsDocumentPath(path) {
 		return false
 	}
@@ -417,8 +428,12 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 			chips = append(chips, filesChip{ID: "text", Label: label, On: pdfvView.textMode})
 		}
 		chips = append(chips, filesChip{ID: "options", Label: "Options"})
-	} else if doc.Error != "" && filesSystemOpenAvailable() && doc.Path != "" {
-		chips = append(chips, filesChip{ID: "system", Label: "Open with Windows"})
+	} else if doc.Error != "" && doc.Path != "" {
+		if filesSystemOpenAvailable() {
+			chips = append(chips, filesChip{ID: "system", Label: "Open with Windows"})
+		}
+		// Another reader on the card may show it (openwith.go).
+		chips = append(chips, filesChip{ID: "openwith", Label: "Open with…"})
 	}
 	chips = append(chips, filesChip{ID: "back", Label: "Back"})
 	chips, toolbarX := filesDrawToolbar(renderer, config, chips, screenWidth-margin, top+4, 34)
@@ -457,6 +472,8 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 		body := doc.Error
 		if filesSystemOpenAvailable() {
 			body += " · Open with Windows is above"
+		} else if doc.Path != "" {
+			body += " · " + hintSentence("%s: Open with… another app", "Y", "Open with")
 		}
 		UIErrorState(renderer, config, view, "@warning", "This document cannot be shown", fitBody(body))
 	case paged:
@@ -493,6 +510,9 @@ func pdfvSubtitle() string {
 
 // pdfvFooterHints are the reader's keys in its current view.
 func pdfvFooterHints() []FooterHint {
+	if pdf.doc.Error != "" && pdf.doc.Path != "" {
+		return []FooterHint{{Button: "Y", Label: "Open with"}, {Button: "B", Label: "Back"}}
+	}
 	if !pdf.doc.Loaded || pdf.doc.Error != "" {
 		return []FooterHint{{Button: "B", Label: "Back"}}
 	}
@@ -735,6 +755,8 @@ func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_o, sdl.K_y, sdl.K_TAB:
 		if pdf.doc.Loaded && pdf.doc.Error == "" {
 			pdfvOpenMenu()
+		} else if pdf.doc.Error != "" && pdf.doc.Path != "" {
+			owOpenPicker(config, pdf.doc.Path, FileEntry{}, "reader")
 		}
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		goBackScene(config)
@@ -772,8 +794,9 @@ func ctrlPDFReader(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_Y:
 		if pdf.doc.Loaded && pdf.doc.Error == "" {
 			pdfvOpenMenu()
-		} else if pdf.doc.Error != "" && filesSystemOpenAvailable() {
-			filesOpenWithSystem(pdf.doc.Path)
+		} else if pdf.doc.Error != "" && pdf.doc.Path != "" {
+			// Every other way to open it, Windows' app included (openwith.go).
+			owOpenPicker(appConfig, pdf.doc.Path, FileEntry{}, "reader")
 		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		goBackScene(appConfig)

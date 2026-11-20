@@ -822,6 +822,9 @@ func partyHostFlow() {
 		ShowToast("Could not open the room: "+firstLine(err.Error()), ToastKindError)
 		return
 	}
+	// A room plays at 1× (videoSpeedRefusal): a video shared at 2× would run
+	// ahead of everyone who joins. A no-op at 1× or with nothing playing.
+	SetPlaybackSpeed(1)
 	partyScreen.model.builtAt = time.Time{}
 	partyScreen.nav.focus = "add"
 	PlaySuccessSound()
@@ -877,6 +880,9 @@ func partyJoinFlow(text string) {
 				return
 			}
 			partyScreen.nav.focus = "np"
+			// The room's video at 1×, also when it is the one already
+			// playing here (videoSpeedRefusal).
+			SetPlaybackSpeed(1)
 			PlaySuccessSound()
 			ShowToast("You are in — the room's video starts on its own", ToastKindSuccess)
 		})

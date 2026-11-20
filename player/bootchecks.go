@@ -42,6 +42,9 @@ func bootEnqueueChecks(config *Config) {
 	// The recovery notice is read here, on the main thread: the toast that
 	// consumes it runs on the main thread after the splash.
 	recovered := userConfigRecoveryNotice != ""
+	// GameCube & Wii (dolphin.go), for the goroutines that read it before any
+	// game starts — in safe mode too.
+	dolphinSyncMode(config)
 	bootEnqueueAsync("settings", func(note func(string)) error {
 		return bootCheckSettings(recovered, note)
 	})

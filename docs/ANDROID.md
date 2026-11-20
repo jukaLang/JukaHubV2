@@ -522,8 +522,10 @@ is chosen like `auto`). The first device run's `[androidrt][present] backend
   in Java (Unity, Unreal, Godot, GameMaker, LÖVE, SDL, Cocos2d-x) cannot run
   on it, and the store says so instead of offering them — with the route that
   works instead where there is one (a PortMaster build, PortMaster's GMLoader
-  for GameMaker games). JukaHub has no Java runtime and does not try to fake
-  one. Real Android apps need a full Android system: the separate GammaOS Core
+  for GameMaker games). JukaHub's own Java (Tools → Java, [JAVA.md](JAVA.md))
+  runs desktop `.jar` programs and J2ME phone games, but it cannot run an
+  APK's DEX code, and AndroidRT does not try to fake an Android Java VM. Real
+  Android apps need a full Android system: the separate GammaOS Core
   boot on the original Smart Pro, or Waydroid on Linux with a binder kernel.
   Installing OpenJDK on stock TrimUI would not execute APK DEX code or provide
   Android's app framework, package manager, graphics and system services.

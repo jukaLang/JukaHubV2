@@ -200,15 +200,18 @@ func raRemapCandidates(dir, folder, romPath string) []string {
 }
 
 // raRemapPrepare writes the game's remap for one launch and sets the keys
-// that make RetroArch load it. It returns the note the sheet shows when the
-// buttons could not be applied, "" when they were.
-func raRemapPrepare(launcher string, game libraryGame, targets []string, mode string, turbo map[string][]raScopeValue) string {
-	buttons := raRemapPreset(mode)
+// that make RetroArch load it. buttons is the Buttons choice's preset with the
+// control layout's laid over it (ctrlLayoutMergeRemap); mode names it in the
+// log. It returns the note the sheet shows when the buttons could not be
+// applied, "" when they were.
+func raRemapPrepare(launcher string, game libraryGame, targets []string, buttons map[string]int, mode string, turbo map[string][]raScopeValue) string {
 	if len(buttons) == 0 {
 		return ""
 	}
 	core := gameCoreFromLauncher(launcher, game.System)
-	folders := resetCoreFolders(core)
+	// The options folder names come first: resetCoreFolders does not know the
+	// DS and DOS cores' library names (melonDS DS, DOSBox-pure) a layout uses.
+	folders := append(append([]string(nil), raTuneCoreFolders[core]...), resetCoreFolders(core)...)
 	if len(folders) == 0 || gameResetStem(game.Path) == "" {
 		logWarn("controls", "cannot tell which core plays %s; launching with its own buttons", game.Path)
 		return "Buttons not applied last time: JukaHub could not tell the RetroArch core"

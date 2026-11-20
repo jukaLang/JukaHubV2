@@ -162,7 +162,40 @@ var (
 	// offline, artwork from the disk cache — never from the network.
 	mediaThumbQueue      = make(chan string, 48)
 	mediaThumbWorkerOnce sync.Once
+	// The Media screen marks artwork it used, so scene exit can release just
+	// those shared-cache entries. Prune keys that have left both caches on a
+	// long scrolling session; resetting the map would lose still-live images.
+	mediaThumbKeys = map[string]struct{}{}
 )
+
+const mediaThumbTrackedMax = 2048
+
+// mediaPruneThumbKeys keeps every Media key that still owns a decoded texture,
+// downloaded bytes, or a recently queued request. The shared caches already
+// bound those sets, so this bounds tracking without forgetting live images.
+// Called on the render thread, with each cache lock held only for its scan.
+func mediaPruneThumbKeys() {
+	live := make(map[string]struct{})
+	textures := getThumbnailTextures()
+	textures.mu.Lock()
+	for key := range textures.entries {
+		if _, used := mediaThumbKeys[key]; used {
+			live[key] = struct{}{}
+		}
+	}
+	textures.mu.Unlock()
+	thumbnailCacheMutex.Lock()
+	for key := range thumbnailDataCache.entries {
+		if _, used := mediaThumbKeys[key]; used {
+			live[key] = struct{}{}
+		}
+	}
+	thumbnailCacheMutex.Unlock()
+	for key := range mediaThumbAsked {
+		live[normalizeThumbnailURL(key)] = struct{}{}
+	}
+	mediaThumbKeys = live
+}
 
 // mediaWarmThumb gets an artwork key's bytes into memory in the background:
 // through the shared prefetch workers online, through mediaThumbWorker for a
@@ -224,6 +257,11 @@ func mediaDrawCardArt(renderer *sdl.Renderer, card *mediaCard, rect sdl.Rect) bo
 		if key == "" {
 			continue
 		}
+		normalized := normalizeThumbnailURL(key)
+		if len(mediaThumbKeys) >= mediaThumbTrackedMax {
+			mediaPruneThumbKeys()
+		}
+		mediaThumbKeys[normalized] = struct{}{}
 		tex := cachedThumbnailTexture(renderer, key)
 		if tex == nil {
 			continue

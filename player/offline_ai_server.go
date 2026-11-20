@@ -13,7 +13,10 @@ package main
 // It stops after offlineAIIdleStop without a question (offlineAIIdleInGame
 // after an answer while a game is open), at once when a game starts or
 // resumes (voiceReleaseForGame),
-// when available memory falls below offlineAILowWaterMB, and with JukaHub.
+// when available memory (counted as the start counts it: memKeepShort) falls
+// below offlineAILowWaterMB, when an idle one's
+// memory is wanted for something else (offlineAIServerStopIdle), and with
+// JukaHub. Too little memory to start makes room first (memfree.go).
 // The kernel kills it first if memory runs out (oom_score_adj 1000), never
 // JukaHub. A package without llama-server, or a server that will not start,
 // answers with llama-cli as before (offline_ai.go).
@@ -191,18 +194,37 @@ func offlineAIPrewarm(avail uint64, pausedGame bool) bool {
 		return false
 	}
 	if avail < need {
-		logDebug("voice", "offline AI not preloaded: %d MB free, %d MB wanted", avail, need)
+		// Not reported as loading: Piper must not count on the room. The
+		// cheap part of the free-up (memfree.go: caches, idle helpers, never
+		// the recognizer the words need, never an app) may still find it;
+		// the question itself frees the rest when it comes.
+		logDebug("voice", "offline AI not preloaded yet: %d MB free, %d MB wanted", avail, need)
+		go func() {
+			time.Sleep(offlineAIPrewarmDelay)
+			if !offlineAIPrewarmStillWanted(pausedGame) {
+				return
+			}
+			if memFreeEnsure(context.Background(), need, memFreeAIPreload, "offline AI preload") && offlineAIPrewarmStillWanted(pausedGame) {
+				offlineAIServerStart(server, model, "preload after freeing memory")
+			}
+		}()
 		return false
 	}
 	// Speech recognition loads first: the card reads one file at a time
 	// best, and its answer is needed first.
 	go func() {
 		time.Sleep(offlineAIPrewarmDelay)
-		if runningGameChildren.Load() == 0 || pausedGame && gameAssistOverlayActive() {
+		if offlineAIPrewarmStillWanted(pausedGame) {
 			offlineAIServerStart(server, model, "preload")
 		}
 	}()
 	return true
+}
+
+// offlineAIPrewarmStillWanted reports whether a preload may still start: no
+// game on screen, or the one paused under the assistant it was asked for.
+func offlineAIPrewarmStillWanted(pausedGame bool) bool {
+	return runningGameChildren.Load() == 0 || pausedGame && gameAssistOverlayActive()
 }
 
 // offlineAIReadAhead reads the model file once into the page cache, at most
@@ -489,7 +511,15 @@ func offlineAIServerAnswer(ctx context.Context, server, model, prompt string, ou
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		if offlineAIGameBlocks() || freeMemoryMB() < offlineAIStartNeedMB(model) {
+		if offlineAIGameBlocks() {
+			return false, errOfflineAIMemory
+		}
+		// Too little memory: make room first (memfree.go), refuse only when
+		// that was not enough.
+		if !memFreeEnsure(ctx, offlineAIStartNeedMB(model), memFreeAI, "offline AI") {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
 			return false, errOfflineAIMemory
 		}
 		if p = offlineAIServerStart(server, model, "question"); p == nil {
@@ -570,7 +600,10 @@ func offlineAIServerWatch() {
 		case busy:
 		case idle > limit && !loading:
 			offlineAIServerStopProc(p, "idle")
-		case freeMemoryMB() < offlineAILowWaterMB:
+		case memKeepShort(offlineAILowWaterMB):
+			// The start gate's measure (memHeadroomMB: swap credit counts), so
+			// a server swap let start is not stopped seconds later and loaded
+			// again for the next question; a hard RAM floor still stops it.
 			offlineAIServerStopProc(p, "low memory")
 		}
 	}
@@ -584,6 +617,26 @@ func offlineAIServerStop(why string) {
 	if p != nil {
 		offlineAIServerStopProc(p, why)
 	}
+}
+
+// offlineAIServerStopIdle ends a loaded server no question uses and none used
+// for memFreeHelperIdle: the free-up's step when memory is wanted for
+// something else (memfree.go). Taken under the lock, so a question cannot
+// pick it up in between. It reports whether one was stopped. Any goroutine.
+func offlineAIServerStopIdle(why string) bool {
+	offlineAIServer.mu.Lock()
+	p := offlineAIServer.p
+	if p == nil || !p.readyOK || offlineAIServer.busy > 0 || time.Since(offlineAIServer.lastUse) < memFreeHelperIdle {
+		offlineAIServer.mu.Unlock()
+		return false
+	}
+	offlineAIServer.p = nil
+	offlineAIServer.mu.Unlock()
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Kill()
+	}
+	logDebug("voice", "offline AI server stopped (%s)", why)
+	return true
 }
 
 // offlineAIServerResetFails gives a newly installed package's server its own

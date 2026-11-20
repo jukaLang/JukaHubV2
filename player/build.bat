@@ -317,7 +317,7 @@ exit /b 0
 REM ============================================================================
 REM  HELP PAGES
 REM  Settings -> About -> Controls and Quick start (helpdoc.go) embed copies of
-REM  docs\CONTROLS.md and docs\QUICK_START.md from helpdocs\, because go:embed
+REM  docs\CONTROLS.md and docs\GETTING_STARTED.md from helpdocs\, because go:embed
 REM  cannot reach ..\docs. They are refreshed (LF line endings) before every
 REM  build, so the manual on the device is the one in docs\. Without docs\
 REM  (player\ copied on its own), or when the copy fails, the committed copies
@@ -325,10 +325,10 @@ REM  are built in.
 REM ============================================================================
 :helpdocs
 if not exist "%ROOT%..\docs\CONTROLS.md" exit /b 0
-if not exist "%ROOT%..\docs\QUICK_START.md" exit /b 0
+if not exist "%ROOT%..\docs\GETTING_STARTED.md" exit /b 0
 set "JH_DOCS=%ROOT%..\docs"
 set "JH_HELPDOCS=%ROOT%helpdocs"
-%PS% -NoProfile -Command "$ErrorActionPreference='Stop'; foreach ($f in 'QUICK_START.md','CONTROLS.md') { $t = [IO.File]::ReadAllText((Join-Path $env:JH_DOCS $f)) -replace [char]13, ''; [IO.File]::WriteAllText((Join-Path $env:JH_HELPDOCS $f), $t) }" && echo [ok] help pages refreshed from docs\ || echo [warn] Could not refresh helpdocs\ from docs\ - the committed copies are built in.
+%PS% -NoProfile -Command "$ErrorActionPreference='Stop'; foreach ($f in 'GETTING_STARTED.md','CONTROLS.md') { $t = [IO.File]::ReadAllText((Join-Path $env:JH_DOCS $f)) -replace [char]13, ''; [IO.File]::WriteAllText((Join-Path $env:JH_HELPDOCS $f), $t) }" && echo [ok] help pages refreshed from docs\ || echo [warn] Could not refresh helpdocs\ from docs\ - the committed copies are built in.
 exit /b 0
 
 

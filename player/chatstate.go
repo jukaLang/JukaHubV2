@@ -524,6 +524,9 @@ func chatSceneEnter() {
 // chatSceneLeave resets what belongs to one visit.
 func chatSceneLeave() {
 	chatWasVisible = false
+	discardPendingChatImageDownloads()
+	discardPendingChatAvatarDownloads()
+	visionCacheKeepLatest()
 	chatVoiceCancel()
 	chatStopInlineTyping()
 	chatStickSpeed = 0
@@ -534,6 +537,19 @@ func chatSceneLeave() {
 		chatViews[t].dividerID = ""
 	}
 	chatDirty.Store(true)
+}
+
+// chatSceneReleaseMemory runs after the outgoing scene has faded to black.
+// The remote image viewer can outlive Chat and reads its current picture from
+// the same cache, so keep that picture until the viewer closes.
+func chatSceneReleaseMemory() {
+	if imageViewerRemote && imageViewerPath != "" {
+		keepChatViewerImage(imageViewerPath)
+	} else {
+		clearChatImageCache()
+	}
+	clearChatAvatarTextures()
+	clearChatLayoutCache()
 }
 
 // chatMarkDivider remembers the first unread message of a tab, so the divider

@@ -35,9 +35,10 @@ package main
 // when it reads ex_config the card does not have: in the copy that line is
 // skipped, and TRIMUI_EX's python3 path names the Python in use. Nothing in
 // PortMaster's folder is edited and nothing in the firmware is replaced; a
-// firmware whose bash and Python work is left as it is. A nested script that
-// a port starts by its own `#!/bin/bash` line still gets the firmware's
-// /bin/bash.
+// firmware whose bash and Python work is left as it is. A script started by
+// its own `#!/bin/bash` line gets a real bash too, in the launch's own mount
+// namespace (portmaster_binbash.go), and JukaHub's Python corrects a
+// PYSDL2_DLL_PATH that names a folder without SDL2 (portmaster_python.go).
 
 import (
 	"bytes"
@@ -94,6 +95,10 @@ type pmRuntimeCheck struct {
 	PythonPath string
 	PythonNote string
 	PythonByEx bool // TRIMUI_EX's Python, which ex_config puts on PATH
+	// BinBashOK: /bin/bash itself is a real bash, which a script's own
+	// `#!/bin/bash` line gets (portmaster_binbash.go). BinBashNote says why not.
+	BinBashOK   bool
+	BinBashNote string
 }
 
 var pmRuntime struct {
@@ -119,6 +124,17 @@ func pmRuntimeSnapshot() pmRuntimeCheck {
 	pmRuntime.mu.Lock()
 	defer pmRuntime.mu.Unlock()
 	return pmRuntime.check
+}
+
+// pmFirmwareHasNoBash reports a TrimUI whose session check found no working
+// bash anywhere on the firmware's PATH (only BusyBox's), so a script the
+// firmware itself starts runs under BusyBox (ports_env.go).
+func pmFirmwareHasNoBash() bool {
+	if !pmRuntimeApplies() {
+		return false
+	}
+	c := pmRuntimeSnapshot()
+	return c.Done && !c.BashOK && c.BashGood == ""
 }
 
 // pmRuntimeForget makes the next launch check the firmware again (after a
@@ -239,6 +255,7 @@ func pmRuntimeProbe(env []string, launcher string) pmRuntimeCheck {
 			c.BashNote += "; it is " + resolved
 		}
 	}
+	c.BinBashOK, c.BinBashNote = pmBinBashProbe(ctx, env, c)
 	switch py := pmLookPath(env, "python3"); {
 	case pmLauncherReadsExConfig(launcher) && pmExConfigPresent() && executableFile(pmExPython):
 		c.PythonOK, c.PythonByEx, c.PythonPath = true, true, pmExPython
@@ -517,6 +534,7 @@ func pmRuntimeEnv(env []string) []string {
 		if d := pmPythonBinDir(); d != "" {
 			front = append(front, d)
 			ownPython = true
+			pmPythonSiteCheck(d) // its sitecustomize.py (portmaster_python.go)
 		}
 	}
 	if len(front) > 0 {
@@ -533,9 +551,20 @@ func pmRuntimeEnv(env []string) []string {
 			set["SSL_CERT_FILE"] = pmFirmwareCA
 		}
 	}
+	sdl := ""
 	if v, _ := childEnvLookup(env, "PYSDL2_DLL_PATH"); strings.TrimSpace(v) == "" && !c.PythonByEx {
-		if d := pmSDLDir(); d != "" {
-			set["PYSDL2_DLL_PATH"] = d
+		if sdl = pmSDLDir(); sdl != "" {
+			set["PYSDL2_DLL_PATH"] = sdl
+		}
+	}
+	if ownPython {
+		// For the sitecustomize.py in JukaHub's Python: PortMaster's launcher
+		// may export PYSDL2_DLL_PATH=/usr/lib over the value above.
+		if sdl == "" {
+			sdl = pmSDLDir()
+		}
+		if sdl != "" {
+			set[pmPythonSDLEnv] = sdl
 		}
 	}
 	if dirExists(pmTrimuiLibDir) {

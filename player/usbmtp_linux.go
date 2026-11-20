@@ -223,6 +223,9 @@ func usbMtpPlatformStart(cfg usbMtpStartConfig) (*mtpServer, func(), error) {
 	if err := mtpEnsureConfigfs(); err != nil {
 		return nil, nil, err
 	}
+	// A controller-mode gadget a crashed run left bound would look like the
+	// firmware's; it goes first, and the firmware's is bound again (usbpad_linux.go).
+	usbPadClearStale()
 	mtpClearStale()
 	f := &mtpFFS{ep0: -1, in: -1, out: -1, intr: -1, done: make(chan struct{}), events: make(chan []byte, 8)}
 	if err := f.attach(cfg); err != nil {

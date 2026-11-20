@@ -206,6 +206,11 @@ func main() {
 	// limit so a 4K video + thumbnail grid cannot balloon the Go heap.
 	applyGCForDevice()
 
+	// Tools installed by an older JukaHub get their configuration rewritten
+	// (john's ~/.john/john.conf) without waiting for the next package change.
+	// Card I/O, so it runs beside the first frames rather than on them.
+	go linuxPkgRepairRuntime()
+
 	// The alarm UI renders through the scene pipeline; register its scene at
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
@@ -331,6 +336,8 @@ func main() {
 	// The reader's text zoom is a saved preference too, loaded before the first
 	// browser frame so a page opens at the size the reader left it.
 	browserZoomLoad(config)
+	// Whoever played last, and "Who is playing?" when asked for (profiles_switch.go).
+	profilesBoot(config)
 	// Push the saved mixer/backlight levels once the panel state exists, so the
 	// device comes up where Quick Settings left it. Only values the user has
 	// actually set are written, and it runs off the startup path because the
@@ -779,6 +786,9 @@ func main() {
 	// the CPU clocked down: put it back first, so the values recorded next are
 	// the firmware's and not the crashed idle screen's.
 	saverPowerRecover()
+	// So did an Xbox game that JukaHub died under (xboxboost.go): its cores,
+	// GPU and Wi-Fi go back, and the boost's exit hook is registered.
+	xboxBoostRecover()
 	// Remember the governor and ceiling the machine booted with, so the teardown
 	// can put the firmware back exactly as it was found even if a child died
 	// holding a performance profile.
@@ -853,6 +863,9 @@ func main() {
 	// below, and given a moment to delete its staging folder
 	// (files_extract.go).
 	defer feExtractShutdown()
+	// So is a ZIP being made, so its hidden .part file is deleted
+	// (files_zip.go).
+	defer feZipShutdown()
 	// A video downloading in the background is stopped on the way out too, so
 	// its yt-dlp does not outlive the app (ytdownload_bg.go).
 	defer ytdlBgShutdown()
@@ -876,6 +889,8 @@ func main() {
 	// The recovery card: the chord's recovery choices, why this launch is in
 	// safe mode, or "JukaHub closed unexpectedly" after a crash (recoverycard.go).
 	recoveryCardOpenAtBoot(config)
+	// An update that did not start was undone by launch.sh: say so (updrescue.go).
+	updRescueOpenAtBoot(config)
 
 	running := true
 	startupReported := false
@@ -939,9 +954,14 @@ func main() {
 			// Nor do the stick lights: the game gets the microphone (ledmic.go).
 			ledMicClose()
 			ledJukaTick(config, time.Now()) // Juka's lights fade out and hand back (ledjuka.go)
+			// The game has the pad: a Controller Mode link left up behind the
+			// launch stops, all buttons released, the light back (ctlmode.go).
+			ctlModeGameAway()
 			// Mouse in games and apps: a goroutine watches the pad for the
 			// Select + L1 chord while the child runs (vcursor_bridge_linux.go).
 			vcursorBridgeTick(config)
+			// A PC mouse over JukaHub's window still shows and hides (mousehide.go).
+			mouseHideTick(vcursorClock())
 			// The game assistant: another watches for Select + R2, and the
 			// overlay opens over the paused game (gameassist.go).
 			gameAssistParkedTick(config)
@@ -1019,6 +1039,7 @@ func main() {
 				break
 			}
 			applyButtonSwap(config, event)
+			startCheckInput(event) // input works, for an update's start check (startcheck.go)
 			// Asleep, and a moment after the wake: presses are dropped, so
 			// neither a pocket nor the wake press acts (powersleep.go).
 			if powerSleepDropInput(event) {
@@ -1026,6 +1047,12 @@ func main() {
 			}
 			// The startup lock takes every press while it is up (bootlock.go).
 			if bootLockEvent(config, event) {
+				continue
+			}
+			// Controller Mode forwards the pad to a PC or phone (ctlmode.go):
+			// while it does, every physical press, release and stick sample is
+			// the link's, before the quit chord, the voice orb or any screen.
+			if ctlModeEvent(event) {
 				continue
 			}
 			// Moving around, choosing and going back stir the liquid
@@ -1113,8 +1140,10 @@ func main() {
 					// SDL auto-repeats a held key. Menus want repeats for movement
 					// and text editing, but a held Enter, Space, letter or Esc must
 					// not open, toggle or step back several times. The allowlist is
-					// deliberately small; every other repeat stops here.
-					if !keyRepeatAllowed(e) {
+					// deliberately small; every other repeat stops here. An
+					// interactive Terminal session keeps them: a held key repeats
+					// in vi or nano as on any terminal (termpty_ui.go).
+					if !keyRepeatAllowed(e) && !termPtyTakesKeys() {
 						continue
 					}
 					// A ringing alarm owns the keyboard: snooze and dismiss are the
@@ -1137,6 +1166,13 @@ func main() {
 					// would have typed is dropped with it).
 					if wakeSwallowPress(wakeInputKey, int32(e.Keysym.Scancode), e.Repeat != 0) {
 						wakeSwallowedText = true
+						continue
+					}
+					// An interactive Terminal session gets every key before the
+					// global ones (F1, F2, F4, F12, Ctrl+Q …) and the clipboard
+					// chords: htop, mc and nano use them. Ctrl+Shift+Q leaves it
+					// (termpty_ui.go).
+					if termPtyKeyDown(e, config) {
 						continue
 					}
 					// An arrow or Tab step lets the focus ring bounce
@@ -1192,6 +1228,19 @@ func main() {
 					}
 					if launchFailure.open {
 						handleLaunchFailureKey(e)
+						continue
+					}
+					// "Who is playing?" owns the keys while it is up (profiles_ui.go).
+					if profilesPickerKey(e, config) {
+						wakeSwallowedText = true
+						continue
+					}
+					// "<Game> isn't ready yet" before a game starts (gameready_ui.go).
+					if gameReadyKey(e) {
+						continue
+					}
+					// A ScummVM or DOS game's controls on its first start (shelf_controls_card.go).
+					if shelfCardKey(e) {
 						continue
 					}
 					// "Which emulator?" before a game starts (emupicker.go).
@@ -1939,6 +1988,10 @@ func main() {
 				// Dragging a zoomed picture pans it (imageviewer.go); dragging a
 				// PDF page pans the page.
 				filesMouseMotion(config, mouseX, mouseY, e.State&sdl.ButtonLMask() != 0)
+				// A held press on Paint's canvas draws (osapps.go).
+				if e.State&sdl.ButtonLMask() != 0 {
+					osAppsPointerMotion(config, mouseX, mouseY)
+				}
 			case *sdl.TouchFingerEvent:
 				// A touch screen (Windows tablets and touch laptops; no TrimUI has
 				// one). SDL's touch-to-mouse is off (disableSyntheticTouchMouse): a
@@ -1971,6 +2024,11 @@ func main() {
 				}
 				// Nor does anything behind the recovery card.
 				if recoveryCard.open {
+					continue
+				}
+				// The Game Ready card scrolls; nothing behind it or the shelves'
+				// controls card does (gameready_ui.go, shelf_controls_card.go).
+				if gameReadyWheel(e.Y) || shelfCard.open {
 					continue
 				}
 				// The emulator picker's list takes the wheel (emupicker.go).
@@ -2053,6 +2111,10 @@ func main() {
 				if tbxSceneWheel(e.Y, config) {
 					continue
 				}
+				// Controller Mode's list or its open sheet (ctlmode_ui.go).
+				if ctlModeSceneWheel(e.Y, config) {
+					continue
+				}
 				if brwInfo.open && brwInfoWheel(e.Y) {
 					continue
 				}
@@ -2119,6 +2181,10 @@ func main() {
 				// Experience packs, Config and Backup & restore scroll their
 				// lists or open sheet (xpackroute.go).
 				if !virtualKeyboardActive && xpackRouteWheel(e.Y, config) {
+					continue
+				}
+				// The everyday apps: Paint zooms, the lists scroll (osapps.go).
+				if !virtualKeyboardActive && osAppsWheel(config, e.Y) {
 					continue
 				}
 				// Settings scrolls its rows (or its open list), Plugins its list.
@@ -2252,12 +2318,22 @@ func main() {
 					if e.Type == sdl.MOUSEBUTTONUP && homeTabsSheetEatRelease() {
 						continue
 					}
+					// The Game Ready card's pills, release included (gameready_ui.go).
+					if gameReadyMouse(e.Type == sdl.MOUSEBUTTONDOWN, mx, my) {
+						continue
+					}
+					if shelfCardMouseEvent(e.Type == sdl.MOUSEBUTTONDOWN, mx, my) {
+						continue
+					}
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						if recoveryCardHandleClick(mx, my, config) {
 							break
 						}
 						if launchFailure.open {
 							handleLaunchFailureMouse()
+							break
+						}
+						if profilesPickerMouse(mx, my) {
 							break
 						}
 						if handleEmuPickMouse(mx, my) {
@@ -2676,6 +2752,11 @@ func main() {
 						if tbxSceneMouse(mx, my, config) {
 							break
 						}
+						// Controller Mode's rows, buttons and question card
+						// (ctlmode_ui.go).
+						if ctlModeSceneClick(mx, my, config) {
+							break
+						}
 						// JukaLand takes clicks and taps on its world and its pause
 						// sheet (a finger's tap only ever arrives as this click).
 						if jlandSceneClick(mx, my, config) {
@@ -2684,6 +2765,11 @@ func main() {
 						// The Tools hub, Network tools and Wi-Fi pages draw their own
 						// tiles, list and sheets, so they own the taps on them.
 						if toolsScenesClick(mx, my, config) {
+							break
+						}
+						// The everyday apps draw their own pages; on Paint's canvas
+						// the press starts a stroke (osapps.go).
+						if osAppsClick(mx, my, config) {
 							break
 						}
 						// Devices, Save sync and Nearby draw their own rows and
@@ -3037,6 +3123,9 @@ func main() {
 						// A picture or PDF page drag ends; a tap that never moved
 						// toggles the viewer's controls.
 						filesMouseUp(config)
+						// A stroke or a dragged shape on Paint's canvas ends
+						// (osapps.go).
+						osAppsPointerUp(config, mx, my)
 					}
 				}
 				focusEngine.SyncSelected()
@@ -3100,6 +3189,8 @@ func main() {
 					requestAppExit()
 					continue
 				}
+				// L1 + R1 held 3 s switches narration; only noted, never taken (narrate.go).
+				narrateChordButton(e)
 				// The controller test owns every pad event, releases included: a
 				// held button is only visible if its release is seen. It reads the
 				// physical buttons, before accessibility remapping — it is a
@@ -3161,6 +3252,12 @@ func main() {
 						continue
 					}
 					if handleLaunchFailureController(e) {
+						continue
+					}
+					if gameReadyPad(e) {
+						continue
+					}
+					if shelfCardPad(e) {
 						continue
 					}
 					if handleEmuPickController(e) {
@@ -3548,8 +3645,10 @@ func main() {
 				} else if axisWakeFilter(e.Axis, e.Value) {
 					// A push that woke the screen only woke it (axisWakeFilter).
 					// The right stick is the virtual cursor's, and L2/R2 scroll
-					// under it while it is up (virtualcursor.go).
-					if !vcursorAxis(e, config) {
+					// under it while it is up (virtualcursor.go). An interactive
+					// Terminal session takes L2 (Tab) and R2 (Ctrl) first
+					// (termpty_ui.go).
+					if !vcursorAxis(e, config) && !termPtyAxis(e, config) {
 						handleControllerAxis(e, config)
 					}
 				}
@@ -3741,6 +3840,8 @@ func main() {
 		// Archive extractions report here the same way: the toast, the relisted
 		// folder and the cursor on the result (files_extract_ui.go).
 		feExtractDrain(config)
+		// And a finished ZIP (files_zip.go).
+		feZipDrain(config)
 		// Every focus ring drawn from here to Present bounces when a press moves
 		// it (homefocusglide.go, Settings → Focus bounce).
 		focusGlideFrame(config, currentSceneIndex)
@@ -4147,6 +4248,9 @@ func main() {
 		// under the emulator picker a Play row can open.
 		homeTabsProvidersRender(renderer, config)
 		renderEmuPick(renderer, config)
+		// "<Game> isn't ready yet" (gameready_ui.go), under the launch-failure card.
+		gameReadyRender(renderer, config)
+		shelfCardRender(renderer, config)
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
 		}
@@ -4222,6 +4326,8 @@ func main() {
 		// sleep's RTC wake, and the Exit card a hold asked for (powerkey.go).
 		powerKeyTick(config, false)
 		homeFocusGlide.endFrame()
+		// Spoken navigation reads the control this frame focused (narrate.go).
+		narrateEndFrame(config)
 
 		// A screen child may also have started from a queued/background action
 		// while this frame was being assembled. Never present it over the game.
@@ -4245,6 +4351,9 @@ func main() {
 			// The boot guard's health clock starts at the first frame: a session
 			// that keeps running past it is a healthy boot (bootguard.go).
 			bootGuardFirstFrame()
+			// An update on probation tells launch.sh it reached a working
+			// screen, or that it has no input (startcheck.go).
+			startCheckFirstFrame()
 			// JukaHub OS's guard runs on the same clock (jukaos_settings.go).
 			jukaosFirstFrame()
 			// Bench mode measures boot and stops before the event loop settles

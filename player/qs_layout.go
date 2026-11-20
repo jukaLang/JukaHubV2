@@ -167,6 +167,8 @@ var qsTileSpecs = [...]qsTileSpec{
 	{ID: "quiet", Kind: qsKindToggle, Toggle: qsActionQuiet, Glyph: "moon"},
 	{ID: "music", Kind: qsKindToggle, Toggle: qsActionBgMusic, Glyph: "music"},
 	{ID: "magnifier", Kind: qsKindToggle, Toggle: qsActionMagnifier, Glyph: "search"},
+	// Record screen, on a handheld that can (screenrec.go).
+	{ID: "screenrec", Kind: qsKindToggle, Toggle: qsActionScreenRec, Glyph: "video"},
 	{ID: "powermode", Kind: qsKindCycle, Cycle: qsCycleRowPowerMode, Glyph: "bolt", Size: homeTileSize{W: 2, H: 1}},
 	{ID: "lock", Kind: qsKindCycle, Cycle: qsCycleScreensaverRow, Glyph: "lock", Size: homeTileSize{W: 2, H: 1}},
 	{ID: "spatial", Kind: qsKindCycle, Cycle: qsCycleRowSpatialMode, Glyph: "radar", Size: homeTileSize{W: 2, H: 1}},
@@ -181,6 +183,10 @@ var qsTileSpecs = [...]qsTileSpec{
 	{ID: "btdevices", Kind: qsKindLink, Link: qsLinkBluetooth, Glyph: "devices"},
 	{ID: "ledstyle", Kind: qsKindLink, Link: qsLinkLEDPanel, Glyph: "palette"},
 	{ID: "legend", Kind: qsKindLink, Link: qsLinkControls, Glyph: "gamepad"},
+	// The Stopwatch app, its line the running clock (stopwatch.go).
+	{ID: "stopwatch", Kind: qsKindLink, Link: qsLinkStopwatch, Glyph: "stopwatch"},
+	// Controller Mode's page (ctlmode_ui.go).
+	{ID: "ctlmode", Kind: qsKindLink, Link: qsLinkControllerMode, Glyph: "gamepad"},
 	{ID: "closeall", Kind: qsKindLink, Link: qsLinkCloseAll, Glyph: "close"},
 	{ID: "power", Kind: qsKindLink, Link: qsLinkPower, Glyph: "power"},
 }

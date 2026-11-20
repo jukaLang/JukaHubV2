@@ -60,9 +60,15 @@ func deviceScreenProfileFor(device DeviceModel) (deviceScreenProfile, bool) {
 }
 
 // applyDeviceUIProfile applies the detected device's canvas. It is a no-op on
-// development builds and unknown hardware.
+// development builds and unknown hardware. A 4:3 model whose screen is 16:9
+// at start (a TV on the Brick Pro's USB-C port) gets the wide canvas instead
+// (tvmode.go); that choice is made once, so a hot reload keeps it.
 func applyDeviceUIProfile(config *Config) bool {
-	return applyUIProfileForDevice(config, DetectDevice())
+	device := DetectDevice()
+	if profile, label, ok := tvModeStartProfile(config, device); ok {
+		return applyScreenProfile(config, profile, label)
+	}
+	return applyUIProfileForDevice(config, device)
 }
 
 // applyUIProfileForDevice is the testable core of applyDeviceUIProfile.

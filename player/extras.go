@@ -655,6 +655,10 @@ func sceneDisplayName(name string) string {
 	if label := xpackDisplayName(name); label != "" {
 		return label
 	}
+	// The everyday apps ("VoiceMemos" is Voice Memos; osapps.go).
+	if label := osAppsDisplayName(name); label != "" {
+		return label
+	}
 	switch name {
 	case "FileExplorer":
 		return "Files"
@@ -730,6 +734,8 @@ func sceneDisplayName(name string) string {
 		return "Voice command"
 	case vscSceneName:
 		return "Voice shortcuts"
+	case ctlModeSceneName:
+		return "Controller Mode"
 	default:
 		return name
 	}
@@ -857,6 +863,8 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, chipFont, label, warn, x+pad, y+(sh-int32(chipFont.Height()))/2)
 		headerTextW += SpaceSM + w
 	}
+	// Who is playing, once there is more than one profile (profiles_ui.go).
+	headerTextW += profilesDrawHeaderChip(renderer, config, StatusBarMargin+headerTextW+SpaceSM, barH)
 
 	// Right side of the bar: the status cluster (brightness, volume,
 	// Bluetooth, network, weather, time, battery, the chip) and the corner's
@@ -1183,6 +1191,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	if hints, ok := battGraphFooterHints(scene.Name); ok {
 		return hints
 	}
+	// The Printer scrapbook: its grid, big view or delete question (gbprinter_ui.go).
+	if hints, ok := gbpFooterHints(scene.Name); ok {
+		return hints
+	}
 	// Settings and Plugins name what the focused row or button does
 	// (setui.go, plugui.go).
 	if hints, ok := setFooterHints(scene); ok {
@@ -1196,6 +1208,11 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	// Experience packs, Config and Backup & restore follow their focus, their
 	// tab and their open sheet (xpackroute.go).
 	if hints, ok := xpackRouteFooterHints(scene); ok {
+		return hints
+	}
+	// The everyday apps (Paint, Voice Memos, Solitaire, Tasks, Stopwatch)
+	// follow their tool, sheet or recording (osapps.go).
+	if hints, ok := osAppsFooterHints(scene.Name); ok {
 		return hints
 	}
 	// The File Explorer's B binding climbs the directory tree, so it is
@@ -1394,6 +1411,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	case vscSceneName:
 		// Voice shortcuts follows its step and its focus (voiceshortcuts_ui.go).
 		hints = vscFooterHints(config)
+	case ctlModeSceneName:
+		// Controller Mode follows its face: the way back while forwarding, a
+		// question's answers, the focused control (ctlmode_ui.go).
+		hints = ctlModeFooterHints(config)
 	}
 	return hints
 }
@@ -1544,6 +1565,7 @@ func sameFooterHints(a, b []FooterHint) bool {
 }
 
 func cachedFooterPlan(config *Config, hints []FooterHint, avail int32) footerPlan {
+	narrateFooterHints(hints) // what A does, for spoken navigation (narrate.go)
 	font := getFontSized(config, "small", footerHintSize)
 	vocab, remap, language := hintVocabNow(), hintRemapNow.Load(), uiLanguageCode()
 	c := &footerLayoutCache
@@ -1573,6 +1595,7 @@ func cachedFooterPlan(config *Config, hints []FooterHint, avail int32) footerPla
 // hint row inside avail pixels, dropping trailing hints only if even the
 // smallest type does not fit.
 func planFooterHints(config *Config, hints []FooterHint, avail int32) footerPlan {
+	narrateFooterHints(hints) // what A does, for spoken navigation (narrate.go)
 	// Home's spacing first (18px between groups, a 6px pad either side of the
 	// button name, 7px to the label), then a pixel smaller and tighter at each
 	// step. Every candidate is opened at its design size through getFontSized,
@@ -2026,6 +2049,8 @@ func saveUserConfigFile(dir string, user *UserConfig, sections bool) {
 		userConfigCache.Chat = userCopy.Chat
 		userConfigCache.JukaLand = userCopy.JukaLand
 	}
+	// While someone else plays, the file stays the owner's (profiles_switch.go).
+	profilesFilterUserConfig(&userCopy, sections)
 	data, err := json.MarshalIndent(userCopy, "", "  ")
 	if err != nil {
 		logWarn("extras", "saveUserConfig: marshal error: %v", err)
@@ -2190,6 +2215,8 @@ func saveConfig(config *Config) {
 	// geometry back before anything is marshalled and re-apply it afterwards, so
 	// a save never writes the generated layout into jukaconfig.json.
 	defer menuTilesDetachForSave(config)()
+	// Likewise the Recordings page's in-memory recorder button (appcenter_open.go).
+	defer acRecordingsDetachForSave(config)()
 	saved := *config
 	saved.SchemaVersion = ConfigSchemaVersion
 	saved.Variables = config.Variables

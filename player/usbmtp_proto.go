@@ -1463,6 +1463,7 @@ func (s *mtpServer) opDelete(c mtpCmd) (uint16, []uint32, error) {
 		}
 	}
 	s.forget(c.p[0])
+	libIndexNoteChange(path) // the library drops it (libindex.go)
 	return mtpRespOK, nil, nil
 }
 
@@ -1613,6 +1614,7 @@ func (s *mtpServer) opSendObject(c mtpCmd) (uint16, []uint32, error) {
 	if !p.mod.IsZero() {
 		_ = os.Chtimes(path, p.mod, p.mod)
 	}
+	libIndexNoteChange(path) // a game copied in shows in the library (libindex.go)
 	return mtpRespOK, nil, nil
 }
 

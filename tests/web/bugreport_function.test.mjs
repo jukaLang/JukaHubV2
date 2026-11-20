@@ -85,6 +85,20 @@ test('a valid report becomes an issue and the device gets its number', async () 
   }
 });
 
+test('the filed issue names the optional update channel', async () => {
+  const beta = report({ channel: 'beta' });
+  assert.equal(validateReport(beta), '');
+  const c = collector({}, [NOT_FOUND, CREATED]);
+  assert.equal((await c.handle(post(beta), at('203.0.113.9'))).status, 201);
+  const filed = JSON.parse(c.calls[1].init.body);
+  assert.ok(filed.body.includes('| JukaHub | 2026-11-01 (JukaHub-20261101000000) · Beta channel |'));
+
+  assert.ok(buildIssue(report({ channel: 'stable' })).body.includes('· Stable channel |'));
+  assert.ok(!buildIssue(report({ channel: undefined })).body.includes(' channel |'));
+  assert.equal(validateReport(report({ channel: 'x'.repeat(17) })), 'channel is too long');
+  assert.equal(validateReport(report({ channel: 42 })), 'channel is not text');
+});
+
 test('opt-in diagnostics become an informational issue with separate labels', async () => {
   const info = report({
     kind: 'anonymous_diagnostics', category: 'other', title: 'Anonymous device diagnostics',

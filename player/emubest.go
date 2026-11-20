@@ -227,8 +227,19 @@ var emuBestTable = []emuBestSystem{
 			emuBestRA("PicoDrive (RetroArch)", "picodrive"),
 		},
 	},
-	{System: "GameCube", Desktop: []emuBestCandidate{emuBestSA("Dolphin", "Dolphin", "dolphin")}},
-	{System: "Wii", Desktop: []emuBestCandidate{emuBestSA("Dolphin", "Dolphin", "dolphin")}},
+	// The handheld plays GameCube and Wii only where dolphin.go says so: in
+	// the Dolphin core JukaHub sets up (its save slots, Continue and speed
+	// settings), else in a standalone Dolphin someone put on the card.
+	{
+		System:   "GameCube",
+		Handheld: []emuBestCandidate{emuBestRA("Dolphin (RetroArch)", "dolphin"), emuBestSA("Dolphin", "", "dolphin")},
+		Desktop:  []emuBestCandidate{emuBestSA("Dolphin", "Dolphin", "dolphin")},
+	},
+	{
+		System:   "Wii",
+		Handheld: []emuBestCandidate{emuBestRA("Dolphin (RetroArch)", "dolphin"), emuBestSA("Dolphin", "", "dolphin")},
+		Desktop:  []emuBestCandidate{emuBestSA("Dolphin", "Dolphin", "dolphin")},
+	},
 	{System: "PlayStation 2", Desktop: []emuBestCandidate{emuBestSA("PCSX2", "PCSX2", "pcsx2")}},
 }
 

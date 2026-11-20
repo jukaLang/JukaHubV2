@@ -307,6 +307,9 @@ func bgmQuietReason() string {
 		return "the screen is asleep or busy"
 	case time.Since(time.Unix(0, synthLastSeen.Load())) < synthIdleStop:
 		return "the Synth is open"
+	case voiceMemoHoldsAudio():
+		// A memo records (the microphone would hear it) or plays (voicememo_play.go).
+		return "a voice memo is recording or playing"
 	case windowMinimised():
 		return "JukaHub is minimised"
 	}
@@ -833,14 +836,18 @@ func bgmLibraryTracks() []string {
 	var out []string
 	mlibState.mu.Lock()
 	for _, it := range mlibState.items {
-		if !it.Video && !it.Book && isAudioFile(it.Path) {
+		// Game soundtracks loop for ever without the player's song lengths
+		// (chiptune.go): not for the menu-music shuffle.
+		if !it.Video && !it.Book && isAudioFile(it.Path) && !chiptuneHandles(it.Path) {
 			out = append(out, it.Path)
 		}
 	}
 	mlibState.mu.Unlock()
 	if len(out) == 0 {
 		for _, f := range audioFilesIn(downloadsMusicDir()) {
-			out = append(out, f.Path)
+			if !chiptuneHandles(f.Path) {
+				out = append(out, f.Path)
+			}
 		}
 	}
 	return out
@@ -882,7 +889,7 @@ func bgmSelectedTracks(path string) ([]string, string) {
 			}
 			return nil
 		}
-		if entry.Type().IsRegular() && isAudioFile(p) {
+		if entry.Type().IsRegular() && isAudioFile(p) && !chiptuneHandles(p) {
 			tracks = append(tracks, p)
 		}
 		return nil

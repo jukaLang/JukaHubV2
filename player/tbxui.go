@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName}
+var tbxSceneNames = [...]string{partySceneName, pmodeSceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, usbPadSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName, javaSceneName, sdMoveSceneName, nasSceneName, acSceneName, verifiedSceneName, devCheckSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -123,6 +123,8 @@ func tbxDisplayName(name string) string {
 	switch name {
 	case partySceneName:
 		return "Watch Party"
+	case pmodeSceneName:
+		return "Party Mode"
 	case chatVoiceSceneName:
 		return "Voice Channel"
 	case tbxSceneName:
@@ -137,6 +139,16 @@ func tbxDisplayName(name string) string {
 		return "RomM"
 	case usbOtgSceneName:
 		return "USB & OTG"
+	case usbPadSceneName:
+		return "USB controller"
+	case wasm4CartsSceneName:
+		return wasm4CartsEntryName
+	case chip8ShelfSceneName:
+		return chip8ShelfEntryName
+	case chip8SceneName:
+		return "CHIP-8"
+	case gbpSceneName:
+		return "Printer scrapbook"
 	case batteryCalSceneName:
 		return "Battery calibration"
 	case hotspotSceneName:
@@ -147,6 +159,18 @@ func tbxDisplayName(name string) string {
 		return "Mail"
 	case linuxPkgSceneName:
 		return "Linux packages"
+	case javaSceneName:
+		return "Java"
+	case sdMoveSceneName:
+		return "Move to a new SD card"
+	case nasSceneName:
+		return "Network drives"
+	case acSceneName:
+		return "App Center"
+	case verifiedSceneName:
+		return "Tested on this device"
+	case devCheckSceneName:
+		return "Device check"
 	}
 	return ""
 }
@@ -1271,6 +1295,7 @@ func tbxRenderSheet(renderer *sdl.Renderer, config *Config) {
 	if renderer == nil || !tbxSheetVisible(config) {
 		return
 	}
+	narrateSheet() // spoken navigation (narrate_hooks.go)
 	fonts, ok := tbxLoadFonts(config)
 	if !ok {
 		return
@@ -1429,6 +1454,8 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 	switch name {
 	case partySceneName:
 		return partySceneClick(mx, my, config)
+	case pmodeSceneName:
+		return pmodeSceneClick(mx, my, config)
 	case chatVoiceSceneName:
 		return chatVoiceSceneClick(mx, my, config)
 	case tbxSceneName:
@@ -1443,6 +1470,8 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return rommCloudClick(mx, my, config)
 	case usbOtgSceneName:
 		return usbOtgSceneClick(mx, my, config)
+	case usbPadSceneName:
+		return usbPadSceneClick(mx, my, config)
 	case batteryCalSceneName:
 		return batteryCalSceneClick(mx, my, config)
 	case hotspotSceneName:
@@ -1453,6 +1482,18 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return mailSceneClick(mx, my, config)
 	case linuxPkgSceneName:
 		return linuxPkgSceneClick(mx, my, config)
+	case javaSceneName:
+		return javaSceneClick(mx, my, config)
+	case sdMoveSceneName:
+		return sdMoveSceneClick(mx, my, config)
+	case nasSceneName:
+		return nasSceneClick(mx, my, config)
+	case acSceneName:
+		return acSceneClick(mx, my, config)
+	case verifiedSceneName:
+		return verifiedPageClick(mx, my, config)
+	case devCheckSceneName:
+		return devCheckSceneClick(mx, my, config)
 	}
 	return false
 }
@@ -1483,6 +1524,8 @@ func tbxSceneNav(name string) *tbxNav {
 	switch name {
 	case partySceneName:
 		return &partyScreen.nav
+	case pmodeSceneName:
+		return &pmodeScreen.nav
 	case chatVoiceSceneName:
 		return &chatVoiceScreen.nav
 	case tbxSceneName:
@@ -1497,6 +1540,8 @@ func tbxSceneNav(name string) *tbxNav {
 		return &rommCloud.nav
 	case usbOtgSceneName:
 		return &usbOtgScreen.nav
+	case usbPadSceneName:
+		return &usbPadScreen.nav
 	case batteryCalSceneName:
 		return &batteryCalScreen.nav
 	case hotspotSceneName:
@@ -1507,6 +1552,18 @@ func tbxSceneNav(name string) *tbxNav {
 		return mailActiveNav()
 	case linuxPkgSceneName:
 		return &linuxPkgScreen.nav
+	case javaSceneName:
+		return &javaScreen.nav
+	case sdMoveSceneName:
+		return &sdMoveScreen.nav
+	case nasSceneName:
+		return &nasScreen.nav
+	case acSceneName:
+		return &acScreen.nav
+	case verifiedSceneName:
+		return verifiedPageNav()
+	case devCheckSceneName:
+		return &devCheckScreen.nav
 	}
 	return nil
 }
@@ -1523,6 +1580,8 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 	switch name {
 	case partySceneName:
 		return partySceneHints(), true
+	case pmodeSceneName:
+		return pmodeSceneHints(), true
 	case chatVoiceSceneName:
 		return chatVoiceSceneHints(), true
 	case tbxSceneName:
@@ -1537,6 +1596,8 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return rommCloudHints(), true
 	case usbOtgSceneName:
 		return usbOtgSceneHints(), true
+	case usbPadSceneName:
+		return usbPadSceneHints(), true
 	case batteryCalSceneName:
 		return batteryCalSceneHints(), true
 	case hotspotSceneName:
@@ -1547,6 +1608,18 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return mailSceneHints(), true
 	case linuxPkgSceneName:
 		return linuxPkgSceneHints(), true
+	case javaSceneName:
+		return javaSceneHints(), true
+	case sdMoveSceneName:
+		return sdMoveSceneHints(), true
+	case nasSceneName:
+		return nasSceneHints(), true
+	case acSceneName:
+		return acSceneHints(), true
+	case verifiedSceneName:
+		return verifiedPageHints(), true
+	case devCheckSceneName:
+		return devCheckSceneHints(), true
 	}
 	return nil, false
 }

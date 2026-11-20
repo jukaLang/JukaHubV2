@@ -85,6 +85,10 @@ var trophyQueue struct {
 
 // trophyEnqueue adds a celebration. The platinum always gets its own card.
 func trophyEnqueue(t trophyToast) {
+	// A Guest's trophies are thrown away with the session (profiles_store.go).
+	if profilesGuestActive() {
+		return
+	}
 	trophyQueue.mu.Lock()
 	defer trophyQueue.mu.Unlock()
 	if t.tier == trophyPlatinum || len(trophyQueue.items) < trophyQueueCap {

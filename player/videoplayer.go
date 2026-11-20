@@ -299,6 +299,8 @@ func skipPlayback(config *Config, delta int) bool {
 		}
 		return true
 	}
+	// The next video of the same list keeps the speed (videoSpeedMem).
+	videoSpeedCarryTo(playbackQueue.videos[next].GetURL())
 	if playbackQueue.shorts {
 		// A short belongs to the feed: startShortAt keeps auto-advance armed.
 		startShortAt(config, next)
@@ -309,12 +311,13 @@ func skipPlayback(config *Config, delta int) bool {
 	return true
 }
 
-// cyclePlaybackSpeed steps to the next preset speed.
+// cyclePlaybackSpeed steps to the next preset speed, wrapping from 2× back to
+// 0.5×. The change is real: both decoders restart at the new speed
+// (SetPlaybackSpeed).
 func cyclePlaybackSpeed() {
-	speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
 	current := snapshotVideoState().speed
-	next := speeds[0]
-	for _, s := range speeds {
+	next := videoSpeedSteps[0]
+	for _, s := range videoSpeedSteps {
 		if s > current {
 			next = s
 			break
@@ -458,6 +461,10 @@ type playbackSession struct {
 	ended atomic.Bool
 	// av keeps the picture on the sound (avsync.go).
 	av avSync
+	// speed is the rate both decoders play at (1 = normal). It is set before
+	// the decoders start and never changes after: a new speed is a new
+	// session (videoRestartAt). Read by the decoders only.
+	speed float64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -505,7 +512,20 @@ func mediaReleaseRetiredFrames() {
 	}
 }
 
-func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSession {
+func beginPlaybackSession(source, pageURL string, tempFile bool, speed float64) *playbackSession {
+	return beginPlaybackSessionAfter(nil, source, pageURL, tempFile, speed)
+}
+
+// beginPlaybackSessionAfter is beginPlaybackSession for a restart of after (a
+// seek, a speed change, videoRestartAt): it starts nothing and returns nil when
+// after is no longer the session on screen. A decoder goroutine restarts its own
+// session (the lighter decode, an ffmpeg without the speed filters) while the
+// main thread may stop the player or start another video meanwhile; the old
+// video must not come back over that. A nil after replaces whatever plays.
+func beginPlaybackSessionAfter(after *playbackSession, source, pageURL string, tempFile bool, speed float64) *playbackSession {
+	if after != nil && !after.isCurrent() {
+		return nil
+	}
 	// A new session (a seek, the next video) supersedes an end the render
 	// thread has not handled yet: that flag belongs to the session being
 	// replaced and must not stop this one.
@@ -516,8 +536,13 @@ func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSessio
 
 	playbackMu.Lock()
 	prev := playbackCurrent
+	if after != nil && prev != after {
+		// Replaced or stopped while the progress above was saved.
+		playbackMu.Unlock()
+		return nil
+	}
 	playbackSeq++
-	s := &playbackSession{id: playbackSeq, source: source, pageURL: pageURL, tempFile: tempFile, local: local}
+	s := &playbackSession{id: playbackSeq, source: source, pageURL: pageURL, tempFile: tempFile, local: local, speed: avSpeedFactor(speed)}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	playbackCurrent = s
 	playbackMu.Unlock()
@@ -1011,12 +1036,44 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 	return fields.width, fields.height, fields.duration, fps
 }
 
+// videoLagging reports whether the picture has stayed over a second behind the
+// sound for three seconds without catching up: a decoder that cannot keep up,
+// not a hiccup (a slow keyframe, the UI busy) or a slow start (the sound of a
+// seek often plays before the picture's first frame) that the picture catches
+// up from by itself. since is when the current run of late frames began and
+// from how late the picture was then; decoder goroutine.
+func videoLagging(clock *avSync, since *time.Time, from *float64, now time.Time) bool {
+	if clock.late <= 1 || !clock.following {
+		*since = time.Time{}
+		return false
+	}
+	if since.IsZero() || now.Sub(*since) < 3*time.Second {
+		if since.IsZero() {
+			*since, *from = now, clock.late
+		}
+		return false
+	}
+	if clock.late < *from-0.25 {
+		// Still behind, but closing in: a new run from here.
+		*since, *from = now, clock.late
+		return false
+	}
+	return true
+}
+
+// videoLightDecode is raised the first time the picture fell a second behind
+// the sound at a speed above 1× (the decoder could not keep up, startFFmpegDecoder):
+// from then on, until JukaHub restarts, a decoder at such a speed skips the
+// frames nothing refers to, which costs smoothness rather than sync.
+var videoLightDecode atomic.Bool
+
 // ffmpegDecoderArgs builds the rawvideo decoder command. When the source is
 // larger than the decode target it uses a scale filter in ffmpeg (cheaper than
 // decoding 4K frames and letting the GPU shrink them); otherwise it asks for
 // the native size directly. inputOpts go in front of -i (the identity a
-// resolved stream is asked for with, ffmpegStreamInputArgs).
-func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, scaling bool, startSec, fps float64, live bool) []string {
+// resolved stream is asked for with, ffmpegStreamInputArgs). speed is the
+// playback speed (1 = normal); startSec is media time.
+func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, scaling bool, startSec, fps float64, live bool, speed float64) []string {
 	// The decoder's stderr goes to errors.txt: without these, every start
 	// (and every retry) wrote ffmpeg's banner and configure line there,
 	// burying the one line that said why the stream failed.
@@ -1024,15 +1081,30 @@ func ffmpegDecoderArgs(path string, inputOpts []string, width, height int32, sca
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
+	if avSpeedFactor(speed) > 1 {
+		if IsTrimuiDevice() || P().IsHandheld() {
+			// Faster, the handheld decodes speed × the frames per second.
+			// The deblocking of frames nothing refers to is skipped: no error
+			// can spread from them, and at 1.5–2× it is not visible.
+			args = append(args, "-skip_loop_filter", "noref")
+		}
+		if videoLightDecode.Load() {
+			// This device fell behind at such a speed: those frames are not
+			// decoded at all (the fps filter repeats a neighbour instead).
+			args = append(args, "-skip_frame", "noref")
+		}
+	}
 	args = append(args, inputOpts...)
 	args = append(args, "-i", path)
 	// The rate is pinned to the one the frames are timed by, from the seek
-	// point on (avsync.go): left to itself ffmpeg picked its own.
+	// point on (avsync.go): left to itself ffmpeg picked its own. A speed
+	// other than 1× retimes the frames first (setpts), so the rate stays the
+	// source's whatever the speed.
 	scale := ""
 	if scaling {
 		scale = fmt.Sprintf("scale=%d:%d:flags=bilinear", width, height)
 	}
-	if vf := avVideoFilters(fps, scale, live); vf != "" {
+	if vf := avVideoFilters(fps, scale, live, speed); vf != "" {
 		args = append(args, "-vf", vf)
 	}
 	if avFiltersOff.Load() {
@@ -1067,6 +1139,9 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	embeddedPlayer.mu.Unlock()
 	scaling := srcW > 0 && srcH > 0 && (srcW != width || srcH != height)
 	pageStream := !sess.tempFile && !sess.local && mediaPageStream(path, sess.pageURL)
+	// Frames come out in output time at fps whatever the speed; each one is
+	// speed seconds of the source per 1/fps (avsync.go).
+	speed := avSpeedFactor(sess.speed)
 	failure := func(frames int, position float64, reason string) *mediaStreamFailure {
 		return &mediaStreamFailure{
 			source:   path,
@@ -1086,7 +1161,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 
 	filtered := !avFiltersOff.Load()
 	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), ffmpegStreamInputArgs(path, sess.pageURL),
-		width, height, scaling, startSec, fps, duration <= 0)
+		width, height, scaling, startSec, fps, duration <= 0, speed)
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1163,16 +1238,13 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		defer watch.Stop()
 	}
 
-	// NOTE: playback speed is intentionally kept at 1x here. Applying
-	// embeddedPlayer.speed to the frame pacing without also re-timing the
-	// audio decoder causes progressive A/V drift, so real speed support
-	// requires restarting both pipelines (a seek). The speed field remains
-	// cosmetic until that is implemented.
-	//
 	// Each frame is read, held until the clock reaches it (the sound's, when
 	// there is sound: avsync.go), then shown. A late frame is shown at once
 	// and the next read straight away, so a picture that fell behind catches
-	// up instead of staying behind.
+	// up instead of staying behind. The clock runs in output time: a speed
+	// other than 1× was applied by both decoders (setpts and atempo), so the
+	// frames are paced exactly as at 1×.
+	lagNoted, lateSince, lateFrom := false, time.Time{}, 0.0
 	for {
 		if sess.ctx.Err() != nil {
 			return nil
@@ -1218,6 +1290,21 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			}
 		} else if !clock.wait(sess.ctx, float64(frameCount-1)/fps, isPaused) {
 			return nil
+		} else if speed != 1 && !lagNoted && videoLagging(clock, &lateSince, &lateFrom, time.Now()) {
+			// Faster, the decoder has more to do; once per session the log
+			// says whether this device keeps up at this speed.
+			lagNoted = true
+			logInfo("video", "at %sx the picture runs %.1f s behind the sound: the decoder cannot keep up (%dx%d, fps=%.2f)",
+				avNumArg(speed), clock.late, width, height, fps)
+			// The first time, the video starts again where the sound is with
+			// the lighter decode (videoLightDecode); a picture that cannot
+			// keep up would otherwise fall further behind for good.
+			if speed > 1 && sess.isCurrent() && !videoLightDecode.Swap(true) {
+				logInfo("video", "decoding lighter above 1x from now on (-skip_frame noref)")
+				if videoRestartAt(sess, snapshotVideoState().progress, 0, true) {
+					return nil
+				}
+			}
 		}
 
 		// Publish the decoded frame by handing the buffer to the renderer and
@@ -1244,7 +1331,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		}
 
 		if frameCount == 1 {
-			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.3f, sound=%v", width, height, frameSize, fps, clock.audioStarted.Load())
+			logDebug("video", "First frame received: %dx%d, %d bytes, fps=%.3f, speed=%sx, sound=%v", width, height, frameSize, fps, avNumArg(speed), clock.audioStarted.Load())
 			if pageStream {
 				// Streaming works here: the run of streams that would not
 				// open starts again (videorecover.go).
@@ -1271,13 +1358,19 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	if sess.ctx.Err() != nil || playbackCurrentSession() != sess {
 		return nil
 	}
-	position := startSec + float64(frameCount)/fps
+	// Media time: each frame delivered stood for speed / fps of the source.
+	position := startSec + float64(frameCount)/fps*speed
 	stderr := stderrTail.String()
 	if watch.Fired() && frameCount == 0 {
 		// It hung opening the input: a failure with the watch's reason, not
 		// ffmpeg's (it was stopped before it could say anything).
 		logWarn("video", "stream stalled: no picture for %.0f s, the decoder was stopped", lastWait.Seconds())
 		return failure(0, position, mediaWatchdogReason())
+	}
+	if frameCount == 0 && avNoteSpeedMissing(stderr, speed) {
+		// This ffmpeg cannot change the speed: the same point again at 1×.
+		videoSpeedUnavailable(sess, startSec)
+		return nil
 	}
 	if frameCount == 0 && avNoteFilterMissing(stderr, filtered) {
 		// This ffmpeg has no fps filter: once more without it.
@@ -1313,6 +1406,11 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	defer sess.av.audioDone.Store(true)
 	filtered := !avFiltersOff.Load()
 	stderr, got := runFFmpegAudio(sess, ffmpegPath, path, startSec)
+	if !got && sess.ctx.Err() == nil && avNoteSpeedMissing(stderr, sess.speed) {
+		// No atempo in this ffmpeg: both decoders start again at 1×.
+		videoSpeedUnavailable(sess, startSec)
+		return
+	}
 	if !got && sess.ctx.Err() == nil && avNoteFilterMissing(stderr, filtered) {
 		// This ffmpeg has no aresample options: once more without them.
 		_, _ = runFFmpegAudio(sess, ffmpegPath, path, startSec)
@@ -1332,11 +1430,12 @@ func runFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec flo
 	args = append(args, ffmpegStreamInputArgs(path, sess.pageURL)...)
 	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path))
 	// Sample 0 is the seek point, with silence over any gap, so the samples
-	// line up with the picture's frames (avsync.go).
+	// line up with the picture's frames (avsync.go); atempo then plays them at
+	// the session's speed, keeping the pitch.
 	embeddedPlayer.mu.Lock()
 	live := embeddedPlayer.duration <= 0
 	embeddedPlayer.mu.Unlock()
-	if af := avAudioFilter(live); af != "" {
+	if af := avAudioFilter(live, sess.speed); af != "" {
 		args = append(args, "-af", af)
 	}
 	args = append(args,
@@ -1497,7 +1596,11 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	videoMiniClear()
 	// The top bar names this session from its page URL (see statusbar_media.go).
 	rememberVideoPage(pageURL)
-	sess := beginPlaybackSession(url, pageURL, tempFile)
+	// The same video starting again (a quality switch, the download that took
+	// over a stream, a Watch Party resync) and the next one of the list the
+	// player moved on to keep the chosen speed; anything else starts at 1×.
+	startSpeed := videoSpeedForStart(pageURL)
+	sess := beginPlaybackSession(url, pageURL, tempFile, startSpeed)
 	// Only fetch remote subtitles when CC is enabled. The original page URL
 	// remains available even if the stream itself is a temporary local file.
 	resetVideoSubtitles(sess)
@@ -1516,7 +1619,7 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	embeddedPlayer.progress = 0
 	embeddedPlayer.progressBase = 0
 	embeddedPlayer.volume = 1.0
-	embeddedPlayer.speed = 1.0
+	embeddedPlayer.speed = startSpeed
 	embeddedPlayer.downloadSpeed = 0
 	embeddedPlayer.lastErr = ""
 	embeddedPlayer.duration = 0
@@ -1561,6 +1664,8 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 			}
 		}
 
+		// Read before the player lock (partyActive takes the party's).
+		refusal := videoSpeedRefusal(dur <= 0)
 		embeddedPlayer.mu.Lock()
 		embeddedPlayer.phase = "playing"
 		embeddedPlayer.width = w
@@ -1572,7 +1677,21 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.decoderStartTime = time.Now()
 		embeddedPlayer.progressBase = progressBase
 		embeddedPlayer.progress = progressBase
+		// The speed is read in the same step that leaves "downloading": a
+		// press while the stream opened (SetPlaybackSpeed) changed it.
+		speed := avSpeedFactor(embeddedPlayer.speed)
+		refused := speed != 1 && refusal != ""
+		if refused {
+			speed = 1
+		}
+		embeddedPlayer.speed = speed
 		embeddedPlayer.mu.Unlock()
+		// Before the decoders start, which read it.
+		sess.speed = speed
+		if refused {
+			videoSpeedRemember(pageURL, 1)
+			ShowToast(refusal, ToastKindInfo)
+		}
 		// A new video plays, whatever the shared device was left in.
 		PauseVideoAudio(false)
 
@@ -1739,24 +1858,38 @@ func ToggleVideoPlayback() {
 	partyPublishPlayback()
 }
 
+// SeekVideo plays the video on screen from fraction of its length, at the
+// speed it plays at.
 func SeekVideo(fraction float64) {
-	prev := playbackCurrentSession()
+	if videoRestartAt(playbackCurrentSession(), fraction, 0, false) {
+		partyPublishPlayback()
+	}
+}
+
+// videoRestartAt replaces prev, the session on screen, with one that plays the
+// same source from fraction of its length at speed (0 keeps the current one).
+// A seek and a speed change are both this: the two decoders start again
+// together at the new point, the sound with its atempo and the picture with its
+// setpts (avsync.go). keepPaused leaves a paused video paused — the new
+// decoders wait for Play, with the last picture on screen — where a seek
+// resumes it. It reports whether a new session started.
+func videoRestartAt(prev *playbackSession, fraction, speed float64, keepPaused bool) bool {
 	if prev == nil {
-		return
+		return false
 	}
 
 	embeddedPlayer.mu.Lock()
-	if embeddedPlayer.phase == "idle" {
-		embeddedPlayer.mu.Unlock()
-		return
-	}
+	phase := embeddedPlayer.phase
 	width := embeddedPlayer.width
 	height := embeddedPlayer.height
 	duration := embeddedPlayer.duration
+	if speed <= 0 {
+		speed = embeddedPlayer.speed
+	}
 	embeddedPlayer.mu.Unlock()
 
-	if width <= 0 || height <= 0 || duration <= 0 || appConfig == nil {
-		return
+	if phase == "idle" || width <= 0 || height <= 0 || duration <= 0 || appConfig == nil {
+		return false
 	}
 	if fraction < 0 {
 		fraction = 0
@@ -1767,24 +1900,51 @@ func SeekVideo(fraction float64) {
 
 	ffmpegPath := getToolPath("ffmpeg", appConfig)
 	if ffmpegPath == "" {
-		return
+		return false
 	}
 
+	speed = avSpeedFactor(speed)
+	if speed != 1 && videoSpeedRefusal(false) != "" {
+		// A Watch Party joined while this played faster: its seeks bring
+		// the video back to 1×, the speed the room keeps.
+		speed = 1
+	}
+	paused := keepPaused && phase == "paused"
 	seekSec := fraction * duration
-	next := beginPlaybackSession(prev.source, prev.pageURL, prev.tempFile)
+	next := beginPlaybackSessionAfter(prev, prev.source, prev.pageURL, prev.tempFile, speed)
+	if next == nil {
+		return false // stopped or replaced meanwhile (a decoder goroutine's restart)
+	}
 
+	now := time.Now()
 	embeddedPlayer.mu.Lock()
-	embeddedPlayer.phase = "playing"
-	embeddedPlayer.decoderStartTime = time.Now()
-	embeddedPlayer.pauseStartTime = time.Time{}
+	if !next.isCurrent() {
+		// Stopped or replaced between the start above and here: that
+		// stop's (or that video's) player state is not overwritten.
+		embeddedPlayer.mu.Unlock()
+		return false
+	}
+	if paused {
+		// Still paused, from now: Play adds the pause up as it always does,
+		// and the first frame restarts the clock anyway.
+		embeddedPlayer.phase = "paused"
+		embeddedPlayer.pauseStartTime = now
+	} else {
+		embeddedPlayer.phase = "playing"
+		embeddedPlayer.pauseStartTime = time.Time{}
+	}
+	embeddedPlayer.speed = speed
+	embeddedPlayer.decoderStartTime = now
 	embeddedPlayer.totalPausedDuration = 0
 	embeddedPlayer.progressBase = fraction
 	embeddedPlayer.progress = fraction
 	embeddedPlayer.mu.Unlock()
-	// A seek resumes playback, so the device resumes too. Seeking from pause
-	// left it paused under a "playing" player: the picture ran on in silence
-	// and the audio decoder blocked on a queue that never drained.
-	PauseVideoAudio(false)
+	if !paused {
+		// A seek resumes playback, so the device resumes too. Seeking from
+		// pause left it paused under a "playing" player: the picture ran on in
+		// silence and the audio decoder blocked on a queue that never drained.
+		PauseVideoAudio(false)
+	}
 
 	videoDecoderWG.Add(1)
 	go func() {
@@ -1796,7 +1956,7 @@ func SeekVideo(fraction float64) {
 		// that expired during a long pause) downloads from there instead.
 		mediaRecoverStream(appConfig, failure)
 	}()
-	partyPublishPlayback()
+	return true
 }
 
 func AdjustVolume(delta float64) {
@@ -1811,16 +1971,148 @@ func AdjustVolume(delta float64) {
 	}
 }
 
+// SetPlaybackSpeed plays the video on screen at speed (1 = normal; clamped to
+// avSpeedMin..avSpeedMax). Both decoders start again at the current position,
+// as for a seek, and a paused video stays paused. While the stream is still
+// opening the choice is kept for its start. A live stream, a Watch Party and
+// an ffmpeg without the speed filters stay at 1×, with a toast saying why.
 func SetPlaybackSpeed(speed float64) {
+	speed = avSpeedFactor(speed)
 	embeddedPlayer.mu.Lock()
-	defer embeddedPlayer.mu.Unlock()
-	if speed < 0.25 {
-		speed = 0.25
+	phase := embeddedPlayer.phase
+	embeddedPlayer.mu.Unlock()
+	if phase == "idle" {
+		return
 	}
-	if speed > 4.0 {
-		speed = 4.0
+	if speed != 1 {
+		// "Live" is only known once the stream is open; the start checks
+		// that one itself.
+		live := phase != "downloading" && snapshotVideoState().duration <= 0
+		if why := videoSpeedRefusal(live); why != "" {
+			ShowToast(why, ToastKindInfo)
+			return
+		}
 	}
-	embeddedPlayer.speed = speed
+	sess := playbackCurrentSession()
+	page := playbackPageURL()
+	if sess != nil {
+		page = sess.pageURL
+	}
+	embeddedPlayer.mu.Lock()
+	if embeddedPlayer.phase == "downloading" {
+		// No decoder yet: the start reads this when the stream opens.
+		embeddedPlayer.speed = speed
+		embeddedPlayer.mu.Unlock()
+		videoSpeedRemember(page, speed)
+		return
+	}
+	current := embeddedPlayer.speed
+	embeddedPlayer.mu.Unlock()
+	if avSpeedFactor(current) == speed {
+		return
+	}
+	state := snapshotVideoState()
+	if videoRestartAt(sess, state.progress, speed, true) {
+		// What the new session really plays at (videoRestartAt has the
+		// last word, a Watch Party joined meanwhile).
+		now := snapshotVideoState().speed
+		videoSpeedRemember(page, now)
+		logInfo("video", "speed %sx at %.1f s", avNumArg(now), state.progress*state.duration)
+	}
+}
+
+// videoSpeedSteps are the speeds the pill and the settings row step through.
+var videoSpeedSteps = []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
+
+// videoSpeedRefusal says why the video cannot play at another speed than 1×,
+// or "" when it can. live is a stream with no length.
+func videoSpeedRefusal(live bool) string {
+	switch {
+	case avSpeedOff.Load():
+		return "This ffmpeg cannot change the speed"
+	case live:
+		// A live stream has no "later" to play ahead into.
+		return "Live streams play at 1×"
+	case partyActive():
+		// The room keeps everyone at one position; a faster guest would be
+		// pulled back every few seconds.
+		return "A Watch Party plays at 1×"
+	}
+	return ""
+}
+
+// videoSpeedMem decides which start keeps the chosen speed. Starts run on
+// resolve goroutines and choices on the main thread, so it has its own lock.
+//
+// The speed lasts while the same video plays — a quality switch, the
+// download that takes over a broken stream, a Watch Party resync and a
+// reopen right after it are the same page starting again — and it carries
+// to the next video of the list when the player itself moves on (L2/R2,
+// previous/next, Up Next, the Shorts feed's autoplay): someone at 1.5×
+// through a lecture or podcast series wants the next part at 1.5× too. A
+// video picked from a screen starts at 1×: speed is a choice about one piece
+// of content, and a stuck 2× on the next music video is a surprise.
+var videoSpeedMem struct {
+	mu    sync.Mutex
+	page  string  // the video the speed belongs to
+	next  string  // the list's next video the player handed off to
+	speed float64 // the speed chosen for page
+}
+
+// videoSpeedForStart is the speed a video starting on page begins at, and
+// makes page the one the speed belongs to.
+func videoSpeedForStart(page string) float64 {
+	page = strings.TrimSpace(page)
+	videoSpeedMem.mu.Lock()
+	defer videoSpeedMem.mu.Unlock()
+	speed := 1.0
+	if page != "" && (page == videoSpeedMem.page || page == videoSpeedMem.next) {
+		speed = avSpeedFactor(videoSpeedMem.speed)
+	}
+	videoSpeedMem.page, videoSpeedMem.next, videoSpeedMem.speed = page, "", speed
+	return speed
+}
+
+// videoSpeedRemember records the speed chosen for page.
+func videoSpeedRemember(page string, speed float64) {
+	videoSpeedMem.mu.Lock()
+	videoSpeedMem.page, videoSpeedMem.speed = strings.TrimSpace(page), avSpeedFactor(speed)
+	videoSpeedMem.mu.Unlock()
+}
+
+// videoSpeedCarryTo names the next video of the list the player hands off
+// to: its start keeps the speed (videoSpeedForStart).
+func videoSpeedCarryTo(next string) {
+	videoSpeedMem.mu.Lock()
+	videoSpeedMem.next = strings.TrimSpace(next)
+	videoSpeedMem.mu.Unlock()
+}
+
+// videoSpeedUnavailable plays sess on at 1× from at (media seconds) after one
+// of its decoders found this ffmpeg without setpts or atempo
+// (avNoteSpeedMissing): the video plays, the pill says 1×, and a toast says
+// why. Decoder goroutine; the session it replaces is its own.
+func videoSpeedUnavailable(sess *playbackSession, at float64) {
+	if sess == nil || sess.ctx.Err() != nil || !sess.isCurrent() {
+		return // the other decoder of this session got here first
+	}
+	embeddedPlayer.mu.Lock()
+	duration := embeddedPlayer.duration
+	embeddedPlayer.mu.Unlock()
+	fraction := 0.0
+	if duration > 0 {
+		fraction = at / duration
+	}
+	videoSpeedRemember(sess.pageURL, 1)
+	ShowToast("This ffmpeg cannot change the speed", ToastKindInfo)
+	if !videoRestartAt(sess, fraction, 1, true) && sess.isCurrent() {
+		// Nothing to restart (a live stream has no position to go back
+		// to): the speed is put back so the pill does not claim one. A
+		// session that replaced this one meanwhile keeps its own.
+		embeddedPlayer.mu.Lock()
+		embeddedPlayer.speed = 1
+		embeddedPlayer.mu.Unlock()
+	}
 }
 
 type videoStateSnapshot struct {
@@ -1885,7 +2177,8 @@ func computeVideoControlLayout(config *Config, x, y, w, h int32, state videoStat
 }
 
 // videoAdvanceProgress moves the stored position forward from wall-clock time
-// and writes the throttled resume position. The in-scene overlay and the
+// (times the playback speed) and writes the throttled resume position, both in
+// media time. The in-scene overlay and the
 // floating mini window (videomini.go) both call it, so the position keeps
 // moving and the resume save keeps running whichever one is drawing.
 func videoAdvanceProgress(state *videoStateSnapshot) {
@@ -1901,7 +2194,10 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 	if effectiveElapsed < 0 {
 		effectiveElapsed = 0
 	}
-	fraction := state.progressBase + effectiveElapsed/state.duration
+	// Wall time is output time; at 2× each second of it is two of the video,
+	// so the bar, the clock, the subtitles and the resume point all move at
+	// the speed the decoders play at.
+	fraction := state.progressBase + effectiveElapsed*avSpeedFactor(state.speed)/state.duration
 	if fraction > 1 {
 		fraction = 1
 	}
@@ -1956,10 +2252,19 @@ func videoSyncPlaybackEnd() {
 		// A short reached its natural end: the main loop starts the next one
 		// instead of dropping the user back on the grid.
 		shortsAutoAdvance = true
+		// At the speed this one played at (videoSpeedMem).
+		if vids := shortsVideos(appConfig); len(vids) > 0 {
+			if next, ok := nextShortIndex(currentShortIdx, len(vids)); ok {
+				videoSpeedCarryTo(vids[next].GetURL())
+			}
+		}
 	} else if upNextAfterPlayback(shortsAutoplay) {
 		// Up Next holds the hand-off. It is taken on the main loop, once the
 		// player this video is releasing is idle again.
 		upNextAdvancePending = true
+		if items := upNextSnapshot(); len(items) > 0 {
+			videoSpeedCarryTo(items[0].GetURL())
+		}
 	}
 	// A file opened from Files was shown on the Media scene only because that
 	// scene owns the video element; when it ends the user goes back to Files.

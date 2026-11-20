@@ -1,9 +1,12 @@
 package main
 
-// chatvoicechannel.go — native, live voice for Chat. A separately hosted
-// JukaHub relay forwards short PCM frames; the app captures, mixes and plays
-// them through the same SDL devices as the rest of the launcher. Discord only
-// carries the invitation message, never the call's audio.
+// chatvoicechannel.go — native, live voice for Chat. The app captures, mixes
+// and plays 20 ms PCM frames through the same SDL devices as the rest of the
+// launcher. A call travels either through a free public Mumble server
+// (chatvoice_mumble.go: the Voice tab's community room, and private Voice
+// Channels when no relay is set) or through a self-hosted JukaHub relay
+// (cmd/voice-relay). Discord only carries the invitation message, never the
+// call's audio.
 
 import (
 	"context"
@@ -40,6 +43,10 @@ var chatVoicePathRE = regexp.MustCompile(`^/voice/[0-9a-f]{32}$`)
 type chatVoicePerson struct {
 	Slot uint8  `json:"slot"`
 	Name string `json:"name"`
+	// Muted and Talking are filled in by JukaHub (Mumble rooms and the
+	// snapshot), never read from a relay.
+	Muted   bool `json:"-"`
+	Talking bool `json:"-"`
 }
 
 type chatVoicePacket struct {
@@ -55,6 +62,11 @@ type chatVoiceSnapshot struct {
 	Muted     bool
 	OwnSlot   uint8
 	StartedAt time.Time
+	// Ended: the server refused and the call stopped retrying.
+	Ended bool
+	// Community: this is the Voice tab's shared room (decided at join, so a
+	// settings change mid-call does not relabel it).
+	Community bool
 }
 
 type chatVoiceCall struct {
@@ -73,6 +85,18 @@ type chatVoiceCall struct {
 	cancel       context.CancelFunc
 	send         chan []byte
 	receive      chan chatVoicePacket
+	// heard is when each person's voice last arrived (by Slot), for the
+	// talking dots on the Voice page.
+	heard map[uint8]time.Time
+	// nameTry and namePlain are touched only by the connection goroutine: a
+	// Mumble server that says the name is taken gets a numbered one next
+	// time, one that refuses its characters a plain JukaHub-xxxx name.
+	nameTry   int
+	namePlain bool
+	// ended is set (under mu) when the server refused and run gave up;
+	// community marks the Voice tab's room.
+	ended     bool
+	community bool
 	// mic and pending are touched only by chatVoiceChannelTick on the UI thread.
 	mic     *micStream
 	pending []byte
@@ -92,9 +116,71 @@ func chatVoiceSnapshotNow() chatVoiceSnapshot {
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	people := append([]chatVoicePerson(nil), c.people...)
+	for i := range people {
+		people[i].Talking = time.Since(c.heard[people[i].Slot]) < 350*time.Millisecond
+	}
 	return chatVoiceSnapshot{Invite: c.invite, Status: c.status,
-		People: append([]chatVoicePerson(nil), c.people...), Connected: c.connected,
-		Muted: c.muted, OwnSlot: c.ownSlot, StartedAt: c.startedAt}
+		People: people, Connected: c.connected,
+		Muted: c.muted, OwnSlot: c.ownSlot, StartedAt: c.startedAt, Ended: c.ended, Community: c.community}
+}
+
+func (c *chatVoiceCall) setStatus(status string) {
+	c.mu.Lock()
+	c.status = status
+	c.mu.Unlock()
+}
+
+func (c *chatVoiceCall) setConnected(connected bool, status string) {
+	c.mu.Lock()
+	c.connected = connected
+	c.status = status
+	c.mu.Unlock()
+}
+
+// markConnected is the moment a call is live: the status says so and a
+// waiting invitation is posted.
+func (c *chatVoiceCall) markConnected() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.markConnectedLocked()
+}
+
+func (c *chatVoiceCall) markConnectedLocked() {
+	c.connected = true
+	if c.speakerError {
+		c.status = "Listening unavailable — speaker could not open"
+	} else {
+		c.status = "Connected"
+	}
+	if !c.announced {
+		c.announced = true
+		names := append([]string(nil), c.announce...)
+		chatOnMain(func(*Config) {
+			if chatVoiceCurrent == c {
+				postChatMessageFiles(chatDisplayName(), chatVoiceInviteLabel(names)+"\n"+chatVoiceInviteLine+c.invite, nil, true)
+			}
+		})
+	}
+}
+
+func (c *chatVoiceCall) markHeard(slot uint8) {
+	if slot == 0 {
+		return
+	}
+	c.mu.Lock()
+	if c.heard == nil {
+		c.heard = map[uint8]time.Time{}
+	}
+	c.heard[slot] = time.Now()
+	c.mu.Unlock()
+}
+
+func (c *chatVoiceCall) setPeople(people []chatVoicePerson, own uint8) {
+	c.mu.Lock()
+	c.people = people
+	c.ownSlot = own
+	c.mu.Unlock()
 }
 
 func chatVoiceInCall() bool { return chatVoiceCurrent != nil }
@@ -126,6 +212,9 @@ func chatVoiceLocalHost(host string) bool {
 }
 
 func chatVoiceInviteURL(raw string) (string, bool) {
+	if server, room, ok := chatVoiceMumbleInvite(raw); ok {
+		return chatVoiceMumbleURL(server, room), true
+	}
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u == nil || !chatVoicePathRE.MatchString(u.Path) {
 		return "", false
@@ -164,6 +253,10 @@ func chatVoiceRelayConfigured(config *Config) string {
 }
 
 func chatVoiceSetRelay(config *Config, raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		// No relay: private Voice Channels use the voice server.
+		return chatVoiceSetCustom(config, chatVoiceRelayKey, "")
+	}
 	base, err := chatVoiceRelayBase(raw)
 	if err != nil {
 		return err
@@ -193,23 +286,27 @@ func chatVoiceNewInvite(base string) (string, error) {
 
 // chatVoiceStartFor opens a native call and announces the invitation in the
 // community conversation. Names select who is asked; the room URL is a secret
-// bearer link, visible to anyone who can read that channel.
+// bearer link, visible to anyone who can read that channel. A room on a
+// public Mumble server is also listed, by its random name, to everyone on
+// that server.
 func chatVoiceStartFor(config *Config, names []string) {
-	invite := chatVoiceSnapshotNow().Invite
-	if invite != "" {
+	if snap := chatVoiceSnapshotNow(); snap.Invite != "" && !snap.Ended && !snap.Community {
+		// Already in a private call: ask these people into it.
 		if len(names) > 0 {
-			postChatMessageFiles(chatDisplayName(), chatVoiceInviteLabel(names)+"\n"+chatVoiceInviteLine+invite, nil, true)
+			postChatMessageFiles(chatDisplayName(), chatVoiceInviteLabel(names)+"\n"+chatVoiceInviteLine+snap.Invite, nil, true)
 		}
 		chatVoiceOpenScene(config)
 		return
 	}
-	base := chatVoiceRelayConfigured(config)
-	if base == "" {
-		chatVoicePromptRelay(config, func() { chatVoiceStartFor(config, names) })
-		return
-	}
+	// A new private room (the voice room, if joined, is left for it).
+	var invite string
 	var err error
-	invite, err = chatVoiceNewInvite(base)
+	if base := chatVoiceRelayConfigured(config); base != "" {
+		invite, err = chatVoiceNewInvite(base)
+	} else {
+		// No relay of one's own: a private room on the free voice server.
+		invite, err = chatVoiceNewPrivateInvite(config)
+	}
 	if err != nil {
 		showToast("Could not start the Voice Channel", ToastWarn())
 		return
@@ -245,19 +342,54 @@ func chatVoiceJoinInternal(invite string, names []string, announce bool) bool {
 		showToast("This Voice Channel invite is not valid", ToastWarn())
 		return false
 	}
-	if chatVoiceCurrent != nil && chatVoiceSnapshotNow().Invite == valid {
+	if snap := chatVoiceSnapshotNow(); chatVoiceCurrent != nil && snap.Invite == valid && !snap.Ended {
 		return true
+	}
+	sendQueue := chatVoiceSendQueue
+	if server, _, ok := chatVoiceMumbleInvite(valid); ok {
+		if server != chatVoiceServerConfigured(appConfig) {
+			// Everyone who should meet uses the server chosen in settings; an
+			// invitation for another one is not followed silently.
+			showToast("This invitation uses another voice server ("+server+"). Pick it under Voice → Voice server to join.", ToastWarn())
+			return false
+		}
+		sendQueue = chatVoiceSendQueueMumble
+	}
+	if prev := chatVoiceSnapshotNow(); prev.Invite != "" && prev.Invite != valid {
+		if prev.Community {
+			showToast("Left the voice room", ToastInfo())
+		} else {
+			showToast("Left the previous Voice Channel", ToastInfo())
+		}
 	}
 	chatVoiceLeave()
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &chatVoiceCall{invite: valid, status: "Connecting…", startedAt: time.Now(),
-		ctx: ctx, cancel: cancel, send: make(chan []byte, chatVoiceSendQueue),
+		ctx: ctx, cancel: cancel, send: make(chan []byte, sendQueue),
 		receive: make(chan chatVoicePacket, chatVoiceAudioQueue), announced: !announce,
-		announce: append([]string(nil), names...)}
+		announce: append([]string(nil), names...), community: valid == chatVoiceCommunityInvite(appConfig)}
 	chatVoiceCurrent = c
 	go c.run(chatDisplayName())
 	go c.playback()
 	return true
+}
+
+// chatVoiceRetry starts a refused call again: the voice room by the current
+// settings, a private channel with its invitation still owed.
+func chatVoiceRetry(config *Config) {
+	c := chatVoiceCurrent
+	if c == nil {
+		return
+	}
+	c.mu.RLock()
+	invite, community, announced := c.invite, c.community, c.announced
+	names := append([]string(nil), c.announce...)
+	c.mu.RUnlock()
+	if community {
+		chatVoiceJoinCommunity(config)
+		return
+	}
+	chatVoiceJoinInternal(invite, names, !announced)
 }
 
 func chatVoiceLeave() {
@@ -398,9 +530,21 @@ func (c *chatVoiceCall) run(name string) {
 		if errors.As(err, &closeErr) && closeErr.Code == websocket.ClosePolicyViolation {
 			c.status = "Channel full or relay unavailable — retrying"
 		}
+		var said chatVoiceErr
+		stopped := false
+		if errors.As(err, &said) {
+			c.status, stopped = said.msg, said.stop
+		}
+		c.ended = stopped
 		c.mu.Unlock()
 		if err != nil {
 			logWarn("chat", "voice channel disconnected: %v", err)
+		}
+		if stopped {
+			// The server refuses; retrying cannot help. Cancelling closes the
+			// speaker too; the call stays listed until Leave or Try again.
+			c.cancel()
+			return
 		}
 		select {
 		case <-c.ctx.Done():
@@ -414,6 +558,9 @@ func (c *chatVoiceCall) run(name string) {
 }
 
 func (c *chatVoiceCall) connect(name string) error {
+	if server, room, ok := chatVoiceMumbleInvite(c.invite); ok {
+		return c.connectMumble(server, room, name)
+	}
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, _, err := dialer.DialContext(c.ctx, c.invite, nil)
 	if err != nil {
@@ -509,21 +656,7 @@ func (c *chatVoiceCall) readStatus(data []byte) {
 	switch msg.Type {
 	case "welcome":
 		c.ownSlot = msg.Slot
-		c.connected = true
-		if c.speakerError {
-			c.status = "Listening unavailable — speaker could not open"
-		} else {
-			c.status = "Connected"
-		}
-		if !c.announced {
-			c.announced = true
-			names := append([]string(nil), c.announce...)
-			chatOnMain(func(*Config) {
-				if chatVoiceCurrent == c {
-					postChatMessageFiles(chatDisplayName(), chatVoiceInviteLabel(names)+"\n"+chatVoiceInviteLine+c.invite, nil, true)
-				}
-			})
-		}
+		c.markConnectedLocked()
 	case "presence":
 		c.people = append([]chatVoicePerson(nil), msg.People...)
 	}
@@ -579,7 +712,13 @@ func chatVoiceMixFrame(queues *[chatVoiceMaxMembers + 1][][]byte, warm *[chatVoi
 		if len(*q) >= 2 {
 			warm[slot] = true
 		}
-		if !warm[slot] || len(*q) == 0 {
+		if len(*q) == 0 {
+			// Ran dry (a pause, or the end of a talk spurt): the next sound
+			// waits for the two-frame lead again.
+			warm[slot] = false
+			continue
+		}
+		if !warm[slot] {
 			continue
 		}
 		frame := (*q)[0]

@@ -2,7 +2,7 @@
 
 **Start → Games → Get Homebrew** (also the Games tab, Home's Store folder, the
 **More stores** strip on Packages and Home search: "homebrew", "itch",
-"gb studio") brings new games for ten consoles from
+"gb studio") brings new games for twelve consoles from
 [itch.io](https://itch.io) — where most of today's homebrew is released — and
 puts them on their shelves in the [Games Library](GAME_LIBRARY.md), covers and
 all.
@@ -19,6 +19,8 @@ all.
 | Game Gear | Game Gear | `.gg` |
 | PC Engine / TurboGrafx-16 | PC Engine | `.pce` |
 | PICO-8 | PICO-8 | `.p8.png`, `.p8` carts |
+| TIC-80 | TIC-80 | `.tic` carts (also from a `.zip`) |
+| RPG Maker 2000/2003 | EasyRPG | the game's folder, from a `.zip` |
 
 ## Browsing
 
@@ -26,7 +28,7 @@ Browsing needs no account. The list is itch.io's own browse pages for each
 console (several tags each — "Game Boy", "made with GB Studio", "PICO-8" …),
 merged so a game tagged twice shows once.
 
-- **Console chips** — All, or one of the ten. **L1 / R1** step through them.
+- **Console chips** — All, or one of the twelve. **L1 / R1** step through them.
 - **Sort** — **Popular**, **Newest** and **Top rated** are itch.io's own
   orders (the lists for Newest and Top rated load the first time you pick
   them); **Free** shows only free games; **Yours** shows the games you bought
@@ -97,7 +99,7 @@ it; you can also revoke it on itch.io at any time.
 - **The folder.** The console's folder under `Roms` — the one your card
   already has for it (`Roms/GB`, CrossMix's names, NextUI's
   `Game Boy (GB)` …), else the firmware's name (`GB`, `GBC`, `GBA`, `FC`,
-  `SFC`, `MD`, `MS`, `GG`, `PCE`, `PICO8`).
+  `SFC`, `MD`, `MS`, `GG`, `PCE`, `PICO8`, `TIC`, `EASYRPG`).
 - **The name.** The game's title as a file name — `Tobu Tobu Girl.gbc` — with
   `(2)` added when another file already has that name.
 - **The cover.** Saved as a PNG in `data/game-art/<console>/`, where the
@@ -108,6 +110,27 @@ Downloads are shown on the status strip (its **X** stops one) and go one at a
 time. Sizes are capped (a cartridge at 64 MB, a zip at 256 MB), free space is
 checked first, and a file only takes its real name once it is complete — a
 power cut mid-download leaves no half game on the shelf.
+
+**RPG Maker 2000/2003 games** are folders, not cartridges. The list comes from
+itch.io's "Made with EasyRPG" filter and the rpg-maker-2003, rpg-maker-2000 and
+rm2k3 tags; "Made with RPG Maker" is left out because most of those games are
+made with MV or MZ, which EasyRPG cannot play. Install takes the game's `.zip`
+and keeps it only if `RPG_RT.ldb` and `RPG_RT.lmt` are at its top or one folder
+down, then unpacks it into `Roms/EASYRPG/<Title>/`, never over a folder of
+yours. A game made with a later RPG Maker, a setup `.exe`, or a `.7z`/`.rar`
+download is refused with the reason. EasyRPG keeps its saves (`SaveXX.lsd`) in
+the game's folder, so **Update** carries them into the new version and
+**Delete** removes everything else; installing the game again later picks the
+saves up. Some games use RPG Maker's free run-time package (RTP): the install
+says so when the game's `RPG_RT.ini` does not mark it complete — put the RTP in
+RetroArch's `system/rtp/2000` or `system/rtp/2003` folder. On the shelf a game
+is titled after its folder. On the handheld the EasyRPG and TIC-80 cores come
+from **Get more cores** (docs/GAME_LIBRARY.md, "More cores").
+
+**Games that play in the browser only.** Most TIC-80 pages on itch.io offer
+only the HTML5 build. Such a page shows **Plays in the browser only** and a
+**Page on itch.io** button instead of Install; Get Homebrew never pulls a
+cartridge out of a web build.
 
 ## Updates
 
@@ -132,13 +155,15 @@ so your saves and save states — which follow the ROM's name — keep working.
 | `data/homebrew-store/games.json` | Game ids, authors and covers from itch.io |
 | `data/homebrew-store/installed.json` | What was installed, for updates |
 | `data/homebrew-store/itch-key.json` | Your API key (mode 0600) |
-| `data/homebrew-store/incoming/` | A zip while its cartridge is taken out |
+| `data/homebrew-store/incoming/` | A zip while its cartridge (or RPG Maker game) is taken out |
 
 ## Limits
 
 - Search narrows what is loaded; it does not search all of itch.io.
 - Games whose only download is a PC or web build cannot be installed: there
   is no cartridge to put on the shelf.
+- RPG Maker downloads are taken from a `.zip` only (up to 512 MB, unpacked to
+  1 GB).
 - itch.io's QR sign-in for handhelds needs an app registered with itch.io;
   until JukaHub has one, the API key is the way in.
 

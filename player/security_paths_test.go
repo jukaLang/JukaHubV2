@@ -343,3 +343,33 @@ func TestAIToolsPathsStayInRootsAndResultsLoseSecrets(t *testing.T) {
 		}
 	}
 }
+
+// Names on a network drive are outside data (nas.go): none may put a file
+// outside its console folder on the card, and a sheet's parts stay beside it.
+func TestNasNamesStayInsideTheConsoleFolder(t *testing.T) {
+	root := t.TempDir()
+	good, err := nasLocalPath(root, "GBA", "Sub/Game (USA).gba")
+	if err != nil || good != filepath.Join(root, "GBA", "Sub", "Game (USA).gba") {
+		t.Fatalf("a plain name: %q, %v", good, err)
+	}
+	for _, rel := range []string{"../x.gba", "Sub/../../x.gba", "/etc/passwd", `a\..\..\x`, "C:x.gba", "CON.gba", "nul",
+		"x.gba.", " x.gba", "a//b", "", ".", "..", "x\x00.gba", "a/b/../c", "x<y>.gba", "LPT9.txt"} {
+		if p, err := nasLocalPath(root, "GBA", rel); err == nil {
+			t.Fatalf("%q was allowed as %q", rel, p)
+		}
+	}
+	for _, folder := range []string{"..", "", ".", "a/b", "C:", "LPT1"} {
+		if p, err := nasLocalPath(root, folder, "x.gba"); err == nil {
+			t.Fatalf("console folder %q was allowed as %q", folder, p)
+		}
+	}
+	cue := "FILE \"Game (Track 1).bin\" BINARY\nFILE \"../../etc/passwd\" BINARY\nFILE \"/abs.bin\" BINARY\n" +
+		"FILE \"C:\\x.bin\" BINARY\nFILE \"Disc\\track2.bin\" BINARY\n"
+	if refs := nasSheetRefs("Game.cue", []byte(cue)); strings.Join(refs, "|") != "Game (Track 1).bin|Disc/track2.bin" {
+		t.Fatalf("cue parts: %q", refs)
+	}
+	m3u := "#EXTM3U\nDisc 1.cue|First\n..\\Other\\Disc 2.cue\nsub/./Disc 3.cue\n"
+	if refs := nasSheetRefs("Game.m3u", []byte(m3u)); strings.Join(refs, "|") != "Disc 1.cue|sub/Disc 3.cue" {
+		t.Fatalf("m3u parts: %q", refs)
+	}
+}

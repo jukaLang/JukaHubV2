@@ -109,9 +109,15 @@ type chiakiPanelState struct {
 	typedHost string
 
 	// page is the view on screen; listCursor keeps the console list's place
-	// while the Account-ID card is up.
+	// while another panel page is up.
 	page       psPanelPage
 	listCursor int
+	// A destructive console action has its own confirmation page. Returning
+	// from it restores the page and row that opened the question.
+	confirmHost         string
+	confirmAction       psPanelAction
+	confirmReturnPage   psPanelPage
+	confirmReturnCursor int
 }
 
 var chiakiPanel chiakiPanelState
@@ -484,6 +490,9 @@ func chiakiRows() []chiakiRow {
 		// One console's options (psremote_console_opts.go).
 		return psConsoleOptsRows()
 	}
+	if chiakiPanel.page == psPageConsoleConfirm {
+		return psConsoleConfirmRows()
+	}
 	psPanelMu.Lock()
 	consoles := append([]psConsole{}, chiakiPanel.consoles...)
 	busy := chiakiPanel.busy
@@ -834,7 +843,9 @@ func psPanelShowPage(page psPanelPage) {
 	if page == psPageConsoles {
 		chiakiPanel.cursor = chiakiPanel.listCursor
 	} else {
-		chiakiPanel.listCursor = chiakiPanel.cursor
+		if chiakiPanel.page == psPageConsoles {
+			chiakiPanel.listCursor = chiakiPanel.cursor
+		}
 		chiakiPanel.cursor = 0
 	}
 	chiakiPanel.page = page
@@ -855,9 +866,14 @@ func psPanelOpenAccountPage(pairing bool) {
 	PlayActivateSound()
 }
 
-// psPanelBack is B on the panel: the Account-ID card goes back to the console
-// list (a pairing waiting on it stops there), the list closes the panel.
+// psPanelBack is B on the panel: a confirmation returns to its previous page,
+// other cards return to the console list, and the list closes the panel.
 func psPanelBack() {
+	if chiakiPanel.page == psPageConsoleConfirm {
+		psPanelCancelConsoleConfirm()
+		PlayBackSound()
+		return
+	}
 	if chiakiPanel.page != psPageConsoles {
 		psPanelPairAfterAccount = false
 		psPanelShowPage(psPageConsoles)
@@ -1117,8 +1133,11 @@ func psDrawSignInBand(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 	}
 }
 
-// psPanelForget drops a console and its credentials.
+// psPanelForget asks before Y drops a console and its credentials.
 func psPanelForget() {
+	if chiakiPanel.page != psPageConsoles {
+		return
+	}
 	rows := chiakiRows()
 	if chiakiPanel.cursor < 0 || chiakiPanel.cursor >= len(rows) {
 		return
@@ -1127,9 +1146,7 @@ func psPanelForget() {
 	if host == "" {
 		return
 	}
-	removePSConsole(host)
-	psPanelReload()
-	ShowToast("Forgot "+host, ToastKindInfo)
+	psPanelAskConsoleConfirm(host, psActionOptsForget)
 }
 
 // vkPSRemoteBuffer is the keyboard's buffer for the PS Remote fields.
@@ -1429,6 +1446,8 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	if chiakiPanel.page == psPageConsoleOptions {
 		header = psConsoleOptsHeader()
+	} else if chiakiPanel.page == psPageConsoleConfirm {
+		header = psConsoleConfirmHeader()
 	}
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
@@ -1534,7 +1553,7 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	if onAccount {
 		hint = hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
 	}
-	if chiakiPanel.page == psPageConsoleOptions {
+	if chiakiPanel.page == psPageConsoleOptions || chiakiPanel.page == psPageConsoleConfirm {
 		hint = psConsoleOptsFooter()
 	}
 	renderText(renderer, config, font, hint, ColorTextTertiary(), panelX+padX, panelY+panelH-footerH+6)

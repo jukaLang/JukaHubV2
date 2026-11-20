@@ -360,7 +360,7 @@ func sttLocalTranscribeRun(ctx context.Context, wav []byte, lang, prompt string,
 		if bin, model := sttFastFiles(); bin != "" {
 			// Vosk's small model needs what the warm server needs, not
 			// Whisper's larger allowance.
-			if err := sttCheckMemoryFor(sttServeStartAvail); err != nil {
+			if err := sttCheckMemoryFor(ctx, sttServeStartAvail); err != nil {
 				return "", err
 			}
 			text, err := sttRunFast(ctx, bin, model, wav)
@@ -375,7 +375,7 @@ func sttLocalTranscribeRun(ctx context.Context, wav []byte, lang, prompt string,
 	if filepath.Base(model) == sttLightModel {
 		need = sttLightAvail
 	}
-	if err := sttCheckMemoryFor(need); err != nil {
+	if err := sttCheckMemoryFor(ctx, need); err != nil {
 		return "", err
 	}
 	text, err := sttRunLocal(ctx, bin, model, wav, lang, prompt, quick)
@@ -410,21 +410,17 @@ func sttRunFast(ctx context.Context, bin, model string, wav []byte) (string, err
 	return strings.TrimSpace(result.Text), nil
 }
 
-// sttCheckMemoryFor reports errSTTMemory when MemAvailable is under need bytes.
-func sttCheckMemoryFor(need int64) error {
-	data, err := os.ReadFile("/proc/meminfo")
-	if err != nil {
-		return nil // on unusual firmware, let the process itself decide
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if !strings.HasPrefix(line, "MemAvailable:") {
-			continue
+// sttCheckMemoryFor makes room when less than need bytes are free (memfree.go:
+// caches, idle helpers and, with no game on screen, apps left running in the
+// background) and reports errSTTMemory only when that was not enough. Without
+// /proc/meminfo (unusual firmware) the process itself decides. Off the main
+// thread: the free-up waits.
+func sttCheckMemoryFor(ctx context.Context, need int64) error {
+	if !memFreeEnsure(ctx, uint64(need>>20), memFreeSpeech, "offline speech") {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		var kb int64
-		if _, err := fmt.Sscanf(line, "MemAvailable: %d kB", &kb); err == nil && kb*1024 < need {
-			return errSTTMemory
-		}
-		break
+		return errSTTMemory
 	}
 	return nil
 }

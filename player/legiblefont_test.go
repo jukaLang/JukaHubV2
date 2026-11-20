@@ -173,14 +173,30 @@ func TestLegibleFontSettingPersistsResetsAndHasARow(t *testing.T) {
 		t.Fatal("the stored value did not load")
 	}
 
+	// The Readable font pick round-trips; a face the chain does not know
+	// (a hand-edited config) loads as Auto.
+	a11y.legibleFace = "andika"
+	a11yStore(cfg)
+	a11y.legibleFace = ""
+	a11yLoad(cfg)
+	if a11y.legibleFace != "andika" {
+		t.Fatalf("the stored readable face loaded as %q", a11y.legibleFace)
+	}
+	cfg.Variables.Custom[a11yKeyLegibleFace] = "../evil.ttf"
+	a11yLoad(cfg)
+	if a11y.legibleFace != "" {
+		t.Fatalf("an unknown readable face loaded as %q", a11y.legibleFace)
+	}
+
 	// A value that is not a boolean falls back to off, never to a half state.
 	cfg.Variables.Custom[a11yKeyLegibleFont] = "bogus"
 	a11yLoad(cfg)
 	if a11y.legibleFont {
 		t.Fatal("an invalid stored value turned the face on")
 	}
+	a11y.legibleFace = "andika"
 	a11yResetDefaults(cfg)
-	if a11y.legibleFont {
+	if a11y.legibleFont || a11y.legibleFace != "" {
 		t.Fatal("reset left the legible face on")
 	}
 

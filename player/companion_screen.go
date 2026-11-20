@@ -235,6 +235,8 @@ func captureCompanionScreen(renderer *sdl.Renderer) {
 	castTick()
 	castCaptureFrame(renderer, time.Now())
 	castDrawLiveIndicator(renderer)
+	// The REC pill while the screen recorder runs (screenrec.go).
+	screenRecDrawIndicator(renderer)
 }
 
 // encodeScreenshotPNG turns SDL's ARGB8888 rows (screenshot mode's capture)

@@ -235,6 +235,10 @@ func chatSceneKey(e *sdl.KeyboardEvent, config *Config) bool {
 		if chatSelectTab(chatTab(sym - sdl.K_1)) {
 			PlayNavSound()
 		}
+	case sdl.K_4:
+		if chatVoiceTabOpen(config, false) {
+			PlayNavSound()
+		}
 	case sdl.K_PAGEUP:
 		chatScrollPage(1)
 	case sdl.K_PAGEDOWN:
@@ -525,10 +529,18 @@ func chatTabAction(config *Config) {
 	}
 }
 
-// chatCycleTab moves to the previous or next tab, wrapping around.
+// chatCycleTab moves to the previous or next tab, wrapping around. The Voice
+// tab sits between the last conversation and the first: stepping onto it
+// opens the Voice page (chatvoice_scene.go), which steps back the same way.
 func chatCycleTab(delta int) {
 	n := int(chatTabCount)
-	next := (int(chatActiveTabID()) + delta%n + n) % n
+	next := int(chatActiveTabID()) + delta%n
+	if next < 0 || next >= n {
+		if chatVoiceTabOpen(appConfig, false) {
+			PlayNavSound()
+		}
+		return
+	}
 	if chatSelectTab(chatTab(next)) {
 		PlayNavSound()
 	}
@@ -970,7 +982,10 @@ func handleChatComposerMouse(mx, my int32, config *Config) bool {
 		return true
 	}
 	if chatHeaderVoiceRect.W > 0 && pointInRect(mx, my, chatHeaderVoiceRect) {
-		chatVoiceOpenScene(config)
+		// The Voice tab: one click joins the community room.
+		if chatVoiceTabOpen(config, true) {
+			PlayActivateSound()
+		}
 		return true
 	}
 	if handleChatTrayClick(mx, my) {

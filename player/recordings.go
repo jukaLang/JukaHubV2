@@ -221,31 +221,48 @@ func prepareRecordings(launcher string) bool {
 // skipped: a capture that is still being written has nothing to play yet, and
 // listing it would only produce a failed open.
 func scanRecordings(dir string) []FileEntry {
-	dir = strings.TrimSpace(dir)
-	if dir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
+	return scanRecordingDirs(dir)
+}
+
+// scanRecordingDirs is scanRecordings over several folders merged into one
+// list, newest first: JukaHub's own and CrossMix's Screen Recorder output.
+// The clip JukaHub is recording right now waits until it is finished
+// (screenrec.go).
+func scanRecordingDirs(dirs ...string) []FileEntry {
 	type capture struct {
 		entry FileEntry
 		at    time.Time
 	}
-	found := make([]capture, 0, len(entries))
-	for _, de := range entries {
-		if de.IsDir() || !isRecordingFile(de.Name()) {
+	var found []capture
+	recording := screenRecCurrentPath()
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		dir = strings.TrimSpace(dir)
+		if dir == "" || seen[filepath.Clean(dir)] {
 			continue
 		}
-		info, err := de.Info()
-		if err != nil || info.Size() == 0 {
+		seen[filepath.Clean(dir)] = true
+		entries, err := os.ReadDir(dir)
+		if err != nil {
 			continue
 		}
-		found = append(found, capture{
-			entry: FileEntry{Name: de.Name(), Path: filepath.Join(dir, de.Name())},
-			at:    info.ModTime(),
-		})
+		for _, de := range entries {
+			if de.IsDir() || !isRecordingFile(de.Name()) {
+				continue
+			}
+			path := filepath.Join(dir, de.Name())
+			if recording != "" && path == recording {
+				continue
+			}
+			info, err := de.Info()
+			if err != nil || info.Size() == 0 {
+				continue
+			}
+			found = append(found, capture{
+				entry: FileEntry{Name: de.Name(), Path: path},
+				at:    info.ModTime(),
+			})
+		}
 	}
 	sort.SliceStable(found, func(i, j int) bool {
 		if !found[i].at.Equal(found[j].at) {
@@ -267,13 +284,16 @@ func scanRecordings(dir string) []FileEntry {
 // returns the number of captures so the rescan button can say what happened.
 func loadRecordings(config *Config) int {
 	dir := recordingsDirFor(config)
-	entries := scanRecordings(dir)
+	entries := scanRecordingDirs(dir, screenRecCrossMixOutput())
 	if config != nil {
 		config.Variables.Custom[recordingsEntriesVar] = entries
 		config.Variables.Custom[recordingsDirVar] = dir
 	}
 	focusedFileIndex = 0
 	logDebug("recordings", "%d capture(s) in %s", len(entries), dir)
+	// A screen recorder app is offered beside the page's own buttons
+	// (appcenter_open.go).
+	acRecordingsPlace(config)
 	return len(entries)
 }
 
@@ -281,6 +301,9 @@ func loadRecordings(config *Config) int {
 // folder, because "no recordings" without a path is not actionable.
 func recordingsScanMessage(config *Config, count int) string {
 	dir := recordingsDirFor(config)
+	if screenRecCrossMixOutput() != "" {
+		dir += " and CrossMix's Screen Recorder folder"
+	}
 	switch count {
 	case 0:
 		return fmt.Sprintf("No captures yet in %s", dir)

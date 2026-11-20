@@ -52,9 +52,9 @@ const TEXT_LIMITS = {
   log: (48 << 10) + CUT_SLACK,
 };
 
-// The device facts: short strings the device always fills in. release is the
-// only optional one (omitempty on the device).
-const FACT_LIMITS = { version: 64, release: 120, device: 120, platform: 64, os: 32, arch: 32 };
+// The device facts: short strings the device fills in. release and channel are
+// optional (omitempty on the device).
+const FACT_LIMITS = { version: 64, release: 120, channel: 16, device: 120, platform: 64, os: 32, arch: 32 };
 
 const CATEGORIES = new Set(['crash', 'ui', 'controls', 'media', 'network', 'other']);
 
@@ -206,7 +206,7 @@ export function validateReport(r) {
   for (const [field, max] of Object.entries(FACT_LIMITS)) {
     const value = r[field];
     if (value === undefined || value === null) {
-      if (field === 'release') continue;
+      if (field === 'release' || field === 'channel') continue;
       return `${field} is missing`;
     }
     if (typeof value !== 'string') return `${field} is not text`;
@@ -256,7 +256,9 @@ export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
   const description = scrub(cleanText(r.description)).trim();
   let diagnostics = scrub(cleanText(r.diagnostics)).trim();
   let log = scrub(cleanText(r.log)).trim();
-  const version = [r.version, r.release ? `(${r.release})` : ''].filter(Boolean).join(' ');
+  const channel = cleanText(r.channel).trim().toLowerCase();
+  const version = [r.version, r.release ? `(${r.release})` : '',
+    channel ? `· ${capitalise(channel)} channel` : ''].filter(Boolean).join(' ');
 
   const head = [
     description ? escapeMarkdown(description) : '_No description._',

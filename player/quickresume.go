@@ -24,11 +24,14 @@ package main
 //     is the resume marker written and the device powered off through Power
 //     off's own path (devPowerRequest: the clean teardown, sync, busybox
 //     poweroff), without the shutdown chime;
-//   - anything that cannot be saved that way (a standalone emulator, a port,
-//     RetroArch with network commands off, a game under the in-game menu, an
-//     emulator that did not exit) is never powered off: the game is stopped
-//     again and the device goes back to sleep. Progress is never traded for
-//     battery.
+//   - a standalone emulator whose own "save state on exit" is on saves and
+//     quits the same way (sessionsafe.go); a stream, or any standalone game
+//     with the battery down to 5%, is closed cleanly and the device powers off;
+//   - anything else that cannot be saved (a standalone emulator without that
+//     option, a port, RetroArch with network commands off, a game under the
+//     in-game menu, an emulator that did not exit) is never powered off: the
+//     game is stopped again and the device goes back to sleep. Progress is
+//     never traded for battery.
 //
 // The delay runs from 15 minutes to 48 hours (the range NextUI's Auto Power
 // Off pak offers) and Quick Settings has it one press away: A turns it off
@@ -511,7 +514,16 @@ func quickSleepDeadline() time.Duration {
 	if quickCfg.noted.Load() {
 		d = time.Duration(quickCfg.sleepMinutes.Load()) * time.Minute
 	}
-	if d <= 0 || !devPowerSupported() {
+	if !devPowerSupported() {
+		return 0
+	}
+	// A game on a low battery gets a nearer time, even with the setting Off,
+	// so it is saved and the device powered off before the battery dies
+	// (saveledger.go).
+	if low := saveLedgerSleepCap(); low > 0 && (d <= 0 || low < d) {
+		d = low
+	}
+	if d <= 0 {
 		return 0
 	}
 	return d
@@ -594,6 +606,9 @@ func quickSleepAtDeadline(held *powerSleepHeld) quickDeadlineOutcome {
 		}
 		marker = m
 	}
+	// The game's saves read back and in the save ledger before the power off
+	// (saveledger.go).
+	saveLedgerFinishNow(saveLedgerTrigPowerOff)
 	if marker != nil {
 		quickResumeWriteMarker(*marker)
 	}
@@ -634,7 +649,8 @@ func quickSaveHeldGame(held *powerSleepHeld) (*quickResumeMarker, bool, string) 
 		}
 	}
 	if !retroArchRunning() {
-		return nil, false, "the game is not running in RetroArch, the one emulator JukaHub can ask to save"
+		// A standalone emulator: saved on its way out where it can (sessionsafe.go).
+		return sessionSafeSaveHeldGame(held, cmds)
 	}
 	if ok, why := retroArchNetCmdReady(); !ok {
 		return nil, false, why
@@ -755,7 +771,12 @@ func quickPowerOffSavesFirst() bool {
 					}
 				}
 			}
+		} else {
+			// A standalone emulator gets its own time to save and quit
+			// before the teardown's short one (sessionsafe.go).
+			sessionSafePowerOffGame(cmds)
 		}
+		saveLedgerFinishNow(saveLedgerTrigPowerOff)
 		quickPowerOff.saved.Store(true)
 		devPowerRequest(devPowerPoweroff)
 	}()
@@ -965,12 +986,16 @@ func quickBootTick(parked bool) {
 		playRecentGameWith(g, libraryGame{Path: g.Path, System: g.System, Title: g.Title}, m.Launcher)
 		return
 	}
+	// RetroArch says where the game came back from once it plays (saveledger_ui.go).
+	saveLedgerNoteResume(m.Path)
 	if m.Launcher != "" && regularFile(m.Launcher) {
 		playRecentGameWith(g, libraryGame{Path: g.Path, System: g.System, Title: g.Title}, m.Launcher)
 		return
 	}
-	// The launcher moved: the Continue row's own choice (it may ask).
-	playRecentGame(g)
+	// The launcher moved: the Continue row's own choice (it may ask). Nobody
+	// pressed anything, so an Xbox game whose hakuX is gone only says so: its
+	// install waits for a press (hakuxStartUnasked).
+	hakuxStartUnasked(func() { playRecentGame(g) })
 }
 
 // quickStartupTasksLeft reports whether tasks queued for after the first

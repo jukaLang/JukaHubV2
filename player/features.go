@@ -406,6 +406,17 @@ func feEnterFocused(config *Config) {
 	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" && chatPickFromFiles(config, entry) {
 		return
 	}
+	// A type with a default app (Open with… → Always use), or a format only
+	// one verified app on the card reads, opens there (openwith.go). Games in
+	// a console folder still play below.
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == "fe_entries" && owOpenWithDefault(config, entry) {
+		return
+	}
+	// A comic or e-book JukaHub has no viewer for opens in KOReader when it is
+	// on the card (koreader.go).
+	if koreaderFilesOpen(config, entry) {
+		return
+	}
 	if strings.EqualFold(filepath.Ext(entry.Path), ".sh") {
 		// A script saved from the chat (any script in Downloads) runs on a
 		// second press only (chatfiles.go).
@@ -418,6 +429,16 @@ func feEnterFocused(config *Config) {
 			showToast("Started "+entry.Name, ToastSuccess())
 		}
 		return
+	}
+	// Java: a .jar in a phone-game console folder is a game (romsetup.go);
+	// any other .jar, .java or .class runs (javarun.go).
+	if javaIsFile(entry.Name) {
+		if filesOpenROM(config, entry) {
+			return
+		}
+		if javaFilesOpen(config, entry) {
+			return
+		}
 	}
 	if feArchiveKindOf(entry.Name) != feArchiveNone {
 		// A zipped game in a console folder (Roms/GBA/game.zip) is a game, not

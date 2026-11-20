@@ -75,7 +75,7 @@ They are copied into `plugins/` on the first scan and are on by default.
 | **Pocket Classic pack** (`classicpack`) | What it changes, Apply it now, Undo | An experience pack: Game Boy palette, hero-tile Home, Gaming controls, Arcade Corner. |
 | **Neon Grid theme** (`neontheme`) | About the theme, Use it now, Back to my theme | A theme preset. |
 | **Pad profiles** (`padprofiles`) | What it maps, Use Couch remote, Use default controls | A control profile for playing docked on a TV. |
-| **Retro formats** (`retroformats`) | Formats it adds, Open the library | Teaches the library Pokémon mini, Supervision, Vectrex, Lynx, Arduboy and WASM-4 files. |
+| **Retro formats** (`retroformats`) | Formats it adds, Open the library | Teaches the library Pokémon mini, Supervision, Vectrex, Lynx and Arduboy files. WASM-4 is a built-in console now ([WASM-4](WASM4.md)). |
 
 **They work everywhere.** Each also exists in Go (`player/plugnative.go`,
 `player/plugnative_tools.go`), so they run on Windows, which has no `sh`, and

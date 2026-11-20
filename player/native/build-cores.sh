@@ -26,7 +26,11 @@
 #   OUT_DIR   gets, per core: <core>_libretro.so.zip (the binary at the zip's
 #             root, as the buildbot ships it), <core>.crc32 (the binary's
 #             CRC32, which the index states) and <core>.buildinfo (source
-#             commit, compiler, NEEDED, newest GLIBC/GLIBCXX)
+#             commit, compiler, NEEDED, newest GLIBC/GLIBCXX); for a core with
+#             a companion file built from the same tree (FreeJ2ME-Plus: the
+#             Java half the core starts, see build_j2me_jar) also that file
+#             and <core>.files ("<sha256>  <name>" per file, the form
+#             sha256sum writes), which the publish job turns into index lines
 #   JOBS, LOG_DIR, SOURCE_COMMIT
 #
 #   build-cores.sh list     prints the table's core names, one per line
@@ -66,6 +70,12 @@ CXXABI_MAX=1.3.11
 # (libretro/mgba 89404771c9); its row builds the mgba_libretro target with the
 # flags of upstream's libretro CI. A build whose extras fail is tried once more
 # without them, from a clean tree.
+#
+# FreeJ2ME-Plus (J2ME phone games) is a small C bridge in src/libretro that
+# starts `java -jar <RetroArch system folder>/<name>-lr.jar` and talks to it
+# over pipes; the jar is built from the same commit (build_j2me_jar), since the
+# two halves only work as a pair. TARGET_NAME pins the file name its devel
+# branch uses (an older tree called it freej2me_libretro.so).
 CORE_TABLE='
 mgba|https://github.com/libretro/mgba.git|.|cmake|-DLIBMGBA_ONLY=ON -DBUILD_LIBRETRO=ON
 gambatte|https://github.com/libretro/gambatte-libretro.git|.|Makefile|
@@ -81,14 +91,25 @@ mednafen_pce_fast|https://github.com/libretro/beetle-pce-fast-libretro.git|.|Mak
 mednafen_wswan|https://github.com/libretro/beetle-wswan-libretro.git|.|Makefile|
 mednafen_ngp|https://github.com/libretro/beetle-ngp-libretro.git|.|Makefile|
 fbneo|https://github.com/libretro/FBNeo.git|src/burner/libretro|Makefile|
+freej2me_plus|https://github.com/TASEmulators/freej2me-plus.git|src/libretro|Makefile|TARGET_NAME=freej2me_plus
+wasm4|https://github.com/aduros/wasm4.git|runtimes/native|cmake|-DLIBRETRO=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF
 '
 
+# WASM-4 (wasm4.org fantasy-console carts, player/wasm4*.go) is upstream's
+# runtimes/native CMake project built for its wasm4_libretro target, the
+# libretro buildbot's own recipe: LIBRETRO=ON is the flag its .gitlab-ci.yml
+# and AmberELEC's package pass. The project may also configure the standalone
+# player's sound library (cubeb); the other two flags keep cubeb from asking
+# for googletest, and the retry without the extras still runs.
+
 # The workflow's runners: the Game Boy cores together (the ones a broken
-# stock card needs first), the small cores together, and the two long builds
-# on runners of their own. Every core in the table is in exactly one group.
+# stock card needs first), the small cores together (FreeJ2ME-Plus's bridge is
+# one C file; its jar adds a JDK and Ant to that runner's root), and the two
+# long builds on runners of their own. Every core in the table is in exactly
+# one group.
 CORE_GROUPS='
 mgba gambatte gpsp snes9x snes9x2005
-fceumm nestopia picodrive genesis_plus_gx mednafen_pce_fast mednafen_wswan mednafen_ngp
+fceumm nestopia picodrive genesis_plus_gx mednafen_pce_fast mednafen_wswan mednafen_ngp freej2me_plus wasm4
 pcsx_rearmed
 fbneo
 '
@@ -201,6 +222,143 @@ print(lib.retro_api_version())' "$c_bin" > "$LOG_DIR/$c_core/load-test.out" 2> "
         say "$c_core: retro_api_version says '$c_api', not 1"
         return 1
     fi
+    return 0
+}
+
+# j2me_jdk: a JDK 8 and Ant in the build root, installed the first time a core
+# needs them; J2ME_JDK is its JAVA_HOME. FreeJ2ME-Plus's build.xml compiles
+# with an old source/target level that JDK 9 and newer refuse, and a JDK 8
+# build also keeps the jar on Java 8's class library: a newer javac without
+# --release links calls such as ByteBuffer.flip() to methods Java 8 does not
+# have. The JDK goes in first, on its own, so Ant's need for a Java runtime is
+# already met and apt does not add the root's default Java beside it.
+J2ME_JDK=""
+j2me_jdk() {
+    [ -z "$J2ME_JDK" ] || return 0
+    if ! apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends openjdk-8-jdk-headless \
+        > "$LOG_DIR/apt-jdk8.log" 2>&1; then
+        tail -n 20 "$LOG_DIR/apt-jdk8.log"
+        say "could not install openjdk-8-jdk-headless in the build root"
+        return 1
+    fi
+    if ! apt-get -o Acquire::Retries=3 install -y -q --no-install-recommends ant \
+        > "$LOG_DIR/apt-ant.log" 2>&1; then
+        tail -n 20 "$LOG_DIR/apt-ant.log"
+        say "could not install ant in the build root"
+        return 1
+    fi
+    for j_home in /usr/lib/jvm/java-8-openjdk-arm64 /usr/lib/jvm/java-8-openjdk-*; do
+        if [ -x "$j_home/bin/javac" ]; then
+            J2ME_JDK="$j_home"
+            break
+        fi
+    done
+    [ -n "$J2ME_JDK" ] || { say "no JDK 8 javac under /usr/lib/jvm"; return 1; }
+    say "JDK for the J2ME jar: $("$J2ME_JDK/bin/javac" -version 2>&1 | sed -n 1p)"
+    return 0
+}
+
+# build_j2me_jar CORE SRC BIN: FreeJ2ME-Plus's Java half, from the tree at SRC
+# that built BIN. The bridge runs `java -jar <system folder>/<name>`, and the
+# name is the one BIN carries (freej2me_plus-lr.jar on devel, freej2me-lr.jar
+# before the rename), so the jar is published under that name whatever Ant
+# called it. Checks: a zip with a Main-Class, and no class newer than Java 8
+# (class file version 52), so any Java from 8 up runs it. Writes the jar and
+# CORE.files to OUT_DIR, before the core's .crc32: a core whose jar did not
+# build is not published.
+build_j2me_jar() {
+    j_core="$1"
+    j_src="$2"
+    j_bin="$3"
+    j_log="$LOG_DIR/$j_core"
+    j_name="$(grep -ao '[A-Za-z0-9_.]*-lr\.jar' "$j_bin" | sed -n 1p)"
+    case "$j_name" in
+        [A-Za-z]*-lr.jar) ;;
+        *)
+            say "$j_core: the core names no <name>-lr.jar to start (found '$j_name')"
+            return 1
+            ;;
+    esac
+    case "$j_name" in
+        *[!A-Za-z0-9_.-]* | *..*)
+            say "$j_core: unexpected jar name '$j_name'"
+            return 1
+            ;;
+    esac
+    j2me_jdk || return 1
+    if [ ! -f "$j_src/build.xml" ]; then
+        say "$j_core: no build.xml in the source tree"
+        return 1
+    fi
+    if ! (cd "$j_src" && JAVA_HOME="$J2ME_JDK" PATH="$J2ME_JDK/bin:$PATH" ant) > "$j_log/ant.log" 2>&1; then
+        echo "::group::$j_core ant log (last 60 lines)"
+        tail -n 60 "$j_log/ant.log"
+        echo "::endgroup::"
+        say "$j_core: ant did not build the jars"
+        return 1
+    fi
+    # The -lr jar Ant wrote: the one named as the core wants it (in build/,
+    # where build.xml puts its jars, before any copy elsewhere in the tree),
+    # else the only one there is.
+    j_jar=""
+    if [ -f "$j_src/build/$j_name" ]; then
+        j_jar="$j_src/build/$j_name"
+    else
+        j_jar="$(find "$j_src" -path "$j_src/.git" -prune -o -type f -name "$j_name" -print | sed -n 1p)"
+    fi
+    if [ -z "$j_jar" ]; then
+        j_all="$(find "$j_src" -path "$j_src/.git" -prune -o -type f -name '*-lr.jar' -print)"
+        if [ "$(printf '%s\n' "$j_all" | sed '/^$/d' | wc -l)" -ne 1 ]; then
+            say "$j_core: ant built no single *-lr.jar (found: $(echo $j_all))"
+            return 1
+        fi
+        j_jar="$j_all"
+    fi
+    if ! unzip -tq "$j_jar" > /dev/null 2>&1; then
+        say "$j_core: $(basename "$j_jar") does not read back as a zip"
+        return 1
+    fi
+    if ! unzip -p "$j_jar" META-INF/MANIFEST.MF 2> /dev/null | grep -qi '^Main-Class:'; then
+        say "$j_core: $(basename "$j_jar") has no Main-Class (java -jar cannot start it)"
+        return 1
+    fi
+    if ! j_newest="$(python3 -c 'import struct, sys, zipfile
+newest = 0
+with zipfile.ZipFile(sys.argv[1]) as z:
+    for name in z.namelist():
+        # A multi-release library keeps newer classes for newer Javas
+        # under META-INF/versions/, and module-info is for Java 9 and up:
+        # Java 8 reads neither.
+        if name.startswith("META-INF/versions/") or name.endswith("module-info.class"):
+            continue
+        if name.endswith(".class"):
+            head = z.read(name)[:8]
+            if len(head) < 8 or head[:4] != b"\xca\xfe\xba\xbe":
+                sys.exit("not a class file: " + name)
+            newest = max(newest, struct.unpack(">H", head[6:8])[0])
+if newest == 0:
+    sys.exit("no classes")
+print(newest)' "$j_jar" 2> "$j_log/classcheck.log")"; then
+        tail -n 5 "$j_log/classcheck.log"
+        say "$j_core: could not read the classes in $(basename "$j_jar")"
+        return 1
+    fi
+    if [ "$j_newest" -gt 52 ]; then
+        say "$j_core: $(basename "$j_jar") has classes for Java $((j_newest - 44)); Java 8 (52) is the most it may need"
+        return 1
+    fi
+    cp "$j_jar" "$OUT_DIR/$j_name" || return 1
+    j_sum="$(sha256sum "$OUT_DIR/$j_name" | cut -d' ' -f1)" || return 1
+    case "$j_sum" in
+        "" | *[!0-9a-f]*) j_sum="" ;;
+    esac
+    if [ "${#j_sum}" -ne 64 ]; then
+        say "$j_core: could not take the SHA-256 of $j_name"
+        return 1
+    fi
+    printf '%s  %s\n' "$j_sum" "$j_name" > "$OUT_DIR/$j_core.files" || return 1
+    j_files="$j_name (sha256 $j_sum, classes for Java 8, built with $("$J2ME_JDK/bin/javac" -version 2>&1 | sed -n 1p))"
+    say "$j_core: $j_name $(du -h "$OUT_DIR/$j_name" | cut -f1), sha256 $j_sum"
     return 0
 }
 
@@ -319,6 +477,15 @@ build_one() {
     if [ -n "$c_glibcxx" ]; then
         echo "::warning title=$b_core::links libstdc++.so.6 (needs GLIBCXX_$c_glibcxx); the handheld refuses it if the firmware's is older"
     fi
+    # A companion file from the same tree, before anything of this core is
+    # packaged: without it the core is not published.
+    j_files=""
+    rm -f "$OUT_DIR/$b_core.files"
+    case "$b_core" in
+        freej2me_plus)
+            build_j2me_jar "$b_core" "$b_src" "$b_bin" || return 1
+            ;;
+    esac
 
     # ── Package ──────────────────────────────────────────────────────────────
     b_stage="$WORK/stage-$b_core"
@@ -353,6 +520,9 @@ print("%08x" % (zlib.crc32(data) & 0xffffffff))' "$b_stage/$b_target")" || retur
         echo "NEEDED:    $(echo $c_needed)"
         echo "glibc:     $c_glibc; libstdc++: ${c_glibcxx:+GLIBCXX_$c_glibcxx}${c_glibcxx:-not linked}"
         echo "crc32:     $b_crc"
+        if [ -n "$j_files" ]; then
+            echo "with:      $j_files"
+        fi
         echo "built:     $(date -u +%Y-%m-%dT%H:%M:%SZ) by JukaHub ${SOURCE_COMMIT:-unknown}"
         echo
     } > "$OUT_DIR/$b_core.buildinfo" || return 1

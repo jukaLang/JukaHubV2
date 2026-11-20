@@ -39,6 +39,19 @@
 #  the hand-back at the end resumes exactly those processes, on every way out.
 #  (Pausing "runtrimui.sh" by name used to match nothing where busybox names
 #  every script it runs "sh", and resumed nothing either.)
+#
+#  jukahub-update-probation: 1
+#
+#  The first starts of an update are watched from here (player/updrescue.go):
+#  JukaHub's own boot guard cannot help a build that hangs or crashes before
+#  Go's main (the 2026-11-19 release deadlocked in package init and hung every
+#  boot). Before the swap the app writes .update-probation: the files the
+#  update replaces and where their backups are. A start under that plan must
+#  report a working screen with input ("ready <pid>" in .start-check) within
+#  the limit; one that hangs, crashes or has no input is stopped (SIGABRT
+#  first: the Go runtime prints every goroutine's stack into errors.txt), the
+#  backups are copied back, .update-rescued tells the restored build what
+#  happened, and it starts at once. Once per plan.
 # ---------------------------------------------------------------------------
 
 # Use this script's installed folder even when an older Apps/JukaHub folder
@@ -88,6 +101,28 @@ SCREEN_GROUPS="$APP_DIR/.screen-groups"
 # The firmware launcher processes paused for this session, one per line:
 # "<pid> <start time> <name>" (see the header). /tmp is empty at every boot.
 PAUSED=/tmp/jukahub-paused
+# The update check (see the header): the plan, the count of its starts, the
+# new build's "<stage> <pid>" line, the note for the restored build, and the
+# watchdog's word on why it stopped a start (this run of the script only).
+PROBATION="$APP_DIR/.update-probation"
+PROBATION_TRIES="$APP_DIR/.update-probation-tries"
+START_CHECK="$APP_DIR/.start-check"
+RESCUED="$APP_DIR/.update-rescued"
+PROBATION_KILL="/tmp/jukahub-probation-kill.$$"
+# Seconds a start under the plan gets to report a working screen: 120, and 45
+# once a start of the same update ended with no verdict (a power-off on a black
+# screen). JUKAHUB_PROBATION_LIMIT (3-3600) sets both, for testing.
+PROBATION_LIMIT=120
+PROBATION_RETRY_LIMIT=45
+case "${JUKAHUB_PROBATION_LIMIT:-}" in
+    "" | *[!0-9]*) ;;
+    *)
+        if [ "$JUKAHUB_PROBATION_LIMIT" -ge 3 ] && [ "$JUKAHUB_PROBATION_LIMIT" -le 3600 ]; then
+            PROBATION_LIMIT="$JUKAHUB_PROBATION_LIMIT"
+            PROBATION_RETRY_LIMIT="$JUKAHUB_PROBATION_LIMIT"
+        fi
+        ;;
+esac
 
 say "=== JukaHub launched from $APP_DIR ==="
 
@@ -584,7 +619,10 @@ JUKAHUB_SCREEN_HANDOFF=1
 # This launcher resumes everything in /tmp/jukahub-paused at the hand-back
 # (the header's paused record), so the app leaves what it paused to it.
 JUKAHUB_PAUSED_RECORD=1
-export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF JUKAHUB_PAUSED_RECORD
+# This launcher watches an update's first starts (the header's update
+# probation): only then does the app write a plan before an update.
+JUKAHUB_UPDATE_PROBATION=1
+export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF JUKAHUB_PAUSED_RECORD JUKAHUB_UPDATE_PROBATION
 
 # ---------------------------------------------------------------- time zone
 # The zone chosen in Settings -> Date & time is kept in jukatimezone next to
@@ -751,16 +789,348 @@ restore_firmware_osd() {
     say "TrimUI's quick menu restored for the stock menu"
 }
 
+# ------------------------------------------------------------ update check
+# The header's update probation. player/updrescue.go writes the plan and reads
+# the note this leaves; player/startcheck.go writes .start-check. All of it
+# runs only while a plan exists, never on an ordinary start.
+
+# A file's size in bytes, "" when it is missing; from ls, which reads no data,
+# else wc. Call it in $(...): it sets -f and its arguments.
+file_size() {
+    [ -f "$1" ] || return 1
+    set -f
+    FS_F="$1"
+    # shellcheck disable=SC2046
+    set -- $(ls -ln "$FS_F" 2>/dev/null)
+    case "$5" in
+        "" | *[!0-9]*)
+            # shellcheck disable=SC2046
+            set -- $(wc -c <"$FS_F" 2>/dev/null)
+            echo "$1"
+            ;;
+        *) echo "$5" ;;
+    esac
+}
+
+# The plan is over: the update started fine, was undone, or cannot be watched.
+# The backups kept aside for it go at JukaHub's next start.
+probation_drop() {
+    rm -f "$PROBATION" "$PROBATION_TRIES" "$START_CHECK" "$PROBATION_KILL"
+}
+
+# The plan's head into PB_*; false for a plan this script cannot follow
+# (another format, no JukaHub size, no file).
+probation_read() {
+    TAB="$(printf '\t')"
+    PB_VERSION="" PB_FROM="" PB_TO="" PB_JOURNAL="" PB_SAVED="" PB_EXE="" PB_FILES=0
+    while IFS= read -r PR_L; do
+        case "$PR_L" in
+            "version "*) PB_VERSION="${PR_L#version }" ;;
+            "from "*) PB_FROM="${PR_L#from }" ;;
+            "to "*) PB_TO="${PR_L#to }" ;;
+            "journal "*) PB_JOURNAL="${PR_L#journal }" ;;
+            "saved "*) PB_SAVED="${PR_L#saved }" ;;
+            "exe "*) PB_EXE="${PR_L#exe }" ;;
+            "file "*) PB_FILES=$((PB_FILES + 1)) ;;
+        esac
+    done <"$PROBATION"
+    [ "$PB_VERSION" = 1 ] || return 1
+    case "$PB_EXE" in "" | *[!0-9]*) return 1 ;; esac
+    [ "$PB_FILES" -gt 0 ]
+}
+
+# Before a start: is it under the plan, and how long does it get? Sets
+# PROBATION_ON, PB_LIMIT and PB_LOG_AT (errors.txt's size: where this start's
+# output begins, for the report).
+PROBATION_ON=0
+probation_begin() {
+    PROBATION_ON=0
+    rm -f "$START_CHECK" "$PROBATION_KILL"
+    case "$SWAP_VERDICT" in
+        failed | none)
+            say "update check: the update did not finish copying, so this start is not watched (JukaHub finishes or undoes it as it starts)"
+            probation_drop
+            return 0
+            ;;
+    esac
+    if ! probation_read; then
+        say "update check: .update-probation is not a plan this launcher can follow; this start is not watched"
+        probation_drop
+        return 0
+    fi
+    # Only the JukaHub the update installed is on probation, not one copied
+    # over it by hand since.
+    PB_SIZE="$(file_size "$APP_DIR/JukaHub")"
+    if [ "$PB_SIZE" != "$PB_EXE" ]; then
+        say "update check: JukaHub is not the build the update installed (${PB_SIZE:-no} bytes, the update's has $PB_EXE); not watching it"
+        probation_drop
+        return 0
+    fi
+    PB_TRY=""
+    read -r PB_TRY _ 2>/dev/null <"$PROBATION_TRIES"
+    # A damaged count starts again (a long number would stop dash's $(( ))).
+    case "$PB_TRY" in "" | *[!0-9]* | ????*) PB_TRY=0 ;; esac
+    PB_TRY=$((PB_TRY + 1))
+    if [ "$PB_TRY" -gt 5 ]; then
+        say "update check: $PB_TO had five starts that ended without a verdict; no longer watching it"
+        probation_drop
+        return 0
+    fi
+    echo "$PB_TRY" >"$PROBATION_TRIES" 2>/dev/null
+    PB_LIMIT="$PROBATION_LIMIT"
+    [ "$PB_TRY" -gt 1 ] && PB_LIMIT="$PROBATION_RETRY_LIMIT"
+    PB_LOG_AT="$(file_size "$LOG")"
+    case "$PB_LOG_AT" in "" | *[!0-9]*) PB_LOG_AT=-1 ;; esac
+    PROBATION_ON=1
+    say "update check: start $PB_TRY of $PB_TO; ${PB_FROM:-the previous version} comes back if it shows no working screen within ${PB_LIMIT}s"
+    # The count has to outlast a power-off on a black screen.
+    sync
+}
+
+# The watchdog, in the background beside `wait`, for the app's pid $1 and $2
+# seconds: "ready" from that process, or the plan gone, ends it; "noinput", or
+# no "ready" in time, stops the start — SIGABRT first, so the Go runtime
+# prints every goroutine's stack into errors.txt (the diagnosis; JukaHub turns
+# SIGQUIT into a quit once its main runs), SIGKILL five seconds later. Why
+# goes to $PROBATION_KILL for the verdict. The start time guards against a
+# reused pid.
+probation_watch() {
+    stat_of "$1" || exit 0
+    PW_START="$ST_START"
+    PW_N=0
+    PW_WHY=hang
+    while [ "$PW_N" -lt "$2" ]; do
+        sleep 1
+        PW_N=$((PW_N + 1))
+        stat_of "$1" && [ "$ST_START" = "$PW_START" ] && [ "$ST_STATE" != Z ] || exit 0
+        # Time it spends paused (SIGSTOP, a debugger) is not its start's.
+        case "$ST_STATE" in
+            T | t)
+                PW_N=$((PW_N - 1))
+                continue
+                ;;
+        esac
+        [ -f "$PROBATION" ] || exit 0
+        PW_STAGE="" PW_PID=""
+        read -r PW_STAGE PW_PID _ 2>/dev/null <"$START_CHECK"
+        [ "$PW_PID" = "$1" ] || continue
+        case "$PW_STAGE" in
+            ready) exit 0 ;;
+            noinput)
+                PW_WHY=noinput
+                break
+                ;;
+        esac
+    done
+    stat_of "$1" && [ "$ST_START" = "$PW_START" ] && [ "$ST_STATE" != Z ] || exit 0
+    echo "$PW_WHY $PW_N" >"$PROBATION_KILL" 2>/dev/null
+    if [ "$PW_WHY" = noinput ]; then
+        say "update check: JukaHub has no working input ${PW_N}s into its start; stopping it"
+    else
+        say "update check: JukaHub showed no working screen within ${PW_N}s; stopping it (its goroutine stacks follow)"
+    fi
+    kill -ABRT "$1" 2>/dev/null
+    PW_N=0
+    while [ "$PW_N" -lt 5 ]; do
+        sleep 1
+        PW_N=$((PW_N + 1))
+        stat_of "$1" && [ "$ST_START" = "$PW_START" ] && [ "$ST_STATE" != Z ] || exit 0
+    done
+    kill -KILL "$1" 2>/dev/null && say "update check: JukaHub did not stop; killed it"
+    exit 0
+}
+
+# One "file" line of the plan into PF_NAME, PF_STORED, PF_SIZE and PF_MODE;
+# false for anything that could reach outside the app folder or the backups'.
+probation_file_fields() {
+    PF_L="${1#file }"
+    case "$PF_L" in *"$TAB"*) ;; *) return 1 ;; esac
+    PF_NAME="${PF_L%%"$TAB"*}"
+    PF_L="${PF_L#*"$TAB"}"
+    PF_STORED="${PF_L%%"$TAB"*}"
+    PF_SIZE="" PF_MODE=""
+    case "$PF_L" in
+        *"$TAB"*)
+            PF_L="${PF_L#*"$TAB"}"
+            PF_SIZE="${PF_L%%"$TAB"*}"
+            case "$PF_L" in *"$TAB"*) PF_MODE="${PF_L#*"$TAB"}" ;; esac
+            ;;
+    esac
+    case "$PF_NAME" in "" | /* | */ | . | .. | ./* | ../* | */. | */.. | */./* | */../* | *//*) return 1 ;; esac
+    case "$PF_STORED" in "" | .* | */*) return 1 ;; esac
+    case "$PF_SIZE" in *[!0-9]*) return 1 ;; esac
+    case "$PF_MODE" in "" | [0-7][0-7][0-7] | [0-7][0-7][0-7][0-7]) ;; *) return 1 ;; esac
+    return 0
+}
+
+# Where the plan's backup $1 is now, in PF_SRC: the journal's folder, or where
+# JukaHub's next start moved it (a saved version, or kept aside).
+probation_find() {
+    PF_SRC=""
+    while IFS= read -r PD_L; do
+        case "$PD_L" in "dir "*) ;; *) continue ;; esac
+        PD_D="${PD_L#dir }"
+        case "$PD_D" in "" | .. | ../* | */../* | */..) continue ;; esac
+        case "$PD_D" in /*) ;; *) PD_D="$APP_DIR/$PD_D" ;; esac
+        if [ -f "$PD_D/$1" ]; then
+            PF_SRC="$PD_D/$1"
+            return 0
+        fi
+    done <"$PROBATION"
+    return 1
+}
+
+# Removes the copies a restore that stopped left beside their targets.
+probation_clean_tmp() {
+    while IFS= read -r PC_L; do
+        case "$PC_L" in "file "*) ;; *) continue ;; esac
+        probation_file_fields "$PC_L" && rm -f "$APP_DIR/$PF_NAME.rescue-tmp"
+    done <"$PROBATION"
+}
+
+# Puts every file of the plan back: first every backup found and whole, then
+# each copied beside its target, then all renamed over it (the release stamp
+# last, as the plan lists it) and the stamp the update added removed. Nothing
+# is replaced unless every copy is ready. False, with the reason said, when the
+# previous version is not back in full.
+probation_restore() {
+    PR_ERR=""
+    while IFS= read -r PR_L; do
+        case "$PR_L" in "file "*) ;; *) continue ;; esac
+        if ! probation_file_fields "$PR_L"; then
+            PR_ERR="the plan has an unusable line"
+            break
+        fi
+        if ! probation_find "$PF_STORED"; then
+            PR_ERR="the saved copy of $PF_NAME is missing"
+            break
+        fi
+        if [ -n "$PF_SIZE" ] && [ "$(file_size "$PF_SRC")" != "$PF_SIZE" ]; then
+            PR_ERR="the saved copy of $PF_NAME is damaged"
+            break
+        fi
+    done <"$PROBATION"
+    if [ -z "$PR_ERR" ]; then
+        while IFS= read -r PR_L; do
+            case "$PR_L" in "file "*) ;; *) continue ;; esac
+            if ! probation_file_fields "$PR_L" || ! probation_find "$PF_STORED"; then
+                PR_ERR="the plan changed"
+                break
+            fi
+            if ! cp -f "$PF_SRC" "$APP_DIR/$PF_NAME.rescue-tmp" 2>/dev/null; then
+                PR_ERR="copying $PF_NAME failed (is the card full?)"
+                break
+            fi
+            [ -z "$PF_MODE" ] || chmod "$PF_MODE" "$APP_DIR/$PF_NAME.rescue-tmp" 2>/dev/null
+        done <"$PROBATION"
+    fi
+    if [ -n "$PR_ERR" ]; then
+        probation_clean_tmp
+        say "update check: cannot put the previous version back: $PR_ERR"
+        return 1
+    fi
+    PR_FAIL=""
+    while IFS= read -r PR_L; do
+        case "$PR_L" in
+            "file "*)
+                probation_file_fields "$PR_L" || continue
+                mv -f "$APP_DIR/$PF_NAME.rescue-tmp" "$APP_DIR/$PF_NAME" 2>/dev/null || PR_FAIL="$PR_FAIL $PF_NAME"
+                ;;
+            "drop "*)
+                PR_D="${PR_L#drop }"
+                case "$PR_D" in "" | /* | .. | ../* | */../* | */..) continue ;; esac
+                rm -f "$APP_DIR/$PR_D"
+                ;;
+        esac
+    done <"$PROBATION"
+    # FAT cards may refuse chmod; the copy's mode then comes from the mount.
+    chmod 755 "$APP_DIR/JukaHub" 2>/dev/null
+    sync
+    if [ -n "$PR_FAIL" ]; then
+        probation_clean_tmp
+        say "update check: putting the previous version back stopped halfway; not replaced:$PR_FAIL"
+        return 1
+    fi
+    return 0
+}
+
+# How the start under the plan went, once it has exited. True when it failed
+# and is undone: PV_WHY (hang, noinput, crash) and PV_SEEN (frame when it drew
+# one, else none). A start that was ready ends the plan; one stopped from
+# outside, or one that quit cleanly before it was ready, keeps it for the next
+# start; one that started another install leaves it to that install.
+probation_verdict() {
+    PV_STAGE="" PV_PID=""
+    read -r PV_STAGE PV_PID _ 2>/dev/null <"$START_CHECK"
+    [ "$PV_PID" = "$LAST_PID" ] || PV_STAGE=""
+    PV_WHY=""
+    read -r PV_WHY _ 2>/dev/null <"$PROBATION_KILL"
+    rm -f "$PROBATION_KILL"
+    if [ "$PV_STAGE" = ready ]; then
+        say "update check: $PB_TO started fine; no longer watching it"
+        probation_drop
+        return 1
+    fi
+    if [ -f "$PENDING" ]; then
+        say "update check: JukaHub is installing something else; that install takes over"
+        return 1
+    fi
+    if [ ! -f "$PROBATION" ]; then
+        # Withdrawn by the app (a rollback took over).
+        rm -f "$PROBATION_TRIES" "$START_CHECK"
+        return 1
+    fi
+    if [ "$STOPPED" -eq 1 ]; then
+        say "update check: JukaHub was stopped from outside before it was ready; its next start is watched again"
+        return 1
+    fi
+    case "$PV_STAGE" in frame | noinput) PV_SEEN=frame ;; *) PV_SEEN=none ;; esac
+    if [ -z "$PV_WHY" ]; then
+        if [ "$PV_STAGE" = noinput ]; then
+            PV_WHY=noinput
+        elif [ "$RC" -ne 0 ]; then
+            PV_WHY=crash
+        else
+            say "update check: JukaHub quit before it was ready (exit code 0); its next start is watched again"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# The note for the restored build ($1 why, $2 how far it got).
+probation_note() {
+    {
+        echo "# launch.sh undid an update that did not start; JukaHub reads and removes this (player/updrescue.go)"
+        echo "from $PB_FROM"
+        echo "to $PB_TO"
+        echo "journal $PB_JOURNAL"
+        echo "saved $PB_SAVED"
+        echo "reason $1"
+        echo "rc $RC"
+        echo "stage $2"
+        echo "pid $LAST_PID"
+        echo "log $PB_LOG_AT"
+    } >"$RESCUED.tmp" 2>/dev/null && mv -f "$RESCUED.tmp" "$RESCUED"
+}
+
 # --------------------------------------------------------------- run it
 if [ ! -x "$APP_DIR/JukaHub" ]; then
     say "FATAL: binary $APP_DIR/JukaHub not found or not executable"
     chmod +x "$APP_DIR/JukaHub" 2>/dev/null
 fi
 
+# How the last update swap's helper ended (swapped, failed, none), for the
+# update check at the next start; set where the loop waits for it, below.
+SWAP_VERDICT=""
 while :; do
     # Also covers a stop that arrived while waiting for an update helper.
     [ "$STOPPED" -eq 1 ] && break
     cpu_snapshot
+    # The first starts of an update are watched (the update check above).
+    PROBATION_ON=0
+    [ -f "$PROBATION" ] && probation_begin
+    SWAP_VERDICT=""
     # JukaHub OS (docs/JUKAHUB_OS.md). With OS mode on in os/os.json, JukaHub
     # starts as "JukaHub --os-session": it applies its layers in a private
     # mount namespace and executes itself again inside it — the same process,
@@ -788,21 +1158,45 @@ while :; do
         "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
     fi
     APP_PID=$!
+    WATCH_PID=""
+    if [ "$PROBATION_ON" = 1 ]; then
+        probation_watch "$APP_PID" "$PB_LIMIT" </dev/null >/dev/null 2>&1 &
+        WATCH_PID=$!
+        # Its start time: the wait below also collects a watchdog that ended
+        # by itself ("ready"), and by JukaHub's exit its id may be another's.
+        WATCH_START=""
+        stat_of "$WATCH_PID" && WATCH_START="$ST_START"
+    fi
     # Who started this script, now that JukaHub is on its way (first pass).
     say_started_by
     wait "$APP_PID"
     RC=$?
+    # The watchdog goes as soon as the app is gone or stopping: it must never
+    # act on a later process. Only while it is still the one started above.
+    if [ -n "$WATCH_PID" ] && stat_of "$WATCH_PID" && [ "$ST_START" = "$WATCH_START" ]; then
+        kill "$WATCH_PID" 2>/dev/null
+    fi
     # A stop signal interrupts wait, not the app. Wait again so the display is
     # only touched once JukaHub has really exited (its own watchdog bounds
-    # this to a few seconds even if a cleanup step is stuck).
+    # this to a few seconds even if a cleanup step is stuck). Not kill -0: the
+    # stop handler's say may have collected a JukaHub that quit at once, and
+    # the shell still holds its status for this wait. Only a first wait that
+    # already reported it makes the shell answer 127; that status stands then.
     if [ "$STOPPED" -eq 1 ]; then
         wait "$APP_PID"
-        RC=$?
+        RC_AGAIN=$?
+        [ "$RC_AGAIN" -eq 127 ] || RC="$RC_AGAIN"
+    fi
+    # The watchdog is gone before the verdict below reads what it left.
+    if [ -n "$WATCH_PID" ]; then
+        wait "$WATCH_PID" 2>/dev/null
+        WATCH_PID=""
     fi
     # The status tells the next start's boot guard a crash or a kill (2, 134,
     # 137, 139, ...) from a quit; the pid tells it the line is about the run it
     # recorded. A failed run needs this line flushed for recovery.
     { echo "$RC $APP_PID" >"$LAST_EXIT"; } 2>/dev/null
+    LAST_PID="$APP_PID"
     APP_PID=""
     say "=== JukaHub exited with code $RC ==="
     # Tell a crash from a quit. 2 is Go's status after a panic or a fatal
@@ -836,6 +1230,34 @@ while :; do
     # before the menu or next build starts, for boot-guard recovery.
     cpu_restore
     [ "$RC" -eq 0 ] || sync
+
+    # The update check's verdict (see the header). A start that failed it is
+    # undone and the restored build starts right away, in this same session.
+    # Once per plan (the restore ends it), and a restore that cannot be done in
+    # full ends the plan too and falls through to what happens without one.
+    if [ "$PROBATION_ON" = 1 ]; then
+        PROBATION_ON=0
+        if probation_verdict; then
+            say "update check: $PB_TO did not start ($PV_WHY, exit code $RC); putting ${PB_FROM:-the previous version} back"
+            # In a subshell that ignores the stop signals: the power key sends
+            # them to the whole group, and a cp or mv they cut short would
+            # leave the plan dropped with the failed build in place, or half
+            # of each. A stop still ends the session once this is done.
+            if (
+                trap '' TERM INT HUP
+                probation_restore || exit 1
+                probation_note "$PV_WHY" "$PV_SEEN"
+                probation_drop
+                rm -f "$RESTART_NOW" "$HANDOFF"
+                sync
+                exit 0
+            ); then
+                say "update check: ${PB_FROM:-the previous version} is back; starting it"
+                continue
+            fi
+            probation_drop
+        fi
+    fi
 
     # A helper took the display over (PS Remote Play): JukaHub quit so the
     # helper could have the screen to itself, and wrote the helper's pid. Wait
@@ -909,9 +1331,13 @@ while :; do
         sleep 1
     done
     if [ -f "$FAILED" ]; then
+        SWAP_VERDICT=failed
         say "swap helper reported a failure; JukaHub finishes or undoes the update as it starts"
     elif [ ! -f "$SWAPPED" ]; then
+        SWAP_VERDICT=none
         say "no swap verdict after 30s; starting the installed build"
+    else
+        SWAP_VERDICT=swapped
     fi
     rm -f "$PENDING" "$SWAPPED" "$FAILED"
     sync

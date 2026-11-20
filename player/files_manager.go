@@ -1212,6 +1212,9 @@ func filesEntryIcon(entry FileEntry) string {
 		return "pdf"
 	case ext == ".epub" || ext == ".mobi" || ext == ".azw3":
 		return "text"
+	case (ext == ".jar" || ext == ".java" || ext == ".class") && filesROMSystem(entry.Path) == "":
+		// A runs Java programs (javarun.go); a jar in a J2ME folder is a game.
+		return "java"
 	case feArchiveKindOf(entry.Name) != feArchiveNone:
 		if filesROMSystem(entry.Path) != "" {
 			return "gamepad"
@@ -1282,6 +1285,8 @@ const (
 	feActExtract
 	feActExtractHere
 	feActExtractCancel
+	// Use as a game's manual (gamemanual_add.go).
+	feActGameManual
 )
 
 // feAction is one row of the sheet. Detail is the line's right-hand summary
@@ -1380,7 +1385,11 @@ func feActions(config *Config) []feAction {
 	actions := []feAction{
 		{Kind: feActNewFolder, Label: "New folder", Detail: newFolderDetail, Enabled: true},
 		{Kind: feActEdit, Label: "Edit text", Detail: editDetail, Enabled: editEnabled},
+		// Every way to open the file, and its default app (openwith.go).
+		owFilesAction(config, targets),
 		feArchiveMainAction(targets),
+		// Bundles the targets into a .zip beside them (files_zip.go).
+		feZipAction(targets),
 		{Kind: feActSendChat, Label: "Send to chat", Detail: sendDetail, Enabled: sendFiles > 0},
 		{Kind: feActRename, Label: "Rename", Detail: renameDetail, Enabled: renameEnabled},
 		{Kind: feActCopy, Label: "Copy", Detail: targetDetail, Enabled: len(targets) > 0},
@@ -1391,6 +1400,18 @@ func feActions(config *Config) []feAction {
 		{Kind: feActSort, Label: "Sort", Detail: feSortLabel(feSortModeOf(config)), Enabled: true},
 		{Kind: feActHidden, Label: "Show hidden files", Detail: hiddenDetail, Enabled: true},
 		{Kind: feActLocations, Label: "All locations", Detail: "card, Home, system, drives", Enabled: true},
+	}
+	// A DOS game folder or archive onto the DOS shelf (shelf_dos_import.go).
+	if a, ok := shelfDOSFilesAction(targets); ok {
+		actions = append(actions, a)
+	}
+	// A manual or guide for a game (gamemanual_add.go).
+	if a, ok := manFilesAction(targets); ok {
+		actions = append(actions, a)
+	}
+	// The saved default apps, once there is one (openwith.go).
+	if a, ok := owDefaultAppsAction(config); ok {
+		actions = append(actions, a)
 	}
 	if filesSystemOpenAvailable() {
 		systemDetail := "pick one file"
@@ -1436,6 +1457,9 @@ func openFeSheet(config *Config) {
 	feSheet = feSheetState{open: true}
 	feSheetRowHits = nil
 	feSheetRect = sdl.Rect{}
+	// The default apps' names for the "Open with…" row, read now rather than
+	// while the sheet is drawn (openwith.go).
+	owPrimeNames(config)
 	PlayActivateSound()
 }
 
@@ -1636,6 +1660,16 @@ func feSheetActivate(config *Config) {
 		chatSendFromFiles(config, targets)
 	case feActArchive, feActExtract, feActExtractHere, feActExtractCancel:
 		feArchiveSheetActivate(config, action)
+	case feActZip:
+		feZipActivate(config)
+	case feActShelfDOS:
+		targets := feSelectionTargets(config)
+		closeFeSheet()
+		shelfDOSImportStart(targets)
+	case feActGameManual:
+		manFilesActivate(config, feSelectionTargets(config))
+	case feActOpenWith, feActDefaultApps:
+		owFilesActivate(config, action.Kind, feSelectionTargets(config))
 	case feActConnect:
 		closeFeSheetKeepKeyboard()
 		openFeRemoteAddressEntry(config)

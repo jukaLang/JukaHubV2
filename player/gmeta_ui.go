@@ -39,6 +39,7 @@ const (
 	gmetaBtnAbout
 	gmetaBtnNotes
 	gmetaBtnHistory
+	gmetaBtnMore // the More sheet: manual, controls, saves, Game Lab… (gamepage_more.go)
 	gmetaBtnCount
 )
 
@@ -262,6 +263,8 @@ func gmetaOpenDetails(game libraryGame) {
 	}
 	PlayActivateSound()
 	gmetaStartLoad(ctx, gen, game, rec, lookup, false)
+	// The features behind More start reading what their chips need.
+	gamePageOpened(game)
 }
 
 // gmetaStartLoad reads the page's data in the background: the local part (save
@@ -467,6 +470,7 @@ func gmetaCloseDetails(sound bool) {
 	gmetaUI = gmetaDetails{}
 	gmetaTagUI.open = false
 	gameHistoryUI.open = false
+	gamePageCloseAll()
 	if sound && wasOpen {
 		PlayBackSound()
 	}
@@ -562,6 +566,9 @@ func gmetaPlayWith(game libraryGame, st *gmetaState, launcher string) {
 	if err := launchLibraryGame(game, launcher); err != nil {
 		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
 		return
+	}
+	if gameLaunchWasHeld(game.Path) {
+		return // a card (Game Ready, the controls) asks first (gamelaunch_hooks.go)
 	}
 	if game.Path == gameRandomPick {
 		trophyEvent(tkGameRandom) // the game the last roll landed on (game_random.go)
@@ -673,6 +680,8 @@ func gmetaActivateButton(i int) {
 		gmetaEditText(true)
 	case gmetaBtnHistory:
 		gameHistoryOpen()
+	case gmetaBtnMore:
+		gamePageMoreOpen()
 	}
 }
 
@@ -998,11 +1007,18 @@ func gmetaHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if !gmetaUI.open {
 		return false
 	}
+	// The More sheet and the screens its rows open (gamepage_more.go).
+	if gamePageRouteKey(e) {
+		return true
+	}
 	if gmetaTagUI.open {
 		gmetaTagAction(tbxKeyAction(e))
 		return true
 	}
 	switch e.Keysym.Sym {
+	case sdl.K_m:
+		gamePageMoreOpen()
+		return true
 	case sdl.K_t:
 		gmetaOpenTags()
 		return true
@@ -1041,6 +1057,9 @@ func gmetaHandlePad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	if !gmetaUI.open {
 		return false
+	}
+	if gamePageRoutePad(e) {
+		return true
 	}
 	if gmetaTagUI.open {
 		gmetaTagAction(tbxPadAction(e))
@@ -1086,6 +1105,9 @@ func gmetaHandleMouse(mx, my int32, config *Config) bool {
 	}
 	if !gmetaUI.open {
 		return false
+	}
+	if gamePageRouteMouse(mx, my) {
+		return true
 	}
 	if gmetaTagUI.open {
 		for _, hit := range gmetaTagUI.rows {
@@ -1135,6 +1157,7 @@ func gmetaRender(renderer *sdl.Renderer, config *Config) {
 		if gmetaTagUI.open {
 			gmetaRenderTags(renderer, config)
 		}
+		gamePageRenderOver(renderer, config)
 	}
 	if gmetaPick.open {
 		gmetaRenderPick(renderer, config)
@@ -1176,6 +1199,8 @@ func gmetaButtonLabel(i int) string {
 		return "Notes"
 	case gmetaBtnHistory:
 		return "History"
+	case gmetaBtnMore:
+		return "More"
 	}
 	return ""
 }
@@ -1333,6 +1358,8 @@ func gmetaDrawInfo(renderer *sdl.Renderer, config *Config, fonts tbxFonts, r sdl
 		x += w + 8
 	}
 	y += rowH + 14
+	// Ready, Manual, Controls…: the chips of the features behind More.
+	y += gamePageDrawChips(renderer, config, fonts, gmetaUI.game, r.X, y, r.W)
 
 	// The bottom block: playtime, achievements, milestones.
 	lineH := fonts.smallH + 6

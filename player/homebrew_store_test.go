@@ -246,3 +246,28 @@ func TestHomebrewInstallsAndKey(t *testing.T) {
 		}
 	}
 }
+
+func TestHomebrewEasyRPGZip(t *testing.T) {
+	for _, c := range []struct {
+		names []string
+		root  string
+		ok    bool
+	}{
+		{[]string{"RPG_RT.ldb", "RPG_RT.lmt", "Map0001.lmu"}, "", true},
+		{[]string{"My Game/", "My Game/rpg_rt.LDB", "My Game/RPG_RT.lmt", "__MACOSX/My Game/._RPG_RT.ldb"}, "My Game", true},
+		{[]string{`Game\RPG_RT.ldb`, `Game\RPG_RT.lmt`, "Backup/Old/RPG_RT.ldb", "Backup/Old/RPG_RT.lmt"}, "Game", true},
+		{[]string{"a/b/RPG_RT.ldb", "a/b/RPG_RT.lmt"}, "", false},         // too deep
+		{[]string{"RPG_RT.ldb"}, "", false},                               // no map tree
+		{[]string{"Game/www/js/rpg_core.js", "Game/Game.exe"}, "", false}, // RPG Maker MV
+		{[]string{"setup.exe", "readme.txt"}, "", false},
+	} {
+		root, err := hbEasyRPGZipRoot(c.names)
+		if (err == nil) != c.ok || root != c.root {
+			t.Errorf("hbEasyRPGZipRoot(%q) = %q, %v", c.names, root, err)
+		}
+	}
+	if !hbEasyRPGFullPackage([]byte("\xef\xbb\xbf[RPG_RT]\r\nGameTitle=X\r\nFullPackageFlag = 1\r\n")) ||
+		hbEasyRPGFullPackage([]byte("[RPG_RT]\nFullPackageFlag=0\n")) {
+		t.Fatal("RPG_RT.ini FullPackageFlag misread")
+	}
+}

@@ -69,6 +69,10 @@ type saveRowHit struct {
 var saveRowHits []saveRowHit
 
 func openSaveManagerPanel() {
+	// It manages RetroArch's own folders, the owner's (profiles_saves.go).
+	if profilesRefuseUnlessOwner("manage saves") {
+		return
+	}
 	qs.open = false
 	toolsPanel.open = false
 	emuPanel.open = false

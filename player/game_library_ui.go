@@ -317,7 +317,8 @@ func selectedLibraryGame() (libraryGame, bool) {
 }
 
 // A built-in game (JukaLand, the Synth) opens its own scene directly; there
-// is no emulator, ROM file or save-state page to prepare first.
+// is no emulator, ROM file or save-state page to prepare first. An arcade
+// minigame (Snake, Pong…) opens the Games screen already playing it.
 func openBuiltInLibraryGame(game libraryGame, config *Config) bool {
 	builtIn, ok := builtInLibraryGameFor(game)
 	if !ok {
@@ -334,6 +335,12 @@ func openBuiltInLibraryGame(game libraryGame, config *Config) bool {
 	gameRandomPick = ""
 	closeGameLibraryPanel()
 	changeSceneTo(config, idx)
+	// Queued only when the switch was taken (switchScene ignores one asked
+	// for during a fade), else a later visit would start the game unasked.
+	// Already on the Games screen it starts on the next frame.
+	if builtIn.arcade != gameNone && (idx == currentSceneIndex || (transitionPhase == "fade-out" && pendingSceneIndex == idx)) {
+		queueGameStart(config, builtIn.arcade)
+	}
 	PlayActivateSound()
 	return true
 }
@@ -381,6 +388,60 @@ func openGameLibraryPanel() {
 	PlayActivateSound()
 }
 
+// gameLibraryShelfWant is the console a press asked the library to open on
+// (the Godot and Xbox tiles' A), the scan it waits for, and what to say when
+// that console has no games once the scan is in. Main thread.
+var gameLibraryShelfWant struct {
+	system string
+	gen    uint64
+	empty  string
+}
+
+// openGameLibraryOnSystem opens the library on system's games. The scan the
+// open starts runs in the background, so the shelf is picked from the last
+// scan at once when it has the console, and again when the new scan lands
+// (gameLibraryShelfAfterScan): a first open after boot, or games just copied
+// in, are only in the new one. empty is the toast when there are none.
+func openGameLibraryOnSystem(system, empty string) {
+	openGameLibraryPanel()
+	found := gameLibrarySelectSystem(system)
+	if !gameLib.scanning {
+		if !found && empty != "" {
+			ShowToast(empty, ToastKindInfo)
+		}
+		return
+	}
+	gameLibraryShelfWant.system, gameLibraryShelfWant.gen, gameLibraryShelfWant.empty = system, gameLib.scanGen, empty
+}
+
+// gameLibrarySelectSystem opens system's games when the current list has
+// some, and reports whether it did.
+func gameLibrarySelectSystem(system string) bool {
+	for i, s := range currentGameSystems() {
+		if s.Name == system && len(s.Games) > 0 {
+			gameLib.system = i
+			gameLib.cursor, gameLib.scroll = 0, 0
+			gameLib.focus = 1
+			return true
+		}
+	}
+	return false
+}
+
+// gameLibraryShelfAfterScan finishes openGameLibraryOnSystem once scan gen
+// is in. The console is picked again by name: the new scan may list the
+// consoles in another order.
+func gameLibraryShelfAfterScan(gen uint64) {
+	want := gameLibraryShelfWant
+	if want.system == "" || want.gen != gen {
+		return
+	}
+	gameLibraryShelfWant.system = ""
+	if !gameLibrarySelectSystem(want.system) && want.empty != "" {
+		ShowToast(want.empty, ToastKindInfo)
+	}
+}
+
 func closeGameLibraryPanel() {
 	if !gameLib.open {
 		return
@@ -398,6 +459,7 @@ func closeGameLibraryPanel() {
 	// later visit that has already started its own scan.
 	gameLib.scanGen++
 	gameLib.scanning = false
+	libIndexForgetEarly() // an unchecked last library is not a scan (libindex.go)
 	invalidateGameLibrarySystemsCache()
 	closeGameLibraryArt()
 	PlayBackSound()
@@ -442,11 +504,16 @@ func startGameLibraryScan() {
 	// read it while the ticker is writing it. The snapshot is never nil, so the
 	// goroutine never falls back to reading the live ledger.
 	seconds := libraryPlaytimeSnapshot()
+	early := gameLib.lib.Total == 0
 	go func() {
+		// With nothing on screen yet, the last library the index kept shows
+		// at once while the card is checked (LIB-1, libindex.go).
+		libIndexShowEarly(gen, roots, early)
 		// The folders' signature before the walk lets the automatic box-art
 		// pass use this scan while nothing changed (LIB-19, boxart_auto.go).
 		signature := boxArtLibrarySignature(roots)
-		report := scanROMLibrary(roots)
+		// Through the library index: only folders that changed are read.
+		report := libIndexScan(roots)
 		romScanPublish(roots, signature, report.Games)
 		// Resolved once against the whole scan, so the Android row below gets
 		// no bare-title figure a ROM console already took.
@@ -456,11 +523,18 @@ func startGameLibraryScan() {
 		libraryAddAndroidGames(&lib, seconds)
 		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
 		libraryAddBuiltInGames(&lib, builtInScenes, builtInCoverRoot())
+		libIndexSaveLibrary(roots, lib)
+		// Games on the network drives join their consoles' shelves, after the
+		// index kept the card's own (nas_index.go).
+		libraryAddNetworkGames(&lib, seconds)
 		tbxPost(func() {
+			keep := libIndexSelectionNow()
 			if !applyGameLibraryScan(&gameLib, gen, lib, recentGames()) {
 				return
 			}
 			clampGameLibrarySelection()
+			// The selected game stays selected in the refreshed list.
+			keep.restore()
 			// A search or tag set while the first scan ran (a phone hand-off, a
 			// Nearby share) was judged against an empty library; with the games
 			// in, its only console opens the way it would have.
@@ -469,6 +543,8 @@ func startGameLibraryScan() {
 			}
 			// The Random game plugin's press that opened the library rolls now.
 			gameRandomAfterScan(gen)
+			// A tile's A that opened the library on a console (openGameLibraryOnSystem).
+			gameLibraryShelfAfterScan(gen)
 		})
 	}()
 }
@@ -510,6 +586,8 @@ func clampGameLibrarySelection() {
 // refreshGameLibrary starts a background rescan; callers can keep the panel
 // interactive while it runs.
 func refreshGameLibrary() {
+	// Games were added or Y asked: every folder is listed again (libindex.go).
+	libIndexNoteChange("")
 	startGameLibraryScan()
 }
 
@@ -547,7 +625,8 @@ func gameLibraryStatus() string {
 	if hidden := libraryHiddenCount(gameLib.lib); hidden > 0 && len(currentGameSystems()) == 0 {
 		return pluralizeCount(hidden, "hidden game", "hidden games") + " — Game options → Show hidden reveals them"
 	}
-	status := pluralizeCount(gameLib.lib.Total, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "system", "systems")
+	onCard, onNet := nasLibraryStatusSplit(gameLib.lib.Total) // network drives' games apart (nas_index.go)
+	status := pluralizeCount(onCard, "game", "games") + " in " + pluralizeCount(len(gameLib.lib.Systems), "system", "systems") + onNet
 	if withArt, coverTotal := libraryCoverTotals(gameLib.lib); coverTotal > 0 {
 		status += " · " + itoa(coverPercent(withArt, coverTotal)) + "% with covers"
 	}
@@ -678,7 +757,7 @@ func fetchMissingLibraryArtwork() {
 		ShowToast("The artwork folder is unavailable.", ToastKindWarning)
 		return
 	}
-	report := scanROMLibrary(romLibraryRoots())
+	report := libIndexScan(romLibraryRoots())
 	missing := romsMissingArtwork(report.Games, artRoot)
 	if len(missing) == 0 {
 		ShowToast("Every scanned game already has box art.", ToastKindSuccess)
@@ -1198,6 +1277,7 @@ func libraryArtTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
 // drawLibraryArt draws box art fitted inside rect, or a monogram placeholder
 // when the game has no downloaded image yet.
 func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game libraryGame) {
+	defer nasLibraryArtBadge(renderer, game, rect) // a network drive's game (nas_index.go)
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 14, WithAlpha(ColorSurfaceRow, 160))
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 14, 1, ColorBorderDefault)
 
@@ -1882,6 +1962,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		// The letter a jump landed on, over the games (game_library_scrub.go).
 		drawGameLibraryScrubBubble(renderer, config, gameLib.listRect)
 	}
+	narrateGameLibrary(systems, system, hasSystem) // spoken navigation (narrate_hooks.go)
 
 	peerDrawFooter(renderer, config, gameLibraryFooterHints(config))
 	// A game's page, its tag sheet and the tag filter's chooser sit on the
@@ -1998,8 +2079,11 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 			if power := gameOptionsPowerSummary(gameOptionsFor(game.Path)); power != "" {
 				detail += " · " + power
 			}
+			// A network drive's game says where it is, or Offline (nas_index.go).
+			detail += nasLibraryRowNote(game.Path)
 			renderText(renderer, config, detailFont, ellipsize(detailFont, detail, rect.W-28),
 				ColorTextTertiary(), rect.X+14, rect.Y+rows.detailY)
+			nasLibraryDimRow(renderer, rect, game.Path)
 		}
 		// Games above or below the rows on screen: the edge rows fade into
 		// the page (listfade.go), unless the cursor is on that row.

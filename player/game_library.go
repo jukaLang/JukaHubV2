@@ -386,6 +386,11 @@ func findGameLaunchers(system string, entries []emuEntry) []emuEntry {
 // alias of the system (Roms/GBA) keeps the usual list, so the picker still
 // offers GBA beside mGBA. With no romPath this is findGameLaunchers.
 func findGameLaunchersFor(system, romPath string, entries []emuEntry) []emuEntry {
+	// CHIP-8 plays in JukaHub's own player: its stand-in is the console's
+	// only emulator, and a launch gate opens the player (chip8_library.go).
+	if own, ok := chip8LauncherEntries(system); ok {
+		return own
+	}
 	// On NextUI a game in a "Name (TAG)" folder starts through that TAG's
 	// pak, as from NextUI's own menu, with no question (nextui.go); another
 	// emulator can still be pinned in the game's options.
@@ -663,7 +668,16 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return fmt.Errorf("no ROM selected")
 	}
 	if !regularFile(game.Path) {
+		// A game on a network drive says where it is (nas_download.go).
+		if err := nasLaunchMissingError(game); err != nil {
+			return err
+		}
 		return fmt.Errorf("ROM is missing: %s", filepath.Base(game.Path))
+	}
+	// A check that may hold the launch with a card of its own, such as Game
+	// Ready (gamelaunch_hooks.go). launcher may still be "" here.
+	if held, err := gameLaunchRunGates(game, launcher); held || err != nil {
+		return err
 	}
 	if strings.TrimSpace(launcher) == "" {
 		// The Xbox, the Xbox 360 and the other consoles only a desktop runs
@@ -709,6 +723,12 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// A core started directly needs the RetroArch beside it, built for the
 	// same chip (emuchoices.go).
 	if err := emuCoreLaunchCheck(launcher); err != nil {
+		return err
+	}
+	// A start in the Dolphin core without its system files, or in a core
+	// from before its dual-core freeze fix, fetches what it lacks first and
+	// runs again from the main loop (dolphin.go).
+	if deferred, err := dolphinPrepareLibraryLaunch(game, launcher); err != nil || deferred {
 		return err
 	}
 	// A core that needs a newer glibc than the firmware's starts RetroArch on
@@ -764,6 +784,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	prepareCheats(launcher, game)
 	// Buttons and turbo for this launch, and the in-game menu's cheat list (racontrols.go).
 	prepareGameControls(launcher, game)
+	// The one-launch settings of the features that register for it: shelves,
+	// control layouts, Game Lab (gamelaunch_hooks.go).
+	gameLaunchRunPrepares(launcher, game)
 	// Save-state screenshots for the game switcher (gameswitcher.go).
 	prepareGameSwitcher(launcher, game)
 	// RetroArch's log for this launch, read if the game quits at once (gamediag.go).
@@ -807,6 +830,8 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	ppssppPrepareManagedLaunch(launcher, cmd)
 	// The official PICO-8: its home folder and environment (pico8native.go).
 	pico8NativePrepareLaunch(launcher, cmd)
+	// A Godot game's engine version, and the port's, into the log (godot.go).
+	godotLaunchNote(launcher, game.Path)
 	// A NextUI pak gets NextUI's environment and resume flag (nextui.go).
 	nextuiPrepareLaunch(launcher, game.Path, cmd)
 	cmd.Dir = filepath.Dir(launcher)
@@ -821,18 +846,29 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// firmware's scripts start it (emuchoices.go). After the line above, which
 	// gives the child the firmware's environment.
 	emuCoreChoicePrepareLaunch(launcher, cmd)
+	// A J2ME game's core runs `java` by name: Java's bin folder first on
+	// RetroArch's PATH (j2me.go).
+	if err := j2mePrepareLaunch(launcher, cmd); err != nil {
+		return err
+	}
 	// Last before the start: the game in a mount namespace of its own whose
 	// RetroArch runs on JukaHub's C library, when the plan above said so.
 	raGlibcApply(cmd, ragPlan)
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
+	// An Xbox game gets the whole handheld: cores, GPU, JukaHub's memory and
+	// the CPU first (xboxboost.go). Before the power profile, which it sets.
+	boost := xboxBoostBegin(xboxBoostKindForGame(game), game.Path, game.Title)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
 	if err := screenChildStart(cmd); err != nil {
 		output.started(false)
 		restoreProfile()
+		boost.end()
 		return err
 	}
 	noteGameChildStarted(cmd)
+	boost.started(cmd.Process.Pid)
+	gameLaunchRunStarted(game, launcher, cmd)
 	// A NextUI pak's minarch owns the power key while it plays (nextui.go).
 	nextuiPakStarted(launcher, cmd)
 	output.started(true)
@@ -869,10 +905,12 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		diag.noteEnd(time.Now(), stopped)
 		gameLaunchLogEnd(game, waitErr, time.Since(launchedAt), stopped)
 		restoreProfile()
+		boost.end()
 		recorder.Stop()
 		// The game and its process group are gone: its saves go up to Google
 		// Drive / RomM in the background (savesync_auto.go).
 		saveSyncAfterExit(game.Path, game.System)
+		gameLaunchRunExited(game, launcher, time.Since(launchedAt), waitErr)
 		// A game that quit within seconds is diagnosed: what is missing, where
 		// it goes (gamediag.go).
 		diag.exited(waitErr)

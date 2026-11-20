@@ -271,3 +271,80 @@ func TestRALocateReadsLaunchScripts(t *testing.T) {
 		t.Errorf("cores folder = %q", got)
 	}
 }
+
+// TestSessionSafeRecordAndEmulatorConfigs covers "Never lose a session"
+// (sessionsafe.go): the record of a game closed for the battery survives a
+// round trip and a damaged one is none; only a state the emulator loads by
+// itself becomes a power-on resume; and the standalone emulators' own
+// configs are read the way they write them.
+func TestSessionSafeRecordAndEmulatorConfigs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), sessionSafeMarkerName)
+	if _, ok := sessionSafeReadMarkerAt(path); ok {
+		t.Fatal("a missing record was read")
+	}
+	want := sessionSafeMarker{Path: "/mnt/SDCARD/Roms/PSP/Game.iso", System: "PSP", Title: "Game",
+		Launcher: "/mnt/SDCARD/Emus/PSP/launch.sh", Emulator: "ppsspp", Label: "PPSSPP",
+		State: "/x/PSP/PPSSPP_STATE/ULUS10000_1.00_0.ppst", AutoLoad: true, Reason: "low battery"}
+	if err := sessionSafeWriteMarkerAt(path, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := sessionSafeReadMarkerAt(path); !ok || got != want {
+		t.Fatalf("round trip: %+v (%t), want %+v", got, ok, want)
+	}
+	if qm, ok := sessionSafeQuickMarker(want); !ok || qm.Path != want.Path || qm.Launcher != want.Launcher {
+		t.Fatalf("an auto-loaded state gave no power-on resume: %+v", qm)
+	}
+	manual := want
+	manual.AutoLoad = false
+	if _, ok := sessionSafeQuickMarker(manual); ok {
+		t.Fatal("a state the emulator does not load by itself claimed a resume")
+	}
+	for _, bad := range []string{"{", `{"path":"/a.iso"}`, ""} {
+		if err := os.WriteFile(path, []byte(bad), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := sessionSafeReadMarkerAt(path); ok {
+			t.Errorf("damaged record %q was read", bad)
+		}
+	}
+
+	type flags struct{ save, load bool }
+	for _, tc := range []struct {
+		id, cfg string
+		want    flags
+	}{
+		{"ppsspp", "[General]\r\nSaveStateOnExit = True\r\nAutoLoadSaveState = 2\r\n", flags{true, true}},
+		{"ppsspp", "[General]\nAutoLoadSaveState = 0\n", flags{false, false}},
+		{"drastic", "enable_autosavestate = 1\nautosavestate_slot = 10\n", flags{true, false}},
+		{"flycast", "[config]\nDreamcast.AutoLoadState = yes\nDreamcast.AutoSaveState = yes\n", flags{true, true}},
+		{"flycast", "[config]\nDreamcast.AutoSaveState = no\n", flags{false, false}},
+		{"mednafen", ";Automatically load/save state\nautosave 1\n", flags{true, true}},
+		{"duckstation", "", flags{true, false}},
+		{"duckstation", "[Main]\nSaveStateOnExit = false\n", flags{false, false}},
+	} {
+		r, ok := sessionSafeRecipeFor(tc.id)
+		if !ok || r.Flags == nil {
+			t.Fatalf("no recipe for %s", tc.id)
+		}
+		if s, l := r.Flags(tc.cfg); (flags{s, l}) != tc.want {
+			t.Errorf("%s %q: save %t load %t, want %+v", tc.id, tc.cfg, s, l, tc.want)
+		}
+	}
+	if r, ok := sessionSafeRecipeFor("PPSSPPSDL_tg504", "/mnt/SDCARD/Emus/PSP/PPSSPPSDL_tg5040"); !ok || r.ID != "ppsspp" {
+		t.Errorf("PPSSPP's TrimUI binary was not recognised (%t)", ok)
+	}
+	if _, _, class := sessionSafeClassify([]sessionSafeProc{{pid: 9, comm: "sh"}, {pid: 10, comm: "ra64.trimui"}}); class != sessionSafeRetroArch {
+		t.Errorf("RetroArch in the group was not left to its own path: %v", class)
+	}
+	// A launch script named after its emulator is neither the emulator nor
+	// signalled as one; only the emulator's own process is.
+	procs := []sessionSafeProc{{pid: 9, comm: "PPSSPP.sh", argv: []string{"/mnt/SDCARD/Emus/PSP/PPSSPP.sh"}, exe: "/bin/busybox"},
+		{pid: 12, comm: "PPSSPPSDL", exe: "/mnt/SDCARD/Emus/PSP/PPSSPPSDL", start: 77}}
+	best, r, _ := sessionSafeClassify(procs)
+	if r == nil || r.ID != "ppsspp" || best.pid != 12 {
+		t.Fatalf("the launch script was taken for the emulator: pid %d", best.pid)
+	}
+	if got := sessionSafeTargets(procs, r); len(got) != 1 || got[0] != (sessionSafeTarget{pid: 12, start: 77}) {
+		t.Errorf("targets = %+v, want the emulator only", got)
+	}
+}

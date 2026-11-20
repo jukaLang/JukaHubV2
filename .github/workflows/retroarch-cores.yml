@@ -4,7 +4,10 @@ name: RetroArch cores for TrimUI (aarch64, glibc 2.31)
 # sources and published as the rolling release "cores-aarch64" of this
 # repository: one <core>_libretro.so.zip per core, and index-extended.txt in
 # the libretro buildbot's own index format ("<date> <crc32> <file>"), which
-# JukaHub already reads (emulatorupdates.go parseCoreIndex).
+# JukaHub already reads (emulatorupdates.go parseCoreIndex). FreeJ2ME-Plus (J2ME
+# phone games) also needs the jar built from its commit: that jar is an asset of
+# its own, with an index line "<date> <sha256> <file> <core>" that the buildbot
+# readers skip and JukaHub's J2ME install verifies it by (j2me_install.go).
 #
 # Why: the buildbot builds its linux/aarch64 nightlies on a newer Ubuntu than
 # the handheld runs (November 2026: mgba_libretro.so needs GLIBC_2.35; the
@@ -170,18 +173,31 @@ jobs:
             fi
           fi
           # New lines for what built now; the old release's lines for the rest
-          # (their zips stay in the release, untouched).
+          # (their zips stay in the release, untouched). A core with companion
+          # files (<core>.files: FreeJ2ME-Plus's jar) gets one more line per
+          # file, "<date> <sha256> <file> <core>", which the buildbot-format
+          # readers skip (no CRC32, no core zip) and JukaHub's J2ME install
+          # reads (j2me_install.go): same date as its core's line, so the
+          # handheld can tell a pair from one run. A core whose files are not
+          # all there is not published at all.
           python3 - "$old" cores <<'PY'
           import datetime, os, re, sys
           old_path, folder = sys.argv[1], sys.argv[2]
           today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
           lines = {}
+          files = {}
           line_re = re.compile(r"^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{8}) ([a-z0-9_]+)_libretro\.so\.zip$")
+          file_re = re.compile(r"^(\d{4}-\d{2}-\d{2}) ([0-9a-f]{64}) ([A-Za-z0-9_][A-Za-z0-9_.-]*\.jar) ([a-z0-9_]+)$")
           for raw in open(old_path, encoding="utf-8", errors="replace"):
               m = line_re.match(raw.strip())
               if m:
                   lines[m.group(3)] = raw.strip()
+                  continue
+              m = file_re.match(raw.strip())
+              if m and ".." not in m.group(3):
+                  files[m.group(3)] = (m.group(4), raw.strip())
           built = []
+          uploads = []
           for name in sorted(os.listdir(folder)):
               if not name.endswith(".crc32"):
                   continue
@@ -190,17 +206,42 @@ jobs:
               if not re.fullmatch(r"[a-z0-9_]+", core) or not re.fullmatch(r"[0-9a-f]{8}", crc) or not os.path.exists(os.path.join(folder, core + "_libretro.so.zip")):
                   print("::warning::skipping %s: its build output is incomplete" % core)
                   continue
+              extra = []
+              listed = os.path.join(folder, core + ".files")
+              complete = True
+              if os.path.exists(listed):
+                  for raw in open(listed, encoding="utf-8"):
+                      parts = raw.split()
+                      if not parts:
+                          continue
+                      if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.jar", parts[1]) or ".." in parts[1] or not os.path.isfile(os.path.join(folder, parts[1])):
+                          complete = False
+                          break
+                      extra.append((parts[1], parts[0]))
+              if not complete:
+                  print("::warning::skipping %s: its companion files are incomplete" % core)
+                  continue
               lines[core] = "%s %s %s_libretro.so.zip" % (today, crc, core)
+              # This run's files replace every file line the core had before.
+              for old_file in [f for f, (c, _) in files.items() if c == core]:
+                  del files[old_file]
+              for file_name, sha in extra:
+                  files[file_name] = (core, "%s %s %s %s" % (today, sha, file_name, core))
+                  uploads.append(file_name)
               built.append(core)
           if not built:
               sys.exit("no complete core build to publish")
           with open(os.path.join(folder, "built.txt"), "w", encoding="utf-8") as out:
               out.write("\n".join(built) + "\n")
+          with open(os.path.join(folder, "files.txt"), "w", encoding="utf-8") as out:
+              out.write("".join(f + "\n" for f in uploads))
           with open(os.path.join(folder, "index-extended.txt"), "w", encoding="utf-8", newline="\n") as out:
               for core in sorted(lines):
                   out.write(lines[core] + "\n")
+              for file_name in sorted(files):
+                  out.write(files[file_name][1] + "\n")
           print("built now: " + " ".join(built))
-          print("index: %d cores" % len(lines))
+          print("index: %d cores, %d companion files" % (len(lines), len(files)))
           PY
           cat cores/*.buildinfo > cores/BUILDINFO.txt
           cat cores/index-extended.txt
@@ -220,6 +261,7 @@ jobs:
             echo "RetroArch cores built by JukaHub from upstream libretro sources for handhelds whose firmware has an older glibc than the libretro buildbot's nightlies need (the TrimUI Smart Pro, Brick and Hammer: glibc 2.33)."
             echo "JukaHub installs one by itself when a core on the card cannot load (a kept build of the card's own comes first)."
             echo "To install one by hand: unzip it into RetroArch/.retroarch/cores/ over the core of the same name."
+            echo "FreeJ2ME-Plus (J2ME phone games) is two halves built from one commit: the core, and the jar its index line names (freej2me_plus-lr.jar), which goes into RetroArch's system (BIOS) folder and needs Java 8 or newer on the device. Use the core and the jar of the same date together."
             echo "This release is rebuilt weekly from each core's newest upstream commit. The builds of the latest run and their source commits are below; a core that did not build in that run keeps its earlier build and index line."
             echo
             echo '```'
@@ -230,10 +272,16 @@ jobs:
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \
               --notes-file "$notes" --latest=false --target "$GITHUB_SHA"
           fi
-          # The zips first, the index last (see the top of this file).
+          # The zips and companion files first, the index last (see the top of
+          # this file).
           zips=$(sed 's/$/_libretro.so.zip/; s/^/cores\//' cores/built.txt)
           # shellcheck disable=SC2086 # one argument per zip
           gh release upload "$RELEASE_TAG" $zips --repo "$GITHUB_REPOSITORY" --clobber
+          extras=$(sed '/^$/d; s/^/cores\//' cores/files.txt)
+          if [ -n "$extras" ]; then
+            # shellcheck disable=SC2086 # one argument per file
+            gh release upload "$RELEASE_TAG" $extras --repo "$GITHUB_REPOSITORY" --clobber
+          fi
           gh release upload "$RELEASE_TAG" cores/BUILDINFO.txt --repo "$GITHUB_REPOSITORY" --clobber
           gh release upload "$RELEASE_TAG" cores/index-extended.txt --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \

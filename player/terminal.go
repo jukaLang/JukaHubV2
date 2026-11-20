@@ -18,6 +18,10 @@ package main
 // clears the screen. The mouse wheel scrolls and a click puts the caret where
 // it lands.
 //
+// Interactive programs — `shell`, htop, vi, nano, less, a REPL, ssh to a host —
+// run on a real terminal instead (termpty.go, termpty_ui.go, termvt.go), with
+// controls of their own; leaving one keeps it running and Start resumes it.
+//
 // Typing on a handheld is slow, so three things spare it: the Command Deck
 // (cmddeck.go — ready-made commands by category with pickers for their
 // blanks, Favorites and macros, Ask Juka), token chips above the on-screen
@@ -161,6 +165,67 @@ type termJob struct {
 	// limit is the run's own timeout when it is not termCommandTimeout (the
 	// apt built-in, linuxpkg_cli.go).
 	limit time.Duration
+	// input feeds a program's standard input (a Java program asking for a
+	// name, javaterm.go): lines typed while it runs are queued here and a
+	// goroutine writes them to the pipe. inputOpen goes false on Ctrl+D or
+	// when the program ends. nil for a command that gets no input.
+	input     chan []byte
+	inputOpen bool
+}
+
+// termInputQueue is how many typed lines may wait for a program that has not
+// read the ones before.
+const termInputQueue = 64
+
+// termInputPrompt marks a line typed to a running program in the scrollback.
+const termInputPrompt = "> "
+
+// takesInput reports whether the running program reads what is typed.
+func (j *termJob) takesInput() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.inputOpen && !j.done
+}
+
+// sendInput queues b for the program; full is true when it has not read
+// enough of what was typed before.
+func (j *termJob) sendInput(b []byte) (sent, full bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.inputOpen || j.done {
+		return false, false
+	}
+	select {
+	case j.input <- b:
+		return true, false
+	default:
+		return false, true
+	}
+}
+
+// closeInput ends the program's input (Ctrl+D, or the program ended).
+func (j *termJob) closeInput() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.inputOpen {
+		return false
+	}
+	j.inputOpen = false
+	close(j.input)
+	return true
+}
+
+// termFeedInput writes queued lines to a program's input until the queue is
+// closed; a program that stopped reading only makes the rest go nowhere.
+func termFeedInput(w io.WriteCloser, ch <-chan []byte) {
+	defer w.Close()
+	for b := range ch {
+		if _, err := w.Write(b); err != nil {
+			for range ch {
+			}
+			return
+		}
+	}
 }
 
 func (j *termJob) Write(p []byte) (int, error) {
@@ -335,6 +400,45 @@ func termStopJob() bool {
 	return true
 }
 
+// termTakesInput reports whether the prompt feeds a running program now: a
+// line job's input, or the on-screen keyboard typing into an interactive
+// session (termpty_ui.go).
+func termTakesInput() bool {
+	return termPtyVKActive() || (term.job != nil && term.job.takesInput())
+}
+
+// termSendInput sends one typed line to the running program. What it printed
+// so far on its current line (its question) and the answer join into one
+// line of the scrollback, as on a real terminal.
+func termSendInput(j *termJob, text string) {
+	termFollow()
+	termDrainJob()
+	j.mu.Lock()
+	partial := j.partial
+	j.partial = ""
+	j.mu.Unlock()
+	term.liveLine = ""
+	if p := termCleanOutput(partial); p != "" {
+		termAppend(p+text, termKindOutput)
+	} else {
+		termAppend(termInputPrompt+text, termKindEcho)
+	}
+	switch sent, full := j.sendInput([]byte(text + "\n")); {
+	case full:
+		termAppend("The program has not read what you typed before — wait a moment.", termKindError)
+	case !sent:
+		termAppend("The program no longer reads input.", termKindSystem)
+	}
+}
+
+// termCloseInput is Ctrl+D: the running program's input ends, which is how
+// a program that reads until the end learns there is no more.
+func termCloseInput() {
+	if j := term.job; j != nil && j.closeInput() {
+		termAppend("^D (end of input)", termKindSystem)
+	}
+}
+
 // termJobParent is the context a new command runs under: the Terminal's scene
 // scope while the Terminal is the screen, so leaving it stops the command the
 // way leaving any screen stops its work (scenetasks.go).
@@ -349,9 +453,27 @@ func termJobParent() context.Context {
 
 // termLaunch starts cmd in the background and makes it the terminal's job.
 func termLaunch(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, label string) {
-	job := &termJob{cancel: cancel, started: time.Now(), command: label}
+	termLaunchCmd(ctx, cancel, cmd, label, 0, false)
+}
+
+// termLaunchInput is termLaunch for a program that reads what the user types
+// (javaterm.go): its standard input is a pipe the prompt feeds, and limit is
+// its own timeout.
+func termLaunchInput(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, label string, limit time.Duration) {
+	termLaunchCmd(ctx, cancel, cmd, label, limit, true)
+}
+
+func termLaunchCmd(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, label string, limit time.Duration, withInput bool) {
+	job := &termJob{cancel: cancel, started: time.Now(), command: label, limit: limit}
 	cmd.Stdout = job
 	cmd.Stderr = job
+	if withInput && cmd.Stdin == nil {
+		if w, err := cmd.StdinPipe(); err == nil {
+			job.input = make(chan []byte, termInputQueue)
+			job.inputOpen = true
+			go termFeedInput(w, job.input)
+		}
+	}
 	// Its own process group (POSIX) or a process tree (Windows), stopped whole
 	// on Stop, on leave or on timeout, and a bounded wait for output pipes a
 	// stray grandchild still holds.
@@ -363,6 +485,8 @@ func termLaunch(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, l
 	go func() {
 		defer cancel()
 		err := cmd.Run()
+		// The input goroutine ends with the program.
+		job.closeInput()
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		switch {
@@ -446,8 +570,9 @@ func termRunExternal(line string) {
 	}
 	cmd.Dir = term.cwd
 	// On the handheld, the programs Linux packages installed come first
-	// (linuxpkg_runtime.go); nothing changes anywhere else.
-	cmd.Env = linuxPkgShellEnv(append(os.Environ(), "TERM=dumb"))
+	// (linuxpkg_runtime.go); nothing changes anywhere else. JukaHub's Java
+	// (javart.go) is first on PATH, with JAVA_HOME, when there is one.
+	cmd.Env = javaShellEnv(linuxPkgShellEnv(append(os.Environ(), "TERM=dumb")))
 	termLaunch(ctx, cancel, cmd, line)
 }
 
@@ -814,6 +939,39 @@ func termOpenWithCommand(config *Config, command string) {
 	}
 }
 
+// termPendingRun is what termOpenAndRun runs once the Terminal is entered,
+// if that is soon (termPendingRunAt): a switch that never arrived must not
+// start a program on some later visit.
+var (
+	termPendingRun   func()
+	termPendingRunAt time.Time
+)
+
+// termOpenAndRun opens the Terminal and runs fn there on the main thread: a
+// Java program Files started (javarun.go) runs as the Terminal's job, so its
+// output shows and what the user types reaches it.
+func termOpenAndRun(config *Config, fn func()) {
+	if fn == nil {
+		return
+	}
+	idx := sceneIndexExact(config, "Terminal")
+	if idx < 0 {
+		showToast("Terminal is not available", ToastWarn())
+		return
+	}
+	if idx == currentSceneIndex {
+		termFocusPrompt()
+		fn()
+		return
+	}
+	termPendingRun, termPendingRunAt = fn, time.Now()
+	changeSceneTo(config, idx)
+	if pendingSceneIndex != idx {
+		termPendingRun = nil
+		showToast("One moment — try again", ToastInfo())
+	}
+}
+
 // termInit runs when the Terminal scene is entered. The session — scrollback,
 // directory, history — survives leaving and coming back.
 func termInit() {
@@ -827,6 +985,11 @@ func termInit() {
 	// Opens the deck when a "Commands" entry asked for it, and starts the
 	// device probe so the deck is ready by the time Select is pressed.
 	cmdDeckTermEntered()
+	// A command handed over from elsewhere is for the line terminal; an
+	// interactive session left on screen waits behind it (termpty.go).
+	if termPendingCommand != "" || termPendingRun != nil {
+		termPty.view = false
+	}
 	if termPendingCommand != "" {
 		termInsertText(termPendingCommand)
 		termPendingCommand = ""
@@ -850,6 +1013,12 @@ func termInit() {
 		}
 		termAppend("", termKindSystem)
 	}
+	if run := termPendingRun; run != nil {
+		termPendingRun = nil
+		if time.Since(termPendingRunAt) <= 15*time.Second {
+			run()
+		}
+	}
 }
 
 // termShellName names the shell external commands run in.
@@ -866,6 +1035,17 @@ func termShellName() string {
 // ── Commands ─────────────────────────────────────────────────────────────
 
 func termExecute(input string) {
+	// The on-screen keyboard typing into an interactive session sends its
+	// Enter through here (termpty_ui.go).
+	if termPtyVKSubmit(input) {
+		return
+	}
+	// A running program that reads its input gets the line instead of the
+	// shell (javaterm.go); it is not a command, so it stays out of history.
+	if j := term.job; j != nil && j.takesInput() {
+		termSendInput(j, input)
+		return
+	}
 	termRecordHistory(input)
 	term.histIdx = -1
 	// Running something is the moment the user wants to see its output.
@@ -880,6 +1060,13 @@ func termExecute(input string) {
 	parts := strings.Fields(cmdline)
 	command := strings.ToLower(parts[0])
 	args := parts[1:]
+
+	// A shell, htop, vi, nano, less, a REPL … get a real terminal
+	// (termpty.go) instead of a pipe they would refuse.
+	if termPtyWants(cmdline) {
+		termPtyRunLine(cmdline)
+		return
+	}
 
 	switch command {
 	case "help", "?":
@@ -977,12 +1164,17 @@ func termExecute(input string) {
 		}
 
 	case "ssh":
-		termSSHCommand(args)
+		// on|off|status is the SFTP server; a host connects (termpty_ssh.go).
+		termPtySSHCommand(args, cmdline)
 
 	case "apt", "apt-get", "jpkg":
 		// Linux packages on the handheld (linuxpkg_cli.go); a PC's own apt
 		// runs as a program.
 		termLinuxPkg(command, cmdline, args)
+
+	case "java", "javac", "jshell", "jar", "javaw":
+		// JukaHub's Java or the computer's (javaterm.go), and java install.
+		termJavaCommand(command, cmdline, args)
 
 	case "exit", "quit":
 		termLeave(appConfig)
@@ -1006,9 +1198,16 @@ func termHelp() {
 		"  date · uptime · whoami · hostname · sysinfo · neofetch",
 		"  calc <expression>  evaluate maths, e.g. calc 2+2*3",
 		"  ssh [on|off|status]  SFTP server for PC file access",
+		"  ssh user@host      connect to another computer (ssh forget <host> drops its key)",
+		"  shell              an interactive shell; htop, vi, nano, less, man, top and",
+		"                     python with no arguments open the same way (" + termPtyLeaveWords() + ")",
 		"  apt <command>      Linux packages on the handheld: update, install, remove, search",
+		"  java <args>        Java programs: java -jar app.jar, java Hello.java, java -version",
+		"  java install [8|11|17|21|25] [jre|jdk] · java update · java remove · java status",
+		"  javac · jshell · jar   the JDK's tools (java install 25 jdk)",
 		"  exit               leave the Terminal",
 		"Anything else runs in the system shell (" + termShellName() + ") for up to " + termDurationText(termCommandTimeout) + ".",
+		"While a Java program runs, the line you type goes to it (Enter / Start); Ctrl+D ends its input.",
 		"Pad: A keyboard · Select commands · Start run · X clear / stop · Y history · L1/R1 page · B back",
 		"Keyboard: Enter run · Ctrl+P commands · Up/Down history · Tab complete · PgUp/PgDn scroll · Esc back",
 		"Commands (Select / Ctrl+P) runs ready-made commands with no typing; Y in the history pins one there.",
@@ -1421,12 +1620,20 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 		if ctrl {
 			termStopJob()
 		}
+	case sdl.K_d:
+		if ctrl {
+			termCloseInput()
+		}
 	}
 }
 
 // handleTermTextInput processes text input for the terminal.
 func handleTermTextInput(e *sdl.TextInputEvent) {
 	text := e.GetText()
+	// An interactive session on screen gets what is typed (termpty_ui.go).
+	if termPtyText(text) {
+		return
+	}
 	if cmdDeck.open {
 		cmdDeckType(text)
 		return
@@ -1444,6 +1651,14 @@ func handleTermTextInput(e *sdl.TextInputEvent) {
 // the click) and the console (which focuses the prompt). Clicks elsewhere —
 // the top bar above all — are left to the shared handlers.
 func handleTermMouseClick(mx, my int32, config *Config) bool {
+	// The session screen, or the line terminal's "resumes" pill. A click the
+	// session leaves (the footer) is not the line terminal's either.
+	if termPtyClick(mx, my) {
+		return true
+	}
+	if termPtyShowing() {
+		return false
+	}
 	if cmdDeck.open {
 		return cmdDeckClick(mx, my, config)
 	}
@@ -1491,6 +1706,9 @@ func handleTermWheel(dy int32) bool {
 	if dy == 0 {
 		return false
 	}
+	if termPtyShowing() {
+		return termPtyWheel(dy)
+	}
 	if cmdDeck.open {
 		cmdDeckWheel(dy)
 		return true
@@ -1507,6 +1725,11 @@ func handleTermWheel(dy int32) bool {
 // open, takes the pad before this runs and closes on B), and Up at the oldest
 // line hands the press to the top bar instead of doing nothing.
 func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
+	// An interactive session on screen has a pad map of its own
+	// (termpty_ui.go).
+	if termPtyShowing() {
+		return termPtyPad(e, config)
+	}
 	if cmdDeck.open {
 		return cmdDeckPad(e, config)
 	}
@@ -1527,7 +1750,15 @@ func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
 		vkOpenTerminal()
 	case sdl.CONTROLLER_BUTTON_START:
 		termFocusPrompt()
-		if strings.TrimSpace(term.input) == "" {
+		// On an empty line Start resumes a session left running — unless a
+		// program here waits for input, which the empty line answers.
+		if strings.TrimSpace(term.input) == "" && termPtyAlive() && !termTakesInput() {
+			PlayActivateSound()
+			termPtyResume()
+			return true
+		}
+		// An empty line is still an answer to a program that asked.
+		if strings.TrimSpace(term.input) == "" && !termTakesInput() {
 			return true
 		}
 		PlayActivateSound()

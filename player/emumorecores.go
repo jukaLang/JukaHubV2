@@ -95,6 +95,9 @@ var emuMoreCoreSuggestions = map[string][]string{
 	"Atari Lynx":           {"handy", "mednafen_lynx"},
 	"Atari Jaguar":         {"virtualjaguar"},
 	"DOS":                  {"dosbox_pure"},
+	"ScummVM":              {"scummvm"},
+	"TIC-80":               {"tic80"},
+	"EasyRPG":              {"easyrpg"},
 }
 
 // emuMoreCoreCandidates is the cores worth having for system, best first: the

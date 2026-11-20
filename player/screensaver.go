@@ -851,8 +851,9 @@ func idleScreenHoldOff(config *Config) bool {
 		ambientEntryBlocked(config),
 		playing,
 		paused,
-		// A Synth pattern playing counts as media playing (synth.go).
-		videoHoldsScreenAwake() || synthHoldsScreenAwake(),
+		// A Synth pattern playing counts as media playing (synth.go), and so
+		// does a Party Mode room with players in it (partymode_net.go).
+		videoHoldsScreenAwake() || synthHoldsScreenAwake() || pmodeHoldsScreenAwake(),
 		installInProgress(),
 		patchInstallBusy(),
 		aiHoldsScreenAwake(),

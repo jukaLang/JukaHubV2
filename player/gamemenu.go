@@ -74,6 +74,7 @@ const (
 	gmSwitch  // quit to the game switcher (gameswitcher.go)
 	gmCheats  // the game's cheats, switched on and off (gamemenu_cheats.go)
 	gmDisc    // a multi-disc game's disc: Left/Right pick, A puts it in (discpage.go)
+	gmManual  // the game's controls and text guides (gamemanual_ingame.go)
 )
 
 // gameMenuEnabled reports Settings → Controls → In-game menu.
@@ -109,6 +110,11 @@ func gmItems(config *Config) []gmItem {
 		// right under Resume.
 		items = append(items, gmMusic)
 	}
+	if stopwatchGameMenuShown() {
+		// A started stopwatch or countdown: live like Music, so beside it
+		// (stopwatch.go).
+		items = append(items, gmStopwatch)
+	}
 	if gmStatesAvailable() {
 		items = append(items, gmSave, gmLoad)
 		if rewind, _ := retroTransportAvailable(); rewind {
@@ -122,11 +128,18 @@ func gmItems(config *Config) []gmItem {
 			items = append(items, gmCheats)
 		}
 	}
+	if gmManualAvailable() {
+		items = append(items, gmManual)
+	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
 	}
 	if gameSwitcherEnabled(config) {
 		items = append(items, gmSwitch)
+	}
+	if screenRecSupported() {
+		// Record screen / Stop recording (screenrec.go).
+		items = append(items, gmRecord)
 	}
 	return append(items, gmCloseBg, gmSleep, gmQuit)
 }
@@ -158,6 +171,8 @@ func gmLabel(it gmItem) (string, string) {
 		return "Game switcher", "Quit, then pick up another recent game"
 	case gmCheats:
 		return "Cheats", gmCheatsSub()
+	case gmManual:
+		return "Manual", gmManualSub()
 	case gmDisc:
 		return gmDiscLabel()
 	case gmMusic:
@@ -167,6 +182,10 @@ func gmLabel(it gmItem) (string, string) {
 			sub = "Paused · " + orbKeyName("A") + " play · Left/Right previous / next"
 		}
 		return "Music: " + title, sub
+	case gmStopwatch:
+		return stopwatchGameMenuLabel()
+	case gmRecord:
+		return screenRecMenuLabel()
 	}
 	return "Resume game", ""
 }
@@ -192,6 +211,10 @@ func gmPress(config *Config, b gaButton) {
 	}
 	if gmCheatsActive() {
 		gmCheatsPress(b)
+		return
+	}
+	if gmManualActive() {
+		gmManualPress(b)
 		return
 	}
 	items := gmItems(config)
@@ -226,8 +249,14 @@ func gmPress(config *Config, b gaButton) {
 		if items[gaOverlay.sel] == gmDisc {
 			gmDiscStep(b == gaBtnRight)
 		}
+		if items[gaOverlay.sel] == gmStopwatch {
+			// Right takes a lap (stopwatch.go).
+			stopwatchGameMenuPress(b)
+		}
 	case gaBtnA:
 		switch items[gaOverlay.sel] {
+		case gmStopwatch:
+			stopwatchGameMenuPress(b)
 		case gmMusic:
 			musicTogglePause()
 		case gmResume:
@@ -253,12 +282,18 @@ func gmPress(config *Config, b gaButton) {
 			retroTransportCommand(false)
 		case gmCheats:
 			gmCheatsOpen()
+		case gmManual:
+			gmManualOpen()
 		case gmDisc:
 			gmDiscApply()
 		case gmCloseBg:
 			// The game stays paused here; the row's line shows the result.
 			PlayActivateSound()
 			closeAllFromGameMenu()
+		case gmRecord:
+			// Start: the game carries on, recorded. Stop: the menu stays and
+			// the row's line says where the clip went (screenrec.go).
+			screenRecMenuPress(config)
 		}
 	}
 }
@@ -326,6 +361,7 @@ func gameForceQuit() {
 	for _, cmd := range cmds {
 		// The player left: not a game that failed to start (gamelaunch_watch.go).
 		gameLaunchNoteStop(cmd)
+		vfoNoteForced(cmd, "needed Select + Start held to leave it") // verified_observe.go
 		gmInterruptGame(cmd)
 		// A game paused by an alarm acts on the interrupt at once.
 		_ = alarmSignalChild(cmd, false)
@@ -357,6 +393,7 @@ func gmQuitWatch(cmds []*exec.Cmd) {
 	for _, cmd := range cmds {
 		if gmAnyLive([]*exec.Cmd{cmd}) && cmd.Process != nil {
 			logInfo("gamemenu", "the game (pid %d) did not quit within %s; killing its group", cmd.Process.Pid, gmQuitGrace)
+			vfoNoteForced(cmd, "did not quit when asked; JukaHub ended it") // verified_observe.go
 			_ = screenChildKill(cmd)
 		}
 	}
@@ -400,6 +437,10 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	}
 	if gmCheatsActive() {
 		gmCheatsDraw(renderer, fonts)
+		return
+	}
+	if gmManualActive() {
+		gmManualDraw(renderer, fonts)
 		return
 	}
 	items := gmItems(config)

@@ -189,6 +189,9 @@ func powerSleepRun(source string) {
 	var held powerSleepHeld
 	lightOff := false
 	clearRTC := func() {}
+	// How long the kernel really slept, for the wake hooks (sleephooks.go).
+	var sleptFor time.Duration
+	suspended := false
 	defer func() {
 		if r := recover(); r != nil {
 			logWarn("sleep", "sleep failed: %v", r)
@@ -212,12 +215,19 @@ func powerSleepRun(source string) {
 		// A hotspot the sleep turned off gives the radio back to Wi-Fi now
 		// (hotspot.go; a no-op when there was none).
 		hotspotAfterSleep()
+		// Features that follow a wake (sleephooks.go), last.
+		sleepHooksRunWake(source, sleptFor, suspended)
 	}()
 
 	logInfo("sleep", "going to sleep (%s)", source)
+	// Features that act while the game still runs (sleephooks.go).
+	sleepHooksRunBefore(source)
 	// "Lock after sleep" goes up now, before the screen comes back (bootlock.go).
 	bootLockNoteSleep()
 	held = powerSleepHold()
+	// A screen recording ends here (screenrec.go; never waits): ffmpeg is not
+	// a held child, and across a suspend its wall-clock frames would jump.
+	screenRecStop("the handheld went to sleep")
 	// devpower.go's switch: the display driver's backlight on the TrimUI,
 	// with a marker that lets the next start undo a light a crash left off.
 	backlightOff(nil)
@@ -256,6 +266,7 @@ func powerSleepRun(source string) {
 			logWarn("sleep", "the device came straight back from suspend")
 		default:
 			logInfo("sleep", "awake after %s%s", slept.Round(time.Second), powerSleepClockNote(before, after))
+			sleptFor, suspended = sleptFor+slept, true
 			powerKeyNoteOwnWake()
 			// Woken by the power-off deadline, not by a press or an alarm:
 			// the game is saved and the device powers off, or it sleeps on.

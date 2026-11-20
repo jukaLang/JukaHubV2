@@ -312,6 +312,9 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// secret never leaves the device, and the ID alone would bring a client
 	// that cannot sign in.
 	"google_client_id": true, "google_client_secret": true,
+	// The Controller Mode link chosen last (ctlmode.go): where the page's
+	// focus starts, not a setting.
+	ctlLastTransportKey: true,
 }
 
 // cfgdocIgnoredKey reports whether a Custom key is runtime state rather than a

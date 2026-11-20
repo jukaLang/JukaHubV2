@@ -257,19 +257,31 @@ func sttServeWarm() {
 			}
 		}()
 		if s, err := sttServerGet(); err == nil {
-			s.touch()
+			s.release() // touches it: the reaper's idle clock starts now
 		}
 	}()
 }
 
-// sttServerGet returns the running server, starting one when there is none.
+// sttServerGet returns the running server, starting one when there is none,
+// for a warm-up or the wake word: only the light free-up makes room for it.
 // Never on the main thread: it may run vosk-cli --help and start a process.
-func sttServerGet() (*sttServer, error) {
+// Like sttServerGetFor, the server comes counted in busy: the caller must
+// call release exactly once when done with it.
+func sttServerGet() (*sttServer, error) { return sttServerGetFor(false) }
+
+// sttServerGetFor is sttServerGet; asked (the orb's words, a clip the user
+// recorded) lets the free-up take every step, apps left in the background
+// included (memfree.go). A server it returns is already counted in busy,
+// taken under sttServe.mu, so neither the reaper nor sttServeStopIdle (which
+// decide under the same lock) can stop it between the hand-out and its use;
+// the caller calls release exactly once (no error: nothing to release).
+func sttServerGetFor(asked bool) (*sttServer, error) {
+	sttServeMakeRoom(asked)
 	sttServe.mu.Lock()
 	defer sttServe.mu.Unlock()
 	if s := sttServe.srv; s != nil && !s.dead() {
-		// A new user: the reaper must not take it as idle before busy counts it.
 		s.touch()
+		s.busy.Add(1)
 		return s, nil
 	}
 	sttServe.srv = nil
@@ -279,7 +291,9 @@ func sttServerGet() (*sttServer, error) {
 	if !sttLocalReady() {
 		return nil, errSTTUnavailable
 	}
-	if avail := sttMemAvailable(); avail > 0 && avail < sttServeStartAvail {
+	// sttServeMakeRoom freed what it could before the lock; part of the free
+	// swap counts (memHeadroomMB).
+	if memHeadroomMB(sttServeStartAvail>>20) < sttServeStartAvail>>20 {
 		return nil, errSTTMemory
 	}
 	bin, model, sure := sttServeFiles()
@@ -300,6 +314,7 @@ func sttServerGet() (*sttServer, error) {
 	}
 	sttServe.failedAt = time.Time{}
 	sttServe.srv = s
+	s.busy.Add(1)
 	if !sttServe.reaping {
 		sttServe.reaping = true
 		go sttServeReap()
@@ -373,6 +388,13 @@ func sttProcRSS(pid int) string {
 }
 
 func (s *sttServer) touch() { s.lastUse.Store(time.Now().UnixNano()) }
+
+// release ends one use sttServerGetFor counted in busy, as recently used (so
+// the reaper's idle clock starts now). Exactly once per server handed out.
+func (s *sttServer) release() {
+	s.touch()
+	s.busy.Add(-1)
+}
 
 func (s *sttServer) dead() bool {
 	select {
@@ -513,6 +535,67 @@ func sttServeStop(why string) {
 	}
 }
 
+// sttServeMakeRoom frees memory for a server that is not running and would
+// not fit (memfree.go), before sttServerGet takes the lock: the free-up may
+// take seconds, and a start under the lock would hold every caller that long.
+// Nothing happens with a server running, a failed start still cooling down,
+// memory enough, or a game on screen (the wake word listens there: the
+// game's memory and card are not touched for it). asked: a start the user
+// asked for (memFreeSpeech, every step); otherwise a warm-up or the wake
+// word's listening, which gets the light, rate-limited steps only and never
+// closes an app (memFreeAIPreload).
+func sttServeMakeRoom(asked bool) {
+	if gameScreenSuspended() && !gameAssistOverlayActive() {
+		return
+	}
+	if !sttServe.mu.TryLock() {
+		return // a start or a stop is under way
+	}
+	running := sttServe.srv != nil && !sttServe.srv.dead()
+	cooling := !sttServe.failedAt.IsZero() && time.Since(sttServe.failedAt) < sttServeRetry
+	sttServe.mu.Unlock()
+	if running {
+		return
+	}
+	if cooling || sttServeProbe.state.Load() == sttServeNo {
+		return
+	}
+	need := uint64(sttServeStartAvail >> 20)
+	if memHeadroomMB(need) >= need {
+		return
+	}
+	if asked {
+		memFreeEnsure(context.Background(), need, memFreeSpeech, "offline speech")
+		return
+	}
+	memFreeEnsure(context.Background(), need, memFreeAIPreload, "offline speech warm-up")
+}
+
+// sttServeStopIdle stops the warm server when no utterance uses it and none
+// did for memFreeHelperIdle. forQuestion (the model starting for a question
+// just recognised) needs the room more: then the server goes whenever no
+// utterance uses it, even while the wake word keeps it. It never waits for
+// the lock: a start or stop under way is not idle. It reports whether one
+// was stopped. Any goroutine (memfree.go).
+func sttServeStopIdle(why string, forQuestion bool) bool {
+	if !sttServe.mu.TryLock() {
+		return false
+	}
+	s := sttServe.srv
+	idle := s != nil && !s.dead() && s.busy.Load() == 0 && (forQuestion ||
+		(!sttServe.keep.Load() && time.Since(time.Unix(0, s.lastUse.Load())) >= memFreeHelperIdle))
+	if idle {
+		sttServe.srv = nil
+	}
+	sttServe.mu.Unlock()
+	if !idle {
+		return false
+	}
+	s.stop()
+	logInfo("voice", "offline speech server stopped: %s", why)
+	return true
+}
+
 // sttServeLoaded reports a server running or starting. It never waits for
 // the lock (a start may hold it for seconds), so the main thread may ask.
 func sttServeLoaded() bool {
@@ -541,8 +624,11 @@ func sttServeReap() {
 		if s.busy.Load() == 0 {
 			idle := time.Since(time.Unix(0, s.lastUse.Load()))
 			keep := sttServe.keep.Load()
-			switch avail := sttMemAvailable(); {
-			case avail > 0 && avail < sttServeKeepAvail:
+			switch {
+			// The start gate's measure (swap credit counts), so a server swap
+			// let start is not stopped and reloaded at once; a hard RAM floor
+			// still stops it (memKeepShort).
+			case memKeepShort(sttServeKeepAvail >> 20):
 				why = "memory is low"
 			case !keep && gameScreenSuspended() && !gameAssistOverlayActive():
 				why = "a game has the screen"
@@ -570,6 +656,10 @@ type sttStreamOpts struct {
 	grammar      []string      // phrases the recognizer may hear (nil: free speech)
 	words        bool          // word times and confidences in the result
 	partialEvery time.Duration // 0: no partial words
+	// asked: the user asked for these words (the orb, a recorded clip), so a
+	// server that does not fit may close apps left in the background to start
+	// (sttServerGetFor). The wake word's segments leave it false.
+	asked bool
 }
 
 // sttWord is one recognized word with its confidence and times (seconds from
@@ -714,13 +804,12 @@ func (s *sttStream) run() {
 			s.err = fmt.Errorf("offline speech stream stopped: %v", r)
 		}
 	}()
-	srv, err := sttServerGet()
+	srv, err := sttServerGetFor(s.opts.asked)
 	if err != nil {
 		s.err = err
 		return
 	}
-	srv.busy.Add(1)
-	defer srv.busy.Add(-1)
+	defer srv.release() // busy was counted under sttServe.mu by the getter
 	if err := srv.waitReady(); err != nil {
 		s.err = err
 		return
@@ -876,7 +965,7 @@ func sttServeTranscribe(ctx context.Context, wav []byte) (string, error) {
 	}
 	pcm := wav[44:]
 	// One goroutine owns this stream's Feed and Finish.
-	st := sttStreamStart(sttStreamOpts{})
+	st := sttStreamStart(sttStreamOpts{asked: true})
 	for len(pcm) > 0 {
 		n := min(len(pcm), sttServeClipChunk)
 		st.Feed(pcm[:n])

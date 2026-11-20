@@ -17,8 +17,8 @@ name: PPSSPP for TrimUI (tg5040)
 # itself when this lands, and a fixed build script publishes at once. A run
 # whose release already carries the newest buildable version (and its asset)
 # stops after a few API calls unless "force" is set, so the daily run costs a
-# runner minute and catches a new PPSSPP within a day. Never on other pushes
-# (the CI rule: two jobs per push).
+# runner minute and catches a new PPSSPP within a day. It does not run on other
+# pushes, keeping the normal CI path short.
 #
 # "Newest buildable": upstream moved its SDL front end to SDL3 for 1.21
 # (hrydgard/ppsspp#22956 dropped the SDL2 leftovers, 2026-11). The TrimUI

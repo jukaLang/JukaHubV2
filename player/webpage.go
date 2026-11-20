@@ -9586,7 +9586,9 @@ type webTableParse struct {
 	colGroupSpan  int
 }
 
-// parseWebPage parses HTML plus any already-fetched CSS into a document.
+// parseWebPage parses HTML plus any already-fetched CSS into a document. Tests
+// use it with fixture HTML, while the browser supplies linked sheets through
+// parseWebPageWithLinkedSheets after its fetch.
 //
 // Every style sheet is in force for the whole document, as in a browser. The
 // linked sheets and the page's own <style> blocks are gathered before the
@@ -9654,7 +9656,8 @@ func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []web
 
 // fetchWebStylesheets pulls the page's linked stylesheets. External CSS is what
 // makes most real pages look like themselves; a sheet or set of sheets past the
-// budget contributes its complete leading rules.
+// budget contributes its complete leading rules. Tests use the combined CSS
+// result to check fetching separately from the document renderer.
 func fetchWebStylesheets(source string, base *url.URL) string {
 	var out strings.Builder
 	for _, sheet := range fetchWebStylesheetBlocks(source, base) {
@@ -9671,6 +9674,10 @@ type webFetchedSheet struct {
 }
 
 func fetchWebStylesheetBlocks(source string, base *url.URL) []webFetchedSheet {
+	return fetchWebStylesheetBlocksContext(context.Background(), source, base)
+}
+
+func fetchWebStylesheetBlocksContext(parent context.Context, source string, base *url.URL) []webFetchedSheet {
 	if base == nil {
 		return nil
 	}
@@ -9681,7 +9688,7 @@ func fetchWebStylesheetBlocks(source string, base *url.URL) []webFetchedSheet {
 	// Fetch in bounded batches. A modern page may link dozens of sheets; all
 	// of their full bodies at once would briefly use much more memory than the
 	// CSS we can apply. Stop scheduling after the CSS budget or deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	pageURL := base.String()
 	var result []webFetchedSheet
@@ -10384,6 +10391,10 @@ func webInlineCSSBlocks(source string) []webInlineCSSBlock {
 // later block cannot move ahead of an earlier block's rules. The imported
 // sheets themselves go through the linked-sheet fetcher.
 func webExpandInlineCSSImports(source string, pageURL *url.URL) string {
+	return webExpandInlineCSSImportsContext(context.Background(), source, pageURL)
+}
+
+func webExpandInlineCSSImportsContext(ctx context.Context, source string, pageURL *url.URL) string {
 	if pageURL == nil || webIndexFold(source, "<style") < 0 {
 		return source
 	}
@@ -10398,7 +10409,7 @@ func webExpandInlineCSSImports(source string, pageURL *url.URL) string {
 		// Each block gets the same fresh budget a linked sheet gets, so one
 		// block's imports cannot starve another's.
 		seen := make(map[string]bool)
-		expanded := webExpandCSSImports(context.Background(), block.css, pageURL, pageURL.String(), seen, 0)
+		expanded := webExpandCSSImports(ctx, block.css, pageURL, pageURL.String(), seen, 0)
 		out.WriteString(source[last:block.start])
 		out.WriteString(expanded)
 		last = block.end

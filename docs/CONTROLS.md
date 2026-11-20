@@ -1,7 +1,11 @@
 # Controls
 
 JukaHub is controller-first: every screen is reachable with the D-pad and the
-four face buttons. Keyboard and mouse are supported on desktop builds.
+four face buttons. Keyboard and mouse are supported on desktop builds. A
+mouse pointer left alone for 10 seconds hides until the mouse moves or clicks
+again (the wheel scrolls without bringing it back), on a PC and with a USB or
+Bluetooth mouse on a handheld; the handheld's own pointer is the
+[virtual cursor](#virtual-cursor).
 
 The top bar always shows the system status — a brightness button, a volume
 button, a Bluetooth button, a Wi-Fi meter, the weather chip, the clock, a
@@ -241,14 +245,14 @@ no footer names may have no key.
 | Live TV | X search · Y favourite | X · Y or F |
 | Browser | Select menu · L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
 | Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
-| Chat | L1 / R1 tabs · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, R renames you, Del drops a waiting file |
+| Chat | L1 / R1 tabs (Voice after Saved) · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, 4 Voice, R renames you, Del drops a waiting file |
 | On-screen keyboard | A type · Start send / submit · B close · X delete · Y submit (Ask AI in chat) · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
 | Settings | L1 / R1 sections · Y search settings · A on "More settings (N)" unfolds the rest · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · Ctrl+F or type a letter on the rail to search · arrows (Left / Right page the sheet) |
 | Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
 | Voice command | A or Menu speak / stop · X type · Y phone QR · B back (cancels while listening or during the pause) | Enter · X · Y · Esc; F4 speak / stop |
 | Wi-Fi | X details · Y scan · Select diagnostics · L1 / R1 page | X · Y or R · I · PgUp / PgDn; D disconnect, C reconnect, F forget |
 | Files | Y actions · X mark · L1 / R1 page | Y · X · PgUp / PgDn; H hidden files |
-| Image viewer | L1 / R1 zoom · L2 / R2 previous / next · Y fit · X lock | - / + · PgUp / PgDn · Y or F · X or L |
+| Image viewer | L1 / R1 zoom · L2 / R2 previous / next · Y fit · X lock · Start mark up in Paint | - / + · PgUp / PgDn · Y or F · X or L · M |
 | PDF reader | L1 / R1 page (or chapter) · L2 / R2 zoom or text size · X text · Y options | PgUp / PgDn (or [ / ]) · - / + · X or T · Y, O or Tab |
 | Playtime & achievements | L1 / R1 tabs · X sort · Y RetroAchievements | Tab / Shift+Tab · X · Y |
 | Game details | Start options · X favourite · Y look up again | O · X or F · Y |
@@ -268,6 +272,11 @@ no footer names may have no key.
 | Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
 | Calculator | X insert x · Y graph · L1 clear · R1 delete | X · Y or G · C · Backspace |
 | Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
+| Tasks | A done · Y add · X task / list sheet · L1 / R1 list · Left / Right column. Due picker: L1 / R1 ±7 days / ±1 hour, Y save | Enter or Space · N or Y · X · PgUp / PgDn · ← / → or Tab; Del twice deletes a task |
+| Voice Memos | Y record · A play / pause (stop & save while recording) · X options (pause while recording) · L1 / R1 −5 s / +5 s | Y or R · Enter · X (Space pauses a recording) · ← / →; N rename, Del delete |
+| Paint | A draw · X tools · Y colours · L1 / R1 undo / redo · L2 / R2 zoom · Select file menu · left stick glide | Enter or Space · T · C · Z or Ctrl+Z / Ctrl+Y · - / + (0 fit) · M; [ ] brush, 1–8 tools, G grid, Ctrl+S save, Shift+arrows 8 px |
+| Stopwatch | A start / pause · X lap · Y reset (countdown being set: next preset) · L1 / R1 tab · countdown Left / Right field, Up / Down change | Enter · X · Y · Tab · arrows |
+| Solitaire | A pick up / put down · X draw · Y smart move · L1 / R1 undo / redo · Start menu | Enter or Space · D · F or Tab · Z / R (Ctrl+Z / Ctrl+Y) · M; N new game |
 | Synth | Start play / stop · L1 / R1 page · L2 / R2 pattern or instrument · Pattern: A step, Y / X note (accent / ratchet on drums) | Space · Tab / Shift+Tab · [ ] · Enter, Y or =, X or -; 1–7 play the pads |
 | Alarm | List: X toggle · Y new · L1 delete (press twice). Editor: Y save · X music / clear label · L1 / R1 ±10 min | X · Y or N · Del; editor Y or S · PgUp / PgDn |
 | Ambient | Y sleep timer · X screen off | Y or S · X; N next photo |
@@ -317,7 +326,7 @@ had nothing to go back to.
 | Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
 | Right stick | Move the virtual cursor (below); L2 / R2 scroll under it |
-| Select + L1 (hold) | Mouse mode on / off: the pointer stays up and the D-pad and sticks move it (below) |
+| Select + L1 (hold) | Mouse mode on / off: the pointer stays on and the D-pad and sticks move it (below) |
 | Select + R1 in a game (TrimUI) | Screenshot of the game's screen ([below](#screenshot-in-a-game-select--r1)) |
 | Power (short press, handheld) | Sleep — on Home, any screen or mid-game; the game carries on at wake (Settings → Power & battery → Power button: Sleep, Exit card or Nothing) |
 | Power (hold 1.5 s) on a JukaHub screen | The power card below |
@@ -332,7 +341,7 @@ clicks (hold A and move to drag a slider or a shelf), and **L2 / R2** scroll up
 and down under the pointer (held, they keep scrolling). B and the other buttons
 keep their usual jobs; the **left stick** stays the D-pad's twin. Any D-pad
 press or left-stick step puts the pointer away (so A presses the focused item
-again), and so do 30 seconds without touching the right stick; the right stick
+again), and so do 10 seconds without touching the right stick; the right stick
 brings it back where it was. A stick that rests a little off centre never
 brings it up.
 
@@ -348,13 +357,20 @@ cursor**.
 
 Hold **Select + L1** for about a second (0.7 s) to turn **mouse mode** on, and
 again to turn it off; **F6** does the same on a keyboard. A short message says
-which. In mouse mode the pointer stays up — no 30-second timeout — and the
+which. In mouse mode the pointer stays on, and the
 **D-pad** moves it as well as the sticks: slowly at first, for a precise nudge,
 then faster the longer you hold it, up to the sticks' full speed. The **left
 stick** moves it too instead of the focus. **A** clicks (hold A and move to
 drag), **L2 / R2** scroll under the pointer, and **B** and every other button
 keep their usual jobs, so you are never stuck behind the pointer: B still goes
 back. This is how the **TrimUI Brick**, which has no sticks, gets a pointer.
+
+Left alone for 10 seconds (no move, click or scroll), the pointer hides where
+it is; mouse mode stays on. The next move of the D-pad or a stick, or **L2 /
+R2**, brings it back at the same spot and moves or scrolls as usual. The first
+**A** only brings it back, so nothing is clicked that you cannot see: press
+**A** again to click. A panel that closes while the pointer is hidden leaves
+it hidden.
 
 Screens that own the pad put the pointer away until they close: Quick
 Settings, the wallpaper picker, the stick calibrations, the controller test, a
@@ -459,6 +475,7 @@ stays on screen, dimmed, and a small menu opens over it:
 | Sleep | Put the handheld to sleep and resume the game on wake |
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
 | Game switcher | Quits the game as Quit to JukaHub does (RetroArch writes its auto save), then opens the [Game switcher](#game-switcher) (only with Settings → Games & emulators → Game switcher on) |
+| Stopwatch / Timer | Once the [Stopwatch](#everyday-apps) or its countdown has been started: "Stopwatch 12:34.5" or "Timer 4:59 left", live; **A** starts or pauses it, **Right** takes a lap |
 
 | Button | Action |
 |--------|--------|
@@ -518,6 +535,74 @@ on older RetroArch it needs the pad's A and B buttons in RetroArch's controls
 (the Turbo row says so when they are missing), and another button pressed
 while the turbo button is held fires repeatedly too. Standalone emulators and
 NextUI paks keep their own controls.
+
+#### Control layouts (RetroArch games)
+
+A control layout is a whole way of holding the pad for one kind of game. Open
+a game's page → **More** → **Controls**, or **Start** on the game in the
+library → **Controls layout**. The list shows the layouts for that console and
+the focused one's chart; **A** uses it for this game, **X** for every game of
+the console, **B** goes back. *None (console buttons)* plays with the
+console's Buttons and Turbo choices. The game page shows a *Controls: …* chip
+while a layout is in use.
+
+| Layout | Consoles | What it does |
+|--------|----------|--------------|
+| Arcade 6-button | Arcade | Light/medium/heavy punch on Y, X, L1; kicks on B, A, R1 (FinalBurn Neo: L2/R2 all three punches/kicks) |
+| Arcade 4-button (Neo Geo) | Neo Geo, Neo Geo CD, Arcade | Neo Geo A, B, C, D on Y, B, X, A |
+| DS stylus | Nintendo DS | Right stick moves the stylus (the D-pad on a Brick, which then is not the DS D-pad), R2 taps, L2 swaps the screens (melonDS DS: next screen layout; DeSmuME: L2 closes the lid) |
+| ScummVM point and click | ScummVM | D-pad or stick moves the pointer, A left click, B right click, X Escape, Y skip a line, L1 slow pointer, R1 F5, Start the ScummVM menu, Select the keyboard |
+| DOS: the game's own mapping | DOS | DOSBox Pure's own mapping for the games it knows; Select opens its on-screen keyboard |
+| DOS keyboard / DOS mouse | DOS | Keyboard- or mouse-style DOS games; Select opens the on-screen keyboard (docs/GAME_LIBRARY.md, "ScummVM and DOS shelves") |
+| Light gun | NES, SNES, Mega Drive, Master System, Sega CD, PlayStation, Arcade | Right stick aims (the D-pad on a Brick), R1 fires, L1 reloads, R3 re-centres; tuned and tried per game in **More** → **Light gun** ([LIGHT_GUN.md](LIGHT_GUN.md)) |
+
+A layout decides only the buttons it sets; the Buttons choice (Swap A and B
+…) still decides the rest. Like Buttons it is written for that start only and
+removed when RetroArch closes, and a remap file you saved yourself in
+RetroArch wins. For DS cores it also sets the core's touch option for that
+start (melonDS: touch mode Joystick; DeSmuME: right-stick pointer) — start the
+game once from RetroArch first so the core has an options file. Standalone
+emulators and NextUI paks keep their own controls, and the picker says so. The
+arcade charts assume the core's default device type ("Classic"); if you
+changed it in RetroArch, use None.
+
+**Your own layouts.** Put a `.json` file in JukaHub's data folder under
+`control-layouts/` (read at start and whenever the list opens; up to 64 files,
+32 KB each):
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "kof-mine",
+  "name": "KOF my way",
+  "description": "Punches on top",
+  "systems": ["Neo Geo", "Arcade"],
+  "defaultFor": [],
+  "buttons": { "y": "b", "x": "y", "b": "a", "a": "x" },
+  "coreOptions": { "fbneo-cpu-speed-adjust": "100%" },
+  "variants": [
+    { "cores": ["mame2003_plus"], "noSticks": false, "buttons": { "l": "none" } }
+  ],
+  "chart": [ { "button": "Y", "action": "Light punch" } ]
+}
+```
+
+- `buttons`: pad button → what the game gets. Names: `a b x y l r l2 r2 l3 r3 start select up down left right`, `none`, or a full stick push `lstick-up/-down/-left/-right`, `rstick-…`.
+- `coreOptions`: libretro core options for that start (no quotes or line breaks in values).
+- `variants`: laid over the layout for the listed cores (`fbneo`, `mame2003_plus`, `melonds`, `melondsds`, `desmume` …) and/or only on a device without sticks (`noSticks`).
+- `keys` (pad button → keyboard key such as `enter`, `escape`, `space`, `f1`, `a`) is accepted and shown but not sent yet.
+- `id`: lower-case letters, digits and dashes (the file name when left out); it cannot reuse a built-in layout's id. `defaultFor` makes it the layout for those consoles' games unless a game picks another.
+
+Choices are kept in `data/game-layouts.json`.
+
+#### Light gun (RetroArch gun games)
+
+Gun games aim with the right stick (the D-pad on a Brick), fire with R1 and
+reload with L1; R3 puts the crosshair back in the middle. Known gun games
+(Duck Hunt, Time Crisis, Operation Wolf …) start with it once by themselves.
+A game's page → **More** → **Light gun** turns it on or off and sets the
+aim (Move or Point), speed, aim area and buttons, with a practice target. On
+Windows the mouse is the gun. Details: [LIGHT_GUN.md](LIGHT_GUN.md).
 
 #### Ask Juka in a game (hold Select + R2)
 
@@ -904,7 +989,8 @@ there (a click elsewhere on a slider focuses it and, on Tiles and Compact,
 starts adjusting it); the wheel moves between the buttons, and the pencil in
 the title's corner opens Edit. **Power** opens the power card —
 Sleep, Restart and Power off on the handheld, Exit on a desktop — from any
-screen (JukaHub goes Home first).
+screen (JukaHub goes Home first). **Stopwatch** opens the Stopwatch and, while
+a stopwatch or countdown runs, shows its time.
 
 #### Edit Quick Settings
 
@@ -1137,6 +1223,17 @@ sheet open, **Up / Down** move between its rows and **A** applies the row, so
 subtitles, full screen, speed and quality are reachable without a touch screen.
 A tap on a control also moves the ring there, so touch and D-pad never disagree.
 
+**Speed** — the pill in the bar, the sheet's **Speed** row, or keys **1**–**4**
+(0.5× / 1× / 1.5× / 2×) — steps 0.5× → 0.75× → 1× → 1.25× → 1.5× → 2× and back,
+and the video really plays at it: picture and sound start again together where
+you were (a moment's pause, like a seek), the sound keeps its pitch, and the time,
+seek bar, subtitles and resume point move at the new rate. A paused video stays
+paused. The speed stays while the same video plays — seeks, a quality change, the
+download that takes over a broken stream — and carries to the next video when the
+player moves on by itself or from its own buttons (L2 / R2, previous / next,
+Up Next, Shorts autoplay); a video opened from a screen starts at 1×. A live
+stream and a Watch Party stay at 1×, and say so.
+
 **Save offline** opens a second page in the same sheet: **Download video** (MP4)
 and **Audio only** (M4A) for a web video; **Extract audio** and **Get subtitles**
 (from the page a download came from) for a file on the card. **B** goes back to
@@ -1190,9 +1287,11 @@ last frame no longer keeps the grid behind it locked.
 
 ## Chat
 
-The Chat screen has three tabs: the community channel (the JukaHub Discord,
-when it is configured), **Juka AI**, and **Saved** for notes that stay on this
-device. Every speaker can be opened as a profile card with their picture,
+The Chat screen has three conversation tabs: the community channel (the
+JukaHub Discord, when it is configured), **Juka AI**, and **Saved** for notes
+that stay on this device. A fourth tab, **Voice**, is the live voice room
+([Voice](VOICE_CHANNEL.md)): clicking it joins, and L1 / R1 onto it open it
+with Join selected. Every speaker can be opened as a profile card with their picture,
 handle, roles and last message.
 
 | Button | Action |
@@ -1215,12 +1314,14 @@ cursor off the message, and **R** renames you (so do a click on your name at
 the top right and **Rename** on your own card in People, which is there before
 you have written anything).
 
-For live voice, open **People**, mark one or more names with **X** or click the
-circle beside a name, then press
-**Y** or **Voice Channel**. A Voice Channel invite appears in the community
-conversation; select it and choose **Join Voice** to join from another JukaHub.
-The call stays active when you return to Chat. See [Voice clips and Voice
-Channels](VOICE_CHANNEL.md) for call controls and Internet relay setup.
+For live voice with everyone, open the **Voice** tab (click it, press **4**, or
+step onto it with L1 / R1 and press **A**). For a private call, open
+**People**, mark one or more names with **X** or click the circle beside a
+name, then press **Y** or **Voice Channel**. A Voice Channel invite appears in
+the community conversation; select it and choose **Join Voice** to join from
+another JukaHub. The call stays active when you return to Chat. See
+[Voice](VOICE_CHANNEL.md) for call controls, the free voice server and joining
+from a phone.
 
 ### Sending files
 
@@ -1416,6 +1517,18 @@ back, in the background like the install; **L1** includes hakuX when JukaHub
 installed it, and the daily **Emulator updates** pass updates it by itself
 (never during a game; a version you rolled back from is not put back). While
 a download runs, the sheet's subtitle shows its progress.
+
+You do not have to press anything on a Smart Pro: with **Emulator updates** on
+*Install automatically* (the default), the daily pass installs hakuX once, by
+itself, when the card has no Xbox launcher — at its quiet moment (on the
+charger or after two idle minutes, never during a game), online, after a check
+that the card keeps 256 MB free besides the download, under the install card
+and the tile's *Installing…* pill — and its toast says where the games go.
+The card remembers it had an Xbox launcher (`Apps/JukaHub/data/hakux/auto-install.json`),
+so a hakuX you delete is not installed again by itself and an `Emus/XBOX` you
+made is never replaced. **A** on an Xbox game in the Games Library before hakuX
+is there installs it right away and starts the game once it is in (on the
+Brick Pro too, which otherwise keeps the install a press).
 The install:
 
 1. asks GitHub for the newest release, and for the newest pre-release when no
@@ -1503,6 +1616,21 @@ Direct3D 12 or Vulkan GPU and the Microsoft Visual C++ Redistributable (x64);
 the tile and the install toast say when that runtime is missing. Games go in
 `Roms\XBOX360` as `.iso` images, which the Games Library lists under
 **Xbox 360** and starts with `xenia_canary.exe "<game>" --fullscreen=true`.
+
+#### Azahar (Nintendo 3DS) on Windows
+
+3DS games (`Roms\3DS`, also `N3DS`) play in
+[Azahar](https://github.com/azahar-emu/azahar/releases), the maintained 3DS
+emulator that took over from Citra and Lime3DS. JukaHub does not install it
+yet: its tile (or the tile of a `Roms\3DS` folder that has games) opens the
+download page. JukaHub finds the installer's copy (Program Files, or your
+user's Programs folder), a portable copy in a folder named `Azahar` (the
+Emulators folder, Desktop, Downloads, Documents, Games) or `azahar.exe` on
+PATH, and starts a game with `azahar.exe -f "<game>"` (full screen). The shelf
+lists `.3ds`/`.cci`, `.cxi`/`.app`, `.3dsx` and `.elf`/`.axf` (and their
+compressed `.z…` forms). A `.cia` is an installer: install it with Azahar's
+**File → Install CIA**. On a handheld, a `Roms/3DS` folder shows **Not
+supported** and says why.
 
 ## Game profiles
 
@@ -1623,6 +1751,25 @@ On the **TrimUI Smart Pro**, **L2** / **R2** move backward / forward through
 The triggers work from each destination opened through Packages; a details
 sheet keeps its own controls until it is closed.
 
+## App Center
+
+**Apps → App Center** (or Home search "app center") lists TrimUI apps with
+where they come from, how they fare on the stock firmware and on CrossMix, and
+what they need ([APP_CENTER.md](APP_CENTER.md)).
+
+| Pad | Keyboard | Action |
+|-----|----------|--------|
+| D-pad | Arrows | Move |
+| A | Enter | Open the app's sheet (on **Releases → Look for new releases**: check now) |
+| X | X | Start the focused installed app |
+| Y | Y | Look for new releases (at most once a minute) |
+| B | Esc | Back |
+
+In an app's sheet **Left / Right** choose a button (Get, Update, Open, Roll
+back, Remove), **A** / Enter presses it, **Up / Down** scroll, **Y** enlarges the
+source's QR code and **B** / Esc closes. A mouse clicks rows and buttons and
+the wheel scrolls.
+
 ## APK Store
 
 Open it from **Packages → More stores**, **Start → Games → APK Store** or search
@@ -1707,6 +1854,29 @@ text-size profile exchange, and a compatibility vote list. See
 
 Tapping a row activates it; tapping outside closes the panel.
 
+## Everyday apps
+
+Notes, Tasks, Voice Memos, Paint, Stopwatch, the Calculator, Alarms and the
+Pomodoro timer are under **Tools → Everyday apps** (also on the Apps screen,
+in the Start menu and in Home search); Solitaire is under **Games**. What each
+one does is in [Everyday apps](EVERYDAY_APPS.md); these are their keys.
+
+| App | Pad | Keyboard |
+|-----|-----|----------|
+| Tasks | **A** done / not done (a repeating task moves to its next date) · **Y** add · **X** the task's (or list's) sheet · **L1 / R1** previous / next list · **Left / Right** lists ↔ tasks · **B** back | Enter or Space · N or Y · X · PgUp / PgDn · Tab; Del twice deletes |
+| Tasks, due picker | **Left / Right** quick pick, ±1 day or ±5 min · **L1 / R1** ±7 days or ±1 hour · **A** use · **Y** save · **B** cancel | arrows · PgUp / PgDn · Enter · Y · Esc |
+| Voice Memos | **Y** record · **A** play / pause the focused memo · **X** options (rename, send to phone, delete, microphone test) · **L1 / R1** or **Left / Right** −5 s / +5 s · **B** stop / back | Y or R · Enter · X · ← / →; N rename, Del delete |
+| Voice Memos, recording | **A** or **B** stop and save · **X** pause / resume | Enter or Esc · Space |
+| Paint | D-pad one pixel (hold to speed up) · left stick glide · **A** draw (held), or a shape's corner · **B** cancel the shape / back · **X** tools · **Y** colours · **L1 / R1** undo / redo · **L2 / R2** zoom · **Select** File (save, wallpaper, game cover) | arrows (Shift: 8 px) · Enter or Space · Esc · T · C · Z or Ctrl+Z / Ctrl+Y · - / + (0 fit) · M; [ ] brush size, 1–8 tools, G grid, Ctrl+S save. A mouse draws with the left button and zooms with the wheel |
+| Paint, tools sheet | D-pad choose · **Left / Right** brush size · **A** use · **B** close | arrows · Enter · Esc |
+| Stopwatch | **A** start / pause · **X** lap · **Y** reset (once paused) · **L1 / R1** Stopwatch ↔ Countdown | Enter · X · Y · Tab |
+| Stopwatch, countdown | **Left / Right** hours, minutes, seconds · **Up / Down** change (hold repeats) · **Y** next preset while setting, reset once started · **A** start / pause | arrows · Y · Enter |
+| Solitaire | D-pad focus (**Up / Down** in a column: how many cards to lift) · **A** pick up / put down · **B** put back / leave · **X** draw · **Y** smart move · **L1 / R1** undo / redo · **Start** game menu | arrows · Enter or Space · Esc · D · F or Tab · Z / R (Ctrl+Z / Ctrl+Y) · M; N new game. Click a pile to pick up or put down, double-click for a smart move |
+
+A started stopwatch or countdown also shows in the [in-game menu](#in-game-menu-hold-select--l2)
+and on its own **Quick Settings** button. **Create ZIP** is in Files: see
+[Archives](#archives).
+
 ## Games
 
 Open **Start → Games**. Snake, Tetris, 2048, Pong, Minesweeper and Flappy all
@@ -1717,6 +1887,7 @@ running game. **R** restarts a lost round.
 |------|------------------|
 | Minesweeper | **A** reveal · **X** / **Y** flag · arrows move |
 | Flappy | **A** / **Space** flap · **R** restart |
+| Solitaire | Klondike with undo and resume: see [Everyday apps](#everyday-apps) |
 
 ## Playtime & achievements
 
@@ -1951,8 +2122,8 @@ format), the row keeps its type chip.
 | X | Mark the row under the cursor and step down |
 | Mouse / touch | A chip in the breadcrumb bar to jump, the sort chip to change order, a row to open it |
 
-The action sheet (**Y**) holds **New folder**, **Edit text**, **Extract…**, **Send to
-chat**, **Rename**, **Copy**, **Cut**, **Paste**, **Delete**, **Select all**,
+The action sheet (**Y**) holds **New folder**, **Edit text**, **Open with…**,
+**Extract…**, **Send to chat**, **Rename**, **Copy**, **Cut**, **Paste**, **Delete**, **Select all**,
 **Sort**, **Connect to device** and **Remote files**. Marked rows are tinted and their type chip becomes a tick, so
 a selection is visible in the list rather than only in the sheet. When nothing
 is marked the actions apply to the row under the cursor, which is the rule a
@@ -1988,6 +2159,15 @@ Extract** unpacks them all, one after another.
 | **Extract here** | Everything goes into the archive's own folder: folders are merged and a file of the same name is replaced (never the archive itself). When that would replace something (or, for a tar, could), the first press arms it and the second runs it. |
 | **Cancel extraction** | While it runs (**Cancel** while it waits its turn). The folder is left exactly as it was; once the result is being moved into place it can no longer be stopped. |
 
+**Y → Create ZIP** goes the other way: it bundles the marked files and folders
+(or the one under the cursor) into a `.zip` in the same folder. Name it (it
+starts as the item's or the folder's name; a taken name gets " (2)") and
+press **Create**. The ZIP is made in the background — the row shows
+"Zipping · 42%", and **A** on it twice stops it, leaving nothing behind — with
+a free-space check first; links are never followed, dates are kept, and
+pictures, music, video and archives are stored as they are while the rest is
+compressed quickly. When it is done the cursor lands on the new ZIP.
+
 The archive is unpacked into a hidden `.jukahub-extract-…` folder beside it and
 moved into place at the end, so a cancel, a full card or a damaged archive
 leaves nothing behind. After **Extract** the cursor lands on what came out when
@@ -2012,6 +2192,29 @@ archive first, and one it cannot list, or one that holds symbolic links (a FAT
 card cannot hold them, and an older 7-Zip could follow one), is not unpacked;
 the sheet says why. Password-protected archives cannot be opened yet; the sheet
 says so (for a 7z or RAR once 7-Zip has looked at it).
+
+### Open with
+
+**Y → Open with…** lists every way to open the highlighted file: JukaHub's own
+viewers that handle it (JukaHub's choice is tagged), **Open with Windows** on a
+PC, the TrimUI apps on the card that open the type, **Get <App>** rows that
+lead to the [App Center](#app-center), and **Another app…**. What each row
+means is in [OPEN_WITH.md](OPEN_WITH.md).
+
+| Pad | Keyboard | Action |
+|-----|----------|--------|
+| Up / Down | Up / Down | Choose a row |
+| A | Enter | Open the file there, this once |
+| X | X | Always use it for this extension (games in a console folder always play) |
+| Y | Y | Forget the default: back to JukaHub's choice (*No default* where KOReader or an app takes the type) |
+| L1 / R1 | PgUp / PgDn | Page the list |
+| B | Esc | Cancel |
+
+**Y → Default apps…** (shown once a default is saved; also Home search
+"default apps") lists each extension and its app: **A** / Enter changes it,
+**X** resets it, **B** / Esc closes. The text page's menu and the reader's
+**Select** menu have **Open with…** too; a document the reader cannot show
+offers it on **Y**.
 
 ## Wi-Fi picker
 
@@ -2499,6 +2702,8 @@ keyboard's token chips.
 | — | Ctrl+L | Clear the output |
 | B | Esc | Back |
 | — | `help` | Built-in command list |
+| Start | Enter | While a program reads input (a Java program asking a question): send the typed line to it; an empty line is an answer too |
+| — | Ctrl+D | End the running program's input |
 
 With the on-screen keyboard open, the strip above the keys offers command
 tokens (flags, paths, history); **Select** takes the first one.
@@ -2518,6 +2723,34 @@ Home search):
 
 In a folder picker the first row (or Y / Ctrl+Enter) uses the folder on
 screen and Left goes up. Deleting a file and stopping a process ask first.
+
+### Interactive programs
+
+`shell` (and bare `sh`, `bash`, `cmd` …), full-screen programs such as `htop`,
+`vi`, `nano`, `less` or `mc`, REPLs typed with no arguments and `ssh user@host`
+run in a session on a real terminal ([TERMINAL.md](TERMINAL.md#interactive-programs)).
+
+| Pad | Keyboard | Action |
+|-----|----------|--------|
+| D-pad | Arrows | Arrow keys |
+| A | Enter | Enter |
+| B | Esc | Esc |
+| Hold B (0.8 s) | Ctrl+Shift+Q | Leave; the session keeps running (Start, or Ctrl+Shift+Q, on the line terminal resumes it) |
+| X | Backspace | Backspace |
+| Y | — | On-screen keyboard; each key goes straight to the program |
+| L2 | Tab | Tab |
+| R2 | Ctrl | Ctrl for the next key |
+| L1 / R1 | PgUp / PgDn | Page in a full-screen program; scroll back on the shell's screen |
+| — | Shift+PgUp / PgDn, wheel | Scroll back |
+| Select | — | Special keys: Esc, Tab, Ctrl+C/D/Z/X/O/L/R, Home, End, PgUp, PgDn, F1–F12, `q`, `:wq` |
+| Start | Ctrl+Shift+M, or click the title bar | Session menu: Leave, End session, Paste, text size, Keys help |
+| — | Ctrl+Shift+V | Paste |
+| — | Ctrl+Shift+Plus / Minus | Text size |
+
+With a keyboard every other key (F1–F12, Ctrl+Q, Ctrl+L, F4 …) goes to the
+program; the Menu button (voice) and Select + Start (quit) stay global. A
+password a program asks for (sudo, su, ssh) shows as dots on the on-screen
+keyboard, and the grid moves up so the line being typed stays visible.
 
 ## JukaLand
 

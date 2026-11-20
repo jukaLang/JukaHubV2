@@ -16,7 +16,9 @@ package main
 //	TextCache                 textcache.go       entries + bytes            ok
 //	homeTextCache             homelayout.go      items + bytes              ok
 //	shapeTextures             shapeCache.go      entries + bytes            ok
-//	thumbnailTextures         thumbstore.go      bytes                      ok
+//	thumbnailTextures         thumbstore.go      entries + bytes            ok
+//	Ports Store screenshots   ports_store_images.go entries + bytes        count only before
+//	Homebrew screenshots      homebrew_store_images.go entries + bytes     count only before
 //	library art               game_library_ui.go bytes                      ok
 //	appIconTextures           appicons.go        entries + bytes  (new)     ~16 MB at 256px icons
 //	chatImages                chat.go            entries + bytes  (new)     48 MB decoded RGBA each

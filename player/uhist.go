@@ -303,9 +303,11 @@ func uhistScan(dir string) []uhistEntry {
 // names the build that was just replaced — the one this history keeps.
 func uhistReload(dir string) {
 	running := strings.TrimSpace(readInstalledReleaseInfo().Tag)
+	// An update on probation restores from its saved copy (updrescue.go).
+	_, held := updProbationHeld()
 	var kept []uhistEntry
 	for _, e := range uhistScan(dir) {
-		if running != "" && strings.EqualFold(e.Tag, running) {
+		if running != "" && strings.EqualFold(e.Tag, running) && e.ID != held {
 			_ = os.RemoveAll(filepath.Join(dir, e.ID))
 			continue
 		}
@@ -553,7 +555,12 @@ func uhistNoteSwap(j *journal, exeDir, tag, reason string) {
 	}
 	if err := upchWriteJSON(uhistPendingPath(dir, j.ID), p); err != nil {
 		logPatch("version history: could not note the swap: %v", err)
+		// Without the record the next start purges the backups a plan would
+		// restore from: no plan, then.
+		p.Reason = ""
 	}
+	// launch.sh's plan for undoing an update that does not start (updrescue.go).
+	updProbationNoteSwap(j, exeDir, p)
 }
 
 // uhistForgetSwap drops the record of a swap whose helper never started.
@@ -564,6 +571,7 @@ func uhistForgetSwap(j *journal) {
 	if dir, err := uhistDir(); err == nil {
 		_ = os.Remove(uhistPendingPath(dir, j.ID))
 	}
+	updProbationForget(j)
 	uhistTakeRollbackTarget()
 }
 
@@ -594,6 +602,11 @@ func uhistAdoptCommittedSwaps() {
 	if err != nil {
 		return
 	}
+	// An update launch.sh undid is settled first, so it is not adopted as a
+	// committed one below; an update still on probation keeps its backups
+	// where launch.sh looks for them (updrescue.go).
+	updRescueSettle(base, dir)
+	probation, _ := updProbationHeld()
 	pendings, _ := filepath.Glob(filepath.Join(dir, "pending-*.json"))
 	sort.Strings(pendings)
 	for _, pp := range pendings {
@@ -616,6 +629,9 @@ func uhistAdoptCommittedSwaps() {
 			} else {
 				uhistPrune(dir, p.Keep)
 			}
+		}
+		if p.JournalID == probation {
+			updProbationKeepAside(base, filesDir, p.JournalID)
 		}
 		_ = os.Remove(pp)
 	}
@@ -675,7 +691,11 @@ func uhistAdopt(dir, filesDir string, p uhistPending) error {
 		e.Bytes += f.Size
 	}
 	if err := upchWriteJSON(filepath.Join(dest, "version.json"), e); err != nil {
-		_ = os.RemoveAll(dest)
+		// Back where they were: the startup purge removes them, unless an
+		// update on probation still needs them (updProbationKeepAside).
+		if os.Rename(dest, filesDir) != nil {
+			_ = os.RemoveAll(dest)
+		}
 		return err
 	}
 	logPatch("version history: kept %s (%s)", uhistLabel(e.Tag, e.Date, e.Version), humanBytes(e.Bytes))
@@ -717,13 +737,21 @@ func uhistPrune(dir string, keep int) {
 	if keep < 0 {
 		keep = 0
 	}
+	// The copy an update on probation restores from stays until it started
+	// (updrescue.go); a factory clock can sort it as the oldest.
+	_, held := updProbationHeld()
 	for i := keep; i < len(entries); i++ {
-		_ = os.RemoveAll(filepath.Join(dir, entries[i].ID))
+		if entries[i].ID != held {
+			_ = os.RemoveAll(filepath.Join(dir, entries[i].ID))
+		}
 	}
 	if len(entries) > keep {
 		entries = entries[:keep]
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].ID == held {
+			continue
+		}
 		free, err := freeBytes(dir)
 		if err != nil || free >= uhistMinFree {
 			break

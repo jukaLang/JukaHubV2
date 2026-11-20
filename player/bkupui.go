@@ -439,6 +439,10 @@ func bkupToggle(c *Config, id string) {
 // bkupOpenRestore enters the restore of a backup and checks it off the render
 // thread.
 func bkupOpenRestore(id string) {
+	// A restore puts back the owner's settings and library (profiles_switch.go).
+	if profilesRefuseUnlessOwner("restore a backup") {
+		return
+	}
 	path := strings.TrimPrefix(id, "file:")
 	s := bkupSnap()
 	for _, it := range s.list {

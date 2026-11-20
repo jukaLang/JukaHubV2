@@ -112,7 +112,9 @@ func homeTabsLibrary() gameLibraryReport {
 		first := &gameLib.lib.Systems[0]
 		if first != s.adopted || gameLib.lib.Total != s.adoptedTotal {
 			s.adopted, s.adoptedTotal = first, gameLib.lib.Total
-			homeTabsInstallLibrary(gameLib.lib)
+			// Without the network drives' games: their tiles would start a
+			// game that is not on the card (nas_index.go).
+			homeTabsInstallLibrary(nasLibraryCardOnly(gameLib.lib))
 			s.launchAt = time.Time{}
 		}
 	}
@@ -184,13 +186,18 @@ func homeTabsStartScan() {
 	seconds := libraryPlaytimeSnapshot()
 	// The favourites read the game tags; their file loads off this thread.
 	gmetaPreload()
+	early := !s.ready
 	go func() {
-		report := scanROMLibrary(roots)
+		// The last library the index kept, while the first scan runs, and
+		// the scan through the index (LIB-1, libindex.go).
+		libIndexHomeEarly(roots, early)
+		report := libIndexScan(roots)
 		seconds := libraryPlaytimeForTitles(seconds, libraryScanTitleConsoles(report.Games))
 		lib := buildGameLibraryWith(report, artRoot, seconds)
 		libraryAddAndroidGames(&lib, seconds)
 		libraryAddHTML5Games(&lib, seconds, html5Roots, html5DemoRoot)
 		libraryAddBuiltInGames(&lib, builtInScenes, builtInCoverRoot())
+		libIndexSaveLibrary(roots, lib)
 		playable, runnable := homeTabsLaunchers(lib.Systems, nil)
 		tbxPost(func() {
 			s.scanning = false
@@ -241,12 +248,18 @@ func homeTabsStartLauncherCheck() {
 // homeTabsSystemPlayable reports whether something can start a console's
 // games: the built-in, Android and HTML5 rows always can; a console needs a
 // launcher (one pinned for the console or a detected emulator). A game pinned
-// to an emulator of its own is homeTabsPinnedPlayable's. Off the render
-// thread.
+// to an emulator of its own is homeTabsPinnedPlayable's. J2ME games always
+// can: their start sets up Java and FreeJ2ME-Plus, or says what is missing
+// (j2me.go). Off the render thread.
 func homeTabsSystemPlayable(system string) bool {
 	switch system {
-	case builtInLibrarySystem, androidLibrarySystem, html5LibrarySystem:
+	case builtInLibrarySystem, androidLibrarySystem, html5LibrarySystem, j2meLibrarySystem:
 		return true
+	case wasm4System:
+		// The first start installs the WASM-4 core where JukaHub can (wasm4.go).
+		if wasm4CanInstall() {
+			return true
+		}
 	}
 	return resolveGameLauncher(system) != ""
 }
@@ -847,14 +860,16 @@ func homeTabsAppItem(c *Config, ref, sub string) (homeTabItem, bool) {
 // cover when the library installed one.
 func homeTabsJukaGames(c *Config) []homeTabItem {
 	var out []homeTabItem
-	for _, scene := range []string{"Games", "JukaLand", synthSceneName} {
+	for _, scene := range []string{"Games", "JukaLand", synthSceneName, solitaireSceneName} {
 		it, ok := homeTabsAppItem(c, homeTileScenePrefix+scene, "JukaGames")
 		if !ok {
 			continue
 		}
 		it.Badge = "Built-in"
 		for _, b := range builtInLibraryGames {
-			if b.scene != scene {
+			// The Games screen's arcade minigames share its scene; the
+			// Games tile keeps its own glyph and they get tiles below.
+			if b.scene != scene || b.arcade != gameNone {
 				continue
 			}
 			it.Glyph = homeTabsGlyph(b.glyph, it.Glyph)
@@ -863,6 +878,19 @@ func homeTabsJukaGames(c *Config) []homeTabItem {
 			}
 		}
 		out = append(out, it)
+	}
+	// Each arcade minigame (Snake, Pong…) as a tile with its cover: A plays
+	// it straight away (openBuiltInLibraryGame). Only once the library has
+	// listed it, which a configuration without the Games screen never does.
+	for _, b := range builtInLibraryGames {
+		if b.arcade == gameNone {
+			continue
+		}
+		if g, found := homeTabsGameByPath(b.path); found {
+			it := homeTabsGameItem(g)
+			it.Badge = "Built-in"
+			out = append(out, it)
+		}
 	}
 	return out
 }

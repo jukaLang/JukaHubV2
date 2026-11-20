@@ -675,3 +675,52 @@ func TestPkgZipSignature(t *testing.T) {
 		t.Errorf("a huge size must render as exabytes, got %q", got)
 	}
 }
+
+// The App Center (appcenter_install.go) installs only an archive that holds
+// exactly one TrimUI app folder whose launch script stays inside it, laid out
+// at the top, in a wrapper or as Apps/<Folder>; the app's own file list is
+// taken relative to that folder.
+func TestAppCenterArchiveLayoutGuard(t *testing.T) {
+	write := func(dir, name, body string) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app := `{"label":"TrimUI Drop","launch":"launch.sh"}`
+
+	card := t.TempDir()
+	write(card, "Drop-v1/Apps/SendFile/config.json", app)
+	write(card, "Drop-v1/Apps/SendFile/launch.sh", "#!/bin/sh\n")
+	root, err := acFindAppRoot(card)
+	if err != nil || filepath.Base(root) != "SendFile" {
+		t.Fatalf("Apps/<Folder> inside a wrapper: got %q, %v", root, err)
+	}
+	if err := acValidateApp(root); err != nil {
+		t.Fatalf("a plain app folder must validate: %v", err)
+	}
+	files := acFilesUnder([]string{"Drop-v1/Apps/SendFile/config.json", "Drop-v1/Apps/SendFile/launch.sh", "Drop-v1/README.md"}, card, root)
+	if strings.Join(files, ",") != "config.json,launch.sh" {
+		t.Fatalf("the app's own files: got %v", files)
+	}
+
+	two := t.TempDir()
+	write(two, "A/config.json", app)
+	write(two, "A/launch.sh", "#!/bin/sh\n")
+	write(two, "B/config.json", app)
+	write(two, "B/launch.sh", "#!/bin/sh\n")
+	if _, err := acFindAppRoot(two); err == nil {
+		t.Fatal("an archive with two apps must be refused")
+	}
+
+	escape := t.TempDir()
+	write(escape, "Evil/config.json", `{"label":"Evil","launch":"../../launch.sh"}`)
+	write(escape, "launch.sh", "#!/bin/sh\n")
+	if _, err := acFindAppRoot(escape); !errors.Is(err, errAcLayout) {
+		t.Fatalf("a launch path that climbs out must not count as an app: %v", err)
+	}
+}

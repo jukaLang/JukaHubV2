@@ -223,6 +223,15 @@ func securityPostureRows(config *Config) []securityRow {
 		Detail: "A hosted room answers devices on this Wi-Fi that know its code",
 	})
 
+	// 8b. Party Mode's game server, which only runs while its screen is up
+	// (so it is never on while this screen is).
+	rows = append(rows, securityRow{
+		ID:     "partymode",
+		Label:  "Party Mode",
+		Value:  "Only while its screen is open",
+		Detail: "Phones that scan its code join as players; they get covers and scores, nothing else",
+	})
+
 	// 9. The browser's own data.
 	browser := securityRow{
 		ID:     "browser",
@@ -397,6 +406,8 @@ func sectrustRowIcon(id string) string {
 		return "phone"
 	case "party":
 		return "party"
+	case "partymode":
+		return "sparkles"
 	case "browser":
 		return "browser"
 	case "telemetry":
@@ -418,7 +429,7 @@ func sectrustBuildModel(config *Config, now time.Time) sectrustModel {
 		case r.Warn:
 			tone = tbxToneWarn
 			m.warnings++
-		case r.ID == "doc" || r.ID == "process" || r.ID == "telemetry" || r.ID == "reports" || r.ID == "party" || r.ID == "companion" || r.ID == "browser":
+		case r.ID == "doc" || r.ID == "process" || r.ID == "telemetry" || r.ID == "reports" || r.ID == "party" || r.ID == "partymode" || r.ID == "companion" || r.ID == "browser":
 			tone = tbxToneNeutral
 		}
 		m.rows = append(m.rows, sectrustRowModel{
@@ -612,6 +623,10 @@ func sectrustExplain(id string) (what, why, section string) {
 	case "party":
 		return "While you host a Watch Party, devices on this Wi-Fi that know the room code can join, add videos and control playback for the room.",
 			"The room is meant for friends on a home network; close it when you are done.",
+			"Threat model"
+	case "partymode":
+		return "While the Party Mode screen is open, JukaHub serves its game page on this Wi-Fi (port 8319, or a free one). A phone that has the party code from the QR code can join, buzz and answer; it sees each cover only as far as the round has revealed it, and the scores. Leaving the screen stops the server.",
+			"Anyone on the same network who sees the code can join the game; there are no files, settings or controls behind it.",
 			"Threat model"
 	case "browser":
 		return "The built-in browser keeps your sign-ins across restarts in a cookie file in the app's data folder (mode 0600).",

@@ -3,7 +3,7 @@ package main
 // helpdoc.go — the on-device manual and Home's tip of the day (backlog
 // SHELL-9).
 //
-// Settings → About → Quick start and Controls open docs/QUICK_START.md and
+// Settings → About → Quick start and Controls open docs/GETTING_STARTED.md and
 // docs/CONTROLS.md in the Markdown reader Security & trust uses for
 // SECURITY.md (sectrustdoc.go): headings, tables, a contents list on Y,
 // paging on the shoulders, and B back to Settings. Both pages are embedded,
@@ -12,7 +12,7 @@ package main
 // the Makefile's build targets, .github/scripts/trimui-build.sh) refresh them
 // from docs/ first with
 //
-//	tr -d '\r' < docs/QUICK_START.md > player/helpdocs/QUICK_START.md
+//	tr -d '\r' < docs/GETTING_STARTED.md > player/helpdocs/GETTING_STARTED.md
 //	tr -d '\r' < docs/CONTROLS.md > player/helpdocs/CONTROLS.md
 //
 // and the committed copies are the fallback for a plain `go build`.
@@ -36,7 +36,7 @@ import (
 	"github.com/veandco/go-sdl2/ttf"
 )
 
-//go:embed helpdocs/QUICK_START.md
+//go:embed helpdocs/GETTING_STARTED.md
 var helpQuickStartMD string
 
 //go:embed helpdocs/CONTROLS.md
@@ -54,9 +54,9 @@ const (
 var (
 	helpQuickStartSpec = mdDocSpec{
 		name: "Quick start",
-		sub:  "Build, run, change and ship JukaHub (docs/QUICK_START.md)",
+		sub:  "Find your way around JukaHub (docs/GETTING_STARTED.md)",
 		icon: "info",
-		url:  helpDocsURL + "QUICK_START.md",
+		url:  helpDocsURL + "GETTING_STARTED.md",
 		load: func() (string, string) { return helpQuickStartMD, "embedded" },
 		back: goBackScene,
 	}

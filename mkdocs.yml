@@ -48,8 +48,12 @@ nav:
       - Recovery: RECOVERY.md
       - Bug reports from the device: BUG_REPORTS.md
   - Software:
+      - Everyday apps (Tasks, Voice Memos, Paint, Stopwatch, Solitaire): EVERYDAY_APPS.md
       - Toolbox: TOOLBOX.md
+      - Open with and default apps: OPEN_WITH.md
+      - App Center (TrimUI apps): APP_CENTER.md
       - Linux packages: LINUX_PACKAGES.md
+      - Java programs: JAVA.md
       - Video and music: MUSIC_PLAYER.md
       - Spatial audio: SPATIAL_AUDIO.md
       - Voice command: VOICE.md
@@ -59,13 +63,22 @@ nav:
       - USB file transfer: USB_FILE_TRANSFER.md
       - Browser: BROWSER.md
       - Game library: GAME_LIBRARY.md
+      - Games on a network drive (NAS): NETWORK_DRIVE.md
       - Game profiles: GAME_PROFILES.md
       - Save manager: SAVE_MANAGER.md
+      - Profiles and Guest: PROFILES.md
+      - Pick up and play, every time: PICK_UP_AND_PLAY.md
+      - Never lose a session (standalone emulators): SESSION_SAFETY.md
+      - Move to a new SD card: SD_CARD_MOVE.md
       - Emulator compatibility: COMPATIBILITY.md
       - PortMaster: PORTMASTER.md
+      - J2ME phone games: J2ME.md
+      - Godot games: GODOT.md
       - LAN play (Remote Play, watch party): REMOTE_PLAY.md
+      - Party Mode (Guess the Game): PARTY_MODE.md
       - Cloud gaming (Game Pass, GeForce NOW): CLOUD_GAMING.md
       - PC streaming (Moonlight, Vibepollo): PC_STREAMING.md
+      - Controller Mode (the handheld as a PC or phone controller): CONTROLLER_MODE.md
       - Email and calendar: EMAIL_CALENDAR.md
       - Smart home: SMART_HOME.md
       - Windows apps: WINDOWS_APPS.md

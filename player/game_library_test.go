@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 func TestGameLaunchCommand(t *testing.T) {
@@ -584,5 +586,119 @@ func TestEmuFolderAlternatives(t *testing.T) {
 	}
 	if alts[1].Name != "N64 · Parallel n64" || filepath.Base(alts[1].Launch) != "parallel_n64.sh" {
 		t.Errorf("second alternative = %+v", alts[1])
+	}
+}
+
+// The library index (libindex.go) is a cache in front of the scan: it gives
+// the scan's own answer, reads only the folders that changed after a restart,
+// drops a damaged index or one of another schema without a word, and keeps
+// the last library for the same folders only.
+func TestLibIndexPersistsAndRebuilds(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "library-index.db")
+	prev, prevList := libIndexPathFn, libIndexAlwaysList
+	libIndexPathFn = func() string { return db }
+	libIndexAlwaysList = false // folder times trusted, as on the handheld
+	libIndexClose()
+	t.Cleanup(func() {
+		libIndexClose()
+		libIndexPathFn, libIndexAlwaysList = prev, prevList
+	})
+	root := filepath.Join(dir, "Roms")
+	gba := filepath.Join(root, "GBA")
+	if err := os.MkdirAll(filepath.Join(gba, "Hacks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Alpha.gba", "Beta.gba", filepath.Join("Hacks", "Gamma.gba"), "notes.txt"} {
+		if err := os.WriteFile(filepath.Join(gba, name), []byte("rom"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Folder times well in the past: no listing is too close to a change.
+	old := time.Now().Add(-time.Hour)
+	for _, d := range []string{root, gba, filepath.Join(gba, "Hacks")} {
+		if err := os.Chtimes(d, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	roots := []string{root}
+	names := func(r romScanReport) string {
+		var out []string
+		for _, g := range r.Games {
+			out = append(out, filepath.Base(g.Path)+"@"+g.System)
+		}
+		return strings.Join(out, ",")
+	}
+	want := names(scanROMLibrary(roots))
+	if want != "Alpha.gba@Game Boy Advance,Beta.gba@Game Boy Advance,Gamma.gba@Game Boy Advance" {
+		t.Fatalf("plain scan = %s", want)
+	}
+	got, listed, ok := libIndexReconcile(roots, false)
+	if !ok || names(got) != want || listed != 3 {
+		t.Fatalf("first look: ok=%v listed=%d games=%s, want %s from 3 folders", ok, listed, names(got), want)
+	}
+
+	// A restart: the index is read back, and no unchanged folder is listed.
+	libIndexClose()
+	libIdx.mu.Lock()
+	libIdx.reconciled = true // past the run's first, full look
+	libIdx.mu.Unlock()
+	if got, listed, _ = libIndexReconcile(roots, false); names(got) != want || listed != 0 {
+		t.Fatalf("after a restart: listed=%d games=%s, want %s from the index", listed, names(got), want)
+	}
+
+	// A game copied in moves its folder's time: that folder alone is read.
+	if err := os.WriteFile(filepath.Join(gba, "Delta.gba"), []byte("rom"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, listed, _ = libIndexReconcile(roots, false); !strings.Contains(names(got), "Delta.gba") || listed != 1 {
+		t.Fatalf("after a copy: listed=%d games=%s", listed, names(got))
+	}
+
+	// A damaged index is dropped and built again.
+	libIndexClose()
+	if err := os.WriteFile(db, []byte("this is not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, ok = libIndexReconcile(roots, false); !ok || !strings.Contains(names(got), "Delta.gba") {
+		t.Fatalf("damaged index: ok=%v games=%s", ok, names(got))
+	}
+
+	// So is one written by another schema.
+	libIndexClose()
+	stale, err := libIndexOpenDB(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.Update(func(tx *bolt.Tx) error {
+		meta, err := tx.CreateBucketIfNotExists(libIndexBucketMeta)
+		if err != nil {
+			return err
+		}
+		return meta.Put(libIndexKeySchema, []byte("0"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stale.Close(); err != nil {
+		t.Fatal(err)
+	}
+	libIdx.mu.Lock()
+	ok = libIdx.ensureLocked()
+	kept := len(libIdx.dirs)
+	libIdx.mu.Unlock()
+	if !ok || kept != 0 {
+		t.Fatalf("another schema: ok=%v, %d folders kept", ok, kept)
+	}
+
+	// The last library comes back after a restart, for the same folders only.
+	lib := gameLibraryReport{Total: 1, Systems: []librarySystem{{Name: "Game Boy Advance",
+		Games: []libraryGame{{Path: filepath.Join(gba, "Alpha.gba"), System: "Game Boy Advance", Title: "Alpha"}}}}}
+	libIndexSaveLibrary(roots, lib)
+	libIndexClose()
+	if back, ok := libIndexLoadLibrary(roots); !ok || back.Total != 1 || back.Systems[0].Games[0].Title != "Alpha" {
+		t.Errorf("kept library = %+v (ok=%v)", back, ok)
+	}
+	if _, ok := libIndexLoadLibrary([]string{gba}); ok {
+		t.Error("a library kept for other folders was offered")
 	}
 }

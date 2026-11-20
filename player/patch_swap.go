@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -185,6 +186,15 @@ func swapScriptPath(staging string) string {
 	return filepath.Join(staging, "apply-update"+ext)
 }
 
+// swapHelperCommand starts the detached helper without handing a Windows
+// batch path to Go's ordinary argument quoting, which cmd.exe parses as code.
+func swapHelperCommand(script string) (*exec.Cmd, error) {
+	if runtime.GOOS == "windows" {
+		return winBatchCommand(script)
+	}
+	return P().CommandContext(context.Background(), script), nil
+}
+
 // OpApplyStagedSwap replaces the installation files with the staged release
 // using the detached swap helper. The journal guarantees automatic rollback on
 // interruption.
@@ -286,9 +296,12 @@ func swapInstallFiles(tag string, files []stagedInstallFile, scriptDir, exePath,
 	// background context and its own session (configureChiakiDetached: Setsid
 	// on the device, a new process group on Windows) keep it alive through
 	// JukaHub's exit; it is released, never waited for.
-	cmd := P().CommandContext(context.Background(), script)
-	configureChiakiDetached(cmd)
-	if err := cmd.Start(); err != nil {
+	cmd, err := swapHelperCommand(script)
+	if err == nil {
+		configureChiakiDetached(cmd)
+		err = cmd.Start()
+	}
+	if err != nil {
 		if restartMarker != "" {
 			_ = os.Remove(restartMarker)
 		}

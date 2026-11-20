@@ -13,11 +13,13 @@ package main
 // the same facts land in the report a user pastes into an issue.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // componentReportRow is one row of the report.
@@ -29,28 +31,135 @@ type componentReportRow struct {
 }
 
 // componentToolVersions caches version probes. Each probe starts a process, and
-// the card is opened from a menu that has to answer the same frame. Failures
-// are not cached: a tool installed a moment ago should report its version the
-// next time the card is opened, without a restart.
+// the card is opened from a menu that has to answer the same frame. A failed
+// probe is tried again after componentToolRetry (yt-dlp, which failed, was
+// probed for up to 3 s on the UI thread at every bug report), and a probe
+// claimed elsewhere (componentVersionsWarm) is not waited for: the row has no
+// version this time. The lock is never held while a probe runs.
 var componentToolVersions struct {
 	sync.Mutex
-	seen map[string]string
+	seen    map[string]string
+	failed  map[string]time.Time
+	running map[string]bool
+}
+
+// componentToolRetry spaces probes of a tool whose probe failed.
+const componentToolRetry = 10 * time.Minute
+
+// componentToolClaim returns a cached version, or claims the probe of path
+// for the caller (claimed); neither when another caller has it or it failed
+// recently.
+func componentToolClaim(path string) (version string, claimed bool) {
+	c := &componentToolVersions
+	c.Lock()
+	defer c.Unlock()
+	if v, ok := c.seen[path]; ok {
+		return v, false
+	}
+	if t, failed := c.failed[path]; c.running[path] || (failed && time.Since(t) < componentToolRetry) {
+		return "", false
+	}
+	if c.running == nil {
+		c.seen, c.failed, c.running = map[string]string{}, map[string]time.Time{}, map[string]bool{}
+	}
+	c.running[path] = true
+	return "", true
+}
+
+// componentToolRun runs a claimed probe and records how it went.
+func componentToolRun(path string) (version string) {
+	c := &componentToolVersions
+	defer func() {
+		c.Lock()
+		delete(c.running, path)
+		if version != "" {
+			c.seen[path] = version
+			delete(c.failed, path)
+		} else {
+			c.failed[path] = time.Now()
+		}
+		c.Unlock()
+	}()
+	return toolVersionFromPath(path)
 }
 
 func probeComponentToolVersion(path string) string {
-	componentToolVersions.Lock()
-	defer componentToolVersions.Unlock()
-	if v, ok := componentToolVersions.seen[path]; ok {
+	v, claimed := componentToolClaim(path)
+	if !claimed {
 		return v
 	}
-	v := toolVersionFromPath(path)
-	if v != "" {
-		if componentToolVersions.seen == nil {
-			componentToolVersions.seen = map[string]string{}
-		}
-		componentToolVersions.seen[path] = v
+	return componentToolRun(path)
+}
+
+// componentDigests keeps each component's SHA-256 by path, size and change
+// time. Sending a bug report hashed JukaHub's own binary, ffmpeg and ffprobe on
+// the UI thread every time, and the stall watchdog caught a 1.7 s frame on a
+// Brick (JH-QCKJ9M). componentVersionsWarm claims every file on the main
+// thread when Report a bug opens and hashes them in the background; a report
+// built while a file is still claimed says so instead of waiting for it.
+var componentDigests struct {
+	sync.Mutex
+	done     map[string]componentDigestEntry
+	inflight map[string]chan struct{}
+}
+
+type componentDigestEntry struct {
+	size int64
+	mod  time.Time
+	sum  string
+}
+
+// componentHashingNote is a row's note while its file is being hashed.
+const componentHashingNote = "still being hashed"
+
+// errComponentHashing says the file is being hashed elsewhere right now.
+var errComponentHashing = errors.New(componentHashingNote)
+
+// componentHashClaim returns a cached digest (ok), or claims the hash of path
+// for the caller (ch, to pass to componentHashRun), or neither when another
+// caller holds it (errComponentHashing).
+func componentHashClaim(path string, info os.FileInfo) (sum string, ch chan struct{}, err error) {
+	componentDigests.Lock()
+	defer componentDigests.Unlock()
+	if e, ok := componentDigests.done[path]; ok && e.size == info.Size() && e.mod.Equal(info.ModTime()) {
+		return e.sum, nil, nil
 	}
-	return v
+	if _, busy := componentDigests.inflight[path]; busy {
+		return "", nil, errComponentHashing
+	}
+	if componentDigests.inflight == nil {
+		componentDigests.inflight = map[string]chan struct{}{}
+	}
+	ch = make(chan struct{})
+	componentDigests.inflight[path] = ch
+	return "", ch, nil
+}
+
+// componentHash is SHA256File through componentDigests.
+func componentHash(path string, info os.FileInfo) (string, error) {
+	sum, ch, err := componentHashClaim(path, info)
+	if err != nil || ch == nil {
+		return sum, err
+	}
+	return componentHashRun(path, info, ch)
+}
+
+// componentHashRun hashes a claimed path and records the result; the claim is
+// released however SHA256File ends, a panic included.
+func componentHashRun(path string, info os.FileInfo, ch chan struct{}) (sum string, err error) {
+	defer func() {
+		componentDigests.Lock()
+		delete(componentDigests.inflight, path)
+		if err == nil && sum != "" {
+			if componentDigests.done == nil {
+				componentDigests.done = map[string]componentDigestEntry{}
+			}
+			componentDigests.done[path] = componentDigestEntry{size: info.Size(), mod: info.ModTime(), sum: sum}
+		}
+		componentDigests.Unlock()
+		close(ch)
+	}()
+	return SHA256File(path)
 }
 
 // componentDigest returns the SHA-256 of a component file and a short note when
@@ -64,11 +173,81 @@ func componentDigest(path string) (digest string, note string) {
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		return "", "not installed"
 	}
-	sum, err := SHA256File(path)
+	sum, err := componentHash(path, info)
+	if errors.Is(err, errComponentHashing) {
+		return "", componentHashingNote
+	}
 	if err != nil {
 		return "", "unreadable"
 	}
 	return sum, ""
+}
+
+// componentVersionsWarm claims, on the main thread, every component file that
+// has no current digest and every helper tool with no known version, then
+// hashes and probes them in the background, so a report built a moment later
+// neither waits for them nor does the work itself on the UI thread.
+func componentVersionsWarm(config *Config) {
+	type claimedFile struct {
+		path string
+		info os.FileInfo
+		ch   chan struct{}
+	}
+	var files []claimedFile
+	var tools []string
+	claimFile := func(p string) {
+		if strings.TrimSpace(p) == "" {
+			return
+		}
+		info, err := os.Stat(p)
+		if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+			return
+		}
+		if _, ch, err := componentHashClaim(p, info); err == nil && ch != nil {
+			files = append(files, claimedFile{p, info, ch})
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		claimFile(exe)
+		claimFile(filepath.Join(filepath.Dir(exe), "launch.sh"))
+	}
+	claimFile(resolvePath("jukaconfig.json"))
+	for _, tool := range []string{"yt-dlp", "ffmpeg", "ffprobe"} {
+		p := getToolPath(tool, config)
+		if strings.TrimSpace(p) == "" || !regularFile(p) {
+			continue
+		}
+		claimFile(p)
+		if _, claimed := componentToolClaim(p); claimed {
+			tools = append(tools, p)
+		}
+	}
+	if len(files) == 0 && len(tools) == 0 {
+		return
+	}
+	go func() {
+		// Every claim is released, whatever happens to the ones before it.
+		for _, f := range files {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logWarn("diagnostics", "hashing a component failed: %v", r)
+					}
+				}()
+				_, _ = componentHashRun(f.path, f.info, f.ch)
+			}()
+		}
+		for _, p := range tools {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logWarn("diagnostics", "asking a helper tool its version failed: %v", r)
+					}
+				}()
+				componentToolRun(p)
+			}()
+		}
+	}()
 }
 
 // componentVersions builds the report. It is intentionally cheap to call once
@@ -82,7 +261,7 @@ func componentVersions(config *Config) []componentReportRow {
 	appDigest, appNote := "", "unknown"
 	if exe, err := os.Executable(); err == nil {
 		appDigest, appNote = componentDigest(exe)
-		if appDigest == "" {
+		if appDigest == "" && appNote != componentHashingNote {
 			appNote = "not readable"
 		}
 	}

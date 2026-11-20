@@ -142,13 +142,19 @@ func musicParseM3U8(data []byte, baseDir string) ([]musicPlaylistEntry, int) {
 		}
 		p := line
 		if !isHTTPMediaURL(p) && !strings.Contains(p, "://") {
-			resolved, err := confinedRegularFile(baseDir, filepath.FromSlash(p))
+			// One song of a soundtrack ("game.nsf#3", chiptune.go) is its
+			// file, which must exist, plus the song number.
+			file, song, isSong := chiptuneSplitPath(filepath.FromSlash(p))
+			resolved, err := confinedRegularFile(baseDir, file)
 			if err != nil {
 				missing++
 				title, duration = "", 0
 				continue
 			}
 			p = resolved
+			if isSong {
+				p = chiptuneSongPath(resolved, song)
+			}
 		}
 		name := strings.TrimSpace(title)
 		if name == "" {

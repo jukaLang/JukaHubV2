@@ -26,6 +26,12 @@ type auditStatus struct {
 	ours   bool
 	interp []string
 	hasInt bool
+	// missing are the Ubuntu packages an installed script tool still needs on
+	// the handheld (auditScriptMissing): opening it installs them first.
+	missing []string
+	// ubuntuInt: a script tool runs on Ubuntu's interpreter from Linux
+	// packages (auditUsesLinuxPkgInterpreter), so Install brings its modules.
+	ubuntuInt bool
 }
 
 // auditRowModel is one prepared row.
@@ -99,6 +105,10 @@ func auditDetectAll() map[string]auditStatus {
 		}
 		if r := t.Recipe(platform); r.Kind == auditKindScript {
 			st.interp, st.hasInt = auditInterpreter(r.Needs)
+			st.ubuntuInt = auditUsesLinuxPkgInterpreter(r.Needs)
+			if st.ours {
+				st.missing = auditScriptMissing(t, st.path)
+			}
 		}
 		out[t.ID] = st
 	}
@@ -331,9 +341,12 @@ func auditRecipeText(t secAuditTool, r auditRecipe, st auditStatus) string {
 		switch {
 		case st.hasInt && len(st.interp) > 0:
 			text += " " + auditInterpreterLabel(r.Needs) + " was found at " + st.interp[0] + "."
+			if len(r.Modules) > 0 && st.ubuntuInt {
+				text += " Install also brings the modules it needs through Linux packages (" + strings.Join(r.Modules, ", ") + ")."
+			}
 		case auditCanInstallInterpreter():
 			text += " The firmware has no " + auditInterpreterLabel(r.Needs) + ", so Install first brings Ubuntu's " +
-				auditInterpreterLabel(r.Needs) + " (" + strings.Join(auditInterpreterPackages(r.Needs), ", ") +
+				auditInterpreterLabel(r.Needs) + " (" + strings.Join(auditScriptPackages(r), ", ") +
 				") through Linux packages: Ubuntu's signed arm64 packages, each download checked against the SHA-256 in that signed index, kept on the card. The firmware is not changed."
 		default:
 			text += " " + auditInterpreterLabel(r.Needs) + " is not installed on this system."
@@ -375,6 +388,10 @@ func auditOpenToolSheet(config *Config, id string) {
 			body.WriteString("Installed with Linux packages (Tools → Linux packages, or apt in the Terminal).\n")
 		} else {
 			body.WriteString("Installed outside JukaHub — update or remove it the way it was installed.\n")
+		}
+		if len(st.missing) > 0 {
+			body.WriteString("It still needs " + strings.Join(st.missing, ", ") +
+				" from Linux packages; opening it (Terminal or Version) installs them first.\n")
 		}
 		body.WriteString("\n")
 	}
@@ -504,10 +521,16 @@ func auditRunInstall(config *Config, t secAuditTool, r auditRecipe, update bool)
 	go func() {
 		var report string
 		var err error
+		verb := "install"
 		if update {
+			verb = "update"
 			report, err = auditUpdate(t, r)
 		} else {
 			report, err = auditInstall(t, r)
+		}
+		if err != nil {
+			// The one line a device report needs: what, and why.
+			logWarn("audit", "%s %s failed: %v", auditLogName(t, r), verb, err)
 		}
 		tbxPost(func() {
 			delete(auditScreen.busy, t.ID)
@@ -515,8 +538,8 @@ func auditRunInstall(config *Config, t secAuditTool, r auditRecipe, update bool)
 			if err != nil {
 				msg := plainNetworkError(err)
 				ShowToast(t.Name+": "+msg, ToastKindError)
-				if strings.TrimSpace(report) != "" && tbxCurrentScene(config) == auditSceneName {
-					auditShowOutput(config, t.Name+" — install failed", report+"\n\n"+msg)
+				if tbxCurrentScene(config) == auditSceneName {
+					auditShowFailure(config, t.Name+" — "+verb+" failed", msg, err, report)
 				}
 				return
 			}
@@ -608,8 +631,59 @@ func auditLaunch(config *Config, t secAuditTool, path string) {
 		ShowToast("Opened "+t.Name, ToastKindSuccess)
 		return
 	}
+	// A script tool installed before one of its modules was known (Nikto
+	// without XML::Writer) or whose interpreter was removed gets them first.
+	// What it misses was found off the frame loop (auditDetectAll): the check
+	// reads status.json and walks PATH, which a press must not wait for.
+	if st := auditScreen.status[t.ID]; st.path == path && len(st.missing) > 0 {
+		auditRepairThenOpen(config, t, path, st.missing)
+		return
+	}
 	PlayActivateSound()
 	termOpenWithCommand(config, auditTerminalCommand(t, path))
+}
+
+// auditRepairThenOpen installs what an installed script tool is missing, on
+// the install bar, then opens it in the Terminal if the Audit toolkit is still
+// on screen. Offline it opens at once with a warning: the tool says what it
+// lacks, and the next open tries again.
+func auditRepairThenOpen(config *Config, t secAuditTool, path string, missing []string) {
+	if !IsOnline() {
+		ShowToast(t.Name+" still needs "+strings.Join(missing, ", ")+" — connect to the internet to install them", ToastKindWarning)
+		PlayActivateSound()
+		termOpenWithCommand(config, auditTerminalCommand(t, path))
+		return
+	}
+	if auditScreen.busy == nil {
+		auditScreen.busy = map[string]string{}
+	}
+	if auditScreen.busy[t.ID] != "" {
+		return
+	}
+	auditScreen.busy[t.ID] = "Installing…"
+	auditScreen.model.builtAt = time.Time{}
+	ShowToast("Installing what "+t.Name+" needs first: "+strings.Join(missing, ", "), ToastKindInfo)
+	go func() {
+		report, err := auditRepairScript(t, missing)
+		tbxPost(func() {
+			delete(auditScreen.busy, t.ID)
+			auditRefresh()
+			if err != nil {
+				msg := plainNetworkError(err)
+				ShowToast(t.Name+": "+msg, ToastKindError)
+				if tbxCurrentScene(config) == auditSceneName {
+					auditShowFailure(config, t.Name+" — install failed", msg, err, report)
+				}
+				return
+			}
+			if tbxCurrentScene(config) != auditSceneName {
+				ShowToast(t.Name+" is ready", ToastKindSuccess)
+				return
+			}
+			PlayActivateSound()
+			termOpenWithCommand(config, auditTerminalCommand(t, path))
+		})
+	}()
 }
 
 // auditCheckVersion runs the tool's own version report and shows it.
@@ -626,6 +700,43 @@ func auditCheckVersion(config *Config, t secAuditTool) {
 	})
 	id := t.ID
 	go func() {
+		// What the tool is missing comes first, as for the Terminal: its
+		// version report would only repeat Perl's "module not found".
+		if path, ok := secAuditResolve(t); ok && IsOnline() {
+			if missing := auditScriptMissing(t, path); len(missing) > 0 {
+				// The row is busy while it installs, as for the Terminal, so
+				// Update and Remove are not offered meanwhile. marked is only
+				// touched on the frame loop, by these two posts in order.
+				marked := false
+				tbxPost(func() {
+					tbxUpdateSheet(token, "Installing what "+t.Name+" needs first: "+strings.Join(missing, ", ")+"…", nil)
+					if auditScreen.busy == nil {
+						auditScreen.busy = map[string]string{}
+					}
+					if auditScreen.busy[id] == "" {
+						auditScreen.busy[id] = "Installing…"
+						auditScreen.model.builtAt = time.Time{}
+						marked = true
+					}
+				})
+				report, err := auditRepairScript(t, missing)
+				tbxPost(func() {
+					if marked {
+						delete(auditScreen.busy, id)
+						auditScreen.model.builtAt = time.Time{}
+					}
+				})
+				if err != nil {
+					text := "Error: " + err.Error()
+					if strings.TrimSpace(report) != "" {
+						text += "\n\n" + report
+					}
+					tbxPost(func() { tbxUpdateSheet(token, text, nil) })
+					return
+				}
+				tbxPost(auditRefresh)
+			}
+		}
 		out, err := secAuditProbe(id, powerTimeoutScript)
 		text := strings.TrimSpace(out)
 		if err != nil && text == "" {
@@ -636,6 +747,20 @@ func auditCheckVersion(config *Config, t secAuditTool) {
 		}
 		tbxPost(func() { tbxUpdateSheet(token, text, nil) })
 	}()
+}
+
+// auditShowFailure shows why an install failed: the short reason, the full
+// error when it says more (the package and what went wrong with it), and the
+// last lines the installer printed.
+func auditShowFailure(config *Config, title, msg string, err error, report string) {
+	body := msg
+	if detail := err.Error(); detail != msg {
+		body += "\n\n" + detail
+	}
+	if strings.TrimSpace(report) != "" {
+		body += "\n\n## Output\n" + report
+	}
+	auditShowOutput(config, title, body)
 }
 
 // auditShowOutput shows a command's output in a tall sheet.

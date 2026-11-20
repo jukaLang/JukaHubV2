@@ -653,6 +653,9 @@ func setBuildSections() []setSection {
 						return setOr(userName(c), "Not set")
 					},
 				},
+				// Everyone's own saves, Continue list and trophies, and Guest
+				// (profiles_ui.go).
+				profilesSettingsRow(),
 				{
 					// The interface language (i18n.go); each stop is named in
 					// its own language so it can be found from any of them.
@@ -792,6 +795,8 @@ func setBuildSections() []setSection {
 				},
 				// The LED lights: the Stick lights page's rows under their own ids.
 				displayLEDRows(),
+				// TV mode: the Brick Pro's USB-C video out (tvmode.go).
+				tvModeSettingsRows(),
 				// The typeface: Inter, or a font downloaded on request (uifont.go).
 				uiFontSettingsRows(),
 				[]setRow{
@@ -1224,12 +1229,17 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Mail accounts, calendars and reminders"),
 					Open:   mailcalOpenSettings,
 				},
+				// Games on a NAS or a PC at home (nas_ui.go).
+				nasSettingsRow(),
 				// A cable to a computer opens the SD card there (MTP,
 				// usbmtp.go). Handheld only.
 				usbMtpSettingRow(),
 				// The same cable carries a little network to the Phone
 				// Companion page (usbnet.go); shown while file transfer is on.
 				usbNetSettingRow(),
+				// Or turns the handheld into a USB controller for it
+				// (usbpad_ui.go). Handheld only.
+				usbPadSettingRow(),
 				{
 					ID: "nettools", Label: "Servers & network tools", Kind: setKindAction,
 					Detail: setStatic("FTP and SSH servers, speed test and lookups"),
@@ -1426,6 +1436,9 @@ func setBuildSections() []setSection {
 						setToast("Notifications during videos: " + setOnOff(on))
 					},
 				},
+				// "Open books with": shown while KOReader is on the card
+				// (koreader.go).
+				koreaderSettingsRow(),
 				{
 					ID: "decoder", Label: "Audio and video decoding", Kind: setKindInfo,
 					Detail: setStatic("Built into JukaHub; nothing to install"),
@@ -1593,6 +1606,13 @@ func setBuildSections() []setSection {
 						setToast("Automatic CPU speed: " + setOnOff(on))
 					},
 				},
+				// "Extra memory (swap)": zram or a swap file (memswap.go).
+				memSwapSettingsRow(),
+				// "Xbox boost": the whole handheld for hakuX and Xbox streams (xboxboost.go).
+				xboxBoostSettingsRow(),
+				// "GameCube & Wii": RetroArch's Dolphin core, on the Smart Pro S
+				// by default (dolphin.go).
+				dolphinSettingsRow(),
 				// "Fan": the Smart Pro S only (fan.go).
 				fanSettingsRow(),
 				{
@@ -1607,6 +1627,8 @@ func setBuildSections() []setSection {
 				},
 				// Covers, Pixel names or Pixel cards (game_library_pixel_look.go).
 				libraryConsoleLookRow(),
+				// The library index: rebuild it, and its CRC pass (libindex*.go).
+				libIndexRebuildRow(), libIndexCRCRow(),
 				{
 					// The Tabs Home's Games tab (hometabs_games.go): consoles
 					// without games left out, ones without an emulator dimmed.
@@ -1761,6 +1783,8 @@ func setBuildSections() []setSection {
 						setToast("Save and suspend at 3%: " + setOnOff(on))
 					},
 				},
+				// PPSSPP, DraStic, Flycast… at 3% and power off (sessionsafe.go).
+				sessionSafeSettingsRow(),
 				{
 					ID: "lowPower", Label: "Low power", Kind: setKindToggle, Quiet: true,
 					Detail: setStatic("A slower frame rate when nothing moves"),
@@ -1896,6 +1920,10 @@ func setBuildSections() []setSection {
 					Detail: setStatic("What drives the screen, sound, radios and lights"),
 					Open:   driversOpenSheet,
 				},
+				// What was seen to work on this model (verified_page.go).
+				verifiedSettingsRow(),
+				// The guided hands-on check with its report (devcheck_ui.go).
+				devCheckSettingsRow(),
 				{
 					ID: "system", Label: "System", Kind: setKindInfo,
 					Detail: setStatic("Operating system and processor type; worth quoting in a bug report"),
@@ -1954,6 +1982,8 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Your whole setup in one file you can copy to any device"),
 					Open:   bkupOpenScreen,
 				},
+				// Everything onto a new card, checked (sdmove_ui.go); handheld only.
+				sdMoveSettingsRow(),
 				{
 					// Reset settings, or erase everything JukaHub created;
 					// both back up first and ask twice (factoryreset.go).

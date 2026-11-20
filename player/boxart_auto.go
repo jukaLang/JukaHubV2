@@ -539,8 +539,10 @@ func boxArtLibrarySignature(roots []string) string {
 					continue
 				}
 				// A Splore favourite copied in is a .p8.png, a game only in a
-				// PICO-8 folder (pico8CartInFolder); it must still count.
-				if romFileExtensions[strings.ToLower(filepath.Ext(gameName))] || pico8CartInFolder(system.Name, gameName) {
+				// PICO-8 folder (pico8CartInFolder); it must still count. So
+				// must a Godot .pck (godotPackInFolder).
+				if romFileExtensions[strings.ToLower(filepath.Ext(gameName))] || pico8CartInFolder(system.Name, gameName) ||
+					godotPackInFolder(system.Name, gameName) {
 					add("game", gameName)
 				}
 			}

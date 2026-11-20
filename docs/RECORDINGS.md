@@ -51,6 +51,30 @@ Standalone emulators (mGBA, PPSSPP, DraStic) are untouched: they write captures
 their own way, and the hub does not rewrite their configs. If one of them
 already writes into the same folder, its clips show up too.
 
+## Record the screen
+
+JukaHub can also record whatever is on the panel itself: its own menus,
+RetroArch, ports and standalone emulators alike. It reads the panel the way the
+time-lapse and Screen Share do, so the game does not need to support recording.
+
+- **Quick Settings → Record screen** starts recording. It keeps going into any
+  game you launch; turn the switch off to save.
+- **Game page → More → Record this game** starts the game and records until you
+  quit it.
+- **In a game:** **Select + L2** opens the in-game menu; pick **Record screen**
+  and the game carries on, recorded. Open the menu again and pick **Stop
+  recording**.
+- A **● REC** pill at the top of JukaHub's screens shows the time while it runs.
+
+Clips are MP4 (up to 640 px wide, 30 fps, MPEG-4, video only — the handheld has
+no way to capture game sound), saved in this folder as
+`<Game> - <date time>.mp4`. On CrossMix the Screen Recorder app's clips
+(`Apps/ScreenRecorder/output`) are listed here too. A recording stops by itself
+after 30 minutes, when less than 150 MB is free on the card, or when the battery
+drops to 5 % unplugged; a clip cut short (power loss, a crash) still plays up to
+its last two seconds. Recording needs ffmpeg (bundled with JukaHub, or
+CrossMix's own) and is not available on Windows or desktop builds.
+
 ## Controls
 
 | Input | Action |
@@ -67,14 +91,14 @@ seconds, B closes full screen and then the player.
 
 ## What it cannot do
 
-- **No in-game overlay.** The emulator owns the framebuffer and the hub is
-  blocked until it exits, so a hub-drawn "REC" badge or menu over a running game
-  would never appear. RetroArch's own OSD is the honest answer, and its overlay
-  art is a separate, per-device job.
+- **No REC badge over a running game.** The emulator owns the framebuffer, so
+  the REC pill shows on JukaHub's own screens only; in a game, the in-game menu
+  (Select + L2) says whether a recording runs.
 - **No trimming, deleting or renaming.** The screen lists and plays; editing a
   capture is a job for a PC, and a mis-typed delete on a handheld is not
   recoverable.
 - **No thumbnails.** A capture is decoded only when it is played, so a card full
   of 4 GB clips costs nothing to browse.
-- **No capture started from the hub.** The record toggle lives inside the
-  emulator's menu; starting one is that menu's job.
+- **No game sound in screen recordings.** Emulators write straight to the sound
+  device and the stock kernels cannot read it back; RetroArch's own recording
+  (above) does include sound.

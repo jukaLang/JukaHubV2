@@ -10,9 +10,10 @@ package main
 //
 //	pad       L1/R1 zoom · D-pad pans when zoomed, browses when not · L2/R2
 //	          previous/next picture · Y Fit → Fill → 1:1 · X lock screen ·
-//	          A hides the controls · B closes
+//	          Start marks it up in Paint · A hides the controls · B closes
 //	keyboard  +/- (and the wheel) zoom · arrows · 0 fit · 1 actual size ·
-//	          F mode · L lock screen · H/Enter hide · PgUp/PgDn browse · Esc
+//	          F mode · L lock screen · M mark up · H/Enter hide · PgUp/PgDn
+//	          browse · Esc
 //	mouse     wheel zooms at the pointer, drag pans, the chips click
 //	touch     pinch zooms, a swipe pans
 //
@@ -297,6 +298,7 @@ func imgvReleaseTextures() {
 
 // closeImageViewer tears down the viewer (B, Escape, the Close chip).
 func closeImageViewer() {
+	wasRemote := imageViewerRemote
 	imgvReleaseTextures()
 	imgvLoad.mu.Lock()
 	imgvLoad.gen++
@@ -312,6 +314,9 @@ func closeImageViewer() {
 	imageViewerRemote = false
 	imageViewerCloseBtn = sdl.Rect{}
 	imageViewerLockBtn = sdl.Rect{}
+	if wasRemote && !chatSceneActive(appConfig) {
+		clearChatImageCache()
+	}
 }
 
 // toggleScreenlockFromViewer gives the picture on screen to the idle screen,
@@ -857,6 +862,10 @@ func imgvController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	case sdl.CONTROLLER_BUTTON_Y:
 		imgvCycleMode()
+	case sdl.CONTROLLER_BUTTON_START:
+		// Mark up: the picture opens in Paint, over a copy (paint.go). Start
+		// had no job in the viewer, which keeps the pad until it closes.
+		imgvMarkUp(config)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		imgvZoomBy(-1, cx, cy)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
@@ -918,6 +927,8 @@ func handleImageViewerInput(e *sdl.KeyboardEvent, config *Config) {
 		imgvSetMode(imgvActual)
 	case sdl.K_f, sdl.K_y:
 		imgvCycleMode()
+	case sdl.K_m:
+		imgvMarkUp(config)
 	case sdl.K_PAGEUP:
 		imageViewerStep(-1)
 	case sdl.K_PAGEDOWN:
@@ -963,6 +974,9 @@ func imgvMouseDown(mx, my int32, config *Config) {
 			return
 		case "lock":
 			toggleScreenlockFromViewer(config)
+			return
+		case "markup":
+			imgvMarkUp(config)
 			return
 		case "zoomout":
 			imgvZoomBy(-1, screenWidth/2, screenHeight/2)
@@ -1121,6 +1135,7 @@ func imgvDrawChrome(renderer *sdl.Renderer, config *Config) {
 			label = "On the lock screen"
 		}
 		chips = append(chips, filesChip{ID: "lock", Label: label, On: isLock})
+		chips = append(chips, filesChip{ID: "markup", Label: "Mark up"})
 	}
 	chips = append(chips, filesChip{ID: "close", Label: "Close"})
 	chips, toolbarX := filesDrawToolbar(renderer, config, chips, screenWidth-margin, headerY+4, 36)
@@ -1168,6 +1183,19 @@ func imgvSubtitle(isLock bool) string {
 	return strings.Join(parts, " · ")
 }
 
+// imgvMarkUp opens the picture on screen in Paint as a markup canvas: the
+// screenshot itself is never written, Paint saves a marked-up copy. A chat
+// image has no file of its own, and a picture still loading or that failed
+// has nothing to draw on.
+func imgvMarkUp(config *Config) {
+	if imageViewerRemote || strings.TrimSpace(imageViewerPath) == "" || imageViewerTexture == nil {
+		PlayErrorSound()
+		return
+	}
+	PlayActivateSound()
+	paintMarkUp(config, imageViewerPath)
+}
+
 // imgvFooterHints are the viewer's keys.
 func imgvFooterHints() []FooterHint {
 	direction := "Browse"
@@ -1182,7 +1210,10 @@ func imgvFooterHints() []FooterHint {
 		{Button: "Y", Label: "Fit / Fill / 1:1"},
 	}
 	if !imageViewerRemote {
-		hints = append(hints, FooterHint{Button: "X", Label: "Lock screen"})
+		// Start (M on a keyboard) opens the picture in Paint (imgvMarkUp).
+		hints = append(hints,
+			FooterHint{Button: "X", Label: "Lock screen"},
+			FooterHint{Button: "Start / M", Label: "Mark up"})
 	}
 	if len(imageViewerFiles) > 1 {
 		hints = append(hints, FooterHint{Button: "L2/R2 / PgUp/PgDn", Label: "Prev / Next"})

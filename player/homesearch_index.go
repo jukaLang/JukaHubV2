@@ -226,6 +226,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Favorites", where: "Media", icon: "favorites", keys: "favorites favourites saved bookmarks pinned", scene: "Favorites"},
 		{title: "Recordings", where: "Media", icon: "camera", keys: "recordings captures clips screen recording", scene: "Recordings"},
 		{title: "Files", where: "Storage", icon: "files", keys: "files file manager explorer folders sd card storage documents", scene: "FileExplorer"},
+		{title: "Default apps", where: "Storage", icon: "files", keys: "open with default app apps file type types association koreader", open: owShowDefaultApps},
 		{title: "Storage", where: "Tools", icon: "disk", keys: "storage disk space sd card free space usage full", scene: "DiskSpace"},
 		{title: "Hardware", where: "Tools", icon: "hardware", keys: "hardware cpu gpu memory ram battery temperature device info specs", scene: "Hardware"},
 		{title: "Speed test", where: "Tools", icon: "speed", keys: "speed test speedtest network speed bandwidth latency", scene: "NetSpeed"},
@@ -234,6 +235,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Terminal", where: "Tools", icon: "terminal", keys: "terminal shell command line console bash cmd prompt", scene: "Terminal"},
 		{title: "Scheduled tasks", where: "Tools", icon: "schedule", keys: "scheduled tasks cron schedule startup timer automation", open: schedOpen},
 		{title: "Watch Party", where: "Tools", icon: "party", keys: "watch party together sync friends share room", open: partyOpenScreen},
+		{title: "Party Mode", where: "Tools", icon: "sparkles", keys: "party mode game show guess the game quiz trivia box art cover friends phones buzz", open: pmodeOpenScreen},
 		{title: "Toolbox", where: "Tools", icon: "toolbox", keys: "toolbox command line tools install binaries", open: tbxOpenScreen},
 		{title: "Audit toolkit", where: "Tools", icon: "audit", keys: "audit security scan pentest nmap", open: auditOpenScreen},
 		{title: "Security & trust", where: "Tools", icon: "shield", keys: "security trust privacy signatures permissions safety", open: sectrustOpenScreen},
@@ -248,6 +250,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Synth", where: "Apps", icon: "synth", keys: "synth synthesizer music maker beat beats drum machine groovebox sequencer piano keyboard instrument make music hum", scene: synthSceneName},
 		{title: "JukaLand", where: "Games", icon: "gamepad", keys: "jukaland game sandbox craft blocks", scene: "JukaLand"},
 		{title: "Apps", where: "Apps", icon: "apps", keys: "apps applications launcher programs", scene: "Apps"},
+		{title: "App Center", where: "Apps", icon: "apps", keys: "app center app store trimui apps install update roll back crossmix koreader ritder screen recorder trimui drop gamepad bluetooth pad", open: func(c *Config) { acOpenCenter(c, "") }},
 		{title: "Packages", where: "Apps", icon: "packages", keys: "packages store install updates repository", scene: "Packages"},
 		{title: "Emulators", where: "Games", icon: "emulator", keys: "emulators emulator retroarch cores consoles", open: func(*Config) { openEmulatorPanel() }},
 		{title: "Games Library", where: "Games", icon: "gamepad", keys: "games game library roms play", open: func(*Config) { openGameLibraryPanel() }},
@@ -264,10 +267,15 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Save sync", where: "Tools", icon: "sync", keys: "save sync saves cloud google drive gdrive webdav nextcloud owncloud koofr infinicloud nas backup saves across devices oauth client", open: ssyncOpenScreen},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
 		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
+		// The handheld as a game controller for a PC or phone (ctlmode_ui.go).
+		{title: "Controller Mode", where: "Tools", icon: "gamepad", keys: "controller mode gamepad pc controller use as controller bluetooth gamepad xinput steam dolphin dsu cemu receiver jukapad joystick pad for pc", open: ctlModeOpen},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
 		{title: "Smart Home", where: "Device", icon: "home", keys: "smart home lights home assistant", open: openSmartHomePanel},
 		{title: "Quit JukaHub", where: "Device", icon: "exit", keys: "exit quit power off shutdown close", open: func(*Config) { requestAppExit() }},
 	}
+	// Notes, Tasks, Voice Memos, Paint, Stopwatch, Pomodoro, Solitaire
+	// (osapps.go).
+	entries = append(entries, osAppsSearchEntries()...)
 	return append(entries, homeSearchStoreEntries()...)
 }
 
@@ -294,13 +302,20 @@ func homeSearchStoreEntries() []homeSearchEntry {
 	if linuxPkgSupported() {
 		entries = append(entries, homeSearchEntry{title: "Linux packages", where: "Tools", icon: "packages", keys: "linux packages apt apt-get install ubuntu debian deb python python3 perl git curl htop nano rsync ssh nmap john aircrack sqlite programs command line", open: linuxPkgOpenScreen})
 	}
+	// Java programs and JukaHub's own Java (javaui.go).
+	entries = append(entries, homeSearchEntry{title: "Java", where: "Tools", icon: "java", keys: "java jar jre jdk javac jshell temurin openjdk adoptium jvm run jar file java program class source hello world", open: javaOpenScreen})
 	if IsWindows() {
 		return entries
 	}
-	return append(entries,
+	entries = append(entries,
 		homeSearchEntry{title: portMasterEntryName, where: "Games", icon: "packages", keys: "portmaster port master ports pc games linux ports indie", open: func(*Config) { openPortsPanel(false) }},
 		homeSearchEntry{title: pico8SploreEntryName, where: "Games", icon: "rom", keys: "splore pico 8 pico8 pico-8 fantasy console carts cartridges bbs lexaloffle", open: func(*Config) { pico8SploreOpen() }},
 	)
+	// Godot games through the TrimUI Smart Pro Godot port, or its install (godot.go).
+	if godotOffered() {
+		entries = append(entries, homeSearchEntry{title: godotEntryName, where: "Games", icon: godotGlyph, keys: "godot godot engine godot games pck frt indie games", open: func(*Config) { godotOpen() }})
+	}
+	return entries
 }
 
 // homeSearchSceneIcon picks the shared glyph for a screen the catalog does
@@ -795,7 +810,7 @@ func homeSearchRefreshIndex(config *Config) {
 			}
 		}
 		var games []recentGame
-		for _, rom := range scanROMLibrary(romRoots).Games {
+		for _, rom := range libIndexScan(romRoots).Games { // through the library index (libindex.go)
 			games = append(games, recentGame{Path: rom.Path, System: rom.System, Title: gameDisplayTitle(rom.Path)})
 			if len(games) >= homeSearchMaxIndexedFiles {
 				break

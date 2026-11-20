@@ -121,7 +121,9 @@ func isAudioFile(name string) bool {
 			return true
 		}
 	}
-	return false
+	// Game soundtracks, tracker modules and one song of a soundtrack
+	// ("x.nsf#3"), chiptune.go.
+	return chiptuneIsFile(name)
 }
 
 // isAudioURL reports whether a remote URL points at an audio file. The query
@@ -181,6 +183,9 @@ func musicLoadPlaylist(dir, startPath string) int {
 		}
 		tracks = append(tracks, musicTrack{Path: f.Path, Name: f.Name})
 	}
+	// A soundtrack with many songs lists them one per row; one opened alone
+	// plays as its own album (chiptune.go).
+	tracks, start = chiptuneExpandTracks(tracks, start, startPath)
 
 	music.mu.Lock()
 	previousPath, previousPos, previousDur := "", 0.0, 0.0
@@ -260,6 +265,8 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 	if start < 0 || start >= len(tracks) {
 		start = 0
 	}
+	// Soundtracks with many songs list them one per row (chiptune.go).
+	tracks, start = chiptuneExpandTracks(tracks, start, "")
 	music.mu.Lock()
 	previousPath, previousPos, previousDur := "", 0.0, 0.0
 	if music.current >= 0 && music.current < len(music.tracks) {
@@ -531,6 +538,11 @@ func musicPlayTrackAt(index int, gapless bool) {
 // returns it (0 when unknown). It never triggers a download: a missing
 // ffprobe only leaves the duration blank.
 func musicProbeDuration(path string) float64 {
+	if chiptuneHandles(path) {
+		// A soundtrack's length is in its header; ffprobe sees one looping
+		// song (chiptune.go).
+		return chiptuneProbeTrack(path)
+	}
 	cfg := appConfig
 	if cfg == nil {
 		cfg = &Config{}
@@ -659,9 +671,12 @@ func musicDecode(path string, startSec float64, gen int) {
 		return
 	}
 	// Bit-perfect on a USB DAC: the track's own rate and bits, straight to
-	// the DAC (usbdac_bitperfect.go). Anything it cannot take plays below.
-	if bp, ok := dacBitPerfectPlan(path); ok && musicDecodeBitPerfect(ffmpegPath, path, startSec, gen, bp) {
-		return
+	// the DAC (usbdac_bitperfect.go). Anything it cannot take plays below; a
+	// soundtrack (chiptune.go) is synthesised and never goes this way.
+	if !chiptuneDecodes(path) {
+		if bp, ok := dacBitPerfectPlan(path); ok && musicDecodeBitPerfect(ffmpegPath, path, startSec, gen, bp) {
+			return
+		}
 	}
 	// The normal route must not be held for a bit-perfect device a previous
 	// track left open: nothing would pace this decoder.
@@ -679,12 +694,26 @@ func musicDecode(path string, startSec float64, gen int) {
 	// An https stream (radio, podcast) reaches the firmware's TLS-less ffmpeg
 	// through the loopback relay (ffmpegtls.go).
 	args := musicFFmpegArgs(ffmpegReadableInput(ffmpegPath, path), startSec, speed, rate)
+	// A soundtrack gets its own input side (libgme with a song and a length,
+	// or the SID player on stdin); one this ffmpeg cannot play has been said
+	// and counts as a track that played nothing (chiptune_decode.go).
+	var chipSetup func(*exec.Cmd)
+	if chiptuneDecodes(path) {
+		var chipErr error
+		if args, chipSetup, chipErr = chiptuneDecodeArgs(ffmpegPath, path, startSec, speed, rate); chipErr != nil {
+			musicDecodeEnded(chipErr, path, gen, false)
+			return
+		}
+	}
 
 	cmd := execCommand(ffmpegPath, args...)
 	if cmd == nil {
 		return
 	}
 	cmd.Stderr = nil
+	if chipSetup != nil {
+		chipSetup(cmd)
+	}
 	// A stream's stderr is kept, and copied to errors.txt as the video
 	// decoders' is: it says whether one that ended had timed out (musicstream.go).
 	stream := musicNewStreamWatch(path, cmd)
@@ -838,7 +867,11 @@ func musicDecodeEnded(waitErr error, path string, gen int, stalled bool) {
 	bookKey := music.bookKey
 	lastBookTrack := music.current == len(music.tracks)-1
 	nextIdx, advance := 0, false
+	// Only a decoder that really finished picks the next track: a skip's
+	// dying decoder (stale gen) used to pop the play-next queue too, so with
+	// tracks queued, Next dropped one of them.
 	switch {
+	case !finished:
 	case cutShort:
 		// Stay on the interrupted track; its place is kept below.
 	case silent && ((repeatOne && !radio) || music.failRun >= len(music.tracks)):
@@ -1657,7 +1690,8 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	musicRects.art = sdl.Rect{X: artX, Y: artY, W: artSize, H: artSize}
 	if showLyrics && len(lyrics) > 0 {
 		renderLyricsTile(renderer, config, font, lyrics, position, artX, artY, artSize)
-	} else {
+	} else if cur < 0 || cur >= len(tracks) || !chiptuneDrawArt(renderer, tracks[cur].Path, artX, artY, artSize, artAlpha) {
+		// A soundtrack shows its game's cover instead (chiptune_art.go).
 		renderMusicVisualizerBars(renderer, playing, paused, artX, artY, artSize, artAlpha)
 	}
 	stateLabel := "Paused"
@@ -1686,7 +1720,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		if chapterMeta := musicChapterMeta(tracks[cur].Path, position); chapterMeta != "" {
 			meta = chapterMeta // audiobook_chapters.go
 		}
-		if dir != "" {
+		if chip := chiptuneNowPlayingMeta(tracks[cur].Path); chip != "" {
+			meta = chip // console, song n of m, game, composer (chiptune.go)
+		} else if dir != "" {
 			meta += "   ·   " + dir
 		}
 	}

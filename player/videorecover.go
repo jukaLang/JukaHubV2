@@ -42,7 +42,7 @@ type mediaStreamFailure struct {
 	tempFile   bool    // the session played a download already
 	local      bool    // the session played a file on the card
 	startSec   float64 // where the decoder started
-	position   float64 // how far it got: startSec plus the frames it delivered
+	position   float64 // how far it got, in media time: startSec plus its frames × speed / fps
 	duration   float64 // the probed length; 0 when unknown (a live stream)
 	frames     int     // frames delivered; 0 means the stream never opened
 	startErr   bool    // ffmpeg itself could not be started

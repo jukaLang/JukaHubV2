@@ -550,6 +550,32 @@ func mediaHubEnter(config *Config) {
 	mediaHubCheckYtDlp(config)
 }
 
+// mediaHubReleaseMemory drops the lists built solely to draw the Media screen.
+// The selected tab and search query stay; entry rebuilds cards from the saved
+// results and library, including an offline local search.
+func mediaHubReleaseMemory() {
+	getThumbnailTextures().ClearKeys(mediaThumbKeys)
+	clearThumbnailDataKeys(mediaThumbKeys)
+	mediaThumbKeys = map[string]struct{}{}
+	mediaHub.rows = nil
+	mediaHub.cards = nil
+	mediaHub.localResults = nil
+	mediaHub.recent = nil
+	mediaHub.hits = nil
+	mediaHub.sheet = mediaSheet{}
+	mediaHub.confirm = mediaConfirm{}
+	mediaHub.footer = nil
+	mediaHub.footerKey = -1
+	mediaHub.playerElem = Element{}
+	mediaHub.builtAt = 0
+	mediaLibraryView.entries = nil
+	mediaLibraryView.valid = false
+	mediaLibraryView.loaded = false
+	mediaThumbAsked = map[string]uint64{}
+	mediaConfirmLinesCache.text = ""
+	mediaConfirmLinesCache.lines = nil
+}
+
 // mediaHubTabShown is the tab on screen while Media is up, -1 while it is not.
 // mediaHubTick writes it on the main loop; background work that must not read
 // mediaHub itself (the search a yt-dlp update re-runs) reads it instead.

@@ -469,3 +469,48 @@ func TestRaRemapFormat(t *testing.T) {
 		}
 	}
 }
+
+// TestCtrlLayoutUserFileAndRemap checks a player's layout file
+// (ctrllayout_store.go) and what its buttons put in the remap file
+// (ctrllayout_apply.go): unknown names and options that would break
+// RetroArch's file are dropped, the id falls back to the file name, a core's
+// variant is laid over the layout, and a layout wins over the Buttons choice
+// only for the buttons it sets.
+func TestCtrlLayoutUserFileAndRemap(t *testing.T) {
+	data := []byte(`{"schemaVersion":1,"name":"My KOF","systems":["Neo Geo"],
+		"buttons":{"Y":"b","b":"a","q":"a","x":"warp"},
+		"keys":{"start":"enter","a":"nokey"},
+		"coreOptions":{"fbneo-cpu-speed-adjust":"100%","bad key":"x","melonds_touch_mode":"Joy\"stick"},
+		"variants":[{"cores":["MAME2003_Plus_libretro"],"buttons":{"y":"x","up":"rstick-up"}}]}`)
+	l, problems, err := ctrlLayoutParseUser(data, "My KOF")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.ID != "my-kof" || l.Name != "My KOF" || len(problems) != 5 {
+		t.Fatalf("id %q, name %q, problems %q", l.ID, l.Name, problems)
+	}
+	if len(l.Buttons) != 2 || l.Buttons["y"] != "b" || len(l.Keys) != 1 || l.Keys["start"] != "enter" ||
+		len(l.CoreOptions) != 1 || l.CoreOptions["fbneo-cpu-speed-adjust"] != "100%" {
+		t.Fatalf("buttons %v, keys %v, options %v", l.Buttons, l.Keys, l.CoreOptions)
+	}
+	if _, _, err := ctrlLayoutParseUser([]byte(`{"schemaVersion":2,"id":"x"}`), "x"); err == nil {
+		t.Fatal("a file from a newer JukaHub was read")
+	}
+
+	fb, mame := ctrlLayoutResolve(l, "fbneo", true), ctrlLayoutResolve(l, "mame2003_plus", true)
+	if len(fb.Buttons) != 2 || fb.Buttons["y"] != 0 || mame.Buttons["y"] != 9 || mame.Buttons["up"] != 23 {
+		t.Fatalf("fbneo %v, mame %v", fb.Buttons, mame.Buttons)
+	}
+	if got := ctrlLayoutMergeRemap(raRemapPreset(gameButtonsSwapAB), fb); len(got) != 3 || got["a"] != 0 || got["b"] != 8 || got["y"] != 0 {
+		t.Fatalf("Swap A and B under the layout: %v", got)
+	}
+	// Arcade 6-button pins the six buttons FinalBurn Neo already uses, so it
+	// cancels a swap and leaves nothing to write.
+	six, ok := ctrlLayoutByID("arcade-6")
+	if !ok {
+		t.Fatal("arcade-6 is not registered")
+	}
+	if got := ctrlLayoutMergeRemap(raRemapPreset(gameButtonsSwapBoth), ctrlLayoutResolve(six, "fbneo", true)); len(got) != 0 {
+		t.Fatalf("arcade-6 under FinalBurn Neo: %v", got)
+	}
+}

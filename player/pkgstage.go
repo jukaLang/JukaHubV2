@@ -631,7 +631,10 @@ func pkgEnsureMarker(paths pkgPaths) {
 	if _, ok := pkgReadMarker(paths.live); ok {
 		return
 	}
-	meta := pkgLoadInstalledMeta()[paths.key]
+	var meta pkgInstalledMeta
+	if pkgIsPackagesRoot(paths.root) {
+		meta = pkgLoadInstalledMeta()[paths.key]
+	}
 	m := pkgMarker{
 		Name:        meta.Name,
 		Version:     meta.Version,
@@ -972,7 +975,9 @@ func pkgRecoverKeyLocked(root, key string) error {
 		} else {
 			moved = true
 			logInfo("packages", "%s: finished an install that was interrupted", key)
-			pkgRecordInstalledMarker(key, m)
+			if pkgIsPackagesRoot(root) {
+				pkgRecordInstalledMarker(key, m)
+			}
 		}
 	}
 	if journal && !pkgIsDir(paths.live) && pkgIsDir(paths.back) {
@@ -987,7 +992,9 @@ func pkgRecoverKeyLocked(root, key string) error {
 			if mb.Schema > 0 {
 				mb.CarryPending, mb.CarryFailed = false, 0
 				_ = pkgWriteMarker(paths.live, mb)
-				pkgRecordInstalledMarker(key, mb)
+				if pkgIsPackagesRoot(root) {
+					pkgRecordInstalledMarker(key, mb)
+				}
 			}
 		}
 	}
@@ -1055,6 +1062,27 @@ func pkgRecordInstalledMarker(key string, m pkgMarker) {
 		SHA256:      m.SHA256,
 		Verified:    m.Verified,
 	})
+}
+
+// pkgIsPackagesRoot reports whether root is the Packages store's folder. The
+// staging, swap and recovery steps here also serve the App Center
+// (appcenter_install.go, root = the card's Apps folder); only the Packages
+// folder has an installed-version record, so the other root never writes or
+// reads it. The path is built without packageInstallDir, which creates the
+// folder: asking must not make a Packages folder beside the program.
+func pkgIsPackagesRoot(root string) bool {
+	own := pkgInstallDirOverride
+	if own == "" {
+		own = filepath.Join(mustExecutableDir(), "packages")
+	}
+	own = filepath.Clean(own)
+	root = filepath.Clean(root)
+	if root == own {
+		return true
+	}
+	a, errA := os.Stat(root)
+	b, errB := os.Stat(own)
+	return errA == nil && errB == nil && os.SameFile(a, b)
 }
 
 // pkgScanRollbacks lists the packages with a rollback copy and the version

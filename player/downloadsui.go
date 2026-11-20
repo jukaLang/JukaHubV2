@@ -125,7 +125,12 @@ func closeDownloadsPanel() {
 // non-empty section. The "Add a link" row always comes first so a fresh install
 // has an obvious next step.
 func downloadRowsFor(tab downloadTab) []downloadRow {
-	items := downloadPanelItems()
+	return downloadRowsForItems(tab, downloadPanelItems())
+}
+
+// downloadRowsForItems builds rows from one queue snapshot. The render path
+// shares that snapshot with its header and tabs instead of sorting it again.
+func downloadRowsForItems(tab downloadTab, items []downloadItem) []downloadRow {
 	rows := []downloadRow{{
 		add:     true,
 		section: "",
@@ -197,7 +202,11 @@ func downloadRowCount(rows []downloadRow) int {
 
 // downloadCursorRows refreshes the rows and keeps the highlight on a real row.
 func downloadCursorRows() []downloadRow {
-	rows := downloadRowsFor(dlPanel.tab)
+	return downloadCursorRowsForItems(downloadPanelItems())
+}
+
+func downloadCursorRowsForItems(items []downloadItem) []downloadRow {
+	rows := downloadRowsForItems(dlPanel.tab, items)
 	dlPanel.rows = rows
 	if dlPanel.cursor >= len(rows) {
 		dlPanel.cursor = len(rows) - 1
@@ -370,11 +379,16 @@ func downloadPanelTogglePause() {
 	PlayNavSound()
 }
 
-// downloadPanelStatus summarises the queue for the header.
-func downloadPanelStatus() string {
-	items := downloadPanelItems()
+// downloadPanelStatusForItems summarises the queue for the compact header.
+func downloadPanelStatusForItems(items []downloadItem) string {
 	active, queued, failed, done := downloadCounts(items)
-	mediaActive, mediaQueued, _, _ := downloadCounts(downloadsSnapshot())
+	mediaPending := false
+	for _, it := range items {
+		if it.Kind != downloadKindFile && (it.Status == downloadActive || it.Status == downloadQueued) {
+			mediaPending = true
+			break
+		}
+	}
 	var parts []string
 	if active > 0 {
 		parts = append(parts, fmt.Sprintf("%d downloading", active))
@@ -392,7 +406,7 @@ func downloadPanelStatus() string {
 		return hintSentence("Nothing queued — press %s on “Add a link” to save a track or file", "A", "Add")
 	}
 	status := strings.Join(parts, " · ")
-	if downloadsPaused() && (mediaActive > 0 || mediaQueued > 0) {
+	if downloadsPaused() && mediaPending {
 		status = "Paused · " + status
 	}
 	return status
@@ -506,6 +520,9 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	if medium == nil {
 		medium = small
 	}
+	// All three panel sections describe the same moment of the queue. A single
+	// snapshot avoids three extra sorts and copies on every rendered frame.
+	items := downloadPanelItems()
 
 	panelW := int32(940)
 	if panelW > screenWidth-48 {
@@ -539,10 +556,13 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	// The title band is the shared page header: the aside that only fits a full
 	// window becomes the status read-out opposite the title, so it moves up and
 	// down with the same geometry every other page uses.
-	header := UIPanelHeader("Downloads", downloadPanelStatus(), "media")
+	status := "Saved audio, video and files stay in Downloads"
+	if compact {
+		status = downloadPanelStatusForItems(items)
+	}
+	header := UIPanelHeader("Downloads", status, "media")
 	header.SubtitleColor = ColorTextSecondary()
 	if !compact {
-		header.Status = "Saved audio, video and files stay in Downloads"
 		header.StatusColor = ColorTextTertiary()
 	}
 	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
@@ -553,9 +573,9 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	drawDownloadStorageCard(renderer, config, small, sdl.Rect{X: panelX + padX, Y: cardY, W: textW, H: cardH}, !compact)
 
 	tabY := cardY + cardH + 12
-	drawDownloadTabs(renderer, config, small, panelX+padX, tabY, textW)
+	drawDownloadTabs(renderer, config, small, panelX+padX, tabY, textW, items)
 
-	rows := downloadCursorRows()
+	rows := downloadCursorRowsForItems(items)
 	dlPanel.hits = dlPanel.hits[:0]
 
 	footerH := int32(30)
@@ -714,11 +734,10 @@ func downloadVisibleRowRange(rows []downloadRow, scroll, visibleH, rowH, gap, se
 // drawDownloadTabs paints the tab strip and records each tab's hit rect. The
 // active tab is named in the accent colour with a short underline, matching the
 // top bar's navigation, and carries its count so an empty tab is obvious.
-func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w int32) {
+func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w int32, items []downloadItem) {
 	if font == nil {
 		return
 	}
-	items := downloadPanelItems()
 	active, queued, failed, done := downloadCounts(items)
 	tabs := []struct {
 		tab   downloadTab

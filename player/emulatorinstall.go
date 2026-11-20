@@ -334,6 +334,11 @@ func startEmulatorInstall(e emuEntry) {
 		hakuxStartInstall()
 		return
 	}
+	if godotTile(e) {
+		// The Godot tile fetches the TrimUI Smart Pro Godot port (godot.go).
+		godotStartInstall()
+		return
+	}
 	if IsWindows() {
 		if name := emuWinStandaloneFor(e); name != "" {
 			if e.Status == emuAvailable && !e.Managed && strings.EqualFold(name, e.Name) {
@@ -839,6 +844,9 @@ func emuInstallHintLabel(e emuEntry) string {
 	if hakuxTile(e) {
 		return hakuxHintA(e)
 	}
+	if godotTile(e) {
+		return godotHintA(e)
+	}
 	switch {
 	case e.Pinned:
 		return "Open"
@@ -876,6 +884,9 @@ func emuInstallHintLabel(e emuEntry) string {
 func emuUpdateHintLabel(e emuEntry) string {
 	if hakuxTile(e) {
 		return hakuxHintX(e)
+	}
+	if godotTile(e) {
+		return godotHintX(e)
 	}
 	// The handheld's PSP tile: X opens the PPSSPP card (ppsspp_managed_ui.go).
 	if label := ppssppTileXLabel(e); label != "" {
@@ -1238,6 +1249,10 @@ func startEmulatorRollback() {
 			return
 		}
 		hakuxStartRollback()
+		return
+	}
+	if godotTile(e) {
+		ShowToast("No previous Godot port is kept — X fetches the port again", ToastKindInfo)
 		return
 	}
 	if e.Managed {

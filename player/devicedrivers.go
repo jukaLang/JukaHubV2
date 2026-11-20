@@ -765,7 +765,9 @@ func driverFirmwareStatus() driverStatus {
 }
 
 // driverVideoOutStatus: external display. Only the Brick Pro has one (USB-C
-// DP alt mode); JukaHub does not drive it, the firmware does.
+// DP alt mode); JukaHub does not drive it, the firmware does. The row says
+// what TV mode's probe reads now (tvmode.go): a display connected, nothing on
+// the status files found, or no such file at all.
 func driverVideoOutStatus() driverStatus {
 	hw := deviceHardwareCurrent()
 	if hw.VideoOut == "" {
@@ -774,5 +776,5 @@ func driverVideoOutStatus() driverStatus {
 		}
 		return driverStatus{State: driverUnknown, Detail: "not a TrimUI handheld"}
 	}
-	return driverStatus{State: driverUnknown, Driver: hw.VideoOut, Detail: "handled by the firmware"}
+	return tvModeDriverStatus(hw.VideoOut)
 }

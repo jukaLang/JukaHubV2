@@ -235,6 +235,7 @@ var emuCoreAlsoPlays = []struct {
 	{"race", []string{"Neo Geo Pocket Color"}},
 	{"beetle_wswan", []string{"WonderSwan Color"}},
 	{"mednafen_wswan", []string{"WonderSwan Color"}},
+	{"dolphin", []string{"Wii"}},
 }
 
 // emuCoreChoicePlays reports whether core plays system's games.
@@ -534,9 +535,9 @@ func emuCoreChoicePrepareLaunch(launcher string, cmd *exec.Cmd) {
 // emuCoreChoiceSeedOptions gives a directly started core of a console this chip
 // only just runs the handheld's speed settings when it has never had options
 // of its own here (see the file comment). It never blocks a launch and never
-// changes a file that exists.
+// changes a file that exists. GameCube and Wii get Dolphin's (dolphin_video.go).
 func emuCoreChoiceSeedOptions(launcher string, game libraryGame) {
-	if !emuIsCoreLaunch(launcher) || systemCompatTier(game.System) != compatTierMixed {
+	if !emuIsCoreLaunch(launcher) || (systemCompatTier(game.System) != compatTierMixed && !dolphinIsSystem(game.System)) {
 		return
 	}
 	core := gameCoreFromLauncher(launcher, game.System)

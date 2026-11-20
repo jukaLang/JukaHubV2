@@ -499,6 +499,8 @@ func lowBatteryTick(config *Config) {
 		return
 	}
 	percent := getBatteryPercent()
+	// At 10%, an emulator that cannot save by itself is named (sessionsafe.go).
+	sessionSafeLowBatteryTick(config, percent)
 	if percent < 0 || percent > lowBatteryWarnPct+2 {
 		resetLowBatteryWarning()
 		return
@@ -513,7 +515,9 @@ func lowBatteryTick(config *Config) {
 		return
 	}
 	acted, warned, _ := lowBatteryGuardFlags()
-	switch batteryGuardActionFor(percent, charging, retroArchRunningCached(), acted, warned) {
+	// A standalone emulator's game counts too: it is closed cleanly (sessionsafe.go).
+	gameRunning := retroArchRunningCached() || sessionSafeGameRunning(config)
+	switch batteryGuardActionFor(percent, charging, gameRunning, acted, warned) {
 	case batteryGuardWarn:
 		if markLowBatteryWarned() {
 			trophyEvent(tkLowBattery)
@@ -602,7 +606,9 @@ func retroArchSaveAndQuit(tag string) (bool, string) {
 
 // protectLowBattery saves, syncs and suspends. It runs off the render thread.
 func protectLowBattery() {
-	saved, _ := retroArchSaveAndQuit("low battery")
+	// RetroArch as below; a standalone emulator saves on its way out where it
+	// can and is closed cleanly either way (sessionsafe.go).
+	saved, _ := sessionSafeProtectGame("low battery")
 	if !saved {
 		showToast("Could not save state — suspending without it", ToastWarn())
 	}

@@ -337,3 +337,92 @@ func TestUhistEntryIDIsAFolderName(t *testing.T) {
 		}
 	}
 }
+
+// An update's probation plan (updrescue.go) lists every file the swap
+// replaces with a backup launch.sh can find, drops a release stamp the update
+// adds, refuses paths that leave the app folder, survives the next start when
+// no versions are kept, and ends with a rollback.
+func TestUhistUpdateProbationPlan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("launch.sh's plan is made on the handheld only")
+	}
+	dir := upchTestPatchDir(t)
+	upchTestResetState(t)
+	uhistKeep.Store(0)
+	exeDir := t.TempDir()
+	prevApp := updAppDirFn
+	updAppDirFn = func() (string, error) { return exeDir, nil }
+	t.Cleanup(func() { updAppDirFn = prevApp })
+	t.Setenv(updProbationEnv, "1")
+	t.Setenv("JUKAHUB_LAUNCHED_BY", "launch.sh")
+	tag := "JukaHub-20261120000000"
+	upchWriteTestFile(t, filepath.Join(exeDir, "JukaHub"), []byte("old build"))
+	upchWriteTestFile(t, filepath.Join(exeDir, "bin", "helper"), []byte("old helper"))
+	staging, err := stagingDirFor(tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upchWriteTestFile(t, filepath.Join(staging, "JukaHub"), []byte("the new build"))
+	upchWriteTestFile(t, filepath.Join(staging, "launch.sh"), []byte("#!/bin/sh\n#  "+updProbationToken+"\n"))
+	j := uhistNoteTestSwap(t, exeDir, tag, "JukaHub", "bin/helper", releaseInfoFileName)
+
+	planPath := filepath.Join(exeDir, updProbationName)
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatalf("no plan: %v", err)
+	}
+	plan, err := updPlanParse(data)
+	if err != nil {
+		t.Fatalf("the plan does not parse: %v\n%s", err, data)
+	}
+	if plan.To != tag || plan.Journal != j.ID || plan.ExeSize != int64(len("the new build")) || len(plan.Dirs) != 3 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if len(plan.Files) != 2 || plan.Files[0].Name != "JukaHub" || plan.Files[1].Name != "bin/helper" || plan.Files[1].Mode != 0o755 {
+		t.Fatalf("files = %+v", plan.Files)
+	}
+	for _, f := range plan.Files {
+		info, err := os.Stat(filepath.Join(filepath.FromSlash(plan.Dirs[0]), f.Stored))
+		if err != nil || info.Size() != f.Size {
+			t.Errorf("the backup of %s is not where the plan says: %v", f.Name, err)
+		}
+	}
+	if len(plan.Drop) != 1 || plan.Drop[0] != releaseInfoFileName {
+		t.Errorf("drop = %v, want the release stamp the update adds", plan.Drop)
+	}
+	for _, bad := range []string{"file ../helper\t0001-helper", "file bin/helper\t../0001-helper", "dir ../../etc"} {
+		if _, err := updPlanParse([]byte(string(data) + bad + "\n")); err == nil {
+			t.Errorf("a plan with %q was accepted", bad)
+		}
+	}
+
+	// The helper committed. Keeping no versions, the next start keeps the
+	// backups aside for launch.sh instead of purging them.
+	if err := os.Remove(j.path); err != nil {
+		t.Fatal(err)
+	}
+	uhistAdoptCommittedSwaps()
+	aside := filepath.Join(dir, updProbationDir, j.ID)
+	if filepath.ToSlash(aside) != plan.Dirs[2] {
+		t.Errorf("kept in %s, the plan looks in %s", aside, plan.Dirs[2])
+	}
+	for _, f := range plan.Files {
+		if !pathExists(filepath.Join(aside, f.Stored)) {
+			t.Errorf("the backup of %s was not kept for launch.sh", f.Name)
+		}
+	}
+
+	// A rollback ends the plan and what it kept.
+	updProbationNoteSwap(j, exeDir, uhistPending{Reason: uhistReasonRollback})
+	if pathExists(planPath) || pathExists(aside) {
+		t.Error("a rollback left the plan or its backups behind")
+	}
+
+	// A release from before the check never says "ready": no plan for it, or
+	// every start of it would be undone.
+	upchWriteTestFile(t, filepath.Join(staging, "launch.sh"), []byte("#!/bin/sh\n"))
+	uhistNoteTestSwap(t, exeDir, tag, "JukaHub")
+	if pathExists(planPath) {
+		t.Error("a plan was made for a release that does not report its start")
+	}
+}

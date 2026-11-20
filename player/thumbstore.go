@@ -174,6 +174,16 @@ func clearThumbnailDataCache() {
 	thumbnailDataCache.clear()
 }
 
+// clearThumbnailDataKeys drops payloads a scene used without emptying the
+// shared thumbnail cache for every other screen.
+func clearThumbnailDataKeys(keys map[string]struct{}) {
+	thumbnailCacheMutex.Lock()
+	defer thumbnailCacheMutex.Unlock()
+	for key := range keys {
+		thumbnailDataCache.drop(key)
+	}
+}
+
 // PrefetchThumbnail enqueues a URL for background download so the disk cache
 // warms up before the user scrolls to it. Non-blocking; drops when full.
 func PrefetchThumbnail(url string) {
@@ -235,6 +245,10 @@ func thumbnailWorkerCount() int {
 const (
 	thumbnailTextureHandheldBudget = int64(64 << 20)
 	thumbnailTextureDesktopBudget  = int64(192 << 20)
+	// Tiny images can use little accounted pixel memory while each still owns
+	// a GPU object and a map/list entry. Bound those costs as well as bytes.
+	thumbnailTextureHandheldEntries = 512
+	thumbnailTextureDesktopEntries  = 1024
 )
 
 func thumbnailTextureBudgetBytes() int64 {
@@ -254,12 +268,13 @@ type thumbnailTextureEntry struct {
 // thumbnailTextureCache is an LRU cache of decoded thumbnail textures. Lookups
 // are O(1); eviction happens on insert, never while a texture is being drawn.
 type thumbnailTextureCache struct {
-	mu       sync.Mutex
-	entries  map[string]*thumbnailTextureEntry
-	lru      *list.List // front = most recently used; values are keys
-	bytes    int64
-	maxBytes int64
-	destroy  func(*sdl.Texture) // injectable for tests
+	mu         sync.Mutex
+	entries    map[string]*thumbnailTextureEntry
+	lru        *list.List // front = most recently used; values are keys
+	bytes      int64
+	maxBytes   int64
+	maxEntries int
+	destroy    func(*sdl.Texture) // injectable for tests
 }
 
 func newThumbnailTextureCache(maxBytes int64) *thumbnailTextureCache {
@@ -267,9 +282,10 @@ func newThumbnailTextureCache(maxBytes int64) *thumbnailTextureCache {
 		maxBytes = 64 << 20
 	}
 	return &thumbnailTextureCache{
-		entries:  make(map[string]*thumbnailTextureEntry),
-		lru:      list.New(),
-		maxBytes: maxBytes,
+		entries:    make(map[string]*thumbnailTextureEntry),
+		lru:        list.New(),
+		maxBytes:   maxBytes,
+		maxEntries: thumbnailTextureDesktopEntries,
 		destroy: func(t *sdl.Texture) {
 			if t != nil {
 				t.Destroy()
@@ -289,6 +305,9 @@ var (
 func getThumbnailTextures() *thumbnailTextureCache {
 	thumbnailTexturesOnce.Do(func() {
 		thumbnailTextures = newThumbnailTextureCache(thumbnailTextureBudgetBytes())
+		if IsTrimuiDevice() || P().IsHandheld() {
+			thumbnailTextures.maxEntries = thumbnailTextureHandheldEntries
+		}
 	})
 	return thumbnailTextures
 }
@@ -329,7 +348,7 @@ func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32
 	c.bytes += bytes
 	// Keep at least the newest entry even if a single texture exceeds the
 	// budget; destroying it would return a dangling pointer to the caller.
-	for c.bytes > c.maxBytes && c.lru.Len() > 1 {
+	for (c.bytes > c.maxBytes || len(c.entries) > c.maxEntries) && c.lru.Len() > 1 {
 		back := c.lru.Back()
 		if back == nil {
 			break
@@ -354,6 +373,39 @@ func (c *thumbnailTextureCache) Clear() {
 	}
 	c.lru.Init()
 	c.bytes = 0
+}
+
+// ClearPrefix releases one client's textures without evicting media and file
+// thumbnails that another scene may still be using.
+func (c *thumbnailTextureCache) ClearPrefix(prefix string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, entry := range c.entries {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		c.destroy(entry.texture)
+		c.lru.Remove(entry.elem)
+		c.bytes -= entry.bytes
+		delete(c.entries, key)
+	}
+}
+
+// ClearKeys releases decoded textures a closed scene used. All callers run on
+// the render thread, after that scene's last draw.
+func (c *thumbnailTextureCache) ClearKeys(keys map[string]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key := range keys {
+		entry, ok := c.entries[key]
+		if !ok {
+			continue
+		}
+		c.destroy(entry.texture)
+		c.lru.Remove(entry.elem)
+		c.bytes -= entry.bytes
+		delete(c.entries, key)
+	}
 }
 
 // Len returns the number of cached textures.

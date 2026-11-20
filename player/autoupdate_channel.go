@@ -194,12 +194,6 @@ func pickJukaHubRelease(list []githubReleaseListed, includePrerelease bool) (*gi
 	return &rel, true
 }
 
-// pickNewestJukaHubRelease is the Beta channel's selection, including
-// prereleases. Keep it separate so channel behavior is explicit at call sites.
-func pickNewestJukaHubRelease(list []githubReleaseListed) (*githubRelease, bool) {
-	return pickJukaHubRelease(list, true)
-}
-
 // jukaHubReleaseTag reports a tag of a JukaHub build: the main-branch builds'
 // JukaHub-<time> (JukaGUI-<time> before the rename) and the versioned v1.2.3
 // releases. The repository's rolling emulator releases (ppsspp-tg5040,

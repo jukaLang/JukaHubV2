@@ -124,6 +124,41 @@ func TestParseCoreIndexRequiresRealDates(t *testing.T) {
 	}
 }
 
+// TestJ2MEIndexFilesAndPair pins the release index's companion-file lines
+// (FreeJ2ME-Plus's jar, j2me_install.go): the core reader still skips them,
+// a jar name is a plain file name, and the jar pairs with the core of its date.
+func TestJ2MEIndexFilesAndPair(t *testing.T) {
+	sum := strings.Repeat("ab", 32)
+	text := strings.Join([]string{
+		"2026-11-23 1234abcd freej2me_plus_libretro.so.zip",
+		"2026-11-16 " + sum + " freej2me_plus-lr.jar freej2me_plus",
+		"2026-11-23 " + strings.ToUpper(sum) + " freej2me_plus-lr.jar freej2me_plus",
+		"2026-11-23 " + sum + " ../evil-lr.jar freej2me_plus",
+		"2026-11-23 " + sum + " sub/x-lr.jar freej2me_plus",
+		"2026-11-23 " + sum[:63] + " short-lr.jar freej2me_plus",
+		"2026-11-23 " + sum + " notajar.zip freej2me_plus",
+		"2026-13-01 " + sum + " baddate-lr.jar freej2me_plus",
+	}, "\n")
+	if cores := parseCoreIndex(text); len(cores) != 1 || cores[0].Core != "freej2me_plus" || cores[0].CRC32 != "1234abcd" {
+		t.Fatalf("parseCoreIndex = %+v, want only the core line", cores)
+	}
+	files := j2meParseIndexFiles(text)
+	if len(files) != 1 || files[0].File != "freej2me_plus-lr.jar" || files[0].Date != "2026-11-23" || files[0].SHA256 != sum {
+		t.Fatalf("j2meParseIndexFiles = %+v, want the last good jar line, lower-cased", files)
+	}
+	entry, jar, err := j2meIndexPair(text, "freej2me_plus")
+	if err != nil || entry.Date != "2026-11-23" || jar.File != "freej2me_plus-lr.jar" {
+		t.Fatalf("j2meIndexPair = %+v, %+v, %v", entry, jar, err)
+	}
+	stale := "2026-11-30 1234abcd freej2me_plus_libretro.so.zip\n2026-11-23 " + sum + " freej2me_plus-lr.jar freej2me_plus\n"
+	if _, _, err := j2meIndexPair(stale, "freej2me_plus"); err == nil {
+		t.Fatal("a jar of another date was paired with the core")
+	}
+	if _, _, err := j2meIndexPair(text, "mgba"); err == nil {
+		t.Fatal("a core the index does not list was paired")
+	}
+}
+
 func TestPlanCoreUpdatesOnlyReportsChangedInstalledCores(t *testing.T) {
 	active := map[string]coreBuild{}
 	dir := t.TempDir()

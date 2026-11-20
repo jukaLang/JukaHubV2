@@ -258,7 +258,14 @@ func mailcalSettingsUpdate(change func(*mailcalSettings)) error {
 	if err := AtomicWrite(p, append(data, '\n'), 0o600); err != nil {
 		return err
 	}
+	secretsChanged := logStoredSecretsMailFingerprint(next) != logStoredSecretsMailFingerprint(mailcalStore.value)
 	mailcalStore.value = next
+	if secretsChanged {
+		// This function can run on the phone or sync goroutine. The main loop
+		// rebuilds the exact-value redaction after the write, retrying if this
+		// lock has not been released by the time it drains the queue.
+		tbxPost(logStoredSecretsMailChangedOnMain)
+	}
 	return nil
 }
 

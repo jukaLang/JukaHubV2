@@ -36,17 +36,19 @@ import (
 )
 
 const (
-	hbShotMaxW            = 320
-	hbShotMaxBytes        = 6 << 20
-	hbShotDiskMax         = 30 << 20
-	hbShotWorkers         = 2
-	hbShotWantMax         = 48
-	hbShotMissTTL         = 24 * time.Hour
-	hbShotRetry           = 2 * time.Minute
-	hbShotTexMax          = 40
-	hbShotDecodesPerFrame = 2
-	hbShotMaxSide         = 2048
-	hbTexIdle             = 3 * time.Second
+	hbShotMaxW             = 320
+	hbShotMaxBytes         = 6 << 20
+	hbShotDiskMax          = 30 << 20
+	hbShotWorkers          = 2
+	hbShotWantMax          = 48
+	hbShotMissTTL          = 24 * time.Hour
+	hbShotRetry            = 2 * time.Minute
+	hbShotTexMax           = 40
+	hbShotTexHandheldBytes = int64(8 << 20)
+	hbShotTexDesktopBytes  = int64(24 << 20)
+	hbShotDecodesPerFrame  = 2
+	hbShotMaxSide          = 2048
+	hbTexIdle              = 3 * time.Second
 )
 
 type hbShotWant struct{ key, url string }
@@ -245,6 +247,7 @@ func hbShotNoteWritten(dir string) {
 var hbTex struct {
 	renderer *sdl.Renderer
 	m        map[string]*pstoreTexEntry
+	bytes    int64
 	frame    uint64
 	loads    int
 	janitor  bool
@@ -253,12 +256,14 @@ var hbTex struct {
 // homebrewTexClear lets every store texture go. Main thread: memory
 // pressure (adaptive.go) and the janitor once the store is off screen.
 func homebrewTexClear() {
-	for k, t := range hbTex.m {
+	for _, t := range hbTex.m {
 		if t.tex != nil {
 			_ = t.tex.Destroy()
 		}
-		delete(hbTex.m, k)
 	}
+	hbTex.m = nil
+	hbTex.bytes = 0
+	hbTex.renderer = nil
 }
 
 // hbTexJanitor frees the textures a few seconds after the store left the
@@ -290,6 +295,7 @@ func hbCoverTexture(renderer *sdl.Renderer, u string) *sdl.Texture {
 	if hbTex.renderer != renderer || hbTex.m == nil {
 		hbTex.renderer = renderer
 		hbTex.m = make(map[string]*pstoreTexEntry, hbShotTexMax)
+		hbTex.bytes = 0
 	}
 	if hbTex.frame != frameCount {
 		hbTex.frame, hbTex.loads = frameCount, 0
@@ -315,26 +321,18 @@ func hbCoverTexture(renderer *sdl.Renderer, u string) *sdl.Texture {
 		_ = os.Remove(path)
 		return nil
 	}
+	bytes := int64(surface.W) * int64(surface.H) * 4
+	budget := cacheBudgetByDevice(hbShotTexHandheldBytes, hbShotTexDesktopBytes)
+	if !storeShotTextureMakeRoom(hbTex.m, &hbTex.bytes, hbShotTexMax, budget, bytes, frameCount) {
+		surface.Free()
+		return nil
+	}
 	tex, err := renderer.CreateTextureFromSurface(surface)
 	surface.Free()
 	if err != nil {
 		return nil
 	}
-	for len(hbTex.m) >= hbShotTexMax {
-		oldKey, oldUsed := "", frameCount
-		for k, t := range hbTex.m {
-			if t.used < oldUsed {
-				oldKey, oldUsed = k, t.used
-			}
-		}
-		if oldKey == "" {
-			break
-		}
-		if t := hbTex.m[oldKey]; t.tex != nil {
-			_ = t.tex.Destroy()
-		}
-		delete(hbTex.m, oldKey)
-	}
-	hbTex.m[key] = &pstoreTexEntry{tex: tex, used: frameCount}
+	hbTex.m[key] = &pstoreTexEntry{tex: tex, used: frameCount, bytes: bytes}
+	hbTex.bytes += bytes
 	return tex
 }

@@ -35,6 +35,9 @@ package main
 // again. A player who quits a working game after five seconds sees nothing:
 // a clean exit with a quiet log is not a failure. When nothing concrete is
 // found the card says so and shows the emulator's last relevant log lines.
+// A PortMaster port has its own rule (gamediag_port.go): one that ends by
+// itself within gameDiagQuickExit always gets the card, and one within
+// gameDiagPortQuickExit when its logs name a cause.
 //
 // The same checks run on demand from the game's options sheet ("Check why
 // it won't start"), before the first launch.
@@ -99,9 +102,9 @@ type gameDiagLaunch struct {
 	port     string // a PortMaster script, instead of a library game
 	portName string
 	started  time.Time
-	// ended, stopped and memMB are a library game's (gamelaunch_watch.go):
-	// when its process group was gone, whether JukaHub had asked it to stop,
-	// and the memory free (MB) when it started.
+	// ended, stopped and memMB (gamelaunch_watch.go; a port's too): when its
+	// process group was gone, whether JukaHub had asked it to stop, and the
+	// memory free (MB) when it started.
 	ended   time.Time
 	stopped bool
 	memMB   int
@@ -172,7 +175,7 @@ func gameDiagPortStart(name, script string) *gameDiagLaunch {
 	if name == portMasterAppName {
 		return nil
 	}
-	return &gameDiagLaunch{port: script, portName: name, started: time.Now()}
+	return &gameDiagLaunch{port: script, portName: name, started: time.Now(), memMB: gameLaunchMemFreeMB()}
 }
 
 // gameDiagExitCode is the launcher's exit status: 0 for a clean exit, -1
@@ -217,7 +220,11 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		// game's time.
 		ran = d.ended.Sub(d.started)
 	}
-	if ran > gameDiagQuickExit+screenSettleDelay {
+	quick := gameDiagQuickExit
+	if d.port != "" {
+		quick = gameDiagPortQuickExit
+	}
+	if ran > quick+screenSettleDelay {
 		// A game that got going proves the core build it ran: a build on
 		// probation stays (corebuilds_probation.go). Unless RetroArch's log
 		// says the core never started it: RetroArch can sit in its own menu
@@ -237,8 +244,9 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	// signal JukaHub did not send is not the player leaving, and a game over
 	// within gameDiagBriefRun never got going, whatever its status: a Brick
 	// Pro on CrossMix showed "Playing …" and nothing else because its launch
-	// scripts ended at once with status 0. A port is judged as before, and so
-	// is a Windows launcher, which may hand its game on and return at once.
+	// scripts ended at once with status 0. A port has its own rule below; a
+	// Windows launcher is judged as before, as it may hand its game on and
+	// return at once.
 	_, sig := gameLaunchExitStatus(waitErr)
 	ownGame := d.port == "" && !d.stopped
 	killed := ownGame && sig > 0
@@ -263,16 +271,34 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 			break
 		}
 	}
+	// A port has its own rule (gamediag_port.go). One that ended by itself
+	// within gameDiagQuickExit never got going, whatever it printed: the card
+	// always opens. Later, up to gameDiagPortQuickExit — and at any time for
+	// a cloud-gaming client, which may be left that soon on purpose — only a
+	// cause in its own output (failed) opens it. One JukaHub stopped (Select +
+	// Start, the in-game menu) is the player leaving.
+	portGone := false
 	if d.port != "" {
 		// PortMaster scripts often end on a command that returns non-zero
 		// after a normal quit, so a port's exit code proves nothing.
 		code = 0
+		early := ran <= gameDiagQuickExit+screenSettleDelay
+		if (!early || x1PortName(filepath.Base(d.port))) && (d.stopped || !failed) {
+			return
+		}
+		portGone = !d.stopped
+		if !early {
+			report.Title = d.portName + " stopped"
+		}
 	}
 	// The first game of a core build JukaHub just activated: a build that
 	// could not start it is put back (corebuilds_probation.go), and the card
 	// says so first.
 	probation := false
-	if ownGame {
+	// A Dolphin start that RetroArch's video driver could not draw proves
+	// nothing about the core build: the driver is switched below instead of
+	// the build being put back (dolphin_video.go).
+	if ownGame && !dolphinVideoFailedStart(d.game, d.launcher, d.logPath) {
 		if outcome, why := gameDiagCoreOutcome(report, failed, code, sig); outcome != coreRunUnclear {
 			core, path := d.coreUsed()
 			if note := coreProbationJudge(core, path, outcome, why); note != "" {
@@ -292,8 +318,17 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 			report.Issues = append([]launchIssue{fix}, report.Issues...)
 			strong = true
 		}
+		// The Dolphin core with a video driver that could not draw for it:
+		// the other driver next time (dolphin_video.go). Only for a start
+		// that failed, not a player who quit within seconds.
+		if code != 0 || failed || killed || brief {
+			if fix, ok := dolphinAfterGame(d.game, d.launcher, d.logPath); ok {
+				report.Issues = append([]launchIssue{fix}, report.Issues...)
+				strong = true
+			}
+		}
 	}
-	if !strong && code == 0 && !failed && !killed && !brief {
+	if !strong && code == 0 && !failed && !killed && !brief && !portGone {
 		// A clean exit with a quiet log: the player quit.
 		return
 	}
@@ -314,9 +349,19 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	if d.memMB > 0 && ((killed && sig == 9) || d.memMB < gameDiagLowMemMB) {
 		memory = " Free memory when it started: " + strconv.Itoa(d.memMB) + " MB."
 	}
-	if len(report.Issues) > 0 {
+	switch {
+	case len(report.Issues) > 0 && d.port != "" && !strong:
+		report.Summary = when + "." + memory + " These may be why:"
+	case len(report.Issues) > 0:
 		report.Summary = when + "." + memory + " This is what stops it:"
-	} else {
+	case d.port != "":
+		report.Summary = when + ". JukaHub found nothing missing that it can check." + memory
+		if len(report.LogLines) > 0 {
+			report.Summary += " The last lines the port printed are below; PortMaster's Discord (#port-help) can read the full log."
+		} else {
+			report.Summary += " The port printed nothing before it stopped."
+		}
+	default:
 		report.Summary = when + ". JukaHub found no missing BIOS, core or game file." + memory
 		if len(report.LogLines) > 0 {
 			report.Summary += " The emulator's own last words are below."
@@ -413,6 +458,8 @@ func diagnoseLibraryGame(game libraryGame, launcher, logPath string) (gameDiagRe
 	report := gameDiagReport{Title: game.Label() + " didn't start"}
 	var issues []launchIssue
 	issues = append(issues, gameDiagROMIssues(game.System, game.Path)...)
+	// A Godot pack that is none, or of an engine the port lacks (godot.go).
+	issues = append(issues, godotDiagIssues(game.System, game.Path, launcher)...)
 	if strings.TrimSpace(launcher) == "" {
 		issues = append(issues, launchIssue{
 			Level:  int(gameDiagSure),
@@ -727,6 +774,10 @@ var gameDiagSystemExtTable = []struct {
 	{[]string{"atari lynx", "lynx"}, []string{".lnx", ".o", ".lyx"}},
 	{[]string{"wonderswan", "ws"}, []string{".ws", ".wsc", ".pc2"}},
 	{[]string{"wonderswan color", "wsc"}, []string{".wsc", ".ws", ".pc2"}},
+	// GameCube and Wii before the Neo Geo Pocket rows: Roms/NGC is a GameCube
+	// folder (romsetup.go), and its .ngc is the Pocket's file type.
+	{[]string{"gamecube", "gc", "nintendo - gamecube"}, []string{".iso", ".gcm", ".gcz", ".rvz", ".ciso", ".wia", ".tgc", ".dol", ".elf", ".m3u"}},
+	{[]string{"wii", "nintendo - wii"}, []string{".iso", ".wbfs", ".rvz", ".wia", ".gcz", ".ciso", ".wad", ".dol", ".elf", ".m3u"}},
 	{[]string{"neo geo pocket", "ngp"}, []string{".ngp", ".ngc", ".ngpc", ".npc"}},
 	{[]string{"neo geo pocket color", "ngpc", "ngc"}, []string{".ngc", ".ngp", ".ngpc", ".npc"}},
 	{[]string{"nintendo 64", "n64"}, []string{".n64", ".v64", ".z64", ".ndd", ".bin", ".u1"}},
@@ -1339,9 +1390,27 @@ func gameDiagDirHasGameFiles(dir string, depth int) bool {
 
 // diagnosePort checks a PortMaster port that quit at once: its folder, the
 // game data folder many ports need filled with the original game's files,
-// and its log.txt.
+// and what it printed — JukaHub's log of the launch and the port's log.txt,
+// sorted into causes by gameDiagPortLogFindings (gamediag_port.go).
 func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool) {
 	report := gameDiagReport{Title: name + " didn't start"}
+	// JukaHub's log has the launch notes and everything the script printed,
+	// also before it sent its output to log.txt: a script that died under
+	// BusyBox's sh or sourcing control.txt never wrote log.txt.
+	jukaLog := portLogPath(name, script)
+	notes, output := gameDiagPortJukaLog(jukaLog, started)
+	// The full log the card names: JukaHub's when the script printed there,
+	// else log.txt (below), else JukaHub's notes alone (finish).
+	if len(output) > 0 {
+		report.LogPath = jukaLog
+	}
+	finish := func(dir string) (gameDiagReport, bool) {
+		failed := gameDiagPortAddOutput(&report, notes, output, script, dir)
+		if report.LogPath == "" && len(notes) > 0 {
+			report.LogPath = jukaLog
+		}
+		return report, failed
+	}
 	dir, rel := gameDiagPortDir(script)
 	if dir == "" {
 		if rel != "" {
@@ -1353,7 +1422,7 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 				Detail: filepath.Base(script) + " runs the port from this folder. Reinstall the port from PortMaster.",
 			})
 		}
-		return report, false
+		return finish("")
 	}
 	for _, sub := range []string{"gamedata", "data", "assets", "game"} {
 		data, ok := gameDiagFileIn(dir, sub)
@@ -1375,25 +1444,49 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		})
 		break
 	}
-	failed := false
 	if logPath, ok := gameDiagFileIn(dir, "log.txt"); ok {
 		if lines := gameDiagReadTail(logPath, started); len(lines) > 0 {
-			excerpt, logFailed := gameDiagExcerpt(lines)
-			report.LogLines = excerpt
-			report.LogPath = logPath
-			failed = logFailed
-			if files := gameDiagPortMissingFiles(lines); len(files) > 0 && len(report.Issues) == 0 {
-				report.Issues = append(report.Issues, launchIssue{
-					Level:  int(gameDiagLikely),
-					Title:  "The port is missing files",
-					Files:  gameDiagListFiles(files, 8),
-					Where:  dir,
-					Detail: "Named in the port's log. Game data goes in the port's folder (often a gamedata folder inside it); a missing .so library means this build does not suit the device.",
-				})
+			output = gameDiagPortMergeOutput(output, lines)
+			if report.LogPath == "" {
+				report.LogPath = logPath
 			}
 		}
 	}
-	return report, failed
+	return finish(dir)
+}
+
+// gameDiagPortAddOutput adds what a port printed to its report: the causes
+// its lines show, else the files they name as missing, and the log lines to
+// read. failed: the port's own output names a cause — a line says loading
+// failed, or a finding rests on one of its lines (the launch notes and the
+// folder checks do not count). dir is the port's folder ("" when missing).
+func gameDiagPortAddOutput(report *gameDiagReport, notes, output []string, script, dir string) bool {
+	excerpt, failed := gameDiagExcerpt(output)
+	found, evidence, fromOutput := gameDiagPortLogFindings(notes, output, script)
+	failed = failed || fromOutput
+	// The log's causes go first, so within a level they come before a data
+	// folder that may only look empty.
+	report.Issues = append(found, report.Issues...)
+	strong := false
+	for _, is := range report.Issues {
+		if is.Level < int(gameDiagMaybe) {
+			strong = true
+			break
+		}
+	}
+	if files := gameDiagPortMissingFiles(output); len(files) > 0 && !strong {
+		report.Issues = append(report.Issues, launchIssue{
+			Level:  int(gameDiagLikely),
+			Title:  "The port is missing files",
+			Files:  gameDiagListFiles(files, 8),
+			Where:  dir,
+			Detail: "Named in the port's log. Game data goes in the port's folder (often a gamedata folder inside it); a missing .so library means this build does not suit the device.",
+		})
+	}
+	// The surest first.
+	sort.SliceStable(report.Issues, func(i, j int) bool { return report.Issues[i].Level < report.Issues[j].Level })
+	report.LogLines = gameDiagPortExcerpt(evidence, excerpt, output)
+	return failed
 }
 
 // gameDiagPortMissingFiles pulls file names out of "No such file", "cannot

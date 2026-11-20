@@ -820,6 +820,8 @@ func emuStandaloneGameArgs(launcher, romPath string) ([]string, bool) {
 		return []string{"-full-screen", "-dvd_path", romPath}, true
 	case emuIsXeniaLauncher(launcher):
 		return []string{romPath, "--fullscreen=true"}, true
+	case emuIsAzaharLauncher(launcher): // 3DS on a PC (emu_azahar.go)
+		return emuAzaharGameArgs(romPath), true
 	}
 	return nil, false
 }

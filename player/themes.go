@@ -1775,6 +1775,8 @@ func ListThemePresetsFor(kind ThemePresetKind) []string {
 }
 
 // ListThemePresets returns selectable presets in a stable, deterministic order.
+// Tests use the all-kinds list to check every visible theme; production screens
+// call ListThemePresetsFor for the kind they show.
 func ListThemePresets() []string {
 	names := make([]string, 0, len(themePresetOrder))
 	for _, name := range themePresetOrder {

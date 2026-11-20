@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 // TestRomSystemAliasCoverage pins LIB-2: the folder names the firmware,
 // CrossMix and No-Intro sets use for the systems in emusystems.go's core
@@ -58,5 +61,49 @@ func TestRomExtensionsCoverNewSystems(t *testing.T) {
 		if !romFileExtensions[ext] {
 			t.Fatalf("%s is not a recognised ROM extension", ext)
 		}
+	}
+}
+
+// TestGodotPackHeader pins the reading of outside data for the Godot shelf
+// (godot.go): the engine version in a .pck's header, the versions in engine
+// file names, and Roms/GODOT listing the .pck and not its side files.
+func TestGodotPackHeader(t *testing.T) {
+	head := func(magic string, nums ...uint32) []byte {
+		b := []byte(magic)
+		for _, n := range nums {
+			b = binary.LittleEndian.AppendUint32(b, n)
+		}
+		return b
+	}
+	if v, ok := godotParsePackHeader(head("GDPC", 1, 3, 5, 2)); !ok || v != (godotVersion{3, 5, 2}) {
+		t.Fatalf("Godot 3 header = %v %v", v, ok)
+	}
+	if v, ok := godotParsePackHeader(head("GDPC", 2, 4, 3, 0, 0)); !ok || v.String() != "4.3.0" {
+		t.Fatalf("Godot 4 header = %v %v", v, ok)
+	}
+	for _, bad := range [][]byte{head("PK\x03\x04", 1, 3, 5, 2), head("GDPC", 1, 0, 5, 2), head("GDPC", 1, 3, 5)} {
+		if v, ok := godotParsePackHeader(bad); ok {
+			t.Fatalf("%q read as Godot %v", bad, v)
+		}
+	}
+	for name, want := range map[string]string{
+		"frt_3.5.2": "3.5.2", "frt_3.2.3.squashfs": "3.2.3", "godot_4.2.2.squashfs": "4.2.2",
+		"Godot_v3.5.3-stable_x11.64": "3.5.3", "frt_100_332_arm64.bin": "3.3.2",
+	} {
+		if v, ok := godotEngineVersion(name); !ok || v.String() != want {
+			t.Fatalf("engine %q = %v %v, want %s", name, v, ok, want)
+		}
+	}
+	if v, ok := godotEngineVersion("launch.sh"); ok {
+		t.Fatalf("launch.sh read as engine %v", v)
+	}
+	if !godotEngineFits([]godotVersion{{3, 5, 2}}, godotVersion{3, 4, 0}) || godotEngineFits([]godotVersion{{3, 5, 2}}, godotVersion{4, 2, 0}) {
+		t.Fatal("engine fit: a 3.5 engine plays 3.4 packs and no 4.x pack")
+	}
+	if alias, ok := romSystemAliases["godot"]; !ok || alias.Name != godotSystemName {
+		t.Fatalf("godot alias = %+v, known %v", alias, ok)
+	}
+	if !romListsFile(godotSystemName, "/r", "/r/game.pck", ".pck") || romListsFile(godotSystemName, "/r", "/r/game.png", ".png") {
+		t.Fatal("Roms/GODOT must list .pck games and not their pictures")
 	}
 }

@@ -11,24 +11,29 @@ package main
 //   - Supported: the device is offered the install at all (hakuxOffered: the
 //     Smart Pro, and the Brick Pro marked untested);
 //   - Installed: an Xbox launcher JukaHub installed is on the card — one put
-//     there by hand is launched but never replaced;
+//     there by hand is launched but never replaced — or, on the Smart Pro in
+//     Install automatically, a card that never had an Xbox launcher, which
+//     the same updater installs hakuX on once (hakux_auto.go, hakuxAutoWanted);
 //   - InUse: hakuX is running. While JukaHub is up it only runs as a game
 //     JukaHub started, and the pass never runs over a game anyway; this is the
 //     last word before files are replaced;
 //   - Check: the newest release against the provenance file, answered from the
-//     Emulators page's own background check while that answer is fresh;
+//     Emulators page's own background check while that answer is fresh; for
+//     the first install, the newest release and room for it on the card;
 //   - Install: hakuxInstall, which checks the download against the published
 //     digests, merges file by file, keeps what it replaces for R1 and copies
 //     out any file the user had changed (the toast says where).
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,11 +42,27 @@ func init() {
 		Key:       "hakux",
 		Title:     hakuxName,
 		Supported: hakuxOffered,
-		Installed: hakuxManagedOnCard,
+		Installed: hakuxUpdaterInstalled,
 		InUse:     hakuxRunning,
 		Check:     hakuxAutoCheck,
 		Install:   hakuxAutoInstall,
 	})
+}
+
+// hakuxUpdaterInstalled is the updater's Installed: a hakuX JukaHub installed
+// is there to update, or (hakuxAutoWanted) the card is one the pass installs
+// it on once. hakuxAutoWanted is asked first because it also records an Xbox
+// launcher it finds, so a later removal is respected. The first install joins
+// a pass only on the charger or once the user stepped away: the pass counts an
+// updater it never checked as overdue, which would start a download of a
+// hundred-odd megabytes in the first minutes after start-up while the device
+// is in use.
+func hakuxUpdaterInstalled() bool {
+	wanted := hakuxAutoWanted()
+	if wanted && (getBatteryCharging() || userInputAge(time.Now()) >= coreAutoUpdateIdle) {
+		return true
+	}
+	return hakuxManagedOnCard()
 }
 
 // hakuxRunning reports an Xbox game that JukaHub started and that is still
@@ -62,6 +83,10 @@ func hakuxRunning() bool {
 func hakuxAutoCheck(ctx context.Context, client *http.Client) (bool, string, error) {
 	_, m, managed := hakuxInstalled(deviceEmuRoots)
 	if !managed {
+		if hakuxAutoWanted() {
+			// Not on the card yet: the first install (hakux_auto.go).
+			return hakuxAutoFirstCheck(ctx, client)
+		}
 		return false, "", nil
 	}
 	if _, newer, fresh := emuWinCachedAnswer(emuXboxEntryName); fresh && !newer {
@@ -76,18 +101,47 @@ func hakuxAutoCheck(ctx context.Context, client *http.Client) (bool, string, err
 }
 
 // hakuxAutoInstall is the pass's install: the one X and L1 run, with the
-// tile's "Installing…" pill while it works.
+// tile's "Installing…" pill while it works. On a card without hakuX it is the
+// first install (hakux_auto.go), asked once more right before it starts:
+// something may have put an Xbox launcher there since the check. A first
+// install that fails once its download has begun — and was not stopped (a
+// game, the card) — is noted on the card, and the pass waits a day before it
+// fetches the package again (hakuxAutoNoteFailure).
 func hakuxAutoInstall(ctx context.Context, client *http.Client, progress func(string)) error {
+	first := !hakuxManagedOnCard()
+	if first && !hakuxAutoWanted() {
+		return errEmuUpdaterCurrent
+	}
 	emuSetInstalling(emuXboxEntryName)
 	defer emuSetInstalling("")
-	result, err := hakuxInstall(ctx, client, hakuxDevicePaths(), hakuxDevice(), emuAutoWinProgress(progress))
+	p := hakuxDevicePaths()
+	report := emuAutoWinProgress(progress)
+	var fetching atomic.Bool // the download began
+	result, err := hakuxInstall(ctx, client, p, hakuxDevice(), func(phase string, done, total int64) {
+		if phase != "" && phase != installPhaseResolving {
+			fetching.Store(true)
+		}
+		report(phase, done, total)
+	})
 	if err != nil {
+		stopped := errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled)
+		if first && fetching.Load() && !stopped {
+			hakuxAutoNoteFailure(p, err)
+		}
 		return err
 	}
 	invalidateEmulatorCache()
 	emuForgetUpdate(emuXboxEntryName)
 	if emuXboxSheetOpen() {
 		emuXboxRescan()
+	}
+	if first && !result.Updated && !result.Current && result.Restored == 0 {
+		// Installed by itself: the pass's toast names it as installed, not
+		// updated, and this line says what it is for.
+		logInfo("emulators", "hakuX %s installed by the daily pass (no Xbox launcher was on the card)", result.Tag)
+		emuRuntimeNoteFirstInstall("hakux")
+		emuRuntimeLeaveNote(hakuxAutoReadyNote())
+		return nil
 	}
 	if result.Edited > 0 {
 		logInfo("emulators", "hakuX: %d changed file(s) replaced; copies in %s", result.Edited, result.EditedDir)

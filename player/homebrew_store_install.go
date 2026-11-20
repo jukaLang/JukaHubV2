@@ -432,6 +432,7 @@ type hbInstallRec struct {
 	Updated  string    `json:"uploadUpdatedAt,omitempty"`
 	At       time.Time `json:"installedAt"`
 	Update   bool      `json:"update,omitempty"`
+	Note     string    `json:"note,omitempty"` // what the game may still need (EasyRPG's RTP)
 }
 
 // hbRecFileOK reports whether r's file is on the card and still the one the
@@ -768,7 +769,11 @@ func hbWorker() {
 				if c := hbConsoleIndex(rec.Console); c >= 0 {
 					con = hbConsoles[c].name
 				}
-				ShowToast(title+" is on your "+con+" shelf", ToastKindSuccess)
+				msg := title + " is on your " + con + " shelf"
+				if rec.Note != "" {
+					msg += ". " + rec.Note
+				}
+				ShowToast(msg, ToastKindSuccess)
 			case !errors.Is(err, hbErrCancelled):
 				ShowToast("Could not install "+title+": "+firstLine(err.Error()), ToastKindError)
 			}
@@ -857,6 +862,10 @@ func hbRunJob(j *hbJob) (hbInstallRec, error) {
 	if err != nil {
 		return hbInstallRec{}, err
 	}
+	// An RPG Maker game is a folder, not a cartridge (homebrew_easyrpg.go).
+	if hbEasyRPGJob(j.consoles, ups, prev, hadPrev) {
+		return hbEasyRPGRunJob(ctx, j, ups, gameID, keyID, cover, prev, hadPrev)
+	}
 	pick, ok := hbPickUpload(ups, j.consoles)
 	if hadPrev && prev.UploadID > 0 {
 		// An update keeps to the file it installed while itch.io lists it.
@@ -872,7 +881,9 @@ func hbRunJob(j *hbJob) (hbInstallRec, error) {
 		}
 	}
 	if !ok {
-		return hbInstallRec{}, errors.New("its page has no cartridge for these consoles — it may be a PC or web game")
+		// A browser-only game, an installer… (homebrew_tic80.go).
+		_, reason := hbNoCartridgeReason(ups, j.consoles)
+		return hbInstallRec{}, errors.New(reason)
 	}
 	if pick.Upload.Size > hbZipMax {
 		return hbInstallRec{}, errors.New("the file is larger than a cartridge download can be")
@@ -1208,6 +1219,10 @@ func hbConsoleDirFind(c int) (string, error) {
 		return "", errors.New("unknown console")
 	}
 	con := hbConsoles[c]
+	// TIC-80 and EasyRPG: no ROM-manager row (homebrew_tic80.go).
+	if dir, ok, err := hbFolderConsoleDir(con); ok {
+		return dir, err
+	}
 	if con.romm == "" {
 		if d := pico8NativeRomsDir(true); d != "" {
 			return d, nil
@@ -1293,7 +1308,10 @@ func hbDelete(link, title string) {
 			// Only the file this store wrote: a player's own file that took
 			// its name since stays (the record just goes).
 			if hbRecFileOK(rec) {
-				if rerr := os.Remove(rec.Path); rerr != nil && !os.IsNotExist(rerr) {
+				if hbEasyRPGRec(rec) {
+					// A game folder: all of it but the saves (homebrew_easyrpg.go).
+					err = hbEasyRPGDelete(rec)
+				} else if rerr := os.Remove(rec.Path); rerr != nil && !os.IsNotExist(rerr) {
 					err = rerr
 				}
 			}
@@ -1405,6 +1423,11 @@ func hbUploadChanged(r hbInstallRec, ups []hbUpload, want uint16) bool {
 			return true
 		}
 		return false
+	}
+	// An RPG Maker game's zip re-uploaded under a new id is still its game.
+	if hbEasyRPGRec(r) {
+		_, ok := hbEasyRPGPick(ups)
+		return ok
 	}
 	_, ok := hbPickUpload(ups, want)
 	return ok

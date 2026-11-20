@@ -74,6 +74,7 @@ var browserState = struct {
 }{links: map[string][]browserLink{}, index: -1}
 
 var browserHomeLoaded bool
+var browserResumeURL string
 
 // ensureBrowserScene gives the browser a home in memory. The handheld config is
 // deliberately pruned and older installs may not have a Browser scene at all,
@@ -298,6 +299,7 @@ func openBrowserHome(config *Config) {
 		return
 	}
 	browserHomeLoaded = false
+	browserResumeURL = ""
 	browserPendingURL = ""
 	// The home page the user chose, or the search engine's start page.
 	config.Variables.Custom[textBrowserURLVariable] = home
@@ -339,6 +341,7 @@ func openBrowserAtURL(config *Config, rawURL string) bool {
 	// Claim the start page so the scene's own refresh cannot replace the URL
 	// the user asked for with the home page.
 	browserHomeLoaded = true
+	browserResumeURL = ""
 	config.Variables.Custom[textBrowserURLVariable] = address
 	config.Variables.Custom[browserContentVariable] = "Loading " + address + " ..."
 	changeSceneTo(config, idx)
@@ -736,6 +739,12 @@ func browserEnsureHome(config *Config) {
 		return
 	}
 	browserHomeLoaded = true
+	if resume := browserResumeURL; resume != "" {
+		browserResumeURL = ""
+		config.Variables.Custom[textBrowserURLVariable] = resume
+		loadTextBrowserURLAt(config, elem, resume, false)
+		return
+	}
 	home := brwHomeURL(config)
 	config.Variables.Custom[textBrowserURLVariable] = home
 	loadTextBrowserURLAt(config, elem, home, true)

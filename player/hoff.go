@@ -881,6 +881,10 @@ func hoffFindGame(a hoffActivity) (libraryGame, bool) {
 	bestScore := 0
 	lib := scanGameLibrary()
 	for _, s := range lib.Systems {
+		// JukaHub's own games (Tetris, Pong…) are no ROM a handoff can mean.
+		if s.Name == builtInLibrarySystem {
+			continue
+		}
 		for _, g := range s.Games {
 			score := 0
 			if stem != "" && ssyncGameStem(g.Path) == stem {

@@ -34,6 +34,47 @@ both real canvases (1280×720 and the Brick's 960×720) until the render tests
 were retired in November 2026; check both canvases by eye when you change a
 label size, a font role or a control's footprint
 
+## Legible reading font
+
+**Legible reading font** (Settings → Accessibility) draws every menu, list and
+Home label in a face drawn for low vision instead of the bundled Inter:
+**Atkinson Hyperlegible** for English, German, Spanish, French, Italian and
+Portuguese, and **Andika** (SIL's face for new readers, which has Cyrillic) for
+Russian. Turning it on is the opt-in to download that face: when the device
+does not have it — a TrimUI never does — JukaHub fetches it into the fonts
+folder (`<JukaHub>/data/fonts` on the handheld, `%APPDATA%\JukaHub\fonts` on
+Windows) with Settings → Display → Font's downloader: GitHub's raw host first,
+jsDelivr's mirror second, HTTPS only, and the file must be a real TrueType/
+OpenType font with the letters the interface needs before it is used. Atkinson
+Hyperlegible is about 110 KB, Andika about 2.4 MB. A toast shows the progress,
+and the screen switches to the face the moment it lands. Inter draws until then.
+
+* **Offline.** The setting remembers that the face is wanted and looks again
+  every 30 seconds until the device is online, then downloads it; nothing runs
+  once the face is there. A download that fails is tried three times a run,
+  then the next face is tried.
+* **At start.** With the setting on and the face missing (a new card, a copied
+  `jukauser.json`), the download starts about 20 seconds after launch.
+* **Language.** A face that cannot draw the interface language is skipped, so
+  a Russian interface never shows "…" in place of letters: switching to Russian
+  with the setting on draws in Inter at once and fetches Andika.
+* **Readable font.** While the setting is on, a **Readable font** row picks the
+  face: **Auto** (the above), Atkinson Hyperlegible, Andika, or a readable face
+  this device already has (Lexend, Verdana, Tahoma or Segoe UI on a PC).
+  Left/Right step through faces that are here and draw the language; A lists
+  them all, and picking one that is not here downloads it.
+* **Removing it.** Settings → Display → **Remove a font** deletes a downloaded
+  face; JukaHub does not fetch it back until the setting is turned on again or
+  the face is picked from the Readable font list (A) — a Left/Right step,
+  Auto included, never fetches it.
+
+Auto's order is Atkinson Hyperlegible, Andika, Lexend, Verdana, Tahoma, Segoe
+UI — the first one present that draws the language — and then Inter. A face
+copied into the fonts folder by hand under its usual file name
+(`AtkinsonHyperlegible-Regular.ttf`, `Andika-Regular.ttf`) counts as present,
+so the setting works with no connection at all. The legible face wins over the
+face picked in Settings → Display → Font.
+
 ## Readable status colours
 
 Status colours are authored as fills — chips, warning bars, danger rings — where
@@ -155,6 +196,71 @@ On devices with a vibration motor, **Vibration strength** cycles through
 Settings → General turns feedback off completely; the strength setting only
 changes how strongly the interface pulses.
 
+## Spoken navigation
+
+**Narration** (Settings → Accessibility, the first row) reads aloud whatever is
+focused: the control's name, its value and what pressing A does — "Vibration,
+on. Switch with A." — so JukaHub can be used without seeing the screen.
+
+**Turning it on without looking.** Hold **L1 and R1 together for three
+seconds** on the pad, or press **Ctrl+Alt+Z** on a keyboard (the left Alt key).
+Two rising tones mean narration is on, two falling tones that it is off. The
+same chord works on every screen, and it changes nothing else: L1 and R1 still
+do what they always do when tapped.
+
+What it reads:
+
+* **Settings** — the sections, every row (a switch says on or off, a list its
+  value, "Left and right change it."), the option lists and confirmations.
+  Rest on a row and its description follows after a short pause.
+* **Home** — the focused tile or header control.
+* **The Start menu**, **the Games library** (consoles and games), **the top
+  bar** (Back, Wi-Fi, notifications…) and **the on-screen keyboard** (each key
+  by name: "shift", "delete", "capital B", "question mark").
+* **Dialogs** — the question and its message once, then the focused button.
+* **Messages** (toasts), after the focused control, when **Read messages** is
+  on.
+
+How it behaves:
+
+* A new focus cuts the old speech off at once. Holding a direction does not
+  read every row it passes: only the one the focus settles on is spoken.
+* Juka's own answers come first. Narration never talks over Juka; it waits for
+  the answer to end and then reads what is focused by then.
+* Nothing is read while a game is running, or while an alarm rings.
+* Quiet Mode does not silence narration (it is how the device is used), but
+  the messages Quiet Mode holds back are not read either.
+* Hints follow the button hints setting: with a keyboard it says "Open with
+  Enter." instead of "Open with A.".
+
+The settings, shown while narration is on:
+
+| Row | What it does |
+|-----|--------------|
+| **Speaking rate** | 0.8× to 2.5×. The pitch stays the same at every speed. |
+| **Read hints** | What A does, and a setting's description after a pause. |
+| **Read messages** | Pop-up messages, read after the focused control. |
+| **Narration voice** | PC only: Windows' default, female or male voice. |
+
+**The voice.** Narration speaks with the device's own voice and works offline:
+on the handheld that is the offline voice (Piper, Lessac — the smallest,
+quickest one), on a PC Windows' built-in speech. It never sends what is on your
+screen to an online service. If the handheld does not have the offline voice
+yet, turning narration on downloads it once (about 90 MB, the same download as
+Settings → Voice & AI → Offline voice) with a message at each quarter; without
+Wi-Fi it says so and starts by itself when you are online. Until the voice is
+there, each focused control answers with a soft tone.
+
+**Speed on the handheld.** Every word narration says is kept: the first time a
+name is read the voice makes it (a fraction of a second once the voice is
+loaded), after that it plays at once. The words said everywhere — "on", "off",
+the hints, the Settings sections — and the neighbours of the focused control
+are made ahead while you rest. Kept words live in `narrate-cache/` in
+JukaHub's data folder (at most 16 MB; the least recently heard go first) and
+in memory (4 MB on the handheld). The voice stays loaded while you browse and
+is let go about 45 seconds after you stop, when a game starts, or when memory
+runs low.
+
 ## Where the settings live
 
 Accessibility preferences are stored in `Apps/JukaHub/jukauser.json`. The
@@ -163,7 +269,8 @@ accessibility-specific keys below are kept in `variables.Custom`:
 | Key | Type | Meaning |
 |-----|------|---------|
 | `a11y_font_scale` | number | 0.85 – 1.45, `1.0` is the shipped size |
-| `a11y_legible_font` | bool | draw the UI in the first installed legible system face (Atkinson Hyperlegible, Lexend, Verdana, Tahoma, Segoe UI), else bundled Inter |
+| `a11y_legible_font` | bool | draw the UI in a readable face (Atkinson Hyperlegible; Andika for Russian), downloading it into the fonts folder when it is missing; bundled Inter until it is there |
+| `a11y_legible_face` | string | the Readable font row: `""` is Auto, else `atkinson`, `andika`, `lexend`, `verdana`, `tahoma` or `segoeui` |
 | `a11y_high_contrast` | bool | high-contrast palette on |
 | `a11y_colorblind` | string | `""`, `deuteranopia`, `protanopia`, `tritanopia` |
 | `a11y_swap_ab` | bool | face buttons A/B swapped |

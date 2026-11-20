@@ -2804,6 +2804,9 @@ func DiagnosticsText(config *Config) string {
 	if report, _ := crashLastReport(); report != "" {
 		sb.WriteString("Last crash   : " + filepath.Base(report) + "\n")
 	}
+	// PortMaster's state and its last launch's logs (portmaster_report.go): a
+	// report sent right after it failed carries why (JH-QCKJ9M had nothing).
+	sb.WriteString(portMasterDiagnosticsText(config))
 	backups, _ := ListBackupSets()
 	sb.WriteString("Backups      : " + pluralizeCount(len(backups), "set", "sets") + "\n")
 	for _, b := range backups {

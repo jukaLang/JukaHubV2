@@ -60,7 +60,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build helpdocs run test test-web e2e vet fmt fmt-check lint bench web \
-        release os-package jukaboot clean check coverage workflows docs-links backlog-check test-scripts test-spatialfx
+        release os-package jukaboot clean check coverage workflows docs-links backlog-check deadcode-scan test-scripts test-spatialfx
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -72,12 +72,12 @@ build: helpdocs ## Build the player without launching it
 	$(BUILD)
 
 # Settings -> About -> Controls and Quick start (player/helpdoc.go) embed copies
-# of docs/CONTROLS.md and docs/QUICK_START.md from player/helpdocs/, because
+# of docs/CONTROLS.md and docs/GETTING_STARTED.md from player/helpdocs/, because
 # go:embed cannot reach ../docs. Refresh them (LF) before a build; the committed
 # copies are what a plain `go build` embeds.
 helpdocs:
 	@mkdir -p $(PLAYER)/helpdocs
-	@for f in QUICK_START.md CONTROLS.md; do \
+	@for f in GETTING_STARTED.md CONTROLS.md; do \
 		tr -d '\r' < docs/$$f > $(PLAYER)/helpdocs/$$f.tmp && mv -f $(PLAYER)/helpdocs/$$f.tmp $(PLAYER)/helpdocs/$$f || exit 1; \
 	done
 
@@ -161,6 +161,9 @@ docs-links: ## Check that every relative Markdown link resolves (tests/scripts/d
 backlog-check: ## Check the open task count, IDs and local anchors
 	@$(PYTHON) tests/scripts/backlog-check.py
 
+deadcode-scan: ## Catch test-only player functions with no documented purpose
+	@$(PYTHON) tests/scripts/deadcode-scan.py $(PLAYER)
+
 test-scripts: ## Check the CI helper scripts (tampered archives refused, release-cache provenance, TrimUI build); CI runs it weekly
 	@bash tests/scripts/install-sdl-mingw.test.sh
 	@bash tests/scripts/go-build-cache.test.sh
@@ -171,5 +174,5 @@ test-scripts: ## Check the CI helper scripts (tampered archives refused, release
 test-spatialfx: ## Check the game-audio plugin against its DSP spec (Linux, gcc)
 	@if [ "$$(uname -s 2>/dev/null)" = Linux ]; then sh $(PLAYER)/spatialfx/tests/run-tests.sh >/dev/null && echo "test-spatialfx: ok"; else echo "test-spatialfx: skipped (Linux only)"; fi
 
-check: lint test test-web workflows docs-links backlog-check ## CI's two jobs, locally and without staticcheck (no browser needed); ESLint is skipped by lint until test-web installs it
+check: lint test test-web workflows docs-links backlog-check deadcode-scan ## Run local lint and tests (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

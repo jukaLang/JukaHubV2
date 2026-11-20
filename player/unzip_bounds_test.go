@@ -223,3 +223,147 @@ func TestXpackZipEntryNamesStayInsideThePack(t *testing.T) {
 		}
 	}
 }
+
+// Java (javart_install.go, javarun.go): Temurin's release list, checksum
+// files, jar manifests and class files all come from outside, and a Java
+// archive must never write outside its stage folder.
+func TestJavaInstallAndFileParsers(t *testing.T) {
+	const dl = "https://github.com/adoptium/temurin25-binaries/releases/download/"
+	asset := func(tag, name string) string {
+		return `{"name":"` + name + `","browser_download_url":"` + dl + tag + `/` + name + `","size":52000000}`
+	}
+	jre := "OpenJDK25U-jre_aarch64_linux_hotspot_25.0.1_8.tar.gz"
+	releases := `[
+	{"tag_name":"jdk-25.0.2+3-ea-beta","prerelease":true,"assets":[` +
+		asset("jdk-25.0.2%2B3-ea-beta", "OpenJDK25U-jre_aarch64_linux_hotspot_ea_25-0-2-3.tar.gz") + `,` +
+		asset("jdk-25.0.2%2B3-ea-beta", "OpenJDK25U-jre_aarch64_linux_hotspot_ea_25-0-2-3.tar.gz.sha256.txt") + `]},
+	{"tag_name":"jdk-25.0.2+10","assets":[` +
+		asset("jdk-25.0.2%2B10", "OpenJDK25U-jre_aarch64_linux_hotspot_2025-10-22-07-16.tar.gz") + `,` +
+		asset("jdk-25.0.2%2B10", "OpenJDK25U-jre_aarch64_linux_hotspot_2025-10-22-07-16.tar.gz.sha256.txt") + `,` +
+		asset("jdk-25.0.2%2B10", "OpenJDK25U-jre_aarch64_linux_hotspot_25.0.2_10.tar.gz") + `,` +
+		asset("jdk-25.0.2%2B10", "OpenJDK25U-jre_aarch64_alpine-linux_hotspot_25.0.2_10.tar.gz") + `,` +
+		asset("jdk-25.0.2%2B10", "OpenJDK25U-jre_aarch64_alpine-linux_hotspot_25.0.2_10.tar.gz.sha256.txt") + `]},
+	{"tag_name":"jdk-25.0.1+8","assets":[` +
+		asset("jdk-25.0.1%2B8", "OpenJDK25U-debugimage_aarch64_linux_hotspot_25.0.1_8.tar.gz") + `,` +
+		asset("jdk-25.0.1%2B8", "OpenJDK25U-debugimage_aarch64_linux_hotspot_25.0.1_8.tar.gz.sha256.txt") + `,` +
+		asset("jdk-25.0.1%2B8", jre) + `,` + asset("jdk-25.0.1%2B8", jre+".sha256.txt") + `]}]`
+	got, err := javaPickAsset([]byte(releases), 25, javaKindJRE, "linux", "aarch64")
+	if err != nil || got.Name != jre || got.Tag != "jdk-25.0.1+8" || got.SumURL != got.URL+".sha256.txt" {
+		t.Fatalf("picked %+v, %v; want %s (prerelease, nightly, no-checksum and alpine skipped)", got, err, jre)
+	}
+	for _, c := range []struct {
+		out     string
+		major   int
+		version string
+	}{
+		{"openjdk version \"25.0.1\" 2025-10-21 LTS\nOpenJDK Runtime Environment Temurin-25.0.1+8 (build 25.0.1+8-LTS)\n", 25, "25.0.1+8"},
+		{"openjdk version \"21.0.5\" 2024-10-15 LTS\n", 21, "21.0.5"},
+		{"openjdk version \"17\" 2021-09-14\n", 17, "17"},
+		{"openjdk version \"25\" 2025-09-16\n", 25, "25"},
+		{"Picked up _JAVA_OPTIONS: -Xmx64m\nopenjdk version \"1.8.0_472\"\nOpenJDK Runtime Environment (Temurin)(build 1.8.0_472-b08)\n", 8, "1.8.0_472-b08"},
+	} {
+		if major, version, ok := javaParseVersion(c.out); !ok || major != c.major || version != c.version {
+			t.Errorf("java -version %q = %d %q %v; want %d %q", c.out, major, version, ok, c.major, c.version)
+		}
+	}
+	if _, _, ok := javaParseVersion("Error: could not find libjava.so\n"); ok {
+		t.Error("an error message was read as a Java version")
+	}
+	if _, err := javaPickAsset([]byte(releases), 25, javaKindJDK, "linux", "aarch64"); err == nil {
+		t.Error("a JDK was picked from a list that has none")
+	}
+	sum := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if s, err := javaParseSum([]byte(sum+"  "+jre+"\n"), jre); err != nil || s != sum {
+		t.Errorf("checksum = %q, %v", s, err)
+	}
+	if _, err := javaParseSum([]byte(sum+"  other.tar.gz\n"), jre); err == nil {
+		t.Error("a checksum for another file was accepted")
+	}
+
+	cases := []struct {
+		manifest string
+		kind     javaFileKind
+		main     string
+	}{
+		{"Manifest-Version: 1.0\r\nMain-Class: com.example.Ma\r\n in\r\n\r\nName: x\r\nMain-Class: other\r\n", javaFileApp, "com.example.Main"},
+		{"MIDlet-1: Game, /i.png, Game\nMicroEdition-Profile: MIDP-2.0\nMain-Class: x\n", javaFileMIDlet, ""},
+		{"Manifest-Version: 1.0\n", javaFileLibrary, ""},
+	}
+	for _, c := range cases {
+		if kind, main := javaManifestKind(javaParseManifest([]byte(c.manifest))); kind != c.kind || main != c.main {
+			t.Errorf("manifest %q = %v %q; want %v %q", c.manifest, kind, main, c.kind, c.main)
+		}
+	}
+
+	utf := func(s string) []byte { return append([]byte{1, byte(len(s) >> 8), byte(len(s))}, s...) }
+	class := func(name string) []byte {
+		b := []byte{0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 65, 0, 7}
+		b = append(b, utf(name)...)
+		b = append(b, 7, 0, 1)
+		b = append(b, utf("java/lang/Object")...)
+		b = append(b, 7, 0, 3)
+		b = append(b, 5, 0, 0, 0, 0, 0, 0, 0, 42) // a Long takes two slots
+		return append(b, 0, 0x21, 0, 2, 0, 4)
+	}
+	good := class("com/example/Hello")
+	if name, major, err := javaClassInfo(good); err != nil || name != "com/example/Hello" || javaMajorForClass(major) != 21 {
+		t.Errorf("class = %q %d, %v", name, major, err)
+	}
+	for _, bad := range [][]byte{good[:20], class("-version"), class("a//b"), {0xCA, 0xFE}} {
+		if _, _, err := javaClassInfo(bad); err == nil {
+			t.Errorf("class file %x was accepted", bad)
+		}
+	}
+	file := filepath.Join("x", "com", "example", "Hello.class")
+	if root, err := javaClassRoot(file, "com/example/Hello"); err != nil || root != "x" {
+		t.Errorf("class root = %q, %v", root, err)
+	}
+	if _, err := javaClassRoot(filepath.Join("x", "other", "Hello.class"), "com/example/Hello"); err == nil {
+		t.Error("a class outside its package folder was accepted")
+	}
+
+	dir := t.TempDir()
+	ok := filepath.Join(dir, "ok.zip")
+	writeUnzipTestArchive(t, ok, func(zw *zip.Writer) {
+		for _, n := range []string{"jdk-25.0.1+8-jre/", "jdk-25.0.1+8-jre/bin/java.exe", "jdk-25.0.1+8-jre/lib/modules"} {
+			w, err := zw.Create(n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n[len(n)-1] != '/' {
+				_, _ = w.Write([]byte("x"))
+			}
+		}
+	})
+	stage := filepath.Join(dir, "stage")
+	if err := javaExtractZip(context.Background(), ok, stage); err != nil {
+		t.Fatalf("good archive: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stage, "bin", "java.exe")); err != nil {
+		t.Errorf("top folder not stripped: %v", err)
+	}
+	for i, names := range [][]string{
+		{"jdk-25.0.1+8-jre/bin/java.exe", "jdk-25.0.1+8-jre/../../evil.txt"},
+		{"jdk-25.0.1+8-jre/bin/java.exe", "/abs/evil.txt"},
+		{"jdk-25.0.1+8-jre/bin/java.exe", "other-top/evil.txt"},
+		{"evil/bin/java.exe"},
+	} {
+		archive := filepath.Join(dir, "bad"+string(rune('0'+i))+".zip")
+		writeUnzipTestArchive(t, archive, func(zw *zip.Writer) {
+			for _, n := range names {
+				w, err := zw.Create(n)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, _ = w.Write([]byte("x"))
+			}
+		})
+		out := filepath.Join(dir, "out"+string(rune('0'+i)), "stage")
+		if err := javaExtractZip(context.Background(), archive, out); err == nil {
+			t.Errorf("archive %v was unpacked", names)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "evil.txt")); err == nil {
+			t.Fatalf("archive %v wrote outside its folder", names)
+		}
+	}
+}

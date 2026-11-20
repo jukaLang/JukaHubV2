@@ -30,7 +30,9 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -361,14 +363,23 @@ func linuxPkgWriteRuntime(lay linuxPkgLayout, st linuxPkgStatus) error {
 			"exec " + interp + " " + linuxPkgShQuote(real) + " \"$@\"\n"}
 	}
 
-	// Write what changed, then drop wrappers of programs that are gone.
-	written := 0
+	// Write what changed, then drop wrappers of programs that are gone. One
+	// wrapper the card refuses must not leave the programs after it (in the
+	// map's random order) without theirs: the rest are written, and the first
+	// failure is reported at the end.
+	written, failed := 0, 0
+	var firstErr error
 	for _, w := range wrappers {
-		if err := os.MkdirAll(filepath.Dir(w.file), 0o755); err != nil {
-			return err
+		err := os.MkdirAll(filepath.Dir(w.file), 0o755)
+		if err == nil {
+			err = linuxPkgWriteIfChanged(w.file, w.body, 0o755)
 		}
-		if err := linuxPkgWriteIfChanged(w.file, w.body, 0o755); err != nil {
-			return err
+		if err != nil {
+			failed++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", filepath.Base(w.file), err)
+			}
+			continue
 		}
 		written++
 	}
@@ -393,8 +404,65 @@ func linuxPkgWriteRuntime(lay linuxPkgLayout, st linuxPkgStatus) error {
 	// GIT_EXEC_PATH depends on whether git-core wrappers exist.
 	_ = linuxPkgWriteIfChanged(envFile, linuxPkgEnvScript(lay), 0o644)
 	linuxPkgWriteAptWrapper(lay)
+	linuxPkgWriteJohnConfig(lay)
 	logInfo("linuxpkg", "runtime rebuilt: %d wrappers for %d packages", written, len(st.Packages))
+	if firstErr != nil {
+		logWarn("linuxpkg", "%d program wrappers could not be written; first: %v", failed, firstErr)
+		return fmt.Errorf("%d program wrappers could not be written (first: %w)", failed, firstErr)
+	}
 	return nil
+}
+
+// linuxPkgRebuildRuntime writes every wrapper again from what is installed: a
+// run that ended before (or while) they were written left a program on the
+// card that nothing starts, and installing it again changes nothing then.
+func linuxPkgRebuildRuntime() error {
+	release, err := linuxPkgBegin("writing the program wrappers")
+	if err != nil {
+		return err
+	}
+	defer release()
+	lay, err := linuxPkgDirs()
+	if err != nil {
+		return err
+	}
+	return linuxPkgWriteRuntime(lay, linuxPkgLoadStatus(lay))
+}
+
+// linuxPkgProgramMissing explains why program name has no wrapper after its
+// package installed: which package's file is on the card without one, or
+// that no installed package has the program in usr/bin or usr/sbin.
+func linuxPkgProgramMissing(name string) string {
+	lay, err := linuxPkgDirs()
+	if err != nil {
+		return err.Error()
+	}
+	st := linuxPkgLoadStatus(lay)
+	for _, rel := range []string{"usr/bin/" + name, "usr/sbin/" + name} {
+		for pkg := range st.Packages {
+			files, links := linuxPkgReadList(lay, pkg)
+			owned := slices.Contains(files, rel)
+			// A program's other name (python3 → python3.12) is not copied on
+			// a card without symlinks (linuxPkgPlaceLinks): its wrapper starts
+			// the file the link leads to, so that is the file to look for.
+			target := rel
+			for _, l := range links {
+				if l.path == rel {
+					owned, target = true, l.target
+				}
+			}
+			if !owned {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(lay.root, filepath.FromSlash(rel))); err != nil {
+				if _, terr := os.Stat(filepath.Join(lay.root, filepath.FromSlash(target))); target == rel || terr != nil {
+					return "package " + pkg + " lists /" + rel + ", but the file is not on the card (" + err.Error() + ")"
+				}
+			}
+			return "package " + pkg + " put /" + rel + " on the card, but its wrapper in " + lay.bin + " could not be written"
+		}
+	}
+	return "no installed package has /usr/bin/" + name + " or /usr/sbin/" + name
 }
 
 // linuxPkgIsWrapper reports a file JukaHub generated (its mark in the first
@@ -470,6 +538,85 @@ func linuxPkgWriteCABundle(lay linuxPkgLayout) {
 		return
 	}
 	_ = linuxPkgWriteIfChanged(dst, b.String(), 0o644)
+}
+
+// linuxPkgJohnMark labels the john.conf JukaHub writes; a file without it is
+// the user's own and is left alone.
+const linuxPkgJohnMark = "# JukaHub wrote this from the card's /etc/john/john.conf."
+
+// linuxPkgWriteJohnConfig gives Ubuntu's John the Ripper the configuration
+// file it looks for.
+//
+// Debian and Ubuntu build john 1.9.0 with JOHN_SYSTEMWIDE=1 and
+// -DCFG_FULL_NAME="/etc/john/john.conf". john_init loads ~/.john/john.conf
+// when there is one, and then the built-in path, which is fatal when it is
+// missing — so without a file of its own every run stops at
+//
+//	fopen: /etc/john/john.conf: No such file or directory
+//
+// On the handheld /etc is the firmware's root, and the package's copy is
+// unpacked into <data>/linux/root/etc/john instead. The private file is the
+// one that can be written, and john asks for it first. "$JOHN/" in the copy
+// (the charsets and password.lst from john-data, and the wordlist default)
+// points at "/usr/share/john", which is on the card too, so it is spelled out.
+func linuxPkgWriteJohnConfig(lay linuxPkgLayout) {
+	conf, err := os.ReadFile(filepath.Join(lay.root, "etc", "john", "john.conf"))
+	if err != nil {
+		return // john is not installed
+	}
+	home := linuxPkgPasswdHome()
+	if home == "" {
+		logWarn("linuxpkg", "john: cannot tell which home folder to write its configuration to")
+		return
+	}
+	target := filepath.Join(home, ".john", "john.conf")
+	if old, err := os.ReadFile(target); err == nil && !bytes.HasPrefix(old, []byte(linuxPkgJohnMark)) {
+		return // a configuration the user wrote
+	}
+	share := filepath.ToSlash(filepath.Join(lay.root, "usr", "share", "john")) + "/"
+	body := linuxPkgJohnMark + " $JOHN is " + share + "\n" + strings.ReplaceAll(string(conf), "$JOHN/", share)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		logWarn("linuxpkg", "john: cannot make %s: %v", filepath.Dir(target), err)
+		return
+	}
+	if err := linuxPkgWriteIfChanged(target, body, 0o644); err != nil {
+		logWarn("linuxpkg", "john: cannot write %s: %v", target, err)
+	}
+}
+
+// linuxPkgRepairRuntime re-writes what a package change puts outside the
+// card's root, once at startup and off the render thread. A tool installed by
+// an older JukaHub — john, before its configuration was written to ~/.john —
+// then works after an app update without installing anything again. It does
+// nothing unless this handheld has Linux packages and john is one of them.
+func linuxPkgRepairRuntime() {
+	if !linuxPkgSupported() {
+		return
+	}
+	lay, err := linuxPkgDirs()
+	if err != nil {
+		return
+	}
+	linuxPkgWriteJohnConfig(lay)
+}
+
+// linuxPkgPasswdHome is the home folder john itself uses. In a system-wide
+// build path.c takes getpwuid(getuid())->pw_dir, so $HOME is not consulted;
+// /etc/passwd is read the same way here, with $HOME only as a fallback.
+func linuxPkgPasswdHome() string {
+	uid := strconv.Itoa(os.Getuid())
+	if data, err := os.ReadFile("/etc/passwd"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			f := strings.Split(line, ":")
+			if len(f) >= 6 && f[2] == uid && f[5] != "" {
+				return f[5]
+			}
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return ""
 }
 
 // linuxPkgProbeLoader starts Ubuntu's loader once: the proof that glibc 2.39

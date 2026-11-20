@@ -444,6 +444,9 @@ the phone opens a small page with:
   anywhere on the page), or tap it to choose several on a phone, and each file
   goes where it belongs (see *Drop anything* below), with its own progress.
   Untick **Put each file where it belongs** to send everything to `PhoneDrop`.
+  **Send a folder** (or drop a folder on the page) sends a whole folder with
+  its structure kept — a book collection, an album, a disc game — with one
+  progress line and **Cancel** per folder.
 * **Files** — browse the shared folders, drag games, covers or music into the
   open folder, upload and download files, and make or rename folders from a
   phone or computer browser.
@@ -478,6 +481,25 @@ A file of the same name is replaced only after you confirm. When the last
 file is in, the handheld says what arrived ("Phone sent 3 games, 1 cover and
 12 songs") and an open Games library rescans. The **Files** card's own drop
 target still puts files in the folder it has open.
+
+**Whole folders.** A folder is placed by what is inside it, all of it in one
+place, its subfolders kept:
+
+| Folder | Goes to |
+|---|---|
+| Books and comics (`.epub`, `.pdf`, `.cbz` …) | `Books/<Folder>` |
+| An album (songs with their covers, `.cue`, `.log`) | `Music/<Folder>` |
+| Videos / pictures | `Videos/<Folder>` / `Pictures/<Folder>` |
+| A disc game (`.cue` + tracks, `.gdi`, `.m3u` + discs, `.chd`), or one console's games | `Roms/<console>/<Folder>` (the console from a disc's first bytes, a zip's file list, or asked) |
+| A DOS game (`.exe`, `.bat`, a dosbox `.conf`) / a ScummVM game | `Roms/DOS/<Folder>` / `Roms/SCUMMVM/<Folder>` |
+| A folder named after a console (`GBA`, `Game Boy (GB)`) or a media folder (`Books`) | merged into that folder |
+| A PortMaster port, scripts or programs, anything else | `PhoneDrop/<Folder>` |
+
+When it cannot tell (songs and videos together, a `.chd` with no console in
+its name) it asks. Hidden and system files (`.DS_Store`, `Thumbs.db`) stay
+behind, a path the card cannot hold is left out and named, files already there
+are replaced only after one confirm, and the handheld says "Phone sent the
+folder Asimov (42 books)". Up to 5000 files per folder.
 
 The pairing card shows the device's IP address (for example
 `http://192.168.1.42`). If port 80 is unavailable, the address includes the
@@ -731,7 +753,8 @@ four the same way, with controller hints; see
 | Page | Covers |
 |------|--------|
 | [The ten-minute tour](docs/TOUR.md) | what the app feels like, from a cold SD card to Continue, in one story |
-| [Quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
+| [Getting started](docs/GETTING_STARTED.md) | a player's first steps in JukaHub |
+| [Developer quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
 | [Controls](docs/CONTROLS.md) | every button and key, screen by screen |
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
@@ -740,19 +763,27 @@ four the same way, with controller hints; see
 | [PS Remote Play](docs/REMOTE_PLAY.md) | the built-in PS4/PS5 client, pairing, quality profiles and troubleshooting |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Voice command](docs/VOICE.md) | the voice orb (Menu, or F4) and saying what to open — through the handheld's microphone or your phone's keyboard — what it understands, and how it finds the microphone |
-| [Chat voice](docs/VOICE_CHANNEL.md) | record and send voice clips, start a Voice Channel with people from Chat, and host the Internet voice relay |
+| [Chat voice](docs/VOICE_CHANNEL.md) | the Voice tab's free voice room (one click, no sign-up, Mumble apps on phones can join), voice clips, private Voice Channels, and the optional self-hosted relay |
 | [Spatial audio](docs/SPATIAL_AUDIO.md) | virtual surround on headphones, wider stereo on the speakers, and RetroArch games through a filter JukaHub ships |
 | [Theme files](docs/THEMES.md) | the complete theme JSON schema and the shared glass rules |
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
+| [TV mode](docs/TV_MODE.md) | the Brick Pro on a TV: detection, larger text, the controller as player 1, the built-in screen off |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
+| [Pick up and play](docs/PICK_UP_AND_PLAY.md) | what was seen to work on your model (Tested on this device), every save checked and the last one shown, updates that undo themselves, and the guided Device check |
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [USB file transfer](docs/USB_FILE_TRANSFER.md) | the SD card on a computer over a USB cable (MTP): Windows, Linux, Mac, startup lock, troubleshooting |
+| [Controller Mode](docs/CONTROLLER_MODE.md) | the handheld as a game controller: USB cable, Wi-Fi to the JukaPad receiver, DSU for PC emulators, Bluetooth gamepad (beta), layouts, Menu to come back |
+| [USB controller](docs/USB_GAMEPAD.md) | the USB-C port as an Xbox 360-compatible or generic HID controller: the kernel check, the tester screen, ADB given back |
 | [VPN](docs/VPN.md) | WireGuard: importing a configuration (card, Files or phone), what goes through the tunnel, how it works on the handheld and on Windows |
 | [DNS](docs/DNS.md) | Settings → Network → DNS: Cloudflare, Google, Quad9, AdGuard, family filtering or your own servers (a Pi-hole), Find the fastest DNS, where the choice applies |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Looks](docs/LOOKS.md) | per-console picture looks (CRT, LCD, SkyWalker541's pixel transparency), Download looks, Tune look, overlays, overscan |
 | [Get Homebrew](docs/HOMEBREW.md) | new games from itch.io for ten consoles: browsing, the itch.io key, installs onto the shelves, updates |
+| [Light gun](docs/LIGHT_GUN.md) | gun games in RetroArch with the right stick as the gun: Move and Point aiming, per-game tuning, the practice target, supported cores |
+| [CHIP-8](docs/CHIP8.md) | the built-in CHIP-8 / SUPER-CHIP / XO-CHIP player, quirks and keys, Get CHIP-8 games from the chip8Archive |
+| [WASM-4](docs/WASM4.md) | WASM-4 carts on their own shelf, the first-start core install, Get WASM-4 carts from wasm4.org |
+| [Game Boy Printer](docs/GB_PRINTER.md) | printing from Game Boy games with DoubleCherryGB, the scrapbook, prints on the phone |
 | [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
 | [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
@@ -762,6 +793,7 @@ four the same way, with controller hints; see
 | [Time-lapse](docs/TIMELAPSE.md) | one frame every few seconds of a playthrough, assembled into a short mp4 on exit |
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
+| [Game soundtracks](docs/SOUNDTRACKS.md) | NSF, SPC, GBS, VGM, SID and module music in the music player: songs per file, lengths and fades, covers, limits |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Toolbox](docs/TOOLBOX.md) | installing rclone, jq, ripgrep, fd, pandoc and age plus the naabu/httpx/dnsx scanners, running them with arguments, the one-time authorization prompt, what is and is not verified |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |

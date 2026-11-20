@@ -461,7 +461,7 @@ func TestPickNewestJukaHubReleaseSkipsEmulatorReleases(t *testing.T) {
 		{githubRelease: githubRelease{TagName: "JukaHub-20261118120000", PublishedAt: "2026-11-18T12:00:00Z"}},
 		{githubRelease: githubRelease{TagName: "v1.4.0-beta.1", PublishedAt: "2026-11-17T12:00:00Z"}},
 	}
-	rel, ok := pickNewestJukaHubRelease(list)
+	rel, ok := pickJukaHubRelease(list, true)
 	if !ok || rel.TagName != "JukaHub-20261118120000" {
 		t.Fatalf("picked %+v, %v; want the JukaHub build", rel, ok)
 	}

@@ -156,7 +156,7 @@ type firmwareIdentity struct {
 // binary scan only happens when a TrimUI file is present, so a desktop Linux
 // build never reads a large file to find nothing. Start-up goes through
 // probeFirmwareFiles and deviceLauncherNames instead, which skip or remember
-// the scan.
+// the scan. Tests use this uncached composition to check both sources together.
 func probeFirmwareIdentity() firmwareIdentity {
 	out := probeFirmwareFiles()
 	if out.TrimUI {

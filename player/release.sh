@@ -55,6 +55,14 @@ OUT="dist"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
+# go:embed reads player/helpdocs, not ../docs. Release binaries must carry the
+# current player guide and controls even when the committed copies are stale.
+mkdir -p helpdocs
+for f in GETTING_STARTED.md CONTROLS.md; do
+    tr -d '\r' < "../docs/$f" > "helpdocs/$f.tmp"
+    mv -f "helpdocs/$f.tmp" "helpdocs/$f"
+done
+
 # --- Windows x64 ---
 echo "Building Windows x64..."
 GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/JukaHub.exe" .

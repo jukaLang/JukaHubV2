@@ -411,7 +411,15 @@ Everything else JukaHub installs and can bring forward by itself runs in the
 same pass, after the cores, under the same setting: hakuX on the Smart Pro
 (when JukaHub installed it; a copy put there by hand is never replaced), the
 Windows-app runtime and AndroidRT when they were downloaded, and on a PC every
-emulator JukaHub installed. Each is checked once a day and keeps its own record
+emulator JukaHub installed. On a Smart Pro whose card never had an Xbox
+launcher, **Install automatically** also installs hakuX once, by itself — the
+same verified install as **X** on the Xbox tile, after a check that the card
+keeps 256 MB free besides the download and its unpacked files — and the pass's
+toast says where Xbox games go. The card then remembers it had one
+(`Apps/JukaHub/data/hakux/auto-install.json`): a hakuX you delete is not put
+back, and an `Emus/XBOX` you made yourself is never replaced. *Notify me* does
+not announce it, *Off* never installs it, and on the Brick Pro (untested) it
+stays a press. Each is checked once a day and keeps its own record
 (`emu-autoupdate.json` beside the patch state), so:
 
 - one that is running — an Xbox game, an Android game, an emulator open on the
@@ -478,3 +486,7 @@ Mouse and touch select rows and tabs in the same way.
   pack.
 * The Smart Pro Tier is a hardware expectation based on the A133P and 1 GB of
   RAM. N64, Dreamcast, PSP and DS remain game-dependent regardless of the badge.
+* GameCube and Wii have no tier: on the Smart Pro S they are game-dependent at
+  best, on the A133P models most games run at half speed or less. How the
+  Dolphin core is set up, kept current and given its first settings is in
+  [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).

@@ -66,6 +66,9 @@ func playRecentGameWith(g recentGame, game libraryGame, launcher string) {
 		ShowToast("Cannot launch "+g.Title+": "+err.Error(), ToastKindError)
 		return
 	}
+	if gameLaunchWasHeld(game.Path) {
+		return // a card asks first (gamelaunch_hooks.go)
+	}
 	PlaySuccessSound()
 	if g.System == androidLibrarySystem {
 		// An Android game is staged in the background first (seconds for a

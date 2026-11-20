@@ -156,6 +156,9 @@ func qsLookOf(config *Config, s qsSlot) qsLook {
 		l.label, l.avail = ln.Label, ln.Available
 		if !ln.Available {
 			l.state = ln.Detail
+		} else if ln.Action == qsLinkStopwatch {
+			// The clock's time, lit while it runs (stopwatch.go).
+			l.state, l.on = stopwatchQSLine()
 		}
 	case qsKindCycle:
 		l.label = qs.cycles[s.Idx].Label
@@ -722,6 +725,9 @@ func qsDrawListRow(renderer *sdl.Renderer, config *Config, f qsFonts, s qsSlot, 
 		if s.Kind == qsKindLink && l.state != "" {
 			detail = l.state
 		}
+	case s.Kind == qsKindLink && l.state != "":
+		// A link with a live value (the Stopwatch's clock) shows it instead.
+		detail = l.state
 	case s.Kind == qsKindLink:
 		detail = "Open >"
 	case s.Kind == qsKindCycle:

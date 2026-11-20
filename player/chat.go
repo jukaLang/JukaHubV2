@@ -95,17 +95,49 @@ func chatImageCacheStats() (entries int, bytes int64) {
 	return chatImages.stats()
 }
 
-// clearChatImageCache releases every decoded chat image. Used by the memory
-// pressure eviction path and by shutdown.
+// clearChatImageCache releases decoded chat images and pending downloads. Used
+// by the memory pressure eviction path and by shutdown.
 func clearChatImageCache() {
 	chatImageMutex.Lock()
-	defer chatImageMutex.Unlock()
 	chatImages.clear()
+	chatImageMutex.Unlock()
+	discardPendingChatImageDownloads()
+}
+
+// keepChatViewerImage releases other decoded chat pictures while a remote
+// picture remains open in the full-screen viewer after leaving Chat.
+func keepChatViewerImage(url string) {
+	chatImageMutex.Lock()
+	for key := range chatImages.entries {
+		if key != url {
+			chatImages.drop(key)
+		}
+	}
+	chatImageMutex.Unlock()
+	discardPendingChatImageDownloads()
 }
 
 var chatImageDownloads = make(map[string][]byte)
 var chatImageFetching = make(map[string]bool)
 var chatImageDLMutex sync.Mutex
+var chatImageFetchCancel context.CancelFunc
+var chatImageFetchGeneration uint64
+
+const chatImageDownloadMaxBytes = 32 << 20
+const chatImagePendingMax = 1
+
+// discardPendingChatImageDownloads drops encoded images no longer needed by
+// the current screen. Keep an in-flight reservation until its canceled reader
+// exits, so a quick return to Chat cannot start a second large read beside it.
+func discardPendingChatImageDownloads() {
+	chatImageDLMutex.Lock()
+	defer chatImageDLMutex.Unlock()
+	chatImageFetchGeneration++
+	if chatImageFetchCancel != nil {
+		chatImageFetchCancel()
+	}
+	clear(chatImageDownloads)
+}
 
 // Compiled on first use, so a session that never opens Chat does not pay for
 // them; the render path still compiles each one exactly once.
@@ -113,6 +145,9 @@ var urlRegex = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(
 var imageURLRegex = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$`) })
 
 func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
+	if url == "" {
+		return nil
+	}
 	chatImageMutex.Lock()
 	if cached, ok := chatImages.get(url); ok {
 		chatImageMutex.Unlock()
@@ -136,12 +171,16 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 		chatImageDLMutex.Unlock()
 		return nil
 	}
-	fetching := chatImageFetching[url]
-	chatImageDLMutex.Unlock()
-
-	if !fetching {
-		go fetchChatImage(url)
+	if chatImageFetching[url] || len(chatImageFetching)+len(chatImageDownloads) >= chatImagePendingMax {
+		chatImageDLMutex.Unlock()
+		return nil
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	chatImageFetching[url] = true
+	chatImageFetchCancel = cancel
+	generation := chatImageFetchGeneration
+	chatImageDLMutex.Unlock()
+	go fetchChatImage(ctx, cancel, url, generation)
 
 	return nil
 }
@@ -157,6 +196,10 @@ const chatImageRetryAfter = 2 * time.Minute
 func markChatImageFailed(url string) {
 	chatImageDLMutex.Lock()
 	defer chatImageDLMutex.Unlock()
+	markChatImageFailedLocked(url)
+}
+
+func markChatImageFailedLocked(url string) {
 	if len(chatImageFailed) > 512 {
 		chatImageFailed = make(map[string]time.Time)
 	}
@@ -193,52 +236,55 @@ func chatLocalAttachment(path string) (*os.File, bool) {
 			return nil, false
 		}
 	}
-	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() || info.Size() > 32<<20 {
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() || info.Size() > chatImageDownloadMaxBytes {
 		f.Close()
 		return nil, false
 	}
 	return f, true
 }
 
-func fetchChatImage(url string) {
-	chatImageDLMutex.Lock()
-	if _, done := chatImageDownloads[url]; done || chatImageFetching[url] {
-		chatImageDLMutex.Unlock()
-		return
-	}
-	chatImageFetching[url] = true
-	chatImageDLMutex.Unlock()
-
+func fetchChatImage(ctx context.Context, cancel context.CancelFunc, url string, generation uint64) {
+	defer cancel()
 	var data []byte
 	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
 		client := &http.Client{Timeout: 15 * time.Second}
-		resp, err := client.Get(url)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				data, _ = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+			resp, err := client.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK && (resp.ContentLength < 0 || resp.ContentLength <= chatImageDownloadMaxBytes) {
+					data, _ = io.ReadAll(io.LimitReader(resp.Body, chatImageDownloadMaxBytes+1))
+					if len(data) > chatImageDownloadMaxBytes {
+						data = nil
+					}
+				}
 			}
 		}
 	} else if f, ok := chatLocalAttachment(url); ok {
 		// Chat attachments store a local file path; read it directly instead
 		// of sending it through http.Get.
-		data, _ = io.ReadAll(io.LimitReader(f, 32<<20+1))
+		data, _ = io.ReadAll(io.LimitReader(f, chatImageDownloadMaxBytes+1))
 		f.Close()
-		if len(data) > 32<<20 {
+		if len(data) > chatImageDownloadMaxBytes {
 			data = nil
 		}
 	}
 
 	chatImageDLMutex.Lock()
 	delete(chatImageFetching, url)
+	chatImageFetchCancel = nil
+	if generation != chatImageFetchGeneration {
+		chatImageDLMutex.Unlock()
+		return
+	}
 	if len(data) > 0 {
 		chatImageDownloads[url] = data
 		delete(chatImageFailed, url)
+	} else {
+		markChatImageFailedLocked(url)
 	}
 	chatImageDLMutex.Unlock()
-	if len(data) == 0 {
-		markChatImageFailed(url)
-	}
 }
 
 func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Texture {
@@ -325,10 +371,12 @@ var (
 			}
 		},
 	)
-	chatAvatarDLMutex sync.Mutex
-	chatAvatarData    = map[string][]byte{}
-	chatAvatarPending = map[string]bool{}
-	chatAvatarFailed  = map[string]bool{}
+	chatAvatarDLMutex    sync.Mutex
+	chatAvatarData       = map[string][]byte{}
+	chatAvatarPending    = map[string]bool{}
+	chatAvatarCancels    = map[string]context.CancelFunc{}
+	chatAvatarFailed     = map[string]bool{}
+	chatAvatarGeneration uint64
 )
 
 const (
@@ -340,7 +388,21 @@ const (
 	chatAvatarPixels = 64
 	// chatAvatarMaxBytes caps what a single avatar download may read.
 	chatAvatarMaxBytes = 1 << 20
+	// A large compressed avatar would still expand fully before its 64px crop.
+	chatAvatarMaxPixels = 4 << 20
+	// Four small avatar reads keep a slow URL from holding up every speaker.
+	chatAvatarPendingMax = 4
 )
+
+func discardPendingChatAvatarDownloads() {
+	chatAvatarDLMutex.Lock()
+	defer chatAvatarDLMutex.Unlock()
+	chatAvatarGeneration++
+	for _, cancel := range chatAvatarCancels {
+		cancel()
+	}
+	clear(chatAvatarData)
+}
 
 // getChatAvatarTexture returns the circular avatar for url, starting a download
 // on first sight. A nil result means "no picture yet": the caller draws the
@@ -364,53 +426,85 @@ func getChatAvatarTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 		return uploadChatAvatar(renderer, url, data)
 	}
 	if !failed {
-		go fetchChatAvatar(url)
+		startChatAvatarFetch(url)
 	}
 	return nil
 }
 
-// fetchChatAvatar downloads one avatar into its byte cache.
-func fetchChatAvatar(url string) {
+// startChatAvatarFetch reserves a bounded download slot before starting the
+// worker, including when several render calls ask for the same URL at once.
+func startChatAvatarFetch(url string) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return
 	}
 	chatAvatarDLMutex.Lock()
-	if chatAvatarPending[url] || len(chatAvatarData[url]) > 0 || chatAvatarFailed[url] {
+	if chatAvatarPending[url] || len(chatAvatarData[url]) > 0 || chatAvatarFailed[url] ||
+		len(chatAvatarPending)+len(chatAvatarData) >= chatAvatarPendingMax {
 		chatAvatarDLMutex.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	chatAvatarPending[url] = true
+	chatAvatarCancels[url] = cancel
+	generation := chatAvatarGeneration
 	chatAvatarDLMutex.Unlock()
+	go fetchChatAvatar(ctx, cancel, url, generation)
+}
 
-	succeeded := false
-	defer func() {
-		chatAvatarDLMutex.Lock()
-		delete(chatAvatarPending, url)
-		if !succeeded {
-			chatAvatarFailed[url] = true
-		}
-		chatAvatarDLMutex.Unlock()
-	}()
-
+// fetchChatAvatar downloads one avatar into its byte cache.
+func fetchChatAvatar(ctx context.Context, cancel context.CancelFunc, url string, generation uint64) {
+	defer cancel()
+	var data []byte
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		logWarn("chat", "avatar download failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		logWarn("chat", "avatar download failed: %s", resp.Status)
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, chatAvatarMaxBytes))
-	if err != nil || len(data) == 0 {
-		return
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err == nil {
+		resp, err := client.Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK && (resp.ContentLength < 0 || resp.ContentLength <= chatAvatarMaxBytes) {
+				var readErr error
+				data, readErr = io.ReadAll(io.LimitReader(resp.Body, chatAvatarMaxBytes+1))
+				if readErr != nil || len(data) > chatAvatarMaxBytes {
+					data = nil
+				}
+			} else if resp.StatusCode != http.StatusOK {
+				logWarn("chat", "avatar download failed: %s", resp.Status)
+			}
+		} else if ctx.Err() == nil {
+			logWarn("chat", "avatar download failed: %v", err)
+		}
 	}
 	chatAvatarDLMutex.Lock()
-	chatAvatarData[url] = data
+	delete(chatAvatarPending, url)
+	delete(chatAvatarCancels, url)
+	if generation != chatAvatarGeneration {
+		chatAvatarDLMutex.Unlock()
+		return
+	}
+	if len(data) > 0 {
+		chatAvatarData[url] = data
+	} else {
+		chatAvatarFailed[url] = true
+	}
 	chatAvatarDLMutex.Unlock()
-	succeeded = true
+}
+
+// decodeChatAvatar checks the dimensions before allocating pixels and shares
+// the decode permit with larger images elsewhere in the player.
+func decodeChatAvatar(data []byte) (image.Image, error) {
+	if !imageDecodeSem.Acquire(context.Background(), 1) {
+		return nil, fmt.Errorf("avatar decode canceled")
+	}
+	defer imageDecodeSem.Release(1)
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > chatAvatarMaxPixels {
+		return nil, fmt.Errorf("avatar is %dx%d, over the %d-pixel decode limit", cfg.Width, cfg.Height, chatAvatarMaxPixels)
+	}
+	img, _, err := image.Decode(bytes.NewReader(data))
+	return img, err
 }
 
 // uploadChatAvatar turns downloaded bytes into a cached circular texture.
@@ -419,7 +513,7 @@ func uploadChatAvatar(renderer *sdl.Renderer, url string, data []byte) *sdl.Text
 	delete(chatAvatarData, url)
 	chatAvatarDLMutex.Unlock()
 
-	img, _, err := image.Decode(bytes.NewReader(data))
+	img, err := decodeChatAvatar(data)
 	if err != nil {
 		chatAvatarDLMutex.Lock()
 		chatAvatarFailed[url] = true
@@ -502,23 +596,25 @@ func circularAvatarPixels(img image.Image, size int) []byte {
 	return pixels
 }
 
-// clearChatAvatarCache drops the avatar textures and the download bookkeeping
-// that belongs to them, and the chat view's other renderer-bound caches (the
-// corner textures and the bubble layouts measured with that renderer's fonts).
-// The textures belong to one renderer, so this runs before that renderer is
-// destroyed.
-func clearChatAvatarCache() {
-	clearChatShapeCache()
-	clearChatLayoutCache()
+// clearChatAvatarTextures releases decoded avatars and their download state
+// without disturbing the small corner-texture cache shared by Chat's bubbles.
+func clearChatAvatarTextures() {
 	chatAvatarMutex.Lock()
 	chatAvatars.clear()
 	chatAvatarMutex.Unlock()
 
+	discardPendingChatAvatarDownloads()
 	chatAvatarDLMutex.Lock()
-	chatAvatarData = map[string][]byte{}
-	chatAvatarPending = map[string]bool{}
 	chatAvatarFailed = map[string]bool{}
 	chatAvatarDLMutex.Unlock()
+}
+
+// clearChatAvatarCache also forgets the chat view's renderer-bound caches.
+// The textures belong to one renderer, so this runs before it is destroyed.
+func clearChatAvatarCache() {
+	clearChatShapeCache()
+	clearChatLayoutCache()
+	clearChatAvatarTextures()
 }
 
 // ChatSection is the chat history section persisted inside jukauser.json.

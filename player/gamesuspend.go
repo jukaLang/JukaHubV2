@@ -162,6 +162,8 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	}
 	screenChildren.cmds[cmd] = struct{}{}
 	screenChildren.mu.Unlock()
+	// Its session is watched for the Verified results (verified_observe.go).
+	vfoChildStarted(cmd)
 	// launch.sh stops it if JukaHub dies without doing so (crashreport.go).
 	crashNoteScreenGroups()
 }
@@ -240,6 +242,8 @@ func screenChildReaped(cmd *exec.Cmd) {
 			time.Sleep(screenGroupPoll)
 		}
 	}
+	// How it ended, for the Verified results (verified_observe.go; never blocks).
+	vfoChildReaped(cmd)
 	time.Sleep(screenSettleDelay)
 	noteGameChildExited(cmd)
 	screenChildAudioDone()

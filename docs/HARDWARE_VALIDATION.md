@@ -177,7 +177,7 @@ For a complete inventory, the tagged headings are:
 | Security and documentation | SEC-21 |
 | Input, shell and power | INP-5, INP-6, INP-15, INP-17, INP-20, SHELL-1, SHELL-2, SHELL-11, PWR-3, PWR-10 |
 | Reliability, languages and network | REL-7, REL-10, REL-12, I18N-3, NET-2, NET-3, NET-5, NET-6, NET-8, NET-12, NET-17, NET-22 |
-| Library and apps | LIB-14, LIB-17, LIB-18, LIB-24, LIB-26, APP-9, APP-16, APP-17, APP-18, APP-20, APP-21 |
+| Library and apps | LIB-14, LIB-17, LIB-18, LIB-24, LIB-26, APP-9, APP-16, APP-17, APP-18, APP-20, APP-21, OPENWITH-HW-1, APPC-HW-1, TERM-HW-1 |
 | Cloud gaming | CLOUD-1 |
 
 ### Next hands-on run
@@ -191,6 +191,13 @@ try a port whose GLIBC requirement the firmware meets. Test volume through
 speakers and headphones, sleep/wake with the power key, Bluetooth, an actual
 USB DAC, and a game launch/exit while watching the screen. The remaining
 model-specific HW-7 checks need a Brick, Smart Pro S and Brick Pro.
+
+The quickest way through the Smart Pro items above is now **Settings → About →
+Device check** (DEVCHECK-HW-1): run all nine checks, save the report and paste
+it from the SD card's `JukaHub reports` folder here as a new dated section. The
+update self-repair has its own run (UPDFIX-HW-1), and what JukaHub records per
+game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
+[Pick up and play](PICK_UP_AND_PLAY.md).
 
 ### Regression checks without separate task IDs
 

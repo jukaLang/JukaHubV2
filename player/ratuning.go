@@ -209,6 +209,15 @@ var raTuneCoreFolders = map[string][]string{
 	"nestopia":        {"Nestopia", "Nestopia UE"},
 	"snes9x":          {"Snes9x"},
 	"pcsx_rearmed":    {"PCSX-ReARMed"},
+	// Set by the DOS and ScummVM shelves and the control layouts (DS touch).
+	"dosbox_pure": {"DOSBox-pure"},
+	"scummvm":     {"scummvm"},
+	"melonds":     {"melonDS"},
+	"melondsds":   {"melonDS DS"},
+	"desmume":     {"DeSmuME"},
+	"desmume2015": {"DeSmuME 2015"},
+	"tic80":       {"TIC-80"},
+	"easyrpg":     {"EasyRPG Player"},
 }
 
 // raTunePALOptions is each core's region option set to PAL. The values are the

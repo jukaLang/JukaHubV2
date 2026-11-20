@@ -557,6 +557,10 @@ func gmetaCollectionFor(system string) string {
 // disagree on which). A zip gives its single ROM's CRC from its directory. Disc
 // images and anything over gmetaCRCMaxBytes are matched by name instead.
 func gmetaROMCRCs(path string) []string {
+	// The library index's background pass keeps them (libindex_crc.go).
+	if crcs, ok := libIndexKnownCRCs(path); ok {
+		return crcs
+	}
 	if strings.EqualFold(filepath.Ext(path), ".zip") {
 		if det := rommDetectZip(path); det.HasCRC {
 			return []string{fmt.Sprintf("%08X", det.CRC)}

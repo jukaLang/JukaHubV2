@@ -51,6 +51,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if tb.startOpen {
 		return ctrlStartMenu(e, config)
 	}
+	// "Who is playing?" floats above every screen while it is up (profiles_ui.go).
+	if profilesPickerController(e, config) {
+		return true
+	}
 
 	// ── Overlay priority (highest to lowest) ──
 	// The podcast library is modal, but its feed keyboard takes the pad first.
@@ -489,6 +493,12 @@ func ctrlImageViewer(e *sdl.ControllerButtonEvent, config *Config) bool {
 const stickDeadzone = 12000
 
 func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
+	// Paint's canvas reads the left stick every frame for a smooth cursor, so
+	// it must not become D-pad steps there, and its triggers zoom; with
+	// anything open over Paint this declines (paint.go).
+	if paintStickAxis(config, e.Axis, e.Value) {
+		return true
+	}
 	// Analog triggers are buttons in disguise: they arrive as a stream of axis
 	// values, so they are latched into single presses (see shoulders.go).
 	switch e.Axis {

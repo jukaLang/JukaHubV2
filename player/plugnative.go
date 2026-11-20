@@ -565,7 +565,9 @@ func plugNativeRetroFormats(action string, _ map[string]interface{}, _ string) (
 	if action != "list" {
 		return "", plugUnknown(action, "list, library")
 	}
-	return "The game library now knows 6 more formats.\n" +
+	// WASM-4 left the list on 2026-11-19: it is a built-in console now
+	// (wasm4.go), whose .wasm counts only in Roms/WASM4.
+	return "The game library now knows 5 more formats.\n" +
 		"Pokémon mini (.min)\nWatara Supervision (.sv)\nVectrex (.vec, .gam)\n" +
-		"Atari Lynx (.lnx)\nArduboy (.arduboy)\nWASM-4 (.wasm)", nil
+		"Atari Lynx (.lnx)\nArduboy (.arduboy)", nil
 }

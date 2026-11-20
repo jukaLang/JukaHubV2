@@ -317,24 +317,24 @@ func TestPSHelperPickPrefersTheNewestStableRelease(t *testing.T) {
 		{TagName: "none", PublishedAt: "2026-11-11T00:00:00Z", Assets: []githubAsset{{Name: "JukaHub-Trimui.zip", BrowserDownloadURL: "https://example.invalid/t", Size: 5}}},
 		{TagName: "huge", PublishedAt: "2026-11-11T12:00:00Z", Assets: []githubAsset{{Name: psHelperAsset, BrowserDownloadURL: "https://example.invalid/huge", Size: psHelperMaxAsset + 1}}},
 	}
-	rel, asset, ok := psHelperPick(rels)
-	if !ok || rel.TagName != "new" || asset.BrowserDownloadURL != "https://example.invalid/new" {
-		t.Fatalf("picked %q (%s, %v), want the newest stable release with the package", rel.TagName, asset.BrowserDownloadURL, ok)
+	candidates := psHelperCandidates(rels)
+	if len(candidates) == 0 || candidates[0].rel.TagName != "new" || candidates[0].asset.BrowserDownloadURL != "https://example.invalid/new" {
+		t.Fatalf("candidates = %+v; want the newest stable release with the package first", candidates)
 	}
 	var order []string
-	for _, c := range psHelperCandidates(rels) {
+	for _, c := range candidates {
 		order = append(order, c.rel.TagName)
 	}
 	if strings.Join(order, ",") != "new,old,beta" {
 		t.Errorf("candidates = %v, want new, old, beta", order)
 	}
-	if rel, _, ok := psHelperPick(rels[:2]); !ok || rel.TagName != "beta" {
-		t.Errorf("with only a beta carrying it: picked %q, %v; want the beta", rel.TagName, ok)
+	if beta := psHelperCandidates(rels[:2]); len(beta) != 1 || beta[0].rel.TagName != "beta" {
+		t.Errorf("with only a beta carrying it: candidates = %+v; want the beta", beta)
 	}
-	if _, _, ok := psHelperPick(rels[1:2]); ok {
+	if len(psHelperCandidates(rels[1:2])) != 0 {
 		t.Error("a draft release was picked")
 	}
-	if _, _, ok := psHelperPick(nil); ok {
+	if len(psHelperCandidates(nil)) != 0 {
 		t.Error("something was picked from no releases")
 	}
 }

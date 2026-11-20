@@ -53,6 +53,7 @@ var shortcutCategories = []struct {
 			{"F8", "Watch Party"},
 			{"F11 / Alt+Enter", "Full screen"},
 			{"F12", "Screenshot"},
+			{"Ctrl+Alt+Z", "Narration on / off (pad: hold L1 + R1 for 3 s)"},
 			{"Alt+F4", "Quit JukaHub (PC)"},
 		},
 	},
@@ -130,6 +131,12 @@ var shortcutCategories = []struct {
 			{"Synth", "Space play, Tab page, [ ] pattern, Enter / Y / X edit, 1-7 pads"},
 			{"Alarm", "Y new alarm, X on / off, Del delete, ↑ ↓ adjust"},
 			{"Watch Party", "Enter host / join / play, X remove"},
+			// The everyday apps (osapps.go).
+			{"Tasks", "N or Y add, Space done, X edit, PgUp / PgDn list, Del twice delete"},
+			{"Voice Memos", "Y or R record, Enter play, Space pause, ← → seek, N rename, Del delete"},
+			{"Paint", "Enter draw, T tools, C colours, Z / Ctrl+Y undo / redo, - + zoom, M file, Ctrl+S save"},
+			{"Stopwatch", "Enter start / pause, X lap, Y reset or preset, Tab switch"},
+			{"Solitaire", "Enter pick / place, D draw, F smart move, Z / R undo / redo, M menu, N new"},
 		},
 	},
 }
@@ -177,6 +184,8 @@ func handleGlobalKeys(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		return true
 	case e.Keysym.Sym == sdl.K_q && e.Keysym.Mod&sdl.KMOD_CTRL != 0:
 		qsToggleOpen()
+		return true
+	case narrateKeyChord(e, config): // Ctrl+Alt+Z: narration on / off (narrate.go)
 		return true
 	}
 	return false

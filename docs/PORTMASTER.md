@@ -83,7 +83,10 @@ JukaHub aims for parity with the firmware's own Ports tab:
    command MainUI runs. On stock Smart Pro 1.1.0 this is
    `Emus/PORTS/launch_balanced.sh`. Otherwise the script runs under `bash` (port scripts
    use bash features) from its own folder. Setting `portLaunchVia` in the user
-   config: `auto` (default), `firmware` or `direct`.
+   config: `auto` (default), `firmware` or `direct`. On a TrimUI whose firmware
+   has no full bash anywhere, `auto` runs the script directly with the bash
+   JukaHub supplies (below), once it is downloaded, instead of the firmware's
+   launcher, which would hand it to BusyBox.
 2. **Environment.** The firmware's `HOME`, `PATH` and `LD_LIBRARY_PATH` as they
    were before JukaHub's `launch.sh` changed them (JukaHub's bundled libraries
    are not on the port's library path), without JukaHub's own variables.
@@ -114,7 +117,9 @@ JukaHub aims for parity with the firmware's own Ports tab:
    the PortMaster folder the script will find, `HOME`, `XDG_DATA_HOME`, `PATH`,
    `LD_LIBRARY_PATH`, the audio variables, what JukaHub changed, then the
    script's own output until it redirects to the port's `log.txt`. Attach it to
-   a bug report together with that `log.txt`.
+   a bug report together with that `log.txt`. A port that ends by itself within
+   8 seconds (20 when its logs name a cause) opens the "didn't start" card,
+   which reads both files and names the cause it recognises.
 
 PortMaster itself runs its own `launch.sh` directly, as MainUI runs apps.
 Before it starts JukaHub creates `Data/home` and `Data/ports` if they are
@@ -132,9 +137,12 @@ Pro or Brick, or under JukaHub OS, it used to close the moment it opened:
   there without it;
 - its menu (`pugwash`) and installer (`harbourmaster`) need `python3`, which
   the firmware does not have;
-- the firmware's `/bin/bash` is BusyBox, and PortMaster's scripts use bash
-  arrays;
-- the Python SDL2 binding finds SDL2 only through `PYSDL2_DLL_PATH`.
+- the firmware's `/bin/bash` is BusyBox (or missing), and PortMaster's
+  scripts use bash arrays;
+- the Python SDL2 binding finds SDL2 only through `PYSDL2_DLL_PATH`, and
+  since PortMaster's launcher rework of October 2026 its default start hook
+  exports `PYSDL2_DLL_PATH=/usr/lib`, where TRIMUI_EX links SDL2 and stock
+  firmware has none.
 
 So on an ARM64 TrimUI JukaHub checks, once a session and in the environment
 the port gets, whether the firmware's bash runs a bash array and a process
@@ -146,7 +154,8 @@ harbourmaster only:
 |---------|-------------------|-------|
 | `python3` | python-build-standalone CPython 3.11 for `aarch64-unknown-linux-gnu` (3.12 or 3.13 if the latest release has no 3.11). It runs on the firmware's glibc. The archive is the one listed in that release's `SHA256SUMS` and must match its SHA-256 there; the test suite, Tk, IDLE, pip and headers are left out (about 30 MB download) | `data/portmaster-runtime/python/` |
 | a real `bash` | the firmware's own real bash when one is further down `PATH` (CrossMix's `System/bin`), through a one-line shim; else Ubuntu's bash on JukaHub's [private C runtime](PRIVATE_GLIBC.md) (glibc 2.39, the newest signed Ubuntu build) | `/tmp/jukahub-port-runtime/bash` or `data/private-glibc/` |
-| `PYSDL2_DLL_PATH` | links in tmpfs to the firmware's SDL2 libraries under the names pysdl2 tries (not with TRIMUI_EX's Python, whose `ex_config` sets it) | `/tmp/jukahub-port-runtime/sdl2` |
+| `PYSDL2_DLL_PATH` | links in tmpfs to the firmware's SDL2 libraries under the names pysdl2 tries (not with TRIMUI_EX's Python, whose `ex_config` sets it). JukaHub's Python also carries a `sitecustomize.py`: when the launcher has pointed `PYSDL2_DLL_PATH` at a folder without SDL2, it uses these links instead as Python starts | `/tmp/jukahub-port-runtime/sdl2` |
+| a real `/bin/bash` | when `/bin/bash` itself is not bash, each PortMaster or port launch runs in a mount namespace of its own whose `/bin` is a read-only folder of links to the firmware's `/bin` plus the bash above — so a script started by its own `#!/bin/bash` line gets bash too. The firmware's `/bin` is not changed, and the namespace ends with the launch | `/tmp/jukahub-port-runtime/ns/` |
 
 With JukaHub's Python, `SSL_CERT_FILE` names the firmware's CA bundle and an
 inherited `PYTHONHOME`/`PYTHONPATH` is dropped. `/usr/trimui/lib` is appended
@@ -158,8 +167,10 @@ reads `ex_config` and the card has none, JukaHub runs a copy beside it,
 exists and TRIMUI_EX's `/mnt/SDCARD/System/bin/python3` names the Python in
 use; the copy is deleted when PortMaster closes. PortMaster's own files are
 not edited. A card with TRIMUI_EX or CrossMix, whose bash and Python work, is
-left as it is. A script a port starts by its own `#!/bin/bash` line still gets
-the firmware's `/bin/bash`; JukaHub does not replace it.
+left as it is. When the launch's own `/bin/bash` could not be set up (no
+mount namespaces, a failed bind), the launch runs as before and the first
+lines of its log say why; `portBinBash: "off"` in the user config turns that
+part off.
 
 The first open downloads what is missing (Wi-Fi) with the install card up,
 then PortMaster opens by itself — unless the card's X stopped the download or
@@ -171,11 +182,21 @@ launch used.
 
 **Y on the PortMaster row** has **Open PortMaster**, **Repair PortMaster** and
 **Why didn't it open?** (checks the firmware again and lists what is missing,
-with the last lines of PortMaster's log). A PortMaster that closes within
-seconds says the likeliest reason.
+with the last lines of JukaHub's launch log and of PortMaster's own
+`log.txt`, where its launcher sends pugwash's output — an SDL2, Python or
+BusyBox error found there is named). A PortMaster that closes within seconds
+says the likeliest reason.
+
+A bug report (**Report a bug** with the diagnostics on) has a PortMaster
+section on a handheld that has PortMaster or has started a port: the bash,
+`/bin/bash` and `python3` it gets, how the last launch ended, and — when that
+launch was in the last day — the last lines of its launch log and of
+PortMaster's `log.txt`, scrubbed like the rest of the report. A report sent
+right after PortMaster failed therefore says why without a description.
 
 > **Unverified on a device:** PortMaster's menu on the downloaded Python and
-> the firmware's SDL2, Ubuntu's bash running PortMaster's scripts, and the
+> the firmware's SDL2, Ubuntu's bash running PortMaster's scripts, the
+> per-launch `/bin/bash` (bind mounts in a launch's own namespace), and the
 > exact `ex_config` line in the current `launch.sh`. PortMaster 2026.09.19+
 > also counts no analog sticks on TrimUI (NX Redux PR #142); JukaHub does not
 > change that yet.
@@ -322,7 +343,7 @@ path. See [MINECRAFT.md](MINECRAFT.md).
 
 | Symptom | Look at |
 |---------|---------|
-| Black screen, back to JukaHub after a second | **Y → Why didn't it start?**; `data/gamediag/ports/<script>.log` (did it find `control.txt`?) |
+| Black screen, back to JukaHub after a second | The "didn't start" card opens by itself for a port that ends within 8 seconds without being quit (within 20 when its logs name a cause): it names the cause it read in the logs (BusyBox's sh, PortMaster not found, newer glibc, missing library, graphics, crash, memory, runtime) or shows the port's last lines. Later: **Why didn't it start?**; `data/gamediag/ports/<script>.log` and the port's `log.txt` |
 | "No such file" for a `.squashfs` | The runtime is missing: open PortMaster with Wi-Fi, or **Update** |
 | The port starts but its folder is empty | It needs your game files; see its `README.md` |
 | Buttons swapped or wrong | PortMaster's device probe; try `portLaunchVia: firmware` (if your card has `Emus/PORTS`) and report the log |

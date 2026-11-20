@@ -61,6 +61,44 @@ Titles are the filename with the extension, underscores and trailing release
 tags removed: `Pokemon_Emerald_(USA).gba` appears as **Pokemon Emerald**.
 Nothing is renamed on the card.
 
+### Big cards open at once (the library index)
+
+JukaHub keeps an index of the card in `data/library-index.db`, so a library of
+thousands of games opens at once instead of walking the whole card first:
+
+- **Opening.** The first time the library (or Home's Games tab) opens after
+  JukaHub starts, it shows the library exactly as you last saw it, straight
+  from the index, while the card is checked in the background. Any change
+  slides in a moment later. Your selected game stays selected.
+- **Only what changed is read.** The index remembers every ROM folder: when
+  it was last changed and what was in it. A folder that has not changed is
+  not read again. The work the old scan repeated on every open is kept too:
+  the fingerprint that keeps a game's name and hidden flag when you rename the
+  file, and which tracks a `.cue`, `.gdi` or `.m3u` uses.
+- **Changes while JukaHub runs.** On the handheld, JukaHub notices files
+  arriving or leaving as they happen — over USB (MTP), FTP or SFTP, from the
+  Files app or a phone drop, or saves an emulator writes — and an open library
+  refreshes itself a few seconds after the copying stops. After a game quits,
+  its folder is checked again. On a PC, every check reads each folder's list
+  of names (a PC's FAT or exFAT drive does not always mark a folder as
+  changed), and an open library also looks for changes once a minute.
+- **A card edited in a computer.** Windows and macOS do not always mark a
+  FAT or exFAT folder as changed when a file is added inside it. So the first
+  check after JukaHub starts reads every folder's list of names (only the
+  names, nothing is opened), and so does **Y** (Rescan) in the library.
+- **Fingerprints in the background.** Games up to 64 MB get their CRC32,
+  which the game details and cover matching look up first. This runs one file
+  at a time at the lowest priority, waits while a game or video plays, and
+  stops when the battery is under 30% and not charging. Turn it off in
+  **Settings → Games & emulators → Fingerprint games in the background**
+  (`libraryFingerprints`, on by default). Disc images and bigger files are
+  matched by name, as before.
+- **Rebuild.** **Settings → Games & emulators → Rebuild library index** deletes
+  the index and reads the card again; its line says how many games and folders
+  the index knows. A damaged index, or one from another JukaHub version, is
+  rebuilt by itself. The index is only a copy: deleting the file loses
+  nothing.
+
 Box art comes from `data/game-art/<Console_Name>/<Title>.png`. JukaHub fills
 it from the libretro thumbnail set by itself, in the background
 ([Found automatically](#found-automatically)), and the library fetches the rest
@@ -81,9 +119,12 @@ and a game with no box art anywhere gets its title screen or an in-game
 picture instead. A title that shares no real word with anything on those lists
 gets no picture.
 
-The **Built-in games** console lists JukaLand and the Synth (A opens them).
-Their covers ship inside JukaHub (`player/builtin_covers/`, drawn by
-`branding/mkcovers.py`) and are copied to `data/builtin-covers/`.
+The **Built-in games** console lists JukaLand, the Synth, Solitaire and the
+Games screen's arcade minigames (Snake, Tetris, 2048, Pong, Minesweeper,
+Flappy); A opens them, an arcade game straight into play. Their covers ship
+inside JukaHub (`player/builtin_covers/`, drawn by `branding/mkcovers.py`) and
+are copied to `data/builtin-covers/`; the Games screen's cards show the same
+pictures.
 
 The fetch runs on a worker; covers appear when it finishes, without reopening
 the panel. While it runs the footer shows **Stop** instead of **Fill Gaps**, and
@@ -260,6 +301,53 @@ next one): the game carries on and RetroArch is sent what its own hotkeys do —
 eject, next or previous disc once per step, close — and shows its own message.
 JukaHub tracks the disc from the one the game started on.
 
+## ScummVM and DOS shelves
+
+Some games are folders, not files. JukaHub lists each of them once, titled
+after its folder (`romshelf.go`, `shelf_*.go`).
+
+**ScummVM.** Put each adventure in its own folder in `Roms/SCUMMVM` (or
+`Roms/ScummVM`). The ScummVM core starts a game from a small `.scummvm` file in
+its folder that holds the game's ScummVM ID (`sky`, `tentacle`). When a folder
+has none, JukaHub writes one for the games it recognises — from the game's
+files (the free classics such as Beneath a Steel Sky and Flight of the Amazon
+Queen, the LucasArts and Sierra adventures, Broken Sword, Simon the Sorcerer,
+Discworld, Kyrandia, Myst), or, for the Sierra games and the early LucasArts
+ones, from the folder's name ("King's Quest IV", "Space Quest 3", "Loom"): name
+such folders after the game. It never overwrites a `.scummvm` file and never
+writes outside a ScummVM folder of the library. Folders it cannot recognise
+are named under **More** on any ScummVM game's page; add a `.scummvm` file with
+the ID from scummvm.org/compatibility yourself. Shortcuts straight in the
+ScummVM folder (CrossMix's importer, muOS, spruce) are listed as they are.
+
+Controls (the **ScummVM point and click** layout, ScummVM 2.8 or later; older
+cores keep their own mapping): D-pad or stick moves the pointer, **A** left
+click, **B** right click, **X** Escape (skip a scene), **Y** skip a line, hold
+**L1** for a slow exact pointer, **R1** F5 (save/load in most games), **Start**
+the ScummVM menu, **Select** the on-screen keyboard.
+
+**DOS.** Put a game in `Roms/DOS` as a `.zip`/`.dosz`, a disc image, a
+program straight in the folder, or a folder. A folder is one game: JukaHub
+starts its start script or main program and never an installer (SETUP,
+INSTALL…). **More → DOS settings** on the game's page picks another start
+program and sets, for that game only, the PC speed, graphics chip, memory,
+mouse speed and what Select opens; they are applied for each start through
+DOSBox Pure's core options and put back when RetroArch closes (start the core
+once from RetroArch first so it has an options file). **Select** opens DOSBox
+Pure's on-screen keyboard on every TrimUI, the Brick included (its menu is one
+tab away). By default DOSBox Pure maps the buttons for the games it knows (the
+**DOS: the game's own mapping** layout); for a point-and-click game choose **DOS mouse** and, once
+per game, the preset "Mouse with Left Analog Stick" in DOSBox Pure's menu
+(Select → Controller Mapper).
+
+In Files, **Y → Add to DOS games** copies a game folder or a `.zip`/`.dosz`
+into `Roms/DOS` (under a hidden name until the copy is whole, never over an
+existing game) and puts it on the shelf.
+
+The first time a ScummVM or DOS game starts in its RetroArch core, a short card
+shows its controls; **A** starts the game, **B** goes back. It is not shown
+again for that game.
+
 ## ROM manager: more for your games
 
 **Settings → Games & emulators → ROM manager** (also in Tools) files loose
@@ -397,7 +485,17 @@ resolves the emulator in this order:
    time*); while the console has an entry in `game-launchers.json` (from **X**
    or written by hand), Left there removes it and its games ask again;
 4. nothing — the panel toasts which console has no emulator instead of starting
-   something random.
+   something random. The Xbox is the exception on a handheld the hakuX port is
+   offered on (the Smart Pro; the Brick Pro, untested): with no Xbox launcher
+   on the card, the start installs hakuX — the install **X** on the Emulators
+   page's Xbox tile runs — and starts the game once it is in, if you are still
+   where you pressed and no game or video took the screen (else the toast says
+   the game is ready). On other models the toast says why they have no Xbox
+   emulator. Once installed, hakuX's `Emus/XBOX/launch.sh` is the Xbox games'
+   emulator like any `Emus` folder; the Xbox shelf lists `.iso` and `.xiso`
+   (XISO) images only, the formats hakuX and xemu boot. Xbox games start with
+   [Xbox boost](DEVICE_TUNING.md#xbox-boost): full CPU and GPU speed, JukaHub's
+   memory and the CPU first while they run.
 
 Starts that already know their emulator never ask: a save state on the game
 page uses the emulator the states were listed for (the game's remembered one,
@@ -597,7 +695,8 @@ console's very best.
 | NES | FCEUmm core · Nestopia core · QuickNES core | Mesen core · FCEUmm core · Nestopia core · FCEUX |
 | Game Boy, Game Boy Color | Gambatte core · SameBoy core · mGBA core · Gearboy core | the same |
 | Mega Drive | Genesis Plus GX core · PicoDrive core | the same |
-| GameCube, Wii / PS2 | — | Dolphin / PCSX2 |
+| GameCube, Wii | Dolphin core · Dolphin (Smart Pro S; see below) | Dolphin |
+| PS2 | — | PCSX2 |
 
 Where the handheld ranking comes from: CrossMix's emulator list and release
 notes (standalone DraStic, PPSSPP, Mupen64Plus, Flycast, YabaSanshiro and
@@ -608,6 +707,44 @@ GLideN64 at full speed on the Smart Pro and Brick). Judgement calls rather than
 measurements: standalone Flycast ahead of its core, the mGBA core ahead of
 standalone mGBA, and the order of the light 8- and 16-bit cores, which all run
 at full speed on this chip.
+
+### GameCube and Wii on the handheld
+
+The Smart Pro S plays GameCube games in RetroArch's Dolphin core: the lighter
+ones at full speed or close, the heavy 3D ones well below it, and few Wii games
+reach full speed. The A133P models (Smart Pro, Brick, Brick Pro) are too slow
+for most GameCube games, so there the consoles stay **not supported** unless
+**Settings → Games & emulators → GameCube & Wii** says **Try anyway**
+(`gamecube` in [CONFIGURATION.md](CONFIGURATION.md)). Put games in `Roms/GC`
+(or `GAMECUBE`, `NGC`) and `Roms/WII` as `.iso`, `.gcm`, `.rvz`, `.gcz`,
+`.ciso`, `.wia`, `.wbfs` (Wii) or `.m3u` for a two-disc game; Dolphin cannot
+open a `.zip` or `.7z`, so those are not listed. RVZ, Dolphin's own
+compressed format (Dolphin on a PC converts to it), keeps a game much smaller
+than its ISO.
+
+- **The first start sets Dolphin up.** With no emulator for the console yet, A
+  on a game installs the buildbot's Dolphin core (through the same checks as
+  any core install, and on JukaHub's newer glibc when the build needs it) and
+  Dolphin's system files (`dolphin-emu/Sys` in RetroArch's system folder, from
+  the buildbot's `Dolphin.zip`, adding only what is missing), then starts the
+  game. **A** on the GameCube row of the Emulators page and **Get more cores**
+  install the core as well; the system files then come with the first start.
+- **No freeze ten seconds in.** A Dolphin core built before 23 October 2026
+  froze an aarch64 RetroArch about ten seconds into a game with its dual-core
+  mode on (libretro/dolphin#462). A start in such a core fetches the newest one
+  first (offline it starts with a warning).
+- **Smoother first play.** The core's first start here gets shaders compiled in
+  the background, skipping an object for the frame or two its shader takes,
+  instead of a pause at every new effect. Change it in RetroArch's core options
+  (Quick Menu → Core Options → Graphics); JukaHub never writes over options the
+  core already has.
+- **The video driver.** When a start stops because RetroArch's video driver
+  could not draw for Dolphin, the card says so and Dolphin's own override
+  (`config/dolphin-emu/dolphin-emu.cfg`) switches between OpenGL ES and Vulkan
+  for the next start; Vulkan only where the firmware has a Vulkan driver.
+- **The whole handheld.** A GameCube or Wii game gets what **Xbox boost** gives
+  an Xbox game: every core and the GPU at full speed, JukaHub's memory handed
+  back, "Hey Juka" closed while it plays.
 
 ### Per-game launch options
 
@@ -879,6 +1016,162 @@ JukaHub reads those 336 bytes (of a `.gb`, a `.gbc`, or the one cartridge in a
   whose name is already in the Game Boy Color folder stays where it is, and a
   cover already there is kept. RetroArch's per-game core settings and the
   firmware's launchers are never touched; every move is logged.
+
+## More on a game's page
+
+A game's page (A on a game) has a **More** button (keyboard: **M**). It lists
+what else belongs to that one title: whether it is ready to start, its manual
+and guides, its control layout (docs/CONTROLS.md, "Control layouts"), its DOS
+settings, its saves on another device and Game Lab. Chips under the rating
+show the short answers — *Ready*, *Manual*, *Controls: Arcade 6-button*,
+*Lab: …*, *Saves: newer on Juka's PC* (`gamepage_more.go`).
+
+### Game Ready
+
+Before a game from the library starts, JukaHub checks the things that most
+often stop a game (`gameready.go`): the game file itself (empty, damaged, an
+empty zip, a `.cue`/`.gdi`/`.m3u` whose files are missing), the emulator and
+the RetroArch core its launch script names, and the BIOS that core needs — in
+the folder this device's RetroArch really reads (`system_directory` in its
+`retroarch.cfg`). On a PC it also says when no controller is connected, and
+with Local play it notices a player whose controller is gone.
+
+Only a certain problem stops the start. Then a card says "*Game* isn't ready
+yet", lists each problem with the missing file names and the full folder to
+copy them into, and offers:
+
+- **A** — the fix: Open BIOS Doctor, Get cores (handheld), Open Emulators (the
+  console's tile is highlighted) or Remove missing players (Local play).
+  Closing BIOS Doctor or the Emulators page brings you back to the library.
+- **X** — Play anyway (not when there is no emulator at all).
+- **Y** — Check again; if everything is there now, the game starts.
+- **B** — Back.
+
+Things that only *may* matter (a BIOS most games run without, a core that may
+not load, no controller on a PC) are listed under "Good to know" and never stop
+a game. A start nobody pressed for — the resume at power-on — is never
+stopped. The page's chip shows the answer (Ready, Needs BIOS, Missing disc
+file, Core missing, No emulator, Needs a PC, BIOS may be needed) and
+**More → Ready check** shows the full report, with a tick for everything that
+was fine. Pressing Play anyway twice for a game turns the card off for it;
+More → Ready check → **X** turns it back on. The choice is kept in
+`data/game-ready.json`.
+
+### Game manuals
+
+**More → Manual & guide** lists the game's controls, then every manual and
+guide JukaHub found for it, then rows to add your own; a *Manual* chip on the
+page means one was found (`gamemanual*.go`). Names are matched loosely, so
+"(USA)", case, punctuation and "The" do not matter:
+
+| Where | Example |
+|---|---|
+| Next to the game | `Roms/SFC/Super Metroid (USA).pdf`, `… (Manual).pdf`, `…-manual.pdf`, `….txt` / `.md` (a guide) |
+| The console's manuals folder | `Roms/SFC/manuals/Super Metroid-manual.pdf` (also `manual/`, `docs/`, `guides/`, `media/manuals/`) |
+| A folder game's own folder | `Roms/SCUMMVM/Monkey Island/Manual.pdf`, `readme.txt` |
+| Batocera / Knulli / RetroBat | the `<manual>` entry in the console's `gamelist.xml` |
+| ES-DE media | `downloaded_media/snes/manuals/Super Metroid (USA).pdf` next to the Roms folder (PC: also in your user folder) |
+| LaunchBox | `LaunchBox/Manuals/Super Nintendo Entertainment System/Super Metroid-01.pdf` |
+| A Manuals folder | `Manuals/Super Metroid.pdf` or `Manuals/SNES/…` next to the Roms folder |
+| Scanned pages | a folder of pictures named like the game in a manuals folder, or `Super Metroid (Manual)/` next to it |
+
+PDF and EPUB open in the Reader, TXT and Markdown in the text viewer, scanned
+pages in the picture viewer and links in the Browser; Back returns to the
+game's page. **Add a manual or guide** opens Files on the game's folder, where
+**Y → Use as this game's manual** copies a file into
+`data/game-manuals/<console>/<game>/`; **Add a guide link** keeps a web page
+for the game (in `data/game-manuals.json`). X twice removes what you added.
+
+In a game on the handheld, hold **Select + L2**: the in-game menu's **Manual**
+shows the controls and the text guides (up to 64 KB each); PDFs and scans are
+listed there to open from the game's page afterwards.
+
+### Game Lab
+
+**More → Game Lab** compares two setups of a game (`gamelab*.go`). A setup is
+one of the game's emulators (firmware launcher, RetroArch core or standalone
+emulator) plus a CPU profile (Auto, Battery saver, Balanced, Performance) and
+an optional clock limit. A starts as what the game uses now, B as the next
+emulator, or the same one at another speed.
+
+**Run A** / **Run B** starts the game with that setup for that one launch —
+nothing is saved to the game. Play a minute or two, then quit. JukaHub
+measures:
+
+- **Speed** — frames shown per second and the share of full speed. On a TrimUI
+  the framebuffer's page flips are counted while RetroArch reports PLAYING
+  (pauses, menus, loading and fast-forward left out, as the shader speed check
+  does); on a PC, RetroArch's own "Average monitor Hz". Standalone emulators:
+  not measured.
+- **Sound** — the underrun and recovery lines RetroArch or ALSA logged, per
+  minute. "None logged" means none were reported (most builds recover
+  silently); "Sound lost" when RetroArch gave up on audio.
+- **Battery** — the median draw in watts (or % per hour), sampled every 5 s;
+  not measured on the charger or on a PC.
+- **Played** — runs under 45 s are kept but marked too short.
+
+A verdict line sums it up ("B is smoother and uses 12% less power"). **Use A**
+/ **Use B** makes that the game's emulator and CPU setting (Game options shows
+them too), and the page shows *Lab: …* while they still match. Results:
+`data/game-lab/labs.json`.
+
+**Sharing.** **Share** writes `data/game-lab/export/<system>-<title>.json`.
+Profiles put in `data/game-lab/import/` that match the game (same system, and
+the same CRC32 or title) appear under **Shared setups**; A loads one as setup B
+when its emulator is installed here — it never starts the game by itself.
+Files over 64 KB, of another schema or a newer version, or with out-of-range
+values are ignored. Format (schemaVersion 1):
+
+```json
+{
+  "schema": "jukahub.gamelab.profile",
+  "schemaVersion": 1,
+  "device": {"model": "trimui-smart-pro", "firmware": "CrossMix", "os": "linux/arm64"},
+  "game": {"system": "GBA", "title": "Golden Sun (USA)", "file": "Golden Sun (USA).gba", "size": 8388608, "crc32": "a2e0f1c9"},
+  "setup": {"emulator": "mGBA", "kind": "core", "core": "mgba", "coreVersion": "", "launcher": "cores/mgba_libretro.so",
+            "cpuProfile": "balanced", "maxFreqKHz": 1600000},
+  "results": {"fps": 59.7, "targetFps": 60, "fpsMethod": "frames", "slowShare": 0.02, "audioChecked": true,
+              "glitchesPerMinute": 0, "soundLost": false, "watts": 2.9, "batteryPctPerHour": 0,
+              "playedSeconds": 124, "tooShort": false}
+}
+```
+
+`kind`: core, retroarch or standalone. `cpuProfile`: auto, battery, balanced
+or performance. `fpsMethod`: frames or log. Optional fields may be absent; zero
+means not measured.
+
+### Save handoff (desktop ↔ handheld)
+
+**More → Saves on *device*** compares this game's saves with a paired
+JukaHub — a Windows PC and a TrimUI, or two handhelds (Settings → Network →
+Paired devices; both need **Nearby devices** on and the same Wi-Fi) — and moves
+them with one press (`savehandoff*.go`, over Save sync's paired connection).
+
+- **What is compared:** the game's battery saves (`<rom>.srm`, `.sav`, `.rtc`…)
+  and RetroArch save states (`<rom>.state`, `.state1`…, `.state.auto` and
+  their screenshots) in the folders Save Manager finds, including RetroArch's
+  per-core and per-content folders (never another console's core folder);
+  NextUI saves and DraStic states too. PSP SAVEDATA is not yet. They are
+  matched by the ROM's file name, so the ROM may live in a different folder on
+  each device but should have the same name.
+- **Which is newer:** content first. Identical files are "the same"; after any
+  sync or handoff between the two devices, JukaHub knows which side changed
+  since. Only for files the two devices never synced do the file times decide,
+  and the screen then says **probably newer** (a handheld's clock can be wrong
+  until it is online).
+- **One press:** **Send to *device*** makes the other device's copy this one;
+  **Get from *device*** the reverse. Files only one device has are copied
+  either way. The receiving device takes a Save Manager snapshot first.
+- **Both changed:** the two versions are shown side by side with **Keep this
+  one** under each. The other is kept beside it as `<name> (from <device>).<ext>`
+  on both devices — nothing is deleted. Two names that differ only in upper
+  and lower case are left alone and the screen asks you to rename one.
+- **Chip and hint:** the page shows "Saves: newer on *device*", "Saves: newer
+  here", "Saves: changed on both" or "Saves in sync" for devices it can reach.
+  After you play for at least a minute, a quiet hint says when this device's
+  saves are newer than the other's.
+- **Away or busy:** a device that is not on the Wi-Fi, has Nearby devices off
+  or is running a game says so; Y checks again.
 
 ## On NextUI
 
@@ -1205,4 +1498,4 @@ pieces that fit the same data:
 |------|-------------------------------|
 | Create and manage save states in JukaHub | The game page lists RetroArch's existing auto and numbered states and can start from one. Saving a new state or stepping to an exact frame still uses RetroArch's own menu. |
 | Curated collections | Favorites and custom tags already filter the library. A separate collection editor with its own saved order is not included. |
-| Managed emulator overlays and hotkey profiles | Per-game extra arguments and the player-order setting cover some launch needs, but JukaHub does not create or manage RetroArch overlay layouts and named hotkey profiles. |
+| Managed emulator overlays and hotkey profiles | Per-game extra arguments, the player-order setting and the named control layouts (docs/CONTROLS.md) cover button layouts, but JukaHub does not create or manage RetroArch overlay layouts and named hotkey profiles. |

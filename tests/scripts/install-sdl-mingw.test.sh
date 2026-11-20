@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The shared SDL installer must refuse an archive whose digest does not match.
+# The shared SDL installer must refuse an archive whose digest does not match
+# without extracting any of the other archives.
 #
 # A checksum check nobody has ever seen fail is indistinguishable from no check
 # at all, so this drives both outcomes through a local manifest: the tampered
@@ -76,13 +77,37 @@ if [ -e "$work/intact/good.tar.gz" ]; then
   fail "the downloaded archive was left behind after extraction"
 fi
 
-# 3. An empty list is a configuration error, not a quiet "installed nothing".
+# 3. With multiple archives, all digests must pass before anything is unpacked.
+echo "second payload" > "$work/src/payload2.txt"
+tar -czf "$work/good2.tar.gz" -C "$work/src" payload2.txt
+good2=$(sha "$work/good2.tar.gz")
+printf 'good.tar.gz  %s  file://%s\ngood2.tar.gz  %s  file://%s\n' \
+  "$good" "$(as_url_path "$work/good.tar.gz")" \
+  "$bad" "$(as_url_path "$work/good2.tar.gz")" > "$work/partial.list"
+if SDL_MINGW_ARCHIVES="$work/partial.list" bash "$installer" "$work/partial" > "$work/partial.log" 2>&1; then
+  fail "the installer accepted a bad second archive"
+fi
+if [ -e "$work/partial/payload.txt" ] || [ -e "$work/partial/payload2.txt" ]; then
+  fail "the installer extracted an archive before all digests passed"
+fi
+
+printf 'good.tar.gz  %s  file://%s\ngood2.tar.gz  %s  file://%s\n' \
+  "$good" "$(as_url_path "$work/good.tar.gz")" \
+  "$good2" "$(as_url_path "$work/good2.tar.gz")" > "$work/two.list"
+if ! SDL_MINGW_ARCHIVES="$work/two.list" bash "$installer" "$work/two" > "$work/two.log" 2>&1; then
+  fail "the installer rejected two intact archives: $(cat "$work/two.log")"
+fi
+if [ ! -f "$work/two/payload.txt" ] || [ ! -f "$work/two/payload2.txt" ]; then
+  fail "the installer did not extract both intact archives"
+fi
+
+# 4. An empty list is a configuration error, not a quiet "installed nothing".
 : > "$work/empty.list"
 if SDL_MINGW_ARCHIVES="$work/empty.list" bash "$installer" "$work/empty" > /dev/null 2>&1; then
   fail "an empty archive list was accepted as a successful install"
 fi
 
-# 4. A list that cannot be read fails before any download, not after.
+# 5. A list that cannot be read fails before any download, not after.
 if SDL_MINGW_ARCHIVES="$work/does-not-exist.list" bash "$installer" "$work/missing" > /dev/null 2>&1; then
   fail "an unreadable archive list was accepted"
 fi

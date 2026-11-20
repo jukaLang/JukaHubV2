@@ -74,6 +74,20 @@ var (
 // setting.
 func logStoredSecretsRebuild(config *Config) {
 	logStoredSecretsMailRefresh()
+	logStoredSecretsPublish(config)
+}
+
+// A mail write can finish on any goroutine. The queued refresh runs on the
+// main thread, and retries on the next frame if another write holds the store.
+func logStoredSecretsMailChangedOnMain() {
+	if !logStoredSecretsMailRefresh() {
+		tbxPost(logStoredSecretsMailChangedOnMain)
+		return
+	}
+	logStoredSecretsPublish(appConfig)
+}
+
+func logStoredSecretsPublish(config *Config) {
 	from := logStoredSecretsMailSum + logStoredSecretsCustomSum(config)
 	if from == logStoredSecretsFrom && logStoredSecrets.Load() != nil {
 		return
@@ -86,14 +100,26 @@ func logStoredSecretsRebuild(config *Config) {
 // free and they changed. The store holds its lock across a write to the card
 // (mailcalSettingsUpdate, called by the sync goroutines on every poll), so the
 // main thread only tries the lock and keeps the last read while it is busy;
-// the next settings load or save tries again. Main thread.
-func logStoredSecretsMailRefresh() {
+// a queued mail-change refresh retries on the next frame. Main thread.
+func logStoredSecretsMailRefresh() bool {
 	if !mailcalStore.mu.TryLock() {
-		return
+		return false
 	}
 	mailcalLoadLocked()
 	s := mailcalCopy(mailcalStore.value)
 	mailcalStore.mu.Unlock()
+	sum := logStoredSecretsMailFingerprint(s)
+	if sum == logStoredSecretsMailSum {
+		return true
+	}
+	logStoredSecretsMailSum = sum
+	logStoredSecretsMail = aiMailCalSecretsOf(s)
+	return true
+}
+
+// logStoredSecretsMailFingerprint compares stored credentials without opening
+// them. Settings updates use it while holding mailcalStore.mu.
+func logStoredSecretsMailFingerprint(s mailcalSettings) uint64 {
 	var sum uint64
 	for _, acc := range s.Accounts {
 		sum += logFNV(acc.Password, acc.RefreshToken)
@@ -101,11 +127,7 @@ func logStoredSecretsMailRefresh() {
 	for _, c := range s.Calendars {
 		sum += logFNV(c.URL, c.Password)
 	}
-	if sum == logStoredSecretsMailSum {
-		return
-	}
-	logStoredSecretsMailSum = sum
-	logStoredSecretsMail = aiMailCalSecretsOf(s)
+	return sum
 }
 
 // logStoredSecretsCustomSum sums a hash of every credential setting's name and

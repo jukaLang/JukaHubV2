@@ -13,6 +13,714 @@ For anything older, the git log and the
 
 ### Added
 
+- **Tested on this device** (Juka, 2026-11-19: "Show whether a game, port,
+  emulator or app has actually been tested for launch, controls, sound, sleep
+  and return on the user's model. Include the tested version and any known
+  issue"). JukaHub now notes, per model, what it saw work: **Starts** (still
+  running after 20 s; a quick exit or crash is noted with its reason),
+  **Controls** (15 presses in a minute or more), **Sound** (the game's own audio
+  stream seen playing on the handheld), **Sleep and wake** (still running 10 s
+  after a real suspend) and **Quits back** (JukaHub came back with nothing left
+  running; Select + Start held, a Quit that needed a kill, leftover programs or
+  a crash count against it). Sound and controls are never marked as problems
+  automatically; JukaHub's own stops never count. Each result carries the
+  JukaHub release, firmware and emulator or core it was seen with, and a
+  game's passes also go to its emulator. A game's page shows **Verified on
+  Smart Pro**, **3 of 5 checks on Smart Pro** or **Known issue**; More →
+  **Tested on this device** lists the five checks with where each came from,
+  lets the player mark them, describe a problem or forget the results; and
+  Settings → About → **Tested on this device** lists games, ports, apps and
+  emulators, with **Export results** for sharing (another device of the same
+  model reads it from `data/verified/import`; maintainers can ship results in
+  `player/verified_seed.json`, empty for now). Results stay with the model, so
+  a card moved to another handheld starts fresh there. Kept in
+  `data/verified/verified.json`. See
+  [Pick up and play](docs/PICK_UP_AND_PLAY.md).
+- **Your progress is safe — and JukaHub shows it** (2026-11-19: "Save safely
+  before sleep or low battery … Show the last successful save"). Every save of
+  a library game is read back after the emulator writes it (on the card,
+  complete, readable; RetroArch states checked too), and the game's page shows
+  the last good one: "Saved 4 min ago", "Saved before power off", or —
+  honestly — "Not saved since it closed unexpectedly" after a crash or power cut
+  with no save. More → **Saves** lists the last few in plain words. Waking a
+  RetroArch game says "Progress safe: in-game save 3 min ago" on its message
+  line, and a game resumed at power-on says "Back where you left off". Nothing
+  asks the emulator to save before an ordinary sleep, so save slots are never
+  overwritten by it. Kept in `data/save-ledger.json`.
+- **A low battery shortens the sleep.** On battery at 25 % or less, a handheld
+  put to sleep with a game running wakes itself within 2 h (30 min at 15 % or
+  less) to save the game and power off, even with Power off after sleeping
+  turned Off, so the game is not lost when the battery runs out asleep.
+- **In-game saves reach the card every 10 seconds** in RetroArch games started
+  from JukaHub (`autosave_interval`, only when you had none, put back after the
+  game). The new `saveFlushSeconds` setting changes it; 0 leaves RetroArch's
+  own setting alone.
+- **Updates fix themselves** (2026-11-19: "Check that an updated JukaHub
+  reaches a usable screen and accepts input. If it fails, restore the working
+  version and explain what happened"). The launcher now watches an updated
+  build's first starts: if it hangs before its first screen — even in Go
+  package init, before any of its own code runs, as the 2026-11-19 release did
+  — crashes, or its buttons don't respond, the previous build is put back
+  within two minutes (a goroutine dump goes to `errors.txt` first), started in
+  the same session, and an **Update undone** card explains what happened, with
+  Send report. That release is not offered again until a newer one is out; the
+  boot guard does not count the rescue as a failed start. Games, saves and
+  settings are never touched. Protection starts with the update after the one
+  that brings it.
+- **Device check** (2026-11-19: a guided hands-on pass for the Smart Pro).
+  Settings → About → **Device check** (also Tools → System) walks nine checks —
+  buttons and sticks (through the Controller test), speaker, headphones, sleep
+  and wake, Bluetooth, Wi-Fi, a USB DAC, a game's launch and return, and the
+  update self-check — and records what JukaHub measured beside each answer: the
+  buttons and sticks seen, the output and volume the test sound took, how long
+  the handheld really slept and how long Wi-Fi and sound took to come back, how
+  many Bluetooth devices answered (a count, never names), the Wi-Fi link and
+  signal (never the network's name or an address), the game's run and its
+  Tested on this device results. An unfinished check resumes where it stopped;
+  **Save report** (Y) writes a Markdown section shaped for
+  `docs/HARDWARE_VALIDATION.md` into the SD card's `JukaHub reports` folder —
+  dates only, no times of day.
+- **Covers for the arcade games** (Juka, 2026-11-19: "in Built-in games there
+  is MineSweeper, Floppy, 2048, Pong, Snake... but they don't have images").
+  Snake, Tetris, 2048, Pong, Minesweeper and Flappy now have covers drawn in
+  each game's own colours (`branding/mkcovers.py`, embedded like JukaLand's).
+  Every card on the Games screen shows its picture, with the name on a band
+  along the bottom; Games → **Built-in games** in the library lists the six
+  beside JukaLand, the Synth and Solitaire, and A there starts the game right
+  after the screen change. The Games tab on the Tabs Home gives each one a
+  tile with its cover too. The built-in games stay out of title matching: a
+  handoff of "Tetris (World).gb", Party Mode's Guess the Game (their covers
+  print the answer), Nearby's shared titles and the AI's game diagnose no
+  longer pick them.
+- **Open with and default apps** (Juka, 2026-11-19: "“Open with” and default
+  apps would add a lot to JukaHub … Someone could select a PDF manual, choose
+  KOReader, and make it the default"). Files → Y → **Open with…** lists every
+  way to open the highlighted file: JukaHub's own viewers that handle it, Open
+  with Windows on a PC, installed TrimUI apps that open the type (marked
+  verified when the App Center's catalogue says how the file is passed and the
+  app's launch script really passes it on, or declared by the app's own
+  `config.json` as `"jukahub": {"opens": [".epub"]}`), "Get <App>" rows that
+  lead to the App Center, and Another app…. A opens once, X makes it the
+  default for that extension, Y forgets the default. With a default saved, A in
+  Files opens the file there; games in console folders always play in the
+  library's emulator, and a default app that left the card is passed over with
+  one toast. Formats JukaHub cannot show (MOBI, AZW3, FB2, DjVu, CBZ/CBR …)
+  open in the one verified app on the card that reads them. **Default apps…**
+  (Files' actions, or search Home) reviews and resets the choices. The text
+  page and the reader have Open with… in their menus, and a document the
+  reader cannot show offers it on Y. Not yet checked on a TrimUI
+  (OPENWITH-HW-1). docs/OPEN_WITH.md.
+- **App Center** (Juka, 2026-11-19: "a verified TSP App Center: show which
+  apps work on stock firmware or CrossMix, with the required dependencies;
+  install and update them from the handheld, with a way back if an update
+  fails"). Apps → App Center (or search Home) is an honest catalogue of
+  TrimUI apps — KOReader, Ritder, CrossMix's Screen Recorder, Xbox Pad BT,
+  Gamepad a PC and TrimUI Drop — with where each comes from, how it fares on
+  the stock firmware and on CrossMix, what it needs (checked live: Bluetooth,
+  a network, CrossMix tools), what it opens, and "Checked" only where the
+  app's own source documents it. Get, Update, Roll back and Remove work on the
+  handheld: the release is downloaded from the catalogue's own GitHub
+  repository (size and published SHA-256 checked), unpacked safely, must hold
+  one app folder, and is swapped in with the previous version kept for Roll
+  back; the app's own settings move over, a failed update puts the old version
+  back, and an install cut short by a power cut is finished or undone. Apps
+  installed by hand are only changed when asked. Apps started from the App
+  Center or Open with hand back cleanly: CPU settings are left to Auto
+  performance or put back, the stick input daemon is restarted if the app
+  stopped it, and a MainUI the app leaves behind is stopped. The Recordings
+  page offers a screen recorder where JukaHub's own cannot record, and
+  controller apps point to Controller Mode. Offline and on a PC the page
+  browses only. Not yet checked on a TrimUI (APPC-HW-1). docs/APP_CENTER.md.
+- **Interactive Terminal** (Juka, 2026-11-19: "a real interactive Terminal …
+  would unlock SSH, `htop`, and text editors"). `shell` (bash or sh; cmd.exe on
+  Windows) and full-screen programs typed in the Terminal — htop, top, vi/vim,
+  nano, less, man, mc, tmux, watch, REPLs such as python3, and pipelines into
+  a pager like `dmesg | less` — now run on a real terminal: a PTY on the
+  handheld, ConPTY on Windows 10 and newer, drawn by JukaHub's own VT100/xterm
+  emulator (256 and 24-bit colour, alternate screen, line drawing, wide
+  characters, 1,000 lines of scrollback). On the pad: D-pad arrows, A Enter,
+  B Esc (hold to leave), X Backspace, Y a keyboard that types straight into the
+  program, L2 Tab, R2 Ctrl, Select special keys (Ctrl+C, Esc, F1–F12, `:wq` …),
+  Start the session menu, L1/R1 page or scroll back. With a keyboard every key
+  goes to the program; Ctrl+Shift+Q leaves and resumes, Ctrl+Shift+M opens the
+  menu, Ctrl+Shift+V pastes. A password a program asks for (sudo, su, ssh)
+  shows as dots on the on-screen keyboard. Leaving keeps the session running
+  ("Start resumes …"); End session or quitting JukaHub stops it and everything
+  it started. `ssh user@host` connects to another computer with the system's
+  ssh, or a built-in client with password sign-in and trust-on-first-use host
+  keys (`ssh forget host`); `ssh on|off|status` still runs the SFTP server. The
+  Command Deck gains Interactive shell and Live process monitor. Not yet
+  checked on a TrimUI (TERM-HW-1); closes backlog APP-3. docs/TERMINAL.md.
+- **Light-gun mode** (Juka, 2026-11-19: "Light-gun mode — Aim with the right
+  stick, fire with a shoulder button, and calibrate per game for supported
+  arcade and console cores"). Gun games in RetroArch play with the pad as the
+  gun: the right stick aims (the D-pad on a Brick or Hammer), R1 fires, L1
+  reloads with a shot off the screen, R3 puts the crosshair back in the middle,
+  and the game keeps Start, Select, the D-pad and the face buttons. A game's
+  page → More → **Light gun** turns it on and tunes it per game — **Move** (the
+  stick steers, speed 1–5) or **Point** (the stick's position is the spot in an
+  aim area: the 4:3 picture, the whole screen or a custom box), R1/R2 to fire,
+  L1/L2 to reload, a buzz per shot — with a practice target to try the
+  settings. About a hundred known gun games (Duck Hunt, Super Scope 6, Time
+  Crisis, Lethal Enforcers, Operation Wolf …) get it once by themselves when
+  the whole title matches; games that mix gun and pad play (Die Hard Trilogy,
+  Resident Evil Survivor, Super Mario Bros. + Duck Hunt) are left alone, and
+  switching one off sticks. For each start JukaHub plugs the console's gun into
+  the right port (NES Zapper, Super Scope / Justifier, Menacer, Light Phaser,
+  GunCon, arcade guns in FCEUmm, Nestopia, Snes9x, Genesis Plus GX,
+  PCSX-ReARMed, Beetle PSX, SwanStation, FinalBurn Neo and MAME 2003-Plus),
+  turns the core's crosshair on and makes a mouse the game aims with; all of it
+  is put back when RetroArch closes. On Windows the PC mouse is the gun. Not
+  yet checked on a TrimUI (LIGHTGUN-HW-1). docs/LIGHT_GUN.md.
+- **CHIP-8 player and Get CHIP-8 games** (Juka, 2026-11-19: "WASM-4 and CHIP-8
+  players — Tiny fantasy-console games should run comfortably on the A133P. A
+  tested launcher and homebrew shelf would complete the experience"). CHIP-8,
+  SUPER-CHIP and XO-CHIP games play inside JukaHub on every TrimUI and on
+  Windows, with no emulator to install: `.ch8`, `.c8`, `.sc8` and `.xo8` files
+  in `Roms/CHIP8` are the CHIP-8 console. The picture is scaled by whole
+  pixels, the pad follows Octo's convention (D-pad 5 7 8 9, A 6, B 4), holding
+  Y shows a 4×4 keypad, and Start opens a menu with Speed, Mode (the machine's
+  quirks), a per-game key map, sound and a quick save. **Start → Games → Get
+  CHIP-8 games** lists John Earnest's public-domain chip8Archive and installs a
+  game with the quirks, speed and colours it was written for, and its own
+  screen as its cover. docs/CHIP8.md.
+- **WASM-4 games and Get WASM-4 carts** (same request). WASM-4 is a built-in
+  console now: `.wasm` carts in `Roms/WASM4` are its shelf, and a `.wasm`
+  anywhere else is not a game (the Retro formats plugin no longer handles
+  them). The first start installs the WASM-4 core once and then plays — on the
+  handheld JukaHub's own `cores-aarch64` build (the cores workflow now builds
+  `wasm4`), else the buildbot's nightly through the usual load check, on the
+  private glibc when it needs it; on Windows the buildbot's DLL into the PC's
+  RetroArch — and the square picture is scaled by whole pixels unless you
+  picked a picture mode. **Get WASM-4 carts** (Start → Games, or More on any
+  WASM-4 game) lists wasm4.org's carts with screenshots and authors, installs
+  one with its screenshot as the cover, shows its page as a QR code, deletes
+  only what it installed (saves stay) and works offline from the last list. Not
+  yet run on a device (WASM4-HW-1). docs/WASM4.md.
+- **Retro soundtrack player** (Juka, 2026-11-19: "Retro soundtrack player —
+  Play NSF, SPC, GBS, VGM and SID music with game artwork, playlists and
+  screen-off playback"). The music player plays game music: NES (NSF, NSFE),
+  SNES (SPC), Game Boy (GBS), Sega (VGM, VGZ, GYM), PC Engine (HES), MSX (KSS),
+  ZX Spectrum (AY), Atari 8-bit (SAP) and Commodore 64 (SID) tunes, plus MOD,
+  XM, S3M and IT modules. A file holding a whole soundtrack opens as an album
+  with one row per song, named from the file's own tags; Now Playing shows the
+  console, "Song 3 of 24" and the game, with the game's cover from the Games
+  library (else the folder's picture) in the player, on the lock screen and on
+  the dock. Looping songs play for the length the file gives (else 2:30) and
+  fade out; playlists, favorites, history, M3U, the screen-off mode and music
+  under games work as for any song, and the Media index files a soundtrack
+  under its game with the console as the artist. Console formats play through
+  ffmpeg's libgme and modules through libopenmpt (an ffmpeg without them says
+  so once); SID tunes play on JukaHub's own small C64 emulation (PSID; RSID is
+  refused). CHIPTUNE-HW-1 checks the handheld's ffmpeg. docs/SOUNDTRACKS.md.
+- **TV mode** (Juka, 2026-11-19: "Brick Pro TV mode — Use its USB-C video
+  output with a larger interface and automatic external-controller setup").
+  Settings → Display → **TV mode** is Auto, On or Off. On a Brick Pro, Auto
+  watches the kernel's video-out status every two seconds and turns TV mode on
+  while a TV is connected, with a toast each way; On shows the TV interface on
+  any device. In TV mode text is larger (115–145%, your own Text size
+  untouched), a USB or Bluetooth controller is player 1 in RetroArch games
+  started from JukaHub (the handheld's buttons the next player, for that launch
+  only), a TV without a controller points at Pair a controller, and an optional
+  switch darkens the built-in screen while the TV is connected. A 16:9 screen
+  at start gets the wide layout; one that changes shape later offers a restart.
+  Drivers & hardware's Video out row says what the probe sees. Built without a
+  Brick Pro on a TV: which file flips, mirroring and RetroArch's pad numbering
+  are TVMODE-HW-1. docs/TV_MODE.md.
+- **Game Boy Printer scrapbook** (Juka, 2026-11-19: "Game Boy Printer scrapbook
+  — Collect pictures printed by supported emulators, then view or send them
+  through the phone companion"). A Game Boy or Game Boy Color game's page has
+  More → **Game Boy Printer** (at the top for games known to print: Pokémon
+  Yellow/Gold/Silver/Crystal/Pinball/TCG, Game Boy Camera, Link's Awakening DX,
+  Super Mario Bros. Deluxe and more). **Play with the printer** downloads
+  DoubleCherryGB once — the only libretro core with an emulated printer — makes
+  it that game's emulator, brings the battery save along when RetroArch keeps
+  saves per core (a copy never overwrites a save changed on both sides, and
+  keeps a backup), and starts the game; **Usual emulator** puts everything
+  back. Pictures printed in the game land in the scrapbook when it ends ("2
+  prints saved to the scrapbook"): a grid with a sharp big view and delete,
+  also at **Tools → Printer scrapbook** for every game. The Phone Companion's
+  new card lists the prints with Save, 2× and 4× downloads for paper, read-only
+  behind the PIN; Y in the scrapbook shows its QR code. Where DoubleCherryGB
+  writes its prints is not documented, so JukaHub compares the folders a core
+  can write to before and after the game (GBPRINT-HW-1). docs/GB_PRINTER.md.
+- **USB controller** (Juka, 2026-11-19: "TrimUI as a USB gamepad — Plug the
+  handheld into a PC and use its controls as a controller. This needs a kernel
+  check for USB HID gadget support before committing to it"). The USB
+  controller engine behind Controller Mode's USB cable link (`usbpad*.go`)
+  makes the USB-C port a **PC (Xbox 360 compatible)** controller — Microsoft's
+  IDs over FunctionFS, which Windows' own driver, XInput games, Steam and
+  Linux's xpad take, with the PC's rumble on the handheld's motor — or a
+  **Generic HID gamepad** (16 buttons, hat, two sticks) for macOS, Android,
+  Linux and DirectInput games, through the kernel's HID function when it has
+  one and HID over FunctionFS when not. Its own screen, **Tools → USB
+  controller** (also Settings → Network), first checks what the firmware's
+  kernel offers and says so on screen and in the log, then works on its own
+  with a live tester; hold Select + Start for 2 seconds to leave (the PC never
+  sees that chord). USB file transfer pauses and comes back after, host mode
+  can't be on at the same time, and the firmware's ADB gadget is given back on
+  leaving, quitting or after a crash. Not verified on hardware (USBPAD-HW-1).
+  docs/USB_GAMEPAD.md.
+- **Controller Mode** (Juka, 2026-11-19: "let someone use their TrimUI as a
+  controller for a PC or phone, then return to JukaHub in one press"). Tools →
+  Controller Mode (also Apps, Start, Home search and Quick Settings) turns the
+  handheld into a game controller through one of four links: a **USB cable**
+  (an Xbox 360 controller for Windows and Steam, or a generic gamepad, through
+  the USB controller engine), **Wi-Fi to a PC** with the free JukaPad receiver
+  the handheld serves itself (`player/ctlmode/jukapad_receiver.py`: an Xbox 360
+  or DualShock 4 pad on Windows through vgamepad, an Xbox-style uinput pad on
+  Linux; paired once with a 6-digit code on both screens — X25519 with
+  commit-then-reveal — then every packet authenticated, the PC releasing all
+  buttons within a second of a lost link, rumble back to the handheld; `--tsp`
+  for networks that block discovery), **DSU for PC emulators** (Dolphin, Cemu,
+  the yuzu forks read `<handheld IP>:26760` with nothing installed), or a
+  **Bluetooth gamepad (beta)** that phones and PCs pair with as a standard BLE
+  HID gamepad (a small D-Bus client in `dbusmini.go` drives BlueZ; the code is
+  confirmed on the handheld). Installed GamePad to PC and Bluetooth pad apps are
+  listed too. While connected every press goes to the other side before any
+  JukaHub screen sees it and a live picture shows it; **tap Menu** to come back
+  (the link stays up, A resumes), **hold Menu** for Guide. Layouts — face
+  buttons by position or label, D-pad as the left stick, stick dead zone,
+  inverted right stick, Menu-for-Guide — are saved per PC, and the screen turns
+  off while you play unless set to stay on. `ctlmode*.go`, `dbusmini.go`,
+  docs/CONTROLLER_MODE.md.
+- **Record the screen** from JukaHub: Quick Settings → **Record screen**, a
+  game page's More → **Record this game**, or the in-game menu (Select + L2)
+  records whatever is on the panel — JukaHub, RetroArch, ports and standalone
+  emulators — as an MP4 (640 px, 30 fps, video only) in the Recordings folder,
+  with a ● REC pill while it runs. It stops by itself at 30 minutes, on a
+  nearly full card or a low battery, and a clip cut short still plays. The
+  Recordings page also lists CrossMix's Screen Recorder clips. `screenrec*.go`,
+  docs/RECORDINGS.md.
+- **Open with KOReader**: with KOReader in the card's Apps folder (CrossMix
+  ships it), comics (CBZ/CBR/CB7/CBT), DjVu, FB2, MOBI/AZW, XPS, CHM and Word
+  files open in it from Files; the reader's Select menu has **Open in
+  KOReader** (your page is saved first), a game manual's list has Y for the
+  other reader, and Settings → Media & playback → **Open books with** can send
+  every PDF and EPUB there (JukaHub's reader stays the default and the
+  fallback). JukaHub comes back where you were when KOReader quits.
+  `koreader.go`, `extapps.go`.
+- **Send whole folders from the phone.** The Phone Companion's drop card has
+  **Send a folder**, and folders can be dropped on the page: the handheld reads
+  the folder's file list first and answers one place for all of it — books to
+  `Books/<Folder>`, an album to `Music/<Folder>`, videos and pictures to their
+  folders, a disc game or one console's games to `Roms/<console>/<Folder>`, a
+  DOS or ScummVM game to its shelf, a folder named after a console merged into
+  it — asks when unsure, and keeps anything with programs or scripts in
+  `PhoneDrop`. Paths that would leave the folder are refused, each folder shows
+  one progress line with Cancel, and the handheld says "Phone sent the folder
+  Asimov (42 books)". `companion_dropdir.go`.
+
+- **Move to a new SD card** (Juka, 2026-11-19: "a guided transfer for games,
+  saves, BIOS files, ports, artwork and settings, with a check that the new
+  card is complete before the old one is retired"). Settings → About and
+  Tools → Your setup (handheld) copy everything on the card — games, saves,
+  BIOS files, ports, artwork, emulators, JukaHub and its settings — onto a new
+  card in a USB card reader. The plan shows each category with its size and
+  checks room (in the new card's real block size), FAT32's 4 GB limit, the
+  battery and running games, and never leaves anything out without asking.
+  Every file is written under a temporary name, flushed and renamed, then read
+  back from the new card (not from memory) and compared with the old card's
+  SHA-256; a stop, a pulled reader or a flat battery resumes where it was. A
+  failing old card does not stop the move: unreadable files are listed, and
+  the old card is never called a complete backup while anything is missing.
+  After the swap JukaHub checks the new card by itself and says when the old
+  one can be reused. JukaHub OS system cards are detected. Files:
+  `sdmove*.go`; docs/SD_CARD_MOVE.md; device check SDMOVE-HW-1.
+- **Profiles for a shared handheld, and Guest** (same list: "each person gets
+  their own saves, Continue list, achievements and preferences"). Settings →
+  General → Profiles adds people; each gets their own RetroArch saves and
+  states, Continue list, playtime, trophies, favourites and look (theme,
+  wallpaper, Home layout, language, text size and accessibility). Switch from
+  Start → Switch profile or the chip on the top bar, or turn on "Ask who is
+  playing at start". Your existing data simply is your profile: nothing moves,
+  and with no other profile nothing changes. Guest plays without touching your
+  progress — no history, playtime or trophies, and its saves are wiped when the
+  session ends. Standalone emulators that keep one save folder for everyone
+  (PPSSPP, DraStic) say so before the first game instead of mixing saves
+  silently; backups, Save Manager, reset and cloud sync stay the owner's.
+  Files: `profiles_*.go`; docs/PROFILES.md; device check PROF-HW-1, follow-up
+  PROF-2.
+- **Never lose a session in standalone emulators** (same list). The 3% battery
+  guard, Power off and Power off after sleeping now protect PPSSPP, DraStic,
+  Flycast, Mednafen, DuckStation, Mupen64Plus, ports and Wine games too, not
+  just RetroArch: the emulator is asked to quit cleanly (writing a save state
+  on the way out where its own "save state on exit" option is on — JukaHub
+  checks the file really appeared), then the card is synced before the suspend
+  or power off. Emulators that load that state by themselves resume at the next
+  power-on. At 10% a game whose emulator cannot save a state by itself gets one
+  warning and a buzz: "save in the game now". Apps from the Apps screen are
+  left alone. Settings → Power & battery → Protect standalone emulators.
+  Files: `sessionsafe*.go`; docs/SESSION_SAFETY.md; device check SAFE-HW-1.
+- **Spoken navigation** (same list: "read the focused button, its current value
+  and what pressing A will do"). Settings → Accessibility → Narration reads
+  whatever is focused — its name, value and what A does ("Vibration, on.
+  Switch with A.") — across Settings, Home, the Start menu, the Games library,
+  dialogs, the top bar and the on-screen keyboard, then pop-up messages. A new
+  focus cuts the old speech off, a held direction reads only where it stops,
+  and Juka's own answers always come first; it is silent while a game runs.
+  Turn it on from anywhere without looking: hold L1 + R1 for three seconds
+  (Ctrl+Alt+Z on a keyboard). It uses the offline voice (downloaded once if
+  needed) or Windows' voice, never an online one, keeps the words it has said
+  so it answers at once the next time, and speaks at 0.8×–2.5×. Files:
+  `narrate*.go`; docs/ACCESSIBILITY.md; device check A11Y-9.
+- **Big game cards open at once** (same list: "keep an index that updates as
+  files change"). The Games library and Home keep an index of the card
+  (`data/library-index.db`): the library shows straight away as you last saw
+  it, and only folders that changed are read again. Games copied over USB, FTP
+  or from your phone appear by themselves a few seconds after the copy ends,
+  your selected game stays selected, and a game's folder is checked again when
+  it quits. A damaged index is rebuilt by itself. Game fingerprints (CRC32, up
+  to 64 MB) are worked out slowly in the background for faster game details;
+  Settings → Games & emulators has **Rebuild library index** and a switch for
+  the fingerprints. Files: `libindex*.go`, `romsetup.go`; docs/GAME_LIBRARY.md;
+  device check LIB-HW-1.
+- **Games on a home network drive** (same list: "browse a NAS from the library
+  and download a game to the card when needed, with a clear offline
+  indicator"). Settings → Network → Network drives adds a NAS or PC share —
+  SMB (found on the Wi-Fi by itself), WebDAV or SFTP, and on a PC any
+  `\\server\share` folder; passwords are kept encrypted like mail passwords.
+  Its games appear on their consoles' shelves in the Games library with a
+  network badge; **Download and play** copies one to the card (multi-disc and
+  folder games as one unit, a stopped copy resumes), and More → **Remove
+  downloaded copy** frees the space again while the saves stay. A drive that
+  does not answer dims its games and marks them Offline. SMB uses JukaHub's own
+  read-only SMB2/3 client (no mounting): user or guest sign-in with NTLMv2,
+  signed messages, SMB 3.1.1 encryption and the server's share list. Files:
+  `nas*.go`, `smb2*.go`; docs/NETWORK_DRIVE.md; device checks NAS-HW-1 and
+  SMB-HW-1.
+- **Voice tab in Chat: a free voice room, one click, nothing to sign up for**
+  (Juka, 2026-11-19: "is there a free option that we can add to chat as a
+  tab … that allows with 1 click to connect to this voice channel … do all the
+  setup so I don't have to sign up"). Chat's tab strip ends in **Voice**: a
+  click joins the community's live voice room, and L1 / R1 step onto it like
+  any tab with Join selected (passing by never opens the microphone). Calls run
+  on Mumble, the free voice chat for gamers, through a public server that
+  welcomes guests (GameMania's `mumble.gamemania.org:42069`, room
+  "Private User-Channels/JukaHub", opened on demand and removed when empty) —
+  no account, no relay to host. Private Voice Channels from People now open a
+  random-named room there too, so they work out of the box; the self-hosted
+  relay stays as an option. One TLS connection carries control and Opus voice
+  (pure-Go `github.com/thesyncim/gopus`, about 20 kbit/s instead of the
+  relay's 256), a voice gate sends sound only while you speak and resists the
+  speaker's echo, the Voice page shows who talks and who is muted (Y mutes),
+  and **Join from a phone or PC** shows a QR code of the `mumble://` address
+  that Mumla and Mumble open. Like Mumble's apps, each device makes one
+  self-signed certificate (servers need it before a guest may open a room).
+  Server and room are settings (`voiceServer`, `voiceRoom`); an invitation for
+  another server is refused. Stepping onto the Voice tab and back keeps Chat's
+  pictures loaded. Run `player\update-deps.bat` once for the new
+  module. Files: `chatvoice_mumble*.go`, `chatvoice_opus.go`,
+  `chatvoice_scene.go`; docs/VOICE_CHANNEL.md; device check VOICE-HW-1.
+- **Everyday apps: Tasks, Voice Memos, Paint, Stopwatch, Solitaire and Create
+  ZIP** (Juka, 2026-11-19: "the small OS apps I'd add next … my first three
+  would be Paint, Voice Memos and Solitaire"). A new **Everyday apps** section
+  in Tools gathers them with Notes, the Calculator, Alarms and Pomodoro; they
+  are on the Apps screen, in the Start menu and in Home search too. Notes and
+  Pomodoro had no way in on a stock config before; now they do. Every control
+  has a keyboard key and a mouse works. docs/EVERYDAY_APPS.md; device checks
+  VMEMO-HW-1, PAINT-HW-1, TASKS-HW-1 and SWZIP-HW-1.
+  - **Paint** draws pixel art (16×16 to 128×128, or a screen-sized sketch) and
+    marks up screenshots: the D-pad moves one pixel at a time (hold to speed
+    up), the left stick glides, A draws, and the Line, Rectangle, Circle and
+    Arrow tools circle or point at things. Undo and redo are on L1/R1, zoom on
+    L2/R2, tools on X and PICO-8's palette on Y; on a screenshot the eraser
+    brings the original back. Select opens File: save a PNG to
+    `Pictures/Paint` (the screenshot itself is never changed), use it as the
+    wallpaper, or as a game's cover — pixel art is enlarged without blur.
+    **Start → Mark up** in the picture viewer opens the picture in Paint. Work
+    in progress is autosaved and offered under Continue.
+  - **Voice Memos** records 16 kHz WAVs into the card's `VoiceMemos` folder
+    (also shared over FTP and in the Phone Companion's Files card) with a live
+    level and waveform, pause and resume, then lets you name the memo. Memos
+    play back with ±5-second seeking; the X menu renames, deletes, or sends one
+    to your phone as a QR code that downloads it through the Phone Companion.
+    A recording streams to the card, so a crash or a flat battery leaves a
+    "Recovered memo"; music and video pause while a memo records or plays. The
+    first visit runs a **Microphone test** that names the device it opened,
+    records a 3-second sample, plays it back and says plainly whether the
+    microphone works, hears nothing or is missing.
+  - **Solitaire** is Klondike among the built-in games (Games screen, Games
+    library, Home Tabs): draw one or three, A picks up and puts down, Y is a
+    smart move, X draws from anywhere, L1/R1 undo and redo back to the deal.
+    Safe cards fly to the foundations by themselves, the game finishes itself
+    once every card is face up, and a win ends in the bouncing-card cascade
+    with your time, moves and streak. The game and its undo history are saved
+    after every move, so you can leave at any moment and resume exactly. The
+    Games screen fits a third row of cards. FreeCell is backlog GAME-23.
+  - **Tasks & reminders** keeps checklists (Inbox and Shopping to start, a
+    Today view across lists). A task can have a day and a time, a reminder
+    (toast, bell entry and a RetroArch message during a game, after the clock
+    is trusted), a one-time alarm with its name in Alarms, and a daily or
+    weekly repeat. Tasks due on a day show in the clock's calendar, and the
+    Phone Companion has a **Tasks** card for typing tasks on the phone. Backup
+    & restore carries `tasks.json`.
+  - **Stopwatch** has a lap stopwatch and a countdown with presets; both keep
+    running anywhere in JukaHub and in games, on a clock that network time
+    cannot make jump. The countdown chimes and files a notification at zero,
+    and during a RetroArch game it says so (with 5 min, 1 min and 10 s
+    warnings) on RetroArch's own message line. A started clock gets a row in
+    the in-game menu (A start/pause, Right lap) and a Quick Settings button
+    that shows its time.
+  - **Create ZIP** in Files (Y → Create ZIP) bundles the marked files and
+    folders into a `.zip` beside them, in the background with its progress on
+    the row (press it twice to stop), after a free-space check; links are
+    never followed, dates are kept, and pictures, music, video and archives
+    are stored as they are while the rest is compressed quickly.
+  - The on-screen keyboard has one prompt every app's "name it" field uses
+    (`osPromptOpen` in osapps.go): it acts on Done only, and B drops the text.
+- **Party Mode: Guess the Game** (Juka, 2026-11-19: "a signature TrimUI
+  feature"). **Tools → Party Mode** makes the handheld a game-show host:
+  friends scan its QR code and play from their phone's browser — no app, no
+  account, no internet. Each round shows a small crop of a cover from your own
+  library that zooms out in five steps (500 down to 100 points); a phone buzzes,
+  the reveal pauses and the buzzer picks among four titles (decoys from the same
+  console). A wrong pick costs 100 and sits that player out for the round. The
+  handheld shows the round, the cover and the scoreboard, then a winner screen
+  with a podium and confetti; phones show the picture too, with sounds and
+  vibration. The handheld can take a seat itself (**Y**). With the hotspot on,
+  the lobby shows a second QR code to join the handheld's Wi-Fi, so a party
+  needs nothing else. The server (port 8319) runs only while the screen is open
+  and serves only the game; Security & trust lists it. docs/PARTY_MODE.md;
+  device check PARTY-HW-1. Ghost Challenges and Pocket Studio are in the
+  backlog's ideas list.
+- **Game Ready** (Juka, 2026-11-19: the "smarter library" list). Before a
+  library game starts, JukaHub checks what it needs: the game file (empty,
+  damaged, a `.cue`/`.gdi`/`.m3u` whose files are missing), the emulator and
+  the core its launch script names, and the BIOS that core needs in the folder
+  this RetroArch really reads. A game that cannot start shows "*Game* isn't
+  ready yet" with the file names and the folder to copy them into, instead of a
+  black screen: **A** fixes what it can (Open BIOS Doctor, Get cores, the
+  Emulators page on the right console, Remove missing players for Local play),
+  **Y** checks again and starts the game once it is fixed, **X** plays anyway
+  (twice turns the card off for that game). Things that only may matter never
+  stop a game, and the resume at power-on is never stopped. The game page shows
+  a chip (Ready, Needs BIOS, Missing disc file, No emulator…) and **More →
+  Ready check** the full report. docs/GAME_LIBRARY.md, "Game Ready".
+- **More on a game's page.** The page has a **More** button (keyboard **M**)
+  for what belongs to one title — Ready check, Manual & guide, Controls, DOS
+  settings, Saves on another device, Game Lab — and chips under the rating with
+  the short answers. docs/GAME_LIBRARY.md, "More on a game's page".
+- **ScummVM and DOS shelves.** A ScummVM adventure or a DOS game kept as a
+  folder is one game on its shelf, titled after its folder. JukaHub writes the
+  missing `.scummvm` file for the adventures it recognises (the free classics,
+  the LucasArts and Sierra adventures, Broken Sword, Simon the Sorcerer,
+  Discworld, Kyrandia, Myst — never over a file of yours) and names the folders
+  it could not. ScummVM games play with a ready-made pointer layout (D-pad or
+  stick, A/B clicks, a slow pointer on L1). A DOS folder starts with its own
+  program (never SETUP or INSTALL); **More → DOS settings** picks another and
+  sets the PC speed, graphics chip, memory and mouse speed for that game, for
+  each start only. DOSBox Pure's on-screen keyboard is on **Select** on every
+  TrimUI, the Brick included. Files' **Y → Add to DOS games** copies a game
+  folder or `.zip`/`.dosz` into `Roms/DOS`. Each game shows its controls once,
+  before its first start. docs/GAME_LIBRARY.md, "ScummVM and DOS shelves".
+- **Per-game control layouts.** **More → Controls** (or Start on a game →
+  **Controls layout**) picks a named layout with its button chart: **Arcade
+  6-button**, **Arcade 4-button (Neo Geo)**, **DS stylus** (right stick, or the
+  D-pad on a Brick, moves the stylus; R2 taps; L2 swaps the screens) and the
+  ScummVM and DOS layouts — for this game (A) or every game of the console (X).
+  It goes into the same one-launch remap file as Buttons (your own RetroArch
+  remap still wins), with the DS cores' touch option for that start. Your own
+  layouts are JSON files in `control-layouts/`. docs/CONTROLS.md, "Control
+  layouts".
+- **Game manuals.** **More → Manual & guide** lists the game's controls and
+  every manual and guide found for it — next to the ROM, in the console's
+  manuals folder, in Batocera/RetroBat gamelists, ES-DE and LaunchBox media
+  folders, or a folder of scanned pages — and opens them in the Reader, the
+  text viewer, the picture viewer or the Browser, coming back to the game's
+  page. Add your own file (Files → **Y → Use as this game's manual**) or a guide
+  link. In a game, the in-game menu (Select + L2) has **Manual** with the
+  controls and text guides. docs/GAME_LIBRARY.md, "Game manuals".
+- **Game Lab.** **More → Game Lab** plays a game in two setups — two
+  emulators or cores, or one at two CPU settings — for one launch each and
+  compares the frames it really showed, the sound glitches RetroArch logged and
+  the battery's draw (on the handheld), with a one-line verdict; **Use A/B**
+  makes the winner the game's emulator and CPU setting. **Share** writes a
+  compatibility profile; profiles in `game-lab/import` show up as Shared setups
+  for the same game. Nothing is measured that was not measured.
+  docs/GAME_LIBRARY.md, "Game Lab".
+- **Save handoff.** **More → Saves on *device*** shows this game's saves here
+  and on a paired JukaHub (PC ↔ handheld, or two handhelds) side by side and
+  moves them with one press, **Send to** or **Get from**. When both changed,
+  both versions are shown and you keep one; the other stays as a "(from
+  *device*)" copy and in a Save Manager snapshot — nothing is deleted. Content
+  and the last sync decide which is newer, never a wrong clock alone. A chip
+  says "Saves: newer on Juka's PC" and a quiet hint after a session says when
+  this device's are newer. docs/GAME_LIBRARY.md, "Save handoff".
+- **TIC-80 and RPG Maker in Get Homebrew.** Two more shelves: TIC-80 carts
+  (`.tic`) and RPG Maker 2000/2003 games played by EasyRPG, installed as a
+  folder in `Roms/EASYRPG` from the game's zip (checked for `RPG_RT.ldb`, later
+  RPG Maker versions and setup programs refused with the reason; saves kept on
+  update and delete). A page that only plays in the browser says so. The
+  handheld gets the cores from Get more cores. docs/HOMEBREW.md.
+- **Nintendo 3DS on Windows with Azahar.** `Roms\3DS` is a 3DS shelf that
+  starts games full screen in the player's own Azahar (installer, a portable
+  folder or PATH); its tile opens the download page until JukaHub installs it.
+  Handhelds say plainly that 3DS is not supported. docs/CONTROLS.md, "Azahar".
+- **GameCube and Wii on the TrimUI handhelds** (Juka, 2026-11-19: "Improve
+  Dolphin or Gamecube support on Trimui devices"). They were "not supported" on
+  every handheld; the Smart Pro S now plays them in RetroArch's Dolphin core,
+  and the A133P models (too slow for most games) can **Try anyway** in
+  **Settings → Games & emulators → GameCube & Wii**. A game's first start
+  installs the buildbot's Dolphin core and Dolphin's system files
+  (`dolphin-emu/Sys`, only what is missing) and then plays; a core from before
+  libretro/dolphin's fix for the freeze ten seconds into a game (23 October
+  2026) is replaced first. The core's first start gets background shader
+  compilation instead of a pause at every new effect, a start that RetroArch's
+  video driver could not draw switches Dolphin's override between OpenGL ES and
+  Vulkan for the next, and the games get Xbox boost (every core and the GPU at
+  full speed, JukaHub's memory handed back). `Roms/GC` and `Roms/WII` list
+  only the formats Dolphin opens (ISO, GCM, RVZ, GCZ, CISO, WIA, WBFS, M3U).
+  docs/GAME_LIBRARY.md, "GameCube and Wii on the handheld".
+- **Java programs** (Juka, 2026-11-19: "can we add Java or ability to run Java
+  files into JukaHub?"). **Tools → Java** installs Eclipse Temurin — Java 25,
+  21, 17, 11 or 8, as a JRE (about 50 MB) or a JDK (about 200 MB, for javac,
+  jshell and `java Hello.java`) — from Adoptium's GitHub releases, checked
+  against the published SHA-256 and started once before it is used; a Java the
+  computer already has (JAVA_HOME, PATH, /usr/lib/jvm, the Windows registry)
+  works too. A on a `.jar`, `.java` or `.class` in Files runs it: text programs
+  in the Terminal, windowed ones (Swing, JavaFX, LWJGL) on their own on a PC,
+  while the handheld says plainly that it has no desktop for them. The Terminal
+  gains `java`, `javac`, `jshell`, `jar`, `javaw` and
+  `java install|update|remove|status`, and a running program now reads what you
+  type (Enter or Start sends the line, Ctrl+D ends input). A Java folder comes
+  with a `Hello.java` sample. This Java cannot run Android apps (an APK's code
+  needs Android itself); AndroidRT still plays native Android games.
+  docs/JAVA.md.
+- **J2ME phone games** (Juka, 2026-11-19: "add J2ME and both"). Old Java phone
+  games (`.jar`, `.kjx`) in `Roms/J2ME` are a **J2ME** shelf in Games, played
+  in RetroArch with FreeJ2ME-Plus. The first start sets everything up: Java
+  (Tools → Java offers it), then on the handheld JukaHub's own aarch64 build of
+  the FreeJ2ME-Plus core and its jar (a few MB, checked against the release's
+  checksums). A `.jar` counts as a game only in a J2ME folder, so PortMaster,
+  Minecraft and app jars are never listed. On a PC, a FreeJ2ME core and jar in
+  RetroArch are used. The "RetroArch cores for TrimUI" workflow now also builds
+  FreeJ2ME-Plus (core and jar from one commit) into `cores-aarch64`; run it once
+  before the first J2ME game on the handheld. docs/J2ME.md.
+- **Godot games on the handheld, through the TrimUI Smart Pro Godot port**
+  (Juka, 2026-11-19: "add Godot... There is Godot Trimui Smart Pro port
+  somewhere so use that"). Godot games (`.pck`) in `Roms/GODOT` are a **Godot**
+  shelf in Games, started through the port's `Emus/GODOT/launch.sh` as the
+  firmware's menu starts them; a picture beside a game is its cover, and the
+  port's `.runtime`/`.gptk` side files are not listed. On TrimUI handhelds the
+  Emulators page has one **Godot** tile: X (or A) downloads
+  [ogregorio/trimui-tsp-godot-port](https://github.com/ogregorio/trimui-tsp-godot-port)
+  from GitHub (Kiwi's `Emus/GODOT` as the fallback when its launcher stands
+  alone), lays it over the card's `Emus/GODOT` (a port file you had edited is
+  kept in `Emus/GODOT/.jukahub-replaced/<date>`, told apart by the checksums
+  recorded at install), makes `Roms/GODOT` and copies in the port's own files
+  there without replacing any; once installed A opens the Godot games and X
+  updates. Each start logs the game's Godot version from its `.pck` header and
+  the engines the port carries, and a game that ends at once gets a
+  launch-report line for a file that is no Godot pack or a version the port has
+  no engine for. Home search "Godot", `.pck` from Files and the phone drop, and
+  Close all apps know Godot games too. The library now opens on a console's
+  shelf once its scan lands (`openGameLibraryOnSystem`), which also fixes the
+  Xbox tile's A landing on the console grid with "No Xbox games yet" on the
+  first open after boot. Untested on a device (GODOT-HW-1). (`player/godot.go`,
+  `romsetup.go`, `emulators.go`, `emulatorinstall.go`, `emusystems.go`,
+  `game_library.go`, `gamediag.go`, `artwork_match.go`, `boxart_auto.go`,
+  `files_open.go`, `companion_drop_route.go`, `homesearch_index.go`,
+  `closeall.go`, `game_library_ui.go`, `hakuxpage.go`; docs/GODOT.md)
+- **Xbox boost: the whole handheld for an Xbox game or stream** (Juka,
+  2026-11-19: "Improve XBOX performance"). On TrimUI handhelds, a hakuX game
+  or a GreenOvercast stream (X1, Cloud Gaming, the Ports row) now starts with
+  every parked core online, the performance governor at the top clock even
+  with Full speed while playing off (a global clock cap and the game's own CPU
+  options still win) and Automatic CPU speed standing aside, a devfreq GPU on
+  its performance governor, JukaHub's textures and caches emptied, its Go heap
+  returned, the warm speech recognizer, media scan and link prefetch stopped
+  and the page cache dropped, the game's process group at nice −5, "Hey Juka"
+  closed for the game, and for streams Wi-Fi power saving off. Everything is
+  put back (compare-and-restore) when the game exits, and a crash marker lets
+  the next start undo what a crash left. Settings → Games & emulators → **Xbox
+  boost** (`xboxBoost`, on by default) turns it off and shows the last
+  session. Untested on a device (XBX-11). (`player/xboxboost.go`,
+  `xboxboost_linux.go`, `xboxboost_other.go`, `game_library.go`, `ports.go`,
+  `powerprofile.go`, `autoperf.go`, `wakeword.go`, `main.go`, `setmodel.go`;
+  docs/DEVICE_TUNING.md, docs/CONFIGURATION.md, docs/CLOUD_GAMING.md,
+  docs/GAME_LIBRARY.md)
+
+- **hakuX installs itself on the Smart Pro and plays Xbox games from Games**
+  (Juka, 2026-11-19: "Xbox haiku X should auto install (in games show as
+  launcher for Xbox games)"). With Emulator updates on **Install
+  automatically** (the default), the daily pass installs hakuX once on a Smart
+  Pro whose card has no Xbox launcher: on the charger or after two idle
+  minutes, never during a game, through the same verified install as X on the
+  Xbox tile, and only when 256 MB stays free besides the download. The card
+  remembers it (`data/hakux/auto-install.json`), so a hakuX you delete is not
+  put back and an `Emus/XBOX` you made is never replaced; Notify me does not
+  announce it, and the Brick Pro (untested) keeps it a press. In Games, A on an
+  Xbox game before hakuX is there installs it at once and starts the game when
+  it is in (if you started something else meanwhile, a toast says it is ready
+  instead); a model without hakuX says why instead of "No emulator found". The
+  Xbox shelf lists only `.iso`/`.xiso` images, the formats hakuX and xemu boot.
+  Untested on a device (XBX-10). (`player/hakux_auto.go`,
+  `emuautoupdate_hakux.go`, `hakux.go`, `hakuxpage.go`, `emupicker.go`,
+  `romsetup.go`; docs/COMPATIBILITY.md, docs/GAME_LIBRARY.md)
+
+- **Python and Perl arrive by themselves for the Audit toolkit** (Juka,
+  2026-11-19). With Emulator updates on **Install automatically** (the
+  default), the daily quiet-moment pass installs Ubuntu's Python 3, Perl and
+  the Perl modules the toolkit's script tools need (TLS, XML::Writer, JSON)
+  through Linux packages when one is missing, also on the first start after
+  this update, never over a game or another install, and only with 400 MB free
+  on the card; a failed attempt is tried again at a later pass. Where the
+  firmware has its own Python, Ubuntu's is not added; Notify me and Off leave
+  them alone. Untested on a device (AUDIT-HW-1).
+  (`player/audit_interp_auto.go`; docs/TOOLBOX.md, docs/LINUX_PACKAGES.md)
+
+- **Legible reading font downloads a readable face by itself** (Juka,
+  2026-11-19). Settings → Accessibility → **Legible reading font** used only
+  faces already installed, so a TrimUI said "no system face found, using
+  Inter". Turning it on now fetches one through Display → Font's downloader:
+  Atkinson Hyperlegible (about 110 KB) for the Latin-script languages, SIL's
+  **Andika** (about 2.4 MB, with Cyrillic) for Russian, and the screen switches
+  the moment it lands. Offline it waits and fetches once JukaHub is online; a
+  face missing at start is fetched about 20 s in, and switching to Russian
+  fetches Andika. A face that cannot draw the interface language is never used,
+  so Russian shows no "…" labels. A new **Readable font** row (while the
+  setting is on) picks Auto, Atkinson Hyperlegible, Andika or a readable face
+  the device has: Left/Right step only through installed faces that can draw
+  the language and never download; A opens the full list, where picking a
+  missing face downloads it. A face removed in Display → Font is not fetched
+  back until you turn the setting on again or pick it. Andika is also in
+  Display → Font. Untested on a device (A11Y-8). (`player/legiblefont.go`,
+  `legiblefont_get.go`, `uifont.go`, `a11y.go`, `a11y_settings.go`;
+  docs/ACCESSIBILITY.md)
+
+- **Memory is freed by itself so the offline AI starts** (Juka, 2026-11-19:
+  "only 140 MB left on Juka and AI doesn't launch sometimes"). When the offline
+  model or a speech recognizer would refuse for memory, JukaHub first makes
+  room, cheapest first, and stops once there is enough: the Go heap, its own
+  picture and byte caches, idle helpers the start does not need (a loaded Piper
+  voice, the idle recognizer or model server, web-video link lookups, the media
+  library scan) and the system's file cache. For a question you asked, with no
+  game or app on screen, it may also close apps left running in the background
+  that **Close all apps & games** would close (never JukaHub's own jobs, such
+  as a Wine prefix set-up or a Ports Store install); a toast names them. "Hey
+  Juka" and warm-ups only get the light steps, at most once a minute and never
+  while a game is on screen. With less than 200 MB free on a 1 GB handheld and
+  nothing playing, the light steps also run by themselves every few minutes,
+  never closing an app. The log's `mem` lines say what was freed. Untested on a
+  device (MEMSWAP-HW-1). (`player/memfree.go`, `adaptive.go`, `closeall.go`,
+  `offline_ai.go`, `offline_ai_server.go`, `stt_local.go`, `stt_stream.go`;
+  docs/LOCAL_AI.md)
+
+- **Extra memory (swap) on 1 GB handhelds** (Juka, 2026-11-19). Settings →
+  Games & emulators → **Extra memory (swap)**, on by default on a TrimUI with
+  1.5 GB of RAM or less: two minutes after start, with no game on screen,
+  JukaHub turns on compressed swap in RAM (zram, half the RAM up to 512 MB)
+  when the kernel has it, otherwise a 256 MB `jukahub.swap` in its data folder
+  (only with that plus 1 GB free; swappiness 10, so the card is written only
+  under real pressure). A card whose file system refuses a swap file is
+  remembered and not written again, and swap that is already on is left alone.
+  Turning it off while the swapped-out pages would not fit in memory keeps it
+  on until restart rather than risk JukaHub being killed. The AI's and speech's
+  memory checks count a cautious part of the free swap; memory read-outs still
+  show RAM only. Untested on a device (MEMSWAP-HW-1). (`player/memswap.go`,
+  `memswap_linux.go`, `setmodel.go`; docs/CONFIGURATION.md, docs/LOCAL_AI.md)
+
 - **RetroArch on JukaHub's glibc 2.39, so the newest cores install and run**
   (Juka, 2026-11-19). The libretro buildbot's aarch64 nightlies need a newer
   glibc than TrimUI's 2.33 (mGBA needed GLIBC_2.35), so the core updater
@@ -2048,6 +2756,73 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Downloads panel avoids repeated queue sorting** (Juka, 2026-11-19).
+  Each redraw now shares one media and browser download snapshot across the
+  header, tabs and rows, cutting seven queue sorts to two per frame. The full
+  size panel also skips formatting a status line it does not show.
+  (`player/downloadsui.go`)
+
+- **More RAM returns when picture-heavy screens close** (Juka, 2026-11-19).
+  Media now releases its built card lists, library snapshot, and the thumbnail
+  images it used after its exit fade. The Ports and Homebrew stores release
+  screenshot textures on exit and cap decoded screenshots at 8 MB each on a
+  handheld (24 MB on desktop). The shared thumbnail texture cache now also
+  has an entry ceiling, so very small images cannot accumulate unlimited GPU
+  objects. A long Media session keeps tracking images still in memory so exit
+  can release them. Chat releases decoded pictures, avatars and message
+  layouts when it closes; a picture still open in the viewer stays until that
+  viewer closes.
+  (`player/media_hub.go`, `media_hub_render.go`, `chatstate.go`, `chat.go`,
+  `imageviewer.go`,
+  `ports_store_images.go`, `homebrew_store_images.go`, `thumbstore.go`,
+  `core.go`)
+
+- **Browser releases page memory when closed** (Juka, 2026-11-19). Leaving
+  Browser stops unfinished page, stylesheet and image requests. After the exit
+  fade, it frees parsed pages, page text, downloaded image bytes, browser image
+  textures, temporary page searches and site-info reports, then returns unused
+  heap pages to the system for apps such as offline AI. Reopening refetches the
+  last address; URL history, bookmarks, cookies, downloads and saved site data
+  remain. (`player/browser_memory.go`, `textbrowser.go`, `webpage.go`,
+  `webpage_image.go`, `thumbstore.go`, `browser.go`, `core.go`; docs/LOCAL_AI.md)
+
+- **Pointers hide after 10 seconds unused** (Juka, 2026-11-19: "Mouse should
+  auto hide when not used after 10 seconds"). The right-stick pointer is put
+  away after 10 seconds instead of 30. Mouse mode's pointer, which never timed
+  out, now hides where it is after 10 seconds without a move, click or scroll
+  while mouse mode stays on: the next D-pad or stick move, or **L2**/**R2**,
+  brings it back at the same spot, the first **A** only brings it back so
+  nothing is clicked unseen, and a panel that closes meanwhile leaves it
+  hidden. A real mouse's cursor (over the PC window, or a USB or Bluetooth
+  mouse on a handheld) hides the same way, also while the address bar's
+  keyboard is open, and comes back on the next move or click; the wheel alone
+  does not bring it back. The games mouse (**Mouse in games and apps**) is
+  unchanged: the game draws that pointer. (`player/mousehide.go`,
+  `virtualcursor.go`, `vcursor_mode.go`, `core.go`; docs/CONTROLS.md,
+  docs/CONFIGURATION.md)
+
+- **The dead-code scan now runs with `make check`** (2026-11-19).
+  Three test-only wrappers were removed so tests exercise the production
+  functions directly; the remaining test seams explain their purpose.
+
+- **Quick start in Help now guides players through JukaHub** (2026-11-19).
+  It covers first start, Home, games, Settings and where to find controls.
+  The build steps embed `docs/GETTING_STARTED.md`; `docs/QUICK_START.md`
+  remains the developer guide.
+
+- **The Patch package menu only lists real choices** (Juka, 2026-11-19).
+  Rows and menus repeated each other: a package that was not installed opened
+  a menu whose only entry was **Install** (the row already said **A Install**),
+  and every menu ended in a **Cancel** row that did nothing B does not already
+  do. **A** on a package that is not installed now installs it, straight to the
+  progress bar, and an installed package's menu is just **Update**/**Reinstall**
+  and **Remove**, closed with B, Escape or a click outside the card. Choosing
+  **Install** used to build a confirmation modal and confirm it in the same
+  breath, so it was never drawn; it now runs the install directly. The menu's
+  keyboard and controller handling share one focus mover and one close path
+  instead of repeating them in four places (`player/patch.go`,
+  `docs/PACKAGES.md`).
+
 - **The Browser is JukaHub's built-in browser again, on every device — no WPE**
   (Juka, 2026-11-19: "For browser, do not use WPE... use the built in that we
   have always... especially on TrimuiSmartPro"). The 2026-11-18 change that
@@ -2599,6 +3374,202 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **The exit status after a stop** (launch.sh). When JukaHub was asked to stop
+  (the power key, a shutdown) and quit at once, `.last-exit` could record 143 or
+  127 instead of JukaHub's own status, so the next start's boot guard could
+  misread a clean stop. The launcher now always waits a second time after a stop
+  and keeps the first status if that wait has nothing to report.
+- **Tetris froze, 2048 stopped adding tiles** (Juka, 2026-11-19: "Tetris
+  crashes when run...2048 works only twice and then no new block appears").
+  Tetris drew its preview piece after taking it as the first piece, so the
+  first game after start-up began with an empty piece; an empty piece fits at
+  every depth, and the ghost-piece loop that looks for where it lands never
+  ended, freezing the screen. The preview now comes first, and an empty piece
+  never fits. Pieces also turn inside their own square with a small wall kick
+  (the O block used to jump two columns right on every turn), and the
+  mini-games' 60 Hz tick now takes the same lock as input and drawing, so a
+  falling piece is no longer moved mid-frame or placed twice when a hard drop
+  meets a gravity step. 2048 only added a tile after a move that merged
+  tiles; a move that just slid them brought none, so the board ran dry after
+  a couple of turns. Every move that changes the board now adds one
+  ([player/games.go](player/games.go)).
+
+- **PortMaster on a stock Brick or Smart Pro, again** (report JH-QCKJ9M,
+  2026-11-20: "Fix PortMaster", TrimUI Brick, no description). Three gaps the
+  November 18 runtime work left open:
+  - Since PortMaster's launcher rework of October 2026 (PortMaster-GUI PR
+    #350) its default start hook exports `PYSDL2_DLL_PATH=/usr/lib` just
+    before pugwash, overriding the folder JukaHub had set. TRIMUI_EX links
+    SDL2 there; stock firmware keeps it in `/usr/trimui/lib`, so the menu died
+    on "could not find any library for SDL2". JukaHub's Python for PortMaster
+    now carries a `sitecustomize.py` that, as Python starts, replaces a
+    `PYSDL2_DLL_PATH` with no SDL2 in it by JukaHub's folder of SDL2 links (an
+    installed Python gets the file at its next launch)
+    ([player/portmaster_python.go](player/portmaster_python.go)).
+  - A script started by its own `#!/bin/bash` line — `device_info.txt` run on
+    its own, WestonPack's `westonwrap.sh`, a port's helper scripts — went to
+    the firmware's `/bin/bash`, which on the Brick is BusyBox's sh or missing
+    (spruceOS #1986, nx-handheld #308). When `/bin/bash` is not bash, each
+    PortMaster or port launch now runs in a mount namespace of its own whose
+    `/bin` is a read-only tmpfs folder of links to the firmware's `/bin` plus
+    the real bash the launch already uses. The firmware is not changed; the mounts end
+    with the launch; anything that fails leaves the launch as before and its
+    log says why. `portBinBash: "off"` turns it off
+    ([player/portmaster_binbash.go](player/portmaster_binbash.go)).
+  - **Why didn't it open?** and the closed-at-once toast now also read
+    PortMaster's own `log.txt`, where its launcher sends pugwash's output, and
+    name an SDL2, Python or BusyBox error found there. A port's launch log
+    ends with how long it ran and how it ended.
+  ([docs/PORTMASTER.md](docs/PORTMASTER.md))
+- **A bug report says what PortMaster did.** The diagnostics report has a
+  PortMaster section on a handheld with PortMaster or a port launch: the bash,
+  `/bin/bash` and `python3` it gets, how the last launch ended, and, for a
+  launch in the last day, the last lines of its launch log and of PortMaster's
+  `log.txt` — read from the card, no program started, scrubbed like the rest
+  ([player/portmaster_report.go](player/portmaster_report.go)).
+- **Sending a bug report no longer freezes the screen.** The report's
+  component list hashed JukaHub's own binary, ffmpeg and ffprobe on the UI
+  thread at every Preview and Send (a 1.7 s frame on a Brick in JH-QCKJ9M).
+  The digests are now kept by size and change time and worked out in the
+  background when Report a bug opens (a report sent that very moment waits at
+  most 0.3 s and says "still being hashed"), and a helper whose version probe
+  failed — yt-dlp here, up to 3 s each time — is asked again only after ten
+  minutes ([player/componentreport.go](player/componentreport.go)).
+- **Next no longer drops a song from the play-next queue.** The decoder a skip
+  stops used to pick the next track as if it had finished, so with songs queued
+  every Next press also took one off the queue; only a decoder that really
+  reached its end moves the list on now
+  ([player/musicplayer.go](player/musicplayer.go)).
+- **A port that stops at once now says why** (Juka, 2026-11-19, TrimUI
+  Brick: SuperTuxKart from the Ports Store said "Launching SuperTuxKart" and
+  nothing else happened). A port's exit status is ignored, and the quick-exit
+  check only spoke when the port's `log.txt` had a line saying loading failed,
+  so a script that died before that — under BusyBox's sh, sourcing a
+  `control.txt` it could not find, on a program the firmware cannot load —
+  came back to the details page without a word. Now a port JukaHub did not
+  stop that ends within 8 seconds always gets the "didn't start" card (within
+  20 seconds when its logs name a cause, so leaving a cloud-gaming client
+  early stays quiet), and both its logs are read: JukaHub's `data/gamediag/ports/<script>.log` (the
+  launch notes and everything the script printed, also before it redirected
+  its output) and the port's `log.txt`. The lines are sorted into causes, the
+  surest first: bash syntax refused by BusyBox (in a file PortMaster sourced,
+  or a script started by its own `#!/bin/bash`), PortMaster not found or
+  hidden by an empty folder, a newer glibc or a missing library, a program for
+  another processor, JukaHub's own bash not starting, graphics (EGL, OpenGL
+  ES, SDL video) failing, a crash, the system stopping it for memory, a
+  runtime that is missing or did not mount, a file it may not run, and
+  commands the firmware lacks (a "maybe"). The card shows the lines behind
+  each cause, or the port's last lines when nothing is recognised. **Why didn't
+  it start?** reads the same logs. And with `portLaunchVia` on `auto`, a port
+  under `Roms/` on a firmware with no full bash anywhere no longer goes through
+  the firmware's Ports launcher (BusyBox would run it) but runs directly with
+  the bash JukaHub supplies, once that is downloaded. The cause of the
+  SuperTuxKart failure itself is
+  not known yet: the card on the next try names it. (`player/gamediag_port.go`,
+  `gamediag.go`, `ports_env.go`, `ports_manage.go`, `portmaster_runtime.go`,
+  `ports_test.go`; docs/PORTMASTER.md)
+
+- An offline AI question can now clear the full set of caches immediately after
+  an automatic light trim, instead of waiting for the trim's 15-second cooldown.
+  A timed-out clear request is withdrawn so it cannot evict textures later.
+  Leaving Chat releases older processed AI pictures and video frames while
+  keeping the newest one for a follow-up.
+
+- **Video speed really changes the speed** (Juka, 2026-11-19: "Media player 2x
+  (or changing to any other speed) is not working"). The speed pill, the
+  settings sheet's Speed row and keys 1–4 only changed a label; both ffmpeg
+  decoders kept playing at 1×. A speed change now restarts picture and sound
+  where the video was, like a seek: the picture is retimed and held to the
+  source frame rate (no more frames to draw at 2× than at 1×), the sound goes
+  through `atempo` so the pitch stays, and A/V sync works as before. The clock,
+  seek bar, subtitles, resume point and Watch Party position move at the new
+  rate, and a paused video stays paused. The speed stays for the same video and
+  carries to the next one when the player moves on (L2/R2, previous/next, Up
+  Next, Shorts autoplay); another video opened from a screen starts at 1×. Live
+  streams and Watch Parties play at 1× with a toast, and hosting or joining a
+  party drops a faster video to 1×. Above 1× the handheld skips deblocking
+  frames nothing refers to and, if the picture still falls a second behind the
+  sound, decodes lighter from then on (logged). Untested on a device
+  (VSPEED-HW-1). (`player/videoplayer.go`, `avsync.go`, `videochrome.go`,
+  `videosheet.go`, `partyscene.go`; docs/CONTROLS.md)
+
+- **Music and audiobooks keep their place at another speed** (2026-11-19). At
+  1.5× or 2× the position divided the decoded sound by the speed instead of
+  multiplying it, so at 2× the clock and the saved resume point ran at a
+  quarter of the real rate, and a speed change or a resume jumped back that
+  far. (`player/audioresume.go`; docs/MUSIC_PLAYER.md)
+
+- **Aircrack-ng and Nikto install and run on the handheld** (Juka, 2026-11-19).
+  Nikto stopped at start with "Required module not found: XML::Writer":
+  Ubuntu's Perl lacks the XML::Writer and JSON modules it checks for. Install
+  and Update now bring `libxml-writer-perl` and `libjson-perl` with Perl, and
+  for a Nikto installed earlier **Terminal** or **Version** installs what is
+  missing first; a Perl "module not found" in a version report names the
+  command that installs it (`apt install` on the handheld, `cpanm` with
+  Strawberry Perl on Windows). Aircrack-ng did not install and nothing said
+  why: a failed Linux-packages install showed only a toast. The sheet now shows
+  the reason with the last lines Linux packages printed, and the log gets
+  `audit: aircrack-ng install failed: …`. The handheld recipe leaves out the
+  adapter set-up helpers, hwloc's viewer with its cairo/X11/font chain, and
+  Python; that is recorded with the package, so upgrade, repair, remove and
+  autoremove keep it (`apt show` lists it). Linux packages no longer fails a
+  whole package for a member name the card cannot hold or a file whose name is
+  already a folder, writes every program wrapper even when one fails, and
+  rebuilds missing wrappers after an install that ended early. An audit press
+  while Linux packages is busy says so instead of cancelling the running
+  install. Untested on a device (AUDIT-HW-1). (`player/secaudit.go`,
+  `auditscene.go`, `linuxpkg_install.go`, `linuxpkg_cli.go`,
+  `linuxpkg_runtime.go`, `linuxpkg_ui.go`; docs/TOOLBOX.md,
+  docs/LINUX_PACKAGES.md)
+
+- Juka's vision cache now has an 8 MB handheld / 12 MB desktop byte limit for
+  processed pictures and video frames, and releases them under memory pressure.
+  Generated video frames are limited to 16 MB before they are read into memory.
+
+- Chat image downloads now use one pending slot instead of accumulating multiple
+  32 MB buffers; avatar downloads use four 1 MB slots. Leaving Chat or clearing
+  caches cancels active requests and drops queued bytes. Late results cannot
+  restore them, and oversized avatar pictures are refused before decoding.
+
+- **Release builds embed current Help pages and filed reports show the update channel**
+  (2026-11-19). The Windows release job and both packaging scripts refresh
+  Getting started and Controls before building. The report service accepts the
+  optional channel and shows it beside the version in the filed issue.
+
+- **Cancelling Windows subtitle fetches stops the entire yt-dlp process tree**
+  (2026-11-19). The fetch uses the existing hidden `taskkill /T /F` path, with
+  a direct kill fallback, before removing its temporary folder.
+
+- **Windows update helpers start safely from folders with `&` or parentheses**
+  (2026-11-19). The detached update and rollback helper now starts through
+  the existing batch launcher, which quotes its path for `cmd.exe` and rejects
+  characters it cannot safely quote.
+
+- **New mail and calendar secrets join log redaction on the next frame**
+  (2026-11-19). A successful credential change queues a main-thread refresh;
+  if the mail store is busy, it retries until the latest secrets are covered.
+
+- **Destructive choices on Tabs Home and Remote Play now open on Keep**
+  (2026-11-19). Deleting a collection focuses Keep on its confirmation page.
+  Forgetting a PlayStation console, including with Y, and removing its saved
+  passcode ask before changing anything; B or Keep returns without a change.
+
+- **John the Ripper runs on the handheld instead of stopping at its config**
+  (Juka, 2026-11-19: "fopen: /etc/john/john.conf: No Such file or directory").
+  Ubuntu builds john 1.9.0 with `JOHN_SYSTEMWIDE=1` and
+  `-DCFG_FULL_NAME="/etc/john/john.conf"`; it reads `~/.john/john.conf` first
+  and then that built-in path, which is fatal when missing. The handheld's
+  `/etc` is the firmware's root, so the package's config only ever lands in
+  `data/linux/root/etc/john` and every run died at the second read. Linux
+  packages now copies the config to `~/.john/john.conf` (the home the password
+  database gives, which is what john uses, not `$HOME`) after every change,
+  with `$JOHN/` spelled out as the card's `root/usr/share/john` so the
+  charsets, `password.lst` and the wordlist default resolve too; a `john.conf`
+  that did not come from JukaHub is left alone. It is rewritten after every
+  package change and once at startup, so a john installed before this fix
+  works without installing anything again. (`player/linuxpkg_runtime.go`,
+  `docs/LINUX_PACKAGES.md`, `docs/TOOLBOX.md`)
 
 - **The X1 pill is green only while an Xbox is actually there** (Juka,
   2026-11-19: "XBOX1 on main menu showing green even though it's not

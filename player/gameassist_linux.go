@@ -458,6 +458,7 @@ func (s *gaPadSession) step(now time.Time) error {
 // feed follows one event: the button or axis it moves, the chord, and while
 // the pad is held the presses the overlay acts on.
 func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
+	vfoNotePadEvent(ev, s.held) // the controls check counts presses (verified_observe.go)
 	switch ev.Type {
 	case evdevEvKey:
 		if ev.Code >= gaEvdevBtnDpadUp && ev.Code <= gaEvdevBtnDpadRight {

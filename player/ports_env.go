@@ -22,7 +22,9 @@ package main
 //     Ports launcher (the Emus/PORTS/config.json launch entry) when there is one, exactly as
 //     MainUI runs it, so whatever that launcher sets up (HOME, the folder
 //     PortMaster lives in, the CPU) happens here too. Settings key
-//     portLaunchVia: "auto" (that), "firmware" or "direct".
+//     portLaunchVia: "auto" (that), "firmware" or "direct". On a TrimUI with
+//     no full bash anywhere on the firmware, "auto" runs the script directly
+//     under JukaHub's bash instead, once it is there (BusyBox would run it).
 //   - Run directly, the script must still find PortMaster. Port scripts look
 //     in /opt/system/Tools/PortMaster, /opt/tools/PortMaster,
 //     ${XDG_DATA_HOME:-$HOME/.local/share}/PortMaster, then
@@ -319,6 +321,15 @@ func portBuildLaunchPlan(config *Config, script string, master bool) portLaunchP
 		if fw == "" && via == "firmware" {
 			plan.Notes = append(plan.Notes, "portLaunchVia=firmware but no configured Emus/PORTS launcher for this script; running it directly")
 		}
+		// The firmware's launcher starts the script with the firmware's own
+		// shell. With no real bash anywhere on the firmware that is BusyBox,
+		// where PortMaster's scripts die at once: run it directly instead,
+		// under the bash JukaHub supplies (portmaster_runtime.go), once it is
+		// there.
+		if fw != "" && via == "auto" && pmFirmwareHasNoBash() && privateGlibcBashReady() {
+			plan.Notes = append(plan.Notes, "not through the firmware's Ports launcher "+fw+": this firmware has no full bash, so JukaHub runs the script with its own")
+			fw = ""
+		}
 	}
 	if fw != "" {
 		plan.Mode = portLaunchFirmware
@@ -530,9 +541,33 @@ func portLogOpen(name, script string, plan portLaunchPlan) (*os.File, string) {
 	for _, n := range plan.Notes {
 		fmt.Fprintf(&b, "# note: %s\n", n)
 	}
-	b.WriteString("# ---- the script's own output follows ----\n")
+	b.WriteString(portLogOutputMarker + "\n") // gamediag_port.go reads the output after it
 	_, _ = f.WriteString(b.String())
 	return f, path
+}
+
+// portLogEndPrefix starts the line JukaHub adds to a port's launch log when
+// the launch ended (portLogNoteEnd); the diagnosis does not count it as the
+// script's output.
+const portLogEndPrefix = "# JukaHub: the launch ended"
+
+// portLogNoteEnd adds how long the launch ran and how it ended to its log, so
+// a bug report or the diagnosis can tell a launch that died at once from one
+// that ran. Off the main thread.
+func portLogNoteEnd(path string, waitErr error, ran time.Duration) {
+	if path == "" {
+		return
+	}
+	how := "exit status 0"
+	if waitErr != nil {
+		how = waitErr.Error()
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(f, "\n%s after %s (%s)\n", portLogEndPrefix, ran.Round(100*time.Millisecond), how)
+	_ = f.Close()
 }
 
 // portLogWatch empties path whenever it grows past portLogMaxBytes, until

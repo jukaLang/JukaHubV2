@@ -72,6 +72,9 @@ func bugrepQuickTitle(form bugrepForm) string {
 // bugrepOpenScreen opens Report a bug. Cross-area contract: the Tools hub, the
 // Community card and Security & trust call it.
 func bugrepOpenScreen(config *Config) {
+	// The diagnostics' component digests are hashed in the background now,
+	// not on the UI thread when Send is pressed (componentreport.go).
+	componentVersionsWarm(config)
 	tbxOpenScene(config, bugrepSceneName)
 }
 

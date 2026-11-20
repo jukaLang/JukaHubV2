@@ -111,10 +111,10 @@ host_go() {
 		die "could not fetch the Go modules"
 	fi
 	# The Help pages (player/helpdoc.go) embed copies of docs/CONTROLS.md and
-	# docs/QUICK_START.md from player/helpdocs/, because go:embed cannot reach
+	# docs/GETTING_STARTED.md from player/helpdocs/, because go:embed cannot reach
 	# ../docs: refresh them (LF) from docs/ before the build. Without docs/ the
 	# committed copies are built in.
-	for f in QUICK_START.md CONTROLS.md; do
+	for f in GETTING_STARTED.md CONTROLS.md; do
 		[ -f "$repo/docs/$f" ] && [ -d "$repo/player/helpdocs" ] || continue
 		tr -d '\r' < "$repo/docs/$f" > "$repo/player/helpdocs/$f.tmp" &&
 			mv -f "$repo/player/helpdocs/$f.tmp" "$repo/player/helpdocs/$f" ||

@@ -47,7 +47,9 @@ would otherwise overwrite it on the next save).
 | `title`, `author`, `description` | string | project metadata |
 | `variables` | object | design tokens and settings, see below |
 | `channel_profile` | object | `channel_id` and optional `token` for the JukaLand chat channel |
-| `variables.Custom.voiceRelayURL` | string | Secure WebSocket base URL for live Chat Voice Channels, for example `wss://voice.example.com/voice`; set from Chat → Voice Channel → Voice relay. `JUKAHUB_VOICE_RELAY` overrides it. See [Voice Channels](VOICE_CHANNEL.md). |
+| `variables.Custom.voiceServer` | string | Mumble server (`host:port`) for Chat's Voice tab and private Voice Channels; unset means the free public default `mumble.gamemania.org:42069`. Set from Chat → Voice → Voice server. `JUKAHUB_VOICE_SERVER` overrides it. See [Voice](VOICE_CHANNEL.md). |
+| `variables.Custom.voiceRoom` | string | Channel path of the voice room on that server, last part being the room; unset means `Private User-Channels/JukaHub`. Private Voice Channels open next to it. |
+| `variables.Custom.voiceRelayURL` | string | Optional self-hosted relay for private Voice Channels (the voice room always uses the voice server), a secure WebSocket base URL such as `wss://voice.example.com/voice`; set from Chat → Voice → Own voice relay, empty clears it. `JUKAHUB_VOICE_RELAY` overrides it. See [Voice](VOICE_CHANNEL.md). |
 | `scenes` | array | the screens, see below |
 
 ## `variables`
@@ -85,6 +87,7 @@ settings such as `search_query` or `stream_url`.
 | `travelLock` | bool | Settings → Power & battery → **Travel lock** (TrimUI Smart Pro only; default off): the FN switch locks the power button. Turning it on stores the switch's current position as unlocked (`travelLockAt`, bookkeeping: the reading `"0"`/`"1"` that means locked). Locked, a press does not wake the device (each wake but an alarm's goes back to sleep) and a power-on is turned straight back off by the boot hook `<SD>/System/starts/00-jukahub-travel-lock.sh`, which the setting writes and removes (it logs to `travel-lock.log` in the JukaHub folder). Slide the switch back, or delete the hook, to undo. |
 | `sleepPowerOff` | text: whole hours (`"1"`…`"48"`) or minutes with an `m` (`"15m"`, `"30m"`); `"0"` is Off | Settings → Power & battery → **Power off after sleeping**, and Quick Settings → **Auto power off** (handheld only; stops Off, 15 min, 30 min, 1, 2, 4, 6, 8, 12, 24 and 48 h; missing = `"6"`, or `"1"` on a kernel that only light-sleeps; a hand-edited delay over a week is held at a week): after that long asleep the handheld wakes itself on the RTC alarm with the screen off, saves the RetroArch game the sleep was holding (save state + quit through RetroArch's network commands; only RetroArch's exit counts as proof) and powers off. On a charger, or with a game it cannot save that way (a standalone emulator, a port, network commands off, the in-game menu open), it goes back to sleep instead. Time asleep is the longer of BOOTTIME's and the RTC's count (a kernel that leaves the suspend out of BOOTTIME no longer hides the sleep). A NextUI pak game sleeping in minarch gets the same deadline: when minarch saves the game for its sleep (NextUI's `auto_resume.txt` naming the running game, written with its slot-9 state) the RTC alarm is set for the delay, and a wake on that alarm (no power press, no JukaHub alarm due) powers the device off, on a charger too; the marker the wake removed is put back so the next power-on resumes the game. A core without save states, or a marker JukaHub did not see before the suspend, gets no deadline. In Quick Settings, A turns it Off or back on at the last delay (kept in the bookkeeping key `sleepPowerOffLast`) and Left/Right step it. Needs an RTC wake alarm; the row says when there is none |
 | `resumeAtPowerOn` | bool | Settings → Power & battery → **Resume game at power on** (default on): the game that power off saved starts again at the next power-on, boot animation skipped, back at its state through RetroArch's auto-load (needs `savestateResume`). Hold **B** at power-on to skip. The one-shot marker `data/resume-at-power-on.json` is deleted as soon as it is read |
+| `saveFlushSeconds` | number | Seconds between RetroArch's writes of a changed in-game (battery) save during games started from JukaHub (default `10`, at most `3600`; `0` leaves RetroArch's own setting alone). Sets `autosave_interval` for that launch only, and only when your own `retroarch.cfg` value is missing or 0; your value comes back when the game ends. RetroArch writes only when the save changed. See [Pick up and play](PICK_UP_AND_PLAY.md#your-progress-is-safe) |
 | `powerKeyMusic` | `"screen-off"`/`"sleep"` | Settings → Power & battery → **Power button while music plays** (handheld only; default `"screen-off"`): with music playing and no game, the power button only turns the screen off and the music keeps playing ([MUSIC_PLAYER.md](MUSIC_PLAYER.md#screen-off)); `"sleep"` sleeps and pauses it |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
@@ -93,7 +96,10 @@ settings such as `search_query` or `stream_url`.
 | `usbBrowserLink` | bool | Settings → Network → **Browser over USB** (default on, handheld only, shown while USB file transfer is on): the cable also carries a small network, so the computer's browser opens the Phone Companion page at `http://10.73.73.1`; needs RNDIS, ECM or NCM in the firmware's kernel. Switching it re-connects the port. See [USB_FILE_TRANSFER.md](USB_FILE_TRANSFER.md#open-jukahub-in-your-browser-over-the-cable) |
 | `vpnEnabled`, `vpnRoute` | bool, `""`/`"config"` | Settings → Network → **VPN** (default off): send the device's traffic through the WireGuard configuration in `data/vpn.json` (imported in Settings, Files or the phone companion; never stored here), and **Send through the VPN**: everything (`""`) or only the configuration's `AllowedIPs` (`"config"`). On without a configuration does nothing; see [VPN.md](VPN.md) |
 | `dnsMode`, `dnsServers` | `""`/`"cloudflare"`/`"google"`/`"quad9"`/`"adguard"`/`"family"`/`"opendns"`/`"custom"`, text | Settings → Network → **DNS** (default `""`, Automatic: the network's own servers): the servers that turn names into addresses — a public service, or `"custom"` with up to three IPv4/IPv6 addresses in `dnsServers` separated by spaces or commas (**Custom DNS servers**). On the handheld (as root) for the whole system through `resolv.conf`, kept after every DHCP lease and put back on Automatic, in safe mode and at quit; on Windows for JukaHub's own lookups. A VPN configuration with `DNS =` wins while it runs. Protected from pushed designs; see [DNS.md](DNS.md) |
-| `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
+| `libraryFingerprints` | bool | Settings → Games & emulators → **Fingerprint games in the background** (default on): the CRC32 of games up to 64 MB, read one at a time at the lowest priority while nothing plays and the battery is above 30% (or charging), kept in the library index `data/library-index.db` (**Rebuild library index** starts it over); game details and cover matching use it. Off: a game's CRC32 is read only when its page asks. See [GAME_LIBRARY.md](GAME_LIBRARY.md) |
+| `protectStandaloneEmus` | bool | Settings → Power & battery → **Protect standalone emulators** (default on): at 3% battery, at Power off and at Power off after sleeping, a standalone emulator (PPSSPP, DraStic, Flycast, Mednafen, DuckStation, Mupen64Plus, ports, Wine games) is asked to quit cleanly, saving a state on the way out where its own option is on, before the card is synced; at 10% one that cannot save by itself is named. Last record: `data/sessionsafe-last.json`. See [SESSION_SAFETY.md](SESSION_SAFETY.md) |
+| `narration`, `narrationRate`, `narrationHints`, `narrationToasts`, `narrationVoice` | bool, `"80"`…`"250"`, bool, bool, `"default"`/`"female"`/`"male"` | Settings → Accessibility → **Narration** (default off; hold L1 + R1 for 3 s or press Ctrl+Alt+Z to switch it from anywhere): speaks the focused control's name, value and what A does, with the offline voice (Windows' own voice on a PC); the speaking rate in percent, whether hints and pop-up messages are read, and the voice. See [ACCESSIBILITY.md](ACCESSIBILITY.md) |
+| `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state; on a Smart Pro whose card never had an Xbox launcher, `install` also installs hakuX once, and `data/hakux/auto-install.json` then records that the card had one, so a deleted hakuX is not put back). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
 | `retroArchGlibc` | `"auto"`/`"always"`/`"off"` | Settings → Games & emulators → **RetroArch's C library** (64-bit TrimUI handhelds): which glibc RetroArch starts on when JukaHub launches a game — `auto` (default, **Automatic**: only a game whose core cannot load on the firmware's glibc 2.33 and can on JukaHub's private glibc 2.39, plus RetroArch's own menu once that runtime is installed; so the core updater installs the newest buildbot nightlies), `always` (**JukaHub's glibc 2.39**: every RetroArch launch), `off` (**Firmware's only**: never; builds that need a newer glibc are refused and put back). The runtime is the one in [`PRIVATE_GLIBC.md`](PRIVATE_GLIBC.md), downloaded the first time a core needs it; RetroArch runs on it inside the game's own mount namespace, the card's RetroArch is not changed, and a RetroArch that fails the start-up probe stays on the firmware's (`data/private-glibc/ra/probe.json`). Games started from the firmware's own menu still use the firmware's glibc |
 | `emuPickAsk` | `"first"`/`"always"`/`"never"` | Settings → Games & emulators → **Ask which emulator**: how often a game whose console has more than one emulator or core (its own launchers, the other scripts its `Emus` folder lists, installed RetroArch cores that play it) asks **Which emulator?** — `first` (default: once per game; A plays and remembers it for that game, Y plays just once), `always` (every launch; Y always uses the one picked), `never` (the one used last, else the recommended one). A game's or console's pin always wins. Settings → Games & emulators → **Get more cores** sits beside it (handheld; which consoles were done is kept in `emu-morecores.json` beside the patch state, not in the config) |
 | `google_client_id`, `google_client_secret` | string, string (`ENC:`…) | Your own Google OAuth client ("TVs and Limited Input devices") for Drive save sync, set from the phone (Tools → Save sync → **Set up Google sign-in**); used when `JUKAHUB_GOOGLE_CLIENT_ID` is not in the environment, before the client stamped into the build. The secret is encrypted with the device's key; neither is exported with settings. WebDAV keeps its sign-in in `data/webdav.json`, not the config. See [Cloud save sync](CLOUD_SYNC.md) |
@@ -148,7 +154,9 @@ the same as the switch.
 
 `mouseMode` (Settings → Controls → **Mouse mode**, on by default) lets the held
 **Select + L1** chord, and **F6** on a keyboard, turn mouse mode on and off: a
-pointer that stays up and that the D-pad and both sticks move
+pointer that stays on (left alone for 10 seconds it hides where it is until
+the next move or scroll; the first **A** then only shows it) and that the
+D-pad and both sticks move
 ([Controls](CONTROLS.md#mouse-mode-hold-select--l1)). Off, the chord does
 nothing and L1 is always the shoulder.
 
@@ -183,6 +191,25 @@ together in a game JukaHub launched saves the screen at once, no hold, as a
 second ([Controls](CONTROLS.md#screenshot-in-a-game-select--r1)). The game
 sees the press too. In JukaHub's own menus the pair stays the control-profile
 switch.
+
+`openBooksWith` (Settings → Media & playback → **Open books with**, shown when
+KOReader is installed in the card's Apps folder): `"jukahub"` (the default)
+opens PDF and EPUB in JukaHub's reader; `"koreader"` sends them to KOReader
+instead (Files, chat, game manuals). Open with… → Reader and Y on a manual
+still use JukaHub's reader, and it is the fallback when KOReader does not
+start. Formats JukaHub cannot show (comics, DjVu, FB2, MOBI/AZW, XPS, CHM,
+Word) open in KOReader from Files whenever it is installed. JukaHub hands the
+book to KOReader's launch script when the script passes its arguments on
+(`"$1"`/`"$@"`); otherwise it runs `luajit reader.lua <book>` from KOReader's
+folder.
+
+`ctlModeScreen` (Controller Mode → **Screen while playing**): `"off"` (the
+default) turns the panel off 15 seconds after a link starts forwarding (tap
+Menu to light it), `"on"` keeps the live controller visible.
+`ctlModeUSBShape` (Controller Mode → USB cable → **Shape**): `"xbox"` (the
+default, an Xbox 360 controller) or `"hid"` (a generic gamepad). Layouts and
+paired PCs live in `controller-mode/` in the data folder, not in this file
+([Controller Mode](CONTROLLER_MODE.md)).
 
 `jukaVoice` (Settings → Voice & AI → **Juka's voice**): `"voice"` (the
 default) speaks the voice assistant's answers — the orb, the Voice command
@@ -513,6 +540,43 @@ how busy the CPU is and remembers each app's level in `auto-performance.json`.
 A game's own CPU profile or limit wins; with `powerProfiles` (Full speed while
 playing) off it only ever lowers the clock.
 
+`memorySwap` (bool, default `true` on TrimUI handhelds with 1.5 GB of RAM or
+less, `false` with more) is Settings → Games & emulators → **Extra memory
+(swap)**: two minutes after start, with no game on screen, JukaHub turns on
+compressed swap in RAM (zram, half the RAM up to 512 MB) when the kernel has
+it, otherwise a 256 MB `jukahub.swap` in its data folder (512 MB with more than
+16 GB free; only with its size plus 1 GB free) at swappiness 10. Nothing is
+added while any swap is already on. A card whose file system refuses a swap
+file is remembered in `memswap.json` (with the kernel and file system) and not
+written again until the switch goes off and on. Off switches JukaHub's own
+swap off, deletes the file and puts the swappiness back (with less memory
+free than the swap holds it stays on until the next start). See
+[LOCAL_AI.md](LOCAL_AI.md) for how the AI's memory check counts it.
+
+`xboxBoost` (bool, default `true`) is Settings → Games & emulators → **Xbox
+boost** on TrimUI handhelds: for an Xbox game (hakuX) or a GreenOvercast stream,
+the launch runs at full CPU speed even with `powerProfiles` off (a
+`powerProfileMaxFreq` cap and the game's own CPU options still apply) with
+Automatic CPU speed standing aside, parked cores come online, a devfreq GPU
+runs at full speed, JukaHub frees its caches and idle helpers, the game's
+process group runs at nice −5, "Hey Juka" stays closed in the game, and a
+stream gets Wi-Fi power saving off. All of it is put back when the game exits;
+see [DEVICE_TUNING.md](DEVICE_TUNING.md#xbox-boost). Where the handheld plays
+GameCube and Wii games (`gamecube` below), they get the same boost.
+
+`gamecube` (`"auto"`/`"on"`/`"off"`, default `"auto"`) is Settings → Games &
+emulators → **GameCube & Wii** on TrimUI handhelds: whether GameCube and Wii
+games play here, in RetroArch's Dolphin core. `auto` (**Automatic**) plays them
+on the Smart Pro S (A523) and not on the A133P models, `on` (**On**, or **Try
+anyway** on an A133P) plays them on any model, `off` never (JukaHub then sets
+nothing up for them; a Dolphin core installed by hand still starts them). While
+they play,
+the first start of a game sets the core and Dolphin's system files up, and
+JukaHub keeps `dolphin.json` in its data folder: the core file it last installed
+or checked (so a build from before the October 2026 freeze fix is replaced
+once) and the video driver it wrote into Dolphin's RetroArch override. See
+[GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
+
 `led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It
 is applied to the RGB value rather than to the sysfs `brightness` file, because
@@ -560,12 +624,16 @@ contrast, exposure and colour temperature over its own frames instead
 The nodes are written again after a wake.
 
 `uiFont` is Settings → Display → **Font**: empty or `inter` is the bundled Inter;
-otherwise a downloaded face's id (`atkinson`, `lato`, `firasans`, `ubuntu`,
-`poppins`, `kanit`, `comicneue`, `sharetechmono`, `vt323`, `silkscreen`,
-`pressstart`, `notosansjp`) or `file:<name>` for a .ttf/.otf in the data
-folder's `fonts` folder (TrimUI: `<JukaHub>/data/fonts`; Windows:
-`%APPDATA%\JukaHub\fonts`). Nothing is downloaded until a face is picked, and
-a face whose file is missing draws in Inter.
+otherwise a downloaded face's id (`atkinson`, `andika`, `lato`, `firasans`,
+`ubuntu`, `poppins`, `kanit`, `comicneue`, `sharetechmono`, `vt323`,
+`silkscreen`, `pressstart`, `notosansjp`) or `file:<name>` for a .ttf/.otf in
+the data folder's `fonts` folder (TrimUI: `<JukaHub>/data/fonts`; Windows:
+`%APPDATA%\JukaHub\fonts`). Nothing is downloaded until a face is picked —
+the one exception is Settings → Accessibility → **Legible reading font**
+(`a11y_legible_font`), which fetches Atkinson Hyperlegible, or Andika for a
+Russian interface, into the same folder by itself (see
+[ACCESSIBILITY.md](ACCESSIBILITY.md#legible-reading-font)) — and a face whose
+file is missing draws in Inter.
 
 The hotspot (Tools → Hotspot) keeps its name and password in `_hotspot_ssid`
 and `_hotspot_pass`; the underscore keeps them out of exported settings. See

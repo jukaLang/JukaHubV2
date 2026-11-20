@@ -46,6 +46,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,7 +62,98 @@ const (
 	// pmPythonProbeCode is what PortMaster needs from a Python: ctypes for
 	// SDL2, ssl for its downloads, zipfile and hashlib for the ports.
 	pmPythonProbeCode = "import sys; assert sys.version_info >= (3, 8); import ctypes, json, ssl, zipfile, hashlib; print('" + pmPythonProbeOK + "')"
+	// pmPythonSDLEnv names, for pmPythonSiteText, the folder of SDL2 links
+	// JukaHub made (pmSDLDir).
+	pmPythonSDLEnv = "JUKAHUB_PYSDL2_DLL_PATH"
 )
+
+// pmPythonSiteText is the sitecustomize.py JukaHub puts into its own Python.
+// Since the launcher restructure of October 2026 (PortMaster-GUI PR #350),
+// PortMaster's default pm_hook_run_pugwash exports PYSDL2_DLL_PATH=/usr/lib —
+// where TRIMUI_EX links SDL2. Stock TrimUI firmware keeps SDL2 in
+// /usr/trimui/lib only, so pugwash died on "could not find any library for
+// SDL2" whatever JukaHub had set before the launcher ran. Python imports this
+// module at start, after the launcher's export and before pugwash imports
+// sdl2: when no folder PYSDL2_DLL_PATH names holds SDL2, JukaHub's folder of
+// links takes its place. Only JukaHub's Python has it; a firmware or TRIMUI_EX
+// Python is never given one.
+const pmPythonSiteText = `# Written by JukaHub (portmaster_python.go) into the Python it keeps for
+# PortMaster on stock TrimUI firmware. PortMaster's launcher may point
+# PYSDL2_DLL_PATH at /usr/lib, where TRIMUI_EX links SDL2; stock firmware keeps
+# SDL2 in /usr/trimui/lib. When no folder named there holds SDL2, the folder of
+# links JukaHub made is used instead.
+import os as _jh_os
+
+
+def _jukahub_sdl2_path():
+    mine = _jh_os.environ.get("` + pmPythonSDLEnv + `", "")
+    if not mine:
+        return
+    names = ("libSDL2-2.0.so.0", "libSDL2-2.0.so", "libSDL2.so")
+    cur = _jh_os.environ.get("PYSDL2_DLL_PATH", "")
+    for folder in cur.split(_jh_os.pathsep):
+        if folder and any(_jh_os.path.exists(_jh_os.path.join(folder, n)) for n in names):
+            return
+    _jh_os.environ["PYSDL2_DLL_PATH"] = mine
+
+
+try:
+    _jukahub_sdl2_path()
+except Exception:
+    pass
+del _jukahub_sdl2_path, _jh_os
+`
+
+// pmPythonSiteDone makes pmPythonEnsureSite look at the card once a session.
+var pmPythonSiteDone atomic.Bool
+
+// pmPythonEnsureSite writes pmPythonSiteText as sitecustomize.py into each
+// lib/python3.*/site-packages of the Python installed at dir, unless it is
+// there already. A Python installed before this file existed gets it at its
+// next launch.
+func pmPythonEnsureSite(dir string) error {
+	libs, _ := filepath.Glob(filepath.Join(dir, "lib", "python3.*"))
+	wrote := 0
+	for _, lib := range libs {
+		if !dirExists(lib) {
+			continue
+		}
+		site := filepath.Join(lib, "site-packages")
+		file := filepath.Join(site, "sitecustomize.py")
+		if old, err := os.ReadFile(file); err == nil && string(old) == pmPythonSiteText {
+			wrote++
+			continue
+		}
+		if err := os.MkdirAll(site, 0o755); err != nil {
+			return err
+		}
+		tmp := file + ".tmp"
+		if err := os.WriteFile(tmp, []byte(pmPythonSiteText), 0o644); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if err := os.Rename(tmp, file); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		wrote++
+	}
+	if wrote == 0 {
+		return errors.New("the Python has no lib/python3.* folder")
+	}
+	return nil
+}
+
+// pmPythonSiteCheck runs pmPythonEnsureSite once a session for the installed
+// Python (pmRuntimeEnv; a few hundred bytes compared on the card).
+func pmPythonSiteCheck(bin string) {
+	if bin == "" || !pmPythonSiteDone.CompareAndSwap(false, true) {
+		return
+	}
+	if err := pmPythonEnsureSite(filepath.Dir(bin)); err != nil {
+		logWarn("portmaster", "could not add JukaHub's sitecustomize.py to PortMaster's Python: %v", err)
+	}
+}
 
 // pmPythonAssetRe matches an aarch64 glibc install-only archive in SHA256SUMS:
 // minor, patch, release date, stripped.
@@ -506,6 +598,9 @@ func pmPythonInstall(ctx context.Context, progress func(done, total int64), phas
 	defer os.RemoveAll(stage)
 	if err := pmPythonExtract(ctx, archive, stage); err != nil {
 		return err
+	}
+	if err := pmPythonEnsureSite(stage); err != nil {
+		return fmt.Errorf("adding sitecustomize.py: %w", err)
 	}
 	if phase != nil {
 		phase(installPhaseVerify)

@@ -91,9 +91,15 @@ func installBarBeginLabelled(tool, label string) {
 // Reading them in a second call let a begin from another goroutine slip in
 // between and hand this run the other one's identity.
 func installBarBeginRun(tool string) (uint64, context.Context) {
+	return installBarBeginRunLabelled(tool, "")
+}
+
+// installBarBeginRunLabelled is installBarBeginRun with the card's title: an
+// update, a removal or a rollback ("Removing KOReader") is not "Installing".
+func installBarBeginRunLabelled(tool, label string) (uint64, context.Context) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
-	installBarBeginLocked(tool, "")
+	installBarBeginLocked(tool, label)
 	return installBar.gen, installBar.runCtx
 }
 

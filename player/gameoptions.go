@@ -430,7 +430,8 @@ func gameOptionsFor(path string) gameOptions {
 	gameOptionsMu.Lock()
 	defer gameOptionsMu.Unlock()
 	ensureGameOptionsLocked()
-	return gameOptionsStore[key]
+	// A Game Lab run's CPU settings, for its one launch only (gamelab.go).
+	return gameLabOptions(key, gameOptionsStore[key])
 }
 
 // setGameOptions stores or clears one game's overrides. An option set back to

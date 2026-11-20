@@ -837,6 +837,10 @@ func drawBrowserFavicon(r *sdl.Renderer, config *Config, doc *webDocument, rect 
 // the layout needs, and always stores an entry per key so the layout never
 // has to probe a second time.
 func fetchWebImages(doc *webDocument) {
+	fetchWebImagesContext(context.Background(), doc)
+}
+
+func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 	if doc == nil {
 		return
 	}
@@ -927,7 +931,7 @@ func fetchWebImages(doc *webDocument) {
 	available := sync.NewCond(&mu)
 	inFlight := 0
 	var wg sync.WaitGroup
-	ctx, cancel := context.WithTimeout(context.Background(), webImagePassTimeout)
+	ctx, cancel := context.WithTimeout(parent, webImagePassTimeout)
 	defer cancel()
 
 	var remote []string

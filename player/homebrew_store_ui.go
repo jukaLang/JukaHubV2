@@ -5,14 +5,13 @@ package main
 //
 // The page is the tool screens' frame, in Home's glass, like the Ports Store
 // (ports_store_ui.go): the shared header with a read-out, then the console
-// chips (All and the ten; L1/R1 step through them), the search, sort and key
-// chips, a one-line summary and the grid of cards. A on a card opens the
+// chips (All and the twelve; L1/R1 step through them), the search, sort and
+// key chips, a one-line summary and the grid of cards. A on a card opens the
 // game's page over the screen; L1/R1 there step to the next game of the
 // list. X installs (or updates) straight from a card; Y opens the options.
 
 import (
 	"context"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -59,6 +58,7 @@ type hbDetail struct {
 	body      string
 	fileNote  string
 	fileBad   bool
+	webOnly   bool // its only build plays in a browser: no Install
 	infoGen   uint64
 	focus     int
 	scroll    int32
@@ -373,7 +373,10 @@ func hbDetailFill() {
 		d.facts = append(d.facts, line)
 	}
 	if r, ok := hbInstalled(it); ok {
-		d.facts = append(d.facts, "Installed: "+filepath.Base(r.Path))
+		d.facts = append(d.facts, "Installed: "+hbInstalledName(r))
+		if r.Note != "" {
+			d.facts = append(d.facts, r.Note)
+		}
 	}
 	var b strings.Builder
 	b.WriteString(setOr(it.desc, "itch.io's list has no description for this game — its page has more."))
@@ -410,21 +413,15 @@ func hbDetailLookup(it *hbItem) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		data, derr := hbGameDataFor(ctx, link)
-		note, bad := "", false
+		note, bad, web := "", false, false
 		if derr == nil && key != "" && (owned || keyID > 0 || hbPriceFree(data.Price)) {
 			ups, err := hbFetchUploads(ctx, key, data.ID, keyID)
-			switch {
-			case err != nil:
+			if err != nil {
 				note, bad = "Its files could not be read: "+firstLine(err.Error()), true
-			default:
-				if pick, ok := hbPickUpload(ups, consoles); ok {
-					note = "File: " + pick.Upload.Filename
-					if pick.Upload.Size > 0 {
-						note += " · " + humanBytes(pick.Upload.Size)
-					}
-				} else {
-					note, bad = "No cartridge for these consoles here — it may be a PC or web game", true
-				}
+			} else {
+				// The cartridge, an RPG Maker game's zip, or why there is
+				// none (homebrew_tic80.go).
+				note, bad, web = hbUploadsNote(ups, consoles)
 			}
 		}
 		tbxPost(func() {
@@ -436,7 +433,7 @@ func hbDetailLookup(it *hbItem) {
 			if !hb.detail.open || hb.detail.infoGen != gen {
 				return
 			}
-			hb.detail.fileNote, hb.detail.fileBad = note, bad
+			hb.detail.fileNote, hb.detail.fileBad, hb.detail.webOnly = note, bad, web
 			hbDetailFill()
 		})
 	}()
@@ -469,6 +466,9 @@ func hbDetailButtons() []hbButton {
 	case hbKeyGet() == "":
 		b = append(b, hbButton{label: "Page on itch.io", act: hbActPage},
 			hbButton{label: "Add itch.io key", act: hbActKey, primary: true})
+	case d.webOnly:
+		// A browser-only game (most TIC-80 pages): itch.io plays it.
+		b = append(b, hbButton{label: "Page on itch.io", act: hbActPage, primary: true})
 	default:
 		label := "Install"
 		if hasJob && st == hbJobFailed {
@@ -826,6 +826,9 @@ func hbPlay(config *Config, it *hbItem) {
 			ShowToast("Cannot start "+it.title+": "+firstLine(err.Error()), ToastKindError)
 			return
 		}
+		if gameLaunchWasHeld(game.Path) {
+			return // a card asks first (gamelaunch_hooks.go)
+		}
 		recordPlayed(config, r.Path)
 		PlaySuccessSound()
 		ShowToast("Playing "+it.title, ToastKindSuccess)
@@ -841,7 +844,7 @@ func hbConfirmDelete(config *Config, it *hbItem) {
 	PlayErrorSound()
 	link, title := it.key, it.title
 	tbxOpenSheet(config, tbxSheetSpec{
-		title: "Delete " + title + "?", subtitle: filepath.Base(r.Path), icon: "trash",
+		title: "Delete " + title + "?", subtitle: hbInstalledName(r), icon: "trash",
 		body: "The game file and the cover Get Homebrew saved for it go. Its saves and save states stay, " +
 			"so installing it again later picks up where you left off.",
 		buttons: []tbxSheetButton{{label: "Keep it", primary: true}, {label: "Delete", run: func() {

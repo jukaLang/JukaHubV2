@@ -710,15 +710,29 @@ func startPortScript(name, path string) error {
 	// The environment is the port's alone, so JukaHub's own audio, libraries
 	// and the next launch are untouched even if the port crashes.
 	cmd.Env = plan.Env
+	// A script's own #!/bin/bash line gets a real bash too, in the launch's
+	// own mount namespace, when the firmware's /bin/bash is not one
+	// (portmaster_binbash.go). Applied just before the start.
+	binBash, binBashNote := pmBinBashPrepare(appConfig)
+	if binBashNote != "" {
+		plan.Notes = append(plan.Notes, binBashNote)
+	}
 	logFile, logPath := portLogOpen(name, path, plan)
 	if logFile != nil {
 		cmd.Stdout, cmd.Stderr = logFile, logFile
+	}
+	// GreenOvercast (Xbox Cloud Gaming, the console at home) decodes the
+	// picture on the CPU: Xbox boost gives it the handheld (xboxboost.go).
+	var boost *xboxBoostSession
+	if !master {
+		boost = xboxBoostBegin(xboxBoostKindForPort(path), path, name)
 	}
 	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
 	// Same hand-off rule as the emulator launchers: the child leads its own
 	// process group, so a wrapper script that backgrounds the game keeps the
 	// screen parked until the game itself exits.
 	screenChildGroupConfigure(cmd)
+	binBash.apply(cmd)
 	err = screenChildStart(cmd)
 	if logFile != nil {
 		_ = logFile.Close() // the child has its own copy
@@ -728,10 +742,12 @@ func startPortScript(name, path string) error {
 			_ = os.Remove(shadow)
 		}
 		restoreProfile()
+		boost.end()
 		logWarn("portmaster", "launch failed for %s: %v", path, err)
 		return fmt.Errorf("could not launch %s", name)
 	}
 	noteGameChildStarted(cmd)
+	boost.started(cmd.Process.Pid)
 	logDone := portLogWatch(logPath)
 	launchedAt := time.Now()
 	gameLaunchWatchStart(cmd)
@@ -747,12 +763,14 @@ func startPortScript(name, path string) error {
 		}
 		screenChildReaped(cmd)
 		portLogWatchDone(logDone)
+		portLogNoteEnd(logPath, waitErr, time.Since(launchedAt))
 		stopped := gameLaunchWatchEnd(cmd)
 		diag.noteEnd(time.Now(), stopped)
 		if !master {
 			gameLaunchLogEnd(game, waitErr, time.Since(launchedAt), stopped)
 		}
 		restoreProfile()
+		boost.end()
 		recorder.Stop()
 		portAfterExit(path, master, time.Since(launchedAt))
 		diag.exited(waitErr)

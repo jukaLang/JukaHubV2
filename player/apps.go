@@ -74,9 +74,23 @@ var builtinApplets = []struct {
 	{"Browser", "Browser", ""},
 	{"Trophies", playtimeSceneName, ""},
 	{"Synth", synthSceneName, ""},
+	// The everyday apps (osapps.go): the "is there a notes app?" screen is
+	// where people look for them first.
+	{"Notes", "Notes", ""},
+	{"Tasks", tasksSceneName, ""},
+	{"Voice Memos", voiceMemoSceneName, ""},
+	{"Paint", paintSceneName, ""},
+	{"Stopwatch", stopwatchSceneName, ""},
+	{"Solitaire", solitaireSceneName, ""},
 	{"Steam", "", "steam"},
 	{mailcalAppEntryName, "", "mail"},
 	{"PS Remote Play", "", "chiaki"},
+	// Controller Mode (ctlmode_ui.go): "use the handheld as a PC pad" is
+	// looked for among the apps, next to the TrimUI pad apps it replaces.
+	{"Controller Mode", ctlModeSceneName, ""},
+	// The App Center (appcenter_ui.go): TrimUI apps with what they need,
+	// installed and updated from here.
+	{"App Center", "", "appcenter"},
 }
 
 // maxAppEntries caps a single source so a huge Start Menu cannot flood the
@@ -164,6 +178,9 @@ func scanInstalledApps(config *Config) {
 	// Icons for desktop shortcuts are extracted by the shell in the background;
 	// the call is a cheap no-op when every tile already has a picture.
 	requestAppIconExtraction(appProgramPaths(entries))
+	// The App Center finishes an install a power cut stopped and scans the
+	// card's apps on a goroutine (appcenter.go).
+	acWarmUp()
 }
 
 // collectAppEntries merges the app sources in priority order: portable apps
@@ -414,6 +431,13 @@ func scanSystemApps(dir string) []FileEntry {
 			if isSelfAppFolder(path) {
 				return filepath.SkipDir
 			}
+			// The App Center's staging, rollback and trash folders
+			// (appcenter_install.go: .jukahub-staging, -rollback, -trash) hold
+			// whole app folders that must never be listed a second time. Other
+			// dot-folders are walked as before.
+			if strings.HasPrefix(info.Name(), ".jukahub-") {
+				return filepath.SkipDir
+			}
 			// A TrimUI application folder (config.json + launch script) is one
 			// app, not a tree of scripts: take its label and icon and skip the
 			// rest, so the launcher never lists the same app as a bare
@@ -549,6 +573,10 @@ func builtinAppActionSupported(action string) bool {
 	case "mail":
 		// Mail (mail_*.go) works wherever there is a network.
 		return true
+	case "appcenter":
+		// The catalogue browses everywhere; installs and starts are the
+		// handheld's (appcenter_ui.go).
+		return true
 	}
 	return false
 }
@@ -565,6 +593,8 @@ func launchBuiltinAppAction(action string) {
 		openSteamPanel()
 	case "mail":
 		mailOpenApp()
+	case "appcenter":
+		acOpenCenter(appConfig, "")
 	default:
 		logWarn("apps", "unknown built-in app action %q", action)
 	}

@@ -185,7 +185,11 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
 		"Dictionary", "PDFReader", "MusicPlayer", synthSceneName, "Notes",
-		"Games", "Browser", "TextBrowser", "Apps", "Packages", "Shorts",
+		// The everyday apps beside Notes (osapps.go).
+		tasksSceneName, voiceMemoSceneName, paintSceneName, stopwatchSceneName,
+		"Games", solitaireSceneName, "Browser", "TextBrowser", "Apps", "Packages", "Shorts",
+		// The handheld as a PC's game controller (ctlmode_ui.go).
+		ctlModeSceneName,
 	}
 	// The experience pack in force lists the screens it pins first (xpack.go).
 	if pins := xpackPinnedScenes(); len(pins) > 0 {
@@ -287,6 +291,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	games = append(games, startMenuEntry{name: portsStoreEntryName, icon: "P", glyph: portsStoreGlyph, action: func(c *Config) { portsStoreOpen(c) }})
 	// New homebrew for ten consoles from itch.io (homebrew_store*.go).
 	games = append(games, startMenuEntry{name: homebrewEntryName, icon: "H", glyph: homebrewGlyph, action: func(c *Config) { homebrewStoreOpen(c) }})
+	// wasm4.org's free fantasy-console games onto the WASM-4 shelf (wasm4_carts*.go).
+	games = append(games, startMenuEntry{name: wasm4CartsEntryName, icon: "W", glyph: "rom", action: func(c *Config) { wasm4CartsOpen(c) }})
+	// The chip8Archive's free CHIP-8 games onto the CHIP-8 shelf (chip8_shelf_ui.go).
+	games = append(games, startMenuEntry{name: chip8ShelfEntryName, icon: "8", glyph: "rom", action: func(c *Config) { chip8ShelfOpen(c) }})
 	// PCs can inspect and download APKs even though AndroidRT runs on the handheld.
 	games = append(games, startMenuEntry{name: apkStoreEntryName, icon: "A", action: func(c *Config) { apkStoreOpen(c) }})
 	// Every way to play Minecraft here: ports, Bedrock, a PC's launchers.
@@ -353,6 +361,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	}
 	// Bluetooth pairing, where bluetoothctl exists (bluetooth_devices_ui.go).
 	device = btStartMenuInsert(device)
+	// Switch profile, once there is someone to switch to (profiles_ui.go).
+	device = profilesStartMenuInsert(device)
 	// Handoff: send what is on screen to a paired device, which offers it on
 	// its Home (hoff.go). Listed first, and only while devices are paired.
 	if targets := hoffSendTargets(); len(targets) > 0 {
@@ -413,6 +423,7 @@ var (
 		"Pomodoro": "timer", "Alarm": "alarm", "Dashboard": "grid", "PDFReader": "pdf",
 		"Notes": "edit", "Games": "games", "Browser": "browser", "Playtime": "trophy",
 		"RomManager": "rom", "NetworkTools": "network", "WiFi": "wifi", "Synth": "synth",
+		ctlModeSceneName: "gamepad",
 	}
 	startMenuActionGlyphs = map[string]string{
 		"Emulators": "emulator", "Games Library": "games", "Game Profiles": "controller",
@@ -437,6 +448,10 @@ func startMenuGlyph(entry startMenuEntry) string {
 	name := ""
 	if entry.scene != "" {
 		name = startMenuSceneGlyphs[entry.scene]
+		if name == "" {
+			// The everyday apps keep their glyphs with them (osapps.go).
+			name = osAppsSceneGlyph(entry.scene)
+		}
 	}
 	if name == "" {
 		name = startMenuActionGlyphs[entry.name]
@@ -668,6 +683,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 	}
 	items := group.items
 	startMenuClampScroll(len(items))
+	narrateStartMenu(group, items) // spoken navigation (narrate_hooks.go)
 
 	// Entrance keyframes: the scrim fades under the menu while the card itself
 	// drops from under the Apps pill and fades as one layer. Reduced motion (or
@@ -1026,6 +1042,12 @@ func sceneClaimsStart(name string) bool {
 	case "Games", "Ambient", "JukaLand", "Terminal", synthSceneName:
 		// The Synth's Start plays and stops the pattern (synth.go).
 		return true
+	case chip8SceneName:
+		// The CHIP-8 player's Start pauses the game (chip8_scene.go).
+		return true
+	case solitaireSceneName:
+		// Solitaire's Start opens its game menu (solitaire_ui.go).
+		return true
 	}
 	return false
 }
@@ -1044,9 +1066,9 @@ func startMenuKeyOpen(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		// The Terminal's and the Synth's own Start is a key of their own
-		// (Enter, Space), so F10 still opens the menu there.
-		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && sceneClaimsStart(name) {
+		// The Terminal's, the Synth's and Solitaire's own Start is a key of
+		// their own (Enter, Space, M), so F10 still opens the menu there.
+		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && name != solitaireSceneName && sceneClaimsStart(name) {
 			return false
 		}
 	}

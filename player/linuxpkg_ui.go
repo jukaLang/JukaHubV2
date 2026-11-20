@@ -202,6 +202,61 @@ func linuxPkgBarIO(run uint64) *linuxPkgIO {
 	}
 }
 
+// linuxPkgTail keeps the last lines an operation printed, so a failure's sheet
+// shows what was being fetched or unpacked when it stopped.
+type linuxPkgTail struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+// linuxPkgTailMax is how many lines a tail keeps.
+const linuxPkgTailMax = 24
+
+func (t *linuxPkgTail) add(s string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.lines = append(t.lines, s)
+	if len(t.lines) > linuxPkgTailMax {
+		t.lines = append(t.lines[:0], t.lines[len(t.lines)-linuxPkgTailMax:]...)
+	}
+}
+
+// text is the kept lines, oldest first.
+func (t *linuxPkgTail) text() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return strings.Join(t.lines, "\n")
+}
+
+// linuxPkgBarIOTail is linuxPkgBarIO that also keeps the last lines in tail.
+func linuxPkgBarIOTail(run uint64, tail *linuxPkgTail) *linuxPkgIO {
+	o := linuxPkgBarIO(run)
+	out := o.out
+	o.out = func(s string) {
+		tail.add(s)
+		out(s)
+	}
+	return o
+}
+
+// linuxPkgMissing is the names among names that are not installed (or were
+// left half-installed by a run that died). Off the frame loop: it reads
+// status.json.
+func linuxPkgMissing(names []string) []string {
+	lay, err := linuxPkgDirs()
+	if err != nil {
+		return nil
+	}
+	st := linuxPkgLoadStatus(lay)
+	var out []string
+	for _, n := range names {
+		if in, ok := st.Packages[n]; !ok || in.State != "installed" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // ── Screen ───────────────────────────────────────────────────────────────
 
 type linuxPkgRow struct {
@@ -538,7 +593,9 @@ func linuxPkgOpenSheet(config *Config, pkg string) {
 	}
 	install := tbxSheetButton{label: "Install", primary: true, run: func() {
 		linuxPkgRunFromPage(config, pkg, title, true, func(ctx context.Context, o *linuxPkgIO) error {
-			return linuxPkgEnsure(ctx, []string{pkg}, false, o)
+			// The Audit toolkit's set for the same package (Aircrack-ng
+			// without the capture helpers), so the two installs agree.
+			return linuxPkgEnsureSkipping(ctx, []string{pkg}, auditSkipDepsFor(pkg), false, o)
 		}, title+" is installed")
 	}}
 	tbxOpenSheet(config, tbxSheetSpec{
@@ -563,7 +620,7 @@ func linuxPkgPreview(pkg string) string {
 	if err != nil {
 		return "The package index (about 20 MB) is downloaded first; then what " + pkg + " needs is installed with it.\n\n" + linuxPkgTrustText()
 	}
-	plan, _, err := linuxPkgPlanInstall(x, linuxPkgLoadStatus(lay), []string{pkg})
+	plan, _, err := linuxPkgPlanInstallSkipping(x, linuxPkgLoadStatus(lay), []string{pkg}, auditSkipDepsFor(pkg))
 	var desc string
 	if e, ok := x.Get(pkg); ok {
 		desc = e.Desc

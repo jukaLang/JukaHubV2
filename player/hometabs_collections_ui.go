@@ -238,6 +238,11 @@ func homeTabsSheetPage(mode int) {
 		homeTabsSheetClose()
 		return
 	}
+	if mode == homeTabsSheetConfirm {
+		s.cursor = confirmSafeFocus(len(s.rows), s.cursor, func(i int) string {
+			return s.rows[i].label
+		})
+	}
 	PlayNavSound()
 }
 
@@ -411,11 +416,15 @@ func renderHomeTabsSheet(renderer *sdl.Renderer, config *Config) {
 	case homeTabsSheetConfirm:
 		subtitle = "The games and apps in it stay where they are"
 	}
+	title := homeTabsItemTitle(s.item)
+	if s.mode == homeTabsSheetConfirm {
+		title = "Delete " + title + "?"
+	}
 	glyph := s.item.Glyph
 	if glyph == "" {
 		glyph = "apps"
 	}
-	header := UIPanelHeader(homeTabsItemTitle(s.item), subtitle, glyph)
+	header := UIPanelHeader(title, subtitle, glyph)
 	rows := len(s.rows)
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := int32(14) + smallH

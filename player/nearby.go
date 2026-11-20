@@ -366,6 +366,10 @@ func nearbyLibraryTitles(now time.Time) []nearbyTitle {
 	titles := []nearbyTitle{}
 	seen := map[string]bool{}
 	for _, s := range lib.Systems {
+		// Every JukaHub has the built-in games: never a title worth sharing.
+		if s.Name == builtInLibrarySystem {
+			continue
+		}
 		for _, g := range s.Games {
 			norm := nearbyNormTitle(g.Title)
 			if norm == "" || seen[norm] {

@@ -829,6 +829,8 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 		}
 		byName[key] = e
 	}
+	// Where the Godot port is offered, its folders are one Godot tile.
+	godotHere := godotOffered()
 
 	for _, root := range emuRoots {
 		dirEntries, err := os.ReadDir(root)
@@ -844,6 +846,10 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 			if hakuxIsXboxFolder(de.Name(), folder) {
 				// The Xbox launcher folder (hakuX's Emus/XBOX) is the Xbox
 				// tile below, not a row of its own.
+				continue
+			}
+			if godotHere && godotIsFolder(de.Name()) {
+				// So is the Godot port's Emus/GODOT: the Godot tile (godot.go).
 				continue
 			}
 			fields := emuFolderConfig(folder)
@@ -904,6 +910,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				if _, ok := byName[strings.ToLower(r.Name())]; ok {
 					continue
 				}
+				if godotHere && godotIsFolder(r.Name()) {
+					continue // the Godot tile below speaks for Roms/GODOT
+				}
 				folder := filepath.Join(romsRoot, r.Name())
 				if sys, ok := emuDesktopSystemFor(r.Name()); ok {
 					if sys.System == emuXboxEntryName {
@@ -938,6 +947,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	// already on the card is the tile, whoever put it there.
 	xboxFolder, _, _ := hakuxInstalled(emuRoots)
 	add(hakuxXboxEntry(xboxFolder, romsRoot, hakuxDevice()))
+	// Godot is listed the same way: one tile for the TrimUI Smart Pro Godot
+	// port, whose X installs it when the card has none (godot.go).
+	if godotHere {
+		add(godotEmuEntry(godotPortFolder(emuRoots), hakuxDevice()))
+	}
 	if IsTrimuiDevice() {
 		for _, row := range emuPublishedCoreRows(emuPublishedCores(), installed, byName) {
 			add(row)
@@ -1427,6 +1441,12 @@ func emuPanelActivate(config *Config) {
 		// The handheld's Xbox tile: its games once hakuX is installed, the
 		// setup sheet before that (hakuxpage.go).
 		hakuxActivate(e)
+		return
+	}
+	if godotTile(e) {
+		// The Godot tile: its games once the port is here, the install before
+		// that (godot.go).
+		godotActivate(e)
 		return
 	}
 	if emuRetroArchMenuTile(e) {

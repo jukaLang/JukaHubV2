@@ -4,9 +4,6 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
 
 # Read-only by default: every job that publishes something asks for the
 # contents write it needs on its own block, so a job added later starts with a
@@ -24,9 +21,6 @@ jobs:
       tag_name: ${{ steps.generate_tag.outputs.tag_name }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
-      - name: Check out the repo
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
       - name: Generate Tag Name
         id: generate_tag
         run: |
@@ -316,18 +310,6 @@ jobs:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
-      - name: Debug TAG_NAME
-        run: |
-          echo "Debug TAG_NAME: ${TAG_NAME}"
-      - name: Check Tag Name Variable
-        run: |
-          if [ -z "${TAG_NAME}" ]; then
-            echo "TAG_NAME variable does not exist. Exiting."
-            exit 1
-          else
-            echo "TAG_NAME variable exists: ${TAG_NAME}"
-          fi
-    
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -759,12 +741,13 @@ jobs:
           # go mod download, not go mod tidy: a release builds the module graph
           # that was committed, not a tidied copy of it. The restore is bounded:
           # a stalled download must cost a cold build, not the job's timeout and
-          # with it the release.
+          # with it the release. The 90-second limit leaves time for a cold
+          # compile when the artifact service stalls.
           (
             cd player
             go version
             go mod download
-            timeout 300 bash "$GITHUB_WORKSPACE/.github/scripts/go-build-cache.sh" restore "$GO_CACHE_ARTIFACT" ||
+            timeout 90 bash "$GITHUB_WORKSPACE/.github/scripts/go-build-cache.sh" restore "$GO_CACHE_ARTIFACT" ||
               echo "::warning title=Go build cache::the restore failed or ran out of time; building without it"
           ) > "$logs/go.log" 2>&1 &
           go_job=$!
@@ -772,13 +755,18 @@ jobs:
           # Nothing here reads man pages: skip man-db's index rebuild. Only a
           # speed-up, so it must not be able to fail the release.
           sudo rm -f /var/lib/man-db/auto-update || true
-          sudo apt-get update -q
           # Only the win32 flavour. The gcc-mingw-w64-x86-64 metapackage also
           # installs the posix one, but x86_64-w64-mingw32-gcc resolved to win32
           # (the higher-priority alternative) all along, so this is the same
           # compiler for half the download. Its binutils bring the objdump the
           # DLL check below uses.
-          sudo apt-get install -y -q --no-install-recommends gcc-mingw-w64-x86-64-win32 zip
+          # Hosted runners usually have usable package lists already. Avoid a
+          # network refresh on that path; refresh and retry if the install fails.
+          apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+          if ! sudo apt-get "${apt_options[@]}" install -y -q --no-install-recommends gcc-mingw-w64-x86-64-win32 zip; then
+            sudo apt-get "${apt_options[@]}" update -q
+            sudo apt-get "${apt_options[@]}" install -y -q --no-install-recommends gcc-mingw-w64-x86-64-win32 zip
+          fi
           x86_64-w64-mingw32-gcc --version | sed -n 1p
 
           if ! wait "$sdl_job"; then
@@ -846,6 +834,13 @@ jobs:
           echo "CGO_LDFLAGS: $CGO_LDFLAGS"
           mkdir -p JukaHub-Trimui-Windows
           cd player
+          # The Help pages are embedded from player/helpdocs, which may lag
+          # behind docs in a release checkout.
+          mkdir -p helpdocs
+          for f in GETTING_STARTED.md CONTROLS.md; do
+            tr -d '\r' < "../docs/$f" > "helpdocs/$f.tmp"
+            mv -f "helpdocs/$f.tmp" "helpdocs/$f"
+          done
           # -v names each package actually compiled (not the cached ones), which
           # is how the cache step below tells a player-only release from one
           # that rebuilt dependencies. -s -w leave out the symbol table and DWARF,
@@ -969,15 +964,12 @@ jobs:
     needs: [create-tag, build-and-publish-ubuntu, build-and-publish-windows]
     permissions:
       contents: write   # flip the verified draft to published
-    # A pull-request build must not become a release: it was published before
-    # too, which is how a branch build could take over /releases/latest.
     # The three results are spelled out instead of left to the implicit
     # success(), which looks at every job upstream, the Remote Play helpers
     # included: their failure must cost a release its helpers, never the
     # release itself.
     if: >-
-      ${{ !cancelled() && github.event_name != 'pull_request' &&
-      needs.create-tag.result == 'success' &&
+      ${{ !cancelled() && needs.create-tag.result == 'success' &&
       needs.build-and-publish-ubuntu.result == 'success' &&
       needs.build-and-publish-windows.result == 'success' }}
     env:

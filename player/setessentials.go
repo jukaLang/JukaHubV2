@@ -42,7 +42,8 @@ func setEssentialRows() map[string][]string {
 	m[displaySettingsSection] = []string{"brightness", "screensaver", "display_contrast", "display_saturation",
 		"display_exposure", "displayLedMissing", "displayLed", "displayLedBrightness", "uiFont", "textSize"}
 	m["display"] = []string{"themes", menuColourKey, "glassStyle", "homeLayout", "wallpaper", "livebg", "motion"}
-	m[a11ySettingsSection] = []string{"textSize", "contrast", "boldText", "magnifier", "monoAudio", "colorblind", "oneHanded"}
+	m[a11ySettingsSection] = []string{narrKeyOn, narrKeyRate, narrKeyHints, narrKeyToasts, narrKeyVoice, // narrate_settings.go
+		"textSize", "contrast", "boldText", "magnifier", "monoAudio", "colorblind", "oneHanded"}
 	m["sound"] = []string{"volume", "uiSounds", "bgMusic", "vibration", "audio"}
 	m["network"] = []string{"wifi", "bluetooth", "btdevices", "airplane", "companion"}
 	m[voiceAISettingsSection] = []string{ttsModeKey, hjWordKey, voiceShortcutsKey, gameAssistKey, sttModeKey}

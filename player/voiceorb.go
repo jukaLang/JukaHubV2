@@ -1010,7 +1010,7 @@ func voiceOrbWake(config *Config) bool {
 func voiceOrbBlockingCard() bool {
 	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
 		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen() ||
-		homeTabsItemSheetActive() ||
+		homeTabsItemSheetActive() || gameReadyUI.open || shelfCard.open ||
 		startupLocked() // bootlock.go
 }
 
@@ -1129,7 +1129,7 @@ func voiceOrbListen(config *Config) {
 	// Offline recognition decodes the clip while it is recorded, so its words
 	// are ready as soon as the speaker stops (stt_stream.go).
 	if sttStreamWanted(config, hand != nil) {
-		voiceOrb.stream = sttStreamStart(sttStreamOpts{partialEvery: sttStreamPartialEvery})
+		voiceOrb.stream = sttStreamStart(sttStreamOpts{partialEvery: sttStreamPartialEvery, asked: true})
 	}
 	// Words said straight after "Hey Juka" are the start of the clip; the
 	// chime would land on them, so a short buzz says "heard you" instead.

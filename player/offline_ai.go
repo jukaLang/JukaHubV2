@@ -129,8 +129,15 @@ func offlineAIGameBlocks() bool {
 	return runningGameChildren.Load() > 0 && !gameAssistOverlayActive()
 }
 
-func offlineAICheckMemory(model string) error {
-	if freeMemoryMB() < offlineAIStartNeedMB(model) {
+// offlineAICheckMemory makes room for the model when there is too little
+// (memfree.go: caches, idle helpers and, with no game on screen, apps left
+// running in the background) and reports errOfflineAIMemory only when that
+// was not enough. Off the main thread: the free-up waits.
+func offlineAICheckMemory(ctx context.Context, model string) error {
+	if !memFreeEnsure(ctx, offlineAIStartNeedMB(model), memFreeAI, "offline AI") {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		return errOfflineAIMemory
 	}
 	return nil
@@ -315,7 +322,7 @@ func offlineAIAnswerPrompt(ctx context.Context, prompt string, onPartial func(st
 	if offlineAIGameBlocks() {
 		return "", errOfflineAIMemory
 	}
-	if err := offlineAICheckMemory(model); err != nil {
+	if err := offlineAICheckMemory(ctx, model); err != nil {
 		return "", err
 	}
 	output.stop = cancel

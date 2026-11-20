@@ -20,9 +20,15 @@ package main
 // else uses; a control-profile line for select+l1 only runs with Mouse mode
 // off, the way a select+r1 line only runs with the profile hotkey off.
 //
-// While mouse mode is on the pointer stays up (no idle hide) and the D-pad and
-// the left stick move it instead of the focus. B and every other button keep
-// their jobs, so nothing is ever trapped behind the pointer. The on-screen
+// While mouse mode is on the pointer stays on and the D-pad and the left stick
+// move it instead of the focus. B and every other button keep their jobs, so
+// nothing is ever trapped behind the pointer. Unused for ten seconds
+// (pointerIdleHide, mousehide.go) it dozes: it is not drawn, mouse mode stays
+// on, and it stays where it was. A stick or D-pad move, L2 or R2 wakes it there
+// and acts; the first A only wakes it, so nothing is clicked that cannot be
+// seen. A panel that closes brings a dozing pointer back still dozing. What it
+// was over stays highlighted, as under a desktop's hidden cursor: in JukaHub
+// that is the focus, which the user still needs to see. The on-screen
 // keyboard keeps the D-pad (it reads the pad itself), and the screens that own
 // the pad outright — the calibrations, the controller test, a ringing alarm,
 // Quick Settings, the wallpaper picker, JukaLand — put the pointer away until
@@ -281,6 +287,7 @@ func vcursorModeApply(config *Config, on, announce bool) {
 	// The Select half of the chord must not also go Back on its release.
 	vcursorSettleSelect()
 	vcursor.mode = on
+	vcursor.dozing = false
 	vcursorDpadClear()
 	if on {
 		// The plain pointer's how-to toast would replace mouse mode's.
@@ -303,6 +310,36 @@ func vcursorModeApply(config *Config, on, announce bool) {
 	if vcursorModeSound != nil {
 		vcursorModeSound()
 	}
+}
+
+// vcursorRouse counts pointer input — a move, A, L2 or R2: the idle clock
+// starts again, and a dozing pointer that is up wakes where it was, drawn
+// again and moved onto that spot again, so what is under it is the hover
+// target of the next click. It reports whether the pointer was dozing.
+func vcursorRouse(now time.Time) bool {
+	vcursor.used = now
+	if !vcursor.dozing || !vcursor.active {
+		return false
+	}
+	vcursor.dozing = false
+	vcursorPushMotion(true)
+	vcursorWake()
+	return true
+}
+
+// vcursorModeReturn brings mouse mode's pointer back once whatever put it
+// away (a panel, the on-screen keyboard) is gone. A dozing one comes back
+// dozing, and with no move queued, so nothing under it is hovered either:
+// a panel closing is not pointer input. vcursorRouse wakes it as usual.
+func vcursorModeReturn() {
+	if !vcursor.dozing || !vcursor.placed {
+		vcursorShow()
+		return
+	}
+	now := vcursorClock()
+	vcursor.active = true
+	vcursor.trig = [2]bool{}
+	vcursor.last, vcursor.used = now, now
 }
 
 // vcursorModeToggle flips mouse mode: the chord's and F6's action.

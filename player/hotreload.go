@@ -311,6 +311,8 @@ func applyConfigReload(prev, next *Config) *Config {
 	// load), and Settings → Save itself triggered this path.
 	flushPendingUserConfig()
 	mergeUserConfig(next, reloadUserConfigFromDisk())
+	// jukauser.json is the owner's: whoever else plays keeps their own (profiles_switch.go).
+	profilesAfterConfigReload(prev, next)
 	applyDeviceUIProfile(next)
 	ensureWeatherUnitSetting(next)
 	sysToolMigrateScenes(next)

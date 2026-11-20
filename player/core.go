@@ -4016,6 +4016,10 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 		}
 		drainCustom(config)
 		vkTickNavRepeat()
+		// The main loop's vcursorTick never runs here: a PC mouse picked up
+		// to click the keys must still bring its hidden cursor back
+		// (mousehide.go).
+		mouseHideTick(vcursorClock())
 		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
 		renderer.Clear()
 		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
@@ -4794,6 +4798,8 @@ func renderTopBarOverlays(renderer *sdl.Renderer, config *Config) {
 	renderBrightnessPopover(renderer, config)
 	renderStartMenu(renderer, config)
 	renderNotifDropdown(renderer, config)
+	// "Who is playing?" (profiles_ui.go), above the rest while it is up.
+	renderProfilesPicker(renderer, config)
 }
 
 // themeGalleryIndex is the focused card in a themegallery element.
@@ -5577,6 +5583,7 @@ func showToastPrimitiveMode(message string, kind ToastKind, quiet bool) {
 	if msg == "" {
 		return
 	}
+	narrateToast(msg, kind) // read aloud after the focus (narrate.go)
 	switch kind {
 	case ToastKindError, ToastKindWarning:
 		PlayErrorSound()
@@ -6852,12 +6859,18 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// The browser's site-info sheet closes too, JukaLand played on its offline
 	// page stops, and a JukaLand world is saved however its screen was left.
 	brwSceneDeparture(config)
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		config.Scenes[currentSceneIndex].Name == browserSceneName {
+		browserStopLoading(config)
+	}
 	// So does the Browser's Select menu, and its page's status pills.
 	brwMenuForget()
 	feSheetForget()
 	// The editor's card names one file on the screen being left, and its keys
 	// would otherwise keep answering on the next scene.
 	fileEditorForget()
+	// So does the Open with sheet (openwith_ui.go).
+	owPickClose()
 	// The package row menu and the Audio / Video / Chat selection used to be
 	// cleared when the next scene arrived. That is a frame too late: input is
 	// not gated while the fade runs and the scene index still points at the
@@ -6877,6 +6890,37 @@ func changeSceneTo(config *Config, targetIdx int) {
 
 // completeSceneTransition finishes the scene switch after fade-out and starts fade-in.
 func completeSceneTransition(config *Config) {
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) && pendingSceneIndex != currentSceneIndex {
+		switch config.Scenes[currentSceneIndex].Name {
+		case browserSceneName:
+			browserReleaseMemory(config)
+		case mediaHubSceneName:
+			mediaHubReleaseMemory()
+		case chatSceneName:
+			// Chat's Voice tab is a scene of its own; stepping onto it and back
+			// must not reload Chat's pictures each time.
+			if pendingSceneIndex < 0 || pendingSceneIndex >= len(config.Scenes) ||
+				config.Scenes[pendingSceneIndex].Name != chatVoiceSceneName {
+				chatSceneReleaseMemory()
+			}
+		case chatVoiceSceneName:
+			// …and leaving the Voice tab anywhere but Chat lets them go then.
+			if pendingSceneIndex < 0 || pendingSceneIndex >= len(config.Scenes) ||
+				config.Scenes[pendingSceneIndex].Name != chatSceneName {
+				chatSceneReleaseMemory()
+			}
+		case portsStoreSceneName:
+			pstoreTexClear()
+		case homebrewSceneName:
+			homebrewTexClear()
+		case pmodeSceneName:
+			pmodeReleaseMemory()
+		case ctlModeSceneName:
+			// Leaving Controller Mode, however it is left, stops its link
+			// (ctlmode_ui.go).
+			ctlModeSceneLeft()
+		}
+	}
 	currentSceneIndex = pendingSceneIndex
 
 	// A Tools menu is laid out as a launcher page before the focus graph is
@@ -7324,6 +7368,10 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if headerBugHit(mx, my) {
 		PlayActivateSound()
 		headerBugActivate(config)
+		return true
+	}
+	// Who is playing: the chip opens "Who is playing?" (profiles_ui.go).
+	if profilesHeaderChipClick(mx, my, config) {
 		return true
 	}
 	if sceneTitleBackRect.W > 0 && hitTouchTarget(sceneTitleBackRect, mx, my) {

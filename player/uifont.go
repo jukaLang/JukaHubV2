@@ -3,7 +3,10 @@ package main
 // uifont.go — interface fonts you can download.
 //
 // JukaHub draws every label in the bundled Inter (home_fonts.go), and that
-// stays the default: nothing here downloads a font until the owner picks one.
+// stays the default: nothing here downloads a font until the owner picks one —
+// or turns on Settings → Accessibility → Legible reading font, the opt-in that
+// fetches a readable face for the interface language by itself through the
+// same downloader (uiFontStartDownload; legiblefont_get.go).
 // Settings → Display → Font lists Inter, a short catalogue of free, legible
 // faces and any font file already in the fonts folder. Picking a catalogue
 // face that is not on the card downloads it (its regular cut, then its bold
@@ -106,6 +109,11 @@ var uiFontCatalog = []uiFontEntry{
 	{ID: "atkinson", Name: "Atkinson Hyperlegible", Note: "Drawn for low vision: every letter distinct",
 		Repo: uiFontRepoGoogle, Regular: "ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Regular.ttf",
 		Bold: "ofl/atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf", KB: 110},
+	// SIL's face for new readers: static cuts, Latin and Cyrillic, so it is
+	// the legible reading face for a Russian interface (legiblefont_get.go).
+	{ID: "andika", Name: "Andika", Note: "Plain letters for new readers, Cyrillic too",
+		Repo: uiFontRepoGoogle, Regular: "ofl/andika/Andika-Regular.ttf",
+		Bold: "ofl/andika/Andika-Bold.ttf", KB: 2400, Cyrillic: true},
 	{ID: "lato", Name: "Lato", Note: "Warm and calm",
 		Repo: uiFontRepoGoogle, Regular: "ofl/lato/Lato-Regular.ttf", Bold: "ofl/lato/Lato-Bold.ttf", KB: 1300},
 	{ID: "firasans", Name: "Fira Sans", Note: "Clear on small screens",
@@ -503,6 +511,18 @@ func uiFontChoiceFiles(choice string) (regular, bold string, scale float64) {
 			if f, found := uiFontCardFileFor(name); found && uiFontFileExists(f.Path) {
 				return f.Path, f.Bold, scale
 			}
+			// A copied file whose name a catalogue face added later now
+			// downloads to ("Andika-Regular.ttf") is listed under that face;
+			// a choice stored before still draws in it.
+			for _, e := range uiFontCatalog {
+				if !strings.EqualFold(name, uiFontInstallName(e, false)) {
+					continue
+				}
+				if p := filepath.Join(uiFontDir(), name); uiFontFileExists(p) {
+					_, bold, scale = uiFontChoiceFiles(e.ID)
+					return p, bold, scale
+				}
+			}
 		}
 		return "", "", scale
 	}
@@ -788,6 +808,9 @@ func uiFontRemove(c *Config, value string) {
 		uiFontForgetCoverage(p)
 	}
 	uiFontListChanged()
+	// The legible reading face may have been this one: it is resolved again,
+	// and a face the setting downloads is not fetched back this run.
+	legibleFontFolderChanged(choice)
 	inUse := choice == uiFontChoice()
 	if inUse {
 		// Even when a cut would not go: half a face is no face to draw in.
@@ -842,20 +865,24 @@ func uiFontSetPercent(p int) {
 	uiFontDL.Unlock()
 }
 
-// uiFontStartInstall downloads e on a goroutine; the result is applied on the
-// main loop (tbxPost). Main thread.
-func uiFontStartInstall(c *Config, e uiFontEntry) {
+// uiFontStartDownload is the one downloader: it installs e on a goroutine and
+// hands the result to done on the main loop (tbxPost). Only one face downloads
+// at a time; it reports false, and says so, when another one is. A face that
+// arrives may be the legible reading face, so the legible setting looks at
+// the folder again first (legibleFontFolderChanged). Used by the Font row
+// (uiFontStartInstall) and by Legible reading font (legiblefont_get.go). Main
+// thread.
+func uiFontStartDownload(e uiFontEntry, done func(err error)) bool {
 	uiFontDL.Lock()
 	if uiFontDL.id != "" {
 		busy := uiFontDL.id
 		uiFontDL.Unlock()
 		ShowToast("Already downloading "+uiFontChoiceName(busy), ToastKindInfo)
-		return
+		return false
 	}
 	uiFontDL.id, uiFontDL.percent = e.ID, 0
 	uiFontDL.Unlock()
 	showToastPrimitive("Downloading "+e.Name+"…", ToastKindInfo)
-	gen := uiFontGen()
 	go func() {
 		err := uiFontInstall(e)
 		uiFontDL.Lock()
@@ -863,36 +890,47 @@ func uiFontStartInstall(c *Config, e uiFontEntry) {
 		uiFontDL.Unlock()
 		uiFontListChanged()
 		tbxPost(func() {
-			if err != nil {
-				logWarn("font", "installing %s failed: %v", e.Name, err)
-				ShowToast("Could not install "+e.Name+": "+uiFontProblem(err), ToastKindWarning)
-				if c != nil && setIsHubScene(setHubSceneName(c)) {
-					setHubRefresh(c)
-				}
-				return
+			if err == nil {
+				legibleFontFolderChanged("")
 			}
-			logInfo("font", "installed %s in %s", e.Name, uiFontDir())
-			refresh := func() {
-				if c != nil && setIsHubScene(setHubSceneName(c)) {
-					setHubRefresh(c)
-				}
-			}
-			if uiFontGen() != gen {
-				// Another face was picked while this one downloaded: it is
-				// installed, the later choice stands.
-				ShowToast(e.Name+" installed", ToastKindSuccess)
-				refresh()
-				return
-			}
-			if msg := uiFontLanguageRefusal(e.ID); msg != "" {
-				ShowToast(msg, ToastKindWarning)
-				refresh()
-				return
-			}
-			uiFontApply(c, e.ID)
-			ShowToast("Font: "+e.Name, ToastKindSuccess)
+			done(err)
 		})
 	}()
+	return true
+}
+
+// uiFontStartInstall downloads e for the Font row; the result is applied on
+// the main loop. Main thread.
+func uiFontStartInstall(c *Config, e uiFontEntry) {
+	gen := uiFontGen()
+	uiFontStartDownload(e, func(err error) {
+		refresh := func() {
+			if c != nil && setIsHubScene(setHubSceneName(c)) {
+				setHubRefresh(c)
+			}
+		}
+		if err != nil {
+			logWarn("font", "installing %s failed: %v", e.Name, err)
+			ShowToast("Could not install "+e.Name+": "+uiFontProblem(err), ToastKindWarning)
+			refresh()
+			return
+		}
+		logInfo("font", "installed %s in %s", e.Name, uiFontDir())
+		if uiFontGen() != gen {
+			// Another face was picked while this one downloaded: it is
+			// installed, the later choice stands.
+			ShowToast(e.Name+" installed", ToastKindSuccess)
+			refresh()
+			return
+		}
+		if msg := uiFontLanguageRefusal(e.ID); msg != "" {
+			ShowToast(msg, ToastKindWarning)
+			refresh()
+			return
+		}
+		uiFontApply(c, e.ID)
+		ShowToast("Font: "+e.Name, ToastKindSuccess)
+	})
 }
 
 // uiFontInstall fetches e's cuts into the folder. The regular cut must arrive;

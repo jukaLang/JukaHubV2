@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"runtime"
@@ -411,14 +412,18 @@ const (
 	MemCritical                            // <80 MB free
 )
 
-// memInfo caches parsed /proc/meminfo values.
+// memInfo caches parsed /proc/meminfo values. InactiveAnon, SwapTotal and
+// SwapFree say what swap could take in (memSwapCreditMB, memswap.go).
 type memInfo struct {
-	MemTotal  uint64 // kB
-	MemFree   uint64 // kB
-	MemAvail  uint64 // kB
-	Buffers   uint64 // kB
-	Cached    uint64 // kB
-	Timestamp time.Time
+	MemTotal     uint64 // kB
+	MemFree      uint64 // kB
+	MemAvail     uint64 // kB
+	Buffers      uint64 // kB
+	Cached       uint64 // kB
+	InactiveAnon uint64 // kB
+	SwapTotal    uint64 // kB
+	SwapFree     uint64 // kB
+	Timestamp    time.Time
 }
 
 // MemoryMonitor periodically reads /proc/meminfo on Linux and exposes the
@@ -489,6 +494,9 @@ func (mm *MemoryMonitor) refresh() {
 		names := map[MemoryPressureLevel]string{MemNormal: "Normal", MemWarning: "Warning", MemCritical: "Critical"}
 		logInfo("mem", "Pressure: %s (avail %d MB)", names[level], availMB)
 	}
+	// The same reading drives the automatic free-up and the swap setup
+	// (memfree.go): no second /proc reader.
+	memWatchTick(info)
 }
 
 // Level returns the current memory pressure level.
@@ -512,17 +520,20 @@ func (mm *MemoryMonitor) Stop() {
 
 // readProcMeminfo parses /proc/meminfo for key values.
 func readProcMeminfo() memInfo {
-	var info memInfo
-	f, err := os.Open("/proc/meminfo")
+	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return info
+		return memInfo{}
 	}
-	defer f.Close()
+	return parseProcMeminfo(data)
+}
 
-	scanner := bufio.NewScanner(f)
+// parseProcMeminfo reads the values memInfo keeps out of /proc/meminfo's
+// "Name: value kB" lines. Pure.
+func parseProcMeminfo(data []byte) memInfo {
+	var info memInfo
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.Fields(line)
+		parts := strings.Fields(scanner.Text())
 		if len(parts) < 2 {
 			continue
 		}
@@ -538,6 +549,12 @@ func readProcMeminfo() memInfo {
 			info.Buffers = val
 		case "Cached:":
 			info.Cached = val
+		case "Inactive(anon):":
+			info.InactiveAnon = val
+		case "SwapTotal:":
+			info.SwapTotal = val
+		case "SwapFree:":
+			info.SwapFree = val
 		}
 	}
 	return info
@@ -554,8 +571,20 @@ func readProcMeminfo() memInfo {
 var cacheEvictor = &cachePressureEvictor{}
 
 // EvictCachesForPressure clears render caches proportional to the current
-// memory pressure level. Returns true if any cache was evicted.
+// memory pressure level. Returns true if any cache was evicted. A free-up
+// on another goroutine (memfree.go) may ask for an eviction whatever the
+// level: it runs first, here on the main thread, which owns the textures.
 func EvictCachesForPressure(mm *MemoryMonitor) bool {
+	if want := memFreeTakeEvict(); want != 0 {
+		if want >= memEvictFull {
+			logInfo("mem", "Making room: clearing every texture and byte cache")
+			evictAllCachesForPressure()
+		} else {
+			trimCachesForPressure()
+		}
+		memFreeEvictDone.Add(1)
+		return true
+	}
 	if mm == nil {
 		return false
 	}
@@ -567,36 +596,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 	case MemCritical:
 		logTextureMemoryStats("critical-evict")
 		logInfo("mem", "Critical: clearing every texture and byte cache")
-		ClearTextCache()
-		// Shape textures hold the palette in their pixels just like text does.
-		ClearShapeCache()
-		ClearIconAtlas()
-		// The gradient textures are the largest cached surfaces — free first.
-		ClearBgGradientCache()
-		// An animated wallpaper keeps only its first frame: its frames are up
-		// to 40 MB of textures (gifwall.go).
-		gifWallShrinkForPressure()
-		clearHomeTextCache()
-		clearThumbnailCache()
-		// Launcher icons, chat images and avatars are textures too. Each was
-		// bounded by a count alone until the cache-budget pass, so a launcher of
-		// large icons or a chat of photos could hold megabytes under a cap that
-		// only counted entries.
-		clearAppIconCache()
-		clearChatImageCache()
-		clearChatAvatarCache()
-		// The Ports Store's screenshots (ports_store_images.go) and Get
-		// Homebrew's covers (homebrew_store_images.go).
-		pstoreTexClear()
-		homebrewTexClear()
-		// The bytes side: downloaded thumbnail payloads waiting for the renderer,
-		// and the validated feed bodies kept for conditional requests. Both are
-		// refetchable, so dropping them costs a round trip, not state.
-		clearThumbnailDataCache()
-		conditionalCache.clear()
-		// The page cache holds whole articles and their images. Dropping it
-		// costs the user one refetch on Back, which beats being killed for RAM.
-		browserClearPageCache()
+		evictAllCachesForPressure()
 		// Reclaim the freed heap off the render thread. runtime.GC() here used
 		// to block the frame that was drawing a transition.
 		go debug.FreeOSMemory()
@@ -607,6 +607,51 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		return true
 	}
 	return false
+}
+
+// trimCachesForPressure is a free-up's light eviction (memEvictTrim): half
+// the text cache and the byte caches, which are refetched rather than
+// redrawn. Main thread.
+func trimCachesForPressure() {
+	TrimTextCache(512 / 2)
+	clearThumbnailDataCache()
+	conditionalCache.clear()
+	visionCacheClear()
+}
+
+// evictAllCachesForPressure clears every texture and byte cache. Main thread.
+func evictAllCachesForPressure() {
+	ClearTextCache()
+	// Shape textures hold the palette in their pixels just like text does.
+	ClearShapeCache()
+	ClearIconAtlas()
+	// The gradient textures are the largest cached surfaces — free first.
+	ClearBgGradientCache()
+	// An animated wallpaper keeps only its first frame: its frames are up
+	// to 40 MB of textures (gifwall.go).
+	gifWallShrinkForPressure()
+	clearHomeTextCache()
+	clearThumbnailCache()
+	// Launcher icons, chat images and avatars are textures too. Each was
+	// bounded by a count alone until the cache-budget pass, so a launcher of
+	// large icons or a chat of photos could hold megabytes under a cap that
+	// only counted entries.
+	clearAppIconCache()
+	clearChatImageCache()
+	clearChatAvatarCache()
+	// The Ports Store's screenshots (ports_store_images.go) and Get
+	// Homebrew's covers (homebrew_store_images.go).
+	pstoreTexClear()
+	homebrewTexClear()
+	// The bytes side: downloaded thumbnail payloads waiting for the renderer,
+	// and the validated feed bodies kept for conditional requests. Both are
+	// refetchable, so dropping them costs a round trip, not state.
+	clearThumbnailDataCache()
+	conditionalCache.clear()
+	visionCacheClear()
+	// The page cache holds whole articles and their images. Dropping it
+	// costs the user one refetch on Back, which beats being killed for RAM.
+	browserClearPageCache()
 }
 
 // clearThumbnailCache destroys all cached thumbnail textures.

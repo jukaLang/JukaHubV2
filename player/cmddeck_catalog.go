@@ -94,6 +94,7 @@ var cmdDeckCats = []cmdDeckCat{
 	{"logs", "Logs"},
 	{"emu", "Emulators"},
 	{"pm", "PortMaster"},
+	{"java", "Java"},
 	{"juka", "JukaHub"},
 }
 
@@ -148,6 +149,7 @@ var cmdDeckLinuxEntries = []cmdEntry{
 	{id: "uname", cat: "system", title: "Kernel and firmware", tmpl: "uname -a", need: []string{"uname"}, keys: "version linux"},
 	{id: "osrel", cat: "system", title: "OS release", tmpl: "cat /etc/os-release", path: "/etc/os-release", keys: "version distro"},
 	{id: "sysinfo", cat: "system", title: "System summary", tmpl: "sysinfo", keys: "info device"},
+	{id: "shell", cat: "system", title: "Interactive shell", tmpl: "shell", keys: "bash sh console prompt interactive pty"},
 	// Storage
 	{id: "df", cat: "storage", title: "Free space on every drive", tmpl: "df -h", need: []string{"df"}, keys: "disk space full sd card"},
 	{id: "du", cat: "storage", title: "Size of a folder", tmpl: "du -sh {1}", slots: []cmdSlot{cmdFolder("sd")}, need: []string{"du"}, keys: "disk usage space"},
@@ -174,6 +176,8 @@ var cmdDeckLinuxEntries = []cmdEntry{
 	// Processes
 	{id: "ps", cat: "proc", title: "Running processes", tmpl: "ps", need: []string{"ps"}, keys: "tasks programs"},
 	{id: "top", cat: "proc", title: "Busiest processes", tmpl: "top -b -n 1 | head -n {1}", slots: []cmdSlot{cmdLines(20)}, need: []string{"top", "head"}, keys: "cpu usage"},
+	{id: "toplive", cat: "proc", title: "Live process monitor", tmpl: "top", need: []string{"top"}, unless: "htop", keys: "cpu usage interactive"},
+	{id: "htop", cat: "proc", title: "Live process monitor", tmpl: "htop", need: []string{"htop"}, keys: "top cpu usage interactive"},
 	{id: "kill", cat: "proc", title: "Stop a process", tmpl: "kill {1}", slots: []cmdSlot{cmdProcess}, need: []string{"kill"}, danger: "The program is asked to quit; unsaved work in it is lost.", keys: "end quit stuck"},
 	{id: "kill9", cat: "proc", title: "Force-stop a process", tmpl: "kill -9 {1}", slots: []cmdSlot{cmdProcess}, need: []string{"kill"}, danger: "The program is killed at once, without a chance to save.", keys: "end stuck hung"},
 	// Logs
@@ -209,6 +213,7 @@ var cmdDeckWindowsEntries = []cmdEntry{
 	{id: "w-cpu", cat: "system", title: "CPU load", tmpl: `powershell -NoProfile -Command "Get-CimInstance Win32_Processor | Select-Object Name,LoadPercentage | Format-List"`, need: []string{"powershell"}, keys: "cpu usage"},
 	{id: "w-battery", cat: "system", title: "Battery level", tmpl: `powershell -NoProfile -Command "Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining,BatteryStatus | Format-List"`, need: []string{"powershell"}, keys: "charge power"},
 	{id: "w-sysinfo", cat: "system", title: "System summary", tmpl: "sysinfo", keys: "info device"},
+	{id: "w-shell", cat: "system", title: "Interactive shell", tmpl: "shell", keys: "cmd console prompt interactive"},
 	// Storage
 	{id: "w-df", cat: "storage", title: "Free space on every drive", tmpl: `powershell -NoProfile -Command "Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize"`, need: []string{"powershell"}, keys: "disk space full"},
 	{id: "w-du", cat: "storage", title: "Size of a folder (MB)", tmpl: `powershell -NoProfile -Command "[math]::Round((Get-ChildItem -LiteralPath '{1}' -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB, 1)"`, slots: []cmdSlot{cmdFolder("home")}, need: []string{"powershell"}, quote: cmdQuotePS, keys: "disk usage"},
@@ -244,6 +249,19 @@ var cmdDeckWindowsEntries = []cmdEntry{
 	{id: "w-history", cat: "juka", title: "Command history", tmpl: "history", keys: "previous"},
 }
 
+// cmdDeckJavaEntries are the Terminal's Java commands (javaterm.go): its own
+// built-ins, the same on every platform.
+var cmdDeckJavaEntries = []cmdEntry{
+	{id: "java-status", cat: "java", title: "Which Java is used", tmpl: "java status", keys: "java jre jdk version installed"},
+	{id: "java-version", cat: "java", title: "Java version", tmpl: "java -version", keys: "java version"},
+	{id: "java-jar", cat: "java", title: "Run a .jar program", tmpl: "java -jar {1}", slots: []cmdSlot{{label: "Program", kind: cmdSlotFile, start: "java"}}, keys: "java jar run program"},
+	{id: "java-src", cat: "java", title: "Run a .java file", tmpl: "java {1}", slots: []cmdSlot{{label: "Source file", kind: cmdSlotFile, start: "java"}}, keys: "java source run hello jdk"},
+	{id: "java-install", cat: "java", title: "Install Java", tmpl: "java install {1} {2}", slots: []cmdSlot{{label: "Version", kind: cmdSlotChoice, def: "25", choices: []string{"25", "21", "17", "11", "8"}}, {label: "Kind", kind: cmdSlotChoice, def: "jre", choices: []string{"jre", "jdk"}}}, keys: "java install temurin jre jdk download"},
+	{id: "java-update", cat: "java", title: "Update Java", tmpl: "java update", keys: "java update newer"},
+	{id: "jshell", cat: "java", title: "Java shell (jshell, JDK)", tmpl: "jshell", keys: "java repl interactive jdk"},
+	{id: "java-remove", cat: "java", title: "Remove JukaHub's Java", tmpl: "java remove", danger: "JukaHub's Java is deleted; java install brings it back.", keys: "java uninstall delete"},
+}
+
 // cmdDeckCatalog is this platform's full list, Ask Juka first.
 func cmdDeckCatalog() []cmdEntry {
 	base := cmdDeckLinuxEntries
@@ -251,7 +269,8 @@ func cmdDeckCatalog() []cmdEntry {
 		base = cmdDeckWindowsEntries
 	}
 	out := cmdDeckAskEntries()
-	return append(out, base...)
+	out = append(out, base...)
+	return append(out, cmdDeckJavaEntries...)
 }
 
 // cmdEntryQuote is the entry's quoting, the platform's when it names none.
@@ -326,6 +345,7 @@ func cmdDeckProbeTokens() map[string]string {
 	}
 	t["sd"] = sd
 	t["gamelogs"] = cmdDeckFirstDir(gameDiagLogDir())
+	t["java"] = cmdDeckFirstDir(javaUserDir())
 	t["gw"] = strings.TrimSpace(defaultGateway())
 	t["errors"] = cmdDeckFileIf(filepath.Join(app, "errors.txt"))
 	if cores := cmdDeckFirstDir(retroArchCoreDirs()...); cores != "" {

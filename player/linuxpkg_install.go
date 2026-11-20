@@ -54,6 +54,10 @@ type linuxPkgInstalled struct {
 	Provides   string `json:"provides,omitempty"`
 	// Bytes is what its files take on the card.
 	Bytes int64 `json:"bytes"`
+	// SkipDeps are dependencies the package was installed without (a
+	// recipe's helper programs it does not need here, linuxPkgEnsureSkipping):
+	// upgrade, repair, remove and autoremove leave them out for it too.
+	SkipDeps []string `json:"skip_deps,omitempty"`
 }
 
 type linuxPkgStatus struct {
@@ -222,10 +226,13 @@ type linuxPkgPlan struct {
 	remove   []string
 	download int64
 	addBytes int64
+	// skipped is, per planned package, the dependencies it goes without
+	// (recorded as linuxPkgInstalled.SkipDeps).
+	skipped map[string][]string
 }
 
 func newLinuxPkgPlan() *linuxPkgPlan {
-	return &linuxPkgPlan{upgrades: map[string]string{}, manual: map[string]bool{}}
+	return &linuxPkgPlan{upgrades: map[string]string{}, manual: map[string]bool{}, skipped: map[string][]string{}}
 }
 
 type linuxPkgResolver struct {
@@ -235,6 +242,52 @@ type linuxPkgResolver struct {
 	planned map[string]linuxPkgEntry
 	cache   map[string]*linuxPkgEntry
 	notes   []string
+	// skip are the dependencies the packages asked for by name go without in
+	// this plan (linuxPkgPlanInstallSkipping).
+	skip map[string]bool
+}
+
+// linuxPkgSkipSet is a SkipDeps list as a set (nil for none).
+func linuxPkgSkipSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			set[n] = true
+		}
+	}
+	return set
+}
+
+// linuxPkgGroupWaived reports whether a dependency group names a package in
+// skip: the package that has the group goes without it.
+func linuxPkgGroupWaived(group []linuxPkgDep, skip map[string]bool) bool {
+	if len(skip) == 0 {
+		return false
+	}
+	for _, d := range group {
+		if skip[d.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// skipFor is what package name goes without: what its installed copy went
+// without and, for a package asked for by name, the plan's own set.
+func (r *linuxPkgResolver) skipFor(name string, manual bool) map[string]bool {
+	set := linuxPkgSkipSet(r.st.Packages[name].SkipDeps)
+	if manual && len(r.skip) > 0 {
+		if set == nil {
+			set = map[string]bool{}
+		}
+		for n := range r.skip {
+			set[n] = true
+		}
+	}
+	return set
 }
 
 func newLinuxPkgResolver(idx *linuxPkgIndex, st linuxPkgStatus) *linuxPkgResolver {
@@ -326,12 +379,35 @@ func (r *linuxPkgResolver) add(e linuxPkgEntry, manual bool) error {
 	}
 	// Marked before its dependencies, so a cycle ends here.
 	r.planned[e.Name] = e
+	skip := r.skipFor(e.Name, manual)
+	var waived []string
 	for _, field := range []string{e.PreDepends, e.Depends} {
 		for _, group := range linuxPkgParseDeps(field) {
+			if linuxPkgGroupWaived(group, skip) {
+				held := false
+				for _, d := range group {
+					held = held || r.satisfied(d)
+				}
+				if !held {
+					waived = append(waived, group[0].Name)
+				}
+				continue
+			}
 			if err := r.group(group, e.Name); err != nil {
 				return err
 			}
 		}
+	}
+	if len(skip) > 0 {
+		kept := make([]string, 0, len(skip))
+		for n := range skip {
+			kept = append(kept, n)
+		}
+		sort.Strings(kept)
+		r.plan.skipped[e.Name] = kept
+	}
+	if len(waived) > 0 {
+		r.notes = append(r.notes, "Leaving out what "+e.Name+" does not need here: "+strings.Join(waived, ", ")+".")
 	}
 	for _, c := range linuxPkgCompanions[e.Name] {
 		dep := linuxPkgDep{Name: c}
@@ -408,7 +484,17 @@ func (r *linuxPkgResolver) want(name string) error {
 // linuxPkgPlanInstall plans `install names…`; a package whose files were
 // being written when a run died is unpacked again as part of it.
 func linuxPkgPlanInstall(x *linuxPkgIndex, st linuxPkgStatus, names []string) (*linuxPkgPlan, []string, error) {
+	return linuxPkgPlanInstallSkipping(x, st, names, nil)
+}
+
+// linuxPkgPlanInstallSkipping is linuxPkgPlanInstall for packages that go
+// without some of their dependencies: a group of names' Depends that names a
+// package in skip is left out for them (and for them only — the same package
+// needed by another one is installed as usual), and the plan records it so
+// later upgrades and repairs leave it out as well.
+func linuxPkgPlanInstallSkipping(x *linuxPkgIndex, st linuxPkgStatus, names, skip []string) (*linuxPkgPlan, []string, error) {
 	r := newLinuxPkgResolver(x, st)
+	r.skip = linuxPkgSkipSet(skip)
 	for _, n := range names {
 		if err := r.want(n); err != nil {
 			return nil, nil, err
@@ -445,18 +531,77 @@ func linuxPkgPlanUpgrade(x *linuxPkgIndex, st linuxPkgStatus) (*linuxPkgPlan, []
 	return r.plan, r.notes, nil
 }
 
+// repairs plans again every package an earlier run left half-installed. A
+// plan that leaves dependencies out (linuxPkgPlanInstallSkipping) does not
+// repair one that came in as a dependency and that nothing here needs — in
+// its skip set, or wanted by no installed package and by none this plan
+// installs: such a package may be what failed before (hwloc's chain under an
+// earlier aircrack-ng run), and repairing it would stop the install again. A
+// plan without a skip set repairs them all, as before.
 func (r *linuxPkgResolver) repairs() error {
+	names := make([]string, 0, len(r.st.Packages))
 	for n, in := range r.st.Packages {
-		if in.State == "installed" {
+		if in.State != "installed" {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	var later []string
+	for _, n := range names {
+		e, ok := r.get(n)
+		if !ok {
 			continue
 		}
-		if e, ok := r.get(n); ok {
-			if err := r.add(e, false); err != nil {
-				return err
+		if len(r.skip) > 0 && r.st.Packages[n].Auto && (r.skip[n] || !r.installedNeeds(e)) {
+			later = append(later, n)
+			continue
+		}
+		if err := r.add(e, false); err != nil {
+			return err
+		}
+	}
+	for _, n := range later {
+		if _, ok := r.planned[n]; ok {
+			continue // a package this plan installs or repairs needs it after all
+		}
+		// Left half-installed by an earlier run that brought it as a
+		// dependency, and not wanted now: an install that leaves it out must
+		// not stop on repairing it (its own chain may be what failed).
+		r.notes = append(r.notes, n+" was left half-installed by an earlier run and is not needed here; apt install "+n+" repairs it, apt autoremove removes it.")
+	}
+	return nil
+}
+
+// installedNeeds reports whether an installed package that this plan does not
+// replace depends on e (by name or through what e provides) or keeps it as a
+// companion. Any mention counts, even beside an alternative that holds: when
+// in doubt, the package is repaired as before.
+func (r *linuxPkgResolver) installedNeeds(e linuxPkgEntry) bool {
+	for m, in := range r.st.Packages {
+		if in.State != "installed" {
+			continue
+		}
+		if _, replaced := r.planned[m]; replaced {
+			continue // its new version's dependencies are planned already
+		}
+		for _, c := range linuxPkgCompanions[m] {
+			if c == e.Name {
+				return true
+			}
+		}
+		skip := linuxPkgSkipSet(in.SkipDeps)
+		for _, group := range linuxPkgParseDeps(in.PreDepends + ", " + in.Depends) {
+			if linuxPkgGroupWaived(group, skip) {
+				continue
+			}
+			for _, d := range group {
+				if d.Name == e.Name || linuxPkgProvidesSatisfies(e.Provides, d) {
+					return true
+				}
 			}
 		}
 	}
-	return nil
+	return false
 }
 
 // linuxPkgUpgradable lists installed packages with a newer version.
@@ -504,9 +649,14 @@ func linuxPkgPlanRemove(st linuxPkgStatus, names []string) ([]string, error) {
 			if gone[n] {
 				continue
 			}
+			skip := linuxPkgSkipSet(in.SkipDeps)
 			for _, group := range linuxPkgParseDeps(in.PreDepends + ", " + in.Depends) {
 				// Only what the removal breaks counts: a group the installed set
-				// never held (the system provides it) stays as it was.
+				// never held (the system provides it) stays as it was, and so
+				// does one the package was installed without.
+				if linuxPkgGroupWaived(group, skip) {
+					continue
+				}
 				if linuxPkgDepHeld(st, group, nil) && !linuxPkgDepHeld(st, group, gone) {
 					gone[n], changed = true, true
 					break
@@ -537,7 +687,12 @@ func linuxPkgAutoremovable(st linuxPkgStatus) []string {
 		n := queue[0]
 		queue = queue[1:]
 		in := st.Packages[n]
+		skip := linuxPkgSkipSet(in.SkipDeps)
 		for _, group := range linuxPkgParseDeps(in.PreDepends + ", " + in.Depends) {
+			// A dependency the package was installed without keeps nothing.
+			if linuxPkgGroupWaived(group, skip) {
+				continue
+			}
 			for _, d := range group {
 				for m, other := range st.Packages {
 					if keep[m] {
@@ -664,6 +819,79 @@ type linuxPkgUnpackResult struct {
 	files []string
 	links []linuxPkgLink
 	bytes int64
+	// left counts members not written (linuxPkgUnwritableMember, or a file
+	// where a folder of the same name already is, or a folder where a file
+	// is); leftFirst names the first. They are never in files: not owned.
+	left      int
+	leftFirst string
+}
+
+// leave counts a member that is not written.
+func (res *linuxPkgUnpackResult) leave(name string) {
+	if res.left == 0 {
+		res.leftFirst = name
+	}
+	res.left++
+}
+
+// errLinuxPkgFolderInWay is a file whose path is already a folder: on a card
+// that ignores case, "Foo" from one package and "foo/" from another.
+var errLinuxPkgFolderInWay = errors.New("a folder is in the way")
+
+// errLinuxPkgFileInWay is the other way round: a folder (a member's own, or
+// one on the way to a file) whose path is already a file.
+var errLinuxPkgFileInWay = errors.New("a file is in the way")
+
+// linuxPkgFileInWay reports whether rel (a slash path under the root) or a
+// folder on the way to it is a regular file — the case where making it as a
+// folder fails. Each step is looked up through the root, so nothing outside it
+// is ever reached; a step that cannot be looked up ends the walk with false,
+// and the caller's error stands.
+func linuxPkgFileInWay(root *os.Root, rel string) bool {
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		info, err := root.Lstat(filepath.FromSlash(strings.Join(parts[:i+1], "/")))
+		if err != nil {
+			return false
+		}
+		if info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
+}
+
+// linuxPkgMkdirAll makes a folder under the root; a regular file already
+// where it or a folder on its way should be (on a card that ignores case,
+// "Foo" from one package and "foo/" from another) is errLinuxPkgFileInWay.
+func linuxPkgMkdirAll(root *os.Root, rel string) error {
+	err := root.MkdirAll(filepath.FromSlash(rel), 0o755)
+	if err != nil && linuxPkgFileInWay(root, rel) {
+		return errLinuxPkgFileInWay
+	}
+	return err
+}
+
+// linuxPkgUnwritableMember reports a member name linuxPkgCleanMember refuses
+// only for its characters — a backslash (systemd's escaped unit names such as
+// "dev-disk-by\x2dlabel.mount") or a control character — and that is a safe
+// relative path otherwise. Such a member is left out rather than failing the
+// whole package: FAT cannot hold a backslash, and the file lists cannot hold a
+// control character. Anything that could leave the root is still an error.
+func linuxPkgUnwritableMember(name string) bool {
+	mapped := []byte(name)
+	changed := false
+	for i, c := range mapped {
+		if c == '\\' || c < 0x20 || c == 0x7f {
+			mapped[i] = '_'
+			changed = true
+		}
+	}
+	if !changed {
+		return false
+	}
+	_, ok := linuxPkgCleanMember(string(mapped))
+	return ok
 }
 
 // linuxPkgOpenData finds data.tar.* in a .deb (an ar archive) and returns a
@@ -732,6 +960,19 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 	const maxEntries = 100000
 	const maxTotal = int64(4 << 30)
 	entries := 0
+	// leftDirs are the folders left out (a file is in the way), lower-cased
+	// with a trailing slash: whatever is under one is left out too, links
+	// included, so nothing there is listed as the package's own.
+	var leftDirs []string
+	underLeft := func(rel string) bool {
+		lower := strings.ToLower(rel)
+		for _, d := range leftDirs {
+			if strings.HasPrefix(lower, d) {
+				return true
+			}
+		}
+		return false
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return res, err
@@ -749,6 +990,10 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 		}
 		clean, ok := linuxPkgCleanMember(h.Name)
 		if !ok {
+			if linuxPkgUnwritableMember(h.Name) {
+				res.leave(h.Name)
+				continue
+			}
 			return res, fmt.Errorf("the package contains an unsafe path %q", h.Name)
 		}
 		if clean == "" {
@@ -758,9 +1003,19 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 		if linuxPkgSkipped(rel) {
 			continue
 		}
+		if underLeft(rel) {
+			res.leave(rel)
+			continue
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := root.MkdirAll(filepath.FromSlash(rel), 0o755); err != nil {
+			if err := linuxPkgMkdirAll(root, rel); err != nil {
+				if errors.Is(err, errLinuxPkgFileInWay) {
+					// What the folder holds is left out with it, member by member.
+					res.leave(rel)
+					leftDirs = append(leftDirs, strings.ToLower(rel)+"/")
+					continue
+				}
 				return res, err
 			}
 		case tar.TypeReg:
@@ -768,6 +1023,14 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 				return res, errors.New("the package unpacks to more than JukaHub allows")
 			}
 			if err := linuxPkgWriteMember(ctx, root, rel, tr, h.Size, os.FileMode(h.Mode)); err != nil {
+				if errors.Is(err, errLinuxPkgFolderInWay) || errors.Is(err, errLinuxPkgFileInWay) {
+					// The tar reader skips the member's unread data itself.
+					res.leave(rel)
+					if errors.Is(err, errLinuxPkgFileInWay) {
+						leftDirs = append(leftDirs, strings.ToLower(path.Dir(rel))+"/")
+					}
+					continue
+				}
 				return res, fmt.Errorf("%s: %w", rel, err)
 			}
 			res.files = append(res.files, rel)
@@ -780,6 +1043,10 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 			res.links = append(res.links, linuxPkgLink{pkg: pkg, path: rel, target: target})
 		case tar.TypeLink:
 			cleanTarget, ok := linuxPkgCleanMember(h.Linkname)
+			if !ok && linuxPkgUnwritableMember(h.Linkname) {
+				res.leave(rel) // its target was left out above
+				continue
+			}
 			if !ok || cleanTarget == "" {
 				return res, fmt.Errorf("the package contains an unsafe link %q", h.Linkname)
 			}
@@ -789,16 +1056,18 @@ func linuxPkgUnpack(ctx context.Context, root *os.Root, deb, pkg string) (linuxP
 }
 
 // linuxPkgWriteMember writes one file through a temporary name and a rename,
-// so a program that is running from the old copy keeps its file.
+// so a program that is running from the old copy keeps its file. A folder
+// already at its path is errLinuxPkgFolderInWay, a file where one of its
+// folders should be errLinuxPkgFileInWay.
 func linuxPkgWriteMember(ctx context.Context, root *os.Root, rel string, r io.Reader, size int64, mode os.FileMode) error {
 	p := filepath.FromSlash(rel)
-	if dir := filepath.Dir(p); dir != "." {
-		if err := root.MkdirAll(dir, 0o755); err != nil {
+	if dir := path.Dir(rel); dir != "." {
+		if err := linuxPkgMkdirAll(root, dir); err != nil {
 			return err
 		}
 	}
 	if info, err := root.Lstat(p); err == nil && info.IsDir() {
-		return errors.New("a folder is in the way")
+		return errLinuxPkgFolderInWay
 	}
 	perm := os.FileMode(0o644)
 	if mode&0o111 != 0 {
@@ -998,7 +1267,11 @@ func linuxPkgDeletePaths(root *os.Root, paths []string, owned map[string]bool) {
 	}
 	sort.Slice(list, func(i, j int) bool { return strings.Count(list[i], "/") > strings.Count(list[j], "/") })
 	for _, d := range list {
-		_ = root.Remove(filepath.FromSlash(d)) // only succeeds when empty
+		// Only a folder, which goes only when empty: on a card that ignores
+		// case the name can be another package's file ("Foo" for "foo/").
+		if info, err := root.Lstat(filepath.FromSlash(d)); err == nil && info.IsDir() {
+			_ = root.Remove(filepath.FromSlash(d))
+		}
 	}
 }
 
@@ -1060,6 +1333,9 @@ func linuxPkgApply(ctx context.Context, lay linuxPkgLayout, plan *linuxPkgPlan, 
 		oldFiles, oldLinks := linuxPkgReadList(lay, e.Name)
 		mark := prev
 		mark.State, mark.Version, mark.Auto = "unpacking", e.Version, auto
+		// Recorded already, so the repair after a run that dies here leaves
+		// out what this install left out.
+		mark.SkipDeps = plan.skipped[e.Name]
 		st.Packages[e.Name] = mark
 		if err := linuxPkgSaveStatus(lay, st); err != nil {
 			return err
@@ -1102,7 +1378,10 @@ func linuxPkgApply(ctx context.Context, lay linuxPkgLayout, plan *linuxPkgPlan, 
 		st.Packages[e.Name] = linuxPkgInstalled{
 			Version: e.Version, Arch: e.Arch, Auto: auto, State: "installed",
 			Section: e.Section, Desc: e.Desc, Depends: e.Depends, PreDepends: e.PreDepends, Provides: e.Provides,
-			Bytes: res.bytes,
+			Bytes: res.bytes, SkipDeps: plan.skipped[e.Name],
+		}
+		if res.left > 0 {
+			logInfo("linuxpkg", "%s: %d files left out (a name this card cannot hold, or a file or folder of the same name; first: %q)", e.Name, res.left, res.leftFirst)
 		}
 		if err := linuxPkgSaveStatus(lay, st); err != nil {
 			return err

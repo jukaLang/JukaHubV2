@@ -79,6 +79,49 @@ available; otherwise it loads after your words are recognized, if about
 needed elsewhere, the idle model and voice close. If the system runs out of
 memory, it stops the model before JukaHub.
 
+When there is not enough, JukaHub makes room before it gives up. It clears
+its own picture caches and hands free memory back to the system, stops idle
+helpers the answer does not need (a loaded voice, the idle speech
+recognizer, web-video link lookups, the media library scan), drops the
+system's file cache and, only while no game or app is on screen, closes apps
+left running in the background, such as an emulator a crashed JukaHub left
+behind; a message names them. The speech recognizers make room the same
+way when you speak to Juka; loading one for "Hey Juka" or ahead of time
+only takes the light steps (caches, idle helpers, at most once a minute),
+never closes an app and never runs behind a game. Only when that is still
+not enough does Juka say there is not enough memory and offer **A: close
+apps and ask again**. The log's `mem` lines say
+what was freed, for example `freed 64 MB (caches, Go heap, Piper voice, page
+cache) for offline AI`. While nothing is playing and less than 200 MB stays
+free, JukaHub also runs the light part of this by itself every few minutes;
+that never closes an app.
+
+A recent light automatic trim does not delay the full cache clear needed for
+an offline AI question.
+When you leave Chat, JukaHub also releases older processed pictures and video
+frames, keeping the newest one for a follow-up.
+Leaving Browser also frees its open page, images and back/forward page cache
+after the screen closes. Browser refetches the last address when reopened;
+bookmarks, cookies and saved site data remain.
+Leaving Media and the Ports or Homebrew stores releases their thumbnail or
+screenshot memory after the screen closes. Those pictures reload when needed.
+Leaving Chat releases its decoded pictures, avatars and message layouts too;
+an open picture stays visible until its viewer closes.
+
+On a handheld with 1.5 GB of RAM or less, **Settings → Games & emulators →
+Extra memory (swap)** (on by default) adds a safety net a couple of minutes
+after start: compressed memory in RAM (zram) when the kernel has it,
+otherwise a 256 MB swap file, `jukahub.swap`, in JukaHub's data folder. The
+file is made only with its size plus 1 GB free on the card and is kept a
+last resort (swappiness 10), so the card is written only under real memory
+pressure. Some FAT32 or exFAT cards cannot hold a swap file on the stock
+kernel: the log says so once and JukaHub does not try again until the switch
+is turned off and on. Swap that is already on is left alone. The memory
+check counts part of the free swap: no more than idle programs could move
+out, a third of that for zram and half for a file, and never more than half
+of what the model needs. The memory figures on Home and in the Hardware
+screen still show RAM only.
+
 The package contains
 [SmolLM2-135M-Instruct Q4_0](https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF),
 a 91,893,088-byte quantized GGUF model, and a CPU-only
@@ -88,8 +131,8 @@ pinned by revision and SHA-256 in `player/native/build-llm.sh`; the release
 package has a checksum for every file. The installer checks the release asset,
 the package checksums, and whether both runners start on the device.
 Inference uses a 384-token context, three threads, and up to 32 new tokens.
-The model stays in memory while loaded. Close a running game if the memory
-check asks for space.
+The model stays in memory while loaded. A game on screen is never closed to
+make room: close it yourself if the memory check still asks for space.
 
 Older 360M packages still work, including packages made before
 `llama-server` was added. The older model uses more memory; packages without

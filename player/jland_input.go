@@ -181,7 +181,9 @@ func jlandKeysCaptured(config *Config) bool {
 	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return false
 	}
-	return config.Scenes[currentSceneIndex].Name == "JukaLand" || brwGameActive()
+	// The CHIP-8 player too: Q and E are hex keys 4 and 6 there (chip8_scene.go).
+	name := config.Scenes[currentSceneIndex].Name
+	return name == "JukaLand" || name == chip8SceneName || brwGameActive()
 }
 
 // jlandPadHeld is the set of logical buttons held on the pad, after the same

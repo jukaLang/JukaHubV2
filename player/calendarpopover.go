@@ -498,6 +498,8 @@ func renderCalendarCard(renderer *sdl.Renderer, config *Config, cx, cy int32) {
 			renderText(renderer, config, medium, numStr, dayCol,
 				cellX+(calPopCellW-int32(nw))/2, cellY+(calPopCellH-int32(nh))/2-3)
 			calEvDrawDots(renderer, days[dayNum], cellX+calPopCellW/2, cellY+calPopCellH-6)
+			// A day with an open task wears a small box (tasks_cal.go).
+			tasksCalDrawMark(renderer, year, month, dayNum, cellX, cellY)
 		}
 	}
 
@@ -597,6 +599,10 @@ func calEvRenderAgenda(renderer *sdl.Renderer, config *Config, smallFont, tinyFo
 
 	rowY := y + calEvHeadH
 	if len(evs) == 0 {
+		// The day's tasks take the strip when it has no events (tasks_cal.go).
+		if tasksCalAgenda(renderer, config, smallFont, tinyFont, day, x, rowY, w, calEvRows) > 0 {
+			return
+		}
 		msg := "No events"
 		if !calSyncHasSources() {
 			msg = "No calendars yet — Settings → Email & calendar"
@@ -631,6 +637,9 @@ func calEvRenderAgenda(renderer *sdl.Renderer, config *Config, smallFont, tinyFo
 		renderText(renderer, config, smallFont, ellipsize(smallFont, text, w-calEvTimeW-4), ColorTextPrimary(),
 			r.X+calEvTimeW, r.Y+(r.H-int32(th))/2)
 	}
+	// The day's tasks fill the rows its events left free (tasks_cal.go).
+	drawn := len(calEvRowRects)
+	tasksCalAgenda(renderer, config, smallFont, tinyFont, day, x, rowY+int32(drawn)*calEvRowH, w, calEvRows-drawn)
 }
 
 // calendarPopoverNavigation consumes a click inside the card: the month

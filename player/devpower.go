@@ -450,9 +450,10 @@ func backlightOn() {
 }
 
 // backlightGuard is the per-frame safety net: the light is off but neither
-// the dark dock nor a sleep wants it off, so it comes back.
+// the dark dock, a sleep, TV mode (a TV is the screen, tvmode.go) nor a
+// Controller Mode session (ctlmode.go) wants it off, so it comes back.
 func backlightGuard() {
-	if backlightIsOff.Load() && !powerSleepActive() && !ambientIsScreenOff() {
+	if backlightIsOff.Load() && !powerSleepActive() && !ambientIsScreenOff() && !tvModeHoldsPanel() && !ctlModeScreenDark() {
 		backlightOn()
 	}
 }

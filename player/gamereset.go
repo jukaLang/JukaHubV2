@@ -478,15 +478,9 @@ func resetTrashNewDir(suffix string) (string, error) {
 	return dir, nil
 }
 
-// resetTrashMove moves src to dst: a rename on the same card, otherwise a
-// copy (through a temporary file) and then the original's removal.
-func resetTrashMove(src, dst string) error {
-	_, err := resetTrashMoveTo(src, dst)
-	return err
-}
-
-// resetTrashMoveTo is resetTrashMove reporting where the file went: dst, or
-// "<name>~N<ext>" beside it when dst was taken.
+// resetTrashMoveTo moves src to dst by renaming on the same card, or by copying
+// through a temporary file and removing the original. It returns dst, or a
+// numbered sibling when dst was already taken.
 func resetTrashMoveTo(src, dst string) (string, error) {
 	var err error
 	if src, err = safeAbsolutePath(src); err != nil {

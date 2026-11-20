@@ -14,11 +14,11 @@ package main
 //
 // B and the other buttons keep their usual jobs. The D-pad — and the left
 // stick, which steps like it — puts the pointer away and moves the focus as
-// always, so A goes back to pressing the focused item; so does half a minute
-// without touching the right stick. Settings → Controls → Virtual cursor turns
-// it off. Screens that use the right stick themselves keep it: JukaLand and
-// browser games aim with it, and the stick calibration and the controller test
-// measure it. Chat shares it: up / down scrolls the history, a sideways tilt
+// always, so A goes back to pressing the focused item; so do ten seconds
+// without touching the right stick (pointerIdleHide, mousehide.go). Settings →
+// Controls → Virtual cursor turns it off. Screens that use the right stick
+// themselves keep it: JukaLand and browser games aim with it, and the stick
+// calibration and the controller test measure it. Chat shares it: up / down scrolls the history, a sideways tilt
 // brings the pointer up (so its paperclip, links and chips can be clicked on a
 // TrimUI), and once the pointer is put away up / down scrolls again.
 //
@@ -35,8 +35,9 @@ package main
 // still reaches full speed.
 //
 // Mouse mode (vcursor_mode.go) is the same pointer turned on on purpose: hold
-// Select + L1 and it stays up, the D-pad and the left stick move it too, and
-// only the screens that own the pad put it away. That is also how the TrimUI
+// Select + L1 and it stays on, the D-pad and the left stick move it too, and
+// only the screens that own the pad put it away; left unused for ten seconds it
+// only dozes out of sight until the next move. That is also how the TrimUI
 // Brick, which has no sticks, gets a pointer.
 
 import (
@@ -66,8 +67,6 @@ const (
 	// at once, then a notch every Repeat after Delay.
 	vcursorScrollDelay  = 350 * time.Millisecond
 	vcursorScrollRepeat = 90 * time.Millisecond
-	// vcursorIdleHide puts an untouched pointer away.
-	vcursorIdleHide = 30 * time.Second
 	// vcursorScale is the size of one bitmap pixel in logical pixels.
 	vcursorScale = 2
 )
@@ -85,10 +84,12 @@ type vcursorState struct {
 	used    time.Time // last deliberate move, click or scroll
 	next    time.Time // when a held trigger scrolls again
 	// Mouse mode (vcursor_mode.go).
-	mode      bool      // on: the pointer stays up; the D-pad and left stick move it
+	mode      bool      // on: the pointer stays on; the D-pad and left stick move it
 	modeTold  bool      // its how-to toast was shown this run
 	dpad      [4]bool   // up, down, left, right held in mouse mode
 	dpadSince time.Time // when the D-pad started moving the pointer
+	dozing    bool      // unused for pointerIdleHide: up, but not drawn (vcursorRouse)
+	rouseA    bool      // the A that only woke a dozing pointer: its release is taken too
 }
 
 // vcursorStaleGap is a tick gap that means the main loop was away (a modal
@@ -148,9 +149,12 @@ func vcursorBlocked(config *Config) bool {
 // guard for them: a click would press the screen behind. The screensaver and
 // the dock's darkened panel show nothing to point at (screensaverAsleep), and
 // mouse mode's pointer, which never times out, was drawn over the starfield.
+// The light gun's practice target aims with the right stick
+// (lightgun_ui.go). Controller Mode, while it sends the pad to a PC, owns
+// all of it: mouse mode reads the held D-pad itself (ctlmode.go).
 func vcursorScreenBlocks(config *Config) bool {
 	return jlandKeysCaptured(config) || calibrationPanel.open || stickCalOwnsSticks(config) || ctrldiag.open ||
-		alarmFiringActive() || qs.open || wpOpen || screensaverAsleep()
+		alarmFiringActive() || qs.open || wpOpen || screensaverAsleep() || lightgunPracticeOpen() || ctlModeActive()
 }
 
 // vcursorChatOwnsStick reports the Chat screen scrolling its history with the
@@ -203,6 +207,7 @@ func vcursorResetAxes() {
 	vcursor.trig = [2]bool{}
 	vcursorDpadClear()
 	vcursorChord = vcursorChordState{}
+	vcursor.rouseA = false
 	if vcursor.pressed {
 		vcursor.pressed = false
 		vcursorPushButton(false)
@@ -233,7 +238,14 @@ func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 		if stickCalOwnsSticks(config) {
 			return true
 		}
-		return vcursorModeLive(config) && !vcursorBlocked(config)
+		if !vcursorModeLive(config) || vcursorBlocked(config) {
+			return false
+		}
+		// A deliberate tilt is use, and wakes a dozing pointer.
+		if lx, ly := stickShaped(config, stickLeft); math.Hypot(lx, ly) >= vcursorActiveTilt {
+			vcursorRouse(vcursorClock())
+		}
+		return true
 	case sdl.CONTROLLER_AXIS_RIGHTX, sdl.CONTROLLER_AXIS_RIGHTY:
 	default:
 		return false
@@ -260,7 +272,9 @@ func vcursorAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	now := vcursorClock()
 	tilt := vcursorRightTilt(config)
 	if tilt >= vcursorActiveTilt {
-		vcursor.used = now
+		// Use: the idle clock starts again, and a dozing mouse-mode
+		// pointer wakes where it was.
+		vcursorRouse(now)
 	}
 	if !vcursor.active && tilt >= vcursorShowTilt {
 		vcursorShow()
@@ -292,10 +306,13 @@ func vcursorTrigger(e *sdl.ControllerAxisEvent, config *Config) bool {
 		vcursor.trig[side] = false
 	}
 	if pressed {
+		// A dozing pointer wakes first, so the notch lands under a pointer
+		// that is on screen (scrolling is harmless; only A waits, below).
 		now := vcursorClock()
+		vcursorRouse(now)
 		vcursor.trig[side] = true
 		vcursorScrollNotch(side)
-		vcursor.used, vcursor.next = now, now.Add(vcursorScrollDelay)
+		vcursor.next = now.Add(vcursorScrollDelay)
 	}
 	return true
 }
@@ -311,7 +328,8 @@ func vcursorScrollNotch(side int) {
 }
 
 // vcursorShow puts the pointer up where it was last time (the centre at
-// first). The first time in a run it says how it works.
+// first), drawn: a dozing one wakes. The first time in a run it says how it
+// works.
 func vcursorShow() {
 	now := vcursorClock()
 	if !vcursor.placed {
@@ -319,6 +337,7 @@ func vcursorShow() {
 		vcursor.placed = true
 	}
 	vcursor.active = true
+	vcursor.dozing = false
 	vcursor.trig = [2]bool{}
 	vcursor.last, vcursor.used = now, now
 	vcursorPushMotion(true)
@@ -330,7 +349,8 @@ func vcursorShow() {
 }
 
 // vcursorHide puts the pointer away, releasing a held click first so nothing
-// is left mid-drag.
+// is left mid-drag. A dozing mouse-mode pointer stays dozing, so it comes back
+// out of sight (vcursorModeReturn).
 func vcursorHide() {
 	if !vcursor.active {
 		return
@@ -349,6 +369,15 @@ func vcursorHide() {
 // pointer away and still moves the focus — except in mouse mode, where the
 // D-pad moves the pointer. It reports true when the press is consumed.
 func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
+	down := e.Type == sdl.CONTROLLERBUTTONDOWN
+	if e.Button == sdl.CONTROLLER_BUTTON_A && vcursor.rouseA {
+		// The release of the A that only woke a dozing pointer is taken too,
+		// wherever the pointer is now; a new press means it was lost.
+		vcursor.rouseA = false
+		if !down {
+			return true
+		}
+	}
 	if !vcursor.active {
 		return false
 	}
@@ -356,9 +385,15 @@ func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 		vcursorHide()
 		return false
 	}
-	down := e.Type == sdl.CONTROLLERBUTTONDOWN
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
+		if down && vcursor.dozing {
+			// A dozing pointer's first A only shows where it is: nothing
+			// unseen is clicked. The next A clicks.
+			vcursorRouse(vcursorClock())
+			vcursor.rouseA = true
+			return true
+		}
 		if down {
 			if !vcursor.pressed {
 				vcursor.pressed = true
@@ -378,10 +413,14 @@ func vcursorButton(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN,
 		sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		if vcursorModeLive(config) {
-			// Mouse mode: the D-pad moves the pointer (vcursorTick). A queued
-			// hold-to-repeat press (navrepeat.go) stands for a direction that
-			// is already held, so it only has to stay away from the focus.
+			// Mouse mode: the D-pad moves the pointer (vcursorTick), and
+			// wakes it first if it was dozing. A queued hold-to-repeat press
+			// (navrepeat.go) stands for a direction that is already held, so
+			// it only has to stay away from the focus.
 			if e.Which != padRepeatWhich {
+				if down {
+					vcursorRouse(vcursorClock())
+				}
 				vcursorDpadEvent(e.Button, down)
 			}
 			return true
@@ -406,9 +445,12 @@ func vcursorCurve(v float64) float64 {
 // vcursorTick runs once per frame: it times the mouse-mode chord, moves the
 // pointer from the held sticks and, in mouse mode, the held D-pad (axis events
 // only arrive when a value changes, so a steady tilt has to be integrated
-// here, not in the event handler), and repeats a held trigger's scroll.
+// here, not in the event handler), repeats a held trigger's scroll, and puts
+// away (or, in mouse mode, dozes) a pointer unused for pointerIdleHide.
 func vcursorTick(config *Config) {
 	now := vcursorClock()
+	// A real mouse's cursor hides after the same time unused (mousehide.go).
+	mouseHideTick(now)
 	// Select + L1 held long enough: mouse mode on or off (vcursor_mode.go).
 	// A chord button whose release was lost is dropped first, and a switch
 	// turned off behind mouse mode's back (a reloaded config) ends it.
@@ -420,9 +462,10 @@ func vcursorTick(config *Config) {
 		vcursorModeApply(config, false, false)
 	}
 	// Mouse mode brings the pointer back once whatever put it away (a panel,
-	// the on-screen keyboard) is gone.
+	// the on-screen keyboard) is gone — still dozing if it was: a panel
+	// closing is not pointer input.
 	if !vcursor.active && vcursorModeLive(config) && !vcursorBlocked(config) {
-		vcursorShow()
+		vcursorModeReturn()
 	}
 	if !vcursor.active {
 		return
@@ -439,6 +482,7 @@ func vcursorTick(config *Config) {
 		// held click (its release went elsewhere), the held triggers and
 		// D-pad, and re-read the sticks.
 		vcursor.pressed = false
+		vcursor.rouseA = false
 		vcursor.trig = [2]bool{}
 		vcursorDpadClear()
 		stickResetAxes()
@@ -453,12 +497,24 @@ func vcursorTick(config *Config) {
 	busy := false
 	live := vcursorModeLive(config)
 
+	// A dozing pointer stays put until pointer input wakes it (vcursorRouse,
+	// from the events): a stick drifting just past its dead zone must not walk
+	// it, unseen, over the screen. With the on-screen keyboard up (mouse mode
+	// paused) it is put away like the plain pointer, and comes back dozing
+	// when the keyboard closes.
+	if vcursor.dozing {
+		if !live {
+			vcursorHide()
+		}
+		return
+	}
+
 	// Right stick: the direction it points, at a speed on the curve (in mouse
 	// mode Chat keeps it for its history). Mouse mode adds the left stick and
 	// the held D-pad, all together never faster than full tilt.
-	var vx, vy float64
+	var rx, ry, vx, vy float64
 	if !live || !vcursorChatOwnsStick(config) {
-		rx, ry := stickShaped(config, stickRight)
+		rx, ry = stickShaped(config, stickRight)
 		vx, vy = vcursorStickVelocity(rx, ry)
 	}
 	if live {
@@ -469,6 +525,12 @@ func vcursorTick(config *Config) {
 		vcursor.x = clampFloat(vcursor.x+vx*dt, 0, float64(screenWidth-1))
 		vcursor.y = clampFloat(vcursor.y+vy*dt, 0, float64(screenHeight-1))
 		busy = vcursorPushMotion(false)
+		// A steady deliberate tilt, or a held D-pad, sends no events, so
+		// while it still moves the pointer it is use here; held against an
+		// edge, where nothing moves, the pointer can idle.
+		if busy && vcursorInUse(config, live, rx, ry) {
+			vcursor.used = now
+		}
 	}
 
 	// A held trigger keeps scrolling.
@@ -488,10 +550,32 @@ func vcursorTick(config *Config) {
 	}
 	// Idle is measured from deliberate use, not from movement: a stick
 	// drifting just past its dead zone creeps the pointer but does not keep it
-	// up for ever. Mouse mode keeps it up until it is turned off.
-	if !live && !vcursor.pressed && now.Sub(vcursor.used) > vcursorIdleHide {
-		vcursorHide()
+	// up for ever. Mouse mode stays on until it is turned off; its pointer
+	// only dozes, out of sight where it is, until the next move, A or scroll.
+	if !vcursor.pressed && now.Sub(vcursor.used) > pointerIdleHide {
+		if live {
+			vcursor.dozing = true
+		} else {
+			vcursorHide()
+		}
 	}
+}
+
+// vcursorInUse reports the pad driving the pointer on purpose: the right stick
+// (rx, ry, 0 where it is not the pointer's) tilted past vcursorActiveTilt, or
+// in mouse mode the left stick tilted as far or a D-pad direction held.
+func vcursorInUse(config *Config, live bool, rx, ry float64) bool {
+	if math.Hypot(rx, ry) >= vcursorActiveTilt {
+		return true
+	}
+	if !live {
+		return false
+	}
+	if !vcursorDpadIdle() {
+		return true
+	}
+	lx, ly := stickShaped(config, stickLeft)
+	return math.Hypot(lx, ly) >= vcursorActiveTilt
 }
 
 // clampFloat keeps v within lo..hi.
@@ -643,10 +727,10 @@ func vcursorBuildRuns(rows []string) []vcursorRun {
 // vcursorRects are reused between frames.
 var vcursorRects struct{ edge, fill []sdl.Rect }
 
-// vcursorRender draws the pointer on top of the finished frame. The fill turns
-// blue while A is held so a press is visible.
+// vcursorRender draws the pointer on top of the finished frame, unless it is
+// dozing. The fill turns blue while A is held so a press is visible.
 func vcursorRender(renderer *sdl.Renderer) {
-	if !vcursor.active || renderer == nil {
+	if !vcursor.active || vcursor.dozing || renderer == nil {
 		return
 	}
 	x0, y0 := int32(math.Round(vcursor.x)), int32(math.Round(vcursor.y))

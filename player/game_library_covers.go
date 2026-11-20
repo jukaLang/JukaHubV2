@@ -7,6 +7,7 @@ import (
 // The cover layouts use the same selected game and click targets as the list.
 // Opening, searching, and launching stay on the library's existing paths.
 func drawGameCoverArt(renderer *sdl.Renderer, game libraryGame, rect sdl.Rect) {
+	defer nasLibraryArtBadge(renderer, game, rect) // a network drive's game (nas_index.go)
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, WithAlpha(ColorPanelRaised, 220))
 	if tex := artTexture(renderer, game.Art); tex != nil {
 		if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {

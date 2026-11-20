@@ -133,7 +133,7 @@ type companionDropPlan struct {
 var companionDropExtraExts = map[string]string{
 	".a26": "Atari 2600", ".a52": "Atari 5200", ".a78": "Atari 7800", ".lnx": "Atari Lynx",
 	".ws": "WonderSwan", ".wsc": "WonderSwan Color", ".ngp": "Neo Geo Pocket", ".32x": "32X",
-	".p8": "PICO-8",
+	".p8": "PICO-8", ".pck": "Godot",
 }
 
 // companionDropHeadExts are types whose header names the console.

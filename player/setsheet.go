@@ -219,6 +219,7 @@ func setSheetDraw(renderer *sdl.Renderer, config *Config, s *setSheetState) {
 	if renderer == nil || !s.open {
 		return
 	}
+	narrateChoiceSheet(s) // spoken navigation (narrate_hooks.go)
 	label := FontForRole(config, TypeBody)
 	small := FontForRole(config, TypeLabel)
 	if label == nil || small == nil {

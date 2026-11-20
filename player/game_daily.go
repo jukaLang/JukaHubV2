@@ -229,7 +229,7 @@ func dailyPrepare(day string, pick bool, path string, roots []string) {
 	if have || !pick {
 		return
 	}
-	games := scanROMLibrary(roots).Games
+	games := libIndexScan(roots).Games // through the library index (libindex.go)
 	game, ok := dailyPick(day, games, !IsWindows(), dailyPlayableFunc())
 	if !ok {
 		if len(games) == 0 {

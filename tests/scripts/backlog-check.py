@@ -13,7 +13,7 @@ REFERENCE = re.compile(r"\b[A-Z][A-Z0-9]*(?:-[A-Z][A-Z0-9]*)*-\d+\b")
 COUNT = re.compile(r"^Open tasks: \*\*(\d+)\*\*", re.M)
 HEADING = re.compile(r"^#{1,6} (.+)$", re.M)
 LOCAL_LINK = re.compile(r"\]\(#([^\s)]+)\)")
-NON_TASK_IDS = {"SHA-1", "SHA-256"}
+NON_TASK_IDS = {"SHA-1", "SHA-256", "TIC-80", "CHIP-8", "WASM-4"}
 
 
 def without_fences(source: str) -> str:

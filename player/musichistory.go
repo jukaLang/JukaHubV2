@@ -798,7 +798,8 @@ func musicHistoryPlay(config *Config, path string) {
 		}
 	}
 	// Opening a folder replaces what is playing: not for a file that is gone.
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+	// A soundtrack's song ("game.nsf#3") is there when its file is (chiptune.go).
+	if info, err := os.Stat(chiptuneFileOf(path)); err != nil || !info.Mode().IsRegular() {
 		showToast("That track is not there any more", ToastInfo())
 		return
 	}

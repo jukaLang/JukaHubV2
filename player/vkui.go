@@ -697,6 +697,7 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 		vkDrawStatic(renderer, config, fonts, pal, offset)
 	}
 	vkDrawLive(renderer, config, fonts, pal, offset)
+	narrateKeyboard() // spoken navigation (narrate_hooks.go)
 }
 
 // vkDrawLive draws what follows typing and focus on top of the static layer.

@@ -143,16 +143,39 @@ Ubuntu's C library, without touching the firmware:
 | Tool | On the handheld |
 |---|---|
 | sqlmap | **Install** first installs Ubuntu's `python3` (if no Python is found), then sqlmap's source from GitHub, all on the same install bar |
-| Nikto | **Install** first installs `perl`, `libnet-ssleay-perl` and `libio-socket-ssl-perl` (HTTPS targets need the last two), then Nikto's source |
+| Nikto | **Install** first installs `perl`, `libnet-ssleay-perl` and `libio-socket-ssl-perl` (HTTPS targets need the last two) and the modules Nikto checks for at start, `libxml-writer-perl` (XML::Writer) and `libjson-perl` (JSON), then Nikto's source |
 | Nmap | Ubuntu's `nmap` package; JukaHub runs as root, so SYN scans and OS detection are available |
-| John the Ripper | Ubuntu's `john` package (the core edition, CPU only — not the "jumbo" build) |
-| Aircrack-ng | Ubuntu's `aircrack-ng` package, **analysis only**: the handheld's Wi-Fi chip has no monitor mode, so it works on captures copied to the card |
+| John the Ripper | Ubuntu's `john` package (the core edition, CPU only — not the "jumbo" build); its configuration is written to `~/.john/john.conf`, since the build looks for `/etc/john/john.conf` and the firmware's `/etc` is untouched |
+| Aircrack-ng | Ubuntu's `aircrack-ng` package, **analysis only**: the handheld's Wi-Fi chip has no monitor mode, so it works on captures copied to the card. The package's adapter set-up helpers (`ethtool`, `iw`, `rfkill`, `usbutils`, `wireless-tools`), `hwloc`'s viewer (which brings cairo, X11 and fonts) and `python3` for its scripts are left out; the libraries the programs link come along |
 | Burp Suite, ZAP, Metasploit, Wireshark, Hashcat | Still not available, with the reason on the row (desktop/Java applications, Ruby and a full system, a GPU with OpenCL) |
 
 **Update** on a Linux-packages tool checks Ubuntu's index first and installs a
 newer version when there is one; **Remove** deletes the package and the
 dependencies nothing else needs. The same packages can be managed with `apt` in
 the Terminal or on the **Tools → Linux packages** page.
+
+A script tool installed before one of its modules was known (Nikto before
+XML::Writer and JSON were added) needs no reinstall: **Terminal** or
+**Version** on it first installs what is missing on the install bar, then
+opens it. The tool's sheet lists what is missing. **Update** on sqlmap or
+Nikto brings the interpreter and modules up to date as well.
+
+Python and Perl (with Nikto's modules) also arrive by themselves: with
+**Emulator updates** on *Install automatically* (the default), the daily
+quiet-moment pass installs whichever of them is missing — on the first start
+after this update too, never over a game or another install, and only with at
+least 400 MB free on the card. A failed attempt is tried again at a later
+pass. Where the firmware has its own Python, Ubuntu's is not added. The pass
+remembers what it has had (`audit-interp.json` beside the pass's record):
+Python or Perl you remove is not brought back (**Install** on the tool does),
+while a module a later recipe adds still arrives.
+
+When an install fails, the sheet shows the reason (which package, and what
+went wrong with it) and the last lines Linux packages printed, and the log
+gets one line: `audit: aircrack-ng install failed: …`. A version report that
+ends in Perl's "module not found" gets the command that installs it (`apt
+install -y lib…-perl` on the handheld, `cpanm …` with Strawberry Perl on
+Windows, which ships JSON but may lack XML::Writer).
 
 ## Using a tool from the rest of the app
 

@@ -120,6 +120,11 @@ func toolsHubEnsureScenes(config *Config) {
 	toolsHubEnsureScene(config, "Calculator", "C", "Quick math with history")
 	// The Synth (synth.go) is reached from this hub and the Start menu.
 	synthEnsureScene(config)
+	// So are the everyday apps: Notes, Tasks, Voice Memos, Paint, Stopwatch,
+	// Pomodoro and Solitaire (osapps.go).
+	osAppsEnsureScenes(config)
+	// Controller Mode's page (ctlmode.go).
+	ctlModeEnsureScene(config)
 }
 
 // toolsHubEnsureScene appends a scene when no scene of that name exists.
@@ -191,6 +196,9 @@ func toolsHubOpen(config *Config) {
 // every scene). Each page loads what it shows as it opens: the hub's values,
 // the Network tools probes that need no input, the Wi-Fi scan.
 func toolsScenesEnter(config *Config, name string) {
+	// The everyday apps load what they show too, and the one being left saves
+	// (osapps.go).
+	osAppsSceneEnter(config, name)
 	switch name {
 	case toolsHubSceneName:
 		toolsHubEnter(config)
@@ -400,6 +408,11 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		}
 	}
 	tiles = append(tiles, party)
+	// Party Mode: the game show friends play from their phones
+	// (partymode_ui.go).
+	if has(pmodeSceneName) {
+		tiles = append(tiles, pmodeHubTile())
+	}
 	// Local play sits beside it: players joining with their own pads, and
 	// pass and play (hotseat_ui.go).
 	tiles = append(tiles, hotseatToolsTile())
@@ -409,6 +422,10 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	// Your mail and calendars, beside the saves that follow you
 	// (mailcal_ui.go).
 	tiles = append(tiles, mailcalHubTile())
+
+	// EVERYDAY APPS — Notes, Tasks, Voice Memos, Paint, the clocks and the
+	// Calculator (osapps.go).
+	tiles = append(tiles, osAppsHubTiles(has)...)
 
 	// TOOLKITS
 	toolbox := toolsHubTile{
@@ -430,6 +447,10 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	// Ubuntu's arm64 programs on the handheld (linuxpkg_ui.go): only there.
 	if linuxPkgSupported() {
 		tiles = append(tiles, linuxPkgHubTile())
+	}
+	// Java programs and JukaHub's own Java (javaui.go): everywhere.
+	if has(javaSceneName) {
+		tiles = append(tiles, javaHubTile())
 	}
 
 	// CONNECTIVITY
@@ -471,6 +492,11 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 			need: toolsHubNeedInternet, value: "Download, upload and ping",
 		})
 	}
+	// The handheld as a game controller for a PC or phone (ctlmode_ui.go).
+	// No network need: its Bluetooth link works offline.
+	if has(ctlModeSceneName) {
+		tiles = append(tiles, toolsHubTile{id: "ctlmode", label: "Controller Mode", icon: "gamepad", value: "Play PC and phone games with this handheld"})
+	}
 
 	// SYSTEM
 	system := make([]toolsHubTile, 0, 12)
@@ -487,6 +513,8 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	if has("DiskSpace") {
 		system = append(system, toolsHubTile{id: "disk", label: "Disk space", icon: "disk", value: "How full each drive is"})
 	}
+	// The guided hands-on check of this device, with its report (devcheck_ui.go).
+	system = append(system, devCheckHubTile())
 	// The two handheld-only tools: what is on the USB-C port (usbotg.go) and
 	// the battery gauge's calibration cycle (batterycal.go). A PC has neither
 	// a sysfs USB role switch nor a fuel gauge JukaHub can read.
@@ -496,6 +524,14 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 			usb.value = "Sticks, pads and DACs on USB-C"
 		}
 		system = append(system, usb)
+		// The handheld as a controller for a computer (usbpad_ui.go).
+		if usbPadSupported() {
+			pad := toolsHubTile{id: "usbpad", label: "USB controller", icon: "gamepad", value: usbPadTileValue()}
+			if usbPadOn() {
+				pad.tone = toolsHubToneGood
+			}
+			system = append(system, pad)
+		}
 		batt := toolsHubTile{id: "battcal", label: "Battery calibration", icon: "battery", value: batteryCalTileValue()}
 		if batt.value == "" {
 			batt.value = "Teach the gauge your battery"
@@ -521,9 +557,7 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	system = append(system, disc)
 	system = append(system, toolsHubTile{id: "rommgr", label: "ROM manager", icon: "rom", value: "File loose games, BIOS and duplicates"})
 	system = append(system, toolsHubTile{id: "rommcloud", label: "RomM server", icon: "rom", value: "Your server's games, covers, saves and BIOS"})
-	if has("Calculator") {
-		system = append(system, toolsHubTile{id: "calculator", label: "Calculator", icon: "calculator", value: "Quick math with history"})
-	}
+	// The Calculator is one of the everyday apps above.
 	if has(synthSceneName) {
 		system = append(system, toolsHubTile{id: "synth", label: "Synth", icon: "synth", value: "Pocket groovebox: beats, bass and melodies"})
 	}
@@ -535,6 +569,8 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		trophies.value = strconv.Itoa(earned) + " of " + strconv.Itoa(shown) + " earned"
 	}
 	system = append(system, trophies)
+	// What the Game Boy games printed (gbprinter_ui.go).
+	system = append(system, gbpHubTile())
 	system[0].section, system[0].sectionIcon = "System", "cpu"
 	tiles = append(tiles, system...)
 
@@ -557,6 +593,10 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		backup.value, backup.tone = "Weekly backup is on", toolsHubToneGood
 	}
 	tiles = append(tiles, packs, cfgTile, backup)
+	// Everything onto a new SD card, checked (sdmove_ui.go): handheld only.
+	if sdMoveSupported() {
+		tiles = append(tiles, sdMoveHubTile())
+	}
 
 	// UPDATES & SUPPORT
 	support := make([]toolsHubTile, 0, 3)
@@ -648,9 +688,14 @@ func toolsHubActivate(config *Config, idx int) {
 		// Power tools plays its own sound as it opens.
 		PlayActivateSound()
 	}
+	if osAppsHubActivate(config, t.id) {
+		return
+	}
 	switch t.id {
 	case "party":
 		partyOpenScreen(config)
+	case "partymode":
+		pmodeOpenScreen(config)
 	case "localplay":
 		hotseatOpen(config)
 	case "nearby":
@@ -667,6 +712,8 @@ func toolsHubActivate(config *Config, idx int) {
 		sectrustOpenScreen(config)
 	case "linuxpkg":
 		linuxPkgOpenScreen(config)
+	case "java":
+		javaOpenScreen(config)
 	case "nettools":
 		netToolsOpen(config)
 	case "wifi":
@@ -675,6 +722,8 @@ func toolsHubActivate(config *Config, idx int) {
 		hotspotOpenScreen(config)
 	case "netspeed":
 		toolsHubOpenScene(config, "NetSpeed")
+	case "ctlmode":
+		ctlModeOpen(config)
 	case "terminal":
 		toolsHubOpenScene(config, "Terminal")
 	case "cmddeck":
@@ -687,8 +736,12 @@ func toolsHubActivate(config *Config, idx int) {
 		toolsHubOpenScene(config, "DiskSpace")
 	case "usbotg":
 		usbOtgOpenScreen(config)
+	case "usbpad":
+		usbPadOpenScreen(config)
 	case "battcal":
 		batteryCalOpenScreen(config)
+	case "devcheck":
+		devCheckOpenScreen(config)
 	case "benchmark":
 		toolsHubOpenScene(config, "Benchmark")
 	case "logs":
@@ -703,18 +756,20 @@ func toolsHubActivate(config *Config, idx int) {
 		rommOpen(config)
 	case "rommcloud":
 		rommCloudOpen(config)
-	case "calculator":
-		toolsHubOpenScene(config, "Calculator")
 	case "synth":
 		toolsHubOpenScene(config, synthSceneName)
 	case "trophies":
 		trophyOpenRoom(config)
+	case "gbprinter":
+		gbpBookOpenScene(config)
 	case "xpack":
 		xpackOpenGallery(config)
 	case "cfgdoc":
 		cfgdocOpenInspector(config)
 	case "bkup":
 		bkupOpenScreen(config)
+	case "sdmove":
+		sdMoveOpenScreen(config)
 	case "updates":
 		toolsHubOpenScene(config, "Patch")
 	case "bug":

@@ -253,8 +253,8 @@ func TestStateAndResetHelpersAcceptRealPaths(t *testing.T) {
 	if err := os.WriteFile(src, []byte("save"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := resetTrashMove(src, dst); err != nil {
-		t.Fatalf("resetTrashMove: %v", err)
+	if _, err := resetTrashMoveTo(src, dst); err != nil {
+		t.Fatalf("resetTrashMoveTo: %v", err)
 	}
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
 		t.Fatalf("source still exists after reset move: %v", err)
@@ -267,8 +267,8 @@ func TestStateAndResetHelpersAcceptRealPaths(t *testing.T) {
 		root + string(filepath.Separator) + ".." + string(filepath.Separator) + "outside.state",
 		"../outside.state",
 	} {
-		if err := resetTrashMove(bad, filepath.Join(root, "trash", "bad.state")); err == nil {
-			t.Errorf("resetTrashMove accepted hostile source %q", bad)
+		if _, err := resetTrashMoveTo(bad, filepath.Join(root, "trash", "bad.state")); err == nil {
+			t.Errorf("resetTrashMoveTo accepted hostile source %q", bad)
 		}
 	}
 }

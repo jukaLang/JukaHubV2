@@ -1179,6 +1179,8 @@ func pdfvChip(id string, config *Config) {
 		pdfvOpenMenu()
 	case "system":
 		filesOpenWithSystem(pdf.doc.Path)
+	case "openwith":
+		owOpenPicker(config, pdf.doc.Path, FileEntry{}, "reader")
 	case "back":
 		goBackScene(config)
 	}
@@ -1218,6 +1220,13 @@ func pdfvMenuRows() {
 			filesMenuRow{ID: "nextmark", Label: "Next bookmark", Enabled: true},
 		)
 	}
+	// A reading app beside the reader ("Open in <App>" / "Get <App>") and
+	// Open with… (openwith.go): asked of the App Center when the menu opens
+	// (no rows yet), reused while its presses rebuild the rows.
+	rows = append(rows, owReaderMenuRows(pdf.doc.Path, pdfvView.menu.rows == nil)...)
+	// KOReader found on the card, when that row does not already open it
+	// (koreader.go).
+	rows = koreaderReaderMenuRows(rows, pdf.doc.Path)
 	if filesSystemOpenAvailable() && pdf.doc.Path != "" {
 		rows = append(rows, filesMenuRow{ID: "system", Label: "Open with Windows", Enabled: true})
 	}
@@ -1265,6 +1274,15 @@ func pdfvMenuApply(in filesMenuInput) {
 	case "system":
 		pdfvView.menu.open = false
 		filesOpenWithSystem(pdf.doc.Path)
+	case "owapp", "openwith":
+		pdfvView.menu.open = false
+		// The page reached is kept before another app takes the document.
+		pdfSaveReadingState()
+		owReaderMenuApply(appConfig, in.run, pdf.doc.Path)
+	case koreaderMenuID:
+		pdfvView.menu.open = false
+		pdfSaveReadingState()
+		koreaderOpen(pdf.doc.Path)
 	}
 	if in.run == "first" || in.run == "back10" || in.run == "fwd10" || in.run == "last" {
 		pdfvView.scrollY = 0

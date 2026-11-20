@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHakuxPickAsset(t *testing.T) {
@@ -292,6 +293,31 @@ func TestHakuxSupportFor(t *testing.T) {
 	}
 	if reason := hakuxSupportFor(DeviceTrimuiSmartProS).Reason; !strings.Contains(reason, "A523") {
 		t.Errorf("the Smart Pro S reason should name its chip: %q", reason)
+	}
+}
+
+// The once-per-card record lives in hakuX's state folder on the card and is
+// written once: what first showed an Xbox launcher stays, so a later removal
+// of hakuX is never answered by installing it again by itself. A failed first
+// install noted there holds the pass for a day without ending it.
+func TestHakuxAutoMarkerOncePerCard(t *testing.T) {
+	p, _, read := hakuxTestCard(t)
+	if hakuxAutoMarked(p) {
+		t.Fatal("a new card reads as having had an Xbox launcher")
+	}
+	now := time.Now()
+	hakuxAutoNoteFailure(p, os.ErrInvalid)
+	if hakuxAutoMarked(p) || !hakuxAutoHeld(p, now) || hakuxAutoHeld(p, now.Add(25*time.Hour)) {
+		t.Fatal("a failed first install must hold the pass for a day, not end it")
+	}
+	hakuxAutoRemember(p, "hakuX v0.1.3 installed")
+	hakuxAutoRemember(p, "Xbox launcher folder found")
+	if !hakuxAutoMarked(p) {
+		t.Fatal("the record was not written")
+	}
+	got := read(p.State + "/" + hakuxAutoMarkerName)
+	if !strings.Contains(got, "v0.1.3 installed") || strings.Contains(got, "folder found") {
+		t.Fatalf("record = %q, want the first sighting kept", got)
 	}
 }
 

@@ -151,6 +151,11 @@ func usbMtpStartNow() {
 		usbNetSetStatus(usbNetOff, "", "")
 		logWarn("usbmtp", "USB file transfer not started: %s", msg)
 	}
+	// Controller mode has the port (usbpad.go); it starts this again after.
+	if usbPadHolds.Load() {
+		fail("controller mode is using the USB port")
+		return
+	}
 	root := fileServerCardRoot()
 	if root == "" {
 		fail("no SD card found")

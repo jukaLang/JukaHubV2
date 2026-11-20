@@ -537,6 +537,12 @@ func beginGamePowerProfile(config *Config) func() {
 // below.)
 func beginLaunchPowerProfile(config *Config, target string) func() {
 	cfg := loadPowerProfileConfig(config)
+	// An Xbox game or stream runs at full speed even with the global switch
+	// off (xboxboost.go); a global clock cap and the game's own options below
+	// still apply.
+	if xboxBoostHolds(target) {
+		cfg = xboxBoostPowerConfig(cfg)
+	}
 	if strings.TrimSpace(target) != "" {
 		cfg = gameLaunchPowerConfig(cfg, gameOptionsFor(target))
 	}

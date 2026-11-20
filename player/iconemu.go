@@ -58,6 +58,8 @@ var iconEmuRules = [...]iconEmuRule{
 	{"emu-neogeo", []string{"neogeo", "neocd", "ngp", "ngpc", "race"}},
 	{"emu-arcade", []string{"mame2000", "mame2003", "mame2010", "mame2015", "mame2016", "mame", "fbneo", "fbalpha", "finalburn", "fba", "arcade", "cps1", "cps2", "cps3", "naomi", "atomiswave"}},
 	{"emu-atari", []string{"stella", "atari", "a2600", "a5200", "a7800", "prosystem", "handy", "lynx", "virtualjaguar", "jaguar"}},
+	// Homebrew engines with no hardware to draw: the cartridge glyph.
+	{"rom", []string{"tic80", "easyrpg"}},
 	{"emu-retroarch", []string{"retroarch", "libretro"}},
 }
 

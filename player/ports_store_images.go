@@ -59,6 +59,10 @@ const (
 	pstoreShotRetry = 2 * time.Minute
 	// pstoreShotTexMax bounds the texture cache.
 	pstoreShotTexMax = 40
+	// Decoded screenshots are much larger than their JPEGs on disk. Keep only
+	// a few screens' worth on a 1 GB handheld, even when every image is valid.
+	pstoreShotTexHandheldBytes = int64(8 << 20)
+	pstoreShotTexDesktopBytes  = int64(24 << 20)
 	// pstoreShotDecodesPerFrame is the per-frame budget for new textures.
 	pstoreShotDecodesPerFrame = 2
 	// pstoreShotMaxSide bounds a downloaded picture's sides before it is
@@ -425,13 +429,15 @@ func pstoreShotNoteWritten(dir string) {
 // ── Textures (render thread) ────────────────────────────────────────────
 
 type pstoreTexEntry struct {
-	tex  *sdl.Texture
-	used uint64
+	tex   *sdl.Texture
+	used  uint64
+	bytes int64
 }
 
 var pstoreTex struct {
 	renderer *sdl.Renderer
 	m        map[string]*pstoreTexEntry
+	bytes    int64
 	frame    uint64
 	loads    int
 	// janitor: a release check is scheduled (main thread only).
@@ -441,12 +447,14 @@ var pstoreTex struct {
 // pstoreTexClear lets every store texture go. Main thread: memory pressure
 // (adaptive.go) and the janitor once the store is off screen.
 func pstoreTexClear() {
-	for k, t := range pstoreTex.m {
+	for _, t := range pstoreTex.m {
 		if t.tex != nil {
 			_ = t.tex.Destroy()
 		}
-		delete(pstoreTex.m, k)
 	}
+	pstoreTex.m = nil
+	pstoreTex.bytes = 0
+	pstoreTex.renderer = nil
 }
 
 // pstoreTexJanitor frees the textures a few seconds after the store left the
@@ -480,6 +488,7 @@ func pstoreShotTexture(renderer *sdl.Renderer, e mcCatalogEntry) *sdl.Texture {
 		// A new renderer: the old one took its textures with it.
 		pstoreTex.renderer = renderer
 		pstoreTex.m = make(map[string]*pstoreTexEntry, pstoreShotTexMax)
+		pstoreTex.bytes = 0
 	}
 	if pstoreTex.frame != frameCount {
 		pstoreTex.frame, pstoreTex.loads = frameCount, 0
@@ -505,32 +514,45 @@ func pstoreShotTexture(renderer *sdl.Renderer, e mcCatalogEntry) *sdl.Texture {
 		_ = os.Remove(filepath.Join(pstoreShotDir(), key+".jpg"))
 		return nil
 	}
+	bytes := int64(surface.W) * int64(surface.H) * 4
+	budget := cacheBudgetByDevice(pstoreShotTexHandheldBytes, pstoreShotTexDesktopBytes)
+	if !storeShotTextureMakeRoom(pstoreTex.m, &pstoreTex.bytes, pstoreShotTexMax, budget, bytes, frameCount) {
+		surface.Free()
+		return nil
+	}
 	tex, err := renderer.CreateTextureFromSurface(surface)
 	surface.Free()
 	if err != nil {
 		return nil
 	}
-	pstoreTexEvict()
-	pstoreTex.m[key] = &pstoreTexEntry{tex: tex, used: frameCount}
+	pstoreTex.m[key] = &pstoreTexEntry{tex: tex, used: frameCount, bytes: bytes}
+	pstoreTex.bytes += bytes
 	return tex
 }
 
-// pstoreTexEvict makes room for one more texture, never taking one drawn
-// this frame.
-func pstoreTexEvict() {
-	for len(pstoreTex.m) >= pstoreShotTexMax {
-		oldKey, oldUsed := "", frameCount
-		for k, t := range pstoreTex.m {
-			if t.used < oldUsed {
-				oldKey, oldUsed = k, t.used
+// storeShotTextureMakeRoom is shared by the Ports and Homebrew stores. It
+// never destroys a texture drawn this frame; if none can leave, the new image
+// waits for a later frame rather than pushing RAM past the byte ceiling.
+func storeShotTextureMakeRoom(entries map[string]*pstoreTexEntry, usedBytes *int64, maxEntries int, maxBytes, incoming int64, frame uint64) bool {
+	if incoming <= 0 || incoming > maxBytes {
+		return false
+	}
+	for len(entries) >= maxEntries || *usedBytes+incoming > maxBytes {
+		oldKey, oldUsed := "", ^uint64(0)
+		for key, entry := range entries {
+			if entry.used < frame && (oldKey == "" || entry.used < oldUsed) {
+				oldKey, oldUsed = key, entry.used
 			}
 		}
 		if oldKey == "" {
-			return
+			return false
 		}
-		if t := pstoreTex.m[oldKey]; t.tex != nil {
-			_ = t.tex.Destroy()
+		entry := entries[oldKey]
+		if entry.tex != nil {
+			_ = entry.tex.Destroy()
 		}
-		delete(pstoreTex.m, oldKey)
+		*usedBytes -= entry.bytes
+		delete(entries, oldKey)
 	}
+	return true
 }

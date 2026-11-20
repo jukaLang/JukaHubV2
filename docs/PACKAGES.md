@@ -14,7 +14,9 @@ interrupted operation is rolled back at the next launch.
 ## What Patch does
 
 - **Install / Update / Reinstall / Remove** from the package list — rows show
-  their state (`Installed`, `Update`) and **A** opens the row menu.
+  their state (`Installed`, `Update`). **A** on a package that is not installed
+  installs it; **A** on an installed one opens the row's menu (`Update` or
+  `Reinstall`, and `Remove`), which **B** or a click outside closes.
 - **Refresh repository** — download and verify the signed repository index (the
   `apt-get update` equivalent; offline keeps the last verified index).
 - **Dependency resolution** — `depends` are resolved into a transaction plan,

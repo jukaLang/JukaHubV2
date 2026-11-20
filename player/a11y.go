@@ -57,6 +57,7 @@ const (
 	a11yKeyMagnifier          = "a11y_magnifier"
 	a11yKeyMagnifierZoom      = "a11y_magnifier_zoom"
 	a11yKeyLegibleFont        = "a11y_legible_font"
+	a11yKeyLegibleFace        = "a11y_legible_face"
 	a11yKeySwitchMode         = "a11y_switch_mode"
 	a11yKeySwitchInterval     = "a11y_switch_interval_ms"
 
@@ -114,9 +115,13 @@ type a11ySettings struct {
 	repeatRateMs  int
 	toastPercent  int
 	stickyChords  bool
-	// legibleFont draws the UI in the best legible system face the machine has
-	// (legiblefont.go), or the bundled Inter when none is installed.
+	// legibleFont draws the UI in the best readable face for the language
+	// (legiblefont.go), downloading Atkinson Hyperlegible or Andika when none
+	// is here (legiblefont_get.go); the bundled Inter until one is.
 	legibleFont bool
+	// legibleFace is the face picked in the Readable font row: "" is Auto,
+	// otherwise a legibleFontFaces id.
+	legibleFace string
 	// magnifier is the zoom lens over the focus (magnifier.go); zoom is the
 	// factor it captures at, 2 or 3.
 	magnifier     bool
@@ -191,6 +196,9 @@ func a11yInit(config *Config) {
 		keys: map[uint8]uint8{}}
 	a11yLoad(config)
 	a11yRefreshFonts()
+	// With Legible reading font on and its face missing (a fresh card, a
+	// copied config), the face is fetched shortly after start.
+	legibleFontStartup(config)
 }
 
 // a11yLoad reads the stored values. Numbers may arrive as float64 (JSON),
@@ -210,6 +218,12 @@ func a11yLoad(config *Config) {
 	a11y.increaseContrast = a11yCustomBool(config, a11yKeyIncreaseContrast)
 	a11y.boldText = a11yCustomBool(config, a11yKeyBoldText)
 	a11y.legibleFont = a11yCustomBool(config, a11yKeyLegibleFont)
+	a11y.legibleFace = ""
+	if s, ok := customString(config.Variables.Custom, a11yKeyLegibleFace); ok {
+		if _, known := legibleFontFaceFor(strings.TrimSpace(s)); known {
+			a11y.legibleFace = strings.TrimSpace(s)
+		}
+	}
 	// The font picked in Settings → Display (uifont.go), read here so the
 	// first frame is drawn in it; a11yInit drops the font caches after.
 	uiFontLoad(config)
@@ -290,6 +304,7 @@ func a11yStore(config *Config) {
 	config.Variables.Custom[a11yKeyIncreaseContrast] = a11y.increaseContrast
 	config.Variables.Custom[a11yKeyBoldText] = a11y.boldText
 	config.Variables.Custom[a11yKeyLegibleFont] = a11y.legibleFont
+	config.Variables.Custom[a11yKeyLegibleFace] = a11y.legibleFace
 	config.Variables.Custom[a11yKeyMonoAudio] = a11y.monoAudio
 	config.Variables.Custom[a11yKeyAudioBalance] = a11y.audioBalance
 	config.Variables.Custom[a11yKeyCaptionsAlways] = a11y.captionsAlways
@@ -352,6 +367,12 @@ func a11yClampScale(scale float64) float64 {
 	return math.Round(scale*100) / 100
 }
 
+// a11yTextBoost multiplies the player's text size at run time without
+// changing it: TV mode (tvmode.go) raises it while a TV is the screen. It is
+// never saved, and the product stays within a11yMaxScale (or the player's own
+// size, when that is larger). Main thread.
+var a11yTextBoost = 1.0
+
 // a11yScaleFontSize is called by getCachedFont for every logical font, which is
 // what makes the setting global. The size is part of the font cache key, so a
 // new scale simply opens new faces instead of reusing stale ones.
@@ -360,7 +381,13 @@ func a11yScaleFontSize(base int) int {
 		return base
 	}
 	scale := a11y.fontScale
-	if scale <= 0 || math.Abs(scale-1) < 0.001 {
+	if scale <= 0 {
+		scale = 1
+	}
+	if a11yTextBoost > 1 {
+		scale = math.Min(scale*a11yTextBoost, math.Max(scale, a11yMaxScale))
+	}
+	if math.Abs(scale-1) < 0.001 {
 		return base
 	}
 	size := int(math.Round(float64(base) * scale))
@@ -1102,24 +1129,21 @@ func a11ySetMagnifierZoom(zoom int) bool {
 }
 
 // a11ySetLegibleFont turns the legible reading face on or off. The face is
-// resolved from the machine's installed fonts at the next frame, and every
-// font-dependent cache is dropped so the change is visible without a restart.
+// resolved at the next frame, and every font-dependent cache is dropped so the
+// change is visible without a restart. Turning it on is also the opt-in that
+// downloads a readable face for the language when none is here
+// (legibleFontAnnounce, legiblefont_get.go).
 func a11ySetLegibleFont(on bool) bool {
 	if on == a11y.legibleFont {
 		return false
 	}
 	a11y.legibleFont = on
-	legibleFontReset()
-	a11yRefreshFonts()
+	legibleFontRedraw()
 	if !on {
 		ShowToast("Legible reading font: Off", ToastKindInfo)
 		return true
 	}
-	if face := legibleFontFaceName(); face != "" {
-		ShowToast("Legible reading font: "+face, ToastKindInfo)
-	} else {
-		ShowToast("Legible reading font on · no system face found, using Inter", ToastKindInfo)
-	}
+	legibleFontAnnounce(nil, true)
 	return true
 }
 
@@ -1221,6 +1245,7 @@ func a11yResetDefaults(config *Config) {
 	a11y.increaseContrast = false
 	a11y.boldText = false
 	a11y.legibleFont = false
+	a11y.legibleFace = ""
 	legibleFontReset()
 	a11y.monoAudio = false
 	a11y.audioBalance = 0

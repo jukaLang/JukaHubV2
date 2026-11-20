@@ -182,6 +182,12 @@ func qsInit() {
 			// Colour, effect and brightness live in their own panel; the LED
 			// Mode cycler below stays the one-press shortcut.
 			{Label: "LED Style", Icon: "[R]", Action: qsLinkLEDPanel},
+			// The Stopwatch app, on every host; the button shows the running
+			// clock (stopwatch.go).
+			{Label: "Stopwatch", Icon: "[W]", Action: qsLinkStopwatch, Available: true},
+			// The handheld as a PC's game controller, on every host
+			// (ctlmode_ui.go).
+			{Label: "Controller Mode", Icon: "[G]", Action: qsLinkControllerMode, Available: true},
 			// Frees memory when Juka's offline AI needs it (closeall.go).
 			{Label: "Close all apps & games", Icon: "[X]", Action: qsLinkCloseAll},
 			{Label: "Power", Icon: "[O]", Action: qsLinkPower},
@@ -203,6 +209,8 @@ func qsInit() {
 		lastBrightness: -1,
 	}
 	qs.links = qsWithBluetoothLink(qs.links)
+	// Record screen, where the panel can be recorded (screenrec.go).
+	qs.toggles = screenRecQSToggles(qs.toggles)
 	// Power off after sleeping, one press away (quickresume.go): A turns it
 	// off or back on at the last delay, Left/Right step it. Only where the
 	// RTC can wake the handheld; last, so the rows above keep their indices.
@@ -270,6 +278,7 @@ func qsRefreshAvailability() {
 		qsActionNetplay:       true,
 		qsActionMagnifier:     true,
 		qsActionBgMusic:       true,
+		qsActionScreenRec:     true, // only added where it works (screenRecQSToggles)
 		qsActionVPN:           vpnQSAvailable() || vpnEnabledIn(appConfig), // on can always go off
 	}
 	detail := map[qsAction]string{
@@ -469,6 +478,8 @@ func qsSyncFromConfig(config *Config) {
 				qs.toggles[i].Value = vpnSettingOn(config)
 			case qsActionBgMusic:
 				qs.toggles[i].Value = bgmEnabledIn(config)
+			case qsActionScreenRec:
+				qs.toggles[i].Value = screenRecActive()
 			}
 		}
 		if config.Variables.ScreensaverTimeout > 0 {
@@ -745,6 +756,19 @@ func qsOpenLink(l qsLink) {
 		// first from another screen (powerkey.go powerKeyTick).
 		qs.open = false
 		powerKeyCardRequested.Store(true)
+	case qsLinkStopwatch:
+		// The app replaces the panel, as the LED panel does.
+		qs.open = false
+		osAppsOpen(appConfig, stopwatchSceneName)
+	case qsLinkControllerMode:
+		// So does Controller Mode's page (ctlmode_ui.go); a game on screen
+		// keeps the panel up with the reason.
+		if ctlModeGameRunning() {
+			ShowToast(ctlUIGameRunningMsg, ToastKindWarning)
+			return
+		}
+		qs.open = false
+		ctlModeOpen(appConfig)
 	}
 }
 
@@ -1018,6 +1042,10 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 	case qsActionQuiet:
 		quietModeSet(appConfig, want)
 		return nil
+	case qsActionScreenRec:
+		// Starts or stops the screen recorder; a game started meanwhile is
+		// recorded too (screenrec.go).
+		return screenRecQSApply(want)
 	case qsActionBgMusic:
 		// bgmSetPrefs stores, saves and applies: off fades the music out
 		// within the loop's next block.

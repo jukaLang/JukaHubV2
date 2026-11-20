@@ -212,7 +212,9 @@ func videoSheetRowLabel(id videoSheetRowID, c videoSheetContext) string {
 	case vsRowFullscreen:
 		return "Full screen: " + vsOnOff(videoFullscreen)
 	case vsRowSpeed:
-		return "Speed: " + vcSpeedLabel(snapshotVideoState().speed)
+		// The speed the decoders play at; a live stream's stays 1× (the press
+		// says why, SetPlaybackSpeed).
+		return "Speed: " + vcSpeedLabelCached(snapshotVideoState().speed)
 	case vsRowQuality:
 		if appConfig == nil {
 			return "Quality: Auto"

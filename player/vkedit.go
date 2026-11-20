@@ -435,7 +435,7 @@ func vkApplyAutoShift() {
 // vkSecretTarget is a field whose text must not be shown, copied or learned.
 func vkSecretTarget() bool {
 	switch vkTarget {
-	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget, homebrewKeyVKTarget:
+	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
 		return true
 	case vkTargetRommServer:
 		return rommCloud.editToken
@@ -446,6 +446,9 @@ func vkSecretTarget() bool {
 	case vkTargetPSRemote:
 		// The PlayStation profile's login passcode (psremote_console_opts.go).
 		return psPanelEditField == psEditLoginPIN
+	case vkTargetTerm:
+		// A Terminal session's program asking for a password (termpty_ui.go).
+		return termPtySecretInput()
 	}
 	return false
 }
@@ -456,10 +459,13 @@ func vkSecretTarget() bool {
 func vkStripModeNow() vkStripMode {
 	switch vkTarget {
 	case vkTargetTerm:
+		if termPtySecretInput() {
+			return vkStripHidden
+		}
 		return vkStripTermTokens
 	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit,
 		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey, bootLockVKTarget,
-		feArchivePassVKTarget, homebrewKeyVKTarget:
+		feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
 		return vkStripHidden
 	case vkTargetRommServer:
 		if rommCloud.editToken {

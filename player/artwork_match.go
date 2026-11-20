@@ -1206,6 +1206,10 @@ func romLocalCoverPath(rom scannedROM) string {
 		filepath.Join(dir, ".res", file),
 		filepath.Join(dir, ".media", stem),
 	}
+	if rom.System == godotSystemName {
+		// The Godot port keeps a game's picture beside its .pck (godot.go).
+		candidates = append(candidates, filepath.Join(dir, stem))
+	}
 	// A game in its own folder: the console folder's Imgs names it after the
 	// folder. Only for a folder that is one game (the ROM is named after it,
 	// or is a disc sheet): a folder of many ROMs ("Hacks") has a picture of

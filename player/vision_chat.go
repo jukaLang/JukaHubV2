@@ -38,6 +38,7 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 )
 
 // visionKind is what Juka does with a file in a question.
@@ -478,15 +479,35 @@ type visionCacheEntry struct {
 	hasClip bool
 }
 
-// visionCacheMax is how many files are remembered: a conversation's latest
-// question carries at most three.
-const visionCacheMax = 6
+// A question carries at most three files. Keep room for recent follow-ups,
+// without retaining six videos' encoded frames indefinitely on the handheld.
+const (
+	visionCacheMax            = 6
+	visionCacheHandheldBudget = 8 << 20
+	visionCacheDesktopBudget  = 12 << 20
+)
+
+func visionCacheEntryBytes(e visionCacheEntry) int64 {
+	n := int64(len(e.key) + len(e.picture.MIME) + len(e.clip.name) + len(e.clip.transcript))
+	n += int64(cap(e.picture.Data))
+	for _, frame := range e.clip.frames {
+		n += int64(cap(frame.Data) + len(frame.MIME))
+	}
+	n += int64(cap(e.clip.frames))*int64(unsafe.Sizeof(jukaVisionImage{})) +
+		int64(cap(e.clip.times))*int64(unsafe.Sizeof(float64(0)))
+	return n
+}
 
 // visionCache holds the entries, oldest first.
-var visionCache struct {
+var visionCache = struct {
 	mu      sync.Mutex
-	entries []visionCacheEntry
-}
+	entries *byteOrderedStore[string, visionCacheEntry]
+}{entries: newByteOrderedStore[string, visionCacheEntry](
+	visionCacheMax,
+	cacheBudgetByDevice(visionCacheHandheldBudget, visionCacheDesktopBudget),
+	visionCacheEntryBytes,
+	nil,
+)}
 
 // visionFileKey names a file as it is now: its path, size and time, so an
 // edited file is read again.
@@ -504,25 +525,33 @@ func visionFileKey(path string) (string, error) {
 func visionCacheGet(key string) (visionCacheEntry, bool) {
 	visionCache.mu.Lock()
 	defer visionCache.mu.Unlock()
-	for _, e := range visionCache.entries {
-		if e.key == key {
-			return e, true
-		}
-	}
-	return visionCacheEntry{}, false
+	return visionCache.entries.get(key)
 }
 
 func visionCachePut(e visionCacheEntry) {
 	visionCache.mu.Lock()
 	defer visionCache.mu.Unlock()
-	kept := make([]visionCacheEntry, 0, visionCacheMax)
-	for _, old := range visionCache.entries {
-		if old.key != e.key {
-			kept = append(kept, old)
-		}
+	if visionCache.entries.maxBytes > 0 && visionCacheEntryBytes(e) > visionCache.entries.maxBytes {
+		visionCache.entries.drop(e.key)
+		return
 	}
-	if len(kept) >= visionCacheMax {
-		kept = kept[len(kept)-visionCacheMax+1:]
+	// A processed file is newest again, as it was in the slice cache.
+	visionCache.entries.drop(e.key)
+	visionCache.entries.put(e.key, e)
+}
+
+func visionCacheClear() {
+	visionCache.mu.Lock()
+	visionCache.entries.clear()
+	visionCache.mu.Unlock()
+}
+
+// visionCacheKeepLatest leaves one recently used file ready for a follow-up
+// after Chat closes and releases older processed pictures and video frames.
+func visionCacheKeepLatest() {
+	visionCache.mu.Lock()
+	defer visionCache.mu.Unlock()
+	for len(visionCache.entries.order) > 1 {
+		visionCache.entries.drop(visionCache.entries.order[0])
 	}
-	visionCache.entries = append(kept, e)
 }

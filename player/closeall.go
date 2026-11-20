@@ -9,7 +9,10 @@ package main
 // the fix (A: close apps and ask again), and the same action sits in Quick
 // Settings, Power tools, the Processes panel, the in-game menu ("Close
 // background apps", which keeps the game on screen) and the voice commands
-// ("close all apps", "free up memory").
+// ("close all apps", "free up memory"). The AI and speech starts now make
+// room by themselves first (memfree.go: caches, idle helpers, and — with no
+// game on screen — the leftovers this file's scan finds, ended with
+// closeAllEndProcs); the offer stays for when that is not enough.
 //
 // What closes:
 //   - JukaHub's own screen children (gamesuspend.go): games, emulators, ports,
@@ -310,6 +313,14 @@ func closeAllLeftovers(kept []*exec.Cmd, keepWine bool, labels *closeAllLabels) 
 	for _, p := range procs {
 		labels.add(p.label)
 	}
+	closeAllEndProcs(procs)
+}
+
+// closeAllEndProcs asks untracked processes to quit, kills what is left after
+// closeAllProcGrace and waits a moment for them to be reaped. The automatic
+// free-up (memfree.go) ends the apps left in the background with it too. Off
+// the main thread.
+func closeAllEndProcs(procs []closeAllProc) {
 	closeAllSignalProcs(procs, false)
 	for deadline := time.Now().Add(closeAllProcGrace); time.Now().Before(deadline) && closeAllProcsAlive(procs); {
 		time.Sleep(50 * time.Millisecond)
@@ -607,6 +618,8 @@ var closeAllAppRules = [...]closeAllRule{
 	{"openbor", '^', "OpenBOR"},
 	{"pico8", '^', "PICO-8"},
 	{"fake-08", '^', "PICO-8"},
+	{"frt", '^', "Godot game"},
+	{"godot", '^', "Godot game"},
 	{"love", '=', "LÖVE game"},          // PortMaster's LÖVE ports
 	{"gmloader", '^', "GameMaker port"}, // PortMaster's GameMaker runner
 	{"gptokeyb", '^', "Port controls"},  // PortMaster's pad-to-keys helper; goes with its port

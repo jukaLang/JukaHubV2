@@ -938,6 +938,11 @@ type mlibTags struct {
 
 // mlibProbeFile reads a file's length and tags with ffprobe.
 func mlibProbeFile(ctx context.Context, ffprobe, path string) (mlibTags, error) {
+	// A game soundtrack's tags are in its header: the game is the album, the
+	// console the album artist (chiptune.go).
+	if t, ok := chiptuneLibraryTags(path); ok {
+		return t, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, mlibProbeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error",
@@ -1161,6 +1166,13 @@ func (j *mlibArtJob) find(ctx context.Context, it mlibItem) (art, poster string)
 	dir := filepath.Dir(it.Path)
 	dirKey := dlPathKey(dir)
 	if !it.Video {
+		// A game soundtrack wears its game's cover from the Games library
+		// (chiptune_art.go); else its folder's, like any song.
+		if src := chiptuneLibraryCover(it.Path); src != "" {
+			if a := j.fromImage(src); a != "" {
+				return a, ""
+			}
+		}
 		if a, seen := j.dirArt[dirKey]; seen {
 			return a, ""
 		}

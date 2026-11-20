@@ -76,8 +76,9 @@ func a11ySettingsRows() []setRow {
 			Set:    setBoldText,
 		},
 		a11yToggleRow("legibleFont", "Legible reading font",
-			"Atkinson Hyperlegible, Lexend, Verdana or Segoe UI if installed; Inter otherwise",
+			"Draws menus in Atkinson Hyperlegible, or Andika for Russian, and downloads it the first time if this device lacks it",
 			func() bool { return a11y.legibleFont }, a11ySetLegibleFont),
+		a11yLegibleFaceSettingRow(),
 		a11yToggleRow("magnifier", "Magnifier",
 			"A 2× or 3× lens beside the focused control, on every screen",
 			func() bool { return a11y.magnifier }, a11ySetMagnifier),
@@ -113,6 +114,7 @@ func a11ySettingsRows() []setRow {
 			func() bool { return a11y.stickyChords }, a11ySetStickyChords),
 		a11yLayoutSettingRow(),
 	}
+	rows = append(narrateSettingsRows(), rows...) // Narration first (narrate_settings.go)
 	for _, button := range a11yPanelButtons {
 		rows = append(rows, a11yButtonSettingRow(button))
 	}
@@ -161,6 +163,32 @@ func a11yScaleSettingRow() setRow {
 				a11ySave(c)
 			}
 		},
+	}
+}
+
+// a11yLegibleFaceSettingRow picks the legible face while Legible reading font
+// is on: Auto (the best readable face for the language), the two faces JukaHub
+// downloads and the readable faces this device already has. Left/Right step
+// only through faces that are here; A lists them all, and a face that is not
+// here yet is downloaded when picked there (legiblefont_get.go).
+func a11yLegibleFaceSettingRow() setRow {
+	return setRow{
+		ID: "legibleFace", Label: "Readable font", Kind: setKindChoice,
+		Detail:     func(*Config) string { return legibleFaceDetail() },
+		Visible:    func(*Config) bool { return a11y.legibleFont },
+		Options:    func(*Config) []setOption { return legibleFaceOptions(false) },
+		Sheet:      func(*Config) []setOption { return legibleFaceOptions(true) },
+		SheetValue: func(*Config) string { return legibleFaceValue() },
+		SheetTitle: "Readable font",
+		// No stop while the face downloads: the read-out says how far.
+		Current: func(*Config) int {
+			if busy, _ := legibleFaceDownloading(); busy != "" {
+				return -1
+			}
+			return ledOptionIndex(legibleFaceOptions(false), legibleFaceValue())
+		},
+		Value:  func(*Config) string { return legibleFaceReadout() },
+		Choose: legibleFontChoose,
 	}
 }
 

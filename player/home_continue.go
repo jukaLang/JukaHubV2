@@ -291,7 +291,8 @@ func homePlayRecent(config *Config, it FavoriteItem) {
 			return
 		}
 		if !isHTTPMediaURL(fe.Path) {
-			if _, err := statUserFile(fe.Path); err != nil {
+			// A soundtrack's song ("game.nsf#3") is there when its file is.
+			if _, err := statUserFile(chiptuneFileOf(fe.Path)); err != nil {
 				showToast("That song is no longer on this device: "+fe.Name, ToastWarn())
 				return
 			}

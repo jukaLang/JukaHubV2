@@ -397,6 +397,10 @@ func alarmCheck(config *Config, now time.Time) {
 	alarmRingTick(now)
 	// Calendar reminders ride on the same tick (calsync_remind.go).
 	calRemindTick(now)
+	// So do the Stopwatch app's countdown and its game messages (stopwatch.go).
+	stopwatchTick(now)
+	// And the Tasks app's reminders, saves and alarms (tasks_remind.go).
+	tasksRemindTick(now)
 	for i := range alarmStore.Alarms {
 		a := &alarmStore.Alarms[i]
 		// A one-time alarm whose day has passed switches itself off, once a

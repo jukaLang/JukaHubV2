@@ -29,9 +29,15 @@ resolver and unpacking, `_runtime` wrappers, `_cli` commands, `_ui` page,
 - **SSH shell on the device**: `<JukaHub>/data/linux/bin/apt …` (it runs
   `JukaHub apt …`, which needs no display), and `. <JukaHub>/data/linux/env.sh`
   puts the installed programs on that shell's `PATH`.
-- **Audit toolkit**: installing sqlmap or Nikto installs Python 3 or Perl first
-  when the handheld has none; Nmap, John the Ripper and Aircrack-ng install
-  from here (see [Toolbox](TOOLBOX.md#on-the-handheld-trimui)).
+- **Audit toolkit**: installing sqlmap or Nikto installs Python 3 or Perl
+  first when the handheld has none, with Nikto's Perl modules; Nmap, John the
+  Ripper and Aircrack-ng install from here (see
+  [Toolbox](TOOLBOX.md#on-the-handheld-trimui)). Aircrack-ng is installed
+  without the helper programs its package brings for capturing (below).
+- **The daily Emulator updates pass** (in *Install automatically*) installs
+  Python 3, Perl and the Audit toolkit's Perl modules at a quiet moment when
+  they are missing (`audit_interp_auto.go`) — only ones it has never had, so
+  a package you remove stays removed.
 
 ## How downloads are checked
 
@@ -106,6 +112,17 @@ when another locale is asked for (only the C locales exist here). The loader
 is started once after `libc6` is installed, as the proof that it runs on this
 kernel; the result is in the log (`linuxpkg`).
 
+John the Ripper needs one file more than the environment can give it. Ubuntu's
+build has `/etc/john/john.conf` compiled in and no option to move it, while the
+package's copy is unpacked into `root/etc/john`; on the firmware's read-only
+`/etc` the built-in path never exists, which is the
+`fopen: /etc/john/john.conf: No such file or directory` error. So the config is
+copied to `~/.john/john.conf`, the private file john reads before that path,
+with `$JOHN/` spelled out as `root/usr/share/john` (where `john-data`'s
+charsets and `password.lst` are). A `john.conf` that did not come from JukaHub
+is never replaced. The folder is the one the password database gives for the
+user john runs as (`getpwuid`), not `$HOME`.
+
 The Terminal puts `bin/` first on `PATH` for its commands. Nothing else in
 JukaHub or the firmware sees it.
 
@@ -141,8 +158,30 @@ release line as the programs). The pinned runtime GreenOvercast uses
   after the whole run is unpacked (and made again when the target's package is
   upgraded). A program's other names (`python3` → `python3.12`, git's builtins)
   are not copied: their wrappers start the target under that name. Links to
-  folders are left out. Names FAT cannot hold (`Foo::Bar.3pm`) are skipped. The
-  card ignores case, so file ownership is compared case-insensitively.
+  folders are left out. Names FAT cannot hold (`Foo::Bar.3pm`, a backslash as
+  in systemd's `dev-disk-by\x2dlabel.mount`) and control characters are
+  skipped rather than failing the package; a path that leaves the root still
+  fails it. The card ignores case, so file ownership is compared
+  case-insensitively, and a file whose name is already a folder (another
+  package's `Foo/` against `foo`), or a folder whose name is already a file
+  (with what it holds), is left out with a log line instead of stopping the
+  install.
+- **Wrappers.** One wrapper the card refuses does not stop the others: every
+  program still gets its own, and the first failure is reported. An install
+  whose program has no wrapper afterwards (a run that ended before they were
+  written) writes them again and, if that does not help, says which package
+  put the program on the card and why it cannot be started.
+- **Dependencies left out on purpose.** A caller can install a package
+  without some of its Depends (`linuxPkgEnsureSkipping`; the Audit toolkit's
+  Aircrack-ng leaves out `ethtool`, `hwloc`, `iw`, `python3`, `rfkill`,
+  `usbutils` and `wireless-tools`). The set is recorded with the package in
+  `status.json` (`skip_deps`): `apt upgrade`, the repair of a half-installed
+  package, `remove` and `autoremove` leave those out for it too, and the same
+  package needed by something else is still installed. A left-out package that
+  an earlier run left half-installed is not repaired by that install, nor is
+  any other dependency left half-installed that no installed or planned
+  package needs (`apt install <name>` repairs it, `apt autoremove` removes
+  it); an install without left-out dependencies repairs them all.
 - **Less on the card.** Documentation, manual pages, info pages, translations,
   lintian overrides and bug-report helpers are not unpacked.
 - **Space.** A first `apt update` downloads about 20 MB of index (kept, so later
@@ -167,3 +206,14 @@ kernel 4.9 from the exFAT card (the GreenOvercast probe suggests it works),
 Python 3.12 and Perl 5.38 starting through the wrappers, the HTTP fallback,
 the zstd/xz `.deb` decoding speed on the A133, and the space a Python install
 really takes.
+
+2026-11-19 (unbuilt, unverified on a device): dependencies left out per
+package (`skip_deps`), unwritable member names and file/folder clashes skipped
+instead of failing the package, wrappers written past a failure, the Audit
+toolkit's failure sheet and `audit: … install failed` log line, Nikto's Perl
+modules, and the quiet-moment Python/Perl install. To confirm on a TrimUI:
+Aircrack-ng installs from the Audit toolkit and its **Version** answers; Nikto
+installed before this update gets XML::Writer and JSON on its first
+**Terminal** or **Version** and then starts; Python and Perl arrive by
+themselves after the first start on an idle device (log: `audit: installing
+… for the Audit toolkit at a quiet moment`).

@@ -859,6 +859,11 @@ func factoryUndoNow(appDir, dataDir string, marker []byte) {
 
 // factoryResetOpen is the Reset choice (Settings → About → Reset).
 func factoryResetOpen(config *Config) {
+	// Both reset the owner's settings, which wait in memory while someone
+	// else plays (profiles_switch.go).
+	if profilesRefuseUnlessOwner("reset or erase settings") {
+		return
+	}
 	recoveryCardShow(recoveryCardSpec{
 		title:    "Reset",
 		subtitle: "Nothing changes until you confirm",

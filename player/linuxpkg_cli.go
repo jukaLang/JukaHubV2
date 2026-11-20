@@ -490,6 +490,9 @@ func linuxPkgCmdShow(o *linuxPkgIO, names []string) error {
 				how = "as a dependency"
 			}
 			o.line("Installed: " + in.Version + " (" + how + ", " + formatSize(in.Bytes) + " on the card)")
+			if len(in.SkipDeps) > 0 {
+				o.line("Installed without: " + strings.Join(in.SkipDeps, ", ") + " (not needed here)")
+			}
 		}
 		o.line("Description: " + e.Desc)
 	}
@@ -592,6 +595,15 @@ func linuxPkgCmdClean(o *linuxPkgIO) error {
 // refresh asks for it (an Update button), and once more when the archive no
 // longer has a file the index names.
 func linuxPkgEnsure(ctx context.Context, names []string, refresh bool, o *linuxPkgIO) error {
+	return linuxPkgEnsureSkipping(ctx, names, nil, refresh, o)
+}
+
+// linuxPkgEnsureSkipping is linuxPkgEnsure for packages that go without some
+// of their dependencies here (an Audit toolkit recipe that needs a program's
+// own binaries, not the helper programs its package brings for other uses):
+// skip is left out for names, and recorded so upgrade, repair, remove and
+// autoremove leave it out too (linuxPkgPlanInstallSkipping).
+func linuxPkgEnsureSkipping(ctx context.Context, names, skip []string, refresh bool, o *linuxPkgIO) error {
 	release, err := linuxPkgBegin("installing " + strings.Join(names, ", "))
 	if err != nil {
 		return err
@@ -611,7 +623,7 @@ func linuxPkgEnsure(ctx context.Context, names []string, refresh bool, o *linuxP
 		if err != nil {
 			return err
 		}
-		plan, notes, err := linuxPkgPlanInstall(x, linuxPkgLoadStatus(lay), names)
+		plan, notes, err := linuxPkgPlanInstallSkipping(x, linuxPkgLoadStatus(lay), names, skip)
 		x.Close()
 		if err != nil {
 			return err

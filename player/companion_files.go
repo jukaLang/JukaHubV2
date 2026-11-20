@@ -114,6 +114,9 @@ func (s *companionServer) registerFileRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/drop/plan", s.guard(s.handleDropPlan))
 	mux.HandleFunc("/api/drop", s.guard(s.handleDrop))
 	mux.HandleFunc("/api/drop/done", s.guard(s.handleDropDone))
+	// Whole folders, their structure kept (companion_dropdir.go).
+	mux.HandleFunc("/api/drop/folder", s.guard(s.handleDropFolder))
+	mux.HandleFunc("/api/drop/folder/file", s.guard(s.handleDropFolderFile))
 }
 
 // openCompanionFileShares opens this request's shares; the caller closes

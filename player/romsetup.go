@@ -163,6 +163,29 @@ var romSystemAliases = map[string]romSystem{
 	"pico":   {"PICO-8", "PICO-8"}, // CrossMix's Roms/PICO
 	"dos":    {"DOS", "DOS"},
 	"dosbox": {"DOS", "DOS"},
+	// Godot games (.pck), played by the TrimUI Smart Pro Godot port's
+	// Emus/GODOT (godot.go). No thumbnail server has covers for them: the
+	// picture beside the game is its cover.
+	"godot": {"Godot", ""},
+
+	// Java ME phone games, played with FreeJ2ME-Plus (j2me.go). "Mobile -
+	// J2ME" is the libretro database's name for them.
+	"j2me":          {"J2ME", "Mobile - J2ME"},
+	"javame":        {"J2ME", "Mobile - J2ME"},
+	"java me":       {"J2ME", "Mobile - J2ME"},
+	"mobile - j2me": {"J2ME", "Mobile - J2ME"},
+
+	// Folder games (romshelf.go): ScummVM adventures, each in its own folder
+	// with a .scummvm file the shelf writes (shelf_scummvm*.go); TIC-80
+	// fantasy-console carts; RPG Maker 2000/2003 games for EasyRPG.
+	"scummvm":   {"ScummVM", "ScummVM"},
+	"scumm":     {"ScummVM", "ScummVM"},
+	"tic80":     {"TIC-80", "TIC-80"},
+	"tic-80":    {"TIC-80", "TIC-80"},
+	"tic":       {"TIC-80", "TIC-80"},
+	"easyrpg":   {"EasyRPG", ""},
+	"rpgmaker":  {"EasyRPG", ""},
+	"rpg maker": {"EasyRPG", ""},
 }
 
 var romFileExtensions = map[string]bool{
@@ -183,9 +206,30 @@ var romFileExtensions = map[string]bool{
 // romSystemExtensions replaces romFileExtensions for a console whose emulator
 // opens only a few formats. Xenia Canary starts an Xbox 360 disc image, an
 // extracted game's default.xex and a ZArchive (.zar, Canary since 2023); a
-// .zip, .7z, .bin or .chd in Roms/XBOX360 was a game it could not open.
+// .zip, .7z, .bin or .chd in Roms/XBOX360 was a game it could not open. The
+// original Xbox's emulators (hakuX on the Smart Pro, xemu on a PC) boot an
+// Xbox disc image (XISO) only, as hakuxGameFile counts them.
 var romSystemExtensions = map[string]map[string]bool{
+	"Xbox":     {".iso": true, ".xiso": true},
 	"Xbox 360": {".iso": true, ".xiso": true, ".xex": true, ".zar": true},
+
+	// Dolphin opens disc images in its own formats (RVZ, WIA, GCZ, CISO,
+	// WBFS), homebrew (.dol, .elf), WiiWare (.wad) and a multi-disc .m3u — not
+	// a .zip or .7z, which RetroArch does not unpack for it (dolphin.go).
+	"GameCube": {".iso": true, ".gcm": true, ".gcz": true, ".rvz": true, ".ciso": true, ".wia": true, ".tgc": true, ".dol": true, ".elf": true, ".m3u": true},
+	"Wii":      {".iso": true, ".wbfs": true, ".rvz": true, ".wia": true, ".gcz": true, ".ciso": true, ".wad": true, ".dol": true, ".elf": true, ".m3u": true},
+
+	// A Godot game is its .pck; the .runtime, .gptk and .png beside it are
+	// the port's side files (godot.go).
+	"Godot": {".pck": true},
+
+	// A .jar is a J2ME game only in a J2ME folder (anywhere else it is a Java
+	// program); FreeJ2ME-Plus opens .jar and .kjx (j2me.go).
+	"J2ME": {".jar": true, ".kjx": true},
+
+	// A TIC-80 cart is one .tic file (the TIC-80 core also reads .png carts,
+	// which would list every picture beside the carts).
+	"TIC-80": {".tic": true},
 }
 
 // romXexDefault is the executable an extracted Xbox 360 game starts from.
@@ -196,14 +240,22 @@ const romXexDefault = "default.xex"
 // Xbox 360 game is a module the game loads, not a game: only default.xex and
 // a lone homebrew .xex straight in the console's folder (dir) count.
 func romListsFile(system, dir, path, ext string) bool {
+	// A console whose games are folders (DOS, ScummVM …) has its own rule
+	// (romshelf.go).
+	if list, handled := romShelfListsFile(system, dir, path, ext); handled {
+		return list
+	}
 	allowed, own := romSystemExtensions[system]
 	if !own {
 		return romFileExtensions[ext]
 	}
+	if !allowed[ext] {
+		return false // the original Xbox's shelf lists no .xex either
+	}
 	if ext == ".xex" {
 		return strings.EqualFold(filepath.Base(path), romXexDefault) || filepath.Dir(path) == dir
 	}
-	return allowed[ext]
+	return true
 }
 
 // romGameStem is the name a game file goes by: its name without the
@@ -213,6 +265,10 @@ func romListsFile(system, dir, path, ext string) bool {
 // default.xex straight in the console's folder keeps its own name ("default"),
 // not the console's. Titles and covers use it. No file system access.
 func romGameStem(path string) string {
+	// A folder game is titled after its folder (romshelf.go).
+	if stem, ok := romShelfStem(path); ok {
+		return stem
+	}
 	base := filepath.Base(path)
 	if strings.EqualFold(base, romXexDefault) {
 		parent := filepath.Dir(path)
@@ -359,9 +415,15 @@ func romSheetReferences(sheet string) []string {
 // sheet plus one row per track or disc, and recounts the systems. Paths are
 // compared without case: sheets are written by hand and the cards are FAT.
 func dropSheetParts(games []scannedROM) ([]scannedROM, map[string]int) {
+	return dropSheetPartsWith(games, romSheetReferences)
+}
+
+// dropSheetPartsWith is dropSheetParts reading each sheet through refs: the
+// library index answers for a sheet it read before (libindex.go).
+func dropSheetPartsWith(games []scannedROM, refs func(string) []string) ([]scannedROM, map[string]int) {
 	referenced := map[string]bool{}
 	for _, g := range games {
-		for _, ref := range romSheetReferences(g.Path) {
+		for _, ref := range refs(g.Path) {
 			if !strings.EqualFold(ref, g.Path) {
 				referenced[strings.ToLower(ref)] = true
 			}
@@ -462,18 +524,29 @@ func plugxROMFormats() (byExt, byFolder map[string]romSystem) {
 }
 
 func scanROMLibrary(roots []string) romScanReport {
+	return scanROMLibraryFrom(roots, nil)
+}
+
+// scanROMLibraryFrom is scanROMLibrary reading the folders and disc sheets
+// through src; nil reads the card. The library index (libindex.go) passes
+// itself, answering for the folders that did not change.
+func scanROMLibraryFrom(roots []string, src romScanSource) romScanReport {
 	// Loose discs become one game (an .m3u) on their own goroutine; what it
 	// writes shows in the next scan, which it asks for (disctools.go). Only
 	// for the library's own roots, never blocking this walk.
 	if hook := romScanStartHook; hook != nil {
 		hook(roots)
 	}
+	readDir, walkDir, sheetRefs := os.ReadDir, filepath.WalkDir, romSheetReferences
+	if src != nil {
+		readDir, walkDir, sheetRefs = src.readDir, src.walkDir, src.sheetRefs
+	}
 	report := romScanReport{Roots: append([]string(nil), roots...), Counts: make(map[string]int)}
 	pluginByExt, pluginByFolder := plugxROMFormats()
 	seen := make(map[string]bool)
 	onNextUI := nextuiActive()
 	for _, root := range roots {
-		entries, err := os.ReadDir(root)
+		entries, err := readDir(root)
 		if err != nil {
 			continue
 		}
@@ -495,7 +568,7 @@ func scanROMLibrary(roots []string) romScanReport {
 			}
 			maps := nextuiMapCache{}
 			systemPath := filepath.Join(root, systemDir.Name())
-			_ = filepath.WalkDir(systemPath, func(path string, entry os.DirEntry, walkErr error) error {
+			_ = walkDir(systemPath, func(path string, entry os.DirEntry, walkErr error) error {
 				if walkErr != nil || entry == nil {
 					return nil
 				}
@@ -517,7 +590,10 @@ func scanROMLibrary(roots []string) romScanReport {
 					!plugGameSkipDir[strings.ToLower(filepath.Base(filepath.Dir(path)))] {
 					ext, pluginExt = ".p8", false
 				}
-				if entry.IsDir() || (!romListsFile(system.Name, systemPath, path, ext) && !pluginExt && !(tagged && nextuiListsFile(entry.Name()))) {
+				// A folder-game console's rule decides in a NextUI tagged folder too
+				// (romshelf.go).
+				nextuiAll := tagged && nextuiListsFile(entry.Name()) && !romShelfHas(system.Name)
+				if entry.IsDir() || (!romListsFile(system.Name, systemPath, path, ext) && !pluginExt && !nextuiAll) {
 					return nil
 				}
 				clean := filepath.Clean(path)
@@ -540,7 +616,7 @@ func scanROMLibrary(roots []string) romScanReport {
 			})
 		}
 	}
-	report.Games, report.Counts = dropSheetParts(report.Games)
+	report.Games, report.Counts = dropSheetPartsWith(report.Games, sheetRefs)
 	sort.Slice(report.Games, func(i, j int) bool {
 		return strings.ToLower(report.Games[i].Path) < strings.ToLower(report.Games[j].Path)
 	})

@@ -730,6 +730,7 @@ func chatDrawTabs(renderer *sdl.Renderer, config *Config, fonts chatFonts, rect 
 		}
 		x += w + gap
 	}
+	x += chatDrawVoiceTab(renderer, config, fonts, x, y, h) + gap
 	chatDrawTabChips(renderer, config, fonts, rect, x+chatPx(12), active)
 }
 
@@ -780,23 +781,7 @@ func chatDrawTabChips(renderer *sdl.Renderer, config *Config, fonts chatFonts, r
 		}
 	}
 
-	if tab == chatTabCommunity || chatVoiceInCall() {
-		label := "Voice Channel"
-		if chatVoiceInCall() {
-			label = "In voice"
-		}
-		lw, _ := measureText(fonts.meta, label)
-		icon := chatPx(16)
-		cw := pad + icon + chatPx(6) + lw + pad
-		if right-cw >= minX {
-			c := sdl.Rect{X: right - cw, Y: y, W: cw, H: h}
-			chatHeaderVoiceRect = c
-			chatDrawChip(renderer, c, chatHover(c))
-			DrawHomeIcon(renderer, "mic", sdl.Rect{X: c.X + pad, Y: c.Y + (h-icon)/2, W: icon, H: icon}, false)
-			chatTextCentered(renderer, config, fonts.meta, label, ColorTextSecondary(), c.X+pad+icon+chatPx(6), c)
-			right = c.X - gap
-		}
-	}
+	// The Voice tab (chatDrawVoiceTab) replaced the Voice Channel chip here.
 
 	label, dot := chatStatusLine(tab)
 	if label == "" {

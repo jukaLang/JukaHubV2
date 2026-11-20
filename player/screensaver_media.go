@@ -148,6 +148,11 @@ func musicCoverArtPath(trackPath string) string {
 	if trackPath == "" {
 		return ""
 	}
+	// A game soundtrack wears its game's cover from the Games library
+	// (chiptune_art.go), else its folder's picture.
+	if art, ok := chiptuneCoverArt(trackPath); ok {
+		return art
+	}
 	dir := filepath.Dir(trackPath)
 	now := time.Now()
 

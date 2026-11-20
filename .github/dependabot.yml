@@ -1,7 +1,6 @@
 version: 2
 # Grouped so one week produces one PR per ecosystem instead of one per module;
-# each PR runs two workflows (ci.yml and the release build), so ungrouped
-# updates cost hours of CI.
+# each PR runs the quick CI workflow, so grouping keeps review manageable.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"

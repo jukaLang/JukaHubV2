@@ -95,3 +95,25 @@ func TestCloseAllProcScan(t *testing.T) {
 		t.Fatalf("picked beside a Wine game %q, want %q", got, want)
 	}
 }
+
+// The memory free-up and the swap setup (memfree.go, memswap.go) read
+// /proc/meminfo and /proc/swaps, and write a swap header the kernel must
+// accept.
+func TestMemProcParsersAndSwapHeader(t *testing.T) {
+	info := parseProcMeminfo([]byte("MemTotal:        1012340 kB\nMemFree:           41200 kB\nMemAvailable:     143360 kB\n" +
+		"Inactive(anon):    90112 kB\nSwapTotal:        262140 kB\nSwapFree:         200000 kB\nbad\n"))
+	if info.MemTotal != 1012340 || info.MemAvail != 143360 || info.InactiveAnon != 90112 || info.SwapTotal != 262140 || info.SwapFree != 200000 {
+		t.Fatalf("meminfo = %+v", info)
+	}
+	swaps := parseProcSwaps([]byte("Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n" +
+		"/dev/zram0                              partition\t524284\t1024\t100\n" +
+		"/mnt/SDCARD/Apps/Juka\\040Hub/data/jukahub.swap file\t262140\t0\t-2\nshort line\n"))
+	if len(swaps) != 2 || !swaps[0].zram() || swaps[0].usedKB != 1024 || swaps[1].zram() ||
+		swaps[1].name != "/mnt/SDCARD/Apps/Juka Hub/data/jukahub.swap" || swaps[1].sizeKB != 262140 {
+		t.Fatalf("swaps = %+v", swaps)
+	}
+	h := memSwapHeader(4096, 65536, []byte("0123456789abcdef"))
+	if len(h) != 4096 || string(h[4086:]) != "SWAPSPACE2" || !memSwapHeaderOK(h, 65536) || memSwapHeaderOK(h, 65535) {
+		t.Fatal("swap header: wrong magic, version or last page")
+	}
+}

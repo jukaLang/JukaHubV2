@@ -38,8 +38,9 @@ const (
 	gameOptionsRowArgs
 	gameOptionsRowOpenIn
 	gameOptionsRowCheats
-	gameOptionsRowButtons // racontrols_ui.go
-	gameOptionsRowTurbo   // racontrols_ui.go
+	gameOptionsRowButtons    // racontrols_ui.go
+	gameOptionsRowCtrlLayout // ctrllayout_ui.go
+	gameOptionsRowTurbo      // racontrols_ui.go
 	gameOptionsRowDiagnose
 	gameOptionsRowChooseCover
 	gameOptionsRowRemoveCover
@@ -144,6 +145,8 @@ func gameOptionsRowName(row int) string {
 		return "Cheats"
 	case gameOptionsRowButtons:
 		return "Buttons"
+	case gameOptionsRowCtrlLayout:
+		return "Controls layout"
 	case gameOptionsRowTurbo:
 		return "Turbo"
 	case gameOptionsRowDiagnose:
@@ -231,6 +234,8 @@ func gameOptionsRowHint(row int) string {
 		return "Cheats from libretro's database (RetroArch or NextUI), on for this game only"
 	case gameOptionsRowButtons:
 		return gameControlsSheetHint(gameOptsUI.game, false)
+	case gameOptionsRowCtrlLayout:
+		return ctrlLayoutSheetHint(gameOptsUI.game)
 	case gameOptionsRowTurbo:
 		return gameControlsSheetHint(gameOptsUI.game, true)
 	case gameOptionsRowDiagnose:
@@ -322,6 +327,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return cheatsOptionsValue(gameOptsUI.game.Path)
 	case gameOptionsRowButtons:
 		return gameButtonsSheetValue(gameOptsUI.game)
+	case gameOptionsRowCtrlLayout:
+		return ctrlLayoutSheetValue(gameOptsUI.game)
 	case gameOptionsRowTurbo:
 		return gameTurboSheetValue(gameOptsUI.game)
 	case gameOptionsRowDiagnose:
@@ -558,6 +565,7 @@ func openGameOptions() bool {
 	}
 	cheatsClose(false) // a Cheats sheet left from a sheet closed elsewhere (cheats_ui.go)
 	artChooseClose(false)
+	ctrlLayoutPickerCloseOn(ctrlLayoutHostSheet)
 	gameOptsUI.open = true
 	gameOptsUI.game = game
 	gameOptsUI.cursor = 0
@@ -603,6 +611,7 @@ func closeGameOptions() {
 	gameOptsUI.coverCard, gameOptsUI.deleteFiles, gameOptsUI.deleteBytes = "", nil, 0
 	cheatsClose(false)
 	artChooseClose(false)
+	ctrlLayoutPickerCloseOn(ctrlLayoutHostSheet)
 	PlayBackSound()
 }
 
@@ -841,6 +850,8 @@ func activateGameOptionsRow() {
 		if gameControlsSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowTurbo, 1, true) {
 			PlayNavSound()
 		}
+	case gameOptionsRowCtrlLayout:
+		ctrlLayoutPickerOpen(gameOptsUI.game, ctrlLayoutHostSheet) // ctrllayout_ui.go
 	case gameOptionsRowDiagnose:
 		// The answer opens as the launch-failure card (gamediag.go).
 		game := gameOptsUI.game
@@ -928,6 +939,9 @@ func handleGameOptionsKey(e *sdl.KeyboardEvent) bool {
 	if artChooseIsOpen() && gameOptsUI.open {
 		return handleArtChooseKey(e) // so does Choose cover (artwork_choose.go)
 	}
+	if ctrlLayoutPickerOnSheet() && gameOptsUI.open {
+		return ctrlLayoutPickerKey(e) // and the Controls layout picker (ctrllayout_ui.go)
+	}
 	if e == nil || e.Type != sdl.KEYDOWN || !gameOptsUI.open {
 		return false
 	}
@@ -987,6 +1001,9 @@ func ctrlGameOptions(e *sdl.ControllerButtonEvent) bool {
 	if artChooseIsOpen() && gameOptsUI.open {
 		return handleArtChooseController(e)
 	}
+	if ctrlLayoutPickerOnSheet() && gameOptsUI.open {
+		return ctrlLayoutPickerPad(e)
+	}
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !gameOptsUI.open {
 		return false
 	}
@@ -1024,6 +1041,9 @@ func handleGameOptionsMouse(mx, my int32) bool {
 	if artChooseIsOpen() {
 		return handleArtChooseMouse(mx, my)
 	}
+	if ctrlLayoutPickerOnSheet() {
+		return ctrlLayoutPickerMouse(mx, my)
+	}
 	for _, hit := range gameOptsUI.rowHits {
 		if pointInRect(mx, my, hit.rect) {
 			gameOptsUI.cursor = hit.index
@@ -1045,6 +1065,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	defer renderCheatsSheet(renderer, config) // drawn over the sheet when open (cheats_ui.go)
 	defer renderArtChooseSheet(renderer, config)
+	defer ctrlLayoutPickerRenderSheet(renderer, config) // ctrllayout_ui.go
 	gameOptionsPollCovers()
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
@@ -1197,6 +1218,9 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		buttonsRow := idx == gameOptionsRowButtons || idx == gameOptionsRowTurbo
 		if buttonsRow && gameControlsSheetOwn(gameOptsUI.game, idx == gameOptionsRowTurbo) {
+			valueColor = focusColor
+		}
+		if idx == gameOptionsRowCtrlLayout && ctrlLayoutSheetOwn(gameOptsUI.game) {
 			valueColor = focusColor
 		}
 		// Ladders and toggles show which way they move; a static value would

@@ -1,7 +1,9 @@
 package main
 
-// builtin_games.go — the games that ship inside JukaHub (JukaLand and the
-// Synth) as the Games library lists them, and their covers.
+// builtin_games.go — the games that ship inside JukaHub (JukaLand, the Synth,
+// Solitaire and the Games screen's arcade minigames: Snake, Tetris, 2048,
+// Pong, Minesweeper, Flappy) as the Games library lists them, and their
+// covers.
 //
 // No thumbnail server has a box for these, so their covers are drawn by
 // branding/mkcovers.py and embedded here. The library shows a cover by file
@@ -24,6 +26,7 @@ const (
 	builtInLibrarySystem = "Built-in games"
 	jukaLandLibraryPath  = "builtin:jukaland"
 	synthLibraryPath     = "builtin:synth"
+	solitaireLibraryPath = "builtin:solitaire"
 )
 
 //go:embed builtin_covers/*.png
@@ -31,10 +34,13 @@ var builtinCovers embed.FS
 
 // builtInLibraryGame is one game JukaHub carries itself: the scene that plays
 // it, its library title and detail line, the glyph drawn when no cover can be
-// shown, and its embedded cover.
+// shown, and its embedded cover. An arcade minigame (games.go) is played on
+// the Games screen, so its scene is "Games" and arcade says which game to
+// start there; a game with a scene of its own has gameNone.
 type builtInLibraryGame struct {
 	path   string
 	scene  string
+	arcade gameID
 	title  string
 	detail string
 	glyph  string
@@ -45,6 +51,13 @@ type builtInLibraryGame struct {
 var builtInLibraryGames = []builtInLibraryGame{
 	{path: jukaLandLibraryPath, scene: "JukaLand", title: "JukaLand", detail: "Built-in JukaHub game", glyph: "jukaland", cover: "jukaland.png"},
 	{path: synthLibraryPath, scene: synthSceneName, title: "Synth", detail: "Built-in groovebox: make music", glyph: "synth", cover: "synth.png"},
+	{path: solitaireLibraryPath, scene: solitaireSceneName, title: "Solitaire", detail: "Built-in card game: Klondike", glyph: "cards", cover: "solitaire.png"},
+	{path: "builtin:snake", scene: "Games", arcade: gameSnake, title: "Snake", detail: "Built-in arcade game: eat, grow, survive", glyph: "arcade", cover: "snake.png"},
+	{path: "builtin:tetris", scene: "Games", arcade: gameTetris, title: "Tetris", detail: "Built-in arcade game: stack blocks, clear lines", glyph: "arcade", cover: "tetris.png"},
+	{path: "builtin:2048", scene: "Games", arcade: game2048, title: "2048", detail: "Built-in puzzle: merge tiles, reach 2048", glyph: "arcade", cover: "2048.png"},
+	{path: "builtin:pong", scene: "Games", arcade: gamePong, title: "Pong", detail: "Built-in arcade game: classic paddle ball", glyph: "arcade", cover: "pong.png"},
+	{path: "builtin:minesweeper", scene: "Games", arcade: gameMinesweeper, title: "Minesweeper", detail: "Built-in puzzle: flag mines, clear the board", glyph: "arcade", cover: "minesweeper.png"},
+	{path: "builtin:flappy", scene: "Games", arcade: gameFlappy, title: "Flappy", detail: "Built-in arcade game: fly through the pipes", glyph: "arcade", cover: "flappy.png"},
 }
 
 // builtInLibraryGameFor reports which built-in game a library entry is.
@@ -65,19 +78,31 @@ func isBuiltInLibraryGame(game libraryGame) bool {
 	return ok
 }
 
-// builtInSceneCover is the embedded cover of the built-in game a scene plays,
-// nil for any other scene.
-func builtInSceneCover(scene string) []byte {
+// builtInCoverData is an embedded cover's bytes by file name, nil for none.
+func builtInCoverData(cover string) []byte {
+	if cover == "" {
+		return nil
+	}
+	data, err := builtinCovers.ReadFile("builtin_covers/" + cover)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// builtInMenuCover is the embedded cover file of a Games screen card: an
+// arcade minigame's by its id, a scene game's by its scene; "" for none. The
+// Games screen's own scene has no cover: each of its minigames carries one.
+func builtInMenuCover(g gameEntry) string {
 	for _, b := range builtInLibraryGames {
-		if b.scene == scene && scene != "" {
-			data, err := builtinCovers.ReadFile("builtin_covers/" + b.cover)
-			if err != nil {
-				return nil
-			}
-			return data
+		if g.scene != "" && b.arcade == gameNone && b.scene == g.scene {
+			return b.cover
+		}
+		if g.scene == "" && g.id != gameNone && b.arcade == g.id {
+			return b.cover
 		}
 	}
-	return nil
+	return ""
 }
 
 // builtInCoverRoot is where the covers are copied for the library, "" when
@@ -182,14 +207,15 @@ func builtInScenesPresent(config *Config) func(string) bool {
 
 var builtInCoverTex struct {
 	owner *sdl.Renderer
-	tex   map[string]*sdl.Texture // scene → texture (nil = failed, not retried)
+	tex   map[string]*sdl.Texture // cover file → texture (nil = failed, not retried)
 }
 
-// builtInCoverTexture is the cover of a built-in game's scene as a texture of
-// renderer, nil when it has none or it cannot be loaded. Textures belong to
-// the renderer they were made on: a new renderer starts the cache over.
-func builtInCoverTexture(renderer *sdl.Renderer, scene string) *sdl.Texture {
-	if renderer == nil || scene == "" {
+// builtInCoverTexture is an embedded cover (builtInMenuCover's file name) as a
+// texture of renderer, nil when there is none or it cannot be loaded.
+// Textures belong to the renderer they were made on: a new renderer starts
+// the cache over.
+func builtInCoverTexture(renderer *sdl.Renderer, cover string) *sdl.Texture {
+	if renderer == nil || cover == "" {
 		return nil
 	}
 	if builtInCoverTex.owner != renderer {
@@ -197,28 +223,42 @@ func builtInCoverTexture(renderer *sdl.Renderer, scene string) *sdl.Texture {
 		builtInCoverTex.owner = renderer
 		builtInCoverTex.tex = map[string]*sdl.Texture{}
 	}
-	if tex, ok := builtInCoverTex.tex[scene]; ok {
+	if tex, ok := builtInCoverTex.tex[cover]; ok {
 		return tex
 	}
 	var tex *sdl.Texture
-	if data := builtInSceneCover(scene); len(data) > 0 {
+	if data := builtInCoverData(cover); len(data) > 0 {
 		if rw, err := sdl.RWFromMem(data); err == nil {
 			tex, _ = img.LoadTextureRW(renderer, rw, false)
 			rw.Close()
 		}
 	}
-	builtInCoverTex.tex[scene] = tex
+	builtInCoverTex.tex[cover] = tex
 	return tex
 }
 
+// builtInCoverArtShare is the top part of a built-in cover that holds the
+// picture: mkcovers.py puts the title pill below 246 of its 300 rows. The
+// Games screen's cards print the name themselves, so they leave the pill out.
+const builtInCoverArtShare = 0.8
+
 // drawCoverFill draws tex over rect, cropped to rect's shape (no bars).
 func drawCoverFill(renderer *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect) bool {
+	return drawCoverTopFill(renderer, tex, rect, 1)
+}
+
+// drawCoverTopFill is drawCoverFill over the top share (0 < share <= 1) of
+// tex's height only.
+func drawCoverTopFill(renderer *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect, share float64) bool {
 	if tex == nil || rect.W <= 0 || rect.H <= 0 {
 		return false
 	}
 	_, _, tw, th, err := tex.Query()
 	if err != nil || tw <= 0 || th <= 0 {
 		return false
+	}
+	if share > 0 && share < 1 {
+		th = max(1, int32(float64(th)*share))
 	}
 	src := sdl.Rect{W: tw, H: th}
 	// Keep the whole height when the texture is wider than rect, else the

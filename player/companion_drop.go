@@ -23,7 +23,8 @@ package main
 //
 // POST /api/drop/done?batch=… ends a batch: the Games library rescans when it
 // is open, the media library looks for new songs and videos, and the handheld
-// shows one line, "Phone sent 3 games, 1 cover and 12 songs".
+// shows one line, "Phone sent 3 games, 1 cover and 12 songs". Whole folders
+// travel their own way (companion_dropdir.go) and join that line.
 //
 // A cover goes beside its game (Imgs, or NextUI's .media), where the stock
 // firmware shows it too. When JukaHub already keeps a cover of its own for
@@ -286,21 +287,26 @@ func (s *companionServer) handleDropDone(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	counts := companionDropTakeBatch(companionDropBatchID(r.URL.Query().Get("batch")))
-	text := companionDropSummary(counts)
+	batch := companionDropBatchID(r.URL.Query().Get("batch"))
+	counts := companionDropTakeBatch(batch)
+	// Whole folders sent in the batch (companion_dropdir.go), by kind.
+	folders, folderKinds := companionDropDirTakeBatch(batch)
+	companionDropDirLog(folders)
+	text := companionDropDirSummary(companionDropSummary(counts), folders)
 	if text != "" {
 		s.sink(companionEvent{Kind: companionEventUpload, Text: text})
-		if counts[companionDropGameKind]+counts[companionDropCoverKind] > 0 {
+		if counts[companionDropGameKind]+counts[companionDropCoverKind]+folderKinds[companionDropGameKind] > 0 {
 			tbxPost(func() {
 				if gameLib.open {
 					refreshGameLibrary()
 				}
 			})
 		}
-		if counts[companionDropMusicKind]+counts[companionDropVideoKind] > 0 {
+		if counts[companionDropMusicKind]+counts[companionDropVideoKind]+
+			folderKinds[companionDropMusicKind]+folderKinds[companionDropVideoKind] > 0 {
 			tbxPost(func() { mlibStartScan(appConfig, true) })
 		}
-		text += " arrived."
+		text = companionDropUpperFirst(text) + " arrived."
 	}
 	writeCompanionJSON(w, map[string]interface{}{"ok": true, "text": text})
 }

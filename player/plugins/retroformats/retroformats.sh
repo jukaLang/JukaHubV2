@@ -15,8 +15,7 @@ case "$action" in
             'Watara Supervision (.sv)' \
             'Vectrex (.vec, .gam; checks the GCE header)' \
             'Atari Lynx (.lnx; checks the LYNX header)' \
-            'Arduboy (.arduboy; checks the archive header)' \
-            'WASM-4 (.wasm; checks the WebAssembly header)'
+            'Arduboy (.arduboy; checks the archive header)'
         ;;
     *)
         printf 'Unknown action: %s (try list)\n' "$action" >&2

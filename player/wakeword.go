@@ -231,6 +231,10 @@ func hjBlocked(config *Config, inGame bool, now time.Time) string {
 		return "off in games"
 	case inGame && (!gameAssistSupported() || !gameAssistEnabled(config)):
 		return "the game assistant is off"
+	case inGame && xboxBoostLive.Load():
+		// The recognizer's memory and a core are the boosted game's: an Xbox,
+		// GameCube or Wii game (xboxboost.go).
+		return "a boosted game has the handheld"
 	case gameAssistOverlayActive(), voiceOrb.phase != orbHidden:
 		return "Juka is up"
 	case micVoiceUsers.Load() > 0, now.Before(hj.resumeAt):
@@ -628,6 +632,7 @@ func hjResolveGrammar() {
 		if err != nil {
 			return
 		}
+		defer srv.release() // counted in busy by sttServerGet: kept while it is asked
 		if srv.waitReady() != nil {
 			return
 		}
