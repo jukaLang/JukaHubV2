@@ -93,6 +93,10 @@ type chatVoiceCall struct {
 	// time, one that refuses its characters a plain JukaHub-xxxx name.
 	nameTry   int
 	namePlain bool
+	// joinWaits counts connections in a row whose room request got no
+	// answer at all (chatvoice_mumble.go reader), so a silent server ends
+	// the call instead of retrying forever. Connection goroutine only.
+	joinWaits int
 	// ended is set (under mu) when the server refused and run gave up;
 	// community marks the Voice tab's room.
 	ended     bool

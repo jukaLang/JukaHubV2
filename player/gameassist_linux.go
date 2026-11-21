@@ -147,7 +147,10 @@ func gameAssistSupported() bool { return IsTrimuiDevice() }
 // screenshot, and the Select + Start hold that ends the game too — and starts
 // one watcher per game while any is.
 func gaPadSync(config *Config, ask, menu, shot, shotChord, quit bool) {
-	want := ask || menu || shot || shotChord || quit
+	// F1 / F2 (L3 / R3) and Menu + Select in a RetroArch game, wherever the
+	// Select + Start hold is watched (gamehotkeys.go).
+	hotkeys := gameHotkeysSync(config, quit)
+	want := ask || menu || shot || shotChord || quit || hotkeys
 	if shot || shotChord {
 		gameShotSync(config)
 	}
@@ -258,6 +261,10 @@ type gaPadSession struct {
 	shotPair      bool
 	shotPairAt    time.Time
 	shotPairFrame gameShotFrame
+
+	// The game hotkeys: F1 / L3 held, F2 / R3, Menu + Select
+	// (gamehotkeys_linux.go).
+	hk gameHotkeyPad
 }
 
 // gaPadRun is the goroutine: it watches for the chord while the game runs and
@@ -435,6 +442,7 @@ func (s *gaPadSession) step(now time.Time) error {
 	if s.shotPairFrame.raw != nil {
 		s.shotPairSettle(now)
 	}
+	s.hotkeyTick(now) // rewind held or let go (gamehotkeys_linux.go)
 	switch {
 	case s.held:
 		s.heldTick(now)
@@ -447,6 +455,10 @@ func (s *gaPadSession) step(now time.Time) error {
 		}
 	case gaPad.wantMenu.Load() && s.menu.due(now, gaMenuHold):
 		s.take(now, gaModeMenu, false)
+	case gaPad.wantMenu.Load() && frontHomeMenuWanted():
+		// A Home key tap on the Smart Pro S (frontkeys_home.go): the menu as
+		// if Select + L2 were held, though no chord is.
+		s.take(now, gaModeMenu, true)
 	case gaPad.wantAsk.Load() && s.ask.due(now, gaChordHold):
 		s.take(now, gaModeAsk, false)
 	case !s.shotAt.IsZero() && !s.shotArmed && now.Sub(s.shotAt) >= menuShotHold:
@@ -508,6 +520,7 @@ func (s *gaPadSession) feed(ev evdevEvent, now time.Time) {
 				gaLink.menuAt.Store(max(int64(powerMonoNow()), 1))
 			}
 			s.shotKey(ev.Code, down)
+			s.hotkeyKey(ev.Code, down, now) // the game hotkeys (gamehotkeys_linux.go)
 		}
 		if !s.held || down == was {
 			return
@@ -653,6 +666,11 @@ func (s *gaPadSession) shotKey(code uint16, down bool) {
 		return
 	}
 	s.shotAt, s.shotVolume = time.Now(), orbVolumeKeys.Load()
+	if menuHoldLive.switcher.Load() {
+		// The hold means the game switcher (menuhold_action.go): no picture.
+		s.shotFrame = gameShotFrame{}
+		return
+	}
 	fr, err := gameShotGrab(s.shotBuf)
 	if err != nil {
 		// Read again when it is saved (shotSave); the game's menu may be in
@@ -703,6 +721,10 @@ func (s *gaPadSession) shotArm() {
 // goes to a goroutine to be written (gameShotSave buzzes when it is).
 func (s *gaPadSession) shotSave() {
 	if !gaPad.wantShot.Load() || s.shotOtherHeld() || orbVolumeKeys.Load() != s.shotVolume {
+		return
+	}
+	if menuHoldLive.switcher.Load() {
+		menuHoldSwitchRequest(s.name) // the game switcher instead (menuhold_action.go)
 		return
 	}
 	fr := s.shotFrame
@@ -1048,6 +1070,7 @@ func (s *gaPadSession) close() {
 	s.shotCancel()
 	s.shotFrame, s.shotBuf = gameShotFrame{}, nil
 	s.shotPair, s.shotPairFrame = false, gameShotFrame{}
+	s.hotkeyStop()
 }
 
 // write writes events in one write(), the way the kernel reads them.

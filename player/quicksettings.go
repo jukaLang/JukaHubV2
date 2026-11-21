@@ -92,8 +92,8 @@ const (
 	qsLinkBluetooth
 	// Close all apps & games (closeall.go): a two-step press, not a panel.
 	qsLinkCloseAll
-	// Power: the Exit card (Sleep, Restart, Power off), from any screen —
-	// NextUI's quick menu had the switch-off a tester missed.
+	// Power: the Exit card (Sleep, Restart, Power off), from any screen — the
+	// switch-off a tester missed.
 	qsLinkPower
 )
 

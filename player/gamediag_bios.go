@@ -499,6 +499,10 @@ func gameDiagBIOSIssues(system, romPath, launcher, core string, coreKnown bool) 
 		if row.Sub == "" && strings.HasPrefix(core, "fbneo") {
 			dirs = append(dirs, filepath.Join(sysDir, "fbneo"))
 		}
+		if row.Sub == "" && strings.HasPrefix(core, extraDSiCore) {
+			// melonDS DS reads its own folder first (extra_systems.go).
+			dirs = append(dirs, filepath.Join(sysDir, extraDSiCoreLabel))
+		}
 		if row.RomDir {
 			dirs = append(dirs, romDir)
 		}

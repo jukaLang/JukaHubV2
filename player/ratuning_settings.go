@@ -123,6 +123,9 @@ func raTuneOverlayLabel(v string) string {
 	case raTuneOverlayNone:
 		return "None"
 	}
+	if userOverlayIsOurs(v) { // Overlays/<Console> on the card (useroverlays.go)
+		return userOverlayLabel(v)
+	}
 	if list, ok := raTuneOverlays(); ok {
 		for _, o := range list {
 			if o.Path == v {
@@ -249,13 +252,26 @@ func raTuneLatencyRow() setRow {
 
 func raTuneOverlayOptions(c *Config) []setOption {
 	list, _ := raTuneOverlays()
-	out := make([]setOption, 0, len(list)+3)
+	// The console's own pictures in Overlays/<Console> (useroverlays.go).
+	var own []userOverlay
 	if raTuneScope != "" {
-		out = append(out, setOption{Value: "", Label: "Default · " + raTuneOverlayLabel(raTuneOverlaySetting(c)), Note: raTuneDefaultNote})
+		own = userOverlaysCached(raTuneScope)
+	}
+	out := make([]setOption, 0, len(list)+len(own)+3)
+	if raTuneScope != "" {
+		if auto, ok := userOverlaysAutoPick(own, raTuneScope); ok {
+			out = append(out, setOption{Value: "", Label: "Default · " + userOverlayLabel(auto.Path),
+				Note: "The first overlay in Overlays/" + auto.Dir + " on the card"})
+		} else {
+			out = append(out, setOption{Value: "", Label: "Default · " + raTuneOverlayLabel(raTuneOverlaySetting(c)), Note: raTuneDefaultNote})
+		}
 	}
 	out = append(out,
 		setOption{Value: raTuneOwn, Label: "RetroArch's own", Note: "Leave RetroArch's overlay setting alone"},
 		setOption{Value: raTuneOverlayNone, Label: "None", Note: "No overlay, even if RetroArch has one on"})
+	for _, o := range own {
+		out = append(out, setOption{Value: o.Path, Label: userOverlayLabel(o.Path), Note: "From Overlays/" + o.Dir + " on the card"})
+	}
 	for _, o := range list {
 		out = append(out, setOption{Value: o.Path, Label: o.Label})
 	}
@@ -277,11 +293,15 @@ func raTuneOverlayRow() setRow {
 			what := "A border or bezel over the game"
 			if raTuneScope != "" {
 				what = raTuneScope + " games only"
+				// Its own pictures go in Overlays/<Console> (useroverlays.go).
+				if len(userOverlaysCached(raTuneScope)) == 0 {
+					return what + " · put your own in Overlays/" + raTuneScope + " on the card"
+				}
 			}
 			switch {
 			case !ok:
 				return what + " · looking for overlays…"
-			case len(list) == 0:
+			case len(list) == 0 && raTuneScope == "":
 				return what + " · no overlays found in RetroArch's overlays folder"
 			}
 			return what + " · A lists them all"
@@ -533,7 +553,15 @@ func raTuneSettingsRows() []setRow {
 		raTuneLookRow(),
 	}
 	rows = append(rows, lookTuneRows()...)
-	rows = append(rows, raTuneCropRow(), looksDownloadRow())
+	rows = append(rows, raTuneCropRow())
+	// Aspect ratio and hard GPU sync, per console too (raratio_ui.go).
+	rows = append(rows, raRatioSettingsRows()...)
+	// Widescreen 16:9 hacks, per console, wide screens only (widescreen_ui.go).
+	rows = append(rows, widescreenSettingsRows()...)
+	// Fast-forward speed, per console too (raffspeed.go); N64 graphics (n64light.go).
+	rows = append(rows, raFFSpeedSettingsRows()...)
+	rows = append(rows, n64LightSettingsRows()...)
+	rows = append(rows, looksDownloadRow())
 	return append(rows, []setRow{
 		{
 			ID: "raTuneSmooth", Label: "Smooth motion", Kind: setKindToggle,
@@ -549,6 +577,8 @@ func raTuneSettingsRows() []setRow {
 				setToast("Smooth motion: " + setOnOff(on))
 			},
 		},
+		// Threaded video: Auto (off on the Smart Pro S), On, Off (ra_threaded.go).
+		raThreadedSettingsRow(),
 		{
 			ID: "raTuneRumble", Label: "Rumble strength", Kind: setKindChoice, Clamp: true,
 			Detail:  setStatic("How hard the motor shakes in RetroArch games"),

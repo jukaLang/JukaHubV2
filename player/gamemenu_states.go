@@ -161,6 +161,11 @@ func gmStatesAvailable() bool {
 // gmPickOpen shows the picker for saving or loading: the six slots are read
 // now, their screenshots decoded on a goroutine.
 func gmPickOpen(save bool) {
+	if !save && raachHardcoreRunning() {
+		// Hardcore RetroAchievements: RetroArch refuses any load, and the
+		// row says so (gamemenu.go gmLabel).
+		return
+	}
 	gmPickDrop()
 	gmPick.open, gmPick.save = true, save
 	gmPick.sel, gmPick.confirm = 0, -1

@@ -19,7 +19,9 @@ package main
 //   - a cover is used when any scanned ROM, the library already on screen or a
 //     recent game has its stem (compared ignoring case, as FAT does);
 //   - a cover written in the last few minutes is left, in case a fetch for a
-//     game added since the scan is writing it.
+//     game added since the scan is writing it;
+//   - the screenshot and title-screen folders (.snap, .title: artstyle.go)
+//     are looked into with the same rules, never treated as consoles.
 // The walk runs on a goroutine; the answer is picked up by the sheet.
 
 import (
@@ -261,6 +263,8 @@ func startArtCleanupScan() bool {
 					files = append(files, f)
 				}
 			}
+			// Screenshots and title screens of ROMs that are gone (artstyle.go).
+			files = append(files, artStyleCleanupFind(root, scanned, used, time.Now())...)
 		}
 		var total int64
 		for _, f := range files {

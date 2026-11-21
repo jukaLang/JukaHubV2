@@ -191,6 +191,24 @@ JukaHub. A panic on the main goroutine still runs the cleanup (the running game
 is stopped, the LEDs and the CPU governor are put back), bounded to 5 seconds so
 a crash can never leave a frozen frame.
 
+## Tasks: resetting an emulator's settings
+
+Settings → About → **Tasks** collects the repair jobs in one list:
+
+| Task | What it does |
+| --- | --- |
+| Reset RetroArch settings | Puts back `retroarch.cfg` as it was before JukaHub first changed it (the `retroarch.cfg.jukahub-backup` JukaHub kept). The current file is kept beside it as `retroarch.cfg.jukahub-reset-<n>.bak`. Without that copy the row says so: RetroArch has no factory config on a TrimUI card, and deleting it would lose the firmware's controls. |
+| Reset core options | Moves RetroArch's core options file and every per-core / per-game `.opt` file aside; each core starts from its own defaults. |
+| Clear per-core and per-game overrides | Moves every override `.cfg` in RetroArch's config folder (`config/<Core>/`) aside. Button remaps stay. |
+| Reset PPSSPP settings | Moves `ppsspp.ini` and the per-game `<ID>_ppsspp.ini` files aside; saves, save states and `controls.ini` stay. |
+| Clear cache, Rebuild library index | The same jobs as Settings → Privacy and Settings → Games & emulators. |
+| Remove Mac and Windows litter, Check my games | Library doctor's actions (`._` files, `.DS_Store`, `Thumbs.db`, `desktop.ini`, `__MACOSX`; asks first), shown while that plugin is on. |
+| Report a bug | The bug report screen. |
+
+A reset asks first, waits until no game is running (RetroArch writes its config when it
+quits) and deletes nothing: the files move to `data/reset-trash/<date>-<what>/`, whose
+`restore.txt` names where each one came from. The newest few reset folders are kept.
+
 ## SD-card health
 
 **Diagnostics** now reports the card JukaHub runs from:

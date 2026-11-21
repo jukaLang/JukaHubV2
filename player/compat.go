@@ -116,6 +116,11 @@ var (
 		"wii":                           "Wii",
 		"nintendo wii":                  "Wii",
 		"nintendo - wii":                "Wii",
+		"ps2":                           "PlayStation 2",
+		"playstation 2":                 "PlayStation 2",
+		"playstation2":                  "PlayStation 2",
+		"sony playstation 2":            "PlayStation 2",
+		"sony - playstation 2":          "PlayStation 2",
 	}
 )
 
@@ -719,10 +724,22 @@ func defaultCoreForSystem(system string) string {
 		return "tic80"
 	case "EasyRPG":
 		return "easyrpg"
+	// The NAOMI and Atomiswave arcade boards and the DSi (extra_systems.go).
+	case extraNaomiSystem, extraAtomiswaveSystem:
+		return extraFlycastCore
+	case extraDSiSystem:
+		return extraDSiCore
 	// The handheld plays these only where dolphin.go says so; elsewhere
 	// emuDesktopSystemFor answers for them first.
 	case "GameCube", "Wii":
 		return "dolphin"
+	// ARMSX2 is built for arm64 only: the handheld's PS2 core (ps2.go). A PC
+	// plays PS2 in the standalone PCSX2 (emuDesktopSystemFor).
+	case "PlayStation 2":
+		if ps2SoC() != "" {
+			return ps2CoreName
+		}
+		return ""
 	default:
 		return ""
 	}
@@ -918,6 +935,10 @@ func addSystemBoostOptions(options map[string]string, core string, plan boostPla
 		// Native resolution is the core's default; what costs these GPUs is
 		// the stall at each new shader (dolphin_video.go).
 		dolphinBoostOptions(options)
+	case ps2CoreName:
+		// The BIOS intro skipped and OpenGL ES where there is no Vulkan
+		// driver (ps2.go).
+		ps2BoostOptions(options)
 	}
 }
 
@@ -1603,6 +1624,9 @@ func coreConfigDisplayName(core string) string {
 		// The core's library name: RetroArch's folder for its options and
 		// override (dolphin_video.go).
 		return dolphinCoreConfigName
+	case ps2CoreName:
+		// The core's library name, its options folder (ps2_video.go).
+		return ps2CoreConfigName
 	default:
 		return core
 	}

@@ -74,16 +74,17 @@ func TestA11YAccessibilityRowsChangeLiveState(t *testing.T) {
 		return setRow{}
 	}
 
-	mono := find("monoAudio")
-	if mono.Get(cfg) {
-		t.Fatal("mono audio starts on")
+	// Audio channels kept the Mono audio switch's ID.
+	channels := find("monoAudio")
+	if channels.Current(cfg) != audioChStereo {
+		t.Fatal("audio channels start on something other than Stereo")
 	}
-	mono.Set(cfg, true)
-	if !a11y.monoAudio {
-		t.Fatal("mono audio row did not reach the live state")
+	channels.Choose(cfg, "mono-left")
+	if a11y.audioChannels != audioChMonoLeft {
+		t.Fatal("audio channels row did not reach the live state")
 	}
-	if cfg.Variables.Custom[a11yKeyMonoAudio] != true {
-		t.Fatalf("mono audio not stored: %v", cfg.Variables.Custom[a11yKeyMonoAudio])
+	if cfg.Variables.Custom[a11yKeyAudioChannels] != "mono-left" || cfg.Variables.Custom[a11yKeyMonoAudio] != true {
+		t.Fatalf("audio channels not stored: %v / %v", cfg.Variables.Custom[a11yKeyAudioChannels], cfg.Variables.Custom[a11yKeyMonoAudio])
 	}
 
 	find("audioBalance").Choose(cfg, "-40")
@@ -129,12 +130,12 @@ func TestA11YAccessibilityRowsChangeLiveState(t *testing.T) {
 		t.Fatalf("reset did not ask first: %+v", tbxSheet.spec.buttons)
 	}
 	tbxSheetActivate(0)
-	if !a11y.monoAudio || !a11y.stickyChords {
+	if a11y.audioChannels != audioChMonoLeft || !a11y.stickyChords {
 		t.Fatal("Keep reset the settings anyway")
 	}
 	find("a11yReset").Open(cfg)
 	tbxSheetActivate(1)
-	if a11y.monoAudio || a11y.oneHanded || a11y.stickyChords || a11y.longPressMs != 450 {
+	if a11y.audioChannels != audioChStereo || a11y.oneHanded || a11y.stickyChords || a11y.longPressMs != 450 {
 		t.Fatalf("reset left state behind: %+v", a11y)
 	}
 	if len(a11y.keys) != 0 || a11ySelectKeyMode() != a11ySelectDefault {

@@ -684,6 +684,7 @@ var hintRemapNow atomic.Pointer[hintPadRemap]
 var hintRemapSeen struct {
 	ready bool
 	sig   [16]uint8
+	roles bool // Controls → Button hints show: Roles (buttonlayout.go)
 }
 
 // hintRemapSignature is what the remap layer does to each button it knows
@@ -710,11 +711,15 @@ func hintRemapSignature() [16]uint8 {
 // badges drawn under the old one.
 func hintRemapRefresh() {
 	sig := hintRemapSignature()
-	if hintRemapSeen.ready && sig == hintRemapSeen.sig {
+	roles := buttonLayoutHintRoles()
+	if hintRemapSeen.ready && sig == hintRemapSeen.sig && roles == hintRemapSeen.roles {
 		return
 	}
-	hintRemapSeen.ready, hintRemapSeen.sig = true, sig
+	hintRemapSeen.ready, hintRemapSeen.sig, hintRemapSeen.roles = true, sig, roles
 	next := &hintPadRemap{gen: 1, pairs: hintRemapInverse(a11yResolveButton)}
+	if roles {
+		next.pairs = nil // the Xbox layout's letters by role, not as printed
+	}
 	if cur := hintRemapNow.Load(); cur != nil {
 		next.gen = cur.gen + 1
 	}

@@ -269,6 +269,8 @@ func syncthingBoot(config *Config) {
 	syncthingWantOn.Store(syncthingEnabled(config))
 	syncthingLANOnly.Store(syncthingLANOnlySetting(config))
 	syncthingPortPref.Store(int32(syncthingPortSetting(config)))
+	// "Also sync" folders and the web GUI choice (syncthing_more.go).
+	syncthingExtrasBoot(config)
 	if syncthingWantOn.Load() {
 		syncthingStartWorker()
 	}
@@ -711,7 +713,8 @@ func syncthingStart(ctx context.Context) (syncthingAPI, error) {
 		"--no-browser",
 		"--no-restart",
 		"--no-upgrade",
-		"--gui-address=127.0.0.1:"+strconv.Itoa(chosen),
+		// Loopback, or every interface while "Web GUI on this network" is on.
+		"--gui-address="+syncthingGuiHost()+":"+strconv.Itoa(chosen),
 	)
 	cmd.Dir = home
 	// The API key goes in the environment, not argv: a command line is
@@ -882,6 +885,8 @@ func syncthingConfigure(ctx context.Context, api syncthingAPI) error {
 			}
 		}
 	}
+	// The shown login while the GUI is open on the network (syncthing_more.go).
+	syncthingApplyWebGUI(ctx, api)
 	var st struct {
 		MyID string `json:"myID"`
 	}
@@ -973,7 +978,9 @@ func syncthingRemoteDevices(ctx context.Context, api syncthingAPI, myID string) 
 // folders that vanished are left configured, so a card swap cannot unshare.
 func syncthingShareFolders(ctx context.Context, api syncthingAPI, myID string) (int, error) {
 	manifest, ok := syncthingSaveFolders()
-	if !ok {
+	// The "Also sync" folders are shared the same way (syncthing_more.go).
+	extras := syncthingExtraFolders()
+	if !ok && len(extras) == 0 {
 		syncthingUpdate(func(s *syncthingSnapshot) { s.Folders = nil })
 		return 0, nil // no save folders yet: nothing to share, not a failure
 	}
@@ -996,7 +1003,8 @@ func syncthingShareFolders(ctx context.Context, api syncthingAPI, myID string) (
 			byID[id] = f
 		}
 	}
-	for _, f := range manifest.Folders {
+	syncthingPruneExtras(ctx, api, byID, extras)
+	for _, f := range syncthingWithExtras(manifest.Folders, extras) {
 		have, ok := byID[f.FolderID]
 		if !ok {
 			if err := api.call(ctx, http.MethodPost, "/rest/config/folders", syncthingFolderObject(f, remote), nil); err != nil {

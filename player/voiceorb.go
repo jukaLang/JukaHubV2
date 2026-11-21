@@ -436,6 +436,10 @@ func voiceOrbLegendRow(keyboard bool) (FooterHint, bool) {
 // Menu on the handheld and F4 on a keyboard.
 func voiceOrbFooterHint(config *Config) (FooterHint, bool) {
 	if P().IsHandheld() {
+		if homeLayoutActive && quickMenuHomeButtonOn(config) {
+			// Menu on Home is the Quick menu (quickmenu.go).
+			return FooterHint{Button: "Menu", Label: "Quick menu"}, true
+		}
 		if !voiceOrbMenuEnabled(config) {
 			return FooterHint{}, false
 		}
@@ -462,7 +466,8 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 			return voiceOrbMenuUp(e, config)
 		}
 		voiceOrb.menuTaken, voiceOrb.menuDown = false, false
-		if voiceOrbMenuOwnsGuide(config, e.Which) || menuShotOwnsGuide(config, e.Which) {
+		if voiceOrbMenuOwnsGuide(config, e.Which) || menuShotOwnsGuide(config, e.Which) ||
+			quickMenuOwnsGuide(config, e.Which) {
 			return voiceOrbMenuDown(e, config)
 		}
 		// Not the voice button here (Back, or a pad's Guide on a PC): it falls
@@ -616,8 +621,9 @@ func voiceOrbMenuDown(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if !ok {
 		// Menu is Back here (voice off, or something the orb cannot open
 		// over). With Hold Menu: screenshot on, the Back waits for the
-		// release, so a hold can be a screenshot instead (menushot.go).
-		if !menuShotOwnsGuide(config, e.Which) {
+		// release, so a hold can be a screenshot instead (menushot.go). So
+		// does "Menu button on Home: Quick menu" there (quickmenu.go).
+		if !menuShotOwnsGuide(config, e.Which) && !quickMenuOwnsGuide(config, e.Which) {
 			return false
 		}
 		route = orbRouteBack
@@ -655,6 +661,9 @@ func voiceOrbMenuUp(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case voiceOrb.menuShot:
 		// A hold: the screenshot (menushot.go).
 		menuShotTake()
+	case !voiceOrb.menuHeldOpen && quickMenuFromMenuTap(config):
+		// A tap with "Menu button on Home: Quick menu": it opened or closed
+		// the Quick menu (quickmenu.go).
 	case voiceOrb.menuRoute == orbRouteBack:
 		// A tap where Menu means Back: Back now (menushot.go).
 		menuShotSendBack()
@@ -1011,7 +1020,8 @@ func voiceOrbBlockingCard() bool {
 	return alarmFiringActive() || gameScreenSuspended() || onboarding.active || recoveryCard.open ||
 		launchFailure.open || updatePrompt.open || videoPrepareActive() || ctrldiag.open || emuPickOpen() ||
 		homeTabsItemSheetActive() || gameReadyUI.open || shelfCard.open ||
-		startupLocked() // bootlock.go
+		startupLocked() || // bootlock.go
+		uiModeOrbBlocked() // Kiosk / Kid mode (uimode.go)
 }
 
 // voiceOrbBlocked names what keeps the orb from coming up, or "": those cards,

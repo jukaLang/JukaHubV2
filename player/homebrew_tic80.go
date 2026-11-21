@@ -20,8 +20,7 @@ package main
 // TIC-80 nor EasyRPG games (rommSystems has no row for them, so RomM has no
 // id to match either): hbFolderConsoleDir finds their folder through the
 // library's own aliases instead. EasyRPG's folder is EASYRPG, the name Onion
-// and the CrossMix-style firmwares use (Batocera's "easyrpg" is the same
-// folder on a FAT card).
+// and CrossMix use (Batocera's "easyrpg" is the same folder on a FAT card).
 
 import (
 	"errors"

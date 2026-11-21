@@ -165,3 +165,48 @@ func TestNetplayRoomParsers(t *testing.T) {
 		t.Fatal("lobby core names do not fold onto core files")
 	}
 }
+
+// The link beacon and the kernel's TCP table come from outside JukaHub
+// (netplay_link*.go): only a known mode, a usable port and an IPv4 sender
+// for Gambatte get through, and the player count reads /proc/net/tcp.
+func TestNetplayLinkParsers(t *testing.T) {
+	from := &net.UDPAddr{IP: net.IPv4(192, 168, 1, 9), Port: 40000}
+	room, ok := parseNetplayLinkBeacon([]byte(`{"v":1,"app":"JukaHub","mode":"gb","nick":"ann","title":"Pokemon Blue","port":56400}`), from)
+	if !ok || room.Host != "192.168.1.9" || room.Port != 56400 || room.Mode != netplayLinkGB {
+		t.Fatalf("link beacon = %+v ok=%v", room, ok)
+	}
+	for _, bad := range []string{
+		`{"v":1,"app":"JukaHub","mode":"gb","port":55435}`,
+		`{"v":1,"app":"JukaHub","mode":"psx","port":56400}`,
+		`{"v":1,"app":"JukaHub","mode":"gba","port":0}`,
+		`{"v":2,"app":"JukaHub","mode":"gb","port":56400}`,
+	} {
+		if _, ok := parseNetplayLinkBeacon([]byte(bad), from); ok {
+			t.Fatalf("accepted %s", bad)
+		}
+	}
+	if _, ok := parseNetplayLinkBeacon([]byte(`{"v":1,"app":"JukaHub","mode":"gb","port":56400}`), &net.UDPAddr{IP: net.ParseIP("fe80::1")}); ok {
+		t.Fatal("a Game Boy link from an IPv6 sender was accepted")
+	}
+	values, err := netplayLinkGBClientOptions(net.ParseIP("192.168.1.5"), 56400)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digits strings.Builder
+	for _, v := range values {
+		if strings.HasPrefix(v.Key, "gambatte_gb_link_network_server_ip_") && !strings.Contains(v.Key, "octet") {
+			digits.WriteString(v.Value)
+		}
+	}
+	if digits.String() != "192168001005" {
+		t.Fatalf("server digits = %q", digits.String())
+	}
+	table := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n" +
+		"   0: 00000000:D88B 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1\n" +
+		"   1: 0501A8C0:D88B 0901A8C0:B5A2 01 00000000:00000000 00:00000000 00000000     0        0 2\n" +
+		"   2: 0501A8C0:D88B 0A01A8C0:C001 01 00000000:00000000 00:00000000 00000000     0        0 3\n" +
+		"   3: 0501A8C0:9C40 0B01A8C0:C002 01 00000000:00000000 00:00000000 00000000     0        0 4\n"
+	if n := netplayLinkCountPeers(table, 55435); n != 2 {
+		t.Fatalf("peers on 55435 = %d, want 2", n)
+	}
+}

@@ -79,8 +79,9 @@ func menuShotEnabled(config *Config) bool {
 func menuShotSettingsRow() setRow {
 	return setRow{
 		ID: menuShotKey, Label: "Hold Menu: screenshot", Kind: setKindToggle,
-		Detail: func(*Config) string {
-			if gameAssistSupported() {
+		Detail: func(c *Config) string {
+			// In a game the hold may mean the game switcher (menuhold_action.go).
+			if gameAssistSupported() && menuHoldGameChoice(c) == menuHoldGameShot {
 				return "Hold Menu anywhere, in a game too, then let go to save the screen"
 			}
 			return "Hold Menu anywhere, then let go to save the screen"
@@ -107,7 +108,8 @@ func menuShotLegendRow() (FooterHint, bool) {
 		return FooterHint{}, false
 	}
 	if gameAssistSupported() {
-		return FooterHint{Button: "Hold Menu", Label: "Screenshot (in a game too)"}, true
+		// Or the game switcher in a game (menuhold_action.go).
+		return FooterHint{Button: "Hold Menu", Label: menuHoldLegendLabel()}, true
 	}
 	return FooterHint{Button: "Hold Menu", Label: "Screenshot"}, true
 }

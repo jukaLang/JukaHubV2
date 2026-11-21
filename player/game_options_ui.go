@@ -25,6 +25,10 @@ const (
 	gameOptionsRowTitle = iota
 	gameOptionsRowFileName
 	gameOptionsRowHidden
+	// gamepin.go: Pin to Home, Add to collection…, Remove from recents.
+	gameOptionsRowPin
+	gameOptionsRowAddCollection
+	gameOptionsRowForgetRecent
 	gameOptionsRowSort
 	gameOptionsRowLayout
 	gameOptionsRowConsoleLook // game_library_pixel_look.go
@@ -41,11 +45,17 @@ const (
 	gameOptionsRowButtons    // racontrols_ui.go
 	gameOptionsRowCtrlLayout // ctrllayout_ui.go
 	gameOptionsRowTurbo      // racontrols_ui.go
+	gameOptionsRowHotkey     // rahotkeys_ui.go: which shortcut
+	gameOptionsRowHotkeyKey  // rahotkeys_ui.go: its buttons
+	gameOptionsRowRatio      // raratio_ui.go
+	gameOptionsRowAnalog     // psxanalog_ui.go: PlayStation games only
+	gameOptionsRowWidescreen // widescreen_ui.go: wide screens only
 	gameOptionsRowDiagnose
 	gameOptionsRowChooseCover
 	gameOptionsRowRemoveCover
 	gameOptionsRowCoverName
 	gameOptionsRowCovers
+	gameOptionsRowArtManager // artmanager.go
 	gameOptionsRowReset
 	gameOptionsRowDelete
 	gameOptionsRowCount
@@ -117,6 +127,8 @@ func gameOptionsRowName(row int) string {
 		return "Rename file"
 	case gameOptionsRowHidden:
 		return "Visibility"
+	case gameOptionsRowPin, gameOptionsRowAddCollection, gameOptionsRowForgetRecent:
+		return gamePinSheetName(row, gameOptsUI.game)
 	case gameOptionsRowSort:
 		return "Library sort"
 	case gameOptionsRowLayout:
@@ -149,6 +161,14 @@ func gameOptionsRowName(row int) string {
 		return "Controls layout"
 	case gameOptionsRowTurbo:
 		return "Turbo"
+	case gameOptionsRowHotkey:
+		return "Hotkey"
+	case gameOptionsRowHotkeyKey:
+		return "Hotkey buttons"
+	case gameOptionsRowRatio:
+		return "Aspect ratio"
+	case gameOptionsRowAnalog, gameOptionsRowWidescreen:
+		return emuExtrasRowName(row) // widescreen_ui.go
 	case gameOptionsRowDiagnose:
 		return "Check why it won't start"
 	case gameOptionsRowChooseCover:
@@ -162,6 +182,8 @@ func gameOptionsRowName(row int) string {
 		return "Name for covers"
 	case gameOptionsRowCovers:
 		return "Clean up covers"
+	case gameOptionsRowArtManager:
+		return artManagerEntryName
 	case gameOptionsRowReset:
 		return "Reset game…"
 	case gameOptionsRowDelete:
@@ -187,10 +209,12 @@ func gameOptionsRowHint(row int) string {
 		return "Renames the ROM on the card with its saves, states and covers"
 	case gameOptionsRowHidden:
 		return "Hide this game; Show hidden brings it back"
+	case gameOptionsRowPin, gameOptionsRowAddCollection, gameOptionsRowForgetRecent:
+		return gamePinSheetHint(row, gameOptsUI.game)
 	case gameOptionsRowSort:
 		return "Order of every console's games"
 	case gameOptionsRowLayout:
-		return "List, a 3D shelf, or a vertical cover column"
+		return "List, 3D shelf, cover column, Cover Flow or Cube"
 	case gameOptionsRowConsoleLook:
 		return gameOptionsConsoleLookHint()
 	case gameOptionsRowShowHidden:
@@ -238,6 +262,14 @@ func gameOptionsRowHint(row int) string {
 		return ctrlLayoutSheetHint(gameOptsUI.game)
 	case gameOptionsRowTurbo:
 		return gameControlsSheetHint(gameOptsUI.game, true)
+	case gameOptionsRowHotkey:
+		return "A RetroArch shortcut to change for this game; its buttons are the next row"
+	case gameOptionsRowHotkeyKey:
+		return raHotkeySheetHint(gameOptsUI.game)
+	case gameOptionsRowRatio:
+		return raRatioSheetHint(gameOptsUI.game)
+	case gameOptionsRowAnalog, gameOptionsRowWidescreen:
+		return emuExtrasSheetHint(gameOptsUI.game, row)
 	case gameOptionsRowDiagnose:
 		return "Missing BIOS, core or game files, and where to copy them"
 	case gameOptionsRowChooseCover:
@@ -251,6 +283,8 @@ func gameOptionsRowHint(row int) string {
 		return "The title box art is looked up by, if the file name differs"
 	case gameOptionsRowCovers:
 		return "Find downloaded box art no game in the library uses"
+	case gameOptionsRowArtManager:
+		return "Box art, screenshots and title screens per console: fetch or reset"
 	case gameOptionsRowReset:
 		return "Settings, core overrides, remaps, DIP switches, high scores"
 	case gameOptionsRowDelete:
@@ -274,6 +308,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			return "Hidden"
 		}
 		return "Visible"
+	case gameOptionsRowPin, gameOptionsRowAddCollection, gameOptionsRowForgetRecent:
+		return gamePinSheetValue(row, gameOptsUI.game)
 	case gameOptionsRowSort:
 		return librarySortLabel()
 	case gameOptionsRowLayout:
@@ -331,6 +367,14 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return ctrlLayoutSheetValue(gameOptsUI.game)
 	case gameOptionsRowTurbo:
 		return gameTurboSheetValue(gameOptsUI.game)
+	case gameOptionsRowHotkey:
+		return raHotkeySheetActionValue()
+	case gameOptionsRowHotkeyKey:
+		return raHotkeySheetButtonValue(gameOptsUI.game)
+	case gameOptionsRowRatio:
+		return raRatioSheetValue(gameOptsUI.game)
+	case gameOptionsRowAnalog, gameOptionsRowWidescreen:
+		return emuExtrasSheetValue(gameOptsUI.game, row)
 	case gameOptionsRowDiagnose:
 		return "Check"
 	case gameOptionsRowChooseCover:
@@ -349,6 +393,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		if gameOptsUI.coverWait || artCleanupBusy() {
 			return "Looking…"
 		}
+		return "→"
+	case gameOptionsRowArtManager:
 		return "→"
 	case gameOptionsRowReset, gameOptionsRowDelete:
 		return "Choose…"
@@ -543,6 +589,10 @@ func gameOptionsPollCovers() {
 func openGameOptions() bool {
 	if !gameLib.open || gameOptsUI.open {
 		return false
+	}
+	// Every row here changes the setup: locked in Kiosk / Kid mode (uimode.go).
+	if !uiModeGate(uiFeatSetup) {
+		return true
 	}
 	// The sheet edits one game, and the consoles grid highlights a console,
 	// not a game: the options open from a console's page.
@@ -764,6 +814,16 @@ func adjustGameOptions(delta int) {
 		if !gameControlsSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowTurbo, delta, false) {
 			return
 		}
+	case gameOptionsRowHotkey, gameOptionsRowHotkeyKey, gameOptionsRowRatio:
+		// Left/Right stop at the ends (rahotkeys_ui.go, raratio_ui.go).
+		if !raSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor), delta, false) {
+			return
+		}
+	case gameOptionsRowAnalog, gameOptionsRowWidescreen:
+		// Left/Right stop at the ends (widescreen_ui.go).
+		if !emuExtrasSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor), delta, false) {
+			return
+		}
 	case gameOptionsRowSort:
 		cycleLibrarySort(delta)
 		refreshLibraryView()
@@ -803,6 +863,8 @@ func activateGameOptionsRow() {
 		vkOpenGameFileName() // game_rename.go
 	case gameOptionsRowHidden:
 		toggleGameHidden()
+	case gameOptionsRowPin, gameOptionsRowAddCollection, gameOptionsRowForgetRecent:
+		gamePinSheetActivate(gameOptionsRowAt(gameOptsUI.cursor), gameOptsUI.game) // gamepin.go
 	case gameOptionsRowSort:
 		cycleLibrarySort(1)
 		refreshLibraryView()
@@ -850,6 +912,14 @@ func activateGameOptionsRow() {
 		if gameControlsSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor) == gameOptionsRowTurbo, 1, true) {
 			PlayNavSound()
 		}
+	case gameOptionsRowHotkey, gameOptionsRowHotkeyKey, gameOptionsRowRatio:
+		if raSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor), 1, true) {
+			PlayNavSound()
+		}
+	case gameOptionsRowAnalog, gameOptionsRowWidescreen:
+		if emuExtrasSheetStep(gameOptsUI.game, gameOptionsRowAt(gameOptsUI.cursor), 1, true) {
+			PlayNavSound()
+		}
 	case gameOptionsRowCtrlLayout:
 		ctrlLayoutPickerOpen(gameOptsUI.game, ctrlLayoutHostSheet) // ctrllayout_ui.go
 	case gameOptionsRowDiagnose:
@@ -870,6 +940,8 @@ func activateGameOptionsRow() {
 		}
 		PlayActivateSound()
 		gameOptsUI.coverWait = startArtCleanupScan()
+	case gameOptionsRowArtManager:
+		artManagerOpenFromLibrary() // closes the sheet and the library (artmanager.go)
 	case gameOptionsRowReset:
 		if gameOptsUI.game.System == androidLibrarySystem {
 			// An Android game keeps its data in the app runtime, not in
@@ -1086,7 +1158,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	// the panel and the bar drawn into it measure the same height.
 	subtitle := gameOptsUI.game.Label()
 	if system := strings.TrimSpace(gameOptsUI.game.System); system != "" {
-		subtitle += " · " + system
+		subtitle += " · " + consoleDisplayName(system)
 	}
 	title := "Game options"
 	switch gameOptsUI.choice {
@@ -1106,6 +1178,15 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	choosing := gameOptsUI.choice != gameOptionsChoiceNone
 	headerH := UIPanelHeaderBand(config, header, 14)
 	noteH := int32(12) + smallH
+	// The game's time this week and ever, a line over the note
+	// (playtime_periods.go); none for a game never played.
+	playLine := ""
+	if !choosing {
+		playLine = playtimePeriodsGameLine(gameOptsUI.game.System, gameOptsUI.game.Title)
+	}
+	if playLine != "" {
+		noteH += smallH + 4
+	}
 	footerH := int32(14) + smallH
 	panelW := int32(620)
 	if panelW > screenWidth-64 {
@@ -1223,12 +1304,19 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 		if idx == gameOptionsRowCtrlLayout && ctrlLayoutSheetOwn(gameOptsUI.game) {
 			valueColor = focusColor
 		}
+		if raSheetOwn(gameOptsUI.game, idx) { // hotkeys, aspect ratio (rahotkeys_ui.go)
+			valueColor = focusColor
+		}
+		extrasRow := idx == gameOptionsRowAnalog || idx == gameOptionsRowWidescreen
+		if extrasRow && emuExtrasSheetOwn(gameOptsUI.game, idx) { // widescreen_ui.go
+			valueColor = focusColor
+		}
 		// Ladders and toggles show which way they move; a static value would
 		// leave Left/Right undiscoverable.
 		if selected && (buttonsRow || idx == gameOptionsRowCeiling || idx == gameOptionsRowCPUProfile ||
 			idx == gameOptionsRowVideo || idx == gameOptionsRowSort || idx == gameOptionsRowLayout ||
 			idx == gameOptionsRowConsoleLook || idx == gameOptionsRowShowHidden || idx == gameOptionsRowHidden ||
-			idx == gameOptionsRowEmulator) {
+			idx == gameOptionsRowEmulator || raSheetRow(idx) || extrasRow) {
 			value = "‹  " + value + "  ›"
 		}
 		value = ellipsize(font, value, innerW/2)
@@ -1238,6 +1326,10 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	noteY := bodyY + rowH*int32(visible) + 4
+	if playLine != "" {
+		renderText(renderer, config, font, ellipsize(font, playLine, innerW), ColorTextSecondary(), panelX+pad, noteY)
+		noteY += smallH + 4
+	}
 	note := "Display, visibility, sort and view are saved; launch rows apply to this game only."
 	if gameOptsUI.game.System == html5LibrarySystem {
 		note = "Display, visibility, sort and view are saved for browser games."

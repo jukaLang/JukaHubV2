@@ -240,7 +240,7 @@ func systemBluetoothAudioDevice() btDevice {
 }
 
 // bluealsaHeldHeadset is the headset BlueALSA holds an A2DP stream for while
-// bluetoothctl named none (spruce routes by that alone): only asked on the
+// bluetoothctl named none: only asked on the
 // handhelds, while a link is up and bluealsa runs.
 func bluealsaHeldHeadset() btDevice {
 	if runtime.GOOS != "linux" || !IsTrimuiDevice() || btLinkCount() <= 0 {

@@ -153,10 +153,12 @@ const (
 // is read by every focusable's draw call rather than baked into one screen.
 var glassFocusRingWidth int32 = 3
 
-func glassFill() sdl.Color        { return glassA(13) }
-func glassFillHover() sdl.Color   { return glassA(17) }
-func glassFillFocus() sdl.Color   { return glassA(20) }
-func glassFillPressed() sdl.Color { return glassA(26) }
+// The fills follow Theme & look → Glass opacity (glassOpacityA,
+// colourpick_theme.go); the edges stay, so a pane keeps its outline.
+func glassFill() sdl.Color        { return glassA(glassOpacityA(13)) }
+func glassFillHover() sdl.Color   { return glassA(glassOpacityA(17)) }
+func glassFillFocus() sdl.Color   { return glassA(glassOpacityA(20)) }
+func glassFillPressed() sdl.Color { return glassA(glassOpacityA(26)) }
 func glassEdge() sdl.Color        { return glassA(20) }
 func glassEdgeHover() sdl.Color   { return glassA(40) }
 
@@ -425,8 +427,10 @@ func drawGlassFocusGlow(renderer *sdl.Renderer, rect sdl.Rect) {
 
 // drawGlassFocusRing is Home's ring: 3px of accent drawn on the control's own
 // edge, so a focused control never grows past the slot it was laid out in.
+// Its ink is the accent, or Theme & look → Focus ring colour when one is
+// picked (glassFocusRingColour, colourpick_theme.go).
 func drawGlassFocusRing(renderer *sdl.Renderer, rect sdl.Rect, radius int32) {
-	drawGlassFocusRingInk(renderer, rect, radius, glassAccent())
+	drawGlassFocusRingInk(renderer, rect, radius, glassFocusRingColour())
 }
 
 // drawGlassFocusRingInk draws the same ring in an explicit ink. The solid

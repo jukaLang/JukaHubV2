@@ -36,6 +36,48 @@ Settings → About → **Drivers & hardware** lists every part with OK / not fou
 this model, and the driver and node behind it. Settings → About → About JukaHub shows the
 identification evidence (model, how it was identified, panel, firmware names, chip).
 
+Three more rows in Settings → About answer the questions a bug report usually starts with:
+
+- **Stock firmware** — the TrimUI firmware version (read from `/etc/version`) and its update
+  file, see below.
+- **Card space** — used, free and total of the card your games are on, its format, and the
+  handheld's internal storage when that is a partition of its own. On a computer the row is
+  called Game storage.
+- **Emulator versions** — RetroArch's version, PPSSPP's (the line the PSP tile shows), every
+  installed core's (`display_version` from its `.info` file, else the version in its file
+  name) and, on Windows, every emulator the Emulators page installed. RetroArch's version is
+  read from the log of the last game JukaHub started, else from the program file, else (Linux)
+  from `--version`; "version not reported" means none of them said it for certain.
+
+## Stock firmware updates
+
+JukaHub runs on top of TrimUI's own system and never flashes it. Settings → About → **Stock
+firmware** tells you which version you have and walks you through TrimUI's own updater:
+
+1. Download the newest firmware for your model from TrimUI (the sheet shows a QR code for the
+   Smart Pro, Smart Pro S and Brick release pages) and unpack it.
+2. Copy the `.awimg` file to the **root** of a **FAT32** card: `trimui_tg5040.awimg` (Smart Pro),
+   `trimui_tg5050.awimg` (Smart Pro S), `trimui_tg3040.awimg` (Brick and Hammer),
+   `trimui_tg4040.awimg` (Brick Pro).
+3. Open Stock firmware again. It lists every update file it finds and what is wrong with it:
+   still in a zip, in a folder instead of at the root, renamed, or — the dangerous one — made
+   for another model. It also shows the battery (charge above 50% first) and warns when the
+   card is not FAT32, which TrimUI's updater cannot read.
+4. Start the update with the buttons:
+   - **Smart Pro, Brick, Brick Pro, Hammer:** power off, hold Volume − and press Power, let go
+     of Power at the logo, keep holding Volume − until the green progress bar appears.
+   - **Smart Pro S:** hold Volume − and briefly press the RESET button, let go of Volume − when
+     the green progress bar appears (TrimUI's manual; some guides keep Volume − held longer).
+
+   Leave the handheld alone until it restarts by itself. Never power it off or take the card
+   out during the update.
+5. Afterwards **Delete the update file** on the same sheet frees the space.
+
+Your games, saves and JukaHub on the card are not touched. TrimUI publishes matching card
+files for its own menu with each firmware; update those too if you use the stock emulators.
+On the JukaHub OS image (a card that starts its own copy of the system) the row says the
+stock updater does not apply: start from a stock card to update the internal system.
+
 ## If something does not work
 
 Open **Drivers & hardware** once — that writes the whole table to the log — then send a bug

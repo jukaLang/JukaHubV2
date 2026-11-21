@@ -704,7 +704,8 @@ type sdMoveScan struct {
 	CID        string
 	Parts      int
 	// System: the handheld starts from this card itself (JukaHub OS image,
-	// Knulli-style cards), so a file copy cannot make a card that boots.
+	// cards with a whole system on them), so a file copy cannot make a card
+	// that boots.
 	System bool
 	Total  int64
 	Free   int64

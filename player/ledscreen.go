@@ -1,7 +1,7 @@
 package main
 
-// ledscreen.go — the stick lights' "Screen colours" mode (NextUI's ambient
-// LEDs): the rings glow with the colours at the edges of the picture, like an
+// ledscreen.go — the stick lights' "Screen colours" mode (ambient LEDs):
+// the rings glow with the colours at the edges of the picture, like an
 // Ambilight TV, in games too.
 //
 // The picture comes from the framebuffer. A game draws straight to /dev/fb0 on
@@ -373,7 +373,7 @@ func ledScreenGamesRow() setRow {
 }
 
 // ledScreenSystemRow switches Screen colours for the console of the last game
-// played (NextUI's per-emulator choice, without a list of every console):
+// played (a per-console choice, without a list of every console):
 // play a game, come back, and this row names its console.
 func ledScreenSystemRow() setRow {
 	return setRow{

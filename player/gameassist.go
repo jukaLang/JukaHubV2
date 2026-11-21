@@ -331,13 +331,15 @@ func gameAssistParkedTick(config *Config) {
 	// which shows nothing or ignores the pad (gameForceQuit) — always on, it
 	// is the way out.
 	gaPadSync(config, can && gameAssistLive.on.Load(), can && gameMenuEnabled(config),
-		can && P().IsHandheld() && menuShotEnabled(config),
+		// Hold Menu: a screenshot or the game switcher (menuhold_action.go).
+		can && P().IsHandheld() && menuHoldGameSync(config),
 		// Two buttons are easy to press in a pocket: not while asleep.
 		can && P().IsHandheld() && gameShotChordEnabled(config) && !powerSleepActive(),
 		can && P().IsHandheld() && !powerSleepActive())
 	if at := gaLink.forceQuitAt.Swap(0); at != 0 && time.Since(time.Unix(0, at)) < time.Second {
 		gameForceQuit()
 	}
+	menuHoldGameTick(config) // Menu held with the game switcher chosen
 	if gaLink.request.Swap(false) && !gaOpen(config, gaMode(gaLink.mode.Load())) {
 		gaLink.release.Store(true)
 	}

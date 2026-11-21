@@ -283,7 +283,8 @@ func readSubtitleCues(path string) ([]subtitleCue, error) {
 	if err != nil {
 		return nil, err
 	}
-	return parseSubtitles(string(data)), nil
+	// .ass/.ssa and MicroDVD .sub by their extension (videotracks_subs.go).
+	return parseSubtitleFile(path, string(data)), nil
 }
 
 // loadSidecarSubtitles reads the best subtitle file beside a local video (see
@@ -381,8 +382,10 @@ func prepareVideoSubtitles(sess *playbackSession, config *Config, source string)
 	if err != nil {
 		lang = ""
 	}
-	cues, label := loadSidecarSubtitles(source, dlFirstNonEmpty(lang, "en"))
-	if len(cues) == 0 {
+	// The track remembered for the file, else the best file beside it, else
+	// its first text track (videotracks_subs.go).
+	cues, label, searched := videoTracksStartSubs(ctx, sess, config, source, dlFirstNonEmpty(lang, "en"))
+	if len(cues) == 0 && !searched {
 		ffmpegPath := ""
 		if config != nil {
 			ffmpegPath = getToolPath("ffmpeg", config)

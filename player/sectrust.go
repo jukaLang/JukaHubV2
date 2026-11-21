@@ -175,13 +175,17 @@ func securityPostureRows(config *Config) []securityRow {
 	// 6. Listening servers are capabilities, not vulnerabilities — say so.
 	servers := "None listening"
 	warn := false
-	if ftpSrv.Running() || sshSrv.Running() {
-		names := make([]string, 0, 2)
+	if extra := vncTelnetSecurityNames(); ftpSrv.Running() || sshSrv.Running() || davSrv.Running() || len(extra) > 0 {
+		// VNC and Telnet first: they hand out the screen and a shell.
+		names := append(make([]string, 0, 5), extra...)
 		if ftpSrv.Running() {
 			names = append(names, fmt.Sprintf("FTP :%d", ftpSrv.Port()))
 		}
 		if sshSrv.Running() {
 			names = append(names, fmt.Sprintf("SFTP :%d", sshSrv.Port()))
+		}
+		if davSrv.Running() {
+			names = append(names, fmt.Sprintf("WebDAV :%d", davSrv.Port()))
 		}
 		servers = strings.Join(names, " · ")
 		warn = true
@@ -686,6 +690,15 @@ func sectrustOpenRowSheet(config *Config, r securityRow) {
 				ShowToast("SFTP server stopped", ToastKindInfo)
 			}})
 		}
+		if davSrv.Running() {
+			buttons = append(buttons, tbxSheetButton{label: "Stop WebDAV", primary: true, run: func() {
+				davSrv.Stop()
+				sectrustScreen.model.builtAt = time.Time{}
+				ShowToast("WebDAV share stopped", ToastKindInfo)
+			}})
+		}
+		// VNC and Telnet (vncserver_ui.go).
+		buttons = append(buttons, vncTelnetSecurityButton()...)
 	case "companion":
 		if companion.srv != nil && companion.srv.Running() {
 			buttons = append(buttons, tbxSheetButton{label: "New PIN", primary: true, run: func() {

@@ -6,7 +6,7 @@ package main
 //
 // The TrimUI Smart Pro and Brick (tg5040, Allwinner A133P) run Allwinner's BSP
 // kernel, whose display driver ("disp2") owns the panel's backlight. The stock
-// firmware, MinUI/NextUI and spruceOS all set it with an ioctl on /dev/disp:
+// firmware and MinUI set it with an ioctl on /dev/disp:
 //
 //	DISP_LCD_SET_BRIGHTNESS (0x102)  arg -> unsigned long[4]{screen, level, 0, 0}
 //	DISP_LCD_GET_BRIGHTNESS (0x103)  arg -> unsigned long[4]{screen, 0, 0, 0}, returns the level

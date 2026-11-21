@@ -2,6 +2,9 @@ package main
 
 // lowbattery.go — the last 3% protection layer.
 //
+// 3% and the 5% warning are the Auto levels; Settings → Power can move both
+// (batterywarn.go), and the decisions below take the levels as arguments.
+//
 // A handheld that dies mid-save corrupts the SD card, and RetroArch writes to
 // that card constantly. So when the battery gets critical *while a game is
 // running*, the guard:
@@ -76,16 +79,24 @@ const (
 // batteryGuardActionFor is the whole decision, kept pure so every edge case is
 // a table row instead of a handheld that sleeps in someone's hands.
 func batteryGuardActionFor(percent int, charging, gameRunning, alreadyActed, alreadyWarned bool) batteryGuardAction {
+	return batteryGuardActionAt(percent, lowBatteryWarnPct, criticalBatteryPct, charging, gameRunning, alreadyActed, alreadyWarned)
+}
+
+// batteryGuardActionAt is batteryGuardActionFor at the levels Settings picked
+// (batterywarn.go): warnPct for the message, savePct for the save and
+// suspend. A save level above the warning level saves a game before any
+// message, and still only warns at warnPct with no game running. Pure.
+func batteryGuardActionAt(percent, warnPct, savePct int, charging, gameRunning, alreadyActed, alreadyWarned bool) batteryGuardAction {
 	if percent < 0 || charging {
 		return batteryGuardIdle
 	}
-	if percent > lowBatteryWarnPct {
+	if percent > max(warnPct, savePct) {
 		return batteryGuardIdle
 	}
-	if percent <= criticalBatteryPct && gameRunning && !alreadyActed {
+	if percent <= savePct && gameRunning && !alreadyActed {
 		return batteryGuardProtect
 	}
-	if alreadyWarned || alreadyActed {
+	if alreadyWarned || alreadyActed || percent > warnPct {
 		return batteryGuardIdle
 	}
 	return batteryGuardWarn
@@ -495,13 +506,16 @@ func endLowBatteryProtect() {
 // battery read already happens for the saver, and the /proc scan only runs when
 // the charge is actually low.
 func lowBatteryTick(config *Config) {
+	// The warning levels from Settings, and the in-game line (batterywarn.go).
+	lv := batteryWarnTick(config)
 	if !lowBatteryGuardEnabled(config) {
 		return
 	}
 	percent := getBatteryPercent()
 	// At 10%, an emulator that cannot save by itself is named (sessionsafe.go).
 	sessionSafeLowBatteryTick(config, percent)
-	if percent < 0 || percent > lowBatteryWarnPct+2 {
+	warnPct, savePct := lv.messagePct(), lv.savePct()
+	if percent < 0 || percent > max(warnPct, savePct)+2 {
 		resetLowBatteryWarning()
 		return
 	}
@@ -517,7 +531,7 @@ func lowBatteryTick(config *Config) {
 	acted, warned, _ := lowBatteryGuardFlags()
 	// A standalone emulator's game counts too: it is closed cleanly (sessionsafe.go).
 	gameRunning := retroArchRunningCached() || sessionSafeGameRunning(config)
-	switch batteryGuardActionFor(percent, charging, gameRunning, acted, warned) {
+	switch batteryGuardActionAt(percent, warnPct, savePct, charging, gameRunning, acted, warned) {
 	case batteryGuardWarn:
 		if markLowBatteryWarned() {
 			trophyEvent(tkLowBattery)

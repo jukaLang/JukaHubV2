@@ -13,6 +13,9 @@ package main
 //     console now (disctools.go): loose "(Disc 1)", "(Disc 2)" files and
 //     "Disc 1" folders become one game. The library also does this by
 //     itself when it scans; this is the button for "do it now".
+//   - "Make missing .cue files" — the CUE generator (cuegen.go): a
+//     sheet for every .bin and split "(Track N)" rip that has none, no
+//     playlists.
 //   - "RomM server" — the RomM page (romm_cloud_ui.go): games, covers, saves
 //     and BIOS from the user's own RomM server. Without an address and a key
 //     the row says to set it up first, and the page opens on its settings.
@@ -63,6 +66,7 @@ func rommExtraRows() []rommExtraRow {
 		disc.pill = "Working…"
 	}
 	rows = append(rows, rommExtraRow{id: "x:disc", spec: disc})
+	rows = append(rows, cueGenRommRow()) // "Make missing .cue files" (cuegen.go)
 
 	romm := tbxRowSpec{icon: "server", title: "RomM server", subtitle: "Games, saves and BIOS from your own RomM server",
 		pill: "Open", tone: tbxToneNeutral}
@@ -132,6 +136,8 @@ func rommExtrasLabel(id string) string {
 		return "Move"
 	case "x:disc":
 		return "Combine"
+	case "x:cue":
+		return "Make"
 	case "x:romm", "x:sync", "x:homebrew":
 		return "Open"
 	}
@@ -143,6 +149,8 @@ func rommExtrasActivate(config *Config, id string) bool {
 	switch id {
 	case "x:gbc":
 		rommConfirmGBC(config)
+	case "x:cue":
+		cueGenRommRun() // cuegen.go
 	case "x:disc":
 		err := discCombineNow(func(r discHelperReport) {
 			if r.Created() > 0 && tbxCurrentScene(appConfig) == rommSceneName && rommUI.phase == rommPhaseReady {

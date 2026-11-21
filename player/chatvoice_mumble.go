@@ -5,10 +5,14 @@ package main
 // Chat's Voice tab joins one shared room on a public Mumble server. Mumble is
 // the free, open-source voice chat gamers use; public servers welcome anyone
 // without an account. By default JukaHub uses GameMania's server, which is
-// "free for everyone" and lets every visitor open a temporary channel under
-// "Private User-Channels" — the server deletes it when the last person
-// leaves. The community meets in "JukaHub" there; a private Voice Channel
-// started from the People list is a channel with a random name next to it.
+// "free for everyone" and lets every visitor who changes to "Private
+// User-Channels" open a channel inside it — the server deletes it when the
+// last person leaves. JukaHub does the same: it goes into the parent
+// channel first, then asks for the room (and, on servers that want more, a
+// lasting channel or a registered certificate; see joinRoom and
+// createRefused). The community meets in "JukaHub" there; a private Voice
+// Channel started from the People list is a channel with a random name next
+// to it.
 // Phones and PCs can join the same rooms with any Mumble app (Mumla on
 // Android, Mumble on iOS and desktops). The server and the room are settings,
 // so a self-hosted Mumble server works the same way.
@@ -304,7 +308,8 @@ func chatMumbleUsername(display string, try int, plain bool) string {
 // the data folder.
 var chatMumbleIdentityCache struct {
 	sync.Mutex
-	cert *tls.Certificate
+	cert  *tls.Certificate
+	saved bool // on disk, so the next start presents the same certificate
 }
 
 func chatMumbleIdentityPath() string {
@@ -317,30 +322,32 @@ func chatMumbleIdentityPath() string {
 // chatMumbleIdentity returns the device's certificate, making it on first
 // use (an RSA key takes a moment on a handheld; this runs on the connection
 // goroutine). nil means none could be made: joining rooms that already exist
-// still works without one.
-func chatMumbleIdentity() *tls.Certificate {
+// still works without one. saved reports whether it is kept on disk: only
+// such a certificate may be registered on a server (createRefused), since a
+// lost one would leave the name registered to a certificate no one has.
+func chatMumbleIdentity() (cert *tls.Certificate, saved bool) {
 	chatMumbleIdentityCache.Lock()
 	defer chatMumbleIdentityCache.Unlock()
 	if chatMumbleIdentityCache.cert != nil {
-		return chatMumbleIdentityCache.cert
+		return chatMumbleIdentityCache.cert, chatMumbleIdentityCache.saved
 	}
 	path := chatMumbleIdentityPath()
 	if path != "" {
 		if data, err := os.ReadFile(path); err == nil {
-			if cert, err := tls.X509KeyPair(data, data); err == nil {
-				chatMumbleIdentityCache.cert = &cert
-				return &cert
+			if pair, err := tls.X509KeyPair(data, data); err == nil {
+				chatMumbleIdentityCache.cert, chatMumbleIdentityCache.saved = &pair, true
+				return &pair, true
 			}
 		}
 	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		logWarn("chat", "voice identity key: %v", err)
-		return nil
+		return nil, false
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	// Fixed dates: a handheld can start before its clock is set, and a
 	// certificate "not yet valid" by a wrong clock would be useless.
@@ -355,18 +362,20 @@ func chatMumbleIdentity() *tls.Certificate {
 	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
 	if err != nil {
 		logWarn("chat", "voice identity certificate: %v", err)
-		return nil
+		return nil, false
 	}
-	cert := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	cert = &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 	if path != "" {
 		data := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 		data = append(data, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})...)
 		if err := AtomicWrite(path, data, 0o600); err != nil {
 			logWarn("chat", "voice identity not saved: %v", err)
+		} else {
+			saved = true
 		}
 	}
-	chatMumbleIdentityCache.cert = cert
-	return cert
+	chatMumbleIdentityCache.cert, chatMumbleIdentityCache.saved = cert, saved
+	return cert, saved
 }
 
 // ── The connection ───────────────────────────────────────────────────────
@@ -376,6 +385,7 @@ type chatMumbleUser struct {
 	channel    uint32
 	selfMute   bool
 	serverMute bool
+	registered bool
 }
 
 type chatMumbleChannel struct {
@@ -416,6 +426,21 @@ type chatMumble struct {
 	// display is each person's place in the people list (1–255), kept for as
 	// long as they stay, so a talking dot never jumps to someone else.
 	display map[uint32]uint8
+
+	// Opening the room (joinRoom, denied, createRefused). Many servers let
+	// only the people inside a channel open rooms in it (Mumble's "in" group:
+	// GameMania tells people to change to "Private User-Channels" first),
+	// some allow only lasting channels and some only registered users.
+	certSaved   bool              // the client certificate is kept on disk
+	private     bool              // a private Voice Channel: never a lasting one
+	rootPerms   uint64            // ServerSync: our permissions in the root channel
+	parentID    uint32            // the room's parent channel, once found
+	perms       map[uint32]uint32 // PermissionQuery: our permissions by channel
+	queried     bool              // asked for them once
+	enterSent   bool              // asked to go into the parent channel first
+	enterFailed bool              // not let in there: ask from where we are
+	permanent   bool              // the next request asks for a lasting channel
+	regSent     bool              // asked the server to register this device
 
 	// Shared with the writer goroutine.
 	session    atomic.Uint32
@@ -466,7 +491,7 @@ func (c *chatVoiceCall) connectMumble(server, room, name string) error {
 		return err
 	}
 	c.setStatus("Connecting to the voice server…")
-	identity := chatMumbleIdentity()
+	identity, identitySaved := chatMumbleIdentity()
 	if c.ctx.Err() != nil {
 		return c.ctx.Err()
 	}
@@ -495,7 +520,9 @@ func (c *chatVoiceCall) connectMumble(server, room, name string) error {
 	parts := strings.Split(room, "/")
 	m := &chatMumble{call: c, conn: conn, parentPath: parts[:len(parts)-1], roomName: parts[len(parts)-1],
 		channels: map[uint32]*chatMumbleChannel{}, users: map[uint32]*chatMumbleUser{},
-		speakers: map[uint32]*chatMumbleSpeaker{}, display: map[uint32]uint8{}}
+		speakers: map[uint32]*chatMumbleSpeaker{}, display: map[uint32]uint8{}, perms: map[uint32]uint32{},
+		certSaved: identity != nil && identitySaved}
+	m.private = strings.HasPrefix(m.roomName, chatVoicePrivatePrefix)
 	if err := m.send(mumbleMsgVersion, mumbleVersionBody(runtime.GOOS)); err != nil {
 		return err
 	}
@@ -533,7 +560,12 @@ func (m *chatMumble) reader() error {
 	var buf []byte
 	for {
 		if m.synced && !m.joined.Load() && time.Since(m.joinStart) > 20*time.Second {
-			// Neither moved in nor refused (a dropped request, say): start over.
+			// Neither moved in nor refused (a dropped request, say): start
+			// over, a few times.
+			m.call.joinWaits++
+			if m.call.joinWaits >= 3 {
+				return chatVoiceErr{msg: "The voice server does not answer when asked for the room. Try again later or pick another server in Voice settings.", stop: true}
+			}
 			return chatVoiceErr{msg: "The voice room did not open — retrying"}
 		}
 		_ = m.conn.SetReadDeadline(time.Now().Add(40 * time.Second))
@@ -552,6 +584,7 @@ func (m *chatMumble) reader() error {
 				return errMumbleProto
 			}
 			m.session.Store(uint32(session))
+			m.rootPerms, _ = mumbleParseUint(body, 4)
 			m.synced = true
 			m.joinStart = time.Now()
 			m.call.setStatus("Joining the voice room…")
@@ -588,6 +621,7 @@ func (m *chatMumble) reader() error {
 				delete(m.channels, uint32(id))
 				if m.hasRoom && uint32(id) == m.room {
 					m.hasRoom, m.createSent, m.moveSent = false, false, false
+					m.enterSent, m.enterFailed = false, false
 					m.publish()
 					if err := m.joinRoom(); err != nil {
 						return err
@@ -616,6 +650,24 @@ func (m *chatMumble) reader() error {
 		case mumbleMsgPermissionDenied:
 			if err := m.denied(body); err != nil {
 				return err
+			}
+		case mumbleMsgPermissionQuery:
+			// Our permissions in a channel (asked by joinRoom, or sent when
+			// they change); a flush forgets everything known.
+			if flush, _ := mumbleParseUint(body, 3); flush != 0 {
+				m.perms = map[uint32]uint32{}
+			}
+			channel, okChannel := mumbleParseUint(body, 1)
+			if perms, ok := mumbleParseUint(body, 2); ok && okChannel {
+				m.perms[uint32(channel)] = uint32(perms)
+			}
+		case mumbleMsgPing:
+			// The marker sent right behind a registration request: the server
+			// handles one connection's messages in order, so a registration
+			// that had worked would have been announced before this.
+			if stamp, ok := mumbleParseUint(body, 1); ok && stamp == chatMumbleRegisterMarker && m.regSent && !m.joined.Load() {
+				logWarn("chat", "voice server did not register this device (is the name taken by someone registered?)")
+				return chatVoiceErrNoRoom
 			}
 		}
 	}
@@ -678,12 +730,45 @@ func (m *chatMumble) rejected(body []byte) error {
 	return chatVoiceErr{msg: reason, stop: true}
 }
 
-// denied handles PermissionDenied (Mumble.proto DenyType numbers).
+// chatVoiceErrNoRoom ends a call whose room the server will not open.
+var chatVoiceErrNoRoom = chatVoiceErr{msg: "This voice server would not open the room. Try another server or room in Voice settings.", stop: true}
+
+// chatMumbleRegisterMarker is the Ping timestamp sent behind a registration
+// request (the writer's pings carry the time in microseconds, never 1).
+const chatMumbleRegisterMarker = 1
+
+// denied handles PermissionDenied (Mumble.proto DenyType numbers). Before
+// the room is joined, a refusal answers the step joinRoom took last: going
+// into the parent channel, registering, or asking for the room; the
+// refusal's own permission and channel say which.
 func (m *chatMumble) denied(body []byte) error {
 	kind, _ := mumbleParseUint(body, 5)
-	logWarn("chat", "voice server refused: type %d %q", kind, mumbleParseString(body, 4))
+	perm, _ := mumbleParseUint(body, 1)
+	channel, hasChannel := mumbleParseUint(body, 2)
+	logWarn("chat", "voice server refused: type %d, permission %#x in channel %d %q (ours there %#x; root %#x)",
+		kind, perm, channel, mumbleParseString(body, 4), m.perms[uint32(channel)], m.rootPerms)
 	if m.joined.Load() {
 		return nil // something unrelated to being in the room
+	}
+	// Which request was refused: Murmur names the parent channel and the
+	// permission for both going in and asking for a room there.
+	aboutParent := kind == 1 && (!hasChannel || uint32(channel) == m.parentID)
+	enterRefused := aboutParent && perm == mumblePermEnter
+	makeRefused := aboutParent && perm&(mumblePermMakeChannel|mumblePermMakeTemp) != 0
+	if m.regSent && (kind == 7 || perm&(mumblePermRegister|mumblePermSelfRegister) != 0) {
+		// Registering is not allowed here: nothing else is left to try.
+		return chatVoiceErrNoRoom
+	}
+	if m.hasRoom && (enterRefused || makeRefused) {
+		// A late answer: the room appeared meanwhile (someone else opened
+		// it) and joinRoom is already moving in.
+		return nil
+	}
+	if m.enterSent && !m.enterFailed && !m.createSent && !m.hasRoom && (kind == 9 || enterRefused) {
+		// Not let into the parent channel (full, or closed to guests): ask
+		// for the room from where we are.
+		m.enterFailed = true
+		return m.joinRoom()
 	}
 	switch kind {
 	case 9: // ChannelFull
@@ -692,15 +777,52 @@ func (m *chatMumble) denied(body []byte) error {
 		return chatVoiceErr{msg: "This voice server only lets registered users open rooms", stop: true}
 	case 3, 6, 10, 11: // ChannelName, TemporaryChannel, NestingLimit, ChannelCountLimit
 		if m.createSent && !m.hasRoom {
-			return chatVoiceErr{msg: "This voice server would not open the room. Try another room in Voice settings.", stop: true}
+			return chatVoiceErrNoRoom
 		}
 	case 1: // Permission
 		if m.hasRoom {
 			return chatVoiceErr{msg: "The room is locked on this voice server", stop: true}
 		}
-		return chatVoiceErr{msg: "This voice server does not let guests open rooms here", stop: true}
+		if m.createSent && makeRefused {
+			return m.createRefused()
+		}
+		if m.createSent {
+			return chatVoiceErrNoRoom // refused in a way no retry would change
+		}
 	}
 	return nil
+}
+
+// createRefused takes the next way to open the room after the server said
+// no to one: a lasting channel where the server allows only those (not for
+// private rooms, which would pile up), then, once, registering this
+// device's certificate under its name, which many servers ask of anyone who
+// opens rooms. A registration ends the connection (see userState).
+func (m *chatMumble) createRefused() error {
+	m.createSent = false
+	perms, known := m.perms[m.parentID]
+	if !m.permanent && !m.private && (!known || perms&mumblePermMakeChannel != 0) {
+		m.permanent = true
+		return m.joinRoom()
+	}
+	own := m.users[m.session.Load()]
+	if m.regSent || !m.certSaved || own == nil || own.registered {
+		return chatVoiceErrNoRoom
+	}
+	m.regSent = true
+	m.call.setStatus("Registering this device on the voice server…")
+	logInfo("chat", "voice: registering this device as %q so it may open rooms", own.name)
+	// Murmur drops requests past a small burst (5, then 1 a second by
+	// default) without a word; the steps so far may have used it up.
+	select {
+	case <-m.call.ctx.Done():
+		return m.call.ctx.Err()
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if err := m.send(mumbleMsgUserState, mumbleRegisterBody(m.session.Load())); err != nil {
+		return err
+	}
+	return m.send(mumbleMsgPing, mumblePingBody(chatMumbleRegisterMarker))
 }
 
 // findChild returns the channel named name under parent.
@@ -729,7 +851,9 @@ func (m *chatMumble) findAnywhere(name string) (uint32, bool) {
 }
 
 // joinRoom walks to the room's parent channel and moves in, or asks the
-// server to open the room when no one is there yet.
+// server to open the room when no one is there yet: from inside the parent
+// channel, the way a person does it in Mumble's apps. Every server answer
+// (userState, a new channel, denied) calls it again for the next step.
 func (m *chatMumble) joinRoom() error {
 	if !m.synced || m.joined.Load() {
 		return nil
@@ -745,6 +869,7 @@ func (m *chatMumble) joinRoom() error {
 		}
 		parent = id
 	}
+	m.parentID = parent
 	if id, ok := m.findChild(parent, m.roomName); ok {
 		if !m.hasRoom || m.room != id {
 			m.room, m.hasRoom = id, true
@@ -753,6 +878,7 @@ func (m *chatMumble) joinRoom() error {
 		if u := m.users[m.session.Load()]; u != nil && u.channel == id {
 			// Already there (the server's default channel, say).
 			if !m.joined.Swap(true) {
+				m.call.joinWaits = 0
 				m.call.markConnected()
 			}
 			return nil
@@ -763,12 +889,40 @@ func (m *chatMumble) joinRoom() error {
 		}
 		return nil
 	}
-	if m.createSent {
+	if m.createSent || m.regSent {
+		return nil // the server has not answered yet
+	}
+	own := m.users[m.session.Load()]
+	if own != nil && own.channel != parent && !m.enterFailed {
+		// Servers often let only the people inside a channel open rooms in it,
+		// so go in first. userState (moved) or denied (refused) comes back here.
+		if !m.enterSent {
+			m.enterSent = true
+			return m.send(mumbleMsgUserState, mumbleMoveBody(m.session.Load(), parent))
+		}
 		return nil
 	}
-	// Murmur moves the creator of a temporary channel in by itself.
 	m.createSent = true
-	return m.send(mumbleMsgChannelState, mumbleCreateRoomBody(parent, m.roomName))
+	m.call.setStatus("Opening the voice room…")
+	parentName := ""
+	if ch := m.channels[parent]; ch != nil {
+		parentName = ch.name
+	}
+	logInfo("chat", "voice: asking to open %q in channel %d %q (temporary %v, inside it %v, registered %v)",
+		m.roomName, parent, parentName, !m.permanent, own != nil && own.channel == parent, own != nil && own.registered)
+	// What may we do here? Murmur answers when the bits are news to this
+	// connection (it may have sent them when we went in), and before it
+	// answers the request below, so createRefused can tell whether a lasting
+	// channel is worth asking for; unknown bits mean "try it". Asked once:
+	// Murmur limits requests per second.
+	if _, known := m.perms[parent]; !known && !m.queried {
+		m.queried = true
+		if err := m.send(mumbleMsgPermissionQuery, mumblePermissionQueryBody(parent)); err != nil {
+			return err
+		}
+	}
+	// Murmur moves the creator of a temporary channel in by itself.
+	return m.send(mumbleMsgChannelState, mumbleCreateRoomBody(parent, m.roomName, !m.permanent))
 }
 
 func (m *chatMumble) userState(body []byte) error {
@@ -793,21 +947,38 @@ func (m *chatMumble) userState(body []byte) error {
 	if msg.hasMute {
 		u.serverMute = msg.serverMute
 	}
+	if msg.hasUserID {
+		u.registered = true
+	}
 	own := m.synced && msg.session == m.session.Load()
 	if !own && msg.hasChannel && (!m.hasRoom || msg.channel != m.room) {
 		m.dropSpeaker(msg.session)
+	}
+	if own && m.regSent && msg.hasUserID && !m.joined.Load() {
+		// Registered. Start a fresh connection, as a registered user: the
+		// server's permissions and its limit on requests per second start
+		// over, and the room is asked for again (a failure is the Ping
+		// marker in reader).
+		logInfo("chat", "voice: this device is registered on the voice server as %q", u.name)
+		return chatVoiceErr{msg: "Registered on the voice server — reconnecting…"}
 	}
 	if own && msg.hasChannel {
 		inRoom := m.hasRoom && msg.channel == m.room
 		was := m.joined.Swap(inRoom)
 		switch {
 		case inRoom && !was:
+			m.call.joinWaits = 0
 			m.call.markConnected()
 		case !inRoom && was:
 			// Moved out of the room (by an admin, say): go back in.
 			m.call.setConnected(false, "Rejoining the voice room…")
 			m.moveSent = false
 			m.joinStart = time.Now()
+			if err := m.joinRoom(); err != nil {
+				return err
+			}
+		case !inRoom:
+			// Moved on the way in (into the room's parent channel): next step.
 			if err := m.joinRoom(); err != nil {
 				return err
 			}

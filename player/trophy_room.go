@@ -3,8 +3,10 @@ package main
 // trophy_room.go — the Playtime scene: the trophy room and the playtime stats.
 //
 // The header is a level ring (trophy points, like a console's trophy level),
-// the earned count with a completion bar and the per-tier counts. Under it two
-// tabs, switched with L1/R1 (Tab on a keyboard): Trophies and Playtime.
+// the earned count with a completion bar and the per-tier counts. Under it three
+// tabs, switched with L1/R1 (Tab on a keyboard): Trophies, Playtime and By game
+// (the games or consoles by time today, this week, month, year or ever,
+// playtime_periods_ui.go).
 //
 // Trophies is a grid of cards — the trophy in its metal when earned, a dim
 // silhouette with a progress bar when not, a "?" while a hidden one is still to
@@ -40,6 +42,8 @@ import (
 const (
 	trophyTabTrophies = 0
 	trophyTabStats    = 1
+	trophyTabGames    = 2 // By game (playtime_periods_ui.go)
+	trophyTabCount    = 3
 
 	trophyZoneChips = 0
 	trophyZoneGrid  = 1
@@ -303,7 +307,7 @@ type trophyRoomState struct {
 	grid       sdl.Rect
 	scrollF    float64
 	chipRects  [trophyChipCount]sdl.Rect
-	tabRects   [2]sdl.Rect
+	tabRects   [trophyTabCount]sdl.Rect
 	raRect     sdl.Rect
 	cardRects  [trophyCardsMax]sdl.Rect
 	cardPos    [trophyCardsMax]int
@@ -797,9 +801,12 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	trophyRoomDrawHero(renderer, config, f, l)
 	trophyRoomDrawTabs(renderer, config, f, l)
 	r.cardN = 0
-	if r.tab == trophyTabStats {
+	switch r.tab {
+	case trophyTabStats:
 		trophyRoomDrawStats(renderer, config, f, l)
-	} else {
+	case trophyTabGames:
+		playtimePeriodsDraw(renderer, config, f, l)
+	default:
 		trophyRoomDrawGrid(renderer, config, f, l)
 	}
 
@@ -1131,13 +1138,14 @@ func trophyRoomChipHasGlyph(i int) bool {
 }
 
 // trophyRoomDrawTabs draws the tab pills and, on the Trophies tab, the wrapped
-// chip rows; on the Playtime tab the RetroAchievements button takes their place.
+// chip rows; on the Playtime and By game tabs the RetroAchievements button takes
+// their place.
 func trophyRoomDrawTabs(renderer *sdl.Renderer, config *Config, f trophyFonts, l trophyRoomLayout) {
 	r := &trophyRoom
 	cy := l.tabsY + l.tabsH/2
 	x := l.content.X
 	x += trophyRoomBadge(renderer, config, f.caption, x, cy, "L1") + 8
-	for t, label := range [2]string{"Trophies", "Playtime"} {
+	for t, label := range [trophyTabCount]string{"Trophies", "Playtime", "By game"} {
 		tw, _ := measureText(f.tab, label)
 		rect := sdl.Rect{X: x, Y: l.tabsY, W: tw + 36, H: l.tabsH}
 		trophyRoomPill(renderer, config, f.tab, rect, label, r.tab == t, false)
@@ -1151,7 +1159,7 @@ func trophyRoomDrawTabs(renderer *sdl.Renderer, config *Config, f trophyFonts, l
 	}
 	r.raRect = sdl.Rect{}
 	right := l.content.X + l.content.W
-	if r.tab == trophyTabStats {
+	if r.tab != trophyTabTrophies {
 		if retroAchievementsSupported() && f.chip != nil {
 			label := "RetroAchievements"
 			tw, _ := measureText(f.chip, label)
@@ -1951,13 +1959,20 @@ func trophyRoomAction(config *Config, act trophyAction) bool {
 		openRetroAchievementsPanel()
 		return true
 	case trophyActPrevTab, trophyActNextTab:
-		r.tab = 1 - r.tab
+		step := 1
+		if act == trophyActPrevTab {
+			step = trophyTabCount - 1
+		}
+		r.tab = (r.tab + step) % trophyTabCount
 		r.zone = trophyZoneChips
 		r.chip = r.filter
 		PlayNavSound()
 		return true
 	}
 
+	if r.tab == trophyTabGames {
+		return playtimePeriodsAction(act)
+	}
 	if r.tab == trophyTabStats {
 		switch act {
 		case trophyActUp:
@@ -2180,9 +2195,12 @@ func trophyRoomFooterHints() []FooterHint {
 		}
 		return append(hints, FooterHint{Button: "B", Label: "Close"})
 	}
+	if r.tab == trophyTabGames {
+		return playtimePeriodsFooterHints()
+	}
 	if r.tab == trophyTabStats {
 		// "/ Tab": the keyboard switches the tab with Tab (trophyRoomKeyAction).
-		hints := []FooterHint{{Button: "L1/R1 / Tab", Label: "Trophies"}, {Button: "B", Label: "Back"}}
+		hints := []FooterHint{{Button: "L1/R1 / Tab", Label: "Tabs"}, {Button: "B", Label: "Back"}}
 		if retroAchievementsSupported() {
 			hints = append(hints, FooterHint{Button: "Y", Label: "RetroAchievements"})
 		}
@@ -2272,6 +2290,9 @@ func trophyRoomClick(mx, my int32) bool {
 		openRetroAchievementsPanel()
 		return true
 	}
+	if r.tab == trophyTabGames {
+		return playtimePeriodsClick(mx, my)
+	}
 	if r.tab == trophyTabStats {
 		return false
 	}
@@ -2325,6 +2346,9 @@ func trophyRoomWheel(y int32) bool {
 			trophyRoomStepSheet(1)
 		}
 		return true
+	}
+	if r.tab == trophyTabGames {
+		return playtimePeriodsWheel(y)
 	}
 	if r.tab != trophyTabTrophies {
 		return false

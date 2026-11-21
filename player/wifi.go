@@ -896,7 +896,7 @@ func tempSupplicantDir() string { return filepath.Join(os.TempDir(), "wpa_suppli
 
 // startSupplicantFor starts wpa_supplicant for one interface with the arguments
 // the TG5040 images use: daemonise, nl80211, this interface, this config, this
-// control directory. It is the same command MinUI and NextUI's own Wi-Fi
+// control directory. It is the same command MinUI's own Wi-Fi
 // packages run on this hardware. "nl80211,wext" is a list the supplicant tries
 // in order: nl80211 wins wherever it did before (the XR829's and the Smart Pro
 // S's AIC8800 drivers are cfg80211 ones), and a build or vendor driver without

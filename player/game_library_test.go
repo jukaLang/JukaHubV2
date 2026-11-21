@@ -550,6 +550,33 @@ func TestNextUIFolderParse(t *testing.T) {
 	if paths := nextuiParseRecents([]byte("/Roms/Game Boy (GB)/Tetris.gb\tTetris\r\n\n/Roms/PS (PS)/FF7.m3u\n"), 12); len(paths) != 2 || paths[0] != "/Roms/Game Boy (GB)/Tetris.gb" {
 		t.Errorf("recent.txt parsed as %q", paths)
 	}
+	// A NextUI collection (collections_nextui.go): CRLF kept, a missing game's
+	// line kept at its place, a line leaving the card refused but not lost.
+	lines, crlf, trailing := colNextuiParse([]byte("\ufeff/Roms/Game Boy (GB)/Tetris.gb\r\n\r\n/Roms/GBA (GBA)/Gone.gba\r\n/Roms/../../etc/passwd\r\n"))
+	if len(lines) != 3 || !crlf || !trailing || lines[0] != "/Roms/Game Boy (GB)/Tetris.gb" {
+		t.Errorf("collection parsed as %q crlf=%v trailing=%v", lines, crlf, trailing)
+	}
+	card := t.TempDir()
+	tetris := filepath.Join(card, "Roms", "Game Boy (GB)", "Tetris.gb")
+	if err := os.MkdirAll(filepath.Dir(tetris), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tetris, []byte("rom"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) == 3 {
+		if _, ok := colNextuiLineFile(card, lines[2]); ok {
+			t.Errorf("a collection line leaving the card was accepted")
+		}
+	}
+	items, from, kept, _ := colNextuiItemsFrom(card, lines, nil, true, false)
+	if len(items) != 1 || items[0].Ref != homeTabRefGame+tetris || len(kept) != 2 || kept[0].At != 1 {
+		t.Errorf("collection items %v kept %v", items, kept)
+	}
+	link := &colNextuiLink{CRLF: crlf, Lines: from, Kept: kept}
+	if out, _ := colNextuiRender(card, link, items); string(out) != "/Roms/Game Boy (GB)/Tetris.gb\r\n/Roms/GBA (GBA)/Gone.gba\r\n/Roms/../../etc/passwd\r\n" {
+		t.Errorf("collection written back as %q", out)
+	}
 }
 
 // A console folder's config.json comes off the card: its launchlist is read

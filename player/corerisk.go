@@ -59,6 +59,7 @@ var coreGPURendered = map[string]bool{
 	"play":                   true,
 	"pcsx2":                  true,
 	"lrps2":                  true,
+	"armsx2":                 true,
 	"openlara":               true,
 	"vitaquake3":             true,
 	"boom3":                  true,

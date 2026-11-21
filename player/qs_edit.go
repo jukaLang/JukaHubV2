@@ -74,7 +74,7 @@ func qsEditClearRects() {
 
 // qsEditOpen starts editing the open panel.
 func qsEditOpen(config *Config) {
-	if !qs.open || qsEd.open {
+	if !qs.open || qsEd.open || !uiModeGate(uiFeatSetup) { // Kiosk / Kid mode (uimode.go)
 		return
 	}
 	if config == nil {
@@ -564,9 +564,10 @@ func qsEditPad(e *sdl.ControllerButtonEvent, config *Config) {
 		qsEditShoulder(padR1, config)
 	case sdl.CONTROLLER_BUTTON_B:
 		qsEditBack(config)
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		// F2 on a Brick puts the whole panel away, saving the edit.
-		if brickHasFunctionKeys() {
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The Brick front key that opens the panel (F2 by default:
+		// frontkeys.go) puts the whole panel away, saving the edit.
+		if frontKeyIs(e.Button, frontActQS) {
 			qsEditClose(config)
 			qsToggleOpen()
 			PlayBackSound()

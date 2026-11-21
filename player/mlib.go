@@ -850,6 +850,8 @@ func mlibRunScan(ctx context.Context, ticket uint64, extra []string, toolsPath s
 	if !mlibEnrich(ctx, toolsPath) {
 		return
 	}
+	// Tags are read: put the Music folder's top level in order (musictidy.go).
+	musicTidyAfterScan(ctx)
 	mlibPruneArt()
 	if onlineArt {
 		mlibFindMissingAlbumArt(ctx)

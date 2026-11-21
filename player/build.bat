@@ -373,6 +373,9 @@ if defined JUKAHUB_GOOGLE_CLIENT_ID set "GOOGLE_LDFLAGS= -X main.googleOAuthClie
 REM Outlook sign-in for Mail (docs/EMAIL_CALENDAR.md): the Microsoft app
 REM registration, likewise only when JUKAHUB_MS_CLIENT_ID is set.
 if defined JUKAHUB_MS_CLIENT_ID set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.microsoftOAuthClientID=%JUKAHUB_MS_CLIENT_ID%"
+REM ScreenScraper box art (docs/BOX_ART.md): the developer key ScreenScraper
+REM gives JukaHub, likewise only when JUKAHUB_SS_DEVID is set.
+if defined JUKAHUB_SS_DEVID set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.screenScraperDevID=%JUKAHUB_SS_DEVID% -X main.screenScraperDevPassword=%JUKAHUB_SS_DEVPASSWORD%"
 echo.
 echo Building %OUT% ...
 echo   NOTE: the FIRST build compiles the SDL2 cgo bindings and can take

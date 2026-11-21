@@ -109,8 +109,7 @@ to it:
   at all. Before the first Windows program after a restart, JukaHub adds that
   one rule as `/run/udev/rules.d/61-jukahub-input-id.rules` (RAM only), reloads
   udev and re-announces the **input** devices only (`udevadm trigger
-  --subsystem-match=input --action=change`), the fix NX Redux ships for
-  PortMaster's Weston ports on the same firmware.
+  --subsystem-match=input --action=change`).
 * **A build that must not run.** CrossMix's preview of WestonPack
   ("Westonwrap 0.2.8 Preview 1") re-announces *every* device on a TrimUI, and
   the firmware then unmounts the SD card. JukaHub refuses a `westonwrap.sh`

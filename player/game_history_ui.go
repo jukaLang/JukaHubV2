@@ -20,11 +20,13 @@ func gameHistoryOpen() {
 		return
 	}
 	gameHistoryUI.open, gameHistoryUI.scroll = true, 0
+	gameHistoryForgetUI.open = false
 	PlayActivateSound()
 }
 
 func gameHistoryClose() {
 	gameHistoryUI.open = false
+	gameHistoryForgetUI.open = false
 	PlayBackSound()
 }
 
@@ -45,7 +47,14 @@ func gameHistoryHandleKey(e *sdl.KeyboardEvent) bool {
 	if !gameHistoryUI.open || e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
+	// Delete this game's record: its confirm, then X / Delete to ask
+	// (game_history_forget.go).
+	if gameHistoryForgetKey(e) {
+		return true
+	}
 	switch e.Keysym.Sym {
+	case sdl.K_x, sdl.K_DELETE:
+		gameHistoryForgetAsk()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
 		gameHistoryClose()
 	case sdl.K_UP, sdl.K_PAGEUP:
@@ -60,7 +69,12 @@ func gameHistoryHandlePad(e *sdl.ControllerButtonEvent) bool {
 	if !gameHistoryUI.open || e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
 	}
+	if gameHistoryForgetPad(e) {
+		return true
+	}
 	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_X:
+		gameHistoryForgetAsk()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		gameHistoryClose()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -75,7 +89,12 @@ func gameHistoryHandleMouse(mx, my int32) bool {
 	if !gameHistoryUI.open {
 		return false
 	}
+	if gameHistoryForgetMouse(mx, my) {
+		return true
+	}
 	switch {
+	case pointInRect(mx, my, gameHistoryForgetUI.ask):
+		gameHistoryForgetAsk()
 	case pointInRect(mx, my, gameHistoryUI.prev):
 		gameHistoryMove(-1)
 	case pointInRect(mx, my, gameHistoryUI.next):
@@ -121,10 +140,9 @@ func gameHistoryRender(renderer *sdl.Renderer, config *Config) {
 	if rec.Total > total {
 		total = rec.Total
 	}
-	rows := []string{
-		"Total " + formatPlaytime(total) + "  ·  " + strconv.Itoa(st.Launches) + " launches  ·  " + strconv.Itoa(st.Sessions) + " sessions",
-		"Longest " + formatPlaytime(st.Longest) + "  ·  Last 7 days " + formatPlaytime(st.Last7) + "  ·  Last 30 days " + formatPlaytime(st.Last30),
-	}
+	// Total, play count, sessions; average and longest session; the last 7
+	// and 30 days (game_history_forget.go).
+	rows := gameHistoryStatRows(rec, st, total)
 	if st.Interrupted > 0 {
 		rows = append(rows, strconv.Itoa(st.Interrupted)+" interrupted launch(es) retained; duration unknown")
 	}
@@ -168,4 +186,11 @@ func gameHistoryRender(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, "↑ Newer", ColorTextSecondary(), x, footerY)
 	renderText(renderer, config, font, "↓ Older", ColorTextSecondary(), x+84, footerY)
 	renderText(renderer, config, font, "B Back", ColorTextSecondary(), card.X+card.W-88, footerY)
+	// X deletes this game's record, after a confirm (game_history_forget.go).
+	askLabel := hintLine(FooterHint{Button: "X", Label: "Delete record"})
+	askW, _ := measureText(font, askLabel)
+	askX := card.X + card.W - 88 - 24 - askW
+	gameHistoryForgetUI.ask = sdl.Rect{X: askX - 6, Y: footerY - 6, W: askW + 12, H: int32(font.Height()) + 12}
+	renderText(renderer, config, font, askLabel, ColorTextSecondary(), askX, footerY)
+	gameHistoryForgetRender(renderer, config, card)
 }

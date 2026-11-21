@@ -677,11 +677,14 @@ func rommDetectFile(path string, size int64) rommDetection {
 	switch ext {
 	case ".zip":
 		return rommDetectZip(path)
+	case ".7z":
+		// Its directory, like a zip's (sevenzip.go).
+		return rommDetect7z(path)
 	case ".cue", ".m3u":
 		return rommDetectSheet(path, 0)
 	case ".gdi", ".cdi":
 		return rommDetection{System: "dc", Strong: true, How: "a Dreamcast disc image"}
-	case ".chd", ".7z", ".gcz":
+	case ".chd", ".gcz":
 		// Compressed: only the folder the file sits in can say.
 		return rommDetection{}
 	}

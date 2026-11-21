@@ -27,6 +27,10 @@ func iconDraw(renderer *sdl.Renderer, name string, rect sdl.Rect, color sdl.Colo
 	}
 	dst := iconSquare(rect)
 	key := iconResolve(name)
+	// A console icon pack's picture stands in for the emu-* glyphs (iconpacks_draw.go).
+	if iconPackDraw(renderer, key, dst, color) {
+		return
+	}
 	if homeIconAtlas.draw(renderer, key, dst, color) {
 		return
 	}

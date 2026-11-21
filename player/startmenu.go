@@ -265,6 +265,8 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	if gameSwitcherEnabled(config) {
 		games = append(games, startMenuEntry{name: gameSwitcherEntryName, icon: "W", glyph: "games", action: func(c *Config) { gameSwitcherOpen(c) }})
 	}
+	// One press, one random game started (startup_target.go).
+	games = append(games, startMenuEntry{name: randomPlayEntryName, icon: "R", glyph: "gamepad", action: randomPlayNow})
 	games = append(games, []startMenuEntry{
 		{name: "Emulators", icon: "E", action: func(*Config) { openEmulatorPanel() }},
 		{name: gamesLibraryEntryName, icon: "L", action: func(*Config) { openGameLibraryPanel() }},
@@ -334,9 +336,13 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	if config != nil && sceneIndexExact(config, "Terminal") >= 0 {
 		tools = append(tools, startMenuEntry{name: "Commands", icon: "C", action: func(c *Config) { cmdDeckOpenFromAnywhere(c, "") }})
 	}
+	// Box art, screenshots and title screens per console (artmanager.go).
+	tools = append(tools, artManagerStartEntry())
 
 	device := []startMenuEntry{
 		{name: "Quick Settings", icon: "Q", action: func(*Config) { qsToggleOpen() }},
+		// The Quick menu: Recents, Games, Tools, Wi-Fi, power (quickmenu.go).
+		{name: quickMenuEntryName, icon: "M", glyph: "grid", action: func(*Config) { quickMenuOpen() }},
 		{name: "Liquid background", icon: "~", badge: setOnOff(liquidLevelOf(config) != liquidLevelOff), action: liquidToggle},
 		{name: "Wi-Fi Networks", icon: "W", action: func(c *Config) { wifiScrOpen(c) }},
 		{name: "Screenshot", icon: "S", action: func(*Config) { requestScreenshot() }},
@@ -395,14 +401,15 @@ func startMenuGroups(config *Config) []startMenuGroup {
 
 	// "Screens", not "Scenes": a scene is the config's word for a screen, and
 	// the menu is read by people, not by the config. Plugins lists the
-	// buttons of the plugins that are switched on (plughooks.go).
-	return []startMenuGroup{
+	// buttons of the plugins that are switched on (plughooks.go). Kiosk and
+	// Kid mode keep the allowed rows and add Unlock (uimode.go).
+	return uiModeStartMenu(config, []startMenuGroup{
 		{name: "Screens", icon: "S", items: kept},
 		{name: "Games", icon: "G", items: games},
 		{name: "Tools", icon: "T", items: tools},
 		{name: "Plugins", icon: "P", items: plugStartMenuEntries()},
 		{name: "Device", icon: "D", items: device},
-	}
+	})
 }
 
 // startMenuSceneGlyphs and startMenuActionGlyphs name the vector icon a Start
@@ -1111,6 +1118,12 @@ func ctrlStartMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 		startMenuShoulder(padL1, config)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		startMenuShoulder(padR1, config)
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The Brick front key set to the Start menu puts it away (frontkeys.go).
+		if frontKeyIs(e.Button, frontActStart) {
+			startMenuDismiss()
+			PlayBackSound()
+		}
 	}
 	return true
 }

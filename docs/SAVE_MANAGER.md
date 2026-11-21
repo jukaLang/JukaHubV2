@@ -146,11 +146,39 @@ this device's ID; your saves stay. There is no in-place update: auto-upgrade is
 off, so a newer Syncthing means Remove and switch On again (which also gives the
 handheld a new device ID).
 
+### More than saves
+
+**Also sync · Screenshots / Recordings / Music / Books / Roms** (each off by
+default) share one more folder each: the screenshots folder, the gameplay
+recordings folder, `Music` and `Books` on the card (`Music` and
+`Documents/Books` in your home folder on a PC) and the Roms folder JukaHub reads
+games from. They get the IDs `jukahub-extra-screenshots`, …, the same settings
+as the save folders (FAT-friendly times, versions kept 30 days under
+`<data>/syncthing/versions/`), the same pauses, and go to every paired device, so
+two JukaHubs match them up by themselves. A folder that is missing is made.
+Turning one off takes it out of Syncthing; its files stay. Roms can be many GB:
+the first sync takes hours and needs that much room on the other side.
+
+**Web GUI on this network** (off by default) opens Syncthing's own web page to
+the Wi-Fi, so a PC's browser can add any folder. Syncthing
+restarts listening on `0.0.0.0:8386` with the user `jukahub` and a password
+JukaHub makes up (kept in `<data>/syncthing/jukahub-webgui-password`). The
+**Open the web GUI** row shows the address and the password, and A shows the
+address as a QR code. Anyone on the same Wi-Fi who has the password can change
+what Syncthing shares: leave it off on public networks. Off again, Syncthing
+restarts on `127.0.0.1` with a new password nobody knows.
+
 Power tools → Folder sync → **Syncthing status** reports the same state, plus
 any other Syncthing on port 8384.
 
 Do not sync the same folders with both Syncthing and **Tools → Save sync**
 between two devices: the two are not coordinated. Pick one.
+
+## Device Sync
+
+**Tools → Save sync** with a paired device can also carry save states (or
+leave them out), BIOS files, collections, recents and play time, missing ROMs
+and your settings: see [DEVICE_SYNC.md](DEVICE_SYNC.md).
 
 ## Phone resume bundle
 

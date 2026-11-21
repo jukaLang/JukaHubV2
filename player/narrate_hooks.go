@@ -108,6 +108,8 @@ func narrSettingsRowItem(row setRow, v setRowView, search bool) narrItem {
 	case setKindChoice:
 		it.value = value
 		switch {
+		case row.Pick != nil:
+			it.hint = "Left and right change it, or pick any colour with A."
 		case row.Sheet != nil:
 			it.hint = "Left and right change it, or list them all with A."
 		case row.Field != "":

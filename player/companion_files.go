@@ -30,6 +30,10 @@ package main
 //     (companionFilesStore), in the folder the handheld chose for each.
 //   - Delete removes one file or one EMPTY folder; a folder with anything in
 //     it is refused, so a mistap cannot wipe a game library.
+//   - Renaming or deleting a place JukaHub depends on (a console's folder in
+//     Roms, BIOS, Saves, Overlays, PortMaster, JukaHub's own files) needs
+//     "confirm": true; without it the answer is 409 with the reason the page
+//     shows in its confirm dialog (companion_guard.go).
 //   - A downloaded file is always an attachment of type octet-stream with
 //     nosniff and a sandbox CSP: an HTML file from the card must never run as
 //     a page on the companion's origin, where its address carries the PIN.
@@ -682,8 +686,9 @@ func (s *companionServer) handleFilesMkdir(w http.ResponseWriter, r *http.Reques
 // the item stays in its folder.
 func (s *companionServer) handleFilesRename(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path string `json:"path"`
-		Name string `json:"name"`
+		Path    string `json:"path"`
+		Name    string `json:"name"`
+		Confirm bool   `json:"confirm"`
 	}
 	if !companionFilesJSON(w, r, &body) {
 		return
@@ -718,6 +723,11 @@ func (s *companionServer) handleFilesRename(w http.ResponseWriter, r *http.Reque
 	}
 	if to.rel == from.rel {
 		writeCompanionJSON(w, map[string]interface{}{"ok": true, "name": name})
+		return
+	}
+	// A console's folder, PortMaster, JukaHub's own files: the page asks
+	// first (companion_guard.go).
+	if !companionFilesConfirmed(w, from, fromInfo, body.Confirm, "rename") {
 		return
 	}
 	// Another item of that name is refused; the same item under another case
@@ -763,7 +773,8 @@ func companionFilesDirEmpty(root *os.Root, rel string) (bool, []string) {
 // or one empty folder. A link is removed itself, never what it points at.
 func (s *companionServer) handleFilesDelete(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path string `json:"path"`
+		Path    string `json:"path"`
+		Confirm bool   `json:"confirm"`
 	}
 	if !companionFilesJSON(w, r, &body) {
 		return
@@ -789,10 +800,18 @@ func (s *companionServer) handleFilesDelete(w http.ResponseWriter, r *http.Reque
 			http.Error(w, "Only empty folders can be deleted. Delete what is inside first.", http.StatusConflict)
 			return
 		}
+		// Even empty, a console's folder is where JukaHub looks for its
+		// games: the page asks first (companion_guard.go).
+		if !companionFilesConfirmed(w, p, info, body.Confirm, "delete") {
+			return
+		}
 		// Left-behind uploads' ".part" files are not the user's: clear them.
 		for _, name := range parts {
 			_ = root.Remove(filepath.Join(p.rel, name))
 		}
+	} else if !companionFilesConfirmed(w, p, info, body.Confirm, "delete") {
+		// One of JukaHub's own data files (companion_guard.go).
+		return
 	}
 	if err := root.Remove(p.rel); err != nil {
 		logWarn("companion", "files: cannot delete %s: %v", p.display(), err)

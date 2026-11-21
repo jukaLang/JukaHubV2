@@ -181,6 +181,8 @@ func homeTabsSheetBuild() {
 				homeTabsSheetPage(homeTabsSheetPick)
 			}})
 		}
+		// A game: Pin to / Unpin from Home, Remove from recents (gamepin.go).
+		rows = append(rows, gamePinTabsSheetRows(s.config, ref, title)...)
 		if col, ok := homeTabsSheetUserCollection(s.parent); ok && ref != "" && homeTabsColHas(col, ref) {
 			at := -1
 			for i, item := range col.Items {

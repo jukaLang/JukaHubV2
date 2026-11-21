@@ -514,3 +514,181 @@ func TestCtrlLayoutUserFileAndRemap(t *testing.T) {
 		t.Fatalf("arcade-6 under FinalBurn Neo: %v", got)
 	}
 }
+
+// The custom hotkeys' codes come from player 1's bindings (the pad's profile
+// fills the rest; Menu is the firmware's hotkey code), JukaHub's Select chords
+// and a button taken twice are skipped, and a firmware hotkey on a button a
+// shortcut now uses — or on a Select chord, once Select is the hotkey button
+// — is unbound for the launch.
+func TestRAHotkeyPlan(t *testing.T) {
+	cfg := strings.Join([]string{
+		`input_player1_select_btn = "6"`,
+		`input_player1_start_btn = "7"`,
+		`input_player1_x_btn = "3"`,
+		`input_player1_r_btn = "5"`,
+		`input_player1_l2_btn = "nul"`,
+		`input_player1_l2_axis = "+2"`,
+		`input_enable_hotkey_btn = "8"`,
+		`input_load_state_btn = "3"`,
+		`input_screenshot_btn = "5"`,
+	}, "\n")
+	profile := "input_device = \"TRIMUI Player1\"\ninput_y_btn = \"4\"\n"
+	pad := raPadRead(cfg, profile)
+	if pad["menu"].Btn != "8" || pad["y"].Btn != "4" || pad["l2"].Axis != "+2" {
+		t.Fatalf("pad = %+v", pad)
+	}
+	picks := map[string]raHotkeyPick{
+		raHotkeyModifier: {Button: "select"},
+		"save":           {Button: "x", Level: 1},
+		"load":           {Button: "x"},     // X is the closer level's Save state
+		"exit":           {Button: "start"}, // Quit may sit on Select + Start
+		"shot":           {Button: "r1"},    // Select + R1 is JukaHub's screenshot
+		"ffHold":         {Button: "y", Level: 2},
+		"pause":          {Button: "b"}, // no code for B anywhere
+	}
+	plan := raHotkeyPlanFor(cfg, profile, picks, raHotkeyReservedSelect(nil))
+	got := map[string]string{}
+	for _, v := range plan.Values {
+		got[v.Key] = v.Value
+	}
+	want := map[string]string{
+		"input_enable_hotkey_btn":      "6",
+		"input_enable_hotkey_axis":     "nul",
+		"input_save_state_btn":         "3",
+		"input_exit_emulator_btn":      "7",
+		"input_hold_fast_forward_btn":  "4",
+		"input_hold_fast_forward_axis": "nul",
+		"input_load_state_btn":         "nul", // the firmware's Load state on X
+		"input_screenshot_btn":         "nul", // the firmware's on R1, now Select + R1
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+	if _, ok := got["input_pause_toggle_btn"]; ok {
+		t.Error("a button without a code was written")
+	}
+	if len(plan.Notes) != 3 {
+		t.Errorf("notes = %q, want load, screenshot and pause", plan.Notes)
+	}
+	// No hotkey button anywhere: X alone would save, so nothing is written.
+	bare := strings.Replace(cfg, `input_enable_hotkey_btn = "8"`, `input_enable_hotkey_btn = "nul"`, 1)
+	if plan := raHotkeyPlanFor(bare, profile, map[string]raHotkeyPick{"save": {Button: "x"}}, nil); len(plan.Values) != 0 {
+		t.Errorf("a shortcut was written without a hotkey button: %v", plan.Values)
+	}
+	// The profile's Quit on Start ("nul" in the config cannot take it away):
+	// Start as the hotkey button would quit at every press.
+	quit := profile + "input_exit_emulator_btn = \"7\"\n"
+	if plan := raHotkeyPlanFor(cfg, quit, map[string]raHotkeyPick{raHotkeyModifier: {Button: "start"}}, nil); len(plan.Values) != 0 {
+		t.Errorf("Start became the hotkey button over the profile's Quit: %v", plan.Values)
+	}
+}
+
+// The levels survive a fresh read, a game's entry follows a rename and goes
+// with a reset; the aspect ratio writes only the table's safe stops for a
+// config no 1.9+ RetroArch saved.
+func TestRALevelStoreAndRatio(t *testing.T) {
+	dir := t.TempDir()
+	prev := raLevelDataDir
+	raLevelDataDir = func() string { return dir }
+	t.Cleanup(func() { raLevelDataDir = prev })
+	store := &raLevelStore{name: "levels-test.json", tag: "test", norm: normaliseRAHotkey}
+	rom := filepath.Join(dir, "Roms", "SFC", "Game.sfc")
+	store.set(raLevel{}, "save", "x")
+	store.set(raLevel{Console: "SNES"}, "save", "y")
+	store.set(raLevel{Console: "SNES", Game: rom}, "exit", "START")
+	store.set(raLevel{}, "bogus", "x")
+	fresh := &raLevelStore{name: store.name, tag: "test", norm: normaliseRAHotkey}
+	if v, level := fresh.resolve("SNES", rom, "save"); v != "y" || level != 1 {
+		t.Errorf("SNES save = %q at %d", v, level)
+	}
+	if v, level := fresh.resolve("NES", "", "save"); v != "x" || level != 0 {
+		t.Errorf("NES save = %q at %d", v, level)
+	}
+	if v, level := fresh.resolve("SNES", rom, "exit"); v != "start" || level != 2 {
+		t.Errorf("game exit = %q at %d", v, level)
+	}
+	if v := fresh.field(raLevel{}, "bogus"); v != "" {
+		t.Errorf("an unknown field was kept: %q", v)
+	}
+	moved := filepath.Join(dir, "Roms", "SFC", "Renamed.sfc")
+	fresh.moveGame(rom, moved)
+	if v, _ := fresh.resolve("SNES", moved, "exit"); v != "start" {
+		t.Errorf("the rename lost the game's choice: %q", v)
+	}
+	fresh.forgetGame(moved)
+	if v, _ := fresh.resolve("SNES", moved, "exit"); v != "" {
+		t.Errorf("the reset kept the game's choice: %q", v)
+	}
+
+	if vals, why := raRatioValues("full", true, 1280, 720); why != "" || len(vals) != 2 || vals[0].Value != "20" || vals[1].Value != "1.777778" {
+		t.Errorf("full screen = %v %q", vals, why)
+	}
+	old := `aspect_ratio_index = "22"` + "\n"
+	if _, why := raRatioValues(raRatioCore, raRatioModern(old), 0, 0); why == "" {
+		t.Error("Core provided was written into a config of an unknown RetroArch")
+	}
+	if vals, _ := raRatioValues("16:9", raRatioModern(old), 0, 0); len(vals) != 1 || vals[0].Value != "1" {
+		t.Errorf("16:9 = %v", vals)
+	}
+	if !raRatioModern(old + `global_core_options = "false"` + "\n") {
+		t.Error("a 1.9+ config was not recognised")
+	}
+}
+
+// TestRaachLogAndSignIn pins the two pieces of raach_*.go that read or write
+// outside data: the unlock line in RetroArch's log, and the sign-in written
+// into retroarch.cfg (the password goes in once, any old token is emptied).
+func TestRaachLogAndSignIn(t *testing.T) {
+	for line, want := range map[string]string{
+		"[INFO] [RCHEEVOS]: Awarding achievement 19851: Mu":                      "19851",
+		"[RCHEEVOS]: Awarding achievement 3424: Mushroom Power (Get a mushroom)": "3424",
+		"[INFO] [RCHEEVOS]: Achievement 19851 awarded, new score: 136":           "",
+		"[INFO] [RCHEEVOS]: Captured screenshot for achievement 341":             "",
+	} {
+		got, ok := raachUnlockLine(line)
+		if got != want || ok != (want != "") {
+			t.Fatalf("raachUnlockLine(%q) = %q, %v; want %q", line, got, ok, want)
+		}
+	}
+	cfg := "cheevos_enable = \"false\"\r\ncheevos_username = \"old\"\r\ncheevos_token = \"Zzzz\"\r\n"
+	out, changed := raachSignInText(cfg, "juka", "p#ss word")
+	if !changed {
+		t.Fatal("the sign-in changed nothing")
+	}
+	for key, want := range map[string]string{
+		"cheevos_username": "juka", "cheevos_password": "p#ss word", "cheevos_token": "", "cheevos_enable": "true",
+	} {
+		if got, ok := raConfigGet(out, key); !ok || got != want {
+			t.Fatalf("%s = %q, %v; want %q in\n%s", key, got, ok, want, out)
+		}
+	}
+	if strings.Count(out, "\r\n") != strings.Count(out, "\n") {
+		t.Fatalf("line endings mixed:\n%q", out)
+	}
+	if !raachHardcoreIn(out) || raachHardcoreIn(strings.Replace(out, `cheevos_password = "p#ss word"`, `cheevos_password = ""`, 1)) {
+		t.Fatal("hardcore: on by default once signed in, off without a login")
+	}
+}
+
+// TestN64LightKeepsOwnOptionsAndFFSpeedFormat: the light N64 options touch only
+// keys a core's .opt holds at the core's default (n64light.go), and the
+// fast-forward ratio is written as RetroArch saves it, so the restore after
+// RetroArch rewrote the file still recognises it (raffspeed.go).
+func TestN64LightKeepsOwnOptionsAndFFSpeedFormat(t *testing.T) {
+	opt := "mupen64plus-43screensize = \"640x480\"\nmupen64plus-EnableFBEmulation = \"True\"\nmupen64plus-EnableCopyColorToRDRAM = \"Sync\"\n"
+	values, kept := n64LightValues(opt, n64LightTable("mupen64plus_next_libretro"))
+	if len(values) != 2 || values[0].Value != "320x240" || values[1].Value != "False" || len(kept) != 1 {
+		t.Fatalf("mupen values = %+v, kept %v", values, kept)
+	}
+	values, _ = n64LightValues("parallel-n64-gfxplugin = \"angrylion\"\n", n64LightTable("parallel_n64"))
+	if len(values) != 0 {
+		t.Fatalf("a renderer of the user's own was replaced (or a missing key added): %+v", values)
+	}
+	for in, want := range map[string]string{"0": "0.000000", "4": "4.000000", "own": "", "5": "", "": ""} {
+		if got := raFFSpeedValue(in); got != want {
+			t.Fatalf("raFFSpeedValue(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

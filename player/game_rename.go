@@ -532,11 +532,11 @@ func gameRenamePlanFor(job gameRenameJob) (gameRenamePlan, error) {
 	// In JukaHub's game-art folder.
 	oldROM := scannedROM{Path: rom, System: job.game.System}
 	newROM := scannedROM{Path: filepath.Join(dir, newBase), System: job.game.System}
-	for _, pair := range [][2]string{
+	for _, pair := range append([][2]string{
 		{romArtworkPath(oldROM, job.root), romArtworkPath(newROM, job.root)},
 		{playShotPath(oldROM, job.root), playShotPath(newROM, job.root)},
 		{artworkNoCoverPath(oldROM, job.root), artworkNoCoverPath(newROM, job.root)},
-	} {
+	}, artStyleKindPairs(oldROM, newROM, job.root)...) { // screenshot, title screen (artstyle.go)
 		if pair[0] != "" && pair[1] != "" && regularFile(pair[0]) {
 			addPicture(pair[0], pair[1], job.shareSys)
 		}
@@ -1011,6 +1011,7 @@ func gameRenameRecords(game libraryGame, newPath string) {
 	recentGamesRepath(oldPath, newPath, newTitle)
 	homeConsoleRecentsRepath(oldPath, newPath)
 	homeTabsColRepathGame(oldPath, newPath)
+	gamePinRepath(oldPath, newPath) // a game pinned to Home (gamepin.go)
 	rommAutoSyncRepath(oldPath, newPath)
 	quickResumeRepath(oldPath, newPath, newTitle)
 	// Name for covers is kept by the stem's title (artwork_choose.go), which
@@ -1049,6 +1050,7 @@ func gameRenameMoveTitle(system, oldTitle, newTitle string) {
 	if oldKey == newKey {
 		return
 	}
+	playtimePeriodsMoveKey(oldKey, newKey) // the days by game (playtime_periods.go)
 	if playtime.loaded && playtime.data.Games != nil {
 		if secs, ok := playtime.data.Games[oldKey]; ok {
 			delete(playtime.data.Games, oldKey)

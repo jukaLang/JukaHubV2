@@ -703,13 +703,19 @@ func audioChunkDuration(spec sdl.AudioSpec) time.Duration {
 	return time.Duration(spec.Samples) * time.Second / time.Duration(spec.Freq)
 }
 
-// a11yProcessAudio applies the Accessibility audio settings in place: a mono
-// downmix and a left/right balance. It works on the stereo S16 frames the
-// video decoder and the music decoder both feed into QueueVideoAudio. UI
-// sounds use the separate mono device and stay centred there.
+// a11yProcessAudio applies the Accessibility audio settings in place: Audio
+// channels (a mono downmix into both ears or one, audiochannels.go) and a
+// left/right balance. It works on the stereo S16 frames the video decoder and
+// the music decoder both feed into QueueVideoAudio. UI sounds use the
+// separate mono device and stay centred there.
 func a11yProcessAudio(pcm []byte) []byte {
-	if !a11y.monoAudio && a11y.audioBalance == 0 {
+	ch := a11y.audioChannels
+	if ch == audioChStereo && a11y.audioBalance == 0 {
 		return pcm
+	}
+	if ch == audioChMonoLeft || ch == audioChMonoRight {
+		// One ear on headphones; both speakers on the speaker.
+		ch = audioChannelsEffective(ch, audioOutputOnSpeaker())
 	}
 	left, right := 1.0, 1.0
 	if a11y.audioBalance < 0 {
@@ -720,10 +726,7 @@ func a11yProcessAudio(pcm []byte) []byte {
 	for i := 0; i+3 < len(pcm); i += 4 {
 		l := int16(uint16(pcm[i]) | uint16(pcm[i+1])<<8)
 		r := int16(uint16(pcm[i+2]) | uint16(pcm[i+3])<<8)
-		if a11y.monoAudio {
-			m := int16((int32(l) + int32(r)) / 2)
-			l, r = m, m
-		}
+		l, r = audioChannelsDownmix(ch, l, r)
 		l = int16(float64(l) * left)
 		r = int16(float64(r) * right)
 		pcm[i] = byte(l)

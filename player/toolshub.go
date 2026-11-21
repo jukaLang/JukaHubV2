@@ -477,6 +477,8 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		wifi.icon = "wifi-off"
 	}
 	tiles = append(tiles, network, wifi)
+	// The card as a drive on a computer, over WebDAV (davshare_ui.go).
+	tiles = append(tiles, davShareHubTile())
 	// The handheld as a Wi-Fi network of its own, on the firmware's hotspot
 	// tools (hotspot.go); a PC shares its connection from its own settings.
 	if hotspotSupported() {
@@ -515,6 +517,11 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	}
 	// The guided hands-on check of this device, with its report (devcheck_ui.go).
 	system = append(system, devCheckHubTile())
+	// The games' SD card: health flags, read test, fake card test
+	// (cardcheck_ui.go); handheld only.
+	if cardCheckSupported() {
+		system = append(system, cardCheckHubTile())
+	}
 	// The two handheld-only tools: what is on the USB-C port (usbotg.go) and
 	// the battery gauge's calibration cycle (batterycal.go). A PC has neither
 	// a sysfs USB role switch nor a fuel gauge JukaHub can read.
@@ -555,6 +562,7 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		disc.value, disc.tone = "Checking your disc games…", toolsHubToneBusy
 	}
 	system = append(system, disc)
+	system = append(system, cueGenToolsTile()) // CUE Generator (cuegen.go)
 	system = append(system, toolsHubTile{id: "rommgr", label: "ROM manager", icon: "rom", value: "File loose games, BIOS and duplicates"})
 	system = append(system, toolsHubTile{id: "rommcloud", label: "RomM server", icon: "rom", value: "Your server's games, covers, saves and BIOS"})
 	// The Calculator is one of the everyday apps above.
@@ -742,6 +750,10 @@ func toolsHubActivate(config *Config, idx int) {
 		batteryCalOpenScreen(config)
 	case "devcheck":
 		devCheckOpenScreen(config)
+	case "cardcheck":
+		cardCheckOpenScreen(config)
+	case "netdrive":
+		davShareOpenScreen(config)
 	case "benchmark":
 		toolsHubOpenScene(config, "Benchmark")
 	case "logs":
@@ -752,6 +764,8 @@ func toolsHubActivate(config *Config, idx int) {
 		openPowerTools(config)
 	case "disc":
 		toolsHubRunDiscHelpers()
+	case "cuegen":
+		cueGenNow(nil) // cuegen.go
 	case "rommgr":
 		rommOpen(config)
 	case "rommcloud":

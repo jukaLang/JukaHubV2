@@ -382,12 +382,22 @@ func ledSettingsRows() []setRow {
 				ledSettingsApply(c)
 			},
 		},
+		// The brightness following the screen's, and the achievement
+		// rainbow (ledsilky.go).
+		ledSilkyFollowScreenRow(),
+		ledSilkyCelebrateRow(),
+		// Dark in games but for the indicators (power_options.go).
+		ledGamesSettingsRow(),
 		// The indicators over every mode, with their own brightness
 		// (ledindicators.go).
 		ledIndLowBatteryRow(),
 		ledIndChargingRow(),
+		// The Charging light as a bar, and L2 + R2's battery flash
+		// (ledbattlevel.go).
+		ledIndChargeBarRow(),
 		ledIndStandbyRow(),
 		ledIndBrightnessRow(),
+		ledBattChordRow(),
 		// Juka's layer over every mode (ledjuka.go). Shown with the switch off
 		// too: Always lights the sticks for Juka even then.
 		ledJukaRow(),

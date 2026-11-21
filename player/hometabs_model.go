@@ -47,9 +47,11 @@ const (
 	homeTabCollections   = "collections"
 )
 
-// homeTabOrder is the default tab order.
+// homeTabOrder is the default tab order. Tools (hometabs_tools.go) is off
+// until it is switched on (homeTabHiddenByDefault).
 var homeTabOrder = [...]string{
 	homeTabRecent, homeTabMain, homeTabGames, homeTabEntertainment, homeTabFavourites, homeTabCollections,
+	homeTabTools,
 }
 
 // The views a page can be drawn in (homeTabItem lists, any tab or folder).
@@ -61,8 +63,10 @@ const (
 	homeTabViewCompact  = "compact"  // small icons, many per row
 )
 
-// homeTabViews is the order a "change view" control steps through.
-var homeTabViews = [...]string{homeTabViewGrid, homeTabViewRow, homeTabViewList, homeTabViewCarousel, homeTabViewCompact}
+// homeTabViews is the order a "change view" control steps through. Backdrop
+// and Minimal are hometabs_backdrop.go's and hometabs_minimal.go's.
+var homeTabViews = [...]string{homeTabViewGrid, homeTabViewRow, homeTabViewList, homeTabViewCarousel, homeTabViewCompact,
+	homeTabViewBackdrop, homeTabViewMinimal}
 
 // Item refs. An item that can be favourited or put into a collection carries
 // a Ref in one of these forms; the homeTiles grammar (home_tiles.go) is reused

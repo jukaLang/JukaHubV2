@@ -114,6 +114,10 @@ type xpackManifest struct {
 	InputProfile string            `json:"inputProfile,omitempty"`
 	Screensaver  string            `json:"screensaver,omitempty"`
 	Scenes       []json.RawMessage `json:"scenes,omitempty"`
+
+	// The theme-pack parts: boot logo, icon pack, console names,
+	// menu colour, startup sound, preview (lookpacks.go).
+	lookpackFields
 }
 
 // xpackEntry is a pack as the app knows it: the manifest, where it came from,
@@ -301,6 +305,7 @@ func xpackBuiltinEntries() []xpackEntry {
 			LogScene("xpack").Error("built-in packs do not parse", "err", err)
 			return
 		}
+		list = append(list, lookpackBuiltinRaw()...)
 		for _, raw := range list {
 			m, err := xpackParseManifest(raw, "")
 			if err != nil {
@@ -509,6 +514,7 @@ func xpackValidate(e *xpackEntry) {
 			asset(rel)
 		}
 	}
+	lookpackValidate(e)
 }
 
 // xpackResolveAsset resolves a file a pack ships: it must sit inside the pack's
@@ -686,6 +692,7 @@ func xpackScanAsync() {
 	xpackStore.mu.Unlock()
 	go func() {
 		entries, problems := xpackScanUserPacks(xpackDir())
+		entries, problems = lookpackScanSD(entries, problems)
 		xpackStore.mu.Lock()
 		xpackStore.user, xpackStore.problems = entries, problems
 		xpackStore.scanned, xpackStore.scanning = true, false
@@ -909,7 +916,8 @@ func xpackStateKeys() []string {
 	keys := make([]string, 0, len(themePresetKeys)+len(themeColorVariables)+10)
 	keys = append(keys, themePresetKeys...)
 	keys = append(keys, themeColorVariables...)
-	return append(keys, "homeArrangement", bootSfxEnabledKey, bootSfxVolumeKey, "ambientMode",
+	keys = append(keys, lookpackStateKeys()...)
+	return append(keys, "homeArrangement", bootSfxEnabledKey, bootSfxVolumeKey, "ambientMode", saverSlidesKindKey,
 		xpackActiveKey, xpackActiveFileKey, xpackStartSceneKey, xpackWallpaperKey, xpackInputKey,
 		// The picker's remembered wallpaper (gifwall.go): Undo puts the
 		// wallpaper back, so it puts back what restores it at the next start.
@@ -976,6 +984,11 @@ func xpackApply(config *Config, e xpackEntry) (string, error) {
 	}
 	if m.Screensaver != "" {
 		custom["ambientMode"] = m.Screensaver == "dock"
+		if m.Screensaver == saverKindStars {
+			// "stars" is the starfield, not a game slideshow chosen before
+			// (saverslides.go).
+			custom[saverSlidesKindKey] = saverKindStars
+		}
 	}
 	if m.StartScene != "" {
 		custom[xpackStartSceneKey] = m.StartScene
@@ -994,6 +1007,7 @@ func xpackApply(config *Config, e xpackEntry) (string, error) {
 			}
 		}
 	}
+	skipped = append(skipped, lookpackApply(config, e)...)
 	undo.AddedFavorites = xpackAddFavorites(e)
 	custom[xpackActiveKey] = m.ID
 	if e.File != "" && e.Source != xpackSourceBuiltin {
@@ -1089,6 +1103,7 @@ func xpackUndo(config *Config) (string, error) {
 		xpackDropDynamicWallpaper()
 	}
 	xpackRepaint(config)
+	lookpackAfterUndo(config)
 	bootSfxBind(config)
 	if rec.HadInputProfile && xpackActivateInputProfile != nil {
 		if err := xpackActivateInputProfile(config, rec.InputProfile); err != nil {
@@ -1242,6 +1257,7 @@ func xpackEnsure(config *Config) {
 	}
 	xpackSyncScenes(config)
 	xpackRefreshLabel(config)
+	lookpackEnsure(config)
 }
 
 // xpackOpenStartScene opens the pack's start screen once the first frame is up

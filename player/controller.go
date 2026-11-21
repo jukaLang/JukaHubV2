@@ -516,6 +516,10 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 			if triggerOwnedByOverlay() {
 				return true
 			}
+			// L2 + R2 on Home shows the battery on the lights (ledbattlevel.go).
+			if battChordTrigger(padL2, config) {
+				return true
+			}
 			return handleShoulderPress(padL2, config)
 		}
 		return false
@@ -533,6 +537,9 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 				return true
 			}
 			if triggerOwnedByOverlay() {
+				return true
+			}
+			if battChordTrigger(padR2, config) {
 				return true
 			}
 			return handleShoulderPress(padR2, config)

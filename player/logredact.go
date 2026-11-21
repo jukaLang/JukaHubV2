@@ -372,3 +372,180 @@ func logContainsFold(s, lower string) bool {
 	}
 	return false
 }
+
+// ── Personal details, for logs that leave the device as files ──────────────
+//
+// The Logs screen keeps names, networks and addresses: they are what a log is
+// read for on the device. A log the user downloads to share (the Phone
+// Companion's "Download logs", companion_logs.go) also goes through
+// redactLogPersonal, which masks, on top of redactDiagnosticText (credentials
+// and the account name in a home folder):
+//   - the exact names it is given: the Wi-Fi networks the handheld knows
+//     ("[wifi]") and the user's account and display names ("[account]"),
+//     each only as a whole word, so "Juka" does not cut "JukaHub" apart;
+//   - an "ssid=…" or "SSID: …" value, whatever network it names;
+//   - e-mail addresses, Bluetooth and Wi-Fi hardware addresses (also BlueZ's
+//     "dev_AA_BB_…" form) and LAN addresses: IPv4 in 10/8, 172.16/12,
+//     192.168/16, 169.254/16 and 100.64/10, and IPv6 link-local and unique
+//     local ones. Public addresses (servers, DNS) stay: they say where a
+//     connection went, not who made it.
+// It is deliberately conservative: game names, folders and versions stay, so
+// the log still explains the problem.
+
+// logPersonal is the compiled patterns, made on first use like logSecretRE.
+var (
+	logPersonalOnce sync.Once
+	logPersonalRE   logPersonalPatterns
+)
+
+type logPersonalPatterns struct {
+	ssid  *regexp.Regexp
+	email *regexp.Regexp
+	mac   *regexp.Regexp
+	bluez *regexp.Regexp
+	ipv4  *regexp.Regexp
+	ipv6  *regexp.Regexp
+}
+
+func logPersonalPatternsCompiled() *logPersonalPatterns {
+	logPersonalOnce.Do(func() {
+		logPersonalRE = logPersonalPatterns{
+			ssid:  regexp.MustCompile(`(?i)\b((?:[a-z]+_)?ssid)\b(["']?\s*[:=]\s*)("[^"\n]*"|'[^'\n]*'|[^\s,;&]+)`),
+			email: regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`),
+			mac:   regexp.MustCompile(`\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b`),
+			bluez: regexp.MustCompile(`\b(dev_)[0-9A-Fa-f]{2}(?:_[0-9A-Fa-f]{2}){5}\b`),
+			ipv4:  regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`),
+			ipv6:  regexp.MustCompile(`(?i)\b(?:fe80|f[cd][0-9a-f]{2}):[0-9a-f:]*[0-9a-f](?:%[a-z0-9_.-]+)?`),
+		}
+	})
+	return &logPersonalRE
+}
+
+// logPrivateIPv4 reports a LAN, link-local or carrier-grade NAT address.
+func logPrivateIPv4(ip string) bool {
+	var o [4]int
+	parts := strings.Split(ip, ".")
+	if len(parts) != 4 {
+		return false
+	}
+	for i, p := range parts {
+		n := 0
+		for _, c := range p {
+			n = n*10 + int(c-'0')
+		}
+		if n > 255 {
+			return false
+		}
+		o[i] = n
+	}
+	switch {
+	case o[0] == 10:
+		return true
+	case o[0] == 172 && o[1] >= 16 && o[1] <= 31:
+		return true
+	case o[0] == 192 && o[1] == 168:
+		return true
+	case o[0] == 169 && o[1] == 254:
+		return true
+	case o[0] == 100 && o[1] >= 64 && o[1] <= 127:
+		return true
+	}
+	return false
+}
+
+// logPersonalNames is the masks redactLogPersonal applies by exact value.
+type logPersonalNames struct {
+	Wifi     []string
+	Accounts []string
+}
+
+// logPersonalNameOK reports whether v is worth masking as a whole word: long
+// enough to be a name, not a word every log line uses, not a switch.
+func logPersonalNameOK(v string) bool {
+	if len(v) < 3 || len(v) > 128 {
+		return false
+	}
+	switch strings.ToLower(v) {
+	case "you", "player", "user", "guest", "admin", "root", "juka", "jukahub", "default", "none",
+		"home", "true", "false", "off", "on", "auto", "unknown", "wifi", "wi-fi", "trimui", "test":
+		return false
+	}
+	return true
+}
+
+// logMaskWord replaces every whole-word occurrence of name in text by mask: a
+// letter, digit or underscore right before or after it means it is part of
+// another word.
+func logMaskWord(text, name, mask string) string {
+	if name == "" || !strings.Contains(text, name) {
+		return text
+	}
+	word := func(b byte) bool {
+		return b == '_' || ('0' <= b && b <= '9') || ('a' <= b && b <= 'z') || ('A' <= b && b <= 'Z') || b >= 0x80
+	}
+	var out strings.Builder
+	rest := text
+	for {
+		i := strings.Index(rest, name)
+		if i < 0 {
+			out.WriteString(rest)
+			break
+		}
+		end := i + len(name)
+		whole := (i == 0 || !word(rest[i-1]) || !word(name[0])) &&
+			(end == len(rest) || !word(rest[end]) || !word(name[len(name)-1]))
+		if whole {
+			out.WriteString(rest[:i])
+			out.WriteString(mask)
+		} else {
+			out.WriteString(rest[:end])
+		}
+		rest = rest[end:]
+	}
+	return out.String()
+}
+
+// redactLogPersonal returns text with credentials, the names in names, network
+// names, e-mail and hardware addresses and LAN addresses masked; see above.
+// Any goroutine.
+func redactLogPersonal(text string, names logPersonalNames) string {
+	text = redactDiagnosticText(text)
+	sortedNames := func(list []string) []string {
+		var out []string
+		seen := map[string]bool{}
+		for _, v := range list {
+			v = strings.TrimSpace(v)
+			if logPersonalNameOK(v) && !seen[v] {
+				seen[v] = true
+				out = append(out, v)
+			}
+		}
+		logStoredSecretsSort(out) // longest first: "Home 5G" before "Home"
+		return out
+	}
+	for _, v := range sortedNames(names.Wifi) {
+		text = logMaskWord(text, v, "[wifi]")
+	}
+	for _, v := range sortedNames(names.Accounts) {
+		text = logMaskWord(text, v, "[account]")
+	}
+	re := logPersonalPatternsCompiled()
+	if logContainsFold(text, "ssid") {
+		text = re.ssid.ReplaceAllString(text, "${1}${2}[wifi]")
+	}
+	if strings.IndexByte(text, '@') >= 0 {
+		text = re.email.ReplaceAllString(text, "[email]")
+	}
+	text = re.bluez.ReplaceAllString(text, "${1}[mac]")
+	text = re.mac.ReplaceAllString(text, "[mac]")
+	text = re.ipv4.ReplaceAllStringFunc(text, func(ip string) string {
+		if logPrivateIPv4(ip) {
+			return "[lan-ip]"
+		}
+		return ip
+	})
+	if logContainsFold(text, "fe80") || logContainsFold(text, "fd") || logContainsFold(text, "fc") {
+		text = re.ipv6.ReplaceAllString(text, "[lan-ip]")
+	}
+	return text
+}

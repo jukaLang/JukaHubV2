@@ -48,9 +48,14 @@ type audioResumeEntry struct {
 }
 
 type audioPrefsData struct {
-	Speed   float64                     `json:"speed,omitempty"`
-	Entries map[string]audioResumeEntry `json:"entries"`
-	Books   map[string]audioBookEntry   `json:"books,omitempty"`
+	// Speed is the listening speed for music, podcasts and every audiobook
+	// without its own; BookSpeeds holds the books' own (key = the shelf's book
+	// key, musicShelfBookKey). A store from before per-book speeds has only
+	// Speed, which simply stays the default.
+	Speed      float64                     `json:"speed,omitempty"`
+	Entries    map[string]audioResumeEntry `json:"entries"`
+	Books      map[string]audioBookEntry   `json:"books,omitempty"`
+	BookSpeeds map[string]float64          `json:"bookSpeeds,omitempty"`
 }
 
 type audioBookEntry struct {
@@ -59,12 +64,16 @@ type audioBookEntry struct {
 }
 
 var audioPrefs struct {
-	mu      sync.Mutex
-	loaded  bool
-	speed   float64
-	entries map[string]audioResumeEntry
-	books   map[string]audioBookEntry
+	mu         sync.Mutex
+	loaded     bool
+	speed      float64
+	entries    map[string]audioResumeEntry
+	books      map[string]audioBookEntry
+	bookSpeeds map[string]float64
 }
+
+// audioBookSpeedMax bounds the per-book speeds kept, like the positions.
+const audioBookSpeedMax = audioResumeMaxEntries
 
 var audioBookRevision atomic.Uint64
 
@@ -98,6 +107,7 @@ func audioPrefsLoadLocked() {
 	audioPrefs.speed = 1
 	audioPrefs.entries = make(map[string]audioResumeEntry)
 	audioPrefs.books = make(map[string]audioBookEntry)
+	audioPrefs.bookSpeeds = make(map[string]float64)
 
 	// The atomic save leaves the previous version beside the live file, so a
 	// truncated store resumes from the saved positions instead of silently
@@ -120,6 +130,11 @@ func audioPrefsLoadLocked() {
 			audioPrefs.books[key] = entry
 		}
 	}
+	for key, speed := range stored.BookSpeeds {
+		if key != "" && speed >= 0.5 && speed <= 2 {
+			audioPrefs.bookSpeeds[key] = speed
+		}
+	}
 }
 
 // audioPrefsSaveLocked writes the store through the same temp+fsync+rename path
@@ -128,9 +143,10 @@ func audioPrefsLoadLocked() {
 // the previous version is now kept as .bak and the loader falls back to it.
 func audioPrefsSaveLocked() error {
 	data, err := json.MarshalIndent(audioPrefsData{
-		Speed:   audioPrefs.speed,
-		Entries: audioPrefs.entries,
-		Books:   audioPrefs.books,
+		Speed:      audioPrefs.speed,
+		Entries:    audioPrefs.entries,
+		Books:      audioPrefs.books,
+		BookSpeeds: audioPrefs.bookSpeeds,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -274,6 +290,65 @@ func audioSaveSpeed(speed float64) {
 	}
 	audioPrefs.speed = speed
 	_ = audioPrefsSaveLocked()
+}
+
+// audioSpeedFor is the listening speed for a playlist: an audiobook's own
+// when it has one, else the global speed (music, podcasts, a book never
+// changed). bookKey "" is not a book.
+func audioSpeedFor(bookKey string) float64 {
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	if strings.TrimSpace(bookKey) != "" {
+		if s, ok := audioPrefs.bookSpeeds[audioResumeKey(bookKey)]; ok {
+			return s
+		}
+	}
+	return audioPrefs.speed
+}
+
+// audioSaveSpeedFor persists a speed change: the book's own for an audiobook,
+// the global one otherwise (what a speed change always did before).
+func audioSaveSpeedFor(bookKey string, speed float64) {
+	if strings.TrimSpace(bookKey) == "" {
+		audioSaveSpeed(speed)
+		return
+	}
+	key := audioResumeKey(bookKey)
+	audioPrefs.mu.Lock()
+	defer audioPrefs.mu.Unlock()
+	audioPrefsLoadLocked()
+	if old, ok := audioPrefs.bookSpeeds[key]; ok && old == speed {
+		return
+	}
+	if _, ok := audioPrefs.bookSpeeds[key]; !ok && len(audioPrefs.bookSpeeds) >= audioBookSpeedMax {
+		// Bounded like the positions: drop a book that has no progress any
+		// more (or, failing that, any one) to make room.
+		drop := ""
+		for k := range audioPrefs.bookSpeeds {
+			if drop == "" {
+				drop = k
+			}
+			if _, live := audioPrefs.books[k]; !live {
+				drop = k
+				break
+			}
+		}
+		delete(audioPrefs.bookSpeeds, drop)
+	}
+	audioPrefs.bookSpeeds[key] = speed
+	_ = audioPrefsSaveLocked()
+}
+
+// musicListeningSpeed is the speed a track of the playlist with bookKey
+// plays at (musicPlayTrackAt): 1 on the bit-perfect path, which applies no
+// tempo, else audioSpeedFor. Called with music.mu held — the order musicSceneEnter
+// already uses (music.mu, then audioPrefs.mu).
+func musicListeningSpeed(bookKey string) float64 {
+	if musicEQ.bitPerfect {
+		return 1
+	}
+	return audioClampSpeed(audioSpeedFor(bookKey))
 }
 
 // audioClampSpeed keeps a speed inside the range atempo accepts and the UI

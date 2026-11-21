@@ -9,7 +9,7 @@ package main
 // a paid program, so JukaHub never ships or downloads it. The user copies two
 // files from their own Raspberry Pi download, pico8_64 and pico8.dat, into
 // Bios/P8 on the card (on a PC: pico8.exe and pico8.dat, or an installed
-// PICO-8 is found where its installer put it). NX Redux 2.5.0 does the same.
+// PICO-8 is found where its installer put it).
 //
 // When both files are there:
 //
@@ -100,7 +100,7 @@ func pico8Card() string {
 }
 
 // pico8NativeDirs are the folders the program may be in, most likely first:
-// the BIOS folders NX Redux, MinUI paks and muOS use (Bios/P8, Bios/PICO,
+// the BIOS folders MinUI paks and muOS use (Bios/P8, Bios/PICO,
 // bios/pico8), the stock TrimUI PICO-8 app, CrossMix's Emus folders, and on a
 // PC the places the installers use.
 func pico8NativeDirs() []string {
@@ -549,7 +549,7 @@ func pico8SploreOpen() {
 }
 
 // pico8SetupDir is where the setup card asks for the files: Bios/P8 on the
-// card (NX Redux's folder), JukaHub's BIOS/P8 on a PC.
+// card, JukaHub's BIOS/P8 on a PC.
 func pico8SetupDir() string {
 	if card := pico8Card(); card != "" {
 		return filepath.Join(card, "Bios", "P8")

@@ -47,7 +47,7 @@ func homeTabsEditToggle(c *Config) {
 		homeTabsEditClose(c)
 		return
 	}
-	if !homeTabsOn() {
+	if !homeTabsOn() || !uiModeGate(uiFeatSetup) { // Kiosk / Kid mode (uimode.go)
 		return
 	}
 	e.order, e.hidden = parseHomeTabsShown(homeTabsCustom(c, homeTabsShownKey))
@@ -492,18 +492,5 @@ func homeTabsSettingsRow() setRow {
 	}
 }
 
-// homeTabsRememberRow is Display & theme → Remember last tab.
-func homeTabsRememberRow() setRow {
-	return setRow{
-		ID: "homeTabsRemember", Label: "Remember last tab", Kind: setKindToggle,
-		Detail:  setStatic("Home opens on the tab you left it on; off, it opens on Main"),
-		Visible: homeTabsOnTabs,
-		Get:     homeTabsRemember,
-		Set: func(c *Config, on bool) {
-			homeTabsWrite(c, homeTabsRememberKey, boolString(on))
-			if on {
-				homeTabsNoteLast(c, homeTabs.cur)
-			}
-		},
-	}
-}
+// The Settings row Remember last tab became Start on (hometabs_start.go),
+// which writes the same key; the switch stays on the L2 sheet above.

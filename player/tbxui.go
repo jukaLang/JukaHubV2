@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, pmodeSceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, usbPadSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName, javaSceneName, sdMoveSceneName, nasSceneName, acSceneName, verifiedSceneName, devCheckSceneName}
+var tbxSceneNames = [...]string{partySceneName, pmodeSceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, usbPadSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName, javaSceneName, sdMoveSceneName, nasSceneName, acSceneName, verifiedSceneName, devCheckSceneName, tailscaledSceneName, cardCheckSceneName, davShareSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -171,6 +171,12 @@ func tbxDisplayName(name string) string {
 		return "Tested on this device"
 	case devCheckSceneName:
 		return "Device check"
+	case cardCheckSceneName:
+		return "Card check"
+	case davShareSceneName:
+		return "WebDAV share"
+	case tailscaledSceneName:
+		return "Tailscale"
 	}
 	return ""
 }
@@ -1494,6 +1500,12 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return verifiedPageClick(mx, my, config)
 	case devCheckSceneName:
 		return devCheckSceneClick(mx, my, config)
+	case cardCheckSceneName:
+		return cardCheckSceneClick(mx, my, config)
+	case davShareSceneName:
+		return davShareSceneClick(mx, my, config)
+	case tailscaledSceneName:
+		return tailscaledSceneClick(mx, my, config)
 	}
 	return false
 }
@@ -1564,6 +1576,12 @@ func tbxSceneNav(name string) *tbxNav {
 		return verifiedPageNav()
 	case devCheckSceneName:
 		return &devCheckScreen.nav
+	case cardCheckSceneName:
+		return &cardCheckScreen.nav
+	case davShareSceneName:
+		return &davShareScreen.nav
+	case tailscaledSceneName:
+		return &tailscaledScreen.nav
 	}
 	return nil
 }
@@ -1620,6 +1638,12 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return verifiedPageHints(), true
 	case devCheckSceneName:
 		return devCheckSceneHints(), true
+	case cardCheckSceneName:
+		return cardCheckSceneHints(), true
+	case davShareSceneName:
+		return davShareSceneHints(), true
+	case tailscaledSceneName:
+		return tailscaledSceneHints(), true
 	}
 	return nil, false
 }

@@ -57,6 +57,30 @@ Folder names are matched through the alias table in `player/romsetup.go`, so
 console, and so on for SNES/SFC, GB, GBC, GBA, NDS, N64, MD/Genesis,
 Saturn, Dreamcast, PlayStation and PSP.
 
+### More consoles: NAOMI, Atomiswave, DSi, OpenBOR, CoCo
+
+The folders spruceOS and Batocera cards use for these consoles are
+read too (`player/extra_systems.go`):
+
+| Folder | Console | Games | What plays them |
+|---|---|---|---|
+| `NAOMI` | NAOMI | `.zip`, `.7z`, `.lst`, `.bin` | RetroArch's Flycast core (the Dreamcast's), with `naomi.zip` in the BIOS folder's `dc` folder or beside the games |
+| `ATOMISWAVE` | Atomiswave | `.zip`, `.7z`, `.lst`, `.bin` | Flycast, with `awbios.zip` in the BIOS folder's `dc` folder or beside the games |
+| `NDSI` (or `DSI`) | Nintendo DSi | `.nds`, `.dsi`, `.ids`, `.zip`, `.7z` | RetroArch's melonDS DS core in DSi mode, with `dsi_bios7.bin`, `dsi_bios9.bin`, `dsi_firmware.bin` and `dsi_nand.bin` from your own DSi in the BIOS folder (or its `melonDS DS` folder) |
+| `OPENBOR` | OpenBOR | `.pak` | the OpenBOR engine: an `Emus/OPENBOR` folder whose `launch.sh` takes the `.pak`, or PortMaster's OpenBOR (copy the `.pak` into its `paks` folder and start it from Ports) |
+| `COCO` | Tandy CoCo | `.ccc`, `.rom`, `.cas`, `.dsk`, `.vdk`, `.dmk`, `.jvc`, `.os9`, `.bin` | XRoar, in an `Emus/COCO` folder with the CoCo ROMs (`bas13.rom`, `extbas11.rom`, `disk11.rom`); it has no RetroArch core |
+
+`naomi.zip` and `awbios.zip` beside the games are BIOS files, not games, and are
+not listed. An installed Flycast or melonDS DS core is offered for these games
+like any other installed core (see [Other emulators for a console](#other-emulators-for-a-console)),
+and **Get more cores** fetches it for a console with games. A DSi game started in
+melonDS DS gets the core's **Console mode** set to DSi for that one launch (put
+back afterwards); DSi mode has no save states. Game Ready names the DSi files
+that are missing before the game starts. With nothing to play OpenBOR or CoCo
+games, starting one says what to add instead of "no launcher". Covers come from
+the libretro thumbnails for NAOMI, Atomiswave and the DSi; OpenBOR and CoCo
+games have none there and use [covers from gameplay](#covers-from-gameplay).
+
 Titles are the filename with the extension, underscores and trailing release
 tags removed: `Pokemon_Emerald_(USA).gba` appears as **Pokemon Emerald**.
 Nothing is renamed on the card.
@@ -237,7 +261,66 @@ small marker, `data/game-art/.nocover/<console>/<game>.off`, which follows the
 game through **Rename file**. The row then reads **Restore cover**: **A**
 removes the marker, shows the card's picture if there is one and otherwise
 looks the game's cover up at once. **Choose cover** and **Name for covers**
-also bring covers back.
+also bring covers back. A removed cover also takes the game's screenshot and
+title screen (below) to the trash, and none is fetched for it.
+
+### Artwork: game art settings, screenshots, title screens
+
+**Settings → Games & emulators** has the game-art rows
+(`artstyle.go`). They shape the list layout's picture; the 3D shelf, the cover
+column, Cover Flow and the Cube are unchanged.
+
+| Row | Choices | What it does |
+|---|---|---|
+| **Game art** (`gameArt`) | On (default) / Off | Off leaves the list text only: no picture beside or behind it. |
+| **Art type** (`gameArtType`) | Box art (default) / Screenshot / Title screen | Which picture the game shows. A game without the chosen one shows its box art. NextUI's `.media` pictures (and `Imgs`, `.res`) count as box art. |
+| **Art style** (`gameArtStyle`) | Thumbnail (default) / Background | Thumbnail is the picture beside the list. Background draws the focused game's picture full height behind the list, against the right edge and dimmed — darker on the left where the titles are — and the list takes the whole width. |
+| **Art width** (`gameArtWidth`) | Standard (default: 34 %, square, capped by the page height) / 30–60 % | The picture's share of the page. A frame wider than the page is tall becomes landscape, which gives a screenshot room. |
+| **Art corner radius** (`gameArtRadius`) | Square (default) / 4–24 px | How round the picture's own corners are. |
+| **Console backgrounds** (`consoleBackgrounds`) | On (default) / Off | A console's picture behind its game list, drawn to fill and dimmed with the theme's base colour: `data/backgrounds/<System>.png` (the console's name with spaces as `_`, like the game-art folder, or as written; `.png` or `.jpg`), else NextUI's `Roms/<console folder>/.media/bg.png`. The consoles grid keeps Home's backdrop. |
+| **Artwork Manager** | | Opens the screen below. |
+
+**Where the pictures live.** Box art stays where it was:
+`data/game-art/<System>/<stem>.png`, or the card's own picture. Screenshots
+and title screens go in hidden folders of the game-art folder, named like the
+box art: `data/game-art/.snap/<System>/<stem>.png` (the thumbnail server's
+`Named_Snaps`) and `data/game-art/.title/<System>/<stem>.png`
+(`Named_Titles`). **Clean up covers** looks inside both with the box art's
+rules (only pictures of games no longer on the card); **Rename file** and the
+Game Boy Color sort carry them; **Delete game** and **Remove cover** take them.
+
+**Fetching them.** With Art type set to Screenshot or Title screen, **Fill
+gaps** (**L1** / **F**) fetches the missing covers first, then the missing
+pictures of that type — matched like the box art (exact name, without a
+release number, the game database's name, a sister console's list, then the
+closest title). It is the same downloader: one run at a time, the same
+progress, and **L1** / **F** stops the run and anything queued behind it. A
+title the server has no picture for is not asked again for two weeks (the
+same not-found file, `data/game-art/.missing-art.json`, under keys of its
+own). The automatic box-art pass fetches box art only.
+
+**Artwork Manager** (Settings → Games & emulators, Start → Tools, or Game
+options → Artwork Manager in the library). One row per console with how many
+of its games have the shown picture type, a bar and a state (Complete, N
+missing, Queued, Fetching…). The top row switches the type shown (it starts
+on Settings' Art type), **Fetch all missing** (or **Stop fetching** while a
+run or the queue is busy) and **Clear done**, which hides the complete
+consoles (**Show all** brings them back).
+
+- On a console row, **A** opens its games: each with **Box**, **Shot** and
+  **Title** lit for the pictures it has (**A** on a game says where they are).
+- **Right** reaches the row's **Fetch** button: **A** queues that console's
+  missing pictures of the shown type. **Y** queues every console.
+- **X** is **Reset artwork** for the console, after a question that opens on
+  **Cancel**: the box art, screenshots and title screens JukaHub downloaded
+  for it (covers picked with Choose cover too) go to the reset trash, and its
+  not-found answers are forgotten so the next fetch asks again. The console
+  folder's `.media` / `Imgs` / `.res` pictures, pictures taken from games and
+  "no cover" choices stay. It waits while a fetch runs.
+
+Games whose cover was removed are left out of the counts. Opened from the
+library, **B** on the console list goes back into the library on the console
+it was on. The screen has no mouse targets yet: the pad and keyboard drive it.
 
 ## Disc-based systems
 
@@ -256,9 +339,15 @@ nothing new costs a stat per game folder; what it writes is logged, and an
 open library rescans once so the discs show as one game. It makes:
 
 - a one-track `.cue` next to every `.bin` of 1 MiB or more that no sheet
-  names, using the sector mode the system uses — `MODE2/2352` on PlayStation,
-  `MODE1/2352` on the Sega and NEC CD systems (a smaller `.bin` is a BIOS,
-  not a disc);
+  names, with the track mode read from the image's first data sector
+  (`MODE2/2352` or `MODE1/2352`; a `.bin` with no CD sync gets no sheet, and a
+  smaller `.bin` is a BIOS, not a disc);
+- one multi-track `.cue` for a Redump split set — `Game (Track 1).bin`,
+  `Game (Track 2).bin` … — with each track's mode read past its gap, audio
+  tracks as `AUDIO` and Redump's `INDEX 00 00:00:00` / `INDEX 01 00:02:00`
+  gaps, made before the `.m3u` step (the CUE generator). The ROM
+  manager's **Make missing .cue files** and the Tools hub's **CUE generator**
+  run the same pass on request and say how many sheets they made;
 - one `.m3u` per multi-disc set of loose discs — `(Disc 1)`, `[CD 2]`,
   `- Disc 3` — in the console's folder or in a game's own folder, listing the
   discs in order and preferring the `.cue` over the `.bin` it describes
@@ -577,6 +666,21 @@ start it (from its folder, with `HOME` there). **A** on a core row opens this
 library searched for the console that core plays (the first **B** clears the
 search).
 
+### Warm up games before launch
+
+On a TrimUI (and any Linux), a game that stays highlighted in the library for
+about a third of a second — or the game on Home's Continue card — has its
+launch files asked into memory in the background: RetroArch, the core the
+launch will use and its `.info`, and the ROM when it is 64 MB or smaller
+(160 MB at most in all). The start that follows reads them from memory instead
+of the card. It gives way to everything else (lowest CPU and disk priority),
+stops when the highlight moves or a game starts, never runs while a game is
+playing or at 15 % battery or less off the charger, needs twice the files'
+size free in memory, and does not read the same file again within five
+minutes. The log's launch lines say whether it had finished
+(`launch warm-up for "…": finished, 3 files, 41 MB`). Switch it off with
+**Settings → Games & emulators → Warm up games before launch**.
+
 ### Other emulators for a console
 
 The firmware's own menu keeps a console's other emulators behind Select on the
@@ -655,7 +759,7 @@ download nothing.
 
 ### The recommended emulator
 
-CrossMix and the other TrimUI firmwares ship more than one emulator for the
+The TrimUI firmwares ship more than one emulator for the
 heavier consoles, and which one plays best on this chip (Allwinner A133P,
 PowerVR GE8300, 1 GB) is mostly word of mouth. JukaHub keeps that knowledge as
 a ranked list per console (`player/emubest.go`), one for the handheld and one
@@ -698,12 +802,12 @@ console's very best.
 | GameCube, Wii | Dolphin core · Dolphin (Smart Pro S; see below) | Dolphin |
 | PS2 | — | PCSX2 |
 
-Where the handheld ranking comes from: CrossMix's emulator list and release
-notes (standalone DraStic, PPSSPP, Mupen64Plus, Flycast, YabaSanshiro and
-mGBA; `mgba_libretro` as its recommended GBA core; PCSX-ReARMed for
-PlayStation), KNULLI's Scarab release (standalone YabaSanshiro "significantly
-boosts" Saturn), and spruceOS's A133P measurements (standalone Mupen64Plus with
-GLideN64 at full speed on the Smart Pro and Brick). Judgement calls rather than
+Where the handheld ranking comes from: what the TrimUI firmwares ship,
+emulator release notes and community measurements on the A133P (standalone
+DraStic, PPSSPP, Mupen64Plus, Flycast, YabaSanshiro and mGBA; `mgba_libretro`
+for GBA; PCSX-ReARMed for PlayStation; standalone YabaSanshiro for Saturn;
+standalone Mupen64Plus with GLideN64 at full speed on the Smart Pro and
+Brick). Judgement calls rather than
 measurements: standalone Flycast ahead of its core, the mGBA core ahead of
 standalone mGBA, and the order of the light 8- and 16-bit cores, which all run
 at full speed on this chip.
@@ -746,6 +850,55 @@ than its ISO.
   an Xbox game: every core and the GPU at full speed, JukaHub's memory handed
   back, "Hey Juka" closed while it plays.
 
+### PlayStation 2 on the handheld
+
+Every TrimUI model plays PS2 games in RetroArch's ARMSX2 core, a PCSX2 fork
+with ARM64 recompilers. Expect the light games (2D, menu-heavy, simple 3D) at
+or near full speed on the Smart Pro, Brick and Hammer, and most 3D games well
+below it; the Smart Pro S does a little better. **Settings → Games & emulators
+→ PlayStation 2** turns it off (`ps2` in [CONFIGURATION.md](CONFIGURATION.md)).
+Put games in `Roms/PS2` as `.iso`, `.chd`, `.cso`, `.zso`, `.cue` (with its
+`.bin` tracks), `.m3u` for a multi-disc game, or `.elf` homebrew; CHD keeps a
+game much smaller than its ISO. A stray `.bin` is not listed as a game.
+
+- **The BIOS is yours to add.** PS2 games need a BIOS dumped from your own
+  console (a 4 MB file such as `SCPH-70012.bin`). Put it in `BIOS/PS2` (or
+  `Bios/PS2`, or the BIOS folder itself, or `Roms/PS2`): the first start
+  copies it to `pcsx2/bios` in RetroArch's system folder, where the core reads
+  it, after checking it the way PCSX2 does (4–8 MB, with the PS2 ROM
+  directory). With no BIOS anywhere the start says where to put one and
+  downloads nothing.
+- **The first start sets ARMSX2 up.** With no emulator for PS2 yet, A on a
+  game downloads ARMSX2's own Linux arm64 libretro core from its GitHub
+  releases (the newest stable release that has one, else the newest nightly;
+  the archive must match the SHA-256 GitHub states) and installs it like any
+  core: the load check, and RetroArch on JukaHub's newer glibc since ARMSX2
+  needs one. The core cannot boot without ARMSX2's `resources` folder (the
+  per-game fixes, the renderer's shaders) from the same build, so the same
+  release's handheld archive gives `pcsx2/resources` in RetroArch's system
+  folder (a resources folder you put there yourself is left alone). Then the
+  game starts. The libretro buildbot's ARMSX2 core is not used: it needs
+  libraries the TrimUI firmware does not have; a start in such a core installs
+  ARMSX2's own build first.
+- **Updates.** **Settings → Games & emulators → PS2 emulator**, or A on the PS2
+  tile of the Emulators page, installs the newest release over the one there
+  (the old core kept as a backup, the first game watched like any core
+  update). JukaHub's automatic core updates leave ARMSX2 alone.
+- **The renderer.** ARMSX2 draws with Vulkan by default, which the PowerVR
+  GE8300 in the Smart Pro, Brick and Hammer has no driver for, so the core's
+  first start here gets OpenGL ES and the BIOS intro skipped (JukaHub never
+  writes over options the core already has). When a start stops because the
+  renderer could not draw, the card says so and the core's options
+  (`config/ARMSX2/ARMSX2.opt`) move to the next renderer for the next start:
+  OpenGL ES, then the software renderer (slow, but it draws anywhere). Change
+  it in RetroArch (Quick Menu → Core Options → GS Renderer).
+- **Speed.** Native resolution and full EE speed are the core's defaults and
+  stay; for a game that is close to full speed, RetroArch's Core Options
+  (EE Cycle Rate, EE Cycle Skip) trade accuracy for speed, and may break it.
+  A PS2 game gets what **Xbox boost** gives an Xbox game. The Smart Pro's two
+  sticks are the DualShock 2's; the Brick and Hammer have none, so a game that
+  needs a stick is hard to play there.
+
 ### Per-game launch options
 
 **Start** (or **O** on a keyboard) opens the options sheet for the highlighted
@@ -765,9 +918,10 @@ cover* above):
 - **Library sort** — Title, Last played, Recently added, Playtime, Rating or Year. The order is
   saved and applies to every console. Games with no value for the chosen sort
   (never played, unrated, no year) come last.
-- **Library view** — List, 3D shelf or Cover column. The shelf uses left/right
-  to browse games and up to return to the console buttons; Cover column keeps
-  the list's up/down navigation. The choice is saved for the next visit.
+- **Library view** — List, 3D shelf, Cover column, Cover Flow or Cube. The
+  shelf uses left/right to browse games and up to return to the console
+  buttons; Cover column keeps the list's up/down navigation. The choice is
+  saved for the next visit (see [Cover Flow and Cube](#cover-flow-and-cube)).
 - **Console look** — Covers, Pixel names or Pixel cards for the console
   buttons (*Console look* above). Saved for every visit.
 - **Shader speed** — after playing with a look (Scanlines, LCD grid, CRT,
@@ -1069,7 +1223,7 @@ page means one was found (`gamemanual*.go`). Names are matched loosely, so
 | Next to the game | `Roms/SFC/Super Metroid (USA).pdf`, `… (Manual).pdf`, `…-manual.pdf`, `….txt` / `.md` (a guide) |
 | The console's manuals folder | `Roms/SFC/manuals/Super Metroid-manual.pdf` (also `manual/`, `docs/`, `guides/`, `media/manuals/`) |
 | A folder game's own folder | `Roms/SCUMMVM/Monkey Island/Manual.pdf`, `readme.txt` |
-| Batocera / Knulli / RetroBat | the `<manual>` entry in the console's `gamelist.xml` |
+| Batocera / RetroBat | the `<manual>` entry in the console's `gamelist.xml` |
 | ES-DE media | `downloaded_media/snes/manuals/Super Metroid (USA).pdf` next to the Roms folder (PC: also in your user folder) |
 | LaunchBox | `LaunchBox/Manuals/Super Nintendo Entertainment System/Super Metroid-01.pdf` |
 | A Manuals folder | `Manuals/Super Metroid.pdf` or `Manuals/SNES/…` next to the Roms folder |
@@ -1301,12 +1455,54 @@ it on private networks. On a handheld, keep both devices on the same access
 point and within range — netplay tolerates a few dropped packets, not a
 reconnect.
 
+### Link cable, wireless adapter and more players
+
+Netplay runs *one* game on both devices. A Pokémon trade needs two — Red on one
+handheld, Blue on the other — so the panel has extra rows for that
+(`netplay_link*.go`):
+
+| Console | Rows | How it runs |
+|---------|------|-------------|
+| Game Boy / Game Boy Color (when the **Gambatte** core is installed) | **Link cable · host**, the link cables heard on the network, **Link cable · join by address** | Gambatte's own network link cable. The host's game starts with `gambatte_gb_link_mode = "Network Server"` on port 56400; a joiner's with `"Network Client"` and the host's IPv4 address in `gambatte_gb_link_network_server_ip_1`…`_12` (one digit each, octets padded to three) and, for older Gambatte builds, `…_ip_octet1`…`4`. Each side plays **its own** game. A console that usually runs in another Game Boy core uses Gambatte for that session only. The link comes up within about 30 seconds of both games entering their link room. |
+| Game Boy Advance (when **gpSP** is installed) | **Wireless adapter (Pokémon FireRed/LeafGreen/Emerald)**, the wireless rooms heard, **Wireless adapter · join by address** | RetroArch netplay with gpSP and `gpsp_serial = "rfu"` (the wireless adapter over RetroArch's packet interface, RetroArch 1.17 or newer). Each side again plays its own game: FireRed and LeafGreen meet in the Union Room. mGBA stays the console's emulator; gpSP is used for that session only. |
+
+A room heard on the network joins with **your** game — the one the panel was
+opened on — not the host's. Link hosts answer a separate UDP query
+(`JUKALINK?1` on port 55438), so an older JukaHub never mistakes a Gambatte link
+for a netplay room. With no Wi-Fi, **A** on a link host row opens the
+**Hotspot** screen: turn it on, join it from the other handheld, host again.
+The core options are set for that launch only and go back when RetroArch exits
+(the same journal as every launch setting); a core that never ran here gets an
+empty options file where RetroArch would create one.
+
+**Up to four players.** Nintendo 64, Dreamcast and Arcade games seat four;
+SNES, NES, Mega Drive, PlayStation, PC Engine and Saturn games do too when the
+game supports a multitap. The host's `netplay-host.cfg` also sets
+`netplay_max_connections = "3"` (three guests; RetroArch's default, in case
+`retroarch.cfg` says fewer) and `netplay_start_as_spectator = "false"`. On those
+consoles **←/→** on a room or on **Join by address** picks the player slot to ask
+for (Auto, 2, 3, 4 — `netplay_request_device_pN` for that launch); Auto takes
+the first free one. While a LAN host plays, the number of players connected is
+shown on RetroArch's message line whenever it changes (counted from the
+kernel's TCP table; RetroArch's command port is on for that launch).
+
+**Saves.** A link cable session is an ordinary library launch, so cloud saves
+come down first and the save ledger watches it. Every netplay start syncs the
+card first, and a wireless-adapter session gets RetroArch's periodic battery
+save flush, so a trade saved in the game is on the card even if the session
+ends badly.
+
+A USB-C cable between two handhelds cannot do any of this: the stock TrimUI
+kernels have no USB networking, so there is no link to carry it. Wi-Fi or the
+hotspot is the cable.
+
 ## Controls
 
 | Input | Action |
 |-------|--------|
 | D-pad | move between the console buttons; on a console's page, up/down move in its games |
-| D-pad left (list, cover column) / up (3D shelf) | from a console's games back to the console buttons |
+| D-pad left (list, cover column) / up (3D shelf, Cover Flow) | from a console's games back to the console buttons |
+| D-pad left / right (Cube) | turn the cube to the previous / next console; up / down roll it to the previous / next game |
 | **A** | open the highlighted console's page, or a game's page; **Play** on that page launches the game |
 | **L2** / **R2** (**PgUp** / **PgDn**) | on a console's page, jump to the previous / next letter; hold to keep jumping (see [Letter scrubbing](#letter-scrubbing)) |
 | D-pad right (list, cover column) | on a console's page, jump to the next letter |
@@ -1323,6 +1519,32 @@ reconnect.
 A search or tag filter shows only the consoles with hits, each button counting
 its matches; when every hit is on one console, that console's page opens
 straight away.
+
+### Cover Flow and Cube
+
+Two more views for a console's page, chosen with **Library view** in the game
+options sheet (**Start** / **O**). Both use the whole page: the highlighted
+cover is drawn large, and its video snap plays on it once you stop.
+
+- **Cover Flow** — the highlighted cover faces you in the middle, the games
+  before and after it turned in perspective on both sides over a soft
+  reflection. **Left** / **Right** slide the row, **Up** goes back to the
+  console buttons (as on the 3D shelf). A click on a side cover opens that
+  game.
+- **Cube** — the highlighted cover is the front of a cube. **Up** / **Down**
+  roll the cube to the previous / next game; **Left** / **Right** turn it to
+  the previous / next console (its first game), whose names are shown beside
+  the cube. **B** goes back to the console buttons, as on every page.
+
+**L2** / **R2** jump by letter in both. With reduced motion or Battery Saver
+the row and the cube move without animating.
+
+**Start → Games → Play a random game** (or "random game" in Home search) skips
+the highlight step: it opens the library, waits for the card to be read, rolls
+the whole library the same way R does (the game you played last is avoided),
+and starts the pick. When it ends you are back in the library on that game.
+**Settings → Power & battery → Start in → Random game** does the same each time
+the handheld is switched on.
 
 ### Letter scrubbing
 
@@ -1344,10 +1566,28 @@ not mislabel anything). Back from the middle of a block goes to its first game,
 and from there to the block before. At either end nothing moves. The Continue
 row, which is in play order, does not scrub.
 
-On a game's page, **History** (or **H** / **Select**) shows launch count,
-completed sessions, longest session, the last 7 and 30 days, and a scrollable
-session list. A launch interrupted by a restart remains in the list with an
-unknown duration rather than being added to playtime.
+### Sorting without "The"
+
+With Settings → Games & emulators → **Ignore 'The' when sorting** on (the
+default), a leading "The", "A" or "An" does not count for the name order:
+**The Legend of Zelda** sorts, and scrubs, under **L**, next to No-Intro's
+**Legend of Zelda, The - A Link to the Past** (a trailing ", The", ", A" or
+", An" before the end of the name or a subtitle is skipped too). The names on
+screen do not change. It applies to the Title sort, to the name every other sort
+falls back on, and to Home's Favourites. Off sorts by the full name.
+
+On a game's page, **History** (or **H** / **Select**) shows the total time,
+how many times the game was played, completed sessions, the average and the
+longest session, the last 7 and 30 days, and a scrollable session list. A
+launch interrupted by a restart remains in the list with an unknown duration
+rather than being added to playtime.
+
+**X** (or **Delete** on a keyboard) in History deletes this game's record,
+after a confirm (**A** Delete, **B** Keep): its launches and sessions, its play
+time and its days in Playtime → By game go. Saves and save states, favourites,
+tags, notes and the Recently played list are never touched. Your overall time
+in JukaHub, trophies already earned and the daily play limit's count for today
+stay as they are, so deleting a record never hands back limited play time.
 
 ## Handing a game to its tool
 
@@ -1388,9 +1628,8 @@ but `zld` does not.
 ## Random pick
 
 **R** (or clicking in the right stick, **R3**) opens a small sheet that rolls a
-game for you, like CrossMix's random picker — but it lands the highlight on the
-pick instead of starting it, so **A** plays it and **R** rolls again without
-leaving the library.
+game for you — it lands the highlight on the pick instead of starting it, so
+**A** plays it and **R** rolls again without leaving the library.
 
 | Row | What it rolls from |
 |-----|--------------------|
@@ -1411,8 +1650,8 @@ that there are no games yet rather than opening an empty sheet.
 
 ## Video snaps
 
-A short clip of the focused game can play in the preview box, the way Knulli
-and the Batocera family do it. Nothing is downloaded: the clips are files you
+A short clip of the focused game can play in the preview box, the way the
+Batocera family does it. Nothing is downloaded: the clips are files you
 put on the card, mirroring the box-art tree.
 
 ```

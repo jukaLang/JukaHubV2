@@ -476,7 +476,8 @@ func subtitleSidecarFiles(videoPath string) []subtitleSidecar {
 		}
 		name := e.Name()
 		ext := filepath.Ext(name)
-		if lower := strings.ToLower(ext); lower != ".srt" && lower != ".vtt" {
+		// .srt and .vtt, and .ass/.ssa/.sub (videotracks_subs.go).
+		if !subtitleSidecarExt(ext) {
 			continue
 		}
 		stem := name[:len(name)-len(ext)]

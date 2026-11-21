@@ -127,6 +127,8 @@ func (a *iconAtlas) forgetLocked() {
 // wherever ClearShapeCache runs (theme changes, accessibility font changes,
 // memory pressure, shutdown); glyphs re-bake on their next draw.
 func ClearIconAtlas() {
+	// A console icon pack's pictures go with it (iconpacks_draw.go).
+	iconPackClearTextures()
 	a := homeIconAtlas
 	a.mu.Lock()
 	defer a.mu.Unlock()

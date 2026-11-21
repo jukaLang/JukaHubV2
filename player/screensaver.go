@@ -399,7 +399,8 @@ func screensaverClearButton(button uint8) bool {
 // forget. With none set the clear button is not offered, and a press of it is an
 // ordinary wake.
 func screensaverBackdropClearable(config *Config) bool {
-	return screenlockImagePath(config) != ""
+	// The game slideshow and videos show no photo (saverslides.go).
+	return screenlockImagePath(config) != "" && !saverSlidesShowing()
 }
 
 // screensaverBackdropArmed reports whether the first press happened and its
@@ -483,6 +484,11 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 		} else {
 			ss.fadeAlpha = uint8(255 * float64(elapsed) / float64(ssFadeInDuration))
 		}
+	}
+	// The game slideshow and the game videos take the slot when chosen and
+	// they have something to show (saverslides.go).
+	if saverSlidesRender(renderer, config, tickNow) {
+		return true
 	}
 	now := time.Now()
 
@@ -742,6 +748,9 @@ func deactivateScreensaver() {
 	// The uploaded photo is several megabytes of texture; its scaled rendition
 	// stays cached, so the next idle screen uploads it again without decoding.
 	releaseScreenlockTexture()
+	// A game video's decoder stops and the slideshow's pictures go
+	// (saverslides.go).
+	saverSlidesWake()
 }
 
 // lastInputUnixNano tracks when the user last interacted. It is an atomic
@@ -854,7 +863,8 @@ func idleScreenHoldOff(config *Config) bool {
 		// A Synth pattern playing counts as media playing (synth.go), and so
 		// does a Party Mode room with players in it (partymode_net.go).
 		videoHoldsScreenAwake() || synthHoldsScreenAwake() || pmodeHoldsScreenAwake(),
-		installInProgress(),
+		// A computer copying files over USB is use too (usbawake.go).
+		installInProgress() || usbAwakeHolds(),
 		patchInstallBusy(),
 		aiHoldsScreenAwake(),
 	)

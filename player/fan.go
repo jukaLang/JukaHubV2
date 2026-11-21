@@ -9,7 +9,7 @@ package main
 //   - Firmware 1.0.2's driver added user_max_state and rejects (EINVAL, or
 //     silently drops) any cur_state above it, and TrimUI's hardwareservice can
 //     lower that cap. So user_max_state is raised to max_state BEFORE cur_state
-//     is written, never after (spruceOS #1673/#1786).
+//     is written, never after.
 //   - Something else may already drive the fan: TrimUI's hardwareservice, a
 //     CFW script (spruce's adaptive_fan.py / thermal-watchdog) or a kernel
 //     thermal zone bound to the cooling device.
@@ -61,7 +61,7 @@ const (
 	fanFightLimit = 5
 )
 
-// fanStepShares are the spinning steps as shares of max_state: spruce's six
+// fanStepShares are the spinning steps as shares of max_state: six
 // levels on the TG5050 (20, 22, 24, 26, 28, 31 of 31). Below about 20 of 31
 // the fan stalls rather than spinning slowly, so there is no lower step.
 var fanStepShares = []float64{20.0 / 31, 22.0 / 31, 24.0 / 31, 26.0 / 31, 28.0 / 31, 1}

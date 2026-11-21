@@ -138,10 +138,9 @@ single-supplicant guard. On two reboots with this change, Home drew at 9.17
 and 8.94 seconds after kernel start, and the device became reachable over
 Wi-Fi 24.6 and 23.4 seconds after the restart request. Create
 `Apps/JukaHub/data/boot-prefetch.off` to disable the early file read, or
-delete that file to enable it again. TortOS's approximately two-second Brick
-boot
-uses a different, minimal device-specific boot chain. Reaching that range on
-Smart Pro would require a separate bootloader, kernel, and small system built
+delete that file to enable it again. A boot of about two seconds needs a
+different, minimal device-specific boot chain (the Brick image on plastron has
+one). Reaching that range on Smart Pro would require a separate bootloader, kernel, and small system built
 and tested for this board; the stock boot hook cannot skip the time before its
 own Linux kernel starts.
 
@@ -179,7 +178,7 @@ explains every value.
 | `bluetooth` `disable_ertm` | `Y` | `Y` | Older Xbox One pad firmware connects over Bluetooth (the setting Batocera and RetroPie use; Series pads use Bluetooth LE and do not need it). New connections only. |
 | `usbhid` `jspoll` | `2` | `2` | A USB pad that reports itself as a joystick (many DirectInput pads; not Xbox pads, which `xpad` drives) is polled every 2 ms (500 Hz) instead of its own interval. The parameter came in Linux 4.12, so on the 4.9 kernels it is normally absent and skipped. Taken when a pad is plugged in; the built-in controls are not USB HID. |
 | SD/eMMC `queue/scheduler` | `noop` | `none` | Flash has no seek to schedule around. The name differs between the kernels, which is why it moved here from the Speed layer. |
-| GPU devfreq `max_freq` | — | `600000000` | The Mali-G57 capped at 600 MHz in every mode, as spruceOS does, so the A523 runs cooler and the fan quieter; the device is matched as `/sys/class/devfreq/*gpu*`. |
+| GPU devfreq `max_freq` | — | `600000000` | The Mali-G57 capped at 600 MHz in every mode, so the A523 runs cooler and the fan quieter; the device is matched as `/sys/class/devfreq/*gpu*`. |
 
 Left out on purpose: Wi-Fi power save (the AIC8800 / XR829 drivers take it as
 a load-time option or through `iw`, not as a value that can be set and put
@@ -199,8 +198,7 @@ fan setting's, not a layer's.
 
 **The Speed layer.** The package ships one layer, switched on:
 `os/layers/speed` (source: `player/trimui/os-layers/speed/layer.json`). It is
-the tuning fast handheld systems such as TortOS are known for, done with
-values the stock kernel already has: the SD card and internal storage
+load-time tuning done with values the stock kernel already has: the SD card and internal storage
 (`mmcblk0`, `mmcblk1`) get the `noop` scheduler (flash has no seek to schedule
 around; since 2026-11-17 set by the driver layer, as `noop` on 4.9 and `none`
 on 5.15), 512 KB read-ahead and no entropy or I/O accounting work;
@@ -412,8 +410,8 @@ place of the stock startup and menu; the internal storage is never written.
 The package described above is still the stock-firmware session edition; it
 is a different install.
 
-**Boot time.** Home within two seconds is a development target inspired by
-TortOS 2 on plastron; it has **not** been measured on a Smart Pro. The Smart
+**Boot time.** Home within two seconds is a development target; it has
+**not** been measured on a Smart Pro. The Smart
 Pro image still uses TrimUI's bootloader and kernel, so it cannot promise that
 time. It boots from the card without flashing an `.awimg` (TrimUI's format for
 rewriting the internal firmware), which JukaHub OS never does. On

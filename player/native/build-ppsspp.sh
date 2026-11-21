@@ -9,8 +9,8 @@
 #
 # Why: the PPSSPP JukaHub installs for PSP games comes from ben16w/minui-psp,
 # which packages spruceUI's builds, and those lag upstream (1.20.3 while
-# hrydgard/ppsspp is at 1.20.4; CrossMix noted in October 2026 that 1.20.4 has
-# no tg5040 binary at all). This script builds the newest upstream release
+# hrydgard/ppsspp is at 1.20.4; in October 2026 1.20.4 had no tg5040 binary
+# anywhere). This script builds the newest upstream release
 # itself; .github/workflows/ppsspp-trimui.yml runs it when a new release appears
 # (it looks daily) and publishes the result as the rolling release
 # "ppsspp-tg5040" of this repository, and

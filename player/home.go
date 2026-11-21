@@ -333,6 +333,11 @@ func homeActivate(config *Config) {
 		return
 	}
 	id := homeLayout.Focus.Current()
+	// Kiosk / Kid mode: header cards that change the setup or go online
+	// (uimode.go); the screens are gated at switchScene.
+	if !uiModeHomeCardOK(id) {
+		return
+	}
 	// The notification bell opens the same dropdown as the touch target and
 	// the chrome control on other scenes. notifToggle plays its own
 	// activation sound, so return before the generic one.

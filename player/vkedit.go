@@ -435,7 +435,8 @@ func vkApplyAutoShift() {
 // vkSecretTarget is a field whose text must not be shown, copied or learned.
 func vkSecretTarget() bool {
 	switch vkTarget {
-	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
+	case vkTargetWiFi, vkTargetGroqKey, bootLockVKTarget, feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget,
+		raachPassVKTarget, tailscaleKeyVKTarget, screenScraperPassVKTarget:
 		return true
 	case vkTargetRommServer:
 		return rommCloud.editToken
@@ -465,7 +466,8 @@ func vkStripModeNow() vkStripMode {
 		return vkStripTermTokens
 	case vkTargetWiFi, vkTargetPSRemote, vkTargetMemory, vkTargetUnit,
 		vkTargetRA, vkTargetMusic, vkTargetGameArgs, vkTargetToolArgs, vkTargetGroqKey, bootLockVKTarget,
-		feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
+		feArchivePassVKTarget, homebrewKeyVKTarget, nasPassVKTarget, raachPassVKTarget, tailscaleKeyVKTarget,
+		screenScraperPassVKTarget:
 		return vkStripHidden
 	case vkTargetRommServer:
 		if rommCloud.editToken {

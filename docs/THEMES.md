@@ -128,7 +128,50 @@ experience packs, restoring a backup and a config reload. The usual readability
 rules still apply, so a colour too close to the background (White on Light) is
 darkened for the ring and for accent text rather than disappearing. It is
 stored as `"menuColour": "theme" | "sky" | "mint" | "lime" | "amber" | "coral" |
-"rose" | "violet" | "indigo" | "teal" | "white"` in the custom variables.
+"rose" | "violet" | "indigo" | "teal" | "white"` in the custom variables, or as
+any `"#rrggbb"` picked with the colour picker (below). Look packs still take
+only the names.
+
+## Your own colours
+
+Below Menu colour, Theme & look has four more colour rows that sit on top of
+whatever theme is on, the same way Menu colour does:
+
+| Row | Changes | Stored as |
+|---|---|---|
+| **Background colour** | The page under everything. Without a Surface colour, the theme's panels, cards and borders are re-mixed from it, and if the theme's text no longer reads on it (under 4.5:1) the text turns black or white. | `colourBackground` |
+| **Surface colour** | Panels, bars and raised cards (the raised and alternate shades are mixed from it). | `colourSurface` |
+| **Text colour** | Labels and lists; the dimmer secondary and tertiary text is mixed from it toward the background. | `colourText` |
+| **Focus ring colour** | The ring around what is selected, on Home and on every other screen. It is kept at 3:1 against the surfaces, like the accent. | `colourFocus` |
+
+Each row starts at *Theme's own* (stored as `""`); Left/Right step through the
+colour palettes' colours for that row. **A opens the colour picker**, as it now
+does on Menu colour and on Button, Label and Input colour too:
+
+- a swatch of the new colour beside the one it replaces, its `#RRGGBB`, and its
+  contrast against the colour it is read with ("4.8:1 against the background ·
+  reads well");
+- **Red, Green and Blue sliders** from 0 to 255: Up/Down picks one,
+  Left/Right moves it by 5 (hold to repeat), L1/R1 (PgUp/PgDn) by 1 (hold to
+  repeat), a tap on a track sets it there;
+- **X** types the colour on the keyboard (`#RRGGBB` or `R,G,B`);
+- **Y** (Shift+Y backwards) steps through the row's presets: the theme's own
+  colour, each palette's colour for that row and the row's swatches;
+- **A** applies, **B** cancels. Nothing behind the sheet changes before A.
+
+The colours stay through everything that repaints the theme, like Menu colour.
+High contrast keeps its own black-and-white palette while it is on.
+
+## Colour palettes
+
+**Colour palette** sets background, surface, text, menu (accent) and focus ring
+colours in one go: *Classic* (black and white),
+*Night*, *Paper* (a light one), *Sakura*, *Forest*, *Ocean*, *Amber* and *Mono*.
+Every palette's text reads at 7:1 or better on its background and its accent
+and ring at 3:1 or better. *Theme's own* clears all five. A list with a line on
+each opens on A; the row reads *Your own mix* once a single colour was changed.
+**Reset colours** (with a confirmation) puts every colour row, Button, Label and
+Input colour and Glass opacity back to the theme's.
 
 ## Glass style
 
@@ -141,6 +184,24 @@ corner), and Home cards float on a soft shadow. Overlay sheets, small chips and
 pills, and panes over videos or games get the light and rim but not the blur.
 Realistic is off while Reduce Transparency or High contrast is on. It is stored
 as `"glassStyle": "classic" | "realistic"` in the custom variables.
+
+## Glass opacity
+
+**Glass opacity** (10 % to 100 %, default 100 %) makes the glass panes, the focused card and row fills, the Tabs
+Home's tab pill and list highlight, and Realistic glass's frost more see-through,
+so the wallpaper shows through them. Edges and focus rings stay as they are.
+Reduce transparency keeps everything solid whatever it says. Stored as
+`"mainColourOpacity": "10"` … `"100"`.
+
+## Animations
+
+**Animations** (under Reduce motion) is *Comfy* (the default, today's
+timings), *Snappy* (the same motions in 60 % of the time: the fade between
+screens, menus, panels and sheets arriving, and the focus ring's glide) or
+*Off*. Off is Reduce motion itself: choosing it turns the Reduce motion switch
+(and its Quick Settings tile) on, and Comfy or Snappy turn it off again. A
+Power mode other than Default decides on its own, as it does for Reduce motion.
+Stored as `"animSpeed": "comfy" | "snappy"`.
 
 ## Liquid glass concepts
 

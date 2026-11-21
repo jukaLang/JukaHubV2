@@ -285,6 +285,11 @@ func chooseGameLauncher(game libraryGame, launch func(launcher string)) {
 		if dolphinLauncherForGame(game, launch) {
 			return
 		}
+		// A PS2 game starts in the ARMSX2 core once it, its resources and the
+		// player's BIOS are in place, set up first when not (ps2.go).
+		if ps2LauncherForGame(game, launch) {
+			return
+		}
 		// A WASM-4 game installs the WASM-4 core first, then plays (wasm4.go).
 		if wasm4LauncherForGame(game, launch) {
 			return

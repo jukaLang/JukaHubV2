@@ -20,7 +20,7 @@ package main
 //
 // The rings blinked, and kept blinking through three rounds of fixes, because
 // of how a colour reaches them. A new effect colour only shows once the effect
-// is re-armed, and the community's way to re-arm (spruceOS, LED'oh) writes the
+// is re-armed, and the usual way to re-arm writes the
 // effect through 0 — "disable", a dark ring — before "static". Every colour
 // change was therefore a dark frame on a lit ring, and so was every repaint
 // after something else touched the driver. So the writer now never re-arms a
@@ -161,6 +161,9 @@ var ledAnimState struct {
 	// entries a frame holds.
 	frameOK, frameSeen bool
 	frameLEDs          int
+	// fill is the ledAnimFill the colour was last landed with: the share of
+	// the LEDs (on the frame path) or of the zones lit, 0 for all of them.
+	fill int32
 
 	// hue is what the rings show at full value, landed by the last colour
 	// write; hueSet is false until the first one of a take.
@@ -495,6 +498,35 @@ func ledAnimFrameText(hue [3]uint8, n int) string {
 	return strings.Repeat(fmt.Sprintf("%02X%02X%02X ", hue[0], hue[1], hue[2]), n)
 }
 
+// ledAnimFill is the share of the lights a layer wants lit, in thousandths:
+// the battery level and the charging bar (ledbattlevel.go). 0 lights them all.
+// The LED loop sets it before each write; a change lands the colour again
+// (applyLEDAnim). Any goroutine.
+var ledAnimFill atomic.Int32
+
+// ledAnimLitCount is how many of n LEDs or zones a fill lights: all for 0, at
+// least one otherwise. Pure.
+func ledAnimLitCount(fill int32, n int) int {
+	if fill <= 0 || fill >= 1000 || n <= 0 {
+		return n
+	}
+	lit := (int(fill)*n + 999) / 1000
+	return min(max(lit, 1), n)
+}
+
+// ledAnimFrameTextFill is ledAnimFrameText with only the first LEDs of the
+// fill lit and the rest dark. Pure.
+func ledAnimFrameTextFill(hue [3]uint8, n int, fill int32) string {
+	if n <= 0 {
+		n = ledAnimFrameLEDs
+	}
+	lit := ledAnimLitCount(fill, n)
+	if lit >= n {
+		return ledAnimFrameText(hue, n)
+	}
+	return ledAnimFrameText(hue, lit) + strings.Repeat("000000 ", n-lit)
+}
+
 // ledAnimFrameMatch judges a frame_hex read-back against a hue: readable when
 // at least one LED parsed, shows when the lit LEDs are mostly that hue (the
 // Brick's frame has unlit slots, and a level too low to hold a hue is not
@@ -559,6 +591,7 @@ func ledAnimTake(dir string) {
 	st.scaleBack = 0
 	st.repaints, st.yielded = 0, false
 	st.land, st.why = false, ""
+	st.fill = 0
 	st.static = ledAnimStaticIndex(ledAnimRead(dir, "effect_names"))
 	// The zones are probed again on every take: a firmware update or a
 	// suspend can change what is writable.
@@ -705,7 +738,7 @@ func ledAnimWriteFrame(dir string, hue [3]uint8) error {
 		_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "0")
 		st.frameArmed = true
 	}
-	if err := writeLEDFile(filepath.Join(dir, ledAnimFrameNode), ledAnimFrameText(hue, st.frameLEDs)); err != nil {
+	if err := writeLEDFile(filepath.Join(dir, ledAnimFrameNode), ledAnimFrameTextFill(hue, st.frameLEDs, st.fill)); err != nil {
 		return err
 	}
 	_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
@@ -718,6 +751,9 @@ func ledAnimWriteFrame(dir string, hue [3]uint8) error {
 func ledAnimLand(dir string, hue [3]uint8, path, why string) error {
 	st := &ledAnimState
 	hex := fmt.Sprintf("%02X%02X%02X", hue[0], hue[1], hue[2])
+	// A layer that lights only part of them (ledbattlevel.go): the first LEDs
+	// of the frame, or the first zones, the primary one always.
+	st.fill = ledAnimFill.Load()
 	if strings.HasPrefix(why, "external") {
 		// Something else may have switched the lights off: on again, here
 		// rather than in the check (a switch write can restart the effect).
@@ -745,8 +781,12 @@ func ledAnimLand(dir string, hue [3]uint8, path, why string) error {
 			return err
 		}
 	} else {
-		col := hex + " "
+		lit := ledAnimLitCount(st.fill, len(st.zones))
 		for i, z := range st.zones {
+			col := hex + " "
+			if i >= lit {
+				col = "000000 "
+			}
 			// The primary zone's failure is the device's; another zone that
 			// stops answering keeps the rest lit.
 			if err := writeLEDFile(filepath.Join(dir, "effect_rgb_hex_"+z.name), col); err != nil && i == 0 {
@@ -996,6 +1036,11 @@ func applyLEDAnim(dev ledDevice, r, g, b uint8) error {
 	ledAnimProbeDue(dev.Dir, now)
 	ledAnimCheck(dev.Dir, now, level)
 
+	if level > 0 && st.hueSet && !st.land && ledAnimFill.Load() != st.fill {
+		// A layer lights more or fewer of them (ledbattlevel.go): the colour
+		// lands again with the new share.
+		st.land, st.why = true, "fill"
+	}
 	if level <= 0 {
 		// Dark wanted: no colour is written now (the next lit frame lands its
 		// own, already dark), and no dip is left half done.

@@ -78,6 +78,10 @@ type netplayPlan struct {
 
 	// AppendConfig is the --appendconfig overlay a host is started with.
 	AppendConfig string
+
+	// Link is the wireless-adapter mode and the joiner's player slot
+	// (netplay_link.go).
+	Link netplayLinkOpts
 }
 
 // netplayCoreSet maps a console to the libretro cores that can carry its link
@@ -599,6 +603,9 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 		}
 		plan.AppendConfig = cfg
 	}
+	// A disk sync, the player slot, gpSP's wireless adapter and the player
+	// count, for this launch only (netplay_link.go).
+	netplayLinkBeforeLaunch(&plan)
 	name, args := netplayCommand(plan)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)

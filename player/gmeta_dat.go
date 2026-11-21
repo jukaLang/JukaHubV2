@@ -554,9 +554,18 @@ func gmetaCollectionFor(system string) string {
 
 // gmetaROMCRCs is a ROM's CRC32 the way the databases may list it: the whole
 // file, and the file without its iNES header or SNES copier header (the sets
-// disagree on which). A zip gives its single ROM's CRC from its directory. Disc
-// images and anything over gmetaCRCMaxBytes are matched by name instead.
+// disagree on which). A zip gives its single ROM's CRC from its directory, and
+// so does a .7z (sevenzip.go). Disc images and anything over gmetaCRCMaxBytes
+// are matched by name instead.
 func gmetaROMCRCs(path string) []string {
+	// A .7z before the index: an index written before 7z directories were
+	// read holds the CRC of the archive itself, which no database lists.
+	if strings.EqualFold(filepath.Ext(path), ".7z") {
+		if crc, ok := sevenZipROMCRC(path); ok {
+			return []string{fmt.Sprintf("%08X", crc)}
+		}
+		return nil
+	}
 	// The library index's background pass keeps them (libindex_crc.go).
 	if crcs, ok := libIndexKnownCRCs(path); ok {
 		return crcs

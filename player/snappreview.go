@@ -3,8 +3,8 @@ package main
 // snappreview.go — optional video snaps in the Games Library.
 //
 // Box art tells you what a game is; a three-second clip tells you what it looks
-// like in motion. Knulli and the Batocera family show one for the focused game,
-// and the library already had the half that matters: a preview box next to the
+// like in motion. The Batocera family shows one for the focused game, and the
+// library already had the half that matters: a preview box next to the
 // list. What it did not have was a way to play a video while the D-pad is still
 // in use, on a 1 GB device, without disturbing the real video player.
 //

@@ -1,7 +1,6 @@
 package main
 
-// titlescroll.go — long titles scroll on the focused item (NextUI's
-// "scrolling titles").
+// titlescroll.go — long titles scroll on the focused item.
 //
 // A list row, a cover or a Home card fits its title with an ellipsis, which
 // makes "The Legend of Zelda: Oracle of Seasons" and "… Oracle of Ages" the

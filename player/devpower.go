@@ -131,11 +131,16 @@ func devPowerAfterShutdown() {
 	}
 	verb := devPowerVerb(a)
 	backlightOn()
+	// Safe power off: programs with files open on the card are asked to
+	// close, then sync and a read-only card; undone if verb fails
+	// (safepoweroff.go).
+	undoSafe := safePowerOffPrepare(verb)
 	if err := syncDisks(); err != nil {
 		logWarn("power", "sync before %s failed: %v", verb, err)
 	}
 	if err := devPowerRun(verb); err != nil {
 		logWarn("power", "%s failed: %v", verb, err)
+		undoSafe()
 	}
 }
 
@@ -309,6 +314,8 @@ func autoSleepBlocker(config *Config) string {
 		return "a download is running"
 	case ytdlBgActive():
 		return "a video is downloading in the background"
+	case usbAwakeHolds():
+		return "a computer is connected over USB" // file transfer (usbawake.go)
 	case idleScreenHoldOff(config):
 		return "something is playing or open"
 	}

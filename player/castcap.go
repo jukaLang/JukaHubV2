@@ -723,7 +723,14 @@ func castCaptureFrame(renderer *sdl.Renderer, now time.Time) {
 // — so the buffer is sized for the whole output, which the viewport never
 // exceeds, and the frame is the viewport's size.
 func castReadFrame(renderer *sdl.Renderer) (w, h, stride int, sx, sy float32, ok bool) {
-	if renderer == nil {
+	return castReadFrameInto(renderer, &castUI.buf)
+}
+
+// castReadFrameInto is castReadFrame into *buf: the VNC server reads into a
+// buffer of its own (vncserver_frames.go), since castUI.buf may be the
+// encoder's at that moment.
+func castReadFrameInto(renderer *sdl.Renderer, buf *[]byte) (w, h, stride int, sx, sy float32, ok bool) {
+	if renderer == nil || buf == nil {
 		return 0, 0, 0, 1, 1, false
 	}
 	ow, oh, err := renderer.GetOutputSize()
@@ -746,11 +753,11 @@ func castReadFrame(renderer *sdl.Renderer) (w, h, stride int, sx, sy float32, ok
 	}
 	stride = int(ow) * 4
 	need := stride * int(oh)
-	if cap(castUI.buf) < need {
-		castUI.buf = make([]byte, need)
+	if cap(*buf) < need {
+		*buf = make([]byte, need)
 	}
-	castUI.buf = castUI.buf[:need]
-	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ABGR8888, unsafe.Pointer(&castUI.buf[0]), stride); err != nil {
+	*buf = (*buf)[:need]
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ABGR8888, unsafe.Pointer(&(*buf)[0]), stride); err != nil {
 		return 0, 0, 0, 1, 1, false
 	}
 	return w, h, stride, sx, sy, true

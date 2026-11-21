@@ -518,6 +518,9 @@ func steamRemoteDo(g steamGame, st steamRemoteState, action steamAction, done fu
 		ShowToast(steamNoPCText(), ToastKindInfo)
 		return
 	}
+	if action != steamActRun && !uiModeGate(uiFeatSetup) { // Kiosk: play only, no installs (uimode.go)
+		return
+	}
 	verb := "Starting "
 	if action == steamActInstall {
 		verb = "Installing "

@@ -144,8 +144,9 @@ func homeTabsFavouriteItems(c *Config) []homeTabItem {
 			listed[ref] = true
 		}
 	}
+	// By the library's name order: a leading "The" ignored (libsort_articles.go).
 	sort.SliceStable(games, func(i, j int) bool {
-		return strings.ToLower(games[i].Title) < strings.ToLower(games[j].Title)
+		return librarySortKey(games[i].Title) < librarySortKey(games[j].Title)
 	})
 	out := games
 	for _, fav := range homeTabsFavList() {

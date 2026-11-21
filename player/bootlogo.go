@@ -415,6 +415,9 @@ type bootLogoArtwork struct {
 	Word    []uint8
 	WordW   int
 	WordH   int
+	// CustomPath is a look pack's own picture to write instead of the
+	// JukaHub logo, staged by the pack (lookpacks_ui.go); "" is the logo.
+	CustomPath string
 }
 
 // bootLogoWordmark rasterises the wordmark for a screen h pixels tall, with the
@@ -434,6 +437,9 @@ func bootLogoWordmark(h int) ([]uint8, int, int, bool) {
 func bootLogoPicture(info bmpInfo, art bootLogoArtwork) ([]byte, error) {
 	if art.ScreenW != info.Width || art.ScreenH != info.Height {
 		return nil, fmt.Errorf("the boot logo is %dx%d now, not the %dx%d it was checked at; try again", info.Width, info.Height, art.ScreenW, art.ScreenH)
+	}
+	if art.CustomPath != "" {
+		return lookpackBootLogoPicture(info, art.CustomPath)
 	}
 	src := brandLogoSource()
 	if src == nil {
@@ -550,6 +556,7 @@ type bootLogoState struct {
 	BackupPath  string    `json:"backupPath,omitempty"`
 	BackupSHA   string    `json:"backupSha256,omitempty"`
 	OursSHA     string    `json:"oursSha256,omitempty"`
+	Custom      bool      `json:"custom,omitempty"` // a look pack's picture, not the JukaHub logo (lookpacks_ui.go)
 	Original    string    `json:"originalBackup,omitempty"`
 	InstalledAt time.Time `json:"installedAt"`
 	RestoredAt  time.Time `json:"restoredAt"`
@@ -632,7 +639,8 @@ func bootLogoStateSaysOurs() bool {
 		return false
 	}
 	st := bootLogoLoadState()
-	if !st.Installed || st.Interrupted || st.OursSHA == "" {
+	// A look pack's picture is not the frame the boot animation starts from.
+	if !st.Installed || st.Interrupted || st.OursSHA == "" || st.Custom {
 		return false
 	}
 	return st.Model == "" || st.Model == string(DetectDevice())
@@ -864,6 +872,7 @@ func bootLogoInstall(art bootLogoArtwork) (string, error) {
 		BackupPath:  backupPath,
 		BackupSHA:   backupSHA,
 		OursSHA:     oursSHA,
+		Custom:      art.CustomPath != "",
 		Original:    st.Original,
 		InstalledAt: bootLogoNow(),
 	}
@@ -1252,9 +1261,9 @@ func bootLogoRowDetail(*Config) string {
 	case bootLogoStatusOurs:
 		return "Shown at power-on · A twice restores the previous logo"
 	case bootLogoStatusOriginal:
-		return "Shown at power-on · A twice installs the JukaHub logo"
+		return "Shown at power-on · A twice installs " + lookpackBootLogoWhat()
 	case bootLogoStatusCustom:
-		return "Set by another tool · A twice installs the JukaHub logo"
+		return "Set by another tool · A twice installs " + lookpackBootLogoWhat()
 	case bootLogoStatusDamaged:
 		return "The last write was cut short · A twice restores the logo"
 	}
@@ -1306,7 +1315,7 @@ func bootLogoRowOpen(*Config) {
 	u.mu.Unlock()
 	if !armed {
 		if op == bootLogoOpInstall {
-			bootLogoToast("Press A again to install the JukaHub boot logo — the current one is kept on the SD card", ToastKindInfo)
+			bootLogoToast(lookpackBootLogoArmText(), ToastKindInfo)
 		} else {
 			bootLogoToast("Press A again to put the previous boot logo back", ToastKindInfo)
 		}
@@ -1321,7 +1330,7 @@ func bootLogoRowOpen(*Config) {
 			bootLogoToast("Could not draw the wordmark for the boot logo", ToastKindError)
 			return
 		}
-		art = bootLogoArtwork{ScreenW: p.Info.Width, ScreenH: p.Info.Height, Word: word, WordW: ww, WordH: wh}
+		art = bootLogoArtwork{ScreenW: p.Info.Width, ScreenH: p.Info.Height, Word: word, WordW: ww, WordH: wh, CustomPath: lookpackStagedBootLogo()}
 	}
 	if !bootLogoBegin(op) {
 		bootLogoToast("The boot logo is busy; try again in a moment", ToastKindInfo)

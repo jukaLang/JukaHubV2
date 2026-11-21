@@ -234,6 +234,8 @@ func captureCompanionScreen(renderer *sdl.Renderer) {
 	}
 	castTick()
 	castCaptureFrame(renderer, time.Now())
+	// The VNC server's viewers get the same frame (vncserver_frames.go).
+	vncCaptureFrame(renderer)
 	castDrawLiveIndicator(renderer)
 	// The REC pill while the screen recorder runs (screenrec.go).
 	screenRecDrawIndicator(renderer)

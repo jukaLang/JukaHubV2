@@ -62,6 +62,8 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowBackground, "Background playback", "Keep playing when you leave the player. In the player, Y + Left toggles it too."},
 		{msRowGameMusic, "Keep music playing in games", "Music that plays when you start a game carries on under it, mixed with the game's sound (speaker or USB DAC). A Bluetooth headset plays one app at a time, so there the music pauses."},
 		{msRowGameLevel, "Music volume in games", "How loud the music plays under a game, so the game's own sound stays on top."},
+		{msRowGameQuiet, "Quiet the game while music plays", "Music started from the in-game menu (Select + L2) mutes a RetroArch game's own sound until the music stops."},
+		{msRowMusicTidy, "Tidy the Music folder", "After a library scan, songs loose in Music move into Music/Singles and an album folder dropped into Music moves to Music/Artist/Album. Nothing is ever overwritten."},
 		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio. With a USB DAC, lossless tracks play at their own rate and bit depth, unscaled (use the DAC's volume); UI sounds are muted while they do."},
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz. Open it with G in the player."},
 		{msRowSpatialMode, "Spatial audio", spatialModeHint},
@@ -101,6 +103,9 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 	if v, ok := spatialPanelValue(row.kind, config); ok {
 		return v
 	}
+	if v, ok := musicExtrasPanelValue(row.kind, config); ok {
+		return v // musictidy.go, ingame_music.go
+	}
 	switch row.kind {
 	case msRowLayout:
 		return musicLayoutFromConfig(config).label()
@@ -137,6 +142,10 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 	// The spatial rows save and sound for themselves (spatial_ui.go).
 	if spatialPanelAdjust(row.kind, dir, config) {
+		return true
+	}
+	// Two switches that save and sound for themselves (musictidy.go).
+	if musicExtrasPanelAdjust(row.kind, config) {
 		return true
 	}
 	switch row.kind {

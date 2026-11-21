@@ -52,7 +52,8 @@ var gameAssistLive struct {
 
 // gameAssistEnabled reports Settings → Voice & AI → Game assistant.
 func gameAssistEnabled(c *Config) bool {
-	if c == nil {
+	// Kiosk / Kid mode: the AI stays off with the voice orb (uimode.go).
+	if c == nil || uiModeLocked() {
 		return false
 	}
 	return customBool(c.Variables.Custom, gameAssistKey, true)

@@ -9,7 +9,7 @@ package main
 //     Nintendo core), so a list of file names reads as a list of consoles.
 //   - emuDesktopSystems are the consoles a handheld of this class cannot
 //     emulate: the Windows emulator that plays each one (Roms/XBOX360 → Xenia
-//     Canary), and the honest reason the handheld cannot, so a Roms/PS2 folder
+//     Canary), and the honest reason the handheld cannot, so a Roms/PS3 folder
 //     on the Smart Pro says "Not supported" instead of offering an install that
 //     could never work. The original Xbox is the exception on the Smart Pro,
 //     which plays it through the experimental hakuX port (hakux.go); its tile
@@ -49,6 +49,7 @@ var emuCoreSystems = []emuCoreSystem{
 	{"ppsspp", "PlayStation Portable", emuFamilyPlayStation},
 	{"pcsx2", "PlayStation 2", emuFamilyPlayStation},
 	{"lrps2", "PlayStation 2", emuFamilyPlayStation},
+	{"armsx2", "PlayStation 2", emuFamilyPlayStation},
 	{"play", "PlayStation 2", emuFamilyPlayStation},
 	{"mupen64plus", "Nintendo 64", emuFamilyNintendo},
 	{"parallel_n64", "Nintendo 64", emuFamilyNintendo},
@@ -167,7 +168,8 @@ type emuDesktopSystem struct {
 // GameCube and Wii rows count only while the handheld does not play them
 // (emuDesktopSystemFor): the Smart Pro S does by default, in RetroArch's
 // Dolphin core, and an A133P model does when its player asks to try
-// (dolphin.go).
+// (dolphin.go). The PlayStation 2 row likewise counts only where PS2 is off:
+// every TrimUI model plays it in RetroArch's ARMSX2 core by default (ps2.go).
 var emuDesktopSystems = []emuDesktopSystem{
 	{
 		System:   "Xbox",
@@ -179,7 +181,7 @@ var emuDesktopSystems = []emuDesktopSystem{
 		System:   "PlayStation 2",
 		Folders:  []string{"ps2", "playstation 2", "playstation2", "sony - playstation 2"},
 		Emulator: "PCSX2",
-		Reason:   "PlayStation 2 emulation needs a far faster CPU and GPU than the TrimUI chips (A133P, A523) — a PC, or a recent Snapdragon-class phone.",
+		Reason:   "On a TrimUI handheld PS2 games play in RetroArch's ARMSX2 core while Settings → Games & emulators → PlayStation 2 is on (light games at full speed); elsewhere PCSX2 on a PC plays them.",
 	},
 	{
 		System:   "PlayStation 3",
@@ -231,8 +233,8 @@ var emuDesktopSystems = []emuDesktopSystem{
 }
 
 // emuDesktopSystemFor finds the desktop-only console a Roms/ folder or system
-// name belongs to. GameCube and Wii are not desktop-only on a handheld that
-// plays them now (dolphinPlaysSystemHere).
+// name belongs to. GameCube, Wii and PlayStation 2 are not desktop-only on a
+// handheld that plays them now (dolphinPlaysSystemHere, ps2PlaysSystemHere).
 func emuDesktopSystemFor(name string) (emuDesktopSystem, bool) {
 	key := strings.ToLower(strings.TrimSpace(name))
 	if key == "" {
@@ -248,7 +250,7 @@ func emuDesktopSystemFor(name string) (emuDesktopSystem, bool) {
 		if !match {
 			continue
 		}
-		if dolphinPlaysSystemHere(sys.System) {
+		if dolphinPlaysSystemHere(sys.System) || ps2PlaysSystemHere(sys.System) {
 			return emuDesktopSystem{}, false
 		}
 		return sys, true
@@ -282,6 +284,12 @@ func emuLibraryLauncherHint(system string) string {
 	}
 	if strings.EqualFold(strings.TrimSpace(system), godotSystemName) {
 		return godotLauncherHint() // the Godot port's install (godot.go)
+	}
+	if hint := extraSystemLauncherHint(system); hint != "" {
+		return hint // NAOMI, DSi, OpenBOR, CoCo (extra_systems.go)
+	}
+	if hint := ps2LauncherHint(system); hint != "" {
+		return hint // ARMSX2's setup on the first start (ps2.go)
 	}
 	sys, ok := emuDesktopSystemFor(system)
 	if !ok {

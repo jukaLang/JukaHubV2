@@ -298,7 +298,7 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 	updates := make([]coreUpdate, 0, len(entries))
 	for _, entry := range entries {
 		build, ok := active[entry.Core]
-		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) {
+		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) || ps2ManagesCore(entry.Core) {
 			continue
 		}
 		// The checksum cache is keyed by size and modification time, so a core

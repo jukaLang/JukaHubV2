@@ -18,7 +18,7 @@ package main
 //     or DOS game): every PDF or EPUB in it, and the text files whose name
 //     says manual, guide, readme, walkthrough or FAQ;
 //   - the console's folders: Roms/<SYS>/manuals, manual, docs, guides,
-//     media/manuals (Skraper), images/manuals; Batocera, Knulli and RetroBat
+//     media/manuals (Skraper), images/manuals; Batocera and RetroBat
 //     scrape to manuals/<stem>-manual.pdf and write it into gamelist.xml's
 //     <manual> tag, which is read too;
 //   - the frontends' media folders beside the Roms folder (the card's root on

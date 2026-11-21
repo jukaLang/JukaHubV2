@@ -554,6 +554,11 @@ func gmetaPlayWith(game libraryGame, st *gmetaState, launcher string) {
 			ShowToast("Starting from a save needs save-state resume (savestateResume in the config)", ToastKindWarning)
 			return
 		}
+		if raachHardcoreAhead(launcher) {
+			// RetroArch would refuse the state (raach_settings.go).
+			ShowToast("Hardcore mode is on: RetroArch loads no states. Settings → RetroAchievements", ToastKindWarning)
+			return
+		}
 		if err := gmetaStageState(*st); err != nil {
 			ShowToast("Cannot prepare "+gmetaStateLabel(*st)+": "+firstLine(err.Error()), ToastKindError)
 			return
@@ -743,6 +748,9 @@ func gmetaDetailsAction(act tbxAction) {
 
 // gmetaOpenTags opens the tag sheet over the page.
 func gmetaOpenTags() {
+	if !uiModeGate(uiFeatSetup) { // Kiosk / Kid mode: tags shape Kid mode's library (uimode.go)
+		return
+	}
 	gmetaTagUI.open = true
 	gmetaTagUI.tags = gmetaAllTags()
 	gmetaTagUI.cursor = 0

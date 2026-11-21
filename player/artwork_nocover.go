@@ -196,7 +196,8 @@ func runGameCoverRemove(game libraryGame, card string) {
 
 	var files []gameResetFile
 	if !gameCoverStemShared(game) {
-		for _, p := range []string{romArtworkPath(rom, root), playShotCoverPath(rom, root)} {
+		// With its screenshot and title screen (artstyle.go).
+		for _, p := range append([]string{romArtworkPath(rom, root), playShotCoverPath(rom, root)}, artStyleKindPaths(rom, root)...) {
 			if p != "" && regularFile(p) {
 				files = append(files, gameResetFile{Path: p, Kind: "jukahub"})
 			}
@@ -295,7 +296,7 @@ func runGameCoverRestore(game libraryGame) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), artChooseTimeout)
 		defer cancel()
-		data, err := fetchROMArtworkFor(ctx, nil, artworkBaseURL, rom, romGameStem(rom.Path))
+		data, err := fetchROMCoverAllSources(ctx, nil, artworkBaseURL, rom, romGameStem(rom.Path))
 		if err == nil {
 			err = gmetaWriteCache(dest, data)
 		}

@@ -237,7 +237,7 @@ func TestCfgdocWriteScenesReplacesAndAdds(t *testing.T) {
 func TestCfgdocSecretKeyNames(t *testing.T) {
 	for key, secret := range map[string]bool{
 		"groq_api_key": true, "openaiApiKey": true, "wifiPassword": true, "github_token": true,
-		"clientSecret": true, "inputProfileHotkey": false, "weatherUnit": false, "keyboardLayout": false,
+		"clientSecret": true, "inputProfileHotkey": false, "weatherUnit": false, "keyboardLayout": false, "aiTranslateURL": true,
 	} {
 		if got := cfgdocIsSecretKey(key); got != secret {
 			t.Errorf("cfgdocIsSecretKey(%q) = %v, want %v", key, got, secret)

@@ -405,7 +405,10 @@ func homeContinueStateFor(it FavoriteItem) HomeContinueState {
 	case "game":
 		st.Kind, st.Chip, st.Action = "game", "Continue playing", "Play"
 		if g, ok := it.Data.(recentGame); ok {
-			st.Preview = homeArtPreviewJob(g)
+			// Where it was left (its newest save-state picture), else its box
+			// art (home_dashboard.go).
+			st.Preview = homeDashContinueJob(g)
+			gameWarmNoteRecent(g) // read ahead for Play (gamewarm.go)
 		}
 	case "iptv":
 		st.Chip, st.Action = "Continue watching", "Watch"

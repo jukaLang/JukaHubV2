@@ -619,11 +619,22 @@ func stickCalSettingsRows() []setRow {
 	out = append(out, vcursorModeSettingsRows()...)
 	// "In-game menu": Select + L2 over a game (gamemenu.go), a handheld's row.
 	out = append(out, gameMenuSettingsRow())
+	// "In-game menu entries": which rows it shows (gamemenu_entries.go).
+	out = append(out, gameMenuEntriesSettingsRow())
 	// "Menu button: voice" (voiceorb.go), a handheld's row.
 	out = append(out, voiceOrbSettingsRows()...)
+	// "Menu button on Home" (voice orb or Quick menu) and "Quick menu:
+	// Backgrounds only" (quickmenu.go).
+	out = append(out, quickMenuSettingsRows()...)
 	// "Hold Menu: screenshot" (menushot.go), a handheld's row.
 	out = append(out, menuShotSettingsRow())
+	// "Hold Menu in a game": screenshot, game switcher or nothing
+	// (menuhold_action.go), a TrimUI's row.
+	out = append(out, menuHoldGameSettingsRow())
 	// "Select + R1: screenshot" in a game (menushot.go), a TrimUI's row.
 	out = append(out, gameShotChordSettingsRow())
+	// "F1 key" / "F2 key" on a Brick, "Home key" / "Home key in a game" on a
+	// Smart Pro S (frontkeys.go, frontkeys_home.go).
+	out = append(out, frontKeySettingsRows()...)
 	return append(out, rows[1:]...)
 }

@@ -665,6 +665,7 @@ var closeAllNeverRules = [...]closeAllRule{
 	{"pipewire", '^', ""},
 	{"dbus", '^', ""},
 	{"syncthing", '=', ""},
+	{"tailscaled", '=', ""}, // remote access (tailscaled.go)
 }
 
 func closeAllRuleMatch(r closeAllRule, lower string) bool {

@@ -162,7 +162,7 @@ func homeEditOpen(config *Config) {
 	if config == nil {
 		config = appConfig
 	}
-	if config == nil || homeEdit.open {
+	if config == nil || homeEdit.open || !uiModeGate(uiFeatSetup) { // Kiosk / Kid mode (uimode.go)
 		return
 	}
 	if !homeLayoutActive || homeLayout == nil {
@@ -1470,6 +1470,9 @@ func homeActivateDynamic(config *Config, id HomeFocusID) bool {
 		return true
 	case homeTileApp:
 		homeActivateApp(config, ref)
+		return true
+	case homeTileGame:
+		gamePinPlay(config, gamePinPathOf(ref)) // gamepin.go
 		return true
 	}
 	return false

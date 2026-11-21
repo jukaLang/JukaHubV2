@@ -224,6 +224,8 @@ func syncthingPanelRows() []saveManagerRow {
 		add(syncthingRowRef{kind: syncthingRowInfo}, saveManagerRow{label: "Another Syncthing runs here", value: "Port 8384",
 			detail: "Left alone. If it shares these save folders too, keep only one of the two."})
 	}
+	// "Also sync" folders and the web GUI on the network (syncthing_more.go).
+	syncthingExtraRows(s, add)
 	add(syncthingRowRef{kind: syncthingRowLAN}, saveManagerRow{label: "LAN only", value: syncthingOnOff(syncthingLANOnlySetting(appConfig)),
 		detail:  "On: same Wi-Fi only. Off: also over the internet (relays), e.g. a phone on mobile data.",
 		hint:    hintLine(FooterHint{"A", "Switch"}),
@@ -307,6 +309,8 @@ func syncthingPanelActivate() {
 		})
 	case syncthingRowConflicts:
 		ShowToast("Open Files, find the *.sync-conflict-* copy beside the save, keep one", ToastKindInfo)
+	case syncthingRowExtra, syncthingRowWebGUI, syncthingRowWebAddr:
+		syncthingExtraActivate(ref, s)
 	case syncthingRowLAN:
 		on := !syncthingLANOnlySetting(appConfig)
 		syncthingSetSetting(appConfig, syncthingLANOnlyKey, on)

@@ -9,15 +9,15 @@ package main
 // given (2026-11-13: "headphones connect, sound still on the speakers"):
 //
 //   - The stock firmware does not start bluealsa at all (its start line is
-//     commented out; OS-Trimux PR #1), and the stock bluez-alsa is 3.1.0
-//     (spruceOS PR #1765). JukaHub starts it — and a bluealsa someone else
+//     commented out; OS-Trimux PR #1), and the stock bluez-alsa is 3.1.0.
+//     JukaHub starts it — and a bluealsa someone else
 //     started without the A2DP source role is restarted with it.
 //   - A headset that connected before bluealsa registered its A2DP endpoint
 //     is connected without its audio profile: BlueZ says "Connected: yes" and
 //     there is no stream to open. The A2DP sink profile is asked for on its
 //     own (Device1.ConnectProfile), a few times per connect.
 //   - alsa-lib's thread-safe locking stalls a BlueALSA stream on these boards
-//     (NextUI #810/#811: no sound, a hang on disconnect). alsa-lib reads
+//     (no sound, a hang on disconnect). alsa-lib reads
 //     LIBASOUND_THREAD_SAFE once, at a process's first PCM open, so it is set
 //     before main runs (init below).
 //   - Games open ALSA's "default", which is the speaker; RetroArch ignores
@@ -1244,7 +1244,7 @@ func audioChildALSAConfig(pcm string) (string, error) {
 	def := filepath.Join(audioChildConfDir, "asound-headset-default.conf")
 	if err := audioWriteFileAtomic(def, "# Written by JukaHub: ALSA's \"default\" is the Bluetooth headset for the\n"+
 		"# game it starts while one is routed. Rewritten on every launch; safe to delete.\n"+
-		"pcm.!default {\n\ttype plug\n\tslave.pcm \""+pcm+"\"\n}\n"); err != nil {
+		audioChannelsDefaultText(pcm)); err != nil { // through Audio channels' downmix when set (audiochannels.go)
 		return "", err
 	}
 	path := filepath.Join(audioChildConfDir, "asound-headset.conf")

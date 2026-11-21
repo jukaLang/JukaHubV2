@@ -33,10 +33,9 @@ package main
 // The firmware's udev has no input_id rule, and Weston's libinput ignores every
 // input device udev did not tag, after which Weston does not start at all
 // ("TRIMUI Player1: not tagged as supported input device", "failed to create
-// compositor backend" — NX Redux #140). Before Weston starts, JukaHub adds that
-// one rule to udev's runtime rules (RAM only) and re-scans the input devices
-// (wine_display_linux.go), the fix NX Redux ships for PortMaster's Weston ports
-// on the same firmware.
+// compositor backend"). Before Weston starts, JukaHub adds that one rule to
+// udev's runtime rules (RAM only) and re-scans the input devices
+// (wine_display_linux.go).
 
 import (
 	"errors"
@@ -674,7 +673,7 @@ func westonWrapperResetsDevices(path string) bool {
 // trigger`: one without a subsystem filter, which sends a change event to every
 // device. CrossMix's preview of WestonPack ("Westonwrap 0.2.8 (Preview 1)")
 // runs one on TrimUI, and the firmware's mdev then unmounts the SD card —
-// JukaHub's own folder included (NX Redux #207). The official 0.2.7.1 has no
+// JukaHub's own folder included. The official 0.2.7.1 has no
 // such line.
 func westonTextResetsDevices(text string) bool {
 	for _, line := range strings.Split(text, "\n") {

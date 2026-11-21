@@ -35,11 +35,11 @@ package main
 //     firmware has them. Only if the link cannot be made (FAT, read-only) is
 //     XDG_DATA_HOME pointed at PortMaster's parent, with the known cost that a
 //     port which does not set XDG_DATA_HOME itself saves beside PortMaster
-//     (minui-portmaster #172, NX Redux #140 — logged when it happens).
+//     (minui-portmaster #172 — logged when it happens).
 //   - An empty $XDG_DATA_HOME/PortMaster with no control.txt makes every
-//     port die sourcing it (NX Redux #140); an empty one is removed.
+//     port die sourcing it; an empty one is removed.
 //   - A bare `udevadm trigger` (CrossMix's WestonPack preview) makes TrimUI's
-//     mdev unmount the SD card (NX Redux #207); ports get a udevadm on PATH
+//     mdev unmount the SD card; ports get a udevadm on PATH
 //     that skips that one call and runs the real tool for everything else.
 //   - SDL's audio driver stays pinned to ALSA (portLaunchEnv, ports.go).
 //   - data/ports.env (NAME=VALUE lines, like weston.env) wins over all of
@@ -445,7 +445,7 @@ func portUdevadmPath() string {
 func portUdevShimScript(real string) string {
 	return "#!/bin/sh\n" +
 		"# Written by JukaHub for PortMaster ports: a bare `udevadm trigger` makes\n" +
-		"# TrimUI's mdev unmount the SD card (NX Redux #207). Everything else runs\n" +
+		"# TrimUI's mdev unmount the SD card. Everything else runs\n" +
 		"# the real udevadm.\n" +
 		"if [ \"$1\" = trigger ]; then\n" +
 		"  bare=1; value=0\n" +

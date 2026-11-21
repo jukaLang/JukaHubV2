@@ -84,7 +84,8 @@ func updateAvailable() bool {
 
 // openUpdatePrompt shows the modal (from a badge click or the automatic offer).
 func openUpdatePrompt() {
-	if !updateAvailable() {
+	// Kiosk / Kid mode: no update is offered to whoever holds it (uimode.go).
+	if !updateAvailable() || uiModeLocked() {
 		return
 	}
 	updatePrompt.open = true

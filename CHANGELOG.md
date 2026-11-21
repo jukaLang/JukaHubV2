@@ -13,6 +13,480 @@ For anything older, the git log and the
 
 ### Added
 
+- **Quick menu, game art, colours, Home views, Device Sync and more**
+  (2026-11-20). None of the entries here was compiled or tried on a device yet
+  (QMENU-HW-1,
+  ART-HW-1, COLOUR-HW-1, HOMEVIEW-HW-1, DEVSYNC-HW-1, NETLINK-HW-1, MEDIA-HW-1,
+  FILES-HW-1, QSET-HW-1, SAFEOFF-HW-1 and EMUTUNE-HW-1 in the backlog).
+- **Quick menu.** A full-screen menu: big Recents, Collections, Games and
+  Tools tiles over round Wi-Fi, Sleep, Restart, Power off and Settings buttons.
+  Open it from Start → Device, a Home tile, a control-profile button
+  (`quick_menu`), the Brick's F1/F2 or the Smart Pro S's Home key, or set
+  Settings → Controls → Menu button on Home to Quick menu; Settings → Power &
+  battery → Start in can open it at power-on. Restart and Power off ask first
+  with Cancel picked. A NextUI theme's `.media/quick_<Name>.png` pictures fill
+  the screen for the focused entry, and Backgrounds only hides the tiles
+  ([Quick menu](docs/QUICK_MENU.md)).
+- **"Turning on Wi-Fi…" and "Turning on Bluetooth…"** show in the activity
+  strip with a spinner while the radio comes up, wherever it was switched on.
+- **Game art settings and the Artwork Manager.** Settings → Games & emulators:
+  Game art off for text-only lists; Art type box art, screenshot or title
+  screen (fetched from the libretro thumbnails with Fill gaps, kept beside the
+  box art and renamed, moved and deleted with the game); Art style thumbnail or
+  a dimmed full-height background behind the list; art width and corner radius
+  (list layout; the defaults look as before). A console's own picture (NextUI's
+  `Roms/<console>/.media/bg.png`, or `data/backgrounds/<System>.png`) sits
+  behind its game list. The Artwork Manager (Start → Tools, Settings or the
+  library's options) counts every console's pictures, fetches one console or
+  all and shows which pictures each game has; Reset artwork moves a console's
+  pictures in JukaHub's art folder to the trash after a question that says what
+  goes ([Game library](docs/GAME_LIBRARY.md)).
+- **Colours of your own.** Every colour row in Theme & look opens an RGB picker
+  (sliders, a live swatch, #RRGGBB and contrast, X to type, Y for presets). New
+  Background, Surface, Text and Focus ring colours sit on top of any theme,
+  Menu colour takes any colour, eight palettes (Classic, Night, Paper, Sakura,
+  Forest, Ocean, Amber, Mono) set them all at once and Reset colours puts the
+  theme's back. Glass opacity (10–100 %) lets the wallpaper show through glass
+  and the selection pill, and Animations picks Comfy, Snappy or Off (Off is
+  Reduce motion) ([Themes](docs/THEMES.md)).
+- **Tabs Home: Backdrop and Minimal views, a Tools tab, pinned games.**
+  Backdrop fills the screen with the selected game's screenshot (or its
+  save-state picture) under its box art and name; Minimal shows big names only.
+  An optional Tools tab lists the Start menu's screens and tools, and Grid
+  selection ring turns the ring off. Pin to Home (game options, the game page's
+  More sheet or X on the Tabs Home) makes a game a cover tile on the Carousel
+  and Widgets Homes and puts it first on Main; Remove from recents and Add to
+  collection… sit beside it ([The Tabs Home](docs/HOME_TABS.md)).
+- **Home dashboard.** The Continue card shows where you left the game (its
+  newest save-state picture), and two new widgets show your Most played game
+  and This month's play time (it waits for the clock after a cold boot).
+- **NextUI collections.** Lists in the card's `Collections` folder appear as
+  JukaHub collections, changes are written back in NextUI's own format (lines
+  for games not on the card are kept), new JukaHub collections appear in
+  NextUI, and a file edited or deleted outside JukaHub is read again rather
+  than overwritten (Settings → Games & emulators → Share collections with
+  NextUI; [Collections](docs/COLLECTIONS.md)).
+- **Device Sync.** Tools → Save sync between two paired handhelds now also
+  carries save states (or leaves them out), BIOS files, collections, recents
+  and play time and — off by default — the ROMs one device lacks, per console
+  with the size shown first. BIOS and ROMs copy only what is missing, never
+  replace anything, need the switch on on both handhelds, and ports or scripts
+  never travel. Send my settings offers this device's look and controls to the
+  other, which applies them only after Use them; Wi-Fi and accounts stay. An
+  older JukaHub on the other side still syncs saves ([Device
+  Sync](docs/DEVICE_SYNC.md)).
+- **Game Boy link cable and the GBA wireless adapter over Wi-Fi.** X on a Game
+  Boy or Game Boy Color game → Link cable lets two handhelds trade and battle
+  with their own games (Pokémon Red with Blue) through Gambatte's network link:
+  the host is found on the network or joined by address, and no Wi-Fi opens the
+  hotspot. On a GBA game, Wireless adapter (Pokémon FireRed/LeafGreen/Emerald)
+  starts a Union Room session with gpSP. Everything set for the session is put
+  back afterwards ([Game library](docs/GAME_LIBRARY.md)).
+- **Netplay for up to four players.** Nintendo 64, Dreamcast, arcade and
+  multitap games take three guests, a guest picks player 2, 3 or 4 with
+  Left/Right, and the host sees "Netplay: N of 4 players here". Netplay
+  sessions sync the card before they start.
+- **Audio and subtitle tracks in videos.** The video settings sheet picks a
+  film's audio track and steps Subtitles through Off, the subtitle files beside
+  it and its text tracks; both choices are remembered per file. `.ass`/`.ssa`
+  and MicroDVD `.sub` files are read too (also `Film.en.ass`), and a film whose
+  first subtitle track is a picture track now shows its first text track.
+- **Lyrics inside songs and a radio directory.** Lyrics stored in MP3, FLAC and
+  M4A tags show when there is no `.lrc` file, and untimed lyrics scroll with
+  the song. A new Radio shelf in Music opens the free Radio Browser directory —
+  top stations, your country's, by genre or by name — where A plays and X saves
+  the station to your stations; the last lists stay readable offline, and Kid
+  mode keeps it shut ([Music player](docs/MUSIC_PLAYER.md)).
+- **Pictures, two panes and play records.** In the picture viewer X opens
+  Rotate right (saved for PNG and JPEG), Rename and Delete. Files → Y → Two
+  panes shows two folders side by side: L1/R1 pick a pane, and Copy / Move to
+  other pane run in the background. Play history shows each game's play count
+  and average session, and X deletes a game's play record after a question
+  (saves are never touched).
+- **Quick settings in games.** The in-game menu's new Quick settings card sets
+  brightness, volume, mute, Wi-Fi, Bluetooth, stick lights, rumble and
+  vibration (and the Music in game level while music plays) without leaving the
+  game, shows CPU, temperature, memory and battery time left, and has a Power
+  off that saves the game first ([Controls](docs/CONTROLS.md)).
+- **Launch scripts and screenshots for scripts.** `.sh` files in
+  `JukaHub/data/hooks/pre-launch` and `post-exit` (or a console's subfolder)
+  run before and after every game and app with `JUKAHUB_*` details, 5 s each; a
+  pre-launch script that exits with 3 stops the start. Scripts and paks can
+  create `/tmp/jukahub/screenshot.request` to save a picture of the game; its
+  path lands in `/tmp/jukahub/screenshot.last`
+  ([Development](docs/DEVELOPMENT.md)).
+- **Safe power off.** Before Restart and Power off, programs still using the SD
+  card are asked to close and the card is synced and made read-only, all within
+  3 s (Settings → Power & battery → Safe power off, on by default; [Session
+  safety](docs/SESSION_SAFETY.md)).
+- **Awake on USB, a stock-system check and a Developer page.** The idle screen
+  and Auto sleep wait while a computer is connected for USB file transfer. If
+  another firmware changed the handheld's own start-up files, JukaHub says so
+  once and suggests reflashing the stock firmware if the handheld misbehaves
+  (Settings → About → Stock system). Settings → Developer: Debug logging
+  without a restart, Copy logs to the card and the Launch scripts switch.
+- **Fast-forward speed, light N64 graphics and one button layout.** Settings →
+  Emulation → Fast-forward speed caps RetroArch's fast forward at 2× to 8× or
+  Unlimited, for every console or one. N64 graphics Light uses the Rice
+  renderer in ParaLLEl N64 or a lighter Mupen64Plus-Next setup (Auto is Light
+  on the Brick and Brick Pro; core options you set yourself stay). Settings →
+  Controls → Button layout Nintendo or Xbox swaps confirm in JukaHub's menus
+  and A/B and X/Y in RetroArch games (a console or game with its own Buttons
+  keeps them), and Button hints show printed letters or roles
+  ([Controls](docs/CONTROLS.md)).
+- **Library layouts, in-game hotkeys, battery warnings, music, play time and
+  .7z games** (2026-11-20). None of the entries below was compiled or tried on
+  a device yet (FLOW-HW-1, GAMEKEYS-HW-1, BATTWARN-HW-1, MUSICX-HW-1,
+  PLAYTIME-HW-1, SEVENZ-HW-1, OVERLAY-HW-1, COMPUPD-HW-1 in the backlog).
+- **Cover Flow and Cube library views.** A console's games can be shown as
+  Cover Flow — the highlighted cover large in the middle, the others turned in
+  perspective on both sides over a reflection, sliding as you move — or as a
+  Cube with the cover on its front face: Up/Down roll it to the previous or
+  next game, Left/Right turn it to the previous or next console, B goes back.
+  Library view in the game options (Start) picks them
+  ([Game library](docs/GAME_LIBRARY.md)).
+- **Games start sooner.** When a game stays highlighted for a moment (or sits
+  on Home's Continue card), JukaHub reads RetroArch, the game's core and the
+  ROM into memory at the lowest priority, so A waits less on the SD card. It
+  stops when you move on, never runs during play or on a nearly empty battery,
+  and Settings → Games & emulators → Warm up games before launch turns it off.
+- **In-game hotkeys.** In a RetroArch game hold **F1** on a Brick to rewind and
+  press **F2** for fast forward (L3 / R3 on handhelds with sticks), and press
+  **Menu + Select** together to save and quit — the next start of the game
+  carries on from there. The in-game menu lists them; Settings → Controls →
+  Game hotkeys and Menu + Select: save and quit turn them off
+  ([Controls](docs/CONTROLS.md)).
+- **Battery warnings you can set.** Settings → Power → Low battery warning at
+  (5–30%) moves the red battery icon, the lights' low-battery pulse and the
+  plug-in message together; Blink from picks where the icon blinks; Show over
+  games puts "Battery 9%" on RetroArch's message line as the charge drops; Save
+  and suspend at picks 3–10% for saving the game and sleeping. Auto keeps
+  today's levels ([Battery warnings](docs/BATTERY_WARNINGS.md)).
+- **Menu + volume sets the brightness**, in games too, wherever the firmware
+  does not already do it — JukaHub OS boots and cards without the stock key
+  daemon (Settings → Display → Menu + volume sets brightness).
+- **Battery level on the lights.** L2 + R2 together on Home flashes the charge
+  on the stick lights for two seconds (more lights the fuller, green, amber or
+  red), and Charging shows a filling bar shows the charge in green quarters
+  while plugged in.
+- **Tidy the Music folder.** After a library scan, loose songs move to
+  Music/Singles and an album folder dropped straight into Music moves to
+  Music/Artist/Album when its tags agree — never overwriting, never while a
+  file is still copying, and favourites, playlists and saved places follow.
+  Handheld only; Audio settings turns it off ([Music player](docs/MUSIC_PLAYER.md)).
+- **Every audiobook keeps its own listening speed**; music keeps the global one.
+- **Music from inside a game.** The in-game menu's Music row opens a
+  now-playing panel (song, artist, previous / play-pause / next); music started
+  there quiets the RetroArch game until it stops (Quiet the game while music
+  plays).
+- **Audio channels: Stereo, Mono, Mono left or Mono right** (Accessibility)
+  replaces Mono audio. Mono left/right play in one ear on headphones,
+  Bluetooth or a USB DAC (Mono on the speaker), and the choice now reaches the
+  games JukaHub starts too.
+- **Play time by game.** The Playtime screen's new By game tab ranks your games
+  by time played today, this week, this month, this year or ever; X adds them
+  up by console, and Game options shows a game's week and lifetime. Ever is
+  complete from the start; the other periods count from this version on.
+- **Games in .7z archives** get what .zip games get: Game Boy Color games are
+  recognised and sorted, and covers, game details and the ROM manager use the
+  game's own checksum from the archive (JukaHub's own small 7z reader).
+- **More box art.** Games the libretro thumbnails lack get a front box from the
+  LaunchBox Games Database automatically, and Choose cover has Search
+  LaunchBox… to pick one by hand. Signing in to ScreenScraper (Settings →
+  Games & emulators) adds covers plus year, genre, developer and synopsis by
+  checksum, filling only what is empty; it needs developer credentials in the
+  build (`JUKAHUB_SS_DEVID`, `JUKAHUB_SS_DEVPASSWORD`) ([Box art](docs/BOX_ART.md)).
+- **Your own overlays.** Every console with games gets a folder in Overlays on
+  the card; drop a screen-sized picture (or a RetroArch overlay) in it and that
+  console's games show it. Settings → Emulation → Overlay picks between them,
+  and pictures can be dropped from a computer over FTP or from the phone's
+  Files card ([Looks](docs/LOOKS.md)).
+- **Left stick as D-pad, per console**, on handhelds with sticks (Settings →
+  Controls): on for consoles that never had a stick, off for N64, PSP and
+  Dreamcast, and PlayStation games on the DualShock keep both sticks.
+- **Phone Companion: updates, logs and folders that ask first.** When a new
+  JukaHub is out on your update channel the page shows it with Install (not
+  during a game, and on a low battery only on the charger) and the handheld
+  says your phone started it; Download logs saves a zip of recent logs with
+  passwords, Wi-Fi names, account names, e-mail, Bluetooth and LAN addresses
+  masked; renaming or deleting a folder JukaHub needs (a console's folder,
+  BIOS, Saves, Overlays, PortMaster) asks first and says what it is for
+  ([USB and Wi-Fi file transfer](docs/USB_FILE_TRANSFER.md)).
+- **Tidy the card at start** (Settings → About, on by default): once per start
+  JukaHub removes the `._` files, .DS_Store, Thumbs.db and desktop.ini a Mac or
+  PC leaves in your game and media folders, and a Mac's .Trashes,
+  .Spotlight-V100 and .fseventsd at the top of the card.
+- **Servers, sharing, widescreen, discs and look packs** (2026-11-20). None of
+  the entries below was compiled or tried on a device yet (the `*-HW-1` checks
+  in the backlog).
+- **VNC server: see and control the handheld from any VNC app.** Tools →
+  Network tools → VNC screen & control serves port 5900 to RealVNC Viewer,
+  TigerVNC, macOS Screen Sharing, bVNC or AVNC on the same network: JukaHub's
+  screens and, on the handheld, the game on screen. Keys behave like a USB
+  keyboard (Enter is A, Esc is B, the arrows are the D-pad, typing goes into
+  text fields) and in a game press the handheld's own buttons; the mouse
+  drives JukaHub's pointer in mouse mode and copied text lands on JukaHub's
+  clipboard. Only the 64×64 squares that changed are sent, ZRLE-compressed,
+  and pictures are taken only while someone watches. Off by default, LAN and
+  Tailscale addresses only, an 8-character password kept until New password,
+  two viewers, and it stops itself like the file servers
+  ([VNC and Telnet](docs/VNC.md)).
+- **Telnet server.** Tools → Network tools → Telnet gives a computer on the
+  same network the Terminal's shell (port 23 on the handheld) behind a
+  password made for each start. The sheet says plainly that Telnet is not
+  encrypted and SSH is the safe choice; three wrong tries end the connection
+  and the window size follows the client.
+- **SMB share: the SD card as a Windows or Mac network drive.** Tools →
+  Network tools → SMB share serves the card as `\\IP\JukaHub` (Windows),
+  `smb://IP/JukaHub` (Mac, Linux, phone file apps; QR code) and
+  `\\DEVICENAME\JukaHub` through a small NetBIOS name service — no 50 MB file
+  limit like Windows' WebDAV client. It is JukaHub's own SMB 2.1 server (no
+  Samba program) with signing required, so Windows 11 24H2 connects: one
+  account `jukahub` with a kept 12-character password, a read-only switch,
+  wrong-password lockout, home-network and tailnet addresses only, off by
+  default and off after 15 idle minutes like FTP/SFTP. Handheld only
+  ([SMB share](docs/SMB_SHARE.md)).
+- **Tailscale built in: reach the handheld from anywhere.** Smart Home's
+  Tailscale row needed a tailscale program on PATH, which a TrimUI never has.
+  Tools → Network tools → Tailscale (and Settings → Network) now installs
+  Tailscale's official static build from pkgs.tailscale.com, checked against
+  its published SHA-256, and runs it in userspace mode: no system changes,
+  but SSH, FTP, the phone companion, VNC and the SMB share answer on the
+  tailnet address from anywhere. Sign in by scanning a QR code with a phone or
+  with an auth key; the screen lists your devices. It runs only while switched
+  on, with Wi-Fi and above 15 % battery, stops with JukaHub, and the emulator
+  updates pass keeps it current. On a PC the screen shows Tailscale for
+  Windows' state ([Tailscale](docs/TAILSCALE.md)).
+- **Syncthing beyond saves.** The Syncthing page has **Also sync** switches
+  for Screenshots, Recordings, Music, Books and Roms (each its own folder,
+  shared with every paired device like the saves; Roms warns about its size)
+  and **Web GUI on this network**, which opens Syncthing's own page to the
+  Wi-Fi with user `jukahub` and a password shown on screen so a PC can add any
+  folder. Both are off by default; turning the web GUI off closes it behind a
+  new unknown password ([Save Manager](docs/SAVE_MANAGER.md)).
+- **PlayStation analog controller.**
+  PlayStation games that read the sticks — Ape Escape, Spyro, Crash Team
+  Racing, Gran Turismo, Metal Gear Solid and about 65 more — start with a
+  DualShock plugged in, while digital-only games keep the standard pad.
+  Settings → Controls → Game buttons for → PlayStation → Analog controller is
+  Auto, Always or Never, and a game can pick DualShock or Standard pad in its
+  options; Auto stays off on the Brick, which has no sticks. Set for one
+  launch only, with the right device for PCSX-ReARMed, SwanStation and Beetle
+  PSX.
+- **Widescreen (16:9).** The Nintendo 64, PlayStation, Dreamcast and Mega
+  Drive emulators that have a widescreen hack can draw 3D games across the
+  Smart Pro's whole screen: per console in Settings → Emulation → Adjust for,
+  or per game in its options; off by default because hacks can glitch at the
+  edges. JukaHub sets the emulator's option and RetroArch's 16:9 picture for
+  that launch only, logs when the emulator has no such mode (PCSX-ReARMed: use
+  SwanStation or Beetle PSX) and hides it all on the 4:3 Brick
+  ([Widescreen](docs/WIDESCREEN.md)).
+- **CUE generator.** CD games ripped as a lone .bin, or as Redump's split
+  "(Track 1).bin, (Track 2).bin …" sets, get a .cue sheet: the track mode is
+  read from the image and split sets get one multi-track sheet with Redump's
+  gaps, automatically when the library scans and on request from the ROM
+  manager's "Make missing .cue files" and the Tools hub's "CUE generator".
+  Existing sheets are never replaced.
+- **Look packs, console icon packs and console names.** Experience packs now
+  carry more in one press: a pack.json may name
+  an icon pack, a console-name style, a menu colour, the startup sound, a
+  preview and a boot logo (staged for Settings → Boot logo, written only after
+  its own confirm); Undo takes all of it back. Packs are also read from the
+  card's Themes/Packs folder, and three built-in packs (Super Famicom,
+  Genesis, Pocket Tags) show it off. Settings → Theme & look gains **Console
+  icons** (icon packs from Icons/<pack>/Emus, drawn in place of
+  the vector glyphs) and **Console names**: International, North America
+  (Genesis, TurboGrafx-16), Japan (Super Famicom, Mega-CD) or Short (MD, PCE,
+  GBA), changing only what is shown ([Look packs](docs/LOOK_PACKS.md)).
+- **Start on tab and a power-off picture.** The Tabs Home's **Start on** row
+  opens on the last used tab or always the same one, and **Power-off screen**
+  → Picture ends a power-off or restart on "See you soon", a clock-and-battery
+  card or your own picture from Themes/Shutdown, held as the power goes; the
+  shutdown never waits for it.
+- **Achievement options, hotkeys, game translation, Kid mode, idle and
+  lights** (2026-11-20). None of the eight entries below was compiled or tried
+  on a device yet (the `*-HW-1` checks in the backlog).
+- **RetroAchievements in games.** A new Settings → RetroAchievements page sets
+  RetroArch's own achievement options: hardcore,
+  leaderboards (on, trackers only, notifications only, off), challenge
+  indicators, unlock sound, screenshot on unlock, encore, rich presence,
+  badges and verbose messages. Every row starts on "RetroArch's own", which
+  writes nothing, and a chosen value lasts only for JukaHub's launch (owner
+  profile only). **Sign in for games** types RetroArch's login on the
+  handheld; RetroArch swaps the password for its token at the first game and
+  JukaHub keeps neither. Each unlock flashes the stick lights and a message
+  after the game counts them. With hardcore chosen here, JukaHub no longer
+  offers Load state, rewind, cheats or a power-on resume RetroArch would
+  refuse ([RetroAchievements](docs/RETROACHIEVEMENTS.md)).
+- **Custom RetroArch hotkeys and aspect ratio, per console and per game.**
+  Settings → Controls sets RetroArch's hotkey button and its shortcuts (menu,
+  quit, save/load state, slots, fast forward, rewind, screenshot, pause,
+  restart, translate screen) for every console or one console, and a game's
+  options sheet for that game alone. Button codes are copied from RetroArch's
+  own player-1 bindings, nothing is written until a hotkey button exists,
+  JukaHub's Select chords stay free and everything is undone when the game
+  exits. Settings → Emulation adds Aspect ratio (Core provided, 4:3, 16:9,
+  3:2, 10:9, 8:7, Square pixels, Full screen) and Hard GPU sync per console,
+  with a per-game Aspect ratio row ([Game hotkeys](docs/GAME_HOTKEYS.md),
+  [Looks](docs/LOOKS.md)).
+- **Translate the game screen** (Settings → Voice & AI → Translate games, off
+  until turned on): RetroArch's AI service.
+  In a RetroArch game, Select + L2 → Translate screen (or a RetroArch AI
+  hotkey) sends the screen to JukaHub's own small service on 127.0.0.1, which
+  asks Groq's vision model with your key for the on-screen text in your
+  language and shows it like subtitles, or reads English aloud with the
+  handheld's voice. A RetroArch-compatible service of your own (vgtranslate,
+  ZTranslate) works too, picture mode included. Nothing is stored
+  ([Game translation](docs/GAME_TRANSLATION.md)).
+- **Kid mode and Kiosk mode** (Settings → Kid & Kiosk mode). Kiosk is
+  play-only: games, favourites, the switcher,
+  music and video work, and Settings shrinks to volume, brightness, Wi-Fi and
+  Leave; stores and installs (also Xbox, PS5 and Steam helpers), Files, the
+  Terminal, updates, profiles, Edit Home, search outside games and quitting to
+  the stock menu are locked. Kid mode also shows only the games marked "For
+  kids" (a game's page → More, per game or the whole console) everywhere games
+  are listed, refuses the others at launch and hides the internet apps and web
+  streams. A parent code set when it is turned on, or the Konami code, leaves;
+  a forgotten code is removed by deleting `ui-mode.json` from a computer or
+  starting with `JUKAHUB_UI_MODE=full` ([Kid mode](docs/KID_MODE.md)).
+- **The FN switch, Silky lights and GPU boost.** On the Smart Pro, Settings →
+  Power & battery → **FN switch does** turns the slide switch into Travel lock
+  (as before), Mute, Lights off or Airplane mode; it works in games, and
+  sliding it back restores exactly what it changed (the volume it muted from,
+  your lights, only the radios that were on). The stick lights add a fast red
+  pulse at 5% battery, an optional **Follow screen brightness** and a
+  three-second rainbow when a RetroAchievement unlocks. **GPU boost in games**
+  (Auto for N64, PSP, Dreamcast, DS, Saturn, PlayStation, PS2, GameCube/Wii
+  and ports; Always; Off) runs the GPU at full speed for one launch with Xbox
+  boost's plan and puts it back afterwards, even after a crash; the row only
+  shows where the GPU has a frequency control
+  ([Device tuning](docs/DEVICE_TUNING.md)).
+- **Idle in games, idle hooks and the battery in games.** Settings → Power &
+  battery → **Dim when idle in games** dims the screen after 5–30 minutes
+  without input while a game runs (any button brings back the exact
+  brightness), and **Then sleep or power off after** 5–60 more minutes either
+  sleeps like the in-game menu's Sleep or saves and powers off like Power off,
+  never on a charger or while music plays. Shell scripts in the data folder's
+  `hooks/idle`, `hooks/extended` and `hooks/active` run on those changes, on
+  the idle screen and around every sleep (not while the startup lock is up).
+  **Battery in games** shows "Battery 54% · about 1 h 20 min left" on
+  RetroArch's message line at 20/15/10/5% or every 15 or 5 minutes, optionally
+  with the time ([Idle](docs/IDLE.md)).
+- **Card check and a WebDAV share.** Tools → System → **Card check** (also in
+  Settings → About) looks at the SD card that holds the games: partition and
+  file system, the file system's own health flags read from the card (FAT32
+  dirty/hard-error bits, exFAT VolumeDirty/MediaFailure) and the kernel's
+  messages, a read of every file that lists the ones the card can no longer
+  read, an optional fake card test that fills free space with checkable data
+  and always removes it, and a read-only fsck where one exists; the report is
+  saved as `card-check.txt` with repair steps for a computer
+  ([Card check](docs/CARD_CHECK.md)). Settings → Network → **WebDAV share**,
+  next to the SMB share, shares the card as a drive Windows Explorer maps,
+  macOS Finder connects to and Linux file managers open, with a fresh key in
+  the address and password at every start and FTP's folders, read-only
+  program folders and automatic stop
+  ([WebDAV share](docs/NETWORK_SHARE.md)).
+- **Automatic collections and two game idle screens.** The Tabs Home's
+  Collections tab now starts with folders that fill themselves (Last played,
+  Most played, All games, Recently added and Never played by default; also
+  Multiplayer and one per genre), each switched on or off in Settings → Games
+  & emulators → **Automatic collections**; Recently added follows JukaHub's
+  own library scans, never file dates or the clock. A game's page says how
+  many times it was played. Settings → Power & battery → **Idle screen** adds
+  **Game slideshow** (your games' pictures, drifting and crossfading, title
+  and console only) and **Game videos** (random muted video snaps, offered
+  when the card has some) ([Collections](docs/COLLECTIONS.md)).
+- **Offline achievements, USB storage, keys, power settings and five more
+  consoles** (2026-11-20). None of the entries below was compiled or tried on
+  a device yet (RAOFF-HW-1, USBSTOR-HW-1, KEYPOWER-HW-1 and MORESYS-HW-1 in the
+  backlog).
+- **Offline RetroAchievements.** RetroArch games keep unlocking achievements
+  with no internet (in Casual), and the unlocks are sent by themselves when the
+  handheld is back online; a game works offline after one online play. JukaHub
+  runs a small RetroAchievements relay on the handheld itself, only around
+  RetroArch games. Settings → RetroAchievements → Offline achievements (on by
+  default): send waiting unlocks now, cache your recent cartridge games for
+  offline, or clear the cache. Right after waking, an achievement game waits
+  up to 8 s for Wi-Fi so RetroArch can sign in (press Play again to start at
+  once) — Wait for Wi-Fi before achievement games
+  ([RetroAchievements](docs/RETROACHIEVEMENTS.md)).
+- **USB storage mode.** Settings → Network → USB storage mode lends the SD card
+  to a computer as a plain USB drive, like a card reader. JukaHub closes while
+  the card is lent and comes back by itself when you eject the drive on the
+  computer (or press a button). Smart Pro, Brick and Hammer on stock firmware;
+  USB file transfer stays the everyday way
+  ([USB file transfer](docs/USB_FILE_TRANSFER.md)).
+- **In-game menu entries, Start in and Hold Menu.** Settings → Controls →
+  In-game menu entries hides the rows you never use (Resume game and Quit to
+  JukaHub always stay). Settings → Power & battery → Start in opens the Game
+  switcher, a random game or the last game played when the handheld is
+  switched on (Home by default; a game Resume at power on brings back comes
+  first; hold B to stay on Home). Settings → Controls → Hold Menu in a game
+  keeps the screenshot, or saves the game and jumps to the Game switcher, or
+  does nothing. Start → Games → **Play a random game** starts one
+  in one press, and each game's play history is kept for the 500 most recent
+  games (was 128).
+- **Brick F1 / F2 keys, the Smart Pro S Home key and D-pad as stick.**
+  Settings → Controls → F1 key / F2 key choose what the Brick's front keys do
+  (Controller card and Quick Settings by default; also Screenshot, Game
+  switcher, Search, Start menu, Sleep, Mute, Home or Nothing). On the Smart
+  Pro S, Home key / Home key in a game make a tap on the top Home key go Home,
+  open Quick Settings or the game switcher, and in a game open the in-game
+  menu, RetroArch's own menu or the game switcher (the rows show once the key
+  is found; `homeKeyCode` overrides its code). N64, PSP and Dreamcast games on
+  a Brick now walk with the D-pad, which pushes the left stick (Settings →
+  Controls, under Turbo, per console). Settings → Emulation → Threaded video:
+  Auto turns it off on the Smart Pro S for smoother frame pacing.
+- **Power, battery and lights.** Settings → Power & battery → Ask before power
+  off: turn it off and the Power tile on Home and holding the power button
+  switch the handheld off at once (a RetroArch game is still saved first).
+  Battery percentage shows the level in the top bar always, only at 20% or
+  less, or never. Settings → Stick lights → Lights in games: off keeps the
+  sticks dark while a game plays, except the low-battery, charging and
+  standby lights.
+- **Stock firmware, card space, emulator versions and Tasks.** Settings →
+  About → Stock firmware shows the TrimUI firmware version, finds an update
+  file on the card, says if it is in the wrong place, still zipped, renamed or
+  for another model, checks the battery and card format, and shows the buttons
+  that start TrimUI's updater on your model (JukaHub never flashes anything).
+  Card space shows used, free and total space; Emulator versions lists
+  RetroArch, PPSSPP and every core. Tasks resets RetroArch's settings, core
+  options, overrides or PPSSPP's settings (files go to a reset trash, never
+  deleted) and gathers Clear cache, Rebuild library index, Library doctor and
+  Report a bug ([Recovery](docs/RECOVERY.md), [Devices](docs/DEVICES.md)).
+- **New consoles and a smarter name sort.** NAOMI and Atomiswave
+  (Roms/NAOMI, Roms/ATOMISWAVE — RetroArch's Flycast core with naomi.zip /
+  awbios.zip), Nintendo DSi (Roms/NDSI — melonDS DS in DSi mode with your own
+  DSi's BIOS, firmware and NAND files), OpenBOR (Roms/OPENBOR, .pak) and Tandy
+  CoCo (Roms/COCO). Get more cores fetches Flycast and melonDS DS; Game Ready
+  names missing DSi files; OpenBOR and CoCo games say what to install. The
+  library now sorts "The Legend of Zelda" under L, also for the L2/R2 letter
+  jumps (Settings → Games & emulators → Ignore 'The' when sorting, on by
+  default) ([Game library](docs/GAME_LIBRARY.md)).
+- **PlayStation 2 on the TrimUI handhelds** (Juka, 2026-11-20: "Add support
+  for PS2", with a report of ARMSX2 running light games at full speed on a
+  Brick Hammer, then "Focus on getting it to work on Trimui Smart Pro...not on
+  windows"). PS2 was "not supported" on every handheld; it now plays in
+  RetroArch's ARMSX2 core (a PCSX2 fork with ARM64 recompilers) on every
+  TrimUI model, on by default (**Settings → Games & emulators → PlayStation
+  2**). A game's first start downloads ARMSX2's own Linux arm64 libretro core
+  from its GitHub releases (the newest stable release that has one, else the
+  newest nightly; the archive checked against GitHub's SHA-256, the core
+  through the usual load check, on JukaHub's glibc 2.39 since it needs a newer
+  glibc than the firmware's) and the matching `resources` folder the core
+  cannot boot without (`pcsx2/resources` in RetroArch's system folder),
+  copies the player's PS2 BIOS there from wherever it is (the BIOS folders,
+  `BIOS/PS2`, the game's folder; checked the way PCSX2 checks one), then
+  plays. With no BIOS anywhere the start says where to put one. The core's
+  first start gets OpenGL ES on the PowerVR models (ARMSX2 defaults to Vulkan,
+  which their firmware lacks) and skips the BIOS intro; a start whose renderer
+  could not draw moves it to the next one (OpenGL ES, then Software) and the
+  card says so. PS2 games get Xbox boost. **Settings → PS2 emulator** and the
+  Emulators page's PS2 tile install ARMSX2 or update it to the newest release.
+  `Roms/PS2` lists ISO, CHD, CSO, ZSO, CUE, M3U and ELF (not a stray `.bin`,
+  which is usually the BIOS). Windows keeps PCSX2. Untested on a device
+  (PS2-HW-1). docs/GAME_LIBRARY.md, "PlayStation 2 on the handheld".
+  (`player/ps2.go`, `player/ps2_setup.go`, `player/ps2_video.go`)
 - **Ports without PortMaster's app** (Juka, 2026-11-20: "Can we try to bypass
   PortMaster? … download required files directly via PortMaster API … launch
   the apps directly without needing to use PortMaster?"). Ports already started
@@ -988,8 +1462,8 @@ For anything older, the git log and the
   back the way they were switched in JukaHub (`boot.env`); the Smart Pro image
   boots with `quiet` and no bootloader delay and loads its radio drivers last.
   `boot.log` records U-Boot's own timings and when the launcher, the picture
-  and JukaHub started, and Settings → JukaHub OS shows **Last boot**. TortOS's
-  two-second boot comes from its own bootloader and kernel on the card, not
+  and JukaHub started, and Settings → JukaHub OS shows **Last boot**. A
+  two-second boot comes from a bootloader and kernel on the card, not
   from an `.awimg`; JukaHub OS works the same way and still never writes the
   handheld's internal storage. Not yet boot-tested. `player/bootframe.go`,
   `bootframe_linux.go`, `jukaos_native.go`, `jukaos_settings.go`,
@@ -1290,10 +1764,9 @@ For anything older, the git log and the
   the render thread and bounded; the list-first (Stock OS) layout does not show
   them yet. Not yet built.
 - **Auto power off after sleep: 15 minutes to 48 hours, NextUI games too**
-  (Juka, 2026-11-17, relaying the post for lmerriam's NextUI Auto Power Off
-  pak). Not yet built or tried on hardware.
+  (2026-11-17). Not yet built or tried on hardware.
   - Power off after sleeping now offers Off, 15 min, 30 min and 1, 2, 4, 6, 8,
-    12, 24 and 48 h (the pak's range; 6 h stays the default), and Quick
+    12, 24 and 48 h (6 h stays the default), and Quick
     Settings has an **Auto power off** row: A turns it off or back on at the
     last delay, Left/Right step it.
   - A game sleeping in a NextUI pak (minarch's own deep sleep, which JukaHub
@@ -1422,7 +1895,7 @@ For anything older, the git log and the
   size and Bold text. The old Display & theme page is now **Theme & look**
   (same id `display`) and keeps themes, Home, wallpaper, glass and motion. Moved
   rows keep their ids, so search, voice and deep links follow them. The picture
-  rows existed (NextUI pass) but were folded under More and hidden wherever the
+  rows existed (2026-11-17) but were folded under More and hidden wherever the
   display driver lacked its `enhance_*` node — now they always show: with the
   node they move the panel itself as before, and without it (the Windows build,
   a firmware without disp2's enhancement) JukaHub draws contrast, exposure and
@@ -1555,7 +2028,7 @@ For anything older, the git log and the
     recognises and switches between them (`data/greenovercast.json`).
   - GreenOvercast needs **glibc 2.38**, and stock TrimUI firmware and CrossMix
     have 2.33, so the screen says so before installing or launching and still
-    lets you try (Knulli and newer firmwares can run it; a newer-glibc runtime
+    lets you try (newer firmwares can run it; a newer-glibc runtime
     for stock firmware is CLOUD-1). Its hardware decoding targets H700 and
     Rockchip chips, so a TrimUI decodes in software (untested).
   - **What works here?** answers the Game Pass question: downloaded Game Pass
@@ -1704,8 +2177,8 @@ For anything older, the git log and the
   land under a hidden temporary name until complete; the card is hidden while
   the startup lock is up. See [docs/USB_FILE_TRANSFER.md](docs/USB_FILE_TRANSFER.md).
 
-- **NextUI features** (Juka, 2026-11-17: "Look at NextUI and see what features
-  we can implement"). Not yet built or tried on hardware.
+- **Emulation settings, cheats, the game switcher, display and lights**
+  (2026-11-17). Not yet built or tried on hardware.
   - **Settings → Emulation** for RetroArch games started from the library:
     Audio quality (Auto / Best / Balanced / Fast resampling, Auto picks per
     console), Latency (Auto / Standard / Low / Lowest — shorter swap chain,
@@ -1720,7 +2193,7 @@ For anything older, the git log and the
     cheats.zip, read in place) with an on/off switch each; switched-on cheats
     are applied when the game starts and removed when it exits. "Choose another
     cheat file" when a game has several. Reset game clears them.
-  - **Game switcher** (Onion / NextUI style): recent games side by side, each
+  - **Game switcher**: recent games side by side, each
     with a screenshot of where you left it (save-state picture, else box art).
     A carries on from the auto save, X takes a game off the list. Open it with
     X on Home (Standard and Hero layouts), Start → Games, search, or the
@@ -1781,8 +2254,8 @@ For anything older, the git log and the
     packs for one exact kernel; none is published yet (TrimUI has not released
     kernel source). The image builders refuse the wrong handheld.
 
-- **NX Redux 2.5 parity** (Juka, 2026-11-17: "look at nx-redux/nx-handheld
-  and come up with latest update"; NX Redux handheld v2.5.0, 2026-11-01).
+- **Native PICO-8, a new Home look, full setting descriptions and more covers**
+  (2026-11-17).
   - **Play PICO-8 on the real PICO-8, with Splore.** If you own PICO-8, copy
     `pico8_64` and `pico8.dat` from your Raspberry Pi download into `Bios/P8`
     on the card (on a PC, an installed PICO-8 is found by itself) and your
@@ -2101,7 +2574,7 @@ For anything older, the git log and the
   handheld on. Built by `player/trimui/make-os-package.sh` from any TrimUI
   build (`make os-package`, and `package-sdcard.sh` writes
   `JukaHub-OS-SDCARD.zip`); optional in CI, so the app packages ship anyway.
-  It ships the **Speed** layer, switched on: TortOS-style tuning with the
+  It ships the **Speed** layer, switched on: load-time tuning with the
   stock kernel's own values — `noop` scheduler, 512 KB read-ahead and no
   entropy/I-O accounting on the SD card and storage, folder listings cached
   longer, fewer background wake-ups — journaled and undone when the session
@@ -2175,8 +2648,8 @@ For anything older, the git log and the
   navy) is kept as **PS4 Style**, with its palette as **PS4 Night**. Theme
   files can ask for the hub with `"carouselStyle": "hub"` (docs/THEMES.md).
 
-- **Wi-Fi, Bluetooth and Power tiles you can pin to Home.** A tester coming
-  from NextUI missed its quick menu's Wi-Fi, Bluetooth and power-off shortcuts.
+- **Wi-Fi, Bluetooth and Power tiles you can pin to Home.** Testers asked
+  for one-press Wi-Fi, Bluetooth and power-off shortcuts.
   Edit Home's **Add to Home** card (L2, then **+**) now starts with a **Quick
   controls** section: **Wi-Fi** and **Bluetooth** switch the radio with one
   press — the round badge is lit while it is on, and the tile names the
@@ -3415,6 +3888,20 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Voice tab: "This voice server does not let guests open rooms here"**
+  (Juka, 2026-11-20: "fix voice"). JukaHub asked GameMania's server for the
+  JukaHub room from the server's lobby, but the server only lets people who
+  are inside **Private User-Channels** open rooms there (its instructions say
+  to change to that channel first), so the first person to join was always
+  refused. JukaHub now steps into the parent channel first and asks from
+  there. A server that still says no gets two more tries before the Voice
+  page gives up: a lasting channel (voice room only; never for private Voice
+  Channels), then registering the device's certificate under the Chat name
+  once, as Mumble's own **Register** does, and reconnecting. Each refusal is
+  now logged with the permission and channel the server named, and other
+  refusals no longer end the call by mistake (`chatvoice_mumble.go`,
+  `chatvoice_mumble_proto.go`; docs/VOICE_CHANNEL.md; VOICE-HW-1).
+
 - **A game and another screen taking turns after a sleep** (Juka, 2026-11-20:
   "when the emulator goes to sleep … one press powerbutton … during wake up
   emulator and stock screen shows up at same time and they blink each
@@ -3496,8 +3983,8 @@ For anything older, the git log and the
     ([player/portmaster_python.go](player/portmaster_python.go)).
   - A script started by its own `#!/bin/bash` line — `device_info.txt` run on
     its own, WestonPack's `westonwrap.sh`, a port's helper scripts — went to
-    the firmware's `/bin/bash`, which on the Brick is BusyBox's sh or missing
-    (spruceOS #1986, nx-handheld #308). When `/bin/bash` is not bash, each
+    the firmware's `/bin/bash`, which on the Brick is BusyBox's sh or missing.
+    When `/bin/bash` is not bash, each
     PortMaster or port launch now runs in a mount namespace of its own whose
     `/bin` is a read-only tmpfs folder of links to the firmware's `/bin` plus
     the real bash the launch already uses. The firmware is not changed; the mounts end
@@ -4515,7 +5002,7 @@ For anything older, the git log and the
 - **Bluetooth can start the XR829 on the TrimUI Smart Pro when the firmware
   left it off.** The fallback now enables the chip's `btwrite` wake control,
   resets its power through the firmware's rfkill `state` file, and starts
-  `rtk_hciattach` at the 115200 baud used by Knulli if the stock `hciattach`
+  `rtk_hciattach` at 115200 baud if the stock `hciattach`
   is unavailable. Chip-specific firmware scripts are preferred over generic
   ones, TrimUI's `rfkill.elf` is recognized, and diagnostics record the wake
   control's value. A failed attach restores the previous wake state
@@ -5886,7 +6373,7 @@ For anything older, the git log and the
   The D-pad, the arrow keys or the wheel move the level and B (Esc) closes.
   What it moves depends on the device: on the TrimUI Smart Pro and Brick the
   panel's backlight through the Allwinner display driver (`/dev/disp`, the
-  path the firmware, MinUI and spruceOS use), in the firmware's own ten steps,
+  path the firmware and MinUI use), in the firmware's own ten steps,
   with the level written back to the firmware's `system.json` so its
   brightness keys carry on from it (and each step written with the panel level
   the firmware itself was seen to use for it, so nothing jumps when the
@@ -7563,7 +8050,7 @@ For anything older, the git log and the
   charger is connected, on Home and every screen, and Quick Settings adds
   "Charging" to its battery line. The Smart Pro's battery driver does not
   report "Charging" reliably, so a charger input that is online (axp2202-usb,
-  the reading MinUI and NextUI use) now counts too, and a latched "Full" no
+  the reading MinUI uses) now counts too, and a latched "Full" no
   longer shows the bolt on battery. The low-battery guard and the battery
   saver stand down for a cable only while the level holds: a charger too weak
   to keep up no longer silences them, and the warning then says the battery
@@ -7575,7 +8062,7 @@ For anything older, the git log and the
   slider asked amixer for Master or PCM, which the tg5040 codec does not
   have, so every change failed. JukaHub now drives the codec's "digital
   volume" control (an attenuation, written through a curve fitted to the
-  steps NextUI measured on the same codec), mutes for real through "DAC
+  steps measured on the same codec), mutes for real through "DAC
   Volume", reads the level back from the codec so it follows the hardware
   keys (headphones included), and keeps the firmware's own level in
   /mnt/UDISK/system.json in step so the keys carry on from it. The next level
@@ -7584,7 +8071,7 @@ For anything older, the git log and the
   a level set just before quitting still reaches them; and JukaHub no longer
   puts its own saved level over the firmware's at launch. Quick Settings'
   writes moved off the render thread too. The mixer names and the curve come
-  from MinUI and NextUI work on the same hardware and still need a check on a
+  from MinUI's work on the same hardware and still need a check on a
   device ([player/volume_trimui.go](player/volume_trimui.go),
   [player/systemcontrol.go](player/systemcontrol.go),
   [player/quicksettings.go](player/quicksettings.go),

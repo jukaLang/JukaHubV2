@@ -27,7 +27,8 @@ func voiceAISettingsRows() []setRow {
 	rows = append(rows, voiceScreenSettingsRows()...) // "Let Juka see the screen" (voicescreen.go)
 	rows = append(rows, voiceShortcutSettingsRows()...)
 	rows = append(rows, gameAssistSettingsRows()...)
-	rows = append(rows, hjSettingsRows()...) // "Hey Juka" (wakeword.go)
+	rows = append(rows, aiTranslateSettingsRows()...) // "Translate games" (aitranslate_settings.go)
+	rows = append(rows, hjSettingsRows()...)          // "Hey Juka" (wakeword.go)
 	rows = append(rows, vkVoiceSettingsRows()...)
 	return rows
 }

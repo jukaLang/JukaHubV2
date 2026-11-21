@@ -3896,7 +3896,7 @@ func ensureVideoScene(config *Config) bool {
 	if idx < 0 || idx == currentSceneIndex {
 		return false
 	}
-	changeSceneTo(config, idx)
+	uiModePlayerScene(config, idx) // changeSceneTo; Kid mode lets the player's screen open (uimode.go)
 	return true
 }
 
@@ -3907,6 +3907,9 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	url := v.GetURL()
 	if url == "" {
 		logDebug("core", "playVideoInfo: empty URL, nothing to play")
+		return
+	}
+	if !uiModeStreamOK(url) { // Kid mode: no web video (uimode.go)
 		return
 	}
 	// A video already downloading in the background (ytdownload_bg.go) plays
@@ -6811,6 +6814,8 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	if transitionPhase != "none" {
 		return
 	}
+	// Kiosk and Kid mode keep only the play screens (uimode.go).
+	targetIdx = uiModeSceneTarget(config, targetIdx, record)
 	if targetIdx < 0 || targetIdx >= len(config.Scenes) || targetIdx == currentSceneIndex {
 		return
 	}

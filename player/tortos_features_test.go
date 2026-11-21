@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -83,6 +84,48 @@ func TestAudiobookFinishedStatusPersists(t *testing.T) {
 	}
 }
 
+// Each audiobook keeps its own listening speed; the global speed (all a store
+// from before per-book speeds has) stays the default for music and for books
+// never changed.
+func TestAudiobookOwnSpeedPersists(t *testing.T) {
+	oldPath := audioResumeFilePath
+	path := filepath.Join(t.TempDir(), "audioresume.json")
+	audioResumeFilePath = func() string { return path }
+	audioPrefs.mu.Lock()
+	oldLoaded, oldSpeed, oldEntries, oldBooks, oldSpeeds := audioPrefs.loaded, audioPrefs.speed, audioPrefs.entries, audioPrefs.books, audioPrefs.bookSpeeds
+	audioPrefs.loaded = false
+	audioPrefs.mu.Unlock()
+	t.Cleanup(func() {
+		audioResumeFilePath = oldPath
+		audioPrefs.mu.Lock()
+		audioPrefs.loaded, audioPrefs.speed, audioPrefs.entries, audioPrefs.books, audioPrefs.bookSpeeds = oldLoaded, oldSpeed, oldEntries, oldBooks, oldSpeeds
+		audioPrefs.mu.Unlock()
+	})
+	// An older store: one global speed, no books' own.
+	if err := os.WriteFile(path, []byte(`{"speed": 1.25, "entries": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	book := filepath.Join(t.TempDir(), "Audiobooks", "Book")
+	other := filepath.Join(t.TempDir(), "Audiobooks", "Other")
+	if got := audioSpeedFor(book); got != 1.25 {
+		t.Fatalf("book without its own speed = %v, want the global 1.25", got)
+	}
+	audioSaveSpeedFor(book, 1.75)
+	audioSaveSpeedFor("", 1.5) // music: the global speed
+	audioPrefs.mu.Lock()
+	audioPrefs.loaded = false
+	audioPrefs.mu.Unlock()
+	if got := audioSpeedFor(book); got != 1.75 {
+		t.Fatalf("book speed after reload = %v, want 1.75", got)
+	}
+	if got := audioSpeedFor(other); got != 1.5 {
+		t.Fatalf("another book = %v, want the global 1.5", got)
+	}
+	if got := audioSpeedFor(""); got != 1.5 || audioSavedSpeed() != 1.5 {
+		t.Fatalf("music speed = %v, want 1.5", got)
+	}
+}
+
 func TestGameHistoryRecoversInterruptedLaunch(t *testing.T) {
 	oldPath := gameHistoryPath
 	path := filepath.Join(t.TempDir(), "game-history.json")
@@ -118,6 +161,67 @@ func TestGameHistoryRecoversInterruptedLaunch(t *testing.T) {
 	st := gameHistorySummarize(gameHistoryFor(game.System, game.Title), time.Now())
 	if st.Launches != 2 || st.Sessions != 1 || st.Longest != 60 || st.Last7 != 60 || st.Last30 != 60 || st.Interrupted != 1 {
 		t.Fatalf("session summary = %+v", st)
+	}
+}
+
+// Deleting a game's record (game_history_forget.go) removes its history, its
+// lifetime time — with the bare-title entry of an older save that the game page
+// counts as its own — and its days by game, keeps another game's, and stays
+// deleted after a reload.
+func TestGameHistoryForgetRemovesOneGame(t *testing.T) {
+	oldPath, oldPeriodsPath, oldPeriods, oldPlaytime := gameHistoryPath, playtimePeriodsTestPath, playtimePeriods, playtime
+	dir := t.TempDir()
+	gameHistoryPath = func() string { return filepath.Join(dir, "game-history.json") }
+	playtimePeriodsTestPath = filepath.Join(dir, playtimePeriodsFileName)
+	playtimePeriods.loaded = false
+	gameHistoryStore.mu.Lock()
+	gameHistoryStore.loaded = false
+	gameHistoryStore.data = gameHistoryFile{}
+	gameHistoryStore.mu.Unlock()
+	t.Cleanup(func() {
+		gameHistoryFlush(time.Second)
+		gameHistoryPath, playtimePeriodsTestPath, playtimePeriods, playtime = oldPath, oldPeriodsPath, oldPeriods, oldPlaytime
+		gameHistoryStore.mu.Lock()
+		gameHistoryStore.loaded = false
+		gameHistoryStore.data = gameHistoryFile{}
+		gameHistoryStore.mu.Unlock()
+	})
+	gone := libraryGame{Path: "a.rom", System: "GBA", Title: "Gone Example"}
+	keep := libraryGame{Path: "b.rom", System: "GBA", Title: "Kept Example"}
+	now := time.Now().Truncate(time.Second)
+	gameHistoryLaunch(gone, now.Add(-time.Hour))
+	gameHistoryLaunch(keep, now.Add(-time.Hour))
+	playtime = playtimeState{loaded: true, data: newPlaytimeData()}
+	playtime.data.Games["GBA|Gone Example"] = 600
+	playtime.data.Games["Gone Example"] = 60
+	playtime.data.Games["GBA|Kept Example"] = 300
+	today := now.Format(wrappedDayKey)
+	playtimePeriodsCredit("GBA|Gone Example", today, 600)
+	playtimePeriodsCredit("GBA|Kept Example", today, 300)
+
+	out := gameHistoryForget(playtimeGameKey(gone.System, gone.Title))
+	if out.Launches != 1 || out.Seconds != 660 || !out.Days {
+		t.Fatalf("forget = %+v, want 1 launch, 660 s and its days", out)
+	}
+	if rec := gameHistoryFor(gone.System, gone.Title); rec.Launches != 0 || len(rec.Sessions) != 0 {
+		t.Fatalf("the deleted game's history is still there: %+v", rec)
+	}
+	if rec := gameHistoryFor(keep.System, keep.Title); rec.Launches != 1 {
+		t.Fatalf("the other game's history changed: %+v", rec)
+	}
+	games := playtime.data.Games
+	if _, ok := games["GBA|Gone Example"]; ok || games["Gone Example"] != 0 || games["GBA|Kept Example"] != 300 {
+		t.Fatalf("lifetime ledger after forget = %v", games)
+	}
+	if totals := playtimePeriodTotals(playtimePeriodToday, now); totals["GBA|Gone Example"] != 0 || totals["GBA|Kept Example"] != 300 {
+		t.Fatalf("today by game after forget = %v", totals)
+	}
+	gameHistoryFlush(time.Second)
+	gameHistoryStore.mu.Lock()
+	gameHistoryStore.loaded = false
+	gameHistoryStore.mu.Unlock()
+	if rec := gameHistoryFor(gone.System, gone.Title); rec.Launches != 0 {
+		t.Fatalf("the deleted record came back after a reload: %+v", rec)
 	}
 }
 
@@ -179,6 +283,10 @@ func TestRecentlyAddedSortAndCoverLayoutValues(t *testing.T) {
 	}
 	if libraryLayoutValue("unknown") != libraryLayoutList || libraryLayoutValue(libraryLayoutVertical) != libraryLayoutVertical {
 		t.Fatal("cover layout normalization failed")
+	}
+	// Cover Flow and the Cube survive game-library.json's normalization.
+	if libraryLayoutValue("covers_flow") != libraryLayoutFlow || libraryLayoutValue("cube") != libraryLayoutCube {
+		t.Fatal("Cover Flow / Cube layout normalization failed")
 	}
 	// game-library.json's console_look: an unknown or empty value is Covers.
 	if libraryConsoleLookValue("") != libraryLookCovers || libraryConsoleLookValue("Pixel") != libraryLookCovers ||

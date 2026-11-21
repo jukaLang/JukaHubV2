@@ -45,10 +45,11 @@ The voice room and private Voice Channels run on **Mumble**, the free,
 open-source voice chat made for gamers. JukaHub connects straight to a public
 Mumble server; no account, no relay and no sign-up are involved. The default is
 GameMania's server, `mumble.gamemania.org:42069`, which is free for everyone
-and lets any visitor open temporary channels under **Private User-Channels**.
-The voice room is the channel **JukaHub** there: the first person to join opens
-it and the server removes it when the last one leaves. A private Voice Channel
-is a channel with a random name (`JukaHub-…`) next to it.
+and lets any visitor who changes to **Private User-Channels** open a channel
+inside it. The voice room is the channel **JukaHub** there: the first person to
+join steps into Private User-Channels and opens it (as GameMania's instructions
+tell people to), and the server removes it when the last one leaves. A private
+Voice Channel is a channel with a random name (`JukaHub-…`) next to it.
 
 Everything (the control messages and the sound, compressed with Opus at about
 20 kbit/s) travels over one TLS connection to the server's port, so no UDP port
@@ -72,6 +73,14 @@ Things to know about a public server:
   Mumble servers only let a guest open a room with one. It is made once per
   device (`voice/mumble-identity.pem` in JukaHub's data folder) and tells the
   servers you join that it is the same device as last time, nothing more.
+- Servers differ in who may open a room. JukaHub first opens it from inside the
+  parent channel. If the server says no, it asks for a lasting channel instead
+  (voice room only, never for private Voice Channels), and if that is refused
+  too, it registers the device's certificate under your Chat name once, as
+  **Register** does in Mumble's apps, then reconnects and asks again. After
+  that, the server knows you by that name, even if you rename yourself in Chat.
+  The log's `chat` lines (`voice: asking to open …`, `voice server refused: …`)
+  show each step and the server's permission bits.
 - An invitation that names a different voice server is refused with a note to
   switch servers first, so everyone meets on the server chosen in settings.
 
@@ -101,10 +110,10 @@ an empty answer restores the default.
   When set, private Voice Channels use it instead of the voice server; the
   voice room always uses the voice server.
 
-If the server refuses (it is full, needs a password, does not let guests open
-channels, has no "Private User-Channels" channel), the Voice page says so in
-one sentence and stops retrying; **Try again** retries, or change the server or
-room. A dropped connection reconnects by itself, and a name already taken on
+If the server refuses (it is full, needs a password, will not open the room by
+any of the ways above, has no "Private User-Channels" channel), the Voice page
+says so in one sentence and stops retrying; **Try again** retries, or change
+the server or room. A dropped connection reconnects by itself, and a name already taken on
 the server gets a number added.
 
 ## Self-hosted relay (optional)

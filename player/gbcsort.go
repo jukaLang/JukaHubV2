@@ -41,7 +41,9 @@ package main
 //
 // Zipped games are read too (the library starts .zip files): a zip holding
 // one .gb or .gbc, read through its directory and at most the header's 336
-// bytes. Every header read is bounded and cached by size and time.
+// bytes. A .7z is read the same way (sevenzip.go: its directory, then its
+// block decoded only up to the header). Every header read is bounded and
+// cached by size and time.
 
 import (
 	"archive/zip"
@@ -102,6 +104,8 @@ func gbcReadHead(path string) []byte {
 		return head[:n]
 	case ".zip":
 		return gbcZipHead(path)
+	case ".7z":
+		return sevenZipCartHead(path, []string{".gb", ".gbc"}, gbcZipMaxEntries, gbcCartMaxBytes, gbcHeaderEnd)
 	}
 	return nil
 }
@@ -160,7 +164,7 @@ type gbcColorEntry struct {
 // by its header (a .gb, a .gbc, or a zip of one). Any goroutine.
 func gbcROMColor(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".gb", ".gbc", ".zip":
+	case ".gb", ".gbc", ".zip", ".7z":
 	default:
 		return false
 	}
@@ -427,11 +431,11 @@ func gbcMovePlanFor(job gbcMoveJob) (gameRenamePlan, error) {
 	// another Game Boy game of the same name keeps its own.
 	oldROM := scannedROM{Path: rom, System: gbLibrarySystem}
 	newROM := scannedROM{Path: newRom, System: gbcLibrarySystem}
-	for _, pair := range [][2]string{
+	for _, pair := range append([][2]string{
 		{romArtworkPath(oldROM, job.root), romArtworkPath(newROM, job.root)},
 		{playShotPath(oldROM, job.root), playShotPath(newROM, job.root)},
 		{artworkNoCoverPath(oldROM, job.root), artworkNoCoverPath(newROM, job.root)},
-	} {
+	}, artStyleKindPairs(oldROM, newROM, job.root)...) { // screenshot, title screen (artstyle.go)
 		if pair[0] != "" && pair[1] != "" && regularFile(pair[0]) {
 			add(pair[0], pair[1], true, false, true)
 		}
@@ -738,6 +742,7 @@ func gbcMoveTitle(title string) {
 	if oldKey == newKey {
 		return
 	}
+	playtimePeriodsMoveKey(oldKey, newKey) // the days by game (playtime_periods.go)
 	if playtime.loaded && playtime.data.Games != nil {
 		if secs, ok := playtime.data.Games[oldKey]; ok {
 			delete(playtime.data.Games, oldKey)

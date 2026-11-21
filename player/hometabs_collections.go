@@ -25,15 +25,15 @@ package main
 // rename, previous version kept as .bak); a damaged file comes back from the
 // .bak, and the damaged copy is kept as collections.json.corrupt.
 //
-// After the user's collections come up to three automatic ones (badge
-// "Auto"), read-only and built from the library: Most played, Recently added
-// and Never played.
+// Before the user's collections come the automatic ones (badge "Auto"),
+// read-only and built from the library: Last played, Most played, All games,
+// Recently added, Never played, Multiplayer and one per genre, each switched
+// on or off in Settings (autocoll.go).
 
 import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,6 +249,9 @@ func homeTabsColChangedLocked() {
 		homeTabsColWrites.written = seq
 	}()
 	homeTabsTouch()
+	// NextUI's Collections/*.txt and Device Sync's change times follow
+	// (collections_nextui.go; it runs on its own goroutine).
+	colNextuiKick()
 }
 
 // homeTabsColGen is the store's change counter.
@@ -605,79 +608,24 @@ func homeTabsItemTitle(it homeTabItem) string {
 
 // ── The automatic collections ─────────────────────────────────────────────
 
+// The ids of the first three; the rest, the lists and the switches that
+// show them are autocoll.go's.
 const (
-	homeTabsAutoPrefix    = "auto-"
-	homeTabsAutoPlayed    = "auto-played"
-	homeTabsAutoAdded     = "auto-added"
-	homeTabsAutoUnplayed  = "auto-unplayed"
-	homeTabsAutoMax       = 30
-	homeTabsAutoUnplayMax = 120
+	homeTabsAutoPrefix   = "auto-"
+	homeTabsAutoPlayed   = "auto-played"
+	homeTabsAutoAdded    = "auto-added"
+	homeTabsAutoUnplayed = "auto-unplayed"
 )
 
 // homeTabsIsAuto reports whether a collection id is an automatic one.
 func homeTabsIsAuto(id string) bool { return strings.HasPrefix(id, homeTabsAutoPrefix) }
 
 // homeTabsAutoName is an automatic collection's name, "" for an unknown id.
-func homeTabsAutoName(id string) string {
-	switch id {
-	case homeTabsAutoPlayed:
-		return "Most played"
-	case homeTabsAutoAdded:
-		return "Recently added"
-	case homeTabsAutoUnplayed:
-		return "Never played"
-	}
-	return ""
-}
+func homeTabsAutoName(id string) string { return autoCollName(id) }
 
 // homeTabsAutoGames is an automatic collection's games, from the library
-// snapshot: the most played, the newest on the card, the never started.
-func homeTabsAutoGames(id string) []libraryGame {
-	var games []libraryGame
-	recent := map[string]bool{}
-	if id == homeTabsAutoUnplayed {
-		for _, r := range recentGames() {
-			recent[r.Path] = true
-		}
-	}
-	for _, system := range filterHiddenLibrarySystems(homeTabsLibrary().Systems, libraryShowHidden()) {
-		if system.Name == continueSystemName {
-			continue
-		}
-		for _, g := range system.Games {
-			switch id {
-			case homeTabsAutoPlayed:
-				if g.Playtime > 0 {
-					games = append(games, g)
-				}
-			case homeTabsAutoAdded:
-				if !g.AddedAt.IsZero() && system.Name != builtInLibrarySystem {
-					games = append(games, g)
-				}
-			case homeTabsAutoUnplayed:
-				if g.Playtime == 0 && g.LastPlayed.IsZero() && !recent[g.Path] && system.Name != builtInLibrarySystem {
-					games = append(games, g)
-				}
-			}
-		}
-	}
-	limit := homeTabsAutoMax
-	switch id {
-	case homeTabsAutoPlayed:
-		sort.SliceStable(games, func(i, j int) bool { return games[i].Playtime > games[j].Playtime })
-	case homeTabsAutoAdded:
-		sort.SliceStable(games, func(i, j int) bool { return games[i].AddedAt.After(games[j].AddedAt) })
-	case homeTabsAutoUnplayed:
-		limit = homeTabsAutoUnplayMax
-		sort.SliceStable(games, func(i, j int) bool {
-			return strings.ToLower(games[i].Label()) < strings.ToLower(games[j].Label())
-		})
-	}
-	if len(games) > limit {
-		games = games[:limit]
-	}
-	return games
-}
+// snapshot (autocoll.go).
+func homeTabsAutoGames(id string) []libraryGame { return autoCollGames(id) }
 
 // ── The tab ───────────────────────────────────────────────────────────────
 
@@ -740,8 +688,9 @@ func homeTabsCollectionItemFor(c *Config, id string) (homeTabItem, bool) {
 }
 
 // homeTabsCollectionItems is the Collections tab (hometabs_model.go): "New
-// collection" first, then the user's collections in the order they were
-// made, then the automatic ones that have anything in them.
+// collection" first, then the automatic ones that are switched on and have
+// anything in them (autocoll.go), then the user's collections in the order
+// they were made.
 func homeTabsCollectionItems(c *Config) []homeTabItem {
 	out := []homeTabItem{{
 		Key:      "x:new-collection",
@@ -750,13 +699,13 @@ func homeTabsCollectionItems(c *Config) []homeTabItem {
 		Glyph:    homeTabsGlyph("plus", "add", "folder"),
 		Activate: func(*Config) { homeTabsNewCollection("", "") },
 	}}
-	for _, col := range homeTabsColList() {
-		if it, ok := homeTabsCollectionItemFor(c, col.ID); ok {
+	for _, id := range autoCollIDs(c) {
+		if it, ok := homeTabsCollectionItemFor(c, id); ok {
 			out = append(out, it)
 		}
 	}
-	for _, id := range []string{homeTabsAutoPlayed, homeTabsAutoAdded, homeTabsAutoUnplayed} {
-		if it, ok := homeTabsCollectionItemFor(c, id); ok {
+	for _, col := range homeTabsColList() {
+		if it, ok := homeTabsCollectionItemFor(c, col.ID); ok {
 			out = append(out, it)
 		}
 	}

@@ -1165,7 +1165,7 @@ func jukaosCheckModule(h jukaosHost, base, rel string) (jukaosModule, error) {
 // manager's tunables, the scheduler's, a block device's queue, transparent
 // huge pages, module parameters, and a GPU's devfreq ceiling and governor
 // (a device under /sys/class/devfreq whose name says "gpu": the A523's Mali
-// runs cooler capped, as spruceOS does). The CPU governor and clocks are not
+// runs cooler capped). The CPU governor and clocks are not
 // on the list — JukaHub's power modes own them and would undo a layer's
 // choice. A path here is always a real one: patterns ("*") are checked by
 // jukaosCheckSysfs and expanded first.

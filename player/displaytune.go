@@ -3,7 +3,7 @@ package main
 // displaytune.go — Settings → Display → Contrast, Saturation,
 // Exposure and Colour temperature.
 //
-// NextUI tunes the TrimUI panel's picture with the Allwinner display driver's
+// The TrimUI panel's picture is tuned with the Allwinner display driver's
 // own enhancement: the disp2 driver publishes it as sysfs attributes
 // (/sys/class/disp/disp/attr/enhance_contrast, enhance_saturation,
 // enhance_bright, color_temperature), and the stock firmware's "display
@@ -15,7 +15,7 @@ package main
 // Nobody documents the nodes' scales (0..10, 0..100 and signed ones all exist
 // across disp2 kernels), so JukaHub never writes an absolute value. Each row is
 // an offset from what the driver showed before JukaHub first touched it — the
-// firmware's own setting — in NextUI's ranges (contrast -4..5, saturation
+// firmware's own setting — in these ranges (contrast -4..5, saturation
 // -5..5, exposure -4..5; colour temperature in steps, lower is warmer). That
 // baseline is read once, the first time a row moves off 0, and kept in the
 // config (displayTuneBaseKey), so a restart (or a crash) never mistakes

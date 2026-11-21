@@ -15,8 +15,13 @@ import (
 
 const (
 	gameHistoryVersion     = 1
-	gameHistoryMaxGames    = 128
+	gameHistoryMaxGames    = 500
 	gameHistoryMaxSessions = 48
+	// Past the gameHistoryFullGames played most recently, a game keeps its
+	// totals and only its last gameHistoryOldSessions sessions: four times the
+	// games for little more file than before.
+	gameHistoryFullGames   = 128
+	gameHistoryOldSessions = 4
 )
 
 type gameHistorySession struct {
@@ -180,6 +185,35 @@ func gameHistoryPruneLocked() {
 			}
 		}
 		delete(gameHistoryStore.data.Games, oldestKey)
+	}
+	if len(gameHistoryStore.data.Games) <= gameHistoryFullGames {
+		return
+	}
+	// The older games keep their totals and their last few sessions only.
+	type aged struct {
+		key  string
+		last time.Time
+	}
+	games := make([]aged, 0, len(gameHistoryStore.data.Games))
+	for key, rec := range gameHistoryStore.data.Games {
+		a := aged{key: key}
+		if n := len(rec.Sessions); n > 0 {
+			a.last = rec.Sessions[n-1].Started
+		}
+		games = append(games, a)
+	}
+	sort.Slice(games, func(i, j int) bool {
+		if !games[i].last.Equal(games[j].last) {
+			return games[i].last.After(games[j].last)
+		}
+		return games[i].key < games[j].key
+	})
+	for _, a := range games[gameHistoryFullGames:] {
+		rec := gameHistoryStore.data.Games[a.key]
+		if n := len(rec.Sessions); n > gameHistoryOldSessions {
+			rec.Sessions = append([]gameHistorySession(nil), rec.Sessions[n-gameHistoryOldSessions:]...)
+			gameHistoryStore.data.Games[a.key] = rec
+		}
 	}
 }
 

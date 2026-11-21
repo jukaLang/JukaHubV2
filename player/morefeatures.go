@@ -90,6 +90,9 @@ func hasMediaExtension(s string) bool {
 // embedded player. ffmpeg reads the stream itself; ffplay is no longer used
 // because the bundled binary needs X11, which the handheld does not have.
 func playStream(config *Config, url string) {
+	if !uiModeStreamOK(url) { // Kid mode: no web streams (uimode.go)
+		return
+	}
 	recordPlayed(config, url)
 	logDebug("morefeatures", "playStream: %s", sanitizeLogURL(url))
 	ensureVideoScene(config)

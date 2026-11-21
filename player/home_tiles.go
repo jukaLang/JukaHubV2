@@ -123,7 +123,10 @@ var homeWidgetSpecs = []homeWidgetSpec{
 	{Name: "battery", Title: "Battery", Note: "Charge level and whether it is charging", Glyph: "battery", Size: homeTileSize{1, 1}},
 	{Name: "storage", Title: "Storage", Note: "Free space where JukaHub is installed", Glyph: "disk", Size: homeTileSize{1, 1}},
 	{Name: "playtime", Title: "Playtime", Note: "Time played today and trophies earned", Glyph: "trophy", Size: homeTileSize{1, 1}},
-	// The quick controls: NextUI's quick-menu switches, pinned (2026-11-13).
+	// The dashboard pair (home_dashboard.go).
+	{Name: homeDashMostPlayed, Title: "Most played", Note: "Your most played game and its hours; A plays it", Glyph: "trophy", Size: homeTileSize{2, 1}},
+	{Name: homeDashThisMonth, Title: "This month", Note: "Game time this month and how many games", Glyph: "calendar", Size: homeTileSize{1, 1}},
+	// The quick controls: Wi-Fi, Bluetooth and Power, pinned (2026-11-13).
 	{Name: "wifi", Title: "Wi-Fi", Note: "Switch Wi-Fi on or off", Glyph: "wifi", Size: homeTileSize{1, 1}, Quick: true},
 	{Name: "bluetooth", Title: "Bluetooth", Note: "Switch Bluetooth on or off", Glyph: "bluetooth", Size: homeTileSize{1, 1}, Quick: true},
 	{Name: "power", Title: "Power", Note: "Sleep, restart or power off", Glyph: "power", Size: homeTileSize{1, 1}, Quick: true},
@@ -174,6 +177,11 @@ func homeTileKindOf(ref string) homeTileKind {
 		if strings.TrimSpace(ref[len(homeTileActionPrefix):]) != "" {
 			return homeTileApp
 		}
+	case strings.HasPrefix(ref, homeTabRefGame):
+		// A game pinned to Home (gamepin.go).
+		if gamePinPathOf(ref) != "" {
+			return homeTileGame
+		}
 	}
 	return homeTileUnknown
 }
@@ -206,6 +214,9 @@ func homeTileNormalizeRef(ref string) string {
 		return out
 	case strings.HasPrefix(lower, homeTileWidgetPrefix):
 		return homeTileWidgetPrefix + strings.TrimSpace(lower[len(homeTileWidgetPrefix):])
+	case strings.HasPrefix(lower, homeTabRefGame):
+		// A pinned game keeps its path's spelling (gamepin.go).
+		return homeTabRefGame + strings.TrimSpace(ref[len(homeTabRefGame):])
 	case lower == homeTileAddRef:
 		return homeTileAddRef
 	}

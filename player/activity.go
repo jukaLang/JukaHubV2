@@ -47,6 +47,9 @@ type activityItem struct {
 	// came from, a download row opens the Downloads panel. nil is the same as
 	// "look, don't tap" — the overflow fold has nowhere to go.
 	open func()
+	// spin draws a turning spinner in the status tile instead of the glyph:
+	// work with no phase to name (activity_busy.go).
+	spin bool
 }
 
 // activityRows assembles the strip's rows from the background-work sources,
@@ -149,6 +152,9 @@ func activityRows() []activityItem {
 	if item, ok := psHelpersActivityItem(); ok {
 		rows = append(rows, item)
 	}
+	// Work with no progress to report: Wi-Fi or Bluetooth coming on
+	// (activity_busy.go).
+	rows = append(rows, activityBusyItems()...)
 	return rows
 }
 
@@ -258,7 +264,10 @@ func renderActivityStrip(renderer *sdl.Renderer, config *Config) {
 		// Status tile on the left: glyph over the tint, like the card's tile.
 		tile := chipH
 		fillRoundedRect(renderer, x, cy, tile, chipH, 10, row.tint)
-		if gw, gh, _ := font.SizeUTF8(row.glyph); gw > 0 && gh > 0 {
+		if row.spin {
+			// Busy work turns instead of naming a phase (activity_busy.go).
+			renderSpinner(renderer, x+tile/2, cy+chipH/2, tile/4, contrastText(row.tint))
+		} else if gw, gh, _ := font.SizeUTF8(row.glyph); gw > 0 && gh > 0 {
 			renderText(renderer, config, font, row.glyph, contrastText(row.tint),
 				x+(tile-int32(gw))/2, cy+(chipH-glyphH)/2+3)
 		}

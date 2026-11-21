@@ -108,7 +108,7 @@ var batteryChargingCache struct {
 // The battery's own status was the only source, and the TrimUI Smart Pro's
 // AXP2202 driver does not reliably report "Charging" there: plugged in, the
 // corner showed a plain gauge. Its USB input (axp2202-usb/online) is the
-// reading MinUI and NextUI use for the same question, so a charger that is
+// reading MinUI uses for the same question, so a charger that is
 // online now counts too.
 func getBatteryCharging() bool {
 	batteryChargingCache.mu.Lock()
@@ -853,7 +853,7 @@ func ensureSmartSettingsScene(config *Config) {
 			"At 20% or less: slower cadence, no motion, OLED theme."},
 		{"Light & dark by time of day", "timeOfDayTheme",
 			"Day and night themes and times: Settings → Theme & look."},
-		{"Save & suspend at 3%", "lowBatteryGuard",
+		{"Save & suspend on low battery", "lowBatteryGuard",
 			"While a game runs: save state, sync, then suspend."},
 	}
 	if jukaosNativeActive() {

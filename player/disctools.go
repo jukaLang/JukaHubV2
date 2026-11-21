@@ -261,9 +261,12 @@ func discSheetListed(dir string, names []string) (sheets, playlists map[string]b
 // than stopping at the first failure: one unwritable file must not hide the
 // eleven that worked.
 func writeDiscHelpers(dir, mode string) (cues, playlists int, errs []string) {
+	// Split "(Track N)" rips get their one sheet first (cuegen.go), so the
+	// passes below see it like any other.
+	cues, errs = cueGenTrackSetSheets(dir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return 0, 0, []string{err.Error()}
+		return cues, 0, append(errs, err.Error())
 	}
 
 	type discFile struct {
@@ -303,7 +306,13 @@ func writeDiscHelpers(dir, mode string) (cues, playlists int, errs []string) {
 		if have[strings.ToLower(cue)] {
 			continue
 		}
-		if err := discWriteNew(filepath.Join(dir, cue), cueSheetText(f.name, mode)); err != nil {
+		// The mode the image's first sector says; none for a .bin that is
+		// not a raw data track (cuegen.go).
+		text, ok := cueGenSingleText(filepath.Join(dir, f.name), mode)
+		if !ok {
+			continue
+		}
+		if err := discWriteNew(filepath.Join(dir, cue), text); err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}
@@ -426,7 +435,11 @@ func discFolderEntry(dir, mode string) (entry string, cues int, err error) {
 		return "", 0, nil
 	}
 	cue := strings.TrimSuffix(bins[0], filepath.Ext(bins[0])) + ".cue"
-	if err := discWriteNew(filepath.Join(dir, cue), cueSheetText(bins[0], mode)); err != nil {
+	text, ok := cueGenSingleText(filepath.Join(dir, bins[0]), mode) // cuegen.go
+	if !ok {
+		return "", 0, nil
+	}
+	if err := discWriteNew(filepath.Join(dir, cue), text); err != nil {
 		return "", 0, err
 	}
 	return cue, 1, nil
@@ -455,6 +468,10 @@ func writeDiscFolderPlaylist(gameDir, mode string) (cues, playlists int, pending
 		if _, taken := byDisc[n]; taken {
 			continue // "Disc 1" and "disc1": the first spelling is kept
 		}
+		// A split "(Track N)" rip in the disc folder gets its sheet (cuegen.go).
+		trackCues, trackErrs := cueGenTrackSetSheets(filepath.Join(gameDir, e.Name()))
+		cues += trackCues
+		errs = append(errs, trackErrs...)
 		entry, made, ferr := discFolderEntry(filepath.Join(gameDir, e.Name()), mode)
 		cues += made
 		if ferr != nil {

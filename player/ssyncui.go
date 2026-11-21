@@ -422,6 +422,8 @@ func ssyncRenderHome(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 			addRow(d.id, d.spec)
 		}
 	}
+	// Device Sync's switches and Send my settings (devsync_ui.go).
+	y, row = devsyncRenderHome(renderer, config, fonts, frame, top, y, row)
 
 	y += 14
 	tbxDrawSection(renderer, config, "Without a network", "upload", x, top+y, w)
@@ -455,7 +457,7 @@ func ssyncRenderCompare(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	if cmp.PeerID == gdrivePeerID {
 		run.subtitle = "Changed on one side is copied; changed on both keeps both; a safety snapshot is taken first"
 	}
-	disabled := len(cmp.Plan.Items) == 0
+	disabled := len(cmp.Plan.Items) == 0 && !devsyncHasWork(cmp.PeerID)
 	if disabled {
 		run.subtitle, run.pill, run.tone, run.dim = "Nothing to copy", "", tbxToneNeutral, true
 	}
@@ -464,6 +466,8 @@ func ssyncRenderCompare(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	nav.add("run", rect, row, disabled)
 	row++
 	y += rowH + 8
+	// Collections, recents, BIOS and ROMs with this device (devsync_ui.go).
+	y, row = devsyncRenderCompare(renderer, config, fonts, frame, top, y, row)
 	if len(cmp.Plan.Skipped) > 0 {
 		note := pluralizeCount(len(cmp.Plan.Skipped), "save", "saves") + " left out: names or folders the other device cannot hold"
 		renderText(renderer, config, fonts.small, ellipsize(fonts.small, note, w), ToastWarnInk(), x, top+y)
@@ -588,6 +592,10 @@ func ssyncScreenHints() []FooterHint {
 		hints = append(hints, FooterHint{Button: "A", Label: "Turn on"})
 	case id == "pair", id == "manager":
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
+	case strings.HasPrefix(id, "ds:cat:"), strings.HasPrefix(id, "ds:rom:"):
+		hints = append(hints, FooterHint{Button: "A", Label: "On or off"})
+	case id == "ds:settings", id == "ds:inbox":
+		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	}
 	return append(hints, FooterHint{Button: "B", Label: "Back"})
 }
@@ -598,7 +606,7 @@ func ssyncActivate(config *Config, id string) {
 		ShowToast("Wait for the current job to finish (B stops it)", ToastKindInfo)
 		return
 	}
-	if cloudActivate(config, id) {
+	if cloudActivate(config, id) || devsyncActivate(config, id) {
 		return
 	}
 	switch {
@@ -614,7 +622,10 @@ func ssyncActivate(config *Config, id string) {
 		PlayActivateSound()
 		ssyncStartCompare(strings.TrimPrefix(id, "dev:"))
 	case id == "run":
-		ssyncStartSync()
+		// Copying games asks first, with the size (devsync_ui.go).
+		if !devsyncConfirmROMs(config, ssyncStartSync) {
+			ssyncStartSync()
+		}
 	case strings.HasPrefix(id, "item:"):
 		ssyncOpenItemSheet(config, id)
 	case id == "export":
@@ -710,6 +721,12 @@ func ssyncStartCompare(peerID string) {
 	ssyncScreen.model.builtAt = time.Time{}
 	go func() {
 		cmp, err := ssyncCompare(ctx, rec.ID, rec.Name)
+		if err == nil {
+			// Saves or states switched off, and the other categories
+			// (devsync.go).
+			cmp.Plan = devsyncFilterSaves(cmp)
+			devsyncCompareExtras(ctx, rec.ID, rec.Name)
+		}
 		tbxPost(func() {
 			ssyncWorkEnd()
 			ssyncScreen.model.builtAt = time.Time{}
@@ -729,7 +746,7 @@ func ssyncStartCompare(peerID string) {
 // ssyncStartSync carries out the comparison on screen.
 func ssyncStartSync() {
 	cmp := ssyncScreen.cmp
-	if cmp == nil || len(cmp.Plan.Items) == 0 {
+	if cmp == nil || (len(cmp.Plan.Items) == 0 && !devsyncHasWork(cmp.PeerID)) {
 		ShowToast("Nothing to copy — the saves are already the same", ToastKindInfo)
 		return
 	}
@@ -745,13 +762,15 @@ func ssyncStartSync() {
 	job := *cmp
 	go func() {
 		res := ssyncRunSync(ctx, job, ssyncWorkProgress)
+		// Then collections, recents, BIOS and ROMs (devsync_ui.go).
+		extra := devsyncRunExtras(ctx, job.PeerID, job.PeerName)
 		tbxPost(func() {
 			ssyncWorkEnd()
 			ssyncScreen.cmp = nil
 			ssyncScreen.cmpRows = nil
 			ssyncScreen.mode = ssyncModeHome
 			ssyncScreen.nav.focus, ssyncScreen.nav.scroll = "", 0
-			ssyncScreen.resultLine = "Last sync with " + job.PeerName + ": " + ssyncResultText(res)
+			ssyncScreen.resultLine = "Last sync with " + job.PeerName + ": " + ssyncResultText(res) + devsyncResultSuffix(extra)
 			ssyncScreen.model.builtAt = time.Time{}
 			peerLastSync.mu.Lock()
 			if peerLastSync.m == nil {
@@ -763,14 +782,14 @@ func ssyncStartSync() {
 				trophyEvent(tkSaveBackup) // a sync that copied at least one save
 			}
 			kind := ToastKindSuccess
-			if res.Failed > 0 {
+			if res.Failed > 0 || len(extra.errs) > 0 {
 				kind = ToastKindWarning
 			}
 			msg := "Saves synced with " + job.PeerName + " · " + ssyncResultText(res)
 			if res.Failed > 0 && len(res.Errors) > 0 {
 				msg += " — " + res.Errors[0]
 			}
-			ShowToast(msg, kind)
+			ShowToast(msg+devsyncResultSuffix(extra), kind)
 		})
 	}()
 }

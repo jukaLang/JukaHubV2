@@ -1,8 +1,8 @@
 package main
 
-// fileserver_guard.go — what the FTP and SFTP servers share: the card they
-// serve, who is connected, when a client last used them, and the watchdog that
-// switches them off (SEC-5).
+// fileserver_guard.go — what the FTP and SFTP servers (and the WebDAV share,
+// davshare.go) share: the card they serve, who is connected, when a client
+// last used them, and the watchdog that switches them off (SEC-5).
 //
 // The servers are for a quick copy at home. Left running they would be a door
 // into the card for every device on whatever network the handheld joins next —
@@ -405,7 +405,7 @@ func fileServerWatchStart() {
 func fileServerWatchDone() bool {
 	fsWatch.mu.Lock()
 	defer fsWatch.mu.Unlock()
-	if ftpSrv.Running() || sshSrv.Running() {
+	if ftpSrv.Running() || sshSrv.Running() || davSrv.Running() {
 		return false
 	}
 	fsWatch.running = false
@@ -431,12 +431,13 @@ func fileServerWatchLoop() {
 		if fileServerWatchDone() {
 			return
 		}
-		ftpTarget, sshTarget := ftpSrv.watchTarget(), sshSrv.watchTarget()
+		// The WebDAV share (davshare.go) is the third server watched.
+		targets := []fsWatchTarget{ftpSrv.watchTarget(), sshSrv.watchTarget(), davSrv.watchTarget()}
 		cur := fsReadNetIdentity()
 		// time.Now(), not a stored or parsed time: its monotonic reading is
 		// what makes the idle test immune to clock sets (fsActivity).
-		reasons := w.decide(time.Now(), cur, []fsWatchTarget{ftpTarget, sshTarget})
-		fileServerApplyStops([]fsWatchTarget{ftpTarget, sshTarget}, reasons)
+		reasons := w.decide(time.Now(), cur, targets)
+		fileServerApplyStops(targets, reasons)
 	}
 }
 
@@ -452,6 +453,10 @@ func fileServerStopUnwatched() {
 		sshSrv.Stop()
 		names = append(names, "SFTP")
 	}
+	if davSrv.Running() {
+		davSrv.Stop()
+		names = append(names, "WebDAV")
+	}
 	if len(names) > 0 {
 		ShowToast(fsStopMessage(names, fsStopUnwatched), ToastKindWarning)
 	}
@@ -461,7 +466,7 @@ func fileServerStopUnwatched() {
 // toast; when they stopped for different reasons the network one is told,
 // because it is the one the user did not cause.
 func fileServerApplyStops(targets []fsWatchTarget, reasons []string) {
-	names := []string{"FTP", "SFTP"}
+	names := []string{"FTP", "SFTP", "WebDAV"}
 	byReason := map[string][]string{}
 	for i, reason := range reasons {
 		if reason == "" || i >= len(targets) || i >= len(names) {
@@ -473,6 +478,8 @@ func fileServerApplyStops(targets []fsWatchTarget, reasons []string) {
 			stopped = ftpSrv.stopRun(targets[i].gen)
 		case 1:
 			stopped = sshSrv.stopRun(targets[i].gen)
+		case 2:
+			stopped = davSrv.stopRun(targets[i].gen)
 		}
 		if !stopped {
 			continue

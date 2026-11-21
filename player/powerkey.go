@@ -334,6 +334,10 @@ func powerKeyLongDue(gen uint64) {
 	if powerKeyModeNow() == powerKeyNothing || gameScreenSuspended() || powerSleepActive() || nextuiPakOwnsPowerKey() {
 		return
 	}
+	// "Ask before power off" Off: the hold powers off, no card (power_options.go).
+	if powerOptKeyHoldOff() {
+		return
+	}
 	logInfo("power", "power key held: Exit card")
 	powerKeyCardRequested.Store(true)
 }
@@ -457,8 +461,15 @@ func powerKeyTick(config *Config, parked bool) {
 		// The FN switch as the power button's hold switch (travellock.go).
 		travelLockTick(config)
 	}
+	// The FN switch's other actions: mute, lights off, airplane mode
+	// (fnswitch.go). Not throttled here: it throttles itself to 100 ms.
+	fnSwitchTick(config, parked)
 	// The power-on resume and the music screen-off (quickresume.go).
 	quickResumeTick(config, parked)
+	// A held key's power off when "Ask before power off" is Off (power_options.go).
+	powerOptKeyTick(config, parked)
+	// A tap on the Smart Pro S's Home key (frontkeys_home.go).
+	frontHomeKeyTick(config, parked)
 	if parked {
 		// No card over a running game; a request made just before it took
 		// the screen is dropped rather than popping up after it.

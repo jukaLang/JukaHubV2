@@ -529,9 +529,9 @@ func musicHistoryReload() {
 // ── The History shelf ────────────────────────────────────────────────────────
 
 // The Music screen's shelves (music_shelf.go): Albums, Artists, Audiobooks,
-// and History last.
+// History, and Radio last (musicShelfTabRadio, radiodir_ui.go).
 const (
-	musicShelfTabs       = 4
+	musicShelfTabs       = 5
 	musicShelfTabHistory = 3
 )
 

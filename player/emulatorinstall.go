@@ -339,6 +339,12 @@ func startEmulatorInstall(e emuEntry) {
 		godotStartInstall()
 		return
 	}
+	if ps2Tile(e) {
+		// Roms/PS2 and the ARMSX2 core install or update ARMSX2's own build,
+		// with its resources folder (ps2.go).
+		ps2StartInstall()
+		return
+	}
 	if IsWindows() {
 		if name := emuWinStandaloneFor(e); name != "" {
 			if e.Status == emuAvailable && !e.Managed && strings.EqualFold(name, e.Name) {

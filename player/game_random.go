@@ -3,8 +3,7 @@ package main
 // game_random.go — the random game picker in the Games Library.
 //
 // A library of a thousand ROMs is a decision problem: the same twenty titles
-// are the ones anyone scrolls past. The picker (CrossMix has one as its own
-// app) rolls a game for you and lands the highlight on it — console, row and
+// are the ones anyone scrolls past. The picker rolls a game for you and lands the highlight on it — console, row and
 // scroll position — so the pick is visible before anything starts; A then plays
 // it, R rolls again.
 //

@@ -780,13 +780,30 @@ four the same way, with controller hints; see
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Looks](docs/LOOKS.md) | per-console picture looks (CRT, LCD, SkyWalker541's pixel transparency), Download looks, Tune look, overlays, overscan |
 | [Get Homebrew](docs/HOMEBREW.md) | new games from itch.io for ten consoles: browsing, the itch.io key, installs onto the shelves, updates |
+| [Box art](docs/BOX_ART.md) | where covers come from: libretro thumbnails, the LaunchBox Games Database, ScreenScraper sign-in; .7z games by checksum |
+| [Battery warnings](docs/BATTERY_WARNINGS.md) | the low-battery level, blink, in-game message and save-and-suspend level; battery on the lights; Menu + volume brightness |
 | [Light gun](docs/LIGHT_GUN.md) | gun games in RetroArch with the right stick as the gun: Move and Point aiming, per-game tuning, the practice target, supported cores |
+| [RetroAchievements](docs/RETROACHIEVEMENTS.md) | RetroArch's achievement options per launch (hardcore, leaderboards, challenge indicators, encore…), Sign in for games, the unlock lights |
+| [Game hotkeys](docs/GAME_HOTKEYS.md) | RetroArch's hotkey button and shortcuts per console and per game, copied from the pad's own button codes |
+| [Game translation](docs/GAME_TRANSLATION.md) | RetroArch's AI service: translate the game screen with your Groq key or your own service |
+| [Kid mode](docs/KID_MODE.md) | Kiosk and Kid modes: what is locked, games for kids, the parent code, the Konami code, the escape hatch |
+| [Idle](docs/IDLE.md) | dim, sleep or power off when idle in games, idle hook scripts, the battery line in games |
+| [Card check](docs/CARD_CHECK.md) | SD card health: file system flags, unreadable files, the fake card test, repairing on a computer |
+| [WebDAV share](docs/NETWORK_SHARE.md) | the card as a drive in Windows Explorer, macOS Finder and Linux file managers |
+| [SMB share](docs/SMB_SHARE.md) | the card as `\\IP\JukaHub` over SMB 2.1 (Windows 11 24H2 signing, macOS, Linux), the NetBIOS name, read-only, limits |
+| [VNC and Telnet](docs/VNC.md) | see and control the handheld from any VNC app, keys and mouse, the Telnet shell, passwords and limits |
+| [Tailscale](docs/TAILSCALE.md) | the built-in Tailscale: install, QR or auth-key sign-in, reaching the servers from anywhere, battery rules |
+| [Widescreen](docs/WIDESCREEN.md) | 16:9 widescreen hacks per console and per game, which emulators have one, the PlayStation analog controller |
+| [Look packs](docs/LOOK_PACKS.md) | look packs (pack.json), console icon packs, console names by region, the power-off picture |
+| [Collections](docs/COLLECTIONS.md) | automatic folders on the Collections tab, play counts, the Game slideshow and Game videos idle screens, NextUI collections shared both ways |
+| [Quick menu](docs/QUICK_MENU.md) | the Quick menu on the TrimUI button: the tiles, every way to open it, Menu on Home, theme pictures (NextUI themes' too) and Backgrounds only |
 | [CHIP-8](docs/CHIP8.md) | the built-in CHIP-8 / SUPER-CHIP / XO-CHIP player, quirks and keys, Get CHIP-8 games from the chip8Archive |
 | [WASM-4](docs/WASM4.md) | WASM-4 carts on their own shelf, the first-start core install, Get WASM-4 carts from wasm4.org |
 | [Game Boy Printer](docs/GB_PRINTER.md) | printing from Game Boy games with DoubleCherryGB, the scrapbook, prints on the phone |
 | [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
 | [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
+| [Device Sync](docs/DEVICE_SYNC.md) | two paired handhelds share saves, states, BIOS, collections, recents and play time, missing ROMs and settings; what never travels |
 | [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |
 | [Memory scanner](docs/MEMORY.md) | RAM search and edit for a running game: scan, narrow, write, and what it cannot do |
 | [Controller test](docs/CONTROLLER_TEST.md) | raw stick values, drift verdicts and a button check for a drifting pad |

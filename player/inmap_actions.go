@@ -63,6 +63,7 @@ var inmapActionAliases = []struct {
 	{"hotseat", "local_play"}, {"multiplayer", "local_play"},
 	{"next_turn", "pass_turn"}, {"end_turn", "pass_turn"},
 	{"ok", "confirm"}, {"go_back", "back"},
+	{"quickmenu", "quick_menu"},
 }
 
 func init() {
@@ -72,6 +73,8 @@ func init() {
 		{name: "home", label: "Home", run: inmapActHome},
 		{name: "start_menu", label: "Start menu", run: inmapActStartMenu},
 		{name: "quick_settings", label: "Quick Settings", run: inmapActQuickSettings},
+		// The Quick menu (quickmenu.go).
+		{name: "quick_menu", label: "Quick menu", run: inmapActQuickMenu},
 		{name: "screenshot", label: "Screenshot", run: inmapActScreenshot},
 		{name: "search", label: "Search", run: inmapActSearch},
 		{name: "context_menu", label: "Context menu", run: inmapActContextMenu},

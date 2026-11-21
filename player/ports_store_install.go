@@ -33,7 +33,7 @@ package main
 //
 // None of this has run on a handheld yet (harbourmaster needs Python: on
 // stock TrimUI firmware PortMaster brings its own through TRIMUI_EX; CrossMix
-// and Knulli ship one). A harbourmaster that cannot start just leads to
+// ships one). A harbourmaster that cannot start just leads to
 // step 5.
 
 import (

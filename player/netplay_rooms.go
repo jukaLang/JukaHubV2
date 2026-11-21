@@ -147,7 +147,8 @@ func netplayAppendConfigText(online bool, relay string) string {
 	}
 	text := "netplay_public_announce = \"" + flag + "\"\n" +
 		"netplay_use_mitm_server = \"" + flag + "\"\n" +
-		"netplay_mitm_server = \"" + relay + "\"\n"
+		"netplay_mitm_server = \"" + relay + "\"\n" +
+		netplayLinkHostOverlay() // four players (netplay_link.go)
 	if online {
 		// RetroArch saves its whole config on exit, overlay included: an
 		// online session must not leave every later host from RetroArch's own

@@ -134,6 +134,11 @@ say "=== JukaHub launched from $APP_DIR ==="
 # The markers only belong to a process that has just exited. Leftovers from a
 # failed update would make this launch wait for a helper that never arrives.
 rm -f "$PENDING" "$SWAPPED" "$FAILED" "$RESTART_NOW" "$HANDOFF" "$SCREEN_GROUPS"
+# USB storage mode's request and helper, in RAM (see usb_storage_handoff); a
+# request is only ever for the run that has just exited.
+USB_STORAGE_REQ=/tmp/jukahub-usbstorage.req
+USB_STORAGE_HELPER=/tmp/jukahub-usbstorage-helper.sh
+rm -f "$USB_STORAGE_REQ"
 
 # ------------------------------------------------------------- processes
 # A process's state, parent, process group, session and start time (fields 3,
@@ -623,6 +628,14 @@ JUKAHUB_PAUSED_RECORD=1
 # probation): only then does the app write a plan before an update.
 JUKAHUB_UPDATE_PROBATION=1
 export LD_LIBRARY_PATH PATH HOME JUKAHUB_LAUNCHED_BY JUKAHUB_SCREEN_HANDOFF JUKAHUB_PAUSED_RECORD JUKAHUB_UPDATE_PROBATION
+# This launcher lends the SD card out when JukaHub asks (usb_storage_handoff):
+# not under NextUI, whose own menu runs from the card.
+if [ "${JUKAHUB_HOST:-}" = nextui ] || [ -n "${SHARED_USERDATA_PATH:-}" ]; then
+    unset JUKAHUB_USB_STORAGE
+else
+    JUKAHUB_USB_STORAGE=1
+    export JUKAHUB_USB_STORAGE
+fi
 
 # ---------------------------------------------------------------- time zone
 # The zone chosen in Settings -> Date & time is kept in jukatimezone next to
@@ -1114,6 +1127,65 @@ probation_note() {
     } >"$RESCUED.tmp" 2>/dev/null && mv -f "$RESCUED.tmp" "$RESCUED"
 }
 
+# -------------------------------------------------------- USB storage mode
+# JukaHub quit to lend the SD card to a computer as a USB drive
+# (player/usbstorage.go): it left $USB_STORAGE_REQ and its helper in /tmp. The
+# card cannot be unmounted while this script runs - the shell reads it from
+# the card, and the shell that started it has its working folder there - so
+# this script does not wait: the firmware's launcher loop above it is paused
+# (written down in $PAUSED, so the stock menu stays closed), the helper starts
+# on its own (a session of its own: the power key's signals to this group do
+# not reach it) and this script ends without handing the screen back. The
+# helper waits for the shells up to that loop to finish, lends the card out,
+# mounts it back and starts this script anew; that run's hand-back lets the
+# loop go on. Returns 1 when nothing was started (the reason is left in
+# /tmp/jukahub-usbstorage.result, which the next JukaHub shows).
+usb_storage_handoff() {
+    if ! sed -n 2p "$USB_STORAGE_HELPER" 2>/dev/null | grep -q 'jukahub-usbstorage-helper: 1'; then
+        echo "failed JukaHub could not prepare the USB storage helper" >/tmp/jukahub-usbstorage.result
+        return 1
+    fi
+    # Started by the boot hook's own copy, not through the loop: that copy
+    # waits on the card for this script and lets the loop go when it ends.
+    for AN_P in $ANCESTORS; do
+        case "$(tr '\0' ' ' <"/proc/$AN_P/cmdline" 2>/dev/null)" in
+            *jukahub-autostart*)
+                echo "failed JukaHub was started straight from the boot hook this time; open it from the stock menu to use USB storage mode" >/tmp/jukahub-usbstorage.result
+                return 1
+                ;;
+        esac
+    done
+    # The helper waits for this script and the shells up to the loop.
+    US_WAIT=""
+    for AN_P in $ANCESTORS; do
+        case " $ANCESTOR_LOOPS " in *" $AN_P "*) break ;; esac
+        US_WAIT="$US_WAIT $AN_P"
+    done
+    # A loop left running would bring the stock menu back over a lent card;
+    # one paused here before a refusal is let go at this session's hand-back.
+    for LP in $ANCESTOR_LOOPS; do
+        stat_of "$LP" && [ "$ST_STATE" != Z ] || continue
+        if ! pausable "$LP" || ! pause_pid "$LP"; then
+            echo "failed The stock menu could not be held back while the card is away" >/tmp/jukahub-usbstorage.result
+            return 1
+        fi
+    done
+    say "USB storage mode: handing the SD card to the helper in /tmp (it starts JukaHub again)"
+    # No library path into the card for the helper's own shell: a library it
+    # loaded from there would hold the card (the helper restores the
+    # original for the start at the end).
+    # shellcheck disable=SC2086
+    if command -v setsid >/dev/null 2>&1; then
+        LD_LIBRARY_PATH= setsid /bin/sh "$USB_STORAGE_HELPER" "$USB_STORAGE_REQ" "$APP_DIR" $US_WAIT </dev/null >/dev/null 2>&1 &
+    else
+        (
+            trap '' HUP
+            LD_LIBRARY_PATH= exec /bin/sh "$USB_STORAGE_HELPER" "$USB_STORAGE_REQ" "$APP_DIR" $US_WAIT
+        ) </dev/null >/dev/null 2>&1 &
+    fi
+    return 0
+}
+
 # --------------------------------------------------------------- run it
 if [ ! -x "$APP_DIR/JukaHub" ]; then
     say "FATAL: binary $APP_DIR/JukaHub not found or not executable"
@@ -1305,6 +1377,24 @@ while :; do
     # A stop request ends the session: never restart into an update in the
     # middle of handing the screen back.
     [ "$STOPPED" -eq 1 ] && break
+
+    # JukaHub asked to lend the SD card out (USB storage mode, see
+    # usb_storage_handoff). Only after a clean exit with no update under way;
+    # a helper that cannot be started brings JukaHub straight back, which
+    # says why.
+    if [ -f "$USB_STORAGE_REQ" ]; then
+        if [ "$RC" -eq 0 ] && [ ! -f "$PENDING" ]; then
+            if usb_storage_handoff; then
+                card_readahead_restore
+                restore_firmware_osd
+                exit 0
+            fi
+            rm -f "$USB_STORAGE_REQ"
+            say "USB storage mode not started: $(head -n 1 /tmp/jukahub-usbstorage.result 2>/dev/null)"
+            continue
+        fi
+        rm -f "$USB_STORAGE_REQ"
+    fi
 
     # JukaHub asked to be started again (Restart in safe mode on the recovery
     # card). Only after a clean exit, and once per request: the marker goes

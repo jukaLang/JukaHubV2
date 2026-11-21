@@ -100,12 +100,13 @@ var statusWiFiSignal = readWiFiSignalLevel
 // statusBatteryColor is the gauge colour: green with charge to spare, yellow
 // when the user should start thinking about a cable, red when it is nearly gone
 // (below 15%, the point Mosaik's gauge turns red too; below 5% the header's
-// chip also blinks, drawStatusBatteryChip).
+// chip also blinks, drawStatusBatteryChip). Those are Auto's levels; Settings →
+// Power → Low battery warning at moves the red (batterywarn.go).
 func statusBatteryColor(pct int) sdl.Color {
 	switch {
 	case pct >= 50:
 		return sdl.Color{R: 92, G: 200, B: 140, A: 255}
-	case pct >= 15:
+	case !batteryWarnHeaderRed(pct):
 		return sdl.Color{R: 236, G: 191, B: 82, A: 255}
 	default:
 		return sdl.Color{R: 232, G: 96, B: 88, A: 255}
@@ -364,8 +365,12 @@ func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 		return w
 	case isBatteryStatusPart(part):
 		pct, _ := statusBatteryPercentOf(part)
-		return statusBatteryIconWidth(iconH) + statusBatteryNubWidth(iconH) + 1 +
-			statusChipTextGap + statusWidth(font, statusBatteryLabel(pct))
+		w := statusBatteryIconWidth(iconH) + statusBatteryNubWidth(iconH) + 1
+		// The level beside it, unless Battery percentage hides it (power_options.go).
+		if statusBatteryTextShown(pct) {
+			w += statusChipTextGap + statusWidth(font, statusBatteryLabel(pct))
+		}
+		return w
 	case isChipStatusPart(part):
 		// The now-playing title and the idle output name share the same glyph
 		// and the same space, so the cluster does not move when playback starts
@@ -625,7 +630,7 @@ func drawStatusBatteryChip(renderer *sdl.Renderer, font *ttf.Font, part string, 
 	if charging {
 		drawStatusChargingBolt(renderer, sdl.Rect{X: x, Y: cellY, W: statusBatteryIconWidth(iconH), H: iconH})
 	}
-	if draw != nil {
+	if draw != nil && statusBatteryTextShown(pct) {
 		draw(statusBatteryLabel(pct), col, x+gaugeW+statusChipTextGap, textTop)
 	}
 	return statusClusterPartWidth(font, part)
@@ -656,7 +661,7 @@ func statusBatteryMotion(pct int, charging bool, now uint64) (fill int, visible 
 	case charging && pct < 100:
 		requestFrameEvery(statusBatterySweepFrameMS)
 		return statusBatterySweepLevel(pct, now), true
-	case !charging && pct < statusBatteryBlinkBelow:
+	case !charging && batteryWarnHeaderBlinks(pct): // below statusBatteryBlinkBelow under Auto (batterywarn.go)
 		requestFrameEvery(statusBatteryBlinkHalfMS / 4)
 		return pct, (now/statusBatteryBlinkHalfMS)%2 == 0
 	}

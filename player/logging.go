@@ -140,7 +140,9 @@ type logRingHandler struct {
 }
 
 func (h *logRingHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
+	// Settings → Developer → Debug logging lets debug lines in at runtime
+	// (devoptions.go).
+	return level >= h.level || (level >= slog.LevelDebug && logDebugForced.Load())
 }
 
 func (h *logRingHandler) Handle(_ context.Context, r slog.Record) error {

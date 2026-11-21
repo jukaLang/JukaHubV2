@@ -330,6 +330,9 @@ func openAudioPlayer(config *Config, path string) {
 	musicShelf.open = false
 	musicShelf.fromShelf = false
 	if isHTTPMediaURL(path) {
+		if !uiModeStreamOK(path) { // Kid mode: no podcasts or web audio (uimode.go)
+			return
+		}
 		if show, idx, ok := podcastEpisodeLookup(path); ok {
 			playPodcastEpisode(config, show, idx)
 			return
@@ -459,6 +462,9 @@ func musicPlayTrackAt(index int, gapless bool) {
 	}
 	track := music.tracks[index]
 	bookKey := music.bookKey
+	// Each audiobook keeps its own listening speed; music the global one
+	// (audioresume.go).
+	music.speed = musicListeningSpeed(bookKey)
 	previousPath, previousPos, previousDur := "", 0.0, 0.0
 	if music.current >= 0 && music.current < len(music.tracks) {
 		previousPath = music.tracks[music.current].Path
@@ -522,6 +528,8 @@ func musicPlayTrackAt(index int, gapless bool) {
 		}
 	}(track.Path)
 	go musicProbeChapters(track.Path, longForm)
+	// No timed .lrc: the lyrics inside the file, or an untimed .lrc (lyrics_embedded.go).
+	go lyricsEmbeddedLoad(track.Path)
 	// Trophies: a new local track (Play on a stopped one resumes it; podcasts and
 	// radio are remote), with its artist when the media library knows the file.
 	if !isHTTPMediaURL(track.Path) && (previousPath == "" || !sameAudioPath(previousPath, track.Path)) {
@@ -999,13 +1007,14 @@ func musicSetSpeed(v float64) float64 {
 	music.speed = v
 	playing := music.playing
 	paused := music.paused
+	bookKey := music.bookKey
 	path, pos := "", 0.0
 	if music.current >= 0 && music.current < len(music.tracks) {
 		path, pos = music.tracks[music.current].Path, music.position
 	}
 	music.mu.Unlock()
 
-	audioSaveSpeed(v)
+	audioSaveSpeedFor(bookKey, v) // the book's own speed, or the global one
 	if playing && path != "" {
 		music.mu.Lock()
 		music.paused = paused

@@ -206,7 +206,8 @@ func gameDeleteArt(game libraryGame) []string {
 	}
 	root := libraryArtworkRoot()
 	var out []string
-	for _, p := range []string{romArtworkPath(rom, root), playShotCoverPath(rom, root), artworkNoCoverPath(rom, root)} {
+	// With its screenshot and title screen (artstyle.go).
+	for _, p := range append([]string{romArtworkPath(rom, root), playShotCoverPath(rom, root), artworkNoCoverPath(rom, root)}, artStyleKindPaths(rom, root)...) {
 		if p != "" && regularFile(p) {
 			out = append(out, p)
 		}
@@ -391,6 +392,7 @@ func gameDeleteFinish(game libraryGame, label string, gone bool, done, failed in
 	gameControlsForget(path) // its Buttons and Turbo (racontrols.go)
 	recentGamesRepath(path, "", "")
 	homeConsoleRecentsRepath(path, "")
+	gamePinRepath(path, "") // its Home tile goes (gamepin.go)
 	if rom, ok := gameCoverROM(game); ok {
 		artworkDirForget(filepath.Dir(romArtworkPath(rom, libraryArtworkRoot())),
 			filepath.Dir(playShotPath(rom, libraryArtworkRoot())), filepath.Dir(artworkNoCoverPath(rom, libraryArtworkRoot())))

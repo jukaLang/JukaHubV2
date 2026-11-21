@@ -940,11 +940,15 @@ func tailscaleToggleArgs(running bool) []string {
 // probeTailscale runs the CLI. A missing binary is "not installed", not an
 // error to show in red.
 func probeTailscale() tailscaleSnapshot {
-	path, err := exec.LookPath("tailscale")
-	if err != nil {
+	// JukaHub's own Tailscale answers from its worker's last poll (tailscaled.go).
+	if snap, ok := tailscaledSmartHomeSnap(); ok {
+		return snap
+	}
+	path, pre, ok := tailscaleCLI()
+	if !ok {
 		return tailscaleSnapshot{}
 	}
-	out, err := runCommandTimeout(smartHomeTimeout, path, "status", "--json")
+	out, err := runCommandTimeout(smartHomeTimeout, path, append(pre, "status", "--json")...)
 	if err != nil {
 		return tailscaleSnapshot{Installed: true, Err: "status failed"}
 	}
@@ -958,11 +962,14 @@ func probeTailscale() tailscaleSnapshot {
 // setTailscale connects or disconnects, returning the CLI's own message on
 // failure so the panel can show why (usually "access denied").
 func setTailscale(running bool) error {
-	path, err := exec.LookPath("tailscale")
-	if err != nil {
+	if tailscaledOwnsCLI() {
+		return tailscaledSmartHomeSet(running)
+	}
+	path, pre, ok := tailscaleCLI()
+	if !ok {
 		return fmt.Errorf("tailscale is not installed")
 	}
-	out, err := runCommandTimeout(15*time.Second, path, tailscaleToggleArgs(running)...)
+	out, err := runCommandTimeout(15*time.Second, path, append(pre, tailscaleToggleArgs(running)...)...)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {

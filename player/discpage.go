@@ -337,27 +337,43 @@ func discOptionsShown() bool {
 	return discOpts.count >= 2 && discOpts.path != "" && discOpts.path == gameOptsUI.game.Path
 }
 
+// gameOptionsDefaultRowHidden reports a row only some games have: Disc for
+// a game on more than one disc, Analog controller and Widescreen where they
+// apply (widescreen_ui.go).
+func gameOptionsDefaultRowHidden(row int) bool {
+	if row == gameOptionsRowDisc {
+		return !discOptionsShown()
+	}
+	return emuExtrasRowHidden(row)
+}
+
 // gameOptionsDefaultRowAt is the row at position pos of an emulated game's
-// sheet: every row, the Disc row only for a game on more than one disc.
+// sheet: every row but the hidden ones.
 func gameOptionsDefaultRowAt(pos int) int {
 	if pos < 0 {
 		return -1
 	}
-	if !discOptionsShown() && pos >= gameOptionsRowDisc {
-		pos++
+	for row := 0; row < gameOptionsRowCount; row++ {
+		if gameOptionsDefaultRowHidden(row) {
+			continue
+		}
+		if pos == 0 {
+			return row
+		}
+		pos--
 	}
-	if pos >= gameOptionsRowCount {
-		return -1
-	}
-	return pos
+	return -1
 }
 
 // gameOptionsDefaultRows is how many rows an emulated game's sheet has.
 func gameOptionsDefaultRows() int {
-	if discOptionsShown() {
-		return gameOptionsRowCount
+	n := 0
+	for row := 0; row < gameOptionsRowCount; row++ {
+		if !gameOptionsDefaultRowHidden(row) {
+			n++
+		}
 	}
-	return gameOptionsRowCount - 1
+	return n
 }
 
 // discOptionsHint is the Disc row's second line.

@@ -5,9 +5,9 @@ package main
 // Two kinds of motor are supported, because they are not the same thing:
 //
 //   * The TrimUI handhelds wire their vibration motor to a vendor GPIO, not to
-//     the gamepad's force-feedback node. NextUI drives the TG5040 family with
+//     the gamepad's force-feedback node: the TG5040 family through
 //     /sys/class/gpio/gpio227/value plus /sys/class/motor/voltage, and the
-//     TG5050 with gpio236 plus /sys/class/motor/level. A pulse there is "switch
+//     TG5050 through gpio236 plus /sys/class/motor/level. A pulse there is "switch
 //     the GPIO on, wait, switch it off", run on a timer so the UI never waits.
 //   * Any other pad with rumble (a USB or Bluetooth controller on a desktop)
 //     answers SDL's controller-rumble API instead.
@@ -118,7 +118,7 @@ const (
 	trimuiMotorGPIO5050 = "sys/class/gpio/gpio236/value"
 	trimuiMotorLevel    = "sys/class/motor/level"
 
-	// Voltages are microvolts. NextUI caps the Brick Pro at 2.5 V because its
+	// Voltages are microvolts. The Brick Pro is capped at 2.5 V because its
 	// motor rattles the shell at 3.3 V; everything else runs at full scale.
 	trimuiMotorMinVoltage = 500000
 	trimuiMotorMaxVoltage = 3300000
@@ -314,9 +314,9 @@ func hapticsDriverStatus() driverStatus {
 }
 
 // detectMotorEnableNode is the Smart Pro S's motor when its driver has its
-// own switch (/sys/class/motor/enable beside level, the way NextUI's tg5050
-// PLAT_setRumble drives it): no GPIO is exported then. A level that reads above
-// 16 bits is in microvolts, so it gets the 0.5–3.3 V range instead of 0..65535.
+// own switch (/sys/class/motor/enable beside level): no GPIO is exported
+// then. A level that reads above 16 bits is in microvolts, so it gets the
+// 0.5–3.3 V range instead of 0..65535.
 // nil when there is no such switch.
 func detectMotorEnableNode(root, levelPath string) *sysfsMotor {
 	enable := filepath.Join(root, "sys/class/motor/enable")

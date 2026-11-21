@@ -293,6 +293,7 @@ func homeSearchStoreEntries() []homeSearchEntry {
 		{title: homebrewEntryName, where: "Games", icon: homebrewGlyph, keys: "get homebrew homebrew itch itch.io itchio indie new games roms download roms game boy gb studio gbc gba nes snes mega drive genesis master system game gear pc engine pico-8 pico8 free games", open: homebrewStoreOpen},
 		{title: cloudGamingEntryName, where: "Games", icon: cloudGamingGlyph, keys: "cloud gaming geforce now gfn nvidia xbox cloud gaming xcloud game pass gamepass ultimate stream streaming greenovercast opennow", open: cloudGamingOpen},
 		{title: gameSwitcherEntryName, where: "Games", icon: "games", keys: "game switcher switch games recent games recently played resume continue save states last played", open: gameSwitcherOpen},
+		{title: randomPlayEntryName, where: "Games", icon: "gamepad", keys: "random game play random surprise me feeling lucky roll dice any game shuffle pick for me", open: randomPlayNow},
 	}
 	// The handheld's own Wi-Fi network (hotspot.go): only where it can exist.
 	if hotspotSupported() {
@@ -962,7 +963,7 @@ func homeSearchResults(raw string, src homeSearchSources) []gsResult {
 		game := g
 		sub := "Game"
 		if g.System != "" {
-			sub = g.System
+			sub = consoleDisplayName(g.System)
 		}
 		apps = append(apps, homeSearchScored{result: gsResult{Title: title, Subtitle: sub, Icon: "gamepad",
 			Category: homeSearchGroupApps, Action: func(*Config) { playRecentGame(game) }}, score: score - 1})
@@ -1052,7 +1053,7 @@ func homeSearchRecentKind(it FavoriteItem) (string, string) {
 		return "Channel", "media"
 	case "game":
 		if g, ok := it.Data.(recentGame); ok && g.System != "" {
-			return g.System, "gamepad"
+			return consoleDisplayName(g.System), "gamepad"
 		}
 		return "Game", "gamepad"
 	}

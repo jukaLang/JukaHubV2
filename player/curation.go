@@ -289,7 +289,7 @@ func curationStepLabel(kind string) string {
 	case curationStepDisplay:
 		return "Display profile"
 	case curationStepBattery:
-		return "Save & suspend at 3%"
+		return "Save & suspend on low battery"
 	}
 	return kind
 }

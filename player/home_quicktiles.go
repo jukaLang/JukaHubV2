@@ -3,8 +3,8 @@ package main
 // home_quicktiles.go — the quick controls Home can pin: the Wi-Fi, Bluetooth
 // and Power tiles (refs w:wifi, w:bluetooth and w:power).
 //
-// A tester coming from NextUI, whose quick menu carries Wi-Fi, Bluetooth,
-// sleep, reboot and power-off icons, asked to pin those to Home (2026-11-13).
+// A tester asked to pin the Wi-Fi, Bluetooth, sleep, reboot and power-off
+// controls to Home (2026-11-13).
 // They are widgets of the editable Home (home_tiles.go): Edit Home's add sheet
 // lists them first, under "Quick controls", and they sit in the Widgets grid
 // and the Carousel like any other tile — Edit Home works from every layout
@@ -150,6 +150,10 @@ func hqActivate(config *Config, name string) {
 	case hqBluetoothName:
 		hqBTActivate(config)
 	case hqPowerName:
+		// "Ask before power off" Off: no card, the tile powers off (power_options.go).
+		if powerOptTileOff(config) {
+			return
+		}
 		homePowerOpen()
 		if homePowerConfirm.full {
 			homePowerConfirm.focus = homePowerOff

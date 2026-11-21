@@ -481,8 +481,8 @@ func powerSleepClockSplit(before, after powerSleepClocks) (boot, rtc time.Durati
 // longer of the two clocks' answers. BOOTTIME only holds a suspend the kernel
 // adds back on resume (from a persistent clock, or the RTC when that is the
 // one it set the time from); a kernel that adds none shows no sleep at all,
-// while the RTC — the clock the wake alarm itself runs on — kept counting.
-// NextUI's Auto Power Off pak moved to the RTC for this (v1.0.1). ok is false
+// while the RTC — the clock the wake alarm itself runs on — kept counting,
+// so the RTC is the one trusted. ok is false
 // when neither clock could be read twice. Pure.
 func powerSleepSlept(before, after powerSleepClocks) (time.Duration, bool) {
 	boot, rtc, bootOK, rtcOK := powerSleepClockSplit(before, after)

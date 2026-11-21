@@ -95,12 +95,12 @@ start only after JukaHub's first frame, so they never delay it.
 
 ## Boot time
 
-TortOS shows its shelf about two seconds after power-on. That speed comes
-from plastron itself: its own U-Boot and TF-A built from source, a trimmed
+A plastron image reaches its menu about two seconds after power-on. That
+speed comes from plastron itself: its own U-Boot and TF-A built from source, a trimmed
 Allwinner 4.9 kernel and a small root, all on the SD card. It does not come
 from an `.awimg`: that is TrimUI's firmware-flash format, written to the
-internal storage with POWER + VOL DOWN. TortOS 2.0 writes nothing to the
-device, and neither does JukaHub OS: the image lives on the card, so taking
+internal storage with POWER + VOL DOWN. JukaHub OS writes nothing to the
+device: the image lives on the card, so taking
 the card out always boots the untouched stock firmware, a bad image can never
 leave the handheld unbootable, and nobody needs TrimUI's flashing tool.
 Flashing would only change where the same bootloader and kernel are read from.

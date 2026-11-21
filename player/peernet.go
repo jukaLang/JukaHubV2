@@ -293,6 +293,8 @@ func peerHandler() http.Handler {
 	mux.HandleFunc(mcPeerVersionsPath, peerGuard(true, mcHandlePeerVersions))
 	mux.HandleFunc(mcPeerPlanPath, peerGuard(true, mcHandlePeerPlan))
 	mux.HandleFunc(mcPeerFilePath, peerGuard(true, mcHandlePeerFile))
+	// Device Sync: BIOS, ROMs, collections, recents, settings (devsync.go).
+	devsyncRoutes(mux)
 	return mux
 }
 

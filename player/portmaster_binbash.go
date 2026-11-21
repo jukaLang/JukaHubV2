@@ -6,8 +6,8 @@ package main
 // JukaHub runs PortMaster's launcher and every port script under a real bash
 // (portmaster_runtime.go), but a script that PortMaster or a port starts by
 // its own `#!/bin/bash` line is handed by the kernel to /bin/bash itself. On
-// a stock Brick that is BusyBox's sh or nothing at all (spruceOS #1986,
-// nx-handheld #308), and such a script dies at its first bash array:
+// a stock Brick that is BusyBox's sh or nothing at all, and such a script
+// dies at its first bash array:
 // PortMaster's device_info.txt when it is run rather than sourced,
 // WestonPack's westonwrap.sh, a port's own helper scripts, and every script
 // the firmware's Ports launcher starts. Custom firmwares fix this by

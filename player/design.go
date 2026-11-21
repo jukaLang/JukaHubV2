@@ -367,6 +367,9 @@ func ApplyThemeColors(p ThemePreset) {
 	// Settings → Theme & look → Menu colour replaces the preset's accent
 	// (menucolour.go), so every theme, schedule and pack keeps the user's pick.
 	p = menuColourOverride(p)
+	// Then the Background / Surface / Text / Focus ring colour rows on top
+	// (colourpick_theme.go), the same way.
+	p = colourPickOverride(p)
 	ColorBackground = hexRGBA(p.Background)
 	ColorSurface = hexRGBA(p.Surface)
 	ColorSurfaceAlt = hexRGBA(p.SurfaceAlt)

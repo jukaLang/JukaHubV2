@@ -4,8 +4,8 @@ package main
 //
 // The generic ALSA path tries Master, then PCM. The tg5040
 // codec exposes neither, so on the Smart Pro and the Brick every volume write
-// failed. What the codec does have, as MinUI's and NextUI's tg5040 ports
-// found out the hard way:
+// failed. What the codec does have, as MinUI's tg5040 port found out the
+// hard way:
 //
 //   - "digital volume" is the control to use: setting the level with
 //     "DAC Volume" distorts at low levels. It is an ATTENUATION: raw 0 is the
@@ -64,7 +64,7 @@ const (
 
 	// trimuiCurveScale shapes the percentage-to-attenuation curve:
 	// raw = -trimuiCurveScale * log10(pct/100). It reproduces the two points
-	// NextUI measured on a tg5040 (20% → 30, 50% → 13). The stock Smart Pro
+	// measured on a tg5040 (20% → 30, 50% → 13). The stock Smart Pro
 	// curve below is used instead on a Smart Pro without NextUI.
 	trimuiCurveScale = 43.0
 	// Stock Smart Pro keymon uses floor(48 * (20 - step) / 20) for audible

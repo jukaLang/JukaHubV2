@@ -92,6 +92,9 @@ type setRow struct {
 	// Field is the input variable a text row edits with the keyboard; a choice
 	// row with a Field opens the keyboard on A (a custom colour).
 	Field string
+	// Pick, when set, is what A does on a choice row before Sheet and Field:
+	// the colour rows open the RGB colour picker (colourpick.go).
+	Pick func(c *Config)
 	// Secret masks a text row's value (API keys).
 	Secret bool
 }
@@ -118,7 +121,8 @@ func setSections() []setSection {
 	if setSectionsCache == nil {
 		setSectionsCache = jukaosFilterSections(setArrangeSections(setBuildSections()))
 	}
-	return setSectionsCache
+	// Kiosk and Kid mode show one small page (uimode_settings.go).
+	return uiModeSettingsSections(setSectionsCache)
 }
 
 // setSectionIndex finds a section by id (-1 when unknown). A retired id
@@ -453,7 +457,8 @@ var setColourPalette = map[string][]setOption{
 }
 
 // setColourRow is a theme colour as a swatch carousel: the theme's own colour
-// first, then the curated swatches; A types any #rrggbb with the keyboard.
+// first, then the curated swatches; A opens the RGB colour picker, whose X
+// types any #rrggbb with the keyboard (colourpick.go).
 func setColourRow(name, label, detail string) setRow {
 	options := func(c *Config) []setOption {
 		theme := rgbHex(themePresetColor(c, name))
@@ -461,10 +466,20 @@ func setColourRow(name, label, detail string) setRow {
 		out = append(out, setOption{Value: "", Label: "Theme colour", Swatch: theme})
 		return append(out, setColourPalette[name]...)
 	}
+	choose := func(c *Config, value string) {
+		if value == "" {
+			value = rgbHex(themePresetColor(c, name))
+		}
+		applyColorVar(c, name, value)
+		saveUserConfigDebounced(userConfigFromVariables(c))
+	}
 	return setRow{
 		ID: name, Label: label, Kind: setKindChoice, Field: name,
 		Detail:  setStatic(detail),
 		Options: options,
+		Pick: func(c *Config) {
+			colourPickOpen(c, setColourPickSlot(name, label, detail, options, choose))
+		},
 		Current: func(c *Config) int {
 			hex := rgbHex(effectiveThemeColor(c, name))
 			if strings.EqualFold(hex, rgbHex(themePresetColor(c, name))) {
@@ -480,13 +495,7 @@ func setColourRow(name, label, detail string) setRow {
 		Value: func(c *Config) string {
 			return "Custom · " + rgbHex(effectiveThemeColor(c, name))
 		},
-		Choose: func(c *Config, value string) {
-			if value == "" {
-				value = rgbHex(themePresetColor(c, name))
-			}
-			applyColorVar(c, name, value)
-			saveUserConfigDebounced(userConfigFromVariables(c))
-		},
+		Choose: choose,
 	}
 }
 
@@ -784,6 +793,8 @@ func setBuildSections() []setSection {
 			Rows: setJoinRows(
 				[]setRow{
 					setSliderRow("brightness", "Brightness", "The screen's backlight", 1),
+					// Menu + volume steps it, in games too (brightkeys.go).
+					brightKeysSettingsRow(),
 					lockScreenAfterRow(),
 					// The panel's own picture: the display driver's enhancement,
 					// or JukaHub's layer where the driver has none (displaytune.go).
@@ -860,6 +871,19 @@ func setBuildSections() []setSection {
 				},
 				// The accent alone, over any theme (menucolour.go).
 				menuColourRow(),
+				// Palettes, the page / surface / text / ring colours over any
+				// theme, and Reset colours; A on each opens the RGB picker
+				// (colourpick_theme.go, colourpick.go).
+				colourPaletteRow(),
+				colourOverrideRow(colourSlotBackground),
+				colourOverrideRow(colourSlotSurface),
+				colourOverrideRow(colourSlotText),
+				colourOverrideRow(colourSlotFocus),
+				colourResetRow(),
+				// Console names by region and icon packs from the card
+				// (consolenames.go, iconpacks.go).
+				consoleNamesRow(),
+				iconPackRow(),
 				{
 					// Which Home: the shipped dashboard, the Hero grid, or one of
 					// the two that read the homeTiles list — a carousel and the
@@ -880,12 +904,15 @@ func setBuildSections() []setSection {
 				// opens on the tab it was left on (hometabs_edit.go). Shown only
 				// on that layout, where they stand in for Edit Home.
 				homeTabsSettingsRow(),
-				homeTabsRememberRow(),
-				// NX Redux 2.5's main-menu look (homelook.go): the tab strip's
+				// Start on: last used or a fixed tab; it replaced Remember
+				// last tab here (hometabs_start.go).
+				homeTabsStartRow(),
+				// The main-menu look (homelook.go): the tab strip's
 				// place, greyed covers but the selected one, edge fades.
 				homeTabsPositionRow(),
 				homeDimArtRow(),
 				listEdgeFadeRow(),
+				homeTabsGridRingRow(), // hometabs_tools.go
 				{
 					// Home's edit mode from here (home_edit.go): it opens Home
 					// first, switching to Widgets when Home is not a tile layout.
@@ -917,6 +944,9 @@ func setBuildSections() []setSection {
 				},
 				// A GIF wallpaper plays unless this is off (gifwall.go).
 				wallpaperAnimateRow(),
+				// Glass or a picture as the device powers off (shutdownscreen.go).
+				shutdownScreenRow(),
+				shutdownPictureRow(),
 				{
 					ID: "contrast", Label: "High contrast", Kind: setKindToggle,
 					Detail: setStatic("Black and white with a yellow focus ring"),
@@ -941,6 +971,8 @@ func setBuildSections() []setSection {
 					Get:    effectiveReducedMotion,
 					Set:    setQSWrite(qsActionReducedMotion),
 				},
+				// Comfy / Snappy / Off; Off is Reduce motion (motionspeed.go).
+				animSpeedRow(),
 				{
 					ID: "livebg", Label: "Living background", Kind: setKindToggle,
 					Detail: setStatic("Colours drift with the time of day and the weather"),
@@ -952,6 +984,8 @@ func setBuildSections() []setSection {
 				},
 				// Classic or realistic, Liquid Glass-style panes (glass_real.go).
 				glassStyleRow(),
+				// How solid the glass and the selection pill are (colourpick_theme.go).
+				glassOpacityRow(),
 				// The water under the glass, and tilt where the device can feel
 				// it (liquidbg.go).
 				liquidLevelRow(),
@@ -969,9 +1003,9 @@ func setBuildSections() []setSection {
 				// The panel's picture (contrast, saturation, exposure, colour
 				// temperature) moved to Display (displaysettings.go).
 				// The 12-hour clock moved to Date & time (datetime.go).
-				setColourRow("buttonColor", "Button colour", "A tint under every button · A types a colour"),
-				setColourRow("labelColor", "Label colour", "Text on buttons and labels · A types a colour"),
-				setColourRow("inputColor", "Input colour", "The wash under text fields · A types a colour"),
+				setColourRow("buttonColor", "Button colour", "A tint under every button · A picks any colour"),
+				setColourRow("labelColor", "Label colour", "Text on buttons and labels · A picks any colour"),
+				setColourRow("inputColor", "Input colour", "The wash under text fields · A picks any colour"),
 				{
 					ID: "a11y", Label: "More accessibility", Kind: setKindAction,
 					Detail: setStatic("Button remapping, one-handed mode, colour filters"),
@@ -1183,6 +1217,8 @@ func setBuildSections() []setSection {
 				vpnProfileRow(),
 				vpnRouteRow(),
 				vpnStatusRow(),
+				// Tailscale (tailscaled.go): reach the handheld from anywhere.
+				tailscaledSettingsRow(),
 				// Which servers turn names into addresses (dnschanger.go): the
 				// network's own, a public service or servers of your own, and
 				// a timing of each from here.
@@ -1231,12 +1267,18 @@ func setBuildSections() []setSection {
 				},
 				// Games on a NAS or a PC at home (nas_ui.go).
 				nasSettingsRow(),
+				// The other way round: the card as a drive on a computer,
+				// over WebDAV (davshare_ui.go).
+				davShareSettingsRow(),
 				// A cable to a computer opens the SD card there (MTP,
 				// usbmtp.go). Handheld only.
 				usbMtpSettingRow(),
 				// The same cable carries a little network to the Phone
 				// Companion page (usbnet.go); shown while file transfer is on.
 				usbNetSettingRow(),
+				// Or lends it the card as a plain USB drive, with JukaHub
+				// closed meanwhile (usbstorage.go). Handheld only.
+				usbStorageSettingRow(),
 				// Or turns the handheld into a USB controller for it
 				// (usbpad_ui.go). Handheld only.
 				usbPadSettingRow(),
@@ -1361,10 +1403,11 @@ func setBuildSections() []setSection {
 		},
 		{
 			// Stick calibration, control profiles, D-pad modes and Local play
-			// (inmap_settings.go).
+			// (inmap_settings.go), with the game hotkeys after the in-game
+			// chords (gamehotkeys.go).
 			ID: "controls", Title: "Controls", Glyph: "gamepad",
 			Subtitle: "Stick calibration, profiles and D-pad modes",
-			Rows:     inmapSettingsRows(),
+			Rows:     gameHotkeysInsertRows(inmapSettingsRows()),
 		},
 		{
 			// The LEDs around the analog sticks: on/off, what they show, colour,
@@ -1498,6 +1541,12 @@ func setBuildSections() []setSection {
 				},
 				// Recent games side by side, each where it was left (gameswitcher.go).
 				gameSwitcherSettingsRow(),
+				// Last played, All games, genres… on Home's Collections tab (autocoll.go).
+				autoCollSettingsRow(),
+				// NextUI's Collections/*.txt, both ways (collections_nextui.go).
+				colNextuiSettingsRow(),
+				// "The Legend of Zelda" sorts under L (libsort_articles.go).
+				librarySortArticlesSettingsRow(),
 				{
 					ID: "snaps", Label: "Video snaps", Kind: setKindToggle,
 					Detail: func(*Config) string {
@@ -1613,6 +1662,10 @@ func setBuildSections() []setSection {
 				// "GameCube & Wii": RetroArch's Dolphin core, on the Smart Pro S
 				// by default (dolphin.go).
 				dolphinSettingsRow(),
+				// "PlayStation 2" and "PS2 emulator": RetroArch's ARMSX2 core,
+				// on every TrimUI model by default (ps2.go).
+				ps2SettingsRow(),
+				ps2EmulatorRow(),
 				// "Fan": the Smart Pro S only (fan.go).
 				fanSettingsRow(),
 				{
@@ -1627,6 +1680,13 @@ func setBuildSections() []setSection {
 				},
 				// Covers, Pixel names or Pixel cards (game_library_pixel_look.go).
 				libraryConsoleLookRow(),
+				// Game art: on/off, type, style, width, corners, console
+				// backgrounds and the Artwork Manager (artstyle.go, artmanager.go).
+				artStyleRow("gameArt"), artStyleRow("gameArtType"), artStyleRow("gameArtStyle"),
+				artStyleRow("gameArtWidth"), artStyleRow("gameArtRadius"), artStyleRow("consoleBackgrounds"),
+				artStyleRow("artManager"),
+				// The highlighted game's emulator and ROM read ahead (gamewarm.go).
+				gameWarmSettingsRow(),
 				// The library index: rebuild it, and its CRC pass (libindex*.go).
 				libIndexRebuildRow(), libIndexCRCRow(),
 				{
@@ -1664,7 +1724,7 @@ func setBuildSections() []setSection {
 					ID: "artAuto", Label: "Find box art automatically", Kind: setKindToggle,
 					Detail: func(c *Config) string {
 						if boxArtAutoEnabled(c) {
-							return "Covers for new games from the libretro thumbnails, when online"
+							return "Covers for new games from the libretro thumbnails and LaunchBox, when online"
 						}
 						return "Off: covers download only from the library's Fill gaps"
 					},
@@ -1674,6 +1734,9 @@ func setBuildSections() []setSection {
 						setToast("Find box art automatically: " + setOnOff(on))
 					},
 				},
+				// ScreenScraper sign-in, the first cover source when signed in
+				// (artwork_screenscraper_ui.go).
+				screenScraperAccountRow(), screenScraperSignOutRow(),
 				{
 					// A picture from two minutes into a game that has no cover
 					// (playshot_cover.go).
@@ -1707,6 +1770,14 @@ func setBuildSections() []setSection {
 			Rows:     raTuneSettingsRows(),
 		},
 		{
+			// RetroArch's achievements while a game plays: sign-in, hardcore,
+			// leaderboards, unlock sound (raach_settings.go); offline
+			// achievements and the wait for Wi-Fi (raoffline_ui.go).
+			ID: raachSettingsSection, Title: "RetroAchievements", Glyph: "trophy",
+			Subtitle: "Sign-in, hardcore, leaderboards and unlock sound in games",
+			Rows:     append(raachSettingsRows(), raOfflineSettingsRows()...),
+		},
+		{
 			ID: "power", Title: "Power & battery", Glyph: "battery",
 			Subtitle: "Battery life, sleep and the idle screen",
 			Rows: []setRow{
@@ -1729,40 +1800,43 @@ func setBuildSections() []setSection {
 					Visible: func(*Config) bool { return getBatteryPercent() >= 0 },
 					Open:    battGraphOpen,
 				},
+				// The level in the top bar: Always, 20% or less, Never (power_options.go).
+				batteryPercentSettingsRow(),
 				// "Lock screen after" (the screensaver timeout) moved to Display
 				// (displaysettings.go).
 				{
+					// Clock dock ("ambientMode"), Starfield, Game slideshow or
+					// Game videos ("idleScreenKind", saverslides.go).
 					ID: "idleScreen", Label: "Idle screen", Kind: setKindChoice,
-					Detail: setStatic("The clock dock shows the time, the weather and what is playing"),
-					Options: func(*Config) []setOption {
-						return []setOption{{Value: "dock", Label: "Clock dock"}, {Value: "stars", Label: "Starfield"}}
-					},
-					Current: func(c *Config) int {
-						if ambientModeEnabled(c) {
-							return 0
-						}
-						return 1
-					},
-					Choose: func(c *Config, value string) {
-						if c.Variables.Custom == nil {
-							c.Variables.Custom = map[string]interface{}{}
-						}
-						c.Variables.Custom["ambientMode"] = value == "dock"
-						saveUserConfigDebounced(userConfigFromVariables(c))
-					},
+					Detail:  idleScreenDetail,
+					Options: idleScreenOptions,
+					Current: idleScreenIndex,
+					Choose:  idleScreenChoose,
 				},
 				// Off until chosen; handheld only (devpower.go).
 				autoSleepSettingsRow(),
+				// Idle in a game: dim, then sleep or power off (idlewatch.go).
+				idleWatchDimSettingsRow(),
+				idleWatchAfterSettingsRow(),
+				idleWatchActionSettingsRow(),
 				// A long sleep saves the game and powers off; the next power-on
 				// resumes it (quickresume.go).
 				sleepPowerOffSettingsRow(),
 				resumeAtPowerOnSettingsRow(),
+				// Home, the game switcher, a random or the last game at the first
+				// start of a boot (startup_target.go).
+				startInSettingsRow(),
 				// What the hardware power key does (powerkey.go).
 				powerButtonSettingsRow(),
 				// ...and while music plays: screen off or sleep (quickresume.go).
 				powerKeyMusicSettingsRow(),
-				// The FN switch locks the power button (travellock.go).
-				travelLockSettingsRow(),
+				// The Power tile and a held key power off without the card (power_options.go).
+				powerOffConfirmSettingsRow(),
+				// What the FN switch does: Travel lock (travellock.go), mute,
+				// lights off or airplane mode (fnswitch.go).
+				fnSwitchSettingsRow(),
+				// The GPU at full speed under heavy consoles (gpuboost.go).
+				gpuBoostSettingsRow(),
 				{
 					ID: "batterySaver", Label: "Battery saver at 20%", Kind: setKindToggle,
 					Detail: setStatic("Low battery: slower cadence, no motion, OLED theme"),
@@ -1774,17 +1848,29 @@ func setBuildSections() []setSection {
 						}
 					},
 				},
+				// The warning levels: header, lights, message, in games
+				// (batterywarn.go).
+				batteryWarnLevelRow(),
+				batteryWarnBlinkRow(),
+				batteryWarnGamesRow(),
 				{
-					ID: "lowBattery", Label: "Save and suspend at 3%", Kind: setKindToggle,
+					ID: "lowBattery", Label: "Save and suspend on low battery", Kind: setKindToggle,
 					Detail: setStatic("While a game runs: save state, sync, then suspend"),
 					Get:    lowBatteryGuardEnabled,
 					Set: func(c *Config, on bool) {
 						setStoreBool(c, "lowBatteryGuard", on)
-						setToast("Save and suspend at 3%: " + setOnOff(on))
+						setToast("Save and suspend on low battery: " + setOnOff(on))
 					},
 				},
+				// Its level, 3% under Auto (batterywarn.go).
+				batterySaveLevelRow(),
 				// PPSSPP, DraStic, Flycast… at 3% and power off (sessionsafe.go).
 				sessionSafeSettingsRow(),
+				// Programs using the card closed, sync, read-only card (safepoweroff.go).
+				safePowerOffSettingsRow(),
+				// The level on RetroArch's message line during a game (gamehud.go).
+				gameHudBatterySettingsRow(),
+				gameHudClockSettingsRow(),
 				{
 					ID: "lowPower", Label: "Low power", Kind: setKindToggle, Quiet: true,
 					Detail: setStatic("A slower frame rate when nothing moves"),
@@ -1893,6 +1979,8 @@ func setBuildSections() []setSection {
 				bootLockVoiceRow(), bootLockVoiceChangeRow(),
 			},
 		},
+		// Kiosk and Kid mode, beside the startup lock (uimode_settings.go).
+		uiModeSettingsSection(),
 		{
 			ID: "plugins", Title: "Plugins", Glyph: "plugin",
 			Subtitle: "Small scripts that add actions to JukaHub",
@@ -1905,6 +1993,8 @@ func setBuildSections() []setSection {
 			Subtitle: "Run JukaHub as the handheld's OS, with temporary layers",
 			Dynamic:  jukaosSettingsRows,
 		},
+		// Debug logging, Copy logs, Launch scripts (devoptions.go).
+		devOptionsSettingsSection(),
 		{
 			ID: "about", Title: "About", Glyph: "info",
 			Subtitle: "This JukaHub, updates and help",
@@ -1929,6 +2019,11 @@ func setBuildSections() []setSection {
 					Detail: setStatic("Operating system and processor type; worth quoting in a bug report"),
 					Value:  setStatic(runtime.GOOS + " · " + runtime.GOARCH),
 				},
+				// The TrimUI firmware and its update file (fwupdate.go); the
+				// card's space and the emulator versions (about_card.go).
+				fwUpdateSettingsRow(), aboutCardRow(), aboutVersionsRow(),
+				// Whether another firmware changed the stock start-up files (stockcheck.go).
+				stockCheckAboutRow(),
 				{
 					// The update channel's state in one line (upch.go).
 					ID: "updates", Label: "Updates", Kind: setKindAction,
@@ -1984,6 +2079,13 @@ func setBuildSections() []setSection {
 				},
 				// Everything onto a new card, checked (sdmove_ui.go); handheld only.
 				sdMoveSettingsRow(),
+				// The games' card: health flags, read test, fake card test
+				// (cardcheck_ui.go); handheld only.
+				cardCheckSettingsRow(),
+				// Mac and Windows litter off the card once per start (cardtidy.go).
+				cardTidySettingsRow(),
+				// Emulator resets and the tidy-up tools in one list (maint_tasks.go).
+				maintTasksRow(),
 				{
 					// Reset settings, or erase everything JukaHub created;
 					// both back up first and ask twice (factoryreset.go).

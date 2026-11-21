@@ -137,6 +137,10 @@ func musicShelfRefresh() {
 		musicShelfRefreshHistory() // works before the library is read, too
 		return
 	}
+	if musicShelf.tab == musicShelfTabRadio {
+		musicShelfRefreshRadio() // the directory and your stations (radiodir_ui.go)
+		return
+	}
 	m := mlibCurrentModel()
 	if m == nil {
 		musicShelf.rows = nil
@@ -241,6 +245,8 @@ func musicShelfChoose(config *Config) {
 		musicShelfPlayGroup(config, row.key, false, row.path)
 	case "listen", "topartist", "clearhistory":
 		musicShelfChooseHistory(config, row)
+	case "radiodir", "station":
+		musicShelfChooseRadio(config, row)
 	}
 	PlayActivateSound()
 }
@@ -411,7 +417,7 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 		title = "Albums by " + musicShelf.artist
 	}
 	renderText(renderer, config, big, ellipsize(big, title, w-48), ColorTextPrimary(), x+22, y+18)
-	labels := [musicShelfTabs]string{"Albums", "Artists", "Audiobooks", "History"}
+	labels := [musicShelfTabs]string{"Albums", "Artists", "Audiobooks", "History", "Radio"}
 	chipY := y + 66
 	chipW := (w - 44 - 10*(musicShelfTabs-1)) / musicShelfTabs
 	for i, label := range labels {

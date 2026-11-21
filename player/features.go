@@ -761,6 +761,10 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 
 	elemW := getElementWidth(element, 600)
 	elemH := getElementHeight(element, 500)
+	// Files in two panes draws both lists itself (files_dualpane.go).
+	if filesDualRender(renderer, config, element, font) {
+		return
+	}
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
 	// File Explorer gets a compact path toolbar above the list: one dark flat

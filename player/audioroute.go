@@ -8,8 +8,7 @@ package main
 //   - Every output was opened once on ALSA's "default", which is the speaker
 //     codec. Nothing ever pointed JukaHub at the headset, and alsa-lib reads
 //     its configuration once per process, so even a firmware that rewrites an
-//     .asoundrc on connect (spruce, NextUI) is not seen by an app already
-//     running — the same bug spruce documents for its PyUI menu.
+//     .asoundrc on connect is not seen by an app already running.
 //   - BlueALSA takes ONE client per PCM ("Device or resource busy" for the
 //     second, documented in its TROUBLESHOOTING.md; dmix cannot sit on it).
 //     JukaHub keeps up to five outputs open at once: UI sounds (also trophy
@@ -22,9 +21,8 @@ package main
 // They return a virtual device id. On the speaker route each virtual device is
 // backed by its own SDL device, exactly as before (passthrough). On the headset
 // route all of them feed one small mixer, which owns the single SDL device
-// opened on "bluealsa:SRV=org.bluealsa,DEV=<addr>,PROFILE=a2dp" (the PCM
-// string spruceOS verified on the same firmware) and resamples, up-mixes and
-// sums them. Callers keep their own format and rate and see the queue sizes
+// opened on "bluealsa:SRV=org.bluealsa,DEV=<addr>,PROFILE=a2dp" and
+// resamples, up-mixes and sums them. Callers keep their own format and rate and see the queue sizes
 // they always saw, so pacing loops do not change.
 //
 // The output monitor (audiooutput.go) picks the route. Before a game starts,

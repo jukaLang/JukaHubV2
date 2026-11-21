@@ -70,6 +70,8 @@ func inmapSettingsRows() []setRow {
 			Open:   inmapOpenProfiles,
 		},
 	}
+	// Button layout Nintendo / Xbox for menus and RetroArch games, first (buttonlayout.go).
+	rows = append(buttonLayoutSettingsRows(), rows...)
 	// The virtual cursor and each stick's dead zone
 	// (stickcal.go).
 	rows = append(rows, stickCalSettingsRows()...)
@@ -94,7 +96,9 @@ func inmapSettingsRows() []setRow {
 		},
 	)
 	// What A, B, X and Y do in RetroArch games, and turbo (racontrols_ui.go).
-	return append(rows, gameControlsSettingsRows()...)
+	rows = append(rows, gameControlsSettingsRows()...)
+	// RetroArch's hotkeys per console (rahotkeys_ui.go).
+	return append(rows, raHotkeySettingsRows()...)
 }
 
 // inmapChosenName is the chosen profile's name.

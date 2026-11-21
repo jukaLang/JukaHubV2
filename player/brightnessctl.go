@@ -14,7 +14,7 @@ package main
 //
 //   - "disp": the Allwinner display driver's ioctl on /dev/disp
 //     (brightness_disp_linux.go). It is what the TrimUI Smart Pro and Brick
-//     firmware, MinUI and spruceOS drive; the old sysfs-only code had nothing
+//     firmware and MinUI drive; the old sysfs-only code had nothing
 //     to move on a kernel without a /sys/class/backlight device.
 //   - "sysfs": a writable /sys/class/backlight device (systemcontrol.go).
 //   - "wmi" and "ddc": on Windows, an external monitor through DDC/CI, or a

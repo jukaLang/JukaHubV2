@@ -209,6 +209,8 @@ jobs:
           JUKAHUB_GOOGLE_CLIENT_ID: ${{ secrets.JUKAHUB_GOOGLE_CLIENT_ID }}
           JUKAHUB_GOOGLE_CLIENT_SECRET: ${{ secrets.JUKAHUB_GOOGLE_CLIENT_SECRET }}
           JUKAHUB_MS_CLIENT_ID: ${{ secrets.JUKAHUB_MS_CLIENT_ID }}
+          JUKAHUB_SS_DEVID: ${{ secrets.JUKAHUB_SS_DEVID }}
+          JUKAHUB_SS_DEVPASSWORD: ${{ secrets.JUKAHUB_SS_DEVPASSWORD }}
         run: |
           set -o pipefail
           start=$SECONDS
@@ -823,6 +825,8 @@ jobs:
           JUKAHUB_GOOGLE_CLIENT_ID: ${{ secrets.JUKAHUB_GOOGLE_CLIENT_ID }}
           JUKAHUB_GOOGLE_CLIENT_SECRET: ${{ secrets.JUKAHUB_GOOGLE_CLIENT_SECRET }}
           JUKAHUB_MS_CLIENT_ID: ${{ secrets.JUKAHUB_MS_CLIENT_ID }}
+          JUKAHUB_SS_DEVID: ${{ secrets.JUKAHUB_SS_DEVID }}
+          JUKAHUB_SS_DEVPASSWORD: ${{ secrets.JUKAHUB_SS_DEVPASSWORD }}
         run: |
           set -o pipefail
           export CC=x86_64-w64-mingw32-gcc
@@ -847,7 +851,7 @@ jobs:
           # as build.bat does: less for the linker to write and a smaller
           # download, while a panic still prints function names and lines.
           build() {
-            go build -v -ldflags "-s -w -X main.buildDate=$(date -u +%Y-%m-%d)${JUKAHUB_GOOGLE_CLIENT_ID:+ -X main.googleOAuthClientID=$JUKAHUB_GOOGLE_CLIENT_ID -X main.googleOAuthClientSecret=$JUKAHUB_GOOGLE_CLIENT_SECRET}${JUKAHUB_MS_CLIENT_ID:+ -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID}" \
+            go build -v -ldflags "-s -w -X main.buildDate=$(date -u +%Y-%m-%d)${JUKAHUB_GOOGLE_CLIENT_ID:+ -X main.googleOAuthClientID=$JUKAHUB_GOOGLE_CLIENT_ID -X main.googleOAuthClientSecret=$JUKAHUB_GOOGLE_CLIENT_SECRET}${JUKAHUB_MS_CLIENT_ID:+ -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID}${JUKAHUB_SS_DEVID:+ -X main.screenScraperDevID=$JUKAHUB_SS_DEVID -X main.screenScraperDevPassword=$JUKAHUB_SS_DEVPASSWORD}" \
               -o ../JukaHub-Trimui-Windows/JukaHub.exe ./ 2>&1 | tee "$RUNNER_TEMP/go-build.log"
           }
           start=$SECONDS

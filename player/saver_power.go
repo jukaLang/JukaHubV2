@@ -155,6 +155,8 @@ func saverLaunchActive() bool {
 // calls it) and moves the state to what the idle screens want.
 func saverPowerTick(now time.Time) {
 	idleUp := ss.active || ambientIsActive()
+	// The idle hook scripts follow the idle screen (idlewatch.go).
+	idleHooksNoteHome(idleUp)
 	saverPower.mu.Lock()
 	switch {
 	case !idleUp:
@@ -175,6 +177,9 @@ func saverPowerTick(now time.Time) {
 	want := saverPowerOff
 	if idleUp && saverPowerSupported() {
 		_, _, _, playing, _ := ambientNowPlaying()
+		// A game video on the idle screen decodes like music does: the same
+		// ceiling, not the lowest (saverslides.go).
+		playing = playing || saverSlidesVideoPlaying()
 		want = saverPowerWant(true, now.Sub(since), alarmFiringActive(), videoHoldsScreenAwake(), saverLaunchActive(), playing)
 	}
 	if want != mode {
@@ -519,6 +524,10 @@ func saverFrameBudget(now time.Time) uint32 {
 			return 0
 		}
 		return saverDockFrameMS
+	}
+	// The game slideshow (every frame while it fades) and videos (saverslides.go).
+	if ms, ok := saverSlidesFrameBudget(now); ok {
+		return ms
 	}
 	return saverStarfieldFrameMS
 }

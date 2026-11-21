@@ -73,6 +73,10 @@ func systemLegendRows() []FooterHint {
 	if menuIsVoice {
 		rows = append(rows, voiceRow)
 	}
+	// Menu on Home: the Quick menu, when Settings says so (quickmenu.go).
+	if row, ok := quickMenuLegendRow(); ok {
+		rows = append(rows, row)
+	}
 	// Hold Menu: a screenshot, in JukaHub and in a game (menushot.go).
 	if row, ok := menuShotLegendRow(); ok {
 		rows = append(rows, row)
@@ -94,13 +98,11 @@ func systemLegendRows() []FooterHint {
 		rows = append(rows, FooterHint{Button: "Select + L2", Label: "In-game menu (hold, in a game)"})
 	}
 	if controlsLegend.brick {
-		// On a Brick "F1" is a key on the device, not the keyboard's: it opens
-		// this card, F2 opens Quick Settings, and Menu is voice (listed above)
-		// or, with that switched off, goes back like B.
-		rows = append(rows,
-			FooterHint{Button: "F1", Label: "This help"},
-			FooterHint{Button: "F2", Label: "Quick Settings"},
-		)
+		// On a Brick "F1" is a key on the device, not the keyboard's: F1 and
+		// F2 do what Settings → Controls says (frontkeys.go; this card and
+		// Quick Settings by default), and Menu is voice (listed above) or,
+		// with that switched off, goes back like B.
+		rows = append(rows, frontKeyLegendRows()...)
 		if !menuIsVoice {
 			rows = append(rows, FooterHint{Button: "Menu", Label: "Back"})
 		}
@@ -183,9 +185,10 @@ func ctrlControlsLegend(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		closeControlsLegend()
-	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
-		// F1 on a Brick opened the card, and the same key puts it away.
-		if controlsLegend.brick {
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The Brick front key that opens the card (F1 unless Settings →
+		// Controls says otherwise: frontkeys.go) puts it away.
+		if controlsLegend.brick && frontKeyIs(e.Button, frontActControls) {
 			closeControlsLegend()
 		}
 	}
@@ -306,7 +309,8 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 
 	hint := hintLine(FooterHint{"B", "Close"}, FooterHint{"F1", "Keyboard shortcuts"})
 	if controlsLegend.brick && !hintsUseKeyboard() {
-		hint = hintLine(FooterHint{"B / F1", "Close"})
+		// B, and the front key that opens the card (frontkeys.go).
+		hint = hintLine(FooterHint{frontKeyLegendClose(), "Close"})
 	}
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint,

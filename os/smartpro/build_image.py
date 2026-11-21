@@ -1198,7 +1198,7 @@ def replace_logo(image: Path) -> str:
                 # screen. JukaHub later writes the saved Home over this file
                 # in place at the same length (bootframe_ubootlogo*.go), which
                 # needs a full-screen 1280x720 24-bit picture here, the size
-                # NextUI and CrossMix use for this U-Boot.
+                # this U-Boot's logo takes.
                 # A portrait logo means a bootloader that draws it turned: a
                 # landscape one there would show sideways, so it stays.
                 stock = bmp_info(old)

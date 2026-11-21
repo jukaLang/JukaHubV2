@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 // appsEntriesVar is the list variable the Apps scene's dynamiclist renders.
@@ -655,6 +656,11 @@ func launchInstalledApp(path string) bool {
 		showToast("Unsupported app type "+ext, ToastError())
 		return false
 	}
+	// The card's pre-launch scripts first: a start they hold comes back here
+	// once they ran (launchscripts.go).
+	if launchScriptsAppGate(clean) {
+		return true
+	}
 	logDebug("apps", "launching %s", clean)
 	// No shell ever sees a command line here: the only string is clean, a
 	// regular file inside the app folders (checked above), and it goes to the
@@ -693,9 +699,12 @@ func launchInstalledApp(path string) bool {
 	}
 	trophyEvent(tkAppLaunch)
 	noteGameChildStarted(cmd)
+	startedAt := time.Now()
 	go func() {
-		_ = cmd.Wait() // reap the child, keep JukaHub responsive
+		waitErr := cmd.Wait() // reap the child, keep JukaHub responsive
 		screenChildReaped(cmd)
+		// The card's post-exit scripts (launchscripts.go).
+		launchScriptsAppExited(clean, startedAt, waitErr)
 	}()
 	return true
 }

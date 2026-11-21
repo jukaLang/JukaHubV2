@@ -302,8 +302,7 @@ func startPortMasterInstall() error {
 
 // startPortMasterRepair downloads the official TrimUI package again and writes
 // its files over the installed PortMaster, which mends a damaged or
-// half-updated install (CrossMix #119: "replace your app with
-// trimui.portmaster.zip"). Ports, the runtimes in libs/, themes and settings
+// half-updated install. Ports, the runtimes in libs/, themes and settings
 // are not in the package and stay as they are.
 func startPortMasterRepair() error {
 	if IsWindows() {
@@ -798,6 +797,8 @@ func startPortScript(name, path string) error {
 	}
 	noteGameChildStarted(cmd)
 	boost.started(cmd.Process.Pid)
+	// GPU boost in games: ports count as heavy (gpuboost.go).
+	gpuBoosted := gpuBoostBeginPort(path, name, master)
 	logDone := portLogWatch(logPath)
 	launchedAt := time.Now()
 	gameLaunchWatchStart(cmd)
@@ -841,6 +842,7 @@ func startPortScript(name, path string) error {
 		}
 		restoreProfile()
 		boost.end()
+		gpuBoosted.end()
 		recorder.Stop()
 		portAfterExit(path, master, time.Since(launchedAt), splashKind)
 		diag.exited(waitErr)

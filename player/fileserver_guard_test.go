@@ -2,9 +2,14 @@ package main
 
 // Tests for what the FTP and SFTP servers share (fileserver_guard.go): the
 // watchdog's idle and network decisions on an injected clock, the client list,
-// and SFTP's default root.
+// and SFTP's default root; and the network drive's sign-in and confinement
+// (davshare.go).
 
 import (
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -279,5 +284,98 @@ func TestFsIdleLimitText(t *testing.T) {
 	}
 	if got := fsStopMessage([]string{"FTP", "SFTP"}, fsStopUnwatched); !strings.Contains(got, "start them again") {
 		t.Fatalf("watchdog failure message = %q", got)
+	}
+}
+
+// The network drive answers only with its key as the first folder or its
+// password, and never outside its shares: not through "..", not through a
+// link off the card, not with a Destination on another key.
+func TestDavShareNeedsTheKeyAndStaysInside(t *testing.T) {
+	delay := davAuthFailDelay
+	davAuthFailDelay = 0
+	defer func() { davAuthFailDelay = delay }()
+	base := t.TempDir()
+	roms := filepath.Join(base, "Roms")
+	if err := os.MkdirAll(filepath.Join(roms, "GBA"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "secret.txt"), []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &davService{}
+	if err := s.startShares([]ftpShare{{name: "Roms", dir: roms}}, []string{"127.0.0.1:0"}); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop()
+	host := "http://127.0.0.1:" + strconv.Itoa(s.Port())
+	key := "/" + s.Token()
+	do := func(method, path, body string, hdr map[string]string, user, pass string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, host+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		if user != "" {
+			req.SetBasicAuth(user, pass)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	depth1 := map[string]string{"Depth": "1"}
+	for _, tc := range []struct {
+		method, path, body string
+		hdr                map[string]string
+		user, pass         string
+		want               int
+	}{
+		{"OPTIONS", "/", "", nil, "", "", http.StatusOK},
+		{"OPTIONS", "/Roms/", "", nil, "", "", http.StatusUnauthorized},
+		{"OPTIONS", key + "/Roms/", "", nil, "", "", http.StatusOK},
+		{"PROPFIND", "/Roms/", "", depth1, "", "", http.StatusUnauthorized},
+		{"PROPFIND", "/aaaa-bbbb-cccc-dddd/Roms/", "", depth1, "", "", http.StatusUnauthorized},
+		{"PROPFIND", "/Roms/", "", depth1, sshUserName, "wrong", http.StatusUnauthorized},
+		{"PROPFIND", "/Roms/", "", depth1, sshUserName, s.Password(), http.StatusMultiStatus},
+		{"PROPFIND", key + "/Roms/", "", depth1, "", "", http.StatusMultiStatus},
+		{"PROPFIND", strings.ToUpper(key) + "/", "", depth1, "", "", http.StatusMultiStatus},
+		{"PUT", key + "/Roms/GBA/game.gba", "data", nil, "", "", http.StatusCreated},
+		{"GET", key + "/Roms/GBA/game.gba", "", nil, "", "", http.StatusOK},
+		{"GET", key + "/Roms/../secret.txt", "", nil, "", "", http.StatusNotFound},
+		{"GET", key + "/Roms/%2e%2e/secret.txt", "", nil, "", "", http.StatusNotFound},
+		{"GET", key + "/../secret.txt", "", nil, "", "", http.StatusNotFound},
+		{"PUT", key + "/Roms/../../escaped.txt", "x", nil, "", "", http.StatusForbidden},
+		{"PUT", key + "/new.txt", "x", nil, "", "", http.StatusForbidden},
+		{"DELETE", key + "/Roms", "", nil, "", "", http.StatusForbidden},
+		{"COPY", key + "/Roms/GBA/game.gba", "", map[string]string{"Destination": host + "/Roms/GBA/copy.gba"}, "", "", http.StatusBadRequest},
+		{"COPY", key + "/Roms/GBA/game.gba", "", map[string]string{"Destination": "http://elsewhere.example" + key + "/Roms/GBA/copy.gba"}, "", "", http.StatusBadGateway},
+		{"COPY", key + "/Roms/GBA/game.gba", "", map[string]string{"Destination": host + key + "/Roms/../../copy.gba"}, "", "", http.StatusForbidden},
+		{"MOVE", key + "/Roms/GBA/game.gba", "", map[string]string{"Destination": host + key + "/Roms/game.gba"}, "", "", http.StatusCreated},
+	} {
+		if got := do(tc.method, tc.path, tc.body, tc.hdr, tc.user, tc.pass); got != tc.want {
+			t.Errorf("%s %s = %d, want %d", tc.method, tc.path, got, tc.want)
+		}
+	}
+	for _, p := range []string{filepath.Join(filepath.Dir(base), "escaped.txt"), filepath.Join(base, "escaped.txt"), filepath.Join(base, "copy.gba")} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s was written outside the share", p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(roms, "game.gba")); err != nil {
+		t.Errorf("the moved file is not there: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Symlink(base, filepath.Join(roms, "out")); err != nil {
+			t.Fatal(err)
+		}
+		if got := do("GET", key+"/Roms/out/secret.txt", "", nil, "", ""); got == http.StatusOK {
+			t.Error("a link led out of the share")
+		}
 	}
 }

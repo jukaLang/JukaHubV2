@@ -131,6 +131,10 @@ func gmItems(config *Config) []gmItem {
 	if gmManualAvailable() {
 		items = append(items, gmManual)
 	}
+	if aiTranslateMenuShown() {
+		// With "Translate games" on (aitranslate.go).
+		items = append(items, gmTranslate)
+	}
 	if gameAssistEnabled(config) {
 		items = append(items, gmAsk)
 	}
@@ -141,7 +145,11 @@ func gmItems(config *Config) []gmItem {
 		// Record screen / Stop recording (screenrec.go).
 		items = append(items, gmRecord)
 	}
-	return append(items, gmCloseBg, gmSleep, gmQuit)
+	// Brightness, volume, radios, lights, power off (gamemenu_quick.go).
+	items = append(items, gmQuick)
+	// Rows hidden in Settings → Controls → In-game menu entries go last
+	// (gamemenu_entries.go); Resume and Quit always stay.
+	return gmEntriesFilter(config, append(items, gmCloseBg, gmSleep, gmQuit))
 }
 
 // gmLabel is a row's words: its label and the smaller line under it.
@@ -154,6 +162,10 @@ func gmLabel(it gmItem) (string, string) {
 	case gmSave:
 		return "Save state", "Six slots, each with a picture and its date"
 	case gmLoad:
+		if raachHardcoreRunning() {
+			// RetroArch refuses it; the picker does not open (raach_unlocks.go).
+			return "Load state", "Hardcore mode is on: RetroArch loads no states"
+		}
 		return "Load state", "Go back to a moment you saved"
 	case gmSleep:
 		return "Sleep", "The game carries on when the handheld wakes"
@@ -176,16 +188,16 @@ func gmLabel(it gmItem) (string, string) {
 	case gmDisc:
 		return gmDiscLabel()
 	case gmMusic:
-		title, paused, _ := musicGameMenuState()
-		sub := orbKeyName("A") + " pause · Left/Right previous / next"
-		if paused {
-			sub = "Paused · " + orbKeyName("A") + " play · Left/Right previous / next"
-		}
-		return "Music: " + title, sub
+		// A opens the now-playing panel (ingame_music.go).
+		return ingameMusicRowLabel()
 	case gmStopwatch:
 		return stopwatchGameMenuLabel()
 	case gmRecord:
 		return screenRecMenuLabel()
+	case gmTranslate:
+		return aiTranslateMenuLabel()
+	case gmQuick:
+		return gmQuickLabel()
 	}
 	return "Resume game", ""
 }
@@ -217,6 +229,14 @@ func gmPress(config *Config, b gaButton) {
 		gmManualPress(b)
 		return
 	}
+	if ingameMusicActive() {
+		ingameMusicPress(b) // the Music panel (ingame_music.go)
+		return
+	}
+	if gmQuickActive() {
+		gmQuickPress(config, b) // Quick settings (gamemenu_quick.go)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1
@@ -241,9 +261,9 @@ func gmPress(config *Config, b gaButton) {
 		// disc. No shoulder or hotkey is needed for them.
 		if items[gaOverlay.sel] == gmMusic {
 			if b == gaBtnLeft {
-				musicPrev()
+				ingameMusicStep(-1)
 			} else {
-				musicNext()
+				ingameMusicStep(1)
 			}
 		}
 		if items[gaOverlay.sel] == gmDisc {
@@ -258,7 +278,7 @@ func gmPress(config *Config, b gaButton) {
 		case gmStopwatch:
 			stopwatchGameMenuPress(b)
 		case gmMusic:
-			musicTogglePause()
+			ingameMusicOpen()
 		case gmResume:
 			PlayBackSound()
 			gaClose("the player resumed", true)
@@ -294,6 +314,11 @@ func gmPress(config *Config, b gaButton) {
 			// Start: the game carries on, recorded. Stop: the menu stays and
 			// the row's line says where the clip went (screenrec.go).
 			screenRecMenuPress(config)
+		case gmTranslate:
+			// Gives the game back, then asks RetroArch (aitranslate.go).
+			aiTranslateMenuPress()
+		case gmQuick:
+			gmQuickOpenRow()
 		}
 	}
 }
@@ -443,6 +468,14 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 		gmManualDraw(renderer, fonts)
 		return
 	}
+	if ingameMusicActive() {
+		ingameMusicDraw(renderer, fonts)
+		return
+	}
+	if gmQuickActive() {
+		gmQuickDraw(renderer, config, fonts)
+		return
+	}
 	items := gmItems(config)
 	if gaOverlay.sel >= len(items) {
 		gaOverlay.sel = len(items) - 1
@@ -459,6 +492,8 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 		title = "Your game"
 	}
 	hint := "D-pad move · " + orbKeyName("A") + " select · " + orbKeyName("B") + " resume"
+	// The game's one-button hotkeys, on a line of their own (gamehotkeys.go).
+	hotkeys := gameHotkeysMenuHint(config)
 
 	w := screenWidth * 42 / 100
 	if minW := scaleX(420, screenWidth); w < minW {
@@ -484,6 +519,9 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 		h += rowH(it) + rowGap
 	}
 	h += pad/2 + fonts.smallH + pad
+	if hotkeys != "" {
+		h += 2 + fonts.smallH
+	}
 	if gaOverlay.system != "" {
 		h += 2 + fonts.smallH
 	}
@@ -572,4 +610,7 @@ func gmDraw(renderer *sdl.Renderer, config *Config, fonts tbxFonts) {
 	}
 	y += pad / 2
 	drawText(renderer, fonts.small, ellipsize(fonts.small, hint, inner), card.X+card.W/2, y, ColorTextSecondary(), textAlignCenter)
+	if hotkeys != "" {
+		drawText(renderer, fonts.small, ellipsize(fonts.small, hotkeys, inner), card.X+card.W/2, y+fonts.smallH+2, ColorTextSecondary(), textAlignCenter)
+	}
 }

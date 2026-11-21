@@ -447,6 +447,9 @@ func goInstall(build goBuild, screenUp func() bool, done func(portsInstallResult
 		ShowToast(goClientName+" runs on the handheld", ToastKindInfo)
 		return
 	}
+	if !uiModeGate(uiFeatSetup) { // Kiosk: the X1 tile and Cloud Gaming install nothing (uimode.go)
+		return
+	}
 	urls := goBuildURLs[build]
 	if len(urls) == 0 {
 		return

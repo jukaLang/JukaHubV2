@@ -867,12 +867,16 @@ func ledLoopSettingsFrom(config *Config) ledLoopSettings {
 // syncLEDLoopSettings publishes config's LED settings to the loop. Render thread.
 func syncLEDLoopSettings(config *Config) {
 	s := ledLoopSettingsFrom(config)
+	// Follow screen brightness, and Celebrate achievements (ledsilky.go).
+	s.brightness = ledSilkyPublish(config, s.brightness)
 	ledLoopState.Lock()
 	ledLoopState.settings = s
 	ledLoopState.synced = time.Now()
 	ledLoopState.Unlock()
 	// The indicators' and Screen colours' settings (ledindicators.go).
 	ledExtrasPublish(config)
+	// Lights in games (power_options.go).
+	powerOptLEDPublish(config)
 }
 
 // syncLEDLoopSettingsIfDue is the main loop's throttled refresh, so every writer
@@ -982,7 +986,10 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 			overGame := backgroundPaused()
 			settings := currentLEDLoopSettings()
 			layers := ledLayersNow(settings, now, overGame)
-			if overGame && !ledJukaHolds(now) && !layers.holds() {
+			// Lights in games Off (power_options.go): over a game only the
+			// indicators light, and a frame with none is dark, not handed back.
+			layers, gameDark := ledGamesOffLayers(layers, now)
+			if overGame && !gameDark && !ledJukaHolds(now) && !layers.holds() {
 				// Hand the lights back once instead of leaving them frozen on
 				// the last frame: the rings get the firmware's colour, the
 				// others go dark. The first frame back repaints everything.
@@ -1001,6 +1008,9 @@ func runLEDLoop(stop <-chan struct{}, done chan<- struct{}, prev <-chan struct{}
 			// The user's mode, with Juka's layer over it (ledjuka.go) and the
 			// indicators over both (ledindicators.go).
 			rawR, rawG, rawB := ledLayersFrame(settings, layers, now, overGame)
+			if gameDark {
+				rawR, rawG, rawB = 0, 0, 0
+			}
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
 			r, g, b := quantiseLEDChannel(rawR), quantiseLEDChannel(rawG), quantiseLEDChannel(rawB)

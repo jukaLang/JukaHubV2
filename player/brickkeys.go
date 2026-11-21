@@ -10,7 +10,8 @@ package main
 // reach. They now mirror their keyboard namesakes as far as a handheld can:
 // F1 opens the Controller card for the screen on display (what every button
 // does here), F2 opens Quick Settings. Pressing the same key again closes what
-// it opened.
+// it opened. Those are the defaults: Settings → Controls → F1 key / F2 key
+// pick another action for either (frontkeys.go).
 //
 // Screens that already give L3 / R3 a meaning keep it: the web browser (L3
 // switches between scrolling and walking links) and the audio player (lyrics,
@@ -67,15 +68,7 @@ func handleBrickFunctionKey(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if !brickHasFunctionKeys() || sceneClaimsStickClicks(config) {
 		return false
 	}
-	if e.Button == sdl.CONTROLLER_BUTTON_LEFTSTICK {
-		openControlsLegend()
-		if !controlsLegend.open {
-			return false
-		}
-		PlayActivateSound()
-		return true
-	}
-	qsToggleOpen()
-	PlayActivateSound()
-	return true
+	// The key's chosen action (frontkeys.go): by default F1 the Controller
+	// card, F2 Quick Settings.
+	return frontKeyPress(e.Button, config)
 }

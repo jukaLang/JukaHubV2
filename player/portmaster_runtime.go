@@ -13,7 +13,7 @@ package main
 //   - pugwash and harbourmaster are `#!/usr/bin/env python3`, and the
 //     firmware has no python3 (TRIMUI_EX brings Python 3.11);
 //   - /bin/bash is BusyBox, and PortMaster's scripts use bash arrays since
-//     autumn 2026 (spruceOS #1986);
+//     autumn 2026;
 //   - pysdl2 finds SDL2 only through PYSDL2_DLL_PATH (TRIMUI_EX links
 //     /usr/trimui/lib/libSDL* into /usr/lib, which JukaHub never does).
 //

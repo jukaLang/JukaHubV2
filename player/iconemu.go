@@ -30,7 +30,7 @@ type iconEmuRule struct {
 // every core name that merely carries a "_libretro" suffix.
 var iconEmuRules = [...]iconEmuRule{
 	{"emu-ps3", []string{"rpcs3", "ps3", "playstation3"}},
-	{"emu-ps2", []string{"pcsx2", "aethersx2", "nethersx2", "lrps2", "ps2", "playstation2"}},
+	{"emu-ps2", []string{"pcsx2", "aethersx2", "nethersx2", "armsx2", "lrps2", "ps2", "playstation2"}},
 	{"emu-vita", []string{"vita3k", "psvita", "vita", "psv"}},
 	{"emu-psp", []string{"ppsspp", "psp", "playstationportable"}},
 	{"emu-ps1", []string{"duckstation", "swanstation", "pcsxrearmed", "pcsx", "rearmed", "epsxe", "psx", "ps1", "ps", "playstation"}},
@@ -39,7 +39,7 @@ var iconEmuRules = [...]iconEmuRule{
 	{"emu-xbox", []string{"xemu", "cxbx", "xenia", "xbox", "xbox360"}},
 	{"emu-switch", []string{"yuzu", "ryujinx", "eden", "citron", "sudachi", "suyu", "torzu", "switch", "nintendoswitch"}},
 	{"emu-3ds", []string{"citra", "lime3ds", "azahar", "panda3ds", "mandarine", "3ds", "nintendo3ds"}},
-	{"emu-nds", []string{"melonds", "drastic", "desmume", "nds", "ds", "nintendods"}},
+	{"emu-nds", []string{"melonds", "drastic", "desmume", "nds", "ds", "nintendods", "ndsi", "dsi"}},
 	{"emu-wiiu", []string{"cemu", "decaf", "wiiu"}},
 	{"emu-wii", []string{"wii"}},
 	{"emu-gc", []string{"dolphin", "gamecube", "gc", "ngc"}},
@@ -58,8 +58,9 @@ var iconEmuRules = [...]iconEmuRule{
 	{"emu-neogeo", []string{"neogeo", "neocd", "ngp", "ngpc", "race"}},
 	{"emu-arcade", []string{"mame2000", "mame2003", "mame2010", "mame2015", "mame2016", "mame", "fbneo", "fbalpha", "finalburn", "fba", "arcade", "cps1", "cps2", "cps3", "naomi", "atomiswave"}},
 	{"emu-atari", []string{"stella", "atari", "a2600", "a5200", "a7800", "prosystem", "handy", "lynx", "virtualjaguar", "jaguar"}},
-	// Homebrew engines with no hardware to draw: the cartridge glyph.
-	{"rom", []string{"tic80", "easyrpg"}},
+	// Homebrew engines with no hardware to draw, and the Tandy CoCo (a
+	// cartridge computer with no glyph of its own): the cartridge glyph.
+	{"rom", []string{"tic80", "easyrpg", "openbor", "xroar", "coco"}},
 	{"emu-retroarch", []string{"retroarch", "libretro"}},
 }
 

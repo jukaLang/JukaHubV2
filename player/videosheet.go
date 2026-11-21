@@ -41,6 +41,7 @@ const (
 	vsRowExtractAudio
 	vsRowGetSubtitles
 	vsRowBack
+	vsRowAudioTrack // a file's audio streams (videotracks.go)
 )
 
 // The sheet's pages: the settings, and the Save offline choices.
@@ -89,6 +90,10 @@ type videoSheetContext struct {
 // every file the same two actions, whatever they can do at the moment.
 func videoSheetRowIDsFor(page int, c videoSheetContext) []videoSheetRowID {
 	if page != videoSheetSave {
+		if c.local {
+			// A file on the card also picks its audio track (videotracks.go).
+			return []videoSheetRowID{vsRowSubtitles, vsRowAudioTrack, vsRowFullscreen, vsRowSpeed, vsRowQuality, vsRowUpNext, vsRowSave, vsRowClose}
+		}
 		return []videoSheetRowID{vsRowSubtitles, vsRowFullscreen, vsRowSpeed, vsRowQuality, vsRowUpNext, vsRowSave, vsRowClose}
 	}
 	if c.local {
@@ -164,7 +169,8 @@ func videoSettingsBack() {
 		return
 	}
 	videoSettingsPage = videoSheetMain
-	videoSettingsItem = videoSheetRowIndex(videoSheetRowIDsFor(videoSheetMain, videoSheetContext{}), vsRowSave)
+	// The video's own context: a file's page has the Audio track row too.
+	videoSettingsItem = videoSheetRowIndex(videoSheetRowIDsFor(videoSheetMain, videoSheetContextNow()), vsRowSave)
 }
 
 // videoSheetRowIndex is a row's position in a list, 0 when it is not there.
@@ -208,7 +214,13 @@ func vsOnOff(on bool) string {
 func videoSheetRowLabel(id videoSheetRowID, c videoSheetContext) string {
 	switch id {
 	case vsRowSubtitles:
+		// A file with several subtitle sources names the one on screen.
+		if label, ok := videoTracksSubsRowLabel(); ok {
+			return label
+		}
 		return "Subtitles: " + vsOnOff(subtitlesEnabled())
+	case vsRowAudioTrack:
+		return videoTracksAudioRowLabel()
 	case vsRowFullscreen:
 		return "Full screen: " + vsOnOff(videoFullscreen)
 	case vsRowSpeed:
@@ -328,7 +340,12 @@ func videoSettingsActivate(idx int) {
 	}
 	switch rows[idx] {
 	case vsRowSubtitles:
-		toggleSubtitlesWithFeedback()
+		// Several sources step Off → each one (videotracks_subs.go); else CC.
+		if !videoTracksSubsRowPress() {
+			toggleSubtitlesWithFeedback()
+		}
+	case vsRowAudioTrack:
+		videoTracksCycleAudio()
 	case vsRowFullscreen:
 		toggleVideoFullscreen()
 		videoSettingsOpen = !videoSettingsOpen

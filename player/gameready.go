@@ -531,9 +531,9 @@ func gameReadyLetThrough(game libraryGame) bool {
 		return true
 	}
 	// The launch path running again after the saves came down, the C library
-	// was installed or Dolphin was set up (dolphin.go sets its marker before
-	// the re-entry and reads it after the gates).
-	if saveSyncAuto.resume == path || raGlibcInstall.resume == path || dolphinResume == path {
+	// was installed or Dolphin or ARMSX2 was set up (dolphin.go and ps2.go set
+	// their markers before the re-entry and read them after the gates).
+	if saveSyncAuto.resume == path || raGlibcInstall.resume == path || dolphinResume == path || ps2Resume == path {
 		return true
 	}
 	if until, ok := gameReadyPasses[path]; ok {

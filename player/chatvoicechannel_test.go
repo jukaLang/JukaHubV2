@@ -113,6 +113,10 @@ func TestChatVoiceMumbleParsersRejectBadInput(t *testing.T) {
 	if _, ok := mumbleParseVoice(pkt[:len(pkt)-1]); ok {
 		t.Error("accepted a cut voice packet")
 	}
+	// A user_id field that is present but zero still marks a registered user.
+	if u, err := mumbleParseUser(mumbleRegisterBody(5)); err != nil || u.session != 5 || !u.hasUserID || u.hasChannel {
+		t.Errorf("user state = %+v, %v", u, err)
+	}
 	if pbEach([]byte{0x1a, 0x05, 'a'}, func(pbField) {}) == nil {
 		t.Error("accepted a field longer than the message")
 	}

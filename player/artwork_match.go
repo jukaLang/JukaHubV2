@@ -1189,10 +1189,9 @@ func artworkIndexLines(data []byte) []string {
 // romLocalCoverPath is a cover another front end left beside the ROM: the
 // stock firmware's and CrossMix's Imgs folder (<console>/Imgs/<name>.png, or
 // for a game kept in its own folder <console>/Imgs/<folder>.png), MinUI's
-// .res folder (.res/<file>.png) and NextUI's / NX Redux's .media folder
+// .res folder (.res/<file>.png) and NextUI's .media folder
 // (.media/<name>.png). Each place is read as .png first, then .jpg/.jpeg,
-// then .webp when this build decodes WebP (NX Redux 2.5 art packs ship
-// .webp). "" when there is none.
+// then .webp when this build decodes WebP (some art packs ship .webp). "" when there is none.
 func romLocalCoverPath(rom scannedROM) string {
 	file := filepath.Base(rom.Path)
 	stem := strings.TrimSuffix(file, filepath.Ext(file))

@@ -338,8 +338,10 @@ func vkActionLabel() string {
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
-		artworkAliasVKTarget, homebrewKeyVKTarget, nasPassVKTarget:
+		artworkAliasVKTarget, homebrewKeyVKTarget, nasPassVKTarget, tailscaleKeyVKTarget:
 		return "Save"
+	case raachPassVKTarget, screenScraperPassVKTarget:
+		return "Sign in"
 	case gameFileNameVKTarget:
 		return "Rename"
 	case osPromptVKTarget:
@@ -927,6 +929,12 @@ func vkCurrentText() string {
 		return homebrewKeyBuffer
 	case nasPassVKTarget:
 		return nasPassBuffer
+	case tailscaleKeyVKTarget:
+		return tailscaleKeyBuffer
+	case raachPassVKTarget:
+		return raachPassBuffer
+	case screenScraperPassVKTarget:
+		return screenScraperPassBuffer
 	case homebrewSearchVKTarget:
 		return hb.query
 	case bootLockVKTarget:
@@ -1073,6 +1081,17 @@ func vkSetText(text string, config *Config) {
 	case nasPassVKTarget:
 		// A network drive's password: kept on submit only (nas_ui.go).
 		nasPassBuffer = text
+	case tailscaleKeyVKTarget:
+		// A Tailscale auth key: handed to one sign-in on submit (tailscaled_ui.go).
+		tailscaleKeyBuffer = text
+	case raachPassVKTarget:
+		// RetroArch's RetroAchievements password: written on submit only
+		// (raach_signin.go).
+		raachPassBuffer = text
+	case screenScraperPassVKTarget:
+		// The ScreenScraper password: checked and stored on submit only
+		// (artwork_screenscraper_ui.go).
+		screenScraperPassBuffer = text
 	case homebrewSearchVKTarget:
 		// Get Homebrew's grid narrows on every key.
 		homebrewSetQuery(text)
@@ -1322,6 +1341,12 @@ func vkTitle() string {
 		return "ITCH.IO API KEY"
 	case nasPassVKTarget:
 		return "NETWORK DRIVE PASSWORD"
+	case tailscaleKeyVKTarget:
+		return "TAILSCALE AUTH KEY"
+	case raachPassVKTarget:
+		return "RETROACHIEVEMENTS PASSWORD"
+	case screenScraperPassVKTarget:
+		return "SCREENSCRAPER PASSWORD"
 	case homebrewSearchVKTarget:
 		return "SEARCH HOMEBREW"
 	case bootLockVKTarget:
@@ -1484,6 +1509,12 @@ func vkPlaceholder() string {
 		return "Your key from itch.io/user/settings/api-keys"
 	case nasPassVKTarget:
 		return "The password of your user on the drive"
+	case tailscaleKeyVKTarget:
+		return "tskey-auth-… from the admin console's Keys page"
+	case raachPassVKTarget:
+		return "Your password on retroachievements.org"
+	case screenScraperPassVKTarget:
+		return "Your password on screenscraper.fr"
 	case homebrewSearchVKTarget:
 		return "Game or author: tobu"
 	case bootLockVKTarget:
@@ -2031,6 +2062,18 @@ func vkCloseKeyboard() {
 	if vkTarget == nasPassVKTarget {
 		// Nor a network drive's password (nas_ui.go).
 		nasPassBuffer = ""
+	}
+	if vkTarget == tailscaleKeyVKTarget {
+		// Nor a Tailscale auth key (tailscaled_ui.go).
+		tailscaleKeyBuffer = ""
+	}
+	if vkTarget == raachPassVKTarget {
+		// Nor RetroArch's RetroAchievements password (raach_signin.go).
+		raachPassBuffer = ""
+	}
+	if vkTarget == screenScraperPassVKTarget {
+		// Nor the ScreenScraper password (artwork_screenscraper_ui.go).
+		screenScraperPassBuffer = ""
 	}
 	if vkTarget == bootLockVKTarget {
 		// Nor a typed startup password (bootlock.go).
@@ -2599,6 +2642,21 @@ func vkSubmit(config *Config, askAI bool) {
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()
 		nasPassSubmit(text)
+	case tailscaleKeyVKTarget:
+		// Read before closing: closing clears the buffer.
+		vkCloseKeyboard()
+		tailscaledKeySubmit(text)
+	case raachPassVKTarget:
+		// The password as typed, spaces kept; closing clears the buffer, so
+		// it is taken first (raach_signin.go).
+		pass := raachPassBuffer
+		vkCloseKeyboard()
+		raachPassSubmit(pass)
+	case screenScraperPassVKTarget:
+		// Taken before closing, which clears it (artwork_screenscraper_ui.go).
+		pass := screenScraperPassBuffer
+		vkCloseKeyboard()
+		screenScraperPassSubmit(pass)
 	case vkTargetGroqKey:
 		// Read before closing: closing clears the buffer.
 		vkCloseKeyboard()

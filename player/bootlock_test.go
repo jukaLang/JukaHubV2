@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -83,5 +85,60 @@ func TestBootLockHashAndBackoffPersistence(t *testing.T) {
 	back[bootLockFailsKey] = "-3"
 	if bootLockFailsFrom(back) != 0 {
 		t.Fatal("a negative hand-edited count must read as 0")
+	}
+}
+
+// Kiosk / Kid mode's file (uimode.go) keeps the parent code as the startup
+// lock's salted hash, never the code; the mode, the wrong-try count and the
+// kid consoles survive a save and reload; a hand edit to a mode or code it
+// does not know is Full mode or no code; and deleting the file — the escape
+// hatch — is Full mode even with a .bak beside it.
+func TestUIModeFileCodeAndRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), uiModeFileName)
+	if got := uiModeLoad(path); got.Mode != uiModeFull || got.Code != "" {
+		t.Fatalf("no file: %+v, want Full with no code", got)
+	}
+	code, err := bootLockHash(bootLockKindCode, "UDLRAB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := uiModeFile{Mode: uiModeKid, Code: code, Fails: 3, KidConsoles: []string{" Game Boy ", "game boy", "", "SNES"}}
+	if err := uiModeSave(path, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "UDLRAB") {
+		t.Fatal("the code itself was written")
+	}
+	back := uiModeLoad(path)
+	if back.Mode != uiModeKid || back.Fails != 3 || !bootLockVerify(back.Code, "UDLRAB") || bootLockVerify(back.Code, "UDLRBA") {
+		t.Fatalf("reload: %+v", back)
+	}
+	if len(back.KidConsoles) != 2 || back.KidConsoles[0] != "Game Boy" || back.KidConsoles[1] != "SNES" {
+		t.Fatalf("kid consoles = %q", back.KidConsoles)
+	}
+	password, _ := bootLockHash(bootLockKindPassword, "UDLRAB")
+	for _, bad := range []uiModeFile{
+		{Mode: "admin", Code: "plain", Fails: -4},
+		{Mode: uiModeKiosk, Code: password},
+	} {
+		got := uiModeNormalize(bad)
+		if got.Code != "" || got.Fails != 0 || (bad.Mode == "admin" && got.Mode != uiModeFull) {
+			t.Fatalf("normalize %+v = %+v", bad, got)
+		}
+	}
+	// A second save leaves the first as the .bak; deleting the live file
+	// must still be Full mode, not the backup's Kid mode.
+	if err := uiModeSave(path, uiModeFile{Mode: uiModeKiosk}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got := uiModeLoad(path); got.Mode != uiModeFull {
+		t.Fatalf("deleted file reads as %q, want full", got.Mode)
 	}
 }

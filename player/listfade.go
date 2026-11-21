@@ -1,7 +1,7 @@
 package main
 
 // listfade.go — the soft fade a scrolling list or grid shows at an edge with
-// more content past it (NX Redux 2.5's main menu look): the tiles melt into
+// more content past it (part of the main menu look): the tiles melt into
 // the page instead of being cut by the clip. Settings → Display & theme →
 // List edge fade (homelook.go) switches it off.
 //

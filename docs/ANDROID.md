@@ -391,9 +391,7 @@ driver package) still selects the `gbm` backend automatically.
 firmware found that GLES contexts made with raw EGL draw nothing — a black
 panel, sound playing, no error — while contexts SDL owns show:
 [NextOS ports issue #1](https://github.com/NextOs-Ports/nextos-universal-ports/issues/1)
-(Horizon Chase on the Brick Pro, fixed by `HC_PURE_SDL_CONTEXTS=1`) and
-[nx-redux PR #152](https://github.com/mohammadsyuhada/nx-redux/pull/152)
-(keep the contexts SDL-owned on tg5040). A black panel without an error is the
+(Horizon Chase on the Brick Pro, fixed by `HC_PURE_SDL_CONTEXTS=1`). A black panel without an error is the
 one failure the runtime cannot notice and fall back from, and every program
 that draws on the stock firmware — JukaHub, RetroArch, the ports — draws
 through that SDL2. So on the PowerVR models (Smart Pro, Brick, Brick Pro,

@@ -107,6 +107,14 @@ is Off — so the game isn't lost when the battery runs out asleep. At the next
 power-on, **Resume game at power on** brings the game back, and RetroArch says
 "Back where you left off".
 
+**Start in.** Settings → Power & battery → **Start in** picks where JukaHub
+opens when you switch the handheld on: Home (the default), the Game switcher,
+a random game, or the last game you played (resumed in the emulator it last
+ran in). It acts on the first start of each boot only — not when JukaHub comes
+back from a game or restarts after an update — and a game that Resume game at
+power on is bringing back always comes first. Hold **B** as Home appears to
+stay on Home.
+
 **In-game saves reach the card quickly.** RetroArch games started from JukaHub
 write a changed in-game save to the card every 10 seconds, so a crash or a
 flat battery loses seconds, not the whole session. Your own RetroArch setting

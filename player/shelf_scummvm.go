@@ -7,7 +7,7 @@ package main
 // Where the .scummvm file lives differs by firmware, and the shelf takes all
 // three without listing a game twice:
 //
-//   - inside the game's folder (the libretro docs, Batocera, Knulli, RetroBat:
+//   - inside the game's folder (the libretro docs, Batocera, RetroBat:
 //     Roms/SCUMMVM/Sky/sky.scummvm). The libretro core plays the game in the
 //     folder the file is in, so this is the layout the shelf writes;
 //   - beside the folder, named like it (muOS, spruce: Roms/SCUMMVM/Sky.scummvm

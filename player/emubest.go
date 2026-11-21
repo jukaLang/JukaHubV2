@@ -2,7 +2,7 @@ package main
 
 // emubest.go — the best emulator for each system, on this hardware.
 //
-// CrossMix and the other TrimUI firmwares ship more than one emulator for the
+// The TrimUI firmwares ship more than one emulator for the
 // heavier systems — DraStic beside the melonDS and DeSmuME cores, a standalone
 // PPSSPP beside RetroArch's, a standalone Mupen64Plus beside two N64 cores —
 // and which one plays best is folklore. The table below writes that folklore
@@ -93,10 +93,8 @@ var emuBestGameBoy = []emuBestCandidate{
 	emuBestRA("Gearboy (RetroArch)", "gearboy"),
 }
 
-// emuBestTable is the ranking. Handheld: what CrossMix (cizia64/CrossMix-OS
-// wiki, Emulators page; release notes 1.2 and 1.3), Knulli (Scarab release,
-// standalone YabaSanshiro) and spruceOS (PRs 1873/1874, Saturn and N64 on
-// the A133P) ship and benchmark on this chip. Desktop: the standalone
+// emuBestTable is the ranking. Handheld: what the TrimUI firmwares ship and
+// what community measurements and emulator release notes report on this chip. Desktop: the standalone
 // emulators the Windows page installs, ahead of the cores they replace.
 var emuBestTable = []emuBestSystem{
 	{

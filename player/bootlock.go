@@ -420,6 +420,11 @@ func bootLockEngage(config *Config, kind, why string) {
 	if sshSrv.Running() {
 		sshSrv.Stop()
 	}
+	// VNC would control, and Telnet's shell reach, what the lock guards.
+	vncTelnetLockStop()
+	if davSrv.Running() {
+		davSrv.Stop()
+	}
 	logInfo("lock", "startup lock up (%s)", why)
 }
 

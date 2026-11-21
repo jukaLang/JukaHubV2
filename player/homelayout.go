@@ -955,6 +955,9 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	// The caller (renderHomeModern) owns the background; the layout only adds
 	// its translucent backdrop blocks on top of it.
 	h.drawBackdrop(renderer)
+	// The Tabs Home's Backdrop view: the selected game behind everything
+	// (hometabs_backdrop.go).
+	h.tabsBackdropBehind(renderer)
 	h.drawHeader(renderer, fonts, data)
 	// Edit Home's strip (the layouts, Reset, Done) takes the greeting's and
 	// the search pill's place while Home is being edited (home_edit.go).

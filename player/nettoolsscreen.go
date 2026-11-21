@@ -67,7 +67,12 @@ type netToolsSpec struct {
 var netToolsSpecs = []netToolsSpec{
 	{id: "ftp", section: "Servers & sharing", sectionIcon: "server", label: "FTP server", icon: "server", need: toolsHubNeedLAN, mode: netToolsModeServer},
 	{id: "ssh", label: "SSH / SFTP", icon: "key", need: toolsHubNeedLAN, mode: netToolsModeServer},
+	{id: "telnet", label: "Telnet", icon: "terminal", need: toolsHubNeedLAN, mode: netToolsModeServer},
+	{id: "vnc", label: "VNC screen & control", icon: "tv", need: toolsHubNeedLAN, mode: netToolsModeServer},
+	{id: "smb", label: "SMB share", icon: "disk", need: toolsHubNeedLAN, mode: netToolsModeServer},
+	{id: "netdrive", label: "WebDAV share", icon: "disk", need: toolsHubNeedLAN, mode: netToolsModePanel, idle: "Map the card as a drive on Windows, a Mac or Linux"},
 	{id: "companion", label: "Phone companion", icon: "phone", need: toolsHubNeedLAN, mode: netToolsModePanel, idle: "Type, use a remote and send files from a phone"},
+	{id: "tailscale", label: "Tailscale", icon: "network", mode: netToolsModePanel, idle: "Reach this handheld from anywhere"},
 	{id: "gateway", section: "Probes", sectionIcon: "radar", label: "Gateway port scan", icon: "scan", need: toolsHubNeedLAN, mode: netToolsModeRun, idle: "13 common ports on your router"},
 	{id: "clipscan", label: "Clipboard host scan", icon: "paste", need: toolsHubNeedLAN, mode: netToolsModeRun, idle: "Scan a host or IP you copied"},
 	{id: "ping", label: "Ping", icon: "radar", need: toolsHubNeedInternet, mode: netToolsModeRun, idle: "Round trip to 1.1.1.1"},
@@ -657,6 +662,14 @@ func netToolsBuildTiles(net toolsHubNet, gateway string) []toolsHubTile {
 			if sshSrv.Running() {
 				t.value, t.tone = "On · "+sshSrv.Address()+netToolsConnected(sshSrv.clients.count()), toolsHubToneGood
 			}
+		case "vnc", "telnet":
+			t.value, t.tone = vncTelnetTile(spec.id)
+		case "smb":
+			t.value, t.tone = smbServeTileValue()
+		case "netdrive":
+			if davSrv.Running() {
+				t.value, t.tone = davShareTileValue(), toolsHubToneGood
+			}
 		case "companion":
 			switch {
 			case companion.err != "":
@@ -664,6 +677,8 @@ func netToolsBuildTiles(net toolsHubNet, gateway string) []toolsHubTile {
 			case companion.open:
 				t.value, t.tone = "Showing the pairing code", toolsHubToneGood
 			}
+		case "tailscale":
+			t.value, t.tone = tailscaledTileValue()
 		case "gateway":
 			if gateway != "" {
 				t.value = "Router " + gateway + " · 13 common ports"
@@ -792,6 +807,12 @@ func netToolsSyncSheet() {
 		// minute, and at once when someone connects or a transfer starts.
 		key.clients = fsClientsVersion.Load()
 		key.age = time.Now().Unix() / 30
+	case "vnc", "telnet":
+		key.running, key.seq = vncTelnetRunning(id), vncTelnetSheetSeq()
+		key.clients, key.age = fsClientsVersion.Load(), time.Now().Unix()/30
+	case "smb":
+		key.running = smbSrv.Running()
+		key.clients, key.age = fsClientsVersion.Load(), time.Now().Unix()/30
 	default:
 		key.seq, key.running, key.failed = res.seq, res.running, res.failed
 		if !res.at.IsZero() {
@@ -967,6 +988,13 @@ func netToolsWholeSystemPress() {
 // netToolsServerSheet fills the sheet with a server's details: where to
 // connect, how to sign in, what it shares and who is connected.
 func netToolsServerSheet(s *toolsHubSheet, id string) {
+	if vncTelnetSheet(s, id) {
+		return
+	}
+	if id == "smb" {
+		smbServeSheet(s)
+		return
+	}
 	var b strings.Builder
 	running := false
 	wholeSwitch := ""
@@ -1057,6 +1085,12 @@ func netToolsServerSheet(s *toolsHubSheet, id string) {
 // netToolsSheetAction runs one of the sheet's actions.
 func netToolsSheetAction(config *Config, action string) {
 	id := netTools.sheetID
+	if vncTelnetAction(config, id, action) {
+		return
+	}
+	if id == "smb" && smbServeSheetAction(action) {
+		return
+	}
 	switch action {
 	case "run":
 		netToolsRerun(config, id)
@@ -1135,6 +1169,18 @@ func netToolsActivate(config *Config, idx int) {
 	case netToolsModeServer:
 		netToolsServerPress(spec.id)
 	case netToolsModePanel:
+		if spec.id == "tailscale" {
+			// A screen of its own (tailscaled_ui.go).
+			PlayActivateSound()
+			tailscaledOpenScreen(config)
+			return
+		}
+		if spec.id == "netdrive" {
+			// A screen of its own (davshare_ui.go).
+			PlayActivateSound()
+			davShareOpenScreen(config)
+			return
+		}
 		// The pairing card is a modal of its own above the page.
 		openCompanionOverlay()
 	case netToolsModeRun:
@@ -1159,6 +1205,13 @@ func netToolsActivate(config *Config, idx int) {
 // Start first: what it shares is chosen there before the start, and a press
 // that started it at once left that choice reachable only after a stop.
 func netToolsServerPress(id string) {
+	if vncTelnetPress(appConfig, id) {
+		return
+	}
+	if id == "smb" {
+		smbServePress()
+		return
+	}
 	running := ftpSrv.Running()
 	if id == "ssh" {
 		running = sshSrv.Running()
@@ -1486,7 +1539,8 @@ func netToolsFooterHints(hints []FooterHint) []FooterHint {
 			switch spec.mode {
 			case netToolsModeServer:
 				verb = "Start"
-				if (spec.id == "ftp" && ftpSrv.Running()) || (spec.id == "ssh" && sshSrv.Running()) {
+				if (spec.id == "ftp" && ftpSrv.Running()) || (spec.id == "ssh" && sshSrv.Running()) || vncTelnetRunning(spec.id) ||
+					(spec.id == "smb" && smbSrv.Running()) {
 					verb = "Details"
 				}
 			case netToolsModeRun:

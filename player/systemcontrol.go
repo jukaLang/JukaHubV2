@@ -405,8 +405,8 @@ func wifiBackend() string {
 	return ""
 }
 
-// btRfkillTool picks the system's rfkill program. The TrimUI images used by
-// NextUI and NX Redux name it rfkill.elf. One that could not run this session
+// btRfkillTool picks the system's rfkill program. NextUI's TrimUI images
+// name it rfkill.elf. One that could not run this session
 // (rfkillToolRun) is passed over.
 func btRfkillTool() string {
 	for _, name := range []string{"rfkill", "rfkill.elf"} {
@@ -512,6 +512,11 @@ func setWifiEnabled(on bool) error {
 		return errors.New("no Wi-Fi control (nmcli/rfkill) on this device")
 	}
 	defer netNetworkSwitching()()
+	if on {
+		// "Turning on Wi-Fi…" in the activity strip until the link is up
+		// (activity_busy.go).
+		defer activityWifiBringUp()()
+	}
 	switch backend {
 	case "nmcli":
 		arg := "off"

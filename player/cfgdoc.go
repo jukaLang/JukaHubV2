@@ -308,6 +308,9 @@ var cfgdocRuntimeKeys = map[string]bool{
 	// The FN switch reading that means "locked" (travellock.go): another
 	// device's switch may read the other way round.
 	travelLockAtKey: true,
+	// The FN switch's other actions (fnswitch.go): the reading that means
+	// "on", for the same reason, and what the switch holds now.
+	fnSwitchAtKey: true, fnSwitchHeldKey: true,
 	// The Google OAuth client sent from the phone (companion_cloud.go): its
 	// secret never leaves the device, and the ID alone would bring a client
 	// that cannot sign in.
@@ -417,6 +420,11 @@ func cfgdocIsSecretKey(key string) bool {
 		if strings.Contains(k, part) {
 			return true
 		}
+	}
+	// A custom translation service's address may carry its key in the query
+	// (?api_key=…, aitranslate.go): it stays on the device like a key.
+	if k == strings.ToLower(aiTrURLKey) {
+		return true
 	}
 	return strings.HasSuffix(k, "key") && !strings.HasSuffix(k, "hotkey")
 }

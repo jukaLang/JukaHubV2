@@ -183,6 +183,7 @@ func homeTabsStartScan() {
 	html5DemoRoot := html5DataRoot()
 	artRoot := libraryArtworkRoot()
 	builtInScenes := builtInScenesPresent(appConfig)
+	librarySortArticlesSync(appConfig) // the build sorts off this thread (libsort_articles.go)
 	seconds := libraryPlaytimeSnapshot()
 	// The favourites read the game tags; their file loads off this thread.
 	gmetaPreload()
@@ -634,7 +635,7 @@ func homeTabsGameItem(g libraryGame) homeTabItem {
 		Key:   ref,
 		Ref:   ref,
 		Title: g.Label(),
-		Sub:   g.System,
+		Sub:   consoleDisplayName(g.System),
 		Glyph: homeTabsGlyph(librarySystemGlyph(g.System), "gamepad"),
 	}
 	if b, ok := builtInLibraryGameFor(g); ok {
@@ -669,7 +670,7 @@ func homeTabsConsoleItem(system librarySystem, playable bool) homeTabItem {
 	it := homeTabItem{
 		Key:   ref,
 		Ref:   ref,
-		Title: name,
+		Title: consoleDisplayName(name),
 		Sub:   pluralizeCount(n, "game", "games"),
 		Glyph: homeTabsGlyph(librarySystemGlyph(name), "gamepad"),
 		Art:   homeTabsArtFn(librarySystemCover(system)),
@@ -693,6 +694,7 @@ func homeTabsConsoleItem(system librarySystem, playable bool) homeTabItem {
 func homeTabsConsoles(c *Config) []homeTabItem {
 	lib := homeTabsLibrary()
 	systems := filterHiddenLibrarySystems(lib.Systems, libraryShowHidden())
+	systems = uiModeKidSystems(systems) // Kid mode: consoles with kids' games (uimode_kids.go)
 	clean := homeTabsEmuCleanOn(c)
 	rank := map[string]int{}
 	for i, g := range recentGames() {

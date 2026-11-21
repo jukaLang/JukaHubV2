@@ -87,8 +87,26 @@ settings such as `search_query` or `stream_url`.
 | `travelLock` | bool | Settings → Power & battery → **Travel lock** (TrimUI Smart Pro only; default off): the FN switch locks the power button. Turning it on stores the switch's current position as unlocked (`travelLockAt`, bookkeeping: the reading `"0"`/`"1"` that means locked). Locked, a press does not wake the device (each wake but an alarm's goes back to sleep) and a power-on is turned straight back off by the boot hook `<SD>/System/starts/00-jukahub-travel-lock.sh`, which the setting writes and removes (it logs to `travel-lock.log` in the JukaHub folder). Slide the switch back, or delete the hook, to undo. |
 | `sleepPowerOff` | text: whole hours (`"1"`…`"48"`) or minutes with an `m` (`"15m"`, `"30m"`); `"0"` is Off | Settings → Power & battery → **Power off after sleeping**, and Quick Settings → **Auto power off** (handheld only; stops Off, 15 min, 30 min, 1, 2, 4, 6, 8, 12, 24 and 48 h; missing = `"6"`, or `"1"` on a kernel that only light-sleeps; a hand-edited delay over a week is held at a week): after that long asleep the handheld wakes itself on the RTC alarm with the screen off, saves the RetroArch game the sleep was holding (save state + quit through RetroArch's network commands; only RetroArch's exit counts as proof) and powers off. On a charger, or with a game it cannot save that way (a standalone emulator, a port, network commands off, the in-game menu open), it goes back to sleep instead. Time asleep is the longer of BOOTTIME's and the RTC's count (a kernel that leaves the suspend out of BOOTTIME no longer hides the sleep). A NextUI pak game sleeping in minarch gets the same deadline: when minarch saves the game for its sleep (NextUI's `auto_resume.txt` naming the running game, written with its slot-9 state) the RTC alarm is set for the delay, and a wake on that alarm (no power press, no JukaHub alarm due) powers the device off, on a charger too; the marker the wake removed is put back so the next power-on resumes the game. A core without save states, or a marker JukaHub did not see before the suspend, gets no deadline. In Quick Settings, A turns it Off or back on at the last delay (kept in the bookkeeping key `sleepPowerOffLast`) and Left/Right step it. Needs an RTC wake alarm; the row says when there is none |
 | `resumeAtPowerOn` | bool | Settings → Power & battery → **Resume game at power on** (default on): the game that power off saved starts again at the next power-on, boot animation skipped, back at its state through RetroArch's auto-load (needs `savestateResume`). Hold **B** at power-on to skip. The one-shot marker `data/resume-at-power-on.json` is deleted as soon as it is read |
+| `startIn` | `"home"`/`"switcher"`/`"random"`/`"last"`/`"quickmenu"` | Settings → Power & battery → **Start in** (default `"home"`): where JukaHub opens on the first start of a boot (the power-on with autostart, or the first launch from the stock menu; never a relaunch in the same boot, the first-run tour or a screenshot session) — the game switcher, a random game from the whole library, the last game played (resumed in the emulator it last ran in), or the [Quick menu](QUICK_MENU.md). A game that `resumeAtPowerOn` starts comes first. Hold **B** (Esc on a keyboard) as Home comes up to stay on Home. With the game switcher off, `"switcher"` stays on Home |
 | `saveFlushSeconds` | number | Seconds between RetroArch's writes of a changed in-game (battery) save during games started from JukaHub (default `10`, at most `3600`; `0` leaves RetroArch's own setting alone). Sets `autosave_interval` for that launch only, and only when your own `retroarch.cfg` value is missing or 0; your value comes back when the game ends. RetroArch writes only when the save changed. See [Pick up and play](PICK_UP_AND_PLAY.md#your-progress-is-safe) |
 | `powerKeyMusic` | `"screen-off"`/`"sleep"` | Settings → Power & battery → **Power button while music plays** (handheld only; default `"screen-off"`): with music playing and no game, the power button only turns the screen off and the music keeps playing ([MUSIC_PLAYER.md](MUSIC_PLAYER.md#screen-off)); `"sleep"` sleeps and pauses it |
+| `powerOffConfirm` | bool | Settings → Power & battery → **Ask before power off** (handheld only; default `true`). `false`: the Power quick tile on Home and holding the power button on a JukaHub screen power off at once instead of opening the power card (a running RetroArch game is still saved first, and the clean teardown still runs). The card itself — Home's power pill, Quick Settings → **Power**, the power button's Exit-card mode, the lock screen's power menu — stays as it is: it is where Sleep, Restart and Exit are chosen. Holding the key does nothing different while a game owns the screen |
+| `batteryPercent` | `"always"`/`"low"`/`"never"` | Settings → Power & battery → **Battery percentage** (default `"always"`): whether the top bar's battery chip (Home's header and every screen's status bar) shows the level beside the gauge — always, only at 20 % or less, or never. The gauge, its colour, the blink and the charging bolt stay; the idle screen, Quick Settings and the battery widgets keep their numbers |
+| `battery_warn_pct` | `"auto"` or `5`–`30` | Settings → Power & battery → **Low battery warning at** (default `auto`): one level for the top bar's red battery icon, the stick lights' low-battery pulse (clears 3% higher), the plug-in message and the in-game line. Auto keeps the old levels: message 5%, lights 10%, red below 15% ([Battery warnings](BATTERY_WARNINGS.md)) |
+| `battery_blink_pct` | `"auto"` or `3`–`15` | **Blink from** (default `auto`: half the warning level, at least 3; below 5% while the warning is Auto): the battery icon blinks at or below it, never above the red level |
+| `battery_warn_games` | bool | **Show over games** (default on): in RetroArch games, "Battery N%" on RetroArch's message line once per percent at or below the warning level (network command `SHOW_MSG`) plus a lights flash; stands down while **Battery in games** (`gameHudBattery`) shows its own line |
+| `battery_save_pct` | `"auto"` or `4`–`10` | **Save and suspend at** (default `auto` = 3%): where the low-battery guard saves the running game and puts the handheld to sleep (it never powers off) |
+| `menu_volume_brightness` | `"auto"`/`"on"`/`"off"` | Settings → Display → **Menu + volume sets brightness** (handheld only; default `auto`: only on a JukaHub OS boot or when no stock `keymon` runs). The system's volume step for that press is put back |
+| `led_battery_chord` | bool | Settings → Stick lights → **L2 + R2 shows the battery** (default on): both triggers together on Home flash the charge on the lights for 2 s |
+| `led_ind_charging_bar` | bool | Settings → Stick lights → **Charging shows a filling bar** (default off): the charging light shows the charge as green quarters instead of the breath |
+| `gameHotkeys` | `"auto"`/`"f1f2"`/`"l3r3"`/`"off"` | Settings → Controls → **Game hotkeys** (TrimUI; default `auto`: F1 / F2 on a Brick or Hammer, L3 / R3 on a handheld with sticks). In a RetroArch game the library started (needs the in-game menu, `gameMenu`), the first key held rewinds where the in-game menu has Rewind and the second toggles fast forward. A press with Select, Start or Menu held is ignored; DS games, light-gun games, and on stick handhelds PlayStation and DOS games keep the keys |
+| `gameSaveQuitChord` | bool | Settings → Controls → **Menu + Select: save and quit** (default on): Menu + Select pressed together in a RetroArch game the library started saves and quits to JukaHub. With `savestateResume` RetroArch's auto state carries the game on at its next start; without it a save state goes to the current slot. It writes no power-on resume marker, and does nothing in RetroAchievements hardcore |
+| `gameWarmUp` | bool | Settings → Games & emulators → **Warm up games before launch** (Linux; default on): 350 ms after a game is highlighted (or Home's Continue card is focused), its RetroArch, core, core `.info` and ROM (≤ 64 MB; ≤ 160 MB in all) are read into the page cache at the lowest CPU and disk priority |
+| `musicTidyFolder` | bool | Audio settings → **Tidy the Music folder** (handheld only; default on): after a library scan, loose songs move to `Music/Singles` and an album folder dropped straight into Music moves to `Music/<Artist>/<Album>` when its tags agree; never overwrites ([Music player](MUSIC_PLAYER.md)) |
+| `musicQuietGame` | bool | Audio settings → **Quiet the game while music plays** (default on): music started from the in-game menu's Music panel mutes the RetroArch game (its `MUTE` command) until the music stops |
+| `a11y_audio_channels` | `"stereo"`/`"mono"`/`"mono-left"`/`"mono-right"` | Accessibility → **Audio channels** (default `stereo`): mono left/right = one ear on headphones, Bluetooth or a USB DAC (Mono on the speaker). Video and music at once, games from their next launch (an ALSA `route` downmix). Replaces `a11y_mono_audio`, which is still written beside it; an old `a11y_mono_audio: true` reads as `mono` |
+| `cardTidyAtStart` | bool | Settings → About → **Tidy the card at start** (handheld only; default on): once per boot, after the first frame, removes AppleDouble `._` files (with the AppleDouble header, ≤ 64 KB), `.DS_Store`, `Thumbs.db` and `desktop.ini` from Roms, Music, Audiobooks, Videos, Pictures, Screenshots, Saves, BIOS and Overlays, and `.Trashes`, `.Spotlight-V100`, `.fseventsd`, `.TemporaryItems` at the card's top. Never System Volume Information; skipped on a read-only card |
+| `gameControls.leftStick`, `gameControls.<console>.leftStick` | `"auto"`/`"on"`/`"off"`/`"own"` | Settings → Controls → **Left stick as D-pad** (handhelds with sticks): for all consoles (default `auto`: on for consoles whose pads had no stick, off for N64, PSP, Dreamcast, PS2, GameCube and Wii; PlayStation follows the pad type) or one console (unset follows the all-consoles choice). Written per launch as `input_player1_analog_dpad_mode` and put back after |
 | `clock12`, `dateFormat` | bool, `""`/`"dmy"`/`"mdy"`/`"ymd"`/`"dots"` | Settings → Date & time: the 12-hour clock, and the order dates are written in (`9 Nov 2026`, `Nov 9, 2026`, `2026-11-09`, `09.11.2026`); empty follows the country your connection is in |
 | `netTimeSync` | bool | Settings → Date & time → **Set time automatically** (on by default; shown only where JukaHub may set the clock — the handheld, running as root): SNTP when Wi-Fi connects and hourly (after a failure: again in 1, 2, 5, 10, 30 minutes until one works), the HTTPS date as a fallback; a correction of more than 10 minutes is made only when the HTTPS date confirms it. On Windows, macOS and Linux PCs JukaHub never asks a time server by itself; there the row shows the system's own switch (read from the Windows Time service on Windows) and opens the system's date & time page. **Set date & time** sets the clock by hand on the handheld (and turns this switch off, so the next sync does not undo it); elsewhere it opens the system's page. The time zone chosen on the device is not a config key: it lives in `jukatimezone` next to the binary, which `launch.sh` exports as `TZ` (programs JukaHub starts get a newly chosen zone after JukaHub restarts) |
 | `liveBuilder`, `liveBuilderLAN` | bool | Settings → Network → **Live Builder**: whether the web builder's receiver starts with JukaHub (default off on the handheld, on on a PC; either way it switches itself off after 30 minutes without use), and whether a PC listens on the network instead of that computer only. `JUKAHUB_LIVE_BUILDER` and `JUKAHUB_LIVE_LAN` win over both, and the older `liveBuilderDisabled: true` still keeps it off; see [SECURITY.md](../SECURITY.md#live-builder-the-web-builders-receiver) |
@@ -97,14 +115,22 @@ settings such as `search_query` or `stream_url`.
 | `vpnEnabled`, `vpnRoute` | bool, `""`/`"config"` | Settings → Network → **VPN** (default off): send the device's traffic through the WireGuard configuration in `data/vpn.json` (imported in Settings, Files or the phone companion; never stored here), and **Send through the VPN**: everything (`""`) or only the configuration's `AllowedIPs` (`"config"`). On without a configuration does nothing; see [VPN.md](VPN.md) |
 | `dnsMode`, `dnsServers` | `""`/`"cloudflare"`/`"google"`/`"quad9"`/`"adguard"`/`"family"`/`"opendns"`/`"custom"`, text | Settings → Network → **DNS** (default `""`, Automatic: the network's own servers): the servers that turn names into addresses — a public service, or `"custom"` with up to three IPv4/IPv6 addresses in `dnsServers` separated by spaces or commas (**Custom DNS servers**). On the handheld (as root) for the whole system through `resolv.conf`, kept after every DHCP lease and put back on Automatic, in safe mode and at quit; on Windows for JukaHub's own lookups. A VPN configuration with `DNS =` wins while it runs. Protected from pushed designs; see [DNS.md](DNS.md) |
 | `libraryFingerprints` | bool | Settings → Games & emulators → **Fingerprint games in the background** (default on): the CRC32 of games up to 64 MB, read one at a time at the lowest priority while nothing plays and the battery is above 30% (or charging), kept in the library index `data/library-index.db` (**Rebuild library index** starts it over); game details and cover matching use it. Off: a game's CRC32 is read only when its page asks. See [GAME_LIBRARY.md](GAME_LIBRARY.md) |
+| `librarySortIgnoreArticles` | bool | Settings → Games & emulators → **Ignore 'The' when sorting** (default on): the library's name order (the Title sort, every other sort's tie-breaker, Home's Favourites) and the letter scrub skip a leading "The", "A" or "An" and No-Intro's trailing ", The" before the end or a subtitle, so "The Legend of Zelda" and "Legend of Zelda, The" both sort under L. Names on screen are unchanged. See [Games Library → Sorting without "The"](GAME_LIBRARY.md#sorting-without-the) |
 | `protectStandaloneEmus` | bool | Settings → Power & battery → **Protect standalone emulators** (default on): at 3% battery, at Power off and at Power off after sleeping, a standalone emulator (PPSSPP, DraStic, Flycast, Mednafen, DuckStation, Mupen64Plus, ports, Wine games) is asked to quit cleanly, saving a state on the way out where its own option is on, before the card is synced; at 10% one that cannot save by itself is named. Last record: `data/sessionsafe-last.json`. See [SESSION_SAFETY.md](SESSION_SAFETY.md) |
 | `narration`, `narrationRate`, `narrationHints`, `narrationToasts`, `narrationVoice` | bool, `"80"`…`"250"`, bool, bool, `"default"`/`"female"`/`"male"` | Settings → Accessibility → **Narration** (default off; hold L1 + R1 for 3 s or press Ctrl+Alt+Z to switch it from anywhere): speaks the focused control's name, value and what A does, with the offline voice (Windows' own voice on a PC); the speaking rate in percent, whether hints and pop-up messages are read, and the voice. See [ACCESSIBILITY.md](ACCESSIBILITY.md) |
 | `coreUpdateMode` | `"off"`/`"notify"`/`"install"` | Settings → Games & emulators → **Emulator updates** (on the handheld the libretro cores, JukaHub's PPSSPP, hakuX, PortMaster's files and the downloaded runtimes; on a PC the emulators JukaHub installed and its RetroArch's cores; default `install`: once a day, while charging or idle — on a PC once JukaHub sits idle, not on a laptop's battery — and never during a game or a video, builds that differ are installed after a check that they can load here, and the replaced one is kept for a one-press roll back; each updater's last check is kept in `emu-autoupdate.json` beside the patch state; on a Smart Pro whose card never had an Xbox launcher, `install` also installs hakuX once, and `data/hakux/auto-install.json` then records that the card had one, so a deleted hakuX is not put back). Written once at start-up with the legacy `emuAutoUpdate` bool beside it (`true` only for `install`), so an older build never installs where this one would not; a stored `emuAutoUpdate` without a mode migrates (explicit off → Off, explicit on → Install automatically). A pick in Settings, on the Core builds page or in an imported settings file also writes `coreUpdateModeChosen: true`; a `"notify"` without it (what earlier builds stored by themselves) becomes `install` once, with a toast |
 | `retroArchGlibc` | `"auto"`/`"always"`/`"off"` | Settings → Games & emulators → **RetroArch's C library** (64-bit TrimUI handhelds): which glibc RetroArch starts on when JukaHub launches a game — `auto` (default, **Automatic**: only a game whose core cannot load on the firmware's glibc 2.33 and can on JukaHub's private glibc 2.39, plus RetroArch's own menu once that runtime is installed; so the core updater installs the newest buildbot nightlies), `always` (**JukaHub's glibc 2.39**: every RetroArch launch), `off` (**Firmware's only**: never; builds that need a newer glibc are refused and put back). The runtime is the one in [`PRIVATE_GLIBC.md`](PRIVATE_GLIBC.md), downloaded the first time a core needs it; RetroArch runs on it inside the game's own mount namespace, the card's RetroArch is not changed, and a RetroArch that fails the start-up probe stays on the firmware's (`data/private-glibc/ra/probe.json`). Games started from the firmware's own menu still use the firmware's glibc |
 | `emuPickAsk` | `"first"`/`"always"`/`"never"` | Settings → Games & emulators → **Ask which emulator**: how often a game whose console has more than one emulator or core (its own launchers, the other scripts its `Emus` folder lists, installed RetroArch cores that play it) asks **Which emulator?** — `first` (default: once per game; A plays and remembers it for that game, Y plays just once), `always` (every launch; Y always uses the one picked), `never` (the one used last, else the recommended one). A game's or console's pin always wins. Settings → Games & emulators → **Get more cores** sits beside it (handheld; which consoles were done is kept in `emu-morecores.json` beside the patch state, not in the config) |
+| `raOfflineAchievements`, `raOfflineWaitWifi` | bool, bool | Settings → RetroAchievements → **Offline achievements** (default on) and **Wait for Wi-Fi before achievement games** (default on). On, a RetroArch game started from JukaHub sends its RetroAchievements requests through a small server JukaHub runs on `127.0.0.1` while games play (`cheevos_custom_host` for that launch only): online it passes them on and keeps what a later offline game needs, offline it answers from that copy and keeps unlocks (Casual only) to send when the internet is back. Hardcore with internet always goes straight to the server. The wait holds an achievement game up to 8 s while Wi-Fi reconnects (right after a wake); Play again starts it at once. The cache, the sign-in and the queue are in `data/ra-offline/`. See [`RETROACHIEVEMENTS.md`](RETROACHIEVEMENTS.md#offline-achievements) |
 | `google_client_id`, `google_client_secret` | string, string (`ENC:`…) | Your own Google OAuth client ("TVs and Limited Input devices") for Drive save sync, set from the phone (Tools → Save sync → **Set up Google sign-in**); used when `JUKAHUB_GOOGLE_CLIENT_ID` is not in the environment, before the client stamped into the build. The secret is encrypted with the device's key; neither is exported with settings. WebDAV keeps its sign-in in `data/webdav.json`, not the config. See [Cloud save sync](CLOUD_SYNC.md) |
 | `artAutoFetch` | bool | Settings → Games & emulators → **Find box art automatically** (default on): background box-art passes from the libretro thumbnail set — about 100 s after start on a card that never had one (on a handheld where JukaHub keeps the time, once network time has set the clock or after half an hour), at most daily, and early when the ROM folders gain games; online only, never during a game, on battery only at 20 % or more and after 90 s without input. Only game titles are sent (GET requests to thumbnails.libretro.com). Off leaves the library's Fill gaps (**L1** / **F**). The pass stamp is `data/game-art/.auto-art.json` ([Games Library → Found automatically](GAME_LIBRARY.md#found-automatically)) |
 | `gameplayCovers` | bool | Settings → Games & emulators → **Covers from gameplay** (default on): a library game with no cover at all gets a picture of itself read from the screen two minutes into play (handheld framebuffer; on Windows the game's window while it is in front), black bars trimmed, saved as `data/game-art/.gameplay/<System>/<rom stem>.png`. Black, white or flat frames, those within 30 s of Menu or while a library RetroArch reports PAUSED, and (before minute 4) still or mostly dark ones are skipped and retried every 20 s of play up to 8 minutes. Any real cover found later replaces it; the box-art fetch keeps looking. Off stops new pictures; taken ones stay. Nothing leaves the device. |
+| `gameArt` | bool | Settings → Games & emulators → **Game art** (default on): off leaves the library's list layout text only ([Games Library → Artwork](GAME_LIBRARY.md#artwork-game-art-settings-screenshots-title-screens)) |
+| `gameArtType` | string | **Art type**: `box` (default), `snap` or `title`. Screenshots and title screens live in `data/game-art/.snap/<System>/` and `data/game-art/.title/<System>/`; a game without one shows its box art |
+| `gameArtStyle` | string | **Art style**: `thumbnail` (default, the picture beside the list) or `background` (full height behind the list, dimmed) |
+| `gameArtWidth` | string | **Art width**: `0` = Standard (34 %, square), or `30`–`60` (percent of the page) |
+| `gameArtRadius` | string | **Art corner radius** in pixels: `0` (default, square) to `24` |
+| `consoleBackgrounds` | bool | **Console backgrounds** (default on): `data/backgrounds/<System>.png` or NextUI's `Roms/<console>/.media/bg.png` behind a console's game list |
 | `remotePlayAutoDownload` | bool | Settings → Games & emulators → **Download Remote Play automatically** (default on; shown only where Remote Play runs): while `bin/chiaki-stream` or `bin/chiaki-regist` is missing, JukaHub downloads them in the background about a minute after it starts — online, on screen (not behind a game or the idle screen) and with a clock past the build's date — and tries again after 2 to 60 minutes when the network, GitHub or the clock failed it. Off, they download when PS Remote Play opens. See [REMOTE_PLAY.md](REMOTE_PLAY.md#installing-the-helpers). |
 | `ssh_readonly`, `ssh_full_root` | bool | the SFTP server refuses every write; or it shares the whole Linux file system instead of the SD card (like `JUKAHUB_SSH_FULL_ROOT=1`, while the **Share whole system…** switch on its panel lasts one run). A design pushed through the Live Builder that sets either waits for approval on the device |
 | `castQuality` | `"smooth"`/`"balanced"`/`"sharp"` | Screen Share's picture: Smooth (640 px, 20 fps; the handheld's default), Balanced (960 px, 15 fps; a PC's default) or Sharp (full size, 10 fps). The handheld captures its menus at most about 12 times a second (fewer when the GPU readback is slow) and re-sends a screen that is not changing once a second |
@@ -184,6 +210,15 @@ a TrimUI, beside `JukaHub.exe` on a PC (`screenshot_<time>.png` for JukaHub,
 shows the saved file's path. In a game the picture is the one on screen when
 Menu went down; a button, trigger or volume key pressed with Menu cancels it.
 
+`menuHoldInGame` (Settings → Controls → **Hold Menu in a game**, TrimUI
+handhelds; `"screenshot"` by default, `"switcher"`, `"off"`): what the same
+0.7 s Menu hold does in a game JukaHub launched. `"screenshot"` is the picture
+above (and still needs `menuHoldScreenshot` on); `"switcher"` quits the game
+exactly as the in-game menu's **Game switcher** row does — RetroArch writes its
+auto state — and opens the game switcher (needs `gameSwitcher` on); `"off"`
+leaves Menu to the game alone. The hold is cancelled the same way by any other
+button, trigger or volume key, so emulator hotkeys never quit a game.
+
 `selectR1Screenshot` (Settings → Controls → **Select + R1: screenshot**, on by
 default; the row is shown on TrimUI handhelds only): pressing Select + R1
 together in a game JukaHub launched saves the screen at once, no hold, as a
@@ -191,6 +226,34 @@ together in a game JukaHub launched saves the screen at once, no hold, as a
 second ([Controls](CONTROLS.md#screenshot-in-a-game-select--r1)). The game
 sees the press too. In JukaHub's own menus the pair stays the control-profile
 switch.
+
+`quickMenuHomeButton` (Settings → Controls → **Menu button on Home**; handheld
+only): `"voice"` (default: a tap of Menu on Home opens the voice orb) or
+`"quickmenu"` (a tap of Menu on a bare Home opens the [Quick menu](QUICK_MENU.md)
+and a tap on the Quick menu closes it; holding Menu still talks to Juka).
+`quickMenuBgOnly` (Settings → Controls → **Quick menu: Backgrounds only**, off by
+default): an entry with a theme picture (`.media/quick_<Name>.png`) shows only
+the picture and a small label.
+
+`brickF1Key` / `brickF2Key` (Settings → Controls → **F1 key** / **F2 key**;
+Brick and Hammer only): what the small keys under the screen do outside the
+screens that use L3 / R3 — `"controls"` (the Controller card; F1's default),
+`"quickSettings"` (F2's default), `"screenshot"`, `"switcher"`, `"search"`,
+`"startMenu"`, `"quickMenu"` (the [Quick menu](QUICK_MENU.md)), `"sleep"`,
+`"mute"`, `"home"` or `"off"` (the screen gets L3 / R3). Anything else is the key's default
+([Controls](CONTROLS.md#trimui-brick)).
+
+`homeKeyMenus` / `homeKeyGame` (Settings → Controls → **Home key** / **Home
+key in a game**; Smart Pro S only, shown once the key is found): what a tap on
+the top Home key does. In menus `"home"` (default), `"quickSettings"`,
+`"switcher"`, `"quickMenu"` or `"off"`; in a game JukaHub launched `"gameMenu"` (default: the
+in-game menu, needs `gameMenu` on), `"retroarchMenu"` (RetroArch's
+`MENU_TOGGLE` network command to a library RetroArch; any other game gets the
+in-game menu), `"switcher"` (needs `gameSwitcher` on) or `"off"`.
+`homeKeyCode` (no row; unset by default) is the evdev key code to read instead
+of `KEY_HOMEPAGE` (172) / `KEY_HOME` (102), for a device whose Home key sends
+something else; read at start
+([Controls](CONTROLS.md#trimui-smart-pro-s-the-home-key)).
 
 `openBooksWith` (Settings → Media & playback → **Open books with**, shown when
 KOReader is installed in the card's Apps folder): `"jukahub"` (the default)
@@ -236,8 +299,26 @@ handhelds) makes holding **Select + L2** in a game pause it under a menu:
 Resume game, Ask Juka, Quit to JukaHub
 ([Controls](CONTROLS.md#in-game-menu-hold-select--l2)).
 
+`gameMenuHidden` (Settings → Controls → **In-game menu entries**; empty by
+default) is a comma list of in-game menu rows to leave out: `music`,
+`stopwatch`, `save`, `load`, `rewind`, `fast`, `disc`, `cheats`, `manual`,
+`ask`, `switcher`, `record`, `closeapps`, `sleep`. Resume game and Quit to
+JukaHub always show. A hidden row still shows while it is the way to stop
+something running (Stop recording, Normal speed). Names a build does not know
+are kept and ignored.
+
+`gameControls.dpadStick` (Settings → Controls → **D-pad as stick** with Game
+buttons for: All consoles): `"auto"` (the default: the D-pad pushes the left
+analog stick in N64, PSP and Dreamcast RetroArch games on a handheld without
+sticks, the Brick and the Hammer) or `"off"`.
+`gameControls.<console>.dpadstick` (the same row with a console picked):
+`"on"`, `"off"`, or `""` to follow All consoles. Written into the launch's
+one-launch remap file as `input_player1_btn_up/down/left/right = "19"/"18"/
+"17"/"16"` (RetroArch's left-stick directions)
+([Controls](CONTROLS.md#game-buttons-and-turbo-retroarch-games)).
+
 `gameSwitcher` (Settings → Games & emulators → **Game switcher**, on by default)
-is the Onion / NextUI-style strip of recent games with save-state pictures: X on
+is the strip of recent games with save-state pictures: X on
 Home (Standard and Hero layouts), Start → Games, search, and the in-game menu's
 **Game switcher** row (quits the game, then opens the strip). Off hides the
 rows and gives X on Home back.
@@ -252,12 +333,22 @@ when RetroArch exits, like `videoFilter`:
 | `raTuningLatency` | `auto` | `auto`, `standard` (RetroArch's own), `low` (2 swap images, automatic frame delay, audio ≤ 64 ms), `lowest` (audio ≤ 48 ms, plus 1 frame of run-ahead on light consoles) |
 | `raTuningOverlay` | `own` | `own`, `none`, or the path of an overlay `.cfg` |
 | `raTuningSmooth` | `true` | v-sync, audio sync and rate control on, VRR runloop off |
+| `raTuningThreaded` | `auto` | Threaded video: `auto` (`video_threaded = false` on the Smart Pro S's A523, RetroArch's own value elsewhere), `on` (`true`), `off` (`false`) |
 | `raTuningRumble` | `own` | `own` or 0–100 (`input_rumble_gain`) |
 | `raTuningRotate` | `upright` | `upright`, `tate` (FBNeo / MAME 2003-Plus vertical mode), `own` |
 | `raTuningPAL` | `false` | the PAL region core option where the core has one |
 | `raTuningCrop` | `own` | Crop overscan: `on` (`video_crop_overscan = true` for the launch), `off` (`false`: the whole picture), `own` (RetroArch's own value, which crops by default) |
 | `videoFilter` | `auto` | the look (also Games & emulators → Video filter): `auto` (by console), `unmanaged` (RetroArch's own), `sharp`, `smooth`, `pixel`, `scanlines`, `lcd`, `crt`, `pt` ([Looks](LOOKS.md)) |
 | `raTuning.<console>.audio` / `.latency` / `.overlay` / `.look` / `.crop` | "" | one console's own choice ("Adjust for"); "" follows the all-consoles value; `.crop` is `on` or `off` |
+| `raTuningFFSpeed` | `own` | **Fast-forward speed**: `own` (RetroArch's own; nothing written), `0` (Unlimited), `2`, `3`, `4`, `6`, `8` — written as `fastforward_ratio` (`"2.000000"`) for the launch; `raTuning.<console>.ffspeed` is one console's own (`""` follows) |
+| `raTuningN64Graphics` | `auto` | **N64 graphics**: `auto` (Light on the Brick family, Full elsewhere), `full` (nothing written), `light` — ParaLLEl N64 `parallel-n64-gfxplugin = rice` + `-gfxplugin-accuracy = low`; Mupen64Plus-Next (GLideN64) `mupen64plus-43screensize = 320x240`, `-EnableFBEmulation = False`, `-EnableCopyColorToRDRAM = Off`. Only keys still at the core's default are set; a widescreen launch keeps Full |
+
+Settings → Controls → **Button layout** (handhelds) stores nothing of its own:
+**Xbox** turns Accessibility's `a11y_swap_ab` / `a11y_swap_xy` on (clearing the
+per-button keymap) and sets `gameControls.buttons` to `swap-both`, keeping the
+old value in `buttonLayoutGamesBefore` (bookkeeping, not exported); **Nintendo**
+turns the swaps off and puts that value back. `buttonLayoutHints` (`letters`,
+the default, or `roles`; shown under Xbox) is what the hints call a button.
 
 Cheats switched on in Game options → **Cheats** set `apply_cheats_after_load`,
 `apply_cheats_after_toggle` and (only when empty) `cheat_database_path` for that
@@ -577,6 +668,19 @@ or checked (so a build from before the October 2026 freeze fix is replaced
 once) and the video driver it wrote into Dolphin's RetroArch override. See
 [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
 
+`ps2` (bool, default `true`) is Settings → Games & emulators → **PlayStation
+2** on TrimUI handhelds: whether PS2 games play here, in RetroArch's ARMSX2
+core. On, a game's first start (or **PS2 emulator** below it, or the Emulators
+page's PS2 tile) installs ARMSX2's own Linux arm64 libretro core and its
+`resources` folder from ARMSX2's GitHub releases and copies the player's BIOS
+into `pcsx2/bios` in RetroArch's system folder; PS2 games also get Xbox boost.
+Off, JukaHub sets nothing up for PS2 (a PS2 core installed by hand still
+starts the games) and `Roms/PS2` shows as not supported. JukaHub keeps
+`armsx2.json` in its data folder: the release and core file it installed, the
+resources folder it put in place, a release whose core this firmware refused,
+and the renderer the start-failure fallback wrote into ARMSX2's core options.
+See [GAME_LIBRARY.md](GAME_LIBRARY.md#playstation-2-on-the-handheld).
+
 `led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It
 is applied to the RGB value rather than to the sysfs `brightness` file, because
@@ -611,6 +715,15 @@ dim glow while the screen is off or the device sleeps — in that order, over an
 The low-battery warning stays on until 13 %, and the indicators and the charger
 reading change only after holding for a few seconds, so a wobbling reading does
 not flicker the rings.
+
+`led_games` (bool, default `true`) is Settings → Stick lights → **Lights in
+games**. `true` is the usual
+behaviour: while a game, emulator, port or app owns the screen the sticks show
+the firmware's own colour, or Screen colours. `false` keeps them dark then — no
+firmware colour, no Screen colours, no achievement rainbow — while the
+indicators above, the in-game battery flash and Juka over a paused game still
+light. Back in JukaHub the lights return at once. It applies only while the
+lights are on (with them off the sticks are the firmware's).
 
 `display_contrast` (-4…5), `display_saturation` (-5…5), `display_exposure`
 (-4…5) and `display_colortemp` (-20…20, negative is warmer), all default 0, are
@@ -650,6 +763,84 @@ Play** switch in Quick Settings. The override only exists once the switch is
 used, so an older `jukauser.json` never turns the feature off by omission.
 The relay used by **Host online** is the custom key `netplay_relay` (`nyc`,
 `madrid`, `montreal` or `saopaulo`; default `nyc`), set with ←/→ on that row.
+
+These user settings came on 2026-11-20 (all in the custom map):
+
+- **RetroAchievements in games** (Settings → RetroAchievements): `raachEnable`,
+  `raachHardcore`, `raachChallenge`, `raachUnlockSound`, `raachScreenshot`,
+  `raachEncore`, `raachRichPresence`, `raachBadges` and `raachVerbose` are
+  `own` (default: write nothing), `on` or `off`; `raachLeaderboards` is `own`,
+  `on`, `trackers`, `notifications` or `off`. A chosen value goes into
+  `retroarch.cfg` for JukaHub's RetroArch launches of the owner profile only
+  and is undone after the game. Sign in for games writes RetroArch's own
+  login once and keeps nothing ([RETROACHIEVEMENTS.md](RETROACHIEVEMENTS.md)).
+- **Translate games** (Settings → Voice & AI): `aiTranslate` (off by default),
+  `aiTranslateLang` (`auto` = JukaHub's language, or `en`, `es`, `pt-BR`,
+  `fr`, `de`, `it`, `ru`), `aiTranslateShow` (`text`, `speech` or `image`, the
+  last for a custom service only), `aiTranslateService` (`jukahub` = Groq's
+  vision model with `groq_api_key` through a 127.0.0.1-only service while the
+  game runs, or `custom`) and `aiTranslateURL` (the custom service; exported
+  settings treat it as a secret). For that launch only: `ai_service_*`,
+  `network_cmd_enable`, and for text or picture mode `menu_enable_widgets` and
+  `video_font_enable` ([GAME_TRANSLATION.md](GAME_TRANSLATION.md)).
+- **FN switch, lights and GPU** (Settings → Power & battery, Stick lights):
+  `fnSwitchMode` is `off`, `travel` (the old `travelLock` reads as this),
+  `mute`, `lights` or `airplane`; `led_follow_screen` (default false) scales
+  the stick lights with the screen's brightness; `led_celebrate` (default
+  true) plays the rainbow when an achievement unlocks; `gpuBoost` is `auto`
+  (default: heavy consoles and ports), `always` or `off`. `fnSwitchAt` and
+  `fnSwitchHeld` are bookkeeping ([DEVICE_TUNING.md](DEVICE_TUNING.md)).
+- **Idle in games and Battery in games** (Settings → Power & battery):
+  `gameIdleDim` (`"0"` off, `"5"`, `"10"`, `"15"`, `"30"` minutes),
+  `gameIdleAfter` (`"0"` off, `"5"`, `"10"`, `"30"`, `"60"` minutes after the
+  dim), `gameIdleAction` (`sleep` or `poweroff`), `gameHudBattery` (`off`,
+  `low` = once each at 20/15/10/5%, `15` or `5` minutes) and `gameHudClock`
+  (bool). Scripts in the data folder's `hooks/idle`, `hooks/extended` and
+  `hooks/active` run with `/bin/sh` in name order, 10 s each, with
+  `JUKAHUB_IDLE_STATE` and `JUKAHUB_IDLE_WHERE` set ([IDLE.md](IDLE.md)).
+- **Library and idle screen**: `autoCollections` is a comma list of `last`,
+  `played`, `all`, `added`, `unplayed`, `multi`, `genres` (unset =
+  `last,played,all,added,unplayed`; `none` turns them all off) for the
+  Collections tab's automatic folders; `idleScreenKind` (`stars`, `slides` or
+  `videos`) picks the idle screen while `ambientMode` is false
+  ([COLLECTIONS.md](COLLECTIONS.md), [AMBIENT.md](AMBIENT.md)).
+- **Kid & Kiosk mode** lives in `data/ui-mode.json` (`mode` full/kiosk/kid,
+  the parent code's salted hash, the whole-console kid list), not in the
+  config; the environment variable `JUKAHUB_UI_MODE=full` forces Full mode at
+  start ([KID_MODE.md](KID_MODE.md)). Custom hotkeys and aspect ratios live in
+  `data/game-hotkeys.json` and `data/game-ratio.json`
+  ([GAME_HOTKEYS.md](GAME_HOTKEYS.md)).
+- **VNC, Telnet, SMB share and Tailscale** (Tools → Network tools):
+  `vnc_port` (default `5900`, env `JUKAHUB_VNC_PORT`), `vncPassword` (made on
+  first use, 8 characters; a secret: exports leave it out; New password
+  replaces it), `telnet_port` (`23` on the handheld, `2323` elsewhere, env
+  `JUKAHUB_TELNET_PORT`; the Telnet password is new each start and never
+  saved), `smb_readonly` (default `false`: the SMB share refuses every write;
+  its password lives in the data folder's `smb_password`, mode 0600) and
+  `tailscaleEnabled` (default `false`: run JukaHub's own Tailscale on the
+  handheld, installed on first use) ([VNC.md](VNC.md),
+  [SMB_SHARE.md](SMB_SHARE.md), [TAILSCALE.md](TAILSCALE.md)).
+- **Syncthing beyond saves**: `syncthingAlsoSync` is a comma list of
+  `screenshots`, `recordings`, `music`, `books` and `roms` (unset = saves
+  only); `syncthingWebGui` (default `false`) opens Syncthing's web GUI to the
+  local network with user `jukahub` and the password on the Syncthing page
+  ([SAVE_MANAGER.md](SAVE_MANAGER.md)).
+- **PlayStation analog and widescreen**: `gameControls.playstation.analog`
+  (`auto`, the default: a DualShock for the games on the analog list on a
+  handheld with sticks; `always`; `never`); `raTuning.<console>.widescreen`
+  (`true` for `nintendo-64`, `playstation`, `dreamcast` or `mega-drive`;
+  unset = off). Per-game `analog` (`dualshock`/`standard`) and `widescreen`
+  (`on`/`off`) live in `data/game-emu-extras.json`
+  ([WIDESCREEN.md](WIDESCREEN.md)).
+- **Look packs and the power-off screen** (Settings → Theme & look):
+  `consoleNames` (`international`, the default, `na`, `japan` or `short`;
+  display only), `iconPack` (a folder under the card's `Icons`; empty = the
+  vector glyphs), `homeTabsStart` (the tab the Tabs Home opens on while
+  `homeTabsRemember` is off; unset = Main), `shutdownScreen` (`glass`, the
+  default, or `picture`), `shutdownPicture` (`builtin:farewell`,
+  `builtin:battery` or a file in the card's `Themes/Shutdown`) and the
+  bookkeeping key `lookpackBootLogo` (the boot logo a look pack staged for
+  Settings → Boot logo) ([LOOK_PACKS.md](LOOK_PACKS.md)).
 
 ### Substitution
 
@@ -713,11 +904,13 @@ cannot be edited on the device; **Edit Home** (L2 on Home) opened on one of
 them switches to Widgets first, and back again when editing ends with nothing
 changed.
 
-The Tabs Home keeps its own state in four more custom variables:
+The Tabs Home keeps its own state in these custom variables:
 `homeTabViews` (`"<tab or folder>=<view>"` pairs split by `;`, views `grid`,
-`row`, `list`, `carousel`, `compact`; folder keys `store` and `col:<id>`),
-`homeTabsShown` (the tab IDs in order, comma-separated, `-` before a hidden
-one; a tab it does not name is shown at the end), `homeTabsRemember` (`true`
+`row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`; folder keys
+`store` and `col:<id>`), `homeTabsShown` (the tab IDs in order,
+comma-separated, `-` before a hidden one; a tab it does not name is shown at
+the end, except `tools`, hidden until named), `homeTabsGridRing` (`true` by
+default: the ring round the selected tile), `homeTabsRemember` (`true`
 by default: open on the last tab; `false` opens on Main) and `homeTabLast` (the
 tab to come back to — bookkeeping, left out of the config document). Three
 more set its look, each a row in Settings → Theme & look and on the Tabs
@@ -788,6 +981,9 @@ Browser, Chat, Tools, Files, Settings and the Clock widget along the bottom.
 |---|---|
 | `continue`, `media`, `emulator`, `packages`, `apps`, `favorites`, `browser`, `chat`, `tools`, `files`, `settings` | a built-in Home card (`emulator` is the Games card) |
 | `w:clock`, `w:weather`, `w:battery`, `w:storage`, `w:nowplaying`, `w:calendar`, `w:playtime` | an info widget |
+| `w:mostplayed` | **Most played**: the game with the most play time, its cover and hours; **A** starts it (Playtime while nothing has been played) |
+| `w:thismonth` | **This month**: game time this calendar month and how many games; it waits for network time on a handheld whose clock is not set yet. **A** opens Playtime |
+| `game:<ROM path>` | a game pinned to Home (Pin to Home in the game options or the game page's More): its cover and name; **A** starts it the way the library does. The path keeps its spelling; a rename moves the pin and a delete removes it |
 | `w:wifi`, `w:bluetooth`, `w:power` | a quick control: **A** switches Wi-Fi or Bluetooth on or off (the tile shows the network, or how many devices are connected), or opens the power card — Sleep, Restart and Power off on the handheld, Exit on a desktop. Where the radio cannot be switched (Windows, macOS) the tile opens the Wi-Fi or Bluetooth page instead |
 | `app:scene:<Scene>` | a screen row of the Start menu, by the scene's `name` (`app:scene:Weather`) |
 | `app:do:<Start menu entry>` | an action row of the Start menu — a tool, a device action, a plugin's button — by its label (`app:do:Wi-Fi Networks`) |
@@ -809,7 +1005,8 @@ newly added tile) has the tile's default size:
 | `media` | 2×1 | 2×1 (its waveform needs the second column) |
 | `w:calendar` | 2×2 | 1×1 |
 | `w:nowplaying` | 2×1 | 1×1 |
-| every other card, widget and `app:` tile | 1×1 | 1×1 |
+| `w:mostplayed` | 2×1 | 1×1 |
+| every other card, widget, `app:` and `game:` tile | 1×1 | 1×1 |
 
 A stored size outside those limits is clamped to them (`@9x5` becomes the
 largest the grid allows). The carousel draws every tile at the same size, so
@@ -1079,8 +1276,12 @@ log.
 | `music-playlists.json` | named playlists saved from the audio player |
 | `theme-catalog.json` | cached copy of the community theme index, so the Theme library browses offline |
 | `theme-updates.json` | which installed themes came from the gallery and a hash of what was written, so a new gallery version can be told apart from your own edits (safe to delete: installed themes are re-adopted, and any that differ from the gallery count as edited) |
-| `audioresume.json` | audiobook/podcast positions and playback speed |
+| `audioresume.json` | audiobook/podcast positions and playback speed; `bookSpeeds` keeps each audiobook's own speed (`speed` is the default for the rest) |
 | `game-history.json` | per-game launches, recent sessions and interrupted launches |
+| `playtime-days.json` | play time by game and day for the Playtime screen's By game tab: about 400 days, and the day counting began (a profile keeps its own; safe to delete: the periods start counting again, Ever is kept in `jukauser.json`) |
+| `screenscraper.json` | the ScreenScraper sign-in (user, password; mode 0600), written by Settings → Games & emulators → ScreenScraper account; delete it to sign out. Needs a build with `JUKAHUB_SS_DEVID` / `JUKAHUB_SS_DEVPASSWORD` ([Box art](BOX_ART.md)) |
+| `game-art/.launchbox-missing.json`, `game-art/.screenscraper-missing.json` | titles LaunchBox or ScreenScraper had no cover for, retried after 30 days (safe to delete) |
+| `overlays-made.txt`, `overlays/` | the consoles whose `Overlays/<Console>/` folder JukaHub already made (a folder you delete is not made again), and the one-line RetroArch overlay files written for bare PNG overlays (safe to delete) |
 | `ipstreams.json` | the IPTV library you added |
 | `saverradio.json` | the radio stations the idle screen plays when the card has no music, downloaded from GitHub and refreshed weekly (safe to delete: it is fetched again) |
 | `tvfavorites.json` | starred channels |
@@ -1097,6 +1298,10 @@ log.
 | `terminal_history` | terminal history (a text file, one command per line) |
 | `notes.json`, `jukaalarm.json` | notes and alarms |
 | `collections.json` | the Tabs Home's collections and its non-game favourites: `{"version":1,"collections":[{"id","name","items":[{"ref","title"}],"created"}],"favourites":[{"ref","title"}]}`. Refs are `game:<path>`, `sys:<console>`, `app:scene:…`, `app:do:…` or a Home card ID (`col:<id>` only among favourites). At most 100 collections of 500 items, 500 favourites, names up to 40 characters. A damaged file is restored from the `.bak` and kept as `collections.json.corrupt`. Game favourites are not here: they are the Favorite tag in `game-meta/games.json` |
+| `game-hotkeys.json` | custom RetroArch hotkeys: global, per console and per game ([GAME_HOTKEYS.md](GAME_HOTKEYS.md)) |
+| `game-ratio.json` | aspect ratio (global, per console, per game) and Hard GPU sync per console |
+| `ui-mode.json` | Kid & Kiosk mode: the mode, the parent code's salted hash, consoles for kids, wrong-code waits ([KID_MODE.md](KID_MODE.md)) |
+| `game-seen.json` | the library scans each game was first seen in, for Recently added ([COLLECTIONS.md](COLLECTIONS.md)) |
 
 Three files are read but never written by the player, so there is no backup to
 fall back to and the loaders say so instead: `game-launchers.json` (per-console

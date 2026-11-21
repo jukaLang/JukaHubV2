@@ -455,6 +455,8 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 	// exit waits for it to ring out (bootchime.go).
 	shutdownChimeStart(config)
 	defer shutdownChimeWait()
+	// Power-off screen: Picture starts decoding now (shutdownscreen.go).
+	shutdownScreenPrepare(config)
 	steps := shutdownSteps(config)
 	labels := make([]string, len(steps))
 	for i, step := range steps {
@@ -550,9 +552,11 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 		draw(d)
 		sdl.Delay(uint32(frameBudget.Milliseconds()))
 	}
-	renderer.SetDrawColor(0, 0, 0, 255)
-	_ = renderer.Clear()
-	renderer.Present()
+	if !shutdownScreenHold(renderer, config, deadline) {
+		renderer.SetDrawColor(0, 0, 0, 255)
+		_ = renderer.Clear()
+		renderer.Present()
+	}
 
 	bootLiquidRelease()
 	shutdownReleaseTextures()

@@ -3,8 +3,7 @@ package main
 // gameswitcher.go — the Game switcher: your recent games side by side, each
 // at the moment you left it.
 //
-// NextUI and Onion OS both have one, and it is the feature their users name
-// first: a full-screen strip of the recently played games, every card a
+// Players ask for it first: a full-screen strip of the recently played games, every card a
 // screenshot of where that game was left, Left / Right to choose and A to be
 // back in it — two presses from one game to another. JukaHub already had
 // every part except the strip itself:
@@ -302,7 +301,7 @@ func gswRead(ctx context.Context, gen uint64) {
 			logWarn("switcher", "reading the recent games failed: %v", r)
 		}
 	}()
-	recents := recentGames()
+	recents := uiModeKidRecents(recentGames()) // Kid mode: kids' games only (uimode_kids.go)
 	var stamp time.Time
 	if len(recents) > 0 {
 		stamp = recents[0].PlayedAt

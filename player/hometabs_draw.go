@@ -118,9 +118,13 @@ func homeTabsLayout(view string, n int, hero bool, bw, bh int32, k float64, out 
 	sz := func(v float64) int32 { return int32(math.Round(v * k)) }
 	gap := max32(6, sz(16))
 	if n <= 0 {
-		return out, view == homeTabViewRow || view == homeTabViewCarousel, 0
+		return out, view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop, 0
 	}
 	switch view {
+	case homeTabViewBackdrop:
+		return homeTabsBackdropLayout(n, bh, k, gap, out) // hometabs_backdrop.go
+	case homeTabViewMinimal:
+		return homeTabsMinimalLayout(n, bw, k, out) // hometabs_minimal.go
 	case homeTabViewRow:
 		// One or two rows of large tiles, filled column by column, that
 		// scroll left and right; a hero stands two rows tall at the front.
@@ -520,7 +524,8 @@ func (h *HomeLayout) tabsDrawStrip(renderer *sdl.Renderer, fonts HomeFonts, focu
 		pillAlpha = homeTabsEdgeAlpha(pill.X+pill.W/2, pill.W/2, strip, fade)
 	}
 	fill := ColorAccent
-	fill.A = uint8(math.Round(70 * pillAlpha))
+	// Glass opacity thins the pill (colourpick_theme.go).
+	fill.A = glassOpacityA(uint8(math.Round(70 * pillAlpha)))
 	edge := ColorAccent
 	edge.A = uint8(math.Round(150 * pillAlpha))
 	fillRoundedRectAt(renderer, base, pill, strip.H/2, fill)
@@ -771,6 +776,10 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 	}
 	if view == homeTabViewList {
 		h.tabsDrawList(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, alpha, live, dimOf)
+	} else if view == homeTabViewMinimal {
+		h.tabsDrawMinimal(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, alpha, live)
+	} else if view == homeTabViewBackdrop {
+		h.tabsDrawBackdrop(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, lift, depth, alpha, live, dimOf)
 	} else {
 		center := float64(body.X+dx) + float64(body.W)/2
 		pitch := float64(1)
@@ -850,7 +859,8 @@ func (h *HomeLayout) tabsDrawCollectionsIntro(renderer *sdl.Renderer, fonts Home
 // past them (listfade.go), each band kept short of the selected tile so its
 // ring stays crisp. The list view fades its column only, not the preview.
 func (h *HomeLayout) tabsDrawEdgeFade(renderer *sdl.Renderer, lvl *homeTabsLevel, g *homeTabsGeom, view string, body sdl.Rect, dx int32, clip sdl.Rect) {
-	if len(g.rects) == 0 || !listEdgeFadeOn(appConfig) {
+	// The Backdrop view's row stands on its own picture (hometabs_backdrop.go).
+	if len(g.rects) == 0 || !listEdgeFadeOn(appConfig) || view == homeTabViewBackdrop {
 		return
 	}
 	// ro is the selected tile's ring and glow past its rect.
@@ -939,11 +949,13 @@ func (h *HomeLayout) tabsPaintTile(renderer *sdl.Renderer, fonts HomeFonts, it h
 	lift, depth float64, fav, compact bool, alpha uint8, dim float64) {
 	draw := scaleHomeCard(base, lift)
 	draw.Y += homePressOffset(depth, h.Height)
-	if focused {
+	// Grid selection ring off: no ring or glow, the lift and the dim say it
+	// (hometabs_tools.go).
+	if homeTabsTileRing(focused) {
 		drawHomeFocusGlow(renderer, draw)
 	}
 	if alpha == 255 {
-		drawGlassTile(renderer, base, draw, focused, pressed)
+		drawGlassTile(renderer, base, draw, homeTabsTileRing(focused), pressed)
 	} else {
 		fillRoundedRectAt(renderer, base, draw, homeTileRadius, homeTabsInk(homeCardFill(), alpha))
 		strokeRoundedRectAt(renderer, base, draw, homeTileRadius, 1, homeTabsInk(homeCardEdge(), alpha))
@@ -1062,9 +1074,9 @@ func (h *HomeLayout) tabsDrawList(renderer *sdl.Renderer, fonts HomeFonts, lvl *
 		isFocus := focused && i == lvl.focus
 		switch {
 		case isFocus && pressed:
-			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeTabsInk(homeGlass(32), alpha))
+			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeTabsInk(homeGlass(glassOpacityA(32)), alpha))
 		case isFocus:
-			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeTabsInk(homeGlass(24), alpha))
+			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeTabsInk(homeGlass(glassOpacityA(24)), alpha))
 		case i == lvl.focus:
 			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, homeTabsInk(homeGlass(12), alpha))
 		}

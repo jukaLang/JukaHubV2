@@ -100,9 +100,10 @@ type uiEnter struct {
 	active bool
 }
 
-// begin restarts the entrance at now.
+// begin restarts the entrance at now, at Theme & look → Animations' speed
+// (motionSpeedMS: Snappy plays it in 60% of dur).
 func (e *uiEnter) begin(now uint64, dur uint64) {
-	e.start, e.dur, e.active = now, dur, true
+	e.start, e.dur, e.active = now, motionSpeedMS(dur), true
 }
 
 // settled reports whether the entrance has finished.
@@ -368,16 +369,17 @@ const (
 // uiSceneFadeMS returns the duration of a scene fade phase ("fade-out" or
 // "fade-in"). Unknown phases report 0 so callers can snap. A config with
 // transition "instant" reports 0 for both phases, which settles the scrim on
-// the same frame instead of waiting out the fade.
+// the same frame instead of waiting out the fade. Animations: Snappy plays
+// both in 60% of the time (motionspeed.go).
 func uiSceneFadeMS(config *Config, phase string) float64 {
 	if motionInstant(config) {
 		return 0
 	}
 	switch phase {
 	case "fade-out":
-		return uiSceneOutMS
+		return uiSceneOutMS * motionSpeedScale(config)
 	case "fade-in":
-		return uiSceneInMS
+		return uiSceneInMS * motionSpeedScale(config)
 	}
 	return 0
 }

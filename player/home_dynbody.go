@@ -341,6 +341,8 @@ func (h *HomeLayout) dynRebuild(config *Config, tiles []homeTile) {
 		case homeTileApp:
 			info := h.dyn.apps[t.Ref]
 			t.Title, t.Subtitle, t.Icon, t.Dim = info.Title, info.Note, info.Glyph, !info.ok
+		case homeTileGame:
+			t.Title, t.Subtitle, t.Icon, t.Dim = gamePinTileLabel(t.Ref) // gamepin.go
 		}
 		if old, ok := prev[t.ID]; ok && old.placed {
 			t.x, t.y, t.placed = old.x, old.y, true
@@ -1219,6 +1221,8 @@ func (h *HomeLayout) dynPaintTile(renderer *sdl.Renderer, fonts HomeFonts, data 
 		h.drawHomeWidget(renderer, fonts, homeTileWidgetName(t.Ref), item, draw, focused, pressed)
 	case homeTileApp:
 		h.drawHomeAppTile(renderer, fonts, item, draw, focused, pressed, t.Dim)
+	case homeTileGame:
+		h.gamePinPaint(renderer, fonts, t, item, draw, focused, pressed) // gamepin.go
 	case homeTileAdd:
 		h.drawEditAddTile(renderer, fonts, item, draw, focused, pressed)
 	}

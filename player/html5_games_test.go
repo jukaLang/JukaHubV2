@@ -225,9 +225,10 @@ func TestHTML5GameOptionsOnlyShowLibrarySettings(t *testing.T) {
 	}
 	gameOptsUI.game.System = "NES"
 	// Every row but Disc, which only a game on more than one disc has
-	// (discpage.go).
-	if got := gameOptionsRows(); got != gameOptionsRowCount-1 {
-		t.Errorf("ROM options show %d rows, want %d", got, gameOptionsRowCount-1)
+	// (discpage.go), Analog controller (PlayStation games) and Widescreen
+	// (consoles with a widescreen hack; widescreen_ui.go).
+	if got := gameOptionsRows(); got != gameOptionsRowCount-3 {
+		t.Errorf("ROM options show %d rows, want %d", got, gameOptionsRowCount-3)
 	}
 }
 

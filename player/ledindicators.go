@@ -1,6 +1,6 @@
 package main
 
-// ledindicators.go — the stick lights as indicators (NextUI's LED indicators),
+// ledindicators.go — the stick lights as indicators,
 // and the layer that puts them, and the Screen colours mode, over the user's
 // lights.
 //
@@ -10,9 +10,16 @@ package main
 //
 //   - Low battery (on by default): at 10% or less and not charging, a slow red
 //     pulse (a breath that never goes near dark), whatever the lights were
-//     showing, until the charge is back at 13%.
+//     showing, until the charge is back at 13%; at 5% a faster, brighter
+//     pulse (ledsilky.go). 10% is Auto's level: Settings → Power → Low
+//     battery warning at moves it, the clear staying 3% above it
+//     (batterywarn.go, ledExtrasSettings.lowPct).
 //   - Charging: the Charging mode's slow green breath (steady green once
-//     full) while plugged in, whatever mode is picked.
+//     full) while plugged in, whatever mode is picked — or, with "Charging
+//     shows a filling bar", the charge as green quarters (ledbattlevel.go).
+//
+// Over the indicators, the battery level flash (L2 + R2 on Home, an in-game
+// battery warning) shows the charge for a moment (ledbattlevel.go).
 //   - Standby: a dim, slow breath in the theme's accent while the screen is
 //     off — the screen-off sleep, the dock's dark screen, the idle low-power
 //     state, and the moment before a kernel suspend (whatever the rings show
@@ -38,6 +45,7 @@ package main
 // like the rest.
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -141,6 +149,11 @@ type ledExtrasSettings struct {
 	charging      bool
 	standby       bool
 	indBrightness int
+	// lowPct is the low-battery warning's level (batterywarn.go), 0 for
+	// ledIndLowBatteryPct; chargeBar shows the charge as a bar while charging
+	// (ledbattlevel.go).
+	lowPct    int
+	chargeBar bool
 	// screenGames and screenOff: Screen colours over games, and the consoles
 	// that keep the firmware's lights (lower case) (ledscreen.go).
 	screenGames bool
@@ -172,6 +185,8 @@ func ledExtrasFrom(config *Config) ledExtrasSettings {
 	x.charging = customBool(m, ledKeyIndCharging, false)
 	x.standby = customBool(m, ledKeyIndStandby, false)
 	x.indBrightness = ledIndBrightnessFrom(config)
+	x.lowPct = batteryWarnLEDPctFrom(config)
+	x.chargeBar = customBool(m, ledKeyIndChargeBar, false)
 	x.screenGames = customBool(m, ledKeyScreenGames, true)
 	x.screenOff = ledScreenOffSystems(config)
 	return x
@@ -229,11 +244,15 @@ func ledStandbyNow() bool {
 // ledIndicatorFor picks the indicator due under x for a battery reading. low
 // is whether the low-battery warning shows now: once on it stays until the
 // charge is ledIndLowClearPct, so a reading that wobbles between 10 and 11%
-// does not switch the rings between red and the user's colour. Pure.
+// does not switch the rings between red and the user's colour. A level picked
+// in Settings (x.lowPct, batterywarn.go) keeps the same 3% above it. Pure.
 func ledIndicatorFor(x ledExtrasSettings, pct int, charging, standby, low bool) ledIndicator {
 	lowLimit := ledIndLowBatteryPct
+	if x.lowPct > 0 {
+		lowLimit = x.lowPct
+	}
 	if low {
-		lowLimit = ledIndLowClearPct - 1
+		lowLimit += ledIndLowClearPct - ledIndLowBatteryPct - 1
 	}
 	switch {
 	case x.lowBattery && !charging && pct >= 0 && pct <= lowLimit:
@@ -252,11 +271,17 @@ type ledLayers struct {
 	ind ledIndicator
 	// screen: the Screen colours mode draws over the game on screen.
 	screen bool
+	// silky: the FN switch's dark or the achievement rainbow (ledsilky.go).
+	silky ledSilkyLayer
+	// level: the battery level flash (ledbattlevel.go).
+	level ledBattShow
 }
 
 // holds reports whether the layers keep the rings while a game owns the
 // screen, instead of handing them back to the firmware.
-func (l ledLayers) holds() bool { return l.ind != ledIndNone || l.screen }
+func (l ledLayers) holds() bool {
+	return l.ind != ledIndNone || l.screen || l.silky.holds() || l.level.on
+}
 
 // ledLayersNow decides the layers for one frame. With the loop running for
 // Juka alone (the user's lights are off) there are none. LED loop.
@@ -266,11 +291,16 @@ func ledLayersNow(s ledLoopSettings, now time.Time, overGame bool) ledLayers {
 		// either.
 		ledScreenRelease()
 	}
+	// The FN switch's dark and the achievement rainbow (ledsilky.go).
+	silky := ledSilkyLayerNow(s, now)
+	// The battery level flash, which may have started the loop by itself
+	// (ledbattlevel.go).
+	level := ledBattLevelNow()
 	if ledJukaOnly.Load() {
-		return ledLayers{}
+		return ledLayers{x: currentLEDExtras(), silky: silky, level: level}
 	}
 	x := currentLEDExtras()
-	l := ledLayers{x: x}
+	l := ledLayers{x: x, silky: silky, level: level}
 	standby := ledStandbyNow()
 	want := ledIndNone
 	if x.lowBattery || x.charging || x.standby {
@@ -298,8 +328,30 @@ func ledLayersNow(s ledLoopSettings, now time.Time, overGame bool) ledLayers {
 // over it (ledJukaFrame), lit over a game when Screen colours draws there, and
 // an indicator over both unless Juka is showing. LED loop.
 func ledLayersFrame(s ledLoopSettings, l ledLayers, now time.Time, overGame bool) (uint8, uint8, uint8) {
+	// The FN switch's dark and the achievement rainbow win over everything.
+	if r, g, b, ok := l.silky.frame(); ok {
+		ledAnimFill.Store(0)
+		return r, g, b
+	}
 	r, g, b := ledJukaFrame(s, now, overGame && !l.screen)
-	if l.ind == ledIndNone || ledJukaHolds(now) {
+	if ledJukaHolds(now) {
+		ledAnimFill.Store(0)
+		return r, g, b
+	}
+	// The battery level, and the charging bar, light only part of the lights
+	// where the hardware can (ledbattlevel.go, ledAnimFill).
+	if l.level.on {
+		lr, lg, lb, fill := ledBattLevelColor(l.level, l.x)
+		ledAnimFill.Store(fill)
+		return lr, lg, lb
+	}
+	if l.ind == ledIndCharging && l.x.chargeBar {
+		br, bg, bb, fill := ledBattBarColor(l.x, now)
+		ledAnimFill.Store(fill)
+		return br, bg, bb
+	}
+	ledAnimFill.Store(0)
+	if l.ind == ledIndNone {
 		return r, g, b
 	}
 	return ledIndicatorColor(l.ind, l.x, now)
@@ -323,6 +375,10 @@ func ledIndicatorColor(ind ledIndicator, x ledExtrasSettings, now time.Time) (ui
 	var r, g, b uint8
 	switch ind {
 	case ledIndLowBattery:
+		// At 5% a faster, brighter pulse (ledsilky.go).
+		if cr, cg, cb, ok := ledSilkyCriticalColor(x, now); ok {
+			return cr, cg, cb
+		}
 		level := ledIndBreath(now, ledIndLowPeriodMs, 0.45)
 		r = uint8(math.Round(255 * level))
 	case ledIndCharging:
@@ -375,8 +431,14 @@ func ledIndToggleRow(id, label, detail, key string, def bool) setRow {
 }
 
 func ledIndLowBatteryRow() setRow {
-	return ledIndToggleRow("ledIndLowBattery", "Low battery warning",
-		"A slow red pulse at 10% or less, whatever the lights show", ledKeyIndLowBattery, true)
+	r := ledIndToggleRow("ledIndLowBattery", "Low battery warning",
+		"A slow red pulse at 10% or less, a fast one at 5%, whatever the lights show", ledKeyIndLowBattery, true)
+	// The level is Settings → Power's (batterywarn.go).
+	r.Detail = func(c *Config) string {
+		return fmt.Sprintf("A slow red pulse at %d%% or less, a fast one at 5%%, whatever the lights show",
+			batteryWarnLEDPctFrom(c))
+	}
+	return r
 }
 
 func ledIndChargingRow() setRow {

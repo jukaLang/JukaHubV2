@@ -606,6 +606,107 @@ something you are happy to publish first. Screens the tour does not open — the
 Wi-Fi screen and its details, the Hardware monitor, the network tools — still
 read the system directly: do not capture those.
 
+## Scripts and paks: launch hooks, screenshot request, debug logging
+
+Linux handhelds only; a PC ignores all of it. Code: `launchscripts.go`,
+`launchscripts_linux.go`, `devoptions.go`.
+
+### Launch scripts
+
+Your own shell scripts run around every game and app JukaHub starts
+(pre- and post-launch hooks). They live beside the idle hooks
+([IDLE.md](IDLE.md)) in JukaHub's data folder:
+
+```
+Apps/JukaHub/data/hooks/pre-launch/*.sh            before every game and app
+Apps/JukaHub/data/hooks/pre-launch/<console>/*.sh  before that console's games
+Apps/JukaHub/data/hooks/post-exit/*.sh             after every game and app
+Apps/JukaHub/data/hooks/post-exit/<console>/*.sh   after that console's games
+```
+
+- `<console>` matches, ignoring case, the console's name as JukaHub shows it
+  (`Game Boy Advance`), the same in lower case with dashes
+  (`game-boy-advance`) or the ROM's own folder on the card (`GBA`). Apps use
+  the folder `apps`.
+- Every `*.sh` (not hidden, a regular file, executable or not, at most 32 per
+  folder) runs with `/bin/sh`, one at a time, in name order: the shared folder
+  first, then the console's. Name them `10-fan.sh`, `20-led.sh` to order them.
+- Each script gets at most **5 seconds**; then it is stopped together with
+  everything it started (its process group).
+- Output (stdout and stderr, the first 8 KB) goes to `launch-scripts.log` in
+  JukaHub's folder, with the exit code and the time taken; one line per run
+  goes into JukaHub's own log too.
+- **Exit code 3 from a pre-launch script cancels the start**: the scripts
+  after it do not run, the game or app does not start, and a toast names the
+  script. Any other non-zero exit code is only logged. Post-exit exit codes
+  are only logged.
+- Pre-launch scripts never block the screen: the start is held, the scripts
+  run in the background ("Running your launch scripts…" after 0.7 s) and the
+  game starts when they are done. Post-exit scripts run in the background
+  after the game has ended.
+- Settings → Developer → **Launch scripts** turns them off (on by default;
+  with empty folders nothing runs and nothing is slower).
+
+Environment (on top of the firmware's, the same a game gets):
+
+| Variable | Value |
+|---|---|
+| `JUKAHUB_STAGE` | `pre-launch` or `post-exit` |
+| `JUKAHUB_KIND` | `game` or `app` |
+| `JUKAHUB_ROM` | the game file (empty for an app) |
+| `JUKAHUB_APP` | the app's file (empty for a game) |
+| `JUKAHUB_TITLE` | the name the library shows |
+| `JUKAHUB_CONSOLE` | the console's name, e.g. `Game Boy Advance` (empty for an app) |
+| `JUKAHUB_CONSOLE_KEY` | its folder form, e.g. `game-boy-advance` (`apps` for an app) |
+| `JUKAHUB_EMULATOR` | the launcher JukaHub starts: a `launch.sh`, a core or a program |
+| `JUKAHUB_CORE` | the libretro core's name when the launcher is a core, else empty |
+| `JUKAHUB_EXIT_CODE` | post-exit only: the game's or app's exit code, `-1` when it was killed |
+| `JUKAHUB_RAN_FOR` | post-exit only: whole seconds it ran |
+| `JUKAHUB_SCREENSHOT_REQUEST`, `JUKAHUB_SCREENSHOT_LAST` | the screenshot request files below |
+
+A pre-launch script that keeps a console's games off a nearly empty battery:
+
+```sh
+#!/bin/sh
+# hooks/pre-launch/game-boy-advance/10-battery.sh
+cap=$(cat /sys/class/power_supply/*battery*/capacity 2>/dev/null | head -n 1)
+[ -n "$cap" ] && [ "$cap" -lt 5 ] && { echo "battery at $cap%"; exit 3; }
+exit 0
+```
+
+### Screenshot request
+
+While a game or app JukaHub started is running, any program (a launch
+script, a pak, a helper the game started) can ask for a screenshot of the
+game's screen:
+
+1. create `/tmp/jukahub/screenshot.request` (its content is ignored);
+2. within half a second JukaHub reads the screen the way Hold Menu does in a
+   game, saves a PNG in JukaHub's `screenshots` folder, writes the PNG's
+   path (one line) to `/tmp/jukahub/screenshot.last` and deletes the request;
+3. when the request is gone, read `screenshot.last`. If it is missing, the
+   screenshot failed (JukaHub's log says why).
+
+```sh
+touch "$JUKAHUB_SCREENSHOT_REQUEST"
+while [ -e "$JUKAHUB_SCREENSHOT_REQUEST" ]; do sleep 0.1; done
+cat "$JUKAHUB_SCREENSHOT_LAST"
+```
+
+The folder is only watched while a child JukaHub started is running, and
+both paths are in every such child's environment. On a screen JukaHub cannot
+read (a KMS/DRM panel without a framebuffer copy) the request fails.
+
+### Debug logging and logs
+
+Settings → Developer → **Debug logging** lets debug lines into JukaHub's log
+at once, no restart, and is remembered (`debugLogging`, off by default). It
+works beside `JUKAHUB_LOG_LEVEL`: off means the normal level. Debug lines go to
+the in-app log only (Tools → Logs); `errors.txt` keeps warnings and errors.
+**Copy logs to the card** writes one zip (`JukaHub-logs/jukahub-logs-<date>.zip`
+at the top of the card) with the in-app log and the log files, names and
+networks masked as in the Phone Companion's "Download logs".
+
 ## Security
 
 Sensitive values (API keys, tokens) are encrypted with AES-256-GCM and can be

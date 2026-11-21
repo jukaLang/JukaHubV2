@@ -36,6 +36,8 @@ func TestMain(m *testing.M) {
 	// the suite's typing must not reach the real store.
 	if err == nil {
 		vkLearnedPath = func() string { return filepath.Join(dir, "vk-words.json") }
+		// Play time by game and day (playtime_periods.go) is saved with playtime.
+		playtimePeriodsTestPath = filepath.Join(dir, playtimePeriodsFileName)
 	}
 	// The Emulators pages start a background buildbot/GitHub check when they
 	// open, and Windows installs land in the real Emulators folder: neither

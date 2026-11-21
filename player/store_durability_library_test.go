@@ -354,3 +354,50 @@ func TestLibraryDurCollectionsRecoverFromBackup(t *testing.T) {
 		t.Errorf("unreadable store did not read as empty: %+v", lost)
 	}
 }
+
+// TestLibraryDurAutoCollectionsStore covers the automatic collections' store
+// (autocoll.go) and the outside details it files games by: a missing, damaged
+// or other-version game-seen.json reads as an empty store (so the next
+// library is the baseline again and nothing floods Recently added), a good
+// one reads back whole, and the libretro player counts and genres parse.
+func TestLibraryDurAutoCollectionsStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), autoCollFileName)
+	for name, body := range map[string]string{
+		"absent":        "",
+		"damaged":       `{"version": 1, "seen": {`,
+		"other version": `{"version": 9, "based": true, "seen": {"k": 3}}`,
+	} {
+		_ = os.Remove(path)
+		if body != "" {
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if f := autoCollReadFile(path); f.Based || len(f.Seen) != 0 || f.Seen == nil || f.Played == nil {
+			t.Errorf("%s store did not read as empty: %+v", name, f)
+		}
+	}
+	good := `{"version": 1, "based": true, "scans": 2, "seen": {"k": 2}, "played": {"/r/a.gba": 7}}`
+	if err := os.WriteFile(path, []byte(good), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if f := autoCollReadFile(path); !f.Based || f.Scans != 2 || f.Seen["k"] != 2 || f.Played["/r/a.gba"] != 7 {
+		t.Errorf("good store read back as %+v", f)
+	}
+	for in, want := range map[string]int{"": 0, "1": 1, "2": 2, "1-4": 4, "4 players": 4} {
+		if got := autoCollPlayers(in); got != want {
+			t.Errorf("players %q = %d, want %d", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"Action / Platformer": "Action", "  Racing ": "Racing", "Shooter, Rail": "Shooter"} {
+		if got := autoCollGenreLabel(in); got != want {
+			t.Errorf("genre %q = %q, want %q", in, got, want)
+		}
+	}
+	if got := autoCollSlug("Role-Playing (RPG)"); got != "role-playing-rpg" {
+		t.Errorf("slug = %q", got)
+	}
+	if autoCollSlug("Shoot'em Up") != autoCollSlug("SHOOTEM up") || autoCollSlug("ロールプレイング") == "" {
+		t.Error("genre spellings did not fold into one folder id")
+	}
+}

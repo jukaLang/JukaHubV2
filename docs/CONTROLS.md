@@ -251,8 +251,8 @@ no footer names may have no key.
 | Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
 | Voice command | A or Menu speak / stop · X type · Y phone QR · B back (cancels while listening or during the pause) | Enter · X · Y · Esc; F4 speak / stop |
 | Wi-Fi | X details · Y scan · Select diagnostics · L1 / R1 page | X · Y or R · I · PgUp / PgDn; D disconnect, C reconnect, F forget |
-| Files | Y actions · X mark · L1 / R1 page | Y · X · PgUp / PgDn; H hidden files |
-| Image viewer | L1 / R1 zoom · L2 / R2 previous / next · Y fit · X lock · Start mark up in Paint | - / + · PgUp / PgDn · Y or F · X or L · M |
+| Files | Y actions · X mark · L1 / R1 page (in two panes: left / right pane) | Y · X · PgUp / PgDn; H hidden files; Tab other pane, F5 / F6 copy / move to it |
+| Image viewer | L1 / R1 zoom · L2 / R2 previous / next · Y fit · X options (rotate, rename, delete, lock screen) · Start mark up in Paint | - / + · PgUp / PgDn · Y or F · X or Tab options · L lock · R rotate · F2 rename · Del delete · M |
 | PDF reader | L1 / R1 page (or chapter) · L2 / R2 zoom or text size · X text · Y options | PgUp / PgDn (or [ / ]) · - / + · X or T · Y, O or Tab |
 | Playtime & achievements | L1 / R1 tabs · X sort · Y RetroAchievements | Tab / Shift+Tab · X · Y |
 | Game details | Start options · X favourite · Y look up again | O · X or F · Y |
@@ -290,14 +290,15 @@ no footer names may have no key.
 
 The Brick (and the Hammer, the same board) has two small keys under the screen,
 **F1** and **F2**. The firmware reports them as the stick clicks (L3 / R3), so
-they used to do nothing in JukaHub. Now:
+they used to do nothing in JukaHub. Now, by default:
 
 | Button | Action |
 |--------|--------|
 | F1 | The **Controller** card for the screen you are on: what every button does here. F1 or B closes it |
 | F2 | **Quick Settings** (Wi-Fi, volume, brightness). F2 or B closes it |
+| F1 (hold) / F2 in a RetroArch game | F1 held plays the game backwards, F2 switches fast forward on and off ([Game hotkeys](#game-hotkeys-retroarch-games); Settings → Controls → **Game hotkeys**) |
 | Menu | The voice orb: press it and speak (with **Menu button: voice** off in Settings → Controls, Back like B) |
-| Menu (hold 0.7 s, let go) | Screenshot of the screen, in a game too (Settings → Controls → **Hold Menu: screenshot**; off, holding Menu is push-to-talk) |
+| Menu (hold 0.7 s, let go) | Screenshot of the screen, in a game too (Settings → Controls → **Hold Menu: screenshot**; off, holding Menu is push-to-talk). In a game it can open the game switcher instead, or do nothing (**Hold Menu in a game**) |
 | Start | The Start menu: every scene, game and tool |
 | Select + Start (hold both) | Quit JukaHub |
 | Select + L1 (hold) | Mouse mode: the D-pad moves a pointer and A clicks (see Virtual cursor) |
@@ -308,6 +309,35 @@ keeps L3 for switching between scrolling and walking links, and the game
 library keeps R3 for a random game, so on those screens F1 / F2 do what those
 screens say. On Home the footer names **Start** instead of a **B Back** that
 had nothing to go back to.
+
+**Settings → Controls → F1 key** and **F2 key** (Brick and Hammer only) pick
+what each key does instead: *Controller card*, *Quick Settings*, *Screenshot*,
+*Game switcher*, *Search*, *Start menu*, *Sleep*, *Mute* (or back to the last
+level), *Home*, or *Nothing* (the screen gets the key as L3 / R3). The key
+that opens the Controller card, Quick Settings, the Start menu or Search also
+closes it, and the Controller card lists what both keys do. The three screens above keep their
+own use whatever is chosen.
+
+### TrimUI Smart Pro S: the Home key
+
+The Smart Pro S has a **Home** key on its top edge, beside the power key. A
+tap on it (let go within about a second; a longer hold is left alone) does what
+two rows in **Settings → Controls** say:
+
+| Row | Choices |
+|-----|---------|
+| Home key | *Home* (the default: closes what is open and shows Home), *Quick Settings*, *Game switcher*, *Nothing* |
+| Home key in a game | *In-game menu* (the default, as if Select + L2 were held), *RetroArch menu* (RetroArch's own menu in RetroArch games; other emulators get the in-game menu), *Game switcher* (the game saves and quits to the switcher), *Nothing* |
+
+The rows appear once JukaHub has found the key. Its code is not published:
+JukaHub reads an input device that sends `KEY_HOMEPAGE` (172) or `KEY_HOME`
+(102). If the rows never appear, run `evtest` over SSH, press Home, and put the
+code it shows as `"homeKeyCode": "<code>"` in `jukauser.json`'s `variables`
+([Configuration](CONFIGURATION.md)); JukaHub's log names the device it reads
+(`Home key: reading key …`). The firmware still sees the key: on the stock
+menu, its own quick menu may open as well. On the idle screen or a dark dock a
+tap only wakes the screen, and over a panel with work of its own (Ports, the
+save manager, a download list…) it does nothing until B closes it.
 
 ---
 
@@ -329,7 +359,7 @@ had nothing to go back to.
 | Select + L1 (hold) | Mouse mode on / off: the pointer stays on and the D-pad and sticks move it (below) |
 | Select + R1 in a game (TrimUI) | Screenshot of the game's screen ([below](#screenshot-in-a-game-select--r1)) |
 | Power (short press, handheld) | Sleep — on Home, any screen or mid-game; the game carries on at wake (Settings → Power & battery → Power button: Sleep, Exit card or Nothing) |
-| Power (hold 1.5 s) on a JukaHub screen | The power card below |
+| Power (hold 1.5 s) on a JukaHub screen | The power card below — or, with Settings → Power & battery → **Ask before power off** off, power off at once |
 | FN switch (Smart Pro, with Settings → Power & battery → Travel lock on) | Locks the power button: no wake, and a power-on turns straight back off; slide it back to unlock |
 
 ### Virtual cursor
@@ -476,6 +506,7 @@ stays on screen, dimmed, and a small menu opens over it:
 | Quit to JukaHub | The emulator is asked to quit (the same request as quitting JukaHub mid-game: RetroArch and PPSSPP write SRAM and settings on the way out) and JukaHub's Home comes back; one that has not quit after six seconds is ended |
 | Game switcher | Quits the game as Quit to JukaHub does (RetroArch writes its auto save), then opens the [Game switcher](#game-switcher) (only with Settings → Games & emulators → Game switcher on) |
 | Stopwatch / Timer | Once the [Stopwatch](#everyday-apps) or its countdown has been started: "Stopwatch 12:34.5" or "Timer 4:59 left", live; **A** starts or pauses it, **Right** takes a lap |
+| Quick settings | Brightness, volume, mute, Wi-Fi, Bluetooth, the stick lights, rumble and Power off without leaving the game, with CPU, temperature, memory and battery at the top (see below) |
 
 | Button | Action |
 |--------|--------|
@@ -507,6 +538,54 @@ RetroArch's cheat menu or cheat hotkeys were used in the same game, or a
 command could not be sent, the list says that changes apply from the next
 start.
 
+**Quick settings** opens a card over the paused game. At the top: CPU load
+and clock, temperature, memory used and the battery with its time left, read
+once a second (the game is paused, so the CPU figure is the handheld at rest).
+**Up/Down** pick a row, **Left/Right** change it, **A** switches it.
+**Brightness** and **Volume** change at once (A dims or mutes); **Mute** turns
+the speaker off and back to its last level; **Music in game** (only while
+JukaHub's music plays under the game) is how loud it plays, heard at once.
+**Wi-Fi** and **Bluetooth** take a few seconds; the row says "Switching…" and
+the card keeps working. **Lights** is Settings → Stick lights → Lights in
+games (with JukaHub driving the stick lights). On a handheld with a motor,
+**Rumble** is RetroArch's rumble strength, used from the next game you start
+(RetroArch cannot change it while it runs), and **Vibration** is JukaHub's own
+buzz. **Power off** asks for a second **A** (unless Ask before power off is
+off), gives the game back to save — RetroArch writes a save state, another
+emulator is closed cleanly — and switches the handheld off. **B** goes back
+to the menu, **Select + L2** straight to the game.
+
+**Settings → Controls → In-game menu entries** chooses which rows the menu
+shows: A on a row shows or hides it, and the list stays open for the next.
+Resume game is always first and Quit to JukaHub always last. A hidden row
+still appears while it is the only way to stop something (Stop recording,
+Normal speed).
+
+#### Game hotkeys (RetroArch games)
+
+In a RetroArch game started from the library (TrimUI handhelds, with
+**In-game menu** on), a few presses work without opening the menu. Nothing is
+taken from the game: it still sees every press. The menu's bottom line lists
+the paused game's hotkeys.
+
+| Button | Action |
+|--------|--------|
+| F1 held (Brick, Hammer) or L3 held (Smart Pro, Smart Pro S, Brick Pro) | The game plays backwards while it is held; let go and it carries on from there. Only on the systems whose in-game menu has **Rewind** |
+| F2 or R3 | Fast forward on; press again for normal speed (the in-game menu's row follows) |
+| Menu + Select (press together, let go) | Save and quit to JukaHub: "Saved — it continues where you left off", and the next start of the game picks up there. A deliberate quit like this does not start the game by itself at the next power-on |
+
+**Settings → Controls → Game hotkeys** is *Auto* (F1 / F2 on a Brick or
+Hammer, L3 / R3 on a handheld with sticks), the pair itself, or *Off*;
+**Menu + Select: save and quit** turns that press off. A press made while
+Select, Start or Menu is held belongs to a chord and does nothing here.
+Nintendo DS games keep the keys to themselves (the DS cores tap the screen
+and close the lid with L3 / R3), and on a handheld with sticks so do
+PlayStation and DOS games, and light-gun games (the gun re-aims on R3).
+Menu + Select does nothing in RetroAchievements hardcore (RetroArch saves no
+states there), in PPSSPP, ports and NextUI paks. With auto-resume off
+(`savestateResume: false`) it writes a save state in the current slot
+instead, and the in-game menu's **Load state** brings it back.
+
 #### Game buttons and turbo (RetroArch games)
 
 **Settings → Controls → Game buttons for** picks *All consoles* or one
@@ -535,6 +614,43 @@ on older RetroArch it needs the pad's A and B buttons in RetroArch's controls
 (the Turbo row says so when they are missing), and another button pressed
 while the turbo button is held fires repeatedly too. Standalone emulators and
 NextUI paks keep their own controls.
+
+**Button layout** (Settings → Controls, the first row; handhelds) sets the
+whole pad at once: **Nintendo** (the default: the right button, A, confirms, as
+printed) or **Xbox** (the bottom button confirms). Xbox swaps A/B and X/Y in
+JukaHub's menus (the same switch as Accessibility's button layout; the hints
+then name the button to press) and sets *All consoles* **Buttons** to **Swap
+both**; Nintendo turns both back, the Buttons row returning to what it was
+before Xbox. A console or game with its own Buttons keeps them, and picking a
+layout clears Accessibility's per-button remaps. Under Xbox, **Button hints
+show** picks **Printed letters** (the letter on the button to press: the bottom
+one is B) or **Roles** (its job in the Xbox layout: A confirms). PPSSPP,
+PortMaster ports and NextUI paks keep the printed layout.
+
+**D-pad as stick**, under Turbo, makes the D-pad push the left analog stick,
+for games that only move with the stick: on a Brick (no sticks) N64, PSP and
+Dreamcast games. *All consoles* is **Auto** (on for the N64, PSP and Dreamcast
+on a handheld without sticks, off everywhere else) or **Off**; a console picked
+on **Game buttons for** gets *Default*, **On** or **Off**. The stick is either
+at rest or pushed all the way, so there is no slow walk, and the game no longer
+sees those D-pad presses as the D-pad. It goes into the same one-launch remap
+file as Buttons (a remap of your own still wins, and a control layout's
+buttons win over it).
+
+**Left stick as D-pad**, on a handheld with sticks (the Smart Pro, Smart Pro
+S and Brick Pro), is the other way round: the left stick works the D-pad, for
+the games of consoles that had no stick. *All consoles* is **Auto** (the
+default), **On**, **Off** or **RetroArch's own**; a console picked on **Game
+buttons for** gets *Default · …* (what All consoles gives it), **On**, **Off**
+or **RetroArch's own**. Auto is on for every console whose pad had no stick
+(the Saturn, the DS and the arcade systems included: their pads are digital,
+so the stick would otherwise do nothing) and off for the N64, PSP,
+Dreamcast, PlayStation 2, GameCube and Wii, whose games read the stick. A
+PlayStation game follows its pad: on the DualShock (**Analog controller**)
+both sticks stay sticks whatever this row says; on the standard pad the stick
+is its D-pad. It sets RetroArch's *Analog to digital type* (left stick, not
+forced) for that start only; a remap of your own that sets it still wins. The
+row is hidden on the Brick and the Hammer, which have no sticks.
 
 #### Control layouts (RetroArch games)
 
@@ -782,6 +898,11 @@ their way, and no panel is covered by a menu drawn beneath it.
 
 Recent games side by side, each with a screenshot of where you left it (its save state's picture, else its box art). Open it with X on Home, Start → Games → Game switcher, search, or the in-game menu.
 
+**Settings → Controls → Hold Menu in a game → Game switcher** makes holding
+Menu for 0.7 s in a game (then letting go) quit it the way the in-game menu's
+row does and open the switcher. **Settings → Power & battery → Start in →
+Game switcher** opens it when the handheld is switched on.
+
 | Button | Action |
 |--------|--------|
 | Left / Right | Previous / next game |
@@ -789,6 +910,15 @@ Recent games side by side, each with a screenshot of where you left it (its save
 | A | Carry on from the auto save |
 | X | Take it off the recent games (its saves stay) |
 | B | Back |
+
+### Quick menu
+
+A full-screen menu: big Recents, Collections, Games and Tools tiles over
+round Wi-Fi, Sleep, Restart, Power off and Settings buttons. Open it from
+Start → Device → Quick menu, or set **Settings → Controls → Menu button on
+Home** to *Quick menu* so a tap of Menu on Home opens it (and closes it again).
+D-pad moves, A opens, B closes. Theme pictures and every way in:
+[Quick menu](QUICK_MENU.md).
 
 ### Home layouts
 
@@ -844,6 +974,13 @@ screen off; JukaHub carries on where it was when it wakes. Settings → Power �
 **Auto sleep** does the same after 3 to 30 minutes without input (off by
 default; never while charging, while a game, music, a video, a download or
 Screen Share runs, or while an alarm is set).
+
+Settings → Power & battery → **Ask before power off** (on by default) decides whether the two shortcuts that
+only exist to switch off ask first: the **Power** tile on Home opens this card
+on Power off, and holding the power button opens it. Turned off, both power off
+at once — still the clean way, with a running RetroArch game saved first. The
+card itself stays wherever it is a choice (the power pill, Quick Settings →
+Power, the lock screen), and holding the key in a game does nothing new.
 
 A handheld left asleep for long powers itself off safely: after Settings →
 Power & battery → **Power off after sleeping** (6 h by default, 1 h on a
@@ -941,7 +1078,7 @@ tools) listing what is not on Home yet, each row with its default size.
 **A** (Enter) adds the highlighted entry, closes the card and puts the focus on
 the new tile, and **B** (Esc) closes the card; the mouse and the wheel work too.
 
-**Quick controls** pin what NextUI's quick menu offers. **Wi-Fi** and
+**Quick controls** pin the everyday switches. **Wi-Fi** and
 **Bluetooth** switch the radio on or off with **A** (Enter): the round badge is
 lit while the radio is on, and the tile names the network, or how many devices
 are connected. **Power** opens the power card — Sleep, Restart and Power off on
@@ -962,7 +1099,7 @@ popover, a panel) is open over it.
 
 ### Quick Settings
 
-**Select** on Home opens Quick Settings; so do **F2** on a Brick, **Start →
+**Select** on Home opens Quick Settings; so do **F2** on a Brick (unless Settings → Controls → F2 key says otherwise), **Start →
 Device → Quick Settings** and **Ctrl+Q**. **Select**, **B** or a click outside
 the card closes it. It has three layouts, which **L2** switches (below):
 
@@ -1222,6 +1359,17 @@ The rewind and fast-forward buttons skip 10 seconds per press. With the settings
 sheet open, **Up / Down** move between its rows and **A** applies the row, so
 subtitles, full screen, speed and quality are reachable without a touch screen.
 A tap on a control also moves the ring there, so touch and D-pad never disagree.
+
+**Audio track and subtitles** — for a video on the card the sheet has an
+**Audio track** row: **A** steps to the file's next audio stream ("2/3 · English ·
+AC3 5.1") and the video carries on from where it was, as after a seek. Its
+**Subtitles** row steps through **Off**, the subtitle files beside the video
+(`.srt`, `.vtt`, `.ass` / `.ssa`, MicroDVD `.sub`, also with a language such as
+`Film.en.srt`) and the text tracks inside it, when there is more than one; with
+one or none it is the plain on / off switch. Picture subtitles (Blu-ray PGS, DVD)
+cannot be drawn and are skipped. Both choices are remembered for the file
+(`video-tracks.json`), so the film comes back in the same language. **Up / Down**
+stay the volume during playback; the tracks change from the sheet.
 
 **Speed** — the pill in the bar, the sheet's **Speed** row, or keys **1**–**4**
 (0.5× / 1× / 1.5× / 2×) — steps 0.5× → 0.75× → 1× → 1.25× → 1.5× → 2× and back,
@@ -1921,6 +2069,30 @@ step off a grid:
 A fresh visit starts at the top, and a scrollbar on the right shows where in the
 page you are.
 
+### Play time by game
+
+The Playtime screen's third tab, **By game** (L1 / R1 or Tab to reach it), ranks
+the games you started from JukaHub by how long you played them **Today**,
+**This week**, **This month**, **This year** or **Ever**, each with a bar
+against the longest. Press **X** to add the same time up by console instead.
+Weeks start on Monday.
+
+| Button | Action |
+|--------|--------|
+| Left / Right | Previous / next period |
+| X | Games or consoles |
+| Up / Down, Page Up / Page Down, Home / End (or wheel) | Scroll the list |
+| L1 / R1, Tab | Switch tab |
+| B | Back |
+
+**Ever** is the lifetime figure, complete from the first day. The other periods
+count from the day this version first ran: time before that was not kept by day
+and game, and the list says from which date it counts. Days are kept for about
+400 days in `playtime-days.json` in the data folder (a profile keeps its own),
+and move to the right date when network time corrects a clock that started at
+the wrong one. A game's **Game options** sheet shows its time this week and
+ever.
+
 ### RetroAchievements
 
 On a TrimUI Smart Pro, open **Start → RetroAchievements**,
@@ -1951,11 +2123,15 @@ in its data folder and is never displayed in full.
 
 ## Music player
 
-Opening **Music** shows Albums, Artists and Audiobooks. Use **L1/R1** or
+Opening **Music** shows Albums, Artists, Audiobooks, History and Radio. Use **L1/R1** or
 **Left/Right** to switch shelves, **Up/Down** to move, **A** to open or play,
 **X** to rescan, and **B** to step back. From playback, **B** returns to the
 shelves. Audiobooks are read from an `Audiobooks` folder and resume at the
-saved chapter.
+saved chapter. On **Radio**, the first row opens the Radio directory (Top,
+Country, Genre and Search tabs: **L1/R1** or **Left/Right** switch tabs, **A**
+plays, **X** saves the station or takes it out, **Y** reloads or searches, **B**
+steps back) and the rows under it are your saved stations — see
+[MUSIC_PLAYER.md](MUSIC_PLAYER.md#radio).
 
 | Button | Action |
 |--------|--------|
@@ -1965,7 +2141,7 @@ saved chapter.
 | Y | Favorite the playing track |
 | Left / Right | Seek −10 s / +10 s |
 | L1 / R1 | Previous / next track |
-| L3 (left stick click) | Show / hide synced `.lrc` lyrics |
+| L3 (left stick click) | Show / hide lyrics (a `.lrc` file beside the song, or the lyrics stored inside it) |
 | R3 (right stick click) | Cycle the sleep timer (off, 15, 30, 60 min) |
 | Start | Toggle the full-screen visualizer |
 | Guide (logo button, where the pad reports it) | Toggle shuffle |
@@ -2115,7 +2291,7 @@ format), the row keeps its type chip.
 | Button | Action |
 |--------|--------|
 | Up / Down | Move through the list |
-| L1 / R1 | Move a screenful; L2 / R2 jump to the first / last row |
+| L1 / R1 | Move a screenful; L2 / R2 jump to the first / last row. In two panes L1 / R1 pick the left / right pane |
 | A | Open a folder or a file; an archive opens its sheet ([Archives](#archives)) and a zipped game in a console folder starts (while Chat is picking files, attach the file, or the marked rows) |
 | B / Back | Up one level, or back to Home at the root (while Chat is picking files, back to the chat) |
 | Y | The action sheet |
@@ -2142,6 +2318,49 @@ highlighted) local rows into the remote folder on screen, **X** takes another
 address and **B** goes up a level. Transfers run in the background with their
 progress in the panel's subtitle, one at a time; the first connection to a
 device pins its host key and a later change is refused rather than trusted.
+
+### Two panes
+
+**Y → Two panes** shows two folder lists side by side, each with its own
+folder, cursor and marks; the setting is remembered. **L1** works in the left
+pane and **R1** in the right one (**Tab** switches on a keyboard; a click on
+the other pane switches to it with the cursor on the row clicked); the pane
+being worked in has the accent edge and the full breadcrumb bar, the other one
+shows its folder name and what it holds. Everything in the Y sheet acts on the
+pane being worked in, and two rows join it after **Paste**:
+
+| Row | What it does |
+|-----|--------------|
+| **Copy to other pane** | Copies the marked rows (or the one under the cursor) into the other pane's folder. A name that is taken gets " (2)", nothing is overwritten. |
+| **Move to other pane** | The same, then the originals go. On one card this is a rename and instant; to another card or drive the copy finishes before the original is removed. |
+
+The transfer runs in the background, one at a time: the other pane's bar reads
+"Copying 2 of 5 here…" over a progress line, the sheet's row shows the item
+being written (**A** on it twice stops after that item), and when it is done
+both panes are read again with the cursor on the first new item. A system
+folder (as the source of a move, or as the destination) asks twice, like the
+other changes there. **F5** / **F6** on a keyboard open the sheet on Copy /
+Move to other pane. One pane stays the default and is unchanged, and Files
+opened to pick files for the chat or background music always shows one pane.
+
+### Pictures: rotate, rename, delete
+
+In the picture viewer, **X** (the **More** chip, **Tab** on a keyboard) opens
+the picture's options:
+
+| Row | What it does |
+|-----|--------------|
+| **Rotate right** | Turns the picture a quarter clockwise and saves it (**R** on a keyboard). PNG stays PNG; JPEG stays JPEG at quality 92, stood upright by its camera orientation first and saved without it, so it is never turned twice — the camera details in the file (EXIF) are not kept. WebP, GIF, BMP and other formats turn on screen only, and the viewer says so. Pictures larger than about 20 megapixels are not turned on the handheld. |
+| **Rename** | A new name on the on-screen keyboard (**F2**), in the same folder. The extension is kept; an empty name, a `/` or a name already taken is refused. |
+| **Delete** | Deletes the picture on the second press (**Del** opens the sheet on it) and shows the next one; after the last, the viewer closes. |
+| **Set as lock screen** | The idle-screen photo (**L**); **Remove from lock screen** once it is. |
+| **Mark up in Paint** | As **Start**: Paint opens on a copy. |
+
+A turned picture is written to a hidden temporary file beside it and renamed
+over it once complete, so a power cut leaves the old or the new picture, never
+half of one. Files under the viewer is read again after every change, so its
+list shows the new name, size and thumbnail; a renamed or deleted lock-screen
+picture is followed or cleared.
 
 ### Archives
 
@@ -2585,9 +2804,9 @@ panel. See [Dock & ambient](AMBIENT.md).
 
 With **Ambient** off, the starfield is the idle screen. It keeps the clock, the
 battery, a rotating quote and — if one was chosen in Files — a photo behind
-them. The photo is set from the viewer, where **X** (or `l`) becomes **Set lock
-screen**, and the same button there reads **Clear lock screen** once that
-picture is the backdrop.
+them. The photo is set from the viewer: **X** opens its options, where **Set as lock
+screen** (or `l` on a keyboard) makes it the backdrop, and the same row reads
+**Remove from lock screen** once that picture is the backdrop.
 
 The idle screen can take the photo back itself, so clearing it does not need a
 trip to Files. **Y** offers **Y clear photo** on its own line above the wake

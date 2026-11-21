@@ -96,6 +96,9 @@ func (h *HomeLayout) drawHomeWidget(renderer *sdl.Renderer, fonts HomeFonts, nam
 	case "playtime":
 		s := hwpPlaytimeStat(now)
 		h.hwpDrawStat(renderer, f, b, &s, focused)
+	default:
+		// Most played, This month (home_dashboard.go).
+		h.homeDashDrawWidget(renderer, f, b, name, draw, focused)
 	}
 }
 
@@ -277,6 +280,8 @@ func homeWidgetActivate(config *Config, name string) {
 			return
 		}
 		ShowToast("Trophies are not part of this setup", ToastKindInfo)
+	default:
+		homeDashWidgetActivate(config, name) // home_dashboard.go
 	}
 }
 
@@ -300,7 +305,7 @@ func hwpKnown(name string) bool {
 	case "clock", "weather", "battery", "storage", "nowplaying", "calendar", "playtime":
 		return true
 	}
-	return hqIsQuick(name)
+	return hqIsQuick(name) || homeDashWidgetKnown(name)
 }
 
 // hwpConfig is the config Home is drawn for this frame (renderHomeModern sets

@@ -490,3 +490,7 @@ Mouse and touch select rows and tabs in the same way.
   best, on the A133P models most games run at half speed or less. How the
   Dolphin core is set up, kept current and given its first settings is in
   [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
+* PlayStation 2 has no tier either: in the ARMSX2 core the light games run at
+  or near full speed on the A133P models and most 3D games well below it. How
+  ARMSX2, its resources folder and the BIOS are set up is in
+  [GAME_LIBRARY.md](GAME_LIBRARY.md#playstation-2-on-the-handheld).

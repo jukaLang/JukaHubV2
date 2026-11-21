@@ -1191,8 +1191,16 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	if hints, ok := battGraphFooterHints(scene.Name); ok {
 		return hints
 	}
+	// The Artwork Manager: its console list, a console's games or a sheet (artmanager.go).
+	if hints, ok := artManagerFooterHints(config, scene.Name); ok {
+		return hints
+	}
 	// The Printer scrapbook: its grid, big view or delete question (gbprinter_ui.go).
 	if hints, ok := gbpFooterHints(scene.Name); ok {
+		return hints
+	}
+	// The Radio directory: its tabs and the focused station (radiodir_ui.go).
+	if hints, ok := radioDirFooterHints(scene.Name); ok {
 		return hints
 	}
 	// Settings and Plugins name what the focused row or button does
@@ -1274,7 +1282,8 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = append(hints,
 				FooterHint{Button: "Y", Label: "Actions"},
 				FooterHint{Button: "X", Label: xLabel},
-				FooterHint{Button: "L1/R1", Label: "Page"},
+				// "Pane" in two panes (files_dualpane.go).
+				FooterHint{Button: "L1/R1", Label: filesDualFooterLabel(config)},
 			)
 		}
 	case "JukaLand":

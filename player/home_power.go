@@ -183,6 +183,9 @@ func homePowerPress(id int) {
 // teardown.
 func homePowerQuit() {
 	homePowerClose()
+	if !uiModeQuitOK() { // Kiosk / Kid mode: no way out to the firmware's menu (uimode.go)
+		return
+	}
 	PlayActivateSound()
 	if snapshotVideoState().phase != "idle" {
 		StopEmbeddedPlayback()

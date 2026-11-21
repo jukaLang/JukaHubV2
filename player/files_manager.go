@@ -825,6 +825,10 @@ func handleFilesChromeMouse(mx, my int32, config *Config) bool {
 	if !feSceneActive(config) {
 		return false
 	}
+	// A press on the other of two panes drives it (files_dualpane.go).
+	if filesDualMouse(mx, my, config) {
+		return true
+	}
 	if filesLocationsCrumbRect.W > 0 && pointInRect(mx, my, filesLocationsCrumbRect) {
 		if !filesNav.atLocations {
 			filesShowLocations(config)
@@ -1317,12 +1321,13 @@ func feActions(config *Config) []feAction {
 	}
 	if filesNav.atLocations {
 		// The Locations rows are whole drives and the card: nothing here can be
-		// renamed, cut or deleted, so the sheet offers what still applies.
-		return []feAction{
+		// renamed, cut or deleted, so the sheet offers what still applies. The
+		// Two panes switch follows Show hidden files (files_dualpane.go).
+		return filesDualSheetRows(config, []feAction{
 			{Kind: feActHidden, Label: "Show hidden files", Detail: hiddenDetail, Enabled: true},
 			{Kind: feActConnect, Label: "Connect to device", Detail: feRemoteAddressHint(), Enabled: true},
 			{Kind: feActRemote, Label: "Remote files", Detail: remoteDetail, Enabled: remoteEnabled},
-		}
+		}, nil)
 	}
 	targets := feSelectionTargets(config)
 	listed := filesNav.listedPath
@@ -1401,6 +1406,9 @@ func feActions(config *Config) []feAction {
 		{Kind: feActHidden, Label: "Show hidden files", Detail: hiddenDetail, Enabled: true},
 		{Kind: feActLocations, Label: "All locations", Detail: "card, Home, system, drives", Enabled: true},
 	}
+	// Two panes: Copy / Move to other pane after Paste, the switch after Show
+	// hidden files (files_dualpane.go).
+	actions = filesDualSheetRows(config, actions, targets)
 	// A DOS game folder or archive onto the DOS shelf (shelf_dos_import.go).
 	if a, ok := shelfDOSFilesAction(targets); ok {
 		actions = append(actions, a)
@@ -1670,6 +1678,9 @@ func feSheetActivate(config *Config) {
 		manFilesActivate(config, feSelectionTargets(config))
 	case feActOpenWith, feActDefaultApps:
 		owFilesActivate(config, action.Kind, feSelectionTargets(config))
+	case feActDualPane, feActDualCopy, feActDualMove:
+		// Two panes and its transfers (files_dualpane.go).
+		filesDualActivate(config, action)
 	case feActConnect:
 		closeFeSheetKeepKeyboard()
 		openFeRemoteAddressEntry(config)
@@ -1767,6 +1778,11 @@ func feFilesKey(key sdl.Keycode, config *Config) bool {
 	if !feSceneActive(config) {
 		return false
 	}
+	// Two panes: Tab switches, F5 / F6 copy or move to the other pane
+	// (files_dualpane.go).
+	if filesDualKey(key, config) {
+		return true
+	}
 	switch key {
 	case sdl.K_y:
 		openFeSheet(config)
@@ -1796,6 +1812,10 @@ func feFilesKey(key sdl.Keycode, config *Config) bool {
 func handleFilesController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || virtualKeyboardActive || !feSceneActive(config) {
 		return false
+	}
+	// In two panes L1/R1 pick the left or the right pane (files_dualpane.go).
+	if filesDualPad(e, config) {
+		return true
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_Y:

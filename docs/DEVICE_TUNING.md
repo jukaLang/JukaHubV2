@@ -297,6 +297,88 @@ The same firmware has configfs FunctionFS for USB file transfer, but its
 kernel explicitly omits ECM and RNDIS gadget functions. It cannot offer
 networking over USB without a different kernel.
 
+## The FN switch
+
+On the original Smart Pro the FN slide switch is a latching GPIO (gpio243,
+the pin Travel lock reads). Settings → Power & battery → **FN switch does**
+(`fnSwitchMode`) picks what sliding it does:
+
+| Choice | Slid | Slid back |
+|--------|------|-----------|
+| Nothing (default) | — | — |
+| Travel lock | the power button cannot wake or start the device | it works again |
+| Mute | the speaker goes to 0 | the level it had comes back |
+| Lights off | the stick lights go dark, in games too | the lights show your mode again |
+| Airplane mode | Wi-Fi and Bluetooth off | exactly the radios that were on come back |
+
+Travel lock is the old **Travel lock** switch, unchanged (its boot hook
+included): a config with it on simply reads as this choice. Picking anything
+else turns it off and takes the hook off the card.
+
+Which position is which is not documented, so a pick stores the position the
+switch is in right then as "off" (`fnSwitchAt`, like `travelLockAt`). A pin
+that is not a switch never changes and so never does anything. The switch's
+position decides, nothing is toggled blindly: slid on, only what is not muted,
+dark or blocked yet changes; slid back, only what the switch did is undone.
+What it holds is kept in `fnSwitchHeld`, so a restart with the switch slid back
+unmutes and brings the radios back, and a restart with it slid on applies the
+action again. A goroutine reads the pin every 250 ms (two equal readings make
+a position), so the switch works while a game runs; toasts only show when
+JukaHub has the screen. The row is hidden on every other device.
+
+## Stick lights: critical battery, screen brightness, achievements
+
+Three additions to Settings → Stick lights:
+
+- **Critical battery.** With the Low battery warning on, at 5% or less and not
+  charging the slow red breath becomes a faster (1 s), deeper and brighter
+  pulse (the indicator brightness plus 40 points), until the charge is back at
+  7%.
+- **Follow screen brightness** (`led_follow_screen`, off): the lights'
+  Brightness is scaled by the backlight's level, never below 10% and never
+  above the Brightness you set; Off stays Off. The warnings keep their own
+  Indicator brightness.
+- **Celebrate achievements** (`led_celebrate`, on): a RetroAchievements unlock
+  runs a three-second rainbow over the rings, over the game too, and then they
+  show what they showed before. On rings where a colour change costs a dip it
+  is six pure colours faded through dark. Nothing happens with the lights off,
+  at Brightness Off, or where the LEDs have no colour.
+
+## GPU boost in games
+
+Settings → Power & battery → **GPU boost in games** (`gpuBoost`) does for
+other games what Xbox boost does for the GPU: the GPU's devfreq node (a name
+containing `gpu` under `/sys/class/devfreq`) runs its `performance` governor,
+or has `min_freq` raised to `max_freq`, for the length of one launch.
+
+| Value | Boosted launches |
+|-------|------------------|
+| `auto` (default) | N64, PSP, Dreamcast (and NAOMI / Atomiswave), Nintendo DS, Saturn, PlayStation, GameCube / Wii, PS2, and ports |
+| `always` | every game and port |
+| `off` | none |
+
+It uses Xbox boost's own plan and lock, so the two never write the node at
+once, and a launch Xbox boost already holds is left to it. Values are put back
+when the game's process group is gone, only where they are still the ones
+written; a marker in the temp directory (`jukahub-gpu-boost.json`) lets the
+next start put back what a crash left. CPU governors are not touched
+(Automatic CPU speed and the launch profile own them). The row only shows on a
+handheld whose GPU has a devfreq node; the log's `gpu` lines say what each
+launch got.
+
+## Threaded video in RetroArch
+
+RetroArch can run its video driver on a thread of its own (`video_threaded`).
+That hides slow frames on a weak CPU, but frames reach the screen a little
+later and less evenly, and on the Smart Pro S's A523 the uneven pacing shows.
+**Settings → Emulation →
+Threaded video**: *Auto* (the default) turns it off for RetroArch games started
+from the library on a Smart Pro S and leaves RetroArch's own value on the other
+TrimUIs and PCs; *On* and *Off* set it everywhere. Like the other Emulation
+settings it is written for that launch and put back when RetroArch exits, so
+games started from the firmware's menu keep RetroArch's own setting
+(`raTuningThreaded` in [Configuration](CONFIGURATION.md)).
+
 ## Related
 
 - Ports and PortMaster installation: [PORTMASTER.md](PORTMASTER.md)

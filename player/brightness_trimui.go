@@ -4,8 +4,8 @@ package main
 // settings-file plumbing it shares with the volume (volume_trimui.go).
 //
 // The firmware's keymon keeps the backlight level as "brightness" in
-// /mnt/UDISK/system.json, in eleven steps (0..10, the scale MinUI and spruceOS
-// use on these handhelds as well), moves it through stock Settings, and
+// /mnt/UDISK/system.json, in eleven steps (0..10, the scale MinUI uses on
+// these handhelds as well), moves it through stock Settings, and
 // re-reads the file when it changes: it watches it with inotify, which is how
 // the stock settings reach it. Two things follow for JukaHub:
 //

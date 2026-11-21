@@ -832,6 +832,9 @@ func steamPortNextStep(g steamGame, st steamPortState) {
 	case st.ready():
 		steamPortPlay(g, st)
 	case st.Queued:
+		if !uiModeGate(uiFeatSetup) { // Kiosk: PortMaster's app is an installer (uimode.go)
+			return
+		}
 		launcher := portMasterLauncher(portMasterSDRoot)
 		if launcher == "" {
 			ShowToast("PortMaster is not installed", ToastKindWarning)
@@ -868,7 +871,7 @@ func steamPortPlay(g steamGame, st steamPortState) {
 // steamPortInstall downloads g's port into PortMaster (which then installs
 // it and the runtimes it names).
 func steamPortInstall(g steamGame, st steamPortState) {
-	if st.installed() {
+	if st.installed() || !uiModeGate(uiFeatSetup) { // Kiosk: no installs (uimode.go)
 		return
 	}
 	if err := portCatalogInstallStart(st.Entry); err != nil {
@@ -883,6 +886,9 @@ func steamPortInstall(g steamGame, st steamPortState) {
 func steamPortCopyFrom(g steamGame, st steamPortState, pc steamRemotePC) {
 	if !st.installed() || st.DataDir == "" {
 		ShowToast("Install the port first", ToastKindInfo)
+		return
+	}
+	if !uiModeGate(uiFeatSetup) { // Kiosk: nothing is copied onto the card (uimode.go)
 		return
 	}
 	gen := steamPanel.gen

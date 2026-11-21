@@ -101,9 +101,10 @@ type a11ySettings struct {
 	// still applied by getCachedFont/loadRoleFont, so bold never buys legibility
 	// by shrinking a caption.
 	boldText bool
-	// Audio access: mono playback and a left/right balance for stereo
-	// decoders, plus captions that start on and their reading style.
-	monoAudio         bool
+	// Audio access: Audio channels (stereo, mono, mono into one ear:
+	// audiochannels.go) and a left/right balance for stereo decoders, plus
+	// captions that start on and their reading style.
+	audioChannels     int
 	audioBalance      int
 	captionsAlways    bool
 	captionSize       int
@@ -227,7 +228,9 @@ func a11yLoad(config *Config) {
 	// The font picked in Settings → Display (uifont.go), read here so the
 	// first frame is drawn in it; a11yInit drops the font caches after.
 	uiFontLoad(config)
-	a11y.monoAudio = a11yCustomBool(config, a11yKeyMonoAudio)
+	// Audio channels; the old Mono audio switch on reads as Mono.
+	a11y.audioChannels = audioChannelsFromConfig(config)
+	audioChannelsPublish(a11y.audioChannels)
 	a11y.audioBalance = a11yInt(config, a11yKeyAudioBalance, 0, -100, 100)
 	a11y.captionsAlways = a11yCustomBool(config, a11yKeyCaptionsAlways)
 	a11y.captionSize = a11yInt(config, a11yKeyCaptionSize, 1, 0, 2)
@@ -305,7 +308,7 @@ func a11yStore(config *Config) {
 	config.Variables.Custom[a11yKeyBoldText] = a11y.boldText
 	config.Variables.Custom[a11yKeyLegibleFont] = a11y.legibleFont
 	config.Variables.Custom[a11yKeyLegibleFace] = a11y.legibleFace
-	config.Variables.Custom[a11yKeyMonoAudio] = a11y.monoAudio
+	audioChannelsStore(config, a11y.audioChannels) // and a11y_mono_audio beside it
 	config.Variables.Custom[a11yKeyAudioBalance] = a11y.audioBalance
 	config.Variables.Custom[a11yKeyCaptionsAlways] = a11y.captionsAlways
 	config.Variables.Custom[a11yKeyCaptionSize] = a11y.captionSize
@@ -949,12 +952,16 @@ func a11ySetColorblind(config *Config, key string) bool {
 	return true
 }
 
-func a11ySetMonoAudio(on bool) bool {
-	if on == a11y.monoAudio {
+// a11ySetAudioChannels picks Stereo, Mono, Mono left or Mono right
+// (audiochannels.go): live for JukaHub's sound, from the next launch for games.
+func a11ySetAudioChannels(ch int) bool {
+	ch = audioChannelsClamp(ch)
+	if ch == a11y.audioChannels {
 		return false
 	}
-	a11y.monoAudio = on
-	ShowToast("Mono audio: "+a11yOnOff(on), ToastKindInfo)
+	a11y.audioChannels = ch
+	audioChannelsPublish(ch)
+	ShowToast("Audio channels: "+audioChannelsLabel(ch), ToastKindInfo)
 	return true
 }
 
@@ -1247,7 +1254,8 @@ func a11yResetDefaults(config *Config) {
 	a11y.legibleFont = false
 	a11y.legibleFace = ""
 	legibleFontReset()
-	a11y.monoAudio = false
+	a11y.audioChannels = audioChStereo
+	audioChannelsPublish(audioChStereo)
 	a11y.audioBalance = 0
 	a11y.captionsAlways = false
 	a11y.captionSize = 1
@@ -1375,7 +1383,7 @@ func a11yRows() []a11yRow {
 		{label: "Reduce transparency", detail: "Makes every glass tile, row, sheet and chip opaque, so wallpaper and background motion cannot show through them.", value: reducedTransparency, kind: a11yRowReduceTransparency},
 		{label: "Increase contrast", detail: "Strengthens glass edges, widens focus outlines and keeps text at 7:1 or better on the surfaces it sits on.", value: increasedContrast, kind: a11yRowIncreaseContrast},
 		{label: "Bold text", detail: "Draws every menu, list and Home label in Inter SemiBold. Captions stay at the 14 px legibility floor.", value: boldText, kind: a11yRowBoldText},
-		{label: "Mono audio", detail: "Downmixes video and music to one channel for a single speaker or one-ear listening.", value: a11yOnOff(a11y.monoAudio), kind: a11yRowMonoAudio},
+		{label: "Audio channels", detail: "Stereo, Mono, or Mono into the left or right ear on headphones and Bluetooth (Mono on the speaker). Applies to video, music and the games you start.", value: audioChannelsLabel(a11y.audioChannels), kind: a11yRowMonoAudio},
 		{label: "Audio balance", detail: "Moves stereo video and music between the left and right channels. Interface sounds stay centred on the mono UI device.", value: a11yAudioBalanceLabel(), kind: a11yRowAudioBalance},
 		{label: "Captions always on", detail: "Each video starts with its subtitles enabled; CC still turns them off for the current video.", value: a11yOnOff(a11y.captionsAlways), kind: a11yRowCaptionsAlways},
 		{label: "Caption size", detail: "Small, Medium or Large cue text above the bottom of the picture.", value: a11yCaptionSizeLabel(), kind: a11yRowCaptionSize},
@@ -1629,8 +1637,12 @@ func a11yAdjust(dir int, config *Config) {
 		a11yRefreshFonts()
 		ShowToast("Bold text: "+a11yOnOff(a11y.boldText), ToastKindInfo)
 		changed = true
-	case a11yRowMonoAudio:
-		changed = a11ySetMonoAudio(!a11y.monoAudio)
+	case a11yRowMonoAudio: // Audio channels
+		step := 1
+		if dir < 0 {
+			step = -1
+		}
+		changed = a11ySetAudioChannels((a11y.audioChannels + step + audioChCount) % audioChCount)
 	case a11yRowAudioBalance:
 		changed = a11ySetAudioBalance(a11y.audioBalance + dir*10)
 	case a11yRowCaptionsAlways:

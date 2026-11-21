@@ -45,7 +45,11 @@ func prepareRetroTransport(launcher, rom, system string) {
 		return
 	}
 	rewind := retroTransportLightSystem(system)
-	if rewind {
+	// JukaHub's own RetroAchievements choice for this launch decides when
+	// one is made: hardcore refuses rewind (raach_settings.go).
+	if hard, decided := raachHardcoreDecision(launcher); decided {
+		rewind = rewind && !hard
+	} else if rewind {
 		for _, path := range raScopeTargets(raLaunchCandidates(launcher, savestateResumeCandidates())) {
 			if raw, err := os.ReadFile(path); err == nil {
 				for _, key := range []string{"cheevos_hardcore_mode_enable", "cheevos_hardcore_mode"} {

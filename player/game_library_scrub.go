@@ -20,7 +20,9 @@ package main
 // What a "letter" is follows the sort in force (game_library_view.go), so a
 // jump always lands at the start of a block the order really has:
 //
-//	Title           the first letter of the name on screen, upper case; digits
+//	Title           the first letter of the name on screen (after a leading
+//	                "The", "A" or "An" when the sort ignores them,
+//	                libsort_articles.go), upper case; digits
 //	                and symbols are one "#" group. Letters outside A–Z are
 //	                their own group ("É", "Ж") because the sort puts them
 //	                where their bytes fall, not under A–Z.
@@ -102,7 +104,9 @@ func libraryScrubGroup(g libraryGame, mode string) string {
 	case librarySortAdded:
 		return libraryScrubMonth(g.AddedAt, "No date")
 	}
-	return libraryScrubLetter(g.Label())
+	// The letter the name sorts by: Zelda's for "The Legend of Zelda"
+	// (libsort_articles.go).
+	return libraryScrubLetter(librarySortLead(g.Label()))
 }
 
 // libraryScrubMonth is a date's month and year, or none for the zero time.

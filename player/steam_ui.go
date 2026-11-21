@@ -855,6 +855,9 @@ func steamPlayPC(g steamGame) {
 
 // steamLocalDo hands g to the Steam app on this computer.
 func steamLocalDo(g steamGame, action steamAction) {
+	if action != steamActRun && !uiModeGate(uiFeatSetup) { // Kiosk: play only, no installs (uimode.go)
+		return
+	}
 	if err := steamLaunchLocal(g.AppID, action); err != nil {
 		ShowToast("Could not reach Steam — "+firstLine(err.Error()), ToastKindError)
 		return

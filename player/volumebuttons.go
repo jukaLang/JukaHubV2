@@ -173,6 +173,15 @@ func sdlVolumeKeyRecent(now time.Time) bool {
 
 // volumeButtonPress feeds one hardware edge into the hold state machine.
 func volumeButtonPress(dir int, down bool) {
+	// Menu + volume is the brightness (brightkeys.go): no volume press, no
+	// hold to skip with, and still a chord for the voice orb and the in-game
+	// menu.
+	if brightKeysChord(dir, down) {
+		if down {
+			voiceOrbNoteVolumeKey()
+		}
+		return
+	}
 	now := time.Now()
 	volumeButtons.mu.Lock()
 	if down {
@@ -274,11 +283,16 @@ func volumeDeviceLoop(file *os.File) {
 	for {
 		n, err := file.Read(buf)
 		if n > 0 {
+			// Menu, for Menu + volume (brightkeys.go).
+			brightKeysNoteInput(file, buf[:n])
 			for _, ev := range volumeEventsFromBuffer(buf[:n]) {
 				if ev.repeat {
 					// Keep the card up during a hold without restarting the
-					// skip timer or scheduling a mixer read per repeat.
-					volumeHUDNoteKey()
+					// skip timer or scheduling a mixer read per repeat (not
+					// for a held Menu + volume: that is the brightness).
+					if !brightKeysChordHeld() {
+						volumeHUDNoteKey()
+					}
 					continue
 				}
 				volumeButtonPress(ev.dir, ev.down)

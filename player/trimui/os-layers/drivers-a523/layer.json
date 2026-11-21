@@ -1,6 +1,6 @@
 {
   "name": "A523 driver layer",
-  "description": "Smart Pro S (A523, kernel 5.15): the firmware's drivers set up for games. GPU capped at 600 MHz to run cooler (like spruceOS), USB pads and dongles stay awake, older Xbox One pads connect over Bluetooth, USB joysticks read every 2 ms, no disk scheduler for the SD card. Undone when JukaHub OS ends.",
+  "description": "Smart Pro S (A523, kernel 5.15): the firmware's drivers set up for games. GPU capped at 600 MHz to run cooler, USB pads and dongles stay awake, older Xbox One pads connect over Bluetooth, USB joysticks read every 2 ms, no disk scheduler for the SD card. Undone when JukaHub OS ends.",
   "version": "1",
   "arch": "aarch64",
   "kind": "drivers",
@@ -15,7 +15,7 @@
     "/sys/block/mmcblk1/queue/scheduler": "none"
   },
   "why": {
-    "/sys/class/devfreq/*gpu*/max_freq": "Mali-G57 devfreq ceiling in Hz. spruceOS caps the Smart Pro S GPU at 600 MHz in every CPU mode for thermals: the A523 heats up and the fan ramps under sustained GPU load. devfreq picks the highest operating point at or under the cap. The device name differs between BSP builds (1800000.gpu), so it is matched by name; a board without one skips the value. The old ceiling is journaled and written back.",
+    "/sys/class/devfreq/*gpu*/max_freq": "Mali-G57 devfreq ceiling in Hz. The Smart Pro S GPU is capped at 600 MHz in every CPU mode for thermals: the A523 heats up and the fan ramps under sustained GPU load. devfreq picks the highest operating point at or under the cap. The device name differs between BSP builds (1800000.gpu), so it is matched by name; a board without one skips the value. The old ceiling is journaled and written back.",
     "/sys/module/usbcore/parameters/autosuspend": "usbcore: -1 = never auto-suspend a USB device plugged in during the session (default 2 s). USB pads and USB Wi-Fi dongles that drop out after an idle autosuspend stay up. Applies to devices plugged in after the value is set.",
     "/sys/module/bluetooth/parameters/disable_ertm": "bluetooth (L2CAP): Y = no Enhanced Retransmission Mode, the setting older Xbox One pad firmware needs to connect. Harmless for pads that do not use ERTM. Affects new Bluetooth connections only.",
     "/sys/module/usbhid/parameters/jspoll": "usbhid (Linux 4.12+): a USB pad that reports itself as a joystick (many DirectInput pads; not Xbox pads, which xpad drives, nor ones that report a game pad) is polled every 2 ms (500 Hz) instead of its own interval. Taken when a pad is plugged in, so plug it in after the session starts. The built-in controls are not USB HID.",

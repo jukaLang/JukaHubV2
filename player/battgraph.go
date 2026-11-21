@@ -5,8 +5,8 @@ package main
 //
 // battery_eta.go answers "how long is left" from the last 45 minutes and keeps
 // nothing else; the percentage in the corner says nothing about the evening
-// before. NextUI shows a graph of the level, and this is the recorder behind
-// JukaHub's: once a minute it notes the time, the level, whether a cable was
+// before. The Battery screen shows a graph of the level, and this is the
+// recorder behind it: once a minute it notes the time, the level, whether a cable was
 // in, whether the screen was asleep, whether a game owned the screen, and the
 // current the fuel gauge last reported (battery_eta.go's own 20-second read —
 // no file is read here). Sampling rides widgetsTick, which keeps running while

@@ -180,6 +180,7 @@ func openNetplayPanel(game libraryGame) {
 	netplayPanel.rowsSig = ""
 	netplayPanel.opened = time.Now()
 	netplayStartDiscovery()
+	netplayLinkPanelOpened(game) // link cable / wireless adapter rows (netplay_link_ui.go)
 	// The online list is fetched once per minute at most: reopening the panel
 	// for another game reuses it, and Y refreshes on demand.
 	if _, busy, _, _ := netplayOnlineSnapshot(); !busy && netplayOnlineStale(time.Minute) {
@@ -202,6 +203,7 @@ func closeNetplayPanel() {
 	netplayPanel.panel = sdl.Rect{}
 	netplayPanel.rows = nil
 	netplayStopDiscovery()
+	netplayLinkPanelClosed()
 	if virtualKeyboardActive && vkTarget == vkTargetNetplay {
 		vkCloseKeyboard()
 	}
@@ -224,6 +226,7 @@ func netplayRebuildRows(force bool) {
 		strconv.FormatUint(lanRev, 10), strconv.FormatUint(onlineRev, 10), strconv.FormatUint(gameLib.scanGen, 10),
 		strconv.Itoa(gameLib.lib.Total),
 		netplayPanel.address, netplayRelayFor(appConfig).ID,
+		strconv.FormatUint(netplayLinkRev(), 10), localIPv4(),
 	}, "|")
 	if !force && sig == netplayPanel.rowsSig {
 		return
@@ -239,9 +242,11 @@ func netplayRebuildRows(force bool) {
 		{kind: netplayRowHostLAN, key: "host-lan", label: "Host on this network"},
 		{kind: netplayRowHostOnline, key: "host-online", label: "Host online"},
 	}
-	rows[0].detail = netplayHostLANDetail()
+	rows[0].detail = netplayPlayersNote(game.System) + netplayHostLANDetail()
 	relay := netplayRelayFor(appConfig)
 	rows[1].detail = "Friends anywhere join through the " + relay.Label + " relay — no router setup"
+	// Link cable (Game Boy) or wireless adapter (GBA) rows (netplay_link_ui.go).
+	rows = append(rows, netplayLinkRows()...)
 
 	index := netplayLibraryIndex()
 	// One RetroArch lookup and one core-folder listing per rebuild, shared by
@@ -458,6 +463,9 @@ func netplayMove(delta int) {
 
 // netplaySide is Left/Right: on the online-host row it picks the relay.
 func netplaySide(config *Config, delta int) {
+	if netplayLinkSide(delta) { // the player slot on a join row (netplay_link_ui.go)
+		return
+	}
 	row, ok := netplayCurrentRow()
 	if !ok || row.kind != netplayRowHostOnline {
 		return
@@ -476,7 +484,7 @@ func netplayCurrentRow() (netplayRow, bool) {
 }
 
 func netplayEditAddress() {
-	if row, ok := netplayCurrentRow(); ok && row.kind == netplayRowAddress {
+	if row, ok := netplayCurrentRow(); ok && (row.kind == netplayRowAddress || row.kind == netplayRowLinkAddress) {
 		vkOpenNetplay()
 	}
 }
@@ -509,6 +517,8 @@ func netplayActivate(config *Config) {
 			return
 		}
 		netplayStartJoin(netplayPanel.address, config)
+	default:
+		netplayLinkActivate(row, config) // link rows (netplay_link_ui.go)
 	}
 }
 
@@ -597,6 +607,9 @@ func netplayJoinSubmit(raw string) {
 		return
 	}
 	netplayPanel.address = text
+	if netplayLinkJoinSubmit(text, appConfig) { // typed on a link row (netplay_link_ui.go)
+		return
+	}
 	netplayStartJoin(text, appConfig)
 }
 
@@ -710,7 +723,7 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 			labelColor = ColorTextSecondary()
 			detailColor = WarningInk()
 		}
-		label := row.label
+		label := row.label + netplayLinkRowSuffix(row)
 		if row.kind == netplayRowHostOnline {
 			label += " · " + netplayRelayFor(config).Label
 		}
@@ -753,6 +766,9 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 			hint = hintLine(FooterHint{"A", "Refresh"}, FooterHint{"B", "Close"})
 		case netplayRowRoom:
 			hint = hintLine(FooterHint{"A", "Join"}, FooterHint{"Y", "Refresh online"}, FooterHint{"B", "Close"})
+		}
+		if h := netplayLinkHint(row); h != "" { // link rows, player slots (netplay_link_ui.go)
+			hint = h
 		}
 	}
 	hintColor := ColorTextSecondary()

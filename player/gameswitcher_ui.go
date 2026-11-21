@@ -3,8 +3,7 @@ package main
 // gameswitcher_ui.go — drawing the Game switcher (gameswitcher.go).
 //
 // One row of cards across the screen, the game in view in the middle at full
-// size and its neighbours smaller and dimmed on either side, the way NextUI
-// and Onion show it. Each card is a picture of where that game was left — the
+// size and its neighbours smaller and dimmed on either side. Each card is a picture of where that game was left — the
 // state screenshot RetroArch wrote beside its save — letterboxed on a dark
 // "screen", or its box art, or for a game with neither a plain card with its
 // console's name. Under the strip: the title, the console and when the game

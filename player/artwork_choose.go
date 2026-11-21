@@ -357,6 +357,11 @@ type artChooseCandidate struct {
 	path  string // the Imgs file; "" for a server cover
 	local bool
 	data  []byte // a server cover once downloaded for its preview
+	// A LaunchBox match, with the ROM's region tags, and the row that
+	// searches LaunchBox (artwork_screenscraper_ui.go).
+	lb     *launchBoxResult
+	tags   []string
+	search bool
 }
 
 var artChoose struct {
@@ -482,6 +487,7 @@ func artChooseGather(rom scannedROM, stem string) ([]artChooseCandidate, string)
 	if len(local) == 0 {
 		notes = append(notes, "no picture in the Imgs folder is named like it")
 	}
+	out = append(out, artChooseLaunchBoxRow())
 	note := ""
 	if len(notes) > 0 {
 		note = strings.Join(notes, "; ")
@@ -585,8 +591,18 @@ func artChooseRequestPreview() {
 		var pic *image.NRGBA
 		var data []byte
 		var err error
-		if cand.local {
+		if cand.search {
+			err = os.ErrNotExist // the search row has no picture
+		} else if cand.local {
 			pic, err = decodeLibraryArt(cand.path, ctx)
+		} else if cand.lb != nil {
+			data = cand.data
+			if data == nil {
+				data, err = artChooseLaunchBoxPreview(ctx, *cand.lb, cand.tags)
+			}
+			if err == nil {
+				pic, err = artChooseDecodeBytes(ctx, data)
+			}
 		} else {
 			data = cand.data
 			if data == nil {
@@ -627,6 +643,10 @@ func artChooseRequestPreview() {
 // scaled down and saved as PNG, since the game-art folder's covers are .png
 // files.
 func artChooseCoverBytes(ctx context.Context, cand artChooseCandidate, collection string) ([]byte, error) {
+	if cand.lb != nil {
+		// The full front box, not the preview's smaller picture.
+		return launchBoxCoverFor(ctx, *cand.lb, cand.tags)
+	}
 	if !cand.local {
 		if cand.data != nil {
 			return cand.data, nil
@@ -677,6 +697,11 @@ func artChooseShrinkToPNG(ctx context.Context, data []byte) ([]byte, error) {
 func artChooseApply() {
 	i := artChoose.cursor
 	if artChoose.loading || artChoose.saving || i < 0 || i >= len(artChoose.cands) {
+		return
+	}
+	if artChoose.cands[i].search {
+		PlayActivateSound()
+		artChooseOpenLaunchBoxSearch()
 		return
 	}
 	rom := artChoose.rom
@@ -829,7 +854,7 @@ func artworkRematch(rom scannedROM, alias string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), artChooseTimeout)
 	defer cancel()
-	data, err := fetchROMArtworkFor(ctx, nil, artworkBaseURL, rom, romGameStem(rom.Path))
+	data, err := fetchROMCoverAllSources(ctx, nil, artworkBaseURL, rom, romGameStem(rom.Path))
 	if err == nil {
 		err = gmetaWriteCache(dest, data)
 	}
@@ -1003,10 +1028,7 @@ func renderArtChooseSheet(renderer *sdl.Renderer, config *Config) {
 			if selected {
 				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, focusColor)
 			}
-			source := "Thumbnail server"
-			if cand.local {
-				source = "Imgs folder on the card"
-			}
+			source := artChooseSourceLabel(cand)
 			renderText(renderer, config, medium, ellipsize(medium, cand.name, rect.W-28), ColorTextPrimary(), rect.X+14, rect.Y+6)
 			renderText(renderer, config, font, source, ColorTextTertiary(), rect.X+14, rect.Y+6+medH+2)
 		}

@@ -137,6 +137,8 @@ host_go() {
 			-e JUKAHUB_GOOGLE_CLIENT_ID="${JUKAHUB_GOOGLE_CLIENT_ID:-}" \
 			-e JUKAHUB_GOOGLE_CLIENT_SECRET="${JUKAHUB_GOOGLE_CLIENT_SECRET:-}" \
 			-e JUKAHUB_MS_CLIENT_ID="${JUKAHUB_MS_CLIENT_ID:-}" \
+			-e JUKAHUB_SS_DEVID="${JUKAHUB_SS_DEVID:-}" \
+			-e JUKAHUB_SS_DEVPASSWORD="${JUKAHUB_SS_DEVPASSWORD:-}" \
 			-e OWNER="$hand_back" \
 			-v "$repo:$repo" \
 			-v "$goroot:$goroot:ro" \
@@ -274,6 +276,10 @@ inside_go() {
 	# Outlook sign-in for Mail (docs/EMAIL_CALENDAR.md), the same way.
 	if [ -n "${JUKAHUB_MS_CLIENT_ID:-}" ]; then
 		google="$google -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID"
+	fi
+	# ScreenScraper box art (docs/BOX_ART.md), the same way.
+	if [ -n "${JUKAHUB_SS_DEVID:-}" ]; then
+		google="$google -X main.screenScraperDevID=$JUKAHUB_SS_DEVID -X main.screenScraperDevPassword=${JUKAHUB_SS_DEVPASSWORD:-}"
 	fi
 	run_stoppable go build -v -buildvcs=false -tags dynamic \
 		-ldflags "-s -w -X main.buildDate=$BUILD_DATE$google" \

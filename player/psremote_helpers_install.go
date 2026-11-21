@@ -431,6 +431,12 @@ func psHelpersStartFor(mode psHelperStartMode, moonlight bool) bool {
 	if psHelperJob.running {
 		return true
 	}
+	// Kiosk mode: no install starts while locked, from the panel opening, a
+	// press, pairing or the background try alike (uimode.go). Silent: some of
+	// them are goroutines; the install row's press says so itself.
+	if !uiModeAllows(uiFeatSetup) {
+		return false
+	}
 	if last := psHelperJob.run; last != nil && last.err != nil {
 		refused := errors.Is(last.err, errPSHelpersWontRun)
 		if mode == psStartAuto && (refused || time.Since(psHelperJob.endedAt) < psHelperAutoRetry) {
@@ -1858,6 +1864,9 @@ func psPanelInstallHelpers() {
 	}
 	if !psHelpersRunning() && !IsOnline() {
 		ShowToast(psHelperFailToast("", errPSHelpersNoInternet), ToastKindWarning)
+		return
+	}
+	if !uiModeGate(uiFeatSetup) { // Kiosk: says why nothing installs (uimode.go)
 		return
 	}
 	PlayActivateSound()

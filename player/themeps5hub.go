@@ -961,7 +961,7 @@ func homeHubRecentNow(now time.Time) {
 		return
 	}
 	c.at = now
-	games := recentGames()
+	games := uiModeKidRecents(recentGames()) // Kid mode: kids' games only (uimode_kids.go)
 	c.ok = len(games) > 0
 	if !c.ok {
 		c.title, c.ago = "", ""

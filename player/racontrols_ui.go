@@ -52,7 +52,8 @@ func gameControlsConsoleOptions(c *Config) []setOption {
 	out = append(out, setOption{Value: "", Label: "All consoles", Note: "The buttons every console starts with"})
 	for _, s := range raTuneSystems {
 		note := ""
-		if gameButtonsConsoleOwn(c, s.Name) != "" || gameTurboConsoleOwn(c, s.Name) != "" {
+		if gameButtonsConsoleOwn(c, s.Name) != "" || gameTurboConsoleOwn(c, s.Name) != "" ||
+			gameDpadConsoleOwn(c, s.Name) != "" || raSticksLeftConsoleOwn(c, s.Name) != "" {
 			note = "Has its own buttons"
 		}
 		out = append(out, setOption{Value: s.Name, Label: s.Name, Note: note})
@@ -113,7 +114,10 @@ func gameControlsSettingsRows() []setRow {
 				if gameControlsScope == "" {
 					return "RetroArch games · pick a console to give it its own buttons and turbo"
 				}
-				return "The next two rows change " + gameControlsScope + " games only"
+				if stickHardware() { // + Left stick as D-pad (rasticks.go)
+					return "The next four rows change " + gameControlsScope + " games only"
+				}
+				return "The rows below change " + gameControlsScope + " games only"
 			},
 			Options:    gameControlsConsoleOptions,
 			Sheet:      gameControlsConsoleOptions,
@@ -176,6 +180,10 @@ func gameControlsSettingsRows() []setRow {
 				gameControlsToast("Turbo", label)
 			},
 		},
+		// The D-pad as the left stick, per console (racontrols_dpad.go).
+		gameDpadStickSettingsRow(),
+		// The left stick as the D-pad, per console; stick handhelds (rasticks.go).
+		raSticksLeftRow(),
 		{
 			ID: "gameControlsTurboSpeed", Label: "Turbo speed", Kind: setKindChoice, Clamp: true,
 			Detail:  setStatic("How fast a turbo button fires, in every console"),
@@ -188,6 +196,8 @@ func gameControlsSettingsRows() []setRow {
 				setToast("Turbo speed: " + gameTurboSpeedLabel(value))
 			},
 		},
+		// PlayStation only: DualShock for analog games (psxanalog_ui.go).
+		psxAnalogSettingsRow(),
 	}
 }
 

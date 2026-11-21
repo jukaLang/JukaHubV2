@@ -15,8 +15,8 @@ package main
 //     a DRM/KMS display, a sysfs backlight, an AXP717 PMIC, an AIC8800D80
 //     Wi-Fi/Bluetooth chip, a pwm fan, and a 5.15 BSP kernel.
 //
-// The table is what was published or seen on the devices (TrimUI's specs,
-// NextUI, spruceOS, Knulli), gathered for the 2026-11-17 driver pass. It is not
+// The table is what was published or seen on the devices (TrimUI's specs and
+// the devices themselves), gathered for the 2026-11-17 driver pass. It is not
 // proof: every driver still probes its node first, and uses the table only to
 // pick an order ("try the sysfs backlight first") or to say "this model has no
 // fan" instead of "fan not found". A zero field means "not known".
@@ -47,8 +47,8 @@ const (
 	// GPU).
 	gpuStackPowerVRFbdev deviceGPUStack = "powervr-fbdev"
 	// gpuStackMaliDRM is the A523's Mali-G57 through the vendor's kbase driver
-	// (/dev/mali0) with a DRM/KMS display (/dev/dri/card0). NextUI notes that
-	// the kernel blanks the panel when the display is released.
+	// (/dev/mali0) with a DRM/KMS display (/dev/dri/card0). The
+	// kernel blanks the panel when the display is released.
 	gpuStackMaliDRM deviceGPUStack = "mali-drm"
 )
 
@@ -147,7 +147,7 @@ var deviceHWTable = []deviceHW{
 	{
 		// The Brick Pro is the Brick's A133P and GPU on a 4.9 kernel, with a
 		// 3.95" panel at the Brick's resolution, Hall sticks with RGB rings,
-		// USB-C video out, and a motor NextUI caps at 2.5 V.
+		// USB-C video out, and a rumble motor capped at 2.5 V.
 		Model: DeviceTrimuiBrickPro, Code: "TG4040", CodeAliases: []string{"TG4070"}, Platform: "tg5040",
 		SoC: socA133P, SoCTree: "sun50iw10",
 		Clusters: []deviceCPUCluster{{Policy: "policy0", Cores: 4, Core: "Cortex-A53", MaxMHz: 1800}},

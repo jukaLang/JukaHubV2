@@ -939,6 +939,9 @@ func libIndexSameRoots(a, b []string) bool {
 // content keys its build made. Off the render thread, after a build.
 func libIndexSaveLibrary(roots []string, lib gameLibraryReport) {
 	libIndexKeepContentKeys(lib)
+	// Recently added files each game under the scan it first turned up in
+	// (autocoll.go).
+	autoCollNoteLibrary(lib)
 	data, err := json.Marshal(libIndexSnap{V: libIndexSchema, Roots: roots, Lib: lib})
 	if err != nil {
 		logDebug("library", "library index: the library cannot be kept: %v", err)

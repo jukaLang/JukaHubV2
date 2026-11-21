@@ -303,6 +303,7 @@ func xpackDescribeLines(c *Config, e xpackEntry) []string {
 	for _, sc := range e.Scenes {
 		lines = append(lines, "Adds a screen: "+sc.Name)
 	}
+	lines = append(lines, lookpackDescribeLines(e)...)
 	return lines
 }
 
@@ -913,7 +914,7 @@ func xpackDrawCard(renderer *sdl.Renderer, c *Config, f xpackKitFonts, card xpac
 		size := min(inner.H/2, 44)
 		DrawHomeIcon(renderer, "plus", sdl.Rect{X: inner.X + (inner.W-size)/2, Y: inner.Y + (inner.H-size)/2, W: size, H: size}, focused)
 	} else {
-		xpackDrawPreview(renderer, c, card.preview, inner)
+		lookpackDrawPreviewOr(renderer, c, card, inner)
 		title, detail = card.entry.Manifest.Name, card.summary
 		if card.entry.Manifest.ID == xpackActiveID(c) {
 			pw, _ := setPillSize(f.small, "On")
@@ -1214,7 +1215,7 @@ func xpackDrawPane(renderer *sdl.Renderer, c *Config, f xpackKitFonts, area sdl.
 		y = xpackKitText(renderer, f.big, m.Name, x, y, w, ColorTextPrimary()) + 2
 		y = xpackKitText(renderer, f.small, card.byline, x, y, w, ColorTextTertiary()) + 10
 		pvH := min(w*9/20, area.H/4)
-		xpackDrawPreview(renderer, c, card.preview, sdl.Rect{X: x, Y: y, W: w, H: pvH})
+		lookpackDrawPreviewOr(renderer, c, card, sdl.Rect{X: x, Y: y, W: w, H: pvH})
 		y += pvH + 10
 		y = xpackDrawSwatches(renderer, card.preview, x, y) + 6
 		for _, line := range xpackUI.descWrap.get(f.body, m.Description, w, 3) {

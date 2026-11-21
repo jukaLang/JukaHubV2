@@ -28,7 +28,7 @@ or kernel sources. So this image boots the Smart Pro's **own** bootloader,
 kernel, drivers and system libraries, copied from the device itself, and
 replaces only the startup and the stock menu with JukaHub. The display, GPU,
 sound, sticks, Wi-Fi and battery therefore run on exactly the software that
-already runs them on your device. Community systems such as Knulli also boot
+already runs them on your device. Other community systems also boot
 the Smart Pro from SD with the stock firmware's own bootloader and kernel; they
 take them from TrimUI's firmware file, this image from the device's internal
 storage, which is the part the first boot has to prove (see the release gate).

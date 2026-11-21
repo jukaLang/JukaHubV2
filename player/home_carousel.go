@@ -296,6 +296,8 @@ func (h *HomeLayout) carRender(renderer *sdl.Renderer, fonts HomeFonts, data Hom
 			h.drawHomeWidget(renderer, fonts, homeTileWidgetName(t.Ref), paint, draw, isFocus, pressed)
 		case homeTileApp:
 			h.drawHomeAppTile(renderer, fonts, paint, draw, isFocus, pressed, t.Dim)
+		case homeTileGame:
+			h.gamePinPaint(renderer, fonts, t, paint, draw, isFocus, pressed) // gamepin.go
 		case homeTileAdd:
 			h.drawEditAddTile(renderer, fonts, paint, draw, isFocus, pressed)
 		}

@@ -190,6 +190,7 @@ func currentGameSystems() []librarySystem {
 	// when no tag is chosen.
 	systems := filterHiddenLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), key.showHidden)
 	systems = gmetaFilterSystems(filterLibrarySystems(systems, gameLib.query))
+	systems = uiModeKidSystems(systems) // Kid mode: the games for kids only (uimode_kids.go)
 	gameLib.systemsCache, gameLib.systemsKey, gameLib.systemsValid = systems, key, true
 	return systems
 }
@@ -221,7 +222,7 @@ func filterLibrarySystems(systems []librarySystem, query string) []librarySystem
 		if system.Name == continueSystemName {
 			continue
 		}
-		consoleMatch := strings.Contains(normalizeGameSearch(system.Name), needle)
+		consoleMatch := strings.Contains(normalizeGameSearch(system.Name), needle) || strings.Contains(normalizeGameSearch(consoleDisplayName(system.Name)), needle)
 		games := make([]libraryGame, 0, len(system.Games))
 		for _, game := range system.Games {
 			if consoleMatch ||
@@ -462,6 +463,7 @@ func closeGameLibraryPanel() {
 	libIndexForgetEarly() // an unchecked last library is not a scan (libindex.go)
 	invalidateGameLibrarySystemsCache()
 	closeGameLibraryArt()
+	artStyleBgFree() // console backgrounds' textures (artstyle.go)
 	PlayBackSound()
 }
 
@@ -500,6 +502,7 @@ func startGameLibraryScan() {
 	html5DemoRoot := html5DataRoot()
 	artRoot := libraryArtworkRoot()
 	builtInScenes := builtInScenesPresent(appConfig)
+	librarySortArticlesSync(appConfig) // the build sorts off this thread (libsort_articles.go)
 	// Copy the playtime map on the render thread; the background build must not
 	// read it while the ticker is writing it. The snapshot is never nil, so the
 	// goroutine never falls back to reading the live ledger.
@@ -515,6 +518,8 @@ func startGameLibraryScan() {
 		// Through the library index: only folders that changed are read.
 		report := libIndexScan(roots)
 		romScanPublish(roots, signature, report.Games)
+		// Overlays/<Console> folders for the consoles found (useroverlays.go).
+		userOverlaysAfterScan(roots, report.Games)
 		// Resolved once against the whole scan, so the Android row below gets
 		// no bare-title figure a ROM console already took.
 		seconds := libraryPlaytimeForTitles(seconds, libraryScanTitleConsoles(report.Games))
@@ -696,6 +701,10 @@ func gameLibraryMove(dx, dy int) {
 		PlayNavSound()
 		return
 	}
+	// Cover Flow and the Cube have their own steps (game_library_cube.go).
+	if gameLibraryLayoutMove(dx, dy) {
+		return
+	}
 	if libraryLayoutMode() == libraryLayoutHorizontal {
 		if dy < 0 {
 			gameLib.focus = 0
@@ -760,7 +769,10 @@ func fetchMissingLibraryArtwork() {
 	report := libIndexScan(romLibraryRoots())
 	missing := romsMissingArtwork(report.Games, artRoot)
 	if len(missing) == 0 {
-		ShowToast("Every scanned game already has box art.", ToastKindSuccess)
+		// Settings → Game art → Art type: screenshots or title screens too (artstyle_fetch.go).
+		if !artStyleFillQueue(report.Games, 0) {
+			ShowToast("Every scanned game already has box art.", ToastKindSuccess)
+		}
 		return
 	}
 	// The console on screen first, then every console in turns, so the one
@@ -774,6 +786,7 @@ func fetchMissingLibraryArtwork() {
 		return
 	}
 	ShowToast("Fetching "+pluralizeCount(len(missing), "missing cover", "missing covers")+" — L1 / F stops and resumes", ToastKindInfo)
+	artStyleFillQueue(report.Games, len(missing)) // queued behind the covers (artstyle_fetch.go)
 }
 
 // recountLibraryArtwork refreshes the HasArt flags and the completeness counts
@@ -1291,7 +1304,7 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 		return
 	}
 
-	tex := libraryArtTexture(renderer, game.Art)
+	tex := libraryArtTexture(renderer, artStyleArtPath(game)) // box art, or the Art type's picture (artstyle.go)
 	if tex != nil {
 		_, _, tw, th, err := tex.Query()
 		if err == nil && tw > 0 && th > 0 {
@@ -1311,7 +1324,7 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 				W: dw,
 				H: dh,
 			}
-			renderer.Copy(tex, nil, &dst)
+			artStyleDrawFitted(renderer, tex, rect, dst) // Art width / corner radius (artstyle.go)
 			return
 		}
 	}
@@ -1768,7 +1781,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 		bottom -= 2
 	}
 	nameTop := rect.Y + pad + badge + 4
-	font, lineH, lines := glassTileLabel(config, system.Name, textW, bottom-nameTop, 20)
+	font, lineH, lines := glassTileLabel(config, consoleDisplayName(system.Name), textW, bottom-nameTop, 20)
 	if font == nil || len(lines) == 0 {
 		// Too little room under the badge for a line (large text, a small
 		// canvas): the name still shows, on one line over the badge's corner,
@@ -1777,7 +1790,7 @@ func drawGameLibrarySystemTile(renderer *sdl.Renderer, config *Config, system li
 		if font == nil {
 			return
 		}
-		lineH, lines = int32(font.Height()), []string{ellipsize(font, system.Name, textW)}
+		lineH, lines = int32(font.Height()), []string{ellipsize(font, consoleDisplayName(system.Name), textW)}
 	}
 	y := bottom - int32(len(lines))*lineH
 	for _, line := range lines {
@@ -1834,6 +1847,8 @@ func gameLibraryFooterHints(config *Config) []FooterHint {
 		// B second: the planner drops hints from the end on a narrow
 		// footer, and the way back must be the last to go.
 		hints := []FooterHint{{"A", "Open"}, {"B", "Consoles"}}
+		// The Cube's Left/Right change console (game_library_cube.go).
+		hints = append(hints, libraryLayoutPageHints()...)
 		// X is only advertised while LAN Play is on: a footer that offers a
 		// switched-off feature teaches a button that answers with a toast.
 		if netplayEnabled(config) {
@@ -1902,12 +1917,14 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !hasSystem {
 		gameLib.focus = 0
 	}
+	// A console's background, and the Background art style's picture (artstyle.go).
+	artStyleDrawLibraryBackdrop(renderer, config, system, hasSystem && gameLib.focus == 1, sdl.Rect{X: 0, Y: top, W: screenWidth, H: screenHeight - top})
 
 	margin := scaleX(homeSideMargin, screenWidth)
 	innerW := screenWidth - 2*margin
 	header := UIPanelHeader("Games", gameLibraryStatus(), "gamepad")
 	if gameLib.focus == 1 {
-		header = UIPanelHeader(system.Name, gameLibrarySystemStatus(system), librarySystemGlyph(system.Name))
+		header = UIPanelHeader(consoleDisplayName(system.Name), gameLibrarySystemStatus(system), librarySystemGlyph(system.Name))
 	}
 	header.X, header.Y, header.W = margin, top+6, innerW
 	band := uiPageHeaderMetricsFor(config, header)
@@ -1963,6 +1980,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		drawGameLibraryScrubBubble(renderer, config, gameLib.listRect)
 	}
 	narrateGameLibrary(systems, system, hasSystem) // spoken navigation (narrate_hooks.go)
+	gameWarmNoteLibrary()                          // the highlighted game's files warmed up (gamewarm.go)
 
 	peerDrawFooter(renderer, config, gameLibraryFooterHints(config))
 	// A game's page, its tag sheet and the tag filter's chooser sit on the
@@ -1997,8 +2015,10 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 	if body.W < 760 || artW < 120 {
 		artW = 0
 	}
+	artW = artStylePreviewWidth(body, artW) // Game art off, Background style, Art width (artstyle.go)
 	gameW := body.W - artW - gap
-	if artW == 0 || gameW < 280 {
+	if artW == 0 || gameW < 280 || libraryLayoutWide(libraryLayoutMode()) {
+		// Cover Flow and the Cube draw the big cover themselves.
 		gameW, artW = body.W, 0
 	}
 	gameX := body.X
@@ -2067,7 +2087,7 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 			// The focused row's long title scrolls (titlescroll.go).
 			titleScrollText(renderer, config, medium, game.Label(), ColorTextPrimary(),
 				rect.X+14, rect.Y+rows.titleY, rect.W-28, idx == gameLib.cursor && gameLib.focus == 1)
-			detail := game.System + " · " + filepath.Base(game.Path)
+			detail := consoleDisplayName(game.System) + " · " + filepath.Base(game.Path)
 			if builtIn, ok := builtInLibraryGameFor(game); ok {
 				detail = builtIn.detail
 			}
@@ -2110,7 +2130,11 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 	// One call per frame decides whether the focused game's snap should run,
 	// so every way the focus can move (pad, mouse, search, rescan) is covered by
 	// the same rule instead of each path remembering to arm it.
-	snapPreviewSync(time.Now())
+	if artStyleHidesPreview() {
+		snapPreviewStop() // Game art off / Background style: no preview to play it in (artstyle.go)
+	} else {
+		snapPreviewSync(time.Now())
+	}
 	if artW <= 0 {
 		gameLib.artRect = sdl.Rect{}
 		return
@@ -2119,15 +2143,15 @@ func renderGameLibraryGames(renderer *sdl.Renderer, config *Config, system libra
 	if len(system.Games) > 0 {
 		preview = system.Games[gameLib.cursor]
 	}
-	rect := sdl.Rect{X: artX, Y: bodyY, W: artW, H: artW}
+	rect := sdl.Rect{X: artX, Y: bodyY, W: artW, H: artStylePreviewHeight(artW, bodyH)} // square unless Art width is wider (artstyle.go)
 	gameLib.artRect = rect
 	drawLibraryArt(renderer, config, rect, preview)
 	if preview.Label() != "" {
 		label := ellipsize(medium, preview.Label(), artW)
-		renderText(renderer, config, medium, label, ColorTextPrimary(), artX, bodyY+artW+12)
+		renderText(renderer, config, medium, label, ColorTextPrimary(), artX, bodyY+rect.H+12)
 		// Fitted like the title: "PlayStation Portable" alone is wider than a
 		// narrow preview column.
-		renderText(renderer, config, detailFont, ellipsize(detailFont, preview.System, artW), ColorTextTertiary(),
-			artX, bodyY+artW+12+medH+2)
+		renderText(renderer, config, detailFont, ellipsize(detailFont, consoleDisplayName(preview.System), artW), ColorTextTertiary(),
+			artX, bodyY+rect.H+12+medH+2)
 	}
 }

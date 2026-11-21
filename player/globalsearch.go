@@ -241,6 +241,7 @@ func homeSearchRun() {
 		src.apps = append(append([]FileEntry(nil), indexedApps...), builtinAppEntries(config)...)
 	}
 	src.games = append(recentGames(), indexedGames...)
+	uiModeSearchSources(&src) // Kiosk / Kid mode: games and allowed screens only (uimode.go)
 	gsResults = homeSearchResults(gsQuery, src)
 	homeSearch.gen = homeSearchIdx.gen.Load()
 	if gsCursor >= len(gsResults) {
@@ -497,6 +498,12 @@ func homeSearchController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		homeSearchClose()
 		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The Brick front key set to Search puts the sheet away (frontkeys.go).
+		if frontKeyIs(e.Button, frontActSearch) {
+			homeSearchClose()
+			PlayBackSound()
+		}
 	}
 	return true
 }

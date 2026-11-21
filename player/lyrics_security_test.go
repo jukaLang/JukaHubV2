@@ -30,3 +30,24 @@ func TestLoadLyricsUsesOnlyARegularSidecar(t *testing.T) {
 		}
 	}
 }
+
+// Lyrics tags inside a file are outside data: a timed tag is preferred and
+// parsed as LRC, plain text is spread over the track, metadata lines dropped.
+func TestEmbeddedLyricsFromProbe(t *testing.T) {
+	probe := `{"streams":[{"tags":{"LYRICS":"[00:02.00]sung\n[00:04.00]later"}}],
+		"format":{"duration":"100.0","tags":{"lyrics-eng":"plain one\nplain two","title":"x"}}}`
+	text, dur := lyricsFromProbe([]byte(probe))
+	if dur != 100 {
+		t.Fatalf("duration = %v", dur)
+	}
+	if lines := lyricsFromText(text, dur); len(lines) != 2 || lines[0].At != 2 || lines[0].Text != "sung" {
+		t.Fatalf("timed lyrics = %#v", lines)
+	}
+	plain := lyricsFromText("[ar:Someone]\nfirst\n\n second  \n", 100)
+	if len(plain) != 2 || plain[0].Text != "first" || plain[1].Text != "second" || plain[0].At < 3.9 || plain[0].At > 4.1 || plain[1].At <= plain[0].At {
+		t.Fatalf("plain lyrics = %#v", plain)
+	}
+	if text, _ := lyricsFromProbe([]byte(`{"format":{"tags":{"comment":"no"}}}`)); text != "" {
+		t.Fatalf("lyrics from a comment tag: %q", text)
+	}
+}

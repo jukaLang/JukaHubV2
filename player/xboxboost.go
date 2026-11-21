@@ -158,12 +158,13 @@ func xboxBoostSupported() bool {
 
 // xboxBoostKindForGame is a library game's kind: the Xbox row's games are
 // hakuX's (the handheld's only Xbox emulator). GameCube and Wii games, on a
-// handheld that plays them (dolphin.go), need the whole machine as much.
+// handheld that plays them (dolphin.go), and PS2 games (ps2.go) need the
+// whole machine as much.
 func xboxBoostKindForGame(game libraryGame) xboxBoostKind {
 	if strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) {
 		return xboxBoostGame
 	}
-	if dolphinPlaysSystemHere(game.System) {
+	if dolphinPlaysSystemHere(game.System) || ps2PlaysSystemHere(game.System) {
 		return xboxBoostGame
 	}
 	return xboxBoostNone
@@ -624,13 +625,20 @@ func xboxBoostSettingsRow() setRow {
 	}
 }
 
-// xboxBoostWhat names the games the boost is for: GameCube and Wii as well
-// where the handheld plays them.
+// xboxBoostWhat names the games the boost is for: GameCube, Wii and PS2 as
+// well where the handheld plays them.
 func xboxBoostWhat() string {
+	names := []string{"Xbox"}
 	if dolphinPlaysHere() {
-		return "Xbox, GameCube or Wii"
+		names = append(names, "GameCube", "Wii")
 	}
-	return "Xbox"
+	if ps2PlaysHere() {
+		names = append(names, "PS2")
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
 }
 
 // xboxBoostSettingDetail is the row's second line. Cheap: drawn every frame.

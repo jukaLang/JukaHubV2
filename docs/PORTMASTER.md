@@ -293,7 +293,7 @@ bug report's PortMaster section.
 > exact `ex_config` line in the current `launch.sh`, and the splash's process
 > (`love.<arch>` on `utils/pmsplash`) and the display devices the menu opens,
 > which the splash handling looks for. PortMaster 2026.09.19+
-> also counts no analog sticks on TrimUI (NX Redux PR #142); JukaHub does not
+> also counts no analog sticks on TrimUI; JukaHub does not
 > change that yet.
 
 ## Installing PortMaster

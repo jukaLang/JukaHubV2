@@ -30,6 +30,7 @@ const (
 	mumbleMsgUserRemove       = 8
 	mumbleMsgUserState        = 9
 	mumbleMsgPermissionDenied = 12
+	mumbleMsgPermissionQuery  = 20
 	mumbleMsgCodecVersion     = 21
 	mumbleMsgServerConfig     = 24
 )
@@ -56,6 +57,15 @@ const (
 	mumbleRejectServerPW    = 4
 	mumbleRejectNameInUse   = 5
 	mumbleRejectServerFull  = 6
+)
+
+// Channel permissions (Mumble's ChanACL bits) that opening a room touches.
+const (
+	mumblePermEnter        = 0x4
+	mumblePermMakeChannel  = 0x40
+	mumblePermMakeTemp     = 0x400
+	mumblePermRegister     = 0x40000
+	mumblePermSelfRegister = 0x80000
 )
 
 var errMumbleProto = errors.New("malformed voice server message")
@@ -178,13 +188,33 @@ func mumbleSelfMuteBody(session uint32, muted bool) []byte {
 	return w.b
 }
 
-// mumbleCreateRoomBody asks for a temporary channel: the server deletes it
-// when the last person leaves, and moves its creator in.
-func mumbleCreateRoomBody(parent uint32, name string) []byte {
+// mumbleCreateRoomBody asks for a new channel. A temporary one is deleted
+// when the last person leaves, and the server moves its creator in; a
+// lasting one (for servers that only allow those) has to be entered.
+func mumbleCreateRoomBody(parent uint32, name string, temporary bool) []byte {
 	var w pbWriter
 	w.varint(2, uint64(parent)) // parent
 	w.str(3, name)              // name
-	w.boolean(8, true)          // temporary
+	if temporary {
+		w.boolean(8, true) // temporary
+	}
+	return w.b
+}
+
+// mumbleRegisterBody asks the server to register this session under its
+// name and client certificate (what "Register" does in Mumble's apps).
+func mumbleRegisterBody(session uint32) []byte {
+	var w pbWriter
+	w.varint(1, uint64(session)) // session
+	w.varint(4, 0)               // user_id: 0 asks for a new registration
+	return w.b
+}
+
+// mumblePermissionQueryBody asks for this session's permissions in a
+// channel; the answer is a PermissionQuery with the bits.
+func mumblePermissionQueryBody(channel uint32) []byte {
+	var w pbWriter
+	w.varint(1, uint64(channel)) // channel_id
 	return w.b
 }
 
@@ -217,6 +247,7 @@ type mumbleUserMsg struct {
 	hasName, hasChannel  bool
 	selfMute, serverMute bool
 	hasSelfMute, hasMute bool
+	hasUserID            bool // the session is a registered user
 }
 
 func mumbleParseUser(b []byte) (mumbleUserMsg, error) {
@@ -232,6 +263,8 @@ func mumbleParseUser(b []byte) (mumbleUserMsg, error) {
 			if f.wire == 2 {
 				m.name, m.hasName = string(f.b), true
 			}
+		case 4:
+			m.hasUserID = true
 		case 5:
 			m.channel, m.hasChannel = uint32(f.u), true
 		case 6:

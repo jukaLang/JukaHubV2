@@ -156,7 +156,7 @@ var gamePageMoreUI struct {
 
 // gamePageMoreOpen opens the sheet for the page's game.
 func gamePageMoreOpen() {
-	if !gmetaUI.open {
+	if !gmetaUI.open || !uiModeGate(uiFeatSetup) { // Kiosk / Kid mode (uimode.go)
 		return
 	}
 	game := gmetaUI.game

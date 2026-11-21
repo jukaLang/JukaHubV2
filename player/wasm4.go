@@ -12,7 +12,7 @@ package main
 // taught the library that a .wasm is a WASM-4 game, in every folder.
 //
 // The console is built in now:
-//   - Library: Roms/WASM4 (the name Batocera and Knulli use; "wasm-4" and
+//   - Library: Roms/WASM4 (the name Batocera uses; "wasm-4" and
 //     "wasm 4" are aliases) is the "WASM-4" shelf, and a .wasm counts as a
 //     game only in that folder (romShelfRegister): anywhere else a .wasm is a
 //     web page's or a tool's module. The collection name is the libretro

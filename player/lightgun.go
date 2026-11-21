@@ -617,63 +617,25 @@ func lightgunPadBinds(cfg string) map[string]string {
 }
 
 // lightgunAutoconfigBinds fills the bindings retroarch.cfg leaves to the
-// pad's autoconfig profile (input_<button>_btn there). Only files named after
-// the TrimUI pad are read — RetroArch ships a thousand profiles, and reading
-// them all at a launch is not on. Card I/O; the launch path.
+// pad's autoconfig profile (input_<button>_btn there), found by raPadProfile
+// (rahotkeys_binds.go, shared with the custom hotkeys). Card I/O; the launch
+// path.
 func lightgunAutoconfigBinds(cfg, cfgPath string, have map[string]string) {
-	dir := filepath.Join(filepath.Dir(cfgPath), "autoconfig")
-	if v, ok := raConfigGet(cfg, "joypad_autoconfig_dir"); ok {
-		if d := videoFilterExpandDir(v, cfgPath); d != "" {
-			dir = d
-		}
+	path, text := raPadProfile(cfg, cfgPath)
+	if path == "" {
+		return
 	}
-	// The joypad driver's own folder first: sdl2 and udev number the same
-	// buttons differently.
-	joypad, _ := raConfigGet(cfg, "input_joypad_driver")
-	joypad = strings.ToLower(strings.TrimSpace(joypad))
-	dirs := []string{dir}
-	if entries, err := os.ReadDir(dir); err == nil {
-		for _, e := range entries {
-			if !e.IsDir() {
+	for _, names := range [][][2]string{lightgunBindNames, lightgunDpadNames} {
+		for _, n := range names {
+			if _, ok := have[n[1]]; ok {
 				continue
 			}
-			sub := filepath.Join(dir, e.Name())
-			if joypad != "" && strings.EqualFold(e.Name(), joypad) {
-				dirs = append([]string{sub}, dirs...)
-			} else {
-				dirs = append(dirs, sub)
+			if v, ok := raConfigGet(text, "input_"+n[1]+"_btn"); ok && lightgunBindUsable(v) {
+				have[n[1]] = strings.TrimSpace(v)
 			}
 		}
 	}
-	for _, d := range dirs {
-		entries, err := os.ReadDir(d)
-		if err != nil {
-			continue
-		}
-		for _, e := range entries {
-			name := strings.ToLower(e.Name())
-			if !e.Type().IsRegular() || !strings.HasSuffix(name, ".cfg") || !strings.Contains(name, "trimui") {
-				continue
-			}
-			data, err := ctrlLayoutReadSmall(filepath.Join(d, e.Name()))
-			if err != nil {
-				continue
-			}
-			text := string(data)
-			for _, names := range [][][2]string{lightgunBindNames, lightgunDpadNames} {
-				for _, n := range names {
-					if _, ok := have[n[1]]; ok {
-						continue
-					}
-					if v, ok := raConfigGet(text, "input_"+n[1]+"_btn"); ok && lightgunBindUsable(v) {
-						have[n[1]] = strings.TrimSpace(v)
-					}
-				}
-			}
-			logInfo("lightgun", "pad bindings the config leaves out read from %s", filepath.Join(d, e.Name()))
-			return
-		}
-	}
+	logInfo("lightgun", "pad bindings the config leaves out read from %s", path)
 }
 
 // lightgunCfgPlan is what one launch's gun needs from retroarch.cfg.

@@ -108,10 +108,10 @@ dpad_left dpad_right. "hold 500ms" waits for a held button, "double" for two
 taps, "l1+a" means hold L1 and press A.
 
 Targets: button:<button>, key:<key>, action:<name>, profile:next|prev|<name>,
-none. Actions: back confirm home start_menu quick_settings screenshot search
-context_menu favorite next_tab prev_tab page_up page_down next_item prev_item
-play_pause seek:-10s volume:+10 volume_up volume_down brightness:+10
-brightness_up brightness_down controls local_play pass_turn.
+none. Actions: back confirm home start_menu quick_settings quick_menu
+screenshot search context_menu favorite next_tab prev_tab page_up page_down
+next_item prev_item play_pause seek:-10s volume:+10 volume_up volume_down
+brightness:+10 brightness_up brightness_down controls local_play pass_turn.
 
 Lines that cannot be read are listed, with their line and column, on the
 Control profiles screen; the rest of the profile still works. Select + Start

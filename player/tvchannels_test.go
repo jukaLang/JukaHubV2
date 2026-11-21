@@ -99,3 +99,37 @@ func TestSaverRadioParseKeepsPlayableStations(t *testing.T) {
 		}
 	}
 }
+
+// Radio Browser's answers are outside data: only http(s) stream links that
+// are not playlists, each once; names cut to one short line; broken stations
+// and bad country codes dropped.
+func TestRadioDirParseStationsKeepsSafeStreams(t *testing.T) {
+	data := `[
+		{"name":"Good\nFM","url":"http://a.example/x.pls","url_resolved":"https://a.example/live","countrycode":"de","tags":"jazz,smooth","codec":"MP3","bitrate":128,"lastcheckok":1,"stationuuid":"ab-12"},
+		{"name":"Dup","url_resolved":"https://a.example/live","lastcheckok":1},
+		{"name":"Broken","url_resolved":"https://b.example/live","lastcheckok":0},
+		{"name":"Script","url_resolved":"javascript:alert(1)","lastcheckok":1},
+		{"name":"Playlist","url_resolved":"https://c.example/list.m3u","lastcheckok":1},
+		{"name":"Spaced","url_resolved":"https://d.example/a b","lastcheckok":1},
+		{"name":"","url_resolved":"http://e.example/stream","countrycode":"Germany","bitrate":"96"}]`
+	got, err := radioDirParseStations([]byte(data))
+	if err != nil || len(got) != 2 {
+		t.Fatalf("radioDirParseStations = %#v, %v", got, err)
+	}
+	if s := got[0]; s.Name != "Good FM" || s.URL != "https://a.example/live" || s.Country != "DE" || s.Bitrate != 128 || s.ID != "ab-12" {
+		t.Errorf("first station = %#v", s)
+	}
+	if s := got[1]; s.URL != "http://e.example/stream" || s.Country != "" || s.Name == "" || s.Bitrate != 96 {
+		t.Errorf("second station = %#v", s)
+	}
+	for _, h := range []string{"de1.api.radio-browser.info", "nl1.api.radio-browser.info."} {
+		if !radioDirHostValid(h) {
+			t.Errorf("%s refused", h)
+		}
+	}
+	for _, h := range []string{"all.api.radio-browser.info", "evil.example", "x.api.radio-browser.info.evil.example", "a.b.api.radio-browser.info"} {
+		if radioDirHostValid(h) {
+			t.Errorf("%s accepted as an API server", h)
+		}
+	}
+}

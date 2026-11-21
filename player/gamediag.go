@@ -297,8 +297,9 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	probation := false
 	// A Dolphin start that RetroArch's video driver could not draw proves
 	// nothing about the core build: the driver is switched below instead of
-	// the build being put back (dolphin_video.go).
-	if ownGame && !dolphinVideoFailedStart(d.game, d.launcher, d.logPath) {
+	// the build being put back (dolphin_video.go). The same for ARMSX2's
+	// renderer (ps2_video.go).
+	if ownGame && !dolphinVideoFailedStart(d.game, d.launcher, d.logPath) && !ps2VideoFailedStart(d.game, d.launcher, d.logPath) {
 		if outcome, why := gameDiagCoreOutcome(report, failed, code, sig); outcome != coreRunUnclear {
 			core, path := d.coreUsed()
 			if note := coreProbationJudge(core, path, outcome, why); note != "" {
@@ -323,6 +324,12 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 		// that failed, not a player who quit within seconds.
 		if code != 0 || failed || killed || brief {
 			if fix, ok := dolphinAfterGame(d.game, d.launcher, d.logPath); ok {
+				report.Issues = append([]launchIssue{fix}, report.Issues...)
+				strong = true
+			}
+			// ARMSX2's renderer that could not draw: the next one next
+			// time (ps2_video.go).
+			if fix, ok := ps2AfterGame(d.game, d.launcher, d.logPath); ok {
 				report.Issues = append([]launchIssue{fix}, report.Issues...)
 				strong = true
 			}
@@ -784,6 +791,7 @@ var gameDiagSystemExtTable = []struct {
 	{[]string{"nintendo ds", "nds"}, []string{".nds", ".dsi", ".ids", ".srl"}},
 	{[]string{"pc engine", "pce", "tg16"}, []string{".pce", ".sgx", ".cue", ".chd", ".ccd", ".m3u", ".toc", ".iso"}},
 	{[]string{"sega cd", "segacd", "mega cd", "megacd"}, []string{".cue", ".chd", ".iso", ".m3u", ".bin", ".img", ".ccd"}},
+	{[]string{"playstation 2", "ps2", "sony - playstation 2"}, []string{".iso", ".chd", ".cso", ".zso", ".cue", ".bin", ".m3u", ".elf", ".gz", ".mdf", ".img"}},
 	{[]string{"playstation", "ps", "ps1", "psx"}, []string{".cue", ".bin", ".img", ".chd", ".pbp", ".m3u", ".iso", ".ccd", ".mdf", ".toc", ".exe", ".cbn", ".ecm"}},
 	{[]string{"dreamcast", "dc"}, []string{".gdi", ".cdi", ".chd", ".cue", ".m3u", ".iso", ".elf", ".lst"}},
 	{[]string{"saturn", "ss"}, []string{".cue", ".chd", ".ccd", ".m3u", ".iso", ".mds", ".toc"}},

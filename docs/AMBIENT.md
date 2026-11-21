@@ -109,6 +109,29 @@ With `ambientMode: false` the starfield screensaver is the idle screen and its
 The timeout can be changed in Settings → Display → **Lock screen after** or from
 Quick Settings, in steps from 15 seconds up (25 by default). Start → Ambient still opens the dock screen manually in that case.
 
+## Game slideshow and game videos
+
+Settings → Power & battery → **Idle screen** has two more choices besides the
+clock dock and the starfield. Both are new and **not yet checked on a TrimUI**.
+
+- **Game slideshow** — a random game from your library every 8 seconds: its
+  gameplay picture or its cover, shown whole, drifting slowly and fading into
+  the next, with the game's name and console in a small caption.
+- **Game videos** — a random video snap of one of your games, muted, the next
+  one when it ends. It is only offered when the card has snaps (the same clips
+  the Games library previews: `game-snaps/<Console>/<game file name>.mp4` or
+  `.webm` in JukaHub's data folder). Without any for the games on the card,
+  the slideshow shows instead.
+
+Neither shows the time, the weather or the network, so a screenshot of them
+gives nothing away. Any press wakes the screen at once and stops the video.
+The idle low-power state still applies; while a video plays the processor
+keeps the same limit the dock keeps for music, so the clip stays smooth. With
+no game pictures at all the starfield shows.
+
+The choice is stored as `ambientMode: false` plus `idleScreenKind`: `stars`
+(the default), `slides` or `videos`.
+
 ## Related
 
 - [Controls](CONTROLS.md) — the rest of the device, screen by screen

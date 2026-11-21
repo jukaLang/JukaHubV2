@@ -1429,6 +1429,8 @@ func runFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec flo
 	// The same identity as the picture decoder (ffmpegStreamInputArgs).
 	args = append(args, ffmpegStreamInputArgs(path, sess.pageURL)...)
 	args = append(args, "-i", ffmpegReadableInput(ffmpegPath, path))
+	// The audio track picked in the sheet (videotracks.go); none keeps ffmpeg's.
+	args = append(args, videoTracksAudioMapArgs(sess)...)
 	// Sample 0 is the seek point, with silence over any gap, so the samples
 	// line up with the picture's frames (avsync.go); atempo then plays them at
 	// the session's speed, keeping the pitch.

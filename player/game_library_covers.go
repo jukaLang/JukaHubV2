@@ -42,6 +42,14 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 	if len(system.Games) == 0 || w <= 0 || h <= 0 {
 		return
 	}
+	switch layout {
+	case libraryLayoutFlow:
+		renderLibraryCoverFlow(renderer, config, system, x, y, w, h, font, medium) // game_library_flow.go
+		return
+	case libraryLayoutCube:
+		renderLibraryCube(renderer, config, system, x, y, w, h, font, medium) // game_library_cube.go
+		return
+	}
 	accent := installHighlight()
 	if layout == libraryLayoutHorizontal {
 		cardW := int32(150)
@@ -129,6 +137,6 @@ func renderGameCoverBrowser(renderer *sdl.Renderer, config *Config, system libra
 		textX := art.X + art.W + 15
 		textW := rect.X + rect.W - textX - 12
 		titleScrollText(renderer, config, medium, system.Games[idx].Label(), ColorTextPrimary(), textX, rect.Y+18, textW, idx == gameLib.cursor && gameLib.focus == 1)
-		renderText(renderer, config, font, ellipsize(font, system.Games[idx].System, textW), ColorTextTertiary(), textX, rect.Y+18+int32(medium.Height())+8)
+		renderText(renderer, config, font, ellipsize(font, consoleDisplayName(system.Games[idx].System), textW), ColorTextTertiary(), textX, rect.Y+18+int32(medium.Height())+8)
 	}
 }

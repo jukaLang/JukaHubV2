@@ -557,6 +557,7 @@ func chip8CreditPlay(game libraryGame, secs int64, firstFrom time.Time) {
 	}
 	d.Games[key] += secs
 	d.GameDays[playtimeTodayKey()] += secs
+	playtimePeriodsCredit(key, playtimeTodayKey(), secs) // the By game tab's days
 	trophyCountAdd(d, tkGameSecs, secs)
 	dailyChallengeCredit(game.Path, secs)
 	playtime.dirty = true

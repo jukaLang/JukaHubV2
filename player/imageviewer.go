@@ -9,7 +9,8 @@ package main
 // "fit": the draw clamped the scale back to the screen after applying it.
 //
 //	pad       L1/R1 zoom · D-pad pans when zoomed, browses when not · L2/R2
-//	          previous/next picture · Y Fit → Fill → 1:1 · X lock screen ·
+//	          previous/next picture · Y Fit → Fill → 1:1 · X options (rotate,
+//	          rename, delete, lock screen; imageviewer_edit.go) ·
 //	          Start marks it up in Paint · A hides the controls · B closes
 //	keyboard  +/- (and the wheel) zoom · arrows · 0 fit · 1 actual size ·
 //	          F mode · L lock screen · M mark up · H/Enter hide · PgUp/PgDn
@@ -299,6 +300,7 @@ func imgvReleaseTextures() {
 // closeImageViewer tears down the viewer (B, Escape, the Close chip).
 func closeImageViewer() {
 	wasRemote := imageViewerRemote
+	imgvEditForget()
 	imgvReleaseTextures()
 	imgvLoad.mu.Lock()
 	imgvLoad.gen++
@@ -844,6 +846,14 @@ func imgvController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil {
 		return false
 	}
+	// Rename's on-screen keyboard takes the pad while it is up, and the
+	// options sheet is modal over the picture (imageviewer_edit.go).
+	if virtualKeyboardActive {
+		return false
+	}
+	if imgvEditPad(e, config) {
+		return true
+	}
 	cx, cy := screenWidth/2, screenHeight/2
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
@@ -853,13 +863,10 @@ func imgvController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		imgv.hideUI = !imgv.hideUI
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_X:
-		// Keep the picture on the lock screen, or take it back if it already
-		// is the backdrop. A remote (chat) image has no file in Files, so the
-		// button stays inert for it.
-		if !imageViewerRemote {
-			PlayActivateSound()
-			toggleScreenlockFromViewer(config)
-		}
+		// The options sheet: Rotate right, Rename, Delete, the lock screen and
+		// Mark up. A remote (chat) image has no file in Files, so the button
+		// stays inert for it.
+		imgvEditOpen(config)
 	case sdl.CONTROLLER_BUTTON_Y:
 		imgvCycleMode()
 	case sdl.CONTROLLER_BUTTON_START:
@@ -889,6 +896,9 @@ func imgvController(e *sdl.ControllerButtonEvent, config *Config) bool {
 // imgvShoulder answers the triggers: previous and next picture, whatever the
 // zoom, so browsing never needs zooming back out first.
 func imgvShoulder(s padShoulder) {
+	if imgvEdit.open || virtualKeyboardActive {
+		return
+	}
 	switch s {
 	case padL2:
 		imageViewerStep(-1)
@@ -904,6 +914,10 @@ func imgvShoulder(s padShoulder) {
 // handleImageViewerInput answers the keyboard while the viewer is open.
 func handleImageViewerInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
+		return
+	}
+	// The options sheet and the editing keys (imageviewer_edit.go).
+	if imgvEditKey(e, config) {
 		return
 	}
 	cx, cy := screenWidth/2, screenHeight/2
@@ -957,7 +971,7 @@ func imgvWheel(notches int32) bool {
 	if imageViewerPath == "" {
 		return false
 	}
-	if notches != 0 {
+	if notches != 0 && !imgvEdit.open {
 		imgvZoomBy(int(notches), mouseX, mouseY)
 	}
 	return true
@@ -966,6 +980,10 @@ func imgvWheel(notches int32) bool {
 // imgvMouseDown answers a press: a chip runs its action, anything else starts
 // a drag (or, released without moving, toggles the controls).
 func imgvMouseDown(mx, my int32, config *Config) {
+	// The options sheet's rows and the More chip (imageviewer_edit.go).
+	if imgvEditMouse(mx, my, config) {
+		return
+	}
 	if !imgv.hideUI {
 		switch filesChipAt(imgv.chips, mx, my) {
 		case "close":
@@ -1034,6 +1052,8 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 	if renderer == nil {
 		return
 	}
+	// The options sheet goes over everything the viewer draws.
+	defer imgvEditRender(renderer, config)
 	texture := imageViewerTexture
 	texW, texH := imageViewerW, imageViewerH
 	if imageViewerRemote {
@@ -1136,6 +1156,8 @@ func imgvDrawChrome(renderer *sdl.Renderer, config *Config) {
 		}
 		chips = append(chips, filesChip{ID: "lock", Label: label, On: isLock})
 		chips = append(chips, filesChip{ID: "markup", Label: "Mark up"})
+		// Rotate, rename, delete (imageviewer_edit.go).
+		chips = append(chips, filesChip{ID: "options", Label: "More"})
 	}
 	chips = append(chips, filesChip{ID: "close", Label: "Close"})
 	chips, toolbarX := filesDrawToolbar(renderer, config, chips, screenWidth-margin, headerY+4, 36)
@@ -1212,7 +1234,7 @@ func imgvFooterHints() []FooterHint {
 	if !imageViewerRemote {
 		// Start (M on a keyboard) opens the picture in Paint (imgvMarkUp).
 		hints = append(hints,
-			FooterHint{Button: "X", Label: "Lock screen"},
+			FooterHint{Button: "X", Label: "Options"},
 			FooterHint{Button: "Start / M", Label: "Mark up"})
 	}
 	if len(imageViewerFiles) > 1 {

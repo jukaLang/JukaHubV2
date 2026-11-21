@@ -33,8 +33,8 @@ package main
 //     game is stopped again and the device goes back to sleep. Progress is
 //     never traded for battery.
 //
-// The delay runs from 15 minutes to 48 hours (the range NextUI's Auto Power
-// Off pak offers) and Quick Settings has it one press away: A turns it off
+// The delay runs from 15 minutes to 48 hours and Quick Settings has it one
+// press away: A turns it off
 // or back on at the last delay. Time asleep is read on two clocks, BOOTTIME
 // and the RTC that holds the alarm (powerSleepSlept), since a kernel that
 // does not add the suspend to BOOTTIME would hide the sleep. A sleep JukaHub
@@ -146,8 +146,8 @@ const (
 
 // sleepPowerOffSteps are the row's stops; 0 is Off. The short ones are for a
 // handheld put down "for a minute" whose RAM should not stay powered for
-// long, 48 h for one left asleep over a weekend: the range NextUI's Auto
-// Power Off pak offers (2026-11), around JukaHub's own 6 h default.
+// long, 48 h for one left asleep over a weekend, around JukaHub's own 6 h
+// default.
 var sleepPowerOffSteps = []time.Duration{
 	0, 15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour, 4 * time.Hour,
 	6 * time.Hour, 8 * time.Hour, 12 * time.Hour, 24 * time.Hour, 48 * time.Hour,
@@ -655,6 +655,10 @@ func quickSaveHeldGame(held *powerSleepHeld) (*quickResumeMarker, bool, string) 
 	if ok, why := retroArchNetCmdReady(); !ok {
 		return nil, false, why
 	}
+	if raachHardcoreRunning() {
+		// RetroArch would not load the state at power-on (raach_unlocks.go).
+		return nil, false, "RetroAchievements hardcore is on and its state could not come back"
+	}
 	marker, named := quickRunningGameMarker(cmds)
 	// The game runs again for the moment the save takes; the screen is off.
 	for _, ch := range held.children {
@@ -693,7 +697,9 @@ func quickAwaitGameCleanup() {
 // RetroArch launch and save-state resume is on (without auto-load the
 // relaunch would start from the title screen). Off the main thread.
 func quickRunningGameMarker(cmds []*exec.Cmd) (quickResumeMarker, bool) {
-	if !savestateResumeEnabled() {
+	// Hardcore RetroAchievements: RetroArch refuses the auto state, so no
+	// resume is promised (raach_unlocks.go).
+	if !savestateResumeEnabled() || raachHardcoreRunning() {
 		return quickResumeMarker{}, false
 	}
 	recent := recentGames()

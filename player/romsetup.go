@@ -219,6 +219,13 @@ var romSystemExtensions = map[string]map[string]bool{
 	"GameCube": {".iso": true, ".gcm": true, ".gcz": true, ".rvz": true, ".ciso": true, ".wia": true, ".tgc": true, ".dol": true, ".elf": true, ".m3u": true},
 	"Wii":      {".iso": true, ".wbfs": true, ".rvz": true, ".wia": true, ".gcz": true, ".ciso": true, ".wad": true, ".dol": true, ".elf": true, ".m3u": true},
 
+	// On the handheld, ARMSX2 (ps2.go) opens disc images (ISO, CHD, CSO, ZSO,
+	// a .cue with its tracks), homebrew (.elf) and a multi-disc .m3u. A .bin
+	// is left out: a CD game's .bin is a track its .cue lists, and a 4 MB .bin
+	// here is usually the BIOS, which the setup copies where the core reads
+	// it. A PC's PCSX2 keeps the general list (romListsFile).
+	"PlayStation 2": {".iso": true, ".chd": true, ".cso": true, ".zso": true, ".cue": true, ".m3u": true, ".elf": true},
+
 	// A Godot game is its .pck; the .runtime, .gptk and .png beside it are
 	// the port's side files (godot.go).
 	"Godot": {".pck": true},
@@ -246,6 +253,9 @@ func romListsFile(system, dir, path, ext string) bool {
 		return list
 	}
 	allowed, own := romSystemExtensions[system]
+	if own && system == ps2SystemName && ps2SoC() == "" {
+		own = false // PCSX2 on a PC opens what the general list holds
+	}
 	if !own {
 		return romFileExtensions[ext]
 	}
@@ -665,8 +675,10 @@ const artworkMissFile = ".missing-art.json"
 
 // artworkMissVersion stamps the not-found cache. It is bumped whenever title
 // matching changes: a title that was "not found" under the old lookup deserves
-// one more try instead of waiting out the artworkMissTTL window.
-const artworkMissVersion = 6
+// one more try instead of waiting out the artworkMissTTL window. 7: LaunchBox
+// (and ScreenScraper when signed in) answer for the thumbnail server's misses
+// (artwork_launchbox.go).
+const artworkMissVersion = 7
 
 // artworkVariantLimit caps how many names one ROM asks the thumbnail server
 // for. A library fetch walks every ROM, so a title that generates ten lookups
@@ -847,7 +859,9 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		if recent {
 			return artMissing
 		}
-		image, err := fetchROMArtworkFor(ctx, client, baseURL, rom, stem)
+		// ScreenScraper when signed in, the thumbnail server, then LaunchBox
+		// (artwork_launchbox.go).
+		image, err := fetchROMCoverAllSources(ctx, client, baseURL, rom, stem)
 		if err != nil {
 			// A 404 is a real answer worth remembering. A timeout or a dropped
 			// connection is not: retrying that next time is the whole point.
@@ -938,6 +952,7 @@ func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http
 		}()
 	}
 	wg.Wait()
+	artworkSourcesFlush() // the other sources' not-found caches (artwork_launchbox.go)
 	// Only stopArtworkFetch cancels ctx before this returns: a stop asked while
 	// the last few covers were in flight is still a stop.
 	return fetched, skipped, missing, ctx.Err() != nil

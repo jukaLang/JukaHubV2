@@ -746,9 +746,10 @@ func qsPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_BACK:
 		qsToggleOpen()
 		PlayBackSound()
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		// F2 on a Brick opened the panel, and the same key puts it away.
-		if brickHasFunctionKeys() {
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The Brick front key that opens the panel (F2 unless Settings →
+		// Controls says otherwise: frontkeys.go) puts it away.
+		if frontKeyIs(e.Button, frontActQS) {
 			qsToggleOpen()
 			PlayBackSound()
 		}

@@ -62,7 +62,10 @@ func exitChordPressed(e *sdl.ControllerButtonEvent) bool {
 	default:
 		return false
 	}
-	return exitChord.update(button, e.Type == sdl.CONTROLLERBUTTONDOWN, exitChordClock())
+	fired := exitChord.update(button, e.Type == sdl.CONTROLLERBUTTONDOWN, exitChordClock())
+	// Kiosk / Kid mode: the chord does not leave to the firmware's menu; it
+	// says "Locked" instead (uimode.go uiModeQuitOK).
+	return fired && uiModeQuitOK()
 }
 
 func (s *exitChordState) update(button uint8, down bool, now time.Time) bool {

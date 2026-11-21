@@ -41,9 +41,10 @@ func homeGlass(alpha uint8) sdl.Color {
 // homeCardFill is the resting tile fill (white 5%) and homeCardEdge its 8%
 // border, straight from the design sheet's --card / --card-border. A focused
 // tile is a clear step brighter (white ~10%, edge ~16%): at 13→20 the lift in
-// fill was below what a handheld panel shows at arm's length.
-func homeCardFill() sdl.Color      { return homeGlass(13) }
-func homeCardFillFocus() sdl.Color { return homeGlass(26) }
+// fill was below what a handheld panel shows at arm's length. The fills follow
+// Glass opacity (glassOpacityA, colourpick_theme.go).
+func homeCardFill() sdl.Color      { return homeGlass(glassOpacityA(13)) }
+func homeCardFillFocus() sdl.Color { return homeGlass(glassOpacityA(26)) }
 func homeCardEdge() sdl.Color      { return homeGlass(20) }
 func homeCardEdgeFocus() sdl.Color { return homeGlass(40) }
 

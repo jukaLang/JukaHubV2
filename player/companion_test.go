@@ -899,3 +899,101 @@ func TestCompanionDropRelPath(t *testing.T) {
 		t.Errorf("companionDropDirCheck: %+v", got)
 	}
 }
+
+// Renaming or deleting a folder JukaHub depends on needs "confirm": without it
+// the server answers 409 with the reason and changes nothing; with it the
+// same request goes through. An ordinary folder deeper down needs nothing
+// (companion_guard.go).
+func TestCompanionFilesImportantFolderNeedsConfirm(t *testing.T) {
+	card := t.TempDir()
+	for _, d := range []string{"Roms/GBA", "Roms/Mine/sub", "BIOS"} {
+		if err := os.MkdirAll(filepath.Join(card, filepath.FromSlash(d)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prev := companionFileShares
+	companionFileShares = func() []ftpShare {
+		return []ftpShare{{name: "Roms", dir: filepath.Join(card, "Roms")}, {name: "BIOS", dir: filepath.Join(card, "BIOS")}}
+	}
+	t.Cleanup(func() { companionFileShares = prev })
+	// The Files card asks the game profiles which folders run programs.
+	prevProfiles := gameProfilesDirOverride
+	gameProfilesDirOverride = t.TempDir()
+	invalidateGameProfileCache()
+	t.Cleanup(func() {
+		gameProfilesDirOverride = prevProfiles
+		invalidateGameProfileCache()
+	})
+	srv, _ := newTestCompanion(t)
+	post := func(path, body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		srv.handler().ServeHTTP(rec, companionRequest(http.MethodPost, path, "123456", strings.NewReader(body)))
+		return rec
+	}
+
+	rec := post("/api/files/rename", `{"path":"/Roms/GBA","name":"GBA2"}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rename without confirm: status %d (%s), want 409", rec.Code, rec.Body.String())
+	}
+	var ans struct {
+		NeedsConfirm bool   `json:"needsConfirm"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil || !ans.NeedsConfirm || !strings.Contains(ans.Reason, "Game Boy Advance") {
+		t.Fatalf("409 answer = %+v (%v), want needsConfirm with the console's name", ans, err)
+	}
+	if _, err := os.Stat(filepath.Join(card, "Roms", "GBA")); err != nil {
+		t.Fatalf("the folder changed without confirm: %v", err)
+	}
+	if rec = post("/api/files/rename", `{"path":"/Roms/GBA","name":"GBA2","confirm":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("rename with confirm: status %d (%s)", rec.Code, rec.Body.String())
+	}
+	if rec = post("/api/files/delete", `{"path":"/Roms/GBA2"}`); rec.Code != http.StatusConflict {
+		t.Fatalf("delete without confirm: status %d, want 409", rec.Code)
+	}
+	if rec = post("/api/files/delete", `{"path":"/Roms/GBA2","confirm":true}`); rec.Code != http.StatusOK {
+		t.Fatalf("delete with confirm: status %d (%s)", rec.Code, rec.Body.String())
+	}
+	if rec = post("/api/files/rename", `{"path":"/Roms/Mine/sub","name":"sub2"}`); rec.Code != http.StatusOK {
+		t.Fatalf("an ordinary folder asked for confirm: status %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	for _, c := range []struct {
+		segs  []string
+		dir   bool
+		wants string
+	}{
+		{[]string{"Apps", "JukaHub", "jukauser.json"}, false, "settings"},
+		{[]string{"Apps"}, true, "holds"},
+		{[]string{"PORTMASTER. "}, true, "PortMaster"},
+		{[]string{"Saves"}, true, "saves"},
+		{[]string{"Roms", ".hidden"}, true, ""},
+		{[]string{"Roms", "GBA", "game.gba"}, false, ""},
+		{[]string{"Music", "Album"}, true, ""},
+	} {
+		got := companionGuardReasonFor(c.segs, c.dir, nil)
+		if (c.wants == "") != (got == "") || !strings.Contains(got, c.wants) {
+			t.Errorf("companionGuardReasonFor(%q) = %q, want one with %q", c.segs, got, c.wants)
+		}
+	}
+}
+
+// Download logs masks what identifies the person and the place — the names
+// it is given, network names, e-mail, hardware and LAN addresses, tokens —
+// and keeps what explains a problem (logredact.go redactLogPersonal).
+func TestRedactLogPersonalMasksNamesAndAddresses(t *testing.T) {
+	names := logPersonalNames{Wifi: []string{"Smith Home 5G"}, Accounts: []string{"jukafan"}}
+	in := "wifi: join of Smith Home 5G failed; ssid=\"Cafe Net\" bssid=aa:bb:cc:dd:ee:ff ip 192.168.1.23 gw 10.0.0.1 dns 1.1.1.1\n" +
+		"ra: signed in as jukafan (jukafanatic stays) mail bob@example.com bt /org/bluez/hci0/dev_11_22_33_44_55_66 fe80::1c2b:3cff:fe4d:5e6f%wlan0 token=abc123secret\n"
+	out := redactLogPersonal(in, names)
+	for _, gone := range []string{"Smith Home 5G", "Cafe Net", "aa:bb:cc", "192.168.1.23", "10.0.0.1", "bob@example.com", "11_22_33", "fe80::1c2b", "abc123secret", "as jukafan "} {
+		if strings.Contains(out, gone) {
+			t.Errorf("%q survived:\n%s", gone, out)
+		}
+	}
+	for _, kept := range []string{"1.1.1.1", "jukafanatic", "wifi: join of", "[wifi]", "[account]", "[lan-ip]", "[mac]", "[email]", "dev_[mac]"} {
+		if !strings.Contains(out, kept) {
+			t.Errorf("%q missing:\n%s", kept, out)
+		}
+	}
+}

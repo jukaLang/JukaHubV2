@@ -261,7 +261,7 @@ var systemLauncherAliases = map[string][]string{
 	"Master System":        {"ms", "sms", "mastersystem", "smsplus", "gearsystem"},
 	"Game Gear":            {"gg", "gamegear"},
 	"PC Engine":            {"pce", "pcengine", "tg16", "turbografx16"},
-	"PlayStation 2":        {"ps2", "pcsx2", "aethersx2", "nethersx2"},
+	"PlayStation 2":        {"ps2", "pcsx2", "aethersx2", "nethersx2", "armsx2"},
 	"Neo Geo":              {"neogeo", "fbneo", "fbalpha"},
 	"GameCube":             {"gc", "gamecube", "ngc", "dolphin"},
 	"Wii":                  {"wii", "dolphin"},
@@ -654,6 +654,9 @@ func gameLaunchExec(launcher, name string, args []string) (*exec.Cmd, error) {
 // launchLibraryGame starts the game detached, records it in the recents list
 // and returns an error instead of toasting so the caller can pick the message.
 func launchLibraryGame(game libraryGame, launcher string) error {
+	if uiModeLaunchHeld(game) { // Kid mode: kids' games only, ports and Android too (uimode_kids.go)
+		return nil
+	}
 	// The Android row's games run through their game profile (AND-16).
 	if game.System == androidLibrarySystem {
 		return launchAndroidLibraryGame(game)
@@ -729,6 +732,12 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// from before its dual-core freeze fix, fetches what it lacks first and
 	// runs again from the main loop (dolphin.go).
 	if deferred, err := dolphinPrepareLibraryLaunch(game, launcher); err != nil || deferred {
+		return err
+	}
+	// A start in the ARMSX2 core without a core that loads here, its
+	// resources folder or a BIOS where it reads one gets them first and runs
+	// again from the main loop (ps2.go).
+	if deferred, err := ps2PrepareLibraryLaunch(game, launcher); err != nil || deferred {
 		return err
 	}
 	// A core that needs a newer glibc than the firmware's starts RetroArch on

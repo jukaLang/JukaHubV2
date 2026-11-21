@@ -39,6 +39,42 @@ func TestBatteryGuardActionFor(t *testing.T) {
 	}
 }
 
+// The levels Settings → Power picks (batterywarn.go) move the same decision.
+func TestBatteryGuardActionAtLevels(t *testing.T) {
+	tests := []struct {
+		name          string
+		percent       int
+		warn, save    int
+		charging      bool
+		gameRunning   bool
+		alreadyWarned bool
+		want          batteryGuardAction
+	}{
+		{"warn at a picked 20%", 20, 20, 3, false, false, false, batteryGuardWarn},
+		{"above a picked 20%", 21, 20, 3, false, false, false, batteryGuardIdle},
+		{"save at a picked 8%", 8, 5, 8, false, true, false, batteryGuardProtect},
+		{"save level above the warning, no game: quiet", 8, 5, 8, false, false, false, batteryGuardIdle},
+		{"still never while charging", 2, 20, 10, true, true, false, batteryGuardIdle},
+	}
+	for _, tc := range tests {
+		got := batteryGuardActionAt(tc.percent, tc.warn, tc.save, tc.charging, tc.gameRunning, false, tc.alreadyWarned)
+		if got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	// Auto is the old levels exactly.
+	auto := batteryWarnLevels{}
+	if auto.messagePct() != lowBatteryWarnPct || auto.savePct() != criticalBatteryPct || auto.ledPct() != ledIndLowBatteryPct {
+		t.Fatalf("Auto moved a level: %d %d %d", auto.messagePct(), auto.savePct(), auto.ledPct())
+	}
+	if !auto.headerRed(14) || auto.headerRed(15) || !auto.headerBlinks(4) || auto.headerBlinks(5) {
+		t.Fatal("Auto moved the header's red or blink")
+	}
+	if picked := (batteryWarnLevels{warn: 10}); picked.blinkPct() != 5 || !picked.headerRed(10) || picked.headerRed(11) {
+		t.Fatalf("a picked 10%%: blink %d", picked.blinkPct())
+	}
+}
+
 func TestNetworkCmdConfigParsing(t *testing.T) {
 	tests := []struct {
 		name string

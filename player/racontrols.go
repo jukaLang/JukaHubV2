@@ -14,7 +14,9 @@ package main
 //	Buttons  Normal, Swap A and B, Swap X and Y, Swap both (the Xbox layout)
 //	Turbo    Off, A, B — holding that button fires it over and over
 //
-// plus one Turbo speed for every console (Fast, Normal, Slow).
+// plus one Turbo speed for every console (Fast, Normal, Slow), and D-pad as
+// stick per console, which puts the D-pad lines in the same remap file
+// (racontrols_dpad.go).
 //
 // Each console has its own Buttons and Turbo (Settings → Controls → Game
 // buttons, racontrols_ui.go), with an "All consoles" choice the consoles
@@ -338,6 +340,8 @@ func gameControlsSet(romPath string, g gameControlsGame) {
 func gameControlsForget(romPath string) {
 	gameControlsSetNote(romPath, "")
 	ctrlLayoutForgetGame(romPath) // its control layout (ctrllayout_store.go)
+	raGameRecordsForget(romPath)  // its hotkeys and aspect ratio (rahotkeys_store.go)
+	emuExtrasForget(romPath)      // its PlayStation pad and widescreen (widescreen_store.go)
 	if own := gameControlsFor(romPath); own.Buttons != "" || own.Turbo != "" {
 		gameControlsSet(romPath, gameControlsGame{})
 	}
@@ -352,6 +356,8 @@ func gameControlsMove(oldPath, newPath string) {
 	}
 	gameControlsSetNote(oldPath, "")
 	ctrlLayoutMoveGame(oldPath, newPath) // its control layout (ctrllayout_store.go)
+	raGameRecordsMove(oldPath, newPath)  // its hotkeys and aspect ratio (rahotkeys_store.go)
+	emuExtrasMove(oldPath, newPath)      // its PlayStation pad and widescreen (widescreen_store.go)
 	gameControlsStore.mu.Lock()
 	gameControlsLoadLocked()
 	own, ok := gameControlsStore.games[oldKey]
@@ -458,7 +464,8 @@ func prepareGameControls(launcher string, game libraryGame) {
 	// The game's control layout shares this one remap file: its buttons win
 	// over the Buttons choice for the buttons it sets (ctrllayout_apply.go).
 	layout, _ := ctrlLayoutLaunchFor(launcher, game)
-	remap := ctrlLayoutMergeRemap(raRemapPreset(buttons), layout)
+	// D-pad as stick goes in under the layout too (racontrols_dpad.go).
+	remap := ctrlLayoutMergeRemap(raDpadStickMerge(raRemapPreset(buttons), game), layout)
 	if len(remap) == 0 && turbo == gameTurboOff {
 		gameControlsSetNote(game.Path, "")
 		return
@@ -504,7 +511,7 @@ func prepareGameControls(launcher string, game libraryGame) {
 		}
 	}
 	if len(remap) > 0 {
-		if note := raRemapPrepare(launcher, game, targets, remap, ctrlLayoutRemapLabel(buttons, layout), turboRemap); note != "" {
+		if note := raRemapPrepare(launcher, game, targets, remap, ctrlLayoutRemapLabel(raDpadStickLabel(buttons, game), layout), turboRemap); note != "" {
 			notes = append(notes, note)
 		}
 	}

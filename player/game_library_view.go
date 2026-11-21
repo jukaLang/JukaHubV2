@@ -18,7 +18,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,7 +37,22 @@ const (
 	libraryLayoutList       = "list"
 	libraryLayoutHorizontal = "covers_horizontal"
 	libraryLayoutVertical   = "covers_vertical"
+	libraryLayoutFlow       = "covers_flow" // game_library_flow.go
+	libraryLayoutCube       = "cube"        // game_library_cube.go
 )
+
+// libraryLayoutChoices is the order the options sheet cycles the console
+// page's layouts through, with the names it shows.
+var libraryLayoutChoices = []struct {
+	Value string
+	Label string
+}{
+	{libraryLayoutList, "List"},
+	{libraryLayoutHorizontal, "3D shelf"},
+	{libraryLayoutVertical, "Cover column"},
+	{libraryLayoutFlow, "Cover Flow"},
+	{libraryLayoutCube, "Cube"},
+}
 
 // librarySortChoices is the order the options sheet cycles through.
 var librarySortChoices = []struct {
@@ -125,12 +139,12 @@ func librarySortValue(mode string) string {
 }
 
 func libraryLayoutValue(layout string) string {
-	switch layout {
-	case libraryLayoutHorizontal, libraryLayoutVertical:
-		return layout
-	default:
-		return libraryLayoutList
+	for _, choice := range libraryLayoutChoices {
+		if choice.Value == layout {
+			return layout
+		}
 	}
+	return libraryLayoutList
 }
 
 func libraryLayoutMode() string {
@@ -141,32 +155,38 @@ func libraryLayoutMode() string {
 }
 
 func libraryLayoutLabel() string {
-	switch libraryLayoutMode() {
-	case libraryLayoutHorizontal:
-		return "3D shelf"
-	case libraryLayoutVertical:
-		return "Cover column"
-	default:
-		return "List"
+	mode := libraryLayoutMode()
+	for _, choice := range libraryLayoutChoices {
+		if choice.Value == mode {
+			return choice.Label
+		}
 	}
+	return "List"
 }
 
 func cycleLibraryLayout(delta int) string {
-	choices := []string{libraryLayoutList, libraryLayoutHorizontal, libraryLayoutVertical}
+	n := len(libraryLayoutChoices)
 	libraryViewStore.mu.Lock()
 	defer libraryViewStore.mu.Unlock()
 	libraryViewEnsureLocked()
 	idx := 0
-	for i, choice := range choices {
-		if choice == libraryViewStore.data.Layout {
+	for i, choice := range libraryLayoutChoices {
+		if choice.Value == libraryViewStore.data.Layout {
 			idx = i
 			break
 		}
 	}
-	idx = (idx + delta + len(choices)) % len(choices)
-	libraryViewStore.data.Layout = choices[idx]
+	idx = ((idx+delta)%n + n) % n
+	libraryViewStore.data.Layout = libraryLayoutChoices[idx].Value
 	libraryViewSaveLocked()
-	return choices[idx]
+	return libraryLayoutChoices[idx].Value
+}
+
+// libraryLayoutWide reports whether a layout takes the whole console page:
+// Cover Flow and the Cube draw the highlighted cover large themselves (and
+// its video snap on it), so the preview column beside them is left out.
+func libraryLayoutWide(layout string) bool {
+	return layout == libraryLayoutFlow || layout == libraryLayoutCube
 }
 
 func libraryCleanDisplayTitle(title string) string {
@@ -445,11 +465,11 @@ func libraryParseYear(text string) int {
 
 // sortLibraryGames orders one console. Missing values always sort last, so an
 // unrated or never-played game does not push the user's rated games off the
-// first screen. The title is the stable tie-breaker in every mode.
+// first screen. The title is the stable tie-breaker in every mode, compared
+// by its sort key (a leading "The" ignored, libsort_articles.go).
 func sortLibraryGames(games []libraryGame, mode string) {
 	mode = librarySortValue(mode)
-	sort.SliceStable(games, func(i, j int) bool {
-		a, b := games[i], games[j]
+	librarySortStable(games, func(a, b *libraryGame, left, right string) bool {
 		switch mode {
 		case librarySortLast:
 			if !a.LastPlayed.Equal(b.LastPlayed) {
@@ -484,7 +504,6 @@ func sortLibraryGames(games []libraryGame, mode string) {
 				return a.Year > b.Year
 			}
 		}
-		left, right := strings.ToLower(a.Label()), strings.ToLower(b.Label())
 		if left == right {
 			return a.Path < b.Path
 		}
@@ -598,6 +617,7 @@ func libraryPlaytimeForTitles(seconds map[string]int64, consoles map[string]map[
 // immediately after an options press.
 func refreshLibraryView() {
 	defer invalidateGameLibrarySystemsCache()
+	librarySortArticlesSync(appConfig) // libsort_articles.go
 	if len(gameLib.lib.Systems) == 0 {
 		return
 	}

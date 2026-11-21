@@ -396,6 +396,9 @@ func glassRealDraw(renderer *sdl.Renderer, base, dst sdl.Rect, radius int32, loo
 	if m == nil || len(m.overIdx) == 0 {
 		return false
 	}
+	// Glass opacity thins the frost too, so the wallpaper reads through
+	// (colourpick_theme.go); a sheet has none to thin.
+	look.frost = glassOpacityA(look.frost)
 	sx := float32(dst.W) / float32(base.W)
 	sy := float32(dst.H) / float32(base.H)
 	ox, oy := float32(dst.X), float32(dst.Y)

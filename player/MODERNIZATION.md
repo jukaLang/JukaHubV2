@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **345** (audited 2026-11-19).
+Open tasks: **384** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -444,7 +444,7 @@ and Save offline have their own [HW] tasks.
    music decoder.
 9. On a stock Smart Pro (SDL_image without WebP, ffmpeg installed) a .webp
    photo is listed in Files with a thumbnail, opens in the picture viewer and
-   works as the lock screen; an NX Redux .webp cover in `.media` shows in the
+   works as the lock screen; a .webp cover in `.media` shows in the
    Games library after one library refresh; a game whose .webp cover ffmpeg
    cannot read (an animated one) gets a downloaded cover; `webp-covers/` stays
    under 256 MB.
@@ -674,7 +674,7 @@ card and the missing pieces on a card with them removed; **Repair PortMaster**
 keeps `libs/` and the ports; a CrossMix card is left on its own bash and
 Python. Also check that `data/private-glibc/current` names a `runtime-2.39-…`
 folder and GreenOvercast still starts through it, and whether PortMaster
-2026.09.19+ reports the Smart Pro's analog sticks (NX Redux PR #142).
+2026.09.19+ reports the Smart Pro's analog sticks.
 Testers on a Brick were also left on PortMaster's splash (2026-11-20, a photo;
 `portmaster_splash.go`): check with `ps` while the splash shows that it is a
 `love.<arch>` process on `utils/pmsplash` and which `/dev` display nodes
@@ -1180,6 +1180,58 @@ step holds or a FIX task names what differs:
    a game's start says how to turn it on; back to Automatic restores play.
 **Verify.** Record in the HW log.
 
+### PS2-HW-1 — PlayStation 2 in the ARMSX2 core on a Smart Pro (P1, M) [HW] [NET]
+**Why.** Juka, 2026-11-20: "Add support for PS2" (a developer runs an ARMSX2
+fork on a Brick Hammer, light games at full speed), then "Focus on getting it
+to work on Trimui Smart Pro...not on windows". `ps2*.go` plays PS2 games in
+RetroArch's ARMSX2 core on every TrimUI model (on by default): a game's first
+start installs ARMSX2's GitHub release asset `Linux-arm64-libretro-core.tar.zst`
+(stable first, else nightly; SHA-256 from GitHub's `digest`), the matching
+`resources` folder from the same release's `Linux-arm64-SDL-handheld.tar.zst`
+into `<system>/pcsx2/resources`, copies a valid BIOS into `<system>/pcsx2/bios`,
+seeds `armsx2_renderer` "OpenGL" (no Vulkan driver) and `armsx2_fast_boot`,
+moves the renderer OpenGL → Software after a start that could not draw, and
+boosts the game (xboxboost.go). Written without a Go toolchain or a device:
+the asset names, that the core archive holds only the .so and the handheld
+archive a `resources/` tree with `GameIndex.yaml`, the core's DT_NEEDED and
+glibc/GLIBCXX needs (PR #716 links its dependencies statically; built on
+Ubuntu 22.04), which GPU context the stock GLES RetroArch gives it on the
+PowerVR GE8300, the option values ("OpenGL", "enabled") and the log lines
+`ps2VideoFailureLine` matches are from web reports, not from a run.
+**Where.** `ps2.go`, `ps2_setup.go`, `ps2_video.go`, `emusystems.go`
+(`emuDesktopSystemFor`), `emupicker.go`, `game_library.go`, `gamediag.go`,
+`emulatorinstall.go`, `emulatorupdates.go` / `emuupdatecheck.go` (buildbot
+updates skip `armsx2`), `xboxboost.go`, `compat.go`, `romsetup.go`;
+`data/armsx2.json`, `<system>/pcsx2/{bios,resources}`,
+`config/ARMSX2/ARMSX2.opt`; the JukaHub log (`library` lines "PS2:", `emulators`
+lines "PS2:").
+**Done when.** On a stock Smart Pro (then a Brick or Hammer, and a Smart Pro
+S), each step holds or a FIX task names what differs:
+1. With no BIOS anywhere, A on a PS2 `.iso` says where to put one and downloads
+   nothing. With `scph*.bin` in `BIOS/PS2`, A shows the install card ("PlayStation
+   2 games"), then the game starts by itself; `cores/armsx2_libretro.so`,
+   `<system>/pcsx2/resources/GameIndex.yaml` and the BIOS copy in
+   `<system>/pcsx2/bios` exist. Record the release tag, both archive sizes, the
+   core's `readelf -d` NEEDED lines, newest GLIBC/GLIBCXX, and whether the log
+   says RetroArch started on JukaHub's glibc.
+2. The BIOS boots into the game (fast boot) and plays for 2 minutes; record the
+   FPS (RetroArch's counter) for a light game (e.g. Road Trip, Virtua Fighter
+   10th Anniversary) and a 3D game, with Xbox boost on and off.
+3. `config/ARMSX2/ARMSX2.opt` was written once with `armsx2_renderer` and
+   `armsx2_fast_boot`; Quick Menu → Core Options shows OpenGL (or record the
+   value spelling the build uses instead). Record whether OpenGL ES draws on the
+   GE8300; if a start fails to draw, the card names the renderer JukaHub moved
+   to and the next start uses it (Software draws, slowly).
+4. Settings → PS2 emulator says the release; A says "already the newest" or
+   installs a newer one (old core kept as `.bak`). The Emulators page's daily
+   core pass leaves `armsx2_libretro.so` alone.
+5. Both sticks, L2/R2 and L3/R3 reach the game; saving to the memory card and
+   a save state survive a restart; quitting through RetroArch returns to
+   JukaHub with no hang.
+6. PlayStation 2 → Off: `Roms/PS2` shows "not supported" with the reason, a
+   game's start says how to turn it on; back On restores play.
+**Verify.** Record in the HW log.
+
 ### GODOT-HW-1 — The Godot port and Godot games on a device (P1, S) [HW] [NET]
 **Why.** Juka, 2026-11-19: "add Godot... There is Godot Trimui Smart Pro port
 somewhere so use that". `godot.go` installs the TrimUI Smart Pro Godot port
@@ -1486,9 +1538,12 @@ FIX task names what differs:
 connect … so I don't have to sign up". `chatvoice_mumble*.go` speak Mumble
 over one TLS connection (Opus via the pure-Go gopus module) to
 `mumble.gamemania.org:42069` and meet in "Private User-Channels/JukaHub".
-Nothing was compiled or run: the protocol was written from Mumble.proto and
-the legacy voice format, gopus's API from its docs, and the voice gate's
-levels were never tried on a TrimUI microphone.
+The protocol was written from Mumble.proto and the legacy voice format,
+gopus's API from its docs, and the voice gate's levels were never tried on a
+TrimUI microphone. The 2026-11-20 Windows build compiled, connected and was
+refused the room ("does not let guests open rooms here"); the same day's fix
+steps into Private User-Channels before asking, then tries a lasting channel
+and a one-time certificate registration — still unrun.
 **Where.** `chatvoice_mumble.go`, `chatvoice_mumble_proto.go`,
 `chatvoice_opus.go`, `chatvoice_scene.go`, `chatvoicechannel.go`;
 docs/VOICE_CHANNEL.md; the JukaHub log (`chat` lines: "voice server …").
@@ -1498,7 +1553,9 @@ and a Windows PC, each step holds or a FIX task names what differs:
    reads Connected; a desktop Mumble client on the same server sees the
    JukaHub channel under Private User-Channels with both JukaHub users in it;
    the first join made `voice/mumble-identity.pem` in the data folder (the
-   RSA key took how long on the Smart Pro?).
+   RSA key took how long on the Smart Pro?); the log's `voice: asking to open
+   …` line shows the first, temporary request worked from inside Private
+   User-Channels (no `voice server refused` line, no registration).
 2. Speech both ways is clear with under half a second of delay; the green
    dots follow who speaks; silence sends nothing (the Mumble client shows the
    JukaHub user as not talking); with the handheld's speaker on, the PC user
@@ -2197,6 +2254,755 @@ whether the kernel's clock counts time asleep were taken from memory.
 **Verify.** `data/save-ledger.json` (no full paths on screen), the log lines
 and the state headers in the hardware log.
 
+### RACHEEVO-HW-1 — RetroAchievements settings, sign-in and unlock lights on a TrimUI (P2, S) [HW] [NET]
+**Why.** Since 2026-11-20 JukaHub writes RetroArch's `cheevos_*` options
+per launch and signs RetroArch in from the handheld (`raach_*.go`). The key
+names were checked on the web only; issue reports say RetroArch 1.20 ignored
+the newer per-message leaderboard switches, and whether RetroArch writes its
+log line by line decides how fast an unlock lights the rings.
+**Where.** `raach_settings.go`, `raach_signin.go`, `raach_unlocks.go`,
+`ledsilky.go` (`ledAchievementFlash`); docs/RETROACHIEVEMENTS.md.
+**Done when.** On a Smart Pro with Wi-Fi: Sign in for games logs RetroArch in
+at the next game and `retroarch.cfg` then holds `cheevos_token` with an empty
+password; each chosen row is in `retroarch.cfg` while the game runs and gone
+after it; Leaderboards Trackers only and Off behave as labelled (note the
+RetroArch version and the keys it read); an easy first-level achievement
+flashes the rings within about 2 s and "1 achievement unlocked in …" shows
+after quitting; with Hardcore On the in-game menu says "Hardcore mode is on"
+on Load state and has no Rewind or Cheats.
+**Verify.** Record in the HW log.
+
+### HOTKEY-HW-1 — Custom hotkeys and aspect ratio on a TrimUI (P2, S) [HW]
+**Why.** `rahotkeys*.go` copies button codes from RetroArch's player-1
+bindings or the pad's autoconfig profile and `raratio*.go` writes
+`aspect_ratio_index` from Batocera's table (Config 20, Square 21, Core 22).
+Neither the TrimUI profile name, the Menu button's code nor the index table
+was seen on a device.
+**Where.** `rahotkeys.go`, `rahotkeys_binds.go`, `rahotkeys_store.go`,
+`raratio.go`; docs/GAME_HOTKEYS.md, docs/LOOKS.md.
+**Done when.** On a Smart Pro and a Brick, with Hotkey button = Select, Save
+state = X and Fast forward (hold) = R2, a library RetroArch game saves on
+Select + X and fast-forwards on Select + R2 (or the row refused R2 because
+the assistant owns it); the firmware's own Menu shortcuts still work when the
+hotkey button is RetroArch's own; `retroarch.cfg` has its old binds after
+quitting; the log names the pad profile and no "cannot read … code" line for
+the face buttons, shoulders, Start or Select; Aspect ratio 4:3, 8:7, 10:9,
+Core provided and Full screen each give the expected shape (note the
+RetroArch version and the index it saves for "Core provided" in its own
+menu).
+**Verify.** Record in the HW log.
+
+### AITRANS-HW-1 — Translate the game screen on a Smart Pro and a Smart Pro S (P2, S) [HW] [NET]
+**Why.** `aitranslate*.go` turns on RetroArch's AI service for one launch and
+answers it from a 127.0.0.1 service that asks Groq's vision model. The mode
+numbers (0 picture, 1 speech, 3 text), the `AI_SERVICE` network command and
+whether the TrimUI RetroArch builds include the AI service at all are
+unconfirmed; text mode needs RetroArch 1.17 or newer.
+**Where.** `aitranslate.go`, `aitranslate_server.go`,
+`aitranslate_settings.go`, `gamemenu.go` (`gmTranslate`);
+docs/GAME_TRANSLATION.md.
+**Done when.** With Translate games on and a Groq key, a Japanese GBA or SNES
+dialogue screen → Select + L2 → Translate screen shows English subtitles
+within about 10 s and the game keeps running; Read aloud plays the English
+line; no key and Wi-Fi off each show RetroArch's one-line error; a custom
+vgtranslate address in picture mode draws over the paused game; after the
+game `retroarch.cfg` has the user's `ai_service_*`, `network_cmd_enable` and
+OSD values back and nothing listens on 127.0.0.1 (`ss -ltn`); the log names
+the mode that worked (fix the numbers if text mode shows nothing).
+**Verify.** Record in the HW log.
+
+### KIDMODE-HW-1 — Kid mode and Kiosk mode on a TrimUI (P2, S) [HW]
+**Why.** `uimode*.go` gates screens in `switchScene`, filters every game list
+and refuses unmarked games at the top of `launchLibraryGame`; the Konami code
+with swapped buttons and the ports and Android launch paths were only read,
+not run.
+**Where.** `uimode.go`, `uimode_kids.go`, `uimode_unlock.go`,
+`uimode_settings.go`; docs/KID_MODE.md.
+**Done when.** On a Brick and a Smart Pro, Kid mode with a code shows only
+the marked games in the library, Tabs Home, search, the switcher and random;
+an unmarked favourite, port and Android game refuse to start; Start → Unlock
+with the code leaves, six wrong codes wait 30 s and the wait survives a
+reboot; the Konami code leaves without a code and opens the code card with
+one; Select + Start and the power card's Exit do not reach the stock menu; in
+Kiosk the Xbox, PS5 and Steam installs say Locked; deleting
+`data/ui-mode.json` from a PC starts in Full mode.
+**Verify.** Record in the HW log.
+
+### FNSWITCH-HW-1 — FN switch actions, Silky lights and GPU boost on real TrimUIs (P2, S) [HW]
+**Why.** `fnswitch.go` acts on gpio243 for Mute, Lights off and Airplane mode
+as well as Travel lock; `ledsilky.go` adds the 5% pulse, Follow screen
+brightness and the achievement rainbow; `gpuboost*.go` needs a GPU devfreq
+node the Smart Pro and Brick may not have.
+**Where.** `fnswitch.go`, `ledsilky.go`, `ledindicators.go`, `gpuboost.go`,
+`gpuboost_linux.go`, `xboxboost_linux.go`; docs/DEVICE_TUNING.md.
+**Done when.** On a Smart Pro, FN switch does → Mute, Lights off and Airplane
+mode each engage and undo by sliding, on Home, in a RetroArch game and in a
+port, with no toast over the game; sliding back restores the previous volume,
+the user's light mode and only the radios that were on; a reboot with the
+switch slid either way leaves the right state; Travel lock still locks and
+its boot hook comes and goes with the choice; the 5% pulse, Follow screen
+brightness and the rainbow look right on the rings; `ls /sys/class/devfreq`
+is recorded on the Smart Pro, Brick and Smart Pro S, and where a GPU node
+exists the log shows boost on and off for an N64 game and a port with the
+governor or `min_freq` restored afterwards.
+**Verify.** Record in the HW log.
+
+### IDLEGAME-HW-1 — Idle in games, idle hooks and Battery in games on a TrimUI (P2, S) [HW]
+**Why.** `idlewatch*.go` reads every input device without grabbing it, dims
+through the display driver while RetroArch owns the screen and sleeps or
+powers off from a goroutine; `gamehud.go` sends `SHOW_MSG` lines. None of
+that ran on a device, and a noisy input device would keep the screen awake.
+**Where.** `idlewatch.go`, `idlewatch_linux.go`, `gamehud.go`,
+`batterywarn.go`; docs/IDLE.md.
+**Done when.** With Dim 5 min and Then 5 min: the screen dims after 5 idle
+minutes in a RetroArch game and a PPSSPP game, a resting stick does not keep
+it lit, any button restores the exact brightness; Sleep sleeps and the power
+key wakes into the game; Save and power off saves and powers off, and neither
+acts on a charger; a Bluetooth pad connected mid-game counts as input;
+`hooks/idle|extended|active/*.sh` run with the right `JUKAHUB_IDLE_*` values
+in a game, on the idle screen and around a power-button sleep, and a 15 s
+script is stopped at 10 s; Battery in games Every 5 min shows the line (the
+"·" drawn) and the time when chosen, nothing while the in-game menu is open,
+and the 20% line once while draining.
+**Verify.** Record in the HW log.
+
+### CARDCHECK-HW-1 — Card check on a Smart Pro and a Brick (P2, S) [HW]
+**Why.** `cardcheck*.go` reads the partition's boot sector, the kernel log and
+every file, and writes a fake-card test; the device names, the exFAT driver
+TrimUI uses and whether stock firmware has an fsck were not seen.
+**Where.** `cardcheck.go`, `cardcheck_linux.go`, `cardcheck_ui.go`;
+docs/CARD_CHECK.md.
+**Done when.** The check names the right partition, file system and card;
+the health-flags step reads the boot sector (no "could not be read"); a card
+pulled out while on shows "not properly unmounted" after a reboot; the read
+test finishes a 64 GB card without menu stutter; the 1 GB fake test passes on
+a genuine card and leaves no `.jukahub-cardcheck` behind; a power cut during
+the test is cleaned up at the next start; the fsck step's result is noted.
+**Verify.** Record in the HW log.
+
+### DAVSHARE-HW-1 — The WebDAV share with real Windows, Mac and Linux clients (P2, S) [HW] [NET]
+**Why.** `davshare*.go` is a WebDAV server written without a client to try:
+Windows' WebClient, macOS Finder and GNOME Files each have their own quirks
+(locks, Win32 properties, free-space queries, `._` files).
+**Where.** `davshare.go`, `davshare_lock.go`, `davshare_props.go`,
+`davshare_ui.go`, `fileserver_guard.go`; docs/NETWORK_SHARE.md.
+**Done when.** Windows 11 Explorer maps `http://IP:8325/KEY/` with the
+WebClient service running, copies a 40 MB file both ways, renames, deletes,
+makes a folder and keeps the file date; macOS Finder connects read-write and
+copies a folder; GNOME Files opens `dav://`; Roms and Ports refuse writes;
+the share stops after 15 idle minutes and on a Wi-Fi change.
+**Verify.** Record in the HW log.
+
+### AUTOCOLL-HW-1 — Automatic collections and the game idle screens on a TrimUI (P2, S) [HW]
+**Why.** `autocoll.go` builds folders from the library on the Collections tab
+and `saverslides.go` decodes art and plays video snaps through ffmpeg at the
+idle screen's CPU ceiling; neither was measured with a large library.
+**Where.** `autocoll.go`, `hometabs_collections.go`, `saverslides.go`,
+`saver_power.go`; docs/COLLECTIONS.md.
+**Done when.** On a Smart Pro and a Smart Pro S with at least 1,000 games the
+Collections tab opens and scrolls All games without a visible stall; Last
+played reorders after a launch, also with the clock at 1970; Recently added
+lists only a ROM copied in after the first scan; "Played N times" shows on a
+played game's page; Game slideshow crossfades every 8 s with memory flat over
+30 minutes; Game videos plays a 640×480 snap smoothly at the idle ceiling
+(`scaling_max_freq` read back), moves on at the end, and one press wakes at
+once with no ffmpeg left in `ps`.
+**Verify.** Record in the HW log.
+
+### RAOFF-HW-1 — Offline RetroAchievements on a TrimUI (P2, S) [HW] [NET]
+**Why.** Since 2026-11-20 JukaHub runs a RetroAchievements relay on
+127.0.0.1 and points RetroArch at it with `cheevos_custom_host` per launch.
+The request fields, the unlock signature with its `o` (seconds since unlock)
+and whether badges go through the relay were checked on the web only.
+**Where.** `raoffline.go`, `raoffline_store.go`, `raoffline_replay.go`,
+`raoffline_ui.go`, `raoffline_hash.go`; docs/RETROACHIEVEMENTS.md.
+**Done when.** Softcore, Wi-Fi on: a library GBA game signs in, loads its set
+and an unlock reaches the website, `retroarch.cfg` holds the relay address
+only while the game runs. Wi-Fi off, same game: it signs in, earned
+achievements do not pop again, a new unlock shows "1 unlock waiting"; Wi-Fi
+on again sends it within a minute (note whether the website shows the real
+unlock time). Hardcore with Wi-Fi writes no relay address; hardcore offline on
+a cached game plays in Casual and is put back after. A game started right
+after a wake waits for Wi-Fi at most 8 s. Cache recently played makes a
+never-played NES/SNES/GB ROM load its set offline. `netstat -ltn` shows the
+relay on 127.0.0.1 only and gone about 90 s after the game.
+**Verify.** Record in the HW log.
+
+### USBSTOR-HW-1 — USB storage mode on a Smart Pro and a Brick (P1, S) [HW]
+**Why.** USB storage mode unmounts the SD card and lends it to a computer as a
+mass-storage gadget from a helper in /tmp (`usbstorage_helper.sh`, started by
+`launch.sh`). What holds /mnt/SDCARD on a stock boot, whether the Brick kernel
+has the mass-storage function, and whether eject and unplug are seen were not
+checked on a device; Smart Pro S and Brick Pro are left out on purpose.
+**Where.** `usbstorage.go`, `usbstorage_linux.go`, `usbstorage_ui.go`,
+`usbstorage_helper.sh`, `launch.sh` (`usb_storage_handoff`);
+docs/USB_FILE_TRANSFER.md.
+**Done when.** On a Smart Pro and a Brick (stock firmware): the row's check
+either opens the sheet or names what holds the card; Windows 11, macOS and
+Linux each see a removable drive, a 1 GB folder copies both ways, and Eject
+brings JukaHub back within about 10 s; a button press, a pulled cable and 10
+idle minutes each bring it back too; afterwards `/proc/mounts` shows
+/mnt/SDCARD with its old options, `adb devices` sees the handheld, a card swap
+file is back in /proc/swaps, and quitting JukaHub returns to the stock menu
+with no black screen.
+**Verify.** Record in the HW log.
+
+### KEYPOWER-HW-1 — Keys, menus and power settings on TrimUIs (P2, S) [HW]
+**Why.** The 2026-11-20 pass added Brick F1/F2 actions, a Smart Pro S Home key
+reader whose key code (172 or 102) is a guess, D-pad as stick through
+RetroArch remap values 16–19, Threaded video per launch, in-game menu entries,
+Start in, Hold Menu → game switcher, Ask before power off, Battery percentage
+and Lights in games — none seen on hardware.
+**Where.** `frontkeys*.go`, `racontrols_dpad.go`, `ra_threaded.go`,
+`gamemenu_entries.go`, `startup_target.go`, `menuhold_action.go`,
+`power_options.go`; docs/CONTROLS.md, docs/CONFIGURATION.md.
+**Done when.** Brick: each F1/F2 choice works on Home and the browser keeps
+its own F1. Smart Pro S: `evtest` names the Home key's code, the log line
+"Home key: reading key …" matches it, and a tap does the chosen thing in
+menus and in a RetroArch game. Brick N64 and PSP games walk with the D-pad
+and the one-launch remap is gone after quitting. Smart Pro S games have
+`video_threaded = "false"` only while they run. Hidden in-game menu rows stay
+hidden; Start in → Last game played starts it after a power cycle but not
+after quitting to the stock menu and back, and Resume at power on still
+wins. Hold Menu → Game switcher saves and opens the switcher, Menu with a
+D-pad hotkey does not. Ask before power off Off powers off from the Home
+tile and a 1.5 s power hold. Battery percentage modes leave no gap; Lights in
+games Off keeps the rings dark in a game but shows charging and low battery.
+**Verify.** Record in the HW log.
+
+### MORESYS-HW-1 — Five more consoles, stock firmware helper and Tasks (P2, S) [HW]
+**Why.** NAOMI/Atomiswave (Flycast), DSi (melonDS DS with
+`melonds_console_mode = "dsi"` per launch), OpenBOR and CoCo were added from
+docs only; the stock firmware row reads `/etc/version` and gives flashing
+steps from guides that disagree for the Smart Pro S; Tasks moves emulator
+settings to a reset trash.
+**Where.** `extra_systems.go`, `libsort_articles.go`, `fwupdate.go`,
+`about_card.go`, `maint_tasks.go`; docs/GAME_LIBRARY.md, docs/DEVICES.md,
+docs/RECOVERY.md.
+**Done when.** NAOMI and Atomiswave sets with their BIOS start in Flycast
+(note fps on a Smart Pro and a Smart Pro S) and the BIOS zips are not listed
+as games; a DSi-enhanced and a DSi-only cart start in DSi mode with the four
+DSi files and the .opt is back to DS after; OpenBOR and CoCo games show what
+to install. Stock firmware shows the same version as TrimUI's Device Info,
+judges a renamed, zipped, misplaced and wrong-model `.awimg`, and one real
+update per model follows the shown steps (record the Smart Pro S buttons).
+Emulator versions match RetroArch's System Information. Each Tasks reset moves
+its files to the reset trash with restore.txt, refuses while a game is
+suspended, and RetroArch keeps its controls after.
+**Verify.** Record in the HW log.
+
+### VNC-HW-1 — VNC and Telnet servers on the devices (P2, S) [HW] [NET]
+**Why.** The VNC server (`vncserver*.go`, 2026-11-20) reads a
+game's picture from /dev/fb0 and types into games by writing events into the
+firmware pad's evdev node; neither can be checked without the hardware, nor
+can real viewers' handling of the RFB details (ZRLE 3-byte pixels,
+DesktopSize, Apple's 3.889 version string). While the game assistant or the
+games mouse has grabbed the pad, the kernel drops the injected events.
+**Where.** `vncserver_frames.go` (vncFBLoop, vncBlit),
+`vncserver_input_linux.go` (vncPadPress, vncPadOpenLocked),
+`vncserver_proto.go` (newVncConv, vncZRLE), `telnetserve.go`; docs/VNC.md.
+**Done when.** On a Smart Pro, a Brick and a Smart Pro S: RealVNC Viewer,
+TigerVNC (ZRLE and Raw) and macOS Screen Sharing sign in with the sheet's
+password and show JukaHub with correct colours; a RetroArch game and a
+PortMaster port are shown (or the Smart Pro S's limit is documented) and
+answer Enter/Esc/arrows/F1 from the viewer; TV mode resizes TigerVNC; New
+password disconnects a viewer; PuTTY and `telnet` get a shell on port 23
+with a working window size, and three wrong passwords drop the connection.
+**Verify.** Record in the HW log.
+
+### SMBSERVE-HW-1 — The SMB share with real Windows, Mac and Linux clients (P2, S) [HW] [NET]
+**Why.** The SMB server (`smbserve*.go`, 2026-11-20) was
+written from MS-SMB2, MS-NLMP and MS-SRVS without a compiler or a client; its
+tests cover NTLMv2, signing, paths and hostile frames, not real Windows or
+macOS behaviour. It sends no SPNEGO mechListMIC (as ksmbd), the main risk on
+Windows 11 24H2.
+**Where.** `smbserve.go`, `smbserve_conn.go`, `smbserve_ntlm.go`,
+`smbserve_fs.go`, `smbserve_info.go`, `smbserve_rpc.go`, `smbserve_nbns.go`;
+docs/SMB_SHARE.md.
+**Done when.** Windows 11 24H2 opens `\\IP\JukaHub` with jukahub and the
+password and "Remember" survives a share restart; Explorer at `\\IP` lists
+JukaHub; `\\DEVICENAME\JukaHub` resolves; Finder connects and copies both
+ways; a 4 GB file copies both ways (note MB/s against SFTP); read-only
+refuses writes; New password disconnects a PC; ports 445/137 are free on the
+stock firmware; the idle and network-change stops fire. If Windows rejects
+the session for the missing mechListMIC, add NTLM's GSS_GetMIC over the
+client's mechTypes in `smbserve_ntlm.go`.
+**Verify.** Record in the HW log.
+
+### TAILSCALE-HW-1 — Tailscale on the handheld: install, reach it, sign in, battery (P2, S) [HW] [NET]
+**Why.** `tailscaled*.go` (2026-11-20) was written without a
+device or network access: the pkgs.tailscale.com package list and `.sha256`
+format, the CLI flags and userspace inbound forwarding come from Tailscale's
+docs and third-party scripts, and nobody has measured what an idle tailnet
+costs in battery.
+**Where.** `tailscaled.go` (install, daemon, sign-in, status),
+`tailscaled_linux.go`, `tailscaled_ui.go`; the servers' listen addresses
+(`ssh_server.go`, `ftp_server.go`, companion, `vncserver*.go`,
+`smbserve*.go`); docs/TAILSCALE.md.
+**Done when.** On a Smart Pro and a Brick (and a Smart Pro S): Install
+downloads, verifies and places both programs; switching on starts tailscaled
+(nice 10); the QR code signs the handheld in from a phone and an auth key
+works; from a phone on mobile data the 100.x address reaches SSH, the phone
+companion, FTP, VNC and SMB (fix any server that binds only the Wi-Fi address
+or refuses 127.0.0.1); Wi-Fi off stops it and Wi-Fi back starts it; below
+15 % it stops; exit and a killed JukaHub leave no tailscaled; an idle hour
+costs no more than about 2 % extra battery; the emulator updates pass updates
+it and the daemon restarts outside a game.
+**Verify.** Record in the HW log.
+
+### SYNCTHING-HW-1 — Syncthing's extra folders and LAN web GUI on a device (P3, S) [HW] [NET]
+**Why.** `syncthing_more.go` (2026-11-20) adds five extra
+folders and opens the web GUI on 0.0.0.0; neither was run against a real
+Syncthing.
+**Where.** `syncthing_more.go`, the hooks in `syncthing.go` (the GUI address,
+syncthingConfigure, syncthingShareFolders); docs/SAVE_MANAGER.md.
+**Done when.** Turning on Screenshots creates and shares
+`jukahub-extra-screenshots` and a paired PC receives new screenshots; turning
+it off removes the folder from Syncthing and keeps the files; two JukaHubs
+with Music on sync it with no further step; Web GUI on restarts Syncthing on
+0.0.0.0, a PC browser signs in with `jukahub` and the shown password, and
+turning it off makes that password fail and the page unreachable.
+**Verify.** Record in the HW log.
+
+### WIDE-HW-1 — Widescreen hacks and the PlayStation analog pad on a TrimUI (P2, S) [HW]
+**Why.** Widescreen (`widescreen.go`) and the PlayStation analog controller
+(`psxanalog.go`), 2026-11-20, write core options and device ids
+taken from upstream docs and other front ends; several names (SwanStation's
+`swanstation_GPU_WidescreenHack` and `swanstation_Display_AspectRatio`,
+Beetle PSX's `*_widescreen_hack_aspect_ratio`, ParaLLEl N64's
+`parallel-n64-aspectratiohint`, SwanStation's DualShock id 261) have not been
+seen working on the handheld, and the option folders' names are assumed. A
+per-core RetroArch override that sets the aspect ratio beats the 16:9 picture.
+**Where.** `widescreen.go` (widescreenCoreOptions, widescreenCoreFolders),
+`psxanalog.go` (psxAnalogDevice), the log lines "widescreen 16:9 for this
+launch" and "psx analog: …"; docs/WIDESCREEN.md.
+**Done when.** On a Smart Pro: Super Mario 64 (Mupen64Plus-Next), a 3D
+PlayStation game in SwanStation and in Beetle PSX HW, a Dreamcast game in
+Flycast and Sonic in Genesis Plus GX Wide each fill the screen with
+Widescreen on and go back to 4:3 after exit; Ape Escape in PCSX-ReARMed and
+in SwanStation shows a DualShock as port 1 with both sticks working, a
+digital-only game keeps the standard pad, and the Brick's Auto leaves the pad
+alone. Wrong keys or ids are fixed in the two tables.
+**Verify.** Record in the HW log.
+
+### LOOKPACK-HW-1 — Look packs, icon packs and the power-off picture on the devices (P2, S) [HW]
+**Why.** Built without a device (2026-11-20): the power-off
+picture relies on the panel keeping the last frame through SDL's teardown
+until power-off, icon packs decode on the handheld's two decode slots, and a
+pack's boot logo goes through the raw boot-logo writer.
+**Where.** `shutdownscreen.go` (shutdownScreenHold, from `shutdown.go`),
+`iconpacks_draw.go`, `lookpacks_ui.go` → `bootlogo.go`; docs/LOOK_PACKS.md.
+**Done when.** On a Smart Pro, a Brick and a Smart Pro S: Power-off screen →
+Picture (each built-in and a PNG in Themes/Shutdown) stays visible until the
+screen goes dark on Power off and Restart, and quitting to the stock menu
+ends on black; an icon pack (Icons/<pack>/Emus) shows on Games, the
+Home tabs and Emulators without frame hitches and Console icons → JukaHub
+brings the glyphs back; a pack's staged boot logo, written from Settings →
+Boot logo, boots with that picture and Restore puts the old one back; the
+stock menu does not list Themes/Packs or Themes/Shutdown as themes.
+**Verify.** Record in the HW log.
+
+### FLOW-HW-1 — Cover Flow, Cube and launch warm-up on a Smart Pro and a Brick (P2, S) [HW]
+**Why.** The Cover Flow and Cube library views draw covers as turned quads
+through SDL_RenderGeometry (flat fallback when it fails), and the launch
+warm-up fadvises RetroArch, the core, its .info and the ROM into the page
+cache at idle priority — none of it was seen on the A133P renderer or the 4.9
+kernel's SD stack.
+**Where.** `game_library_flow.go`, `game_library_cube.go`,
+`game_library_covers.go`, `game_library_view.go`, `gamewarm*.go`;
+docs/GAME_LIBRARY.md.
+**Done when.** Both views hold 60 fps while sliding/turning on a Smart Pro and
+a Brick (a held Up/Down on the Cube may snap between turns — judge whether it
+should roll on from the current angle), a video snap plays on the centre
+cover, clicks open the cover on top, and B/Left/Up leave as documented. The
+launch log shows `launch warm-up for "…": finished, N files` for a GBA/SNES
+game highlighted for a second, and A → first frame is measurably shorter
+than with Warm up games before launch off (cold boot, same game, 3 runs each);
+nothing is read during a game or at ≤ 15% battery.
+**Verify.** Record in the HW log.
+
+### GAMEKEYS-HW-1 — In-game F1/F2 rewind and fast forward, Menu + Select save and quit (P2, S) [HW]
+**Why.** The game hotkeys read the pad without grabbing it and drive
+RetroArch's command port: the Brick's front F1/F2 arrive as L3/R3 (0x13d /
+0x13e) by reading of the code, the Brick Pro's own F1/F2 codes are unknown (it
+uses L3/R3 for now), and nobody checked what the firmware's retroarch.cfg
+binds to those buttons or to Menu + Select.
+**Where.** `gamehotkeys.go`, `gamehotkeys_linux.go`, hooks in
+`gameassist_linux.go`; docs/CONTROLS.md.
+**Done when.** Brick, GBA game: holding F1 rewinds smoothly and stops on
+release, F2 toggles fast forward and the in-game menu row agrees; on a Smart
+Pro L3/R3 do the same; a DS game keeps L3/R3. Menu + Select saves and quits,
+Home says "Saved — it continues…", the next start of the game continues
+there, and a power cycle afterwards shows Home (no auto-start). Nothing fires
+with the in-game menu open, in hardcore, or with a Select chord. `evtest` on a
+Brick Pro names its F1/F2 codes (then add them to the table).
+**Verify.** Record in the HW log.
+
+### BATTWARN-HW-1 — Battery warning levels, Menu + volume brightness and battery on the lights (P2, S) [HW]
+**Why.** Battery warnings (level, blink, "Battery N%" over RetroArch games,
+save-and-suspend level), the Menu + volume brightness chord (Menu assumed to
+be BTN_MODE, EVIOCGKEY to confirm it is held, the OS's volume step undone
+0.7 s later) and the L2 + R2 battery flash on partial LEDs/zones were written
+without a device.
+**Where.** `batterywarn.go`, `lowbattery.go`, `statusbar_status.go`,
+`brightkeys*.go`, `volumebuttons.go`, `ledbattlevel.go`, `ledindicators.go`,
+`ledanim.go`; docs/BATTERY_WARNINGS.md.
+**Done when.** With Auto everything warns exactly as before (5% message, 10%
+lights, red below 15%, save at 3%); a 20% level turns the icon red and pulses
+the lights at 20%, a RetroArch game shows "Battery 19%" once per percent and
+never while charging; Save and suspend at 8% saves and sleeps at 8%. On a
+JukaHub OS boot Menu + volume steps brightness in Home and in a game and the
+volume ends where it was; on stock firmware with keymon nothing happens twice.
+L2 + R2 on bare Home flashes the level on a Smart Pro's rings and a Brick's
+lights (record which LEDs light), and lone L2/R2 still work everywhere.
+**Verify.** Record in the HW log.
+
+### MUSICX-HW-1 — Music tidy, per-book speed, in-game music and Audio channels (P2, S) [HW]
+**Why.** Tidy the Music folder renames on the card's FAT/exFAT (case folding,
+no atomic no-replace rename), the in-game Music panel mutes RetroArch with
+its MUTE toggle (journalled in racfgscope), and Audio channels wraps games'
+ALSA output in a `route` plugin (also around BlueALSA) — none of it ran on
+TrimUI's alsa-lib.
+**Where.** `musictidy.go`, `ingame_music.go`, `audiochannels.go`,
+`musicgame.go`, `audioresume.go`, `a11y.go`; docs/MUSIC_PLAYER.md.
+**Done when.** Loose songs and a dropped album folder land in Music/Singles and
+Music/Artist/Album after a scan, with favourites, playlists and a saved book
+place following; a file still copying over USB/FTP is not moved. Two books
+keep different speeds. From the in-game menu, music starts under a game that
+was launched with music playing, the game goes quiet and comes back exactly
+once when the music stops or the game ends, and the next game is not silent.
+Mono, Mono left and Mono right are right on the speaker, wired headphones, a
+USB DAC and a Bluetooth headset in a RetroArch game, a PPSSPP game and a port;
+Stereo leaves the generated ALSA file byte-identical to before.
+**Verify.** Record in the HW log.
+
+### PLAYTIME-HW-1 — Play time by game across a power cycle and a clock jump (P3, S) [HW] [NET]
+**Why.** The By game tab reads a new per-game per-day store
+(`playtime-days.json`) that is re-dated when network time fixes a TrimUI's
+power-on clock; that path only ran in a unit test.
+**Where.** `playtime_periods.go`, `playtime_periods_ui.go`, hooks in
+`playtime.go`, `trophy_room.go`, `game_options_ui.go`.
+**Done when.** Play two games offline after a cold boot (clock at the
+firmware's default date), then join Wi-Fi: both sessions show under Today
+(not the bogus date) in By game, This week/month/year agree, X sums by
+console, Ever matches the library's Playtime sort, and Game options shows
+"This week … · Ever …". A profile switch shows the other person's numbers.
+**Verify.** Record in the HW log.
+
+### SEVENZ-HW-1 — .7z games, LaunchBox and ScreenScraper covers (P2, S) [HW] [NET]
+**Why.** The pure-Go 7z reader (Copy/LZMA/LZMA2), the LaunchBox Games DB HTML
+parse and platform names, and ScreenScraper's API v2 fields, system ids and
+quota codes were written blind (both sites were unreachable from the build
+sandbox). ScreenScraper also needs developer credentials: register a
+developer account for the softname "JukaHub" and set the secrets
+`JUKAHUB_SS_DEVID` / `JUKAHUB_SS_DEVPASSWORD` (CI) or the same environment
+variables for build.bat / release.sh; without them the row says "Not in this
+build".
+**Where.** `sevenzip.go`, `gbcsort.go`, `gmeta_dat.go`, `romm_detect.go`,
+`artwork_launchbox.go`, `artwork_screenscraper*.go`, `romsetup.go`
+(fetchROMCoverAllSources), `artwork_choose.go`; docs/BOX_ART.md.
+**Done when.** A .7z Game Boy Color game made by 7-Zip (LZMA2, the default) is
+sorted into GBC and gets its libretro cover by CRC; a PPMd or BCJ2 .7z is left
+as before with one log line. A game libretro lacks gets a LaunchBox front box
+automatically (one request per second in the log), and Choose cover →
+Search LaunchBox… finds and saves a cover. With credentials, signing in to
+ScreenScraper fills cover, year, genre and synopsis for an unscraped game,
+keeps a hand-written description, and a quota answer backs off.
+**Verify.** Record in the HW log.
+
+### OVERLAY-HW-1 — Your own overlays and Left stick as D-pad on TrimUIs (P2, S) [HW]
+**Why.** Overlays/<Console>/ pictures become a generated RetroArch overlay
+.cfg per launch, and Left stick as D-pad writes
+`input_player1_analog_dpad_mode` through the per-launch scope; neither the
+overlay keys nor the analog mode values were seen in TrimUI's RetroArch, and
+fake-08 starting through RetroArch is unconfirmed.
+**Where.** `useroverlays.go`, `ratuning.go`, `ratuning_settings.go`,
+`ftp_server.go`, `rasticks.go`, `racontrols_ui.go`; docs/LOOKS.md,
+docs/CONTROLS.md.
+**Done when.** After a scan each console with games has its Overlays folder
+(once; a deleted one stays deleted); a 1024×768 PNG dropped from the phone's
+Files card shows in that console's next game and is listed under Settings →
+Emulation → Overlay; retroarch.cfg's own `input_overlay` is back after the
+game, a crash and a power cut. On a Smart Pro the left stick walks in a GBA
+game, is a real stick in N64 and in a DualShock PlayStation game, and the
+row is hidden on a Brick.
+**Verify.** Record in the HW log.
+
+### COMPUPD-HW-1 — Companion update card, logs.zip, folder guard and card tidy (P2, S) [HW] [NET]
+**Why.** Install from the phone runs the handheld's own update path through
+`tbxPost`; logs.zip masks Wi-Fi names, accounts, e-mail, MAC/BT and LAN
+addresses with `redactLogPersonal`; the Files guard asks before renaming or
+deleting a console folder; card tidy deletes Mac/Windows litter once per
+boot — all unrun.
+**Where.** `companion_update.go`, `companion_logs.go`, `companion_guard.go`,
+`companion.go`, `companion_files.go`, `logredact.go`, `cardtidy.go`;
+docs/USB_FILE_TRANSFER.md.
+**Done when.** With an older build on the Beta channel the page shows the
+newer version, Install updates and restarts JukaHub and the handheld says the
+phone started it; Install is refused during a game and at low battery off
+the charger. logs.zip opens on a PC and contains no Wi-Fi name, account name,
+e-mail, MAC or 192.168.x address. Renaming Roms/GBA asks first, says what it
+is for, and works after confirming. A card written by a Mac loses its `._`
+files, .DS_Store and .Spotlight-V100 at the next start (count in the log),
+and nothing else changes.
+**Verify.** Record in the HW log.
+
+### QMENU-HW-1 — The Quick menu, Menu on Home, theme pictures and busy chips (P2, S) [HW]
+**Why.** The Quick menu (2026-11-20) opens from Start, a Home tile, a
+control-profile button, the Brick's F1/F2, the Smart Pro S's Home key, Start in
+and (opt-in) a Menu tap on Home; it reads NextUI theme pictures and the activity
+strip now shows "Turning on Wi-Fi…" / "Turning on Bluetooth…". None of it was
+seen on a device.
+**Where.** `quickmenu.go`, `quickmenu_ui.go`, `quickmenu_bg.go`,
+`activity_busy.go`, hooks in `voiceorb.go`, `frontkeys*.go`, `startup_target.go`,
+`systemcontrol.go`, `bluetooth_bringup.go`; docs/QUICK_MENU.md.
+**Done when.** On a Brick and a Smart Pro every tile and button acts (Recents →
+switcher, Collections → the Tabs Home's Collections tab, Games, Tools, Settings)
+and B returns to the Quick menu; Sleep wakes back into it; Restart/Power off ask
+first with Cancel focused (one A with "Ask before power off" off). With Menu
+button on Home = Quick menu a Menu tap opens and closes it, holding Menu still
+talks to Juka and Hold Menu screenshots still work. A NextUI theme's
+`.media/quick_*.png` shows per entry without a flash, Backgrounds only hides the
+tiles, memory stays flat after many visits. Wi-Fi off → on shows the chip until
+connected (≤ 12 s with no saved network); Bluetooth from cold shows its chip.
+**Verify.** Record in the HW log.
+
+### ART-HW-1 — Game art settings, console backgrounds and the Artwork Manager (P2, S) [HW] [NET]
+**Why.** Art type (box / screenshot / title screen from the libretro
+thumbnails), Art style Background, art width and corner radius, console
+backgrounds and the Artwork Manager (2026-11-20) were written without a device:
+rounded corners copy 2·r+1 strips per frame, the background picture decodes at
+512 px and stretches, and counting reads every console folder.
+**Where.** `artstyle.go`, `artstyle_fetch.go`, `artmanager.go`, hooks in
+`game_library_ui.go`, `artcleanup.go`, `game_rename.go`, `game_delete.go`,
+`gbcsort.go`; docs/GAME_LIBRARY.md.
+**Done when.** Art type Screenshot → L1 (Fill gaps) fetches covers then
+screenshots, the preview shows the screenshot (box art when there is none) and
+L1 again stops both. Art style Background keeps titles readable on dark and
+light themes and does not stutter while scrolling fast. Art width 60 % and
+radius 24 px look right at 1280×720 and 1024×768, and Standard looks exactly as
+before. A NextUI `Roms/<console>/.media/bg.png` and a
+`data/backgrounds/<System>.png` show dimmed behind that console's games and go
+with Console backgrounds off. The Artwork Manager counts, fetches one console
+and all (progress in the header), Clear done hides complete consoles, A lists a
+console's games with Box/Shot/Title marks, Reset asks on Cancel and moves the
+files to the trash; B from it returns to the library on the same console.
+Remove cover, Rename file and Delete game carry the `.snap`/`.title` files.
+Record decode time and memory for a big card.
+**Verify.** Record in the HW log.
+
+### COLOUR-HW-1 — Colour picker, palettes, glass opacity and animation speed (P2, S) [HW]
+**Why.** The RGB picker sheet, the Background/Surface/Text/Focus ring
+overrides, eight palettes, Glass opacity and Animations (Comfy / Snappy / Off)
+of 2026-11-20 were checked by script for contrast only, never on a screen.
+**Where.** `colourpick.go`, `colourpick_theme.go`, `motionspeed.go`, hooks in
+`design.go` (`ApplyThemeColors`), `menucolour.go`, `setui.go`, `ui_glass.go`,
+`home_design.go`, `glass_real.go`, `hometabs_draw.go`, `anim.go`,
+`homefocusglide.go`; docs/THEMES.md.
+**Done when.** On a TSP and a Brick the picker fits; Left/Right step 5 with
+held repeat, L1/R1 step 1 with held repeat; X takes a typed `#FF8800`; Y cycles
+presets; A applies and B cancels. Paper on the Dark theme and Night on the
+Light theme keep cards, borders, text and badges readable, survive a theme
+switch and the light/dark schedule, and give way to High contrast (toggle and
+theme). A red Focus ring paints rings on Settings, Home tiles, the Tabs Home and
+sheets. Glass opacity 30 % thins tiles, the Tabs pill and the Realistic frost,
+and Reduce transparency makes them solid. Snappy visibly speeds scene fades and
+entrances; Off switches Reduce motion and its Quick Settings tile on; Comfy
+both off. Two profiles with different palettes switch correctly.
+**Verify.** Record in the HW log.
+
+### HOMEVIEW-HW-1 — Backdrop and Minimal views, Tools tab, pinned games and the Home dashboard (P2, S) [HW]
+**Why.** The Tabs Home's Backdrop view decodes a 640×480 picture 220 ms after
+the selection rests and redraws it full screen every frame; pinned games are a
+new `game:` tile kind; the Continue card now uses the save-state picture and
+This month waits for a sane clock (2026-11-20). None of it ran on the A133P.
+**Where.** `hometabs_backdrop.go`, `hometabs_minimal.go`, `hometabs_tools.go`,
+`gamepin.go`, `home_dashboard.go`, hooks in `hometabs*.go`, `home_tiles.go`,
+`home_continue.go`, `game_options_ui.go`; docs/HOME_TABS.md.
+**Done when.** On a TSP and a Brick: Backdrop walked fast and slow shows the
+picture about ¼ s after stopping, fading over the last, without stutter; a game
+without art shows the normal background; Minimal is readable with the selection
+in the accent colour. L2 → Y on Tools shows the tab and each entry opens. Grid
+selection ring off removes the ring everywhere on the Tabs Home. Pin to Home
+from the library leads Main with a Pinned badge and adds a cover tile on the
+Widgets Home that plays the game; renaming the file keeps the pin, deleting the
+game removes it. Remove from recents clears Recent, Continue and the switcher
+(saves still load); Add to collection… opens the picker over the library. After
+quitting a RetroArch game the Continue card shows the in-game picture within a
+few seconds. Most played and This month match Playtime → By game; a cold boot
+without Wi-Fi shows "Waiting for the clock" until NTP. The 13-row L2 sheet fits
+on 1024×768.
+**Verify.** Record in the HW log.
+
+### DEVSYNC-HW-1 — Device Sync between two handhelds and NextUI collections (P2, S) [HW] [NET]
+**Why.** Device Sync (2026-11-20) adds save states, BIOS, collections, recents
+and play time, ROMs and Send my settings to Save sync over the paired HTTPS
+link, with resumable copies; NextUI's `Collections/*.txt` are read and written
+back. Two devices, NextUI's own reading of JukaHub's files and real Wi-Fi drops
+were never tried.
+**Where.** `devsync.go`, `devsync_data.go`, `devsync_ui.go`,
+`collections_nextui.go`, hooks in `ssyncui.go`, `peernet.go`,
+`hometabs_collections.go`; docs/DEVICE_SYNC.md, docs/COLLECTIONS.md.
+**Done when.** Two paired TrimUIs: Save states off → only battery saves move;
+BIOS on (on both) copies a file only one has and leaves a different same-named
+file alone; BIOS off on one side refuses with "switched off on the other
+handheld"; same-named collections merge both ways; Continue on B shows A's last
+game and play time keeps the higher figure; ROMs on → per-console rows with
+sizes, one console left out, the confirm shows the total, a Wi-Fi drop in a big
+ISO resumes (the part grows, not restarts), and nothing in a ports folder or
+any `.sh` is listed; Send my settings A → B waits on B until Use them, then theme,
+wallpaper and text size change while Wi-Fi and the greeting stay; a peer on an
+older JukaHub shows "has an older JukaHub" and saves still sync. On a NextUI
+card with two collections (one naming a deleted game): both appear in order; a
+game added in JukaHub shows in NextUI and the deleted game's line is kept with
+the file's line endings; an edit made in NextUI or on a PC shows after a
+restart; a new JukaHub collection appears in NextUI; a deleted one goes to
+`Collections/.deleted` and NextUI hides that folder.
+**Verify.** Record in the HW log.
+
+### NETLINK-HW-1 — Game Boy link cable, GBA wireless adapter and four-player netplay (P2, S) [HW] [NET]
+**Why.** The link modes (2026-11-20) set Gambatte's network-link options and
+gpSP's `gpsp_serial = "rfu"` for one launch, with key names taken from libretro
+docs, not from the firmware's cores; four-player netplay relies on RetroArch's
+`netplay_request_device_pN`. Nothing ran on two devices.
+**Where.** `netplay_link.go`, `netplay_link_beacon.go`, `netplay_link_ui.go`,
+hooks in `netplay.go`, `netplay_rooms.go`, `netplay_ui.go`;
+docs/GAME_LIBRARY.md (Netplay).
+**Done when.** Two TrimUIs on one Wi-Fi, Pokémon Red on A and Blue on B
+(Gambatte installed): A hosts Link cable, B finds the room and joins; the Cable
+Club connects within about 30 s, a trade is saved on both cards, and the link
+options are back to their old values (or gone) in the Gambatte `.opt` after
+quitting. Also joined by typed address, and with A on its own hotspot. Record
+whether the stock Gambatte has the network link and which address keys it uses
+(12 digits or octets). A console whose usual core is another GB core says
+"uses Gambatte for this session" and the next launch is back on the usual core.
+FireRed and LeafGreen on gpSP see each other in the Union Room (record the
+RetroArch version; 1.17 or newer is needed). An N64 game with two or three
+guests seats everyone, "as player 3" seats B as player 3, and the host's
+"N of 4 players here" follows joins and leaves. After every session
+`retroarch.cfg`'s netplay request keys, spectator flag, command port and
+autosave interval are back.
+**Verify.** Record in the HW log.
+
+### MEDIA-HW-1 — Audio and subtitle tracks, .ass/.sub files, song lyrics and the radio directory (P2, S) [HW] [NET]
+**Why.** The track switch restarts the sound decoder with `-map 0:a:N` and
+reads ffprobe's JSON with disposition flags; the `.ass`/`.ssa`/MicroDVD
+parsers, lyrics from tags and the Radio Browser directory (2026-11-20) never
+met the firmware's ffmpeg, real files or the device's TLS and DNS.
+**Where.** `videotracks.go`, `videotracks_subs.go`, `lyrics_embedded.go`,
+`radiodir.go`, `radiodir_ui.go`, hooks in `videoplayer.go`
+(`runFFmpegAudio`), `videosubs.go`, `videosheet.go`, `music_shelf.go`;
+docs/MUSIC_PLAYER.md, docs/CONTROLS.md.
+**Done when.** On a Brick and a Smart Pro: an MKV with two audio tracks
+switches language within about a second with picture and sound in sync, also
+while paused, and reopening keeps the choice; an MKV with a picture subtitle
+first and a text track second shows the text track, the Subtitles row steps Off
+→ files → tracks, and a picture-only file says so; `Film.ass` and a MicroDVD
+`Film.sub` show at the right times without `{\…}` codes. An MP3 with USLT, a
+FLAC with LYRICS and an M4A with ©lyr show lyrics with no `.lrc` (a timed tag
+syncs); record the cost of the extra ffprobe per track on the Brick. Music → the
+Radio shelf → Radio directory: Top loads, Country opens on the device's
+country, Genre "hip hop" and Search work, A plays and Next zaps, X saves to the
+Radio shelf and IPStream's Radio tab, airplane mode shows the saved copy, and a
+200-row list scrolls smoothly.
+**Verify.** Record in the HW log.
+
+### FILES-HW-1 — Picture rotate, rename and delete, two-pane Files and deleting a play record (P2, S) [HW]
+**Why.** Rotate right decodes, turns and re-encodes in Go (up to three
+full-size copies of a 20 MP picture in RAM), Rename types over the viewer, Two
+panes swaps Files state between panes and copies or moves in the background,
+and Play history can delete a game's record (2026-11-20). None of it ran on the
+handheld.
+**Where.** `imageviewer_edit.go`, `files_dualpane.go`,
+`files_dualpane_xfer.go`, `game_history_forget.go`, hooks in `imageviewer.go`,
+`files_manager.go`, `features.go`, `game_history_ui.go`; docs/CONTROLS.md,
+docs/GAME_LIBRARY.md.
+**Done when.** A 12 MP portrait phone JPEG (EXIF orientation 6) → X → Rotate
+right saves within a few seconds, shows turned once (not twice) and its Files
+thumbnail updates, without running out of memory on the Brick; a PNG saves; a
+WebP says "turned on screen only". Rename with the pad over the viewer keeps the
+extension and refuses a taken name; Delete (two presses) shows the next picture.
+Y → Two panes on a Brick and a TSP is readable at half width, L1/R1 switch
+panes, Copy to other pane of a 1 GB folder shows progress in the other bar with
+the UI responsive and a second A stops it, a move SD → USB drive copies then
+deletes and SD → SD is an instant rename. A game page's History shows Played N
+times and Average session; X → A deletes the record, Playtime → By game and Ever
+drop the game, and its saves are untouched.
+**Verify.** Record in the HW log.
+
+### QSET-HW-1 — The in-game Quick settings card and its Power off (P2, S) [HW]
+**Why.** The in-game menu's Quick settings card (2026-11-20) changes
+brightness, volume, radios, lights and rumble while the game is stopped under
+the overlay, reads CPU/temperature/RAM/battery each second and powers off
+through the save-first path; switching Bluetooth while a paused game holds a
+BlueALSA headset was never tried.
+**Where.** `gamemenu_quick.go`, hooks in `gamemenu.go`, `gamemenu_entries.go`;
+docs/CONTROLS.md.
+**Done when.** On a TSP and a Brick, in a RetroArch game and in PPSSPP or a
+port (Select + L2 → Quick settings): brightness and volume change at once while
+paused and match the header after quitting; Wi-Fi and Bluetooth say
+"Switching…" and end where Quick Settings later agrees; Lights off darkens the
+rings at once (low battery and charging still show); with music under a game
+the Music in game level is heard at once; a new Rumble strength applies to the
+next game; the system line updates each second. Power off: the game resumes
+briefly, RetroArch writes a save state, the handheld switches off and the next
+power-on resumes it (also with "Ask before power off" off). B goes back to the
+menu, Select + L2 to the game, and the card fits at 1280×720 and 1024×768.
+**Verify.** Record in the HW log.
+
+### SAFEOFF-HW-1 — Safe power off, launch scripts, screenshot requests, USB awake, stock check and Developer page (P1, S) [HW]
+**Why.** Safe power off (2026-11-20) sends SIGTERM to programs holding SD card
+files, syncs and remounts the card read-only inside 3 s before every Restart
+and Power off — on by default, never run on the TrimUI's vfat/exfat card. The
+same pass added launch scripts, a screenshot request file read from the
+framebuffer, staying awake on USB transfer, a stock-system check and a
+Developer page.
+**Where.** `safepoweroff.go`, `safepoweroff_linux.go`, `launchscripts*.go`,
+`usbawake.go`, `stockcheck.go`, `devoptions.go`, hooks in `devpower.go`,
+`gamesuspend.go`, `screengroup_unix.go`, `apps.go`, `screensaver.go`,
+`logging.go`; docs/SESSION_SAFETY.md, docs/DEVELOPMENT.md,
+docs/USB_FILE_TRANSFER.md.
+**Done when.** Power off and Restart with Safe power off on: errors.txt says
+"safe power off before poweroff: N of M card mount(s) read-only", the card has
+no dirty flag or fsck repair at the next boot, an SSH `tail -f` on a card file
+is closed, and tap-to-dark grows by under 3 s; a failed poweroff leaves the
+card writable with its old mount options. A `data/hooks/pre-launch/10-log.sh`
+plus a `GBA/` copy run in order with the `JUKAHUB_*` values before a GBA game
+and an app (see `launch-scripts.log`); `exit 3` cancels with a toast; a
+`sleep 30` script is killed at 5 s and the game still starts; post-exit scripts
+get the exit code. `touch /tmp/jukahub/screenshot.request` during a RetroArch
+game saves a PNG and writes its path to `screenshot.last` (also on a Smart Pro
+S). With Auto sleep 3 min and the idle screen 1 min, a PC on MTP for 5 idle
+minutes sees neither; unplugged, both return. On a card whose `runtrimui.sh`
+NextUI or MinUI replaced: one toast, none after a restart, About → Stock system
+names it; clean stock says Unchanged with no toast (record whether stock
+mentions `.tmp_update`). Debug logging on shows DEBUG lines at once and after a
+restart; Copy logs to the card writes a masked zip.
+**Verify.** Record in the HW log.
+
+### EMUTUNE-HW-1 — Fast-forward speed, N64 Light graphics and the Button layout (P2, S) [HW]
+**Why.** Fast-forward speed writes `fastforward_ratio` as "2.000000" for one
+launch; N64 graphics Light sets ParaLLEl N64's Rice plugin or cheaper
+Mupen64Plus-Next options whose names were not checked against the firmware's
+cores; Button layout Xbox flips the menu swap and makes RetroArch games default
+to Swap both (2026-11-20).
+**Where.** `raffspeed.go`, `n64light.go`, `buttonlayout.go`, hooks in
+`ratuning_settings.go`, `inmap_settings.go`, `inputhints.go`;
+docs/CONTROLS.md, docs/CONFIGURATION.md.
+**Done when.** Fast-forward speed 2× → a GB game's fast forward runs about 2×
+(not 10×) and `retroarch.cfg` has its own value back after quitting; GBA at 4×
+while All consoles is 2× follows the console. On a Brick with N64 graphics Auto
+an N64 game on ParaLLEl N64 logs "light N64 graphics for this launch" and shows
+Rice in RetroArch's Core options, the `.opt` is restored after quitting, and
+Mupen64Plus-Next gets 320x240 without frame-buffer emulation; a core option set
+in RetroArch for a game logs "kept your own …"; a Smart Pro on Auto writes
+nothing; a 16:9 widescreen launch stays Full. Record which games break without
+frame-buffer emulation. Button layout Xbox on a Brick: the bottom button
+confirms in menus, hints read by letter or role as chosen, a SNES game in
+RetroArch has A on the bottom; Nintendo puts menus, hints and All consoles
+Buttons back, and a console set to Normal stays Normal.
+**Verify.** Record in the HW log.
+
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
 `mail_*.go`, `calsync*.go`, `mailcal_ui.go`, `companion_mailcal.go`,
@@ -2710,8 +3516,10 @@ game palettes).
 
 ### UX-15 — A motion system (P3, M)
 **Done when.** Enter, exit, focus and sheet transitions use the curves in
-`motion.go` everywhere (one duration scale), all honour reduced motion, and the
-Start menu, sheets and toasts share one entrance.
+`motion.go` everywhere, all honour reduced motion and the Animations speed
+(Comfy / Snappy since 2026-11-20, `motionspeed.go`, which today scales scene
+fades, overlay entrances and the focus glide), and the Start menu, sheets and
+toasts share one entrance.
 
 ### UX-16 — Trophy set two on a device, and its leftovers (P2, S) [HW]
 **Why.** About 386 trophies (`trophy_set2.go`, the event API in
@@ -3180,8 +3988,7 @@ their normal compatibility checks. See `docs/PRIVATE_GLIBC.md`.
 **Why.** Penguin Dash has been played on a Smart Pro with AndroidRT
 (`docs/ANDROID.md`), but the Brick, the backend log lines, a stop from the hub
 and a pause/resume have not been checked; `sdl` is the stock-TrimUI default on
-the PowerVR models, chosen from other ports' reports (NextOS ports issue #1,
-nx-redux PR #152).
+the PowerVR models, chosen from other ports' reports (NextOS ports issue #1).
 **Where.** `player/androidrt/src/eglpresent.c`, `docs/ANDROID.md` (device trial
 steps and log lines).
 **Done when.** On a Smart Pro and a Brick, with the runtime the TrimUI archive
@@ -3340,12 +4147,12 @@ first: JukaHub's own captures and RetroArch's are grouped by the game named in
 the file name, anything else under "Other"; A opens a picture full screen and
 L1/R1 step between games.
 
-### MED-6 — Audio and subtitle tracks (P2, M)
-**Why.** Only the first embedded subtitle or a sidecar file plays; there is no
-audio-track picker.
-**Done when.** The video settings sheet lists audio and subtitle tracks (from
-ffprobe), remembers the choice per language, and styles subtitles (size,
-background).
+### MED-6 — Subtitle style and language preferences (P2, M)
+**Why.** Since 2026-11-20 the video settings sheet picks audio and subtitle
+tracks and remembers them per file (`videotracks.go`), but nothing prefers a
+language across files and subtitles have one fixed look.
+**Done when.** A preferred audio and subtitle language picks the matching
+tracks in any new video, and subtitles can be styled (size, background).
 
 ### MED-7 — Crossfade and ReplayGain (P3, S)
 **Why.** Album playback is already gapless (`musicStartDecodeGapless`,
@@ -3359,9 +4166,10 @@ switched on; both stay off on the bit-perfect path.
 **Done when.** Episodes download for offline listening (Downloads queue), OPML
 import/export works, chapters are shown, played episodes clean up.
 
-### MED-10 — Internet radio directory (P3, M) [NET]
-**Done when.** Stations from radio-browser.info by country, tag and search,
-favourites, buffering state and now-playing metadata.
+### MED-10 — Radio buffering and now-playing titles (P3, M) [NET]
+**Done when.** The Radio Browser directory (Music → Radio, 2026-11-20,
+`radiodir.go`) and saved stations show a buffering state while a stream
+connects and the station's now-playing title (ICY metadata) while it plays.
 
 ### MED-11 — Comics (P3, M)
 **Done when.** CBZ/CBR/CB7 open in a reader with fit width/height, two-page
@@ -3544,8 +4352,8 @@ start the chosen one; the shelf counts a probed file's chapters.
 (`bluetooth_devices*.go`, `statusbar_bluetooth.go`, `bluetooth_quick.go`,
 `bluetooth_bringup*.go`, `bluetooth_attach.go`) were written without a device.
 TrimUI's firmware promises only "BLE hid", so classic pads (DualShock 4,
-DualSense) may connect without input, and spruceOS saw stock pairings lost after
-a reboot or a radio toggle.
+DualSense) may connect without input, and stock pairings have been seen lost
+after a reboot or a radio toggle.
 **Where.** The files above; `bluetooth_diag.go` logs the whole stack when the
 page opens and on every failed bring-up (also in the diagnostics bundle).
 **Done when.** On a Smart Pro and a Brick, stock 1.1.x and CrossMix, recorded in
@@ -3597,15 +4405,20 @@ warning at 90% full; the card's filesystem dirty flag is checked at boot
 (`sdhealth.go`).
 
 ### SYS-9 — Move to a new device (P3, M)
-**Why.** Switch 2 ships device-to-device transfer; JukaHub has handoff and save
-sync but no "move my setup".
-**Done when.** Two paired devices (`peerpair.go`) can transfer settings,
-themes, collections, playtime, saves and the package list over the LAN in one
-flow, with a summary of what moved.
+**Why.** Switch 2 ships device-to-device transfer. Device Sync (2026-11-20,
+`devsync*.go`) already carries saves, states, BIOS, collections, recents, play
+time, ROMs and Send my settings between paired devices, but settings that name
+a file (wallpaper, theme files) apply only when the file is already there, and
+installed apps, emulators and cores do not follow.
+**Done when.** Send my settings also copies the wallpaper and custom theme
+files it names, and the installed package list (apps, emulators, cores) can be
+reinstalled on the other device in one flow, with a summary of what moved.
 
 ### SYS-10 — Import from the stock launcher and other firmwares (P3, M)
 **Done when.** First run offers to import TrimUI MainUI favourites, recents and
-playtime, and NextUI/muOS collections where their files are on the card.
+playtime, and muOS collections where their files are on the card (NextUI's
+`Collections/*.txt` are shared both ways since 2026-11-20,
+`collections_nextui.go`).
 
 ### SYS-14 — Chat files against the real channel (P1, S) [NET] [HW]
 **Why.** Chat uploads use a hand-written streaming multipart POST
@@ -3815,9 +4628,9 @@ layer** for a zip with `layer.json`; driver and value changes apply live where
 possible; a per-session report page lists what was bound, loaded and skipped;
 the power card can restart JukaHub OS.
 
-### SYS-24 — JukaHub OS image on plastron, TortOS's Linux (P3, L) [HW]
-**Why.** TortOS 2 boots the Brick to its menu in about 1.9 s because the card is
-the whole system; plastron (github.com/tarikbc/plastron, now ZyperOS) builds
+### SYS-24 — JukaHub OS image on plastron's Linux (P3, L) [HW]
+**Why.** A plastron card boots the Brick to its menu in about 1.9 s because the
+card is the whole system; plastron (github.com/tarikbc/plastron, now ZyperOS) builds
 U-Boot + TF-A and Allwinner's 4.9.191 A133 kernel from source. Its modules
 cannot be JukaHub OS layers on the stock kernel (vermagic/CRCs); the Speed layer
 (`trimui/os-layers/speed`) is the stock-kernel part. The image builders exist
@@ -3827,7 +4640,7 @@ but have not been boot-tested.
 boot0/U-Boot/kernel/rootfs saved by `dump-board.sh`, with `/jukahub/init` as
 process 1; see its README), `docs/JUKAHUB_OS.md`.
 **Done when.** The licences of plastron and TortOS allow redistribution (else
-stop); a Brick boots the image into JukaHub (timed against TortOS's 1.9 s) with
+stop); a Brick boots the image into JukaHub (timed against 1.9 s) with
 a working SDL2 video path — the PowerVR GE8300 userspace copied from the owner's
 own stock firmware at install, or SDL2 KMSDRM/fbdev with software rendering —
 plus Wi-Fi firmware, audio, sticks, LEDs and battery, and taking the card out
@@ -3909,7 +4722,7 @@ set in JukaHub (or the drift is written down), and the alarm's ramp leaves
 **Why.** The stock keymon owns the hardware keys and may re-apply its own level
 — for example when headphones are plugged in, with a separate "hpvol" in
 `system.json` — over a level JukaHub set. And a USB DAC present at boot becomes
-ALSA card 0 (NextUI issue #865), so the codec's controls are not where `amixer`
+ALSA card 0, so the codec's controls are not where `amixer`
 looks.
 **Where.** `volume_trimui.go` (probe and poll), `audiooutput.go` (the output
 re-probe already sees headphones and Bluetooth), `volumectl.go`.
@@ -4384,16 +5197,17 @@ shows its picture on the game page's states strip.
 ### SHELL-2 — Indicators drawn inside a running game (P2, XL) [HW]
 **Why.** The in-game menu (`gamemenu.go`, hold Select + L2) pauses any game
 under JukaHub's own overlay (resume, music, save/load state, rewind, fast
-forward, Ask Juka, Game switcher, close background apps, sleep, quit), but it
-has no brightness or performance-profile row, and nothing JukaHub draws is seen
+forward, Ask Juka, Game switcher, close background apps, sleep, quit, and since
+2026-11-20 a Quick settings card with brightness, volume and radios), but it
+has no performance-profile row, and nothing JukaHub draws is seen
 while a game runs: volume, brightness and low-battery changes are invisible (the
 low-battery LED in `ledindicators.go` is the only sign). muOS draws such
 overlays through an `LD_PRELOAD` hook on SDL/GLES swap.
 **Where.** `gamemenu.go` (`gmItems`), `powerprofile.go`; a small C hook library
 next to `androidrt/` (swap-buffers hook, own GLES drawing); `volumebuttons.go`,
 `lowbattery.go`.
-**Done when.** The in-game menu gains Brightness and Performance profile rows;
-an opt-in hook draws a volume, brightness and low-battery indicator into
+**Done when.** The in-game menu gains a Performance profile row; an opt-in
+hook draws a volume, brightness and low-battery indicator into
 RetroArch and the standalone PPSSPP, with no frame-time cost visible in
 RetroArch's own FPS readout, and a game whose renderer the hook cannot find runs
 unchanged.
@@ -4499,8 +5313,8 @@ one that is running; the helper's status file carries the battery level at the
 start and the end of a stream, and JukaHub learns the stream's rate from it.
 
 ### PWR-10 — Travel lock on the FN switch: verify on the device (P2, S) [HW]
-**Why.** `travellock.go` reads the Smart Pro's FN switch as gpio243 (PH19, the
-pin spruceOS reads) and takes its position when the setting is turned on as
+**Why.** `travellock.go` reads the Smart Pro's FN switch as gpio243 (PH19)
+and takes its position when the setting is turned on as
 "unlocked", so the pin's polarity never had to be guessed; it has not run on a
 device.
 **Where.** `travellock.go`, `powersleep.go` (`travelLockKeepAsleep`, the
@@ -4984,8 +5798,8 @@ RetroArch's own updater) is labelled "another build", never with the wrong
 build's date.
 
 ### LIB-24 — The recommended-emulator ranking, measured (P2, S) [HW]
-**Why.** `emubest.go`'s handheld ranking comes from CrossMix, KNULLI and
-spruceOS notes and search snippets; standalone Flycast ahead of its core, the
+**Why.** `emubest.go`'s handheld ranking comes from firmware notes, release
+notes and search snippets; standalone Flycast ahead of its core, the
 mGBA core ahead of standalone mGBA, the Saturn order and the order of the light
 cores are judgement calls (docs/GAME_LIBRARY.md lists the sources).
 **Where.** `emubest.go` (`emuBestTable`), docs/GAME_LIBRARY.md.

@@ -260,6 +260,8 @@ func (g *homeFocusGlideState) beginFrame(now uint64, ctx int, level focusBounceL
 	g.open, g.enabled, g.frameMS, g.ctx = true, enabled, now, ctx
 	if enabled {
 		g.tune = focusBounceTunes[level]
+		// Animations: Snappy shortens the glide too (motionspeed.go).
+		g.tune.ms = motionSpeedMS(g.tune.ms)
 	}
 	g.input = navMark != g.lastInput
 	g.lastInput = navMark

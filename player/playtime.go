@@ -120,6 +120,9 @@ func newPlaytimeData() playtimeData {
 // used to announce a dozen of them, every start, while the record kept being
 // written back to its boot copy (saveUserConfigFile).
 func playtimeInit(config *Config) {
+	// The days by game are read again too, from whoever's folder is current
+	// (a profile switch calls this after moving the paths).
+	playtimePeriodsReload()
 	prev := playtime
 	playtime = playtimeState{data: newPlaytimeData(), rev: prev.rev,
 		session: prev.session, lastDay: prev.lastDay, lastRecordAt: prev.lastRecordAt}
@@ -216,6 +219,7 @@ func playtimePersist(config *Config) {
 	playtime.lastSave = time.Now()
 	playtime.dirty = false
 	saveUserConfigDebounced(userConfigFromVariables(config))
+	playtimePeriodsPersist(false) // the days by game, in their own file
 }
 
 // playtimeFlush is called on graceful exit so the last partial interval and
@@ -238,6 +242,7 @@ func playtimeFlush(config *Config) {
 	// written after it by the shutdown's flush.
 	saveUserConfigDebounced(userConfigFromVariables(config))
 	flushPendingUserConfig()
+	playtimePeriodsPersist(true) // the days by game, on the card before going on
 }
 
 // playtimeMaxGames bounds the per-game ledger. A handheld library is large, but
@@ -499,6 +504,7 @@ func playtimeTick(config *Config) {
 	trophySyncAvailability(config)
 	// Network time or a new zone moved the date: re-anchor (clockjump.go).
 	playtimeClockJumpCheck()
+	playtimePeriodsClockCheck() // the days by game follow (playtime_periods.go)
 	// What the features reported since the last tick (trophy_events.go). It is
 	// applied before anything below can return, so a download that finishes
 	// under the screensaver still counts, and saved within the interval even
@@ -806,6 +812,7 @@ func playtimeCreditGameGap(gapStart, gapEnd time.Time) {
 	}
 	d.Games[key] += secs
 	d.GameDays[day] += secs
+	playtimePeriodsCredit(key, day, secs) // by game and day, for the By game tab
 	d.Total += secs
 	d.Days[day] += secs
 	playtimeRunNote(day, secs)

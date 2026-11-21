@@ -435,13 +435,15 @@ func profilesPrefKeys() []string {
 	keys := append([]string(nil), xpackStateKeys()...)
 	return append(keys, xpackUndoKey,
 		uiLanguageKey, uiFontKey, menuColourKey, glassStyleKey, liquidKey, liquidTiltKey,
+		colourBackgroundKey, colourSurfaceKey, colourTextKey, colourFocusKey, glassOpacityKey, animSpeedKey,
 		homeTilesKey, homeTabsViewsKey, homeTabsShownKey, homeTabsRememberKey, homeTabsPositionKey,
+		homeTabsStartKey, shutdownScreenKey, shutdownPictureKey,
 		bgmEnabledKey, bgmSourceKey, bgmVolumeKey, bgmSelectedKey,
 		"reducedMotion", "clock12", "dynamicBg", "tspUsername",
 		a11yKeyFontScale, a11yKeyContrast, a11yKeyColorblind, a11yKeySwapAB, a11yKeySwapXY,
 		a11yKeyPrevTheme, a11yKeyOneHanded, a11yKeyChordBtn, a11yKeySlowRepeat, a11yKeyKeymap,
 		a11yKeyReduceTransparency, a11yKeyIncreaseContrast, a11yKeyBoldText, a11yKeyMonoAudio,
-		a11yKeyAudioBalance, a11yKeyCaptionsAlways, a11yKeyCaptionSize, a11yKeyCaptionBackground,
+		a11yKeyAudioChannels, a11yKeyAudioBalance, a11yKeyCaptionsAlways, a11yKeyCaptionSize, a11yKeyCaptionBackground,
 		a11yKeyLongPress, a11yKeyRepeatDelay, a11yKeyRepeatRate, a11yKeyToastDuration,
 		a11yKeyStickyChords, a11yKeyMagnifier, a11yKeyMagnifierZoom, a11yKeyLegibleFont,
 		a11yKeyLegibleFace, a11yKeySwitchMode, a11yKeySwitchInterval)

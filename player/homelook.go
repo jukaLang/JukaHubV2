@@ -1,6 +1,6 @@
 package main
 
-// homelook.go — Home's "new main menu look" (NX Redux 2.5's): three switches
+// homelook.go — Home's main menu look: three switches
 // and what they share.
 //
 //   - Dim unselected art (homeDimArt, on unless switched off): on the Tabs
@@ -296,7 +296,8 @@ var homeLookRowsCache []setRow
 // arranging sheet list them (homeTabsEditPosition, Dim, Fade).
 func homeLookRows() []setRow {
 	if homeLookRowsCache == nil {
-		homeLookRowsCache = []setRow{homeTabsPositionRow(), homeDimArtRow(), listEdgeFadeRow()}
+		// Grid selection ring is hometabs_tools.go's (homeTabsEditRing).
+		homeLookRowsCache = []setRow{homeTabsPositionRow(), homeDimArtRow(), listEdgeFadeRow(), homeTabsGridRingRow()}
 	}
 	return homeLookRowsCache
 }
@@ -309,6 +310,7 @@ const (
 	homeTabsEditPosition
 	homeTabsEditDim
 	homeTabsEditFade
+	homeTabsEditRing
 	homeTabsEditLayout
 	homeTabsEditExtraRows
 )

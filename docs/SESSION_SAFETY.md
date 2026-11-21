@@ -105,6 +105,27 @@ as before: only RetroArch games are saved and closed first.
 **Save and suspend at 3%** switches the whole low-battery guard, RetroArch
 included.
 
+## Safe power off
+
+After everything above — the game saved and closed, JukaHub's own settings,
+saves and logs written, the card synced — **Restart** and **Power off** take
+one more step before the handheld goes dark (safe shutdown):
+
+1. Any other program that still has a file open on the SD card (a helper a
+   script started, a server, a daemon) is asked to close (SIGTERM). The
+   system itself, JukaHub and the scripts that started JukaHub are left alone.
+2. Up to 1.5 seconds for them to finish.
+3. The card is synced once more.
+4. The card is switched to read-only, so nothing can be half-written as the
+   power goes. If a file is still open for writing the card stays writable;
+   the sync already happened.
+
+All of it takes at most 3 seconds, and anything that fails just lets the
+power off go on as before. If the power off itself fails, the card is made
+writable again.
+
+Settings → Power & battery → **Safe power off** (on by default; TrimUI only).
+
 ## Known limits
 
 - The save-state-on-exit behaviour of each emulator is taken from its

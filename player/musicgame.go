@@ -104,6 +104,11 @@ type musicGamePlan struct {
 	hookFile string  // the hook file naming the "default" file
 	at       time.Time
 	applied  bool // the child's environment names outFile
+	// chanOnly marks a plan made only for Audio channels (audiochannels.go):
+	// the game's "default" goes through the downmix, no mix is shared, and
+	// music that played stays paused for musicWhy.
+	chanOnly bool
+	musicWhy string
 }
 
 var musicGame struct {
@@ -182,6 +187,11 @@ func musicGameBind(config *Config) {
 	if config == nil {
 		return
 	}
+	// The other launch-time and background sound settings ride along:
+	// Audio channels, Tidy the Music folder, Quiet the game while music plays.
+	audioChannelsPublish(a11y.audioChannels)
+	musicTidyBind(config)
+	ingameQuietBind(config)
 	s := musicGameSettings{keep: musicGameKeepEnabled(config), level: musicGameLevel(config)}
 	if old := musicGameSettingsLive.Load(); old != nil && *old == s {
 		return
@@ -227,9 +237,20 @@ func musicGamePlanNow() *musicGamePlan {
 		playing := music.playing && !music.paused
 		music.mu.Unlock()
 		if !playing {
-			return nil
+			// No music: the launch stays untouched — unless Audio channels
+			// downmixes every game (audiochannels.go; nil in Stereo).
+			if p = audioChannelsPlanBuild(""); p == nil {
+				return nil
+			}
+		} else {
+			p = musicGamePlanBuild()
+			if p.why != "" {
+				// The music cannot stay; the downmix still applies.
+				if c := audioChannelsPlanBuild(p.why); c != nil {
+					p = c
+				}
+			}
 		}
-		p = musicGamePlanBuild()
 	}
 	musicGame.mu.Lock()
 	musicGame.plan = p
@@ -331,6 +352,12 @@ func musicGameOutText(slave, card string) string {
 			"\t\tbuffer_size " + strconv.Itoa(musicGameMixBuffer) + "\n" +
 			"\t}\n" +
 			"}\n"
+	}
+	// Audio channels other than Stereo: the game plays through the downmix
+	// in front of the mix or card (audiochannels.go). JukaHub's own open of
+	// jhgamemix skips it; a11yProcessAudio already mapped the music.
+	if route := audioChannelsRouteText(audioChannelsPCM, slave, audioChannelsGameNow()); route != "" {
+		return text + route + audioChannelsPlugText(musicGameOutPCM)
 	}
 	return text + "pcm." + musicGameOutPCM + " {\n\ttype plug\n\tslave.pcm \"" + slave + "\"\n}\n"
 }
@@ -473,6 +500,14 @@ func musicGameAtRelease(held bool) {
 	switch {
 	case p == nil || time.Since(p.at) > musicGamePlanTTL:
 		musicGamePaused("the game took the sound")
+		return
+	case p.chanOnly:
+		// Audio channels' plan: no shared mix to move onto.
+		why := p.musicWhy
+		if why == "" {
+			why = "the game took the sound"
+		}
+		musicGamePaused(why)
 		return
 	case p.why != "":
 		musicGamePaused(p.why)

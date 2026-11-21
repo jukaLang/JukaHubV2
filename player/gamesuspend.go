@@ -153,6 +153,9 @@ func noteGameChildStarted(cmd *exec.Cmd) {
 	voiceReleaseForGame()
 	// Syncthing pauses every device until JukaHub is back (syncthing.go).
 	syncthingKick()
+	// A script's or pak's screenshot request file is watched while it runs
+	// (launchscripts.go).
+	shotRequestWatch()
 	if cmd == nil {
 		return
 	}

@@ -7,7 +7,7 @@ package main
 // XRadio XR829 Wi-Fi + Bluetooth combo. Its Bluetooth half sits on the UART
 // ttyS1 and only becomes the kernel adapter hci0 once a user-space program,
 // hciattach, opens that port, loads the chip's patch and hands the line to the
-// kernel (Knulli's Brick: `rtk_hciattach -s 3000000 ttyS1 xradio`; Allwinner's
+// kernel (Realtek's fork: `rtk_hciattach -s 3000000 ttyS1 xradio`; Allwinner's
 // Tina guide for the XR829: `hciattach -n ttyS1 xradio`). The firmware does this
 // itself while its own Bluetooth switch is on. With that switch off there is no
 // hci0 at all, and the bring-up used to depend on a generic Tina script,
@@ -21,8 +21,7 @@ package main
 // hci0 appears. Everything is bounded and logged.
 //
 // The Smart Pro S (TG5050, Allwinner A523) carries an AICSemi AIC8800D80
-// instead: Wi-Fi on SDIO, Bluetooth on the UART ttyAS1 (spruceOS attaches it
-// there). Its Bluetooth firmware is loaded over SDIO by the aic8800_bsp driver,
+// instead: Wi-Fi on SDIO, Bluetooth on the UART ttyAS1. Its Bluetooth firmware is loaded over SDIO by the aic8800_bsp driver,
 // so the UART needs no vendor setup: the AIC8800 boards' recipe (Bit-Brick K1,
 // Radxa Zero 3W, Armbian's A733 service) is the helper module aic8800_btlpm
 // (rfkill switch + /proc/bluetooth/sleep), rfkill unblock, a write to btwrite
@@ -53,7 +52,7 @@ const (
 	// the patch download over the UART takes a few seconds.
 	btAttachWait = 10 * time.Second
 	// The XR829's sleep controller must allow writes before the firmware is
-	// loaded. NextUI and NX Redux set this before resetting the radio. The
+	// loaded, so it is set before the radio is reset. The
 	// AIC8800's helper module (aic8800_btlpm) creates the same node.
 	btChipWritePath = "/proc/bluetooth/sleep/btwrite"
 	// btModuleLoadWait bounds one modprobe of the AIC8800's Bluetooth helper.
@@ -177,8 +176,7 @@ type btAttachCommand struct {
 
 // btAttachCommands are the attach programs to try for a port, in order: BlueZ's
 // hciattach as Allwinner's Tina images run it for the XR829, then the Realtek
-// fork Knulli uses on the same board. Knulli's startup script passes 115200
-// baud to that fork. Both stay in the foreground (-n), so their exit is seen.
+// fork for the same board, at 115200 baud. Both stay in the foreground (-n), so their exit is seen.
 //
 // The AIC8800 gets BlueZ's hciattach alone, with no vendor setup ("any": its
 // firmware is already in, over SDIO), at its rate both ways, with hardware flow
@@ -285,7 +283,7 @@ func btAttachChip(ctx context.Context, say func(string)) bool {
 		}
 	}
 	// The stock XR829 script assumes the firmware's manager has already made
-	// this write. NX Redux does it explicitly before its rfkill reset. Restore
+	// this write, so it is made here before the rfkill reset. Restore
 	// the previous value if every attach fails, so a failed attempt does not
 	// leave the chip awake for no reason.
 	restoreWake := btWakeChip(btChipWritePath)

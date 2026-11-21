@@ -133,6 +133,9 @@ func btBringUp(ctx context.Context, stage func(string)) error {
 	if btAdapterPresent() && daemonOK() && btRadioIsOn() {
 		return nil
 	}
+	// The slow path shows in the activity strip while it runs
+	// (activity_busy.go).
+	defer activityBegin(activityBusyBTLabel)()
 
 	if !btAdapterPresent() {
 		if !firmware {

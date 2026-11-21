@@ -11,7 +11,7 @@ light work for every TrimUI handheld.
 
 Put the `.wasm` files in **`Roms/WASM4`** on the card (on a PC, the
 `Roms/WASM4` folder beside JukaHub). Folders named `wasm-4` or `WASM 4` work too
-(Batocera and Knulli call it `wasm4`), and so does a sub-folder inside one.
+(Batocera calls it `wasm4`), and so does a sub-folder inside one.
 
 A `.wasm` counts as a game only in a WASM-4 folder. Anywhere else a `.wasm` is
 part of a web page or a tool, so JukaHub never lists those as games.

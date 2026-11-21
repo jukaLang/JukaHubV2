@@ -10,7 +10,7 @@ package main
 // is awake the switch changes nothing but a toast.
 //
 // The switch. On the TrimUI A133P boards the FN switch is a latching GPIO,
-// gpio243 (PH19), the pin spruceOS reads for its FN features. Which reading
+// gpio243 (PH19). Which reading
 // means "slid away from the FN label" is not documented, so the lock does not
 // guess: turning Travel lock on stores the position the switch is in right
 // then as "unlocked" (the device is in use, so that is the open position) and

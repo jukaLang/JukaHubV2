@@ -235,7 +235,9 @@ func gmCheatsLoad(gen int, launcher string, game libraryGame, rec cheatsGameReco
 // gmCheatsAvailable reports whether the paused game has a cheat list the menu
 // can switch (the row shows).
 func gmCheatsAvailable() bool {
-	if !gmStatesAvailable() {
+	// A cheat switched on would end hardcore RetroAchievements: the row
+	// waits for a game without it (raach_unlocks.go).
+	if !gmStatesAvailable() || raachHardcoreRunning() {
 		return false
 	}
 	gmCheatsLaunch.mu.Lock()

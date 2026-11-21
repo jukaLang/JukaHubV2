@@ -51,6 +51,8 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	musicGameNoteChild(cmd)
 	cmd.Env = spatialChildEnv(cmd, cmd.Env)
 	cmd.Env = audioRouteChildEnv(cmd.Env)
+	// Where a script or pak asks for a screenshot (launchscripts.go).
+	cmd.Env = shotRequestChildEnv(cmd.Env)
 }
 
 // processGroupConfigure only makes cmd the leader of a new process group, for

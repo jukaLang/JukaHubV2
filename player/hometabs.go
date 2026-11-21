@@ -175,6 +175,8 @@ func homeTabLabel(id string) string {
 		return "Favourites"
 	case homeTabCollections:
 		return "Collections"
+	case homeTabTools:
+		return "Tools"
 	}
 	return id
 }
@@ -190,6 +192,10 @@ func homeTabViewLabel(v string) string {
 		return "Carousel"
 	case homeTabViewCompact:
 		return "Compact"
+	case homeTabViewBackdrop:
+		return "Backdrop"
+	case homeTabViewMinimal:
+		return "Minimal"
 	}
 	return "Grid"
 }
@@ -363,6 +369,10 @@ func parseHomeTabsShown(raw string) ([]string, map[string]bool) {
 	for _, id := range homeTabOrder {
 		if !seen[id] {
 			order = append(order, id)
+			// An optional tab starts off (hometabs_tools.go).
+			if homeTabHiddenByDefault(id) {
+				hidden[id] = true
+			}
 		}
 	}
 	return order, hidden
@@ -477,15 +487,8 @@ func (h *HomeLayout) tabsOn(config *Config) {
 	h.Items[homeTabsStripID] = HomeItem{ID: homeTabsStripID, Title: "Tabs", Icon: "apps"}
 	h.Focus.SetDynamic([]HomeFocusID{homeTabsPageID, homeTabsStripID}, []HomeFocusID{homeTabsPageID})
 	vis := homeTabsVisible(config)
-	start := homeTabMain
-	if homeTabsRemember(config) {
-		if last := homeTabsCustom(config, homeTabLastKey); homeTabIndexIn(vis, last) >= 0 {
-			start = last
-		}
-	}
-	if homeTabIndexIn(vis, start) < 0 {
-		start = vis[0]
-	}
+	// Last used, the chosen Start on tab, or Main (hometabs_start.go).
+	start := homeTabsStartTab(config, vis)
 	homeTabs.cur = ""
 	homeTabsEnter(config, start, 0)
 	h.tabsKeepFocus()
@@ -602,6 +605,8 @@ func homeTabsBuild(c *Config, tab string, sub bool, folder homeTabItem) ([]homeT
 		return homeTabsFavouriteItems(c), false
 	case homeTabCollections:
 		return homeTabsCollectionItems(c), false
+	case homeTabTools:
+		return homeTabsToolsItems(c), false
 	}
 	return nil, false
 }
@@ -1196,7 +1201,7 @@ func (h *HomeLayout) tabsScroll(back bool, steps int) {
 		return
 	}
 	view := homeTabsViewFor(appConfig, lvl.key)
-	horiz := view == homeTabViewRow || view == homeTabViewCarousel
+	horiz := view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop
 	dir := FocusDown
 	switch {
 	case back && horiz:

@@ -174,7 +174,7 @@ func homeTabsRecentItems(c *Config) ([]homeTabItem, bool) {
 		}))
 	}
 	now := time.Now()
-	for i, g := range recentGames() {
+	for i, g := range uiModeKidRecents(recentGames()) { // Kid mode: kids' games only (uimode_kids.go)
 		if i >= homeTabsRecentGames {
 			break
 		}
@@ -185,7 +185,7 @@ func homeTabsRecentItems(c *Config) ([]homeTabItem, bool) {
 		if title == "" {
 			title = strings.TrimSuffix(filepath.Base(g.Path), filepath.Ext(g.Path))
 		}
-		sub := g.System
+		sub := consoleDisplayName(g.System)
 		// TrimUI boots before its clock is set: a time from before that, or
 		// one ahead of the clock, says nothing true.
 		if t := g.PlayedAt; !t.IsZero() {
@@ -293,6 +293,8 @@ func homeTabsMainItems(c *Config) []homeTabItem {
 			out = append(out, it)
 		}
 	}
+	// The games pinned to Home lead (gamepin.go).
+	out = append(out, gamePinTabItems(c)...)
 	add(homeTabsCard(c, HomeFocusSettings, "", ""))
 	add(m.app(homeTileScenePrefix+playtimeSceneName, "Trophies", "JukaHub achievements", "trophy"))
 	add(m.app(homeTileActionPrefix+"RetroAchievements", "", "RetroArch achievements", "trophy"))

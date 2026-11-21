@@ -50,6 +50,10 @@ fi
 if [ -n "${JUKAHUB_MS_CLIENT_ID:-}" ]; then
     LDFLAGS="$LDFLAGS -X main.microsoftOAuthClientID=${JUKAHUB_MS_CLIENT_ID}"
 fi
+# ScreenScraper box art (docs/BOX_ART.md), when JUKAHUB_SS_DEVID is set.
+if [ -n "${JUKAHUB_SS_DEVID:-}" ]; then
+    LDFLAGS="$LDFLAGS -X main.screenScraperDevID=${JUKAHUB_SS_DEVID} -X main.screenScraperDevPassword=${JUKAHUB_SS_DEVPASSWORD:-}"
+fi
 
 OUT="dist"
 rm -rf "$OUT"

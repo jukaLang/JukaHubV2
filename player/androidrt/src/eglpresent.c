@@ -1002,12 +1002,11 @@ void apak_presentShutdown(void);
 /* The stock firmware of the PowerVR GE8300 models (Smart Pro, Brick, Brick
  * Pro, Hammer — every board but the Smart Pro S, tg5050, whose GPU really is
  * a Mali). Their SDL2 calls its only real video driver "mali" (SDL's generic
- * fbdev-EGL driver over PowerVR's fbdev EGL), and two ports on this firmware
+ * fbdev-EGL driver over PowerVR's fbdev EGL), and ports on this firmware
  * found the same thing: GLES contexts made with raw EGL draw nothing (a black
  * panel, sound playing, no error) while SDL-owned ones show (NextOS ports
- * issue #1, Horizon Chase on the Brick Pro: HC_PURE_SDL_CONTEXTS=1; nx-redux
- * PR #152: keep the contexts SDL-owned on tg5040). A black panel without an
- * error is the one failure auto's native-to-sdl fallback cannot see, so on
+ * issue #1, Horizon Chase on the Brick Pro: HC_PURE_SDL_CONTEXTS=1). A black
+ * panel without an error is the one failure auto's native-to-sdl fallback cannot see, so on
  * these boards auto starts on the SDL-hosted backend. */
 static int onPowerVrTrimui(void) {
     const ApakDevice *dev;

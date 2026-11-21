@@ -208,6 +208,7 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	// visit (tzpicker.go).
 	tzPickerHubEnter()
 	clockSheetHubEnter()
+	colourPickHubEnter()
 	setHub.viewSection = -1
 	if c != nil {
 		// A real arrival (the transition that opened this scene, not a redraw)
@@ -635,6 +636,12 @@ func setHubActivate(c *Config, i, dir int) {
 		}
 		row.Set(c, on)
 	case setKindChoice:
+		if dir == 0 && row.Pick != nil {
+			// The colour rows' RGB picker (colourpick.go); it plays its own
+			// sound and marks the page dirty when it applies.
+			row.Pick(c)
+			return
+		}
 		if dir == 0 && row.Sheet != nil {
 			current := ""
 			if row.SheetValue != nil {
@@ -790,6 +797,7 @@ func setHubRender(renderer *sdl.Renderer, c *Config) {
 	}
 	tzPickerDraw(renderer, c)
 	clockSheetDraw(renderer, c)
+	colourPickDraw(renderer, c)
 	// The shared confirmation sheet (tbxOpenSheet): "Reset to defaults?" and
 	// the like, opened by a row.
 	tbxRenderSheet(renderer, c)
@@ -1287,6 +1295,10 @@ func setHubKey(e *sdl.KeyboardEvent, c *Config) bool {
 		clockSheetKey(e, c)
 		return true
 	}
+	if colourPick.open {
+		colourPickKey(e)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetKey(&setHub.sheet, e.Keysym.Sym)
 		return true
@@ -1361,6 +1373,10 @@ func setHubPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		clockSheetPad(e.Button, c)
 		return true
 	}
+	if colourPick.open {
+		colourPickPad(e.Button)
+		return true
+	}
 	if setHub.sheet.open {
 		setSheetPad(&setHub.sheet, e.Button)
 		return true
@@ -1404,6 +1420,10 @@ func setHubMouse(mx, my int32, c *Config) bool {
 	}
 	if clockSheet.open {
 		clockSheetMouse(mx, my, c)
+		return true
+	}
+	if colourPick.open {
+		colourPickMouse(mx, my)
 		return true
 	}
 	if setHub.sheet.open {
@@ -1468,6 +1488,10 @@ func setHubWheel(dy int32) {
 		clockSheetWheel(dy)
 		return
 	}
+	if colourPick.open {
+		colourPickWheel(dy)
+		return
+	}
 	if setHub.sheet.open {
 		setSheetWheel(&setHub.sheet, dy)
 		return
@@ -1495,6 +1519,9 @@ func setHubHints() []FooterHint {
 	}
 	if clockSheet.open {
 		return clockSheetHints()
+	}
+	if colourPick.open {
+		return colourPickHints()
 	}
 	if setHub.sheet.open {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
@@ -1532,6 +1559,8 @@ func setHubHints() []FooterHint {
 	case setKindChoice:
 		a := "Next"
 		switch {
+		case row.Pick != nil:
+			a = "Pick"
 		case row.Sheet != nil:
 			a = "All"
 		case row.Field != "":

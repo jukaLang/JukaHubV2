@@ -4,8 +4,7 @@ package main
 // sound, the delay between a press and the picture, smooth motion, an
 // overlay, rumble strength, arcade rotation and PAL timing.
 //
-// NextUI (the MinUI fork for the TrimUI Brick and Smart Pro) sells itself on
-// these: high-quality audio resampling with a quality/performance choice per
+// Players on these handhelds ask for: high-quality audio resampling with a quality/performance choice per
 // emulator, about one frame of latency, no tearing or sync stutter, overlays,
 // variable rumble, FBNeo screen rotation and a PAL mode. RetroArch can do all
 // of them already; they are buried in its menus, and some are core options
@@ -48,12 +47,15 @@ package main
 //	                video_threaded is left as it is: threaded video lowers
 //	                frame drops on slow cores but adds a frame of latency and
 //	                behaves differently per GLES driver, so the firmware's
-//	                choice stays.
+//	                choice stays — except on the Smart Pro S, and when
+//	                "Threaded video" says otherwise (ra_threaded.go).
 //	Overlay         input_overlay_enable, input_overlay (a .cfg found under
 //	                RetroArch's overlay folders), input_overlay_opacity 1 (an
 //	                overlay on a handheld is a border, not a see-through touch
 //	                pad) and input_overlay_hide_in_menu. "None" switches an
-//	                overlay the user had off for the launch.
+//	                overlay the user had off for the launch. The player's own
+//	                overlays in Overlays/<Console> on the card are offered too,
+//	                and a console at Default plays its folder's (useroverlays.go).
 //	Rumble          input_rumble_gain, a percentage.
 //	Arcade rotation video_allow_rotate on, so FBNeo and MAME can turn a vertical
 //	                game upright; Sideways (TATE) also sets the core's vertical
@@ -191,6 +193,9 @@ var raTuneSystems = []raTuneSystem{
 	{"Arcade", raTuneMedium, false},
 	{"Neo Geo", raTuneMedium, false},
 	{"Neo Geo CD", raTuneMedium, false},
+	// fake-08 in RetroArch: listed for its own overlay (Overlays/PICO-8,
+	// useroverlays.go) and buttons; Medium is what an unlisted console gets.
+	{"PICO-8", raTuneMedium, false},
 	{"Atari Jaguar", raTuneHeavy, false},
 	{"Saturn", raTuneHeavy, false},
 	{"Dreamcast", raTuneHeavy, false},
@@ -218,6 +223,8 @@ var raTuneCoreFolders = map[string][]string{
 	"desmume2015": {"DeSmuME 2015"},
 	"tic80":       {"TIC-80"},
 	"easyrpg":     {"EasyRPG Player"},
+	// Set by the PS2 renderer fallback (ps2_video.go).
+	"armsx2": {"ARMSX2"},
 }
 
 // raTunePALOptions is each core's region option set to PAL. The values are the
@@ -415,10 +422,15 @@ func raTuneLatencyFor(c *Config, system string) string {
 	return mode
 }
 
-// raTuneOverlayFor is the overlay a launch uses: a path, "none" or "own".
+// raTuneOverlayFor is the overlay a launch uses: a path, "none" or "own". A
+// console left at Default plays the overlay in its Overlays/<Console> folder
+// on the card when there is one (useroverlays.go; reads that folder).
 func raTuneOverlayFor(c *Config, system string) string {
 	sys, _ := raTuneSystemFor(system)
 	if v := raTuneConsoleOverlay(c, sys.Name); v != "" {
+		return v
+	}
+	if v := userOverlayAuto(sys.Name); v != "" {
 		return v
 	}
 	return raTuneOverlaySetting(c)
@@ -512,7 +524,8 @@ func raTuneArcade(system, core string) bool {
 }
 
 // raTunePlanFor builds the launch's values from the settings. Pure but for
-// the overlay file check.
+// the overlay: the file check, the console's Overlays folder, and the .cfg a
+// picture from there gets (useroverlays.go).
 func raTunePlanFor(c *Config, system, core string) raTunePlan {
 	var p raTunePlan
 	sys, _ := raTuneSystemFor(system)
@@ -561,6 +574,12 @@ func raTunePlanFor(c *Config, system, core string) raTunePlan {
 		p.What = append(p.What, "smooth motion")
 	}
 
+	// Threaded video: off on the Smart Pro S unless chosen (ra_threaded.go).
+	if v, what, ok := raThreadedValue(c); ok {
+		p.Config = append(p.Config, v)
+		p.What = append(p.What, what)
+	}
+
 	switch overlay := raTuneOverlayFor(c, system); overlay {
 	case raTuneOwn:
 	case raTuneOverlayNone:
@@ -571,9 +590,14 @@ func raTunePlanFor(c *Config, system, core string) raTunePlan {
 			logWarn("emulation", "overlay %s is not on the card any more; launching with RetroArch's own overlay setting", overlay)
 			break
 		}
+		// A picture from an Overlays folder gets a generated .cfg (useroverlays.go).
+		cfg := userOverlayRetroArchCfg(overlay)
+		if cfg == "" {
+			break
+		}
 		p.Config = append(p.Config,
 			raScopeValue{Key: "input_overlay_enable", Value: "true"},
-			raScopeValue{Key: "input_overlay", Value: overlay},
+			raScopeValue{Key: "input_overlay", Value: cfg},
 			raScopeValue{Key: "input_overlay_opacity", Value: raTuneOverlayOpacity},
 			raScopeValue{Key: "input_overlay_hide_in_menu", Value: "true"})
 		p.What = append(p.What, "overlay "+filepath.Base(overlay))

@@ -80,6 +80,9 @@ const (
 	sessionSafeKey = "protectStandaloneEmus"
 	// sessionSafeWarnPct is where an emulator that cannot save gets its warning.
 	sessionSafeWarnPct = 10
+	// sessionSafeWarnLead keeps the warning that far above a save level picked
+	// in Settings → Power (batterywarn.go), so it still comes before the save.
+	sessionSafeWarnLead = 5
 	// sessionSafeNudgeWait is the second signal's wait.
 	sessionSafeNudgeWait = 3 * time.Second
 	// sessionSafeStateSlack lets a state written within a clock tick of the
@@ -928,11 +931,16 @@ func sessionSafeLowBatteryTick(config *Config, percent int) {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	if percent < 0 || percent > sessionSafeWarnPct+2 {
+	// The guard's save level is Settings → Power's (batterywarn.go, published
+	// by lowBatteryTick just before): 10% and 3% under Auto as always, the
+	// warning kept sessionSafeWarnLead above a higher one.
+	savePct := batteryWarnNow().savePct()
+	warnPct := max(sessionSafeWarnPct, savePct+sessionSafeWarnLead)
+	if percent < 0 || percent > warnPct+2 {
 		sessionSafeWarnedKey = 0
 		return
 	}
-	if percent > sessionSafeWarnPct || percent <= criticalBatteryPct || !sessionSafeEnabled(config) {
+	if percent > warnPct || percent <= savePct || !sessionSafeEnabled(config) {
 		return
 	}
 	cmds := liveScreenChildren()

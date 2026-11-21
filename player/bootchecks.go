@@ -45,6 +45,8 @@ func bootEnqueueChecks(config *Config) {
 	// GameCube & Wii (dolphin.go), for the goroutines that read it before any
 	// game starts — in safe mode too.
 	dolphinSyncMode(config)
+	// PlayStation 2 (ps2.go), for the same goroutines.
+	ps2SyncMode(config)
 	bootEnqueueAsync("settings", func(note func(string)) error {
 		return bootCheckSettings(recovered, note)
 	})

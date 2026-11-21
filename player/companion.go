@@ -569,6 +569,11 @@ func (s *companionServer) handler() http.Handler {
 	// The Game Boy Printer scrapbook card: the prints, read-only, behind the
 	// PIN (gbprinter_companion.go).
 	s.registerGBPrinterRoutes(mux)
+	// The update card: a release on the user's channel, installed from the
+	// phone the way the handheld's prompt installs it (companion_update.go).
+	s.registerUpdateRoutes(mux)
+	// Download logs, personal details masked (companion_logs.go).
+	s.registerLogRoutes(mux)
 	return mux
 }
 
@@ -633,6 +638,11 @@ func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {
 		// the handheld is unlocked. The page itself still loads.
 		if startupLocked() {
 			http.Error(w, "JukaHub is locked", http.StatusLocked)
+			return
+		}
+		// Kiosk / Kid mode: a phone must not go round the lock (uimode.go).
+		if uiModeCompanionLocked() {
+			http.Error(w, "JukaHub is in "+uiModeLabel(uiModeNow())+" mode", http.StatusLocked)
 			return
 		}
 		next(w, r)
@@ -957,6 +967,17 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class=row><button class="ghost shotonly" id=shotScreen>Refresh</button><button class="ghost shotonly" id=autoScreen>Live: off</button><button class=ghost id=pinScreen>Hide screen</button></div>
 </div>
 
+<div class=card id=updCard hidden>
+  <h2>JukaHub update</h2>
+  <p class=note id=updNote></p>
+  <ul class=note id=updNotes hidden></ul>
+  <div class=row><button id=updInstall>Install</button></div>
+  <div class="bar idle" id=updBar><span></span></div>
+  <div class=msg id=updMsg aria-live=polite></div>
+  <small>The handheld downloads the update and restarts JukaHub when it is ready. Not while a game is running, and on a low battery only on the charger.</small>
+  <script defer src="/companion-extras.js"></script>
+</div>
+
 <div class=card id=dropCard>
   <h2>Send to the handheld</h2>
   <div class="filedrop big" id=dropZone role=button tabindex=0>Drop games, covers, music, folders…<small>or tap to choose files</small></div>
@@ -1042,7 +1063,7 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class="bar idle" id=filesBar><span id=filesBarFill></span></div>
   <div class=msg id=filesMsg aria-live=polite></div>
   <div class=flist id=filesList><div class=fempty>Loading...</div></div>
-  <small>Open a destination folder first. Use this page over Wi-Fi or an active USB network connection. Roms/Ports is read-only here. Delete removes a file or an empty folder only.</small>
+  <small>Open a destination folder first. Use this page over Wi-Fi or an active USB network connection. Roms/Ports is read-only here. Delete removes a file or an empty folder only. Renaming or deleting a folder JukaHub needs, like a console's folder in Roms, asks first.</small>
 </div>
 
 <div class=card id=gbprintCard>
@@ -1164,6 +1185,8 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <div class=msg id=vpnMsg></div>
   <small>Paste the WireGuard configuration your VPN provider or your own server gives you, or pick its .conf file. Got a QR code? Scan it with the phone's camera and paste the text. The handheld keeps it to itself and never sends it back; send it over your own Wi-Fi, then switch the VPN on in Settings &gt; Network.</small>
 </div>
+
+<p class=note style="text-align:center"><a href="#" id=logsLink>Download logs</a><br><small>For a bug report: Wi-Fi names, account names, e-mail, Bluetooth and LAN addresses are masked.</small></p>
 
 <div id=toast></div>
 <script>
@@ -2444,11 +2467,28 @@ function filesDownload(full, name) {
   a.click();
   a.remove();
 }
+// A folder JukaHub depends on (a console's folder, BIOS, PortMaster...) is
+// answered 409 with the reason; asked about, the request goes again with
+// confirm (companion_guard.go). False when the user said no.
+async function filesGuarded(path, body) {
+  const send = (b) => fetch(path, {method: 'POST', headers: hdr({'Content-Type': 'application/json'}), body: JSON.stringify(b)});
+  let res = await send(body);
+  if (res.status === 409) {
+    const text = await res.text();
+    let j = null;
+    try { j = JSON.parse(text); } catch (_) { j = null; }
+    if (!j || !j.needsConfirm) throw new Error(text.trim() || res.statusText);
+    if (!confirm(j.reason + '. ' + (j.ask || 'Go ahead?'))) return false;
+    res = await send(Object.assign({}, body, {confirm: true}));
+  }
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  return true;
+}
 async function filesRename(full, old) {
   const next = prompt('New name for ' + old, old);
   if (next === null || next.trim() === '' || next.trim() === old) return;
   try {
-    await api('/api/files/rename', {path: full, name: next.trim()}, true);
+    if (!await filesGuarded('/api/files/rename', {path: full, name: next.trim()})) return;
     toast('Renamed');
     await filesLoad(filesPath);
   } catch (e) { filesSay(e.message, true); }
@@ -2459,7 +2499,7 @@ async function filesDelete(full, e) {
     : 'Delete "' + e.name + '" from the handheld? This cannot be undone.';
   if (!confirm(ask)) return;
   try {
-    await api('/api/files/delete', {path: full}, true);
+    if (!await filesGuarded('/api/files/delete', {path: full})) return;
     toast('Deleted');
     await filesLoad(filesPath);
   } catch (err) { filesSay(err.message, true); }

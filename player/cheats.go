@@ -2,7 +2,7 @@ package main
 
 // cheats.go — cheats for games started in RetroArch from the library.
 //
-// NextUI ships "cheats support"; JukaHub had only PPSSPP's own cheat switch
+// JukaHub had only PPSSPP's own cheat switch
 // (ppsspp_managed.go, untouched here). RetroArch already knows how to run
 // cheats — what a handheld lacks is a way to pick them without digging
 // through Quick Menu → Cheats → Load Cheat File in every game. So the game
@@ -484,6 +484,13 @@ func prepareCheats(launcher string, game libraryGame) {
 	}
 	if !retroArchLauncher(launcher) {
 		logDebug("cheats", "%s does not start RetroArch; its cheats are not applied", filepath.Base(launcher))
+		return
+	}
+	// RetroArch turns hardcore off when cheats load: a Hardcore choice made in
+	// Settings → RetroAchievements wins and the cheats wait for a launch
+	// without it; under RetroArch's own values they load (raach_settings.go).
+	if hard, decided := raachHardcoreDecision(launcher); decided && hard {
+		logInfo("cheats", "RetroAchievements hardcore is on; the cheats of %s are not applied", game.Path)
 		return
 	}
 	stem := gameResetStem(game.Path)

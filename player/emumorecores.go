@@ -15,7 +15,7 @@ package main
 //   - for a console the ranking knows (emubest.go; docs/GAME_LIBRARY.md,
 //     "Handheld, best first"), its RetroArch cores in rank order;
 //   - for the rest, the short lists below (emuMoreCoreSuggestions): the cores
-//     the TrimUI firmwares (stock, CrossMix, Knulli, spruceOS) ship for that
+//     the TrimUI firmwares ship for that
 //     console on this chip.
 //
 // A core is fetched only when the buildbot's aarch64 index lists it, it is not

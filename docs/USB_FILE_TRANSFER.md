@@ -45,6 +45,10 @@ Things JukaHub writes while the computer is connected (a new screenshot, a
 download) show up after you refresh the folder on the computer (F5 in
 Explorer).
 
+While a computer is connected the handheld stays awake: the idle screen
+does not come up and Auto sleep waits, so a long copy is never cut off
+halfway (`usbawake.go`).
+
 ## Open JukaHub in your browser over the cable
 
 The same cable also carries a small network of its own, so the computer's
@@ -90,6 +94,29 @@ The line under the switch says why:
   which starts by itself once the handheld has an address (safe mode keeps it
   off).
 
+### Updates, logs and folders that ask first
+
+The same page, over the cable or over Wi-Fi, also:
+
+- **Installs updates.** When a new JukaHub is out on your update channel
+  (Stable or Beta), a **JukaHub update** card at the top says which version,
+  with **Install**. The handheld then downloads and installs it exactly as its
+  own update prompt does, says that your phone started it, and restarts
+  JukaHub when it is ready. Not while a game is running, and below 30 %
+  battery only on the charger.
+- **Downloads the logs.** **Download logs** at the bottom of the page saves a
+  zip of JukaHub's recent logs (newest first, 20 MB at most) for a bug
+  report. Passwords and keys, Wi-Fi network names, account and display
+  names, e-mail addresses, Bluetooth and Wi-Fi hardware addresses and LAN
+  addresses are masked; game names and folders stay, so read it before you
+  share it.
+- **Asks before renaming or deleting what JukaHub needs.** A console's folder
+  in Roms, BIOS, Saves, Overlays, PortMaster and JukaHub's own files can still
+  be renamed or deleted from the Files card, but only after a dialog that
+  says what the folder is for ("JukaHub keeps your Game Boy Advance games
+  here"). The handheld enforces it, whatever page or program sends the
+  request.
+
 ### How it works
 
 `player/usbnet_linux.go` adds a network function to the USB gadget that file
@@ -123,7 +150,8 @@ and Explorer shows it empty. Unlock JukaHub and the SD card appears.
 The handheld acts as an MTP device, the protocol Android phones use. MTP
 shares files rather than a raw disk, which is why it works while JukaHub
 runs from the same card: a USB "card reader" mode has to unmount the card
-first, so it can only run with everything else stopped.
+first, so it can only run with everything else stopped (that is **USB
+storage mode**, below).
 
 JukaHub serves MTP itself (`player/usbmtp_proto.go`) through the kernel's USB
 gadget framework (configfs + FunctionFS, `player/usbmtp_linux.go`); nothing is
@@ -132,6 +160,90 @@ of their own. JukaHub adds MTP to that gadget, so the computer sees one device
 with both, as with a phone; with no gadget running it makes its own. Turning
 the switch off, or closing JukaHub, takes MTP out again and leaves the port as
 the firmware had it.
+
+## USB storage mode
+
+**Settings → Network → USB storage mode** turns the SD card into a plain USB
+drive on the computer, exactly as if the card were in a card reader. JukaHub
+closes while the card is lent out and comes back when you are done.
+
+> **Device status (2026-11-20):** built from the Smart Pro 1.1.0 kernel's
+> configuration (configfs mass storage is enabled, see
+> [the hardware log](HARDWARE_VALIDATION.md)); not yet tried on a handheld.
+
+### When to use it instead of USB file transfer
+
+- **A Mac** — Finder opens the drive directly; no OpenMTP needed.
+- **Big copies** — a whole ROM set or a library rebuild goes at the card's
+  full USB 2 speed, and any program can use the drive: a sync tool, a
+  backup program, a disk checker, a ROM manager writing straight to the card.
+- **Things MTP cannot do** — formatting-free repairs (`chkdsk`, Disk Utility's
+  First Aid), changing file dates, opening a file in place.
+
+USB file transfer stays the everyday way: it works while JukaHub keeps
+running, and the startup lock protects it.
+
+### How to use it
+
+1. Open **Settings → Network → USB storage mode** and press A. JukaHub checks
+   that the card can go (see below) and says what will happen.
+2. Choose **Start**. Games and JukaHub close and everything is saved; the
+   screen then says **USB storage mode**.
+3. Plug the handheld into the computer with a USB data cable (before or after
+   step 2). The card appears as a drive.
+4. When you are done, **eject the drive on the computer**: Eject in File
+   Explorer or Finder, or Safely Remove Hardware. JukaHub comes back by
+   itself a few seconds later.
+
+You can also press any button on the handheld to come back, or unplug the
+cable. Eject first if you can: a button pressed while the computer is still
+writing cuts that file short, the same as pulling a USB stick. With no
+computer for 10 minutes, or after two hours, JukaHub comes back on its own.
+
+### If the computer offers to repair the drive
+
+Windows sometimes says "There's a problem with this drive" or "Scan and
+fix", and macOS may show a disk check, when the card was last unplugged
+without an eject (from the handheld or a card reader). Letting it scan is
+safe and does no harm to your files. Whenever the mode ends without an eject,
+JukaHub also checks the card itself before it mounts it again (where the
+firmware has `fsck.vfat` or `fsck.exfat`), and the toast after it starts says
+if something was repaired. Never format the drive from that dialog.
+
+### When it cannot start
+
+The sheet says why. The usual reasons:
+
+- **"Other programs are using the SD card"** — an SSH session, a script from
+  the card, or another app keeps files open there. Close it and try again.
+- **"JukaHub was started straight from the boot hook this time"** — open
+  JukaHub from the stock menu once, then try again.
+- **"The swap file on the SD card holds more than fits in free memory"** —
+  close a game, or turn off Settings → Games & emulators → Extra memory.
+- **Not shown at all** — the mode is for the Smart Pro, the Brick and the
+  Hammer on their stock firmware (with or without JukaHub OS mode). The Smart
+  Pro S and Brick Pro firmware treat the card as removed when its USB drive
+  closes, and the JukaHub OS image and NextUI run from the card themselves;
+  use USB file transfer there.
+
+If the card does not mount again after the computer had it (badly damaged by
+a pulled cable), the handheld restarts so the firmware can mount it at boot.
+
+### How it works
+
+The card cannot be lent out while anything runs from it, and JukaHub,
+`launch.sh` and the shell the stock menu started them from all do. So after
+**Start** JukaHub saves a picture of the screen and a small helper script into
+the handheld's memory (`/tmp`) and quits; `launch.sh` pauses the firmware's
+menu loop and starts the helper on its own. The helper
+(`player/usbstorage_helper.sh`) checks that nothing else uses the card, turns
+a swap file on it off, unmounts the card (never lazily), and makes a USB
+gadget with a mass-storage function backed by the card's partition in place
+of the firmware's ADB gadget. When the computer ejects the drive (or a button,
+the cable or the time limit ends it), it takes the gadget down, gives the port
+back to ADB, checks the file system if the drive was not ejected, mounts the
+card with its old options and starts JukaHub again. Its log goes to
+`errors.txt` in the JukaHub folder.
 
 ## Troubleshooting
 

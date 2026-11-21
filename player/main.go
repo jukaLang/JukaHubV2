@@ -395,6 +395,8 @@ func main() {
 	// The built-in Syncthing starts when it is on (syncthing.go): two setting
 	// reads here, everything else on its own goroutine.
 	deferStartupTask("syncthing", func() { syncthingBoot(config) })
+	// So does the built-in Tailscale (tailscaled.go), the same way.
+	deferStartupTask("tailscale", func() { tailscaledBoot(config) })
 
 	// Show the release notes once on the first launch of a newly installed
 	// build. The notes were cached before the restart, so this works offline.
@@ -789,6 +791,8 @@ func main() {
 	// So did an Xbox game that JukaHub died under (xboxboost.go): its cores,
 	// GPU and Wi-Fi go back, and the boost's exit hook is registered.
 	xboxBoostRecover()
+	// And a game under GPU boost in games (gpuboost.go): the GPU goes back.
+	gpuBoostRecover()
 	// Remember the governor and ceiling the machine booted with, so the teardown
 	// can put the firmware back exactly as it was found even if a child died
 	// holding a performance profile.
@@ -809,6 +813,9 @@ func main() {
 	// Past that check the start goes on: the power-on resume's markers are
 	// used up now, not before (quickresume.go).
 	quickResumeBootCommit()
+	// Settings → Power → Start in: the game switcher, a random or the last
+	// game once the first frame is up — unless a game resumes (startup_target.go).
+	bootToPlan(config)
 	// Whether this start asks for the startup lock, before the boot draws
 	// anything of Home (bootlock.go).
 	bootLockArm(config)
@@ -972,6 +979,8 @@ func main() {
 			hjTick(config, true)
 			// The power key's main-loop half; no Exit card over a game.
 			powerKeyTick(config, true)
+			// Menu + volume brightness, in games too (brightkeys.go).
+			hwKeysTick(config, true)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
 				alarmCheck(config, now)
@@ -1017,6 +1026,8 @@ func main() {
 		// phone "launch" must not start something behind a stopped game.
 		if !gameAssistOverlayActive() && !startupLocked() {
 			drainCompanionQueue(config)
+			// A VNC viewer's keys, mouse and clipboard (vncserver_input.go).
+			vncDrainInput(config)
 		}
 		// Exit request (home Exit button or config "exit" trigger): leave the
 		// loop, then run the glass teardown below (stop children, persist, restore
@@ -1053,6 +1064,11 @@ func main() {
 			// while it does, every physical press, release and stick sample is
 			// the link's, before the quit chord, the voice orb or any screen.
 			if ctlModeEvent(event) {
+				continue
+			}
+			// Kiosk / Kid mode: the parent code card, and the Konami code
+			// watched while locked (uimode_unlock.go).
+			if uiModeEvent(config, event) {
 				continue
 			}
 			// Moving around, choosing and going back stir the liquid
@@ -1471,7 +1487,9 @@ func main() {
 						continue
 					}
 					focusEngine.SyncSelected()
-					if imageViewerPath != "" {
+					// The viewer's Rename prompt types on the keyboard below it
+					// (imageviewer_edit.go).
+					if imageViewerPath != "" && !virtualKeyboardActive {
 						handleImageViewerInput(e, config)
 						continue
 					}
@@ -3842,6 +3860,8 @@ func main() {
 		feExtractDrain(config)
 		// And a finished ZIP (files_zip.go).
 		feZipDrain(config)
+		// And a two-pane Copy / Move to other pane (files_dualpane_xfer.go).
+		filesDualDrain(config)
 		// Every focus ring drawn from here to Present bounces when a press moves
 		// it (homefocusglide.go, Settings → Focus bounce).
 		focusGlideFrame(config, currentSceneIndex)
@@ -4261,6 +4281,9 @@ func main() {
 		if qrZoomActive() {
 			renderQRZoom(renderer, config)
 		}
+		// The parent code card of Kiosk / Kid mode, under the toasts that
+		// answer it (uimode_unlock.go).
+		uiModeRender(renderer, config)
 
 		// A finished time-lapse is assembled off the render thread; its notice is
 		// shown here, where the toast state belongs.
@@ -4289,6 +4312,9 @@ func main() {
 		if alarmFiringActive() {
 			renderAlarmRing(renderer, config)
 		}
+		// USB storage mode's full-screen card, from Start until JukaHub quits
+		// for the helper: its picture is what the panel keeps (usbstorage_ui.go).
+		usbStorageRender(renderer, config)
 
 		// Companion screen view: capture on the render thread only when the
 		// phone asked for a frame (see companion_screen.go).
@@ -4325,6 +4351,8 @@ func main() {
 		// The power key's main-loop half: the setting, the next alarm for a
 		// sleep's RTC wake, and the Exit card a hold asked for (powerkey.go).
 		powerKeyTick(config, false)
+		// Menu + volume brightness, L2 + R2's battery flash (brightkeys.go).
+		hwKeysTick(config, false)
 		homeFocusGlide.endFrame()
 		// Spoken navigation reads the control this frame focused (narrate.go).
 		narrateEndFrame(config)

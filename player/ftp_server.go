@@ -655,10 +655,13 @@ func ftpRootDir() string {
 // PhoneDrop is where the Phone Companion saves what a phone sends
 // (companionDropDir), so a PC can collect it. VoiceMemos holds Voice Memos'
 // recordings (voicememo*.go), which a phone downloads from the Files card.
+// Overlays holds the player's own overlay pictures per console
+// (useroverlays.go).
 var ftpShareNames = []string{
 	"Roms", "BIOS", "Saves", "States", "Screenshots", "Imgs", "Collections",
 	"Music", "Videos", "Movies", "Pictures", "Photos", "Images", "Books",
 	"Documents", "Downloads", "Recordings", "Media", companionDropDir, "VoiceMemos",
+	userOverlaysDirName,
 }
 
 const (

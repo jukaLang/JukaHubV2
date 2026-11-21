@@ -22,8 +22,9 @@ package main
 // White on the Light theme is darkened for the ring instead of vanishing, and
 // accent text goes through TextInk as before.
 //
-// The choice is a Custom string ("menuColour": "theme" or a colour's name),
-// read from appConfig when the theme is applied. Startup and a config reload
+// The choice is a Custom string ("menuColour": "theme", a colour's name, or
+// any "#rrggbb" picked with the colour picker on A, colourpick.go), read from
+// appConfig when the theme is applied. Startup and a config reload
 // call menuColourSync once the config is in place, which repaints only when the
 // colour on screen is not the stored one; the Settings row repaints at once.
 // The ten colours are mid tones that read on dark and light themes alike.
@@ -59,8 +60,9 @@ var menuColourChoices = []menuColourChoice{
 // theme's own). Main thread, like ApplyThemeColors.
 var menuColourApplied string
 
-// menuColourValue is the stored choice, normalised: a known colour's name, or
-// menuColourTheme for anything else (unset, an old or misspelt value).
+// menuColourValue is the stored choice, normalised: a known colour's name, a
+// custom "#rrggbb" from the colour picker (colourpick.go), or menuColourTheme
+// for anything else (unset, an old or misspelt value).
 func menuColourValue(c *Config) string {
 	if c == nil || c.Variables.Custom == nil {
 		return menuColourTheme
@@ -72,15 +74,31 @@ func menuColourValue(c *Config) string {
 			return v
 		}
 	}
+	if col, ok := parseHexColor(v); ok && strings.HasPrefix(v, "#") {
+		return colourHexOf(col)
+	}
 	return menuColourTheme
 }
 
-// menuColourHexFor is a choice's #rrggbb, "" for the theme's own.
+// menuColourHexFor is a named choice's #rrggbb, "" for the theme's own. Look
+// packs check names with it, so a custom hex is not one (menuColourHexOf).
 func menuColourHexFor(value string) string {
 	for _, ch := range menuColourChoices {
 		if ch.value == value {
 			return ch.hex
 		}
+	}
+	return ""
+}
+
+// menuColourHexOf is the colour a stored value paints: a name's, a custom
+// "#rrggbb" itself, "" for the theme's own.
+func menuColourHexOf(value string) string {
+	if hex := menuColourHexFor(value); hex != "" {
+		return hex
+	}
+	if col, ok := parseHexColor(value); ok && strings.HasPrefix(value, "#") {
+		return colourHexOf(col)
 	}
 	return ""
 }
@@ -92,13 +110,16 @@ func menuColourLabel(value string) string {
 			return ch.label
 		}
 	}
+	if hex := menuColourHexOf(value); hex != "" {
+		return colourHexLabel(hex)
+	}
 	return "Theme's own"
 }
 
 // menuColourOverride is the preset ApplyThemeColors paints: the same one with
 // the chosen colour as its accent, or untouched with "Theme's own".
 func menuColourOverride(p ThemePreset) ThemePreset {
-	hex := menuColourHexFor(menuColourValue(appConfig))
+	hex := menuColourHexOf(menuColourValue(appConfig))
 	menuColourApplied = hex
 	if hex == "" {
 		return p
@@ -136,15 +157,18 @@ func menuColourSync(c *Config) {
 	if c == nil || c != appConfig {
 		return
 	}
-	if menuColourHexFor(menuColourValue(c)) != menuColourApplied {
+	// The colour rows' overrides and Glass opacity ride along (colourpick_theme.go).
+	colourPickSyncPrefs(c)
+	if menuColourHexOf(menuColourValue(c)) != menuColourApplied || colourPickStale(c) {
 		menuColourRepaint(c)
 	}
 }
 
 // menuColourOptions are the row's stops: the theme's own first, then the ten
-// colours, each with its swatch. "Theme's own" shows the theme's colour.
-func menuColourOptions(*Config) []setOption {
-	opts := make([]setOption, 0, len(menuColourChoices)+1)
+// colours, each with its swatch, and a picked custom colour last. "Theme's
+// own" shows the theme's colour.
+func menuColourOptions(c *Config) []setOption {
+	opts := make([]setOption, 0, len(menuColourChoices)+2)
 	themeHex := ""
 	if p, ok := themePresets[themePresetName(appConfig)]; ok {
 		themeHex = p.Info
@@ -156,18 +180,37 @@ func menuColourOptions(*Config) []setOption {
 	for _, ch := range menuColourChoices {
 		opts = append(opts, setOption{Value: ch.value, Label: ch.label, Swatch: ch.hex})
 	}
+	if v := menuColourValue(c); strings.HasPrefix(v, "#") {
+		opts = append(opts, setOption{Value: v, Label: colourHexLabel(v), Swatch: v})
+	}
 	return opts
 }
 
-// menuColourRow is Settings → Theme & look → Menu colour.
+// menuColourChoose stores a choice — "theme", a name or a custom "#rrggbb" —
+// and repaints. The row and the colour picker both land here.
+func menuColourChoose(c *Config, value string) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value != menuColourTheme && menuColourHexOf(value) == "" {
+		value = menuColourTheme
+	}
+	if menuColourHexFor(value) == "" && value != menuColourTheme {
+		value = menuColourHexOf(value)
+	}
+	setStoreString(c, menuColourKey, value)
+	saveUserConfigDebounced(userConfigFromVariables(c))
+	menuColourRepaint(c)
+	setToast("Menu colour: " + menuColourLabel(value))
+}
+
+// menuColourRow is Settings → Theme & look → Menu colour: Left/Right step the
+// named colours, A opens the colour picker (any colour, the palettes' accents
+// on Y).
 func menuColourRow() setRow {
 	return setRow{
 		ID: menuColourKey, Label: "Menu colour", Kind: setKindChoice,
-		Detail:     setStatic("The colour of highlights, rings and bars; the theme stays"),
-		Options:    menuColourOptions,
-		Sheet:      menuColourOptions,
-		SheetValue: menuColourValue,
-		SheetTitle: "Menu colour",
+		Detail:  setStatic("The colour of highlights, rings and bars; the theme stays"),
+		Options: menuColourOptions,
+		Pick:    func(c *Config) { colourPickOpen(c, menuColourPickSlot()) },
 		Current: func(c *Config) int {
 			v := menuColourValue(c)
 			for i, opt := range menuColourOptions(c) {
@@ -177,15 +220,7 @@ func menuColourRow() setRow {
 			}
 			return 0
 		},
-		Value: func(c *Config) string { return menuColourLabel(menuColourValue(c)) },
-		Choose: func(c *Config, value string) {
-			if value != menuColourTheme && menuColourHexFor(value) == "" {
-				value = menuColourTheme
-			}
-			setStoreString(c, menuColourKey, value)
-			saveUserConfigDebounced(userConfigFromVariables(c))
-			menuColourRepaint(c)
-			setToast("Menu colour: " + menuColourLabel(value))
-		},
+		Value:  func(c *Config) string { return menuColourLabel(menuColourValue(c)) },
+		Choose: menuColourChoose,
 	}
 }
