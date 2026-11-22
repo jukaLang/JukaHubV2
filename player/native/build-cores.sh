@@ -266,10 +266,14 @@ core_gcc() {
 # JIT-generated, the DSP's emulation, the GPU thread's work) runs on the
 # A133P's Cortex-A53, an in-order core that gains most from instructions laid
 # out for its pipeline: -mtune=cortex-a53 does that and, unlike -mcpu, uses no
-# instruction the A53 or the Smart Pro S's Cortex-A55 might lack.
+# instruction the A53 or the Smart Pro S's Cortex-A55 might lack. mGBA and
+# WASM-4 (the other CMake rows, interpreters both) get it too since 2026-11-21:
+# CMake adds the flags before its own -O3 -DNDEBUG, so nothing of the
+# Release build is lost. The make rows keep their Makefiles' flags: some read
+# CFLAGS with ?=, where any value would replace their own -O level.
 core_cflags() {
     case "$1" in
-        dolphin) echo "-mtune=cortex-a53" ;;
+        dolphin | mgba | wasm4) echo "-mtune=cortex-a53" ;;
     esac
 }
 

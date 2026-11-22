@@ -1,0 +1,23 @@
+#!/bin/sh /etc/rc.common
+# From the first startup service on, the kernel stops printing to the board's
+# unused serial port (the stock loglevel=8 makes every driver wait for each
+# message to go out at 115200 baud; dmesg still gets them all) and finishes
+# RCU grace periods at once (closing an input device no longer waits tens of
+# milliseconds). Both last until the next power-off.
+START=01
+boot() {
+    begin=
+    read -r begin _ </proc/uptime 2>/dev/null
+    level=
+    read -r level _ </proc/sys/kernel/printk 2>/dev/null
+    case "$level" in
+    '' | *[!0-9]*) ;;
+    *) [ "$level" -le 1 ] || echo 1 2>/dev/null >/proc/sys/kernel/printk ;;
+    esac
+    rcu=unchanged
+    if [ -f /sys/kernel/rcu_expedited ] && echo 1 2>/dev/null >/sys/kernel/rcu_expedited; then
+        rcu=expedited
+    fi
+    printf '%s console-was %s rcu %s\n' "${begin:-?}" "${level:-?}" "$rcu" 2>/dev/null >/tmp/jukahub-quietboot.log
+    return 0
+}

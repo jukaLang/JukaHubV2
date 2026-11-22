@@ -2,7 +2,7 @@
 """mkcovers.py: draw the library covers of JukaHub's built-in games.
 
 JukaLand, the Synth, Solitaire and the Games screen's arcade minigames (Snake,
-Tetris, 2048, Pong, Minesweeper, Flappy) ship inside JukaHub, so no thumbnail
+Tetris, 2048, Pong, Minesweeper, Flappy, Brick Breaker) ship inside JukaHub, so no thumbnail
 server has a box for them. Their covers are drawn here instead and embedded in
 the player (player/builtin_covers/, go:embed in builtin_games.go), the same
 480 x 300 landscape shape and title pill as the bundled HTML5 demos' covers.
@@ -769,6 +769,47 @@ def flappy():
     return img.resize((W, H), Image.LANCZOS)
 
 
+# Brick Breaker: rows of glowing bricks with a few already broken, the paddle
+# and the ball on its way up.
+def brickbreaker():
+    img = vgradient(W * S, H * S, (16, 12, 38), (6, 6, 16))
+    soft_spot(img, [120 * S, -40 * S, 360 * S, 120 * S], (120, 80, 255, 70), 50 * S)
+    rows = [(255, 90, 110), (255, 150, 70), (255, 214, 70), (90, 220, 120), (70, 180, 255), (170, 110, 255)]
+    gone = {(1, 3), (1, 4), (2, 4), (2, 5), (3, 2), (3, 6), (4, 1), (4, 5), (4, 6), (5, 0), (5, 3), (5, 7), (5, 8)}
+    lay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(lay)
+    cols, bw, bh, gap = 10, 40 * S, 14 * S, 4 * S
+    x0 = (W * S - (cols * bw + (cols - 1) * gap)) // 2
+    for r, c in enumerate(rows):
+        for k in range(cols):
+            if (r, k) in gone:
+                continue
+            x = x0 + k * (bw + gap)
+            y = 22 * S + r * (bh + gap)
+            ld.rounded_rectangle([x, y, x + bw, y + bh], radius=3 * S, fill=c + (255,))
+            ld.rectangle([x + 3 * S, y + 2 * S, x + bw - 3 * S, y + 4 * S], fill=(255, 255, 255, 90))
+    glow_layer(img, lay, 6 * S)
+    d = ImageDraw.Draw(img, "RGBA")
+    # the paddle
+    pad = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(pad).rounded_rectangle([190 * S, 222 * S, 290 * S, 234 * S], radius=6 * S, fill=(230, 236, 255, 255))
+    glow_layer(img, pad, 8 * S)
+    # the ball's trail, from the paddle up toward the gap in the wall
+    bx, by = 300 * S, 150 * S
+    for i in range(10, 0, -1):
+        k = i / 10
+        x = bx - 0.55 * i * 12 * S
+        y = by + 1.0 * i * 7 * S
+        rr = (7 - 4 * k) * S
+        d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=(255, 255, 255, int(140 * (1 - k))))
+    ball = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    rr = 8 * S
+    ImageDraw.Draw(ball).ellipse([bx - rr, by - rr, bx + rr, by + rr], fill=(255, 255, 255, 255))
+    glow_layer(img, ball, 7 * S)
+    title_pill(img, "BRICK BREAKER")
+    return img.resize((W, H), Image.LANCZOS)
+
+
 def write(name, img):
     os.makedirs(OUT, exist_ok=True)
     buf = io.BytesIO()
@@ -797,3 +838,4 @@ if __name__ == "__main__":
     write("pong.png", pong())
     write("minesweeper.png", minesweeper())
     write("flappy.png", flappy())
+    write("brickbreaker.png", brickbreaker())

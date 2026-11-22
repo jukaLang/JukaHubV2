@@ -260,7 +260,8 @@ class EnvTests(unittest.TestCase):
         self.assertEqual(words.count("rootwait"), 1)
         # Boot time: no console chatter, no wait at U-Boot's prompt.
         self.assertIn("quiet", words)
-        self.assertFalse(any(w.startswith("loglevel=") for w in words))
+        self.assertEqual([w for w in words if w.startswith("loglevel=")], ["loglevel=1"])
+        self.assertGreater(words.index("loglevel=1"), words.index("quiet"))
         self.assertEqual(reread.values["bootdelay"], "0")
         nand = reread.values["setargs_nand"]
         self.assertIn("root=PARTUUID=1234-uuid", nand)

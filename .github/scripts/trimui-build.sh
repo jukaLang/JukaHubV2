@@ -139,6 +139,8 @@ host_go() {
 			-e JUKAHUB_MS_CLIENT_ID="${JUKAHUB_MS_CLIENT_ID:-}" \
 			-e JUKAHUB_SS_DEVID="${JUKAHUB_SS_DEVID:-}" \
 			-e JUKAHUB_SS_DEVPASSWORD="${JUKAHUB_SS_DEVPASSWORD:-}" \
+			-e JUKAHUB_LASTFM_API_KEY="${JUKAHUB_LASTFM_API_KEY:-}" \
+			-e JUKAHUB_LASTFM_SECRET="${JUKAHUB_LASTFM_SECRET:-}" \
 			-e OWNER="$hand_back" \
 			-v "$repo:$repo" \
 			-v "$goroot:$goroot:ro" \
@@ -280,6 +282,10 @@ inside_go() {
 	# ScreenScraper box art (docs/BOX_ART.md), the same way.
 	if [ -n "${JUKAHUB_SS_DEVID:-}" ]; then
 		google="$google -X main.screenScraperDevID=$JUKAHUB_SS_DEVID -X main.screenScraperDevPassword=${JUKAHUB_SS_DEVPASSWORD:-}"
+	fi
+	# Last.fm scrobbling (docs/MUSIC_SERVERS.md), the same way.
+	if [ -n "${JUKAHUB_LASTFM_API_KEY:-}" ]; then
+		google="$google -X main.lastfmAPIKey=$JUKAHUB_LASTFM_API_KEY -X main.lastfmAPISecret=${JUKAHUB_LASTFM_SECRET:-}"
 	fi
 	run_stoppable go build -v -buildvcs=false -tags dynamic \
 		-ldflags "-s -w -X main.buildDate=$BUILD_DATE$google" \

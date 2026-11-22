@@ -233,7 +233,8 @@ func hjBlocked(config *Config, inGame bool, now time.Time) string {
 		return "the game assistant is off"
 	case inGame && xboxBoostLive.Load():
 		// The recognizer's memory and a core are the boosted game's: an Xbox,
-		// GameCube or Wii game (xboxboost.go).
+		// GameCube, Wii or PS2 game, or one the A133P only just plays
+		// (xboxboost.go).
 		return "a boosted game has the handheld"
 	case gameAssistOverlayActive(), voiceOrb.phase != orbHidden:
 		return "Juka is up"

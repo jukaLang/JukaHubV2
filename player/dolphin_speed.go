@@ -309,8 +309,7 @@ func dolphinSpeedPrepare(launcher string, game libraryGame) {
 // ── Settings → Games & emulators ─────────────────────────────────────────
 
 // dolphinSpeedSettingsRow is "GameCube speed", under "GameCube & Wii", on the
-// handheld while GameCube and Wii play there (On or Try anyway, or Automatic
-// on the Smart Pro S).
+// handheld while GameCube and Wii play there (Automatic or On).
 func dolphinSpeedSettingsRow() setRow {
 	return setRow{
 		ID: dolphinSpeedSetting, Label: "GameCube speed", Kind: setKindChoice,
@@ -319,7 +318,7 @@ func dolphinSpeedSettingsRow() setRow {
 			case dolphinModeOn:
 				return dolphinSoC() != ""
 			case dolphinModeAuto:
-				return dolphinSoC() == socA523
+				return dolphinSoC() != ""
 			}
 			return false
 		},

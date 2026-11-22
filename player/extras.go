@@ -1386,6 +1386,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	case synthSceneName:
 		// The keys follow the Synth's page and its cursor (synth.go).
 		hints = synthFooterHints()
+	case padsSceneName:
+		// The keys follow the Pads page, finger drumming and the browser.
+		hints = padsFooterHints()
 	case "Pomodoro":
 		// A starts and pauses, X skips the phase, Y resets the cycle.
 		hints[1] = FooterHint{Button: "A", Label: "Start / Pause"}

@@ -13,8 +13,8 @@ package main
 // and the libretro buildbot publishes a linux/aarch64 Dolphin core. So:
 //
 //   - Settings → Games & emulators → "GameCube & Wii" (key gamecube: auto, on,
-//     off). Automatic plays them on the A523 and keeps the A133P's "not
-//     supported"; there "Try anyway" lets a player see for themselves. While
+//     off). Automatic plays them on every model since 2026-11-21 (before, it
+//     kept the A133P's "not supported" behind "Try anyway"). While
 //     it is on, the two consoles are no longer desktop-only here
 //     (emuDesktopSystemFor): the Emulators page lists their folders like any
 //     other console's and the daily challenge may pick one of their games.
@@ -27,9 +27,8 @@ package main
 //     J2ME's start does.
 //   - The Emulators page's Dolphin tiles (the core's row, the GameCube and
 //     Wii folders) run the same setup on a press and look for a newer build
-//     that loads here (dolphinStartInstall). On an A133P whose setting is
-//     Automatic that press turns GameCube & Wii to Try anyway: Juka asked on
-//     2026-11-20, on a Brick Pro, for "dolphin that works on Trimui".
+//     that loads here (dolphinStartInstall): Juka asked on 2026-11-20, on a
+//     Brick Pro, for "dolphin that works on Trimui".
 //   - Every start in the core (launchLibraryGame) first makes sure the Sys
 //     folder is there and that the core is not a build from before the
 //     October 2026 fix for libretro/dolphin#462, whose dual-core mode froze an
@@ -136,19 +135,16 @@ func dolphinMode() string {
 }
 
 // dolphinPlaysHere reports whether GameCube and Wii games play on this device:
-// the handheld, with the setting on — Automatic is on for the A523 only.
+// the handheld, with the setting anything but Off.
 func dolphinPlaysHere() bool {
 	soc := dolphinSoC()
 	if soc == "" {
 		return false
 	}
-	switch dolphinMode() {
-	case dolphinModeOn:
-		return true
-	case dolphinModeOff:
-		return false
-	}
-	return soc == socA523
+	// Automatic is on on every model since 2026-11-21 (Juka: "GameCube, PS2,
+	// and XBOX should all work on all Trimui devices (even if performance is
+	// not great)"); the A133P plays them slowly, at GameCube speed Fastest.
+	return dolphinMode() != dolphinModeOff
 }
 
 // dolphinPlaysSystemHere reports whether system is a Dolphin console this
@@ -192,10 +188,7 @@ func dolphinFetchSupported() bool {
 // handheld that does not play them now.
 func dolphinNotHereHint(system string) string {
 	name := canonicalCompatSystem(system)
-	if dolphinSoC() == socA523 {
-		return name + " games are off · Settings → Games & emulators → GameCube & Wii turns them on"
-	}
-	return name + " needs more than this handheld's A133P chip: most games run at half speed or less · to try anyway, Settings → Games & emulators → GameCube & Wii"
+	return name + " games are off · Settings → Games & emulators → GameCube & Wii turns them on"
 }
 
 // ── A game's start ───────────────────────────────────────────────────────
@@ -439,10 +432,7 @@ func dolphinTile(e emuEntry) bool {
 
 // dolphinStartInstall installs the Dolphin core, or brings it to the newest
 // build this handheld can load, with Dolphin's Sys folder (a Dolphin tile on
-// the Emulators page). On an A133P model whose GameCube & Wii setting is
-// Automatic (off for that chip) the press is the player asking to try: the
-// setting becomes Try anyway, so their games start in it, and the result says
-// so. Main thread.
+// the Emulators page). Main thread.
 func dolphinStartInstall() {
 	dolphinSyncMode(appConfig)
 	if dolphinMode() == dolphinModeOff {
@@ -454,8 +444,8 @@ func dolphinStartInstall() {
 		ShowToast("No internet connection — connect to set up Dolphin", ToastKindWarning)
 		return
 	}
-	// Automatic on an A133P: the setting turns to Try anyway once the setup
-	// is under way.
+	// A setting that does not play them here (none since Automatic is on
+	// everywhere, kept for safety) turns On once the setup is under way.
 	turnOn := !dolphinPlaysHere() && appConfig != nil
 	before := dolphinCoreIdentity(dolphinFindCore())
 	setting := "Setting up Dolphin for GameCube and Wii games"
@@ -464,7 +454,7 @@ func dolphinStartInstall() {
 	}
 	onNote := ""
 	if turnOn {
-		onNote = " · GameCube & Wii set to Try anyway: on this chip most games run well below full speed"
+		onNote = " · GameCube & Wii set to On"
 	}
 	why := dolphinBeginSetup("", "", "", time.Now(), dolphinGetNewest, setting, func(core string, kept error) {
 		if kept != nil {
@@ -498,7 +488,7 @@ func dolphinStartInstall() {
 		dolphinSyncMode(appConfig)
 		// The page's GameCube and Wii folders are no longer "not supported".
 		invalidateEmulatorCache()
-		logInfo("library", "GameCube: GameCube & Wii set to Try anyway by a press on a Dolphin tile")
+		logInfo("library", "GameCube: GameCube & Wii set to On by a press on a Dolphin tile")
 	}
 }
 
@@ -512,16 +502,9 @@ func dolphinSettingsRow() setRow {
 		Visible: func(*Config) bool { return dolphinSoC() != "" },
 		Detail:  dolphinSettingDetail,
 		Options: func(*Config) []setOption {
-			def := "Off on this chip"
-			if dolphinSoC() == socA523 {
-				def = "On for this chip"
-			}
-			labels := map[string]string{dolphinModeAuto: "Automatic", dolphinModeOn: "Try anyway", dolphinModeOff: "Off"}
-			if dolphinSoC() == socA523 {
-				labels[dolphinModeOn] = "On"
-			}
+			labels := map[string]string{dolphinModeAuto: "Automatic", dolphinModeOn: "On", dolphinModeOff: "Off"}
 			notes := map[string]string{
-				dolphinModeAuto: def + ": the Smart Pro S plays the lighter games; the A133P models are too slow for most",
+				dolphinModeAuto: "On: the Smart Pro S plays the lighter games; on the A133P models most run well below full speed",
 				dolphinModeOn:   "GameCube and Wii games start in RetroArch's Dolphin core, set up on the first start",
 				dolphinModeOff:  "JukaHub does not set Dolphin up here; a Dolphin core you installed yourself still starts the games",
 			}
@@ -549,14 +532,11 @@ func dolphinSettingsRow() setRow {
 // dolphinSettingDetail is the row's second line. Cheap: drawn every frame.
 func dolphinSettingDetail(c *Config) string {
 	mode := dolphinModeFrom(c)
-	on := mode == dolphinModeOn || (mode == dolphinModeAuto && dolphinSoC() == socA523)
 	switch {
-	case !on && dolphinSoC() == socA523:
+	case mode == dolphinModeOff:
 		return "Off · JukaHub does not set Dolphin up for GameCube and Wii games"
-	case !on:
-		return "Off · the A133P is too slow for most GameCube games"
 	case dolphinSoC() != socA523:
-		return "Trying anyway · expect most games well below full speed"
+		return "In RetroArch's Dolphin core · on this chip expect most games well below full speed"
 	}
 	return "In RetroArch's Dolphin core · lighter games play; Wii games rarely reach full speed"
 }

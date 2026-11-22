@@ -11,11 +11,11 @@ REM   1. go get -u -t ./...   for windows/amd64 AND linux/arm64 (TrimUI), so
 REM                           modules only one platform imports are covered
 REM   2. go get toolchain@latest   newest stable Go for the toolchain line
 REM                           (the "go 1.26.0" minimum is left alone)
-REM   3. go mod tidy + go mod vendor   player/vendor/ is what CI builds from
+REM   3. go mod tidy + go mod vendor   player/vendor/ is a git-ignored local copy
 REM   4. go list both platforms from vendor/ to prove the tree resolves
 REM
 REM  Pre-release tags are never picked: @latest / -u only take stable semver.
-REM  Afterwards run  build.bat nolaunch  and commit go.mod, go.sum, vendor/.
+REM  Afterwards run  build.bat nolaunch  and commit go.mod and go.sum.
 REM ============================================================================
 
 set "GO_EXE="
@@ -73,7 +73,7 @@ echo === changes ===
 git --no-optional-locks diff --stat -- go.mod go.sum vendor/modules.txt
 git --no-optional-locks diff -U0 -- go.mod
 echo.
-echo [ok] Dependencies updated. Next:  build.bat nolaunch   then commit go.mod, go.sum and vendor/.
+echo [ok] Dependencies updated. Next:  build.bat nolaunch   then commit go.mod and go.sum.
 exit /b 0
 
 :fail

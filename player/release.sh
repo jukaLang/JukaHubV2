@@ -54,6 +54,10 @@ fi
 if [ -n "${JUKAHUB_SS_DEVID:-}" ]; then
     LDFLAGS="$LDFLAGS -X main.screenScraperDevID=${JUKAHUB_SS_DEVID} -X main.screenScraperDevPassword=${JUKAHUB_SS_DEVPASSWORD:-}"
 fi
+# Last.fm scrobbling (docs/MUSIC_SERVERS.md), when JUKAHUB_LASTFM_API_KEY is set.
+if [ -n "${JUKAHUB_LASTFM_API_KEY:-}" ]; then
+    LDFLAGS="$LDFLAGS -X main.lastfmAPIKey=${JUKAHUB_LASTFM_API_KEY} -X main.lastfmAPISecret=${JUKAHUB_LASTFM_SECRET:-}"
+fi
 
 OUT="dist"
 rm -rf "$OUT"

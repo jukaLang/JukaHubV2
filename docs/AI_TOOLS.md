@@ -23,7 +23,7 @@ Unverified on device as of 2026-11-17: built and checked statically only.
 | `read_text_file` | A text file (configs, logs, scripts); binary files and files with keys or passwords are refused | read |
 | `search_settings`, `get_setting` | Settings rows, their values and choices | read |
 | `retroarch_get` | RetroArch options, globally or in a core's override file | read |
-| `performance_get` | Power mode, automatic CPU speed, clock, temperature | read |
+| `performance_get` | Power mode, automatic CPU speed, CPU boost in games, heat limit, clock, temperature | read |
 | `mail_inbox` | The newest messages of the mail accounts in Email & calendar, unread first: sender, subject, date, a 200-character snippet ([EMAIL_CALENDAR.md](EMAIL_CALENDAR.md)) | read |
 | `calendar_agenda` | The synced calendars' events for the coming days (1-31): time, title, place, calendar | read |
 | `open_screen` | Adds an "Open …" button under the answer (a Settings row or a screen) | read |

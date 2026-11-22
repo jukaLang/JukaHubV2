@@ -36,7 +36,7 @@ const (
 )
 
 // audioSpeedSteps are the speeds the player cycles through.
-var audioSpeedSteps = []float64{0.75, 1, 1.25, 1.5, 1.75, 2}
+var audioSpeedSteps = []float64{0.0625, 0.125, 0.25, 0.5, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2}
 
 type audioResumeEntry struct {
 	Position float64 `json:"position"`
@@ -385,7 +385,7 @@ func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string 
 		"-i", path,
 		"-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2",
 		"-ar", strconv.Itoa(int(rate)))
-	if chain := musicPEQCurrentChain(speed); chain != "" {
+	if chain := musicPEQCurrentChain(speed, rate); chain != "" {
 		args = append(args, "-af", chain)
 	}
 	return append(args, "pipe:1")

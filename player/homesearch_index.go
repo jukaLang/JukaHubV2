@@ -248,6 +248,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Browser", where: "Apps", icon: "browser", keys: "browser web internet www website pages", open: openBrowserHome},
 		{title: "Browser settings", where: "Settings", icon: "browser", keys: "browser search engine default engine home page homepage start page google duckduckgo bing startpage", open: brwOpenSettings},
 		{title: "Synth", where: "Apps", icon: "synth", keys: "synth synthesizer music maker beat beats drum machine groovebox sequencer piano keyboard instrument make music hum", scene: synthSceneName},
+		{title: "Pads", where: "Apps", icon: "pads", keys: "pads pad sampler sample samples sequencer drum pads mpc beat beats chop slice slices loop loops song grainbrick music maker", scene: padsSceneName},
 		{title: "JukaLand", where: "Games", icon: "gamepad", keys: "jukaland game sandbox craft blocks", scene: "JukaLand"},
 		{title: "Apps", where: "Apps", icon: "apps", keys: "apps applications launcher programs", scene: "Apps"},
 		{title: "App Center", where: "Apps", icon: "apps", keys: "app center app store trimui apps install update roll back crossmix koreader ritder screen recorder trimui drop gamepad bluetooth pad", open: func(c *Config) { acOpenCenter(c, "") }},
@@ -391,6 +392,8 @@ func homeSearchSceneIcon(scene, title string) string {
 		return "clock"
 	case synthSceneName:
 		return "synth"
+	case padsSceneName:
+		return "pads"
 	case "Dashboard":
 		return "grid"
 	case "PDFReader":

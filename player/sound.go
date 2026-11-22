@@ -668,6 +668,8 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	// Video and music share this path, so one publish covers both. The buffer is
 	// stereo S16 at the device's rate; the analyser reads at most 2048 frames.
 	publishAudioLevel(pcm, int(videoAudioRate), 2)
+	// The visualizers read what is heard, by the device's byte count (musicviz.go).
+	musicScopeWrite(pcm, videoAudioFed, videoAudioRate)
 	if err := outQueue(videoAudioDev, pcm); err != nil {
 		videoAudioSkipped += int64(len(pcm))
 	} else {

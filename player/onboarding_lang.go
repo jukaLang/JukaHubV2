@@ -51,6 +51,7 @@ var onbLangTitles = map[string]string{
 	"de":    "Wähle deine Sprache",
 	"it":    "Scegli la lingua",
 	"ru":    "Выберите язык",
+	"uk":    "Виберіть мову",
 }
 
 // onbLangWord is the one-line "Language" in every offered language, under the
@@ -58,7 +59,7 @@ var onbLangTitles = map[string]string{
 func onbLangWord() string {
 	words := map[string]string{
 		"en": "Language", "es": "Idioma", "pt-BR": "Idioma", "fr": "Langue",
-		"de": "Sprache", "it": "Lingua", "ru": "Язык",
+		"de": "Sprache", "it": "Lingua", "ru": "Язык", "uk": "Мова",
 	}
 	seen := map[string]bool{}
 	parts := make([]string, 0, len(uiLanguages))
@@ -365,6 +366,8 @@ func uiTrimuiSystemLanguage() string {
 		return "it"
 	case "russian", "русский":
 		return "ru"
+	case "ukrainian", "українська":
+		return "uk"
 	}
 	return uiLanguageFromLocale(v)
 }

@@ -20,16 +20,125 @@ remaining gaps are worth closing.
 | Transport | Play/pause, next/previous, stop, seek ±10 s, seek by tapping the rail, volume ±10 % |
 | Modes | Shuffle (every track once before wrapping), repeat off / all / one, a play-next queue |
 | Favorites | Toggled per track, marked in the list, stored in `musicfavorites.json` |
-| Long form | 0.75×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
+| Long form | 1/16×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
 | Lyrics | A `.lrc` file next to the track; the active line and its neighbours are drawn in the artwork square. Without a timed `.lrc`, the lyrics stored inside the file (ID3 USLT, a FLAC/Vorbis `LYRICS` or `UNSYNCEDLYRICS` comment, MP4 `©lyr`) are used: timed when they carry LRC timestamps, otherwise spread evenly over the song. An `.lrc` without timestamps scrolls the same way |
 | Radio | The **Radio** shelf: the free Radio Browser directory (top stations, by country, by genre, search) and your saved stations (see [Radio](#radio)) |
-| Visuals | 32-bar smoothed spectrum in the artwork tile and a full-screen visualizer |
+| Visuals | The real spectrum of what is heard in the artwork tile, and ten full-screen visualizers drawn from a 1024-point FFT in four Bayer-dithered shades (see [Visualizers](#visualizers)) |
+| Layouts | Auralis Pro (artwork card), StockOS (list first) and **iPod**: click-wheel menus over every source, 38 four-shade themes, six screen transitions, dithered album art and the wheel's tick (see [iPod layout](#ipod-layout)) |
+| Sound | 31-band PEQ with JukaHub's and the iPod's presets, AutoEQ headphone profiles (see [AutoEQ](#autoeq)), Tape Mode and stereo effects (see [Sound effects](#sound-effects)) |
+| Servers | Navidrome (Subsonic) and Jellyfin: browse, stream through a cache, Download Offline, Jellyfin films and series; Last.fm and ListenBrainz scrobbling with an offline queue ([MUSIC_SERVERS.md](MUSIC_SERVERS.md)) |
+| Library tags | Genres and composers (the index reads the tags again once after the update) |
+| Games | Music Quiz and Sound Racer (Extras › Games on the iPod screen), Brick Breaker on the Games screen |
 | Background | Audio keeps playing when you leave the screen and, by default, under a game; starting a video or a Watch Party stream stops it |
 | Transitions | Gapless: the next track starts without a gap, and the last second of a track is no longer cut off |
 | USB DAC | Sound moves to a plugged-in USB DAC; Bit-perfect plays lossless tracks at their own rate and bit depth |
 | Game soundtracks | NSF, SPC, GBS, VGM/VGZ, GYM, HES, KSS, AY, SAP and C64 SID tunes, plus MOD/XM/S3M/IT modules: one row per song, the game's cover, the console and the song number in Now Playing (see [Game soundtracks](#game-soundtracks)) |
 
 Controls are in [CONTROLS.md](CONTROLS.md#music-player).
+
+## iPod layout
+
+**Settings → Audio → Now Playing layout → iPod** (or Settings › Layout on the
+iPod screen to go back) turns the player into a click-wheel iPod: a stack of
+menus — Music (Playlists, Artists, Albums, Songs, Genres, Composers,
+Favorites, Recently Added, Search), Videos (Continue Watching, Movies, TV
+Shows), Podcasts, Audiobooks, Extras, Settings, Shuffle Songs and Now
+Playing. **Settings › Source** picks what Music and Videos list: this device,
+Navidrome, Jellyfin, or **All sources**, where a song or album on the card and
+on a server is one row and plays from the card first.
+
+| Button | Lists | Now Playing |
+|--------|-------|-------------|
+| Up / Down | Scroll (the wheel; it ticks with Clicker on) | Volume (the bar replaces the progress bar for a moment) |
+| A / Right | Open or play | Play / pause (Right: next) |
+| B / Left | Back; at the top menu, leave the player | Back (Left: previous) |
+| X | Context menu: Play, Shuffle, Play Next, Add to On-The-Go, Download Offline, Go to Album/Artist, Favorite, Info, Rename File…, Delete File | Shuffle, Repeat, Speed, Sleep Timer, Sound Effects, Equalizer, On-The-Go, Favorite, Lyrics, Info, Download Offline |
+| Y | Jump to Now Playing | Cover → visualizer → lyrics |
+| L1 / R1 | Previous / next song | Previous / next song |
+| L2 / R2 | A page up / down | Seek −10 / +10 s |
+| Start | Play / pause | Play / pause |
+| Select | Screen off (playback continues) | Screen off |
+| Menu | Back to the top menu | Back to the top menu |
+
+A keyboard has the same keys plus Enter, Esc, Space, PgUp/PgDn, `/` (search)
+and `K` (Audio settings). A song list starts with **Shuffle**; an artist's
+albums start with **All Songs**. **On-The-Go** is a saved playlist like any
+other (its context menu saves it under a name), so the other layouts and the
+M3U8 export see it.
+
+Settings on the iPod screen: Source, Music Servers, Theme (38 four-shade
+palettes: Classic, the iPod mini colours, DMG and Pocket, phosphor and amber
+monitors, Kyiv…), Transition (Push, Slide, Fade, Zoom, Dither, None), Clicker,
+Shuffle, Repeat, EQ (Off and every preset), Edit EQ Curve, AutoEQ Headphones,
+Sound Effects, Speed, Sleep Timer, Visualizer, Dithering, Scrobbling, Offline
+Cache (size cap and Clear Cache), Downloads, Background Play, Language, Layout
+and About. Extras holds the visualizers, the games (Music Quiz, Sound Racer,
+Brick Breaker, Tetris, Snake, 2048), the Stopwatch and **Browse Files** (Files
+at the Music folder: rename, copy, move, delete and file info).
+
+## Sound effects
+
+**R2** (or **X** on a keyboard) in the player, Settings → Audio → Sound
+effects, or Sound Effects on the iPod screen. Each row changes with
+Left/Right; **A** puts a row back, **Y** steps through the presets (Walkman,
+Worn cassette, Concert hall, Space echo, Dream, Jet, Slow + reverb, Off).
+
+- **Tape Mode**: wow and flutter (a 0.6 Hz wow, 7 and 13 Hz flutter and a slow
+  random drift of the capstan), tape hiss, soft saturation, high-frequency
+  roll-off (20 kHz down to about 2.5 kHz) and the tape speed (0.50×–1.50×,
+  pitch and tempo together like a deck's trimmer).
+- **Reverb** (a Freeverb-style room, with its size), **ping-pong delay** (each
+  echo jumps to the other ear; time and feedback), **chorus** and **flanger**.
+- **Playback speed**: 1/16× to 2× with the pitch kept; audiobooks keep their
+  own.
+
+The effects run on the decoded sound in JukaHub itself and a change restarts
+the decoder where you are, so it is heard at once. Bit-perfect output bypasses
+them, like the equaliser.
+
+## AutoEQ
+
+**Settings → Audio → AutoEQ headphones** (or AutoEQ Headphones on the iPod
+screen) corrects a headphone to neutral with a profile from the
+[AutoEq](https://github.com/jaakkopasanen/AutoEq) project. The list of every
+measured headphone is downloaded once and kept, so the search works offline
+afterwards; a profile is downloaded the first time it is picked and kept too.
+`ParametricEQ.txt` or `FixedBandEQ.txt` files you put in `Music/AutoEQ` are
+listed first. The profile's preamp and filters run before the 31-band PEQ, so
+the two stack. Pick **Off** to stop it.
+
+The PEQ itself (L2 in the player, or Settings → Audio → 31-band PEQ → A) now
+steps through the iPod's presets as well: Acoustic, Bass Booster, Bass
+Reducer, Classical, Dance, Deep, Electronic, Hip-Hop, Jazz, Latin, Loudness,
+Lounge, Piano, Pop, R&B, Small Speakers, Spoken Word, Treble Booster, Treble
+Reducer and Vocal Booster.
+
+## Visualizers
+
+**Start** (or **V**) in Auralis Pro and StockOS, Y on the iPod's Now Playing,
+or Extras › Visualizers. Left/Right change the visualizer, **Y** (or **D**)
+the dithering. All ten read the sound the speaker is playing (not the decoder
+a second ahead), through a 1024-point FFT folded into 48 bands, the VU level
+and peak of each channel, the waveform and a beat detector:
+
+Cassette Deck (turning reels and a 28-segment LED meter), Stereo VU Meter,
+Sonic Vortex, Phosphor Scope (an X-Y trace), Spectrum Matrix, Cyber Horizon,
+Liquid Metal, Chladni Plate, Star Warp and LCD Plasma. They are drawn at 320
+pixels wide and scaled up square; with dithering on they use the theme's four
+shades in a Bayer pattern, like an old LCD.
+
+## Music games
+
+- **Music Quiz**: ten rounds, fifteen seconds from the middle of a random
+  song, four titles to pick from; a right answer scores 100 plus 10 a second
+  left. The best score is kept.
+- **Sound Racer**: a racing game whose road is the song. The song is listened
+  to once (game soundtracks too) and turned into a map — bends from the bass
+  and treble, a gem on every onset in the lane its pitch suggests, an obstacle
+  on the heaviest bass hits — which is kept in `racer-maps/`, so the next race
+  on that song starts at once.
+- **Brick Breaker** joins Snake, Tetris and the other arcade games on the
+  Games screen.
 
 ## USB DAC
 
@@ -196,6 +305,29 @@ out. The console formats go through ffmpeg's libgme and the modules through
 libopenmpt; an ffmpeg without them says so once. SID tunes play on JukaHub's
 own small C64 emulation, cheap enough to run with the screen off. Formats,
 limits and the SID details are in [SOUNDTRACKS.md](SOUNDTRACKS.md).
+
+## Compared with UIPod
+
+[UIPod](https://famiclone.dev/UIPod/) is an iPod-style player for the TrimUI
+Brick (NextUI) and Android handhelds. What it has and where JukaHub has it:
+
+| UIPod | JukaHub |
+|-------|---------|
+| iPod Mini-style UI, 38 four-shade themes, 6 transitions, dithered album art, click-wheel sound | The iPod layout (above) |
+| Local music, podcasts, audiobooks (chapters, resume), videos | Music, Podcasts, Audiobooks and Videos menus over the media library |
+| Navidrome: streaming, caching, scrobbling, Download offline | Navidrome source, the song cache, Download Offline, scrobbling ([MUSIC_SERVERS.md](MUSIC_SERVERS.md)) |
+| Jellyfin: movies, series, music; direct stream or server transcode; resume sync; download | Jellyfin source: the same, with Quick Connect sign-in |
+| One deduplicated library across the three | Source → All sources |
+| Last.fm QR sign-in, offline scrobble cache | Last.fm (QR), ListenBrainz, the servers' own counts; `scrobbles.json` waits for a connection |
+| 10-band EQ, offline AutoEQ database | 31-band PEQ with the iPod presets; AutoEQ with the kept index |
+| Speed 1/16×–1.5×, Walkman Tape Mode, reverb, ping-pong delay, chorus, flanger | Sound effects (above), speed 1/16×–2× |
+| 10 Bayer-dithered visualizers on a 1024-point FFT | The same ten (above) |
+| File manager: delete, rename, copy, move, info | Browse Files (the Files screen) and the context menu's Rename, Delete and Info |
+| Video subtitles and audio track switching | The video player's subtitle and audio track pickers |
+| USB file transfer while running | Settings → Network → USB file transfer (MTP) |
+| English and Ukrainian | Ukrainian is a JukaHub language (menus and the player; long help texts stay English for now) |
+| Plugins: Music Quiz, Sound Racer, Tetris, Snake, Brick Breaker, 2048, Stopwatch, LCD Plasma, Text Viewer | Extras › Games, the Stopwatch app, LCD Plasma among the visualizers, the text viewer in Files; JukaHub's own plugins (docs/PLUGINS.md) instead of `.uipod` files |
+| Android app, browser simulator | Not applicable: JukaHub runs on the handheld and on Windows |
 
 ## Compared with NXT Retro Music
 

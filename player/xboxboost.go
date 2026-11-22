@@ -20,6 +20,14 @@ package main
 //   - GPU: a GPU with a devfreq node (a name with "gpu" under
 //     /sys/class/devfreq) runs its performance governor, or with its floor
 //     raised to its ceiling where it has none;
+//   - memory clock: a memory controller with a devfreq node (a name with
+//     "dram", "ddr" or "dmc") the same way — an emulator of a 3D console
+//     waits on memory as much as on the CPU, and a DRAM governor that clocks
+//     down between bursts costs it frames;
+//   - the card: the read-ahead of the disk the game is read from goes up to
+//     xboxBoostReadAheadKB where it is lower (the kernel's default is
+//     128 KB), so a disc image streamed during play — a level, a video, the
+//     music — is read in long runs instead of many small ones;
 //   - memory: JukaHub's textures and byte caches are emptied just before the
 //     start (main thread, while nothing draws them); beside the launch the Go
 //     heap is handed back, the warm speech recognizer, the media library's
@@ -27,9 +35,13 @@ package main
 //     dropped and compacted (memFreeKernel). Every game start already stops
 //     the offline AI and the Piper voice (voiceReleaseForGame). On a 1 GB
 //     handheld this decides whether the game's working set sits in RAM or in
-//     swap;
+//     swap — and a start in the first minutes after power-on sets that swap
+//     up at once rather than at its quiet moment (xboxBoostSwapEarly);
 //   - priority: the game's process group runs at nice xboxBoostNice, ahead of
 //     whatever JukaHub or the firmware does in the background;
+//     JukaHub's own threads step back to nice 10 and the idle I/O class, and
+//     on a chip with a faster cluster (the Smart Pro S) the game is held to
+//     it (xboxboost_hub_linux.go);
 //   - "Hey Juka" stays closed in an Xbox game (wakeword.go): its recognizer
 //     holds 100–150 MB and a loud game keeps it decoding on a core;
 //   - streams only: Wi-Fi power saving off, as Moonlight's hand-off does (a
@@ -45,8 +57,16 @@ package main
 // what a JukaHub that died mid-game left (xboxBoostRecover, from main before
 // the boot CPU values are recorded).
 //
-// Settings → Games & emulators → "Xbox boost" (xboxBoost, on by default) turns
-// it off. On a PC, and on the handheld for every other game, nothing here runs.
+// It began with the Xbox; GameCube, Wii and PS2 games joined where the
+// handheld plays them (dolphin.go, ps2.go), and on 2026-11-21 ("improve
+// performance of all emulators...especially on Trimui Smart Pro and Trimui
+// Brick") the consoles the A133P only just plays joined on that chip: PSP,
+// Dreamcast (with NAOMI and Atomiswave), Saturn, Jaguar, N64 and DS. The
+// Smart Pro S plays those without it.
+//
+// Settings → Games & emulators → "Heavy-game boost" (xboxBoost, on by default;
+// the key keeps its first name) turns it off. On a PC, and on the handheld for
+// every other game, nothing here runs.
 //
 // What it does not do: change hakuX's or GreenOvercast's own settings (render
 // scale, frame skip and stream resolution are in their own menus), clock
@@ -79,10 +99,17 @@ const (
 	xboxBoostApplyWait = 5 * time.Second
 	// xboxBoostExitWait bounds the exit hook's wait for restores under way.
 	xboxBoostExitWait = 2 * time.Second
+	// xboxBoostReadAheadKB is the read-ahead (KB) the card a boosted game is
+	// read from gets: what the JukaHub OS images give it at boot.
+	xboxBoostReadAheadKB = 1024
 )
 
-// xboxBoostDevfreqRoot is where a GPU's devfreq node is looked for.
-var xboxBoostDevfreqRoot = "/sys/class/devfreq"
+// xboxBoostDevfreqRoot is where a GPU's or memory controller's devfreq node
+// is looked for; xboxBoostBlockRoot where a disk's queue settings are.
+var (
+	xboxBoostDevfreqRoot = "/sys/class/devfreq"
+	xboxBoostBlockRoot   = "/sys/block"
+)
 
 // xboxBoostKind is what a launch is, for the boost.
 type xboxBoostKind int
@@ -103,12 +130,16 @@ type xboxBoostSession struct {
 	applied chan struct{} // closed when the start's background half is done
 
 	mu       sync.Mutex
-	writes   []saverSysfsWrite // cores and GPU, in the order they were made
+	writes   []saverSysfsWrite // cores, GPU, memory, card, in the order made
 	wifi     []string          // radios whose power saving went off ("iw:wlan0")
 	details  []string          // everything done, for the log
 	cores    int               // parked cores brought online
 	gpu      bool              // the GPU's governor or floor raised
+	mem      bool              // the memory controller's governor or floor raised
+	disk     bool              // the card's read-ahead raised
 	reniced  bool              // the game's group runs at xboxBoostNice
+	pinned   string            // the fast cluster's CPUs the game is held to
+	stepped  bool              // JukaHub's threads stepped back
 	cpuOwn   bool              // the game's own CPU profile or limit is in charge
 	ended    bool              // finish ran
 	restored bool              // restore ran (or the session is past it)
@@ -159,15 +190,62 @@ func xboxBoostSupported() bool {
 // xboxBoostKindForGame is a library game's kind: the Xbox row's games are
 // hakuX's (the handheld's only Xbox emulator). GameCube and Wii games, on a
 // handheld that plays them (dolphin.go), and PS2 games (ps2.go) need the
-// whole machine as much.
+// whole machine as much, and so do the consoles the A133P only just plays
+// (xboxBoostA133PHeavy).
 func xboxBoostKindForGame(game libraryGame) xboxBoostKind {
 	if strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) {
 		return xboxBoostGame
 	}
-	if dolphinPlaysSystemHere(game.System) || ps2PlaysSystemHere(game.System) {
+	if dolphinPlaysSystemHere(game.System) || ps2PlaysSystemHere(game.System) || xboxBoostA133PHeavy(game.System) {
 		return xboxBoostGame
 	}
 	return xboxBoostNone
+}
+
+// xboxBoostA133PConsoles are the consoles the A133P (Smart Pro, Brick, Brick
+// Pro, Hammer) only just plays, by canonicalCompatSystem's names and the
+// library's; xboxBoostA133PFolders the folder names (lower case) neither
+// knows.
+var (
+	xboxBoostA133PConsoles = map[string]bool{
+		"PlayStation Portable": true, "Dreamcast": true, "Saturn": true,
+		"Nintendo 64": true, "Nintendo DS": true, "Atari Jaguar": true,
+	}
+	xboxBoostA133PFolders = map[string]bool{
+		"naomi": true, "naomi2": true, "atomiswave": true, "awave": true,
+		"ss": true, "ds": true, "jaguar": true, "atarijaguar": true,
+	}
+)
+
+// xboxBoostOnA133P reports a TrimUI handheld on the A133P.
+func xboxBoostOnA133P() bool {
+	return xboxBoostSupported() && deviceHardware(DetectDevice()).SoC == socA133P
+}
+
+// xboxBoostA133PHeavy reports whether system's games get the boost because
+// this handheld is an A133P one.
+func xboxBoostA133PHeavy(system string) bool {
+	return xboxBoostOnA133P() && xboxBoostSystemIn(system, xboxBoostA133PConsoles, xboxBoostA133PFolders)
+}
+
+// xboxBoostSystemIn reports whether system — a library name ("N64"),
+// NextUI's "Nintendo 64 (N64)" or an emulator folder's name — is one of
+// consoles or folders. Pure.
+func xboxBoostSystemIn(system string, consoles, folders map[string]bool) bool {
+	s := strings.TrimSpace(system)
+	if s == "" {
+		return false
+	}
+	names := []string{s}
+	if i := strings.LastIndex(s, "("); i > 0 && strings.HasSuffix(s, ")") {
+		names = append(names, strings.TrimSpace(s[i+1:len(s)-1]), strings.TrimSpace(s[:i]))
+	}
+	for _, n := range names {
+		if consoles[canonicalCompatSystem(n)] || consoles[n] || folders[strings.ToLower(n)] {
+			return true
+		}
+	}
+	return false
 }
 
 // xboxBoostKindForPort is a port launch's kind: GreenOvercast, by its script's
@@ -252,14 +330,33 @@ func xboxBoostBegin(kind xboxBoostKind, target, label string) *xboxBoostSession 
 	// The last launch's restore, if it is still waiting for its background
 	// half: now, so it cannot park a core this launch counts on.
 	prev.restoreLocked()
-	s.applyLocked(xboxBoostHardwarePlan())
+	s.applyLocked(xboxBoostHardwarePlan(target))
 	xboxBoostOps.Unlock()
+	if xboxBoostSwapEarly() {
+		s.detail("swap set up before its quiet moment")
+	}
 	// Nothing draws until the game is gone: every texture and byte cache goes
 	// now and is made again on the way back.
 	evictAllCachesForPressure()
 	s.detail("JukaHub's caches emptied")
 	go s.background(before)
 	return s
+}
+
+// xboxBoostSwapEarly starts the swap setup (memswap.go) when a boosted game
+// starts before that setup's quiet moment — in the first minutes after
+// power-on, or a game resumed at power-on — so a 1 GB handheld has its
+// compressed swap, or the swap file an earlier start wrote, before the game's
+// working set needs it. A swap file still to be written stops as the game
+// takes the screen and is tried again at the next quiet moment, as memswap.go
+// does for any game. Main thread (the switch is read from the config).
+func xboxBoostSwapEarly() bool {
+	if !memSwapSupported() || memSwap.asked.Load() || !memSwapEnabled(appConfig) {
+		return false
+	}
+	memSwap.asked.Store(true)
+	memSwapApply(true)
+	return true
 }
 
 // applyLocked makes the planned writes, recording each one that took. The
@@ -282,9 +379,14 @@ func (s *xboxBoostSession) applyLocked(plan []saverSysfsWrite) {
 		}
 		s.writes = append(s.writes, w)
 		s.details = append(s.details, fmt.Sprintf("%s %s → %s", w.Path, w.Original, w.Written))
-		if filepath.Base(w.Path) == "online" {
+		switch {
+		case filepath.Base(w.Path) == "online":
 			s.cores++
-		} else {
+		case filepath.Base(w.Path) == "read_ahead_kb":
+			s.disk = true
+		case xboxBoostMemName(filepath.Base(filepath.Dir(w.Path))):
+			s.mem = true
+		default:
 			s.gpu = true
 		}
 	}
@@ -324,6 +426,22 @@ func (s *xboxBoostSession) background(before uint64) {
 	if memFreeKernel() {
 		s.detail("page cache dropped")
 	}
+	// JukaHub's own threads behind the game, unless it already ended
+	// (xboxboost_hub_linux.go; put back in restoreLocked, which runs under
+	// the same lock, so the two never cross).
+	xboxBoostOps.Lock()
+	s.mu.Lock()
+	over := s.restored
+	s.mu.Unlock()
+	if !over {
+		if n := xboxBoostStepBack(); n > 0 {
+			s.mu.Lock()
+			s.stepped = true
+			s.details = append(s.details, fmt.Sprintf("JukaHub's %d threads behind the game", n))
+			s.mu.Unlock()
+		}
+	}
+	xboxBoostOps.Unlock()
 	// The game is loading beside all this, so the two figures are what was
 	// there, not what was freed.
 	after := readProcMeminfo().MemAvail / 1024
@@ -361,6 +479,14 @@ func (s *xboxBoostSession) wifiOff() {
 func (s *xboxBoostSession) started(pid int) {
 	if s == nil || pid <= 0 {
 		return
+	}
+	// The fast cluster first: the script has not started the emulator yet,
+	// which inherits it (xboxboost_hub_linux.go).
+	if cpus := xboxBoostPin(pid); cpus != "" {
+		s.mu.Lock()
+		s.pinned = cpus
+		s.details = append(s.details, "game held to the fast cluster (CPUs "+cpus+")")
+		s.mu.Unlock()
 	}
 	if err := xboxBoostRenice(pid); err != nil {
 		s.detail(fmt.Sprintf("priority unchanged (%v)", err))
@@ -407,9 +533,21 @@ func (s *xboxBoostSession) summaryLocked() string {
 	if s.gpu {
 		parts = append(parts, "GPU at full speed")
 	}
+	if s.mem {
+		parts = append(parts, "memory at full speed")
+	}
+	if s.disk {
+		parts = append(parts, "card read-ahead raised")
+	}
 	parts = append(parts, "JukaHub's memory freed")
 	if s.reniced {
 		parts = append(parts, "first on the CPU")
+	}
+	if s.pinned != "" {
+		parts = append(parts, "on the fast cores")
+	}
+	if s.stepped {
+		parts = append(parts, "JukaHub stepped back")
 	}
 	if len(s.wifi) > 0 {
 		parts = append(parts, "Wi-Fi power saving off")
@@ -491,6 +629,7 @@ func (s *xboxBoostSession) restoreLocked() {
 	n := saverRestoreWrites(writes)
 	xboxBoostWiFiOn(wifi)
 	xboxBoostRemoveMarker()
+	xboxBoostStepForward()
 	radios := ""
 	if len(wifi) > 0 {
 		radios = ", Wi-Fi power saving back on"
@@ -501,7 +640,7 @@ func (s *xboxBoostSession) restoreLocked() {
 	if xboxBoost.pending == s {
 		xboxBoost.pending = nil
 	}
-	xboxBoost.status = "Last Xbox session: " + summary
+	xboxBoost.status = "Last boosted game: " + summary
 	xboxBoost.mu.Unlock()
 }
 
@@ -569,7 +708,8 @@ func xboxBoostRecover() {
 }
 
 // xboxBoostWritable reports whether p is a file the boost writes: a CPU's
-// online switch or a devfreq GPU's governor or floor.
+// online switch, a devfreq GPU's or memory controller's governor or floor, or
+// a disk's read-ahead (/sys/block/<disk>/queue/read_ahead_kb).
 func xboxBoostWritable(p string) bool {
 	if p == "" || p != filepath.Clean(p) {
 		return false
@@ -581,10 +721,39 @@ func xboxBoostWritable(p string) bool {
 		return filepath.Dir(dir) == filepath.Clean(cpufreqRoot) && len(name) > 3 &&
 			strings.HasPrefix(name, "cpu") && strings.Trim(name[3:], "0123456789") == ""
 	case "governor", "min_freq":
+		name := filepath.Base(dir)
 		return filepath.Dir(dir) == filepath.Clean(xboxBoostDevfreqRoot) &&
-			strings.Contains(strings.ToLower(filepath.Base(dir)), "gpu")
+			(strings.Contains(strings.ToLower(name), "gpu") || xboxBoostMemName(name))
+	case "read_ahead_kb":
+		disk := filepath.Dir(dir)
+		return filepath.Base(dir) == "queue" && filepath.Dir(disk) == filepath.Clean(xboxBoostBlockRoot) &&
+			xboxBoostDiskName(filepath.Base(disk))
 	}
 	return false
+}
+
+// xboxBoostMemName reports a devfreq device name that is a memory
+// controller's ("dramfreq", "dmc", "ddr…"), not a GPU's.
+func xboxBoostMemName(name string) bool {
+	name = strings.ToLower(name)
+	if strings.Contains(name, "gpu") {
+		return false
+	}
+	return strings.Contains(name, "dram") || strings.Contains(name, "ddr") || strings.Contains(name, "dmc")
+}
+
+// xboxBoostDiskName reports a block device name the boost may tune: letters
+// and digits only (mmcblk0, sda, nvme0n1).
+func xboxBoostDiskName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // xboxBoostShutdown is the exit hook: a boosted game still running when
@@ -609,24 +778,25 @@ func xboxBoostShutdown() {
 
 // ── Settings ────────────────────────────────────────────────────────────────
 
-// xboxBoostSettingsRow is Settings → Games & emulators → "Xbox boost", below
-// Extra memory (swap). It boosts GameCube and Wii games too, where the
-// handheld plays them (dolphin.go); the second line says so there.
+// xboxBoostSettingsRow is Settings → Games & emulators → "Heavy-game boost",
+// below Extra memory (swap). It began as "Xbox boost"; the second line names
+// the consoles it covers on this handheld (xboxBoostWhat).
 func xboxBoostSettingsRow() setRow {
 	return setRow{
-		ID: xboxBoostSetting, Label: "Xbox boost", Kind: setKindToggle,
+		ID: xboxBoostSetting, Label: "Heavy-game boost", Kind: setKindToggle,
 		Visible: func(*Config) bool { return xboxBoostSupported() },
 		Detail:  xboxBoostSettingDetail,
 		Get:     xboxBoostEnabled,
 		Set: func(c *Config, on bool) {
 			setStoreBool(c, xboxBoostSetting, on)
-			setToast("Xbox boost: " + setOnOff(on) + " · from the next " + xboxBoostWhat() + " game or stream")
+			setToast("Heavy-game boost: " + setOnOff(on) + " · from the next " + xboxBoostWhat() + " game or stream")
 		},
 	}
 }
 
 // xboxBoostWhat names the games the boost is for: GameCube, Wii and PS2 as
-// well where the handheld plays them.
+// well where the handheld plays them, and on the A133P the consoles it only
+// just plays.
 func xboxBoostWhat() string {
 	names := []string{"Xbox"}
 	if dolphinPlaysHere() {
@@ -634,6 +804,9 @@ func xboxBoostWhat() string {
 	}
 	if ps2PlaysHere() {
 		names = append(names, "PS2")
+	}
+	if xboxBoostOnA133P() {
+		names = append(names, "PSP", "Dreamcast", "Saturn", "N64", "DS")
 	}
 	if len(names) == 1 {
 		return names[0]
@@ -652,5 +825,5 @@ func xboxBoostSettingDetail(c *Config) string {
 	if st != "" {
 		return st
 	}
-	return xboxBoostWhat() + " games and streams get every core and the GPU at full speed, and JukaHub's memory"
+	return xboxBoostWhat() + " games and streams get every core, the GPU and memory at full speed, and JukaHub's memory"
 }

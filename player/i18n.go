@@ -96,6 +96,7 @@ var uiLanguages = []uiLanguage{
 	{"de", "Deutsch"},
 	{"it", "Italiano"},
 	{"ru", "Русский"},
+	{"uk", "Українська"},
 }
 
 // uiCatalogFile is the decoded shape of one i18n/<code>.json.

@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **387** (audited 2026-11-19).
+Open tasks: **393** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -799,6 +799,31 @@ mount options and a copy of `runtrimui.sh`.
 `--shell-init` as the default for releases until a jukaboot card has booted
 cleanly ten times.
 
+### BOOT-HW-5 — Silent boot and the quiet start, measured (P1, S) [HW]
+**Why.** On 2026-11-21 Juka asked for a faster power-on by changing the
+bootloader slightly. TrimUI's bootloader passes `loglevel=8`, and the stock
+Smart Pro kernel took 4.2 s to reach its root while printing everything to an
+unused 115200-baud port. Silent boot rewrites that one value in U-Boot's spare
+environment copy; JukaHub's start and a new `S01` stock hook quiet the console
+and expedite RCU. Built from code reading only: no Go toolchain, no device.
+**Where.** `bootenv.go`, `bootenv_linux.go`, `setmodel.go` (`silentBoot`),
+`startup_kerneltune_linux.go`, `startup.go` (`startupBootSummary`),
+`os/smartpro/stock_fastboot/jukahub-quietboot` and `stock-fastboot.sh`,
+`os/smartpro/build_image.py` (`quiet loglevel=1`).
+**Done when.** On the stock Smart Pro: `JukaHub silent-boot` over SSH names
+both copies, the one U-Boot loads and `loglevel=8 (passed on: true)`, or says
+why it is Unavailable (send that line and the log's `bootenv` lines);
+`silent-boot on` writes only the idle copy (two backups in `data/bootenv/`);
+after a reboot the last `loglevel=` in `/proc/cmdline` is 1, the row says On and
+`dmesg` still has the whole log. Kernel to Home and `dmesg`'s root-mount time
+for three boots each way against 2026-11-19's 9.2–9.7 s; `silent-boot off`
+brings `loglevel=8` back after the next reboot. `/tmp/jukahub-quietboot.log`
+shows the `S01` hook ran; JukaHub's own "kernel tune" log line appears only
+when it did not. One Brick on stock firmware too.
+**Verify.** Record the numbers in `docs/HARDWARE_VALIDATION.md`; a row
+that says No effect gets a FIX task with the `silent-boot` output (the stock
+command line carries `loglevel=8` twice: which source adds the second).
+
 ### OSBOOT-HW-1 — Boot picture, radios and the Smart Pro command line (P1, S) [HW]
 **Why.** The 2026-11-18 OS-image pass puts a saved picture of Home on the
 framebuffer before JukaHub starts, starts Wi-Fi and Bluetooth after JukaHub's
@@ -817,7 +842,7 @@ next boot shows the splash. Wi-Fi and Bluetooth switched in JukaHub come back
 after a restart as left, Wi-Fi gets an address and the phone companion loads.
 A theme change shows in the next boot's picture. Smart Pro card: the same
 picture checks over the stock logo, radios after the first frame in `os.log`,
-`/proc/cmdline` with `quiet` and no `loglevel=8`. Also confirm plastron's
+`/proc/cmdline` with `quiet loglevel=1` and no `loglevel=8`. Also confirm plastron's
 splash process name and Wi-Fi/Bluetooth init script names.
 **Verify.** Record in the HW log with `boot.log`; file a FIX task for anything
 that differs.
@@ -2157,6 +2182,24 @@ it; the reader's menu shows exactly one "Open in KOReader". On Windows the
 sheet lists Open with Windows and keyboard-only hints read as keys.
 **Verify.** Record in the HW log with the toasts seen.
 
+### PADS-HW-1 — Pads sample sequencer on the handheld (P2, S) [HW]
+**Why.** Pads (`pads*.go`, 2026-11-21) was written without a compiler or a
+device: its audio loop mixes sixteen voices, an echo, a reverb and the stick
+effects at 48 kHz on the A133P, hold and loop pads are let go by polling the
+pad's buttons every frame, and sounds other than WAV go through ffmpeg.
+**Where.** `pads.go`, `pads_ui.go`, `pads_engine.go`, `pads_samples.go`,
+`controller.go` (stick hook), `shoulders.go`; docs/PADS.md.
+**Done when.** On a Smart Pro: the starter beat plays without crackle with all
+eight stick effects pushed in turn (watch the CPU on the performance overlay);
+finger drumming plays eight pads with no held-D-pad machine-gunning and a loop
+pad stops when its button is let go; an MP3 from Music and a GrainBrick WAV load
+onto pads, Chop at hits cuts a drum loop where the hits are; Record live hits
+lands on the nearest step; a 128-step pattern pages on the Beat grid; Export to
+WAV plays back in the Music player; leaving the page stops the sound within a
+second and pads.json comes back after a restart. On a Brick (no sticks) the FX
+page's Hold rows work.
+**Verify.** Record in the HW log with the CPU figure.
+
 ### EDITOR-HW-1 — Syntax colours and the hex editor on the handheld (P2, S) [HW]
 **Why.** The text editor's syntax colours (`fileeditor_syntax*.go`) and the hex
 editor (`fileeditor_hex*.go`, 2026-11-21) were written without a device or a
@@ -2749,6 +2792,34 @@ L2 + R2 on bare Home flashes the level on a Smart Pro's rings and a Brick's
 lights (record which LEDs light), and lone L2/R2 still work everywhere.
 **Verify.** Record in the HW log.
 
+### UIPOD-HW-1 — The iPod layout, sound effects, visualizers, servers and scrobbling on a device (P1, M) [HW] [NET] [WIN]
+**Why.** The UIPod-parity pass (2026-11-21) was written without a compiler or
+a device: the iPod layout draws its transitions through render targets, the
+sound effects run on every decoded buffer on the A133P, the visualizers read
+a ring the device lock writes, and the Navidrome/Jellyfin proxy, the song
+cache, Download Offline and the scrobble queue have only been reasoned about.
+**Where.** `musicpod.go`, `musicpod_draw.go`, `musicpod_theme.go`,
+`musicfx.go`, `musicfx_ui.go`, `musicviz.go`, `musicautoeq.go`,
+`musicpanels.go`, `musicsrc*.go`, `musicproxy.go`, `musicscrobble.go`,
+`companion_music.go`, `musicquiz.go`, `musicracer.go`, `brickbreaker.go`,
+`sound.go` (the scope tap), `mlib.go` (index v3); docs/MUSIC_PLAYER.md,
+docs/MUSIC_SERVERS.md.
+**Done when.** `player\build.bat nolaunch` and `make check` pass. On a Smart
+Pro and a Brick: the iPod layout scrolls a 5,000-song list at 60 fps with the
+clicker on, every theme and transition draws (Dither and Zoom included), album
+art appears dithered within a second; Tape Mode, each stereo effect and 1/16×
+play without underruns (CPU under 15 % for the effects); the ten visualizers
+follow the music they show at 30 fps or better; an AutoEQ profile downloads,
+applies and still applies offline after a restart. Against a real Navidrome
+and Jellyfin: browsing, play from the proxy (a seek mid-song, a Wi-Fi drop),
+the cache filling and trimming, Download Offline landing in Music/Navidrome,
+a Jellyfin H.264 film playing direct and an HEVC one through the HLS transcode
+with a working seek and resume in the Jellyfin web app, Quick Connect. Last.fm
+QR sign-in (with a key built in and with your own), ListenBrainz, Navidrome
+counts, and twenty listens made offline arriving once online. Music Quiz,
+Sound Racer (a song and an `.nsf`) and Brick Breaker play through.
+**Verify.** Record in the HW log with CPU and frame timings.
+
 ### MUSICX-HW-1 — Music tidy, per-book speed, in-game music and Audio channels (P2, S) [HW]
 **Why.** Tidy the Music folder renames on the card's FAT/exFAT (case folding,
 no atomic no-replace rename), the in-game Music panel mutes RetroArch with
@@ -3083,7 +3154,10 @@ to Swap both (2026-11-20).
 docs/CONTROLS.md, docs/CONFIGURATION.md.
 **Done when.** Fast-forward speed 2× → a GB game's fast forward runs about 2×
 (not 10×) and `retroarch.cfg` has its own value back after quitting; GBA at 4×
-while All consoles is 2× follows the console. On a Brick with N64 graphics Auto
+while All consoles is 2× follows the console. With 4× set, change Fast-Forward
+Rate to 2.5 in RetroArch's menu and quit: a toast says 2.5× is kept, the row
+shows 2.5×, and after a sleep and a power-off the next game fast-forwards at
+2.5×; the in-game menu's Fast forward line names it. On a Brick with N64 graphics Auto
 an N64 game on ParaLLEl N64 logs "light N64 graphics for this launch" and shows
 Rice in RetroArch's Core options, the `.opt` is restored after quitting, and
 Mupen64Plus-Next gets 320x240 without frame-buffer emulation; a core option set
@@ -3094,6 +3168,119 @@ confirms in menus, hints read by letter or role as chosen, a SNES game in
 RetroArch has A on the bottom; Nintendo puts menus, hints and All consoles
 Buttons back, and a console set to Normal stays Normal.
 **Verify.** Record in the HW log.
+
+### EMUSPEED-HW-1 — Emulator speed, PS2 speed and the wider Heavy-game boost on a Smart Pro and a Brick (P1, M) [HW]
+**Why.** Juka, 2026-11-21: "improve performance of all emulators...especially
+on Trimui Smart Pro and Trimui Brick XBOX, PS2, Gamecube, Wii support".
+Settings → Emulation → Speed (`emuspeed.go`) writes per-launch core options
+(the cores' automatic frameskip, threaded renderers, Fastest's trades) whose
+keys and values come from the cores' option headers as remembered, not from
+the firmware's builds; `emuspeed_ppsspp.go` edits JukaHub's PPSSPP's
+`ppsspp.ini` per launch; Heavy-game boost (`xboxboost*.go`, formerly Xbox
+boost) now also raises a memory-controller devfreq node and the game disk's
+read-ahead, sets the swap up early, and covers PSP, Dreamcast, Saturn, Jaguar,
+N64 and DS on the A133P; hakuX is offered (untested) on the Brick and Hammer.
+All written without a Go toolchain or a device.
+**Where.** `emuspeed.go`, `emuspeed_ppsspp.go`, `xboxboost.go`,
+`xboxboost_linux.go`, `hakux.go`; hooks in `ratuning_settings.go`,
+`n64light.go`, `gamediag.go` (`prepareGameDiag`), `setmodel.go`;
+docs/DEVICE_TUNING.md (Emulator speed, Heavy-game boost), docs/CONFIGURATION.md,
+docs/GAME_LIBRARY.md.
+**Done when.** On a Smart Pro and a Brick, each step holds or a FIX task names
+what differs:
+1. A PlayStation game (PCSX-ReARMed) started twice logs `emulator speed for
+   this launch … pcsx_rearmed_frameskip_type = auto` from the second start (the
+   first may log "no options file yet"); Quick Menu → Core Options shows
+   Frameskip Auto during the game, and the `.opt` holds `disabled` again after
+   quitting.
+2. A PSP game in JukaHub's PPSSPP logs `FrameSkip = 1, AutoFrameSkip = True`
+   (and Fastest's keys on the A133P); PPSSPP's Graphics settings show them
+   during the game; `ppsspp.ini` is as before and `emu-speed-ppsspp.json` gone
+   after quitting; a value changed in PPSSPP during the game stays.
+3. A PSP game in the PPSSPP core, a Dreamcast game (Flycast), an N64 game
+   (Mupen64Plus-Next) and a DS game (melonDS or DeSmuME) each log what was
+   written; note every key the firmware's builds lack or ignore (Core Options
+   still show the old value) and every value RetroArch rejects.
+4. A PS2 game on the A133P logs `armsx2_ee_cycle_rate` (record whether the
+   build spells it `75%` or `-1`) and `armsx2_ee_cycle_skip = mild`; compare
+   one game's fps at PS2 speed Fastest and Fast.
+5. Record `/sys/class/devfreq` on the A133P and the A523 (a memory-controller
+   node such as `dramfreq` or `dmc`?) and `/sys/block/mmcblk*/queue/read_ahead_kb`
+   before, during and after a boosted game (the `boost on` line names both); a
+   PSP game gets the boost on the Smart Pro and not on the Smart Pro S.
+6. A heavy console's second start in one run has `libretro_log_level = 2` in
+   the scoped edit; a first start that fails still shows its card.
+7. On a Brick and a Smart Pro S, the Xbox tile offers hakuX marked untested;
+   the install log names the binary `hakux_fit.go` replaced with spruceUI's
+   `hakux.aarch64` (or why it could not). Record whether a game starts, whether
+   the picture fills the panel, and whether hakuX's Menu maps a stick onto the
+   D-pad. A GameCube game on a Brick starts with GameCube & Wii on Automatic.
+8. Settings → Emulation → Adjust for GameCube → Speed and Games & emulators →
+   GameCube speed show and change the same value.
+9. During a boosted game `ps -L -o tid,ni,comm -p <JukaHub pid>` shows nice 10
+   (the library index's thread stays 19) and 0 again after; on a Smart Pro S
+   `taskset -p <RetroArch pid>` shows the fast cluster's CPUs. A PS1 game on
+   the A133P logs `video_threaded = true`; compare its fps with Threaded video
+   Off, and turn Auto's choice around if it is worse.
+**Verify.** Record in the HW log; turn the fps notes into Auto changes where a
+level costs more than it gives.
+
+### HEAT-HW-1 — CPU boost in games and the heat guard on every TrimUI model (P1, M) [HW]
+**Why.** Juka, 2026-11-21: "boost performance when running emulator by
+adjusting CPU frequency safely...make sure to not overheat device by checking
+temperature (All Trimui devices)". `cpuboost.go` holds a boosted game at the
+top of its clock table 3 s after the start (the ceiling, the floor too under a
+dynamic governor, parked cores online); `heatguard.go` lowers any session's
+clock one operating point at a time while the hottest CPU/GPU zone or the
+battery passes a per-model limit (Smart Pro 80/87/95 °C, Brick and Hammer
+75/82/92, Brick Pro 76/83/92, Smart Pro S 82/88/95; battery 45/50/55; Heat
+limit Cooler/Standard/Warmer), held 10 °C under the kernel's own critical
+trip. Both run in Automatic CPU speed's tick (`autoperf.go`), which now also
+follows the sessions it does not clock, for the guard alone. The limits, the
+dial's pace (tuned on a lumped thermal model, not a device) and the 4.9
+kernel's floor/ceiling write order were all written without a Go toolchain or
+a device.
+**Where.** `heatguard.go`, `cpuboost.go`, `autoperf.go` (session kinds,
+`autoPerfSetPairLocked`, `autoPerfMarkerEntrySafe`); rows in `setmodel.go`;
+`thermal.go` (Drivers & hardware), `gamemenu_quick.go` ("(cooling)"),
+`aitools_games.go` (`performance_get`); docs/DEVICE_TUNING.md (CPU boost in
+games and the heat guard), docs/CONFIGURATION.md.
+**Done when.** On a Smart Pro, a Brick or Hammer, a Brick Pro and a Smart Pro
+S, each step holds or a FIX task names what differs:
+1. The first `heat` line (`guard on … chip …/…/… °C, battery …; kernel …;
+   clock …`) names the model's limits, the kernel's trip points and the clock
+   table; Settings → Games & emulators → Heat limit shows the temperature, and
+   Drivers & hardware's Thermal line ends "JukaHub slows the CPU from … °C".
+2. A PSP or N64 game shows `… · CPU boost · …` (or `heavy-game boost`) in the
+   Automatic CPU speed row about 3 s after it starts; during it
+   `scaling_max_freq` is the top (and `scaling_min_freq` too when the launch
+   script left a dynamic governor); after quitting both are what they were
+   before the game, with no `invalid argument` in the log.
+3. A Game Boy game follows Automatic CPU speed on Auto, is boosted on Always,
+   and on Off both games follow Automatic CPU speed and their launch scripts.
+4. Twenty minutes of the heaviest game each model plays (Brick: N64 or
+   Dreamcast; Smart Pro: PSP; Smart Pro S: GameCube) on Standard: record the
+   `heat … peak` line, every `CPU limit … → …` step and the clock it settled
+   at; the RetroArch message line shows "Hot (… °C): CPU slowed to …" once and
+   "Cooled down: full CPU speed again" later, and the in-game menu's system
+   line shows "(cooling)" meanwhile. Repeat on Cooler and Warmer.
+5. With Automatic CPU speed off, and for a game whose options pick Battery
+   saver or a CPU limit, the guard still lowers `scaling_max_freq` when hot and
+   puts the game's value back once cool.
+6. Playing while charging: record the battery's `temp` and whether a battery
+   limit ever decides (`battery … °C` in the `heat` lines); a gauge stuck at
+   25 °C is harmless.
+7. `kill -9` JukaHub during a boosted game: the next start logs `restored …
+   CPU setting(s)` and the floor, ceiling and parked cores are as before the
+   game.
+8. Smart Pro S: both policies step together, the slow cluster at the same
+   share of its range, and the fan is at full speed before the guard's first
+   step.
+9. A NextUI pak (minarch on the userspace governor) shows "the emulator sets
+   its own clock" and is only held under the dial.
+**Verify.** Record in the HW log; turn each model's peaks into
+`heatBaseLimits` changes where a model runs cooler or hotter than its limits
+assume.
 
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
@@ -4052,7 +4239,7 @@ FIX task names what differs:
 2. Record whether `/sys/class/devfreq` has a GPU node on the A133P, and its
    governor during the game and after it.
 3. `scaling_governor` reads `performance` and Settings → Automatic CPU speed
-   reads `<game> · Xbox boost` while it plays; after quitting, the log shows
+   reads `<game> · heavy-game boost` while it plays; after quitting, the log shows
    `boost off after … values put back` and the governor, ceiling and GPU are
    the firmware's again.
 4. A GreenOvercast stream logs `Wi-Fi power saving off` where `iw` or
@@ -5650,6 +5837,15 @@ measurement goes through the translated text; the first start picks the OS or
 firmware locale when a catalogue exists; a CI check lists untranslated strings
 per language; missing translations fall back to English.
 
+### I18N-UK-1 — The Ukrainian catalogue, finished (P3, M)
+**Why.** Ukrainian joined the interface languages on 2026-11-21 (`i18n/uk.json`,
+1,717 strings): every label of up to 40 characters, the music player and the
+iPod layout. Longer help texts, the first-run tour (`uk.tour.json` does not
+exist) and the strings added since fall back to English.
+**Where.** `player/i18n/uk.json`, a new `player/i18n/uk.tour.json`.
+**Done when.** Every key of `ru.json` and `ru.tour.json` has a Ukrainian value
+written or checked by a Ukrainian speaker, and the catalogue test passes.
+
 ### I18N-3 — Fonts for every script (P1, M) [HW]
 **Why.** Only Inter ships, and Settings → Display → Font (`uifont.go`) replaces
 it with one downloaded face at a time; there is no per-glyph fallback, so
@@ -6197,9 +6393,11 @@ display mode, `drm gl kiosk system`, uses Weston's DRM/GBM backend, which the
 stock firmware may not offer, and `docs/WINDOWS_APPS.md` says that mode is shown
 through Crusty, which the Westonpack wiki does not.
 **Where.** `windowsapps.go` (`wineRun`), `wine_display.go`,
-`wine_display_linux.go`, `vcursor_bridge_linux.go`, `docs/WINDOWS_APPS.md`.
-**Done when.** A small 32-bit GDI program in `data/windows-apps` (an old Notepad
-clone, WinMine) opens a window with a visible pointer; the sticks, A, the D-pad,
+`wine_display_linux.go`, `vcursor_bridge_linux.go`, `windowsapps_sample.go`,
+`docs/WINDOWS_APPS.md`.
+**Done when.** The sample program (Setup → Sample program, or A on the empty
+list; `windowsapps_sample.go`) downloads, and both Notepad++ builds, 64-bit and
+32-bit (WoW64), open a window with a visible pointer; the sticks, A, the D-pad,
 Start, Y, Select + Start (Alt+F4) and Select + L1 (pad to the program and back)
 behave as `docs/CONTROLS.md` says, and Y, A and Start do nothing in JukaHub
 before the window appears; after the program closes the list is back, the pad

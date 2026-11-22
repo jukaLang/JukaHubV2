@@ -47,8 +47,9 @@ import (
 )
 
 const (
-	// mlibIndexVersion is the index format; another version is scanned afresh.
-	mlibIndexVersion = 2
+	// mlibIndexVersion is the index format; another version is scanned afresh,
+	// except version 2, which only lacked the genre and composer tags.
+	mlibIndexVersion = 3
 	// mlibMaxDepth bounds how deep a root is walked: Show/Season/episode and
 	// Artist/Album/CD1/song fit with room to spare.
 	mlibMaxDepth = 6
@@ -120,6 +121,10 @@ type mlibItem struct {
 	Artist string `json:"artist,omitempty"`
 	Album  string `json:"album,omitempty"`
 	Track  int    `json:"track,omitempty"`
+	// Genre and Composer are the tags the iPod screen's Genres and Composers
+	// lists group by (musicsrc_local.go), as tagged ("Rock; Pop" is two).
+	Genre    string `json:"genre,omitempty"`
+	Composer string `json:"composer,omitempty"`
 	// Art is the item's own picture in the poster cache; Poster is its show's
 	// (an episode's show folder), drawn on the show's card.
 	Art    string `json:"art,omitempty"`
@@ -897,6 +902,17 @@ func mlibUpgradeIndex(file mlibIndexFile) mlibIndexFile {
 	if file.Version == mlibIndexVersion {
 		return file
 	}
+	// Version 2 had every entry and poster right but no genre or composer:
+	// keep it all and let the slow pass read the songs' tags once more.
+	if file.Version == 2 {
+		for i := range file.Items {
+			if !file.Items[i].Video {
+				file.Items[i].Probed = false
+			}
+		}
+		file.Version = mlibIndexVersion
+		return file
+	}
 	// A format change requires rebuilding file and folder entries, but video
 	// positions are still valid by path and must survive the scan.
 	return mlibIndexFile{Resume: file.Resume}
@@ -936,6 +952,8 @@ type mlibTags struct {
 	album       string
 	track       int
 	year        int
+	genre       string
+	composer    string
 }
 
 // mlibProbeFile reads a file's length and tags with ffprobe.
@@ -988,6 +1006,10 @@ func mlibParseProbe(out string) mlibTags {
 			if y := mlibLeadingInt(value); y >= 1900 && y <= 2100 {
 				t.year = y
 			}
+		case "genre":
+			t.genre = value
+		case "composer":
+			t.composer = value
 		}
 	}
 	return t
@@ -1029,6 +1051,12 @@ func mlibApplyTags(it *mlibItem, t mlibTags) {
 	}
 	if t.year > 0 {
 		it.Year = t.year
+	}
+	if g := strings.TrimSpace(t.genre); g != "" {
+		it.Genre = g
+	}
+	if c := strings.TrimSpace(t.composer); c != "" {
+		it.Composer = c
 	}
 }
 

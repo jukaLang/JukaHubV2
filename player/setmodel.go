@@ -772,6 +772,16 @@ func setBuildSections() []setSection {
 					Open:    bootLogoRowOpen,
 				},
 				{
+					// The bootloader starts Linux without printing to the
+					// unused serial port (bootenv.go): A twice sets its log
+					// level to 1, A twice again puts the original back.
+					ID: "silentBoot", Label: "Silent boot", Kind: setKindAction,
+					Detail:  bootEnvRowDetail,
+					Visible: bootEnvRowVisible,
+					Value:   bootEnvRowValue,
+					Open:    bootEnvRowOpen,
+				},
+				{
 					ID: "bootPreview", Label: "Watch the boot animation", Kind: setKindAction,
 					Detail: bootStylePreviewDetail,
 					Open:   bootOSPreviewOpen,
@@ -1655,9 +1665,15 @@ func setBuildSections() []setSection {
 						setToast("Automatic CPU speed: " + setOnOff(on))
 					},
 				},
+				// "CPU boost in games": heavy games hold the top clock while the
+				// chip is cool (cpuboost.go); "Heat limit": where the heat guard
+				// starts slowing any game down (heatguard.go).
+				cpuBoostSettingsRow(),
+				heatLimitSettingsRow(),
 				// "Extra memory (swap)": zram or a swap file (memswap.go).
 				memSwapSettingsRow(),
-				// "Xbox boost": the whole handheld for hakuX and Xbox streams (xboxboost.go).
+				// "Heavy-game boost": the whole handheld for Xbox, GameCube, Wii and
+				// PS2 games, Xbox streams, and the A133P's heavy consoles (xboxboost.go).
 				xboxBoostSettingsRow(),
 				// "GameCube & Wii": RetroArch's Dolphin core, on the Smart Pro S
 				// by default (dolphin.go), and "GameCube speed": how much of
@@ -1668,6 +1684,8 @@ func setBuildSections() []setSection {
 				// on every TrimUI model by default (ps2.go).
 				ps2SettingsRow(),
 				ps2EmulatorRow(),
+				// "PS2 speed": the PlayStation 2's Speed level (emuspeed.go).
+				ps2SpeedSettingsRow(),
 				// "Fan": the Smart Pro S only (fan.go).
 				fanSettingsRow(),
 				{

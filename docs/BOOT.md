@@ -160,7 +160,7 @@ the budget is already spent.
 
 ## Settings
 
-Five rows in **Settings → General**, after **Start JukaHub at login**:
+Six rows in **Settings → General**, after **Start JukaHub at login**:
 
 | Row | What it does |
 | --- | --- |
@@ -168,6 +168,7 @@ Five rows in **Settings → General**, after **Start JukaHub at login**:
 | Startup animation | **Full at power-on** (default): the full boot when the device starts into JukaHub, the short one when you open it. **Full every time**: the full boot on every start. **Always quick**: never the full one. Saved as `startupAnimation` = `power`, `always` or `quick`. |
 | Boot animation | What the logo does: **Cinematic**, **Roll**, **Still logo**, **Classic**, **Surprise me** or **None** (default; see [Boot animation styles](#boot-animation-styles)). Saved as `bootStyle` = `cinematic`, `roll`, `image`, `classic`, `random` or `none`. |
 | Boot logo | TrimUI only. Says what the device shows at power-on: **JukaHub**, **Original** (the picture that was there before JukaHub's), **Custom** (another tool changed it), **Restore needed** (a write was cut short, by a power loss say) or **Unavailable** (the second line says why); **Checking…** while it looks and **Writing…** while it writes. Press **A** twice to install the JukaHub logo — the first press arms it and says what will happen, the second within four seconds does it. When the JukaHub logo is installed (or a restore is needed), the same two presses put the previous picture back. |
+| Silent boot | TrimUI only. The bootloader starts Linux without printing every kernel message to the board's unused serial port: **Off**, **On from next start**, **On**, **Off from next start**, **No effect** (this bootloader passes its level some other way) or **Unavailable** (the second line says why). **A** twice switches it; see [Silent boot](#silent-boot). |
 | Watch the boot animation | Plays the power-on sequence in the chosen style now, over the screen you are on, and comes back to it. The progress line is simulated, since nothing is starting. With **None** it only says the animation is off. |
 
 ## Starting the full boot from a script
@@ -287,6 +288,85 @@ On CrossMix, the JukaHub picture is also copied to
 `Apps/BootLogo/Images/JukaHub.bmp`, so CrossMix's own BootLogo app can pick it
 like any other logo.
 
+## Silent boot
+
+**Settings → General → Silent boot** is the one bootloader setting JukaHub
+changes, aimed at the longest stretch of a stock power-on: the kernel's own
+start. TrimUI's bootloader starts Linux with `loglevel=8`: every kernel
+message, debug ones included, goes out of the serial port on the board's test
+pads at 115200 baud, and the kernel waits for each character to leave
+(about 87 µs apiece) with nothing listening. On a stock Smart Pro the kernel
+took 4.2 seconds to reach its root file system. Silent boot sets the
+bootloader's `loglevel` to 1: only an emergency (a kernel panic) still
+prints. The kernel's message buffer still keeps every message (`dmesg`), so
+nothing is lost for a bug report. How much it saves on a given handheld is
+what the first boots after switching it on will show (Settings → JukaHub OS
+→ **Last boot**, `autostart.log`'s boot times).
+
+| Value | Meaning |
+| --- | --- |
+| **Off** | The bootloader passes its own level (8 on the stock Smart Pro). **A** twice switches Silent boot on. |
+| **On from next start** | Written; the next power-on starts quietly. **A** twice undoes it. |
+| **On** | This boot's kernel started quietly. **A** twice puts the bootloader's own level back. |
+| **Off from next start** | Put back; the next power-on prints again. |
+| **No effect** | Set, but the kernel booted after it still printed: this bootloader takes its level from somewhere else. **A** twice puts the setting back. |
+| **Unavailable** | The second line says why; nothing is written. |
+
+How it writes:
+
+- It finds U-Boot's saved settings (its *environment*) by partition name,
+  with the boot logo installer's finder: `env` and `env-redund`, on the
+  internal eMMC only, never on a card.
+- It only changes a bootloader that keeps **two copies** of its settings
+  (U-Boot's redundant environment; the Smart Pro's U-Boot looks for
+  `env-redund`). The new copy goes to the copy U-Boot is not loading, with
+  the next serial number, exactly as U-Boot's own `saveenv` does: until that
+  copy is complete and its checksum holds, U-Boot keeps loading the old one,
+  so a power cut in the middle changes nothing. A bootloader with one copy
+  is left alone (**Unavailable**): rewriting it in place could leave it with
+  no settings at all.
+- It writes only where the setting demonstrably decides: the copy U-Boot
+  loads has `loglevel` exactly once, with the value the running kernel's
+  command line ended with; a `setenv bootargs` step hands `${loglevel}` on;
+  and the kernel image's own command line (the boot partition's header)
+  names no level that would come after it.
+- The new copy is the loaded one byte for byte except that value's byte, the
+  serial and the checksum. It is parsed again and compared setting by setting
+  before the write and read back byte for byte after it, and U-Boot's own
+  rule for picking a copy must then pick it; otherwise the slot is put back
+  as it was.
+- Before every write both copies are saved to `Apps/JukaHub/data/bootenv/`
+  on the SD card (`env-<hash>.bin`, `env-redund-<hash>.bin`; a copy is never
+  overwritten), and `state.json` there keeps the original level, which
+  switching it off writes back the same way.
+
+Not changed: the bootloader's code, the kernel, the boot partition, the
+partition table and every other setting. A firmware update rewrites the
+bootloader's settings and brings the stock level back (the row then says
+**Off**). Over SSH, `JukaHub silent-boot` in the app's folder prints the status
+and what it found (`/mnt/SDCARD/Apps/JukaHub/JukaHub silent-boot`, or
+`Apps/JukaHub-Trimui`); `silent-boot on` and `silent-boot off` switch it.
+
+### The rest of a quiet start
+
+JukaHub's own start on a TrimUI sets two kernel values before SDL opens the
+display, sound and input devices, and puts them back when it quits: the
+console's log level to 1 (for the messages drivers print while JukaHub opens
+them, when Silent boot is off) and expedited RCU grace periods
+(`/sys/kernel/rcu_expedited`). Closing an input device waits for a grace
+period, tens of milliseconds each on the A133's 4.9 kernel, and SDL's
+joystick setup opens and closes every input device; expedited, each wait is
+a few milliseconds. `JUKAHUB_KERNEL_TUNE=0` leaves both
+alone (for a serial-console session). With **Boot into JukaHub OS** on a
+verified stock Smart Pro the first startup service sets both for the whole
+boot ([JukaHub OS](JUKAHUB_OS.md#how-it-boots)).
+
+Settings → JukaHub OS → **Last boot** says **Kernel to Home** where the
+bootloader keeps no timings of its own (the stock firmware): the seconds
+before the kernel starts — about 3.8 on one Smart Pro — are not in that
+number. The JukaHub OS cards' bootloader records them, and there it says
+**Power to Home**.
+
 ## Flashing by hand
 
 The reference pictures are in the repository under
@@ -313,6 +393,8 @@ Both are 24-bit uncompressed BMPs (about 2.8 and 2.4 MB).
 ## If something goes wrong
 
 - **Boot logo → A twice** puts the previous picture back.
+- **Silent boot → A twice** puts the bootloader's own log level back; the two
+  copies of its settings as they were before are in `Apps/JukaHub/data/bootenv/`.
 - The backup in `Apps/JukaHub/data/bootlogo/` is an ordinary BMP: any of the
   tools above can flash it.
 - A full firmware reflash from TrimUI's own update file rewrites the device's
@@ -355,6 +437,8 @@ was missing; **Tools → Logs** has the details for a report.
 | `player/splash.go` | the startup entry point that hands over to the boot sequence |
 | `player/autostart.go` | the boot hook (in its template): the queue, closing the menu, the black hand-over, `trimuiAutostartMenuShown` |
 | `player/bootlogo.go`, `bootlogo_linux.go`, `bootlogo_other.go` | the installer: finding the partition, the BMP rewrite, backups, Restore, the Settings row |
+| `player/bootenv.go`, `bootenv_linux.go`, `bootenv_other.go` | Silent boot: the two-copy U-Boot environment, U-Boot's rule for the copy it loads, the one-value rewrite, backups, the Settings row and `JukaHub silent-boot` |
+| `player/startup_kerneltune_linux.go` | the console level and expedited RCU for JukaHub's own start, put back at exit |
 | `branding/mkbootlogo.py` | the reference pictures above |
 
 Change a placement constant in `bootlogo_layout.go` and its twin in

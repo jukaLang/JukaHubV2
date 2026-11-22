@@ -3,8 +3,8 @@
 package main
 
 // xboxboost_linux.go — the hardware half of Xbox boost (xboxboost.go): parked
-// cores, the GPU's devfreq node, the game's priority and the Wi-Fi radios'
-// power saving.
+// cores, the GPU's and the memory controller's devfreq nodes, the card's
+// read-ahead, the game's priority and the Wi-Fi radios' power saving.
 
 import (
 	"context"
@@ -21,11 +21,15 @@ import (
 // xboxBoostCmdTimeout bounds one iw / iwconfig run.
 const xboxBoostCmdTimeout = 3 * time.Second
 
-// xboxBoostHardwarePlan is the boost's sysfs writes, in the order they must
-// happen: parked cores first (a core must be online before the launch profile
-// can set its governor), then the GPU.
-func xboxBoostHardwarePlan() []saverSysfsWrite {
-	return append(xboxBoostCorePlan(cpufreqRoot), xboxBoostGPUPlan(xboxBoostDevfreqRoot)...)
+// xboxBoostHardwarePlan is the boost's sysfs writes for a launch of target, in
+// the order they must happen: parked cores first (a core must be online before
+// the launch profile can set its governor), then the GPU, the memory clock
+// and the read-ahead of the disk target is read from.
+func xboxBoostHardwarePlan(target string) []saverSysfsWrite {
+	plan := xboxBoostCorePlan(cpufreqRoot)
+	plan = append(plan, xboxBoostGPUPlan(xboxBoostDevfreqRoot)...)
+	plan = append(plan, xboxBoostMemPlan(xboxBoostDevfreqRoot)...)
+	return append(plan, xboxBoostReadAheadPlan(target)...)
 }
 
 // xboxBoostCorePlan brings every parked CPU online: cpuN/online reading 0.
@@ -60,13 +64,25 @@ func xboxBoostCPUIndex(p string) int {
 // one, else the floor up to the ceiling, so whatever governor runs cannot
 // clock the GPU down between frames.
 func xboxBoostGPUPlan(root string) []saverSysfsWrite {
+	return xboxBoostDevfreqPlan(root, func(name string) bool { return strings.Contains(strings.ToLower(name), "gpu") })
+}
+
+// xboxBoostMemPlan raises the memory controller's devfreq node the same way
+// (xboxBoostMemName: "dramfreq", "dmc"…), where the kernel has one.
+func xboxBoostMemPlan(root string) []saverSysfsWrite {
+	return xboxBoostDevfreqPlan(root, xboxBoostMemName)
+}
+
+// xboxBoostDevfreqPlan raises every devfreq node under root whose name match
+// accepts: its performance governor, else its floor up to its ceiling.
+func xboxBoostDevfreqPlan(root string, match func(name string) bool) []saverSysfsWrite {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
 	}
 	var plan []saverSysfsWrite
 	for _, e := range entries {
-		if !strings.Contains(strings.ToLower(e.Name()), "gpu") {
+		if !match(e.Name()) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
@@ -89,6 +105,37 @@ func xboxBoostGPUPlan(root string) []saverSysfsWrite {
 		}
 	}
 	return plan
+}
+
+// xboxBoostReadAheadPlan raises the read-ahead of the disk target is read
+// from to xboxBoostReadAheadKB, where it is lower.
+func xboxBoostReadAheadPlan(target string) []saverSysfsWrite {
+	disk := xboxBoostDiskOf(target)
+	if disk == "" {
+		return nil
+	}
+	p := filepath.Join(xboxBoostBlockRoot, disk, "queue", "read_ahead_kb")
+	cur := saverReadTrimmed(p)
+	n, err := strconv.Atoi(cur)
+	if err != nil || n < 0 || n >= xboxBoostReadAheadKB || !xboxBoostWritable(p) {
+		return nil
+	}
+	return []saverSysfsWrite{{Path: p, Original: cur, Written: strconv.Itoa(xboxBoostReadAheadKB)}}
+}
+
+// xboxBoostDiskOf names the whole disk (not the partition) holding path —
+// mmcblk1 for a game on the card — through sdMoveDiskOf (sdmove_linux.go).
+// "" for a file on no block device (a network drive, tmpfs, a FUSE mount) or
+// a disk without a queue to tune.
+func xboxBoostDiskOf(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	name := sdMoveDiskOf(path)
+	if !xboxBoostDiskName(name) || !regularFile(filepath.Join(xboxBoostBlockRoot, name, "queue", "read_ahead_kb")) {
+		return ""
+	}
+	return name
 }
 
 // xboxBoostListed reports whether a space-separated sysfs list names want.

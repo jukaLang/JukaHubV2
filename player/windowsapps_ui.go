@@ -31,6 +31,10 @@ type windowsAppsPanelState struct {
 	// closed first (windowsAppsStartReady).
 	notice  string
 	pending *windowsAppEntry
+	// sampleWait is set while the sample program this visit asked for
+	// downloads: it starts once it is in (windowsSampleFinished), unless the
+	// panel or setup was left, or another app was chosen, first.
+	sampleWait bool
 }
 
 var winAppsPanel windowsAppsPanelState
@@ -47,6 +51,10 @@ var windowsAppPanelRect sdl.Rect
 // touch-only handheld users can reach the runtime page without a keyboard.
 var windowsSetupButtonRect sdl.Rect
 
+// windowsSampleLineRect is the empty list's sample line, which a tap
+// activates like A.
+var windowsSampleLineRect sdl.Rect
+
 func openWindowsAppsPanel(returnEmu bool) {
 	qs.open = false
 	toolsPanel.open = false
@@ -58,6 +66,7 @@ func openWindowsAppsPanel(returnEmu bool) {
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
 	windowsSetupButtonRect = sdl.Rect{}
+	windowsSampleLineRect = sdl.Rect{}
 	windowsSetupRowHit = [windowsSetupRowCount]sdl.Rect{}
 	setupCursor = windowsSetupRowWine
 	invalidateWindowsAppsCache()
@@ -83,6 +92,7 @@ func closeWindowsAppsPanel() {
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
 	windowsSetupButtonRect = sdl.Rect{}
+	windowsSampleLineRect = sdl.Rect{}
 	if returnEmu {
 		emuPanel.open = true
 		emuPanelRect = sdl.Rect{}
@@ -140,6 +150,8 @@ func setupActivate() {
 		windowsAppsPanelInstallDisplay()
 	case windowsSetupRowDXVK:
 		windowsAppsPanelInstallDXVK()
+	case windowsSetupRowSample:
+		windowsAppsPanelSample()
 	default:
 		if tag := windowsRuntimeUpdateTag(); tag != "" {
 			windowsAppsPanelUpdateRuntime(tag)
@@ -338,20 +350,29 @@ func windowsAppsPanelRescan() {
 // windowsAppsPanelActivate starts the focused app. The panel stays open: the
 // row shows the launch's progress until the program takes the screen, and the
 // list is back when it ends. A missing runtime opens the setup page instead.
+// On an empty list, A gets the sample program (windowsapps_sample.go).
 func windowsAppsPanelActivate() {
 	entries := windowsAppEntries()
 	if len(entries) == 0 {
 		if IsWindows() {
 			ShowToast("No programs found — copy them into "+windowsAppsDir(), ToastKindInfo)
 		} else {
-			ShowToast("No .exe files found — press X for setup", ToastKindInfo)
+			windowsAppsPanelSample()
 		}
 		return
 	}
 	if winAppsPanel.cursor < 0 || winAppsPanel.cursor >= len(entries) {
 		return
 	}
-	entry := entries[winAppsPanel.cursor]
+	windowsAppsActivateEntry(entries[winAppsPanel.cursor])
+}
+
+// windowsAppsActivateEntry is A on entry's row: nothing while it is starting
+// or the runtime is being installed, the setup page when the runtime misses a
+// piece, else the launch. Choosing an app ends the wait for a sample
+// download (sampleWait).
+func windowsAppsActivateEntry(entry windowsAppEntry) {
+	winAppsPanel.sampleWait = false
 	if wineLaunchPhase(entry.Path) != "" {
 		// Already starting: the row says how far it got.
 		return
@@ -506,11 +527,13 @@ func windowsAppsPanelToggleHelp() {
 		PlayActivateSound()
 		return
 	}
-	// Closing setup drops a launch that was waiting for the runtime; the user
-	// asked for the launcher, not for the app to open later by itself.
+	// Closing setup drops a launch that was waiting for the runtime, or for
+	// the sample download; the user asked for the launcher, not for the app
+	// to open later by itself.
 	windowsDropPendingLaunch()
 	winAppsPanel.pending = nil
 	winAppsPanel.notice = ""
+	winAppsPanel.sampleWait = false
 	PlayBackSound()
 }
 
@@ -626,6 +649,10 @@ func handleWindowsAppsMouse(mx, my int32, config *Config) bool {
 			return true
 		}
 	}
+	if windowsSampleLineRect.W > 0 && pointInRect(mx, my, windowsSampleLineRect) {
+		windowsAppsPanelSample()
+		return true
+	}
 	if windowsAppPanelRect.W > 0 && pointInRect(mx, my, windowsAppPanelRect) {
 		return true
 	}
@@ -724,12 +751,14 @@ func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus)
 }
 
 // Windows Apps setup actions. They are the only focusable rows on the setup
-// page; everything below them is status text.
+// page; everything below them is status text. The last one downloads the
+// sample program (windowsapps_sample.go).
 const (
 	windowsSetupRowWine    = 0
 	windowsSetupRowDisplay = 1
 	windowsSetupRowDXVK    = 2
-	windowsSetupRowCount   = 3
+	windowsSetupRowSample  = 3
+	windowsSetupRowCount   = 4
 )
 
 // windowsRuntimeStepRow maps a provisioning step to the setup row it belongs
@@ -757,11 +786,11 @@ type windowsSetupRow struct {
 	Bad    bool
 }
 
-// windowsAppsSetupRows builds the three install actions: the runtime (which
-// runs the whole chain), the display and DXVK. The actions come first so the
-// panel answers "what do I press" before it explains the environment. The
-// facts behind them are at most a second old (wine_setup.go); whether a row
-// is installing or failed is read fresh.
+// windowsAppsSetupRows builds the install actions: the runtime (which runs
+// the whole chain), the display, DXVK and the sample program. The actions
+// come first so the panel answers "what do I press" before it explains the
+// environment. The facts behind them are at most a second old
+// (wine_setup.go); whether a row is installing or failed is read fresh.
 func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 	base := windowsSetupSnapshot()
 	rows := append([]windowsSetupRow(nil), base.rows...)
@@ -776,6 +805,9 @@ func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 		case windowsRuntimeFailed(key) != "" && (rows[i].Bad || rows[i].Status == "optional"):
 			rows[i].Status, rows[i].Bad = "failed", true
 		}
+	}
+	if !IsWindows() && len(rows) > windowsSetupRowSample {
+		windowsSampleSetupOverlay(&rows[windowsSetupRowSample])
 	}
 	// The daily pass found a newer runtime (Emulator updates on Notify me, or
 	// an install that failed): the runtime row says so and A updates it.
@@ -866,6 +898,10 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		bodyH = rowH*int32(windowsSetupRowCount) + 12 + int32(len(setupLines))*(smallH+4) + 12
 	} else if len(entries) == 0 {
 		bodyH = 18 + medH + 4 + smallH + 4 + smallH + 4 + smallH + 18
+		if !IsWindows() {
+			// The sample program's line.
+			bodyH += smallH + 4
+		}
 	} else {
 		maxRows := (screenHeight - 40 - headerH - footerH) / rowH
 		if maxRows < 3 {
@@ -909,6 +945,9 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 
 	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
+	// Only the empty list has the sample line; the other views drop its tap
+	// target, so a tap where it was does not start a download.
+	windowsSampleLineRect = sdl.Rect{}
 
 	if winAppsPanel.help {
 		windowsAppRowHits = nil
@@ -937,7 +976,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			switch {
 			case row.Bad:
 				statusColor = ToastErrorInk()
-			case row.Status == "installing" || row.Status == "update":
+			case row.Status == "installing" || row.Status == "update" || row.Status == "downloading":
 				statusColor = WarningInk()
 			case row.Status == "optional" || row.Status == "not needed" || row.Status == "off":
 				statusColor = ColorTextTertiary()
@@ -980,7 +1019,26 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		y := panelY + headerH
 		renderText(renderer, config, medium, "No Windows apps yet", ColorTextPrimary(), panelX+padX, y)
 		y += medH + 4
-		renderText(renderer, config, font, "Copy Windows apps into:", ColorTextSecondary(), panelX+padX, y)
+		copyLine := "Copy Windows apps into:"
+		if !IsWindows() {
+			// A downloads the sample program; the line says so, or how its
+			// download goes, and a tap on it is A.
+			text, busy, failed := windowsSampleEmptyLine()
+			color := accentColor
+			switch {
+			case busy:
+				color = WarningInk()
+			case failed:
+				color = ToastErrorInk()
+			}
+			text = ellipsize(font, text, panelW-2*padX)
+			w, _, _ := font.SizeUTF8(text)
+			windowsSampleLineRect = sdl.Rect{X: panelX + padX, Y: y - 2, W: int32(w), H: smallH + 4}
+			renderText(renderer, config, font, text, color, panelX+padX, y)
+			y += smallH + 4
+			copyLine = "or copy Windows apps into:"
+		}
+		renderText(renderer, config, font, copyLine, ColorTextSecondary(), panelX+padX, y)
 		y += smallH + 4
 		for i, root := range windowsAppRootsCached() {
 			if i >= 2 {
@@ -1066,7 +1124,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	case IsWindows():
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
 	case len(entries) == 0:
-		hint = hintLine(FooterHint{"X", "Setup"}, FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
+		hint = hintLine(FooterHint{"A", "Get Notepad++"}, FooterHint{"X", "Setup"}, FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
 	default:
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Y", "Display"}, FooterHint{"X", "Setup"},
 			FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})

@@ -26,6 +26,7 @@ const (
 	gamePong
 	gameMinesweeper
 	gameFlappy
+	gameBrickBreaker // brickbreaker.go
 )
 
 var (
@@ -54,6 +55,7 @@ var gameList = []gameEntry{
 	{name: "Pong", icon: "[P]", desc: "Classic paddle ball", id: gamePong},
 	{name: "Minesweeper", icon: "[M]", desc: "Flag mines, clear the board", id: gameMinesweeper},
 	{name: "Flappy", icon: "[F]", desc: "Tap to fly through pipes", id: gameFlappy},
+	{name: "Brick Breaker", icon: "[B]", desc: "Break the wall with paddle and ball", id: gameBrickBreaker},
 	{name: "JukaLand", icon: "[J]", desc: "Build and explore a block world", scene: "JukaLand"},
 	// The pocket groovebox (synth.go), also a tile in the Tools hub.
 	{name: "Synth", icon: "[S]", desc: "Make beats on the groovebox", scene: synthSceneName},
@@ -332,6 +334,9 @@ func startGame(id gameID) {
 	case gameFlappy:
 		trophyEventDistinct(tkArcadeGames, "flappy")
 		initFlappy()
+	case gameBrickBreaker:
+		trophyEventDistinct(tkArcadeGames, "brickbreaker")
+		initBrickBreaker()
 	}
 }
 
@@ -359,6 +364,8 @@ func renderActiveGame(renderer *sdl.Renderer, config *Config) {
 		renderMinesweeper(renderer, config)
 	case gameFlappy:
 		renderFlappy(renderer, config)
+	case gameBrickBreaker:
+		renderBrickBreaker(renderer, config)
 	}
 }
 
@@ -387,6 +394,8 @@ func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
 		return handleMinesweeperInput(event)
 	case gameFlappy:
 		return handleFlappyInput(event)
+	case gameBrickBreaker:
+		return handleBrickBreakerInput(event)
 	}
 	return true
 }
@@ -408,6 +417,8 @@ func tickActiveGame() {
 		tickMinesweeper()
 	case gameFlappy:
 		tickFlappy()
+	case gameBrickBreaker:
+		tickBrickBreaker()
 	}
 }
 
@@ -1419,6 +1430,8 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 			initMinesweeper()
 		case gameFlappy:
 			initFlappy()
+		case gameBrickBreaker:
+			initBrickBreaker()
 		}
 		gameOver = false
 		gameScore = 0
@@ -1551,6 +1564,17 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 	case gameFlappy:
 		if e.Button == sdl.CONTROLLER_BUTTON_A || e.Button == sdl.CONTROLLER_BUTTON_START {
 			flappyFlap()
+		}
+	case gameBrickBreaker:
+		// The paddle follows the held D-pad (bbPoll); A launches, and after
+		// the last life A starts again.
+		if e.Button == sdl.CONTROLLER_BUTTON_A {
+			if gameOver {
+				initBrickBreaker()
+				gameOver = false
+			} else {
+				bb.launch = true
+			}
 		}
 	}
 	return true

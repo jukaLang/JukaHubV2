@@ -32,6 +32,10 @@ more downloads, or a GPU feature the device lacks will not run.
 
 ## Starting a program
 
+No Windows program at hand? On the handheld, press **A** on the empty list,
+or on **Sample program** in Setup: JukaHub downloads Notepad++ to try Windows
+apps with (see [The sample program](#the-sample-program)). Otherwise:
+
 1. Copy the program into one of these folders (up to four folders deep):
 
    ```text
@@ -61,6 +65,38 @@ seconds, opens the *Couldn't launch* card with the reason and the log's name —
 for a Wine game profile too. If another game took the screen while Windows was
 being prepared, the launch stops there and that game keeps the screen and the
 pad.
+
+## The sample program
+
+So there is something to try Wine with, Windows Apps downloads one well-known
+program on request: **Notepad++ 8.9.9.1**, a Notepad-class editor that draws
+its own windows with GDI, the kind of program this page calls the target.
+**A** on the empty list, or on **Sample program** (the fourth row of Setup),
+gets it:
+
+1. Both of its portable builds come from Notepad++'s own GitHub release, about
+   16 MB together: the **64-bit** one, which Box64 runs directly, and the
+   **32-bit** one, which also goes through Wine's WoW64 layer, as most old
+   Windows games do. When one opens and the other does not, that says which
+   of the two paths needs work on the device.
+2. Each zip must match the SHA-256 the release publishes, which JukaHub pins,
+   so a changed file is refused. It is unpacked into
+   `data/windows-apps/Notepad++/64-bit` or `32-bit` without its updater
+   (`GUP.exe`; the portable build does not use it), and its `notepad++.exe`
+   must be a Windows program for that CPU. A build shows up in the list only
+   when it is complete, as **Notepad++ (64-bit)** and **Notepad++ (32-bit)**.
+3. If the panel is still open, the 64-bit build then starts as if you had
+   pressed **A** on its row. When the runtime is not installed yet, the setup
+   page offers it first, and **A** there installs it and then starts
+   Notepad++. Leaving Setup or the panel during the download only downloads.
+
+The setup row says **downloading** with the bytes so far, **installed**, or
+**failed** with the reason; **A** tries again, and a download that was cut off
+resumes. A folder at those places that JukaHub did not make is never
+replaced: the install stops and says so. To remove the sample, delete
+`data/windows-apps/Notepad++`. With no on-screen keyboard inside Windows
+programs yet, Notepad++ is for its menus, dialogs and opening files with the
+pad as the mouse, not for typing.
 
 ## Display modes
 
@@ -142,7 +178,7 @@ and named in the app's log.
 | Input | Action |
 |-------|--------|
 | D-pad Up / Down | Move through the programs |
-| A / Enter | Start the selected program |
+| A / Enter | Start the selected program; on an empty list, download the sample program |
 | Y / `y` / `d` | Display: Windows (GDI) or OpenGL, for this program |
 | X / `x` / `h` | The setup page |
 | Start / `r` / F5 | Rescan the folders |
@@ -194,7 +230,8 @@ programs that need typing are out of reach for now.
 
 ## First run on a device
 
-1. Install the runtime (see [Automatic setup](#automatic-setup)) and copy one
+1. Install the runtime (see [Automatic setup](#automatic-setup)) and get the
+   sample program ([The sample program](#the-sample-program)), or copy one
    small Windows program into `data/windows-apps`: a portable GDI tool, or an
    old 2D game.
 2. Start it and time it: the first launch prepares Windows for a few minutes.
@@ -203,7 +240,8 @@ programs that need typing are out of reach for now.
    arrows, Enter and Esc; does **Select + Start** close the window; does the
    list come back afterwards and does the pad work in JukaHub again?
 4. Start it a second time: it should be quicker, and nothing from the first
-   session should be left running.
+   session should be left running. With the sample, start the other
+   Notepad++ build as well (64-bit and 32-bit take different paths).
 5. Send back:
    * the app's log from `data/windows-runtime/logs/`;
    * the output of `cat /proc/bus/input/devices`, `cat /proc/mounts`,
@@ -353,4 +391,5 @@ program runs directly whatever `display` says. See
   program runs, JukaHub's own screen is parked like during any game.
 * No on-screen keyboard inside Windows programs.
 * Only regular files the scan found are started; nothing is run from an
-  arbitrary path or from the network.
+  arbitrary path or from the network. The sample program is downloaded into
+  `data/windows-apps` first and started through the same scan.

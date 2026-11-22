@@ -152,6 +152,11 @@ func prepareGameDiag(game libraryGame, launcher string) *gameDiagLaunch {
 	// one's when RetroArch never gets far enough to write.
 	_ = os.WriteFile(logPath, nil, 0o644)
 	values := gameDiagRetroArchLogValues(dir)
+	// A heavy console's core that already played here this run logs warnings
+	// only: each line is a write to the card while the game plays (emuspeed.go).
+	if emuSpeedQuietCoreLog(game, launcher) {
+		values = gameDiagQuietCoreLog(values)
+	}
 	configured := false
 	for _, path := range raScopeTargets(raLaunchCandidates(launcher, retroArchConfigCandidates())) {
 		if _, err := raScopeApply(path, values); err != nil {

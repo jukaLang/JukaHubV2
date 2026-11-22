@@ -13,6 +13,202 @@ For anything older, the git log and the
 
 ### Added
 
+- **The music player has everything UIPod has** (Juka, 2026-11-21: "Make sure
+  to have all features in our music player as https://famiclone.dev/UIPod/").
+  A third Now Playing layout, **iPod** (`musicpod*.go`): click-wheel menus
+  (Music, Videos, Podcasts, Audiobooks, Extras, Settings, Shuffle Songs, Now
+  Playing) over this device, Navidrome, Jellyfin or all of them folded together
+  (`musicsrc*.go`), 38 four-shade themes, six screen transitions, Bayer-dithered
+  album art, the wheel's tick, On-The-Go, Play Next, Info, Rename and Delete in
+  a context menu. **Sound effects** (`musicfx*.go`, R2 or X): Walkman Tape Mode
+  (wow and flutter, hiss, saturation, roll-off, tape speed), reverb, ping-pong
+  delay, chorus, flanger, and speed from 1/16× to 2×. **Ten real visualizers**
+  (`musicviz.go`) on a 1024-point FFT of what the speaker plays, drawn in four
+  dithered shades; the artwork tile's bars follow the real spectrum too.
+  **AutoEQ** headphone profiles with the AutoEq index kept for offline search
+  (`musicautoeq.go`), and the iPod's twenty EQ presets on the 31-band PEQ (L2
+  opens it on a pad now). **Navidrome and Jellyfin** (`musicsrc_subsonic.go`,
+  `musicsrc_jellyfin.go`): browse, stream through a loopback proxy that keeps
+  tokens off command lines and caches songs (`musicproxy.go`, 2 GB by default),
+  Download Offline into Music/Navidrome and Music/Jellyfin, Jellyfin films and
+  series (direct stream or HLS transcode, resume reported back), Quick Connect.
+  **Scrobbling** (`musicscrobble.go`): Last.fm signed in by a QR code,
+  ListenBrainz, Navidrome play counts, with listens queued in `scrobbles.json`
+  while offline; the phone's **Music servers** page sets it all up
+  (`companion_music.go`). **Games**: Music Quiz and Sound Racer (song maps kept
+  in `racer-maps/`, chiptunes included) on the iPod's Extras, Brick Breaker on
+  the Games screen. The library reads genre and composer tags (index v3 reads
+  the songs' tags once more), and **Ukrainian** is an interface language
+  (`i18n/uk.json`: menus, labels and the player; long help texts stay English).
+  Release builds need the `JUKAHUB_LASTFM_API_KEY`/`JUKAHUB_LASTFM_SECRET`
+  secrets for one-tap Last.fm (docs/MUSIC_SERVERS.md). Not run on a device or
+  compiled yet (UIPOD-HW-1).
+- **More speed for heavy games** (Juka, 2026-11-21: "improve performance even
+  further"). Heavy-game boost now also moves JukaHub's own threads behind the
+  game (nice 10, idle I/O class; each thread's own value comes back after, and
+  a worker that was lower stays lower) and, on the Smart Pro S, holds the game
+  to its 2.0 GHz cluster from the start (`xboxboost_hub_linux.go`). Emulator
+  speed's Fast and Fastest give the bigger consoles an audio buffer of at least
+  64 ms, so the cores' automatic frameskip skips only when a game really falls
+  behind, and on the Smart Pro and Brick turn on RetroArch's threaded video
+  while Threaded video is on Auto. Not run on a device yet (EMUSPEED-HW-1).
+- **Silent boot: the bootloader starts Linux quietly** (Juka, 2026-11-21: "Can
+  we hook JukaHub to load even faster? Maybe we can modify the bootloader on
+  Trimui devices (slightly) ... so we don't have to wait 9 seconds"). TrimUI's
+  bootloader passes `loglevel=8`, so the stock kernel prints every message to
+  an unused 115200-baud serial port and waits for it (the stock Smart Pro's
+  kernel took 4.2 s to reach its root). **Settings →
+  General → Silent boot** (A twice) sets that one value of the bootloader's
+  saved settings to 1, the way U-Boot's own `saveenv` writes: into the copy
+  U-Boot is not loading, with the next serial, so a power cut mid-write
+  changes nothing; only where two copies exist and the value demonstrably
+  drives the running kernel (and the kernel image names no level of its own);
+  both copies saved to `data/bootenv/` first; A twice puts the original back,
+  and the next boot's `/proc/cmdline` shows whether it took (**No effect**
+  otherwise). `JukaHub silent-boot [status|on|off]` does the same over SSH.
+  Not run on a device yet (BOOT-HW-5).
+- **A quieter, quicker start on the stock firmware** (same request): before
+  SDL opens the GPU, sound and input devices, JukaHub on a TrimUI sets the
+  kernel console's level to 1 and expedites RCU grace periods (SDL's joystick
+  setup closes every input device, and each close waits for one), and puts
+  both back at exit (`JUKAHUB_KERNEL_TUNE=0`
+  leaves them). With **Boot into JukaHub OS** on a verified stock Smart Pro a
+  new first-service hook (`jukahub-quietboot`, `S01`) does both for the whole
+  boot, installed and restored with the other stock speed hooks. The Smart Pro
+  SD image now boots `quiet loglevel=1` (warnings no longer print either).
+- **GameCube, Wii, PS2 and Xbox on every TrimUI model** (Juka, 2026-11-21:
+  "GameCube, PS2, and XBOX should all work on all Trimui devices (even if
+  performance is not great)"). GameCube & Wii's Automatic now plays them on the
+  Smart Pro, Brick, Brick Pro and Hammer too (before, those needed Try
+  anyway), at GameCube speed Fastest; PS2 was already on everywhere. hakuX
+  (Xbox) is offered on every model, marked untested away from the Smart Pro:
+  there, after the Smart Pro package is installed, spruceUI's build of the same
+  emulator (`spruceUI/hakuX-spruce`, release `beta-main`, checked against
+  GitHub's SHA-256 digest) replaces its binary — it draws at the panel's own
+  mode (the Brick's 1024x768) and runs on any Vulkan driver, the Smart Pro S's
+  Mali included (`hakux_fit.go`). An existing install gets it at the next
+  press of X. Not run on a device yet (EMUSPEED-HW-1).
+- **CPU boost in games, and a heat guard on every TrimUI** (Juka, 2026-11-21:
+  "boost performance when running emulator by adjusting CPU frequency
+  safely...make sure to not overheat device by checking temperature (All
+  Trimui devices)"). Settings → Games & emulators → **CPU boost in games**
+  (Auto / Always / Off): three seconds after a heavy game starts, once the
+  firmware's `cpufreq.sh` has run (it used to put emulators back on `ondemand`
+  or under a lower ceiling, and Automatic CPU speed then left them alone),
+  parked cores come online and the clock is held at the top of what the launch
+  may use, the floor too under a dynamic governor so none idles it between
+  frames. Auto takes N64, PSP, Dreamcast, DS, Saturn, Jaguar, GameCube, Wii,
+  PS2, ports and the Heavy-game boost's games (PlayStation and the 8/16-bit
+  consoles keep following Automatic CPU speed); a game's own Performance
+  option is now a boost, even with Full speed while playing off. The **heat
+  guard** (no off switch) reads the hottest CPU/GPU zone and the battery every
+  2 s, whoever set the clock (Automatic CPU speed, a boost, a game's own CPU
+  setting, a launch script, or Automatic CPU speed switched off), and lowers
+  the ceiling one operating point at a time past a per-model limit, replacing
+  Automatic CPU speed's fixed 80/88 °C: Smart Pro 80/87/95 °C, Smart Pro S
+  82/88/95, Brick Pro 76/83/92, Brick and Hammer 75/82/92, battery 45/50/55,
+  always 10 °C under the kernel's own critical trip. **Heat limit** (Cooler /
+  Standard / Warmer) moves them. Steps stop at 1.0 GHz (critical ones at
+  600 MHz); full speed returns step by step once it has cooled, and a level
+  that proved too hot is retried only every 2 minutes (tuned on a thermal model
+  of the Brick and the Smart Pro so the clock settles instead of rocking). A
+  RetroArch game gets "Hot (84 °C): CPU slowed to 1.6 GHz to cool down" and
+  "Cooled down: full CPU speed again" on its message line, JukaHub's in-game
+  menu shows "(cooling)", and the Drivers page's Thermal line and the AI's
+  performance check say where the guard starts. Floors and ceilings are put
+  back compare-and-restore in the order the 4.9 kernel accepts, and the crash
+  marker now covers floors and woken cores too (`heatguard.go`, `cpuboost.go`,
+  `autoperf.go`). Not run on a device yet (HEAT-HW-1).
+- **Emulator speed, per console, and a wider Heavy-game boost** (Juka,
+  2026-11-21: "improve performance of all emulators...especially on Trimui
+  Smart Pro and Trimui Brick XBOX, PS2, Gamecube, Wii support"). Settings →
+  Emulation has a **Speed** row (per console under "Adjust for"): **Fast**
+  skips a frame only when the handheld falls behind — the cores' own `auto`
+  frameskip in PCSX-ReARMed, FBNeo, MAME 2003 / 2003-Plus, PicoDrive, Genesis
+  Plus GX, Snes9x, gpSP, mGBA, Handy and Beetle PCE Fast, PPSSPP's automatic
+  frameskip, Flycast's automatic skip, YabaSanshiro's frameskip — turns on
+  Mupen64Plus-Next's and melonDS's threaded renderers, N64 frame duping,
+  DeSmuME's JIT, Virtual Jaguar's fast blitter and Opera's DSP thread, and
+  switches RetroArch's run-ahead, preemptive frames and rewind off above the
+  8/16-bit consoles; **Fastest** adds PSP lazy textures, low curve detail and
+  skipped GPU read-backs, Dreamcast without its sound DSP, mipmaps or
+  anisotropic filtering and with per-strip sorting, an asynchronous PCSX-ReARMed
+  GPU thread, DeSmuME frameskip 1, ARMSX2's EE at 75% with mild cycle
+  skipping, and N64 Light graphics. **Auto** leaves the 8/16-bit consoles
+  alone, gives PlayStation, N64, DS, arcade and the CD consoles Fast, and PSP,
+  Dreamcast, Saturn, Jaguar and PS2 Fastest on the Smart Pro, Brick, Brick Pro
+  and Hammer (Fast on the Smart Pro S). Everything is written for one launch
+  and put back when RetroArch exits; only options still at the core's default
+  change, and a game's own options file is never touched (`emuspeed.go`).
+  JukaHub's own PPSSPP gets the PSP's level in `ppsspp.ini` the same way
+  (`emuspeed_ppsspp.go`); Games & emulators → **PS2 speed** is the PS2's level
+  beside its switch, and the Speed row with GameCube or Wii picked is GameCube
+  speed. A heavy console's core logs warnings only once it has played a game in
+  that run, instead of writing every info line to the card while it plays.
+  **Heavy-game boost** (formerly Xbox boost; key `xboxBoost` unchanged) now
+  also takes PSP, Dreamcast (NAOMI, Atomiswave), Saturn, Jaguar, N64 and DS
+  games on the A133P models, raises a memory-controller devfreq node where the
+  kernel has one, gives the game's disk a 1024 KB read-ahead for streamed disc
+  images, and sets the swap up at once when such a game starts in the first
+  minutes after power-on; all of it is put back after the game. hakuX (Xbox)
+  is now offered on the Brick and Hammer too, marked untested and never
+  installed by itself (no sticks: hakuX's Menu maps controls per game). The
+  cores-aarch64 builds of mGBA and WASM-4 are tuned for the Cortex-A53 like
+  Dolphin's. Not run on a device yet (EMUSPEED-HW-1).
+- **Pads: a 64-pad sample sequencer** (Juka, 2026-11-21: "add features of
+  PocketPads"). A new app beside the Synth (Apps, the Tools hub, the Start
+  menu, Home search "pads" / "sampler"): four banks of sixteen pads, eight
+  patterns of 16 to 128 steps with a note and an accent per step, row painting
+  (hold A and move), and a song chain of up to 64 slots. Each pad has volume,
+  pitch and fine tune, a one-knob low/high-pass filter, trim, fades, reverse,
+  one-shot / hold / loop play, choke groups, pan, echo and reverb sends, lo-fi
+  and mute; **Chop now** cuts a sound into 4, 8 or 16 pads in equal slices or
+  at the hits it hears. Select on the Play page is finger drumming (the D-pad
+  and Y X B A play two rows of four); Record live hits writes them into the
+  playing pattern. The sticks play effects, chosen per direction on the FX
+  page: filter sweeps, tempo bend, fade out, echo, reverb, stutter, crush,
+  auto-pan and tape stop, with "Hold" amounts for the Brick. A master
+  compressor, a tempo-synced echo, a small reverb and **Export to WAV**
+  (`Downloads/music/Pads 001.wav`). Sounds come from a built-in kit rendered by
+  the Synth's engine, Voice Memos ("Record a new sample" opens it), a
+  `Samples` folder on the card, GrainBrick installs (their saved WAV files;
+  `PP_GB_DIR` is honoured), Music and Downloads/music; WAV is read directly,
+  other formats through ffmpeg, 30 s per sound and ~96 MB in all. The project
+  saves to `pads.json` (in backups). No MIDI. New files `player/pads.go`,
+  `pads_ui.go`, `pads_engine.go`, `pads_samples.go`; docs/PADS.md and
+  CONTROLS.md. Not compiled or tried on a device yet (PADS-HW-1).
+
+- **Windows Apps downloads a program to try Wine with** (Juka, 2026-11-21:
+  "Improve running WINE by downloading a simple application to run on trimui
+  smart pro"). An empty Windows Apps list now says "A downloads Notepad++
+  (about 16 MB) to try Windows apps with", and Setup has a fourth row,
+  **Sample program: Notepad++ 8.9.9.1**. A press fetches Notepad++'s official
+  portable zips from its GitHub release: the 64-bit build, which Box64 runs
+  directly, and the 32-bit one, which also goes through Wine's WoW64 layer as
+  most old games do, so the two rows tell which path works. Each zip must
+  match the SHA-256 the release publishes (pinned in
+  `player/windowsapps_sample.go`); it is unpacked into
+  `data/windows-apps/Notepad++/64-bit` or `32-bit` without its updater, its
+  `notepad++.exe` must be a Windows program for that CPU, and the folder is
+  renamed into place only when complete, so the list shows **Notepad++
+  (64-bit)** and **Notepad++ (32-bit)** and never half a build. If the panel
+  is still open the 64-bit one then starts, or the setup page offers the
+  runtime first (Install & Run); a folder there that JukaHub did not make is
+  never replaced. The row and the empty list show the download's bytes, or why
+  it failed, and A retries. Not run on a device yet (APP-18).
+- **Fast forward keeps the speed you pick in RetroArch** (Juka, 2026-11-21,
+  quoting a Reddit post: "When fast forwarding it defaults to the max speed
+  possible ... when I go into retroarch and change it it saves for that
+  instance but if I power the device off ir put it to sleep it defaults back
+  to max speed"). Settings → Emulation → Fast-forward speed used to write its
+  own value at every launch, so a limit changed in RetroArch's menu lasted one
+  game. Now, when RetroArch saves a different `fastforward_ratio` on exit,
+  JukaHub takes it as the setting that launch used (the console's own if it had
+  one, All consoles otherwise), says so in a toast, and writes it next time. The
+  row gained 1.5×, 5× and 10× and shows a kept odd speed such as 2.5×, and the
+  in-game menu's Fast forward line names the speed ("Run the game at 3× ...").
+  A power cut mid-game stops RetroArch before it saves, so a change made then
+  is not seen.
 - **The text editor colours code, and a hex editor opens any file** (Juka,
   2026-11-21: "improve built in file editor...highlight keyworsds...suppport
   languages like perl, python, json, javascript, bash, and c++...also allow
@@ -3370,6 +3566,11 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Last boot says "Kernel to Home" on the stock firmware.** Settings →
+  JukaHub OS → Last boot used to read "Power to Home" where the bootloader
+  leaves no timings, but the number starts at the kernel: on one Smart Pro
+  about 3.8 s of bootloader came before it. It says "Power to Home" only where
+  U-Boot records its own share (the JukaHub OS cards).
 - **Calculator: a real scientific calculator** (Juka, 2026-11-20: "Improve
   Calculator"). A new expression engine reads the line with the usual rules:
   `2^3^2` is 512, `−2²` is −4, `2+−3`, `5×−(2)` and `2(3)`, `2π`, `2sin30`
@@ -4028,6 +4229,16 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Pulling a Go dependency update no longer stops the build** (Juka,
+  2026-11-21, passing on Dependabot PRs #63, #64, #66 and #67).
+  `player/vendor/` is a git-ignored local copy of the Go modules, so after a
+  merged Dependabot PR changed `go.mod`, `build.bat` (and `make test`/`vet`)
+  stopped with "inconsistent vendoring" until `go mod vendor` was run by hand.
+  They now check the copy with `go list -m` and refresh it when it no longer
+  matches. The four open updates are in the tree as well: regexp2 2.13.1,
+  gjson 1.20.4 (with tidwall/pretty 1.3.0), golang.org/x/net 0.63.0,
+  actions/setup-go 7.1.0, and for the test tools jsdom 31.0.1 and
+  @playwright/test 1.65.1.
 - **"Can't update the hub, it failed during update"** (Juka, 2026-11-20,
   passing on a report with no log). Update now no longer depends on GitHub's
   API answering at the moment it is pressed. That API allows 60 lookups an

@@ -105,6 +105,9 @@ type musicState struct {
 	pcmLead int64
 	rate    int32 // device sample rate of the running decoder
 	failRun int   // tracks in a row that ended without any audio
+	// mediaRate is the seconds of the track one second of the running
+	// decoder's output holds: the speed times the tape speed (musicfx.go).
+	mediaRate float64
 }
 
 var music = musicState{current: -1, volume: 0.8}
@@ -404,6 +407,11 @@ func musicDefaultDir(config *Config) string {
 // musicSceneEnter prepares the player when its scene is opened. An active
 // playlist survives leaving and re-entering the scene.
 func musicSceneEnter() {
+	// The iPod layout keeps its own menus (musicpod.go).
+	if musicPodActive(appConfig) {
+		musicPodEnter(appConfig)
+		return
+	}
 	if musicShelf.open {
 		mlibStartScan(appConfig, false)
 		return
@@ -530,6 +538,8 @@ func musicPlayTrackAt(index int, gapless bool) {
 	go musicProbeChapters(track.Path, longForm)
 	// No timed .lrc: the lyrics inside the file, or an untimed .lrc (lyrics_embedded.go).
 	go lyricsEmbeddedLoad(track.Path)
+	// Scrobbling and the servers' play reports follow the player (musicscrobble.go).
+	scrobbleStartWatcher()
 	// Trophies: a new local track (Play on a stopped one resumes it; podcasts and
 	// radio are remote), with its artist when the media library knows the file.
 	if !isHTTPMediaURL(track.Path) && (previousPath == "" || !sameAudioPath(previousPath, track.Path)) {
@@ -699,6 +709,9 @@ func musicDecode(path string, startSec float64, gen int) {
 	if speed <= 0 {
 		speed = 1
 	}
+	// Tape Mode's speed reads the track faster or slower too (musicfx.go): the
+	// position counts media seconds, so it is part of the rate.
+	mediaRate := speed * musicFXTapeFactor()
 	// An https stream (radio, podcast) reaches the firmware's TLS-less ffmpeg
 	// through the loopback relay (ffmpegtls.go).
 	args := musicFFmpegArgs(ffmpegReadableInput(ffmpegPath, path), startSec, speed, rate)
@@ -747,8 +760,12 @@ func musicDecode(path string, startSec float64, gen int) {
 	}
 	music.proc = cmd
 	music.rate = rate
+	music.mediaRate = mediaRate
 	music.mu.Unlock()
 
+	// Tape Mode and the stereo effects (musicfx.go); with every effect off it
+	// only keeps the stream in whole frames.
+	fx := newMusicFXEngine(rate)
 	buf := make([]byte, 32*1024)
 	// One scratch buffer for the volume-adjusted copy. QueueVideoAudio hands
 	// the bytes to SDL, which copies them, so the buffer is free to reuse
@@ -779,7 +796,7 @@ loop:
 				time.Sleep(20 * time.Millisecond)
 			}
 			copy(pcm[:n], buf[:n])
-			QueueVideoAudio(pcm[:n], vol)
+			QueueVideoAudio(fx.processS16(pcm[:n]), vol)
 
 			music.mu.Lock()
 			if gen == music.gen {
@@ -788,7 +805,7 @@ loop:
 				if heard < 0 {
 					heard = 0
 				}
-				elapsed := musicMediaElapsed(music.pcmStart, heard, rate, speed)
+				elapsed := musicMediaElapsed(music.pcmStart, heard, rate, mediaRate)
 				if music.duration <= 0 || elapsed < music.duration {
 					music.position = elapsed
 				} else {
@@ -1390,6 +1407,16 @@ func musicUpdateVisualizer() {
 		return
 	}
 
+	// The real spectrum of what the speaker plays (musicviz.go), once audio
+	// has reached the device; the drawn waves only until then.
+	var live [visualBars]float64
+	if musicVizBars(live[:]) {
+		for i := range music.visualizer {
+			target := (0.08 + 0.92*live[i]) * float64(visualMaxH)
+			music.visualizer[i] += (target - music.visualizer[i]) * 0.5
+		}
+		return
+	}
 	now := float64(time.Now().UnixNano()) / 1e9
 	for i := range music.visualizer {
 		freq1 := math.Sin(now*3.0+float64(i)*0.5) * 0.3
@@ -1417,10 +1444,10 @@ type musicVisualizerLayoutState struct {
 var musicVisualizerLayout musicVisualizerLayoutState
 
 // renderMusicFullVisualizer is the immersive mode toggled with V. It trades the
-// playlist for a mirrored spectrum, large track title, and a progress rail. The
-// bars come from the same smoothed visualizer the artwork tile uses, so the two
-// views never disagree about whether audio is playing.
+// playlist for one of the ten visualizers (musicviz.go), large track title,
+// and a progress rail. Left/Right change the visualizer, D its dithering.
 func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
+	brwClearChromeHits()
 	musicUpdateVisualizer()
 
 	music.mu.Lock()
@@ -1431,7 +1458,6 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	position := music.position
 	duration := music.duration
 	volume := music.volume
-	barsData := music.visualizer
 	music.mu.Unlock()
 
 	// Deep vertical gradient backdrop.
@@ -1475,46 +1501,6 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	musicVisualizerLayout.title = sdl.Rect{X: titleX, Y: 54, W: int32(tw), H: int32(th)}
 	musicVisualizerLayout.meta = sdl.Rect{X: nowPlayingLineX(screenWidth, int32(mw)), Y: metaY, W: int32(mw), H: int32(mh)}
 
-	// Spectrum. 48 bars, mirrored around a centre line with a faint reflection.
-	// Its top follows the meta line: the old fixed 42%-of-height ceiling could
-	// grow up through a long title at the same time as the title grew down.
-	bars := 48
-	gap := int32(5)
-	usable := screenWidth - 120
-	barW := (usable - gap*int32(bars-1)) / int32(bars)
-	if barW < 4 {
-		barW = 4
-	}
-	baseY := screenHeight/2 + 70
-	spectrumTop := metaY + int32(mh) + 12
-	maxH := baseY - spectrumTop
-	if ceiling := int32(float64(screenHeight) * 0.42); maxH > ceiling {
-		maxH = ceiling
-	}
-	if maxH < 8 {
-		maxH = 8
-	}
-	musicVisualizerLayout.spectrum = sdl.Rect{X: 60, Y: baseY - maxH, W: screenWidth - 120, H: maxH}
-	for i := 0; i < bars; i++ {
-		v := barsData[(i*visualBars/bars)%visualBars]
-		h := int32(v / float64(visualMaxH) * float64(maxH))
-		if h < 8 {
-			h = 8
-		}
-		x := 60 + int32(i)*(barW+gap)
-		col := WithAlpha(accentColor, 230)
-		if !playing || paused {
-			col = WithAlpha(accentColor, 90)
-		}
-		fillRoundedRect(renderer, x, baseY-h, barW, h, barW/2, col)
-		// Mirrored lower half fades into the background.
-		fillRoundedRect(renderer, x, baseY+4, barW, h/2, barW/2,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 52})
-	}
-
-	// Centre line and progress rail.
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
-	renderer.FillRect(&sdl.Rect{X: 60, Y: baseY, W: screenWidth - 120, H: 2})
 	frac := 0.0
 	if duration > 0 {
 		frac = position / duration
@@ -1533,6 +1519,22 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	stateY := hintY - fontH - 4
 	timeY := stateY - fontH - 4
 	railY := timeY - 18
+	// The visualizer fills the stage between the meta line and the rail; its
+	// top follows the meta line, so a long title never runs into it.
+	spectrumTop := metaY + int32(mh) + 12
+	vizH := railY - 12 - spectrumTop
+	if vizH < 8 {
+		vizH = 8
+	}
+	stage := sdl.Rect{X: 60, Y: spectrumTop, W: screenWidth - 120, H: vizH}
+	musicVisualizerLayout.spectrum = stage
+	style := musicVizStyle(config)
+	musicVizDraw(renderer, stage, style, musicVizPalette(config), musicVizDitherOn(config))
+	if !playing || paused {
+		// A paused picture is dimmed, so it does not look frozen by a fault.
+		renderer.SetDrawColor(0, 0, 0, 110)
+		renderer.FillRect(&stage)
+	}
 	musicVisualizerLayout.rail = sdl.Rect{X: 60, Y: railY, W: screenWidth - 120, H: 6}
 	fillRoundedRect(renderer, 60, railY, screenWidth-120, 6, 3, WithAlpha(ColorBorder, 120))
 	if frac > 0 {
@@ -1558,12 +1560,13 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	} else if paused {
 		state = "Paused"
 	}
-	state = fmt.Sprintf("%s   ·   Vol %d%%", state, int(math.Round(volume*100)))
+	state = fmt.Sprintf("%s   ·   Vol %d%%   ·   %s", state, int(math.Round(volume*100)), musicVizNames[style])
 	sw, _, _ := font.SizeUTF8(state)
 	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, stateY)
 	musicVisualizerLayout.state = sdl.Rect{X: (screenWidth - int32(sw)) / 2, Y: stateY, W: int32(sw), H: fontH}
 
-	hint := hintLine(FooterHint{"V", "Close Visualizer"}, FooterHint{"Space", "Pause"}, FooterHint{"B", "Back"})
+	hint := hintLine(FooterHint{"Left/Right", "Visualizer"}, FooterHint{"Y", "Dither"},
+		FooterHint{"V", "Close"}, FooterHint{"Space", "Pause"}, FooterHint{"B", "Back"})
 	hint = ellipsize(font, hint, screenWidth-32)
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, ColorTextMuted(), (screenWidth-int32(hw))/2, hintY)
@@ -1612,8 +1615,19 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		renderMusicScreenOff(renderer)
 		return
 	}
+	// Music Quiz and Sound Racer take the whole screen (musicquiz.go).
+	if renderMusicGames(renderer, config) {
+		return
+	}
+	// The iPod layout draws every screen of its own (musicpod.go).
+	if musicPodActive(config) {
+		renderMusicPod(renderer, config)
+		renderMusicPanels(renderer, config)
+		return
+	}
 	if musicShelf.open {
 		renderMusicShelf(renderer, config)
+		renderMusicPanels(renderer, config)
 		return
 	}
 	music.mu.Lock()
@@ -1625,6 +1639,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		renderer.SetDrawColor(11, 15, 23, 255)
 		renderer.Clear()
 		renderMusicFullVisualizer(renderer, config)
+		renderMusicPanels(renderer, config)
 		return
 	}
 	// Both list layouts stand on Home's backdrop, like every other screen.
@@ -2087,7 +2102,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	// Header last, so no row or hint line can be painted over the bar.
 	renderStatusBar(renderer, config)
 	renderMusicSearchOverlay(renderer, config)
-	renderMusicPEQPanel(renderer, config)
+	renderMusicPanels(renderer, config)
 }
 
 // musicButtonIcons maps the transport's old text marks to the shared vector
@@ -2163,11 +2178,18 @@ func HandleMusicClick(mx, my int32) bool {
 		musicSetScreenOff(false)
 		return true
 	}
-	if musicShelfClick(mx, my, appConfig) {
+	if mgameActive() {
+		return mgameClick(mx, my, appConfig)
+	}
+	// The panels are modal too: a tap on a band or a row selects it
+	// (musicpanels.go).
+	if musicPanelsClick(mx, my, appConfig) {
 		return true
 	}
-	// The PEQ panel is modal too, and a tap on a band selects it.
-	if HandleMusicPEQClick(mx, my) {
+	if musicPodActive(appConfig) {
+		return musicPodClick(mx, my, appConfig)
+	}
+	if musicShelfClick(mx, my, appConfig) {
 		return true
 	}
 	// The search panel is modal for clicks: a tap on a row plays it, and a tap
@@ -2294,15 +2316,30 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 			return
 		}
 	}
-	if musicShelfHandleKey(e, config) {
+	// A music game owns every key while it runs (musicquiz.go).
+	if mgameKey(e, config) {
 		return
 	}
-	// The equaliser panel owns the D-pad while it is up.
-	if handleMusicPEQKey(e) {
+	// The equaliser, Sound effects and AutoEQ panels own the keys while one is
+	// up (musicpanels.go).
+	if musicPanelsKey(e, config) {
+		return
+	}
+	// The iPod layout has keys of its own (musicpod.go).
+	if musicPodActive(config) {
+		musicPodKey(e, config)
+		return
+	}
+	if musicShelfHandleKey(e, config) {
 		return
 	}
 	// The search panel keeps Up/Down/Enter/Esc after the keyboard is dismissed.
 	if musicHandleSearchKey(e) {
+		return
+	}
+	// The full-screen visualizer: Left/Right pick the visualizer, Y or D its
+	// dithering (musicviz.go).
+	if musicVizKey(e.Keysym.Sym, config) {
 		return
 	}
 
@@ -2401,6 +2438,8 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_g:
 		musicPEQTogglePanel(config)
 		PlayNavSound()
+	case sdl.K_x:
+		musicFXPanelOpen()
 	case sdl.K_e:
 		minutes := musicCycleExitTimer()
 		showToast(musicTimerToast("Auto-exit", minutes), ToastInfo())
@@ -2435,8 +2474,16 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 // ──────────────────────────────────────────────────────────────────────
 
 // formatSpeedLabel renders a listening speed without trailing zeros:
-// 1 -> "1x", 1.25 -> "1.25x".
+// 1 -> "1x", 1.25 -> "1.25x"; the slowest steps as fractions, "1/16x".
 func formatSpeedLabel(speed float64) string {
+	for _, f := range []struct {
+		v     float64
+		label string
+	}{{0.0625, "1/16x"}, {0.125, "1/8x"}, {0.25, "1/4x"}} {
+		if math.Abs(speed-f.v) < 0.001 {
+			return f.label
+		}
+	}
 	s := strconv.FormatFloat(speed, 'f', 2, 64)
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimRight(s, ".")
@@ -2509,12 +2556,25 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 	if musicSettings.open {
 		return ctrlMusicSettings(e, appConfig)
 	}
+	// A music game owns the pad while it runs (musicquiz.go).
+	if mgameActive() {
+		return mgamePad(e, appConfig)
+	}
+	// So are the equaliser, Sound effects and AutoEQ panels, which a pad opens
+	// with L2, R2 and from the settings (musicpanels.go).
+	if musicPanelsOpen() {
+		return musicPanelsPad(e, appConfig)
+	}
 	// Dark panel first: Select wakes it, and the mode decides whether the
 	// transport buttons still act.
 	if musicScreenOffActive() {
 		if musicHandleScreenOffButton(e.Button, musicScreenModeFromConfig(appConfig)) {
 			return true
 		}
+	}
+	// The iPod layout has a pad map of its own (musicpod.go).
+	if musicPodActive(appConfig) {
+		return musicPodPad(e, appConfig)
 	}
 	if musicShelfHandlePad(e, appConfig) {
 		return true
@@ -2535,6 +2595,23 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			return true
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 			musicCloseSearch()
+			return true
+		}
+	}
+
+	// The full-screen visualizer takes Left/Right (which visualizer) and Y
+	// (dithering).
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		if musicVizKey(sdl.K_LEFT, appConfig) {
+			return true
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		if musicVizKey(sdl.K_RIGHT, appConfig) {
+			return true
+		}
+	case sdl.CONTROLLER_BUTTON_Y:
+		if musicVizKey(sdl.K_y, appConfig) {
 			return true
 		}
 	}
@@ -2654,6 +2731,65 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		PlayNavSound()
 	default:
 		return false
+	}
+	return true
+}
+
+// ctrlMusicPEQPanel drives the equaliser panel from a pad: the D-pad picks a
+// band and its gain, Y the preset, X flattens the band, B closes. The panel's
+// keyboard handler does the work, so both stay the same.
+func ctrlMusicPEQPanel(e *sdl.ControllerButtonEvent) bool {
+	var key sdl.Keycode
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		key = sdl.K_LEFT
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		key = sdl.K_RIGHT
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		key = sdl.K_UP
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		key = sdl.K_DOWN
+	case sdl.CONTROLLER_BUTTON_Y:
+		key = sdl.K_y
+	case sdl.CONTROLLER_BUTTON_X:
+		key = sdl.K_x
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_A:
+		key = sdl.K_ESCAPE
+	default:
+		return true
+	}
+	handleMusicPEQKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: key}})
+	return true
+}
+
+// musicShoulder takes the triggers on the player (shoulders.go): in the iPod
+// layout they page its lists; otherwise L2 opens the equaliser and R2 the
+// Sound effects panel, and each closes its own panel again. It reports
+// whether the press was used.
+func musicShoulder(s padShoulder, config *Config) bool {
+	if config == nil || !musicSceneActive() || musicSettings.open || virtualKeyboardActive {
+		return false
+	}
+	if s != padL2 && s != padR2 {
+		return false
+	}
+	if autoEQPanel.open || mgameActive() {
+		return true
+	}
+	if musicPodShoulder(s, config) {
+		return true
+	}
+	switch {
+	case s == padL2 && musicEQ.panel:
+		musicEQ.panel = false
+		PlayBackSound()
+	case s == padL2 && !musicFXPanel.open:
+		musicPEQTogglePanel(config)
+		PlayNavSound()
+	case s == padR2 && musicFXPanel.open:
+		musicFXPanelClose()
+	case s == padR2 && !musicEQ.panel:
+		musicFXPanelOpen()
 	}
 	return true
 }

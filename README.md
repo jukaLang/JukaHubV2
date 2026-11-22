@@ -265,7 +265,10 @@ clock and the notification bell are in the bar itself.
   TrimUI switches on at its first start and a desktop leaves off. A start with
   the device plays a full boot — the logo comes alive and Home builds itself
   card by card — and **General → Boot logo** puts the JukaHub logo into the
-  firmware's own power-on screen ([docs/BOOT.md](docs/BOOT.md)).
+  firmware's own power-on screen, and **General → Silent boot** has the
+  firmware's bootloader start Linux without printing every message to an
+  unused serial port, which the stock kernel waits for at power-on
+  ([docs/BOOT.md](docs/BOOT.md)).
 
   ![Settings on Display & theme: theme presets, experience pack, community themes, wallpaper, text size and high contrast](screenshots/settings.png)
 * **Game Profiles** — launch Windows games through Box64/Wine, native

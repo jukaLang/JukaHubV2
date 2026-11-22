@@ -499,6 +499,11 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	if paintStickAxis(config, e.Axis, e.Value) {
 		return true
 	}
+	// Pads plays effects on the sticks (pads.go): they must not also step
+	// the focus there.
+	if padsStickAxis(config, e.Axis) {
+		return true
+	}
 	// Analog triggers are buttons in disguise: they arrive as a stream of axis
 	// values, so they are latched into single presses (see shoulders.go).
 	switch e.Axis {

@@ -422,3 +422,79 @@ func TestDXVKNeedsVulkan(t *testing.T) {
 		}
 	}
 }
+
+// The sample program's pins are well formed, its program check tells a 64-bit
+// exe from a 32-bit one and from a library, and its swap never replaces a
+// folder the installer did not make (windowsapps_sample.go).
+func TestWindowsSampleInstallGuards(t *testing.T) {
+	for _, b := range windowsSampleBuilds {
+		if err := validatePatchURL(b.Spec.URL); err != nil || !strings.HasSuffix(b.Spec.URL, "/"+b.Spec.Asset) {
+			t.Errorf("%s: URL %q (%v)", b.Title, b.Spec.URL, err)
+		}
+		if releaseAssetDigest("sha256:"+b.Spec.SHA256) == "" {
+			t.Errorf("%s: SHA-256 %q is not 64 hex digits", b.Title, b.Spec.SHA256)
+		}
+	}
+	dir := t.TempDir()
+	peFile := func(name string, machine, flags uint16) string {
+		buf := make([]byte, 128)
+		copy(buf, "MZ")
+		binary.LittleEndian.PutUint32(buf[0x3c:], 0x40)
+		copy(buf[0x40:], "PE\x00\x00")
+		binary.LittleEndian.PutUint16(buf[0x44:], machine)
+		binary.LittleEndian.PutUint16(buf[0x56:], flags)
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, buf, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	exe64 := peFile("a64.exe", 0x8664, 0x0022)
+	if problem := windowsPEProblem(exe64, 0x8664); problem != "" {
+		t.Errorf("a 64-bit program %s", problem)
+	}
+	if windowsPEProblem(exe64, 0x14c) == "" {
+		t.Error("a 64-bit program passed as a 32-bit one")
+	}
+	if windowsPEProblem(peFile("lib.dll", 0x8664, 0x2022), 0x8664) == "" {
+		t.Error("a library passed as a program")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "text.exe"), []byte("not a program"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if windowsPEProblem(filepath.Join(dir, "text.exe"), 0x8664) == "" {
+		t.Error("a text file passed as a program")
+	}
+
+	stage := filepath.Join(dir, "stage")
+	dest := filepath.Join(dir, "Notepad++", "64-bit")
+	for _, d := range []string{stage, dest} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(stage, "notepad++.exe"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dest, "mine.txt"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsSampleSwap(stage, dest); err == nil {
+		t.Fatal("the swap replaced a folder the installer did not make")
+	}
+	if !regularFile(filepath.Join(dest, "mine.txt")) {
+		t.Fatal("a refused swap lost the folder's files")
+	}
+	if err := os.WriteFile(filepath.Join(dest, windowsSampleMarker), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := windowsSampleSwap(stage, dest); err != nil {
+		t.Fatalf("the swap over an earlier install failed: %v", err)
+	}
+	if !regularFile(filepath.Join(dest, "notepad++.exe")) || regularFile(filepath.Join(dest, "mine.txt")) {
+		t.Error("the swap did not put the new build in place of the earlier one")
+	}
+	if _, err := os.Stat(windowsSampleOldDir(dest)); !os.IsNotExist(err) {
+		t.Errorf("the earlier install was left beside the new one (%v)", err)
+	}
+}

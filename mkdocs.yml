@@ -52,6 +52,7 @@ nav:
       - Toolbox: TOOLBOX.md
       - Open with and default apps: OPEN_WITH.md
       - Text and hex editor: TEXT_EDITOR.md
+      - Pads (sample sequencer): PADS.md
       - App Center (TrimUI apps): APP_CENTER.md
       - Linux packages: LINUX_PACKAGES.md
       - Java programs: JAVA.md

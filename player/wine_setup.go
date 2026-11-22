@@ -8,7 +8,8 @@ package main
 // fresh each frame on top. The rows are the three things the chain installs:
 // the runtime (which also brings the display and prepares Windows), the
 // display alone, and DXVK, which is optional and, on a Vulkan 1.1 handheld,
-// an experiment the user has to confirm.
+// an experiment the user has to confirm; then the sample program to try them
+// with (windowsapps_sample.go).
 
 import (
 	"fmt"
@@ -64,6 +65,7 @@ func buildWindowsSetupBase() windowsSetupBase {
 				{Title: "Windows runs .exe files itself", Detail: "Nothing to install on a PC.", Status: "not needed"},
 				{Title: "Display", Detail: "Programs open in their own windows.", Status: "not needed"},
 				{Title: "DXVK", Detail: "Windows has Direct3D already.", Status: "not needed"},
+				{Title: "Sample program", Detail: "Copy programs into the Windows Apps folder; they run directly.", Status: "not needed"},
 			},
 			lines: []string{"On a PC, Windows Apps opens .exe files directly: nothing needs installing."},
 		}
@@ -77,6 +79,7 @@ func buildWindowsSetupBase() windowsSetupBase {
 		windowsRuntimeSetupRow(facts),
 		windowsDisplaySetupRow(weston),
 		windowsDXVKSetupRow(dxvk, vulkan),
+		windowsSampleSetupRow(),
 	}
 	base.lines = windowsSetupFactLines(facts, weston, dxvk, vulkan)
 	return base
@@ -210,7 +213,7 @@ func windowsSetupFactLines(facts wineRuntimeFacts, weston westonPackSource, dxvk
 		lines = append(lines, folder)
 	}
 	lines = append(lines, display, dxvkLine, vulkanLine, "",
-		"Copy .exe files to data/windows-apps or /mnt/SDCARD/Roms/PC.",
+		"Copy .exe files to data/windows-apps or /mnt/SDCARD/Roms/PC, or get the sample program above.",
 		"The first launch prepares Windows, which takes a few minutes.")
 	return lines
 }

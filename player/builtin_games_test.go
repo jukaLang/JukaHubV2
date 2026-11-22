@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+)
 
 func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{
@@ -29,14 +33,14 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 		t.Errorf("Start menu has %d JukaLand rows, want one", startRows)
 	}
 
-	// The library lists JukaLand, the Synth, Solitaire and the six arcade
+	// The library lists JukaLand, the Synth, Solitaire and the seven arcade
 	// minigames under "Built-in games", each with its embedded cover
 	// installed as a file the cover views can load.
 	var lib gameLibraryReport
 	coverRoot := t.TempDir()
 	libraryAddBuiltInGames(&lib, func(string) bool { return true }, coverRoot)
 	if lib.Total != len(builtInLibraryGames) || len(lib.Systems) != 1 || lib.Systems[0].Name != builtInLibrarySystem ||
-		len(lib.Systems[0].Games) != 9 {
+		len(lib.Systems[0].Games) != 10 {
 		t.Fatalf("built-in library entries = %+v", lib)
 	}
 	for i, want := range []string{"JukaLand", synthSceneName, solitaireSceneName} {
@@ -99,5 +103,45 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 	}
 	if len(gamesRows) < 3 || gamesRows[1] != "JukaLand" || gamesRows[2] != synthSceneName {
 		t.Errorf("Start → Games begins %v, want Games, JukaLand, Synth", gamesRows)
+	}
+}
+
+// TestPadsProjectLoadsAHandEditedFile: pads.json is the user's work. A file
+// edited by hand or written by another build must load clamped (no pad,
+// step or pattern out of range for the engine) and survive a save.
+func TestPadsProjectLoadsAHandEditedFile(t *testing.T) {
+	raw := `{"bpm": 999, "current": 42, "song": [0, 9, -3], "stickFx": [99],
+		"pads": [{"sample": "kit:kick", "start": 0.9, "end": 0.2, "vol": 7, "pitch": -80, "choke": 12}],
+		"patterns": [{"steps": 20, "hits": [{"p": 0, "s": 3}, {"p": 0, "s": 3}, {"p": 70, "s": 1}, {"p": 1, "s": 40}]}]}`
+	p := padsDefaultProject()
+	p.Patterns = [padsPatterns]padsPattern{}
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatal(err)
+	}
+	p.sanitize()
+	if p.BPM != padsMaxBPM || p.Current != padsPatterns-1 || p.FX[0] != padsFxCount-1 {
+		t.Errorf("bpm %d, current %d, stick fx %d: not clamped", p.BPM, p.Current, p.FX[0])
+	}
+	if got, want := fmt.Sprint(p.Song), fmt.Sprint([]int{0, padsPatterns - 1, 0}); got != want {
+		t.Errorf("song %s, want %s", got, want)
+	}
+	if d := p.Pads[0]; d.Start != 0 || d.End != 1 || d.Volume != 1 || d.Pitch != -padsMaxNote || d.Choke != padsChokes {
+		t.Errorf("pad A1 not clamped: %+v", d)
+	}
+	pat := p.Patterns[0]
+	if pat.Steps != 32 || len(pat.Hits) != 1 || pat.Hits[0] != (padsHit{Pad: 0, Step: 3}) {
+		t.Errorf("pattern 1 = %d steps, hits %+v; want 32 steps and the one valid hit", pat.Steps, pat.Hits)
+	}
+	data, err := json.Marshal(&p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q padsProject
+	if err := json.Unmarshal(data, &q); err != nil {
+		t.Fatal(err)
+	}
+	q.sanitize()
+	if q.BPM != p.BPM || q.Pads[0] != p.Pads[0] || len(q.Patterns[0].Hits) != 1 {
+		t.Errorf("a saved project did not load back the same")
 	}
 }

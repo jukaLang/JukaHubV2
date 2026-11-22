@@ -2,7 +2,7 @@ package main
 
 // builtin_games.go — the games that ship inside JukaHub (JukaLand, the Synth,
 // Solitaire and the Games screen's arcade minigames: Snake, Tetris, 2048,
-// Pong, Minesweeper, Flappy) as the Games library lists them, and their
+// Pong, Minesweeper, Flappy, Brick Breaker) as the Games library lists them, and their
 // covers.
 //
 // No thumbnail server has a box for these, so their covers are drawn by
@@ -58,6 +58,7 @@ var builtInLibraryGames = []builtInLibraryGame{
 	{path: "builtin:pong", scene: "Games", arcade: gamePong, title: "Pong", detail: "Built-in arcade game: classic paddle ball", glyph: "arcade", cover: "pong.png"},
 	{path: "builtin:minesweeper", scene: "Games", arcade: gameMinesweeper, title: "Minesweeper", detail: "Built-in puzzle: flag mines, clear the board", glyph: "arcade", cover: "minesweeper.png"},
 	{path: "builtin:flappy", scene: "Games", arcade: gameFlappy, title: "Flappy", detail: "Built-in arcade game: fly through the pipes", glyph: "arcade", cover: "flappy.png"},
+	{path: "builtin:brickbreaker", scene: "Games", arcade: gameBrickBreaker, title: "Brick Breaker", detail: "Built-in arcade game: break the wall", glyph: "arcade", cover: "brickbreaker.png"},
 }
 
 // builtInLibraryGameFor reports which built-in game a library entry is.

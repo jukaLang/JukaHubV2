@@ -120,6 +120,7 @@ func toolsHubEnsureScenes(config *Config) {
 	toolsHubEnsureScene(config, "Calculator", "C", "Quick math with history")
 	// The Synth (synth.go) is reached from this hub and the Start menu.
 	synthEnsureScene(config)
+	padsEnsureScene(config) // and Pads, the sample sequencer (pads.go)
 	// So are the everyday apps: Notes, Tasks, Voice Memos, Paint, Stopwatch,
 	// Pomodoro and Solitaire (osapps.go).
 	osAppsEnsureScenes(config)
@@ -569,6 +570,9 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	if has(synthSceneName) {
 		system = append(system, toolsHubTile{id: "synth", label: "Synth", icon: "synth", value: "Pocket groovebox: beats, bass and melodies"})
 	}
+	if has(padsSceneName) {
+		system = append(system, toolsHubTile{id: "pads", label: "Pads", icon: "pads", value: "64-pad sampler: chop, sequence, song"})
+	}
 	// The trophy room is injected on demand (trophyOpenRoom), so its tile is
 	// there whatever the config carries. Its value is the live count, which is
 	// what makes the tile worth opening; trophySummary is cached between frames.
@@ -772,6 +776,8 @@ func toolsHubActivate(config *Config, idx int) {
 		rommCloudOpen(config)
 	case "synth":
 		toolsHubOpenScene(config, synthSceneName)
+	case "pads":
+		toolsHubOpenScene(config, padsSceneName)
 	case "trophies":
 		trophyOpenRoom(config)
 	case "gbprinter":

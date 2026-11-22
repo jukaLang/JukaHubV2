@@ -75,6 +75,8 @@ var builtinApplets = []struct {
 	{"Browser", "Browser", ""},
 	{"Trophies", playtimeSceneName, ""},
 	{"Synth", synthSceneName, ""},
+	// Pads (pads.go): the sample sequencer, beside the Synth.
+	{"Pads", padsSceneName, ""},
 	// The everyday apps (osapps.go): the "is there a notes app?" screen is
 	// where people look for them first.
 	{"Notes", "Notes", ""},

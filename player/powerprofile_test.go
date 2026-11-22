@@ -401,6 +401,28 @@ func TestBootCPUMarkerSafe(t *testing.T) {
 			t.Errorf("bootCPUMarkerSafe(%+v, %s) = %v, want %v", tc.entry, tc.file, got, tc.ok)
 		}
 	}
+	// Automatic CPU speed's marker (autoperf.go) also carries CPU boost's
+	// floor and parked-core writes and the heat guard's: still only those
+	// files, with values that fit them.
+	floor := "/sys/devices/system/cpu/cpufreq/policy0/scaling_min_freq"
+	core := "/sys/devices/system/cpu/cpu2/online"
+	for _, tc := range []struct {
+		w  saverSysfsWrite
+		ok bool
+	}{
+		{saverSysfsWrite{Path: ceil, Original: "2000000", Written: "1600000"}, true},
+		{saverSysfsWrite{Path: floor, Original: "408000", Written: "2000000"}, true},
+		{saverSysfsWrite{Path: core, Original: "0", Written: "1"}, true},
+		{saverSysfsWrite{Path: "/sys/devices/system/cpu/online", Original: "0", Written: "1"}, false},
+		{saverSysfsWrite{Path: core, Original: "0", Written: "0-3"}, false},
+		{saverSysfsWrite{Path: floor, Original: "408000", Written: "max"}, false},
+		{saverSysfsWrite{Path: "/etc/scaling_min_freq", Original: "1", Written: "2"}, false},
+		{saverSysfsWrite{Path: gov, Original: "ondemand", Written: "performance"}, false},
+	} {
+		if got := autoPerfMarkerEntrySafe(tc.w); got != tc.ok {
+			t.Errorf("autoPerfMarkerEntrySafe(%+v) = %v, want %v", tc.w, got, tc.ok)
+		}
+	}
 }
 
 // A desktop has no cpufreq at all; the teardown says so instead of claiming a

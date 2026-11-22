@@ -283,16 +283,23 @@ func TestHakuxSupportFor(t *testing.T) {
 	if s := hakuxSupportFor(DeviceTrimuiSmartPro); !s.Offer || s.Untested != "" {
 		t.Fatalf("Smart Pro = %+v, want a plain offer", s)
 	}
-	if s := hakuxSupportFor(DeviceTrimuiBrickPro); !s.Offer || s.Untested == "" {
-		t.Fatalf("Brick Pro = %+v, want an offer marked untested", s)
+	// Every other TrimUI is offered it, marked untested and never installed by
+	// itself; they get spruceUI's build (hakux_fit.go).
+	for _, d := range []DeviceModel{DeviceTrimuiBrickPro, DeviceTrimuiBrick, DeviceTrimuiHammer, DeviceTrimuiSmartProS} {
+		if s := hakuxSupportFor(d); !s.Offer || s.Untested == "" {
+			t.Fatalf("%s = %+v, want an offer marked untested", d, s)
+		}
+		if !hakuxNeedsFit(d) {
+			t.Errorf("%s should get the screen-fit build", d)
+		}
 	}
-	for _, d := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiHammer, DeviceUnknown, DeviceDevBuild} {
+	if hakuxNeedsFit(DeviceTrimuiSmartPro) {
+		t.Error("the Smart Pro keeps the package's own build")
+	}
+	for _, d := range []DeviceModel{DeviceUnknown, DeviceDevBuild} {
 		if s := hakuxSupportFor(d); s.Offer || s.Reason == "" {
 			t.Errorf("%s = %+v, want no offer and a reason", d, s)
 		}
-	}
-	if reason := hakuxSupportFor(DeviceTrimuiSmartProS).Reason; !strings.Contains(reason, "A523") {
-		t.Errorf("the Smart Pro S reason should name its chip: %q", reason)
 	}
 }
 

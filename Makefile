@@ -60,7 +60,8 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build helpdocs run test test-web e2e vet fmt fmt-check lint bench web \
-        release os-package jukaboot clean check coverage workflows docs-links backlog-check deadcode-scan test-scripts test-spatialfx
+        release os-package jukaboot clean check coverage workflows docs-links backlog-check deadcode-scan test-scripts test-spatialfx \
+        vendor-sync
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -84,7 +85,18 @@ helpdocs:
 run: ## Launch the last build (no rebuild)
 	$(RUNBIN)
 
-test: ## Run the player's lean unit-test core (no render tests)
+# player/vendor/ is a git-ignored local copy of the modules (update-deps.bat or
+# `go mod vendor` makes it). While it exists every go command builds from it, so
+# a pulled go.mod change (a merged Dependabot PR) stops them with "inconsistent
+# vendoring". `go list -m` runs that check in a moment: refresh the copy when it
+# fails. player\build.bat does the same for Windows builds.
+vendor-sync:
+	@cd $(PLAYER) && if [ -f vendor/modules.txt ] && ! $(GO) list -m >/dev/null 2>&1; then \
+		echo "vendor-sync: player/vendor no longer matches go.mod, running go mod vendor"; \
+		$(GO) mod vendor; \
+	fi
+
+test: vendor-sync ## Run the player's lean unit-test core (no render tests)
 	cd $(PLAYER) && $(GO) test ./... $(GOTESTFLAGS)
 
 test-web: ## Run the browser-free builder tests (jsdom)
@@ -97,7 +109,7 @@ e2e: ## Run the builder Chromium smoke test (installs the pinned Chromium on the
 	@cd tests/e2e && npx playwright install chromium
 	cd tests/e2e && npx playwright test
 
-vet: ## go vet the player
+vet: vendor-sync ## go vet the player
 	cd $(PLAYER) && $(GO) vet ./...
 
 fmt: ## gofmt the player (vendored packages are skipped)
@@ -118,7 +130,7 @@ lint: fmt-check vet ## Formatting, vet, builder syntax, ESLint and config JSON
 	fi
 	@echo "lint: ok"
 
-coverage: ## Go coverage total plus the worst-covered functions (advisory)
+coverage: vendor-sync ## Go coverage total plus the worst-covered functions (advisory)
 	@cd $(PLAYER) && $(GO) test ./... -count=1 -covermode=atomic -coverprofile="$${TMPDIR:-/tmp}/jukahub-cover.out" >/dev/null 2>&1; \
 	status=$$?; \
 	if [ $$status -ne 0 ]; then echo "coverage: the test run failed (exit $$status)"; exit $$status; fi; \
@@ -146,7 +158,7 @@ os-package: ## JukaHub OS SD-card zip from a TrimUI build: make os-package APP=J
 	bash $(PLAYER)/trimui/make-os-package.sh "$(APP)" JukaHub-OS-Trimui.zip
 
 # jukaboot is pure Go (no cgo, no SDL), so this works from any OS, Windows too.
-jukaboot: ## JukaHub OS's process 1 for the Smart Pro image: player/jukaboot (static linux/arm64)
+jukaboot: vendor-sync ## JukaHub OS's process 1 for the Smart Pro image: player/jukaboot (static linux/arm64)
 	cd $(PLAYER) && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -buildmode=exe -ldflags="-s -w" -o jukaboot ./cmd/jukaboot
 
 clean: ## Remove build outputs (Windows also removes the local SDL copy)

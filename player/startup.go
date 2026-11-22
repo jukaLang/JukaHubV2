@@ -349,9 +349,12 @@ func startupWriteTmpFile(path, text string) error {
 }
 
 // startupBootSummary is the current boot in one line for Settings → JukaHub
-// OS, e.g. "Power to Home 2.31 s · system 1.70 s · JukaHub 0.61 s" (with a
-// bootloader share first where U-Boot left one in the device tree). It is
-// empty where it is unknown: not Linux, no first frame recorded this boot, or
+// OS, e.g. "Power to Home 2.31 s · bootloader 0.70 s · system 1.00 s ·
+// JukaHub 0.61 s" where U-Boot left its own timings in the device tree (the
+// JukaHub OS cards). Without them only the time since the kernel started is
+// known — the stock bootloader's seconds before it are not — so the line then
+// says "Kernel to Home" instead of claiming the whole power-on. It is empty
+// where it is unknown: not Linux, no first frame recorded this boot, or
 // JukaHub was first started well after the boot (opened from another menu).
 func startupBootSummary() string {
 	if !startupBootClockKnown() {
@@ -366,7 +369,7 @@ func startupBootSummary() string {
 		return fmt.Sprintf("Power to Home %.2f s · bootloader %.2f s · system %.2f s · JukaHub %.2f s",
 			loader+t.FirstFrame, loader, t.Start, own)
 	}
-	return fmt.Sprintf("Power to Home %.2f s · system %.2f s · JukaHub %.2f s", t.FirstFrame, t.Start, own)
+	return fmt.Sprintf("Kernel to Home %.2f s · system %.2f s · JukaHub %.2f s", t.FirstFrame, t.Start, own)
 }
 
 // startupBootTimingNow is this boot's record: the file when it belongs to this

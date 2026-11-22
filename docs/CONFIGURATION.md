@@ -329,6 +329,7 @@ when RetroArch exits, like `videoFilter`:
 
 | Key | Default | Meaning |
 |---|---|---|
+| `raTuningSpeed` | `auto` | **Speed** (handhelds): what the emulators trade for frames, per launch — `fast` (frames skipped only when the handheld falls behind: the cores' `auto` frameskip, PPSSPP's automatic frameskip, Flycast's automatic skip; Mupen64Plus-Next and melonDS threaded renderers, N64 frame duping, DeSmuME JIT, Virtual Jaguar fast blitter, Opera DSP thread; run-ahead, preemptive frames and rewind off above the 8/16-bit consoles), `fastest` (plus PSP lazy textures / low curves / skipped read-backs, Dreamcast DSP off / per-strip sorting / no mipmaps or anisotropic filtering, PCSX-ReARMed async GPU thread, DeSmuME frameskip 1, ARMSX2 EE at 75% + mild cycle skip, N64 Light graphics), `own` (nothing), `auto` (8/16-bit and handheld consoles `own`; PlayStation, N64, DS, arcade, CD consoles `fast`; PSP, Dreamcast, Saturn, Jaguar, PS2 `fastest` on the A133P models, `fast` on the Smart Pro S). Only options still at the core's default are written, never into a game's or folder's own options file; JukaHub's PPSSPP gets the PSP's level in `ppsspp.ini` (journal `emu-speed-ppsspp.json`); GameCube and Wii follow `gamecubeSpeed`; `raTuning.<console>.speed` is one console's own (`""` follows) |
 | `raTuningAudio` | `auto` | resampling: `auto` (per console), `best` (sinc, high), `balanced` (sinc, lower), `fast` (cc), `own` |
 | `raTuningLatency` | `auto` | `auto`, `standard` (RetroArch's own), `low` (2 swap images, automatic frame delay, audio ≤ 64 ms), `lowest` (audio ≤ 48 ms, plus 1 frame of run-ahead on light consoles) |
 | `raTuningOverlay` | `own` | `own`, `none`, or the path of an overlay `.cfg` |
@@ -340,8 +341,8 @@ when RetroArch exits, like `videoFilter`:
 | `raTuningCrop` | `own` | Crop overscan: `on` (`video_crop_overscan = true` for the launch), `off` (`false`: the whole picture), `own` (RetroArch's own value, which crops by default) |
 | `videoFilter` | `auto` | the look (also Games & emulators → Video filter): `auto` (by console), `unmanaged` (RetroArch's own), `sharp`, `smooth`, `pixel`, `scanlines`, `lcd`, `crt`, `pt` ([Looks](LOOKS.md)) |
 | `raTuning.<console>.audio` / `.latency` / `.overlay` / `.look` / `.crop` | "" | one console's own choice ("Adjust for"); "" follows the all-consoles value; `.crop` is `on` or `off` |
-| `raTuningFFSpeed` | `own` | **Fast-forward speed**: `own` (RetroArch's own; nothing written), `0` (Unlimited), `2`, `3`, `4`, `6`, `8` — written as `fastforward_ratio` (`"2.000000"`) for the launch; `raTuning.<console>.ffspeed` is one console's own (`""` follows) |
-| `raTuningN64Graphics` | `auto` | **N64 graphics**: `auto` (Light on the Brick family, Full elsewhere), `full` (nothing written), `light` — ParaLLEl N64 `parallel-n64-gfxplugin = rice` + `-gfxplugin-accuracy = low`; Mupen64Plus-Next (GLideN64) `mupen64plus-43screensize = 320x240`, `-EnableFBEmulation = False`, `-EnableCopyColorToRDRAM = Off`. Only keys still at the core's default are set; a widescreen launch keeps Full |
+| `raTuningFFSpeed` | `own` | **Fast-forward speed**: `own` (RetroArch's own; nothing written), `0` (Unlimited), `1.5`, `2`, `3`, `4`, `5`, `6`, `8`, `10`, or another ratio above 1 (up to 30, one decimal) kept from RetroArch's menu — written as `fastforward_ratio` (`"2.000000"`) for the launch; a speed changed in RetroArch's menu during a library game replaces the key the launch read; `raTuning.<console>.ffspeed` is one console's own (`""` follows) |
+| `raTuningN64Graphics` | `auto` | **N64 graphics**: `auto` (Light on the Brick family and wherever the N64's Speed is `fastest`, Full elsewhere), `full` (nothing written), `light` — ParaLLEl N64 `parallel-n64-gfxplugin = rice` + `-gfxplugin-accuracy = low`; Mupen64Plus-Next (GLideN64) `mupen64plus-43screensize = 320x240`, `-EnableFBEmulation = False`, `-EnableCopyColorToRDRAM = Off`. Only keys still at the core's default are set; a widescreen launch keeps Full |
 
 Settings → Controls → **Button layout** (handhelds) stores nothing of its own:
 **Xbox** turns Accessibility's `a11y_swap_ab` / `a11y_swap_xy` on (clearing the
@@ -438,7 +439,9 @@ drops both) — never when JukaHub has already started since the machine
 booted, which the kernel's boot id recorded with each first frame
 (`bootId` in `startup-state.json`) tells even across a clock change. The firmware boot logo (Settings → General → **Boot
 logo**) keeps its record in `Apps/JukaHub/data/bootlogo/state.json`, not in
-`jukauser.json`; see [BOOT.md](BOOT.md).
+`jukauser.json`, and so does **Silent boot** (the bootloader's log level) in
+`Apps/JukaHub/data/bootenv/state.json`, beside the copies of the bootloader's
+settings saved before each write; see [BOOT.md](BOOT.md#silent-boot).
 
 `bootStyle` (Settings → General → **Boot animation**) chooses what the logo
 does in that boot: `cinematic` (the default: it crashes onto a cracking floor,
@@ -631,6 +634,22 @@ how busy the CPU is and remembers each app's level in `auto-performance.json`.
 A game's own CPU profile or limit wins; with `powerProfiles` (Full speed while
 playing) off it only ever lowers the clock.
 
+`cpuBoostGames` (`"auto"`/`"always"`/`"off"`, default `"auto"`) is Settings →
+Games & emulators → **CPU boost in games** on TrimUI handhelds: three seconds
+after a boosted game starts (once its launch script has set its own clock),
+parked cores come online and the CPU clock is held at the top of what the
+launch may use, the floor too under a dynamic governor, with only the heat
+guard moving it. `auto` boosts N64, PSP, Dreamcast, DS, Saturn, Jaguar,
+GameCube, Wii and PS2 games, ports and the Heavy-game boost's games; `always`
+every game. A game's own CPU options win (its Performance is a boost).
+`heatLimit` (`"cool"`/`"standard"`/`"warm"`, default `"standard"`) is **Heat
+limit**: where the heat guard starts lowering any game's clock. On Standard
+that is per model (Smart Pro 80 °C, Smart Pro S 82, Brick Pro 76, Brick and
+Hammer 75; the battery 45 °C on all), 6 °C sooner on Cooler and 4 °C later on
+Warmer, always under the kernel's own critical trip; see
+[DEVICE_TUNING.md](DEVICE_TUNING.md#cpu-boost-in-games-and-the-heat-guard).
+`JUKAHUB_HEAT_GUARD=0` in the environment turns the guard off for one run.
+
 `memorySwap` (bool, default `true` on TrimUI handhelds with 1.5 GB of RAM or
 less, `false` with more) is Settings → Games & emulators → **Extra memory
 (swap)**: two minutes after start, with no game on screen, JukaHub turns on
@@ -644,24 +663,28 @@ swap off, deletes the file and puts the swappiness back (with less memory
 free than the swap holds it stays on until the next start). See
 [LOCAL_AI.md](LOCAL_AI.md) for how the AI's memory check counts it.
 
-`xboxBoost` (bool, default `true`) is Settings → Games & emulators → **Xbox
-boost** on TrimUI handhelds: for an Xbox game (hakuX) or a GreenOvercast stream,
+`xboxBoost` (bool, default `true`) is Settings → Games & emulators →
+**Heavy-game boost** (called Xbox boost until 2026-11-21; the key kept the
+name) on TrimUI handhelds: for an Xbox game (hakuX) or a GreenOvercast stream,
 the launch runs at full CPU speed even with `powerProfiles` off (a
 `powerProfileMaxFreq` cap and the game's own CPU options still apply) with
-Automatic CPU speed standing aside, parked cores come online, a devfreq GPU
-runs at full speed, JukaHub frees its caches and idle helpers, the game's
-process group runs at nice −5, "Hey Juka" stays closed in the game, and a
-stream gets Wi-Fi power saving off. All of it is put back when the game exits;
-see [DEVICE_TUNING.md](DEVICE_TUNING.md#xbox-boost). Where the handheld plays
-GameCube and Wii games (`gamecube` below), they get the same boost.
+Automatic CPU speed standing aside, parked cores come online, a devfreq GPU and
+memory controller run at full speed, the game's disk gets a 1024 KB read-ahead,
+JukaHub frees its caches and idle helpers (and sets up its swap at once in the
+first minutes after power-on), the game's process group runs at nice −5, "Hey
+Juka" stays closed in the game, and a stream gets Wi-Fi power saving off. All
+of it is put back when the game exits; see
+[DEVICE_TUNING.md](DEVICE_TUNING.md#heavy-game-boost). Where the handheld plays
+GameCube, Wii and PS2 games (`gamecube`, `ps2` below), they get the same boost,
+and so do PSP, Dreamcast (NAOMI, Atomiswave), Saturn, Jaguar, N64 and DS games
+on the A133P models (Smart Pro, Brick, Brick Pro, Hammer).
 
 `gamecube` (`"auto"`/`"on"`/`"off"`, default `"auto"`) is Settings → Games &
 emulators → **GameCube & Wii** on TrimUI handhelds: whether GameCube and Wii
-games play here, in RetroArch's Dolphin core. `auto` (**Automatic**) plays them
-on the Smart Pro S (A523) and not on the A133P models, `on` (**On**, or **Try
-anyway** on an A133P) plays them on any model, `off` never (JukaHub then sets
+games play here, in RetroArch's Dolphin core. `auto` (**Automatic**) and `on`
+play them on every model (since 2026-11-21 Automatic includes the A133P models,
+where most games run well below full speed), `off` never (JukaHub then sets
 nothing up for them; a Dolphin core installed by hand still starts them).
-Installing Dolphin from the Emulators page on an A133P turns `auto` into `on`.
 While they play,
 the first start of a game sets the core and Dolphin's system files up, and
 JukaHub keeps `dolphin.json` in its data folder: the core file it last installed
@@ -687,7 +710,9 @@ Smart Pro S. See
 core. On, a game's first start (or **PS2 emulator** below it, or the Emulators
 page's PS2 tile) installs ARMSX2's own Linux arm64 libretro core and its
 `resources` folder from ARMSX2's GitHub releases and copies the player's BIOS
-into `pcsx2/bios` in RetroArch's system folder; PS2 games also get Xbox boost.
+into `pcsx2/bios` in RetroArch's system folder; PS2 games also get Heavy-game
+boost, and **PS2 speed** below it is `raTuning.playstation-2.speed` (see
+`raTuningSpeed`).
 Off, JukaHub sets nothing up for PS2 (a PS2 core installed by hand still
 starts the games) and `Roms/PS2` shows as not supported. JukaHub keeps
 `armsx2.json` in its data folder: the release and core file it installed, the

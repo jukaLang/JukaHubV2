@@ -1,6 +1,6 @@
 package main
 
-// musicskins.go — the two Now Playing layouts.
+// musicskins.go — the Now Playing layouts (the third, iPod, is musicpod.go).
 //
 // Auralis Pro is the rich card the player grew into: large artwork, the
 // visualizer inside it, transport and play modes in one row. StockOS is the
@@ -27,13 +27,35 @@ const (
 	musicLayoutAuralis musicLayout = iota
 	// musicLayoutStockOS is the list-led layout.
 	musicLayoutStockOS
+	// musicLayoutPod is the iPod-style screen with its own menus, themes and
+	// transitions (musicpod.go).
+	musicLayoutPod
 )
 
 func (l musicLayout) label() string {
-	if l == musicLayoutStockOS {
+	switch l {
+	case musicLayoutStockOS:
 		return "StockOS"
+	case musicLayoutPod:
+		return "iPod"
 	}
 	return "Auralis Pro"
+}
+
+// musicLayoutCycle is the layout after (dir > 0) or before l.
+func musicLayoutCycle(l musicLayout, dir int) musicLayout {
+	order := []musicLayout{musicLayoutAuralis, musicLayoutStockOS, musicLayoutPod}
+	at := 0
+	for i, v := range order {
+		if v == l {
+			at = i
+		}
+	}
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	return order[(at+step+len(order))%len(order)]
 }
 
 const (
@@ -50,6 +72,8 @@ func musicLayoutFromConfig(config *Config) musicLayout {
 	switch strings.ToLower(strings.TrimSpace(customStringValue(config.Variables.Custom, musicLayoutKey))) {
 	case "stockos", "stock", "os", "list":
 		return musicLayoutStockOS
+	case "ipod", "uipod", "pod":
+		return musicLayoutPod
 	}
 	return musicLayoutAuralis
 }
@@ -62,11 +86,14 @@ func musicSetLayout(config *Config, l musicLayout) {
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}
 	}
-	if l == musicLayoutStockOS {
+	switch l {
+	case musicLayoutStockOS:
 		config.Variables.Custom[musicLayoutKey] = "stockos"
-		return
+	case musicLayoutPod:
+		config.Variables.Custom[musicLayoutKey] = "ipod"
+	default:
+		config.Variables.Custom[musicLayoutKey] = "auralis"
 	}
-	config.Variables.Custom[musicLayoutKey] = "auralis"
 }
 
 // musicArtOpacityPercent is the configured cover-art opacity, clamped to the
@@ -457,5 +484,5 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	// Header last, so the list and its hints cannot paint over the bar.
 	renderStatusBar(renderer, config)
 	renderMusicSearchOverlay(renderer, config)
-	renderMusicPEQPanel(renderer, config)
+	renderMusicPanels(renderer, config)
 }

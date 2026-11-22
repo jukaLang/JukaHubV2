@@ -5,7 +5,7 @@ package main
 // xboxboost_other.go — Xbox boost is the handheld's (xboxboost.go): off Linux
 // there are no cores, GPU nodes, priorities or radios for it to touch.
 
-func xboxBoostHardwarePlan() []saverSysfsWrite { return nil }
+func xboxBoostHardwarePlan(target string) []saverSysfsWrite { return nil }
 
 func xboxBoostRenice(pid int) error { return nil }
 

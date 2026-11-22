@@ -5,7 +5,8 @@ package main
 //
 // The choices: Auto (the default), Full and Light. Auto is Light on the Brick
 // family — Brick, Brick Pro and Hammer: the A133P's PowerVR GE8300 driving a
-// 1024x768 panel — and Full everywhere else. Full writes nothing. Light sets,
+// 1024x768 panel — and wherever the N64's Speed is Fastest (Settings →
+// Emulation, emuspeed.go), Full everywhere else. Full writes nothing. Light sets,
 // for one launch, in the options file RetroArch reads for the game
 // (raTuneCoreOptionFile, ratuning.go) and through raScopeApply
 // (racfgscope.go), so it all goes back when RetroArch exits:
@@ -87,7 +88,8 @@ func n64LightAutoLight() bool {
 	return deviceFamily(DetectDevice()) == DeviceTrimuiBrick
 }
 
-// n64LightOn reports whether launches use Light.
+// n64LightOn reports whether launches use Light: Auto is Light on the Brick
+// family, and wherever the N64's Speed is Fastest (emuspeed.go).
 func n64LightOn(c *Config) bool {
 	switch n64LightSetting(c) {
 	case n64LightLight:
@@ -95,7 +97,12 @@ func n64LightOn(c *Config) bool {
 	case n64LightFull:
 		return false
 	}
-	return n64LightAutoLight()
+	return n64LightAutoLight() || n64LightSpeedFastest(c)
+}
+
+// n64LightSpeedFastest reports the N64's Speed at Fastest (emuspeed.go).
+func n64LightSpeedFastest(c *Config) bool {
+	return emuSpeedLevelFor(c, "Nintendo 64") == emuSpeedFastest
 }
 
 // n64LightTable is a core's Light options, nil for a core that is not an N64
@@ -217,13 +224,13 @@ func n64LightLabel(v string) string {
 	return "Auto"
 }
 
-func n64LightOptions(*Config) []setOption {
+func n64LightOptions(c *Config) []setOption {
 	auto := "Auto · Full"
-	if n64LightAutoLight() {
+	if n64LightAutoLight() || n64LightSpeedFastest(c) {
 		auto = "Auto · Light"
 	}
 	return []setOption{
-		{Value: n64LightAuto, Label: auto, Note: "Light on the Brick and Brick Pro, Full on the Smart Pro"},
+		{Value: n64LightAuto, Label: auto, Note: "Light on the Brick and Brick Pro, and wherever N64 Speed is Fastest; Full on the Smart Pro"},
 		{Value: n64LightFull, Label: "Full", Note: "The emulator's own graphics settings"},
 		{Value: n64LightLight, Label: "Light", Note: "Faster: the Rice renderer, or half resolution without frame-buffer effects; a few effects go missing"},
 	}

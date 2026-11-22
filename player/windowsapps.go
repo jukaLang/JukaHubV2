@@ -282,6 +282,9 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 	var entries []windowsAppEntry
 	var issues []string
 	seen := map[string]bool{}
+	// The sample program's two builds share one file name; their rows are
+	// named after the build instead (windowsapps_sample.go).
+	sampleTitles := windowsSampleTitles()
 	for _, root := range dedupeCleanPaths(roots) {
 		info, err := os.Stat(root)
 		if err != nil || !info.IsDir() {
@@ -320,8 +323,12 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 				return nil
 			}
 			seen[real] = true
+			title := windowsAppTitle(d.Name())
+			if sample, ok := sampleTitles[windowsSampleKey(path)]; ok {
+				title = sample
+			}
 			entries = append(entries, windowsAppEntry{
-				Title: windowsAppTitle(d.Name()),
+				Title: title,
 				Path:  real,
 				Rel:   filepath.ToSlash(rel),
 			})

@@ -118,6 +118,7 @@ var aiTrLangs = []aiTrLang{
 	{Code: "de", English: "German", Service: "de"},
 	{Code: "it", English: "Italian", Service: "it"},
 	{Code: "ru", English: "Russian", Service: "ru"},
+	{Code: "uk", English: "Ukrainian", Service: "uk"},
 }
 
 // aiTr is the launch the translation was set up for. Written by the prepare

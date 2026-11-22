@@ -184,7 +184,7 @@ func startMenuSceneEntries(config *Config) []startMenuEntry {
 		"Main", playtimeSceneName, "Tube", "LiveTV", "FileExplorer", "Chat", toolsHubSceneName, "Calculator",
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
-		"Dictionary", "PDFReader", "MusicPlayer", synthSceneName, "Notes",
+		"Dictionary", "PDFReader", "MusicPlayer", synthSceneName, padsSceneName, "Notes",
 		// The everyday apps beside Notes (osapps.go).
 		tasksSceneName, voiceMemoSceneName, paintSceneName, stopwatchSceneName,
 		"Games", solitaireSceneName, "Browser", "TextBrowser", "Apps", "Packages", "Shorts",
@@ -1046,8 +1046,8 @@ func startMenuActivate(config *Config) {
 // took the press.
 func sceneClaimsStart(name string) bool {
 	switch name {
-	case "Games", "Ambient", "JukaLand", "Terminal", synthSceneName:
-		// The Synth's Start plays and stops the pattern (synth.go).
+	case "Games", "Ambient", "JukaLand", "Terminal", synthSceneName, padsSceneName:
+		// The Synth's and Pads' Start plays and stops the pattern.
 		return true
 	case chip8SceneName:
 		// The CHIP-8 player's Start pauses the game (chip8_scene.go).
@@ -1075,7 +1075,7 @@ func startMenuKeyOpen(e *sdl.KeyboardEvent, config *Config) bool {
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		// The Terminal's, the Synth's and Solitaire's own Start is a key of
 		// their own (Enter, Space, M), so F10 still opens the menu there.
-		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && name != solitaireSceneName && sceneClaimsStart(name) {
+		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && name != padsSceneName && name != solitaireSceneName && sceneClaimsStart(name) {
 			return false
 		}
 	}

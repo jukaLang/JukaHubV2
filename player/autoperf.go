@@ -15,8 +15,9 @@ package main
 //     autoPerfUpAll) steps up at once — two steps when it is pegged — and a
 //     quiet one steps down only after autoPerfDownSamples quiet samples in a
 //     row, never right after a step up, and much later after a bounce;
-//   - a hot chip (or the kernel's thermal limit being active) never steps up,
-//     and above autoPerfTooHotC it steps down;
+//   - a warm chip or battery (or the kernel's thermal limit being active)
+//     never steps up, and no level goes over the heat guard's dial
+//     (heatguard.go), which steps the clock down while either is hot;
 //   - each app's settled clock is remembered (data/auto-performance.json), so
 //     the next start of that game or screen begins where it ended up.
 //
@@ -29,10 +30,11 @@ package main
 //     no write per tick;
 //   - fight anyone. Every value it writes is remembered with the value it
 //     replaced; if the ceiling is no longer the one Auto wrote (a game's own
-//     tool, a script, the user), Auto leaves that app alone until the next one;
+//     tool, a script, the user), Auto leaves that app alone until the next one
+//     — the heat guard still lowers it while the chip is hot;
 //   - override a choice. A game with its own CPU profile or CPU limit
-//     (gameoptions.go) runs exactly as chosen, and with "Full speed while
-//     playing" off Auto only ever lowers the clock;
+//     (gameoptions.go) runs exactly as chosen, under the heat guard's dial,
+//     and with "Full speed while playing" off Auto only ever lowers the clock;
 //   - pretend. A firmware whose scaling_max_freq is not writable (no root),
 //     a PC, or a CPU without cpufreq gets one reason in the Settings row and
 //     nothing else.
@@ -43,6 +45,14 @@ package main
 // value and not Auto's; the exit puts everything back; and a crash leaves a
 // marker in the temp directory that the next start replays before it records
 // the boot settings (captureBootCPUSettings).
+//
+// Besides following a load, a session is one of two other kinds. A boosted
+// launch (CPU boost in games, cpuboost.go) holds the top of its table — under
+// a dynamic governor the floor there too, and every parked core online — and
+// only the heat dial moves it. A session JukaHub does not clock (its own CPU
+// setting, another tool's ceiling, Automatic CPU speed off) is still followed,
+// for the heat guard alone (heatHoldLocked). Either way the session's records
+// and the guard's go into the one crash marker.
 
 import (
 	"encoding/json"
@@ -77,11 +87,6 @@ const (
 	autoPerfUpHold      = 10 * time.Second
 	autoPerfBounce      = 30 * time.Second
 	autoPerfBounceHold  = 60 * time.Second
-
-	// Temperatures (°C): no step up from autoPerfHotC, a step down from
-	// autoPerfTooHotC.
-	autoPerfHotC    = 80.0
-	autoPerfTooHotC = 88.0
 
 	// Learning: an app must run this long before its level is remembered;
 	// the file is written at most this often (and on exit); at most this many
@@ -155,6 +160,21 @@ type autoPerfSession struct {
 	adapt   autoPerfAdapt
 	at      map[int64]time.Duration
 	last    time.Time
+
+	// What the context asked for: a session that made itself manual (an
+	// emulator on the userspace governor) is not begun again every tick.
+	reqManual bool
+	reqBoost  bool
+	// CPU boost (cpuboost.go): the level is the heat dial's, the floor goes
+	// with it under a dynamic governor (minRaise), cores counts parked cores
+	// it woke.
+	boost    bool
+	minRaise bool
+	cores    int
+	// The heat guard's own records in a session JukaHub does not clock
+	// (heatguard.go heatHoldLocked), and whether a refusal was logged.
+	heat    []saverSysfsWrite
+	heatErr bool
 }
 
 // autoPerfLearned is one app's remembered clock.
@@ -175,11 +195,13 @@ var autoPerf struct {
 	denied  bool
 
 	// A launch on its way: the game's key (or "" to name it after the child
-	// process), whether it has its own CPU setting, and when it began.
+	// process), whether it has its own CPU setting or is boosted, and when it
+	// began.
 	launchSet    bool
 	launchKey    string
 	launchLabel  string
 	launchManual bool
+	launchBoost  bool
 	launchAt     time.Time
 
 	prev map[string]autoPerfCPUTimes
@@ -284,6 +306,10 @@ func autoPerfFrame(config *Config, now time.Time) {
 	pcfg := loadPowerProfileConfig(config)
 	autoPerfBoostOK.Store(pcfg.Enabled)
 	autoPerfGlobalCap.Store(pcfg.MaxFreqKHz)
+	// CPU boost's row, and the heat guard's: its stop, and a line waiting
+	// for the player (cpuboost.go, heatguard.go).
+	cpuBoostModeNow.Store(cpuBoostMode(config))
+	heatGuardFrame(config, now)
 	key, label, class := autoPerfHubContext(config)
 	autoPerfHub.mu.Lock()
 	autoPerfHub.key, autoPerfHub.label, autoPerfHub.class = key, label, class
@@ -301,6 +327,8 @@ func autoPerfHubContext(config *Config) (string, string, autoPerfClass) {
 		return "hub:video", "Video", autoPerfClassMedia
 	case synthSceneActive(config):
 		return "hub:synth", "Synth", autoPerfClassHeavy
+	case padsSceneActive(config):
+		return "hub:pads", "Pads", autoPerfClassHeavy
 	case musicSceneActive():
 		return "hub:music", "Music", autoPerfClassMedia
 	case ss.active || ambientIsActive():
@@ -341,13 +369,16 @@ func autoPerfLaunchBegin(target string) {
 		return
 	}
 	target = strings.TrimSpace(target)
-	manual := false
+	manual, boost := false, false
 	key, label := "", ""
 	if target != "" {
 		opts := gameOptionsFor(target)
-		// Xbox boost holds an Xbox game at the launch's top clock
-		// (xboxboost.go): a game waiting on its GPU must not read as quiet.
-		manual = normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0 || xboxBoostHolds(target)
+		// CPU boost holds the game at the top clock the heat allows
+		// (cpuboost.go); the heavy-game boost's games are among them unless
+		// CPU boost is off (xboxboost.go: a game waiting on its GPU must not
+		// read as quiet). Otherwise the game's own CPU setting is in charge.
+		boost = cpuBoostWanted(target, opts)
+		manual = !boost && (normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0 || xboxBoostHolds(target))
 		key = "game:" + gameOptionsKey(target)
 		label = strings.TrimSuffix(filepath.Base(target), filepath.Ext(target))
 	}
@@ -358,7 +389,7 @@ func autoPerfLaunchBegin(target string) {
 	}
 	autoPerfEndLocked(time.Now())
 	autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel = true, key, label
-	autoPerf.launchManual, autoPerf.launchAt = manual, time.Now()
+	autoPerf.launchManual, autoPerf.launchBoost, autoPerf.launchAt = manual, boost, time.Now()
 }
 
 // autoPerfYield is called by beginGamePowerProfileWith (every launch,
@@ -384,7 +415,7 @@ func autoPerfYield() {
 	autoPerfEndLocked(now)
 	if !autoPerf.launchSet || now.Sub(autoPerf.launchAt) > 2*time.Second {
 		autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel = true, "", ""
-		autoPerf.launchManual, autoPerf.launchAt = false, now
+		autoPerf.launchManual, autoPerf.launchBoost, autoPerf.launchAt = false, false, now
 	}
 }
 
@@ -405,6 +436,7 @@ func autoPerfLaunchEnd() {
 	}
 	autoPerfEndLocked(time.Now())
 	autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel, autoPerf.launchManual = false, "", "", false
+	autoPerf.launchBoost = false
 }
 
 // ── The ticker ───────────────────────────────────────────────────────────
@@ -465,36 +497,39 @@ func autoPerfTickOnce(now time.Time) bool {
 	}
 	maxBusy, allBusy, sampled := autoPerfBusy(autoPerf.prev, cur)
 	autoPerf.prev = cur
+	// The heat dial moves every tick, whoever clocks the CPU (heatguard.go).
+	heatGuardTickLocked(now)
 	switch {
 	case autoPerf.denied:
 		// Refused once this run: nothing more to try.
-	case !autoPerfOn.Load():
-		if autoPerf.sess.active {
-			autoPerfEndLocked(now)
-		}
-		autoPerfSetLine("")
 	case saverLowPowerEngaged() || voiceBoostActive():
 		// Their turn: the idle screen or Juka's boost own the clock and put
 		// Auto's value back when they are done.
 		autoPerf.sess.adapt.DownRun = 0
 		autoPerf.sess.last = now
 	default:
-		key, label, class, manual, wait := autoPerfContextLocked(now)
+		key, label, class, manual, boost, wait := autoPerfContextLocked(now)
+		if !boost && !autoPerfOn.Load() {
+			// Automatic CPU speed off: the app in front is still followed,
+			// for the heat guard alone.
+			manual = true
+		}
+		s := &autoPerf.sess
 		switch {
 		case wait:
 			// A launch is starting its child: hands off until it is up.
-		case !autoPerf.sess.active || key != autoPerf.sess.key:
+		case !s.active || key != s.key || manual != s.reqManual || boost != s.reqBoost:
 			// From one hub screen to another the ceiling is handed over as
 			// it is, rather than put back and lowered again a moment later.
-			old := &autoPerf.sess
-			keep := old.active && !old.manual && !old.foreign &&
-				strings.HasPrefix(old.key, "hub:") && strings.HasPrefix(key, "hub:")
+			keep := s.active && !s.manual && !s.foreign && !s.boost && !manual &&
+				strings.HasPrefix(s.key, "hub:") && strings.HasPrefix(key, "hub:")
 			carry := autoPerfFinishLocked(now, keep)
-			autoPerfBeginLocked(now, key, label, class, manual, carry)
-		case sampled:
-			autoPerfAdaptLocked(now, maxBusy, allBusy)
+			autoPerfBeginLocked(now, key, label, class, manual, boost, carry)
+		default:
+			autoPerfAdaptLocked(now, maxBusy, allBusy, sampled)
 		}
 	}
+	heatGuardAfterLocked(now)
 	save := autoPerfSaveLocked(now, false)
 	autoPerf.mu.Unlock()
 	if save != nil {
@@ -503,24 +538,29 @@ func autoPerfTickOnce(now time.Time) bool {
 	return true
 }
 
-// autoPerfContextLocked names the app in front. wait reports a launch that
-// has not started its child yet.
-func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClass, manual, wait bool) {
+// autoPerfContextLocked names the app in front. boost reports a CPU boost
+// launch (cpuboost.go); wait reports a launch that has not started its child
+// yet, or a boosted one whose launch script may still be setting the clock.
+func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClass, manual, boost, wait bool) {
 	launchPowerProfile.mu.Lock()
 	depth := launchPowerProfile.depth
 	launchPowerProfile.mu.Unlock()
 	if depth > 0 || runningGameChildren.Load() > 0 || foreignScreenSuspended() {
 		if autoPerf.launchSet && autoPerf.launchKey != "" {
-			return autoPerf.launchKey, autoPerf.launchLabel, autoPerfClassGame, autoPerf.launchManual, false
+			if autoPerf.launchBoost && now.Sub(autoPerf.launchAt) < cpuBoostSettle && !autoPerf.sess.active {
+				return "", "", autoPerfClassGame, false, false, true
+			}
+			return autoPerf.launchKey, autoPerf.launchLabel, autoPerfClassGame, autoPerf.launchManual, autoPerf.launchBoost, false
 		}
 		key, label = autoPerfChildKey()
-		return key, label, autoPerfClassGame, false, false
+		return key, label, autoPerfClassGame, false, false, false
 	}
 	if autoPerf.launchSet {
 		if now.Sub(autoPerf.launchAt) < autoPerfLaunchWait && !autoPerf.sess.active {
-			return "", "", autoPerfClassMenu, false, true
+			return "", "", autoPerfClassMenu, false, false, true
 		}
 		autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel, autoPerf.launchManual = false, "", "", false
+		autoPerf.launchBoost = false
 	}
 	autoPerfHub.mu.Lock()
 	key, label, class = autoPerfHub.key, autoPerfHub.label, autoPerfHub.class
@@ -528,7 +568,7 @@ func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClas
 	if key == "" {
 		key, label, class = "hub:scene:Home", "Home", autoPerfClassMenu
 	}
-	return key, label, class, false, false
+	return key, label, class, false, false, false
 }
 
 // autoPerfChildKey names a launch that came without a ROM path (an app
@@ -553,30 +593,58 @@ func autoPerfChildKey() (string, string) {
 }
 
 // autoPerfBeginLocked starts following an app: its level table, its floor,
-// and the learned (or class) starting level, written once.
-func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, manual bool, carry []saverSysfsWrite) {
+// and the learned (or class) starting level, written once. A boosted launch
+// starts at the top of its table; a session JukaHub does not clock is only
+// held under the heat dial. Neither goes over the dial.
+func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, manual, boost bool, carry []saverSysfsWrite) {
 	autoPerf.sess = autoPerfSession{
 		active: true, key: key, label: label, class: class, manual: manual,
+		reqManual: manual, reqBoost: boost,
 		at: map[int64]time.Duration{}, last: now, writes: carry,
 	}
 	s := &autoPerf.sess
+	heatGuardSessionBeginLocked(label, class)
+	why := ""
+	if boost && !manual {
+		if cpuBoostGovernor(autoPerfPolicyDirs()) == "userspace" {
+			// The emulator sets its own clock (NextUI's minarch).
+			manual, why = true, " · the emulator sets its own clock"
+		} else {
+			s.boost = true
+		}
+	}
 	if manual {
-		// Not ours to set: anything handed over goes back first.
+		// Not ours to set: anything handed over goes back first, and the
+		// heat guard alone holds it.
+		s.manual = true
 		autoPerfRestoreWrites(s.writes)
 		autoPerfRemoveMarker()
 		s.writes = nil
-		if xboxBoostLive.Load() && class == autoPerfClassGame {
-			autoPerfSetLine(label + " · Xbox boost")
-		} else {
+		s.dirs = autoPerfPolicyDirs()
+		switch {
+		case why != "":
+			autoPerfSetLine(label + why)
+		case !autoPerfOn.Load():
+			autoPerfSetLine("")
+		case xboxBoostLive.Load() && class == autoPerfClassGame:
+			autoPerfSetLine(label + " · heavy-game boost")
+		default:
 			autoPerfSetLine(label + " · its own CPU setting")
 		}
+		heatHoldLocked(s, heatCapKHzLocked())
 		return
+	}
+	if s.boost {
+		// Before the policies are listed: a cluster whose cores are all
+		// parked has no policy link until one comes up.
+		s.cores = cpuBoostCoresOnlineLocked(s)
 	}
 	s.dirs = autoPerfPolicyDirs()
 	if len(s.dirs) == 0 {
 		s.foreign = true
 		return
 	}
+	heatGuardRefreshLevelsLocked()
 	limit := autoPerfGlobalCap.Load()
 	if !autoPerfBoostOK.Load() {
 		// "Full speed while playing" is off: never above what the firmware
@@ -603,43 +671,87 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 	s.top = len(s.levels) - 1
 	s.floor = autoPerfIndexAtLeast(s.levels, spec.FloorKHz)
 	start := s.top
-	if spec.StartKHz > 0 {
-		start = autoPerfIndexAtLeast(s.levels, spec.StartKHz)
+	if s.boost {
+		// A dynamic governor idles the clock between frames: the floor goes
+		// with the level (autoPerfWriteLocked).
+		s.minRaise = cpuBoostGovernor(s.dirs) != "performance"
+	} else {
+		if spec.StartKHz > 0 {
+			start = autoPerfIndexAtLeast(s.levels, spec.StartKHz)
+		}
+		autoPerfLoadLocked()
+		if l, ok := autoPerf.learned[key]; ok && l.KHz > 0 {
+			start = autoPerfIndexAtLeast(s.levels, l.KHz)
+			l.Used = now.Unix()
+			autoPerf.learned[key] = l
+		}
+		start = clampInt(start, s.floor, s.top)
 	}
-	autoPerfLoadLocked()
-	if l, ok := autoPerf.learned[key]; ok && l.KHz > 0 {
-		start = autoPerfIndexAtLeast(s.levels, l.KHz)
-		l.Used = now.Unix()
-		autoPerf.learned[key] = l
-	}
-	start = clampInt(start, s.floor, s.top)
+	start = min(start, autoPerfHeatIdxLocked(s))
 	s.idx = start
 	if autoPerfWriteLocked(s.levels[start]) {
-		autoPerfSetLine(label + " · " + formatFrequencyKHz(s.levels[start]))
+		autoPerfSetLine(autoPerfLineLocked(s))
 	}
 }
 
-// autoPerfAdaptLocked is one sample's decision for the app in front.
-func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64) {
+// autoPerfHeatIdxLocked is the highest level of the session's table the heat
+// dial allows: its top while the dial limits nothing.
+func autoPerfHeatIdxLocked(s *autoPerfSession) int {
+	capKHz := heatCapKHzLocked()
+	if capKHz <= 0 || len(s.levels) == 0 {
+		return s.top
+	}
+	return min(s.top, autoPerfIndexAtMost(s.levels, capKHz))
+}
+
+// autoPerfLineLocked is the Settings line for the session's level.
+func autoPerfLineLocked(s *autoPerfSession) string {
+	if s.idx < 0 || s.idx >= len(s.levels) {
+		return s.label
+	}
+	clock := formatFrequencyKHz(s.levels[s.idx])
+	line := s.label + " · " + clock
+	switch {
+	case s.boost && xboxBoostLive.Load() && s.class == autoPerfClassGame:
+		line = s.label + " · heavy-game boost · " + clock
+	case s.boost:
+		line = s.label + " · CPU boost · " + clock
+	}
+	if s.idx < s.top && s.idx == autoPerfHeatIdxLocked(s) {
+		line += " (cooling)"
+	}
+	return line
+}
+
+// autoPerfAdaptLocked is one tick's decision for the app in front: a level
+// from the load (when a CPU sample came in), never over the heat dial; a
+// boosted launch's level is the dial's own; a session JukaHub does not clock
+// is held under the dial (heatHoldLocked).
+func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64, sampled bool) {
 	s := &autoPerf.sess
 	if len(s.levels) > 0 && s.idx >= 0 && s.idx < len(s.levels) {
 		s.at[s.levels[s.idx]] += now.Sub(s.last)
 	}
 	s.last = now
 	if s.manual || s.foreign || len(s.levels) == 0 {
+		heatHoldLocked(s, heatCapKHzLocked())
 		return
 	}
-	temp, tempOK := cpuTempValueC()
-	tooHot := tempOK && temp >= autoPerfTooHotC
-	hot := tooHot || tempOK && temp >= autoPerfHotC
-	if !hot && (maxBusy >= autoPerfUpBusy || allBusy >= autoPerfUpAll) {
-		if active, known := cpuThermalThrottleState(); known && active {
-			hot = true
+	heatIdx := autoPerfHeatIdxLocked(s)
+	next := heatIdx
+	if !s.boost {
+		next = s.idx
+		if sampled {
+			// A warm chip or battery steps no higher (heatguard.go).
+			hot := heatGuardHoldsLocked()
+			if !hot && (maxBusy >= autoPerfUpBusy || allBusy >= autoPerfUpAll) {
+				if active, known := cpuThermalThrottleState(); known && active {
+					hot = true
+				}
+			}
+			next = autoPerfNext(s.idx, s.floor, s.top, maxBusy, allBusy, autoPerfSpec(s.class), hot, now, &s.adapt)
 		}
-	}
-	next := autoPerfNext(s.idx, s.floor, s.top, maxBusy, allBusy, autoPerfSpec(s.class), hot, now, &s.adapt)
-	if tooHot && next >= s.idx && s.idx > s.floor {
-		next = s.idx - 1
+		next = min(next, heatIdx)
 	}
 	if next == s.idx {
 		return
@@ -648,7 +760,7 @@ func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64) {
 		logDebug("power", "auto performance: %s %s → %s (busiest core %.0f%%, all %.0f%%)",
 			s.label, formatFrequencyKHz(s.levels[s.idx]), formatFrequencyKHz(s.levels[next]), maxBusy, allBusy)
 		s.idx = next
-		autoPerfSetLine(s.label + " · " + formatFrequencyKHz(s.levels[next]))
+		autoPerfSetLine(autoPerfLineLocked(s))
 	}
 }
 
@@ -734,9 +846,22 @@ func autoPerfIndexAtLeast(levels []int64, khz int64) int {
 	return len(levels) - 1
 }
 
-// autoPerfWriteLocked moves every policy's ceiling to khz. It reports whether
-// the level is now in force; a ceiling someone else moved, or a refusal,
-// takes Auto's hands off this app (and a refusal off the rest of the run).
+// autoPerfIndexAtMost is the last level at or below khz, else the lowest.
+func autoPerfIndexAtMost(levels []int64, khz int64) int {
+	idx := 0
+	for i, f := range levels {
+		if f <= khz {
+			idx = i
+		}
+	}
+	return idx
+}
+
+// autoPerfWriteLocked moves every policy's ceiling to khz and, for a boosted
+// session under a dynamic governor, its floor with it. It reports whether the
+// level is now in force; a ceiling or floor someone else moved, or a refusal,
+// takes Auto's hands off this app (and a refusal off the rest of the run), and
+// from then on only the heat guard holds it (heatHoldLocked).
 func autoPerfWriteLocked(khz int64) bool {
 	s := &autoPerf.sess
 	// khz is a point of the first (fastest) policy's table; a second cluster
@@ -745,57 +870,141 @@ func autoPerfWriteLocked(khz int64) bool {
 	if len(s.dirs) > 1 {
 		refTop = advertisedMaxKHz(s.dirs[0])
 	}
+	heatCap := heatCapKHzLocked()
 	for _, dir := range s.dirs {
-		path := filepath.Join(dir, "scaling_max_freq")
-		cur := saverReadTrimmed(path)
+		maxPath := filepath.Join(dir, "scaling_max_freq")
+		minPath := filepath.Join(dir, "scaling_min_freq")
+		cur := saverReadTrimmed(maxPath)
 		if cur == "" {
 			continue
 		}
-		rec := -1
-		for i := range s.writes {
-			if s.writes[i].Path == path {
-				rec = i
-			}
-		}
-		if rec >= 0 && !autoPerfOurs(cur, s.writes[rec].Written) {
+		curMin := saverReadTrimmed(minPath)
+		if !autoPerfRecordHolds(s.writes, maxPath, cur) || !autoPerfRecordHolds(s.writes, minPath, curMin) {
 			s.foreign = true
 			logInfo("power", "auto performance: the CPU ceiling was changed by something else; leaving %s alone", s.label)
 			autoPerfSetLine(s.label + " · set by another tool")
 			return false
 		}
 		target := cpufreqScaleKHz(dir, khz, refTop)
-		// The kernel refuses a ceiling under the floor.
-		if lo := readKHzFile(filepath.Join(dir, "scaling_min_freq")); lo > 0 && target < lo {
-			target = lo
+		floor := int64(-1) // -1: the floor stays as it is
+		lo, _ := strconv.ParseInt(curMin, 10, 64)
+		if i := autoPerfRecordIndex(s.writes, minPath); i >= 0 {
+			// A floor this session moved goes back toward the value found,
+			// never over the new ceiling.
+			if v, err := strconv.ParseInt(s.writes[i].Original, 10, 64); err == nil {
+				lo = v
+			}
+			floor = min(lo, target)
 		}
-		want := strconv.FormatInt(target, 10)
-		if cur == want {
-			continue
+		switch {
+		case s.boost && s.minRaise:
+			// CPU boost: the floor at the level too, so a dynamic governor
+			// cannot idle the clock between frames.
+			floor = target
+		case floor < 0 && lo > 0 && target < lo:
+			if heatCap > 0 && khz <= heatCap {
+				floor = target // the heat dial goes under a raised floor too
+			} else {
+				target = lo // the kernel refuses a ceiling under the floor
+			}
 		}
-		if rec < 0 {
-			s.writes = append(s.writes, saverSysfsWrite{Path: path, Original: cur, Written: want})
-			rec = len(s.writes) - 1
-		}
-		// The marker first, so a crash between the two leaves enough behind.
-		s.writes[rec].Written = want
-		autoPerfWriteMarker(s.writes)
-		if err := os.WriteFile(path, []byte(want+"\n"), 0o644); err != nil {
+		if _, err := autoPerfSetPairLocked(&s.writes, maxPath, cur, target, minPath, curMin, floor); err != nil {
 			s.foreign = true
 			if os.IsPermission(err) {
 				autoPerf.denied = true
 				autoPerfSetReason("this firmware does not let apps change the CPU speed")
 			}
 			logWarn("power", "auto performance: could not set the CPU ceiling (%v)", err)
-			// Nothing changed: what is there is what a restore compares with.
-			s.writes[rec].Written = cur
-			autoPerfWriteMarker(s.writes)
 			return false
 		}
 		// Written stays what was written, not the read-back: a thermal clamp
 		// lowers what scaling_max_freq reports (autoPerfOurs).
 	}
-	autoPerfWriteMarker(s.writes)
 	return true
+}
+
+// autoPerfRecordIndex is the record of path in recs, or -1.
+func autoPerfRecordIndex(recs []saverSysfsWrite, path string) int {
+	for i := range recs {
+		if recs[i].Path == path {
+			return i
+		}
+	}
+	return -1
+}
+
+// autoPerfRecordHolds reports whether path still holds what recs say was
+// written there: true when nothing was, or it cannot be read.
+func autoPerfRecordHolds(recs []saverSysfsWrite, path, cur string) bool {
+	i := autoPerfRecordIndex(recs, path)
+	return i < 0 || cur == "" || autoPerfOurs(cur, recs[i].Written)
+}
+
+// autoPerfSetPairLocked moves one policy's ceiling to wantMax and, with
+// wantMin ≥ 0, its floor to wantMin, in the order the kernel takes them:
+// going down the floor first, going up the ceiling first (the 4.9 kernel
+// refuses a ceiling under the floor at every step). Each value is recorded in
+// recs the first time it changes. It reports whether anything was written.
+func autoPerfSetPairLocked(recs *[]saverSysfsWrite, maxPath, curMax string, wantMax int64, minPath, curMin string, wantMin int64) (bool, error) {
+	type op struct{ path, cur, want string }
+	ops := []op{{maxPath, curMax, strconv.FormatInt(wantMax, 10)}}
+	if wantMin >= 0 && curMin != "" {
+		floor := op{minPath, curMin, strconv.FormatInt(wantMin, 10)}
+		if c, err := strconv.ParseInt(curMax, 10, 64); err == nil && wantMax < c {
+			ops = []op{floor, ops[0]}
+		} else {
+			ops = append(ops, floor)
+		}
+	}
+	wrote := false
+	for _, o := range ops {
+		w, err := autoPerfWriteRecordedLocked(recs, o.path, o.cur, o.want)
+		if err != nil {
+			return wrote, err
+		}
+		wrote = wrote || w
+	}
+	return wrote, nil
+}
+
+// autoPerfWriteRecordedLocked writes want to path, recording the value it
+// replaced in recs the first time; the crash marker is written first, so a
+// crash between the two leaves enough behind. A value that already reads as
+// the one written (a thermal clamp may read lower) is not written again.
+func autoPerfWriteRecordedLocked(recs *[]saverSysfsWrite, path, cur, want string) (bool, error) {
+	i := autoPerfRecordIndex(*recs, path)
+	if i < 0 && cur == want {
+		return false, nil
+	}
+	if i >= 0 && (*recs)[i].Written == want && autoPerfOurs(cur, want) {
+		return false, nil
+	}
+	prev := cur // what a refused write leaves the record comparing with
+	if i < 0 {
+		*recs = append(*recs, saverSysfsWrite{Path: path, Original: cur, Written: want})
+		i = len(*recs) - 1
+	} else {
+		prev = (*recs)[i].Written
+		(*recs)[i].Written = want
+	}
+	autoPerfSaveMarkerLocked()
+	if err := os.WriteFile(path, []byte(want+"\n"), 0o644); err != nil {
+		// Nothing changed: the record goes back to what is there.
+		(*recs)[i].Written = prev
+		autoPerfSaveMarkerLocked()
+		return false, err
+	}
+	return true, nil
+}
+
+// autoPerfSaveMarkerLocked writes the crash marker for what the session in
+// front holds: its own records and the heat guard's.
+func autoPerfSaveMarkerLocked() {
+	s := &autoPerf.sess
+	all := make([]saverSysfsWrite, 0, len(s.writes)+len(s.heat))
+	all = append(all, s.writes...)
+	all = append(all, s.heat...)
+	autoPerfWriteMarker(all)
 }
 
 // autoPerfOurs reports whether a ceiling still holds the value Auto wrote.
@@ -832,7 +1041,7 @@ func autoPerfFinishLocked(now time.Time, keep bool) []saverSysfsWrite {
 	if len(s.levels) > 0 && s.idx >= 0 && s.idx < len(s.levels) && !s.last.IsZero() {
 		s.at[s.levels[s.idx]] += now.Sub(s.last)
 	}
-	if !s.manual && !s.foreign && s.key != "" {
+	if !s.manual && !s.foreign && !s.boost && s.key != "" {
 		var total time.Duration
 		for _, d := range s.at {
 			total += d
@@ -846,9 +1055,21 @@ func autoPerfFinishLocked(now time.Time, keep bool) []saverSysfsWrite {
 			}
 		}
 	}
-	writes := s.writes
+	heat := heatGuardSessionEndLocked()
+	if s.boost {
+		var top int64
+		if s.top >= 0 && s.top < len(s.levels) {
+			top = s.levels[s.top]
+		}
+		cpuBoostSessionEnd(s.label, top, s.cores, heat)
+	}
+	writes, held := s.writes, s.heat
 	autoPerf.sess = autoPerfSession{}
+	// The heat guard's values first: they sit over whatever the session or a
+	// launch script left.
+	autoPerfRestoreWrites(held)
 	if keep {
+		autoPerfWriteMarker(writes)
 		return writes
 	}
 	autoPerfRestoreWrites(writes)
@@ -882,6 +1103,7 @@ func autoPerfSettled(at map[int64]time.Duration) int64 {
 // still Auto's: a launch's or the user's value wins.
 func autoPerfRestoreWrites(writes []saverSysfsWrite) int {
 	restored := 0
+	var again []saverSysfsWrite
 	for i := len(writes) - 1; i >= 0; i-- {
 		w := writes[i]
 		if w.Path == "" || w.Original == "" || w.Original == w.Written {
@@ -890,6 +1112,16 @@ func autoPerfRestoreWrites(writes []saverSysfsWrite) int {
 		if !autoPerfOurs(saverReadTrimmed(w.Path), w.Written) {
 			continue
 		}
+		if err := os.WriteFile(w.Path, []byte(w.Original+"\n"), 0o644); err != nil {
+			// A ceiling going back under a floor that is still raised (or a
+			// floor over a ceiling still lowered) waits for the other one:
+			// the 4.9 kernel refuses it until then.
+			again = append(again, w)
+			continue
+		}
+		restored++
+	}
+	for _, w := range again {
 		if err := os.WriteFile(w.Path, []byte(w.Original+"\n"), 0o644); err != nil {
 			logWarn("power", "auto performance: could not restore %s (%v)", filepath.Base(w.Path), err)
 			continue
@@ -960,11 +1192,12 @@ func autoPerfRemoveMarker() {
 	}
 }
 
-// autoPerfRecover puts back a ceiling a crashed run left lowered or raised.
-// captureBootCPUSettings calls it after the launch marker's recovery: each
+// autoPerfRecover puts back a ceiling, a floor or a parked core a crashed run
+// left changed (Automatic CPU speed, CPU boost, the heat guard).
+// captureBootCPUSettings calls it before the launch marker's recovery: each
 // value is restored only where it is still Auto's, so the order is safe. The
-// marker is in the temp directory, which is shared: only a scaling_max_freq
-// inside cpufreqRoot, with a number, is ever written.
+// marker is in the temp directory, which is shared: only the files
+// autoPerfMarkerEntrySafe allows are ever written.
 func autoPerfRecover() {
 	if !autoPerfMarkerOn() {
 		return
@@ -980,14 +1213,29 @@ func autoPerfRecover() {
 	}
 	var safe []saverSysfsWrite
 	for _, w := range marker.Writes {
-		if bootCPUMarkerSafe(bootCPUMarkerEntry{Path: w.Path, Value: w.Original}, "scaling_max_freq") &&
-			bootCPUMarkerSafe(bootCPUMarkerEntry{Path: w.Path, Value: w.Written}, "scaling_max_freq") {
+		if autoPerfMarkerEntrySafe(w) {
 			safe = append(safe, w)
 		}
 	}
 	if n := autoPerfRestoreWrites(safe); n > 0 {
-		logInfo("power", "auto performance: restored %d CPU ceiling(s) an interrupted run left changed", n)
+		logInfo("power", "auto performance: restored %d CPU setting(s) an interrupted run left changed", n)
 	}
+}
+
+// autoPerfMarkerEntrySafe reports whether a marker entry names a file Auto,
+// CPU boost or the heat guard writes — a policy's scaling_max_freq or
+// scaling_min_freq inside cpufreqRoot, or a CPU's online switch — with values
+// that fit it.
+func autoPerfMarkerEntrySafe(w saverSysfsWrite) bool {
+	switch base := filepath.Base(w.Path); base {
+	case "scaling_max_freq", "scaling_min_freq":
+		return bootCPUMarkerSafe(bootCPUMarkerEntry{Path: w.Path, Value: w.Original}, base) &&
+			bootCPUMarkerSafe(bootCPUMarkerEntry{Path: w.Path, Value: w.Written}, base)
+	case "online":
+		return xboxBoostWritable(w.Path) && (w.Original == "0" || w.Original == "1") &&
+			(w.Written == "0" || w.Written == "1")
+	}
+	return false
 }
 
 // ── CPU load ─────────────────────────────────────────────────────────────

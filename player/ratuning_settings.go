@@ -3,10 +3,11 @@ package main
 // ratuning_settings.go — Settings → Emulation: the rows behind ratuning.go.
 //
 // The first row picks what the scoped rows change: "All consoles", or one
-// console that then gets its own Audio quality, Latency, Overlay, Look and
-// Crop overscan (a Game Boy border is no use on a PlayStation game, a PSP game
-// wants the cheap resampler while the NES gets the best one, and the Game Boy
-// wants SkyWalker541's PT screen where the NES wants a CRT). Each per-console
+// console that then gets its own Speed (emuspeed.go), Audio quality, Latency,
+// Overlay, Look and Crop overscan (a Game Boy border is no use on a
+// PlayStation game, a PSP game wants the cheap resampler and the most frames
+// while the NES gets the best one, and the Game Boy wants SkyWalker541's PT
+// screen where the NES wants a CRT). Each per-console
 // row starts with "Default · …", which follows the all-consoles choice and
 // shows what that is for this console. The picked console is remembered for
 // this run of the app only; it is a view, not a setting.
@@ -474,7 +475,7 @@ func raTuneCropRow() setRow {
 // raTuneConsoleHasOwn reports whether a console has any choice of its own.
 func raTuneConsoleHasOwn(c *Config, name string) bool {
 	return raTuneConsoleAudio(c, name) != "" || raTuneConsoleLatency(c, name) != "" || raTuneConsoleOverlay(c, name) != "" ||
-		videoFilterConsoleLook(c, name) != "" || raTuneConsoleCrop(c, name) != ""
+		videoFilterConsoleLook(c, name) != "" || raTuneConsoleCrop(c, name) != "" || emuSpeedConsole(c, name) != ""
 }
 
 func raTuneConsoleOptions(c *Config) []setOption {
@@ -495,9 +496,9 @@ func raTuneConsoleRow() setRow {
 		ID: "raTuneConsole", Label: "Adjust for", Kind: setKindChoice,
 		Detail: func(*Config) string {
 			if raTuneScope == "" {
-				return "Pick a console to give it its own audio, latency, overlay, look and crop"
+				return "Pick a console to give it its own speed, audio, latency, overlay, look and crop"
 			}
-			return "Audio, latency, overlay, look and crop below change " + raTuneScope + " games only"
+			return "Speed, audio, latency, overlay, look and crop below change " + raTuneScope + " games only"
 		},
 		Options:    raTuneConsoleOptions,
 		Sheet:      raTuneConsoleOptions,
@@ -547,6 +548,8 @@ func raTuneSettingsRows() []setRow {
 			Visible: func(*Config) bool { return !raTuneHasRetroArch() },
 		},
 		raTuneConsoleRow(),
+		// What the emulators trade for frames, per console (emuspeed.go).
+		emuSpeedSettingsRow(),
 		raTuneAudioRow(),
 		raTuneLatencyRow(),
 		raTuneOverlayRow(),

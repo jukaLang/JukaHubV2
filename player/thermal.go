@@ -41,6 +41,9 @@ func thermalDriverStatus() driverStatus {
 	if active, known := cpuThermalThrottleState(); known && active {
 		st.Detail += " · CPU thermal limit active"
 	}
+	// Where JukaHub's own heat guard slows the CPU, or what it holds now
+	// (heatguard.go).
+	st.Detail += heatGuardDriverNote()
 	return st
 }
 

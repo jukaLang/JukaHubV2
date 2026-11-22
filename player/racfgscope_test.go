@@ -686,9 +686,51 @@ func TestN64LightKeepsOwnOptionsAndFFSpeedFormat(t *testing.T) {
 	if len(values) != 0 {
 		t.Fatalf("a renderer of the user's own was replaced (or a missing key added): %+v", values)
 	}
-	for in, want := range map[string]string{"0": "0.000000", "4": "4.000000", "own": "", "5": "", "": ""} {
+	for in, want := range map[string]string{"0": "0.000000", "4": "4.000000", "1.5": "1.500000", "own": "", "1": "", "0.5": "", "x": "", "": ""} {
 		if got := raFFSpeedValue(in); got != want {
 			t.Fatalf("raFFSpeedValue(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestFFSpeedKeptFromRetroArchMenu: a fast-forward speed the player changed
+// in RetroArch's menu (the file no longer holds what the launch wrote) is
+// handed to the setting the launch read, once, and only for this launch's
+// value; RetroArch's float form reads back as the short one (raffspeed.go).
+func TestFFSpeedKeptFromRetroArchMenu(t *testing.T) {
+	for in, want := range map[string]string{"2.000000": "2", "\"3.0\"": "3", "2.54": "2.5", "0.000000": "0", "1.0": "", "45": "", "OWN": "own"} {
+		if got := normaliseRAFFSpeed(in); got != want {
+			t.Fatalf("normaliseRAFFSpeed(%q) = %q, want %q", in, got, want)
+		}
+	}
+	old := raScopeKeptHook
+	defer func() { raScopeKeptHook = old }()
+	var seen []string
+	raScopeKeptHook = func(e raScopeEdit, now string) { seen = append(seen, e.Key+"="+now) }
+	cfg := "fastforward_ratio = \"3.000000\"\nsavestate_auto_load = \"true\"\n"
+	raScopeNoteKept(cfg, []raScopeEdit{
+		{Key: "fastforward_ratio", Wrote: "8.000000"},
+		{Key: "savestate_auto_load", Wrote: "true"},
+	})
+	if len(seen) != 1 || seen[0] != "fastforward_ratio=3.000000" {
+		t.Fatalf("kept keys = %v, want only the changed ratio", seen)
+	}
+
+	raFFSpeedLaunch.mu.Lock()
+	raFFSpeedLaunch.wrote, raFFSpeedLaunch.key, raFFSpeedLaunch.console = "8.000000", raFFSpeedKey, ""
+	raFFSpeedLaunch.mu.Unlock()
+	raFFSpeedKept(raScopeEdit{Key: "fastforward_ratio", Wrote: "6.000000"}, "3.000000")
+	raFFSpeedLaunch.mu.Lock()
+	still := raFFSpeedLaunch.wrote
+	raFFSpeedLaunch.mu.Unlock()
+	if still != "8.000000" {
+		t.Fatal("another launch's journal record took this launch's speed")
+	}
+	raFFSpeedKept(raScopeEdit{Key: "fastforward_ratio", Wrote: "8.000000"}, "3.000000")
+	raFFSpeedLaunch.mu.Lock()
+	still = raFFSpeedLaunch.wrote
+	raFFSpeedLaunch.mu.Unlock()
+	if still != "" {
+		t.Fatal("the launch record was not taken: a second config would toast again")
 	}
 }

@@ -414,6 +414,14 @@ func aiPerformanceGet(ctx context.Context, a aiArgs) aiStep {
 		if row, _, ok := aiFindRow(c, "autoPerformance"); ok {
 			fmt.Fprintf(&b, "Automatic CPU speed: %s — %s\n", aiRowValue(c, row), autoPerfSettingDetail(c))
 		}
+		// The boost and the heat guard: why a game runs at the clock it does
+		// (cpuboost.go, heatguard.go).
+		if row, _, ok := aiFindRow(c, cpuBoostKey); ok {
+			fmt.Fprintf(&b, "CPU boost in games: %s — %s\n", aiRowValue(c, row), cpuBoostSettingDetail(c))
+		}
+		if row, _, ok := aiFindRow(c, heatLimitKey); ok {
+			fmt.Fprintf(&b, "Heat limit: %s — %s\n", aiRowValue(c, row), heatLimitSettingDetail(c))
+		}
 		out = b.String()
 	})
 	if err != nil {

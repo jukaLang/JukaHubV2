@@ -106,21 +106,27 @@ type hakuxSupport struct {
 // hakuxSupportFor decides per model. The package is built for the original
 // Smart Pro (TG5040: Allwinner A133P, PowerVR GE8300, 1 GB). The Brick Pro has
 // the same chip and GPU and two analog sticks, so it is offered and labelled
-// untested; the Brick has the same chip but no sticks, which Xbox games are
-// played with; the Smart Pro S is a different chip and GPU (A523, Mali) that
-// no build exists for.
+// untested. The Brick and the Hammer have the same chip and GPU too but no
+// sticks; since 2026-11-21 (Juka: Xbox "especially on Trimui Smart Pro and
+// Trimui Brick") they are offered it as untested as well, a press away and
+// never installed by itself (hakux_auto.go), with what to expect: hakuX keeps
+// a controller mapping per game (its Menu), which can put a stick's job on the
+// D-pad. Since the same evening every model is offered it ("XBOX should all
+// work on all Trimui devices"): those other than the Smart Pro get spruceUI's
+// build of the same emulator, which draws at the panel's own mode and runs on
+// any Vulkan driver, the Smart Pro S's Mali included (hakux_fit.go).
 func hakuxSupportFor(device DeviceModel) hakuxSupport {
 	switch device {
 	case DeviceTrimuiSmartPro:
 		return hakuxSupport{Offer: true}
 	case DeviceTrimuiBrickPro:
-		return hakuxSupport{Offer: true, Untested: "Built for the Smart Pro and untested on the Brick Pro (same A133P chip, GPU and sticks, but a 4:3 screen)."}
+		return hakuxSupport{Offer: true, Untested: "Untested on the Brick Pro: the Smart Pro's package with spruceUI's build of hakuX, which draws at this screen's 1024x768."}
 	case DeviceTrimuiBrick:
-		return hakuxSupport{Reason: "The hakuX port is built for the Smart Pro, and Xbox games need two analog sticks — the Brick has none."}
+		return hakuxSupport{Offer: true, Untested: "Untested on the Brick: the Smart Pro's package with spruceUI's build of hakuX for its 1024x768 screen; no analog sticks (hakuX's Menu maps a game's controls onto the D-pad)."}
 	case DeviceTrimuiHammer:
-		return hakuxSupport{Reason: "The hakuX port is built for the Smart Pro, and Xbox games need two analog sticks — the Hammer (the Brick's board) has none."}
+		return hakuxSupport{Offer: true, Untested: "Untested on the Hammer (the Brick's board): spruceUI's build of hakuX for its 4:3 screen; no analog sticks (hakuX's Menu maps a game's controls onto the D-pad)."}
 	case DeviceTrimuiSmartProS:
-		return hakuxSupport{Reason: "The hakuX port is built only for the original Smart Pro (TG5040: A133P, PowerVR GPU). The Smart Pro S has a different chip, GPU and firmware (A523, Mali), and no build for it has been published yet."}
+		return hakuxSupport{Offer: true, Untested: "Untested on the Smart Pro S: the Smart Pro's package with spruceUI's build of hakuX, made for 64-bit handhelds with a Vulkan driver (the A523's Mali has one)."}
 	}
 	return hakuxSupport{Reason: "JukaHub sets up Xbox games on the TrimUI Smart Pro (hakuX) and on Windows (xemu); this device has neither."}
 }
@@ -352,6 +358,10 @@ type hakuxManifest struct {
 	Launcher    string            `json:"launcher"`
 	InstalledAt string            `json:"installed_at"`
 	Files       []hakuxFileRecord `json:"files"`
+	// ScreenBuild names the spruceUI build that replaced the package's own
+	// emulator on a model other than the Smart Pro (hakux_fit.go); "" when
+	// the package's binary is the one installed.
+	ScreenBuild string `json:"screen_build,omitempty"`
 }
 
 // hakuxReadManifest reads a launcher folder's provenance; ok is false for a
@@ -1224,6 +1234,16 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		result.Current = true
 		result.Tag = installed.Tag
 		result.Launcher = hakuxLauncherIn(folder)
+		// An install from before hakux_fit.go on a model that needs
+		// spruceUI's build gets it now.
+		if hakuxNeedsFit(device) && installed.ScreenBuild == "" {
+			report(installPhaseDownload, 0, 0)
+			if err := hakuxFitApply(ctx, client, p, folder, &installed); err != nil {
+				logWarn("emulators", "hakuX: the build for this model could not be installed (%v); the Smart Pro build stays", err)
+			} else if err := hakuxWriteManifest(folder, installed); err != nil {
+				logWarn("emulators", "could not record the hakuX install: %v", err)
+			}
+		}
 		hakuxAutoRemember(p, "hakuX "+installed.Tag+" found in "+folder)
 		return result, nil
 	}
@@ -1430,6 +1450,13 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		Launcher:    plan.Launcher,
 		InstalledAt: time.Now().UTC().Format(time.RFC3339),
 		Files:       records,
+	}
+	// Every model but the Smart Pro plays with spruceUI's build of the same
+	// emulator, which draws at the panel's own mode (hakux_fit.go).
+	if hakuxNeedsFit(device) {
+		if err := hakuxFitApply(ctx, client, p, filepath.Join(p.SDRoot, hakuxOS(launcherDir)), &manifest); err != nil {
+			logWarn("emulators", "hakuX: the build for this model could not be installed (%v); the Smart Pro build stays", err)
+		}
 	}
 	if err := hakuxWriteManifest(filepath.Join(p.SDRoot, hakuxOS(launcherDir)), manifest); err != nil {
 		logWarn("emulators", "could not record the hakuX install: %v", err)

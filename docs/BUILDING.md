@@ -6,9 +6,11 @@ Windows wrapper installs both for you; on other hosts you install them yourself.
 Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.26+**, toolchain
 pinned to 1.27.3). Dependencies are fetched with `go mod download` on first build,
 so the first build needs network access. The git-ignored `player/vendor/` is an
-optional local snapshot; after dependency changes, refresh it with `go mod vendor`
-from `player/` or remove it to use the module cache. `go list -mod=vendor .`
-checks that a local snapshot agrees with `go.mod`.
+optional local snapshot. `build.bat` and the Makefile's Go targets refresh it
+with `go mod vendor` when it no longer matches `go.mod` (after pulling a merged
+Dependabot PR, for example); you can also run that from `player/` yourself, or
+remove the folder to use the module cache. `go list -mod=vendor .` checks that
+a local snapshot agrees with `go.mod`.
 
 | Task | Command |
 |------|---------|

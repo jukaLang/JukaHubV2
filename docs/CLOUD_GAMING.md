@@ -69,11 +69,12 @@ already waiting is replaced only after the new download has arrived.
 - **Video decoding.** On the tested A133 TrimUI, GreenOvercast selected its
   `cedar-h616` decoder at startup. A live stream has not been checked yet; if
   the picture stutters, pick 720p and 30 fps in GreenOvercast's settings.
-- **Xbox boost.** While GreenOvercast runs, JukaHub gives it full CPU speed,
-  every core, a full-speed GPU where the firmware allows it, its own memory and
-  priority, and switches Wi-Fi power saving off; all of it comes back when the
-  stream ends. Settings → Games & emulators → **Xbox boost** turns it off. See
-  [Device tuning](DEVICE_TUNING.md#xbox-boost).
+- **Heavy-game boost.** While GreenOvercast runs, JukaHub gives it full CPU
+  speed, every core, a full-speed GPU and memory clock where the firmware
+  allows it, its own memory and priority, and switches Wi-Fi power saving off;
+  all of it comes back when the stream ends. Settings → Games & emulators →
+  **Heavy-game boost** (it was called Xbox boost) turns it off. See
+  [Device tuning](DEVICE_TUNING.md#heavy-game-boost).
 - Its authors have tested streaming on Anbernic H700 devices (muOS, Knulli,
   ROCKNIX), the Miyoo Flip (SpruceOS) and the R36S. The private loader and
   binary startup have been tested on a TrimUI; sign-in and a live stream still

@@ -101,10 +101,11 @@ func legibleFontIsAuto(id string) bool {
 
 // legibleEntryDraws reports whether a catalogue face that is not on the card
 // yet can draw lang, as far as the catalogue knows: every catalogue face has
-// the Latin letters, and only Russian needs more (uiFontEntry.Cyrillic). A
-// face on the card is checked against its own character map instead.
+// the Latin letters, and only Russian and Ukrainian need more
+// (uiFontEntry.Cyrillic). A face on the card is checked against its own
+// character map instead.
 func legibleEntryDraws(e uiFontEntry, lang string) bool {
-	return lang != "ru" || e.Cyrillic
+	return (lang != "ru" && lang != "uk") || e.Cyrillic
 }
 
 // legibleFontWanted is the catalogue face the setting should download now, or
@@ -415,7 +416,7 @@ func legibleFaceOptions(all bool) []setOption {
 
 // legibleNoLettersNote is the list's note on a face that cannot draw lang.
 func legibleNoLettersNote(lang string) string {
-	if lang == "ru" {
+	if lang == "ru" || lang == "uk" {
 		return "Latin letters only"
 	}
 	return "missing letters for this language"

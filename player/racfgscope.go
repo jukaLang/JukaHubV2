@@ -314,6 +314,26 @@ func raScopeRestoreText(cfg string, edits []raScopeEdit) (string, bool) {
 	return cfg, changed
 }
 
+// raScopeKeptHook hears about a key the restore leaves alone because it no
+// longer holds what JukaHub wrote — the player changed it in RetroArch's own
+// menu during the game and RetroArch saved it on exit (raffspeed.go keeps a
+// fast-forward speed chosen there). It runs under raScope.mu on the restore's
+// goroutine: a hook only records and posts (tbxPost), never edits a config.
+var raScopeKeptHook func(e raScopeEdit, now string)
+
+// raScopeNoteKept reports every edit of cfg the restore will leave alone.
+func raScopeNoteKept(cfg string, edits []raScopeEdit) {
+	hook := raScopeKeptHook
+	if hook == nil {
+		return
+	}
+	for _, e := range edits {
+		if current, has := raConfigGet(cfg, e.Key); has && !raValueEqual(current, e.Wrote) {
+			hook(e, current)
+		}
+	}
+}
+
 // raScopeMerge adds a launch's edits to the journal. A key already recorded
 // keeps the user's value from the first record while the file still holds
 // what JukaHub wrote then (an unfinished earlier launch, or a second edit in
@@ -586,6 +606,7 @@ func raScopeRestoreLocked() (int, error) {
 			continue
 		}
 		changed, err := editRetroArchConfig(path, func(cfg string) (string, bool) {
+			raScopeNoteKept(cfg, edits)
 			return raScopeRestoreText(cfg, edits)
 		})
 		if err != nil {

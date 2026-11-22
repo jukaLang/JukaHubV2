@@ -364,7 +364,7 @@ var uiModeKioskScenes = map[string]bool{
 	"MusicPlayer": true, "Recordings": true, "PDFReader": true,
 	"IPStream": true, "Podcasts": true, "LiveTV": true, "Tube": true, "Shorts": true,
 	"Games": true, "JukaLand": true,
-	gameSwitcherSceneName: true, playtimeSceneName: true, synthSceneName: true,
+	gameSwitcherSceneName: true, playtimeSceneName: true, synthSceneName: true, padsSceneName: true,
 	solitaireSceneName: true, chip8SceneName: true, paintSceneName: true,
 	stopwatchSceneName: true, gbpSceneName: true, cloudGamingSceneName: true,
 }

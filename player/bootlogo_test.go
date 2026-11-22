@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"image"
 	"os"
 	"path/filepath"
@@ -976,5 +977,182 @@ func TestBootLogoWaitIdle(t *testing.T) {
 	bootLogoFinish(bootLogoProbe{})
 	if !bootLogoWaitIdle(time.Millisecond) {
 		t.Fatal("not idle after the install finished")
+	}
+}
+
+// ── Silent boot (bootenv.go) ─────────────────────────────────────────────
+
+// bootEnvTestImage is a two-copy U-Boot environment built by hand: the crc32
+// of the data area, the serial byte, NUL-ended settings, an empty one, zero
+// padding to 0x2000 bytes.
+func bootEnvTestImage(serial byte, level string) []byte {
+	const size = 0x2000
+	body := "bootdelay=0\x00" +
+		"bootcmd=run setargs_mmc boot_normal\x00" +
+		"setargs_mmc=setenv bootargs console=${console} root=${mmc_root} rootwait init=${init} loglevel=${loglevel}\x00" +
+		"console=ttyS0,115200\x00" +
+		"loglevel=" + level + "\x00" +
+		"mmc_root=/dev/mmcblk0p7\x00\x00"
+	raw := make([]byte, size)
+	copy(raw[5:], body)
+	raw[4] = serial
+	binary.LittleEndian.PutUint32(raw, crc32.ChecksumIEEE(raw[5:]))
+	return raw
+}
+
+func TestBootEnvParseRewriteAndUBootChoice(t *testing.T) {
+	raw := bootEnvTestImage(7, "8")
+	c, ok := bootEnvParseCopy(raw)
+	if !ok || c.Size != 0x2000 || c.Serial != 7 {
+		t.Fatalf("parse: ok %v, size %#x, serial %d", ok, c.Size, c.Serial)
+	}
+	entries, err := bootEnvEntries(c)
+	if err != nil || len(entries) != 6 {
+		t.Fatalf("entries: %v, %d of them", err, len(entries))
+	}
+	if !bootEnvPassesLevel(entries) {
+		t.Fatal("the setargs step passes ${loglevel} on")
+	}
+	var level bootEnvEntry
+	for _, e := range entries {
+		if e.Name == bootEnvVar {
+			level = e
+		}
+	}
+	if level.Value != "8" || raw[level.At] != '8' {
+		t.Fatalf("loglevel %q at %d", level.Value, level.At)
+	}
+	out, err := bootEnvRewrite(c, level, "1", 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the checksum, the serial and the value's byte differ.
+	for i := range out {
+		if out[i] != raw[i] && i > 4 && i != level.At {
+			t.Fatalf("byte %d changed", i)
+		}
+	}
+	back, ok := bootEnvParseCopy(out)
+	if !ok || back.Serial != 8 || out[level.At] != '1' {
+		t.Fatalf("the new copy: ok %v, serial %d", ok, back.Serial)
+	}
+	if _, err := bootEnvRewrite(c, level, "10", 8); err == nil {
+		t.Fatal("a value of another length was accepted")
+	}
+	// A one-copy environment (no serial byte) is recognised, never parsed.
+	one := make([]byte, 0x2000)
+	copy(one[4:], "loglevel=8\x00\x00")
+	binary.LittleEndian.PutUint32(one, crc32.ChecksumIEEE(one[4:]))
+	if _, ok := bootEnvParseCopy(one); ok || !bootEnvOneCopy(one) {
+		t.Fatal("a one-copy environment was not told apart")
+	}
+	for _, tc := range []struct {
+		valid  [2]bool
+		serial [2]byte
+		want   int
+	}{
+		{[2]bool{true, true}, [2]byte{1, 2}, 1},
+		{[2]bool{true, true}, [2]byte{3, 2}, 0},
+		{[2]bool{true, true}, [2]byte{255, 0}, 1},
+		{[2]bool{true, true}, [2]byte{0, 255}, 0},
+		{[2]bool{true, true}, [2]byte{4, 4}, 0},
+		{[2]bool{true, false}, [2]byte{1, 9}, 0},
+		{[2]bool{false, true}, [2]byte{9, 1}, 1},
+		{[2]bool{false, false}, [2]byte{0, 0}, -1},
+	} {
+		if got := bootEnvActive(tc.valid, tc.serial); got != tc.want {
+			t.Errorf("valid %v serial %v: U-Boot loads %d, got %d", tc.valid, tc.serial, tc.want, got)
+		}
+	}
+	if lv, last, n := bootEnvKernelLevel("console=ttyS0,115200 loglevel=8 earlyprintk=x loglevel=8 partitions=env@mmcblk0p2"); lv != 8 || last != "8" || n != 2 {
+		t.Fatalf("command line: %d %q %d", lv, last, n)
+	}
+	if lv, last, _ := bootEnvKernelLevel("loglevel=8 quiet"); lv != 4 || last != "" {
+		t.Fatalf("quiet after loglevel: %d %q", lv, last)
+	}
+	head := make([]byte, 2048)
+	copy(head, "ANDROID!")
+	copy(head[64:], "console=ttyS0 loglevel=7")
+	if named, ok := bootEnvImageLevel(head); !named || !ok {
+		t.Fatal("the kernel image's own level was missed")
+	}
+}
+
+func TestBootEnvSwitchWritesOnlyTheIdleCopy(t *testing.T) {
+	disk := [2][]byte{bootEnvTestImage(1, "8"), make([]byte, 0x2000)} // env-redund never written
+	first := append([]byte(nil), disk[0]...)
+	cmdline := "console=ttyS0,115200 loglevel=8 partitions=env@mmcblk0p2:env-redund@mmcblk0p3"
+	bootID := "boot-a"
+	dir := t.TempDir()
+	oldSupported, oldLoad, oldWrite, oldDir, oldBootID := bootEnvSupportedFn, bootEnvLoadFn, bootEnvWriteFn, bootEnvDataDirFn, bootOSBootIDFn
+	defer func() {
+		bootEnvSupportedFn, bootEnvLoadFn, bootEnvWriteFn, bootEnvDataDirFn, bootOSBootIDFn = oldSupported, oldLoad, oldWrite, oldDir, oldBootID
+	}()
+	bootEnvSupportedFn = func() bool { return true }
+	bootEnvDataDirFn = func() (string, error) { return dir, nil }
+	bootOSBootIDFn = func() string { return bootID }
+	bootEnvLoadFn = func() (bootEnvPlan, error) {
+		return bootEnvPlanFrom([2]string{"env", "env-redund"}, [2]string{"/dev/a", "/dev/b"},
+			append([]byte(nil), disk[0]...), append([]byte(nil), disk[1]...), cmdline, true, nil)
+	}
+	writes := 0
+	bootEnvWriteFn = func(_ bootEnvPlan, slot int, expect, data []byte) (bool, error) {
+		if expect != nil && !bytes.Equal(disk[slot][:len(expect)], expect) {
+			return false, errBootEnvChanged
+		}
+		writes++
+		copy(disk[slot], data)
+		return true, nil
+	}
+	status := func() string {
+		p, err := bootEnvLoadFn()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, _ := bootEnvClassify(p, bootEnvLoadState(), bootID)
+		return s
+	}
+	if s := status(); s != bootEnvStatusOff {
+		t.Fatalf("before: %s", s)
+	}
+	if _, err := bootEnvSwitch(true); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 || !bytes.Equal(disk[0], first) {
+		t.Fatalf("%d writes; the loaded copy changed: %v", writes, !bytes.Equal(disk[0], first))
+	}
+	if c, ok := bootEnvParseCopy(disk[1]); !ok || c.Serial != 2 {
+		t.Fatal("the idle copy does not hold the new settings with the next serial")
+	}
+	if s := status(); s != bootEnvStatusOnNext {
+		t.Fatalf("after switching on, same boot: %s", s)
+	}
+	// The next boot: the bootloader passed loglevel=1.
+	bootID, cmdline = "boot-b", "console=ttyS0,115200 loglevel=1 partitions=env@mmcblk0p2:env-redund@mmcblk0p3"
+	if s := status(); s != bootEnvStatusOn {
+		t.Fatalf("next boot: %s", s)
+	}
+	if _, err := bootEnvSwitch(false); err != nil {
+		t.Fatal(err)
+	}
+	p, err := bootEnvLoadFn()
+	if err != nil || p.Active != 0 || p.Level.Value != "8" || p.Copies[0].Serial != 3 {
+		t.Fatalf("after switching off: %v, loads %d, loglevel %q", err, p.Active, p.Level.Value)
+	}
+	if s := status(); s != bootEnvStatusOffNext {
+		t.Fatalf("after switching off, same boot: %s", s)
+	}
+	backups, _ := filepath.Glob(filepath.Join(dir, "env*-*.bin"))
+	if len(backups) < 2 {
+		t.Fatalf("backups: %v", backups)
+	}
+	// A kernel image that names its own level, or a running level that is not
+	// the setting's, is never written to.
+	bootID, cmdline = "boot-c", "console=ttyS0,115200 loglevel=7"
+	if s := status(); s != bootEnvStatusUnavailable {
+		t.Fatalf("a level from elsewhere: %s", s)
+	}
+	if _, err := bootEnvSwitch(true); !errors.Is(err, errBootEnvNotDriving) {
+		t.Fatalf("switched on against another level: %v", err)
 	}
 }

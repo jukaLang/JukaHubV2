@@ -103,7 +103,10 @@ Settings. These changes apply to OS sessions started through `launch.sh`,
 including the OS package's boot path.
 
 On the verified stock Smart Pro TG5040 firmware, **Boot into JukaHub OS** also
-installs a reversible speed path. An early init hook mounts the SD card; the
+installs a reversible speed path. The first startup service (`S01`) stops the
+kernel printing to the board's unused serial port (the stock `loglevel=8`
+makes every driver wait while its messages go out at 115200 baud; `dmesg`
+still gets them) and expedites RCU grace periods for the rest of the boot. An early init hook mounts the SD card; the
 next hook reads up to 32 MiB of JukaHub into the kernel's file cache while
 other stock services start (limited to one second so slow cards do not hold
 up boot); the stock launcher skips a second splash draw after U-Boot has
@@ -119,6 +122,13 @@ Its manual recovery command is
 `sh /mnt/SDCARD/Apps/JukaHub/stock_fastboot/stock-fastboot.sh restore` (use
 `Apps/JukaHub-Trimui` for an app installed under that name). It changes the
 firmware's writable startup overlay and the SD card, not U-Boot or the kernel.
+The kernel's own start, before any of these hooks, is the part only the
+bootloader decides: **Settings → General → Silent boot** sets the one value
+that matters for it, the bootloader's `loglevel`, to 1 — in U-Boot's spare
+copy of its settings, the way U-Boot's own `saveenv` writes, backed up first
+and put back with the same two presses ([BOOT.md](BOOT.md#silent-boot)). It is
+not switched on by **Boot into JukaHub OS**; the hardware check of it is
+pending.
 On one device, six optimized boots showed Home 9.31–10.42 seconds after the
 **kernel** began. On a fresh 2026-11-19 reboot, the A133's generic timer
 measured 3.806 seconds before the kernel; the stock kernel mounted its root
@@ -138,7 +148,10 @@ single-supplicant guard. On two reboots with this change, Home drew at 9.17
 and 8.94 seconds after kernel start, and the device became reachable over
 Wi-Fi 24.6 and 23.4 seconds after the restart request. Create
 `Apps/JukaHub/data/boot-prefetch.off` to disable the early file read, or
-delete that file to enable it again. A boot of about two seconds needs a
+delete that file to enable it again. These times are counted from the kernel's
+start: Settings → JukaHub OS → **Last boot** says **Kernel to Home** for them
+(before 2026-11-21 it said "Power to Home", which left out the bootloader's
+seconds). A boot of about two seconds needs a
 different, minimal device-specific boot chain (the Brick image on plastron has
 one). Reaching that range on Smart Pro would require a separate bootloader, kernel, and small system built
 and tested for this board; the stock boot hook cannot skip the time before its
@@ -231,8 +244,8 @@ optional: a failure warns and the app packages still ship.
 
 | | |
 |---|---|
-| Bootloader, kernel, firmware base files in `/usr` and `/lib` | Kept as shipped; the bootloader picture is a separately restorable image. |
-| Writable `/etc` startup overlay on verified stock Smart Pro | An early SD hook and a one-line splash skip are installed with backups, then restored when OS boot is turned off. |
+| Bootloader, kernel, firmware base files in `/usr` and `/lib` | Kept as shipped; the bootloader picture is a separately restorable image, and **Silent boot** (Settings → General, off unless switched on) changes one value of the bootloader's saved settings, the kernel's log level, in their spare copy, with backups. |
+| Writable `/etc` startup overlay on verified stock Smart Pro | A first-service hook that quiets the kernel console and expedites RCU, an early SD hook and a one-line splash skip are installed with backups, then restored when OS boot is turned off. |
 | SD card startup files on verified stock Smart Pro | A backed-up `TRIMUI_EX` script is wrapped to defer routine work, and a short CPU boost hook is added. Both are restored when OS boot is turned off. |
 | Files a layer replaces (libraries, configs) | Bind mounts in a **private mount namespace**: only JukaHub and the programs it starts see them. MainUI, the firmware's services and everything outside never do, and the namespace disappears with the last program in it. `/` is made a *slave* mount, so new SD/USB mounts still appear inside, while the session's mounts never leak out. |
 | Libraries for games (`libs`) | Put first on `LD_LIBRARY_PATH` for JukaHub (and, with `"children": true`, for the games it starts). An environment variable — gone with the process. |

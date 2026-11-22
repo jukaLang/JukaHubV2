@@ -318,8 +318,9 @@ func jukaosSettingsRows(*Config) []setRow {
 }
 
 // jukaosBootTimeRow shows how long the last boot took to reach Home, as the
-// start-up measured it (startupBootSummary, e.g. "Power to Home 1.84 s ·
-// system 1.21 s · JukaHub 0.63 s"): its first part as the value, all of it
+// start-up measured it (startupBootSummary, e.g. "Kernel to Home 6.84 s ·
+// system 4.21 s · JukaHub 2.63 s", or "Power to Home …" with the bootloader's
+// own share where it records one): its first part as the value, all of it
 // underneath. Read once, when the section opens.
 func jukaosBootTimeRow(summary string) setRow {
 	summary = strings.TrimSpace(summary)

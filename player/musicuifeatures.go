@@ -223,6 +223,10 @@ func musicToggleBackground(config *Config) bool {
 // musicLeavePlayer is the single exit point: it keeps playback alive when the
 // user asked for background audio and stops it otherwise.
 func musicLeavePlayer(config *Config) {
+	// A panel left open would still own the keys on the way back in, and a
+	// music game ends with the player.
+	musicPanelsCloseAll()
+	mgame.mode = mgameNone
 	if musicBackgroundEnabled(config) {
 		return
 	}

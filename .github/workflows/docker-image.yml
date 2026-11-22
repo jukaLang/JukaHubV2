@@ -137,7 +137,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: player/go.mod
           # Not setup-go's cache, for the reason the Windows job gives: what is
@@ -211,6 +211,8 @@ jobs:
           JUKAHUB_MS_CLIENT_ID: ${{ secrets.JUKAHUB_MS_CLIENT_ID }}
           JUKAHUB_SS_DEVID: ${{ secrets.JUKAHUB_SS_DEVID }}
           JUKAHUB_SS_DEVPASSWORD: ${{ secrets.JUKAHUB_SS_DEVPASSWORD }}
+          JUKAHUB_LASTFM_API_KEY: ${{ secrets.JUKAHUB_LASTFM_API_KEY }}
+          JUKAHUB_LASTFM_SECRET: ${{ secrets.JUKAHUB_LASTFM_SECRET }}
         run: |
           set -o pipefail
           start=$SECONDS
@@ -705,7 +707,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: player/go.mod
           # Not setup-go's cache: that is actions/cache, which any workflow on
@@ -827,6 +829,8 @@ jobs:
           JUKAHUB_MS_CLIENT_ID: ${{ secrets.JUKAHUB_MS_CLIENT_ID }}
           JUKAHUB_SS_DEVID: ${{ secrets.JUKAHUB_SS_DEVID }}
           JUKAHUB_SS_DEVPASSWORD: ${{ secrets.JUKAHUB_SS_DEVPASSWORD }}
+          JUKAHUB_LASTFM_API_KEY: ${{ secrets.JUKAHUB_LASTFM_API_KEY }}
+          JUKAHUB_LASTFM_SECRET: ${{ secrets.JUKAHUB_LASTFM_SECRET }}
         run: |
           set -o pipefail
           export CC=x86_64-w64-mingw32-gcc
@@ -851,7 +855,7 @@ jobs:
           # as build.bat does: less for the linker to write and a smaller
           # download, while a panic still prints function names and lines.
           build() {
-            go build -v -ldflags "-s -w -X main.buildDate=$(date -u +%Y-%m-%d)${JUKAHUB_GOOGLE_CLIENT_ID:+ -X main.googleOAuthClientID=$JUKAHUB_GOOGLE_CLIENT_ID -X main.googleOAuthClientSecret=$JUKAHUB_GOOGLE_CLIENT_SECRET}${JUKAHUB_MS_CLIENT_ID:+ -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID}${JUKAHUB_SS_DEVID:+ -X main.screenScraperDevID=$JUKAHUB_SS_DEVID -X main.screenScraperDevPassword=$JUKAHUB_SS_DEVPASSWORD}" \
+            go build -v -ldflags "-s -w -X main.buildDate=$(date -u +%Y-%m-%d)${JUKAHUB_GOOGLE_CLIENT_ID:+ -X main.googleOAuthClientID=$JUKAHUB_GOOGLE_CLIENT_ID -X main.googleOAuthClientSecret=$JUKAHUB_GOOGLE_CLIENT_SECRET}${JUKAHUB_MS_CLIENT_ID:+ -X main.microsoftOAuthClientID=$JUKAHUB_MS_CLIENT_ID}${JUKAHUB_SS_DEVID:+ -X main.screenScraperDevID=$JUKAHUB_SS_DEVID -X main.screenScraperDevPassword=$JUKAHUB_SS_DEVPASSWORD}${JUKAHUB_LASTFM_API_KEY:+ -X main.lastfmAPIKey=$JUKAHUB_LASTFM_API_KEY -X main.lastfmAPISecret=$JUKAHUB_LASTFM_SECRET}" \
               -o ../JukaHub-Trimui-Windows/JukaHub.exe ./ 2>&1 | tee "$RUNNER_TEMP/go-build.log"
           }
           start=$SECONDS

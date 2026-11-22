@@ -176,6 +176,9 @@ func gmLabel(it gmItem) (string, string) {
 		if fast {
 			return "Normal speed", "Turn fast forward off and keep playing"
 		}
+		if note := raFFSpeedGameNote(gaOverlay.system); note != "" {
+			return "Fast forward", note // the speed it runs at (raffspeed.go)
+		}
 		return "Fast forward", "Run the game faster until you switch it off"
 	case gmCloseBg:
 		return "Close background apps", closeAllMenuSub()

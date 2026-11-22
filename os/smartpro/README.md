@@ -4,13 +4,17 @@
 
 For a Smart Pro still running stock firmware, **Boot into JukaHub OS** can use
 the [reversible stock startup hooks](stock_fastboot/stock-fastboot.sh) instead
-of this separate image. They mount the SD card early, skip the repeated stock
+of this separate image. They quiet the kernel's serial console and expedite
+RCU grace periods from the first startup service on (`jukahub-quietboot`,
+`S01`), mount the SD card early, skip the repeated stock
 splash, read up to 32 MiB of JukaHub in parallel with stock startup (bounded
 to one second), let completed TRIMUI_EX setup finish after Home, and briefly
 boost the CPU until Home. They preserve the stock launcher and its
 failed-start fallback.
 The installer checks the exact firmware files tested on one TG5040 and leaves
-other versions untouched. It does not change U-Boot or the kernel. See
+other versions untouched. It does not change U-Boot or the kernel; **Settings → General → Silent boot**
+is the separate, opt-in switch for the bootloader's `loglevel`, which decides
+the kernel's own start ([BOOT.md](../../docs/BOOT.md#silent-boot)). See
 [JukaHub OS boot](../../docs/JUKAHUB_OS.md#how-it-boots) for measured times and
 restoration. The image below is a different, still unbooted experiment.
 On the tested stock card, the early read reduced kernel-start-to-Home from
@@ -185,7 +189,7 @@ bootloader's and kernel's plus JukaHub's start. The builder trims what it
 can in the card's copy of U-Boot's environment; on firmware that rewrites
 `root=` at runtime, `/rdinit` is the independent way to reach the SD root.
 It sets `bootdelay=0` (no wait
-at U-Boot's prompt), `quiet` in place of the stock `loglevel=8` (every kernel
+at U-Boot's prompt), `quiet loglevel=1` in place of the stock `loglevel=8` (every kernel
 message printed to the 115200-baud serial console makes the kernel wait for
 the UART, which costs time), removes `earlyprintk`, and sets `lpj=` with the stock kernel's own
 delay-loop value when `dump-board.sh` found one in the boot messages (`LPJ=`
@@ -324,7 +328,7 @@ shows `root=PARTUUID=` of the card's system partition and
 
 Then, before anyone else gets this, on a real Smart Pro: first boot to JukaHub and
 its time (os.log, boot.log); the boot frame on the second boot (Home at once,
-no black flash before JukaHub's first frame); that `quiet` and `bootdelay=0`
+no black flash before JukaHub's first frame); that `quiet loglevel=1` and `bootdelay=0`
 reached the kernel (`/proc/cmdline`); sticks, buttons, both shoulder pairs and the menu key; speaker,
 headphones and volume; brightness; a RetroArch game with BIOS, save and
 resume; Wi-Fi joining and surviving a restart; Bluetooth; sleep and wake;

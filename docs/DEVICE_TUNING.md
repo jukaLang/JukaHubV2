@@ -160,28 +160,127 @@ running.
 Background on the TSP's shared policy, the stock `cpufreq.sh` defaults and the
 2 GHz heat trade-off: <https://github.com/guiopen/tsp-optimization>.
 
-### Xbox boost
+### CPU boost in games and the heat guard
 
-An Xbox game (hakuX on the Smart Pro) or an Xbox stream (GreenOvercast, started
-from the X1 pill, Cloud Gaming or the library's Ports row) gets more than the
-launch profile: on 1 GB of RAM and four A53 cores neither has a frame to spare.
-Settings → Games & emulators → **Xbox boost** (`xboxBoost`, on by default) does
-this for that launch only:
+Two things keep a game's clock where it belongs: **CPU boost in games** raises
+it, and the **heat guard** lowers it whenever the handheld gets too hot,
+whoever set the clock.
+
+**CPU boost in games** (Settings → Games & emulators, `cpuBoostGames`: `auto`
+by default, `always` or `off`). The launch profile above lifts the governor and
+the ceiling before the game starts, but the firmware's own launch scripts run
+after it: TrimUI's `cpufreq.sh` files put an emulator back on `ondemand`,
+sometimes under a lower ceiling, and Automatic CPU speed used to read a game
+waiting on its GPU as quiet and step it down. A boosted launch is held instead.
+Three seconds after the start, when the script's lines have run, every parked
+core comes online and the clock is held at the top of what the launch may use:
+`scaling_max_freq` there and, when the governor left is a dynamic one,
+`scaling_min_freq` too, so no governor idles the clock between frames. With
+Full speed while playing off, the top is the firmware's own ceiling. Auto
+boosts N64, PSP, Dreamcast (NAOMI, Atomiswave), DS, Saturn, Jaguar, GameCube,
+Wii and PS2 games, ports, and every game the Heavy-game boost takes, while the
+PlayStation and the 8/16-bit consoles, which run at full speed well under the
+top clock, keep following Automatic CPU speed (and save the battery); Always
+boosts every game. A game's own options win: Performance there is a
+boost, while Battery saver, Balanced or a CPU limit are not. An emulator on the
+`userspace` governor (NextUI's minarch) sets its own clock and gets the heat
+guard only. Everything goes back when the game ends, only where it is still
+the value written, and the auto-performance marker in the temp directory
+covers a crash. While it holds, the Automatic CPU speed row reads
+`<game> · CPU boost · 2.0 GHz` (`heavy-game boost` for those games), and the
+boost row shows the last session: `Last boosted: Tekken 3 · 2.0 GHz · peak 74 °C`.
+
+**The heat guard** has no off switch, like the fan's emergency speed. Every two
+seconds (in Automatic CPU speed's tick, whether that is on or not) it reads the
+hottest CPU/GPU thermal zone and the battery's own `temp`, and moves one dial:
+the highest clock the heat allows.
+
+| Reading | What the dial does |
+|---|---|
+| 3 °C or more under the soft limit (battery: 2 °C) | after 20 s, one operating point back up every 15 s, never sooner than 45 s after a step down; a level that proved too hot is tried again only every 2 minutes, until the chip has been cool for 3 minutes |
+| just under the soft limit | holds; Automatic CPU speed steps no higher |
+| soft limit | one step under the clock in front at once, then one more every 20 s while the reading is not falling |
+| hard limit | one step every 4 s |
+| critical limit | straight to 1.0 GHz, then lower (down to 600 MHz) while it stays there |
+
+Hot and very hot steps stop at the first operating point at or above 1.0 GHz:
+the game slows, it does not stop. Automatic CPU speed and CPU boost keep their
+clock under the dial. A game JukaHub does not clock (its own CPU setting, a
+launch script's ceiling, Automatic CPU speed off, the Heavy-game boost with CPU
+boost off) has its `scaling_max_freq` lowered to the dial, and a raised
+`scaling_min_freq` with it, and both put back once the dial lifts, only where
+the value is still the guard's: a newer value someone else wrote is theirs.
+
+The limits are per model. Chip temperature in °C, soft / hard / critical, on
+**Heat limit** → Standard:
+
+| Model | Chip | Why |
+|---|---|---|
+| Smart Pro (TG5040) | 80 / 87 / 95 | the thresholds Automatic CPU speed always used |
+| Smart Pro S (TG5050) | 82 / 88 / 95 | its fan is flat out by 75 °C |
+| Brick Pro (TG4040) | 76 / 83 / 92 | a smaller body than the Smart Pro |
+| Brick and Hammer (TG3040), an unidentified TrimUI | 75 / 82 / 92 | the smallest body, whose metal back is the heat sink |
+
+The battery's are 45 / 50 / 55 °C on every model. **Cooler** takes 6, 5 and
+3 °C off the chip's limits and 3 and 2 off the battery's soft and hard ones;
+**Warmer** adds 4 to the chip's soft and hard limits and 2 to the battery's.
+The critical limit always stays 10 °C under the kernel's own lowest hot or
+critical trip point on the chip's zones, and each limit at least a few degrees
+under the next. With no temperature reading at all the dial holds, and only
+the kernel's own limits apply.
+
+A RetroArch game shows one line on its message line when the guard first slows
+it ("Hot (84 °C): CPU slowed to 1.6 GHz to cool down"), one at critical ("Very
+hot (95 °C): CPU at 1.0 GHz, save and let it cool") and one when it is back at
+full speed; JukaHub's in-game menu adds "(cooling)" to its temperature
+meanwhile, and the hub gets a toast. The log's `heat` lines name the model's
+limits and the kernel's trip points at start, every step (`84 °C (hot, limit
+80 °C): CPU limit none → 1.8 GHz`) and each warm game's peak when it ends.
+Settings → Games & emulators → **Heat limit** shows the temperature and what
+the dial does now, and Drivers & hardware's Thermal line says where it starts.
+`JUKAHUB_HEAT_GUARD=0` in the environment turns the guard off for one run, for
+comparing.
+
+### Heavy-game boost
+
+An Xbox game (hakuX), a GameCube, Wii or PS2 game where the handheld plays
+them, an Xbox stream (GreenOvercast, started from the X1 pill, Cloud Gaming or
+the library's Ports row) and — on the A133P models (Smart Pro, Brick, Brick
+Pro, Hammer) — a PSP, Dreamcast (NAOMI, Atomiswave), Saturn, Jaguar, N64 or DS
+game get more than the launch profile: on 1 GB of RAM and four A53 cores none
+of them has a frame to spare. The Smart Pro S plays the second group without
+it. Settings → Games & emulators → **Heavy-game boost** (`xboxBoost`, on by
+default; it was called Xbox boost until 2026-11-21 and the key kept that name)
+does this for that launch only:
 
 - the launch profile at full speed even with `powerProfiles` off (a
   `powerProfileMaxFreq` cap and the game's own CPU options still apply), and
   Automatic CPU speed stands aside, so the clock never steps down while the
-  game waits on its GPU;
+  game waits on its GPU (CPU boost in games holds it at the top unless that is
+  off, and only the [heat guard](#cpu-boost-in-games-and-the-heat-guard) slows
+  it);
 - every parked core online (`cpuN/online` reading `0`);
 - the GPU's devfreq node (a name containing `gpu` under `/sys/class/devfreq`)
   on its `performance` governor, or with `min_freq` raised to `max_freq` where
   it has none;
+- the memory controller's devfreq node, where the kernel has one (a name with
+  `dram`, `ddr` or `dmc`), the same way: an emulator of a 3D console waits on
+  memory as much as on the CPU;
+- the read-ahead of the disk the game is read from
+  (`/sys/block/<disk>/queue/read_ahead_kb`) raised to 1024 KB where it is
+  lower — the kernel's default is 128 KB — so a disc image streamed during play
+  is read in long runs;
 - JukaHub's memory: its textures and byte caches are emptied before the start,
   then the Go heap is handed back, the warm speech recognizer, the media
   library scan and the video link prefetch stop, and the page cache is dropped
   and compacted (every game start already stops the offline AI and the Piper
-  voice);
-- the game's process group at nice −5, ahead of background work;
+  voice); a start in the first minutes after power-on sets up the swap
+  (Extra memory) at once instead of waiting for its quiet moment;
+- the game's process group at nice −5, ahead of background work, and JukaHub's
+  own threads at nice 10 in the idle I/O class until the game ends (only
+  threads that were higher are moved, and each gets its own value back);
+- on a chip with a faster CPU cluster (the Smart Pro S: four cores at 2.0 GHz,
+  four at 1.4 GHz) the game held to the fast cluster's cores from its start;
 - "Hey Juka" closed for the game;
 - streams only: Wi-Fi power saving off (`iw`, else `iwconfig`), as the
   Moonlight hand-off does.
@@ -193,11 +292,46 @@ The log's `xbox` lines name each change (`boost on for Halo: …`, `boost off
 after 42m0s of Halo: 3 of 3 values put back`), and the Settings row shows what
 the last session got.
 
-What the boost cannot do is make hakuX itself faster. In a game, **Menu** opens
-hakuX's settings: a lower render scale (0.5× is the default) and display frame
-skip matter most, and both are kept per game ("Apply settings" and a restart
-for the scale). For a stream that stutters, pick 720p and 30 fps in
-GreenOvercast's settings.
+What the boost cannot do is make an emulator itself faster: that is the
+emulators' own settings (see [Emulator speed](#emulator-speed) for RetroArch's
+cores and JukaHub's PPSSPP, and GameCube speed for Dolphin). In an Xbox game,
+**Menu** opens hakuX's settings: a lower render scale (0.5× is the default)
+and display frame skip matter most, and both are kept per game ("Apply
+settings" and a restart for the scale). For a stream that stutters, pick 720p
+and 30 fps in GreenOvercast's settings.
+
+### Emulator speed
+
+Settings → Emulation → **Speed** decides, per console ("Adjust for"), how much
+accuracy the emulators trade for frames. Each launch from the library gets its
+console's level for that launch only, put back when RetroArch exits:
+
+| Level | What it writes |
+|-------|----------------|
+| **Fast** | Frames skipped only when the handheld falls behind (the cores' audio-buffer frameskip: `auto` in PCSX-ReARMed, FBNeo, MAME 2003 / 2003-Plus, PicoDrive, Genesis Plus GX, Snes9x, gpSP, mGBA, Handy, Beetle PCE Fast; PPSSPP's automatic frameskip; Flycast's automatic skip at "some"; YabaSanshiro's / Yabause's frameskip), Mupen64Plus-Next's threaded renderer and frame duping, melonDS's threaded renderer, DeSmuME's JIT, Virtual Jaguar's fast blitter, Opera's DSP thread; on every console above the 8/16-bit ones, RetroArch's run-ahead, preemptive frames and rewind off, an audio buffer of at least 64 ms for the frameskip to watch (unless that console's Latency is Low or Lowest) and, on the A133P with Threaded video on Auto, threaded video (software-drawn cores hand the GPU driver's work to another core) |
+| **Fastest** | Fast, plus: PSP lazy texture caching, low curve detail, GPU read-backs skipped; Dreamcast DSP off, per-strip alpha sorting, no mipmaps or anisotropic filtering, more skippable frames; PCSX-ReARMed's GPU thread asynchronous; DeSmuME skipping one frame in two; ARMSX2's EE at 75% with mild cycle skipping; N64 Light graphics |
+| **Emulators' own** | nothing |
+
+**Auto** (the default) is by console and chip: the 8/16-bit consoles and the
+handhelds keep their emulators' own settings; PlayStation, N64, DS, arcade and
+the CD consoles get Fast; PSP, Dreamcast, Saturn, Jaguar and PS2 get Fastest on
+the A133P models and Fast on the Smart Pro S. GameCube and Wii follow
+**GameCube speed** (the Speed row with GameCube or Wii picked is that setting);
+**PS2 speed** under Games & emulators is the PS2's own Speed.
+
+A setting someone made wins: an option is written only where the core's
+options file holds the core's own default for it, a key the file lacks is not
+added, and a game's or a folder's own options file (RetroArch's "Save Game
+Options") is left alone. A core that never ran has no options file yet;
+RetroArch writes one when it exits, so its second start gets the level.
+JukaHub's own PPSSPP gets the PSP's level in its `ppsspp.ini` the same way
+(`FrameSkip 1` + `AutoFrameSkip`; Fastest adds `TextureBackoffCache`,
+`SplineBezierQuality 0`, skipped GPU read-backs and no anisotropic filtering),
+journalled in `emu-speed-ppsspp.json` and put back after the game. Heavy
+consoles' cores also log warnings only once a core has played a game in this
+run of JukaHub (a game that does not start is still diagnosed from the first
+launch's full log). The log's `emulation` lines (`emulator speed for this
+launch`) say what each launch got.
 
 ## PortMaster audio, per launch
 
@@ -347,7 +481,7 @@ Three additions to Settings → Stick lights:
 ## GPU boost in games
 
 Settings → Power & battery → **GPU boost in games** (`gpuBoost`) does for
-other games what Xbox boost does for the GPU: the GPU's devfreq node (a name
+other games what Heavy-game boost does for the GPU: the GPU's devfreq node (a name
 containing `gpu` under `/sys/class/devfreq`) runs its `performance` governor,
 or has `min_freq` raised to `max_freq`, for the length of one launch.
 
@@ -357,8 +491,8 @@ or has `min_freq` raised to `max_freq`, for the length of one launch.
 | `always` | every game and port |
 | `off` | none |
 
-It uses Xbox boost's own plan and lock, so the two never write the node at
-once, and a launch Xbox boost already holds is left to it. Values are put back
+It uses Heavy-game boost's own plan and lock, so the two never write the node
+at once, and a launch Heavy-game boost already holds is left to it. Values are put back
 when the game's process group is gone, only where they are still the ones
 written; a marker in the temp directory (`jukahub-gpu-boost.json`) lets the
 next start put back what a crash left. CPU governors are not touched

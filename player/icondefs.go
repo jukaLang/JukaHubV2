@@ -298,6 +298,11 @@ var iconDefs = [...]iconDef{
 		s: M6 10 V20 M10 10 V20 M14 10 V20 M18 10 V20
 		f: R4.6 10 2.8 5.5 0.7 R8.6 10 2.8 5.5 0.7 R16.6 10 2.8 5.5 0.7
 		s: M6 7 M10 7 M14 7 M18 7`},
+	{"pads", `
+		s: R2.5 2.5 19 19 3
+		f: R5.5 5.5 3.6 3.6 0.8 R10.2 5.5 3.6 3.6 0.8 R14.9 5.5 3.6 3.6 0.8
+		f: R5.5 10.2 3.6 3.6 0.8 R10.2 10.2 3.6 3.6 0.8 R14.9 10.2 3.6 3.6 0.8
+		f: R5.5 14.9 3.6 3.6 0.8 R10.2 14.9 3.6 3.6 0.8 R14.9 14.9 3.6 3.6 0.8`},
 	{"language", `
 		s: M2 5 H12 M7 2 V5
 		s: M10 5 Q9 11 3 15
@@ -727,6 +732,8 @@ var iconAliasPairs = [...][2]string{
 	{"synthesizer", "synth"},
 	{"piano", "synth"},
 	{"groovebox", "synth"},
+	{"sampler", "pads"},
+	{"drumpads", "pads"},
 	{"podcast", "mic"},
 	{"podcasts", "mic"},
 	{"microphone", "mic"},

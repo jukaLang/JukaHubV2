@@ -56,7 +56,7 @@ var musicSettings musicSettingsState
 // musicSettingsRows is the fixed list; the order is the reading order.
 func musicSettingsRows() []musicSettingsRow {
 	return []musicSettingsRow{
-		{msRowLayout, "Now Playing layout", "Auralis Pro is the artwork card; StockOS is the compact list-first screen."},
+		{msRowLayout, "Now Playing layout", "Auralis Pro is the artwork card; StockOS is the compact list-first screen; iPod is the click-wheel style screen with its own menus, themes and servers."},
 		{msRowArtOpacity, "Cover art opacity", "How strongly the artwork tile and its spectrum show through the card."},
 		{msRowScreenMode, "Screen-off controls", "What still works while the panel is dark: any key wakes, Controls keeps transport and volume, Select only ignores stray presses."},
 		{msRowBackground, "Background playback", "Keep playing when you leave the player. In the player, Y + Left toggles it too."},
@@ -65,7 +65,11 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowGameQuiet, "Quiet the game while music plays", "Music started from the in-game menu (Select + L2) mutes a RetroArch game's own sound until the music stops."},
 		{msRowMusicTidy, "Tidy the Music folder", "After a library scan, songs loose in Music move into Music/Singles and an album folder dropped into Music moves to Music/Artist/Album. Nothing is ever overwritten."},
 		{msRowBitPerfect, "Bit-perfect DAC output", "Bypass the equaliser, tempo and spatial audio. With a USB DAC, lossless tracks play at their own rate and bit depth, unscaled (use the DAC's volume); UI sounds are muted while they do."},
-		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz. Open it with G in the player."},
+		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz, with the iPod's presets. A opens it (L2 or G in the player); Left/Right switch it on or off."},
+		{msRowAutoEQ, "AutoEQ headphones", "Correct your headphones to neutral with an AutoEq profile, searched offline once the list is downloaded. Your own ParametricEQ.txt files in Music/AutoEQ are listed first."},
+		{msRowSoundFX, "Sound effects", "Tape Mode (wow and flutter, hiss, saturation, roll-off, tape speed), reverb, ping-pong delay, chorus, flanger and the playback speed. R2 or X in the player."},
+		{msRowVisualizer, "Visualizer", "The full-screen visualizer (Start or V): ten styles drawn from what you hear, in four dithered shades."},
+		{msRowServers, "Music servers & scrobbling", "Navidrome, Jellyfin, Last.fm and ListenBrainz: A shows a code that opens the setup page on your phone."},
 		{msRowSpatialMode, "Spatial audio", spatialModeHint},
 		{msRowSpatialStrength, "Spatial strength", spatialStrengthHint},
 		{msRowSpatialRoom, "Virtual room", spatialRoomHint},
@@ -105,6 +109,9 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 	}
 	if v, ok := musicExtrasPanelValue(row.kind, config); ok {
 		return v // musictidy.go, ingame_music.go
+	}
+	if v, ok := musicPodSettingsValue(row.kind, config); ok {
+		return v // musicpanels.go
 	}
 	switch row.kind {
 	case msRowLayout:
@@ -148,12 +155,13 @@ func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
 	if musicExtrasPanelAdjust(row.kind, config) {
 		return true
 	}
+	// The AutoEQ, effects, visualizer and servers rows (musicpanels.go).
+	if musicPodSettingsAdjust(row.kind, dir, config) {
+		return true
+	}
 	switch row.kind {
 	case msRowLayout:
-		next := musicLayoutStockOS
-		if musicLayoutFromConfig(config) == musicLayoutStockOS {
-			next = musicLayoutAuralis
-		}
+		next := musicLayoutCycle(musicLayoutFromConfig(config), dir)
 		musicSetLayout(config, next)
 		showToast("Layout: "+next.label(), ToastInfo())
 	case msRowArtOpacity:
@@ -235,6 +243,10 @@ func onOff(on bool) string {
 // musicSettingsActivate handles A / Enter on a row: the ones that are really
 // commands act, the rest step forward like Right.
 func musicSettingsActivate(row musicSettingsRow, config *Config) {
+	// The rows that open a panel of their own (musicpanels.go).
+	if musicPodSettingsActivate(row.kind, config) {
+		return
+	}
 	if row.kind == msRowShortcuts {
 		shortcutsOpen = true
 		PlayActivateSound()

@@ -834,7 +834,9 @@ func gmqMonitorLines() (string, string) {
 		a = append(a, fmt.Sprintf("%d MHz", s.freqMHz))
 	}
 	if s.tempOK {
-		a = append(a, fmt.Sprintf("%d °C", int(s.tempC+0.5)))
+		// "(cooling)" while the heat guard holds the game's clock down
+		// (heatguard.go).
+		a = append(a, fmt.Sprintf("%d °C", int(s.tempC+0.5))+heatGuardQuickNote())
 	}
 	if s.memOK && s.memTotal > 0 {
 		a = append(a, fmt.Sprintf("RAM %d / %d MB", s.memUsed>>20, s.memTotal>>20))

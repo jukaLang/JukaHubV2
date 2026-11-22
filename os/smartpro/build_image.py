@@ -462,8 +462,10 @@ def rewrite_bootimg_cmdline(raw: bytes, partuuid: str, fstype: str, init: str = 
 
 # Boot time: the stock line prints every kernel message (loglevel=8) to the
 # 115200-baud serial console, and printk waits for the UART, which costs
-# seconds. The image boots "quiet" (warnings and worse only); lpj= skips the
-# delay-loop calibration where the stock kernel ran one (dump-board.sh).
+# seconds. The image boots "quiet loglevel=1": emergencies only (quiet alone
+# still prints warnings and errors, and Allwinner's drivers print many); the
+# kernel's buffer keeps every message for boot-dmesg.txt. lpj= skips the delay-loop calibration where the stock kernel
+# ran one (dump-board.sh).
 SPEED_KEYS = ("loglevel", "quiet", "lpj", "earlyprintk")
 # --boot-profile and --initcall-blacklist: never taken over from the stock
 # line, only added when asked for.
@@ -502,7 +504,7 @@ def rewrite_args(args: str, partuuid: str, fstype: str, lpj: str | None = None,
                       ("init", f"init={init}"), ("ro", "ro"), ("rootwait", "rootwait")):
         if key not in seen and not (key == "ro" and "rw" in seen):
             words.append(word)
-    words.append("quiet")
+    words.extend(("quiet", "loglevel=1"))  # the last level word wins
     if lpj:
         words.append(f"lpj={lpj}")
     words.extend(extra)

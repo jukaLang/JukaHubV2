@@ -111,16 +111,54 @@ func musicAudioFilterChain(speed float64, enabled, bitPerfect bool, gains [music
 			parts = append(parts, graph)
 		}
 	}
-	if speed > 0 && math.Abs(speed-1) > 0.01 {
-		parts = append(parts, fmt.Sprintf("atempo=%.2f", speed))
+	if tempo := musicAtempoChain(speed); tempo != "" {
+		parts = append(parts, tempo)
 	}
 	return strings.Join(parts, ",")
 }
 
-// musicPEQCurrentChain reads the live state for the decoder.
-func musicPEQCurrentChain(speed float64) string {
+// musicAtempoChain is the atempo filters for a speed. One atempo takes 0.5 to
+// 2 on every ffmpeg this runs with, so 1/16x is four halvings. "" at 1x. Pure.
+func musicAtempoChain(speed float64) string {
+	if speed <= 0 || math.Abs(speed-1) <= 0.01 {
+		return ""
+	}
+	var parts []string
+	for speed < 0.5-1e-9 && len(parts) < 8 {
+		parts = append(parts, "atempo=0.5")
+		speed /= 0.5
+	}
+	for speed > 2+1e-9 && len(parts) < 8 {
+		parts = append(parts, "atempo=2")
+		speed /= 2
+	}
+	if math.Abs(speed-1) > 0.001 {
+		parts = append(parts, fmt.Sprintf("atempo=%s", strconv.FormatFloat(speed, 'f', 4, 64)))
+	}
+	return strings.Join(parts, ",")
+}
+
+// musicPEQCurrentChain reads the live state for the decoder: the AutoEQ
+// headphone profile (musicautoeq.go), the 31-band curve, the speed, and
+// Tape Mode's tape speed (musicfx.go). rate is the output rate the tape speed
+// is worked out at.
+func musicPEQCurrentChain(speed float64, rate int32) string {
 	musicPEQEnsureLoaded()
-	return musicAudioFilterChain(speed, musicEQ.enabled, musicEQ.bitPerfect, musicEQ.gains)
+	chain := musicAudioFilterChain(speed, musicEQ.enabled, musicEQ.bitPerfect, musicEQ.gains)
+	if musicEQ.bitPerfect {
+		return chain
+	}
+	var parts []string
+	if auto := musicAutoEQChain(); auto != "" {
+		parts = append(parts, auto)
+	}
+	if chain != "" {
+		parts = append(parts, chain)
+	}
+	if tape := musicTapeFilter(musicFXTapeFactor(), rate); tape != "" {
+		parts = append(parts, tape)
+	}
+	return strings.Join(parts, ",")
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -131,6 +169,17 @@ func musicPEQCurrentChain(speed float64) string {
 // as an intent rather than 31 magic numbers.
 func musicPEQPresetGains(name string) [musicPEQBands]float64 {
 	var g [musicPEQBands]float64
+	// The iPod's own presets are ten-band curves: they go on the octave bands
+	// (31.5 Hz … 16 kHz, every third ISO band), whose Q of 1 overlaps them into
+	// one smooth curve the way a ten-band graphic EQ does.
+	for _, p := range musicPEQIPodPresets {
+		if strings.EqualFold(p.name, name) {
+			for i, v := range p.gains {
+				g[2+3*i] = v
+			}
+			return g
+		}
+	}
 	for i, f := range musicPEQFrequencies {
 		switch strings.ToLower(name) {
 		case "bass":
@@ -171,8 +220,43 @@ func musicPEQPresetGains(name string) [musicPEQBands]float64 {
 	return g
 }
 
-// musicPEQPresetNames is the order Y steps through.
-var musicPEQPresetNames = []string{"Flat", "Bass", "Vocal", "Rock", "Night"}
+// musicPEQIPodPresets are the iPod's EQ list, as ten octave gains (31.5 Hz to
+// 16 kHz) in dB.
+var musicPEQIPodPresets = []struct {
+	name  string
+	gains [10]float64
+}{
+	{"Acoustic", [10]float64{5, 4.9, 4, 1, 2.2, 1.8, 3.5, 4.1, 3.6, 2.2}},
+	{"Bass Booster", [10]float64{5.5, 4.4, 3.5, 2.5, 1.3, 0, 0, 0, 0, 0}},
+	{"Bass Reducer", [10]float64{-5.5, -4.4, -3.5, -2.5, -1.3, 0, 0, 0, 0, 0}},
+	{"Classical", [10]float64{4.8, 3.8, 3, 2.5, -1.5, -1.5, 0, 2.3, 3.3, 3.8}},
+	{"Dance", [10]float64{3.6, 6.6, 5, 0, 1.9, 3.7, 5.2, 4.5, 3.6, 0}},
+	{"Deep", [10]float64{5, 3.6, 1.8, 1, 2.9, 2.5, 1.5, -2.2, -3.6, -4.6}},
+	{"Electronic", [10]float64{4.3, 3.8, 1.2, 0, -2.2, 2.3, 0.9, 1.3, 4, 4.8}},
+	{"Hip-Hop", [10]float64{5, 4.3, 1.5, 3, -1, -1, 1.5, -0.5, 2, 3}},
+	{"Jazz", [10]float64{4, 3, 1.5, 2.3, -1.5, -1.5, 0, 1.5, 3, 3.8}},
+	{"Latin", [10]float64{4.5, 3, 0, 0, -1.5, -1.5, -1.5, 0, 3, 4.5}},
+	{"Loudness", [10]float64{6, 4, 0, 0, -2, 0, -1, -5, 5, 1}},
+	{"Lounge", [10]float64{-3, -1.5, -0.5, 1.5, 4, 2.5, 0, -1.5, 2, 1}},
+	{"Piano", [10]float64{3, 2, 0, 2.5, 3, 1.5, 3.5, 4.5, 3, 3.5}},
+	{"Pop", [10]float64{-1.5, -1, 0, 2, 4, 4, 2, 0, -1, -1.5}},
+	{"R&B", [10]float64{2.6, 6.9, 5.7, 1.3, -2.2, -1.5, 2.3, 2.7, 3, 3.8}},
+	{"Small Speakers", [10]float64{5.5, 4.3, 3.5, 2.5, 1.3, 0, -1.3, -2.5, -3.5, -4.3}},
+	{"Spoken Word", [10]float64{-3.5, -0.5, 0, 0.7, 3.5, 4.6, 4.8, 4.3, 2.5, 0}},
+	{"Treble Booster", [10]float64{0, 0, 0, 0, 0, 1.3, 2.5, 3.5, 4.3, 5.5}},
+	{"Treble Reducer", [10]float64{0, 0, 0, 0, 0, -1.3, -2.5, -3.5, -4.3, -5.5}},
+	{"Vocal Booster", [10]float64{-1.5, -3, -3, 1.5, 3.8, 3.8, 3, 1.5, 0, -1.5}},
+}
+
+// musicPEQPresetNames is the order Y steps through: JukaHub's five, then the
+// iPod's list.
+var musicPEQPresetNames = func() []string {
+	names := []string{"Flat", "Bass", "Vocal", "Rock", "Night"}
+	for _, p := range musicPEQIPodPresets {
+		names = append(names, p.name)
+	}
+	return names
+}()
 
 // musicPEQCyclePreset returns the next preset and its curve.
 func musicPEQCyclePreset(current string) (string, [musicPEQBands]float64) {
@@ -236,6 +320,10 @@ func musicPEQLoad(config *Config) {
 	}
 	musicEQ.preset = musicPEQMatchPreset(musicEQ.gains)
 	musicPEQLoaded = true
+	// The AutoEQ headphone profile sits in front of the curve (musicautoeq.go),
+	// and the proxy's song cache reads its size cap (musicproxy.go).
+	musicAutoEQLoad(config)
+	musicCacheBind(config)
 }
 
 // musicPEQSave writes the equaliser back into the config's custom variables.

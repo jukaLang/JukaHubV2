@@ -19,6 +19,8 @@ EARLY=/etc/init.d/jukahub-earlysd
 EARLY_LINK=/etc/rc.d/S41jukahub-earlysd
 PREFETCH=/etc/init.d/jukahub-earlyprefetch
 PREFETCH_LINK=/etc/rc.d/S42jukahub-earlyprefetch
+QUIET=/etc/init.d/jukahub-quietboot
+QUIET_LINK=/etc/rc.d/S01jukahub-quietboot
 BOOST=/mnt/SDCARD/System/starts/00-jukahub-bootboost.sh
 EX_WANT=/tmp/jukahub-ex-init-want.$$
 BOOST_WANT=/tmp/jukahub-boost-want.$$
@@ -27,6 +29,7 @@ RUN_ORIGINAL_SHA=a907221999794038941afceb9571315a69ce884d2f58c14701ef06a08b4535c
 RUN_PATCHED_SHA=5cc2dce4809fef80d13b2d5fe31a74000fb913eb41c02f56bd6624c5426a1121
 EARLY_SHA=2e8dd37ea529ae41247954f15e624ee20413a7727a22a3925c34c382187cc55b
 PREFETCH_SHA=f54015266fe638e3da137a36b81cff6265edc94d1f9d5bf0d502e0fef8af0a1f
+QUIET_SHA=d8b48fcad4624b744ec22e7001f5eed112f5dd59b7b5b86dee945e727f373bb9
 EX_ORIGINAL_SHA=292f803627e5aa3a69abb92de63deb770a7d966bf8ce6ae29cf3a31dfa252001
 EX_LEGACY_SHA=6ceacabdaeeffdb774e801d7fd2ffd545199ddf0fb104ef4b3a2db18ba14dcca
 BOOST_LEGACY_SHA=f4de121254fceeea84b53b4d1f1648feef997c2dbaf434b70a68000921f041be
@@ -47,9 +50,10 @@ installed() {
     original_run "$RUN_OLD" && original_ex "$EX_OLD" &&
         same "$RUN" "$BASE/runtrimui-patched" && same "$EX" "$EX_WANT" &&
         same "$EARLY" "$BASE/jukahub-earlysd" && same "$PREFETCH" "$PREFETCH_WANT" &&
-        same "$BOOST" "$BOOST_WANT" &&
+        same "$BOOST" "$BOOST_WANT" && same "$QUIET" "$BASE/jukahub-quietboot" &&
         [ "$(readlink "$EARLY_LINK" 2>/dev/null)" = ../init.d/jukahub-earlysd ] &&
-        [ "$(readlink "$PREFETCH_LINK" 2>/dev/null)" = ../init.d/jukahub-earlyprefetch ]
+        [ "$(readlink "$PREFETCH_LINK" 2>/dev/null)" = ../init.d/jukahub-earlyprefetch ] &&
+        [ "$(readlink "$QUIET_LINK" 2>/dev/null)" = ../init.d/jukahub-quietboot ]
 }
 
 copy_boot_file() {
@@ -68,10 +72,12 @@ prepare() {
     sed "s|@APP_DIR@|$APP|g" "$BASE/ex_init-wrapper" >"$EX_WANT" || fail 'cannot prepare the update wrapper'
     sed "s|@APP_DIR@|$APP|g" "$BASE/00-jukahub-bootboost.sh" >"$BOOST_WANT" || fail 'cannot prepare the CPU boost'
     sed "s|@APP_DIR@|$APP|g" "$BASE/jukahub-earlyprefetch" >"$PREFETCH_WANT" || fail 'cannot prepare the early read-ahead'
-    [ -f "$BASE/jukahub-earlysd" ] && [ -f "$BASE/jukahub-earlyprefetch" ] && [ -f "$BASE/runtrimui-patched" ] || fail 'package files are missing'
+    [ -f "$BASE/jukahub-earlysd" ] && [ -f "$BASE/jukahub-earlyprefetch" ] && [ -f "$BASE/runtrimui-patched" ] &&
+        [ -f "$BASE/jukahub-quietboot" ] || fail 'package files are missing'
     [ "$(digest "$BASE/runtrimui-patched")" = "$RUN_PATCHED_SHA" ] || fail 'launcher patch in package is damaged'
     [ "$(digest "$BASE/jukahub-earlysd")" = "$EARLY_SHA" ] || fail 'early SD hook in package is damaged'
     [ "$(digest "$BASE/jukahub-earlyprefetch")" = "$PREFETCH_SHA" ] || fail 'early read-ahead hook in package is damaged'
+    [ "$(digest "$BASE/jukahub-quietboot")" = "$QUIET_SHA" ] || fail 'quiet boot hook in package is damaged'
 }
 
 install() {
@@ -89,12 +95,16 @@ install() {
     { [ ! -e "$EX_OLD" ] && original_ex "$EX"; } || [ -e "$EX_OLD" ] || fail 'TRIMUI_EX backup is missing'
     { [ ! -e "$EARLY" ] || same "$EARLY" "$BASE/jukahub-earlysd"; } || fail 'early SD hook is unfamiliar'
     { [ ! -e "$PREFETCH" ] || same "$PREFETCH" "$PREFETCH_WANT"; } || fail 'early read-ahead hook is unfamiliar'
+    { [ ! -e "$QUIET" ] || same "$QUIET" "$BASE/jukahub-quietboot"; } || fail 'quiet boot hook is unfamiliar'
     { [ ! -e "$BOOST" ] || legacy_boost "$BOOST" || v1_boost "$BOOST" || same "$BOOST" "$BOOST_WANT"; } || fail 'CPU boost hook is unfamiliar'
     if [ -e "$EARLY_LINK" ] || [ -L "$EARLY_LINK" ]; then
         [ "$(readlink "$EARLY_LINK")" = ../init.d/jukahub-earlysd ] || fail 'early SD startup link is unfamiliar'
     fi
     if [ -e "$PREFETCH_LINK" ] || [ -L "$PREFETCH_LINK" ]; then
         [ "$(readlink "$PREFETCH_LINK")" = ../init.d/jukahub-earlyprefetch ] || fail 'early read-ahead startup link is unfamiliar'
+    fi
+    if [ -e "$QUIET_LINK" ] || [ -L "$QUIET_LINK" ]; then
+        [ "$(readlink "$QUIET_LINK")" = ../init.d/jukahub-quietboot ] || fail 'quiet boot startup link is unfamiliar'
     fi
     if installed; then
         echo 'stock-fastboot: installed'
@@ -108,6 +118,8 @@ install() {
     if [ ! -L "$EARLY_LINK" ]; then ln -s ../init.d/jukahub-earlysd "$EARLY_LINK" || fail 'cannot enable early SD mount'; fi
     same "$PREFETCH" "$PREFETCH_WANT" || copy_boot_file "$PREFETCH_WANT" "$PREFETCH"
     if [ ! -L "$PREFETCH_LINK" ]; then ln -s ../init.d/jukahub-earlyprefetch "$PREFETCH_LINK" || fail 'cannot enable early read-ahead'; fi
+    same "$QUIET" "$BASE/jukahub-quietboot" || copy_boot_file "$BASE/jukahub-quietboot" "$QUIET"
+    if [ ! -L "$QUIET_LINK" ]; then ln -s ../init.d/jukahub-quietboot "$QUIET_LINK" || fail 'cannot enable the quiet boot'; fi
     same "$RUN" "$BASE/runtrimui-patched" || copy_boot_file "$BASE/runtrimui-patched" "$RUN"
     same "$EX" "$EX_WANT" || copy_boot_file "$EX_WANT" "$EX"
     same "$BOOST" "$BOOST_WANT" || copy_boot_file "$BOOST_WANT" "$BOOST"
@@ -156,6 +168,18 @@ restore() {
         rm -f "$PREFETCH" || bad=1
     elif [ -e "$PREFETCH" ]; then
         echo 'stock-fastboot: early read-ahead hook changed; kept it' >&2
+        bad=1
+    fi
+    if [ -L "$QUIET_LINK" ] && [ "$(readlink "$QUIET_LINK")" = ../init.d/jukahub-quietboot ]; then
+        rm -f "$QUIET_LINK" || bad=1
+    elif [ -e "$QUIET_LINK" ] || [ -L "$QUIET_LINK" ]; then
+        echo 'stock-fastboot: quiet boot startup link changed; kept it' >&2
+        bad=1
+    fi
+    if same "$QUIET" "$BASE/jukahub-quietboot"; then
+        rm -f "$QUIET" || bad=1
+    elif [ -e "$QUIET" ]; then
+        echo 'stock-fastboot: quiet boot hook changed; kept it' >&2
         bad=1
     fi
     if [ -L "$EARLY_LINK" ] && [ "$(readlink "$EARLY_LINK")" = ../init.d/jukahub-earlysd ]; then

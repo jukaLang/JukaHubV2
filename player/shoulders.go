@@ -128,6 +128,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if gameLibraryTrigger(s) {
 		return true
 	}
+	// The music player's triggers: the equaliser and Sound effects panels, or
+	// paging in the iPod layout (musicplayer.go musicShoulder).
+	if musicShoulder(s, config) {
+		return true
+	}
 	// Panels that draw their own modal list own the pad; a trigger must not
 	// page the scene behind them.
 	if modalPanelBlocksShoulders() {
@@ -142,6 +147,11 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	// The Synth's triggers pick the pattern or the instrument (synth.go).
 	if synthSceneActive(config) && !virtualKeyboardActive {
 		synthShoulder(s)
+		return true
+	}
+	// Pads' triggers pick the bank, the pattern or the pad (pads_ui.go).
+	if padsSceneActive(config) && !virtualKeyboardActive {
+		padsShoulder(s)
 		return true
 	}
 	// R2 steps the liquid background Off → Slight → Medium → Lively

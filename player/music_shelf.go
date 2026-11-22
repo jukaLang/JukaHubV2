@@ -382,6 +382,10 @@ func musicShelfClick(mx, my int32, config *Config) bool {
 }
 
 func musicShelfWheel(delta int32) bool {
+	// The iPod layout's lists scroll the same way (musicpod.go).
+	if musicPodWheel(delta) {
+		return true
+	}
 	if !musicShelf.open {
 		return false
 	}

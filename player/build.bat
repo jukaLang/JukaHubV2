@@ -354,6 +354,17 @@ if exist "go.mod" (
     echo Downloading Go modules ...
     "%GO_EXE%" mod download || (set "ERR=go mod download failed - check network / GOPROXY." & exit /b 1)
 )
+REM player\vendor\ is a git-ignored local copy of the modules (update-deps.bat
+REM makes it). While it exists Go builds from it, so a pulled go.mod change, a
+REM merged Dependabot PR for example, stops go build with "inconsistent
+REM vendoring". go list -m runs that check in a moment: refresh the copy when it
+REM fails.
+if exist "vendor\modules.txt" (
+    "%GO_EXE%" list -m >nul 2>&1 || (
+        echo Refreshing vendor\ for the changed go.mod ...
+        "%GO_EXE%" mod vendor || (set "ERR=go mod vendor failed - delete player\vendor and build again." & exit /b 1)
+    )
+)
 REM Stamp the compile time into the binary. The updater compares a release's
 REM publication time with this stamp, so a same-day release published after
 REM this build is still offered (a date-only stamp would hide it).
@@ -376,6 +387,9 @@ if defined JUKAHUB_MS_CLIENT_ID set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.mic
 REM ScreenScraper box art (docs/BOX_ART.md): the developer key ScreenScraper
 REM gives JukaHub, likewise only when JUKAHUB_SS_DEVID is set.
 if defined JUKAHUB_SS_DEVID set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.screenScraperDevID=%JUKAHUB_SS_DEVID% -X main.screenScraperDevPassword=%JUKAHUB_SS_DEVPASSWORD%"
+REM Last.fm scrobbling (docs/MUSIC_SERVERS.md): JukaHub's Last.fm API account,
+REM likewise only when JUKAHUB_LASTFM_API_KEY is set.
+if defined JUKAHUB_LASTFM_API_KEY set "GOOGLE_LDFLAGS=%GOOGLE_LDFLAGS% -X main.lastfmAPIKey=%JUKAHUB_LASTFM_API_KEY% -X main.lastfmAPISecret=%JUKAHUB_LASTFM_SECRET%"
 echo.
 echo Building %OUT% ...
 echo   NOTE: the FIRST build compiles the SDL2 cgo bindings and can take

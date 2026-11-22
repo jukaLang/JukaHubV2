@@ -221,7 +221,7 @@ func trophySetTwo() []playtimeAchievement {
 		// ── Arcade: the built-in minigames ──
 		t2Count("arcade_10", "Coin-Op", "Start 10 minigames", "Arcade", trophyBronze, tkArcadePlay, 10, "games").needs("Games"),
 		t2Count("arcade_100", "Arcade Rat", "Start 100 minigames", "Arcade", trophySilver, tkArcadePlay, 100, "games").needs("Games"),
-		t2Set("arcade_all", "Full Cabinet", "Play all six minigames", "Arcade", trophyBronze, tkArcadeGames, 6, "minigames").needs("Games"),
+		t2Set("arcade_all", "Full Cabinet", "Play all seven minigames", "Arcade", trophyBronze, tkArcadeGames, 7, "minigames").needs("Games"),
 		t2Best("snake_100", "Snack Time", "Score 100 in Snake", "Arcade", trophyBronze, tkSnakeBest, 100, "points").needs("Games"),
 		t2Best("snake_250", "Long Boi", "Score 250 in Snake", "Arcade", trophySilver, tkSnakeBest, 250, "points").needs("Games"),
 		t2Best("snake_500", "Ouroboros", "Score 500 in Snake", "Arcade", trophyGold, tkSnakeBest, 500, "points").needs("Games"),

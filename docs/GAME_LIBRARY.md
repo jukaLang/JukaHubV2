@@ -583,8 +583,8 @@ resolves the emulator in this order:
    emulator. Once installed, hakuX's `Emus/XBOX/launch.sh` is the Xbox games'
    emulator like any `Emus` folder; the Xbox shelf lists `.iso` and `.xiso`
    (XISO) images only, the formats hakuX and xemu boot. Xbox games start with
-   [Xbox boost](DEVICE_TUNING.md#xbox-boost): full CPU and GPU speed, JukaHub's
-   memory and the CPU first while they run.
+   [Heavy-game boost](DEVICE_TUNING.md#heavy-game-boost): full CPU, GPU and
+   memory speed, JukaHub's memory and the CPU first while they run.
 
 Starts that already know their emulator never ask: a save state on the game
 page uses the emulator the states were listed for (the game's remembered one,
@@ -816,11 +816,10 @@ at full speed on this chip.
 
 The Smart Pro S plays GameCube games in RetroArch's Dolphin core: the lighter
 ones at full speed or close, the heavy 3D ones well below it, and few Wii games
-reach full speed. The A133P models (Smart Pro, Brick, Brick Pro) are too slow
-for most GameCube games, so there the consoles stay **not supported** unless
-**Settings → Games & emulators → GameCube & Wii** says **Try anyway**
-(`gamecube` in [CONFIGURATION.md](CONFIGURATION.md)); installing Dolphin from
-the Emulators page sets that too. Put games in `Roms/GC`
+reach full speed. The A133P models (Smart Pro, Brick, Brick Pro, Hammer) play
+them too since 2026-11-21, most games well below full speed (GameCube speed
+is Fastest there); **Settings → Games & emulators → GameCube & Wii** (`gamecube`
+in [CONFIGURATION.md](CONFIGURATION.md)) turns them off. Put games in `Roms/GC`
 (or `GAMECUBE`, `NGC`) and `Roms/WII` as `.iso`, `.gcm`, `.rvz`, `.gcz`,
 `.ciso`, `.wia`, `.wbfs` (Wii) or `.m3u` for a two-disc game; Dolphin cannot
 open a `.zip` or `.7z`, so those are not listed. RVZ, Dolphin's own
@@ -839,9 +838,7 @@ than its ISO.
   every core install has ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)).
 - **The Emulators page.** Installing Dolphin there (**A** on its core's tile,
   or **X** on a GameCube or Wii folder) runs the same setup, system files
-  included, and a later **X** looks for a newer build that loads here. On an
-  A133P model whose GameCube & Wii setting is Automatic, that press sets it to
-  Try anyway. The daily core updates and **Update all** leave Dolphin alone (it
+  included, and a later **X** looks for a newer build that loads here. The daily core updates and **Update all** leave Dolphin alone (it
   is among the largest cores and the buildbot has a new build nearly every
   day), JukaHub's own build is only ever replaced by a newer one of its own,
   and **Get more cores** does not fetch it.
@@ -874,9 +871,9 @@ than its ISO.
   could not draw for Dolphin, the card says so and Dolphin's own override
   (`config/dolphin-emu/dolphin-emu.cfg`) switches between OpenGL ES and Vulkan
   for the next start; Vulkan only where the firmware has a Vulkan driver.
-- **The whole handheld.** A GameCube or Wii game gets what **Xbox boost** gives
-  an Xbox game: every core and the GPU at full speed, JukaHub's memory handed
-  back, "Hey Juka" closed while it plays.
+- **The whole handheld.** A GameCube or Wii game gets what **Heavy-game
+  boost** gives an Xbox game: every core, the GPU and memory at full speed,
+  JukaHub's memory handed back, "Hey Juka" closed while it plays.
 
 ### PlayStation 2 on the handheld
 
@@ -920,12 +917,17 @@ game much smaller than its ISO. A stray `.bin` is not listed as a game.
   (`config/ARMSX2/ARMSX2.opt`) move to the next renderer for the next start:
   OpenGL ES, then the software renderer (slow, but it draws anywhere). Change
   it in RetroArch (Quick Menu → Core Options → GS Renderer).
-- **Speed.** Native resolution and full EE speed are the core's defaults and
-  stay; for a game that is close to full speed, RetroArch's Core Options
-  (EE Cycle Rate, EE Cycle Skip) trade accuracy for speed, and may break it.
-  A PS2 game gets what **Xbox boost** gives an Xbox game. The Smart Pro's two
-  sticks are the DualShock 2's; the Brick and Hammer have none, so a game that
-  needs a stick is hard to play there.
+- **Speed.** Native resolution and multi-threaded VU1 are the core's defaults
+  and stay. Settings → Games & emulators → **PS2 speed** (the PS2's own
+  [Emulator speed](DEVICE_TUNING.md#emulator-speed) level) is **Fastest** on
+  the A133P models by default: the emulated EE at 75% (`armsx2_ee_cycle_rate`)
+  with mild cycle skipping (`armsx2_ee_cycle_skip`), for that launch only — a
+  game with cycles to spare plays as before, a busy scene slows inside the game
+  instead of the whole game crawling, and a game that breaks plays at **Fast**
+  (the PS2's own timing) or **Emulators' own**. A value you set in RetroArch's
+  Core Options stays. A PS2 game gets what **Heavy-game boost** gives an Xbox
+  game. The Smart Pro's two sticks are the DualShock 2's; the Brick and Hammer
+  have none, so a game that needs a stick is hard to play there.
 
 ### Per-game launch options
 

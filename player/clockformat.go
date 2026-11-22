@@ -448,6 +448,19 @@ var dateLocales = map[string]*dateLocale{
 		decimal:     ",",
 		groupMin:    4,
 	},
+	"uk": {
+		months:      [12]string{"січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада", "грудня"},
+		monthsShort: [12]string{"січ.", "лют.", "бер.", "квіт.", "трав.", "черв.", "лип.", "серп.", "вер.", "жовт.", "лист.", "груд."},
+		monthsAlone: [12]string{"Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень", "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"},
+		days:        [7]string{"неділя", "понеділок", "вівторок", "середа", "четвер", "п’ятниця", "субота"},
+		daysShort:   [7]string{"нд", "пн", "вт", "ср", "чт", "пт", "сб"},
+		daysNarrow:  [7]string{"Н", "П", "В", "С", "Ч", "П", "С"},
+		dmy:         dateLayouts{Long: "Monday, 2 January 2006 р.", Day: "Monday, 2 January", Medium: "2 Jan 2006 р.", Short: "2 Jan", Brief: "Mon, 2 Jan"},
+		near:        [3]string{"Учора", "Сьогодні", "Завтра"},
+		group:       "\u00a0",
+		decimal:     ",",
+		groupMin:    4,
+	},
 }
 
 // dateLocaleNow is the interface language's conventions, nil for English.

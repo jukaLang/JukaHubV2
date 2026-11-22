@@ -278,6 +278,7 @@ no footer names may have no key.
 | Stopwatch | A start / pause · X lap · Y reset (countdown being set: next preset) · L1 / R1 tab · countdown Left / Right field, Up / Down change | Enter · X · Y · Tab · arrows |
 | Solitaire | A pick up / put down · X draw · Y smart move · L1 / R1 undo / redo · Start menu | Enter or Space · D · F or Tab · Z / R (Ctrl+Z / Ctrl+Y) · M; N new game |
 | Synth | Start play / stop · L1 / R1 page · L2 / R2 pattern or instrument · Pattern: A step, Y / X note (accent / ratchet on drums) | Space · Tab / Shift+Tab · [ ] · Enter, Y or =, X or -; 1–7 play the pads |
+| Pads | Start play / stop · L1 / R1 page · Play: A pad, Y sound, X edit, Select finger drums, L2 / R2 bank · Beat: A step (hold to paint), Y / X note, Select accent · sticks play effects | Space · Tab / Shift+Tab · [ ] · Enter · M or ` (Select); 1–4, Q–R, A–F, Z–V play the pads |
 | Alarm | List: X toggle · Y new · L1 delete (press twice). Editor: Y save · X music / clear label · L1 / R1 ±10 min | X · Y or N · Del; editor Y or S · PgUp / PgDn |
 | Ambient | Y sleep timer · X screen off | Y or S · X; N next photo |
 | Patch | Hold A to confirm a risky step | Hold Enter |
@@ -1647,9 +1648,9 @@ The **Xbox** tile is always on the page. What it offers depends on the device:
 | Device | Xbox tile |
 |---|---|
 | Smart Pro (TG5040) | Installs the experimental [hakuX port](https://github.com/ToastedFrog2/hakux-trimui-smart-pro) |
-| Brick Pro | The same install, marked untested: same A133P chip, GPU and sticks, but the port is built for the Smart Pro |
-| Brick, Hammer | Not supported: the port is built for the Smart Pro, and Xbox games need two analog sticks the Brick does not have |
-| Smart Pro S | Not supported: the port is built for the Smart Pro's A133P and PowerVR GPU; no build exists for the A523 |
+| Brick Pro | The same install, marked untested, with spruceUI's build of hakuX (which draws at the panel's own 1024x768) in place of the Smart Pro's |
+| Brick, Hammer | The same, marked untested and never installed by itself; no analog sticks (hakuX's **Menu** maps a game's controls per title, so a stick's job can go on the D-pad) |
+| Smart Pro S | The same, marked untested: spruceUI's build runs on any Vulkan driver, the A523's Mali included |
 | Windows | xemu, installed from its official release; **Y** on its tile opens the BIOS checklist |
 
 The Xbox 360 is played on Windows only, by Xenia Canary (below). On a handheld
@@ -1810,7 +1811,7 @@ see [WINDOWS_APPS.md](WINDOWS_APPS.md).
 | Button | Action |
 |--------|--------|
 | D-pad Up / Down | Move through apps |
-| A | Start the selected app; its row shows the progress (the first start prepares Windows for a few minutes) |
+| A | Start the selected app; its row shows the progress (the first start prepares Windows for a few minutes). On an empty list (handheld), download the sample program, Notepad++ |
 | Y | Display for this app: Windows (GDI) or OpenGL (handheld) |
 | X | The runtime setup page (handheld) |
 | Start | Rescan the app folders |
@@ -1818,7 +1819,8 @@ see [WINDOWS_APPS.md](WINDOWS_APPS.md).
 
 On a keyboard, **Enter** starts, **Y** or **D** switches the display, **X** or
 **H** opens setup, **R** or **F5** rescans and **Esc** goes back. Tapping a row
-starts it; tapping outside closes the panel.
+starts it (on an empty list, tapping the sample line downloads it); tapping
+outside closes the panel.
 
 While a Windows program runs on the handheld, the pad is its mouse and types a
 few keys:
@@ -2148,7 +2150,15 @@ steps back) and the rows under it are your saved stations — see
 | Select | Turn the screen off (playback continues) |
 | X, then D-pad Right (within 0.45 s) | Open song search |
 | Y, then D-pad Left (within 0.45 s) | Toggle background playback |
+| L2 | Open / close the 31-band equaliser |
+| R2 | Open / close Sound effects (Tape Mode, reverb, delay, chorus, flanger, speed) |
 | B | Close the visualizer, then go back |
+
+In the full-screen visualizer, **Left / Right** pick one of the ten visualizers
+and **Y** turns the dithering on or off. The **iPod** layout (Start → Audio →
+Now Playing layout) has its own map: see
+[MUSIC_PLAYER.md](MUSIC_PLAYER.md#ipod-layout). On a keyboard, **X** opens
+Sound effects and **G** the equaliser in every layout.
 
 ### Search
 
@@ -2182,9 +2192,12 @@ one-third-octave centres from 20 Hz to 20 kHz, ±12 dB per band.
 |-------|--------|
 | Left / Right | Pick a band |
 | Up / Down | ±1 dB on the selected band |
-| Y | Cycle presets (Flat, Bass, Vocal, Rock, Night) |
+| Y | Cycle presets (Flat, Bass, Vocal, Rock, Night, then the iPod's: Acoustic … Vocal Booster) |
 | X | Flatten the selected band |
 | G / B | Close the panel |
+
+On a pad the panel opens with **L2**: the D-pad works as above, **Y** steps the
+presets, **X** flattens the band and **B** (or L2) closes it.
 
 Gains are saved to the config as `musicPEQGains`, and the curve restarts the
 decoder immediately so the change is audible. **Bit-perfect DAC output** (in
@@ -2880,6 +2893,29 @@ Enter, Y (or `=`) and X (or `-`) are A, Y and X, and 1–7 play the pads.
 Exports land in Downloads/music as `Synth 001.wav`… where the Music player
 lists them. The project saves itself to `synth.json` beside JukaHub (and goes
 into backups). The Synth only sounds while its page is on screen.
+
+## Pads
+
+A 64-pad sample sequencer (Start menu → Pads, Apps → Pads or Tools → Pads):
+four banks of sixteen pads, eight patterns of 16 to 128 steps, a song chain and
+effects on the sticks. Start plays and stops on every page; L1 / R1 switch
+between the six pages. See [Pads](PADS.md) for sounds, chops and exports.
+
+| Page | Buttons |
+|------|---------|
+| Play | D-pad moves (Up / Down past the edge change bank) · A plays the pad · Y picks its sound · X edits it · L2 / R2 bank · Select: finger drumming, where the D-pad plays one row (Left, Up, Down, Right) and Y X B A the row under it, L2 / R2 move two rows and Select stops |
+| Beat | D-pad moves · A sets / clears a step (hold A and move to paint the row) · Y / X note up / down a semitone · Select accent · L2 / R2 pattern |
+| Pad | L2 / R2 previous / next pad · Up / Down choose a setting · Left / Right adjust · X / Y big steps (Pitch: an octave) · A runs the row or plays the pad · Select plays the pad |
+| Song | Settings on the left, the song's slots on the right: on a slot Left / Right change its pattern, Y repeats it, X removes it, A opens its pattern |
+| FX | Left / Right choose a stick direction's effect · on a Hold row A turns it on / off and Left / Right set the amount |
+| Mix | Tempo (A taps it), swing, master, compressor, echo, reverb, Record live hits; actions: Export to WAV, starter kit, clear bank, new project (the last three press twice) |
+
+Sticks: on Play and FX both sticks play effects (how far they lean is how
+much); on the other pages the right stick does and the left one moves the
+focus. In the sound browser A puts the sound on the pad, Y listens and B goes
+up a folder. Keyboard: Space plays, Tab / Shift+Tab change the page, `[` `]`
+are L2 / R2, M or `` ` `` is Select, and on the Play page `1 2 3 4`, `Q W E R`,
+`A S D F` and `Z X C V` play the bank's four rows.
 
 ## Alarm
 

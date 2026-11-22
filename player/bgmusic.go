@@ -307,6 +307,8 @@ func bgmQuietReason() string {
 		return "the screen is asleep or busy"
 	case time.Since(time.Unix(0, synthLastSeen.Load())) < synthIdleStop:
 		return "the Synth is open"
+	case padsOpenRecently():
+		return "Pads is open"
 	case voiceMemoHoldsAudio():
 		// A memo records (the microphone would hear it) or plays (voicememo_play.go).
 		return "a voice memo is recording or playing"

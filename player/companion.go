@@ -554,6 +554,10 @@ func (s *companionServer) handler() http.Handler {
 	// saved; secrets are never sent back (companion_cloud.go).
 	mux.HandleFunc("/cloud", s.handleCloudPage)
 	mux.HandleFunc("/api/cloud", s.guard(s.handleCloud))
+	// Music servers and scrobbling: Navidrome, Jellyfin, Last.fm and
+	// ListenBrainz, checked before they are saved (companion_music.go).
+	mux.HandleFunc("/music", s.handleMusicPage)
+	mux.HandleFunc("/api/music", s.guard(s.handleMusicAPI))
 	// Steam: the sign-in through Steam's own page (a one-use token, never the
 	// PIN, goes to Steam) and the card's profile link, Web API key and Sign
 	// out (steam_signin.go).

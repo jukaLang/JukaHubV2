@@ -71,11 +71,20 @@ func main() {
 	if handled, code := handleLinuxPkgCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// `JukaHub silent-boot [status|on|off]`: Settings → General → Silent boot
+	// from an SSH shell (bootenv.go).
+	if handled, code := handleSilentBootCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	// The collector stays off from here to the first frame (startup.go); the
 	// commands above are processes of their own and keep it on.
 	startupGCHold()
 
 	InitLogging()
+	// TrimUI: RCU grace periods expedited and the kernel's serial console
+	// quiet before SDL opens the input, GPU and sound devices, put back at
+	// exit (startup_kerneltune_linux.go).
+	startupKernelTune()
 	// The first frame's font, icons and labels are read on the idle cores
 	// from here, while SDL and the GPU driver start (startup_preload.go).
 	startupPreload()

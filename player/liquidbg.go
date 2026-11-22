@@ -2499,7 +2499,7 @@ func liquidFooterHint(config *Config, hints []FooterHint) []FooterHint {
 		// handleChromeShoulder's overlays page with R2 themselves.
 		tb.startOpen || nc.open || clipSearchOpen || globalSearchOpen || wpOpen ||
 		imageViewerPath != "" || shortcutsOpen ||
-		pdfvSceneActive(config) || synthSceneActive(config) ||
+		pdfvSceneActive(config) || synthSceneActive(config) || padsSceneActive(config) ||
 		pkgHubStep(pkgHubLocation(config), padR2) >= 0 {
 		return hints
 	}

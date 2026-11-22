@@ -556,6 +556,7 @@ var uiFontLanguageSamples = map[string]string{
 	"de":    "äöüßÄÖÜ",
 	"it":    "àèéìòùÀÈ",
 	"ru":    "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюяЁё",
+	"uk":    "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯабвгґдеєжзиіїйклмнопрстуфхцчшщьюя’",
 }
 
 // uiFontLanguageGap is the first letter the interface language needs that the
