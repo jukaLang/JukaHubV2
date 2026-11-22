@@ -1706,10 +1706,21 @@ downloads, a download that was cut off or arrived damaged, a full card, or a
 clock so far off that the secure connection fails.
 
 Games go in `Roms/XBOX` as `.iso` (XISO) images and start through the
-package's own `Emus/XBOX/launch.sh`, like any other system. In a game,
-**Menu** opens hakuX's settings (per-game settings, LAN, screenshots to
+package's own `Emus/XBOX/launch.sh`. JukaHub closes while an Xbox game
+plays, as it does for a PS Remote Play or Moonlight stream: it hands the
+screen to a small script and quits, the script runs the launcher exactly as
+the stock menu would, and JukaHub's `launch.sh` starts JukaHub again when the
+game ends — back in the Games Library on the game when it was started there.
+hakuX then has the screen, the buttons and all of the 1 GB to itself; next
+to JukaHub its picture could stay hidden behind JukaHub's last screen and
+Menu could reach the firmware's quick menu instead. In a game, **Menu**
+opens hakuX's settings (per-game settings, LAN, screenshots to
 `Screenshots/XBOX`), and holding **Start + Select** for about 1.2 seconds
-exits.
+exits; JukaHub's own in-game chords are not there while it is closed. The
+time played counts in the game's playtime, and a game that stops within
+seconds opens the launch card with the launcher's last lines
+(`Apps/JukaHub/data/gamediag/launcher.log`). A JukaHub started by hand (over
+SSH) or under an older `launch.sh` starts the game beside itself as before.
 
 hakuX 1.0 and later run games on their own Xbox kernel and need no BIOS, MCPX
 ROM or HDD image; the xemu-based builds before them did, and the port does not

@@ -175,14 +175,18 @@ var elfResultCache struct {
 // own run path ("" when unknown). archOnly stops after the architecture: the
 // system folders hold this process's architecture, so another one's libraries
 // (a 32-bit RetroArch's) are not where the check would look for them. used, when
-// set, collects the libraries the answer relied on.
+// set, collects the libraries the answer relied on. deviceDirs are searched
+// last, and only for the device-access libraries (coretrimui.go): JukaHub's
+// copies of Ubuntu's libusb and libudev for a RetroArch that starts on its
+// glibc (coredevlibs.go).
 type elfLoadEnv struct {
-	class    elf.Class
-	machine  elf.Machine
-	libDirs  []string
-	origin   string
-	archOnly bool
-	used     *[]elfLibStamp
+	class      elf.Class
+	machine    elf.Machine
+	libDirs    []string
+	origin     string
+	archOnly   bool
+	used       *[]elfLibStamp
+	deviceDirs []string
 }
 
 // elfHostEnv is the environment of the running process.

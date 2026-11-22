@@ -256,6 +256,10 @@ func voiceEmuRunTile(config *Config, name string) {
 		// The handheld's Xbox tile: its games, or its setup sheet — which is
 		// drawn only on the Emulators page, so A is pressed there.
 		voiceEmuOpenTile(config, name, true)
+	case dolphinConsoleTile(e):
+		// GameCube or Wii: that console's games, or Dolphin's setup
+		// (dolphin_folders.go).
+		dolphinConsoleActivate(e)
 	case voiceEmuStarts(e):
 		launchEmulatorEntry(e)
 	case e.Status == emuAvailable && strings.TrimSpace(e.Launch) == "":

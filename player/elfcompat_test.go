@@ -528,3 +528,31 @@ func TestNativeLoadProblemRechecksWhenALibraryChanges(t *testing.T) {
 		t.Fatalf("after its libc was replaced by an older one: %q, want the missing version named", got)
 	}
 }
+
+// A desktop build's device libraries (coretrimui.go): every one missing is
+// named in one sentence, which the installer of JukaHub's copies reads back
+// (coredevlibs.go), and the copies, in env.deviceDirs, answer it.
+func TestCoreDeviceLibsNamedTogetherAndFoundInJukaHubsCopies(t *testing.T) {
+	core := buildTestELF(t, testELF{machine: elf.EM_AARCH64, needed: []string{"libc.so.6", "libusb-1.0.so.0", "libudev.so.1"}})
+	env := aarch64Env(t.TempDir())
+	got := coreDeviceLibLoadProblem(bytes.NewReader(core), env, "")
+	if got != "needs libusb-1.0.so.0 and libudev.so.1, which this firmware does not have" {
+		t.Fatalf("problem = %q", got)
+	}
+	if libs := coreDevLibsMissing(got); strings.Join(libs, " ") != "libusb-1.0.so.0 libudev.so.1" {
+		t.Errorf("read back as %q", libs)
+	}
+	for _, other := range []string{"needs libX11.so.6, which this firmware does not have", "needs GLIBC_2.34; this firmware's libc.so.6 has up to GLIBC_2.33", ""} {
+		if libs := coreDevLibsMissing(other); libs != nil {
+			t.Errorf("%q read as device libraries %q", other, libs)
+		}
+	}
+	copies := t.TempDir()
+	for _, lib := range []string{"libusb-1.0.so.0", "libudev.so.1"} {
+		writeTestFile(t, filepath.Join(copies, lib), buildTestELF(t, testELF{machine: elf.EM_AARCH64, soname: lib}))
+	}
+	env.deviceDirs = []string{copies}
+	if got := coreDeviceLibLoadProblem(bytes.NewReader(core), env, ""); got != "" {
+		t.Errorf("with JukaHub's copies beside the runtime: %q", got)
+	}
+}

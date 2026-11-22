@@ -28,7 +28,9 @@ package main
 //   - The Emulators page's Dolphin tiles (the core's row, the GameCube and
 //     Wii folders) run the same setup on a press and look for a newer build
 //     that loads here (dolphinStartInstall): Juka asked on 2026-11-20, on a
-//     Brick Pro, for "dolphin that works on Trimui".
+//     Brick Pro, for "dolphin that works on Trimui". Since 2026-11-21 the card
+//     gets Roms/GC and Roms/WII, and the page always lists a GameCube and a
+//     Wii tile (dolphin_folders.go).
 //   - Every start in the core (launchLibraryGame) first makes sure the Sys
 //     folder is there and that the core is not a build from before the
 //     October 2026 fix for libretro/dolphin#462, whose dual-core mode froze an
@@ -381,6 +383,9 @@ func dolphinBeginSetup(label, romPath, launcher string, pressed time.Time, want 
 			installBarFailRun(gen, firstLine(emuFriendlyError(err)))
 		} else {
 			installBarDoneRun(gen)
+			// The games' folders, Roms/GC and Roms/WII, unless the player
+			// deleted them (dolphin_folders.go).
+			dolphinEnsureRomsFolders()
 		}
 		tbxPost(func() {
 			dolphinBusy.Store(false)
@@ -422,8 +427,9 @@ func dolphinStart(game libraryGame, launch func(launcher string), core string) {
 // ── The Emulators page ───────────────────────────────────────────────────
 
 // dolphinTile reports whether an Emulators page tile is Dolphin's on the
-// handheld: the Roms/GC or Roms/Wii folder's, the installed core's, or the
-// buildbot's "dolphin" row. A press on it runs dolphinStartInstall instead of
+// handheld: the GameCube or Wii tile (dolphin_folders.go), a Roms/GC or
+// Roms/Wii folder's, the installed core's, or the buildbot's "dolphin" row.
+// X on it (A while the core is missing) runs dolphinStartInstall instead of
 // the generic core install, so the core comes from the source whose build
 // loads here, with Dolphin's Sys folder.
 func dolphinTile(e emuEntry) bool {
@@ -462,7 +468,7 @@ func dolphinStartInstall() {
 			return
 		}
 		rec := dolphinRecordGet()
-		msg := "Dolphin is ready for GameCube and Wii games"
+		msg := "Dolphin is ready · games go in " + dolphinFoldersLabel()
 		if before != "" && dolphinCoreIdentity(core) == before {
 			msg = "Dolphin is already the newest build that runs here"
 		}
@@ -521,7 +527,9 @@ func dolphinSettingsRow() setRow {
 			// The Emulators page and the library's hints read the mode.
 			invalidateEmulatorCache()
 			if dolphinPlaysHere() {
-				setToast("GameCube & Wii: on · a game's first start sets Dolphin up")
+				// Their folders on the card (dolphin_folders.go).
+				dolphinEnsureRomsFolders("GameCube", "Wii")
+				setToast("GameCube & Wii: on · games go in " + dolphinFoldersLabel() + "; the first start sets Dolphin up")
 				return
 			}
 			setToast("GameCube & Wii: off on this handheld")

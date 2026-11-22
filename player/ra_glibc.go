@@ -545,7 +545,12 @@ func raGlibcStamp() string {
 	if !ready {
 		return raGlibcMode() + ":none"
 	}
-	return raGlibcMode() + ":" + filepath.Base(libDir) + ":" + strings.Join(raGlibcRefusedUnder(libDir), ",")
+	stamp := raGlibcMode() + ":" + filepath.Base(libDir) + ":" + strings.Join(raGlibcRefusedUnder(libDir), ",")
+	// The device libraries beside it count too (coredevlibs.go).
+	if dev := coreDevLibsStamp(); dev != "" {
+		stamp += ":dev=" + dev
+	}
+	return stamp
 }
 
 // ── Which load problems the runtime closes ───────────────────────────────
@@ -808,8 +813,10 @@ type raGlibcFiles struct {
 }
 
 // raGlibcWriteFiles writes the setup script and the wrappers for ras and makes
-// their mount points (empty folders, outside any game's namespace).
-func raGlibcWriteFiles(ras []string, loader, libDir string) (raGlibcFiles, error) {
+// their mount points (empty folders, outside any game's namespace). extra
+// folders go last on the library path: JukaHub's device libraries for a core
+// that links them (coredevlibs.go), nil for every other launch and the probe.
+func raGlibcWriteFiles(ras []string, loader, libDir string, extra []string) (raGlibcFiles, error) {
 	var files raGlibcFiles
 	dir, err := raGlibcDir()
 	if err != nil {
@@ -820,6 +827,16 @@ func raGlibcWriteFiles(ras []string, loader, libDir string) (raGlibcFiles, error
 		return files, errors.New("the firmware has no mount or readlink program")
 	}
 	tail := raGlibcLibTail()
+	for _, d := range extra {
+		d = filepath.Clean(strings.TrimSpace(d))
+		if !filepath.IsAbs(d) || strings.ContainsAny(d, ":\n\r'\"$`\\") {
+			continue
+		}
+		if tail != "" {
+			tail += ":"
+		}
+		tail += d
+	}
 	nsDir := filepath.Join(dir, "ns")
 	keep := map[string]bool{}
 	var binds strings.Builder
@@ -968,7 +985,7 @@ func raGlibcProbeRun(ra, loader, libDir string) (bool, string) {
 	if sh == "" {
 		return false, "the firmware has no /bin/sh"
 	}
-	files, err := raGlibcWriteFiles([]string{ra}, loader, libDir)
+	files, err := raGlibcWriteFiles([]string{ra}, loader, libDir, nil)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -1041,12 +1058,14 @@ func raGlibcProbeAll() { raGlibcProbePending("") }
 // ── Launches ─────────────────────────────────────────────────────────────
 
 // raGlibcPlan is one launch's decision: the RetroArchs its namespace wraps,
-// none when it starts as before.
+// none when it starts as before. extra are folders last on the library path
+// (coreDevLibsForCore: JukaHub's device libraries for a core that links them).
 type raGlibcPlan struct {
 	ras    []string
 	loader string
 	libDir string
 	why    string
+	extra  []string
 }
 
 func (p raGlibcPlan) active() bool { return len(p.ras) > 0 }
@@ -1105,7 +1124,15 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 		}
 		return plan, false, unprobed
 	}
-	return raGlibcPlan{ras: ras, loader: loader, libDir: libDir, why: why}, false, unprobed
+	plan = raGlibcPlan{ras: ras, loader: loader, libDir: libDir, why: why}
+	if core != "" {
+		// The device libraries a desktop build links, from JukaHub's copies
+		// (coredevlibs.go): only for a core that links them.
+		if plan.extra = coreDevLibsForCore(core); len(plan.extra) > 0 && mode != raGlibcAlways {
+			plan.why = filepath.Base(core) + " needs a newer glibc or device libraries the firmware does not have"
+		}
+	}
+	return plan, false, unprobed
 }
 
 // raGlibcProbePending probes, off the main thread, every RetroArch a launch of
@@ -1155,7 +1182,7 @@ func raGlibcApply(cmd *exec.Cmd, plan raGlibcPlan) bool {
 		logWarn("emulators", "RetroArch stays on the firmware's C library: no mount namespaces or no /bin/sh here")
 		return false
 	}
-	files, err := raGlibcWriteFiles(plan.ras, plan.loader, plan.libDir)
+	files, err := raGlibcWriteFiles(plan.ras, plan.loader, plan.libDir, plan.extra)
 	if err != nil {
 		logWarn("emulators", "RetroArch stays on the firmware's C library: %v", err)
 		return false
@@ -1166,8 +1193,12 @@ func raGlibcApply(cmd *exec.Cmd, plan raGlibcPlan) bool {
 	cmd.Args = append([]string{"sh", files.setup, host, cmd.Path}, cmd.Args[1:]...)
 	cmd.Path = sh
 	raGlibcLastSet(plan)
-	logInfo("emulators", "RetroArch starts on JukaHub's glibc %s (%s): %s; wrapped %s",
-		privateGlibcVersion, filepath.Base(plan.libDir), plan.why, strings.Join(plan.ras, ", "))
+	extra := ""
+	if len(plan.extra) > 0 {
+		extra = "; device libraries from " + strings.Join(plan.extra, ", ")
+	}
+	logInfo("emulators", "RetroArch starts on JukaHub's glibc %s (%s): %s; wrapped %s%s",
+		privateGlibcVersion, filepath.Base(plan.libDir), plan.why, strings.Join(plan.ras, ", "), extra)
 	return true
 }
 
@@ -1394,6 +1425,16 @@ func raGlibcEnsureForCore(ctx context.Context, problem, target string) bool {
 	if !raGlibcWanted() || !raGlibcCouldCover(problem) || strings.TrimSpace(target) == "" {
 		return false
 	}
+	return raGlibcEnsureRuntimeFor(ctx, target)
+}
+
+// raGlibcEnsureRuntimeFor installs the runtime when it is not, and probes the
+// RetroArch that owns target's folder when that was never done under it (a
+// background goroutine). true when that RetroArch starts on the runtime.
+func raGlibcEnsureRuntimeFor(ctx context.Context, target string) bool {
+	if !raGlibcWanted() || strings.TrimSpace(target) == "" {
+		return false
+	}
 	ra := raGlibcResolve(coreRetroArchBinary(filepath.Dir(target)))
 	if ra == "" {
 		return false
@@ -1433,12 +1474,19 @@ func raGlibcPending(problem, target string) bool {
 
 // raGlibcRefusalMayPass reports a remembered refusal (core-refused.json's
 // reason) that a new try could pass: one made only of glibc gaps the runtime
-// closes, while RetroArch may start on it and — once it is installed — the
-// RetroArch that owns target's folder does ("" target: any). A refusal of any
-// other kind is final for that build.
+// closes, or only of device libraries JukaHub brings beside it
+// (coreDevLibsCouldCover), while RetroArch may start on it and — once it is
+// installed — the RetroArch that owns target's folder does ("" target: any).
+// A refusal of any other kind is final for that build.
 func raGlibcRefusalMayPass(reason, target string) bool {
 	problem, ok := strings.CutPrefix(reason, coreCannotLoadReason)
-	if !ok || !raGlibcWanted() || !raGlibcCouldCover(problem) {
+	if !ok || !raGlibcWanted() {
+		return false
+	}
+	if coreDevLibsCouldCover(problem, target) {
+		return true
+	}
+	if !raGlibcCouldCover(problem) {
 		return false
 	}
 	if _, _, ready := raGlibcRuntime(); !ready || strings.TrimSpace(target) == "" {

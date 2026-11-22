@@ -582,9 +582,12 @@ resolves the emulator in this order:
    the game is ready). On other models the toast says why they have no Xbox
    emulator. Once installed, hakuX's `Emus/XBOX/launch.sh` is the Xbox games'
    emulator like any `Emus` folder; the Xbox shelf lists `.iso` and `.xiso`
-   (XISO) images only, the formats hakuX and xemu boot. Xbox games start with
-   [Heavy-game boost](DEVICE_TUNING.md#heavy-game-boost): full CPU, GPU and
-   memory speed, JukaHub's memory and the CPU first while they run.
+   (XISO) images only, the formats hakuX and xemu boot. On the handheld an
+   Xbox game gets the device to itself: JukaHub closes while it plays and
+   comes back, on the game, when it ends (the screen hand-off in
+   [CONTROLS.md](CONTROLS.md#hakux-on-the-smart-pro)), with
+   [Heavy-game boost](DEVICE_TUNING.md#heavy-game-boost) for its CPU, GPU and
+   memory.
 
 Starts that already know their emulator never ask: a save state on the game
 page uses the emulator the states were listed for (the game's remembered one,
@@ -826,6 +829,14 @@ open a `.zip` or `.7z`, so those are not listed. RVZ, Dolphin's own
 compressed format (Dolphin on a PC converts to it), keeps a game much smaller
 than its ISO.
 
+- **The folders are made for you.** TrimUI's firmware has no GameCube or Wii
+  folder, so JukaHub makes `Roms/GC` and `Roms/WII` on the card: at start-up,
+  after Dolphin is set up, when **GameCube & Wii** is turned on, and when you
+  press the console's tile on the Emulators page. A folder the card already
+  has in another spelling (`GAMECUBE`, `NGC`, `Wii`) is used instead. Delete
+  one you do not want and it stays deleted (`dolphin.json` remembers) until
+  you press its tile or turn **GameCube & Wii** on again. Nothing is made on a
+  NextUI card, whose menu lists only its own tagged folders.
 - **The first start sets Dolphin up.** With no emulator for the console yet, A
   on a game installs a Dolphin core that loads here and Dolphin's system files
   (`dolphin-emu/Sys` in RetroArch's system folder, from the buildbot's
@@ -834,14 +845,22 @@ than its ISO.
   GCC 13 and libstdc++ linked in, so it runs on the firmware's own C library);
   while that is not published, the buildbot's nightly, which needs a newer
   libstdc++ than any TrimUI firmware has and so runs on JukaHub's private
-  glibc (**RetroArch's C library** on Automatic). Both go through the checks
-  every core install has ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)).
-- **The Emulators page.** Installing Dolphin there (**A** on its core's tile,
-  or **X** on a GameCube or Wii folder) runs the same setup, system files
-  included, and a later **X** looks for a newer build that loads here. The daily core updates and **Update all** leave Dolphin alone (it
-  is among the largest cores and the buildbot has a new build nearly every
-  day), JukaHub's own build is only ever replaced by a newer one of its own,
-  and **Get more cores** does not fetch it.
+  glibc (**RetroArch's C library** on Automatic), with Ubuntu's libusb and
+  libudev beside it (a desktop build links them; JukaHub installs them the
+  first time). Both go through the checks every core install has
+  ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)). When neither
+  gives a core, the message says why for each, JukaHub's own build first.
+- **The Emulators page.** It always lists a **GameCube** and a **Wii** tile,
+  each naming Dolphin, the folder its games go in and how many are there.
+  **A** on either opens that console's games, or sets Dolphin up while it is
+  not installed; **X** there (or on the Dolphin core's own tile) runs the same
+  setup, system files included, and later looks for a newer build that loads
+  here. A launcher folder of your own in `Emus` (a standalone Dolphin, say)
+  keeps its tile instead, and the games start in it. The daily core updates
+  and **Update all** leave Dolphin alone (it is among the largest cores and
+  the buildbot has a new build nearly every day), JukaHub's own build is only
+  ever replaced by a newer one of its own, and **Get more cores** does not
+  fetch it.
 - **No freeze ten seconds in.** A Dolphin core built before 23 October 2026
   froze an aarch64 RetroArch about ten seconds into a game with its dual-core
   mode on (libretro/dolphin#462). A start in such a core fetches the newest one

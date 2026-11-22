@@ -1,0 +1,756 @@
+package main
+
+// hakux_handoff.go — an Xbox game gets the handheld to itself: JukaHub closes
+// while hakuX plays and comes back when the game ends.
+//
+// A tester, 2026-11-21 (relayed by Juka): the first Xbox game "stuck in the
+// menu" — JukaHub's screen stayed on the panel while the game's sound played
+// — and "the controls for hotkeys only opened RetroArch menu and not the
+// standalone hakuX emulator".
+//
+// The hakuX package (hakux.go) is a launcher made for the stock menu. There,
+// MainUI queues the game and quits, and the firmware's loop runs
+// Emus/XBOX/launch.sh with nothing else alive on the display; the launcher
+// stops the firmware's quick menu and music service for the game and brings
+// them back afterwards. Started from JukaHub, the same launcher ran beside a
+// JukaHub that stays alive: its window still open on the framebuffer (it only
+// stops presenting, gamesuspend.go), its pad watcher reading the buttons
+// beside the game, and its memory taken from a 1 GB handheld on which hakuX
+// wants all of it. hakuX does not draw through SDL's framebuffer path like
+// RetroArch and the other emulators here — its own platform layer presents
+// through the PowerVR's Vulkan driver — so the last picture JukaHub drew could
+// stay on the panel over a game that was running, and Menu met the firmware's
+// quick menu or JukaHub's RetroArch-minded in-game layer instead of hakuX's
+// own settings.
+//
+// So an Xbox game started from JukaHub now goes the way PS Remote Play's and
+// Moonlight's streams go (psremote.go; the screen-handoff protocol in
+// launch.sh's header): JukaHub writes a short script, starts it in a session
+// of its own, leaves the script's pid in .screen-handoff and quits. The script
+// waits for JukaHub to be gone and runs the Xbox launcher exactly as MainUI's
+// queue would — the firmware's environment (screenChildEnv), the game in
+// MainUI's form (firmwareROMArg), the interpreter its #! line names
+// (firmwareScriptCommand) — with its output in gamediag/launcher.log, kept
+// under launcherLogCap. launch.sh keeps the stock menu stopped meanwhile and
+// starts JukaHub again when the script ends: JukaHub's quick start, since a
+// start in the same boot plays no boot animation. In the game hakuX's own
+// controls are the only ones: Menu opens hakuX's settings, and holding Start
+// + Select about 1.2 s quits back to JukaHub.
+//
+// Heavy-game boost (xboxboost.go) still applies, in two halves: before JukaHub
+// quits it brings parked cores online and raises the GPU and memory clocks and
+// the card's read-ahead — values that outlive it, and the crash marker it
+// writes is what the next start reads to put them back (xboxBoostRecover) —
+// and the script gives the CPU the performance governor once launch.sh has put
+// JukaHub's CPU settings back, and the previous governor after the game.
+//
+// The return (hakuxHandoffReturn): JukaHub leaves a note in the temp folder
+// before it quits — the game, its launcher, when it was started, whether from
+// the Games Library — and the script adds when the game started and ended by
+// the boot clock, its exit status and the steps it took. The next start reads
+// them once: the time played goes into the game's playtime and history like a
+// game played beside JukaHub, a game that ended within seconds with an error
+// (or one the script never started) gets the launch card with the launcher's
+// last lines (gamediag.go), and a game started from the Games Library opens
+// it on the game again. A MainUI that came up with the game, or a quick menu
+// where none ran before it, is put away by the script, so JukaHub comes back
+// alone.
+//
+// Only where it can work: a TrimUI under a launch.sh that waits for a screen
+// helper (JUKAHUB_SCREEN_HANDOFF). Anywhere else — a JukaHub started by hand,
+// an older launch.sh, a script that cannot be written or started — the game
+// starts beside JukaHub as before.
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	// The hand-off's files, in the temp folder: RAM, so a power-off during
+	// the game leaves nothing for the next boot to take for a return.
+	hakuxHandoffScriptName = "jukahub-xbox-handoff.sh"
+	hakuxHandoffNoteName   = "jukahub-xbox-handoff.json"
+	hakuxHandoffStatusName = "jukahub-xbox-handoff.status"
+	// hakuxHandoffNoteVersion is the note's layout.
+	hakuxHandoffNoteVersion = 1
+	// hakuxHandoffSignalled is the status the script records when a stop
+	// signal ended it (the power key: launch.sh stops the helper's session).
+	hakuxHandoffSignalled = 143
+	// hakuxHandoffWaitFrames bounds how many posted looks the return waits
+	// for the playtime ledger and the start-up questions (the lock, "Who is
+	// playing?") before it lets go.
+	hakuxHandoffWaitFrames = 600
+)
+
+// hakuxHandoffBegun is set once a hand-off has started this run: JukaHub is
+// on its way out, and a second press must not start the game twice. Main
+// thread.
+var hakuxHandoffBegun bool
+
+// hakuxHandoffPath is one of the hand-off's files.
+func hakuxHandoffPath(name string) string {
+	return filepath.Join(os.TempDir(), name)
+}
+
+// hakuxHandoffNote is what JukaHub leaves for its next start.
+type hakuxHandoffNote struct {
+	Version      int    `json:"version"`
+	Path         string `json:"path"`
+	System       string `json:"system"`
+	Title        string `json:"title"`
+	DisplayTitle string `json:"display_title,omitempty"`
+	Launcher     string `json:"launcher"`
+	// Log is the launcher's output (gamediag/launcher.log), "" when none.
+	Log string `json:"log,omitempty"`
+	// PlayedAt is the start the recents recorded: what the time played is
+	// credited from (playtimeCreditGameGap matches it).
+	PlayedAt time.Time `json:"played_at"`
+	// FromLibrary: the Games Library was open at the start.
+	FromLibrary bool `json:"from_library,omitempty"`
+	// Script is the hand-off script's pid.
+	Script int `json:"script_pid,omitempty"`
+}
+
+// game is the note's game, as the library names it.
+func (n hakuxHandoffNote) game() libraryGame {
+	return libraryGame{Path: n.Path, System: n.System, Title: n.Title, DisplayTitle: n.DisplayTitle}
+}
+
+// hakuxHandoffRun is what the script recorded: the boot clock (seconds) when
+// the game started and ended, the launcher's exit status and the steps it
+// took, in order.
+type hakuxHandoffRun struct {
+	Started, Ended   float64
+	HasStart, HasEnd bool
+	RC               int
+	HasRC            bool
+	Steps            []string
+}
+
+// ran is how long the game ran, 0 when that is not known.
+func (r hakuxHandoffRun) ran() time.Duration {
+	if !r.HasStart || !r.HasEnd || r.Ended < r.Started {
+		return 0
+	}
+	return time.Duration((r.Ended - r.Started) * float64(time.Second))
+}
+
+// lastStep is the last step the script recorded ("" when none).
+func (r hakuxHandoffRun) lastStep() string {
+	if len(r.Steps) == 0 {
+		return ""
+	}
+	return r.Steps[len(r.Steps)-1]
+}
+
+// hakuxHandoffParseStatus reads the script's key=value lines: a later value
+// wins, unknown keys and lines are skipped. Pure.
+func hakuxHandoffParseStatus(data []byte) hakuxHandoffRun {
+	var r hakuxHandoffRun
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		key, value, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch key {
+		case "started", "ended":
+			f, err := strconv.ParseFloat(value, 64)
+			if err != nil || f < 0 {
+				continue
+			}
+			if key == "started" {
+				r.Started, r.HasStart = f, true
+			} else {
+				r.Ended, r.HasEnd = f, true
+			}
+		case "rc":
+			if n, err := strconv.Atoi(value); err == nil {
+				r.RC, r.HasRC = n, true
+			}
+		case "step":
+			if value != "" && len(r.Steps) < 32 {
+				r.Steps = append(r.Steps, value)
+			}
+		}
+	}
+	return r
+}
+
+// hakuxHandoffFailed reports a start that did not get going, by gamediag.go's
+// rule for a library game JukaHub did not stop: the game never started, or it
+// ended within gameDiagQuickExit with an error, or within gameDiagBriefRun
+// whatever its status. One a stop signal ended is the power key, not a
+// failure; one whose end was not recorded is not judged. Pure.
+func hakuxHandoffFailed(r hakuxHandoffRun) bool {
+	if !r.HasStart {
+		return true
+	}
+	if !r.HasEnd || !r.HasRC || r.RC == hakuxHandoffSignalled {
+		return false
+	}
+	ran := r.ran()
+	if ran > gameDiagQuickExit {
+		return false
+	}
+	return r.RC != 0 || ran <= gameDiagBriefRun
+}
+
+// ── The hand-off ────────────────────────────────────────────────────────────
+
+// hakuxHandoffWanted reports whether game, started with launcher, is an Xbox
+// game for the hand-off: the Xbox row's game, started by the shell launcher of
+// an Xbox launcher folder (hakuxIsXboxFolder), on a TrimUI. Whether this
+// launch.sh can take it is asked separately.
+func hakuxHandoffWanted(game libraryGame, launcher string) bool {
+	if IsWindows() || !IsTrimuiDevice() || !strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) {
+		return false
+	}
+	launcher = strings.TrimSpace(launcher)
+	if !launcherShellScript(launcher) {
+		return false
+	}
+	dir := filepath.Dir(launcher)
+	return hakuxIsXboxFolder(filepath.Base(dir), dir)
+}
+
+// hakuxHandoffLaunch hands the screen to an Xbox game and asks JukaHub to
+// quit; launchLibraryGame calls it once every check before a start has
+// passed. It reports whether it took the start (the caller returns then);
+// false starts the game beside JukaHub as before, the reason in the log.
+// Main thread.
+func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
+	if !hakuxHandoffWanted(game, launcher) {
+		return false
+	}
+	title := hakuxGameTitle(game)
+	if hakuxHandoffBegun {
+		// JukaHub is already closing for a game: a second press is spent.
+		return true
+	}
+	if !psLauncherWaitsForHandoff() {
+		logInfo("xbox", "%s starts beside JukaHub: this launch.sh does not wait for a screen helper", title)
+		return false
+	}
+	marker := psScreenHandoffMarkerPath()
+	if marker == "" {
+		logInfo("xbox", "%s starts beside JukaHub: JukaHub's folder is unknown", title)
+		return false
+	}
+	// The command MainUI's queue would run, as launchLibraryGame builds it.
+	romArg := firmwareROMArg(launcher, game.Path)
+	extra := hotseatLaunchArgs(launcher, parseGameArgs(gameOptionsFor(game.Path).Args))
+	if len(extra) > 0 && !hotseatLauncherForwards(launcher) {
+		extra = nil
+	}
+	name, args := gameLaunchCommandArgs(launcher, romArg, extra)
+	name, args = firmwareScriptCommand(launcher, name, args)
+	logPath := ""
+	if dir := gameDiagLogDir(); dir != "" && os.MkdirAll(dir, 0o755) == nil {
+		logPath = filepath.Join(dir, launcherLogName)
+	}
+	boost := xboxBoostSupported() && xboxBoostEnabled(appConfig)
+	scriptPath := hakuxHandoffPath(hakuxHandoffScriptName)
+	statusPath := hakuxHandoffPath(hakuxHandoffStatusName)
+	notePath := hakuxHandoffPath(hakuxHandoffNoteName)
+	script := hakuxHandoffScript(hakuxHandoffSpec{
+		PID:     os.Getpid(),
+		Dir:     filepath.Dir(launcher),
+		Command: append([]string{name}, args...),
+		Status:  statusPath,
+		Log:     logPath,
+		Title:   title,
+		Boost:   boost,
+	})
+	// An earlier hand-off's files are not this one's.
+	_ = os.Remove(statusPath)
+	_ = os.Remove(notePath)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		logWarn("xbox", "%s starts beside JukaHub: the hand-off script could not be written (%v)", title, err)
+		return false
+	}
+	cmd := exec.Command("sh", "--", scriptPath)
+	cmd.Dir = filepath.Dir(launcher)
+	// The firmware's environment, as screenChildGroupConfigure gives a game
+	// started beside JukaHub; with a Bluetooth headset routed, the game's
+	// sound goes there too (JukaHub, the PCM's one client, is gone by then).
+	cmd.Env = screenChildEnv(os.Environ())
+	if pcm := audioRouteChildPCM(); pcm != "" {
+		if _, set := childEnvLookup(cmd.Env, "AUDIODEV"); !set {
+			cmd.Env = append(cmd.Env, "AUDIODEV="+pcm)
+		}
+	}
+	configureChiakiDetached(cmd)
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(scriptPath)
+		logWarn("xbox", "%s starts beside JukaHub: the hand-off script did not start (%v)", title, err)
+		return false
+	}
+	pid := cmd.Process.Pid
+	// Without the marker launch.sh would give the screen to the stock menu as
+	// JukaHub quits, and never bring JukaHub back: no marker, no hand-off.
+	if err := os.WriteFile(marker, []byte(strconv.Itoa(pid)+"\n"), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.Remove(scriptPath)
+		logWarn("xbox", "%s starts beside JukaHub: the screen hand-off could not be recorded (%v)", title, err)
+		return false
+	}
+	go func() { _ = cmd.Wait() }()
+	hakuxHandoffBegun = true
+
+	// The start counts now — the recents, the game's launches, the Continue
+	// card — and the next start credits the time played (hakuxHandoffReturn).
+	gmetaNoteLaunch(game)
+	recents := recordGameLaunch(game)
+	note := hakuxHandoffNote{
+		Version:      hakuxHandoffNoteVersion,
+		Path:         game.Path,
+		System:       game.System,
+		Title:        game.Title,
+		DisplayTitle: game.DisplayTitle,
+		Launcher:     launcher,
+		Log:          logPath,
+		FromLibrary:  gameLib.open,
+		Script:       pid,
+	}
+	if len(recents) > 0 && recents[0].Path == game.Path {
+		note.PlayedAt = recents[0].PlayedAt
+	}
+	if data, err := json.Marshal(note); err != nil {
+		logWarn("xbox", "the note for the return from %s was not written: %v", title, err)
+	} else if err := os.WriteFile(notePath, data, 0o600); err != nil {
+		logWarn("xbox", "the note for the return from %s was not written: %v", title, err)
+	}
+	if boost {
+		hakuxHandoffBoost(game)
+	}
+	logInfo("xbox", "%s gets the screen to itself: hand-off script pid %d runs %s once JukaHub has closed, and launch.sh starts JukaHub again when the game ends",
+		title, pid, strings.Join(append([]string{name}, args...), " "))
+	ShowToast(title+" is starting — JukaHub closes while it plays and comes back after", ToastKindInfo)
+	requestAppExit()
+	return true
+}
+
+// hakuxHandoffBoost is Heavy-game boost's hardware half for a game JukaHub
+// quits for, made before it quits: parked cores online, the GPU's and the
+// memory controller's clocks up, the card's read-ahead raised
+// (xboxBoostHardwarePlan). Nothing puts them back at the exit — the session is
+// never the active one (xboxBoostShutdown) — and the crash marker applyLocked
+// writes is what the next start, after the game, reads to put back what is
+// still as written (xboxBoostRecover). Main thread.
+func hakuxHandoffBoost(game libraryGame) {
+	label := hakuxGameTitle(game)
+	xboxBoost.mu.Lock()
+	busy := xboxBoost.active != nil
+	prev := xboxBoost.pending
+	if !busy {
+		xboxBoost.pending = nil
+	}
+	xboxBoost.mu.Unlock()
+	if busy {
+		return
+	}
+	s := &xboxBoostSession{kind: xboxBoostGame, target: game.Path, label: label, begun: time.Now()}
+	xboxBoostOps.Lock()
+	// The last boosted game's restore first: it would remove this marker.
+	prev.restoreLocked()
+	s.applyLocked(xboxBoostHardwarePlan(game.Path))
+	xboxBoostOps.Unlock()
+	s.mu.Lock()
+	line := strings.Join(s.details, "; ")
+	s.mu.Unlock()
+	if line != "" {
+		logInfo("xbox", "boost for %s while JukaHub is closed: %s; the next start puts it back", label, line)
+	}
+}
+
+// ── The script ──────────────────────────────────────────────────────────────
+
+// hakuxHandoffSpec is what one hand-off script is written for.
+type hakuxHandoffSpec struct {
+	PID     int      // JukaHub, which the script waits for
+	Dir     string   // the launcher's folder, where it runs
+	Command []string // the launcher's command line, as MainUI's queue runs it
+	Status  string   // the status file the next start reads
+	Log     string   // the launcher's output ("" for none)
+	Title   string   // the game, for the status lines
+	Boost   bool     // the performance governor while the game runs
+}
+
+// hakuxHandoffScript writes the hand-off script: the values, quoted for sh,
+// then hakuxHandoffShell. The launcher's command line becomes the script's
+// positional parameters, one quoted word each, so no name on the card is ever
+// read as shell.
+func hakuxHandoffScript(spec hakuxHandoffSpec) string {
+	logPath := spec.Log
+	if strings.TrimSpace(logPath) == "" {
+		logPath = "/dev/null"
+	}
+	// The title goes into status lines: no line breaks in it.
+	title := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, spec.Title)
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# Generated by JukaHub — hands the screen to an Xbox game (hakux_handoff.go). Do not edit.\n")
+	fmt.Fprintf(&b, "JUKAHUB_PID=%d\n", spec.PID)
+	fmt.Fprintf(&b, "LAUNCH_DIR=%s\n", psShellQuote(spec.Dir))
+	fmt.Fprintf(&b, "STATUS=%s\n", psShellQuote(spec.Status))
+	fmt.Fprintf(&b, "LOG=%s\n", psShellQuote(logPath))
+	fmt.Fprintf(&b, "LOG_CAP=%d\n", launcherLogCap)
+	fmt.Fprintf(&b, "TITLE=%s\n", psShellQuote(title))
+	if spec.Boost {
+		b.WriteString("BOOST=1\n")
+	} else {
+		b.WriteString("BOOST=0\n")
+	}
+	b.WriteString("set --")
+	for _, a := range spec.Command {
+		b.WriteString(" " + psShellQuote(a))
+	}
+	b.WriteString("\n")
+	b.WriteString(hakuxHandoffShell)
+	return b.String()
+}
+
+// hakuxHandoffShell is the script's body (POSIX sh, BusyBox's as well). Its
+// steps go to the status file only, so the launcher's log holds the
+// launcher's own lines for the card; the next start writes them into
+// JukaHub's log.
+const hakuxHandoffShell = `
+step() {
+    echo "step=$*" >> "$STATUS" 2>/dev/null
+}
+# The boot clock, which the network cannot move: what the game is measured by.
+uptime_now() {
+    UN_UP=""
+    read -r UN_UP UN_REST < /proc/uptime 2>/dev/null
+    echo "${UN_UP:-0}"
+}
+uptime_secs() {
+    US_UP="$(uptime_now)"
+    US_UP="${US_UP%.*}"
+    case "$US_UP" in "" | *[!0-9]*) US_UP=0 ;; esac
+    echo "$US_UP"
+}
+# Heavy-game boost's governor: every cpufreq policy that offers performance,
+# put back after the game exactly as it was.
+TUNE_CPU=""
+tune_cpu_dirs() {
+    TD_ANY=""
+    for TD_D in /sys/devices/system/cpu/cpufreq/policy[0-9]*; do
+        [ -d "$TD_D" ] && { echo "$TD_D"; TD_ANY=1; }
+    done
+    [ -n "$TD_ANY" ] && return 0
+    for TD_D in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+        [ -d "$TD_D" ] && echo "$TD_D"
+    done
+    return 0
+}
+tune_apply() {
+    for TA_D in $(tune_cpu_dirs); do
+        TA_G="$(cat "$TA_D/scaling_governor" 2>/dev/null)"
+        case "$TA_G" in "" | performance | *[!A-Za-z0-9_]*) continue ;; esac
+        case " $(cat "$TA_D/scaling_available_governors" 2>/dev/null) " in
+            *" performance "*) ;;
+            *) continue ;;
+        esac
+        # Noted before the write: a signal between the two still puts it back.
+        TUNE_CPU="$TUNE_CPU$TA_D $TA_G
+"
+        { echo performance > "$TA_D/scaling_governor"; } 2>/dev/null
+        [ "$(cat "$TA_D/scaling_governor" 2>/dev/null)" = performance ] || continue
+        step "CPU ${TA_D#/sys/devices/system/cpu/}: governor $TA_G -> performance"
+    done
+    return 0
+}
+tune_restore() {
+    while read -r TR_D TR_G; do
+        [ -n "$TR_D" ] || continue
+        { echo "$TR_G" > "$TR_D/scaling_governor"; } 2>/dev/null
+        step "CPU ${TR_D#/sys/devices/system/cpu/}: governor back to $TR_G"
+    done <<EOF
+$TUNE_CPU
+EOF
+    TUNE_CPU=""
+    return 0
+}
+# The firmware's quick menu, by its own binary (the list launch.sh checks).
+osd_pids() {
+    for OP_P in $(pidof trimui_osdd 2>/dev/null || pgrep -x trimui_osdd 2>/dev/null); do
+        case "$(readlink "/proc/$OP_P/exe" 2>/dev/null)" in
+            /usr/trimui/osd/trimui_osdd | /mnt/SDCARD/trimui/osd/trimui_osdd | /mnt/UDISK/trimui/osd/trimui_osdd)
+                echo "$OP_P"
+                ;;
+        esac
+    done
+}
+# Never the stock menu on the panel with the game, or with JukaHub coming back.
+# pidof can name several MainUIs: one argument per pid.
+stop_mainui() {
+    SM_PID="$(pidof MainUI 2>/dev/null)"
+    [ -n "$SM_PID" ] || return 0
+    step "a MainUI was running (pid $SM_PID); closed it"
+    kill $SM_PID 2>/dev/null
+    sleep 1
+    SM_PID="$(pidof MainUI 2>/dev/null)"
+    [ -n "$SM_PID" ] && kill -9 $SM_PID 2>/dev/null
+    return 0
+}
+WATCH_PID=""
+finish() {
+    [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
+    WATCH_PID=""
+    tune_restore
+}
+trap '' HUP
+trap 'echo "ended=$(uptime_now)" >> "$STATUS" 2>/dev/null; echo "rc=143" >> "$STATUS" 2>/dev/null; finish; step "stopped by a signal"; rm -f "$0" 2>/dev/null; exit 143' TERM INT
+
+echo "version=1" > "$STATUS" 2>/dev/null
+# A log that can be written, emptied for this game; else none. The probe runs
+# in a subshell: a failed redirect on ":" ends a POSIX shell outright.
+mkdir -p "$(dirname "$LOG")" 2>/dev/null
+if ! (: > "$LOG") 2>/dev/null; then
+    LOG=/dev/null
+fi
+step "waiting for JukaHub (pid $JUKAHUB_PID) to close"
+NAP=0.1
+LIMIT=600
+sleep 0.1 2>/dev/null || { NAP=1; LIMIT=60; }
+i=0
+while kill -0 "$JUKAHUB_PID" 2>/dev/null; do
+    i=$((i + 1))
+    [ "$i" -ge "$LIMIT" ] && break
+    sleep "$NAP"
+done
+if kill -0 "$JUKAHUB_PID" 2>/dev/null; then
+    step "JukaHub did not close within a minute; the game was not started over it"
+    rm -f "$0" 2>/dev/null
+    exit 0
+fi
+CLOSED="$(uptime_secs)"
+# launch.sh puts back the CPU settings JukaHub found as it exits; the governor
+# goes on after that.
+sleep 1
+stop_mainui
+OSD_BEFORE="$(osd_pids)"
+[ "$BOOST" = 1 ] && tune_apply
+step "starting $TITLE"
+echo "started=$(uptime_now)" >> "$STATUS" 2>/dev/null
+# The launcher's output stays under LOG_CAP; the watch ends with this script.
+if [ "$LOG" != /dev/null ]; then
+    (
+        while kill -0 "$$" 2>/dev/null; do
+            sleep 30
+            LW_SIZE="$(wc -c < "$LOG" 2>/dev/null)"
+            case "$LW_SIZE" in "" | *[!0-9]*) continue ;; esac
+            [ "$LW_SIZE" -gt "$LOG_CAP" ] && : > "$LOG"
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    WATCH_PID=$!
+fi
+(
+    cd "$LAUNCH_DIR" 2>/dev/null
+    exec "$@"
+) >> "$LOG" 2>&1
+RC=$?
+echo "ended=$(uptime_now)" >> "$STATUS" 2>/dev/null
+echo "rc=$RC" >> "$STATUS" 2>/dev/null
+finish
+step "$TITLE ended (exit code $RC)"
+stop_mainui
+if [ -z "$OSD_BEFORE" ]; then
+    for P in $(osd_pids); do
+        kill -KILL "$P" 2>/dev/null && step "closed the quick menu the game left running (pid $P)"
+    done
+fi
+# launch.sh looks for this script right after JukaHub exits: a game that ended
+# at once must not take the script with it before launch.sh is waiting.
+NOW="$(uptime_secs)"
+if [ $((NOW - CLOSED)) -lt 3 ]; then
+    sleep 3
+fi
+rm -f "$0" 2>/dev/null
+exit 0
+`
+
+// ── The return ──────────────────────────────────────────────────────────────
+
+func init() {
+	// After the first frame, like PS Remote Play's last-run note: the card and
+	// the library need the render loop (startup.go).
+	deferStartupTask("xbox-handoff-return", hakuxHandoffReturn)
+}
+
+// hakuxHandoffScriptRunning reports whether pid is a hand-off script still
+// running: the game still is (a JukaHub started by hand beside it).
+func hakuxHandoffScriptRunning(pid int) bool {
+	if pid <= 1 {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	return err == nil && bytes.Contains(raw, []byte(hakuxHandoffScriptName))
+}
+
+// hakuxHandoffClear removes the hand-off's files.
+func hakuxHandoffClear() {
+	for _, name := range []string{hakuxHandoffNoteName, hakuxHandoffStatusName, hakuxHandoffScriptName} {
+		_ = os.Remove(hakuxHandoffPath(name))
+	}
+}
+
+// hakuxHandoffReturn reads what the last hand-off left, once, at the start
+// after it (the package header). Main thread (the deferred start-up queue).
+func hakuxHandoffReturn() {
+	if IsWindows() {
+		return
+	}
+	data, err := os.ReadFile(hakuxHandoffPath(hakuxHandoffNoteName))
+	if err != nil {
+		return
+	}
+	var note hakuxHandoffNote
+	if json.Unmarshal(data, &note) != nil || note.Version != hakuxHandoffNoteVersion || strings.TrimSpace(note.Path) == "" {
+		hakuxHandoffClear()
+		return
+	}
+	if hakuxHandoffScriptRunning(note.Script) {
+		logInfo("xbox", "the Xbox game JukaHub closed for is still running (hand-off script pid %d); its note waits", note.Script)
+		return
+	}
+	status, _ := os.ReadFile(hakuxHandoffPath(hakuxHandoffStatusName))
+	run := hakuxHandoffParseStatus(status)
+	hakuxHandoffClear()
+	game := note.game()
+	title := hakuxGameTitle(game)
+	steps := strings.Join(run.Steps, " · ")
+	ran := run.ran()
+	switch {
+	case !run.HasStart:
+		logWarn("xbox", "%s was not started after JukaHub closed for it: %s", title, steps)
+	case !run.HasEnd:
+		logWarn("xbox", "%s started, but its end was not recorded: %s", title, steps)
+	default:
+		logInfo("xbox", "back from %s after %s (exit code %d): %s", title, ran.Round(time.Second), run.RC, steps)
+	}
+	if run.HasStart {
+		// Its saves go up to Google Drive / RomM, as after any game
+		// (savesync_auto.go).
+		saveSyncAfterExit(game.Path, game.System)
+	}
+	if ran > 0 {
+		hakuxHandoffCredit(note, ran, 0)
+	}
+	if hakuxHandoffFailed(run) {
+		go hakuxHandoffDiagnose(note, run)
+	}
+	if note.FromLibrary {
+		hakuxHandoffReopen(game, 0)
+	}
+}
+
+// hakuxHandoffCredit counts the time played like a game played beside JukaHub
+// (playtimeCreditGameGap, gameHistoryFinishHandoff): from the start the
+// recents recorded, for as long as the script measured, when that start is
+// still the newest. It waits a few frames for the playtime ledger to load.
+// Main thread.
+func hakuxHandoffCredit(note hakuxHandoffNote, ran time.Duration, tries int) {
+	if note.PlayedAt.IsZero() {
+		return
+	}
+	if !playtime.loaded {
+		if tries < hakuxHandoffWaitFrames {
+			requestFrameEvery(50)
+			tbxPost(func() { hakuxHandoffCredit(note, ran, tries+1) })
+		}
+		return
+	}
+	recents := recentGames()
+	if len(recents) == 0 || recents[0].Path != note.Path || !recents[0].PlayedAt.Equal(note.PlayedAt) {
+		logInfo("xbox", "time in %s not counted: another game was started since", filepath.Base(note.Path))
+		return
+	}
+	start := recents[0].PlayedAt
+	end := start.Add(ran)
+	gameHistoryFinishHandoff(recents, start, end)
+	playtimeCreditGameGap(start, end)
+}
+
+// hakuxHandoffDiagnose builds the launch card for a start that did not get
+// going: the game's own checks (gamediag.go), the launcher's last lines and
+// what the script saw. Its own goroutine: it reads the card.
+func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
+	defer func() {
+		if r := recover(); r != nil {
+			logWarn("xbox", "the card for the last Xbox game failed: %v", r)
+		}
+	}()
+	game := note.game()
+	report, _ := diagnoseLibraryGame(game, note.Launcher, "")
+	if strings.TrimSpace(note.Log) != "" {
+		d := &gameDiagLaunch{game: game, launcher: note.Launcher, outPath: note.Log}
+		d.addLauncherOutput(&report)
+	}
+	if !run.HasStart {
+		why := run.lastStep()
+		if why == "" {
+			why = "the hand-off script never ran"
+		}
+		report.Summary = "JukaHub closed to give the game the screen, but the game was not started: " + why + "."
+		logInfoDiag(report)
+		gameDiagPost(report)
+		return
+	}
+	secs := int(run.ran().Round(time.Second) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	when := "It closed after " + pluralizeCount(secs, "second", "seconds")
+	if run.RC > 0 {
+		when += " (exit code " + strconv.Itoa(run.RC) + ")"
+	}
+	switch {
+	case len(report.Issues) > 0:
+		report.Summary = when + ". This is what stops it:"
+	case len(report.LogLines) > 0:
+		report.Summary = when + ". JukaHub found nothing missing that it can check; hakuX's launcher's last lines are below."
+	default:
+		report.Summary = when + ". JukaHub found nothing missing that it can check, and hakuX's launcher printed nothing."
+	}
+	logInfoDiag(report)
+	gameDiagPost(report)
+}
+
+// hakuxHandoffReopen opens the Games Library on the game again for a game
+// started from it, once the start-up questions are answered (the lock, the
+// first-run tour, "Who is playing?"). Main thread.
+func hakuxHandoffReopen(game libraryGame, tries int) {
+	if exitRequested.Load() || gameScreenSuspended() {
+		return
+	}
+	if startupLocked() || onboarding.active || profilesPicker.sheet.open {
+		if tries < hakuxHandoffWaitFrames {
+			requestFrameEvery(50)
+			tbxPost(func() { hakuxHandoffReopen(game, tries+1) })
+		}
+		return
+	}
+	openGameLibraryOnSystem(game.System, "")
+	if !gameLib.scanning {
+		jumpToLibraryGame(game)
+	}
+}

@@ -825,7 +825,8 @@ func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, exi
 // consoles this hardware cannot run (when their Roms/ folder exists), marked
 // "Not supported" with the reason instead of offering a dead end, and always
 // one Xbox tile: hakuX where
-// it is offered or installed, the honest reason where it is not.
+// it is offered or installed, the honest reason where it is not. A GameCube
+// and a Wii tile join it while Dolphin plays them here (dolphin_folders.go).
 func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEntry {
 	byName := map[string]emuEntry{}
 	add := func(e emuEntry) {
@@ -843,6 +844,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	}
 	// Where the Godot port is offered, its folders are one Godot tile.
 	godotHere := godotOffered()
+	// Where Dolphin plays GameCube and Wii, each has its own tile, whatever
+	// the card holds yet (dolphin_folders.go).
+	dolphinTiles := dolphinConsoleTilesShown()
 
 	for _, root := range emuRoots {
 		dirEntries, err := os.ReadDir(root)
@@ -925,6 +929,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				if godotHere && godotIsFolder(r.Name()) {
 					continue // the Godot tile below speaks for Roms/GODOT
 				}
+				if dolphinTiles && dolphinConsoleFolderName(r.Name()) {
+					continue // so do the GameCube and Wii tiles for Roms/GC and Roms/WII
+				}
 				folder := filepath.Join(romsRoot, r.Name())
 				if sys, ok := emuDesktopSystemFor(r.Name()); ok {
 					if sys.System == emuXboxEntryName {
@@ -953,6 +960,11 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 		}
 	}
 
+	// GameCube and Wii too, while Dolphin plays them here: Dolphin, where their
+	// games go, and A plays or sets it up (dolphin_folders.go).
+	for _, e := range dolphinConsoleEntries(romsRoot, byName) {
+		add(e)
+	}
 	// Xbox is listed whether or not a Roms/ folder exists: people ask for it
 	// (Halo 2). On the Smart Pro the tile installs the experimental hakuX port;
 	// on a model it is not offered for, it says why. A launcher folder that is
@@ -1459,6 +1471,12 @@ func emuPanelActivate(config *Config) {
 		// The Godot tile: its games once the port is here, the install before
 		// that (godot.go).
 		godotActivate(e)
+		return
+	}
+	if dolphinConsoleTile(e) {
+		// The GameCube and Wii tiles: the console's games once Dolphin is in,
+		// its setup before that (dolphin_folders.go).
+		dolphinConsoleActivate(e)
 		return
 	}
 	if emuRetroArchMenuTile(e) {

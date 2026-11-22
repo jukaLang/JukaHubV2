@@ -245,6 +245,19 @@ func gameHistoryLaunch(game libraryGame, when time.Time) {
 // Short starts are retained with zero playtime; they count as launches but do
 // not change the existing lifetime playtime rule.
 func gameHistoryFinishGap(recents []recentGame, gapStart, gapEnd time.Time) {
+	gameHistoryFinish(recents, gapStart, gapEnd, false)
+}
+
+// gameHistoryFinishHandoff settles a game JukaHub quit for and came back after
+// (hakux_handoff.go): the start in between marked its open session
+// interrupted, which it was not.
+func gameHistoryFinishHandoff(recents []recentGame, gapStart, gapEnd time.Time) {
+	gameHistoryFinish(recents, gapStart, gapEnd, true)
+}
+
+// gameHistoryFinish is gameHistoryFinishGap; restarted also takes the session
+// a restart marked interrupted.
+func gameHistoryFinish(recents []recentGame, gapStart, gapEnd time.Time, restarted bool) {
 	if len(recents) == 0 {
 		return
 	}
@@ -275,9 +288,9 @@ func gameHistoryFinishGap(recents []recentGame, gapStart, gapEnd time.Time) {
 	rec := gameHistoryStore.data.Games[key]
 	for i := len(rec.Sessions) - 1; i >= 0; i-- {
 		s := &rec.Sessions[i]
-		if s.Ended.IsZero() && !s.Interrupted && s.Started.Sub(g.PlayedAt) < time.Second &&
+		if s.Ended.IsZero() && (!s.Interrupted || restarted) && s.Started.Sub(g.PlayedAt) < time.Second &&
 			s.Started.Sub(g.PlayedAt) > -time.Second {
-			s.Ended, s.Seconds = gapEnd, seconds
+			s.Ended, s.Seconds, s.Interrupted = gapEnd, seconds, false
 			if seconds > 0 {
 				rec.Completed++
 				rec.Total += seconds

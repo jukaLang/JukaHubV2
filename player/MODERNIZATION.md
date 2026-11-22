@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **393** (audited 2026-11-19).
+Open tasks: **394** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -1218,8 +1218,23 @@ work on TrimUI. 2026-11-21 (Juka: "a few fps" on the Smart Pro):
 shader mode 3, native resolution, skipped duplicate frames, deferred EFB
 copies; no run-ahead, preemptive frames or rewind) or Fastest (plus
 `dolphin_efb_access_enable` off, `dolphin_cpu_clock_rate` 0.50, `video_vsync`
-off); Automatic is Fastest on the A133P. Written without a Go toolchain or a
-device: whether either build loads and draws on the TrimUI firmware (its
+off); Automatic is Fastest on the A133P. 2026-11-21 (Juka: "I can't find
+GameCube or Wii folders"): `dolphin_folders.go` makes `Roms/GC` and `Roms/WII`
+(once per card at start-up and after a setup, whenever missing on a press of
+the console's tile or when the setting is turned on) and always lists a
+GameCube and a Wii tile on the Emulators page. 2026-11-22, a tester's Brick Pro
+(CrossMix-OS): "Could not install GameCube games — the 2026-11-21 build was
+refused here before: … needs libusb-1.0.so…" — JukaHub's own build was not
+there (not published, or not yet when the list was read), and the buildbot's
+nightly, a desktop build, links libusb and libudev. `coredevlibs.go` now
+installs Ubuntu's `libusb-1.0-0`/`libudev1` (+ libcap) through Linux packages,
+copies them into `private-glibc/devlibs/`, adds that folder last on the
+private loader's path for a core that links them, and refuses a build these
+do not complete with every missing library named; the setup's error names each
+source's outcome and a press re-reads `cores-aarch64`'s index; `build-cores.sh`
+hands CMake the libudev stub (`LIBUDEV_LIBRARY`) and removes the root's
+`libudev.so` link. Written without a Go toolchain
+or a device: whether either build loads and draws on the TrimUI firmware (its
 DT_NEEDED, glibc), the option values the rebased core takes, whether
 the CI build passes with its switches (target `dolphin_libretro`, output
 under `Binaries/`, hidapi linking `udev`), which context the stock
@@ -1227,7 +1242,9 @@ RetroArch gives it (GLES 3 or Vulkan), Dolphin.zip's layout, the numeric option
 values and the RetroArch log lines `dolphinVideoFailureLine` matches are from
 web reports, not from a run.
 **Where.** `dolphin.go`, `dolphin_setup.go`, `dolphin_video.go`,
-`coretrimui.go`, `dolphin_speed.go`, `emulatorupdates.go` (`fetchCoreUpdate`),
+`coretrimui.go`, `coredevlibs.go`, `ra_glibc.go` (`raGlibcPlanFor`),
+`dolphin_speed.go`, `dolphin_folders.go`, `emulators.go`
+(`deviceEmulatorEntries`), `emulatorupdates.go` (`fetchCoreUpdate`),
 `emusystems.go` (`emuDesktopSystemFor`), `emupicker.go`, `game_library.go`,
 `gamediag.go`, `xboxboost.go`, `compat.go`, `romsetup.go`,
 `player/native/build-cores.sh`, `.github/workflows/retroarch-cores.yml`;
@@ -1274,6 +1291,26 @@ Try anyway), each step holds or a FIX task names what differs:
    during the game and the old ones after it. Record which option values the
    build refused (RetroArch's log), and any game Fastest breaks (the skipped
    EFB reads, the half-speed CPU) for a per-game exception.
+9. The folders and tiles, on a card with neither folder: the first start makes
+   `Roms/GC` and `Roms/WII` (log `GameCube: made …`; `dolphin.json` lists
+   `folders`). The Emulators page shows a GameCube and a Wii tile ("A sets it
+   up" before the core is in, the game count after) and no "GC — no emulator
+   found" row; A on the Wii tile with no Wii games opens the library with the
+   "No Wii games yet" toast. Delete `Roms/WII` and restart: it stays deleted,
+   and A on the Wii tile makes it again. With a launcher folder of your own in
+   `Emus/GC`, the GameCube tile is not listed and its games start there.
+10. The buildbot fallback on the Brick Pro, while `cores-aarch64` has no
+    Dolphin (or with it removed from the card's choice by hand): X on the
+    GameCube tile installs Linux packages `libusb-1.0-0` and `libudev1` (log
+    `installing Ubuntu's …`, then `device libraries for RetroArch on JukaHub's
+    glibc: …`), `data/private-glibc/devlibs/` holds `libusb-1.0.so.0`,
+    `libudev.so.1` and `libcap.so.2` (or record what else the copy needed), and
+    the core installs — or is refused naming every library still missing
+    (record them: those are what the buildbot links). A game's start logs
+    `RetroArch starts on JukaHub's glibc … device libraries from …` and
+    reaches gameplay; a SNES game right after logs no device libraries. With
+    neither source giving a build, the card names both ("JukaHub's build for
+    TrimUI: …; the libretro buildbot: …").
 **Verify.** Record in the HW log.
 
 ### PS2-HW-1 — PlayStation 2 in the ARMSX2 core on a Smart Pro (P1, M) [HW] [NET]
@@ -4246,7 +4283,37 @@ FIX task names what differs:
    `iwconfig` exists, and `iw dev wlan0 get power_save` reads on again after.
 5. Note MemAvailable before/after from the `boost on` line and the in-game fps
    of one title with Xbox boost on and off.
+Since 2026-11-22 an Xbox game started under launch.sh quits JukaHub instead
+(XBX-12): steps 1, 3 and 5 then apply to a GameCube, Wii or PS2 game, and the
+hand-off's own half of the boost is XBX-12's step 4.
 **Verify.** Record in the HW log.
+
+### XBX-12 — Xbox games with JukaHub closed (hakuX screen hand-off) (P1, S) [HW]
+**Why.** A tester, 2026-11-21: the first Xbox game "stuck in the menu" with its
+sound playing, and the hotkeys "only opened RetroArch menu and not the
+standalone hakuX emulator". An Xbox game now quits JukaHub for its length
+through launch.sh's screen-handoff protocol; written without a Go toolchain or
+a device.
+**Where.** `hakux_handoff.go` (hook in `game_library.go` `launchLibraryGame`),
+`game_history.go` (`gameHistoryFinishHandoff`); `/tmp/jukahub-xbox-handoff.*`,
+`Apps/JukaHub/data/gamediag/launcher.log`, `.screen-handoff`.
+**Done when.** On a Smart Pro and a Brick with hakuX and an Xbox game, each step
+holds or a FIX task names what differs:
+1. A on the game shows "… is starting — JukaHub closes while it plays", JukaHub
+   closes and the game's picture appears (no JukaHub frame left on the panel);
+   errors.txt shows `screen handed to helper pid …`.
+2. Menu opens hakuX's settings, not the firmware's quick menu; holding
+   Start + Select about 1.2 s quits, and JukaHub comes back within a few
+   seconds without the boot animation, on the Games Library's Xbox row.
+3. The log's `back from <game> after …` line lists the script's steps; the
+   game page's playtime grows by the session (sessions of 30 s or more).
+4. With Heavy-game boost on, `scaling_governor` reads `performance` during
+   the game and the firmware's value after; the log shows `boost for <game>
+   while JukaHub is closed: …` and, after the return, `put back … value(s)`.
+5. A launch.sh edited to `exit 1` at once brings JukaHub back with the launch
+   card and the launcher's lines; under JukaHub OS no TrimUI quick menu is
+   left running after the game.
+**Verify.** Record in the HW log and fold the results into XBX-1.
 
 ### XBX-3 — Reproducible hakuX build (P3, M) [NET]
 **Done when.** If the port documents its build (TrimUI SDK or

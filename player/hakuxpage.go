@@ -37,6 +37,9 @@ const (
 	hakuxCaveat = "Experimental port: 1 GB of RAM, not every game runs, and 30 fps is a target, not a promise."
 	// hakuxControls is how hakuX is driven inside a game.
 	hakuxControls = "In a game: Menu opens hakuX's settings (screenshots too) · hold Start+Select about 1.2 s to exit."
+	// hakuxHandoffSheetNote says what a start does where the screen hand-off
+	// runs (hakux_handoff.go).
+	hakuxHandoffSheetNote = "JukaHub closes while an Xbox game plays, so hakuX has the screen, the buttons and all the memory, and comes back when the game ends."
 )
 
 // xboxLibraryLauncherHintFor is the Games Library's answer to an Xbox game with
@@ -709,7 +712,11 @@ func hakuxSheetReport() emuXboxReport {
 	if folder == "" && hakuxAutoPending() {
 		report.Notes = append(report.Notes, "Emulator updates installs hakuX by itself at its next quiet moment (on the charger, or after 2 idle minutes) · A on an Xbox game in Games installs it at once")
 	}
-	report.Notes = append(report.Notes, hakuxControls, hakuxCaveat)
+	report.Notes = append(report.Notes, hakuxControls)
+	if psLauncherWaitsForHandoff() {
+		report.Notes = append(report.Notes, hakuxHandoffSheetNote)
+	}
+	report.Notes = append(report.Notes, hakuxCaveat)
 	if support.Untested != "" {
 		report.Notes = append(report.Notes, support.Untested)
 	}

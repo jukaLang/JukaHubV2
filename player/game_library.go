@@ -762,6 +762,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if err := playtimeAllowGameLaunch(game.Title); err != nil {
 		return err
 	}
+	// An Xbox game gets the handheld to itself: JukaHub quits for it and
+	// launch.sh starts JukaHub again when the game ends (hakux_handoff.go).
+	if hakuxHandoffLaunch(game, launcher) {
+		return nil
+	}
 	// A RetroArch launcher gets the two cfg switches that make the next boot
 	// continue from the auto state, plus the folder its own record toggle
 	// writes captures to, so the Recordings screen can list them. Standalone

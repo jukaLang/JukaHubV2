@@ -111,9 +111,13 @@ dolphin|https://github.com/libretro/dolphin.git|.|cmake|-DLIBRETRO=ON -DENABLE_Q
 # link, frame dumps; every library it keeps comes from its own Externals. Its
 # bundled hidapi links libudev on Linux (to find Wii Remotes): udev_stub gives
 # it a libudev that finds nothing, linked in, so the core needs no libudev.so.1
-# either. Unknown -D names are only a CMake warning, so a switch a newer tree
-# dropped costs nothing. One attempt only: without the extras it is not a
-# libretro build, and a build takes most of an hour.
+# either. The bundled libusb may look for libudev with CMake's find_library,
+# whose full path no -L order overrides: the stub is handed to CMake as
+# LIBUDEV_LIBRARY (core_cmake_args) and the root's libudev.so development link
+# is removed, so only the stub can answer (2026-11-22, after a Brick Pro fell
+# back to the buildbot's build). Unknown -D names are only a CMake warning, so
+# a switch a newer tree dropped costs nothing. One attempt only: without the
+# extras it is not a libretro build, and a build takes most of an hour.
 
 # WASM-4 (wasm4.org fantasy-console carts, player/wasm4*.go) is upstream's
 # runtimes/native CMake project built for its wasm4_libretro target, the
@@ -381,7 +385,31 @@ print(len(names))' /usr/include/libudev.h "$us_dir/udev-stub.c")"; then
         return 1
     fi
     say "libudev stub: $us_count functions" >&2
+    # The shared libudev stays out of every link: a CMake find_library (the
+    # bundled libusb's FindLIBUDEV) would hand the linker its full path, which
+    # no -L order overrides, and the core would need libudev.so.1 after all.
+    # Without the development link only the stub answers "udev" (the build root
+    # is thrown away after the run; libudev.so.1 itself stays for its tools).
+    for us_so in /usr/lib/aarch64-linux-gnu/libudev.so /lib/aarch64-linux-gnu/libudev.so /usr/lib/libudev.so /lib/libudev.so; do
+        if [ -e "$us_so" ] || [ -L "$us_so" ]; then
+            rm -f "$us_so" && say "kept $us_so out of the link: the stub stands in" >&2
+        fi
+    done
     printf '%s\n' "$us_dir"
+    return 0
+}
+
+# core_cmake_args CORE STUB: CMake cache entries a core's configure gets beyond
+# the table's extras. Dolphin's libudev is the stub archive itself, so a
+# FindLIBUDEV that is asked anyway links it in rather than searching.
+core_cmake_args() {
+    case "$1" in
+        dolphin)
+            if [ -n "$2" ]; then
+                printf '%s\n' "-DLIBUDEV_LIBRARY=$2/libudev.a -DLIBUDEV_INCLUDE_DIR=/usr/include"
+            fi
+            ;;
+    esac
     return 0
 }
 
@@ -584,12 +612,14 @@ build_one() {
     b_cflags="$(core_cflags "$b_core")"
     # Folders put first on the link path: Dolphin's libudev stub.
     b_ldpath=""
+    b_stub=""
     case "$b_core" in
         dolphin)
             b_stub="$(udev_stub)" || return 1
             b_ldpath="-L$b_stub"
             ;;
     esac
+    b_cmake_more="$(core_cmake_args "$b_core" "$b_stub")"
 
     # Attempts, first to last: the table's extras with libstdc++ linked in
     # (its symbols kept out of the core's exports), the extras without that (a
@@ -624,7 +654,7 @@ build_one() {
                 # shellcheck disable=SC2086 # the extras are separate arguments
                 (cd "$b_mk" && LDFLAGS="$b_ldflags" CFLAGS="$b_cflags" CXXFLAGS="$b_cflags" \
                     CC="$b_cc" CXX="$b_cxx" \
-                    cmake -S . -B build-jukahub -G Ninja -DCMAKE_BUILD_TYPE=Release $b_args &&
+                    cmake -S . -B build-jukahub -G Ninja -DCMAKE_BUILD_TYPE=Release $b_args $b_cmake_more &&
                     cmake --build build-jukahub --target "$b_core"_libretro -j "$JOBS") \
                     > "$b_log/$b_name.log" 2>&1
             elif [ "$b_static" = yes ]; then

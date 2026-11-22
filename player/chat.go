@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/draw"
 	"io"
 	"math"
 	"net/http"
@@ -123,12 +124,27 @@ var chatImageDLMutex sync.Mutex
 var chatImageFetchCancel context.CancelFunc
 var chatImageFetchGeneration uint64
 
+// chatImageDecoding holds the downloaded pictures a goroutine is decoding, and
+// chatImageDecoded the pictures it decoded, waiting for the render thread to
+// make their textures (chatImageDecodeAsync). Guarded by chatImageDLMutex.
+// The tester log of 2026-11-22 showed why: the render thread decoded a 4 MB
+// photo itself, and Chat (on screen at start) froze for five to nine seconds.
+var chatImageDecoding = make(map[string]bool)
+var chatImageDecoded = make(map[string]*image.RGBA)
+
 const chatImageDownloadMaxBytes = 32 << 20
 const chatImagePendingMax = 1
+
+// chatImageMaxSide bounds a decoded chat picture's longer side: a phone photo
+// (4000×3000, 48 MB as a texture) is shrunk to what any screen JukaHub runs on
+// shows, the full-screen viewer included.
+const chatImageMaxSide = 2048
 
 // discardPendingChatImageDownloads drops encoded images no longer needed by
 // the current screen. Keep an in-flight reservation until its canceled reader
 // exits, so a quick return to Chat cannot start a second large read beside it.
+// A decode in flight keeps its reservation the same way; what it decodes is
+// dropped (the generation moved on).
 func discardPendingChatImageDownloads() {
 	chatImageDLMutex.Lock()
 	defer chatImageDLMutex.Unlock()
@@ -137,6 +153,64 @@ func discardPendingChatImageDownloads() {
 		chatImageFetchCancel()
 	}
 	clear(chatImageDownloads)
+	clear(chatImageDecoded)
+}
+
+// chatImagePendingLocked counts the pictures on their way: downloading,
+// downloaded, decoding and decoded. The caller holds chatImageDLMutex.
+func chatImagePendingLocked() int {
+	return len(chatImageFetching) + len(chatImageDownloads) + len(chatImageDecoding) + len(chatImageDecoded)
+}
+
+// chatImageDecodeAsync decodes one downloaded picture off the render thread:
+// the shared bounded decoder, then shrunk to chatImageMaxSide. A picture that
+// will not decode waits like a failed download. The caller marked url in
+// chatImageDecoding.
+func chatImageDecodeAsync(url string, data []byte, generation uint64) {
+	rgba, err := decodeImageRGBA(context.Background(), data)
+	if err == nil {
+		rgba = chatImageFit(rgba)
+	}
+	chatImageDLMutex.Lock()
+	defer chatImageDLMutex.Unlock()
+	delete(chatImageDecoding, url)
+	if generation != chatImageFetchGeneration {
+		return // discarded meanwhile
+	}
+	if err != nil || rgba == nil || rgba.Bounds().Dx() <= 0 || rgba.Bounds().Dy() <= 0 {
+		markChatImageFailedLocked(url)
+		return
+	}
+	chatImageDecoded[url] = rgba
+}
+
+// chatImageFit shrinks a decoded picture whose longer side is over
+// chatImageMaxSide, keeping its shape. Pure.
+func chatImageFit(rgba *image.RGBA) *image.RGBA {
+	b := rgba.Bounds()
+	w, h := b.Dx(), b.Dy()
+	long := max(w, h)
+	if long <= chatImageMaxSide || w <= 0 || h <= 0 {
+		return rgba
+	}
+	if b.Min != (image.Point{}) {
+		// pstoreDownscale reads from the origin.
+		moved := image.NewRGBA(image.Rect(0, 0, w, h))
+		draw.Draw(moved, moved.Bounds(), rgba, b.Min, draw.Src)
+		rgba = moved
+	}
+	return pstoreDownscale(rgba, max(1, w*chatImageMaxSide/long))
+}
+
+// chatImageStartDecodeLocked hands downloaded bytes to a decode goroutine.
+// The caller holds chatImageDLMutex.
+func chatImageStartDecodeLocked(url string, data []byte) {
+	delete(chatImageDownloads, url)
+	if chatImageDecoding[url] {
+		return
+	}
+	chatImageDecoding[url] = true
+	go chatImageDecodeAsync(url, data, chatImageFetchGeneration)
 }
 
 // Compiled on first use, so a session that never opens Chat does not pay for
@@ -156,12 +230,23 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 	chatImageMutex.Unlock()
 
 	chatImageDLMutex.Lock()
-	if data, ok := chatImageDownloads[url]; ok && len(data) > 0 {
-		// Taken out here so processChatImageDownloads does not decode the
-		// same bytes a second time in this frame.
-		delete(chatImageDownloads, url)
+	if rgba, ok := chatImageDecoded[url]; ok && renderer != nil {
+		// Decoded off this thread: only the texture is made here.
+		delete(chatImageDecoded, url)
 		chatImageDLMutex.Unlock()
-		return uploadChatImage(renderer, url, data)
+		return uploadChatImageRGBA(renderer, url, rgba)
+	}
+	if data, ok := chatImageDownloads[url]; ok && len(data) > 0 {
+		// Taken out here (so processChatImageDownloads does not start a
+		// second decode) and decoded by a goroutine; the picture appears a
+		// frame or two after that.
+		chatImageStartDecodeLocked(url, data)
+		chatImageDLMutex.Unlock()
+		return nil
+	}
+	if chatImageDecoding[url] {
+		chatImageDLMutex.Unlock()
+		return nil
 	}
 	// A link that failed (gone, offline, not an image) waits before the next
 	// try. Nothing was remembered before, so it was fetched again on every
@@ -171,7 +256,7 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 		chatImageDLMutex.Unlock()
 		return nil
 	}
-	if chatImageFetching[url] || len(chatImageFetching)+len(chatImageDownloads) >= chatImagePendingMax {
+	if chatImageFetching[url] || chatImagePendingLocked() >= chatImagePendingMax {
 		chatImageDLMutex.Unlock()
 		return nil
 	}
@@ -287,19 +372,12 @@ func fetchChatImage(ctx context.Context, cancel context.CancelFunc, url string, 
 	chatImageDLMutex.Unlock()
 }
 
-func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Texture {
-	// Decode through the shared bounded decoder: it turns the bytes into a
-	// dense RGBA and takes a permit, so a fan-out of decodes elsewhere cannot
-	// run unbounded. This call is on the render thread, where nothing else
-	// holds a permit, so the Acquire never blocks here.
-	rgba, err := decodeImageRGBA(context.Background(), data)
-	if err != nil {
-		markChatImageFailed(url)
-		return nil
-	}
+// uploadChatImageRGBA makes the texture of a picture chatImageDecodeAsync
+// decoded (the render thread: SDL textures belong to it) and caches it.
+func uploadChatImageRGBA(renderer *sdl.Renderer, url string, rgba *image.RGBA) *sdl.Texture {
 	bounds := rgba.Bounds()
-	w, h := bounds.Max.X, bounds.Max.Y
-	if w <= 0 || h <= 0 {
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 || len(rgba.Pix) == 0 {
 		markChatImageFailed(url)
 		return nil
 	}
@@ -317,28 +395,29 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 	return tex
 }
 
+// processChatImageDownloads moves each picture along once a frame (the render
+// thread): downloaded bytes go to a decode goroutine — the bytes are dropped
+// there, the texture owns the pixels in the end — and decoded pictures become
+// textures. While one decodes, the frames keep coming, so it shows up without
+// a key press.
 func processChatImageDownloads(renderer *sdl.Renderer) {
 	chatImageDLMutex.Lock()
-	var ready []struct {
-		url  string
-		data []byte
-	}
 	for url, data := range chatImageDownloads {
-		ready = append(ready, struct {
-			url  string
-			data []byte
-		}{url, data})
+		chatImageStartDecodeLocked(url, data)
 	}
+	decoded := make(map[string]*image.RGBA, len(chatImageDecoded))
+	for url, rgba := range chatImageDecoded {
+		decoded[url] = rgba
+	}
+	clear(chatImageDecoded)
+	waiting := len(chatImageDecoding) > 0
 	chatImageDLMutex.Unlock()
 
-	for _, item := range ready {
-		uploadChatImage(renderer, item.url, item.data)
-		// The texture now owns the pixels. Keeping the downloaded buffer as
-		// well doubled the cost of every image in the history, and nothing
-		// ever freed it.
-		chatImageDLMutex.Lock()
-		delete(chatImageDownloads, item.url)
-		chatImageDLMutex.Unlock()
+	for url, rgba := range decoded {
+		uploadChatImageRGBA(renderer, url, rgba)
+	}
+	if waiting {
+		requestFrameEvery(100)
 	}
 }
 

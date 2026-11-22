@@ -685,13 +685,16 @@ games play here, in RetroArch's Dolphin core. `auto` (**Automatic**) and `on`
 play them on every model (since 2026-11-21 Automatic includes the A133P models,
 where most games run well below full speed), `off` never (JukaHub then sets
 nothing up for them; a Dolphin core installed by hand still starts them).
-While they play,
-the first start of a game sets the core and Dolphin's system files up, and
-JukaHub keeps `dolphin.json` in its data folder: the core file it last installed
-or checked (so a build from before the October 2026 freeze fix is replaced
-once), where that build came from (`coreFrom`: JukaHub's build for TrimUI or
-the libretro buildbot; `coreGlibc`: it starts on JukaHub's glibc) and the video
-driver it wrote into Dolphin's RetroArch override. See
+While they play, JukaHub makes `Roms/GC` and `Roms/WII` on the card and lists a
+GameCube and a Wii tile on the Emulators page, the first start of a game sets
+the core and Dolphin's system files up, and JukaHub keeps `dolphin.json` in its
+data folder: the core file it last installed or checked (so a build from before
+the October 2026 freeze fix is replaced once), where that build came from
+(`coreFrom`: JukaHub's build for TrimUI or the libretro buildbot; `coreGlibc`:
+it starts on JukaHub's glibc), the video driver it wrote into Dolphin's
+RetroArch override, and the consoles whose Roms folder it found or made
+(`folders`: a folder you delete stays deleted until you press its tile or turn
+the setting on again). See
 [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
 
 `gamecubeSpeed` (`"auto"`/`"fastest"`/`"fast"`/`"own"`, default `"auto"`) is

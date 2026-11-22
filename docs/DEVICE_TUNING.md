@@ -288,6 +288,13 @@ does this for that launch only:
 Everything is put back when the game's process group is gone, and only where
 the value is still the one written, so a launch script's own change wins. A
 marker in the temp directory lets the next start put back what a crash left.
+An Xbox game on the handheld is boosted differently, because JukaHub closes
+for it (the screen hand-off, [CONTROLS.md](CONTROLS.md#hakux-on-the-smart-pro)):
+the parked cores, GPU and memory clocks and the read-ahead are set just
+before it quits and put back by that marker when it starts again after the
+game, and the hand-off script gives the CPU the `performance` governor for
+the game's length (JukaHub's memory, priority and wake word no longer
+matter: it is not running).
 The log's `xbox` lines name each change (`boost on for Halo: …`, `boost off
 after 42m0s of Halo: 3 of 3 values put back`), and the Settings row shows what
 the last session got.

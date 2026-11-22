@@ -13,7 +13,11 @@ package main
 //     too. Then the libretro buildbot's linux/aarch64 nightly, which on
 //     2026-11-20 needed GLIBCXX_3.4.32 (GCC 13's libstdc++, newer than the
 //     firmware's): it installs when RetroArch can start on JukaHub's private
-//     glibc 2.39 (ra_glibc.go), fetched and probed first. Both go through the
+//     glibc 2.39 (ra_glibc.go), fetched and probed first. As a desktop build
+//     it also links libusb and libudev, which no TrimUI firmware has (a Brick
+//     Pro refused it for libusb on 2026-11-22): JukaHub brings Ubuntu's own
+//     beside that glibc (coredevlibs.go). When neither source gives a build,
+//     the error says why for each, JukaHub's own first. Both go through the
 //     door every core install uses (fetchCoreUpdate: allowlisted hosts, the
 //     index's CRC32, the load check against the file the build becomes;
 //     activateCoreBuild). On 2026-11-20 a Brick Pro's press on the Emulators
@@ -104,6 +108,11 @@ type dolphinRecord struct {
 	VideoPath   string   `json:"videoPath,omitempty"`
 	VideoFailed []string `json:"videoFailed,omitempty"`
 	VideoCore   string   `json:"videoCore,omitempty"`
+	// Folders lists the consoles ("GameCube", "Wii") whose Roms folder JukaHub
+	// found on the card or made there (dolphin_folders.go): one the player
+	// deleted since is made again only when its tile is pressed or GameCube &
+	// Wii is turned on.
+	Folders []string `json:"folders,omitempty"`
 }
 
 var dolphinState struct {
@@ -150,6 +159,7 @@ func dolphinRecordGet() dolphinRecord {
 	dolphinLoadLocked()
 	rec := dolphinState.rec
 	rec.VideoFailed = slices.Clone(rec.VideoFailed)
+	rec.Folders = slices.Clone(rec.Folders)
 	return rec
 }
 
@@ -471,6 +481,13 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 	}
 	pool := compatCorePoolDir()
 	var lastErr error
+	// Why each source gave no build, in the order tried: with two sources the
+	// error names both (a tester's Brick Pro, 2026-11-22, was told only the
+	// buildbot's refusal, which said nothing about JukaHub's own build).
+	var notes []string
+	note := func(src dolphinSource, why string) {
+		notes = append(notes, src.name+": "+why)
+	}
 	for _, src := range dolphinSources() {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -484,10 +501,14 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 		}
 		phase(installPhaseResolving, "Dolphin core: "+src.name)
 		index, err := src.index(ctx, client)
+		if errors.Is(err, errCoreFixNoBuild) {
+			note(src, "no Dolphin build published yet")
+			logInfo("library", "GameCube: %s publishes no cores for this device yet", src.name)
+			continue
+		}
 		if err != nil {
-			if !errors.Is(err, errCoreFixNoBuild) {
-				lastErr = fmt.Errorf("%s: %w", src.name, err)
-			}
+			lastErr = fmt.Errorf("%s: %w", src.name, err)
+			note(src, "its list could not be read ("+firstLine(err.Error())+")")
 			logInfo("library", "GameCube: %s cannot be read: %v", src.name, err)
 			continue
 		}
@@ -496,7 +517,17 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 			emuNoteCoreCheck(index, nil, nil, nil)
 		}
 		entry, ok := coreFixEntry(index, dolphinCoreName)
+		if !ok && src.own {
+			// Published by the cores workflow after a JukaHub release may be
+			// read before: a press asks GitHub again rather than an hour-old
+			// copy of the list (coreFixIndexTTL).
+			coreFixIndexForget()
+			if fresh, err := src.index(ctx, client); err == nil {
+				entry, ok = coreFixEntry(fresh, dolphinCoreName)
+			}
+		}
 		if !ok {
+			note(src, "no Dolphin build published yet")
 			logInfo("library", "GameCube: %s has no Dolphin core", src.name)
 			continue
 		}
@@ -512,6 +543,7 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 			// Not fetched again; the source's next build gets its own check.
 			logInfo("library", "GameCube: %s's %s Dolphin build was refused here before: %s", src.name, entry.Date, reason)
 			lastErr = &coreRefusedError{Core: dolphinCoreName, Build: entry.Date, Reason: "was refused here before: " + reason}
+			note(src, "the "+entry.Date+" build "+reason)
 			continue
 		}
 		phase(installPhaseDownload, "Dolphin core, "+entry.Date+" build · "+src.name)
@@ -528,6 +560,7 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 			}
 			logInfo("library", "GameCube: %s's %s Dolphin build: %v", src.name, entry.Date, err)
 			lastErr = err
+			note(src, firstLine(err.Error()))
 			continue
 		}
 		phase(installPhaseExtract, "Dolphin core, "+entry.Date+" build")
@@ -543,6 +576,7 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 		if err != nil {
 			logInfo("library", "GameCube: %s's %s Dolphin build not installed: %v", src.name, entry.Date, err)
 			lastErr = err
+			note(src, firstLine(err.Error()))
 			continue
 		}
 		// The catalog (and with it the games' choices), the compatibility
@@ -559,6 +593,12 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 		dolphinNoteCore(active, entry.Date, src.name)
 		logInfo("library", "GameCube: Dolphin core %s from %s installed at %s", entry.Date, src.name, active)
 		return active, nil
+	}
+	if len(notes) > 1 {
+		// Every source said why: the card and the toast name them all, JukaHub's
+		// own build first.
+		logWarn("library", "GameCube: no Dolphin core could be installed · %s", strings.Join(notes, " · "))
+		return "", errors.New(strings.Join(notes, "; "))
 	}
 	if lastErr == nil {
 		lastErr = errors.New("no Dolphin core is published for this device right now — try again later")

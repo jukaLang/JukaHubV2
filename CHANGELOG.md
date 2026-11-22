@@ -4229,6 +4229,85 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Dolphin installs on a Brick Pro when JukaHub's own build is not there**
+  (a tester, relayed by Juka, 2026-11-22: "Could not install GameCube games —
+  the 2026-11-21 build was refused here before: cannot load on this firmware:
+  needs libusb-1.0.so…"). The GameCube setup takes JukaHub's own Dolphin build
+  for TrimUI first and falls back to the libretro buildbot's nightly, which
+  RetroArch runs on JukaHub's glibc 2.39. That nightly is a desktop Linux
+  build: it also links libusb and libudev (Dolphin's GameCube-adapter and Wii
+  Remote code), which no TrimUI firmware has, so the load check refused it.
+  JukaHub now brings Ubuntu's own copies: the packages that hold the missing
+  libraries (`libusb-1.0-0`, `libudev1`, with `libbluetooth3` and `libevdev2`
+  when a build needs them) come through Linux packages (Ubuntu's signed index,
+  every package's SHA-256 checked), and the libraries — with libudev's
+  libcap — are copied into `private-glibc/devlibs/`. Only a launch of a core
+  that links them gets that folder, last on its library path; every other
+  game, port and RetroArch menu starts as before. A build these libraries do
+  not complete is still refused, now with every library it lacks named (one
+  that also needed X11 would say so instead of installing and failing each
+  start), and a refusal of the old kind is tried once more. When no source
+  gives a build, the error says why for each, JukaHub's own first ("JukaHub's
+  build for TrimUI: no Dolphin build published yet; the libretro buildbot:
+  …"), and a press on a Dolphin tile reads JukaHub's list fresh rather than an
+  hour-old copy, so a build the cores workflow just published is found
+  (`player/coredevlibs.go`, `player/dolphin_setup.go`).
+- **JukaHub's own Dolphin build can no longer pick up libudev in CI.** The
+  cores workflow links a stub libudev into Dolphin, but the bundled libusb's
+  CMake `find_library` could hand the linker the build root's real
+  `libudev.so` by full path, which no `-L` order overrides, and the workflow's
+  check then refuses a core that needs `libudev.so.1`. The stub is now given
+  to CMake as `LIBUDEV_LIBRARY` and the root's `libudev.so` development link is
+  removed before the build (`player/native/build-cores.sh`).
+- **Chat no longer freezes for seconds on a photo.** A tester's log on
+  2026-11-22 showed the screen stalled 5–9 s at each start while Chat (on
+  screen) decoded a 4 MB picture on the render thread, pixel by pixel. Chat
+  pictures now decode in the background — the bubble fills in a frame later —
+  and are shrunk to 2048 pixels on the longer side (a phone photo was 48 MB as
+  a texture); every decode through the shared image decoder (Chat, the stores'
+  screenshots, artwork, music themes) converts with the standard library's
+  fast paths instead of one interface call per pixel (`player/chat.go`,
+  `player/bounded.go`).
+- **Xbox games no longer stick on JukaHub's screen, and Menu opens hakuX**
+  (a tester, relayed by Juka, 2026-11-21: the first game "stuck in the menu"
+  with the game's sound playing, and the hotkeys "only opened RetroArch menu
+  and not the standalone hakuX emulator"). The hakuX package is a launcher
+  made for the stock menu, which quits before a game starts; from JukaHub it
+  ran beside a JukaHub that stays alive — its window still on the
+  framebuffer, its pad watcher beside the game, its memory taken from a 1 GB
+  handheld — and hakuX, which presents through its own Vulkan layer rather
+  than SDL's framebuffer path, could leave JukaHub's last picture on the panel
+  while Menu met the firmware's quick menu or JukaHub's RetroArch-minded
+  in-game layer. An Xbox game now gets the handheld to itself, the way PS
+  Remote Play and Moonlight do: JukaHub hands the screen to a small script and
+  quits, the script runs `Emus/XBOX/launch.sh` exactly as the stock menu would
+  (the firmware's environment, the game in MainUI's form, its own
+  interpreter), and launch.sh starts JukaHub again when the game ends — back in
+  the Games Library on the game when it was started there. Menu opens hakuX's
+  settings and holding Start + Select about 1.2 s quits back. Heavy-game boost
+  still applies (cores, GPU and memory clocks and the card's read-ahead before
+  JukaHub quits, put back at its next start; the performance governor for the
+  game's length), the time played counts in the game's playtime and history,
+  and a game that ends within seconds with an error opens the launch card with
+  the launcher's last lines (`gamediag/launcher.log`). A JukaHub started by
+  hand or under an older launch.sh starts the game beside itself as before
+  (`player/hakux_handoff.go`).
+- **GameCube and Wii have their folders now** (Juka, 2026-11-21: "I can't find
+  GameCube or Wii folders that using dolphin emulator and subfolder for both
+  Wii and GameCube inside ROMS file"). Nothing made them: TrimUI's firmware
+  has no GameCube or Wii folder, and the Emulators page listed a console's
+  folder only once the card had it, and dropped it as soon as the Dolphin core
+  was in. On a handheld that plays them (**GameCube & Wii** not Off), the card
+  gets `Roms/GC` and `Roms/WII` at start-up and after a Dolphin setup; a
+  folder the card already has in another spelling (`GAMECUBE`, `NGC`, `Wii`)
+  is used instead, and one you delete stays deleted (`dolphin.json` remembers)
+  until you press its tile or turn the setting on. The Emulators page always
+  lists a **GameCube** and a **Wii** tile: Dolphin, where the games go and how
+  many are there; **A** opens that console's games, or sets Dolphin up while
+  it is not installed, and **X** sets it up or looks for a newer build. A
+  launcher folder of your own in `Emus` (a standalone Dolphin) keeps its tile.
+  Games still start in the Dolphin core from JukaHub; the stock TrimUI menu
+  does not list the two consoles (`player/dolphin_folders.go`).
 - **Pulling a Go dependency update no longer stops the build** (Juka,
   2026-11-21, passing on Dependabot PRs #63, #64, #66 and #67).
   `player/vendor/` is a git-ignored local copy of the Go modules, so after a

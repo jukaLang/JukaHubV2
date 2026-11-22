@@ -211,7 +211,21 @@ again; the next build the index lists is checked as usual. The same check
 refuses a build that links a device-access library — libudev, libusb, BlueZ's
 libbluetooth, libevdev — that neither the firmware's folders nor RetroArch's
 own have: RetroArch does not bring those, and every start would end at its
-`dlopen`.
+`dlopen`. The refusal names every such library at once ("needs
+libusb-1.0.so.0 and libudev.so.1, which this firmware does not have").
+
+Where RetroArch can start on JukaHub's glibc (below), JukaHub brings those
+libraries itself instead: it installs the Ubuntu packages that hold them
+(`libusb-1.0-0`, `libudev1`, `libbluetooth3`, `libevdev2` — only the ones a
+build lacks) through [Linux packages](LINUX_PACKAGES.md), copies the libraries
+and what they need beyond the runtime (libudev's libcap) into
+`data/private-glibc/devlibs/`, and checks the build again. Only the launch of
+a core that links them gets that folder, last on the library path; no other
+game, port or RetroArch menu sees it. A build that loads only with these
+copies must then have every library it links somewhere RetroArch looks, or it
+is refused with the missing ones named. This is what lets the libretro
+buildbot's Dolphin — a desktop build that links libusb and libudev — run when
+JukaHub's own TrimUI build of it is not published.
 
 On the 64-bit TrimUI handhelds a symbol version the firmware lacks is no
 longer the end of it: with Settings → Games & emulators → **RetroArch's C

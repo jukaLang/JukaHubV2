@@ -39,6 +39,13 @@ resolver and unpacking, `_runtime` wrappers, `_cli` commands, `_ui` page,
   Python 3, Perl and the Audit toolkit's Perl modules at a quiet moment when
   they are missing (`audit_interp_auto.go`) — only ones it has never had, so
   a package you remove stays removed.
+- **A RetroArch core that links device libraries** (the libretro buildbot's
+  Dolphin links libusb and libudev): `libusb-1.0-0`, `libudev1` (with
+  `libcap2`), `libbluetooth3` or `libevdev2`, whichever the core lacks, and
+  JukaHub copies the libraries into `data/private-glibc/devlibs/` for that
+  core's RetroArch (`coredevlibs.go`,
+  [COMPATIBILITY](COMPATIBILITY.md#fetching-newer-builds)). The packages stay
+  listed here as installed; removing them later does not touch the copies.
 
 ## How downloads are checked
 

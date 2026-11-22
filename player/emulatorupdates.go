@@ -458,6 +458,21 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if problem != "" && raGlibcEnsureForCore(ctx, problem, target) {
 		problem = coreLoadProblemFile(binary.Name(), target)
 	}
+	// What is left may be the device-access libraries a desktop build links
+	// (libusb, libudev: the buildbot's Dolphin on a Brick Pro, 2026-11-22):
+	// Ubuntu's copies beside the runtime (coredevlibs.go), then the strict look
+	// that every library it links is somewhere RetroArch finds it.
+	devPending := false
+	if problem != "" {
+		if ok, pending := coreDevLibsEnsureForCore(ctx, problem, target); ok {
+			problem = coreLoadProblemFile(binary.Name(), target)
+		} else {
+			devPending = pending
+		}
+	}
+	if problem == "" && coreDevLibsForCore(binary.Name()) != nil {
+		problem = coreDevLibsStrictProblem(binary.Name(), target)
+	}
 	if problem != "" {
 		if err := ctx.Err(); err != nil {
 			return coreBuild{}, err
@@ -467,6 +482,11 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 			// finish: nothing about this build is final, so it is not
 			// remembered as refused and the next try fetches it again.
 			return coreBuild{}, fmt.Errorf("the %s build needs JukaHub's glibc %s, which could not be downloaded — check the connection and try again (%s)", upd.Date, privateGlibcVersion, problem)
+		}
+		if devPending {
+			// Likewise the device libraries: JukaHub brings them, but could
+			// not just now.
+			return coreBuild{}, fmt.Errorf("the %s build needs Ubuntu's %s beside JukaHub's glibc, which could not be installed just now — check the connection and try again", upd.Date, mlJoinAnd(coreDevLibsMissing(problem)))
 		}
 		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}

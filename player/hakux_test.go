@@ -342,3 +342,49 @@ func TestHakuxConfigFirmware(t *testing.T) {
 		t.Fatalf("ini = %v, want only the flash ROM (a switch and a comment are not files)", got)
 	}
 }
+
+// The hand-off script (hakux_handoff.go) runs as root with names from the
+// card: every one is a single quoted word, and the status it leaves is read
+// back the way the next start judges the game.
+func TestHakuxHandoffScriptAndStatus(t *testing.T) {
+	script := hakuxHandoffScript(hakuxHandoffSpec{
+		PID:     42,
+		Dir:     "/mnt/SDCARD/Emus/XBOX",
+		Command: []string{"sh", "/mnt/SDCARD/Emus/XBOX/launch.sh", "/mnt/SDCARD/Emus/XBOX/../../Roms/XBOX/Halo 'CE' $(x).iso"},
+		Status:  "/tmp/s",
+		Title:   "Halo\nrc=9",
+		Boost:   true,
+	})
+	for _, want := range []string{
+		"JUKAHUB_PID=42\n",
+		"LOG='/dev/null'\n",
+		"BOOST=1\n",
+		"TITLE='Halo rc=9'\n",
+		`set -- 'sh' '/mnt/SDCARD/Emus/XBOX/launch.sh' '/mnt/SDCARD/Emus/XBOX/../../Roms/XBOX/Halo '\''CE'\'' $(x).iso'` + "\n",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("script lacks %q", want)
+		}
+	}
+	run := hakuxHandoffParseStatus([]byte("version=1\nstep=waiting\nstarted=100.5\nended=160.25\nrc=0\nstep=Halo ended\nnoise\n"))
+	if run.ran() != 59750*time.Millisecond || run.RC != 0 || !run.HasRC || run.lastStep() != "Halo ended" || len(run.Steps) != 2 {
+		t.Fatalf("status = %+v (ran %s)", run, run.ran())
+	}
+	for _, c := range []struct {
+		status string
+		failed bool
+		why    string
+	}{
+		{"step=JukaHub did not close", true, "never started"},
+		{"started=10\nended=12\nrc=0", true, "over within gameDiagBriefRun"},
+		{"started=10\nended=15\nrc=1", true, "an error within gameDiagQuickExit"},
+		{"started=10\nended=15\nrc=0", false, "a quit"},
+		{"started=10\nended=40\nrc=1", false, "played"},
+		{"started=10\nended=11\nrc=143", false, "the power key"},
+		{"started=10", false, "its end not recorded"},
+	} {
+		if got := hakuxHandoffFailed(hakuxHandoffParseStatus([]byte(c.status))); got != c.failed {
+			t.Errorf("%s: failed(%q) = %v, want %v", c.why, c.status, got, c.failed)
+		}
+	}
+}

@@ -114,6 +114,15 @@ func coreFixEnd(core string) {
 	coreFixState.mu.Unlock()
 }
 
+// coreFixIndexForget drops the index fetched last, so the next look asks
+// GitHub again: a press looking for a core the cores workflow may have
+// published since (dolphin_setup.go).
+func coreFixIndexForget() {
+	coreFixState.mu.Lock()
+	coreFixState.index, coreFixState.indexAt = nil, time.Time{}
+	coreFixState.mu.Unlock()
+}
+
 // coreFixIndex is the release's index, fetched at most once an hour.
 func coreFixIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry, error) {
 	coreFixState.mu.Lock()

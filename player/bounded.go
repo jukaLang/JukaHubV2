@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"image"
+	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -137,7 +138,7 @@ func imageDecodeSemReset(n int) { imageDecodeSem = newSemaphore(n) }
 // its pixels; the caller frees it by dropping the reference (GC handles it).
 //
 // The conversion from the decoded interface to a dense RGBA happens here rather
-// than at each call site, because the per-pixel Set loop is the expensive part
+// than at each call site, because it is the expensive part (one full-size copy)
 // and it must happen while the permit is held — that is the whole point of the
 // cap.
 func decodeImageRGBA(ctx context.Context, data []byte) (*image.RGBA, error) {
@@ -166,10 +167,10 @@ func decodeImageRGBA(ctx context.Context, data []byte) (*image.RGBA, error) {
 	}
 	bounds := img.Bounds()
 	rgba := image.NewRGBA(bounds)
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			rgba.Set(x, y, img.At(x, y))
-		}
-	}
+	// draw.Src copies exactly what a Set of each At gives, through the
+	// standard library's fast paths for a JPEG's YCbCr and a PNG's NRGBA: the
+	// per-pixel interface calls took seconds for a phone photo on the A133P (a
+	// tester's log, 2026-11-22: Chat's 4 MB picture held the screen for 5-9 s).
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
 	return rgba, nil
 }
