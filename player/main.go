@@ -1905,8 +1905,10 @@ func main() {
 						// owns the keyboard (E builds there).
 						// Ctrl/Alt chords are not scene keys: Ctrl+Q used to open
 						// Quick Settings and switch the scene too. The time-zone
-						// picker's search types letters, q and e included.
-						if !inTerminal && !jlandKeysCaptured(config) && !tzPickerVisible() && e.Keysym.Mod&(sdl.KMOD_CTRL|sdl.KMOD_ALT) == 0 {
+						// picker's search types letters, q and e included, and so
+						// does a keyboard in the Calculator (sqrt, e).
+						if !inTerminal && !jlandKeysCaptured(config) && !tzPickerVisible() && !calcOwnsLetterKeys(config) &&
+							e.Keysym.Mod&(sdl.KMOD_CTRL|sdl.KMOD_ALT) == 0 {
 							switch e.Keysym.Sym {
 							case sdl.K_q:
 								changeScene(config, -1)
@@ -4543,6 +4545,9 @@ func handleTextInputEvent(e *sdl.TextInputEvent, config *Config) {
 			handleDictTextInput(e)
 		case "Notes":
 			handleNotesTextInput(e)
+		case "Calculator":
+			// A keyboard types sums (calculator.go).
+			handleCalcTextInput(e)
 		}
 	}
 	// Chat composer and unit converter typing without the modal.

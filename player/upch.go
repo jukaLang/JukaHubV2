@@ -1441,6 +1441,18 @@ func upchStageEntry(ctx context.Context, dir string, e upchEntry) error {
 	if e.dir == "" || filepath.Base(e.dir) != e.dir {
 		return errors.New("the cached update is no longer on the card")
 	}
+	// The room check a download gets (autoupdate.go): a cached archive unpacks,
+	// and the swap backs up what it replaces, on this card too. A delta's
+	// release is rebuilt already (tree/) and is copied into staging whole.
+	if base, err := PatchStateDir(); err == nil {
+		unpacked := updateUnpackedEstimate(e.Size)
+		if e.Kind == upchKindDelta {
+			unpacked = dirBytes(filepath.Join(dir, e.dir, "tree"))
+		}
+		if err := updateMakeRoomFor(base, e.Tag, unpacked); err != nil {
+			return err
+		}
+	}
 	entryDir := filepath.Join(dir, e.dir)
 	drop := func(err error) error {
 		_ = os.RemoveAll(entryDir)

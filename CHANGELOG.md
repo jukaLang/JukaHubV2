@@ -13,6 +13,107 @@ For anything older, the git log and the
 
 ### Added
 
+- **The text editor colours code, and a hex editor opens any file** (Juka,
+  2026-11-21: "improve built in file editor...highlight keyworsds...suppport
+  languages like perl, python, json, javascript, bash, and c++...also allow
+  "open with" hex editor"). Files' text page now colours keywords, types and
+  builtins, strings, numbers, comments, function names, variables and
+  preprocessor/decorator lines for shell, Perl, Python, JavaScript/TypeScript,
+  JSON, C/C++, Java and config files (INI, RetroArch `.cfg`/`.opt`, TOML, YAML,
+  `.env`), picking the language from the file's name or its `#!` line.
+  Block comments, Python docstrings, template strings, shell and Perl
+  here-documents and Perl POD are followed across lines; a regex against a
+  division, a Perl hash against the modulus and a shell word as a command are
+  told apart by the token before them. The colours come from One Dark / One
+  Light and are run through the readable-ink check of the theme (7:1 under
+  Increase Contrast). View → **Syntax colours** (H on a keyboard) switches
+  them off, and View → **Highlight as** colours the open file as another
+  language. Those languages' files (`.py`, `.pl`, `.cpp`, `.bashrc` …) now
+  count as text everywhere Files asks, and the keyboard no longer capitalises
+  the first letter of a line of code. **Hex editor** is in Open with for every
+  file (and in the text page's View menu); a binary file opens there instead
+  of the old read-only hex view. A on a byte edits it with the D-pad (Up/Down
+  count a digit, Left/Right step to the next, A keeps, B puts the bytes back),
+  X types a run of bytes (`4A 75 6B 61` or `"text"`), a keyboard types hex
+  digits straight in, View has Go to offset (hex or `50%`), Undo and Undo every
+  change, and changed bytes show in the warning colour. Bytes are only
+  overwritten — the file never grows or shrinks — and nothing is written until
+  Y: the save refuses a file that changed on disk since it was opened, writes
+  files up to 64 MB as an atomic copy and larger ones (disc images) in place.
+  New: `fileeditor_syntax.go` (the lexer), `fileeditor_syntax_draw.go`
+  (colours, per-line state cache, coloured row pieces), `fileeditor_hex.go`
+  and `fileeditor_hex_ui.go`; `docs/TEXT_EDITOR.md`.
+
+- **The browser draws pages closer to a real browser** (Juka, 2026-11-20:
+  "Improve ... Webbrowser (it needs to render more accurately)"). **SVG** is
+  drawn: inline `<svg>` icons and logos (in the text colour for
+  `currentColor`, with the page's CSS `fill`/`stroke`, sprite sheets used
+  through `<use>`), `<img src="….svg">`, SVG `<picture>` sources and the
+  `data:image/svg+xml` URIs CSS backgrounds use — paths, shapes, transforms,
+  `<style>` classes, opacity and linear/radial gradients, by a small
+  rasteriser of the reader's own (`player/webpage_svg.go`); they used to be
+  empty boxes. **Images inside a line stay in it**: README badges, emoji
+  pictures and the icon in a link or a button sit in the text instead of
+  breaking it into separate rows, and a link that is only an image is a
+  D-pad stop. **Runs share a baseline**, so a large word, small print and
+  code no longer sit at different heights. **`display: inline-block`** boxes
+  (nav items, pagination, tag lists, button rows) sit side by side, each as
+  wide as its content and aligned like the parent's text, and an inline or
+  inline-block `<li>` loses its bullet. **Bold is real** (Inter SemiBold, or an
+  emboldened copy of a picked face) instead of the text drawn twice a pixel
+  apart; `<pre>`, `<code>`, `<kbd>` and a monospace `font-family` use a
+  monospace face when the machine has one (Consolas or Cascadia on Windows,
+  DejaVu/Liberation/Noto Mono on Linux, or a `*Mono*.ttf` in JukaHub's fonts
+  folder), so ASCII art and code columns line up; icon fonts no longer leave
+  stray "…" marks, and Material Icons names become the nearest arrow, tick or
+  cross Inter has instead of words like `arrow_forward`. **Headings keep
+  their size** up to twice the body text (they stopped at 1.5×). **Images are
+  sized like the text** (CSS px at the same scale; a 120px picture was drawn
+  at two thirds of that beside the text) and their `width`/`height`
+  attributes win over the file's own size, so a high-resolution avatar no
+  longer balloons. **Shadows are soft** (`box-shadow` blur and spread, the
+  first visible outer layer of a list), **rounded images are round**
+  (`border-radius` clips the picture; avatars are circles), positioned boxes
+  honour `transform: translate()` and percentage insets (the
+  `left: 50%; transform: translate(-50%, …)` centring), a nested inline
+  element keeps its parent's highlight, and a `<code>` chip shows inside a
+  tinted block. CSS_SUPPORT.md lists the details and what is still skipped.
+
+- **GameCube speed** (Juka, 2026-11-21: "are there any optimizations we can do
+  for Trimui Smart Pro to get Gamecube sort of running at least a few fps?").
+  **Settings → Games & emulators → GameCube speed** sets how much of Dolphin's
+  accuracy each launch trades for frames, written for that launch and put back
+  when RetroArch exits. **Fast** changes no game's picture: Dolphin's CPU on a
+  thread of its own (dual core), shaders compiled in the background, native
+  resolution, no duplicate frames, EFB copies written back only when read, and
+  no run-ahead, preemptive frames or rewind. **Fastest** adds three trades:
+  Dolphin skips the CPU's reads of the picture (effects that read the screen
+  vanish), the GameCube's CPU runs at half its clock (busy scenes slow down
+  inside the game instead of the whole game crawling) and vsync is off (the
+  picture may tear). Automatic is Fastest on the Smart Pro, Brick and Brick
+  Pro and Fast on the Smart Pro S. Options saved for a game in RetroArch stay,
+  and so does a value set in Core Options, except dual core, background
+  shaders, duplicate frames and deferred EFB copies. The Emulation page's
+  Automatic audio now uses the fast resampler for GameCube, Wii and PS2, and
+  JukaHub's own Dolphin build is tuned for the Cortex-A53 (`-mtune`). These are
+  the settings that cost Dolphin most on these chips; how many frames they buy
+  depends on the game, and nothing here was compiled or measured on a device
+  yet (`dolphin_speed.go`; DOLPHIN-HW-1 step 8;
+  [Game library](docs/GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld)).
+- **Audit toolkit: eight more tools that install on the Smart Pro**
+  (2026-11-20). For TLS and SSH set-ups, testssl.sh, sslscan and ssh-audit;
+  on the network, tcpdump, which captures on the handheld to a file Wireshark
+  opens on a computer; for code, OSV-Scanner (known vulnerabilities in a
+  project's dependencies) and Gitleaks (passwords and keys committed to code);
+  for files, YARA (rule-based malware scans) and Binwalk (what is inside a
+  firmware image). All are open source. On the handheld six come from Ubuntu's
+  signed arm64 packages through Linux packages (testssl.sh with Ubuntu's
+  `bash`, and its data found through `TESTSSL_INSTALL_DIR`), and OSV-Scanner
+  and Gitleaks from the project's arm64 release, checked against its SHA-256
+  list (the Toolbox now reads OSV-Scanner's `osv-scanner_SHA256SUMS`). Windows
+  and desktop Linux get winget, the project's build or the package-manager
+  line. Not compiled or tried on a device yet (AUDIT-HW-2)
+  ([Toolbox](docs/TOOLBOX.md#audit-toolkit)).
 - **Quick menu, game art, colours, Home views, Device Sync and more**
   (2026-11-20). None of the entries here was compiled or tried on a device yet
   (QMENU-HW-1,
@@ -3269,6 +3370,45 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Calculator: a real scientific calculator** (Juka, 2026-11-20: "Improve
+  Calculator"). A new expression engine reads the line with the usual rules:
+  `2^3^2` is 512, `−2²` is −4, `2+−3`, `5×−(2)` and `2(3)`, `2π`, `2sin30`
+  work, brackets left open are closed by **=**, and `200 + 10%` is 220 the way
+  phone and desktop calculators add a percentage. Answers show twelve
+  significant digits (0.1 + 0.2 is 0.3, sin 180° is 0, large and tiny values
+  as 1.5E+15), the big line groups thousands, and an error says why ("Can't
+  divide by 0", "Not defined", "Too big", "Syntax error") while the sum stays
+  on the line to fix. New keys: **2nd** (sin⁻¹ cos⁻¹ tan⁻¹, eˣ, 10ˣ, x³, ³√,
+  ʸ√x), **DEG/RAD** (degrees by default), ln, log, n! (Γ between whole
+  numbers), %, π, e and **Ans**; a faint "= …" previews the answer while
+  typing. The keypad fits the Brick's and the Smart Pro's screens and any PC
+  window. The **history** keeps 30 sums across restarts (`calculator.json`
+  beside JukaHub) and the D-pad walks into it from the right-hand keys: **A**
+  uses an answer, **X** puts its sum back to edit; a tap does the same. The
+  **graph** labels its y range, draws a thicker line and spans ±360° in
+  degrees. On a **keyboard** sums are typed directly (digits, operators,
+  brackets and names like `sqrt` or `sin`), **Enter** or **=** answers,
+  **Backspace** deletes a whole `sin(`, **Del** clears, **Ctrl+C / Ctrl+V**
+  copy the answer and paste a sum; typing **q** or **e** there no longer
+  switches screens. The Terminal's `calc` command uses the same engine.
+
+- **JukaHub's own PPSSPP build is PPSSPP 1.20.3, with no X11** (Juka,
+  2026-11-20: "trimui doesn't have x11...use 1.20.3 which exists for Trimui
+  for PPSSPP"). The `PPSSPP for TrimUI (tg5040)` workflow chased the newest
+  upstream release that still builds with SDL2 (1.20.4) every day and failed
+  every day: the SDL2 it builds only to link against looked for X11 (Mesa's
+  development packages pull `libx11-dev` in) and stopped at a missing
+  `Xext.h`. That SDL2 is now configured with every desktop back end off (X11,
+  Wayland, KMS/DRM, Vulkan, desktop GL, PulseAudio/PipeWire/JACK, D-Bus) and
+  the build stops if X11 or Wayland still reaches `SDL_config.h`; PPSSPP runs
+  on the firmware's own SDL2 as before. The workflow builds 1.20.3 — the
+  version TrimUI builds exist for, the one minui-psp packages — and runs only
+  when its files change (a push always rebuilds) or on a press (Actions → Run,
+  which can name another tag); the daily schedule is gone. On the handheld nothing changes for PSP
+  games: with both sources on 1.20.3, JukaHub keeps minui-psp's unless that
+  one is missing or did not start here
+  (`.github/workflows/ppsspp-trimui.yml`, `player/native/build-ppsspp.sh`).
+
 - **Downloads panel avoids repeated queue sorting** (Juka, 2026-11-19).
   Each redraw now shares one media and browser download snapshot across the
   header, tabs and rows, cutting seven queue sorts to two per frame. The full
@@ -3887,6 +4027,86 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **"Can't update the hub, it failed during update"** (Juka, 2026-11-20,
+  passing on a report with no log). Update now no longer depends on GitHub's
+  API answering at the moment it is pressed. That API allows 60 lookups an
+  hour per network without a sign-in, and every handheld and PC running
+  JukaHub on the network spends them on emulators, cores, PortMaster and
+  runtimes too; once they were gone, Update failed at "checking JukaHub
+  releases" with an HTTP 403, minutes after the release was offered, and kept
+  failing for up to an hour. When the API does not answer, the repository's
+  latest-release page on github.com (which that limit does not count) names
+  the release, and the archive downloads from the release's own folder,
+  checked against the SHA-256 the API gave when the release was offered
+  (kept with the offer since this build). Other fixes on the same path:
+  - **Room for the update is checked first.** The only check asked for 96 MB
+    free whatever the release weighed; the program alone is about 70 MB now,
+    and the update needs the archive, the unpacked release and a backup of
+    every file it replaces at once (about five and a half times the archive,
+    less when a retry reuses the unpacked copy). A card
+    short of that is told how much is needed and how much is free before
+    anything downloads, after JukaHub removes what unfinished updates left in
+    its staging area. A card that still fills up says so in plain words
+    instead of "no space left on device", and the cached-update install
+    checks the same.
+  - **The downloaded archive is deleted once it is unpacked**, instead of
+    staying on the card until the next update.
+  - **A download cut off for one release is never resumed into another's.**
+    The archive is now named by its release; under the one shared name the
+    next release's download continued the old part, failed its checksum and
+    cost one "Update failed" first. Old archives in `patch/downloads` go.
+  - A refusal from GitHub's API that is its hourly limit now says so ("…is
+    used up; it resets at 21:40") wherever it is shown, and the whole update
+    error goes to `errors.txt` (the toast shows its first line).
+  - A release may hold up to 1024 files (was 128; the TrimUI archive has about
+    40, and a release over the limit could only be fixed by an update).
+
+  Not tried on a device. If an update still fails, the bell keeps the toast's
+  reason and `errors.txt` has the `[patch] update:` lines
+  (`player/autoupdate.go`, `autoupdate_channel.go`, `patch_engine.go`,
+  `upch.go`, `updateprompt.go`).
+
+- **Dolphin "cannot load on this firmware", and cores that cannot work on a
+  TrimUI handheld** (Juka, 2026-11-20, on a Brick Pro: "dolphin cannot load on
+  this firmware...find dolphine that works on Trimui and use that...also do
+  not show cores that will not work on Trimui"). Installing Dolphin from the
+  Emulators page said "the 2026-11-20 build cannot load on this firmware:
+  needs GLIBCXX_3.4.32": the buildbot's nightly is built with GCC 13, whose
+  libstdc++ no TrimUI firmware has. JukaHub's private glibc 2.39 (RetroArch's
+  C library on Automatic) runs such builds, but the load check of a core the
+  card did not have yet looked at no cores folder, so it never counted that
+  runtime or installed it. Every core install now checks a new core as the
+  file it becomes, so a first install of a build that only needs a newer
+  glibc or libstdc++ sets the runtime up and installs; a runtime download
+  that fails no longer marks the build refused for good.
+  Dolphin also comes from a build made for TrimUI now: the "RetroArch cores
+  for TrimUI" workflow builds libretro/dolphin with GCC 13 from Ubuntu's
+  toolchain PPA, libstdc++ linked in and a stand-in libudev that finds no
+  devices, so it loads on the firmware's own C library with nothing in
+  between. Dolphin's setup takes that build first and the buildbot's (on the
+  private glibc) only while it is not published, never puts a nightly over
+  JukaHub's build, and the daily core updates leave Dolphin to it. A Dolphin
+  tile on the Emulators page (the core, or a GameCube or Wii folder) runs that
+  setup with Dolphin's system files and looks for a newer build; on an A133P
+  model (Smart Pro, Brick, Brick Pro) whose **GameCube & Wii** is Automatic,
+  the press sets it to Try anyway. The workflow runs on the push of this
+  change (or Actions → RetroArch cores for TrimUI → Run with `dolphin`); until
+  it has published, the buildbot's build is used.
+  The Emulators page and **Get more cores** no longer offer cores that cannot
+  work on these handhelds: the 3DS's and Wii U's (and other desktop-only
+  consoles'), PS2 cores other than ARMSX2, Kronos (desktop OpenGL 4.3), Beetle
+  Saturn and the accuracy-first bsnes and higan builds (a desktop-class CPU),
+  Doom 3, RemoteJoy, the video processor, Dolphin's launcher core, RetroArch's
+  developer tests, and a build this device already refused for a reason no
+  new try changes (its next build is offered again). Installed cores stay
+  listed. The load check also refuses a build that links a device library
+  the firmware lacks (libudev, libusb, BlueZ, libevdev) instead of installing
+  one that fails at every start. Not compiled or tried on a device yet
+  (`dolphin_setup.go`, `coretrimui.go`, `emulatorupdates.go`,
+  `player/native/build-cores.sh`; DOLPHIN-HW-1;
+  [Game library](docs/GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld),
+  [Compatibility](docs/COMPATIBILITY.md#cores-the-handheld-does-not-offer)).
 
 - **Voice tab: "This voice server does not let guests open rooms here"**
   (Juka, 2026-11-20: "fix voice"). JukaHub asked GameMania's server for the

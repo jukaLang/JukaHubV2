@@ -22,8 +22,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -217,4 +223,160 @@ func jukaHubReleaseAssetURL(rel *githubRelease, asset string) string {
 		}
 	}
 	return jukaHubReleaseDownloadBase + asset
+}
+
+// ── When GitHub's API does not answer ──────────────────────────────────────
+//
+// "can't update the hub. it failed during update" (2026-11-20): the release
+// list comes from GitHub's API, which answers 60 lookups an hour per network
+// without a sign-in, and every handheld and PC running JukaHub on that network
+// spends them on emulators, cores, PortMaster and runtimes too. Once they were
+// gone, Update failed at "checking JukaHub releases" with an HTTP 403 even
+// though the release had been offered minutes before, and kept failing for up
+// to an hour. The release archives themselves download from github.com, which
+// that limit does not count, so only the question "which release?" needs
+// another answer: the repository's latest-release page gives it.
+
+// jukaHubLatestReleasePage is the repository's latest-release page on
+// github.com, not the API. It answers with a redirect to the release's own
+// page, whose last path element is the tag. GitHub's "latest" is the newest
+// JukaHub build: the rolling emulator releases are published with
+// --latest=false.
+const jukaHubLatestReleasePage = "https://github.com/jukaLang/JukaHubV2/releases/latest"
+
+// jukaHubReleasePageTimeout bounds the page lookup.
+const jukaHubReleasePageTimeout = 20 * time.Second
+
+// fetchJukaHubReleaseOrPage is fetchJukaHubRelease and, when that fails for
+// any reason but a cancelled request (GitHub's hourly limit, an API outage, a
+// list that did not arrive whole), the release the latest-release page names.
+// The API's error is returned when the page names nothing either: it says
+// what went wrong. A Beta device gets the newest stable release from the
+// page; releaseIsNewerThanInstalled keeps that from ever being a downgrade.
+func fetchJukaHubReleaseOrPage(ctx context.Context, includePrerelease bool) (*githubRelease, error) {
+	rel, err := fetchJukaHubRelease(ctx, includePrerelease)
+	if err == nil || ctx.Err() != nil {
+		return rel, err
+	}
+	page, perr := fetchJukaHubReleaseFromPage(ctx)
+	if perr != nil {
+		logPatch("auto-update: GitHub's API did not answer (%v), and neither did the release page (%v)", err, perr)
+		return nil, err
+	}
+	// The page names only the newest stable release and has no list behind
+	// it. When that is nothing newer, it cannot say whether a prerelease
+	// (Beta) or the release on offer is still out, and every caller would
+	// take it for "up to date" and drop the offer, which the next answer from
+	// the API would bring back: the API's error stands instead.
+	if !releaseIsNewerThanInstalled(page) && (includePrerelease || availableUpdateTag() != "") {
+		logPatch("auto-update: GitHub's API did not answer (%v); the release page names %s, nothing newer", err, page.TagName)
+		return nil, err
+	}
+	logPatch("auto-update: GitHub's API did not answer (%v); the release page names %s", err, page.TagName)
+	return page, nil
+}
+
+// fetchJukaHubReleaseFromPage asks the latest-release page which release it
+// is. The redirect is the answer; the page it leads to is not fetched.
+func fetchJukaHubReleaseFromPage(ctx context.Context) (*githubRelease, error) {
+	ctx, cancel := context.WithTimeout(ctx, jukaHubReleasePageTimeout)
+	defer cancel()
+	client := newPatchClient()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jukaHubLatestReleasePage, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "JukaHub-Patch/"+versionString(nil))
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 300 || resp.StatusCode > 399 {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, jukaHubLatestReleasePage)
+	}
+	loc, err := resp.Location()
+	if err != nil {
+		return nil, fmt.Errorf("%s did not say where the release is: %w", jukaHubLatestReleasePage, err)
+	}
+	tag, ok := jukaHubTagFromReleasePage(loc)
+	if !ok {
+		return nil, fmt.Errorf("%s led to %s, not a JukaHub release", jukaHubLatestReleasePage, loc.Redacted())
+	}
+	return jukaHubReleaseFromPage(tag), nil
+}
+
+// jukaHubTagFromReleasePage reads the tag out of a release page's address,
+// https://github.com/jukaLang/JukaHubV2/releases/tag/<tag>: on github.com
+// only, this repository only, and only a JukaHub build's tag in plain
+// characters (it becomes part of a download address and a folder name).
+func jukaHubTagFromReleasePage(u *url.URL) (string, bool) {
+	if u == nil || !strings.EqualFold(u.Scheme, "https") || !strings.EqualFold(u.Hostname(), "github.com") {
+		return "", false
+	}
+	const prefix = "/jukalang/jukahubv2/releases/tag/"
+	if len(u.Path) <= len(prefix) || !strings.EqualFold(u.Path[:len(prefix)], prefix) {
+		return "", false
+	}
+	tag := u.Path[len(prefix):]
+	if !validReleaseNotesTag(tag) || !jukaHubReleaseTag(tag) {
+		return "", false
+	}
+	return tag, true
+}
+
+// jukaHubReleaseFromPage is the release a page lookup names. It has no notes
+// and no asset list of the API's, so the archive for this device is listed
+// with the address of the release's own folder, and with the digest, size
+// and publication time the offer recorded when the API last described this
+// very release (markUpdateAvailable). Without that record the archive is not
+// checksum-verified, as with any release whose API entry had no digest
+// (StageJukaHubUpdate says so in the log); the zip's own checksums still catch
+// a download that arrived damaged.
+func jukaHubReleaseFromPage(tag string) *githubRelease {
+	rel := &githubRelease{TagName: tag}
+	if t, ok := releaseTimeFromTag(tag); ok {
+		rel.PublishedAt = t.Format(time.RFC3339)
+	}
+	target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return rel
+	}
+	asset := githubAsset{Name: target.Asset, BrowserDownloadURL: jukaHubReleaseAssetURL(rel, target.Asset)}
+	patchStateMu.Lock()
+	if strings.EqualFold(patchState.AvailableUpdateTag, tag) && strings.EqualFold(patchState.AvailableUpdateAsset, target.Asset) {
+		asset.Digest = patchState.AvailableUpdateDigest
+		asset.Size = patchState.AvailableUpdateSize
+		if at := strings.TrimSpace(patchState.AvailableUpdateAt); at != "" {
+			rel.PublishedAt = at
+		}
+	}
+	patchStateMu.Unlock()
+	rel.Assets = []githubAsset{asset}
+	return rel
+}
+
+// githubLimitNote is what fetchBounded adds to a refusal from GitHub's API
+// whose reason is the hourly limit (no lookups left), with the time it resets;
+// "" for anything else.
+func githubLimitNote(resp *http.Response, now time.Time) string {
+	if resp == nil || resp.Request == nil || resp.Request.URL == nil ||
+		!strings.EqualFold(resp.Request.URL.Hostname(), "api.github.com") {
+		return ""
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+	case http.StatusForbidden:
+		if strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) != "0" {
+			return ""
+		}
+	default:
+		return ""
+	}
+	note := " (GitHub's limit of lookups an hour from this network is used up"
+	if reset, err := strconv.ParseInt(strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")), 10, 64); err == nil && reset > now.Unix() {
+		note += "; it resets at " + time.Unix(reset, 0).Local().Format("15:04")
+	}
+	return note + ")"
 }

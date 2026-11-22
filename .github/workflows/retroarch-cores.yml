@@ -19,13 +19,16 @@ name: RetroArch cores for TrimUI (aarch64, glibc 2.31)
 # when a core on the card cannot load, it puts back a build the card kept or
 # installs this release's (player/corefix.go). MODERNIZATION LIB-26.
 #
-# How: four arm64 runners side by side (build-cores.sh groups: the Game Boy
-# cores, the small cores, PCSX-ReARMed, FinalBurn Neo), each in the Ubuntu
-# 20.04 build root the Remote Play helpers and PPSSPP use
+# How: five arm64 runners side by side (build-cores.sh groups: the Game Boy
+# cores, the small cores, PCSX-ReARMed, FinalBurn Neo, Dolphin), each in the
+# Ubuntu 20.04 build root the Remote Play helpers and PPSSPP use
 # (.github/scripts/build-root.sh build cores → player/native/build-cores.sh,
 # which checks every build: aarch64, only libraries the firmware has, glibc <=
 # 2.31, libstdc++ no newer than the TrimUI SDK's when it is linked at all,
-# opens with the dynamic loader and answers retro_api_version). A core that
+# opens with the dynamic loader and answers retro_api_version). Dolphin
+# (GameCube and Wii) needs GCC 12 or newer: it builds with GCC 13 from Ubuntu's
+# toolchain PPA, libstdc++ linked in, so it loads where the buildbot's nightly
+# (GLIBCXX_3.4.32) does not (player/dolphin_setup.go installs it first). A core that
 # fails costs only itself: its runner keeps what did build, and the publish
 # job merges the new builds into the release's index, so a core that failed
 # this week keeps last week's build (its zip and its index line).
@@ -258,10 +261,11 @@ jobs:
           title="RetroArch cores for TrimUI (aarch64, glibc 2.31)"
           notes="$RUNNER_TEMP/notes.md"
           {
-            echo "RetroArch cores built by JukaHub from upstream libretro sources for handhelds whose firmware has an older glibc than the libretro buildbot's nightlies need (the TrimUI Smart Pro, Brick and Hammer: glibc 2.33)."
+            echo "RetroArch cores built by JukaHub from upstream libretro sources for handhelds whose firmware has an older glibc than the libretro buildbot's nightlies need (the TrimUI Smart Pro, Brick, Brick Pro and Hammer: glibc 2.33)."
             echo "JukaHub installs one by itself when a core on the card cannot load (a kept build of the card's own comes first)."
             echo "To install one by hand: unzip it into RetroArch/.retroarch/cores/ over the core of the same name."
             echo "FreeJ2ME-Plus (J2ME phone games) is two halves built from one commit: the core, and the jar its index line names (freej2me_plus-lr.jar), which goes into RetroArch's system (BIOS) folder and needs Java 8 or newer on the device. Use the core and the jar of the same date together."
+            echo "Dolphin (GameCube and Wii) is built from libretro/dolphin with GCC 13 from Ubuntu's toolchain PPA and libstdc++ linked in, so it needs nothing newer than the firmware's glibc and no libstdc++ of the firmware's at all. It also needs Dolphin's Sys folder in RetroArch's system folder (system/dolphin-emu/Sys), which JukaHub fetches with it."
             echo "This release is rebuilt weekly from each core's newest upstream commit. The builds of the latest run and their source commits are below; a core that did not build in that run keeps its earlier build and index line."
             echo
             echo '```'

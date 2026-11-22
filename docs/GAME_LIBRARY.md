@@ -819,7 +819,8 @@ ones at full speed or close, the heavy 3D ones well below it, and few Wii games
 reach full speed. The A133P models (Smart Pro, Brick, Brick Pro) are too slow
 for most GameCube games, so there the consoles stay **not supported** unless
 **Settings → Games & emulators → GameCube & Wii** says **Try anyway**
-(`gamecube` in [CONFIGURATION.md](CONFIGURATION.md)). Put games in `Roms/GC`
+(`gamecube` in [CONFIGURATION.md](CONFIGURATION.md)); installing Dolphin from
+the Emulators page sets that too. Put games in `Roms/GC`
 (or `GAMECUBE`, `NGC`) and `Roms/WII` as `.iso`, `.gcm`, `.rvz`, `.gcz`,
 `.ciso`, `.wia`, `.wbfs` (Wii) or `.m3u` for a two-disc game; Dolphin cannot
 open a `.zip` or `.7z`, so those are not listed. RVZ, Dolphin's own
@@ -827,12 +828,23 @@ compressed format (Dolphin on a PC converts to it), keeps a game much smaller
 than its ISO.
 
 - **The first start sets Dolphin up.** With no emulator for the console yet, A
-  on a game installs the buildbot's Dolphin core (through the same checks as
-  any core install, and on JukaHub's newer glibc when the build needs it) and
-  Dolphin's system files (`dolphin-emu/Sys` in RetroArch's system folder, from
-  the buildbot's `Dolphin.zip`, adding only what is missing), then starts the
-  game. **A** on the GameCube row of the Emulators page and **Get more cores**
-  install the core as well; the system files then come with the first start.
+  on a game installs a Dolphin core that loads here and Dolphin's system files
+  (`dolphin-emu/Sys` in RetroArch's system folder, from the buildbot's
+  `Dolphin.zip`, adding only what is missing), then starts the game. The core
+  is JukaHub's own build for TrimUI (the `cores-aarch64` release, built with
+  GCC 13 and libstdc++ linked in, so it runs on the firmware's own C library);
+  while that is not published, the buildbot's nightly, which needs a newer
+  libstdc++ than any TrimUI firmware has and so runs on JukaHub's private
+  glibc (**RetroArch's C library** on Automatic). Both go through the checks
+  every core install has ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)).
+- **The Emulators page.** Installing Dolphin there (**A** on its core's tile,
+  or **X** on a GameCube or Wii folder) runs the same setup, system files
+  included, and a later **X** looks for a newer build that loads here. On an
+  A133P model whose GameCube & Wii setting is Automatic, that press sets it to
+  Try anyway. The daily core updates and **Update all** leave Dolphin alone (it
+  is among the largest cores and the buildbot has a new build nearly every
+  day), JukaHub's own build is only ever replaced by a newer one of its own,
+  and **Get more cores** does not fetch it.
 - **No freeze ten seconds in.** A Dolphin core built before 23 October 2026
   froze an aarch64 RetroArch about ten seconds into a game with its dual-core
   mode on (libretro/dolphin#462). A start in such a core fetches the newest one
@@ -842,6 +854,22 @@ than its ISO.
   instead of a pause at every new effect. Change it in RetroArch's core options
   (Quick Menu → Core Options → Graphics); JukaHub never writes over options the
   core already has.
+- **GameCube speed.** **Settings → Games & emulators → GameCube speed** sets
+  how much of Dolphin's accuracy each launch trades for frames (`gamecubeSpeed`
+  in [CONFIGURATION.md](CONFIGURATION.md)), for that launch only. **Fast**
+  changes no game's picture: dual core, shaders in the background, native
+  resolution, no duplicate frames, EFB copies written back only when read, no
+  run-ahead, preemptive frames or rewind. **Fastest** also skips the CPU's
+  reads of the picture (screen-reading effects such as Sunshine's goop or a
+  lens flare go), runs the GameCube's CPU at half its clock (busy scenes slow
+  down inside the game) and turns vsync off (the picture may tear).
+  **Automatic** is Fastest on the A133P models and Fast on the Smart Pro S;
+  **Dolphin's own** changes nothing. Options you saved for a game in RetroArch
+  stay, and so does a value you set in Core Options, except dual core,
+  background shaders, duplicate frames and deferred EFB copies. On the A133P
+  even Fastest leaves the heavy 3D games far from full speed; the lighter games
+  gain the most. Disc images load fastest as ISO, or as RVZ compressed with
+  Zstandard: LZMA and bzip2 take these chips long to unpack.
 - **The video driver.** When a start stops because RetroArch's video driver
   could not draw for Dolphin, the card says so and Dolphin's own override
   (`config/dolphin-emu/dolphin-emu.cfg`) switches between OpenGL ES and Vulkan

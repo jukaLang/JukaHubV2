@@ -96,11 +96,15 @@ What you scan is your responsibility. The acknowledgement exists so that the
 feature cannot be used by accident out of the box, not because the app can tell
 whether a target is yours — it cannot, and it does not try.
 
-## Audit toolkit: tools you installed yourself
+## Audit toolkit
 
-**Tools → Audit toolkit** (also **Power tools → Audit toolkit**) lists the
-security tools that are already on this machine and checks that they run. It is
-a launcher, not an installer: nothing in this page downloads anything.
+**Tools → Audit toolkit** (also **Power tools → Audit toolkit**) lists security
+tools for systems you own or may test, sorted by what this device can do with
+them: the ones already here, the ones that install here, and the ones that
+cannot run here, with the reason on the row. Every tool has a recipe per
+platform: winget or the project's own build on Windows, a verified GitHub
+release or Ubuntu's packages on the handheld, the package-manager line on
+desktop Linux.
 
 | Tool | Category | Found by |
 |---|---|---|
@@ -108,37 +112,52 @@ a launcher, not an installer: nothing in this page downloads anything.
 | OWASP ZAP | Web & API | `zap.sh`, `zaproxy`, `zap`, or the ZAP install folder |
 | sqlmap | Web & API | `sqlmap`, `sqlmap.py` |
 | Nikto | Web & API | `nikto`, `nikto.pl` |
+| Nuclei | Web & API | `nuclei` |
+| testssl.sh | TLS & SSH | `testssl`, `testssl.sh` |
+| sslscan | TLS & SSH | `sslscan` |
+| ssh-audit | TLS & SSH | `ssh-audit`, `ssh-audit.py` |
+| Nmap | Network | `nmap`, or the Nmap install folder |
 | Wireshark | Network | `wireshark`, or `C:\Program Files\Wireshark` |
+| tcpdump | Network | `tcpdump` |
 | Aircrack-ng | Network | `aircrack-ng` |
+| OSV-Scanner | Code & dependencies | `osv-scanner` |
+| Gitleaks | Code & dependencies | `gitleaks` |
+| YARA | Files & firmware | `yara`, `yara64`, or winget's links folder |
+| Binwalk | Files & firmware | `binwalk` |
 | Metasploit Framework | Validation | `msfconsole`, `msfvenom` |
 | Hashcat | Validation | `hashcat` |
 | John the Ripper | Validation | `john`, `john-the-ripper` |
 
 | Button | What it does |
 |---|---|
-| **A** on an installed command-line tool | Runs its version report (`sqlmap --version`, `nikto -Version`, …) and shows the output with the resolved path |
-| **A** on an installed GUI tool | Opens the application itself (Burp Suite, ZAP, Wireshark) |
-| **A** on a tool that is not installed | Copies the install hint (`pip install sqlmap`, `apt install nikto`, a vendor page) so it can be pasted |
+| **A** on a tool | Opens its sheet: how it installs on this system and how the download is checked, anything worth knowing first, and the actions that apply — **Install**, **Terminal** or **Open**, **Version**, **Update**, **Remove**, or the official download page (a QR code on the handheld) |
+| **X** on an installed tool | **Terminal** for a command-line tool (its help command typed in, waiting for Enter) or **Open** for a desktop tool |
 
-Detection is PATH first, then the absolute paths the vendor installers use, so a
-GUI application that never touched PATH is still found. Nothing is downloaded
-and no check sends traffic: pressing **A** never passes a target, a host or a
-scan profile. A real run against a host you own belongs in **Power tools →
-Script snippets**, where the whole command line is visible before it starts.
+Detection is what JukaHub installed first, then PATH, then the absolute paths
+the vendor installers use, so a GUI application that never touched PATH is
+still found. Nothing installs without a press and nothing starts with a target:
+**Version** runs the tool's own version report, and **Terminal** types its help
+command and waits. Tools that talk to other hosts sit behind the same one-time
+"systems you own or may test" acknowledgement as the Toolbox scanners. A real
+run against a host you own belongs in the Terminal or **Power tools → Script
+snippets**, where the whole command line is visible before it starts.
 
 The catalog leaves out command-and-control platforms and autonomous
 exploitation drivers on purpose: an app that starts those on a button press is a
 different trust decision from an app that starts a scanner's version report. The
 list is `secAuditCatalog` in `player/secaudit.go`; adding a tool there is one
-entry, because nothing is fetched.
+entry with a recipe per platform (a GitHub release's repo also goes on
+`allowedToolRepos` in `player/tools.go`).
 
 ### On the handheld (TrimUI)
 
-The stock firmware has no Python and no Perl, and the projects publish no
-ARM64 Linux builds of Nmap, John the Ripper or Aircrack-ng. On a TrimUI those
-come from [Linux packages](LINUX_PACKAGES.md) — Ubuntu 24.04's own arm64
-packages, verified against Ubuntu's signed index and run from the card with
-Ubuntu's C library, without touching the firmware:
+The stock firmware has no Python and no Perl, and most of these projects
+publish no ARM64 Linux builds. On a TrimUI the tools come one of two ways,
+neither of which touches the firmware: Nuclei, OSV-Scanner and Gitleaks as the
+project's static arm64 release from GitHub, checked against the SHA-256 list
+the release publishes; everything else from [Linux packages](LINUX_PACKAGES.md)
+— Ubuntu 24.04's own arm64 packages, verified against Ubuntu's signed index and
+run from the card with Ubuntu's C library:
 
 | Tool | On the handheld |
 |---|---|
@@ -147,7 +166,19 @@ Ubuntu's C library, without touching the firmware:
 | Nmap | Ubuntu's `nmap` package; JukaHub runs as root, so SYN scans and OS detection are available |
 | John the Ripper | Ubuntu's `john` package (the core edition, CPU only — not the "jumbo" build); its configuration is written to `~/.john/john.conf`, since the build looks for `/etc/john/john.conf` and the firmware's `/etc` is untouched |
 | Aircrack-ng | Ubuntu's `aircrack-ng` package, **analysis only**: the handheld's Wi-Fi chip has no monitor mode, so it works on captures copied to the card. The package's adapter set-up helpers (`ethtool`, `iw`, `rfkill`, `usbutils`, `wireless-tools`), `hwloc`'s viewer (which brings cairo, X11 and fonts) and `python3` for its scripts are left out; the libraries the programs link come along |
+| testssl.sh | Ubuntu's `testssl.sh` package (the command is `testssl`) with Ubuntu's `bash`, since the firmware's shell cannot run the script; its cipher mapping and CA stores are found through `TESTSSL_INSTALL_DIR`. **Remove** leaves `bash` for the Terminal |
+| sslscan | Ubuntu's `sslscan` package |
+| ssh-audit | Ubuntu's `ssh-audit` package, on Ubuntu's Python 3, which comes along; **Version** shows its help screen, which starts with the version |
+| tcpdump | Ubuntu's `tcpdump` package. Ubuntu builds it to switch to a `tcpdump` user, which the handheld does not have, so start captures with `-Z root` (`tcpdump -Z root -i wlan0 -w /mnt/SDCARD/capture.pcap`) and open the file in Wireshark on a computer |
+| YARA | Ubuntu's `yara` package; it brings no rules — copy `.yar` files you trust to the card |
+| Binwalk | Ubuntu's `binwalk` package; signature scans work as installed, while extracting (`-e`) needs the matching unpacker (for example `squashfs-tools`) from Linux packages |
+| Nuclei, OSV-Scanner, Gitleaks | The project's arm64 release from GitHub, checked against its SHA-256 list. OSV-Scanner looks up the names and versions of the packages it finds (not your code) on OSV.dev; Gitleaks' `git` mode needs `git` from Linux packages |
 | Burp Suite, ZAP, Metasploit, Wireshark, Hashcat | Still not available, with the reason on the row (desktop/Java applications, Ruby and a full system, a GPU with OpenCL) |
+
+Two well-known auditors stay out on purpose: Lynis stops when it runs as root
+unless its include files have modes such as 640, and the card's exFAT keeps no
+per-file modes to set; ClamAV's signature set needs more memory than the Smart
+Pro has.
 
 **Update** on a Linux-packages tool checks Ubuntu's index first and installs a
 newer version when there is one; **Remove** deletes the package and the

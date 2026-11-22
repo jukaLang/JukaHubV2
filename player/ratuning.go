@@ -27,8 +27,8 @@ package main
 //	                resampler reads them. Auto picks by console: Best for the
 //	                8/16-bit consoles and the handhelds, Balanced for the
 //	                PlayStation, N64, DS and the CD/arcade systems, Fast for the
-//	                PSP, Dreamcast and Saturn, which need every cycle the A133
-//	                has.
+//	                PSP, Dreamcast, Saturn, GameCube, Wii and PS2, which need
+//	                every cycle the A133 has.
 //	Latency         Low: video_max_swapchain_images 2 (one frame less queued
 //	                than the default 3), video_frame_delay_auto on, and
 //	                audio_latency no higher than 64 ms. Lowest: audio 48 ms and,
@@ -152,7 +152,7 @@ type raTuneTier int
 const (
 	raTuneLight  raTuneTier = iota // 8/16-bit consoles and the handhelds
 	raTuneMedium                   // PlayStation, N64, DS, CD and arcade systems
-	raTuneHeavy                    // PSP, Dreamcast, Saturn, Jaguar
+	raTuneHeavy                    // PSP, Dreamcast, Saturn, Jaguar, GameCube, Wii, PS2
 )
 
 // raTuneSystem is one console the Emulation page can tune on its own.
@@ -200,6 +200,11 @@ var raTuneSystems = []raTuneSystem{
 	{"Saturn", raTuneHeavy, false},
 	{"Dreamcast", raTuneHeavy, false},
 	{"PlayStation Portable", raTuneHeavy, false},
+	// Dolphin and ARMSX2 on the handheld (dolphin.go, ps2.go): every cycle the
+	// resampler does not take is one the emulator gets (dolphin_speed.go).
+	{"GameCube", raTuneHeavy, false},
+	{"Wii", raTuneHeavy, false},
+	{"PlayStation 2", raTuneHeavy, false},
 }
 
 // raTuneCoreFolders are the folder names RetroArch gives a core's options

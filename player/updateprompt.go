@@ -201,7 +201,10 @@ func startHeaderUpdate() bool {
 				return
 			}
 			installBarFail(firstLine(err.Error()))
+			// ShowToast also files it in the bell, unread. The whole error goes to
+			// errors.txt: the toast shows its first line only.
 			ShowToast("Update failed — "+firstLine(err.Error()), ToastKindError)
+			logPatch("update: install failed: %v", err)
 			return
 		}
 		installBarDone()

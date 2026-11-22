@@ -6,7 +6,7 @@ package main
 // The rule is the one desktop file managers follow: a file with a viewer of its
 // own (pictures, music and video, PDF/EPUB, a game, a script, an archive) opens
 // there, and everything else opens in the built-in text editor — or, when the
-// bytes are not text, in its read-only hex view with a warning instead of a
+// bytes are not text, in its hex editor (fileeditor_hex.go) instead of a
 // screen of garbage. Before this, any extension the editor did not list
 // answered "No handler for …", which on a handheld with no other app meant the
 // file could not be looked at at all.
@@ -140,7 +140,7 @@ func filesHasDedicatedViewer(path string) bool {
 }
 
 // filesOpenDefault opens a file with no viewer of its own: text in the editor
-// (read-only and paged when it is large), anything else in the hex view.
+// (read-only and paged when it is large), anything else in the hex editor.
 func filesOpenDefault(config *Config, entry FileEntry) {
 	path, err := resolveExplorerEntry(config, entry.Path)
 	if err != nil {

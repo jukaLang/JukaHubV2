@@ -632,12 +632,25 @@ func (l *webLayouter) intrinsicContainerWidth(blocks []webBlock) int32 {
 	widest := int32(0)
 	for _, b := range blocks {
 		padding := int32((b.Indent + b.Style.IndentRight) * scale)
+		// A sized image (a logo, an icon) is as wide as it draws.
+		if b.Image {
+			if width := l.intrinsicImageWidth(&b) + padding; width > widest {
+				widest = width
+			}
+			continue
+		}
 		for _, run := range b.Runs {
+			if run.Image != nil {
+				if width := l.intrinsicImageWidth(run.Image) + padding; width > widest {
+					widest = width
+				}
+				continue
+			}
 			text := strings.TrimSpace(run.Text)
 			if text == "" {
 				continue
 			}
-			font := l.fontAt(run.Style.FontPx)
+			font := l.styledFont(run.Style)
 			if font == nil {
 				continue
 			}
@@ -672,12 +685,24 @@ func (l *webLayouter) intrinsicMinContentWidth(blocks []webBlock) int32 {
 	widest := int32(0)
 	for _, b := range blocks {
 		padding := int32((b.Indent + b.Style.IndentRight) * scale)
+		if b.Image {
+			if width := l.intrinsicImageWidth(&b) + padding; width > widest {
+				widest = width
+			}
+			continue
+		}
 		for _, run := range b.Runs {
+			if run.Image != nil {
+				if width := l.intrinsicImageWidth(run.Image) + padding; width > widest {
+					widest = width
+				}
+				continue
+			}
 			text := strings.TrimSpace(run.Text)
 			if text == "" {
 				continue
 			}
-			font := l.fontAt(run.Style.FontPx)
+			font := l.styledFont(run.Style)
 			if font == nil {
 				continue
 			}
@@ -1186,7 +1211,9 @@ func (l *webLayouter) paintWebBox(info webBoxInfo, rect sdl.Rect) {
 		l.layout.Rects = append(l.layout.Rects, r)
 	}
 	for _, bg := range boxLayout.Backgrounds {
-		if bg.Rect.Y+bg.Rect.H > rect.H {
+		// A shadow is the box moved by its offset: trimming it to the box
+		// would cut off the part a downward offset shows below the card.
+		if !bg.Shadow && bg.Rect.Y+bg.Rect.H > rect.H {
 			bg.Rect.H = max(0, rect.H-bg.Rect.Y)
 		}
 		bg.Rect.X += rect.X
@@ -2358,6 +2385,12 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 	if first.FlexWrap {
 		minCol = 110
 	}
+	// A run of inline-block boxes (openInlineRow) sizes each box by its
+	// content, so a nav item or a button is as wide as its label.
+	inlineRow := l.doc != nil && l.doc.FlexInlineRow[first.FlexGroup]
+	if inlineRow {
+		minCol = 24
+	}
 	tableRow := first.Style.TableRole == webTableRoleCell
 	if tableRow {
 		// A table cell is not a card: a 40px column is a legitimate width.
@@ -2439,6 +2472,9 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 		rowWidth := int32(0)
 		for i, item := range grouped {
 			basis := l.itemWidth(item.blocks[0], contentW)
+			if basis <= 0 && inlineRow {
+				basis = l.intrinsicContainerWidth(item.blocks)
+			}
 			if minWidths[i] > basis {
 				basis = minWidths[i]
 			}
@@ -2515,6 +2551,11 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 			// A content-sized containment container is shrink-to-fit: its
 			// own text decides the column, and cqw/cqi inside it then use that
 			// measured width instead of the parser's viewport guess.
+			w = l.intrinsicContainerWidth(item.blocks)
+		}
+		if w <= 0 && inlineRow && b.FlexGrow <= 0 {
+			// An inline-block box is shrink-to-fit too; the row's free space
+			// stays beside the boxes, where text-align puts it.
 			w = l.intrinsicContainerWidth(item.blocks)
 		}
 		if w <= 0 && totalGrow == 0 {
@@ -2940,7 +2981,8 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 		case b.FlexBasis > 0:
 			w = int32(b.FlexBasis * scale)
 		case autoWidth && b.HasLeft && b.HasRight:
-			w = anchor.W - int32(b.PosLeft*scale) - int32(b.PosRight*scale)
+			w = anchor.W - webInsetPx(b.PosLeft, b.Style.InsetPct[3], anchor.W, scale) -
+				webInsetPx(b.PosRight, b.Style.InsetPct[1], anchor.W, scale)
 		case autoWidth:
 			// An auto-width layer has no intrinsic width in a text reader.
 			// A caption-sized column reads better than a full-bleed strip.
@@ -2975,19 +3017,33 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 			continue
 		}
 		h := int32(len(sub.Rows)) * l.rowH
+		// Percentage insets resolve against the containing block (a fixed
+		// layer's vertical ones against the screen), and translate() moves the
+		// box by lengths and by percentages of its own size: the
+		// `left: 50%; transform: translate(-50%, -50%)` centring idiom.
+		vertical := anchor.H
+		if b.Style.Position == webPositionFixed {
+			if _, vh := webMediaViewport(); vh > 0 {
+				vertical = int32(vh * scale)
+			}
+		}
 		x := anchor.X
 		switch {
 		case b.HasLeft:
-			x = anchor.X + int32(b.PosLeft*scale)
+			x = anchor.X + webInsetPx(b.PosLeft, b.Style.InsetPct[3], anchor.W, scale)
 		case b.HasRight:
-			x = anchor.X + anchor.W - w - int32(b.PosRight*scale)
+			x = anchor.X + anchor.W - w - webInsetPx(b.PosRight, b.Style.InsetPct[1], anchor.W, scale)
 		}
 		y := anchor.Y
 		switch {
 		case b.HasTop:
-			y = anchor.Y + int32(b.PosTop*scale)
+			y = anchor.Y + webInsetPx(b.PosTop, b.Style.InsetPct[0], vertical, scale)
 		case b.HasBottom:
-			y = anchor.Y + anchor.H - h - int32(b.PosBottom*scale)
+			y = anchor.Y + anchor.H - h - webInsetPx(b.PosBottom, b.Style.InsetPct[2], vertical, scale)
+		}
+		if b.Style.HasTranslate {
+			x += int32(math.Round(b.Style.TranslateX*scale + b.Style.TranslatePctX*float64(w)/100))
+			y += int32(math.Round(b.Style.TranslateY*scale + b.Style.TranslatePctY*float64(h)/100))
 		}
 		if y < 0 {
 			y = 0
@@ -3053,6 +3109,10 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 	// its only colour here, so dropping these left it transparent.
 	for _, bg := range f.Backgrounds {
 		y := top + bg.Rect.Y
+		if bg.Shadow {
+			drawWebShadowPaint(r, bg, rect.X+f.X+bg.Rect.X, y, rect)
+			continue
+		}
 		if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
 			continue
 		}
@@ -3060,6 +3120,7 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 			drawWebImage(r, config, doc, webImagePos{
 				Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
 				ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
+				Radius: bg.Radius,
 			}, rect.X+f.X+bg.Rect.X, y)
 			continue
 		}
@@ -3080,10 +3141,10 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 		drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
 	}
 	for _, bg := range f.Rects {
-		if bg.BackgroundFill {
-			// The block colour is already in f.Backgrounds, where layers can
-			// stack in CSS order; painting it here again would double a
-			// translucent fill.
+		if bg.BackgroundFill || bg.Shadow {
+			// The block colour and the box shadow are already in
+			// f.Backgrounds, where layers stack in CSS order; painting them
+			// here again would double a translucent fill.
 			continue
 		}
 		y := top + bg.Rect.Y
@@ -3110,20 +3171,24 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 			break
 		}
 		for _, run := range row.Runs {
-			if run.Invisible {
+			if run.Invisible || run.Image != nil {
+				// An inline image is painted with f.Images.
 				continue
 			}
 			if run.Font == nil {
 				continue
 			}
+			// The baseline and vertical-align offsets move a run within its
+			// row here as on the page.
+			textY := y + run.VerticalOffset
 			if run.HasBg {
 				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil {
-					fillRoundedRect(r, rect.X+f.X+run.X-2, y-1, int32(w)+4, int32(h), 3, run.Bg)
+					fillRoundedRect(r, rect.X+f.X+run.X-2, textY-1, int32(w)+4, int32(h), 3, run.Bg)
 				}
 			}
-			drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X, y)
-			if run.Bold {
-				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X+1, y)
+			drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X, textY)
+			if run.Bold && !webFontIsBold(run.Font) {
+				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X+1, textY)
 			}
 		}
 	}

@@ -270,7 +270,7 @@ no footer names may have no key.
 | APK Store | A options · X details · Y rescan · L1 / R1 tabs | Enter · X or Del · Y · Tab / Shift+Tab or PgUp / PgDn |
 | Power tools, Memory scanner | X · Y | X · Y (R picks the target in the scanner) |
 | Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
-| Calculator | X insert x · Y graph · L1 clear · R1 delete | X · Y or G · C · Backspace |
+| Calculator | X insert x (history: edit) · Y graph · L1 clear · R1 delete | type the sum · Y · Del · Backspace |
 | Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
 | Tasks | A done · Y add · X task / list sheet · L1 / R1 list · Left / Right column. Due picker: L1 / R1 ±7 days / ±1 hour, Y save | Enter or Space · N or Y · X · PgUp / PgDn · ← / → or Tab; Del twice deletes a task |
 | Voice Memos | Y record · A play / pause (stop & save while recording) · X options (pause while recording) · L1 / R1 −5 s / +5 s | Y or R · Enter · X (Space pauses a recording) · ← / →; N rename, Del delete |
@@ -2435,6 +2435,40 @@ means is in [OPEN_WITH.md](OPEN_WITH.md).
 **Select** menu have **Open with…** too; a document the reader cannot show
 offers it on **Y**.
 
+### Text and hex editor
+
+A on a text file — a script, a config, a source file, a log — opens the text
+editor; a file that is not text opens the hex editor, and **Open with… → Hex
+editor** (or the text editor's **View → Hex editor**) shows any file's bytes.
+The full guide is [TEXT_EDITOR.md](TEXT_EDITOR.md).
+
+| Pad | Keyboard | Text editor |
+|-----|----------|-------------|
+| Up / Down, L1 / R1 | Arrows, PgUp / PgDn | Move a line, a page |
+| A | Enter | Edit the line on the keyboard |
+| X | X / Insert | Insert a line after it |
+| R2 | Delete | Delete the line |
+| Y | Y / Ctrl+S | Save (a `.json` file must be valid JSON) |
+| Start | Tab | View: wrap, line numbers, text size, syntax colours, Highlight as, Hex editor, Open with… |
+| – | H | Syntax colours on or off |
+| B | Esc | Close (asks first when there are unsaved changes) |
+
+Shell, Perl, Python, JavaScript/TypeScript, JSON, C/C++, Java and config files
+(INI, `.cfg`, YAML, TOML) are coloured by keyword, string and comment, the
+language found from the file's name or its `#!` line; **View → Highlight as**
+picks another one for the open file.
+
+| Pad | Keyboard | Hex editor |
+|-----|----------|------------|
+| D-Pad | Arrows | Move a byte (Left / Right) or a row (Up / Down) |
+| L1 / R1, L2 / R2 | PgUp / PgDn, Home / End | Page; first / last byte |
+| A | Enter | Edit the byte: Up / Down count its digit, Left / Right step on, A keeps it, B puts it back |
+| – | 0–9, A–F | Type hex digits straight in |
+| X | X | Type bytes from the cursor on: `4A 75 6B 61`, or text in quotes |
+| Y | Y / Ctrl+S | Save (nothing is written before) |
+| Start | Tab, Ctrl+G, Ctrl+Z | View: go to offset, undo, show as text |
+| B | Esc | Close (asks first when bytes changed) |
+
 ## Wi-Fi picker
 
 Open it from **Quick Settings → Wi-Fi Networks**, **Hardware → Wi-Fi**, or a
@@ -2895,12 +2929,22 @@ Left / Right and previews each one as it lands.
 
 ## Calculator
 
-| Button | Action |
-|--------|--------|
-| D-pad | Move over the keypad |
-| A | Press the focused key |
-| L1 / R1 | Clear (**C**) / backspace (**<**) |
-| B | Back |
+| Pad | Keyboard | Action |
+|-----|----------|--------|
+| D-pad | Arrows | Move over the keypad; Right from the right-hand column walks into the history |
+| A | Space (Enter when nothing was typed) | Press the focused key; in the history, use that answer |
+| — | Digits, operators, `( )`, names (`sqrt`, `sin`, `pi`, `ans`) | Type the sum |
+| — | Enter, `=` | Answer (brackets left open are closed) |
+| X | `x` | Type the graph's x; in the history, put that sum back to edit |
+| Y | Y | Graph / history |
+| L1 | Del | Clear the line |
+| R1 | Backspace | Delete the last character or a whole `sin(` |
+| — | Ctrl+C / Ctrl+V | Copy the answer / paste a sum |
+| B | Esc | Back (from the history: back to the keys) |
+
+**2nd** switches sin, cos and tan to their inverses, ln to eˣ, log to 10ˣ, x²
+to x³, √ to ³√ and xʸ to ʸ√x for the next key; **DEG / RAD** sets the angle
+unit (degrees by default, also a tap on the display's corner).
 
 ## Terminal
 

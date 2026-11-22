@@ -17,13 +17,19 @@ package main
 //     supported"; there "Try anyway" lets a player see for themselves. While
 //     it is on, the two consoles are no longer desktop-only here
 //     (emuDesktopSystemFor): the Emulators page lists their folders like any
-//     other console's, Get more cores fetches the core, the daily challenge
-//     may pick one of their games.
+//     other console's and the daily challenge may pick one of their games.
+//     Get more cores leaves the core to the setup below (dolphinManagesCore).
 //   - A game's start with no emulator for it (chooseGameLauncher) sets
-//     Dolphin up — the core from the buildbot through the Emulators page's
-//     own install and load checks (RetroArch then runs it on JukaHub's glibc
-//     when the build needs a newer one, ra_glibc.go), and Dolphin's Sys
-//     folder — and starts the game once both are in, as J2ME's start does.
+//     Dolphin up — the core from JukaHub's own build for TrimUI, else the
+//     buildbot's nightly (RetroArch then runs it on JukaHub's glibc, which
+//     the buildbot's build needs, ra_glibc.go; dolphin_setup.go has both),
+//     and Dolphin's Sys folder — and starts the game once both are in, as
+//     J2ME's start does.
+//   - The Emulators page's Dolphin tiles (the core's row, the GameCube and
+//     Wii folders) run the same setup on a press and look for a newer build
+//     that loads here (dolphinStartInstall). On an A133P whose setting is
+//     Automatic that press turns GameCube & Wii to Try anyway: Juka asked on
+//     2026-11-20, on a Brick Pro, for "dolphin that works on Trimui".
 //   - Every start in the core (launchLibraryGame) first makes sure the Sys
 //     folder is there and that the core is not a build from before the
 //     October 2026 fix for libretro/dolphin#462, whose dual-core mode froze an
@@ -228,7 +234,7 @@ func dolphinLauncherForGame(game libraryGame, launch func(launcher string)) bool
 		return true
 	}
 	setting := "Setting up Dolphin for " + canonicalCompatSystem(game.System) + " games (once) — " + game.Label() + " starts when it is in"
-	if why := dolphinBeginSetup(game, "", time.Now(), true, setting, func(core string) {
+	if why := dolphinBeginSetup(game.Label(), game.Path, "", time.Now(), dolphinFixStale, setting, func(core string, _ error) {
 		dolphinStart(game, launch, core)
 	}); why != "" {
 		ShowToast(why, ToastKindInfo)
@@ -293,7 +299,11 @@ func dolphinPrepareLibraryLaunch(game libraryGame, launcher string) (deferred bo
 	case need.CoreStale:
 		setting = "Updating the Dolphin core and getting its system files — " + game.Label() + " starts when they are in"
 	}
-	why := dolphinBeginSetup(game, launcher, time.Now(), need.CoreStale, setting, func(core string) {
+	want := dolphinKeepCore
+	if need.CoreStale {
+		want = dolphinFixStale
+	}
+	why := dolphinBeginSetup(game.Label(), game.Path, launcher, time.Now(), want, setting, func(core string, _ error) {
 		if gameScreenSuspended() || videoHoldsScreenAwake() || emuPickOpen() {
 			ShowToast("Dolphin is ready — start "+game.Label()+" again to play", ToastKindSuccess)
 			return
@@ -336,27 +346,33 @@ func dolphinToastAfterCaller(msg string, kind ToastKind) {
 
 // dolphinBeginSetup installs what Dolphin lacks for a start with launcher (""
 // for the core JukaHub sets up) with the install card up — the core when there
-// is none or (updateStale) when it is an old build, and the Sys folder — then
-// runs then with the core file. setting is the toast that says so. It returns
-// why it did not start, "" when it did. Main thread.
-func dolphinBeginSetup(game libraryGame, launcher string, pressed time.Time, updateStale bool, setting string, then func(core string)) string {
+// is none, or the newer build want asks for, and the Sys folder — then runs
+// then with the core file, and kept: why the newer build did not replace the
+// core there (nil when nothing was kept). label and romPath are the game's
+// ("" for a press on the Emulators page, whose then always runs and says what
+// kept means; a game's start says it here); setting is the toast that says
+// what happens. It returns why it did not start, "" when it did. Main thread.
+func dolphinBeginSetup(label, romPath, launcher string, pressed time.Time, want dolphinCoreWant, setting string, then func(core string, kept error)) string {
+	again := "try again when that is done"
+	if label != "" {
+		again = "start " + label + " again when that is done"
+	}
 	if !dolphinBusy.CompareAndSwap(false, true) {
-		return "Dolphin is already being set up — start " + game.Label() + " again when that is done"
+		return "Dolphin is already being set up — " + again
 	}
 	// A run never takes the install card from another one: the player starts
 	// the game again when that is done.
 	if installBarActive() || !tryBeginPatchOp() {
 		dolphinBusy.Store(false)
-		return "Another download or update is running — start " + game.Label() + " again when it is done"
+		return "Another download or update is running — " + again
 	}
 	gen, barCtx := installBarBeginRun(dolphinSetupLabel)
 	ShowToast(setting, ToastKindInfo)
 	dolphinToastAfterCaller(setting, ToastKindInfo)
 	PlayActivateSound()
-	romPath := game.Path
 	go func() {
 		ctx, cancel := context.WithTimeout(barCtx, dolphinSetupTimeout)
-		core, err := dolphinSetup(ctx, launcher, romPath, updateStale,
+		core, kept, err := dolphinSetup(ctx, launcher, romPath, want,
 			func(phase, detail string) {
 				installBarUpdateRun(gen, phase, 0, 0)
 				if detail != "" && installBarGeneration() == gen {
@@ -375,15 +391,18 @@ func dolphinBeginSetup(game libraryGame, launcher string, pressed time.Time, upd
 		}
 		tbxPost(func() {
 			dolphinBusy.Store(false)
+			if err == nil && kept != nil && label != "" {
+				ShowToast("The Dolphin core could not be updated ("+firstLine(emuFriendlyError(kept))+") — "+label+" plays in the one there", ToastKindWarning)
+			}
 			switch {
 			case err != nil && cancelled:
 				// Stopped from the card: the player chose not to wait.
 			case err != nil:
 				ShowToast("Dolphin could not be set up: "+emuFriendlyError(err), ToastKindError)
-			case time.Since(pressed) > dolphinPlayAfterWithin:
-				ShowToast("Dolphin is ready — start "+game.Label()+" again to play", ToastKindSuccess)
+			case label != "" && time.Since(pressed) > dolphinPlayAfterWithin:
+				ShowToast("Dolphin is ready — start "+label+" again to play", ToastKindSuccess)
 			default:
-				then(core)
+				then(core, kept)
 			}
 		})
 	}()
@@ -405,6 +424,82 @@ func dolphinStart(game libraryGame, launch func(launcher string), core string) {
 	dolphinResume = game.Path
 	launch(core)
 	dolphinResume = ""
+}
+
+// ── The Emulators page ───────────────────────────────────────────────────
+
+// dolphinTile reports whether an Emulators page tile is Dolphin's on the
+// handheld: the Roms/GC or Roms/Wii folder's, the installed core's, or the
+// buildbot's "dolphin" row. A press on it runs dolphinStartInstall instead of
+// the generic core install, so the core comes from the source whose build
+// loads here, with Dolphin's Sys folder.
+func dolphinTile(e emuEntry) bool {
+	return !e.Pinned && dolphinSoC() != "" && coreFixSupported() && emuCoreForEntry(e) == dolphinCoreName
+}
+
+// dolphinStartInstall installs the Dolphin core, or brings it to the newest
+// build this handheld can load, with Dolphin's Sys folder (a Dolphin tile on
+// the Emulators page). On an A133P model whose GameCube & Wii setting is
+// Automatic (off for that chip) the press is the player asking to try: the
+// setting becomes Try anyway, so their games start in it, and the result says
+// so. Main thread.
+func dolphinStartInstall() {
+	dolphinSyncMode(appConfig)
+	if dolphinMode() == dolphinModeOff {
+		PlayNavSound()
+		ShowToast("GameCube & Wii are off on this handheld · Settings → Games & emulators → GameCube & Wii turns them on", ToastKindInfo)
+		return
+	}
+	if !IsOnline() {
+		ShowToast("No internet connection — connect to set up Dolphin", ToastKindWarning)
+		return
+	}
+	// Automatic on an A133P: the setting turns to Try anyway once the setup
+	// is under way.
+	turnOn := !dolphinPlaysHere() && appConfig != nil
+	before := dolphinCoreIdentity(dolphinFindCore())
+	setting := "Setting up Dolphin for GameCube and Wii games"
+	if before != "" {
+		setting = "Looking for the newest Dolphin core that runs on this handheld"
+	}
+	onNote := ""
+	if turnOn {
+		onNote = " · GameCube & Wii set to Try anyway: on this chip most games run well below full speed"
+	}
+	why := dolphinBeginSetup("", "", "", time.Now(), dolphinGetNewest, setting, func(core string, kept error) {
+		if kept != nil {
+			ShowToast("No newer Dolphin core could be installed ("+firstLine(emuFriendlyError(kept))+") — the one there stays"+onNote, ToastKindWarning)
+			return
+		}
+		rec := dolphinRecordGet()
+		msg := "Dolphin is ready for GameCube and Wii games"
+		if before != "" && dolphinCoreIdentity(core) == before {
+			msg = "Dolphin is already the newest build that runs here"
+		}
+		switch {
+		case rec.CorePath != filepath.Clean(core):
+			// The record is about another file: nothing to add.
+		case rec.CoreGlibc && rec.CoreFrom != "":
+			msg += " · " + rec.CoreFrom + "'s build, started on JukaHub's glibc " + privateGlibcVersion
+		case rec.CoreGlibc:
+			msg += " · started on JukaHub's glibc " + privateGlibcVersion
+		case rec.CoreFrom != "":
+			msg += " · " + rec.CoreFrom
+		}
+		PlaySuccessSound()
+		ShowToast(msg+onNote, ToastKindSuccess)
+	})
+	if why != "" {
+		ShowToast(why, ToastKindInfo)
+		return
+	}
+	if turnOn {
+		setStoreString(appConfig, dolphinSetting, dolphinModeOn)
+		dolphinSyncMode(appConfig)
+		// The page's GameCube and Wii folders are no longer "not supported".
+		invalidateEmulatorCache()
+		logInfo("library", "GameCube: GameCube & Wii set to Try anyway by a press on a Dolphin tile")
+	}
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────

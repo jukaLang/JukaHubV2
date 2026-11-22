@@ -93,7 +93,32 @@ gap, not a silent promise.
 - `calc()` over `px`, `em`, `rem`, percentages and viewport units, plus
   `min()`, `max()` and `clamp()` in ordinary lengths.
 - Container queries and container-relative units.
-- Images, video, forms and details/summary layout.
+- Images, video, forms and details/summary layout. An inline-level image
+  (not `display: block`, floated, positioned or a flex/grid item) is an
+  unbreakable box inside its line: it wraps like a word, stands on the
+  baseline or follows `vertical-align: middle/top/bottom`, and a link made of
+  images is a D-pad stop. Image sizes are CSS px on the same scale as text;
+  `width`/`height` attributes win over the file's natural size.
+- `display: inline-block` (and `inline-flex`/`inline-grid`) on block-level
+  elements: consecutive siblings form a wrapping row, each box as wide as its
+  content (or its `width`), justified like the parent's `text-align`, with
+  its own padding, background, border and radius. A block-level sibling ends
+  the row. An `<li>` with `display: inline` or `inline-block` has no marker.
+- `transform: translate()`, `translateX()`, `translateY()` and
+  `translate3d()` (lengths and percentages of the box) on absolutely and
+  fixed positioned boxes, after their size is known, and percentage insets
+  resolved against the containing block.
+- SVG: inline `<svg>`, `<img src>` SVG files, SVG `<picture>` sources and
+  `data:image/svg+xml` URIs (base64, percent-encoded or utf8, including in
+  CSS `url()`), rasterised by `webpage_svg.go`: paths (every command, arcs
+  included), rect/circle/ellipse/line/polyline/polygon, groups, nested
+  `<svg>`, `<use>` and `<symbol>` (also from sprite sheets elsewhere on the
+  page, hidden ones included), transforms, presentation attributes,
+  `style=""`, simple `<style>` rules (tag, `.class`, `#id`), `currentColor`
+  (the element's text colour), the page's CSS `fill`/`stroke` on the
+  `<svg>`, fill/stroke opacity, `fill-rule`, caps, joins and miter limits,
+  and linear/radial gradients (with `href` inheritance). An `<svg>` without
+  a size takes its `viewBox` size.
 - Tables: row/cell flow, `colspan`/`rowspan` (clamped to 32 tracks and the
   remaining rows), `<colgroup>`/`<col>` widths and `span` values matched
   left-to-right, `table-layout: auto/fixed`, direct cell widths, empty rows
@@ -105,9 +130,25 @@ gap, not a silent promise.
 ### Typography and paint
 
 - Colour, background colour, linear/radial/conic gradients and opacity.
-- Font size, weight (faux bold), text transform, text align (including
-  `justify`), line height, `font-style: italic/oblique` (synthetic italic
-  face), `letter-spacing`, and `word-spacing`.
+- Font size (up to twice the body size), weight (a real bold face: Inter
+  SemiBold, or an emboldened copy of a picked UI face; numeric weights from
+  600 up are bold), text transform, text align (including `justify`), line
+  height, `font-style: italic/oblique` (synthetic italic face),
+  `letter-spacing`, and `word-spacing`.
+- `font-family` chooses between two faces: the UI face, and a monospace face
+  for `monospace`, `ui-monospace`, the common code families (Menlo, Consolas,
+  Courier New, Fira Code, JetBrains Mono, …) and `<pre>`, `<code>`, `<kbd>`,
+  `<samp>`, `<tt>`, when the machine has one (`termPtyMonoFontPath`: a
+  `*Mono*.ttf` in JukaHub's fonts folder, Consolas or Cascadia Mono on
+  Windows, DejaVu, Liberation or Noto Sans Mono on Linux). Unknown families
+  keep the inherited choice.
+- Every line is set on one baseline: runs of different sizes and faces, and
+  inline images, align as in a browser.
+- Icon fonts: Private Use Area code points (Font Awesome and the like) are
+  dropped instead of drawing as stray marks, and Material Icons / Material
+  Symbols ligature names (by family or by the `material-icons*` /
+  `material-symbols-*` classes) become the nearest glyph Inter has (arrows,
+  ×, ✓, ‹ ›, ★, …) or nothing.
 - `white-space: normal`, `nowrap`, `pre`, `pre-wrap`, `pre-line` and
   `break-spaces`. `nowrap` keeps one line and ellipsizes overflow; `pre` keeps
   authored spaces and newlines without wrapping; `pre-wrap` and `break-spaces`
@@ -126,8 +167,11 @@ gap, not a silent promise.
 - `text-decoration` underline/strikethrough, `text-decoration-color`, pixel
   `text-decoration-thickness`, and `solid`/`double`/`dotted`/`dashed`/`wavy`
   `text-decoration-style`.
-- `text-shadow` offset and colour (blur is ignored).
-- `box-shadow` outer offset and colour (blur, spread and inset are ignored).
+- `text-shadow`: the first visible layer's offset and colour; its blur only
+  softens the alpha.
+- `box-shadow`: the first visible outer layer, with its offset, blur (a soft
+  falloff of layered translucent rects, up to 96 device px) and spread. Inset
+  layers are skipped.
 - Borders in `solid`, `dashed`, `dotted`, `double`, `none` and `hidden`
   styles; border width and colour; outlines as a separate box edge with
   `outline-offset`; list styles and list-style none.
@@ -159,6 +203,9 @@ gap, not a silent promise.
 - Box `opacity` multiplies into text, fills, borders, gradients, images and
   video card chrome/thumbnails; `opacity: 0.5` therefore paints a different
   alpha from `1`.
+- `border-radius` on an image clips the picture itself (SDL_RenderGeometry;
+  a renderer without it draws the picture square), so a `50%` avatar is a
+  circle.
 - Links, focus outlines and reader selection states.
 
 ## HTML elements
@@ -171,10 +218,11 @@ gap, not a silent promise.
 - Inline and text: `a`, `span`, `strong`, `b`, `em`, `i`, `u`, `ins`, `s`,
   `del`, `strike`, `small`, `mark`, `code`, `kbd`, `samp`, `var`, `q`, `cite`,
   `abbr`, `time`, `sub`, `sup`, `br`, `wbr`, and unknown/custom tags (inline).
-- Replaced/media: `img`, `picture`/`source`, `hr`, `video`, `audio`, `iframe`
-  embeds. `svg`, `canvas`, `object`, `embed`, and media without a playable
-  source keep a real placeholder box with their resolved width, height,
-  background and border. Their fallback content is not interpreted.
+- Replaced/media: `img`, `picture`/`source`, `svg`, `hr`, `video`, `audio`,
+  `iframe` embeds. `canvas`, `object`, `embed`, an `<svg>` with nothing to
+  draw but a background or border, and media without a playable source keep
+  a real placeholder box with their resolved width, height, background and
+  border. Their fallback content is not interpreted.
 - Forms: `input` (text/password/checkbox/radio/submit/range/etc.), `textarea`,
   `select`/`option`, `button`, `label`, `legend`, `output`, `progress`, `meter`.
 - Table structure: `table`, `thead`, `tbody`, `tfoot`, `tr`, `td`, `th`,
@@ -196,14 +244,15 @@ mistaken for working CSS.
 
 | Construct | Current behaviour |
 | --- | --- |
-| `font-family` | Accepted; the reader uses its one bundled face. |
-| `display: inline-block` and block/inline conversion | `display: contents` and `display: inline` participate in flow, but inline-block dimensions and every block/inline conversion are not yet modelled as browser box generation. |
+| `font-family` | Two faces only (the UI face and a monospace one); web fonts are not downloaded. |
+| `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They stay inline text with a background chip; their own width, height and vertical padding are not boxes. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
 | aspect-ratio on a wrapper with no direct block | Accepted for ordinary blocks; a wrapper that only colours its children reserves its ratio through its box, not through a text row. |
 | `position: sticky` | Kept in normal flow and pinned as a copy once it scrolls past its inset; nested scroll containers are not modelled. |
-| `box-shadow` blur, spread, inset; `text-shadow` blur | Accepted; only the first offset/colour is painted. |
-| `transform`, `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. |
+| `box-shadow` inset; more than one shadow layer; `text-shadow` blur | Only the first visible outer box-shadow layer is painted; a text shadow's blur only lowers its alpha. |
+| `transform` (except `translate` on positioned boxes), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. In-flow boxes stay where the flow puts them. |
+| SVG `<text>`, `<image>`, filters, masks, clip paths, patterns, markers, dashes and `<foreignObject>`; external `<use href="sprite.svg#icon">` | Skipped; the rest of the drawing renders. |
 | non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |

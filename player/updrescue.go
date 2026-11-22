@@ -656,6 +656,7 @@ func updRescueApply(appDir, base, versionsDir string, r updRescue) {
 	}
 	if strings.EqualFold(patchState.AvailableUpdateTag, r.To) {
 		patchState.AvailableUpdateTag, patchState.AvailableUpdateAt, patchState.AvailableUpdateAsset = "", "", ""
+		patchState.AvailableUpdateDigest, patchState.AvailableUpdateSize = "", 0
 		changed = true
 	}
 	// The restored stamp, or none when the update had added the stamp (the

@@ -27,11 +27,11 @@ const (
 const (
 	browserAcceptDocument = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
 	browserAcceptStyle    = "text/css,*/*;q=0.1"
-	browserAcceptImage    = "image/webp,image/apng,image/png,image/jpeg,image/gif,image/bmp"
+	browserAcceptImage    = "image/webp,image/apng,image/png,image/jpeg,image/gif,image/bmp,image/svg+xml"
 	browserAcceptScript   = "*/*"
 	// browserAcceptImageNoWebP is the image Accept of a build whose SDL_image
-	// cannot decode WebP.
-	browserAcceptImageNoWebP = "image/apng,image/png,image/jpeg,image/gif,image/bmp"
+	// cannot decode WebP. SVG is drawn by the reader itself (webpage_svg.go).
+	browserAcceptImageNoWebP = "image/apng,image/png,image/jpeg,image/gif,image/bmp,image/svg+xml"
 )
 
 // browserImageAccept is the Accept header an image request sends. It names

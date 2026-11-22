@@ -395,8 +395,8 @@ func toolboxFetchLatestRelease(ctx context.Context, repo string) (toolboxRelease
 // toolboxChecksumAsset finds the file in a release that publishes the SHA-256 of
 // asset: a per-file side-car (ripgrep's "<archive>.sha256") first, then a
 // combined list (goreleaser's "<name>_<version>_checksums.txt", rclone's
-// "SHA256SUMS", jq's "sha256sum.txt"). single reports a side-car, which may
-// carry the hash alone.
+// "SHA256SUMS", OSV-Scanner's "osv-scanner_SHA256SUMS", jq's
+// "sha256sum.txt"). single reports a side-car, which may carry the hash alone.
 func toolboxChecksumAsset(assets []releaseAsset, asset string) (sum releaseAsset, single bool, ok bool) {
 	lower := strings.ToLower(asset)
 	for _, a := range assets {
@@ -409,6 +409,8 @@ func toolboxChecksumAsset(assets []releaseAsset, asset string) (sum releaseAsset
 		n := strings.ToLower(a.Name)
 		switch {
 		case n == "sha256sums", n == "sha256sums.txt", n == "sha256sum.txt", n == "checksums.txt":
+			return a, false, true
+		case strings.HasSuffix(n, "_sha256sums"):
 			return a, false, true
 		case strings.Contains(n, "checksums") && strings.HasSuffix(n, ".txt") && !strings.Contains(n, "sha512"):
 			return a, false, true

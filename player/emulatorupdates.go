@@ -298,7 +298,7 @@ func planCoreUpdates(entries []coreIndexEntry, active map[string]coreBuild) []co
 	updates := make([]coreUpdate, 0, len(entries))
 	for _, entry := range entries {
 		build, ok := active[entry.Core]
-		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) || ps2ManagesCore(entry.Core) {
+		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) || ps2ManagesCore(entry.Core) || dolphinManagesCore(entry.Core) {
 			continue
 		}
 		// The checksum cache is keyed by size and modification time, so a core
@@ -448,12 +448,26 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	// load them is a separate question, asked before the pool is changed. A
 	// build that only needs a newer glibc than the firmware's gets RetroArch's
 	// own (ra_glibc.go: JukaHub's private glibc installed and probed), then is
-	// asked again.
-	problem := coreLoadProblemFile(binary.Name(), upd.Active)
-	if problem != "" && raGlibcEnsureForCore(ctx, problem, upd.Active) {
-		problem = coreLoadProblemFile(binary.Name(), upd.Active)
+	// asked again. Both questions are about the file the build becomes
+	// (coreUpdateCheckTarget): asked about no file, a core the card did not
+	// have yet was checked against the firmware's libraries alone and never
+	// got the runtime — the buildbot's Dolphin (GLIBCXX_3.4.32) was refused on
+	// a Brick Pro whose RetroArch would have run it on JukaHub's glibc.
+	target := coreUpdateCheckTarget(upd, want)
+	problem := coreLoadProblemFile(binary.Name(), target)
+	if problem != "" && raGlibcEnsureForCore(ctx, problem, target) {
+		problem = coreLoadProblemFile(binary.Name(), target)
 	}
 	if problem != "" {
+		if err := ctx.Err(); err != nil {
+			return coreBuild{}, err
+		}
+		if raGlibcPending(problem, target) {
+			// Only JukaHub's glibc was missing, and its download did not
+			// finish: nothing about this build is final, so it is not
+			// remembered as refused and the next try fetches it again.
+			return coreBuild{}, fmt.Errorf("the %s build needs JukaHub's glibc %s, which could not be downloaded — check the connection and try again (%s)", upd.Date, privateGlibcVersion, problem)
+		}
 		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}
 
@@ -500,6 +514,22 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		Pool:    true,
 		Size:    size,
 	}, nil
+}
+
+// coreUpdateCheckTarget is the file a downloaded build of upd is checked as:
+// the core it replaces, else — a core the card does not have yet — the file
+// activation will write (coreActivationTarget: its cores folder, whose
+// RetroArch decides the architecture and whether JukaHub's glibc counts),
+// else "" (no cores folder JukaHub may write: the firmware's libraries alone).
+func coreUpdateCheckTarget(upd coreUpdate, file string) string {
+	if strings.TrimSpace(upd.Active) != "" || IsWindows() {
+		// Windows has no load check (a DLL is not an ELF file) to aim.
+		return upd.Active
+	}
+	if target, err := coreActivationTarget(coreBuild{Core: upd.Core, File: file}); err == nil {
+		return target
+	}
+	return ""
 }
 
 // coreRefusedError is a core build this device will not take: one that cannot

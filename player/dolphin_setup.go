@@ -4,11 +4,29 @@ package main
 // Dolphin core (dolphin.go): the core, a build new enough, and Dolphin's Sys
 // folder.
 //
-//   - The core is the libretro buildbot's linux/aarch64 dolphin_libretro,
-//     installed the way the Emulators page installs any core (planEmuInstall
-//     → applyEmuInstallPlan: the CRC32 the index states, elfcompat's load
-//     check, RetroArch on JukaHub's glibc when the build needs a newer one,
-//     probation through its first game).
+//   - The core comes from the first of two sources that has a build this
+//     handheld can load (dolphinSources). First JukaHub's own build for
+//     TrimUI: the rolling release "cores-aarch64", compiled from
+//     libretro/dolphin by .github/workflows/retroarch-cores.yml with GCC 13
+//     and libstdc++ linked in, in the Ubuntu 20.04 (glibc 2.31) root, so it
+//     loads on the firmware's own C library and starts from the stock menu
+//     too. Then the libretro buildbot's linux/aarch64 nightly, which on
+//     2026-11-20 needed GLIBCXX_3.4.32 (GCC 13's libstdc++, newer than the
+//     firmware's): it installs when RetroArch can start on JukaHub's private
+//     glibc 2.39 (ra_glibc.go), fetched and probed first. Both go through the
+//     door every core install uses (fetchCoreUpdate: allowlisted hosts, the
+//     index's CRC32, the load check against the file the build becomes;
+//     activateCoreBuild). On 2026-11-20 a Brick Pro's press on the Emulators
+//     page's Dolphin tile was refused all the same: the load check of a core
+//     the card did not have yet asked about no file, so it never counted the
+//     runtime (fetchCoreUpdate now asks about the file activation writes).
+//   - The buildbot's daily core updates leave the core to this setup on the
+//     handheld (dolphinManagesCore): a nightly must not replace JukaHub's
+//     build with one that needs the runtime, and Dolphin is among the largest
+//     downloads the buildbot has, with a new build nearly every day. A press
+//     on the Emulators page's Dolphin tile looks for the newest build that
+//     loads here (dolphinGetNewest); JukaHub's own build is only ever
+//     replaced by a newer one of its own.
 //   - A core built before dolphinRaceFixed freezes: libretro/dolphin#462 —
 //     JITARM64 with the dual-core option (dolphin_main_cpu_thread, on by
 //     default) stopped an aarch64 RetroArch about ten seconds into a game, its
@@ -72,7 +90,11 @@ type dolphinRecord struct {
 	CorePath string `json:"corePath,omitempty"`
 	CoreSize int64  `json:"coreSize,omitempty"`
 	CoreTime int64  `json:"coreTime,omitempty"` // modification time, Unix seconds
-	CoreDate string `json:"coreDate,omitempty"` // the buildbot index's date for it
+	CoreDate string `json:"coreDate,omitempty"` // its source index's date for it
+	// CoreFrom names that source (dolphinSource.name, "" when unknown), and
+	// CoreGlibc reports a build that starts on JukaHub's glibc only.
+	CoreFrom  string `json:"coreFrom,omitempty"`
+	CoreGlibc bool   `json:"coreGlibc,omitempty"`
 	// Video is the driver JukaHub wrote into Dolphin's RetroArch override at
 	// VideoPath ("" when it wrote none); VideoFailed lists the drivers a start
 	// could not draw with in the core file VideoCore names (path, size and
@@ -151,18 +173,23 @@ func dolphinRecordUpdate(change func(*dolphinRecord)) {
 }
 
 // dolphinNoteCore records path as the core this setup installed or checked
-// (date: the index's date for it, "" when unknown).
-func dolphinNoteCore(path, date string) {
+// (date: its source index's date for it, from: that source's name; "" when
+// unknown), and whether it loads only on JukaHub's glibc. Off the main
+// thread: the last part reads the core's ELF header.
+func dolphinNoteCore(path, date, from string) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return
 	}
 	path = filepath.Clean(path)
+	needsGlibc, _ := raGlibcCoreNeeds(path)
 	dolphinRecordUpdate(func(r *dolphinRecord) {
 		r.CorePath = path
 		r.CoreSize = info.Size()
 		r.CoreTime = info.ModTime().Unix()
 		r.CoreDate = date
+		r.CoreFrom = from
+		r.CoreGlibc = needsGlibc
 	})
 }
 
@@ -296,27 +323,43 @@ func dolphinSysPresent(sysDir string) bool {
 
 // ── The setup ────────────────────────────────────────────────────────────
 
+// dolphinCoreWant says what a setup does about a Dolphin core that is there.
+type dolphinCoreWant int
+
+const (
+	// dolphinKeepCore installs a core only when there is none.
+	dolphinKeepCore dolphinCoreWant = iota
+	// dolphinFixStale also replaces a build from before the freeze fix.
+	dolphinFixStale
+	// dolphinGetNewest also brings any other build to the newest one this
+	// device takes (a press on the Emulators page's Dolphin tile).
+	dolphinGetNewest
+)
+
 // dolphinSetup installs what a game at romPath needs to start in Dolphin with
 // launcher ("" for the core JukaHub sets up) and returns the core file: the
-// core when there is none, a newer one over an old build when updateStale
-// says to (an update that fails keeps the old one, said in a toast), and the
-// Sys folder. A RetroArch script that names the core brings its own: only the
-// Sys folder of the RetroArch it starts is fetched for it. Off the main
-// thread; the caller holds the patch slot. phase names each step (with a
-// detail line); progress gets download bytes.
-func dolphinSetup(ctx context.Context, launcher, romPath string, updateStale bool, phase func(phase, detail string), progress func(done, total int64)) (string, error) {
+// core when there is none, a newer one over the build there when want says to
+// (an update that fails keeps the old one: kept is why), and the Sys folder.
+// A RetroArch script that names the core brings its own: only the Sys folder
+// of the RetroArch it starts is fetched for it. romPath is "" for a press with
+// no game: the Sys folder is then fetched only into a system folder of
+// RetroArch's own (one set to "default" reads it from each game's folder,
+// which a game's start sets up). Off the main thread; the caller holds the
+// patch slot. phase names each step (with a detail line); progress gets
+// download bytes.
+func dolphinSetup(ctx context.Context, launcher, romPath string, want dolphinCoreWant, phase func(phase, detail string), progress func(done, total int64)) (core string, kept, err error) {
 	client := newEmulatorUpdateClient()
 	script := strings.TrimSpace(launcher) != "" && !dolphinIsCore(launcher)
-	core := launcher
+	core = launcher
 	if !dolphinIsCore(core) {
 		core = dolphinFindCore()
 	}
-	if !script && (core == "" || (updateStale && dolphinCoreStale(core))) {
+	if !script && (core == "" || want == dolphinGetNewest || (want == dolphinFixStale && dolphinCoreStale(core))) {
 		// A system folder that cannot take the Sys folder stops the setup
 		// before a core is downloaded for nothing.
-		if pre, _, _ := gameDiagSystemDir(core, romPath); !dolphinSysPresent(pre) {
+		if pre, _, _ := gameDiagSystemDir(core, romPath); romPath != "" && !dolphinSysPresent(pre) {
 			if err := dolphinCheckSysDir(pre, romPath); err != nil {
-				return "", err
+				return "", nil, err
 			}
 		}
 		installed, err := dolphinInstallCore(ctx, client, core, phase)
@@ -324,11 +367,11 @@ func dolphinSetup(ctx context.Context, launcher, romPath string, updateStale boo
 		case err == nil:
 			core = installed
 		case core != "" && ctx.Err() == nil:
-			// Only an update: the old build still plays.
+			// Only an update: the old build still plays (the caller says so).
 			logWarn("library", "GameCube: the Dolphin core could not be updated, keeping %s: %v", core, err)
-			ShowToast("The Dolphin core could not be updated ("+firstLine(emuFriendlyError(err))+") — the game plays in the one there", ToastKindWarning)
+			kept = err
 		default:
-			return "", err
+			return "", nil, err
 		}
 	}
 	from := core
@@ -337,88 +380,190 @@ func dolphinSetup(ctx context.Context, launcher, romPath string, updateStale boo
 	}
 	sysDir, _, _ := gameDiagSystemDir(from, romPath)
 	if !dolphinSysPresent(sysDir) {
+		if romPath == "" && !filepath.IsAbs(sysDir) {
+			// No game, and RetroArch reads system files from each game's
+			// folder: the first game's start fetches them (and says how to
+			// give RetroArch a folder of its own).
+			logInfo("library", "GameCube: Dolphin's system files wait for a game: RetroArch's system folder is %q", sysDir)
+			return core, kept, nil
+		}
 		if err := dolphinCheckSysDir(sysDir, romPath); err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if err := dolphinInstallSys(ctx, client, sysDir, phase, progress); err != nil {
-			return "", err
+			return "", nil, err
 		}
 	}
-	return core, nil
+	return core, kept, nil
 }
 
-// dolphinInstallCore installs the buildbot's newest Dolphin core over current
-// ("" for none) and returns the active file.
-func dolphinInstallCore(ctx context.Context, client *http.Client, current string, phase func(phase, detail string)) (string, error) {
-	phase(installPhaseResolving, "The libretro buildbot's Dolphin core")
-	index, err := fetchCoreIndex(ctx, client)
-	if err != nil {
-		return "", fmt.Errorf("the buildbot's core list: %w", err)
+// dolphinSource is one place the Dolphin core comes from.
+type dolphinSource struct {
+	name string // for the card, the log and dolphin.json
+	// index reads the source's list, in the buildbot's index format.
+	index func(ctx context.Context, client *http.Client) ([]coreIndexEntry, error)
+	base  string // the folder its zips are served from
+	own   bool   // JukaHub's own build for TrimUI
+}
+
+// dolphinSourceOwn and dolphinSourceBuildbot name the two sources.
+const (
+	dolphinSourceOwn      = "JukaHub's build for TrimUI"
+	dolphinSourceBuildbot = "the libretro buildbot"
+)
+
+// dolphinSources lists the sources in the order a setup tries them (see the
+// file comment): JukaHub's own build first where JukaHub publishes one for
+// this device (coreFixSupported: the 64-bit TrimUI handhelds), then the
+// buildbot's nightly.
+func dolphinSources() []dolphinSource {
+	buildbot := dolphinSource{name: dolphinSourceBuildbot, index: fetchCoreIndex, base: emuCoreBaseURL()}
+	if !coreFixSupported() {
+		return []dolphinSource{buildbot}
 	}
-	// The catalog learns what the buildbot publishes (emumorecores.go).
-	emuNoteCoreCheck(index, nil, nil, nil)
-	plan := planEmuInstall(emuEntry{Name: "Dolphin", Core: dolphinCoreName}, scanCoreInventory(), index)
-	switch plan.Action {
-	case emuInstallNew, emuInstallUpdate:
-	case emuInstallCurrent:
-		// The newest build already: the file's time said otherwise only
-		// because the clock was off when it was written. What is current is
-		// the active file the plan checked, which may not be the one a
-		// launcher named.
-		active := plan.ActivePath
-		if active == "" || coreRetroArchBinary(filepath.Dir(active)) == "" {
-			active = dolphinFindCore()
-		}
-		if active == "" {
-			return "", errors.New("the Dolphin core is in, but there is no RetroArch beside it to start it")
-		}
-		dolphinNoteCore(active, plan.Index.Date)
-		return active, nil
-	default:
+	own := dolphinSource{name: dolphinSourceOwn, index: coreFixIndex, base: coreFixBaseURL, own: true}
+	return []dolphinSource{own, buildbot}
+}
+
+// dolphinActiveIsOwn reports whether core is the build this setup last
+// installed or found current from JukaHub's own source (dolphin.json: the
+// same path, size and time).
+func dolphinActiveIsOwn(core string) bool {
+	if strings.TrimSpace(core) == "" {
+		return false
+	}
+	info, err := os.Stat(core)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	rec := dolphinRecordGet()
+	return rec.CoreFrom == dolphinSourceOwn && rec.CorePath == filepath.Clean(core) &&
+		rec.CoreSize == info.Size() && rec.CoreTime == info.ModTime().Unix()
+}
+
+// dolphinManagesCore reports a core the buildbot's core updates leave alone
+// (planCoreUpdates, emuCompareCores) and Get more cores does not fetch: on the
+// handheld this setup picks the Dolphin build, from the source whose build
+// loads here (see the file comment).
+func dolphinManagesCore(core string) bool {
+	return normalizeCoreName(core) == dolphinCoreName && dolphinSoC() != "" && coreFixSupported()
+}
+
+// dolphinInstallCore installs the newest Dolphin core this device can load
+// over current ("" for none) and returns the active file: the first source,
+// in dolphinSources order, that lists a build the card takes. The active core
+// being that source's build already ends the look with nothing downloaded. A
+// build the load check refused here before is skipped, unless JukaHub's glibc
+// would close what it lacked and RetroArch may start on it (a refusal from
+// before a first install counted the runtime; raGlibcRefusalMayPass). The
+// firmware's own core, on its read-only partition, stays.
+func dolphinInstallCore(ctx context.Context, client *http.Client, current string, phase func(phase, detail string)) (string, error) {
+	// The file a build becomes: the core RetroArch loads now, replaced where
+	// it is, or a new one in the first cores folder JukaHub may write.
+	target, err := coreActivationTarget(coreBuild{Core: dolphinCoreName, File: dolphinCoreName + "_libretro.so"})
+	if err != nil {
 		if current != "" && coreDirIsSystem(filepath.Dir(current)) {
-			// The firmware's own copy, on its read-only partition: it stays,
-			// and is not asked about again.
-			logWarn("library", "GameCube: keeping %s: %s", current, plan.Reason)
-			dolphinNoteCore(current, "")
+			logWarn("library", "GameCube: keeping %s: %v", current, err)
+			dolphinNoteCore(current, "", "")
 			return current, nil
 		}
-		// None published right now: an old core stays this time
-		// (dolphinSetup) and is looked at again later.
-		return "", errors.New(plan.Reason)
+		return "", err
 	}
-	// A build the load check refused here before is not fetched again; a
-	// later build gets its own check.
-	if reason, refused := coreBuildRefused(dolphinCoreName, plan.Index.CRC32); refused {
-		return "", &coreRefusedError{Core: dolphinCoreName, Build: plan.Index.Date, Reason: "was refused here before: " + reason}
-	}
-	phase(installPhaseDownload, "Dolphin core, "+plan.Index.Date+" build")
 	pool := compatCorePoolDir()
-	build, _, err := applyEmuInstallPlan(ctx, client, plan, pool)
-	if err != nil {
-		return "", err
-	}
-	if !coreKeepActivatedInPool() {
-		// The build is the active file now: on the handheld a pool copy would
-		// be a second copy of a large core.
-		if dropErr := coreDropPoolBuild(pool, build); dropErr != nil {
-			logDebug("library", "GameCube: kept the pool copy of the Dolphin core: %v", dropErr)
+	var lastErr error
+	for _, src := range dolphinSources() {
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
+		if !src.own && dolphinActiveIsOwn(dolphinFindCore()) {
+			// JukaHub's build loads on the firmware's own glibc: only a newer
+			// one of it replaces it, never a nightly that needs the runtime
+			// because GitHub could not be reached just now.
+			logInfo("library", "GameCube: keeping JukaHub's Dolphin build: %s is not asked", src.name)
+			break
+		}
+		phase(installPhaseResolving, "Dolphin core: "+src.name)
+		index, err := src.index(ctx, client)
+		if err != nil {
+			if !errors.Is(err, errCoreFixNoBuild) {
+				lastErr = fmt.Errorf("%s: %w", src.name, err)
+			}
+			logInfo("library", "GameCube: %s cannot be read: %v", src.name, err)
+			continue
+		}
+		if !src.own {
+			// The catalog learns what the buildbot publishes (emumorecores.go).
+			emuNoteCoreCheck(index, nil, nil, nil)
+		}
+		entry, ok := coreFixEntry(index, dolphinCoreName)
+		if !ok {
+			logInfo("library", "GameCube: %s has no Dolphin core", src.name)
+			continue
+		}
+		if active := dolphinFindCore(); active != "" {
+			if sum, err := emuCachedCRC32(active); err == nil && sum == entry.CRC32 {
+				// This source's newest build already: an old file time said
+				// otherwise only because the clock was off when it was written.
+				dolphinNoteCore(active, entry.Date, src.name)
+				return active, nil
+			}
+		}
+		if reason, refused := coreBuildRefused(dolphinCoreName, entry.CRC32); refused && !raGlibcRefusalMayPass(reason, target) {
+			// Not fetched again; the source's next build gets its own check.
+			logInfo("library", "GameCube: %s's %s Dolphin build was refused here before: %s", src.name, entry.Date, reason)
+			lastErr = &coreRefusedError{Core: dolphinCoreName, Build: entry.Date, Reason: "was refused here before: " + reason}
+			continue
+		}
+		phase(installPhaseDownload, "Dolphin core, "+entry.Date+" build · "+src.name)
+		build, err := fetchCoreUpdate(ctx, client, coreUpdate{
+			Core:   dolphinCoreName,
+			Date:   entry.Date,
+			CRC32:  entry.CRC32,
+			URL:    src.base + entry.File,
+			Active: target,
+		}, pool)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			logInfo("library", "GameCube: %s's %s Dolphin build: %v", src.name, entry.Date, err)
+			lastErr = err
+			continue
+		}
+		phase(installPhaseExtract, "Dolphin core, "+entry.Date+" build")
+		active, _, err := activateCoreBuild(build)
+		emuCRCForget(active)
+		if err != nil || !coreKeepActivatedInPool() {
+			// Active now (on the handheld a pool copy would be a second copy
+			// of a large core), or refused: the pool copy goes either way.
+			if dropErr := coreDropPoolBuild(pool, build); dropErr != nil {
+				logDebug("library", "GameCube: kept the pool copy of the Dolphin core: %v", dropErr)
+			}
+		}
+		if err != nil {
+			logInfo("library", "GameCube: %s's %s Dolphin build not installed: %v", src.name, entry.Date, err)
+			lastErr = err
+			continue
+		}
+		// The catalog (and with it the games' choices), the compatibility
+		// panel and the Core builds page all read the cores folder.
+		invalidateEmulatorCache()
+		invalidateCompatCache()
+		coreBuildsRequestReload()
+		if err := emuConfirmInstalledCore(dolphinCoreName, build); err != nil {
+			return "", err
+		}
+		if active = dolphinFindCore(); active == "" {
+			return "", errors.New("the Dolphin core is in, but there is no RetroArch beside it to start it")
+		}
+		dolphinNoteCore(active, entry.Date, src.name)
+		logInfo("library", "GameCube: Dolphin core %s from %s installed at %s", entry.Date, src.name, active)
+		return active, nil
 	}
-	// The catalog (and with it the games' choices), the compatibility panel and
-	// the Core builds page all read the cores folder.
-	invalidateEmulatorCache()
-	invalidateCompatCache()
-	coreBuildsRequestReload()
-	if err := emuConfirmInstalledCore(dolphinCoreName, build); err != nil {
-		return "", err
+	if lastErr == nil {
+		lastErr = errors.New("no Dolphin core is published for this device right now — try again later")
 	}
-	active := dolphinFindCore()
-	if active == "" {
-		return "", errors.New("the Dolphin core is in, but there is no RetroArch beside it to start it")
-	}
-	dolphinNoteCore(active, plan.Index.Date)
-	logInfo("library", "GameCube: Dolphin core %s installed at %s", plan.Index.Date, active)
-	return active, nil
+	return "", lastErr
 }
 
 // dolphinInstallSys fetches Dolphin.zip and adds its Sys folder to

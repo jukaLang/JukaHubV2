@@ -1353,7 +1353,9 @@ func coreDirIsSystem(dir string) bool {
 // A build that links desktop OpenGL where this RetroArch has OpenGL ES only
 // cannot be opened either (coreGLLoadProblem, corerisk.go): the generic check
 // stands aside for libraries RetroArch might bring, and libGL is one this
-// firmware's RetroArch does not.
+// firmware's RetroArch does not. Nor does it bring the device-access
+// libraries a desktop build may link (libudev, libusb, BlueZ, libevdev:
+// coreDeviceLibLoadProblem, coretrimui.go).
 //
 // Where RetroArch starts on JukaHub's private C library (ra_glibc.go), that
 // runtime's libraries are read first: a build that needs a newer glibc than
@@ -1385,7 +1387,12 @@ func coreLoadProblemFileWith(source, target string, withRuntime bool) string {
 	if strings.TrimSpace(target) != "" {
 		retroArch = coreRetroArchBinary(filepath.Dir(target))
 	}
-	return coreGLLoadProblem(f, env, retroArch)
+	if problem := coreGLLoadProblem(f, env, retroArch); problem != "" {
+		return problem
+	}
+	// Likewise a device-access library (libudev, libusb…) no folder has
+	// (coretrimui.go).
+	return coreDeviceLibLoadProblem(f, env, retroArch)
 }
 
 // coreLoadProblemData is coreLoadProblemFile for a download still in memory, so

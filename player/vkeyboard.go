@@ -336,10 +336,13 @@ func vkActionLabel() string {
 			return "Next"
 		}
 		return "Save"
-	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle, vkTargetFileLine,
+	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle,
 		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
 		artworkAliasVKTarget, homebrewKeyVKTarget, nasPassVKTarget, tailscaleKeyVKTarget:
 		return "Save"
+	case vkTargetFileLine:
+		// "Save" for a line, "Apply"/"Go" for the hex editor's prompts.
+		return fileEditorVKAction()
 	case raachPassVKTarget, screenScraperPassVKTarget:
 		return "Sign in"
 	case gameFileNameVKTarget:
@@ -1305,10 +1308,7 @@ func vkTitle() string {
 	case vkTargetDNS:
 		return "DNS LOOKUP"
 	case vkTargetFileLine:
-		if fileEditor.pending == fileEditorInsertLine {
-			return "INSERT LINE"
-		}
-		return fmt.Sprintf("LINE %d", fileEditor.cursor+1)
+		return fileEditorVKTitle()
 	case vkTargetToolsURL:
 		return "HTTP CHECK"
 	case vkTargetNetwork:
@@ -1468,10 +1468,7 @@ func vkPlaceholder() string {
 	case vkTargetDNS:
 		return "github.com or 8.8.8.8"
 	case vkTargetFileLine:
-		if fileEditor.pending == fileEditorInsertLine {
-			return "New line"
-		}
-		return "The line's text"
+		return fileEditorVKPlaceholder()
 	case vkTargetToolsURL:
 		return "example.com or https://…"
 	case vkTargetNetwork:

@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **384** (audited 2026-11-19).
+Open tasks: **387** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -1082,6 +1082,38 @@ differs:
    Perl installed`; the next day's pass reports it current.
 **Verify.** Record in the HW log.
 
+### AUDIT-HW-2 — The Audit toolkit's eight new tools on a device (P2, S) [HW] [NET]
+**Why.** Juka, 2026-11-20: "Add more professional audit tools to audit toolkit
+(that are open source and can be installed on Trimui Smart Pro)". testssl.sh,
+sslscan, ssh-audit, tcpdump, YARA and Binwalk install from Ubuntu's arm64
+packages, OSV-Scanner and Gitleaks from their GitHub arm64 releases. It was
+written without a Go toolchain or a device, and three details rest on Ubuntu's
+packaging as documented, not as seen: testssl.sh's command name (`testssl`) and
+data folder (found through `TESTSSL_INSTALL_DIR`), and tcpdump's switch to a
+`tcpdump` user (hence the sheet's `-Z root` advice).
+**Where.** `secaudit.go` (catalog, `auditLinuxPkgProgram`, Remove keeping
+testssl.sh's `bash`), `auditscene.go`, `linuxpkg_runtime.go`
+(`TESTSSL_INSTALL_DIR`), `toolbox.go` (`osv-scanner_SHA256SUMS`), `tools.go`
+(`allowedToolRepos`); docs/TOOLBOX.md, docs/LINUX_PACKAGES.md.
+**Done when.** On a stock Smart Pro, each step holds or a FIX task names what
+differs:
+1. Install, then **Version**, on each Linux-packages tool answers with the
+   tool's own report: `testssl --version` with no "No cipher mapping file
+   found!" question, `sslscan --version`, `ssh-audit -h` (version on its first
+   line), `tcpdump --version`, `yara --version`, `binwalk --help`.
+2. OSV-Scanner and Gitleaks install with "Matched the SHA-256 the project
+   publishes for this release." on the sheet, and **Version** prints their
+   versions.
+3. In the Terminal: `testssl` against a TLS host you own finishes; `tcpdump -Z
+   root -i wlan0 -c 20 -w /mnt/SDCARD/t.pcap` writes a file Wireshark opens,
+   and the same line without `-Z root` stops with "Couldn't find user
+   'tcpdump'" (so the advice stays true); `ssh-audit` against an SSH host you
+   own prints its report; `osv-scanner scan source -r` on a project folder and
+   `gitleaks dir` on a folder finish.
+4. **Remove** on testssl.sh leaves `bash` installed (`apt list --installed`)
+   and puts the row back under the install group.
+**Verify.** Record in the HW log.
+
 ### VSPEED-HW-1 — Video and music speed on a device (P1, S) [HW] [NET]
 **Why.** Juka, 2026-11-19: "Media player 2x (or changing to any other speed) is
 not working". A speed change now restarts both ffmpeg decoders with
@@ -1146,23 +1178,52 @@ the A133P models: a game's first start installs the buildbot's linux/aarch64
 libretro/dolphin#462 fix (2026-10-23), seeds `dolphin_shader_compilation_mode`
 "3" and `dolphin_wait_for_shaders` "disabled", switches the override's video
 driver after a start that could not draw, and boosts the game (xboxboost.go).
-Written without a Go toolchain or a device: whether the buildbot core loads
-on the TrimUI firmware (its DT_NEEDED, glibc), which context the stock
+2026-11-20, Brick Pro: the Emulators page's install said the buildbot core
+"cannot load on this firmware: needs GLIBCXX_3.4.32" (built with GCC 13), and
+the private glibc was never tried because a new core's load check looked at no
+cores folder (`coreUpdateCheckTarget` fixes that for every install). Since then
+the core comes from JukaHub's own TrimUI build first (`cores-aarch64`,
+`build-cores.sh` row `dolphin`: GCC 13 from the toolchain PPA, libstdc++ linked
+in, a libudev stub for hidapi), the buildbot's on the private glibc second; a
+press on a Dolphin tile runs `dolphinStartInstall` (Automatic on an A133P
+becomes Try anyway); the daily core updates skip Dolphin
+(`dolphinManagesCore`); and `coretrimui.go` hides published cores that cannot
+work on TrimUI. 2026-11-21 (Juka: "a few fps" on the Smart Pro):
+`dolphin_speed.go` writes, per launch through raScopeApply, Fast (dual core,
+shader mode 3, native resolution, skipped duplicate frames, deferred EFB
+copies; no run-ahead, preemptive frames or rewind) or Fastest (plus
+`dolphin_efb_access_enable` off, `dolphin_cpu_clock_rate` 0.50, `video_vsync`
+off); Automatic is Fastest on the A133P. Written without a Go toolchain or a
+device: whether either build loads and draws on the TrimUI firmware (its
+DT_NEEDED, glibc), the option values the rebased core takes, whether
+the CI build passes with its switches (target `dolphin_libretro`, output
+under `Binaries/`, hidapi linking `udev`), which context the stock
 RetroArch gives it (GLES 3 or Vulkan), Dolphin.zip's layout, the numeric option
 values and the RetroArch log lines `dolphinVideoFailureLine` matches are from
 web reports, not from a run.
 **Where.** `dolphin.go`, `dolphin_setup.go`, `dolphin_video.go`,
+`coretrimui.go`, `dolphin_speed.go`, `emulatorupdates.go` (`fetchCoreUpdate`),
 `emusystems.go` (`emuDesktopSystemFor`), `emupicker.go`, `game_library.go`,
-`gamediag.go`, `xboxboost.go`, `compat.go`, `romsetup.go`; `data/dolphin.json`,
+`gamediag.go`, `xboxboost.go`, `compat.go`, `romsetup.go`,
+`player/native/build-cores.sh`, `.github/workflows/retroarch-cores.yml`;
+`data/dolphin.json` (`coreFrom`, `coreGlibc`),
 `<system>/dolphin-emu/Sys`, `config/dolphin-emu/dolphin-emu.{opt,cfg}`; the
 JukaHub log (`library` lines "GameCube:", `emulators` lines "GameCube:").
-**Done when.** On a stock Smart Pro S (then a Smart Pro with Try anyway), each
-step holds or a FIX task names what differs:
+**Done when.** On a stock Smart Pro S (then a Smart Pro or the Brick Pro with
+Try anyway), each step holds or a FIX task names what differs:
+0. Actions → RetroArch cores for TrimUI → Run with `dolphin`: the runner
+   publishes `dolphin_libretro.so.zip`, whose BUILDINFO names g++-13 and
+   NEEDED without libstdc++ or libudev, glibc 2.31 at most; or record the
+   first error of its log (the target name, a CMake switch, the libudev stub).
 1. With no core, A on a GameCube `.rvz` shows the install card ("GameCube
    games"), then the game starts by itself; `cores/dolphin_libretro.so` and
    `<system>/dolphin-emu/Sys/GameSettings` exist; record the core's
    `readelf -d` NEEDED lines, newest GLIBC/GLIBCXX, and whether the log says it
-   started on JukaHub's glibc.
+   started on JukaHub's glibc. On the Brick Pro, X on the Emulators page's
+   Dolphin tile with GameCube & Wii on Automatic installs it, the setting
+   reads Try anyway after, and the toast and the log line
+   `GameCube: Dolphin core … from …` name the source (JukaHub's build once
+   step 0 published it, the buildbot's on JukaHub's glibc before).
 2. The game reaches gameplay and plays for 2 minutes without freezing (the
    #462 hang came at about 10 s); record the in-game FPS (RetroArch's FPS
    counter) for one light game (e.g. a 2D or menu-heavy title) and one 3D game,
@@ -1178,6 +1239,16 @@ step holds or a FIX task names what differs:
    the in-game menu returns to JukaHub with no hang.
 6. GameCube & Wii → Off: the GC folder shows "not supported" with the reason,
    a game's start says how to turn it on; back to Automatic restores play.
+7. The Brick Pro's Emulators page lists no `cemu`, `citra`, `play`, `kronos`
+   or `test…` tile (record the tile count before and after this build), an
+   installed core of any kind is still listed, and a press of L1 (Update all)
+   leaves `dolphin_libretro.so` as it was.
+8. GameCube speed on a Smart Pro, with one light and one 3D game: RetroArch's
+   FPS counter under Dolphin's own, Fast and Fastest; the log line "GameCube
+   speed for this launch" lists what was set; Core Options show those values
+   during the game and the old ones after it. Record which option values the
+   build refused (RetroArch's log), and any game Fastest breaks (the skipped
+   EFB reads, the half-speed CPU) for a per-game exception.
 **Verify.** Record in the HW log.
 
 ### PS2-HW-1 — PlayStation 2 in the ARMSX2 core on a Smart Pro (P1, M) [HW] [NET]
@@ -2085,6 +2156,27 @@ edits refuses a viewer and Get <App>; a double-click never runs a row; with
 it; the reader's menu shows exactly one "Open in KOReader". On Windows the
 sheet lists Open with Windows and keyboard-only hints read as keys.
 **Verify.** Record in the HW log with the toasts seen.
+
+### EDITOR-HW-1 — Syntax colours and the hex editor on the handheld (P2, S) [HW]
+**Why.** The text editor's syntax colours (`fileeditor_syntax*.go`) and the hex
+editor (`fileeditor_hex*.go`, 2026-11-21) were written without a device or a
+compiler: a coloured row is several textures where it was one, the hex editor
+draws a texture per byte cell, and its save renames a copy over a file on the
+SD card.
+**Where.** `fileeditor.go`, `fileeditor_syntax.go`, `fileeditor_syntax_draw.go`,
+`fileeditor_hex.go`, `fileeditor_hex_ui.go`, `openwith.go`, `vkeyboard.go`,
+`vkedit.go`; docs/TEXT_EDITOR.md.
+**Done when.** On a Smart Pro: a 1 MB Python file and `retroarch.cfg` scroll
+with L1/R1 and a held D-pad without dropped frames; the colours sit on their
+text at every text size, with wrap on and off, and stay readable on a light
+theme; a script with no extension but `#!/bin/sh` is coloured as Shell; a new
+line typed in a `.py` file is not capitalised. In the hex editor a `.srm` save
+opens from Open with, A + Up/Down changes a byte and B puts it back, X types
+`4A 75`, Y saves and every other byte is unchanged (compare on a PC); a one-byte
+change to a 4 GB `.iso` saves in place within a second; a file replaced over
+USB while open refuses the save. On Windows a keyboard types hex digits and the
+footer shows "0–F Type".
+**Verify.** Record in the HW log with the timings.
 
 ### APPC-HW-1 — App Center installs, roll back and clean return on a device (P1, S) [HW] [NET]
 **Why.** The App Center (`appcenter*.go`, 2026-11-19) installs TrimUI apps
@@ -3059,6 +3151,44 @@ their layout and their links.
 browser engine with remote images off by default (one "Show images" press),
 scripts never run, links open in the Browser, and the plain-text view stays
 one press away.
+
+### RENDER-HW-1 — The browser's new drawing and the Calculator on a device (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-20: "Improve Calculator and Webbrowser (it needs to
+render more accurately)". Written without a Go toolchain or a device: the
+reader now rasterises SVG itself (`webpage_svg.go`), keeps inline images in
+their lines and sets every line on one baseline (`webpage_inline.go`), lays
+`display: inline-block` siblings out as a wrapping row, draws bold in Inter
+SemiBold and code in a monospace face (`webpage_fonts.go`), paints soft
+shadows (`webpage_paint.go`), rounds pictures with SDL_RenderGeometry
+(`drawWebImageRounded`) and sizes images on the text's CSS-px scale; the
+Calculator has a new expression engine, keypad, history file and keyboard
+typing (`calculator.go`). None of it has been drawn or timed on a handheld.
+**Where.** `webpage_svg.go`, `webpage_inline.go`, `webpage_fonts.go`,
+`webpage_paint.go`, `webpage_image.go`, `webpage.go`, `webpage_flow.go`,
+`calculator.go`; `calculator.json` beside JukaHub; the JukaHub log
+(`browser` lines "RenderGeometry is unavailable", "Error loading the reader
+face").
+**Done when.** On a Smart Pro (then a Brick and a Windows PC), each step holds
+or a FIX task names what differs:
+1. github.com/jukaLang/JukaHubV2 shows the GitHub logo and the octicons in
+   the text colour, the README's badge row on one line, and its code blocks
+   monospaced on a PC (Consolas); on the handheld code stays in Inter unless
+   a `*Mono*.ttf` is in the fonts folder.
+2. A page with Material Icons (e.g. a Google product page) shows arrows and
+   crosses, not words like `arrow_forward`; a Font Awesome page shows no
+   stray "…".
+3. A Bootstrap page with `.list-inline` / `.btn` rows and a WordPress nav
+   built from `li { display: inline-block }` shows them side by side; a card
+   row with `box-shadow: 0 2px 8px rgba(0,0,0,.15)` has a soft shadow; a round
+   avatar (`border-radius: 50%`) is a circle. Record the frame time while
+   scrolling such a page against the previous build.
+4. A page with 100+ inline SVG icons opens within a second of the text, and
+   memory stays within the image budget (Settings → System → Memory).
+5. Calculator: `2^3^2` = 512, `−2²` = −4, `200+10%` = 220, `sin(30)` = 0.5 in
+   DEG, `0.1+0.2` = 0.3; the keypad fits the Smart Pro and the Brick without
+   overlap; Right from the keys walks into the history and A uses an answer;
+   the history survives a restart; on a PC typing `sqrt(2)` and Enter answers
+   and q/e do not switch screens.
 
 ---
 

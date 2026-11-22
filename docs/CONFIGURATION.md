@@ -660,12 +660,26 @@ emulators → **GameCube & Wii** on TrimUI handhelds: whether GameCube and Wii
 games play here, in RetroArch's Dolphin core. `auto` (**Automatic**) plays them
 on the Smart Pro S (A523) and not on the A133P models, `on` (**On**, or **Try
 anyway** on an A133P) plays them on any model, `off` never (JukaHub then sets
-nothing up for them; a Dolphin core installed by hand still starts them). While
-they play,
+nothing up for them; a Dolphin core installed by hand still starts them).
+Installing Dolphin from the Emulators page on an A133P turns `auto` into `on`.
+While they play,
 the first start of a game sets the core and Dolphin's system files up, and
 JukaHub keeps `dolphin.json` in its data folder: the core file it last installed
 or checked (so a build from before the October 2026 freeze fix is replaced
-once) and the video driver it wrote into Dolphin's RetroArch override. See
+once), where that build came from (`coreFrom`: JukaHub's build for TrimUI or
+the libretro buildbot; `coreGlibc`: it starts on JukaHub's glibc) and the video
+driver it wrote into Dolphin's RetroArch override. See
+[GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
+
+`gamecubeSpeed` (`"auto"`/`"fastest"`/`"fast"`/`"own"`, default `"auto"`) is
+Settings → Games & emulators → **GameCube speed**: the Dolphin settings each
+launch gets, written for that launch and put back when RetroArch exits.
+`fast` sets dual core, background shaders, native resolution, no duplicate
+frames, deferred EFB copies and no run-ahead, preemptive frames or rewind;
+`fastest` adds skipped EFB reads (`dolphin_efb_access_enable` off), a
+half-speed GameCube CPU (`dolphin_cpu_clock_rate` 0.50) and vsync off; `own`
+writes nothing; `auto` is `fastest` on the A133P models and `fast` on the
+Smart Pro S. See
 [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
 
 `ps2` (bool, default `true`) is Settings → Games & emulators → **PlayStation

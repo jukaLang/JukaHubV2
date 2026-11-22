@@ -6,6 +6,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -492,5 +494,43 @@ func TestStageRejectsRetroArchCoreRelease(t *testing.T) {
 	err := StageJukaHubUpdate(context.Background(), nil, &githubRelease{TagName: "cores-aarch64"})
 	if err == nil || !strings.Contains(err.Error(), "not a JukaHub app release") {
 		t.Fatalf("staging a cores release: %v", err)
+	}
+}
+
+// When GitHub's API is out of lookups the latest-release page's redirect names
+// the release: only a JukaHub tag of this repository, on github.com over
+// HTTPS, is taken from it. Only an exhausted limit gets the limit's note.
+func TestLatestReleasePageAndLimitNote(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"https://github.com/jukaLang/JukaHubV2/releases/tag/JukaHub-20261121021530", "JukaHub-20261121021530"},
+		{"https://github.com/jukalang/jukahubv2/releases/tag/v1.2.3", "v1.2.3"},
+		{"https://github.com/jukaLang/JukaHubV2/releases/tag/cores-aarch64", ""},
+		{"https://github.com/jukaLang/JukaHubV2/releases", ""},
+		{"https://github.com/someone/JukaHubV2/releases/tag/JukaHub-20261121021530", ""},
+		{"http://github.com/jukaLang/JukaHubV2/releases/tag/JukaHub-20261121021530", ""},
+		{"https://example.com/jukaLang/JukaHubV2/releases/tag/JukaHub-1", ""},
+		{"https://github.com/jukaLang/JukaHubV2/releases/tag/JukaHub-1%2F..%2Fx", ""},
+	} {
+		u, err := url.Parse(tc.raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := jukaHubTagFromReleasePage(u)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("jukaHubTagFromReleasePage(%s) = %q, %v; want %q", tc.raw, got, ok, tc.want)
+		}
+	}
+	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "api.github.com", Path: "/repos/jukaLang/JukaHubV2/releases"}}
+	now := time.Unix(1800000000, 0)
+	limited := &http.Response{StatusCode: http.StatusForbidden, Request: req, Header: http.Header{}}
+	limited.Header.Set("X-RateLimit-Remaining", "0")
+	limited.Header.Set("X-RateLimit-Reset", "1800000600")
+	if note := githubLimitNote(limited, now); !strings.Contains(note, "used up") || !strings.Contains(note, "resets at") {
+		t.Errorf("an exhausted limit got the note %q", note)
+	}
+	left := &http.Response{StatusCode: http.StatusForbidden, Request: req, Header: http.Header{}}
+	left.Header.Set("X-RateLimit-Remaining", "12")
+	if note := githubLimitNote(left, now); note != "" {
+		t.Errorf("a 403 with lookups left got the note %q", note)
 	}
 }

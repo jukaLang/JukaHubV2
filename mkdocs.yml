@@ -51,6 +51,7 @@ nav:
       - Everyday apps (Tasks, Voice Memos, Paint, Stopwatch, Solitaire): EVERYDAY_APPS.md
       - Toolbox: TOOLBOX.md
       - Open with and default apps: OPEN_WITH.md
+      - Text and hex editor: TEXT_EDITOR.md
       - App Center (TrimUI apps): APP_CENTER.md
       - Linux packages: LINUX_PACKAGES.md
       - Java programs: JAVA.md

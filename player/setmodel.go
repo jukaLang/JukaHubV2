@@ -1660,8 +1660,10 @@ func setBuildSections() []setSection {
 				// "Xbox boost": the whole handheld for hakuX and Xbox streams (xboxboost.go).
 				xboxBoostSettingsRow(),
 				// "GameCube & Wii": RetroArch's Dolphin core, on the Smart Pro S
-				// by default (dolphin.go).
+				// by default (dolphin.go), and "GameCube speed": how much of
+				// Dolphin's accuracy goes for frames (dolphin_speed.go).
 				dolphinSettingsRow(),
+				dolphinSpeedSettingsRow(),
 				// "PlayStation 2" and "PS2 emulator": RetroArch's ARMSX2 core,
 				// on every TrimUI model by default (ps2.go).
 				ps2SettingsRow(),

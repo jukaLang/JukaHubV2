@@ -4,24 +4,31 @@
 #
 # SDL: built against SDL2 only. Upstream 1.21 moved to SDL3, which the TrimUI
 # firmware does not have and whose display back ends do not drive its screen;
-# the workflow builds the newest release that still uses SDL2 (1.20.x), and this
-# script refuses a tree that does not.
+# the workflow builds 1.20.3, and this script refuses a tree that does not
+# build against SDL2.
 #
-# Why: the PPSSPP JukaHub installs for PSP games comes from ben16w/minui-psp,
-# which packages spruceUI's builds, and those lag upstream (1.20.3 while
-# hrydgard/ppsspp is at 1.20.4; in October 2026 1.20.4 had no tg5040 binary
-# anywhere). This script builds the newest upstream release
-# itself; .github/workflows/ppsspp-trimui.yml runs it when a new release appears
-# (it looks daily) and publishes the result as the rolling release
-# "ppsspp-tg5040" of this repository, and
-# ppsspp_managed.go installs whichever of the two sources names the newer
-# PPSSPP (same verification, same launcher, same fallback to the firmware's
-# PPSSPP when a build does not start).
+# Which PPSSPP: 1.20.3, the release TrimUI builds exist for (spruceUI's, which
+# ben16w/minui-psp packages and JukaHub installs for PSP games). Juka,
+# 2026-11-20: "use 1.20.3 which exists for Trimui". The build is a second
+# source of that same version: .github/workflows/ppsspp-trimui.yml runs this
+# script when it or the workflow changes, or on a press, and publishes the
+# result as the release "ppsspp-tg5040" of this repository. ppsspp_managed.go
+# asks both sources; on the same version it keeps minui-psp's (device patches)
+# unless JukaHub's is the one installed, and it takes JukaHub's when minui-psp's
+# release is missing or did not start here (same verification, same launcher,
+# same fallback to the firmware's PPSSPP when a build does not start).
+#
+# No X11, no Wayland: the handhelds have neither. The SDL2 below is only a link
+# target (the binary runs on the firmware's own SDL2), configured with the
+# desktop back ends off, so it neither looks for X11 headers (focal's Mesa
+# development packages pull libx11-dev in, and SDL's X11 check then stopped
+# the build on a missing Xext.h) nor puts X11 into SDL_config.h, where
+# SDL_syswm.h would include X11 headers into PPSSPP's own build.
 #
 # It runs as root inside the Ubuntu 20.04 arm64 build root
 # (.github/scripts/build-root.sh build ppsspp), native, with network:
 #
-#   PPSSPP_TAG   the upstream tag, e.g. v1.20.4 (required)
+#   PPSSPP_TAG   the upstream tag, e.g. v1.20.3 (required)
 #   GL_DIR       optional: the TrimUI SDK's own GLES/EGL libraries in
 #                GL_DIR/lib, copied out of the toolchain image by the workflow.
 #                Linking against them gives the binary exactly the sonames the
@@ -46,7 +53,7 @@
 #   PPSSPP/BUILDINFO.txt      tag, commit, compiler, GL source, NEEDED list
 set -eu
 
-PPSSPP_TAG="${PPSSPP_TAG:?set PPSSPP_TAG to an upstream tag such as v1.20.4}"
+PPSSPP_TAG="${PPSSPP_TAG:?set PPSSPP_TAG to an upstream tag such as v1.20.3}"
 OUT_DIR="${OUT_DIR:-/src/player/native/bin}"
 LOG_DIR="${LOG_DIR:-/tmp/jukahub-ppsspp-logs}"
 GL_DIR="${GL_DIR:-}"
@@ -69,7 +76,7 @@ die() {
 
 case "$PPSSPP_TAG" in
     v[0-9]*.[0-9]*) ;;
-    *) die "PPSSPP_TAG must look like v1.20.4, not '$PPSSPP_TAG'" ;;
+    *) die "PPSSPP_TAG must look like v1.20.3, not '$PPSSPP_TAG'" ;;
 esac
 VERSION="${PPSSPP_TAG#v}"
 
@@ -134,11 +141,28 @@ if [ ! -f "$SDL_PREFIX/lib/cmake/SDL2/SDL2Config.cmake" ]; then
     [ -f "$sdl_tar" ] || die "could not fetch SDL2 $SDL2_VERSION with sha256 $SDL2_SHA256"
     rm -rf "$WORK/SDL2-$SDL2_VERSION" "$WORK/sdl2-build"
     tar -xzf "$sdl_tar" -C "$WORK"
+    # The handhelds have no X11, no Wayland, no KMS/DRM display, no desktop GL
+    # and no sound servers: their SDL2 draws through the GPU vendor's EGL on
+    # the framebuffer and plays through ALSA. This copy is only linked against,
+    # so every desktop back end is off (header comment); dummy and offscreen
+    # stay, which is all a link target needs. The API, and so the symbols
+    # PPSSPP links to, is the same whatever back ends a build has.
     quietly sdl2-configure cmake -S "$WORK/SDL2-$SDL2_VERSION" -B "$WORK/sdl2-build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$SDL_PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
-        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_RPATH=OFF
+        -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF -DSDL_RPATH=OFF \
+        -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_RPI=OFF -DSDL_VIVANTE=OFF \
+        -DSDL_DIRECTFB=OFF -DSDL_VULKAN=OFF -DSDL_OPENGL=OFF -DSDL_OPENGLES=ON \
+        -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF \
+        -DSDL_ESD=OFF -DSDL_NAS=OFF -DSDL_ARTS=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF
     quietly sdl2-build cmake --build "$WORK/sdl2-build" -j "$JOBS"
     quietly sdl2-install cmake --install "$WORK/sdl2-build"
+    # Belt and braces: a back end that still slipped into the configuration
+    # would bring its headers into PPSSPP's build through SDL_config.h.
+    [ -f "$SDL_PREFIX/include/SDL2/SDL_config.h" ] || die "the SDL2 link target installed no SDL_config.h"
+    if grep -Eq '^#define SDL_VIDEO_DRIVER_(X11|WAYLAND) ' "$SDL_PREFIX/include/SDL2/SDL_config.h"; then
+        rm -rf "$SDL_PREFIX"
+        die "the SDL2 link target was configured with X11 or Wayland (see $LOG_DIR/sdl2-configure.log)"
+    fi
 fi
 
 # ── GLES/EGL link targets ────────────────────────────────────────────────────
@@ -189,10 +213,10 @@ say "PPSSPP $PPSSPP_TAG at $COMMIT"
 # Upstream moved the SDL front end to SDL3 for 1.21 (hrydgard/ppsspp#22956). The
 # handheld's display only works through the firmware's own SDL2, so a tree that
 # no longer builds against SDL2 is refused here with a clear message; the
-# workflow already picks the newest release that still does.
+# workflow builds 1.20.3, which does.
 if ! grep -v '^[[:space:]]*#' "$SRC/CMakeLists.txt" |
     grep -Eq 'find_package[[:space:]]*\([[:space:]]*SDL2([^_[:alnum:]]|$)|SDL2::SDL2([^_[:alnum:]]|$)|SDL2_LIBRAR'; then
-    die "PPSSPP $PPSSPP_TAG builds its SDL front end with SDL3 only; the TrimUI firmware has SDL2 (build a 1.20.x tag)"
+    die "PPSSPP $PPSSPP_TAG builds its SDL front end with SDL3 only; the TrimUI firmware has SDL2 (build v1.20.3)"
 fi
 
 BUILD="$WORK/build-$VERSION"

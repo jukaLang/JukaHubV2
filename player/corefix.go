@@ -450,8 +450,9 @@ type coreFixScanFile struct {
 
 // coreFixCheckVersion is raised whenever coreLoadProblemFile learns to find a
 // problem it did not before, so the remembered "it loads" answers are read
-// again.
-const coreFixCheckVersion = 1
+// again. 2 (2026-11-20): device-access libraries the firmware lacks
+// (coreDeviceLibLoadProblem, coretrimui.go).
+const coreFixCheckVersion = 2
 
 // coreFixScanMu serialises core-loadcheck.json's read-modify-write.
 var coreFixScanMu sync.Mutex

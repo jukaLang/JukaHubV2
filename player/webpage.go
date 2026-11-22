@@ -702,6 +702,43 @@ type webStyle struct {
 	// can apply them again once a measured container size is known. It is a
 	// pointer for the same reason as Vars: styles stay comparable.
 	CQ *webCQContext
+	// SVGFill and SVGStroke are the cascaded CSS fill and stroke, kept as raw
+	// text (currentColor stays symbolic). They inherit, as in CSS, and reach an
+	// inline <svg> as its root paint (webpage_svg.go): `.octicon { fill:
+	// currentColor }` is how an icon takes the colour of the text beside it.
+	SVGFill   string
+	SVGStroke string
+	// Mono and IconFont are inherited typography flags (webpage_fonts.go). Mono
+	// draws the run in a monospace face: <pre>, <code>, <kbd>, <samp>, <tt> or a
+	// monospace font-family. IconFont marks a Material Icons/Symbols ligature
+	// font, whose words are icon names rather than text.
+	Mono     bool
+	IconFont bool
+	// BoxShadowBlur/BoxShadowSpread complete the first visible outer
+	// box-shadow layer, in CSS px: the painter fades the shadow over the blur
+	// and grows the box by the spread (webpage_paint.go). TextShadowBlur is
+	// the text shadow's blur, which only softens its alpha. None inherit.
+	BoxShadowBlur   float64
+	BoxShadowSpread float64
+	TextShadowBlur  float64
+	// HasTranslate/Translate* are a transform's translate() lengths in CSS px
+	// and its percentages of the element's own box. Absolutely and fixed
+	// positioned boxes apply them once their size is known (layoutFloats);
+	// rotate/scale/skew are ignored so content stays upright and readable.
+	HasTranslate  bool
+	TranslateX    float64
+	TranslateY    float64
+	TranslatePctX float64
+	TranslatePctY float64
+	// InsetPct keeps percentage top/right/bottom/left values (in that order;
+	// 0 for a length or auto). A positioned box resolves them against its
+	// containing block, where `left: 50%` is half the anchor's width.
+	InsetPct [4]float64
+	// DisplayInlineBlock is display: inline-block (or inline-flex /
+	// inline-grid). On a block-level element it makes the element one box in
+	// a wrapping row with its inline-block siblings (openInlineRow); an li
+	// with it, or with display: inline, has no list marker. Not inherited.
+	DisplayInlineBlock bool
 }
 
 // webGridAreas is the small named-area matrix a grid container declares.
@@ -758,6 +795,9 @@ func (s *webVarScope) lookup(name string) (string, bool) {
 type webRun struct {
 	Text  string
 	Style webStyle
+	// Image is set on the run that stands for an inline image once layout
+	// has stitched an image-split paragraph back together (webpage_inline.go).
+	Image *webBlock
 }
 
 // webBlock is one laid-out unit: a paragraph, heading, list item, quote, code
@@ -926,6 +966,18 @@ type webBlock struct {
 	VideoSrc   string
 	VideoThumb string
 	VideoTitle string
+	// InlineGroup ties together the blocks of one line of text an inline
+	// image split apart: the text before it, the image and the text after it
+	// carry the same nonzero ID, and layout sets them as one paragraph again
+	// (webpage_inline.go). InlineSpace records whitespace before the block's
+	// content; LineStyle is the paragraph's own style on an image block,
+	// whose Style is the image's.
+	InlineGroup int
+	InlineSpace bool
+	LineStyle   *webStyle
+	// ImageAlt is an image's text alternative, which names an image-only
+	// link in the link list.
+	ImageAlt string
 }
 
 // webFlexMembership describes one level of a block's container ancestry.
@@ -1074,6 +1126,21 @@ type webDocument struct {
 	// holds mu: sharing one mutex deadlocked the reader on the first page with
 	// an image whose size the markup did not give, which froze the whole app.
 	imageMu sync.Mutex
+
+	// SVGInline holds each drawable inline <svg> under its synthetic
+	// "jhsvg:" image key until the image pass rasterises it; SVGDefs keeps the
+	// page's sprite sheets (<symbol>s a <use> elsewhere points at). The byte
+	// counts bound both. The parser fills these, the image pass reads them
+	// once and then lets them go (webpage_svg.go).
+	SVGInline      map[string]webSVGSource
+	SVGInlineBytes int
+	SVGDefs        []string
+	SVGDefBytes    int
+
+	// FlexInlineRow marks the flex groups that are a parent's run of
+	// inline-block children (openInlineRow): their items are as wide as their
+	// content, as inline boxes are, instead of sharing the row.
+	FlexInlineRow map[int]bool
 }
 
 // webBoxInfo is one visual container box an element contributed. direct is
@@ -1134,6 +1201,11 @@ type webRunPos struct {
 	VerticalOffset int32
 	Clip           sdl.Rect
 	HasClip        bool
+	// Image marks an inline image's place on a line (webpage_inline.go): the
+	// run has no text, and ImageW/ImageH are its box in layout pixels. The
+	// picture itself is painted from layout.Images.
+	Image          *webBlock
+	ImageW, ImageH int32
 }
 
 // webRow is one line slot in the uniform layout grid. Tall lines (headings)
@@ -1174,6 +1246,14 @@ type webRect struct {
 	// every rect, so z-index decides which background or border wins where
 	// two elements overlap.
 	Z int
+	// Shadow marks a box-shadow. Like BackgroundFill it stays in Rects for
+	// geometry consumers while the painter draws its twin entry in
+	// layout.Backgrounds, under the element's own background. Rect is the box
+	// moved by the shadow offset; Blur and Spread are device pixels the
+	// painter fades over and grows the box by.
+	Shadow bool
+	Blur   int32
+	Spread int32
 }
 
 // webFloat is an absolutely positioned block: it is laid out at its own width,
@@ -1237,6 +1317,12 @@ type webBackgroundPaint struct {
 	Opacity        float64
 	Radius         int32
 	Z              int
+	// Shadow paints this entry as a box-shadow (drawWebBoxShadow): Rect is
+	// the box moved by the offset, grown by Spread and faded over Blur, both
+	// in device pixels. It sits right before the owner's background.
+	Shadow bool
+	Blur   int32
+	Spread int32
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -1607,6 +1693,9 @@ type webFlexFrame struct {
 	gridAutoFlow      int
 	gridDense         bool
 	gridAreas         *webGridAreas
+	// implicit marks the wrapping row a parent becomes for its inline-block
+	// children (openInlineRow); the parent itself declared no flex.
+	implicit bool
 }
 
 // webListState tracks <ul>/<ol> numbering.
@@ -6986,16 +7075,33 @@ func webBackgroundURL(value string) string {
 		return ""
 	}
 	rest := strings.TrimSpace(value[start+4:])
+	// A quoted URL ends at its closing quote, not at the first ')': an SVG
+	// data URI written as utf8 markup carries transform="translate(…)" and
+	// the like. The reader draws those now (webpage_svg.go), so they are kept.
+	if rest != "" && (rest[0] == '"' || rest[0] == '\'') {
+		quote := rest[0]
+		var b strings.Builder
+		for i := 1; i < len(rest); i++ {
+			c := rest[i]
+			if c == quote {
+				return strings.TrimSpace(b.String())
+			}
+			if c == '\\' && i+1 < len(rest) {
+				i++
+				c = rest[i]
+				if c == '\n' {
+					continue
+				}
+			}
+			b.WriteByte(c)
+		}
+		return ""
+	}
 	end := strings.IndexByte(rest, ')')
 	if end < 0 {
 		return ""
 	}
-	rest = strings.TrimSpace(rest[:end])
-	rest = strings.Trim(rest, "\"'")
-	if rest == "" || strings.HasPrefix(strings.ToLower(rest), "data:image/svg") {
-		return ""
-	}
-	return rest
+	return strings.TrimSpace(rest[:end])
 }
 
 func webLayerListValue(values []string, index int) string {
@@ -7453,8 +7559,9 @@ func webTransformWord(word string, mode int) string {
 
 // webFontShorthand reads the font shorthand's `[style] [variant] [weight]
 // [stretch] size[/line-height] family` form. Only what the reader draws is
-// applied: the family is ignored because the app ships one face, and a system
-// font keyword (caption, menu, ...) carries no explicit size to read.
+// applied: the family only chooses between the UI face and a monospace one
+// (webApplyFontFamily), and a system font keyword (caption, menu, ...) carries
+// no explicit size to read.
 func webFontShorthand(st *webStyle, value string) {
 	v := strings.ToLower(strings.TrimSpace(value))
 	if v == "" || v == "inherit" || v == "initial" || v == "unset" {
@@ -7468,7 +7575,8 @@ func webFontShorthand(st *webStyle, value string) {
 	size := 0.0
 	lineHeight := 0.0
 	found := false
-	for _, field := range fields {
+	sizeAt := -1
+	for i, field := range fields {
 		if found {
 			break
 		}
@@ -7484,6 +7592,7 @@ func webFontShorthand(st *webStyle, value string) {
 			continue
 		}
 		found = true
+		sizeAt = i
 		size = px
 		if lineToken != "" {
 			if lh, ok := webLineHeightPx(lineToken, px); ok {
@@ -7505,6 +7614,19 @@ func webFontShorthand(st *webStyle, value string) {
 	st.FontPx = size
 	if lineHeight > 0 {
 		st.LineHeight = lineHeight
+	}
+	// The family list follows the size (and a line-height written apart, as
+	// in `16px / 1.5 monospace`).
+	family := fields[sizeAt+1:]
+	if !strings.Contains(fields[sizeAt], "/") && len(family) > 0 && strings.HasPrefix(family[0], "/") {
+		if family[0] == "/" && len(family) > 1 {
+			family = family[2:]
+		} else {
+			family = family[1:]
+		}
+	}
+	if len(family) > 0 {
+		webApplyFontFamily(st, strings.Join(family, " "))
 	}
 	for _, field := range fields {
 		switch {
@@ -7638,7 +7760,8 @@ func webBaseStyle() webStyle {
 
 // applyWebTagDefaults gives the reader its browser-ish baseline: headings are
 // large and bold, paragraphs are spaced, lists are indented, quotes carry a
-// rule and code is monospaced-ish on a tinted panel.
+// rule and code is monospaced (when the machine has a monospace face,
+// webpage_fonts.go) on a tinted panel.
 func applyWebTagDefaults(st *webStyle, tag string) {
 	switch tag {
 	case "h1":
@@ -7665,13 +7788,21 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.Pre = true
 		st.WhiteSpace = webWhiteSpacePre
 		st.FontPx = 13
+		st.Mono, st.IconFont = true, false
 		st.MarginTop, st.MarginBot = 16, 16
 		st.HasBg = true
 		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
 	case "code", "kbd", "samp":
 		st.FontPx = 13
+		st.Mono, st.IconFont = true, false
 		st.HasBg = true
 		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
+	case "tt":
+		st.FontPx = 13
+		st.Mono, st.IconFont = true, false
+	case "mat-icon":
+		// Angular Material's icon element: its text is a ligature name.
+		st.IconFont, st.Mono = true, false
 	case "li":
 		st.Indent += 18
 		st.MarginTop, st.MarginBot = 2, 2
@@ -7680,7 +7811,7 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.Link = true
 	case "strong", "b":
 		st.Bold = true
-	case "em", "i":
+	case "em", "i", "cite", "dfn", "var", "address":
 		st.Italic = true
 	case "s", "del", "strike":
 		st.Strike = true
@@ -7820,16 +7951,27 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["font-weight"]; ok {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "bold", "bolder", "600", "700", "800", "900":
+		switch weight := strings.ToLower(strings.TrimSpace(v)); weight {
+		case "bold", "bolder":
 			st.Bold = true
-		case "normal", "lighter", "100", "200", "300", "400", "500":
+		case "normal", "lighter":
 			st.Bold = false
+		default:
+			// Any numeric weight, variable-font steps (650, 750) included: the
+			// reader has a regular and a bold cut, and bold starts at 600.
+			if n, err := strconv.ParseFloat(weight, 64); err == nil && n >= 1 && n <= 1000 {
+				st.Bold = n >= 600
+			}
 		}
 	}
 	if v, ok := decls["font-style"]; ok {
 		lower := strings.ToLower(strings.TrimSpace(v))
 		st.Italic = strings.HasPrefix(lower, "italic") || strings.HasPrefix(lower, "oblique")
+	}
+	// After the font shorthand, which may have named a family too: the
+	// longhand wins, as a later declaration does in a browser.
+	if v, ok := decls["font-family"]; ok {
+		webApplyFontFamily(st, v)
 	}
 	for _, key := range []string{"text-decoration", "text-decoration-line"} {
 		if v, ok := decls[key]; ok {
@@ -7861,19 +8003,32 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["text-shadow"]; ok {
-		if x, y, color, valid := webShadowValue(v, st.FontPx); valid {
-			st.HasTextShadow, st.TextShadowX, st.TextShadowY = true, x, y
-			if color != nil {
-				st.TextShadowColor, st.HasTextShadowColor = *color, true
+		if s, valid := webFirstTextShadow(v, st.FontPx); valid {
+			st.HasTextShadow, st.TextShadowX, st.TextShadowY = true, s.X, s.Y
+			st.TextShadowBlur = s.Blur
+			if s.HasColor {
+				st.TextShadowColor, st.HasTextShadowColor = webTextShadowSoften(s.Color, s.Blur), true
 			}
 		}
 	}
-	if v, ok := decls["box-shadow"]; ok && !strings.Contains(strings.ToLower(v), "inset") {
-		if x, y, color, valid := webShadowValue(v, st.FontPx); valid {
-			st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = true, x, y
-			if color != nil {
-				st.BoxShadowColor, st.HasBoxShadowColor = *color, true
+	// The first visible outer layer of a shadow list lifts the box. An inset
+	// layer (painted inside the box, not modelled) or a transparent framework
+	// placeholder ahead of it no longer drops the whole declaration.
+	if v, ok := decls["box-shadow"]; ok {
+		if s, valid := webFirstOuterShadow(v, st.FontPx); valid {
+			st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = true, s.X, s.Y
+			st.BoxShadowBlur, st.BoxShadowSpread = s.Blur, s.Spread
+			if s.HasColor {
+				st.BoxShadowColor, st.HasBoxShadowColor = s.Color, true
 			}
+		}
+	}
+	if v, ok := decls["transform"]; ok {
+		st.HasTranslate = false
+		st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = 0, 0, 0, 0
+		if x, y, pctX, pctY, valid := webTranslateValue(v, st.FontPx); valid {
+			st.HasTranslate = true
+			st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = x, y, pctX, pctY
 		}
 	}
 	if v, ok := decls["text-transform"]; ok {
@@ -8249,6 +8404,13 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
+	// SVG paint. Only an inline <svg> reads these (webpage_svg.go).
+	if v, ok := decls["fill"]; ok {
+		st.SVGFill = webSVGPaintDecl(v, st.SVGFill)
+	}
+	if v, ok := decls["stroke"]; ok {
+		st.SVGStroke = webSVGPaintDecl(v, st.SVGStroke)
+	}
 	applyWebLayoutDecls(st, decls)
 }
 
@@ -8338,6 +8500,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		}
 		st.DisplayContents = lower == "contents"
 		st.DisplayInline = lower == "inline"
+		st.DisplayInlineBlock = lower == "inline-block" || lower == "inline-flex" || lower == "inline-grid"
 		switch lower {
 		case "contents":
 			st.Display = webDisplayBlock
@@ -8687,6 +8850,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		if top, right, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.Top, st.Right, st.Bottom, st.Left = top, right, bottom, left
 			st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = true, true, true, true
+			st.InsetPct = webInsetPercents(v)
 		}
 	}
 	// The logical two-axis shorthands (inset-block/inset-inline) are common
@@ -8701,6 +8865,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			}
 			st.Top, st.HasTop = webLength(fields[0], st.FontPx), !webCSSAuto(fields[0])
 			st.Bottom, st.HasBottom = webLength(end, st.FontPx), !webCSSAuto(end)
+			st.InsetPct[0], st.InsetPct[2] = webInsetPercent(fields[0]), webInsetPercent(end)
 		}
 	}
 	if v, ok := decls["inset-inline"]; ok {
@@ -8712,26 +8877,29 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			}
 			st.Left, st.HasLeft = webLength(fields[0], st.FontPx), !webCSSAuto(fields[0])
 			st.Right, st.HasRight = webLength(end, st.FontPx), !webCSSAuto(end)
+			st.InsetPct[3], st.InsetPct[1] = webInsetPercent(fields[0]), webInsetPercent(end)
 		}
 	}
 	for _, edge := range []struct {
 		key  string
 		val  *float64
 		flag *bool
+		pct  *float64
 	}{
-		{"top", &st.Top, &st.HasTop},
-		{"right", &st.Right, &st.HasRight},
-		{"bottom", &st.Bottom, &st.HasBottom},
-		{"left", &st.Left, &st.HasLeft},
-		{"inset-block-start", &st.Top, &st.HasTop},
-		{"inset-block-end", &st.Bottom, &st.HasBottom},
-		{"inset-inline-start", &st.Left, &st.HasLeft},
-		{"inset-inline-end", &st.Right, &st.HasRight},
+		{"top", &st.Top, &st.HasTop, &st.InsetPct[0]},
+		{"right", &st.Right, &st.HasRight, &st.InsetPct[1]},
+		{"bottom", &st.Bottom, &st.HasBottom, &st.InsetPct[2]},
+		{"left", &st.Left, &st.HasLeft, &st.InsetPct[3]},
+		{"inset-block-start", &st.Top, &st.HasTop, &st.InsetPct[0]},
+		{"inset-block-end", &st.Bottom, &st.HasBottom, &st.InsetPct[2]},
+		{"inset-inline-start", &st.Left, &st.HasLeft, &st.InsetPct[3]},
+		{"inset-inline-end", &st.Right, &st.HasRight, &st.InsetPct[1]},
 	} {
 		v, ok := decls[edge.key]
 		if !ok {
 			continue
 		}
+		*edge.pct = webInsetPercent(v)
 		if webCSSAuto(v) {
 			*edge.flag = false
 			continue
@@ -9567,6 +9735,11 @@ type webParser struct {
 	// target is the page address's fragment: the element whose id it names is
 	// the one :target matches.
 	target string
+	// inlineGroup is the open chain of blocks an inline image split
+	// (webpage_inline.go): the next text block joins it, and any other flush
+	// ends it. inlineSeq numbers the chains.
+	inlineGroup int
+	inlineSeq   int
 }
 
 type webTableParse struct {
@@ -10151,8 +10324,14 @@ func webIndexFold(source, sub string) int {
 }
 
 // webRawElement returns the raw text of a style/title/script-like element and
-// the offset just past its closing tag.
+// the offset just past its closing tag. An <svg> may nest further <svg>s, so
+// it ends at its matching close tag (webSVGElementEnd).
 func webRawElement(source string, start int, tag string) (string, int, bool) {
+	if tag == "svg" {
+		if bodyEnd, next, ok := webSVGElementEnd(source, start); ok {
+			return source[start:bodyEnd], next, true
+		}
+	}
 	closing := "</" + tag
 	idx := webIndexFold(source[start:], closing)
 	if idx < 0 {
@@ -10218,10 +10397,11 @@ func webRawTextElement(tag string) bool {
 }
 
 // webPlaceholderElement lists replaced content this reader cannot rasterize.
-// Their fallback text is not laid out; the element itself keeps a box.
+// Their fallback text is not laid out; the element itself keeps a box. An
+// <svg> is drawn instead (walk → walkSVG).
 func webPlaceholderElement(tag string) bool {
 	switch tag {
-	case "svg", "canvas", "object", "embed", "audio":
+	case "canvas", "object", "embed", "audio":
 		return true
 	}
 	return false
@@ -10519,6 +10699,13 @@ func (p *webParser) walk(source string) {
 			p.endTag(name)
 			continue
 		}
+		// An inline <svg> is captured whole and drawn as an image
+		// (webpage_svg.go). It is seen even under a hidden parent: a sprite
+		// sheet parked in a display:none wrapper still defines the icons.
+		if name == "svg" {
+			i = p.walkSVG(source, end-len(raw)-1, i, attrs, selfClose)
+			continue
+		}
 		// Raw elements bypass startTag. When their parent is hidden, consume
 		// their bodies without creating a placeholder or a media card.
 		if p.topStyle().Hidden && (name == "title" || name == "style" || webRawTextElement(name)) {
@@ -10740,18 +10927,10 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			}
 			return
 		}
-		p.flush()
-		p.beginFlexLeaf(style)
-		block := p.ensureBlock()
-		block.Image = true
-		// An <img> is a replaced element: its own width, height and
-		// aspect-ratio belong on the image block, not on the surrounding
-		// paragraph style ensureBlock inherited.
-		block.Style = style
-		block.ImageSrc = resolved
-		block.ImageW = htmlTagAttributeFloat(attrs, "width")
-		block.ImageH = htmlTagAttributeFloat(attrs, "height")
-		p.flush()
+		// An image block, set inside its line when it is inline-level
+		// (webpage_inline.go).
+		attrW, attrH := webImageAttrSize(&style, attrs)
+		p.addImageElement(style, resolved, htmlAttrValue(alt), attrW, attrH)
 		return
 	case "input":
 		// A form field is content, not a void tag to skip: the reader used to
@@ -10793,12 +10972,33 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		return
 	}
 	if name == "ul" || name == "ol" {
+		if !style.DisplayInlineBlock || !p.openInlineRow(style) {
+			p.closeInlineRow()
+		}
 		p.flush()
 		p.lists = append(p.lists, webListState{ordered: name == "ol"})
 		p.push(el, style, "list", attrs)
 		return
 	}
+	if name == "li" && (style.DisplayInline || style.DisplayInlineBlock) {
+		// An inline or inline-block item is not a list item: no marker, no
+		// number. Inline-block items sit side by side in a wrapping row
+		// (webpage_inline.go), which is how nav bars, pagination and tag lists
+		// are built; inline items flow in the line like any inline element.
+		// Inside a flex or grid list either kind is simply one of its items.
+		if style.DisplayInlineBlock {
+			p.openInlineRow(style)
+		}
+		if style.DisplayInlineBlock || p.parentIsFlexContainer() {
+			p.flush()
+			p.push(el, style, "block", attrs)
+			return
+		}
+		p.pushInline(el, style, attrs, selfClose, name)
+		return
+	}
 	if name == "li" {
+		p.closeInlineRow()
 		p.flush()
 		p.pendingB = p.nextBullet(style)
 		p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
@@ -10823,12 +11023,34 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		return
 	}
 	if (webBlockElement(name) && !style.DisplayInline) || style.DisplayBlock || style.Display >= webDisplayTable {
+		// A block-level inline-block (a card, a button row item) joins the
+		// wrapping row its siblings form; any other block ends that row and
+		// lays out full width below it.
+		if !(webBlockElement(name) && style.DisplayInlineBlock && p.openInlineRow(style)) {
+			p.closeInlineRow()
+		}
 		p.flush()
 		p.push(el, style, "block", attrs)
 		if selfClose {
 			p.endTag(name)
 		}
 		return
+	}
+	p.pushInline(el, style, attrs, selfClose, name)
+}
+
+// pushInline opens an inline element. A nested inline element with no
+// background of its own paints its parent's (`<mark>a <b>b</b></mark>` is one
+// highlight), and horizontal margin or padding keeps a gap to the neighbour,
+// so minified nav markup does not read "HomeAboutContact".
+func (p *webParser) pushInline(el webElement, style webStyle, attrs string, selfClose bool, name string) {
+	if !style.HasBg && len(p.stack) > 0 {
+		if parent := p.stack[len(p.stack)-1]; parent.kind == "inline" && parent.style.HasBg {
+			style.HasBg, style.Background = true, parent.style.Background
+		}
+	}
+	if style.Indent > 3 {
+		p.space = true
 	}
 	p.push(el, style, "inline", attrs)
 	if selfClose {
@@ -11081,6 +11303,11 @@ func (p *webParser) endTag(name string) {
 		}
 		if p.stack[i].kind == "block" || p.stack[i].kind == "list" || p.stack[i].kind == "contents" {
 			p.flush()
+		}
+		if p.stack[i].kind == "inline" && p.stack[i].style.IndentRight > 3 {
+			// The element's right margin/padding is a gap before what
+			// follows (pushInline keeps the left one).
+			p.space = true
 		}
 		if name == "head" {
 			p.inHead = false
@@ -11356,6 +11583,7 @@ func webResetElementStyle(st *webStyle) {
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
 	st.Display, st.DisplayBlock, st.DisplayContents, st.DisplayInline, st.FlexDir = webDisplayBlock, false, false, false, webFlexRow
+	st.DisplayInlineBlock = false
 	st.FlexReverse = false
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.AlignContent = webContentStretch
@@ -11390,6 +11618,10 @@ func webResetElementStyle(st *webStyle) {
 	st.TextOverflow = 0
 	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
 	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
+	st.BoxShadowBlur, st.BoxShadowSpread, st.TextShadowBlur = 0, 0, 0
+	st.HasTranslate = false
+	st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = 0, 0, 0, 0
+	st.InsetPct = [4]float64{}
 }
 
 // Keep the last width declaration this renderer can actually measure. A
@@ -11445,6 +11677,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// which is how every browser renders `<a><b>text</b></a>`.
 
 	applyWebTagDefaults(&st, el.tag)
+	webApplyIconFontClass(&st, el.classes)
 
 	chain := make([]webElement, 0, len(p.stack)+1)
 	for _, frame := range p.stack {
@@ -12133,6 +12366,8 @@ func (p *webParser) ensureBlock() *webBlock {
 	}
 	p.tagFlexBlock(block, st)
 	block.Details, block.DetailsShown = p.detailsTag()
+	// Text that follows an inline image continues its line (webpage_inline.go).
+	block.InlineGroup = p.inlineGroup
 	p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
 	p.current = block
 	return block
@@ -12538,6 +12773,17 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 		p.selectOptionText.WriteString(htmlstd.UnescapeString(raw))
 		return
 	}
+	if style.IconFont {
+		// A ligature icon font (Material Icons/Symbols) spells its glyphs as
+		// words: "menu" draws a hamburger, not the word. The reader's face has
+		// no such ligatures, so a known name becomes the nearest glyph and the
+		// rest are dropped (webpage_fonts.go), on a button's label too.
+		raw = webIconFontText(raw)
+		style.Transform = 0
+		if raw == "" {
+			return
+		}
+	}
 	if p.buttonCtrl != nil {
 		if p.buttonText.Len() < 512 {
 			p.buttonText.WriteString(htmlstd.UnescapeString(raw))
@@ -12593,6 +12839,11 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 			collapsed = " " + collapsed
 		}
 	}
+	// The gap between an inline image and the text after it lives on the
+	// text's block, which starts empty (webpage_inline.go).
+	if len(block.Runs) == 0 && block.InlineGroup != 0 && (p.space || leadsWithSpace) {
+		block.InlineSpace = true
+	}
 	p.space = false
 	trimmed := strings.TrimRight(text, " \t\r\n")
 	if len(trimmed) < len(text) {
@@ -12632,6 +12883,9 @@ func (p *webParser) appendRun(text string, style webStyle) {
 }
 
 func (p *webParser) flush() {
+	// Every block boundary ends an inline-image chain; addImageElement
+	// reopens it after its own flushes.
+	p.inlineGroup = 0
 	if p.current == nil {
 		return
 	}
@@ -12740,7 +12994,10 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	fontSize := func(cssPx float64) int {
 		size := int(math.Round(cssPx * baseSize / 16))
 		minSize := int(math.Round(baseSize * 0.72))
-		maxSize := int(math.Round(baseSize * 1.5))
+		// Twice the body size: an h1 (2em) and a hero title keep their
+		// scale instead of every large heading shrinking to one 1.5em cap.
+		// emit() gives a tall line as many grid rows as its face needs.
+		maxSize := int(math.Round(baseSize * 2))
 		if size < minSize {
 			size = minSize
 		}
@@ -12761,20 +13018,25 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		fonts[size] = font
 		return font
 	}
-	italicFonts := make(map[int]*ttf.Font, 4)
+	// Bold, italic and monospace runs are measured and drawn in faces of their
+	// own (webpage_fonts.go), opened at the size the regular face is: a real
+	// bold cut instead of a doubled regular one, and the italic no longer a
+	// step smaller than its line when the text size is raised.
+	styledFonts := make(map[webFaceRequest]*ttf.Font, 8)
 	fontAtStyle := func(style webStyle) *ttf.Font {
-		if !style.Italic {
+		if !style.Bold && !style.Italic && !style.Mono {
 			return fontAt(style.FontPx)
 		}
 		size := fontSize(style.FontPx)
-		if font, ok := italicFonts[size]; ok {
+		key := webFaceRequest{size: size, bold: style.Bold, italic: style.Italic, mono: style.Mono}
+		if font, ok := styledFonts[key]; ok {
 			return font
 		}
-		font := getFontSizedStyled(config, elem.Font, size, ttf.STYLE_ITALIC)
+		font := webReaderFace(config, elem.Font, size, style.Bold, style.Italic, style.Mono)
 		if font == nil {
 			font = fontAt(style.FontPx)
 		}
-		italicFonts[size] = font
+		styledFonts[key] = font
 		return font
 	}
 
@@ -12801,7 +13063,9 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 			containerRows:  make(map[int]webContainerRowSpan),
 		}
 		// Absolutely positioned blocks are measured on their own and painted
-		// over the flow, so they take no room in it.
+		// over the flow, so they take no room in it. A positioned box's line
+		// split by an inline image is stitched first, so it stays one layer.
+		blocks = webMergeInlineChains(blocks)
 		flow := make([]webBlock, 0, len(blocks))
 		var floats []webBlock
 		for _, b := range blocks {
@@ -13038,8 +13302,9 @@ type webLayouter struct {
 	// parent flex/grid layout before this item's sublayout was measured.
 	constraintSkip int
 	fontAt         func(float64) *ttf.Font
-	// fontAtStyle resolves a face including its synthetic italic style. It is
-	// separate from fontAt so metrics-only callers stay cheap.
+	// fontAtStyle resolves the face a run is measured and drawn in: its bold,
+	// italic or monospace face (webpage_fonts.go). It is separate from fontAt
+	// so metrics-only callers stay cheap.
 	fontAtStyle func(webStyle) *ttf.Font
 
 	// containerSizes is shared with every flex-item sub-layout, so a measured
@@ -13087,13 +13352,15 @@ func (l *webLayouter) spaceWidth(font *ttf.Font) int32 {
 }
 
 // sanitizedWord drops characters the font cannot draw, remembering the result
-// so the same word is scanned once.
+// so the same word is scanned once. Icon-font code points (the Private Use
+// Area) go first: no reader face draws those icons, so a word made only of
+// them comes back empty and the run loop skips it.
 func (l *webLayouter) sanitizedWord(font *ttf.Font, text string) string {
 	key := webSanitizeKey{font: font, text: text}
 	if out, ok := l.sanitized[key]; ok {
 		return out
 	}
-	out := sanitizeForFont(font, text)
+	out := sanitizeForFont(font, webDropPrivateUse(text))
 	if l.sanitized == nil {
 		l.sanitized = make(map[webSanitizeKey]string, 256)
 	}
@@ -13265,6 +13532,9 @@ func webMarginRows(cssPx, baseSize float64, rowH int32) int32 {
 // relative to the column's own width, with padX as its left edge, so a flex
 // item can be laid out at 0 and moved later.
 func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
+	// A paragraph the parser split around inline images is one paragraph
+	// again before anything measures it (webpage_inline.go).
+	blocks = webMergeInlineChains(blocks)
 	blocks = l.prepareWebTables(blocks, contentW)
 	layout := l.layout
 	rowH := l.rowH
@@ -13786,6 +14056,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					line[i].X += offset
 				}
 			}
+			// Runs of different sizes and faces share one baseline, and an
+			// inline image stands on it (webpage_inline.go); the line grows
+			// to hold both. A line in one face is unchanged.
+			metrics := webAlignLineRuns(line)
+			if h := metrics.ascent + metrics.descent; h > lineFontH {
+				lineFontH = h
+			}
 			// The author's line-height, when it is larger than the glyphs,
 			// becomes the slot height: the row grid centres the text in the
 			// slot, which is exactly what extra leading looks like. Capped so
@@ -13804,7 +14081,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					slotH = int32(lh)
 				}
 			}
+			rowAt := len(layout.Rows)
 			emit(line, slotH)
+			if rowAt < len(layout.Rows) {
+				l.placeInlineImages(line, layout.Rows[rowAt].Y, metrics)
+			}
 			firstLine = false
 			line = nil
 			lineMax, lineFontH = 0, 0
@@ -13813,6 +14094,32 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 
 		for _, run := range block.Runs {
+			// An inline image is one unbreakable box on the line, like a long
+			// word: it wraps when it does not fit and is placed once the line
+			// is set (placeInlineImages).
+			if run.Image != nil {
+				if lineClipped {
+					continue
+				}
+				pos, ok := l.inlineImagePos(run, block, avail, len(line) > 0)
+				if !ok {
+					continue
+				}
+				if len(line) > 0 && x+pos.SpaceBefore+pos.ImageW > lineRight && webWhiteSpaceWraps(block.Style.WhiteSpace) {
+					flushLine(false)
+					pos.SpaceBefore = 0
+				}
+				x += pos.SpaceBefore
+				pos.X = x
+				pos.BoxWidth = contentW
+				pos.Boxes = append([]int(nil), block.Boxes...)
+				line = append(line, pos)
+				x += pos.ImageW
+				if x > lineMax {
+					lineMax = x
+				}
+				continue
+			}
 			// A form control paints its current state, not the text it was
 			// parsed with: a filled field, a stepped select and a ticked box all
 			// read back from the control, so changing one is a re-layout rather
@@ -14048,10 +14355,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					}
 					color := webResolveColor(run.Style, d)
 					if run.Style.Control != nil && run.Style.Control.PlaceholderShown() {
-						// The reader has one face, so an italic prompt is not something it
-						// can draw (webStyle.Italic is parsed but never painted). Dimming
-						// toward the paper is the cue that actually renders: an empty
-						// field reads as a prompt, and stops the moment a value is typed.
+						// A field's prompt is dimmed toward the paper rather than set in
+						// italic, which a field chip measured in the upright face would
+						// not hold: an empty field reads as a prompt, and stops the
+						// moment a value is typed.
 						color = sdl.Color{
 							R: uint8((int(color.R) + 2*int(d.Paper.R)) / 3),
 							G: uint8((int(color.G) + 2*int(d.Paper.G)) / 3),
@@ -14080,7 +14387,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						ShadowColor:         run.Style.TextShadowColor,
 						HasShadowColor:      run.Style.HasTextShadowColor,
 						Href:                run.Style.Href,
-						HasBg:               run.Style.HasBg && (!block.HasBg || boxW > 0),
+						HasBg:               run.Style.HasBg && (!block.HasBg || boxW > 0 || run.Style.Background != block.Background),
 						Bg:                  run.Style.Background,
 						Control:             run.Style.Control,
 						BoxW:                boxW, BoxH: boxH,
@@ -14184,20 +14491,15 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			radius = half
 		}
 		if block.Style.HasBoxShadow && !block.Style.Invisible && height > 0 {
-			shadowColor := sdl.Color{R: 0, G: 0, B: 0, A: 70}
-			if block.Style.HasBoxShadowColor {
-				shadowColor = block.Style.BoxShadowColor
+			// The shadow follows the surface that is actually filled (the
+			// background colour rect starts at the first row), or the border
+			// box when the block has no colour of its own. It is emitted just
+			// before that background so it paints underneath it.
+			shadowTop := paintTop
+			if block.HasBg {
+				shadowTop = startGrid * rowH
 			}
-			layout.Rects = append(layout.Rects, webRect{
-				Rect: sdl.Rect{
-					X: padX - 4 + int32(math.Round(block.Style.BoxShadowX*baseSize/16)),
-					Y: paintTop + int32(math.Round(block.Style.BoxShadowY*baseSize/16)),
-					W: paintW + 8, H: height,
-				},
-				Color:  webFadeColor(shadowColor, d.Paper, block.Style),
-				Z:      block.ZIndex - 1,
-				Radius: radius,
-			})
+			l.emitBoxShadow(block.Style, sdl.Rect{X: padX - 4, Y: shadowTop, W: paintW + 8, H: height}, radius, block.ZIndex)
 		}
 		if block.HasBg && !block.Style.Invisible && height > 0 {
 			layout.Rects = append(layout.Rects, webRect{
@@ -14576,12 +14878,20 @@ func collectWebLinks(layout *webLayout) []webLinkHit {
 				if cur.Href != href || cur.Font == nil {
 					break
 				}
-				w, _, err := cur.Font.SizeUTF8(cur.Text)
-				if err != nil {
-					break
+				// An image inside the link counts with its own width, so a
+				// logo or a thumbnail that is the whole link is a stop too.
+				w := cur.ImageW
+				if cur.Image == nil {
+					tw, _, err := cur.Font.SizeUTF8(cur.Text)
+					if err != nil {
+						break
+					}
+					w = int32(tw)
+				} else if cur.Image.ImageAlt != "" {
+					label += " " + cur.Image.ImageAlt
 				}
 				label += " " + cur.Text
-				if end := cur.X + int32(w); end > endX {
+				if end := cur.X + w; end > endX {
 					endX = end
 				}
 			}
@@ -14975,6 +15285,12 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		}
 		for _, bg := range layout.Backgrounds {
 			y := rect.Y + bg.Rect.Y - offset
+			if bg.Shadow {
+				// A soft shadow reaches past its box by the blur, so it has
+				// its own visibility test.
+				drawWebShadowPaint(r, bg, rect.X+bg.Rect.X, y, rect)
+				continue
+			}
 			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
 				continue
 			}
@@ -14982,6 +15298,7 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				drawWebImage(r, config, doc, webImagePos{
 					Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
 					ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
+					Radius: bg.Radius,
 				}, rect.X+bg.Rect.X, y)
 				continue
 			}
@@ -14992,7 +15309,8 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
 		}
 		for _, bg := range layout.Rects {
-			if bg.BackgroundFill {
+			if bg.BackgroundFill || bg.Shadow {
+				// Both are painted from layout.Backgrounds, in CSS order.
 				continue
 			}
 			y := rect.Y + bg.Rect.Y - offset
@@ -15091,10 +15409,13 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 					endX = rect.X + next.X + int32(nw)
 					i = j
 				}
-				fillRoundedRect(r, startX, y, endX-startX+4, int32(h), 3, run.Bg)
+				// The chip sits behind the glyphs, which the baseline and
+				// vertical-align may have moved down the row.
+				fillRoundedRect(r, startX, y+run.VerticalOffset, endX-startX+4, int32(h), 3, run.Bg)
 			}
 			for _, run := range row.Runs {
-				if run.Invisible {
+				if run.Invisible || run.Image != nil {
+					// An inline image is painted with layout.Images.
 					continue
 				}
 				x, textY := rect.X+run.X, y+run.VerticalOffset
@@ -15111,9 +15432,10 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 					drawTextRun(r, config, run.Font, run.Text, shadow, x+run.ShadowX, textY+run.ShadowY)
 				}
 				drawTextRun(r, config, run.Font, run.Text, run.Color, x, textY)
-				if run.Bold {
-					// One pixel of fake weight: the app ships one font face, and
-					// a second offset copy reads as bold at this size.
+				if run.Bold && !webFontIsBold(run.Font) {
+					// A bold run is laid out in a bold face (webpage_fonts.go).
+					// Only when none would open is it the regular face, and a
+					// second copy a pixel over is the weight it can have.
 					drawTextRun(r, config, run.Font, run.Text, run.Color, x+1, textY)
 				}
 				if (run.Underline || run.Strike) && run.Font != nil {

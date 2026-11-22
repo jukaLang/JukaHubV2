@@ -3,7 +3,9 @@
 A in **Files** opens a file in JukaHub's own viewer for its type: pictures in
 the image viewer, music in the music player, PDF and EPUB in the reader, a game
 in the library's emulator, an archive in its sheet, and anything else as text
-(or, when it is not text, as a read-only hex view).
+(or, when it is not text, in the hex editor). **Hex editor** is in the sheet
+for every file, so the bytes of a save file, a ROM header or a text file can be
+read and changed too ([Text and hex editor](TEXT_EDITOR.md)).
 
 A handheld card often holds better tools for some files. KOReader reads MOBI,
 DjVu, FB2 and comic archives that JukaHub cannot show, and reads a PDF with
@@ -20,7 +22,9 @@ menu. The sheet lists:
 - **JukaHub's viewers** that really handle the file. The one A uses today is
   marked *JukaHub's choice*; a type's saved default is marked *Default*; when
   an app takes the type without a default (see below), its row is marked
-  *Opens now*;
+  *Opens now*. **Hex editor** is there for every file; from the text page the
+  sheet offers the hex editor, and from the hex editor the text editor (for a
+  text file), but never the page it was opened from;
 - **Open with Windows** on a PC (the app Windows associates with the type);
 - **installed apps** that open the type. An app the App Center's catalogue
   documents for the type says *catalogue: opens .epub*; an app that only
@@ -59,9 +63,9 @@ this device.
   default were saved (below). The default stays saved, so reinstalling the app
   brings it back; **Default apps…** shows it as *not on the card*.
 - **The text page.** Choosing one of JukaHub's viewers, or **Get <App>**, from
-  the text page's menu while it has unsaved changes is refused with a toast:
-  save or discard them first. Another app or Windows opens over the page and
-  leaves it as it is.
+  the text or hex editor's menu while it has unsaved changes is refused with a
+  toast: save or discard them first. Another app or Windows opens over the
+  page and leaves it as it is.
 
 ### Formats JukaHub cannot show
 
@@ -70,7 +74,7 @@ For e-books, comics and documents JukaHub has no viewer for — `.mobi`, `.azw`,
 `.cbr`, `.cb7`, `.cbt`, `.xps`, `.oxps`, `.doc`, `.docx` and `.odt` — A opens
 the file in the one verified app on the card that reads it, without asking. A
 toast names the app and how to change it. With two such apps (or none), the
-KOReader on the card reads it; without KOReader A shows the hex view as before.
+KOReader on the card reads it; without KOReader A shows the hex editor as before.
 (`.rtf` is not one of these: the text page shows it.)
 
 ### "Open books with" (Settings → Media & playback)
@@ -80,7 +84,7 @@ with** can send every PDF and EPUB to KOReader instead of JukaHub's reader.
 That setting applies only while the type has no default. Choosing JukaHub's
 **Reader** in Open with (Always use) for `.pdf` or `.epub` then saves it as the
 default, so A opens JukaHub's reader for that type even with "Open books with:
-KOReader"; the same goes for **Hex view** on a format KOReader or a verified app
+KOReader"; the same goes for **Hex editor** on a format KOReader or a verified app
 would otherwise take. **Y** (*No default*) gives the type back to the setting.
 
 ### Reviewing them

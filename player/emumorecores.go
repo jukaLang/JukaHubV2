@@ -19,8 +19,10 @@ package main
 //     console on this chip.
 //
 // A core is fetched only when the buildbot's aarch64 index lists it, it is not
-// installed, and that exact build was not refused here before
-// (coreBuildRefused). Each one goes through the install the Emulators page
+// installed, that exact build was not refused here before (coreBuildRefused),
+// and it can work on a TrimUI handheld at all (coretrimui.go); Dolphin and
+// ARMSX2 are left to their own setups (dolphin.go, ps2.go), which pick a
+// build that loads here. Each one goes through the install the Emulators page
 // uses (planEmuInstall → applyEmuInstallPlan: the CRC32 the index states, the
 // size cap, elfcompat's "can this firmware load it" before anything is
 // written), each after the free-space floor a core update keeps
@@ -203,6 +205,12 @@ func emuMoreCoresPlanFor(systems []string, index []coreIndexEntry, installed map
 		plays := hasEmulator != nil && hasEmulator(system)
 		for _, core := range emuMoreCoreCandidates(system) {
 			if installed[core] || taken[core] {
+				continue
+			}
+			// Dolphin and ARMSX2 come from setups of their own (dolphin.go,
+			// ps2.go), and a core that cannot work on a TrimUI handheld is
+			// never fetched (coretrimui.go).
+			if dolphinManagesCore(core) || ps2ManagesCore(core) || coreTrimuiMisfit(core, "") != "" {
 				continue
 			}
 			if index != nil {

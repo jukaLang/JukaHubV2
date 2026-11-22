@@ -59,8 +59,13 @@ const (
 	// release checks. The check itself runs at every startup; the cooldown
 	// only stops a crash-restart loop from hammering the GitHub API.
 	autoUpdateCheckInterval = 30 * time.Minute
-	autoUpdateMaxFiles      = 128
-	autoUpdateStartupDelay  = 4 * time.Second
+	// autoUpdateMaxFiles bounds a staged release. The TrimUI archive holds
+	// about 40 files now (androidrt/, bin/, lib/, stock_fastboot/ beside the
+	// program); 128 was close enough that one more bundled folder would have
+	// stopped every update at "staged release has N files", in builds that can
+	// only be fixed by an update.
+	autoUpdateMaxFiles     = 1024
+	autoUpdateStartupDelay = 4 * time.Second
 	// autoUpdateCheckAttempts includes the first try. A handheld can reach the
 	// UI before Wi-Fi has finished associating, and one failed lookup used to
 	// leave the whole session with no update offer.
@@ -355,14 +360,29 @@ func markUpdateAvailable(rel *githubRelease) {
 	if rel == nil || !jukaHubReleaseTag(rel.TagName) {
 		return
 	}
-	asset := ""
+	asset, digest, size := "", "", int64(0)
 	if target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH); err == nil {
 		asset = target.Asset
+		for _, a := range rel.Assets {
+			if strings.EqualFold(a.Name, asset) {
+				digest, size = strings.TrimSpace(a.Digest), a.Size
+				break
+			}
+		}
 	}
 	patchStateMu.Lock()
+	// A release the latest-release page named (the API was out of lookups)
+	// carries no digest of its own: the one the API gave for the same release
+	// earlier stays.
+	if digest == "" && strings.EqualFold(patchState.AvailableUpdateTag, rel.TagName) &&
+		strings.EqualFold(patchState.AvailableUpdateAsset, asset) {
+		digest, size = patchState.AvailableUpdateDigest, patchState.AvailableUpdateSize
+	}
 	patchState.AvailableUpdateTag = rel.TagName
 	patchState.AvailableUpdateAt = releaseStampISO(rel)
 	patchState.AvailableUpdateAsset = asset
+	patchState.AvailableUpdateDigest = digest
+	patchState.AvailableUpdateSize = size
 	patchStateMu.Unlock()
 	_ = savePatchState()
 }
@@ -375,6 +395,8 @@ func clearAvailableUpdate() {
 	patchState.AvailableUpdateTag = ""
 	patchState.AvailableUpdateAt = ""
 	patchState.AvailableUpdateAsset = ""
+	patchState.AvailableUpdateDigest = ""
+	patchState.AvailableUpdateSize = 0
 	patchStateMu.Unlock()
 	if had {
 		_ = savePatchState()
@@ -505,7 +527,7 @@ func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
 	// the release on offer. A release newer than the cached one is downloaded.
 	if entry, ok := upchBestReady(); ok {
 		if adv := availableUpdateTag(); adv == "" || strings.EqualFold(adv, entry.Tag) || !IsOnline() {
-			return upchInstallEntry(ctx, config, entry)
+			return updateExplainDiskFull(upchInstallEntry(ctx, config, entry))
 		}
 	}
 	// The download below wants the connection to itself.
@@ -523,9 +545,31 @@ func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
 		return fmt.Errorf("%w (%s)", errAlreadyUpToDate, installed)
 	}
 	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
+		return updateExplainDiskFull(err)
+	}
+	return updateExplainDiskFull(OpApplyStagedSwap(ctx, config))
+}
+
+// updateExplainDiskFull turns a card that filled up while an update unpacked
+// or backed up its files into the sentence the toast shows; the raw error goes
+// to the log. Nothing was installed by then: an unpack that fails removes its
+// tree, and a journal that fails is rolled back. Other errors pass unchanged.
+func updateExplainDiskFull(err error) error {
+	if !updateDiskFull(err) {
 		return err
 	}
-	return OpApplyStagedSwap(ctx, config)
+	logPatch("update: the card is full: %v", err)
+	free := int64(-1)
+	if dir, derr := PatchStateDir(); derr == nil {
+		if n, ferr := freeBytes(dir); ferr == nil {
+			free = n
+		}
+	}
+	if free < 0 {
+		return fmt.Errorf("the %s is full, so the update stopped before it changed anything. Delete some files and try again", updateDiskName())
+	}
+	return fmt.Errorf("the %s is full (%d MB free), so the update stopped before it changed anything. Delete some files and try again",
+		updateDiskName(), free>>20)
 }
 
 // releaseAssetDigest turns a release asset's API digest ("sha256:<hex>") into
@@ -747,15 +791,24 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	if assetSize > 0 && assetSize > patchMaxDownload {
 		return fmt.Errorf("release asset %s is larger than the %d byte limit", target.Asset, patchMaxDownload)
 	}
-	if free, err := freeBytes(dir); err == nil && free < 96<<20 {
-		return fmt.Errorf("insufficient free space for update staging (%d bytes free)", free)
+	// The archive is named by its release. Under the one shared name, the part
+	// of a download a dropped connection left for one release was resumed into
+	// the next release's archive: the old release's bytes, then the new one's
+	// from the same offset, which failed its digest (or, with none, unpacked as
+	// a broken zip) and cost the user an "Update failed" first. What earlier
+	// updates left in downloads/ goes before the room is measured.
+	downloads := filepath.Join(dir, "downloads")
+	archivePath := filepath.Join(downloads, sanitizeFileName(rel.TagName)+"-"+sanitizeFileName(target.Asset))
+	updateDropStaleArchives(downloads, target.Asset, filepath.Base(archivePath))
+	if err := updateMakeRoom(dir, rel.TagName, assetSize); err != nil {
+		patchRowStatus(ComponentApp, StatusFailed)
+		return err
 	}
 
 	patchRowStatus(ComponentApp, StatusDownloading)
 	// The install bar is only shown when a caller opened it (the header chip
 	// and the prompt do); these calls are no-ops elsewhere.
 	installBarPhase(installPhaseDownload)
-	archivePath := filepath.Join(dir, "downloads", sanitizeFileName(target.Asset))
 	// A truncated or swapped archive is caught here, before it is unpacked: the
 	// handheld's Wi-Fi drops mid-download often enough that a corrupt file used
 	// to surface as "archive contains no JukaHub executable".
@@ -764,7 +817,149 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		return fmt.Errorf("download failed: %w", err)
 	}
 	patchRowStatus(ComponentApp, StatusVerified)
-	return stageJukaHubArchive(ctx, rel, archivePath, target.Asset)
+	err = stageJukaHubArchive(ctx, rel, archivePath, target.Asset)
+	// Unpacked and checked, or not unpackable here: either way the archive
+	// only takes room now (it stayed on the card until the next update
+	// before). A retry downloads again — downloadToFile resumes only a partial
+	// file — and the offline update cache keeps a copy of its own.
+	if rerr := os.Remove(archivePath); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		logPatch("update: could not remove the downloaded %s: %v", target.Asset, rerr)
+	}
+	return err
+}
+
+// updateDropStaleArchives removes the app archives, whole or partial, that
+// earlier updates left in downloads/ (the old unversioned name, other
+// releases', a whole archive of this one that a retry would download again
+// anyway), keeping only the partial download of keep, which resumes. Package
+// archives there ("<id>.archive", patch_repo.go) are not app archives and stay.
+func updateDropStaleArchives(downloads, asset, keep string) {
+	entries, err := os.ReadDir(downloads)
+	if err != nil {
+		return
+	}
+	asset = sanitizeFileName(asset)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || name == keep+".part" || !strings.HasSuffix(strings.TrimSuffix(name, ".part"), asset) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(downloads, name)); err != nil {
+			logPatch("update: could not remove the old download %s: %v", name, err)
+		}
+	}
+}
+
+// updateSpaceMargin is what an update leaves free on the card at its fullest.
+const updateSpaceMargin = int64(32 << 20)
+
+// updateSpaceFloor is the least an update asks for when the archive's size is
+// unknown: what the only check before 2026-11-20 asked, whatever the release
+// weighed.
+const updateSpaceFloor = int64(96 << 20)
+
+// updateSpaceNeed is roughly the most room an update takes at once, from the
+// size its release has unpacked. The archive goes once unpacked
+// (StageJukaHubUpdate); then the staged tree and the swap journal's copy of
+// every file the update replaces (about as much again) are on the card
+// together, and the helper writes the new program beside the old one, which
+// the quitting JukaHub may still hold for a moment. The program alone is about
+// 70 MB now, and the old flat 96 MiB let a card start an update it could not
+// finish: it stopped at "no space left on device" while unpacking, backing up
+// or swapping. staged: the unpacked tree is on the card already (a retry
+// reuses it), so only the backups and the helper's copy are still to come.
+func updateSpaceNeed(unpacked int64, staged bool) int64 {
+	need := updateSpaceFloor
+	if unpacked > 0 {
+		// The backups, the program's copy (at most about half the release),
+		// and the tree unless it is there already.
+		n := unpacked + unpacked/2 + updateSpaceMargin
+		if !staged {
+			n += unpacked
+		}
+		if n > need {
+			need = n
+		}
+	}
+	return need
+}
+
+// updateUnpackedEstimate is how big an archive of archiveBytes unpacks:
+// deflate takes the program, which is most of the release, to a little under
+// half, so two and a quarter times (0: unknown).
+func updateUnpackedEstimate(archiveBytes int64) int64 {
+	if archiveBytes <= 0 {
+		return 0
+	}
+	return archiveBytes * 9 / 4
+}
+
+// updateMakeRoom checks the card has room for an update of an archive of
+// archiveBytes before anything is downloaded or unpacked.
+func updateMakeRoom(dir, tag string, archiveBytes int64) error {
+	return updateMakeRoomFor(dir, tag, updateUnpackedEstimate(archiveBytes))
+}
+
+// updateMakeRoomFor checks the card has room for an update whose release
+// unpacks to unpacked bytes (0: unknown, the floor applies). Short of room, it
+// first removes what earlier updates that never finished left in the staging
+// area (every release tree but tag's, which a retry reuses), then measures
+// again. A card that is still short gets a sentence a person can act on, not
+// the "no space left on device" an update used to stop at halfway. Where free
+// space cannot be measured the update goes ahead.
+func updateMakeRoomFor(dir, tag string, unpacked int64) error {
+	keep := "app-" + sanitizeFileName(tag)
+	staged := false
+	if info, err := os.Stat(filepath.Join(dir, "staging", keep+".ready")); err == nil && info.Mode().IsRegular() {
+		staged = true
+	}
+	need := updateSpaceNeed(unpacked, staged)
+	free, err := freeBytes(dir)
+	if err != nil || free >= need {
+		return nil
+	}
+	if entries, rerr := os.ReadDir(filepath.Join(dir, "staging")); rerr == nil {
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "app-") || name == keep || name == keep+".ready" {
+				continue
+			}
+			if err := os.RemoveAll(filepath.Join(dir, "staging", name)); err != nil {
+				logPatch("update: could not remove the stale staging %s: %v", name, err)
+			}
+		}
+	}
+	if free, err = freeBytes(dir); err != nil || free >= need {
+		return nil
+	}
+	return errUpdateNoRoom(need, free)
+}
+
+// errUpdateNoRoom is the refusal: how much the update needs and how much is
+// free, in megabytes.
+func errUpdateNoRoom(need, free int64) error {
+	return fmt.Errorf("not enough free space on the %s for this update: it needs about %d MB, %d MB are free. "+
+		"Delete some files (or older saved versions under Version history) and try again",
+		updateDiskName(), (need+(1<<20)-1)>>20, free>>20)
+}
+
+// updateDiskName is what the space messages call the place JukaHub lives on.
+func updateDiskName() string {
+	if runtime.GOOS == "windows" {
+		return "disk"
+	}
+	return "SD card"
+}
+
+// updateDiskFull reports an error that is the card running out of room
+// (Linux's ENOSPC, Windows' "not enough space on the disk"), by its text: the
+// errors arrive wrapped by the archive, copy and journal code.
+func updateDiskFull(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no space left on device") || strings.Contains(msg, "not enough space on the disk")
 }
 
 // stageJukaHubArchive unpacks a verified release archive that is already on
@@ -1138,6 +1333,8 @@ func confirmAppliedUpdate() {
 	patchState.AvailableUpdateTag = ""
 	patchState.AvailableUpdateAt = ""
 	patchState.AvailableUpdateAsset = ""
+	patchState.AvailableUpdateDigest = ""
+	patchState.AvailableUpdateSize = 0
 	patchStateMu.Unlock()
 	_ = savePatchState()
 	if dir, err := PatchStateDir(); err == nil {

@@ -237,7 +237,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: "Watch Party", where: "Tools", icon: "party", keys: "watch party together sync friends share room", open: partyOpenScreen},
 		{title: "Party Mode", where: "Tools", icon: "sparkles", keys: "party mode game show guess the game quiz trivia box art cover friends phones buzz", open: pmodeOpenScreen},
 		{title: "Toolbox", where: "Tools", icon: "toolbox", keys: "toolbox command line tools install binaries", open: tbxOpenScreen},
-		{title: "Audit toolkit", where: "Tools", icon: "audit", keys: "audit security scan pentest nmap", open: auditOpenScreen},
+		{title: "Audit toolkit", where: "Tools", icon: "audit", keys: "audit security scan pentest nmap tls ssl ssh testssl sslscan tcpdump secrets gitleaks dependencies osv yara binwalk firmware", open: auditOpenScreen},
 		{title: "Security & trust", where: "Tools", icon: "shield", keys: "security trust privacy signatures permissions safety", open: sectrustOpenScreen},
 		{title: "Report a bug", where: "Tools", icon: "bug", keys: "report bug feedback issue crash problem", open: bugrepOpenScreen},
 		{title: "Weather", where: "Tools", icon: "sun", keys: "weather forecast temperature rain", scene: "Weather"},

@@ -81,7 +81,7 @@ var owBuiltinNames = map[string]string{
 	owMusic:   "Music player",
 	owVideo:   "Video player",
 	owText:    "Text editor",
-	owHex:     "Hex view",
+	owHex:     "Hex editor",
 	owArchive: "Archive",
 	owGame:    "Play",
 	owWeb:     "Canvas sandbox",
@@ -97,7 +97,7 @@ var owBuiltinDetails = map[string]string{
 	owMusic:   "JukaHub · plays the folder as a playlist",
 	owVideo:   "JukaHub · video player",
 	owText:    "JukaHub · view and edit the text",
-	owHex:     "JukaHub · the file's bytes, read-only",
+	owHex:     "JukaHub · view and change the file's bytes",
 	owArchive: "JukaHub · see what is inside, extract",
 	owGame:    "JukaHub · the library's emulator",
 	owWeb:     "JukaHub · runs the page offline",
@@ -433,8 +433,9 @@ func owJukaChoice(path string, binary bool) string {
 }
 
 // owBuiltinHandles reports whether one of JukaHub's viewers really handles
-// the file. ctx is where the sheet was opened ("files", "editor", "reader",
-// "defaults"): the archive sheet belongs to the Files screen.
+// the file. ctx is where the sheet was opened ("files", "editor", "hex",
+// "reader", "defaults"): the archive sheet belongs to the Files screen. The
+// hex editor (fileeditor_hex.go) opens every file.
 func owBuiltinHandles(id, path string, binary bool, ctx string) bool {
 	name := filepath.Base(path)
 	ext := strings.ToLower(filepath.Ext(name))
@@ -460,7 +461,7 @@ func owBuiltinHandles(id, path string, binary bool, ctx string) bool {
 	case owText:
 		return !binary
 	case owHex:
-		return binary
+		return true
 	case owSystem:
 		return filesSystemOpenAvailable()
 	}
@@ -468,8 +469,9 @@ func owBuiltinHandles(id, path string, binary bool, ctx string) bool {
 }
 
 // owBuiltinIDs lists the viewers that handle the file, JukaHub's choice
-// first. The viewer the sheet was opened from is left out (the text page's
-// "Open with…" does not offer the text page).
+// first. The viewer the sheet was opened from is left out: the text page's
+// "Open with…" offers the hex editor and not itself, the hex editor's the
+// text editor (for a text file) and not itself.
 func owBuiltinIDs(path string, binary bool, ctx string) []string {
 	choice := owJukaChoice(path, binary)
 	ids := make([]string, 0, 6)
@@ -479,7 +481,9 @@ func owBuiltinIDs(path string, binary bool, ctx string) []string {
 			return
 		}
 		switch {
-		case ctx == "editor" && (id == owText || id == owHex):
+		case ctx == "editor" && id == owText:
+			return
+		case ctx == "hex" && id == owHex:
 			return
 		case ctx == "reader" && id == owReader:
 			return
@@ -674,7 +678,7 @@ func owRun(config *Config, h owHandler, path string, entry FileEntry, confirmed 
 	case owText:
 		return fileEditorOpen(path)
 	case owHex:
-		return filesViewerOpen(path)
+		return fileEditorOpenHex(path)
 	case owArchive:
 		return openFeArchiveSheet(config, path, false)
 	case owGame:
@@ -828,7 +832,7 @@ func owCurrentLabel(config *Config, name, path string) string {
 	if choice == owText && !fileEditorCanEdit(name) && !filesHasDedicatedViewer(name) {
 		// A type the editor does not know: A reads the file and shows text or
 		// its bytes, whichever it turns out to be.
-		return "Text or hex view"
+		return "Text or hex editor"
 	}
 	return owBuiltinNames[choice]
 }

@@ -353,7 +353,11 @@ func auditRecipeText(t secAuditTool, r auditRecipe, st auditStatus) string {
 		}
 		return text
 	case auditKindLinuxPkg:
-		return "Installs Ubuntu 24.04's arm64 package " + strings.Join(r.Packages, ", ") + " (and what it needs) through Linux packages. Ubuntu signs its package index, JukaHub accepts only Ubuntu's archive key, and every download must match the SHA-256 in that index. It runs from the card with Ubuntu's own C library; the firmware is not changed."
+		what := "package " + strings.Join(r.Packages, ", ") + " (and what it needs)"
+		if len(r.Packages) > 1 {
+			what = "packages " + strings.Join(r.Packages, ", ") + " (and what they need)"
+		}
+		return "Installs Ubuntu 24.04's arm64 " + what + " through Linux packages. Ubuntu signs its package index, JukaHub accepts only Ubuntu's archive key, and every download must match the SHA-256 in that index. It runs from the card with Ubuntu's own C library; the firmware is not changed."
 	case auditKindManual:
 		text := "Install it from the official page: " + r.Page
 		if r.Hint != "" {

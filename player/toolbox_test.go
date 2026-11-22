@@ -195,7 +195,7 @@ func TestToolboxChecksumAssetPicksThePublishedList(t *testing.T) {
 	if sum, single, ok := toolboxChecksumAsset(assets, "naabu_2.6.1_linux_arm64.zip"); !ok || single || sum.URL != "list" {
 		t.Fatalf("list = %+v single=%v ok=%v", sum, single, ok)
 	}
-	for _, name := range []string{"SHA256SUMS", "sha256sum.txt", "checksums.txt"} {
+	for _, name := range []string{"SHA256SUMS", "sha256sum.txt", "checksums.txt", "osv-scanner_SHA256SUMS"} {
 		if _, single, ok := toolboxChecksumAsset([]releaseAsset{{Name: "x.zip"}, {Name: name}}, "x.zip"); !ok || single {
 			t.Errorf("%s was not taken as the checksum list", name)
 		}

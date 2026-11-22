@@ -185,7 +185,16 @@ it. **A** on the ZIP extracts it again.
 ## Notes, Calculator, Alarms and Pomodoro
 
 - **Notes** keeps notes in folders, with search (`notes.json` beside JukaHub).
-- **Calculator** does quick maths with history and draws graphs.
+- **Calculator** is a scientific calculator: the usual precedence (`−2²` is
+  −4, `2^3^2` is 512), implicit multiplication (`2π`, `3(4)`), n!, `%` the way
+  phone calculators add it (`200 + 10%` is 220), degrees or radians, **2nd**
+  for inverse trig, eˣ, 10ˣ and roots, and **Ans**. Answers have twelve
+  significant digits (0.1 + 0.2 is 0.3); an error names itself and leaves the
+  sum to fix. The last 30 sums are kept (`calculator.json` beside JukaHub):
+  Right from the keypad walks into them, **A** uses an answer and **X**
+  brings a sum back. **Y** draws `y = f(x)` (±360° in degrees, ±10 in
+  radians). With a keyboard, type the sum and press **Enter** (see
+  [CONTROLS.md](CONTROLS.md#calculator)).
 - **Alarms** wake you with a tone or your music; the clock in the status bar
   opens them too.
 - **Pomodoro** times 25-minute focus sessions with short and long breaks.

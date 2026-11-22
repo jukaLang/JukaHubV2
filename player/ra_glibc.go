@@ -1417,6 +1417,36 @@ func raGlibcEnsureForCore(ctx context.Context, problem, target string) bool {
 	return raGlibcLoadDir(target) != ""
 }
 
+// raGlibcPending reports a load problem that only the runtime would close for
+// a core that becomes target, while the runtime is not installed (its
+// download failed or was stopped): the updater does not remember such a build
+// as refused, since the next try may install the runtime and take it.
+func raGlibcPending(problem, target string) bool {
+	if !raGlibcWanted() || strings.TrimSpace(target) == "" || !raGlibcCouldCover(problem) {
+		return false
+	}
+	if _, _, ready := raGlibcRuntime(); ready {
+		return false
+	}
+	return raGlibcResolve(coreRetroArchBinary(filepath.Dir(target))) != ""
+}
+
+// raGlibcRefusalMayPass reports a remembered refusal (core-refused.json's
+// reason) that a new try could pass: one made only of glibc gaps the runtime
+// closes, while RetroArch may start on it and — once it is installed — the
+// RetroArch that owns target's folder does ("" target: any). A refusal of any
+// other kind is final for that build.
+func raGlibcRefusalMayPass(reason, target string) bool {
+	problem, ok := strings.CutPrefix(reason, coreCannotLoadReason)
+	if !ok || !raGlibcWanted() || !raGlibcCouldCover(problem) {
+		return false
+	}
+	if _, _, ready := raGlibcRuntime(); !ready || strings.TrimSpace(target) == "" {
+		return true
+	}
+	return raGlibcLoadDir(target) != ""
+}
+
 // raGlibcRescue is corefix's look meeting active cores that cannot load: when
 // the runtime would close their gaps, it is installed (download: only when the
 // look may download) and probed. true when the look should be asked again.

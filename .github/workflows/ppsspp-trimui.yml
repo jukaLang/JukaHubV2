@@ -1,31 +1,32 @@
 name: PPSSPP for TrimUI (tg5040)
 
-# JukaHub's own PPSSPP for the A133P TrimUI handhelds (Smart Pro, Brick,
-# Hammer), built from the newest upstream PPSSPP release and published as the
-# rolling release "ppsspp-tg5040" of this repository: one asset,
-# PPSSPP-tg5040.zip, titled "PPSSPP <version> for TrimUI (tg5040)".
+# JukaHub's own build of PPSSPP 1.20.3 for the A133P TrimUI handhelds (Smart
+# Pro, Brick, Hammer), published as the release "ppsspp-tg5040" of this
+# repository: one asset, PPSSPP-tg5040.zip, titled "PPSSPP <version> for TrimUI
+# (tg5040)".
 #
-# Why: JukaHub's PSP emulator came only from ben16w/minui-psp (spruceUI's
-# builds), which lags upstream; 1.20.4 had no tg5040 build anywhere. On a
-# tg5040, ppsspp_managed.go now asks both sources and installs whichever names
-# the newer PPSSPP, with the checks it always ran (GitHub's SHA-256 digest of
-# the asset, the libraries the firmware has, the launcher that falls back to
-# the firmware's PPSSPP when a build does not start).
+# Why 1.20.3: it is the PPSSPP release TrimUI builds exist for (spruceUI's,
+# which ben16w/minui-psp packages and JukaHub installs for PSP games). Juka,
+# 2026-11-20: "use 1.20.3 which exists for Trimui". This workflow used to chase
+# the newest upstream release that still builds with SDL2 (1.20.4; 1.21 moved
+# to SDL3, which the firmware lacks) once a day, and failed every day. Now it
+# is a second source of the same version: on a tg5040, ppsspp_managed.go asks
+# both and keeps minui-psp's unless that one is missing or did not start here,
+# with the checks it always ran (GitHub's SHA-256 digest of the asset, the
+# libraries the firmware has, the launcher that falls back to the firmware's
+# PPSSPP when a build does not start).
 #
-# Daily, on a press (Actions → this workflow → Run), and on a push that changes
-# this file or player/native/build-ppsspp.sh — so the first build happens by
-# itself when this lands, and a fixed build script publishes at once. A run
-# whose release already carries the newest buildable version (and its asset)
-# stops after a few API calls unless "force" is set, so the daily run costs a
-# runner minute and catches a new PPSSPP within a day. It does not run on other
+# On a push that changes this file or player/native/build-ppsspp.sh, and on a
+# press (Actions → this workflow → Run, optionally naming another upstream
+# tag). No schedule: the version is pinned, so there is nothing new to look
+# for. A push always builds (the script changed, so a fixed build publishes at
+# once); a press whose release already carries that version (and its asset)
+# stops after two API calls unless "force" is set. It does not run on other
 # pushes, keeping the normal CI path short.
 #
-# "Newest buildable": upstream moved its SDL front end to SDL3 for 1.21
-# (hrydgard/ppsspp#22956 dropped the SDL2 leftovers, 2026-11). The TrimUI
-# firmware's display only works through its own SDL2, so a release whose
-# CMakeLists.txt no longer looks for SDL2 is skipped with a warning and the
-# newest one that still does is built (1.20.x). When upstream's latest is
-# skipped, the run says so in its summary.
+# No X11 and no Wayland anywhere: the handhelds have neither. The SDL2 the
+# build links against is configured without them (build-ppsspp.sh), and the
+# binary uses the firmware's own SDL2 at run time.
 #
 # The release is created with --latest=false, so GitHub's "latest release" —
 # which JukaHub's own updater, the README and the website download from —
@@ -39,8 +40,6 @@ name: PPSSPP for TrimUI (tg5040)
 # toolchain image carries them (copied out of it, never run), else Mesa's.
 
 on:
-  schedule:
-    - cron: "17 6 * * *"
   push:
     branches: [main]
     paths:
@@ -49,11 +48,11 @@ on:
   workflow_dispatch:
     inputs:
       force:
-        description: "Build and publish even when the release already has the newest PPSSPP"
+        description: "Build and publish even when the release already has this PPSSPP"
         type: boolean
         default: false
       tag:
-        description: "Upstream tag to build instead of the newest release (e.g. v1.20.4)"
+        description: "Upstream tag to build instead of v1.20.3 (it must still build with SDL2)"
         type: string
         default: ""
 
@@ -74,6 +73,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ppsspp-tg5040
+      # The PPSSPP TrimUI builds exist for (see the top of this file).
+      PPSSPP_TRIMUI_TAG: v1.20.3
       # The image docker-image.yml builds the handheld binary in; only its SDK
       # sysroot's GLES/EGL libraries are copied out. Same digest as there.
       TOOLCHAIN_IMAGE: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
@@ -83,54 +84,26 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Find the newest PPSSPP
+      - name: Which PPSSPP
         id: want
         env:
-          FORCE: ${{ inputs.force }}
+          # A push changed the build script or this file: build again even
+          # when the release has this version, so a fix publishes at once.
+          FORCE: ${{ inputs.force || github.event_name == 'push' }}
           WANT_TAG: ${{ inputs.tag }}
         run: |
           set -eu
-          # sdl2_ok TAG: the tag's CMakeLists.txt still builds the SDL front
-          # end against SDL2 (find_package(SDL2), not SDL2_ttf alone, or the
-          # SDL2:: target / variables). A fetch that fails stops the run
-          # rather than building something unchecked.
-          sdl2_ok() {
-            cml=$(gh api -H "Accept: application/vnd.github.raw" "repos/hrydgard/ppsspp/contents/CMakeLists.txt?ref=$1") || {
-              echo "::error::could not read CMakeLists.txt at $1"; exit 1; }
-            printf '%s\n' "$cml" | grep -v '^[[:space:]]*#' |
-              grep -Eq 'find_package[[:space:]]*\([[:space:]]*SDL2([^_[:alnum:]]|$)|SDL2::SDL2([^_[:alnum:]]|$)|SDL2_LIBRAR'
-          }
-          latest=$(gh api repos/hrydgard/ppsspp/releases/latest --jq .tag_name)
-          tag=""
-          if [ -n "${WANT_TAG:-}" ]; then
-            case "$WANT_TAG" in
-              v[0-9]*.[0-9]*) ;;
-              *) echo "::error::unexpected PPSSPP tag '$WANT_TAG'"; exit 1 ;;
-            esac
-            sdl2_ok "$WANT_TAG" || { echo "::error::PPSSPP $WANT_TAG builds with SDL3 only; the TrimUI firmware has SDL2"; exit 1; }
-            tag="$WANT_TAG"
-          else
-            # Published releases, newest version first (not by date: a 1.20.x
-            # fix can come out after 1.21.0).
-            candidates=$(gh api 'repos/hrydgard/ppsspp/releases?per_page=40' \
-              --jq '.[] | select(.draft | not) | select(.prerelease | not) | .tag_name' \
-              | grep -E '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -rV | head -n 8)
-            for cand in $candidates; do
-              if sdl2_ok "$cand"; then
-                tag="$cand"
-                break
-              fi
-              echo "::warning title=PPSSPP::$cand builds with SDL3 only (no find_package(SDL2) in CMakeLists.txt); the TrimUI firmware's display needs its SDL2, so it is skipped"
-            done
-          fi
-          if [ -z "$tag" ]; then
-            echo "::error::no recent PPSSPP release still builds with SDL2"
-            exit 1
-          fi
+          # 1.20.3 unless a press names another tag. build-ppsspp.sh refuses
+          # a tree that no longer builds with SDL2 (1.21 and later).
+          tag="${WANT_TAG:-$PPSSPP_TRIMUI_TAG}"
+          case "$tag" in
+            v[0-9]*.[0-9]*) ;;
+            *) echo "::error::unexpected PPSSPP tag '$tag'"; exit 1 ;;
+          esac
           version="${tag#v}"
           current=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json name --jq .name 2> /dev/null || true)
           assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2> /dev/null || true)
-          echo "upstream latest: $latest; building: $tag; our release: ${current:-none}"
+          echo "building: $tag; our release: ${current:-none}"
           build=true
           if [ "${FORCE:-false}" != "true" ] && [ "$current" = "PPSSPP $version for TrimUI (tg5040)" ] &&
              printf '%s\n' "$assets" | grep -qx 'PPSSPP-tg5040.zip'; then
@@ -139,7 +112,7 @@ jobs:
           fi
           {
             echo "### PPSSPP for TrimUI (tg5040)"
-            echo "- upstream latest: \`$latest\`; newest SDL2 release: \`$tag\`"
+            echo "- PPSSPP \`$tag\` (the version TrimUI builds exist for, unless a run named another)"
             echo "- release \`$RELEASE_TAG\`: ${current:-not published yet}"
             if [ "$build" = true ]; then echo "- building $tag"; else echo "- up to date"; fi
           } >> "$GITHUB_STEP_SUMMARY"
@@ -198,7 +171,7 @@ jobs:
           {
             echo "JukaHub's own build of upstream PPSSPP for the TrimUI Smart Pro, Brick and Hammer (tg5040)."
             echo "JukaHub installs it by itself (Settings → Games & emulators → Emulator updates)."
-            echo "This release is replaced in place whenever upstream publishes a new version."
+            echo "PPSSPP $VERSION; rebuilt in place when its build script changes."
             echo
             echo '```'
             unzip -p "$zip" PPSSPP/BUILDINFO.txt

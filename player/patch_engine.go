@@ -340,6 +340,13 @@ type PatchState struct {
 	AvailableUpdateTag   string `json:"available_update_tag,omitempty"`
 	AvailableUpdateAt    string `json:"available_update_published_at,omitempty"`
 	AvailableUpdateAsset string `json:"available_update_asset,omitempty"`
+	// What GitHub's API said about that archive when the release was offered
+	// ("sha256:<hex>" and bytes). An install that cannot reach the API — its
+	// hourly limit counts every device on the network — downloads the archive
+	// from the release's own folder and checks it against these
+	// (jukaHubReleaseFromPage).
+	AvailableUpdateDigest string `json:"available_update_digest,omitempty"`
+	AvailableUpdateSize   int64  `json:"available_update_size,omitempty"`
 	// Release notes are cached so the in-app changelog can open immediately
 	// after a restart, before (or without) a network round trip. The body is
 	// GitHub's release markdown or notes from its tagged commits.
@@ -1666,7 +1673,8 @@ func fetchBounded(ctx context.Context, client *http.Client, raw string, maxBytes
 		return nil, fmt.Errorf("HTTP 304 from %s without a cached copy", raw)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
+		// The status and URL stay first: emuRateLimited and relpack read them.
+		return nil, fmt.Errorf("HTTP %d from %s%s", resp.StatusCode, raw, githubLimitNote(resp, time.Now()))
 	}
 	limited := io.LimitReader(resp.Body, maxBytes+1)
 	data, err := io.ReadAll(limited)
@@ -1856,9 +1864,13 @@ type githubRelease struct {
 
 // FetchLatestJukaHubRelease returns the newest JukaHub app release for the
 // selected channel. The repository's other releases (RetroArch cores and
-// emulator runtimes) are excluded by tag before they can be advertised.
+// emulator runtimes) are excluded by tag before they can be advertised. When
+// GitHub's API does not answer (its 60 lookups an hour per network are often
+// gone: every device and PC running JukaHub there asks it for emulators, cores
+// and PortMaster too), the repository's latest-release page names the release
+// instead (autoupdate_channel.go).
 func FetchLatestJukaHubRelease(ctx context.Context) (*githubRelease, error) {
-	return fetchJukaHubRelease(ctx, updateChannelBetaOn.Load())
+	return fetchJukaHubReleaseOrPage(ctx, updateChannelBetaOn.Load())
 }
 
 // FindManifestAsset returns the release asset whose name matches the manifest

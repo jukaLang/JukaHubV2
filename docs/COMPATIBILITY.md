@@ -207,7 +207,11 @@ reason — "the 2026-11-09 build cannot load on this firmware: needs GLIBC_2.34;
 this firmware's libc.so.6 has up to GLIBC_2.33" — the installed core stays, and
 that exact build (by its checksum) is remembered in
 `data/performance/core-refused.json` so the daily check does not download it
-again; the next build the index lists is checked as usual.
+again; the next build the index lists is checked as usual. The same check
+refuses a build that links a device-access library — libudev, libusb, BlueZ's
+libbluetooth, libevdev — that neither the firmware's folders nor RetroArch's
+own have: RetroArch does not bring those, and every start would end at its
+`dlopen`.
 
 On the 64-bit TrimUI handhelds a symbol version the firmware lacks is no
 longer the end of it: with Settings → Games & emulators → **RetroArch's C
@@ -217,7 +221,12 @@ A build whose only problem is such a gap in libc, libm, libpthread, libdl,
 librt, libstdc++ or libgcc_s gets that runtime installed and RetroArch probed
 first, then the check reads the runtime's libraries before the firmware's — so
 the newest nightlies install. Builds refused only for that are fetched again
-once a RetroArch passes the probe. **Firmware's only** restores the strict
+once a RetroArch passes the probe. A core the card does not have yet is
+checked as the file it will become, in the first cores folder JukaHub may
+write, whose RetroArch decides; until 2026-11-20 it was checked against the
+firmware's libraries alone, which refused the buildbot's Dolphin
+(`GLIBCXX_3.4.32`) on a Brick Pro whose RetroArch could have run it. A build
+refused only because the runtime's download failed is not remembered. **Firmware's only** restores the strict
 check above. Archives are
 streamed to the card, including MAME's build, which exceeds the old 96 MB
 limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused
@@ -252,8 +261,11 @@ JukaHub puts a build that loads in place of such a core
    core's newest upstream libretro commit in the Ubuntu 20.04 (glibc 2.31)
    arm64 build root (`player/native/build-cores.sh`: mGBA, Gambatte, gpSP,
    Snes9x, Snes9x 2005, FCEUmm, Nestopia, PicoDrive, Genesis Plus GX,
-   PCSX-ReARMed, Beetle PCE Fast, Beetle WonderSwan, Beetle NeoPop and
-   FinalBurn Neo). Its `index-extended.txt` has the buildbot's own format, so
+   PCSX-ReARMed, Beetle PCE Fast, Beetle WonderSwan, Beetle NeoPop,
+   FinalBurn Neo, FreeJ2ME-Plus, WASM-4 and Dolphin — Dolphin with GCC 13 from
+   Ubuntu's toolchain PPA, since its tree needs C++23, and libstdc++ linked in;
+   Dolphin's own setup installs it before the buildbot's nightly). Its
+   `index-extended.txt` has the buildbot's own format, so
    the download goes through the usual checks: allowlisted hosts, the index's
    CRC32, and the load check against this firmware.
 
@@ -280,6 +292,21 @@ in one toast per broken build, then only logged.
 To do the same by hand: download the core's zip from the `cores-aarch64`
 release and unzip it into `RetroArch/.retroarch/cores/` over the file of the
 same name.
+
+#### Cores the handheld does not offer
+
+The Emulators page lists every core the buildbot publishes for this device as
+a tile to install, and **Get more cores** picks from the same list. Neither
+offers a core that cannot work on a TrimUI handheld (`player/coretrimui.go`):
+one for a console no TrimUI chip runs (3DS, Wii U, PS3, Vita, Switch, Xbox
+360 — and GameCube and Wii while **GameCube & Wii** is Off), a PS2 core other
+than ARMSX2 (Play!, PCSX2), Kronos (desktop OpenGL 4.3), Beetle Saturn and the
+accuracy-first bsnes and higan builds (a desktop-class CPU), Doom 3, RemoteJoy
+(a PSP on a USB cable), the video processor (a capture card), Dolphin's
+launcher core and RetroArch's developer tests; nor a build this device already
+refused for a reason no new try changes (not one JukaHub's private glibc would
+fix) — the buildbot's next build of that core gets its own check, and its tile
+comes back. A core that is installed is always listed, whatever it is.
 
 ### Core updates and your save states
 

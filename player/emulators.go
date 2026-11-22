@@ -775,15 +775,27 @@ func emuCoreEntries(coresDir string) ([]emuEntry, map[string]bool) {
 }
 
 // emuPublishedCoreRows adds every core the handheld's buildbot channel offers
-// that is not already installed or represented by a launcher/system tile. The
+// that is not already installed or represented by a launcher/system tile, and
+// that can work on a TrimUI handheld at all (coreTrimuiMisfit: not the 3DS's,
+// the Wii U's, a desktop-only renderer, a build this device refused…). The
 // index is fetched in the background; no catalog build waits for the network.
 func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, existing map[string]emuEntry) []emuEntry {
 	rows := make([]emuEntry, 0, len(index))
+	hidden := 0
+	defer func() {
+		if hidden > 0 {
+			logDebug("emulators", "%d published core(s) not listed: they cannot work on this handheld (coretrimui.go)", hidden)
+		}
+	}()
 	for _, entry := range index {
 		if entry.Core == "" || installed[entry.Core] {
 			continue
 		}
 		if _, present := existing[strings.ToLower(entry.Core)]; present {
+			continue
+		}
+		if coreTrimuiMisfit(entry.Core, entry.CRC32) != "" {
+			hidden++
 			continue
 		}
 		detail := "Downloadable RetroArch core · " + entry.Date

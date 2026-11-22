@@ -12,12 +12,14 @@ package main
 //     carry; or, where the project ships only a format JukaHub cannot unpack, a
 //     button that opens the official download page.
 //   - The handheld (TrimUI, Linux arm64, no desktop): static arm64 releases
-//     where the project publishes them (verified against the release's
-//     checksum list); Ubuntu's arm64 packages through Linux packages
-//     (linuxpkg_*.go: Ubuntu's signed index, every download checked against
-//     it) for Nmap, John the Ripper and Aircrack-ng (without the helper
-//     programs it brings for uses the handheld does not have, SkipDeps), and
-//     for the Python and Perl a script tool needs with its modules (Modules),
+//     where the project publishes them (Nuclei, OSV-Scanner, Gitleaks;
+//     verified against the release's checksum list); Ubuntu's arm64 packages
+//     through Linux packages (linuxpkg_*.go: Ubuntu's signed index, every
+//     download checked against it) for Nmap, John the Ripper, Aircrack-ng
+//     (without the helper programs it brings for uses the handheld does not
+//     have, SkipDeps), testssl.sh, sslscan, ssh-audit, tcpdump, YARA and
+//     Binwalk, and for the Python and Perl a script tool needs with its
+//     modules (Modules),
 //     installed as part of its install press, before it opens when one is
 //     missing, and at a quiet moment by the daily pass (audit_interp_auto.go);
 //     and an honest "Not available on this device" with the reason for
@@ -149,13 +151,23 @@ func auditPlatformLabel(p auditPlatform) string {
 	return runtime.GOOS + " " + runtime.GOARCH
 }
 
+// auditArchX64 is this machine's architecture as releases that call x86-64
+// "x64" spell it (Gitleaks); other architectures keep Go's name.
+func auditArchX64() string {
+	if runtime.GOARCH == "amd64" {
+		return "x64"
+	}
+	return runtime.GOARCH
+}
+
 // secAuditTool is one entry in the audit catalog.
 type secAuditTool struct {
 	// ID is the stable key used in rows and actions.
 	ID string
 	// Name is what the row shows.
 	Name string
-	// Category groups the list: "Web & API", "Network" or "Validation".
+	// Category groups the list: "Web & API", "TLS & SSH", "Network", "Code &
+	// dependencies", "Files & firmware" or "Validation".
 	Category string
 	// Summary is one line about what the tool is for.
 	Summary string
@@ -197,6 +209,8 @@ func (t secAuditTool) Recipe(p auditPlatform) auditRecipe {
 // secAuditCatalog is the list, grouped the way a security review is usually
 // organised.
 func secAuditCatalog() []secAuditTool {
+	// What OSV-Scanner sends, and where; the same on every platform.
+	const osvNote = "It looks up the packages it finds in the OSV.dev database: their names and versions leave the device, your code does not. Try osv-scanner scan source -r <folder>."
 	return []secAuditTool{
 		// ── Web application & API testing ──────────────────────────────────
 		{
@@ -311,6 +325,69 @@ func secAuditCatalog() []secAuditTool {
 			},
 		},
 
+		// ── TLS and SSH configuration ──────────────────────────────────────
+		{
+			ID:           "testssl",
+			Name:         "testssl.sh",
+			Category:     "TLS & SSH",
+			Summary:      "Grades a server's TLS: protocols, ciphers, certificate, known flaws",
+			Binaries:     []string{"testssl", "testssl.sh"},
+			Version:      []string{"--version"},
+			Start:        []string{"--help"},
+			Install:      "apt install testssl.sh",
+			SendsTraffic: true,
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindManual, Page: "https://testssl.sh/",
+					Note: "testssl.sh is a Bash script: on Windows it runs inside WSL, MSYS2 or Cygwin."},
+				// Ubuntu installs the script as testssl, with its data (cipher
+				// mapping, CA stores) under /usr/share — on the card here, so
+				// the Linux packages environment points TESTSSL_INSTALL_DIR at
+				// it (linuxPkgEnvScript). Bash is asked for by name: it is
+				// Essential, so no package depends on it, and the firmware's
+				// shell cannot run the script.
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"testssl.sh", "bash"}, Entry: "testssl",
+					Note: "A full check takes a few minutes on the handheld. Give the port when it is not 443, as in example.org:8443."},
+				auditPlatformLinux: {Kind: auditKindManual, Page: "https://testssl.sh/", Hint: "sudo apt install testssl.sh"},
+			},
+		},
+		{
+			ID:           "sslscan",
+			Name:         "sslscan",
+			Category:     "TLS & SSH",
+			Summary:      "Quick list of the TLS protocols and ciphers a server accepts",
+			Binaries:     []string{"sslscan"},
+			Version:      []string{"--version"},
+			Start:        []string{"--help"},
+			Install:      "apt install sslscan",
+			SendsTraffic: true,
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindManual, Page: "https://github.com/rbsec/sslscan/releases",
+					Note: "The project's releases page carries a Windows build, which the project calls experimental."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"sslscan"}, Entry: "sslscan",
+					Note: "For the fuller report (certificate chain, known TLS flaws, client simulations), use testssl.sh."},
+				auditPlatformLinux: {Kind: auditKindManual, Page: "https://github.com/rbsec/sslscan", Hint: "sudo apt install sslscan"},
+			},
+		},
+		{
+			ID:           "sshaudit",
+			Name:         "ssh-audit",
+			Category:     "TLS & SSH",
+			Summary:      "Checks an SSH server's algorithms and keys against hardening advice",
+			Binaries:     []string{"ssh-audit", "ssh-audit.py"},
+			Version:      []string{"-h"},
+			Start:        []string{"-h"},
+			Install:      "pip install ssh-audit",
+			SendsTraffic: true,
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindScript, Needs: "python", Entry: "ssh-audit.py",
+					URL: "https://github.com/jtesta/ssh-audit/archive/refs/heads/master.zip"},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"ssh-audit"}, Entry: "ssh-audit",
+					Note: "Its help screen starts with the version. ssh-audit -c audits an SSH client instead: it listens on port 2222 for the client to connect."},
+				auditPlatformLinux: {Kind: auditKindScript, Needs: "python", Entry: "ssh-audit.py",
+					URL: "https://github.com/jtesta/ssh-audit/archive/refs/heads/master.zip"},
+			},
+		},
+
 		// ── Network & traffic analysis ─────────────────────────────────────
 		{
 			ID:       "nmap",
@@ -351,8 +428,29 @@ func secAuditCatalog() []secAuditTool {
 					Page: "https://www.wireshark.org/download.html",
 					Note: "Capturing needs Npcap, which the Wireshark installer offers to install."},
 				auditPlatformHandheld: {Kind: auditKindNone,
-					Reason: "Wireshark is a desktop application, and the handheld has no desktop to show it."},
+					Reason: "Wireshark is a desktop application, and the handheld has no desktop to show it. tcpdump, in this list, captures on the handheld to a file Wireshark opens on a computer."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.wireshark.org/download.html", Hint: "sudo apt install wireshark"},
+			},
+		},
+		{
+			ID:           "tcpdump",
+			Name:         "tcpdump",
+			Category:     "Network",
+			Summary:      "Records packets on this device's own interfaces to a capture file",
+			Binaries:     []string{"tcpdump"},
+			Version:      []string{"--version"},
+			Start:        []string{"--help"},
+			Install:      "apt install tcpdump",
+			SendsTraffic: true,
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindNone,
+					Reason: "tcpdump is a Unix tool. On Windows, Wireshark (in this list) captures, and its installer brings the dumpcap command too."},
+				// Ubuntu builds tcpdump to give up root for a "tcpdump" user,
+				// which only its maintainer script would add; -Z root keeps
+				// root.
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"tcpdump"}, Entry: "tcpdump",
+					Note: "Ubuntu's tcpdump switches to a \"tcpdump\" user the handheld does not have, so start captures with -Z root, as in tcpdump -Z root -i wlan0 -w /mnt/SDCARD/capture.pcap. Copy the file to a computer to read it in Wireshark."},
+				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.tcpdump.org/", Hint: "sudo apt install tcpdump"},
 			},
 		},
 		{
@@ -380,6 +478,91 @@ func secAuditCatalog() []secAuditTool {
 					SkipDeps: []string{"ethtool", "hwloc", "iw", "python3", "rfkill", "usbutils", "wireless-tools"},
 					Note:     "Analysis only: the handheld's Wi-Fi chip cannot capture in monitor mode, so aircrack-ng works on captures you copy to the card from another device. Its adapter set-up helpers are not installed."},
 				auditPlatformLinux: {Kind: auditKindManual, Page: "https://www.aircrack-ng.org/downloads.html", Hint: "sudo apt install aircrack-ng"},
+			},
+		},
+
+		// ── Code and dependencies ──────────────────────────────────────────
+		{
+			ID:       "osvscanner",
+			Name:     "OSV-Scanner",
+			Category: "Code & dependencies",
+			Summary:  "Finds known vulnerabilities in a project's dependencies and lockfiles",
+			Binaries: []string{"osv-scanner"},
+			Version:  []string{"--version"},
+			Start:    []string{"--help"},
+			Install:  "github.com/google/osv-scanner/releases",
+			Recipes: map[auditPlatform]auditRecipe{
+				// One static program per platform, listed in the release's
+				// osv-scanner_SHA256SUMS (toolboxChecksumAsset).
+				auditPlatformWindows: {Kind: auditKindGitHub, Repo: "google/osv-scanner", Entry: "osv-scanner.exe",
+					Assets: [][]string{{"osv-scanner", "windows", "amd64", ".exe"}},
+					Note:   osvNote},
+				auditPlatformHandheld: {Kind: auditKindGitHub, Repo: "google/osv-scanner", Entry: "osv-scanner",
+					Assets: [][]string{{"osv-scanner", "linux", "arm64"}},
+					Note:   osvNote},
+				auditPlatformLinux: {Kind: auditKindGitHub, Repo: "google/osv-scanner", Entry: "osv-scanner",
+					Assets: [][]string{{"osv-scanner", "linux", runtime.GOARCH}},
+					Note:   osvNote},
+			},
+		},
+		{
+			ID:       "gitleaks",
+			Name:     "Gitleaks",
+			Category: "Code & dependencies",
+			Summary:  "Finds passwords, API keys and tokens committed to code or folders",
+			Binaries: []string{"gitleaks"},
+			Version:  []string{"version"},
+			Start:    []string{"--help"},
+			Install:  "github.com/gitleaks/gitleaks/releases",
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindGitHub, Repo: "gitleaks/gitleaks", Entry: "gitleaks.exe",
+					Assets: [][]string{{"windows", "x64", ".zip"}},
+					Note:   "gitleaks dir <folder> scans files; gitleaks git <folder> reads a repository's history and needs Git for Windows."},
+				auditPlatformHandheld: {Kind: auditKindGitHub, Repo: "gitleaks/gitleaks", Entry: "gitleaks",
+					Assets: [][]string{{"linux", "arm64", ".tar.gz"}},
+					Note:   "gitleaks dir <folder> scans files; gitleaks git <folder> reads a repository's history and needs git, from Linux packages."},
+				auditPlatformLinux: {Kind: auditKindGitHub, Repo: "gitleaks/gitleaks", Entry: "gitleaks",
+					Assets: [][]string{{"linux", auditArchX64(), ".tar.gz"}}},
+			},
+		},
+
+		// ── Files and firmware ─────────────────────────────────────────────
+		{
+			ID:       "yara",
+			Name:     "YARA",
+			Category: "Files & firmware",
+			Summary:  "Scans files against malware-detection rules you provide",
+			Binaries: []string{"yara", "yara64"},
+			Paths: []string{
+				`$LOCALAPPDATA\Microsoft\WinGet\Links\yara.exe`,
+				`$LOCALAPPDATA\Microsoft\WinGet\Links\yara64.exe`,
+			},
+			Version: []string{"--version"},
+			Start:   []string{"--help"},
+			Install: "apt install yara",
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindWinget, WingetID: "VirusTotal.YARA", Page: "https://github.com/VirusTotal/yara/releases",
+					Note: "YARA brings no rules: save .yar rule files you trust, then run yara -r rules.yar <folder>. If it does not start, install the Microsoft Visual C++ Redistributable."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"yara"}, Entry: "yara",
+					Note: "YARA brings no rules: copy .yar rule files you trust to the card, then run yara -r rules.yar <folder>."},
+				auditPlatformLinux: {Kind: auditKindManual, Page: "https://virustotal.github.io/yara/", Hint: "sudo apt install yara"},
+			},
+		},
+		{
+			ID:       "binwalk",
+			Name:     "Binwalk",
+			Category: "Files & firmware",
+			Summary:  "Looks inside firmware images for embedded files and file systems",
+			Binaries: []string{"binwalk"},
+			Version:  []string{"--help"},
+			Start:    []string{"--help"},
+			Install:  "apt install binwalk",
+			Recipes: map[auditPlatform]auditRecipe{
+				auditPlatformWindows: {Kind: auditKindNone,
+					Reason: "Binwalk is a Linux tool. On Windows it runs inside WSL (sudo apt install binwalk there)."},
+				auditPlatformHandheld: {Kind: auditKindLinuxPkg, Packages: []string{"binwalk"}, Entry: "binwalk",
+					Note: "Signature scans (binwalk image.bin) work as installed. Extracting (-e) calls separate unpackers, such as squashfs-tools for SquashFS images, which Linux packages can add."},
+				auditPlatformLinux: {Kind: auditKindManual, Page: "https://github.com/ReFirmLabs/binwalk", Hint: "sudo apt install binwalk"},
 			},
 		},
 
@@ -1018,13 +1201,13 @@ func auditInstallLinuxPkg(t secAuditTool, r auditRecipe, refresh bool) (report s
 	if err := linuxPkgEnsureSkipping(ctx, r.Packages, r.SkipDeps, refresh, linuxPkgBarIOTail(run, tail)); err != nil {
 		return "", fmt.Errorf("%s: %w", t.Name, err)
 	}
-	path := linuxPkgWrapperPath(r.Entry)
+	path := auditLinuxPkgProgram(t, r)
 	if path == "" {
 		// Installed, but the run that unpacked it ended before its wrapper
 		// was written (installing again then changes nothing): write them
 		// again from what is installed.
 		werr := linuxPkgRebuildRuntime()
-		if path = linuxPkgWrapperPath(r.Entry); path == "" {
+		if path = auditLinuxPkgProgram(t, r); path == "" {
 			why := linuxPkgProgramMissing(r.Entry)
 			if werr != nil {
 				why += " (" + werr.Error() + ")"
@@ -1040,6 +1223,22 @@ func auditInstallLinuxPkg(t secAuditTool, r auditRecipe, refresh bool) (report s
 	linuxPkgSummaryForget()
 	installBarDoneRun(run)
 	return t.Name + " " + version + " installed from Ubuntu's arm64 packages.\n\nUbuntu's package index is signed with its archive key, and every download matched the SHA-256 listed there.", nil
+}
+
+// auditLinuxPkgProgram is the wrapper of a Linux-packages tool's program: the
+// recipe's Entry, else the first of the tool's Binaries that has one (Ubuntu
+// names a few programs differently from their projects — testssl.sh is
+// testssl there). "" when none is written.
+func auditLinuxPkgProgram(t secAuditTool, r auditRecipe) string {
+	if p := linuxPkgWrapperPath(r.Entry); p != "" {
+		return p
+	}
+	for _, name := range t.Binaries {
+		if p := linuxPkgWrapperPath(name); p != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 // auditUpdate brings an installed tool to the latest version.
@@ -1075,7 +1274,14 @@ func auditRemove(t secAuditTool, r auditRecipe) (string, error) {
 		return auditWingetRun(ctx, "uninstall", "--id", r.WingetID, "--exact")
 	}
 	if r.Kind == auditKindLinuxPkg {
-		if err := linuxPkgRemoveNames(r.Packages, &linuxPkgIO{}); err != nil {
+		// The tool's own package goes, with what it brought along that
+		// nothing else needs. A companion asked for by name beside it
+		// (testssl.sh's bash) stays: the Terminal may use it too.
+		names := r.Packages
+		if len(names) > 1 {
+			names = names[:1]
+		}
+		if err := linuxPkgRemoveNames(names, &linuxPkgIO{}); err != nil {
 			return "", fmt.Errorf("remove %s: %w", t.Name, err)
 		}
 		auditForgetRecord(t.ID)

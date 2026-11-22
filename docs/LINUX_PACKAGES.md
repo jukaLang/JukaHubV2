@@ -31,7 +31,8 @@ resolver and unpacking, `_runtime` wrappers, `_cli` commands, `_ui` page,
   puts the installed programs on that shell's `PATH`.
 - **Audit toolkit**: installing sqlmap or Nikto installs Python 3 or Perl
   first when the handheld has none, with Nikto's Perl modules; Nmap, John the
-  Ripper and Aircrack-ng install from here (see
+  Ripper, Aircrack-ng, testssl.sh (with `bash`), sslscan, ssh-audit, tcpdump,
+  YARA and Binwalk install from here (see
   [Toolbox](TOOLBOX.md#on-the-handheld-trimui)). Aircrack-ng is installed
   without the helper programs its package brings for capturing (below).
 - **The daily Emulator updates pass** (in *Install automatically*) installs
@@ -107,10 +108,10 @@ wrapper that runs it with the wrapped interpreter. `bin/.jpkg-env` sets what
 relocated programs need, only for what is installed: `PYTHONHOME`, `PERL5LIB`
 (Ubuntu perl's `@INC` under the root), `GCONV_PATH`, `TERMINFO_DIRS`,
 `SSL_CERT_FILE` / `CURL_CA_BUNDLE` / `GIT_SSL_CAINFO`, `OPENSSL_CONF`, `TZDIR`,
-`GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `NMAPDIR`, `MAGIC`, and `LC_ALL=C.UTF-8`
-when another locale is asked for (only the C locales exist here). The loader
-is started once after `libc6` is installed, as the proof that it runs on this
-kernel; the result is in the log (`linuxpkg`).
+`GIT_EXEC_PATH`, `GIT_TEMPLATE_DIR`, `NMAPDIR`, `TESTSSL_INSTALL_DIR`, `MAGIC`,
+and `LC_ALL=C.UTF-8` when another locale is asked for (only the C locales exist
+here). The loader is started once after `libc6` is installed, as the proof that
+it runs on this kernel; the result is in the log (`linuxpkg`).
 
 John the Ripper needs one file more than the environment can give it. Ubuntu's
 build has `/etc/john/john.conf` compiled in and no option to move it, while the

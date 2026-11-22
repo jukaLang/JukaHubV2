@@ -566,7 +566,7 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		"table-layout", "border-collapse", "border-spacing",
 		"container", "container-name", "container-type", "content", "counter-increment",
 		"counter-reset", "counter-set", "display", "flex",
-		"flex-basis", "flex-direction", "flex-flow", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-size",
+		"flex-basis", "flex-direction", "flex-flow", "flex-grow", "flex-shrink", "flex-wrap", "float", "font", "font-family", "font-size",
 		"font-style", "font-weight", "gap", "grid-template-columns", "grid-column",
 		"grid-column-start", "grid-column-end", "grid-template-rows", "grid-row",
 		"grid-row-start", "grid-row-end", "grid-template-areas", "grid-area",
@@ -584,6 +584,9 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		"text-decoration-line", "text-decoration-style", "text-indent", "text-shadow", "text-transform", "top",
 		"overflow", "overflow-x", "overflow-y", "overflow-wrap", "word-wrap", "word-break", "text-overflow",
 		"vertical-align", "visibility", "white-space", "width", "word-spacing", "z-index",
+		// Rendered since 2026-11-21: an inline <svg>'s root paint
+		// (webpage_svg.go) and translate() on positioned boxes.
+		"fill", "stroke", "transform",
 	} {
 		classified[name] = true
 	}

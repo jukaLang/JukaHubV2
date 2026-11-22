@@ -96,6 +96,11 @@ type webImagePos struct {
 	Clip           sdl.Rect
 	HasClip        bool
 	Opacity        float64
+	// Radius rounds the picture itself, in device pixels and already clamped
+	// to half the shorter side: border-radius on an <img> (a circular avatar,
+	// a rounded thumbnail) or on a background layer that covers its whole
+	// box. Zero draws the square texture.
+	Radius int32
 }
 
 // webSrcsetTargetWidth is the design-pixel width a responsive image should
@@ -409,12 +414,13 @@ func (p *webParser) webSrcsetPickForImage(srcset, sizes string) string {
 }
 
 // webImageTypeSupported reports whether the <source type> MIME is one this
-// build can actually decode. Picture art direction must not pick an AVIF or
-// SVG source only to render the placeholder.
+// build can actually decode. Picture art direction must not pick an AVIF
+// source only to render the placeholder. SVG is drawn by the reader itself
+// (webpage_svg.go).
 func webImageTypeSupported(value string) bool {
 	mime := strings.ToLower(strings.TrimSpace(strings.SplitN(value, ";", 2)[0]))
 	switch mime {
-	case "image/png", "image/apng", "image/jpeg", "image/jpg", "image/gif", "image/bmp":
+	case "image/png", "image/apng", "image/jpeg", "image/jpg", "image/gif", "image/bmp", "image/svg+xml":
 		return true
 	case "image/webp":
 		return webpDecodable()
@@ -488,17 +494,18 @@ func webImageAttrValue(attrs string, names ...string) string {
 	return ""
 }
 
-// webImageURL resolves an img src into either a data:image/...;base64 URI or
-// an http(s) URL relative to the document. Anything else (svg data URIs, ftp,
-// javascript, or a relative URL on a base-less page) returns "", which keeps
-// alt text rendering instead of a dead weight in the layout.
+// webImageURL resolves an img src into either a data:image/...;base64 URI, an
+// SVG data URI in any encoding (CSS backgrounds percent-encode them), or an
+// http(s) URL relative to the document. Anything else (ftp, javascript, or a
+// relative URL on a base-less page) returns "", which keeps alt text rendering
+// instead of a dead weight in the layout.
 func (p *webParser) webImageURL(src string) string {
 	src = strings.TrimSpace(src)
 	if src == "" {
 		return ""
 	}
-	if strings.HasPrefix(src, "data:image/") {
-		if strings.Contains(src, ";base64,") {
+	if strings.HasPrefix(src, "data:image/") || webIsSVGDataURI(src) {
+		if strings.Contains(src, ";base64,") || webIsSVGDataURI(src) {
 			return src
 		}
 		return ""
@@ -612,8 +619,16 @@ func webpImageSize(data []byte) (int, int, bool) {
 }
 
 // decodeWebImageDataURI decodes a data:image/...;base64 URI into raw bytes
-// (plus its meta) without touching the network.
+// (plus its meta) without touching the network. An SVG data URI comes back
+// rasterised to PNG, with the SVG's intrinsic size as its meta.
 func decodeWebImageDataURI(src string) ([]byte, webImageMeta, bool) {
+	if webIsSVGDataURI(src) {
+		markup, ok := webSVGDataURIBytes(src)
+		if !ok {
+			return nil, webImageMeta{}, false
+		}
+		return webRasterizeSVG(markup, webSVGOptions{})
+	}
 	comma := strings.Index(src, ";base64,")
 	if comma < 0 {
 		return nil, webImageMeta{}, false
@@ -640,10 +655,18 @@ func decodeWebImageDataURI(src string) ([]byte, webImageMeta, bool) {
 	return raw, decodeWebImageMeta(raw), true
 }
 
-// webImageDimsFromBlock works out the layout-time box for one image. Attribute
-// sizes scale like CSS px; the recorded natural pixel size wins when it is
-// larger, because authors put full-resolution photos behind small attributes.
-func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) (w, h int32) {
+// webImageDimsFromBlock works out the layout-time box for one image. scale is
+// the reader's CSS→device factor (baseSize/16), the one text and block widths
+// already use, so a 120px image sits beside 16px text the way it does in a
+// browser instead of at two thirds of that. CSS width/height win; the
+// width/height attributes come next, because they are presentational hints
+// for CSS width/height (a 400px avatar file behind width="40" draws 40 CSS
+// px, not 400); only an image with neither falls back to its natural size,
+// which webImageMeta records in CSS px at 1x.
+func webImageDimsFromBlock(b webBlock, doc *webDocument, scale float64, contentW int32) (w, h int32) {
+	if scale <= 0 {
+		scale = 1
+	}
 	var meta webImageMeta
 	if doc != nil {
 		meta, _ = doc.imageMeta(b.ImageSrc)
@@ -677,24 +700,39 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	if b.Style.WidthPct > 0 {
 		cssW = int32(float64(contentW) * b.Style.WidthPct / 100)
 	} else if b.Style.Width > 0 {
-		cssW = int32(b.Style.Width * float64(scale))
+		cssW = int32(math.Round(b.Style.Width * scale))
 	}
 	if b.Style.Height > 0 {
-		cssH = int32(b.Style.Height * float64(scale))
+		cssH = int32(math.Round(b.Style.Height * scale))
 	}
-	w = int32(0)
-	if cssW > 0 {
-		w = cssW
-	} else {
-		if b.ImageW > 0 {
-			w = int32(b.ImageW * float64(scale))
-		}
-		if meta.HasSize && int32(meta.W) > w {
-			w = int32(meta.W)
+	attrW, attrH := int32(0), int32(0)
+	if b.ImageW > 0 {
+		attrW = int32(math.Round(b.ImageW * scale))
+	}
+	if b.ImageH > 0 {
+		attrH = int32(math.Round(b.ImageH * scale))
+	}
+	w = cssW
+	if w <= 0 {
+		w = attrW
+	}
+	// No width yet: a definite height (CSS first, then the attribute) and a
+	// known shape give it, the way `height: 40px` sizes a logo in a browser
+	// instead of stretching the file's natural width under a short box.
+	heightHint := cssH
+	if heightHint <= 0 {
+		heightHint = attrH
+	}
+	if w <= 0 && heightHint > 0 {
+		switch {
+		case aspect > 0:
+			w = int32(float64(heightHint) * aspect)
+		case ratio > 0:
+			w = int32(float64(heightHint) / ratio)
 		}
 	}
-	if w <= 0 && cssH > 0 && aspect > 0 {
-		w = int32(float64(cssH) * aspect)
+	if w <= 0 && meta.HasSize && meta.W > 0 {
+		w = int32(math.Round(float64(meta.W) * scale))
 	}
 	if w <= 0 {
 		// No size hint at all: a comfortable reading width beats a sliver.
@@ -715,12 +753,14 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 		h = cssH
 	case ratio > 0:
 		h = int32(float64(w) * ratio)
+	case attrH > 0:
+		h = attrH
 	default:
 		h = w * 3 / 4
 	}
 	// width/min-width/max-width and the height constraints apply to the
 	// replaced element's box too. Keep the source ratio when one side moves.
-	scaleF := float64(scale)
+	scaleF := scale
 	if b.Style.BoxSizing == 1 && (b.Style.Width > 0 || b.Style.WidthPct > 0) {
 		w -= int32((b.Indent + b.Style.IndentRight) * scaleF)
 		if w < webMinImagePx {
@@ -935,7 +975,27 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 	defer cancel()
 
 	var remote []string
+	// The page's sprite sheets are parsed once for all of its inline icons.
+	var svgDefs []*webSVGDoc
+	svgDefsParsed := false
 	for _, src := range srcs {
+		// An inline <svg> is drawn here from the markup the parser kept; its
+		// key is not an address and never goes to the network.
+		if strings.HasPrefix(src, webSVGInlinePrefix) {
+			if !svgDefsParsed {
+				svgDefs, svgDefsParsed = webSVGParseDefs(doc.SVGDefs), true
+			}
+			data, m, ok := doc.rasterizeInlineSVG(src, svgDefs)
+			if ok && int64(len(data)) <= budget {
+				budget -= int64(len(data))
+				images[src] = data
+				fetched[src] = m
+				commitDoc(src, data, m)
+			} else {
+				fetched[src] = webImageMeta{}
+			}
+			continue
+		}
 		// Data URIs need no network but still occupy the page's image budget.
 		if data, m, ok := decodeWebImageDataURI(src); ok {
 			if int64(len(data)) <= budget {
@@ -986,7 +1046,15 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 
 				body := fetchWebImageBytes(ctx, doc.URL, src, reserve)
 				var m webImageMeta
-				if len(body) > 0 {
+				if len(body) > 0 && webSVGLooksLike(body) {
+					// SDL_image may not read SVG at all: the reader draws it
+					// and hands the picture on as a PNG.
+					if raster, sm, ok := webRasterizeSVG(body, webSVGOptions{}); ok {
+						body, m = raster, sm
+					} else {
+						body = nil
+					}
+				} else if len(body) > 0 {
 					m = decodeWebImageMeta(body)
 				}
 				mu.Lock()
@@ -1085,7 +1153,7 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 	if scale <= 0 {
 		scale = 1
 	}
-	w, h := webImageDimsFromBlock(b, l.doc, int32(scale), contentW)
+	w, h := webImageDimsFromBlock(b, l.doc, scale, contentW)
 	idx := int32(len(layout.Rows))
 	slots := int32((h + rowH - 1) / rowH)
 	if slots < 1 {
@@ -1108,25 +1176,52 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 	if x < padX {
 		x = padX
 	}
-	imageBox := sdl.Rect{X: x, Y: idx * rowH, W: w, H: h}
-	// A replaced element still paints its own background and border. This is
-	// visible with object-fit: contain, where the letterbox belongs to the
-	// element's background rather than the image's transparent margin.
+	l.emitImageBox(b, sdl.Rect{X: x, Y: idx * rowH, W: w, H: h})
+	for i := int32(0); i < slots && len(layout.Rows) < webMaxRows; i++ {
+		layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
+	}
+}
+
+// emitImageBox records the paint of one image whose box is already placed in
+// layout-local coordinates, and reserves no rows: layoutImage owns the flow
+// of a block image, the line builder the flow of an image inside a text line.
+// A replaced element still paints its own shadow, background and border. The
+// background is visible with object-fit: contain, where the letterbox belongs
+// to the element's background rather than the image's transparent margin. The
+// picture keeps the element's border-radius, so a `border-radius: 50%`
+// avatar is a circle rather than a square on a round background.
+func (l *webLayouter) emitImageBox(b webBlock, box sdl.Rect) {
+	layout := l.layout
+	if layout == nil || box.W <= 0 || box.H <= 0 {
+		return
+	}
+	scale := l.baseSize / 16
+	if scale <= 0 {
+		scale = 1
+	}
+	paper := sdl.Color{R: 255, G: 255, B: 255, A: 255}
+	if l.doc != nil {
+		paper = l.doc.Paper
+	}
+	radius := int32(math.Round(b.Style.Radius * scale))
+	if half := min32(box.W, box.H) / 2; radius > half {
+		radius = half
+	}
+	if radius < 0 {
+		radius = 0
+	}
 	if !b.Style.Invisible {
-		radius := int32(math.Round(b.Style.Radius * scale))
-		if half := min32(w, h) / 2; radius > half {
-			radius = half
-		}
+		l.emitBoxShadow(b.Style, box, radius, b.ZIndex)
 		if b.Style.HasBg {
 			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
-				Rect: imageBox, Color: webFadeColor(b.Style.Background, l.doc.Paper, b.Style),
+				Rect: box, Color: webFadeColor(b.Style.Background, paper, b.Style),
 				Radius: radius, Z: b.ZIndex,
 			})
 		}
 		if b.Style.HasGradient && b.Gradient.Stops != nil {
 			layout.Backgrounds = append(layout.Backgrounds, webBackgroundPaint{
-				Rect: imageBox, Color: webGradientAverage(b.Gradient),
-				Gradient:    webFadeGradient(b.Gradient, l.doc.Paper, b.Style),
+				Rect: box, Color: webGradientAverage(b.Gradient),
+				Gradient:    webFadeGradient(b.Gradient, paper, b.Style),
 				HasGradient: true, Radius: radius, Z: b.ZIndex,
 			})
 		}
@@ -1140,7 +1235,7 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 				thickness = 1
 			}
 			layout.Rects = append(layout.Rects, webRect{
-				Rect: imageBox, Color: webFadeColor(color, l.doc.Paper, b.Style),
+				Rect: box, Color: webFadeColor(color, paper, b.Style),
 				Stroke: true, Thickness: thickness, Radius: radius,
 				BorderStyle: b.BorderStyle, Z: b.ZIndex,
 			})
@@ -1148,15 +1243,13 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 	}
 	layout.Images = append(layout.Images, webImagePos{
 		Key:            b.ImageSrc,
-		Rect:           imageBox,
+		Rect:           box,
 		ObjectFit:      b.Style.ObjectFit,
 		ObjectPosition: b.Style.ObjectPosition,
 		Invisible:      b.Style.Invisible,
 		Opacity:        webPaintOpacity(b.Style),
+		Radius:         radius,
 	})
-	for i := int32(0); i < slots && len(layout.Rows) < webMaxRows; i++ {
-		layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
-	}
 }
 
 // htmlTagAttributeFloat reads a numeric HTML attribute ("100px", "100" or a
@@ -1190,7 +1283,7 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 	}
 	key := webImageCacheKey(im.Key)
 	if tex := getThumbnailTextures().Get(key); tex != nil {
-		drawWebImageTexture(r, tex, rect, im.ObjectFit, im.ObjectPosition, im.Opacity)
+		_ = drawWebImagePicture(r, tex, rect, im)
 		return
 	}
 	data := doc.imageBytes(im.Key)
@@ -1214,9 +1307,117 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 		tw, th = qw, qh
 	}
 	getThumbnailTextures().Put(key, tex, tw, th)
-	if err := drawWebImageTexture(r, tex, rect, im.ObjectFit, im.ObjectPosition, im.Opacity); err != nil {
+	if err := drawWebImagePicture(r, tex, rect, im); err != nil {
 		drawWebImagePlaceholder(r, config, rect)
 	}
+}
+
+// drawWebImagePicture draws one decoded picture: with its rounded corners when
+// it has a radius and the renderer can draw geometry, else square.
+func drawWebImagePicture(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect, im webImagePos) error {
+	if im.Radius > 0 && drawWebImageRounded(r, tex, rect, im) {
+		return nil
+	}
+	return drawWebImageTexture(r, tex, rect, im.ObjectFit, im.ObjectPosition, im.Opacity)
+}
+
+// webImageGeomFailed is set the first time SDL_RenderGeometry refuses (an SDL
+// older than 2.0.18, or a renderer without it): rounded pictures then draw
+// square, as they always did.
+var webImageGeomFailed bool
+
+// drawWebImageRounded draws tex into rect with rounded corners of im.Radius:
+// a triangle fan around the rounded outline whose texture coordinates follow
+// object-fit and object-position, so a `border-radius: 50%` avatar is a circle
+// instead of a square on a round background. It reports false when the
+// caller should draw the picture square.
+func drawWebImageRounded(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect, im webImagePos) bool {
+	if webImageGeomFailed || r == nil || tex == nil || rect.W <= 0 || rect.H <= 0 {
+		return false
+	}
+	_, _, tw, th, err := tex.Query()
+	if err != nil || tw <= 0 || th <= 0 {
+		return false
+	}
+	posX, posY := webObjectPositionFraction(im.ObjectPosition, rect.W, rect.H)
+	dst := rect
+	u0, v0, u1, v1 := 0.0, 0.0, 1.0, 1.0
+	switch im.ObjectFit {
+	case webObjectFitFill:
+	case webObjectFitContain:
+		dst = webObjectFitBoxAt(rect, tw, th, false, posX, posY)
+	case webObjectFitNone, webObjectFitScaleDown:
+		// Natural-size pictures are rare behind a radius; keep the square path.
+		return false
+	default:
+		// cover (and the reader's own default): crop the source to the box.
+		target := float64(rect.W) / float64(rect.H)
+		source := float64(tw) / float64(th)
+		if source > target {
+			span := target / source
+			u0 = (1 - span) * posX
+			u1 = u0 + span
+		} else if source < target {
+			span := source / target
+			v0 = (1 - span) * posY
+			v1 = v0 + span
+		}
+	}
+	if dst.W <= 0 || dst.H <= 0 {
+		return false
+	}
+	radius := float64(im.Radius)
+	if half := float64(min32(dst.W, dst.H)) / 2; radius > half {
+		radius = half
+	}
+	steps := int(radius/2) + 3
+	if steps > 16 {
+		steps = 16
+	}
+	alpha := uint8(255)
+	if im.Opacity < 0.999 {
+		alpha = uint8(math.Round(math.Max(0, im.Opacity) * 255))
+	}
+	color := sdl.Color{R: 255, G: 255, B: 255, A: alpha}
+	x0, y0 := float64(dst.X), float64(dst.Y)
+	w, h := float64(dst.W), float64(dst.H)
+	vertex := func(px, py float64) sdl.Vertex {
+		return sdl.Vertex{
+			Position: sdl.FPoint{X: float32(px), Y: float32(py)},
+			Color:    color,
+			TexCoord: sdl.FPoint{X: float32(u0 + (px-x0)/w*(u1-u0)), Y: float32(v0 + (py-y0)/h*(v1-v0))},
+		}
+	}
+	verts := make([]sdl.Vertex, 0, 4*(steps+1)+1)
+	verts = append(verts, vertex(x0+w/2, y0+h/2))
+	corners := [4][3]float64{
+		{x0 + w - radius, y0 + radius, -math.Pi / 2}, // top right
+		{x0 + w - radius, y0 + h - radius, 0},        // bottom right
+		{x0 + radius, y0 + h - radius, math.Pi / 2},  // bottom left
+		{x0 + radius, y0 + radius, math.Pi},          // top left
+	}
+	for _, c := range corners {
+		for i := 0; i <= steps; i++ {
+			t := c[2] + math.Pi/2*float64(i)/float64(steps)
+			verts = append(verts, vertex(c[0]+radius*math.Cos(t), c[1]+radius*math.Sin(t)))
+		}
+	}
+	n := int32(len(verts) - 1)
+	indices := make([]int32, 0, 3*n)
+	for i := int32(1); i <= n; i++ {
+		next := i + 1
+		if next > n {
+			next = 1
+		}
+		indices = append(indices, 0, i, next)
+	}
+	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+	if err := r.RenderGeometry(tex, verts, indices); err != nil {
+		webImageGeomFailed = true
+		logWarn("browser", "RenderGeometry is unavailable (%v): rounded pictures draw square", err)
+		return false
+	}
+	return true
 }
 
 // drawWebImageTexture applies object-fit to one decoded texture. Fill is the

@@ -1160,7 +1160,7 @@ func termExecute(input string) {
 		if err != nil {
 			termAppend(fmt.Sprintf("Error: %v", err), termKindError)
 		} else {
-			termAppend(fmt.Sprintf("= %g", val), termKindOutput)
+			termAppend("= "+calcFormat(val), termKindOutput)
 		}
 
 	case "ssh":

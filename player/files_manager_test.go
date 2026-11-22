@@ -1,15 +1,18 @@
 package main
 
 // files_manager_test.go — the Files screen's manager, the device-to-device
-// transfer address parser and the text editor's byte-exact round trip.
+// transfer address parser, the text editor's byte-exact round trip, the hex
+// editor's saves and the syntax colours' lexer on arbitrary bytes.
 // Everything here works on a real temporary tree: the operations are
 // filesystem work, and a mock would only test the mock.
 
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // feTestConfig builds a Config whose Files root is dir, with the entry map the
@@ -290,5 +293,150 @@ func TestFileEditorTextCutMidCharacterIsText(t *testing.T) {
 	}
 	if !fileEditorLooksBinary([]byte("abc\x00d")) {
 		t.Fatal("a NUL byte must still mark binary data")
+	}
+}
+
+// The hex editor writes only the bytes it changed — as an atomic copy that
+// keeps the file's permissions, or in place for a large file — refuses a
+// change past the end, and leaves no temporary file behind. Its keyboard
+// field reads hex pairs and quoted text; "Go to offset" reads hex and shares.
+func TestHexEditorSavesOnlyChangedBytes(t *testing.T) {
+	orig := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	want := []byte{0xAA, 1, 2, 3, 0xBB, 0xCC, 6, 7, 8, 0xDD}
+	patches := map[int64]byte{0: 0xAA, 4: 0xBB, 5: 0xCC, 9: 0xDD}
+	for _, atomic := range []bool{true, false} {
+		path := filepath.Join(t.TempDir(), "save.srm")
+		if err := os.WriteFile(path, orig, 0o640); err != nil {
+			t.Fatal(err)
+		}
+		if err := hexWritePatches(path, patches, atomic); err != nil {
+			t.Fatalf("atomic=%v: %v", atomic, err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != string(want) {
+			t.Fatalf("atomic=%v: file = % X, want % X (%v)", atomic, got, want, err)
+		}
+		if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
+			t.Errorf("atomic=%v: mode %v, want -rw-r-----", atomic, info.Mode().Perm())
+		}
+		if err := hexWritePatches(path, map[int64]byte{10: 1}, atomic); err == nil {
+			t.Errorf("atomic=%v: a change past the end was written", atomic)
+		}
+		if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".jukahub-hex-*")); len(left) > 0 {
+			t.Errorf("atomic=%v: temporary files left: %v", atomic, left)
+		}
+	}
+	for _, c := range []struct{ in, want string }{
+		{"4A 75 6b 61", "Juka"},
+		{"0x4A,0x75", "Ju"},
+		{`"Juka"`, "Juka"},
+		{`'J`, "J"},
+	} {
+		if got, err := hexParseBytes(c.in); err != nil || string(got) != c.want {
+			t.Errorf("hexParseBytes(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+	for _, bad := range []string{"", "4", "4G", `""`} {
+		if _, err := hexParseBytes(bad); err == nil {
+			t.Errorf("hexParseBytes(%q) took it", bad)
+		}
+	}
+	if off, err := hexParseOffset("0x1f", 100); err != nil || off != 31 {
+		t.Errorf("hexParseOffset(0x1f) = %d, %v", off, err)
+	}
+	if off, err := hexParseOffset("50%", 101); err != nil || off != 50 {
+		t.Errorf("hexParseOffset(50%%) = %d, %v", off, err)
+	}
+	if off, err := hexParseOffset("FFFF", 100); err != nil || off != 99 {
+		t.Errorf("an offset past the end should land on the last byte, got %d, %v", off, err)
+	}
+}
+
+// The syntax colours run on whatever a file holds. Every row, cut anywhere,
+// gives spans that are in order, inside the row, on rune boundaries and never
+// plain, and the state-only pass ends where the colouring one does. A few
+// exact spans pin the rules that keep the rest of a file right.
+func TestSyntaxScanStaysInBounds(t *testing.T) {
+	rows := []string{
+		"", " ", "#", "\"", "'", "`", "/", "//", "/*", "*/", "<<", "<<<", "<<-", "$", "${", "$(", "@", "%",
+		`echo "$HOME/${x}" # c`, "cat <<-EOF", "s{a}{b}g;", "my %h = (a => 1); $x % 2", "=pod", "=cut",
+		`print <<"END";`, "a = b / c / d", `x = /re[/]x/g.test(s)`, "`tmpl ${a}", `#include <stdio.h>`,
+		`auto s = R"x(raw)x";`, `R"(open`, `{"k": "v", "n": -1.5e3}`, `key = "v" ; c`, "[section]", "- a: 1",
+		`x = f"{a}" # c`, `'''doc`, `@app.route("/")`, "qw(a b", "tr/a-z//", "$#", "${#x}", "0x1Fu 1'000 2.5e-3f",
+		"日本語 'строка' \"ü\"", "\xff\xfe\x00\x80", strings.Repeat("(", 300) + strings.Repeat("\"", 301),
+	}
+	// A fixed byte soup from a tiny LCG: the same rows on every run.
+	seed := uint32(1)
+	for i := 0; i < 64; i++ {
+		b := make([]byte, 1+i*7)
+		for j := range b {
+			seed = seed*1664525 + 1013904223
+			b[j] = "\"'`/*#$@%<>{}()[];=\\ \tqsmyx0aZ\x80\xff"[seed>>27]
+		}
+		rows = append(rows, string(b))
+	}
+	for lang := synNone; lang < synLangCount; lang++ {
+		for _, ends := range []bool{true, false} {
+			var st synState
+			for _, row := range rows {
+				var spans []synSpan
+				next := synScan(lang, st, row, ends, &spans)
+				if bare := synScan(lang, st, row, ends, nil); bare != next {
+					t.Errorf("%s: %q ends in %+v without spans, %+v with", synLangName(lang), row, bare, next)
+				}
+				end := 0
+				for _, sp := range spans {
+					if sp.start < end || sp.end <= sp.start || sp.end > len(row) || sp.kind == synPlain || sp.kind >= synKindCount ||
+						!utf8.RuneStart(row[sp.start]) || (sp.end < len(row) && !utf8.RuneStart(row[sp.end])) {
+						t.Fatalf("%s: bad span %+v in %q (%+v)", synLangName(lang), sp, row, spans)
+					}
+					end = sp.end
+				}
+				st = next
+			}
+		}
+	}
+
+	type want struct {
+		text string
+		kind synKind
+	}
+	check := func(lang synLangID, row string, wants ...want) {
+		t.Helper()
+		var spans []synSpan
+		synScan(lang, synState{}, row, true, &spans)
+		got := map[string]synKind{}
+		for _, sp := range spans {
+			got[row[sp.start:sp.end]] = sp.kind
+		}
+		for _, w := range wants {
+			if k, ok := got[w.text]; !ok || k != w.kind {
+				t.Errorf("%s %q: %q is %v (coloured: %v), want %v", synLangName(lang), row, w.text, k, ok, w.kind)
+			}
+		}
+	}
+	check(synPython, `def f(self): return "x" # c`,
+		want{"def", synKeyword}, want{"f", synFunc}, want{"self", synVar}, want{`"x"`, synString}, want{"# c", synComment})
+	check(synBash, `echo "$HOME" # c`, want{"echo", synType}, want{"$HOME", synVar}, want{"# c", synComment})
+	check(synPerl, `my %h = (a => 1); $x % 2`, want{"my", synKeyword}, want{"%h", synVar}, want{"a", synKey}, want{"$x", synVar})
+	check(synJS, `x = /re[/]x/g.test(s) / 2`, want{"/re[/]x/g", synString}, want{"test", synFunc}, want{"2", synNumber})
+	check(synJSON, `{"k": "v", "n": -1.5e3, "b": true}`,
+		want{`"k"`, synKey}, want{`"v"`, synString}, want{"-1.5e3", synNumber}, want{"true", synConst})
+	check(synCpp, `#include <stdio.h>`, want{"#include", synMeta}, want{"<stdio.h>", synString})
+	check(synCpp, `int main() { return nullptr; } // c`,
+		want{"int", synType}, want{"main", synFunc}, want{"return", synKeyword}, want{"nullptr", synConst}, want{"// c", synComment})
+
+	// What carries over from one line to the next.
+	st := synScan(synPython, synState{}, `s = '''doc`, true, nil)
+	var spans []synSpan
+	synScan(synPython, st, `still''' + x`, true, &spans)
+	if len(spans) == 0 || spans[0].start != 0 || spans[0].end != len(`still'''`) || spans[0].kind != synString {
+		t.Errorf("a Python docstring did not carry over: %+v", spans)
+	}
+	st = synScan(synBash, synState{}, "cat <<-EOF", true, nil)
+	st = synScan(synBash, st, "  $not_a_var", true, nil)
+	spans = spans[:0]
+	if synScan(synBash, st, "  EOF", true, &spans) != (synState{}) || len(spans) != 1 {
+		t.Errorf("a shell here-doc did not end at its terminator: %+v", spans)
 	}
 }

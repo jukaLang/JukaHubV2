@@ -1358,16 +1358,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = []FooterHint{{Button: "B", Label: "Save & Back"}}
 		}
 	case "Calculator":
-		// The pad walks the key grid; X inserts the graph variable and Y
-		// toggles the graph view. The shoulders are Clear and Backspace.
-		hints[1] = FooterHint{Button: "A", Label: "Select"}
-		hints = append(hints,
-			FooterHint{Button: "X", Label: "Insert x"},
-			FooterHint{Button: "Y", Label: "Graph"},
-			// The keyboard's twins: C clears, Backspace deletes (calculator.go).
-			FooterHint{Button: "L1 / C", Label: "Clear"},
-			FooterHint{Button: "R1 / Backspace", Label: "Delete"},
-		)
+		// The pad walks the key grid and the history list; the keys follow
+		// whichever holds it (calculator.go).
+		hints = calcFooterHints(hints)
 	case "PDFReader":
 		// The reader draws its own footer with these (pdfreader.go): pages
 		// or chapters on the shoulders, zoom on the triggers, fit, text view.

@@ -878,13 +878,15 @@ func TestBrowserHeadlessImageSizingAndFit(t *testing.T) {
 	if natural.W <= 0 || natural.H <= 0 || natural.W > 64 || natural.H > 64 {
 		t.Fatalf("natural 16px image has the wrong size: %+v", natural)
 	}
-	if fixed.W != 120 || fixed.H != 60 {
+	// Image sizes are CSS px on the same scale as the text: Config{} draws 16px
+	// text at 24 layout pixels, so a 120px image is 180 of them.
+	if fixed.W != 180 || fixed.H != 90 {
 		t.Fatalf("explicit image dimensions were not honoured: %+v", fixed)
 	}
-	if crop.W != 240 || crop.H != 80 || contain.W != 240 || contain.H != 80 {
+	if crop.W != 360 || crop.H != 120 || contain.W != 360 || contain.H != 120 {
 		t.Fatalf("object-fit boxes have the wrong dimensions: crop=%+v contain=%+v", crop, contain)
 	}
-	if maxed.W > 100 || maxed.W <= 0 || maxed.H <= 0 {
+	if maxed.W > 150 || maxed.W <= 0 || maxed.H <= 0 {
 		t.Fatalf("max-width did not cap the large image: %+v", maxed)
 	}
 	if layout.Images[2].ObjectFit == 0 || layout.Images[3].ObjectFit == 0 {

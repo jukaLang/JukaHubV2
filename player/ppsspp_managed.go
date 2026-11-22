@@ -86,13 +86,15 @@ const (
 	// ppssppPakAsset is the one release asset it publishes.
 	ppssppPakAsset = "PSP.pak.zip"
 	// ppssppOwnRepo, ppssppOwnTag and ppssppOwnAsset are JukaHub's own build of
-	// upstream PPSSPP for the tg5040 handhelds: the rolling release that
-	// .github/workflows/ppsspp-trimui.yml rebuilds from hrydgard/ppsspp's newest
-	// SDL2 release when one appears (player/native/build-ppsspp.sh; 1.21 moved
-	// to SDL3, which the firmware lacks), titled "PPSSPP <version>
-	// for TrimUI (tg5040)". minui-psp lags upstream (1.20.3 while upstream had
-	// 1.20.4, which had no tg5040 build anywhere), so on a tg5040 both are asked
-	// and the newer PPSSPP wins (ppssppPickRelease).
+	// upstream PPSSPP for the tg5040 handhelds: the release that
+	// .github/workflows/ppsspp-trimui.yml builds (player/native/build-ppsspp.sh),
+	// titled "PPSSPP <version> for TrimUI (tg5040)". Since 2026-11-20 it is
+	// pinned to 1.20.3, the release TrimUI builds exist for and the one
+	// minui-psp packages ("use 1.20.3 which exists for Trimui"; 1.21 moved to
+	// SDL3, which the firmware lacks): a second source of the same PPSSPP. On a
+	// tg5040 both are asked and ppssppPickRelease keeps minui-psp's on a tie
+	// unless JukaHub's is the one installed; JukaHub's stands in when
+	// minui-psp's release is missing or did not start here.
 	ppssppOwnRepo     = "jukaLang/JukaHubV2"
 	ppssppOwnTag      = "ppsspp-tg5040"
 	ppssppOwnAsset    = "PPSSPP-tg5040.zip"

@@ -36,7 +36,7 @@ const (
 var owPick struct {
 	open bool
 	mode owPickMode
-	ctx  string // "files", "editor", "reader", "defaults"
+	ctx  string // "files", "editor", "hex", "reader", "defaults"
 	// path is the file (open mode) or owTypeProbe(ext) (choose mode).
 	path  string
 	entry FileEntry
@@ -402,7 +402,7 @@ func owPickActivate(config *Config, always bool) {
 // unsaved changes: one of JukaHub's viewers takes the screen, and the App
 // Center is another scene. An app or Windows opens over it and leaves it be.
 func owEditorRefuses(h owHandler) bool {
-	if owPick.ctx != "editor" || (h.Kind != owKindBuiltin && h.Kind != owKindGet) ||
+	if !owFromEditor(owPick.ctx) || (h.Kind != owKindBuiltin && h.Kind != owKindGet) ||
 		!fileEditor.open || !fileEditorDirty() {
 		return false
 	}
@@ -414,9 +414,15 @@ func owEditorRefuses(h owHandler) bool {
 // owLeaveEditor closes the text page (nothing unsaved: owEditorRefuses went
 // first) before one of JukaHub's viewers or the App Center takes over.
 func owLeaveEditor(h owHandler) {
-	if owPick.ctx == "editor" && (h.Kind == owKindBuiltin || h.Kind == owKindGet) && fileEditor.open {
+	if owFromEditor(owPick.ctx) && (h.Kind == owKindBuiltin || h.Kind == owKindGet) && fileEditor.open {
 		fileEditorForget()
 	}
+}
+
+// owFromEditor reports a sheet opened from the text page, as the text
+// editor ("editor") or the hex editor ("hex").
+func owFromEditor(ctx string) bool {
+	return ctx == "editor" || ctx == "hex"
 }
 
 // owPickReset is Y in open mode: the type loses its default and the sheet

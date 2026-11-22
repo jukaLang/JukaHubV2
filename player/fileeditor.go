@@ -13,10 +13,15 @@ package main
 //
 // Three modes (files_textview.go): a text file up to fileEditorMaxBytes is held
 // as editable lines; a larger one is shown read-only one window at a time, so a
-// 200 MB log costs a quarter of a megabyte; binary data is shown as a read-only
-// hex dump with a warning instead of as garbage text. Word wrap, line numbers
-// and the text size are view options (Start opens them; the toolbar chips do
-// the same with a click) and are remembered with the user's settings.
+// 200 MB log costs a quarter of a megabyte; binary data opens in the hex
+// editor (fileeditor_hex.go) instead of as garbage text, and Open with… or
+// View → Hex editor shows any file there. Word wrap, line numbers, the text
+// size and syntax colours are view options (Start opens them; the toolbar
+// chips do the same with a click) and are remembered with the user's
+// settings. Scripts, sources and configs — shell, Perl, Python, JavaScript,
+// JSON, C/C++, Java, INI/.cfg/YAML — are coloured by their keywords, strings
+// and comments (fileeditor_syntax.go), the language found from the file's
+// name or its #! line.
 //
 // Editing on a D-pad and an on-screen keyboard is line based on purpose. The
 // keyboard types into a single string, so a caret moving through a document
@@ -100,6 +105,13 @@ type fileEditorState struct {
 	viewLines int
 	menu      filesMenu
 	chips     []filesChip
+	// syntax is the language the text is coloured as (fileeditor_syntax.go),
+	// found from the name or the #! line when the file opens; syntaxSet marks
+	// a pick from View → Highlight as, which lasts while the file is open.
+	syntax    synLangID
+	syntaxSet bool
+	// hex is the hex editor's state (fileeditor_hex.go).
+	hex fileEditorHex
 }
 
 type fileEditorPending int
@@ -127,13 +139,16 @@ var fileEditorAutoExts = map[string]bool{
 // and a page's A opens it in the sandbox, so editing needs its own entry.
 var fileEditorSheetExts = map[string]bool{".sh": true, ".js": true, ".html": true, ".css": true, ".java": true}
 
-// fileEditorCanEdit reports whether the action sheet may open a path here.
+// fileEditorCanEdit reports whether the action sheet may open a path here:
+// the formats above, and every source or config file the syntax colours know
+// (.py, .pl, .cpp, .bashrc …) unless another viewer owns the extension too
+// (.ts is a video before it is TypeScript).
 func fileEditorCanEdit(path string) bool {
 	ext := strings.ToLower(filepath.Ext(strings.TrimSpace(path)))
-	if fileEditorAutoExts[ext] {
+	if fileEditorAutoExts[ext] || fileEditorSheetExts[ext] {
 		return true
 	}
-	return fileEditorSheetExts[ext]
+	return synLangByName(path) != synNone && !filesHasDedicatedViewer(path)
 }
 
 // fileEditorTooLargeText explains why a large file opened read-only.
@@ -193,22 +208,24 @@ func fileEditorJoin(lines []string, trailingNewline bool) string {
 // fileEditorOpen opens a text file for editing (Patch's index, the Files
 // sheet's Edit text). Binary data is refused here — writing a line list back
 // would destroy it; A on a binary file goes through filesViewerOpen, which
-// shows it as hex instead. Every refusal is explained in a toast.
+// opens it in the hex editor instead. Every refusal is explained in a toast.
 func fileEditorOpen(path string) bool {
 	return fileEditorOpenAs(path, false)
 }
 
 // filesViewerOpen opens any file in the page: text for editing (read-only and
-// paged when large), binary data as a hex dump.
+// paged when large), binary data in the hex editor.
 func filesViewerOpen(path string) bool {
 	return fileEditorOpenAs(path, true)
 }
 
-func fileEditorOpenAs(path string, allowHex bool) bool {
+// fileEditorResolve turns a path into the file the page edits — absolute,
+// symlinks followed — and its stat, explaining a failure in a toast.
+func fileEditorResolve(path string) (string, os.FileInfo, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		showToast("No file to edit", ToastWarn())
-		return false
+		return "", nil, false
 	}
 	resolved, err := filepath.Abs(path)
 	if err == nil {
@@ -222,10 +239,29 @@ func fileEditorOpenAs(path string, allowHex bool) bool {
 	info, err := os.Stat(path)
 	if err != nil {
 		showToast("Cannot open "+filepath.Base(path)+": "+filesFriendlyError(err), ToastError())
-		return false
+		return "", nil, false
 	}
 	if info.IsDir() {
 		showToast("That is a folder, not a file", ToastInfo())
+		return "", nil, false
+	}
+	return path, info, true
+}
+
+// fileEditorShow puts a freshly opened state on screen.
+func fileEditorShow(state fileEditorState) {
+	fileEditor = state
+	fileEditorRowRects = nil
+	fileEditor.rect = sdl.Rect{}
+	filesWrapCacheReset()
+	// One modal at a time: the page covers the screen that opened it.
+	feSheetForget()
+	PlayActivateSound()
+}
+
+func fileEditorOpenAs(path string, allowHex bool) bool {
+	path, info, ok := fileEditorResolve(path)
+	if !ok {
 		return false
 	}
 	binary, err := filesLooksBinary(path)
@@ -248,11 +284,7 @@ func fileEditorOpenAs(path string, allowHex bool) bool {
 	filesLineIndexStopIfOther(path)
 	switch {
 	case binary:
-		state.mode = filesViewHex
-		state.readOnly = true
-		state.notice = "Binary file — shown as hex, read-only"
-		state.noticeWarn = true
-		if !filesViewerLoadEdge(&state, false) {
+		if !fileEditorHexSetup(&state, info, true) {
 			return false
 		}
 	case info.Size() > fileEditorMaxBytes:
@@ -269,6 +301,11 @@ func fileEditorOpenAs(path string, allowHex bool) bool {
 			state.cursor = len(state.window.lines) - 1
 		}
 		filesLineIndexStart(path, info.Size())
+		first := ""
+		if state.window.start == 0 && len(state.window.lines) > 0 {
+			first = state.window.lines[0]
+		}
+		state.syntax = fileEditorDetectSyntax(path, first)
 	default:
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -288,14 +325,9 @@ func fileEditorOpenAs(path string, allowHex bool) bool {
 		if state.readOnly {
 			state.notice = "Read-only — JukaHub cannot write this file"
 		}
+		state.syntax = fileEditorDetectSyntax(path, state.lines[0])
 	}
-	fileEditor = state
-	fileEditorRowRects = nil
-	fileEditor.rect = sdl.Rect{}
-	filesWrapCacheReset()
-	// One modal at a time: the page covers the screen that opened it.
-	feSheetForget()
-	PlayActivateSound()
+	fileEditorShow(state)
 	return true
 }
 
@@ -346,8 +378,12 @@ func fileEditorText() string {
 	return fileEditorJoin(fileEditor.lines, fileEditor.endsWithNewline)
 }
 
-// fileEditorDirty reports whether the buffer differs from what was loaded.
+// fileEditorDirty reports whether the buffer differs from what was loaded, or
+// the hex editor holds changed bytes.
 func fileEditorDirty() bool {
+	if fileEditor.open && fileEditor.mode == filesViewHex {
+		return len(fileEditor.hex.patches) > 0
+	}
 	return fileEditor.open && fileEditor.mode == filesViewEdit && fileEditorText() != fileEditor.original
 }
 
@@ -369,15 +405,16 @@ func fileEditorChanged() {
 	filesWrapCacheReset()
 }
 
-// fileEditorRowCount is how many rows the page shows: lines, the rows of the
-// window on screen, or hex rows.
+// fileEditorRowCount is how many rows the page shows: lines, or the rows of
+// the window on screen. The hex editor keeps its own cursor and rows
+// (fileeditor_hex.go), so it has none here.
 func fileEditorRowCount() int {
 	switch fileEditor.mode {
 	case filesViewHex:
 		if fileEditor.forcedText {
 			return len(fileEditor.window.lines)
 		}
-		return len(fileEditor.window.hex)
+		return 0
 	case filesViewWindow:
 		return len(fileEditor.window.lines)
 	}
@@ -435,6 +472,10 @@ func fileEditorClamp() {
 // fileEditorMove walks the cursor by delta lines. A large or binary file's
 // window follows the cursor: moving past either end loads the next window.
 func fileEditorMove(delta int) {
+	if fileEditorHexMode() {
+		hexMoveRows(delta)
+		return
+	}
 	if fileEditor.mode != filesViewEdit {
 		filesViewerMove(delta)
 		return
@@ -493,6 +534,10 @@ func filesViewerLoad(offset int64, forward, hex bool) bool {
 
 // filesViewerJump goes to the top or the end of the file.
 func filesViewerJump(toEnd bool) {
+	if fileEditorHexMode() {
+		hexJump(toEnd)
+		return
+	}
 	if fileEditor.mode == filesViewEdit {
 		if toEnd {
 			fileEditor.cursor = len(fileEditor.lines) - 1
@@ -523,40 +568,54 @@ func filesViewerJump(toEnd bool) {
 	PlayNavSound()
 }
 
-// filesViewerToggleHexText shows a binary file as text or back as hex. Some
-// "binary" files are logs with a stray NUL; X is the way to read them anyway.
+// filesViewerToggleHexText shows a binary file's bytes as text, or back in the
+// hex editor. Some "binary" files are logs with a stray NUL; "Text" is the way
+// to read them anyway. A text file opened in the hex editor goes back to the
+// text editor instead.
 func filesViewerToggleHexText() {
 	if fileEditor.mode != filesViewHex {
 		return
 	}
-	fileEditor.forcedText = !fileEditor.forcedText
-	hex := !fileEditor.forcedText
-	start := fileEditor.window.start
-	end := start + filesWindowBytes
-	if hex {
-		start -= start % filesHexRowBytes
-		end = start + filesHexWindowBytes
-	}
-	if end > fileEditor.size {
-		end = fileEditor.size
-	}
-	w, err := filesLoadWindow(fileEditor.path, start, end, hex)
-	if err != nil {
+	if !fileEditor.hex.binary {
+		fileEditorSwitchToText()
 		return
 	}
-	fileEditor.window = w
-	fileEditor.cursor, fileEditor.scroll = 0, 0
 	if fileEditor.forcedText {
-		fileEditor.notice = "Binary file shown as text — some characters will look wrong"
+		fileEditor.forcedText = false
+		hexPlace(fileEditor.window.start)
+		fileEditorHexNotice(&fileEditor)
 	} else {
-		fileEditor.notice = "Binary file — shown as hex, read-only"
+		if fileEditorDirty() {
+			PlayErrorSound()
+			showToast("Save or undo the byte changes first", ToastWarn())
+			return
+		}
+		// The text starts at the hex cursor's row.
+		start := fileEditor.hex.cursor - fileEditor.hex.cursor%filesHexRowBytes
+		end := min(start+filesWindowBytes, fileEditor.size)
+		w, err := filesLoadWindow(fileEditor.path, start, end, false)
+		if err != nil {
+			showToast("Cannot read "+fileEditor.title+": "+filesFriendlyError(err), ToastError())
+			return
+		}
+		fileEditor.forcedText = true
+		fileEditor.window = w
+		fileEditor.lineBase = 0
+		fileEditor.cursor, fileEditor.scroll = 0, 0
+		fileEditor.notice = "Binary file shown as text — some characters will look wrong"
+		fileEditor.noticeWarn = true
 	}
 	filesWrapCacheReset()
 	PlayNavSound()
 }
 
-// fileEditorStartLine opens the keyboard for the focused line.
+// fileEditorStartLine opens the keyboard for the focused line (in the hex
+// editor: edits the byte under the cursor).
 func fileEditorStartLine() {
+	if fileEditorHexMode() {
+		hexBeginEdit()
+		return
+	}
 	if !fileEditor.open || fileEditor.cursor < 0 || fileEditor.cursor >= len(fileEditor.lines) {
 		if fileEditor.open && fileEditor.mode != filesViewEdit {
 			fileEditorReadOnlyRefuse()
@@ -570,8 +629,13 @@ func fileEditorStartLine() {
 	vkOpenFileLine(fileEditor.lines[fileEditor.cursor])
 }
 
-// fileEditorStartInsert opens the keyboard for a new line after the cursor.
+// fileEditorStartInsert opens the keyboard for a new line after the cursor
+// (in the hex editor: for bytes to write from the cursor on).
 func fileEditorStartInsert() {
+	if fileEditorHexMode() {
+		hexStartTyping()
+		return
+	}
 	if fileEditorReadOnlyRefuse() {
 		return
 	}
@@ -583,14 +647,14 @@ func fileEditorStartInsert() {
 // reason, so an edit cannot be typed and then discarded by a save that was
 // never possible.
 func fileEditorReadOnlyRefuse() bool {
-	if !fileEditor.readOnly && fileEditor.mode == filesViewEdit {
+	if !fileEditor.readOnly && (fileEditor.mode == filesViewEdit || fileEditorHexMode()) {
 		return false
 	}
-	switch fileEditor.mode {
-	case filesViewHex:
-		showToast("Binary files are shown read-only", ToastWarn())
-	case filesViewWindow:
+	switch {
+	case fileEditor.mode == filesViewWindow:
 		showToast("Large files open read-only", ToastWarn())
+	case fileEditor.mode == filesViewHex && fileEditor.forcedText:
+		showToast("Shown as text — View → Show as hex to change bytes", ToastWarn())
 	default:
 		showToast("This file is read-only", ToastWarn())
 	}
@@ -601,6 +665,10 @@ func fileEditorReadOnlyRefuse() bool {
 // called from the keyboard's submit path, after the keyboard has closed.
 func fileEditorApplyLine(text string) {
 	if !fileEditor.open {
+		return
+	}
+	// The hex editor's prompts (bytes to type, an offset to go to).
+	if fileEditorApplyHex(text) {
 		return
 	}
 	if fileEditorReadOnlyRefuse() {
@@ -624,6 +692,8 @@ func fileEditorApplyLine(text string) {
 	}
 	fileEditor.pending = fileEditorIdle
 	fileEditorChanged()
+	// The colours of the lines above the edit stay as they were.
+	fileEditorSynEdited(fileEditor.cursor)
 	fileEditorClamp()
 }
 
@@ -643,6 +713,7 @@ func fileEditorDeleteLine() {
 		fileEditor.lines = append(fileEditor.lines[:fileEditor.cursor], fileEditor.lines[fileEditor.cursor+1:]...)
 	}
 	fileEditorChanged()
+	fileEditorSynEdited(fileEditor.cursor)
 	fileEditorClamp()
 	PlayBackSound()
 }
@@ -666,6 +737,9 @@ func fileEditorValidate(path, text string) error {
 func fileEditorSave() error {
 	if !fileEditor.open {
 		return errors.New("no file open")
+	}
+	if fileEditorHexMode() {
+		return hexSave()
 	}
 	if fileEditor.mode != filesViewEdit {
 		return errors.New("this file is shown read-only")
@@ -718,6 +792,8 @@ func fileEditorSave() error {
 	fileEditor.original = text
 	fileEditor.err = ""
 	fileEditorChanged()
+	// Saving changed no line: every line keeps its colours.
+	fileEditorSynEdited(len(fileEditor.lines))
 	return nil
 }
 
@@ -746,6 +822,7 @@ func fileEditorForget() {
 	fileEditor = fileEditorState{}
 	fileEditorRowRects = nil
 	filesWrapCacheReset()
+	fileEditorSynForget()
 }
 
 // fileEditorVisible is how many lines one page holds: what the last frame
@@ -764,7 +841,7 @@ func fileEditorVisible() int {
 // fileEditorSaveAndReport saves and reports the outcome; shared by the pad and
 // mouse paths so both behave identically.
 func fileEditorSaveAndReport() bool {
-	if fileEditor.readOnly || fileEditor.mode != filesViewEdit {
+	if fileEditor.readOnly || (fileEditor.mode != filesViewEdit && !fileEditorHexMode()) {
 		showToast("This file is open read-only", ToastWarn())
 		return false
 	}
@@ -890,20 +967,46 @@ func fileEditorMenuRows() {
 		}
 		return "Off"
 	}
-	hex := fileEditor.mode == filesViewHex && !fileEditor.forcedText
-	rows := []filesMenuRow{
-		{ID: "wrap", Label: "Word wrap", Value: onOff(filesViewWrap()), Enabled: !hex},
-		{ID: "numbers", Label: "Line numbers", Value: onOff(filesViewNumbers()), Enabled: !hex},
-		{ID: "size", Label: "Text size", Value: strconv.Itoa(filesViewTextSize()) + " px", Adjust: true, Enabled: true},
-		{ID: "top", Label: "Go to the top", Enabled: true},
-		{ID: "end", Label: "Go to the end", Enabled: true},
+	hex := fileEditorHexMode()
+	size := filesMenuRow{ID: "size", Label: "Text size", Value: strconv.Itoa(filesViewTextSize()) + " px", Adjust: true, Enabled: true}
+	var rows []filesMenuRow
+	if hex {
+		// The hex editor's own rows (fileeditor_hex.go).
+		h := &fileEditor.hex
+		rows = []filesMenuRow{
+			{ID: "goto", Label: "Go to offset…", Enabled: fileEditor.size > 0},
+			{ID: "undo", Label: "Undo the last change", Enabled: len(h.undo) > 0},
+			{ID: "revert", Label: "Undo every change", Enabled: len(h.patches) > 0},
+			size,
+		}
+	} else {
+		rows = []filesMenuRow{
+			{ID: "wrap", Label: "Word wrap", Value: onOff(filesViewWrap()), Enabled: true},
+			{ID: "numbers", Label: "Line numbers", Value: onOff(filesViewNumbers()), Enabled: true},
+			size,
+		}
+		if fileEditor.mode != filesViewHex {
+			// Syntax colours (fileeditor_syntax_draw.go); a binary file shown
+			// as text has none.
+			rows = append(rows,
+				filesMenuRow{ID: "syntax", Label: "Syntax colours", Value: onOff(filesViewSyntax()), Enabled: true},
+				filesMenuRow{ID: "lang", Label: "Highlight as", Value: fileEditorSyntaxLabel(), Adjust: true, Enabled: filesViewSyntax()})
+		}
 	}
-	if fileEditor.mode == filesViewHex {
+	rows = append(rows,
+		filesMenuRow{ID: "top", Label: "Go to the top", Enabled: true},
+		filesMenuRow{ID: "end", Label: "Go to the end", Enabled: true})
+	switch {
+	case fileEditor.mode == filesViewHex && fileEditor.hex.binary:
 		label := "Show as text"
 		if fileEditor.forcedText {
 			label = "Show as hex"
 		}
 		rows = append(rows, filesMenuRow{ID: "hex", Label: label, Enabled: true})
+	case hex:
+		rows = append(rows, filesMenuRow{ID: "texteditor", Label: "Text editor", Enabled: true})
+	default:
+		rows = append(rows, filesMenuRow{ID: "hexeditor", Label: "Hex editor", Enabled: fileEditor.path != ""})
 	}
 	// Every other way to open the file (openwith.go).
 	rows = append(rows, filesMenuRow{ID: "openwith", Label: "Open with…", Enabled: fileEditor.path != ""})
@@ -943,9 +1046,38 @@ func fileEditorMenuApply(in filesMenuInput) {
 	case "hex":
 		fileEditor.menu.open = false
 		filesViewerToggleHexText()
+	case "syntax":
+		filesToggleSyntax()
+	case "lang":
+		step := in.adjust
+		if step == 0 {
+			step = 1
+		}
+		fileEditorStepSyntax(step)
+	case "hexeditor":
+		fileEditor.menu.open = false
+		fileEditorSwitchToHex()
+		return
+	case "texteditor":
+		fileEditor.menu.open = false
+		fileEditorSwitchToText()
+		return
+	case "goto":
+		fileEditor.menu.open = false
+		hexStartGoto()
+	case "undo":
+		hexUndoLast()
+	case "revert":
+		hexRevertAll()
 	case "openwith":
 		fileEditor.menu.open = false
-		owOpenPicker(appConfig, fileEditor.path, FileEntry{}, "editor")
+		// The page offers its other half: the hex editor from the text,
+		// the text editor from the hex (owBuiltinIDs).
+		ctx := "editor"
+		if fileEditorHexMode() {
+			ctx = "hex"
+		}
+		owOpenPicker(appConfig, fileEditor.path, FileEntry{}, ctx)
 	case "system":
 		fileEditor.menu.open = false
 		filesOpenWithSystem(fileEditor.path)
@@ -993,6 +1125,10 @@ func handleFileEditorKey(e *sdl.KeyboardEvent, config *Config) bool {
 		fileEditorMenuApply(filesMenuKey(&fileEditor.menu, e.Keysym.Sym))
 		return true
 	}
+	// The hex editor types digits and moves by bytes (fileeditor_hex_ui.go).
+	if fileEditorHexMode() && hexKey(e) {
+		return true
+	}
 	ctrl := e.Keysym.Mod&uint16(sdl.KMOD_CTRL) != 0
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
@@ -1019,7 +1155,7 @@ func handleFileEditorKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 		fileEditorStartLine()
 	case sdl.K_x, sdl.K_i, sdl.K_INSERT:
-		if fileEditor.mode == filesViewHex {
+		if fileEditor.mode == filesViewHex && fileEditor.forcedText {
 			filesViewerToggleHexText()
 			break
 		}
@@ -1035,6 +1171,8 @@ func handleFileEditorKey(e *sdl.KeyboardEvent, config *Config) bool {
 		filesToggleWrap()
 	case sdl.K_n, sdl.K_l:
 		filesToggleNumbers()
+	case sdl.K_h:
+		filesToggleSyntax()
 	case sdl.K_PLUS, sdl.K_EQUALS, sdl.K_KP_PLUS:
 		filesStepTextSize(1)
 	case sdl.K_MINUS, sdl.K_KP_MINUS:
@@ -1076,6 +1214,11 @@ func ctrlFileEditor(e *sdl.ControllerButtonEvent, config *Config) bool {
 		fileEditorMenuApply(filesMenuController(&fileEditor.menu, e.Button))
 		return true
 	}
+	// The hex editor's D-pad edits digits and moves by bytes
+	// (fileeditor_hex_ui.go).
+	if fileEditorHexMode() && hexController(e) {
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		fileEditorMove(-1)
@@ -1098,7 +1241,7 @@ func ctrlFileEditor(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		fileEditorStartLine()
 	case sdl.CONTROLLER_BUTTON_X:
-		if fileEditor.mode == filesViewHex {
+		if fileEditor.mode == filesViewHex && fileEditor.forcedText {
 			filesViewerToggleHexText()
 			break
 		}
@@ -1149,6 +1292,10 @@ func handleFileEditorMouse(mx, my int32, config *Config) bool {
 		fileEditorRequestClose()
 		return true
 	}
+	if fileEditorHexMode() {
+		hexMouse(mx, my)
+		return true
+	}
 	for i, r := range fileEditorRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
 			line := fileEditor.scroll + i
@@ -1179,7 +1326,8 @@ func fileEditorWheel(notches int32) bool {
 
 var fileEditorRowRects []sdl.Rect
 
-// filesWrapKey is everything the wrapped rows of a line depend on.
+// filesWrapKey is everything the wrapped rows of a line depend on, and the
+// language their colours come from.
 type filesWrapKey struct {
 	path    string
 	edits   int
@@ -1189,19 +1337,23 @@ type filesWrapKey struct {
 	hscroll int
 	text    bool
 	font    *ttf.Font
+	syntax  synLangID
 }
 
 // filesWrapCache keeps the display rows of the lines on screen, so a frame only
-// copies textures: wrapping measures text, a FreeType call per try.
+// copies textures: wrapping measures text, a FreeType call per try. segs holds
+// the same rows cut into coloured pieces (fileeditor_syntax_draw.go).
 var filesWrapCache struct {
 	key   filesWrapKey
 	valid bool
 	rows  map[int][]string
+	segs  map[int][][]filesSeg
 }
 
 func filesWrapCacheReset() {
 	filesWrapCache.valid = false
 	filesWrapCache.rows = nil
+	filesWrapCache.segs = nil
 }
 
 // filesMaxDisplayRunes bounds a line drawn without wrap: past it a long line
@@ -1317,6 +1469,7 @@ func filesRowsFor(idx int, key filesWrapKey) []string {
 		filesWrapCache.key = key
 		filesWrapCache.valid = true
 		filesWrapCache.rows = make(map[int][]string, 64)
+		filesWrapCache.segs = nil
 	}
 	if rows, ok := filesWrapCache.rows[idx]; ok {
 		return rows
@@ -1385,7 +1538,7 @@ func renderFileEditor(renderer *sdl.Renderer, config *Config) {
 	top := int32(14)
 
 	// Toolbar chips first, so the header knows how much room is left.
-	hexView := fileEditor.mode == filesViewHex && !fileEditor.forcedText
+	hexView := fileEditorHexMode()
 	chips := fileEditor.chips[:0]
 	if hexView {
 		chips = append(chips, filesChip{ID: "hex", Label: "Text"})
@@ -1399,7 +1552,7 @@ func renderFileEditor(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 	chips = append(chips, filesChip{ID: "smaller", Label: "A−"}, filesChip{ID: "larger", Label: "A+"})
-	if fileEditor.mode == filesViewEdit && !fileEditor.readOnly {
+	if (fileEditor.mode == filesViewEdit || hexView) && !fileEditor.readOnly {
 		chips = append(chips, filesChip{ID: "save", Label: "Save", On: fileEditorDirtyCached()})
 	}
 	chips = append(chips, filesChip{ID: "view", Label: "View"}, filesChip{ID: "close", Label: "Close"})
@@ -1427,7 +1580,7 @@ func renderFileEditor(renderer *sdl.Renderer, config *Config) {
 	drawGlassSurface(renderer, body, glassRowRadius, glassState{})
 	fileEditorClamp()
 	if hexView {
-		renderFilesHexBody(renderer, config, font, body)
+		renderHexBody(renderer, config, font, body)
 	} else {
 		renderFilesTextBody(renderer, config, font, body)
 	}
@@ -1470,6 +1623,7 @@ func renderFilesTextBody(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 		hscroll: fileEditor.hscroll,
 		text:    fileEditor.forcedText,
 		font:    font,
+		syntax:  fileEditorSyntaxNow(),
 	}
 
 	avail := body.H - 16
@@ -1522,6 +1676,9 @@ func renderFilesTextBody(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 						// there and editable.
 						filesDrawPlainText(r, config, font, "(empty line)", WithAlpha(ColorTextTertiary(), 150), textX, rowY+2)
 					}
+				} else if segs := filesRowSegs(idx, i, key); segs != nil {
+					// Syntax colours (fileeditor_syntax_draw.go).
+					filesDrawSegs(r, config, font, segs, textX, rowY+2)
 				} else {
 					filesDrawPlainText(r, config, font, row, ColorTextPrimary(), textX, rowY+2)
 				}
@@ -1559,51 +1716,6 @@ func fileEditorLineLabel(idx int) string {
 	return filesNumberString(fileEditor.lineBase + int64(rel))
 }
 
-// renderFilesHexBody draws hex rows: the offset, four groups of four bytes at
-// fixed columns (Inter is not monospaced, so each group gets its own column),
-// and the printable characters.
-func renderFilesHexBody(renderer *sdl.Renderer, config *Config, font *ttf.Font, body sdl.Rect) {
-	rowH := int32(font.Height()) + 4
-	rows := fileEditor.window.hex
-	count := len(rows)
-	avail := body.H - 16
-	visible := int(avail / rowH)
-	if visible < 1 {
-		visible = 1
-	}
-	if fileEditor.cursor < fileEditor.scroll {
-		fileEditor.scroll = fileEditor.cursor
-	}
-	if fileEditor.cursor >= fileEditor.scroll+visible {
-		fileEditor.scroll = fileEditor.cursor - visible + 1
-	}
-	offW, _ := measureText(font, "00000000")
-	groupW, _ := measureText(font, "WW WW WW WW")
-	x0 := body.X + 16
-	groupX := x0 + offW + 28
-	asciiX := groupX + 4*(groupW+18) + 12
-	fileEditorRowRects = fileEditorRowRects[:0]
-	y := body.Y + 8
-	renderWithClip(renderer, body.X+2, body.Y+2, body.W-4, body.H-4, func(r *sdl.Renderer) {
-		for idx := fileEditor.scroll; idx < count && idx < fileEditor.scroll+visible; idx++ {
-			row := rows[idx]
-			rect := sdl.Rect{X: body.X + 6, Y: y, W: body.W - 12, H: rowH}
-			if idx == fileEditor.cursor {
-				fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 8, WithAlpha(glassAccent(), 34))
-			}
-			filesDrawPlainText(r, config, font, row.offset, ColorTextTertiary(), x0, y+2)
-			for g := 0; g < 4; g++ {
-				filesDrawPlainText(r, config, font, row.groups[g], ColorTextPrimary(), groupX+int32(g)*(groupW+18), y+2)
-			}
-			filesDrawPlainText(r, config, font, row.ascii, ColorTextSecondary(), asciiX, y+2)
-			fileEditorRowRects = append(fileEditorRowRects, rect)
-			y += rowH
-		}
-	})
-	fileEditor.viewLines = visible
-	filesDrawBodyScrollbar(renderer, body, count, visible)
-}
-
 // filesDrawBodyScrollbar marks where the view is: within the file for a
 // windowed file, within the buffer otherwise.
 func filesDrawBodyScrollbar(renderer *sdl.Renderer, body sdl.Rect, count, visible int) {
@@ -1632,6 +1744,9 @@ func fileEditorTitle() string {
 	if fileEditor.confirm {
 		return "Discard changes?"
 	}
+	if fileEditorHexMode() && !fileEditor.readOnly {
+		return "Hex editor · " + fileEditor.title
+	}
 	if fileEditor.mode != filesViewEdit || fileEditor.readOnly {
 		return fileEditor.title
 	}
@@ -1652,13 +1767,24 @@ func fileEditorSubtitle(font *ttf.Font, maxW int32) string {
 	if fileEditor.mode == filesViewEdit && fileEditorDirtyCached() {
 		state = "unsaved changes"
 	}
+	if n := len(fileEditor.hex.patches); n > 0 && fileEditorHexMode() {
+		state = pluralizeCount(n, "byte changed", "bytes changed")
+	}
 	if fileEditor.readOnly {
 		state = "read-only"
 	}
 	if fileEditor.err != "" {
+		if fileEditorHexMode() {
+			return ellipsize(font, fileEditor.err, maxW)
+		}
 		return ellipsize(font, fileEditor.err+" · line "+fmt.Sprintf("%d", fileEditor.cursor+1), maxW)
 	}
-	rest := fileEditorPosition() + " · " + state
+	rest := fileEditorPosition() + " · "
+	// The language the colours come from, when there are colours.
+	if lang := fileEditorSyntaxNow(); lang != synNone {
+		rest += synLangName(lang) + " · "
+	}
+	rest += state
 	folder := filepath.Base(filepath.Dir(fileEditor.path))
 	if folder == "" || folder == "." || folder == string(filepath.Separator) {
 		folder = fileEditor.path
@@ -1680,12 +1806,11 @@ func fileEditorSubtitle(font *ttf.Font, maxW int32) string {
 
 // fileEditorPosition says where the cursor is in the file.
 func fileEditorPosition() string {
-	switch fileEditor.mode {
-	case filesViewEdit:
+	switch {
+	case fileEditor.mode == filesViewEdit:
 		return fmt.Sprintf("line %d of %d", fileEditor.cursor+1, len(fileEditor.lines))
-	case filesViewHex:
-		offset := fileEditor.window.start + int64(fileEditor.cursor)*filesHexRowBytes
-		return fmt.Sprintf("offset %s of %s", humanBytes(offset), humanBytes(fileEditor.size))
+	case fileEditorHexMode():
+		return hexPosition()
 	}
 	pct := 0
 	if fileEditor.size > 0 {
@@ -1708,15 +1833,15 @@ func fileEditorFooterHints() []FooterHint {
 	if fileEditor.confirm {
 		return []FooterHint{{Button: "B", Label: "Discard"}, {Button: "A", Label: "Keep editing"}}
 	}
+	if fileEditorHexMode() {
+		return hexFooterHints()
+	}
 	if fileEditor.mode == filesViewHex {
-		toggle := "Text"
-		if fileEditor.forcedText {
-			toggle = "Hex"
-		}
+		// A binary file shown as text: X goes back to the hex editor.
 		return []FooterHint{
 			{Button: "D-Pad", Label: "Scroll"},
 			{Button: "L1/R1", Label: "Page"},
-			{Button: "X", Label: toggle},
+			{Button: "X", Label: "Hex"},
 			{Button: "Start / Tab", Label: "View"},
 			{Button: "B", Label: "Close"},
 		}

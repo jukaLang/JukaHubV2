@@ -324,6 +324,15 @@ func (r emuInstallReport) summary() string {
 // reports through the install bar and a toast, the same way every other
 // download action does.
 func startEmulatorInstall(e emuEntry) {
+	if dolphinTile(e) {
+		// Roms/GC, Roms/Wii and the Dolphin core install or update the Dolphin
+		// build that loads here — JukaHub's own for TrimUI first — with
+		// Dolphin's Sys folder (dolphin.go). Also from a GameCube folder that
+		// reads "not supported" on an A133P: the press turns GameCube & Wii to
+		// Try anyway, or says how while the player has them off.
+		dolphinStartInstall()
+		return
+	}
 	if e.Status == emuUnsupported {
 		PlayNavSound()
 		ShowToast(e.Name+" is not supported here — "+e.Note, ToastKindInfo)

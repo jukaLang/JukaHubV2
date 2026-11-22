@@ -383,7 +383,7 @@ func emuCompareCores(index []coreIndexEntry, active map[string]coreBuild) (stale
 	current = map[string]bool{}
 	for _, entry := range index {
 		build, ok := active[entry.Core]
-		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) || ps2ManagesCore(entry.Core) {
+		if !ok || build.Path == "" || coreDirIsSystem(filepath.Dir(build.Path)) || ps2ManagesCore(entry.Core) || dolphinManagesCore(entry.Core) {
 			continue
 		}
 		if _, refused := coreBuildRefused(entry.Core, entry.CRC32); refused {

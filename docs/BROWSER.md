@@ -91,6 +91,12 @@ they were, and Select still opens the menu. The choice is the
 * Run the page's own JavaScript, so content a script builds — a framework app,
   a list fetched as JSON, lazy-loaded images, web components — is drawn too.
   See [JavaScript](#javascript).
+* Draw what modern pages are built from: SVG logos and icons (inline, as
+  `<img>` files and in CSS backgrounds), pictures inside lines of text (README
+  badges, emoji, the icon in a link), inline-block nav bars, pagination and
+  button rows side by side, real bold and monospace code, soft shadows and
+  round avatars, with every line set on one baseline.
+  [CSS_SUPPORT.md](../player/CSS_SUPPORT.md) lists exactly what is drawn.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and absolutely positioned or fixed layers painted
@@ -911,9 +917,11 @@ when a page's container structure depends on layout the reader does not model,
 it can still pick the wrong branch. Column flow grows implicit rows when the
 block axis is indefinite, and `auto-fit` removes the gaps belonging to
 tracks it collapses. A non-rectangular `grid-template-areas` matrix still uses
-the bounding box of its cells. A font family is kept only as far as "the
-app's one face", so a monospace `font-family` does not make a code block
-monospaced.
+the bounding box of its cells. A font family chooses only between the app's
+face and a monospace one (when the machine has a monospace font); web fonts are
+not downloaded, and an icon font shows only the icons Inter has a glyph for.
+SVG text, embedded pictures, filters, masks and clip paths are not drawn (the
+rest of the drawing is).
 GitHub issue pages and
 release pages work, and so do most pages that render their content with
 JavaScript; a page whose scripts need more than the reader has (a canvas, a live

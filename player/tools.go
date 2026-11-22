@@ -50,6 +50,10 @@ var allowedToolRepos = map[string]bool{
 	"projectdiscovery/httpx":  true,
 	"projectdiscovery/dnsx":   true,
 	"projectdiscovery/nuclei": true,
+	// The Audit toolkit's OSV-Scanner and Gitleaks (secaudit.go): one static
+	// program each, checked against the release's SHA-256 list.
+	"google/osv-scanner": true,
+	"gitleaks/gitleaks":  true,
 	// The built-in Syncthing for save files (syncthing.go). Installed only
 	// when the release's sha256sum.txt.asc lists the archive's hash.
 	"syncthing/syncthing": true,

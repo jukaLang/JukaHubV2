@@ -386,8 +386,12 @@ func vkLearnLastWord() {
 // vkSentenceTarget is a field of prose, where a sentence starts capitalised.
 func vkSentenceTarget() bool {
 	switch vkTarget {
-	case vkTargetChat, vkTargetFileLine, vkTargetName, vkTargetPlaylist, homeTabsNameVKTarget:
+	case vkTargetChat, vkTargetName, vkTargetPlaylist, homeTabsNameVKTarget:
 		return true
+	case vkTargetFileLine:
+		// A line of a plain text file, not of code or a config
+		// (fileeditor_syntax_draw.go): "import os" must not become "Import os".
+		return fileEditorLineIsProse()
 	case mailComposeVKTarget:
 		return mailComposeProse()
 	}
@@ -482,6 +486,11 @@ func vkStripModeNow() vkStripMode {
 		// Addresses are not words: the strip must not learn pieces of them.
 		if f := mailUI.compose.editing; f == "to" || f == "cc" {
 			return vkStripQuickHost
+		}
+	case vkTargetFileLine:
+		// The hex editor's bytes and offsets are not words either.
+		if fileEditorVKHexInput() {
+			return vkStripHidden
 		}
 	case vkTargetFiles:
 		switch filesKeyboard {

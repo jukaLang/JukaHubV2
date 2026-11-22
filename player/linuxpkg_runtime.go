@@ -14,9 +14,9 @@ package main
 // firmware's libraries. A script (a Python or Perl program from a package)
 // gets a wrapper that runs it with the wrapped interpreter. What relocated
 // programs need to find their own files — PYTHONHOME, Perl's @INC, gconv
-// modules, terminal descriptions, CA certificates, Nmap's data — is written
-// once into bin/.jpkg-env, which every wrapper sources. All of it is rebuilt
-// from the installed packages after every change.
+// modules, terminal descriptions, CA certificates, Nmap's and testssl.sh's
+// data — is written once into bin/.jpkg-env, which every wrapper sources. All
+// of it is rebuilt from the installed packages after every change.
 //
 // <data>/linux/bin is first on PATH for the Terminal's commands only. A
 // firmware SSH shell can source <data>/linux/env.sh, or call the wrappers by
@@ -185,6 +185,15 @@ func linuxPkgEnvScript(lay linuxPkgLayout) string {
 	}
 	if p, ok := exists("usr/share/nmap"); ok {
 		export("NMAPDIR", p)
+	}
+	// testssl.sh reads its cipher mapping and CA stores from
+	// $TESTSSL_INSTALL_DIR/etc; the package's default is a /usr/share folder,
+	// which is on the card here.
+	for _, rel := range []string{"usr/share/testssl", "usr/share/testssl.sh"} {
+		if _, ok := exists(rel + "/etc/cipher-mapping.txt"); ok {
+			export("TESTSSL_INSTALL_DIR", filepath.Join(root, filepath.FromSlash(rel)))
+			break
+		}
 	}
 	for _, rel := range []string{"usr/lib/file/magic.mgc", "usr/share/misc/magic.mgc"} {
 		if p, ok := exists(rel); ok {
