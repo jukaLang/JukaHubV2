@@ -530,9 +530,10 @@ func TestNativeLoadProblemRechecksWhenALibraryChanges(t *testing.T) {
 }
 
 // A desktop build's device libraries (coretrimui.go): every one missing is
-// named in one sentence, which the installer of JukaHub's copies reads back
-// (coredevlibs.go), and the copies, in env.deviceDirs, answer it.
-func TestCoreDeviceLibsNamedTogetherAndFoundInJukaHubsCopies(t *testing.T) {
+// named in one sentence, which coredevlibs.go reads back (libevdev, which gets
+// no stand-in, makes the sentence one it does not take), and JukaHub's
+// stand-ins, in env.deviceDirs, answer it.
+func TestCoreDeviceLibsNamedTogetherAndFoundInJukaHubsStandIns(t *testing.T) {
 	core := buildTestELF(t, testELF{machine: elf.EM_AARCH64, needed: []string{"libc.so.6", "libusb-1.0.so.0", "libudev.so.1"}})
 	env := aarch64Env(t.TempDir())
 	got := coreDeviceLibLoadProblem(bytes.NewReader(core), env, "")
@@ -542,17 +543,161 @@ func TestCoreDeviceLibsNamedTogetherAndFoundInJukaHubsCopies(t *testing.T) {
 	if libs := coreDevLibsMissing(got); strings.Join(libs, " ") != "libusb-1.0.so.0 libudev.so.1" {
 		t.Errorf("read back as %q", libs)
 	}
-	for _, other := range []string{"needs libX11.so.6, which this firmware does not have", "needs GLIBC_2.34; this firmware's libc.so.6 has up to GLIBC_2.33", ""} {
+	for _, other := range []string{"needs libX11.so.6, which this firmware does not have", "needs GLIBC_2.34; this firmware's libc.so.6 has up to GLIBC_2.33", "",
+		"needs libusb-1.0.so.0, libudev.so.1 and libevdev.so.2, which this firmware does not have"} {
 		if libs := coreDevLibsMissing(other); libs != nil {
 			t.Errorf("%q read as device libraries %q", other, libs)
 		}
 	}
-	copies := t.TempDir()
-	for _, lib := range []string{"libusb-1.0.so.0", "libudev.so.1"} {
-		writeTestFile(t, filepath.Join(copies, lib), buildTestELF(t, testELF{machine: elf.EM_AARCH64, soname: lib}))
+	// With libevdev among them, the others still get stand-ins, so the
+	// refusal that follows names only libevdev.
+	if standIn, others, ok := coreDevLibsSplit("needs libusb-1.0.so.0, libudev.so.1 and libevdev.so.2, which this firmware does not have"); !ok ||
+		strings.Join(standIn, " ") != "libusb-1.0.so.0 libudev.so.1" || strings.Join(others, " ") != "libevdev.so.2" {
+		t.Errorf("split as %q / %q (%v)", standIn, others, ok)
 	}
-	env.deviceDirs = []string{copies}
+	standIns := t.TempDir()
+	for _, lib := range []string{"libusb-1.0.so.0", "libudev.so.1"} {
+		data, err := devStubBuild(lib, nil, nil, devStubLibs[lib].ret)
+		if err != nil {
+			t.Fatalf("%s: %v", lib, err)
+		}
+		writeTestFile(t, filepath.Join(standIns, lib), data)
+	}
+	env.deviceDirs = []string{standIns}
 	if got := coreDeviceLibLoadProblem(bytes.NewReader(core), env, ""); got != "" {
-		t.Errorf("with JukaHub's copies beside the runtime: %q", got)
+		t.Errorf("with JukaHub's stand-ins beside the runtime: %q", got)
+	}
+	// The manifest's record says when a stand-in must be widened.
+	syms := []devStubSym{{name: "udev_new", version: "LIBUDEV_183"}}
+	rec := coreDevStubRecordOf([]string{"LIBUDEV_183"}, syms, 1)
+	if !coreDevStubCovers(rec, []string{"LIBUDEV_183"}, syms) || len(coreDevStubSymsOf(rec)) != 1 {
+		t.Errorf("record %+v does not cover what it was written for", rec)
+	}
+	if coreDevStubCovers(rec, nil, append(syms, devStubSym{name: "udev_unref", version: "LIBUDEV_183"})) {
+		t.Errorf("record %+v covers a function it lacks", rec)
+	}
+}
+
+// JukaHub's stand-in for a device library (coredevstub.go) is a file glibc's
+// loader takes: 64-bit ARM, its own name, every function the core imports at
+// the version it asks for, two segments the loader can map (the dynamic
+// section in the writable one, which glibc relocates in place), no executable
+// stack, and code that returns what the library's callers expect.
+func TestDeviceLibraryStandInIsALoadableLibrary(t *testing.T) {
+	le := binary.LittleEndian
+	parse := func(lib string, versions []string, syms []devStubSym) (*elf.File, []byte) {
+		t.Helper()
+		data, err := devStubBuild(lib, versions, syms, devStubLibs[lib].ret)
+		if err != nil {
+			t.Fatalf("%s: %v", lib, err)
+		}
+		f, err := elf.NewFile(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("%s does not parse: %v", lib, err)
+		}
+		if f.Type != elf.ET_DYN || f.Class != elf.ELFCLASS64 || f.Machine != elf.EM_AARCH64 {
+			t.Fatalf("%s: %v %v %v", lib, f.Type, f.Class, f.Machine)
+		}
+		if names, err := f.DynString(elf.DT_SONAME); err != nil || strings.Join(names, ",") != lib {
+			t.Errorf("%s: soname %v, %v", lib, names, err)
+		}
+		if libs, _ := f.ImportedLibraries(); len(libs) != 0 {
+			t.Errorf("%s needs %v", lib, libs)
+		}
+		var loads []*elf.Prog
+		for _, p := range f.Progs {
+			switch p.Type {
+			case elf.PT_LOAD:
+				loads = append(loads, p)
+				if p.Align != devStubAlign || (p.Vaddr-p.Off)%p.Align != 0 || p.Off+p.Filesz > uint64(len(data)) {
+					t.Errorf("%s: segment %+v cannot be mapped", lib, p.ProgHeader)
+				}
+			case elf.PT_GNU_STACK:
+				if p.Flags&elf.PF_X != 0 {
+					t.Errorf("%s asks for an executable stack", lib)
+				}
+			}
+		}
+		dyn := f.Section(".dynamic")
+		if len(loads) != 2 || loads[0].Off != 0 || loads[0].Flags&elf.PF_W != 0 || loads[1].Flags&elf.PF_W == 0 ||
+			dyn == nil || dyn.Addr < loads[1].Vaddr || dyn.Addr+dyn.Size > loads[1].Vaddr+loads[1].Memsz {
+			t.Fatalf("%s: segments %d, dynamic %+v", lib, len(loads), dyn)
+		}
+		return f, data
+	}
+	// code is the instructions of the function sym.
+	code := func(f *elf.File, data []byte, sym string) (pc uint64, words []uint32) {
+		t.Helper()
+		syms, err := f.DynamicSymbols()
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := f.Section(".text")
+		for _, s := range syms {
+			if s.Name == sym {
+				if s.Section != elf.SectionIndex(devStubShText) || s.Value < text.Addr || s.Value+s.Size > text.Addr+text.Size {
+					t.Fatalf("%s at %#x outside .text", sym, s.Value)
+				}
+				for at := s.Value; at < s.Value+s.Size; at += 4 {
+					words = append(words, le.Uint32(data[text.Offset+at-text.Addr:]))
+				}
+				return s.Value, words
+			}
+		}
+		t.Fatalf("%s is not exported", sym)
+		return 0, nil
+	}
+	adrTarget := func(pc uint64, w uint32) uint64 {
+		imm := int64(w>>5&0x7ffff)<<2 | int64(w>>29&3)
+		if imm&(1<<20) != 0 {
+			imm -= 1 << 21
+		}
+		return uint64(int64(pc) + imm)
+	}
+
+	// libudev: versioned functions, each returning NULL.
+	f, data := parse("libudev.so.1", []string{"LIBUDEV_183"}, []devStubSym{
+		{name: "udev_new", version: "LIBUDEV_183"}, {name: "udev_unref", version: "LIBUDEV_183"},
+		{name: "udev_device_get_tags_list_entry", version: "LIBUDEV_196"},
+	})
+	if defs := elfVersionDefs(f); len(defs) != 2 || !defs["LIBUDEV_183"] || !defs["LIBUDEV_196"] {
+		t.Errorf("libudev versions %v", defs)
+	}
+	versym, err := f.Section(".gnu.version").Data()
+	if err != nil || len(versym) != 8 {
+		t.Fatalf("versym %v, %v", versym, err)
+	}
+	// Name order: udev_device_get_tags_list_entry (LIBUDEV_196, index 3),
+	// udev_new and udev_unref (LIBUDEV_183, index 2).
+	if got := []uint16{le.Uint16(versym[2:]), le.Uint16(versym[4:]), le.Uint16(versym[6:])}; got[0] != 3 || got[1] != 2 || got[2] != 2 {
+		t.Errorf("symbol versions %v", got)
+	}
+	if _, words := code(f, data, "udev_new"); len(words) != 2 || words[0] != 0xd2800000 || words[1] != a64Ret {
+		t.Errorf("udev_new = %#x, want mov x0, #0; ret", words)
+	}
+
+	// libusb: unversioned; not-supported, a string, 0, and the version.
+	f, data = parse("libusb-1.0.so.0", nil, []devStubSym{{name: "libusb_init"}, {name: "libusb_error_name"},
+		{name: "libusb_has_capability"}, {name: "libusb_get_version"}})
+	if _, words := code(f, data, "libusb_init"); len(words) != 2 || words[0] != 0x92800160 || words[1] != a64Ret {
+		t.Errorf("libusb_init = %#x, want mov x0, #-12; ret", words)
+	}
+	if _, words := code(f, data, "libusb_has_capability"); len(words) != 2 || words[0] != 0xd2800000 {
+		t.Errorf("libusb_has_capability = %#x, want 0", words)
+	}
+	ro := f.Section(".rodata")
+	pc, words := code(f, data, "libusb_error_name")
+	if at := adrTarget(pc, words[0]); at < ro.Addr || at >= ro.Addr+ro.Size {
+		t.Errorf("libusb_error_name points at %#x, outside .rodata", at)
+	} else if s, _ := elfString(data[ro.Offset:ro.Offset+ro.Size], uint32(at-ro.Addr)); s != "LIBUSB_ERROR_NOT_SUPPORTED" {
+		t.Errorf("libusb_error_name returns %q", s)
+	}
+	pc, words = code(f, data, "libusb_get_version")
+	sec := f.Section(".data")
+	if len(words) != 6 || sec == nil || adrTarget(pc, words[0]) != sec.Addr || sec.Size != 24 || words[5] != a64Ret {
+		t.Fatalf("libusb_get_version = %#x, data %+v", words, sec)
+	}
+	if ver := data[sec.Offset:]; le.Uint16(ver[0:]) != 1 || le.Uint16(ver[4:]) != 27 {
+		t.Errorf("libusb_version starts %v", ver[:8])
 	}
 }

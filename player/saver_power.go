@@ -67,6 +67,11 @@ const (
 
 	// saverWakePollMS is how often the idle sleep looks for a queued press.
 	saverWakePollMS = uint32(20)
+
+	// framePressPollMS is how often an awake frame's sleep looks for one: the
+	// most a press waits for the loop, where it used to wait out the rest of
+	// the frame (up to 66 ms on a menu left alone for ten seconds).
+	framePressPollMS = uint32(8)
 )
 
 // saverPowerMode is the low-power profile in force.
@@ -183,6 +188,11 @@ func saverPowerTick(now time.Time) {
 		want = saverPowerWant(true, now.Sub(since), alarmFiringActive(), videoHoldsScreenAwake(), saverLaunchActive(), playing)
 	}
 	if want != mode {
+		if want != saverPowerOff {
+			// Faster menus' raised floor goes first: under it the kernel
+			// refuses the idle ceiling (uiboost.go).
+			uiBoostEndNow()
+		}
 		saverPowerApply(want)
 	}
 }
@@ -532,15 +542,16 @@ func saverFrameBudget(now time.Time) uint32 {
 	return saverStarfieldFrameMS
 }
 
-// saverFrameSleep is the main loop's end-of-frame sleep. Awake it is exactly
-// sdl.Delay(normal). In the idle low-power state the frame waits for the idle
-// budget instead, looking for a queued press every saverWakePollMS and
-// returning the moment there is one: the press is handled on the very next
-// iteration, so the slow cadence never costs the wake any latency.
+// saverFrameSleep is the main loop's end-of-frame sleep. Awake it is the
+// normal sleep, cut short by a press (framePressSleep). In the idle low-power
+// state the frame waits for the idle budget instead, looking for a queued
+// press every saverWakePollMS and returning the moment there is one: the press
+// is handled on the very next iteration, so the slow cadence never costs the
+// wake any latency.
 func saverFrameSleep(normal uint32) {
 	budget := saverFrameBudget(time.Now())
 	if budget <= normal {
-		sdl.Delay(normal)
+		framePressSleep(normal)
 		return
 	}
 	start := sdl.GetTicks64()
@@ -551,6 +562,34 @@ func saverFrameSleep(normal uint32) {
 		}
 		step := uint64(saverWakePollMS)
 		if left := uint64(budget) - elapsed; left < step {
+			step = left
+		}
+		sdl.Delay(uint32(step))
+		sdl.PumpEvents()
+		if saverPressQueued() {
+			return
+		}
+	}
+}
+
+// framePressSleep is an awake frame's sleep: up to ms, looking for a queued
+// press every framePressPollMS and returning when there is one, so the press
+// is handled — and its frame drawn — at once instead of after the rest of the
+// frame's sleep. Stick drift and motion do not count (saverPressEvents), so a
+// resting stick keeps the cadence it had. Main thread.
+func framePressSleep(ms uint32) {
+	if ms <= framePressPollMS {
+		sdl.Delay(ms)
+		return
+	}
+	start := sdl.GetTicks64()
+	for {
+		elapsed := sdl.GetTicks64() - start
+		if elapsed >= uint64(ms) {
+			return
+		}
+		step := uint64(framePressPollMS)
+		if left := uint64(ms) - elapsed; left < step {
 			step = left
 		}
 		sdl.Delay(uint32(step))

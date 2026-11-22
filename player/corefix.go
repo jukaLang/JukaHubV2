@@ -587,7 +587,15 @@ func coreFixFindBroken(stop func() bool) []coreFixBroken {
 			}
 			break
 		}
-		if problem := coreLoadProblemFile(b.Path, b.Path); problem != "" {
+		problem := coreLoadProblemFile(b.Path, b.Path)
+		// A desktop build that only lacks device libraries (the buildbot's
+		// Dolphin, from RetroArch's own updater) gets JukaHub's stand-ins now,
+		// so its first start — from RetroArch's menu too — finds them
+		// (coredevlibs.go).
+		if problem != "" && coreDevLibsCouldCover(problem, b.Path) && raGlibcLoadDir(b.Path) != "" && coreDevLibsEnsureFor(b.Path) {
+			problem = coreLoadProblemFile(b.Path, b.Path)
+		}
+		if problem != "" {
 			if coreFixScanSure(problem) {
 				broken = append(broken, coreFixBroken{core: core, path: b.Path, problem: problem})
 			} else {

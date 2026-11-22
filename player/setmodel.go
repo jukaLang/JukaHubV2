@@ -1665,6 +1665,9 @@ func setBuildSections() []setSection {
 						setToast("Automatic CPU speed: " + setOnOff(on))
 					},
 				},
+				// "Faster menus": a press lifts the clock for a moment, and the
+				// menus draw up to 60 fps while in use (uiboost.go).
+				uiBoostSettingsRow(),
 				// "CPU boost in games": heavy games hold the top clock while the
 				// chip is cool (cpuboost.go); "Heat limit": where the heat guard
 				// starts slowing any game down (heatguard.go).

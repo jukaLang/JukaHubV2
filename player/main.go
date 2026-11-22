@@ -85,6 +85,9 @@ func main() {
 	// quiet before SDL opens the input, GPU and sound devices, put back at
 	// exit (startup_kerneltune_linux.go).
 	startupKernelTune()
+	// TrimUI: the screen's thread — this one, which SDL holds — runs ahead of
+	// background work; the processes it starts do not inherit that (uiprio_linux.go).
+	uiThreadPriorityInit()
 	// The first frame's font, icons and labels are read on the idle cores
 	// from here, while SDL and the GPU driver start (startup_preload.go).
 	startupPreload()
@@ -1021,6 +1024,9 @@ func main() {
 		if whileAwayWasActive && !gameScreenSuspended() {
 			whileAwayWasActive = false
 			whileAwayNotify()
+			// The page, its covers and the textures come back at once: the
+			// CPU is up for them (uiboost.go).
+			uiBoostNote(uiBoostReturn)
 		}
 		// Keep the home-header pairing QR live: start the companion when Wi-Fi
 		// appears and rebuild the code if DHCP moved the address. The first

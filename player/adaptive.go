@@ -109,7 +109,20 @@ type FrameRateController struct {
 	// backdropBurst is a request that may pass the active cadence too, up
 	// to profile.Burst (requestFrameBurst).
 	backdropBurst bool
+	// costMS is a running average of what a frame costs (Pace), and fast
+	// whether it is low enough for Faster menus' 60 fps step (Delay): on at
+	// frameFastMS or less, off again over frameSlowMS.
+	costMS float64
+	fast   bool
 }
+
+// Faster menus' 60 fps step (uiboost.go): frames this cheap hold 60 fps with
+// room to spare; the gap between the two keeps one slow frame (a cover
+// decoding) from flipping the cadence back and forth.
+const (
+	frameFastMS = 11.0
+	frameSlowMS = 14.0
+)
 
 // NewFrameRateController creates a controller tuned for the given platform.
 func NewFrameRateController() *FrameRateController {
@@ -138,6 +151,9 @@ func (fc *FrameRateController) NotifyInput() {
 		logDebug("framerate", "→ Active (%d fps)", fc.profile.fps(FrameRateActive))
 	}
 	fc.mu.Unlock()
+	// Faster menus: the CPU speeds up for the frames this press asked for
+	// (uiboost.go; a no-op off the handheld or with the row off).
+	uiBoostNote(uiBoostPress)
 }
 
 // LastInput is the SDL tick of the last NotifyInput (0 on a nil controller).
@@ -232,8 +248,15 @@ func (fc *FrameRateController) Delay() uint32 {
 	backdrop := fc.backdropMS
 	backdropPast := fc.backdropPastLowPower
 	backdropBurst := fc.backdropBurst
+	fast := fc.fast
 
 	fc.mu.Unlock()
+
+	// Faster menus (uiboost.go): for a moment after a press Low Power's cap is
+	// off — the setting promises a slower frame rate when nothing moves — and
+	// with the CPU boost up and frames cheap the active cadence is Burst.
+	pressing := uiBoostOn.Load() && elapsed < uint64(uiBoostPressHold/time.Millisecond)
+	capped := lowPower && !pressing
 
 	var mode FrameRateMode
 	switch {
@@ -241,7 +264,7 @@ func (fc *FrameRateController) Delay() uint32 {
 		// Performance, or a playing video: answer an idle query with the
 		// fastest cadence.
 		mode = FrameRateActive
-	case lowPower && elapsed < fc.deepThreshold:
+	case capped && elapsed < fc.deepThreshold:
 		mode = FrameRateIdle
 	case animation || elapsed < fc.idleThreshold:
 		mode = FrameRateActive
@@ -263,7 +286,11 @@ func (fc *FrameRateController) Delay() uint32 {
 		// 30 frames a second judders, and the decoder is the real cost anyway.
 		return fc.profile.Active
 	}
-	return fc.profile.backdropDelay(fc.profile.delayFor(mode, lowPower), backdrop, lowPower && !backdropPast, backdropBurst)
+	delay := fc.profile.delayFor(mode, capped)
+	if pressing && fast && mode == FrameRateActive && fc.profile.Burst > 0 && uiBoostLive.Load() {
+		delay = min(delay, fc.profile.Burst)
+	}
+	return fc.profile.backdropDelay(delay, backdrop, capped && !backdropPast, backdropBurst)
 }
 
 // CurrentMode returns the current frame rate mode (for diagnostics).
@@ -283,6 +310,7 @@ func (fc *FrameRateController) CurrentMode() FrameRateMode {
 // nothing moves the sleep stays whole, which is the cheaper cadence idle
 // screens are meant to have.
 func (fc *FrameRateController) Pace(spent time.Duration) uint32 {
+	fc.noteFrameCost(spent)
 	delay := fc.Delay()
 	fc.mu.Lock()
 	busy := fc.animationActive || fc.performancePinned || fc.videoActive || fc.backdropMS > 0 ||
@@ -298,6 +326,29 @@ func (fc *FrameRateController) Pace(spent time.Duration) uint32 {
 		return 1
 	}
 	return delay - ms
+}
+
+// noteFrameCost folds one frame's cost into the running average Faster menus'
+// 60 fps step reads (Delay): a screen whose frames take longer than that step
+// allows keeps its 30 fps, and the average follows within a few frames.
+func (fc *FrameRateController) noteFrameCost(spent time.Duration) {
+	if spent <= 0 {
+		return
+	}
+	ms := float64(spent) / float64(time.Millisecond)
+	fc.mu.Lock()
+	if fc.costMS <= 0 {
+		fc.costMS = ms
+	} else {
+		fc.costMS += (ms - fc.costMS) * 0.2
+	}
+	switch {
+	case !fc.fast && fc.costMS <= frameFastMS:
+		fc.fast = true
+	case fc.fast && fc.costMS > frameSlowMS:
+		fc.fast = false
+	}
+	fc.mu.Unlock()
 }
 
 // ── Frame requests from moving pictures ─────────────────────────────────

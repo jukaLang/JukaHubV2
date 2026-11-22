@@ -53,6 +53,11 @@ package main
 // setting, another tool's ceiling, Automatic CPU speed off) is still followed,
 // for the heat guard alone (heatHoldLocked). Either way the session's records
 // and the guard's go into the one crash marker.
+//
+// An in-hub session can also be boosted for a moment (Faster menus,
+// uiboost.go): a press lifts its ceiling to the top the heat allows and its
+// floor near it, through the same writes and records, until the press's hold
+// runs out. A press wakes the ticker at once rather than at its next sample.
 
 import (
 	"encoding/json"
@@ -314,6 +319,9 @@ func autoPerfFrame(config *Config, now time.Time) {
 	autoPerfHub.mu.Lock()
 	autoPerfHub.key, autoPerfHub.label, autoPerfHub.class = key, label, class
 	autoPerfHub.mu.Unlock()
+	// Faster menus' row and power mode (uiboost.go), before the start's
+	// request below can read them.
+	uiBoostPublish(config)
 	autoPerfStart()
 }
 
@@ -332,7 +340,7 @@ func autoPerfHubContext(config *Config) (string, string, autoPerfClass) {
 	case musicSceneActive():
 		return "hub:music", "Music", autoPerfClassMedia
 	case ss.active || ambientIsActive():
-		return "hub:idle", "Idle screen", autoPerfClassMenu
+		return uiBoostIdleKey, "Idle screen", autoPerfClassMenu
 	}
 	name := ""
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
@@ -356,6 +364,9 @@ func autoPerfStart() {
 	autoPerf.mu.Unlock()
 	Cleanup = append(Cleanup, autoPerfShutdown)
 	go autoPerfLoop()
+	// The first frames and the start-up work behind them run boosted
+	// (uiboost.go); the hub session begins with them, not two seconds later.
+	uiBoostNote(uiBoostStart)
 }
 
 // ── Launch hooks (powerprofile.go) ───────────────────────────────────────
@@ -452,10 +463,29 @@ func autoPerfLoop() {
 	}
 	t := time.NewTicker(autoPerfTick)
 	defer t.Stop()
-	for range t.C {
-		if !autoPerfTickOnce(time.Now()) {
-			return
+	// Faster menus (uiboost.go): a press wakes the loop at once, and the end
+	// of its hold is a timer of its own.
+	hold := time.NewTimer(time.Hour)
+	hold.Stop()
+	defer hold.Stop()
+	look := func(after time.Duration) {
+		if after > 0 {
+			hold.Reset(after)
+		} else {
+			hold.Stop()
 		}
+	}
+	look(uiBoostReconcile(time.Now()))
+	for {
+		select {
+		case <-t.C:
+			if !autoPerfTickOnce(time.Now()) {
+				return
+			}
+		case <-uiBoostKick:
+		case <-hold.C:
+		}
+		look(uiBoostReconcile(time.Now()))
 	}
 }
 
@@ -499,6 +529,22 @@ func autoPerfTickOnce(now time.Time) bool {
 	autoPerf.prev = cur
 	// The heat dial moves every tick, whoever clocks the CPU (heatguard.go).
 	heatGuardTickLocked(now)
+	autoPerfFollowLocked(now, maxBusy, allBusy, sampled)
+	heatGuardAfterLocked(now)
+	save := autoPerfSaveLocked(now, false)
+	autoPerf.mu.Unlock()
+	if save != nil {
+		save()
+	}
+	return true
+}
+
+// autoPerfFollowLocked is one decision for the app in front: begin following
+// it, or move its level with the load. sampled is false without a load sample
+// (the first tick, or a press that woke the menus' boost between ticks,
+// uiboost.go): the session is begun or kept, never stepped by load. Under
+// autoPerf.mu.
+func autoPerfFollowLocked(now time.Time, maxBusy, allBusy float64, sampled bool) {
 	switch {
 	case autoPerf.denied:
 		// Refused once this run: nothing more to try.
@@ -529,13 +575,32 @@ func autoPerfTickOnce(now time.Time) bool {
 			autoPerfAdaptLocked(now, maxBusy, allBusy, sampled)
 		}
 	}
-	heatGuardAfterLocked(now)
-	save := autoPerfSaveLocked(now, false)
-	autoPerf.mu.Unlock()
-	if save != nil {
-		save()
+}
+
+// autoPerfHubKeyLocked is the in-hub screen the main thread last named (Home
+// before it has named one). Under autoPerf.mu; takes autoPerfHub.mu, as
+// autoPerfContextLocked does.
+func autoPerfHubKeyLocked() string {
+	autoPerfHub.mu.Lock()
+	key := autoPerfHub.key
+	autoPerfHub.mu.Unlock()
+	if key == "" {
+		return "hub:scene:Home"
 	}
-	return true
+	return key
+}
+
+// autoPerfHubInFrontLocked reports whether the hub's own screen is in front:
+// no launch on its way or running, no other program on the display. Only
+// then does a press begin a session between ticks (uiboost.go); a game's
+// session is begun by the tick alone, after the launch has recorded what it
+// will restore. Under autoPerf.mu; takes launchPowerProfile.mu, as
+// autoPerfContextLocked does.
+func autoPerfHubInFrontLocked() bool {
+	launchPowerProfile.mu.Lock()
+	depth := launchPowerProfile.depth
+	launchPowerProfile.mu.Unlock()
+	return depth == 0 && !autoPerf.launchSet && runningGameChildren.Load() == 0 && !foreignScreenSuspended()
 }
 
 // autoPerfContextLocked names the app in front. boost reports a CPU boost
@@ -716,6 +781,10 @@ func autoPerfLineLocked(s *autoPerfSession) string {
 		line = s.label + " · heavy-game boost · " + clock
 	case s.boost:
 		line = s.label + " · CPU boost · " + clock
+	case uiBoost.on && uiBoostEligibleLocked(s):
+		// Faster menus (uiboost.go): the press's clock, then the level.
+		ceil, floor := uiBoostLevelsLocked(s)
+		line = s.label + " · " + uiBoostRange(floor, ceil) + " while you press, then " + clock
 	}
 	if s.idx < s.top && s.idx == autoPerfHeatIdxLocked(s) {
 		line += " (cooling)"
@@ -864,6 +933,14 @@ func autoPerfIndexAtMost(levels []int64, khz int64) int {
 // from then on only the heat guard holds it (heatHoldLocked).
 func autoPerfWriteLocked(khz int64) bool {
 	s := &autoPerf.sess
+	// Faster menus (uiboost.go): while a press holds the boost, the ceiling is
+	// the top the heat allows and the floor stays near it.
+	var uiFloor int64
+	if uiBoost.on && uiBoostEligibleLocked(s) {
+		ceil, floor := uiBoostLevelsLocked(s)
+		khz = max(khz, ceil)
+		uiFloor = floor
+	}
 	// khz is a point of the first (fastest) policy's table; a second cluster
 	// with its own table gets the same share of its range.
 	var refTop int64
@@ -901,6 +978,11 @@ func autoPerfWriteLocked(khz int64) bool {
 			// CPU boost: the floor at the level too, so a dynamic governor
 			// cannot idle the clock between frames.
 			floor = target
+		case uiFloor > 0:
+			// The menus' boost: its floor at least (a higher one found
+			// stays), never over the ceiling. Once the boost is off, the
+			// record above takes the floor back to the value found.
+			floor = min(max(lo, cpufreqScaleKHz(dir, uiFloor, refTop)), target)
 		case floor < 0 && lo > 0 && target < lo:
 			if heatCap > 0 && khz <= heatCap {
 				floor = target // the heat dial goes under a raised floor too
@@ -1034,6 +1116,11 @@ func autoPerfEndLocked(now time.Time) { autoPerfFinishLocked(now, false) }
 // carry on from; otherwise they are restored and nil is returned.
 func autoPerfFinishLocked(now time.Time, keep bool) []saverSysfsWrite {
 	s := &autoPerf.sess
+	if !keep {
+		// The menus' boost ends with the session: the restore below puts its
+		// floor and ceiling back with the rest (uiboost.go).
+		uiBoostFinishLocked()
+	}
 	if !s.active {
 		autoPerf.sess = autoPerfSession{}
 		return nil

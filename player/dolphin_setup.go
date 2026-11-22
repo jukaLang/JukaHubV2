@@ -15,8 +15,9 @@ package main
 //     firmware's): it installs when RetroArch can start on JukaHub's private
 //     glibc 2.39 (ra_glibc.go), fetched and probed first. As a desktop build
 //     it also links libusb and libudev, which no TrimUI firmware has (a Brick
-//     Pro refused it for libusb on 2026-11-22): JukaHub brings Ubuntu's own
-//     beside that glibc (coredevlibs.go). When neither source gives a build,
+//     Pro refused it for libusb on 2026-11-22): JukaHub writes stand-ins for
+//     them beside that glibc, at the install and before every start
+//     (coredevlibs.go, coredevstub.go). When neither source gives a build,
 //     the error says why for each, JukaHub's own first. Both go through the
 //     door every core install uses (fetchCoreUpdate: allowlisted hosts, the
 //     index's CRC32, the load check against the file the build becomes;

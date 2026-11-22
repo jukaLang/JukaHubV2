@@ -414,6 +414,10 @@ func aiPerformanceGet(ctx context.Context, a aiArgs) aiStep {
 		if row, _, ok := aiFindRow(c, "autoPerformance"); ok {
 			fmt.Fprintf(&b, "Automatic CPU speed: %s — %s\n", aiRowValue(c, row), autoPerfSettingDetail(c))
 		}
+		// The hub's own clock while it is used (uiboost.go).
+		if row, _, ok := aiFindRow(c, uiBoostSetting); ok {
+			fmt.Fprintf(&b, "Faster menus: %s — %s\n", aiRowValue(c, row), uiBoostSettingDetail(c))
+		}
 		// The boost and the heat guard: why a game runs at the clock it does
 		// (cpuboost.go, heatguard.go).
 		if row, _, ok := aiFindRow(c, cpuBoostKey); ok {

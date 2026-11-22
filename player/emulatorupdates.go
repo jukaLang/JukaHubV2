@@ -460,17 +460,22 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	}
 	// What is left may be the device-access libraries a desktop build links
 	// (libusb, libudev: the buildbot's Dolphin on a Brick Pro, 2026-11-22):
-	// Ubuntu's copies beside the runtime (coredevlibs.go), then the strict look
-	// that every library it links is somewhere RetroArch finds it.
+	// JukaHub's stand-ins beside the runtime (coredevlibs.go), then the strict
+	// look that every library it links is somewhere RetroArch finds it.
 	devPending := false
 	if problem != "" {
-		if ok, pending := coreDevLibsEnsureForCore(ctx, problem, target); ok {
+		if ok, pending := coreDevLibsEnsureForCore(ctx, problem, binary.Name(), target); ok {
 			problem = coreLoadProblemFile(binary.Name(), target)
 		} else {
 			devPending = pending
 		}
 	}
 	if problem == "" && coreDevLibsForCore(binary.Name()) != nil {
+		// A build that loads with the stand-ins already there (an earlier
+		// nightly's) may import a function they lack: widened now.
+		if _, err := coreDevLibsEnsure(binary.Name(), target); err != nil {
+			logWarn("emulators", "stand-in device libraries for %s: %v", upd.Core, err)
+		}
 		problem = coreDevLibsStrictProblem(binary.Name(), target)
 	}
 	if problem != "" {
@@ -484,9 +489,11 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 			return coreBuild{}, fmt.Errorf("the %s build needs JukaHub's glibc %s, which could not be downloaded — check the connection and try again (%s)", upd.Date, privateGlibcVersion, problem)
 		}
 		if devPending {
-			// Likewise the device libraries: JukaHub brings them, but could
-			// not just now.
-			return coreBuild{}, fmt.Errorf("the %s build needs Ubuntu's %s beside JukaHub's glibc, which could not be installed just now — check the connection and try again", upd.Date, mlJoinAnd(coreDevLibsMissing(problem)))
+			// Likewise the device libraries: JukaHub writes stand-ins for
+			// them, but its glibc did not download or the card refused the
+			// write just now.
+			standIn, _, _ := coreDevLibsSplit(problem)
+			return coreBuild{}, fmt.Errorf("the %s build needs %s beside JukaHub's glibc %s, which could not be set up just now — check the connection and the card's free space, then try again", upd.Date, mlJoinAnd(standIn), privateGlibcVersion)
 		}
 		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
 	}

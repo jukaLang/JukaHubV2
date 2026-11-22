@@ -38,9 +38,10 @@ package main
 // aside for any library it cannot find, since RetroArch may bring it; these it
 // does not, so such a build is refused with the library named instead of
 // installing and then failing every start at RetroArch's dlopen. Where
-// RetroArch starts on JukaHub's glibc, JukaHub brings Ubuntu's own copies of
-// them instead (coredevlibs.go, since 2026-11-22: the buildbot's Dolphin
-// needed libusb on a Brick Pro).
+// RetroArch starts on JukaHub's glibc, JukaHub writes stand-ins for libusb,
+// libudev and libbluetooth instead (coredevlibs.go, coredevstub.go; since
+// 2026-11-22, when the buildbot's Dolphin needed libusb on a Brick Pro);
+// libevdev it does not, so a build that links it stays refused.
 
 import (
 	"debug/elf"
@@ -130,12 +131,12 @@ var coreDeviceLibs = []string{"libudev.so", "libusb-1.0.so", "libbluetooth.so", 
 // coreDeviceLibLoadProblem is the device-library half of the load check (see
 // the file comment): a build that links one of coreDeviceLibs loads only where
 // some library folder has it — the firmware's, RetroArch's own and the card's
-// (coreGLExtraDirs), then JukaHub's copies for a RetroArch on its glibc
+// (coreGLExtraDirs), then JukaHub's stand-ins for a RetroArch on its glibc
 // (env.deviceDirs, coredevlibs.go) — or where the RetroArch that opens it
 // links it itself. "" when the build links none of them, when each is found,
 // and whenever the check cannot tell; else every one missing is named
 // ("needs libusb-1.0.so.0 and libudev.so.1, which this firmware does not
-// have"), so one install of JukaHub's copies covers them all. retroArch is the
+// have"), so one pass of JukaHub's stand-ins covers them all. retroArch is the
 // RetroArch binary that owns the target's cores folder ("" when unknown).
 func coreDeviceLibLoadProblem(r io.ReaderAt, env elfLoadEnv, retroArch string) string {
 	f, err := elf.NewFile(r)

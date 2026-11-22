@@ -594,19 +594,28 @@ func raGlibcCouldCover(problem string) bool {
 
 // raGlibcCoreNeeds reports a core that cannot load on the firmware's glibc and
 // can on the runtime; missing, one that may once the runtime is installed.
+// The device libraries a desktop build links count as the runtime's: its
+// launches read JukaHub's stand-ins for them (coredevlibs.go), which are
+// written or widened here when the core needs what the folder lacks — a core
+// RetroArch's own updater installed never met JukaHub's updater, and on
+// 2026-11-22 such a Dolphin started on the firmware's glibc, without them,
+// and stopped at "libusb-1.0.so.0: cannot open shared object file".
 func raGlibcCoreNeeds(core string) (needs, missing bool) {
 	firmware := coreLoadProblemFileWith(core, core, false)
 	if firmware == "" {
 		return false, false
 	}
 	if raGlibcLoadDir(core) != "" {
+		// Cheap once this core file was seen (a stat and a map).
+		coreDevLibsEnsureFor(core)
 		return coreLoadProblemFileWith(core, core, true) == "", false
 	}
 	if _, _, ready := raGlibcRuntime(); ready {
 		// Installed, but this core's RetroArch does not start on it.
 		return false, false
 	}
-	return false, raGlibcCouldCover(firmware) && raGlibcResolve(coreRetroArchBinary(filepath.Dir(core))) != ""
+	return false, (raGlibcCouldCover(firmware) || coreDevLibsCouldCover(firmware, core)) &&
+		raGlibcResolve(coreRetroArchBinary(filepath.Dir(core))) != ""
 }
 
 // raGlibcForgetGapRefusals drops the updater's refusals of builds that only
@@ -814,8 +823,9 @@ type raGlibcFiles struct {
 
 // raGlibcWriteFiles writes the setup script and the wrappers for ras and makes
 // their mount points (empty folders, outside any game's namespace). extra
-// folders go last on the library path: JukaHub's device libraries for a core
-// that links them (coredevlibs.go), nil for every other launch and the probe.
+// folders go last on the library path: JukaHub's stand-in device libraries
+// (coredevlibs.go) for a core that links them and for RetroArch's own menu,
+// nil for every other launch and the probe.
 func raGlibcWriteFiles(ras []string, loader, libDir string, extra []string) (raGlibcFiles, error) {
 	var files raGlibcFiles
 	dir, err := raGlibcDir()
@@ -1058,8 +1068,9 @@ func raGlibcProbeAll() { raGlibcProbePending("") }
 // ── Launches ─────────────────────────────────────────────────────────────
 
 // raGlibcPlan is one launch's decision: the RetroArchs its namespace wraps,
-// none when it starts as before. extra are folders last on the library path
-// (coreDevLibsForCore: JukaHub's device libraries for a core that links them).
+// none when it starts as before. extra are folders last on the library path:
+// JukaHub's stand-in device libraries (coredevlibs.go), for a core that links
+// them and for RetroArch's own menu.
 type raGlibcPlan struct {
 	ras    []string
 	loader string
@@ -1125,12 +1136,27 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 		return plan, false, unprobed
 	}
 	plan = raGlibcPlan{ras: ras, loader: loader, libDir: libDir, why: why}
-	if core != "" {
-		// The device libraries a desktop build links, from JukaHub's copies
-		// (coredevlibs.go): only for a core that links them.
+	switch {
+	case core != "":
+		// The device libraries a desktop build links, from JukaHub's
+		// stand-ins (coredevlibs.go): only for a core that links them. Made
+		// sure of here too, for the Always setting, which skips
+		// raGlibcCoreNeeds.
+		coreDevLibsEnsureFor(core)
 		if plan.extra = coreDevLibsForCore(core); len(plan.extra) > 0 && mode != raGlibcAlways {
 			plan.why = filepath.Base(core) + " needs a newer glibc or device libraries the firmware does not have"
 		}
+	case menu:
+		// RetroArch's own menu may load such a core (Load Core → Dolphin, a
+		// build its Online Updater fetched): the stand-ins, last on its path,
+		// are found only where no real library is, and say "no device" to
+		// anything else that looks. The start's look (corefix.go) writes them
+		// for every active core that needs them; Dolphin's is made sure of
+		// here as well.
+		if dolphinCore := dolphinFindCore(); dolphinCore != "" {
+			coreDevLibsEnsureFor(dolphinCore)
+		}
+		plan.extra = coreDevLibsDirs()
 	}
 	return plan, false, unprobed
 }

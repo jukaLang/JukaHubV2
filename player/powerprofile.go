@@ -477,6 +477,75 @@ func restoreFrequencyCeiling(saved []cpuFrequencySave) {
 	}
 }
 
+// launchHubCPUSnapshot records what the hub runs with before a launch: each
+// policy's floor and ceiling and every CPU that is online. TrimUI's launch
+// scripts (an emulator's cpufreq.sh) set a floor and a ceiling of their own and
+// park cores for the lighter consoles, behind the launch profile, which puts
+// back only the governor and the ceiling it changed itself — so the menus after
+// a GBA game ran on two cores with the script's floor until JukaHub restarted.
+func launchHubCPUSnapshot() []cpuFrequencySave {
+	var out []cpuFrequencySave
+	// While the kernel's thermal limit is active a ceiling reads as its clamp,
+	// not the hub's value: only floors and cores are noted then.
+	active, known := cpuThermalThrottleState()
+	names := []string{"scaling_min_freq", "scaling_max_freq"}
+	if known && active {
+		names = names[:1]
+	}
+	for _, dir := range cpufreqPolicyDirs(cpufreqRoot) {
+		for _, name := range names {
+			path := filepath.Join(dir, name)
+			if v := saverReadTrimmed(path); v != "" {
+				out = append(out, cpuFrequencySave{path: path, value: v})
+			}
+		}
+	}
+	// Online CPUs only: a core that was parked stays the way it is.
+	online, _ := filepath.Glob(filepath.Join(cpufreqRoot, "cpu[0-9]*", "online"))
+	for _, path := range online {
+		if saverReadTrimmed(path) == "1" {
+			out = append(out, cpuFrequencySave{path: path, value: "1"})
+		}
+	}
+	return out
+}
+
+// launchHubCPURestore puts back what launchHubCPUSnapshot found, after the
+// launch's own restore: every core that was online then and is parked now —
+// a core is only ever brought back, never parked, and none while the kernel's
+// thermal limit is active (its own cooling may have parked it) — then each
+// floor and ceiling that differs. It reports how many values it wrote.
+func launchHubCPURestore(saved []cpuFrequencySave) int {
+	if len(saved) == 0 {
+		return 0
+	}
+	written := 0
+	// Cores first: a cluster whose cores were all parked has no cpufreq files
+	// until one of them is back.
+	if active, known := cpuThermalThrottleState(); !known || !active {
+		for _, s := range saved {
+			if filepath.Base(s.path) == "online" && saverReadTrimmed(s.path) == "0" &&
+				os.WriteFile(s.path, []byte("1\n"), 0o644) == nil {
+				written++
+			}
+		}
+	}
+	// Twice: a floor cannot go over the ceiling in force, nor a ceiling under
+	// the floor, so one of a pair may only land on the second pass.
+	for pass := 0; pass < 2; pass++ {
+		for _, s := range saved {
+			if filepath.Base(s.path) == "online" {
+				continue
+			}
+			if cur := saverReadTrimmed(s.path); cur != "" && cur != s.value &&
+				os.WriteFile(s.path, []byte(s.value+"\n"), 0o644) == nil {
+				written++
+			}
+		}
+	}
+	return written
+}
+
 // applyPowerProfile switches every CPU. It returns the governor names it set,
 // and an error naming the first CPU that refused.
 func applyPowerProfile(profile powerProfile, cfg powerProfileConfig) ([]string, error) {
@@ -516,6 +585,9 @@ var launchPowerProfile struct {
 	warned    bool
 	ceiling   []cpuFrequencySave
 	governors []cpuGovernorSave
+	// hub is what the hub ran with before the launch, for what a game's
+	// launch script changes behind the profile (launchHubCPUSnapshot).
+	hub []cpuFrequencySave
 }
 
 // beginGamePowerProfile raises the performance profile and returns a function
@@ -585,7 +657,7 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		launchPowerProfile.mu.Lock()
 		launchPowerProfile.depth--
 		last := launchPowerProfile.depth <= 0
-		var ceiling []cpuFrequencySave
+		var ceiling, hub []cpuFrequencySave
 		var governors []cpuGovernorSave
 		if last {
 			launchPowerProfile.depth = 0
@@ -595,6 +667,8 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 			launchPowerProfile.ceiling = nil
 			governors = launchPowerProfile.governors
 			launchPowerProfile.governors = nil
+			hub = launchPowerProfile.hub
+			launchPowerProfile.hub = nil
 		}
 		launchPowerProfile.mu.Unlock()
 		if !last || !switchable {
@@ -603,6 +677,13 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		// Whatever the restore manages, the launch is over: its crash marker
 		// must not make a later boot "restore" values from before this one.
 		defer bootCPUMarkerClear()
+		// Last, once the governor and ceiling below are back: the floors,
+		// ceilings and cores the game's launch script changed on its own.
+		defer func() {
+			if n := launchHubCPURestore(hub); n > 0 {
+				logPatch("power profile: put back %d CPU setting(s) the game's launch script changed (floor, ceiling, parked cores)", n)
+			}
+		}()
 		// Auto performance's game session goes back first (to this launch's
 		// ceiling), so its compare-and-restore can never land after the
 		// unconditional restore below and leave the launch's value behind.
@@ -634,6 +715,9 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	// policy for its maximum, so a firmware that boots with scaling_max_freq
 	// below the top OPP would otherwise pin the game to that lower clock.
 	governors := readGovernorSaves(cpuGovernorPaths(cpufreqRoot))
+	// Before the profile writes anything: the hub's own floor, ceiling and
+	// cores, for what the game's launch script changes behind it.
+	hub := launchHubCPUSnapshot()
 	ceiling, ceilingKHz, ceilingErr := applyFrequencyCeiling(cfg)
 	launchProfile := powerProfilePerformance
 	if cfg.Balanced {
@@ -658,6 +742,7 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	launchPowerProfile.mu.Lock()
 	launchPowerProfile.ceiling = ceiling
 	launchPowerProfile.governors = governors
+	launchPowerProfile.hub = hub
 	launchPowerProfile.mu.Unlock()
 	// If the hub dies while the game holds the performance profile, the next
 	// start puts these values back before it records the boot settings.

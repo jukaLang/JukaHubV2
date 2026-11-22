@@ -13,6 +13,28 @@ For anything older, the git log and the
 
 ### Added
 
+- **Faster menus: the CPU speeds up the moment you press** (Juka, 2026-11-22:
+  "Optimize JukaHub to run even faster and have better performance on Trimui
+  devices...feel free to manage cpu freq"). Automatic CPU speed kept Home and
+  the menus at 1.2 GHz, 816 MHz once quiet, under the firmware's `ondemand`
+  governor, so the frames a press asked for were drawn at that clock until its
+  next two-second sample. Now a press (and a held button's repeats) lifts the
+  hub session's ceiling to the top the heat guard allows and its floor to the
+  first operating point at 75% of the top (1.6 GHz on the Smart Pro) for 1.5 s
+  after the last press, 4 s after a game hands the screen back and 6 s at the
+  start, always in the Performance power mode, and wakes Automatic CPU speed's
+  ticker at once. Settings → Games & emulators → **Faster menus**
+  (`menuBoost`, on); it rests under Battery Saver, while the chip is warm or
+  the kernel throttles, on the idle screens (which end it before lowering the
+  clock), during the voice assistant's own boost and in games. While you
+  press, Low power no longer holds the menus at 24 fps (its promise is a
+  slower frame rate when nothing moves): they draw at 30 fps, and at up to
+  60 fps while the clock is up and the screen's frames cost 11 ms or less. A
+  press also ends the frame's sleep at once (polled every 8 ms: up to 66 ms
+  less wait on a menu left alone), and the screen's thread runs at nice −5
+  with `SCHED_RESET_ON_FORK`, ahead of background work, while everything it
+  starts begins at nice 0 (`uiboost.go`, `uiprio_linux.go`, `autoperf.go`,
+  `adaptive.go`, `saver_power.go`). Not run on a device yet (MENUBOOST-HW-1).
 - **The music player has everything UIPod has** (Juka, 2026-11-21: "Make sure
   to have all features in our music player as https://famiclone.dev/UIPod/").
   A third Now Playing layout, **iPod** (`musicpod*.go`): click-wheel menus
@@ -4229,6 +4251,50 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **JukaHub builds, and so releases, again.** No release had been published
+  since the 2026-11-21 evening build (`JukaHub-20261122000223`): the music
+  player's video rows (Jellyfin films and episodes, the card's Videos) set
+  and read a `Video` field that `musicItem` did not have, so the "Build and
+  Release" workflow stopped at the compiler on both platforms for every push
+  after it (tags `JukaHub-20261122033944` and `JukaHub-20261122081333` stayed
+  unpublished drafts). Handhelds kept the evening build and never received
+  the fixes made since, the Dolphin libusb fix and the hakuX screen hand-off
+  among them: a tester's Brick Pro, 2026-11-22, still refused Dolphin for
+  libusb and still kept JukaHub running beside an Xbox game. The field is
+  added (`player/musicsrc.go`).
+- **The menus get every core back after a game.** TrimUI's launch scripts
+  (`cpufreq.sh`) park cores for the lighter consoles and set a floor and a
+  ceiling of their own, and the launch profile put back only the governor and
+  the ceiling it had changed itself: after a GBA game the menus ran on two
+  cores with the script's floor until JukaHub restarted. A launch now notes
+  each policy's floor and ceiling and every online core before it starts, and
+  afterwards puts back what the script moved and brings back the cores it
+  parked, never parking one and none while the kernel's thermal limit is
+  active (`powerprofile.go`; MENUBOOST-HW-1).
+- **Dolphin no longer stops at "libusb-1.0.so.0" on TrimUI handhelds** (Juka,
+  2026-11-22: "On Trimui devices (and Trimui Brick Pro) libusb-1.0.so ...make
+  sure to fix it and make sure we can run Dolphin on Trimui Smart Pro"). The
+  libretro buildbot's Dolphin, which the GameCube setup falls back to while
+  JukaHub's own TrimUI build is not published, links libusb and libudev, and
+  no TrimUI firmware has them. The morning's fix fetched Ubuntu's copies, but
+  only when JukaHub's own updater installed the core, and only after tens of
+  megabytes of package index: a Dolphin core RetroArch's own Online Updater
+  put in started without them (and on the firmware's C library at that), so
+  did one loaded from RetroArch's own menu, and a failed download left the
+  build refused. JukaHub now writes those libraries itself: small stand-ins
+  (a few KB, no download) that export exactly the functions and symbol
+  versions the core imports and answer "no such device" — libusb's "not
+  supported", a NULL udev, no Bluetooth adapter — which is all a handheld
+  could give Dolphin's USB, GameCube-adapter and Wii Remote code anyway, and
+  what JukaHub's own Dolphin build does with its built-in stub. They are made
+  sure of when the updater checks a build, before every start of a core that
+  links them, at the start-up look at the installed cores, and for
+  RetroArch's own menu on JukaHub's glibc, and they are widened when a newer
+  build imports more. Ubuntu copies the morning build installed are replaced.
+  libevdev gets no stand-in (Dolphin's evdev input needs a udev that works):
+  a build that links it is refused with libevdev named alone instead of a
+  sentence that starts with libusb (`player/coredevstub.go`,
+  `player/coredevlibs.go`, `player/ra_glibc.go`, `player/corefix.go`).
 - **Dolphin installs on a Brick Pro when JukaHub's own build is not there**
   (a tester, relayed by Juka, 2026-11-22: "Could not install GameCube games —
   the 2026-11-21 build was refused here before: cannot load on this firmware:
@@ -4237,21 +4303,17 @@ For anything older, the git log and the
   RetroArch runs on JukaHub's glibc 2.39. That nightly is a desktop Linux
   build: it also links libusb and libudev (Dolphin's GameCube-adapter and Wii
   Remote code), which no TrimUI firmware has, so the load check refused it.
-  JukaHub now brings Ubuntu's own copies: the packages that hold the missing
-  libraries (`libusb-1.0-0`, `libudev1`, with `libbluetooth3` and `libevdev2`
-  when a build needs them) come through Linux packages (Ubuntu's signed index,
-  every package's SHA-256 checked), and the libraries — with libudev's
-  libcap — are copied into `private-glibc/devlibs/`. Only a launch of a core
-  that links them gets that folder, last on its library path; every other
-  game, port and RetroArch menu starts as before. A build these libraries do
-  not complete is still refused, now with every library it lacks named (one
-  that also needed X11 would say so instead of installing and failing each
-  start), and a refusal of the old kind is tried once more. When no source
-  gives a build, the error says why for each, JukaHub's own first ("JukaHub's
-  build for TrimUI: no Dolphin build published yet; the libretro buildbot:
-  …"), and a press on a Dolphin tile reads JukaHub's list fresh rather than an
-  hour-old copy, so a build the cores workflow just published is found
-  (`player/coredevlibs.go`, `player/dolphin_setup.go`).
+  JukaHub now supplies them in `private-glibc/devlibs/` (Ubuntu's copies at
+  first; since the same day its own stand-ins, see above), last on the
+  library path of a launch of a core that links them. A build these
+  libraries do not complete is still refused, now with every library it
+  lacks named (one that also needed X11 would say so instead of installing
+  and failing each start), and a refusal of the old kind is tried once more.
+  When no source gives a build, the error says why for each, JukaHub's own
+  first ("JukaHub's build for TrimUI: no Dolphin build published yet; the
+  libretro buildbot: …"), and a press on a Dolphin tile reads JukaHub's list
+  fresh rather than an hour-old copy, so a build the cores workflow just
+  published is found (`player/coredevlibs.go`, `player/dolphin_setup.go`).
 - **JukaHub's own Dolphin build can no longer pick up libudev in CI.** The
   cores workflow links a stub libudev into Dolphin, but the bundled libusb's
   CMake `find_library` could hand the linker the build root's real

@@ -14,29 +14,40 @@ package main
 // firmware carries. The device-library check (coretrimui.go) refused it, and
 // rightly: RetroArch's dlopen would have failed on every start.
 //
-// Those libraries are Ubuntu's, like the runtime. For a build whose only load
-// problem left is such libraries, JukaHub installs the Ubuntu packages that
-// hold them (libusb-1.0-0, libudev1, libbluetooth3, libevdev2: the ones the
-// build lacks) with its Linux packages (linuxpkg_*.go: Ubuntu's signed index,
-// every .deb checked against its SHA-256), and copies the libraries — and what
-// they need that neither the runtime nor the firmware has (libudev's libcap) —
-// into <data>/private-glibc/devlibs/. That folder is read
+// That morning JukaHub fetched Ubuntu's copies of them through Linux packages,
+// and only when its own updater installed the core. Juka, the same noon: "On
+// Trimui devices (and Trimui Brick Pro) libusb-1.0.so ...make sure to fix it".
+// A core that came another way (RetroArch's own Online Updater, an earlier
+// JukaHub, a card copied from another handheld) started without them, and on
+// the firmware's glibc at that: raGlibcCoreNeeds saw a problem the runtime
+// alone did not close. RetroArch's own menu never had them. And the Ubuntu
+// route needed tens of megabytes of package index before the first library.
+//
+// Now JukaHub writes the libraries itself: stand-ins that export what the core
+// imports and report no such device (coredevstub.go; libusb, libudev,
+// libbluetooth — not libevdev). They go in <data>/private-glibc/devlibs/
+// (devlibs.json lists them, with what each exports), and are made or widened
+// whenever something is about to need them, in a moment and without a
+// network:
+//   - the updater's load check, for a build whose only problem left is such
+//     libraries (fetchCoreUpdate);
+//   - a launch of a core that links them, before its plan is made
+//     (raGlibcCoreNeeds), whichever way the core reached the card;
+//   - the start's look at the active cores (corefix.go).
+// The folder is read
 //   - by the load check, after every other folder, for a core whose RetroArch
 //     starts on the runtime (compat.go coreLoadEnvWith, elfLoadEnv.deviceDirs);
-//   - by the launch of such a core, last on the private loader's library path,
-//     and only when the core links one of these libraries (ra_glibc.go
-//     raGlibcPlanFor): every other game, port and RetroArch menu starts as
-//     before — libudev in particular, which SDL picks up whenever it can, stays
-//     out of them.
+//   - by the launch of such a core, last on the private loader's library path
+//     (ra_glibc.go raGlibcPlanFor), and by RetroArch's own menu on the
+//     runtime, which may load such a core. Last, so a firmware that has the
+//     real library keeps it, and harmless anywhere else: a NULL udev is what
+//     SDL meets on a firmware with no libudev.
 //
-// The libraries need no udev daemon (these handhelds have none): libudev reads
-// /sys by itself and only hears no hot-plug events.
-//
-// A build these libraries do not complete is still refused, with what it
-// lacks named: once JukaHub's copies are in, every library the build links
-// must be found where RetroArch looks (coreDevLibsStrictProblem) — the generic
-// check stands aside for a library it cannot find, and a desktop build that
-// also links X11, say, would otherwise install and fail every start.
+// A build the stand-ins do not complete is still refused, with what it lacks
+// named: once they are in, every library the build links must be found where
+// RetroArch looks (coreDevLibsStrictProblem) — the generic check stands aside
+// for a library it cannot find, and a desktop build that also links X11, say,
+// would otherwise install and fail every start.
 
 import (
 	"context"
@@ -44,7 +55,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,39 +67,34 @@ import (
 const (
 	// coreDevLibsDirName is the folder under <data>/private-glibc.
 	coreDevLibsDirName = "devlibs"
-	// coreDevLibsManifestName lists what the folder holds and where from.
+	// coreDevLibsManifestName lists what the folder holds.
 	coreDevLibsManifestName = "devlibs.json"
-	// coreDevLibsMaxFiles bounds the libraries one install copies.
-	coreDevLibsMaxFiles = 16
-	// coreDevLibsMaxSize bounds one library's size.
-	coreDevLibsMaxSize = 8 << 20
+	// coreDevLibsKindStub marks a folder of JukaHub's stand-ins. A manifest
+	// without it lists the Ubuntu copies the 2026-11-22 morning build
+	// installed, which the next ensure replaces.
+	coreDevLibsKindStub = "stub"
 	// coreDevLibsTTL is how long one look at the folder is used: every core's
 	// load check asks for it.
 	coreDevLibsTTL = 10 * time.Second
 )
 
-// coreDevLibsPackages names the Ubuntu package that holds each device library
-// coreDeviceLibLoadProblem can name.
-var coreDevLibsPackages = map[string]string{
-	"libusb-1.0.so.0":   "libusb-1.0-0",
-	"libudev.so.1":      "libudev1",
-	"libbluetooth.so.3": "libbluetooth3",
-	"libevdev.so.2":     "libevdev2",
-}
-
-// coreDevLibsNever are the C and C++ runtime's own files: always the
-// runtime's, never copied beside it.
-var coreDevLibsNever = map[string]bool{
-	"ld-linux-aarch64.so.1": true, "libc.so.6": true, "libm.so.6": true, "libpthread.so.0": true,
-	"libdl.so.2": true, "librt.so.1": true, "libresolv.so.2": true, "libstdc++.so.6": true,
-	"libgcc_s.so.1": true,
-}
-
 // coreDevLibsManifest is devlibs.json.
 type coreDevLibsManifest struct {
-	Libs      []string `json:"libs"`
-	Packages  []string `json:"packages"`
-	Installed string   `json:"installed,omitempty"`
+	Kind string   `json:"kind,omitempty"`
+	Libs []string `json:"libs"`
+	// Stubs are the stand-ins, by file name.
+	Stubs map[string]coreDevStubRecord `json:"stubs,omitempty"`
+	// Packages named the Ubuntu packages of the morning build's copies.
+	Packages []string `json:"packages,omitempty"`
+	Written  string   `json:"written,omitempty"`
+}
+
+// coreDevStubRecord is what one stand-in exports, and its size.
+type coreDevStubRecord struct {
+	Versions []string `json:"versions,omitempty"`
+	// Symbols are "name" or "name@VERSION".
+	Symbols []string `json:"symbols"`
+	Size    int64    `json:"size"`
 }
 
 // coreDevLibsDir is the folder, "" without a data folder.
@@ -120,14 +125,10 @@ func coreDevLibsLook() (dirs, libs []string) {
 	if since := time.Since(m.at); m.at.IsZero() || since < 0 || since >= coreDevLibsTTL {
 		m.dirs, m.libs = nil, nil
 		if dir := coreDevLibsDir(); dir != "" {
-			if raw, err := os.ReadFile(filepath.Join(dir, coreDevLibsManifestName)); err == nil && len(raw) <= 16<<10 {
-				var man coreDevLibsManifest
-				if json.Unmarshal(raw, &man) == nil {
-					for _, lib := range man.Libs {
-						if lib == filepath.Base(lib) && regularFile(filepath.Join(dir, lib)) {
-							m.libs = append(m.libs, lib)
-						}
-					}
+			man, _ := coreDevLibsReadManifest(dir)
+			for _, lib := range man.Libs {
+				if lib == filepath.Base(lib) && regularFile(filepath.Join(dir, lib)) {
+					m.libs = append(m.libs, lib)
 				}
 			}
 			if len(m.libs) > 0 {
@@ -139,6 +140,19 @@ func coreDevLibsLook() (dirs, libs []string) {
 	return slices.Clone(m.dirs), slices.Clone(m.libs)
 }
 
+// coreDevLibsReadManifest reads dir's devlibs.json; ok is false when there is
+// none that parses.
+func coreDevLibsReadManifest(dir string) (man coreDevLibsManifest, ok bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, coreDevLibsManifestName))
+	if err != nil || len(raw) > 256<<10 {
+		return man, false
+	}
+	if json.Unmarshal(raw, &man) != nil {
+		return coreDevLibsManifest{}, false
+	}
+	return man, true
+}
+
 // coreDevLibsDirs is the folder as a search list: nil while it holds no
 // library JukaHub put there.
 func coreDevLibsDirs() []string {
@@ -146,7 +160,7 @@ func coreDevLibsDirs() []string {
 	return dirs
 }
 
-// coreDevLibsForget drops that look: an install just changed the folder.
+// coreDevLibsForget drops that look: the folder just changed.
 func coreDevLibsForget() {
 	coreDevLibsMemo.mu.Lock()
 	coreDevLibsMemo.at = time.Time{}
@@ -160,38 +174,51 @@ func coreDevLibsStamp() string {
 	return strings.Join(libs, ",")
 }
 
-// coreDevLibsMissing are the libraries a load problem names when it is
-// nothing but device libraries JukaHub can bring — coreMissingLibsProblem's
-// sentence, every library in coreDevLibsPackages. nil for any other problem.
-// Pure.
-func coreDevLibsMissing(problem string) []string {
+// coreDevLibsSplit reads coreMissingLibsProblem's sentence back: the
+// libraries it names that JukaHub stands in for (devStubLibs), and the others
+// (libevdev, say). ok is false for any other problem. Pure.
+func coreDevLibsSplit(problem string) (standIn, others []string, ok bool) {
 	list, ok := strings.CutPrefix(strings.TrimSpace(problem), "needs ")
 	if !ok {
-		return nil
+		return nil, nil, false
 	}
 	list, ok = strings.CutSuffix(list, ", which this firmware does not have")
 	if !ok || strings.ContainsAny(list, ";()") {
-		return nil
+		return nil, nil, false
 	}
-	var libs []string
 	for _, part := range strings.Split(strings.ReplaceAll(list, " and ", ", "), ", ") {
 		part = strings.TrimSpace(part)
-		if _, known := coreDevLibsPackages[part]; !known {
-			return nil
-		}
-		if !slices.Contains(libs, part) {
-			libs = append(libs, part)
+		switch _, known := devStubLibs[part]; {
+		case part == "":
+			return nil, nil, false
+		case known:
+			if !slices.Contains(standIn, part) {
+				standIn = append(standIn, part)
+			}
+		case !slices.Contains(others, part):
+			others = append(others, part)
 		}
 	}
-	return libs
+	return standIn, others, true
+}
+
+// coreDevLibsMissing are the libraries a load problem names when it is
+// nothing but device libraries JukaHub stands in for; nil for any other
+// problem (one that names libevdev too, say). Pure.
+func coreDevLibsMissing(problem string) []string {
+	standIn, others, ok := coreDevLibsSplit(problem)
+	if !ok || len(others) > 0 {
+		return nil
+	}
+	return standIn
 }
 
 // coreDevLibsCouldCover reports a load problem made only of device libraries
-// JukaHub can bring, for a core that becomes target: Linux packages work here
-// and RetroArch may start on JukaHub's glibc — the RetroArch that owns
-// target's folder does, once the runtime is installed ("" target: any).
+// JukaHub stands in for, for a core that becomes target: RetroArch may start
+// on JukaHub's glibc, whose launches read the stand-ins — the RetroArch that
+// owns target's folder does, once the runtime is installed ("" target: any).
 func coreDevLibsCouldCover(problem, target string) bool {
-	if len(coreDevLibsMissing(problem)) == 0 || !linuxPkgSupported() || !raGlibcWanted() {
+	if len(coreDevLibsMissing(problem)) == 0 || !raGlibcWanted() {
 		return false
 	}
 	if _, _, ready := raGlibcRuntime(); !ready || strings.TrimSpace(target) == "" {
@@ -200,225 +227,255 @@ func coreDevLibsCouldCover(problem, target string) bool {
 	return raGlibcLoadDir(target) != ""
 }
 
-// coreDevLibsInstallMu serialises installs into the folder.
+// coreDevLibsInstallMu serialises writes into the folder.
 var coreDevLibsInstallMu sync.Mutex
 
 // coreDevLibsEnsureForCore is the updater's (fetchCoreUpdate, a background
-// goroutine): a downloaded build that becomes target and cannot load only for
-// device libraries JukaHub can bring gets them. ok: the load check should be
-// asked again. pending: they could not be installed now for a reason another
-// try may not meet (offline, Linux packages busy, a download that broke), so
-// the build is not remembered as refused.
-func coreDevLibsEnsureForCore(ctx context.Context, problem, target string) (ok, pending bool) {
-	libs := coreDevLibsMissing(problem)
-	if len(libs) == 0 || strings.TrimSpace(target) == "" || !coreDevLibsCouldCover(problem, target) {
+// goroutine): a downloaded build at file that becomes target and cannot load
+// for device libraries gets JukaHub's stand-ins for those it can stand in for.
+// ok: the load check should be asked again — it then names only what is still
+// missing (libevdev, say), so a refusal says what really stops the build.
+// pending: they could not be put in now for a reason another try may not meet
+// (JukaHub's glibc did not download, the card refused the write), so the
+// build is not remembered as refused.
+func coreDevLibsEnsureForCore(ctx context.Context, problem, file, target string) (ok, pending bool) {
+	libs, _, isDev := coreDevLibsSplit(problem)
+	if !isDev || len(libs) == 0 || strings.TrimSpace(target) == "" || !raGlibcWanted() {
 		return false, false
 	}
-	// The copies are read only by a RetroArch on JukaHub's glibc: the runtime
-	// first (a build that only lacks device libraries never asked for it).
+	if _, _, ready := raGlibcRuntime(); ready && raGlibcLoadDir(target) == "" {
+		// Installed, but this core's RetroArch does not start on it.
+		return false, false
+	}
+	// The stand-ins are read only by a RetroArch on JukaHub's glibc: the
+	// runtime first (a build that only lacks device libraries never asked for
+	// it).
 	if !raGlibcEnsureRuntimeFor(ctx, target) {
 		_, _, ready := raGlibcRuntime()
 		return false, !ready && ctx.Err() == nil
 	}
-	err := coreDevLibsInstall(ctx, libs, target)
-	if err == nil {
-		return true, false
+	if _, err := coreDevLibsEnsure(file, target); err != nil {
+		logWarn("emulators", "stand-ins for %s for %s: %v", mlJoinAnd(libs), filepath.Base(target), err)
+		return false, ctx.Err() == nil
 	}
-	logWarn("emulators", "%s for %s: %v", mlJoinAnd(libs), filepath.Base(target), err)
-	if ctx.Err() != nil {
-		return false, true
-	}
-	lower := strings.ToLower(err.Error())
-	for _, final := range []string{"unable to locate package", "belongs to a full ubuntu system", "is not an arm64 library", "ubuntu's packages have no"} {
-		if strings.Contains(lower, final) {
-			return false, false
-		}
-	}
-	return false, true
+	return true, false
 }
 
-// coreDevLibsInstall installs the Ubuntu packages that hold libs and copies
-// them, with what they need that no folder of the runtime, the firmware or
-// RetroArch's has, into the folder. target is the core file they are for (its
-// RetroArch's folders count as places a library already is).
-func coreDevLibsInstall(ctx context.Context, libs []string, target string) error {
-	if !linuxPkgSupported() {
-		return errors.New("Linux packages are not available on this device")
-	}
-	var pkgs []string
-	for _, lib := range libs {
-		pkg, ok := coreDevLibsPackages[lib]
-		if !ok {
-			return fmt.Errorf("JukaHub has no package for %s", lib)
-		}
-		if !slices.Contains(pkgs, pkg) {
-			pkgs = append(pkgs, pkg)
-		}
-	}
-	sort.Strings(pkgs)
-	coreDevLibsInstallMu.Lock()
-	defer coreDevLibsInstallMu.Unlock()
-	o := &linuxPkgIO{out: func(s string) { logDebug("emulators", "device libraries: %s", s) }}
-	logInfo("emulators", "installing Ubuntu's %s for %s (%s)", strings.Join(pkgs, ", "), filepath.Base(target), mlJoinAnd(libs))
-	if err := linuxPkgEnsure(ctx, pkgs, false, o); err != nil {
-		return err
-	}
-	lay, err := linuxPkgDirs()
-	if err != nil {
-		return err
-	}
-	from := []string{
-		filepath.Join(lay.root, "usr", "lib", "aarch64-linux-gnu"),
-		filepath.Join(lay.root, "lib", "aarch64-linux-gnu"),
-	}
-	dest := coreDevLibsDir()
-	if dest == "" {
-		return errors.New("JukaHub has no data folder")
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	// Where a library already is for this core's RetroArch: the runtime, the
-	// firmware's folders and RetroArch's own.
-	env := coreLoadEnvWith(target, true)
-	elsewhere := append(slices.Clone(env.libDirs), coreGLExtraDirs(coreRetroArchBinary(filepath.Dir(target)))...)
-	man := coreDevLibsManifest{Packages: pkgs}
-	if raw, err := os.ReadFile(filepath.Join(dest, coreDevLibsManifestName)); err == nil {
-		var old coreDevLibsManifest
-		if json.Unmarshal(raw, &old) == nil {
-			// What an earlier install put there stays listed while it is there.
-			for _, lib := range old.Libs {
-				if lib == filepath.Base(lib) && regularFile(filepath.Join(dest, lib)) {
-					man.Libs = append(man.Libs, lib)
-				}
-			}
-			for _, p := range old.Packages {
-				if !slices.Contains(man.Packages, p) {
-					man.Packages = append(man.Packages, p)
-				}
-			}
-		}
-	}
-	queue := slices.Clone(libs)
-	seen := map[string]bool{}
-	copied := 0
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		if seen[name] || coreDevLibsNever[name] || name != filepath.Base(name) {
-			continue
-		}
-		seen[name] = true
-		asked := slices.Contains(libs, name)
-		if !asked {
-			if _, state := elfFindLibrary(name, elf.ELFCLASS64, elf.EM_AARCH64, elsewhere); state != elfLibMissing {
-				continue // the loader finds it there first anyway
-			}
-		}
-		src := ""
-		for _, dir := range from {
-			if p := filepath.Join(dir, name); regularFile(p) {
-				src = p
-				break
-			}
-		}
-		if src == "" {
-			return fmt.Errorf("Ubuntu's packages have no %s", name)
-		}
-		needed, err := coreDevLibsReadNeeded(src)
-		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
-		if copied++; copied > coreDevLibsMaxFiles {
-			return fmt.Errorf("more than %d libraries to copy", coreDevLibsMaxFiles)
-		}
-		if err := coreDevLibsCopy(src, filepath.Join(dest, name)); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
-		}
-		if !slices.Contains(man.Libs, name) {
-			man.Libs = append(man.Libs, name)
-		}
-		queue = append(queue, needed...)
-	}
-	sort.Strings(man.Libs)
-	sort.Strings(man.Packages)
-	man.Installed = time.Now().UTC().Format(time.RFC3339)
-	data, err := json.MarshalIndent(man, "", "  ")
-	if err != nil {
-		return err
-	}
-	// The manifest last: the folder counts once it names the libraries.
-	if err := linuxPkgWriteFile(filepath.Join(dest, coreDevLibsManifestName), append(data, '\n')); err != nil {
-		return err
-	}
-	coreDevLibsForget()
-	logInfo("emulators", "device libraries for RetroArch on JukaHub's glibc: %s in %s (from Ubuntu's %s)",
-		strings.Join(man.Libs, ", "), dest, strings.Join(pkgs, ", "))
-	return nil
+// coreDevLibsEnsured remembers the cores coreDevLibsEnsureFor already saw, by
+// file and folder state, so a launch reads the core's symbols once.
+var coreDevLibsEnsured struct {
+	mu sync.Mutex
+	m  map[string]string
 }
 
-// coreDevLibsReadNeeded checks that file is a 64-bit ARM shared library and
-// returns the libraries it links.
-func coreDevLibsReadNeeded(file string) ([]string, error) {
-	st, err := os.Stat(file)
+// coreDevLibsEnsureFor makes sure the stand-ins core needs are in, for a core
+// already in its cores folder (a launch, the start's look, the Dolphin setup).
+// true when it wrote one: the caller asks the load check again. Cheap once a
+// core was seen: a stat and a map.
+func coreDevLibsEnsureFor(core string) bool {
+	if strings.TrimSpace(core) == "" || !raGlibcWanted() {
+		return false
+	}
+	info, err := os.Stat(core)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	key := coreFixFileStamp(info) + "|" + coreDevLibsStamp()
+	coreDevLibsEnsured.mu.Lock()
+	seen := coreDevLibsEnsured.m[core] == key
+	coreDevLibsEnsured.mu.Unlock()
+	if seen {
+		return false
+	}
+	changed, err := coreDevLibsEnsure(core, core)
 	if err != nil {
-		return nil, err
+		logWarn("emulators", "stand-in device libraries for %s: %v", filepath.Base(core), err)
+		return false
 	}
-	if st.Size() > coreDevLibsMaxSize {
-		return nil, fmt.Errorf("larger than %d MB", coreDevLibsMaxSize>>20)
+	coreDevLibsEnsured.mu.Lock()
+	if coreDevLibsEnsured.m == nil || len(coreDevLibsEnsured.m) > 64 {
+		coreDevLibsEnsured.m = map[string]string{}
 	}
-	f, err := elf.Open(file)
+	coreDevLibsEnsured.m[core] = coreFixFileStamp(info) + "|" + coreDevLibsStamp()
+	coreDevLibsEnsured.mu.Unlock()
+	return changed
+}
+
+// coreDevLibsEnsure writes the stand-ins the core at file needs as target:
+// one for each device library it links (devStubLibs) that no folder of the
+// runtime, the firmware or RetroArch has and RetroArch does not link itself,
+// exporting what the core imports from it together with what that stand-in
+// already exported (another core's needs). changed reports a write. The
+// morning build's Ubuntu copies, when the folder has them, are replaced first.
+func coreDevLibsEnsure(file, target string) (changed bool, err error) {
+	if !raGlibcSupported() {
+		return false, nil
+	}
+	fh, err := os.Open(file)
 	if err != nil {
-		return nil, fmt.Errorf("is not an arm64 library: %w", err)
+		return false, err
 	}
-	defer f.Close()
-	if f.Class != elf.ELFCLASS64 || f.Machine != elf.EM_AARCH64 || f.Type != elf.ET_DYN {
-		return nil, errors.New("is not an arm64 library")
+	defer fh.Close()
+	f, err := elf.NewFile(fh)
+	if err != nil || f.Class != elf.ELFCLASS64 || f.Machine != elf.EM_AARCH64 {
+		// Not a 64-bit ARM core: the load check says what it is.
+		return false, nil
 	}
 	needed, err := f.ImportedLibraries()
 	if err != nil {
-		return nil, err
+		return false, nil
 	}
-	out := make([]string, 0, len(needed))
+	env := coreLoadEnvWith(target, true)
+	ra := coreRetroArchBinary(filepath.Dir(target))
+	elsewhere := append(append(elfRunPaths(f, env.origin), env.libDirs...), coreGLExtraDirs(ra)...)
+	raNeeds := coreRetroArchNeeds(ra)
+	var want []string
 	for _, lib := range needed {
-		out = append(out, filepath.Base(lib))
+		base := filepath.Base(lib)
+		if _, known := devStubLibs[base]; !known || raNeeds[base] || slices.Contains(want, base) {
+			continue
+		}
+		if _, state := elfFindLibrary(lib, f.Class, f.Machine, elsewhere); state != elfLibMissing {
+			continue // the loader finds a real one first
+		}
+		want = append(want, base)
 	}
-	return out, nil
+	if len(want) == 0 {
+		return false, nil
+	}
+	dest := coreDevLibsDir()
+	if dest == "" {
+		return false, errors.New("JukaHub has no data folder")
+	}
+	coreDevLibsInstallMu.Lock()
+	defer coreDevLibsInstallMu.Unlock()
+	man, _ := coreDevLibsReadManifest(dest)
+	if man.Kind != coreDevLibsKindStub {
+		// The morning build's Ubuntu copies (and libudev's libcap beside
+		// them): the stand-ins replace them, so every handheld runs the same.
+		for _, lib := range man.Libs {
+			if lib == filepath.Base(lib) && lib != coreDevLibsManifestName {
+				_ = os.Remove(filepath.Join(dest, lib))
+			}
+		}
+		if len(man.Libs) > 0 {
+			logInfo("emulators", "device libraries: Ubuntu's copies (%s) make way for JukaHub's stand-ins", strings.Join(man.Libs, ", "))
+		}
+		man = coreDevLibsManifest{Kind: coreDevLibsKindStub}
+	}
+	if man.Stubs == nil {
+		man.Stubs = map[string]coreDevStubRecord{}
+	}
+	var wrote []string
+	for _, lib := range want {
+		versions, syms := devStubNeeds(f, lib)
+		path := filepath.Join(dest, lib)
+		rec, have := man.Stubs[lib]
+		if have {
+			if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && st.Size() == rec.Size && coreDevStubCovers(rec, versions, syms) {
+				continue
+			}
+			// Widened, never narrowed: what it exported stays.
+			versions = append(versions, rec.Versions...)
+			syms = append(syms, coreDevStubSymsOf(rec)...)
+		}
+		data, err := devStubBuild(lib, versions, syms, devStubLibs[lib].ret)
+		if err != nil {
+			return changed, fmt.Errorf("%s: %w", lib, err)
+		}
+		// Through a temporary file and a rename (linuxPkgWriteFile): a
+		// RetroArch that has the old one open keeps it whole.
+		if err := linuxPkgWriteFile(path, data); err != nil {
+			return changed, fmt.Errorf("%s: %w", lib, err)
+		}
+		man.Stubs[lib] = coreDevStubRecordOf(versions, syms, int64(len(data)))
+		if !slices.Contains(man.Libs, lib) {
+			man.Libs = append(man.Libs, lib)
+		}
+		changed = true
+		wrote = append(wrote, fmt.Sprintf("%s (%d functions)", lib, len(man.Stubs[lib].Symbols)))
+	}
+	if !changed {
+		return false, nil
+	}
+	sort.Strings(man.Libs)
+	man.Packages = nil
+	man.Written = time.Now().UTC().Format(time.RFC3339)
+	raw, err := json.MarshalIndent(man, "", "  ")
+	if err != nil {
+		return changed, err
+	}
+	// The manifest last: a library counts once it is listed.
+	if err := linuxPkgWriteFile(filepath.Join(dest, coreDevLibsManifestName), append(raw, '\n')); err != nil {
+		return changed, err
+	}
+	coreDevLibsForget()
+	logInfo("emulators", "device libraries for RetroArch on JukaHub's glibc: JukaHub's stand-ins %s in %s, for %s",
+		strings.Join(wrote, ", "), dest, filepath.Base(target))
+	return true, nil
 }
 
-// coreDevLibsCopy copies src (a link is followed) to dst through a temporary
-// file, so a RetroArch reading dst never sees half of it.
-func coreDevLibsCopy(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
+// coreDevStubRecordOf is the manifest's record of a stand-in written for
+// versions and syms.
+func coreDevStubRecordOf(versions []string, syms []devStubSym, size int64) coreDevStubRecord {
+	rec := coreDevStubRecord{Size: size}
+	for _, v := range versions {
+		if v != "" && !slices.Contains(rec.Versions, v) {
+			rec.Versions = append(rec.Versions, v)
+		}
 	}
-	defer in.Close()
-	tmp := dst + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
+	for _, s := range syms {
+		name := s.name
+		if s.version != "" {
+			name += "@" + s.version
+		}
+		if !slices.Contains(rec.Symbols, name) {
+			rec.Symbols = append(rec.Symbols, name)
+		}
 	}
-	_, copyErr := io.Copy(out, io.LimitReader(in, coreDevLibsMaxSize+1))
-	syncErr := out.Sync()
-	closeErr := out.Close()
-	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	sort.Strings(rec.Versions)
+	sort.Strings(rec.Symbols)
+	return rec
+}
+
+// coreDevStubSymsOf reads a record's symbols back.
+func coreDevStubSymsOf(rec coreDevStubRecord) []devStubSym {
+	out := make([]devStubSym, 0, len(rec.Symbols))
+	for _, s := range rec.Symbols {
+		name, version, _ := strings.Cut(s, "@")
+		if name != "" {
+			out = append(out, devStubSym{name: name, version: version})
+		}
 	}
-	if err := os.Rename(tmp, dst); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	return out
+}
+
+// coreDevStubCovers reports whether a stand-in recorded as rec defines every
+// version and exports every function a core needs.
+func coreDevStubCovers(rec coreDevStubRecord, versions []string, syms []devStubSym) bool {
+	for _, v := range versions {
+		if v != "" && !slices.Contains(rec.Versions, v) {
+			return false
+		}
 	}
-	return nil
+	for _, s := range syms {
+		name := s.name
+		if s.version != "" {
+			name += "@" + s.version
+		}
+		if !slices.Contains(rec.Symbols, name) {
+			return false
+		}
+	}
+	return true
 }
 
 // coreDevLibsStrictProblem is the last word on a build that loads only with
-// JukaHub's copies (fetchCoreUpdate): every library file links must be found
-// where its RetroArch looks — the runtime, the firmware's and RetroArch's own
-// folders, the copies — or be linked by RetroArch itself. "" when each is;
-// else the missing ones, in the load check's sentence. target is the file the
-// build becomes.
+// JukaHub's stand-ins (fetchCoreUpdate): every library file links must be
+// found where its RetroArch looks — the runtime, the firmware's and
+// RetroArch's own folders, the stand-ins — or be linked by RetroArch itself.
+// "" when each is; else the missing ones, in the load check's sentence.
+// target is the file the build becomes.
 func coreDevLibsStrictProblem(file, target string) string {
 	fh, err := os.Open(file)
 	if err != nil {
@@ -455,7 +512,7 @@ func coreDevLibsStrictProblem(file, target string) string {
 }
 
 // coreDevLibsForCore is the folder a launch of core on JukaHub's glibc adds to
-// its library path (ra_glibc.go): the copies, when core links one of them;
+// its library path (ra_glibc.go): the stand-ins, when core links one of them;
 // nil otherwise, and for every other core.
 func coreDevLibsForCore(core string) []string {
 	dirs, libs := coreDevLibsLook()

@@ -148,6 +148,7 @@ Environment variables:
 | `JUKAHUB_BOOTGUARD_SYNC=1` | flush the boot guard's record in line, as before 2026-11-18 |
 | `JUKAHUB_WAIT_DISPLAY=<file>` | wait (8 s at most) for that file before starting SDL; set by the Smart Pro image while its display drivers load |
 | `JUKAHUB_KERNEL_TUNE=0` | TrimUI: leave `/sys/kernel/rcu_expedited` and the kernel console's log level as they are at start (by default both are set to 1 before SDL and put back at exit; keep the console's level for a serial-console session) |
+| `JUKAHUB_UI_PRIORITY=0` | TrimUI: keep the main (screen) thread at the normal priority (by default it runs at nice −5 with `SCHED_RESET_ON_FORK`, so what it starts begins at 0; see [DEVICE_TUNING.md](DEVICE_TUNING.md#faster-menus)) |
 
 `startup-bench.sh` builds once, deletes the marker before every sample and
 fails on a median over the limit. CI runs it with a 5 s limit (the runner is

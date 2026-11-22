@@ -634,6 +634,19 @@ how busy the CPU is and remembers each app's level in `auto-performance.json`.
 A game's own CPU profile or limit wins; with `powerProfiles` (Full speed while
 playing) off it only ever lowers the clock.
 
+`menuBoost` (bool, default `true`) is Settings → Games & emulators → **Faster
+menus** on TrimUI handhelds, part of Automatic CPU speed: a press (and a held
+button's repeats) lifts the hub's clock ceiling to the top the heat guard
+allows and its floor to the first operating point at 75% of the top or above,
+for 1.5 s after the last press (4 s after a game hands the screen back, 6 s at
+the start, always in the Performance power mode); with the clock up and frames
+cheap the menus draw at up to 60 fps, and for those 1.5 s Low power does not
+slow the frames. It rests under the Battery Saver power mode or the
+low-battery saver, while the chip is warm, on the idle screens and in games;
+see [DEVICE_TUNING.md](DEVICE_TUNING.md#faster-menus).
+`JUKAHUB_UI_PRIORITY=0` in the environment keeps the screen's thread at the
+normal priority for one run.
+
 `cpuBoostGames` (`"auto"`/`"always"`/`"off"`, default `"auto"`) is Settings →
 Games & emulators → **CPU boost in games** on TrimUI handhelds: three seconds
 after a boosted game starts (once its launch script has set its own clock),

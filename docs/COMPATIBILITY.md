@@ -214,16 +214,24 @@ own have: RetroArch does not bring those, and every start would end at its
 `dlopen`. The refusal names every such library at once ("needs
 libusb-1.0.so.0 and libudev.so.1, which this firmware does not have").
 
-Where RetroArch can start on JukaHub's glibc (below), JukaHub brings those
-libraries itself instead: it installs the Ubuntu packages that hold them
-(`libusb-1.0-0`, `libudev1`, `libbluetooth3`, `libevdev2` — only the ones a
-build lacks) through [Linux packages](LINUX_PACKAGES.md), copies the libraries
-and what they need beyond the runtime (libudev's libcap) into
-`data/private-glibc/devlibs/`, and checks the build again. Only the launch of
-a core that links them gets that folder, last on the library path; no other
-game, port or RetroArch menu sees it. A build that loads only with these
-copies must then have every library it links somewhere RetroArch looks, or it
-is refused with the missing ones named. This is what lets the libretro
+Where RetroArch can start on JukaHub's glibc (below), JukaHub supplies
+libusb, libudev and libbluetooth itself instead: it writes small stand-in
+libraries into `data/private-glibc/devlibs/` (a few kilobytes each, no
+download) that export exactly the functions and symbol versions the core
+imports and answer "no such device" — libusb's "not supported", a NULL
+udev, no Bluetooth adapter — which is all a handheld could offer Dolphin's
+USB, GameCube-adapter and Wii Remote code anyway. They are written when the
+updater checks such a build, before every launch of a core that links them
+(whichever way the core reached the card: RetroArch's own Online Updater
+included), and by the start's look at the installed cores; `devlibs.json`
+lists what each one exports, and a later build that imports more widens it.
+The folder goes last on the library path of the launches of such cores and
+of RetroArch's own menu on JukaHub's glibc (which may load one), so a
+firmware that has the real library keeps it. libevdev gets no stand-in:
+Dolphin's evdev input backend needs a working udev, so a build that links it
+stays refused, the refusal naming it alone. A build that loads only with the
+stand-ins must then have every library it links somewhere RetroArch looks,
+or it is refused with the missing ones named. This is what lets the libretro
 buildbot's Dolphin — a desktop build that links libusb and libudev — run when
 JukaHub's own TrimUI build of it is not published.
 

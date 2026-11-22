@@ -1444,8 +1444,8 @@ func coreLoadEnvWith(target string, withRuntime bool) elfLoadEnv {
 	if withRuntime && !env.archOnly {
 		if dir := raGlibcLoadDir(target); dir != "" {
 			env.libDirs = append([]string{dir}, env.libDirs...)
-			// Such a launch also finds JukaHub's copies of the device-access
-			// libraries a desktop build links (coredevlibs.go).
+			// Such a launch also finds JukaHub's stand-ins for the
+			// device-access libraries a desktop build links (coredevlibs.go).
 			env.deviceDirs = coreDevLibsDirs()
 		}
 	}

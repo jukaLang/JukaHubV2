@@ -845,9 +845,10 @@ than its ISO.
   GCC 13 and libstdc++ linked in, so it runs on the firmware's own C library);
   while that is not published, the buildbot's nightly, which needs a newer
   libstdc++ than any TrimUI firmware has and so runs on JukaHub's private
-  glibc (**RetroArch's C library** on Automatic), with Ubuntu's libusb and
-  libudev beside it (a desktop build links them; JukaHub installs them the
-  first time). Both go through the checks every core install has
+  glibc (**RetroArch's C library** on Automatic), with JukaHub's stand-ins
+  for libusb and libudev beside it (a desktop build links them; JukaHub
+  writes them itself, no download, before the first start). Both go through
+  the checks every core install has
   ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)). When neither
   gives a core, the message says why for each, JukaHub's own build first.
 - **The Emulators page.** It always lists a **GameCube** and a **Wii** tile,

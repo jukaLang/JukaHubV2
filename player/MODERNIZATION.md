@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **394** (audited 2026-11-19).
+Open tasks: **395** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -1226,14 +1226,25 @@ GameCube and a Wii tile on the Emulators page. 2026-11-22, a tester's Brick Pro
 (CrossMix-OS): "Could not install GameCube games — the 2026-11-21 build was
 refused here before: … needs libusb-1.0.so…" — JukaHub's own build was not
 there (not published, or not yet when the list was read), and the buildbot's
-nightly, a desktop build, links libusb and libudev. `coredevlibs.go` now
-installs Ubuntu's `libusb-1.0-0`/`libudev1` (+ libcap) through Linux packages,
-copies them into `private-glibc/devlibs/`, adds that folder last on the
-private loader's path for a core that links them, and refuses a build these
-do not complete with every missing library named; the setup's error names each
-source's outcome and a press re-reads `cores-aarch64`'s index; `build-cores.sh`
-hands CMake the libudev stub (`LIBUDEV_LIBRARY`) and removes the root's
-`libudev.so` link. Written without a Go toolchain
+nightly, a desktop build, links libusb and libudev. The same noon (Juka: "On
+Trimui devices (and Trimui Brick Pro) libusb-1.0.so ...make sure to fix it and
+make sure we can run Dolphin on Trimui Smart Pro") the morning's Ubuntu copies
+(Linux packages, only inside the updater) gave way to stand-ins JukaHub writes
+itself (`coredevstub.go`: an aarch64 ELF writer exporting exactly what the core
+imports, with its symbol versions; libusb answers LIBUSB_ERROR_NOT_SUPPORTED,
+libudev NULL, libbluetooth -1; libevdev gets none) into
+`private-glibc/devlibs/`, made sure of by the updater, before every launch
+(`raGlibcCoreNeeds`, `raGlibcPlanFor` — also a core RetroArch's own updater
+installed, which used to start on the firmware's glibc without them), by the
+start's look (`coreFixFindBroken`) and for RetroArch's own menu on JukaHub's
+glibc (folder last on its path). The x86-64 twin of the same layout was loaded
+by glibc 2.35's loader (versioned + unversioned imports, LD_BIND_NOW); the
+aarch64 file was only read back (`readelf`, the Go test). A build these do not
+complete is refused with what is still missing named (libevdev alone, say); the
+setup's error names each source's outcome and a press re-reads
+`cores-aarch64`'s index; `build-cores.sh` hands CMake the libudev stub
+(`LIBUDEV_LIBRARY`) and removes the root's `libudev.so` link. Written without a
+Go toolchain
 or a device: whether either build loads and draws on the TrimUI firmware (its
 DT_NEEDED, glibc), the option values the rebased core takes, whether
 the CI build passes with its switches (target `dolphin_libretro`, output
@@ -1242,7 +1253,8 @@ RetroArch gives it (GLES 3 or Vulkan), Dolphin.zip's layout, the numeric option
 values and the RetroArch log lines `dolphinVideoFailureLine` matches are from
 web reports, not from a run.
 **Where.** `dolphin.go`, `dolphin_setup.go`, `dolphin_video.go`,
-`coretrimui.go`, `coredevlibs.go`, `ra_glibc.go` (`raGlibcPlanFor`),
+`coretrimui.go`, `coredevlibs.go`, `coredevstub.go`, `ra_glibc.go`
+(`raGlibcCoreNeeds`, `raGlibcPlanFor`), `corefix.go` (`coreFixFindBroken`),
 `dolphin_speed.go`, `dolphin_folders.go`, `emulators.go`
 (`deviceEmulatorEntries`), `emulatorupdates.go` (`fetchCoreUpdate`),
 `emusystems.go` (`emuDesktopSystemFor`), `emupicker.go`, `game_library.go`,
@@ -1299,18 +1311,22 @@ Try anyway), each step holds or a FIX task names what differs:
    "No Wii games yet" toast. Delete `Roms/WII` and restart: it stays deleted,
    and A on the Wii tile makes it again. With a launcher folder of your own in
    `Emus/GC`, the GameCube tile is not listed and its games start there.
-10. The buildbot fallback on the Brick Pro, while `cores-aarch64` has no
-    Dolphin (or with it removed from the card's choice by hand): X on the
-    GameCube tile installs Linux packages `libusb-1.0-0` and `libudev1` (log
-    `installing Ubuntu's …`, then `device libraries for RetroArch on JukaHub's
-    glibc: …`), `data/private-glibc/devlibs/` holds `libusb-1.0.so.0`,
-    `libudev.so.1` and `libcap.so.2` (or record what else the copy needed), and
-    the core installs — or is refused naming every library still missing
-    (record them: those are what the buildbot links). A game's start logs
+10. The buildbot fallback on a Smart Pro and the Brick Pro, while
+    `cores-aarch64` has no Dolphin (or with it removed from the card's choice
+    by hand): X on the GameCube tile installs the core with no Linux packages
+    download — the log says `device libraries for RetroArch on JukaHub's
+    glibc: JukaHub's stand-ins libusb-1.0.so.0 (N functions), libudev.so.1
+    (…)`, and `data/private-glibc/devlibs/` holds those files (a few KB each)
+    and `devlibs.json` — or it is refused naming what is still missing
+    (record it: that is what else the buildbot links). A game's start logs
     `RetroArch starts on JukaHub's glibc … device libraries from …` and
-    reaches gameplay; a SNES game right after logs no device libraries. With
-    neither source giving a build, the card names both ("JukaHub's build for
-    TrimUI: …; the libretro buildbot: …").
+    reaches gameplay with no "libusb-1.0.so.0: cannot open shared object
+    file" in RetroArch's log (record any "Failed to init libusb" or panic
+    text Dolphin shows); a SNES game right after logs no device libraries.
+    Also: a Dolphin core put in by RetroArch's own Online Updater starts from
+    JukaHub's library and from RetroArch's menu (Load Core → Dolphin) on
+    JukaHub's glibc. With neither source giving a build, the card names both
+    ("JukaHub's build for TrimUI: …; the libretro buildbot: …").
 **Verify.** Record in the HW log.
 
 ### PS2-HW-1 — PlayStation 2 in the ARMSX2 core on a Smart Pro (P1, M) [HW] [NET]
@@ -3318,6 +3334,51 @@ S, each step holds or a FIX task names what differs:
 **Verify.** Record in the HW log; turn each model's peaks into
 `heatBaseLimits` changes where a model runs cooler or hotter than its limits
 assume.
+
+### MENUBOOST-HW-1 — Faster menus, the screen thread first and the post-game CPU restore on every TrimUI model (P1, M) [HW]
+**Why.** Juka, 2026-11-22: "Optimize JukaHub to run even faster and have
+better performance on Trimui devices...feel free to manage cpu freq".
+`uiboost.go` lifts the hub session's ceiling to the top the heat allows and
+its floor to 75% of the top for 1.5 s after a press (4 s after a game, 6 s at
+the start, always in the Performance power mode), inside Automatic CPU
+speed's own records (`autoperf.go`); `adaptive.go` lets a press lift Low
+power's 24 fps cap and steps to 60 fps while boosted and frames cost 11 ms or
+less; `saver_power.go` ends an awake frame's sleep on a press (8 ms poll);
+`uiprio_linux.go` runs the main thread at nice −5 with SCHED_RESET_ON_FORK;
+`powerprofile.go` puts back the floor, ceiling and parked cores a game's
+launch script changed. Written without a Go toolchain or a device: the
+`ondemand` governor's real sampling rate, the frame cost at 1.6 GHz and the
+battery cost are guesses.
+**Where.** `uiboost.go`, `autoperf.go` (`autoPerfLoop`,
+`autoPerfFollowLocked`, `autoPerfWriteLocked`), `adaptive.go` (`Delay`,
+`noteFrameCost`), `saver_power.go` (`framePressSleep`, `saverPowerTick`),
+`uiprio_linux.go`, `powerprofile.go` (`launchHubCPUSnapshot`,
+`launchHubCPURestore`); the row in `setmodel.go`; docs/DEVICE_TUNING.md
+(Faster menus), docs/CONFIGURATION.md.
+**Done when.** On a Smart Pro, a Brick, a Brick Pro and a Smart Pro S, each
+step holds or a FIX task names what differs:
+1. The log has `screen thread … at nice -5` and `faster menus: first boost,
+   Home held at … (for 6s)`; field 19 of `/proc/<pid>/task/<pid>/stat` reads
+   -5, and a game started from the library shows nice 0 in `top`.
+2. Pressing Down on Home: `scaling_min_freq` reads the boost floor (1.6 GHz on
+   the Smart Pro) at once and the old value 1.5 s after the last press; the
+   Automatic CPU speed row reads `Home · 1.6–2.0 GHz while you press, then …`.
+3. `JUKAHUB_FRAMESTATS=1` while scrolling a long list: the `[frame]` lines
+   show about 60 fps where frames cost 11 ms or less and 30 fps on heavier
+   screens; 24 fps only once nothing was pressed for 1.5 s (Low power on).
+4. The dock or the starfield still lowers its clock after its timeout (no
+   `read-only` warning in the `idle` lines), with no boost floor left.
+5. Battery Saver, a warm chip (Heat limit Cooler, a long session) and the
+   voice orb's answer get no boost; the Performance power mode keeps the floor
+   up while the hub is in front and drops it in a game.
+6. A GBA game whose `cpufreq.sh` parks cores: after quitting, every core that
+   was online before is online (`/sys/devices/system/cpu/cpu*/online`),
+   `scaling_min_freq` is back, and the log says `put back N CPU setting(s) the
+   game's launch script changed`.
+7. Battery and heat: an hour of browsing with Faster menus on and off (the
+   battery graph), and the chip's temperature after ten minutes of scrolling.
+**Verify.** Record in the HW log; move `uiBoostFloorPct`, `uiBoostPressHold`
+or `frameFastMS` where a model needs it.
 
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,

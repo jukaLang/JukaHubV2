@@ -157,8 +157,72 @@ child runs last and the hub does not fight it. Nested launches are depth-counted
 so quitting one emulator does not drop the profile while another is still
 running.
 
+When the game ends the hub gets its own values back, not the script's. The
+launch notes each policy's `scaling_min_freq` and `scaling_max_freq` and every
+online core before it starts; afterwards it puts back a floor or ceiling the
+script moved and brings back any core the script parked (`cpuN/online`), once
+the governor and its own ceiling are back. A core is only ever brought back,
+never parked, and none while the kernel's thermal limit is active; a ceiling
+noted under that limit is not noted at all. Before this, the menus after a GBA
+game ran on two cores with the script's floor until JukaHub restarted. The log
+says `power profile: put back N CPU setting(s) the game's launch script
+changed`.
+
 Background on the TSP's shared policy, the stock `cpufreq.sh` defaults and the
 2 GHz heat trade-off: <https://github.com/guiopen/tsp-optimization>.
+
+### Faster menus
+
+**Faster menus** (Settings → Games & emulators, under Automatic CPU speed;
+`menuBoost`, on by default) is the hub's own share of the clock. Automatic CPU
+speed runs Home and the menus low — 1.2 GHz to start, 816 MHz once quiet —
+under the firmware's `ondemand` governor, which idles the clock between frames
+and looks at the load only now and then, so the frames a press asked for (a
+page opening, a list scrolling, the keyboard coming up) were drawn at that low
+clock until the next two-second sample. Now these lift the menus' session for a
+moment:
+
+| Asked by | Held for |
+|---|---|
+| a press: a button, a key, a touch, a stick pushed past its dead zone (a held button's repeats keep it up) | 1.5 s after the last one |
+| a game handing the screen back | 4 s |
+| JukaHub's start | 6 s |
+| the Performance power mode | as long as the hub is in front |
+
+While it holds, `scaling_max_freq` is at the top of Automatic CPU speed's table
+under the heat guard's dial, and `scaling_min_freq` at the first operating
+point at or above 75% of that top (1.6 GHz of the Smart Pro's 2 GHz), so no
+governor idles the clock between those frames; then both go back, the floor to
+the value found and the ceiling to the level the load chose. A press wakes
+Automatic CPU speed's ticker at once instead of at its next sample. Both are
+Automatic CPU speed's own writes: the same compare-and-restore and crash
+marker, and a launch takes them back before it records what it restores. It
+stands aside with Automatic CPU speed off or refused, under the Battery Saver
+power mode or the low-battery saver, while the chip or the battery is warm (the
+heat guard steps nothing up then) or the kernel's thermal limit is active, on
+the idle screens (whose low-power state ends it before lowering the clock),
+during the voice assistant's own boost, and in games.
+
+The frame rate follows the press too. The handheld ships with Low power on,
+which held the menus at 24 fps even while they were in use; its promise is "a
+slower frame rate when nothing moves", so for 1.5 s after a press the menus
+draw at the active 30 fps, and while the clock is boosted and the screen's
+frames cost 11 ms or less (a running average; back to 30 fps over 14 ms) at up
+to 60 fps. The Automatic CPU speed row then reads `Home · 1.6–2.0 GHz while you
+press, then 1.2 GHz`, and each run's first boost is a `power` line in the log
+(`faster menus: first boost, Home held at 1.6–2.0 GHz (for 1.5s)`).
+
+Two more things keep the hub quick, with no switch. **A press is handled at
+once**: an awake frame's sleep looks for a queued press every 8 ms and ends
+there, so the press is drawn on the next frame instead of after the rest of the
+sleep (up to 66 ms on a menu left alone for ten seconds); stick drift does not
+count. **The screen's thread goes first**: JukaHub draws every frame on its
+main thread, which runs at nice −5 on a TrimUI handheld, about three times the
+share of a background thread while every core is busy (a port unpacking, a
+cover scan, Syncthing). It is set with `SCHED_RESET_ON_FORK`, so every thread
+and process it starts begins at nice 0 again and games and helpers run as
+before; the Heavy-game boost still steps it back behind a boosted game.
+`JUKAHUB_UI_PRIORITY=0` in the environment leaves it alone for one run.
 
 ### CPU boost in games and the heat guard
 

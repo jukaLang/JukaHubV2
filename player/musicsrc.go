@@ -129,6 +129,7 @@ type musicItem struct {
 	Starred  bool
 	MediaID  string // Jellyfin's media source of a video
 	Direct   bool   // a Jellyfin video the handheld can play as it is
+	Video    bool   // a film or an episode (Jellyfin's or the card's Videos), not a song
 	Parts    []musicItem
 }
 
