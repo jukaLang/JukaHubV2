@@ -264,6 +264,17 @@ streamed to the card, including MAME's build, which exceeds the old 96 MB
 limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused
 and remembered the same way.
 
+`GLIBCXX_3.4.30` in such a refusal is not a glibc version, however much it
+reads like one: GLIBCXX numbers the C++ library, libstdc++ — 3.4.29 is GCC
+11's, 3.4.30 GCC 12's — which the buildbot's nightlies need and the firmware's
+own (GCC 7's, up to 3.4.24) lacks. JukaHub's glibc 2.39 runtime carries GCC
+14's libstdc++, which defines every version up to 3.4.33, so it covers them,
+and a refusal that names a GLIBCXX version now says so. Since 2026-11-23
+JukaHub installs that complete runtime by itself a few minutes after it starts,
+on a handheld whose RetroArch can start on it (online, between games, unless
+**Emulator updates** is Off), and probes RetroArch with it, so installs,
+updates and the start-up look find it there instead of fetching it first.
+
 #### A core that is already broken
 
 The check above stops JukaHub's own installs, but RetroArch's **Online Updater**
@@ -339,6 +350,29 @@ launcher core and RetroArch's developer tests; nor a build this device already
 refused for a reason no new try changes (not one JukaHub's private glibc would
 fix) — the buildbot's next build of that core gets its own check, and its tile
 comes back. A core that is installed is always listed, whatever it is.
+
+Since 2026-11-23 the page also knows, before any download, which of the
+buildbot's builds load here at all. JukaHub's cores workflow reads every
+linux/aarch64 nightly the buildbot publishes, each week
+(`player/native/survey-cores.py`): the libraries each one links and the symbol
+versions it needs of each, the two tables the load check reads. It publishes
+them as `buildbot-needs.json` in the `cores-aarch64` release, and the handheld
+reads that file with the buildbot's index and checks every core the way the
+loader would (`player/corecompat.go`): each library in the firmware's folders,
+in RetroArch's, among JukaHub's stand-ins or brought by JukaHub's glibc, each
+version defined by the firmware's copy or by that runtime's. A core that loads
+neither way — it needs desktop OpenGL (`libGL.so.1`), another library the
+handheld does not have, or a version newer than JukaHub's glibc 2.39 runtime
+has, or RetroArch cannot start on that runtime here — is not offered, unless
+JukaHub builds it for TrimUI itself: then its tile says "JukaHub's build for
+TrimUI" and an install takes that build without downloading the buildbot's. A
+core that loads only on the runtime says "runs on JukaHub's glibc 2.39". The
+build the survey read is refused before a download whenever nothing here could
+change its answer (a missing library, a newer version), by a press and by the
+daily update alike, so no update puts a build that cannot load in front of a
+game. A core the survey does not list, a survey more than 30 days old, or a
+build newer than the one it read changes nothing: the load check after the
+download decides, as before.
 
 ### Core updates and your save states
 

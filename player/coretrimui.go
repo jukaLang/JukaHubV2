@@ -116,6 +116,12 @@ func coreTrimuiMisfit(core, crc string) string {
 			}
 		}
 	}
+	// What the cores workflow's survey says the buildbot's build needs, held
+	// against this firmware and JukaHub's glibc (corecompat.go): a core that
+	// loads neither way, with no JukaHub build of it for TrimUI, is not offered.
+	if why := coreSurveyMisfit(core); why != "" {
+		return why
+	}
 	if crc = strings.TrimSpace(crc); crc != "" {
 		if reason, refused := coreBuildRefused(core, crc); refused && !raGlibcRefusalMayPass(reason, "") {
 			return "this build was refused here: " + reason

@@ -802,6 +802,11 @@ func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, exi
 		if system, _ := emuCoreInfo(entry.Core); system != "" {
 			detail = system + " · " + detail
 		}
+		if note := coreSurveyNote(entry.Core); note != "" {
+			// Where it loads, when not on the firmware's own libraries
+			// (corecompat.go): on JukaHub's glibc, or JukaHub's TrimUI build.
+			detail += " · " + note
+		}
 		if coreNeedsGPU(entry.Core) {
 			// The one-line warning of a per-core press: "Get more cores"
 			// leaves these here for a console that plays already

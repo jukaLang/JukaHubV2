@@ -454,6 +454,16 @@ func emuRunUpdateCheck() {
 			errText = emuFriendlyError(err)
 		}
 	}
+	if coreSurveySupported() {
+		// What each buildbot core needs, from the cores workflow's survey, and
+		// the cores JukaHub builds for TrimUI itself: the page offers only the
+		// cores that load here (corecompat.go). Neither failing is this
+		// check's error: without them the page is what it was.
+		coreSurveyRefresh(ctx, client)
+		if _, err := coreFixIndex(ctx, client); err != nil {
+			logDebug("emulators", "JukaHub's TrimUI core builds: %v", err)
+		}
+	}
 
 	win := map[string]emuWinRelease{}
 	// winAnswered stays true only if every lookup answered: a lookup that

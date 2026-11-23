@@ -32,7 +32,13 @@ Settings → Games & emulators → **RetroArch's C library** (`retroArchGlibc`):
 
 The runtime is downloaded the first time a core needs it (the game starts by
 itself when it is ready); offline, the game starts on the firmware's glibc as
-before.
+before. Since 2026-11-23 the complete runtime — with GCC 14's C++ library,
+whose `GLIBCXX` versions (up to 3.4.33) are what the buildbot's nightlies ask
+for most: 3.4.29 and 3.4.30, GCC 11's and 12's, not glibc versions — is also
+installed ahead, a few minutes after JukaHub starts on a handheld whose
+RetroArch can start on it, unless **Emulator updates** is Off
+([COMPATIBILITY](COMPATIBILITY.md#cores-the-handheld-does-not-offer), which
+also covers how the Emulators page offers only the cores that load here).
 
 How, without changing the firmware or the card's RetroArch
 (`player/ra_glibc.go`): the game runs in a mount namespace of its own. A setup

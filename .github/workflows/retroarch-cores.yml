@@ -33,9 +33,20 @@ name: RetroArch cores for TrimUI (aarch64, glibc 2.31)
 # job merges the new builds into the release's index, so a core that failed
 # this week keeps last week's build (its zip and its index line).
 #
+# The survey job also reads every linux/aarch64 build the libretro buildbot
+# publishes (player/native/survey-cores.py): the libraries each links and the
+# symbol versions it needs of each (GLIBC, and GLIBCXX — the C++ library's
+# versions, 3.4.30 for GCC 12's), the two tables the handheld's own load check
+# reads. That goes into the same release as buildbot-needs.json, so JukaHub
+# offers only the buildbot cores that load on a TrimUI — on the firmware's
+# libraries or on its private glibc 2.39, whose GCC 14 C++ library covers
+# GLIBCXX up to 3.4.33 — without downloading one to find out
+# (player/corecompat.go). A survey that fails costs only itself: the cores are
+# published, and the handheld keeps the last survey it read.
+#
 # Weekly, on a press (Actions → this workflow → Run, optionally naming some
 # cores, which then build on one runner), and on a push to main that changes
-# this file or build-cores.sh. Never on other pushes (the CI rule: two jobs per
+# this file, build-cores.sh or survey-cores.py. Never on other pushes (the CI rule: two jobs per
 # push). Only main publishes. The release is created with --latest=false, so
 # GitHub's "latest release" stays the newest JukaHub build, and JukaHub's Beta
 # channel skips it by its tag (autoupdate_channel.go jukaHubReleaseTag). The
@@ -52,6 +63,7 @@ on:
     paths:
       - .github/workflows/retroarch-cores.yml
       - player/native/build-cores.sh
+      - player/native/survey-cores.py
   workflow_dispatch:
     inputs:
       cores:
@@ -291,3 +303,35 @@ jobs:
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "$title" \
             --notes-file "$notes" --latest=false --draft=false --prerelease=false
           echo "Published $(wc -l < cores/built.txt) core(s) to $RELEASE_TAG: $(echo $(cat cores/built.txt))"
+
+  survey:
+    name: Survey the buildbot's aarch64 cores
+    # After the publish job, whatever it did: the release it uploads to is the
+    # one publish keeps. Only main publishes.
+    needs: publish
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write   # upload buildbot-needs.json to the cores-aarch64 release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: cores-aarch64
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read every linux/aarch64 nightly
+        run: python3 player/native/survey-cores.py --out "$RUNNER_TEMP/buildbot-needs.json"
+
+      - name: Publish buildbot-needs.json
+        run: |
+          set -eu
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::warning title=Survey::there is no $RELEASE_TAG release yet; the survey goes up with the next run"
+            exit 0
+          fi
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/buildbot-needs.json" --repo "$GITHUB_REPOSITORY" --clobber
+          echo "Published buildbot-needs.json to $RELEASE_TAG"

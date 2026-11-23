@@ -355,6 +355,14 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if upd.Core == "" || strings.ContainsAny(upd.Core, "/\\") || upd.Core == "." || upd.Core == ".." || !validCoreIndexDate(upd.Date) {
 		return coreBuild{}, errors.New("the core index names an invalid core or date")
 	}
+	// The cores workflow's survey read this very buildbot build: one that
+	// needs what nothing here gives — a library nowhere on the handheld, a
+	// version newer than JukaHub's glibc has — is refused without the download
+	// (corecompat.go). A press then falls back on JukaHub's own TrimUI build
+	// (emuInstallOwnBuild), and the daily update keeps the core it has.
+	if problem := coreSurveyRefusal(upd); problem != "" {
+		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
+	}
 	if err := os.MkdirAll(poolRoot, 0o755); err != nil {
 		return coreBuild{}, err
 	}
@@ -601,9 +609,11 @@ func (e *coreRefusedError) Error() string {
 		// The hint first: a toast shows three lines, and the firmware's gap
 		// alone does not say what to do.
 		return build + " cannot load on this firmware's own C library, and JukaHub's newer one could not be used: " +
-			e.Hint + " (" + problem + ")"
+			e.Hint + " (" + problem + ")" + coreGapPlain(problem)
 	}
-	return build + " " + e.Reason
+	// A GLIBCXX version reads like a glibc one ("glibc 4.29"): say whose it
+	// is (corecompat.go).
+	return build + " " + e.Reason + coreGapPlain(e.Reason)
 }
 
 // corePendingError is a build that would load once JukaHub's glibc (with its

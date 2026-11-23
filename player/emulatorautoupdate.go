@@ -607,6 +607,9 @@ func startCoreAutoUpdate(config *Config) {
 	// A card with no RetroArch at all gets TrimUI's newest build for this
 	// model, on JukaHub's glibc (raget_ui.go).
 	startRetroArchEnsure()
+	// And JukaHub's complete glibc (GCC 14's C++ library with it) goes in
+	// ahead of the cores that need it (corecompat.go).
+	startCoreRuntimeEnsure()
 	if !coreAutoUpdateAllowed(coreAutoUpdateDisabled(), emuCoreInstallSupported(), IsTrimuiDevice(), true) {
 		return
 	}

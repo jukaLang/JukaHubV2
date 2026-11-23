@@ -13,6 +13,32 @@ For anything older, the git log and the
 
 ### Added
 
+- **Emulators offers only the cores that load on this TrimUI, and JukaHub's
+  glibc is ready before they need it** (Juka, 2026-11-23: "Make sure all
+  emulators that get updated work on glibc...we want to show the emulators
+  that Trimui devices can run...many of emulator cores are asking for glibc
+  4.29...but even our private glibc is at 2.39"). What those cores ask for is
+  `GLIBCXX_3.4.29` and `3.4.30`: versions of the C++ library (GCC 11's and
+  12's libstdc++), not of glibc. JukaHub's private runtime is Ubuntu 24.04's —
+  glibc 2.39 with GCC 14's libstdc++, which defines every GLIBCXX up to 3.4.33
+  — so it covers every buildbot nightly seen so far, once the complete runtime
+  is installed and RetroArch starts on it. Now: JukaHub installs that complete
+  runtime by itself a few minutes after start on a handheld whose RetroArch
+  can use it, and probes RetroArch with it, instead of fetching it in the
+  middle of an install; JukaHub's cores workflow surveys every linux/aarch64
+  build the buildbot publishes each week (the libraries each links, the symbol
+  versions it needs) into `buildbot-needs.json`, and the Emulators page and
+  **Get more cores** check each core against this handheld's libraries and
+  the runtime before anything is downloaded — a core that loads neither way
+  (desktop OpenGL, a library the handheld lacks, a version newer than the
+  runtime has) is not offered unless JukaHub builds it for TrimUI itself, in
+  which case an install takes that build at once; the same build is refused
+  before a download by the daily update, so no update puts a core that cannot
+  load in front of a game. Tiles say "runs on JukaHub's glibc 2.39" or
+  "JukaHub's build for TrimUI", and a refusal that names a GLIBCXX version
+  says whose it is. See
+  [COMPATIBILITY](docs/COMPATIBILITY.md#cores-the-handheld-does-not-offer).
+
 - **RetroArch for a card that has none, on JukaHub's glibc** (Juka, 2026-11-22:
   "Download latest version of working RetroArch (if it's not installed)...make
   sure GLIBC is private library that we use and that it's compatible with

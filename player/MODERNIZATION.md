@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **397** (audited 2026-11-19).
+Open tasks: **398** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -1116,6 +1116,38 @@ not. 4. The Emulators page's RetroArch tile opens RetroArch's menu, and reads
 asset names and sizes, how long the install took and how much was downloaded;
 a package the log calls unreadable (a compression method, a 7z) gets a FIX
 task.
+**Verify.** Record in the HW log.
+
+### CORESURVEY-HW-1 — The buildbot survey and the Emulators page on a device (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-23: "Make sure all emulators that get updated work on
+glibc...we want to show the emulators that Trimui devices can run...many of
+emulator cores are asking for glibc 4.29 (GLIBCXX_3.4.29, the C++ library's
+version)...". `player/native/survey-cores.py` (the survey job of
+`.github/workflows/retroarch-cores.yml`) publishes what every buildbot
+linux/aarch64 core needs as `buildbot-needs.json` in the `cores-aarch64`
+release; `player/corecompat.go` judges each core against the handheld and
+JukaHub's glibc, hides the ones that load neither way (unless JukaHub builds
+them), refuses their builds before a download, and installs the complete
+runtime ahead (`startCoreRuntimeEnsure`). The script was run against local
+ELF files and a local HTTP server only; the workflow never ran, and nothing was
+compiled or run on a device.
+**Where.** `survey-cores.py`, `retroarch-cores.yml` (job `survey`),
+`corecompat.go`, `coretrimui.go`, `emulators.go`, `emulatorupdates.go`
+(`fetchCoreUpdate`, `coreRefusedError`), `emuupdatecheck.go`,
+`emulatorautoupdate.go`; the JukaHub log (`emulators` lines "core survey:",
+"JukaHub's glibc 2.39 with GCC 14's C++ library … is installed ahead"),
+`data/performance/buildbot-needs.json`.
+**Done when.** 1. Actions → RetroArch cores → Run: the survey job's summary
+lists how many cores were read and the GLIBC/GLIBCXX they need; the release
+carries `buildbot-needs.json`. 2. On a stock Smart Pro with the setting on
+Automatic, three minutes after start the log says the complete runtime is
+installed ahead (or why not). 3. Emulators: no tile for a core the summary
+lists under desktop OpenGL; PPSSPP's tile says "runs on JukaHub's glibc 2.39"
+and installs; a core JukaHub builds whose buildbot build cannot load says
+"JukaHub's build for TrimUI" and installs that one without a buildbot download
+in the log. 4. With the setting on Firmware's only, the cores that need the
+runtime disappear from the list. 5. Record any core the page offers that then
+fails to start, with its survey entry.
 **Verify.** Record in the HW log.
 
 ### AUDIT-HW-1 — The Audit toolkit's installs on a device (P1, S) [HW] [NET]

@@ -402,6 +402,7 @@ func TestRetroArchPackageReadInPart(t *testing.T) {
 		a, b, n  int64
 		accepted bool
 	}{
+		{"bytes 0-0/1", 0, 0, 1, true},
 		{"bytes 0-99/1000", 0, 99, 1000, true},
 		{"bytes 5-5/*", 5, 5, -1, true},
 		{"bytes 9-3/1000", 0, 0, 0, false},
@@ -412,5 +413,76 @@ func TestRetroArchPackageReadInPart(t *testing.T) {
 		if ok != tc.accepted || (ok && (a != tc.a || b != tc.b || n != tc.n)) {
 			t.Fatalf("raGetContentRange(%q) = %d, %d, %d, %v", tc.in, a, b, n, ok)
 		}
+	}
+}
+
+// TestCoreSurveyJudge pins how corecompat.go reads the cores workflow's
+// survey of a buildbot build: GLIBC_2.35 and GLIBCXX_3.4.30 load on JukaHub's
+// glibc where RetroArch may use it and only there; a version above the
+// runtime's, a library nowhere and another architecture are final; JukaHub's
+// stand-ins count once RetroArch may use the runtime.
+func TestCoreSurveyJudge(t *testing.T) {
+	defs := func(vs ...string) map[string]bool {
+		m := map[string]bool{}
+		for _, v := range vs {
+			m[v] = true
+		}
+		return m
+	}
+	firmware := map[string]coreSurveyLib{
+		"libc.so.6":      {found: true, defs: defs("GLIBC_2.17", "GLIBC_2.28", "GLIBC_2.33")},
+		"libm.so.6":      {found: true, defs: defs("GLIBC_2.17", "GLIBC_2.29")},
+		"libstdc++.so.6": {found: true, defs: defs("GLIBCXX_3.4", "GLIBCXX_3.4.24", "CXXABI_1.3")},
+		"libGLESv2.so.2": {found: true},
+	}
+	env := func(open bool) coreSurveyEnv {
+		return coreSurveyEnv{
+			firmware: func(s string) coreSurveyLib { return firmware[s] },
+			runtime:  func(s string) coreSurveyLib { return coreSurveyLib{found: coreSurveyRuntimeSonames[s]} },
+			raHas:    func(s string) bool { return s == "libSDL2-2.0.so.0" },
+			standIn: func(s string) bool {
+				_, ok := devStubLibs[s]
+				return ok && open
+			},
+			runtimeOpen: open,
+			runtimeWhy:  "the setting says so",
+			ceilings:    raGlibcCeilings,
+		}
+	}
+	ppsspp := coreSurveyEntry{Arch: "aarch64", CRC32: "abcd0123",
+		Needed: []string{"libGLESv2.so.2", "libstdc++.so.6", "libm.so.6", "libc.so.6", "libSDL2-2.0.so.0"},
+		Versions: map[string][]string{"libc.so.6": {"GLIBC_2.17", "GLIBC_2.34"}, "libm.so.6": {"GLIBC_2.35"},
+			"libstdc++.so.6": {"GLIBCXX_3.4.30", "CXXABI_1.3.13"}}}
+	if fit := coreSurveyJudge(ppsspp, env(true)); fit.firmware || !fit.runtime || fit.problem != "" {
+		t.Fatalf("GLIBCXX_3.4.30, runtime open: %+v", fit)
+	}
+	fit := coreSurveyJudge(ppsspp, env(false))
+	if fit.firmware || fit.runtime || fit.final || !strings.Contains(fit.problem, "the setting says so") {
+		t.Fatalf("GLIBCXX_3.4.30, runtime closed: %+v", fit)
+	}
+	if note := coreGapPlain(fit.problem); !strings.Contains(note, "GCC 12") || !strings.Contains(note, "not of glibc") {
+		t.Fatalf("coreGapPlain = %q", note)
+	}
+	newer := coreSurveyEntry{Arch: "aarch64", Needed: []string{"libc.so.6"}, Versions: map[string][]string{"libc.so.6": {"GLIBC_2.41"}}}
+	if fit := coreSurveyJudge(newer, env(true)); fit.runtime || !fit.final || !strings.Contains(fit.problem, "GLIBC_2.41") {
+		t.Fatalf("GLIBC_2.41: %+v", fit)
+	}
+	gl := coreSurveyEntry{Arch: "aarch64", Needed: []string{"libGL.so.1", "libc.so.6"}}
+	if fit := coreSurveyJudge(gl, env(true)); fit.runtime || !fit.final || !strings.Contains(fit.problem, "desktop OpenGL") {
+		t.Fatalf("libGL: %+v", fit)
+	}
+	usb := coreSurveyEntry{Arch: "aarch64", Needed: []string{"libusb-1.0.so.0", "libc.so.6"}}
+	if fit := coreSurveyJudge(usb, env(true)); !fit.runtime || fit.firmware {
+		t.Fatalf("libusb beside JukaHub's stand-ins: %+v", fit)
+	}
+	if fit := coreSurveyJudge(coreSurveyEntry{Arch: "x86_64"}, env(true)); !fit.final || fit.runtime {
+		t.Fatalf("x86_64: %+v", fit)
+	}
+	doc, err := coreSurveyParse([]byte(`{"format":1,"generated":"2026-11-23T05:41:00Z","cores":{"PPSSPP":{"crc32":"ABCD0123","arch":"aarch64"}}}`))
+	if err != nil || doc.Cores["ppsspp"].CRC32 != "abcd0123" {
+		t.Fatalf("coreSurveyParse = %+v, %v", doc, err)
+	}
+	if _, err := coreSurveyParse([]byte(`{"format":2,"generated":"2026-11-23T05:41:00Z","cores":{"x":{}}}`)); err == nil {
+		t.Fatal("a survey of another format was read")
 	}
 }
