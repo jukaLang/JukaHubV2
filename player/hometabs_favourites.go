@@ -4,7 +4,7 @@ package main
 // favourite games and apps, and the heart a tile shows.
 //
 // A game is a favourite when it carries the Favorite tag (gmeta_store.go) —
-// the same tag the Games library's details page sets and its L3 filter shows,
+// the same tag the Games library's details page sets and its tag filter shows,
 // so favouriting a game on Home or in the library is one thing. Everything
 // else (apps, consoles, collections, a game the library cannot place) is kept
 // in collections.json's "favourites" list (hometabs_collections.go).

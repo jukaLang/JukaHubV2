@@ -1311,7 +1311,8 @@ func renderPong(renderer *sdl.Renderer, config *Config) {
 	if !gameOver {
 		smallFont, _ := getCachedFont(config, "small")
 		if smallFont != nil {
-			hint := hintLine(FooterHint{"Up/Down", "Move Paddle"}, FooterHint{"Q", "Quit"})
+			// "pad / key": B quits on the pad, Q on a keyboard (inputhints.go).
+			hint := hintLine(FooterHint{"Up/Down", "Move Paddle"}, FooterHint{"B / Q", "Quit"})
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, (screenWidth-int32(hw))/2, offsetY+pongH+16, ColorTextTertiary(), textAlignLeft)
 		}
@@ -1348,7 +1349,8 @@ func renderGameOver(renderer *sdl.Renderer, config *Config, title string, score 
 		drawText(renderer, bodyFont, scoreText, cx+(cardW-int32(sw))/2, cy+80, ColorTextPrimary(), textAlignLeft)
 	}
 	if smallFont != nil {
-		hint := hintLine(FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
+		// Start restarts on the pad (ctrlActiveGame), R on a keyboard.
+		hint := hintLine(FooterHint{"Start / R", "Restart"}, FooterHint{"B / Q", "Quit"})
 		hw, _, _ := smallFont.SizeUTF8(hint)
 		drawText(renderer, smallFont, hint, cx+(cardW-int32(hw))/2, cy+130, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1817,8 +1819,13 @@ func renderMinesweeper(renderer *sdl.Renderer, config *Config) {
 		drawText(renderer, font, header, (screenWidth-int32(hw))/2, offsetY-58, getAccentColor(config), textAlignLeft)
 	}
 	if small != nil {
-		hint := hintLine(FooterHint{"Arrows", "Move"}, FooterHint{"Enter", "Reveal"},
-			FooterHint{"F", "Flag"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
+		// The pad's buttons on a pad, the keys on a keyboard ("pad / key"
+		// pairs); only a keyboard restarts mid-game (R).
+		hints := []FooterHint{{"D-Pad", "Move"}, {"A / Enter", "Reveal"}, {"X / F", "Flag"}}
+		if hintsUseKeyboard() {
+			hints = append(hints, FooterHint{"R", "Restart"})
+		}
+		hint := hintLine(append(hints, FooterHint{"B / Q", "Quit"})...)
 		hw, _, _ := small.SizeUTF8(hint)
 		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+boardH+18, ColorTextTertiary(), textAlignLeft)
 	}
@@ -2003,7 +2010,13 @@ func renderFlappy(renderer *sdl.Renderer, config *Config) {
 		drawText(renderer, font, score, (screenWidth-int32(sw))/2, offsetY+18, sdl.Color{R: 255, G: 255, B: 255, A: 240}, textAlignLeft)
 	}
 	if small != nil {
-		hint := hintLine(FooterHint{"A / Space", "Flap"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
+		// Only a keyboard restarts mid-flight (R); B quits on the pad, Q on a
+		// keyboard.
+		hints := []FooterHint{{"A / Space", "Flap"}}
+		if hintsUseKeyboard() {
+			hints = append(hints, FooterHint{"R", "Restart"})
+		}
+		hint := hintLine(append(hints, FooterHint{"B / Q", "Quit"})...)
 		hw, _, _ := small.SizeUTF8(hint)
 		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+flappyH+12, ColorTextTertiary(), textAlignLeft)
 	}

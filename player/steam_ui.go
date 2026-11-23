@@ -1833,7 +1833,7 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 	case steamPanel.sheet:
 		hint = hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	case len(games) == 0:
-		hint = hintLine(FooterHint{"L1 / R1", "Tabs"}, FooterHint{"X", "Account"}, FooterHint{"Start / F5", "Refresh"}, FooterHint{"B", "Back"})
+		hint = hintLine(FooterHint{"L1/R1", "Tabs"}, FooterHint{"X", "Account"}, FooterHint{"Start / F5", "Refresh"}, FooterHint{"B", "Back"})
 	default:
 		action := "Play"
 		if g, ok := steamPanelFocused(); ok {
@@ -1846,7 +1846,7 @@ func renderSteamPanel(renderer *sdl.Renderer, config *Config) {
 		if steamPanel.query != "" {
 			back = "Clear search"
 		}
-		hint = hintLine(FooterHint{"A", action}, FooterHint{"Y", "Options"}, FooterHint{"L1 / R1", "Tabs"},
+		hint = hintLine(FooterHint{"A", action}, FooterHint{"Y", "Options"}, FooterHint{"L1/R1", "Tabs"},
 			FooterHint{"L2 / F", "Search"}, FooterHint{"R2 / S", "Sort"}, FooterHint{"X", "Account"}, FooterHint{"B", back})
 	}
 	renderText(renderer, config, font, ellipsize(font, hint, panelW-2*padX), ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)

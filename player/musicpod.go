@@ -1763,19 +1763,9 @@ func musicPodPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 		musicNext()
 		musicPodTick(config)
 		return true
-	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
-		if !musicToggleLyrics() {
-			showToast("No lyrics for this song", ToastInfo())
-		}
-		return true
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		minutes := musicCycleSleepTimer()
-		if minutes == 0 {
-			showToast("Sleep timer off", ToastInfo())
-		} else {
-			showToast(fmt.Sprintf("Sleep timer: %d min", minutes), ToastSuccess())
-		}
-		return true
+	// Lyrics and the sleep timer are on X's Now Playing menu: the stick
+	// clicks that used to be their shortcuts are not on every handheld
+	// (stickclicks.go).
 	case sdl.CONTROLLER_BUTTON_GUIDE:
 		podPopToRoot()
 		return true

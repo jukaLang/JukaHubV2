@@ -901,6 +901,11 @@ func audioRouteUpdate(addr string) {
 	// (bt_audiofollow.go).
 	cur := audioRouteChildPCM()
 	btFollowRoute(addr, cur != "" && !usbDACPCMIs(cur))
+	if !gameScreenSuspended() {
+		// A headset that stays connected without the sound is said, once
+		// (audioroute_bluealsa.go).
+		audioRouteNoteStuck(addr, cur != "")
+	}
 }
 
 // audioRouteSetVolume applies a volume change (0..100) to the headset at once;

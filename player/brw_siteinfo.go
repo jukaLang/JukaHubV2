@@ -5,8 +5,8 @@ package main
 // The HTTP check, the TLS certificate report and the security-headers audit
 // used to be three rows in Tools that asked you to type a URL. They are about
 // the page you are reading, so they live in the browser now: the padlock at the
-// left of the address bar (or the Info chip, `i` on a keyboard, R3 on a pad —
-// F2 on a Brick) opens a sheet over the page with three tabs:
+// left of the address bar (or the Info chip, `i` on a keyboard, the Select
+// menu's Site info on a pad) opens a sheet over the page with three tabs:
 //
 //   - Connection: HTTP status, timing, server, type and size (httpCheckSummary)
 //   - Certificate: issuer, validity, key, names and trust (certSummary); an
@@ -424,7 +424,7 @@ func brwInfoController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return true
 	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		brwInfoClose()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER, sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		brwInfoSwitch(-1)

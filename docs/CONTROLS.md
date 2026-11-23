@@ -7,6 +7,17 @@ again (the wheel scrolls without bringing it back), on a PC and with a USB or
 Bluetooth mouse on a handheld; the handheld's own pointer is the
 [virtual cursor](#virtual-cursor).
 
+Every action on a JukaHub screen sits on a button every supported handheld
+has — the D-pad, **A**, **B**, **X**, **Y**, **L1**, **R1**, **L2**, **R2**,
+**Select**, **Start** and **Menu** — or in that screen's menu, and the hints
+name only buttons the handheld in your hands has. The stick clicks (L3 / R3)
+are for games: the original Smart Pro's sticks do not press in, the Brick and
+the Hammer have no sticks (their **F1** / **F2** keys do the same thing on
+every screen), and only the Smart Pro S and the Brick Pro click theirs. Where
+a screen has a menu of its own, **Select** opens it (the Browser, Mail, the
+Games library); **Start** opens the Start menu, or the screen's options where
+it has them (a game's options in the library, the music player's).
+
 The top bar always shows the system status — a brightness button, a volume
 button, a Bluetooth button, a Wi-Fi meter, the weather chip, the clock, a
 battery gauge, the now-playing title and the notification bell on the right,
@@ -243,7 +254,7 @@ no footer names may have no key.
 | Media | L1 / R1 tabs · R2 more · X search · Y details | Tab or [ / ] · PgDn · X or **/** · Y or I; U undo, Del remove |
 | Favorites | Left / Right tabs · X remove · Y undo | Left / Right · X, D or Del · Y or U |
 | Live TV | X search · Y favourite | X · Y or F |
-| Browser | Select menu · L1 / R1 scroll · L2 / R2 zoom · X links · Y search · L3 mode | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
+| Browser | Select menu (link mode, site info, …) · L1 / R1 scroll · L2 / R2 zoom · X links · Y search | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
 | Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
 | Chat | L1 / R1 tabs (Voice after Saved) · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, 4 Voice, R renames you, Del drops a waiting file |
 | On-screen keyboard | A type · Start send / submit · B close · X delete · Y submit (Ask AI in chat) · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
@@ -256,6 +267,7 @@ no footer names may have no key.
 | PDF reader | L1 / R1 page (or chapter) · L2 / R2 zoom or text size · X text · Y options | PgUp / PgDn (or [ / ]) · - / + · X or T · Y, O or Tab |
 | Playtime & achievements | L1 / R1 tabs · X sort · Y RetroAchievements | Tab / Shift+Tab · X · Y |
 | Game details | Start options · X favourite · Y look up again | O · X or F · Y |
+| Games library | Select menu (random game, tag filter, search, box art, rescan) · R1 search · L1 fill missing box art · Y rescan · Start a game's options | M · S or **/** · F · Y · O; R random game, T tag filter |
 | Games library, a console's page | L2 / R2 previous / next letter (hold to keep going) · Right next letter in a column | PgUp / PgDn · → |
 | Local play | L1 / R1 move a player · Y remove · X end game | PgUp / PgDn · Y or Del · X |
 | Keyboard languages | L1 / R1 move · X remove · Y add | [ / ] · X or Del · Y |
@@ -305,19 +317,21 @@ they used to do nothing in JukaHub. Now, by default:
 | Select + L1 (hold) | Mouse mode: the D-pad moves a pointer and A clicks (see Virtual cursor) |
 | L2 / R2 (the small top buttons) | On Home L2 edits Home; R2 steps the liquid background (Off, Slight, Medium, Lively) on any screen that has no R2 job of its own; L2 jumps to the top of a list |
 
-The audio player keeps L3 / R3 for lyrics and the sleep timer, the web browser
-keeps L3 for switching between scrolling and walking links, and the game
-library keeps R3 for a random game, so on those screens F1 / F2 do what those
-screens say. On Home the footer names **Start** instead of a **B Back** that
-had nothing to go back to.
+F1 and F2 do this on every screen: no JukaHub screen gives the stick clicks a
+job of its own (lyrics and the sleep timer are in the music player's
+**Start** options, link mode and site info in the browser's **Select** menu,
+the random game and the tag filter in the Games library's **Select** menu). The
+Games library takes every press while it is open, the front keys too, so they
+do nothing there. On Home the footer names **Start** instead of a **B Back**
+that had nothing to go back to.
 
 **Settings → Controls → F1 key** and **F2 key** (Brick and Hammer only) pick
 what each key does instead: *Controller card*, *Quick Settings*, *Screenshot*,
 *Game switcher*, *Search*, *Start menu*, *Sleep*, *Mute* (or back to the last
-level), *Home*, or *Nothing* (the screen gets the key as L3 / R3). The key
-that opens the Controller card, Quick Settings, the Start menu or Search also
-closes it, and the Controller card lists what both keys do. The three screens above keep their
-own use whatever is chosen.
+level), *Home*, or *Nothing* (the key does nothing in JukaHub; a game still
+gets it as L3 / R3). The key that opens the Controller card, Quick Settings,
+the Start menu or Search also closes it, and the Controller card lists what
+both keys do.
 
 ### TrimUI Smart Pro S: the Home key
 
@@ -571,17 +585,21 @@ the paused game's hotkeys.
 
 | Button | Action |
 |--------|--------|
-| F1 held (Brick, Hammer) or L3 held (Smart Pro, Smart Pro S, Brick Pro) | The game plays backwards while it is held; let go and it carries on from there. Only on the systems whose in-game menu has **Rewind** |
+| F1 held (Brick, Hammer) or L3 held (Smart Pro S, Brick Pro) | The game plays backwards while it is held; let go and it carries on from there. Only on the systems whose in-game menu has **Rewind** |
 | F2 or R3 | Fast forward on; press again for normal speed (the in-game menu's row follows) |
 | Menu + Select (press together, let go) | Save and quit to JukaHub: "Saved — it continues where you left off", and the next start of the game picks up there. A deliberate quit like this does not start the game by itself at the next power-on |
 
 **Settings → Controls → Game hotkeys** is *Auto* (F1 / F2 on a Brick or
-Hammer, L3 / R3 on a handheld with sticks), the pair itself, or *Off*;
+Hammer, L3 / R3 on a handheld whose sticks press in), the pair itself, or
+*Off*. The original Smart Pro's sticks do not click, so it has no pair and no
+row: rewind and fast forward are the in-game menu's rows and RetroArch's own
+hotkeys there.
 **Menu + Select: save and quit** turns that press off. A press made while
 Select, Start or Menu is held belongs to a chord and does nothing here.
 Nintendo DS games keep the keys to themselves (the DS cores tap the screen
-and close the lid with L3 / R3), and on a handheld with sticks so do
-PlayStation and DOS games, and light-gun games (the gun re-aims on R3).
+and close the lid with L3 / R3), and on a handheld whose sticks click so do
+PlayStation and DOS games, and light-gun games (the gun re-aims on its spare
+R shoulder).
 Menu + Select does nothing in RetroAchievements hardcore (RetroArch saves no
 states there), in PPSSPP, ports and NextUI paks. With auto-resume off
 (`savestateResume: false`) it writes a save state in the current slot
@@ -671,7 +689,7 @@ while a layout is in use.
 | ScummVM point and click | ScummVM | D-pad or stick moves the pointer, A left click, B right click, X Escape, Y skip a line, L1 slow pointer, R1 F5, Start the ScummVM menu, Select the keyboard |
 | DOS: the game's own mapping | DOS | DOSBox Pure's own mapping for the games it knows; Select opens its on-screen keyboard |
 | DOS keyboard / DOS mouse | DOS | Keyboard- or mouse-style DOS games; Select opens the on-screen keyboard (docs/GAME_LIBRARY.md, "ScummVM and DOS shelves") |
-| Light gun | NES, SNES, Mega Drive, Master System, Sega CD, PlayStation, Arcade | Right stick aims (the D-pad on a Brick), R1 fires, L1 reloads, R3 re-centres; tuned and tried per game in **More** → **Light gun** ([LIGHT_GUN.md](LIGHT_GUN.md)) |
+| Light gun | NES, SNES, Mega Drive, Master System, Sega CD, PlayStation, Arcade | Right stick aims (the D-pad on a Brick), R1 fires, L1 reloads, R2 re-centres (R1 when R2 fires); tuned and tried per game in **More** → **Light gun** ([LIGHT_GUN.md](LIGHT_GUN.md)) |
 
 A layout decides only the buttons it sets; the Buttons choice (Swap A and B
 …) still decides the rest. Like Buttons it is written for that start only and
@@ -715,7 +733,7 @@ Choices are kept in `data/game-layouts.json`.
 #### Light gun (RetroArch gun games)
 
 Gun games aim with the right stick (the D-pad on a Brick), fire with R1 and
-reload with L1; R3 puts the crosshair back in the middle. Known gun games
+reload with L1; R2 (R1 when R2 is the trigger) puts the crosshair back in the middle. Known gun games
 (Duck Hunt, Time Crisis, Operation Wolf …) start with it once by themselves.
 A game's page → **More** → **Light gun** turns it on or off and sets the
 aim (Move or Point), speed, aim area and buttons, with a practice target. On
@@ -1278,7 +1296,7 @@ or the Menu key opens it; with a mouse, a right click.
 | L1 / R1 | Scroll by a page |
 | L2 / R2 (keyboard **-** / **+**, or the toolbar **zoom** chip) | Zoom the page text out / in (75%–160%); the chip shows the scale, lights up off 100%, and steps up on a tap |
 | Left / Right | Walk the links in reading order, scrolling them into view |
-| **Tab** (keyboard) or **L3** (left stick click) | Switch between scrolling the page and walking its links |
+| **Tab** (keyboard), or **Select** → **Link mode** | Switch between scrolling the page and walking its links (**B** goes back to scrolling) |
 | A | Open the highlighted link, work the highlighted form control (type into a field, step a list, tick a box, send a form), or edit the address bar when nothing is picked |
 | Y (keyboard **Y** or **/**) | Search the web (opens the keyboard); the **SEARCH** chip does the same |
 | X | Open the full link list for the page |
@@ -2154,9 +2172,7 @@ steps back) and the rows under it are your saved stations — see
 | Y | Favorite the playing track |
 | Left / Right | Seek −10 s / +10 s |
 | L1 / R1 | Previous / next track |
-| L3 (left stick click) | Show / hide lyrics (a `.lrc` file beside the song, or the lyrics stored inside it) |
-| R3 (right stick click) | Cycle the sleep timer (off, 15, 30, 60 min) |
-| Start | Toggle the full-screen visualizer |
+| Start | The player's options: the Audio panel with **Now playing** on top — full-screen visualizer, lyrics (a `.lrc` file beside the song, or the lyrics stored inside it), sleep timer (off, 15, 30, 60 min), shuffle, repeat, speed, auto-exit and song search. Start or B closes it; in the full-screen visualizer Start puts the visualizer away |
 | Guide (logo button, where the pad reports it) | Toggle shuffle |
 | Select | Turn the screen off (playback continues) |
 | X, then D-pad Right (within 0.45 s) | Open song search |
@@ -2166,8 +2182,10 @@ steps back) and the rows under it are your saved stations — see
 | B | Close the visualizer, then go back |
 
 In the full-screen visualizer, **Left / Right** pick one of the ten visualizers
-and **Y** turns the dithering on or off. The **iPod** layout (Start → Audio →
-Now Playing layout) has its own map: see
+and **Y** turns the dithering on or off. The footer names these buttons on a
+pad and the player's keys on a keyboard (Enter, Space, T sleep, L lyrics, K
+options, V visualizer…). The **iPod** layout (Start → Now Playing layout) has
+its own map: see
 [MUSIC_PLAYER.md](MUSIC_PLAYER.md#ipod-layout). On a keyboard, **X** opens
 Sound effects and **G** the equaliser in every layout.
 

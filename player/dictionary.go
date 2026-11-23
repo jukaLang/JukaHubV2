@@ -523,7 +523,12 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 
 	// Controls.
 	if font != nil {
-		controls := hintLine(FooterHint{Label: "Type to Search"}, FooterHint{"Enter", "Look Up"}, FooterHint{"Esc", "Back"})
+		// The pad picks a word from the list (ctrlDictionary); typing needs a
+		// keyboard, so only a keyboard is told to type.
+		controls := hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A", "Look Up"}, FooterHint{"B", "Back"})
+		if hintsUseKeyboard() {
+			controls = hintLine(FooterHint{Label: "Type to Search"}, FooterHint{"Enter", "Look Up"}, FooterHint{"Esc", "Back"})
+		}
 		cw, _, _ := font.SizeUTF8(controls)
 		renderText(renderer, config, font, controls,
 			WithAlpha(ColorTextTertiary(), 120),

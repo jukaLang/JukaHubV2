@@ -1055,6 +1055,11 @@ func sceneClaimsStart(name string) bool {
 	case solitaireSceneName:
 		// Solitaire's Start opens its game menu (solitaire_ui.go).
 		return true
+	case "MusicPlayer":
+		// The player's Start opens its options — the Audio panel with the Now
+		// playing rows: visualizer, lyrics, sleep timer (music_nowplaying_rows.go)
+		// — and the iPod layout's Start plays and pauses (musicpod.go).
+		return true
 	}
 	return false
 }
@@ -1073,9 +1078,11 @@ func startMenuKeyOpen(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		// The Terminal's, the Synth's and Solitaire's own Start is a key of
-		// their own (Enter, Space, M), so F10 still opens the menu there.
-		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && name != padsSceneName && name != solitaireSceneName && sceneClaimsStart(name) {
+		// The Terminal's, the Synth's, Solitaire's and the music player's own
+		// Start is a key of their own (Enter, Space, M, K), so F10 still opens
+		// the menu there.
+		if name := config.Scenes[currentSceneIndex].Name; name != "Terminal" && name != synthSceneName && name != padsSceneName &&
+			name != solitaireSceneName && name != "MusicPlayer" && sceneClaimsStart(name) {
 			return false
 		}
 	}

@@ -330,7 +330,7 @@ func netplayLinkHint(row netplayRow) string {
 		return ""
 	}
 	if row.kind == netplayRowAddress {
-		return hintLine(FooterHint{"←/→", "Player"}, FooterHint{"A", "Join"}, FooterHint{"X", "Edit address"}, FooterHint{"B", "Close"})
+		return hintLine(FooterHint{"Left/Right", "Player"}, FooterHint{"A", "Join"}, FooterHint{"X", "Edit address"}, FooterHint{"B", "Close"})
 	}
-	return hintLine(FooterHint{"←/→", "Player"}, FooterHint{"A", "Join"}, FooterHint{"B", "Close"})
+	return hintLine(FooterHint{"Left/Right", "Player"}, FooterHint{"A", "Join"}, FooterHint{"B", "Close"})
 }

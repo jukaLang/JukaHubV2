@@ -108,6 +108,11 @@ func systemLegendRows() []FooterHint {
 		}
 		return rows
 	}
+	// F1 is a keyboard key: a PC has one beside its pad, a handheld does not
+	// (with a keyboard plugged in, the keyboard rows above name F1 instead).
+	if hintOnHandheld() {
+		return rows
+	}
 	return append(rows, FooterHint{Button: "F1", Label: "Keyboard shortcuts"})
 }
 

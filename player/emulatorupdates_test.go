@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -281,5 +282,135 @@ func TestVerifyReleaseDigest(t *testing.T) {
 	}
 	if err := verifyReleaseDigest(body, "md5:abc"); err == nil {
 		t.Fatal("an unsupported digest algorithm was accepted")
+	}
+}
+
+// TestRetroArchPackageReadInPart pins raget.go's reading of a TrimUI SD
+// package: only range requests (in small blocks here, so they cross and
+// evict), RetroArch's folder found under the package's top folder, the binary
+// and its version, and the folder written without overwriting a file the
+// card kept, without the lean parts and without anything outside the folder.
+func TestRetroArchPackageReadInPart(t *testing.T) {
+	prevBlock, prevDir := raGetBlock, raGetDirBlock
+	raGetBlock, raGetDirBlock = 1000, 700
+	t.Cleanup(func() { raGetBlock, raGetDirBlock = prevBlock, prevDir })
+
+	// Bytes that do not compress, so the package spans many blocks.
+	noise := func(n int, seed uint32) string {
+		b := make([]byte, n)
+		for i := range b {
+			seed = seed*1664525 + 1013904223
+			b[i] = byte(seed >> 24)
+		}
+		return string(b)
+	}
+	binary := "\x7fELF fake\x00zlib\x001.3.1\x00libpng 1.6.43\x00RetroArch 1.22.2\x00v1.21.0\x00" + noise(6000, 1)
+	files := []struct{ name, body string }{
+		{"pkg/Emus/GBA/launch.sh", "#!/bin/sh\n" + noise(3000, 4)},
+		{"pkg/RetroArch/ra64.trimui", binary},
+		{"pkg/RetroArch/retroarch.cfg", "video_fullscreen_x = \"1024\"\nvideo_driver = \"gl\"\n"},
+		{"pkg/RetroArch/.retroarch/cores/a_libretro.so", noise(9000, 2)},
+		{"pkg/RetroArch/.retroarch/assets/big.png", noise(5000, 3)},
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for _, f := range files {
+		w, err := zw.Create(f.name)
+		if err != nil {
+			t.Fatalf("zip: %v", err)
+		}
+		if _, err := w.Write([]byte(f.body)); err != nil {
+			t.Fatalf("zip: %v", err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zip: %v", err)
+	}
+	dir := t.TempDir()
+	pkg := filepath.Join(dir, "base.zip")
+	if err := os.WriteFile(pkg, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var ranged atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") == "" {
+			t.Errorf("a request without a range for %s", r.URL.Path)
+		}
+		ranged.Add(1)
+		http.ServeFile(w, r, pkg)
+	}))
+	defer server.Close()
+	allowUpdateTestServer(t, server.URL)
+
+	ctx := context.Background()
+	asset := emuGitHubAsset{Name: "base.zip", BrowserDownloadURL: server.URL + "/base.zip", Size: int64(buf.Len())}
+	c, ok, err := raGetOpenAsset(ctx, server.Client(), raGetSource{Repo: "trimui/assets_brick", Model: DeviceTrimuiBrick}, "20241105", asset)
+	if err != nil || !ok {
+		t.Fatalf("raGetOpenAsset = %v, %v", ok, err)
+	}
+	if c.Prefix != "pkg/RetroArch/" || !c.Full || c.Files != 4 {
+		t.Fatalf("candidate = prefix %q, full %v, %d files", c.Prefix, c.Full, c.Files)
+	}
+
+	staged := filepath.Join(dir, "stage", "ra64.trimui")
+	if err := raGetFetch(ctx, &c, c.Bin, staged, nil); err != nil {
+		t.Fatalf("raGetFetch: %v", err)
+	}
+	if got, _ := os.ReadFile(staged); string(got) != binary {
+		t.Fatalf("the binary came back as %d bytes, want %d", len(got), len(binary))
+	}
+	if v := raGetBinaryVersion(staged); v != "1.22.2" {
+		t.Fatalf("version = %q, want 1.22.2", v)
+	}
+
+	target := filepath.Join(dir, "card", "RetroArch")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "retroarch.cfg"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	plan, dirs, total, packed, err := raGetFolderPlan(&c, target, true)
+	if err != nil {
+		t.Fatalf("raGetFolderPlan: %v", err)
+	}
+	created, err := raGetWriteFolder(ctx, &c, target, plan, dirs, total, packed, func(int64, int64) {})
+	if err != nil {
+		t.Fatalf("raGetWriteFolder: %v", err)
+	}
+	if len(created) != 1 || created[0] != ".retroarch/cores/a_libretro.so" {
+		t.Fatalf("written = %v, want only the core", created)
+	}
+	if got, _ := os.ReadFile(filepath.Join(target, ".retroarch", "cores", "a_libretro.so")); string(got) != files[3].body {
+		t.Fatalf("the core came back as %d bytes", len(got))
+	}
+	if got, _ := os.ReadFile(filepath.Join(target, "retroarch.cfg")); string(got) != "mine\n" {
+		t.Fatalf("the card's own retroarch.cfg was replaced: %q", got)
+	}
+	for _, absent := range []string{filepath.Join(target, "ra64.trimui"), filepath.Join(target, ".retroarch", "assets", "big.png"),
+		filepath.Join(dir, "card", "Emus")} {
+		if _, err := os.Stat(absent); err == nil {
+			t.Fatalf("%s was written", absent)
+		}
+	}
+	if n := ranged.Load(); n < 10 {
+		t.Fatalf("only %d range requests: the small blocks were not used", n)
+	}
+
+	for _, tc := range []struct {
+		in       string
+		a, b, n  int64
+		accepted bool
+	}{
+		{"bytes 0-99/1000", 0, 99, 1000, true},
+		{"bytes 5-5/*", 5, 5, -1, true},
+		{"bytes 9-3/1000", 0, 0, 0, false},
+		{"bytes 0-999/999", 0, 0, 0, false},
+		{"items 0-9/10", 0, 0, 0, false},
+	} {
+		a, b, n, ok := raGetContentRange(tc.in)
+		if ok != tc.accepted || (ok && (a != tc.a || b != tc.b || n != tc.n)) {
+			t.Fatalf("raGetContentRange(%q) = %d, %d, %d, %v", tc.in, a, b, n, ok)
+		}
 	}
 }

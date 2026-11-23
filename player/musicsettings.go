@@ -53,9 +53,10 @@ type musicSettingsHit struct {
 
 var musicSettings musicSettingsState
 
-// musicSettingsRows is the fixed list; the order is the reading order.
+// musicSettingsRows is the fixed list; the order is the reading order. Opened
+// over the player, its Now playing rows lead (music_nowplaying_rows.go).
 func musicSettingsRows() []musicSettingsRow {
-	return []musicSettingsRow{
+	rows := []musicSettingsRow{
 		{msRowLayout, "Now Playing layout", "Auralis Pro is the artwork card; StockOS is the compact list-first screen; iPod is the click-wheel style screen with its own menus, themes and servers."},
 		{msRowArtOpacity, "Cover art opacity", "How strongly the artwork tile and its spectrum show through the card."},
 		{msRowScreenMode, "Screen-off controls", "What still works while the panel is dark: any key wakes, Controls keeps transport and volume, Select only ignores stray presses."},
@@ -68,7 +69,7 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowPEQ, "31-band PEQ", "One-third-octave equaliser from 20 Hz to 20 kHz, with the iPod's presets. A opens it (L2 or G in the player); Left/Right switch it on or off."},
 		{msRowAutoEQ, "AutoEQ headphones", "Correct your headphones to neutral with an AutoEq profile, searched offline once the list is downloaded. Your own ParametricEQ.txt files in Music/AutoEQ are listed first."},
 		{msRowSoundFX, "Sound effects", "Tape Mode (wow and flutter, hiss, saturation, roll-off, tape speed), reverb, ping-pong delay, chorus, flanger and the playback speed. R2 or X in the player."},
-		{msRowVisualizer, "Visualizer", "The full-screen visualizer (Start or V): ten styles drawn from what you hear, in four dithered shades."},
+		{msRowVisualizer, "Visualizer", "The full-screen visualizer's style (Now playing's first row in the player, or V): ten styles drawn from what you hear, in four dithered shades."},
 		{msRowServers, "Music servers & scrobbling", "Navidrome, Jellyfin, Last.fm and ListenBrainz: A shows a code that opens the setup page on your phone."},
 		{msRowSpatialMode, "Spatial audio", spatialModeHint},
 		{msRowSpatialStrength, "Spatial strength", spatialStrengthHint},
@@ -77,6 +78,10 @@ func musicSettingsRows() []musicSettingsRow {
 		{msRowPlaylists, "Playlists", "Left/right picks a saved list, A plays it, X saves the current queue under a name."},
 		{msRowShortcuts, "Keyboard shortcuts", "Show every key and controller binding."},
 	}
+	if now := musicNowPlayingRows(); len(now) > 0 {
+		return append(now, rows...)
+	}
+	return rows
 }
 
 // musicBackgroundKey is the custom variable behind background playback.
@@ -104,6 +109,9 @@ func musicSetBackgroundEnabled(config *Config, on bool) {
 
 // musicSettingsValue is the right-hand text of a row.
 func musicSettingsValue(row musicSettingsRow, config *Config) string {
+	if v, ok := musicNowPlayingValue(row.kind, config); ok {
+		return v // music_nowplaying_rows.go
+	}
 	if v, ok := spatialPanelValue(row.kind, config); ok {
 		return v
 	}
@@ -147,6 +155,11 @@ func musicSettingsValue(row musicSettingsRow, config *Config) string {
 
 // musicSettingsAdjust moves a row's value. dir < 0 is left, dir > 0 is right.
 func musicSettingsAdjust(row musicSettingsRow, dir int, config *Config) bool {
+	// The Now playing rows act on the player and sound for themselves
+	// (music_nowplaying_rows.go).
+	if musicNowPlayingAdjust(row.kind, dir, config) {
+		return true
+	}
 	// The spatial rows save and sound for themselves (spatial_ui.go).
 	if spatialPanelAdjust(row.kind, dir, config) {
 		return true
@@ -243,6 +256,10 @@ func onOff(on bool) string {
 // musicSettingsActivate handles A / Enter on a row: the ones that are really
 // commands act, the rest step forward like Right.
 func musicSettingsActivate(row musicSettingsRow, config *Config) {
+	// The full-screen visualizer and search (music_nowplaying_rows.go).
+	if musicNowPlayingActivate(row.kind) {
+		return
+	}
 	// The rows that open a panel of their own (musicpanels.go).
 	if musicPodSettingsActivate(row.kind, config) {
 		return
@@ -366,10 +383,17 @@ func ctrlMusicSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		musicSettingsAdjust(rows[cur], -1, config)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_A:
-		musicSettingsActivate(rows[cur], config)
+		// On the visualizer row Right steps the style and A shows it, as
+		// Right and Enter do on a keyboard (music_nowplaying_rows.go).
+		if e.Button == sdl.CONTROLLER_BUTTON_DPAD_RIGHT && rows[cur].kind == msRowNowVisualizer {
+			musicSettingsAdjust(rows[cur], 1, config)
+		} else {
+			musicSettingsActivate(rows[cur], config)
+		}
 	case sdl.CONTROLLER_BUTTON_Y:
 		musicExportSelectedPlaylist()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+		// Start too: in the player it is the button that opened the panel.
 		closeMusicSettingsPanel()
 	}
 	return true
@@ -425,7 +449,11 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 	footerH := 18 + smallH
 	// The settings sheet opens with the shared page header, measured before the
 	// card is sized so the rows start where the header band ends.
-	header := UIPanelHeader("Audio", "Settings", "media")
+	subtitle := "Settings"
+	if musicSceneActive() {
+		subtitle = "Now playing & settings"
+	}
+	header := UIPanelHeader("Audio", subtitle, "media")
 	band := UIPanelHeaderBand(config, header, 12)
 	panelW := int32(860)
 	if panelW > screenWidth-48 {

@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **395** (audited 2026-11-19).
+Open tasks: **397** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -236,7 +236,10 @@ Groq key; Wi-Fi on and off; a USB-C DAC; a Bluetooth headset; `logs.txt` with
 14. A Bluetooth headset connected before and after start takes Home sounds,
     music, a video, a RetroArch and a PPSSPP game, and a disconnect returns
     everything to the speaker without a pop; Bluetooth diagnostics show
-    BlueALSA on D-Bus, its streams and the route.
+    BlueALSA on D-Bus, its streams and the route. A bluealsa stopped with
+    `kill -STOP` is continued, and one that stops answering D-Bus is restarted
+    within about 10 s and the headset plays again; a headset JukaHub cannot
+    open toasts the reason after 45 s (2026-11-22).
 15. A question to Juka with a picture or a video, asked just before a
     one-minute sleep, is asked again soon after the wake once Wi-Fi is back
     (no six-minute wait); the reply is whole, never half an answer cut by the
@@ -1071,9 +1074,49 @@ only** brings back kept builds at once (toast), **JukaHub's glibc 2.39** runs a
 core that does not need it. 6. A game from MainUI with a 2.35 core still fails
 (expected; noted in the HW log). If the probe refuses: record its `why` here;
 if the namespace cannot be made (not root, no `mount`), record the setup
-script's `jukahub:` line from the launcher output.
+script's `jukahub:` line from the launcher output. 7. On a card whose runtime
+is the pinned glibc-only fallback (`data/private-glibc/glibc-2.39-0ubuntu8.12/`,
+no `current`), Emulators → ppsspp (`GLIBCXX_3.4.30`) installs the complete
+runtime first (log: "installed private runtime") and then the core; with
+ports.ubuntu.com blocked the toast says the complete one did not install, and
+Emulators → mgba then installs JukaHub's `cores-aarch64` build (toast "·
+JukaHub's build for TrimUI") (2026-11-22).
 **Verify.** Record in the HW log; update LIB-26 with what the daily pass now
 installs.
+
+### RAGET-HW-1 — RetroArch installed on a card without one (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-22: "Download latest version of working RetroArch (if
+it's not installed) … make sure GLIBC is private library that we use and that
+it's compatible with Trimui Smart Pro and other Trimui devices".
+`player/raget.go` installs TrimUI's newest `ra64.trimui` for the model from
+`trimui/assets_*` on GitHub, reading the SD base package's zip through HTTP
+range requests (`raget_remote.go`), checks each build with the firmware's and
+the private loader, and starts it on glibc 2.39 (`ra_glibc.go`,
+`raGetOwnsLaunch`). Written without a Go toolchain, without access to GitHub
+(the package names, formats and folder layout come from TrimUI's release
+notes and setup guides; the Smart Pro's own packages are `.7z`, which are
+skipped) and without a device.
+**Where.** `raget.go`, `raget_remote.go`, `raget_ui.go`, `ra_glibc.go`
+(`raGlibcPlanFor`), `emulators.go`, `raemu.go`, `gamelaunch_firmware.go`; the
+JukaHub log (`emulators` lines "RetroArch packages:", "RetroArch install:",
+"RetroArch installed:"), `RetroArch/.jukahub-retroarch.json`.
+**Done when.** On a stock Smart Pro (then a Brick, a Brick Pro and a Smart Pro
+S), with the card's `RetroArch` folder renamed: 1. About a minute and a half
+after start the install bar shows "Getting RetroArch for the Smart Pro"; the
+log lists the packages found ("RetroArch packages: … in <asset> (N files,
+size)") and the build taken ("… starts on the firmware's glibc and on JukaHub's
+2.39"); the toast names the version. 2. A GBA game starts from Games with
+sound, saves and the in-game menu, and the log says "RetroArch starts on
+JukaHub's glibc 2.39 … JukaHub installed this RetroArch". 3. Where the build
+came from another model's package (a Smart Pro takes the Brick's or Brick
+Pro's), the picture fills the screen and the buttons are right; record what is
+not. 4. The Emulators page's RetroArch tile opens RetroArch's menu, and reads
+"installed by JukaHub". 5. With the card nearly full, the install leaves out
+`.retroarch/assets` and RetroArch still starts. 6. Record, per model, the
+asset names and sizes, how long the install took and how much was downloaded;
+a package the log calls unreadable (a compression method, a 7z) gets a FIX
+task.
+**Verify.** Record in the HW log.
 
 ### AUDIT-HW-1 — The Audit toolkit's installs on a device (P1, S) [HW] [NET]
 **Why.** Juka, 2026-11-19: Aircrack-ng did not install on the handheld and
@@ -3379,6 +3422,46 @@ step holds or a FIX task names what differs:
    battery graph), and the chip's temperature after ten minutes of scrolling.
 **Verify.** Record in the HW log; move `uiBoostFloorPct`, `uiBoostPressHold`
 or `frameFastMS` where a model needs it.
+
+### BUTTONS-HW-1 — No stick clicks or keyboard keys in the hints, the library's Select menu and the music player's Start on every TrimUI model (P1, S) [HW]
+**Why.** Juka, 2026-11-22: "I see some spots on the os where it says r3 as a
+button, which is not included on trimui smart pro...or many other devices...
+reconfigure menu appropriately...make sure buttons for the most part are
+consistent". `stickclicks.go` (`deviceHW.ClickSticks`: Smart Pro S and Brick
+Pro only) took every JukaHub action off L3 / R3: the Games library's Select
+menu (`game_library_menu.go`), the browser's Select menu rows, the music
+player's Start → Audio panel with Now playing rows
+(`music_nowplaying_rows.go`, `sceneClaimsStart`), the light gun's spare R
+shoulder; Game hotkeys, RetroArch hotkey buttons, the Chord button, the
+controller test and the DS chart follow the model. Written without a Go
+toolchain or a device: whether a Smart Pro's Menu key really reaches the
+library as BACK with `padEventRaw` = GUIDE (so it still goes back) is read
+from the code only.
+**Where.** `stickclicks.go`, `game_library_menu.go`, `game_library_ui.go`
+(`ctrlGameLibrary`, `gameLibraryFooterHints`), `game_random.go`, `browser.go`,
+`musicplayer.go` (`ctrlMusicPlayer`, `musicPlayerHintLines`),
+`music_nowplaying_rows.go`, `musicsettings.go`, `startmenu.go`,
+`lightgun_aim.go`, `lightgun_ui.go`, `gamehotkeys.go`, `rahotkeys_ui.go`,
+`a11y.go`, `ctrldiag.go`, `brickkeys.go`; docs/CONTROLS.md.
+**Done when.** On a Smart Pro, a Brick, a Brick Pro and a Smart Pro S, each
+step holds or a FIX task names what differs:
+1. No footer, card or sheet names L3 or R3 on the Smart Pro or the Brick
+   (Games library, browser, music player, light-gun practice, Settings →
+   Controls, the controller test, a DS game's control chart); on a Brick the
+   RetroArch hotkey rows say F1 / F2.
+2. Games library: Select opens the menu, A on *Random game from …* lands on a
+   game, and Select, A rolls another; the Menu key (voice off) still goes back;
+   *Show only a tag…*, *Search*, *Fill missing box art* and *Rescan the card*
+   do what L3, R1, L1 and Y do.
+3. Music player (Auralis and StockOS): the footer names A, X, L1/R1, Y, Start,
+   Select, L2, R2 and B; Start opens the Audio panel on *Full-screen
+   visualizer*; Lyrics, Sleep timer, Shuffle, Repeat, Speed and Auto-exit
+   change from it; Start closes it. iPod layout: Start plays and pauses.
+4. On a Brick, F1 / F2 open the Controller card and Quick Settings in the
+   browser and the music player too, and do nothing in the Games library.
+5. Light gun: with R1 the trigger, R2 re-centres the crosshair in a gun game
+   and on the practice target.
+**Verify.** Record in the HW log with a screenshot per screen.
 
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,

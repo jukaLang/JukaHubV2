@@ -203,7 +203,7 @@ func gameLibraryScrub(dir int) bool {
 // other modal panel above them.
 func gameLibraryScrubOwnsTriggers() bool {
 	if !gameLib.open || gameLib.focus != 1 || virtualKeyboardActive ||
-		gameOptsUI.open || gameRandomUI.open || gmetaSheetOpen() || dlPanel.open {
+		gameOptsUI.open || gameRandomUI.open || gameLibMenu.open || gmetaSheetOpen() || dlPanel.open {
 		return false
 	}
 	// Nothing drawn above the page: the overlays that swallow the triggers,

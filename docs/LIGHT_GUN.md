@@ -41,7 +41,7 @@ right gun is still chosen.
 | Right stick | Aims the crosshair |
 | R1 (or R2) | Fires |
 | L1 (or L2) | Reloads: a shot off the screen, which is how these games reload |
-| R3 | Puts the crosshair back in the middle of the aim area |
+| R2 (R1 when R2 fires) | Puts the crosshair back in the middle of the aim area: the R shoulder the trigger leaves free. R3 does it too where the sticks click (the Smart Pro S and the Brick Pro; the original Smart Pro's sticks do not) |
 | A, B, X | The gun's side buttons (GunCon A and B, Super Scope cursor and turbo) |
 | Start, Select | Start and Select; Select is the coin in arcade games |
 
@@ -99,7 +99,7 @@ Then JukaHub makes a mouse (a uinput device) before RetroArch starts, reads the
 pad beside the game without taking it, and moves the mouse at 125 Hz. For
 *Point* it pushes the pointer into the top-left corner first, so it knows
 where the pointer is; it does that 3 seconds after the start (for *Point*
-again at 12 seconds), when you press R3, and when the game comes back from
+again at 12 seconds), when you press the spare R shoulder (or R3), and when the game comes back from
 JukaHub's in-game menu — the crosshair then starts from the middle. Nothing is
 drawn by JukaHub during the game: a buzz says the gun is ready.
 
@@ -128,7 +128,8 @@ NextUI paks keep their own controls.
   says so after a start. Some firmware builds of RetroArch may also never
   look for a mouse; that is the first thing the hardware check will tell.
 - **The crosshair is off the target.** Try *Point* with a *Custom* aim area
-  that matches the game picture, or press R3 to put the crosshair back in the
+  that matches the game picture, or press the spare R shoulder (R2 when R1
+  fires) to put the crosshair back in the
   middle.
 - **The game still waits for a gun.** Some games want the gun in the other
   port, or the core's own device setting; set the port's device type in

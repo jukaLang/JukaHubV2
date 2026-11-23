@@ -185,8 +185,8 @@ func currentGameSystems() []librarySystem {
 		return gameLib.systemsCache
 	}
 	// The view filter is first: a hidden game stays out of search, tags and the
-	// Continue row unless "Show hidden" is on. The tag filter (L3 / T,
-	// gmeta_ui.go) narrows what the search leaves; it returns the list untouched
+	// Continue row unless "Show hidden" is on. The tag filter (Select's menu or
+	// T, gmeta_ui.go) narrows what the search leaves; it returns the list untouched
 	// when no tag is chosen.
 	systems := filterHiddenLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), key.showHidden)
 	systems = gmetaFilterSystems(filterLibrarySystems(systems, gameLib.query))
@@ -369,6 +369,7 @@ func openGameLibraryPanel() {
 	gameLib.logoSystem = ""
 	gameLib.logoAt = 0
 	resetGameRandomPicker()
+	resetGameLibMenu()
 	// A fresh visit shows every game, and the per-game data loads in the
 	// background so a game's page opens without a read.
 	gmetaLibraryOpened()
@@ -447,10 +448,12 @@ func closeGameLibraryPanel() {
 	if !gameLib.open {
 		return
 	}
-	// The options and random sheets cannot outlive the library they belong to.
+	// The options and random sheets and the menu cannot outlive the library
+	// they belong to.
 	gameOptsUI.open = false
 	gameOptsUI.rowHits = nil
 	resetGameRandomPicker()
+	resetGameLibMenu()
 	// So can a game's page, its tag sheet and the tag filter's chooser; the
 	// page's screenshots are textures and go with it.
 	gmetaCloseAll()
@@ -608,7 +611,7 @@ func gameLibraryStatus() string {
 		for _, system := range currentGameSystems() {
 			games += len(system.Games)
 		}
-		return "Showing " + tag + " · " + pluralizeCount(games, "game", "games") + " — B shows every game"
+		return "Showing " + tag + " · " + pluralizeCount(games, "game", "games") + " — " + hintKeyFor("B", "Back") + " shows every game"
 	}
 	if query := gameLib.query; query != "" {
 		games, systems := 0, 0
@@ -617,7 +620,7 @@ func gameLibraryStatus() string {
 			games += len(system.Games)
 		}
 		if games == 0 {
-			return "No match for \"" + query + "\" — press S to change it"
+			return "No match for \"" + query + "\" — press " + hintKeyFor("S / R1", "Search") + " to change it"
 		}
 		return pluralizeCount(games, "match", "matches") + " for \"" + query + "\" in " + pluralizeCount(systems, "system", "systems")
 	}
@@ -785,7 +788,7 @@ func fetchMissingLibraryArtwork() {
 		ShowToast("An artwork fetch is already running.", ToastKindInfo)
 		return
 	}
-	ShowToast("Fetching "+pluralizeCount(len(missing), "missing cover", "missing covers")+" — L1 / F stops and resumes", ToastKindInfo)
+	ShowToast("Fetching "+pluralizeCount(len(missing), "missing cover", "missing covers")+" — "+hintKeyFor("L1 / F", "Stop")+" stops and resumes", ToastKindInfo)
 	artStyleFillQueue(report.Games, len(missing)) // queued behind the covers (artstyle_fetch.go)
 }
 
@@ -828,6 +831,9 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if gameRandomUI.open {
 		return handleGameRandomKey(e)
 	}
+	if gameLibMenu.open {
+		return handleGameLibMenuKey(e)
+	}
 	// A game's page, its tag sheet and the tag filter (gmeta_ui.go).
 	if gmetaSheetOpen() {
 		return gmetaHandleKey(e, config)
@@ -862,6 +868,9 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		openGameOptions()
 	case sdl.K_r:
 		openGameRandomPicker()
+	case sdl.K_m:
+		// Select's twin: the library's menu (game_library_menu.go).
+		openGameLibMenu()
 	case sdl.K_x:
 		if gameLib.focus == 1 {
 			libraryOpenNetplay()
@@ -897,6 +906,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if gameRandomUI.open {
 		return ctrlGameRandom(e)
 	}
+	if gameLibMenu.open {
+		return ctrlGameLibMenu(e)
+	}
 	// A game's page, its tag sheet and the tag filter (gmeta_ui.go).
 	if gmetaSheetOpen() {
 		return gmetaHandlePad(e, config)
@@ -912,10 +924,19 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		gameLibraryMove(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		gmetaOpenSelected()
-	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
-		// L3 chooses a tag to show (Favorites, Backlog …); the stick click is
-		// free here, like R3 for the random pick.
-		gmetaOpenFilterPicker()
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// Select is the library's menu: a random game, the tag filter, search,
+		// box art and a rescan (game_library_menu.go). Those used to sit on
+		// the stick clicks, which the Smart Pro does not have. The handheld's
+		// Menu key arrives as BACK too and keeps going back, like B.
+		if gameLibSelectPressed(e) {
+			openGameLibMenu()
+		} else {
+			gameLibraryBack()
+		}
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// The stick clicks (a Brick's F1 / F2) have no job here: the library
+		// is modal, and nothing a screen needs sits on them (stickclicks.go).
 	case sdl.CONTROLLER_BUTTON_X:
 		if gameLib.focus == 1 {
 			libraryOpenNetplay()
@@ -933,12 +954,7 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// R1 searches. The shoulders are otherwise blocked while this panel is
 		// open (shoulders.go), so the trigger is free here.
 		vkOpenGameSearch()
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		// R3 rolls a random game. The stick click has no other binding in the
-		// app, and a key that is not on the pad would leave handhelds without
-		// the picker.
-		openGameRandomPicker()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_B:
 		gameLibraryBack()
 	default:
 		return false
@@ -959,6 +975,9 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	}
 	if gameRandomUI.open {
 		return handleGameRandomMouse(mx, my)
+	}
+	if gameLibMenu.open {
+		return handleGameLibMenuMouse(mx, my)
 	}
 	if gmetaSheetOpen() {
 		return gmetaHandleMouse(mx, my, config)
@@ -1849,6 +1868,9 @@ func gameLibraryFooterHints(config *Config) []FooterHint {
 		hints := []FooterHint{{"A", "Open"}, {"B", "Consoles"}}
 		// The Cube's Left/Right change console (game_library_cube.go).
 		hints = append(hints, libraryLayoutPageHints()...)
+		// Select's menu holds the random pick and the tag filter, which no
+		// button of their own reaches on every handheld (game_library_menu.go).
+		hints = append(hints, FooterHint{"Select / M", "Menu"})
 		// X is only advertised while LAN Play is on: a footer that offers a
 		// switched-off feature teaches a button that answers with a toast.
 		if netplayEnabled(config) {
@@ -1859,17 +1881,15 @@ func gameLibraryFooterHints(config *Config) []FooterHint {
 		if scrub, ok := gameLibraryScrubHint(); ok {
 			hints = append(hints, scrub)
 		}
-		return append(hints, FooterHint{"R / R3", "Random"},
-			FooterHint{"S / R1", "Search"}, FooterHint{"L3 / T", "Tags"}, artHint,
-			FooterHint{"Y", "Rescan"})
+		return append(hints, FooterHint{"S / R1", "Search"}, artHint, FooterHint{"Y", "Rescan"})
 	}
 	back := FooterHint{"B", "Close"}
 	if gameLib.query != "" || gmetaFilterTag() != "" {
 		back = FooterHint{"B", "Show All"}
 	}
 	// X steps the Console look (game_library_pixel_look.go).
-	return []FooterHint{{"A", "Open"}, back, {"S / R1", "Search"}, {"L3 / T", "Tags"},
-		{"R / R3", "Random"}, {"X", "Look"}, artHint, {"Y", "Rescan"}}
+	return []FooterHint{{"A", "Open"}, back, {"Select / M", "Menu"}, {"S / R1", "Search"},
+		{"X", "Look"}, artHint, {"Y", "Rescan"}}
 }
 
 // renderGameLibraryPanel draws the library page: Home's backdrop under the top
@@ -1986,6 +2006,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	// A game's page, its tag sheet and the tag filter's chooser sit on the
 	// library, under the random and options sheets they can open.
 	gmetaRender(renderer, config)
+	renderGameLibMenu(renderer, config)
 	renderGameRandomPicker(renderer, config)
 	renderGameOptionsPanel(renderer, config)
 }

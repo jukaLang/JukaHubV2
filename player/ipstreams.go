@@ -1147,18 +1147,24 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	// Every hint names the pad button and the key that does the same thing, so a
 	// handheld and a Windows keyboard are told the same story. Narrow panels get
 	// the short spelling of the same list.
-	footer := hintLine(FooterHint{"L1/R1", "Tab"}, FooterHint{"/", "Find"}, FooterHint{"A / Enter", "Open"},
+	// Find is a keyboard key (/) only; Remove is Start on the pad and Del on
+	// a keyboard in every tier ("pad / key" pairs, inputhints.go).
+	full := []FooterHint{{"L1/R1", "Tab"}}
+	if hintsUseKeyboard() {
+		full = append(full, FooterHint{"/", "Find"})
+	}
+	footer := hintLine(append(full, FooterHint{"A / Enter", "Open"},
 		FooterHint{"X", "Save Link"}, FooterHint{"Y", "Import"}, FooterHint{"Start / Del", "Remove"},
-		FooterHint{"B / Esc", "Close"})
+		FooterHint{"B / Esc", "Close"})...)
 	if fw, _, _ := font.SizeUTF8(footer); int32(fw) > rowW {
 		footer = hintLine(FooterHint{"L1/R1", "Tab"}, FooterHint{"A", "Open"}, FooterHint{"X", "Save"},
-			FooterHint{"Del", "Remove"}, FooterHint{"B / Esc", "Close"})
+			FooterHint{"Start / Del", "Remove"}, FooterHint{"B / Esc", "Close"})
 	}
 	if fw, _, _ := font.SizeUTF8(footer); int32(fw) > rowW {
 		// The tab hint survives to the last tier: the pill row is the newest
 		// thing on the card, and the one people will not guess is there.
 		footer = hintLine(FooterHint{"L1/R1", "Tab"}, FooterHint{"A", "Open"},
-			FooterHint{"Del", "Remove"}, FooterHint{"B / Esc", "Close"})
+			FooterHint{"Start / Del", "Remove"}, FooterHint{"B / Esc", "Close"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),

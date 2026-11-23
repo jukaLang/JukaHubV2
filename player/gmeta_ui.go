@@ -12,7 +12,8 @@ package main
 // focused, so A, A still starts a game in two presses.
 //
 // Also here: the tag sheet (stacked on the page), the library's tag filter
-// (L3 / T: show only the Favorites, the Backlog, a custom tag …) and the tick
+// (Select's menu or T: show only the Favorites, the Backlog, a custom tag …)
+// and the tick
 // that celebrates the hour milestones through the trophy card.
 //
 // Everything slow — the save-state folders, the screenshots, the CRC, the
@@ -811,8 +812,8 @@ func gmetaTagAction(act tbxAction) {
 
 // ── The filter chooser ───────────────────────────────────────────────────────
 
-// gmetaOpenFilterPicker is L3 / T in the library: choose a tag to show only its
-// games, or All games.
+// gmetaOpenFilterPicker is the library menu's "Show only a tag" (Select, or T
+// on a keyboard): choose a tag to show only its games, or All games.
 func gmetaOpenFilterPicker() bool {
 	if gameOptsUI.open || gameRandomUI.open || gmetaUI.open {
 		return false

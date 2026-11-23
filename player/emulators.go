@@ -911,6 +911,10 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	// config, and A opens its menu (raemu.go).
 	if ra, ok := deviceRetroArchEntry(coresDir, len(coreRows)); ok {
 		add(ra)
+	} else if ra, ok := raGetMissingEntry(coresDir); ok {
+		// No RetroArch on the card at all: its tile installs TrimUI's
+		// newest build for this model (raget.go).
+		add(ra)
 	}
 
 	// Systems with games but no emulator are the rows that matter most: the
@@ -1477,6 +1481,11 @@ func emuPanelActivate(config *Config) {
 		// The GameCube and Wii tiles: the console's games once Dolphin is in,
 		// its setup before that (dolphin_folders.go).
 		dolphinConsoleActivate(e)
+		return
+	}
+	if raGetTileWantsInstall(e) {
+		// A RetroArch tile with no RetroArch to open installs one (raget.go).
+		raGetActivate(e)
 		return
 	}
 	if emuRetroArchMenuTile(e) {

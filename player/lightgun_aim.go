@@ -20,8 +20,10 @@ package main
 //
 // The trigger and reload are the left and right mouse buttons, from R1 / L1
 // or R2 / L2 (a key on some pads, an axis on the TrimUI's: latched like the
-// games mouse's wheel triggers). R3 asks for an anchor and the crosshair back
-// in the middle of the area.
+// games mouse's wheel triggers). The R shoulder that does not fire (R2 when
+// R1 fires, R1 when R2 does) asks for an anchor and the crosshair back in the
+// middle of the area; so does R3 where the sticks click, which the original
+// Smart Pro's do not (stickclicks.go).
 
 import (
 	"math"
@@ -147,8 +149,10 @@ type lightgunEngine struct {
 	latch [2]bool
 	// btn is the mouse's left (trigger) and right (reload) button held.
 	btn [2]bool
-	// recenter: R3 was pressed; the session anchors.
+	// recenter: R3 or the spare R shoulder was pressed; the session anchors.
+	// spare is that shoulder held at the last tick (a press is its going down).
 	recenter bool
+	spare    bool
 	// shot: the trigger went down this tick (the recoil buzz).
 	shot bool
 	// pos is where the pointer is, once an anchor made it known; centre
@@ -208,6 +212,16 @@ func (g *lightgunEngine) feed(ev evdevEvent, now time.Time) {
 			g.dpadAt = now
 		}
 	}
+}
+
+// lightgunSpareShoulder is the R shoulder the trigger leaves free ("r2" when
+// R1 fires, "r1" when R2 does): it puts the crosshair back in the middle, the
+// job R3 has where the sticks click. Pure.
+func lightgunSpareShoulder(s lightgunSettings) string {
+	if s.Trigger == "r2" {
+		return "r1"
+	}
+	return "r2"
 }
 
 // held reports a gun button ("r1", "r2", "l1", "l2") held: a key, or the
@@ -299,6 +313,12 @@ func (g *lightgunEngine) tick(now time.Time, out []evdevEvent) []evdevEvent {
 	}
 	out = g.button(0, fire, out)
 	out = g.button(1, g.held(g.p.Set.Reload), out)
+	// The spare R shoulder re-centres like R3; the session acts on it next.
+	spare := g.held(lightgunSpareShoulder(g.p.Set))
+	if spare && !g.spare {
+		g.recenter = true
+	}
+	g.spare = spare
 
 	w, h := float64(g.p.W), float64(g.p.H)
 	if g.centre && g.known {

@@ -248,7 +248,17 @@ checked as the file it will become, in the first cores folder JukaHub may
 write, whose RetroArch decides; until 2026-11-20 it was checked against the
 firmware's libraries alone, which refused the buildbot's Dolphin
 (`GLIBCXX_3.4.32`) on a Brick Pro whose RetroArch could have run it. A build
-refused only because the runtime's download failed is not remembered. **Firmware's only** restores the strict
+refused only because the runtime's download failed is not remembered. A gap
+in libstdc++ or libgcc_s needs the complete runtime from Ubuntu's signed
+index: a card whose runtime is the pinned glibc-only fallback gets the
+complete one first (2026-11-22; before, every such build stayed refused there,
+the buildbot's PPSSPP on a Smart Pro among them). When the runtime cannot be
+used, the refusal says why before the firmware's gap — "cannot load on this
+firmware's own C library, and JukaHub's newer one could not be used: RetroArch
+did not start on it (…)" — and a press on the Emulators page then installs
+JukaHub's own TrimUI build of the core from the `cores-aarch64` release below,
+when it has one, instead of stopping there (an update leaves a working
+installed core alone). **Firmware's only** restores the strict
 check above. Archives are
 streamed to the card, including MAME's build, which exceeds the old 96 MB
 limit. A corrupt archive over 512 MB or an extracted core over 1 GB is refused

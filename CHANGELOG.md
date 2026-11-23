@@ -13,6 +13,29 @@ For anything older, the git log and the
 
 ### Added
 
+- **RetroArch for a card that has none, on JukaHub's glibc** (Juka, 2026-11-22:
+  "Download latest version of working RetroArch (if it's not installed)...make
+  sure GLIBC is private library that we use and that it's compatible with
+  Trimui Smart pro and other Trimui devices"). RetroArch is not part of the
+  TrimUI firmware: it comes on the card, in TrimUI's SD base package, so a card
+  set up without that package had none, and every game, core install and
+  core update stopped at "RetroArch not found". JukaHub now installs TrimUI's
+  newest `ra64.trimui` for the model from TrimUI's own packages on GitHub
+  (`trimui/assets_*`; the A133P handhelds — Smart Pro, Brick, Hammer, Brick
+  Pro — share builds, the Smart Pro S has its own), reading only each zip's
+  directory and the files it uses. Up to three builds, newest first, are
+  checked on the handheld before anything is written — the firmware's loader
+  and JukaHub's private one list and bind every library and symbol version —
+  then the RetroArch folder of the model's own package goes in (never over a
+  file the card has; without menu pictures and shaders when space is short) and
+  the binary last. The private glibc 2.39, with its C++ library, is installed
+  first, and every launch JukaHub makes of that RetroArch runs on it. It
+  happens a minute and a half after start (unless Emulator updates is Off),
+  from the Emulators page's RetroArch tile, or when a game finds no RetroArch;
+  the daily pass keeps it on TrimUI's newest build. A RetroArch that came with
+  the card is never touched. See
+  [PRIVATE_GLIBC](docs/PRIVATE_GLIBC.md#retroarch-on-a-card-without-one).
+
 - **Faster menus: the CPU speeds up the moment you press** (Juka, 2026-11-22:
   "Optimize JukaHub to run even faster and have better performance on Trimui
   devices...feel free to manage cpu freq"). Automatic CPU speed kept Home and
@@ -3588,6 +3611,62 @@ For anything older, the git log and the
 
 ### Changed
 
+- **No more buttons the handheld does not have** (Juka, 2026-11-22: "I see
+  some spots on the os where it says r3 as a button, which is not included on
+  trimui smart pro...or many other devices... reconfigure menu
+  appropriately...make sure buttons for the most part are consistent"). The
+  original Smart Pro's sticks do not press in (only the Smart Pro S and the
+  Brick Pro click theirs; the Brick and Hammer have no sticks and send their
+  F1 / F2 keys as L3 / R3), yet the Games library put the random pick on R3 and
+  the tag filter on L3, the browser link mode on L3 and Site info on R3, the
+  music player lyrics on L3 and the sleep timer on R3, the light gun's
+  re-centre on R3, and Game hotkeys gave the Smart Pro "L3 · R3". No JukaHub
+  screen needs a stick click now (`stickclicks.go`, `deviceHW.ClickSticks`):
+  - **Games library: Select opens the library's menu** (M on a keyboard,
+    `game_library_menu.go`): *Random game from* the console on screen or the
+    whole library (rolled at once), *Show only a tag…*, *Search*, *Fill missing
+    box art* / *Stop*, *Rescan the card* and, on the consoles grid, *Next
+    console look*, each naming the button that also does it. It opens again on
+    the row used last, so **Select**, **A** rolls another random game (the toast
+    says so). The Menu key still goes back like B. The footer shows
+    **Select Menu** instead of "R / R3 Random" and "L3 / T Tags".
+  - **Browser:** link mode and Site info are the Select menu's rows (Tab and I
+    on a keyboard); the toasts name B (Esc) to leave link mode instead of
+    "Tab / L3".
+  - **Music player: Start opens its options** — the Audio panel with new
+    *Now playing* rows on top: the full-screen visualizer, lyrics, the sleep
+    timer, shuffle, repeat, speed, auto-exit and song search
+    (`music_nowplaying_rows.go`). Start used to open the Start menu there (the
+    player never claimed it, so the documented Start → visualizer never ran);
+    Start or B closes the panel, and over the full-screen visualizer Start
+    puts it away. The iPod layout's Start now plays and pauses, as its docs
+    said; its lyrics and sleep timer stay on X's Now Playing menu.
+  - **Light gun:** the R shoulder that does not fire (R2 when R1 fires, R1 when
+    R2 does) re-centres the crosshair, in the game and on the practice target;
+    R3 still does where the sticks click.
+  - **Game hotkeys** (rewind / fast forward on one button) are offered only
+    where the sticks click or a Brick's F1 / F2 exist: on the original Smart
+    Pro the row is gone and the in-game menu no longer names L3 / R3.
+  - **Lists that let you pick a button** leave L3 / R3 out where nothing sends
+    them and call them F1 / F2 on a Brick: RetroArch hotkeys' Hotkey button and
+    shortcut buttons, the one-handed Chord button (a stored L3 falls back to
+    L1), the controller test's chips, and the DS stylus chart's "L3 Closes the
+    lid" (its tap is named R2, not "R2 or R3").
+  - **A Brick's F1 / F2 do the same on every screen:** the browser and the
+    music player no longer keep them as L3 / R3; *Nothing* means nothing.
+- **Hints name the keys in your hands on every screen.** Several footers still
+  named keyboard keys on a pad: the music player's two lines ("ENTER Play
+  SPACE Pause … T Sleep … L Lyrics") now list the pad's buttons (A Play, X
+  Pause, Left/Right Seek, L1/R1 Track, Y Favorite, Start Options, Select Screen
+  off, L2 EQ, R2 Effects, B Back) and the keys only on a keyboard; so do the
+  StockOS line, the visualizer's (Start / V Close, X / Space Pause), the
+  equaliser's (B / G Close), the mini-games (Start / R Restart, B / Q Quit, X /
+  F Flag), the dictionary, the IP streams and podcasts panels (Start / Del
+  Remove in every width) and Chat (V Voice clip on a keyboard only). The
+  library's toasts name the search, art and back buttons in the same words;
+  the Controller card shows the music player's real buttons and drops "F1
+  Keyboard shortcuts" on a handheld without a keyboard. Pad names are spelt
+  one way: L1/R1, Left/Right. Not run on a device yet (BUTTONS-HW-1).
 - **Last boot says "Kernel to Home" on the stock firmware.** Settings →
   JukaHub OS → Last boot used to read "Power to Home" where the bootloader
   leaves no timings, but the number starts at the kernel: on one Smart Pro
@@ -4251,6 +4330,45 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Emulator downloads on a Smart Pro no longer all stop at "needs
+  GLIBCXX_3.4.30"** (Juka, 2026-11-22, photo of Emulators → ppsspp: "Could not
+  install PPSSPP core · the 2026-11-10 build cannot load on this firmware: needs
+  GLIBCXX_3.4.30; this firmware's libstdc…", and "every time I try to download
+  an emulator it gives me this error"). The buildbot's aarch64 nightlies need a
+  newer glibc and libstdc++ than the firmware's, and JukaHub's private glibc
+  2.39 is what lets them load. A runtime that came from the pinned fallback
+  (GreenOvercast's first install, or a day Ubuntu's signed index could not be
+  read) is glibc alone, with no libstdc++ or libgcc_s, yet it counted as
+  installed for good: every core built with a newer GCC stayed refused, and the
+  message only quoted the firmware's gap. Now a core that needs the C++ runtime
+  first replaces a glibc-only runtime with the complete signed one (at install,
+  at a game's launch and in the start's core look; a failed try waits two
+  minutes, not one per core); a refusal says what stopped JukaHub's C library
+  before the firmware's gap (it did not install and why, the glibc-only copy,
+  no mount namespace, no 64-bit RetroArch, RetroArch's probe answer, the
+  setting on Firmware's only), and the Emulators page no longer rewords it as a
+  download error; and when the buildbot's build cannot load, a press installs
+  JukaHub's own TrimUI build of the core from the `cores-aarch64` release when
+  it has one (mGBA, Gambatte, gpSP, Snes9x, FCEUmm, Nestopia, PicoDrive,
+  Genesis Plus GX, PCSX-ReARMed, the Beetle cores, FinalBurn Neo…), which needs
+  no newer C library at all; an update leaves a working installed core alone
+  (`glibc_runtime.go`, `ra_glibc.go`, `emulatorupdates.go`,
+  `emulatorinstall.go`). Not run on a device yet (RAGLIBC-HW-1 step 7); the
+  photo's PPSSPP is not one JukaHub builds, so if it is still refused the toast
+  now names the cause.
+- **A Bluetooth headset gets its sound back when BlueALSA stops answering**
+  (Juka, 2026-11-22: "Bluetooth audio is not working still", no log). A
+  bluealsa that kept its D-Bus name but stopped answering it was left alone for
+  good, so JukaHub's sound and every game stayed on the speaker until a
+  reboot; spruceOS found bluez-alsa 3.1 doing exactly that on the same TrimUI
+  boards and restarts it. JukaHub now continues a stopped one and restarts a
+  silent one after 5 s (three times a run at most), then asks the headset for
+  its audio profile again. And a headset that stays connected for 45 s without
+  JukaHub's sound now gets one toast saying why — no BlueALSA on the firmware,
+  no BlueALSA plugin for ALSA, BlueALSA off D-Bus, silent or exiting at start
+  (with its last words), the profile missing, or ALSA's open error — with the
+  Bluetooth description written to the log (`audioroute_bluealsa.go`,
+  `audioroute.go`). Not run on a device yet (HW-3 step 14).
 - **JukaHub builds, and so releases, again.** No release had been published
   since the 2026-11-21 evening build (`JukaHub-20261122000223`): the music
   player's video rows (Jellyfin films and episodes, the card's Videos) set

@@ -4,9 +4,9 @@ package main
 // → "F1 key" and "F2 key").
 //
 // brickkeys.go made the two small keys under a Brick's screen useful: F1 the
-// Controller card, F2 Quick Settings, outside the screens that use the stick
-// clicks the firmware reports them as (L3 / R3). Now the user picks what
-// those keys do: each key runs one of the
+// Controller card, F2 Quick Settings, on every screen (the firmware reports
+// them as the stick clicks, L3 / R3, which no screen uses: stickclicks.go).
+// Now the user picks what those keys do: each key runs one of the
 // openers the app already has — the Controller card, Quick Settings, a
 // screenshot, the game switcher, search, the Start menu, sleep, mute, Home —
 // or nothing. The defaults are the old fixed pair, so nothing changes for
@@ -22,10 +22,11 @@ package main
 // frontKeyIs (qs_layout.go, qs_edit.go, controlslegend.go, startmenu.go,
 // globalsearch.go).
 //
-// "Nothing" hands the press back to the screen, which sees L3 / R3 as before.
-// The screens that own the stick clicks (sceneClaimsStickClicks: the web
-// browser, the audio player; the library's modal) keep them whatever is
-// chosen here. The FN switch on the side is another setting (fnswitch*.go).
+// "Nothing" hands the press back to the screen as L3 / R3, which no JukaHub
+// screen acts on: the key does nothing there (a game, a stream or Controller
+// Mode still gets it). A modal panel that owns every press (the game library)
+// takes the keys whatever is chosen here. The FN switch on the side is
+// another setting (fnswitch*.go).
 //
 // The Smart Pro S's Home key, on the same Settings page, is in
 // frontkeys_home.go.
@@ -81,7 +82,7 @@ func frontKeyOptions() []setOption {
 		{Value: frontActSleep, Label: "Sleep"},
 		{Value: frontActMute, Label: "Mute", Note: "Sound off, or back to its level"},
 		{Value: frontActHome, Label: "Home"},
-		{Value: frontActOff, Label: "Nothing", Note: "The screen gets the key as L3 / R3"},
+		{Value: frontActOff, Label: "Nothing", Note: "The key does nothing in JukaHub"},
 	}
 }
 
@@ -280,7 +281,7 @@ func frontKeyRow(name string, button uint8) setRow {
 			if frontKeyChoice(c, button) == frontActOff {
 				return "The small " + name + " key under the screen does nothing"
 			}
-			return "The small " + name + " key under the screen · the browser and the music player keep their own"
+			return "The small " + name + " key under the screen · the same on every screen"
 		},
 		Visible: func(*Config) bool { return brickHasFunctionKeys() },
 		Options: func(*Config) []setOption { return frontKeyOptions() },

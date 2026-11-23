@@ -42,8 +42,9 @@ package main
 //
 // During the game JukaHub draws nothing, so there are no live adjustments:
 // Select and the D-pad belong to the game and to RetroArch's hotkeys on many
-// firmwares (state slots), and a change nobody can see is guesswork. R3 puts
-// the crosshair back in the middle of the aim area (and re-learns where the
+// firmwares (state slots), and a change nobody can see is guesswork. The R
+// shoulder that does not fire (and R3, where the sticks click) puts the
+// crosshair back in the middle of the aim area (and re-learns where the
 // pointer is), which is the one fix a drifting pointer needs. The pad is
 // never grabbed: the game keeps reading Start, Select, the D-pad and the face
 // buttons. Mouse in games and apps stays out of the way while the gun is on
@@ -237,17 +238,22 @@ func lightgunKnownCores() []string {
 // ── The layout ──────────────────────────────────────────────────────────────
 
 // lightgunShoulders are the pad buttons the gun takes over: they reach the
-// game as nothing for that start. R3 re-centres the crosshair.
+// game as nothing for that start. The R shoulder that does not fire re-centres
+// the crosshair, and so does R3 where the sticks click (lightgun_aim.go).
 var lightgunShoulders = map[string]string{"l": "none", "r": "none", "l2": "none", "r2": "none", "r3": "none"}
 
 func lightgunLayout() ctrlLayout {
+	// The re-centre is named on the shoulder every model has: the original
+	// Smart Pro's sticks do not click, so an R3 line would name a button it
+	// lacks (stickclicks.go).
 	chart := ctrlLayoutLines(
 		"Right stick|Aims the crosshair", "R1|Fires (or R2: More → Light gun)",
-		"L1|Reloads: a shot off the screen (or L2)", "R3|Puts the crosshair back in the middle",
+		"L1|Reloads: a shot off the screen (or L2)", "R2|Puts the crosshair back in the middle (R1 when R2 fires)",
 		"A, B, X|The gun's side buttons", "Start, Select|Start and Select (coin)")
 	noSticks := ctrlLayoutLines(
 		"D-pad|Aims the crosshair (not the game's D-pad)", "R1|Fires (or R2)",
-		"L1|Reloads: a shot off the screen (or L2)", "A, B, X|The gun's side buttons", "Start, Select|Start and Select (coin)")
+		"L1|Reloads: a shot off the screen (or L2)", "R2|Puts the crosshair back in the middle (R1 when R2 fires)",
+		"A, B, X|The gun's side buttons", "Start, Select|Start and Select (coin)")
 	l := ctrlLayout{
 		ID:          lightgunLayoutID,
 		Name:        "Light gun",

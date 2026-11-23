@@ -110,10 +110,13 @@ func ctrlLayoutBuiltins() []ctrlLayout {
 			Name:        "DS stylus",
 			Description: "Aim the stylus with the right stick (the D-pad on a Brick), tap with R2",
 			Systems:     []string{"Nintendo DS"},
-			// melonDS and melonDS DS: R3 touches, R2 swaps (next layout).
+			// melonDS and melonDS DS: R3 touches, R2 swaps (next layout). The
+			// chart names R2 for the tap, which every model has; R3 taps too
+			// where the sticks click, and the lid's L3 line is left out where
+			// they do not (padChartLines, stickclicks.go).
 			Buttons: map[string]string{"r2": "r3", "l2": "r2"},
 			Chart: ctrlLayoutLines(
-				"Right stick|Moves the stylus", "R2 or R3|Taps the screen", "L2|Swaps the screens", "L3|Closes the lid"),
+				"Right stick|Moves the stylus", "R2|Taps the screen", "L2|Swaps the screens", "L3|Closes the lid"),
 			Variants: []ctrlLayoutVariant{
 				{
 					Cores:       ctrlLayoutMelonDSCores,
@@ -122,7 +125,7 @@ func ctrlLayoutBuiltins() []ctrlLayout {
 				{
 					Cores: ctrlLayoutMelonDSDSCore,
 					Chart: ctrlLayoutLines(
-						"Right stick|Moves the stylus", "R2 or R3|Taps the screen", "L2|Next screen layout", "L3|Closes the lid"),
+						"Right stick|Moves the stylus", "R2|Taps the screen", "L2|Next screen layout", "L3|Closes the lid"),
 				},
 				{
 					// DeSmuME taps with R2 itself; L2 stays its lid.

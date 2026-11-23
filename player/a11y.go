@@ -778,12 +778,20 @@ func a11yRemapButton(b uint8) uint8 {
 
 // ── One-handed chord ──────────────────────────────────────────────────────
 
-// a11yChordKey normalises a stored chord button name. An unknown value falls
-// back to L1 rather than leaving the mode with no modifier at all.
+// a11yChordOffered reports whether a chord button is one this handheld has:
+// L3 only where the sticks press in. The original Smart Pro's do not, and a
+// Brick's F1 / F2 (sent as L3 / R3) keep their own job (stickclicks.go).
+func a11yChordOffered(key string) bool {
+	return key != "l3" || padHasStickClicks()
+}
+
+// a11yChordKey normalises a stored chord button name. An unknown value, or
+// one this handheld does not have (L3 kept from another model), falls back to
+// L1 rather than leaving the mode with a modifier nobody can press.
 func a11yChordKey(key string) string {
 	wanted := strings.ToLower(strings.TrimSpace(key))
 	for _, option := range a11yChordButtons {
-		if option.key == wanted {
+		if option.key == wanted && a11yChordOffered(option.key) {
 			return option.key
 		}
 	}
@@ -1069,20 +1077,27 @@ func a11ySetOneHanded(on bool) bool {
 	return true
 }
 
-// a11yChordStep is the next chord modifier in a11yChordButtons, wrapping.
+// a11yChordStep is the next chord modifier in a11yChordButtons this handheld
+// has (a11yChordOffered), wrapping.
 func a11yChordStep(dir int) string {
+	keys := make([]string, 0, len(a11yChordButtons))
+	for _, option := range a11yChordButtons {
+		if a11yChordOffered(option.key) {
+			keys = append(keys, option.key)
+		}
+	}
 	idx := 0
-	for i, option := range a11yChordButtons {
-		if option.key == a11yChordKey(a11y.chordButton) {
+	for i, key := range keys {
+		if key == a11yChordKey(a11y.chordButton) {
 			idx = i
 		}
 	}
 	if dir < 0 {
-		idx += len(a11yChordButtons) - 1
+		idx += len(keys) - 1
 	} else {
 		idx++
 	}
-	return a11yChordButtons[idx%len(a11yChordButtons)].key
+	return keys[idx%len(keys)]
 }
 
 func a11ySetChordButton(key string) bool {

@@ -373,7 +373,7 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	}
 	// The Brick's front F1 / F2 keys (reported as L3 / R3): the Controller
-	// card and Quick Settings, unless the screen uses the stick clicks itself.
+	// card and Quick Settings by default, the same on every screen.
 	if handleBrickFunctionKey(e, config) {
 		return true
 	}

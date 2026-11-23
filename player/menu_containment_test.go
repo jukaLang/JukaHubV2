@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -178,7 +177,8 @@ func TestMusicAuralisFooterFitsAtLargestText(t *testing.T) {
 					t.Fatalf("hints overlap: %+v and %+v", l.hints[i-1], r)
 				}
 			}
-			if !strings.Contains(l.hintLines[0], "E Exit") || !strings.Contains(l.hintLines[1], "B Back") {
+			// Drawn whole: the lines name the buttons in hand (musicPlayerHintLines).
+			if full := musicPlayerHintLines(); l.hintLines[0] != full[0] || l.hintLines[1] != full[1] {
 				t.Fatalf("footer hints were truncated: %q / %q", l.hintLines[0], l.hintLines[1])
 			}
 			font, _ := getCachedFont(cfg, "small")

@@ -232,6 +232,21 @@ func privateGlibcReady() bool {
 	return ok
 }
 
+// privateRuntimeHasCxx reports whether the runtime folder dir carries the C++
+// runtime as well (libstdc++ and libgcc_s): every runtime from Ubuntu's signed
+// index does (privateRuntimeRequired); the pinned fallback, glibc alone, does
+// not.
+func privateRuntimeHasCxx(dir string) bool {
+	return strings.TrimSpace(dir) != "" && regularFile(filepath.Join(dir, "libstdc++.so.6")) &&
+		regularFile(filepath.Join(dir, "libgcc_s.so.1"))
+}
+
+// privateGlibcFullReady reports an installed runtime with the C++ runtime.
+func privateGlibcFullReady() bool {
+	_, dir, ok := privateGlibcPaths()
+	return ok && privateRuntimeHasCxx(dir)
+}
+
 // privateGlibcBashWrapperDir is the folder holding the `bash` that runs
 // Ubuntu's bash through the current runtime, or "" when that runtime has no
 // bash (none installed, or only the pinned fallback). The wrapper is rewritten
@@ -1023,11 +1038,22 @@ func privateGlibcInstallPinned(ctx context.Context) error {
 
 // privateGlibcInstall makes sure some verified runtime is installed: the
 // newest signed build, else the pinned fallback.
-func privateGlibcInstall(ctx context.Context) error {
+func privateGlibcInstall(ctx context.Context) error { return privateGlibcInstallFor(ctx, false) }
+
+// privateGlibcInstallFor is privateGlibcInstall; cxx asks for the C++ runtime
+// as well, which only the signed build carries. A pinned glibc-only fallback
+// already installed (GreenOvercast's first install, an index that could not be
+// read that day) is then replaced by the signed build: before, it counted as
+// installed for good, so a core built with a newer GCC than the firmware's
+// never loaded (2026-11-22, a Smart Pro: every buildbot core refused, the
+// photo's PPSSPP with "needs GLIBCXX_3.4.30"). When the signed build cannot be
+// installed and no runtime is, the pinned glibc still goes in — it closes the
+// glibc gaps — and the error says the C++ runtime is missing.
+func privateGlibcInstallFor(ctx context.Context, cxx bool) error {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "arm64" || !IsTrimuiDevice() {
 		return errors.New("private C runtime is only offered on an ARM64 TrimUI")
 	}
-	if privateGlibcReady() {
+	if privateGlibcReady() && (!cxx || privateGlibcFullReady()) {
 		return nil
 	}
 	err := privateRuntimeInstallLatest(ctx, nil)
@@ -1035,17 +1061,19 @@ func privateGlibcInstall(ctx context.Context) error {
 		privateRuntimeMarkChecked()
 		return nil
 	}
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || (cxx && privateGlibcReady()) {
 		return err
 	}
 	logWarn("glibc", "newest runtime from Ubuntu's signed index failed (%v); installing the pinned libc6", err)
 	privateRuntimeInstallMu.Lock()
 	defer privateRuntimeInstallMu.Unlock()
-	if privateGlibcReady() {
-		return nil
+	if !privateGlibcReady() {
+		if pinErr := privateGlibcInstallPinned(ctx); pinErr != nil {
+			return fmt.Errorf("%v; pinned fallback: %w", err, pinErr)
+		}
 	}
-	if pinErr := privateGlibcInstallPinned(ctx); pinErr != nil {
-		return fmt.Errorf("%v; pinned fallback: %w", err, pinErr)
+	if cxx {
+		return fmt.Errorf("only glibc went in, without the C++ library: %w", err)
 	}
 	return nil
 }
@@ -1070,13 +1098,21 @@ var privateGlibcWork struct {
 	mu       sync.Mutex
 	running  bool
 	callback func(error)
+	// cxx: a request asked for the C++ runtime too (privateGlibcInstallFor).
+	cxx bool
 }
 
 // privateGlibcEnsureAsync joins concurrent requests to one install. If a
 // player chooses a different streaming service during the download, the last
 // choice is the one launched. The callback runs on the UI thread.
-func privateGlibcEnsureAsync(after func(error)) {
-	if privateGlibcReady() {
+func privateGlibcEnsureAsync(after func(error)) { privateGlibcEnsureAsyncFor(false, after) }
+
+// privateGlibcEnsureAsyncFor is privateGlibcEnsureAsync; cxx asks for the C++
+// runtime too (a RetroArch core built with a newer GCC than the firmware's). A
+// request for it that arrives while a glibc-only install runs gets a second
+// pass before the callback.
+func privateGlibcEnsureAsyncFor(cxx bool, after func(error)) {
+	if privateGlibcReady() && (!cxx || privateGlibcFullReady()) {
 		if after != nil {
 			tbxPost(func() { after(nil) })
 		}
@@ -1084,6 +1120,7 @@ func privateGlibcEnsureAsync(after func(error)) {
 	}
 	privateGlibcWork.mu.Lock()
 	privateGlibcWork.callback = after
+	privateGlibcWork.cxx = privateGlibcWork.cxx || cxx
 	if privateGlibcWork.running {
 		privateGlibcWork.mu.Unlock()
 		return
@@ -1093,14 +1130,25 @@ func privateGlibcEnsureAsync(after func(error)) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-		err := privateGlibcInstall(ctx)
-		privateGlibcWork.mu.Lock()
-		callback := privateGlibcWork.callback
-		privateGlibcWork.callback = nil
-		privateGlibcWork.running = false
-		privateGlibcWork.mu.Unlock()
-		if callback != nil {
-			tbxPost(func() { callback(err) })
+		for {
+			privateGlibcWork.mu.Lock()
+			want := privateGlibcWork.cxx
+			privateGlibcWork.mu.Unlock()
+			err := privateGlibcInstallFor(ctx, want)
+			privateGlibcWork.mu.Lock()
+			if err == nil && !want && privateGlibcWork.cxx {
+				privateGlibcWork.mu.Unlock()
+				continue
+			}
+			callback := privateGlibcWork.callback
+			privateGlibcWork.callback = nil
+			privateGlibcWork.running = false
+			privateGlibcWork.cxx = false
+			privateGlibcWork.mu.Unlock()
+			if callback != nil {
+				tbxPost(func() { callback(err) })
+			}
+			return
 		}
 	}()
 }

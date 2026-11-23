@@ -20,7 +20,7 @@ remaining gaps are worth closing.
 | Transport | Play/pause, next/previous, stop, seek ±10 s, seek by tapping the rail, volume ±10 % |
 | Modes | Shuffle (every track once before wrapping), repeat off / all / one, a play-next queue |
 | Favorites | Toggled per track, marked in the list, stored in `musicfavorites.json` |
-| Long form | 1/16×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more |
+| Long form | 1/16×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more. On a pad **Start** in the player opens them, with lyrics, shuffle, repeat and the full-screen visualizer: the Audio panel's *Now playing* rows |
 | Lyrics | A `.lrc` file next to the track; the active line and its neighbours are drawn in the artwork square. Without a timed `.lrc`, the lyrics stored inside the file (ID3 USLT, a FLAC/Vorbis `LYRICS` or `UNSYNCEDLYRICS` comment, MP4 `©lyr`) are used: timed when they carry LRC timestamps, otherwise spread evenly over the song. An `.lrc` without timestamps scrolls the same way |
 | Radio | The **Radio** shelf: the free Radio Browser directory (top stations, by country, by genre, search) and your saved stations (see [Radio](#radio)) |
 | Visuals | The real spectrum of what is heard in the artwork tile, and ten full-screen visualizers drawn from a 1024-point FFT in four Bayer-dithered shades (see [Visualizers](#visualizers)) |

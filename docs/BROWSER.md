@@ -62,8 +62,9 @@ they were, and Select still opens the menu. The choice is the
   it) instead of appending to the old one.
 * Follow links on the page without typing: press **X** (or `L`) to open the
   link picker, choose with the D-pad, and press **A**. Or press **Tab** (a
-  keyboard) / **L3** (left stick click on a gamepad) to switch the D-pad from
-  scrolling to walking the page's links: Left/Right follow reading order,
+  keyboard) or pick **Link mode** in the Select menu (a gamepad; **B** goes
+  back to scrolling) to switch the D-pad from scrolling to walking the page's
+  links: Left/Right follow reading order,
   Up/Down follow the rows and pick the nearest column, and **A** opens the
   outlined link. The toolbar's **SCROLL** / **LINKS** chip names the mode you
   are in, so the D-pad's job is readable a frame later instead of living only in
@@ -868,7 +869,7 @@ behind the keyboard — which is exactly what it used to do.
 | Backspace · Alt+← / Alt+→ · F5 | Back / Forward / Reload (keyboard) |
 | D-pad Up / Down | Scroll the page (link mode: nearest link on the row above/below) |
 | D-pad Left / Right | Walk the page's links in reading order |
-| Tab / L3 | Cycle scroll ⇄ link mode (**SCROLL** / **LINKS** chip shows which) |
+| Tab · Select menu → Link mode | Cycle scroll ⇄ link mode (**SCROLL** / **LINKS** chip shows which); **B** leaves link mode |
 | L1 / R1 | Scroll up / down by a page |
 | L2 / R2 · `-` / `+` · zoom chip | Zoom the page text out / in (75%–160%). The toolbar chip is the one place the scale is shown and changed: it names the current scale, is highlighted when off 100%, and steps up on a tap (wrapping). Remembered across pages and relaunches. |
 | A / Enter | Edit the address bar, open the outlined link in link mode, or work the focused form control |

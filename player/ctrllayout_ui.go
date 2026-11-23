@@ -347,11 +347,12 @@ func ctrlLayoutTargetLabel(n int) string {
 	return "Button " + itoa(n)
 }
 
-// ctrlLayoutChartLines is the chart to draw for a resolved layout: its own,
+// ctrlLayoutChartLines is the chart to draw for a resolved layout: its own
+// (without a stick click this handheld has no way to press: padChartLines),
 // or one made from its buttons when it has none.
 func ctrlLayoutChartLines(r ctrlLayoutResolved) []ctrlLayoutLine {
 	if len(r.Chart) > 0 {
-		return r.Chart
+		return padChartLines(r.Chart)
 	}
 	var out []ctrlLayoutLine
 	for _, pad := range ctrlLayoutPadOrder {

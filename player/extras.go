@@ -1327,6 +1327,17 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		// X removes the focused row, Y takes the last removal back
 		// (favorites.go).
 		hints = favoritesFooterHints(hints)
+	case "MusicPlayer":
+		// The player draws these itself (musicPlayerHintLines); the
+		// Controller card lists them too. The iPod layout names its keys on
+		// its own screens.
+		if !musicPodActive(config) {
+			if hintsUseKeyboard() {
+				hints = append([]FooterHint(nil), musicPlayerKeyHints...)
+			} else {
+				hints = append([]FooterHint(nil), musicPlayerPadHints...)
+			}
+		}
 	case "Apps":
 		// The launcher is a tile grid: A starts the focused app.
 		hints[1] = FooterHint{Button: "A", Label: "Launch"}

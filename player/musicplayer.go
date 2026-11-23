@@ -1565,8 +1565,9 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, stateY)
 	musicVisualizerLayout.state = sdl.Rect{X: (screenWidth - int32(sw)) / 2, Y: stateY, W: int32(sw), H: fontH}
 
+	// "pad / key" pairs: the pad's half on a pad, the key on a keyboard.
 	hint := hintLine(FooterHint{"Left/Right", "Visualizer"}, FooterHint{"Y", "Dither"},
-		FooterHint{"V", "Close"}, FooterHint{"Space", "Pause"}, FooterHint{"B", "Back"})
+		FooterHint{"Start / V", "Close"}, FooterHint{"X / Space", "Pause"}, FooterHint{"B", "Back"})
 	hint = ellipsize(font, hint, screenWidth-32)
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, ColorTextMuted(), (screenWidth-int32(hw))/2, hintY)
@@ -2078,11 +2079,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Footer hints, on two lines: the player gained keys, and one line no
-	// longer fits the panel at the smallest text size.
-	hints := []string{
-		"ENTER Play   SPACE Pause   LEFT/RIGHT Seek   hold -/+ Skip   [ ] Speed   T Sleep   E Exit",
-		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   G PEQ   / Search   O Screen off   B Back",
-	}
+	// longer fits the panel at the smallest text size. They name the buttons
+	// in hand: the pad's, or a keyboard's keys (musicPlayerHintLines).
+	hints := musicPlayerHintLines()
 	hintTop := screenHeight - 10 - hintStack
 	musicAuralisLayout.hintInk = ColorTextMuted()
 	musicAuralisLayout.hintLines = musicAuralisLayout.hintLines[:0]
@@ -2103,6 +2102,35 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderStatusBar(renderer, config)
 	renderMusicSearchOverlay(renderer, config)
 	renderMusicPanels(renderer, config)
+}
+
+// musicPlayerPadHints are the Auralis and StockOS players' buttons on a pad,
+// in the order the footer reads them; the iPod layout has its own map
+// (musicpod.go). Start opens the Audio panel, whose Now playing rows hold the
+// visualizer, lyrics and the sleep timer (music_nowplaying_rows.go).
+var musicPlayerPadHints = []FooterHint{
+	{"A", "Play"}, {"X", "Pause"}, {"Left/Right", "Seek"}, {"L1/R1", "Track"}, {"Y", "Favorite"},
+	{"Start", "Options"}, {"Select", "Screen off"}, {"L2", "EQ"}, {"R2", "Effects"}, {"B", "Back"},
+}
+
+// musicPlayerKeyHints are the same players' keyboard keys (handleMusicInput).
+var musicPlayerKeyHints = []FooterHint{
+	{"Enter", "Play"}, {"Space", "Pause"}, {"Left/Right", "Seek"}, {"Hold -/+", "Skip"}, {"[ ]", "Speed"},
+	{"T", "Sleep"}, {"E", "Exit"}, {"M", "Shuffle"},
+	{"R", "Repeat"}, {"F", "Favorite"}, {"Q", "Queue"}, {"L", "Lyrics"},
+	{"G", "PEQ"}, {"/", "Search"}, {"O", "Screen off"}, {"K", "Options"}, {"Esc", "Back"},
+}
+
+// musicPlayerHintLines is the Auralis player's footer, two lines in the
+// words of the buttons in hand (inputhints.go): a pad's ten, or a keyboard's
+// keys on a PC without a pad or a handheld with a keyboard plugged in. The
+// footer used to name keyboard keys on every handheld.
+func musicPlayerHintLines() []string {
+	hints, split := musicPlayerPadHints, 5
+	if hintsUseKeyboard() {
+		hints, split = musicPlayerKeyHints, 8
+	}
+	return []string{hintLine(hints[:split]...), hintLine(hints[split:]...)}
 }
 
 // musicButtonIcons maps the transport's old text marks to the shared vector
@@ -2660,10 +2688,21 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			showToast("Nothing to favorite yet", ToastInfo())
 		}
 	case sdl.CONTROLLER_BUTTON_START:
+		// Start is the player's options (the player claims Start:
+		// sceneClaimsStart): the Audio panel with the Now playing rows on top —
+		// the visualizer, lyrics, the sleep timer, shuffle, repeat, speed —
+		// which no button of their own reaches on every handheld
+		// (music_nowplaying_rows.go). Over the full-screen visualizer it puts
+		// the visualizer away.
 		music.mu.Lock()
-		music.visualizerFull = !music.visualizerFull
+		full := music.visualizerFull
+		music.visualizerFull = false
 		music.mu.Unlock()
-		PlayNavSound()
+		if full {
+			PlayNavSound()
+		} else {
+			openMusicSettingsPanel(appConfig)
+		}
 	case sdl.CONTROLLER_BUTTON_BACK:
 		// Select darkens the panel; the panel keeps playing. B still goes back.
 		musicToggleScreenOff()
@@ -2708,10 +2747,6 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		musicNext()
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
-		if !musicToggleLyrics() {
-			showToast("No .lrc file next to this track", ToastInfo())
-		}
 	case sdl.CONTROLLER_BUTTON_GUIDE:
 		// Pads that report the logo/guide button get a shuffle toggle; the
 		// on-screen Shuffle button and M on a keyboard reach the same state.
@@ -2719,14 +2754,6 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			showToast("Shuffle on", ToastSuccess())
 		} else {
 			showToast("Shuffle off", ToastInfo())
-		}
-		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		minutes := musicCycleSleepTimer()
-		if minutes == 0 {
-			showToast("Sleep timer off", ToastInfo())
-		} else {
-			showToast(fmt.Sprintf("Sleep timer: %d min", minutes), ToastSuccess())
 		}
 		PlayNavSound()
 	default:

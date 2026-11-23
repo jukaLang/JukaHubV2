@@ -19,7 +19,7 @@ package main
 // when the game is back. An anchor also runs 3 seconds after the start (the
 // crosshair starts in the middle) and, for Point, again at 12 seconds —
 // RetroArch's SDL may open the mouse late, and an anchor before that is lost
-// — and whenever R3 is pressed.
+// — and whenever the spare R shoulder or R3 is pressed (lightgun_aim.go).
 //
 // The game ending (lightgunSessionStop from the exit hook), a new launch, and
 // JukaHub quitting (a Cleanup hook) remove the mouse; JukaHub dying outright

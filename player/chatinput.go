@@ -1086,11 +1086,13 @@ func chatFooterHints() []FooterHint {
 	if chatHasDraft() {
 		hints = append(hints, FooterHint{Button: "Start / Ctrl+Enter", Label: "Send"})
 	}
-	hints = append(hints, back,
-		FooterHint{Button: "X", Label: "Attach"},
-		FooterHint{Button: "V", Label: "Voice clip"},
-		FooterHint{Button: "L1/R1", Label: "Tabs"},
-	)
+	hints = append(hints, back, FooterHint{Button: "X", Label: "Attach"})
+	// V is a keyboard key; on a pad the voice clip is the composer's mic
+	// button (the D-pad reaches it), so the pad's footer does not name V.
+	if hintsUseKeyboard() {
+		hints = append(hints, FooterHint{Button: "V", Label: "Voice clip"})
+	}
+	hints = append(hints, FooterHint{Button: "L1/R1", Label: "Tabs"})
 	switch chatActiveTabID() {
 	case chatTabCommunity:
 		hints = append(hints, FooterHint{Button: "Y", Label: "People"})

@@ -75,7 +75,7 @@ var libraryCube struct {
 var cubeIdx = libraryMeshIndices(cubeGrid, cubeGrid, 1)
 
 // cubeHints is the console page's extra footer hint in this layout.
-var cubeHints = []FooterHint{{"←/→", "Console"}}
+var cubeHints = []FooterHint{{"Left/Right", "Console"}}
 
 // libraryLayoutPageHints is the footer hint a layout adds on a console's page
 // (game_library_ui.go's gameLibraryFooterHints).

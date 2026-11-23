@@ -258,6 +258,8 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		} else {
 			detail += " JukaHub finds no RetroArch either (it searched the RetroArch folders on " +
 				childEnvFirmwareCard() + ", every launch script in Emus and the card itself)."
+			// And gets one: TrimUI's newest build for this model (raget.go).
+			detail += raGetLaunchNote()
 		}
 	}
 	logWarn("gamediag", "%s: %s", title, missingLine)

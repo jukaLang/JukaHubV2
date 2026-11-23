@@ -91,6 +91,7 @@ type deviceHW struct {
 	BTUART      string             // HCI UART the chip attaches on: "ttyS1"; "" unknown
 	HasFan      bool               // a pwm fan (cooling_device type pwm-fan)
 	HasSticks   bool               // analog sticks (trimui_inputd serial sticks)
+	ClickSticks bool               // the sticks press in: L3 / R3 (not the Smart Pro's)
 	HasLEDs     bool               // RGB zones under /sys/class/led_anim
 	RumbleMaxUV int                // motor voltage ceiling in microvolts; 0 unknown
 	VideoOut    string             // external display: "USB-C DP alt mode"; "" none
@@ -99,6 +100,7 @@ type deviceHW struct {
 // deviceHWTable is the table. Read it through deviceHardware.
 var deviceHWTable = []deviceHW{
 	{
+		// Its sticks do not press in: no L3 / R3 (stickclicks.go).
 		Model: DeviceTrimuiSmartPro, Code: "TG5040", Platform: "tg5040",
 		SoC: socA133P, SoCTree: "sun50iw10",
 		Clusters: []deviceCPUCluster{{Policy: "policy0", Cores: 4, Core: "Cortex-A53", MaxMHz: 2000}},
@@ -142,7 +144,7 @@ var deviceHWTable = []deviceHW{
 		Kernel: "5.15", PanelW: 1280, PanelH: 720, PanelInch: 4.96,
 		Backlight: brightnessBackendSysfs, PMIC: "AXP717",
 		WiFiChip: "AIC8800D80", BTChip: "AIC8800D80", BTUART: "ttyAS1",
-		HasFan: true, HasSticks: true, HasLEDs: true, RumbleMaxUV: 3300000,
+		HasFan: true, HasSticks: true, ClickSticks: true, HasLEDs: true, RumbleMaxUV: 3300000,
 	},
 	{
 		// The Brick Pro is the Brick's A133P and GPU on a 4.9 kernel, with a
@@ -155,7 +157,7 @@ var deviceHWTable = []deviceHW{
 		Kernel: "4.9", PanelW: 1024, PanelH: 768, PanelInch: 3.95,
 		Backlight: brightnessBackendDisp,
 		WiFiChip:  "XR829", BTChip: "XR829", BTUART: "ttyS1",
-		HasSticks: true, HasLEDs: true, RumbleMaxUV: 2500000,
+		HasSticks: true, ClickSticks: true, HasLEDs: true, RumbleMaxUV: 2500000,
 		VideoOut: "USB-C DP alt mode",
 	},
 }

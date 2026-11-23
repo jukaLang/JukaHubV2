@@ -438,18 +438,26 @@ func a11ySelectSettingRow() setRow {
 	}
 }
 
-func a11yChordSettingRow() setRow {
+// a11yChordOptions are the Chord button row's stops: the buttons this
+// handheld has (a11yChordOffered leaves out L3 where the sticks do not click).
+func a11yChordOptions() []setOption {
 	options := make([]setOption, 0, len(a11yChordButtons))
 	for _, option := range a11yChordButtons {
-		options = append(options, setOption{Value: option.key, Label: option.label})
+		if a11yChordOffered(option.key) {
+			options = append(options, setOption{Value: option.key, Label: option.label})
+		}
 	}
+	return options
+}
+
+func a11yChordSettingRow() setRow {
 	return setRow{
 		ID: "chordButton", Label: "Chord button", Kind: setKindChoice,
 		Detail:  setStatic("The button that arms the one-handed chord. Pick one your other hand's index finger can reach."),
-		Options: func(*Config) []setOption { return options },
+		Options: func(*Config) []setOption { return a11yChordOptions() },
 		Current: func(*Config) int {
-			for i, option := range a11yChordButtons {
-				if option.key == a11yChordKey(a11y.chordButton) {
+			for i, option := range a11yChordOptions() {
+				if option.Value == a11yChordKey(a11y.chordButton) {
 					return i
 				}
 			}

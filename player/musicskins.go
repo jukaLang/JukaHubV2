@@ -468,9 +468,14 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hints := []FooterHint{{"A", "Play"}, {"B", "Back"}, {"/", "Search"},
-		{"G", "PEQ"}, {"O", "Screen Off"},
-		{Label: fmt.Sprintf("Vol %d%%", int(math.Round(volume*100)))}}
+	// "pad / key" pairs name the half the user can press (inputhints.go);
+	// search has no pad button of its own here (Start → Search songs does it).
+	hints := []FooterHint{{"A", "Play"}, {"B", "Back"}, {"Start / K", "Options"},
+		{"L2 / G", "PEQ"}, {"Select / O", "Screen Off"}}
+	if hintsUseKeyboard() {
+		hints = append(hints, FooterHint{"/", "Search"})
+	}
+	hints = append(hints, FooterHint{Label: fmt.Sprintf("Vol %d%%", int(math.Round(volume*100)))})
 	if queued > 0 {
 		hints = append(hints, FooterHint{Label: fmt.Sprintf("%d Queued", queued)})
 	}

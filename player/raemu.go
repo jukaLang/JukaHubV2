@@ -77,6 +77,10 @@ func deviceRetroArchEntry(coresDir string, coreCount int) (emuEntry, bool) {
 	e.Status = emuAvailable
 	e.Launch = bin
 	e.Detail = cores + " · " + dir + " · " + settings
+	if note := raGetTileNote(bin); note != "" {
+		// The RetroArch JukaHub put on the card (raget.go).
+		e.Detail += " · " + note
+	}
 	e.IconPath = sidecarIcon(bin)
 	return e, true
 }

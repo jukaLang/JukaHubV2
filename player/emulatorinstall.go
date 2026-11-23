@@ -174,8 +174,16 @@ func planEmuInstall(e emuEntry, inv coreInventory, index []coreIndexEntry) emuIn
 // active core. The previous binary, when there is one, is kept as a .bak by
 // activateCoreBuild. The returned backup path is "" for a first-time install.
 func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInstallPlan, poolRoot string) (coreBuild, string, error) {
+	build, backup, _, err := applyEmuInstallPlanFrom(ctx, client, plan, poolRoot)
+	return build, backup, err
+}
+
+// applyEmuInstallPlanFrom is applyEmuInstallPlan, and says where the build
+// came from: "" for the index the plan names, else the other source a press
+// fell back to (emuInstallOwnBuild).
+func applyEmuInstallPlanFrom(ctx context.Context, client *http.Client, plan emuInstallPlan, poolRoot string) (coreBuild, string, string, error) {
 	if plan.Action != emuInstallNew && plan.Action != emuInstallUpdate {
-		return coreBuild{}, "", fmt.Errorf("%s has nothing to install", plan.Entry)
+		return coreBuild{}, "", "", fmt.Errorf("%s has nothing to install", plan.Entry)
 	}
 	upd := coreUpdate{
 		Core:    plan.Core,
@@ -185,17 +193,72 @@ func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInsta
 		Current: plan.Current,
 		Active:  plan.ActivePath,
 	}
+	source := ""
 	build, err := fetchCoreUpdate(ctx, client, upd, poolRoot)
 	if err != nil {
-		return coreBuild{}, "", err
+		own, ok := emuInstallOwnBuild(ctx, client, plan, poolRoot, err)
+		if !ok {
+			return coreBuild{}, "", "", err
+		}
+		build, source = own, "JukaHub's build for TrimUI"
 	}
 	target, backup, err := activateCoreBuild(build)
 	emuCRCForget(target)
 	if err != nil {
-		return build, "", err
+		return build, "", source, err
 	}
-	logDebug("emulators", "installed core %s %s (backup %q)", plan.Core, plan.Index.Date, backup)
-	return build, backup, nil
+	logDebug("emulators", "installed core %s %s (backup %q)", plan.Core, build.Version, backup)
+	return build, backup, source, nil
+}
+
+// emuInstallOwnBuild is a press's way out when the buildbot's build cannot
+// load on this firmware (why): JukaHub's own build of the core for TrimUI —
+// the cores-aarch64 release corefix.go also installs from, built against
+// glibc 2.31, so it needs no newer C library at all. Only on the handheld,
+// only for a refusal of that kind, and only where nothing that loads is
+// installed already (an update keeps the working core instead). ok reports a
+// build in the pool, ready to activate.
+func emuInstallOwnBuild(ctx context.Context, client *http.Client, plan emuInstallPlan, poolRoot string, why error) (coreBuild, bool) {
+	if !coreFixSupported() || client == nil || !coreLoadRefusal(why) || ctx.Err() != nil {
+		return coreBuild{}, false
+	}
+	if plan.Action == emuInstallUpdate && coreLoadProblemFile(plan.ActivePath, plan.ActivePath) == "" {
+		return coreBuild{}, false
+	}
+	index, err := coreFixIndex(ctx, client)
+	if err != nil {
+		logInfo("emulators", "%s: no JukaHub build to fall back on: %v", plan.Core, err)
+		return coreBuild{}, false
+	}
+	entry, ok := coreFixEntry(index, plan.Core)
+	if !ok {
+		logInfo("emulators", "%s: the buildbot's build cannot load here, and JukaHub's builds for TrimUI have none", plan.Core)
+		return coreBuild{}, false
+	}
+	if plan.ActivePath != "" {
+		if crc, err := emuCachedCRC32(plan.ActivePath); err == nil && strings.EqualFold(crc, entry.CRC32) {
+			return coreBuild{}, false // that build is the one installed
+		}
+	}
+	if reason, refused := coreBuildRefused(plan.Core, entry.CRC32); refused && !raGlibcRefusalMayPass(reason, plan.ActivePath) {
+		return coreBuild{}, false
+	}
+	installBarDetail(coreConfigDisplayName(plan.Core) + " " + entry.Date + " · JukaHub's build")
+	build, err := fetchCoreUpdate(ctx, client, coreUpdate{
+		Core:    plan.Core,
+		Date:    entry.Date,
+		CRC32:   entry.CRC32,
+		URL:     coreFixBaseURL + entry.File,
+		Current: plan.Current,
+		Active:  plan.ActivePath,
+	}, poolRoot)
+	if err != nil {
+		logWarn("emulators", "%s: JukaHub's %s build for TrimUI did not install either: %v", plan.Core, entry.Date, err)
+		return coreBuild{}, false
+	}
+	logInfo("emulators", "%s: the buildbot's %s build cannot load here (%v); installing JukaHub's %s build for TrimUI instead",
+		plan.Core, plan.Index.Date, why, entry.Date)
+	return build, true
 }
 
 // emuCoreBuildsMatch compares the core RetroArch will actually load with the
@@ -440,10 +503,17 @@ func startEmulatorInstall(e emuEntry) {
 
 		installBarPhase(installPhaseDownload)
 		installBarDetail(coreConfigDisplayName(plan.Core) + " " + plan.Index.Date)
-		build, backup, err := applyEmuInstallPlan(ctx, client, plan, compatCorePoolDir())
+		build, backup, source, err := applyEmuInstallPlanFrom(ctx, client, plan, compatCorePoolDir())
 		if err != nil {
-			installBarFail(installCardDetail(emuFriendlyError(err)))
-			msg, kind := coreConfigDisplayName(plan.Core)+": "+emuFriendlyError(err), ToastKindError
+			text := emuFriendlyError(err)
+			if coreLoadRefusal(err) {
+				// Its own words: they say what stopped JukaHub's C library, and
+				// a download error quoted in them is not this press's download.
+				text = firstLine(err.Error())
+				logWarn("emulators", "install %s: %s", plan.Core, text)
+			}
+			installBarFail(installCardDetail(text))
+			msg, kind := coreConfigDisplayName(plan.Core)+": "+text, ToastKindError
 			var refused *coreRefusedError
 			if errors.As(err, &refused) {
 				// Not a failure of the download: this device will not take
@@ -473,8 +543,13 @@ func startEmulatorInstall(e emuEntry) {
 		}
 		trophyEvent(tkEmuInstall) // one per press, also when a RetroArch came first
 		PlaySuccessSound()
+		version := build.Version
+		if source != "" {
+			// The buildbot's build could not load here (emuInstallOwnBuild).
+			version += " · " + source
+		}
 		if plan.Action == emuInstallNew {
-			note := coreConfigDisplayName(plan.Core) + " core installed · " + build.Version
+			note := coreConfigDisplayName(plan.Core) + " core installed · " + version
 			if needRetroArch {
 				note = "RetroArch and the " + note
 			}
@@ -488,7 +563,7 @@ func startEmulatorInstall(e emuEntry) {
 			ShowToast(note, ToastKindSuccess)
 			return
 		}
-		note := coreConfigDisplayName(plan.Core) + " core updated · " + build.Version
+		note := coreConfigDisplayName(plan.Core) + " core updated · " + version
 		if backup != "" {
 			note += " · previous build kept"
 			if coreNeedsGPU(plan.Core) && !IsWindows() {

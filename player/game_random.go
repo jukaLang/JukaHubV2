@@ -5,7 +5,8 @@ package main
 // A library of a thousand ROMs is a decision problem: the same twenty titles
 // are the ones anyone scrolls past. The picker rolls a game for you and lands the highlight on it — console, row and
 // scroll position — so the pick is visible before anything starts; A then plays
-// it, R rolls again.
+// it, and Select then A (the library's menu, game_library_menu.go) or R on a
+// keyboard rolls again.
 //
 // The roll can come from the console on screen or from every console at once.
 // A small sheet asks which, because a hidden modifier would make the second
@@ -270,13 +271,29 @@ func chooseGameRandomScope(index int) bool {
 	}
 	resetGameRandomPicker()
 	if !jumpToLibraryGame(game) {
-		ShowToast("That game is no longer on the card — press Y to rescan", ToastKindWarning)
+		ShowToast("That game is no longer on the card — press "+hintKeyFor("Y", "Rescan")+" to rescan", ToastKindWarning)
 		return true
 	}
+	// The library's menu opens on this scope's row next time, however the roll
+	// was asked for, so Select then A rolls another (game_library_menu.go).
+	gameLibMenu.last = glmRandomAll
+	if scope.console != "" {
+		gameLibMenu.last = glmRandomHere
+	}
 	gameRandomPick = game.Path
-	ShowToast("Random: "+game.Title+" — A plays it, R for another", ToastKindInfo)
+	ShowToast("Random: "+game.Title+" — "+hintKeyFor("A", "Play")+" plays it, "+gameRandomAgainKeys()+" for another", ToastKindInfo)
 	PlayActivateSound()
 	return true
+}
+
+// gameRandomAgainKeys names the way to roll again: R on a keyboard; on the pad
+// Select then A, since the library's menu opens on the row used last
+// (game_library_menu.go).
+func gameRandomAgainKeys() string {
+	if hintsUseKeyboard() {
+		return "R"
+	}
+	return hintKeyFor("Select", "Menu") + ", " + hintKeyFor("A", "Pick")
 }
 
 // handleGameRandomKey consumes every key while the sheet is open, so the list

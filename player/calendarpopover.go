@@ -524,7 +524,7 @@ func renderCalendarCard(renderer *sdl.Renderer, config *Config, cx, cy int32) {
 		}
 		line2 = hintLine(append(second, FooterHint{"X", "Sync"})...)
 	} else {
-		line1 = hintLine(FooterHint{"D-Pad", "Day"}, FooterHint{"L1 / R1", "Month"}, FooterHint{"A", "Today"})
+		line1 = hintLine(FooterHint{"D-Pad", "Day"}, FooterHint{"L1/R1", "Month"}, FooterHint{"A", "Today"})
 		second := []FooterHint{}
 		if len(evs) > 1 {
 			second = append(second, FooterHint{"Select", "Next Event"})

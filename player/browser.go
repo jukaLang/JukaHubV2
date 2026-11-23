@@ -176,7 +176,7 @@ func browserSceneElements(config *Config) []Element {
 		{"Find", "browser_find"},
 		// Info opens Site info for the page: its connection, certificate and
 		// security headers (brw_siteinfo.go). The padlock in the address bar,
-		// `i` and R3 open the same sheet.
+		// `i` and the Select menu's Site info open the same sheet.
 		{"Info", "browser_site_info"},
 	}
 	// The chips share the content width, but not equally: each one is as wide
@@ -1600,12 +1600,26 @@ var browserNav = browserModeScroll
 func browserToggleNavMode() {
 	if browserNav == browserModeLinks {
 		browserNav = browserModeScroll
-		showToast("Scroll mode — D-Pad scrolls (Tab / L3)", ToastInfo())
 	} else {
 		browserNav = browserModeLinks
-		showToast("Link mode — D-Pad steps through links (Tab / L3)", ToastInfo())
 	}
+	showToast(browserNavModeToast(), ToastInfo())
 	PlayNavSound()
+}
+
+// browserNavModeToast says what the D-pad does now and how to switch, in the
+// words of the keys in hand (inputhints.go): B (Esc) leaves link mode, a
+// keyboard's Tab switches either way, and on a pad the Select menu's Link
+// mode row does. No stick click: not every handheld has one (stickclicks.go).
+func browserNavModeToast() string {
+	move := hintKeyFor("D-Pad", "Move")
+	if browserNav == browserModeLinks {
+		return "Link mode — " + move + " steps through links · " + hintKeyFor("B", "Back") + " scrolls again"
+	}
+	if hintsUseKeyboard() {
+		return "Scroll mode — " + move + " scrolls the page · Tab for links"
+	}
+	return "Scroll mode — " + move + " scrolls the page"
 }
 
 // browserEnsureLinkFocus focuses the first link when nothing is picked, so
@@ -2240,7 +2254,7 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		}
 		if browserNav == browserModeLinks {
 			browserNav = browserModeScroll
-			showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+			showToast(browserNavModeToast(), ToastInfo())
 			PlayNavSound()
 			return true
 		}
@@ -2363,12 +2377,10 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 	if brwCardPad(config, elem, e) {
 		return true
 	}
+	// Site info and link mode are rows of the Select menu (brw_menu.go); the
+	// stick clicks that used to open them are not on every handheld
+	// (stickclicks.go), and a Brick's F1 / F2 do their own job here too.
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		// Site info (F2 on a Brick, whose front keys report as the stick
-		// clicks; the browser keeps both, see brickkeys.go).
-		brwInfoOpenFor(config)
-		return true
 	case sdl.CONTROLLER_BUTTON_BACK:
 		// Select is the browser's menu (brw_menu.go). The main loop opens it
 		// before the page sees the press; a press that still arrives here came
@@ -2381,7 +2393,7 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 			browserFindClear()
 		} else if browserNav == browserModeLinks {
 			browserNav = browserModeScroll
-			showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+			showToast(browserNavModeToast(), ToastInfo())
 			PlayNavSound()
 		} else {
 			goBackScene(config)
@@ -2413,11 +2425,6 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 			return browserStepPageLinkRow(config, elem, 1)
 		}
 		return browserScrollButton(config, elem, 1)
-	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
-		// Firmware that reports a real gamepad has no Tab key; the stick
-		// click is the same cycle, and the toast names both keys.
-		browserToggleNavMode()
-		return true
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		browserScrollByPage(config, elem, -1)
 		return true

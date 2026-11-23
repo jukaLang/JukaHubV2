@@ -631,7 +631,7 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 	UIPageHeaderDraw(renderer, config, header)
 
 	hint := hintLine(FooterHint{"Left/Right", "Band"}, FooterHint{"Up/Down", "Gain"},
-		FooterHint{"Y", "Preset"}, FooterHint{"X", "Flatten Band"}, FooterHint{"G", "Close"})
+		FooterHint{"Y", "Preset"}, FooterHint{"X", "Flatten Band"}, FooterHint{"B / G", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
 	// The band sliders begin 96px down the card. The hint used to be drawn at
 	// the end of the header band, which is below that: on both canvases the

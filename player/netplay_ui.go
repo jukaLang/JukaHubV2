@@ -759,7 +759,7 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	if row, ok := netplayCurrentRow(); ok {
 		switch row.kind {
 		case netplayRowHostOnline:
-			hint = hintLine(FooterHint{"←/→", "Relay"}, FooterHint{"A", "Host"}, FooterHint{"B", "Close"})
+			hint = hintLine(FooterHint{"Left/Right", "Relay"}, FooterHint{"A", "Host"}, FooterHint{"B", "Close"})
 		case netplayRowAddress:
 			hint = hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Edit address"}, FooterHint{"B", "Close"})
 		case netplayRowOnlineInfo:

@@ -1181,7 +1181,7 @@ func renderPodcastPanel(renderer *sdl.Renderer, config *Config) {
 			FooterHint{"A", "Open"},
 			FooterHint{"X", "Add Feed"},
 			FooterHint{"Y", "Refresh"},
-			FooterHint{"Del", "Remove"},
+			FooterHint{"Start / Del", "Remove"},
 			FooterHint{"B / Esc", "Close"},
 		)
 	}

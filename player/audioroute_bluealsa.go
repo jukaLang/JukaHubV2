@@ -266,6 +266,12 @@ var outBluealsa struct {
 	// counts the restarts for a missing name this run.
 	contPID        int
 	offBusRestarts int
+	// wedgedPID is the daemon last found owning its name but not answering,
+	// wedgedSince when that was first seen, wedgedRestarts the restarts for
+	// it this run (bluealsaWedged).
+	wedgedPID      int
+	wedgedSince    time.Time
+	wedgedRestarts int
 }
 
 // bluealsaProcess is the running BlueALSA daemon (bluealsa, or bluealsad from
@@ -417,9 +423,15 @@ func bluealsaEnsure(addr string) bool {
 	}
 	if sinks == nil && bluealsaNoReply(answer) {
 		// A bluealsa that does not answer D-Bus would hold the ALSA open (and
-		// every other open waiting on audioDevEnvMu) for its 25 s timeout.
+		// every other open waiting on audioDevEnvMu) for its 25 s timeout. It
+		// was also left like that for good: on these boards bluez-alsa 3.1
+		// stops answering (spruceOS saw `amixer -D bluealsa` hang there and
+		// restarts it when it does not answer within 3 s), and the headset
+		// stayed silent until a reboot. It is restarted now (bluealsaWedged).
+		bluealsaWedged(pid, args, addr)
 		return false
 	}
+	bluealsaAnswered(pid)
 	// The open is the real test either way: a stream can appear between the
 	// two, and dbus-send may be missing or answer in a shape not foreseen.
 	return true
@@ -788,6 +800,187 @@ func bluealsaNotOnBus(pid int, args []string, addr string) {
 		bluealsaStop(pid, args)
 		bluealsaStart(path, rest, addr, "restarted: it was not on D-Bus")
 	}
+}
+
+// bluealsaWedgedGrace is how long a bluealsa that owns its D-Bus name may go
+// without answering it before JukaHub restarts it: two of the monitor's 2 s
+// questions in a row, about what spruceOS waits (3 s) on the same boards.
+const bluealsaWedgedGrace = 5 * time.Second
+
+// bluealsaWedgedRestartMax caps those restarts per run, so a daemon that
+// hangs again at once is not restarted all evening.
+const bluealsaWedgedRestartMax = 3
+
+// bluealsaWedged handles a bluealsa that runs and owns its name but does not
+// answer it (dbus-send's NoReply): a stopped one is continued once; one that
+// stays silent for bluealsaWedgedGrace is restarted with the A2DP source role
+// (at most bluealsaWedgedRestartMax times a run), and the headset is asked for
+// its audio profile again once the new daemon registered its endpoint.
+func bluealsaWedged(pid int, args []string, addr string) {
+	cmdline := strings.Join(args, " ")
+	state := bluealsaProcState(pid)
+	outBluealsa.mu.Lock()
+	firstCont := outBluealsa.contPID != pid
+	if (state == "T" || state == "t") && firstCont {
+		outBluealsa.contPID = pid
+	}
+	outBluealsa.mu.Unlock()
+	if (state == "T" || state == "t") && firstCont && runtime.GOOS == "linux" {
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Signal(syscall.Signal(18)) // SIGCONT, as in bluealsaNotOnBus
+		}
+		logWarn("audio", "bluealsa (pid %d) was stopped, so it did not answer on D-Bus; continued it", pid)
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — was stopped (state %s); JukaHub continued it", pid, cmdline, state)
+		})
+		time.AfterFunc(2*time.Second, audioRouteKick)
+		return
+	}
+	outBluealsa.mu.Lock()
+	if outBluealsa.wedgedPID != pid {
+		outBluealsa.wedgedPID, outBluealsa.wedgedSince = pid, time.Now()
+		time.AfterFunc(bluealsaWedgedGrace+time.Second, audioRouteKick)
+	}
+	waited := time.Since(outBluealsa.wedgedSince)
+	spent := outBluealsa.wedgedRestarts >= bluealsaWedgedRestartMax
+	restart := waited >= bluealsaWedgedGrace && !spent
+	if restart {
+		outBluealsa.wedgedRestarts++
+		outBluealsa.wedgedPID, outBluealsa.wedgedSince = 0, time.Time{}
+		outBluealsa.restarted = time.Now()
+	}
+	outBluealsa.mu.Unlock()
+	switch {
+	case !restart && spent:
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — does not answer on D-Bus (state %s); JukaHub's %d restarts are spent%s",
+				pid, cmdline, state, bluealsaWedgedRestartMax, bluealsaLogWords())
+		})
+	case !restart:
+		audioDiagSet(func() {
+			audioDiag.bluealsa = fmt.Sprintf("pid %d: %s — does not answer on D-Bus yet (state %s, %s)", pid, cmdline, state, waited.Round(time.Second))
+		})
+	default:
+		path := bluealsaExePath(pid, args)
+		rest := append([]string{}, args[1:]...)
+		if !bluealsaArgsHaveSource(args) {
+			rest = append(rest, "-p", "a2dp-source")
+		}
+		logWarn("audio", "bluealsa (pid %d, %s) has not answered on D-Bus for %s; restarting it", pid, cmdline, waited.Round(time.Second))
+		bluealsaStop(pid, args)
+		bluealsaStart(path, rest, addr, "restarted: it stopped answering")
+	}
+}
+
+// ── Telling the player ───────────────────────────────────────────────────────
+
+// audioRouteStuckAfter is how long a connected headset may stay without
+// JukaHub's sound before the player is told why, once per connection.
+const audioRouteStuckAfter = 45 * time.Second
+
+// audioRouteStuck follows a connected headset JukaHub's sound has not reached:
+// its address, since when, the monitor's last look, and whether the player
+// was told.
+var audioRouteStuck struct {
+	mu    sync.Mutex
+	addr  string
+	since time.Time
+	last  time.Time
+	told  bool
+}
+
+// audioRouteNoteStuck is the monitor's look after each route decision: addr
+// is the connected headset ("" for none), routed whether JukaHub's sound left
+// the speaker. A headset that stays connected and unrouted for
+// audioRouteStuckAfter gets one toast with what the probes found, and the
+// Bluetooth description goes to the log. Before, the only sign of a headset
+// JukaHub could not open was silence ("Bluetooth audio is not working still",
+// 2026-11-22, no log).
+func audioRouteNoteStuck(addr string, routed bool) {
+	now := time.Now()
+	s := &audioRouteStuck
+	s.mu.Lock()
+	if addr == "" || routed {
+		s.addr, s.since, s.told = "", time.Time{}, false
+		s.mu.Unlock()
+		return
+	}
+	// A new headset, or the first look after a pause (a game held the
+	// screen, the monitor slept): its time starts now.
+	paused := !s.last.IsZero() && now.Sub(s.last) > 3*audioOutputPollInterval
+	s.last = now
+	if !strings.EqualFold(s.addr, addr) || paused {
+		s.addr, s.since, s.told = addr, now, false
+		s.mu.Unlock()
+		time.AfterFunc(audioRouteStuckAfter+time.Second, audioRouteKick)
+		return
+	}
+	if s.told || now.Sub(s.since) < audioRouteStuckAfter {
+		s.mu.Unlock()
+		return
+	}
+	s.told = true
+	waited := now.Sub(s.since)
+	s.mu.Unlock()
+	why := audioRouteStuckReason()
+	logWarn("audio", "a headset has been connected for %s, but JukaHub's sound is not on it: %s", waited.Round(time.Second), why)
+	go btLogDiagnostics("a connected headset never got the sound")
+	ShowToast("Bluetooth headset connected, but its sound could not be opened: "+why, ToastKindWarning)
+}
+
+// audioRouteStuckReason is what the probes found, in a few words for the
+// toast; the diagnostics block keeps the whole of it.
+func audioRouteStuckReason() string {
+	audioDiagMu.Lock()
+	d := audioDiag
+	audioDiagMu.Unlock()
+	bluealsaDefs.mu.Lock()
+	defsNote := bluealsaDefs.note
+	bluealsaDefs.mu.Unlock()
+	// The part of a daemon line after its command line: "not on D-Bus…".
+	daemon := d.bluealsa
+	if _, rest, ok := strings.Cut(daemon, " — "); ok {
+		daemon = rest
+	}
+	short := func(s string) string {
+		s = firstLine(strings.TrimSpace(s))
+		if r := []rune(s); len(r) > 140 {
+			s = string(r[:140]) + "…"
+		}
+		return btDiagMaskAddrs(s)
+	}
+	switch {
+	case strings.Contains(d.bluealsa, "no bluealsa/bluealsad"):
+		return "this firmware has no BlueALSA (bluealsa), which every headset's sound goes through"
+	case strings.Contains(defsNote, "no BlueALSA ALSA plugin"):
+		return "this firmware has no BlueALSA plugin for ALSA (libasound_module_pcm_bluealsa.so)"
+	case strings.Contains(d.openErr, "SDL's audio driver"):
+		return short(d.openErr)
+	case strings.Contains(daemon, "D-Bus"):
+		return "BlueALSA " + short(daemon)
+	case strings.HasPrefix(d.bluealsa, "not running"):
+		// Started and gone again: its own last words say why (no D-Bus
+		// policy for it: "Couldn't acquire D-Bus name").
+		if tail := bluealsaLogTail(1); len(tail) > 0 {
+			return short("BlueALSA stops right after it starts; it said: " + tail[0])
+		}
+		return "BlueALSA is " + short(d.bluealsa)
+	case strings.HasPrefix(d.streams, "none"):
+		return "the headset connected without its audio (A2DP) profile, and asking for it did not help"
+	case d.openErr != "":
+		return "ALSA said " + short(d.openErr)
+	}
+	return "nothing recorded why — Bluetooth's diagnostics are in the log"
+}
+
+// bluealsaAnswered notes that the daemon answered: a later silence starts its
+// grace afresh.
+func bluealsaAnswered(pid int) {
+	outBluealsa.mu.Lock()
+	if outBluealsa.wedgedPID == pid {
+		outBluealsa.wedgedPID, outBluealsa.wedgedSince = 0, time.Time{}
+	}
+	outBluealsa.mu.Unlock()
 }
 
 // bluealsaExePath is the program a running bluealsa was started from.

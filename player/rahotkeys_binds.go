@@ -65,11 +65,12 @@ var raPadButtons = []struct{ ID, Label, Bind string }{
 	{"right", "Right", "right"},
 }
 
-// raPadButtonLabel is a logical button's name on the rows.
+// raPadButtonLabel is a logical button's name on the rows: L3 / R3 are F1 /
+// F2 on a Brick, whose front keys send them (stickclicks.go).
 func raPadButtonLabel(id string) string {
 	for _, b := range raPadButtons {
 		if b.ID == id {
-			return b.Label
+			return padStickClickName(b.Label)
 		}
 	}
 	return id

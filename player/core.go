@@ -6491,7 +6491,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "browser_site_info":
 		// The page's connection, certificate and security headers (the
-		// padlock, `i` and R3 open the same sheet).
+		// padlock, `i` and the Select menu's Site info open the same sheet).
 		brwInfoOpenFor(config)
 	case "browser_search":
 		// The Search chip and the Y button both open the query keyboard.

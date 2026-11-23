@@ -12,9 +12,12 @@ package main
 //     picks up there.
 //
 // The Brick (and the Hammer) report F1 and F2 as the stick clicks, L3 and R3
-// (brickkeys.go). A handheld with sticks (Smart Pro, Smart Pro S, Brick Pro)
-// gets the same two jobs on L3 / R3 instead. Settings → Controls → Game
-// hotkeys: Auto (the keys this handheld has), the pair itself, or Off. DS
+// (brickkeys.go). A handheld whose sticks press in (Smart Pro S, Brick Pro)
+// gets the same two jobs on L3 / R3 instead; the original Smart Pro's sticks
+// do not click, so it has no pair and no row (stickclicks.go) — RetroArch's
+// own hotkeys and the in-game menu rewind and fast-forward there. Settings →
+// Controls → Game hotkeys: Auto (the keys this handheld has), the pair
+// itself, or Off. DS
 // games keep the keys to themselves (the DS cores tap the screen and close the
 // lid with L3 / R3), and on a handheld with sticks so do PlayStation and DOS
 // games, which press the sticks in. The Brick Pro also has F1 / F2 keys of its
@@ -159,14 +162,14 @@ func gameHotkeysSystemOf(rom string) string {
 // ── Which keys ───────────────────────────────────────────────────────────
 
 // gameHotkeysKeysOf is the pair a handheld has: the Brick and the Hammer
-// their front F1 / F2, a handheld with sticks L3 / R3, anything else none.
-// Pure.
+// their front F1 / F2, a handheld whose sticks press in L3 / R3, anything
+// else (the original Smart Pro: sticks that do not click) none. Pure.
 func gameHotkeysKeysOf(d DeviceModel) gameHotkeyKeys {
 	switch d {
 	case DeviceTrimuiBrick, DeviceTrimuiHammer:
 		return gameHotkeysFn
 	}
-	if deviceHardware(d).HasSticks {
+	if deviceHardware(d).ClickSticks {
 		return gameHotkeysStick
 	}
 	return gameHotkeysNone
@@ -257,8 +260,8 @@ func gameHotkeysClickConsole(system string, k gameHotkeyKeys) bool {
 }
 
 // gameHotkeysForGame is the pair active in the launch of rom. A light-gun
-// game keeps the pair too: the gun, which reads the pad beside the game just
-// like this, re-anchors on R3 (lightgun_aim.go).
+// game has none: the gun, which reads the pad beside the game just like this,
+// re-anchors on R3 as well as on its spare R shoulder (lightgun_aim.go).
 func gameHotkeysForGame(c *Config, rom string) gameHotkeyKeys {
 	k := gameHotkeysResolve(gameHotkeysSetting(c), DetectDevice())
 	if k != gameHotkeysNone && (gameHotkeysClickConsole(gameHotkeysSystemOf(rom), k) || lightgunActive()) {

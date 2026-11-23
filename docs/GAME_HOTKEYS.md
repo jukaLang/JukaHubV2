@@ -23,7 +23,7 @@ It is new and **not yet checked on a TrimUI**: see
 | Row | What it does |
 |---|---|
 | **Hotkeys for** | *All consoles*, or one console that then gets its own hotkeys |
-| **Hotkey button** | the button held with every shortcut: Select, Menu, Start, L3, R3, L1, R1, L2 or R2 |
+| **Hotkey button** | the button held with every shortcut: Select, Menu, Start, L1, R1, L2 or R2, and L3 / R3 where something sends them (sticks that click; F1 / F2 on a Brick, named so there). The original Smart Pro has neither, so they are not offered |
 | **Shortcut** | which shortcut the next row changes; **A** lists them all with their buttons |
 | **Its buttons** | that shortcut's button |
 | **Clear these hotkeys** | the console (or All consoles) back to the defaults; shown once something is set |

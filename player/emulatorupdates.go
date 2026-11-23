@@ -483,19 +483,37 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 			return coreBuild{}, err
 		}
 		if raGlibcPending(problem, target) {
-			// Only JukaHub's glibc was missing, and its download did not
-			// finish: nothing about this build is final, so it is not
+			// Only JukaHub's glibc was missing (or its C++ library, the
+			// pinned glibc-only copy being installed), and its download did
+			// not finish: nothing about this build is final, so it is not
 			// remembered as refused and the next try fetches it again.
-			return coreBuild{}, fmt.Errorf("the %s build needs JukaHub's glibc %s, which could not be downloaded — check the connection and try again (%s)", upd.Date, privateGlibcVersion, problem)
+			what := "JukaHub's glibc " + privateGlibcVersion
+			if raGlibcGapNeedsCxx(problem) {
+				what += " with its C++ library"
+			}
+			return coreBuild{}, &corePendingError{msg: fmt.Sprintf("the %s build needs %s, which could not be downloaded%s — check the connection and try again (%s)",
+				upd.Date, what, raGlibcInstallErrWords(), problem)}
 		}
 		if devPending {
 			// Likewise the device libraries: JukaHub writes stand-ins for
 			// them, but its glibc did not download or the card refused the
 			// write just now.
 			standIn, _, _ := coreDevLibsSplit(problem)
-			return coreBuild{}, fmt.Errorf("the %s build needs %s beside JukaHub's glibc %s, which could not be set up just now — check the connection and the card's free space, then try again", upd.Date, mlJoinAnd(standIn), privateGlibcVersion)
+			return coreBuild{}, &corePendingError{msg: fmt.Sprintf("the %s build needs %s beside JukaHub's glibc %s, which could not be set up just now — check the connection and the card's free space, then try again",
+				upd.Date, mlJoinAnd(standIn), privateGlibcVersion)}
 		}
-		return coreBuild{}, coreRefuse(upd, coreCannotLoadReason+problem)
+		refusal := coreRefuse(upd, coreCannotLoadReason+problem)
+		// What stopped JukaHub's glibc from closing a gap it could close goes
+		// with the error the player reads (not with the reason remembered):
+		// the firmware's "needs GLIBCXX_3.4.30" alone said nothing of it.
+		if why := raGlibcWhyNot(problem, target); why != "" {
+			var refused *coreRefusedError
+			if errors.As(refusal, &refused) {
+				refused.Hint = why
+			}
+			logWarn("emulators", "core %s %s: JukaHub's glibc %s could not be used: %s", upd.Core, upd.Date, privateGlibcVersion, why)
+		}
+		return coreBuild{}, refusal
 	}
 
 	dir := filepath.Join(poolRoot, upd.Core, upd.Date)
@@ -567,6 +585,11 @@ type coreRefusedError struct {
 	// Build names the build — the index date, or a kept build's time.
 	Build  string
 	Reason string
+	// Hint says why JukaHub's glibc, which would have let a build that cannot
+	// load on the firmware's libraries load, could not be used here
+	// (raGlibcWhyNot). It goes with the message, never with the remembered
+	// reason (raGlibcRefusalMayPass reads that).
+	Hint string
 }
 
 func (e *coreRefusedError) Error() string {
@@ -574,7 +597,32 @@ func (e *coreRefusedError) Error() string {
 	if strings.TrimSpace(e.Build) != "" {
 		build = "the " + e.Build + " build"
 	}
+	if problem, ok := strings.CutPrefix(e.Reason, coreCannotLoadReason); ok && e.Hint != "" {
+		// The hint first: a toast shows three lines, and the firmware's gap
+		// alone does not say what to do.
+		return build + " cannot load on this firmware's own C library, and JukaHub's newer one could not be used: " +
+			e.Hint + " (" + problem + ")"
+	}
 	return build + " " + e.Reason
+}
+
+// corePendingError is a build that would load once JukaHub's glibc (with its
+// C++ library) or its stand-in device libraries are in, which could not be set
+// up just now: not a refusal, so the build is not remembered as refused.
+type corePendingError struct{ msg string }
+
+func (e *corePendingError) Error() string { return e.msg }
+
+// coreLoadRefusal reports an error that says a build cannot load here as it
+// is — refused for this firmware, or waiting on JukaHub's glibc — rather than
+// a failed download: one where another build of the core may still do.
+func coreLoadRefusal(err error) bool {
+	var refused *coreRefusedError
+	if errors.As(err, &refused) {
+		return strings.HasPrefix(refused.Reason, coreCannotLoadReason)
+	}
+	var pending *corePendingError
+	return errors.As(err, &pending)
 }
 
 // coreCannotLoadReason prefixes a load problem from elfcompat.go, so every

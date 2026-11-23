@@ -587,7 +587,8 @@ func lightgunPracticeReload(now time.Time) {
 }
 
 // lightgunPracticeKey: arrows aim (read each frame), Space fires, R reloads,
-// C puts the crosshair in the middle (R3's twin), Esc or B ends the practice.
+// C puts the crosshair in the middle (the spare shoulder's twin), Esc or B
+// ends the practice.
 func lightgunPracticeKey(e *sdl.KeyboardEvent) {
 	if e == nil || e.Type != sdl.KEYDOWN || e.Repeat != 0 {
 		return
@@ -606,15 +607,14 @@ func lightgunPracticeKey(e *sdl.KeyboardEvent) {
 	}
 }
 
-// lightgunPracticePad: the game's trigger and reload shoulders, R3 to the
-// middle, B (or Select) ends the practice. R2 and L2 are read as axes each
-// frame.
+// lightgunPracticePad: the game's trigger and reload shoulders, the spare R
+// shoulder (or R3, where the sticks click) to the middle, B (or Select) ends
+// the practice. R2 and L2 are read as axes each frame.
 func lightgunPracticePad(e *sdl.ControllerButtonEvent) {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return
 	}
 	s := lightgunUI.set
-	p := &lightgunUI.pr
 	now := time.Now()
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
@@ -622,15 +622,24 @@ func lightgunPracticePad(e *sdl.ControllerButtonEvent) {
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		if s.Trigger == "r1" {
 			lightgunPracticeShoot(now)
+		} else {
+			lightgunPracticeCentre()
 		}
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		if s.Reload == "l1" {
 			lightgunPracticeReload(now)
 		}
 	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
-		p.x, p.y = float64(p.rect.W)/2, float64(p.rect.H)/2
-		PlayNavSound()
+		lightgunPracticeCentre()
 	}
+}
+
+// lightgunPracticeCentre puts the practice crosshair in the middle, as the
+// spare R shoulder and R3 re-centre the game's (lightgun_aim.go).
+func lightgunPracticeCentre() {
+	p := &lightgunUI.pr
+	p.x, p.y = float64(p.rect.W)/2, float64(p.rect.H)/2
+	PlayNavSound()
 }
 
 // lightgunPracticeTick moves the crosshair and the target to now.
@@ -650,8 +659,11 @@ func lightgunPracticeTick(now time.Time) {
 			switch {
 			case !p.latch[side] && v >= mbridgeTrigDown:
 				p.latch[side] = true
+				// R2 fires, or re-centres when R1 is the trigger.
 				if side == 1 && s.Trigger == "r2" {
 					lightgunPracticeShoot(now)
+				} else if side == 1 {
+					lightgunPracticeCentre()
 				}
 				if side == 0 && s.Reload == "l2" {
 					lightgunPracticeReload(now)
@@ -890,10 +902,10 @@ func lightgunPracticeRender(renderer *sdl.Renderer, config *Config, fonts tbxFon
 		if !stickHardware() {
 			aim = FooterHint{"D-Pad", "Aim"}
 		}
-		hints := []FooterHint{aim, {strings.ToUpper(s.Trigger), "Fire"}, {strings.ToUpper(s.Reload), "Reload"}}
-		if stickHardware() {
-			hints = append(hints, FooterHint{"R3", "Middle"})
-		}
+		// The spare R shoulder re-centres on every model; R3 only clicks on
+		// some, so it is not named (stickclicks.go).
+		hints := []FooterHint{aim, {strings.ToUpper(s.Trigger), "Fire"}, {strings.ToUpper(s.Reload), "Reload"},
+			{strings.ToUpper(lightgunSpareShoulder(s)), "Middle"}}
 		hint = hintLine(append(hints, FooterHint{"B", "Done"})...)
 	}
 	renderText(renderer, config, fonts.small, ellipsize(fonts.small, hint, card.W-2*OverlayPadX), ColorTextSecondary(),

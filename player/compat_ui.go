@@ -567,10 +567,10 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 		renderCompatCoreDetail(renderer, config, rows, detailX, bodyY, detailW, bodyH, font, medium)
 	}
 
-	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"←/→", "Tab"},
+	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"Left/Right", "Tab"},
 		FooterHint{"A", "Apply Boost"}, FooterHint{"X", "Revert"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	if cpPanel.tab == compatTabCores {
-		hint = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"←/→", "Tab"},
+		hint = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"Left/Right", "Tab"},
 			FooterHint{"A", "Activate Build"}, FooterHint{"U/L1", "Update Cores"},
 			FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	}

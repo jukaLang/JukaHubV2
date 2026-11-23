@@ -605,10 +605,15 @@ func raGlibcCoreNeeds(core string) (needs, missing bool) {
 	if firmware == "" {
 		return false, false
 	}
-	if raGlibcLoadDir(core) != "" {
+	if dir := raGlibcLoadDir(core); dir != "" {
 		// Cheap once this core file was seen (a stat and a map).
 		coreDevLibsEnsureFor(core)
-		return coreLoadProblemFileWith(core, core, true) == "", false
+		if coreLoadProblemFileWith(core, core, true) == "" {
+			return true, false
+		}
+		// The pinned glibc-only runtime cannot give it the newer libstdc++ it
+		// needs; the complete one, once installed, can.
+		return false, !privateRuntimeHasCxx(dir) && raGlibcGapNeedsCxx(firmware) && raGlibcCouldCover(firmware)
 	}
 	if _, _, ready := raGlibcRuntime(); ready {
 		// Installed, but this core's RetroArch does not start on it.
@@ -1095,10 +1100,15 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 	if preferred == "" && core != "" {
 		preferred = coreRetroArchBinary(filepath.Dir(core))
 	}
+	// The RetroArch JukaHub installed (raget.go) starts on its glibc at every
+	// launch, like Always: that is what it was installed and checked for.
+	own := raGetOwnsLaunch(preferred)
 	why := ""
 	switch {
 	case mode == raGlibcAlways:
 		why = "RetroArch's C library is set to JukaHub's"
+	case own:
+		why = "JukaHub installed this RetroArch to start on its glibc " + privateGlibcVersion
 	case menu:
 		why = "RetroArch's own menu may load any core"
 	case core != "":
@@ -1115,7 +1125,7 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 	}
 	loader, libDir, ready := raGlibcRuntime()
 	if !ready {
-		return plan, mode == raGlibcAlways && !menu, nil
+		return plan, (mode == raGlibcAlways || own) && !menu, nil
 	}
 	if !raGlibcNamespaceOK() {
 		return plan, false, nil
@@ -1314,7 +1324,7 @@ func raGlibcPrepareLibraryLaunch(game libraryGame, launcher string) (plan raGlib
 		}
 	}
 	ShowToast("Getting JukaHub's newer C library for "+what+" (once, a few MB)…", ToastKindInfo)
-	privateGlibcEnsureAsync(func(err error) {
+	privateGlibcEnsureAsyncFor(raGlibcCoreNeedsCxx(core), func(err error) {
 		raGlibcRuntimeForget()
 		if err != nil {
 			raGlibcInstall.failedAt = time.Now()
@@ -1349,7 +1359,7 @@ func raGlibcPrepareDirect(cmd *exec.Cmd, core, retroArch string) error {
 		}
 	}
 	if missing && IsOnline() && !raGlibcInstallHeldOff() {
-		privateGlibcEnsureAsync(func(err error) {
+		privateGlibcEnsureAsyncFor(raGlibcCoreNeedsCxx(core), func(err error) {
 			raGlibcRuntimeForget()
 			if err != nil {
 				raGlibcInstall.failedAt = time.Now()
@@ -1451,13 +1461,21 @@ func raGlibcEnsureForCore(ctx context.Context, problem, target string) bool {
 	if !raGlibcWanted() || !raGlibcCouldCover(problem) || strings.TrimSpace(target) == "" {
 		return false
 	}
-	return raGlibcEnsureRuntimeFor(ctx, target)
+	return raGlibcEnsureRuntimeWith(ctx, target, raGlibcGapNeedsCxx(problem))
 }
 
 // raGlibcEnsureRuntimeFor installs the runtime when it is not, and probes the
 // RetroArch that owns target's folder when that was never done under it (a
 // background goroutine). true when that RetroArch starts on the runtime.
 func raGlibcEnsureRuntimeFor(ctx context.Context, target string) bool {
+	return raGlibcEnsureRuntimeWith(ctx, target, false)
+}
+
+// raGlibcEnsureRuntimeWith is raGlibcEnsureRuntimeFor; cxx asks for a runtime
+// with the C++ library (a core needs a newer libstdc++ or libgcc_s than the
+// firmware's): a pinned glibc-only runtime installed earlier is replaced by the
+// complete one first (privateGlibcInstallFor), and true needs that one.
+func raGlibcEnsureRuntimeWith(ctx context.Context, target string, cxx bool) bool {
 	if !raGlibcWanted() || strings.TrimSpace(target) == "" {
 		return false
 	}
@@ -1465,17 +1483,24 @@ func raGlibcEnsureRuntimeFor(ctx context.Context, target string) bool {
 	if ra == "" {
 		return false
 	}
-	if _, _, ready := raGlibcRuntime(); ready {
+	if _, libDir, ready := raGlibcRuntime(); ready && (!cxx || privateRuntimeHasCxx(libDir)) {
 		privateGlibcRefreshAsync() // the weekly look for a newer Ubuntu build
 	} else {
-		if err := privateGlibcInstall(ctx); err != nil {
+		if !raGlibcInstallMayTry(cxx) {
+			return false
+		}
+		err := privateGlibcInstallFor(ctx, cxx)
+		raGlibcRuntimeForget()
+		raGlibcInstallNote(cxx, err)
+		if err != nil {
+			// For glibc alone an error means nothing went in; for the C++
+			// runtime the pinned glibc may have, which does not close this gap.
 			logWarn("emulators", "JukaHub's glibc %s for the newest cores: %v", privateGlibcVersion, err)
 			return false
 		}
-		raGlibcRuntimeForget()
 	}
 	_, libDir, ready := raGlibcRuntime()
-	if !ready {
+	if !ready || (cxx && !privateRuntimeHasCxx(libDir)) {
 		return false
 	}
 	if st, _ := raGlibcProbeState(ra, libDir); st == raProbeUnknown {
@@ -1484,15 +1509,130 @@ func raGlibcEnsureRuntimeFor(ctx context.Context, target string) bool {
 	return raGlibcLoadDir(target) != ""
 }
 
+// raGlibcInstallLast is the last install of the runtime the updater asked for
+// that failed: when, whether it was for the C++ runtime, and why — for the
+// refusal the player reads (raGlibcWhyNot), and so a pass over many cores does
+// not download Ubuntu's index once per core.
+var raGlibcInstallLast struct {
+	mu  sync.Mutex
+	at  time.Time
+	cxx bool
+	err string
+}
+
+// raGlibcInstallSpacing is the least time between two such tries.
+const raGlibcInstallSpacing = 2 * time.Minute
+
+// raGlibcInstallMayTry reports whether an install may be tried now: none of
+// the same kind failed in the last raGlibcInstallSpacing (one for glibc alone
+// does not hold back one for the C++ runtime).
+func raGlibcInstallMayTry(cxx bool) bool {
+	raGlibcInstallLast.mu.Lock()
+	defer raGlibcInstallLast.mu.Unlock()
+	l := &raGlibcInstallLast
+	if l.err == "" || l.at.IsZero() || (cxx && !l.cxx) {
+		return true
+	}
+	since := time.Since(l.at)
+	return since < 0 || since >= raGlibcInstallSpacing
+}
+
+// raGlibcInstallNote records how an install went.
+func raGlibcInstallNote(cxx bool, err error) {
+	raGlibcInstallLast.mu.Lock()
+	defer raGlibcInstallLast.mu.Unlock()
+	if err == nil {
+		raGlibcInstallLast.err, raGlibcInstallLast.at = "", time.Time{}
+		return
+	}
+	raGlibcInstallLast.at, raGlibcInstallLast.cxx = time.Now(), cxx
+	raGlibcInstallLast.err = firstLine(strings.TrimSpace(err.Error()))
+	if r := []rune(raGlibcInstallLast.err); len(r) > 160 {
+		raGlibcInstallLast.err = string(r[:160]) + "…"
+	}
+}
+
+// raGlibcInstallErrWords is " (<why the last install failed>)", or "".
+func raGlibcInstallErrWords() string {
+	raGlibcInstallLast.mu.Lock()
+	defer raGlibcInstallLast.mu.Unlock()
+	if raGlibcInstallLast.err == "" {
+		return ""
+	}
+	return " (" + raGlibcInstallLast.err + ")"
+}
+
+// raGlibcGapNeedsCxx reports a load problem with a gap in the C++ runtime
+// (libstdc++'s GLIBCXX or CXXABI, libgcc_s's GCC versions), which only the
+// complete runtime closes. Pure.
+func raGlibcGapNeedsCxx(problem string) bool {
+	for _, g := range raGlibcGapRe.FindAllStringSubmatch(problem, -1) {
+		switch family, _ := elfVersionSplit(g[1]); family {
+		case "GLIBCXX", "CXXABI", "GCC":
+			return true
+		}
+	}
+	return false
+}
+
+// raGlibcCoreNeedsCxx reports a core file whose load problem on the
+// firmware's libraries includes the C++ runtime.
+func raGlibcCoreNeedsCxx(core string) bool {
+	if strings.TrimSpace(core) == "" {
+		return false
+	}
+	return raGlibcGapNeedsCxx(coreLoadProblemFileWith(core, core, false))
+}
+
+// raGlibcWhyNot says why JukaHub's glibc did not close a load problem it
+// could close, for a core that becomes target: what the refusal the player
+// reads adds (coreRefusedError.Hint), and the log. "" when the problem is not
+// one the runtime closes, or nothing stood in its way. Before, every such
+// case ended in the firmware's bare "needs GLIBCXX_3.4.30", whatever had
+// stopped the runtime.
+func raGlibcWhyNot(problem, target string) string {
+	if !raGlibcSupported() || !raGlibcCouldCover(problem) {
+		return ""
+	}
+	if raGlibcMode() == raGlibcOff {
+		return "Settings → Games & emulators → RetroArch's C library is set to Firmware's only"
+	}
+	if strings.TrimSpace(target) == "" {
+		return "JukaHub found no RetroArch cores folder it may write"
+	}
+	ra := raGlibcResolve(coreRetroArchBinary(filepath.Dir(target)))
+	if ra == "" {
+		return "JukaHub found no 64-bit RetroArch beside " + filepath.Dir(target) + " to start on it"
+	}
+	_, libDir, ready := raGlibcRuntime()
+	if !ready {
+		return "it did not install" + raGlibcInstallErrWords()
+	}
+	if raGlibcGapNeedsCxx(problem) && !privateRuntimeHasCxx(libDir) {
+		return "the copy here is glibc alone, and the complete one with the C++ library did not install" + raGlibcInstallErrWords()
+	}
+	if !raGlibcNamespaceOK() {
+		return "this firmware does not let a game have a mount namespace of its own"
+	}
+	if st, why := raGlibcProbeState(ra, libDir); st == raProbeFailed {
+		if why == "" {
+			why = "no reason was recorded"
+		}
+		return "RetroArch did not start on it (" + why + ")"
+	}
+	return ""
+}
+
 // raGlibcPending reports a load problem that only the runtime would close for
 // a core that becomes target, while the runtime is not installed (its
-// download failed or was stopped): the updater does not remember such a build
-// as refused, since the next try may install the runtime and take it.
+// download failed or was stopped) — or is installed without the C++ runtime
+// the problem needs: the updater does not remember such a build as refused,
+// since the next try may install the runtime and take it.
 func raGlibcPending(problem, target string) bool {
 	if !raGlibcWanted() || strings.TrimSpace(target) == "" || !raGlibcCouldCover(problem) {
 		return false
 	}
-	if _, _, ready := raGlibcRuntime(); ready {
+	if _, libDir, ready := raGlibcRuntime(); ready && (!raGlibcGapNeedsCxx(problem) || privateRuntimeHasCxx(libDir)) {
 		return false
 	}
 	return raGlibcResolve(coreRetroArchBinary(filepath.Dir(target))) != ""
@@ -1528,27 +1668,32 @@ func raGlibcRescue(broken []coreFixBroken, download bool) bool {
 	if !raGlibcWanted() {
 		return false
 	}
-	need := false
+	need, cxx := false, false
 	for _, b := range broken {
 		if raGlibcCouldCover(b.problem) && raGlibcResolve(coreRetroArchBinary(filepath.Dir(b.path))) != "" {
 			need = true
-			break
+			cxx = cxx || raGlibcGapNeedsCxx(b.problem)
 		}
 	}
 	if !need {
 		return false
 	}
-	if _, _, ready := raGlibcRuntime(); !ready {
-		if !download {
+	if _, libDir, ready := raGlibcRuntime(); !ready || (cxx && !privateRuntimeHasCxx(libDir)) {
+		if !download || !raGlibcInstallMayTry(cxx) {
 			return false
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), coreFixTimeout)
-		err := privateGlibcInstall(ctx)
+		err := privateGlibcInstallFor(ctx, cxx)
 		cancel()
 		raGlibcRuntimeForget()
+		raGlibcInstallNote(cxx, err)
 		if err != nil {
 			logWarn("emulators", "core fix: JukaHub's glibc %s: %v", privateGlibcVersion, err)
-			return false
+			// The pinned glibc may have gone in for the cores that need only
+			// it; they are asked again below.
+			if _, _, ready := raGlibcRuntime(); !ready {
+				return false
+			}
 		}
 	}
 	raGlibcProbeAll()
@@ -1594,6 +1739,8 @@ func raGlibcSettingDetail(c *Config) string {
 		return "The newest cores run on JukaHub's glibc " + privateGlibcVersion + " · fetched when a core needs it"
 	case len(raGlibcRefusedUnder(libDir)) > 0:
 		return "RetroArch here did not start on JukaHub's glibc " + privateGlibcVersion + " · cores stay on the firmware's"
+	case !privateRuntimeHasCxx(libDir):
+		return "The newest cores run on JukaHub's glibc " + privateGlibcVersion + " · installed without its C++ library, fetched with the next core that needs it"
 	}
 	return "The newest cores run on JukaHub's glibc " + privateGlibcVersion + " · installed"
 }

@@ -1561,9 +1561,10 @@ hotspot is the cable.
 | **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
-| **R** / **R3** | roll a random game from this console or the whole library |
+| **Select** / **M** | the library's menu: a random game from this console or the whole library, the tag filter (**T**), search, fill missing box art, rescan and, on the console buttons, the next Console look. Each row names the button that also does it; the menu opens again on the row used last |
+| **R** | (keyboard) roll a random game: a sheet asks whether from this console or the whole library |
 | **Y** | rescan the card (after copying new ROMs) |
-| **B** / Back | one level back: a console's page → the console buttons → clear an active search or tag filter → close the library |
+| **B** (or the Menu key) | one level back: a console's page → the console buttons → clear an active search or tag filter → close the library |
 | Mouse | click a console button to open it, a game to open its page, the page title to go one level back, the top bar to close |
 
 A search or tag filter shows only the consoles with hits, each button counting
@@ -1677,9 +1678,14 @@ but `zld` does not.
 
 ## Random pick
 
-**R** (or clicking in the right stick, **R3**) opens a small sheet that rolls a
-game for you — it lands the highlight on the pick instead of starting it, so
-**A** plays it and **R** rolls again without leaving the library.
+**Select** opens the library's menu, whose first rows roll a game for you —
+**Random game from** the console on screen, or **from the whole library** —
+and land the highlight on the pick instead of starting it, so **A** plays it.
+The menu opens again on the row used last, so **Select**, **A** rolls another
+without leaving the library. On a keyboard **R** opens a small sheet that asks
+which of the two to roll from. The stick click (R3) that used to do this is
+gone: the original Smart Pro's sticks do not press in, and a Brick's F2 is its
+own key.
 
 | Row | What it rolls from |
 |-----|--------------------|
@@ -1690,12 +1696,13 @@ The detail line under each row counts what the roll will actually draw from, so
 it follows an active search: with `metroid` typed, both rows roll only the
 matching games and the whole-library row says *matches*. The roll never picks
 the game already under the highlight while the scope has another candidate, so
-a second **R** always moves. **B** cancels the sheet.
+a second roll always moves. **B** cancels the sheet.
 
 Picking jumps the library to the game's console, row and scroll position and
-shows a toast naming it (`Random: ... — A plays it, R for another`). A game
+shows a toast naming it (`Random: ... — A plays it, Select, A for another`;
+`R for another` on a keyboard). A game
 that has disappeared from the card since the last scan is reported instead of
-moving the highlight somewhere unrelated, and **R** in an empty library explains
+moving the highlight somewhere unrelated, and a roll in an empty library explains
 that there are no games yet rather than opening an empty sheet.
 
 ## Video snaps

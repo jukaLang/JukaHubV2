@@ -604,6 +604,9 @@ func startCoreAutoUpdate(config *Config) {
 		// here (corefix.go).
 		startCoreFixScan()
 	}
+	// A card with no RetroArch at all gets TrimUI's newest build for this
+	// model, on JukaHub's glibc (raget_ui.go).
+	startRetroArchEnsure()
 	if !coreAutoUpdateAllowed(coreAutoUpdateDisabled(), emuCoreInstallSupported(), IsTrimuiDevice(), true) {
 		return
 	}

@@ -11,7 +11,6 @@ package main
 
 import (
 	"math"
-	"strings"
 	"testing"
 	"unsafe"
 
@@ -312,8 +311,8 @@ func TestThemePlayerHintsAndStartMenuAtEveryPalette(t *testing.T) {
 									musicAuralisLayout.hints[i-1], rect)
 							}
 						}
-						if !strings.Contains(musicAuralisLayout.hintLines[0], "E Exit") ||
-							!strings.Contains(musicAuralisLayout.hintLines[1], "B Back") {
+						if full := musicPlayerHintLines(); musicAuralisLayout.hintLines[0] != full[0] ||
+							musicAuralisLayout.hintLines[1] != full[1] {
 							t.Fatalf("%s/%s: Auralis hints truncated: %q / %q", preset, profile.name,
 								musicAuralisLayout.hintLines[0], musicAuralisLayout.hintLines[1])
 						}

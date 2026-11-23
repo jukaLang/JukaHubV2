@@ -198,7 +198,7 @@ func manBuildRows() {
 func manControls(game libraryGame) (title string, lines []ctrlLayoutLine, note string) {
 	if l, ok := ctrlLayoutForGame(game); ok && len(l.Chart) > 0 {
 		title, note = l.Name, l.Description
-		lines = append(lines, l.Chart...)
+		lines = append(lines, padChartLines(l.Chart)...)
 	} else {
 		buttons, turbo := gameButtonsForGame(appConfig, game), gameTurboForGame(appConfig, game)
 		title = "Buttons: " + gameButtonsLabel(buttons)

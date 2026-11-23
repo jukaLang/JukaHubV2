@@ -134,11 +134,22 @@ func raHotkeyChoices(l raLevel, action string) []string {
 		out = append(out, "")
 	}
 	out = append(out, raHotkeyOwn)
+	// L3 / R3 are offered only where something sends them: sticks that press
+	// in, or a Brick's F1 / F2 (stickclicks.go). The original Smart Pro has
+	// neither, and a hotkey on a button it lacks could never be pressed.
+	sticks := padSendsStickClicks()
 	if action == raHotkeyModifier {
-		return append(out, raHotkeyModifierButtons...)
+		for _, b := range raHotkeyModifierButtons {
+			if sticks || (b != "l3" && b != "r3") {
+				out = append(out, b)
+			}
+		}
+		return out
 	}
 	for _, b := range raPadButtons {
-		out = append(out, b.ID)
+		if sticks || (b.ID != "l3" && b.ID != "r3") {
+			out = append(out, b.ID)
+		}
 	}
 	return out
 }

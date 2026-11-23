@@ -111,7 +111,7 @@ and the game switcher; its saves and states stay.
 **Favourites** lists your favourite games A–Z, then everything else you
 favourited in the order you added it, then *Saved videos* (the media Favorites
 screen) when it has anything. A game's favourite is its Favorite tag, so it is
-the same favourite in the Games library (L3 → Favorite).
+the same favourite in the Games library (Select → Show only a tag → Favorite).
 
 **Collections** starts with *New collection*. Each collection is a folder; open
 it with A and pick its view (grid, row, list…) like any page — every

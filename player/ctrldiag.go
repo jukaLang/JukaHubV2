@@ -98,7 +98,26 @@ var diagButtons = []uint8{
 	sdl.CONTROLLER_BUTTON_RIGHTSTICK,
 }
 
-// diagButtonLabels is the short name drawn on each chip.
+// ctrldiagChipButtons are the chips drawn: diagButtons without the stick
+// clicks where nothing on the handheld sends them (the original Smart Pro's
+// sticks do not press in: stickclicks.go), so the test does not show two
+// chips that can never light. A pad that sends them anyway is still recorded
+// (ctrldiagButtonEvent).
+func ctrldiagChipButtons() []uint8 {
+	if padSendsStickClicks() {
+		return diagButtons
+	}
+	out := make([]uint8, 0, len(diagButtons))
+	for _, b := range diagButtons {
+		if b != sdl.CONTROLLER_BUTTON_LEFTSTICK && b != sdl.CONTROLLER_BUTTON_RIGHTSTICK {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// diagButtonLabels is the short name drawn on each chip; the stick clicks are
+// F1 / F2 on a Brick (ctrldiagButtonLabel).
 var diagButtonLabels = map[uint8]string{
 	sdl.CONTROLLER_BUTTON_A:             "A",
 	sdl.CONTROLLER_BUTTON_B:             "B",
@@ -301,7 +320,7 @@ func ctrldiagSummary() string {
 // ctrldiagButtonLabel names a button for the chip and the "other" tally.
 func ctrldiagButtonLabel(btn uint8) string {
 	if label, ok := diagButtonLabels[btn]; ok {
-		return label
+		return padStickClickName(label)
 	}
 	return fmt.Sprintf("B%d", btn)
 }
@@ -362,7 +381,8 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	chipH := smallH + 12
 	chipGap := int32(8)
-	chipRows := int32((len(diagButtons) + 3) / 4)
+	chips := ctrldiagChipButtons()
+	chipRows := int32((len(chips) + 3) / 4)
 	labelH := smallH + 6
 
 	// The title band is the shared page header, built before the card is sized so
@@ -414,7 +434,7 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	// Button chips, four to a row.
 	chipsY := barY + chipH + 16
 	chipW := (panelW - 2*padX - 3*chipGap) / 4
-	for i, btn := range diagButtons {
+	for i, btn := range chips {
 		col := int32(i % 4)
 		row := int32(i / 4)
 		x := panelX + padX + col*(chipW+chipGap)

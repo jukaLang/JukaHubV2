@@ -13,11 +13,13 @@ package main
 // it opened. Those are the defaults: Settings → Controls → F1 key / F2 key
 // pick another action for either (frontkeys.go).
 //
-// Screens that already give L3 / R3 a meaning keep it: the web browser (L3
-// switches between scrolling and walking links) and the audio player (lyrics,
-// sleep timer). The game library's R3 is handled by its own modal before this
-// runs. Other hardware is untouched: on a Smart Pro L3 / R3 are real stick
-// clicks.
+// The two keys do that on every screen (owner decision, 2026-11-22): no
+// JukaHub screen gives L3 / R3 a job of its own any more (stickclicks.go), so
+// the browser and the audio player, which used to keep them, no longer take
+// them from F1 / F2. A modal panel that owns every press (the game library)
+// takes them as it takes any other button. Other hardware is untouched: on a
+// Smart Pro S or a Brick Pro L3 / R3 are stick clicks, and the original
+// Smart Pro has none.
 
 import (
 	"github.com/veandco/go-sdl2/sdl"
@@ -37,24 +39,6 @@ func brickHasFunctionKeys() bool {
 	return false
 }
 
-// sceneClaimsStickClicks reports whether the screen on display already uses
-// L3 / R3, in which case F1 / F2 must reach it unchanged.
-func sceneClaimsStickClicks(config *Config) bool {
-	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
-		return false
-	}
-	scene := config.Scenes[currentSceneIndex]
-	if scene.Name == "MusicPlayer" {
-		return true
-	}
-	for _, el := range scene.Elements {
-		if el.Type == "textbrowser" && textBrowserElementSource(el) == textBrowserSourceWeb {
-			return true
-		}
-	}
-	return false
-}
-
 // handleBrickFunctionKey runs F1 / F2 on a Brick and reports whether the press
 // was used. Every other press, and every press on other hardware, is left for
 // the scene.
@@ -65,7 +49,7 @@ func handleBrickFunctionKey(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e.Button != sdl.CONTROLLER_BUTTON_LEFTSTICK && e.Button != sdl.CONTROLLER_BUTTON_RIGHTSTICK {
 		return false
 	}
-	if !brickHasFunctionKeys() || sceneClaimsStickClicks(config) {
+	if !brickHasFunctionKeys() {
 		return false
 	}
 	// The key's chosen action (frontkeys.go): by default F1 the Controller

@@ -904,7 +904,7 @@ func mlFooterHint() string {
 		hints = append(hints, FooterHint{"Start / F5", "Reload"}, FooterHint{"B", "PCs"})
 		return hintLine(hints...)
 	case mlPageSettings:
-		return hintLine(FooterHint{"Left / Right", "Change"}, FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
+		return hintLine(FooterHint{"Left/Right", "Change"}, FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
 	}
 	if v, ok := mlFocusedHost(); ok {
 		open := "Pair"
