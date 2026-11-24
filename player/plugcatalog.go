@@ -65,6 +65,15 @@ type plugEntry struct {
 	StartupDaily bool
 	StartupQuiet bool
 	Quick        []plugAction
+	// Permissions are what the plugin asks for (plugperms.go), Granted what
+	// the owner allowed and Missing the rest; UnknownPerms are names it asked
+	// for that JukaHub does not know. Bundled: the code that runs is
+	// JukaHub's own.
+	Permissions  []string
+	Granted      []string
+	Missing      []string
+	UnknownPerms []string
+	Bundled      bool
 }
 
 // plugRunNote is the RunNote for e.

@@ -26,6 +26,7 @@ const (
 	saveActionSync
 	saveActionResume
 	saveActionRefresh
+	saveActionTimeMachine
 )
 
 type saveManagerRow struct {
@@ -258,6 +259,15 @@ func saveManagerRows() []saveManagerRow {
 			enabled: len(savePanel.snapshots) > 0,
 		},
 		{
+			// Each game's own moments and checkpoints (savetimeline_ui.go).
+			label:   "Time Machine",
+			value:   "Per game",
+			detail:  "Each game's saves while you played; go back with one press.",
+			hint:    hintLine(FooterHint{"A", "Open"}),
+			action:  saveActionTimeMachine,
+			enabled: true,
+		},
+		{
 			label:   "Save folders",
 			value:   fmt.Sprintf("%d", len(savePanel.roots)),
 			detail:  saveFolderNames(savePanel.roots),
@@ -402,6 +412,9 @@ func saveManagerActivate() {
 	case saveActionRefresh:
 		refreshSaveManager()
 		ShowToast("Save folders refreshed", ToastKindSuccess)
+	case saveActionTimeMachine:
+		closeSaveManagerPanel()
+		timeMachineOpenAll(appConfig)
 	}
 }
 

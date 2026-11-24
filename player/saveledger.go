@@ -1067,6 +1067,11 @@ func (s *saveLedgerSession) record(e saveLedgerEntry) (first, added bool) {
 	default:
 		logInfo("saves", "%s: %s %s read back (%d bytes, %s)", title, saveLedgerKindWord(e.Kind), e.File, e.Size, e.Trigger)
 	}
+	if e.Bad == "" {
+		// The Save Time Machine keeps a moment of it (savetimeline.go); the
+		// scan lock held here guards s.roots.
+		saveTimelineNoteSave(s.game, s.roots)
+	}
 	return first, true
 }
 
@@ -1110,6 +1115,11 @@ func (s *saveLedgerSession) finish(how, trigger string, ran time.Duration) {
 		logWarn("saves", "%s crashed after %s with no new save", saveLedgerTitle(s.game.Title, s.game.Path), ran.Round(time.Second))
 	}
 	saveLedgerPersist(true)
+	// The Save Time Machine's last moment of the session (savetimeline.go).
+	s.scanMu.Lock()
+	roots := s.roots
+	s.scanMu.Unlock()
+	saveTimelineSessionEnded(s.game, roots, how)
 }
 
 // ── Sleep and wake ───────────────────────────────────────────────────────

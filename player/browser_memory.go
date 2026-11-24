@@ -93,6 +93,9 @@ func browserReleaseMemory(config *Config) {
 	delete(config.Variables.Custom, browserFormVariable)
 
 	browserClearPageCache()
+	// Pictures still queued or decoding for the page are thrown away with it
+	// (webpage_decode.go), before their textures are dropped.
+	webDecodeReset()
 	getThumbnailTextures().ClearPrefix("webimg:")
 	browserSharedTransport().CloseIdleConnections()
 

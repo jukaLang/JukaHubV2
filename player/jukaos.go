@@ -558,7 +558,7 @@ func jukaosLoadLayers(h jukaosHost, layersDir string) []jukaosLayer {
 		if len(out) >= jukaosLayersMax {
 			break
 		}
-		if !e.IsDir() || !jukaosValidID(e.Name()) || e.Name() == jukaosBuiltinLibsID {
+		if !e.IsDir() || !jukaosValidID(e.Name()) || e.Name() == jukaosBuiltinLibsID || e.Name() == jukaosFoldersID {
 			continue
 		}
 		dir := filepath.Join(layersDir, e.Name())

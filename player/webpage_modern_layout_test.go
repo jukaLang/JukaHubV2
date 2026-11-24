@@ -19,13 +19,15 @@ func TestWebGridAutoFitUsesTheMeasuredWidth(t *testing.T) {
 		}
 	}
 
-	wide := doc.computeLayout(&Config{}, Element{Font: "body"}, 1600)
+	// The page is laid out at the view's full width: 900 px holds three
+	// 160px (240 layout px) tracks and their gaps, so D starts a second row.
+	wide := doc.computeLayout(&Config{}, Element{Font: "body"}, 900)
 	aRow, aX := webTestTextPosition(t, wide, "A")
 	bRow, bX := webTestTextPosition(t, wide, "B")
 	cRow, cX := webTestTextPosition(t, wide, "C")
 	dRow, dX := webTestTextPosition(t, wide, "D")
 	if aRow != bRow || bRow != cRow || dRow <= aRow || dX != aX || !(aX < bX && bX < cX) {
-		t.Fatalf("auto-fit grid at 1600: A=(%d,%d) B=(%d,%d) C=(%d,%d) D=(%d,%d)",
+		t.Fatalf("auto-fit grid at 900: A=(%d,%d) B=(%d,%d) C=(%d,%d) D=(%d,%d)",
 			aRow, aX, bRow, bX, cRow, cX, dRow, dX)
 	}
 

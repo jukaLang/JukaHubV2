@@ -206,6 +206,42 @@ func TestSsyncConflictName(t *testing.T) {
 	}
 }
 
+func TestSsyncChooseConflictKeepsSelectedSaveActive(t *testing.T) {
+	localDir, remoteDir := ssyncTestState(t)
+	when := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	ssyncTestWrite(t, localDir, "game.srm", "this device", when)
+	ssyncTestWrite(t, remoteDir, "game.srm", "other device", when)
+	local, err := ssyncBuildManifest(context.Background(), ssyncTestRoots(localDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := ssyncBuildManifest(context.Background(), ssyncTestRoots(remoteDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmp := &ssyncComparison{PeerID: "paired-device", PeerName: "There", Local: local, Remote: remote,
+		Plan: ssyncBuildPlan(local, remote, nil, 0, "Here", "There")}
+	if len(cmp.Plan.Items) != 1 || cmp.Plan.Items[0].Action != ssyncConflict || !cmp.Plan.Items[0].LocalWins {
+		t.Fatalf("expected a conflict with this device active: %+v", cmp.Plan)
+	}
+	if !ssyncChooseConflict(cmp, 0, false) || cmp.Plan.Items[0].LocalWins || cmp.Plan.Items[0].CopyPath != "game (from Here).srm" {
+		t.Fatalf("choice did not name the kept copy: %+v", cmp.Plan.Items[0])
+	}
+	peer := &ssyncFakePeer{roots: map[string]string{"retroarch-saves": remoteDir}}
+	res, _ := ssyncExecute(context.Background(), cmp.Plan, peer, ssyncTestRoots(localDir), "There", "before sync with There", nil)
+	if res.Failed != 0 || res.Conflicts != 1 || res.Snapshot == "" {
+		t.Fatalf("sync after choice: %+v", res)
+	}
+	for _, dir := range []string{localDir, remoteDir} {
+		if got := ssyncTestRead(t, dir, "game.srm"); got != "other device" {
+			t.Errorf("%s active save = %q", dir, got)
+		}
+		if got := ssyncTestRead(t, dir, "game (from Here).srm"); got != "this device" {
+			t.Errorf("%s kept save = %q", dir, got)
+		}
+	}
+}
+
 func TestSsyncCleanRel(t *testing.T) {
 	for _, p := range []string{"Zelda.srm", "gba/Pokemon Emerald.sav", "PSP/SAVEDATA/ULUS10041/DATA.BIN", "Zelda (from Brick).srm"} {
 		if got, ok := ssyncCleanRel(p); !ok || got != p {

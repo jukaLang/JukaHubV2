@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -280,6 +281,199 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 			items = append(items, placeholder)
 		}
 		plan.items[row] = items
+	}
+}
+
+// --- Vertical alignment in rows ---------------------------------------------------
+//
+// A browser stretches every cell of a row to the row's height and places the
+// cell's content in it by vertical-align: middle by default (the UA sheet's
+// `tbody, tr { vertical-align: middle }`), or top or bottom from the page's CSS
+// or a valign attribute. The reader used to leave each cell as tall as its own
+// text, at the top: a bordered table whose cells wrap to different heights
+// had a ragged bottom edge, and a short cell beside a long one sat at the top
+// where a browser centres it.
+//
+// Now each cell's own surface — its background, borders and shadow, tagged
+// when the cell is laid out (webTagCellSurface) — is given the row's height,
+// and its content drops by the free rows for middle (half) and bottom (all)
+// alignment (layoutFlexRowItems → webStretchTableCell).
+
+// Table-cell vertical alignment (webStyle.CellVAlign).
+const (
+	webCellVAlignUnset = iota // nothing said: middle, as in a browser
+	webCellVAlignTop
+	webCellVAlignMiddle
+	webCellVAlignBottom
+)
+
+// The parts of a table cell's surface webTagCellSurface marks.
+const (
+	webCellSpans  uint8 = 1 // fills the cell: grows with the row
+	webCellBottom uint8 = 2 // the bottom edge: moves down with the row
+)
+
+// webCellVAlignFrom turns a vertical-align mode into a cell alignment;
+// baseline (also what `inherit` reads as) and lengths say nothing.
+func webCellVAlignFrom(mode int) int {
+	switch mode {
+	case webVerticalTop, webVerticalTextTop:
+		return webCellVAlignTop
+	case webVerticalMiddle:
+		return webCellVAlignMiddle
+	case webVerticalBottom, webVerticalTextBottom:
+		return webCellVAlignBottom
+	}
+	return webCellVAlignUnset
+}
+
+// webHTMLTablePart reports whether tag is a real table element, which the
+// browser's own sheet gives a vertical-align (a CSS `display: table-cell` box
+// starts at baseline instead).
+func webHTMLTablePart(tag string) bool {
+	switch tag {
+	case "table", "thead", "tbody", "tfoot", "tr", "td", "th":
+		return true
+	}
+	return false
+}
+
+// webCellVAlignCascade is the cell alignment a table part hands its cells,
+// as a browser's cascade gives it: value/declared are the part's own
+// vertical-align, role its table role, html whether it is a real table
+// element, parentRole the table role of the element around it and inherited
+// what that element hands down. With nothing declared, the UA sheet's
+// `thead, tbody, tfoot { vertical-align: middle }` applies — to a row
+// straight in its table too, which sits in the tbody the HTML parser adds —
+// and rows and cells inherit; CSS table boxes are at baseline. An explicit
+// baseline (Eric Meyer's reset writes it on every table part) or length lines
+// up first lines, which for one text size is the top; `inherit` (Bootstrap 5's
+// `.table > tbody`) takes the table's.
+func webCellVAlignCascade(role int, html bool, parentRole, inherited int, value string, declared bool) int {
+	if declared {
+		v := strings.ToLower(strings.TrimSpace(value))
+		if v == "inherit" {
+			return inherited
+		}
+		mode, _ := webVerticalAlignValue(v)
+		if a := webCellVAlignFrom(mode); a != webCellVAlignUnset {
+			return a
+		}
+		return webCellVAlignTop
+	}
+	switch role {
+	case webTableRoleTable:
+		return webCellVAlignUnset
+	case webTableRoleHeaderGroup, webTableRoleRowGroup, webTableRoleFooterGroup:
+		if html {
+			return webCellVAlignMiddle
+		}
+		return webCellVAlignTop
+	case webTableRoleRow:
+		switch {
+		case html && parentRole == webTableRoleTable:
+			return webCellVAlignMiddle
+		case html:
+			return inherited
+		}
+		return webCellVAlignTop
+	case webTableRoleCell:
+		if html {
+			return inherited
+		}
+		return webCellVAlignTop
+	}
+	return inherited
+}
+
+// webCellAlignSelf is the row-item alignment a cell's content takes.
+func webCellAlignSelf(v int) int {
+	switch v {
+	case webCellVAlignTop:
+		return webItemStart
+	case webCellVAlignBottom:
+		return webItemEnd
+	}
+	return webItemCenter
+}
+
+// webTableCellKey identifies one cell of one table: its table, row and first
+// column. Never 0 for a real cell (table IDs start at 1).
+func webTableCellKey(st webStyle) int64 {
+	return int64(st.TableID)<<32 | int64(st.TableRow&0xffffff)<<8 | int64(st.TableCol&0xff)
+}
+
+// webTagCellSurface marks the paints a table cell's block just emitted that
+// make up its surface: those covering the cell from its top to its bottom
+// (background, side borders, the border box, a shadow) and its bottom border.
+// top1/top2 are the two tops the block paints from (the padding box and the
+// first row) and height the painted height.
+func webTagCellSurface(layout *webLayout, block webBlock, rectStart, bgStart int, top1, top2, height int32) {
+	if layout == nil || height <= 0 {
+		return
+	}
+	if top2 < top1 {
+		top1, top2 = top2, top1
+	}
+	key := webTableCellKey(block.Style)
+	bottom := top1 + height
+	part := func(r sdl.Rect) uint8 {
+		switch {
+		case r.Y >= top1-1 && r.Y <= top2+1 && r.Y+r.H >= bottom-1:
+			return webCellSpans
+		case r.Y > top2+1 && r.Y+r.H >= bottom-1 && r.H*2 < height:
+			return webCellBottom
+		}
+		return 0
+	}
+	for i := rectStart; i < len(layout.Rects); i++ {
+		if p := part(layout.Rects[i].Rect); p != 0 {
+			layout.Rects[i].cellKey, layout.Rects[i].cellPart = key, p
+		}
+	}
+	for i := bgStart; i < len(layout.Backgrounds); i++ {
+		if p := part(layout.Backgrounds[i].Rect); p != 0 {
+			layout.Backgrounds[i].cellKey, layout.Backgrounds[i].cellPart = key, p
+		}
+	}
+}
+
+// webStretchTableCell gives one cell's tagged surface in its measured
+// sublayout the extra height of its row (in pixels), keeping it at the row's
+// top although the cell's content is about to be merged drop pixels lower.
+// Tags of that cell are cleared, so a table nested in a cell of an outer
+// table is not stretched again by the outer row.
+func webStretchTableCell(sub *webLayout, key int64, extra, drop int32) {
+	if sub == nil || key == 0 {
+		return
+	}
+	for i := range sub.Rects {
+		r := &sub.Rects[i]
+		if r.cellKey != key {
+			continue
+		}
+		switch r.cellPart {
+		case webCellSpans:
+			r.Rect.Y -= drop
+			r.Rect.H += extra
+		case webCellBottom:
+			r.Rect.Y += extra - drop
+		}
+		r.cellKey, r.cellPart = 0, 0
+	}
+	for i := range sub.Backgrounds {
+		bg := &sub.Backgrounds[i]
+		if bg.cellKey != key {
+			continue
+		}
+		switch bg.cellPart {
+		case webCellSpans:
+			bg.Rect.Y -= drop
+			bg.Rect.H += extra
+		case webCellBottom:
+			bg.Rect.Y += extra - drop
+		}
+		bg.cellKey, bg.cellPart = 0, 0
 	}
 }
 

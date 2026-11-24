@@ -160,14 +160,21 @@ func plugToggle(c *Config) {
 	}
 	on := !e.Enabled
 	PlayToggleSound()
+	if on {
+		// A plugin that asks for something not allowed yet asks first
+		// (plugperms.go); switched on, its onEnable action runs.
+		name := e.Name
+		plugAskEnable(c, name, func() {
+			plugSyncCursor()
+			plugAfterToggle(c, name, true)
+		})
+		return
+	}
 	plugSetEnabled(c, e.Name, on)
 	plugSyncCursor()
-	// Says what the switch changed and, switched on, runs the plugin's
-	// onEnable action (plughooks.go).
+	// Says what the switch changed (plughooks.go).
 	plugAfterToggle(c, e.Name, on)
-	if !on {
-		plugUI.inActions = false
-	}
+	plugUI.inActions = false
 }
 
 // plugEnterActions moves the focus onto the plugin's buttons.
@@ -246,6 +253,11 @@ func plugKey(e *sdl.KeyboardEvent, c *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
+	if tbxSheetVisible(c) {
+		// The permissions question (plugperms.go).
+		tbxSheetAction(tbxKeyAction(e))
+		return true
+	}
 	plugEnsureVisit(c)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
@@ -307,6 +319,10 @@ func plugPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 		sdl.CONTROLLER_BUTTON_LEFTSTICK, sdl.CONTROLLER_BUTTON_RIGHTSTICK:
 		return false
 	}
+	if tbxSheetVisible(c) {
+		tbxSheetAction(tbxPadAction(e))
+		return true
+	}
 	plugEnsureVisit(c)
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -355,6 +371,10 @@ func plugPad(e *sdl.ControllerButtonEvent, c *Config) bool {
 
 // plugMouse handles a click or a tap on the page.
 func plugMouse(mx, my int32, c *Config) bool {
+	if tbxSheetVisible(c) {
+		tbxSheetMouse(mx, my)
+		return true
+	}
 	plugEnsureVisit(c)
 	for i, r := range plugUI.switchRects {
 		if r.W > 0 && hitTouchTarget(r, mx, my) {
@@ -405,6 +425,9 @@ func plugWheel(dy int32) {
 
 // plugHints is the page's footer.
 func plugHints() []FooterHint {
+	if tbxSheetVisible(appConfig) {
+		return tbxSheetHints()
+	}
 	if plugUI.inActions {
 		return []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Run"},
 			{Button: "X", Label: "On/Off"}, {Button: "B", Label: "List"}}
@@ -455,6 +478,8 @@ func plugRender(renderer *sdl.Renderer, c *Config) {
 	card := sdl.Rect{X: margin + listW + 20, Y: contentY, W: screenWidth - margin - (margin + listW + 20), H: bottom - contentY}
 	plugDrawList(renderer, title, small, list)
 	plugDrawCard(renderer, c, title, small, big, body, card)
+	// The permissions question over the page (plugperms.go).
+	tbxRenderSheet(renderer, c)
 	renderStatusBar(renderer, c)
 	renderFooter(renderer, c)
 }
@@ -573,6 +598,13 @@ func plugDrawCard(renderer *sdl.Renderer, c *Config, title, small, big, body *tt
 		plugUI.descLines = wrapTextLines(body, setOr(e.Description, "No description in plugin.json."), w, 4)
 	}
 	drawText(renderer, small, ellipsize(small, plugUI.cardMeta, w), x, y, ColorTextTertiary(), textAlignLeft)
+	y += int32(small.Height()) + 4
+	// Where it comes from and what it may do (plugperms.go).
+	trust := ColorTextSecondary()
+	if !e.Bundled {
+		trust = WarningInk()
+	}
+	drawText(renderer, small, ellipsize(small, plugPermsLine(e), w), x, y, trust, textAlignLeft)
 	y += int32(small.Height()) + 12
 
 	bh := int32(body.Height()) + 2

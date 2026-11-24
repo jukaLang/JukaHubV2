@@ -31,9 +31,12 @@ var onboardingSteps = []onboardingStep{
 		kind:  "language",
 	},
 	{
+		// The quick start (onboarding_start.go): play, add games, Wi-Fi or a
+		// look, each one press from here; the rest of the tour is its last
+		// row.
 		title: "Welcome to JukaHub",
-		body:  "Let’s get your handheld ready. This short setup checks the basics, then shows you where everything lives.",
-		hint:  "You can skip the setup or replay it later from Settings.",
+		body:  "What would you like to do first? Everything else can wait.",
+		kind:  "start",
 	},
 	{
 		// The user's name (onboarding_name.go): Home's greeting, the chat and
@@ -238,7 +241,9 @@ func onboardingStepIsSetup() bool {
 	if onboarding.step < 0 || onboarding.step >= len(onboardingSteps) {
 		return false
 	}
-	return onboardingSteps[onboarding.step].kind == "setup"
+	// The quick start's choices are a checklist too (onboarding_start.go).
+	kind := onboardingSteps[onboarding.step].kind
+	return kind == "setup" || kind == "start"
 }
 
 // ── "Get set up" checklist ──────────────────────────────────────────────
@@ -260,7 +265,11 @@ func onboardingSetupRefresh(config *Config, force bool) []setupRow {
 	if !force && onboarding.setupRows != nil && now-onboarding.setupAt < 500 {
 		return onboarding.setupRows
 	}
-	onboarding.setupRows = setupChecklist(liveSetupEnv(config), setupActionsFor())
+	if onboardingSteps[onboarding.step].kind == "start" {
+		onboarding.setupRows = onboardingStartRows(config)
+	} else {
+		onboarding.setupRows = setupChecklist(liveSetupEnv(config), setupActionsFor())
+	}
 	onboarding.setupAt = now
 	if onboarding.setupCursor >= len(onboarding.setupRows) {
 		onboarding.setupCursor = len(onboarding.setupRows) - 1
@@ -797,7 +806,7 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		cardW = screenWidth - 32
 	}
 	cardH := int32(470)
-	if step.kind == "setup" || step.kind == "language" || step.kind == "layout" {
+	if step.kind == "setup" || step.kind == "start" || step.kind == "language" || step.kind == "layout" {
 		// The checklist and the language list need a row per entry; the plain
 		// steps do not.
 		cardH = 600
@@ -868,7 +877,12 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	// the rune cut that was here split a word across the break ("th" over
 	// "n shows" on the Brick) and appended "…" even when nothing was cut.
 	onboarding.bodyLines = nil
-	if step.kind == "setup" {
+	if step.kind == "start" {
+		// One line of body above the choices.
+		renderText(renderer, config, bodyFont, ellipsize(bodyFont, step.body, textW), ColorTextSecondary(), textX, bodyY)
+		bodyY += int32(bodyFont.Height()) + 16
+	}
+	if step.kind == "setup" || step.kind == "start" {
 		onboardingRenderSetup(renderer, config, cy, cx, cardW, cardH, textX, textW, bodyY, bodyFont, smallFont, accent)
 	} else if step.kind == "language" {
 		// On a narrow card the text column starts under the coin, not beside
@@ -982,6 +996,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Open"},
 			FooterHint{"B", "Done"})
 	}
+	if step.kind == "start" {
+		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Go"},
+			FooterHint{"B", "Skip"})
+	}
 	if step.kind == "language" {
 		footer = hintLine(FooterHint{"Up/Down", "Choose"}, FooterHint{"A / Enter", "Next"},
 			FooterHint{"B", "Skip"})
@@ -1013,7 +1031,7 @@ func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW
 	if len(rows) == 0 {
 		return
 	}
-	if summary := setupSummary(rows); summary != "" {
+	if summary := setupSummary(rows); summary != "" && onboardingSteps[onboarding.step].kind == "setup" {
 		w, _, _ := smallFont.SizeUTF8(summary)
 		renderText(renderer, config, smallFont, summary, ColorTextSecondary(),
 			cx+cardW-52-int32(w), cy+28)

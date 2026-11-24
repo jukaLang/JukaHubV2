@@ -3,9 +3,10 @@ package main
 // webpage_hints.go — what old HTML says with attributes, and the CSS idioms the
 // reader used to draw wrongly.
 //
-// HTML still carries a presentation layer of its own: bgcolor, align, width,
-// border, cellpadding and cellspacing on tables, <font color size face>, the
-// text and link colours on <body>, a list's type. Hacker News, forums, mailing
+// HTML still carries a presentation layer of its own: bgcolor, align, valign,
+// width, border, cellpadding, cellspacing, nowrap and background on tables,
+// <font color size face>, the text and link colours (and background) on
+// <body>, an image's hspace/vspace, a list's type. Hacker News, forums, mailing
 // list archives and most pages written before CSS layout are built from them,
 // and the reader ignored every one: a table's coloured header bar, its widths
 // and its spacing were lost, and so was the red of a <font color> warning.
@@ -22,6 +23,9 @@ package main
 //   - `background-clip: text` gradient headings: the ramp shows through the
 //     glyphs. The reader cannot clip a ramp to glyph shapes, so the text takes
 //     the ramp's colour and the box paints no slab behind it.
+//
+// and soft hyphens (&shy;), which are break points rather than characters
+// (webSoftHyphenSplit).
 
 import (
 	"math"
@@ -70,6 +74,22 @@ func (p *webParser) webPresentationalHints(el *webElement) map[string]string {
 			}
 		}
 	}
+	// valign places a row's or a cell's content in a taller row
+	// (webpage_table.go); it is the vertical-align a browser maps it to.
+	valign := func() {
+		if v, ok := attr("valign"); ok {
+			if a, valid := webLegacyVerticalAlign(v); valid {
+				set("vertical-align", a)
+			}
+		}
+	}
+	// background="tile.gif" on the body, a table, a row or a cell is a
+	// background image, resolved against the page like any url().
+	background := func() {
+		if v, ok := attr("background"); ok && v != "" && !strings.ContainsAny(v, "\"\\\n\r") {
+			set("background-image", `url("`+v+`")`)
+		}
+	}
 	if el.tag == "td" || el.tag == "th" {
 		if table, ok := p.webOpenTable(); ok {
 			if v, has := table.attr("cellpadding"); has {
@@ -92,6 +112,7 @@ func (p *webParser) webPresentationalHints(el *webElement) map[string]string {
 	case "body":
 		color("bgcolor", "background-color")
 		color("text", "color")
+		background()
 		if v, ok := attr("link"); ok {
 			if c, valid := webLegacyColor(v); valid {
 				p.linkColor = c
@@ -113,6 +134,7 @@ func (p *webParser) webPresentationalHints(el *webElement) map[string]string {
 		}
 	case "table":
 		color("bgcolor", "background-color")
+		background()
 		length("width", "width", true)
 		if v, ok := attr("cellspacing"); ok {
 			if l, valid := webLegacyLength(v, false); valid {
@@ -129,11 +151,21 @@ func (p *webParser) webPresentationalHints(el *webElement) map[string]string {
 	case "tr", "thead", "tbody", "tfoot":
 		color("bgcolor", "background-color")
 		align(true)
+		valign()
+		if el.tag == "tr" {
+			background()
+		}
 	case "td", "th":
 		color("bgcolor", "background-color")
 		align(true)
+		valign()
+		background()
 		length("width", "width", true)
 		length("height", "height", false)
+		// <td nowrap> is white-space: nowrap, as in every browser.
+		if el.hasAttr("nowrap") {
+			set("white-space", "nowrap")
+		}
 	case "div", "caption", "legend":
 		if mentions("align") {
 			align(true)
@@ -155,6 +187,15 @@ func (p *webParser) webPresentationalHints(el *webElement) map[string]string {
 			case "top", "texttop":
 				set("vertical-align", "top")
 			}
+		}
+		// hspace/vspace are the picture's side and top/bottom margins.
+		if mentions("hspace") {
+			length("hspace", "margin-left", false)
+			length("hspace", "margin-right", false)
+		}
+		if mentions("vspace") {
+			length("vspace", "margin-top", false)
+			length("vspace", "margin-bottom", false)
 		}
 	case "hr":
 		length("width", "width", true)
@@ -321,6 +362,53 @@ func webLegacyTextAlign(value string, centerBlocks bool) (string, bool) {
 			return "-webkit-center", true
 		}
 		return "center", true
+	}
+	return "", false
+}
+
+// --- soft hyphens ---------------------------------------------------------------
+
+// webSoftHyphen is U+00AD (&shy;): an invisible point where a long word may
+// break, with a hyphen shown only when it does. Fonts draw the character as a
+// hyphen, so German and Dutch pages (and Wikipedia's long compounds) read
+// "Ver-kehrs-mi-nis-ter" before the reader dropped it.
+const webSoftHyphen = "\u00ad"
+
+// webSoftHyphenSplit breaks word at its last soft hyphen whose part before it,
+// with a visible hyphen added, measures at most room. prefix is that part with
+// the hyphen; rest is the remainder, still holding its own soft hyphens. ok
+// is false when no soft hyphen leaves a part that fits.
+func webSoftHyphenSplit(word string, room int32, measure func(string) int32) (prefix, rest string, ok bool) {
+	best := -1
+	for i := 0; i < len(word); {
+		r, size := utf8.DecodeRuneInString(word[i:])
+		if r == '\u00ad' && i > 0 {
+			if measure(strings.ReplaceAll(word[:i], webSoftHyphen, "")+"-") > room {
+				break
+			}
+			best = i
+		}
+		i += size
+	}
+	if best < 0 {
+		return "", word, false
+	}
+	prefix = strings.ReplaceAll(word[:best], webSoftHyphen, "") + "-"
+	rest = word[best+len(webSoftHyphen):]
+	if strings.ReplaceAll(rest, webSoftHyphen, "") == "" {
+		return "", word, false
+	}
+	return prefix, rest, true
+}
+
+// webLegacyVerticalAlign maps a valign attribute (top, middle, bottom,
+// baseline; "center" is read as middle, as browsers do).
+func webLegacyVerticalAlign(value string) (string, bool) {
+	switch v := strings.ToLower(strings.TrimSpace(value)); v {
+	case "top", "middle", "bottom", "baseline":
+		return v, true
+	case "center":
+		return "middle", true
 	}
 	return "", false
 }

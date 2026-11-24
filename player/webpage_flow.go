@@ -217,6 +217,22 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 		float.Y += dy
 		l.layout.Floats = append(l.layout.Floats, float)
 	}
+	// A positioned subtree that started inside the item keeps its static
+	// position, moved with the item (webpage_layers.go).
+	l.mergeStatics(sub, x, dy)
+}
+
+// mergeStatics moves a sublayout's layer static positions into this layout.
+func (l *webLayouter) mergeStatics(sub *webLayout, dx, dy int32) {
+	if len(sub.statics) == 0 {
+		return
+	}
+	if l.layout.statics == nil {
+		l.layout.statics = make(map[int]webStaticPos, len(sub.statics))
+	}
+	for id, pos := range sub.statics {
+		l.layout.statics[id] = webStaticPos{X: pos.X + dx, Y: pos.Y + dy}
+	}
 }
 
 // mergeFlexSubLayoutAtY merges a measured sublayout at an exact pixel Y. The
@@ -289,6 +305,7 @@ func (l *webLayouter) mergeFlexSubLayoutAtY(sub *webLayout, x, y int32) {
 		float.Y += y
 		l.layout.Floats = append(l.layout.Floats, float)
 	}
+	l.mergeStatics(sub, x, y)
 }
 
 // layoutFlexColumnAuto is the column counterpart of the row main-axis path.
@@ -583,14 +600,20 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 		boxH = floor + padTop + padBot
 	}
 	endRow = startRow + int32(math.Ceil(float64(boxH)/float64(l.rowH)))
+	// A float paints over the flow's surfaces and under its text and every
+	// positioned layer (webpage_layers.go), in document order.
 	l.layout.Floats = append(l.layout.Floats, webFloat{
 		Z:           block.ZIndex,
 		X:           x,
 		Y:           startRow * l.rowH,
+		H:           boxH,
+		Phase:       webLayerFloat,
+		Key:         webFreeStackKey(block.ZIndex, block.TreeSeq),
 		Rows:        sub.Rows,
 		Rects:       sub.Rects,
 		Backgrounds: sub.Backgrounds,
 		Images:      sub.Images,
+		Videos:      sub.Videos,
 	})
 	return endRow, width
 }
@@ -842,18 +865,48 @@ func (l *webLayouter) paintContainerBoxes() {
 			addRun(run, row.Y, 0, 0)
 		}
 	}
+	// A float still widens the boxes it sits in, as it always did here. A
+	// positioned layer does not: it paints its own boxes, and CSS keeps it
+	// out of its ancestors' size (webpage_layers.go).
 	for _, f := range l.layout.Floats {
+		if f.Phase != webLayerFloat {
+			continue
+		}
 		for _, row := range f.Rows {
 			for _, run := range row.Runs {
 				addRun(run, row.Y, f.X, f.Y)
 			}
 		}
 	}
+	// Pictures are part of their boxes too: a card's surface reaches up
+	// behind the photo at its top, and a figure's around its image.
+	for _, im := range l.layout.Images {
+		if im.Rect.W <= 0 || im.Rect.H <= 0 {
+			continue
+		}
+		for _, id := range im.Boxes {
+			span := spans[id]
+			if span == nil {
+				span = &containerBoxSpan{}
+				spans[id] = span
+			}
+			if !span.seen {
+				span.minX, span.minY, span.seen = im.Rect.X, im.Rect.Y, true
+			}
+			span.minX = min32(span.minX, im.Rect.X)
+			span.minY = min32(span.minY, im.Rect.Y)
+			span.maxX = max32(span.maxX, im.Rect.X+im.Rect.W)
+			span.maxY = max32(span.maxY, im.Rect.Y+im.Rect.H)
+		}
+	}
 	// Creation order is outer-to-inner for nested boxes, so a child's surface
-	// paints over its parent's instead of being hidden by it.
+	// paints over its parent's instead of being hidden by it. A layer's pass
+	// paints only the boxes from its root's on (boxFloor).
 	ids := make([]int, 0, len(spans))
 	for id := range spans {
-		ids = append(ids, id)
+		if id >= l.boxFloor {
+			ids = append(ids, id)
+		}
 	}
 	sort.Ints(ids)
 	scale := l.baseSize / 16
@@ -892,9 +945,13 @@ func (l *webLayouter) paintContainerBoxes() {
 		if span == nil || !span.seen {
 			continue
 		}
+		// The run's X starts after the wrapper's left padding/margin. The
+		// painter wants the border-box edge, so back that inset out here.
+		left := int32(info.style.Indent * scale)
 		w := span.width
 		if w <= 0 {
-			w = span.maxX - span.minX
+			// No text, only pictures: the box wraps them and its padding.
+			w = span.maxX - span.minX + left + int32(info.style.IndentRight*scale)
 		}
 		if span.maxX > span.minX+w {
 			w = span.maxX - span.minX
@@ -910,9 +967,6 @@ func (l *webLayouter) paintContainerBoxes() {
 		if bottom < 0 {
 			bottom = 0
 		}
-		// The run's X starts after the wrapper's left padding/margin. The
-		// painter wants the border-box edge, so back that inset out here.
-		left := int32(info.style.Indent * scale)
 		x, y := span.minX-left, span.minY-top
 		h := span.maxY - span.minY + top + bottom
 		// A definite height sizes the wrapper's painted box even when its
@@ -943,7 +997,11 @@ func (l *webLayouter) paintContainerBoxes() {
 		if w <= 0 || h <= 0 {
 			continue
 		}
+		// The union is the box's own surface: tagged with its ID it paints in
+		// tree order, under the boxes and pictures nested in it.
+		rectStart, bgStart := len(l.layout.Rects), len(l.layout.Backgrounds)
 		l.paintWebBox(info, sdl.Rect{X: x, Y: y, W: w, H: h})
+		l.tagPaints(id, false, rectStart, bgStart)
 	}
 }
 
@@ -976,7 +1034,12 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 	}
 	for _, id := range block.Boxes[start:end] {
 		info, ok := l.doc.Boxes[id]
-		if !ok {
+		if override, found := l.boxOverride[id]; found {
+			// A layer's root, whose width the layer already took.
+			info, ok = override, true
+		}
+		if !ok || info.anchor {
+			// An anchor box only names a containing block.
 			continue
 		}
 		// A block whose style is the same element style already had its own
@@ -1067,6 +1130,8 @@ func (l *webLayouter) boxHasNestedBlocks(id int) bool {
 // removeBoxPaints drops the partial surface a direct block painted for a
 // wrapper that also has nested content. Layered fills are removed together so
 // a translucent background is not applied twice when the union replaces it.
+// Content painted inside the box (an image's frame, Inner) is not the box's
+// surface and stays.
 func (l *webLayouter) removeBoxPaints(id int) {
 	if l == nil || l.layout == nil || id == 0 {
 		return
@@ -1074,7 +1139,7 @@ func (l *webLayouter) removeBoxPaints(id int) {
 	if len(l.layout.Rects) > 0 {
 		kept := l.layout.Rects[:0]
 		for _, r := range l.layout.Rects {
-			if r.BoxID != id {
+			if r.BoxID != id || r.Inner {
 				kept = append(kept, r)
 			}
 		}
@@ -1083,7 +1148,7 @@ func (l *webLayouter) removeBoxPaints(id int) {
 	if len(l.layout.Backgrounds) > 0 {
 		kept := l.layout.Backgrounds[:0]
 		for _, bg := range l.layout.Backgrounds {
-			if bg.BoxID != id {
+			if bg.BoxID != id || bg.Inner {
 				kept = append(kept, bg)
 			}
 		}
@@ -1133,6 +1198,18 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 			width = max(width, run.BoxWidth)
 		}
 	}
+	// A picture is part of the box as much as its text: a relative wrapper
+	// around a photo is the containing block of the badge over the photo.
+	for _, im := range l.layout.Images {
+		if im.Rect.W <= 0 || im.Rect.H <= 0 || !webBoxesHave(im.Boxes, id) {
+			continue
+		}
+		seen = true
+		minX = min32(minX, im.Rect.X)
+		minY = min32(minY, im.Rect.Y)
+		maxX = max(maxX, im.Rect.X+im.Rect.W)
+		maxY = max(maxY, im.Rect.Y+im.Rect.H)
+	}
 	if !seen {
 		return sdl.Rect{}, false
 	}
@@ -1140,6 +1217,10 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	left := int32(math.Round(info.style.Indent * scale))
 	top := int32(math.Round(info.style.MarginTop * scale))
 	bottom := int32(math.Round(info.style.MarginBot * scale))
+	if info.anchor {
+		// An anchor box reserved no margins in the flow (syncBoxes).
+		top, bottom = 0, 0
+	}
 	if left < 0 {
 		left = 0
 	}
@@ -1151,7 +1232,8 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	}
 	w := width
 	if w <= 0 {
-		w = maxX - minX
+		// Only pictures: the box wraps them and its padding, as it is painted.
+		w = maxX - minX + left + int32(math.Round(info.style.IndentRight*scale))
 	}
 	if maxX > minX+w {
 		w = maxX - minX
@@ -2928,6 +3010,12 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 				drop = freeRows
 			}
 		}
+		if tableRow {
+			// A table cell's background and borders fill the row however
+			// short its content is; the content sits by its vertical-align
+			// (webpage_table.go).
+			webStretchTableCell(cell.sub, webTableCellKey(grouped[i].blocks[0].Style), freeRows*l.rowH, drop*l.rowH)
+		}
 		// Merge every layer the item measured, not just its text, boxes and
 		// images: a card's gradient/background image, an embedded video and a
 		// positioned badge all live beside the rows and used to disappear when
@@ -2936,174 +3024,13 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 	}
 }
 
-// layoutFloats measures the absolutely positioned blocks and parks them in the
-// layer list. They take no room in the flow; the painter draws them over the
-// page in ascending z-index order.
-func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
-	if len(blocks) == 0 {
-		return
-	}
-	scale := l.baseSize / 16
-	if scale <= 0 {
-		scale = 1
-	}
-	pageH := int32(len(l.layout.Rows)) * l.rowH
-	for _, b := range blocks {
-		// Find the nearest positioned ancestor before choosing a width:
-		// `left` plus `right` stretch an inset overlay across that box instead
-		// of leaving it at the reader's caption-sized default.
-		anchor := sdl.Rect{X: padX, Y: 0, W: contentW, H: pageH}
-		if b.Style.Position == webPositionFixed {
-			// fixed: the viewport is the containing block, so right:0 and
-			// bottom:0 reach the screen edge rather than the body's inset.
-			anchor = sdl.Rect{X: 0, Y: 0, W: contentW + 2*padX, H: pageH}
-		} else {
-			for i := len(b.Boxes) - 1; i >= 0; i-- {
-				info, ok := l.doc.Boxes[b.Boxes[i]]
-				if !ok || info.style.Position != webPositionRelative {
-					continue
-				}
-				if rect, ok := l.boxFlowRect(b.Boxes[i]); ok {
-					anchor = rect
-				}
-				break
-			}
-		}
-		autoWidth := b.WidthPct <= 0 && b.Width <= 0 && b.BasisPct <= 0 && b.FlexBasis <= 0
-		w := contentW
-		switch {
-		case b.WidthPct > 0:
-			w = int32(float64(contentW) * b.WidthPct / 100)
-		case b.Width > 0:
-			w = int32(b.Width * scale)
-		case b.BasisPct > 0:
-			w = int32(float64(contentW) * b.BasisPct / 100)
-		case b.FlexBasis > 0:
-			w = int32(b.FlexBasis * scale)
-		case autoWidth && b.HasLeft && b.HasRight:
-			w = anchor.W - webInsetPx(b.PosLeft, b.Style.InsetPct[3], anchor.W, scale) -
-				webInsetPx(b.PosRight, b.Style.InsetPct[1], anchor.W, scale)
-		case autoWidth:
-			// An auto-width layer has no intrinsic width in a text reader.
-			// A caption-sized column reads better than a full-bleed strip.
-			w = int32(l.baseSize * 18)
-			if w < 140 {
-				w = 140
-			}
-			if w > contentW {
-				w = contentW
-			}
-		}
-		if w < 60 {
-			if autoWidth && b.HasLeft && b.HasRight {
-				if w < 1 {
-					w = 1
-				}
-			} else {
-				w = 60
-			}
-		}
-		if w > contentW && !(autoWidth && b.HasLeft && b.HasRight) {
-			w = contentW
-		}
-
-		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
-			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
-			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
-		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
-		l.absorbContainerRows(subLayouter.containerRows)
-		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
-			continue
-		}
-		h := int32(len(sub.Rows)) * l.rowH
-		// Percentage insets resolve against the containing block (a fixed
-		// layer's vertical ones against the screen), and translate() moves the
-		// box by lengths and by percentages of its own size: the
-		// `left: 50%; transform: translate(-50%, -50%)` centring idiom.
-		vertical := anchor.H
-		if b.Style.Position == webPositionFixed {
-			if _, vh := webMediaViewport(); vh > 0 {
-				vertical = int32(vh * scale)
-			}
-		}
-		x := anchor.X
-		switch {
-		case b.HasLeft:
-			x = anchor.X + webInsetPx(b.PosLeft, b.Style.InsetPct[3], anchor.W, scale)
-		case b.HasRight:
-			x = anchor.X + anchor.W - w - webInsetPx(b.PosRight, b.Style.InsetPct[1], anchor.W, scale)
-		}
-		y := anchor.Y
-		switch {
-		case b.HasTop:
-			y = anchor.Y + webInsetPx(b.PosTop, b.Style.InsetPct[0], vertical, scale)
-		case b.HasBottom:
-			y = anchor.Y + anchor.H - h - webInsetPx(b.PosBottom, b.Style.InsetPct[2], vertical, scale)
-		}
-		if b.Style.HasTranslate {
-			x += int32(math.Round(b.Style.TranslateX*scale + b.Style.TranslatePctX*float64(w)/100))
-			y += int32(math.Round(b.Style.TranslateY*scale + b.Style.TranslatePctY*float64(h)/100))
-		}
-		if y < 0 {
-			y = 0
-		}
-		l.layout.Floats = append(l.layout.Floats, webFloat{
-			Z:           b.ZIndex,
-			X:           x,
-			Y:           y,
-			Rows:        sub.Rows,
-			Rects:       sub.Rects,
-			Backgrounds: sub.Backgrounds,
-			Images:      sub.Images,
-		})
-	}
-	sort.SliceStable(l.layout.Floats, func(i, j int) bool {
-		return l.layout.Floats[i].Z < l.layout.Floats[j].Z
-	})
-}
-
-// drawWebFloats paints the stacked layers over the flow. It runs inside the
-// page's clip rect, so a layer that scrolls out of view is clipped as a whole
-// instead of leaking over the toolbar. under selects the layers with a
-// negative z-index, which belong behind the text; the rest go on top.
-func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, offset int32, under bool) {
-	for _, f := range layout.Floats {
-		if (f.Z < 0) != under {
-			continue
-		}
-		top := rect.Y + f.Y - offset
-		if top+int32(len(f.Rows))*layout.RowH <= rect.Y || top >= rect.Y+rect.H {
-			continue
-		}
-		drawWebLayer(r, config, doc, layout, rect, f, top)
-	}
-}
-
-// drawWebStickies paints the sticky blocks that have scrolled past their
-// normal position. A sticky block keeps its flow rows (so it reserves space)
-// and this pass adds the pinned copy at its top offset, which is the other
-// half of CSS sticky: the page may scroll underneath it while it stays.
-func drawWebStickies(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, offset int32) {
-	for _, f := range layout.Stickies {
-		if offset <= f.Y {
-			// The block is still at or above its flow position; the normal
-			// painting already shows it there.
-			continue
-		}
-		top := rect.Y + f.Top - f.Y
-		if top >= rect.Y+rect.H {
-			continue
-		}
-		drawWebLayer(r, config, doc, layout, rect, f, top)
-	}
-}
-
-// drawWebLayer paints one positioned block: backgrounds and images below its
-// borders and text, matching the order of an in-flow box. Sticky overlays and
-// absolutely positioned floats share this body; they differ only in how top
-// is derived from the scroll offset.
-func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, f webFloat, top int32) {
+// drawWebLayer paints one layer whose top-left corner is at (rect.X+f.X, top)
+// on screen: backgrounds and images below its borders and text, matching the
+// order of an in-flow box. Positioned layers, floats and pinned sticky copies
+// share this body (webpage_layers.go); they differ only in how top is derived
+// from the scroll offset. A sticky copy's run clips were measured at its flow
+// place, so they are dropped (sticky).
+func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, f *webFloat, top int32, sticky bool) {
 	// Background layers sit under the box borders and content, exactly as
 	// they do on an in-flow card. A fixed or sticky header usually carries
 	// its only colour here, so dropping these left it transparent.
@@ -3128,7 +3055,7 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 			drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, bg.Radius, bg.Gradient)
 			continue
 		}
-		fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
+		webPaintFill(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
 	}
 	for _, im := range f.Images {
 		if im.Invisible {
@@ -3139,6 +3066,16 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 			continue
 		}
 		drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
+	}
+	for _, v := range f.Videos {
+		if v.Invisible {
+			continue
+		}
+		y := top + v.Rect.Y
+		if v.Rect.H <= 0 || y >= rect.Y+rect.H || y+v.Rect.H <= rect.Y {
+			continue
+		}
+		drawWebVideo(r, config, doc, v, rect.X+f.X+v.Rect.X, y)
 	}
 	for _, bg := range f.Rects {
 		if bg.BackgroundFill || bg.Shadow {
@@ -3156,40 +3093,26 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 			if thickness < 1 {
 				thickness = 1
 			}
-			strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
+			webPaintStroke(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
 			continue
 		}
 		if bg.HasGradient {
 			drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
 			continue
 		}
-		fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
+		webPaintFill(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
 	}
-	for _, row := range f.Rows {
-		y := top + row.Y
+	// The rows are drawn the way the page draws its own (webpage_paintfast.go):
+	// joined stretches with their chips, shadows and decorations. A layer's
+	// run clips are in its own coordinates.
+	for i := range f.Rows {
+		y := top + f.Rows[i].Y
 		if y >= rect.Y+rect.H {
 			break
 		}
-		for _, run := range row.Runs {
-			if run.Invisible || run.Image != nil {
-				// An inline image is painted with f.Images.
-				continue
-			}
-			if run.Font == nil {
-				continue
-			}
-			// The baseline and vertical-align offsets move a run within its
-			// row here as on the page.
-			textY := y + run.VerticalOffset
-			if run.HasBg {
-				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil {
-					fillRoundedRect(r, rect.X+f.X+run.X-2, textY-1, int32(w)+4, int32(h), 3, run.Bg)
-				}
-			}
-			drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X, textY)
-			if run.Bold && !webFontIsBold(run.Font) {
-				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+f.X+run.X+1, textY)
-			}
+		if y+3*layout.RowH <= rect.Y {
+			continue
 		}
+		drawWebPaintRowAt(r, config, f.paintRuns(i, sticky), rect.X+f.X, y, rect, rect.X+f.X, top)
 	}
 }

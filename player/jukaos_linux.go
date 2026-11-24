@@ -132,7 +132,13 @@ func jukaosSessionEntry() {
 		return
 	}
 	h := jukaosHostFor(appDir)
+	// The generated layers: JukaHub's libs for games, and one BIOS folder
+	// for every emulator (libfolders.go) — that one walks the BIOS folders,
+	// so only when it is switched on.
 	all := append(jukaosLoadLayers(h, jukaosLayersDir(appDir)), jukaosBuiltinLayer(appDir))
+	if state.Layers[jukaosFoldersID] {
+		all = append(all, jukaosFoldersLayer(h))
+	}
 	layers := jukaosEnabledLayers(all, state)
 	info := jukaosSessionInfo{PID: os.Getpid()}
 	for _, l := range all {

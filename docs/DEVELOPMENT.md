@@ -151,6 +151,7 @@ Environment variables:
 | `JUKAHUB_UI_PRIORITY=0` | TrimUI: keep the main (screen) thread at the normal priority (by default it runs at nice −5 with `SCHED_RESET_ON_FORK`, so what it starts begins at 0; see [DEVICE_TUNING.md](DEVICE_TUNING.md#faster-menus)) |
 | `JUKAHUB_GAME_START=0` | TrimUI: no Faster game starts window for this run: no 1 MB card read-ahead, no step back of JukaHub's threads and no start warm-up during a game's first 10 s (the clock part follows the Settings row; see [DEVICE_TUNING.md](DEVICE_TUNING.md#faster-game-starts)) |
 | `JUKAHUB_LAUNCH_BATCH=0` | Sync each launch-time RetroArch setting to the card on its own, as before 2026-11-23 (by default a library launch writes them as they come and syncs the journal and each file once, just before the game starts; `racfgscope.go`) |
+| `JUKAHUB_WEB_DECODE=0` / `=N` | TrimUI: decode the Browser's pictures on the drawing thread when they are drawn, as before 2026-11-23 (`0`), or with N threads (1-8); by default the Smart Pro S uses 4 and the A133P models 2, scaling each picture to its box (`webpage_tune.go`, `webpage_decode.go`; see [BROWSER.md](BROWSER.md#speed-on-the-handhelds)) |
 
 `startup-bench.sh` builds once, deletes the marker before every sample and
 fails on a median over the limit. CI runs it with a 5 s limit (the runner is

@@ -1417,6 +1417,11 @@ func feActions(config *Config) []feAction {
 	if a, ok := manFilesAction(targets); ok {
 		actions = append(actions, a)
 	}
+	// One file's checksums, and the comparison with a published one
+	// (filecheck_ui.go).
+	if a, ok := fileCheckFilesAction(targets); ok {
+		actions = append(actions, a)
+	}
 	// The saved default apps, once there is one (openwith.go).
 	if a, ok := owDefaultAppsAction(config); ok {
 		actions = append(actions, a)
@@ -1676,6 +1681,8 @@ func feSheetActivate(config *Config) {
 		shelfDOSImportStart(targets)
 	case feActGameManual:
 		manFilesActivate(config, feSelectionTargets(config))
+	case feActChecksum:
+		fileCheckFilesActivate(config, feSelectionTargets(config))
 	case feActOpenWith, feActDefaultApps:
 		owFilesActivate(config, action.Kind, feSelectionTargets(config))
 	case feActDualPane, feActDualCopy, feActDualMove:

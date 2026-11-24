@@ -48,6 +48,11 @@ type pkgExtra struct {
 	Changelog string
 	Featured  bool
 	Homepage  string
+	// Screenshots are pictures of the app (HTTPS links; the sheet shows the
+	// first three, storeshots.go); CheckedOn are the handhelds someone
+	// checked it on, apart from the "device" list its author made it for.
+	Screenshots []string
+	CheckedOn   []string
 }
 
 // pkgEntry is one registry entry with its extras.
@@ -107,12 +112,14 @@ func pkgParseExtra(item json.RawMessage) pkgExtra {
 		return pkgExtra{}
 	}
 	return pkgExtra{
-		Category:  pkgRawString(fields, "category", "categories"),
-		Icon:      pkgRawString(fields, "icon", "image", "artwork", "logo"),
-		Size:      pkgRawSize(fields, "size", "download_size", "filesize"),
-		Changelog: pkgRawText(fields, "changelog", "whats_new", "whatsnew", "release_notes"),
-		Featured:  pkgRawBool(fields, "featured"),
-		Homepage:  pkgRawString(fields, "homepage", "website", "repository", "repo"),
+		Category:    pkgRawString(fields, "category", "categories"),
+		Icon:        pkgRawString(fields, "icon", "image", "artwork", "logo"),
+		Size:        pkgRawSize(fields, "size", "download_size", "filesize"),
+		Changelog:   pkgRawText(fields, "changelog", "whats_new", "whatsnew", "release_notes"),
+		Featured:    pkgRawBool(fields, "featured"),
+		Homepage:    pkgRawString(fields, "homepage", "website", "repository", "repo"),
+		Screenshots: pkgRawList(fields, 3, "screenshots", "screenshot"),
+		CheckedOn:   pkgRawList(fields, 8, "checked_on", "tested_on", "works_on"),
 	}
 }
 

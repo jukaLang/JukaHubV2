@@ -22,6 +22,14 @@ package main
 // Liberation or Noto Sans Mono on Linux). A machine without one keeps drawing
 // them in the UI face.
 //
+// Serif runs (a serif font-family: Georgia, Times, Wikipedia's Linux
+// Libertine headings, "Source Serif"...) use a serif face: a *Serif*.ttf in
+// JukaHub's fonts folder, Georgia or Times New Roman on Windows, DejaVu,
+// Liberation or Noto Serif on Linux, and otherwise — on every handheld — the
+// Library theme's embedded serif (Lora, OFL). A word the serif cannot set
+// stays in the UI face, and Legible reading font or Bold text keep everything
+// in the UI face.
+//
 // Icon fonts: Private Use Area code points (Font Awesome's ::before content)
 // are dropped before a word is measured — Inter maps parts of that area to its
 // own alternates, so they used to draw as stray letters — and the ligature
@@ -30,6 +38,8 @@ package main
 
 import (
 	htmlstd "html"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -48,6 +58,7 @@ type webFaceRequest struct {
 	bold   bool
 	italic bool
 	mono   bool
+	serif  bool
 }
 
 // webBoldFaces remembers every face opened as a bold cut or emboldened copy,
@@ -88,11 +99,12 @@ func webFaceStyle(bold, italic bool) int {
 	return style
 }
 
-// webReaderFace is the face a bold, italic or monospace run is measured and
-// drawn in, opened at the pixel size the regular face is (px is the reader's
-// size before the legibility floor and accessibility scale, as fontAt passes
-// it to getFontSized). nil keeps the run in the regular face. Render thread.
-func webReaderFace(config *Config, role string, px int, bold, italic, mono bool) *ttf.Font {
+// webReaderFace is the face a bold, italic, monospace or serif run is measured
+// and drawn in, opened at the pixel size the regular face is (px is the
+// reader's size before the legibility floor and accessibility scale, as fontAt
+// passes it to getFontSized). nil keeps the run in the regular face. Render
+// thread.
+func webReaderFace(config *Config, role string, px int, bold, italic, mono, serif bool) *ttf.Font {
 	size := a11yScaleFontSize(uiLegibleFontSize(px))
 	if mono {
 		if path := termPtyMonoFontPath(); path != "" {
@@ -101,6 +113,10 @@ func webReaderFace(config *Config, role string, px int, bold, italic, mono bool)
 			if font := webOpenReaderFace(path, size, webFaceStyle(bold || a11y.boldText, italic), false); font != nil {
 				return font
 			}
+		}
+	} else if serif {
+		if font := webSerifFace(size, bold, italic); font != nil {
+			return font
 		}
 	}
 	if !bold && !italic {
@@ -236,41 +252,47 @@ const (
 	webFamilyText
 	webFamilyMono
 	webFamilyIcon
+	webFamilySerif
 )
 
 // webApplyFontFamily reads a font-family list (from the longhand or the font
-// shorthand). The reader draws in its UI face or a monospace face, so the list
-// only decides which of the two a run uses and whether its words are icon
-// names: the first family the reader recognises decides. A list of families it
-// has never heard of ("Brand Sans Pro", "FontAwesome") leaves the inherited
-// choice alone, so a site's own code font keeps <code> monospaced.
+// shorthand). The reader draws in its UI face, a monospace face or a serif
+// face, so the list only decides which of the three a run uses and whether its
+// words are icon names: the first family the reader recognises decides. A list
+// of families it has never heard of ("Brand Sans Pro", "FontAwesome") leaves
+// the inherited choice alone, so a site's own code font keeps <code>
+// monospaced.
 func webApplyFontFamily(st *webStyle, value string) {
 	v := strings.TrimSpace(value)
 	switch strings.ToLower(v) {
 	case "", "inherit", "unset", "revert", "revert-layer":
 		return
 	case "initial":
-		st.Mono, st.IconFont = false, false
+		st.Mono, st.IconFont, st.Serif = false, false, false
 		return
 	}
 	for _, family := range strings.Split(v, ",") {
 		switch webFontFamilyKind(family) {
 		case webFamilyMono:
-			st.Mono, st.IconFont = true, false
+			st.Mono, st.IconFont, st.Serif = true, false, false
 			return
 		case webFamilyIcon:
-			st.Mono, st.IconFont = false, true
+			st.Mono, st.IconFont, st.Serif = false, true, false
+			return
+		case webFamilySerif:
+			st.Mono, st.IconFont, st.Serif = false, false, true
 			return
 		case webFamilyText:
-			st.Mono, st.IconFont = false, false
+			st.Mono, st.IconFont, st.Serif = false, false, false
 			return
 		}
 	}
 }
 
 // webFontFamilyKind classifies one family name: the generic families, the
-// monospace and proportional faces pages name most, Material Icons/Symbols,
-// and otherwise the words in the name ("Noto Sans Mono", "Brand Serif").
+// monospace, serif and sans-serif faces pages name most, Material
+// Icons/Symbols, and otherwise the words in the name ("Noto Sans Mono", "Brand
+// Serif", "Roboto Slab").
 func webFontFamilyKind(name string) int {
 	name = strings.ToLower(strings.Trim(strings.TrimSpace(name), `"'`))
 	name = strings.Join(strings.Fields(name), " ")
@@ -281,15 +303,24 @@ func webFontFamilyKind(name string) int {
 		"consolas", "courier new", "courier", "lucida console", "lucida sans typewriter",
 		"andale mono", "inconsolata", "hack", "iosevka", "anonymous pro", "fixedsys", "terminal":
 		return webFamilyMono
-	case "serif", "sans-serif", "system-ui", "ui-sans-serif", "ui-serif", "ui-rounded",
-		"cursive", "fantasy", "math", "fangsong", "-apple-system", "blinkmacsystemfont",
+	case "serif", "ui-serif", "fangsong", "georgia", "georgia pro", "times", "times new roman",
+		"cambria", "garamond", "eb garamond", "palatino", "palatino linotype", "book antiqua",
+		"charter", "bitstream charter", "tinos", "merriweather", "linux libertine", "libertine",
+		"linux libertine o", "lora", "playfair display", "crimson text", "crimson pro", "baskerville",
+		"libre baskerville", "didot", "bodoni 72", "constantia", "iowan old style", "new york",
+		"sitka text", "literata", "spectral", "cormorant", "cormorant garamond", "bitter", "arvo",
+		"rockwell", "domine", "noticia text", "nyt-cheltenham", "nyt-imperial", "tiempos text",
+		"tiempos headline", "guardian text egyptian web", "minion pro", "big caslon", "hoefler text":
+		return webFamilySerif
+	case "sans-serif", "system-ui", "ui-sans-serif", "ui-rounded",
+		"cursive", "fantasy", "math", "-apple-system", "blinkmacsystemfont",
 		"segoe ui", "segoe ui variable", "roboto", "helvetica", "helvetica neue", "arial",
-		"inter", "inter var", "georgia", "times", "times new roman", "verdana", "tahoma",
+		"inter", "inter var", "verdana", "tahoma",
 		"trebuchet ms", "open sans", "lato", "ubuntu", "cantarell", "oxygen", "montserrat",
-		"poppins", "raleway", "nunito", "lucida grande", "calibri", "cambria", "garamond",
-		"palatino", "palatino linotype", "book antiqua", "optima", "avenir", "avenir next",
-		"futura", "geneva", "arimo", "tinos", "charter", "manrope", "rubik", "karla", "heebo",
-		"barlow", "figtree", "outfit", "lexend", "quicksand", "oswald", "merriweather", "geist":
+		"poppins", "raleway", "nunito", "lucida grande", "calibri",
+		"optima", "avenir", "avenir next",
+		"futura", "geneva", "arimo", "manrope", "rubik", "karla", "heebo",
+		"barlow", "figtree", "outfit", "lexend", "quicksand", "oswald", "geist":
 		return webFamilyText
 	}
 	if strings.HasPrefix(name, "material icons") || strings.HasPrefix(name, "material symbols") {
@@ -304,11 +335,150 @@ func webFontFamilyKind(name string) int {
 	}
 	for _, word := range words {
 		switch word {
-		case "sans", "serif", "grotesk", "grotesque", "slab":
+		case "sans", "grotesk", "grotesque":
 			return webFamilyText
 		}
 	}
+	for _, word := range words {
+		switch word {
+		case "serif", "slab":
+			// "IBM Plex Serif", "Source Serif 4", "Roboto Slab" — and not
+			// "Noto Sans", which the loop above already took.
+			return webFamilySerif
+		}
+	}
 	return webFamilyUnknown
+}
+
+// --- Serif ---------------------------------------------------------------------
+
+// webSerifState remembers the serif file found on this machine. Render thread.
+var webSerifState struct {
+	probed bool
+	path   string
+}
+
+// webSerifFacePath is a serif font file on this machine, "" when there is
+// none: a *Serif*.ttf in JukaHub's fonts folder (not a sans-serif one), then
+// Georgia or Times New Roman on Windows, DejaVu, Liberation or Noto Serif on
+// Linux. A TrimUI handheld has none of these and uses the embedded Library
+// serif instead (webSerifFace). Render thread.
+func webSerifFacePath() string {
+	s := &webSerifState
+	if s.probed {
+		return s.path
+	}
+	s.probed = true
+	var cands []string
+	if dir := uiFontDir(); dir != "" {
+		for _, pat := range []string{"*Serif*.ttf", "*serif*.ttf"} {
+			if m, err := filepath.Glob(filepath.Join(dir, pat)); err == nil {
+				for _, p := range m {
+					if !strings.Contains(strings.ToLower(filepath.Base(p)), "sans") {
+						cands = append(cands, p)
+					}
+				}
+			}
+		}
+	}
+	if runtime.GOOS == "windows" {
+		win := os.Getenv("WINDIR")
+		if win == "" {
+			win = `C:\Windows`
+		}
+		for _, f := range []string{"georgia.ttf", "times.ttf", "cambria.ttc"} {
+			cands = append(cands, filepath.Join(win, "Fonts", f))
+		}
+	} else {
+		cands = append(cands,
+			"/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+			"/usr/share/fonts/dejavu/DejaVuSerif.ttf",
+			"/usr/share/fonts/TTF/DejaVuSerif.ttf",
+			"/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
+			"/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+			"/usr/share/fonts/truetype/noto/NotoSerif-Regular.ttf",
+			"/usr/share/fonts/noto/NotoSerif-Regular.ttf",
+		)
+	}
+	for _, p := range cands {
+		if regularFile(p) {
+			s.path = p
+			break
+		}
+	}
+	return s.path
+}
+
+// webSerifFace is the serif face for a run at size (already scaled), bold and
+// italic applied, or nil when the run keeps the UI face: Legible reading font
+// or Bold text is on (legibility wins over the page's choice), or no serif
+// opens. A machine's own serif file comes first; otherwise the Library theme's
+// embedded serif (themelibrary.go: Lora, OFL), which every JukaHub carries.
+// That cut is SemiBold, so a bold run is it emboldened once more. Render
+// thread.
+func webSerifFace(size int, bold, italic bool) *ttf.Font {
+	if size <= 0 || a11y.boldText || legibleFontFile() != "" {
+		return nil
+	}
+	style := webFaceStyle(bold, italic)
+	if path := webSerifFacePath(); path != "" {
+		if font := webOpenReaderFace(path, size, style, false); font != nil {
+			return font
+		}
+	}
+	// The plain embedded face is the Library theme's own (it also registers
+	// the face's character map); a styled one is a copy of its own.
+	plain := libThemeSerifFont(size)
+	if plain == nil || style == ttf.STYLE_NORMAL {
+		return plain
+	}
+	key := "web\n" + libThemeSerifName + "\n" + strconv.Itoa(size) + "\n" + strconv.Itoa(style)
+	if font, ok := fontStyleCache[key]; ok {
+		return font
+	}
+	if webFailedFaces[key] {
+		return plain
+	}
+	rw, err := sdl.RWFromMem(libThemeSerifTTF)
+	if err != nil {
+		webFailedFaces[key] = true
+		return plain
+	}
+	font, err := ttf.OpenFontRW(rw, 1, size)
+	if err != nil || font == nil {
+		webFailedFaces[key] = true
+		logWarn("browser", "Error loading the reader serif at %d px: %v", size, err)
+		return plain
+	}
+	font.SetStyle(style)
+	registerFontPath(font, libThemeSerifName)
+	fontStyleCache[key] = font
+	if bold {
+		webBoldFaces.Lock()
+		webBoldFaces.fonts[font] = true
+		webBoldFaces.Unlock()
+	}
+	return font
+}
+
+// webFontCoversText reports whether font has a glyph for every letter of s
+// (spaces aside). A serif run falls back to the UI face for a word the serif
+// cannot set — a Greek word in a Lora paragraph — instead of drawing it as
+// substitutes.
+func webFontCoversText(font *ttf.Font, s string) bool {
+	path, ok := fontPathFor(font)
+	if !ok {
+		return true
+	}
+	for _, r := range s {
+		if r == ' ' {
+			continue
+		}
+		if !fontCoversRune(path, r) {
+			return false
+		}
+	}
+	return true
 }
 
 // webApplyIconFontClass marks an element whose class is a Material icon font

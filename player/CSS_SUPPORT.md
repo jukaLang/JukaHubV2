@@ -86,10 +86,39 @@ gap, not a silent promise.
   following block is narrowed beside it; `clear: left/right/both` and the
   logical spellings move a block below the float). Floats shrink to their
   widest run when no width is given.
+- The page is laid out at the full width of the view, as a browser lays a
+  page out at its window's width, and `@media` and `vw` answer for that same
+  width (no narrower reading column).
 - `position: relative/absolute/fixed`, physical and logical inset properties
   including the `inset-block`/`inset-inline` two-axis shorthands, z-index. An
-  absolutely positioned auto-width box with both inline edges set stretches
-  between them instead of keeping its caption-sized default.
+  absolutely positioned box is one layer with everything in it: its heading,
+  paragraphs, buttons and pictures are measured together and placed at its
+  insets in the nearest positioned ancestor (or the page), whose text and
+  pictures give it its rectangle. A box without insets keeps its static
+  position, where its markup would have put it in the flow. A layer without a
+  width shrinks to its widest line; one with both inline edges set stretches
+  between them; both insets with a width and `margin: auto` centre it. A
+  positioned container whose children all left the flow keeps a line and its
+  height of its own.
+- `position: fixed` boxes are layers pinned to the screen — at their top or
+  bottom inset, centred by `margin: auto`, or at their static place — and stay
+  there while the page scrolls under them; their links and fields are tapped
+  where they are drawn.
+- Stacking: the page paints as CSS stacks it — layers with a negative
+  z-index, the flow's surfaces in tree order (a box's own background under the
+  boxes and pictures nested in it, and around its pictures: a card's surface
+  reaches behind the photo at its top), floats, the flow's pictures and text,
+  then positioned layers and pinned sticky bars by z-index. A z-index orders a
+  layer inside the stacking context of a positioned ancestor with a z-index, a
+  fixed or sticky one, or a translucent or translated one, so a badge's
+  `z-index: 9999` inside a `z-index: 1` card stays under a `z-index: 2`
+  header. An `overflow: hidden` containing block clips its layers. A layer
+  wholly outside the page or its clip (a skip link parked above the page, an
+  off-canvas drawer, a carousel's next slide), a fully transparent positioned
+  block and a screen-reader-only one (the 1×1 px `sr-only`/`visually-hidden`
+  box) are not painted. Links and fields inside layers and floats are D-pad
+  and tap targets, a tap goes to the topmost one, and find-in-page searches
+  their text.
 - `calc()` over `px`, `em`, `rem`, percentages and viewport units, plus
   `min()`, `max()` and `clamp()` in ordinary lengths.
 - Container queries and container-relative units.
@@ -134,9 +163,19 @@ gap, not a silent promise.
   remaining rows), `<colgroup>`/`<col>` widths and `span` values matched
   left-to-right, `table-layout: auto/fixed`, direct cell widths, empty rows
   retained for rowspan gaps, and `border-collapse: separate/collapse` with
-  `border-spacing`. Collapsed borders resolve conflicts by width, style
-  priority (hidden > double > solid > dashed > dotted > none), then cell over
-  row over table, and each interior edge paints once.
+  `border-spacing`. Every cell's background, borders and shadow reach the
+  bottom of its row, and its content sits by `vertical-align` (or `valign`)
+  given on the table, a row group, the row or the cell, cascaded as a
+  browser does: `middle` by default in an HTML table (the UA sheet's
+  `tbody`, also the implicit one), `inherit` taking the table's value
+  (Bootstrap 5), `top`/`bottom` (`text-top`/`text-bottom` count as those),
+  and an explicit `baseline` — as CSS resets write it — read as `top`, which
+  is also where CSS table boxes (`display: table-cell`) start. A cell's own
+  `vertical-align` places its content; it no longer raises or drops the
+  cell's text as an inline offset. Collapsed borders resolve
+  conflicts by width, style priority (hidden > double > solid > dashed >
+  dotted > none), then cell over row over table, and each interior edge
+  paints once.
 
 ### Typography and paint
 
@@ -160,13 +199,23 @@ gap, not a silent promise.
   by its `top`/`bottom` (normalize.css and Bootstrap draw `<sup>` that way).
   Inline descendants move with the box, so the link inside a footnote
   `<sup>` is raised too.
-- `font-family` chooses between two faces: the UI face, and a monospace face
+- `font-family` chooses between three faces: the UI face; a monospace face
   for `monospace`, `ui-monospace`, the common code families (Menlo, Consolas,
   Courier New, Fira Code, JetBrains Mono, …) and `<pre>`, `<code>`, `<kbd>`,
   `<samp>`, `<tt>`, when the machine has one (`termPtyMonoFontPath`: a
   `*Mono*.ttf` in JukaHub's fonts folder, Consolas or Cascadia Mono on
-  Windows, DejaVu, Liberation or Noto Sans Mono on Linux). Unknown families
-  keep the inherited choice.
+  Windows, DejaVu, Liberation or Noto Sans Mono on Linux); and a serif face
+  for `serif`, `ui-serif` and the common serif families (Georgia, Times,
+  Linux Libertine, Cambria, Charter, Merriweather, Lora, "… Serif", "…
+  Slab"): a `*Serif*.ttf` in JukaHub's fonts folder, Georgia or Times New
+  Roman on Windows, DejaVu, Liberation or Noto Serif on Linux, and otherwise
+  the embedded Library serif (Lora), so the handhelds have one too. A word the
+  serif face cannot draw stays in the UI face; Legible reading font and Bold
+  text keep every run in the UI face. Unknown families keep the inherited
+  choice.
+- Soft hyphens (`&shy;`) are break points: a word longer than the rest of its
+  line breaks at the last one that fits and shows a hyphen there; elsewhere
+  they are not drawn.
 - Every line is set on one baseline: runs of different sizes and faces, and
   inline images, align as in a browser.
 - Icon fonts: Private Use Area code points (Font Awesome and the like) are
@@ -262,8 +311,10 @@ gap, not a silent promise.
   `align` (text alignment; on `img`, `left`/`right` float and
   `middle`/`top` align; on a `table`, `center`), `width`/`height` on tables
   and cells, `width`/`size`/`color`/`noshade` on `hr`, a table's `border`
-  (with `bordercolor`), `cellpadding` and `cellspacing`, `<font color size
-  face>`, and `<body text link bgcolor>`.
+  (with `bordercolor`), `cellpadding` and `cellspacing`, `valign` on rows,
+  row groups and cells, `nowrap` on cells, `background` (a picture) on the
+  body, tables, rows and cells, `hspace`/`vspace` on images, `<font color
+  size face>`, and `<body text link bgcolor background>`.
 - Replaced/media: `img`, `picture`/`source`, `svg`, `hr`, `video`, `audio`,
   `iframe` embeds. `canvas`, `object`, `embed`, an `<svg>` with nothing to
   draw but a background or border, and media without a playable source keep
@@ -290,12 +341,14 @@ mistaken for working CSS.
 
 | Construct | Current behaviour |
 | --- | --- |
-| `font-family` | Two faces only (the UI face and a monospace one); web fonts are not downloaded. |
+| `font-family` | Three faces only (the UI face, a monospace one and a serif one); web fonts are not downloaded. |
 | `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They stay inline text with a background chip; their own width, height and vertical padding are not boxes. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
 | aspect-ratio on a wrapper with no direct block | Accepted for ordinary blocks; a wrapper that only colours its children reserves its ratio through its box, not through a text row. |
-| `position: sticky` | Kept in normal flow and pinned as a copy once it scrolls past its inset; nested scroll containers are not modelled. |
+| `position: sticky` | Kept in normal flow and pinned as a copy of the element's whole subtree (a header's logo, menu and buttons) once it scrolls past its inset, until its containing block (a table for a header cell) scrolls away; `bottom` alone sticks to the bottom edge. A bar taller than the view, or taller than two fifths of it across most of the width, scrolls; its floats and positioned children are not in the pinned copy, and nested scroll containers are not modelled. |
+| `position: fixed` too big to pin, and boxes covering the screen | A fixed box taller than the view, or most of it across most of the width (a drawer, a consent panel), scrolls with the page (one on the bottom edge after its last line). A fixed box, or an absolute one with no positioned ancestor (a positioned `<html>`/`<body>` counts as none), that covers the whole screen (`inset: 0`, or most of the viewport both ways: a modal backdrop, a cookie wall) keeps its child blocks in the flow, since the reader cannot press its close button; only its own text is a layer. A fixed box inside a positioned layer stays in that layer's flow. |
+| Stacking contexts from `isolation`, `filter`, `will-change`, `contain`, `mix-blend-mode` | Not recognised; z-index only nests inside positioned, fixed, sticky, translucent and translated ancestors. Positioned boxes in the flow paint with the flow: their z-index orders surfaces, not text. |
 | `box-shadow` inset; more than one shadow layer; `text-shadow` blur | Only the first visible outer box-shadow layer is painted; a text shadow's blur only lowers its alpha. |
 | `transform` (except `translate` on positioned boxes), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. In-flow boxes stay where the flow puts them. |
 | SVG `<text>`, `<image>`, filters, masks, clip paths, patterns, markers, dashes and `<foreignObject>`; external `<use href="sprite.svg#icon">` | Skipped; the rest of the drawing renders. |
@@ -304,8 +357,8 @@ mistaken for working CSS.
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
 | `background-clip: text` | The glyphs take the gradient's average colour; the ramp is not clipped to the letter shapes. |
 | `line-clamp` on a wrapper whose text sits in child blocks | Only the element's own lines are clamped; a clamp on a wrapper of paragraphs does not count their lines. |
-| `vertical-align` in table cells, `valign` | Cell content stays at the top of the row; browsers centre it by default. |
-| Presentation attributes not listed above (`nowrap`, `background`, `hspace`/`vspace`, `frame`/`rules`, a table's `align="left"/"right"`) | Ignored; CSS for the same properties works. |
+| `vertical-align: baseline` and lengths in table cells | Read as top; content moves by whole text rows, so `middle` centres it to the nearest row. |
+| Presentation attributes not listed above (`frame`/`rules`, a table's `align="left"/"right"`) | Ignored; CSS for the same properties works. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
@@ -330,9 +383,9 @@ feature that regresses paint or box flow fails the suite.
 | Transforms | `TransformsStayInFlow` | `transform` is accepted but deliberately not applied; content stays readable in normal flow. |
 | Text alignment, decoration, line height, letter spacing | `TextMetricsAndDecoration` and `JustifiedText` | Justification stretches automatic word gaps; a line with no gaps stays left-aligned. |
 | Table borders, collapsed separators, padding, spans | `TableSpanPaddingAndBorders` | Column-level borders/backgrounds are not painted. |
-| Image dimensions, natural size, `object-fit`/`max-width` | `ImageSizingAndFit` | Natural size is capped to the reading measure and four-thirds screen height. |
+| Image dimensions, natural size, `object-fit`/`max-width` | `ImageSizingAndFit` | Natural size is capped to the page width and four-thirds screen height. |
 | Background colour/image layers, repeat, position | `BackgroundLayersRepeatAndPosition` | Four layers and 512 tiles per block are the cap. |
-| Relative/absolute/fixed offsets | `PositionedOffsets` | `fixed` anchors to the viewport-sized page box; there is no scrolling viewport. |
+| Relative/absolute/fixed offsets | `PositionedOffsets` | `fixed` is pinned to the view (the fixture paints at scroll 0). A positioned subtree is one layer (`StickyHeaderAndOverlay`). |
 | Media queries and meta viewport | `MediaQueriesAndViewportMeta` | Width-based `@media` is evaluated against the reader viewport; printable/device-specific queries do not change layout. |
 | Default and disabled form controls | `FormControlStates` | Native OS widgets are replaced by reader-drawn controls. |
 

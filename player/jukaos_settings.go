@@ -240,7 +240,8 @@ func jukaosSettingsRows(*Config) []setRow {
 	}
 	appDir := jukaosAppDir()
 	jukaosUI.state = jukaosLoadState(appDir)
-	jukaosUI.layers = append(jukaosLoadLayers(jukaosHostFor(appDir), jukaosLayersDir(appDir)), jukaosBuiltinLayer(appDir))
+	host := jukaosHostFor(appDir)
+	jukaosUI.layers = append(jukaosLoadLayers(host, jukaosLayersDir(appDir)), jukaosBuiltinLayer(appDir), jukaosFoldersLayer(host))
 	jukaosUI.kernel = setOr(jukaosKernel(), "unknown")
 	jukaosUI.stockOnce = jukaosStockOnce()
 	session := jukaosSessionActive()

@@ -1651,6 +1651,11 @@ func pkgSheetText(it *pkgItem, ft *pkgType, width int32) []pkgSheetLine {
 	if it.Devices != "" {
 		para(pkgLineBody, ft.body, "Made for "+it.Devices+".")
 	}
+	// Who checked it where (storeshots.go): what was tried, apart from what
+	// the author aimed at.
+	if line := pkgCheckedOnLine(it.Extra.CheckedOn); line != "" {
+		para(pkgLineBody, ft.body, line)
+	}
 	switch it.DeviceFit {
 	case 1:
 		add(pkgLineMeta, "✓ Works on this device.")
@@ -1908,6 +1913,8 @@ func pkgDrawSheet(renderer *sdl.Renderer, config *Config, ft *pkgType, body sdl.
 		}
 	}
 	ty += chipH + 16
+	// The app's screenshots, when the registry names any (storeshots.go).
+	ty += pkgDrawShots(renderer, it, sdl.Rect{X: rx, Y: ty, W: rw, H: (s.Y + s.H - 20 - ty) * 2 / 5})
 
 	// Text column.
 	text := sdl.Rect{X: rx, Y: ty, W: rw, H: s.Y + s.H - 20 - ty}

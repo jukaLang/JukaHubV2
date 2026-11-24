@@ -830,6 +830,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		logWarn("library", "%s does not forward options; ignoring %q", filepath.Base(launcher), extra)
 		extra = nil
 	}
+	// A game on a handheld's card in this computer plays with the card's
+	// saves and BIOS files (libportable.go).
+	extra = portableCardLaunchArgs(launcher, game, extra)
 	// A firmware script gets the game the way MainUI passes it,
 	// Emus/<system>/../../Roms/...: CrossMix's RetroArch launchers read their
 	// folders from it (gamelaunch_firmware.go).

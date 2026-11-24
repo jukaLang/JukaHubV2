@@ -601,3 +601,73 @@ func TestCreateResumeBundle(t *testing.T) {
 		t.Fatalf("latestResumeBundle = %q, %v", latest, ok)
 	}
 }
+
+// TestSaveTimelineRestoreRoundTrip is the Save Time Machine's promise: a
+// moment holds exactly one game's saves, a restore brings them back with the
+// battery save and auto state the moment did not have set aside, a damaged
+// moment changes nothing, and a pinned moment is kept as a checkpoint.
+func TestSaveTimelineRestoreRoundTrip(t *testing.T) {
+	_, sd := setSaveManagerTestDirs(t)
+	saves := filepath.Join(sd, "RetroArch", "saves")
+	states := filepath.Join(sd, "RetroArch", "states")
+	roots := []saveRoot{{Name: "RetroArch saves", Path: saves}, {Name: "RetroArch states", Path: states}}
+	game := libraryGame{Path: filepath.Join(sd, "Roms", "GBA", "Zelda.gba"), System: "Game Boy Advance", Title: "Zelda"}
+	srm, auto, slot := filepath.Join(saves, "Zelda.srm"), filepath.Join(states, "Zelda.state.auto"), filepath.Join(states, "Zelda.state1")
+	writeSaveTestFile(t, srm, "v1")
+	writeSaveTestFile(t, filepath.Join(saves, "Mario.srm"), "mario")
+
+	m1, err := saveTimelineCapture(game, roots, saveLedgerTrigPlay, "", false, false)
+	if err != nil || len(m1.M.Roots) != 1 || len(m1.M.Roots[0].Files) != 1 {
+		t.Fatalf("first moment = %+v, %v; want Zelda.srm alone", m1.M.Roots, err)
+	}
+	if _, err := saveTimelineCapture(game, roots, saveLedgerTrigPlay, "", false, false); !errors.Is(err, errSaveTimelineUnchanged) {
+		t.Fatalf("an unchanged capture = %v, want errSaveTimelineUnchanged", err)
+	}
+	writeSaveTestFile(t, srm, "v2")
+	writeSaveTestFile(t, auto, "auto2")
+	writeSaveTestFile(t, slot, "slot1")
+	m2, err := saveTimelineCapture(game, roots, saveLedgerTrigQuit, "", false, false)
+	if err != nil || m2.M.TotalBytes != int64(len("v2")+len("auto2")+len("slot1")) {
+		t.Fatalf("second moment = %d bytes, %v", m2.M.TotalBytes, err)
+	}
+
+	if _, err := saveTimelineRestore(game, m1, roots); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if got := readSaveTestFile(t, srm); got != "v1" {
+		t.Errorf("Zelda.srm = %q after the restore, want v1", got)
+	}
+	if _, err := os.Stat(auto); !os.IsNotExist(err) {
+		t.Errorf("the auto state the moment did not have is still there (%v)", err)
+	}
+	if got := readSaveTestFile(t, slot); got != "slot1" {
+		t.Errorf("a slot state made since was touched: %q", got)
+	}
+	if got := readSaveTestFile(t, filepath.Join(saves, "Mario.srm")); got != "mario" {
+		t.Errorf("another game's save was touched: %q", got)
+	}
+
+	// A damaged moment is refused before anything moves.
+	writeSaveTestFile(t, filepath.Join(m2.Dir, "files", m2.M.Roots[0].Slug, "Zelda.srm"), "XX")
+	if _, err := saveTimelineRestore(game, m2, roots); err == nil || !strings.Contains(err.Error(), "nothing was changed") {
+		t.Fatalf("restoring a damaged moment = %v, want a refusal", err)
+	}
+	if got := readSaveTestFile(t, srm); got != "v1" {
+		t.Errorf("a refused restore changed Zelda.srm to %q", got)
+	}
+
+	moments, _ := saveTimelineList(game.Path)
+	var oldest saveMoment
+	for _, m := range moments {
+		if m.M.ID == m1.M.ID {
+			oldest = m
+		}
+	}
+	cp, err := saveTimelinePin(oldest, "  Before\tthe boss ")
+	if err != nil || !cp.Checkpoint || cp.M.Name != "Before the boss" {
+		t.Fatalf("pin = %+v, %v", cp.M, err)
+	}
+	if _, checkpoints := saveTimelineList(game.Path); len(checkpoints) != 1 || checkpoints[0].M.Name != "Before the boss" {
+		t.Fatalf("checkpoints = %+v, want the pinned one", checkpoints)
+	}
+}

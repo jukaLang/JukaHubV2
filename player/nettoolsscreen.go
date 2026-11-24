@@ -73,7 +73,10 @@ var netToolsSpecs = []netToolsSpec{
 	{id: "netdrive", label: "WebDAV share", icon: "disk", need: toolsHubNeedLAN, mode: netToolsModePanel, idle: "Map the card as a drive on Windows, a Mac or Linux"},
 	{id: "companion", label: "Phone companion", icon: "phone", need: toolsHubNeedLAN, mode: netToolsModePanel, idle: "Type, use a remote and send files from a phone"},
 	{id: "tailscale", label: "Tailscale", icon: "network", mode: netToolsModePanel, idle: "Reach this handheld from anywhere"},
-	{id: "gateway", section: "Probes", sectionIcon: "radar", label: "Gateway port scan", icon: "scan", need: toolsHubNeedLAN, mode: netToolsModeRun, idle: "13 common ports on your router"},
+	// The one-tap check of every step at once (conncheck_ui.go): no need, it
+	// is what to run when there is no network.
+	{id: "conncheck", section: "Probes", sectionIcon: "radar", label: "Connection check", icon: "internet", mode: netToolsModePanel, idle: "Wi-Fi, router, DNS and internet, in order"},
+	{id: "gateway", label: "Gateway port scan", icon: "scan", need: toolsHubNeedLAN, mode: netToolsModeRun, idle: "13 common ports on your router"},
 	{id: "clipscan", label: "Clipboard host scan", icon: "paste", need: toolsHubNeedLAN, mode: netToolsModeRun, idle: "Scan a host or IP you copied"},
 	{id: "ping", label: "Ping", icon: "radar", need: toolsHubNeedInternet, mode: netToolsModeRun, idle: "Round trip to 1.1.1.1"},
 	{id: "traceroute", label: "Traceroute", icon: "route", need: toolsHubNeedInternet, mode: netToolsModeRun, idle: "Every hop to 1.1.1.1"},
@@ -679,6 +682,8 @@ func netToolsBuildTiles(net toolsHubNet, gateway string) []toolsHubTile {
 			}
 		case "tailscale":
 			t.value, t.tone = tailscaledTileValue()
+		case "conncheck":
+			t.value, t.tone = connCheckTileValue(spec.idle)
 		case "gateway":
 			if gateway != "" {
 				t.value = "Router " + gateway + " · 13 common ports"
@@ -1179,6 +1184,12 @@ func netToolsActivate(config *Config, idx int) {
 			// A screen of its own (davshare_ui.go).
 			PlayActivateSound()
 			davShareOpenScreen(config)
+			return
+		}
+		if spec.id == "conncheck" {
+			// So is the connection check (conncheck_ui.go).
+			PlayActivateSound()
+			connCheckOpen(config)
 			return
 		}
 		// The pairing card is a modal of its own above the page.

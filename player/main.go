@@ -1052,6 +1052,12 @@ func main() {
 			running = false
 			continue
 		}
+		// Still frames: a quiet Home sleeps here until something on it
+		// changes, a second at most, and the loop starts over to draw it
+		// (stillframes.go).
+		if stillFrameGate(config, startupReported && !deferredStartupPending && !startupGreetingPending) {
+			continue
+		}
 		// Set when a key press only woke the screen, so the text event SDL
 		// sends with it in the same batch is dropped too.
 		wakeSwallowedText := false
@@ -4383,6 +4389,7 @@ func main() {
 		// Measured after Present, so the idle delay at the end of the loop is
 		// not counted as frame cost.
 		frameStatsRecord(time.Since(frameStart))
+		stillNotePresented() // when Home was last drawn (stillframes.go)
 		if !startupReported {
 			startupReported = true
 			startupMarkNow("first-frame")
@@ -4428,6 +4435,7 @@ func main() {
 		animating := html5GameActive() || transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating() ||
 			trophyOverlayActive() || chatBadgeAnimating()
 		frameRateCtrl.SetAnimationActive(animating)
+		stillNoteAnimating(animating)
 		// A moving backdrop — the liquid background's water, an animated
 		// wallpaper — asked for its cadence while it was drawn; this hands it
 		// over and logs the memory line now and then (adaptive.go).

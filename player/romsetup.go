@@ -460,6 +460,8 @@ func romLibraryRoots() []string {
 	if dir, err := P().DataDir(); err == nil && dir != "" {
 		roots = append(roots, filepath.Join(dir, "Roms"))
 	}
+	// A handheld's SD card in this computer (libportable.go).
+	roots = append(roots, portableCardRomRoots()...)
 	seen := make(map[string]bool, len(roots))
 	unique := roots[:0]
 	for _, root := range roots {

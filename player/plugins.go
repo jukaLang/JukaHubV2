@@ -39,6 +39,10 @@ type PluginInfo struct {
 	StartupDaily bool     `json:"startupDaily,omitempty"`
 	StartupQuiet bool     `json:"startupQuiet,omitempty"`
 	Quick        []string `json:"quick,omitempty"`
+	// Permissions are what the script asks for beyond its own folder
+	// (plugperms.go); Granted is what the owner allowed, filled by the scan.
+	Permissions []string `json:"permissions,omitempty"`
+	Granted     []string `json:"-"`
 }
 
 var (
@@ -105,6 +109,8 @@ func LoadPlugins(config *Config) {
 		ext := plugxParse(entry.Name(), filepath.Join(pluginDir, entry.Name()), data)
 		row := plugEntryFor(config, info)
 		plugxDecorate(&row, info, ext)
+		// What it asks for, what was allowed, and off until it is (plugperms.go).
+		plugPermsApply(config, &info, &row)
 		catalog = append(catalog, row)
 		if !row.Enabled {
 			continue
@@ -159,12 +165,15 @@ func plugExecute(plugin PluginInfo, action string, vars map[string]interface{}) 
 		if err != nil {
 			return fmt.Sprintf("Plugin %q has an invalid entry path: %v", pluginName, err)
 		}
-		return runPluginScript(entryPath, action, vars)
+		return runPluginScript(plugin, pluginRoot, entryPath, action, vars)
 	}
 	return fmt.Sprintf("Plugin %q action %q executed (entry=%s)", pluginName, action, entryPath)
 }
 
-func runPluginScript(path, action string, vars map[string]interface{}) string {
+// runPluginScript runs one action of a script: in its folder, with a small
+// environment, and without the network unless the owner allowed it
+// (plugperms.go).
+func runPluginScript(plugin PluginInfo, pluginRoot, path, action string, vars map[string]interface{}) string {
 	args := []string{path, action}
 	for k, v := range vars {
 		args = append(args, fmt.Sprintf("--%s=%v", k, v))
@@ -172,12 +181,29 @@ func runPluginScript(path, action string, vars map[string]interface{}) string {
 	interpreter := plugInterpreter(path)
 	ctx, cancel := context.WithTimeout(context.Background(), plugActionTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, interpreter, args...)
-	cmd.Dir = filepath.Dir(path)
-	// A script that leaves a child holding the output pipe must not keep the
-	// action open after its own exit or the timeout.
-	cmd.WaitDelay = 2 * time.Second
+	newCmd := func(wall bool) (*exec.Cmd, bool) {
+		cmd := exec.CommandContext(ctx, interpreter, args...)
+		cmd.Dir = filepath.Dir(path)
+		cmd.Env = plugScriptEnv(plugin, pluginRoot)
+		// A script that leaves a child holding the output pipe must not keep
+		// the action open after its own exit or the timeout.
+		cmd.WaitDelay = 2 * time.Second
+		walled := false
+		if wall {
+			walled = plugSandbox(cmd, plugin.Granted)
+		}
+		return cmd, walled
+	}
+	cmd, walled := newCmd(true)
 	out, err := cmd.CombinedOutput()
+	if walled && err != nil && plugSandboxRefused(err) {
+		// The kernel has no network namespaces for it: run as before, and
+		// the Plugins page says the network is not blocked here.
+		plugNetBlockFailed.Store(true)
+		logWarn("plugins", "%s: the network could not be blocked here (%v); its script runs with it", plugin.Name, err)
+		cmd, _ = newCmd(false)
+		out, err = cmd.CombinedOutput()
+	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Sprintf("Plugin error: the action took longer than %d seconds and was stopped\n%s",
 			int(plugActionTimeout/time.Second), string(out))

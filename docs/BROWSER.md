@@ -99,18 +99,42 @@ they were, and Select still opens the menu. The choice is the
   round avatars, with every line set on one baseline.
   [CSS_SUPPORT.md](../player/CSS_SUPPORT.md) lists exactly what is drawn.
 * Draw older and simpler pages the way a desktop browser does: table
-  colours, widths, borders, padding and spacing written as HTML attributes
-  (`bgcolor`, `width`, `border`, `cellpadding`, `cellspacing`), `<font>`
-  colours and sizes, `<center>` and `align` (a centred table sits in the
-  middle), numbered lists that start where the page says, footnote markers
-  set small and raised, headings sized from the text around them, `rem`
-  sizes that follow the page's root size, gradient headings in their colour,
-  and card titles cut with "…" after the lines the page allows
-  (`line-clamp`).
+  colours, widths, borders, padding, spacing and background pictures written
+  as HTML attributes (`bgcolor`, `width`, `border`, `cellpadding`,
+  `cellspacing`, `background`, `nowrap`), `<font>` colours and sizes,
+  `<center>` and `align` (a centred table sits in the middle), numbered lists
+  that start where the page says, footnote markers set small and raised,
+  headings sized from the text around them, `rem` sizes that follow the page's
+  root size, gradient headings in their colour, and card titles cut with "…"
+  after the lines the page allows (`line-clamp`).
+* Set tables like a browser: every cell of a row reaches the row's bottom
+  (backgrounds and borders included), and a cell's content sits in the middle
+  of a taller row unless `vertical-align` or `valign` puts it at the top or
+  the bottom.
+* Draw serif text in a serif face (Georgia, Times and Wikipedia's headings;
+  on the handhelds the embedded Lora), and break long words at their soft
+  hyphens (`&shy;`) with a hyphen, as German and Dutch pages expect.
+* Use the whole screen: the page is laid out at the full width of the view,
+  as a desktop or tablet browser lays it out at its window's width, and the
+  page's `@media` rules answer for that width.
+* Stack the page the way a browser does: an absolutely positioned card,
+  caption or badge is one layer with its heading, text and buttons, placed
+  over the photo or section it belongs to (or, without insets, where its
+  markup puts it); a `position: fixed` header, bottom bar or button is
+  pinned to the screen while the page scrolls under it, and a sticky header
+  is pinned whole (logo, menu and buttons) until its section ends (a sticky
+  table header stays with its table). Layers, floats and sticky bars paint
+  in `z-index` order inside their stacking contexts, a section's background
+  stays under the code block or note inside it, and a card's surface reaches
+  behind its photo. Screen-reader-only headings and skip links no longer
+  appear over the page, carousel slides outside their frame are hidden, and
+  links and fields inside overlays, pinned bars and floated boxes are
+  reachable with the D-pad and by tap (and, except on pinned bars, by
+  find-in-page).
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
-  further rows when needed, and absolutely positioned or fixed layers painted
-  over the text in `z-index` order. Flex rows wrap at each card's stated
+  further rows when needed, and positioned layers painted in their stacking
+  order. Flex rows wrap at each card's stated
   width, basis or min-content floor, share spare space according to `flex-grow`,
   shrink down only to the longest unbreakable word unless `min-width: 0`
   removes that floor, and keep nested rows inside their parent cards. CSS grids keep their empty trailing columns
@@ -903,6 +927,36 @@ pill does.
 
 In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 
+## Speed on the handhelds
+
+The reader sets its pace by the handheld it runs on, and the log says which
+pace it chose (`browser` line `reader tune: …`):
+
+| Device | Picture threads | Decoded ahead / behind | New pictures per frame | Downloads at once |
+| --- | --- | --- | --- | --- |
+| Smart Pro S (A523, eight cores) | 4 | 2 screens / 1 screen | 8 MB | 10 |
+| Smart Pro, Brick, Brick Pro, Hammer (A133P, four cores) | 2 | 1 screen / ½ screen | 4 MB | 8 |
+| PC | on the drawing thread, as before | — | — | 8 |
+
+On a handheld a picture is never decoded in the middle of a frame. A decoding
+thread opens it and scales it down to the size its box has on this screen
+(never larger than the picture, never longer than the GPU's texture limit), so
+a 4000×3000 photo in a 600-pixel box costs a 600×450 texture; the box stays
+empty for the moment that takes. Pictures within the window above and below
+the screen are decoded before they scroll in, and a picture the page no longer
+shows (a page left, a picture flicked past) is dropped before it starts. Zooming
+in decodes a sharper copy and draws the smaller one until it arrives. A picture
+whose canvas is larger than 24 megapixels is drawn as a placeholder instead
+of being decoded.
+
+Text is drawn a stretch at a time: the words of a line that share their look
+are one string, measured once, rather than one picture per word, and rounded
+boxes, borders, shadows and gradients are drawn as geometry rather than as
+pictures made for each size.
+
+`JUKAHUB_WEB_DECODE=0` puts a handheld back on the old path (pictures decoded
+when drawn) for one run; `JUKAHUB_WEB_DECODE=4` sets the number of threads.
+
 ## What it cannot do
 
 This is a reading browser, not a full web engine. It runs a page's scripts
@@ -928,11 +982,16 @@ it can still pick the wrong branch. Column flow grows implicit rows when the
 block axis is indefinite, and `auto-fit` removes the gaps belonging to
 tracks it collapses. A non-rectangular `grid-template-areas` matrix still uses
 the bounding box of its cells. A font family chooses only between the app's
-face and a monospace one (when the machine has a monospace font); web fonts are
-not downloaded, and an icon font shows only the icons Inter has a glyph for.
-SVG text, embedded pictures, filters, masks and clip paths are not drawn (the
-rest of the drawing is). Table cells keep their content at the top of the row
-(a browser centres it).
+face, a monospace one (when the machine has a monospace font) and a serif one;
+web fonts are not downloaded, and an icon font shows only the icons Inter has a
+glyph for. SVG text, embedded pictures, filters, masks and clip paths are not
+drawn (the rest of the drawing is). A cell's content moves within its row by
+whole text rows, so `vertical-align: middle` centres it to the nearest row.
+A fixed box too big to pin (taller than the screen, or most of it across the
+width) scrolls with the page, and one that covers the whole screen (a modal
+backdrop or cookie wall, whose close button the reader cannot press) keeps
+its content in the page instead; a sticky bar taller than two fifths of the
+screen across most of its width scrolls too.
 GitHub issue pages and
 release pages work, and so do most pages that render their content with
 JavaScript; a page whose scripts need more than the reader has (a canvas, a live

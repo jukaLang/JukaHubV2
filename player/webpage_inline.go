@@ -75,7 +75,20 @@ func (p *webParser) addImageElement(style webStyle, src, alt string, attrW, attr
 	}
 	p.flush()
 	p.beginFlexLeaf(style)
+	wasDirect := false
+	if ids := p.boxPath(); len(ids) > 0 {
+		wasDirect = p.doc.Boxes[ids[len(ids)-1]].direct
+	}
 	block := p.ensureBlock()
+	if block.OwnsBox && !wasDirect {
+		// An image is not its paragraph's surface (it paints its own frame,
+		// webpage_layers.go): unless a text block owns the box, the container
+		// pass paints the box around the picture.
+		if info, ok := p.doc.Boxes[block.BoxOwner]; ok {
+			info.direct = false
+			p.doc.Boxes[block.BoxOwner] = info
+		}
+	}
 	// The paragraph's own style, which ensureBlock gave the block, is what a
 	// stitched line is laid out with; the image block itself carries the
 	// image's CSS (its width, height, aspect ratio and fit).
@@ -164,7 +177,7 @@ func webMergeInlineChains(blocks []webBlock) []webBlock {
 // same container: the same flex/grid item at every level, the same boxes and
 // the same <details> state.
 func webSameInlineContext(a, b *webBlock) bool {
-	if a.FlexGroup != b.FlexGroup || a.FlexItem != b.FlexItem || a.Float != b.Float ||
+	if a.FlexGroup != b.FlexGroup || a.FlexItem != b.FlexItem || a.Float != b.Float || a.Layer != b.Layer ||
 		len(a.FlexTrail) != len(b.FlexTrail) || len(a.Boxes) != len(b.Boxes) ||
 		len(a.Details) != len(b.Details) || a.DetailsShown != b.DetailsShown {
 		return false

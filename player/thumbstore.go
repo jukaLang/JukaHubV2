@@ -324,6 +324,16 @@ func (c *thumbnailTextureCache) Get(key string) *sdl.Texture {
 	return entry.texture
 }
 
+// Has reports whether key has a texture, without marking it used: a look-ahead
+// that only asks must not keep a picture off screen warmer than the ones in
+// view.
+func (c *thumbnailTextureCache) Has(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.entries[key]
+	return ok
+}
+
 // Put stores a texture, evicting least-recently-used entries over the budget.
 // w/h are the texture dimensions; they determine the accounted footprint.
 func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32) {

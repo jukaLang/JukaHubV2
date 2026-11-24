@@ -1,8 +1,10 @@
 package main
 
 import (
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -19,9 +21,18 @@ import (
 const biosDoctorEntryName = "BIOS Doctor"
 
 type biosFileFingerprint struct {
-	Name   string
-	Root   string
-	SHA256 string
+	Name     string
+	Root     string
+	Path     string
+	Relative string
+	Size     int64
+	SHA1     string
+	SHA256   string
+}
+
+type biosKnownHash struct {
+	Size int64
+	SHA1 string
 }
 
 const (
@@ -41,17 +52,38 @@ type biosSystemStatus struct {
 	Name     string
 	Ready    bool
 	Optional bool // no core strictly needs these files
-	Missing  []string
-	Files    []biosFileFingerprint
+	Checks   []biosDoctorCheck
 }
 
 type biosDoctorReport struct {
-	Roots   []string
-	Systems []biosSystemStatus
-	Files   []biosFileFingerprint
+	Roots      []string
+	TargetRoot string
+	Systems    []biosSystemStatus
+	Files      []biosFileFingerprint
 	// Xbox is the Xbox checklist (emuxbox.go): xemu's on Windows, hakuX's on
 	// a handheld the port is offered on, nil elsewhere.
 	Xbox *emuXboxReport
+}
+
+type biosDoctorCheckKind string
+
+const (
+	biosCheckVerified   biosDoctorCheckKind = "verified"
+	biosCheckMissing    biosDoctorCheckKind = "missing"
+	biosCheckWrongHash  biosDoctorCheckKind = "wrong hash"
+	biosCheckWrongPlace biosDoctorCheckKind = "wrong folder"
+	biosCheckUnverified biosDoctorCheckKind = "unverified"
+)
+
+// biosDoctorCheck describes one set of interchangeable filenames. Found and
+// Expected are full paths so the result gives a concrete next step.
+type biosDoctorCheck struct {
+	Kind     biosDoctorCheckKind
+	Names    []string
+	Found    string
+	Expected string
+	SHA1     string
+	Note     string
 }
 
 // biosDoctorGroup is one console line of the doctor's page: each accepted
@@ -104,18 +136,123 @@ func biosDoctorRoots() []string {
 	return unique
 }
 
+// biosDoctorRootsForScan leaves RetroArch's configured directory first. When
+// RetroArch has no readable setting, the first existing common BIOS folder is
+// the most useful target; the other roots remain searchable for misplaced files.
+func biosDoctorRootsForScan() []string {
+	roots := biosDoctorRoots()
+	if dir, _, ok := gameDiagConfiguredSystemDir("", ""); ok && dir != "." {
+		return roots
+	}
+	for i, root := range roots {
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			if i > 0 {
+				roots = append([]string{root}, append(roots[:i], roots[i+1:]...)...)
+			}
+			break
+		}
+	}
+	return roots
+}
+
+func biosDoctorSamePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if IsWindows() {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+func biosDoctorCheckGroup(names []string, target string, found map[string][]biosFileFingerprint,
+	catalog map[string]biosKnownHash) biosDoctorCheck {
+	check := biosDoctorCheck{Kind: biosCheckMissing, Names: append([]string(nil), names...)}
+	if len(names) == 0 {
+		return check
+	}
+	check.Expected = filepath.Join(target, filepath.FromSlash(names[0]))
+	bestScore := 6
+	for _, name := range names {
+		want := filepath.ToSlash(name)
+		known, hasHash := catalog[strings.ToLower(want)]
+		for _, file := range found[strings.ToLower(path.Base(want))] {
+			rightFolder := biosDoctorSamePath(file.Path, filepath.Join(target, filepath.FromSlash(want)))
+			verified := hasHash && file.Size == known.Size && strings.EqualFold(file.SHA1, known.SHA1)
+			score := 5
+			switch {
+			case verified && rightFolder:
+				score = 0
+			case verified:
+				score = 1
+			case !hasHash && rightFolder:
+				score = 2
+			case hasHash && rightFolder:
+				score = 3
+			case !hasHash:
+				score = 4
+			}
+			if score >= bestScore {
+				continue
+			}
+			bestScore = score
+			check.Expected = filepath.Join(target, filepath.FromSlash(want))
+			check.Found = file.Path
+			check.SHA1 = file.SHA1
+			check.Note = ""
+			switch score {
+			case 0:
+				check.Kind = biosCheckVerified
+			case 1:
+				check.Kind = biosCheckWrongPlace
+			case 2, 4:
+				check.Kind = biosCheckUnverified
+				if file.SHA1 == "" {
+					check.Note = "Could not read this file."
+				} else {
+					check.Note = "No known-good checksum for this filename."
+				}
+				if score == 4 {
+					check.Note += " It is also in the wrong folder."
+				}
+			case 3, 5:
+				check.Kind = biosCheckWrongHash
+				if file.SHA1 == "" {
+					check.Kind = biosCheckUnverified
+					check.Note = "Could not read this file."
+				} else if file.Size != known.Size {
+					check.Note = fmt.Sprintf("File size is %d bytes; known-good is %d bytes.", file.Size, known.Size)
+				} else {
+					check.Note = "SHA-1 does not match the known-good checksum."
+				}
+				if score == 5 {
+					check.Note += " It is also in the wrong folder."
+				}
+			}
+		}
+	}
+	return check
+}
+
 func scanBIOSRoots(roots []string) biosDoctorReport {
+	return scanBIOSRootsWithCatalog(roots, biosKnownHashes)
+}
+
+// scanBIOSRootsWithCatalog makes the checksum policy testable with tiny files.
+// A filename alone never produces a verified result.
+func scanBIOSRootsWithCatalog(roots []string, catalog map[string]biosKnownHash) biosDoctorReport {
 	report := biosDoctorReport{Roots: append([]string(nil), roots...)}
-	found := make(map[string]biosFileFingerprint)
+	if len(roots) > 0 {
+		report.TargetRoot = roots[0]
+	}
+	found := make(map[string][]biosFileFingerprint)
 	files := 0
 	for _, root := range roots {
 		rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
-		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		_ = filepath.WalkDir(root, func(filePath string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil || entry == nil {
 				return nil
 			}
 			if entry.IsDir() {
-				if strings.Count(filepath.Clean(path), string(os.PathSeparator))-rootDepth >= biosScanMaxDepth {
+				if strings.Count(filepath.Clean(filePath), string(os.PathSeparator))-rootDepth >= biosScanMaxDepth {
 					return filepath.SkipDir
 				}
 				return nil
@@ -128,52 +265,43 @@ func scanBIOSRoots(roots []string) biosDoctorReport {
 				return nil
 			}
 			files++
-			sum := biosNotHashed
-			if info.Size() <= biosHashMaxBytes {
-				file, err := os.Open(path)
-				if err != nil {
-					return nil
-				}
-				h := sha256.New()
-				_, copyErr := io.Copy(h, io.LimitReader(file, biosHashMaxBytes+1))
-				closeErr := file.Close()
-				if copyErr != nil || closeErr != nil {
-					return nil
-				}
-				sum = hex.EncodeToString(h.Sum(nil))
+			rel, err := filepath.Rel(root, filePath)
+			if err != nil {
+				return nil
 			}
 			item := biosFileFingerprint{
-				Name:   entry.Name(),
-				Root:   root,
-				SHA256: sum,
+				Name: entry.Name(), Root: root, Path: filePath,
+				Relative: filepath.ToSlash(rel), Size: info.Size(), SHA256: biosNotHashed,
 			}
-			key := strings.ToLower(entry.Name())
-			if _, exists := found[key]; !exists {
-				found[key] = item
+			if info.Size() <= biosHashMaxBytes {
+				if file, err := os.Open(filePath); err == nil {
+					h1, h256 := sha1.New(), sha256.New()
+					n, copyErr := io.Copy(io.MultiWriter(h1, h256), io.LimitReader(file, biosHashMaxBytes+1))
+					closeErr := file.Close()
+					if copyErr == nil && closeErr == nil && n <= biosHashMaxBytes {
+						item.SHA1 = hex.EncodeToString(h1.Sum(nil))
+						item.SHA256 = hex.EncodeToString(h256.Sum(nil))
+					}
+				}
 			}
+			found[strings.ToLower(item.Name)] = append(found[strings.ToLower(item.Name)], item)
 			report.Files = append(report.Files, item)
 			return nil
 		})
 	}
 	sort.Slice(report.Files, func(i, j int) bool {
 		if strings.EqualFold(report.Files[i].Name, report.Files[j].Name) {
-			return report.Files[i].Root < report.Files[j].Root
+			return report.Files[i].Path < report.Files[j].Path
 		}
 		return strings.ToLower(report.Files[i].Name) < strings.ToLower(report.Files[j].Name)
 	})
 	for _, group := range biosFilenameGroups {
 		system := biosSystemStatus{Name: group.name, Ready: true, Optional: group.optional}
-		for _, requiredNames := range group.accepted {
-			matched := false
-			for _, name := range requiredNames {
-				if item, ok := found[strings.ToLower(path.Base(name))]; ok {
-					matched = true
-					system.Files = append(system.Files, item)
-				}
-			}
-			if !matched {
+		for _, names := range group.accepted {
+			check := biosDoctorCheckGroup(names, report.TargetRoot, found, catalog)
+			system.Checks = append(system.Checks, check)
+			if check.Kind != biosCheckVerified {
 				system.Ready = false
-				system.Missing = append(system.Missing, strings.Join(requiredNames, " or "))
 			}
 		}
 		report.Systems = append(report.Systems, system)
@@ -200,7 +328,7 @@ func biosScanStart() {
 	biosScan.running = true
 	biosScan.Unlock()
 	go func() {
-		report := scanBIOSRoots(biosDoctorRoots())
+		report := scanBIOSRoots(biosDoctorRootsForScan())
 		if IsWindows() || hakuxOffered() {
 			xbox := emuXboxScan()
 			report.Xbox = &xbox
@@ -275,13 +403,9 @@ func biosDoctorXboxLines(xbox *emuXboxReport) []string {
 	return append(lines, "")
 }
 
-func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf.Font,
-	panelX, panelY, panelW, panelH, padX, headerH int32, report biosDoctorReport, scanning bool) {
-	contentX := panelX + padX
-	contentW := panelW - 2*padX
-	lineH := int32(font.Height()) + 7
-	// Under the shared page header's measured band, not a number guessed here.
-	y := panelY + headerH + 16
+// biosDoctorLines keeps the diagnosis separate from drawing, so the precise
+// file and destination paths can also be checked without an SDL window.
+func biosDoctorLines(report biosDoctorReport, scanning bool) []string {
 	status := "Checked " + pluralizeCount(len(report.Roots), "location", "locations") +
 		" · found " + pluralizeCount(len(report.Files), "file", "files")
 	if scanning {
@@ -290,18 +414,52 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 			status += " (showing the last result)"
 		}
 	}
-	lines := []string{status, "SHA-256 fingerprints · filenames indicate presence, not authenticity", ""}
+	lines := []string{status, "Known-good SHA-1 checksums: libretro System.dat v1.19.0"}
+	if report.TargetRoot != "" {
+		lines = append(lines, "BIOS folder checked for RetroArch: "+report.TargetRoot)
+	}
+	lines = append(lines, "")
 	for _, system := range report.Systems {
+		allMissing := true
+		for _, check := range system.Checks {
+			if check.Kind != biosCheckMissing {
+				allMissing = false
+				break
+			}
+		}
 		switch {
 		case system.Ready:
-			lines = append(lines, system.Name+" · ready")
-		case system.Optional:
-			lines = append(lines, system.Name+" · not found (most games run without) "+strings.Join(system.Missing, ", "))
+			lines = append(lines, system.Name+" · verified")
+		case system.Optional && allMissing:
+			lines = append(lines, system.Name+" · optional, not found (most games run without)")
 		default:
-			lines = append(lines, system.Name+" · missing "+strings.Join(system.Missing, ", "))
+			lines = append(lines, system.Name+" · needs attention")
 		}
-		for _, file := range system.Files {
-			lines = append(lines, "  "+file.Name+"  "+file.SHA256)
+		for _, check := range system.Checks {
+			switch check.Kind {
+			case biosCheckVerified:
+				lines = append(lines, "  Verified: "+filepath.Base(check.Expected))
+			case biosCheckMissing:
+				lines = append(lines, "  Missing: "+strings.Join(check.Names, " or "))
+				lines = append(lines, "    Put a known-good copy at "+check.Expected)
+			case biosCheckWrongHash:
+				lines = append(lines, "  Wrong hash: "+check.Found)
+				if check.Note != "" {
+					lines = append(lines, "    "+check.Note)
+				}
+				lines = append(lines, "    Replace with a known-good copy at "+check.Expected)
+			case biosCheckWrongPlace:
+				lines = append(lines, "  Wrong folder: "+check.Found)
+				lines = append(lines, "    Put this verified file at "+check.Expected)
+			case biosCheckUnverified:
+				lines = append(lines, "  Cannot verify: "+check.Found)
+				if check.Note != "" {
+					lines = append(lines, "    "+check.Note)
+				}
+				if !biosDoctorSamePath(check.Found, check.Expected) {
+					lines = append(lines, "    Expected at "+check.Expected)
+				}
+			}
 		}
 		lines = append(lines, "")
 	}
@@ -309,19 +467,78 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 	if len(report.Files) > 0 {
 		lines = append(lines, "Other files found:")
 		known := make(map[string]bool)
-		for _, system := range report.Systems {
-			for _, file := range system.Files {
-				known[strings.ToLower(file.Name)] = true
+		for _, group := range biosFilenameGroups {
+			for _, names := range group.accepted {
+				for _, name := range names {
+					known[strings.ToLower(path.Base(name))] = true
+				}
 			}
 		}
 		for _, file := range report.Files {
 			if !known[strings.ToLower(file.Name)] {
-				lines = append(lines, "  "+file.Name+"  "+file.SHA256)
+				lines = append(lines, "  "+file.Path+"  SHA-256 "+file.SHA256)
 			}
 		}
 	} else if !scanning || len(report.Roots) > 0 {
 		lines = append(lines, "No BIOS files found in the common locations.")
 	}
+	return lines
+}
+
+// biosDoctorWrapLines splits long paths over rows without hiding their ends.
+// A width based on the font's wide M glyph keeps the rendered rows within the
+// panel while preserving every character of a destination path.
+func biosDoctorWrapLines(lines []string, maxChars int) []string {
+	if maxChars < 12 {
+		maxChars = 12
+	}
+	var out []string
+	for _, original := range lines {
+		line := original
+		if line == "" {
+			out = append(out, "")
+			continue
+		}
+		first := true
+		for line != "" {
+			prefix := ""
+			if !first {
+				prefix = "    "
+			}
+			limit := maxChars - len(prefix)
+			runes := []rune(line)
+			if len(runes) <= limit {
+				out = append(out, prefix+line)
+				break
+			}
+			cut := limit
+			for i := limit - 1; i > 4; i-- {
+				if runes[i] == ' ' || runes[i] == '/' || runes[i] == '\\' {
+					cut = i + 1
+					break
+				}
+			}
+			out = append(out, strings.TrimRight(prefix+string(runes[:cut]), " "))
+			line = strings.TrimLeft(string(runes[cut:]), " ")
+			first = false
+		}
+	}
+	return out
+}
+
+func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf.Font,
+	panelX, panelY, panelW, panelH, padX, headerH int32, report biosDoctorReport, scanning bool) {
+	contentX := panelX + padX
+	contentW := panelW - 2*padX
+	lineH := int32(font.Height()) + 7
+	// Under the shared page header's measured band, not a number guessed here.
+	y := panelY + headerH + 16
+	charW, _, _ := font.SizeUTF8("M")
+	if charW < 1 {
+		charW = 1
+	}
+	maxChars := int(contentW / int32(charW))
+	lines := biosDoctorWrapLines(biosDoctorLines(report, scanning), maxChars)
 	available := int((panelY + panelH - 44 - y) / lineH)
 	if available < 1 {
 		available = 1

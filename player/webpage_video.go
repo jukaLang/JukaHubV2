@@ -427,6 +427,12 @@ func drawWebVideoThumb(r *sdl.Renderer, doc *webDocument, thumb string, rect sdl
 	if len(data) == 0 {
 		return false
 	}
+	if webDecodeAsync() {
+		// On a handheld the art decodes off the render thread like any page
+		// picture (webpage_decode.go); the plain card shows until it lands.
+		webDecodeRequest(doc, thumb, key, rect, fit, true)
+		return false
+	}
 	rwops, err := sdl.RWFromMem(data)
 	if err != nil || rwops == nil {
 		return false

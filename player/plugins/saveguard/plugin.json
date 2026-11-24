@@ -1,12 +1,13 @@
 {
   "name": "saveguard",
   "title": "Save guard",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Backs up your game saves quietly each time JukaHub starts, only when a save changed, and keeps its last five. Restore a backup opens the save manager.",
   "author": "JukaHub",
   "entry": "saveguard.sh",
   "icon": "backup",
   "enabled": true,
+  "permissions": ["files"],
   "actions": [
     {"id": "backup", "label": "Back up saves now"},
     {"id": "last", "label": "Last backup"},

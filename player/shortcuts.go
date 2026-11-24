@@ -137,6 +137,13 @@ var shortcutCategories = []struct {
 			{"Paint", "Enter draw, T tools, C colours, Z / Ctrl+Y undo / redo, - + zoom, M file, Ctrl+S save"},
 			{"Stopwatch", "Enter start / pause, X lap, Y reset or preset, Tab switch"},
 			{"Solitaire", "Enter pick / place, D draw, F smart move, Z / R undo / redo, M menu, N new"},
+			// The Tools hub's search and pins, and its small pages (toolsearch.go,
+			// toolspages.go).
+			{"Tools hub", "Y, / or Ctrl+F search, X pin / unpin, Esc clears the search"},
+			{"What's using space", "Enter open, X show in Files, Y largest files, ← → drive, Esc up"},
+			{"Verify a file", "Enter copy / choose, X copy SHA-256, Y another file"},
+			{"Connection check", "X run again, Y copy the report"},
+			{"Screen test", "Enter / → next, ← previous, 1-9 a card, Y auto, X hide the caption"},
 		},
 	},
 }

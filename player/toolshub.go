@@ -27,6 +27,7 @@ package main
 import (
 	"context"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,6 +127,9 @@ func toolsHubEnsureScenes(config *Config) {
 	osAppsEnsureScenes(config)
 	// Controller Mode's page (ctlmode.go).
 	ctlModeEnsureScene(config)
+	// Connection check, What's using space, Verify a file and the Screen
+	// test (toolspages.go).
+	toolsPagesEnsureScenes(config)
 }
 
 // toolsHubEnsureScene appends a scene when no scene of that name exists.
@@ -183,8 +187,10 @@ func toolsHubOpen(config *Config) {
 	if idx < 0 {
 		return
 	}
-	// The hub replaces the panel it was opened from.
+	// The hub replaces the panel it was opened from, and a fresh visit shows
+	// every tool, not the last search (toolsearch.go).
 	qs.open = false
+	toolsHubFind.query, toolsHubFind.typing = "", false
 	toolsHub.page.reset()
 	if idx == currentSceneIndex {
 		toolsHubEnter(config)
@@ -198,8 +204,9 @@ func toolsHubOpen(config *Config) {
 // the Network tools probes that need no input, the Wi-Fi scan.
 func toolsScenesEnter(config *Config, name string) {
 	// The everyday apps load what they show too, and the one being left saves
-	// (osapps.go).
+	// (osapps.go). So do the small tool pages (toolspages.go).
 	osAppsSceneEnter(config, name)
+	toolsPagesEnter(config, name)
 	switch name {
 	case toolsHubSceneName:
 		toolsHubEnter(config)
@@ -270,6 +277,9 @@ func toolsScenesHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 
 // toolsScenesClick routes a click or tap on a tools page.
 func toolsScenesClick(mx, my int32, config *Config) bool {
+	if toolsPagesClick(mx, my, config) {
+		return true
+	}
 	switch toolsScenesCurrent(config) {
 	case toolsHubSceneName:
 		return toolsHubClick(mx, my, config)
@@ -283,6 +293,9 @@ func toolsScenesClick(mx, my int32, config *Config) bool {
 
 // toolsScenesWheel scrolls a tools page (or its open sheet).
 func toolsScenesWheel(config *Config, y int32) bool {
+	if toolsPagesWheel(config, y) {
+		return true
+	}
 	switch toolsScenesCurrent(config) {
 	case toolsHubSceneName:
 		return toolsHub.page.wheel(y)
@@ -298,12 +311,17 @@ func toolsScenesWheel(config *Config, y int32) bool {
 // sheet the way Patch's footer follows its dialog. hints is the default
 // navigate/open/back row.
 func toolsScenesFooterHints(name string, hints []FooterHint) []FooterHint {
+	// The small tool pages follow their focus and their sheet (toolspages.go).
+	if pageHints, ok := toolsPagesFooterHints(name); ok {
+		return pageHints
+	}
 	switch name {
 	case toolsHubSceneName:
 		if toolsHub.page.chip {
 			return []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Copy IP"}, {Button: "B", Label: "Back"}}
 		}
-		return append(hints, FooterHint{Button: "L1/R1", Label: "Section"})
+		// Search and pins (toolsearch.go).
+		return toolsHubFindHints(append(hints, FooterHint{Button: "L1/R1", Label: "Section"}))
 	case netToolsSceneName:
 		return netToolsFooterHints(hints)
 	case wifiScrSceneName:
@@ -373,13 +391,21 @@ func toolsHubWiFiSSID() string {
 	return toolsHubWiFiName.ssid
 }
 
-// toolsHubRebuild rebuilds the tiles and keeps the focus on the same tool.
+// toolsHubRebuild rebuilds the tiles and keeps the focus on the same tool. A
+// new search lands on its first result instead.
 func toolsHubRebuild(config *Config) {
 	focusID := ""
 	if c := toolsHub.page.cursor; c >= 0 && c < len(toolsHub.tiles) {
 		focusID = toolsHub.tiles[c].id
 	}
-	toolsHub.tiles = toolsHubBuildTiles(config, toolsHubReadNet(), toolsHub.slow, toolsHubWiFiSSID())
+	net := toolsHubReadNet()
+	searchWas := toolsHubFind.applied
+	// The search and the pins shape the list (toolsearch.go).
+	toolsHub.tiles = toolsHubFindApply(toolsHubBuildTiles(config, net, toolsHub.slow, toolsHubWiFiSSID()), net)
+	if toolsHubFind.applied != searchWas {
+		focusID = ""
+		toolsHub.page.reset()
+	}
 	toolsHub.builtAt = time.Now()
 	if focusID != "" {
 		if i := toolsHubIndexOf(toolsHub.tiles, focusID); i >= 0 {
@@ -425,8 +451,12 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	tiles = append(tiles, mailcalHubTile())
 
 	// EVERYDAY APPS — Notes, Tasks, Voice Memos, Paint, the clocks and the
-	// Calculator (osapps.go).
-	tiles = append(tiles, osAppsHubTiles(has)...)
+	// Calculator (osapps.go), and the QR maker (qrmaker.go).
+	apps := append(osAppsHubTiles(has), qrMakerHubTile())
+	if apps[0].section == "" {
+		apps[0].section, apps[0].sectionIcon = "Everyday apps", "apps"
+	}
+	tiles = append(tiles, apps...)
 
 	// TOOLKITS
 	toolbox := toolsHubTile{
@@ -478,6 +508,9 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 		wifi.icon = "wifi-off"
 	}
 	tiles = append(tiles, network, wifi)
+	// Every step from Wi-Fi to the internet, checked in one press
+	// (conncheck_ui.go); no need, it is what to run when offline.
+	tiles = append(tiles, connCheckHubTile())
 	// The card as a drive on a computer, over WebDAV (davshare_ui.go).
 	tiles = append(tiles, davShareHubTile())
 	// The handheld as a Wi-Fi network of its own, on the firmware's hotspot
@@ -516,8 +549,12 @@ func toolsHubBuildTiles(config *Config, net toolsHubNet, slow toolsHubSlowValues
 	if has("DiskSpace") {
 		system = append(system, toolsHubTile{id: "disk", label: "Disk space", icon: "disk", value: "How full each drive is"})
 	}
-	// The guided hands-on check of this device, with its report (devcheck_ui.go).
-	system = append(system, devCheckHubTile())
+	// What fills a drive, folder by folder (spaceuse_ui.go), and one file's
+	// checksums (filecheck_ui.go).
+	system = append(system, spaceUseHubTile(), fileCheckHubTile())
+	// The guided hands-on check of this device, with its report (devcheck_ui.go),
+	// and the display's own test cards (screentest.go).
+	system = append(system, devCheckHubTile(), screenTestHubTile())
 	// The games' SD card: health flags, read test, fake card test
 	// (cardcheck_ui.go); handheld only.
 	if cardCheckSupported() {
@@ -659,7 +696,8 @@ func toolsHubHeader(net toolsHubNet) UIPageHeader {
 // status bar and footer on top.
 func renderToolsHub(renderer *sdl.Renderer, config *Config) {
 	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
-	if toolsHub.tiles == nil || time.Since(toolsHub.builtAt) > time.Second {
+	// A letter typed into the search rebuilds at once (toolsearch.go).
+	if toolsHub.tiles == nil || time.Since(toolsHub.builtAt) > time.Second || toolsHubFindStale() {
 		if time.Since(toolsHub.slow.at) > 15*time.Second {
 			toolsHubRefreshSlow(config)
 		}
@@ -667,7 +705,11 @@ func renderToolsHub(renderer *sdl.Renderer, config *Config) {
 	}
 	net := toolsHubReadNet()
 	header := toolsHubHeader(net)
+	toolsHubFindHeader(&header, len(toolsHub.tiles))
 	toolsHubDrawPage(renderer, config, &toolsHub.page, header, toolsHub.tiles, net.ip, toolsHubRingVisible())
+	if len(toolsHub.tiles) == 0 && toolsHubFind.applied != "" {
+		toolsHubFindDrawEmpty(renderer, config, header, net.ip)
+	}
 	renderStatusBar(renderer, config)
 	renderFooter(renderer, config)
 	renderer.SetDrawColor(0, 0, 0, 255)
@@ -696,14 +738,21 @@ func toolsHubActivate(config *Config, idx int) {
 		ShowToast(toolsHubBlockedMessage(t.label, t.blocked), ToastKindWarning)
 		return
 	}
-	if t.id != "powertools" {
+	// A pinned copy opens what its tile opens; a Network tools tool found by
+	// the search opens that page on it (toolsearch.go).
+	id := toolsHubBaseID(t.id)
+	if id != "powertools" {
 		// Power tools plays its own sound as it opens.
 		PlayActivateSound()
 	}
-	if osAppsHubActivate(config, t.id) {
+	if spec, ok := strings.CutPrefix(id, toolsNetPrefix); ok {
+		netToolsOpenAt(config, spec)
 		return
 	}
-	switch t.id {
+	if osAppsHubActivate(config, id) {
+		return
+	}
+	switch id {
 	case "party":
 		partyOpenScreen(config)
 	case "partymode":
@@ -736,6 +785,16 @@ func toolsHubActivate(config *Config, idx int) {
 		toolsHubOpenScene(config, "NetSpeed")
 	case "ctlmode":
 		ctlModeOpen(config)
+	case "conncheck":
+		connCheckOpen(config)
+	case "spaceuse":
+		spaceUseOpen(config, "")
+	case "filecheck":
+		fileCheckOpen(config, "")
+	case "screentest":
+		screenTestOpen(config)
+	case "qrmaker":
+		qrMakerOpen(config)
 	case "terminal":
 		toolsHubOpenScene(config, "Terminal")
 	case "cmddeck":
@@ -882,8 +941,21 @@ func toolsHubKey(e *sdl.KeyboardEvent, config *Config) bool {
 		p.jumpSection(toolsHub.tiles, 1)
 	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE:
 		toolsHubPress(config)
+	case sdl.K_y, sdl.K_SLASH:
+		// Search and pins (toolsearch.go); Ctrl+F searches too.
+		toolsHubSearchOpen()
+	case sdl.K_f:
+		if e.Keysym.Mod&sdl.KMOD_CTRL == 0 {
+			return false
+		}
+		toolsHubSearchOpen()
+	case sdl.K_x:
+		toolsHubPinFocused()
 	case sdl.K_ESCAPE, sdl.K_BACKSPACE, sdl.K_b:
-		goBackScene(config)
+		// B clears a search before it leaves the hub.
+		if !toolsHubSearchClear() {
+			goBackScene(config)
+		}
 	default:
 		return false
 	}
@@ -911,8 +983,16 @@ func toolsHubPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 		p.jumpSection(toolsHub.tiles, 1)
 	case sdl.CONTROLLER_BUTTON_A:
 		toolsHubPress(config)
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Search and pins (toolsearch.go).
+		toolsHubSearchOpen()
+	case sdl.CONTROLLER_BUTTON_X:
+		toolsHubPinFocused()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		goBackScene(config)
+		// B clears a search before it leaves the hub.
+		if !toolsHubSearchClear() {
+			goBackScene(config)
+		}
 	default:
 		return false
 	}

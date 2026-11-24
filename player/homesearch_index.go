@@ -277,6 +277,9 @@ func homeSearchCatalog() []homeSearchEntry {
 	// Notes, Tasks, Voice Memos, Paint, Stopwatch, Pomodoro, Solitaire
 	// (osapps.go).
 	entries = append(entries, osAppsSearchEntries()...)
+	// Connection check, What's using space, Verify a file, Screen test and
+	// the QR maker (toolspages.go).
+	entries = append(entries, toolsPagesSearchEntries()...)
 	return append(entries, homeSearchStoreEntries()...)
 }
 

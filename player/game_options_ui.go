@@ -51,6 +51,7 @@ const (
 	gameOptionsRowAnalog     // psxanalog_ui.go: PlayStation games only
 	gameOptionsRowWidescreen // widescreen_ui.go: wide screens only
 	gameOptionsRowDiagnose
+	gameOptionsRowTimeMachine
 	gameOptionsRowChooseCover
 	gameOptionsRowRemoveCover
 	gameOptionsRowCoverName
@@ -171,6 +172,8 @@ func gameOptionsRowName(row int) string {
 		return emuExtrasRowName(row) // widescreen_ui.go
 	case gameOptionsRowDiagnose:
 		return "Check why it won't start"
+	case gameOptionsRowTimeMachine:
+		return "Time Machine"
 	case gameOptionsRowChooseCover:
 		return "Choose cover"
 	case gameOptionsRowRemoveCover:
@@ -272,6 +275,8 @@ func gameOptionsRowHint(row int) string {
 		return emuExtrasSheetHint(gameOptsUI.game, row)
 	case gameOptionsRowDiagnose:
 		return "Missing BIOS, core or game files, and where to copy them"
+	case gameOptionsRowTimeMachine:
+		return "Go back to an earlier save, or pin a checkpoint with a name"
 	case gameOptionsRowChooseCover:
 		return "The closest box art on the server or in the Imgs folder"
 	case gameOptionsRowRemoveCover:
@@ -377,6 +382,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 		return emuExtrasSheetValue(gameOptsUI.game, row)
 	case gameOptionsRowDiagnose:
 		return "Check"
+	case gameOptionsRowTimeMachine:
+		return "→"
 	case gameOptionsRowChooseCover:
 		return "→"
 	case gameOptionsRowRemoveCover:
@@ -927,6 +934,12 @@ func activateGameOptionsRow() {
 		game := gameOptsUI.game
 		closeGameOptions()
 		gameDiagRunManual(game)
+	case gameOptionsRowTimeMachine:
+		// The game's moments and checkpoints (savetimeline_ui.go).
+		game := gameOptsUI.game
+		closeGameOptions()
+		closeGameLibraryPanel()
+		timeMachineOpenFor(appConfig, game)
 	case gameOptionsRowChooseCover:
 		openArtChoose() // artwork_choose.go
 	case gameOptionsRowRemoveCover:

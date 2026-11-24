@@ -101,6 +101,10 @@ type webImagePos struct {
 	// a rounded thumbnail) or on a background layer that covers its whole
 	// box. Zero draws the square texture.
 	Radius int32
+	// Boxes are the container boxes around the picture (its block's), so a
+	// card's surface and a containing block reach around it
+	// (webpage_layers.go). Shared with the block; read only.
+	Boxes []int
 }
 
 // webSrcsetTargetWidth is the design-pixel width a responsive image should
@@ -526,11 +530,41 @@ func (p *webParser) webImageURL(src string) string {
 }
 
 // webImageCacheKey turns an image key into a thumbnail-cache key. Data URIs
-// are far too large to be map keys, so everything hashes.
+// are far too large to be cache keys, so everything hashes. The hash is
+// remembered per address: every picture on screen asked for it again every
+// frame, a SHA-1 and two allocations each.
 func webImageCacheKey(src string) string {
+	webImageKeyMemo.Lock()
+	if key, ok := webImageKeyMemo.keys[src]; ok {
+		webImageKeyMemo.Unlock()
+		return key
+	}
+	webImageKeyMemo.Unlock()
 	sum := sha1.Sum([]byte(src))
-	return "webimg:" + hex.EncodeToString(sum[:])
+	key := "webimg:" + hex.EncodeToString(sum[:])
+	if len(src) <= webImageKeyMemoMaxLen {
+		webImageKeyMemo.Lock()
+		if webImageKeyMemo.keys == nil || len(webImageKeyMemo.keys) >= webImageKeyMemoMax {
+			webImageKeyMemo.keys = make(map[string]string, 256)
+		}
+		webImageKeyMemo.keys[src] = key
+		webImageKeyMemo.Unlock()
+	}
+	return key
 }
+
+// webImageKeyMemo is webImageCacheKey's memory: address → key. It is emptied
+// when it fills and when a page is released (webDecodeReset). Data URIs past
+// webImageKeyMemoMaxLen are hashed every time rather than kept as map keys.
+var webImageKeyMemo struct {
+	sync.Mutex
+	keys map[string]string
+}
+
+const (
+	webImageKeyMemoMax    = 2048
+	webImageKeyMemoMaxLen = 4096
+)
 
 // imageBytes returns one image's fetched bytes under the image mutex.
 func (d *webDocument) imageBytes(key string) []byte {
@@ -1016,7 +1050,12 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 	// scheduled before the first one finished, so all of them ran and the
 	// page cap never held.
 	queue := make(chan string)
-	for i := 0; i < webImageFetchWorkers; i++ {
+	workers := webImageFetchWorkers
+	if n := webTuneNow().FetchWorkers; n > 0 {
+		// The Smart Pro S's Wi-Fi 6 and eight cores take a few more at once.
+		workers = n
+	}
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1210,6 +1249,18 @@ func (l *webLayouter) emitImageBox(b webBlock, box sdl.Rect) {
 	if radius < 0 {
 		radius = 0
 	}
+	// The picture's own shadow, background and border are content inside the
+	// box around it: they paint over that box's surface (webSortPaintOrder),
+	// and the box's container pass never takes them for its own.
+	rectStart, bgStart := len(layout.Rects), len(layout.Backgrounds)
+	defer func() {
+		for i := rectStart; i < len(layout.Rects); i++ {
+			layout.Rects[i].Inner = true
+		}
+		for i := bgStart; i < len(layout.Backgrounds); i++ {
+			layout.Backgrounds[i].Inner = true
+		}
+	}()
 	if !b.Style.Invisible {
 		l.emitBoxShadow(b.Style, box, radius, b.ZIndex)
 		if b.Style.HasBg {
@@ -1249,6 +1300,7 @@ func (l *webLayouter) emitImageBox(b webBlock, box sdl.Rect) {
 		Invisible:      b.Style.Invisible,
 		Opacity:        webPaintOpacity(b.Style),
 		Radius:         radius,
+		Boxes:          b.Boxes,
 	})
 }
 
@@ -1282,12 +1334,32 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 		return
 	}
 	key := webImageCacheKey(im.Key)
+	async := webDecodeAsync()
 	if tex := getThumbnailTextures().Get(key); tex != nil {
+		if async {
+			// A box larger than the texture was made for (the page zoomed
+			// in) asks for a sharper decode; this one draws until then.
+			webDecodeWants(doc, im.Key, key, rect, im.ObjectFit)
+		}
 		_ = drawWebImagePicture(r, tex, rect, im)
 		return
 	}
 	data := doc.imageBytes(im.Key)
 	if len(data) == 0 {
+		drawWebImagePlaceholder(r, config, rect)
+		return
+	}
+	if async {
+		// Decoded off the render thread at the size this box needs
+		// (webpage_decode.go); the box stays empty until the texture lands.
+		if webDecodeRequest(doc, im.Key, key, rect, im.ObjectFit, true) == webDecodeFailed {
+			drawWebImagePlaceholder(r, config, rect)
+		}
+		return
+	}
+	// A small file can declare a canvas of gigabytes; refuse it before the
+	// decoder allocates it.
+	if m, ok := doc.imageMeta(im.Key); ok && m.HasSize && int64(m.W)*int64(m.H) > webTuneNow().MaxPixels {
 		drawWebImagePlaceholder(r, config, rect)
 		return
 	}
@@ -1609,6 +1681,6 @@ func drawWebImagePlaceholder(r *sdl.Renderer, config *Config, rect sdl.Rect) {
 		return
 	}
 	_ = config
-	fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 2, sdl.Color{R: 236, G: 239, B: 244, A: 255})
-	strokeRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 2, 1, sdl.Color{R: 200, G: 206, B: 216, A: 255})
+	webPaintFill(r, rect.X, rect.Y, rect.W, rect.H, 2, sdl.Color{R: 236, G: 239, B: 244, A: 255})
+	webPaintStroke(r, rect.X, rect.Y, rect.W, rect.H, 2, 1, sdl.Color{R: 200, G: 206, B: 216, A: 255})
 }

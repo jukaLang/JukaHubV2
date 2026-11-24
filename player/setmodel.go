@@ -1551,6 +1551,13 @@ func setBuildSections() []setSection {
 				},
 				// Recent games side by side, each where it was left (gameswitcher.go).
 				gameSwitcherSettingsRow(),
+				// A copy of each game's safe saves while it runs (savetimeline.go).
+				saveTimelineSettingsRow(),
+				// Where games, BIOS files and saves live, and one BIOS set for
+				// every emulator (libfolders_ui.go); a handheld's card on a
+				// computer (libportable.go).
+				libFoldersSettingsRow(),
+				portableCardSettingsRow(),
 				// Last played, All games, genres… on Home's Collections tab (autocoll.go).
 				autoCollSettingsRow(),
 				// NextUI's Collections/*.txt, both ways (collections_nextui.go).
@@ -1828,6 +1835,10 @@ func setBuildSections() []setSection {
 				},
 				// The level in the top bar: Always, 20% or less, Never (power_options.go).
 				batteryPercentSettingsRow(),
+				// "Still frames": a quiet Home is drawn only when it changes
+				// (stillframes.go); "Battery life check" measures it (powercheck.go).
+				stillFramesSettingsRow(),
+				powerCheckSettingsRow(),
 				// "Lock screen after" (the screensaver timeout) moved to Display
 				// (displaysettings.go).
 				{
@@ -2190,10 +2201,16 @@ func setPluginRows(*Config) []setRow {
 				return ok && entry.Enabled
 			},
 			Set: func(c *Config, on bool) {
-				plugSetEnabled(c, name, on)
 				// The Plugins page's own switch path: switched on, the plugin's
 				// onEnable action runs, and the toast says what it added or
-				// withdrew. This row used to skip both (plughooks.go).
+				// withdrew. This row used to skip both (plughooks.go). A
+				// plugin that asks for something not allowed yet asks first
+				// (plugperms.go).
+				if on {
+					plugAskEnable(c, name, func() { plugAfterToggle(c, name, true) })
+					return
+				}
+				plugSetEnabled(c, name, on)
 				plugAfterToggle(c, name, on)
 			},
 		})

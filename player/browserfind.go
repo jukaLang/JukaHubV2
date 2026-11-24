@@ -19,6 +19,7 @@ package main
 // exactly where it was.
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -67,8 +68,11 @@ func browserFindPageKey(elem Element) string {
 }
 
 // browserFindRowText is one laid-out row as a single string: the text of every
-// run on that line, concatenated in reading order. Runs are already in x order,
-// so this is the line as the reader sees it.
+// run on that line, in reading order, with the space the layout put between
+// two words written back. Runs are already in x order, so this is the line as
+// the reader sees it, and a search for two words ("table of contents") finds
+// the line that shows them — the words used to be joined with nothing between
+// them, so only "tableofcontents" matched.
 func browserFindRowText(row webRow) string {
 	if len(row.Runs) == 0 {
 		return ""
@@ -78,6 +82,9 @@ func browserFindRowText(row webRow) string {
 	}
 	var sb strings.Builder
 	for i := range row.Runs {
+		if i > 0 && row.Runs[i].SpaceBefore > 0 {
+			sb.WriteByte(' ')
+		}
 		sb.WriteString(row.Runs[i].Text)
 	}
 	return sb.String()
@@ -100,6 +107,33 @@ func browserFindScan(layout *webLayout, query string) []int {
 				break
 			}
 		}
+	}
+	// A layer's or float's lines (a card overlay, a floated infobox) are found
+	// on the page row they are painted over (webpage_layers.go).
+	layered := false
+	for fi := range layout.Floats {
+		f := &layout.Floats[fi]
+		if f.Pin != webPinNone {
+			// A bar pinned to the screen is always in view: no page row to
+			// scroll to.
+			continue
+		}
+		for _, row := range f.Rows {
+			if len(rows) >= browserFindMaxMatches || layout.RowH <= 0 {
+				break
+			}
+			if !strings.Contains(strings.ToLower(browserFindRowText(row)), needle) {
+				continue
+			}
+			if pageRow := int((f.Y + row.Y) / layout.RowH); pageRow >= 0 && pageRow < len(layout.Rows) {
+				rows = append(rows, pageRow)
+				layered = true
+			}
+		}
+	}
+	if layered {
+		slices.Sort(rows)
+		rows = slices.Compact(rows)
 	}
 	return rows
 }

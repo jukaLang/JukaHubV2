@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **401** (audited 2026-11-19).
+Open tasks: **402** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -2377,6 +2377,34 @@ USB while open refuses the save. On Windows a keyboard types hex digits and the
 footer shows "0–F Type".
 **Verify.** Record in the HW log with the timings.
 
+### TOOLS-HW-1 — Tools search, pins and the five quick tools on the handheld (P2, S) [HW]
+**Why.** The Tools hub's search and pins (`toolsearch.go`) and its five small
+tools (2026-11-23) were written without a compiler or a device: the Connection
+check (`conncheck*.go`) reads wpa_cli, the routes, the neighbour table and the
+resolver; What's using space (`spaceuse*.go`) walks the whole SD card and skips
+mounts read from `/proc/self/mounts`; Verify a file (`filecheck*.go`) hashes a
+file four ways at once; the Screen test (`screentest.go`) draws whole-screen
+rect lists every frame; the QR maker (`qrmaker.go`) reuses the QR card.
+**Where.** `toolsearch.go`, `toolspages.go`, `conncheck.go`, `conncheck_ui.go`,
+`spaceuse.go`, `spaceuse_ui.go`, `filecheck.go`, `filecheck_ui.go`,
+`screentest.go`, `qrmaker.go`, `toolshub.go`, `toolsgrid.go`,
+`nettoolsscreen.go`, `systool_disk.go`, `files_manager.go`; docs/TOOLS.md.
+**Done when.** On a Smart Pro: Y on Tools filters as letters are typed
+("stor" finds Disk space and What's using space, "ftp" finds the FTP server and
+opens Network tools on it), B clears the search, X pins three tools that lead
+the page after a restart. The Connection check on a good network says
+"Everything works"; with Wi-Fi off it says so and Open Wi-Fi joins a network,
+B comes back to a fresh check; with the router's WAN cable pulled it blames the
+internet, not the router; with the clock set to 2020 it names the clock. What's
+using space scans a full 128 GB card in about a minute with the menus smooth,
+Roms is the biggest folder, X shows a folder in Files, and the "Other used
+space" row is plausible on exFAT. Verify a file on a 4 GB ISO matches the
+SHA-256 from its download page (paste from the Phone companion) within two
+minutes. Every Screen test card fills the screen with no bars; Fine lines show
+no shimmer; Auto steps every three seconds. A QR maker code scans on a phone.
+On a Brick (1024×768) the button row of the Connection check fits.
+**Verify.** Record in the HW log with the scan and hash timings.
+
 ### APPC-HW-1 — App Center installs, roll back and clean return on a device (P1, S) [HW] [NET]
 **Why.** The App Center (`appcenter*.go`, 2026-11-19) installs TrimUI apps
 from GitHub releases through `pkgstage.go` with `Apps` as the root, restores
@@ -3675,13 +3703,35 @@ presentation attributes as CSS hints (`webpage_hints.go`), font sizes
 relative to the parent and `rem` to the root, `inherit` keywords, the
 browser's UA defaults (em headings, raised `<sup>`, centred `th`, 40px
 quotes), `line-clamp`, gradient text, `<center>` and centred tables.
+2026-11-23 night ("Improve internet layout engine even further...make sure
+to support Trimui Smart Pro S...do optimizations for it"), also unbuilt: a
+per-device tune (`webpage_tune.go`; Smart Pro S 4 decode threads, A133P 2),
+pictures decoded off the render thread and scaled to their box
+(`webpage_decode.go`), text drawn as joined stretches and boxes, borders and
+gradients as geometry (`webpage_paintfast.go`), serif faces, table cells
+that fill their row with `vertical-align`/`valign`, `nowrap`/`background`/
+`hspace`/`vspace` attributes and soft hyphens.
+2026-11-24 ("Improve web browser layering engine"), also unbuilt: a
+positioned subtree is one layer (`webpage_layers.go`), every positioned
+element has an anchor box, surfaces paint in tree order, layers and sticky
+bars in stacking-key order with CSS's paint phases, sticky limits and
+bottom-sticky, overflow clips, hidden/off-screen layers dropped, and layer
+links, fields and text reachable (`browser.go` taps, `browserfind.go`).
+2026-11-24 ("cnn.com still doesnt render correctly...use full rsolution..
+use position:fixed and pin to screen"), also unbuilt: the page laid out at
+the view's full width (no 38 em column), `position: fixed` layers pinned to
+the screen with pinned hit rects, every absolute box a layer with a static
+position marker, and sticky wrappers copied whole (`webCollectStickies`).
 **Where.** `webpage_svg.go`, `webpage_inline.go`, `webpage_fonts.go`,
 `webpage_paint.go`, `webpage_image.go`, `webpage.go`, `webpage_flow.go`,
-`webpage_hints.go`, `calculator.go`; `calculator.json` beside JukaHub; the JukaHub log
-(`browser` lines "RenderGeometry is unavailable", "Error loading the reader
-face").
-**Done when.** On a Smart Pro (then a Brick and a Windows PC), each step holds
-or a FIX task names what differs:
+`webpage_hints.go`, `webpage_tune.go`, `webpage_decode.go`,
+`webpage_paintfast.go`, `webpage_table.go`, `webpage_layers.go`,
+`browser.go`, `browserfind.go`, `calculator.go`;
+`calculator.json` beside JukaHub; the JukaHub log (`browser` lines
+"RenderGeometry is unavailable", "Error loading the reader face",
+"reader tune:", "over the … MP limit").
+**Done when.** On a Smart Pro (then a Brick and a Windows PC), and steps 9-17
+on a Smart Pro S too, each step holds or a FIX task names what differs:
 1. github.com/jukaLang/JukaHubV2 shows the GitHub logo and the octicons in
    the text colour, the README's badge row on one line, and its code blocks
    monospaced on a PC (Consolas); on the handheld code stays in Inter unless
@@ -3712,6 +3762,57 @@ or a FIX task names what differs:
 8. A news or shop page whose card titles use `-webkit-line-clamp: 2` cuts
    each title after two lines with "…", and a page built on
    `html { font-size: 62.5% }` reads at its normal size.
+9. The log's `reader tune:` line says "Smart Pro S, 4 decode thread(s), 2.0
+   screen(s) ahead, 10 downloads" on the Smart Pro S and "A133P handheld, 2
+   … 1.0 …, 8" on the Smart Pro. On a photo-heavy page (a news front page, a
+   Wikipedia article with a gallery) holding Down scrolls without the stall
+   each new photo used to cause (record `framestats` against the previous
+   build on both devices); photos appear within a moment of their box, the
+   ones a screen below are already there, and Settings → System → Memory
+   stays lower than before on the same page. With `JUKAHUB_WEB_DECODE=0` the
+   old behaviour returns.
+10. A full screen of article text draws at least as fast as before
+    (`framestats`), links are underlined under the spaces between their
+    words, rounded cards, chips and soft shadows look as they did, and a
+    page with a gradient header shows a smooth ramp with no bands.
+11. A Wikipedia article's h1/h2 headings are in a serif (Lora on the
+    handhelds, Georgia on a PC); Greek words in a serif paragraph are
+    readable (set in Inter). A German news article shows no stray hyphens
+    inside words, and long compounds break at their soft hyphens.
+12. A Bootstrap table (`.table`) and a Wikipedia `wikitable` with cells that
+    wrap to different heights have straight row bottoms and borders, cell text
+    sits clear of the borders, and short cells are centred (or at the top on
+    Bootstrap); Hacker News' comment rows keep the vote arrows at the top.
+13. A shop or news page whose product/story cards carry an absolutely
+    positioned badge or caption ("Sale", a duration, a title over the photo)
+    shows it over the photo at its corner as one box, not as text below the
+    card; a hero with an absolutely positioned headline and button shows them
+    over the hero picture; GitHub's README code blocks and MDN's notes keep
+    their grey/blue fill inside the page's white column. Record the frame
+    time while scrolling such a page against the previous build.
+14. A page with `position: sticky; top: 0` headers (and a table with sticky
+    `th` cells) pins them while scrolling, lets a section's header go when the
+    section ends, and the cards' badges scroll under the pinned header, not
+    over it; a `bottom: 0` sticky bar sits on the bottom edge until its own
+    place scrolls into view.
+15. No "Skip to content" link or screen-reader-only heading (Bootstrap
+    `.visually-hidden`, WordPress `.screen-reader-text`) is drawn over a
+    page's header; a carousel shows only its current slide; a page with a
+    fixed header or sidebar still reads top to bottom with nothing covering
+    its text, and a fixed cookie bar sits after the last line.
+16. Link mode (Tab / the Select menu) stops on the links inside an overlay
+    card or a floated box, a tap on an overlay's button follows it rather
+    than the link under it, and Find on page finds a word that only appears
+    inside an overlay.
+17. cnn.com fills the screen's width with the layout CNN uses at that width
+    (not a narrow centred column), its header bar stays pinned at the top
+    while the stories scroll under it (sticky or fixed alike), the cards'
+    photos, headlines and LIVE/duration badges sit where a desktop browser
+    puts them, and the header's links can be tapped and walked with the
+    D-pad at any scroll. A page with a fixed bottom bar or chat button keeps
+    it on the bottom edge; a cookie wall that covers the screen does not
+    block the page. Save the page (or a screenshot of each screen) for the
+    next pass if anything still differs.
 
 ---
 

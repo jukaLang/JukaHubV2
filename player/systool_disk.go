@@ -271,6 +271,18 @@ var sysToolDiskView struct {
 	d       sysToolDiskData
 	status  string
 	runRect sdl.Rect
+	useRect sdl.Rect
+}
+
+// sysToolDiskSpaceUse is A: what fills the first drive (spaceuse_ui.go), the
+// one JukaHub lives on.
+func sysToolDiskSpaceUse(config *Config) {
+	path := ""
+	if rows := sysToolDiskView.d.rows; len(rows) > 0 {
+		path = rows[0].vol.Path
+	}
+	PlayActivateSound()
+	spaceUseOpen(config, path)
 }
 
 func sysToolDiskSync() {
@@ -291,7 +303,7 @@ func sysToolDiskSync() {
 
 // sysToolDiskFooterHints is the Storage screen's footer row.
 func sysToolDiskFooterHints() []FooterHint {
-	return []FooterHint{{Button: "B", Label: "Back"}, {Button: "X", Label: "Refresh"}}
+	return []FooterHint{{Button: "A", Label: "What's using space"}, {Button: "X", Label: "Refresh"}, {Button: "B", Label: "Back"}}
 }
 
 // sysToolDiskDonut draws a usage ring with the percentage in its middle.
@@ -323,7 +335,7 @@ func renderSysToolDisk(renderer *sdl.Renderer, config *Config) {
 		sysToolFinishPage(renderer, config)
 		return
 	}
-	v.runRect = sdl.Rect{}
+	v.runRect, v.useRect = sdl.Rect{}, sdl.Rect{}
 	actionH := int32(f.body.Height()) + 22
 	body := sdl.Rect{X: area.X, Y: area.Y, W: area.W, H: area.H - actionH - 16}
 	rows := v.d.rows
@@ -391,7 +403,8 @@ func renderSysToolDisk(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 	ay := area.Y + area.H - actionH
-	v.runRect = sysToolAction(renderer, f, area.X, ay, "X", "Refresh", false)
+	v.useRect = sysToolAction(renderer, f, area.X, ay, "A", "What's using space", true)
+	v.runRect = sysToolAction(renderer, f, v.useRect.X+v.useRect.W+12, ay, "X", "Refresh", false)
 	sysToolFinishPage(renderer, config)
 }
 
@@ -401,6 +414,8 @@ func sysToolDiskPad(e *sdl.ControllerButtonEvent, config *Config) bool {
 		goBackScene(config)
 	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
 		sysToolDiskAgain()
+	case sdl.CONTROLLER_BUTTON_A:
+		sysToolDiskSpaceUse(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		return focusChromeBar()
 	default:
@@ -415,6 +430,8 @@ func sysToolDiskKey(e *sdl.KeyboardEvent, config *Config) bool {
 		goBackScene(config)
 	case sdl.K_x, sdl.K_y, sdl.K_F5, sdl.K_r:
 		sysToolDiskAgain()
+	case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
+		sysToolDiskSpaceUse(config)
 	case sdl.K_UP:
 		return focusChromeBar()
 	default:
@@ -426,6 +443,10 @@ func sysToolDiskKey(e *sdl.KeyboardEvent, config *Config) bool {
 func sysToolDiskClick(mx, my int32) bool {
 	if sysToolDiskView.runRect.W > 0 && pointInRect(mx, my, sysToolDiskView.runRect) {
 		sysToolDiskAgain()
+		return true
+	}
+	if sysToolDiskView.useRect.W > 0 && pointInRect(mx, my, sysToolDiskView.useRect) {
+		sysToolDiskSpaceUse(appConfig)
 		return true
 	}
 	return false

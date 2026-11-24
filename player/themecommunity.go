@@ -18,6 +18,9 @@ type themeCommunityPanelState struct {
 	open   bool
 	cursor int
 	scroll int
+	// detail shows the focused theme's page: its picture, its words and
+	// whether it was made for this handheld (storeshots.go).
+	detail bool
 }
 
 var themeCommunityPanel themeCommunityPanelState
@@ -39,6 +42,7 @@ func openThemeCommunityPanel(config *Config) {
 	themeCommunityPanel.open = true
 	themeCommunityPanel.cursor = 0
 	themeCommunityPanel.scroll = 0
+	themeCommunityPanel.detail = false
 	themeCommunityRowRects = nil
 	themeCommunityPanelRect = sdl.Rect{}
 	startThemeCatalogLoad(false)
@@ -112,18 +116,44 @@ func handleThemeCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 		return false
 	}
 	switch e.Keysym.Sym {
-	case sdl.K_UP:
+	case sdl.K_UP, sdl.K_LEFT:
 		themeCommunityMove(-1)
-	case sdl.K_DOWN:
+	case sdl.K_DOWN, sdl.K_RIGHT:
 		themeCommunityMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		themeCommunityActivate(config)
+	case sdl.K_x:
+		themeCommunityToggleDetail()
 	case sdl.K_r:
 		themeCommunityRefresh()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closeThemeCommunityPanel()
+		themeCommunityBack()
 	}
 	return true
+}
+
+// themeCommunityToggleDetail opens or closes the focused theme's page.
+func themeCommunityToggleDetail() {
+	if len(themeCommunityRows()) == 0 {
+		return
+	}
+	themeCommunityPanel.detail = !themeCommunityPanel.detail
+	if themeCommunityPanel.detail {
+		PlayActivateSound()
+	} else {
+		PlayBackSound()
+	}
+}
+
+// themeCommunityBack is B: from a theme's page back to the list, from the
+// list out of the library.
+func themeCommunityBack() {
+	if themeCommunityPanel.detail {
+		themeCommunityPanel.detail = false
+		PlayBackSound()
+		return
+	}
+	closeThemeCommunityPanel()
 }
 
 func ctrlThemeCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
@@ -131,16 +161,18 @@ func ctrlThemeCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		themeCommunityMove(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		themeCommunityMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		themeCommunityActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		themeCommunityToggleDetail()
 	case sdl.CONTROLLER_BUTTON_Y:
 		themeCommunityRefresh()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		closeThemeCommunityPanel()
+		themeCommunityBack()
 	}
 	return true
 }
@@ -251,6 +283,9 @@ func renderThemeCommunityPanel(renderer *sdl.Renderer, config *Config) {
 		visible = 1
 	}
 	panelH := headerH + int32(visible)*rowH + 34 + 34
+	if themeCommunityPanel.detail && panelH < screenHeight*7/10 {
+		panelH = screenHeight * 7 / 10 // room for the theme's picture
+	}
 	if panelH > screenHeight-20 {
 		panelH = screenHeight - 20
 	}
@@ -290,7 +325,49 @@ func renderThemeCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	themeCommunityPanel.cursor, themeCommunityPanel.scroll = cursor, scroll
 
-	if len(entries) == 0 {
+	if themeCommunityPanel.detail && len(entries) > 0 {
+		// The focused theme's page: picture, words, fit (storeshots.go).
+		themeCommunityRowRects = themeCommunityRowRects[:0]
+		entry := entries[cursor]
+		top := panelY + headerH
+		area := sdl.Rect{X: panelX + padX, Y: top, W: rowW, H: panelH - headerH - 78}
+		pic := sdl.Rect{X: area.X, Y: area.Y, W: area.W * 11 / 20, H: area.H}
+		themeCommunityPreview(renderer, entry, pic)
+		tx, tw := pic.X+pic.W+18, area.X+area.W-(pic.X+pic.W+18)
+		ty := area.Y + 4
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			name = entry.ID
+		}
+		renderText(renderer, config, medium, ellipsize(medium, name, tw), ColorTextPrimary(), tx, ty)
+		ty += medH + 4
+		renderText(renderer, config, font, ellipsize(font, themeCommunityByline(entry), tw), ColorTextSecondary(), tx, ty)
+		ty += smallH + 10
+		fitInk := ColorTextSecondary()
+		switch themeCommunityFit(entry) {
+		case 1:
+			fitInk = SuccessInk()
+		case -1:
+			fitInk = WarningInk()
+		}
+		for _, line := range wrapTextLines(font, themeCommunityFitLine(entry), tw, 2) {
+			renderText(renderer, config, font, line, fitInk, tx, ty)
+			ty += smallH + 2
+		}
+		ty += 8
+		about := strings.TrimSpace(entry.About)
+		if about == "" {
+			about = strings.TrimSpace(entry.Description)
+		}
+		if about == "" {
+			about = "The author wrote nothing more about it."
+		}
+		maxLines := int((area.Y + area.H - ty) / (smallH + 2))
+		for _, line := range wrapTextLines(font, about, tw, max(maxLines, 1)) {
+			renderText(renderer, config, font, line, ColorTextTertiary(), tx, ty)
+			ty += smallH + 2
+		}
+	} else if len(entries) == 0 {
 		themeCommunityRowRects = themeCommunityRowRects[:0]
 		message := "No community themes yet."
 		if loading {
@@ -367,7 +444,10 @@ func renderThemeCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	note := "Installs as a theme file in themes/ — built-in palettes are never replaced."
 	renderText(renderer, config, font, ellipsize(font, note, rowW), ColorTextTertiary(), panelX+padX, noteY)
 
-	footer := hintLine(FooterHint{"A", "Install"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
+	footer := hintLine(FooterHint{"A", "Install"}, FooterHint{"X", "Details"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
+	if themeCommunityPanel.detail {
+		footer = hintLine(FooterHint{"A", "Install"}, FooterHint{"D-Pad", "Next theme"}, FooterHint{"B", "Back"})
+	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

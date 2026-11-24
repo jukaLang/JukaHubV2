@@ -47,7 +47,7 @@ const (
 )
 
 // tbxSceneNames is the list tbxEnsureScenes walks, in Tools-hub order.
-var tbxSceneNames = [...]string{partySceneName, pmodeSceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, usbPadSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName, javaSceneName, sdMoveSceneName, nasSceneName, acSceneName, verifiedSceneName, devCheckSceneName, tailscaledSceneName, cardCheckSceneName, davShareSceneName}
+var tbxSceneNames = [...]string{partySceneName, pmodeSceneName, tbxSceneName, auditSceneName, sectrustSceneName, bugrepSceneName, rommCloudSceneName, chatVoiceSceneName, usbOtgSceneName, usbPadSceneName, batteryCalSceneName, hotspotSceneName, mailcalSceneName, mailSceneName, linuxPkgSceneName, javaSceneName, sdMoveSceneName, nasSceneName, acSceneName, verifiedSceneName, devCheckSceneName, tailscaledSceneName, cardCheckSceneName, davShareSceneName, timeMachineSceneName, powerCheckSceneName, addGamesSceneName, libFoldersSceneName}
 
 // tbxEnsureScenes gives each tool screen a scene. The edit is in memory and
 // idempotent; the user's config file is never rewritten for it. The scenes have
@@ -175,6 +175,14 @@ func tbxDisplayName(name string) string {
 		return "Card check"
 	case davShareSceneName:
 		return "WebDAV share"
+	case timeMachineSceneName:
+		return "Time Machine"
+	case powerCheckSceneName:
+		return "Battery life check"
+	case addGamesSceneName:
+		return "Add games"
+	case libFoldersSceneName:
+		return "Library folders"
 	case tailscaledSceneName:
 		return "Tailscale"
 	}
@@ -1504,6 +1512,14 @@ func tbxSceneMouse(mx, my int32, config *Config) bool {
 		return cardCheckSceneClick(mx, my, config)
 	case davShareSceneName:
 		return davShareSceneClick(mx, my, config)
+	case timeMachineSceneName:
+		return timeMachineSceneClick(mx, my, config)
+	case powerCheckSceneName:
+		return powerCheckSceneClick(mx, my, config)
+	case addGamesSceneName:
+		return addGamesSceneClick(mx, my, config)
+	case libFoldersSceneName:
+		return libFoldersSceneClick(mx, my, config)
 	case tailscaledSceneName:
 		return tailscaledSceneClick(mx, my, config)
 	}
@@ -1580,6 +1596,14 @@ func tbxSceneNav(name string) *tbxNav {
 		return &cardCheckScreen.nav
 	case davShareSceneName:
 		return &davShareScreen.nav
+	case timeMachineSceneName:
+		return &timeMachineScreen.nav
+	case powerCheckSceneName:
+		return &powerCheckScreen.nav
+	case addGamesSceneName:
+		return &addGamesScreen.nav
+	case libFoldersSceneName:
+		return &libFoldersScreen.nav
 	case tailscaledSceneName:
 		return &tailscaledScreen.nav
 	}
@@ -1642,6 +1666,14 @@ func tbxFooterHints(config *Config, name string) ([]FooterHint, bool) {
 		return cardCheckSceneHints(), true
 	case davShareSceneName:
 		return davShareSceneHints(), true
+	case timeMachineSceneName:
+		return timeMachineSceneHints(), true
+	case powerCheckSceneName:
+		return powerCheckSceneHints(), true
+	case addGamesSceneName:
+		return addGamesSceneHints(), true
+	case libFoldersSceneName:
+		return libFoldersSceneHints(), true
 	case tailscaledSceneName:
 		return tailscaledSceneHints(), true
 	}

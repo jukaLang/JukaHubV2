@@ -287,6 +287,20 @@ battery is warm, and while the kernel's thermal limit is active.
 line says what a start got (`faster game start for "Game": mmcblk0 reads ahead
 128 → 1024 KB; JukaHub's 23 threads behind the game; start warm-up, for 10s`).
 
+### The Browser on each handheld
+
+The Browser sets its own pace by the chip (`webpage_tune.go`): on the Smart
+Pro S (A523, eight cores, Wi-Fi 6) four threads decode a page's pictures, two
+screens ahead of the view and one behind, up to 8 MB of new pictures reach the
+GPU per frame and ten of the page's images download at once; on the A133P
+models (Smart Pro, Brick, Brick Pro, Hammer) two threads, one screen ahead and
+4 MB per frame, so a core stays free for the menus and the sound. Each picture
+is scaled to the size its box has on the screen before it becomes a texture,
+so the 64 MB picture cache holds a whole page. The log's `browser` line
+`reader tune: …` names the choice; `JUKAHUB_WEB_DECODE=0` goes back to decoding
+on the drawing thread for one run. See
+[BROWSER.md](BROWSER.md#speed-on-the-handhelds).
+
 ### CPU boost in games and the heat guard
 
 Two things keep a game's clock where it belongs: **CPU boost in games** raises

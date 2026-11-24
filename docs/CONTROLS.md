@@ -259,7 +259,7 @@ no footer names may have no key.
 | Chat | L1 / R1 tabs (Voice after Saved) · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, 4 Voice, R renames you, Del drops a waiting file |
 | On-screen keyboard | A type · Start send / submit · B close · X delete · Y submit (Ask AI in chat) · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
 | Settings | L1 / R1 sections · Y search settings · A on "More settings (N)" unfolds the rest · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · Ctrl+F or type a letter on the rail to search · arrows (Left / Right page the sheet) |
-| Tools hub, Network tools | L1 / R1 section · X copy in a result sheet | PgUp / PgDn · X or C; R runs a tool, E edits its target |
+| Tools hub, Network tools | L1 / R1 section · Y search the hub · X pin a tool on the hub, copy in a result sheet | PgUp / PgDn · Y, / or Ctrl+F search · X pin (X or C copies in a sheet); R runs a tool, E edits its target |
 | Voice command | A or Menu speak / stop · X type · Y phone QR · B back (cancels while listening or during the pause) | Enter · X · Y · Esc; F4 speak / stop |
 | Wi-Fi | X details · Y scan · Select diagnostics · L1 / R1 page | X · Y or R · I · PgUp / PgDn; D disconnect, C reconnect, F forget |
 | Files | Y actions · X mark · L1 / R1 page (in two panes: left / right pane) | Y · X · PgUp / PgDn; H hidden files; Tab other pane, F5 / F6 copy / move to it |
@@ -2059,6 +2059,20 @@ one does is in [Everyday apps](EVERYDAY_APPS.md); these are their keys.
 A started stopwatch or countdown also shows in the [in-game menu](#in-game-menu-hold-select--l2)
 and on its own **Quick Settings** button. **Create ZIP** is in Files: see
 [Archives](#archives).
+
+## Tools: search, pins and quick checks
+
+On the Tools hub, **Y** searches as you type and **X** pins the focused tool to
+a Pinned section at the top; **B** clears a search before it leaves. The five
+quick tools are in [Tools](TOOLS.md); these are their keys.
+
+| Screen | Pad | Keyboard |
+|--------|-----|----------|
+| Connection check | **A** a button or a step's details · **X** run again · **Y** copy the report · **B** back | Enter · X · Y · Esc |
+| What's using space | **A** open a folder (a file: show it in Files) · **X** show in Files · **Y** largest files ↔ folders · **Left / Right** on the drive row: another drive · **B** up a folder, then back | Enter · X · Y · ← / → · Esc |
+| Verify a file | **A** copy a checksum, choose, compare · **X** copy the SHA-256 · **Y** another file · **B** back (in the picker: up a folder) | Enter · X · Y · Esc |
+| Screen test | **A**, **Right**, **Down** or **R1** next card · **Left**, **Up** or **L1** previous · **Y** auto (every 3 s) · **X** hide the caption · **B** leave | Enter, Space or → · ← · 1–9 a card · Y · X or H · Esc |
+| QR maker | the keyboard, then **A** or **B** closes the code | Enter · Esc |
 
 ## Games
 

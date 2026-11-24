@@ -49,6 +49,7 @@ nav:
       - Bug reports from the device: BUG_REPORTS.md
   - Software:
       - Everyday apps (Tasks, Voice Memos, Paint, Stopwatch, Solitaire): EVERYDAY_APPS.md
+      - "Tools: search, pins and quick checks": TOOLS.md
       - Toolbox: TOOLBOX.md
       - Open with and default apps: OPEN_WITH.md
       - Text and hex editor: TEXT_EDITOR.md

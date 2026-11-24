@@ -117,8 +117,10 @@ func TestWebFlexWrapUsesMinContentFloorWithGap(t *testing.T) {
 	if abs32(a[0].W-319) > 4 || abs32(b[0].W-319) > 4 || abs32(c[0].W-319) > 4 {
 		t.Fatalf("wrapped item widths = %d/%d/%d, want 319 each", a[0].W, b[0].W, c[0].W)
 	}
-	if abs32(a[0].X-40) > 4 || abs32(b[0].X-369) > 4 || abs32(c[0].X-40) > 4 {
-		t.Fatalf("wrapped item positions = %d/%d/%d, want 40/369/40", a[0].X, b[0].X, c[0].X)
+	// The page fills the view (6px gutters), so the row starts at the left
+	// edge: the background is drawn 4px left of the 6px content edge.
+	if abs32(a[0].X-2) > 4 || abs32(b[0].X-331) > 4 || abs32(c[0].X-2) > 4 {
+		t.Fatalf("wrapped item positions = %d/%d/%d, want 2/331/2", a[0].X, b[0].X, c[0].X)
 	}
 	if gap := b[0].X - (a[0].X + a[0].W); gap < 8 || gap > 12 {
 		t.Fatalf("wrapped row gap = %d, want the scaled 12px gap (background edges subtract 8px)", gap)

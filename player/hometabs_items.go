@@ -238,7 +238,9 @@ func homeTabsRecentItems(c *Config) ([]homeTabItem, bool) {
 		out = append(out, it)
 		apps++
 	}
-	return out, hero
+	// Games and Media after the resume tile, and a new handheld's first
+	// steps (homefirst.go).
+	return homeFirstLead(c, out, hero)
 }
 
 // homeTabsDailyItem is today's challenge on Recent: the game with its cover

@@ -72,6 +72,9 @@ type toolsHubTile struct {
 	// blocked is the tag a tile wears while the network cannot serve it; it is
 	// empty when the tile can run.
 	blocked string
+	// pinned marks a tool in the hub's Pinned section (toolsearch.go); its
+	// own tile wears a star.
+	pinned bool
 }
 
 // toolsHubNet is the network as the tiles see it, read once per refresh.
@@ -875,6 +878,16 @@ func toolsHubDrawTile(renderer *sdl.Renderer, fonts toolsHubFonts, rect sdl.Rect
 			c.A = uint8(140 + 100*math.Sin(phase*2*math.Pi))
 		}
 		fillCircle(renderer, rect.X+rect.W-pad-2, rect.Y+pad+6, 5, c)
+	}
+	if t.pinned && !blocked && !strings.HasPrefix(t.id, toolsPinPrefix) {
+		// A pinned tool's own tile, left of its state dot: the copy in the
+		// Pinned section needs no star, its heading says it.
+		star := int32(16)
+		sx := rect.X + rect.W - pad - star
+		if toolsHubToneColor(t.tone).A > 0 {
+			sx -= 16
+		}
+		DrawHomeIcon(renderer, "star", sdl.Rect{X: sx, Y: rect.Y + pad - 2, W: star, H: star}, false)
 	}
 
 	textW := rect.W - 2*pad

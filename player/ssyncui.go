@@ -315,8 +315,15 @@ func ssyncBuildCompareRows(cmp *ssyncComparison) ([]peerRowModel, string) {
 			spec.icon, spec.pill, spec.tone = "upload", "Send", tbxToneGood
 			spec.subtitle = folder + " · " + it.Reason + " · " + humanBytes(it.Local.Size)
 		case ssyncConflict:
-			spec.icon, spec.pill, spec.tone = "copy", "Keep both", tbxToneWarn
-			spec.subtitle = folder + " · changed on both · the other copy is kept as " + path.Base(it.CopyPath)
+			spec.icon, spec.pill, spec.tone = "copy", "Choose", tbxToneWarn
+			active := "this device"
+			if !it.LocalWins {
+				active = cmp.PeerName
+			}
+			if cmp.PeerID == gdrivePeerID {
+				spec.pill = "Keep both"
+			}
+			spec.subtitle = folder + " · active: " + active + " · other kept as " + path.Base(it.CopyPath)
 		}
 		rows = append(rows, peerRowModel{id: "item:" + strconv.Itoa(i), spec: spec})
 	}
@@ -453,7 +460,7 @@ func ssyncRenderCompare(renderer *sdl.Renderer, config *Config, fonts tbxFonts, 
 	y += card.H + 14
 
 	run := tbxRowSpec{icon: "sync", title: "Sync now", pill: "Sync", tone: tbxToneAccent,
-		subtitle: "Newest wins; both copies are kept when both changed; a safety snapshot is taken first"}
+		subtitle: "Choose the active copy for saves changed on both devices; both copies and a safety snapshot are kept"}
 	if cmp.PeerID == gdrivePeerID {
 		run.subtitle = "Changed on one side is copied; changed on both keeps both; a safety snapshot is taken first"
 	}
@@ -689,15 +696,37 @@ func ssyncOpenItemSheet(config *Config, id string) {
 				path.Base(it.CopyPath) + ", so nothing is lost."
 			break
 		}
-		body += "Both copies changed since the last sync. The newer one keeps this name on both devices and the other is kept beside it as " +
-			path.Base(it.CopyPath) + ", so nothing is lost."
+		active := "this device"
+		if !it.LocalWins {
+			active = cmp.PeerName
+		}
+		body += "Both copies changed since the last sync. Choose which one keeps the normal save name on both devices. " +
+			"The other stays beside it as a separate file, and a safety snapshot is taken first.\n\n" +
+			"Currently active: " + active + ". The other will be named " + path.Base(it.CopyPath) + "."
+	}
+	buttons := []tbxSheetButton{{label: "Close", primary: true}}
+	if it.Action == ssyncConflict && cmp.PeerID != gdrivePeerID {
+		choose := func(localWins bool) func() {
+			return func() {
+				if ssyncChooseConflict(cmp, n, localWins) {
+					ssyncScreen.cmpRows, ssyncScreen.cmpSummary = ssyncBuildCompareRows(cmp)
+					ssyncScreen.model.builtAt = time.Time{}
+					ShowToast("Active save chosen · both copies will be kept", ToastKindSuccess)
+				}
+			}
+		}
+		buttons = []tbxSheetButton{
+			{label: "This device", primary: it.LocalWins, run: choose(true)},
+			{label: cmp.PeerName, primary: !it.LocalWins, run: choose(false)},
+			{label: "Cancel"},
+		}
 	}
 	tbxOpenSheet(config, tbxSheetSpec{
 		title:    path.Base(it.Path),
 		subtitle: it.Reason,
 		icon:     "files",
 		body:     body,
-		buttons:  []tbxSheetButton{{label: "Close", primary: true}},
+		buttons:  buttons,
 	})
 }
 

@@ -659,6 +659,10 @@ func sceneDisplayName(name string) string {
 	if label := osAppsDisplayName(name); label != "" {
 		return label
 	}
+	// The small tool pages ("SpaceUse" is What's using space; toolspages.go).
+	if label := toolsPagesDisplayName(name); label != "" {
+		return label
+	}
 	switch name {
 	case "FileExplorer":
 		return "Files"
@@ -1407,9 +1411,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			FooterHint{Button: "X", Label: "Skip"},
 			FooterHint{Button: "Y", Label: "Reset"},
 		)
-	case toolsHubSceneName, netToolsSceneName, wifiScrSceneName:
+	case toolsHubSceneName, netToolsSceneName, wifiScrSceneName,
+		connCheckSceneName, spaceUseSceneName, fileCheckSceneName, screenTestSceneName:
 		// The tools pages follow their focus and their open sheet, the way
-		// Patch follows its dialog.
+		// Patch follows its dialog (the small ones: toolspages.go).
 		hints = toolsScenesFooterHints(scene.Name, hints)
 	case playtimeSceneName:
 		// The trophy room's keys follow its tab, its focus and its sheet.

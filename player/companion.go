@@ -578,6 +578,9 @@ func (s *companionServer) handler() http.Handler {
 	s.registerUpdateRoutes(mux)
 	// Download logs, personal details masked (companion_logs.go).
 	s.registerLogRoutes(mux)
+	// The Games page: the library, playing a game and its saves
+	// (companion_library.go).
+	s.registerLibraryRoutes(mux)
 	return mux
 }
 
@@ -1014,6 +1017,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 </div>
 
 <div class=card>
+  <h2>Games</h2>
+  <div class=row><button id=gamesPage>Games and saves</button></div>
+  <small>The handheld's library: start a game there, download a game's saves, send one back, or go back to an earlier save.</small>
+</div>
+
+<div class=card>
   <h2>Voice</h2>
   <div class=row><button id=voicePage>Say what to open</button></div>
   <small>Your keyboard's microphone sends commands like "open YouTube" or "volume 50".</small>
@@ -1243,6 +1252,7 @@ async function sendText() {
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
+document.getElementById('gamesPage').onclick = () => { location.href = '/games?p=' + encodeURIComponent(pin); };
 document.getElementById('cloudPage').onclick = () => { location.href = '/cloud?p=' + encodeURIComponent(pin); };
 
 // A report typed on the phone keeps its reference across a retry, so a lost

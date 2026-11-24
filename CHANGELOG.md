@@ -13,6 +13,79 @@ For anything older, the git log and the
 
 ### Added
 
+- **Tools: search, pins and five quick tools** (Juka, 2026-11-23: a ranked
+  list of "small additions" for the Tools screen — "Search Tools and pin
+  favorites", "What's using my card?", "One-tap connection check", "Verify a
+  file", "Screen test", "QR maker"). All six, in [Tools](docs/TOOLS.md):
+  **Search and pins** (`player/toolsearch.go`): Y (keyboard Y, / or Ctrl+F) on
+  the Tools hub filters the page as letters are typed — by name, line, section
+  and the words people use ("storage", "no internet", "checksum") — and finds
+  the Network tools page's tools too, opening that page on the tool; B clears
+  the search before it leaves. X pins the focused tool into a **Pinned**
+  section at the top (twelve at most, a star on its own tile), kept in
+  `tools-pins.json` in the data folder, which backups carry. **Connection
+  check** (`player/conncheck.go`, `conncheck_ui.go`; Tools → Connectivity,
+  Network tools → Probes): Wi-Fi, the router, name lookups, the internet and
+  secure sites in order, read together — a router that ignores tests while the
+  internet answers is not the fault, an internet that answers by address while
+  names fail is DNS, a sign-in page and a wrong clock are named — with one
+  sentence of advice, Open Wi-Fi / Date & time when that is the fix, Run again
+  and Copy report; it runs as the screen opens and needs no network. **What's
+  using space** (`player/spaceuse.go`, `spaceuse_ui.go`; Tools → System, and A
+  on the Storage screen): one walk of a drive sizes every folder and keeps the
+  largest files of each and of the whole drive; browse folder by folder,
+  biggest first with a share bar, X shows a row in Files, Y lists the sixty
+  largest files, and one row names what the drive counts as used beyond its
+  files (file-system records, cluster slack). The card is scanned as the screen
+  opens on the handheld; links and other mounted drives are not followed, and
+  the walk waits while a game runs. **Verify a file** (`player/filecheck.go`,
+  `filecheck_ui.go`; Tools → System, and Files → Y → Verify checksum): SHA-256,
+  SHA-1, MD5 and CRC32 in one read with speed and time left, copy any of them,
+  and compare with a pasted or typed checksum (told apart by its length; a
+  `sha256sum` line works) — Match or Different. From Tools it opens on a small
+  file picker. **Screen test** (`player/screentest.go`; Tools → System):
+  full-screen White, Black, Red, Green, Blue, Grey, Gradients, Colour bars,
+  Fine lines, Grid and Motion cards, each saying what to look for, with no bars
+  drawn; A / Right next, Left previous, 1-9 a card, Y a slow Auto (every three
+  seconds), X hides the caption. **QR maker** (`player/qrmaker.go`; Tools →
+  Everyday apps): type or paste up to 1,200 characters and Show fills the
+  screen with the code on the QR card (full brightness while up). The four new
+  pages are injected scenes like the hub's own (`player/toolspages.go`) and are
+  in Home search. Not built or run on a device yet: TOOLS-HW-1.
+
+- **The browser on the Smart Pro S, and faster on every TrimUI** (Juka,
+  2026-11-23: "Improve internet layout engine even further...make sure to
+  support Trimui Smart Pro S...do optimizations for it"). The reader now
+  knows the handheld it runs on (`player/webpage_tune.go`): the Smart Pro S
+  (A523, eight Cortex-A55, Mali-G57, Wi-Fi 6) gets four picture-decoding
+  threads, decodes two screens ahead and one behind, uploads up to 8 MB of new
+  pictures a frame and downloads ten of a page's images at once; the A133P
+  models (Smart Pro, Brick, Brick Pro, Hammer) get two threads, one screen
+  ahead and 4 MB a frame, so a core stays with the menus and the sound. The
+  log names the choice (`reader tune: …`). **Pictures no longer stall the
+  scroll** (`player/webpage_decode.go`): instead of being decoded on the
+  render thread, at full size, in the frame they scrolled in, they are
+  decoded off it and scaled down with an area filter to the size their box
+  needs on this screen (aspect kept for cover and contain, never enlarged,
+  never past the GPU's texture limit), in RGBA ready for the GPU, and the
+  pictures just below the view are ready before they arrive. A 4000×3000
+  photo in a 600-px box is a 600×450 texture instead of 48 MB, so the picture
+  cache keeps the rest of the page; a picture taller than the GPU's limit is
+  drawn instead of a grey box; a canvas over 24 megapixels (a tiny PNG can
+  declare gigabytes) is refused before decoding; YouTube cards' art takes the
+  same path. **Fewer draw calls per frame** (`player/webpage_paintfast.go`):
+  a line's words that share their look are drawn as one string, measured
+  once, instead of one texture and one copy per word (a full screen of text
+  was 250-300 copies a frame), so the 512-entry text cache stops churning
+  while scrolling; rounded boxes, borders, `<code>` chips, soft shadows and
+  placeholders are single geometry fans instead of a texture baked through a
+  render target for every new size (a tile flush on both GPUs); gradients are
+  one smooth strip with a vertex at every stop instead of up to 96 bands. The
+  page's layout check no longer formats a string every frame, and each
+  picture's cache key is hashed once. A PC keeps decoding on the render
+  thread; `JUKAHUB_WEB_DECODE=0` does the same on a handheld for one run
+  (`=N` sets the threads). See [BROWSER](docs/BROWSER.md#speed-on-the-handhelds).
+
 - **Faster game starts** (Juka, 2026-11-23: "Improve performance on Trimui
   devices even further...improve emulator launching..."). The seconds between
   **A** and a game's first frame went to three things, and each costs less now.
@@ -3686,6 +3759,93 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The browser uses the whole screen and pins fixed bars and sticky
+  headers** (Juka, 2026-11-24: "cnn.com still doesnt render correctly...feel
+  free to use full rsolution..and use position:fixed and pin to screen (even
+  if small)..we need to render as accurately as possible"). The page is laid
+  out at the full width of the view instead of a 38 em reading column, so a
+  news front page such as CNN's gets the layout its media queries chose for
+  the screen's width — it used to be drawn in two thirds of the screen, at a
+  width it was not designed for. **`position: fixed` is pinned to the
+  screen**: a site's header bar, bottom navigation, cookie bar or chat button
+  is a layer held at its top or bottom inset (centred by `margin: auto`, or
+  at its static place) while the page scrolls under it, painted at its
+  z-index, and its links and fields are focused and tapped where they are
+  drawn; one too big to pin (taller than the screen, or most of it across the
+  width) scrolls with the page, and one covering the whole screen (a modal
+  backdrop, a cookie wall) keeps its content in the flow. **Every absolutely
+  positioned box is a layer**, not only one inside a positioned ancestor, and
+  a box without insets keeps its static position (where its markup puts it)
+  instead of jumping to its containing block's corner. **Sticky wrappers**: a
+  sticky header made of a logo, a menu and buttons is pinned whole — the bar
+  is copied from the finished page by box membership, surfaces included —
+  where only an element whose own text was the bar used to pin, and a narrow
+  sticky side column may be taller than two fifths of the screen. Not built
+  or run on a device yet: RENDER-HW-1.
+
+- **The browser's layering engine** (Juka, 2026-11-24: "Improve web browser
+  layering engine...we need to improve it and make it better"). The reader
+  now stacks a page the way CSS does (`player/webpage_layers.go`). **A
+  positioned box is one layer with everything in it**: an absolutely
+  positioned card, caption or badge inside a positioned ancestor is measured
+  with its heading, paragraphs, buttons and pictures and placed at its insets
+  over the photo or section it belongs to. Only the positioned element's own
+  text used to move; its children stayed in the page and the box painted
+  around both halves spanned half the screen. A layer without a width shrinks
+  to its widest line (a badge's background no longer runs 430 px wide),
+  `inset: 0; margin: auto` with a width centres it, every positioned element
+  can be a containing block (a plain `position: relative` wrapper around a
+  photo now anchors its badge instead of the page corner), and a positioned
+  container whose children all became layers keeps its line and height
+  (`position: fixed` is pinned to the screen: see the entry above).
+  **Paint order**:
+  layers with a negative `z-index`, the flow's surfaces in tree order, floats,
+  the flow's pictures and text, then positioned layers and pinned sticky bars
+  together by `z-index`, each inside its stacking context (a positioned
+  ancestor with a z-index, a fixed, sticky, translucent or translated one) —
+  a `z-index: 9999` badge inside a `z-index: 1` card stays under a `z-index:
+  2` header, a sticky header covers the badges scrolling under it, and floats
+  no longer paint over a pinned header. A section's or card's background no
+  longer covers the code blocks, notes and nested cards inside it (container
+  surfaces were painted last), a card's surface reaches behind its photo, and
+  a figure's around its image. **Sticky**: a bar leaves with its containing
+  block (a sticky table header with its table), `bottom` alone sticks to the
+  bottom edge, the bars inside flex and grid items (table header cells, grid
+  sidebars) are kept, and a bar taller than two fifths of the screen across
+  most of its width scrolls instead of covering the page. **Hidden things stay hidden**:
+  screen-reader-only (`sr-only`, `visually-hidden`) and fully transparent
+  positioned blocks, skip links parked above the page, off-canvas drawers and
+  carousel slides outside an `overflow: hidden` frame are no longer painted
+  over the page, and layers are clipped by such a frame. **Reachable**: links
+  and form fields inside layers and floats are D-pad stops and tap targets (a
+  tap prefers the topmost layer), find-in-page searches their text, and layer
+  rows are drawn with underlines and text shadows like the page's own. Not
+  built or run on a device yet: RENDER-HW-1.
+
+- **The browser's layout engine, further** (Juka, 2026-11-23: "Improve
+  internet layout engine even further"). **Serif text**: a serif
+  `font-family` (Georgia, Times, Wikipedia's Linux Libertine headings,
+  "Source Serif", `serif`) is drawn in a serif face — the machine's own
+  (Georgia on Windows, DejaVu/Liberation/Noto Serif on Linux, or a
+  `*Serif*.ttf` in JukaHub's fonts folder) and otherwise, on every handheld,
+  the Library theme's embedded Lora; a word the serif cannot set stays in
+  Inter, and Legible reading font or Bold text keep the page in the UI face.
+  **Table cells fill their row**: a cell's background and borders reach the
+  bottom of a row a taller neighbour made (bordered tables had ragged bottom
+  edges), and its content sits by `vertical-align` or `valign`, cascaded as
+  in a browser — in the middle by default in an HTML table, top or bottom
+  when the table, row group, row or cell says so, at the top for a reset's
+  `baseline` and for CSS `display: table-cell` boxes. A cell's own `vertical-align` no longer lifts or drops
+  its text half a line (Bootstrap's `td { vertical-align: top }` pushed every
+  cell's text into the border above it). **More HTML attributes**: `valign`,
+  `nowrap` on cells, `background` on the body, tables, rows and cells, and
+  `hspace`/`vspace` on images. **Soft hyphens** (`&shy;`) are break points:
+  a long word breaks at the last one that fits, with a hyphen, and they are no
+  longer drawn as hyphens in the middle of words (German and Dutch pages).
+  An underline runs under the spaces inside a link, and **Find on page**
+  matches across words ("table of contents"; the row's words used to be
+  joined with nothing between them).
+
 - **The browser draws older and simpler pages like a desktop browser, and
   more modern CSS right** (Juka, 2026-11-23: "improve browser rendering even
   further"). **HTML presentation attributes** count the way a browser counts
@@ -4554,7 +4714,13 @@ For anything older, the git log and the
   the fixes made since, the Dolphin libusb fix and the hakuX screen hand-off
   among them: a tester's Brick Pro, 2026-11-22, still refused Dolphin for
   libusb and still kept JukaHub running beside an Xbox game. The field is
-  added (`player/musicsrc.go`).
+  added (`player/musicsrc.go`). It was not the only stop: Sound Racer, from
+  the same evening, compared its `int` row counter with the `int32` screen
+  height (`player/musicracer.go`: "mismatched types int and int32"), so
+  every push after that fix failed the TrimUI and Windows builds too, until
+  2026-11-23 evening, when Juka pasted the compiler's line and the comparison
+  was corrected (`a0fae48`). Handhelds get everything since 2026-11-21
+  evening with the first release that builds.
 - **The menus get every core back after a game.** TrimUI's launch scripts
   (`cpufreq.sh`) park cores for the lighter consoles and set a floor and a
   ceiling of their own, and the launch profile put back only the governor and

@@ -1367,6 +1367,10 @@ func browserFocusedLink(elem Element, layout *webLayout) int {
 // browserRevealLink scrolls the page just enough to show the focused link,
 // moving it only when it would otherwise sit off screen.
 func browserRevealLink(elem Element, layout *webLayout, hit webLinkHit) {
+	if hit.Pinned > 0 {
+		// A link on a bar pinned to the screen is always in view.
+		return
+	}
 	max := browserScrollMax(elem, layout)
 	if max <= 0 {
 		textBrowserScrollY = 0
@@ -2460,13 +2464,20 @@ func browserPageLinkRects(config *Config, elem Element, layout *webLayout) []sdl
 	if layout == nil || layout.RowH <= 0 {
 		return nil
 	}
-	left, top, _, _ := browserPageContentBox(elem)
+	left, top, width, height := browserPageContentBox(elem)
 	scroll := int(textBrowserScrollY)
 	if scroll > int(browserScrollMax(elem, layout)) {
 		scroll = int(browserScrollMax(elem, layout))
 	}
 	rects := make([]sdl.Rect, len(layout.Links))
+	view := sdl.Rect{X: left, Y: top, W: width, H: height}
 	for i, hit := range layout.Links {
+		// A link on a bar pinned to the screen is where the bar is drawn,
+		// whatever the scroll (webpage_layers.go).
+		if r, ok := webPinnedHitRect(layout, hit, view); ok {
+			rects[i] = r
+			continue
+		}
 		if hit.Box.W > 0 && hit.Box.H > 0 {
 			rects[i] = sdl.Rect{X: left + hit.Box.X, Y: top + hit.Box.Y - int32(scroll)*layout.RowH, W: hit.Box.W, H: hit.Box.H}
 			continue
@@ -2555,36 +2566,54 @@ func browserTapPageLink(renderer *sdl.Renderer, config *Config, elem Element, mx
 	if mx < left || mx >= left+width || my < top || my >= top+height {
 		return false
 	}
-	for i, rect := range browserPageLinkRects(config, elem, layout) {
-		if rect.Y+rect.H <= top || rect.Y >= top+height {
-			continue
+	// A layer paints over the flow, so a tap on a link or field inside one
+	// is that one even where a flow link lies underneath (webpage_layers.go):
+	// the layers' hits are tried first.
+	rects := browserPageLinkRects(config, elem, layout)
+	for pass := 0; pass < 2; pass++ {
+		for i, rect := range rects {
+			if layout.Links[i].Layer != (pass == 0) {
+				continue
+			}
+			if browserTapPageHit(renderer, config, elem, layout, i, rect, mx, my, top, height) {
+				return true
+			}
 		}
-		if rect.W > 0 && pointInRect(mx, my, rect) {
-			// A form control is a tap target like a link, and a tap does what its
-			// kind says: a field opens the keyboard, a select steps, a box ticks.
-			if ctrl := layout.Links[i].Control; ctrl != nil {
-				PlayActivateSound()
-				browserActivatePageControl(renderer, config, elem, ctrl)
-				return true
-			}
-			base := textBrowserAddress(config)
-			if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
-				base = doc.URL
-			}
-			target, ok := browserResolveLink(base, layout.Links[i].Href)
-			if !ok {
-				showToast("That link cannot be opened here", ToastInfo())
-				return true
-			}
-			browserLinkCursor = browserLinkCursorState{}
-			// A YouTube video plays in Media (browser_youtube.go).
-			if brwOpenYouTubeLink(config, target, layout.Links[i].Text) {
-				return true
-			}
+	}
+	return false
+}
+
+// browserTapPageHit activates hit i of the page when the tap at (mx, my) is
+// on its rectangle, reporting whether it was.
+func browserTapPageHit(renderer *sdl.Renderer, config *Config, elem Element, layout *webLayout, i int, rect sdl.Rect, mx, my, top, height int32) bool {
+	if rect.Y+rect.H <= top || rect.Y >= top+height {
+		return false
+	}
+	if rect.W > 0 && pointInRect(mx, my, rect) {
+		// A form control is a tap target like a link, and a tap does what its
+		// kind says: a field opens the keyboard, a select steps, a box ticks.
+		if ctrl := layout.Links[i].Control; ctrl != nil {
 			PlayActivateSound()
-			loadTextBrowserURL(config, elem, target)
+			browserActivatePageControl(renderer, config, elem, ctrl)
 			return true
 		}
+		base := textBrowserAddress(config)
+		if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
+			base = doc.URL
+		}
+		target, ok := browserResolveLink(base, layout.Links[i].Href)
+		if !ok {
+			showToast("That link cannot be opened here", ToastInfo())
+			return true
+		}
+		browserLinkCursor = browserLinkCursorState{}
+		// A YouTube video plays in Media (browser_youtube.go).
+		if brwOpenYouTubeLink(config, target, layout.Links[i].Text) {
+			return true
+		}
+		PlayActivateSound()
+		loadTextBrowserURL(config, elem, target)
+		return true
 	}
 	return false
 }
@@ -2604,6 +2633,9 @@ func browserDrawPageLinkFocus(renderer *sdl.Renderer, elem Element, layout *webL
 	box := sdl.Rect{X: left + hit.X - 4, Y: contentTop + layout.Rows[hit.Row].Y - int32(scroll)*layout.RowH - 2, W: hit.W + 8, H: layout.RowH}
 	if hit.Box.W > 0 && hit.Box.H > 0 {
 		box = sdl.Rect{X: left + hit.Box.X, Y: contentTop + hit.Box.Y - int32(scroll)*layout.RowH, W: hit.Box.W, H: hit.Box.H}
+	}
+	if r, ok := webPinnedHitRect(layout, hit, sdl.Rect{X: left, Y: contentTop, W: getElementWidth(elem, 1100) - 14, H: contentH}); ok {
+		box = r
 	}
 	if box.Y+box.H <= contentTop || box.Y >= contentTop+contentH {
 		return

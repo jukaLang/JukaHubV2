@@ -1105,6 +1105,43 @@ type ssyncComparison struct {
 	At       time.Time
 }
 
+// ssyncChooseConflict changes which version keeps the original filename on
+// both devices. The other version still gets its own unused filename. Only a
+// paired-device conflict can be changed; cloud sync has its own merge rules.
+func ssyncChooseConflict(cmp *ssyncComparison, index int, localWins bool) bool {
+	if cmp == nil || cmp.PeerID == gdrivePeerID || index < 0 || index >= len(cmp.Plan.Items) {
+		return false
+	}
+	it := &cmp.Plan.Items[index]
+	if it.Action != ssyncConflict {
+		return false
+	}
+	if it.LocalWins == localWins {
+		return true
+	}
+	taken := make(map[string]bool, len(cmp.Local.Files)+len(cmp.Remote.Files)+cmp.Plan.Conflict)
+	for _, f := range cmp.Local.Files {
+		taken[strings.ToLower(f.key())] = true
+	}
+	for _, f := range cmp.Remote.Files {
+		taken[strings.ToLower(f.key())] = true
+	}
+	for i, other := range cmp.Plan.Items {
+		if i != index && other.Action == ssyncConflict {
+			taken[strings.ToLower(other.Root+"/"+other.CopyPath)] = true
+		}
+	}
+	loser := cmp.Local.Name
+	if localWins {
+		loser = cmp.PeerName
+	}
+	it.CopyPath = ssyncConflictName(it.Path, loser, func(rel string) bool {
+		return taken[strings.ToLower(it.Root+"/"+rel)]
+	})
+	it.LocalWins = localWins
+	return true
+}
+
 // ssyncCompare fetches the other device's manifest, builds this device's and
 // plans the sync. The first comparison hashes every save, which can take a
 // while on a card full of save states; later ones reuse the hash cache.

@@ -46,6 +46,11 @@ type communityTheme struct {
 	Tags        []string  `json:"tags"`
 	Theme       themeFile `json:"theme"`
 	Updated     string    `json:"updated,omitempty"`
+	// Screenshot (an HTTPS picture), Devices (the handhelds it was made for)
+	// and About (a longer description) are optional (storeshots.go).
+	Screenshot string   `json:"screenshot,omitempty"`
+	Devices    []string `json:"devices,omitempty"`
+	About      string   `json:"about,omitempty"`
 }
 
 // communityCatalogFile is the part of gallery/community.json JukaHub reads.

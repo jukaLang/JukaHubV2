@@ -202,8 +202,9 @@ func drawWebShadowPaint(r *sdl.Renderer, bg webBackgroundPaint, x, y int32, view
 // over ±blur around the edge, each faint enough that the whole stack reaches
 // the authored alpha: dense under the box, about half strength at its edge
 // and gone blur pixels outside it, which is the shape of the Gaussian a
-// browser draws. Every layer reuses one cached shape scaled to its size, so a
-// shadow costs a few blits rather than a texture per layer.
+// browser draws. Each layer is one geometry fan (webPaintFill); where SDL
+// cannot draw geometry every layer reuses one cached shape scaled to its size,
+// so a shadow costs a few blits rather than a texture per layer.
 func drawWebBoxShadow(r *sdl.Renderer, rect sdl.Rect, radius, blur, spread int32, color sdl.Color) {
 	if r == nil || color.A == 0 {
 		return
@@ -219,7 +220,7 @@ func drawWebBoxShadow(r *sdl.Renderer, rect sdl.Rect, radius, blur, spread int32
 		radius = half
 	}
 	if blur <= 0 {
-		fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, radius, color)
+		webPaintFill(r, rect.X, rect.Y, rect.W, rect.H, radius, color)
 		return
 	}
 	steps := blur / 3
@@ -243,6 +244,12 @@ func drawWebBoxShadow(r *sdl.Renderer, rect sdl.Rect, radius, blur, spread int32
 		e := int32(math.Round(float64(blur) * (1 - (2*float64(i)+1)/float64(steps))))
 		dst := sdl.Rect{X: rect.X - e, Y: rect.Y - e, W: rect.W + 2*e, H: rect.H + 2*e}
 		if dst.W <= 0 || dst.H <= 0 {
+			continue
+		}
+		if !webGeomFailed {
+			// One fan per layer, its corner growing with the layer as a blur
+			// rounds it (webpage_paintfast.go): no texture baked per shadow.
+			webPaintFill(r, dst.X, dst.Y, dst.W, dst.H, max32(shapeR+e, 0), layer)
 			continue
 		}
 		fillRoundedRectAt(r, rect, dst, shapeR, layer)
@@ -316,7 +323,7 @@ func webTranslateLength(value string, fontPx float64) (px, pct float64, ok bool)
 
 // webInsetPercent returns the percentage of a top/right/bottom/left value, or
 // 0 when it is a length or auto. A positioned box resolves it against its
-// containing block in layoutFloats; webLength alone would read `50%` as half
+// containing block in layoutLayer; webLength alone would read `50%` as half
 // the font size.
 func webInsetPercent(value string) float64 {
 	v := strings.TrimSpace(value)

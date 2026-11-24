@@ -1,12 +1,13 @@
 {
   "name": "librarydoctor",
   "title": "Library doctor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Finds the same game copied twice, zips cut off mid-copy, empty files and Mac/Windows litter in your Roms folders. Removes the litter and moves extra copies to Roms/.duplicates; it never deletes a game.",
   "author": "JukaHub",
   "entry": "librarydoctor.sh",
   "icon": "scan",
   "enabled": true,
+  "permissions": ["files"],
   "actions": [
     {"id": "check", "label": "Check my games"},
     {"id": "junk", "label": "Remove junk files"},
