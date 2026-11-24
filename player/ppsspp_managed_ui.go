@@ -165,8 +165,14 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 	}
 	b.WriteString("JukaHub keeps a newer PPSSPP of its own — its own build of the newest upstream PPSSPP for this model, or the TrimUI build packaged by minui-psp, whichever is newer — and updates it with the Emulator updates setting. ")
 	b.WriteString("Both use the firmware's save folders, so saves and save states carry over either way, and if JukaHub's build does not start, the game opens in the firmware's PPSSPP instead.")
-	if IsTrimuiDevice() {
-		b.WriteString(" If PPSSPP ever stays on a black screen, hold Select + L2 to open the in-game menu and choose Quit to JukaHub.")
+	if reason, alone := ppssppScreenAloneReason(); alone {
+		b.WriteString(" PSP games get the screen to themselves: JukaHub closes while one plays and comes back when it ends (" + reason)
+		if t, ok := parseReleaseTimestamp(st.ScreenAloneAt); ok && !t.Before(minSaneClock) {
+			b.WriteString(", " + timeAgo(t))
+		}
+		b.WriteString("). In the game, PPSSPP's own menu (Menu) has Exit.")
+	} else if IsTrimuiDevice() {
+		b.WriteString(" If PPSSPP ever stays on a black screen, hold Select + L2 to open the in-game menu and choose Quit to JukaHub; JukaHub also notices a picture that never reaches the screen and gives PSP games the screen to themselves.")
 	}
 	if untested {
 		b.WriteString(" This model is untested with that build: if its buttons do not work in PPSSPP, use the in-game menu to quit and choose the firmware's PPSSPP here.")
@@ -279,6 +285,18 @@ func openPPSSPPCard(e emuEntry) {
 		options = append(options, recoveryOption{icon: "check", title: "Use JukaHub's " + newest.label() + " for PSP games",
 			detail: "Saves are shared · the firmware's PPSSPP takes over if it does not start",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartSwitch(true) }})
+	}
+
+	// Where PSP games play: beside JukaHub, or with the panel to themselves
+	// (ppsspp_picture.go, hakux_handoff.go).
+	if _, alone := ppssppScreenAloneReason(); alone {
+		options = append(options, recoveryOption{icon: "restore", title: "Play PSP games beside JukaHub again",
+			detail: "JukaHub's in-game menu, sleep and hotkeys work in them · if the picture stays black, PSP games get the screen to themselves again",
+			run:    func(*Config) { recoveryCardClose(); ppssppStartScreenMode(false) }})
+	} else if IsTrimuiDevice() {
+		options = append(options, recoveryOption{icon: "gamepad", title: "Give PSP games the screen to themselves",
+			detail: "JukaHub closes while one plays and comes back after · for a picture that stays black",
+			run:    func(*Config) { recoveryCardClose(); ppssppStartScreenMode(true) }})
 	}
 
 	if installed {
@@ -432,6 +450,28 @@ func ppssppStartSwitch(useJukaHub bool) {
 		invalidateEmulatorCache()
 		PlaySuccessSound()
 		ShowToast("PSP games use "+ppssppFirmwareLabel(fw)+" again · JukaHub's build stays installed", ToastKindSuccess)
+	}()
+}
+
+// ppssppStartScreenMode is the card's "Give PSP games the screen to themselves"
+// (alone) and "Play PSP games beside JukaHub again". Off the event thread: it
+// writes the PPSSPP state.
+func ppssppStartScreenMode(alone bool) {
+	go func() {
+		reason := ""
+		if alone {
+			reason = "you chose it on the PPSSPP card"
+		}
+		if err := ppssppSetScreenAlone(reason, false); err != nil {
+			ShowToast("PPSSPP: "+err.Error(), ToastKindError)
+			return
+		}
+		PlaySuccessSound()
+		if alone {
+			ShowToast("PSP games get the screen to themselves · JukaHub closes while one plays and comes back after", ToastKindSuccess)
+			return
+		}
+		ShowToast("PSP games play beside JukaHub again · its in-game menu and sleep work in them", ToastKindSuccess)
 	}()
 }
 

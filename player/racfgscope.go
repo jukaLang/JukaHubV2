@@ -36,6 +36,20 @@ package main
 // .retroarch/retroarch.cfg beside it may exist too. JukaHub cannot ask the
 // binary, so a launch edits every config of that one RetroArch install
 // (raScopeTargets), which is harmless now that each edit is undone.
+//
+// One launch, one sync (2026-11-23, "improve emulator launching"): a library
+// launch runs a dozen or more of these edits in a row — the save-state
+// switches, the OSD, the log, the picture, the controls, the speed level… —
+// and each used to sync the journal, its folder and the config to the card on
+// its own: some thirty fsyncs on a FAT card before the emulator could even
+// start. A launch now opens a batch (raScopeBatchBegin, from faststart.go):
+// every edit is still written to its file at once, so a later hook that reads
+// the config sees what an earlier one set, but nothing is synced until the
+// batch ends — the journal first, then each config once — just before the game
+// starts (screenChildStart calls raScopeBatchFlush). No restore runs while a
+// batch is open: the launch's own exit (or the failsafe the batch end arms)
+// restores everything, so a late restore from the last game can no longer undo
+// the new launch's first edits halfway through its preparation.
 
 import (
 	"encoding/json"
@@ -46,6 +60,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,6 +79,9 @@ const (
 	// outlived its launcher's process group before the values go back.
 	raScopeWaitPoll = 2 * time.Second
 	raScopeWaitMax  = 8 * time.Hour
+	// raScopeBatchMax ends a launch batch nobody ended (a launch path that
+	// returned without its deferred end): its syncs run then.
+	raScopeBatchMax = 20 * time.Second
 )
 
 // raScopeEdit is one key JukaHub changed in one config for a launch.
@@ -113,6 +131,27 @@ var raScope struct {
 	mu    sync.Mutex
 	timer *time.Timer
 }
+
+// raScopeBatch is the launch batch in force, under raScope.mu: depth counts
+// the begins not ended yet, gen tells one batch from the next (for the stale
+// timer), journal reports a journal written without a sync, paths the configs
+// written without one (each once), edits how many values changed.
+var raScopeBatch struct {
+	depth   int
+	gen     uint64
+	began   time.Time
+	journal bool
+	paths   []string
+	edits   int
+}
+
+// raScopeBatchLive mirrors depth > 0, so the start's flush (screenChildStart,
+// every launch) costs one atomic load when there is nothing to flush.
+var raScopeBatchLive atomic.Bool
+
+// raScopeBatchOff is JUKAHUB_LAUNCH_BATCH=0: every edit syncs on its own, as
+// before the batch existed (a device check, or a card that misbehaves).
+var raScopeBatchOff = os.Getenv("JUKAHUB_LAUNCH_BATCH") == "0"
 
 // Test seams: the journal's place, the failsafe delay (0 turns it off), the
 // two "is anything still running" questions and the configs the one-time
@@ -514,6 +553,13 @@ func raScopeLoadLocked() raScopeJournal {
 // raScopeSaveLocked writes the journal through a temporary file, or removes
 // it when nothing is left to restore.
 func raScopeSaveLocked(journal raScopeJournal) error {
+	return raScopeSaveJournalLocked(journal, true)
+}
+
+// raScopeSaveJournalLocked is raScopeSaveLocked with the sync optional: a
+// launch batch writes the journal at once (it still comes before the edit it
+// covers) and syncs it once, at the batch's end (raScopeBatchCommitLocked).
+func raScopeSaveJournalLocked(journal raScopeJournal, durable bool) error {
 	path := raScopeJournalPath()
 	if path == "" {
 		if len(journal.Edits) == 0 {
@@ -532,7 +578,11 @@ func raScopeSaveLocked(journal raScopeJournal) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := writeFileSynced(tmp, append(data, '\n'), 0o644); err != nil {
+	write := writeFileSynced
+	if !durable {
+		write = os.WriteFile
+	}
+	if err := write(tmp, append(data, '\n'), 0o644); err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
@@ -540,7 +590,9 @@ func raScopeSaveLocked(journal raScopeJournal) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	syncDirectory(filepath.Dir(path))
+	if durable {
+		syncDirectory(filepath.Dir(path))
+	}
 	return nil
 }
 
@@ -563,18 +615,164 @@ func raScopeApply(path string, values []raScopeValue) (bool, error) {
 	journal.Edits = raScopeMerge(journal.Edits, edits)
 	// Write-ahead: the user's values are on the card before the first byte of
 	// theirs changes, so a power cut in between leaves something to restore
-	// from instead of an edit nobody remembers.
-	if err := raScopeSaveLocked(journal); err != nil {
+	// from instead of an edit nobody remembers. Inside a launch batch both
+	// writes happen now, in the same order, and the batch's end syncs the
+	// journal before any config.
+	batched := raScopeBatch.depth > 0
+	if err := raScopeSaveJournalLocked(journal, !batched); err != nil {
 		return false, fmt.Errorf("record the values to restore: %w", err)
 	}
-	changed, err := editRetroArchConfig(path, func(cfg string) (string, bool) {
+	if batched {
+		raScopeBatch.journal = true
+	}
+	changed, err := editRetroArchConfigWith(path, func(cfg string) (string, bool) {
 		return raScopeApplyText(cfg, values)
-	})
+	}, !batched)
 	if err != nil {
 		return false, err
 	}
+	if batched && changed {
+		raScopeBatchNoteLocked(path, len(edits))
+	}
 	raScopeArmFailsafeLocked()
 	return changed, nil
+}
+
+// ── The launch batch ─────────────────────────────────────────────────────
+
+// raScopeBatchBegin opens a launch batch (or joins the one open): the edits
+// until its end are written at once and synced together. Every begin needs
+// its raScopeBatchEnd; raScopeBatchFlush ends the batch whatever its depth.
+func raScopeBatchBegin() {
+	if raScopeBatchOff {
+		return
+	}
+	raScope.mu.Lock()
+	defer raScope.mu.Unlock()
+	raScopeBatch.depth++
+	if raScopeBatch.depth > 1 {
+		return
+	}
+	raScopeBatch.gen++
+	raScopeBatch.began = time.Now()
+	raScopeBatchLive.Store(true)
+	gen := raScopeBatch.gen
+	time.AfterFunc(raScopeBatchMax, func() { raScopeBatchExpire(gen) })
+}
+
+// raScopeBatchEnd is a begin's end; the last one syncs the batch. An end with
+// no batch open (a flush already ended it) does nothing.
+func raScopeBatchEnd() {
+	if !raScopeBatchLive.Load() {
+		return
+	}
+	raScope.mu.Lock()
+	defer raScope.mu.Unlock()
+	if raScopeBatch.depth == 0 {
+		return
+	}
+	raScopeBatch.depth--
+	if raScopeBatch.depth == 0 {
+		raScopeBatchCommitLocked("launch")
+	}
+}
+
+// raScopeBatchFlush ends the open batch now: the game is about to start and
+// reads its config (screenChildStart). The launch's deferred end then finds
+// nothing open.
+func raScopeBatchFlush() {
+	if !raScopeBatchLive.Load() {
+		return
+	}
+	raScope.mu.Lock()
+	defer raScope.mu.Unlock()
+	if raScopeBatch.depth == 0 {
+		return
+	}
+	raScopeBatch.depth = 0
+	raScopeBatchCommitLocked("start")
+}
+
+// raScopeBatchExpire ends a batch left open for raScopeBatchMax.
+func raScopeBatchExpire(gen uint64) {
+	raScope.mu.Lock()
+	defer raScope.mu.Unlock()
+	if raScopeBatch.depth == 0 || raScopeBatch.gen != gen {
+		return
+	}
+	logWarn("retroarch", "a launch left its RetroArch settings unsynced for %s; syncing them now", raScopeBatchMax)
+	raScopeBatch.depth = 0
+	raScopeBatchCommitLocked("timeout")
+}
+
+// raScopeBatchNoteLocked records a config the batch wrote without a sync.
+func raScopeBatchNoteLocked(path string, edits int) {
+	raScopeBatch.edits += edits
+	for _, p := range raScopeBatch.paths {
+		if p == path {
+			return
+		}
+	}
+	raScopeBatch.paths = append(raScopeBatch.paths, path)
+}
+
+// raScopeBatchCommitLocked syncs what the batch wrote: the journal and its
+// folder first — the user's values are safe on the card before any of the
+// launch's edits can be — then each config and its folder, once. A sync that
+// fails is logged; the data is in the file either way, and the journal's
+// records still cover every edit. Under raScope.mu, depth already 0.
+func raScopeBatchCommitLocked(why string) {
+	raScopeBatchLive.Store(false)
+	journal, paths, edits, began := raScopeBatch.journal, raScopeBatch.paths, raScopeBatch.edits, raScopeBatch.began
+	raScopeBatch.journal, raScopeBatch.paths, raScopeBatch.edits = false, nil, 0
+	if !journal && len(paths) == 0 {
+		return
+	}
+	start := time.Now()
+	var dirs []string
+	addDir := func(dir string) {
+		for _, d := range dirs {
+			if d == dir {
+				return
+			}
+		}
+		dirs = append(dirs, dir)
+	}
+	if path := raScopeJournalPath(); journal && path != "" {
+		if err := raScopeSyncFile(path); err != nil && !os.IsNotExist(err) {
+			logWarn("retroarch", "could not sync the launch journal: %v", err)
+		}
+		syncDirectory(filepath.Dir(path))
+	}
+	for _, p := range paths {
+		if err := raScopeSyncFile(p); err != nil && !os.IsNotExist(err) {
+			logWarn("retroarch", "could not sync %s: %v", p, err)
+		}
+		addDir(filepath.Dir(p))
+	}
+	for _, d := range dirs {
+		syncDirectory(d)
+	}
+	logDebug("retroarch", "launch settings: %s in %s synced once at the %s in %s (batch open %s)",
+		pluralizeCount(edits, "edit", "edits"), pluralizeCount(len(paths), "file", "files"), why,
+		time.Since(start).Round(time.Millisecond), start.Sub(began).Round(time.Millisecond))
+	// The failsafe for a launch that never starts, from the batch's end: an
+	// edit made early in a long preparation still gets its full delay.
+	raScopeArmFailsafeLocked()
+}
+
+// raScopeSyncFile flushes one file to the card. Opened for writing: Windows
+// flushes only a handle that may write.
+func raScopeSyncFile(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // raScopeRestoreLocked puts every recorded value back and clears the journal.
@@ -647,7 +845,8 @@ func raScopeFailsafeCheck() {
 	}
 	raScope.mu.Lock()
 	defer raScope.mu.Unlock()
-	if raScopeChildRunning() {
+	// A launch preparing its edits: its batch's end arms the failsafe again.
+	if raScopeChildRunning() || raScopeBatch.depth > 0 {
 		return
 	}
 	if n, err := raScopeRestoreLocked(); err != nil {
@@ -673,7 +872,8 @@ func raScopeScreenFree() {
 // raScopeRestoreAfterExit waits for RetroArch itself to be gone — a launcher
 // that left it running outside its group would otherwise get the values back
 // under a live emulator, which writes its own on exit — then restores, unless
-// a new launch has started meanwhile: that launch's exit restores everything.
+// a new launch has started meanwhile, or is preparing (its batch is open):
+// that launch's exit restores everything.
 func raScopeRestoreAfterExit() {
 	deadline := time.Now().Add(raScopeWaitMax)
 	for raScopeRetroArchRunning() && time.Now().Before(deadline) {
@@ -681,7 +881,7 @@ func raScopeRestoreAfterExit() {
 	}
 	raScope.mu.Lock()
 	defer raScope.mu.Unlock()
-	if raScopeChildRunning() {
+	if raScopeChildRunning() || raScopeBatch.depth > 0 {
 		return
 	}
 	if n, err := raScopeRestoreLocked(); err != nil {
@@ -709,7 +909,9 @@ func raScopeStartupRecover() {
 		}
 		raScope.mu.Lock()
 		defer raScope.mu.Unlock()
-		if raScopeChildRunning() {
+		// A game resumed at power-on may be preparing already: its exit puts
+		// the old records back with its own, and the repair waits a start.
+		if raScopeChildRunning() || raScopeBatch.depth > 0 {
 			return
 		}
 		if n, err := raScopeRestoreLocked(); err != nil {

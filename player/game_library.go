@@ -764,9 +764,15 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	}
 	// An Xbox game gets the handheld to itself: JukaHub quits for it and
 	// launch.sh starts JukaHub again when the game ends (hakux_handoff.go).
+	// So does a PSP game whose picture needs the panel alone
+	// (ppsspp_picture.go).
 	if hakuxHandoffLaunch(game, launcher) {
 		return nil
 	}
+	// Faster game starts (faststart.go): the RetroArch settings below are
+	// written as they come and synced once, just before the game starts
+	// (racfgscope.go), and the card reads ahead for the game's first seconds.
+	defer fastStartPrepare(game, launcher)()
 	// A RetroArch launcher gets the two cfg switches that make the next boot
 	// continue from the auto state, plus the folder its own record toggle
 	// writes captures to, so the Recordings screen can list them. Standalone

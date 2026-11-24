@@ -1163,8 +1163,11 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	partW := func(p string) int32 {
 		return statusClusterPartWidth(fonts.Small, p)
 	}
+	// The Library look's big clock stands in for the cluster's time
+	// (themelibrary.go).
+	parts := h.libraryStatusParts(data.StatusParts)
 	total := int32(0)
-	for i, part := range data.StatusParts {
+	for i, part := range parts {
 		total += partW(part)
 		if i > 0 {
 			total += sepW
@@ -1213,7 +1216,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// The whole right of the bar in the user's order (Edit Home → Top bar,
 	// header_arrange.go); the shipped order puts the corner's buttons last,
 	// the bell at the margin. Home's cluster is never trimmed.
-	plan := headerPlan(headerConfig, data.StatusParts, partW, &corner, sepW, headerCornerGap, right)
+	plan := headerPlan(headerConfig, parts, partW, &corner, sepW, headerCornerGap, right)
 	// The Tabs Home's strip takes the span between the wordmark and these.
 	h.tabsNoteSpan(brandEnd, plan)
 	bellDrawn := false
@@ -1444,7 +1447,12 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 	}
 	// The clock is a button (the calendar) while it is drawn; the user may
-	// have hidden it (Edit Home → Top bar).
+	// have hidden it (Edit Home → Top bar). The Library look's big clock is
+	// that button while it stands in for the cluster's (themelibrary.go):
+	// told first, so a focused clock is never switched off for a moment.
+	if h.libraryClockFocus() {
+		clockDrawn = true
+	}
 	h.Focus.SetEnabled(HomeFocusClock, clockDrawn)
 	// The network meter, the Bluetooth rune, the speaker and the sun are tap
 	// targets as well as readings, so grow their hit areas to finger size once

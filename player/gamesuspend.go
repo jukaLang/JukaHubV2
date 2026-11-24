@@ -54,6 +54,9 @@ var screenChildAudio struct {
 var screenChildAudioNeeded = IsTrimuiDevice
 
 func screenChildStart(cmd *exec.Cmd) error {
+	// A library launch's RetroArch settings, written as its hooks went, reach
+	// the card in one go before the game reads them (racfgscope.go).
+	raScopeBatchFlush()
 	if screenChildAudioNeeded() {
 		screenChildAudio.mu.Lock()
 		screenChildAudio.count++
@@ -205,6 +208,9 @@ func noteGameChildExited(cmd *exec.Cmd) {
 		// RetroArch has written its config and gone: the keys JukaHub set for
 		// the launch get the user's values back (racfgscope.go; never blocks).
 		raScopeScreenFree()
+		// A game that ended in its first seconds: the card's read-ahead and
+		// JukaHub's threads come back now (faststart.go).
+		fastStartScreenFree()
 	}
 	if cmd == nil {
 		return

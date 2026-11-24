@@ -68,9 +68,29 @@ Every tab — and every folder, each collection on its own — has a view:
   a moment, and fades in over the last one.
 - **Minimal** — big names only, one per line, no art; the selected name in the
   accent colour.
+- **Library** — a media library's front page: the selected item large in a
+  featured banner across the top — its picture on the right (a game's
+  screenshot or save-state picture, fading in over its cover; box art stands
+  upright at the banner's end), and on the left a letter-spaced kicker
+  ("FEATURED IN GAMES", "JUMP BACK IN" on Recent), its name in a serif, its
+  line, and **Play** / **Resume** / **Open** (A) and **Options** (X) — over a
+  heading ("Next up" on Recent) with the position ("3 / 12") and one row of
+  tall 2:3 posters that Left / Right walk. A game's cover wears a round play
+  mark.
+  A tap on the banner opens the item; its Options button opens the X sheet.
+  It is the Library theme's view (Theme presets → Styles → Library), and works
+  under any theme.
 
 A on the strip (or a tap on the active tab) steps the page's view; the
 arranging sheet (L2) sets each tab's.
+
+Under the **Library** theme every page starts in the Library view, the tabs sit
+in one glass capsule, and the top bar's left end is a large clock over the date
+instead of the wordmark — it is the clock control, so A on it opens the
+calendar (Left from the first tab reaches it, Right goes back to the tabs).
+The views you pick while the Library theme is on are kept apart from the
+others (`homeTabViewsLibrary`), so switching theme brings each set back as you
+left it.
 
 **Grid selection ring** (Settings → Theme & look, and the arranging sheet; on
 by default) draws the ring and glow round the selected tile of the tile views.
@@ -146,7 +166,8 @@ Stored in `jukauser.json` (the `Custom` variables):
 | Key | Example | Meaning |
 | --- | --- | --- |
 | `homeArrangement` | `"tabs"` | The Home layout. Unset means Tabs; `"custom"` is Standard. `"jukaos"` and `"v2"` also mean Tabs. |
-| `homeTabViews` | `"games=row;main=grid;col:abc=list;store=compact"` | The view of each tab (by tab ID) and folder (`store`, `col:<id>`). Views: `grid`, `row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`. |
+| `homeTabViews` | `"games=row;main=grid;col:abc=list;store=compact"` | The view of each tab (by tab ID) and folder (`store`, `col:<id>`). Views: `grid`, `row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`, `library`. |
+| `homeTabViewsLibrary` | `"games=grid"` | The same, kept for while the Library theme is on; a page it does not name is in the `library` view. |
 | `homeTabsShown` | `"recent,main,games,-entertainment,favourites,collections,tools"` | The tabs in their order; `-` hides one. A tab the value does not name is added at the end — shown, except `tools`, which stays hidden until named. |
 | `homeTabsGridRing` | `"false"` | Grid selection ring: the ring round the selected tile (default on). |
 | `homeTabsRemember` | `"true"` | Open on the last tab (default on). Off, Home opens on the `homeTabsStart` tab, else Main. |

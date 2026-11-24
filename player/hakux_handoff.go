@@ -60,6 +60,12 @@ package main
 // helper (JUKAHUB_SCREEN_HANDOFF). Anywhere else — a JukaHub started by hand,
 // an older launch.sh, a script that cannot be written or started — the game
 // starts beside JukaHub as before.
+//
+// PSP games take the same way once their picture did not reach the panel
+// beside JukaHub (ppsspp_picture.go), or when the player chose it on the
+// PPSSPP card: the note's Kind says which, for the log and the card. Their
+// one-launch PPSSPP settings are written before JukaHub quits and put back at
+// the return (emuspeed_ppsspp.go).
 
 import (
 	"bufio"
@@ -91,6 +97,30 @@ const (
 	hakuxHandoffWaitFrames = 600
 )
 
+// The kinds of game a hand-off is for: an Xbox game in hakuX, or a PSP game
+// whose picture needs the panel to itself (ppsspp_picture.go). A note without
+// a kind is an Xbox game's (the only kind before 2026-11-23).
+const (
+	handoffKindXbox = "xbox"
+	handoffKindPSP  = "psp"
+)
+
+// handoffKindTag is the log tag of a kind.
+func handoffKindTag(kind string) string {
+	if kind == handoffKindPSP {
+		return "ppsspp"
+	}
+	return "xbox"
+}
+
+// handoffKindEmulator names the emulator of a kind for the launch card.
+func handoffKindEmulator(kind string) string {
+	if kind == handoffKindPSP {
+		return "PPSSPP"
+	}
+	return "hakuX"
+}
+
 // hakuxHandoffBegun is set once a hand-off has started this run: JukaHub is
 // on its way out, and a second press must not start the game twice. Main
 // thread.
@@ -118,6 +148,9 @@ type hakuxHandoffNote struct {
 	FromLibrary bool `json:"from_library,omitempty"`
 	// Script is the hand-off script's pid.
 	Script int `json:"script_pid,omitempty"`
+	// Kind is handoffKindXbox or handoffKindPSP ("" from before PSP games
+	// took this way: an Xbox game).
+	Kind string `json:"kind,omitempty"`
 }
 
 // game is the note's game, as the library names it.
@@ -224,28 +257,51 @@ func hakuxHandoffWanted(game libraryGame, launcher string) bool {
 	return hakuxIsXboxFolder(filepath.Base(dir), dir)
 }
 
-// hakuxHandoffLaunch hands the screen to an Xbox game and asks JukaHub to
-// quit; launchLibraryGame calls it once every check before a start has
-// passed. It reports whether it took the start (the caller returns then);
-// false starts the game beside JukaHub as before, the reason in the log.
-// Main thread.
+// hakuxHandoffKindFor is the kind of hand-off a start takes: an Xbox game's,
+// a PSP game's that needs the panel to itself (ppssppHandoffWanted), or ""
+// for a start beside JukaHub.
+func hakuxHandoffKindFor(game libraryGame, launcher string) string {
+	switch {
+	case hakuxHandoffWanted(game, launcher):
+		return handoffKindXbox
+	case ppssppHandoffWanted(game, launcher):
+		return handoffKindPSP
+	}
+	return ""
+}
+
+// hakuxHandoffLaunch hands the screen to an Xbox game, or to a PSP game that
+// needs the panel to itself, and asks JukaHub to quit; launchLibraryGame calls
+// it once every check before a start has passed. It reports whether it took
+// the start (the caller returns then); false starts the game beside JukaHub as
+// before, the reason in the log. Main thread.
 func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
-	if !hakuxHandoffWanted(game, launcher) {
+	kind := hakuxHandoffKindFor(game, launcher)
+	if kind == "" {
 		return false
 	}
+	tag := handoffKindTag(kind)
 	title := hakuxGameTitle(game)
 	if hakuxHandoffBegun {
 		// JukaHub is already closing for a game: a second press is spent.
 		return true
 	}
 	if !psLauncherWaitsForHandoff() {
-		logInfo("xbox", "%s starts beside JukaHub: this launch.sh does not wait for a screen helper", title)
+		logInfo(tag, "%s starts beside JukaHub: this launch.sh does not wait for a screen helper", title)
 		return false
 	}
 	marker := psScreenHandoffMarkerPath()
 	if marker == "" {
-		logInfo("xbox", "%s starts beside JukaHub: JukaHub's folder is unknown", title)
+		logInfo(tag, "%s starts beside JukaHub: JukaHub's folder is unknown", title)
 		return false
+	}
+	if kind == handoffKindPSP {
+		// What a start beside JukaHub does to JukaHub's PPSSPP first: the
+		// shared HOME seeded (the opaque picture shader too), the launcher
+		// current, the PSP's speed level in its ini. That level goes back at
+		// the return (hakuxHandoffReturn).
+		ppssppReadyManagedLaunch(launcher)
+		emuSpeedPrepare(launcher, game)
 	}
 	// The command MainUI's queue would run, as launchLibraryGame builds it.
 	romArg := firmwareROMArg(launcher, game.Path)
@@ -259,7 +315,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	if dir := gameDiagLogDir(); dir != "" && os.MkdirAll(dir, 0o755) == nil {
 		logPath = filepath.Join(dir, launcherLogName)
 	}
-	boost := xboxBoostSupported() && xboxBoostEnabled(appConfig)
+	boost := xboxBoostSupported() && xboxBoostEnabled(appConfig) && xboxBoostKindForGame(game) != xboxBoostNone
 	scriptPath := hakuxHandoffPath(hakuxHandoffScriptName)
 	statusPath := hakuxHandoffPath(hakuxHandoffStatusName)
 	notePath := hakuxHandoffPath(hakuxHandoffNoteName)
@@ -276,7 +332,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	_ = os.Remove(statusPath)
 	_ = os.Remove(notePath)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
-		logWarn("xbox", "%s starts beside JukaHub: the hand-off script could not be written (%v)", title, err)
+		logWarn(tag, "%s starts beside JukaHub: the hand-off script could not be written (%v)", title, err)
 		return false
 	}
 	cmd := exec.Command("sh", "--", scriptPath)
@@ -293,7 +349,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(scriptPath)
-		logWarn("xbox", "%s starts beside JukaHub: the hand-off script did not start (%v)", title, err)
+		logWarn(tag, "%s starts beside JukaHub: the hand-off script did not start (%v)", title, err)
 		return false
 	}
 	pid := cmd.Process.Pid
@@ -303,7 +359,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		_ = os.Remove(scriptPath)
-		logWarn("xbox", "%s starts beside JukaHub: the screen hand-off could not be recorded (%v)", title, err)
+		logWarn(tag, "%s starts beside JukaHub: the screen hand-off could not be recorded (%v)", title, err)
 		return false
 	}
 	go func() { _ = cmd.Wait() }()
@@ -323,19 +379,20 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		Log:          logPath,
 		FromLibrary:  gameLib.open,
 		Script:       pid,
+		Kind:         kind,
 	}
 	if len(recents) > 0 && recents[0].Path == game.Path {
 		note.PlayedAt = recents[0].PlayedAt
 	}
 	if data, err := json.Marshal(note); err != nil {
-		logWarn("xbox", "the note for the return from %s was not written: %v", title, err)
+		logWarn(tag, "the note for the return from %s was not written: %v", title, err)
 	} else if err := os.WriteFile(notePath, data, 0o600); err != nil {
-		logWarn("xbox", "the note for the return from %s was not written: %v", title, err)
+		logWarn(tag, "the note for the return from %s was not written: %v", title, err)
 	}
 	if boost {
 		hakuxHandoffBoost(game)
 	}
-	logInfo("xbox", "%s gets the screen to itself: hand-off script pid %d runs %s once JukaHub has closed, and launch.sh starts JukaHub again when the game ends",
+	logInfo(tag, "%s gets the screen to itself: hand-off script pid %d runs %s once JukaHub has closed, and launch.sh starts JukaHub again when the game ends",
 		title, pid, strings.Join(append([]string{name}, args...), " "))
 	ShowToast(title+" is starting — JukaHub closes while it plays and comes back after", ToastKindInfo)
 	requestAppExit()
@@ -406,7 +463,7 @@ func hakuxHandoffScript(spec hakuxHandoffSpec) string {
 	}, spec.Title)
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\n")
-	b.WriteString("# Generated by JukaHub — hands the screen to an Xbox game (hakux_handoff.go). Do not edit.\n")
+	b.WriteString("# Generated by JukaHub — hands the screen to a game (hakux_handoff.go). Do not edit.\n")
 	fmt.Fprintf(&b, "JUKAHUB_PID=%d\n", spec.PID)
 	fmt.Fprintf(&b, "LAUNCH_DIR=%s\n", psShellQuote(spec.Dir))
 	fmt.Fprintf(&b, "STATUS=%s\n", psShellQuote(spec.Status))
@@ -628,8 +685,9 @@ func hakuxHandoffReturn() {
 		hakuxHandoffClear()
 		return
 	}
+	tag := handoffKindTag(note.Kind)
 	if hakuxHandoffScriptRunning(note.Script) {
-		logInfo("xbox", "the Xbox game JukaHub closed for is still running (hand-off script pid %d); its note waits", note.Script)
+		logInfo(tag, "the game JukaHub closed for is still running (hand-off script pid %d); its note waits", note.Script)
 		return
 	}
 	status, _ := os.ReadFile(hakuxHandoffPath(hakuxHandoffStatusName))
@@ -641,11 +699,16 @@ func hakuxHandoffReturn() {
 	ran := run.ran()
 	switch {
 	case !run.HasStart:
-		logWarn("xbox", "%s was not started after JukaHub closed for it: %s", title, steps)
+		logWarn(tag, "%s was not started after JukaHub closed for it: %s", title, steps)
 	case !run.HasEnd:
-		logWarn("xbox", "%s started, but its end was not recorded: %s", title, steps)
+		logWarn(tag, "%s started, but its end was not recorded: %s", title, steps)
 	default:
-		logInfo("xbox", "back from %s after %s (exit code %d): %s", title, ran.Round(time.Second), run.RC, steps)
+		logInfo(tag, "back from %s after %s (exit code %d): %s", title, ran.Round(time.Second), run.RC, steps)
+	}
+	if note.Kind == handoffKindPSP {
+		// The PSP's one-launch PPSSPP settings go back, as the Exited hook
+		// puts them back after a game beside JukaHub (emuspeed_ppsspp.go).
+		go emuSpeedPPSSPPRestore()
 	}
 	if run.HasStart {
 		// Its saves go up to Google Drive / RomM, as after any game
@@ -681,7 +744,7 @@ func hakuxHandoffCredit(note hakuxHandoffNote, ran time.Duration, tries int) {
 	}
 	recents := recentGames()
 	if len(recents) == 0 || recents[0].Path != note.Path || !recents[0].PlayedAt.Equal(note.PlayedAt) {
-		logInfo("xbox", "time in %s not counted: another game was started since", filepath.Base(note.Path))
+		logInfo(handoffKindTag(note.Kind), "time in %s not counted: another game was started since", filepath.Base(note.Path))
 		return
 	}
 	start := recents[0].PlayedAt
@@ -696,9 +759,10 @@ func hakuxHandoffCredit(note hakuxHandoffNote, ran time.Duration, tries int) {
 func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 	defer func() {
 		if r := recover(); r != nil {
-			logWarn("xbox", "the card for the last Xbox game failed: %v", r)
+			logWarn(handoffKindTag(note.Kind), "the card for the last game JukaHub closed for failed: %v", r)
 		}
 	}()
+	emu := handoffKindEmulator(note.Kind)
 	game := note.game()
 	report, _ := diagnoseLibraryGame(game, note.Launcher, "")
 	if strings.TrimSpace(note.Log) != "" {
@@ -727,9 +791,9 @@ func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 	case len(report.Issues) > 0:
 		report.Summary = when + ". This is what stops it:"
 	case len(report.LogLines) > 0:
-		report.Summary = when + ". JukaHub found nothing missing that it can check; hakuX's launcher's last lines are below."
+		report.Summary = when + ". JukaHub found nothing missing that it can check; " + emu + "'s launcher's last lines are below."
 	default:
-		report.Summary = when + ". JukaHub found nothing missing that it can check, and hakuX's launcher printed nothing."
+		report.Summary = when + ". JukaHub found nothing missing that it can check, and " + emu + "'s launcher printed nothing."
 	}
 	logInfoDiag(report)
 	gameDiagPost(report)

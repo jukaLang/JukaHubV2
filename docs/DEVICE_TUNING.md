@@ -224,6 +224,69 @@ and process it starts begins at nice 0 again and games and helpers run as
 before; the Heavy-game boost still steps it back behind a boosted game.
 `JUKAHUB_UI_PRIORITY=0` in the environment leaves it alone for one run.
 
+### Faster game starts
+
+The seconds between **A** and a game's first frame went to three things, and
+each now costs less.
+
+**JukaHub's own preparation, with no switch.** Before a RetroArch game starts,
+a dozen or more of JukaHub's features set a launch-only value in
+`retroarch.cfg` or a core's `.opt` file: the save-state switches behind
+Continue, the OSD, the log, the picture mode, the controls, the speed level.
+Each edit used to sync its journal, the journal's folder and the config to the
+card on its own, some thirty fsyncs on a FAT card before the emulator could
+start. A library launch now writes each edit to its file at once, so a later
+feature still reads what an earlier one set, and syncs them together just
+before the game starts: the journal first, then each file once. The journal's
+promise is unchanged, since the user's values reach the card before the
+launch's edits do. While a launch is preparing, no restore from the game before
+it runs: that restore used to be able to undo the new launch's first edits
+halfway through. `JUKAHUB_LAUNCH_BATCH=0` syncs each edit on its own again for
+one run. The debug log says `launch settings: 14 edits in 2 files synced once
+at the start in 40ms (batch open 210ms)`.
+
+**The clock.** Automatic CPU speed starts a game where it settled last time
+(1.0 GHz for a GBA game, say), and it used to move there about two seconds
+after the start, while RetroArch was still loading the core, the ROM and the
+auto state. With **Faster game starts** (Settings → Games & emulators, under
+Faster menus; `gameStartBoost`, on by default), a game's session begins at the
+top of Automatic CPU speed's table under the heat guard's dial, with
+`scaling_min_freq` at 75% of that top, the values Faster menus uses. It holds
+there for 8 s before taking the game's own level. Those seconds are not learned
+and do not move the level, so a game keeps the clock it needs while it plays.
+Games that CPU boost in games already holds at the top, and games with their
+own CPU setting, are left as they are. The Automatic CPU speed row reads
+`Game · starting at 1.6–2.0 GHz, then 1.0 GHz`, and each run's first such start
+is a `power` line (`faster game start: Game at 1.6–2.0 GHz for 8s, then
+1.0 GHz`).
+
+**The card and JukaHub.** The row also opens a 10-second window at the start.
+For those seconds:
+
+- The disk holding the ROM and the emulator reads ahead 1 MB (`read_ahead_kb`)
+  instead of the kernel's usual 128 KB, so a core or ROM loads in fewer and
+  larger reads.
+- JukaHub's own threads step behind the game, at nice 10 and the lowest
+  best-effort I/O level. Its work right after a start (the recents, the game's
+  record, the log) then waits for the game's reads. The idle I/O class is not
+  used, because a game streaming its disc could starve it. SDL's sound threads
+  keep their place, so music JukaHub plays under a game does not stutter.
+- The game's emulator, core and ROM are read ahead while RetroArch is still
+  setting up its screen and sound. Files the highlight's warm-up already read
+  are skipped, and this runs only with **Warm up games before launch** on.
+
+The window closes after 10 s, or as soon as the game ends. The read-ahead goes
+back to the value found, and JukaHub's threads to their own priorities.
+
+The heavy-game boost already raises the read-ahead for its games and steps
+JukaHub back for their whole run, so the window leaves those two parts to it.
+Everything rests under the Battery Saver power mode and the low-battery saver.
+The clock part also rests with Automatic CPU speed off, while the chip or
+battery is warm, and while the kernel's thermal limit is active.
+`JUKAHUB_GAME_START=0` turns the window off for one run. The log's `library`
+line says what a start got (`faster game start for "Game": mmcblk0 reads ahead
+128 → 1024 KB; JukaHub's 23 threads behind the game; start warm-up, for 10s`).
+
 ### CPU boost in games and the heat guard
 
 Two things keep a game's clock where it belongs: **CPU boost in games** raises
@@ -380,7 +443,7 @@ console's level for that launch only, put back when RetroArch exits:
 | Level | What it writes |
 |-------|----------------|
 | **Fast** | Frames skipped only when the handheld falls behind (the cores' audio-buffer frameskip: `auto` in PCSX-ReARMed, FBNeo, MAME 2003 / 2003-Plus, PicoDrive, Genesis Plus GX, Snes9x, gpSP, mGBA, Handy, Beetle PCE Fast; PPSSPP's automatic frameskip; Flycast's automatic skip at "some"; YabaSanshiro's / Yabause's frameskip), Mupen64Plus-Next's threaded renderer and frame duping, melonDS's threaded renderer, DeSmuME's JIT, Virtual Jaguar's fast blitter, Opera's DSP thread; on every console above the 8/16-bit ones, RetroArch's run-ahead, preemptive frames and rewind off, an audio buffer of at least 64 ms for the frameskip to watch (unless that console's Latency is Low or Lowest) and, on the A133P with Threaded video on Auto, threaded video (software-drawn cores hand the GPU driver's work to another core) |
-| **Fastest** | Fast, plus: PSP lazy texture caching, low curve detail, GPU read-backs skipped; Dreamcast DSP off, per-strip alpha sorting, no mipmaps or anisotropic filtering, more skippable frames; PCSX-ReARMed's GPU thread asynchronous; DeSmuME skipping one frame in two; ARMSX2's EE at 75% with mild cycle skipping; N64 Light graphics |
+| **Fastest** | Fast, plus: PSP lazy texture caching, low curve detail; Dreamcast DSP off, per-strip alpha sorting, no mipmaps or anisotropic filtering, more skippable frames; PCSX-ReARMed's GPU thread asynchronous; DeSmuME skipping one frame in two; ARMSX2's EE at 75% with mild cycle skipping; N64 Light graphics |
 | **Emulators' own** | nothing |
 
 **Auto** (the default) is by console and chip: the 8/16-bit consoles and the
@@ -396,9 +459,12 @@ added, and a game's or a folder's own options file (RetroArch's "Save Game
 Options") is left alone. A core that never ran has no options file yet;
 RetroArch writes one when it exits, so its second start gets the level.
 JukaHub's own PPSSPP gets the PSP's level in its `ppsspp.ini` the same way
-(`FrameSkip 1` + `AutoFrameSkip`; Fastest adds `TextureBackoffCache`,
-`SplineBezierQuality 0`, skipped GPU read-backs and no anisotropic filtering),
-journalled in `emu-speed-ppsspp.json` and put back after the game. Heavy
+(`FrameSkip 1` + `AutoFrameSkip`, not while `SkipBufferEffects` is on, a pair
+PPSSPP never runs together; Fastest adds `TextureBackoffCache`,
+`SplineBezierQuality 0` and no anisotropic filtering), journalled in
+`emu-speed-ppsspp.json` and put back after the game. No level skips the PSP's
+GPU read-backs (since 2026-11-23): a game that shows a picture it reads back
+from the GPU goes black without them. Heavy
 consoles' cores also log warnings only once a core has played a game in this
 run of JukaHub (a game that does not start is still diagnosed from the first
 launch's full log). The log's `emulation` lines (`emulator speed for this

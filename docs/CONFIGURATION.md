@@ -329,7 +329,7 @@ when RetroArch exits, like `videoFilter`:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `raTuningSpeed` | `auto` | **Speed** (handhelds): what the emulators trade for frames, per launch — `fast` (frames skipped only when the handheld falls behind: the cores' `auto` frameskip, PPSSPP's automatic frameskip, Flycast's automatic skip; Mupen64Plus-Next and melonDS threaded renderers, N64 frame duping, DeSmuME JIT, Virtual Jaguar fast blitter, Opera DSP thread; run-ahead, preemptive frames and rewind off above the 8/16-bit consoles), `fastest` (plus PSP lazy textures / low curves / skipped read-backs, Dreamcast DSP off / per-strip sorting / no mipmaps or anisotropic filtering, PCSX-ReARMed async GPU thread, DeSmuME frameskip 1, ARMSX2 EE at 75% + mild cycle skip, N64 Light graphics), `own` (nothing), `auto` (8/16-bit and handheld consoles `own`; PlayStation, N64, DS, arcade, CD consoles `fast`; PSP, Dreamcast, Saturn, Jaguar, PS2 `fastest` on the A133P models, `fast` on the Smart Pro S). Only options still at the core's default are written, never into a game's or folder's own options file; JukaHub's PPSSPP gets the PSP's level in `ppsspp.ini` (journal `emu-speed-ppsspp.json`); GameCube and Wii follow `gamecubeSpeed`; `raTuning.<console>.speed` is one console's own (`""` follows) |
+| `raTuningSpeed` | `auto` | **Speed** (handhelds): what the emulators trade for frames, per launch — `fast` (frames skipped only when the handheld falls behind: the cores' `auto` frameskip, PPSSPP's automatic frameskip, Flycast's automatic skip; Mupen64Plus-Next and melonDS threaded renderers, N64 frame duping, DeSmuME JIT, Virtual Jaguar fast blitter, Opera DSP thread; run-ahead, preemptive frames and rewind off above the 8/16-bit consoles), `fastest` (plus PSP lazy textures / low curves, Dreamcast DSP off / per-strip sorting / no mipmaps or anisotropic filtering, PCSX-ReARMed async GPU thread, DeSmuME frameskip 1, ARMSX2 EE at 75% + mild cycle skip, N64 Light graphics), `own` (nothing), `auto` (8/16-bit and handheld consoles `own`; PlayStation, N64, DS, arcade, CD consoles `fast`; PSP, Dreamcast, Saturn, Jaguar, PS2 `fastest` on the A133P models, `fast` on the Smart Pro S). Only options still at the core's default are written, never into a game's or folder's own options file; JukaHub's PPSSPP gets the PSP's level in `ppsspp.ini` (journal `emu-speed-ppsspp.json`; no frameskip while `SkipBufferEffects` is on, and no level skips the PSP's GPU read-backs, which blacked out games that show a read-back picture); GameCube and Wii follow `gamecubeSpeed`; `raTuning.<console>.speed` is one console's own (`""` follows) |
 | `raTuningAudio` | `auto` | resampling: `auto` (per console), `best` (sinc, high), `balanced` (sinc, lower), `fast` (cc), `own` |
 | `raTuningLatency` | `auto` | `auto`, `standard` (RetroArch's own), `low` (2 swap images, automatic frame delay, audio ≤ 64 ms), `lowest` (audio ≤ 48 ms, plus 1 frame of run-ahead on light consoles) |
 | `raTuningOverlay` | `own` | `own`, `none`, or the path of an overlay `.cfg` |
@@ -444,12 +444,13 @@ logo**) keeps its record in `Apps/JukaHub/data/bootlogo/state.json`, not in
 settings saved before each write; see [BOOT.md](BOOT.md#silent-boot).
 
 `bootStyle` (Settings → General → **Boot animation**) chooses what the logo
-does in that boot: `cinematic` (the default: it crashes onto a cracking floor,
-with a buzz of the vibration motor and a knock in the chime), `roll` (it rolls
-in on its rounded corners), `image` (the logo still), `classic` (the glass
-light running round the pane), `random` (cinematic, roll or classic, a
-different one each start) or `none` (no boot animation and no quick hello: the
-fastest start, `startupAnimation` then has no effect). Reduce motion switched
+does in that boot: `cinematic` (it falls from the screen, big, shrinking as it
+nears the ground, and crashes onto it, which cracks, with a buzz of the
+vibration motor and a knock in the chime), `roll` (it rolls in on its rounded
+corners), `image` (the logo still), `classic` (the glass light running round
+the pane), `random` (cinematic, roll or classic, a different one each start)
+or `none` (the default: no boot animation and no quick hello: the fastest
+start, `startupAnimation` then has no effect). Reduce motion switched
 on by hand, and battery saver, play `cinematic` and `roll` as `image`; an app
 launch plays a short version of the style. See [BOOT.md](BOOT.md).
 
@@ -646,6 +647,21 @@ low-battery saver, while the chip is warm, on the idle screens and in games;
 see [DEVICE_TUNING.md](DEVICE_TUNING.md#faster-menus).
 `JUKAHUB_UI_PRIORITY=0` in the environment keeps the screen's thread at the
 normal priority for one run.
+
+`gameStartBoost` (bool, default `true`) is Settings → Games & emulators →
+**Faster game starts** on TrimUI handhelds. A game's Automatic CPU speed
+session begins at the top the heat guard allows, with the floor at 75% of it,
+for 8 s before the game's learned level. Those seconds are not learned. For
+10 s after the start, the disk holding the game reads ahead 1 MB, JukaHub's
+threads run at nice 10 and the lowest best-effort I/O level, and the game's
+emulator, core and ROM are read ahead if the warm-up did not already read them.
+It rests under the Battery Saver power mode and the low-battery saver. The
+clock part also rests with Automatic CPU speed off and on a warm chip. A
+library launch's RetroArch settings are synced to the card once, just before
+the game starts, whatever this row says. See
+[DEVICE_TUNING.md](DEVICE_TUNING.md#faster-game-starts).
+`JUKAHUB_GAME_START=0` and `JUKAHUB_LAUNCH_BATCH=0` in the environment turn off
+the 10-second window and the single sync, each for one run.
 
 `cpuBoostGames` (`"auto"`/`"always"`/`"off"`, default `"auto"`) is Settings →
 Games & emulators → **CPU boost in games** on TrimUI handhelds: three seconds
@@ -961,8 +977,10 @@ changed.
 
 The Tabs Home keeps its own state in these custom variables:
 `homeTabViews` (`"<tab or folder>=<view>"` pairs split by `;`, views `grid`,
-`row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`; folder keys
-`store` and `col:<id>`), `homeTabsShown` (the tab IDs in order,
+`row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`, `library`; folder
+keys `store` and `col:<id>`), `homeTabViewsLibrary` (the same, kept apart for
+while the Library theme is on; a page it does not name is in the `library`
+view), `homeTabsShown` (the tab IDs in order,
 comma-separated, `-` before a hidden one; a tab it does not name is shown at
 the end, except `tools`, hidden until named), `homeTabsGridRing` (`true` by
 default: the ring round the selected tile), `homeTabsRemember` (`true`
@@ -1010,7 +1028,10 @@ turns the Carousel into the console's welcome hub (a row of icon tiles over
 trophy pills and a board of info cards), PS4 Style reshapes the row as a
 top-left *shelf* and the Switch 2 looks as the console's home screen (an
 edge-scrolling *strip* of square tiles led by your recent games, over a line
-of round buttons).
+of round buttons). **Library** (`convert-library`) dresses the Tabs Home as a
+media library: every page in the Library view (a featured banner over a row of
+posters, `homeTabViewsLibrary`), a big clock in the wordmark's place and the
+tabs in one capsule (`"carouselStyle": "library"` with `"arrangement": "tabs"`).
 A theme file can use the same optional keys: `carouselStyle`, `tileRadius`,
 `focusRing` and `focusRing2`. See [THEMES.md](THEMES.md#styles-and-layouts).
 

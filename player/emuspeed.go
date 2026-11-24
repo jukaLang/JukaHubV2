@@ -119,13 +119,14 @@ var emuSpeedCoreTables = map[string][]emuSpeedOpt{
 		{Key: "pcsx_rearmed_frameskip_type", Value: "auto", Defaults: []string{"disabled"}},
 		{Key: "pcsx_rearmed_gpu_thread_rendering", Value: "async", Defaults: []string{"disabled"}, Fastest: true},
 	},
-	// PSP. Automatic frameskip acts only with a frameskip of one or more.
+	// PSP. Automatic frameskip acts only with a frameskip of one or more. GPU
+	// read-backs are not skipped (2026-11-23): a game that shows a picture it
+	// reads back from the GPU goes black without them (emuspeed_ppsspp.go).
 	"ppsspp": {
 		{Key: "ppsspp_frameskip", Value: "1", Defaults: []string{"disabled", "0", "Off"}},
 		{Key: "ppsspp_auto_frameskip", Value: "enabled", Defaults: []string{"disabled"}},
 		{Key: "ppsspp_lazy_texture_caching", Value: "enabled", Defaults: []string{"disabled"}, Fastest: true},
 		{Key: "ppsspp_spline_quality", Value: "Low", Defaults: []string{"High"}, Fastest: true},
-		{Key: "ppsspp_skip_gpu_readbacks", Value: "enabled", Defaults: []string{"disabled"}, Fastest: true},
 	},
 	// Dreamcast, NAOMI and Atomiswave (init adds the reicast_ names of the
 	// builds before Flycast's 2021 rename).

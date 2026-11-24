@@ -98,6 +98,15 @@ they were, and Select still opens the menu. The choice is the
   button rows side by side, real bold and monospace code, soft shadows and
   round avatars, with every line set on one baseline.
   [CSS_SUPPORT.md](../player/CSS_SUPPORT.md) lists exactly what is drawn.
+* Draw older and simpler pages the way a desktop browser does: table
+  colours, widths, borders, padding and spacing written as HTML attributes
+  (`bgcolor`, `width`, `border`, `cellpadding`, `cellspacing`), `<font>`
+  colours and sizes, `<center>` and `align` (a centred table sits in the
+  middle), numbered lists that start where the page says, footnote markers
+  set small and raised, headings sized from the text around them, `rem`
+  sizes that follow the page's root size, gradient headings in their colour,
+  and card titles cut with "…" after the lines the page allows
+  (`line-clamp`).
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and absolutely positioned or fixed layers painted
@@ -922,7 +931,8 @@ the bounding box of its cells. A font family chooses only between the app's
 face and a monospace one (when the machine has a monospace font); web fonts are
 not downloaded, and an icon font shows only the icons Inter has a glyph for.
 SVG text, embedded pictures, filters, masks and clip paths are not drawn (the
-rest of the drawing is).
+rest of the drawing is). Table cells keep their content at the top of the row
+(a browser centres it).
 GitHub issue pages and
 release pages work, and so do most pages that render their content with
 JavaScript; a page whose scripts need more than the reader has (a canvas, a live

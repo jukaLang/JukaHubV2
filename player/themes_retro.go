@@ -266,7 +266,7 @@ var themeStyleTabOrder = []string{
 	"convert-gamecube",
 	"convert-xbox", "convert-xboxone",
 	"convert-megadrive", "convert-dreamcast",
-	"convert-minimal",
+	"convert-library", "convert-minimal",
 }
 
 // themePresetIsStyle identifies built-ins with a distinct UI treatment.

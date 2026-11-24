@@ -418,6 +418,10 @@ func aiPerformanceGet(ctx context.Context, a aiArgs) aiStep {
 		if row, _, ok := aiFindRow(c, uiBoostSetting); ok {
 			fmt.Fprintf(&b, "Faster menus: %s — %s\n", aiRowValue(c, row), uiBoostSettingDetail(c))
 		}
+		// A game's first seconds: clock, card and JukaHub (faststart.go).
+		if row, _, ok := aiFindRow(c, fastStartKey); ok {
+			fmt.Fprintf(&b, "Faster game starts: %s — %s\n", aiRowValue(c, row), fastStartSettingDetail(c))
+		}
 		// The boost and the heat guard: why a game runs at the clock it does
 		// (cpuboost.go, heatguard.go).
 		if row, _, ok := aiFindRow(c, cpuBoostKey); ok {

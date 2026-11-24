@@ -63,10 +63,11 @@ const (
 	homeTabViewCompact  = "compact"  // small icons, many per row
 )
 
-// homeTabViews is the order a "change view" control steps through. Backdrop
-// and Minimal are hometabs_backdrop.go's and hometabs_minimal.go's.
+// homeTabViews is the order a "change view" control steps through. Backdrop,
+// Minimal and Library are hometabs_backdrop.go's, hometabs_minimal.go's and
+// hometabs_library.go's.
 var homeTabViews = [...]string{homeTabViewGrid, homeTabViewRow, homeTabViewList, homeTabViewCarousel, homeTabViewCompact,
-	homeTabViewBackdrop, homeTabViewMinimal}
+	homeTabViewBackdrop, homeTabViewMinimal, homeTabViewLibrary}
 
 // Item refs. An item that can be favourited or put into a collection carries
 // a Ref in one of these forms; the homeTiles grammar (home_tiles.go) is reused

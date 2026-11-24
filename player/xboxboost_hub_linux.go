@@ -155,7 +155,11 @@ func xboxBoostStepForward() {
 		}
 		switch {
 		case was && t.ioIdle:
-			_, _, _ = unix.Syscall(unix.SYS_IOPRIO_SET, 1, uintptr(tid), uintptr(t.ioprio))
+			// A thread that had done no I/O reads back as "none, level 4",
+			// which ioprio_set refuses: it goes back to plain "none"
+			// (faststart_linux.go). Before 2026-11-23 such a thread stayed in
+			// the idle class after the game.
+			_, _, _ = unix.Syscall(unix.SYS_IOPRIO_SET, 1, uintptr(tid), uintptr(fastStartIOBack(t.ioprio)))
 		case !was:
 			_, _, _ = unix.Syscall(unix.SYS_IOPRIO_SET, 1, uintptr(tid), 0)
 		}

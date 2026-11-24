@@ -98,6 +98,8 @@ var themeConsoleSpecs = map[string]themeConsoleSpec{
 	"convert-xbox":        {radius: 8, ring: "#ffffff"},
 	"convert-xboxone":     {radius: 2, ring: "#ffffff"},
 	"convert-minimal":     {carousel: homeCarouselText, radius: 2, ring: "#ffffff"},
+	// Library: the Tabs Home's media-library look (themelibrary.go).
+	"convert-library": {carousel: homeCarouselLibrary, radius: 12, ring: "#ecc33d"},
 }
 
 // applyTo writes the look into a preset.
@@ -138,6 +140,7 @@ var homeConsoleLook struct {
 	hasRing     bool
 	pulse       bool
 	switchHome  bool // carouselStyle "switch": the Switch Home (themeswitch.go)
+	library     bool // carouselStyle "library": the Library look on the Tabs Home (themelibrary.go)
 	// pulseFor is the control the pulse runs for, pulseAt when it began.
 	pulseFor HomeFocusID
 	pulseAt  uint64
@@ -158,6 +161,7 @@ func applyThemeConsoleLook(p ThemePreset) {
 	l := &homeConsoleLook
 	l.carousel = normalizeCarouselStyle(p.CarouselStyle)
 	l.switchHome = homeIsSwitchHomeStyle(p.CarouselStyle)
+	l.library = homeIsLibraryStyle(p.CarouselStyle)
 	homeTileRadius = homeTileRadiusDefault
 	if p.TileRadius > 0 {
 		homeTileRadius = min32(max32(p.TileRadius, 2), homeTileRadiusMax)
@@ -438,6 +442,11 @@ func (h *HomeLayout) carDrawConsoleLabels(renderer *sdl.Renderer, fonts HomeFont
 // rows in their own shape, everything else as drawThemeArrangementSketch has
 // it.
 func drawThemeSketchFor(renderer *sdl.Renderer, p ThemePreset, x, y, w, h int32, ink, accent sdl.Color) {
+	// The Library look dresses the Tabs Home, whatever the arrangement field
+	// says (themelibrary.go).
+	if drawLibraryHomeSketch(renderer, p, x, y, w, h, ink, accent) {
+		return
+	}
 	style := homeCarouselCentred
 	if normalizeHomeArrangement(p.Arrangement) == homeArrangementCarousel {
 		style = normalizeCarouselStyle(p.CarouselStyle)

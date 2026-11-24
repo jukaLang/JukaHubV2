@@ -23,6 +23,8 @@ package main
 //   - a new highlight, the page left, or the setting switched off cancels
 //     the warm in flight; a launch stops it too, and its log line says
 //     whether the warm had finished (a gameLaunchRegisterStarted hook).
+//     Faster game starts (faststart.go) then reads what was left, beside the
+//     starting game and behind its reads (gameWarmAtStart).
 //
 // The reads are Linux's (gamewarm_linux.go): posix_fadvise WILLNEED on a
 // thread of its own at nice 19 in the idle I/O class, with a fallback that
@@ -196,9 +198,80 @@ func gameWarmBegin(gen uint64, game libraryGame) {
 }
 
 // gameWarmShouldStop reports whether the warm in flight must stop now: it
-// was cancelled, or a game took the screen.
+// was cancelled, or a game took the screen — unless it is the start warm,
+// which reads beside the game it is for.
 func gameWarmShouldStop(ctx context.Context) bool {
-	return ctx.Err() != nil || runningGameChildren.Load() > 0
+	if ctx.Err() != nil {
+		return true
+	}
+	if ctx.Value(gameWarmStartKey{}) != nil {
+		return false
+	}
+	return runningGameChildren.Load() > 0
+}
+
+// gameWarmStartKey marks the start warm's context (gameWarmStartContext).
+type gameWarmStartKey struct{}
+
+// gameWarmStartContext is the base of a start warm's context.
+func gameWarmStartContext() context.Context {
+	return context.WithValue(context.Background(), gameWarmStartKey{}, true)
+}
+
+// gameWarmAtStart is the start warm of Faster game starts (faststart.go): the
+// launch files of the game that has just started which no warm read in the
+// last gameWarmRepeat — for a game started without a moment on its
+// highlight, the emulator, the core and the ROM — read while RetroArch is
+// still setting up its screen and sound. It runs on its own goroutine at the
+// priority of JukaHub's other threads, which the window has stepped behind
+// the game by then, so the game's own reads come first; ctx ends it with the
+// window. launcher is the one the launch started.
+func gameWarmAtStart(ctx context.Context, cancel context.CancelFunc, game libraryGame, launcher string) {
+	defer cancel()
+	if !gameWarmSupported || !gameWarmCandidate(game) {
+		return
+	}
+	res := gameWarmResult{rom: game.Path, state: "skipped"}
+	defer func() {
+		if res.state != "skipped" || res.why != "" {
+			logDebug("gamewarm", "%s at the start: %s", filepath.Base(game.Path), gameWarmDescribe(res))
+		}
+	}()
+	if pct := getBatteryPercent(); pct >= 0 && pct <= gameWarmLowBattery && !getBatteryCharging() {
+		res.why = "battery at " + strconv.Itoa(pct) + "%"
+		return
+	}
+	files, sizes, total, recent := gameWarmPick(gameWarmPlanFor(game, launcher), time.Now())
+	if len(files) == 0 {
+		if recent > 0 {
+			res.state, res.why = "finished", "already warm"
+		}
+		return
+	}
+	if avail := memAvailNowMB(); avail == 0 || avail<<20 < uint64(2*total) {
+		res.why = "too little free memory"
+		return
+	}
+	for i, path := range files {
+		n, err := gameWarmFile(ctx, path, sizes[i])
+		res.bytes += n
+		if gameWarmShouldStop(ctx) {
+			res.state = "stopped"
+			return
+		}
+		if err != nil {
+			logDebug("gamewarm", "%s: %v", path, err)
+			continue
+		}
+		res.files++
+		gameWarm.mu.Lock()
+		if gameWarm.warmed == nil {
+			gameWarm.warmed = map[string]time.Time{}
+		}
+		gameWarm.warmed[path] = time.Now()
+		gameWarm.mu.Unlock()
+	}
+	res.state = "finished"
 }
 
 // gameWarmRun warms game's launch files on its own goroutine.
@@ -270,7 +343,12 @@ func gameWarmRun(ctx context.Context, cancel context.CancelFunc, game libraryGam
 // It resolves the emulator the way the launch does, so it runs off the main
 // thread.
 func gameWarmPlan(game libraryGame) []string {
-	launcher := resolveGameLauncherFor(game)
+	return gameWarmPlanFor(game, resolveGameLauncherFor(game))
+}
+
+// gameWarmPlanFor is gameWarmPlan for a launcher already known (the start
+// warm's: the one the launch started).
+func gameWarmPlanFor(game libraryGame, launcher string) []string {
 	core := ""
 	switch {
 	case launcher == "":

@@ -32,10 +32,10 @@ fields accept only opaque `#RRGGBB` colors.
 | `info` | Informational status color and the accent for focus rings and highlights. |
 | `overlay` | Scrim color behind modal panels. |
 | `summary` | Optional short note shown for a total-conversion theme. |
-| `arrangement` | Optional Home layout. `dashboard`, `grid`, `carousel` and `widgets` make a total conversion; blank, `custom` or an unknown value leaves the layout alone. |
+| `arrangement` | Optional Home layout. `dashboard`, `grid`, `carousel`, `widgets` and `tabs` make a total conversion; blank, `custom` or an unknown value leaves the layout alone. |
 | `bloom` | Optional color for the first glow in Home's backdrop. |
 | `bloom2` | Optional color for the second glow in Home's backdrop. |
-| `carouselStyle` | Optional Home composition for the Carousel layout: `shelf` (PS4 game shelf), `strip` (equal square tiles), `ps1` (paged, bevelled system menu), `ps2` (vertical browser list and blue orbit), `psp` (horizontal icon crossbar and waves), `switch` (Switch 2 home screen), `hub` (PS5 welcome hub), or `text` (Minimal UI text list; aliases `minimal`, `list`). Blank or unknown keeps the centred carousel. Only visible with `"arrangement": "carousel"`. |
+| `carouselStyle` | Optional Home composition for the Carousel layout: `shelf` (PS4 game shelf), `strip` (equal square tiles), `ps1` (paged, bevelled system menu), `ps2` (vertical browser list and blue orbit), `psp` (horizontal icon crossbar and waves), `switch` (Switch 2 home screen), `hub` (PS5 welcome hub), or `text` (Minimal UI text list; aliases `minimal`, `list`). Blank or unknown keeps the centred carousel. Only visible with `"arrangement": "carousel"` — except `library`, the Library look, which dresses the Tabs Home instead (use it with `"arrangement": "tabs"`). |
 | `tileRadius` | Optional corner radius of Home's tiles and the shared cards, in 1280x720 design pixels, `0` to `32`. `0` or missing keeps 20. |
 | `focusRing` | Optional `#RRGGBB` color for the ring around a focused Home tile. Missing uses `info`. |
 | `focusRing2` | Optional `#RRGGBB` color the ring pulses toward for about two seconds after each move. Needs `focusRing`; the pulse stays off with reduced motion. |
@@ -77,10 +77,10 @@ palette without moving Home cards. Home layout is a separate setting under
 Settings → Theme & look, with Tabs, Standard, Hero grid, Carousel and Widgets.
 The first-run tour offers the same five layouts with visual previews.
 
-Styles contains console-inspired looks, Minimal UI and looks with their own
-background glow. These can change colors, tile shapes, the Home arrangement
-and the focus treatment, with no logos, fonts or artwork. Plain palettes stay
-in Colour. Built-in combinations that only repeated a palette and a layout no
+Styles contains console-inspired looks, Library, Minimal UI and looks with
+their own background glow. These can change colors, tile shapes, the Home
+arrangement and the focus treatment, with no logos or artwork; the only typeface
+besides Inter is Library's serif. Plain palettes stay in Colour. Built-in combinations that only repeated a palette and a layout no
 longer fill the gallery; existing saved selections still load. User-authored
 conversion themes remain available in Styles.
 
@@ -98,6 +98,7 @@ conversion themes remain available in Styles.
 | GameCube Style | GameCube Indigo | Dashboard | Deep indigo, 14 px tiles. |
 | Xbox Style | Xbox Green | Widgets | Dark charcoal with green highlights and glow. The Widgets grid uses 8 px rounded rectangles with a white focus ring. |
 | Xbox One Style | Xbox One | Hero grid | The 2013 Metro dashboard: near-black backdrop, flat square tiles (2 px corners), lime-green glow and a white focus ring. |
+| Library | Library | Tabs, `library` | A media library's front room on studio grey. The top bar starts with a large serif clock over the date (the clock control: A opens the calendar) and holds the tabs in one glass capsule. Every tab opens in the Library view ([HOME_TABS.md](HOME_TABS.md#views)): a dark featured banner for the selected item — its picture on the right, a gold letter-spaced kicker ("FEATURED IN GAMES"), its name in a serif, its line, Play / Resume / Open (A) and Options (X), a dot per item — over a serif heading and a row of tall 2:3 posters with round play marks, all standing on a boardwalk of dark planks under a soft light. The views you pick under Library are kept apart from every other theme's. 12 px corners, gold focus ring. The serif is Lora (SIL Open Font License), embedded and renamed; names it cannot draw are set in Inter, and Legible reading font or Bold text switch it off. |
 | Minimal UI | Minimal | Carousel (`text`) | Just text: black page, Home as a plain list of names, the focused one white with a thin bar before it and its description after it. No tiles, art or glows. |
 | Mega Drive Style | Mega Drive | Dashboard | Black, red and gold, square 4 px tiles. |
 | Dreamcast Style | Dreamcast | Carousel, `strip` | White with the swirl's orange, 16 px tiles. |

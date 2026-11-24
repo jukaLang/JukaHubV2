@@ -1668,6 +1668,9 @@ func setBuildSections() []setSection {
 				// "Faster menus": a press lifts the clock for a moment, and the
 				// menus draw up to 60 fps while in use (uiboost.go).
 				uiBoostSettingsRow(),
+				// "Faster game starts": full clock, card read-ahead and JukaHub
+				// stepped back while a game loads (faststart.go).
+				fastStartSettingsRow(),
 				// "CPU boost in games": heavy games hold the top clock while the
 				// chip is cool (cpuboost.go); "Heat limit": where the heat guard
 				// starts slowing any game down (heatguard.go).

@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **398** (audited 2026-11-19).
+Open tasks: **401** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -73,10 +73,11 @@ have their own [HW] tasks.
    display-holder warning (the firmware's OSD daemon is ignored).
 2. With Start at login on, a power-on goes stock menu → black → JukaHub with no
    flash, and `autostart.log` has one "closed the stock menu" line.
-3. Boot styles: Cinematic's crack layer draws on the GE8300 at the UI frame rate
-   and buzzes and knocks on impact; Roll is smooth at 30 fps; floor and horizon
-   fit the Brick's 4:3 canvas; None goes straight to Home; Reduce motion and
-   Battery Saver show the still logo; an app launch plays the short version.
+3. Boot styles: Cinematic's fall from the screen stays smooth while the logo is
+   several times its size, its crack layer draws on the GE8300 at the UI frame
+   rate, it buzzes and knocks on impact and its ground fills the Brick's 4:3
+   canvas; Roll is smooth at 30 fps; None goes straight to Home; Reduce motion
+   and Battery Saver show the still logo; an app launch plays the short version.
 4. Tabs Home: a fresh card opens on Tabs and an existing arrangement is kept;
    the strip fits the Brick with a full top bar; the D-pad moves between strip,
    page, top bar and power pill; L1/R1 switch tabs; the first
@@ -1148,6 +1149,33 @@ and installs; a core JukaHub builds whose buildbot build cannot load says
 in the log. 4. With the setting on Firmware's only, the cores that need the
 runtime disappear from the list. 5. Record any core the page offers that then
 fails to start, with its survey entry.
+**Verify.** Record in the HW log.
+
+### PSPPIC-HW-1 — A PSP game's picture on the A133P handhelds (P1, S) [HW]
+**Why.** Juka, 2026-11-23: "I tried psp, but the screen was black and only
+played game sound" — the third black PSP screen on his Smart Pro (2026-11-14,
+11-15). JukaHub's PPSSPP now ends its shader chain with an opaque copy of the
+picture (`ppsspp_opaque.go`; the A133P's framebuffer is ARGB and PPSSPP keeps
+the PSP's alpha), looks at the panel for the first 45 seconds of a PSP game
+(`ppsspp_picture.go`) and, when the picture never reaches it, restarts the game
+with the device to itself through the screen hand-off (`hakux_handoff.go`).
+Written without a Go toolchain and without a device: the cause is inferred from
+two ports on the same chip, not seen.
+**Where.** `ppsspp_opaque.go`, `ppsspp_picture.go`, `ppsspp_managed.go`
+(`ppssppSeedHome`, `ppssppNoteForceQuit`, `ScreenAlone*`), `hakux_handoff.go`,
+`ppsspp_managed_ui.go`, `emuspeed_ppsspp.go`; the JukaHub log (`ppsspp` lines
+"picture check:", "opaque picture:"), the memstick's `PSP/shaders/jukahub-opaque.*`.
+**Done when.** On a stock Smart Pro, then a Brick: 1. A PSP game started from
+Games shows its picture beside JukaHub, and the log says "picture check: … is
+on the panel …"; PPSSPP's Display layout & effects lists *JukaHub opaque
+picture* as the last shader. 2. With the shader removed from the chain by hand
+in `ppsspp.ini` before a start, record what the panel shows and the log's
+verdict, display layers and framebuffer format. 3. With PSP games set to the
+screen to themselves on the PPSSPP card, a PSP game shows its picture, PPSSPP's
+Menu → Exit brings JukaHub back on the game in the library, and its play time
+is counted. 4. A game that does show (step 1) never gets "picture check:"
+warnings, a black loading screen of up to 45 s included. 5. Record any PSP game
+whose picture breaks with the opaque shader on.
 **Verify.** Record in the HW log.
 
 ### AUDIT-HW-1 — The Audit toolkit's installs on a device (P1, S) [HW] [NET]
@@ -3455,6 +3483,55 @@ step holds or a FIX task names what differs:
 **Verify.** Record in the HW log; move `uiBoostFloorPct`, `uiBoostPressHold`
 or `frameFastMS` where a model needs it.
 
+### FASTSTART-HW-1 — Faster game starts and the single launch sync on every TrimUI model (P1, M) [HW]
+**Why.** Juka, 2026-11-23: "Improve performance on Trimui devices even
+further...improve emulator launching...". `racfgscope.go` now writes a library
+launch's RetroArch edits as they come and syncs the journal, then each file,
+once just before the game starts (the launch batch; restores wait while it is
+open). `faststart.go` starts a game's Automatic CPU speed session at the top
+the heat allows, with the floor at 75%, for 8 s (`fastStartBurstHold`, not
+learned). For 10 s after the start (`fastStartWindow`) it raises the game
+disk's `read_ahead_kb` to 1024, steps JukaHub's threads to nice 10 and I/O
+best-effort level 7 (SDL sound threads skipped, `faststart_linux.go`), and runs
+the start warm-up (`gameWarmAtStart`). Written without a Go toolchain or a
+device: the fsync cost per edit on a FAT card, the start-time gain, whether the
+stock firmware's I/O scheduler honours I/O levels (CFQ does; noop and deadline
+do not) and the 8 s / 10 s lengths are guesses.
+**Where.** `faststart.go`, `faststart_linux.go`, `racfgscope.go`
+(`raScopeBatch*`, `raScopeSaveJournalLocked`), `savestate_resume.go`
+(`editRetroArchConfigWith`), `gamesuspend.go` (`screenChildStart`,
+`noteGameChildExited`), `game_library.go` (`launchLibraryGame`), `autoperf.go`
+(`autoPerfBeginLocked`, `autoPerfAdaptLocked`, `autoPerfWriteLocked`),
+`heatguard.go` (`heatGuardCurIdxLocked`), `gamewarm.go`, the row in
+`setmodel.go`; docs/DEVICE_TUNING.md (Faster game starts), docs/CONFIGURATION.md.
+**Done when.** On a Smart Pro, a Brick, a Brick Pro and a Smart Pro S, each
+step holds or a FIX task names what differs:
+1. A GBA game played twice (so its level is learned): the log has `faster game
+   start: … at 1.6–2.0 GHz for 8s, then …` (the Brick's clocks differ), and
+   `scaling_max_freq` / `scaling_min_freq` read the burst values for about 8 s
+   after the start and the learned level after it.
+2. With Settings → Developer → Debug logging on, each RetroArch launch shows
+   one `launch settings: N edits in M files synced once at the start` line; the
+   game starts with every launch value in place (Continue resumes, the OSD
+   preset shows, `data/gamediag/retroarch.log` is written).
+3. Time from A to the first frame (a phone's slow-motion video) for a GBA, a
+   PS1 and an N64 game with the row on and off, and with
+   `JUKAHUB_LAUNCH_BATCH=0`: record the three numbers per model.
+4. `cat /sys/block/mmcblk*/queue/read_ahead_kb` reads 1024 during the first
+   10 s of a GBA game and the old value after; `cat
+   /sys/block/mmcblk0/queue/scheduler` is recorded (CFQ or BFQ honour the I/O
+   step back).
+5. Field 19 of `/proc/<pid>/task/*/stat` shows 10 for JukaHub's threads during
+   the window and the old values after, including -5 on the main thread;
+   music played under a game does not stutter during the window.
+6. A game quit within 5 s: the read-ahead and the priorities are back at once,
+   and the debug line `… over after … (the game ended)` appears.
+7. A heavy console (PSP on the Smart Pro): no burst line (CPU boost holds it),
+   the read-ahead stays 1024 for the whole game (the heavy-game boost's), and
+   no `threads behind the game` in the window line.
+**Verify.** Record in the HW log; move `fastStartBurstHold`, `fastStartWindow`
+or `fastStartHubNice` where a model needs it.
+
 ### BUTTONS-HW-1 — No stick clicks or keyboard keys in the hints, the library's Select menu and the music player's Start on every TrimUI model (P1, S) [HW]
 **Why.** Juka, 2026-11-22: "I see some spots on the os where it says r3 as a
 button, which is not included on trimui smart pro...or many other devices...
@@ -3494,6 +3571,36 @@ step holds or a FIX task names what differs:
 5. Light gun: with R1 the trigger, R2 re-centres the crosshair in a gun game
    and on the practice target.
 **Verify.** Record in the HW log with a screenshot per screen.
+
+### LIBRARY-HW-1 — The Library theme on a Smart Pro and a Brick (P2, S) [HW]
+**Why.** Juka, 2026-11-23, with a screenshot of a media-library app: "Create a
+theme based on and call it library". The Library style (`themelibrary.go`,
+`hometabs_library.go`) draws its banner, posters and boardwalk with
+`SDL_RenderGeometry` fans and quads and sets its clock and titles in an
+embedded serif (`librarytheme_serif.ttf`). Written without a Go toolchain or a
+device: the frame cost, the serif's rendering and the banner picture are
+unchecked.
+**Where.** `themelibrary.go`, `hometabs_library.go`, `hometabs_backdrop.go`
+(`tabsBackdropBehind`), `hometabs_draw.go` (`tabsDrawStrip`, `tabsDrawLevel`),
+`hometabs.go` (`homeTabsViewsKeyNow`, `tabsMove`), `homelayout.go`
+(`drawHeader`); docs/THEMES.md, docs/HOME_TABS.md.
+**Done when.** On a Smart Pro and a Brick, each step holds or a FIX task names
+what differs:
+1. Theme presets → Styles → Library: Home is the Tabs Home; the top bar starts
+   with the serif clock over the date and the right cluster shows no second
+   time; the tabs sit in one capsule; every tab is in the Library view; the
+   boardwalk runs from under the banner to the bottom edge.
+2. Walking the Recent and Games rows holds the frame rate the Grid view holds;
+   a game's screenshot or save-state picture fades in over its cover in the
+   banner within about a second; box art stands upright at the banner's end.
+3. Left from the first tab reaches the clock, Right goes back to the tabs, A on
+   the clock opens the calendar, Down enters the page.
+4. A plays the focused game and X opens its sheet; a Japanese title is set in
+   Inter; Settings → Accessibility → Bold text sets the clock and titles in
+   Inter.
+5. Another theme brings back its own views; Library again brings back the
+   Library views.
+**Verify.** Record in the HW log with a screenshot per step (screenshot mode).
 
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
@@ -3563,9 +3670,14 @@ shadows (`webpage_paint.go`), rounds pictures with SDL_RenderGeometry
 (`drawWebImageRounded`) and sizes images on the text's CSS-px scale; the
 Calculator has a new expression engine, keypad, history file and keyboard
 typing (`calculator.go`). None of it has been drawn or timed on a handheld.
+2026-11-23 ("improve browser rendering even further"), also unbuilt: HTML
+presentation attributes as CSS hints (`webpage_hints.go`), font sizes
+relative to the parent and `rem` to the root, `inherit` keywords, the
+browser's UA defaults (em headings, raised `<sup>`, centred `th`, 40px
+quotes), `line-clamp`, gradient text, `<center>` and centred tables.
 **Where.** `webpage_svg.go`, `webpage_inline.go`, `webpage_fonts.go`,
 `webpage_paint.go`, `webpage_image.go`, `webpage.go`, `webpage_flow.go`,
-`calculator.go`; `calculator.json` beside JukaHub; the JukaHub log
+`webpage_hints.go`, `calculator.go`; `calculator.json` beside JukaHub; the JukaHub log
 (`browser` lines "RenderGeometry is unavailable", "Error loading the reader
 face").
 **Done when.** On a Smart Pro (then a Brick and a Windows PC), each step holds
@@ -3589,6 +3701,17 @@ or a FIX task names what differs:
    overlap; Right from the keys walks into the history and A uses an answer;
    the history survives a restart; on a PC typing `sqrt(2)` and Enter answers
    and q/e do not switch screens.
+6. news.ycombinator.com: the orange header bar, the beige 85 % table in the
+   middle of the page and tight rank/vote columns (cellspacing 0); on a
+   Wikipedia article the footnote markers ([1]) are small and raised, link
+   included, and headings are sized like a desktop browser's.
+7. A Tailwind page: headings without size classes are the size of the text
+   around them, links without colour classes are not blue, and a gradient
+   heading (`bg-clip-text text-transparent`) shows in the gradient's colour
+   with no coloured slab behind it.
+8. A news or shop page whose card titles use `-webkit-line-clamp: 2` cuts
+   each title after two lines with "…", and a page built on
+   `html { font-size: 62.5% }` reads at its normal size.
 
 ---
 

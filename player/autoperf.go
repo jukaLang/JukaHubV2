@@ -180,6 +180,11 @@ type autoPerfSession struct {
 	// (heatguard.go heatHoldLocked), and whether a refusal was logged.
 	heat    []saverSysfsWrite
 	heatErr bool
+	// Faster game starts (faststart.go): a game's first seconds held at the
+	// top the heat allows, with the floor near it, until burstUntil; idx
+	// stays the level the game gets afterwards.
+	burst      bool
+	burstUntil time.Time
 }
 
 // autoPerfLearned is one app's remembered clock.
@@ -320,8 +325,9 @@ func autoPerfFrame(config *Config, now time.Time) {
 	autoPerfHub.key, autoPerfHub.label, autoPerfHub.class = key, label, class
 	autoPerfHub.mu.Unlock()
 	// Faster menus' row and power mode (uiboost.go), before the start's
-	// request below can read them.
+	// request below can read them; Faster game starts' too (faststart.go).
 	uiBoostPublish(config)
+	fastStartPublish(config)
 	autoPerfStart()
 }
 
@@ -754,6 +760,9 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 	}
 	start = min(start, autoPerfHeatIdxLocked(s))
 	s.idx = start
+	// Faster game starts (faststart.go): a game loads at the top the heat
+	// allows and gets its learned level once it plays.
+	fastStartBurstArmLocked(s, now)
 	if autoPerfWriteLocked(s.levels[start]) {
 		autoPerfSetLine(autoPerfLineLocked(s))
 	}
@@ -781,6 +790,10 @@ func autoPerfLineLocked(s *autoPerfSession) string {
 		line = s.label + " · heavy-game boost · " + clock
 	case s.boost:
 		line = s.label + " · CPU boost · " + clock
+	case s.burst:
+		// Faster game starts (faststart.go): the load's clock, then the level.
+		ceil, floor := uiBoostLevelsLocked(s)
+		line = s.label + " · starting at " + uiBoostRange(floor, ceil) + ", then " + clock
 	case uiBoost.on && uiBoostEligibleLocked(s):
 		// Faster menus (uiboost.go): the press's clock, then the level.
 		ceil, floor := uiBoostLevelsLocked(s)
@@ -798,6 +811,11 @@ func autoPerfLineLocked(s *autoPerfSession) string {
 // is held under the dial (heatHoldLocked).
 func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64, sampled bool) {
 	s := &autoPerf.sess
+	// A game still loading (Faster game starts, faststart.go): its seconds are
+	// neither learned nor stepped by, and the level comes back once they end.
+	if fastStartBurstTickLocked(s, now) {
+		return
+	}
 	if len(s.levels) > 0 && s.idx >= 0 && s.idx < len(s.levels) {
 		s.at[s.levels[s.idx]] += now.Sub(s.last)
 	}
@@ -937,6 +955,11 @@ func autoPerfWriteLocked(khz int64) bool {
 	// the top the heat allows and the floor stays near it.
 	var uiFloor int64
 	if uiBoost.on && uiBoostEligibleLocked(s) {
+		ceil, floor := uiBoostLevelsLocked(s)
+		khz = max(khz, ceil)
+		uiFloor = floor
+	} else if fastStartBurstHoldsLocked(s) {
+		// Faster game starts (faststart.go): the same lift while a game loads.
 		ceil, floor := uiBoostLevelsLocked(s)
 		khz = max(khz, ceil)
 		uiFloor = floor

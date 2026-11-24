@@ -15,7 +15,8 @@ package main
 // stays until the new one fades in over it. At most two textures exist (the
 // one on screen and the one fading out), each at most gswPicW × gswPicH, and
 // both are freed when the page on screen leaves the Backdrop view
-// (homeTabsBackdropRelease).
+// (homeTabsBackdropRelease). The Library view (hometabs_library.go) borrows
+// the same picture for its banner.
 //
 // Like every view, the row is a list of rects (homeTabsLayout), so the D-pad,
 // the pointer, the scroll and the Dim unselected art work as on the others;
@@ -319,13 +320,21 @@ func homeTabsBackdropRelease(renderer *sdl.Renderer) {
 
 // tabsBackdropBehind draws the selected game's picture over the whole screen
 // under a veil, before the top bar (Render calls it after the app backdrop).
-// Nothing unless the page on screen is in the Backdrop view.
+// Nothing unless the page on screen is in the Backdrop view — or the Library
+// view, which loads the picture the same way for its banner and has the
+// Library theme's room drawn here instead.
 func (h *HomeLayout) tabsBackdropBehind(renderer *sdl.Renderer) {
 	if h == nil || renderer == nil {
 		return
 	}
 	lvl := homeTabsLevelNow()
-	if !h.tabsActive() || !homeTabs.on || lvl == nil || homeTabsViewFor(appConfig, lvl.key) != homeTabViewBackdrop {
+	view := ""
+	if h.tabsActive() && homeTabs.on && lvl != nil {
+		view = homeTabsViewFor(appConfig, lvl.key)
+	}
+	// The Library view shows the same picture in its banner
+	// (hometabs_library.go).
+	if view != homeTabViewBackdrop && view != homeTabViewLibrary {
 		// Another view, tab or Home layout: the pictures go.
 		homeTabsBackdropRelease(renderer)
 		return
@@ -342,6 +351,16 @@ func (h *HomeLayout) tabsBackdropBehind(renderer *sdl.Renderer) {
 	}
 	if pending || b.fade.active {
 		homeTabsBackdropBusy = true
+	}
+	if view == homeTabViewLibrary {
+		// The banner draws the picture; nothing fades out behind it. The
+		// Library theme's room stands behind the page (themelibrary.go).
+		if !b.fade.active && b.prev != nil {
+			_ = b.prev.Destroy()
+			b.prev = nil
+		}
+		h.libraryDrawStage(renderer, lvl)
+		return
 	}
 	// The last picture stays while the next one is on its way; a game with
 	// none (or an app) shows Home's own backdrop.

@@ -166,7 +166,9 @@ const (
 	// under an older number is due at once, so a JukaHub update that changes
 	// what the check would do (a new source, a fixed decision) acts at the
 	// next start instead of after the day an old "nothing to do" stamped.
-	ppssppCheckRule = 2
+	// 3 (2026-11-23): a build whose force-quit mark was taken back
+	// (ppssppForgiveForceQuitMarks) is switched back to at once.
+	ppssppCheckRule = 3
 )
 
 // ppssppDigestPattern is the only digest an install accepts: GitHub's own
@@ -286,6 +288,11 @@ type ppssppBinaryScan struct {
 //   - Bad: tags whose launcher reported that they do not start, with why.
 //   - FallbackSeen: the last "opened in the firmware's PPSSPP" reason toasted.
 //   - FirmwareScan: the cached firmware binary version.
+//   - ScreenAlone: why PSP games get the panel to themselves — JukaHub closes
+//     while one plays (hakux_handoff.go); "" plays them beside JukaHub.
+//     ScreenAloneAt is when, ScreenAloneAuto whether the picture check chose
+//     it (ppsspp_picture.go) rather than the player, ScreenAloneRule the
+//     check's rule then.
 type ppssppState struct {
 	Builds        []ppssppBuild     `json:"builds,omitempty"`
 	Active        string            `json:"active,omitempty"`
@@ -304,6 +311,11 @@ type ppssppState struct {
 	FallbackSeen  string            `json:"fallback_seen,omitempty"`
 	FirmwareScan  ppssppBinaryScan  `json:"firmware_scan"`
 	RANoSignIn    bool              `json:"ra_no_sign_in,omitempty"` // the card's RetroAchievements switch is off (ppsspp_managed_ra.go)
+
+	ScreenAlone     string `json:"screen_alone,omitempty"`
+	ScreenAloneAt   string `json:"screen_alone_at,omitempty"`
+	ScreenAloneAuto bool   `json:"screen_alone_auto,omitempty"`
+	ScreenAloneRule int    `json:"screen_alone_rule,omitempty"`
 }
 
 // ppssppFirmwareInfo is the firmware's PPSSPP as JukaHub would run it without
@@ -1498,8 +1510,31 @@ func ppssppAgeFrom(stat, uptime string) (time.Duration, bool) {
 // PPSSPP did not answer never ends in an exit status, so the launcher alone
 // could not tell; this was what kept sending Juka's PSP games back to a black
 // screen (2026-11-15). Choosing JukaHub's PPSSPP on the PSP tile clears it.
+//
+// Where the picture check watches the game (ppsspp_picture.go) it knows
+// better (2026-11-23): a game whose picture it saw started fine, so the build
+// is not blamed; one it looked at and never saw a picture of had a panel
+// problem, which another PPSSPP beside JukaHub would have too (the firmware's
+// was black the same way on 2026-11-15), so PSP games get the panel to
+// themselves instead. Before its first look it says nothing either way.
 func ppssppNoteForceQuit() {
 	if !ppssppManagedEnabled() {
+		return
+	}
+	switch looked, seen, early := ppssppPictureState(); {
+	case looked && !seen:
+		if _, on := ppssppScreenAloneReason(); !on {
+			if err := ppssppSetScreenAlone("it was ended with Select + Start while its picture had not reached the panel", true); err == nil {
+				logWarn("ppsspp", "a PSP game was ended with Select + Start before its picture reached the panel; PSP games get the screen to themselves from the next start")
+				tbxPost(func() {
+					ShowToast("No PSP picture beside JukaHub — PSP games now get the screen to themselves: start the game again", ToastKindInfo)
+				})
+			}
+		}
+		return
+	case looked, early:
+		// A picture was seen (the build started fine), or the watch has not
+		// looked yet: too early to blame the build.
 		return
 	}
 	st := ppssppSnapshot()
@@ -1516,7 +1551,7 @@ func ppssppNoteForceQuit() {
 		if regularFile(bad) {
 			return
 		}
-		reason := fmt.Sprintf("it was ended with Select + Start %ds after it started — no picture or no controls", int(age.Round(time.Second)/time.Second))
+		reason := fmt.Sprintf("it was ended with Select + Start %ds after it started, with no picture check to tell why", int(age.Round(time.Second)/time.Second))
 		if err := os.WriteFile(bad, []byte(reason+"\n"), 0o644); err != nil {
 			logWarn("ppsspp", "could not mark %s as not working: %v", b.label(), err)
 			return
@@ -1524,6 +1559,51 @@ func ppssppNoteForceQuit() {
 		logWarn("ppsspp", "%s %s; the next PSP game uses the firmware's PPSSPP", b.label(), reason)
 		return
 	}
+}
+
+// ppssppForceQuitMarkOld ends the reason an earlier JukaHub's force quit wrote
+// into a build's .bad (ppssppNoteForceQuit before 2026-11-23).
+const ppssppForceQuitMarkOld = "after it started — no picture or no controls"
+
+// ppssppForgiveForceQuitMarks takes back the "did not start" marks that a
+// Select + Start force quit left before the picture check existed: on the
+// A133P they were a black panel (ppsspp_opaque.go, ppsspp_picture.go), not a
+// build that fails, and they kept PSP games on the firmware's PPSSPP, which
+// JukaHub's opaque picture never reaches. The build is offered again — the
+// first check after this start switches PSP games back to it by the usual
+// rule (ppssppAutoAdopt; ppssppCheckRule 3 makes that check due) — and a
+// mark the launcher itself wrote (PPSSPP exited at once) stays. Where no
+// picture check runs (the Smart Pro S) nothing changes.
+func ppssppForgiveForceQuitMarks() {
+	if deviceHardware(DetectDevice()).GPUStack != gpuStackPowerVRFbdev {
+		return
+	}
+	ppssppMgr.mu.Lock()
+	defer ppssppMgr.mu.Unlock()
+	st := ppssppLockedState()
+	var forgiven []string
+	for _, b := range st.Builds {
+		file := filepath.Join(b.Dir, ppssppBadName)
+		reason, marked := ppssppReadFirstLine(file)
+		if st.Bad[b.Tag] != "" {
+			reason, marked = st.Bad[b.Tag], true
+		}
+		if !marked || !strings.HasSuffix(strings.TrimSpace(reason), ppssppForceQuitMarkOld) {
+			continue
+		}
+		delete(st.Bad, b.Tag)
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+			logWarn("ppsspp", "could not take back the mark on %s: %v", b.label(), err)
+		}
+		forgiven = append(forgiven, b.label())
+	}
+	if len(forgiven) == 0 {
+		return
+	}
+	if err := ppssppSaveLocked(); err != nil {
+		logWarn("ppsspp", "could not save the PPSSPP state: %v", err)
+	}
+	logInfo("ppsspp", "%s: the \"did not start\" mark a Select + Start force quit left before the picture check is taken back (a black panel, not a failing build)", strings.Join(forgiven, ", "))
 }
 
 // ppssppStaleMountsMu keeps the start-up cleanup and the scheduler's from
@@ -2571,8 +2651,9 @@ func ppssppCopyFile(src, dst string, limit int64) error {
 
 // ppssppSeedHome prepares the shared HOME and its save mount points. On first
 // install it copies the package's settings and the firmware's per-game files.
-// On every call it also fills a missing controls.ini and repairs the Smart Pro
-// video backend and a keyboard-only controller map. Other user settings stay.
+// On every call it also fills a missing controls.ini, repairs the Smart Pro
+// video backend and a keyboard-only controller map, and keeps the opaque
+// picture shader last in the chain. Other user settings stay.
 func ppssppSeedHome(b ppssppBuild, fwStick string) {
 	stick := b.memstick()
 	if stick == "" {
@@ -2612,6 +2693,8 @@ func ppssppSeedHome(b ppssppBuild, fwStick string) {
 	}
 	ppssppPrepareTrimuiHome(sys, b.Platform)
 	ppssppApplyDeviceAspect(sys, ppssppDevice())
+	// The picture opaque on the A133P's panel (ppsspp_opaque.go).
+	ppssppEnsureOpaquePicture(stick, b.Platform)
 }
 
 // ppssppDeviceAspect is the display aspect ratio minui-psp's launcher gives
@@ -3450,7 +3533,17 @@ func ppssppRefreshActiveScript() {
 // falls back to, JukaHub's own HOME and libraries. The video driver is set in
 // the script, on PPSSPP's command alone. Other emulator launches are untouched.
 func ppssppPrepareManagedLaunch(launcher string, cmd *exec.Cmd) {
-	if cmd == nil || !ppssppIsManagedLauncher(launcher) {
+	if cmd == nil {
+		return
+	}
+	ppssppReadyManagedLaunch(launcher)
+}
+
+// ppssppReadyManagedLaunch is ppssppPrepareManagedLaunch's work, for a start
+// beside JukaHub and for one JukaHub closes for (hakux_handoff.go): nothing
+// unless launcher is the script of the build PSP games use.
+func ppssppReadyManagedLaunch(launcher string) {
+	if !ppssppIsManagedLauncher(launcher) {
 		return
 	}
 	// A game started before the first background look (boot resume, Continue,
@@ -3605,6 +3698,7 @@ func ppssppAutoUpdateLoop() {
 	}
 	ppssppDetectFirmwareNow()
 	ppssppCheckPlatform()
+	ppssppForgiveForceQuitMarks()
 	ppssppRefreshActiveScript()
 	lastRefresh := time.Now()
 	var lastTick time.Time

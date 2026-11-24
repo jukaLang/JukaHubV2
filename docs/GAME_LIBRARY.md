@@ -589,6 +589,24 @@ resolves the emulator in this order:
    [Heavy-game boost](DEVICE_TUNING.md#heavy-game-boost) for its CPU, GPU and
    memory.
 
+**PSP games and the picture (A133P models: Smart Pro, Brick, Hammer, Brick
+Pro).** Their panel shows one ARGB framebuffer that can blend by each pixel's
+alpha, and PPSSPP copies the PSP's own alpha (its stencil, mostly 0) into
+it, which can show as a black screen while the game's sound plays. So
+JukaHub's PPSSPP keeps one post-processing shader last in its chain, *JukaHub
+opaque picture* (`PSP/shaders/jukahub-opaque.*` in its memstick, put back
+before every game, after any shaders you chose), and for the first 45 seconds
+of a PSP game JukaHub looks at what the panel shows. When the game's picture
+never reaches it — transparent, still JukaHub's last picture, or black — the
+log says what it saw (`picture check:` lines with the display layers and
+PPSSPP's last lines), the game is started again with the device to itself
+(the Xbox's screen hand-off: JukaHub closes while it plays, so its in-game
+menu, sleep and hotkeys are not there; PPSSPP's own menu, **Menu**, has
+**Exit**), and PSP games keep that way. A Select + Start hold that ends a PSP
+game whose picture was never seen chooses it too. The PPSSPP card (**X** on
+the PSP tile of the Emulators page) says so and has **Play PSP games beside
+JukaHub again** and **Give PSP games the screen to themselves**.
+
 Starts that already know their emulator never ask: a save state on the game
 page uses the emulator the states were listed for (the game's remembered one,
 else the console's, else the one picked last, else the recommended one) and

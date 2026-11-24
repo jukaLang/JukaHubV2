@@ -161,10 +161,14 @@ func homeIsSwitchHomeStyle(style string) bool {
 
 // homeThemeFileCarouselStyle is the carousel style a theme file's value is
 // kept as (themeloader.go): normalizeCarouselStyle's, except that "switch"
-// stays itself, or the file would lose the Switch Home to the plain strip.
+// stays itself, or the file would lose the Switch Home to the plain strip —
+// and "library" too, the Library look (themelibrary.go).
 func homeThemeFileCarouselStyle(style string) string {
 	if homeIsSwitchHomeStyle(style) {
 		return homeCarouselSwitchHome
+	}
+	if homeIsLibraryStyle(style) {
+		return homeCarouselLibrary
 	}
 	return normalizeCarouselStyle(style)
 }
@@ -751,6 +755,10 @@ var homeSwAvatarColors = [...]sdl.Color{
 func (h *HomeLayout) homeBrandOrAvatar(renderer *sdl.Renderer, config *Config, fonts HomeFonts, barH int32, caption string) int32 {
 	homeSwitch.avatar = sdl.Rect{}
 	if !h.switchChrome() {
+		// The Library look has its clock there (themelibrary.go).
+		if end, ok := h.libraryDrawClock(renderer, config, fonts, barH); ok {
+			return end
+		}
 		return drawHeaderBrand(renderer, config, barH, caption)
 	}
 	d := min32(scaleX(homeSwAvatarD, h.Width), scaleY(homeSwAvatarD, h.Height))

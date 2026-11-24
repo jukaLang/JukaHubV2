@@ -7,11 +7,19 @@ package main
 // The same levels as the PPSSPP core's, in the ini's own keys ([Graphics]):
 //
 //	Fast     FrameSkip 1 with AutoFrameSkip on: a frame is skipped only when
-//	         the game falls behind, and never two in a row.
+//	         the game falls behind, and never two in a row. Not with Skip
+//	         buffer effects on: PPSSPP never runs the two together (its own
+//	         menu turns that one off), and the pair drew black screens.
 //	Fastest  Fast, and lazy texture caching (TextureBackoffCache), curves
-//	         and surfaces at low detail (SplineBezierQuality 0), GPU
-//	         read-backs skipped (SkipGPUReadbackMode 1, or SkipGPUReadbacks in
-//	         builds before 1.17) and no anisotropic filtering.
+//	         and surfaces at low detail (SplineBezierQuality 0) and no
+//	         anisotropic filtering.
+//
+// GPU read-backs are no longer skipped (2026-11-23): a game that draws its
+// picture on the GPU and reads it back to show it (or to build the next
+// effect from it) shows a black screen without them — the one failure a
+// speed setting must never cause — while Juka's PSP games were already black
+// for another reason (ppsspp_opaque.go). A value an earlier JukaHub wrote is
+// still put back (emuSpeedPPSSPPRetired).
 //
 // For one launch, like RetroArch's settings: a value is written only where the
 // file holds PPSSPP's default for it, and a key the file lacks is not added
@@ -51,10 +59,20 @@ var emuSpeedPPSSPPOpts = []emuSpeedINIOpt{
 	{Section: "Graphics", Key: "AutoFrameSkip", Value: "True", Defaults: []string{"False"}},
 	{Section: "Graphics", Key: "TextureBackoffCache", Value: "True", Defaults: []string{"False"}, Fastest: true},
 	{Section: "Graphics", Key: "SplineBezierQuality", Value: "0", Defaults: []string{"2"}, Fastest: true},
-	{Section: "Graphics", Key: "SkipGPUReadbackMode", Value: "1", Defaults: []string{"0"}, Fastest: true},
-	{Section: "Graphics", Key: "SkipGPUReadbacks", Value: "True", Defaults: []string{"False"}, Fastest: true},
 	{Section: "Graphics", Key: "AnisotropyLevel", Value: "0", Defaults: []string{"4"}, Fastest: true},
 }
+
+// emuSpeedPPSSPPRetired are values a level no longer writes. A journal an
+// earlier JukaHub left (it stopped mid-game) may still name them, and the
+// restore puts them back like the rest.
+var emuSpeedPPSSPPRetired = []emuSpeedINIOpt{
+	{Section: "Graphics", Key: "SkipGPUReadbackMode", Value: "1", Defaults: []string{"0"}, Fastest: true},
+	{Section: "Graphics", Key: "SkipGPUReadbacks", Value: "True", Defaults: []string{"False"}, Fastest: true},
+}
+
+// emuSpeedPPSSPPFrameSkipKeys are the frameskip values Skip buffer effects
+// rules out.
+var emuSpeedPPSSPPFrameSkipKeys = map[string]bool{"FrameSkip": true, "AutoFrameSkip": true}
 
 // emuSpeedINIEdit is one value written for a launch: what the file held and
 // what was written.
@@ -102,8 +120,13 @@ func emuSpeedPPSSPPPlan(path string, lines []string, level string) []emuSpeedINI
 		return nil
 	}
 	var edits []emuSpeedINIEdit
+	sbe, _ := ppssppINIValue(lines, "Graphics", "SkipBufferEffects")
+	noFrameSkip := strings.EqualFold(strings.TrimSpace(sbe), "True")
 	for _, o := range emuSpeedPPSSPPOpts {
 		if o.Fastest && level != emuSpeedFastest {
+			continue
+		}
+		if noFrameSkip && emuSpeedPPSSPPFrameSkipKeys[o.Key] {
 			continue
 		}
 		cur, had := ppssppINIValue(lines, o.Section, o.Key)
@@ -123,9 +146,11 @@ func emuSpeedPPSSPPKnown(e emuSpeedINIEdit, ini string) bool {
 	if ini == "" || filepath.Clean(e.Path) != filepath.Clean(ini) {
 		return false
 	}
-	for _, o := range emuSpeedPPSSPPOpts {
-		if o.Section == e.Section && o.Key == e.Key && o.Value == e.Wrote {
-			return true
+	for _, opts := range [][]emuSpeedINIOpt{emuSpeedPPSSPPOpts, emuSpeedPPSSPPRetired} {
+		for _, o := range opts {
+			if o.Section == e.Section && o.Key == e.Key && o.Value == e.Wrote {
+				return true
+			}
 		}
 	}
 	return false

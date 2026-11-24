@@ -529,7 +529,9 @@ func heatGuardCurIdxLocked() int {
 	if !s.active {
 		return top
 	}
-	if !s.manual && !s.foreign && s.idx >= 0 && s.idx < len(s.levels) {
+	// A game's start burst (faststart.go) holds the clock over its level: the
+	// ceiling as it reads is the clock in front then.
+	if !s.manual && !s.foreign && !s.burst && s.idx >= 0 && s.idx < len(s.levels) {
 		return autoPerfIndexAtMost(g.levels, s.levels[s.idx])
 	}
 	if len(s.dirs) > 0 {

@@ -36,9 +36,10 @@ package main
 // handheld's out-of-box default (bootOSMotion).
 //
 // What the logo does is the user's choice (Settings → General → Boot
-// animation, bootstyles.go): the cinematic crash onto a cracking floor, the
-// roll, the still image, this glass light ("classic"), a random one, or none
-// at all (the default: Home as soon as it is ready, the chime rising with it).
+// animation, bootstyles.go): the cinematic fall from the screen onto cracking
+// ground, the roll, the still image, this glass light ("classic"), a random
+// one, or none at all (the default: Home as soon as it is ready, the chime
+// rising with it).
 
 import (
 	"math"

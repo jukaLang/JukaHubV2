@@ -734,3 +734,50 @@ func TestFFSpeedKeptFromRetroArchMenu(t *testing.T) {
 		t.Fatal("the launch record was not taken: a second config would toast again")
 	}
 }
+
+// A launch batch (2026-11-23): every edit is in the file at once, so a later
+// hook reads what an earlier one set; the journal covers them before the batch
+// ends; a restore waits while the batch is open; the start's flush ends it and
+// the launch's own deferred end then finds nothing open; and the round trip
+// gives the user's file back exactly.
+func TestRaScopeLaunchBatch(t *testing.T) {
+	dir := raScopeTestSetup(t)
+	if raScopeBatchOff {
+		t.Skip("JUKAHUB_LAUNCH_BATCH=0")
+	}
+	cfg := filepath.Join(dir, "retroarch.cfg")
+	original := "savestate_auto_load = \"false\"\naudio_latency = \"32\"\n"
+	raScopeWrite(t, cfg, original)
+
+	raScopeBatchBegin()
+	if _, err := raScopeApply(cfg, savestateResumeValues()); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := raConfigGet(raScopeRead(t, cfg), savestateAutoLoadKey); v != "true" {
+		t.Fatalf("an edit inside the batch is not in the file yet: auto-load = %q", v)
+	}
+	if changed, err := raScopeApply(cfg, []raScopeValue{{Key: "audio_latency", Value: "64"}}); err != nil || !changed {
+		t.Fatalf("second edit: changed %t, err %v", changed, err)
+	}
+	if !fileExists(filepath.Join(dir, raScopeJournalName)) {
+		t.Fatal("no journal while the batch's edits are in the file")
+	}
+	raScopeRestoreAfterExit()
+	if v, _ := raConfigGet(raScopeRead(t, cfg), "audio_latency"); v != "64" {
+		t.Fatalf("a restore ran while the launch was preparing: audio_latency = %q", v)
+	}
+	raScopeBatchFlush()
+	raScopeBatchEnd()
+	raScope.mu.Lock()
+	depth, paths := raScopeBatch.depth, len(raScopeBatch.paths)
+	raScope.mu.Unlock()
+	if depth != 0 || paths != 0 || raScopeBatchLive.Load() {
+		t.Fatalf("batch still open after the start: depth %d, %d unsynced file(s)", depth, paths)
+	}
+	if n := raScopeRestoreNow(t); n != 3 {
+		t.Errorf("restored %d values, want 3", n)
+	}
+	if got := raScopeRead(t, cfg); got != original {
+		t.Fatalf("after the game the config is\n%q\nwant\n%q", got, original)
+	}
+}

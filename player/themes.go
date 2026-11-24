@@ -42,7 +42,8 @@ type ThemePreset struct {
 	// Carousel layout's row ("shelf": small tiles along the top-left, the
 	// focused one big with its name beside it; "strip": one row of large
 	// equal squares the focus walks along; "hub": PS5 Style's welcome hub,
-	// themeps5hub.go). TileRadius is the tiles' corner
+	// themeps5hub.go; "library" dresses the Tabs Home instead, the Library
+	// theme, themelibrary.go). TileRadius is the tiles' corner
 	// radius in design px (2..32; 0 keeps 20). FocusRing colours the focused
 	// tile's ring (#rrggbb; empty is the accent), and FocusRing2 is the colour
 	// it pulses toward for a moment after each move.
@@ -1340,6 +1341,32 @@ var themePresets = map[string]ThemePreset{
 		Info:          "#ffffff",
 		Overlay:       "#000000e6",
 	},
+	// library: a media library's front room — studio grey under a white
+	// light, near-black cards and the gold of a featured title. The Library
+	// style adds the Tabs Home's look (themelibrary.go).
+	"library": {
+		Name:          "Library",
+		Bloom:         "#f2f2f4",
+		Bloom2:        "#bfc0c4",
+		Background:    "#48494d",
+		ButtonColor:   "#24272d",
+		LabelColor:    "#ffffff",
+		InputColor:    "#1d2025",
+		Surface:       "#16181c",
+		SurfaceAlt:    "#1d2025",
+		SurfaceRaised: "#262a30",
+		TextPrimary:   "#ffffff",
+		TextSecondary: "#d4d5d8",
+		TextTertiary:  "#c0c1c5",
+		BorderSubtle:  "#ffffff12",
+		BorderDefault: "#ffffff26",
+		BorderFocus:   "#ecc33d",
+		Success:       "#6ad897",
+		Warning:       "#f5a85a",
+		Danger:        "#ffa0a0",
+		Info:          "#ecc33d",
+		Overlay:       "#0c0d10cc",
+	},
 }
 
 // themeConversionSpecs are the total conversions: a palette the catalogue
@@ -1398,6 +1425,8 @@ var themeConversionSpecs = []struct {
 	{"convert-xbox", "Xbox Style", "xbox", homeArrangementWidgets, "Tile grid · charcoal and green", "", ""},
 	{"convert-xboxone", "Xbox One Style", "xboxone", homeArrangementGrid, "Metro dashboard · square green tiles", "#107c10", "#52b043"},
 	{"convert-minimal", "Minimal UI", "minimal", homeArrangementCarousel, "Just text · no tiles, no art", "#000000", "#000000"},
+	// The Library style dresses the Tabs Home (themelibrary.go).
+	{"convert-library", "Library", "library", homeArrangementTabs, "Featured banner · posters on a boardwalk", "", ""},
 }
 
 func init() {
@@ -1711,11 +1740,13 @@ var themePresetOrder = []string{
 	"arctic", "ruby", "cobalt", "tangerine", "orchid", "terminal",
 	// The console palettes (their Style conversions lead that tab).
 	"ps5", "ps4", "switch", "switch-dark", "xbox", "xboxone", "minimal",
+	// The media library's palette (the Library style, themelibrary.go).
+	"library",
 	// Legacy palette-plus-layout combinations are filtered from the gallery;
 	// distinctive styles remain visible under Styles.
 	"convert-dashboard", "convert-grid",
 	"convert-ps5", "convert-ps4", "convert-switch", "convert-switch-dark", "convert-xbox",
-	"convert-xboxone", "convert-minimal",
+	"convert-xboxone", "convert-minimal", "convert-library",
 	"convert-aurora", "convert-segablue", "convert-dmg", "convert-synthwave",
 	"convert-nord", "convert-solarized", "convert-paper", "convert-forest",
 	"convert-amber", "convert-oceanglass", "convert-arcade", "convert-eink",

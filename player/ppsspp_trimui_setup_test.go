@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +64,77 @@ func TestPPSSPPFirstManagedLaunchRepairsExistingHome(t *testing.T) {
 	ppssppPrepareManagedLaunch("/outside/jukahub-ppsspp.sh", other)
 	if other.Env != nil {
 		t.Fatal("another emulator inherited PPSSPP's video driver")
+	}
+}
+
+// A PSP picture that reaches the A133P's panel (2026-11-23): the opaque shader
+// ends PPSSPP's own chain — global ini and a game's own, after the player's
+// shaders, once, line endings kept — the speed level skips no GPU read-backs
+// and no frames under Skip buffer effects, and the framebuffer's alpha byte is
+// read from the driver's description.
+func TestPPSSPPPictureSettings(t *testing.T) {
+	stick := t.TempDir()
+	sys := filepath.Join(stick, "SYSTEM")
+	if err := os.MkdirAll(sys, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	global := filepath.Join(sys, "ppsspp.ini")
+	game := filepath.Join(sys, "ULUS10041_ppsspp.ini")
+	if err := os.WriteFile(global, []byte("[Graphics]\r\nGraphicsBackend = 0 (OPENGL)\r\n[PostShaderList]\r\nPostShader2 = FXAA\r\nPostShader1 = JukaHubOpaque\r\nPostShader3 = Off\r\n[Upgrade]\r\nDismissed = 1\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(game, []byte("[Graphics]\nFrameSkip = 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ppssppEnsureOpaquePicture(stick, "tg5040")
+	got, _ := os.ReadFile(global)
+	if !strings.Contains(string(got), "[PostShaderList]\r\nPostShader1 = FXAA\r\nPostShader2 = JukaHubOpaque\r\n[Upgrade]\r\n") {
+		t.Fatalf("the global chain does not end with the opaque shader: %q", got)
+	}
+	if own, _ := os.ReadFile(game); !strings.HasSuffix(string(own), "FrameSkip = 0\n[PostShaderList]\nPostShader1 = JukaHubOpaque\n") {
+		t.Fatalf("the game's own ini has no chain of its own: %q", own)
+	}
+	for _, name := range []string{"jukahub-opaque.ini", "jukahub-opaque.fsh", "jukahub-opaque.vsh"} {
+		if !regularFile(filepath.Join(stick, "shaders", name)) {
+			t.Fatalf("shaders/%s was not written", name)
+		}
+	}
+	ppssppEnsureOpaquePicture(stick, "tg5040")
+	if again, _ := os.ReadFile(global); string(again) != string(got) {
+		t.Fatal("a second pass changed the chain again")
+	}
+	other := t.TempDir()
+	ppssppEnsureOpaquePicture(other, "tg5050")
+	if dirExists(filepath.Join(other, "shaders")) {
+		t.Fatal("the Smart Pro S's build got the A133P's shader")
+	}
+
+	ini := "/x/ppsspp.ini"
+	lines := []string{"[Graphics]", "FrameSkip = 0", "AutoFrameSkip = False", "SkipGPUReadbackMode = 0", "AnisotropyLevel = 4"}
+	for _, e := range emuSpeedPPSSPPPlan(ini, lines, emuSpeedFastest) {
+		if strings.HasPrefix(e.Key, "SkipGPUReadback") {
+			t.Fatalf("Fastest skips GPU read-backs: %+v", e)
+		}
+	}
+	for _, e := range emuSpeedPPSSPPPlan(ini, append(lines, "SkipBufferEffects = True"), emuSpeedFast) {
+		if e.Key == "FrameSkip" || e.Key == "AutoFrameSkip" {
+			t.Fatalf("frames are skipped under Skip buffer effects: %+v", e)
+		}
+	}
+	if !emuSpeedPPSSPPKnown(emuSpeedINIEdit{Path: ini, Section: "Graphics", Key: "SkipGPUReadbackMode", Wrote: "1"}, ini) {
+		t.Fatal("an older journal's read-back skip would not be put back")
+	}
+
+	v := make([]byte, 160)
+	for off, n := range map[int]uint32{24: 32, 68: 24, 72: 8} {
+		binary.LittleEndian.PutUint32(v[off:], n)
+	}
+	if got := ppssppPictureAlphaFromVar(v); got != 3 {
+		t.Fatalf("ARGB8888's alpha byte = %d, want 3", got)
+	}
+	binary.LittleEndian.PutUint32(v[72:], 0)
+	if got := ppssppPictureAlphaFromVar(v); got != -1 {
+		t.Fatalf("XRGB8888's alpha byte = %d, want none", got)
 	}
 }
 

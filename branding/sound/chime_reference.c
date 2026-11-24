@@ -15,8 +15,8 @@
  * cinematic and roll are the power-on chime of those boot styles
  * (player/bootstyles.go): the start score pushed back behind the style's
  * entrance, plus the knocks (chimeThudNote) on its landings. "lift" is the
- * power-on that starts from the firmware's logo (it leaves through the top
- * edge first); the roll is laid out for a WIDTH x HEIGHT screen (default
+ * power-on that starts from the firmware's logo (it is tossed up towards the
+ * screen first); the roll is laid out for a WIDTH x HEIGHT screen (default
  * 1280 x 720, the Smart Pro; 1024 768 is the Brick).
  * analyze.py prints level, spectrum and stereo figures and draws a spectrogram.
  */
@@ -350,13 +350,14 @@ static int style_score(note *out, double leadMS, const note *thuds, int nthuds, 
     return n;
 }
 
-/* cinematic_score is prepareDrop for the power-on (bootDropPower): a 560 ms
- * fall (after a 300 ms lift off the firmware's logo when lift is set), then
- * the impact and two hops, each landing a knock. */
+/* cinematic_score is prepareDrop for the power-on (bootDropPower): a 640 ms
+ * fall from the screen to the ground (after a 340 ms toss up off the
+ * firmware's logo when lift is set), then the impact and two hops, each
+ * landing a knock. */
 static int cinematic_score(note *out, int lift, double *seconds) {
-    const double fall = 560, hold = 70, contactMS = 45, air[2] = {230, 120};
+    const double fall = 640, hold = 70, contactMS = 45, air[2] = {230, 120};
     const double knocks[3][3] = {{190, 0.36, 0.7}, {180, 0.12, 0.4}, {175, 0.06, 0.3}};
-    double impact = (lift ? 300 : 0) + fall;
+    double impact = (lift ? 340 : 0) + fall;
     note thuds[3];
     double at = impact;
     int n = 0;

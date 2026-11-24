@@ -207,6 +207,14 @@ func prepareGameMenuStates(launcher, romPath string) {
 // Every edit goes through here — a launch's scoped values, their restore and
 // the one-time repair (racfgscope.go) — so they share one crash-safe write.
 func editRetroArchConfig(path string, edit func(string) (string, bool)) (bool, error) {
+	return editRetroArchConfigWith(path, edit, true)
+}
+
+// editRetroArchConfigWith is editRetroArchConfig with the sync optional (not
+// durable: no fsync before the rename): a launch batch (racfgscope.go) writes
+// the file now and syncs it once, with the rest of the launch's edits, just
+// before the game starts.
+func editRetroArchConfigWith(path string, edit func(string) (string, bool), durable bool) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false, err
@@ -240,9 +248,11 @@ func editRetroArchConfig(path string, edit func(string) (string, bool)) (bool, e
 		tmp.Close()
 		return false, err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return false, err
+	if durable {
+		if err := tmp.Sync(); err != nil {
+			tmp.Close()
+			return false, err
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		return false, err

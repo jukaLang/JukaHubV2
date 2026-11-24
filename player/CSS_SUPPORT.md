@@ -108,6 +108,17 @@ gap, not a silent promise.
   `translate3d()` (lengths and percentages of the box) on absolutely and
   fixed positioned boxes, after their size is known, and percentage insets
   resolved against the containing block.
+- `line-clamp` and `-webkit-line-clamp` (on `display: -webkit-box` with
+  `-webkit-box-orient: vertical`, the only place browsers honour the prefixed
+  form): the element keeps that many lines of its text, and the last kept
+  line ends in "…" when text was cut. Such a legacy vertical box is laid out
+  as a block of lines, not as a flex row of its inline children.
+- `text-align: -webkit-center` (also `<center>` and `align="center"` on a div
+  or table part) centres narrower boxes as well as text. A table narrower than
+  its column is centred by it or by `margin: auto` / `align="center"`; a rule
+  (`<hr>`) narrower than its column sits in the middle.
+- `border-spacing: 0` (and `cellspacing="0"`) means no gap; only a table
+  with no spacing at all gets the 2px default.
 - SVG: inline `<svg>`, `<img src>` SVG files, SVG `<picture>` sources and
   `data:image/svg+xml` URIs (base64, percent-encoded or utf8, including in
   CSS `url()`), rasterised by `webpage_svg.go`: paths (every command, arcs
@@ -130,11 +141,25 @@ gap, not a silent promise.
 ### Typography and paint
 
 - Colour, background colour, linear/radial/conic gradients and opacity.
+  `color: inherit` / `currentColor` on a link keeps the surrounding text
+  colour instead of the reader's link blue (Tailwind's reset).
 - Font size (up to twice the body size), weight (a real bold face: Inter
   SemiBold, or an emboldened copy of a picked UI face; numeric weights from
   600 up are bold), text transform, text align (including `justify`), line
   height, `font-style: italic/oblique` (synthetic italic face),
-  `letter-spacing`, and `word-spacing`.
+  `letter-spacing`, and `word-spacing`. A font size in `em` or `%` is
+  relative to the parent's size (not to the tag's default), `rem` follows the
+  root element's size (`html { font-size: 62.5% }` makes 1rem 10px), and
+  `inherit`/`unset` on font-size, font-weight, font-style and text-align take
+  the parent's value even on a heading or `<th>`.
+- Gradient text: with `background-clip: text` (or the `-webkit-` spelling)
+  the glyphs take the background ramp's average colour and no background box
+  is painted. A visible `-webkit-text-fill-color` is the glyph colour.
+- `vertical-align: super` and `sub` raise and drop the baseline by a third and
+  a fifth of the parent's size, and a relatively positioned inline box moves
+  by its `top`/`bottom` (normalize.css and Bootstrap draw `<sup>` that way).
+  Inline descendants move with the box, so the link inside a footnote
+  `<sup>` is raised too.
 - `font-family` chooses between two faces: the UI face, and a monospace face
   for `monospace`, `ui-monospace`, the common code families (Menlo, Consolas,
   Courier New, Fira Code, JetBrains Mono, …) and `<pre>`, `<code>`, `<kbd>`,
@@ -213,11 +238,32 @@ gap, not a silent promise.
 - Block flow: `body`, `p`, `div`, `section`, `article`, `main`, `header`,
   `footer`, `aside`, `nav`, `form`, `fieldset`, `figure`, `figcaption`,
   `address`, `dl`, `dt`, `dd`, `li`, `tr`, `details`, `summary`, `blockquote`,
-  `pre`, `h1`–`h6`, `dialog`, `hgroup`, `menu`, `search`.
-- Lists: `ul`, `ol`, `li`, including nested lists and custom counters.
+  `pre`, `listing`, `h1`–`h6`, `dialog`, `hgroup`, `menu`, `search`,
+  `center`.
+- The browser's own defaults: `h1`–`h6` are 2, 1.5, 1.17, 1, 0.83 and 0.67
+  times their parent's size with Chrome's em margins; `p`, `pre`,
+  `blockquote` and `figure` have one em above and below; `blockquote` and
+  `figure` are indented 40px on both sides (no rule), `dd` 40px on the left;
+  `code`, `kbd`, `samp`, `tt` and `pre` are 13/16 of the surrounding size;
+  `small` and `sup`/`sub` are a step smaller, `big` a step larger; `th` is
+  bold and centred; `q` is quoted (“ ”) unless the page's own `::before` /
+  `::after` content replaces the quotes; `abbr[title]` has a dotted
+  underline; `nobr` does not wrap.
+- Lists: `ul`, `ol`, `li`, including nested lists and custom counters. Nested
+  bulleted lists step from disc to circle to square; `<ol start>`,
+  `<li value>` and the `type` attribute (`1`, `a`, `A`, `i`, `I`, `disc`,
+  `circle`, `square`) number and mark the way the page says.
 - Inline and text: `a`, `span`, `strong`, `b`, `em`, `i`, `u`, `ins`, `s`,
-  `del`, `strike`, `small`, `mark`, `code`, `kbd`, `samp`, `var`, `q`, `cite`,
-  `abbr`, `time`, `sub`, `sup`, `br`, `wbr`, and unknown/custom tags (inline).
+  `del`, `strike`, `small`, `big`, `mark`, `code`, `kbd`, `samp`, `var`, `q`,
+  `cite`, `abbr`, `time`, `sub`, `sup`, `font`, `nobr`, `br`, `wbr`, and
+  unknown/custom tags (inline).
+- Presentation attributes, as zero-specificity hints that any CSS rule
+  overrides (`webpage_hints.go`): `bgcolor` (also written without `#`),
+  `align` (text alignment; on `img`, `left`/`right` float and
+  `middle`/`top` align; on a `table`, `center`), `width`/`height` on tables
+  and cells, `width`/`size`/`color`/`noshade` on `hr`, a table's `border`
+  (with `bordercolor`), `cellpadding` and `cellspacing`, `<font color size
+  face>`, and `<body text link bgcolor>`.
 - Replaced/media: `img`, `picture`/`source`, `svg`, `hr`, `video`, `audio`,
   `iframe` embeds. `canvas`, `object`, `embed`, an `<svg>` with nothing to
   draw but a background or border, and media without a playable source keep
@@ -256,6 +302,10 @@ mistaken for working CSS.
 | non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
+| `background-clip: text` | The glyphs take the gradient's average colour; the ramp is not clipped to the letter shapes. |
+| `line-clamp` on a wrapper whose text sits in child blocks | Only the element's own lines are clamped; a clamp on a wrapper of paragraphs does not count their lines. |
+| `vertical-align` in table cells, `valign` | Cell content stays at the top of the row; browsers centre it by default. |
+| Presentation attributes not listed above (`nowrap`, `background`, `hspace`/`vspace`, `frame`/`rules`, a table's `align="left"/"right"`) | Ignored; CSS for the same properties works. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |

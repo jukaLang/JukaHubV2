@@ -118,13 +118,15 @@ func homeTabsLayout(view string, n int, hero bool, bw, bh int32, k float64, out 
 	sz := func(v float64) int32 { return int32(math.Round(v * k)) }
 	gap := max32(6, sz(16))
 	if n <= 0 {
-		return out, view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop, 0
+		return out, view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop || view == homeTabViewLibrary, 0
 	}
 	switch view {
 	case homeTabViewBackdrop:
 		return homeTabsBackdropLayout(n, bh, k, gap, out) // hometabs_backdrop.go
 	case homeTabViewMinimal:
 		return homeTabsMinimalLayout(n, bw, k, out) // hometabs_minimal.go
+	case homeTabViewLibrary:
+		return homeTabsLibraryLayout(n, bw, bh, k, out) // hometabs_library.go
 	case homeTabViewRow:
 		// One or two rows of large tiles, filled column by column, that
 		// scroll left and right; a hero stands two rows tall at the front.
@@ -501,8 +503,14 @@ func (h *HomeLayout) tabsDrawStrip(renderer *sdl.Renderer, fonts HomeFonts, focu
 	off := strip.X - int32(math.Round(homeTabs.stripScroll))
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	// The Library look holds the tabs in one glass capsule
+	// (themelibrary.go): the band only shows where the tabs overflow it.
+	capsule := h.libraryChrome()
+	if capsule {
+		h.libraryDrawCapsule(renderer, strip)
+	}
 	// The band behind the tabs, fading out at both ends.
-	if tex := homeTabsFadeTexture(renderer, strip.W, fade); tex != nil {
+	if tex := homeTabsFadeTexture(renderer, strip.W, fade); tex != nil && (!capsule || overflow) {
 		band := homeGlass(18)
 		_ = tex.SetColorMod(band.R, band.G, band.B)
 		_ = tex.SetAlphaMod(band.A)
@@ -528,6 +536,12 @@ func (h *HomeLayout) tabsDrawStrip(renderer *sdl.Renderer, fonts HomeFonts, focu
 	fill.A = glassOpacityA(uint8(math.Round(70 * pillAlpha)))
 	edge := ColorAccent
 	edge.A = uint8(math.Round(150 * pillAlpha))
+	if capsule {
+		// Inside the Library capsule the active tab is a lighter glass; the
+		// accent is the focus ring's.
+		fill = homeGlass(glassOpacityA(uint8(math.Round(40 * pillAlpha))))
+		edge = homeGlass(uint8(math.Round(90 * pillAlpha)))
+	}
 	fillRoundedRectAt(renderer, base, pill, strip.H/2, fill)
 	strokeRoundedRectAt(renderer, base, pill, strip.H/2, 1, edge)
 
@@ -604,6 +618,7 @@ func (h *HomeLayout) tabsRender(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 
 	homeTabs.hits = homeTabs.hits[:0]
 	homeTabs.back = sdl.Rect{}
+	homeLibTheme.options = sdl.Rect{}
 	lvl := homeTabsLevelNow()
 	if lvl == nil {
 		return
@@ -780,6 +795,8 @@ func (h *HomeLayout) tabsDrawLevel(renderer *sdl.Renderer, fonts HomeFonts, lvl 
 		h.tabsDrawMinimal(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, alpha, live)
 	} else if view == homeTabViewBackdrop {
 		h.tabsDrawBackdrop(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, lift, depth, alpha, live, dimOf)
+	} else if view == homeTabViewLibrary {
+		h.tabsDrawLibrary(renderer, fonts, lvl, g, body, dx, scroll, clip, focused, pressed, lift, depth, alpha, live, dimOf)
 	} else {
 		center := float64(body.X+dx) + float64(body.W)/2
 		pitch := float64(1)
@@ -859,8 +876,9 @@ func (h *HomeLayout) tabsDrawCollectionsIntro(renderer *sdl.Renderer, fonts Home
 // past them (listfade.go), each band kept short of the selected tile so its
 // ring stays crisp. The list view fades its column only, not the preview.
 func (h *HomeLayout) tabsDrawEdgeFade(renderer *sdl.Renderer, lvl *homeTabsLevel, g *homeTabsGeom, view string, body sdl.Rect, dx int32, clip sdl.Rect) {
-	// The Backdrop view's row stands on its own picture (hometabs_backdrop.go).
-	if len(g.rects) == 0 || !listEdgeFadeOn(appConfig) || view == homeTabViewBackdrop {
+	// The Backdrop view's row stands on its own picture (hometabs_backdrop.go),
+	// the Library view's on its own floor (hometabs_library.go).
+	if len(g.rects) == 0 || !listEdgeFadeOn(appConfig) || view == homeTabViewBackdrop || view == homeTabViewLibrary {
 		return
 	}
 	// ro is the selected tile's ring and glow past its rect.

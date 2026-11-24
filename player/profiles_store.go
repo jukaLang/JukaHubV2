@@ -436,7 +436,7 @@ func profilesPrefKeys() []string {
 	return append(keys, xpackUndoKey,
 		uiLanguageKey, uiFontKey, menuColourKey, glassStyleKey, liquidKey, liquidTiltKey,
 		colourBackgroundKey, colourSurfaceKey, colourTextKey, colourFocusKey, glassOpacityKey, animSpeedKey,
-		homeTilesKey, homeTabsViewsKey, homeTabsShownKey, homeTabsRememberKey, homeTabsPositionKey,
+		homeTilesKey, homeTabsViewsKey, homeTabsViewsLibraryKey, homeTabsShownKey, homeTabsRememberKey, homeTabsPositionKey,
 		homeTabsStartKey, shutdownScreenKey, shutdownPictureKey,
 		bgmEnabledKey, bgmSourceKey, bgmVolumeKey, bgmSelectedKey,
 		"reducedMotion", "clock12", "dynamicBg", "tspUsername",

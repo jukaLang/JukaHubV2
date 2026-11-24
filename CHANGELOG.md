@@ -13,6 +13,55 @@ For anything older, the git log and the
 
 ### Added
 
+- **Faster game starts** (Juka, 2026-11-23: "Improve performance on Trimui
+  devices even further...improve emulator launching..."). The seconds between
+  **A** and a game's first frame went to three things, and each costs less now.
+  JukaHub's own preparation: a library launch sets a dozen or more launch-only
+  values in `retroarch.cfg` and the core's `.opt` (save-state switches, OSD,
+  log, picture, controls, speed level), and each edit synced its journal, the
+  journal's folder and the file to the card on its own, some thirty fsyncs on
+  a FAT card before the emulator could start. They are now written as they
+  come (a later feature still reads what an earlier one set) and synced
+  together just before the game starts: the journal first, then each file once
+  (`racfgscope.go`; no switch, `JUKAHUB_LAUNCH_BATCH=0` for one run). The
+  clock: Automatic CPU speed used to put a game on the clock it settled at last
+  time (1.0 GHz for a GBA game) about two seconds in, while RetroArch was still
+  loading the core, the ROM and the auto state. With Settings → Games &
+  emulators → **Faster game starts** (`gameStartBoost`, on), a game's session
+  begins at the top the heat guard allows, with the floor at 75% of it, for
+  8 s, and then takes its learned level; those seconds are not learned. The
+  card and JukaHub: for 10 s after the start, the disk holding the game reads
+  ahead 1 MB, JukaHub's threads step behind the game (nice 10 and the lowest
+  best-effort I/O level, with SDL's sound threads left alone), and the game's
+  emulator, core and ROM are read ahead while RetroArch sets up its screen,
+  unless the warm-up already read them. The heavy-game boost keeps doing its
+  own read-ahead and step back for its games, and CPU-boosted games already
+  hold the top clock. Everything rests under Battery Saver and the low-battery
+  saver; `JUKAHUB_GAME_START=0` turns the 10-second window off for one run. New
+  files `faststart.go` and `faststart_linux.go`. See
+  [DEVICE_TUNING](docs/DEVICE_TUNING.md#faster-game-starts).
+
+- **Library theme: Home as a media library's front room** (Juka, 2026-11-23,
+  with a screenshot of a media-library app: "Create a theme based on and call
+  it library"). Theme presets → Styles → **Library** (and a **Library** palette
+  in Colour): studio grey with a soft light, near-black cards and gold. The
+  Tabs Home's top bar starts with a large serif clock over the date — it is
+  the clock control, A opens the calendar — and holds the tabs in one glass
+  capsule. Every tab opens in the new **Library view**: a dark featured banner
+  for the selected item (its screenshot or save-state picture fading in over
+  its cover, box art standing upright; a gold letter-spaced "FEATURED IN
+  GAMES"; its name in a serif; Play / Resume / Open on A and Options on X; a
+  dot per item) over a "Next up" style heading with the position and one row
+  of tall 2:3 posters with round play marks, standing on a boardwalk of dark
+  planks drawn from geometry. The view works under any theme too (A on the strip).
+  Views picked while Library is on are kept apart (`homeTabViewsLibrary`), so
+  other themes keep theirs. The serif is Lora (SIL OFL 1.1), instanced at
+  SemiBold, renamed and embedded (`player/librarytheme_serif.ttf`, licence in
+  `player/librarytheme_serif_OFL.txt`); names it cannot draw are set in Inter,
+  and Legible reading font or Bold text switch it off. See
+  [THEMES](docs/THEMES.md#styles-and-layouts) and
+  [HOME_TABS](docs/HOME_TABS.md#views).
+
 - **Emulators offers only the cores that load on this TrimUI, and JukaHub's
   glibc is ready before they need it** (Juka, 2026-11-23: "Make sure all
   emulators that get updated work on glibc...we want to show the emulators
@@ -3637,6 +3686,57 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The browser draws older and simpler pages like a desktop browser, and
+  more modern CSS right** (Juka, 2026-11-23: "improve browser rendering even
+  further"). **HTML presentation attributes** count the way a browser counts
+  them — as zero-specificity hints any CSS overrides
+  (`player/webpage_hints.go`): table and cell `bgcolor`, `width` and
+  `height`, a table's `border`, `cellpadding` and `cellspacing`
+  (`cellspacing="0"` and `border-spacing: 0` now mean no gap instead of the
+  2px default), `align` on blocks, cells and images, `<hr width size color
+  noshade>`, `<font color size face>`, `<body text link bgcolor>` and the
+  `type`/`start`/`value` of lists, so Hacker News, forums and old pages keep
+  their coloured bars, widths and spacing. `<center>` is a block and, like
+  `align="center"`, centres the tables and narrower boxes inside it.
+  **Sizes follow CSS**: a font size in `em` or `%` is relative to the parent
+  (`h2 { font-size: 1.5em }` was 1.5 × the reader's own heading size), `rem`
+  follows the root size (`html { font-size: 62.5% }` drew such pages at
+  160 %), and `inherit` takes the parent's size, weight and alignment
+  (Tailwind's reset left every heading large and bold); `a { color: inherit }`
+  links are no longer link blue. **The browser's own defaults**: headings
+  scale from the text around them (h1 2em … h6 0.67em) with Chrome's margins,
+  footnote `<sup>`/`<sub>` are smaller and raised or dropped (also when a
+  sheet does it with `position: relative; top: -.5em`, and the link inside
+  moves with them), `th` is centred, `blockquote` and `figure` are indented
+  40px on both sides (the reader's own quote bar is gone), `dd` is indented,
+  `<q>` is quoted, nested bullets step from disc to circle to square, and
+  `abbr[title]` is dotted. **Card titles and summaries are cut** after the
+  lines `-webkit-line-clamp` / `line-clamp` allows, ending in "…" (the
+  `display: -webkit-box` idiom is a block of lines, no longer a row of its
+  links), and **gradient headings** (`background-clip: text`) are drawn in
+  the gradient's colour instead of as a coloured slab. CSS_SUPPORT.md lists
+  the details and the gaps that remain.
+
+- **Cinematic boot: the logo falls from the screen to the ground** (Juka,
+  2026-11-23: "for the cinematic logo drop down boot, meant the logo coming
+  straight down from the screen, like starting off big and getting smaller as
+  it reaches the ground"). The camera now looks straight down at the ground,
+  lit in a pool round the logo's place, and the logo falls to it out of the
+  screen: it appears at over four times its size, spilling past the screen's
+  edges as if just under the glass, and shrinks to its resting size as it
+  falls, faster and faster, trailing a short blur, its shadow sliding in under
+  it. The impact keeps its buzz, shake, flash and knock; a wave of light runs
+  out from the tile's edge, dust and sparks burst out all round, and the cracks
+  race out from under the tile in every direction. The logo is driven into the
+  ground for a moment and bounces back up towards the screen twice. A power-on
+  that starts from the firmware's logo first tosses it up towards the screen
+  and lets it fall back; the app-launch hello falls from under twice its size.
+  Before, the logo dropped in from above the top edge onto a floor seen from
+  the side. While it is far bigger than at rest it is drawn from the artwork's
+  own 300 px rather than the resting size blown up (`bootstyles.go`; the
+  chime's knocks follow the new landings, and `branding/sound/chime_reference.c`
+  with them). See [BOOT](docs/BOOT.md#boot-animation-styles).
+
 - **No more buttons the handheld does not have** (Juka, 2026-11-22: "I see
   some spots on the os where it says r3 as a button, which is not included on
   trimui smart pro...or many other devices... reconfigure menu
@@ -4355,6 +4455,55 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **JukaHub's threads no longer stay in the idle I/O class after a
+  heavy-game boost** (found 2026-11-23 while building Faster game starts). A
+  thread that had done no I/O before the boost reads back as I/O class "none,
+  level 4", which `ioprio_set` refuses. The end of the boost put that value
+  back, the kernel refused it, and the thread kept the idle class until
+  JukaHub restarted, so its reads and writes waited for a quiet card. It now
+  goes back to plain "none" (`xboxboost_hub_linux.go`).
+
+- **A new game's launch settings are no longer undone halfway through its
+  preparation** (found 2026-11-23). The restore that puts the user's
+  RetroArch values back after a game used to run whenever no game was on
+  screen, and that included the moment the next game was still being
+  prepared. It could put back the first values that launch had just written,
+  such as the save-state switches or the log. The restore, the failsafe and
+  the start-up recovery now wait while a launch is preparing, and that
+  launch's own exit restores everything (`racfgscope.go`).
+
+- **PSP games no longer play to a black screen on the A133P handhelds** (Juka,
+  2026-11-23: "I tried psp, but the screen was black and only played game
+  sound" — the third black PSP screen on his Smart Pro, after 2026-11-14 and
+  11-15). On the Smart Pro, Brick, Hammer and Brick Pro every program draws
+  into one ARGB framebuffer that the display can blend by each pixel's alpha,
+  and PPSSPP copies the PSP's own alpha — its stencil, mostly 0 — into it: a
+  picture the panel shows as black while the game runs (two ports on the same
+  chip hit the same thing). Three changes. JukaHub's PPSSPP keeps a
+  post-processing shader of JukaHub's last in its chain, *JukaHub opaque
+  picture*, which copies the picture with alpha 1 at output resolution (no
+  extra pass; in the global ini and in a game's own, after the player's own
+  shaders; tg5040 builds only; `ppsspp_opaque.go`). For the first 45 seconds
+  of a PSP game JukaHub now looks at the page the panel shows (a sparse read of
+  `/dev/fb0` every two seconds) and, when the game's picture never reaches it —
+  transparent, still JukaHub's own last picture, or black — logs what it saw
+  (`picture check:` with the counts, the framebuffer's format, the display
+  engine's layer description and PPSSPP's last lines), ends the black game and
+  starts it again with the device to itself: the Xbox's screen hand-off,
+  JukaHub closing while it plays the way MainUI, MinUI and NextUI start PPSSPP
+  with nothing else on the display, and PSP games keep that way
+  (`ppsspp_picture.go`, `hakux_handoff.go` with a kind for PSP games). A
+  Select + Start hold that ends a PSP game whose picture was never seen now
+  chooses that too, instead of marking JukaHub's PPSSPP build as not working,
+  which sent PSP games to the firmware's PPSSPP — just as black beside JukaHub.
+  The PPSSPP card says which way PSP games play and switches it (**Give PSP
+  games the screen to themselves** / **Play PSP games beside JukaHub again**).
+  And the Speed levels no longer skip the PSP's GPU read-backs (Fastest, the
+  A133P's Automatic for the PSP: a game that shows a picture it reads back from
+  the GPU goes black without them; JukaHub's PPSSPP and RetroArch's core), nor
+  turn on PPSSPP's frameskip while its Skip buffer effects is on. Not run on a
+  device yet (PSPPIC-HW-1).
 
 - **Emulator downloads on a Smart Pro no longer all stop at "needs
   GLIBCXX_3.4.30"** (Juka, 2026-11-22, photo of Emulators → ppsspp: "Could not

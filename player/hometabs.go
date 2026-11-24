@@ -29,7 +29,8 @@ package main
 // X opens the item sheet (favourite, add to a collection — the providers');
 // L2 arranges the tabs; Y, Start, Select, R2 and Menu are Home's as ever.
 //
-// Stored (Custom, jukauser.json): homeTabViews ("games=row;col:abc=list"),
+// Stored (Custom, jukauser.json): homeTabViews ("games=row;col:abc=list"; the
+// Library theme keeps its own in homeTabViewsLibrary, themelibrary.go),
 // homeTabsShown ("recent,main,-games,…": order, "-" hidden), homeTabLast (the
 // tab to come back to; bookkeeping, cfgdocRuntimeKeys) and homeTabsRemember.
 
@@ -116,12 +117,14 @@ var homeTabs struct {
 	// is empty; the next tab with something on it takes it back.
 	autoStrip bool
 
-	// The visible tabs, in order, and the views, parsed from Custom.
+	// The visible tabs, in order, and the views, parsed from Custom (the
+	// key they were read from: the Library look keeps its own).
 	shown    []string
 	shownRaw string
 	shownOK  bool
 	views    map[string]string
 	viewsRaw string
+	viewsKey string
 	viewsOK  bool
 
 	// The strip: the free span of the top bar (drawHeader), the strip drawn
@@ -196,6 +199,8 @@ func homeTabViewLabel(v string) string {
 		return "Backdrop"
 	case homeTabViewMinimal:
 		return "Minimal"
+	case homeTabViewLibrary:
+		return "Library"
 	}
 	return "Grid"
 }
@@ -292,20 +297,36 @@ func formatHomeTabViews(m map[string]string) string {
 	return b.String()
 }
 
+// homeTabsViewsKeyNow is the Custom key the page views are kept under: the
+// Library look keeps a set of its own (themelibrary.go), so its pages start
+// in the Library view and the views picked under every other theme come back
+// untouched.
+func homeTabsViewsKeyNow() string {
+	if homeLibraryLookOn() {
+		return homeTabsViewsLibraryKey
+	}
+	return homeTabsViewsKey
+}
+
 // homeTabsViewsMap is homeTabViews parsed, re-read only when it changed.
 func homeTabsViewsMap(c *Config) map[string]string {
-	raw := homeTabsCustom(c, homeTabsViewsKey)
-	if homeTabs.viewsOK && raw == homeTabs.viewsRaw && homeTabs.views != nil {
+	key := homeTabsViewsKeyNow()
+	raw := homeTabsCustom(c, key)
+	if homeTabs.viewsOK && raw == homeTabs.viewsRaw && key == homeTabs.viewsKey && homeTabs.views != nil {
 		return homeTabs.views
 	}
-	homeTabs.viewsRaw, homeTabs.viewsOK = raw, true
+	homeTabs.viewsRaw, homeTabs.viewsKey, homeTabs.viewsOK = raw, key, true
 	homeTabs.views = parseHomeTabViews(raw)
 	return homeTabs.views
 }
 
 // homeTabsDefaultView is a page's view until the user picks one: Recent is a
-// row of covers to scroll through, everything else a grid.
+// row of covers to scroll through, everything else a grid — and every page the
+// Library view under the Library look.
 func homeTabsDefaultView(key string) string {
+	if homeLibraryLookOn() {
+		return homeTabViewLibrary
+	}
 	if key == homeTabRecent {
 		return homeTabViewRow
 	}
@@ -331,7 +352,7 @@ func homeTabsSetView(c *Config, key, view string) {
 		next[k] = v
 	}
 	next[key] = view
-	homeTabsWrite(c, homeTabsViewsKey, formatHomeTabViews(next))
+	homeTabsWrite(c, homeTabsViewsKeyNow(), formatHomeTabViews(next))
 }
 
 // homeTabsNextView is the view after (step 1) or before (step -1) v.
@@ -1028,6 +1049,11 @@ func (h *HomeLayout) tabsMove(direction FocusDirection) HomeFocusID {
 					h.Focus.Set(id)
 				}
 			}
+			// The Library look's clock stands left of the first tab
+			// (themelibrary.go).
+			if direction == FocusLeft && !bottom && h.libraryClockOn() {
+				h.Focus.Set(HomeFocusClock)
+			}
 		case FocusUp:
 			// At the bottom the page is above the strip: back into it, or
 			// on to the top bar when it is empty.
@@ -1066,6 +1092,11 @@ func (h *HomeLayout) tabsMove(direction FocusDirection) HomeFocusID {
 		// one comes back to the strip when it is in the bar.
 		if direction == FocusDown {
 			h.tabsPageOrStrip()
+			break
+		}
+		// The Library look's clock is on the strip's other side
+		// (themelibrary.go).
+		if h.libraryClockStep(cur, direction) {
 			break
 		}
 		if next := h.Focus.Move(direction); next == cur && direction == FocusLeft && !homeTabsStripBottom() {
@@ -1201,7 +1232,7 @@ func (h *HomeLayout) tabsScroll(back bool, steps int) {
 		return
 	}
 	view := homeTabsViewFor(appConfig, lvl.key)
-	horiz := view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop
+	horiz := view == homeTabViewRow || view == homeTabViewCarousel || view == homeTabViewBackdrop || view == homeTabViewLibrary
 	dir := FocusDown
 	switch {
 	case back && horiz:
@@ -1332,6 +1363,11 @@ func homeTabsClick(mx, my int32, c *Config) bool {
 	}
 	if pointInRect(mx, my, homeTabs.back) {
 		homeTabsBack(c)
+		return true
+	}
+	// The Library view's Options button, inside its banner (which opens the
+	// item): the item's sheet (hometabs_library.go).
+	if homeLibThemeOptionsClick(c, mx, my) {
 		return true
 	}
 	if lvl := homeTabsLevelNow(); lvl != nil {

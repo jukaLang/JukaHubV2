@@ -178,6 +178,10 @@ const (
 	webVerticalTextTop
 	webVerticalTextBottom
 	webVerticalLength
+	// Super and sub raise or drop the baseline; the shift itself is carried
+	// by webStyle.BaselineShift so inline descendants move with the box.
+	webVerticalSuper
+	webVerticalSub
 )
 
 const (
@@ -739,6 +743,24 @@ type webStyle struct {
 	// a wrapping row with its inline-block siblings (openInlineRow); an li
 	// with it, or with display: inline, has no list marker. Not inherited.
 	DisplayInlineBlock bool
+	// CenterBlocks is text-align: -webkit-center (<center>, align="center" on a
+	// div or a table part): boxes narrower than the line are centred too, not
+	// only the text. Inherited, like text-align, and cleared by any other value.
+	CenterBlocks bool
+	// TableCenter puts a table narrower than its column in the middle (margin
+	// auto or a -webkit-center parent); prepareTableStyle copies it to every
+	// row and cell of the table, like the table's width.
+	TableCenter bool
+	// TableSpacingSet records an explicit border-spacing (or cellspacing), so
+	// `border-spacing: 0` is not mistaken for the 2px default.
+	TableSpacingSet bool
+	// LineClamp is line-clamp / -webkit-line-clamp: the block keeps that many
+	// lines and ends the last with "…". Not inherited.
+	LineClamp int
+	// BaselineShift is the raise (negative) or drop of an inline box in CSS px:
+	// vertical-align super/sub and a relatively positioned inline element. It
+	// inherits through inline descendants and a block resets it.
+	BaselineShift float64
 }
 
 // webGridAreas is the small named-area matrix a grid container declares.
@@ -773,6 +795,8 @@ type webCQContext struct {
 	decls        map[string]string
 	vars         *webVarScope
 	parentHeight float64
+	// rootPx is the root font size rem lengths followed at parse time.
+	rootPx float64
 }
 
 // webVarScope is one element's view of the custom properties: the ones it
@@ -2901,6 +2925,7 @@ var webSupportedProperties = map[string]bool{
 	"text-transform": true, "visibility": true, "white-space": true,
 	"width": true, "z-index": true, "table-layout": true,
 	"border-collapse": true, "border-spacing": true,
+	"line-clamp": true,
 }
 
 // webSupportsApplies evaluates an @supports condition. It understands
@@ -4053,6 +4078,11 @@ func (p *webParser) webOrdinaryContainerSize() (w, h float64) {
 // such as @supports that have no element stack.
 func (p *webParser) webResolveStyleValueIn(value string, scope *webVarScope, em, cw, ch float64) string {
 	value = webSubstituteVars(value, scope)
+	// rem follows the root's font size (`html { font-size: 62.5% }`); the
+	// lengths below read a bare rem as 16px.
+	if p.rootFontPx > 0 && p.rootFontPx != 16 {
+		value = webSubstituteRootEm(value, p.rootFontPx)
+	}
 	value = webSubstituteContainerUnits(value, cw, ch)
 	if strings.Contains(strings.ToLower(value), "calc(") {
 		value = webSubstituteCalcContainer(value, em, 0, 0, cw, ch)
@@ -4076,6 +4106,9 @@ func (ctx *webCQContext) resolve(current webStyle, cw, ch float64) webStyle {
 			continue
 		}
 		decls[name] = webSubstituteVars(value, ctx.vars)
+		if ctx.rootPx > 0 && ctx.rootPx != 16 {
+			decls[name] = webSubstituteRootEm(decls[name], ctx.rootPx)
+		}
 	}
 	if raw, ok := decls["font-size"]; ok {
 		if px, valid := webFontSizePx(declsValueAt(decls, "font-size", raw, em, cw, ch), em); valid {
@@ -4091,6 +4124,11 @@ func (ctx *webCQContext) resolve(current webStyle, cw, ch float64) webStyle {
 	applyWebDecls(&st, decls)
 	webResolvePercentageHeights(&st, decls, ctx.parentHeight)
 	st.Href, st.Link, st.Hidden, st.Control = current.Href, current.Link, current.Hidden, current.Control
+	// Facts computeStyle settled beyond the declarations (the inherited
+	// baseline shift, `inherit` on weight, slant and alignment) do not depend
+	// on the container's size.
+	st.BaselineShift = current.BaselineShift
+	st.Bold, st.Italic, st.Align, st.CenterBlocks = current.Bold, current.Italic, current.Align, current.CenterBlocks
 	return st
 }
 
@@ -6886,7 +6924,7 @@ func webFontSizePx(value string, parent float64) (float64, bool) {
 		return 11, true
 	case "small":
 		return 13, true
-	case "medium":
+	case "medium", "initial":
 		return 16, true
 	case "large":
 		return 18, true
@@ -7020,9 +7058,9 @@ func webAutoBlockLogicalSides(value string) (top, bottom bool) {
 
 func webTextAlign(value string) int {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "center":
+	case "center", "-webkit-center", "-moz-center", "-khtml-center":
 		return 1
-	case "right", "end":
+	case "right", "end", "-webkit-right", "-moz-right":
 		return 2
 	case "justify":
 		return 3
@@ -7468,7 +7506,11 @@ func webVerticalAlignValue(value string) (int, float64) {
 		return webVerticalTextTop, 0
 	case "text-bottom":
 		return webVerticalTextBottom, 0
-	case "baseline", "sub", "super":
+	case "super":
+		return webVerticalSuper, 0
+	case "sub":
+		return webVerticalSub, 0
+	case "baseline":
 		return webVerticalBaseline, 0
 	}
 	if px := webLength(lower, 16); px != 0 {
@@ -7481,25 +7523,31 @@ func webVerticalOffset(style webStyle, font *ttf.Font, baseSize float64) int32 {
 	if font == nil {
 		return 0
 	}
+	// The raise or drop of a sub/super or relatively positioned inline box,
+	// which its inline descendants share (webApplyBaselineShift).
+	shift := int32(0)
+	if baseSize > 0 {
+		shift = int32(math.Round(style.BaselineShift * baseSize / 16))
+	}
 	h := int32(font.Height())
 	if h < 1 {
 		h = 1
 	}
 	switch style.VerticalAlign {
 	case webVerticalTop:
-		return -h / 2
+		return shift - h/2
 	case webVerticalBottom:
-		return h / 2
+		return shift + h/2
 	case webVerticalTextTop:
-		return -h / 4
+		return shift - h/4
 	case webVerticalTextBottom:
-		return h / 4
+		return shift + h/4
 	case webVerticalLength:
 		if baseSize > 0 {
-			return -int32(math.Round(style.VerticalAlignPx * baseSize / 16))
+			return shift - int32(math.Round(style.VerticalAlignPx*baseSize/16))
 		}
 	}
-	return 0
+	return shift
 }
 
 func webOverflowValue(value string) int {
@@ -7758,48 +7806,82 @@ func webBaseStyle() webStyle {
 	return webStyle{FontPx: 16, FlexShrink: 1, MinWidthAuto: true}
 }
 
-// applyWebTagDefaults gives the reader its browser-ish baseline: headings are
-// large and bold, paragraphs are spaced, lists are indented, quotes carry a
-// rule and code is monospaced (when the machine has a monospace face,
-// webpage_fonts.go) on a tinted panel.
+// applyWebTagDefaults gives the reader a browser's baseline: headings scale
+// from their parent's size (h1 2em … h6 0.67em) with Chrome's em margins,
+// paragraphs are spaced, lists are indented, <sup>/<sub> are smaller and
+// raised or dropped, table headers are bold and centred, and code is
+// monospaced (when the machine has a monospace face, webpage_fonts.go) on a
+// tinted panel. st arrives with the inherited font size, so every relative
+// size here is relative to the parent, as in CSS.
 func applyWebTagDefaults(st *webStyle, tag string) {
+	heading := func(scale, margin float64) {
+		st.FontPx, st.Bold = math.Min(st.FontPx*scale, 64), true
+		st.MarginTop, st.MarginBot = st.FontPx*margin, st.FontPx*margin
+	}
+	// A monospace face reads larger than the text face at the same size, so
+	// browsers set code at 13px against 16px text — once: the <code> inside a
+	// <pre> keeps the <pre>'s size.
+	monoScale := 13.0 / 16.0
+	if st.Mono {
+		monoScale = 1
+	}
 	switch tag {
 	case "h1":
-		st.FontPx, st.Bold = 30, true
-		st.MarginTop, st.MarginBot = 20, 10
+		heading(2, 0.67)
 	case "h2":
-		st.FontPx, st.Bold = 25, true
-		st.MarginTop, st.MarginBot = 18, 8
+		heading(1.5, 0.83)
 	case "h3":
-		st.FontPx, st.Bold = 21, true
-		st.MarginTop, st.MarginBot = 16, 6
-	case "h4", "h5", "h6":
-		st.FontPx, st.Bold = 18, true
-		st.MarginTop, st.MarginBot = 12, 4
+		heading(1.17, 1)
+	case "h4":
+		heading(1, 1.33)
+	case "h5":
+		heading(0.83, 1.67)
+	case "h6":
+		heading(0.67, 2.33)
 	case "p":
 		// Browsers give a paragraph one em above and below; without it the
 		// rows of two paragraphs merge into one undifferentiated wall.
-		st.MarginTop, st.MarginBot = 16, 16
+		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
 	case "blockquote":
-		st.Indent += 16
-		st.MarginTop, st.MarginBot = 16, 16
-		st.BorderLeft = true
-	case "pre":
+		// A browser indents a quote by 40px on both sides and draws no rule;
+		// a sheet that wants a bar says so (and can now also say none).
+		st.Indent += 40
+		st.IndentRight += 40
+		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
+	case "figure":
+		st.Indent += 40
+		st.IndentRight += 40
+		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
+	case "dd":
+		st.Indent += 40
+	case "pre", "listing":
 		st.Pre = true
 		st.WhiteSpace = webWhiteSpacePre
-		st.FontPx = 13
+		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
+		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
-		st.MarginTop, st.MarginBot = 16, 16
 		st.HasBg = true
 		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
 	case "code", "kbd", "samp":
-		st.FontPx = 13
+		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
 		st.HasBg = true
 		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
 	case "tt":
-		st.FontPx = 13
+		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
+	case "sup", "sub":
+		// font-size: smaller, vertical-align: super/sub. The raise itself is
+		// webApplyBaselineShift's, against the parent's size.
+		st.FontPx /= 1.2
+		st.VerticalAlign = webVerticalSuper
+		if tag == "sub" {
+			st.VerticalAlign = webVerticalSub
+		}
+	case "big":
+		st.FontPx = math.Min(st.FontPx*1.2, 64)
+	case "nobr":
+		st.WhiteSpace = webWhiteSpaceNowrap
 	case "mat-icon":
 		// Angular Material's icon element: its text is a ligature name.
 		st.IconFont, st.Mono = true, false
@@ -7818,7 +7900,8 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 	case "u", "ins":
 		st.Underline = true
 	case "center":
-		st.Align = 1
+		// text-align: -webkit-center: the text and the boxes inside centre.
+		st.Align, st.CenterBlocks = 1, true
 	case "dt":
 		// Definition terms are bold in every browser.
 		st.Bold = true
@@ -7826,14 +7909,17 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.HasBg = true
 		st.Background = sdl.Color{R: 255, G: 233, B: 120, A: 255}
 	case "small":
-		if st.FontPx > 12 {
-			st.FontPx -= 2
-		}
+		st.FontPx /= 1.2
 	case "td", "th":
 		st.Indent += 4
 		if tag == "th" {
-			st.Bold = true
+			// Header cells are bold and centred in every browser.
+			st.Bold, st.Align, st.CenterBlocks = true, 1, false
 		}
+	case "hr":
+		// hr { margin: 0.5em auto }: a rule narrower than its column (a
+		// width attribute or rule) sits in the middle.
+		st.MarginLeftAuto, st.MarginRightAuto = true, true
 	case "tr":
 		// A table row is a real row: its direct cell blocks are flex items, so
 		// cells occupy columns instead of being folded into one text run.
@@ -7875,6 +7961,11 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["color"]; ok {
 		if c, valid := parseWebColor(v); valid {
 			st.Color, st.HasColor = c, true
+		} else if webInheritKeyword(v) || strings.EqualFold(strings.TrimSpace(v), "currentcolor") {
+			// The colour inherits already; what the keyword changes is that a
+			// link no longer paints in the reader's link blue. Tailwind's reset
+			// is `a { color: inherit }`.
+			st.Link = false
 		}
 	}
 	for _, key := range []string{"background-color", "background"} {
@@ -7954,7 +8045,7 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		switch weight := strings.ToLower(strings.TrimSpace(v)); weight {
 		case "bold", "bolder":
 			st.Bold = true
-		case "normal", "lighter":
+		case "normal", "lighter", "initial":
 			st.Bold = false
 		default:
 			// Any numeric weight, variable-font steps (650, 750) included: the
@@ -8035,7 +8126,13 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.Transform = webTextTransform(v)
 	}
 	if v, ok := decls["text-align"]; ok {
-		st.Align = webTextAlign(v)
+		switch lower := strings.ToLower(strings.TrimSpace(v)); lower {
+		case "inherit", "unset", "revert", "revert-layer", "match-parent":
+			// text-align inherits: these keep the parent's alignment.
+		default:
+			st.Align = webTextAlign(lower)
+			st.CenterBlocks = lower == "-webkit-center" || lower == "-moz-center" || lower == "-khtml-center"
+		}
 	}
 	if v, ok := decls["vertical-align"]; ok {
 		st.VerticalAlign, st.VerticalAlignPx = webVerticalAlignValue(v)
@@ -8411,6 +8508,12 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["stroke"]; ok {
 		st.SVGStroke = webSVGPaintDecl(v, st.SVGStroke)
 	}
+	// Gradient text (background-clip: text) and -webkit-text-fill-color, after
+	// the colour and every background layer are known (webpage_hints.go).
+	webApplyTextClip(st, decls)
+	if n, ok := webLineClampValue(decls); ok {
+		st.LineClamp = n
+	}
 	applyWebLayoutDecls(st, decls)
 }
 
@@ -8498,6 +8601,15 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		if alias, valid := webUnprefixedValueAlias("display", v); valid {
 			lower = alias
 		}
+		// The line-clamp idiom (display: -webkit-box with a vertical box
+		// orient) is a block of lines. As a flex row it set every link and
+		// <b> of a card's title side by side as items of their own.
+		if webLegacyVerticalBox(decls) {
+			lower = "block"
+			if strings.Contains(strings.ToLower(v), "inline") {
+				lower = "inline-block"
+			}
+		}
 		st.DisplayContents = lower == "contents"
 		st.DisplayInline = lower == "inline"
 		st.DisplayInlineBlock = lower == "inline-block" || lower == "inline-flex" || lower == "inline-grid"
@@ -8562,6 +8674,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			if len(fields) > 1 {
 				st.TableSpacingY = webLength(fields[1], 16)
 			}
+			st.TableSpacingSet = true
 		}
 	}
 	if v, ok := decls["grid-template-columns"]; ok && st.Display == webDisplayGrid {
@@ -9740,6 +9853,11 @@ type webParser struct {
 	// ends it. inlineSeq numbers the chains.
 	inlineGroup int
 	inlineSeq   int
+	// linkColor is <body link="…">, the colour of every link after it that
+	// no sheet colours; rootFontPx is the <html> element's font size, which
+	// rem lengths follow (webpage_hints.go). Zero until <html> is styled.
+	linkColor  string
+	rootFontPx float64
 }
 
 type webTableParse struct {
@@ -9757,6 +9875,8 @@ type webTableParse struct {
 	colGroupWidth float64
 	colGroupPct   float64
 	colGroupSpan  int
+	// center: the table sits in the middle of a wider column (TableCenter).
+	center bool
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document. Tests
@@ -10457,7 +10577,8 @@ func webBlockElement(tag string) bool {
 		"aside", "nav", "form", "fieldset", "figure", "figcaption", "address",
 		"dl", "dt", "dd", "li", "tr", "details", "summary", "blockquote", "pre",
 		"h1", "h2", "h3", "h4", "h5", "h6", "table", "caption", "thead",
-		"tbody", "tfoot", "td", "th", "menu", "hgroup", "dialog", "search":
+		"tbody", "tfoot", "td", "th", "menu", "hgroup", "dialog", "search",
+		"center", "listing":
 		return true
 	}
 	return false
@@ -10798,10 +10919,18 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	// on the frame and popped by its end tag.
 	p.applyCounters(name, style)
 	p.pendingBefore, p.pendingBeforeStyle = "", webStyle{}
+	beforeSet := false
 	if p.pseudoMask&(1<<webPseudoElemBefore) != 0 {
 		if generated := p.pseudoContent(el, attrs, style, webPseudoElemBefore); generated.Matched && generated.HasContent {
 			p.pendingBefore, p.pendingBeforeStyle = generated.Text, generated.Style
+			beforeSet = true
 		}
+	}
+	// <q> is quoted by the UA sheet's `q::before { content: open-quote }`,
+	// unless the page's own ::before content replaces it (a reset's
+	// `content: none` included).
+	if name == "q" && !beforeSet {
+		p.pendingBefore, p.pendingBeforeStyle = "“", style
 	}
 	if name == "body" || name == "html" {
 		if style.HasBg {
@@ -10899,6 +11028,20 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			Background:     style.Background,
 			Indent:         style.Indent,
 		}
+		// The rule's own box: its width (a width attribute or rule) and right
+		// margin bound the bar, and visibility hides it. Nothing else of the
+		// element's style applies, so it never floats or turns into a flex box.
+		rule.Style = webStyle{
+			FontPx: style.FontPx, Width: style.Width, WidthPct: style.WidthPct,
+			MinWidth: style.MinWidth, MinWidthPct: style.MinWidthPct, MinWidthAuto: true,
+			MaxWidth: style.MaxWidth, MaxWidthPct: style.MaxWidthPct, BoxSizing: style.BoxSizing,
+			IndentRight: style.IndentRight, Invisible: style.Invisible, FlexShrink: 1,
+		}
+		// hr { margin: auto }: a narrower rule sits in the middle (layoutBlocks
+		// reads Align for a rule).
+		if style.MarginLeftAuto && style.MarginRightAuto {
+			rule.Align = 1
+		}
 		p.tagFlexBlock(&rule, style)
 		rule.Details, rule.DetailsShown = p.detailsTag()
 		p.blocks = append(p.blocks, rule)
@@ -10976,7 +11119,14 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			p.closeInlineRow()
 		}
 		p.flush()
-		p.lists = append(p.lists, webListState{ordered: name == "ol"})
+		state := webListState{ordered: name == "ol"}
+		// <ol start="5"> counts from 5.
+		if v, ok := el.attr("start"); state.ordered && ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > -1<<20 && n < 1<<20 {
+				state.n = n - 1
+			}
+		}
+		p.lists = append(p.lists, state)
 		p.push(el, style, "list", attrs)
 		return
 	}
@@ -11000,6 +11150,14 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "li" {
 		p.closeInlineRow()
 		p.flush()
+		// <li value="10"> renumbers its ordered list from this item on.
+		if n := len(p.lists); n > 0 && p.lists[n-1].ordered {
+			if v, ok := el.attr("value"); ok {
+				if k, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && k > -1<<20 && k < 1<<20 {
+					p.lists[n-1].n = k - 1
+				}
+			}
+		}
 		p.pendingB = p.nextBullet(style)
 		p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
 		// A ::marker rule can replace the bullet and style it. The list
@@ -11136,17 +11294,23 @@ func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string
 		}
 		ctx.cols = &webTableColumns{rows: make(map[int]webTableBorderSpec)}
 		ctx.cols.table = webTableBorderSpecFromStyle(*style, 0)
-		if style.TableSpacingX == 0 && style.TableSpacingY == 0 {
+		// The 2px default holds only when nothing set the spacing: an explicit
+		// `border-spacing: 0` (or cellspacing="0") means no gap at all.
+		if style.TableSpacingX == 0 && style.TableSpacingY == 0 && !style.TableSpacingSet {
 			ctx.spacingX, ctx.spacingY = 2, 2
 		}
 		if ctx.collapse == webBorderCollapseCollapse {
 			ctx.spacingX, ctx.spacingY = 0, 0
 		}
+		// A table narrower than its column is centred by auto margins, or by a
+		// <center>/align="center" parent (text-align: -webkit-center).
+		ctx.center = style.MarginLeftAuto && style.MarginRightAuto || p.topStyle().CenterBlocks
 		style.TableID, style.TableRole = ctx.id, webTableRoleTable
 		style.TableLayout, style.BorderCollapse = ctx.layout, ctx.collapse
 		style.TableSpacingX, style.TableSpacingY = ctx.spacingX, ctx.spacingY
 		style.TableWidthPx, style.TableWidthPct = ctx.width, ctx.widthPct
 		style.TableCols = ctx.cols
+		style.TableCenter = ctx.center
 		p.tables = append(p.tables, ctx)
 		return
 	}
@@ -11159,6 +11323,7 @@ func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string
 	style.TableSpacingX, style.TableSpacingY = ctx.spacingX, ctx.spacingY
 	style.TableWidthPx, style.TableWidthPct = ctx.width, ctx.widthPct
 	style.TableCols = ctx.cols
+	style.TableCenter = ctx.center
 	switch role {
 	case webTableRoleColumnGroup:
 		ctx.colGroupStart = len(ctx.cols.defs)
@@ -11295,11 +11460,18 @@ func (p *webParser) endTag(name string) {
 		}
 		// ::after resolves at the closing tag, after descendants have run
 		// their counter increments, which is when a browser computes it.
+		afterSet := false
 		if p.pseudoMask&(1<<webPseudoElemAfter) != 0 {
 			frame := &p.stack[i]
-			if generated := p.pseudoContent(frame.el, frame.attrs, frame.style, webPseudoElemAfter); generated.Matched && generated.HasContent && generated.Text != "" {
-				p.addTextStyled(generated.Text, generated.Style)
+			if generated := p.pseudoContent(frame.el, frame.attrs, frame.style, webPseudoElemAfter); generated.Matched && generated.HasContent {
+				afterSet = true
+				if generated.Text != "" {
+					p.addTextStyled(generated.Text, generated.Style)
+				}
 			}
+		}
+		if name == "q" && !afterSet {
+			p.addTextStyled("”", p.stack[i].style)
 		}
 		if p.stack[i].kind == "block" || p.stack[i].kind == "list" || p.stack[i].kind == "contents" {
 			p.flush()
@@ -11339,6 +11511,12 @@ func (p *webParser) endTag(name string) {
 
 func (p *webParser) push(el webElement, style webStyle, kind string, attrs string) {
 	depth := len(p.stack)
+	// A block starts a new baseline: only inline boxes carry a sub/super or
+	// relative raise down to their text (webApplyBaselineShift). A block's own
+	// relative offset moves the whole block in layout instead.
+	if kind == "block" || kind == "list" {
+		style.BaselineShift = 0
+	}
 	containerID := 0
 	if style.ContainerType != 0 {
 		p.containerSeq++
@@ -11622,6 +11800,7 @@ func webResetElementStyle(st *webStyle) {
 	st.HasTranslate = false
 	st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = 0, 0, 0, 0
 	st.InsetPct = [4]float64{}
+	st.LineClamp = 0
 }
 
 // Keep the last width declaration this renderer can actually measure. A
@@ -11676,6 +11855,13 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// on <a> or <s> has to keep showing on the <strong>/<span> inside it,
 	// which is how every browser renders `<a><b>text</b></a>`.
 
+	// A font-size in em or % is relative to the parent's size, never to the
+	// tag's own default: `h2 { font-size: 1.5em }` is 24px under 16px text,
+	// not 1.5 × the reader's heading size. The parent's weight, slant and
+	// alignment are kept for `inherit` too.
+	parentFontPx := st.FontPx
+	parentBold, parentItalic := st.Bold, st.Italic
+	parentAlign, parentCenter := st.Align, st.CenterBlocks
 	applyWebTagDefaults(&st, el.tag)
 	webApplyIconFontClass(&st, el.classes)
 
@@ -11721,8 +11907,14 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// stylesheet rule (including a rule that hides an element).
 	// Collapsing the winners into one map also gives var()
 	// and calc() the final value to resolve against, so the property parsers
-	// below only ever see plain lengths and colours.
-	merged := make(map[string]string, 16)
+	// below only ever see plain lengths and colours. The element's
+	// presentation attributes (bgcolor, align, width, <font color>, …) come
+	// first, below every style sheet (webpage_hints.go).
+	hints := p.webPresentationalHints(&el)
+	merged := make(map[string]string, 16+len(hints))
+	for name, value := range hints {
+		merged[name] = value
+	}
 	for _, rule := range matched {
 		for name, value := range rule.decls {
 			merged[name] = value
@@ -11767,12 +11959,29 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 			delete(merged, name)
 		}
 	}
+	cw, ch := p.webOrdinaryContainerSize()
+	// A valid font-size (or font shorthand) replaces the tag's default size and
+	// resolves against the parent's: the element's style starts from that size
+	// again, and the declaration becomes the px it resolved to. `inherit` is
+	// the parent's size, which is how Tailwind's reset sets every heading.
+	if raw, ok := merged["font-size"]; ok {
+		resolved := p.webResolveStyleValueIn(raw, st.Vars, parentFontPx, cw, ch)
+		px, valid := webFontSizePx(resolved, parentFontPx)
+		if webInheritKeyword(resolved) {
+			px, valid = parentFontPx, true
+		}
+		if valid {
+			st.FontPx = parentFontPx
+			merged["font-size"] = strconv.FormatFloat(px, 'f', -1, 64) + "px"
+		}
+	} else if _, ok := merged["font"]; ok {
+		st.FontPx = parentFontPx
+	}
 	base := st
 	base.CQ = nil
 	// `em` inside calc() is this element's font size, which font-size itself
 	// has to settle first.
 	em := st.FontPx
-	cw, ch := p.webOrdinaryContainerSize()
 	if raw, ok := merged["font-size"]; ok {
 		if px, valid := webFontSizePx(p.webResolveStyleValueIn(raw, st.Vars, em, cw, ch), em); valid {
 			em = px
@@ -11782,10 +11991,18 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		if _, present := merged[name]; !present {
 			continue
 		}
-		value, ok := webCascadedSupportedWidth(name, matched, inlineDecls, inlineImportant, func(value string) bool {
+		supported := func(value string) bool {
 			resolved := p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 			return webSupportedWidthValue(name, resolved, em)
-		})
+		}
+		value, ok := webCascadedSupportedWidth(name, matched, inlineDecls, inlineImportant, supported)
+		if !ok {
+			// A presentational width (table/td width="85%") is the bottom of
+			// the author cascade: it holds when no sheet gave a usable one.
+			if hint, has := hints[name]; has && supported(hint) {
+				value, ok = hint, true
+			}
+		}
 		if ok {
 			merged[name], rawDecls[name] = value, value
 		} else {
@@ -11799,6 +12016,22 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	parentHeight := p.webContainingBlockHeight(el)
 	applyWebDecls(&st, merged)
 	webResolvePercentageHeights(&st, merged, parentHeight)
+	// `inherit` on an inherited property is the parent's value even where the
+	// tag has a default of its own (a reset's `h1 { font-weight: inherit }`).
+	if v, ok := merged["font-weight"]; ok && webInheritKeyword(v) {
+		st.Bold = parentBold
+	}
+	if v, ok := merged["font-style"]; ok && webInheritKeyword(v) {
+		st.Italic = parentItalic
+	}
+	if v, ok := merged["text-align"]; ok && webInheritKeyword(v) {
+		st.Align, st.CenterBlocks = parentAlign, parentCenter
+	}
+	webApplyBaselineShift(&st, parentFontPx)
+	// rem is the root element's font size (webSubstituteRootEm).
+	if el.tag == "html" {
+		p.rootFontPx = st.FontPx
+	}
 	if st.BackgroundImage != "" {
 		st.BackgroundImage = p.webImageURL(st.BackgroundImage)
 		if st.BackgroundImage == "" {
@@ -11825,7 +12058,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		st.Backdrop, st.HasBackdrop = webGradientAverage(*st.Gradient), true
 	}
 	if needsCQ {
-		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars, parentHeight: parentHeight}
+		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars, parentHeight: parentHeight, rootPx: p.rootFontPx}
 		p.hasContainerUnits = true
 	}
 	// The anchor target is not a CSS property and is never inherited from a
@@ -12281,7 +12514,18 @@ func (p *webParser) nextBullet(style webStyle) string {
 	if list.ordered {
 		list.n++
 	}
-	return webListMarker(style.ListStyle, list.ordered, list.n)
+	marker := style.ListStyle
+	// A nested bulleted list steps through the UA sheet's markers: disc, then
+	// circle (`ul ul`), then square (`ul ul ul`), however deep.
+	if !list.ordered && marker == webListStyleDefault {
+		switch depth := len(p.lists); {
+		case depth == 2:
+			marker = webListStyleCircle
+		case depth > 2:
+			marker = webListStyleSquare
+		}
+	}
+	return webListMarker(marker, list.ordered, list.n)
 }
 
 func (p *webParser) ensureBlock() *webBlock {
@@ -13736,6 +13980,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if rowW < 32 {
 					rowW = 32
 				}
+				// <center><table width="85%">, or a table with auto margins:
+				// its rows sit in the middle of the column.
+				if block.Style.TableCenter && rowW < groupW {
+					groupPadX += (groupW - rowW) / 2
+				}
 			}
 			l.layoutFlexRow(blocks[i:j], groupPadX, rowW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
@@ -13849,9 +14098,17 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if ruleW < 0 {
 				ruleW = 0
 			}
+			ruleX := padX + indent
+			// A rule narrower than its column (hr width="50%") is centred by
+			// its auto margins, as in a browser.
+			if block.Align == 1 {
+				if free := contentW - indent - ruleW; free > 0 {
+					ruleX += free / 2
+				}
+			}
 			if !block.Style.Invisible {
 				layout.Rects = append(layout.Rects, webRect{
-					Rect:  sdl.Rect{X: padX + indent, Y: y, W: ruleW, H: barW},
+					Rect:  sdl.Rect{X: ruleX, Y: y, W: ruleW, H: barW},
 					Color: webFadeColor(color, d.Paper, block.Style),
 				})
 			}
@@ -13926,7 +14183,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		// `max-width: 560px; margin: 0 auto` is the common page column, and
 		// `width: 60%; margin-inline: auto` is the common centred card; both
 		// used to sit against the left edge because auto resolved to zero.
-		if (block.Style.MarginLeftAuto || block.Style.MarginRightAuto) &&
+		if (block.Style.MarginLeftAuto || block.Style.MarginRightAuto || block.Style.CenterBlocks) &&
 			!block.Float && block.Style.FloatSide == 0 && block.Style.TableRole == webTableRoleNone &&
 			block.FlexGroup == 0 {
 			if free := contentW - paintW; free > 0 {
@@ -13935,6 +14192,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					padX += free / 2
 				case block.Style.MarginLeftAuto:
 					padX += free
+				case block.Style.CenterBlocks && !block.Style.MarginRightAuto:
+					// Inside <center> or align="center" (text-align:
+					// -webkit-center) a narrower box is centred too.
+					padX += free / 2
 				}
 			}
 		}
@@ -13984,9 +14245,25 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		lineStart := padX + textIndent
 		lineRight := lineStart + avail
 		x := lineStart + firstLineIndent
+		// line-clamp: once clampLines lines are set, clampRow is the last one
+		// kept. Every later line is dropped, and the first one dropped puts
+		// "…" at the end of clampRow, since content was cut.
+		clampLines, linesSet := block.Style.LineClamp, 0
+		clampRow, clampCut := -1, false
 
 		flushLine := func(last bool) {
 			if len(line) == 0 {
+				return
+			}
+			if clampRow >= 0 {
+				if !clampCut && clampRow < len(layout.Rows) {
+					webClampEllipsis(layout.Rows[clampRow].Runs, lineRight)
+				}
+				clampCut = true
+				line = nil
+				lineMax, lineFontH = 0, 0
+				lineClipped = false
+				x = lineStart
 				return
 			}
 			lineWidth := lineMax - (padX + textIndent + firstLineIndent)
@@ -14086,6 +14363,9 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if rowAt < len(layout.Rows) {
 				l.placeInlineImages(line, layout.Rows[rowAt].Y, metrics)
 			}
+			if linesSet++; clampLines > 0 && linesSet >= clampLines {
+				clampRow = rowAt
+			}
 			firstLine = false
 			line = nil
 			lineMax, lineFontH = 0, 0
@@ -14094,6 +14374,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 
 		for _, run := range block.Runs {
+			if clampCut {
+				// line-clamp has already cut the block; nothing after it is drawn.
+				break
+			}
 			// An inline image is one unbreakable box on the line, like a long
 			// word: it wraps when it does not fit and is placed once the line
 			// is set (placeInlineImages).
@@ -14142,8 +14426,14 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			for si, segment := range segments {
 				if si > 0 {
 					if len(line) == 0 {
-						// An explicit <br> on an empty line is a blank row.
-						skipRows(1)
+						// An explicit <br> on an empty line is a blank row; a
+						// clamped block counts it as one of its lines.
+						if clampRow < 0 {
+							skipRows(1)
+							if linesSet++; clampLines > 0 && linesSet >= clampLines {
+								clampRow = len(layout.Rows) - 1
+							}
+						}
 					} else {
 						flushLine(true)
 					}
@@ -14182,6 +14472,9 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				transformedPart := make([]bool, len(words))
 				breakParts := 0
 				for wi := 0; wi < len(words); wi++ {
+					if clampCut {
+						break
+					}
 					word := words[wi]
 					if word == "" {
 						continue
