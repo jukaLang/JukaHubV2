@@ -501,7 +501,7 @@ func renderMusicRacer(renderer *sdl.Renderer, config *Config) {
 	}
 	const persp = 4.2 // segments: p = persp/(k+persp)
 	roadBottom := w * 0.46
-	for y := int(horizon) + 1; y < screenHeight; y++ {
+	for y := int(horizon) + 1; y < int(screenHeight); y++ {
 		p := (float64(y) - horizon) / (h - horizon)
 		k := persp*(1/p) - persp
 		if k > racerView {

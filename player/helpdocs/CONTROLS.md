@@ -493,9 +493,13 @@ it can still save) and, if it has not after six seconds, stopped. Nothing is
 drawn and the game is not paused first, so this works when the screen is
 black, when the game ignores the buttons, or when the in-game menu cannot
 come up over it. The motor gives a firm pulse when the hold counts. A tap or
-a short hold of Select + Start is still the game's. If the game was
-JukaHub's own PPSSPP and it had been running for less than a minute, PSP
-games switch to the firmware's PPSSPP for the next game (a toast says so);
+a short hold of Select + Start is still the game's. A PSP game JukaHub was
+watching for its picture (the A133P models, [GAME_LIBRARY.md](GAME_LIBRARY.md#launching))
+says more than the hold: when its picture never reached the screen, PSP
+games get the screen to themselves from the next start (JukaHub closes while
+one plays; a toast says so), and when it did, nothing changes. Where JukaHub
+could not look, a hold within a minute of JukaHub's own PPSSPP starting
+still switches PSP games to the firmware's PPSSPP for the next game;
 choosing JukaHub's PPSSPP on the PSP tile switches back.
 
 In a PSP game, **Menu** also opens PPSSPP's own pause menu, whose **Exit**
