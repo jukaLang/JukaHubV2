@@ -726,16 +726,18 @@ func TestBrowserHeadlessTransformsStayInFlow(t *testing.T) {
 	_, layout := h.load("transforms-ignored", html)
 	raster := h.rasterize("transforms-ignored")
 
+	// translate() moves the box like a browser (80 CSS px is 120 here); the
+	// rotation is not drawn, and the block keeps its place in the flow.
 	moved := h.textRect(layout, "Transformed")
 	control := h.textRect(layout, "Control")
-	if moved.X != control.X {
-		t.Fatalf("ignored transform shifted text horizontally: moved=%+v control=%+v", moved, control)
+	if dx := moved.X - control.X; dx < 110 || dx > 130 {
+		t.Fatalf("translate(80px) moved the text by %d px, want about 120: moved=%+v control=%+v", dx, moved, control)
 	}
-	if moved.Y >= control.Y {
+	if moved.Y-45 >= control.Y {
 		t.Fatalf("transformed block left normal document flow: moved=%+v control=%+v", moved, control)
 	}
 	if len(layout.Floats) != 0 {
-		t.Fatalf("ignored transform created a detached layer: floats=%+v", layout.Floats)
+		t.Fatalf("an in-flow transform created a detached layer: floats=%+v", layout.Floats)
 	}
 	h.requireTextPixels(raster, layout, "Transformed", "transform fallback")
 	h.requireTextPixels(raster, layout, "Control", "transform control")

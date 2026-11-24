@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **402** (audited 2026-11-19).
+Open tasks: **403** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -3630,6 +3630,35 @@ what differs:
    Library views.
 **Verify.** Record in the HW log with a screenshot per step (screenshot mode).
 
+### MOVIES-HW-1 — Movies & TV on a Brick: Jellyfin, network servers and free films (P1, M) [HW] [NET]
+**Why.** Juka, 2026-11-24, relaying testers who want the Brick as a streaming
+movie device. Media → Movies & TV (`media_movies.go`, `dlna.go`,
+`freefilms.go`, the `jfi`/`iav`/`iai` routes in `musicproxy.go`) was written
+without a Go toolchain, a device, a DLNA server or a Jellyfin server; only
+static checks ran.
+**Where.** `media_movies.go`, `dlna.go`, `freefilms.go`, `musicproxy.go`,
+`media_hub.go`, `media_hub_input.go`, `media_hub_render.go`,
+`media_hub_sheet.go`, `streaming.go` (`isDirectStreamURL`),
+`apkstore_verdict.go`; docs/MOVIES_TV.md.
+**Done when.** On a Brick (and a Smart Pro), each step holds or a FIX task
+names what differs:
+1. Media shows Movies & TV second in the strip; with no Jellyfin set up the
+   tab shows On your network, the four free-film rows with posters, and a
+   Connect Jellyfin card that opens the phone set-up.
+2. Free films: A on a feature film starts it within a few seconds (toast
+   "Opening …" first), seeking with L1/R1 works, B and A again resume where it
+   stopped, See all pages on with R2 and shows the Loading more spinner.
+3. Network: a MiniDLNA (or NAS / Windows media sharing / Plex DLNA) server on
+   the same Wi-Fi appears within about five seconds; its folders open and an
+   H.264 file plays; Search again finds a server switched on afterwards.
+4. Jellyfin signed in: Continue watching, Recently added, Movies and TV shows
+   appear with wide pictures; an episode in a season plays, stopping it
+   updates Continue watching (here and in Jellyfin's web app) within a few
+   seconds; an HEVC film plays through the transcode.
+5. The APK Store shows Colosseum's APK as "Can't run", names Qt, and ends with
+   the Movies & TV route.
+**Verify.** Record in the HW log with a screenshot per step (screenshot mode).
+
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
 `mail_*.go`, `calsync*.go`, `mailcal_ui.go`, `companion_mailcal.go`,
@@ -3722,15 +3751,24 @@ use position:fixed and pin to screen"), also unbuilt: the page laid out at
 the view's full width (no 38 em column), `position: fixed` layers pinned to
 the screen with pinned hit rects, every absolute box a layer with a static
 position marker, and sticky wrappers copied whole (`webCollectStickies`).
+2026-11-24 ("make sure font color is correct and the location of items is
+rendered correctly"), also unbuilt: every CSS colour form and exact named
+colours (`webpage_color.go`), composited translucent backdrops, alpha-0
+backgrounds as no surface, the contrast flip only under 1.5:1 and never over
+a photo, light-mode media features, UA link colour on `<a href>` only, no
+`<code>`/`<pre>` panel; flex items content-sized, pixel cross-axis
+alignment against the container's height, stretched cards, column
+`justify-content`/`align-items`, `inset: 0` overlays stretched, grid rows
+snapped to the row grid, in-flow `translate()` and relative backgrounds.
 **Where.** `webpage_svg.go`, `webpage_inline.go`, `webpage_fonts.go`,
 `webpage_paint.go`, `webpage_image.go`, `webpage.go`, `webpage_flow.go`,
 `webpage_hints.go`, `webpage_tune.go`, `webpage_decode.go`,
 `webpage_paintfast.go`, `webpage_table.go`, `webpage_layers.go`,
-`browser.go`, `browserfind.go`, `calculator.go`;
+`webpage_color.go`, `browser.go`, `browserfind.go`, `calculator.go`;
 `calculator.json` beside JukaHub; the JukaHub log (`browser` lines
 "RenderGeometry is unavailable", "Error loading the reader face",
 "reader tune:", "over the … MP limit").
-**Done when.** On a Smart Pro (then a Brick and a Windows PC), and steps 9-17
+**Done when.** On a Smart Pro (then a Brick and a Windows PC), and steps 9-19
 on a Smart Pro S too, each step holds or a FIX task names what differs:
 1. github.com/jukaLang/JukaHubV2 shows the GitHub logo and the octicons in
    the text colour, the README's badge row on one line, and its code blocks
@@ -3813,6 +3851,22 @@ on a Smart Pro S too, each step holds or a FIX task names what differs:
     it on the bottom edge; a cookie wall that covers the screen does not
     block the page. Save the page (or a screenshot of each screen) for the
     next pass if anything still differs.
+18. Colours match a desktop browser on: a Tailwind CSS 4 site (oklch()
+    palette: coloured buttons, badges and dark sections keep their colours,
+    `bg-black/50` overlays are translucent); a shadcn/ui page (`hsl(var(--x))`
+    colours); a site with a dark mode under `prefers-color-scheme: dark` (it
+    shows its light theme, logo included); a page with no CSS (black on white,
+    #0000ee links, no grey panel behind `<pre>`); a news card whose white
+    headline sits on its photo (stays white); and grey captions (`#999`,
+    `#aaa`) that stay grey.
+19. Items sit where a desktop browser puts them: a header whose menu is at the
+    right end (`justify-content: space-between`) and whose links are centred
+    against a taller logo; a full-screen hero whose heading and button are in
+    the middle (`min-height: 100vh` with flex centring); a row of cards with
+    backgrounds ending level; a photo card whose caption overlay sits at the
+    bottom of the photo; a CSS grid of cards followed by the next section with
+    no blank band between them. Link mode's focus ring stays on the words of a
+    link in such a centred row.
 
 ---
 
@@ -4963,10 +5017,6 @@ spread and right-to-left (manga) mode, remembering the page.
 **Done when.** XMLTV EPG for M3U playlists that name one (`url-tvg`), shown as
 now/next in the channel list.
 
-### MED-14 — Media servers on the LAN (P3, M)
-**Done when.** DLNA/UPnP servers are discovered (SSDP) and browsable as a Media
-source; a Kodi remote (parking lot) uses JSON-RPC.
-
 ### MED-15 — Search, tracks and folders in the music library (P3, S)
 **Why.** Music browses the media index (`mlib.go`, `music_shelf.go`) by album,
 artist and audiobook with incremental rescans, but has no search, no list of all
@@ -5126,6 +5176,23 @@ still says "1 chapter(s)" for a one-file book.
 `ctrlMusicPlayer`), `music_shelf.go`, `audiobook_chapters.go`.
 **Done when.** Both layouts list the chapters; Up/Down and A, a click or a tap
 start the chosen one; the shelf counts a probed file's chapters.
+
+### MED-40 — Plex sign-in, libraries and transcoding (P3, M) [NET]
+**Why.** Media → Movies & TV (2026-11-24, `media_movies.go`) streams Jellyfin
+natively, but a Plex server only shows up through its DLNA server: no
+Continue watching, no progress sync, no transcoding for files the handheld
+cannot decode.
+**Where.** A `plex.go` beside `musicsrc_jellyfin.go`; routes in
+`musicproxy.go`; rows in `media_movies.go`.
+**Done when.** A plex.tv/link PIN sign-in (code on screen, no password typed
+on the handheld) finds the account's servers, picks a home-network connection
+before a relay, lists On Deck, Movies and TV shows, plays a file the handheld
+decodes directly and anything else through the universal transcoder at 720p
+H.264, and reports the timeline so Plex keeps where it stopped. The token stays
+in the loopback proxy, never on ffmpeg's command line.
+**Verify.** Against a Plex Media Server on the home network: sign in, play a
+film and an HEVC episode, stop half-way, and the Plex web app shows both in
+Continue Watching at the right place.
 
 ---
 
@@ -7093,6 +7160,8 @@ are rough.
   D-pad (a tile map, a sprite, a few rules) and share its cartridge with
   another JukaHub; a single-file cart (like the fantasy consoles' picture
   carts) and the Nearby devices transfer are the natural carriers.
+- **Kodi remote** (S–M): drive a Kodi box on the home network over its
+  JSON-RPC API (play, pause, seek, browse) from the Media screen.
 - **Xbox 360 digital games** (S): list STFS packages under `Roms/XBOX360`
   (no extension; `LIVE`, `PIRS` or `CON ` magic), titled from the package
   header, for Xenia Canary.

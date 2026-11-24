@@ -335,7 +335,7 @@ func webParseGradient(value string) (webGradient, bool) {
 	}
 	raw := make([]rawStop, 0, len(parts)-start)
 	for _, part := range parts[start:] {
-		color, ok := webColorInValue(part)
+		color, ok := webColorInValueAny(part)
 		if !ok {
 			continue
 		}
@@ -391,6 +391,7 @@ func webParseGradient(value string) (webGradient, bool) {
 		prev = pos
 		stops = append(stops, webGradientStop{Pos: pos, Color: stop.color})
 	}
+	stops = webPremultiplyTransparentStops(stops)
 	if reversed {
 		// Mirroring the ramp is one reverse plus 1-p on every stop; the
 		// positions stay ascending because both operations flip order.
@@ -404,6 +405,63 @@ func webParseGradient(value string) (webGradient, bool) {
 	return webGradient{Stops: stops, Vertical: vertical}, true
 }
 
+// webPremultiplyTransparentStops gives every fully transparent stop the colour
+// of its neighbours. CSS interpolates a gradient in premultiplied alpha, so
+// `transparent, #000` fades black in and `#fff, transparent` fades white out;
+// the reader blends colour and alpha separately, and transparent (black at
+// alpha 0) used to darken a white fade into grey. A transparent stop between
+// two different colours becomes two stops at its place, one per side.
+func webPremultiplyTransparentStops(stops []webGradientStop) []webGradientStop {
+	hasClear := false
+	for _, s := range stops {
+		if s.Color.A == 0 {
+			hasClear = true
+			break
+		}
+	}
+	if !hasClear {
+		return stops
+	}
+	out := make([]webGradientStop, 0, len(stops)+2)
+	for i, s := range stops {
+		if s.Color.A != 0 {
+			out = append(out, s)
+			continue
+		}
+		prev, next := -1, -1
+		for j := i - 1; j >= 0; j-- {
+			if stops[j].Color.A != 0 {
+				prev = j
+				break
+			}
+		}
+		for j := i + 1; j < len(stops); j++ {
+			if stops[j].Color.A != 0 {
+				next = j
+				break
+			}
+		}
+		faded := func(c sdl.Color) webGradientStop {
+			return webGradientStop{Pos: s.Pos, Color: sdl.Color{R: c.R, G: c.G, B: c.B}}
+		}
+		switch {
+		case prev >= 0 && next >= 0:
+			a, b := stops[prev].Color, stops[next].Color
+			out = append(out, faded(a))
+			if a.R != b.R || a.G != b.G || a.B != b.B {
+				out = append(out, faded(b))
+			}
+		case prev >= 0:
+			out = append(out, faded(stops[prev].Color))
+		case next >= 0:
+			out = append(out, faded(stops[next].Color))
+		default:
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // webGradientDirection reads the first argument of linear-gradient(). ok is
 // false when that argument is a colour, which means the direction was left out.
 func webGradientDirection(arg string) (vertical, reversed, ok bool) {
@@ -411,7 +469,7 @@ func webGradientDirection(arg string) (vertical, reversed, ok bool) {
 	if d == "" {
 		return true, false, false
 	}
-	if _, isColor := webColorInValue(d); isColor {
+	if _, isColor := webColorInValueAny(d); isColor {
 		return true, false, false
 	}
 	if angle, isAngle := webGradientAngle(d); isAngle {
@@ -537,7 +595,7 @@ func webGradientColor(value string) (sdl.Color, bool) {
 			break
 		}
 		for _, part := range webSplitTopLevel(value[open+1:end], ',') {
-			if c, ok := webColorInValue(part); ok {
+			if c, ok := webColorInValueAny(part); ok {
 				sumR += float64(c.R)
 				sumG += float64(c.G)
 				sumB += float64(c.B)

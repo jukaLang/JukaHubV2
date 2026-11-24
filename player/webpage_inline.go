@@ -75,6 +75,11 @@ func (p *webParser) addImageElement(style webStyle, src, alt string, attrW, attr
 	}
 	p.flush()
 	p.beginFlexLeaf(style)
+	// A box positioned over this picture later is an overlay on a photo
+	// (webpage_color.go); an icon-sized one is not a photo.
+	if !(attrW > 0 && attrW <= 48 && attrH > 0 && attrH <= 48) {
+		p.markImageInAnchors()
+	}
 	wasDirect := false
 	if ids := p.boxPath(); len(ids) > 0 {
 		wasDirect = p.doc.Boxes[ids[len(ids)-1]].direct

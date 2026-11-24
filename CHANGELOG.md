@@ -13,6 +13,35 @@ For anything older, the git log and the
 
 ### Added
 
+- **Media: Movies & TV** (Juka, 2026-11-24, relaying testers: "make the
+  TrimUI Brick JukaHub a streaming movie and media device" and "can I install
+  this Android APK for movie streaming (Colosseum) through JukaHub?"). A new
+  Media tab, second in the strip ([Movies & TV](docs/MOVIES_TV.md),
+  `player/media_movies.go`): rows like Library's for **Jellyfin** (Continue
+  watching, Recently added, Movies and TV shows with See all; a show opens its
+  seasons, a one-season show its episodes; wide pictures through a new `jfi`
+  proxy route), **On your network** — DLNA / UPnP AV media servers found by an
+  SSDP search with nothing to set up (`player/dlna.go`: NAS boxes, routers,
+  Windows media sharing, MiniDLNA, Serviio, Emby, Plex's DLNA server), browsed
+  folder by folder and played straight from the server, home-network addresses
+  only through the LAN-only dialer — and four rows of **free public-domain
+  films** from the Internet Archive's curated collections (Feature Films,
+  Sci-Fi & Horror, Silent Films, classic cartoons; `player/freefilms.go`): the
+  advanced search lists them, the metadata API picks the H.264 MP4 at most 720
+  lines high, and the `iav`/`iai` loopback routes stream the film and its
+  picture, since the stock ffmpeg has no https. A Connect Jellyfin card opens
+  the phone set-up while no server is signed in; failed sources show a Try
+  again card; Y gives resume, play from the start, Up Next and Favorites; L2/R2
+  step through the list. A plain-http address at a home-network IP now counts
+  as a direct stream (`isDirectStreamURL`), so a media server, NAS or TV tuner
+  plays without yt-dlp. **APK Store:** Qt apps (Colosseum is Qt 6) are
+  recognised and explained, and a video player or streaming app (mpv, VLC,
+  ijkplayer, Media3 FFmpeg, Kodi libraries) ends its cannot-run verdict with
+  the Movies & TV route; a "Movie and TV streaming apps" catalogue entry says
+  the same. Sources that stream films from torrents or unlicensed hosts are
+  not wired in. Static checks only: no Go toolchain or device here
+  (MOVIES-HW-1).
+
 - **Tools: search, pins and five quick tools** (Juka, 2026-11-23: a ranked
   list of "small additions" for the Tools screen — "Search Tools and pin
   favorites", "What's using my card?", "One-tap connection check", "Verify a
@@ -3758,6 +3787,47 @@ For anything older, the git log and the
   crashing input. (OpenSSF Scorecard `Fuzzing`.)
 
 ### Changed
+
+- **The browser draws the page's colours and puts its items where the page
+  does** (Juka, 2026-11-24: "improve web browser even further...make sure font
+  color is correct and the location of items is rendered correctly").
+  **Colours** (new `player/webpage_color.go`): the 148 CSS colour names now have
+  their exact values — `red`, `blue`, `orange`, `gray`, `darkgray` and two dozen
+  more were approximations, and every other name was ignored — and the reader
+  reads `hsl()`/`hwb()`, `lab()`/`lch()`/`oklab()`/`oklch()` (the palette of
+  every Tailwind CSS 4 site), `color()`, `color-mix()` (Tailwind 4's opacity
+  modifiers), `light-dark()`, relative colours and the system colours, where it
+  used to drop the declaration and leave the text its inherited colour. A
+  background with alpha 0 (`rgba(0,0,0,0)`) counted as a black backdrop and
+  turned dark text pale; a translucent surface is now judged as the colour it
+  shows, a translucent text colour (`rgba(0,0,0,.54)`) is drawn as its grey, a
+  translucent page colour is composited over white, a transparent gradient stop
+  fades its neighbour instead of greying it, and `color: transparent` paints
+  nothing. The reader keeps the author's text colour unless it would vanish
+  into the surface (under 1.5:1, was 2.4:1, which repainted `#aaa` captions
+  black), and never over a photo — white headlines on a hero image or a photo
+  card's overlay were turned dark. Media queries answer as a light-mode desktop
+  browser with reduced motion: `prefers-color-scheme: dark` and `light` both
+  used to apply, so the later — usually dark — palette won on white paper, and
+  `hover: none`/`pointer: coarse` held next to their opposites. A page that sets
+  no colours is black on white; only `<a href>` is a link, coloured like one
+  unless the page colours it (the colour around it no longer reaches it, as in
+  a browser); `<code>` and `<pre>` lose the reader's grey panel; `<mark>` is
+  yellow; uncoloured borders take the text colour; `text-shadow` inherits.
+  **Positions:** a flex item with no width of its own is as wide as its content,
+  so `justify-content: space-between` sends a header's menu to the far end (it
+  stopped in the middle, each item taking an equal share of the row) and a lone
+  button centres; cross-axis alignment works in pixels against the tallest item
+  or the container's own `height`/`min-height`, so links sit in the middle of a
+  taller logo and of a 64px bar or a full-screen hero, and stretched cards end
+  level; a column container centres its items (`align-items`) and distributes
+  its height (`justify-content`); an `inset: 0` overlay fills its photo card with
+  its caption at the foot; `space-evenly` is no longer `space-around`. Text in a
+  flex item kept losing its row's own offset (a tall heading, a relatively
+  positioned block), grid cells added rows out of order — a blank stretch after
+  a grid whose tracks were not whole text rows — and a relatively positioned
+  block left its background behind; `transform: translate()` now moves a box in
+  the flow too, and a relative `left: 50%` is half its container.
 
 - **The browser uses the whole screen and pins fixed bars and sticky
   headers** (Juka, 2026-11-24: "cnn.com still doesnt render correctly...feel

@@ -217,6 +217,9 @@ func mediaHubInput(config *Config, in mediaInput) bool {
 		if mediaHub.tab == mediaTabLibrary && mlibDrillBack(config) {
 			break
 		}
+		if mediaHub.tab == mediaTabMovies && mtvDrillBack(config) {
+			break
+		}
 		goBackScene(config)
 	case mediaInSearch:
 		mediaHubOpenSearch(config)
@@ -334,12 +337,15 @@ func mediaHubEnterContent() {
 }
 
 // mediaHubStateAction is the button the content's empty state shows: 0 opens
-// Downloads (offline), 1 loads the list again, 2 scans the Library again, -1
-// when there is none (3, the Library list's Back chip, is pointer only). It
-// follows mediaHubDrawRows, mediaHubDrawGridEmpty and mediaHubDrawLibrary, so
+// Downloads (offline), 1 loads the list again, 2 scans the Library again, 4
+// opens a Movies & TV list again, -1 when there is none (3 and 5, the Library
+// and Movies & TV lists' Back chips, are pointer only). It follows
+// mediaHubDrawRows, mediaHubDrawGridEmpty, mediaHubDrawLibrary and mtvDraw, so
 // A does what the focused button says.
 func mediaHubStateAction(config *Config, online bool) int {
 	switch mediaHub.tab {
+	case mediaTabMovies:
+		return mtvStateAction()
 	case mediaTabForYou:
 		if !online && !mediaHubRowsHaveContent(online) {
 			return 0
@@ -399,6 +405,11 @@ func mediaHubRunStateAction(config *Config, action int) {
 		mlibStartScan(config, true)
 	case 3:
 		mlibDrillBack(config)
+	case 4:
+		PlayActivateSound()
+		mtvRetry("list")
+	case 5:
+		mtvDrillBack(config)
 	}
 }
 

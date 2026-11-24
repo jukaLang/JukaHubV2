@@ -1007,7 +1007,7 @@ func (l *webLayouter) layoutPlaceholder(b webBlock, padX, contentW int32) {
 			layout.Rects = append(layout.Rects, webRect{Rect: sdl.Rect{X: x, Y: y, W: w, H: h}, Color: b.Background, Z: b.ZIndex})
 		}
 		if b.BoxBorder || b.BorderLeft || b.BorderRight || b.BorderTop || b.BorderBottom {
-			color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
+			color := webCurrentColor(b.Style, l.doc)
 			if b.HasBorderColor {
 				color = b.BorderColor
 			}

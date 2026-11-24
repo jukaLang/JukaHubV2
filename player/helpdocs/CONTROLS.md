@@ -1208,6 +1208,12 @@ video or bookmark it without leaving the list. Tapping a pill works too, even on
 a row that is not highlighted. The legacy multi-column grid keeps Left/Right for
 moving between cards, so its buttons are tap-only.
 
+**Movies & TV** (the second chip): **A** plays a film or opens a list (a show,
+a season, a network server's folder, a whole free-film collection), **B** goes
+back up one level, **Y** opens the details (resume, play from the start, Up
+Next, Favorites) and **R2** loads more of a long collection. See
+[Movies & TV](MOVIES_TV.md).
+
 ## Favorites
 
 Favorites is the library, not a second copy of the search list. It opens on

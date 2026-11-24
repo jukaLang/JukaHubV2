@@ -190,6 +190,9 @@ const (
 	webJustifyEnd
 	webJustifyBetween
 	webJustifyAround
+	// Evenly puts the same space before, between and after the items; it used
+	// to read as space-around, whose ends get half a gap.
+	webJustifyEvenly
 )
 
 // Content alignment is the block-axis counterpart of justify-content. It
@@ -351,6 +354,13 @@ type webStyle struct {
 	// contrast-flipped against the page's white paper.
 	Backdrop    sdl.Color
 	HasBackdrop bool
+	// ImageBackdrop marks text over a picture: a covering background image
+	// on the element or an ancestor, or a positioned overlay inside a box that
+	// holds an <img>. Its real backdrop is the photo, whose colour the reader
+	// does not know, so the author's text colour is kept as it is rather than
+	// judged against Backdrop (webReadableColor). Inherited; an opaque fill
+	// below it clears it.
+	ImageBackdrop bool
 	// BackgroundImage is a resolved url() background. The layout carries a
 	// background layer into layout.Images so it paints under the text.
 	BackgroundImage string
@@ -727,8 +737,9 @@ type webStyle struct {
 	IconFont bool
 	// BoxShadowBlur/BoxShadowSpread complete the first visible outer
 	// box-shadow layer, in CSS px: the painter fades the shadow over the blur
-	// and grows the box by the spread (webpage_paint.go). TextShadowBlur is
-	// the text shadow's blur, which only softens its alpha. None inherit.
+	// and grows the box by the spread (webpage_paint.go); neither inherits.
+	// TextShadowBlur is the text shadow's blur, which only softens its alpha;
+	// it inherits with the rest of text-shadow.
 	BoxShadowBlur   float64
 	BoxShadowSpread float64
 	TextShadowBlur  float64
@@ -1420,6 +1431,11 @@ type webLayout struct {
 	// statics holds each layer's static position, keyed by webBlock.Layer:
 	// where its root would have started in the flow (webpage_layers.go).
 	statics map[int]webStaticPos
+	// boxStretch is the height, in layout pixels, a flex or grid item's box is
+	// stretched to (align-items: stretch, the default): the line's or the
+	// track's. The container pass paints the box at least that tall, so a row
+	// of cards ends level (webpage_flow.go).
+	boxStretch map[int]int32
 }
 
 type webBackgroundPaint struct {
@@ -1764,6 +1780,11 @@ type webFrame struct {
 	seq        int
 	blockStart int
 	sticky     int
+	// sawImage is set on the open elements, up to the nearest positioned one,
+	// when a picture is added inside them: an absolutely positioned box opened
+	// later in that containing block is an overlay on the photo
+	// (webParser.anchorSawImage).
+	sawImage bool
 }
 
 // webContainerInfo is one containment container's element facts. The size
@@ -2059,7 +2080,7 @@ func webMediaTokens(s string) []string {
 // range form (`width < 48rem`, `400px <= width <= 700px`), or a bare name.
 func webMediaFeature(inner string, w, h float64) bool {
 	if colon := strings.IndexByte(inner, ':'); colon >= 0 {
-		name := strings.TrimSpace(inner[:colon])
+		name := strings.TrimPrefix(strings.TrimSpace(inner[:colon]), "-webkit-")
 		value := strings.TrimSpace(inner[colon+1:])
 		prefix := ""
 		if strings.HasPrefix(name, "min-") || strings.HasPrefix(name, "max-") {
@@ -2078,6 +2099,9 @@ func webMediaFeature(inner string, w, h float64) bool {
 			want, ok := webMediaRatio(value)
 			return !ok || webMediaCompare(w/h, prefix, want)
 		}
+		if held, known := webMediaDiscrete(name, prefix, value, false); known {
+			return held
+		}
 		have, ok := webMediaDimension(name, w, h)
 		if !ok {
 			return true
@@ -2088,7 +2112,98 @@ func webMediaFeature(inner string, w, h float64) bool {
 	if strings.ContainsAny(inner, "<>=") {
 		return webMediaRange(inner, w, h)
 	}
+	if held, known := webMediaDiscrete(strings.TrimSpace(inner), "", "", true); known {
+		return held
+	}
 	return true
+}
+
+// webMediaDiscrete answers the media features that describe the screen and
+// the reader rather than the viewport's size, the way a light-mode desktop
+// Chrome on an sRGB screen would, with reduced motion: the reader paints a
+// light page, cannot animate (content waiting for a fade-in would stay
+// invisible), takes a hovering pointer's styles (the desktop has a mouse and
+// the handhelds' cursor stands in for one) and runs page scripts. Both
+// halves of a pair — prefers-color-scheme dark and light, hover and none —
+// used to hold at once, so the later rule won: usually the dark palette, on
+// the reader's white paper. bare is the boolean form `(feature)`; known is
+// false for a feature this does not model.
+func webMediaDiscrete(name, prefix, value string, bare bool) (held, known bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	is := func(want string) bool { return bare || value == want }
+	switch name {
+	case "prefers-color-scheme":
+		return is("light"), true
+	case "prefers-reduced-motion":
+		return is("reduce"), true
+	case "prefers-contrast", "prefers-reduced-transparency", "prefers-reduced-data":
+		return !bare && value == "no-preference", true
+	case "forced-colors", "inverted-colors":
+		return !bare && value == "none", true
+	case "hover", "any-hover":
+		return is("hover"), true
+	case "pointer", "any-pointer":
+		return is("fine"), true
+	case "scripting":
+		return is("enabled"), true
+	case "update":
+		return is("fast"), true
+	case "display-mode":
+		return is("browser"), true
+	case "color-gamut":
+		return is("srgb"), true
+	case "dynamic-range", "video-dynamic-range":
+		return is("standard"), true
+	case "overflow-block", "overflow-inline":
+		return is("scroll"), true
+	case "grid":
+		return !bare && value == "0", true
+	case "color", "monochrome", "color-index":
+		// Eight bits a channel, no monochrome or palette screen.
+		have := 0.0
+		if name == "color" {
+			have = 8
+		}
+		if bare {
+			return have > 0, true
+		}
+		want, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return false, true
+		}
+		return webMediaCompare(have, prefix, want), true
+	case "resolution", "device-pixel-ratio":
+		want, ok := webMediaResolution(value, name == "device-pixel-ratio")
+		if bare {
+			return true, true
+		}
+		if !ok {
+			return false, true
+		}
+		return webMediaCompare(webViewportPixelScale(), prefix, want), true
+	}
+	return false, false
+}
+
+// webMediaResolution reads a resolution in dots per CSS pixel: 2dppx, 2x,
+// 192dpi, 75.6dpcm, or the bare number of -webkit-device-pixel-ratio.
+func webMediaResolution(value string, bareNumber bool) (float64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	units := []struct {
+		suffix string
+		scale  float64
+	}{{"dppx", 1}, {"dpcm", 2.54 / 96}, {"dpi", 1.0 / 96}, {"x", 1}}
+	for _, u := range units {
+		if strings.HasSuffix(value, u.suffix) {
+			n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(value, u.suffix)), 64)
+			return n * u.scale, err == nil
+		}
+	}
+	if bareNumber {
+		n, err := strconv.ParseFloat(value, 64)
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // webMediaDimension is the viewport size a width or height feature asks for.
@@ -6708,153 +6823,23 @@ func webSelectorNameByte(c byte) bool {
 
 // --- CSS values -----------------------------------------------------------
 
-var webNamedColors = map[string]sdl.Color{
-	"black":       {R: 0, G: 0, B: 0, A: 255},
-	"white":       {R: 255, G: 255, B: 255, A: 255},
-	"red":         {R: 220, G: 50, B: 47, A: 255},
-	"green":       {R: 40, G: 140, B: 70, A: 255},
-	"blue":        {R: 30, G: 90, B: 200, A: 255},
-	"yellow":      {R: 240, G: 200, B: 0, A: 255},
-	"orange":      {R: 235, G: 130, B: 30, A: 255},
-	"purple":      {R: 120, G: 60, B: 160, A: 255},
-	"gray":        {R: 128, G: 128, B: 128, A: 255},
-	"grey":        {R: 128, G: 128, B: 128, A: 255},
-	"silver":      {R: 192, G: 192, B: 192, A: 255},
-	"maroon":      {R: 128, G: 0, B: 0, A: 255},
-	"olive":       {R: 128, G: 128, B: 0, A: 255},
-	"lime":        {R: 0, G: 200, B: 0, A: 255},
-	"aqua":        {R: 0, G: 180, B: 180, A: 255},
-	"cyan":        {R: 0, G: 180, B: 180, A: 255},
-	"teal":        {R: 0, G: 128, B: 128, A: 255},
-	"navy":        {R: 0, G: 0, B: 128, A: 255},
-	"fuchsia":     {R: 200, G: 40, B: 190, A: 255},
-	"magenta":     {R: 200, G: 40, B: 190, A: 255},
-	"brown":       {R: 140, G: 80, B: 45, A: 255},
-	"pink":        {R: 235, G: 140, B: 175, A: 255},
-	"gold":        {R: 215, G: 175, B: 45, A: 255},
-	"beige":       {R: 245, G: 245, B: 220, A: 255},
-	"ivory":       {R: 255, G: 255, B: 240, A: 255},
-	"khaki":       {R: 240, G: 230, B: 140, A: 255},
-	"coral":       {R: 255, G: 127, B: 80, A: 255},
-	"crimson":     {R: 220, G: 20, B: 60, A: 255},
-	"indigo":      {R: 75, G: 0, B: 130, A: 255},
-	"violet":      {R: 200, G: 130, B: 220, A: 255},
-	"turquoise":   {R: 64, G: 200, B: 190, A: 255},
-	"salmon":      {R: 250, G: 128, B: 114, A: 255},
-	"tomato":      {R: 255, G: 99, B: 71, A: 255},
-	"steelblue":   {R: 70, G: 130, B: 180, A: 255},
-	"darkgray":    {R: 90, G: 90, B: 90, A: 255},
-	"darkgrey":    {R: 90, G: 90, B: 90, A: 255},
-	"lightgray":   {R: 211, G: 211, B: 211, A: 255},
-	"lightgrey":   {R: 211, G: 211, B: 211, A: 255},
-	"whitesmoke":  {R: 245, G: 245, B: 245, A: 255},
-	"gainsboro":   {R: 220, G: 220, B: 220, A: 255},
-	"dimgray":     {R: 105, G: 105, B: 105, A: 255},
-	"transparent": {R: 0, G: 0, B: 0, A: 0},
-}
-
-// parseWebColor handles hex, rgb()/rgba() and the common named colours. Alpha
-// is kept: a translucent gradient overlay is how most hero images stay
-// readable, and dropping it painted the ramp as an opaque sheet over the photo.
+// parseWebColor reads a CSS colour: hex, a named or system colour, or any
+// colour function (webpage_color.go). Alpha is kept: a translucent gradient
+// overlay is how most hero images stay readable, and dropping it painted the
+// ramp as an opaque sheet over the photo. The keyword transparent reports
+// false, which is what callers that look for a surface want; a colour with
+// alpha 0 written any other way (#0000 in Tailwind's empty shadows) is a
+// colour, so a shadow made of it stays invisible.
 func parseWebColor(value string) (sdl.Color, bool) {
 	v := strings.ToLower(strings.TrimSpace(value))
-	if v == "" {
+	if v == "" || v == "transparent" {
 		return sdl.Color{}, false
 	}
-	if strings.HasPrefix(v, "#") {
-		hex := v[1:]
-		switch len(hex) {
-		case 3, 4:
-			r, ok1 := webHexByte(string([]byte{hex[0], hex[0]}))
-			g, ok2 := webHexByte(string([]byte{hex[1], hex[1]}))
-			b, ok3 := webHexByte(string([]byte{hex[2], hex[2]}))
-			if ok1 && ok2 && ok3 {
-				a := uint8(255)
-				if len(hex) == 4 {
-					if v, ok := webHexByte(string([]byte{hex[3], hex[3]})); ok {
-						a = v
-					}
-				}
-				return sdl.Color{R: r, G: g, B: b, A: a}, true
-			}
-		case 6, 8:
-			r, ok1 := webHexByte(hex[0:2])
-			g, ok2 := webHexByte(hex[2:4])
-			b, ok3 := webHexByte(hex[4:6])
-			if ok1 && ok2 && ok3 {
-				a := uint8(255)
-				if len(hex) == 8 {
-					if v, ok := webHexByte(hex[6:8]); ok {
-						a = v
-					}
-				}
-				return sdl.Color{R: r, G: g, B: b, A: a}, true
-			}
-		}
+	c, ok := webCSSColor(v, 0)
+	if !ok {
 		return sdl.Color{}, false
 	}
-	if strings.HasPrefix(v, "rgb") {
-		open := strings.IndexByte(v, '(')
-		close := strings.LastIndexByte(v, ')')
-		if open < 0 || close <= open {
-			return sdl.Color{}, false
-		}
-		parts := strings.FieldsFunc(v[open+1:close], func(r rune) bool { return r == ',' || r == ' ' || r == '/' })
-		if len(parts) < 3 {
-			return sdl.Color{}, false
-		}
-		vals := make([]uint8, 3)
-		alpha := uint8(255)
-		for i := 0; i < 3; i++ {
-			part := strings.TrimSpace(parts[i])
-			percent := strings.HasSuffix(part, "%")
-			part = strings.TrimSuffix(part, "%")
-			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
-			if err != nil {
-				return sdl.Color{}, false
-			}
-			if percent {
-				n = n * 255 / 100
-			}
-			n = math.Round(n)
-			if n < 0 {
-				n = 0
-			}
-			if n > 255 {
-				n = 255
-			}
-			vals[i] = uint8(n)
-		}
-		if len(parts) > 3 {
-			part := strings.TrimSpace(parts[3])
-			percent := strings.HasSuffix(part, "%")
-			part = strings.TrimSuffix(part, "%")
-			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
-			if err == nil {
-				if percent {
-					n = n * 255 / 100
-				} else {
-					n *= 255
-				}
-				n = math.Round(n)
-				if n < 0 {
-					n = 0
-				}
-				if n > 255 {
-					n = 255
-				}
-				alpha = uint8(n)
-			}
-		}
-		return sdl.Color{R: vals[0], G: vals[1], B: vals[2], A: alpha}, true
-	}
-	if c, ok := webNamedColors[v]; ok {
-		if c.A == 0 {
-			return sdl.Color{}, false
-		}
-		return c, true
-	}
-	return sdl.Color{}, false
+	return c.toSDL(), true
 }
 
 func webHexByte(text string) (uint8, bool) {
@@ -7889,26 +7874,38 @@ func webBorderVisible(value string) bool {
 }
 
 // webColorInValue finds the colour in a shorthand such as
-// `background: #123 url(x.png) no-repeat` or `1px solid rgba(0,0,0,.2)`.
+// `background: #123 url(x.png) no-repeat` or `1px solid rgba(0,0,0,.2)`. The
+// value is read in top-level tokens, so a colour function keeps its own spaces,
+// commas and slash (rgb(0 0 0 / 50%), color-mix(in oklab, …)), and a colour
+// inside a gradient or a url() is not taken for the box's own.
 func webColorInValue(value string) (sdl.Color, bool) {
-	if c, ok := parseWebColor(value); ok {
+	return webColorInValueMode(value, false)
+}
+
+// webColorInValueAny is webColorInValue that also accepts the keyword
+// transparent (alpha 0): a gradient stop, a background-color that removes a
+// surface.
+func webColorInValueAny(value string) (sdl.Color, bool) {
+	return webColorInValueMode(value, true)
+}
+
+func webColorInValueMode(value string, transparent bool) (sdl.Color, bool) {
+	parse := func(s string) (sdl.Color, bool) {
+		if transparent && strings.EqualFold(strings.TrimSpace(s), "transparent") {
+			return sdl.Color{}, true
+		}
+		return parseWebColor(s)
+	}
+	if c, ok := parse(value); ok {
 		return c, true
 	}
-	lower := strings.ToLower(value)
-	if idx := strings.Index(lower, "rgb"); idx >= 0 {
-		if open := strings.IndexByte(lower[idx:], '('); open >= 0 {
-			if end := strings.IndexByte(lower[idx+open:], ')'); end >= 0 {
-				if c, ok := parseWebColor(lower[idx : idx+open+end+1]); ok {
+	for _, part := range webSplitTopLevel(value, ',') {
+		for _, field := range webCSSSpaceFields(part) {
+			for _, piece := range webSplitTopLevel(field, '/') {
+				if c, ok := parse(piece); ok {
 					return c, true
 				}
 			}
-		}
-	}
-	for _, field := range strings.FieldsFunc(value, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == ',' || r == '/'
-	}) {
-		if c, ok := parseWebColor(field); ok {
-			return c, true
 		}
 	}
 	return sdl.Color{}, false
@@ -7969,18 +7966,17 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 	case "dd":
 		st.Indent += 40
 	case "pre", "listing":
+		// A browser's <pre> and <code> are monospace and nothing more: the
+		// grey panel the reader used to put behind them was its own, and a
+		// page that wants one says so.
 		st.Pre = true
 		st.WhiteSpace = webWhiteSpacePre
 		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
 		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
-		st.HasBg = true
-		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
 	case "code", "kbd", "samp":
 		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
-		st.HasBg = true
-		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
 	case "tt":
 		st.FontPx *= monoScale
 		st.Mono, st.IconFont = true, false
@@ -8020,8 +8016,10 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		// Definition terms are bold in every browser.
 		st.Bold = true
 	case "mark":
+		// mark { background-color: Mark; color: MarkText }: yellow and black.
 		st.HasBg = true
-		st.Background = sdl.Color{R: 255, G: 233, B: 120, A: 255}
+		st.Background = sdl.Color{R: 255, G: 255, A: 255}
+		st.Color, st.HasColor = sdl.Color{A: 255}, true
 	case "small":
 		st.FontPx /= 1.2
 	case "td", "th":
@@ -8073,21 +8071,41 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["color"]; ok {
-		if c, valid := parseWebColor(v); valid {
-			st.Color, st.HasColor = c, true
-		} else if webInheritKeyword(v) || strings.EqualFold(strings.TrimSpace(v), "currentcolor") {
-			// The colour inherits already; what the keyword changes is that a
-			// link no longer paints in the reader's link blue. Tailwind's reset
-			// is `a { color: inherit }`.
+		switch lower := strings.ToLower(strings.TrimSpace(v)); {
+		case lower == "transparent":
+			// Text that keeps its place and paints nothing (an icon button's
+			// label, a skeleton line): the layout makes such runs invisible.
+			st.Color, st.HasColor = sdl.Color{}, true
+		case lower == "initial":
+			st.Color, st.HasColor = sdl.Color{A: 255}, true
+		case webInheritKeyword(lower) || lower == "currentcolor":
+			// The colour inherits (computeStyle restores the parent's for a
+			// link); what the keyword changes is that a link no longer paints
+			// in link blue. Tailwind's reset is `a { color: inherit }`.
 			st.Link = false
+		default:
+			if c, valid := parseWebColor(v); valid {
+				st.Color, st.HasColor = c, true
+			}
 		}
 	}
-	for _, key := range []string{"background-color", "background"} {
-		if v, ok := decls[key]; ok {
-			if c, valid := webColorInValue(v); valid {
-				st.Background, st.HasBg = c, true
-				break
-			}
+	// background-color decides the surface when the element states one, the
+	// background shorthand otherwise — and a shorthand without a colour
+	// (`background: url(x)`, `none`) resets it to transparent, as a browser's
+	// does. A colour with alpha 0 is no surface at all: it used to count as an
+	// opaque black backdrop and turned dark text pale.
+	bgDecided := false
+	if v, ok := decls["background-color"]; ok {
+		if c, valid := webColorInValueAny(v); valid {
+			webSetBackground(st, c)
+			bgDecided = true
+		}
+	}
+	if v, ok := decls["background"]; ok && !bgDecided {
+		if c, valid := webColorInValueAny(v); valid {
+			webSetBackground(st, c)
+		} else if webBackgroundShorthandClears(v) {
+			st.Background, st.HasBg = sdl.Color{}, false
 		}
 	}
 	// Resolve the comma-separated background layer list. Each layer keeps its
@@ -8211,9 +8229,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		if s, valid := webFirstTextShadow(v, st.FontPx); valid {
 			st.HasTextShadow, st.TextShadowX, st.TextShadowY = true, s.X, s.Y
 			st.TextShadowBlur = s.Blur
+			st.TextShadowColor, st.HasTextShadowColor = sdl.Color{}, false
 			if s.HasColor {
 				st.TextShadowColor, st.HasTextShadowColor = webTextShadowSoften(s.Color, s.Blur), true
 			}
+		} else if !webInheritKeyword(v) {
+			// none, or a shadow that paints nothing: the inherited one stops here.
+			st.HasTextShadow, st.TextShadowX, st.TextShadowY, st.TextShadowBlur = false, 0, 0, 0
+			st.TextShadowColor, st.HasTextShadowColor = sdl.Color{}, false
 		}
 	}
 	// The first visible outer layer of a shadow list lifts the box. An inset
@@ -9824,22 +9847,24 @@ func webPercentValue(value string) (float64, bool) {
 }
 
 func webJustifyValue(value string) int {
-	switch strings.ToLower(strings.TrimSpace(value)) {
+	switch webAlignKeyword(value) {
 	case "center":
 		return webJustifyCenter
 	case "flex-end", "end", "right":
 		return webJustifyEnd
 	case "space-between":
 		return webJustifyBetween
-	case "space-around", "space-evenly":
+	case "space-around":
 		return webJustifyAround
+	case "space-evenly":
+		return webJustifyEvenly
 	}
 	return webJustifyStart
 }
 
 func webAlignValue(value string) int {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "center":
+	switch webAlignKeyword(value) {
+	case "center", "anchor-center":
 		return webItemCenter
 	case "flex-end", "end", "right", "self-end":
 		return webItemEnd
@@ -9847,6 +9872,17 @@ func webAlignValue(value string) int {
 		return webItemStretch
 	}
 	return webItemStart
+}
+
+// webAlignKeyword is an alignment value without its overflow keyword: `safe
+// center` and `unsafe center` centre like `center` (the reader never lets an
+// item overflow its line), and `first baseline` is a baseline.
+func webAlignKeyword(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range [...]string{"safe ", "unsafe ", "first ", "last "} {
+		v = strings.TrimSpace(strings.TrimPrefix(v, prefix))
+	}
+	return v
 }
 
 // webContentAlignValue maps align-content's block-axis distribution. `normal`
@@ -10012,10 +10048,13 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 }
 
 func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []webFetchedSheet) *webDocument {
+	// A page that sets no colours is black text on white, as in a browser
+	// (Canvas and CanvasText); the reader's own softer pair made such a page
+	// look subtly unlike itself.
 	doc := &webDocument{
 		URL:              baseURL,
-		Paper:            sdl.Color{R: 250, G: 251, B: 253, A: 255},
-		Text:             sdl.Color{R: 28, G: 32, B: 38, A: 255},
+		Paper:            sdl.Color{R: 255, G: 255, B: 255, A: 255},
+		Text:             sdl.Color{A: 255},
 		Containers:       make(map[int]webContainerInfo),
 		FlexBoxDepth:     make(map[int]int),
 		FlexItemBoxDepth: make(map[int]map[int]int),
@@ -11062,7 +11101,9 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	}
 	if name == "body" || name == "html" {
 		if style.HasBg {
-			p.doc.Paper = style.Background
+			// The paper is opaque: a translucent page colour is what it shows
+			// over the white canvas (rgba(0,0,0,.02) is a faint grey, not black).
+			p.doc.Paper = webColorOver(style.Background, p.doc.Paper)
 			p.doc.HasPaperGradient = style.HasGradient && style.Gradient != nil
 			if p.doc.HasPaperGradient {
 				p.doc.PaperGradient = *style.Gradient
@@ -11776,6 +11817,9 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		}
 		p.doc.FlexBoxDepth[group] = boxDepth
 		p.doc.FlexScrollX[group] = style.ScrollX
+		if layer != 0 && layer <= len(p.doc.Layers) {
+			p.doc.Layers[layer-1].flexGroup = group
+		}
 		p.flexStack = append(p.flexStack, webFlexFrame{
 			group:             group,
 			depth:             depth,
@@ -11972,8 +12016,8 @@ func webResetElementStyle(st *webStyle) {
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
 	st.Content = ""
 	st.CounterReset, st.CounterIncrement, st.CounterSet = "", "", ""
-	st.HasTextShadow, st.TextShadowX, st.TextShadowY = false, 0, 0
-	st.TextShadowColor, st.HasTextShadowColor = sdl.Color{}, false
+	// text-shadow inherits, as in CSS: a hero's shadowed heading keeps the
+	// shadow on the <span> and <a> inside it.
 	st.DecorationThickness = 0
 	st.DecorationStyle = 0
 	st.VerticalAlign, st.VerticalAlignPx = 0, 0
@@ -11981,7 +12025,7 @@ func webResetElementStyle(st *webStyle) {
 	st.TextOverflow = 0
 	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
 	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
-	st.BoxShadowBlur, st.BoxShadowSpread, st.TextShadowBlur = 0, 0, 0
+	st.BoxShadowBlur, st.BoxShadowSpread = 0, 0
 	st.HasTranslate = false
 	st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = 0, 0, 0, 0
 	st.InsetPct = [4]float64{}
@@ -12047,8 +12091,22 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	parentFontPx := st.FontPx
 	parentBold, parentItalic := st.Bold, st.Italic
 	parentAlign, parentCenter := st.Align, st.CenterBlocks
+	parentColor, parentHasColor := st.Color, st.HasColor
+	parentLink, parentUnderline := st.Link, st.Underline
 	applyWebTagDefaults(&st, el.tag)
 	webApplyIconFontClass(&st, el.classes)
+	// Only an <a> with an href is a link (a:any-link). One without (<a name>,
+	// <a id>) is an anchor target, drawn like the text around it. A link is
+	// coloured by the UA sheet itself, so the colour of the element around it
+	// does not reach it: it is link blue unless the page colours the link
+	// (`color: inherit` included, restored below).
+	isLink := el.tag == "a" && el.hasAttr("href")
+	if el.tag == "a" && !isLink {
+		st.Link, st.Underline = parentLink, parentUnderline
+	}
+	if isLink {
+		st.HasColor = false
+	}
 
 	chain := make([]webElement, 0, len(p.stack)+1)
 	for _, frame := range p.stack {
@@ -12212,6 +12270,9 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	if v, ok := merged["text-align"]; ok && webInheritKeyword(v) {
 		st.Align, st.CenterBlocks = parentAlign, parentCenter
 	}
+	if v, ok := merged["color"]; ok && (webInheritKeyword(v) || strings.EqualFold(strings.TrimSpace(v), "currentcolor")) {
+		st.Color, st.HasColor = parentColor, parentHasColor
+	}
 	webApplyBaselineShift(&st, parentFontPx)
 	// Where a table part puts its cells' content in a taller row, by the
 	// browser's cascade for vertical-align (webpage_table.go).
@@ -12240,15 +12301,34 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	if st.BackgroundLayerCount > 0 {
 		st.BackgroundImage = st.BackgroundLayers[0].Image
 	}
-	// Carry the surface down to the text. A gradient's average is a better
-	// contrast backing than the page paper for a hero's white copy; an image
-	// alone has no reliable colour, so the nearest solid/gradient ancestor
-	// stays in effect.
-	if st.HasBg {
-		st.Backdrop, st.HasBackdrop = st.Background, true
+	// Carry the surface down to the text. A translucent fill is composited
+	// over what is behind it (rgba(255,255,255,.06) on a dark page is dark,
+	// not white), a gradient by its average, and an opaque one hides whatever
+	// was behind. A picture — a covering background image here or above, or an
+	// <img> under a positioned overlay — is a backdrop of unknown colour: the
+	// text on it keeps the author's colour (webReadableColor).
+	under := p.doc.Paper
+	if st.HasBackdrop {
+		under = st.Backdrop
 	}
-	if st.HasGradient && st.Gradient != nil {
-		st.Backdrop, st.HasBackdrop = webGradientAverage(*st.Gradient), true
+	if (st.Position == webPositionAbsolute || st.Position == webPositionFixed) && p.anchorSawImage() {
+		st.ImageBackdrop = true
+	}
+	switch {
+	case st.HasGradient && st.Gradient != nil:
+		avg := webGradientAverage(*st.Gradient)
+		st.Backdrop, st.HasBackdrop = webColorOver(avg, under), true
+		if avg.A == 255 {
+			st.ImageBackdrop = false
+		}
+	case st.HasBg:
+		st.Backdrop, st.HasBackdrop = webColorOver(st.Background, under), true
+		if st.Background.A == 255 {
+			st.ImageBackdrop = false
+		}
+	}
+	if webStyleImageBackdrop(&st) {
+		st.ImageBackdrop = true
 	}
 	if needsCQ {
 		st.CQ = &webCQContext{base: base, decls: rawDecls, vars: st.Vars, parentHeight: parentHeight, rootPx: p.rootFontPx}
@@ -12970,11 +13050,13 @@ func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	st.Control = ctrl
 	ctrl.Width, ctrl.WidthPct, ctrl.Height = style.Width, style.WidthPct, style.Height
 	if boxed && !st.HasBg {
-		// The same filled chip an inline <code> gets, sized by the text it
-		// shows, so a field cannot be mistaken for body copy. An author's
-		// background (including input:disabled) wins over this default.
+		// A filled chip sized by the text it shows, so a field cannot be
+		// mistaken for body copy. An author's background (including
+		// input:disabled) wins over this default. The field's text is read
+		// against the chip, not the page under it.
 		st.HasBg = true
 		st.Background = sdl.Color{R: 232, G: 237, B: 244, A: 255}
+		st.Backdrop, st.HasBackdrop, st.ImageBackdrop = st.Background, true, false
 	}
 	// The italic that marks an empty field's prompt is decided at layout time
 	// instead (webControl.PlaceholderShown): fixing it here left the prompt
@@ -13995,6 +14077,41 @@ func webRelativeOffset(st webStyle, baseSize float64) (int32, int32) {
 	return dx, dy
 }
 
+// webInFlowShift is the rest of an in-flow box's paint offset, known once it
+// is laid out (webRelativeOffset has the lengths): a relative left or right
+// in percent of the containing block's width cw, and translate(), whose
+// percentages are of the box's own width w and height h. A relative top or
+// bottom in percent needs a definite containing height, which a flow block
+// does not have, so it stays 0 as in a browser. Absolute and fixed boxes are
+// layers and move in layoutLayer.
+func webInFlowShift(st webStyle, cw, w, h int32, baseSize float64) (int32, int32) {
+	if baseSize <= 0 || st.Position == webPositionAbsolute || st.Position == webPositionFixed {
+		return 0, 0
+	}
+	dx, dy := 0.0, 0.0
+	if st.Position == webPositionRelative {
+		switch {
+		case st.HasLeft && st.InsetPct[3] != 0:
+			dx += float64(cw) * st.InsetPct[3] / 100
+		case !st.HasLeft && st.HasRight && st.InsetPct[1] != 0:
+			dx -= float64(cw) * st.InsetPct[1] / 100
+		}
+	}
+	if st.HasTranslate {
+		scale := baseSize / 16
+		dx += st.TranslateX*scale + st.TranslatePctX*float64(w)/100
+		// `top: 50%; transform: translateY(-50%)` centres a box in a parent
+		// whose height the reader cannot resolve here: half of the idiom alone
+		// would push the box up out of place, so it stays where the flow put it.
+		pctTop := st.Position == webPositionRelative &&
+			((st.HasTop && st.InsetPct[0] != 0) || (!st.HasTop && st.HasBottom && st.InsetPct[2] != 0))
+		if !pctTop {
+			dy += st.TranslateY*scale + st.TranslatePctY*float64(h)/100
+		}
+	}
+	return int32(math.Round(dx)), int32(math.Round(dy))
+}
+
 // webMarginRows converts a CSS vertical margin to the reader's row grid. The
 // cap keeps a stray large margin from opening a hole bigger than three lines.
 func webMarginRows(cssPx, baseSize float64, rowH int32) int32 {
@@ -14180,6 +14297,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				layout.Rects[i].Rect.X += dx
 				layout.Rects[i].Rect.Y += dy
 			}
+			// The fill is painted from Backgrounds: it moves with its text
+			// and borders (it used to stay behind).
+			for i := bgStart; i < len(layout.Backgrounds); i++ {
+				layout.Backgrounds[i].Rect.X += dx
+				layout.Backgrounds[i].Rect.Y += dy
+			}
 			for i := imageStart; i < len(layout.Images); i++ {
 				layout.Images[i].Rect.X += dx
 				layout.Images[i].Rect.Y += dy
@@ -14243,7 +14366,9 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			l.layoutFlexRow(blocks[i:j], groupPadX, rowW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = 0
-			shiftRelative()
+			// No group-wide relative shift: this block is the first item's,
+			// whose own offset its sub-layout already applied — shifting the
+			// whole row by it moved every other item too.
 			i = j - 1
 			continue
 		}
@@ -14267,7 +14392,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					skipRows(marginRows(lead))
 				}
 				groupPadX, groupW := padX, contentW
-				if heightRows := l.flexColumnHeightRows(block.FlexHeight); heightRows > 0 && flexAutoCount(grouped) > 0 {
+				// A definite height has room to hand out: to the items' auto
+				// margins, or by justify-content (layoutFlexColumnAuto).
+				distributes := flexAutoCount(grouped) > 0 || block.FlexReverse || block.FlexJustify != webJustifyStart
+				if heightRows := l.flexColumnHeightRows(block.FlexHeight); heightRows > 0 && distributes {
 					l.layoutFlexColumnAuto(grouped, block, groupPadX, groupW, heightRows)
 				} else {
 					for k, item := range grouped {
@@ -14281,14 +14409,15 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							itemBlocks = append([]webBlock(nil), item.blocks...)
 							itemBlocks[0].MarginTop = 0
 						}
-						shift := l.flexCrossOffset(itemBlocks, groupW)
-						l.layoutBlocksFlat(itemBlocks, groupPadX+shift, groupW)
+						// Across the column: auto margins, or align-items center
+						// and end at the item's own width (flexColumnCross).
+						itemX, itemW := l.flexColumnCross(itemBlocks, groupPadX, groupW)
+						l.layoutBlocksFlat(itemBlocks, itemX, itemW)
 					}
 				}
 			}
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
 			previousMarginBot = blocks[j-1].MarginBot
-			shiftRelative()
 			i = j - 1
 			continue
 		}
@@ -14998,7 +15127,8 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						Bg:                  run.Style.Background,
 						Control:             run.Style.Control,
 						BoxW:                boxW, BoxH: boxH,
-						Invisible:      run.Style.Invisible,
+						// color: transparent keeps the words' room and paints none.
+						Invisible:      run.Style.Invisible || (run.Style.HasColor && run.Style.Color.A == 0 && run.Style.Control == nil),
 						VerticalOffset: webVerticalOffset(run.Style, font, baseSize),
 					}
 					// Letter spacing changes the advance between glyphs. A run with
@@ -15189,7 +15319,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if thickness > 32 {
 					thickness = 32
 				}
-				color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
+				color := webCurrentColor(block.Style, d)
 				if edge.hasColor {
 					color = edge.color
 				}
@@ -15212,11 +15342,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 		}
 		if height > 0 && !block.Style.Invisible && ((borderPaint && (block.BorderLeft || block.BorderRight || block.BoxBorder || block.BorderTop || block.BorderBottom)) || block.Outline) {
-			// One colour for every edge the block draws: an uncoloured border is
-			// the reader's light hairline, a coloured one is what the sheet
-			// asked for — a `border-left: 4px solid #c00` quote used to render a
-			// grey bar, which is the one thing the author definitely decided.
-			color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
+			// One colour for every edge the block draws: what the sheet asked
+			// for — a `border-left: 4px solid #c00` quote used to render a grey
+			// bar, which is the one thing the author definitely decided — or,
+			// uncoloured, currentColor, the text's own colour, as in a browser.
+			color := webCurrentColor(block.Style, d)
 			if block.HasBorderColor {
 				color = block.BorderColor
 			}
@@ -15332,6 +15462,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			// The row gives a cell's surface its full height (webpage_table.go).
 			webTagCellSurface(layout, block, rectStart, bgStart, paintTop, startGrid*rowH, height)
 		}
+		// A relative left/right in percent is of the containing block's width,
+		// and translate() moves the box by lengths and by percentages of its
+		// own size — `left: 50%; transform: translateX(-50%)` centres it, and
+		// a card pulled up into the hero above by translateY(-60px) overlaps
+		// it. Neither changes the flow.
+		tdx, tdy := webInFlowShift(block.Style, contentW, paintW, height, baseSize)
+		dx, dy = dx+tdx, dy+tdy
 		shiftRelative()
 		l.tagBlockBox(block, rectStart, bgStart)
 	}
@@ -15430,16 +15567,19 @@ func collectWebControls(layout *webLayout) []webLinkHit {
 			}
 			hit := webLinkHit{Row: rowIdx, X: startX, W: endX - startX, Text: strings.TrimSpace(label), Control: ctrl}
 			run := row.Runs[i]
+			// The control is drawn VerticalOffset below its row (a field in a
+			// centred flex item, a grid track's edge); so is its target.
+			y := row.Y + run.VerticalOffset
 			if run.BoxW > 0 && run.BoxH > 0 {
 				hit.W = run.BoxW
-				hit.Box = sdl.Rect{X: run.X, Y: row.Y, W: run.BoxW, H: run.BoxH}
+				hit.Box = sdl.Rect{X: run.X, Y: y, W: run.BoxW, H: run.BoxH}
 			} else if run.Font != nil {
 				// A submit button draws its label as ordinary text and has no
 				// control frame of its own. Its hit box was left at 0×0, so the
 				// D-pad could focus the button but not touch it. Use the measured
 				// run as the hit target, just like a link uses its own extent.
 				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil && w > 0 && h > 0 {
-					hit.Box = sdl.Rect{X: run.X, Y: row.Y, W: int32(w), H: int32(h)}
+					hit.Box = sdl.Rect{X: run.X, Y: y, W: int32(w), H: int32(h)}
 				}
 			}
 			hits = append(hits, hit)
@@ -15495,13 +15635,19 @@ func collectWebLinks(layout *webLayout) []webLinkHit {
 				continue
 			}
 			seen[href] = true
-			links = append(links, webLinkHit{
+			hit := webLinkHit{
 				Row:  rowIdx,
 				X:    startX,
 				W:    endX - startX,
 				Href: href,
 				Text: strings.Join(strings.Fields(label), " "),
-			})
+			}
+			if vo := run.VerticalOffset; vo != 0 && layout.RowH > 0 {
+				// Drawn below its row (a centred flex item, a grid track's exact
+				// edge): the focus ring and the tap target go where the words are.
+				hit.Box = sdl.Rect{X: startX - 4, Y: row.Y + vo - 2, W: endX - startX + 8, H: layout.RowH + 4}
+			}
+			links = append(links, hit)
 		}
 	}
 	return links
@@ -15526,11 +15672,24 @@ func webContrast(a, b sdl.Color) float64 {
 	return (la + 0.05) / (lb + 0.05)
 }
 
-// webReadableColor keeps author colours when they read on the page background
-// and flips them when a page assumed its own background (a common reason a
-// light page renders as invisible text).
-func webReadableColor(fg, bg sdl.Color) sdl.Color {
-	if webContrast(fg, bg) >= 2.4 {
+// webMinTextContrast is the contrast below which the reader takes a text
+// colour for a mistake of its own rather than the author's design: the page
+// assumed a surface the reader did not paint (a background it cannot draw),
+// and the words would vanish into the paper. #aaa on white (2.3:1) is a design
+// choice, a caption or a footer, and is drawn as written; white on white is not.
+const webMinTextContrast = 1.5
+
+// webReadableColor keeps the author's colour, as a browser does, unless it
+// would all but vanish into the backdrop the reader knows for it — then it is
+// flipped to a dark or light ink. Text over a picture (style.ImageBackdrop)
+// and text with a shadow drawn to set it off are the author's own judgement
+// of a backdrop the reader cannot see, and are never flipped.
+func webReadableColor(fg, bg sdl.Color, style webStyle) sdl.Color {
+	if fg.A == 0 || style.ImageBackdrop || webContrast(fg, bg) >= webMinTextContrast {
+		return fg
+	}
+	if style.HasTextShadow && style.HasTextShadowColor && style.TextShadowColor.A >= 128 &&
+		webContrast(fg, style.TextShadowColor) >= 3 {
 		return fg
 	}
 	if webLuminance(bg) > 0.4 {
@@ -15539,29 +15698,44 @@ func webReadableColor(fg, bg sdl.Color) sdl.Color {
 	return sdl.Color{R: 242, G: 245, B: 250, A: 255}
 }
 
+// webLinkBlue and webLinkBlueDark are Chrome's LinkText on a light page
+// (#0000ee) and on a dark one (#9e9eff): an unstyled link on a surface where
+// the first would not read takes the second.
+var (
+	webLinkBlue     = sdl.Color{R: 0, G: 0, B: 238, A: 255}
+	webLinkBlueDark = sdl.Color{R: 158, G: 158, B: 255, A: 255}
+)
+
 func webResolveColor(style webStyle, doc *webDocument) sdl.Color {
-	// An element with its own background (an inline <code> chip, a tinted
-	// box) must be judged against that background, not the page: a light chip
-	// on a dark page would otherwise draw light text on light fill.
+	// Text is judged against the surface it sits on: the element's own fill
+	// composited over the surfaces behind it (Backdrop, computeStyle), or the
+	// paper. A light chip on a dark page would otherwise draw light text on a
+	// light fill.
 	bg := doc.Paper
-	if style.HasBg {
-		bg = style.Background
-	} else if style.HasBackdrop {
+	switch {
+	case style.HasBackdrop:
 		bg = style.Backdrop
+	case style.HasBg:
+		bg = webColorOver(style.Background, doc.Paper)
 	}
 	color := doc.Text
 	if style.HasColor {
 		color = style.Color
 	} else if style.Link {
-		if webLuminance(bg) > 0.4 {
-			color = sdl.Color{R: 20, G: 88, B: 200, A: 255}
-		} else {
-			color = sdl.Color{R: 130, G: 170, B: 255, A: 255}
+		color = webLinkBlue
+		if webContrast(webLinkBlue, bg) < 3 {
+			color = webLinkBlueDark
 		}
+	}
+	// A translucent text colour (rgba(0,0,0,.54), the secondary text of most
+	// design systems) is drawn as the colour it shows on its backdrop. Over a
+	// picture the alpha is kept for the glyph renderer instead.
+	if color.A > 0 && color.A < 255 && !style.ImageBackdrop {
+		color = webColorOver(color, bg)
 	}
 	// Opacity is painted by blending toward the surface the text sits on: the
 	// reader has no compositing layer, and a faded label should still read.
-	return webFadeColor(webReadableColor(color, bg), bg, style)
+	return webFadeColor(webReadableColor(color, bg, style), bg, style)
 }
 
 // webRectCorner is the radius a rect is painted with: the author's

@@ -131,6 +131,21 @@ they were, and Select still opens the menu. The choice is the
   links and fields inside overlays, pinned bars and floated boxes are
   reachable with the D-pad and by tap (and, except on pinned bars, by
   find-in-page).
+* Draw the page's colours as written: every CSS colour form (the exact named
+  colours, `hsl()`, `oklch()` as Tailwind 4 writes its palette, `color-mix()`,
+  `light-dark()`, relative colours), black text on white and blue links when a
+  page sets none, translucent text and surfaces as they look on what is behind
+  them, and the page's light theme rather than its dark one. A link takes the
+  link colour unless the page colours it, `<code>` and `<pre>` get no panel a
+  browser would not draw, and the reader only replaces a text colour that would
+  vanish into the surface it knows for it — never text over a photo.
+* Put items where the page puts them: flex items as wide as their content, so
+  `justify-content` sends a header's menu to the far end and centres a lone
+  button; items centred to the pixel in a taller line or a fixed-height bar or
+  hero; a row of cards ending level; a centred column (`align-items: center`)
+  with its heading and button in the middle; an overlay's caption at the foot of
+  its photo (`inset: 0`); and `transform: translate()` and relative offsets
+  moving a box together with its background.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and positioned layers painted in their stacking

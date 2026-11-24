@@ -221,7 +221,24 @@ JukaHub runs. With GammaOS booted, install F-Droid using Android's normal APK
 installer and try apps there; this has not been tested as a JukaHub flow. The
 release notes document hardware limitations, including Bluetooth and sleep
 issues. Use the release's device-specific image and instructions; the Smart Pro
-S has different hardware and must not use the A133P image.
+S has different hardware and must not use the A133P image. For the **TrimUI
+Brick**, the same author publishes GammaOS Nano
+([GammaOSNext v1.4.1-TRIMUIBRICK](https://github.com/TheGammaSqueeze/GammaOSNext/releases/tag/v1.4.1-TRIMUIBRICK)),
+an Android 14 build that also boots from its own microSD card and leaves the
+stock firmware alone; JukaHub does not run inside it either.
+
+### Streaming and video apps
+
+Testers asked to install an Android movie-streaming app (Colosseum) through
+JukaHub. Colosseum's APK is a Qt 6 app: Qt for Android starts in Java
+(QtActivity), and its window, input, sound and video (libmpv) go through
+Android's framework, so AndroidRT cannot start it; its Linux build is for
+x86-64 PCs only. Stremio, VLC for Android and other video apps are Java apps
+too. The APK Store recognises Qt apps and video players (mpv, VLC, ijkplayer,
+Media3's FFmpeg decoder, Kodi libraries) and ends their verdict with the route
+that works on the handheld: **Media → Movies & TV** ([MOVIES_TV.md](MOVIES_TV.md))
+— your Jellyfin server, the media servers on your home network and free
+public-domain films.
 
 ## AndroidPak: NDK-only games without Android (Tier 1)
 

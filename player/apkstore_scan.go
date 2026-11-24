@@ -550,6 +550,7 @@ func apkStoreAnalyze(p string, withIcon bool) (info apkStoreInfo) {
 		Split:          m.Split,
 		SplitsRequired: splitsRequired,
 		Entry:          info.Entry,
+		Media:          apkStoreMediaApp(libNames),
 	})
 
 	if withIcon {

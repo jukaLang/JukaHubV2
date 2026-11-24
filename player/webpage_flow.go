@@ -13,6 +13,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -155,10 +156,20 @@ func (l *webLayouter) flexColumnHeightRows(height float64) int32 {
 // mergeFlexSubLayout moves one measured item into the page row grid. The item
 // is measured at x=0, so its painted boxes and runs move together here.
 func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
+	l.mergeFlexSubLayoutShift(sub, x, rowOffset, 0)
+}
+
+// mergeFlexSubLayoutShift is mergeFlexSubLayout with the item dropped a
+// further shift pixels inside its rows: a centred item in a flex line, a grid
+// item at its track's exact pixel edge. The page keeps its uniform row grid —
+// each run stays in the page row its own row maps to and is drawn lower by
+// the shift and by any offset its row had in the item (a tall line centred in
+// its slots, a relatively positioned block), which used to be lost here.
+func (l *webLayouter) mergeFlexSubLayoutShift(sub *webLayout, x, rowOffset, shift int32) {
 	if sub == nil {
 		return
 	}
-	dy := rowOffset * l.rowH
+	dy := rowOffset*l.rowH + shift
 	ensureRows := func(last int32) {
 		for int32(len(l.layout.Rows)) <= last && len(l.layout.Rows) < webMaxRows {
 			idx := int32(len(l.layout.Rows))
@@ -171,8 +182,12 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 		if target < 0 || target >= int32(len(l.layout.Rows)) {
 			continue
 		}
+		// Where the row's text belongs on the page, against where the page row
+		// it joins is drawn.
+		extra := dy + row.Y - l.layout.Rows[target].Y
 		for _, run := range row.Runs {
 			run.X += x
+			run.VerticalOffset += extra
 			if run.HasClip {
 				run.Clip.X += x
 				run.Clip.Y += dy
@@ -220,6 +235,43 @@ func (l *webLayouter) mergeFlexSubLayout(sub *webLayout, x, rowOffset int32) {
 	// A positioned subtree that started inside the item keeps its static
 	// position, moved with the item (webpage_layers.go).
 	l.mergeStatics(sub, x, dy)
+	for id, h := range sub.boxStretch {
+		l.stretchBox(id, h)
+	}
+}
+
+// stretchBox records that box id is painted at least h layout pixels tall:
+// a flex or grid item stretched to its line or track (layout.boxStretch).
+func (l *webLayouter) stretchBox(id int, h int32) {
+	if l == nil || l.layout == nil || id == 0 || h <= 0 {
+		return
+	}
+	if l.layout.boxStretch == nil {
+		l.layout.boxStretch = make(map[int]int32, 4)
+	}
+	if h > l.layout.boxStretch[id] {
+		l.layout.boxStretch[id] = h
+	}
+}
+
+// stretchFlexItem gives a stretched flex or grid item the cross size of its
+// line or track: the surface its own block painted in the sub-layout
+// (stretchGridItemBackgrounds), and the box of a wrapper item, which the
+// container pass paints later from its runs (stretchBox). An item with a
+// height of its own keeps it.
+func (l *webLayouter) stretchFlexItem(sub *webLayout, b webBlock, contentH, lineH int32) {
+	if sub == nil || lineH <= contentH || b.Style.Height > 0 || l.doc == nil {
+		return
+	}
+	stretchGridItemBackgrounds(sub, contentH, lineH)
+	depth := l.doc.FlexItemBoxDepth[b.FlexGroup][b.FlexItem]
+	if depth <= 0 || depth > len(b.Boxes) {
+		return
+	}
+	id := b.Boxes[depth-1]
+	if info, ok := l.doc.Boxes[id]; ok && info.style.Height <= 0 && !info.anchor {
+		l.stretchBox(id, lineH)
+	}
 }
 
 // mergeStatics moves a sublayout's layer static positions into this layout.
@@ -235,90 +287,108 @@ func (l *webLayouter) mergeStatics(sub *webLayout, dx, dy int32) {
 	}
 }
 
-// mergeFlexSubLayoutAtY merges a measured sublayout at an exact pixel Y. The
-// ordinary merge snaps to the text-row grid, which would round a 40px grid
-// track up to two 29px rows; explicit grid tracks need their authored pixel
-// edges, so their rows and paint layers keep the measured offset here.
+// mergeFlexSubLayoutAtY merges a measured sublayout at an exact pixel Y.
+// Explicit grid tracks need their authored pixel edges (a 40px track is not
+// two 29px rows), so the paint layers keep the exact offset and each text row
+// joins the page row it falls in, drawn the rest of the way down
+// (mergeFlexSubLayoutShift). It used to append a page row at every new Y: rows
+// out of grid order, painted out of turn, and — the page's height being its
+// row count — a blank stretch after every grid whose tracks were not whole
+// rows.
 func (l *webLayouter) mergeFlexSubLayoutAtY(sub *webLayout, x, y int32) {
-	if sub == nil {
+	if sub == nil || l.rowH <= 0 {
 		return
 	}
-	for _, row := range sub.Rows {
-		targetY := y + row.Y
-		target := -1
-		for i := len(l.layout.Rows) - 1; i >= 0; i-- {
-			if l.layout.Rows[i].Y == targetY {
-				target = i
-				break
-			}
-			if l.layout.Rows[i].Y < targetY {
-				break
-			}
-		}
-		if target < 0 {
-			target = len(l.layout.Rows)
-			l.layout.Rows = append(l.layout.Rows, webRow{Y: targetY})
-		}
-		for _, run := range row.Runs {
-			run.X += x
-			if run.HasClip {
-				run.Clip.X += x
-				run.Clip.Y += y
-			}
-			l.layout.Rows[target].Runs = append(l.layout.Rows[target].Runs, run)
-		}
+	rowOffset := y / l.rowH
+	if y < 0 && y%l.rowH != 0 {
+		rowOffset--
 	}
-	for _, rect := range sub.Rects {
-		rect.Rect.X += x
-		rect.Rect.Y += y
-		if rect.HasClip {
-			rect.Clip.X += x
-			rect.Clip.Y += y
-		}
-		l.layout.Rects = append(l.layout.Rects, rect)
-	}
-	for _, bg := range sub.Backgrounds {
-		bg.Rect.X += x
-		bg.Rect.Y += y
-		l.layout.Backgrounds = append(l.layout.Backgrounds, bg)
-	}
-	for _, im := range sub.Images {
-		im.Rect.X += x
-		im.Rect.Y += y
-		if im.HasClip {
-			im.Clip.X += x
-			im.Clip.Y += y
-		}
-		l.layout.Images = append(l.layout.Images, im)
-	}
-	for _, video := range sub.Videos {
-		video.Rect.X += x
-		video.Rect.Y += y
-		if video.HasClip {
-			video.Clip.X += x
-			video.Clip.Y += y
-		}
-		l.layout.Videos = append(l.layout.Videos, video)
-	}
-	for _, float := range sub.Floats {
-		float.X += x
-		float.Y += y
-		l.layout.Floats = append(l.layout.Floats, float)
-	}
-	l.mergeStatics(sub, x, y)
+	l.mergeFlexSubLayoutShift(sub, x, rowOffset, y-rowOffset*l.rowH)
 }
 
-// layoutFlexColumnAuto is the column counterpart of the row main-axis path.
-// It measures each item, hands the container's spare block rows to the same
-// flexAutoSpaces allocator the row uses, and then merges the items at those
-// offsets. It is only used when the container has a definite block height.
+// layoutFlexSingle lays out a flex row's only item where its container puts
+// it. justify-content center or end moves an item narrower than the row (a
+// lone button, a logo) along it — the item is as wide as its content, as
+// flex-basis: auto makes it — and a definite container height (a 64px header
+// around one wrapper, a full-screen hero around one block) gives
+// align-items/align-self center or end, or a top auto margin, room to drop it.
+// It reports false, having done nothing, when the item simply fills the row,
+// as every single item used to.
+func (l *webLayouter) layoutFlexSingle(item webFlexItem, first webBlock, padX, contentW int32) bool {
+	if len(item.blocks) == 0 || l.baseSize <= 0 || l.rowH <= 0 {
+		return false
+	}
+	b := item.blocks[0]
+	x, w := padX, contentW
+	justify := first.FlexJustify
+	if first.FlexReverse {
+		// row-reverse starts at the right.
+		switch justify {
+		case webJustifyStart:
+			justify = webJustifyEnd
+		case webJustifyEnd:
+			justify = webJustifyStart
+		}
+	}
+	if justify != webJustifyStart && justify != webJustifyBetween && b.FlexGrow <= 0 {
+		// The item is laid out at its own width, as each item of a longer
+		// row is (layoutFlexRowItems): its width, basis or max-width, or its
+		// content's.
+		itemW := l.itemWidth(b, contentW)
+		if itemW <= 0 {
+			itemW = l.shrinkToFitWidth(item.blocks, contentW)
+		}
+		if itemW > 0 && itemW < contentW {
+			shift := (contentW - itemW) / 2
+			if justify == webJustifyEnd {
+				shift = contentW - itemW
+			}
+			x, w = padX+shift, itemW
+		}
+	}
+	align := b.FlexAlign
+	if b.AlignSelf >= 0 {
+		align = b.AlignSelf
+	}
+	crossStart, _ := flexAutoCross(b)
+	crossMoves := first.FlexHeight > 0 && (align == webItemCenter || align == webItemEnd || crossStart)
+	if x == padX && w == contentW && !crossMoves {
+		return false
+	}
+	sub := &webLayout{RowH: l.rowH}
+	sl := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
+		spaceWidths: l.spaceWidths, sanitized: l.sanitized, boxOverride: l.boxOverride,
+		containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
+	sl.primeItemContainerWidths(item.blocks, w)
+	sl.layoutBlocksFlat(item.blocks, 0, w)
+	l.absorbContainerRows(sl.containerRows)
+	extent := webFlexCellExtent(sub)
+	lineH, drop := extent, int32(0)
+	if crossMoves {
+		lineH = max(extent, int32(math.Round(first.FlexHeight*l.baseSize/16)))
+		drop = webFlexCrossDrop(b, align, lineH-extent)
+	}
+	baseRow := int32(len(l.layout.Rows))
+	need := baseRow + max(int32(len(sub.Rows)), (lineH+l.rowH-1)/l.rowH)
+	for int32(len(l.layout.Rows)) < need && len(l.layout.Rows) < webMaxRows {
+		l.layout.Rows = append(l.layout.Rows, webRow{Y: int32(len(l.layout.Rows)) * l.rowH})
+	}
+	l.mergeFlexSubLayoutShift(sub, x, baseRow+drop/l.rowH, drop%l.rowH)
+	return true
+}
+
+// layoutFlexColumnAuto lays out a column flex container with a definite
+// block height. It measures each item, hands the spare rows to the items'
+// auto margins (the same flexAutoSpaces allocator the row uses) or, when no
+// item has one, to justify-content — a hero's heading and button in the
+// middle or at the foot of a full-screen section — and merges the items at
+// those offsets, each placed across the column by flexColumnCross.
 func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock, padX, contentW, containerRows int32) {
 	type measuredItem struct {
 		item     webFlexItem
 		sub      *webLayout
+		x        int32
 		rows     int32
-		before   int32
-		after    int32
 		gapAbove int32
 	}
 	gap := webMarginRows(block.FlexGapY, l.baseSize, l.rowH)
@@ -336,30 +406,66 @@ func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock
 			blocks = append([]webBlock(nil), item.blocks...)
 			blocks[0].MarginTop = 0
 		}
+		x, w := l.flexColumnCross(blocks, padX, contentW)
 		sub := &webLayout{RowH: l.rowH}
 		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, constraintSkip: l.constraintSkip, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
 			spaceWidths: l.spaceWidths, sanitized: l.sanitized,
 			containerSizes: l.containerSizes, containerRows: make(map[int]webContainerRowSpan)}
-		subLayouter.primeItemContainerWidths(blocks, contentW)
-		subLayouter.layoutBlocksFlat(blocks, 0, contentW)
+		subLayouter.primeItemContainerWidths(blocks, w)
+		subLayouter.layoutBlocksFlat(blocks, 0, w)
 		l.absorbContainerRows(subLayouter.containerRows)
 		rows := int32(len(sub.Rows))
 		if rows < 1 && webItemVisible(blocks[0]) {
 			rows = 1
 		}
 		total += gapAbove + rows
-		measured = append(measured, measuredItem{item: item, sub: sub, rows: rows, gapAbove: gapAbove})
+		measured = append(measured, measuredItem{item: item, sub: sub, x: x, rows: rows, gapAbove: gapAbove})
 	}
 	free := containerRows - total
 	if free < 0 {
 		free = 0
 	}
 	startSpace, endSpace := flexAutoSpaces(grouped, free)
+	lead, between := int32(0), int32(0)
+	if flexAutoCount(grouped) == 0 && free > 0 && len(measured) > 0 {
+		n := int32(len(measured))
+		justify := block.FlexJustify
+		if block.FlexReverse {
+			// column-reverse starts at the bottom: its start packs the items
+			// at the foot and its end at the top (the caller has already put
+			// the items in visual order).
+			switch justify {
+			case webJustifyStart:
+				justify = webJustifyEnd
+			case webJustifyEnd:
+				justify = webJustifyStart
+			}
+		}
+		switch justify {
+		case webJustifyCenter:
+			lead = free / 2
+		case webJustifyEnd:
+			lead = free
+		case webJustifyBetween:
+			if n > 1 {
+				between = free / (n - 1)
+			}
+		case webJustifyAround:
+			between = free / n
+			lead = between / 2
+		case webJustifyEvenly:
+			between = free / (n + 1)
+			lead = between
+		}
+	}
 	baseRow := int32(len(l.layout.Rows))
-	cursor := baseRow
+	cursor := baseRow + lead
 	for i := range measured {
 		m := &measured[i]
 		cursor += m.gapAbove
+		if i > 0 {
+			cursor += between
+		}
 		before, after := startSpace[i], endSpace[i]
 		if block.FlexReverse {
 			// flexAutoMain reports main-start/main-end. In a column-reverse
@@ -367,8 +473,7 @@ func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock
 			before, after = after, before
 		}
 		cursor += before
-		x := padX + l.flexCrossOffset(m.item.blocks, contentW)
-		l.mergeFlexSubLayout(m.sub, x, cursor)
+		l.mergeFlexSubLayout(m.sub, m.x, cursor)
 		cursor += m.rows + after
 	}
 	targetRows := containerRows
@@ -379,6 +484,164 @@ func (l *webLayouter) layoutFlexColumnAuto(grouped []webFlexItem, block webBlock
 		idx := int32(len(l.layout.Rows))
 		l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
 	}
+}
+
+// flexColumnCross places a column flex item across the column: x is its left
+// edge and w the measure it is laid out in. Auto margins come first
+// (flexCrossOffset). Otherwise align-self, or the container's align-items,
+// decides: stretch (the default) keeps the whole column; center and end move
+// an item without a width of its own to the middle or the right at its
+// content's width, as a browser shrinks it — a hero's heading and button sit
+// in the middle with no text-align — and start shrinks an item that paints a
+// box (a tag, a badge) so its surface hugs its text.
+func (l *webLayouter) flexColumnCross(blocks []webBlock, padX, contentW int32) (int32, int32) {
+	if len(blocks) == 0 || l.baseSize <= 0 {
+		return padX, contentW
+	}
+	if shift := l.flexCrossOffset(blocks, contentW); shift > 0 {
+		return padX + shift, contentW
+	}
+	b := blocks[0]
+	if start, end := flexAutoCross(b); start || end {
+		return padX, contentW
+	}
+	align := b.FlexAlign
+	if b.AlignSelf >= 0 {
+		align = b.AlignSelf
+	}
+	if align == webItemStretch {
+		return padX, contentW
+	}
+	scale := l.baseSize / 16
+	if b.Width > 0 || b.WidthPct > 0 {
+		// The item has a width of its own. When its first block is the item
+		// itself, the block pass applies that width and only the place moves;
+		// a wrapper's width lives on its box, which the item's layout does
+		// not apply again, so it keeps the column as before.
+		if b.Style.Width != b.Width || b.Style.WidthPct != b.WidthPct {
+			return padX, contentW
+		}
+		w := webBlockContentWidth(b, contentW, l.baseSize) + int32(math.Round((b.Indent+b.Style.IndentRight)*scale))
+		if free := contentW - w; free > 0 {
+			switch align {
+			case webItemCenter:
+				return padX + free/2, contentW
+			case webItemEnd:
+				return padX + free, contentW
+			}
+		}
+		return padX, contentW
+	}
+	if align == webItemStart && !b.HasBg && !b.HasGradient && !b.BoxBorder && !b.Style.HasBoxShadow {
+		return padX, contentW
+	}
+	w := l.shrinkToFitWidth(blocks, contentW)
+	if w <= 0 || w >= contentW {
+		return padX, contentW
+	}
+	switch align {
+	case webItemCenter:
+		return padX + (contentW-w)/2, w
+	case webItemEnd:
+		return padX + contentW - w, w
+	}
+	return padX, w
+}
+
+// shrinkToFitWidth is the width a flex item without one of its own takes when
+// it is not stretched: its widest line — one block's runs side by side, the
+// blocks under each other — with its padding, never wider than avail. 0 when
+// the item cannot be measured that way (a nested flex or grid row, a table, a
+// video or a preformatted block): it then keeps the whole column.
+func (l *webLayouter) shrinkToFitWidth(blocks []webBlock, avail int32) int32 {
+	if l.baseSize <= 0 || avail <= 0 {
+		return 0
+	}
+	scale := l.baseSize / 16
+	widest := int32(0)
+	for bi := range blocks {
+		b := &blocks[bi]
+		if len(b.FlexTrail) > 0 || b.Style.TableRole != webTableRoleNone || b.Video || b.Placeholder || b.Rule ||
+			!webWhiteSpaceWraps(b.WhiteSpace) || b.Pre || b.Style.WidthPct > 0 {
+			return 0
+		}
+		pad := int32(math.Round((b.Indent + b.Style.IndentRight) * scale))
+		if b.Image {
+			iw := l.intrinsicImageWidth(b)
+			if iw <= 0 {
+				// A picture of unknown or relative width cannot say how wide
+				// its item is.
+				return 0
+			}
+			widest = max(widest, iw+pad)
+			continue
+		}
+		if b.Style.Width > 0 {
+			// A block with a width of its own is that wide, whatever its text.
+			bw := int32(math.Round(b.Style.Width * scale))
+			if b.Style.BoxSizing != 1 {
+				bw += pad
+			}
+			widest = max(widest, bw)
+			continue
+		}
+		line, lineMax := int32(0), int32(0)
+		for ri, run := range b.Runs {
+			if run.Image != nil {
+				iw := l.intrinsicImageWidth(run.Image)
+				if iw <= 0 {
+					return 0
+				}
+				line += iw
+				continue
+			}
+			if ctrl := run.Style.Control; ctrl != nil && (ctrl.Kind == "text" || ctrl.Kind == "textarea") {
+				w := int32(ctrl.Width * scale)
+				if ctrl.WidthPct > 0 {
+					w = int32(float64(avail) * ctrl.WidthPct / 100)
+				}
+				if w <= 0 {
+					w = int32(l.baseSize * 12)
+				}
+				line += w
+				continue
+			}
+			text := run.Text
+			if ri == 0 {
+				text = strings.TrimLeft(text, " \t")
+			}
+			if ri == len(b.Runs)-1 {
+				text = strings.TrimRight(text, " \t")
+			}
+			font := l.styledFont(run.Style)
+			if font == nil {
+				return 0
+			}
+			for si, segment := range strings.Split(text, "\n") {
+				if si > 0 {
+					// A line break: the next segment starts a new line.
+					lineMax = max(lineMax, line)
+					line = 0
+				}
+				segment = webTransformWord(segment, run.Style.Transform)
+				if segment == "" {
+					continue
+				}
+				w, _, err := font.SizeUTF8(segment)
+				if err != nil {
+					return 0
+				}
+				line += int32(w) + int32(math.Round(run.Style.LetterSpacing*scale))*int32(utf8.RuneCountInString(segment))
+			}
+		}
+		widest = max(widest, max(lineMax, line)+pad)
+	}
+	if widest <= 0 {
+		return 0
+	}
+	// The line builder measures word by word; a few pixels of slack keep the
+	// rounding from wrapping the last word.
+	return min(widest+int32(math.Ceil(6*scale)), avail)
 }
 
 // A direct flex or grid child can contain several paragraphs. They share one
@@ -836,7 +1099,9 @@ func (l *webLayouter) paintContainerBoxes() {
 		if err != nil {
 			return
 		}
-		y := rowY + oy
+		// The text is drawn VerticalOffset below its row (a baseline, a
+		// centred flex item, a grid track's exact edge); its box follows it.
+		y := rowY + oy + run.VerticalOffset
 		for _, id := range run.Boxes {
 			span := spans[id]
 			if span == nil {
@@ -979,9 +1244,13 @@ func (l *webLayouter) paintContainerBoxes() {
 				h += int32(math.Round((info.style.PadTop + info.style.PadBot) * scale))
 			}
 		}
-		// min-height remains a floor for either kind of wrapper.
+		// min-height remains a floor for either kind of wrapper, and so does
+		// the line or track a stretched flex or grid item fills (boxStretch).
 		if minH := int32(math.Round(info.style.MinHeight * scale)); minH > h {
 			h = minH
+		}
+		if s := l.layout.boxStretch[id]; s > h && info.style.Height <= 0 {
+			h = s
 		}
 		// A card at the top of the page can have padding above its first line;
 		// the page clip starts at zero, so keep the painted box on-page and
@@ -1191,10 +1460,11 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 				continue
 			}
 			seen = true
+			y := row.Y + run.VerticalOffset
 			minX = min32(minX, run.X)
-			minY = min32(minY, row.Y)
+			minY = min32(minY, y)
 			maxX = max(maxX, run.X+int32(w))
-			maxY = max(maxY, row.Y+int32(h))
+			maxY = max(maxY, y+int32(h))
 			width = max(width, run.BoxWidth)
 		}
 	}
@@ -1241,6 +1511,11 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	h := maxY - minY + top + bottom
 	if floor := int32(math.Round(max(info.style.Height, info.style.MinHeight) * scale)); floor > h {
 		h = floor
+	}
+	if s := l.layout.boxStretch[id]; s > h && info.style.Height <= 0 {
+		// A stretched flex or grid item: the badge at its foot sits at the
+		// bottom of the line, not of the item's own text.
+		h = s
 	}
 	if w <= 0 || h <= 0 {
 		return sdl.Rect{}, false
@@ -2068,6 +2343,10 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 			per := extra / int32(activeTracks)
 			gapForTracks += per
 			leading = per / 2
+		case webJustifyEvenly:
+			per := extra / int32(activeTracks+1)
+			gapForTracks += per
+			leading = per
 		}
 	}
 	offsets := gridTrackOffsets(tracks, gapForTracks, usedCols)
@@ -2340,7 +2619,7 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 			free := areaH - cell.contentH
 			startAuto, endAuto := flexAutoCross(b)
 			if free > 0 && cell.align == webItemStretch && !startAuto && !endAuto && b.Style.Height <= 0 {
-				stretchGridItemBackgrounds(cell.sub, cell.contentH, areaH)
+				l.stretchFlexItem(cell.sub, b, cell.contentH, areaH)
 			}
 			drop := int32(0)
 			switch {
@@ -2450,7 +2729,9 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 	keepRow := !first.FlexWrap && l.flexInFixedHeightBox(first)
 	autoCount := flexAutoCount(grouped)
 	if singleFull && n == 1 && autoCount == 0 {
-		l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
+		if !l.layoutFlexSingle(grouped[0], first, padX, contentW) {
+			l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
+		}
 		return
 	}
 
@@ -2671,6 +2952,35 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 			continue
 		}
 		auto = append(auto, i)
+	}
+	// Items with no width, basis or grow of their own are as wide as their
+	// content (flex-basis: auto), and justify-content places the room left
+	// over: a header's logo at one end and its menu at the other, a centred
+	// pair of buttons, a row of tags packed to the left. They used to share the
+	// whole row in equal columns, which put a space-between menu in the
+	// middle of the bar. Content wider than the row shrinks below (each item
+	// in proportion to its width, never under its longest word), so a
+	// paragraph beside a button gives up the room, not the button. Items the
+	// reader cannot measure (a nested row, a picture of unknown size) keep the
+	// equal shares.
+	if len(auto) > 0 && totalGrow == 0 && !tableRow && !gridMode {
+		natural := make([]int32, len(auto))
+		measured := true
+		for k, idx := range auto {
+			w := l.shrinkToFitWidth(grouped[idx].blocks, avail)
+			if w <= 0 {
+				measured = false
+				break
+			}
+			natural[k] = max(w, minWidths[idx])
+		}
+		if measured {
+			for k, idx := range auto {
+				widths[idx] = natural[k]
+				fixed += natural[k]
+			}
+			auto = auto[:0]
+		}
 	}
 
 	if fixed > avail {
@@ -2894,6 +3204,9 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 			if n > 0 {
 				gapExtra = free / n
 			}
+		case webJustifyEvenly:
+			start = free / (n + 1)
+			gapExtra = start
 		}
 	}
 
@@ -2983,45 +3296,117 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 		}
 	}
 
+	// The cross axis is aligned in pixels: an item is as tall as what it
+	// paints (a 40px logo is 40px, not the two grid rows it reserves), the line
+	// as tall as its tallest item — or as the container, when it has a
+	// definite height (a 64px header bar) — and a centred item drops by half
+	// the difference. The old row-quantised drop left a nav's links at the top
+	// of a taller logo, and every item at the top of a fixed-height bar.
+	extents := make([]int32, len(cells))
+	lineH := int32(0)
+	for i, cell := range cells {
+		if tableRow {
+			// A table cell's surface spans whole rows (webStretchTableCell).
+			extents[i] = int32(len(cell.sub.Rows)) * l.rowH
+		} else {
+			extents[i] = webFlexCellExtent(cell.sub)
+		}
+		lineH = max(lineH, extents[i])
+	}
+	if singleFull && !tableRow && first.FlexHeight > 0 {
+		lineH = max(lineH, int32(math.Round(first.FlexHeight*l.baseSize/16)))
+	}
+	lineRows := max(maxRows, (lineH+l.rowH-1)/l.rowH)
 	baseRow := int32(len(l.layout.Rows))
-	need := baseRow + maxRows
+	need := baseRow + lineRows
 	for int32(len(l.layout.Rows)) < need && len(l.layout.Rows) < webMaxRows {
 		idx := int32(len(l.layout.Rows))
 		l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
 	}
 
 	for i, cell := range cells {
-		rows := int32(len(cell.sub.Rows))
-		drop := int32(0)
-		crossStart, crossEnd := flexAutoCross(grouped[i].blocks[0])
-		freeRows := maxRows - rows
-		switch {
-		case crossStart && crossEnd:
-			drop = freeRows / 2
-		case crossStart:
-			drop = freeRows
-		case crossEnd:
-			drop = 0
-		default:
-			switch cell.align {
-			case webItemCenter:
-				drop = freeRows / 2
-			case webItemEnd:
-				drop = freeRows
-			}
+		free := max(lineH-extents[i], 0)
+		drop := webFlexCrossDrop(grouped[i].blocks[0], cell.align, free)
+		if crossStart, crossEnd := flexAutoCross(grouped[i].blocks[0]); !tableRow && free > 0 && cell.align == webItemStretch && !crossStart && !crossEnd {
+			// align-items: stretch (the default): the item is as tall as its
+			// line, so a row of cards ends level.
+			l.stretchFlexItem(cell.sub, grouped[i].blocks[0], int32(len(cell.sub.Rows))*l.rowH, lineH)
 		}
 		if tableRow {
 			// A table cell's background and borders fill the row however
 			// short its content is; the content sits by its vertical-align
 			// (webpage_table.go).
-			webStretchTableCell(cell.sub, webTableCellKey(grouped[i].blocks[0].Style), freeRows*l.rowH, drop*l.rowH)
+			webStretchTableCell(cell.sub, webTableCellKey(grouped[i].blocks[0].Style), free, drop)
 		}
 		// Merge every layer the item measured, not just its text, boxes and
 		// images: a card's gradient/background image, an embedded video and a
 		// positioned badge all live beside the rows and used to disappear when
 		// the card was a flex or grid item.
-		l.mergeFlexSubLayout(cell.sub, cellX[i], baseRow+drop)
+		l.mergeFlexSubLayoutShift(cell.sub, cellX[i], baseRow+drop/l.rowH, drop%l.rowH)
 	}
+}
+
+// webFlexCrossDrop is how far down its line a flex item goes: free is the
+// line's height less the item's, in pixels. Auto margins on the cross axis
+// take the space first; otherwise align-self (or the container's
+// align-items) decides — the start, the middle or the end.
+func webFlexCrossDrop(b webBlock, align int, free int32) int32 {
+	if free <= 0 {
+		return 0
+	}
+	crossStart, crossEnd := flexAutoCross(b)
+	switch {
+	case crossStart && crossEnd:
+		return free / 2
+	case crossStart:
+		return free
+	case crossEnd:
+		return 0
+	}
+	switch align {
+	case webItemCenter:
+		return free / 2
+	case webItemEnd:
+		return free
+	}
+	return 0
+}
+
+// webFlexCellExtent is how tall a measured flex item is in pixels: its text
+// rows, surfaces and pictures. Rows it only reserves to round a picture up to
+// the row grid do not count; a whole row or more past its content (a
+// min-height, a padded box) does, since that is the item's own box.
+func webFlexCellExtent(sub *webLayout) int32 {
+	if sub == nil || sub.RowH <= 0 {
+		return 0
+	}
+	rowsH := int32(len(sub.Rows)) * sub.RowH
+	content := int32(0)
+	for i, row := range sub.Rows {
+		if len(row.Runs) > 0 {
+			content = max(content, int32(i+1)*sub.RowH)
+		}
+	}
+	for _, bg := range sub.Backgrounds {
+		if !bg.Shadow {
+			content = max(content, bg.Rect.Y+bg.Rect.H)
+		}
+	}
+	for _, r := range sub.Rects {
+		if !r.Shadow {
+			content = max(content, r.Rect.Y+r.Rect.H)
+		}
+	}
+	for _, im := range sub.Images {
+		content = max(content, im.Rect.Y+im.Rect.H)
+	}
+	for _, v := range sub.Videos {
+		content = max(content, v.Rect.Y+v.Rect.H)
+	}
+	if content <= 0 || rowsH-content >= sub.RowH {
+		return rowsH
+	}
+	return content
 }
 
 // drawWebLayer paints one layer whose top-left corner is at (rect.X+f.X, top)

@@ -175,6 +175,10 @@ type webLayerInfo struct {
 	outerFlex  int
 	rootBox    int
 	key        webStackKey
+	// flexGroup is the flex or grid container the root itself opens (0 when
+	// it is a plain block): a layer stretched between its top and bottom
+	// insets hands that container its height (layoutLayer).
+	flexGroup int
 }
 
 // webLayerGroup is the blocks of one layer, in document order. layer is 0 for
@@ -617,6 +621,24 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 			b.FlexTrail = b.FlexTrail[1:]
 		}
 	}
+	// An absolute box held by both its top and its bottom inset, with no
+	// height of its own, is as tall as the room between them (inset: 0): an
+	// overlay over its photo card, a scrim, a side rail. Its own flex or grid
+	// container is given that height, so its content sits where the box puts
+	// it — the caption at the foot of the photo, the play button in the middle
+	// (it used to hang at the top) — and its surface fills the room below.
+	roomH := int32(0)
+	if layered && st.Position == webPositionAbsolute && st.HasTop && st.HasBottom && st.Height <= 0 &&
+		!(st.MarginTopAuto && st.MarginBotAuto) {
+		roomH = anchor.H - webInsetPx(st.Top, st.InsetPct[0], anchor.H, scale) - webInsetPx(st.Bottom, st.InsetPct[2], anchor.H, scale)
+		if css := float64(roomH)/scale - st.PadTop - st.PadBot; css > 0 && info.flexGroup != 0 {
+			for i := range blocks {
+				if blocks[i].FlexGroup == info.flexGroup && css > blocks[i].FlexHeight {
+					blocks[i].FlexHeight = css
+				}
+			}
+		}
+	}
 	sub := &webLayout{RowH: l.rowH}
 	sl := &webLayouter{
 		doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
@@ -651,6 +673,10 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 	h := webLayerExtent(sub)
 	if h <= 0 {
 		h = l.rowH
+	}
+	if roomH > h {
+		webStretchLayerSurface(sub, info.rootBox, h, roomH)
+		h = roomH
 	}
 
 	// Percentage insets resolve against the containing block (a fixed box's
@@ -862,6 +888,38 @@ func webLayerExtent(sub *webLayout) int32 {
 		h = max(h, v.Rect.Y+v.Rect.H)
 	}
 	return h
+}
+
+// webStretchLayerSurface grows a layer measured `from` pixels tall to `to`:
+// its root's own surface — the fill, the background layers, the border box,
+// the side bars, the shadow — reaches the new bottom, and a bottom border bar
+// moves down to it. The content stays where the layout put it.
+func webStretchLayerSurface(sub *webLayout, rootBox int, from, to int32) {
+	if sub == nil || rootBox == 0 || to <= from {
+		return
+	}
+	extra := to - from
+	grow := func(r *sdl.Rect) {
+		if r.Y+r.H < from-2 {
+			// It ends above the old bottom: not a surface of the whole box.
+			return
+		}
+		if r.Y <= sub.RowH {
+			r.H += extra
+		} else {
+			r.Y += extra
+		}
+	}
+	for i := range sub.Rects {
+		if r := &sub.Rects[i]; r.BoxID == rootBox && !r.Inner {
+			grow(&r.Rect)
+		}
+	}
+	for i := range sub.Backgrounds {
+		if bg := &sub.Backgrounds[i]; bg.BoxID == rootBox && !bg.Inner {
+			grow(&bg.Rect)
+		}
+	}
 }
 
 // webRectsOverlap reports whether two rectangles share any area.

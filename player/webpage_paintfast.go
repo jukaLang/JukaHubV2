@@ -168,7 +168,9 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 			continue
 		}
 		if run.BoxW > 0 && run.BoxH > 0 {
-			webPaintFill(r, x0+run.X, y, run.BoxW, run.BoxH, 3, run.Bg)
+			// The field's frame goes where its text goes: VerticalOffset below
+			// the row (a field in a centred flex item or a grid track).
+			webPaintFill(r, x0+run.X, y+run.VerticalOffset, run.BoxW, run.BoxH, 3, run.Bg)
 			continue
 		}
 		startX := x0 + run.X - 2

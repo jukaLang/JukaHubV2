@@ -88,6 +88,12 @@ func isDirectStreamURL(raw string) bool {
 	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
 		return false
 	}
+	// A media server, NAS or TV tuner on the home network serves the file
+	// itself, whatever its address ends in (Media › Movies & TV's network
+	// servers): yt-dlp has nothing to resolve there.
+	if mediaLANStreamHost(s) {
+		return true
+	}
 	// Strip query/fragment before looking at the extension: HLS manifests and
 	// progressive files often carry signed query strings.
 	cut := strings.IndexAny(s, "?#")
@@ -989,7 +995,18 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 		startEmbeddedPlayback(config, url, startSec, false)
 		return playbackStarted
 	}
-	ytDlpPath, missing, err := resolvePlaybackTools(prepareCtx, config)
+	var ytDlpPath, missing string
+	var err error
+	if isDirectStreamURL(url) && !toolPathRunnable(getToolPath("yt-dlp", config)) {
+		// A direct stream (a home media server, a free film through the
+		// proxy, a live channel) needs only ffmpeg: yt-dlp would only be the
+		// download fallback, and fetching it first kept a home server's film
+		// from playing without the internet.
+		missing = "ffmpeg"
+		_, err = helperToolPathCtx(prepareCtx, "ffmpeg", config)
+	} else {
+		ytDlpPath, missing, err = resolvePlaybackTools(prepareCtx, config)
+	}
 	if err != nil {
 		finishVideoPrepare(prepareSeq)
 		if prepareCtx.Err() != nil {
@@ -1019,6 +1036,13 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 	if started {
 		finishVideoPrepare(prepareSeq)
 		return playbackStarted
+	}
+	if ytDlpPath == "" {
+		// A direct stream that did not open, with no yt-dlp to download it.
+		finishVideoPrepare(prepareSeq)
+		logDebug("stream", "%s: %s did not open and yt-dlp is not installed", logLabel, sanitizeLogURL(url))
+		showToast("This video did not open — is its server still on?", ToastError())
+		return playbackAttemptFailed
 	}
 	// Every streaming strategy failed: this is the slow path, and it is worth
 	// saying so in the log next to the reasons logged above.

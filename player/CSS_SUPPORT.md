@@ -71,6 +71,23 @@ gap, not a silent promise.
   `min-width: auto` gives each item a min-content floor measured from its
   longest unbreakable word; the floor participates in basis resolution,
   wrapping and the shrink pass, while `min-width: 0` disables it.
+  An item with no width, basis or grow of its own is as wide as its content
+  (`flex-basis: auto`), so `justify-content` places the room left over — a
+  header's logo at one end and its menu at the other, a row of tags packed to
+  the start — and content wider than the row shrinks in proportion to each
+  item's width; items the reader cannot measure (a nested row, a picture of
+  unknown size) share the row. `space-evenly` is distinct from
+  `space-around`, and `safe`/`unsafe` alignment keywords are read. A lone item
+  is placed too (`justify-content: center` centres a single button).
+- Cross-axis alignment is in pixels: an item is as tall as what it paints, a
+  line as tall as its tallest item or as the container's definite `height` /
+  `min-height` (a 64px header bar, a full-screen hero), and `align-items` /
+  `align-self` `center` and `end` drop an item inside it — a nav's links sit
+  in the middle of a taller logo. `stretch` (the default) gives every item the
+  line's height, so a row of cards ends level. In a column container with a
+  definite height, `justify-content` distributes the spare rows, and
+  `align-items` `center`/`end` put an item without a width of its own in the
+  middle or at the end of the column at its content's width.
 - Width (lengths and percentages), `height`/`min-height`/`max-height` in
   pixels and percentages against a definite parent height, `min-width`/`max-width`,
   `box-sizing: content-box/border-box` (padding is included in border-box
@@ -97,7 +114,11 @@ gap, not a silent promise.
   pictures give it its rectangle. A box without insets keeps its static
   position, where its markup would have put it in the flow. A layer without a
   width shrinks to its widest line; one with both inline edges set stretches
-  between them; both insets with a width and `margin: auto` centre it. A
+  between them; both insets with a width and `margin: auto` centre it. An
+  absolute box held by both its `top` and `bottom` (`inset: 0`) with no height
+  of its own is as tall as the room between them: its surface fills it, and
+  its own flex or grid container gets that height, so an overlay's caption
+  sits at the foot of its photo and a play button in its middle. A
   positioned container whose children all left the flow keeps a line and its
   height of its own.
 - `position: fixed` boxes are layers pinned to the screen — at their top or
@@ -134,9 +155,13 @@ gap, not a silent promise.
   its own padding, background, border and radius. A block-level sibling ends
   the row. An `<li>` with `display: inline` or `inline-block` has no marker.
 - `transform: translate()`, `translateX()`, `translateY()` and
-  `translate3d()` (lengths and percentages of the box) on absolutely and
-  fixed positioned boxes, after their size is known, and percentage insets
-  resolved against the containing block.
+  `translate3d()` (lengths and percentages of the box), after its size is
+  known: a positioned layer moves by it, and so does a box in the flow without
+  leaving its place there (`left: 50%; transform: translateX(-50%)` centres a
+  relatively positioned block; a card pulled up into a hero overlaps it).
+  Percentage insets resolve against the containing block; a relative
+  `left`/`right` in percent against its width. A relatively positioned block
+  moves with its background.
 - `line-clamp` and `-webkit-line-clamp` (on `display: -webkit-box` with
   `-webkit-box-orient: vertical`, the only place browsers honour the prefixed
   form): the element keeps that many lines of its text, and the last kept
@@ -179,9 +204,37 @@ gap, not a silent promise.
 
 ### Typography and paint
 
-- Colour, background colour, linear/radial/conic gradients and opacity.
-  `color: inherit` / `currentColor` on a link keeps the surrounding text
-  colour instead of the reader's link blue (Tailwind's reset).
+- Colour, background colour, linear/radial/conic gradients and opacity, with
+  every CSS colour form (`webpage_color.go`): hex, the 148 named colours at
+  their exact values (`red` is #ff0000), the system colours (`Canvas`,
+  `CanvasText`, `LinkText`, `ButtonFace`, `Mark`, …) as a light-mode Chrome
+  has them, `rgb()`/`hsl()`/`hwb()` in the comma and space syntaxes,
+  `lab()`/`lch()`/`oklab()`/`oklch()` (Tailwind CSS 4's palette), `color()`
+  in the predefined spaces (display-p3 and the rest mapped into sRGB),
+  `color-mix()` (Tailwind 4's opacity modifiers, mixed with premultiplied
+  alpha), `light-dark()` (the light value) and relative colours
+  (`rgb(from var(--brand) r g b / 50%)`).
+- A page that sets no colours is black text on white, links #0000ee. Only an
+  `<a>` with an `href` is a link: its colour is the link colour unless the
+  page colours the link itself — the colour of the text around it does not
+  reach it, as in a browser — and `color: inherit` / `currentColor` takes the
+  surrounding colour (Tailwind's reset). `<a name>` is plain text. An
+  unstyled link on a dark surface takes Chrome's dark-scheme link colour.
+- Translucent colours are what they look like on their backdrop: a text
+  colour such as `rgba(0,0,0,.54)` is drawn as that grey, a translucent fill
+  (`rgba(255,255,255,.06)` on a dark page) is judged as the colour it shows,
+  a background with alpha 0 (`rgba(0,0,0,0)`, `transparent`) is no surface,
+  and a translucent page colour is composited over white. `color:
+  transparent` keeps the words' room and paints nothing. A transparent
+  gradient stop fades its neighbour in or out (premultiplied), not through
+  grey.
+- The reader keeps the author's text colour. It only replaces one that would
+  all but vanish into the surface the reader knows for it (contrast under
+  1.5:1 — the page assumed a background the reader could not draw); text over
+  a picture (a covering background image, or a positioned overlay on an
+  `<img>`) and text with a contrasting shadow are never changed.
+- Borders and outlines without a colour are drawn in `currentColor`.
+  `text-shadow` inherits; `text-shadow: none` ends an inherited one.
 - Font size (up to twice the body size), weight (a real bold face: Inter
   SemiBold, or an emboldened copy of a picked UI face; numeric weights from
   600 up are bold), text transform, text align (including `justify`), line
@@ -281,6 +334,14 @@ gap, not a silent promise.
   a renderer without it draws the picture square), so a `50%` avatar is a
   circle.
 - Links, focus outlines and reader selection states.
+- Media features beyond the viewport size are answered as a light-mode desktop
+  Chrome on an sRGB screen with reduced motion: `prefers-color-scheme: light`,
+  `prefers-reduced-motion: reduce` (content waiting for a fade-in is shown),
+  `hover: hover`, `pointer: fine`, `scripting: enabled`, `forced-colors: none`,
+  `prefers-contrast: no-preference`, `display-mode: browser`, `color`,
+  `monochrome`, `grid` and `resolution` (the reader's CSS pixel scale). A dark
+  palette written for `prefers-color-scheme: dark` no longer replaces the
+  light one, and a `<picture>` source for dark mode is not picked.
 
 ## HTML elements
 
@@ -293,7 +354,8 @@ gap, not a silent promise.
   times their parent's size with Chrome's em margins; `p`, `pre`,
   `blockquote` and `figure` have one em above and below; `blockquote` and
   `figure` are indented 40px on both sides (no rule), `dd` 40px on the left;
-  `code`, `kbd`, `samp`, `tt` and `pre` are 13/16 of the surrounding size;
+  `code`, `kbd`, `samp`, `tt` and `pre` are 13/16 of the surrounding size and
+  monospace, with no background of their own; `mark` is yellow with black text;
   `small` and `sup`/`sub` are a step smaller, `big` a step larger; `th` is
   bold and centred; `q` is quoted (“ ”) unless the page's own `::before` /
   `::after` content replaces the quotes; `abbr[title]` has a dotted
@@ -350,14 +412,14 @@ mistaken for working CSS.
 | `position: fixed` too big to pin, and boxes covering the screen | A fixed box taller than the view, or most of it across most of the width (a drawer, a consent panel), scrolls with the page (one on the bottom edge after its last line). A fixed box, or an absolute one with no positioned ancestor (a positioned `<html>`/`<body>` counts as none), that covers the whole screen (`inset: 0`, or most of the viewport both ways: a modal backdrop, a cookie wall) keeps its child blocks in the flow, since the reader cannot press its close button; only its own text is a layer. A fixed box inside a positioned layer stays in that layer's flow. |
 | Stacking contexts from `isolation`, `filter`, `will-change`, `contain`, `mix-blend-mode` | Not recognised; z-index only nests inside positioned, fixed, sticky, translucent and translated ancestors. Positioned boxes in the flow paint with the flow: their z-index orders surfaces, not text. |
 | `box-shadow` inset; more than one shadow layer; `text-shadow` blur | Only the first visible outer box-shadow layer is painted; a text shadow's blur only lowers its alpha. |
-| `transform` (except `translate` on positioned boxes), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; no visual transform. In-flow boxes stay where the flow puts them. |
+| `transform` (except `translate`), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; rotate, scale and skew are not drawn, so content stays upright. A translated box in the flow is painted moved and keeps its place in the flow. |
 | SVG `<text>`, `<image>`, filters, masks, clip paths, patterns, markers, dashes and `<foreignObject>`; external `<use href="sprite.svg#icon">` | Skipped; the rest of the drawing renders. |
 | non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
 | `list-style-image`, `list-style-position` | Accepted; markers are text only. |
 | `background-clip: text` | The glyphs take the gradient's average colour; the ramp is not clipped to the letter shapes. |
 | `line-clamp` on a wrapper whose text sits in child blocks | Only the element's own lines are clamped; a clamp on a wrapper of paragraphs does not count their lines. |
-| `vertical-align: baseline` and lengths in table cells | Read as top; content moves by whole text rows, so `middle` centres it to the nearest row. |
+| `vertical-align: baseline` and lengths in table cells | Read as top. |
 | Presentation attributes not listed above (`frame`/`rules`, a table's `align="left"/"right"`) | Ignored; CSS for the same properties works. |
 | `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
@@ -380,13 +442,13 @@ feature that regresses paint or box flow fails the suite.
 | Floats and `clear` | `FloatsAndClear` | Float shrink-to-fit uses the widest run. |
 | Four-side borders, styles, radius | `BordersAndRadius` | Radius is clamped to the used box; no elliptical radii. |
 | Opacity | `OpacityPaintsThrough` | Opacity multiplies paint, not an isolated compositing group. |
-| Transforms | `TransformsStayInFlow` | `transform` is accepted but deliberately not applied; content stays readable in normal flow. |
+| Transforms | `TransformsStayInFlow` | `translate()` moves an in-flow box without taking it out of the flow; `rotate()` is not drawn, so content stays readable. |
 | Text alignment, decoration, line height, letter spacing | `TextMetricsAndDecoration` and `JustifiedText` | Justification stretches automatic word gaps; a line with no gaps stays left-aligned. |
 | Table borders, collapsed separators, padding, spans | `TableSpanPaddingAndBorders` | Column-level borders/backgrounds are not painted. |
 | Image dimensions, natural size, `object-fit`/`max-width` | `ImageSizingAndFit` | Natural size is capped to the page width and four-thirds screen height. |
 | Background colour/image layers, repeat, position | `BackgroundLayersRepeatAndPosition` | Four layers and 512 tiles per block are the cap. |
 | Relative/absolute/fixed offsets | `PositionedOffsets` | `fixed` is pinned to the view (the fixture paints at scroll 0). A positioned subtree is one layer (`StickyHeaderAndOverlay`). |
-| Media queries and meta viewport | `MediaQueriesAndViewportMeta` | Width-based `@media` is evaluated against the reader viewport; printable/device-specific queries do not change layout. |
+| Media queries and meta viewport | `MediaQueriesAndViewportMeta` | Width-based `@media` is evaluated against the reader viewport; print queries do not apply, and device features (colour scheme, hover, pointer, motion) answer as a light-mode desktop browser with reduced motion. |
 | Default and disabled form controls | `FormControlStates` | Native OS widgets are replaced by reader-drawn controls. |
 
 The full list of accepted-but-not-rendered CSS remains the table above; the

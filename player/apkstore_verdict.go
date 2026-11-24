@@ -117,6 +117,7 @@ const (
 	apkEngineFlutter        = "Flutter"
 	apkEngineReactNative    = "React Native"
 	apkEngineXamarin        = "Xamarin / .NET"
+	apkEngineQt             = "Qt"
 )
 
 // apkEngineLibs maps a library base name to the engine it gives away. The
@@ -150,8 +151,38 @@ var apkEngineLibs = map[string]string{
 // a Unity game bundling SDL for its controller support is a Unity game.
 var apkEngineOrder = []string{
 	apkEngineMinecraft, apkEngineXamarin, apkEngineUnity, apkEngineUnreal, apkEngineGodot,
-	apkEngineGameMaker, apkEngineLove, apkEngineCocos, apkEngineFlutter, apkEngineReactNative, apkEngineSDL,
+	apkEngineGameMaker, apkEngineLove, apkEngineCocos, apkEngineFlutter, apkEngineReactNative, apkEngineQt, apkEngineSDL,
 }
+
+// apkMediaLibs are libraries that give a video player or streaming app away
+// (mpv, VLC, ijkplayer, Media3's FFmpeg decoder, Kodi). Their verdict points
+// at the route that plays films here instead (apkStoreMediaRoute).
+var apkMediaLibs = map[string]bool{
+	"libmpv.so":       true,
+	"libvlc.so":       true,
+	"libvlcjni.so":    true,
+	"libijkplayer.so": true,
+	"libijkffmpeg.so": true,
+	"libffmpegJNI.so": true,
+	"libkodi.so":      true,
+}
+
+// apkStoreMediaApp reports an APK whose libraries are a video player's.
+// Pure.
+func apkStoreMediaApp(libs []string) bool {
+	for _, lib := range libs {
+		if apkMediaLibs[lib] {
+			return true
+		}
+	}
+	return false
+}
+
+// apkStoreMediaRoute ends a streaming or video app's verdict: the route that
+// plays films and shows on the handheld.
+const apkStoreMediaRoute = " For films and shows, JukaHub's own Media › Movies & TV plays them here: your Jellyfin " +
+	"server, the media servers on your home network (a NAS, Plex's DLNA server, Windows media sharing) and free " +
+	"public-domain classics; Live TV, podcasts and the videos on the SD card are in Media too."
 
 // apkStoreDetectEngine names the engine from the library base names (every
 // ABI), the declared activities and the launcher class. dexNative reports
@@ -162,6 +193,10 @@ func apkStoreDetectEngine(libs, activities []string, launcher string, dexNative,
 	for _, lib := range libs {
 		if e, ok := apkEngineLibs[lib]; ok {
 			found[e] = true
+		}
+		// Qt names its libraries per ABI: libQt6Core_arm64-v8a.so.
+		if strings.HasPrefix(lib, "libQt5Core") || strings.HasPrefix(lib, "libQt6Core") {
+			found[apkEngineQt] = true
 		}
 	}
 	for _, a := range activities {
@@ -180,6 +215,8 @@ func apkStoreDetectEngine(libs, activities []string, launcher string, dexNative,
 			found[apkEngineCocos] = true
 		case strings.HasPrefix(a, "com.epicgames."):
 			found[apkEngineUnreal] = true
+		case strings.HasPrefix(a, "org.qtproject."):
+			found[apkEngineQt] = true
 		}
 	}
 	for _, e := range apkEngineOrder {
@@ -229,6 +266,10 @@ func apkStoreJavaEngine(engine string) (why string, javaOnly bool) {
 		return "A React Native app: it runs JavaScript on Android's Java framework. AndroidRT cannot run it.", true
 	case apkEngineXamarin:
 		return "A Xamarin/.NET app: its code is C# run by Mono inside a Java app. AndroidRT runs native code only.", true
+	case apkEngineQt:
+		return "A Qt app: Qt for Android starts in Java (QtActivity), and its window, input and sound go through " +
+			"Android's Java framework, which AndroidRT does not have. A Linux build of the same app for 64-bit ARM " +
+			"(aarch64), where one exists, is the route on this handheld.", true
 	}
 	return "", false
 }
@@ -251,6 +292,9 @@ type apkStoreVerdictInput struct {
 	// Entry is what the libraries said about an entry point (checked for an
 	// APK with native code and a Java start).
 	Entry apkStoreEntryCheck
+	// Media marks a video player or streaming app (apkStoreMediaApp): a
+	// verdict that it cannot run ends with the route that plays films here.
+	Media bool
 }
 
 // apkStoreSplitWhy explains a split piece: it cannot run, and what to get
@@ -267,7 +311,17 @@ func apkStoreSplitWhy(in apkStoreVerdictInput) string {
 }
 
 // apkStoreVerdict returns the tier, the one-line verdict and the explanation.
+// A video or streaming app that cannot run is told where films play instead.
 func apkStoreVerdict(in apkStoreVerdictInput) (apkStoreTier, string, string) {
+	tier, verdict, why := apkStoreVerdictFor(in)
+	if in.Media && tier == apkTierJava {
+		why += apkStoreMediaRoute
+	}
+	return tier, verdict, why
+}
+
+// apkStoreVerdictFor is the verdict before the media route is added.
+func apkStoreVerdictFor(in apkStoreVerdictInput) (apkStoreTier, string, string) {
 	// A split piece first: the base piece has no libraries, which triage would
 	// otherwise call a Java app, and a library piece has no app at all.
 	if in.Split != "" || in.SplitsRequired {

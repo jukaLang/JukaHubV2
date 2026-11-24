@@ -22,7 +22,10 @@ package main
 // /jfh/<server>/<id>/… (the server's HLS transcode, playlists and segments
 // passed through, so a seek in a transcoded film costs a segment, not the
 // whole film). <server> is a short hash of the address and account: a
-// stale address from another server is refused.
+// stale address from another server is refused. Media › Movies & TV adds
+// /jfi/<server>/<id>/<kind>/<tag>.jpg (a Jellyfin picture, media_movies.go)
+// and /iav/ia/<item>.mp4 and /iai/ia/<item>.jpg (a free film from the
+// Internet Archive and its picture, freefilms.go).
 
 import (
 	"context"
@@ -180,6 +183,12 @@ func musicProxyServe(w http.ResponseWriter, r *http.Request) {
 		musicProxySong(w, r, route, srv, rest)
 	case "jfv", "jfh":
 		musicProxyVideo(w, r, route, srv, rest)
+	case "jfi":
+		// A Jellyfin picture for Media › Movies & TV (media_movies.go).
+		mtvJfImageProxy(w, r, srv, rest)
+	case "iav", "iai":
+		// A free film or its picture from the Internet Archive (freefilms.go).
+		freeFilmsProxy(w, r, route, rest)
 	default:
 		http.NotFound(w, r)
 	}

@@ -467,6 +467,8 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 	switch {
 	case !online && mediaHub.tab == mediaTabLibrary:
 		statusText, statusKind = "Not connected — your library works offline", 1
+	case !online && mediaHub.tab == mediaTabMovies:
+		statusText, statusKind = "Not connected — home servers still play", 1
 	case !online:
 		statusText, statusKind = "Not connected — showing your downloads", 1
 	case backOnline:
@@ -501,6 +503,8 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 		mediaHubDrawDownloads(renderer, config, layout.content)
 	case mediaTabLibrary:
 		mediaHubDrawLibrary(renderer, config, layout.content, online)
+	case mediaTabMovies:
+		mtvDraw(renderer, config, layout.content, online)
 	default:
 		mediaHubDrawGrid(renderer, config, layout.content, online)
 	}
@@ -823,6 +827,9 @@ func mediaHubDrawRows(renderer *sdl.Renderer, config *Config, rect sdl.Rect, onl
 				mediaHubDrawChipRow(renderer, chipFont, row, i, sdl.Rect{X: rect.X, Y: y + headH, W: rect.W, H: chipH}, activeRow)
 			} else if len(row.cards) == 0 {
 				msg := "Nothing here yet"
+				if row.empty != "" {
+					msg = row.empty
+				}
 				if row.kind == mediaRowTrending {
 					msg = "Loading trending videos…"
 					if mediaSearchIdle(mediaTrendingVar) && !mediaTrendingLoadedAt.IsZero() {
@@ -992,7 +999,7 @@ func mediaHubDrawGrid(renderer *sdl.Renderer, config *Config, rect sdl.Rect, onl
 		target = bottom - float64(rect.H)
 	}
 	contentH := int32(rowsN)*pitch - mediaCardGap
-	loading := mediaPageLoading(mediaHubTabVar(t))
+	loading := mediaPageLoading(mediaHubTabVar(t)) || (t == mediaTabMovies && mtvPageLoading())
 	if loading {
 		contentH += 40
 	}

@@ -66,9 +66,10 @@ var mlibStatusCache struct {
 }
 
 // mediaTabHasRows reports a tab drawn as rows of cards: For you, and the
-// Library while no list is open.
+// Library and Movies & TV while no list is open.
 func mediaTabHasRows(t mediaTab) bool {
-	return t == mediaTabForYou || (t == mediaTabLibrary && len(mlibNav.stack) == 0)
+	return t == mediaTabForYou || (t == mediaTabLibrary && len(mlibNav.stack) == 0) ||
+		(t == mediaTabMovies && len(mtvNav.stack) == 0)
 }
 
 // mlibEnterTab runs when the Library is shown: look for changes (a quick pass

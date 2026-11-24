@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestApkStoreNativeLauncherBeatsBundledEngine(t *testing.T) {
 	for _, launcher := range []string{"android.app.NativeActivity", "com.google.androidgamesdk.GameActivity"} {
@@ -40,5 +43,21 @@ func TestApkStoreNativeEntryBehindJavaLauncherIsExperimental(t *testing.T) {
 	in.Entry = apkEntryNone
 	if tier, _, _ := apkStoreVerdict(in); tier != apkTierJava || tier.canAdd() {
 		t.Errorf("Java subclass without native entry = %v, want Java-only", tier)
+	}
+}
+
+// A Qt streaming app (Colosseum's APK: Qt 6 libraries named per ABI, libmpv)
+// is a Java app here, and its verdict says where films play instead.
+func TestApkStoreQtStreamingAppPointsToMedia(t *testing.T) {
+	libs := []string{"libQt6Core_arm64-v8a.so", "libQt6Quick_arm64-v8a.so", "libmpv.so"}
+	launcher := "org.qtproject.qt.android.bindings.QtActivity"
+	engine := apkStoreDetectEngine(libs, []string{launcher}, launcher, false, false)
+	if engine != apkEngineQt || !apkStoreMediaApp(libs) {
+		t.Fatalf("engine = %q, media = %v", engine, apkStoreMediaApp(libs))
+	}
+	in := apkStoreVerdictInput{ChosenABI: "arm64-v8a", Engine: engine, HasCode: true, Launcher: launcher, Media: true}
+	tier, _, why := apkStoreVerdict(in)
+	if tier != apkTierJava || tier.canAdd() || !strings.HasSuffix(why, apkStoreMediaRoute) {
+		t.Errorf("Qt streaming app = %v %q", tier, why)
 	}
 }

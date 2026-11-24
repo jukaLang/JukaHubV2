@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updated": "2026-11-12",
+  "updated": "2026-11-24",
   "entries": [
     {
       "id": "penguin-dash",
@@ -181,6 +181,14 @@
       "get": "F-Droid publishes its official APK at https://f-droid.org/F-Droid.apk. You can copy it to the APKs folder to inspect its compatibility here.",
       "notes": "The official APK checked for this entry includes a native graphics helper, but its store and installer still need Android itself.",
       "route": "On the original TrimUI Smart Pro, boot GammaOS Core from a separate microSD card, then install F-Droid in Android. Waydroid needs Linux binder support, which stock TrimUI lacks."
+    },
+    {
+      "id": "streaming-apps",
+      "title": "Movie and TV streaming apps",
+      "kind": "category",
+      "status": "wontrun",
+      "summary": "Streaming and video apps (Colosseum, Stremio, VLC and the like) are Java or Qt apps built on Android's media framework. AndroidRT runs native game code only, so none of them start on the handheld.",
+      "route": "Media › Movies & TV plays films and shows here: your Jellyfin server, the media servers on your home network (a NAS, Plex's DLNA server, Windows media sharing) and free public-domain classics from the Internet Archive. Live TV, podcasts and the videos on the SD card are in Media too."
     },
     {
       "id": "java-apps",

@@ -93,6 +93,9 @@ const (
 	mediaTabLibrary
 	mediaTabLiveTV
 	mediaTabPodcasts
+	// mediaTabMovies is Movies & TV (media_movies.go). It is last in the
+	// enum and second in the strip (mediaTabOrder).
+	mediaTabMovies
 	mediaTabCount
 )
 
@@ -118,6 +121,8 @@ func mediaTabLabel(t mediaTab) string {
 		return "Live TV"
 	case mediaTabPodcasts:
 		return "Podcasts"
+	case mediaTabMovies:
+		return "Movies & TV"
 	}
 	return "For you"
 }
@@ -142,6 +147,8 @@ func mediaTabIcon(t mediaTab) string {
 		return "globe"
 	case mediaTabPodcasts:
 		return "mic"
+	case mediaTabMovies:
+		return "tv"
 	}
 	return "home"
 }
@@ -182,6 +189,15 @@ const (
 	mediaRowLibMovies
 	mediaRowLibShows
 	mediaRowLibMusic
+	// The Movies & TV rows (media_movies.go). mediaRowMtvFilms stays last:
+	// the free collections' rows are mediaRowMtvFilms + their index.
+	mediaRowMtvContinue
+	mediaRowMtvRecent
+	mediaRowMtvMovies
+	mediaRowMtvShows
+	mediaRowMtvNetwork
+	mediaRowMtvSetup
+	mediaRowMtvFilms
 )
 
 // mediaCard is one thumbnail card, with every string it draws measured out of
@@ -218,9 +234,15 @@ type mediaCard struct {
 	mlibKey    string
 	glyph      string
 	artContain bool
+
+	// A Movies & TV card (media_movies.go): what it stands for and the
+	// item, folder, server or source behind it.
+	mtvKind mtvCardKind
+	mtvKey  string
 }
 
-// mediaRow is one For you row.
+// mediaRow is one For you row. empty is what a row without cards says
+// ("Nothing here yet" when it is "").
 type mediaRow struct {
 	kind   mediaRowKind
 	title  string
@@ -228,6 +250,7 @@ type mediaRow struct {
 	chips  []string
 	focus  int
 	scroll float64
+	empty  string
 }
 
 // mediaSliceSig identifies a published result list without copying it.
@@ -251,6 +274,7 @@ type mediaBuildKey struct {
 	queue    int64
 	limit    int
 	mlib     uint64
+	mtv      uint64
 }
 
 // mediaHitKind is what a drawn rect does when it is clicked.
@@ -525,6 +549,10 @@ func mediaHubEnter(config *Config) {
 		// The Library is all on the card: it opens offline as well.
 		mlibEnterTab(config)
 	}
+	if mediaHub.tab == mediaTabMovies {
+		// Home-network servers answer without the internet too.
+		mtvEnterTab()
+	}
 	if !mediaHub.online {
 		if mediaTabNeedsNetwork(mediaHub.tab) || mediaHub.tab == mediaTabForYou || mediaHub.tab == mediaTabSearch {
 			mediaHubSelectTab(config, mediaTabDownloads, false)
@@ -669,6 +697,7 @@ func mediaHubTick(config *Config) {
 		// Where a library video was left feeds the Library's Continue
 		// watching, beyond the player's twenty-entry recent list.
 		go mlibSyncResume()
+		mtvAfterPlayback()
 	}
 	if mediaHub.deferLoad && !mediaHubPlayerOnScreen() && !videoPrepareActive() {
 		mediaHub.deferLoad = false
@@ -689,7 +718,7 @@ func mediaHubTick(config *Config) {
 
 // mediaTabOrder is the strip after the Results chip, a fixed array so building
 // the strip every frame allocates nothing.
-var mediaTabOrder = [...]mediaTab{mediaTabForYou, mediaTabTrending, mediaTabShorts, mediaTabDownloads,
+var mediaTabOrder = [...]mediaTab{mediaTabForYou, mediaTabMovies, mediaTabTrending, mediaTabShorts, mediaTabDownloads,
 	mediaTabHistory, mediaTabFavorites, mediaTabLibrary, mediaTabLiveTV, mediaTabPodcasts}
 
 // mediaHubTabs returns the chips in strip order. Results joins the strip once a
@@ -754,6 +783,9 @@ func mediaHubSelectTab(config *Config, t mediaTab, sound bool) {
 	}
 	if t == mediaTabLibrary && changed {
 		mlibEnterTab(config)
+	}
+	if t == mediaTabMovies && changed {
+		mtvEnterTab()
 	}
 	if changed && mediaHubWantsTrending(t) && config != nil && mediaHubIsCurrent(config) &&
 		!mediaHub.deferLoad && !videoPrepareActive() && playerPhase() == "idle" {
@@ -887,6 +919,10 @@ func mediaHubTabVar(t mediaTab) string {
 // mediaHubLoadMore appends the next page of the visible paged list. It is R2,
 // PageDown, and what scrolling past the last row does.
 func mediaHubLoadMore(config *Config, quiet bool) bool {
+	if mediaHub.tab == mediaTabMovies {
+		// A free collection's See all list pages on (media_movies.go).
+		return mtvLoadMore(quiet)
+	}
 	resultVar := mediaHubTabVar(mediaHub.tab)
 	if resultVar == "" || config == nil || (mediaHub.tab == mediaTabSearch && mediaHub.localSearch) {
 		return false
@@ -1140,6 +1176,10 @@ func mediaHubBuildKey(config *Config) mediaBuildKey {
 		// rows. Keep its first frame independent of online work settling.
 		return mediaBuildKey{tab: mediaTabLibrary, libGen: dlLibraryGen(), mlib: mlibGen()}
 	}
+	if mediaHub.tab == mediaTabMovies {
+		// Movies & TV is built from its own model (media_movies.go).
+		return mediaBuildKey{tab: mediaTabMovies, online: IsOnline(), mtv: mtv.gen}
+	}
 	return mediaBuildKey{
 		tab:      mediaHub.tab,
 		libGen:   dlLibraryGen(),
@@ -1168,7 +1208,7 @@ func mediaHubEnsureBuilt(config *Config) {
 	key := mediaHubBuildKey(config)
 	// A video in the mini player can change a card's progress without changing
 	// the list signature. All other changes are represented in the key.
-	refreshProgress := mediaHub.tab != mediaTabLibrary && playerPhase() != "idle"
+	refreshProgress := mediaHub.tab != mediaTabLibrary && mediaHub.tab != mediaTabMovies && playerPhase() != "idle"
 	if key == mediaHub.built && mediaHub.builtAt != 0 &&
 		(!refreshProgress || now-mediaHub.builtAt < mediaRebuildEvery) {
 		return
@@ -1200,7 +1240,7 @@ func mediaHubRebuild(config *Config) {
 	// context here would copy the downloads and all favourites just to draw
 	// the Downloads tab's count, blocking the first Library frame.
 	ctx := mediaCardContext{}
-	if mediaHub.tab == mediaTabLibrary {
+	if mediaHub.tab == mediaTabLibrary || mediaHub.tab == mediaTabMovies {
 		ctx.libCount = dlLibraryCount()
 	} else {
 		ctx = mediaNewCardContext()
@@ -1240,6 +1280,31 @@ func mediaHubRebuild(config *Config) {
 					break
 				}
 			}
+		}
+		mediaHub.cards = mediaHub.cards[:0]
+	case mediaTabMovies:
+		if n := len(mtvNav.stack); n > 0 {
+			mediaHub.cards = mtvDrillCards(mtvNav.stack[n-1])
+			break
+		}
+		// In the rows, the ring stays on the same row when a row appears
+		// above it (the server's rows arriving after the free films'). Before
+		// the rows are entered it goes back to the top, so Down lands on the
+		// first row that has loaded, not on the one that loaded first.
+		focusKind, hadFocus := mediaRowMtvContinue, false
+		if mediaHub.zone == mediaZoneContent && mediaHub.row >= 0 && mediaHub.row < len(mediaHub.rows) {
+			focusKind, hadFocus = mediaHub.rows[mediaHub.row].kind, true
+		}
+		mediaHub.rows = mtvBuildRows(mediaHub.rows)
+		if hadFocus {
+			for i := range mediaHub.rows {
+				if mediaHub.rows[i].kind == focusKind {
+					mediaHub.row = i
+					break
+				}
+			}
+		} else {
+			mediaHub.row = 0
 		}
 		mediaHub.cards = mediaHub.cards[:0]
 	case mediaTabDownloads:
@@ -1673,7 +1738,8 @@ func mediaHubWarmFocused(config *Config) {
 	}
 	vids := make([]VideoInfo, 0, end-idx)
 	for _, c := range list[idx:end] {
-		if c.path == "" && !c.queued && c.mlibKind == mlibCardNone {
+		// Movies & TV's videos play from their own address: nothing to resolve.
+		if c.path == "" && !c.queued && c.mlibKind == mlibCardNone && c.mtvKind == mtvCardNone {
 			vids = append(vids, c.video)
 		}
 	}
@@ -1698,6 +1764,11 @@ func mediaHubPlay(config *Config, card mediaCard, list []mediaCard, index int, f
 	// A song, an album or a show from the Library plays its own way; a film
 	// or an episode goes on as any file on the card does.
 	if mlibPlayCard(config, card) {
+		return
+	}
+	// Movies & TV's cards play, open or retry their own way — a home server
+	// plays without the internet (media_movies.go).
+	if mtvPlayCard(config, card, list, index, fromStart) {
 		return
 	}
 	if mediaHub.tab == mediaTabShorts && card.vertical && card.path == "" {
@@ -2193,6 +2264,8 @@ func mediaHubFooterHints(base []FooterHint) []FooterHint {
 		key = 6
 	case mediaHub.tab == mediaTabLibrary:
 		key = 8
+	case mediaHub.tab == mediaTabMovies:
+		key = 9
 	}
 	if key == mediaHub.footerKey && mediaHub.footer != nil {
 		// Capacity is capped, so a caller that appends gets its own copy
@@ -2239,6 +2312,11 @@ func mediaHubFooterHints(base []FooterHint) []FooterHint {
 		hints = []FooterHint{
 			{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Open"}, {Button: "B", Label: "Back"},
 			{Button: "X", Label: "Search"}, {Button: "Y", Label: "Details"}, {Button: "L1/R1", Label: "Tabs"},
+		}
+	case 9:
+		hints = []FooterHint{
+			{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Play / Open"}, {Button: "B", Label: "Back"},
+			{Button: "Y", Label: "Details"}, {Button: "L1/R1", Label: "Tabs"}, {Button: "R2", Label: "More"},
 		}
 	default:
 		hints = []FooterHint{

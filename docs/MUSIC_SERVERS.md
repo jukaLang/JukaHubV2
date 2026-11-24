@@ -53,7 +53,9 @@ Jellyfin videos open in the video player: a file the handheld decodes as it is
 is; anything else (HEVC, AV1, VP9, 10-bit, 4K, DTS) is transcoded by the server
 to H.264/AAC at 720p over HLS, so a seek costs a segment. Jellyfin is told
 what plays and where you stopped, so Continue Watching and your other Jellyfin
-apps pick up from there.
+apps pick up from there. The same films and shows, with posters, Continue
+watching and Recently added, are in **Media → Movies & TV**
+([MOVIES_TV.md](MOVIES_TV.md)).
 
 ## Download Offline
 

@@ -57,6 +57,13 @@ type jfItem struct {
 		IsFavorite            bool  `json:"IsFavorite"`
 	} `json:"UserData"`
 	MediaSources []jfMediaSource `json:"MediaSources"`
+	// The wide pictures Media › Movies & TV puts on its 16:9 cards
+	// (media_movies.go).
+	BackdropImageTags       []string `json:"BackdropImageTags"`
+	ParentBackdropItemID    string   `json:"ParentBackdropItemId"`
+	ParentBackdropImageTags []string `json:"ParentBackdropImageTags"`
+	ParentThumbItemID       string   `json:"ParentThumbItemId"`
+	ParentThumbImageTag     string   `json:"ParentThumbImageTag"`
 }
 
 type jfMediaSource struct {

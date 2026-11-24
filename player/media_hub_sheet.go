@@ -35,6 +35,11 @@ func mediaSheetActionsFor(card mediaCard, online, party, favorite, queued, audio
 		add(mediaActCancelDownload, "Cancel download")
 		return acts, labels
 	}
+	if card.mtvKind != mtvCardNone {
+		// Movies & TV streams from a server or the Archive: nothing here is
+		// a download or a link to share (media_movies.go).
+		return mtvSheetActions(card, favorite, queued)
+	}
 	if mlibCardOpens(card.mlibKind) {
 		// A Library show, album or See all card: open its list, or play.
 		add(mediaActOpen, "Open")
@@ -116,6 +121,9 @@ func mediaSheetInfo(card mediaCard) string {
 		}
 	case card.downloaded:
 		parts = append(parts, "Downloaded")
+	case card.mtvKind != mtvCardNone && card.detail != "":
+		// Where a Movies & TV card streams from.
+		parts = append(parts, card.detail)
 	}
 	if card.overLimit {
 		parts = append(parts, "over your storage limit")
@@ -198,6 +206,12 @@ func mediaHubSheetRun(config *Config, act mediaSheetAction) {
 		mediaHubCancelTransfer(card)
 	case mediaActOpen:
 		mediaHub.sheet = mediaSheet{}
+		if card.mtvKind != mtvCardNone {
+			// A Movies & TV list, Connect Jellyfin or Try again.
+			list, idx := mediaHubFocusedList()
+			mtvPlayCard(config, card, list, idx, false)
+			break
+		}
 		mlibOpenGroup(config, card)
 	}
 }
