@@ -548,6 +548,8 @@ func windowsAppLogPath(entry windowsAppEntry) string {
 type wineLaunchSettings struct {
 	bridge mbridgeParams
 	power  powerProfileConfig
+	// binBashOff is portBinBash "off" (portmaster_binbash.go).
+	binBashOff bool
 }
 
 var wineLaunchSettingsCopy atomic.Pointer[wineLaunchSettings]
@@ -562,8 +564,9 @@ func wineLaunchSettingsTake(config *Config) {
 		bridge = mbridgeParamsFor(config)
 	}
 	wineLaunchSettingsCopy.Store(&wineLaunchSettings{
-		bridge: bridge,
-		power:  loadPowerProfileConfig(config),
+		bridge:     bridge,
+		power:      loadPowerProfileConfig(config),
+		binBashOff: pmBinBashOff(config),
 	})
 }
 
@@ -776,7 +779,7 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	release := func(d wineDisplayPlan) {
 		wineBounded(log, "the WestonPack unmount", wineUnmountLimit, func() { d.release(log) })
 	}
-	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, log)
+	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, log, func(line string) { wineSetPhase(l.Key, line) }, settings.binBashOff)
 	if err == nil && gameScreenSuspended() {
 		// Planning took minutes with JukaHub on screen: whatever started
 		// meanwhile owns the screen and the pad now, and must keep them.
@@ -866,6 +869,9 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		// The program leads its own process group, so whatever the wrapper
 		// starts in the background keeps the screen parked until it is gone.
 		screenChildGroupConfigure(cmd)
+		// Last, as for ports: a real /bin/bash in the session's own mount
+		// namespace where the firmware's is not one (nil: nothing to do).
+		disp.binbash.apply(cmd)
 		err = screenChildStart(cmd)
 		if watchW != nil {
 			// The child has its own copy; the pipe ends when the last

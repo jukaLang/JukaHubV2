@@ -219,6 +219,9 @@ type ppssppRelease struct {
 	Size    int64
 	Digest  string
 	Date    string
+	// Resume: the notes say the build takes JukaHub's save request
+	// (ppsspp_resume.go), which only JukaHub's own build can.
+	Resume bool
 }
 
 // ppssppGitHubRelease is the part of the GitHub release JSON the check reads.
@@ -817,6 +820,7 @@ func ppssppReleaseFromAsset(data []byte, assetName, source string) (ppssppReleas
 		return ppssppRelease{}, fmt.Errorf("the %s release has no tag", source)
 	}
 	out := ppssppRelease{Tag: tag, Name: strings.TrimSpace(rel.Name), Version: ppssppVersionFromNotes(rel.Name, rel.Body)}
+	out.Resume = strings.Contains(rel.Body, ppssppResumeCapability)
 	for _, a := range rel.Assets {
 		if !strings.EqualFold(strings.TrimSpace(a.Name), assetName) || strings.TrimSpace(a.BrowserDownloadURL) == "" {
 			continue
@@ -881,9 +885,11 @@ func ppssppFetchRelease(ctx context.Context, client *http.Client) (ppssppRelease
 
 // ppssppPickRelease chooses between the minui-psp release and JukaHub's own
 // build: the newer PPSSPP; JukaHub's when minui-psp's version is unknown (its
-// notes and history name none, so it cannot be judged newer); on a tie, the one
-// installed already (no reinstall of the same PPSSPP from the other source),
-// else minui-psp's, whose spruceUI build carries device patches.
+// notes and history name none, so it cannot be judged newer); on a tie, the
+// source installed already (no reinstall of the same PPSSPP from the other
+// source — and a rebuild of JukaHub's own, which can save a PSP game for a
+// power off, still reaches a device that chose it), else minui-psp's, whose
+// spruceUI build carries device patches.
 func ppssppPickRelease(pak, own ppssppRelease, installedTag string) ppssppRelease {
 	switch {
 	case own.Version == "":
@@ -892,7 +898,7 @@ func ppssppPickRelease(pak, own ppssppRelease, installedTag string) ppssppReleas
 		return own
 	case ppssppNewer(pak.Version, own.Version):
 		return pak
-	case installedTag == own.Tag:
+	case installedTag == own.Tag, ppssppIsOwnTag(installedTag):
 		return own
 	}
 	return pak
@@ -1910,6 +1916,14 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	if s.Platform == ppssppOwnPlatform {
 		video = `SDL_VIDEODRIVER=mali `
 	}
+	line("# A game JukaHub saved for a power off or a flat battery starts from that")
+	line("# state (ppsspp_resume.go): PPSSPP's own --state=, given to PPSSPP alone,")
+	line("# never to the fallback.")
+	line("RESUME=")
+	line(`if [ -n "${`, ppssppEnvState, `:-}" ] && [ -f "$`, ppssppEnvState, `" ]; then`)
+	line(`	RESUME="--state=$`, ppssppEnvState, `"`)
+	line(`	note "resuming from $`, ppssppEnvState, `"`)
+	line("fi")
 	line(`note "start PPSSPP $VERSION: $ROM"`)
 	line("# PPSSPP's own output (this run only) stays beside the build, so a report")
 	line("# after a failed start has PPSSPP's reason in it.")
@@ -1920,7 +1934,7 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("START=$(date +%s 2>/dev/null)")
 	line(`case "$START" in ''|*[!0-9]*) START=0 ;; esac`)
 	line(`if [ "$#" -gt 0 ]; then`)
-	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen >&4 2>&4`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen ${RESUME:+"$RESUME"} >&4 2>&4`)
 	line("else")
 	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --fullscreen >&4 2>&4`)
 	line("fi")

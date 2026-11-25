@@ -15,12 +15,15 @@ package main
 //     just was, its shadow sliding in under it and darkening, and crashes: the
 //     motor gives one hard buzz on the exact frame of the impact, the picture
 //     shakes and flashes, a wave of light runs out along the ground, dust and
-//     sparks burst out all round and cracks race out from under the tile,
-//     glowing in the accent and cooling to dark. The logo is driven into the
-//     ground for a moment, bounces back up towards the screen twice (each
-//     landing a weaker buzz and a quieter knock in the chime) and settles.
-//     Then the wordmark, the theme's colours and the progress line come up as
-//     in the classic boot, and the first screen arrives.
+//     sparks burst out all round and the ground breaks like stone: cracks run
+//     out from under the tile, the slab round it splits into pieces and the
+//     edge it hit is crushed (bootcracks.go, 2026-11-24: "make cracks on that
+//     one boot animation more realistic"; they were glowing lines before).
+//     The logo is driven into the ground for a moment, bounces back up
+//     towards the screen twice (each landing a weaker buzz and a quieter
+//     knock in the chime) and settles. Then the wordmark, the theme's colours
+//     and the progress line come up as in the classic boot, and the first
+//     screen arrives.
 //   - roll: the rounded tile tumbles in from the left, rolling on its rounded
 //     corners (the corner's centre travels along the floor as the tile turns,
 //     so the roll is smooth, never a jump), lands on each side with a small
@@ -29,7 +32,12 @@ package main
 //   - image: the logo still and upright where the firmware's boot logo is, so
 //     a power-on shows no jump; the wordmark, the progress line, no motion.
 //   - classic: the glass light running round the pane (bootos.go), unchanged.
-//   - random: cinematic, roll or classic, a different one each boot.
+//   - random ("Surprise me"): cinematic, roll or classic.
+//   - several styles at once, the value listing them ("cinematic,roll"):
+//     Juka, 2026-11-24, "add ability to select multiple bootlogo animations".
+//     A on the Settings row lists the styles with a check on each one picked.
+//     Like random, every start plays one of them, and never the one the last
+//     start played (bootStyleLastFile), so two picked take turns.
 //   - none (the default since 2026-11-18): no boot animation and no quick
 //     hello at all (bootOSPlanStartup): the queued startup work runs and the
 //     first screen appears as soon as it can, with no arrival. The fastest
@@ -45,18 +53,19 @@ package main
 // Everything is drawn from textures made once before the first frame: the
 // ground (a small texture scaled up), the tile's soft shadow, the artwork at
 // its own 300 px for the frames where the falling logo is far bigger than at
-// rest, the soft dot and the rim's glow bootos.go already has (sparks, dust,
-// glow, the wave), and the cracks, which are grown into a render target
-// segment by segment as their time comes, so a frame only draws the new
-// segments and copies the layer twice (its cool lines, then its glow). Where
-// the driver refuses the target the visible segments are drawn as lines each
-// frame instead. A panic inside a style falls back to the classic boot for
+// rest, and the soft dot and the rim's glow bootos.go already has (sparks,
+// dust, glow, the wave). The cracks are the exception: their layer is drawn
+// on another core while the logo falls and uploaded a band a frame
+// (bootcracks.go). A panic inside a style falls back to the classic boot for
 // the rest of the boot (styleGuard): the start never fails over a picture.
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -66,7 +75,8 @@ import (
 // animation.
 const bootStyleKey = "bootStyle"
 
-// Its values.
+// Its values; several styles picked are stored as their list, joined by
+// commas in bootStylePickable's order ("cinematic,roll").
 const (
 	bootStyleCinematic = "cinematic"
 	bootStyleRoll      = "roll"
@@ -75,6 +85,16 @@ const (
 	bootStyleRandom    = "random"
 	bootStyleNone      = "none"
 )
+
+// bootStyleLastFile, in the data folder, names the style the last start
+// played, so a start that picks from several never plays it twice running.
+const bootStyleLastFile = "bootstyle-last"
+
+// bootStylePickable are the styles a player can pick, in Settings' order.
+var bootStylePickable = [...]string{bootStyleCinematic, bootStyleRoll, bootStyleImage, bootStyleClassic}
+
+// bootStyleSurprise is what Surprise me (random) plays: the three that move.
+var bootStyleSurprise = [...]string{bootStyleCinematic, bootStyleRoll, bootStyleClassic}
 
 const (
 	// bootStyleTailMS is how long the classic beats that follow the logo's
@@ -115,10 +135,6 @@ const (
 	// bootWaveReach how far it gets (times the artwork's side).
 	bootWaveMS    = 340.0
 	bootWaveReach = 6.0
-	// bootCrackGrowMS is how long the cracks take to reach their full length.
-	bootCrackGrowMS = 420.0
-	// bootCrackMaxSegs bounds the crack network.
-	bootCrackMaxSegs = 320
 	// bootRollGhostMS fades the firmware's logo out as the roll comes in.
 	bootRollGhostMS = 220.0
 	// bootPulseLateMS drops a buzz whose frame came this late: after a stall
@@ -194,15 +210,6 @@ type bootDropSeg struct {
 	height float64
 }
 
-// bootCrackSeg is one straight piece of a crack on the canvas, born birth ms
-// after the impact, width pixels wide: the main cracks are widest near the
-// impact, the branches thinnest.
-type bootCrackSeg struct {
-	x0, y0, x1, y1 float32
-	birth          float32
-	width          uint8
-}
-
 // bootSpark is one particle of the impact, thrown out from under the tile's
 // edge at (x, y) with velocity (vx, vy), in pixels a second: a spark flying
 // fast and dying quickly, or a puff of dust rolling out slower and spreading.
@@ -270,17 +277,15 @@ type bootStyleRun struct {
 	fired  int
 	thuds  []chimeNote
 
-	// The cinematic ground, the cracks (grown into crackTex, crackDone of them
-	// so far) and the particles; the tile's shadow, and the artwork at its own
-	// size for the frames where the falling logo is far bigger than at rest
-	// (nil where that is no bigger than the resting size's texture).
-	ground    *sdl.Texture
-	cracks    []bootCrackSeg
-	crackTex  *sdl.Texture
-	crackDone int
-	sparks    []bootSpark
-	shadow    *sdl.Texture
-	big       *sdl.Texture
+	// The cinematic ground, the cracks in it (bootcracks.go) and the
+	// particles; the tile's shadow, and the artwork at its own size for the
+	// frames where the falling logo is far bigger than at rest (nil where that
+	// is no bigger than the resting size's texture).
+	ground *sdl.Texture
+	crack  bootCrackLayer
+	sparks []bootSpark
+	shadow *sdl.Texture
+	big    *sdl.Texture
 }
 
 // animated reports whether the style draws its own logo layer.
@@ -290,7 +295,8 @@ func (s *bootStyleRun) animated() bool {
 
 // ── The setting ─────────────────────────────────────────────────────────
 
-// bootStyleSetting is the stored boot animation, bootStyleDefault unless chosen.
+// bootStyleSetting is the stored boot animation — one style, random, none, or
+// several styles' list in order — bootStyleDefault unless chosen.
 // Someone who never picked a style but asked for the full boot on every start
 // (Startup animation → Full every time) asked for an animation, so they keep
 // the one that was the default when they asked.
@@ -300,6 +306,11 @@ func bootStyleSetting(c *Config) string {
 			switch s := strings.ToLower(strings.TrimSpace(v)); s {
 			case bootStyleCinematic, bootStyleRoll, bootStyleImage, bootStyleClassic, bootStyleRandom, bootStyleNone:
 				return s
+			default:
+				// Several styles: the list, in order and each once.
+				if set := bootStyleParseSet(s); len(set) > 0 {
+					return bootStyleJoin(set)
+				}
 			}
 		}
 		if bootOSAnimationSetting(c) == bootOSAnimationAlways {
@@ -320,16 +331,140 @@ func bootStyleDefault() string {
 	return bootStyleNone
 }
 
-// bootStyleOptions are the Settings row's stops.
-func bootStyleOptions(*Config) []setOption {
+// bootStyleOptions are the Settings row's stops. Several styles picked (A on
+// the row) are a stop of their own while they are the choice.
+func bootStyleOptions(c *Config) []setOption {
+	// The list's styles, then the picked ones, Surprise me and None.
+	list := bootStyleSheetOptions(c)
+	none := list[len(list)-1]
+	opts := append([]setOption(nil), list[:len(list)-1]...)
+	if v := bootStyleSetting(c); strings.Contains(v, ",") {
+		opts = append(opts, setOption{Value: v, Label: bootStyleSetLabel(bootStyleParseSet(v)), Note: "Each start plays one of them, never the same one twice running"})
+	}
+	return append(opts, setOption{Value: bootStyleRandom, Label: "Surprise me", Note: "Cinematic, Roll or Classic, a different one each time"}, none)
+}
+
+// bootStyleSheetOptions are the list A opens on the row: every style, then
+// None. Several can be checked (bootStyleChecked, bootStyleToggle).
+func bootStyleSheetOptions(*Config) []setOption {
 	return []setOption{
 		{Value: bootStyleCinematic, Label: "Cinematic", Note: "The logo falls from the screen onto the ground, which cracks, and the device shakes"},
 		{Value: bootStyleRoll, Label: "Roll", Note: "The logo rolls in on its rounded corners and stops in the middle"},
 		{Value: bootStyleImage, Label: "Still logo", Note: "The logo upright and still, with the progress line"},
 		{Value: bootStyleClassic, Label: "Classic", Note: "A light runs round the glass logo as the colours come up"},
-		{Value: bootStyleRandom, Label: "Surprise me", Note: "Cinematic, Roll or Classic, a different one each time"},
 		{Value: bootStyleNone, Label: "None", Note: "No animation: the fastest start, straight to Home"},
 	}
+}
+
+// bootStyleParseSet reads a list of styles (separated by commas, plus signs
+// or spaces) into bootStylePickable's order, each once; anything else in it
+// is dropped.
+func bootStyleParseSet(v string) []string {
+	in := map[string]bool{}
+	for _, f := range strings.FieldsFunc(strings.ToLower(v), func(r rune) bool { return r == ',' || r == '+' || r == ' ' }) {
+		in[f] = true
+	}
+	var set []string
+	for _, s := range bootStylePickable {
+		if in[s] {
+			set = append(set, s)
+		}
+	}
+	return set
+}
+
+// bootStyleJoin is the stored value for a set of styles: none for an empty
+// one, the style itself for one, random for Surprise me's three, the list
+// otherwise.
+func bootStyleJoin(set []string) string {
+	set = bootStyleParseSet(strings.Join(set, ","))
+	switch len(set) {
+	case 0:
+		return bootStyleNone
+	case 1:
+		return set[0]
+	}
+	if strings.Join(set, ",") == strings.Join(bootStyleSurprise[:], ",") {
+		return bootStyleRandom
+	}
+	return strings.Join(set, ",")
+}
+
+// bootStyleSet is the styles a start may play: the one chosen, Surprise me's
+// three, or the ones picked; nothing for None.
+func bootStyleSet(c *Config) []string {
+	switch v := bootStyleSetting(c); v {
+	case bootStyleNone:
+		return nil
+	case bootStyleRandom:
+		return append([]string(nil), bootStyleSurprise[:]...)
+	default:
+		return bootStyleParseSet(v)
+	}
+}
+
+// bootStyleLabel is a style's name in Settings.
+func bootStyleLabel(style string) string {
+	switch style {
+	case bootStyleCinematic:
+		return "Cinematic"
+	case bootStyleRoll:
+		return "Roll"
+	case bootStyleImage:
+		return "Still logo"
+	case bootStyleClassic:
+		return "Classic"
+	}
+	return style
+}
+
+// bootStyleSetLabel names several styles at once in the interface language,
+// "Cinematic + Roll": a composed label is no catalogue key, so each name is
+// translated here.
+func bootStyleSetLabel(set []string) string {
+	names := make([]string, len(set))
+	for i, s := range set {
+		names[i] = uiT(bootStyleLabel(s))
+	}
+	return strings.Join(names, " + ")
+}
+
+// bootStyleChecked is the list's checks: the styles a start may play, or
+// None when the animation is off.
+func bootStyleChecked(c *Config) map[string]bool {
+	set := bootStyleSet(c)
+	checked := make(map[string]bool, len(set)+1)
+	for _, s := range set {
+		checked[s] = true
+	}
+	if len(set) == 0 {
+		checked[bootStyleNone] = true
+	}
+	return checked
+}
+
+// bootStyleToggle is A on one of the list's rows: a style joins the set or
+// leaves it (the last one leaving turns the animation off), and None empties
+// it. A style picked while None is checked starts a new set.
+func bootStyleToggle(c *Config, value string) {
+	if c == nil {
+		return
+	}
+	var set []string
+	if value != bootStyleNone {
+		had := false
+		for _, s := range bootStyleSet(c) {
+			if s == value {
+				had = true
+				continue
+			}
+			set = append(set, s)
+		}
+		if !had {
+			set = append(set, value)
+		}
+	}
+	setStoreString(c, bootStyleKey, bootStyleJoin(set))
 }
 
 // bootStyleCurrent is the stop the stored choice is.
@@ -381,22 +516,102 @@ func bootStylePreviewDetail(c *Config) string {
 	return "The full boot JukaHub plays when the device starts"
 }
 
-// bootStyleResolve picks the style one boot plays: random draws one of the
-// animated styles, reduced motion stills the moving ones, and none (which
-// never reaches a boot: bootOSPlanStartup skips it) plays as the still image.
+// bootStyleResolve picks the style one boot plays: from several (Surprise me,
+// or the ones picked) one at random but never the last start's, reduced
+// motion stills the moving ones, and none (which never reaches a boot:
+// bootOSPlanStartup skips it) plays as the still image.
 func bootStyleResolve(c *Config, motion, quick bool) bootStyleRun {
 	kind := bootStyleSetting(c)
-	switch kind {
-	case bootStyleRandom:
-		picks := [3]string{bootStyleCinematic, bootStyleRoll, bootStyleClassic}
-		kind = picks[int(uint64(time.Now().UnixNano())/1000%3)]
-	case bootStyleNone:
+	switch set := bootStyleSet(c); {
+	case kind == bootStyleNone:
 		kind = bootStyleImage
+	case len(set) > 1:
+		kind = bootStylePick(set, bootStyleLastPlayed(), uint64(time.Now().UnixNano())/1000)
+		bootStyleRemember(kind)
 	}
 	if !motion && (kind == bootStyleCinematic || kind == bootStyleRoll) {
 		kind = bootStyleImage
 	}
 	return bootStyleRun{kind: kind, quick: quick}
+}
+
+// bootStylePick draws one of set (two or more styles) with roll, leaving out
+// last, the style the last start played: two picked take turns.
+func bootStylePick(set []string, last string, roll uint64) string {
+	if len(set) == 0 {
+		return bootStyleImage
+	}
+	choices := make([]string, 0, len(set))
+	for _, s := range set {
+		if s != last {
+			choices = append(choices, s)
+		}
+	}
+	if len(choices) == 0 {
+		choices = set
+	}
+	return choices[roll%uint64(len(choices))]
+}
+
+// bootStyleLast is the style the last start played, once read or written
+// this session ("" unknown).
+var bootStyleLast struct {
+	sync.Mutex
+	style string
+	read  bool
+}
+
+// bootStyleLastWrite orders the writes of bootStyleLastFile.
+var bootStyleLastWrite sync.Mutex
+
+// bootStyleLastPath is bootStyleLastFile's path, or "" without a data folder.
+func bootStyleLastPath() string {
+	dir, err := P().DataDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, bootStyleLastFile)
+}
+
+// bootStyleLastPlayed is the style the last start played, from the data
+// folder the first time ("" when none is known).
+func bootStyleLastPlayed() string {
+	bootStyleLast.Lock()
+	defer bootStyleLast.Unlock()
+	if !bootStyleLast.read {
+		bootStyleLast.read = true
+		if path := bootStyleLastPath(); path != "" {
+			if b, err := os.ReadFile(path); err == nil && len(b) < 64 {
+				bootStyleLast.style = strings.TrimSpace(string(b))
+			}
+		}
+	}
+	return bootStyleLast.style
+}
+
+// bootStyleRemember notes the style this start plays, for the next start to
+// leave out. The file is written off the boot's thread, each write the latest
+// style; losing it only lets a style play twice running.
+func bootStyleRemember(style string) {
+	bootStyleLast.Lock()
+	changed := bootStyleLast.style != style
+	bootStyleLast.style, bootStyleLast.read = style, true
+	bootStyleLast.Unlock()
+	if !changed {
+		return
+	}
+	go func() {
+		bootStyleLastWrite.Lock()
+		defer bootStyleLastWrite.Unlock()
+		bootStyleLast.Lock()
+		latest := bootStyleLast.style
+		bootStyleLast.Unlock()
+		if path := bootStyleLastPath(); path != "" {
+			if err := AtomicWrite(path, []byte(latest+"\n"), 0o644); err != nil {
+				logWarn("startup", "boot animation: could not note the style played: %v", err)
+			}
+		}
+	}()
 }
 
 // bootStyleHapticsReady reports whether the motor has been found and the
@@ -580,8 +795,8 @@ func (r *bootOSRun) prepareDropTextures() {
 	}
 }
 
-// prepareScene builds the cinematic ground: its texture, the crack network
-// and its render target, and the particles.
+// prepareScene builds the cinematic ground: its texture and the particles,
+// and sets the crack layer drawing (bootcracks.go).
 func (r *bootOSRun) prepareScene(seed uint32) {
 	s := &r.style
 	pad := bootGroundPad * s.w
@@ -592,99 +807,9 @@ func (r *bootOSRun) prepareScene(seed uint32) {
 	pix := bootGroundPixels(bootGroundTexW, th, (s.cx+pad)/gw, (s.cy+pad)/gh, gw/gh, seed^0x9e3779b9)
 	s.ground = bootLiquidTexture(r.renderer, pix, bootGroundTexW, th)
 	sdl.SetHint(sdl.HINT_RENDER_SCALE_QUALITY, prev)
-	rng := seed
-	s.growCracks(&rng)
-	s.crackTex = r.crackTarget()
+	s.crackStart(seed)
+	rng := seed*2654435761 | 1
 	s.sparks = s.makeSparks(&rng)
-}
-
-// crackTarget is the crack layer's render target, the whole screen cleared to
-// transparent, or nil when the driver refuses one (the cracks are then drawn
-// as lines).
-func (r *bootOSRun) crackTarget() *sdl.Texture {
-	if screenWidth <= 0 || screenHeight <= 0 {
-		return nil
-	}
-	tex, err := r.renderer.CreateTexture(sdl.PIXELFORMAT_RGBA8888, sdl.TEXTUREACCESS_TARGET, screenWidth, screenHeight)
-	if err != nil || tex == nil {
-		return nil
-	}
-	if err := r.renderer.SetRenderTarget(tex); err != nil {
-		_ = tex.Destroy()
-		return nil
-	}
-	_ = r.renderer.SetDrawColor(0, 0, 0, 0)
-	_ = r.renderer.Clear()
-	if err := r.renderer.SetRenderTarget(nil); err != nil {
-		logWarn("startup", "boot cracks could not release their target: %v", err)
-	}
-	_ = r.renderer.SetClipRect(nil)
-	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-	return tex
-}
-
-// bootCrackBirth is when a crack reaches a fraction u of the longest crack's
-// length: fast at first, slowing as it spreads.
-func bootCrackBirth(u float64) float64 {
-	return bootCrackGrowMS * (1 - math.Sqrt(1-bootClamp01(u)))
-}
-
-// growCracks grows the crack network from under the logo: seven to nine
-// cracks wandering out across the ground in every direction, branching now and
-// then, in canvas coordinates, sorted by when each piece appears. A crack ends
-// where it leaves the screen.
-func (s *bootStyleRun) growCracks(rng *uint32) {
-	maxLen := 0.46 * math.Max(s.w, s.h)
-	if maxLen <= 0 {
-		return
-	}
-	step := maxLen * 0.05
-	segs := make([]bootCrackSeg, 0, bootCrackMaxSegs)
-	var walk func(x, y, a, dist, length float64, depth int)
-	walk = func(x, y, a, dist, length float64, depth int) {
-		for left := length; left > 0 && len(segs) < bootCrackMaxSegs; {
-			l := math.Min(left, step*(0.7+0.6*bootStyleRand(rng)))
-			a += (bootStyleRand(rng) - 0.5) * 0.65
-			nx, ny := x+math.Cos(a)*l, y+math.Sin(a)*l
-			if nx < -l || ny < -l || nx > s.w+l || ny > s.h+l {
-				return
-			}
-			dist += l
-			width := uint8(1)
-			if depth == 0 {
-				width = 2
-				if dist < 0.3*maxLen {
-					width = 3
-				}
-			}
-			segs = append(segs, bootCrackSeg{
-				x0:    float32(x),
-				y0:    float32(y),
-				x1:    float32(nx),
-				y1:    float32(ny),
-				birth: float32(bootCrackBirth(dist / maxLen)),
-				width: width,
-			})
-			x, y, left = nx, ny, left-l
-			if depth < 2 && left > step && bootStyleRand(rng) < 0.2 {
-				turn := 0.45 + 0.45*bootStyleRand(rng)
-				if bootStyleRand(rng) < 0.5 {
-					turn = -turn
-				}
-				walk(x, y, a+turn, dist, left*(0.35+0.25*bootStyleRand(rng)), depth+1)
-			}
-		}
-	}
-	n := 7 + int(bootStyleRand(rng)*3)
-	// The cracks set out from just inside the tile's edge, so they come out
-	// from under it.
-	r0 := s.tile * 0.40
-	for i := 0; i < n; i++ {
-		a := (float64(i) + 0.6*bootStyleRand(rng)) * 2 * math.Pi / float64(n)
-		walk(s.cx+math.Cos(a)*r0, s.cy+math.Sin(a)*r0, a, r0, maxLen*(0.5+0.5*bootStyleRand(rng)), 0)
-	}
-	sort.SliceStable(segs, func(i, j int) bool { return segs[i].birth < segs[j].birth })
-	s.cracks = segs
 }
 
 // makeSparks scatters the impact's particles round the tile's edge: sparks
@@ -776,12 +901,13 @@ func bootGroundPixels(w, h int, fx, fy, aspect float64, seed uint32) []byte {
 // release destroys the style's textures. It runs on the render thread while
 // their renderer is alive, with the screen as the target.
 func (s *bootStyleRun) release() {
-	for _, tex := range [...]*sdl.Texture{s.crackTex, s.ground, s.shadow, s.big} {
+	for _, tex := range [...]*sdl.Texture{s.ground, s.shadow, s.big} {
 		if tex != nil {
 			_ = tex.Destroy()
 		}
 	}
-	s.crackTex, s.ground, s.shadow, s.big = nil, nil, nil, nil
+	s.ground, s.shadow, s.big = nil, nil, nil
+	s.crack.release()
 }
 
 // chimeScore is the power-on chime for this style: the start chime pushed
@@ -822,7 +948,7 @@ func (r *bootOSRun) styleGuard(what string, fn func()) (ok bool) {
 // (wordmark, dawn, blooms, progress) after their own entrance and draw the
 // logo themselves; the still image keeps every beat but moves nothing. hold
 // is set for the hold's frames, which fire the style's buzzes; every frame
-// grows the cracks first, before anything is drawn to the screen.
+// takes the crack layer's next band first, before anything is drawn.
 func (r *bootOSRun) frame(ms float64, hold bool) bootOSFrame {
 	r.nowMS = ms
 	s := &r.style
@@ -833,7 +959,7 @@ func (r *bootOSRun) frame(ms float64, hold bool) bootOSFrame {
 			if hold {
 				r.styleFire(ms)
 			}
-			r.crackUpdate(ms)
+			r.crackUpdate()
 			f = bootOSTimeline(ms-s.lead, r.powerOn, r.motion, false)
 			f.logo, f.logoScale, f.comet = 1, 1, -1
 			if r.continuity {
@@ -868,86 +994,6 @@ func (r *bootOSRun) styleFire(ms float64) {
 		}
 		playHaptic(p.pulse)
 	}
-}
-
-// crackUpdate draws the crack pieces born by ms into the crack layer.
-func (r *bootOSRun) crackUpdate(ms float64) {
-	s := &r.style
-	if s.crackTex == nil || s.crackDone >= len(s.cracks) {
-		return
-	}
-	t := float32(ms - s.impact)
-	if t < 0 {
-		return
-	}
-	n := s.crackDone
-	for n < len(s.cracks) && s.cracks[n].birth <= t {
-		n++
-	}
-	if n == s.crackDone {
-		return
-	}
-	if err := r.renderer.SetRenderTarget(s.crackTex); err != nil {
-		// The cracks are drawn as lines from here on.
-		_ = s.crackTex.Destroy()
-		s.crackTex = nil
-		return
-	}
-	_ = r.renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	bootCrackLines(r.renderer, s.cracks[s.crackDone:n], 0, 0, sdl.Color{R: 255, G: 255, B: 255, A: 255}, 255, 130)
-	if err := r.renderer.SetRenderTarget(nil); err != nil {
-		logWarn("startup", "boot cracks could not release their target: %v", err)
-	}
-	_ = r.renderer.SetClipRect(nil)
-	s.crackDone = n
-}
-
-// bootCrackLines draws crack pieces offset by (dx, dy) in c: a faint halo at
-// halo alpha along both sides, then each piece at alpha, as many pixels wide
-// as its width.
-func bootCrackLines(renderer *sdl.Renderer, segs []bootCrackSeg, dx, dy float32, c sdl.Color, alpha, halo uint8) {
-	line := func(g *bootCrackSeg, step int) {
-		ax, ay := g.across()
-		ox, oy := dx+ax*float32(step), dy+ay*float32(step)
-		_ = renderer.DrawLineF(g.x0+ox, g.y0+oy, g.x1+ox, g.y1+oy)
-	}
-	if halo > 0 {
-		_ = renderer.SetDrawColor(c.R, c.G, c.B, halo)
-		for i := range segs {
-			lo, hi := segs[i].span()
-			line(&segs[i], lo-1)
-			line(&segs[i], hi+1)
-		}
-	}
-	_ = renderer.SetDrawColor(c.R, c.G, c.B, alpha)
-	for i := range segs {
-		lo, hi := segs[i].span()
-		for step := lo; step <= hi; step++ {
-			line(&segs[i], step)
-		}
-	}
-}
-
-// across is the one-pixel step across a crack piece that widens it: down for
-// a piece running more across the screen than up it, right for one running
-// more up, so a crack keeps its width whichever way it heads.
-func (g *bootCrackSeg) across() (float32, float32) {
-	if math.Abs(float64(g.x1-g.x0)) >= math.Abs(float64(g.y1-g.y0)) {
-		return 0, 1
-	}
-	return 1, 0
-}
-
-// span is the steps across the piece that its pixels cover: one line, a
-// second beside it, or one on either side.
-func (g *bootCrackSeg) span() (lo, hi int) {
-	switch {
-	case g.width >= 3:
-		return -1, 1
-	case g.width == 2:
-		return 0, 1
-	}
-	return 0, 0
 }
 
 // dropPose is the falling logo at ms: its size against its size at rest, how
@@ -1305,52 +1351,6 @@ func (r *bootOSRun) drawWave(ms, fade, zoom, shx, shy float64) {
 	from := s.tile / (s.side * (1 - 2*bootLogoPaneInset))
 	grow := from + (bootWaveReach-from)*(1-(1-q)*(1-q))
 	r.drawRim(s.cx+shx, s.cy+shy, grow*zoom, (1-q)*(1-q)*fade)
-}
-
-// drawCracks paints the crack layer at presence p: its lines in a cool tone,
-// then their glow in the accent, hot as they spread and cooling after.
-func (r *bootOSRun) drawCracks(ms, p, shx, shy float64, light bool) {
-	s := &r.style
-	t := ms - s.impact
-	if t < 0 || len(s.cracks) == 0 || p <= 0 {
-		return
-	}
-	glow := 1.0
-	if t > bootCrackGrowMS {
-		glow = 0.16 + 0.84*math.Exp(-(t-bootCrackGrowMS)/520)
-	}
-	accent := glassAccent()
-	cool, coolA := glassMix(sdl.Color{R: 96, G: 104, B: 124, A: 255}, accent, 0.2), 150.0
-	if light {
-		cool, coolA = sdl.Color{R: 30, G: 34, B: 44, A: 255}, 170
-	}
-	if tex := s.crackTex; tex != nil {
-		bootOSF = sdl.FRect{X: float32(shx), Y: float32(shy), W: float32(screenWidth), H: float32(screenHeight)}
-		_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-		_ = tex.SetColorMod(cool.R, cool.G, cool.B)
-		_ = tex.SetAlphaMod(uint8(math.Round(coolA * p)))
-		_ = r.renderer.CopyF(tex, nil, &bootOSF)
-		glowA := 255.0
-		if light {
-			glowA = 200
-		}
-		_ = tex.SetBlendMode(bootStyleLightMode(light))
-		_ = tex.SetColorMod(accent.R, accent.G, accent.B)
-		_ = tex.SetAlphaMod(uint8(math.Round(glowA * glow * p)))
-		_ = r.renderer.CopyF(tex, nil, &bootOSF)
-		_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-		_ = tex.SetColorMod(255, 255, 255)
-		_ = tex.SetAlphaMod(255)
-		return
-	}
-	// No target: the pieces born so far, drawn as lines.
-	n := 0
-	for n < len(s.cracks) && float64(s.cracks[n].birth) <= t {
-		n++
-	}
-	_ = r.renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	col := glassMix(cool, accent, glow)
-	bootCrackLines(r.renderer, s.cracks[:n], float32(shx), float32(shy), col, uint8(math.Round(220*p)), uint8(math.Round(70*p)))
 }
 
 // drawRollGround paints the roll's floor: one faint line of light along it.

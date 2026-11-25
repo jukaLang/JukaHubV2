@@ -31,6 +31,24 @@ type queuedKeyboardEvent struct {
 	_ [syntheticEventPad]byte
 }
 
+type queuedControllerAxisEvent struct {
+	sdl.ControllerAxisEvent
+	_ [syntheticEventPad]byte
+}
+
+// pushControllerAxis queues one controller axis value (a stick or a trigger),
+// as a pad moving it would.
+func pushControllerAxis(which sdl.JoystickID, axis uint8, value int16) error {
+	_, err := syntheticEventPush(&queuedControllerAxisEvent{ControllerAxisEvent: sdl.ControllerAxisEvent{
+		Type:      sdl.CONTROLLERAXISMOTION,
+		Timestamp: sdl.GetTicks(),
+		Which:     which,
+		Axis:      axis,
+		Value:     value,
+	}})
+	return err
+}
+
 type queuedMouseMotionEvent struct {
 	sdl.MouseMotionEvent
 	_ [syntheticEventPad]byte

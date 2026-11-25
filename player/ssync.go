@@ -1170,6 +1170,18 @@ func ssyncCompare(ctx context.Context, peerID, peerName string) (ssyncComparison
 		skew = 0
 	}
 	plan := ssyncBuildPlan(local, remote, ssyncLoadBase(peerID), skew, local.Name, peerName)
+	// A file on one side only whose name the other side spells with other
+	// upper/lower case would land on that file (FAT32, exFAT and Windows fold
+	// case) with no snapshot, now that syncs also run by themselves
+	// (synchub_peers.go): it is left where it is and listed instead.
+	if clash := shoCaseClashes(plan, local.Files, remote.Files); len(clash) > 0 {
+		for _, it := range plan.Items {
+			if clash[it.Key] {
+				plan.Skipped = append(plan.Skipped, it.Path+" (the other device spells it with other upper/lower case)")
+			}
+		}
+		plan = ssyncFilterPlan(plan, func(it ssyncItem) bool { return !clash[it.Key] })
+	}
 	return ssyncComparison{
 		PeerID:   peerID,
 		PeerName: peerName,
@@ -1288,6 +1300,12 @@ func ssyncHandleManifest(w http.ResponseWriter, r *http.Request, call peerCall) 
 	}
 	if gameScreenSuspended() {
 		http.Error(w, "a game is running there — close it first", http.StatusConflict)
+		return
+	}
+	// This device is running a whole sync with the caller itself
+	// (synchub_peers.go): one direction at a time.
+	if syncPeersBusyWith(call.id) {
+		http.Error(w, "it is syncing with this device already — try again in a moment", http.StatusConflict)
 		return
 	}
 	ssyncBuildMu.Lock()

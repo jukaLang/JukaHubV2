@@ -31,6 +31,9 @@ func quietModeFromConfig(config *Config) bool {
 // takes effect without a restart.
 func quietModeBind(config *Config) {
 	quietModeActive.Store(quietModeFromConfig(config))
+	// Quiet hours and Notifications while playing ride along
+	// (notifications_actions.go).
+	notifPrefsBind(config)
 }
 
 // quietModeSet applies the switch and writes it into the live config. The

@@ -164,6 +164,16 @@ they were, and Select still opens the menu. The choice is the
   as a browser's does: `@layer` order (Tailwind 4), the later of
   `padding: 1rem` and `padding-top: 0`, and a reset's `margin: 0` on quotes
   and figures.
+* Float figures, infoboxes and sidebars like a browser: a floated figure keeps
+  its picture and caption together at the side of the text (Wikipedia's
+  thumbnails and infobox, WordPress captions, the columns of a float grid),
+  each line beside it is only as much shorter as the float needs, and the
+  text has the whole width again below it. A box that cannot run under a
+  float (a panel with a background, a picture, a table) sits beside it or
+  below it, and clearfixes, `overflow: hidden` boxes, flex items and table
+  cells keep their floats inside them. A padded card or panel is drawn at its
+  full width, so its right padding is back and its lines stay inside its
+  border.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and positioned layers painted in their stacking
@@ -622,6 +632,42 @@ criteo.com, or twitter.com loading analytics.twitter.com — its files load as
 the site's own. The URL-path patterns apply everywhere, so an `/ads/` folder is
 blocked on any site.
 
+### Ads are taken out of the page
+
+Blocking the requests leaves the room a page keeps for its ads: an empty
+250-pixel slot under an "Advertisement" line, a sponsored card in a grid, a
+picture from an ad server drawn as a blank placeholder. So before the reader
+reads a page — after its scripts have run, before its text, links, style sheets
+and layout — every ad is cut out of the markup with everything inside it
+(`player/webpage_adremove.go`). Nothing of it is drawn, linked, focused or
+downloaded, and the page closes up where it was: the paragraphs around it meet,
+a grid's other cards move up, text no longer wraps round an empty slot. A grid
+that lost an ad item closes the columns nothing is left in, so an article beside
+a removed ad rail spans the page instead of leaving a blank column.
+
+What counts as an ad: the markers ad code itself writes (AdSense's
+`adsbygoogle`, Google Publisher Tag's `div-gpt-ad…` slots and ad frames,
+`data-ad-client`, AMP's `<amp-ad>`, Taboola, Outbrain, Ezoic, AdThrive and
+similar widgets, the ad blocks of DuckDuckGo, Bing, Yahoo and Google), pictures,
+videos and frames from the blocked servers above, tracking pixels, links into ad
+click servers, elements named *advertisement*, *sponsored* or *advertorial*,
+and elements named for an ad (`ad-slot`, `top-ad`, `AdContainer`, `data-ad-…`)
+that hold nothing but ad furniture. A label on a line of its own —
+"Advertisement", "Sponsored", "Story continues below advertisement", "Ad
+Feedback", "Anzeige", "Publicidad", "広告" — goes too, and so does the frame
+round an ad that holds nothing else. A box named for an ad that carries a
+"Sponsored" label is a native ad and goes whole.
+
+What stays: anything with real content in it is judged by that content, not by
+its name. A classifieds listing whose card is called `ad-card` keeps its title,
+price and photo; a page flagged `has-ads` or `ad-free`, an `ad-title` or
+`ad-price`, a Drupal teaser marked `node--promoted` and a country flag `fi-ad`
+are not ads; the word "advertisement" inside a sentence is left alone; an
+element whose tag was never closed and runs on into the article is kept. Every
+removed element counts toward the page's **BLOCKED** total, and the removal
+follows the request filter's switches: **Allow ads on this site** and
+**Settings → Browser → Block ads and trackers** turn it off too.
+
 ### Turning filtering off for one site
 
 A page that needs the very script the filter drops (a consent wall, a checkout,
@@ -650,16 +696,16 @@ reloads under it. On an excepted site it reads **Block ads on this site**.
 ### Turning filtering off everywhere
 
 **Settings → Browser → Block ads and trackers** (on by default) turns the filter
-off for every site: pages load every subresource they ask for, the counter reads
-**FILTER OFF**, and the per-site switches have nothing to do until it is back
+off for every site: pages load every subresource they ask for and keep their ad
+boxes, the counter reads **FILTER OFF**, and the per-site switches have nothing to do until it is back
 on. The setting is the `browserBlockAds` key in `jukauser.json` (see
 [Configuration](CONFIGURATION.md)).
 
 This is a curated list, not EasyList (whose licence and cosmetic rules do not
 fit a reader): it targets the networks that dominate ad-heavy pages without
 breaking sites that load their own assets — no CDNs, font or library hosts, or
-video hosts are on it. Ads a site serves from its own domain can still get
-through.
+video hosts are on it. An ad a site serves from its own domain is still removed
+from the page when its markup says it is an ad (see above).
 A page's images are given at most six seconds in total, so photo-heavy pages
 show their text promptly and draw any image that missed the budget as a plain
 placeholder. Laying out a very long article (1,500+ rows) takes a moment once,

@@ -85,16 +85,20 @@ back.
 ## Boot animation styles
 
 **Settings → General → Boot animation** chooses what the logo does (saved as
-`bootStyle`; `bootstyles.go`). **Watch the boot animation** plays the chosen
-one, vibration included.
+`bootStyle`; `bootstyles.go`). Left and Right step through the styles below;
+**A** lists them with a check on each one picked, and **A** on a style adds it
+or takes it out, so you can pick several (2026-11-24): each start then plays
+one of them, never the one the last start played. **Watch the boot animation**
+plays the chosen one (or the next of the ones picked), vibration included.
 
 | Style | `bootStyle` | What you see |
 | --- | --- | --- |
-| **Cinematic** | `cinematic` | The camera looks straight down at the ground, lit in a pool round the logo's place, and the logo falls to it from the screen: it appears big, over four times its size and spilling past the screen's edges, as if just under the glass, and shrinks to its resting size as it falls, faster and faster, trailing a short blur, its shadow sliding in under it. On the frame it lands, one hard buzz of the vibration motor, the picture shakes for under half a second, a short flash, a wave of light runs out along the ground, dust and sparks burst out all round and cracks race out from under the tile in every direction, glowing in the accent and cooling to dark — a different pattern every boot. The logo is driven into the ground for a moment, bounces back up towards the screen twice (a weaker buzz and a quieter knock in the startup chime on each landing) and settles; then the name, the colours and the progress line come up. When the firmware's logo is already on screen, it is first tossed up towards the screen and then falls back. |
+| **Cinematic** | `cinematic` | The camera looks straight down at the ground, lit in a pool round the logo's place, and the logo falls to it from the screen: it appears big, over four times its size and spilling past the screen's edges, as if just under the glass, and shrinks to its resting size as it falls, faster and faster, trailing a short blur, its shadow sliding in under it. On the frame it lands, one hard buzz of the vibration motor, the picture shakes for under half a second, a short flash, a wave of light runs out along the ground, dust and sparks burst out all round and the ground breaks like stone (`bootcracks.go`, 2026-11-24): cracks run out from under the tile in every direction, first from its corners, widest at the tile, jagged, forking and tapering to hairlines, each a dark groove lit from the top-left with a thin bright far lip; rings of cracks split the slab round the tile into pieces, some tipped a little so they catch more or less light; the edge it hit is crushed, with hair cracks all round, and a little grit lies scattered — a different pattern every boot. The logo is driven into the ground for a moment, bounces back up towards the screen twice (a weaker buzz and a quieter knock in the startup chime on each landing) and settles; then the name, the colours and the progress line come up. When the firmware's logo is already on screen, it is first tossed up towards the screen and then falls back. |
 | **Roll** | `roll` | The rounded logo tumbles in from the left, rolling over its rounded corners, landing on each side with a small squash and a light tick, slowing step by step until it stops upright in the middle — exactly where the firmware's logo sits. About two seconds. |
 | **Still logo** | `image` | The logo upright and still where the firmware's logo is (so a power-on shows no jump), the name and the progress line. Nothing moves; the quickest boot that still shows one. |
 | **Classic** | `classic` | The glass boot described above: a light runs round the pane, the lights come up with the chime's bells. |
 | **Surprise me** | `random` | Cinematic, Roll or Classic, a different one each time. |
+| Several picked (**A**), shown as their names, "Cinematic + Roll" | the list, `cinematic,roll` | One of them each start, never the one the last start played, so two picked take turns. Picking Cinematic, Roll and Classic is **Surprise me**; taking the last one out is **None**. |
 | **None** (default) | `none` | No boot animation at all, and no short one when you open JukaHub either: the startup work runs and Home appears as soon as it is ready, without building itself. The fastest start. The startup chime (if on) starts with Home's first frame. **Startup animation** has nothing left to choose and is greyed out. |
 
 - **None is the default everywhere** (2026-11-18; before, only on the JukaHub
@@ -119,6 +123,32 @@ one, vibration included.
 - Cinematic and Roll hold the boot a little longer than Classic (about 3.3 and
   4 seconds after the startup work, against 2.7); the Still logo is shorter
   (2 seconds). A press ends it at any time.
+- **Several picked** (or **Surprise me**): the style each start played is noted
+  in `bootstyle-last` in the data folder, so the next start leaves it out;
+  without the file (a new card) the first pick is free. An app launch's short
+  version takes a turn too.
+- Cinematic's cracks are drawn on another core while the logo falls (an
+  estimated few tens of milliseconds on the handheld, not yet timed there) and
+  revealed outwards from under the tile; `branding/mkbootcracks.py` draws the same cracks from the same seed on
+  a PC, to preview a change before building.
+
+### Can the boot logo itself be animated?
+
+No. The picture a power-on shows first is drawn by the firmware's bootloader
+before Linux starts, from one still BMP on the device's own storage (on the
+JukaHub OS card image, on the card); that bootloader shows one picture and
+has no way to play frames, and the picture stays up untouched while Linux
+starts. The boot-logo tools for these handhelds flash one still BMP too. The
+animation can only begin once JukaHub runs, a few seconds later. That is why
+the installed boot logo sits on exactly the pixels of the animation's first
+frame (`bootlogo_layout.go`): when a power-on starts from it (the boot hook
+started JukaHub and the installed logo is JukaHub's), the still logo seems to
+come to life — Cinematic tosses it up towards the screen before it falls, Roll
+fades it out under the rolling tile, the Still logo and Classic carry on from
+it — and with several styles picked, each starts from the same picture.
+Playing frames during Linux's own start would need another player started by
+the firmware ahead of JukaHub, competing with the boot for the processor; JukaHub
+does not do that.
 
 ## Shutting down
 
@@ -166,7 +196,7 @@ Six rows in **Settings → General**, after **Start JukaHub at login**:
 | --- | --- |
 | Skip the stock menu at boot | TrimUI stock firmware only, with **Start JukaHub at login** on. **On** (default): the boot hook starts JukaHub in place of the stock menu, which never opens. **Off**: the menu opens for a moment and is closed once it is up (try it if Wi-Fi, brightness or volume are not set up after a boot). Saved as `autoStartSkipMenu`; off leaves `.autostart-keep-menu` in the JukaHub folder for the hook. Off also keeps the menu in JukaHub OS mode, whose own switch (Settings → JukaHub OS) then greys out. |
 | Startup animation | **Full at power-on** (default): the full boot when the device starts into JukaHub, the short one when you open it. **Full every time**: the full boot on every start. **Always quick**: never the full one. Saved as `startupAnimation` = `power`, `always` or `quick`. |
-| Boot animation | What the logo does: **Cinematic**, **Roll**, **Still logo**, **Classic**, **Surprise me** or **None** (default; see [Boot animation styles](#boot-animation-styles)). Saved as `bootStyle` = `cinematic`, `roll`, `image`, `classic`, `random` or `none`. |
+| Boot animation | What the logo does: **Cinematic**, **Roll**, **Still logo**, **Classic**, **Surprise me** or **None** (default; see [Boot animation styles](#boot-animation-styles)). **A** lists the styles to check several, one of which plays each start. Saved as `bootStyle` = `cinematic`, `roll`, `image`, `classic`, `random`, `none`, or the styles picked joined by commas (`cinematic,roll`). |
 | Boot logo | TrimUI only. Says what the device shows at power-on: **JukaHub**, **Original** (the picture that was there before JukaHub's), **Custom** (another tool changed it), **Restore needed** (a write was cut short, by a power loss say) or **Unavailable** (the second line says why); **Checking…** while it looks and **Writing…** while it writes. Press **A** twice to install the JukaHub logo — the first press arms it and says what will happen, the second within four seconds does it. When the JukaHub logo is installed (or a restore is needed), the same two presses put the previous picture back. |
 | Silent boot | TrimUI only. The bootloader starts Linux without printing every kernel message to the board's unused serial port: **Off**, **On from next start**, **On**, **Off from next start**, **No effect** (this bootloader passes its level some other way) or **Unavailable** (the second line says why). **A** twice switches it; see [Silent boot](#silent-boot). |
 | Watch the boot animation | Plays the power-on sequence in the chosen style now, over the screen you are on, and comes back to it. The progress line is simulated, since nothing is starting. With **None** it only says the animation is off. |

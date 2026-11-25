@@ -101,6 +101,11 @@ if [ -n "$HELPERS_DIR" ]; then
     else
         echo "    (no moonlight-stream in $HELPERS_DIR: the package ships without Moonlight streaming)"
     fi
+    # The In-game indicators hook (ingamehud.go), optional as well.
+    if [ -f "$HELPERS_DIR/libjukaosd.so" ]; then
+        cp "$HELPERS_DIR/libjukaosd.so" "$PKG/bin/"
+        chmod 644 "$PKG/bin/libjukaosd.so"
+    fi
 else
     echo "    (no Remote Play helpers in native/bin: the package ships without Remote Play streaming)"
 fi

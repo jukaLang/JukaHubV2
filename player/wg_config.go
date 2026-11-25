@@ -48,6 +48,9 @@ type wgConfig struct {
 	Keepalive    int // seconds; 0: off
 	// Skipped lists the keys JukaHub reads past (scripts, routing tables).
 	Skipped []string
+	// AWG is the AmneziaWG obfuscation (Jc…, S1…, H1…, I1… in the
+	// [Interface], wg_awg.go); nil for plain WireGuard.
+	AWG *wgAWG
 }
 
 // wgLooksLikeConfig is the cheap test Files and the import list use before
@@ -104,7 +107,7 @@ func wgParseConfig(text string) (*wgConfig, error) {
 		return nil, errors.New("that file is too big to be a WireGuard configuration")
 	}
 	text = strings.TrimPrefix(text, "\ufeff")
-	c := &wgConfig{}
+	c := &wgConfig{AWG: newWGAWG()}
 	section := ""
 	peers := 0
 	haveKey, havePeerKey := false, false
@@ -173,6 +176,13 @@ func wgParseConfig(text string) (*wgConfig, error) {
 	if _, has6 := c.families(); has6 && c.MTU > 0 && c.MTU < 1280 {
 		return nil, fmt.Errorf("MTU %d is too small for the IPv6 address (IPv6 needs 1280)", c.MTU)
 	}
+	// AmneziaWG decoys left out are listed with the other ignored keys.
+	c.Skipped = append(c.Skipped, c.AWG.Notes...)
+	awg, err := wgAWGFinish(c.AWG)
+	if err != nil {
+		return nil, fmt.Errorf("AmneziaWG settings: %w", err)
+	}
+	c.AWG = awg
 	if _, err := newWGIdentity(c.PrivateKey, c.PeerKey, c.PresharedKey); err != nil {
 		return nil, err
 	}
@@ -219,6 +229,10 @@ func (c *wgConfig) setInterface(key, val string, haveKey *bool) error {
 		}
 		c.ListenPort = n
 	default:
+		// AmneziaWG's keys (wg_awg.go).
+		if handled, err := wgAWGSet(c.AWG, key, val); handled {
+			return err
+		}
 		// Table, FwMark, SaveConfig and the scripts are wg-quick's business;
 		// anything else is a provider's extra. Neither stops the import.
 		c.Skipped = append(c.Skipped, wgKeyName(key))
@@ -300,12 +314,13 @@ func wgValidDomain(s string) bool {
 	return true
 }
 
-// mtu is the tunnel's MTU.
+// mtu is the tunnel's MTU. AmneziaWG's transport padding (S4) rides in every
+// datagram, so the default leaves room for it (never under IPv6's 1280).
 func (c *wgConfig) mtu() int {
 	if c.MTU > 0 {
 		return c.MTU
 	}
-	return wgDefaultMTU
+	return max(wgDefaultMTU-c.AWG.pad(wgMsgData), 1280)
 }
 
 // families reports which IP versions the tunnel has an address for.
@@ -431,6 +446,7 @@ func (c *wgConfig) quickText(all bool) string {
 	if c.ListenPort > 0 {
 		b.WriteString("ListenPort = " + strconv.Itoa(c.ListenPort) + "\n")
 	}
+	b.WriteString(c.AWG.quickLines())
 	b.WriteString("\n[Peer]\n")
 	b.WriteString("PublicKey = " + wgKeyString(c.PeerKey) + "\n")
 	if c.HasPSK {

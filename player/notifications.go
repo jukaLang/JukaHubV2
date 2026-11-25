@@ -33,6 +33,19 @@ type notification struct {
 	// chatty producer (a retry loop, a volume slider) shows "×3" instead of
 	// pushing everything else out of the 50-entry history.
 	Repeat int
+	// ID is the row's own number for this run (notifSeq): the open centre's
+	// highlight follows it when rows arrive (notifFollowArrivals).
+	ID uint64
+	// Source groups the row with others from the same part of JukaHub
+	// ("Updates", "Downloads"…; notifications_store.go): the centre lists a
+	// source's rows together, newest source first.
+	Source string
+	// Action is what A does on the row ("Install update", "Open", "Retry"),
+	// by name so it survives a restart (notifications_actions.go).
+	Action notifAction
+	// Key makes a newer row with the same key replace this one: one offer of
+	// an update, not one per start.
+	Key string
 }
 
 type notifCenter struct {
@@ -56,6 +69,14 @@ type notifCenter struct {
 	// seenAdded is notifAdded as of the last frame drawn while open
 	// (notifFollowArrivals).
 	seenAdded uint64
+	// cursorID is the highlighted row's ID as of the last frame drawn (0
+	// before one): arrivals regroup the rows, so the highlight follows the
+	// row rather than its index.
+	cursorID uint64
+	// actionRect and dismissRect are the highlighted row's action pill and
+	// "×" from the last frame, for a click or a tap.
+	actionRect  sdl.Rect
+	dismissRect sdl.Rect
 }
 
 var nc notifCenter
@@ -116,27 +137,105 @@ func notifRecordToast(msg string, kind ToastKind) {
 // A repeat folds into the newest row only when that row has the same read
 // state, so a run of confirmations cannot swallow an unread warning.
 func notifRecordAs(msg string, p notifPriority, read bool) {
+	notifFile(notification{Message: msg, Priority: p, Read: read})
+}
+
+// notifFile files one row: the single writer for nc.history. The row goes to
+// the top of its source's group, and the group to the top of the list
+// (notifInsertLocked); a row with a Key first replaces the older row that
+// carries it; the history keeps notifHistoryMax rows, dropping the oldest.
+// Rows worth keeping are written to the card a moment later
+// (notifications_store.go). An unread row filed while a game owns the screen
+// is counted for the "while you were playing" summary (whileaway.go).
+func notifFile(n notification) {
 	// Stored as the toast shows it, so the toast can find its row (notifPush
 	// hands its text over untrimmed; showToastPrimitive trims the toast's).
-	msg = strings.TrimSpace(msg)
-	if msg == "" {
+	n.Message = strings.TrimSpace(n.Message)
+	if n.Message == "" {
 		return
 	}
+	if n.Source == "" {
+		n.Source = notifGuessSource(n.Message)
+	}
+	notifEnsureLoaded()
 	notifHistoryMu.Lock()
-	defer notifHistoryMu.Unlock()
 	if len(nc.history) > 0 {
 		top := &nc.history[0]
-		if top.Message == msg && top.Priority == p && top.Read == read {
+		if top.Message == n.Message && top.Priority == n.Priority && top.Read == n.Read && top.Action == n.Action {
 			top.Timestamp = time.Now()
 			top.Repeat++
+			keep := notifKeeps(*top)
+			notifHistoryMu.Unlock()
+			if keep {
+				notifChanged()
+			}
 			return
 		}
 	}
-	nc.history = append([]notification{{Message: msg, Priority: p, Timestamp: time.Now(), Read: read, Repeat: 1}}, nc.history...)
-	notifAdded++
-	if len(nc.history) > 50 {
-		nc.history = nc.history[:50]
+	replaced := false
+	if n.Key != "" {
+		kept := nc.history[:0]
+		for _, h := range nc.history {
+			if h.Key != n.Key {
+				kept = append(kept, h)
+			} else {
+				replaced = true
+			}
+		}
+		nc.history = kept
 	}
+	notifSeq++
+	n.ID = notifSeq
+	n.Timestamp = time.Now()
+	n.Repeat = 1
+	notifInsertLocked(n)
+	notifAdded++
+	notifHistoryMu.Unlock()
+	if !n.Read {
+		noteAwayEvent(awayKindAlert, "")
+	}
+	// A confirmation that is not kept on the card does not rewrite the file
+	// (a volume slider files one per step).
+	if replaced || notifKeeps(n) {
+		notifChanged()
+	}
+}
+
+// notifHistoryMax bounds the history, in memory and on the card.
+const notifHistoryMax = 50
+
+// notifSeq numbers the rows filed this run (notification.ID). Guarded by
+// notifHistoryMu.
+var notifSeq uint64
+
+// notifInsertLocked puts n at the top of its source's group and that group at
+// the top of the list, so the rows of one source stay together, newest source
+// first, newest row first within it; history[0] is always the newest row. When
+// the list is over notifHistoryMax the oldest rows go, whatever their group.
+// The caller holds notifHistoryMu.
+func notifInsertLocked(n notification) {
+	out := make([]notification, 0, len(nc.history)+1)
+	out = append(out, n)
+	for _, h := range nc.history {
+		if h.Source == n.Source {
+			out = append(out, h)
+		}
+	}
+	for _, h := range nc.history {
+		if h.Source != n.Source {
+			out = append(out, h)
+		}
+	}
+	for len(out) > notifHistoryMax {
+		oldest := 0
+		for i := range out {
+			if out[i].ID < out[oldest].ID {
+				oldest = i
+			}
+		}
+		out = append(out[:oldest], out[oldest+1:]...)
+	}
+	nc.history = out
 }
 
 // notifBadgeLabel is the count drawn on the bell: exact up to nine, "9+" past
@@ -173,6 +272,7 @@ var notifAdded uint64
 // notifHistoryState copies the history for a reader on the render thread,
 // with notifAdded read under the same lock.
 func notifHistoryState() ([]notification, uint64) {
+	notifEnsureLoaded()
 	notifHistoryMu.Lock()
 	defer notifHistoryMu.Unlock()
 	return append([]notification(nil), nc.history...), notifAdded
@@ -204,6 +304,8 @@ func notifRowIndexLocked(msg string) int {
 }
 
 func notifUnreadCount() int {
+	// The bell is drawn from the first frame: the card's rows count from then.
+	notifEnsureLoaded()
 	notifHistoryMu.Lock()
 	defer notifHistoryMu.Unlock()
 	n := 0
@@ -559,14 +661,16 @@ func notifDropMaxH(by int32) int32 {
 // have their own measured heights, so a message is never clipped to make the
 // arithmetic work. An empty history gets the empty state's measured height
 // instead of a guessed row count.
-func notifDropdownLayout(config *Config, by int32, heights []int32, cursor, scroll int) (w, h int32, first, count int) {
+//
+// footH is the button line under the rows (notifFooterHint), 0 for none.
+func notifDropdownLayout(config *Config, by int32, heights []int32, cursor, scroll int, footH int32) (w, h int32, first, count int) {
 	w = notifDropWidth()
 	maxH := notifDropMaxH(by)
 	if len(heights) == 0 {
 		return w, min(notifHeaderH+notifEmptyContentH(config), maxH), 0, 0
 	}
-	first, count = notifListWindow(heights, maxH-notifHeaderH-notifListPadB, notifMaxRows, cursor, scroll)
-	h = notifHeaderH + notifSumHeights(heights[first:first+count]) + notifListPadB
+	first, count = notifListWindow(heights, maxH-notifHeaderH-notifListPadB-footH, notifMaxRows, cursor, scroll)
+	h = notifHeaderH + notifSumHeights(heights[first:first+count]) + notifListPadB + footH
 	return w, h, first, count
 }
 
@@ -579,6 +683,11 @@ func notifDropdownLayout(config *Config, by int32, heights []int32, cursor, scro
 // keeps its rows where they are. When every row of the history (rows) is new
 // there is no row to follow (Clear All, then a burst), and the highlight goes
 // to the newest instead of the oldest of the burst.
+//
+// Rows are grouped by source (notifInsertLocked), so an arrival can move a
+// whole group above the row being read: the highlight follows that row's ID
+// (cursorID, kept by the last frame drawn) wherever it went, and only without
+// one does it move down by the number of arrivals.
 func notifFollowArrivals(added uint64, rows int) {
 	if added <= nc.seenAdded {
 		nc.seenAdded = added
@@ -586,6 +695,16 @@ func notifFollowArrivals(added uint64, rows int) {
 	}
 	d := int(added - nc.seenAdded)
 	nc.seenAdded = added
+	if nc.cursorID != 0 {
+		if i := notifIndexOfID(nc.cursorID); i >= 0 {
+			moved := i - nc.cursor
+			nc.cursor = i
+			if nc.scroll > 0 {
+				nc.scroll = max(nc.scroll+moved, 0)
+			}
+			return
+		}
+	}
 	if d >= rows {
 		nc.cursor, nc.scroll = 0, 0
 		return
@@ -593,6 +712,29 @@ func notifFollowArrivals(added uint64, rows int) {
 	nc.cursor += d
 	if nc.scroll > 0 {
 		nc.scroll += d
+	}
+}
+
+// notifIndexOfID is the history index of the row with id, or -1.
+func notifIndexOfID(id uint64) int {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
+	for i, n := range nc.history {
+		if n.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// notifSyncCursorID records the highlighted row's ID, after a move or a
+// frame, so the next arrival follows that row.
+func notifSyncCursorID() {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
+	nc.cursorID = 0
+	if nc.cursor >= 0 && nc.cursor < len(nc.history) {
+		nc.cursorID = nc.history[nc.cursor].ID
 	}
 }
 
@@ -615,14 +757,25 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	history, added := notifHistoryState()
 	notifFollowArrivals(added, len(history))
 	nc.cursor = clampIndex(nc.cursor, len(history))
+	notifSyncCursorID()
 	lineH := int32(font.Height())
-	expanded := notifExpandedLines(notifDropMaxH(by)-notifHeaderH-notifListPadB, lineH)
+	// The first row of each source carries the source's name above its
+	// message, and the card ends in the line of buttons (A, X, Y).
+	kickerH := lineH + 2
+	footH := int32(0)
+	if len(history) > 0 {
+		footH = lineH + 10
+	}
+	expanded := notifExpandedLines(notifDropMaxH(by)-notifHeaderH-notifListPadB-footH-kickerH, lineH)
 	rowLayouts := notifMeasureRows(font, history, notifMessageWidth(notifDropWidth()), nc.cursor, expanded)
 	heights := make([]int32, len(rowLayouts))
 	for i, r := range rowLayouts {
 		heights[i] = r.height
+		if notifGroupStarts(history, i) {
+			heights[i] += kickerH
+		}
 	}
-	dropW, dropH, first, numRows := notifDropdownLayout(config, by, heights, nc.cursor, nc.scroll)
+	dropW, dropH, first, numRows := notifDropdownLayout(config, by, heights, nc.cursor, nc.scroll, footH)
 	nc.scroll = first
 	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
@@ -685,21 +838,33 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		if scrollable {
 			rowW -= 8
 		}
+		nc.actionRect, nc.dismissRect = sdl.Rect{}, sdl.Rect{}
 		for i := first; i < first+numRows && i < len(history) && i < len(rowLayouts); i++ {
 			n := history[i]
 			row := rowLayouts[i]
 			focused := i == nc.cursor
+			rowH := heights[i]
 
-			if ry+row.height > by+dropH {
+			if ry+rowH > by+dropH-footH {
 				break
 			}
 
-			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: rowW, H: row.height - 2}
+			// A source's first row starts with the source's name; the row's own
+			// rect (highlight, clicks) starts under it.
+			if notifGroupStarts(history, i) {
+				renderText(renderer, config, font, notifSourceLabel(n.Source),
+					WithAlpha(glassAccent(), 210), bx+16, ry+4)
+				ry += kickerH
+				rowH -= kickerH
+			}
+
+			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: rowW, H: rowH - 2}
 			nc.rowRects = append(nc.rowRects, rowRect)
 
 			// Row background: the cursor row is a selected list row.
 			if focused {
 				UIListRow(renderer, rowRect, 10, true, false)
+				nc.dismissRect = notifDrawDismissMark(renderer, rowRect)
 			}
 
 			// Priority dot, aligned with the first message line.
@@ -728,28 +893,26 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 					bx+32, ry+notifRowPad+int32(li)*lineH)
 			}
 
-			// Timestamp under the last message line.
-			ago := time.Since(n.Timestamp)
-			timeStr := ""
-			switch {
-			case ago < time.Minute:
-				timeStr = "just now"
-			case ago < time.Hour:
-				timeStr = fmt.Sprintf("%dm ago", int(ago.Minutes()))
-			default:
-				timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
+			// Timestamp under the last message line, and the row's action at
+			// the line's far end: a pill on the highlighted row (A runs it, a
+			// tap too), the accent word on the others.
+			timeY := ry + notifRowPad + int32(len(row.lines))*lineH + 2
+			renderText(renderer, config, font, notifAgo(n.Timestamp),
+				WithAlpha(ColorTextTertiary(), 150), bx+32, timeY)
+			if label := n.Action.Label; label != "" {
+				r := notifDrawActionLabel(renderer, config, font, label, rowRect.X+rowRect.W-12, timeY, focused)
+				if focused {
+					nc.actionRect = r
+				}
 			}
-			renderText(renderer, config, font, timeStr,
-				WithAlpha(ColorTextTertiary(), 150),
-				bx+32, ry+notifRowPad+int32(len(row.lines))*lineH+2)
 
-			ry += row.height
+			ry += rowH
 		}
 
 		// Rows above or below the window: the scrollbar says there is more,
 		// and where the card is in the history.
 		if scrollable {
-			listH := dropH - headerH - notifListPadB
+			listH := dropH - headerH - notifListPadB - footH
 			thumb := float64(numRows) / float64(len(history))
 			pos := float64(first) / float64(len(history)-numRows)
 			drawScrollbar(renderer, bx+dropW-9, listY+2, 3, listH-4, thumb, pos)
@@ -758,8 +921,28 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		if len(history) == 0 {
 			UIEmptyState(renderer, config, sdl.Rect{X: bx, Y: listY, W: dropW, H: dropH - headerH},
 				"@bell", "No notifications", "You're all caught up.")
+			return
 		}
+		// The buttons, in this frame's vocabulary (keyboard keys without a pad).
+		hint := ellipsize(font, notifFooterHint(history, nc.cursor), dropW-32)
+		renderText(renderer, config, font, hint, WithAlpha(ColorTextTertiary(), 200), bx+16, by+dropH-footH)
 	})
+}
+
+// notifAgo is a row's age: "just now", "5m ago", "3h ago", "2d ago". A row
+// from before the clock was set (the handheld boots before NTP) reads "just
+// now" rather than a negative age.
+func notifAgo(at time.Time) string {
+	ago := time.Since(at)
+	switch {
+	case ago < time.Minute:
+		return "just now"
+	case ago < time.Hour:
+		return fmt.Sprintf("%dm ago", int(ago.Minutes()))
+	case ago < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(ago.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(ago.Hours()/24))
 }
 
 // notifToggle opens/closes the notification dropdown.
@@ -800,6 +983,8 @@ func notifSetOpen(open, focusBell bool) {
 		}
 		nc.seenAdded = notifAdded
 		notifHistoryMu.Unlock()
+		notifSyncCursorID()
+		notifChanged()
 	}
 	PlayActivateSound()
 }
@@ -820,6 +1005,7 @@ func notifOpenOn(msg string) {
 	if i >= 0 {
 		nc.cursor = i
 	}
+	notifSyncCursorID()
 }
 
 // notifToastOpensCentre reports whether a click on the toast showing msg
@@ -869,6 +1055,7 @@ func notifNavigate(dr int) {
 		return
 	}
 	nc.cursor = clampIndex(nc.cursor+dr, notifHistoryLen())
+	notifSyncCursorID()
 }
 
 // notifWheel walks the open centre's rows under the mouse wheel, a row a
@@ -889,11 +1076,14 @@ func notifWheel(dy int32) bool {
 // notifClearAll clears all notifications. The dropdown stays open so the
 // empty state is visible (touch users get direct feedback).
 func notifClearAll() {
+	notifEnsureLoaded() // what is on the card goes too, not back at the next start
 	notifHistoryMu.Lock()
 	nc.history = nc.history[:0]
 	notifHistoryMu.Unlock()
 	nc.cursor = 0
 	nc.scroll = 0
+	nc.cursorID = 0
+	notifChanged()
 }
 
 // notifDismiss closes the dropdown.
@@ -937,12 +1127,23 @@ func notifHandleClick(x, y int32) bool {
 		PlayActivateSound()
 		return true
 	}
+	// The highlighted row's action pill runs it, its "×" dismisses it
+	// (notifications_actions.go).
+	if nc.actionRect.W > 0 && hitTouchTarget(nc.actionRect, x, y) {
+		notifRunAction(appConfig)
+		return true
+	}
+	if nc.dismissRect.W > 0 && hitTouchTarget(nc.dismissRect, x, y) {
+		notifDismissRow()
+		return true
+	}
 	// Clicking a row moves the selection there, which also shows its whole
 	// message; rowRects[0] is history row rowFirst once the list has scrolled.
 	for i, r := range nc.rowRects {
 		if pointInRect(x, y, r) {
 			if row := nc.rowFirst + i; nc.cursor != row {
 				nc.cursor = row
+				notifSyncCursorID()
 				PlayNavSound()
 			}
 			break

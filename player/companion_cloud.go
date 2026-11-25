@@ -525,7 +525,7 @@ small{color:var(--dim);display:block;margin-top:10px;font-size:12px}
 [hidden]{display:none!important}
 </style>
 <h1>Cloud save sync</h1>
-<p class=note>Your saves, the same on every JukaHub. Pick one of these; Tools &gt; Save sync on the handheld shows the result.</p>
+<p class=note>Your saves, the same on every JukaHub. Pick one of these; Tools &gt; Sync on the handheld shows the result. The <a id=syncLink href="#">Sync page</a> also pairs another JukaHub, RomM and Syncthing.</p>
 
 <div class=card id=googleCard>
   <h2>Google Drive</h2>
@@ -592,7 +592,7 @@ function showGoogle(g) {
   let line;
   if (g.signedIn && !g.expired) line = 'Signed in to Google Drive as ' + (g.account || 'your account') + '.';
   else if (g.signedIn) line = 'The sign-in for ' + (g.account || 'your account') + ' expired: press Sign in on the handheld.';
-  else if (g.source === 'build') line = 'This JukaHub has Google sign-in built in: press Sign in to Google Drive on the handheld (Tools > Save sync). The steps below are only for using a client of your own.';
+  else if (g.source === 'build') line = 'This JukaHub has Google sign-in built in: sign in from the Sync page, or on the handheld (Tools > Sync). The steps below are only for using a client of your own.';
   else if (g.source === 'environment') line = 'A Google client is set in this JukaHub\'s environment, and it comes first.';
   else if (g.source === 'config') line = 'Your own Google client is set (' + g.clientId + '). Press Sign in on the handheld, or send another one.';
   else line = 'No Google client on this JukaHub yet: follow the steps below once.';
@@ -669,6 +669,7 @@ $('dRemove').onclick = () => busy('dRemove', 'Forgetting...', async () => {
   try { const r = await post({action: 'webdav-remove'}); say('dMsg', r.message); $('dURL').value = ''; $('dUser').value = ''; await load(); }
   catch (e) { say('dMsg', e.message, true); }
 });
+$('syncLink').href = '/sync?p=' + encodeURIComponent(pin);
 const picked = location.hash.slice(1);
 if (picked === 'google' || picked === 'webdav') {
   const card = $(picked + 'Card');

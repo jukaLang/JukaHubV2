@@ -30,6 +30,12 @@ package main
 // carries what westonwrap.sh reads itself (PortMaster's device variables,
 // CRUSTY_SHOW_CURSOR, the headless size).
 //
+// westonwrap.sh is a bash script; a stock TrimUI has only BusyBox's sh, which
+// stops it at the first file it cannot source. It runs under a real bash —
+// the firmware's when it has one, else JukaHub's on the private glibc,
+// fetched at the first launch — and, where /bin/bash is not bash, in a mount
+// namespace of its own where it is (westonPickShell, westonBinBashPlan).
+//
 // The firmware's udev has no input_id rule, and Weston's libinput ignores every
 // input device udev did not tag, after which Weston does not start at all
 // ("TRIMUI Player1: not tagged as supported input device", "failed to create
@@ -38,6 +44,7 @@ package main
 // (wine_display_linux.go).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -207,8 +214,13 @@ type wineDisplayPlan struct {
 	Detail string
 
 	wrapper  string // westonwrap.sh, for the clean-up
+	shell    string // what runs westonwrap.sh (westonPickShell), the clean-up too
 	mountDir string // where an image is mounted ("" when nothing is)
 	unmount  bool   // this launch mounted it, so this launch unmounts it
+	// binbash gives the session's own `#!/bin/bash` scripts a real bash in a
+	// mount namespace of its own (portmaster_binbash.go); nil when the
+	// firmware's /bin/bash is one, or when none can be given.
+	binbash *pmBinBashPlan
 }
 
 // weston reports a WestonPack session.
@@ -243,7 +255,9 @@ func (d wineDisplayPlan) command(dir string) (*exec.Cmd, error) {
 // prepareWineDisplay puts the display around plan's command. openGL picks
 // WestonPack's OpenGL mode where WestonPack is the display. A WestonPack image
 // is mounted here; whatever this sets up is put away by stop and release.
-func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log wineLog) (wineDisplayPlan, error) {
+// phase shows a step that takes a while (a bash download, westonPickShell);
+// binBashOff is the portBinBash setting, read on the main thread.
+func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
 	host := currentWineHost()
 	mode, err := resolveWineDisplay(request, host)
 	if err != nil {
@@ -260,7 +274,7 @@ func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log w
 		}
 		return d, nil
 	case windowsDisplayWeston, windowsDisplayWestonGL:
-		return prepareWestonDisplay(d, host.weston, plan, log)
+		return prepareWestonDisplay(d, host.weston, plan, log, phase, binBashOff)
 	case windowsDisplayHeadless:
 		// An explicitly headless launch must not pick up a desktop session's
 		// display connection.
@@ -274,10 +288,17 @@ func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log w
 	return d, nil
 }
 
-// prepareWestonDisplay wraps the command in westonwrap.sh: the image mounted
-// when WestonPack is one, the wrapper checked, the PortMaster-style values set,
-// the input devices labelled for Weston's libinput.
-func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRuntimePlan, log wineLog) (wineDisplayPlan, error) {
+// prepareWestonDisplay wraps the command in westonwrap.sh: a real bash found
+// (or fetched) to run it, the image mounted when WestonPack is one, the
+// wrapper checked, the PortMaster-style values set, the input devices labelled
+// for Weston's libinput.
+func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRuntimePlan, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
+	// The shell comes first: getting JukaHub's bash is a download, and no
+	// image stays mounted meanwhile.
+	base := screenChildEnv(os.Environ())
+	shell, shellDir, shellNote := westonPickShell(base, phase, log)
+	d.shell = shell
+	log.printf("display: %s\n", shellNote)
 	wrapper := src.Wrapper
 	if wrapper == "" {
 		dir, mounted, err := wineMountWestonImage(src.Image, log)
@@ -324,7 +345,12 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 		log.printf("display: no PortMaster stand-in (%v); westonwrap.sh runs without one\n", err)
 		control = ""
 	}
-	d.Env = westonWrapperEnv(screenChildEnv(os.Environ()), w, h, control, overrides)
+	d.Env = westonWrapperEnv(base, w, h, control, overrides)
+	if shellDir != "" {
+		// `bash` by name is the same bash as the one running westonwrap.sh.
+		path, _ := childEnvLookup(d.Env, "PATH")
+		d.Env = mergeGameProfileEnv(d.Env, map[string]string{"PATH": strings.TrimSuffix(shellDir+":"+path, ":")})
+	}
 
 	// Crusty draws the pointer itself (CRUSTY_SHOW_CURSOR); the program gets the
 	// switch as well, for the mode where Crusty runs inside it.
@@ -332,8 +358,13 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 	if !hasEnvKey(appEnv, "CRUSTY_SHOW_CURSOR") {
 		appEnv["CRUSTY_SHOW_CURSOR"] = "1"
 	}
-	d.Command = westonShell()
+	d.Command = shell
 	d.Args = append([]string{wrapper}, westonWrapArgs(words, plan.Command, plan.Args, appEnv)...)
+	binbash, binbashNote := westonBinBashPlan(shell, d.Env, binBashOff)
+	d.binbash = binbash
+	if binbashNote != "" {
+		log.printf("display: %s\n", binbashNote)
+	}
 	wineLabelInputDevices(log)
 	return d, nil
 }
@@ -345,13 +376,18 @@ func (d wineDisplayPlan) stop(log wineLog) {
 	if d.wrapper == "" {
 		return
 	}
-	cmd := exec.Command(westonShell(), d.wrapper, "cleanup")
+	shell := d.shell
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	cmd := exec.Command(shell, d.wrapper, "cleanup")
 	cmd.Dir = filepath.Dir(d.wrapper)
 	cmd.Env = d.Env
 	if log.f != nil {
 		cmd.Stdout, cmd.Stderr = log.f, log.f
 	}
 	processGroupConfigure(cmd)
+	d.binbash.apply(cmd)
 	if err := cmd.Start(); err != nil {
 		log.printf("display: westonwrap.sh cleanup did not start: %v\n", err)
 		return
@@ -475,15 +511,102 @@ func wineScreenSize() (int, int) {
 	return 1280, 720
 }
 
-// westonShell runs the WestonPack scripts. PortMaster's scripts are written for
-// bash; the firmware's sh is the fallback, as for PortMaster ports (ports.go).
-func westonShell() string {
-	for _, name := range []string{"bash", "sh"} {
-		if path, err := exec.LookPath(name); err == nil && path != "" {
-			return path
+// westonPickShell is what runs westonwrap.sh, with a line for the launch log;
+// dir, when not "", goes first on the session's PATH so that `bash` by name is
+// the same bash. westonwrap.sh is a bash script, and BusyBox's sh — the only
+// shell of a stock TrimUI — stops it at the first file it cannot source, where
+// bash reports the file and goes on: a TrimUI PortMaster's control.txt sources
+// TRIMUI_EX's ex_config, which a card without TRIMUI_EX does not have
+// ("source: line 12: can't open '/mnt/SDCARD/System/etc/ex_config'", exit 2
+// before Weston started). So: a bash on env's PATH that runs a bash array;
+// else JukaHub's — Ubuntu's bash on the private glibc, the one PortMaster's
+// ports get (glibc_runtime.go), fetched here on an ARM64 TrimUI when the
+// handheld is online (a few MB, once); else the firmware's sh. Off the main
+// thread: it starts programs and may download.
+func westonPickShell(env []string, phase func(string), log wineLog) (shell, dir, note string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	all := pmLookPathAll(env, "bash")
+	for i, p := range all {
+		if i >= 3 {
+			break
+		}
+		if pmBashWorks(ctx, p, env) {
+			cancel()
+			if i > 0 {
+				// A BusyBox bash comes first on PATH: a shim names this one.
+				dir = pmBashShimDir(p)
+			}
+			return p, dir, "shell: " + p
 		}
 	}
-	return "/bin/sh"
+	cancel()
+	own := func(how string) (string, string, string, bool) {
+		d := privateGlibcBashWrapperDir()
+		if d == "" {
+			return "", "", "", false
+		}
+		return filepath.Join(d, "bash"), d, "shell: JukaHub's bash (Ubuntu's, on the private glibc " + privateGlibcVersion + ")" + how, true
+	}
+	if shell, dir, note, ok := own(""); ok {
+		return shell, dir, note
+	}
+	why := "the firmware has no bash"
+	if len(all) > 0 {
+		why = all[0] + " is not a full bash"
+	}
+	switch {
+	case !pmRuntimeApplies():
+	case !IsOnline():
+		why += "; connect to Wi-Fi once so JukaHub can add one"
+	default:
+		if phase != nil {
+			phase("Adding bash for WestonPack…")
+		}
+		log.printf("display: %s; adding JukaHub's bash (Ubuntu's, on the private glibc)\n", why)
+		dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		err := privateGlibcEnsureBash(dctx, nil)
+		dcancel()
+		if err == nil {
+			if shell, dir, note, ok := own(", added now: " + why); ok {
+				return shell, dir, note
+			}
+			err = errors.New("the private runtime has no usable bash")
+		}
+		why += "; adding JukaHub's failed: " + firstLine(err.Error())
+	}
+	sh := "/bin/sh"
+	if p, err := exec.LookPath("sh"); err == nil && p != "" {
+		sh = p
+	}
+	return sh, "", "shell: " + sh + " — " + why + ". westonwrap.sh is a bash script: under this sh it stops at the first file it cannot source"
+}
+
+// westonBinBashPlan is the /bin/bash cover for a WestonPack session on an
+// ARM64 TrimUI whose /bin/bash is BusyBox or missing (portmaster_binbash.go,
+// as PortMaster's ports get it): whatever westonwrap.sh starts by its own
+// `#!/bin/bash` line then gets shell too. nil when shell is not a bash, when
+// /bin/bash is one, when portBinBash is off, or when no namespace can be made;
+// the note (for the log) says which. Off the main thread.
+func westonBinBashPlan(shell string, env []string, off bool) (*pmBinBashPlan, string) {
+	if !pmRuntimeApplies() || filepath.Base(shell) != "bash" || !filepath.IsAbs(shell) {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c := pmRuntimeCheck{Done: true, BashOK: true, BashPath: shell, BashGood: shell}
+	ok, why := pmBinBashProbe(ctx, env, c)
+	if ok {
+		return nil, ""
+	}
+	why = setOr(why, pmBinBashSystem+" is not bash")
+	if off {
+		return nil, why + "; portBinBash is off, so a script's own #!/bin/bash line gets the firmware's"
+	}
+	plan, target, err := pmBinBashMake(c)
+	if err != nil {
+		return nil, why + "; the session keeps it: " + err.Error()
+	}
+	return plan, why + ", so the session runs in its own mount namespace where /bin/bash is " + target
 }
 
 // westonControlShim writes the PortMaster control.txt stand-in westonwrap.sh

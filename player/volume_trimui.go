@@ -893,6 +893,71 @@ func trimuiSystemVolume() (int, bool) {
 	return vol * 100 / trimuiSystemSteps, true
 }
 
+// trimuiRestoreVolumeAtLaunch puts the firmware's saved level (system.json
+// "vol", or "hpvol" with headphones in) on the codec once at launch, where the
+// codec shows another one. Started at boot by the autostart hook, JukaHub runs
+// before the stock launcher would have applied the file, and the speaker came
+// up at the codec's own default after every restart while the file still held
+// the level. Launched from the stock menu the two agree and nothing is
+// written. The file is not rewritten (it already holds the level), and a
+// level the user set meanwhile wins. A codec still registering is asked again
+// when the mixer probe retries (trimuiProbeRetry), a few times. Off the main
+// thread: amixer runs, and it may wait.
+func trimuiRestoreVolumeAtLaunch() {
+	if !IsTrimuiDevice() || volumeCachedBackend() != "trimui" {
+		return
+	}
+	for try := 0; try < 4; try++ {
+		if try > 0 {
+			time.Sleep(trimuiProbeRetry + time.Second)
+		}
+		if gen, _ := volumeEditCounters(); gen > 0 {
+			return
+		}
+		data, err := os.ReadFile(trimuiSystemJSONPath)
+		if err != nil {
+			return
+		}
+		key := "vol"
+		if headphoneJackPlugged(os.ReadFile) || headphoneJackEvdev() {
+			if _, ok, _ := trimuiSystemJSONIntFrom(data, "hpvol", trimuiSystemSteps); ok {
+				key = "hpvol"
+			}
+		}
+		step, ok, inRange := trimuiSystemJSONIntFrom(data, key, trimuiSystemSteps)
+		if !ok || !inRange {
+			return
+		}
+		want := step * 100 / trimuiSystemSteps
+		cur, ok := trimuiVolume()
+		if !trimuiMixerAnswered() {
+			// trimuiVolume fell back to the file: the codec did not answer.
+			continue
+		}
+		if !ok || cur == want {
+			return
+		}
+		if gen, _ := volumeEditCounters(); gen > 0 {
+			return
+		}
+		if err := trimuiSetVolumeTransient(want); err != nil {
+			logWarn("volume", "could not put back the firmware's saved level %d%%: %v", want, err)
+			return
+		}
+		logInfo("volume", "the codec was at %d%% after the start; put back the firmware's saved %s %d (%d%%)", cur, key, step, want)
+		volumeRefreshNow()
+		return
+	}
+}
+
+// trimuiMixerAnswered reports whether the mixer probe found a control to
+// drive, i.e. amixer answered for this codec.
+func trimuiMixerAnswered() bool {
+	trimuiMixer.mu.Lock()
+	defer trimuiMixer.mu.Unlock()
+	return trimuiMixer.info.digital || trimuiMixer.info.gain != ""
+}
+
 // trimuiSystemVolumeStep reads the firmware's level in its own twentieths.
 func trimuiSystemVolumeStep() (int, bool) {
 	data, err := os.ReadFile(trimuiSystemJSONPath)

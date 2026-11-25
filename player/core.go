@@ -5563,7 +5563,9 @@ func ShowToastAlways(message string, kind ToastKind) {
 // history. ShowToast wraps it for normal callers; notifPush uses it directly
 // because it has already recorded its own message.
 func showToastPrimitive(message string, kind ToastKind) {
-	showToastPrimitiveMode(message, kind, quietModeOn())
+	// Quiet hours hold what Quiet Mode holds, except errors and the answer to
+	// a press (notifications_actions.go).
+	showToastPrimitiveMode(message, kind, quietModeOn() || notifQuietHoursHold(kind))
 }
 
 // showToastPrimitiveMode is showToastPrimitive with the Quiet Mode answer
@@ -5573,15 +5575,23 @@ func showToastPrimitiveMode(message string, kind ToastKind, quiet bool) {
 	if quiet && msg != "" {
 		return
 	}
+	// Under a game, with "Notifications while playing: Over the game", the
+	// toast is drawn into the game too (ingamehud.go).
+	if msg != "" && kind != ToastKindSwitch && gameScreenSuspended() && notifWhilePlayingMode() == notifPlayOver {
+		ingameHUDToast(msg, kind)
+	}
+	now := sdl.GetTicks64()
 	currentToastMu.Lock()
-	currentToast = ToastState{
+	// It shows now, replaces the one with the same words, or waits its turn
+	// behind a toast that was just raised (toastqueue.go).
+	toastOfferLocked(ToastState{
 		Message:   msg,
 		Kind:      kind,
-		StartedAt: sdl.GetTicks64(),
+		StartedAt: now,
 		Duration:  toastDurationForMessage(kind, msg),
 		lines:     nil,
 		linesW:    -1,
-	}
+	}, now)
 	currentToastMu.Unlock()
 	if msg == "" {
 		return
@@ -5774,6 +5784,9 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	// video" line and chat toasts are raised here, before the toast is read.
 	videoNotifTick(config)
 	currentToastMu.Lock()
+	// A toast whose time is up goes, and the next waiting one takes the
+	// screen once the current one has been up long enough (toastqueue.go).
+	toastAdvanceLocked(sdl.GetTicks64())
 	t := currentToast
 	currentToastMu.Unlock()
 	if strings.TrimSpace(t.Message) == "" {
@@ -5781,12 +5794,6 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	}
 	elapsed := sdl.GetTicks64() - t.StartedAt
 	if t.Duration == 0 || elapsed > t.Duration {
-		currentToastMu.Lock()
-		// Only the toast this frame read is cleared; one raised since stays.
-		if currentToast.StartedAt == t.StartedAt && currentToast.Message == t.Message {
-			currentToast = ToastState{}
-		}
-		currentToastMu.Unlock()
 		return
 	}
 	// While the open notification centre shows this message on its card, the
@@ -7632,16 +7639,9 @@ func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 		return true
 	}
 	if nc.open {
-		switch e.Keysym.Sym {
-		case sdl.K_UP:
-			notifNavigate(-1)
-		case sdl.K_DOWN:
-			notifNavigate(1)
-		case sdl.K_PAGEUP, sdl.K_PAGEDOWN, sdl.K_HOME, sdl.K_END:
-			notifShoulder(keyShoulder(e.Keysym.Sym))
-		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a, sdl.K_ESCAPE, sdl.K_b:
-			notifDismiss()
-		}
+		// Enter runs the row's action, Delete / X dismisses it, Y clears
+		// them all, Esc closes (notifications_actions.go).
+		notifKey(config, e)
 		return true
 	}
 	return false

@@ -880,6 +880,9 @@ func vpnOpenProfileSheet(c *Config) {
 		opts = append(opts, setOption{Value: "remove", Label: "Remove " + v.Name, Note: "Switches the VPN off and deletes the configuration from this device"})
 		// The public key is what a server of one's own registers.
 		note = v.Name + " · server " + v.Config.Endpoint + " · your public key " + v.Config.publicKey()
+		if v.Config.AWG != nil {
+			note += " · AmneziaWG"
+		}
 		if len(v.Config.Skipped) > 0 {
 			note += " · ignored: " + strings.Join(v.Config.Skipped, ", ")
 		}

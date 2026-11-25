@@ -152,7 +152,7 @@ func narrateChoiceSheet(s *setSheetState) {
 	}
 	o := s.options[s.cursor]
 	value := ""
-	if o.Value == s.current {
+	if o.Value == s.current || s.checked[o.Value] {
 		value = "selected"
 	}
 	if note := strings.TrimSpace(o.Note); note != "" {

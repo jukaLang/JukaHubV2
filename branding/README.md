@@ -93,3 +93,16 @@ The app renders its own copy in the device's exact format (Settings → General
 python3 branding/mkbootlogo.py                     # rewrites the files that changed
 python3 branding/mkbootlogo.py --preview sheet.png # the contact sheet only
 ```
+
+## Boot animation cracks
+
+[`mkbootcracks.py`](mkbootcracks.py) previews the cracks the **Cinematic** boot
+animation leaves in the ground. `player/bootcracks.go` draws them on the
+handheld from a new seed each boot; this draws the same layer from the same
+seed, step for step, over the same ground with the logo at rest, so a change
+can be judged on a PC before it is built. Change the two together.
+
+```sh
+python3 branding/mkbootcracks.py out/                 # 1280x720: the final cracks and how they grow
+python3 branding/mkbootcracks.py out/ 1024 768 42 final  # the Brick's screen, seed 42, final frame only
+```

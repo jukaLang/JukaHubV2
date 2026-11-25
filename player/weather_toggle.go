@@ -84,6 +84,8 @@ func weatherSyncEnabled(config *Config) {
 	if config != nil {
 		config.Variables.WeatherEnabled = on
 	}
+	// The place chosen in Settings, for the fetch (weather_location.go).
+	weatherFixedPublish(config)
 	weatherApplyEnabled(on)
 }
 

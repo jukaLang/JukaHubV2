@@ -524,7 +524,10 @@ instead. **Start → Tools → Screen Share** (search finds it as *screen share*
 *cast*, *tv* or *hdmi*) shows a link and a QR code. Open the link on a smart TV,
 laptop, tablet or phone on the same Wi-Fi — or open it on a laptop and cast that
 tab to a TV — and the handheld's screen appears live, games included, with no
-app to install: the stream is plain MJPEG in a web page.
+app to install: the stream is plain MJPEG in a web page. The page can also play
+the handheld's sound, and — once you allow it on the handheld — a controller,
+keyboard or phone touch pad on the viewer's side plays the handheld: put it on
+the table, play on the TV.
 
 * **A / Enter** on *Share* starts or stops sharing. It is off by default; while
   it is off the link's page waits, and it starts by itself when you switch
@@ -537,21 +540,50 @@ app to install: the stream is plain MJPEG in a web page.
 * **Games too** (handheld): JukaHub stops drawing while a game runs, so the
   picture then comes from the screen's framebuffer — through the bundled ffmpeg
   when it is installed, otherwise JukaHub's own reader at up to 8 fps and
-  640 px. Switch it off and viewers see a pause card while you play.
+  640 px. Switch it off and viewers see a pause card while you play, hear
+  nothing of the game, and a playing viewer's presses do not reach it.
 * On the viewer page, **F** or a double-click (double-tap) toggles full screen
   and **M** cycles Fit / Fill / Pixel-perfect; the controls hide after three
   idle seconds. Add `&tv=1` to the link for a TV browser: no buttons, just the
-  picture. A browser that cannot show the stream falls back to single frames.
+  picture, and the remote's first key turns the sound on. A browser that cannot
+  show the stream falls back to single frames.
+* **Sound** (on by default): the viewer page's **Sound** button plays what the
+  handheld plays — its menus, music and videos, and the sound of games started
+  while sharing is on (each game's ALSA output is copied on its way to the
+  speaker, so a game already running when you switch sharing on keeps its
+  sound on the handheld until it is started again). It arrives as compact
+  ADPCM, about 50 kB/s, a tenth of a second or so behind. The handheld keeps
+  playing too; turn it down there if the TV is enough.
+* **Controllers** (Ask by default): **Play** on the viewer page asks the
+  handheld; the request appears on the panel's *Controllers* row (a toast says
+  so when the panel is closed), where **A** lets that viewer play and **X**
+  says no. A phone paired with the Phone Companion's PIN plays without asking.
+  One viewer plays at a time; **X** on the panel takes control back, and a new
+  link, switching sharing or Controllers off, or the viewer leaving ends the
+  turn and lets go of every held button. On the handheld the presses go into
+  its own pad, so games hear them as if you had pressed the buttons — by
+  position, like the handheld's (right = A, bottom = B, top = X, left = Y; the
+  page can switch to by-letter for an Xbox pad) — sticks and triggers included.
+  On a PC only JukaHub's own screens hear them. While a viewer plays, the menus
+  are captured at up to 24 fps instead of 12.
+* Playing from the viewer page: a controller connected to the TV, laptop or
+  phone (press one of its buttons first; Chrome and Edge show controllers only
+  to https pages, so use Firefox or Safari on this http:// link), the keyboard
+  (arrows, X = A, Z = B, S = X, A = Y, Q/W = L1/R1, E/R = L2/R2, Enter =
+  Start, Shift = Select, H = Menu), or the on-screen touch pad on a phone or
+  tablet.
 * A red **LIVE** pill at the top of the handheld's screen shows while anyone
-  watches; it never appears in the stream or in screenshots.
+  watches, and says so when a viewer plays or asks to; it never appears in the
+  stream or in screenshots.
 * The link keeps working across restarts until you make a new one: **Y** in the
   panel does that, and the old link stops at once. The Phone Companion's PIN is
   not changed.
 * Up to six browsers can watch at once (streams and single-frame viewers
-  together). Sound stays on the handheld (or its Bluetooth headphones).
+  together).
 * In safe mode, or with no network, the panel says why and sharing stays off.
 
-The link is view-only: it cannot press buttons, type or upload, and the
+The link lets a viewer watch and listen; it cannot type text or upload, and it
+presses buttons only after you allow that viewer on the handheld. The
 phone-pairing code (Home's header QR, the pairing card, and the panel's own code
 and link) is painted over in the shared picture. Everything else on screen is
 shown — including what you type — so share the link only with people you trust,
@@ -800,10 +832,12 @@ four the same way, with controller hints; see
 | [Look packs](docs/LOOK_PACKS.md) | look packs (pack.json), console icon packs, console names by region, the power-off picture |
 | [Collections](docs/COLLECTIONS.md) | automatic folders on the Collections tab, play counts, the Game slideshow and Game videos idle screens, NextUI collections shared both ways |
 | [Quick menu](docs/QUICK_MENU.md) | the Quick menu on the TrimUI button: the tiles, every way to open it, Menu on Home, theme pictures (NextUI themes' too) and Backgrounds only |
+| [Ghost Challenges](docs/GHOST_CHALLENGES.md) | race a friend's run of the arcade games (or your best): what a run records, sending it to a paired JukaHub or as a file, the race |
 | [CHIP-8](docs/CHIP8.md) | the built-in CHIP-8 / SUPER-CHIP / XO-CHIP player, quirks and keys, Get CHIP-8 games from the chip8Archive |
 | [WASM-4](docs/WASM4.md) | WASM-4 carts on their own shelf, the first-start core install, Get WASM-4 carts from wasm4.org |
 | [Game Boy Printer](docs/GB_PRINTER.md) | printing from Game Boy games with DoubleCherryGB, the scrapbook, prints on the phone |
 | [Email and calendar](docs/EMAIL_CALENDAR.md) | mail accounts and calendar links added from your phone, app passwords per provider, Microsoft sign-in, reminders, what is stored encrypted |
+| [Sync](docs/SYNC.md) | one QR code sets up every place saves follow (another JukaHub, Google Drive, WebDAV, RomM, Syncthing); what syncs by itself around games |
 | [RomM server](docs/ROMM_SERVER.md) | connect to your own RomM library, download games, covers and BIOS, sync saves |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Device Sync](docs/DEVICE_SYNC.md) | two paired handhelds share saves, states, BIOS, collections, recents and play time, missing ROMs and settings; what never travels |

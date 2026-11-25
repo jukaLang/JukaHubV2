@@ -182,17 +182,20 @@ func peerPairNotifyIncoming(token int64, name string) {
 	if token == 0 {
 		return
 	}
-	if peerCurrentScene(appConfig) == peerSceneName || homeLayoutActive {
+	if scene := peerCurrentScene(appConfig); scene == peerSceneName || scene == ssyncSceneName || homeLayoutActive {
+		// Devices, Sync and Home show the code by themselves.
 		PlayActivateSound()
 		return
 	}
 	ShowToast(name+" wants to pair — go Home to compare the code", ToastKindInfo)
 }
 
-// peerPairNotifyDone confirms a pairing.
+// peerPairNotifyDone confirms a pairing. Sync then keeps the two finding
+// each other and syncs them at the next quiet moment (synchub.go).
 func peerPairNotifyDone(name string) {
-	ShowToast("Paired with "+name+" — sync saves and continue games between you", ToastKindSuccess)
+	ShowToast("Paired with "+name+" — your saves now follow you between the two", ToastKindSuccess)
 	trophyEvent(tkPeerPair)
+	syncHubAfterPairing(appConfig)
 }
 
 // peerPairCancelView cancels the session a sheet or card shows.

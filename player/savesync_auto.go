@@ -3,12 +3,14 @@ package main
 // savesync_auto.go — saves follow the player with no button pressed.
 //
 // Before a library game starts, its saves come down from the cloud — Google
-// Drive, or the WebDAV server when Drive is not signed in — and from RomM,
-// when that is set up (rommAutoSyncGame in romm_autosync.go), within six
+// Drive, or the WebDAV server when Drive is not signed in — from RomM, when
+// that is set up (rommAutoSyncGame in romm_autosync.go), and from a paired
+// JukaHub on this Wi-Fi that has them newer (synchub_peers.go), within six
 // seconds all told; offline, signed out or switched off, nothing waits at
-// all. When the game has ended, its saves go up, and half a minute later —
-// unless another game started — everything else is synced in the
-// background. Nothing ever syncs while a game holds the screen. Only one
+// all. When the game has ended, its saves go up and to those devices, and
+// half a minute later — unless another game started — everything else is
+// synced in the background. Sync's one Automatic sync switch (synchub.go)
+// stops all of it. Nothing ever syncs while a game holds the screen. Only one
 // cloud does the automatic syncs: two would play the same saves against each
 // other, so with both connected Drive does them and WebDAV syncs on Compare.
 //
@@ -56,9 +58,10 @@ var saveSyncAuto struct {
 }
 
 // saveSyncRommConfigured is a cheap "could RomM have work" check (a server
-// set and its auto-sync on); the RomM hook decides the rest.
+// set and its auto-sync on, under Sync's Automatic sync switch); the RomM hook
+// decides the rest.
 func saveSyncRommConfigured() bool {
-	return rommServerSettingsGet().autoSyncOn()
+	return syncAutoFlag.Load() && rommServerSettingsGet().autoSyncOn()
 }
 
 // saveSyncCloud is the cloud the automatic syncs use: its name for the
@@ -74,8 +77,12 @@ type saveSyncCloud struct {
 }
 
 // saveSyncActiveCloud is Google Drive when it is signed in with its switch
-// on, else the WebDAV server when it is connected with its switch on.
+// on, else the WebDAV server when it is connected with its switch on — none
+// while Sync's Automatic sync switch is off (synchub.go).
 func saveSyncActiveCloud() (saveSyncCloud, bool) {
+	if !syncAutoFlag.Load() {
+		return saveSyncCloud{}, false
+	}
 	switch {
 	case gdriveAutoReady():
 		return saveSyncCloud{name: gdrivePeerName, short: "Drive", logTag: "gdrive",
@@ -98,7 +105,10 @@ func saveSyncDeferLaunch(game libraryGame, launcher string) (deferred bool, err 
 	}
 	_, cloud := saveSyncActiveCloud()
 	drive := cloud && IsOnline()
-	if !drive && !saveSyncRommConfigured() {
+	// The paired JukaHubs on this Wi-Fi hand over a newer save too
+	// (synchub_peers.go).
+	peers := syncPeersLaunchReady(game)
+	if !drive && !peers && !saveSyncRommConfigured() {
 		return false, nil
 	}
 	if saveSyncAuto.pending {
@@ -106,7 +116,7 @@ func saveSyncDeferLaunch(game libraryGame, launcher string) (deferred bool, err 
 	}
 	saveSyncAuto.pending = true
 	// After the caller's own "Starting…" toast, which would replace it.
-	if drive {
+	if drive || peers {
 		tbxPost(func() {
 			if saveSyncAuto.pending {
 				ShowToast("Getting your latest saves…", ToastKindInfo)
@@ -161,12 +171,21 @@ func saveSyncBeforeLaunch(romPath, system string) {
 			}
 		}
 	}
-	if ctx.Err() == nil {
+	if ctx.Err() == nil && syncAutoFlag.Load() {
 		note, err := rommAutoSyncGame(ctx, romPath, system, true)
 		if err != nil {
 			logInfo("romm", "auto-sync before %s: %v", ssyncGameStem(romPath), err)
 		} else if note != "" {
 			notes = append(notes, note)
+		}
+	}
+	// Last, a paired JukaHub on this Wi-Fi with the game's saves newer
+	// (synchub_peers.go), in what is left of the budget.
+	if ctx.Err() == nil {
+		more, warn := syncPeersBeforeLaunch(ctx, romPath, system)
+		notes = append(notes, more...)
+		if warn {
+			kind = ToastKindWarning
 		}
 	}
 	saveSyncToast(notes, kind)
@@ -200,14 +219,23 @@ func saveSyncAfterExit(romPath, system string) {
 				}
 			}
 		}
-		note, err := rommAutoSyncGame(ctx, romPath, system, false)
-		if err != nil {
-			logInfo("romm", "auto-sync after %s: %v", ssyncGameStem(romPath), err)
-		} else if note != "" {
-			notes = append(notes, note)
+		if syncAutoFlag.Load() {
+			note, err := rommAutoSyncGame(ctx, romPath, system, false)
+			if err != nil {
+				logInfo("romm", "auto-sync after %s: %v", ssyncGameStem(romPath), err)
+			} else if note != "" {
+				notes = append(notes, note)
+			}
+		}
+		// The paired JukaHubs on this Wi-Fi get the game's newer saves too
+		// (synchub_peers.go).
+		more, warn := syncPeersAfterExit(ctx, romPath, system)
+		notes = append(notes, more...)
+		if warn {
+			kind = ToastKindWarning
 		}
 		saveSyncToast(notes, kind)
-		if drive {
+		if drive || syncPeersAutoReady() {
 			saveSyncScheduleFull()
 		}
 	}()
@@ -299,18 +327,24 @@ func saveSyncCancelFull() {
 }
 
 // saveSyncRunFull is the background sync of every save folder with the
-// cloud. gen is the schedule that started it (a cancel since then wins).
+// cloud, then with the paired JukaHubs on this Wi-Fi (synchub_peers.go). gen
+// is the schedule that started it (a cancel since then wins).
 func saveSyncRunFull(gen uint64) {
-	c, ok := saveSyncActiveCloud()
-	if gameScreenSuspended() || !ok || !IsOnline() {
+	c, cloud := saveSyncActiveCloud()
+	cloud = cloud && IsOnline()
+	if cloud {
+		if gdriveSyncMu.TryLock() {
+			gdriveSyncMu.Unlock()
+		} else {
+			// The Sync page is syncing with the cloud: that covers it.
+			cloud = false
+		}
+	}
+	peers := syncPeersAutoReady()
+	if gameScreenSuspended() || (!cloud && !peers) {
 		// The next game's exit schedules it again.
 		return
 	}
-	if !gdriveSyncMu.TryLock() {
-		// The Save sync page is syncing: that covers it.
-		return
-	}
-	gdriveSyncMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), saveSyncFullBudget)
 	saveSyncAuto.mu.Lock()
 	if saveSyncAuto.fullGen != gen {
@@ -347,6 +381,22 @@ func saveSyncRunFull(gen uint64) {
 			}
 		}
 	}()
+	if cloud {
+		saveSyncFullCloud(ctx, c)
+	}
+	if peers && ctx.Err() == nil {
+		if notes, warn := syncPeersFull(ctx); len(notes) > 0 {
+			kind := ToastKindSuccess
+			if warn {
+				kind = ToastKindWarning
+			}
+			saveSyncToast(notes, kind)
+		}
+	}
+}
+
+// saveSyncFullCloud is the background pass's sync of everything with cloud c.
+func saveSyncFullCloud(ctx context.Context, c saveSyncCloud) {
 	res, err := c.syncAll(ctx)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {

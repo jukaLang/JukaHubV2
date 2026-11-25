@@ -102,10 +102,17 @@ handheld to sleep, so your own save slots are never overwritten.
 
 **Low battery.** If the battery is at 25 % or less when you put the handheld to
 sleep with a game running, it wakes itself within 2 hours (30 minutes at 15 %
-or less), saves the game and powers off — even if **Power off after sleeping**
-is Off — so the game isn't lost when the battery runs out asleep. At the next
-power-on, **Resume game at power on** brings the game back, and RetroArch says
-"Back where you left off".
+or less, 10 minutes at 5 % or less), saves the game and powers off — even if
+**Power off after sleeping** is Off — so the game isn't lost when the battery
+runs out asleep. At the next power-on, **Resume game at power on** brings the
+game back, and RetroArch says "Back where you left off".
+
+**Any game, not only RetroArch.** At the battery's last 3 %, a game whose state
+can be saved is saved, and comes back at the next power-on even if the battery
+runs out after the save. A game nothing can save — a port, a Windows program,
+an Android game — is held asleep exactly where it is instead of being closed:
+plug in and press power to carry on. PSP games resume exactly in JukaHub's own
+PPSSPP build. See [Never lose a session](SESSION_SAFETY.md#universal-instant-resume).
 
 **Start in.** Settings → Power & battery → **Start in** picks where JukaHub
 opens when you switch the handheld on: Home (the default), the Game switcher,

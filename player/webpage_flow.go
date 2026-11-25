@@ -243,6 +243,39 @@ func (l *webLayouter) mergeFlexSubLayoutShift(sub *webLayout, x, rowOffset, shif
 	for id, h := range sub.boxStretch {
 		l.stretchBox(id, h)
 	}
+	l.mergeBoxGeom(sub, x)
+}
+
+// webBoxGeom is a layout box's border box across, in layout pixels: where
+// applyBoxConstraints put it (X) and how wide it made it (W).
+type webBoxGeom struct {
+	X, W int32
+}
+
+// noteBoxGeom records box id's border box the first time layout applies the
+// box; every block inside it applies it the same way.
+func (l *webLayouter) noteBoxGeom(id int, x, w int32) {
+	if l == nil || l.layout == nil || id == 0 || w <= 0 {
+		return
+	}
+	if l.layout.boxGeom == nil {
+		l.layout.boxGeom = make(map[int]webBoxGeom, 16)
+	}
+	if _, ok := l.layout.boxGeom[id]; !ok {
+		l.layout.boxGeom[id] = webBoxGeom{X: x, W: w}
+	}
+}
+
+// mergeBoxGeom takes the box geometry a sub-layout measured at x = 0 (a flex
+// or grid item, a float) into this layout, moved dx across. A box this layout
+// applied itself keeps its own.
+func (l *webLayouter) mergeBoxGeom(sub *webLayout, dx int32) {
+	if sub == nil {
+		return
+	}
+	for id, g := range sub.boxGeom {
+		l.noteBoxGeom(id, g.X+dx, g.W)
+	}
 }
 
 // stretchBox records that box id is painted at least h layout pixels tall:
@@ -861,38 +894,57 @@ func (l *webLayouter) itemWidth(b webBlock, avail int32) int32 {
 	return width
 }
 
-// layoutCSSFloat measures a `float: left/right` block at its own width and
-// parks it in the layer list at the current flow row. The caller records the
-// returned row span so following siblings shorten beside it (or move below it
-// for clear). A float does not advance the flow itself, exactly like CSS.
-func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, leftActive, rightActive int32) (endRow, width int32) {
+// layoutCSSFloat measures a `float: left/right` block of its own (a floated
+// picture, a floated paragraph) at its own width and parks it in the layer
+// list at the flow row startRow: at its side of the containing block (padX,
+// contentW), beside the floats already there, or below them when it does not
+// fit (webpage_floats.go). A picture of known size is as wide as it draws and
+// keeps its own margins as the gap to the text. It returns the room it takes,
+// which the flow wraps round and `clear` moves below. A float does not advance
+// the flow itself, exactly like CSS.
+func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow int32, reserves []webFloatReserve) (webFloatReserve, bool) {
 	if contentW <= 0 || l.rowH <= 0 {
-		return startRow, 0
+		return webFloatReserve{}, false
 	}
 	scale := l.baseSize / 16
 	if scale <= 0 {
 		scale = 1
 	}
 	style := block.Style
-	autoWidth := style.Width <= 0 && style.WidthPct <= 0 &&
-		style.MinWidth <= 0 && style.MaxWidth <= 0 && style.MinWidthPct <= 0 && style.MaxWidthPct <= 0
-	if autoWidth {
-		width = l.intrinsicContainerWidth([]webBlock{block})
-		if width <= 0 {
-			width = int32(120 * scale)
+	width, marginL, marginR, marginB := int32(0), int32(0), int32(0), int32(0)
+	picture := false
+	if block.Image {
+		// An image block's style is the picture's own: its margins are the
+		// gap a page puts between a floated photo and the text.
+		if iw := l.floatPictureWidth(&block, contentW); iw > 0 {
+			width, picture = iw, true
+			marginL = max(int32(math.Round((style.Indent-style.PadLeft)*scale)), 0)
+			marginR = max(int32(math.Round((style.IndentRight-style.PadRight)*scale)), 0)
+			marginB = max(int32(math.Round(style.MarginBot*scale)), 0)
 		}
-		if maxW := webConstraintLength(style.MaxWidth, style.MaxWidthPct, contentW, scale); maxW > 0 && float64(width)/scale > maxW {
-			width = int32(math.Round(maxW * scale))
-		}
-		if minW := webConstraintLength(style.MinWidth, style.MinWidthPct, contentW, scale); minW > 0 && float64(width)/scale < minW {
-			width = int32(math.Round(minW * scale))
-		}
-	} else {
-		width = webBlockContentWidth(block, contentW, l.baseSize)
 	}
-	maxWidth := contentW - leftActive - rightActive
+	if !picture {
+		autoWidth := style.Width <= 0 && style.WidthPct <= 0 &&
+			style.MinWidth <= 0 && style.MaxWidth <= 0 && style.MinWidthPct <= 0 && style.MaxWidthPct <= 0
+		if autoWidth {
+			width = l.intrinsicContainerWidth([]webBlock{block})
+			if width <= 0 {
+				width = int32(120 * scale)
+			}
+			if maxW := webConstraintLength(style.MaxWidth, style.MaxWidthPct, contentW, scale); maxW > 0 && float64(width)/scale > maxW {
+				width = int32(math.Round(maxW * scale))
+			}
+			if minW := webConstraintLength(style.MinWidth, style.MinWidthPct, contentW, scale); minW > 0 && float64(width)/scale < minW {
+				width = int32(math.Round(minW * scale))
+			}
+		} else {
+			width = webBlockContentWidth(block, contentW, l.baseSize)
+		}
+	}
+	row, left, right := webFloatPlace(reserves, startRow, padX, contentW, width+marginL+marginR)
+	maxWidth := right - left - marginL - marginR
 	if maxWidth < 16 {
-		maxWidth = contentW
+		maxWidth = contentW - marginL - marginR
 	}
 	if width > maxWidth {
 		width = maxWidth
@@ -900,11 +952,11 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	if width < 16 {
 		width = 16
 	}
-	x := padX + leftActive
+	x := left + marginL
 	if style.FloatSide == 2 {
-		x = padX + contentW - width
-		if x < padX+leftActive {
-			x = padX + leftActive
+		x = right - marginR - width
+		if x < left+marginL {
+			x = left + marginL
 		}
 	}
 
@@ -914,9 +966,19 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	inner.Style.FloatSide = 0
 	inner.Style.Clear = 0
 	inner.Style.Position = webPositionStatic
-	inner.Style.Width, inner.Style.WidthPct = 0, 0
-	inner.Style.MinWidth, inner.Style.MaxWidth = 0, 0
-	inner.Style.MinWidthPct, inner.Style.MaxWidthPct = 0, 0
+	if picture {
+		// The picture fills its float box at the width found above (a
+		// percentage was of the column, not of the box), and neither its
+		// paragraph's alignment nor the boxes around the float move it.
+		inner.Align = 0
+		inner.Style.Width, inner.Style.WidthPct = float64(width)/scale, 0
+		inner.Style.MinWidth, inner.Style.MaxWidth = 0, 0
+		inner.Style.MinWidthPct, inner.Style.MaxWidthPct = 0, 0
+	} else {
+		inner.Style.Width, inner.Style.WidthPct = 0, 0
+		inner.Style.MinWidth, inner.Style.MaxWidth = 0, 0
+		inner.Style.MinWidthPct, inner.Style.MaxWidthPct = 0, 0
+	}
 	sub := &webLayout{RowH: l.rowH}
 	sl := &webLayouter{
 		doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt, fontAtStyle: l.fontAtStyle,
@@ -925,9 +987,12 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 		containerSizes: l.containerSizes,
 		containerRows:  make(map[int]webContainerRowSpan),
 	}
+	if picture {
+		sl.constraintSkip = len(block.Boxes)
+	}
 	sl.layoutBlocks([]webBlock{inner}, 0, width)
 	if len(sub.Rows) == 0 {
-		return startRow, width
+		return webFloatReserve{}, false
 	}
 	// The float's flow reserve covers its painted box, not just its text
 	// rows: a padded float otherwise let `clear` put the next paragraph over
@@ -935,17 +1000,19 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	// in the ordinary block box.
 	padTop := int32(math.Round(block.Style.PadTop * scale))
 	padBot := int32(math.Round(block.Style.PadBot * scale))
-	if padTop < 0 {
+	if padTop < 0 || picture {
 		padTop = 0
 	}
-	if padBot < 0 {
+	if padBot < 0 || picture {
 		padBot = 0
 	}
 	boxH := int32(len(sub.Rows))*l.rowH + padTop + padBot
-	if floor := int32(math.Round(max(block.Style.Height, block.Style.MinHeight) * scale)); floor > boxH {
+	if picture {
+		boxH = max(webLayerExtent(sub), l.rowH)
+	} else if floor := int32(math.Round(max(block.Style.Height, block.Style.MinHeight) * scale)); floor > boxH {
 		boxH = floor + padTop + padBot
 	}
-	endRow = startRow + int32(math.Ceil(float64(boxH)/float64(l.rowH)))
+	endRow := row + int32(math.Ceil(float64(boxH+marginB)/float64(l.rowH)))
 	// The innermost box the float sits in places it inside a sticky bar,
 	// whose pinned copy carries it (webCollectStickies).
 	root := 0
@@ -957,7 +1024,7 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 	l.layout.Floats = append(l.layout.Floats, webFloat{
 		Z:           block.ZIndex,
 		X:           x,
-		Y:           startRow * l.rowH,
+		Y:           row * l.rowH,
 		H:           boxH,
 		W:           width,
 		Phase:       webLayerFloat,
@@ -969,7 +1036,11 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 		Images:      sub.Images,
 		Videos:      sub.Videos,
 	})
-	return endRow, width
+	l.mergeBoxGeom(sub, x)
+	return webFloatReserve{
+		side: style.FloatSide, startRow: row, endRow: endRow,
+		x0: x - marginL, x1: x + width + marginR, seq: block.TreeSeq,
+	}, true
 }
 
 // itemContainerID finds the containment container that is the flex item's own
@@ -1247,11 +1318,13 @@ func (l *webLayouter) paintContainerBoxes() {
 		}
 	}
 	// Pictures are part of their boxes too: a card's surface reaches up
-	// behind the photo at its top, and a figure's around its image.
-	for _, im := range l.layout.Images {
+	// behind the photo at its top, and a figure's around its image — a
+	// floated figure's as well (webpage_floats.go).
+	addImage := func(im webImagePos, ox, oy int32) {
 		if im.Rect.W <= 0 || im.Rect.H <= 0 {
-			continue
+			return
 		}
+		r := sdl.Rect{X: im.Rect.X + ox, Y: im.Rect.Y + oy, W: im.Rect.W, H: im.Rect.H}
 		for _, id := range im.Boxes {
 			span := spans[id]
 			if span == nil {
@@ -1259,12 +1332,22 @@ func (l *webLayouter) paintContainerBoxes() {
 				spans[id] = span
 			}
 			if !span.seen {
-				span.minX, span.minY, span.seen = im.Rect.X, im.Rect.Y, true
+				span.minX, span.minY, span.seen = r.X, r.Y, true
 			}
-			span.minX = min32(span.minX, im.Rect.X)
-			span.minY = min32(span.minY, im.Rect.Y)
-			span.maxX = max32(span.maxX, im.Rect.X+im.Rect.W)
-			span.maxY = max32(span.maxY, im.Rect.Y+im.Rect.H)
+			span.minX = min32(span.minX, r.X)
+			span.minY = min32(span.minY, r.Y)
+			span.maxX = max32(span.maxX, r.X+r.W)
+			span.maxY = max32(span.maxY, r.Y+r.H)
+		}
+	}
+	for _, im := range l.layout.Images {
+		addImage(im, 0, 0)
+	}
+	for _, f := range l.layout.Floats {
+		if f.Phase == webLayerFloat {
+			for _, im := range f.Images {
+				addImage(im, f.X, f.Y)
+			}
 		}
 	}
 	// Creation order is outer-to-inner for nested boxes, so a child's surface
@@ -1336,6 +1419,13 @@ func (l *webLayouter) paintContainerBoxes() {
 			bottom = 0
 		}
 		x, y := span.minX-left, span.minY-top
+		// Across, the box is as wide as layout made it where it applied the
+		// box (applyBoxConstraints). Its runs' union is only as wide as its
+		// text: a padded card or sidebar lost its right padding that way, and
+		// its lines ran over its right edge.
+		if g, ok := l.layout.boxGeom[id]; ok && g.W > 0 {
+			x, w = g.X, g.W
+		}
 		h := span.maxY - span.minY + top + bottom
 		// A definite height sizes the wrapper's painted box even when its
 		// children overflow it. The descendant union is only the size of an
@@ -1418,7 +1508,7 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 		// padding and width applied by the ordinary block pass. A box owner
 		// with different padding is still an ancestor wrapper for this text;
 		// skipping it lets an article line run beyond its card border.
-		if block.BoxOwner == id &&
+		if block.BoxOwner == id && block.FloatBlocks == nil &&
 			math.Abs(block.Indent-info.style.Indent) < 0.01 &&
 			math.Abs(block.Style.IndentRight-info.style.IndentRight) < 0.01 {
 			// This is the element that owns the box. Its own width, padding and
@@ -1476,6 +1566,12 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 				x += free
 			}
 		}
+		// The box's border box — its margins outside, its padding inside — is
+		// what the container pass paints and its positioned children are
+		// placed in (paintContainerBoxes, boxFlowRect).
+		marginL := min(max(int32(math.Round((st.Indent-st.PadLeft)*scale)), 0), left)
+		marginR := min(max(int32(math.Round((st.IndentRight-st.PadRight)*scale)), 0), right)
+		l.noteBoxGeom(id, x-left+marginL, target-marginL-marginR)
 		padX, contentW = x, inner
 	}
 	return padX, contentW
@@ -1546,45 +1642,46 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	minX, minY, maxX, maxY := int32(1<<30-1), int32(1<<30-1), int32(0), int32(0)
 	width := int32(0)
 	seen := false
-	for _, row := range l.layout.Rows {
-		for _, run := range row.Runs {
-			if run.Font == nil {
-				continue
-			}
-			found := false
-			for _, box := range run.Boxes {
-				if box == id {
-					found = true
-					break
+	scan := func(rows []webRow, images []webImagePos, ox, oy int32) {
+		for _, row := range rows {
+			for _, run := range row.Runs {
+				if run.Font == nil || !webBoxesHave(run.Boxes, id) {
+					continue
 				}
+				w, h, err := run.Font.SizeUTF8(run.Text)
+				if err != nil {
+					continue
+				}
+				seen = true
+				x, y := run.X+ox, row.Y+oy+run.VerticalOffset
+				minX = min32(minX, x)
+				minY = min32(minY, y)
+				maxX = max(maxX, x+int32(w))
+				maxY = max(maxY, y+int32(h))
+				width = max(width, run.BoxWidth)
 			}
-			if !found {
-				continue
-			}
-			w, h, err := run.Font.SizeUTF8(run.Text)
-			if err != nil {
+		}
+		// A picture is part of the box as much as its text: a relative
+		// wrapper around a photo is the containing block of the badge over
+		// the photo.
+		for _, im := range images {
+			if im.Rect.W <= 0 || im.Rect.H <= 0 || !webBoxesHave(im.Boxes, id) {
 				continue
 			}
 			seen = true
-			y := row.Y + run.VerticalOffset
-			minX = min32(minX, run.X)
-			minY = min32(minY, y)
-			maxX = max(maxX, run.X+int32(w))
-			maxY = max(maxY, y+int32(h))
-			width = max(width, run.BoxWidth)
+			minX = min32(minX, im.Rect.X+ox)
+			minY = min32(minY, im.Rect.Y+oy)
+			maxX = max(maxX, im.Rect.X+ox+im.Rect.W)
+			maxY = max(maxY, im.Rect.Y+oy+im.Rect.H)
 		}
 	}
-	// A picture is part of the box as much as its text: a relative wrapper
-	// around a photo is the containing block of the badge over the photo.
-	for _, im := range l.layout.Images {
-		if im.Rect.W <= 0 || im.Rect.H <= 0 || !webBoxesHave(im.Boxes, id) {
-			continue
+	scan(l.layout.Rows, l.layout.Images, 0, 0)
+	// So are the floats it holds: a positioned figure that floats is the
+	// containing block of the badge on its picture (webpage_floats.go).
+	for i := range l.layout.Floats {
+		if f := &l.layout.Floats[i]; f.Phase == webLayerFloat {
+			scan(f.Rows, f.Images, f.X, f.Y)
 		}
-		seen = true
-		minX = min32(minX, im.Rect.X)
-		minY = min32(minY, im.Rect.Y)
-		maxX = max(maxX, im.Rect.X+im.Rect.W)
-		maxY = max(maxY, im.Rect.Y+im.Rect.H)
 	}
 	if !seen {
 		return sdl.Rect{}, false
@@ -1626,7 +1723,14 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	if w <= 0 || h <= 0 {
 		return sdl.Rect{}, false
 	}
-	return sdl.Rect{X: minX - left, Y: minY - top, W: w, H: h}, true
+	x := minX - left
+	// The width layout gave the box, where it applied it: an overlay's
+	// `right: 20px` is measured from the hero's right edge, its padding
+	// included, not from the end of the hero's text.
+	if g, ok := l.layout.boxGeom[id]; ok && g.W > 0 {
+		x, w = g.X, g.W
+	}
+	return sdl.Rect{X: x, Y: minY - top, W: w, H: h}, true
 }
 
 // paintWebBox reuses the ordinary block painter for a box that had no block of
@@ -2382,12 +2486,33 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 	sort.SliceStable(placements, func(i, j int) bool { return placements[i].item < placements[j].item })
 
 	var usedCols []bool
+	// A grid an ad item was cut out of (webpage_adremove.go) closes the tracks
+	// nothing is left in, as auto-fit does: the article beside a cut ad rail
+	// takes the rail's width instead of leaving a blank column. An item across
+	// every track — a header over the grid — holds none of them open.
+	adCut := first.GridAutoRepeat != 2 && cols > 1 && l.doc != nil && l.doc.FlexAdCut[first.FlexGroup]
 	if first.GridAutoRepeat == 2 {
 		usedCols = make([]bool, cols)
 		for _, p := range placements {
 			for c := p.col; c < p.col+p.colSpan && c < cols; c++ {
 				usedCols[c] = true
 			}
+		}
+	} else if adCut {
+		used, open := make([]bool, cols), 0
+		for _, p := range placements {
+			if p.colSpan >= cols {
+				continue
+			}
+			for c := max(p.col, 0); c < p.col+p.colSpan && c < cols; c++ {
+				if !used[c] {
+					used[c] = true
+					open++
+				}
+			}
+		}
+		if open > 0 && open < cols {
+			usedCols = used
 		}
 	}
 	// Auto minima in columns use the same intrinsic text measurement that a
@@ -2413,8 +2538,18 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 	if len(tracks) == 0 {
 		tracks = make([]int32, cols)
 		trackW := int32(0)
-		if cols > 0 {
-			trackW = (contentW - gap*int32(cols-1)) / int32(cols)
+		// The tracks an ad left empty are closed: the open ones share the width.
+		shared := cols
+		if adCut && usedCols != nil {
+			shared = 0
+			for _, open := range usedCols {
+				if open {
+					shared++
+				}
+			}
+		}
+		if shared > 0 {
+			trackW = (contentW - gap*int32(shared-1)) / int32(shared)
 		}
 		if trackW < 1 {
 			trackW = 1

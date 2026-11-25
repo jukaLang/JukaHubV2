@@ -13,6 +13,253 @@ For anything older, the git log and the
 
 ### Added
 
+- **In-game indicators, and the game's CPU profile from the in-game menu**
+  (Juka, 2026-11-24: "in-game overlay (volume/brightness/battery over a
+  running game — its absence is the one moment JukaHub feels like an app, not
+  an OS)"). Settings → Games & emulators → **In-game indicators** (off by
+  default) puts `bin/libjukaosd.so` in `LD_PRELOAD` for RetroArch and PPSSPP
+  games the library starts. The hook (`player/native/ingame_osd.c`, built and
+  checked with the Remote Play helpers: libc and libdl only, GLIBC ≤ 2.31, the
+  four hooked symbols exported) wraps `eglSwapBuffers`, `SDL_GL_SwapWindow` and
+  `SDL_RenderPresent` and draws one card over the finished frame — GLES2 with
+  every piece of GL state it touches saved and put back (GLES3's vertex array,
+  unpack buffer and sampler too), or one `SDL_RenderCopy` — and never calls
+  `glGetError`. JukaHub's parked loop draws the card (the glyph, the words in
+  the interface language and font, a level bar) and writes it to a file in
+  `/tmp` the hook maps: per frame the hook reads two integers, and copies a
+  picture only when its sequence numbers and FNV-1a sum say it is complete.
+  Shown: **Volume** and **Brightness** for 1.5 s after a change, **Battery** at
+  15, 10 and 5 % and every percent under 5 while draining, and with
+  Notifications while playing set to **Over the game**, each toast. A game
+  whose renderer is none of the three runs unchanged. The in-game menu gains
+  **Performance** (Left/Right or A: Auto, Battery saver, Balanced,
+  Performance), applied at once and kept as the game's own CPU profile; the
+  launch's restore puts the hub's governor back when the game ends. Host-tested
+  here against a fake SDL (one upload, one copy per frame, fade, restored
+  viewport and target); not run on a device yet.
+- **Notifications you can act on, kept across restarts, toasts that wait their
+  turn** (Juka, 2026-11-24: "persistent actionable notifications"). A row may
+  carry an action, stored by name so it survives a restart: **Install update**
+  on an update offer, **Open** on a saved download, **Retry** on a failed one
+  (new: a failed download is filed in the bell), **Open Mail** on new mail,
+  **Play** on a friend's Ghost Challenge. In the bell **A** runs the action,
+  **X** dismisses the row, **Y** twice clears them all (Enter, Delete / X, Y,
+  Shift+Delete on a keyboard; a tap on the row's pill or "×"); the card ends in
+  the button line. Rows are grouped by source (Updates, Downloads, Mail,
+  Reminders, Battery & power…), newest source first, and the highlight follows
+  its row when a group moves. Unread rows, warnings, errors and rows with an
+  action are kept in `notifications.json` in the data folder (50 rows, bounded
+  and checked when read back); seen confirmations are not. Toasts queue: the
+  same message with new numbers replaces itself, a higher priority takes the
+  screen, anything else waits about a second behind the one showing, an error
+  keeps its whole time, and a toast that waited 9 s is skipped (it is in the
+  bell). Settings → General → **Quiet hours** (22–7 and four other windows;
+  errors and the answer to a press still show; only once the clock is set) and
+  **Notifications while playing** (a summary when you are back — now with the
+  count of new alerts — over the game with In-game indicators, or only in the
+  bell).
+- **Commands in Home search** (Juka, 2026-11-24: "verb search"). "wifi off",
+  "brightness 40", "louder", "mute", "screenshot", "sleep", "screen off",
+  "update", "new note", "next song", "close all apps", "battery" and the
+  settings sentences voice understands ("dark mode on") are listed first under
+  **Commands**, with what they would do and the value now ("Turn Wi-Fi off ·
+  Wi-Fi is on now", "Set brightness to 40% · Now 70%"); A runs them through the
+  same controls as voice commands. "sleep" offers the handheld's sleep and the
+  screensaver; "update" offers the waiting release or a check. A word one edit
+  from a command word (a letter missing, extra, wrong, or two swapped:
+  "wfi", "brigthness", "screnshot") is read as it — a bounded Damerau check,
+  no fuzzy library; the name results below still get what was typed. Not in
+  Kiosk or Kid mode.
+- **Ghost Challenges** (Juka, 2026-11-24: "send a friend a replay of your run —
+  genuinely novel here"). Every run of Flappy, Snake, Tetris, 2048 and Brick
+  Breaker records its seed, its score every 100 ms and Flappy's bird every
+  50 ms (a few kB a minute); your best of each game is kept. **Y** on the
+  game-over card, or Games → **Ghost Challenges**, sends a run to a JukaHub
+  paired under Nearby devices (`POST /peer/v1/ghost`, paired only, checked
+  and kept in an inbox of 30) or saves it as a `.jghost` file in the Ghosts
+  folder (the card's top level; Documents on a PC) to send any way; files
+  left there are taken in when the screen opens. Racing a run uses its seed —
+  the same pipes, pieces and first tiles — with the ghost's score counting up
+  beside yours ("Ana's ghost 14 · You 12") and, in Flappy, the ghost bird
+  flying the run beside yours; the game-over card says who won and by how
+  much, and the screen keeps your best against each friend's run ("Beaten").
+  Race your own best the same way. A friend's run arriving puts **Play** in
+  the bell.
+- **Japanese, Korean and Chinese (Simplified)** (Juka, 2026-11-24: "ja/ko/zh
+  localization (you have 7 locales; TrimUI's home market is missing)"). Three
+  machine-translated catalogues of about 1,070 strings each (Home, Settings,
+  the common buttons and messages, this release's new screens), dates in their
+  own year-first forms (2026年11月24日 星期一) and their names for yesterday and
+  today. Inter has no CJK, so each language comes with its face: picking it
+  (Settings → General → Language, the first-run tour, the iPod layout)
+  downloads Noto Sans JP, KR or SC (the noto-cjk 2.004 subsets, 4.5, 4.6 and
+  8.4 MB; Latin and Cyrillic included) with the Font row's downloader, and the
+  interface switches when it lands — until then it stays in the language it
+  was in, never in "…". The face draws only while the language is in force;
+  the language rows name the three in English until their face is here. The
+  device's own language (`zh_CN`, "Chinese", "日本語" in TrimUI's system.json)
+  is recognised for the first start. Not yet: the tour's own sentences and
+  line breaks inside a CJK sentence (I18N-CJK-1).
+
+- **Screen Share: the TV hears the handheld and plays it** (Juka, 2026-11-24:
+  "Finish the living-room promise — Screen Share is view-only MJPEG, no sound,
+  ~12 fps. Sound + an input back-channel turns a diagnostic into a flagship
+  demo"). The viewer page has **Sound** and **Play**. Sound plays JukaHub's own
+  sound (menus, music, videos: each output's buffers are copied as they are
+  queued) and, on the handheld, that of games started while sharing is on: the
+  game's ALSA "default" becomes a 16-bit plug, then ALSA's file plugin piping a
+  copy to `JukaHub --share-audio-tap` (datagrams to 127.0.0.1), then whatever
+  "default" was — reached even under the stock firmware's own asound.conf by
+  reading the files that define it a second time inside a compound
+  (`jhprev.pcm.default`), and wrapping spatial audio, music in games and the
+  headset route. A check at the first share (`--share-audio-probe`, ending in
+  ALSA's null device) proves the route before any game gets it. The mix goes
+  out as 48 kHz stereo IMA ADPCM (about 50 kB/s) on a new `/play` WebSocket and
+  is scheduled in the page with Web Audio. **Play** asks the handheld: the
+  request takes over the panel's new **Controllers** row (**A** lets them play,
+  **X** says no; a toast and a buzz when the panel is closed), a Phone
+  Companion PIN plays without asking, one viewer plays at a time, **X** takes
+  control back, and a new link, sharing or Controllers off, or a page that goes
+  quiet for a second lets go of every held button. The page reads a controller
+  (by position like the handheld's pad, or by letter), the keyboard
+  (RetroArch's layout) or an on-screen touch pad. On a TrimUI handheld the
+  presses are written into the built-in pad's evdev node, so games hear them,
+  sticks and triggers included; a firmware that rewrites the pad over held
+  input is noticed and its reader paused only while the viewer holds
+  something (continued on every way out, and after a crash at the next start).
+  On Windows JukaHub's own screens hear them through SDL. While a viewer plays,
+  menus are captured at up to 24 fps instead of 12, and the LIVE pill says
+  when a viewer plays or asks to. New settings `castSound` and `castControl`
+  ([README](README.md#share-the-screen-on-a-tv-screen-share),
+  [Controls](docs/CONTROLS.md#screen-share), `player/castaudio*.go`,
+  `player/castinput*.go`, `player/companion_castplay.go`). The ALSA chain was
+  run against real alsa-lib (1.2.6) with a firmware-style default and an
+  earlier step's hook, and the page's decoder against the encoder's
+  algorithm; nothing was compiled or tried on a device yet (SHARE-HW-1: the
+  check's log line, a RetroArch and a PPSSPP game heard on a laptop, Right
+  held in a platformer from the laptop's pad and whether the rewrite watch
+  fires, the phone's touch pad, A and X on the panel).
+
+- **Universal instant resume: any game comes back where it was after a power
+  off or a flat battery** (Juka, 2026-11-24: "Universal instant resume — this
+  is the biggest gap … the low-battery guard and power-off only save
+  RetroArch. A PPSSPP, DraStic, PortMaster or Wine session is lost"). Each
+  kind of game now has a plan for the battery's save level, Power off after
+  sleeping and Power off (`instantresume.go`, tested as one table). RetroArch
+  is saved as before, and now also writes the power-on resume marker at 3 %,
+  so a battery that runs out after the save still brings the game back at the
+  next power-on (a standalone emulator's saved state too). A game nothing can
+  save — a port, Wine, hakuX, an Android game, Java, an emulator with its own
+  save state on exit off, RetroArch with network commands off — is **held
+  asleep where it is** at 3 % instead of closed: stopped in RAM, card synced,
+  JukaHub's own sleep with the power-off time ten minutes away. A charger and
+  a press bring it back exactly where it was; without them it is asked to quit
+  (its own saves flushed) and the device powers off cleanly before the battery
+  dies. Woken without a charger it gets 45 seconds, then it is closed as
+  before. A power-on marker written in this boot is dropped when another game
+  starts. Android games in AndroidRT are recognised by their runner's folder.
+  Docs: [Never lose a session](docs/SESSION_SAFETY.md#universal-instant-resume).
+- **PSP games resume exactly in JukaHub's own PPSSPP build.**
+  `player/native/build-ppsspp.sh` adds one change to upstream PPSSPP: SIGUSR1
+  asks the running game for a save state at `$JUKAHUB_PPSSPP_SAVE_TO` (a file
+  in JukaHub's data folder, never one of the player's slots), written by
+  PPSSPP's own `SaveState::Save`, with `<file>.done` as the answer. It goes in
+  at one anchor (NativeFrame's first line); a tree it does not fit, or that
+  does not build with it, is built unchanged, and the package says which
+  (`jukahub-resume.txt`, BUILDINFO's Resume line) — JukaHub never signals a
+  build without the flag. JukaHub asks before a power off and at 3 %, waits
+  for the answer, then lets PPSSPP quit as before; the game's next start
+  (Resume game at power on, Continue, the library) begins from that state
+  through `jukahub-ppsspp.sh` and PPSSPP's own `--state=`. Only the newest such
+  state is kept. The PPSSPP card offers **Resume PSP games after a power off**,
+  which installs JukaHub's build in place of minui-psp's (`ppsspp_resume.go`).
+- **Xbox and PSP games JukaHub closes for are covered at low battery too.**
+  Their hand-off script watches the battery while JukaHub is closed: at the
+  guard's save level, off the charger, two readings running, it asks JukaHub's
+  PPSSPP build for a state, asks the game to quit (the emulator first, its
+  launch scripts after) and syncs the card; it suspends under a game that will
+  not quit instead of killing it. JukaHub, started again, keeps the state for
+  the game's next start and powers off at once unless a charger came
+  (`hakux_handoff.go`).
+- **Boot animation: pick several** (Juka, 2026-11-24: "add ability to select
+  multiple bootlogo animations"). **A** on Settings → General → **Boot
+  animation** lists the styles with a check on each one picked, and **A** on a
+  style adds it or takes it out, so any two or more of Cinematic, Roll, Still
+  logo and Classic can be on at once. Each start plays one of them, never the
+  one the last start played (noted in `data/bootstyle-last`), so two picked
+  take turns, and **Watch the boot animation** shows the next one. The row
+  shows them as "Cinematic + Roll" (`bootStyle` = `cinematic,roll`); Cinematic,
+  Roll and Classic together is **Surprise me**, which no longer repeats the
+  last start's style either, and taking the last one out is **None**. Settings
+  lists can hold a set now (`setRow.SheetChecked` / `SheetToggle`: a check on
+  every row picked, the list stays open). [docs/BOOT.md](docs/BOOT.md) also
+  answers whether the boot logo itself can be animated: no, the firmware's
+  bootloader draws one still BMP, which the animation then picks up from.
+
+- **Sync: one page and one QR code for every place your saves follow** (Juka,
+  2026-11-24: "Continuity that needs no setup — you have five sync backends
+  (Drive, WebDAV, Syncthing, RomM, device-to-device) and five separate setups.
+  Make it one Sync with QR pairing"). Tools → Save sync is now **Tools → Sync**
+  (also Settings → Network → Sync). Its QR code opens one phone page that
+  connects any of the five: a JukaHub found on the same Wi-Fi (tap Pair; the
+  phone shows the six-digit code and confirms for this handheld while the other
+  confirms on its own screen), Google Drive (Google's code and link appear on
+  the phone), WebDAV, RomM with the code from RomM 4.8+'s **Pair device** (the
+  handheld exchanges it for a token itself, `POST /api/client-tokens/exchange`)
+  and Syncthing (turn it on, copy the handheld's ID, accept requests or add a
+  device by ID). Everything connected is one list on the handheld with the same
+  sheet each — Sync now, Compare, its own Auto switch, Forget or Sign out — plus
+  **Sync everything now** and one **Automatic sync** switch over all of them.
+  No switch to find first: while Sync is open, the phone page is in use or a
+  pairing runs, the handheld answers and looks for other JukaHubs even with
+  Nearby devices off, two handhelds with Sync open list each other under
+  **Found on this Wi-Fi**, and a finished pairing switches Nearby devices on so
+  the two keep finding each other. Paired JukaHubs now sync **by themselves**
+  like the clouds: before a game the one with its saves newer hands them over
+  (within the same 6 s launch budget), after it they go back, and half a minute
+  later Save sync's whole comparison runs in the background — only when the
+  last sync recorded which version both had, never on the clocks; saves changed
+  on both are left for Compare and a toast says so; two devices never sync each
+  other in both directions at once. Full Save sync also leaves a one-sided file
+  whose name the other device spells with other upper/lower case alone and
+  lists it (FIX-15's first half). The phone companion's main page links to the
+  new page ([Sync](docs/SYNC.md); `player/synchub.go`, `synchub_peers.go`,
+  `companion_sync.go`). Not run on a device yet: the checks are in
+  [hardware validation](docs/HARDWARE_VALIDATION.md#regression-checks-without-separate-task-ids).
+
+- **VPN: AmneziaWG configurations connect** (Juka, 2026-11-24, relaying a
+  stock Smart Pro tester: "Vpn don't take a handshake with amneziaWG config
+  file"). An AmneziaVPN/AmneziaWG `.conf` imports as before, and its extra
+  `[Interface]` keys now shape what goes on the wire instead of being listed as
+  ignored: H1–H4 replace the four message types (a `min-max` range from
+  AmneziaWG 2.0 takes a random value per message and accepts any in it),
+  S1–S4 put that many random bytes in front of the initiation, the response,
+  the cookie reply and every data packet, Jc junk datagrams of Jmin–Jmax bytes
+  go out before each handshake, and the I1–I5 decoys (`<b 0x…>`, `<r N>`,
+  `<rc N>`, `<rd N>`, `<t>`, `<c>`; J1–J3 between two Itime seconds apart)
+  before those. A configuration with only WireGuard's own values runs exactly
+  as before; one whose padded sizes or types collide is refused with the
+  reason, and so is AmneziaWG 3's header protection (`HeaderProtectionKey`),
+  which needs a 2.0 configuration for now; a decoy with a tag JukaHub does not
+  know is left out. The configuration sheet says "AmneziaWG"; on Windows, where
+  WireGuard for Windows cannot carry these keys, switching the VPN on says to
+  use the Amnezia app there ([VPN](docs/VPN.md#amneziawg), `player/wg_awg.go`).
+  `TestWGAmneziaWG` runs two devices against each other through junk, decoys,
+  padding and ranges; nothing was tried against a real Amnezia server
+  (STOCKSP-HW-1).
+
+- **Settings › General › Weather location** (Juka, 2026-11-24, relaying the
+  same tester: "Where i can look a location, that used on a weather forecast?
+  Can i change it?"). The forecast was for wherever the handheld's internet
+  address points — the VPN server's city with a VPN on — and nothing said
+  which place that was. The forecast card's heading now names the city, the
+  Weather screen's first lines say the place and where it came from, and the
+  new row picks **Automatic** (the internet address, as before) or **Choose a
+  city…**: type a name, pick it from the places Open-Meteo's geocoding finds
+  (the forecast's own provider, no key). The choice is `weatherPlace`,
+  `weatherLat`, `weatherLon` and `weatherPlaceCountry`
+  ([Configuration](docs/CONFIGURATION.md), `player/weather_location.go`).
+
 - **Browser: videos, songs and live streams play from web pages** (Juka,
   2026-11-24, relaying a tester's reply to the Colosseum answer: "If not it's
   ok … can streaming from browser"). A link straight to a video, a song or a
@@ -3807,6 +4054,86 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The low-battery guard acts once per low-battery episode, not once per
+  JukaHub start**: a charger ends the episode, so a second drain in the same
+  session is protected again. The sleep's power-off time with a game at 5 % or
+  less is 10 minutes (`saveLedgerCapFor`), and the save ledger counts the
+  guard's runs to tell a game it closed from one that was quit.
+- **Cinematic boot: the ground breaks like stone** (Juka, 2026-11-24: "we
+  should make cracks on that one boot animation more realistic"). The glowing
+  accent lines that raced out from under the logo are gone; the cracks are cut
+  into the ground now (`bootcracks.go`). They start from the tile's corners,
+  where the blow is hardest, then from its sides, run out jagged and forking,
+  and taper from about 4 px at the tile to hairlines; each is a dark V-shaped
+  groove lit from the top-left like the logo's shadow, with a soft shadow on
+  its upper rim and a thin bright far lip, and near the impact a lip chips out
+  here and there. A near ring hugging the tile and a far ring cut across from
+  crack to crack split the slab into pieces, some tipped a little lighter or
+  darker; the edge the tile hit is crushed, with hair cracks all round, and a
+  little grit lies scattered. The layer is drawn on another core while the
+  logo falls, uploaded a quarter per frame and revealed outwards from under
+  the tile over 420 ms (SDL_RenderGeometry; a growing square where the driver
+  has none), with no render target any more. `branding/mkbootcracks.py` draws
+  the same cracks from the same seed on a PC, to preview a change before
+  building. Roll is unchanged.
+- **The browser removes ads from pages, not just their requests, and the page
+  closes up where they were** (Juka, 2026-11-24: "In WebBrowser, hide all
+  advertisement (do not even render it at all) and it's content...just remove
+  it...also make sure alignment is correct"). The request filter kept ad
+  servers off the wire, but the room a page keeps for its ads was still drawn:
+  empty 250-pixel slots under an "Advertisement" line, "Ad Feedback" links,
+  sponsored cards in grids, Taboola and Outbrain feeds, and blank placeholders
+  where a blocked ad picture would have been. A new pass
+  (`player/webpage_adremove.go`) cuts every ad out of the page's markup, with
+  everything inside it, after the page's scripts run and before the reader
+  reads its text, links, style sheets and layout, so an ad is never laid out,
+  painted, focused, linked or fetched, and the page reflows as if it had never
+  been there: paragraphs meet, a grid's cards move up (`:nth-child` patterns
+  stay in step, which a `display: none` ad would break), text no longer wraps
+  round an empty floated slot. A grid that lost an ad item closes the column
+  tracks nothing is left in, so an article beside a removed ad rail takes the
+  rail's width instead of leaving a blank column. It recognises ad-tech markers
+  (AdSense, Google Publisher Tag slots and frames, AMP ads, Taboola, Outbrain,
+  Ezoic, AdThrive, the search engines' ad blocks), pictures, videos and frames
+  from blocked ad servers, tracking pixels, links into ad click servers,
+  elements named advertisement, sponsored or advertorial, elements named for
+  an ad that hold nothing but ad furniture, label lines ("Advertisement",
+  "Sponsored", "Story continues below advertisement", "Anzeige", "広告"…) and
+  the frames round removed ads; a box named for an ad that carries a
+  "Sponsored" label (a native ad) goes whole. Content is judged by what it
+  holds, not by its name: a classifieds listing called `ad-card`, a page
+  flagged `has-ads` or `ad-free`, a sentence that says "advertisement" and an
+  element left unclosed over the article all stay. Each removed element counts
+  toward the page's BLOCKED total, and **Allow ads on this site** and
+  **Settings → Browser → Block ads and trackers** turn it off with the request
+  filter.
+
+- **The browser floats figures, infoboxes and columns, and wraps text round
+  them line by line** (Juka, 2026-11-24: "improve Web Browser even more...make
+  sure it works well...Improve rendering layout of browser"). A floated element
+  that holds other elements used to stay in the flow: Wikipedia's thumbnail
+  figures (a picture and its caption) and its infobox table, WordPress caption
+  boxes, a float grid's columns and a floated sidebar were laid out full width
+  instead of beside the text. Now a floated block takes its whole subtree with
+  it (new `player/webpage_floats.go`), at its own width — the width the page
+  gives it, or as wide as its picture or widest line, with a `table-caption`
+  caption (Wikipedia's figures) wrapping under the picture instead of widening
+  it — and with its margins as the gap to the text. Lines beside a float are
+  shortened by exactly the part the float covers and the lines below it have
+  the whole width again (a paragraph next to a small picture used to stay
+  narrow to its end, and a column with a margin of its own beside a sidebar was
+  pushed across twice); a line with no room beside a float goes below it. A box
+  that cannot run under a float — one with a background or border, a picture,
+  a flex row, a grid, a table — sits beside it, or below it when there is no
+  room. A second right float stands left of the first, a float that does not
+  fit drops below the others, and a float's own `clear` moves only the float. A
+  clearfix (`::after { clear: both }`), `<br clear="all">`, an empty
+  `<div style="clear: both">`, `clear` on an element whose text is in its
+  children, an element with `overflow: hidden` or `display: flow-root`, and
+  every flex item, table cell and the page itself now hold their floats, so a
+  media object's picture no longer pushes the next item across and a float at
+  the end of the page can be scrolled to.
+
 - **The browser's layering engine stacks heroes, badges and sticky headers
   like a browser** (Juka, 2026-11-24: "improve layerimg engine even
   further"). A relatively positioned part of the page that CSS paints over an
@@ -4764,6 +5091,103 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **No games started: RetroArch is installed when the games' one is gone**
+  (Juka, 2026-11-25, JH-X6HRVE: a Smart Pro whose every game stopped with
+  `launch.sh: line 7: /mnt/SDCARD/RetroArch/ra64.trimui: not found`, the
+  diagnostics saying `RetroArch: not found` and `RA install: not tried this
+  session`). The card's RetroArch folder had lost its binary and its
+  `retroarch.cfg` a minute after JukaHub saw them (the same start logged
+  `mkdir …: input/output error`), and JukaHub's install never ran: "is
+  RetroArch missing?" asked a search that also counts any `retroarch` on
+  `PATH`, in `/usr/bin` or beside JukaHub, wrapper scripts included. It now
+  asks what the games ask (`player/racard.go`): the launch scripts of the
+  stock firmware and CrossMix-OS are read for the RetroArch they call
+  (`$RA_DIR/ra64.trimui`, a `cd` before `./ra64.trimui`), and that file must be
+  there and a program for the handheld's ARM processor whose loader is on the
+  system; when no script names one, the card's `RetroArch/ra64.trimui` or any
+  RetroArch program the wider search finds will do. When it is missing, the
+  start-up installs TrimUI's build about a minute after start and again
+  whenever a look every three minutes finds it gone; a game whose script could
+  not start it starts the install at once (its card says so, and points to
+  Tools → System → Card check when the RetroArch went missing during the
+  session); Get more cores, a core install and the RetroArch tile no longer
+  stand down. A `ra64.trimui` that is there but cannot start (another
+  processor's, its loader missing, empty) is kept as `ra64.trimui.bak` and
+  replaced. Diagnostics: `RA install` says why no install ran ("not needed:
+  …", "not tried yet: … waiting for …"), and a new `RA games` line names the
+  binary the launch scripts call and what is wrong with it. And the right build: TrimUI's Smart Pro packages are
+  `.7z` archives with 7-Zip's ARM64 filter on `ra64.trimui` and the cores,
+  which JukaHub's 7z reader now undoes (with the ARM and ARM-Thumb filters;
+  checked against liblzma and against a second form of the ARM64 conversion),
+  so a Smart Pro gets its own model's build rather than another model's; a
+  first install prefers a build of its own model that starts on the
+  firmware's own glibc (TrimUI's newest Smart Pro package came with firmware
+  1.1.0, the handheld ran 1.0.4) over one that starts only on JukaHub's glibc
+  2.39, takes RetroArch's folder from the same package as the binary, and the
+  update pass never trades a build that starts on the firmware's glibc for one
+  that does not (`player/raget.go`, `player/sevenzip.go`). Static checks only;
+  not yet run on a handheld.
+- **Windows apps: Notepad++ starts on a stock Smart Pro** (Juka,
+  2026-11-24, relaying a tester's log: `westonwrap.sh: source: line 12: can't
+  open '/mnt/SDCARD/System/etc/ex_config'`, then exit status 2 in every display
+  mode). A stock firmware has no bash, so WestonPack's `westonwrap.sh` ran
+  under BusyBox's sh, which stops a script at the first file it cannot
+  source — here PortMaster's TrimUI `control.txt` reading TRIMUI_EX's
+  `ex_config`, which only CrossMix and TRIMUI_EX cards have. It now runs under
+  a real bash: the firmware's when it has one, else JukaHub's (Ubuntu's on the
+  private glibc, the one PortMaster's ports get), fetched at the first launch
+  ("Adding bash for WestonPack…", a few MB, once). Bash reports the missing
+  file and goes on. Where `/bin/bash` itself is not bash, the session runs in
+  a mount namespace of its own where it is, as ports do. The launch log names
+  the shell (`player/wine_display.go`). Static checks only (STOCKSP-HW-1).
+- **Stick lights: no flicker every two seconds** (the same tester: "Stick leds
+  are flickering in all modes every 2sec"). JukaHub drove the rings through
+  the driver's effects while the driver's frame animation
+  (`anim_frames_enable`, on since boot) kept running over them; the firmware's
+  own LED scripts switch it off before they use an effect (OS-Trimux PR #7).
+  It is now off while an effect drives the rings, on for the frame path, put
+  back as the firmware had it when the lights stop, and watched like the other
+  nodes. A cycle count of -1 that the driver does not keep is written as the
+  firmware's own 30000 instead of leaving the boot value 1. The "lights taken"
+  log line names both (`player/ledanim.go`; STOCKSP-HW-1).
+- **Bluetooth stays off after a restart** (the same tester: "Bluetooth enabled
+  automatically on every boot"). The stock firmware brings Bluetooth up at
+  every boot by its own setting. JukaHub now remembers where its switches left
+  the radio (`data/bluetooth-switch.json`) and, on a TrimUI, switches a radio
+  left off back off after the firmware's start (looked at for 90 seconds, at
+  most twice, never once anything this session switched it on); the
+  firmware's own setting follows too where `system.json` has a `bluetooth` or
+  `btswitch` key (`player/bt_bootswitch.go`; STOCKSP-HW-1).
+- **Brightness and volume come back after a restart** (the same tester:
+  "After reboot brightness and volume dropped to stock value"). Started at
+  boot by the autostart hook, JukaHub runs before the stock launcher would
+  have applied `system.json`, and JukaHub left the levels to the firmware on a
+  TrimUI, so the panel and the speaker came up at their own defaults while the
+  file and the header still showed the saved levels. At launch the file's
+  `brightness` and `vol` (`hpvol` with headphones in) now go back on the panel
+  and the codec where they differ; launched from the stock menu nothing
+  changes, and a level set meanwhile wins (`player/brightnessctl.go`,
+  `player/volume_trimui.go`; STOCKSP-HW-1).
+
+- **Browser: padded cards and panels are as wide as their box again**
+  (2026-11-24). A box whose content is in child elements — a card with a
+  heading and a paragraph, a docs admonition, a sidebar panel — was painted as
+  wide as its text measure and shifted left by its own inset, so its right
+  padding was missing and full lines ran over its right border. Such a box is
+  now painted at the width layout gave it, its margins outside and its padding
+  inside, and the same width places an absolutely positioned child against its
+  right edge (`right: 20px` on a badge in a padded hero landed its padding's
+  width too far left). Flex and grid items keep the width their track gives
+  them.
+- **Browser: centred and justified lines of an indented paragraph stay inside
+  it** (2026-11-24). `text-indent` was taken off the width of every line, not
+  only the first, so the later lines of an indented, justified paragraph were
+  stretched past its right edge by the indent and centred ones sat half of it
+  too far right.
+- **Browser: no debugging line on every page layout** (2026-11-24). A
+  leftover `DBG page height=` print ran each time a page was measured, filling
+  the log while reading.
 
 - **Browser: a table's last row keeps its bottom padding on the page**
   (2026-11-24). A cell paints one padding row below the row grid its content

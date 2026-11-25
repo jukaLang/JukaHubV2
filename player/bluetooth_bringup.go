@@ -102,10 +102,20 @@ var (
 // has registered, bluetoothd running, the radio unblocked and powered. On a
 // stack that is already up it costs a directory listing, a walk of /proc and
 // one ioctl. stage reports progress in words for the page ("Starting
-// Bluetooth…") and may be nil. A nil error means the radio is on. Ending ctx
+// Bluetooth…") and may be nil. A nil error means the radio is on, and the
+// switch is remembered on for the next start (bt_bootswitch.go). Ending ctx
 // stops it between rungs; a bluetoothctl run already under way is killed with
 // it (btPowerOn).
 func btBringUp(ctx context.Context, stage func(string)) error {
+	err := btBringUpStack(ctx, stage)
+	if err == nil {
+		btSwitchRemember(true)
+	}
+	return err
+}
+
+// btBringUpStack is btBringUp's work.
+func btBringUpStack(ctx context.Context, stage func(string)) error {
 	if runtime.GOOS != "linux" {
 		return errBzNoTool
 	}

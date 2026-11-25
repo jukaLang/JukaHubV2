@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -62,6 +61,8 @@ var gameList = []gameEntry{
 	// Klondike with undo and a saved game (solitaire*.go), also on the Apps
 	// screen.
 	{name: "Solitaire", icon: "[S]", desc: "Klondike with undo and resume", scene: solitaireSceneName},
+	// Race a friend's run of the arcade games, or your own best (ghost_ui.go).
+	{name: "Ghost Challenges", icon: "[G]", desc: "Race a friend's run, or your best", scene: ghostSceneName},
 }
 
 var gameMenuCursor int
@@ -367,6 +368,10 @@ func renderActiveGame(renderer *sdl.Renderer, config *Config) {
 	case gameBrickBreaker:
 		renderBrickBreaker(renderer, config)
 	}
+	// Ghost Challenges: the run ends with the game, and the race is drawn
+	// over it (ghost.go).
+	ghostFrame()
+	ghostDraw(renderer, config)
 }
 
 func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
@@ -380,6 +385,12 @@ func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
 		activeGame = gameNone
 		PlayBackSound()
 		return true
+	case sdl.K_y:
+		// After a run: send it to a friend as a Ghost Challenge (ghost_ui.go).
+		if run, ok := ghostOfferRun(); ok && event.Type == sdl.KEYDOWN {
+			ghostSendSheet(appConfig, run)
+			return true
+		}
 	}
 	switch activeGame {
 	case gameSnake:
@@ -420,6 +431,7 @@ func tickActiveGame() {
 	case gameBrickBreaker:
 		tickBrickBreaker()
 	}
+	ghostTick() // the run's score and, in Flappy, the bird's height (ghost.go)
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -453,6 +465,7 @@ var (
 )
 
 func initSnake() {
+	ghostRunBegin(gameSnake) // the run's seed and recording (ghost.go)
 	midX, midY := snakeW/2, snakeH/2
 	snakeBody = []snakePoint{
 		{midX, midY}, {midX - 1, midY}, {midX - 2, midY},
@@ -465,7 +478,7 @@ func initSnake() {
 
 func placeSnakeFood() {
 	for {
-		food := snakePoint{rand.Intn(snakeW), rand.Intn(snakeH)}
+		food := snakePoint{arcadeRng.Intn(snakeW), arcadeRng.Intn(snakeH)}
 		occupied := false
 		for _, s := range snakeBody {
 			if s == food {
@@ -648,6 +661,7 @@ var tetrisShapes = []struct {
 }
 
 func initTetris() {
+	ghostRunBegin(gameTetris) // the run's seed and recording (ghost.go)
 	for i := range tetrisBoard {
 		for j := range tetrisBoard[i] {
 			tetrisBoard[i][j] = 0
@@ -665,7 +679,7 @@ func initTetris() {
 }
 
 func randomTetrisShape() ([4][4]int, sdl.Color) {
-	s := tetrisShapes[rand.Intn(len(tetrisShapes))]
+	s := tetrisShapes[arcadeRng.Intn(len(tetrisShapes))]
 	return s.shape, s.color
 }
 
@@ -915,6 +929,7 @@ const (
 var g2048Board [g2048Grid][g2048Grid]int
 
 func init2048() {
+	ghostRunBegin(game2048) // the run's seed and recording (ghost.go)
 	for i := range g2048Board {
 		for j := range g2048Board[i] {
 			g2048Board[i][j] = 0
@@ -938,9 +953,9 @@ func place2048Tile() {
 	if len(empty) == 0 {
 		return
 	}
-	pos := empty[rand.Intn(len(empty))]
+	pos := empty[arcadeRng.Intn(len(empty))]
 	g2048Board[pos[1]][pos[0]] = 2
-	if rand.Intn(10) == 0 {
+	if arcadeRng.Intn(10) == 0 {
 		g2048Board[pos[1]][pos[0]] = 4
 	}
 }
@@ -1190,7 +1205,7 @@ func initPong() {
 	pongBall.x = float64(pongW) / 2
 	pongBall.y = float64(pongH) / 2
 	pongBall.vx = pongSpeed
-	pongBall.vy = pongSpeed * (rand.Float64()*0.6 - 0.3)
+	pongBall.vy = pongSpeed * (arcadeRng.Float64()*0.6 - 0.3)
 	pongPaddleY[0] = float64(pongH)/2 - float64(pongPaddleH)/2
 	pongPaddleY[1] = float64(pongH)/2 - float64(pongPaddleH)/2
 	gameScore = 0
@@ -1261,14 +1276,14 @@ func tickPong() {
 		pongBall.x = float64(pongW) / 2
 		pongBall.y = float64(pongH) / 2
 		pongBall.vx = pongSpeed
-		pongBall.vy = pongSpeed * (rand.Float64()*0.6 - 0.3)
+		pongBall.vy = pongSpeed * (arcadeRng.Float64()*0.6 - 0.3)
 	}
 	if pongBall.x > float64(pongW)+20 {
 		// Player scored
 		pongBall.x = float64(pongW) / 2
 		pongBall.y = float64(pongH) / 2
 		pongBall.vx = -pongSpeed
-		pongBall.vy = pongSpeed * (rand.Float64()*0.6 - 0.3)
+		pongBall.vy = pongSpeed * (arcadeRng.Float64()*0.6 - 0.3)
 		gameScore += 5
 		trophyEvent(tkPongPoint)
 	}
@@ -1417,6 +1432,14 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 		gameOver = false
 		PlayBackSound()
 		return true
+	}
+	// After a run Y sends it to a friend as a Ghost Challenge (ghost_ui.go).
+	// Minesweeper's Y flags a mine; it records no runs.
+	if e.Button == sdl.CONTROLLER_BUTTON_Y {
+		if run, ok := ghostOfferRun(); ok {
+			ghostSendSheet(appConfig, run)
+			return true
+		}
 	}
 	if e.Button == sdl.CONTROLLER_BUTTON_START && gameOver {
 		switch activeGame {
@@ -1611,7 +1634,7 @@ func initMinesweeper() {
 	gameScore = 0
 	// Keep the first move safe: no mine under the centre 3x3 area.
 	for placed := 0; placed < msMines; {
-		x, y := rand.Intn(msW), rand.Intn(msH)
+		x, y := arcadeRng.Intn(msW), arcadeRng.Intn(msH)
 		if msMine[y][x] || (msAbs(x-msCursorX) <= 1 && msAbs(y-msCursorY) <= 1) {
 			continue
 		}
@@ -1868,14 +1891,19 @@ var (
 	flappyPipes     []flappyPipe
 	flappyLastMs    uint64
 	flappySpawnWait float64
+	// flappyClock is the run's own time in seconds (the sum of its ticks),
+	// the clock a Ghost Challenge's bird flies by (ghost.go).
+	flappyClock float64
 )
 
 func initFlappy() {
+	ghostRunBegin(gameFlappy) // the run's seed and recording (ghost.go)
 	flappyY = float64(flappyH-flappyGround) / 2
 	flappyVy = 0
 	flappyPipes = nil
 	flappySpawnWait = 0.9
 	flappyLastMs = sdl.GetTicks64()
+	flappyClock = 0
 	gameScore = 0
 	gameOver = false
 }
@@ -1917,6 +1945,7 @@ func tickFlappy() {
 	if dt > 0.1 {
 		dt = 0.1
 	}
+	flappyClock += dt
 
 	flappyVy += flappyGravity * dt
 	flappyY += flappyVy * dt
@@ -1948,7 +1977,7 @@ func tickFlappy() {
 	if flappySpawnWait <= 0 {
 		gapMin := float64(80)
 		gapMax := floor - flappyGap - 80
-		gapY := gapMin + rand.Float64()*(gapMax-gapMin)
+		gapY := gapMin + arcadeRng.Float64()*(gapMax-gapMin)
 		flappyPipes = append(flappyPipes, flappyPipe{X: float64(flappyW) + 60, GapY: gapY})
 		flappySpawnWait = flappySpawnGap
 	}
@@ -2028,6 +2057,8 @@ func renderFlappy(renderer *sdl.Renderer, config *Config) {
 // ensureGamesScene adds the collection to configs that predate it, so the Start
 // menu always has a Games row even after a config reset or an old update.
 func ensureGamesScene(config *Config) {
+	// Ghost Challenges' screen rides along (ghost_ui.go).
+	ghostEnsureScene(config)
 	if config == nil || sceneByName(config, "Games") != nil {
 		return
 	}
@@ -2048,12 +2079,22 @@ func (gamesScene) render(r *sdl.Renderer, c *Config) bool {
 	if activeGame != gameNone {
 		renderActiveGame(r, c)
 	} else {
+		if gameStartQueued == gameNone {
+			// Back on the list: a Ghost Challenge raced is over (ghost.go).
+			ghostLeft()
+		}
 		renderGamesMenu(r, c)
 	}
+	// Ghost Challenges' "send this run" sheet (ghost_ui.go).
+	tbxRenderSheet(r, c)
 	return true
 }
 
 func (gamesScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	if tbxSheetVisible(c) {
+		tbxDispatch(c, tbxKeyAction(e), nil)
+		return true
+	}
 	if activeGame != gameNone {
 		handleActiveGameInput(e)
 	} else {
@@ -2065,6 +2106,10 @@ func (gamesScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 }
 
 func (gamesScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	if tbxSheetVisible(c) {
+		tbxDispatch(c, tbxPadAction(e), nil)
+		return true
+	}
 	return ctrlGames(e, c)
 }
 

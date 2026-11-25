@@ -201,6 +201,76 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
 
 ### Regression checks without separate task IDs
 
+- **In-game indicators** ([Configuration](CONFIGURATION.md#in-game-indicators-ingamehud),
+  2026-11-24). Needs a package whose `bin/` has `libjukaosd.so` (its block in
+  `bin/BUILDINFO.txt`). Turn Settings → Games & emulators → In-game indicators
+  on, start a RetroArch game and a standalone PPSSPP game from the library:
+  the volume keys show a Volume card with a bar at the top, Menu + volume a
+  Brightness card, each fading out after about 1.5 s; RetroArch's own FPS
+  readout shows no drop while a card is up or after; a notification (with
+  Notifications while playing set to Over the game) appears as a card; a port
+  or a Wine program runs exactly as before; switching the setting off and
+  launching again leaves the picture alone. Log a game's `LD_PRELOAD` line and
+  any card that does not show (which emulator, which video driver). In the
+  in-game menu, **Performance** steps Auto → Battery saver → Balanced →
+  Performance, `scaling_governor` follows at once, the game's options sheet
+  shows the new CPU profile, and the hub's governor is back after the game.
+- **Ghost Challenges between two handhelds** ([Ghost Challenges](GHOST_CHALLENGES.md),
+  2026-11-24): with Nearby devices paired, play Flappy on one, **Y** on the
+  game-over card → Send to the other: the other gets a toast and **Play** in
+  the bell; racing shows the same pipes and the ghost bird; the result reaches
+  the screen's row ("Beaten"). Save as a file, copy the `.jghost` to the other
+  card's `Ghosts` folder: it is taken in when Ghost Challenges opens.
+- **Japanese, Korean and Chinese** ([Configuration](CONFIGURATION.md),
+  2026-11-24): online, pick 日本語 (shown as "Japanese"), 한국어 and 简体中文 in
+  Settings → General → Language: each downloads its Noto Sans (JP 4.5 MB, KR
+  4.6 MB, SC about 8.4 MB) from noto-cjk's Sans2.004 subsets and switches when
+  it lands; Home, Settings and the Start menu read in the language with no
+  "…" and no label running off its row; dates read 2026年11月24日; offline the
+  pick stays English and switches once Wi-Fi is back. Note any clipped label.
+
+- **Universal instant resume** ([Never lose a session](SESSION_SAFETY.md),
+  2026-11-24). Settings → Power & battery → save level 10 % makes these quick.
+  (1) A port or a Wine program at the save level off the charger: the device
+  buzzes and sleeps with the game stopped; plug in, press power — the game
+  carries on where it was. Again without a charger: after about ten minutes it
+  wakes, the port quits (its own save written) and the device powers off; the
+  bell names the hold. Woken without a charger, the guard closes it 45 s later.
+  (2) A RetroArch game at the save level: saved and suspended; wake it and
+  power off from the menu without starting another game, then power on — it
+  resumes. Start another game first and it does not.
+  (3) JukaHub's own PPSSPP build (PPSSPP card → **Resume PSP games after a power
+  off**): Power off mid-game; the log shows "asked PPSSPP for a save state", a
+  `.ppst` and `.ppst.done` ("ok") appear in `data/emulators/ppsspp/resume/`,
+  and the next power-on starts the game at that point (`jukahub-ppsspp.status`:
+  "resuming from …"). Check that the build's release notes carry
+  `Resume: save-on-request` and that PSP saves and the player's own state slots
+  are untouched. (4) The same PSP game with the screen to itself (hand-off) at
+  the save level: JukaHub comes back, its log says the game "was closed by its
+  battery watch" with the state kept, and it powers off; the next power-on
+  resumes the game. (5) An
+  Android game: logged as "This Android game", held like a port.
+- **Browser ads removed** ([Browser](BROWSER.md), 2026-11-24): open a news page
+  with ads (cnn.com, theguardian.com, a recipe blog) and a DuckDuckGo search with
+  sponsored results. No ad slot, "Advertisement" or "Ad Feedback" line,
+  sponsored card, blank picture placeholder or empty band is drawn; the
+  paragraphs round a removed ad meet, a card grid has no hole, and an article
+  beside a removed ad rail spans the page. Site info → **Allow ads on this site**
+  brings the slots back and **Block ads on this site** removes them again. A
+  classifieds site (OLX, Gumtree) keeps every listing.
+- **Sync, one code** ([Sync](SYNC.md), 2026-11-24): with Nearby devices off on
+  two handhelds, open Tools → Sync on both; each lists the other under Found on
+  this Wi-Fi within seconds. Pair once from a screen and once from the phone's
+  `/sync` page (the code shows on the phone and on the other screen; Codes match
+  on both); afterwards Nearby devices is on on both and the first background
+  sync runs about half a minute later. Play a game on one, exit, start it on the
+  other: "Saves updated from …" and the newer save; a save changed on both says
+  "changed here and on …" and copies nothing; with Automatic sync off nothing
+  moves by itself. On the phone page: Google's code and link appear after Sign
+  in; WebDAV connects; a RomM 4.8+ Pair device code connects RomM (a pasted
+  token still works); Syncthing turns on, shows its ID and a PC's request is
+  accepted from the phone. The big code on the handheld closes when the phone
+  opens the page.
 - **Live Builder:** Enable it in Settings → Network and push from a laptop's
   builder at `http://localhost`. An ordinary design applies; one with a program
   waits for approval; another push gets 409 while approval is pending; New

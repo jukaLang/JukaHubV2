@@ -264,8 +264,8 @@ func homeSearchCatalog() []homeSearchEntry {
 		{title: mailcalAppEntryName, where: "Apps", icon: "mail", keys: "mail email e-mail inbox gmail outlook hotmail icloud yahoo messages imap smtp write reply compose", open: func(*Config) { mailOpenApp() }},
 		{title: mailcalSettingsEntryName, where: "Settings", icon: "calendar", keys: "email calendar accounts mail account add account app password caldav ics webcal ical google calendar outlook calendar icloud sync reminders", open: mailcalOpenSettings},
 		{title: "Calendar", where: "Clock", icon: "calendar", keys: "calendar events agenda schedule appointments meetings month today upcoming", open: func(*Config) { mailcalOpenCalendar() }},
-		// Save sync and its clouds (ssyncui.go, cloudsync_ui.go).
-		{title: "Save sync", where: "Tools", icon: "sync", keys: "save sync saves cloud google drive gdrive webdav nextcloud owncloud koofr infinicloud nas backup saves across devices oauth client", open: ssyncOpenScreen},
+		// Sync: every device and cloud the saves follow (synchub.go).
+		{title: "Sync", where: "Tools", icon: "sync", keys: "sync save sync saves cloud google drive gdrive webdav nextcloud owncloud koofr infinicloud nas romm syncthing pair pairing paired devices another jukahub qr code continuity automatic backup saves across devices oauth client", open: ssyncOpenScreen},
 		{title: "Phone companion", where: "Device", icon: "phone", keys: "phone companion qr pair remote control", open: func(*Config) { openCompanionOverlay() }},
 		{title: "Screen Share", where: "Device", icon: "devices", keys: "screen share sharing cast mirror stream tv hdmi watch broadcast remote cast", open: openCastPanel},
 		// The handheld as a game controller for a PC or phone (ctlmode_ui.go).

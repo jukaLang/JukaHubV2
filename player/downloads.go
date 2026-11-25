@@ -817,7 +817,7 @@ func downloadsWorker() {
 			downloads.mu.Unlock()
 			continue
 		}
-		justSaved := false
+		justSaved, justFailed := false, false
 		var saved downloadItem
 		switch {
 		case err != nil && (errors.Is(err, context.Canceled) || downloads.paused):
@@ -828,6 +828,7 @@ func downloadsWorker() {
 			cur.Status = downloadFailed
 			cur.Speed = 0
 			cur.Err = downloadFailureLine(err)
+			justFailed = true
 		default:
 			cur.Status = downloadDone
 			cur.Path = res.Path
@@ -850,14 +851,25 @@ func downloadsWorker() {
 			}
 		}
 		title := cur.displayTitle()
+		failLine, failID := cur.Err, cur.ID
 		downloads.mu.Unlock()
 
+		if justFailed {
+			// Quietly in the bell, with a Retry (notifications_actions.go):
+			// the Downloads screen shows the row too.
+			notifPost(notifSpec{Message: "Download failed: " + title + " — " + failLine, Priority: notifWarning,
+				Source: notifSrcDownloads, Key: "download-" + strconv.FormatInt(failID, 10),
+				Action: notifAction{Label: "Retry", Kind: notifActDownloadRetry, Arg: strconv.FormatInt(failID, 10)}})
+		}
 		if justSaved {
 			trophyEvent(tkDownload)
 			if st, err := os.Stat(saved.Path); err == nil { // the file, not yt-dlp's estimate
 				trophyEventN(tkDownloadMB, st.Size()>>20)
 			}
-			ShowToast("Saved "+title, ToastKindSuccess)
+			// The confirmation, kept in the bell with an Open.
+			notifPost(notifSpec{Message: "Saved " + title, Priority: notifSuccess, Source: notifSrcDownloads,
+				Key: "download-" + strconv.FormatInt(saved.ID, 10), Toast: true, Read: true,
+				Action: notifAction{Label: "Open", Kind: notifActOpenFile, Arg: saved.Path}})
 			noteAwayDownloadSaved(title)
 			// The queue forgets its rows on exit; the library keeps the file
 			// listed, with its artwork, for offline play (dl_library.go).

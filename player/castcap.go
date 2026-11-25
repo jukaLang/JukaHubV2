@@ -66,7 +66,25 @@ const (
 	castQualityKey = "castQuality" // smooth | balanced | sharp
 	castGamesKey   = "castGames"   // share games too (handheld)
 	castRotateKey  = "castRotate"  // 0/90/180/270: turn a game's picture clockwise
+	castSoundKey   = "castSound"   // viewers hear the handheld (castaudio.go)
+	castControlKey = "castControl" // ask | off: viewers may ask to play (castinput.go)
 )
+
+// castSoundFor reads Sound: on unless turned off.
+func castSoundFor(config *Config) bool {
+	if config == nil {
+		return true
+	}
+	return customBool(config.Variables.Custom, castSoundKey, true)
+}
+
+// castControlFor reads Controllers: viewers may ask to play unless it is off.
+func castControlFor(config *Config) bool {
+	if config == nil {
+		return true
+	}
+	return !strings.EqualFold(strings.TrimSpace(customStringValue(config.Variables.Custom, castControlKey)), "off")
+}
 
 // castPresetIndex finds a preset by name, -1 when there is none.
 func castPresetIndex(name string) int {
@@ -177,6 +195,8 @@ var castLive struct {
 	source    atomic.Int32 // castSource*
 	fbBlack   atomic.Bool  // the game's framebuffer has shown nothing but black
 	fbFailed  atomic.Bool  // the game's picture could not be read at all
+	sound     atomic.Bool  // "Sound": viewers hear the handheld
+	control   atomic.Bool  // "Controllers": viewers may ask to play
 }
 
 // castLivePreset is the preset the share runs at right now. Safe from any
@@ -210,6 +230,14 @@ func castSyncSettings(config *Config) {
 		tools = config.Variables.ToolsPath
 	}
 	castLive.toolsPath.Store(tools)
+	if sound := castSoundFor(config); castLive.sound.Swap(sound) != sound {
+		castAudioRefresh()
+	}
+	if control := castControlFor(config); castLive.control.Swap(control) != control && !control {
+		castInputRevoke("Controllers were switched off on the handheld")
+	}
+	// The remote pad's face buttons for JukaHub's own screens (castinput.go).
+	castInputSyncSettings(config)
 }
 
 // castTick keeps castLive current while the share runs: twice a second is
@@ -218,6 +246,8 @@ func castSyncSettings(config *Config) {
 // link works whether or not sharing was ever opened this session.
 func castTick() {
 	castTokenLoad(appConfig)
+	// A viewer asking to play is announced here (castinput.go).
+	castInputMainTick()
 	if !castIsEnabled() {
 		return
 	}
@@ -646,7 +676,29 @@ func castUIFrameDue(now time.Time) bool {
 	if !castIsEnabled() || castWatcherCount() == 0 || castUI.busy.Load() {
 		return false
 	}
+	if castInputPlaying() {
+		// Someone plays from the TV: its picture is the one being looked at.
+		return now.Sub(castUI.last) >= castUIPlayGap(castUI.readCost)
+	}
 	return now.Sub(castUI.last) >= castUIGap(castLivePreset().FPS, P().IsHandheld(), castUI.readCost)
+}
+
+const (
+	// castUIPlayFPS and castUIPlayReadShare are the capture while a viewer
+	// plays: up to 24 frames a second, and the readback may take a quarter of
+	// the render thread instead of a tenth — the handheld's own picture
+	// matters less than the TV's then.
+	castUIPlayFPS       = 24
+	castUIPlayReadShare = 4
+)
+
+// castUIPlayGap is castUIGap while a viewer plays.
+func castUIPlayGap(readCost time.Duration) time.Duration {
+	gap := time.Second / castUIPlayFPS
+	if slow := readCost * castUIPlayReadShare; slow > gap {
+		gap = slow
+	}
+	return min(gap, castUIMaxGap)
 }
 
 // castUIGap is the time between two UI captures: the preset's frame interval,
@@ -863,7 +915,7 @@ func castDrawLiveIndicator(renderer *sdl.Renderer) {
 	if font == nil {
 		return
 	}
-	label := castLiveLabel(n)
+	label := castLivePillText(n)
 	tw, th := measureText(font, label)
 	h := th + scaleY(6, screenHeight)
 	dot := h / 3
@@ -895,6 +947,36 @@ func castLiveLabel(n int) string {
 		castLiveLabelCache.text = fmt.Sprintf("LIVE · %d", n)
 	}
 	return castLiveLabelCache.text
+}
+
+// castLivePillCache keeps the pill's words with a viewer's turn in them.
+// Render thread only.
+var castLivePillCache struct {
+	n, mode int
+	text    string
+}
+
+// castLivePillText is the pill: castLiveLabel, and whether a viewer plays the
+// handheld or asks to — whoever holds it should know that too.
+func castLivePillText(n int) string {
+	mode := 0
+	if owner, asking, _ := castInputStatus(); owner != "" {
+		mode = 1
+	} else if asking != "" {
+		mode = 2
+	}
+	if mode == 0 {
+		return castLiveLabel(n)
+	}
+	c := &castLivePillCache
+	if c.n != n || c.mode != mode || c.text == "" {
+		c.n, c.mode = n, mode
+		c.text = castLiveLabel(n) + " · Viewer in control"
+		if mode == 2 {
+			c.text = castLiveLabel(n) + " · Viewer asks to play"
+		}
+	}
+	return c.text
 }
 
 // castMaskPIN is how a screen shows the Phone Companion PIN: as it is, except
@@ -1092,8 +1174,13 @@ func init() {
 	Cleanup = append(Cleanup, castShutdown)
 }
 
-// castShutdown stops the share on the way out.
+// castShutdown stops the share on the way out. A viewer's held buttons are let
+// go and the firmware's pad reader is running again (castinput.go) before
+// JukaHub leaves.
 func castShutdown() {
 	castEnabled.Store(false)
 	castSupervisorStop()
+	castInputRevoke("JukaHub is closing")
+	castPlayCloseAll()
+	castAudioRefresh()
 }

@@ -67,6 +67,9 @@ type wgDeviceConfig struct {
 	// increasing across restarts by the daemon).
 	Timestamp func() [12]byte
 	Logf      func(format string, args ...any)
+	// AWG is the AmneziaWG obfuscation the server expects (wg_awg.go); nil
+	// for plain WireGuard.
+	AWG *wgAWG
 }
 
 // wgKeypair is one session's keys and counters.
@@ -183,7 +186,7 @@ func newWGDevice(cfg wgDeviceConfig, tun wgTUN, conn wgConn, random io.Reader) *
 		cfg:      cfg,
 		tun:      tun,
 		conn:     conn,
-		noise:    wgNoise{id: cfg.Identity},
+		noise:    wgNoise{id: cfg.Identity, awg: cfg.AWG},
 		endpoint: cfg.Endpoint,
 		done:     make(chan struct{}),
 		now:      time.Now,
@@ -357,7 +360,7 @@ func (d *wgDevice) receiveInitiation(msg []byte, src netip.AddrPort) {
 	d.anyReceivedLocked(now)
 	d.anySentLocked(now)
 	d.mu.Unlock()
-	d.write(resp, src)
+	d.write(d.cfg.AWG.frame(wgMsgResponse, resp), src)
 }
 
 func (d *wgDevice) receiveResponse(msg []byte, src netip.AddrPort) {
@@ -429,19 +432,28 @@ func wgPadding(n, mtu int) int {
 // sealData frames pkt as a transport message for kp with the given counter,
 // encrypting it in place inside buf (grown when too small).
 func sealData(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte) []byte {
+	return sealDataAWG(kp, counter, pkt, mtu, buf, nil)
+}
+
+// sealDataAWG is sealData with AmneziaWG's transport type and the random
+// padding in front (wg_awg.go); a nil a is plain WireGuard.
+func sealDataAWG(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte, a *wgAWG) []byte {
+	pre := a.pad(wgMsgData)
 	pad := wgPadding(len(pkt), mtu)
 	body := len(pkt) + pad
-	if cap(buf) < wgDataHeaderSize+body+wgTagSize {
-		buf = make([]byte, 0, wgDataHeaderSize+body+wgTagSize)
+	if cap(buf) < pre+wgDataHeaderSize+body+wgTagSize {
+		buf = make([]byte, 0, pre+wgDataHeaderSize+body+wgTagSize)
 	}
-	buf = buf[:wgDataHeaderSize+body]
-	binary.LittleEndian.PutUint32(buf[0:4], wgMsgData)
-	binary.LittleEndian.PutUint32(buf[4:8], kp.remoteIndex)
-	binary.LittleEndian.PutUint64(buf[8:16], counter)
-	copy(buf[wgDataHeaderSize:], pkt)
-	clear(buf[wgDataHeaderSize+len(pkt):])
+	buf = buf[:pre+wgDataHeaderSize+body]
+	wgAWGFill(buf[:pre])
+	msg := buf[pre:]
+	binary.LittleEndian.PutUint32(msg[0:4], a.header(wgMsgData))
+	binary.LittleEndian.PutUint32(msg[4:8], kp.remoteIndex)
+	binary.LittleEndian.PutUint64(msg[8:16], counter)
+	copy(msg[wgDataHeaderSize:], pkt)
+	clear(msg[wgDataHeaderSize+len(pkt):])
 	nonce := wgNonce(counter)
-	return kp.send.Seal(buf[:wgDataHeaderSize], nonce[:], buf[wgDataHeaderSize:], nil)
+	return kp.send.Seal(buf[:pre+wgDataHeaderSize], nonce[:], msg[wgDataHeaderSize:], nil)
 }
 
 // sendPacket sends one packet from the tunnel to the peer — or a keepalive
@@ -460,7 +472,7 @@ func (d *wgDevice) sendPacket(pkt, buf []byte) {
 		init := d.initiateLocked(now, false)
 		ep := d.endpoint
 		d.mu.Unlock()
-		d.write(init, ep)
+		d.writeInit(init, ep)
 		return
 	}
 	counter := kp.sendNonce
@@ -475,8 +487,8 @@ func (d *wgDevice) sendPacket(pkt, buf []byte) {
 	}
 	ep := d.endpoint
 	d.mu.Unlock()
-	d.write(sealData(kp, counter, pkt, d.cfg.MTU, buf), ep)
-	d.write(init, ep)
+	d.write(sealDataAWG(kp, counter, pkt, d.cfg.MTU, buf, d.cfg.AWG), ep)
+	d.writeInit(init, ep)
 }
 
 // queueLocked keeps pkt for when the session is up. A keepalive is only
@@ -537,7 +549,7 @@ func (d *wgDevice) receiveData(msg []byte, src netip.AddrPort, buf []byte) {
 	}
 	d.mu.Unlock()
 	d.rx.Add(uint64(len(msg)))
-	d.write(init, src)
+	d.writeInit(init, src)
 	for _, p := range queued {
 		d.sendPacket(p, nil)
 	}
@@ -628,7 +640,7 @@ func (d *wgDevice) tick() {
 	}
 	ep := d.endpoint
 	d.mu.Unlock()
-	d.write(init, ep)
+	d.writeInit(init, ep)
 	if keepalive {
 		d.sendPacket(nil, nil)
 	}
@@ -651,7 +663,7 @@ func (d *wgDevice) timerLoop() {
 
 func (d *wgDevice) tunLoop() {
 	buf := make([]byte, wgBufSize)
-	out := make([]byte, 0, wgBufSize+wgDataHeaderSize+wgTagSize+16)
+	out := make([]byte, 0, d.cfg.AWG.pad(wgMsgData)+wgBufSize+wgDataHeaderSize+wgTagSize+16)
 	for {
 		n, err := d.tun.Read(buf)
 		if d.closed.Load() {
@@ -690,6 +702,10 @@ func (d *wgDevice) receive(msg []byte, src netip.AddrPort, buf []byte) {
 	if len(msg) < 4 {
 		return
 	}
+	if d.cfg.AWG != nil {
+		d.receiveAWG(msg, src, buf)
+		return
+	}
 	switch binary.LittleEndian.Uint32(msg[:4]) {
 	case wgMsgInitiation:
 		if len(msg) == wgInitiationSize {
@@ -706,6 +722,51 @@ func (d *wgDevice) receive(msg []byte, src netip.AddrPort, buf []byte) {
 	case wgMsgData:
 		d.receiveData(msg, src, buf)
 	}
+}
+
+// receiveAWG is receive for an AmneziaWG server (wg_awg.go): a handshake
+// message is known by its padded size and a type in its range behind the
+// padding; anything else is a transport message behind S4 bytes, with a type
+// in H4's range. What matches nothing (junk, decoys) is dropped.
+func (d *wgDevice) receiveAWG(msg []byte, src netip.AddrPort, buf []byte) {
+	a := d.cfg.AWG
+	for _, k := range [...]struct {
+		kind uint32
+		size int
+	}{{wgMsgInitiation, wgInitiationSize}, {wgMsgResponse, wgResponseSize}, {wgMsgCookie, wgCookieSize}} {
+		pad := a.pad(k.kind)
+		if len(msg) != pad+k.size || !a.is(k.kind, binary.LittleEndian.Uint32(msg[pad:pad+4])) {
+			continue
+		}
+		switch body := msg[pad:]; k.kind {
+		case wgMsgInitiation:
+			d.receiveInitiation(body, src)
+		case wgMsgResponse:
+			d.receiveResponse(body, src)
+		default:
+			d.receiveCookie(body)
+		}
+		return
+	}
+	pad := a.pad(wgMsgData)
+	if len(msg) >= pad+wgKeepaliveSize && a.is(wgMsgData, binary.LittleEndian.Uint32(msg[pad:pad+4])) {
+		d.receiveData(msg[pad:], src, buf)
+	}
+}
+
+// writeInit sends a handshake initiation: as it is, or — for an AmneziaWG
+// server — after its decoys and junk datagrams and behind its padding.
+func (d *wgDevice) writeInit(init []byte, to netip.AddrPort) {
+	if len(init) == 0 {
+		return
+	}
+	if a := d.cfg.AWG; a != nil && to.IsValid() && !d.closed.Load() {
+		for _, junk := range a.beforeInitiation(time.Now()) {
+			d.write(junk, to)
+		}
+		init = a.frame(wgMsgInitiation, init)
+	}
+	d.write(init, to)
 }
 
 // write sends one message, logging a failing network at most once a minute.

@@ -363,6 +363,10 @@ type dateLocale struct {
 	near                             [3]string // yesterday, today, tomorrow
 	group, decimal                   string
 	groupMin                         int // digits a whole number needs before it is grouped
+
+	// ymd is the language's own year-first form (Japanese, Korean,
+	// Chinese: "2026年11月24日"); nil keeps the shared numeric one.
+	ymd *dateLayouts
 }
 
 // dateLocales holds the languages Settings offers (uiLanguages) besides
@@ -461,6 +465,51 @@ var dateLocales = map[string]*dateLocale{
 		decimal:     ",",
 		groupMin:    4,
 	},
+	// Japanese, Korean and Chinese write the year first with their own
+	// markers; their day-first slot holds the same form, which is the one
+	// their readers know (uilangface.go draws them).
+	"ja": {
+		months:      [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthsShort: [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthsAlone: [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		days:        [7]string{"日曜日", "月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日"},
+		daysShort:   [7]string{"日", "月", "火", "水", "木", "金", "土"},
+		daysNarrow:  [7]string{"日", "月", "火", "水", "木", "金", "土"},
+		dmy:         dateLayouts{Long: "2006年January2日 Monday", Day: "January2日 Monday", Medium: "2006年January2日", Short: "January2日", Brief: "January2日(Mon)"},
+		ymd:         &dateLayouts{Long: "2006年January2日 Monday", Day: "January2日 Monday", Medium: "2006年January2日", Short: "January2日", Brief: "January2日(Mon)"},
+		near:        [3]string{"昨日", "今日", "明日"},
+		group:       ",",
+		decimal:     ".",
+		groupMin:    4,
+	},
+	"ko": {
+		months:      [12]string{"1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"},
+		monthsShort: [12]string{"1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"},
+		monthsAlone: [12]string{"1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"},
+		days:        [7]string{"일요일", "월요일", "화요일", "수요일", "목요일", "금요일", "토요일"},
+		daysShort:   [7]string{"일", "월", "화", "수", "목", "금", "토"},
+		daysNarrow:  [7]string{"일", "월", "화", "수", "목", "금", "토"},
+		dmy:         dateLayouts{Long: "2006년 January 2일 Monday", Day: "January 2일 Monday", Medium: "2006년 January 2일", Short: "January 2일", Brief: "January 2일 (Mon)"},
+		ymd:         &dateLayouts{Long: "2006년 January 2일 Monday", Day: "January 2일 Monday", Medium: "2006년 January 2일", Short: "January 2일", Brief: "January 2일 (Mon)"},
+		near:        [3]string{"어제", "오늘", "내일"},
+		group:       ",",
+		decimal:     ".",
+		groupMin:    4,
+	},
+	"zh-CN": {
+		months:      [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthsShort: [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		monthsAlone: [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
+		days:        [7]string{"星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"},
+		daysShort:   [7]string{"周日", "周一", "周二", "周三", "周四", "周五", "周六"},
+		daysNarrow:  [7]string{"日", "一", "二", "三", "四", "五", "六"},
+		dmy:         dateLayouts{Long: "2006年January2日 Monday", Day: "January2日 Monday", Medium: "2006年January2日", Short: "January2日", Brief: "January2日 Mon"},
+		ymd:         &dateLayouts{Long: "2006年January2日 Monday", Day: "January2日 Monday", Medium: "2006年January2日", Short: "January2日", Brief: "January2日 Mon"},
+		near:        [3]string{"昨天", "今天", "明天"},
+		group:       ",",
+		decimal:     ".",
+		groupMin:    4,
+	},
 }
 
 // dateLocaleNow is the interface language's conventions, nil for English.
@@ -472,6 +521,9 @@ func dateLocaleNow() *dateLocale {
 // dateLayoutsIn is dateLayoutsFor in a language: its own day-first layouts
 // for the day-first order, the shared tables for the others.
 func dateLayoutsIn(order string, l *dateLocale) *dateLayouts {
+	if l != nil && order == dateOrderYMD && l.ymd != nil {
+		return l.ymd
+	}
 	if l != nil && order != dateOrderMDY && order != dateOrderYMD && order != dateOrderDots {
 		return &l.dmy
 	}

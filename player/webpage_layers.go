@@ -562,6 +562,8 @@ func (p *webParser) layerMarker(layer, seq int) {
 	marker.Boxes = p.boxPath()
 	p.tagFlexBlock(&marker, st)
 	marker.Details, marker.DetailsShown = p.detailsTag()
+	// Inside a floated subtree the place is in the float (webpage_floats.go).
+	marker.FloatGroup = p.openFloatIn(len(p.stack))
 	p.blocks = append(p.blocks, marker)
 }
 
@@ -644,6 +646,7 @@ func (p *webParser) layerSpacer(i int) {
 	}
 	p.tagFlexBlock(&spacer, st)
 	spacer.Details, spacer.DetailsShown = p.detailsTag()
+	spacer.FloatGroup = p.openFloatIn(i + 1)
 	p.blocks = append(p.blocks, spacer)
 }
 

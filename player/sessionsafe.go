@@ -33,6 +33,15 @@ package main
 // running when the caller suspends (the RAM keeps it) or powers off (the
 // teardown ends it), exactly as a RetroArch that ignored QUIT always was.
 //
+// JukaHub's own PPSSPP build saves on request instead, before step 2:
+// SIGUSR1 asks it for a state at the file its launch named
+// (JUKAHUB_PPSSPP_SAVE_TO, ppsspp_resume.go), its answer file says when the
+// state is written, and only then is it asked to quit. The game's next start
+// is given that state (PPSSPP's --state=), so it resumes. Which family of
+// game gets which step at the battery, the sleep's power off and Power off is
+// instantresume.go's plan; a game nothing can save is held asleep at the
+// battery instead of closed there.
+//
 // The paths:
 //   - Battery at 3% (protectLowBattery): a standalone game now counts as a
 //     game, and is closed as above before the sync and the suspend. An app
@@ -95,6 +104,15 @@ const (
 	sessionSafeRescan = 5 * time.Second
 	// sessionSafeMarkerName is the record in the data folder.
 	sessionSafeMarkerName = "sessionsafe-last.json"
+	// sessionSafeRequestWait bounds the wait for JukaHub's PPSSPP build to
+	// answer a save request; sessionSafeSettleWait the wait for the state to
+	// stop growing after it, looked at every sessionSafeSettleGap.
+	sessionSafeRequestWait = 8 * time.Second
+	sessionSafeSettleWait  = 3 * time.Second
+	sessionSafeSettleGap   = 300 * time.Millisecond
+	// sessionSafeDoneSuffix names the answer file beside a requested state
+	// ("ok" or "fail", written by the build once PPSSPP has saved).
+	sessionSafeDoneSuffix = ".done"
 )
 
 // sessionSafeProc is one process of a running game, as the /proc scan saw it.
@@ -127,6 +145,10 @@ type sessionSafeRun struct {
 	saveOnQuit bool
 	autoLoad   bool
 	config     string // the config the flags came from ("" when none)
+	// saveTo is where JukaHub's own PPSSPP build writes a state on request
+	// ("" for any other program), and saver the process that takes it.
+	saveTo string
+	saver  sessionSafeTarget
 }
 
 // label names the emulator for the user.
@@ -250,20 +272,26 @@ func sessionSafeStarted(game libraryGame, launcher string, cmd *exec.Cmd) {
 	}
 	sessionSafeLaunches.byPid[cmd.Process.Pid] = sessionSafeLaunch{game: game, launcher: launcher}
 	sessionSafeLaunches.mu.Unlock()
-	path := game.Path
-	go func() {
-		m, ok := sessionSafeLastMarker()
-		if !ok || m.Path == "" || m.Path != path {
-			return
-		}
-		switch {
-		case m.AutoLoad:
-			logInfo("power", "%s starts again in %s, which loads the state it saved by itself", filepath.Base(path), m.Label)
-		case m.State != "":
-			logInfo("power", "%s starts again; the state %s saved is in its Load State menu (%s)", filepath.Base(path), m.Label, filepath.Base(m.State))
-		}
-		sessionSafeClearLast()
-	}()
+	go sessionSafeNoteStart(game.Path)
+}
+
+// sessionSafeNoteStart drops the record of an earlier save of the game at
+// path: this start is its resume (or its fresh start). A start JukaHub closes
+// for calls it too (hakux_handoff.go). Any goroutine.
+func sessionSafeNoteStart(path string) {
+	m, ok := sessionSafeLastMarker()
+	if !ok || m.Path == "" || m.Path != path {
+		return
+	}
+	switch {
+	case m.Resume != "":
+		logInfo("power", "%s starts again from the state JukaHub saved for it in %s", filepath.Base(path), m.Label)
+	case m.AutoLoad:
+		logInfo("power", "%s starts again in %s, which loads the state it saved by itself", filepath.Base(path), m.Label)
+	case m.State != "":
+		logInfo("power", "%s starts again; the state %s saved is in its Load State menu (%s)", filepath.Base(path), m.Label, filepath.Base(m.State))
+	}
+	sessionSafeClearLast()
 }
 
 // sessionSafeExited forgets a launch whose process group is gone. The
@@ -370,7 +398,7 @@ func sessionSafeClassify(procs []sessionSafeProc) (sessionSafeProc, *sessionSafe
 		if sessionSafeIsShell(p) {
 			continue
 		}
-		r, ok := sessionSafeRecipeFor(p.comm, argv0, p.exe)
+		r, ok := sessionSafeProcRecipe(p)
 		if !ok {
 			continue
 		}
@@ -408,11 +436,7 @@ func sessionSafeTargets(procs []sessionSafeProc, recipe *sessionSafeRecipe) []se
 		if p.pid <= 1 || sessionSafeIsShell(p) {
 			continue
 		}
-		argv0 := ""
-		if len(p.argv) > 0 {
-			argv0 = p.argv[0]
-		}
-		if r, ok := sessionSafeRecipeFor(p.comm, argv0, p.exe); ok && r == recipe {
+		if r, ok := sessionSafeProcRecipe(p); ok && r == recipe {
 			out = append(out, sessionSafeTarget{pid: p.pid, start: p.start})
 		}
 	}
@@ -437,6 +461,14 @@ func sessionSafeDetect(cmds []*exec.Cmd) sessionSafeRun {
 		text, path := sessionSafeReadConfig(run.bases, recipe.Configs)
 		run.saveOnQuit, run.autoLoad = recipe.Flags(text)
 		run.config = path
+	}
+	// JukaHub's own PPSSPP build saves on request, into a file JukaHub gives
+	// the game's next start (instantresume.go): that is a resume too.
+	if recipe.ID == "ppsspp" && best.pid > 0 {
+		if to := sessionSafeRequestTarget(best.pid); to != "" {
+			run.saveTo, run.saver = to, sessionSafeTarget{pid: best.pid, start: best.start}
+			run.saveOnQuit, run.autoLoad = true, true
+		}
 	}
 	return run
 }
@@ -541,14 +573,23 @@ func sessionSafeEnd(tag string, run sessionSafeRun) sessionSafeResult {
 		wait = sessionSafeDefaultWait
 	}
 	label := run.label()
-	trySave := run.class == sessionSafeOnQuit && run.saveOnQuit
-	logInfo("power", "%s: closing %s (save on exit %s, config %q)", tag, label, setOnOff(trySave), run.config)
+	// A state on request (JukaHub's PPSSPP build) is written before the quit;
+	// one on exit is looked for in the emulator's state folders after it.
+	trySave := run.class == sessionSafeOnQuit && run.saveOnQuit && run.saveTo == ""
+	how := "save on exit " + setOnOff(trySave)
+	if run.saveTo != "" {
+		how = "save on request"
+	}
+	logInfo("power", "%s: closing %s (%s, config %q)", tag, label, how, run.config)
 	var dirs []sessionSafeStateDir
 	if trySave {
 		dirs = sessionSafeOpenStateDirs(run)
 		defer sessionSafeCloseStateDirs(dirs)
 	}
 	since := time.Now()
+	if run.saveTo != "" && sessionSafeRequestSave(tag, run) {
+		res.state, res.saved = run.saveTo, true
+	}
 	// JukaHub ends the game here, not the game itself (gamelaunch_watch.go).
 	gameLaunchNoteStopAll()
 	other := sessionSafeSigInt
@@ -570,12 +611,15 @@ func sessionSafeEnd(tag string, run sessionSafeRun) sessionSafeResult {
 		res.state = sessionSafeNewestState(dirs, r.StateExt, since)
 		res.saved = res.state != ""
 	}
-	switch {
-	case res.saved:
+	if res.saved {
 		logInfo("power", "%s: %s saved %s", tag, label, res.state)
+	}
+	switch {
 	case !res.exited:
+		// Saved or not, a game still running is the caller's to hold.
 		res.why = label + " did not quit"
-	case trySave:
+	case res.saved:
+	case trySave || run.saveTo != "":
 		res.why = label + " wrote no new save state"
 	case run.class == sessionSafeStream:
 		res.why = "a stream: the game goes on on the other machine"
@@ -755,15 +799,16 @@ func sessionSafeNewestState(dirs []sessionSafeStateDir, exts []string, since tim
 
 // sessionSafeProtectGame is the 3% guard's save (protectLowBattery): RetroArch
 // through its network commands as always, a standalone emulator through the
-// steps above. It reports whether a state was saved and, if not, why.
+// steps above. A state saved either way comes back at the next power-on
+// (instantresume.go). It reports whether a state was saved and, if not, why.
 func sessionSafeProtectGame(tag string) (bool, string) {
 	cmds := liveScreenChildren()
 	if runtime.GOOS != "linux" || len(cmds) == 0 || !sessionSafeEnabled(appConfig) || retroArchRunning() {
-		return retroArchSaveAndQuit(tag)
+		return resumeRetroArchSave(tag, cmds)
 	}
 	run := sessionSafeDetect(cmds)
 	if run.class == sessionSafeNone || run.class == sessionSafeRetroArch {
-		return retroArchSaveAndQuit(tag)
+		return resumeRetroArchSave(tag, cmds)
 	}
 	if !sessionSafeIsGame(run) {
 		// An app, not a game: closing it could throw away unsaved work, and
@@ -773,7 +818,14 @@ func sessionSafeProtectGame(tag string) (bool, string) {
 	}
 	l, named := sessionSafeLaunchFor(cmds)
 	res := sessionSafeEnd(tag, run)
+	if res.exited {
+		// Its launch's own end first (the screen handed back), as Power off.
+		quickAwaitGameCleanup()
+	}
 	m := sessionSafeRecord(tag, run, res, l, named)
+	if qm, ok := sessionSafeQuickMarker(m); ok && res.exited {
+		quickResumeWriteMarker(qm)
+	}
 	switch {
 	case res.saved && m.AutoLoad:
 		ShowToast(fmt.Sprintf("Battery critical: %s saved in %s; it resumes there", sessionSafeTitle(m), m.Label), ToastKindWarning)
@@ -824,19 +876,21 @@ const (
 	sessionSafeDeadlineQuit
 )
 
-// sessionSafeDeadlineActionFor decides it. percent is a fresh reading (-1:
-// unknown). Pure.
+// sessionSafeDeadlineActionFor decides it by the plan (instantresume.go): a
+// game that saves (on exit, or JukaHub's PPSSPP on request, both with
+// saveOnQuit set) saves; a stream, or a game nothing can save once the
+// battery is down to 5%, is closed; anything else sleeps on. An app is held
+// like a game here. RetroArch is quickSaveHeldGame's. percent is a fresh
+// reading (-1: unknown). Pure.
 func sessionSafeDeadlineActionFor(percent int, class sessionSafeClass, saveOnQuit bool) sessionSafeDeadlineAction {
 	switch class {
 	case sessionSafeNone, sessionSafeRetroArch:
 		return sessionSafeDeadlineSleep
-	case sessionSafeStream:
-		return sessionSafeDeadlineQuit
 	}
-	if class == sessionSafeOnQuit && saveOnQuit {
+	switch resumeActionFor(resumeCauseSleepPowerOff, resumeFamilyOf(class, saveOnQuit, false, true, true), percent, false) {
+	case resumeSave:
 		return sessionSafeDeadlineSave
-	}
-	if percent >= 0 && percent <= lowBatteryWarnPct {
+	case resumeClose:
 		return sessionSafeDeadlineQuit
 	}
 	return sessionSafeDeadlineSleep
@@ -965,7 +1019,9 @@ func sessionSafeLowBatteryTick(config *Config, percent int) {
 // ── The record ───────────────────────────────────────────────────────────
 
 // sessionSafeMarker is what was running when a game was closed for the
-// battery or a power off, and the state it saved.
+// battery or a power off, and the state it saved. Resume is set when that
+// state is one JukaHub gives the game's next start itself (JukaHub's PPSSPP
+// build's save on request, ppsspp_resume.go).
 type sessionSafeMarker struct {
 	Path     string `json:"path,omitempty"`
 	System   string `json:"system,omitempty"`
@@ -974,6 +1030,7 @@ type sessionSafeMarker struct {
 	Emulator string `json:"emulator"`
 	Label    string `json:"label,omitempty"`
 	State    string `json:"state,omitempty"`
+	Resume   string `json:"resume,omitempty"`
 	AutoLoad bool   `json:"auto_load,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 	BootID   string `json:"boot_id,omitempty"`
@@ -1062,6 +1119,20 @@ func sessionSafeRecord(tag string, run sessionSafeRun, res sessionSafeResult, l 
 	if named {
 		m.Path, m.System, m.Title, m.Launcher = l.game.Path, l.game.System, l.game.Title, l.launcher
 	}
+	if res.saved && run.saveTo != "" && res.state == run.saveTo {
+		// JukaHub gives it to the game's next start; older ones go.
+		m.Resume = res.state
+		ppssppResumePrune(m.Resume)
+	}
+	sessionSafeKeepMarker(m)
+	if res.saved && !m.AutoLoad && tag != "low battery" {
+		notifRecord(fmt.Sprintf("%s saved %s before the power off — load the state from its menu", m.Label, sessionSafeTitle(m)), notifInfo)
+	}
+	return m
+}
+
+// sessionSafeKeepMarker writes the record and keeps it as the cached one.
+func sessionSafeKeepMarker(m sessionSafeMarker) {
 	if path := sessionSafeMarkerPath(); path != "" {
 		if err := sessionSafeWriteMarkerAt(path, m); err != nil {
 			logWarn("power", "could not keep the record of %s: %v", m.Label, err)
@@ -1070,10 +1141,71 @@ func sessionSafeRecord(tag string, run sessionSafeRun, res sessionSafeResult, l 
 	sessionSafeLast.mu.Lock()
 	sessionSafeLast.loaded, sessionSafeLast.ok, sessionSafeLast.m = true, true, m
 	sessionSafeLast.mu.Unlock()
-	if res.saved && !m.AutoLoad && tag != "low battery" {
-		notifRecord(fmt.Sprintf("%s saved %s before the power off — load the state from its menu", m.Label, sessionSafeTitle(m)), notifInfo)
+}
+
+// ── Save on request (JukaHub's PPSSPP build) ─────────────────────────────
+
+// sessionSafeRequestSave asks JukaHub's own PPSSPP build for a state at
+// run.saveTo (SIGUSR1 to the one process sessionSafeRequestTarget approved)
+// and waits, bounded, for its answer file and for the state to stop growing.
+// PPSSPP writes the state on its next emulated frame, so a game paused under
+// the in-game menu or the sleep is continued for it. It reports whether a
+// whole state is there.
+func sessionSafeRequestSave(tag string, run sessionSafeRun) bool {
+	label := run.label()
+	done := run.saveTo + sessionSafeDoneSuffix
+	if err := os.Remove(done); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logWarn("power", "%s: could not clear %s: %v", tag, done, err)
+		return false
 	}
-	return m
+	since := time.Now()
+	for _, cmd := range run.cmds {
+		_ = alarmSignalChild(cmd, false)
+	}
+	if !sessionSafeSignalSave(run.saver) {
+		logWarn("power", "%s: could not ask %s for a save state (pid %d)", tag, label, run.saver.pid)
+		return false
+	}
+	logInfo("power", "%s: asked %s for a save state at %s", tag, label, run.saveTo)
+	deadline := time.Now().Add(sessionSafeRequestWait)
+	for {
+		if data, err := sessionSafeReadLimited(done, 64); err == nil {
+			if answer := strings.TrimSpace(string(data)); answer != "" {
+				if answer != "ok" {
+					logWarn("power", "%s: %s could not write its save state (%q)", tag, label, answer)
+					return false
+				}
+				return sessionSafeStateSettled(run.saveTo, since)
+			}
+		}
+		if !time.Now().Before(deadline) {
+			logWarn("power", "%s: %s did not answer the save request within %s", tag, label, sessionSafeRequestWait)
+			return false
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+// sessionSafeStateSettled reports a state file written since since, not
+// empty, and the same size two looks sessionSafeSettleGap apart, within
+// sessionSafeSettleWait.
+func sessionSafeStateSettled(path string, since time.Time) bool {
+	deadline := time.Now().Add(sessionSafeSettleWait)
+	last := int64(-1)
+	for {
+		info, err := os.Stat(path)
+		if err == nil && info.Mode().IsRegular() && info.Size() > 0 && !info.ModTime().Before(since.Add(-sessionSafeStateSlack)) {
+			if info.Size() == last {
+				return true
+			}
+			last = info.Size()
+		}
+		if !time.Now().Before(deadline) {
+			logWarn("power", "the save state %s was not whole within %s", path, sessionSafeSettleWait)
+			return false
+		}
+		time.Sleep(sessionSafeSettleGap)
+	}
 }
 
 // sessionSafeTitle names the record's game for a message.

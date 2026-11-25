@@ -30,6 +30,7 @@ package main
 //	POST saves/prepare       snapshot what a sync will overwrite (paired)
 //	GET|PUT saves/file       one save file (paired, ssync.go)
 //	POST saves/done          a sync finished (paired, ssync.go)
+//	POST ghost               a friend's Ghost Challenge run (paired, ghost.go)
 
 import (
 	"bytes"
@@ -295,6 +296,8 @@ func peerHandler() http.Handler {
 	mux.HandleFunc(mcPeerFilePath, peerGuard(true, mcHandlePeerFile))
 	// Device Sync: BIOS, ROMs, collections, recents, settings (devsync.go).
 	devsyncRoutes(mux)
+	// A friend's Ghost Challenge run (ghost.go): checked and kept in the inbox.
+	mux.HandleFunc(ghostPeerPath, peerGuard(true, ghostHandlePeer))
 	return mux
 }
 

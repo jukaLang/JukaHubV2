@@ -18,9 +18,11 @@ package main
 //     certificate on both sides, and each side pins the key it paired with
 //     (peernet.go): encrypted, authenticated, forward secret. Go picks
 //     ChaCha20-Poly1305 on a CPU without AES instructions and AES-GCM elsewhere.
-//   - The listener only runs while the switch is on, binds one TCP port and
-//     one UDP discovery port, caps connections and body sizes, and is stopped
-//     on shutdown.
+//   - The listener only runs while the switch is on — or while Sync needs it:
+//     its page open, its phone page in use or a pairing running (synchub.go;
+//     a finished pairing turns the switch on) — binds one TCP port and one
+//     UDP discovery port, caps connections and body sizes, and is stopped on
+//     shutdown.
 //
 // The x/crypto chacha20poly1305, hkdf and argon2 packages are not vendored and
 // no new module may be added, which is why the transport is the standard
@@ -903,7 +905,10 @@ func peerApplyEnabled(on bool) {
 // peerSyncFlags copies the stored switches into the flags the goroutines read.
 // It runs on the main loop, which owns the config.
 func peerSyncFlags(config *Config) {
-	peerApplyEnabled(peerSettingEnabled(config) && safeModeAllows(SafeFeatureNetwork))
+	// Sync (synchub.go) keeps the layer up while its page is open, the phone
+	// page is in use or a pairing runs, so pairing needs no switch first.
+	peerApplyEnabled((peerSettingEnabled(config) || syncHubWantsPeers(config)) && safeModeAllows(SafeFeatureNetwork))
+	syncAutoFlag.Store(syncAutoSetting(config))
 	nearbyShareFlag.Store(nearbySettingShare(config))
 	hoffOffersFlag.Store(hoffSettingOffers(config))
 	hoffSettingsFlag.Store(hoffSettingShareSettings(config))

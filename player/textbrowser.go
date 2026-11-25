@@ -1591,6 +1591,17 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 		return browserPage{}
 	}
 	source := scripted.HTML
+	// The page's ads come out of its markup before anything reads it: the
+	// reader text, the links, the style sheets, the layout and the image pass
+	// never see them, and the page closes up where they were
+	// (webpage_adremove.go). Each one counts toward the page's tally.
+	if !browserAdBlockOff(pageURL.String()) {
+		cleaned, removed := webRemoveAds(source, pageURL.String())
+		source = cleaned
+		for ; removed > 0; removed-- {
+			noteBrowserBlocked()
+		}
+	}
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
 		title = pageURL.Hostname()

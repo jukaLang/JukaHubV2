@@ -85,7 +85,21 @@ runtime, RetroArch's own **Restart RetroArch** closes it instead of restarting
 
 RetroArch is not part of the TrimUI firmware: it comes on the card, in each
 model's SD base package (`RetroArch/ra64.trimui`). On a card set up without
-that package JukaHub installs it (`player/raget.go`):
+that package — or one that lost it, or whose binary cannot start — JukaHub
+installs it (`player/raget.go`).
+
+"No RetroArch" is what the games see (`player/racard.go`): the stock
+firmware's and CrossMix-OS's launch scripts (`Emus/<console>/launch.sh`) all
+start `RA_DIR=/mnt/SDCARD/RetroArch` … `$RA_DIR/ra64.trimui`, so JukaHub reads
+them for the binary they call and looks at that file: there, readable, and a
+program for the handheld's ARM processor whose loader is on the system. When
+no script names a RetroArch, the card's `RetroArch/ra64.trimui` is the one
+looked at, and any RetroArch program JukaHub's wider search finds does
+instead. Until 2026-11-25 the question went to a search that also took any
+`retroarch` on `PATH`, in `/usr/bin` or beside JukaHub, wrapper scripts
+included, so a card whose launch scripts' RetroArch was gone could still count
+as having one and nothing was installed (JH-X6HRVE: "not tried this session"
+under every game stopping at `ra64.trimui: not found`).
 
 - **Which build.** TrimUI's own, from its SD base packages on GitHub:
   `trimui/assets_smartpro`, `assets_brick` and `assets_brickpro` for the A133P
@@ -100,45 +114,67 @@ that package JukaHub installs it (`player/raget.go`):
   the directory in a few range requests, then one pass over the solid blocks
   that hold RetroArch's files, decoded from their start, so most of the
   package may be downloaded (nothing but RetroArch's files is written).
-  Blocks packed with a filter (BCJ, ARM64), PPMd or BZip2 are not decoded:
-  that package is skipped with the method in the log, and the next build is
-  tried. The pass waits while a game is on screen, and a `.7z` package whose
-  build did not start here, or that cannot be decoded, is passed over by later
-  starts for a week (`data/retroarch-get-refused.json`). Until 2026-11-24 a
-  `.7z` package was skipped outright, so a Smart Pro could only take the
-  Brick's November 2024 build.
+  7-Zip 23 and later put its ARM64 branch filter in front of LZMA2 for every
+  64-bit ARM program, ELF ones included — `ra64.trimui` and the cores — and
+  the reader undoes it, and the ARM and ARM-Thumb filters (`player/sevenzip.go`;
+  since 2026-11-25 — before, every such block failed). Blocks packed with the
+  x86 filters (BCJ, BCJ2), PPMd or BZip2 are not decoded: that package is
+  skipped with the methods in the log, and the next build is tried. The pass
+  waits while a game is on screen, and a `.7z` package whose build did not
+  start here, or that cannot be decoded, is passed over by later starts for a
+  week (`data/retroarch-get-refused.json`; a refusal from an older decoder is
+  tried again). Until 2026-11-24 a `.7z` package was skipped outright, so a
+  Smart Pro could only take the Brick's November 2024 build.
 - **Is it working here.** Up to three builds are downloaded and checked
   before anything is written: a 64-bit ARM program whose libraries the
   firmware's loader and this runtime's loader both list and bind (as
   `ldd -r` does), every one found and every symbol version defined. A build
   is taken when it starts on the firmware's glibc, or on this runtime where
   JukaHub can start it so (the setting allows it, a game can have a mount
-  namespace).
+  namespace). A first install prefers one that starts on the firmware's own
+  glibc — the firmware's menu and every launch script can start that one too,
+  and JukaHub can still start it on this runtime for a core that needs it: a
+  build of the handheld's own model that starts on this runtime only (TrimUI's
+  newest package can be made for a newer firmware than the handheld's — the
+  Smart Pro's 20250430 package came with firmware 1.1.0 and its SDL2 2.30.8)
+  is kept while that model's older builds are tried, and taken when none of
+  them does. The update pass never replaces a build that starts on the
+  firmware's glibc with one that does not.
 - **What is written.** Only into the card's `RetroArch` folder, and only files
-  the card does not have yet: the RetroArch folder of the handheld's own
-  model's newest package (else the chosen build's) — without the menu
-  pictures, shaders, overlays and databases when the card is short of space —
-  then `ra64.trimui` last, so an install cut short leaves nothing to start and
-  the next start finishes it. A `retroarch.cfg` from another model's package
+  the card does not have yet: the RetroArch folder of the chosen build's own
+  package when it is the handheld's model's (binary, cores and settings made
+  for one firmware), else of the model's newest package, else the chosen
+  build's — without the menu pictures, shaders, overlays and databases when
+  the card is short of space — then `ra64.trimui` last, so an install cut short
+  leaves nothing to start and the next start finishes it. A `ra64.trimui` that
+  is there but cannot start (another processor's, its loader missing, empty)
+  is kept as `ra64.trimui.bak`. A `retroarch.cfg` from another model's package
   gets its full-screen size and custom viewport set back to `0` (the screen's
   own). `RetroArch/.jukahub-retroarch.json` records what was installed.
 - **On this runtime.** The runtime goes in first, with its C++ library. Every
   launch JukaHub makes of that RetroArch — a game, netplay, its own menu —
   runs on glibc 2.39, as with **JukaHub's glibc 2.39**, once the probe above
   passed; when it refuses, RetroArch starts on the firmware's glibc.
-- **When.** About a minute after start, online and between games,
+- **When.** About a minute after start, and whenever a later look (every
+  three minutes) finds the games' RetroArch gone, online and between games,
   unless Settings → Games & emulators → **Emulator updates** is Off (a note
   then says Emulators → RetroArch installs it); **A** on the Emulators page's
   RetroArch tile; **Install** on a system's tile or **Get more cores** (also
   from a game's "no emulator yet" card), which put RetroArch on first and the
   cores after it (a core that came in TrimUI's package is kept, not swapped for
-  the buildbot's); or a game whose launch script found no RetroArch. The
+  the buildbot's); or a game whose launch script could not start RetroArch —
+  its card says the install is running. The
   Emulator updates pass keeps it on TrimUI's newest build: the binary only,
   the one it replaces kept as `ra64.trimui.bak`, and never from another
   model's `.7z` package (unpacking its binary costs most of that package). A
   RetroArch that came with the card, or one replaced by hand, is never
-  touched. The bug report's diagnostics carry an `RA install` line: what
-  JukaHub installed, and this session's last try and why it failed.
+  touched while it can start. The bug report's diagnostics carry an
+  `RA install` line — what JukaHub installed, this session's last try and why
+  it failed, or, when none ran, what the start-up's last look found — and an
+  `RA games` line: the binary the launch scripts call, whether it can start,
+  and when it was last seen if it went missing during the session (a card that
+  loses files has errors or holds less than it claims: Tools → System →
+  **Card check**).
 - **Cores before RetroArch.** Until RetroArch is there, a core installed any
   other way (Get more cores, the PS2, GameCube or J2ME set-up), or after a
   RetroArch download that failed, goes into `RetroArch/.retroarch/cores` on
@@ -229,4 +265,9 @@ RetroArch on a card without one (above) is untested too: TrimUI's package
 names, formats and folder layout come from its release notes and setup
 guides, not from opening them, and a build from another model's package (a
 Smart Pro running the Brick Pro's) is only known to load, not to fill the
-screen or map the pad right (`RAGET-HW-1`).
+screen or map the pad right. The ARM64 filter's decoding was checked against
+a second, independently written form of the conversion and the ARM and
+ARM-Thumb ones against liblzma, not against a package TrimUI made; reading
+the launch scripts was checked on the stock firmware's and CrossMix-OS's
+script text, not on a card. What a handheld shows goes in the
+[hardware validation log](HARDWARE_VALIDATION.md).

@@ -45,6 +45,11 @@ func homeUIFontForRole(path string) string {
 	if chosen := uiFontFile(); chosen != "" {
 		return chosen
 	}
+	// Japanese, Korean and Chinese draw in their own Noto Sans when neither
+	// face above can (uilangface.go).
+	if face := uiLanguageFaceFile(); face != "" {
+		return face
+	}
 	if a11y.boldText {
 		return homeUIFontBoldFile
 	}

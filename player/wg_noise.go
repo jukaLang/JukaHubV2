@@ -237,6 +237,9 @@ const (
 // owns it and calls it under its lock.
 type wgNoise struct {
 	id *wgIdentity
+	// awg gives the handshake messages AmneziaWG's types (wg_awg.go); nil
+	// for plain WireGuard. The MACs cover the type as sent.
+	awg *wgAWG
 
 	state       wgHandshakeState
 	hash        [32]byte
@@ -304,7 +307,7 @@ func (n *wgNoise) initiation(eph *ecdh.PrivateKey, index uint32, ts [12]byte, no
 	}
 	id := n.id
 	msg := make([]byte, wgInitiationSize)
-	binary.LittleEndian.PutUint32(msg[0:4], wgMsgInitiation)
+	binary.LittleEndian.PutUint32(msg[0:4], n.awg.header(wgMsgInitiation))
 	binary.LittleEndian.PutUint32(msg[4:8], index)
 
 	ck := wgInitialChainKey
@@ -422,7 +425,7 @@ func (n *wgNoise) response(eph *ecdh.PrivateKey, index uint32, now time.Time) (m
 	}
 	id := n.id
 	msg = make([]byte, wgResponseSize)
-	binary.LittleEndian.PutUint32(msg[0:4], wgMsgResponse)
+	binary.LittleEndian.PutUint32(msg[0:4], n.awg.header(wgMsgResponse))
 	binary.LittleEndian.PutUint32(msg[4:8], index)
 	binary.LittleEndian.PutUint32(msg[8:12], n.remoteIndex)
 

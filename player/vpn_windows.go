@@ -173,6 +173,11 @@ func vpnPlatformApply(payload []byte) error {
 	if err != nil {
 		return err
 	}
+	if cfg.AWG != nil {
+		// WireGuard for Windows refuses AmneziaWG's keys, and without them
+		// an AmneziaWG server never answers.
+		return errors.New("this is an AmneziaWG configuration; WireGuard for Windows cannot connect with it — use the AmneziaVPN or AmneziaWG app on this PC (the handheld connects with it itself)")
+	}
 	dir, err := vpnWinDir()
 	if err != nil {
 		return err

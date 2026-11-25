@@ -706,7 +706,9 @@ func upchTick(explicit bool) {
 	}
 	label := upchTagLabel(rel.TagName, rel.PublishedAt)
 	logPatch("update cache: %s is ready to install offline", rel.TagName)
-	notifPush("JukaHub "+label+" is ready to install — no internet needed", notifSuccess)
+	notifPost(notifSpec{Message: "JukaHub " + label + " is ready to install — no internet needed",
+		Priority: notifSuccess, Source: notifSrcUpdates, Key: "update-offer", Toast: true,
+		Action: notifAction{Label: "Install update", Kind: notifActUpdate}})
 }
 
 // upchWatchGame stops a download when a game takes the screen. The bytes

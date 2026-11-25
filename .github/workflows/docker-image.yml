@@ -379,6 +379,14 @@ jobs:
             else
               echo "::warning title=Moonlight helper::not built for this run; JukaHub-Trimui.zip ships without Moonlight streaming (see the Remote Play helpers job)"
             fi
+            # The In-game indicators hook (player/ingamehud.go), optional too:
+            # a library, so no execute bit.
+            if [ -f remote-play-helpers/libjukaosd.so ]; then
+              cp remote-play-helpers/libjukaosd.so JukaHub-Trimui/bin/
+              chmod 644 JukaHub-Trimui/bin/libjukaosd.so
+            else
+              echo "::warning title=In-game indicators::libjukaosd.so was not built for this run; JukaHub-Trimui.zip ships without In-game indicators"
+            fi
             echo "Remote Play helpers added to bin/:"
             sed -n '1,4p' remote-play-helpers/BUILDINFO.txt 2>/dev/null || true
             # The same helpers on their own, as JukaHub-RemotePlay-linux-arm64.zip:

@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"hash/crc32"
@@ -648,5 +649,119 @@ func TestCoreSurveyJudge(t *testing.T) {
 	}
 	if _, err := coreSurveyParse([]byte(`{"format":2,"generated":"2026-11-23T05:41:00Z","cores":{"x":{}}}`)); err == nil {
 		t.Fatal("a survey of another format was read")
+	}
+}
+
+// raCardTestELF is a minimal 64-bit little-endian ELF header for machine,
+// with a PT_INTERP naming interp when it is not "".
+func raCardTestELF(machine uint16, interp string) []byte {
+	b := make([]byte, 64)
+	copy(b, "\x7fELF\x02\x01\x01")
+	binary.LittleEndian.PutUint16(b[16:], 2) // ET_EXEC
+	binary.LittleEndian.PutUint16(b[18:], machine)
+	binary.LittleEndian.PutUint32(b[20:], 1)
+	binary.LittleEndian.PutUint16(b[52:], 64) // e_ehsize
+	binary.LittleEndian.PutUint16(b[54:], 56) // e_phentsize
+	binary.LittleEndian.PutUint16(b[58:], 64) // e_shentsize
+	if interp == "" {
+		return b
+	}
+	name := append([]byte(interp), 0)
+	binary.LittleEndian.PutUint64(b[32:], 64) // e_phoff
+	binary.LittleEndian.PutUint16(b[56:], 1)  // e_phnum
+	ph := make([]byte, 56)
+	binary.LittleEndian.PutUint32(ph[0:], 3) // PT_INTERP
+	binary.LittleEndian.PutUint32(ph[4:], 4)
+	binary.LittleEndian.PutUint64(ph[8:], 120) // p_offset
+	binary.LittleEndian.PutUint64(ph[32:], uint64(len(name)))
+	binary.LittleEndian.PutUint64(ph[40:], uint64(len(name)))
+	binary.LittleEndian.PutUint64(ph[48:], 1)
+	return append(append(b, ph...), name...)
+}
+
+// TestRetroArchTheGamesCall pins racard.go (JH-X6HRVE): the RetroArch the
+// stock firmware's and CrossMix's launch scripts call is read out of them —
+// $RA_DIR, a cd before a relative ./ra64.trimui, bare names and longer names
+// left out — and the card misses it, whatever else the search finds, when
+// that binary is not there; it is broken when it is there but cannot start
+// (another processor's, its loader absent), and a script counts only where
+// the launch scripts call it.
+func TestRetroArchTheGamesCall(t *testing.T) {
+	stock := "#!/bin/sh\necho $0 $*\nRA_DIR=/mnt/SDCARD/RetroArch\nEMU_DIR=/mnt/SDCARD/Emus/SFC\ncd $RA_DIR/\n\n" +
+		"HOME=$RA_DIR/ $RA_DIR/ra64.trimui -v -L $RA_DIR/.retroarch/cores/snes9x_libretro.so \"$@\"\n"
+	crossmix := "RA_DIR=/mnt/SDCARD/RetroArch\ncd $RA_DIR\n./ra64.trimui -v $NET_PARAM -L .retroarch/cores/x.so \"$@\"\n" +
+		"killall ra64.trimui\ncp $RA_DIR/ra64.trimui.bak /tmp\n$UNSET/ra32.trimui\ncat $RA_DIR/retroarch.cfg\n"
+	want := filepath.FromSlash("/mnt/SDCARD/RetroArch/ra64.trimui")
+	for name, text := range map[string]string{"stock": stock, "crossmix": crossmix} {
+		if got := raScriptCallsText(text, "/mnt/SDCARD/Emus/SFC"); len(got) != 1 || got[0] != want {
+			t.Errorf("%s calls %q, want only %s", name, got, want)
+		}
+	}
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "RetroArch", raGetBinaryName)
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "Apps", "RetroArch", "retroarch")
+	none := func() string { return "" }
+	found := func() string { return other }
+	put := func(data []byte) {
+		t.Helper()
+		if err := os.WriteFile(target, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// A file system with coarse times could keep the last answer.
+		raBinaryMemo.mu.Lock()
+		raBinaryMemo.m = nil
+		raBinaryMemo.mu.Unlock()
+	}
+	check := func(what string, st raCardState, missing, broken bool, problem string) {
+		t.Helper()
+		if st.Missing != missing || st.Broken != broken || !strings.Contains(st.Problem, problem) || (problem == "" && st.Problem != "") {
+			t.Errorf("%s: %+v, want missing %v, broken %v, problem %q", what, st, missing, broken, problem)
+		}
+	}
+	check("called, not there", raCardJudge(target, target, 41, found), true, false, "missing")
+	check("not named, not there, another found", raCardJudge(target, "", 0, found), false, false, "missing")
+	if st := raCardJudge(target, "", 0, found); st.Found != other {
+		t.Errorf("the other RetroArch was not taken: %+v", st)
+	}
+	put(raCardTestELF(62, ""))
+	check("an x86-64 build", raCardJudge(target, target, 41, found), true, true, "x86-64")
+	loader := filepath.Join(dir, "ld-linux-aarch64.so.1")
+	if err := os.WriteFile(loader, []byte("ld"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	put(raCardTestELF(183, loader))
+	check("an aarch64 build", raCardJudge(target, target, 41, none), false, false, "")
+	if filepath.IsAbs("/nonexistent-jukahub") {
+		put(raCardTestELF(183, "/nonexistent-jukahub/ld-linux-aarch64.so.1"))
+		check("its loader absent", raCardJudge(target, target, 41, none), true, true, "loader")
+	}
+	put([]byte("#!/bin/sh\nexec ./real \"$@\"\n"))
+	check("a script the scripts call", raCardJudge(target, target, 41, none), false, false, "")
+	check("a script no script names", raCardJudge(target, "", 0, none), true, true, "script")
+
+	if filepath.Separator == '/' {
+		// The scripts on a card: the two that start RetroArch outvote the
+		// standalone emulator's.
+		card := filepath.Join(dir, "card")
+		ra := filepath.ToSlash(filepath.Join(card, "RetroArch"))
+		for emu, text := range map[string]string{
+			"GBA": strings.ReplaceAll(stock, "/mnt/SDCARD/RetroArch", ra),
+			"SFC": strings.ReplaceAll(crossmix, "/mnt/SDCARD/RetroArch", ra),
+			"PSP": "#!/bin/sh\ncd /mnt/SDCARD/Emus/PSP\n./PPSSPPSDL \"$@\"\n",
+		} {
+			if err := os.MkdirAll(filepath.Join(card, "Emus", emu), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(card, "Emus", emu, "launch.sh"), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if calls, n := raScriptCalls([]string{card}); calls != ra+"/"+raGetBinaryName || n != 2 {
+			t.Errorf("raScriptCalls = %q, %d", calls, n)
+		}
 	}
 }

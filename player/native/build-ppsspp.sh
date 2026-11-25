@@ -45,12 +45,18 @@
 # What is bundled: libstdc++.so.6 from the root's gcc 9 (the firmware's is
 # older), the way minui-psp 6.1.0 bundles one.
 #
+# One change is made to upstream's source: a save state on request (SIGUSR1),
+# for JukaHub's universal resume — see "JukaHub's one change" below. A tree
+# it does not fit is built unchanged, and the package says so.
+#
 # The package mirrors what ppsspp_managed.go's ppssppDiscoverLayout looks for:
 #   PPSSPP/PPSSPPSDL_tg5040   the binary
 #   PPSSPP/assets/            PPSSPP's assets (flash0, atlases, compat.ini,
 #                             gamecontrollerdb.txt)
 #   PPSSPP/lib/               bundled libraries
-#   PPSSPP/BUILDINFO.txt      tag, commit, compiler, GL source, NEEDED list
+#   PPSSPP/BUILDINFO.txt      tag, commit, compiler, GL source, NEEDED list,
+#                             and whether the save on request went in
+#   PPSSPP/jukahub-resume.txt "save-on-request", only when it did
 set -eu
 
 PPSSPP_TAG="${PPSSPP_TAG:?set PPSSPP_TAG to an upstream tag such as v1.20.3}"
@@ -87,15 +93,24 @@ mkdir -p "$LOG_DIR" "$OUT_DIR" "$WORK"
 quietly() {
     q_name="$1"
     shift
-    q_log="$LOG_DIR/$q_name.log"
-    if "$@" > "$q_log" 2>&1; then
-        say "$q_name: ok"
+    attempt "$q_name" "$@" || die "$q_name failed (full log: $LOG_DIR/$q_name.log)"
+}
+
+# attempt NAME CMD...: quietly, but a failure is returned instead of ending
+# the script.
+attempt() {
+    a_name="$1"
+    shift
+    a_log="$LOG_DIR/$a_name.log"
+    if "$@" > "$a_log" 2>&1; then
+        say "$a_name: ok"
         return 0
     fi
-    echo "::group::$q_name (last 80 lines)"
-    tail -n 80 "$q_log"
+    echo "::group::$a_name (last 80 lines)"
+    tail -n 80 "$a_log"
     echo "::endgroup::"
-    die "$q_name failed (full log: $q_log)"
+    say "$a_name failed (full log: $a_log)"
+    return 1
 }
 
 # version_le A B: A <= B for dotted version numbers.
@@ -219,25 +234,169 @@ if ! grep -v '^[[:space:]]*#' "$SRC/CMakeLists.txt" |
     die "PPSSPP $PPSSPP_TAG builds its SDL front end with SDL3 only; the TrimUI firmware has SDL2 (build v1.20.3)"
 fi
 
+# ── JukaHub's one change: a save state on request ────────────────────────────
+#
+# Universal resume (player/instantresume.go, ppsspp_resume.go): before a power
+# off, or at a battery about to give out, JukaHub saves the game that is
+# running. Upstream PPSSPP can load a state at start (--state=) but cannot be
+# asked for one from outside, so this build adds exactly that: SIGUSR1 asks
+# the running game for a save state at $JUKAHUB_PPSSPP_SAVE_TO — a file in
+# JukaHub's data folder, never one of the player's slots — which PPSSPP's own
+# SaveState::Save writes on its next frame; "<file>.done" then holds "ok" or
+# "fail". Without the variable a request does nothing. The handler is set by a
+# static initialiser, before SDL installs its own (SIGINT and SIGTERM only, so
+# their handling is unchanged). JukaHub waits for the answer, then asks PPSSPP
+# to quit as before, and starts the game from that state next time.
+#
+# The change goes in by text at one anchor, the first line of NativeFrame in
+# UI/NativeApp.cpp, which every front end calls once a frame. A tree where
+# that line is not there exactly once, or where the changed source does not
+# build, is built as upstream left it; the package says which (BUILDINFO.txt's
+# Resume line), and only a binary with jukahub-resume.txt beside it is ever
+# sent the signal (SIGUSR1 ends a program that does not handle it).
+RESUME_ANCHOR='void NativeFrame(GraphicsContext *graphicsContext) {'
+RESUME_FILE="$SRC/UI/NativeApp.cpp"
+RESUME_BLOCK="$WORK/jukahub-resume.cpp"
+cat > "$RESUME_BLOCK" << 'EOF'
+// ---- JukaHub: a save state on request -------------------------------------
+// Added by JukaHub's build (github.com/jukaLang/JukaHubV2,
+// player/native/build-ppsspp.sh). SIGUSR1 asks for a save state of the game
+// running now at $JUKAHUB_PPSSPP_SAVE_TO; "<file>.done" says "ok" or "fail"
+// once PPSSPP has written it. JukaHub asks before a power off or at a
+// critical battery, and starts the game from it with --state= next time.
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include "Core/SaveState.h"
+
+static volatile std::sig_atomic_t g_jukahubSaveRequested = 0;
+
+static void JukaHubOnSaveSignal(int) {
+	g_jukahubSaveRequested = 1;
+}
+
+namespace {
+struct JukaHubSaveSignalSetup {
+	JukaHubSaveSignalSetup() {
+		std::signal(SIGUSR1, JukaHubOnSaveSignal);
+	}
+} g_jukahubSaveSignalSetup;
+}  // namespace
+
+static void JukaHubWriteSaveAnswer(const std::string &target, bool ok) {
+	const std::string answer = target + ".done";
+	FILE *f = std::fopen(answer.c_str(), "w");
+	if (!f)
+		return;
+	std::fputs(ok ? "ok\n" : "fail\n", f);
+	std::fclose(f);
+}
+
+static void JukaHubResumeFrame() {
+	if (!g_jukahubSaveRequested)
+		return;
+	g_jukahubSaveRequested = 0;
+	const char *to = std::getenv("JUKAHUB_PPSSPP_SAVE_TO");
+	if (!to || !*to)
+		return;
+	const std::string target(to);
+	SaveState::Save(Path(target), -1, [target](SaveState::Status status, auto &&...) {
+		JukaHubWriteSaveAnswer(target, status == SaveState::Status::SUCCESS);
+	});
+}
+// ---- end JukaHub -----------------------------------------------------------
+
+EOF
+
+# resume_anchors FILE: how many lines of FILE are the anchor (trailing blanks
+# and a CR aside).
+resume_anchors() {
+    awk -v anchor="$RESUME_ANCHOR" '
+        { line = $0; sub(/[ \t\r]+$/, "", line) }
+        line == anchor { n++ }
+        END { print n + 0 }
+    ' "$1"
+}
+
+# resume_patch: puts the block above before NativeFrame and its call first in
+# it. A tree already changed (a reused work folder) is left as it is.
+resume_patch() {
+    [ -f "$RESUME_FILE" ] || return 1
+    grep -q 'JukaHubResumeFrame();' "$RESUME_FILE" && return 0
+    [ "$(resume_anchors "$RESUME_FILE")" = 1 ] || return 1
+    cp "$RESUME_FILE" "$RESUME_FILE.jukahub-orig"
+    if ! awk -v anchor="$RESUME_ANCHOR" -v block="$RESUME_BLOCK" '
+        { line = $0; sub(/[ \t\r]+$/, "", line) }
+        line == anchor && !done {
+            while ((getline b < block) > 0) print b
+            print
+            print "\tJukaHubResumeFrame();"
+            done = 1
+            next
+        }
+        { print }
+    ' "$RESUME_FILE.jukahub-orig" > "$RESUME_FILE"; then
+        cp "$RESUME_FILE.jukahub-orig" "$RESUME_FILE"
+        return 1
+    fi
+    grep -q 'JukaHubResumeFrame();' "$RESUME_FILE"
+}
+
+# resume_unpatch: the file as upstream has it.
+resume_unpatch() {
+    if [ -f "$RESUME_FILE.jukahub-orig" ]; then
+        cp "$RESUME_FILE.jukahub-orig" "$RESUME_FILE"
+    fi
+}
+
+RESUME=0
+RESUME_NOTE="none: JukaHub's change was not applied"
+if resume_patch; then
+    RESUME=1
+    RESUME_NOTE="save-on-request (JukaHub's change: SIGUSR1 writes a state to \$JUKAHUB_PPSSPP_SAVE_TO)"
+    say "save on request: added to UI/NativeApp.cpp"
+else
+    resume_unpatch
+    RESUME_NOTE="none: the anchor line was not found once in UI/NativeApp.cpp"
+    echo "::warning title=PPSSPP::JukaHub's save-on-request change found no single NativeFrame line in UI/NativeApp.cpp; this build cannot save a game for a power off"
+fi
+
 BUILD="$WORK/build-$VERSION"
-rm -rf "$BUILD"
 # Cortex-A53 (A133P). No rpath: the launcher sets LD_LIBRARY_PATH to the
 # bundled libraries, then the firmware's.
 ARCH_FLAGS="-march=armv8-a+crc -mtune=cortex-a53"
 LINK_FLAGS="-L$LINK_DIR -Wl,--allow-shlib-undefined -Wl,--as-needed"
-quietly ppsspp-configure cmake -S "$SRC" -B "$BUILD" -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH="$SDL_PREFIX" \
-    -DSDL2_DIR="$SDL_PREFIX/lib/cmake/SDL2" \
-    -DCMAKE_C_FLAGS="$ARCH_FLAGS" -DCMAKE_CXX_FLAGS="$ARCH_FLAGS" \
-    -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS" \
-    -DCMAKE_LIBRARY_PATH="$LINK_DIR" \
-    -DCMAKE_SKIP_RPATH=ON \
-    -DUSING_GLES2=ON -DUSING_EGL=OFF -DUSING_FBDEV=OFF \
-    -DVULKAN=OFF -DUSING_X11_VULKAN=OFF -DUSE_WAYLAND_WSI=OFF -DUSE_VULKAN_DISPLAY_KHR=OFF \
-    -DUSE_DISCORD=OFF -DUSE_SYSTEM_FFMPEG=OFF -DUSE_SYSTEM_LIBZIP=OFF \
-    -DHEADLESS=OFF -DUNITTEST=OFF -DUSE_ASAN=OFF -DUSE_UBSAN=OFF
-quietly ppsspp-build cmake --build "$BUILD" --target PPSSPPSDL -j "$JOBS"
+
+# ppsspp_build SUFFIX: configure and build PPSSPPSDL in a fresh BUILD; the
+# logs are ppsspp-configure$SUFFIX and ppsspp-build$SUFFIX.
+ppsspp_build() {
+    rm -rf "$BUILD"
+    attempt "ppsspp-configure$1" cmake -S "$SRC" -B "$BUILD" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="$SDL_PREFIX" \
+        -DSDL2_DIR="$SDL_PREFIX/lib/cmake/SDL2" \
+        -DCMAKE_C_FLAGS="$ARCH_FLAGS" -DCMAKE_CXX_FLAGS="$ARCH_FLAGS" \
+        -DCMAKE_EXE_LINKER_FLAGS="$LINK_FLAGS" \
+        -DCMAKE_LIBRARY_PATH="$LINK_DIR" \
+        -DCMAKE_SKIP_RPATH=ON \
+        -DUSING_GLES2=ON -DUSING_EGL=OFF -DUSING_FBDEV=OFF \
+        -DVULKAN=OFF -DUSING_X11_VULKAN=OFF -DUSE_WAYLAND_WSI=OFF -DUSE_VULKAN_DISPLAY_KHR=OFF \
+        -DUSE_DISCORD=OFF -DUSE_SYSTEM_FFMPEG=OFF -DUSE_SYSTEM_LIBZIP=OFF \
+        -DHEADLESS=OFF -DUNITTEST=OFF -DUSE_ASAN=OFF -DUSE_UBSAN=OFF &&
+        attempt "ppsspp-build$1" cmake --build "$BUILD" --target PPSSPPSDL -j "$JOBS"
+}
+
+if ! ppsspp_build ""; then
+    [ "$RESUME" = 1 ] || die "PPSSPP did not build (see the log above)"
+    # The change is what failed, most likely: upstream as tagged instead, so
+    # the release still gets a PPSSPP — one that cannot save on request.
+    echo "::warning title=PPSSPP::PPSSPP with JukaHub's save-on-request change did not build; building it as upstream left it"
+    resume_unpatch
+    RESUME=0
+    RESUME_NOTE="none: PPSSPP with JukaHub's change did not build"
+    ppsspp_build "-upstream" || die "PPSSPP did not build, with or without JukaHub's change (see the logs above)"
+fi
 
 BIN="$BUILD/PPSSPPSDL"
 [ -f "$BIN" ] || die "the build made no PPSSPPSDL"
@@ -295,17 +454,26 @@ done
 if echo "$NEEDED" | grep -qx 'libstdc++.so.6'; then
     cp -L "$($CXX -print-file-name=libstdc++.so.6)" "$STAGE/PPSSPP/lib/libstdc++.so.6"
 fi
+# The flag JukaHub looks for before it sends the save request (ppsspp_resume.go).
+if [ "$RESUME" = 1 ]; then
+    printf '%s\n' 'save-on-request' > "$STAGE/PPSSPP/jukahub-resume.txt"
+fi
+LICENSE_NOTE="GPL-2.0-or-later; the source is the upstream commit above."
+if [ "$RESUME" = 1 ]; then
+    LICENSE_NOTE="GPL-2.0-or-later; the source is the upstream commit above plus the change player/native/build-ppsspp.sh makes, in JukaHub ${SOURCE_COMMIT:-unknown}."
+fi
 gxx=$($CXX --version | sed -n 1p)
 {
     echo "PPSSPP $VERSION for TrimUI $PLATFORM (Smart Pro, Brick, Hammer), built by JukaHub"
     echo "Upstream:  https://github.com/hrydgard/ppsspp tag $PPSSPP_TAG, commit $COMMIT"
+    echo "Resume:    $RESUME_NOTE"
     echo "Compiler:  $gxx, Ubuntu 20.04 arm64 (glibc 2.31), $ARCH_FLAGS"
     echo "SDL2:      $SDL2_VERSION headers; the handheld's own libSDL2-2.0.so.0 at run time"
     echo "GLES/EGL:  $GL_SOURCE"
     echo "NEEDED:    $(echo $NEEDED)"
     echo "Bundled:   $(cd "$STAGE/PPSSPP/lib" && ls | tr '\n' ' ')"
     echo "Built:     $(date -u +%Y-%m-%dT%H:%M:%SZ) from JukaHub ${SOURCE_COMMIT:-unknown}"
-    echo "License:   GPL-2.0-or-later; the source is the upstream commit above."
+    echo "License:   $LICENSE_NOTE"
 } > "$STAGE/PPSSPP/BUILDINFO.txt"
 cat "$STAGE/PPSSPP/BUILDINFO.txt"
 

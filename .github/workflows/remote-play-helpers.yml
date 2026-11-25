@@ -125,7 +125,7 @@ jobs:
           set +e
           miss() {
             rm -f player/native/bin/chiaki-stream player/native/bin/chiaki-regist player/native/bin/moonlight-stream \
-              player/native/bin/BUILDINFO.txt
+              player/native/bin/libjukaosd.so player/native/bin/BUILDINFO.txt
             exit 0
           }
           if ! name=$(sh .github/scripts/build-root.sh key helpers); then
@@ -134,15 +134,16 @@ jobs:
           fi
           echo "artifact=$name" >> "$GITHUB_OUTPUT"
           echo "helper sources: $name"
-          # moonlight-stream is in the set: an earlier build whose Moonlight
-          # helper failed is a miss, so this run tries it again.
+          # moonlight-stream and libjukaosd.so are in the set: an earlier
+          # build whose optional part failed is a miss, so this run tries it
+          # again.
           if ! timeout 180 bash .github/scripts/go-build-cache.sh fetch "$name" player/native/bin \
-              chiaki-stream chiaki-regist moonlight-stream BUILDINFO.txt; then
+              chiaki-stream chiaki-regist moonlight-stream libjukaosd.so BUILDINFO.txt; then
             miss
           fi
           # The binaries must be the ones their BUILDINFO.txt describes, which
           # is what the step summary and the release's helper package show.
-          for bin in chiaki-stream chiaki-regist moonlight-stream; do
+          for bin in chiaki-stream chiaki-regist moonlight-stream libjukaosd.so; do
             want=$(awk -v b="$bin" '$0 == b { f = 1; next } f && $1 == "sha256:" { print $2; exit }' \
               player/native/bin/BUILDINFO.txt)
             have=$(sha256sum "player/native/bin/$bin" | cut -d' ' -f1)
@@ -328,12 +329,13 @@ jobs:
         with:
           name: remote-play-helpers
           # Artifacts do not keep file modes: the packaging jobs set +x again.
-          # moonlight-stream only when it was built (if-no-files-found looks at
-          # the whole list).
+          # moonlight-stream and libjukaosd.so only when they were built
+          # (if-no-files-found looks at the whole list).
           path: |
             player/native/bin/chiaki-stream
             player/native/bin/chiaki-regist
             player/native/bin/moonlight-stream
+            player/native/bin/libjukaosd.so
             player/native/bin/BUILDINFO.txt
           if-no-files-found: error
           retention-days: 30
@@ -345,7 +347,7 @@ jobs:
         # A fresh build that passed its checks, on a push to main: the only
         # kind the lookup above accepts. Reused helpers are kept already. A
         # set without moonlight-stream would only ever be a miss: not kept.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('player/native/bin/moonlight-stream') != '' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('player/native/bin/moonlight-stream') != '' && hashFiles('player/native/bin/libjukaosd.so') != '' }}
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -355,6 +357,7 @@ jobs:
             player/native/bin/chiaki-stream
             player/native/bin/chiaki-regist
             player/native/bin/moonlight-stream
+            player/native/bin/libjukaosd.so
             player/native/bin/BUILDINFO.txt
           if-no-files-found: error
           retention-days: 90

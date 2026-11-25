@@ -105,6 +105,11 @@ func legibleFontIsAuto(id string) bool {
 // (uiFontEntry.Cyrillic). A face on the card is checked against its own
 // character map instead.
 func legibleEntryDraws(e uiFontEntry, lang string) bool {
+	if _, cjk := uiScriptFaces[lang]; cjk {
+		// Japanese, Korean and Chinese are drawn in their own Noto Sans
+		// (uilangface.go); no reading face here has their characters.
+		return false
+	}
 	return (lang != "ru" && lang != "uk") || e.Cyrillic
 }
 

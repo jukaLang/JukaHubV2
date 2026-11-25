@@ -156,7 +156,10 @@ the bell opens the notification centre, exactly like tapping it; **B**/Esc
 closes it. The highlighted notification shows its whole message, and the
 D-pad, **L1**/**R1**, **L2**/**R2** and the mouse wheel scroll through every
 one kept; a toast cut short with "…" opens the centre on its message when
-clicked.
+clicked. **A** runs the highlighted row's action ("Install update", "Open",
+"Retry", "Play" — the pill at the row's end; a row without one closes the
+centre), **X** dismisses the row and **Y** twice clears them all (Enter,
+Delete / X, Y and Shift+Delete on a keyboard; a tap on the pill or the "×").
 **Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
 it, and the D-pad does not move the screen underneath while it is open.
 
@@ -2754,17 +2757,46 @@ describes what viewers get.
 
 | Input | Action |
 |-------|--------|
-| Up / Down | Move between the code, **Share**, **Quality** and **Games too** (handheld only), wrapping |
-| Left / Right | On **Quality**: the previous / next preset. On **Share** or **Games too**, Left selects the code and Right comes back |
-| A / Enter | Code: enlarge it · Share / Games too: switch · Quality: next preset |
-| Y | New link: the old one stops working at once; the Phone Companion's PIN is not changed |
+| Up / Down | Move between the code, **Share**, **Quality**, **Games too** (handheld only), **Sound** and **Controllers**, wrapping |
+| Left / Right | On **Quality**: the previous / next preset. On the other rows, Left selects the code and Right comes back |
+| A / Enter | Code: enlarge it · Share / Games too / Sound / Controllers: switch · Quality: next preset · Controllers while a viewer asks to play: let them play |
+| X | No to the viewer who asks to play · take control back from the viewer who plays |
+| Y | New link: the old one stops working at once, and a viewer who plays stops; the Phone Companion's PIN is not changed |
 | B / Esc | Close |
 | Click / tap | Runs the row (on **Quality** the left half steps down, the right half up); a click outside the card closes it |
 
+A viewer's request to play turns the **Controllers** row into the request (the
+viewer's browser and address); with the panel closed, a toast and a buzz say a
+viewer asks, and opening the panel lands on it.
+
 On the viewer page, **F**, the full-screen button or a double-click (double-tap)
 toggles full screen, and **M** cycles Fit, Fill and Pixel-perfect; the controls
-hide after three seconds without the pointer moving. Add `&tv=1` to the link
-for a TV browser: no controls, just the picture.
+hide after three seconds without the pointer moving. **Sound** plays the
+handheld's sound there, and **Play** asks to play it. Add `&tv=1` to the link
+for a TV browser: no controls, just the picture, and the remote's first key
+turns the sound on.
+
+While a viewer plays, the page's keys are the handheld's buttons (F and M then
+belong to the game; use the buttons):
+
+| Viewer's key | Handheld |
+|-------|--------|
+| Arrows | D-pad |
+| X / Z / S / A | A / B / X / Y |
+| Q / W | L1 / R1 |
+| E / R | L2 / R2 |
+| Enter | Start |
+| Shift or Backspace | Select |
+| H | Menu |
+
+A controller on the viewer's side works by position, like the handheld's own
+pad (its right face button is A, the bottom one B, the top one X, the left one
+Y); **Buttons by letter** on the page's bottom bar switches to the letters
+printed on an Xbox-style pad. Sticks, analog triggers, L3/R3 and the Home
+button (Menu) work too. On a phone or tablet the page shows a touch pad over the
+picture (**Hide touch pad** puts it away; a controller found hides it). The
+in-game menu and the game assistant, which take the handheld's pad for
+themselves, answer only the handheld's own buttons.
 
 ## Voice orb
 

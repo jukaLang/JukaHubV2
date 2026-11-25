@@ -640,6 +640,63 @@ func brightnessMainTick(b string) {
 		brightnessQSSynced = true
 		qsRefreshBrightnessRow()
 	}
+	if !brightnessLaunchChecked {
+		brightnessLaunchChecked = true
+		if brightnessFirmwareSync(b) {
+			go brightnessFirmwareLaunchCheck(b)
+		}
+	}
+}
+
+// brightnessLaunchChecked is set once brightnessMainTick has looked at the
+// firmware's level after launch. Main thread only.
+var brightnessLaunchChecked bool
+
+// brightnessLaunchTolerance is how far (in the panel's raw units) the backlight
+// may sit from the firmware's saved step before the step is put back: under
+// half a step of the stock Smart Pro's 22.
+const brightnessLaunchTolerance = 10
+
+// brightnessFirmwareLaunchCheck puts the firmware's saved level (system.json
+// "brightness") on the panel once at launch, where the panel shows another
+// one. Started at boot by the autostart hook, JukaHub runs before the stock
+// launcher would have applied the file, and the screen came up at the
+// panel's own default after every restart while the card showed the saved
+// level. Launched from the stock menu the two agree and nothing is written.
+// The file is not rewritten (it already holds the level), and a level the
+// user set meanwhile wins. Off the main thread; the write is posted back.
+func brightnessFirmwareLaunchCheck(b string) {
+	step, ok := trimuiSystemBrightnessLevel()
+	if !ok {
+		return
+	}
+	raw, max, err := brightnessHardwareRaw(b)
+	if err != nil || max <= 0 {
+		return
+	}
+	pct := brightnessNormalize(b, step*brightnessFullPct/trimuiBrightnessSteps)
+	want := brightnessRawForLevel(b, pct, max)
+	if d := raw - want; d <= brightnessLaunchTolerance && d >= -brightnessLaunchTolerance {
+		return
+	}
+	tbxPost(func() {
+		brightnessLevel.mu.Lock()
+		if brightnessLevel.editGen > 0 || brightnessBorrowed.Load() {
+			brightnessLevel.mu.Unlock()
+			return
+		}
+		brightnessLevel.pct, brightnessLevel.known = pct, true
+		if pct > brightnessFloorFor(b) {
+			brightnessLevel.restore = pct
+		}
+		brightnessLevel.editGen++
+		gen := brightnessLevel.editGen
+		brightnessLevel.mu.Unlock()
+		brightnessRequestLevel(pct, gen)
+		qsNoteBrightnessLevel(pct)
+		logInfo("brightness", "the panel was at raw %d after the start; put back the firmware's saved step %d (%d%%, raw %d)",
+			raw, step, pct, want)
+	})
 }
 
 // brightnessNoteSavedLevel queues the level saved in jukauser.json; it is

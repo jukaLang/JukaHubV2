@@ -601,7 +601,7 @@ func devsyncHandleSettings(w http.ResponseWriter, r *http.Request, call peerCall
 	name := call.rec.Name
 	tbxPost(func() {
 		devsyncInboxState.box = &devsyncInbox{from: name, doc: doc, at: time.Now()}
-		ShowToast(name+" sent its settings — open Tools → Save sync to use them", ToastKindInfo)
+		ShowToast(name+" sent its settings — open Tools → Sync to use them", ToastKindInfo)
 	})
 	peerWriteJSONResponse(w, http.StatusOK, map[string]bool{"ok": true})
 }

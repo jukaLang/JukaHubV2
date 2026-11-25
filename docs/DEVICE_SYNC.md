@@ -1,10 +1,13 @@
 # Device Sync
 
-Two paired JukaHubs (Settings → Network → Paired devices) can make more than
-their saves the same, over Wi-Fi, with nothing in between. Everything is on
-**Tools → Save sync**: under the paired devices, **What syncs with a paired
-device** has one switch per category, and comparing with a device lists what
-each switched-on category would do under **Sync now**.
+Two paired JukaHubs can make more than their saves the same, over Wi-Fi, with
+nothing in between. Pair them from **Tools → Sync** ([Sync](SYNC.md): open it
+on both, or pair from the phone page its QR code opens). On that page **What
+syncs with a paired device** has one switch per category, and **Compare** on a
+paired device lists what each switched-on category would do under **Sync
+now**. Saves and save states also move by themselves around games while both
+are on the same Wi-Fi ([what happens by itself](SYNC.md#what-happens-by-itself));
+BIOS, ROMs, collections and settings move only from Compare.
 
 > Status: built 2026-11-20 (`player/devsync.go`, `devsync_data.go`,
 > `devsync_ui.go`); not yet run between two devices.

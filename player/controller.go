@@ -258,22 +258,9 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// walks its rows and A/B close it, matching handleChromeOverlayKey so the
 	// controller and the keyboard behave the same on every scene, Home included.
 	if nc.open {
-		switch e.Button {
-		case sdl.CONTROLLER_BUTTON_DPAD_UP:
-			notifNavigate(-1)
-			PlayNavSound()
-		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-			notifNavigate(1)
-			PlayNavSound()
-		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-			notifShoulder(padL1)
-		case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-			notifShoulder(padR1)
-		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B,
-			sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
-			notifDismiss()
-			PlayBackSound()
-		}
+		// A runs the row's action, X dismisses it, Y clears them all
+		// (notifications_actions.go).
+		notifPadButton(config, e.Button)
 		return true
 	}
 	// The Local weather card floats above every scene, so it consumes the

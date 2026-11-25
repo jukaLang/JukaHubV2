@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBatteryGuardActionFor(t *testing.T) {
@@ -72,6 +73,100 @@ func TestBatteryGuardActionAtLevels(t *testing.T) {
 	}
 	if picked := (batteryWarnLevels{warn: 10}); picked.blinkPct() != 5 || !picked.headerRed(10) || picked.headerRed(11) {
 		t.Fatalf("a picked 10%%: blink %d", picked.blinkPct())
+	}
+}
+
+// TestUniversalResumePlan is instantresume.go's whole plan as a table: what
+// the battery's save level, the sleep's power off and Power off do to each
+// family of game. A state is never traded away, a game nothing can save is
+// held at the battery rather than closed, and nothing is held where the
+// device cannot wake itself to power off.
+func TestUniversalResumePlan(t *testing.T) {
+	// The families, as the detection reads them.
+	families := []struct {
+		name                                 string
+		class                                sessionSafeClass
+		saveOnQuit, onRequest, raReady, game bool
+		want                                 resumeFamily
+	}{
+		{"nothing running", sessionSafeNone, false, false, true, true, resumeFamilyNone},
+		{"RetroArch", sessionSafeRetroArch, false, false, true, true, resumeFamilyRetroArch},
+		{"RetroArch without network commands", sessionSafeRetroArch, false, false, false, true, resumeFamilyRetroArchOff},
+		{"JukaHub's PPSSPP build", sessionSafeOnQuit, true, true, true, true, resumeFamilyOnRequest},
+		{"DraStic with its auto save state", sessionSafeOnQuit, true, false, true, true, resumeFamilyOnQuit},
+		{"PPSSPP without save on exit", sessionSafeOnQuit, false, false, true, true, resumeFamilyHold},
+		{"a port, Wine, hakuX, Android", sessionSafeQuitOnly, false, false, true, true, resumeFamilyHold},
+		{"Moonlight", sessionSafeStream, false, false, true, true, resumeFamilyStream},
+		{"an app", sessionSafeQuitOnly, false, false, true, false, resumeFamilyApp},
+	}
+	for _, f := range families {
+		if got := resumeFamilyOf(f.class, f.saveOnQuit, f.onRequest, f.raReady, f.game); got != f.want {
+			t.Errorf("%s: family %v, want %v", f.name, got, f.want)
+		}
+	}
+
+	type cell struct {
+		cause   resumeCause
+		fam     resumeFamily
+		percent int
+		canHold bool
+		want    resumeAction
+	}
+	for _, c := range []cell{
+		// The battery's save level.
+		{resumeCauseBattery, resumeFamilyRetroArch, 3, true, resumeSave},
+		{resumeCauseBattery, resumeFamilyOnRequest, 3, true, resumeSave},
+		{resumeCauseBattery, resumeFamilyOnQuit, 3, true, resumeSave},
+		{resumeCauseBattery, resumeFamilyHold, 3, true, resumeHold},
+		{resumeCauseBattery, resumeFamilyHold, 3, false, resumeClose},
+		{resumeCauseBattery, resumeFamilyRetroArchOff, 3, true, resumeHold},
+		{resumeCauseBattery, resumeFamilyRetroArchOff, 3, false, resumeLeave},
+		{resumeCauseBattery, resumeFamilyStream, 3, true, resumeClose},
+		{resumeCauseBattery, resumeFamilyApp, 3, true, resumeLeave},
+		{resumeCauseBattery, resumeFamilyNone, 3, true, resumeLeave},
+		// The sleep's power off: nothing that cannot save is closed before
+		// the battery's last 5%.
+		{resumeCauseSleepPowerOff, resumeFamilyOnRequest, 40, false, resumeSave},
+		{resumeCauseSleepPowerOff, resumeFamilyHold, 40, false, resumeSleepAgain},
+		{resumeCauseSleepPowerOff, resumeFamilyHold, 5, false, resumeClose},
+		{resumeCauseSleepPowerOff, resumeFamilyHold, -1, false, resumeSleepAgain},
+		{resumeCauseSleepPowerOff, resumeFamilyApp, 4, false, resumeClose},
+		{resumeCauseSleepPowerOff, resumeFamilyRetroArchOff, 2, false, resumeSleepAgain},
+		{resumeCauseSleepPowerOff, resumeFamilyStream, 80, false, resumeClose},
+		// Power off: saved where it can be, asked to quit otherwise.
+		{resumeCausePowerOff, resumeFamilyOnQuit, 50, false, resumeSave},
+		{resumeCausePowerOff, resumeFamilyHold, 50, true, resumeClose},
+		{resumeCausePowerOff, resumeFamilyApp, 50, false, resumeClose},
+	} {
+		if got := resumeActionFor(c.cause, c.fam, c.percent, c.canHold); got != c.want {
+			t.Errorf("cause %v, family %v at %d%% (hold %t): %v, want %v", c.cause, c.fam, c.percent, c.canHold, got, c.want)
+		}
+	}
+
+	// The sleep's power off keeps its answers through the plan.
+	for _, d := range []struct {
+		percent    int
+		class      sessionSafeClass
+		saveOnQuit bool
+		want       sessionSafeDeadlineAction
+	}{
+		{50, sessionSafeOnQuit, true, sessionSafeDeadlineSave},
+		{50, sessionSafeQuitOnly, false, sessionSafeDeadlineSleep},
+		{4, sessionSafeQuitOnly, false, sessionSafeDeadlineQuit},
+		{50, sessionSafeStream, false, sessionSafeDeadlineQuit},
+		{2, sessionSafeRetroArch, false, sessionSafeDeadlineSleep},
+	} {
+		if got := sessionSafeDeadlineActionFor(d.percent, d.class, d.saveOnQuit); got != d.want {
+			t.Errorf("deadline at %d%%, class %v, save %t: %v, want %v", d.percent, d.class, d.saveOnQuit, got, d.want)
+		}
+	}
+
+	// The hold's sleep powers off within ten minutes at the guard's 5%.
+	if got := saveLedgerCapFor(lowBatteryWarnPct, false, true); got != 10*time.Minute {
+		t.Errorf("sleep cap at %d%%: %s", lowBatteryWarnPct, got)
+	}
+	if got := saveLedgerCapFor(12, false, true); got != 30*time.Minute {
+		t.Errorf("sleep cap at 12%%: %s", got)
 	}
 }
 

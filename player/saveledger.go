@@ -224,7 +224,7 @@ type saveLedgerSession struct {
 	g            shoGame
 	launcher     string
 	startedAt    time.Time
-	actedAtStart bool // the low-battery guard had already acted this run
+	actedAtStart int  // the low-battery guard's runs before it (lowBatteryGuardActs)
 	resume       bool // started by the power-on resume
 
 	retroArch atomic.Bool
@@ -798,13 +798,12 @@ func saveLedgerStarted(game libraryGame, launcher string, _ *exec.Cmd) {
 	if !shoApplies(game) {
 		return
 	}
-	acted, _, _ := lowBatteryGuardFlags()
 	s := &saveLedgerSession{
 		game:         game,
 		g:            shoGameOf(game),
 		launcher:     launcher,
 		startedAt:    time.Now(),
-		actedAtStart: acted,
+		actedAtStart: lowBatteryGuardActs(),
 		resume:       saveLedgerTakeResume(game.Path),
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
@@ -844,11 +843,11 @@ func saveLedgerExited(game libraryGame, _ string, ranFor time.Duration, waitErr 
 // saves first too; the low-battery guard's run, whether it began in this
 // session; then a crash signal; else the player quit.
 func saveLedgerHowEnded(s *saveLedgerSession, waitErr error) (how, trigger string) {
-	acted, _, running := lowBatteryGuardFlags()
+	_, _, running := lowBatteryGuardFlags()
 	switch {
 	case powerSleepActive() || quickPowerOff.busy.Load() || quickPowerOff.silent.Load():
 		return saveLedgerTrigPowerOff, saveLedgerTrigPowerOff
-	case running || (acted && !s.actedAtStart):
+	case running || lowBatteryGuardActs() > s.actedAtStart:
 		return saveLedgerTrigBattery, saveLedgerTrigBattery
 	}
 	if _, sig := gameLaunchExitStatus(waitErr); saveLedgerCrashSignal(sig) {
@@ -1207,12 +1206,15 @@ var saveLedgerCap struct {
 }
 
 // saveLedgerCapFor is the nearer power-off time a sleep with a game gets on
-// battery: 30 min at 15% or less, 2 h at 25% or less, none otherwise (also on
-// a charger, at an unknown level, or with no game). Pure.
+// battery: 10 min at the guard's 5% or less (the low-battery hold's sleep,
+// instantresume.go), 30 min at 15% or less, 2 h at 25% or less, none
+// otherwise (also on a charger, at an unknown level, or with no game). Pure.
 func saveLedgerCapFor(percent int, charging, game bool) time.Duration {
 	switch {
 	case !game || charging || percent < 0:
 		return 0
+	case percent <= lowBatteryWarnPct:
+		return 10 * time.Minute
 	case percent <= 15:
 		return 30 * time.Minute
 	case percent <= 25:

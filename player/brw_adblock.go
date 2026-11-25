@@ -28,7 +28,10 @@ package main
 //
 // The top-level page the user opened, and every link they follow, never pass
 // through the filter: only a page's subresources do (scripts, fetch/XHR,
-// stylesheets, images — the reader never loads iframes).
+// stylesheets, images — the reader never loads iframes). The ads' own boxes —
+// slots, labels, sponsored cards, pictures from the servers listed here — are
+// cut out of the page's markup by webpage_adremove.go, under the same switch
+// and the same per-site exception.
 
 import (
 	"net"
@@ -93,7 +96,7 @@ func browserBlockAdsEnabled() bool { return !browserBlockAdsOff.Load() }
 func brwAdBlockSettingsRow() setRow {
 	return setRow{
 		ID: "blockAds", Label: "Block ads and trackers", Kind: setKindToggle,
-		Detail: setStatic("Skip ad and tracker requests on pages · Site info allows them per site"),
+		Detail: setStatic("Remove ads from pages and skip ad and tracker requests · Site info allows them per site"),
 		Get:    browserBlockAdsSetting,
 		Set: func(c *Config, on bool) {
 			setStoreBool(c, browserBlockAdsKey, on)

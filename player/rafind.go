@@ -419,11 +419,7 @@ func raBinaryFromScript(script string) string {
 // from its own plain assignments, and the folders those variables name.
 func raBinaryFromScriptText(text, scriptDir string) string {
 	slashDir := filepath.ToSlash(scriptDir)
-	for _, form := range []string{`$(dirname "$0")`, `$(dirname $0)`, "`dirname \"$0\"`", "`dirname $0`",
-		`$(cd "$(dirname "$0")" && pwd)`, `$(cd "$(dirname "$0")"; pwd)`, `$(cd $(dirname $0) && pwd)`} {
-		text = strings.ReplaceAll(text, form, slashDir)
-	}
-	vars := raScriptVars(text)
+	text, vars := raScriptPrepare(text, scriptDir)
 	var dirs []string
 	check := func(raw string) string {
 		p, ok := raExpand(raw, vars)
@@ -472,6 +468,17 @@ func raBinaryFromScriptText(text, scriptDir string) string {
 		}
 	}
 	return ""
+}
+
+// raScriptPrepare is a script's text with its own folder put in for the
+// $(dirname "$0") forms, and its plain assignments (raScriptVars).
+func raScriptPrepare(text, scriptDir string) (string, map[string]string) {
+	slashDir := filepath.ToSlash(scriptDir)
+	for _, form := range []string{`$(dirname "$0")`, `$(dirname $0)`, "`dirname \"$0\"`", "`dirname $0`",
+		`$(cd "$(dirname "$0")" && pwd)`, `$(cd "$(dirname "$0")"; pwd)`, `$(cd $(dirname $0) && pwd)`} {
+		text = strings.ReplaceAll(text, form, slashDir)
+	}
+	return text, raScriptVars(text)
 }
 
 // raScriptVars are a script's plain assignments with every $VAR they use

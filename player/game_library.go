@@ -851,6 +851,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return err
 	}
 	ppssppPrepareManagedLaunch(launcher, cmd)
+	// JukaHub's PPSSPP build can save the game for a power off, and the next
+	// start begins from that state (ppsspp_resume.go).
+	ppssppPrepareResumeLaunch(launcher, game.Path, cmd)
 	// The official PICO-8: its home folder and environment (pico8native.go).
 	pico8NativePrepareLaunch(launcher, cmd)
 	// A Godot game's engine version, and the port's, into the log (godot.go).
@@ -874,6 +877,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if err := j2mePrepareLaunch(launcher, cmd); err != nil {
 		return err
 	}
+	// In-game indicators: the hook library and its file, with the child's
+	// environment settled (ingamehud.go).
+	ingameHUDPrepareLaunch(launcher, game.System, cmd)
 	// Last before the start: the game in a mount namespace of its own whose
 	// RetroArch runs on JukaHub's C library, when the plan above said so.
 	raGlibcApply(cmd, ragPlan)

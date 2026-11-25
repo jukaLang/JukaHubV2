@@ -24,12 +24,16 @@ package main
 //     its name, size, CRC32 and place in its folder's stream.
 //   - Reading the first bytes of a file: its folder's stream is decoded from
 //     the start up to the file's offset plus what was asked. Copy (00), LZMA
-//     (03 01 01) and LZMA2 (21) folders of one coder are read with the
-//     vendored github.com/ulikunitz/xz/lzma package (the same one
-//     files_extract_xz.go uses); anything else (BCJ/BCJ2 filters, PPMd,
-//     Deflate, BZip2, AES, several coders) is errSevenZipUnsupported, and the
-//     callers then do what they did before. Listing needs no decoding beyond
-//     the directory, so it works whatever the files were packed with.
+//     (03 01 01) and LZMA2 (21) are read with the vendored
+//     github.com/ulikunitz/xz/lzma package (the same one files_extract_xz.go
+//     uses), alone or under the branch filters for ARM programs — ARM64 (0A),
+//     ARM (03 03 05 01) and ARM-Thumb (03 03 07 01) — which 7-Zip 23 and later
+//     put in front of LZMA2 by itself for every 64-bit ARM program, ELF ones
+//     included: TrimUI's Smart Pro packages of ra64.trimui and its cores
+//     (raget_7z.go). Anything else (the x86 BCJ/BCJ2 filters, PPMd, Deflate,
+//     BZip2, AES, coders that are not one chain) is errSevenZipUnsupported,
+//     and the callers then do what they did before. Listing needs no decoding
+//     beyond the directory, so it works whatever the files were packed with.
 //
 // It is outside data, so every size is bounded before anything is allocated:
 // a directory of at most sevenZipMaxHeader bytes (decoded or not), at most
@@ -149,11 +153,25 @@ type sevenZipEntry struct {
 	offset uint64
 }
 
+// sevenZipCoder is one coder of a folder: its method id and properties, and
+// how many streams it takes in and gives out.
+type sevenZipCoder struct {
+	id      []byte
+	props   []byte
+	in, out int
+}
+
 // sevenZipFolder is one solid block: its coders and where its packed data is.
 type sevenZipFolder struct {
-	method     []byte // the single coder's id; nil with several coders
-	props      []byte
-	simple     bool // one coder, one packed stream in, one stream out
+	method []byte // the coder that reads the packed stream; nil when the coders are not one chain
+	props  []byte
+	// filters are the branch filters over method's output, in the order a
+	// decoder applies them (7-Zip's "ARM64 LZMA2" is LZMA2, then ARM64), and
+	// codeOut is method's out stream; coders are all of them, for messages.
+	filters    []sevenZipCoder
+	codeOut    int
+	coders     []sevenZipCoder
+	simple     bool // one packed stream through a chain of one-in, one-out coders
 	packIndex  int  // its first pack stream
 	numPacked  int
 	outSizes   []uint64
@@ -572,7 +590,8 @@ func parseSevenZipFolders(b *sevenZipBuf, st *sevenZipStreams) {
 	}
 }
 
-// parseSevenZipFolder reads one folder's coders and bind pairs.
+// parseSevenZipFolder reads one folder's coders and bind pairs, and whether
+// they are one chain this reader follows (chain).
 func parseSevenZipFolder(b *sevenZipBuf) sevenZipFolder {
 	var f sevenZipFolder
 	numCoders := b.count(sevenZipMaxCoders)
@@ -599,25 +618,28 @@ func parseSevenZipFolder(b *sevenZipBuf) sevenZipFolder {
 		}
 		totalIn += in
 		totalOut += out
-		if numCoders == 1 {
-			f.method = append([]byte(nil), id...)
-			f.props = append([]byte(nil), props...)
-		}
+		f.coders = append(f.coders, sevenZipCoder{id: append([]byte(nil), id...), props: append([]byte(nil), props...), in: in, out: out})
 	}
 	if b.err != nil || totalOut == 0 {
 		b.fail()
 		return f
 	}
-	// The folder's output is the one out stream no bind pair consumes.
+	// The folder's output is the one out stream no bind pair consumes; with
+	// one packed stream, that stream goes to the one in stream no bind pair
+	// feeds. feeds maps an in stream to the out stream bound to it.
 	bindPairs := totalOut - 1
-	bound := make([]bool, totalOut)
+	boundOut := make([]bool, totalOut)
+	boundIn := make([]bool, totalIn)
+	feeds := make(map[int]int, bindPairs)
 	for i := 0; i < bindPairs; i++ {
-		b.number() // in index
-		if out := b.number(); out < uint64(totalOut) {
-			bound[out] = true
+		in := b.number()
+		out := b.number()
+		if in < uint64(totalIn) && out < uint64(totalOut) {
+			boundIn[in], boundOut[out] = true, true
+			feeds[int(in)] = int(out)
 		}
 	}
-	for j, isBound := range bound {
+	for j, isBound := range boundOut {
 		if !isBound {
 			f.mainOut = j
 			break
@@ -628,14 +650,60 @@ func parseSevenZipFolder(b *sevenZipBuf) sevenZipFolder {
 		b.fail()
 		return f
 	}
+	packedIn := -1
 	if f.numPacked > 1 {
 		for i := 0; i < f.numPacked; i++ {
 			b.number()
 		}
+	} else {
+		for j, isBound := range boundIn {
+			if !isBound {
+				packedIn = j
+				break
+			}
+		}
 	}
 	f.outSizes = make([]uint64, totalOut)
-	f.simple = numCoders == 1 && totalIn == 1 && totalOut == 1
+	f.chain(feeds, packedIn)
 	return f
+}
+
+// chain works out whether f's coders are one chain from its packed stream to
+// its output — every coder one stream in and one out, each feeding the next,
+// the last reading packedIn (-1: several packed streams, never one chain) —
+// and if so sets method and props (the coder that reads the packed stream),
+// the filters over it in decoding order and codeOut, and simple.
+func (f *sevenZipFolder) chain(feeds map[int]int, packedIn int) {
+	for _, c := range f.coders {
+		if c.in != 1 || c.out != 1 {
+			return
+		}
+	}
+	// Every coder takes one stream in and gives one out, so in stream i and
+	// out stream i are both coder i's. From the output back to the packed
+	// stream:
+	n := len(f.coders)
+	order := []int{f.mainOut}
+	for cur := f.mainOut; cur != packedIn; {
+		next, ok := feeds[cur]
+		if !ok || len(order) >= n {
+			return
+		}
+		order = append(order, next)
+		cur = next
+	}
+	if len(order) != n {
+		return
+	}
+	code := order[n-1]
+	f.method = append([]byte(nil), f.coders[code].id...)
+	f.props = append([]byte(nil), f.coders[code].props...)
+	f.codeOut = code
+	f.filters = nil
+	for k := n - 2; k >= 0; k-- {
+		f.filters = append(f.filters, f.coders[order[k]])
+	}
+	f.simple = true
 }
 
 // parseSevenZipSubStreams reads how each folder splits into files, their
@@ -897,7 +965,17 @@ func (st *sevenZipStreams) folderReaderDict(r io.ReaderAt, size int64, i int, li
 	if !f.simple {
 		return nil, errSevenZipUnsupported
 	}
-	if f.packIndex >= len(st.packSize) {
+	for _, c := range f.filters {
+		if _, _, ok := sevenZipBranchFor(c); !ok {
+			return nil, errSevenZipUnsupported
+		}
+	}
+	if f.packIndex >= len(st.packSize) || f.codeOut >= len(f.outSizes) {
+		return nil, errSevenZipFormat
+	}
+	// A branch filter keeps the size: the coder under the filters gives as
+	// much as the folder does.
+	if f.outSizes[f.codeOut] != f.unpackSize {
 		return nil, errSevenZipFormat
 	}
 	start, packed := st.packStart[f.packIndex], st.packSize[f.packIndex]
@@ -905,6 +983,12 @@ func (st *sevenZipStreams) folderReaderDict(r io.ReaderAt, size int64, i int, li
 		return nil, errSevenZipFormat
 	}
 	limit = min(limit, f.unpackSize)
+	// Under a filter the coder decodes a little past the read: an instruction
+	// the read's end cuts is converted whole (sevenZipBranchAhead).
+	inner := limit
+	if len(f.filters) > 0 {
+		inner = min(f.unpackSize, limit+sevenZipBranchAhead)
+	}
 	src := io.NewSectionReader(r, int64(start), int64(packed))
 	// The dictionary need not be the encoder's: no match reaches back further
 	// than the bytes before it, so one that holds every byte the decoder ever
@@ -914,7 +998,7 @@ func (st *sevenZipStreams) folderReaderDict(r io.ReaderAt, size int64, i int, li
 	// plain LZMA, never at all once one pass filled the dictionary with more
 	// than this read needs. slack is that look-ahead.
 	dictFor := func(declared, slack uint64) (int, error) {
-		d := min(declared, f.unpackSize, limit+slack)
+		d := min(declared, f.unpackSize, inner+slack)
 		if d < lzma.MinDictCap {
 			d = lzma.MinDictCap
 		}
@@ -968,7 +1052,213 @@ func (st *sevenZipStreams) folderReaderDict(r io.ReaderAt, size int64, i int, li
 	default:
 		return nil, errSevenZipUnsupported
 	}
-	return io.LimitReader(dec, int64(limit)), nil
+	if len(f.filters) == 0 {
+		return io.LimitReader(dec, int64(limit)), nil
+	}
+	out := io.LimitReader(dec, int64(inner))
+	for _, c := range f.filters {
+		conv, pc, _ := sevenZipBranchFor(c)
+		out = newSevenZipBranchReader(out, conv, pc)
+	}
+	return io.LimitReader(out, int64(limit)), nil
+}
+
+// ── Branch filters ──────────────────────────────────────────────────────────
+
+// sevenZipBranchAhead is how far past a read the coder under a branch filter
+// decodes, so an instruction the read's end cuts is converted whole.
+const sevenZipBranchAhead = 16
+
+// sevenZipBranchBuf is the buffer a branch filter converts in.
+const sevenZipBranchBuf = 64 << 10
+
+// sevenZipBranchFor is a branch filter coder's decoding conversion and the
+// stream position it starts at (its 4-byte property, 0 without one); ok is
+// false for any other coder, or properties this reader does not take. These
+// are the filters 7-Zip puts before LZMA/LZMA2 for ARM programs: ARM64 (0A),
+// ARM (03 03 05 01) and ARM-Thumb (03 03 07 01) — the same conversions as
+// xz's, checked against liblzma for ARM and ARM-Thumb.
+func sevenZipBranchFor(c sevenZipCoder) (func(b []byte, pc uint32) int, uint32, bool) {
+	var conv func(b []byte, pc uint32) int
+	switch {
+	case bytes.Equal(c.id, []byte{0x0A}):
+		conv = sevenZipARM64
+	case bytes.Equal(c.id, []byte{0x03, 0x03, 0x05, 0x01}):
+		conv = sevenZipARM
+	case bytes.Equal(c.id, []byte{0x03, 0x03, 0x07, 0x01}):
+		conv = sevenZipARMT
+	default:
+		return nil, 0, false
+	}
+	switch len(c.props) {
+	case 0:
+		return conv, 0, true
+	case 4:
+		return conv, binary.LittleEndian.Uint32(c.props), true
+	}
+	return nil, 0, false
+}
+
+// sevenZipARM64 undoes the ARM64 filter over b, whose first byte is at stream
+// position pc: the targets of BL (26 bits) and of ADRP (21 bits, the ones
+// within ±512 MiB) go back from absolute to relative. It returns the bytes it
+// is done with, whole 4-byte instructions.
+func sevenZipARM64(b []byte, pc uint32) int {
+	i := 0
+	for ; i+4 <= len(b); i += 4 {
+		instr := binary.LittleEndian.Uint32(b[i:])
+		at := pc + uint32(i)
+		switch {
+		case instr>>26 == 0x25: // BL
+			rel := instr - at>>2
+			v := 0x94000000 | rel&0x03FFFFFF
+			binary.LittleEndian.PutUint32(b[i:], v)
+		case instr&0x9F000000 == 0x90000000: // ADRP
+			src := instr>>29&3 | instr>>3&0x001FFFFC
+			if near := src + 0x00020000; near&0x001C0000 != 0 {
+				continue
+			}
+			dest := src - at>>12
+			v := instr & 0x9000001F
+			v |= (dest & 3) << 29
+			v |= (dest & 0x0003FFFC) << 3
+			v |= -(dest & 0x00020000) & 0x00E00000
+			binary.LittleEndian.PutUint32(b[i:], v)
+		}
+	}
+	return i
+}
+
+// sevenZipARM undoes the ARM filter: BL's 24-bit target, in 4-byte steps.
+func sevenZipARM(b []byte, pc uint32) int {
+	i := 0
+	for ; i+4 <= len(b); i += 4 {
+		if b[i+3] != 0xEB {
+			continue
+		}
+		src := uint32(b[i+2])<<16 | uint32(b[i+1])<<8 | uint32(b[i])
+		at := pc + uint32(i) + 8
+		dest := src<<2 - at
+		dest >>= 2
+		b[i+2] = byte(dest >> 16)
+		b[i+1] = byte(dest >> 8)
+		b[i] = byte(dest)
+	}
+	return i
+}
+
+// sevenZipARMT undoes the ARM-Thumb filter: a BL pair's 22-bit target, in
+// 2-byte steps.
+func sevenZipARMT(b []byte, pc uint32) int {
+	i := 0
+	for ; i+4 <= len(b); i += 2 {
+		if b[i+1]&0xF8 != 0xF0 || b[i+3]&0xF8 != 0xF8 {
+			continue
+		}
+		hi := uint32(b[i+1]) & 7
+		lo := uint32(b[i+3]) & 7
+		src := hi<<19 | uint32(b[i])<<11 | lo<<8 | uint32(b[i+2])
+		at := pc + uint32(i) + 4
+		dest := src<<1 - at
+		dest >>= 1
+		b[i+1] = 0xF0 | byte(dest>>19&7)
+		b[i] = byte(dest >> 11)
+		b[i+3] = 0xF8 | byte(dest>>8&7)
+		b[i+2] = byte(dest)
+		i += 2
+	}
+	return i
+}
+
+// sevenZipBranchReader undoes a branch filter over src. An instruction a read
+// cuts waits for the rest; the stream's last bytes, too few for one, come
+// out as they are.
+type sevenZipBranchReader struct {
+	src  io.Reader
+	conv func(b []byte, pc uint32) int
+	pc   uint32 // the stream position of buf[0], with the filter's start
+	buf  []byte
+	// buf[start:ready] is converted and not yet returned; buf[:end] came
+	// from src; err is src's error once it gave one.
+	start, ready, end int
+	err               error
+}
+
+func newSevenZipBranchReader(src io.Reader, conv func(b []byte, pc uint32) int, pc uint32) *sevenZipBranchReader {
+	return &sevenZipBranchReader{src: src, conv: conv, pc: pc, buf: make([]byte, sevenZipBranchBuf)}
+}
+
+func (r *sevenZipBranchReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for r.start == r.ready {
+		if r.err != nil {
+			return 0, r.err
+		}
+		// The bytes not converted yet go to the front, then more come.
+		n := copy(r.buf, r.buf[r.ready:r.end])
+		r.start, r.ready, r.end = 0, 0, n
+		for tries := 0; r.err == nil; tries++ {
+			m, err := r.src.Read(r.buf[r.end:])
+			r.end += m
+			switch {
+			case err != nil:
+				r.err = err
+			case m == 0 && tries >= 100:
+				r.err = io.ErrNoProgress
+			}
+			if m > 0 {
+				break
+			}
+		}
+		done := r.conv(r.buf[:r.end], r.pc)
+		r.pc += uint32(done)
+		r.ready = done
+		if r.err != nil {
+			r.ready = r.end
+		}
+	}
+	n := copy(p, r.buf[r.start:r.ready])
+	r.start += n
+	return n, nil
+}
+
+// sevenZipMethodNames names 7z methods for messages.
+var sevenZipMethodNames = map[string]string{
+	"\x00": "Copy", "\x03\x01\x01": "LZMA", "\x21": "LZMA2", "\x03": "Delta",
+	"\x03\x03\x01\x03": "BCJ", "\x03\x03\x01\x1b": "BCJ2", "\x03\x03\x02\x05": "PPC",
+	"\x03\x03\x04\x01": "IA64", "\x03\x03\x05\x01": "ARM", "\x03\x03\x07\x01": "ARMT",
+	"\x03\x03\x08\x05": "SPARC", "\x0a": "ARM64", "\x0b": "RISCV", "\x03\x04\x01": "PPMd",
+	"\x04\x01\x08": "Deflate", "\x04\x01\x09": "Deflate64", "\x04\x02\x02": "BZip2",
+	"\x06\xf1\x07\x01": "AES",
+}
+
+// sevenZipFolderMethods names a folder's coders for a message, an unknown one
+// by its id: a chain from the filter that makes the output to the coder that
+// reads the packed stream ("ARM64 + LZMA2", as 7-Zip lists it; 7-Zip stores
+// LZMA2 first), any other folder's in the order stored.
+func sevenZipFolderMethods(f sevenZipFolder) string {
+	coders := f.coders
+	if f.simple {
+		coders = make([]sevenZipCoder, 0, len(f.filters)+1)
+		for k := len(f.filters) - 1; k >= 0; k-- {
+			coders = append(coders, f.filters[k])
+		}
+		coders = append(coders, sevenZipCoder{id: f.method})
+	}
+	if len(coders) == 0 {
+		return "no coder"
+	}
+	names := make([]string, 0, len(coders))
+	for _, c := range coders {
+		name, ok := sevenZipMethodNames[string(c.id)]
+		if !ok {
+			name = fmt.Sprintf("method %x", c.id)
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, " + ")
 }
 
 // readHead returns the first n bytes of entry i (fewer when the file is

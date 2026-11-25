@@ -46,6 +46,10 @@ const (
 
 	// A game with no cover got a picture of itself (playshot_cover.go).
 	awayKindCover = "cover"
+
+	// An unread row filed in the notification centre (notifFile): a warning,
+	// an error or an event nobody saw, waiting in the bell.
+	awayKindAlert = "alert"
 )
 
 // awayEventCap bounds the ledger. A hundred-track queue finishing under one
@@ -142,6 +146,11 @@ func awayLabelFor(kind string, n int) (string, bool) {
 			return "1 cover taken from the game", true
 		}
 		return strconv.Itoa(n) + " covers taken from games", true
+	case awayKindAlert:
+		if n == 1 {
+			return "1 new notification in the bell", true
+		}
+		return strconv.Itoa(n) + " new notifications in the bell", true
 	}
 	return "", false
 }
@@ -157,7 +166,7 @@ func awaySummaryText(events []awayEvent) string {
 	parts := make([]string, 0, 3)
 	// Fixed order so two runs over the same work produce the same sentence;
 	// map iteration would shuffle the clauses between returns.
-	for _, kind := range []string{awayKindDownload, awayKindTool, awayKindAchievement, awayKindScreenshot, awayKindScreenshotFailed, awayKindCover} {
+	for _, kind := range []string{awayKindDownload, awayKindTool, awayKindAchievement, awayKindScreenshot, awayKindScreenshotFailed, awayKindCover, awayKindAlert} {
 		if n := counts[kind]; n > 0 {
 			if label, ok := awayLabelFor(kind, n); ok {
 				parts = append(parts, label)
@@ -188,6 +197,17 @@ const whileAwayToastDurationMS = 8000
 // the parked section of the main loop returns to presenting frames.
 func whileAwayNotify() {
 	events := whileAwayDrain()
+	// Settings → General → Notifications while playing: "Only in the bell"
+	// shows nothing, "Over the game" showed them as they came — when In-game
+	// indicators could draw them; otherwise the summary still comes.
+	switch notifWhilePlayingMode() {
+	case notifPlayBell:
+		return
+	case notifPlayOver:
+		if ingameHUDEnabled(appConfig) {
+			return
+		}
+	}
 	text := awaySummaryText(events)
 	if text == "" {
 		return

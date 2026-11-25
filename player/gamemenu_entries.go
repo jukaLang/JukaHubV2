@@ -66,6 +66,7 @@ var gmEntries = []gmEntry{
 	{gmAsk, "ask", "Ask Juka", "With the game assistant on"},
 	{gmSwitch, "switcher", "Game switcher", "Quit, then pick up another recent game"},
 	{gmRecord, "record", "Record screen", "Record a clip of the game"},
+	{gmPerf, "perf", "Performance", "The game's CPU profile, changed while it runs"},
 	{gmQuick, "quick", "Quick settings", "Brightness, volume, Wi-Fi, lights, power off"},
 	{gmCloseBg, "closeapps", "Close background apps", "Free memory and keep the game"},
 	{gmSleep, "sleep", "Sleep", "The game carries on when the handheld wakes"},

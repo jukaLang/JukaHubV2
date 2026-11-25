@@ -642,6 +642,11 @@ func setHubActivate(c *Config, i, dir int) {
 			row.Pick(c)
 			return
 		}
+		if dir == 0 && row.Sheet != nil && row.SheetChecked != nil {
+			// A set: A on an option adds or takes it out, the list stays.
+			setSheetOpenSet(c, row, setOr(row.SheetNote, v.detail))
+			return
+		}
 		if dir == 0 && row.Sheet != nil {
 			current := ""
 			if row.SheetValue != nil {

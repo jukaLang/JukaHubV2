@@ -101,6 +101,11 @@ func TestUICataloguesParse(t *testing.T) {
 					t.Errorf("%s: %q -> %q, which fit/draw retranslates to %q", l.Code, k, v, got)
 				}
 			}
+			if _, ownFace := uiScriptFaces[l.Code]; ownFace {
+				// Japanese, Korean and Chinese are drawn in their own Noto Sans
+				// (uilangface.go), not in Inter.
+				continue
+			}
 			for _, r := range v {
 				if r > 0x7f && !fontCoversRune(homeUIFontFile, r) {
 					t.Errorf("%s: %q uses %q, which Inter cannot draw", l.Code, k, r)

@@ -144,6 +144,57 @@ the tunnel, so a configuration without an IPv6 address leaves IPv6 with nowhere
 to go rather than around the VPN; and DNS is set on WireGuard's adapter, which
 Windows prefers but does not use exclusively.
 
+## AmneziaWG
+
+AmneziaVPN servers (AmneziaWG, the WireGuard fork made to get past blocking
+that recognises WireGuard) hand out the same `.conf`, with more keys in the
+`[Interface]`. JukaHub reads them and connects the Amnezia way; nothing else
+changes — import it like any other configuration, and VPN configuration says
+*AmneziaWG* beside the server.
+
+```ini
+[Interface]
+PrivateKey = <your private key>
+Address = 10.8.1.2/32
+DNS = 1.1.1.1
+Jc = 4
+Jmin = 40
+Jmax = 70
+S1 = 52
+S2 = 117
+H1 = 1271458223
+H2 = 381622150
+H3 = 1823452801
+H4 = 1904573225
+
+[Peer]
+PublicKey = <the server's public key>
+PresharedKey = <the preshared key>
+Endpoint = 203.0.113.7:51820
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+```
+
+| Key | What it does |
+| --- | --- |
+| `H1` `H2` `H3` `H4` | The four message types (initiation, response, cookie reply, data) instead of WireGuard's 1–4. AmneziaWG 2.0's `min-max` ranges work: each message takes a random type in the range, and any type in it is accepted. |
+| `S1` `S2` `S3` `S4` | That many random bytes in front of the initiation, the response, the cookie reply and (2.0) every data packet. With `S4` and no `MTU` line the tunnel's MTU leaves room for it. |
+| `Jc` `Jmin` `Jmax` | Before every handshake, `Jc` datagrams of random bytes, each `Jmin` to `Jmax` long. |
+| `I1`–`I5` | AmneziaWG 1.5's decoys, sent before those: `<b 0x…>` fixed bytes, `<r N>` random bytes, `<rc N>` random letters, `<rd N>` random digits, `<t>` a timestamp, `<c>` a counter. |
+| `J1`–`J3`, `Itime` | Decoys of the same kind sent instead of the `I` ones until `Itime` seconds have passed since those. |
+
+The server must use the same values: they come from it, so copy the file as
+the Amnezia app exported it. A file whose types overlap, or whose padded
+handshake messages would be the same length, is refused with the reason.
+A file with only WireGuard's own values (`H1 = 1`…, `S1 = 0`) is plain
+WireGuard. A decoy with a tag JukaHub does not know is left out (decoys only
+disguise the start; the server ignores them) and listed under VPN
+configuration's ignored keys. AmneziaWG 3's header protection
+(`HeaderProtectionKey`, `ContentPaddingAddition`) is not supported yet: such a
+file is refused with that reason — ask the server for an AmneziaWG 2.0
+configuration. **On Windows** WireGuard for Windows cannot take these keys:
+use the AmneziaVPN or AmneziaWG app on the PC.
+
 ## Where things are kept
 
 | What | Where |
@@ -163,7 +214,7 @@ Windows prefers but does not use exclusively.
 - **A kill switch.** While the VPN is on but the server does not answer,
   traffic waits for the tunnel; if the tunnel process itself stops, the device
   falls back to its normal connection rather than going offline.
-- **OpenVPN, IKEv2 and other protocols.** WireGuard only.
+- **OpenVPN, IKEv2 and other protocols.** WireGuard and AmneziaWG only.
 
 ## Troubleshooting
 

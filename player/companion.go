@@ -520,6 +520,9 @@ func (s *companionServer) handler() http.Handler {
 	mux.HandleFunc("/stream", s.castGuard(s.handleStream))
 	mux.HandleFunc("/frame.jpg", s.castGuard(s.handleFrame))
 	mux.HandleFunc("/status", s.castGuard(s.handleCastStatus))
+	// The page's sound and a viewer's presses: one WebSocket, behind the
+	// same guard (companion_castplay.go).
+	mux.HandleFunc("/play", s.castGuard(s.handlePlay))
 	// PlayStation sign-in: the page that walks a phone through Sony's login,
 	// and the call that hands the PSN Account-ID back (psn_signin.go).
 	mux.HandleFunc("/psn", s.handlePSNPage)
@@ -554,6 +557,10 @@ func (s *companionServer) handler() http.Handler {
 	// saved; secrets are never sent back (companion_cloud.go).
 	mux.HandleFunc("/cloud", s.handleCloudPage)
 	mux.HandleFunc("/api/cloud", s.guard(s.handleCloud))
+	// Sync: one page for every device and cloud the saves follow — pairing
+	// another JukaHub, Google, WebDAV, RomM's pairing code and Syncthing
+	// (companion_sync.go).
+	s.registerSyncRoutes(mux)
 	// Music servers and scrobbling: Navidrome, Jellyfin, Last.fm and
 	// ListenBrainz, checked before they are saved (companion_music.go).
 	mux.HandleFunc("/music", s.handleMusicPage)
@@ -1029,9 +1036,9 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
 </div>
 
 <div class=card id=cloudCard>
-  <h2>Cloud save sync</h2>
-  <div class=row><button id=cloudPage>Google Drive or WebDAV</button></div>
-  <small>Set up Google sign-in with a client of your own, or connect Nextcloud, Koofr or a NAS, so saves follow you to every JukaHub.</small>
+  <h2>Sync</h2>
+  <div class=row><button id=cloudPage>Devices and clouds</button></div>
+  <small>Another JukaHub, Google Drive, Nextcloud or a NAS, RomM and Syncthing, all from one page: connect them once and your saves follow you.</small>
 </div>
 
 <div class=card id=bugCard>
@@ -1253,7 +1260,7 @@ document.getElementById('sendText').onclick = () => sendText().catch(e => toast(
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
 document.getElementById('gamesPage').onclick = () => { location.href = '/games?p=' + encodeURIComponent(pin); };
-document.getElementById('cloudPage').onclick = () => { location.href = '/cloud?p=' + encodeURIComponent(pin); };
+document.getElementById('cloudPage').onclick = () => { location.href = '/sync?p=' + encodeURIComponent(pin); };
 
 // A report typed on the phone keeps its reference across a retry, so a lost
 // response cannot create a second issue. Saved device reports have the same

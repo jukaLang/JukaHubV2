@@ -132,6 +132,17 @@ to it:
   Wine settings, a profile's `env`) travels as `NAME=VALUE` words, because
   WestonPack hands the program only those. Afterwards `westonwrap.sh cleanup`
   runs, as in every WestonPack port.
+* **A real bash.** `westonwrap.sh` is a bash script, and a stock TrimUI has
+  only BusyBox's sh, which stops a script at the first file it cannot source
+  — on a card without TRIMUI_EX, PortMaster's TrimUI `control.txt` reading
+  `/mnt/SDCARD/System/etc/ex_config` ("source: line 12: can't open", exit 2
+  before Weston starts). JukaHub runs it under the firmware's bash when the
+  firmware has one, else under its own — Ubuntu's bash on the private glibc,
+  the one PortMaster's ports get — which the first launch fetches ("Adding bash
+  for WestonPack…", a few MB, Wi-Fi needed once). Bash reports a missing file
+  and goes on. Where `/bin/bash` itself is not bash, the session runs in a
+  mount namespace of its own where it is (`portBinBash` "off" stops that), as
+  ports do. The log's `display: shell:` line names the shell.
 * **PortMaster's values.** `westonwrap.sh` reads PortMaster's `control.txt`.
   JukaHub writes a small stand-in at
   `data/windows-runtime/weston-env/PortMaster/control.txt` and points

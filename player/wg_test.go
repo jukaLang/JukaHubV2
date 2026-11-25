@@ -277,6 +277,123 @@ func TestWGDeviceRoundTrip(t *testing.T) {
 	}
 }
 
+// TestWGAmneziaWG: an AmneziaWG file (1.0 keys, a 1.5 decoy, 2.0 ranges and
+// padding) parses and keeps its keys for wg-quick; the mistakes are refused;
+// and two devices with it talk through junk, decoys, padding and the custom
+// types, which a plain device does not take.
+func TestWGAmneziaWG(t *testing.T) {
+	priv := wgTranscriptKey(t, "client_static")
+	peer := wgTranscriptKey(t, "server_public")
+	awgLines := []string{"Jc = 3", "Jmin = 40", "Jmax = 70", "S1 = 15", "S2 = 18", "S3 = 9", "S4 = 12",
+		"H1 = 1000000-1000100", "H2 = 2000000", "H3 = 3000000", "H4 = 4000000-4000050", "I1 = <b 0xc0ffee><r 8><t><rc 4><rd 3><c>"}
+	text := strings.Join(append(append([]string{"[Interface]", "PrivateKey = " + base64.StdEncoding.EncodeToString(priv[:]),
+		"Address = 10.8.1.2/32"}, awgLines...), "[Peer]", "PublicKey = "+base64.StdEncoding.EncodeToString(peer[:]),
+		"AllowedIPs = 0.0.0.0/0", "Endpoint = 198.51.100.7:51820"), "\n")
+	c, err := wgParseConfig(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.AWG
+	if a == nil || a.Jc != 3 || a.Jmin != 40 || a.Jmax != 70 || a.S1 != 15 || a.S4 != 12 || a.H[0] != (wgAWGRange{1000000, 1000100}) ||
+		a.H[1] != (wgAWGRange{2000000, 2000000}) || len(a.I[0]) != 6 || len(c.Skipped) != 0 || c.mtu() != wgDefaultMTU-12 {
+		t.Fatalf("parsed %+v (AWG %+v)", c, a)
+	}
+	if quick := c.quickText(false); !strings.Contains(quick, "H1 = 1000000-1000100\nH2 = 2000000\n") || !strings.Contains(quick, "I1 = <b 0xc0ffee>") {
+		t.Fatalf("wg-quick text lost the AmneziaWG keys:\n%s", quick)
+	}
+	plain := strings.Join([]string{"[Interface]", "PrivateKey = " + base64.StdEncoding.EncodeToString(priv[:]), "Address = 10.8.1.2/32",
+		"H1 = 1", "H2 = 2", "S1 = 0", "[Peer]", "PublicKey = " + base64.StdEncoding.EncodeToString(peer[:]),
+		"AllowedIPs = 0.0.0.0/0", "Endpoint = 198.51.100.7:51820"}, "\n")
+	if p, err := wgParseConfig(plain); err != nil || p.AWG != nil {
+		t.Fatalf("the default values are plain WireGuard: %v %+v", err, p)
+	}
+	for name, bad := range map[string]string{
+		"overlapping types": strings.Replace(text, "H2 = 2000000", "H2 = 1000050", 1),
+		"same padded size":  strings.Replace(text, "S2 = 18", "S2 = 71", 1),
+		"Jmin over Jmax":    strings.Replace(text, "Jmin = 40", "Jmin = 90", 1),
+		"broken tag":        strings.Replace(text, "<rd 3>", "<rd 3", 1),
+		"backwards range":   strings.Replace(text, "1000000-1000100", "1000100-1000000", 1),
+		"type zero":         strings.Replace(text, "H3 = 3000000", "H3 = 0", 1),
+		"header protection": strings.Replace(text, "Jc = 3", "Jc = 3\nHeaderProtectionKey = "+base64.StdEncoding.EncodeToString(peer[:]), 1),
+	} {
+		if _, err := wgParseConfig(bad); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// A decoy with a tag JukaHub does not know is left out, not the file.
+	if u, err := wgParseConfig(strings.Replace(text, "<rd 3>", "<zz 3>", 1)); err != nil || u.AWG == nil || u.AWG.I[0] != nil ||
+		len(u.Skipped) != 1 || !strings.HasPrefix(u.Skipped[0], "I1 (") {
+		t.Fatalf("unknown decoy tag: %v %+v", err, u)
+	}
+
+	idA, errA := newWGIdentity(priv, peer, [32]byte{})
+	idB, errB := newWGIdentity(wgTranscriptKey(t, "server_static"), wgTranscriptKey(t, "client_public"), [32]byte{})
+	if errA != nil || errB != nil {
+		t.Fatal(errA, errB)
+	}
+	epA, epB := netip.MustParseAddrPort("192.0.2.1:40000"), netip.MustParseAddrPort("198.51.100.7:51820")
+	all := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}
+	stamp := func() [12]byte { return wgTAI64N(time.Now()) }
+	wireA, wireB, tunA, tunB := &wgTestWire{}, &wgTestWire{}, &wgTestTUN{}, &wgTestTUN{}
+	cfgB, err := wgParseConfig(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dA := newWGDevice(wgDeviceConfig{Identity: idA, Endpoint: epB, Allowed: all, MTU: wgDefaultMTU, Timestamp: stamp, AWG: a}, tunA, wireA, crand.Reader)
+	dB := newWGDevice(wgDeviceConfig{Identity: idB, Endpoint: epA, Allowed: all, MTU: wgDefaultMTU, Timestamp: stamp, AWG: cfgB.AWG}, tunB, wireB, crand.Reader)
+	take := func(w *wgTestWire) [][]byte {
+		s := w.sent
+		w.sent = nil
+		return s
+	}
+	deliver := func(msgs [][]byte, to *wgDevice, src netip.AddrPort) {
+		for _, m := range msgs {
+			to.receive(m, src, make([]byte, 0, wgBufSize))
+		}
+	}
+	ping := wgTestPacket("10.8.1.2", "10.8.1.1", "ping")
+	dA.sendPacket(ping, nil)
+	first := take(wireA)
+	// The decoy, three junk datagrams, then the padded initiation.
+	if len(first) != 5 || !bytes.HasPrefix(first[0], []byte{0xc0, 0xff, 0xee}) || len(first[0]) != 3+8+4+4+3+4 {
+		t.Fatalf("before the initiation: %d datagrams, first %x", len(first), first[0])
+	}
+	for _, j := range first[1:4] {
+		if len(j) < 40 || len(j) > 70 {
+			t.Fatalf("junk of %d bytes, want 40 to 70", len(j))
+		}
+	}
+	init := first[4]
+	if len(init) != 15+wgInitiationSize || !a.H[0].has(binary.LittleEndian.Uint32(init[15:19])) {
+		t.Fatalf("initiation %d bytes, type %d", len(init), binary.LittleEndian.Uint32(init[15:19]))
+	}
+	plainB := newWGDevice(wgDeviceConfig{Identity: idB, Endpoint: epA, Allowed: all, MTU: wgDefaultMTU, Timestamp: stamp}, &wgTestTUN{}, &wgTestWire{}, crand.Reader)
+	plainB.receive(init[15:], epA, make([]byte, 0, wgBufSize))
+	if plainB.Stats().Tx != 0 {
+		t.Fatal("a plain WireGuard device answered an AmneziaWG initiation")
+	}
+	deliver(first, dB, epA) // b drops the junk and answers the initiation
+	resp := take(wireB)
+	if len(resp) != 1 || len(resp[0]) != 18+wgResponseSize || binary.LittleEndian.Uint32(resp[0][18:22]) != 2000000 {
+		t.Fatalf("response: %d datagrams", len(resp))
+	}
+	deliver(resp, dA, epB)
+	data := take(wireA)
+	if len(data) != 1 || !a.H[3].has(binary.LittleEndian.Uint32(data[0][12:16])) {
+		t.Fatalf("data after the handshake: %d datagrams", len(data))
+	}
+	deliver(data, dB, epA)
+	if len(tunB.got) != 1 || !bytes.Equal(tunB.got[0], ping) {
+		t.Fatalf("b's tunnel got %x, want one %x", tunB.got, ping)
+	}
+	pong := wgTestPacket("10.8.1.1", "10.8.1.2", "pong")
+	dB.sendPacket(pong, nil)
+	deliver(take(wireB), dA, epB)
+	if len(tunA.got) != 1 || !bytes.Equal(tunA.got[0], pong) {
+		t.Fatalf("a's tunnel got %x, want one %x", tunA.got, pong)
+	}
+}
+
 // TestWGReplayWindow: each counter once, and nothing older than the window.
 func TestWGReplayWindow(t *testing.T) {
 	var r wgReplay

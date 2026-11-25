@@ -167,6 +167,11 @@ type hakuxHandoffRun struct {
 	RC               int
 	HasRC            bool
 	Steps            []string
+	// LowBattery: the battery watch closed the game, at LowBatteryPct;
+	// Resume is the state JukaHub's PPSSPP build saved for it then.
+	LowBattery    bool
+	LowBatteryPct int
+	Resume        string
 }
 
 // ran is how long the game ran, 0 when that is not known.
@@ -214,6 +219,14 @@ func hakuxHandoffParseStatus(data []byte) hakuxHandoffRun {
 		case "step":
 			if value != "" && len(r.Steps) < 32 {
 				r.Steps = append(r.Steps, value)
+			}
+		case "lowbattery":
+			if n, err := strconv.Atoi(value); err == nil && n >= 0 && n <= 100 {
+				r.LowBattery, r.LowBatteryPct = true, n
+			}
+		case "resume":
+			if filepath.IsAbs(value) {
+				r.Resume = filepath.Clean(value)
 			}
 		}
 	}
@@ -295,6 +308,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		logInfo(tag, "%s starts beside JukaHub: JukaHub's folder is unknown", title)
 		return false
 	}
+	saveTo := ""
 	if kind == handoffKindPSP {
 		// What a start beside JukaHub does to JukaHub's PPSSPP first: the
 		// shared HOME seeded (the opaque picture shader too), the launcher
@@ -302,6 +316,9 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		// the return (hakuxHandoffReturn).
 		ppssppReadyManagedLaunch(launcher)
 		emuSpeedPrepare(launcher, game)
+		// Where JukaHub's PPSSPP build saves on request, for the battery
+		// watch below (ppsspp_resume.go).
+		saveTo = ppssppResumeTargetFor(launcher, game.Path)
 	}
 	// The command MainUI's queue would run, as launchLibraryGame builds it.
 	romArg := firmwareROMArg(launcher, game.Path)
@@ -319,7 +336,7 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	scriptPath := hakuxHandoffPath(hakuxHandoffScriptName)
 	statusPath := hakuxHandoffPath(hakuxHandoffStatusName)
 	notePath := hakuxHandoffPath(hakuxHandoffNoteName)
-	script := hakuxHandoffScript(hakuxHandoffSpec{
+	spec := hakuxHandoffSpec{
 		PID:     os.Getpid(),
 		Dir:     filepath.Dir(launcher),
 		Command: append([]string{name}, args...),
@@ -327,7 +344,17 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		Log:     logPath,
 		Title:   title,
 		Boost:   boost,
-	})
+		SaveTo:  saveTo,
+	}
+	// The battery watch stands in for the low-battery guard, which closes
+	// with JukaHub (instantresume.go): at the guard's save level, read from
+	// the battery's own capacity file.
+	if lowBatteryGuardEnabled(appConfig) {
+		if dir := batterySysfsDir(); dir != "" && regularFile(filepath.Join(dir, "capacity")) {
+			spec.Battery, spec.Supplies, spec.SavePct = dir, powerSupplyRoot, batteryWarnNow().savePct()
+		}
+	}
+	script := hakuxHandoffScript(spec)
 	// An earlier hand-off's files are not this one's.
 	_ = os.Remove(statusPath)
 	_ = os.Remove(notePath)
@@ -345,6 +372,11 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		if _, set := childEnvLookup(cmd.Env, "AUDIODEV"); !set {
 			cmd.Env = append(cmd.Env, "AUDIODEV="+pcm)
 		}
+	}
+	if kind == handoffKindPSP {
+		// The file a save request writes, and the state JukaHub saved for
+		// this game, as a start beside JukaHub gets them (ppsspp_resume.go).
+		cmd.Env, _ = ppssppResumeEnv(launcher, game.Path, cmd.Env)
 	}
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
@@ -364,6 +396,12 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	}
 	go func() { _ = cmd.Wait() }()
 	hakuxHandoffBegun = true
+	// A record of an earlier save of this game is this start's now, and a
+	// power-on resume marker written in this boot is superseded, as at a
+	// start beside JukaHub (sessionsafe.go, instantresume.go). Before JukaHub
+	// quits, not on a goroutine.
+	sessionSafeNoteStart(game.Path)
+	resumeDropSameBootMarker()
 
 	// The start counts now — the recents, the game's launches, the Continue
 	// card — and the next start credits the time played (hakuxHandoffReturn).
@@ -443,6 +481,13 @@ type hakuxHandoffSpec struct {
 	Log     string   // the launcher's output ("" for none)
 	Title   string   // the game, for the status lines
 	Boost   bool     // the performance governor while the game runs
+	// The battery watch (instantresume.go): the battery's sysfs folder, the
+	// power-supply class it sits in and the save level (0: no watch), and
+	// the file JukaHub's PPSSPP build saves on request ("" for none).
+	Battery  string
+	Supplies string
+	SavePct  int
+	SaveTo   string
 }
 
 // hakuxHandoffScript writes the hand-off script: the values, quoted for sh,
@@ -475,6 +520,16 @@ func hakuxHandoffScript(spec hakuxHandoffSpec) string {
 	} else {
 		b.WriteString("BOOST=0\n")
 	}
+	savePct := spec.SavePct
+	if spec.Battery == "" || savePct < 0 {
+		savePct = 0
+	}
+	fmt.Fprintf(&b, "BATTERY=%s\n", psShellQuote(spec.Battery))
+	fmt.Fprintf(&b, "SUPPLIES=%s\n", psShellQuote(spec.Supplies))
+	fmt.Fprintf(&b, "SAVE_PCT=%d\n", savePct)
+	fmt.Fprintf(&b, "SAVE_TO=%s\n", psShellQuote(spec.SaveTo))
+	fmt.Fprintf(&b, "RESUME_FLAG=%s\n", psShellQuote(ppssppResumeFlagName))
+	fmt.Fprintf(&b, "RESUME_CAP=%s\n", psShellQuote(ppssppResumeCapability))
 	b.WriteString("set --")
 	for _, a := range spec.Command {
 		b.WriteString(" " + psShellQuote(a))
@@ -568,10 +623,192 @@ stop_mainui() {
     [ -n "$SM_PID" ] && kill -9 $SM_PID 2>/dev/null
     return 0
 }
+# ── The battery watch (instantresume.go) ──────────────────────────────────
+# JukaHub's low-battery guard closed with JukaHub, so this stands in for it: at
+# the guard's save level, off the charger, two looks running (20 s apart),
+# JukaHub's PPSSPP build is asked for a save state (SIGUSR1, only a program
+# with the flag file beside it), then the game is asked to quit — the emulator
+# first, its launch scripts after — and the card is synced. JukaHub, started
+# again, keeps the state for the next start and powers off unless a charger
+# came (hakuxHandoffReturn). A game that will not quit is never killed: the
+# handheld is suspended under it instead.
+BATT_PID=""
+BATT_BUSY="$STATUS.battery"
+battery_pct() {
+    BP_V=""
+    { read -r BP_V < "$BATTERY/capacity"; } 2>/dev/null
+    case "$BP_V" in "" | *[!0-9]*) BP_V="" ;; esac
+    echo "$BP_V"
+}
+# On external power: the battery says Charging or Full, or a charger of the
+# power-supply class is online (batteryChargingIn's rule, simplified).
+on_charger() {
+    OC_S=""
+    { read -r OC_S < "$BATTERY/status"; } 2>/dev/null
+    case "$OC_S" in Charging | Full) return 0 ;; esac
+    for OC_D in "$SUPPLIES"/*; do
+        [ "$OC_D" = "$BATTERY" ] && continue
+        OC_T=""
+        { read -r OC_T < "$OC_D/type"; } 2>/dev/null
+        [ "$OC_T" = Battery ] && continue
+        OC_O=""
+        { read -r OC_O < "$OC_D/online"; } 2>/dev/null
+        [ "$OC_O" = 1 ] && return 0
+    done
+    return 1
+}
+# The game's processes: every live descendant of this script but the watches
+# (GP_SKIP), from /proc/*/stat — "pid (comm) state ppid ...", where the comm
+# may hold spaces, so the fields after its last ")" are read.
+game_pids() {
+    GP_ALL=""
+    for GP_F in /proc/[0-9]*/stat; do
+        GP_L=""
+        { read -r GP_L < "$GP_F"; } 2>/dev/null
+        [ -n "$GP_L" ] || continue
+        GP_PID="${GP_L%% *}"
+        set -- ${GP_L##*) }
+        [ "$#" -ge 2 ] || continue
+        [ "$1" = Z ] && continue
+        GP_ALL="$GP_ALL $GP_PID:$2"
+    done
+    GP_IN=" $$ "
+    GP_OUT=""
+    GP_MORE=1
+    while [ "$GP_MORE" = 1 ]; do
+        GP_MORE=0
+        for GP_E in $GP_ALL; do
+            GP_P="${GP_E%%:*}"
+            case "$GP_IN" in *" $GP_P "*) continue ;; esac
+            case "$GP_IN" in *" ${GP_E#*:} "*) ;; *) continue ;; esac
+            case " $GP_SKIP " in *" $GP_P "*) continue ;; esac
+            GP_IN="$GP_IN$GP_P "
+            GP_OUT="$GP_OUT $GP_P"
+            GP_MORE=1
+        done
+    done
+    echo "$GP_OUT"
+}
+# A shell runs a launch script, never the game itself.
+is_shell() {
+    IS_E="$(readlink "/proc/$1/exe" 2>/dev/null)"
+    case "${IS_E##*/}" in sh | bash | ash | dash | busybox) return 0 ;; esac
+    return 1
+}
+# JukaHub's PPSSPP build among the game's processes: a PPSSPP program with the
+# save-on-request flag file beside it (SIGUSR1 ends any other).
+saver_pid() {
+    for SV_P in $(game_pids); do
+        SV_E="$(readlink "/proc/$SV_P/exe" 2>/dev/null)"
+        case "${SV_E##*/}" in PPSSPP* | ppsspp*) ;; *) continue ;; esac
+        if grep -qxF -- "$RESUME_CAP" "${SV_E%/*}/$RESUME_FLAG" 2>/dev/null; then
+            echo "$SV_P"
+            return 0
+        fi
+    done
+    return 1
+}
+# wait_gone SECONDS: until none of the game's processes is left.
+wait_gone() {
+    WG_I=0
+    while [ -n "$(game_pids)" ]; do
+        [ "$WG_I" -ge "$1" ] && return 1
+        sleep 1
+        WG_I=$((WG_I + 1))
+    done
+    return 0
+}
+# battery_stop PERCENT: save where the build can, close the game, sync.
+battery_stop() {
+    : > "$BATT_BUSY" 2>/dev/null
+    echo "lowbattery=$1" >> "$STATUS" 2>/dev/null
+    step "battery at $1% off the charger: saving and closing $TITLE"
+    BS_P=""
+    [ -n "$SAVE_TO" ] && BS_P="$(saver_pid)"
+    if [ -n "$BS_P" ]; then
+        rm -f "$SAVE_TO.done" 2>/dev/null
+        kill -CONT "$BS_P" 2>/dev/null
+        if kill -USR1 "$BS_P" 2>/dev/null; then
+            BS_I=0
+            BS_MAX=80
+            [ "$NAP" = 1 ] && BS_MAX=8
+            while [ "$BS_I" -lt "$BS_MAX" ] && [ ! -s "$SAVE_TO.done" ]; do
+                sleep "$NAP"
+                BS_I=$((BS_I + 1))
+            done
+            BS_A=""
+            { read -r BS_A < "$SAVE_TO.done"; } 2>/dev/null
+            BS_S1="$(wc -c < "$SAVE_TO" 2>/dev/null)"
+            sleep 1
+            BS_S2="$(wc -c < "$SAVE_TO" 2>/dev/null)"
+            if [ "$BS_A" = ok ] && [ -s "$SAVE_TO" ] && [ -n "$BS_S1" ] && [ "$BS_S1" = "$BS_S2" ]; then
+                echo "resume=$SAVE_TO" >> "$STATUS" 2>/dev/null
+                step "PPSSPP saved $TITLE for its next start"
+            else
+                step "PPSSPP did not save $TITLE (${BS_A:-no answer})"
+            fi
+        fi
+    fi
+    # The emulator first: its launch script then ends by itself.
+    for BS_P in $(game_pids); do
+        is_shell "$BS_P" && continue
+        kill -TERM "$BS_P" 2>/dev/null
+        kill -CONT "$BS_P" 2>/dev/null
+    done
+    if ! wait_gone 8; then
+        for BS_P in $(game_pids); do
+            kill -TERM "$BS_P" 2>/dev/null
+            kill -CONT "$BS_P" 2>/dev/null
+        done
+        wait_gone 4
+    fi
+    sync
+    if [ -n "$(game_pids)" ]; then
+        step "$TITLE did not quit: the card is synced and the handheld suspended under it"
+        { echo mem > /sys/power/state; } 2>/dev/null || { echo freeze > /sys/power/state; } 2>/dev/null
+    else
+        step "$TITLE closed and the card synced"
+    fi
+    rm -f "$BATT_BUSY" 2>/dev/null
+    return 0
+}
+battery_watch() {
+    SELF=""
+    { read -r SELF BW_REST < /proc/self/stat; } 2>/dev/null
+    GP_SKIP="$SELF $WATCH_PID"
+    BW_LOW=0
+    while kill -0 "$$" 2>/dev/null; do
+        sleep 20
+        BW_PCT="$(battery_pct)"
+        if [ -z "$BW_PCT" ] || [ "$BW_PCT" -gt "$SAVE_PCT" ] || on_charger; then
+            BW_LOW=0
+            continue
+        fi
+        BW_LOW=$((BW_LOW + 1))
+        [ "$BW_LOW" -ge 2 ] || continue
+        battery_stop "$BW_PCT"
+        return 0
+    done
+    return 0
+}
+# The watch ends with the game; one still closing it is waited for, so its
+# sync is not cut short.
+battery_watch_end() {
+    [ -n "$BATT_PID" ] || return 0
+    if [ -f "$BATT_BUSY" ]; then
+        wait "$BATT_PID" 2>/dev/null
+    else
+        kill "$BATT_PID" 2>/dev/null
+    fi
+    BATT_PID=""
+    rm -f "$BATT_BUSY" 2>/dev/null
+    return 0
+}
 WATCH_PID=""
 finish() {
     [ -n "$WATCH_PID" ] && kill "$WATCH_PID" 2>/dev/null
     WATCH_PID=""
+    battery_watch_end
     tune_restore
 }
 trap '' HUP
@@ -619,6 +856,11 @@ if [ "$LOG" != /dev/null ]; then
         done
     ) </dev/null >/dev/null 2>&1 &
     WATCH_PID=$!
+fi
+if [ "$SAVE_PCT" -gt 0 ] 2>/dev/null && [ -n "$BATTERY" ]; then
+    rm -f "$BATT_BUSY" 2>/dev/null
+    battery_watch </dev/null >/dev/null 2>&1 &
+    BATT_PID=$!
 fi
 (
     cd "$LAUNCH_DIR" 2>/dev/null
@@ -723,6 +965,12 @@ func hakuxHandoffReturn() {
 	}
 	if note.FromLibrary {
 		hakuxHandoffReopen(game, 0)
+	}
+	if run.LowBattery {
+		// The battery watch ended the game: its state is kept for the next
+		// start, and the device powers off unless a charger came
+		// (instantresume.go).
+		resumeHandoffBattery(note, run)
 	}
 }
 

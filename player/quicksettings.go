@@ -396,6 +396,13 @@ func qsLoadPersisted() {
 // launch. Nothing is written unless the user has actually set a value, so a
 // fresh install keeps the device's own defaults.
 func qsApplyPersistedSystemState() {
+	// On a TrimUI a Bluetooth radio left off in JukaHub goes off again after
+	// the firmware's boot switched it on (bt_bootswitch.go), and the
+	// firmware's own saved level goes back on the codec when the boot left it
+	// elsewhere (volume_trimui.go; it may wait for the codec, so on its own
+	// goroutine).
+	btSwitchRestoreAtStart()
+	go trimuiRestoreVolumeAtLaunch()
 	user := loadUserConfig()
 	if user == nil {
 		return

@@ -429,6 +429,32 @@ func TestNotifHighlightFollowsItsRow(t *testing.T) {
 	}
 }
 
+// The centre's file reads back what it wrote and nothing it should not:
+// confirmations already seen are not kept, an action of a kind this build
+// does not know is dropped from its row, values are bounded
+// (notifications_store.go).
+func TestNotifStoreRoundTrip(t *testing.T) {
+	rows := []notification{
+		{Message: "Saved", Priority: notifSuccess, Read: true, ID: 1},
+		{Message: "Update ready", Priority: notifInfo, ID: 3, Source: notifSrcUpdates, Key: "update-offer",
+			Action: notifAction{Label: "Install update", Kind: notifActUpdate}},
+		{Message: "Failed", Priority: notifError, Read: true, ID: 2, Source: notifSrcDownloads},
+	}
+	got := notifParseStore(notifEncodeStore(rows))
+	if len(got) != 2 || got[0].Message != "Update ready" || got[0].Action.Kind != notifActUpdate ||
+		got[0].Key != "update-offer" || got[0].ID != 3 || got[1].Priority != notifError || got[1].Source != notifSrcDownloads {
+		t.Fatalf("round trip: %+v", got)
+	}
+	bad := `{"v":1,"rows":[{"msg":"x","prio":9,"source":"Bad Source!","act":{"label":"Go","kind":"no.such"}},{"msg":"   "}]}`
+	got = notifParseStore([]byte(bad))
+	if len(got) != 1 || got[0].Priority != notifError || got[0].Source != "" || got[0].Action.Kind != "" {
+		t.Fatalf("bounds: %+v", got)
+	}
+	if notifParseStore([]byte(`{"v":2,"rows":[{"msg":"x"}]}`)) != nil {
+		t.Fatal("a file of another version was read")
+	}
+}
+
 // TestVideoNotifHold covers Notifications during videos (videonotif.go): a
 // playing full-screen video holds toasts nobody asked for unless the switch is
 // on; answers to a press, errors and scene switches always show.

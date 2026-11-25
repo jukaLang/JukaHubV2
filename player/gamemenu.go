@@ -145,6 +145,10 @@ func gmItems(config *Config) []gmItem {
 		// Record screen / Stop recording (screenrec.go).
 		items = append(items, gmRecord)
 	}
+	if gmPerfAvailable(config) {
+		// The game's CPU profile, changed while it runs (ingamehud.go).
+		items = append(items, gmPerf)
+	}
 	// Brightness, volume, radios, lights, power off (gamemenu_quick.go).
 	items = append(items, gmQuick)
 	// Rows hidden in Settings → Controls → In-game menu entries go last
@@ -201,6 +205,8 @@ func gmLabel(it gmItem) (string, string) {
 		return aiTranslateMenuLabel()
 	case gmQuick:
 		return gmQuickLabel()
+	case gmPerf:
+		return gmPerfLabel()
 	}
 	return "Resume game", ""
 }
@@ -276,6 +282,13 @@ func gmPress(config *Config, b gaButton) {
 			// Right takes a lap (stopwatch.go).
 			stopwatchGameMenuPress(b)
 		}
+		if items[gaOverlay.sel] == gmPerf {
+			if b == gaBtnLeft {
+				gmPerfStep(config, -1)
+			} else {
+				gmPerfStep(config, 1)
+			}
+		}
 	case gaBtnA:
 		switch items[gaOverlay.sel] {
 		case gmStopwatch:
@@ -322,6 +335,14 @@ func gmPress(config *Config, b gaButton) {
 			aiTranslateMenuPress()
 		case gmQuick:
 			gmQuickOpenRow()
+		case gmPerf:
+			// A steps on, as Right does: Auto, Battery saver, Balanced,
+			// Performance, then back to Auto.
+			if gameCPUProfiles[len(gameCPUProfiles)-1] == normaliseGameCPUProfile(gameOptionsFor(ingameHUD.gamePath).CPUProfile) {
+				gmPerfStep(config, -len(gameCPUProfiles))
+			} else {
+				gmPerfStep(config, 1)
+			}
 		}
 	}
 }

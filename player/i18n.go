@@ -79,24 +79,29 @@ const uiLanguageKey = "uiLanguage"
 const uiLanguageDefault = "en"
 
 // uiLanguage is one language Settings offers: its code (the catalogue file is
-// i18n/<code>.json) and its name in itself. Only languages the bundled Inter
-// can draw are offered (Latin and Cyrillic; see setlang.go and fonts.go): a
-// language whose letters fall outside Inter would render as substitutes.
+// i18n/<code>.json), its name in itself and in English. The bundled Inter
+// draws the Latin and Cyrillic ones; Japanese, Korean and Chinese are drawn
+// in their own Noto Sans, downloaded when the language is picked
+// (uilangface.go), and are named in English until it is here.
 type uiLanguage struct {
-	Code   string
-	Native string
+	Code    string
+	Native  string
+	English string
 }
 
 // uiLanguages is the list Settings shows, English first.
 var uiLanguages = []uiLanguage{
-	{"en", "English"},
-	{"es", "Español"},
-	{"pt-BR", "Português (Brasil)"},
-	{"fr", "Français"},
-	{"de", "Deutsch"},
-	{"it", "Italiano"},
-	{"ru", "Русский"},
-	{"uk", "Українська"},
+	{"en", "English", "English"},
+	{"es", "Español", "Spanish"},
+	{"pt-BR", "Português (Brasil)", "Portuguese (Brazil)"},
+	{"fr", "Français", "French"},
+	{"de", "Deutsch", "German"},
+	{"it", "Italiano", "Italian"},
+	{"ru", "Русский", "Russian"},
+	{"uk", "Українська", "Ukrainian"},
+	{"ja", "日本語", "Japanese"},
+	{"ko", "한국어", "Korean"},
+	{"zh-CN", "简体中文", "Chinese (Simplified)"},
 }
 
 // uiCatalogFile is the decoded shape of one i18n/<code>.json.
@@ -544,6 +549,9 @@ func uiNormalizeLanguage(v string) string {
 	if strings.EqualFold(v, "pt") {
 		return "pt-BR"
 	}
+	if code := uiLanguageLocaleAlias(v); code != "" {
+		return code // "zh", "zh_CN", "zh-Hans" (uilangface.go)
+	}
 	return uiLanguageDefault
 }
 
@@ -625,7 +633,12 @@ func uiLanguageApply(config *Config) {
 	// No key means English: a reset to defaults or a restored backup from
 	// before this setting must not leave the previous language in force.
 	v, _ := customValue(config.Variables.Custom, uiLanguageKey)
-	uiSetLanguage(coerceString(v))
+	// Japanese, Korean and Chinese wait for their face: English until it is
+	// on the card, then the language (uilangface.go).
+	// (uiSetLanguageDrawable reopens the fonts when the face changes.)
+	if code := uiNormalizeLanguage(coerceString(v)); !uiSetLanguageDrawable(code) {
+		uiLanguageFaceKeep(config, code, false)
+	}
 	// The clock and the date order, for the dates written off the main
 	// thread (dateSeen in clockformat.go), follow the same settings.
 	clockHour12(config)
@@ -650,14 +663,24 @@ func renderTextRaw(renderer *sdl.Renderer, config *Config, font *ttf.Font, text 
 func uiLanguageOptions(*Config) []setOption {
 	out := make([]setOption, 0, len(uiLanguages))
 	for _, l := range uiLanguages {
-		out = append(out, setOption{Value: l.Code, Label: l.Native})
+		o := setOption{Value: l.Code, Label: uiLanguageLabel(l)}
+		if e, ok := uiLanguageScriptFace(l.Code); ok && !uiLanguageDrawable(l.Code) {
+			o.Note = "Downloads the " + e.Name + " font (" + uiFontSizeLabel(e.KB) + ") first"
+		}
+		out = append(out, o)
 	}
 	return out
 }
 
 // uiLanguageCurrent is the index of the language in force.
-func uiLanguageCurrent(*Config) int {
+func uiLanguageCurrent(c *Config) int {
 	code := uiLanguageCode()
+	if c != nil && uiLangFace.want != "" {
+		// A language waiting for its face is the one picked.
+		if v, ok := customString(c.Variables.Custom, uiLanguageKey); ok && uiNormalizeLanguage(v) == uiLangFace.want {
+			code = uiLangFace.want
+		}
+	}
 	for i, l := range uiLanguages {
 		if l.Code == code {
 			return i
@@ -670,15 +693,20 @@ func uiLanguageCurrent(*Config) int {
 func uiLanguageChoose(c *Config, value string) {
 	code := uiNormalizeLanguage(value)
 	setStoreString(c, uiLanguageKey, code)
-	uiSetLanguage(code)
+	if !uiSetLanguageDrawable(code) {
+		// Its face first: the switch happens when it lands (uilangface.go).
+		uiLanguageFaceKeep(c, code, true)
+		return
+	}
 	setToast(uiT("Language") + ": " + uiLanguageNative(code))
 }
 
-// uiLanguageNative is a code's name in its own language.
+// uiLanguageNative is a code's name in its own language (in English while
+// the face that draws it is not here).
 func uiLanguageNative(code string) string {
 	for _, l := range uiLanguages {
 		if l.Code == code {
-			return l.Native
+			return uiLanguageLabel(l)
 		}
 	}
 	return code

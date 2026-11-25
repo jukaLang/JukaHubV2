@@ -1188,6 +1188,9 @@ This is deliberately RetroArch-only. mGBA, PPSSPP, DraStic and the other
 standalone emulators own their own state formats, so the hub does not pretend it
 can resume them. To opt out entirely, set `savestateResume` to `false` in
 `variables.Custom` in `jukauser.json`; JukaHub will stop editing the config.
+(A power off or a flat battery is another matter: what JukaHub does for each
+kind of game then, JukaHub's own PPSSPP build included, is in
+[Never lose a session](SESSION_SAFETY.md#universal-instant-resume).)
 
 ### Pinning a launcher by hand
 

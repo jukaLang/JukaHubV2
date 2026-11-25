@@ -30,10 +30,13 @@ package main
 //
 // The binary is then checked like a zip's (raGetCheck), and the folder's
 // files are moved into the card's RetroArch folder (raGet7zPlaceFolder): a
-// rename, on the card they were unpacked on. A block packed with something
-// sevenzip.go does not decode — a BCJ or ARM64 filter, several coders, PPMd,
-// BZip2, encryption — fails that package with the reason, and the next build
-// is tried.
+// rename, on the card they were unpacked on. 7-Zip 23 and later pack every
+// 64-bit ARM program — ra64.trimui, the cores — with its ARM64 filter in
+// front of LZMA2, and sevenzip.go undoes it (and the ARM and ARM-Thumb ones);
+// a block packed with something it does not decode — the x86 filters, PPMd,
+// BZip2, encryption — fails that package with the methods named, and the next
+// build is tried. A package that failed so is passed over for a week, unless
+// the decoder learnt more since (raGet7zDecoder).
 
 import (
 	"context"
@@ -338,12 +341,9 @@ func raGet7zUnpack(ctx context.Context, c *raGetCandidate, root *os.Root, want [
 		rd, err := st.folderReaderDict(c.remote, arc.size, fi, ends[fi], raGet7zLimits.Dict)
 		switch {
 		case errors.Is(err, errSevenZipUnsupported):
-			// Said with the method, so a report shows what TrimUI used.
-			how := "several coders (a filter such as BCJ or ARM64 before the compression)"
-			if m := st.folders[fi].method; m != nil {
-				how = fmt.Sprintf("7z method %x", m)
-			}
-			return raGet7zFinal{fmt.Errorf("its RetroArch files are packed with %s, which JukaHub does not decode", how)}
+			// Said with the methods, so a report shows what TrimUI used.
+			return raGet7zFinal{fmt.Errorf("its RetroArch files are packed with %s, which JukaHub does not decode",
+				sevenZipFolderMethods(st.folders[fi]))}
 		case errors.Is(err, errSevenZipTooFar):
 			return raGet7zFinal{fmt.Errorf("its blocks are packed with a dictionary larger than the %s JukaHub decodes with", formatInstallBytes(int64(raGet7zLimits.Dict)))}
 		case errors.Is(err, errSevenZipFormat):
@@ -526,11 +526,17 @@ func (f raGet7zFinal) Unwrap() error { return f.err }
 // glibc coming or going, tries it again sooner.
 const raGetRefusedTTL = 7 * 24 * time.Hour
 
-// raGetRefusal is one package passed over.
+// raGet7zDecoder counts what sevenzip.go decodes: 2 since it undoes the ARM64,
+// ARM and ARM-Thumb filters. A package refused by an earlier decoder is tried
+// again — the builds before it refused every Smart Pro package "for good".
+const raGet7zDecoder = 2
+
+// raGetRefusal is one package passed over; Dec is the decoder that refused it.
 type raGetRefusal struct {
 	At      time.Time `json:"at"`
 	Why     string    `json:"why"`
 	Runtime bool      `json:"runtime"`
+	Dec     int       `json:"dec,omitempty"`
 }
 
 // raGetRefusedMu keeps the file whole between goroutines.
@@ -582,8 +588,9 @@ func raGetPassOver(cands []raGetCandidate) {
 		}
 		r, ok := all[raGetRefusedKey(c)]
 		// A time ahead of the clock is a clock set back (TrimUI starts before
-		// the network time): the package is tried again.
-		if !ok || r.Runtime != ready || r.At.After(now.Add(time.Hour)) || now.Sub(r.At) > raGetRefusedTTL {
+		// the network time): the package is tried again, as is one an older
+		// decoder refused.
+		if !ok || r.Runtime != ready || r.Dec < raGet7zDecoder || r.At.After(now.Add(time.Hour)) || now.Sub(r.At) > raGetRefusedTTL {
 			continue
 		}
 		c.szFailed = "passed over: on " + r.At.Local().Format("2006-01-02") + " " + r.Why
@@ -608,7 +615,7 @@ func raGetRefuse(c *raGetCandidate, why string) {
 			delete(all, k)
 		}
 	}
-	all[raGetRefusedKey(c)] = raGetRefusal{At: now.UTC(), Why: firstLine(why), Runtime: ready}
+	all[raGetRefusedKey(c)] = raGetRefusal{At: now.UTC(), Why: firstLine(why), Runtime: ready, Dec: raGet7zDecoder}
 	data, err := json.MarshalIndent(all, "", "  ")
 	if err == nil {
 		err = linuxPkgWriteFile(file, append(data, '\n'))

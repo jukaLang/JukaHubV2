@@ -107,6 +107,17 @@ const (
 	ledAnimProbeMinScale = 4
 	// ledAnimLogEvery rate-limits the colour-change log line per reason.
 	ledAnimLogEvery = 30 * time.Second
+	// ledAnimFramesNode is the driver's "toggle of frames anim function". The
+	// firmware boots with it on and its own LED scripts turn it off before
+	// they use an effect (OS-Trimux PR #7): left on, the frame animation runs
+	// over the effect, and the rings flickered every two seconds in every
+	// mode. Off while an effect drives the rings, on for the frame path (the
+	// state LED'oh draws frames in), put back on release.
+	ledAnimFramesNode = "anim_frames_enable"
+	// ledAnimCyclesFallback is the cycle count written when the driver does
+	// not keep -1 ("for ever"): the firmware's own low-battery blink uses it,
+	// and the boot value, 1, ends a static colour after one run.
+	ledAnimCyclesFallback = "30000"
 )
 
 // The ways a colour reaches the rings (see the file comment); the names are
@@ -209,10 +220,11 @@ var ledAnimState struct {
 }
 
 // ledAnimSaved is the lights' state before the first write, switches included
-// (lights the stock settings turned off stay off after JukaHub).
+// (lights the stock settings turned off stay off after JukaHub); frames is
+// the frame animation's switch (ledAnimFramesNode).
 type ledAnimSaved struct {
-	enable, effEn string
-	zones         []ledAnimZoneSaved
+	enable, effEn, frames string
+	zones                 []ledAnimZoneSaved
 }
 
 // ledAnimZoneSaved is one zone's colour, effect and cycles before the take.
@@ -244,7 +256,7 @@ type ledAnimZone struct {
 // the two switches and the frame. Pure.
 func ledAnimNodeKept(name string) bool {
 	switch name {
-	case "enable", "effect_enable", ledAnimFrameNode:
+	case "enable", "effect_enable", ledAnimFrameNode, ledAnimFramesNode:
 		return true
 	}
 	return strings.HasPrefix(name, "effect_rgb_hex_") || strings.HasPrefix(name, "effect_cycles_") ||
@@ -599,6 +611,7 @@ func ledAnimTake(dir string) {
 	st.saved = ledAnimSaved{
 		enable: ledAnimRead(dir, "enable"),
 		effEn:  ledAnimRead(dir, "effect_enable"),
+		frames: ledAnimRead(dir, ledAnimFramesNode),
 		zones:  make([]ledAnimZoneSaved, len(st.zones)),
 	}
 	st.scales = st.scales[:0]
@@ -623,8 +636,13 @@ func ledAnimTake(dir string) {
 			saved := ledAnimRead(dir, z.scale)
 			st.scales = append(st.scales, ledAnimScale{file: z.scale, max: ledAnimScaleCeiling(saved), saved: saved})
 		}
-		if canWriteFile(filepath.Join(dir, "effect_cycles_"+z.name)) {
-			_ = writeLEDFile(filepath.Join(dir, "effect_cycles_"+z.name), "-1")
+		if cycles := filepath.Join(dir, "effect_cycles_"+z.name); canWriteFile(cycles) {
+			_ = writeLEDFile(cycles, "-1")
+			if back := ledAnimRead(dir, "effect_cycles_"+z.name); back != "-1" {
+				// Not kept (OS-Trimux PR #7 doubts -1): a static colour would
+				// end after one run at the boot value, 1.
+				_ = writeLEDFile(cycles, ledAnimCyclesFallback)
+			}
 		}
 	}
 	st.scaleMax = ledAnimScaleLimit
@@ -669,6 +687,9 @@ func ledAnimTake(dir string) {
 	p := &ledAnimProven
 	st.byFrame = p.frame == 1 && st.frameOK
 	ledAnimHueCostly.Store(!st.byFrame && p.direct != 1)
+	// The frame animation off before an effect is armed, as the firmware's
+	// own scripts do; on for the frame path (ledAnimFramesNode).
+	ledAnimFramesSet(dir, st.byFrame)
 	// What the driver showed and how JukaHub will drive it, once per take:
 	// if the rings still blink, this line (with the "colour written" and
 	// "read-back" ones) says why.
@@ -680,9 +701,28 @@ func ledAnimTake(dir string) {
 		frame = "read-only"
 	}
 	LogScene("led").Info("lights taken", "zones", ledAnimZoneList(st.zones), "effect", first.effect, "static", st.static,
-		"cycles", first.cycles, "duration", ledAnimRead(dir, "effect_duration_"+ledAnimPrimary()),
+		"cycles", first.cycles, "cyclesNow", ledAnimRead(dir, "effect_cycles_"+ledAnimPrimary()),
+		"duration", ledAnimRead(dir, "effect_duration_"+ledAnimPrimary()),
+		"framesAnimWas", st.saved.frames, "framesAnimNow", ledAnimRead(dir, ledAnimFramesNode),
 		"scaleFile", st.scaleFile, "scaleMax", st.scaleMax, "scaleWas", st.lastScale, "frame", frame,
 		"path", ledAnimPathFor(true), "proven", fmt.Sprintf("oracle=%d frame=%d direct=%d", p.oracle, p.frame, p.direct))
+}
+
+// ledAnimFramesSet turns the driver's frame animation on (the frame path) or
+// off (an effect drives the rings), where the node is there and writable and
+// does not already read so (a write may restart it). Under lock.
+func ledAnimFramesSet(dir string, on bool) {
+	path := filepath.Join(dir, ledAnimFramesNode)
+	if !canWriteFile(path) {
+		return
+	}
+	want := "0"
+	if on {
+		want = "1"
+	}
+	if ledAnimRead(dir, ledAnimFramesNode) != want {
+		_ = writeLEDFile(path, want)
+	}
 }
 
 // ledAnimScaleCeiling is how bright JukaHub drives a scale node: the
@@ -736,6 +776,9 @@ func ledAnimWriteFrame(dir string, hue [3]uint8) error {
 			_ = writeLEDFile(filepath.Join(dir, "effect_"+z.name), "0")
 		}
 		_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "0")
+		// The frame animation is what shows a frame (the firmware's boot
+		// state, which LED'oh draws in); an effect path turned it off.
+		ledAnimFramesSet(dir, true)
 		st.frameArmed = true
 	}
 	if err := writeLEDFile(filepath.Join(dir, ledAnimFrameNode), ledAnimFrameTextFill(hue, st.frameLEDs, st.fill)); err != nil {
@@ -762,6 +805,11 @@ func ledAnimLand(dir string, hue [3]uint8, path, why string) error {
 				_ = writeLEDFile(filepath.Join(dir, sw), "1")
 			}
 		}
+		// And the frame animation back to what this path needs (the frame
+		// path sets it again when it re-arms).
+		if path != ledAnimPathFrame {
+			ledAnimFramesSet(dir, false)
+		}
 	}
 	if path == ledAnimPathFrame {
 		if err := ledAnimWriteFrame(dir, hue); err != nil {
@@ -775,6 +823,7 @@ func ledAnimLand(dir string, hue [3]uint8, path, why string) error {
 			}
 			st.byFrame, st.frameArmed = false, false
 			st.probe = ledAnimProbeNone
+			ledAnimFramesSet(dir, false)
 			_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
 			st.land, st.why = true, "frame write failed"
 			ledAnimHueCostly.Store(p.direct != 1)
@@ -866,6 +915,7 @@ func ledAnimProbeDue(dir string, now time.Time) {
 				p.frame = -1
 				st.byFrame, st.frameArmed = false, false
 				lg.Info("stick rings: frame_hex write failed; staying on effects", "err", err)
+				ledAnimFramesSet(dir, false)
 				_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
 				st.land, st.why = true, "frame write failed"
 				return
@@ -885,6 +935,7 @@ func ledAnimProbeDue(dir string, now time.Time) {
 		// Back on the effect engine: the rings show the wrong thing or
 		// nothing now, so this one re-arm is not a blink of a lit colour.
 		st.byFrame, st.frameArmed = false, false
+		ledAnimFramesSet(dir, false)
 		_ = writeLEDFile(filepath.Join(dir, "effect_enable"), "1")
 		st.land, st.why = true, "frame did not hold"
 	case ledAnimProbeDirect:
@@ -909,6 +960,9 @@ func ledAnimWatched(dir string) []string {
 	out := []string{
 		ledAnimRead(dir, "enable"),
 		ledAnimRead(dir, "effect_"+z),
+		// The frame animation coming back on over an effect is the flicker
+		// (ledAnimFramesNode).
+		ledAnimRead(dir, ledAnimFramesNode),
 	}
 	if !st.byFrame {
 		// effect_enable is written with every frame; the effect's colour is
@@ -921,7 +975,7 @@ func ledAnimWatched(dir string) []string {
 // ledAnimWatchedNames names ledAnimWatched's entries for the log. Under lock.
 func ledAnimWatchedNames() []string {
 	z := ledAnimPrimary()
-	names := []string{"enable", "effect_" + z}
+	names := []string{"enable", "effect_" + z, ledAnimFramesNode}
 	if !ledAnimState.byFrame {
 		names = append(names, "effect_enable", "effect_rgb_hex_"+z)
 	}
@@ -1177,6 +1231,7 @@ func releaseLEDAnim(dev ledDevice) {
 		}
 	}
 	for _, sw := range []struct{ file, value string }{
+		{ledAnimFramesNode, saved.frames},
 		{"effect_enable", saved.effEn},
 		{"enable", saved.enable},
 	} {

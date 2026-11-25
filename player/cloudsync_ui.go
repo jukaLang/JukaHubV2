@@ -1,23 +1,24 @@
 package main
 
-// cloudsync_ui.go — the cloud cards at the top of Save sync's start view
-// (ssyncui.go draws the page; this file draws and runs the cards).
+// cloudsync_ui.go — Google Drive and WebDAV on the Sync page (ssyncui.go
+// draws the page, synchub.go its start view; this file runs the clouds).
 //
 // Google Drive:
 //   - no OAuth client yet: "Set up Google sign-in", a code that opens the
 //     phone page where the player sends the client file from Google Cloud
 //     Console (companion_cloud.go); the sign-in starts by itself afterwards;
-//   - signed out: "Sign in to Google Drive", which shows a code and a QR code
-//     of google.com/device on the page (Y/A on "Show the code full screen"
-//     enlarges it) while the phone approves;
-//   - signed in: the account and the last result with "Compare" (the same
-//     comparison and Sync now as a paired device), the automatic-sync switch
-//     and Sign out.
+//   - signed out: the sign-in shows a code and a QR code of google.com/device
+//     on the page (A on "Show Google's code full screen" enlarges it) while
+//     the phone approves — started from the phone's Sync page or from "Set up
+//     on this screen";
+//   - signed in: a row under Connected whose sheet (synchub.go) has Compare
+//     (the same comparison and Sync now as a paired device), Sync now, the
+//     automatic-sync switch and Sign out.
 //
 // WebDAV (Nextcloud, ownCloud, Koofr, InfiniCLOUD, a NAS) for players with no
 // Google project: connected from the phone too, then the same Compare, switch
-// and Forget. Last, a row that explains the route to Google Drive through a
-// computer (Syncthing into Google Drive for desktop).
+// and Forget. The ids of the cards this file used to draw (gd-*, wd-*,
+// cloud-pc) still run here.
 //
 // A comparison with either cloud carries gdrivePeerID, which tells the page's
 // shared code "a cloud copy, no clock"; gdriveStartSync tells the two apart by
@@ -81,108 +82,6 @@ func cloudShortClientID(id string) string {
 		id = id[:22] + "…"
 	}
 	return id
-}
-
-// cloudRenderDrive draws the cards and returns the y below them and the next
-// row number.
-func cloudRenderDrive(renderer *sdl.Renderer, config *Config, fonts tbxFonts, frame tbxFrame, top, y int32, row int, dm cloudDriveModel) (int32, int) {
-	nav := &ssyncScreen.nav
-	x, w := frame.x, frame.w
-	rowH := tbxRowHeight(fonts)
-	addRow := func(id string, spec tbxRowSpec) {
-		rect := sdl.Rect{X: x, Y: y, W: w, H: rowH}
-		tbxDrawRow(renderer, config, fonts, peerScr(rect, top), spec, nav.focused(id))
-		nav.add(id, rect, row, false)
-		row++
-		y += rowH + 8
-	}
-	tbxDrawSection(renderer, config, "Google Drive", "cloud", x, top+y, w)
-	y += tbxSectionHeight
-	s := dm.settings
-	switch {
-	case gdriveSignIn.active:
-		y = cloudDrawSignInCard(renderer, config, fonts, frame, top, y)
-		if len(gdriveSignIn.qr) > 0 {
-			addRow("gd-qr", tbxRowSpec{icon: "qr", title: "Show the code full screen", pill: "Enlarge", tone: tbxToneAccent,
-				subtitle: "Bigger and brighter for a phone camera"})
-		}
-		addRow("gd-cancel", tbxRowSpec{icon: "close", title: "Cancel sign-in", pill: "Cancel", tone: tbxToneNeutral,
-			subtitle: "Nothing is stored until the phone says yes"})
-	case !s.signedIn() && !dm.configured:
-		addRow("gd-setup", tbxRowSpec{icon: "phone", title: "Set up Google sign-in", pill: "Set up", tone: tbxToneAccent,
-			subtitle: "Once, about 10 minutes: make a free Google client on a computer, then send it from your phone"})
-	case !s.signedIn():
-		addRow("gd-signin", tbxRowSpec{icon: "cloud", title: "Sign in to Google Drive", pill: "Sign in", tone: tbxToneAccent,
-			subtitle: "Saves follow you to every device — scan a code with your phone, no typing here"})
-		if dm.source == "config" {
-			addRow("gd-client", tbxRowSpec{icon: "phone", title: "Your own Google client", pill: "Change", tone: tbxToneNeutral,
-				subtitle: cloudShortClientID(dm.clientID) + " · change or remove it from your phone"})
-		}
-	case s.Expired:
-		addRow("gd-signin", tbxRowSpec{icon: "cloud", title: "Google Drive · sign in again", pill: "Sign in", tone: tbxToneWarn,
-			subtitle: s.accountLabel() + ": the sign-in expired or was removed — the saves on Drive are safe"})
-		addRow("gd-signout", tbxRowSpec{icon: "logout", title: "Sign out", pill: "Sign out", tone: tbxToneNeutral,
-			subtitle: "Forget this Google account on this device"})
-	default:
-		sub := "Not synced yet — compare to see what goes up"
-		if s.LastResult != "" {
-			sub = s.LastResult
-			if !s.LastAt.IsZero() {
-				sub += " · " + peerAgo(time.Now(), s.LastAt)
-			}
-		}
-		addRow("gd-sync", tbxRowSpec{icon: "cloud", title: "Google Drive · " + s.accountLabel(), subtitle: sub, pill: "Compare", tone: tbxToneAccent})
-		auto := tbxRowSpec{icon: "sync", title: "Sync automatically when a game starts and ends", pill: "Off", tone: tbxToneNeutral,
-			subtitle: "Off — only Compare and Sync now copy anything"}
-		if s.Auto {
-			auto.pill, auto.tone = "On", tbxToneGood
-			auto.subtitle = "Before a game its saves come down (up to 6 s); after it they go up, then the rest syncs"
-		}
-		addRow("gd-auto", auto)
-		addRow("gd-signout", tbxRowSpec{icon: "logout", title: "Sign out", pill: "Sign out", tone: tbxToneNeutral,
-			subtitle: "Your saves stay on Drive, which keeps each file's earlier versions for 30 days"})
-	}
-
-	y += 14
-	tbxDrawSection(renderer, config, "WebDAV and other clouds", "cloud", x, top+y, w)
-	y += tbxSectionHeight
-	d := dm.webdav
-	switch {
-	case !d.connected():
-		addRow("wd-setup", tbxRowSpec{icon: "phone", title: "Connect a WebDAV server", pill: "Set up", tone: tbxToneAccent,
-			subtitle: "Nextcloud, ownCloud, Koofr, InfiniCLOUD or a NAS — no Google project; type it on your phone"})
-	case d.Refused:
-		addRow("wd-setup", tbxRowSpec{icon: "phone", title: "WebDAV · send the password again", pill: "Phone", tone: tbxToneWarn,
-			subtitle: d.label() + ": the server refused the user name or password — the saves there are safe"})
-		addRow("wd-forget", tbxRowSpec{icon: "logout", title: "Forget this server", pill: "Forget", tone: tbxToneNeutral,
-			subtitle: "This device stops syncing with it; the saves on the server stay"})
-	default:
-		sub := "Not synced yet — compare to see what goes up"
-		if d.LastResult != "" {
-			sub = d.LastResult
-			if !d.LastAt.IsZero() {
-				sub += " · " + peerAgo(time.Now(), d.LastAt)
-			}
-		}
-		addRow("wd-sync", tbxRowSpec{icon: "cloud", title: "WebDAV · " + d.label(), subtitle: sub, pill: "Compare", tone: tbxToneAccent})
-		auto := tbxRowSpec{icon: "sync", title: "Sync automatically when a game starts and ends", pill: "Off", tone: tbxToneNeutral,
-			subtitle: "Off — only Compare and Sync now copy anything"}
-		if d.Auto {
-			auto.pill, auto.tone = "On", tbxToneGood
-			auto.subtitle = "Before a game its saves come down (up to 6 s); after it they go up, then the rest syncs"
-			if s.ready() && s.Auto {
-				auto.subtitle = "Google Drive does the game syncs while it is signed in; Compare syncs with WebDAV"
-			}
-		}
-		addRow("wd-auto", auto)
-		addRow("wd-edit", tbxRowSpec{icon: "phone", title: "Change the server or password", pill: "Phone", tone: tbxToneNeutral,
-			subtitle: "Opens the same page on your phone"})
-		addRow("wd-forget", tbxRowSpec{icon: "logout", title: "Forget this server", pill: "Forget", tone: tbxToneNeutral,
-			subtitle: "This device stops syncing with it; the saves on the server stay"})
-	}
-	addRow("cloud-pc", tbxRowSpec{icon: "info", title: "Google Drive through a computer", pill: "How", tone: tbxToneNeutral,
-		subtitle: "No Google project at all: Syncthing to a folder inside Google Drive for desktop"})
-	return y + 14, row
 }
 
 // cloudDrawSignInCard draws the code, the address and the QR code.

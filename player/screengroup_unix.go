@@ -51,6 +51,10 @@ func screenChildGroupConfigure(cmd *exec.Cmd) {
 	musicGameNoteChild(cmd)
 	cmd.Env = spatialChildEnv(cmd, cmd.Env)
 	cmd.Env = audioRouteChildEnv(cmd.Env)
+	// Screen Share's viewers hear the program too: its "default", whatever the
+	// steps above made it, also feeds the share (castaudio_alsa.go). Last, so
+	// it wraps their chains instead of being skipped by them.
+	cmd.Env = castAudioChildEnv(cmd, cmd.Env)
 	// Where a script or pak asks for a screenshot (launchscripts.go).
 	cmd.Env = shotRequestChildEnv(cmd.Env)
 }

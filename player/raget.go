@@ -47,10 +47,11 @@ package main
 // this screen and pad), else the chosen build's package's — when the card is
 // short of space without the menu pictures, shaders, overlays and databases
 // RetroArch runs without — then the binary last, so an install cut short
-// leaves no RetroArch to start and the next start finishes it. A folder from
-// another model's package has its full-screen size and custom viewport put
-// back to "the screen's own" (raGetFitConfig). .jukahub-retroarch.json beside
-// the binary records what was installed.
+// leaves no RetroArch to start and the next start finishes it; a ra64.trimui
+// that is there but cannot start (racard.go) is kept as ra64.trimui.bak. A
+// folder from another model's package has its full-screen size and custom
+// viewport put back to "the screen's own" (raGetFitConfig).
+// .jukahub-retroarch.json beside the binary records what was installed.
 //
 // JukaHub's glibc. The private runtime (glibc_runtime.go) is installed first,
 // with its C++ library: the builds are checked against it, and the newest
@@ -59,10 +60,12 @@ package main
 // the core (ra_glibc.go, raGetOwnsLaunch), as long as the probe passes; the
 // firmware's glibc is what is left when it cannot.
 //
-// When. A minute after start, on a card with no RetroArch, online and between
-// games (raget_ui.go), unless Emulator updates is Off; A on the Emulators
-// page's RetroArch tile; a core install or "Get more cores" on such a card;
-// a game whose launch script found no RetroArch. Afterwards the Emulator
+// When. "No RetroArch" is the games' answer (racard.go): the RetroArch the
+// card's launch scripts call is missing or cannot start. A minute after start,
+// and again whenever a later look finds it gone, online and between games
+// (raget_ui.go), unless Emulator updates is Off; A on the Emulators page's
+// RetroArch tile; a core install or "Get more cores" on such a card; a game
+// whose launch script found no RetroArch. Afterwards the Emulator
 // updates pass keeps the RetroArch JukaHub installed current with TrimUI's
 // newest build (the binary alone, the old one kept as ra64.trimui.bak; never
 // from another model's 7z package); a RetroArch that came with the card, or
@@ -222,19 +225,19 @@ func raGetTargetDir() string {
 	return filepath.Join(card, "RetroArch")
 }
 
-// raGetMissingNow reports a handheld with no RetroArch anywhere JukaHub looks:
-// the card's RetroArch folder, then everything netplayRetroArchPath searches
-// (JUKAHUB_RETROARCH, the card's and the firmware's RetroArch folders, a
-// running RetroArch, the launch scripts, a walk of the card). It may walk the
-// card: never on the main thread.
+// raGetMissingNow reports a handheld whose games have no RetroArch they can
+// start (racard.go): the one the card's launch scripts call — or, when none
+// names one, the card's RetroArch folder's and any other the search finds —
+// is missing, unreadable, or not a program this handheld can start. It no
+// longer asks netplayRetroArchPath, whose "retroarch" on PATH or beside
+// JukaHub, wrapper scripts included, kept every install from running while
+// the scripts' RetroArch was gone (JH-X6HRVE). It may read the card: never on
+// the main thread.
 func raGetMissingNow() bool {
 	if !raGetSupported() {
 		return false
 	}
-	if dir := raGetTargetDir(); dir != "" && regularFile(filepath.Join(dir, raGetBinaryName)) {
-		return false
-	}
-	return netplayRetroArchPath() == ""
+	return raCardCheck().Missing
 }
 
 // ── What JukaHub installed ───────────────────────────────────────────────────
@@ -678,11 +681,13 @@ func raGetRank(cands []raGetCandidate, ownFirst bool) {
 }
 
 // raGetFolderSource is the candidate whose folder becomes the card's (its
-// retroarch.cfg, autoconfig profiles, cores…), whichever package the binary
-// came from: the handheld's own model's newest whole folder — TrimUI's set for
-// exactly this screen and pad — else pick's own when it is whole, else the
-// whole one closest to it (same release, same repository, the newest); -1 when
-// there is none.
+// retroarch.cfg, autoconfig profiles, cores…): pick's own when it is the
+// handheld's own model's and whole — the binary, its cores and its settings
+// from one package, made for one firmware (raGetPick may take an older build
+// than the newest) — else the handheld's own model's newest whole folder —
+// TrimUI's set for exactly this screen and pad — else pick's own when it is
+// whole, else the whole one closest to it (same release, same repository, the
+// newest); -1 when there is none.
 func raGetFolderSource(cands []raGetCandidate, pick int) int {
 	if pick < 0 || pick >= len(cands) {
 		return -1
@@ -696,6 +701,8 @@ func raGetFolderSource(cands []raGetCandidate, pick int) int {
 		}
 	}
 	switch {
+	case cands[pick].Own && whole(&cands[pick]):
+		return pick
 	case own >= 0:
 		return own
 	case whole(&cands[pick]):
@@ -1044,13 +1051,28 @@ func raGetBinaryVersion(file string) string {
 // file in stage and the verdict. target is the card's RetroArch folder for a
 // first install (its own model's builds first; a 7z package whose folder the
 // card will get unpacks that folder in the same pass), "" for an update.
+//
+// A first install prefers a build that starts on the firmware's own glibc:
+// the firmware's menu and every launch script start that one too, and JukaHub
+// can still start it on its own glibc for a core that needs it (ra_glibc.go).
+// So a build of the handheld's own model that starts on JukaHub's glibc only —
+// TrimUI's newest package was built with a newer firmware than the one on the
+// handheld (the Smart Pro's 20250430 package came with firmware 1.1.0's SDL2,
+// JH-X6HRVE's handheld ran 1.0.4) — is kept while the model's older builds are
+// tried, and taken only when none of them starts on the firmware's.
 func raGetPick(ctx context.Context, cands []raGetCandidate, stage, target string, report func(phase string, done, total int64)) (int, string, raGetVerdict, error) {
 	raGetRank(cands, target != "")
 	var why []string
 	refused := map[uint32]bool{}
 	tries := 0
+	// kept is that build of the handheld's own model (-1: none yet).
+	kept, keptStaged := -1, ""
+	var keptVerdict raGetVerdict
 	for i := range cands {
 		c := &cands[i]
+		if kept >= 0 && !c.Own {
+			break // past the own model's builds: the one kept stands
+		}
 		if refused[c.binCRC()] {
 			continue // the same binary in another package
 		}
@@ -1105,8 +1127,25 @@ func raGetPick(ctx context.Context, cands []raGetCandidate, stage, target string
 			why = append(why, c.label()+": "+v.why)
 			continue
 		}
+		switch {
+		case target != "" && c.Own && !v.firmware && kept < 0:
+			kept, keptStaged, keptVerdict = i, staged, v
+			logInfo("emulators", "RetroArch install: %s %s; an older build of TrimUI's for the %s may start on the firmware's own glibc",
+				c.label(), v.note, raGetModelName(c.Model))
+			continue
+		case kept >= 0 && !v.firmware:
+			_ = os.Remove(staged) // no better than the one kept
+			continue
+		case kept >= 0:
+			_ = os.Remove(keptStaged)
+		}
 		logInfo("emulators", "RetroArch install: %s %s", c.label(), v.note)
 		return i, staged, v, nil
+	}
+	if kept >= 0 {
+		logInfo("emulators", "RetroArch install: no build of TrimUI's for the %s starts on the firmware's glibc; %s does on JukaHub's",
+			raGetModelName(cands[kept].Model), cands[kept].label())
+		return kept, keptStaged, keptVerdict, nil
 	}
 	if len(why) == 0 {
 		return -1, "", raGetVerdict{}, errors.New("TrimUI's packages for this model carry no RetroArch JukaHub can read")
@@ -1431,7 +1470,7 @@ func raGetInstallFirst(ctx context.Context, client *http.Client, progress emuWin
 	if !raGetSupported() {
 		return res, errors.New("JukaHub installs RetroArch only on a TrimUI handheld")
 	}
-	if !raGetMissingNow() {
+	if !raCardCheck().Missing {
 		return res, errRaGetPresent
 	}
 	target := raGetTargetDir()
@@ -1508,15 +1547,27 @@ func raGetInstallFirst(ctx context.Context, client *http.Client, progress emuWin
 		}
 	}
 	_ = os.MkdirAll(filepath.Join(target, ".retroarch", "cores"), 0o755)
-	// The binary last (raGetPlaceBinary refuses when a RetroArch appeared there
-	// meanwhile: that one stays, and so does nothing of this install).
-	bin, err := raGetPlaceBinary(staged, target, false)
+	// The binary last, looked at once more: a RetroArch that appeared there
+	// meanwhile (and can start) stays, and so does nothing of this install
+	// (raGetPlaceBinary refuses to replace one). A binary that is there but
+	// cannot start — another processor's, its loader absent, empty — is kept
+	// as ra64.trimui.bak (racard.go).
+	raCardForget()
+	card := raCardCheck()
+	if !card.Missing {
+		raGetUndo(target, created, madeTarget)
+		return res, errRaGetPresent
+	}
+	bin, err := raGetPlaceBinary(staged, target, card.Broken)
 	if err != nil {
 		raGetUndo(target, created, madeTarget)
 		if errors.Is(err, errRaGetPresent) {
 			return res, err
 		}
 		return res, fmt.Errorf("putting %s in place: %w", raGetBinaryName, err)
+	}
+	if card.Broken {
+		logInfo("emulators", "RetroArch install: the %s that was there is %s; it is kept as %s.bak", raGetBinaryName, card.Problem, raGetBinaryName)
 	}
 	st, err := os.Stat(bin)
 	if err != nil {
@@ -1587,6 +1638,7 @@ func raGetZipFolderInto(ctx context.Context, folder *raGetCandidate, target stri
 // at the first game.
 func raGetAfterInstall(bin string) {
 	raGetForgetManaged()
+	raCardForget()
 	invalidateEmulatorCache()
 	raGlibcRuntimeForget()
 	go raGlibcProbePending(bin)
@@ -1681,6 +1733,13 @@ func raGetUpdate(ctx context.Context, client *http.Client, report func(phase str
 		return res, errors.New("a game started: RetroArch is updated at the next quiet moment")
 	}
 	chosen := &newer[pick]
+	if !verdict.firmware && man.Glibc == "firmware" {
+		// The firmware's menu and the launch scripts start the one installed;
+		// they could not start this one (raGetPick).
+		logInfo("emulators", "RetroArch update: %s starts on JukaHub's glibc only; the installed build starts on the firmware's own, so it stays", chosen.label())
+		raGetRememberSeen(dir, keys)
+		return res, errEmuUpdaterCurrent
+	}
 	placed, err := raGetPlaceBinary(staged, dir, true)
 	if err != nil {
 		return res, err

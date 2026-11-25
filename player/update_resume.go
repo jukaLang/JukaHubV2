@@ -194,7 +194,9 @@ func noteUndoneSwap(j *journal) {
 	}
 	// "Install" covers both swaps that write these journals: an update, and a
 	// rollback to a saved version (uhist.go).
-	notifPush("The last JukaHub install could not finish and was undone. You can try it again.", notifWarning)
+	notifPost(notifSpec{Message: "The last JukaHub install could not finish and was undone. You can try it again.",
+		Priority: notifWarning, Source: notifSrcUpdates, Toast: true,
+		Action: notifAction{Label: "Try again", Kind: notifActUpdate}})
 }
 
 // finishStagedCopy copies a staged release over the installation the way the

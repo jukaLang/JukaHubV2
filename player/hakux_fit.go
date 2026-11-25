@@ -25,6 +25,18 @@ package main
 // hash, so the next update replaces it like any file JukaHub laid down and
 // runs this step again. When the step cannot run (offline, no digest, no
 // binary found), the package's own binary stays and the log says why.
+//
+// An install made before this step existed kept the Smart Pro's binary: a
+// tester's Brick Pro, whose hakuX JukaHub had installed on 2026-11-21, played
+// the game's music behind a screen that never moved past the menu (relayed by
+// Juka on 2026-11-22, and asked about again on 2026-11-24). Nothing fitted it
+// later: the step ran only with an install or an update of the package, and
+// with no newer release there was no update (X on the tile did fit it, behind
+// "already the newest version"). So an Xbox game's start now fits such an
+// install first (hakuxFitGate): the start waits under the install card while
+// the build downloads, once, and the game starts when it is in. The emulator
+// it replaces is looked for among the files the install recorded as well as
+// in the launcher folder, wherever the package keeps it (hakuxFitTarget).
 
 import (
 	"archive/tar"
@@ -43,6 +55,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -89,11 +102,33 @@ func hakuxFileIsARM64Exec(p string) bool {
 	return hakuxIsARM64Exec(head)
 }
 
-// hakuxFitTarget finds the package's emulator in the launcher folder: the
-// largest 64-bit ARM executable whose name contains "hakux" (not a library).
-func hakuxFitTarget(folder string) (string, error) {
+// hakuxFitTarget finds the package's emulator: the largest 64-bit ARM
+// executable whose name contains "hakux" (not a library), among the files the
+// install recorded in m (under the card at sdRoot: the package's Data/ folder
+// as well as its Emus/ one) and in the launcher folder.
+func hakuxFitTarget(sdRoot, folder string, m hakuxManifest) (string, error) {
 	var best string
 	var bestSize int64
+	consider := func(p string, info fs.FileInfo) {
+		name := strings.ToLower(info.Name())
+		if !info.Mode().IsRegular() || !strings.Contains(name, "hakux") || strings.Contains(name, ".so") ||
+			info.Size() <= bestSize || !hakuxFileIsARM64Exec(p) {
+			return
+		}
+		best, bestSize = p, info.Size()
+	}
+	if strings.TrimSpace(sdRoot) != "" {
+		for _, f := range m.Files {
+			rel, err := hakuxCardRel(f.Path)
+			if err != nil {
+				continue
+			}
+			p := filepath.Join(sdRoot, hakuxOS(rel))
+			if info, err := os.Lstat(p); err == nil {
+				consider(p, info)
+			}
+		}
+	}
 	base := filepath.Clean(folder)
 	err := filepath.WalkDir(base, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -105,22 +140,16 @@ func hakuxFitTarget(folder string) (string, error) {
 			}
 			return nil
 		}
-		name := strings.ToLower(d.Name())
-		if !strings.Contains(name, "hakux") || strings.Contains(name, ".so") || !d.Type().IsRegular() {
-			return nil
+		if info, err := d.Info(); err == nil {
+			consider(p, info)
 		}
-		info, err := d.Info()
-		if err != nil || info.Size() <= bestSize || !hakuxFileIsARM64Exec(p) {
-			return nil
-		}
-		best, bestSize = p, info.Size()
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
 	if best == "" {
-		return "", fmt.Errorf("no hakuX emulator binary found in %s", folder)
+		return "", fmt.Errorf("no hakuX emulator binary found in %s or among the files its install recorded", folder)
 	}
 	return best, nil
 }
@@ -189,10 +218,11 @@ func hakuxFitUnpack(archive, dest string) error {
 	}
 }
 
-// hakuxFitApply replaces the package's emulator in folder (the launcher
+// hakuxFitApply replaces the package's emulator (folder is the launcher
 // folder, on the card at p.SDRoot) with spruceUI's build and records it in m.
-func hakuxFitApply(ctx context.Context, client *http.Client, p hakuxPaths, folder string, m *hakuxManifest) error {
-	target, err := hakuxFitTarget(folder)
+// progress, when not nil, gets the download's bytes.
+func hakuxFitApply(ctx context.Context, client *http.Client, p hakuxPaths, folder string, m *hakuxManifest, progress func(done, total int64)) error {
+	target, err := hakuxFitTarget(p.SDRoot, folder, *m)
 	if err != nil {
 		return err
 	}
@@ -215,7 +245,7 @@ func hakuxFitApply(ctx context.Context, client *http.Client, p hakuxPaths, folde
 	}
 	defer func() { _ = os.RemoveAll(work) }()
 	archive := filepath.Join(work, hakuxFitAsset)
-	sum, err := emuDownload(ctx, client, rel.URL, archive, hakuxFitMaxBytes, nil)
+	sum, err := emuDownload(ctx, client, rel.URL, archive, hakuxFitMaxBytes, progress)
 	if err != nil {
 		return err
 	}

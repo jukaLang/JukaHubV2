@@ -22,6 +22,13 @@ func sessionSafeSignalTargets(targets []sessionSafeTarget, sig sessionSafeSignal
 // sessionSafeTargetAlive knows no process without /proc.
 func sessionSafeTargetAlive(t sessionSafeTarget) bool { return false }
 
+// sessionSafeRequestTarget finds no PPSSPP build that saves on request: no
+// /proc, and JukaHub's build is the handheld's.
+func sessionSafeRequestTarget(pid int) string { return "" }
+
+// sessionSafeSignalSave has nothing to ask.
+func sessionSafeSignalSave(t sessionSafeTarget) bool { return false }
+
 // sessionSafeSignalGroups interrupts each child as the exit path does.
 func sessionSafeSignalGroups(cmds []*exec.Cmd, sig sessionSafeSignal) {
 	for _, cmd := range cmds {

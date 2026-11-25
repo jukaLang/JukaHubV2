@@ -162,6 +162,12 @@ func TestPPSSPPReleaseRequiresDigest(t *testing.T) {
 	if err != nil || own.Tag != "jukahub-1.20.4-"+digest[7:15] || own.Version != "1.20.4" || own.Asset != "PPSSPP-tg5040.zip" {
 		t.Fatalf("own release = %+v, %v", own, err)
 	}
+	// A build with the save on request says so in its notes (BUILDINFO's
+	// Resume line, ppsspp_resume.go); one without does not claim it.
+	resumable, err := ppssppOwnReleaseFrom([]byte(`{"tag_name":"ppsspp-tg5040","name":"PPSSPP 1.20.4 for TrimUI (tg5040)","body":"Resume:    save-on-request (JukaHub's change)","assets":[` + ownAsset + `]}`))
+	if err != nil || !resumable.Resume || own.Resume {
+		t.Errorf("save on request: with %+v (%v), without %t", resumable, err, own.Resume)
+	}
 	for _, bad := range []string{
 		`{"tag_name":"ppsspp-tg5040","name":"PPSSPP for TrimUI","assets":[` + ownAsset + `]}`,
 		`{"tag_name":"ppsspp-tg5040","name":"PPSSPP 1.20.4 for TrimUI (tg5040)","prerelease":true,"assets":[` + ownAsset + `]}`,
@@ -183,6 +189,7 @@ func TestPPSSPPReleaseRequiresDigest(t *testing.T) {
 		{"pak unknown", ppssppRelease{Tag: "6.3.0"}, own, "", own.Tag},
 		{"tie, nothing installed", ppssppRelease{Tag: "6.3.0", Version: "1.20.4"}, own, "", "6.3.0"},
 		{"tie, own installed", ppssppRelease{Tag: "6.3.0", Version: "1.20.4"}, own, own.Tag, own.Tag},
+		{"tie, an earlier build of own installed", ppssppRelease{Tag: "6.3.0", Version: "1.20.4"}, own, "jukahub-1.20.4-0badc0de", own.Tag},
 		{"own unknown", pak, ppssppRelease{}, "", "6.2.0"},
 	} {
 		if got := ppssppPickRelease(c.pak, c.own, c.installed); got.Tag != c.want {

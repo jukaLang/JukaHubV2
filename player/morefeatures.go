@@ -1024,7 +1024,16 @@ func weatherScreenText(config *Config) string {
 	unit := weatherUnit(config)
 	conv := func(c float64) float64 { return weatherTemp(c, unit) }
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("7-Day Forecast (%s)\n\n", unit))
+	sb.WriteString(fmt.Sprintf("7-Day Forecast (%s)\n", unit))
+	// Which place it is for, and why (weather_location.go).
+	if place, source := weatherUsedPlace(); place != "" {
+		sb.WriteString(place)
+		if words := weatherSourceWords(source); words != "" {
+			sb.WriteString(" · " + words)
+		}
+		sb.WriteString("\nSettings › General › Weather location changes it\n")
+	}
+	sb.WriteString("\n")
 	for _, d := range days {
 		day := d.Date
 		if t, err := time.Parse("2006-01-02", d.Date); err == nil {

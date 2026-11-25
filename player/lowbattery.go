@@ -15,13 +15,19 @@ package main
 //  2. syncs the filesystems once the emulator has exited;
 //  3. suspends the device (or explains why it could not).
 //
+// A game no state can be saved for (a port, Wine, an Android game…) is held
+// instead: stopped where it is under JukaHub's own sleep, which powers the
+// device off cleanly ten minutes later unless a charger comes
+// (instantresume.go).
+//
 // The guard is deliberately conservative:
 //   - it never acts while the battery is charging (a cable in and the level
 //     not falling, batteryHoldingCharge), or when the level is unknown;
 //   - it only auto-saves/suspends when a game is actually running, so reading a
 //     note at 2% does not put the device to sleep without warning;
-//   - it acts at most once per launch (a failed save must not loop forever on
-//     an SD card that is about to lose power);
+//   - it acts at most once per low-battery episode, which only a charger ends
+//     (a failed save must not loop forever on an SD card that is about to
+//     lose power); the hold does not count, but holds once;
 //   - the suspend write is bounded and never powers the device off. A hard
 //     shutdown at an unknown point is exactly what this file exists to avoid.
 //
@@ -65,6 +71,13 @@ const (
 	lowBatterySaveDelay = 700 * time.Millisecond
 	// lowBatterySyncTimeout bounds `sync`, which can hang on a failing card.
 	lowBatterySyncTimeout = 15 * time.Second
+	// lowBatteryHoldGrace is how long a game the guard held asleep
+	// (instantresume.go) plays on after a wake with no charger before the
+	// guard acts again: time to plug one in.
+	lowBatteryHoldGrace = 45 * time.Second
+	// lowBatteryEpisodeClear is how far above the guard's levels the charge
+	// must be to start a new low-battery episode without a charger seen.
+	lowBatteryEpisodeClear = 10
 )
 
 // batteryGuardAction is what the guard wants to do at the current charge.
@@ -456,6 +469,13 @@ type lowBatteryGuardState struct {
 	acted   bool
 	warned  bool
 	running bool
+	// held: this low-battery episode's hold was spent (instantresume.go), so
+	// the guard's next step saves or closes the game. An episode ends on a
+	// charger (resetLowBatteryEpisode).
+	held bool
+	// acts counts the runs that saved or closed a game (a hold is not one),
+	// for the save ledger's "how did it end" (saveledger.go).
+	acts int
 }
 
 var lowBatteryGuard lowBatteryGuardState
@@ -484,16 +504,54 @@ func resetLowBatteryWarning() {
 	lowBatteryGuard.mu.Unlock()
 }
 
-// beginLowBatteryProtect claims the one protection run this launch gets.
-func beginLowBatteryProtect() bool {
+// beginLowBatteryProtect claims the one protection run a low-battery episode
+// gets; holdUnused reports that the episode's hold (instantresume.go) is still
+// there to use.
+func beginLowBatteryProtect() (holdUnused, ok bool) {
 	lowBatteryGuard.mu.Lock()
 	defer lowBatteryGuard.mu.Unlock()
 	if lowBatteryGuard.acted || lowBatteryGuard.running {
-		return false
+		return false, false
 	}
 	lowBatteryGuard.running = true
 	lowBatteryGuard.acted = true
-	return true
+	lowBatteryGuard.acts++
+	return !lowBatteryGuard.held, true
+}
+
+// lowBatteryNoteHold spends the episode's hold. A hold is not the guard's
+// one action: woken with the battery still at the save level and no charger,
+// the game is saved or closed after lowBatteryHoldGrace.
+func lowBatteryNoteHold() {
+	lowBatteryGuard.mu.Lock()
+	lowBatteryGuard.held = true
+	lowBatteryGuard.acted = false
+	lowBatteryGuard.acts--
+	lowBatteryGuard.mu.Unlock()
+}
+
+// lowBatteryGuardActs is how many runs saved or closed a game so far.
+func lowBatteryGuardActs() int {
+	lowBatteryGuard.mu.Lock()
+	defer lowBatteryGuard.mu.Unlock()
+	return lowBatteryGuard.acts
+}
+
+// lowBatteryHeldNow reports a hold spent in this episode.
+func lowBatteryHeldNow() bool {
+	lowBatteryGuard.mu.Lock()
+	defer lowBatteryGuard.mu.Unlock()
+	return lowBatteryGuard.held
+}
+
+// resetLowBatteryEpisode starts over on a charger: the battery is no longer
+// about to give out, so the guard may hold and act again when it is next low
+// (it used to act once per JukaHub start, whatever happened in between).
+func resetLowBatteryEpisode() {
+	lowBatteryGuard.mu.Lock()
+	lowBatteryGuard.acted = false
+	lowBatteryGuard.held = false
+	lowBatteryGuard.mu.Unlock()
 }
 
 func endLowBatteryProtect() {
@@ -517,6 +575,11 @@ func lowBatteryTick(config *Config) {
 	warnPct, savePct := lv.messagePct(), lv.savePct()
 	if percent < 0 || percent > max(warnPct, savePct)+2 {
 		resetLowBatteryWarning()
+		// Charged well past the levels (asleep on a charger, say): a new
+		// episode. Not on the few percent a resting battery bounces back.
+		if percent >= max(warnPct, savePct)+lowBatteryEpisodeClear {
+			resetLowBatteryEpisode()
+		}
 		return
 	}
 	// "Charging" here means the battery is not draining (batteryHoldingCharge),
@@ -526,6 +589,7 @@ func lowBatteryTick(config *Config) {
 	charging := batteryHoldingCharge()
 	if charging {
 		resetLowBatteryWarning()
+		resetLowBatteryEpisode()
 		return
 	}
 	acted, warned, _ := lowBatteryGuardFlags()
@@ -538,11 +602,15 @@ func lowBatteryTick(config *Config) {
 			showToast(lowBatteryMessage(config, percent, getBatteryCharging()), ToastWarn())
 		}
 	case batteryGuardProtect:
-		if beginLowBatteryProtect() {
-			showToast("Battery critical — saving and suspending", ToastWarn())
+		// Never while JukaHub's sleep runs (the guard's own hold among them),
+		// nor in the moment after a hold's wake: a charger may be on its way.
+		if powerSleepActive() || (lowBatteryHeldNow() && powerSleepJustWoke(lowBatteryHoldGrace)) {
+			break
+		}
+		if holdUnused, ok := beginLowBatteryProtect(); ok {
 			go func() {
 				defer endLowBatteryProtect()
-				protectLowBattery()
+				protectLowBattery(holdUnused)
 			}()
 		}
 	}
@@ -618,10 +686,19 @@ func retroArchSaveAndQuit(tag string) (bool, string) {
 	return true, ""
 }
 
-// protectLowBattery saves, syncs and suspends. It runs off the render thread.
-func protectLowBattery() {
+// protectLowBattery saves, syncs and suspends — or, for a game no state can
+// be saved for, holds it asleep where it is (instantresume.go); holdUnused
+// reports that this episode's hold is still there to use. It runs off the
+// render thread.
+func protectLowBattery(holdUnused bool) {
+	if plan := resumeBatteryPlanNow(holdUnused); plan.action == resumeHold {
+		resumeHoldForBattery(plan)
+		return
+	}
+	showToast("Battery critical — saving and suspending", ToastWarn())
 	// RetroArch as below; a standalone emulator saves on its way out where it
-	// can and is closed cleanly either way (sessionsafe.go).
+	// can and is closed cleanly either way (sessionsafe.go). A saved state
+	// comes back at the next power-on (resumeRetroArchSave, the record).
 	saved, _ := sessionSafeProtectGame("low battery")
 	if !saved {
 		showToast("Could not save state — suspending without it", ToastWarn())

@@ -153,6 +153,42 @@ func sessionSafeSignalTargets(targets []sessionSafeTarget, sig sessionSafeSignal
 	}
 }
 
+// sessionSafeRequestTarget is where pid writes a state on request, when pid is
+// JukaHub's own PPSSPP build (instantresume.go): the JUKAHUB_PPSSPP_SAVE_TO
+// its launch gave it, and the flag file beside its program saying the build
+// takes the request (ppssppBinaryCanResume). "" for anything else: SIGUSR1
+// ends a program that does not handle it.
+func sessionSafeRequestTarget(pid int) string {
+	dir := "/proc/" + strconv.Itoa(pid)
+	exe, err := os.Readlink(dir + "/exe")
+	if err != nil || !ppssppBinaryCanResume(strings.TrimSuffix(exe, " (deleted)")) {
+		return ""
+	}
+	data, err := sessionSafeReadLimited(dir+"/environ", 64<<10)
+	if err != nil {
+		return ""
+	}
+	for _, kv := range bytes.Split(data, []byte{0}) {
+		if v, ok := bytes.CutPrefix(kv, []byte(ppssppEnvSaveTo+"=")); ok {
+			if to := string(v); filepath.IsAbs(to) {
+				return filepath.Clean(to)
+			}
+		}
+	}
+	return ""
+}
+
+// sessionSafeSignalSave sends JukaHub's PPSSPP build its save request
+// (SIGUSR1), after a continue for one that is stopped: only while t is still
+// the process that was approved (the same start time), never JukaHub.
+func sessionSafeSignalSave(t sessionSafeTarget) bool {
+	if t.pid == os.Getpid() || !sessionSafeTargetAlive(t) {
+		return false
+	}
+	_ = syscall.Kill(t.pid, syscall.SIGCONT)
+	return syscall.Kill(t.pid, syscall.SIGUSR1) == nil
+}
+
 // sessionSafeTargetAlive reports whether t still runs: the same pid with the
 // same start time, and not a zombie (which writes nothing more).
 func sessionSafeTargetAlive(t sessionSafeTarget) bool {

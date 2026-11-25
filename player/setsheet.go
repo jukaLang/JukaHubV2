@@ -27,6 +27,9 @@ type setSheetState struct {
 	cursor  int
 	scroll  int32
 	choose  func(value string)
+	// checked marks every option of a set (setSheetOpenSet); nil for a
+	// single choice, whose one stored value is current.
+	checked map[string]bool
 	// The last frame's geometry, for the mouse.
 	card  sdl.Rect
 	view  sdl.Rect
@@ -51,6 +54,38 @@ func setSheetOpen(s *setSheetState, title, note string, options []setOption, cur
 		}
 	}
 	PlayActivateSound()
+}
+
+// setSheetOpenSet opens the Settings hub's sheet on a choice row that holds a
+// set (setRow.SheetChecked): a check on every option in it, the cursor on the
+// first. A on an option hands it to the row's SheetToggle, which adds or
+// takes it out, and the list opens again on the same row with the checks as
+// they now stand, so several can be changed in one visit; B closes it.
+func setSheetOpenSet(c *Config, row setRow, note string) {
+	if row.Sheet == nil || row.SheetChecked == nil {
+		return
+	}
+	var choose func(string)
+	choose = func(value string) {
+		if row.SheetToggle != nil {
+			row.SheetToggle(c, value)
+		}
+		s := &setHub.sheet
+		cursor, scroll := s.cursor, s.scroll
+		s.open, s.choose = true, choose
+		s.options, s.checked = row.Sheet(c), row.SheetChecked(c)
+		s.cursor, s.scroll = min(cursor, max(0, len(s.options)-1)), scroll
+		setHub.dirty = true
+	}
+	s := &setHub.sheet
+	setSheetOpen(s, setOr(row.SheetTitle, row.Label), note, row.Sheet(c), "", choose)
+	s.checked = row.SheetChecked(c)
+	for i, o := range s.options {
+		if s.checked[o.Value] {
+			s.cursor = i
+			break
+		}
+	}
 }
 
 // setSheetClose dismisses the sheet without choosing.
@@ -280,7 +315,7 @@ func setSheetDraw(renderer *sdl.Renderer, config *Config, s *setSheetState) {
 		UIListRow(renderer, r, glassRowRadius, i == s.cursor, hovered)
 		x := r.X + 16
 		right := r.X + r.W - 16
-		if o.Value == s.current {
+		if o.Value == s.current || s.checked[o.Value] {
 			box := sdl.Rect{X: right - check, Y: r.Y + (r.H-check)/2, W: check, H: check}
 			DrawHomeIcon(renderer, "check", box, true)
 			right = box.X - 10

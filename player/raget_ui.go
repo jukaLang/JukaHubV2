@@ -3,26 +3,30 @@ package main
 // raget_ui.go — when raget.go installs RetroArch, and what the player sees.
 //
 //   - Start-up (startRetroArchEnsure, from startCoreAutoUpdate): about a
-//     minute after JukaHub starts, a handheld whose card has no RetroArch gets
-//     one — online, between games, with the install bar, the patch slot held
-//     like every other install — unless Emulator updates is Off, which gets a
-//     one-time note instead. A try that fails is repeated twice more in the
-//     session, ten minutes apart; offline, during a game or under 15 % battery
-//     off the charger, it waits.
+//     minute after JukaHub starts, a handheld whose games have no RetroArch
+//     they can start (racard.go) gets one — online, between games, with the
+//     install bar, the patch slot held like every other install — unless
+//     Emulator updates is Off, which gets a one-time note instead. A try that
+//     fails is repeated twice more in the session, ten minutes apart; offline,
+//     during a game, while another install runs or under 15 % battery off the
+//     charger, it waits. A card that has RetroArch is looked at again every
+//     raGetWatchEvery: JH-X6HRVE's lost it a minute after the start.
 //   - The Emulators page: a card with no RetroArch shows a RetroArch tile
 //     saying so, and A on it (or on a RetroArch folder without its binary)
 //     installs it.
 //   - A core install (startEmulatorInstall) or "Get more cores"
 //     (emuMoreCoresStart) on such a card puts RetroArch first, inside its own
 //     patch slot (raGetForCoreInstall, raGetForMoreCores).
-//   - A game whose launch script found no RetroArch (gamelaunch_firmware.go):
-//     the card says JukaHub is installing it, and the install starts.
+//   - A game whose launch script found no RetroArch (gamelaunch_firmware.go,
+//     raLaunchMissingNote): the card says JukaHub is installing it, and the
+//     install starts.
 //   - The Emulator updates pass keeps the RetroArch JukaHub installed current
 //     (raGetUpdate), as one more updater (emuautoupdate_registry.go).
 //
 // The last install's outcome is kept for the diagnostics (raGetDiagnostics):
 // JH-X5T7PW, "cant install retroarch", came with a log that began after the
-// try had failed, and nothing else said why.
+// try had failed, and nothing else said why. So is the start-up's last look
+// when no install ran: JH-X6HRVE said only "not tried this session".
 //
 // raGetOwnsLaunch is ra_glibc.go's question: a launch of the RetroArch JukaHub
 // installed starts on JukaHub's glibc whatever Automatic would decide.
@@ -33,6 +37,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +56,9 @@ const (
 	// raGetSlotWait is how long an install a press or a game asked for waits
 	// for another download to end.
 	raGetSlotWait = 15 * time.Minute
+	// raGetWatchEvery is how often the start-up looks again at a card that
+	// has its RetroArch (a stat and a remembered answer while it is there).
+	raGetWatchEvery = 3 * time.Minute
 	// raGetUpdaterKey is RetroArch's key in the Emulator updates pass.
 	raGetUpdaterKey = "retroarch"
 )
@@ -68,8 +76,18 @@ var raGetRun struct {
 	running bool
 	tries   int  // start-up tries that failed this session
 	told    bool // the Off note was shown
-	// last is this session's latest install, for the diagnostics.
-	last raGetOutcome
+	// last is this session's latest install, for the diagnostics; look the
+	// start-up's latest look and what it decided, lookAt when.
+	last   raGetOutcome
+	look   string
+	lookAt time.Time
+}
+
+// raGetNoteLook records the start-up's look for raGetDiagnostics.
+func raGetNoteLook(what string) {
+	raGetRun.mu.Lock()
+	raGetRun.look, raGetRun.lookAt = what, time.Now()
+	raGetRun.mu.Unlock()
 }
 
 // raGetOutcome is one install as the diagnostics tell it: when it began, who
@@ -113,6 +131,7 @@ func raGetDiagnostics() string {
 	}
 	raGetRun.mu.Lock()
 	last, tries, told, running := raGetRun.last, raGetRun.tries, raGetRun.told, raGetRun.running
+	look, lookAt := raGetRun.look, raGetRun.lookAt
 	raGetRun.mu.Unlock()
 	var parts []string
 	if _, man, ok := raGetManaged(); ok {
@@ -145,6 +164,10 @@ func raGetDiagnostics() string {
 		parts = append(parts, fmt.Sprintf("%d start-up tries failed", tries))
 	}
 	if len(parts) == 0 {
+		if look != "" {
+			// Why no install ran: the start-up's last look.
+			return look + " (looked at " + lookAt.Format("15:04") + ")"
+		}
 		return "not tried this session"
 	}
 	return strings.Join(parts, " · ")
@@ -306,8 +329,9 @@ func raGetWaitSlot() bool {
 }
 
 // startRetroArchEnsure is the start-up's install (main thread, from
-// startCoreAutoUpdate): it waits raGetStartDelay, then looks every so often
-// until the card has a RetroArch or the session has tried enough.
+// startCoreAutoUpdate): it waits raGetStartDelay, then looks every so often —
+// at a card with RetroArch too, which may lose it — until the session has
+// tried enough or Emulator updates is Off.
 func startRetroArchEnsure() {
 	if !raGetSupported() {
 		return
@@ -328,10 +352,23 @@ func startRetroArchEnsure() {
 // nothing left to do this session, else how long to wait for the next.
 func raGetEnsureTick() (wait time.Duration, done bool) {
 	if raGetBusy() {
+		raGetNoteLook("not tried by the start-up: an install of RetroArch is running or waiting for its turn")
 		return time.Minute, false
 	}
-	if !raGetMissingNow() {
-		return 0, true
+	if gameScreenSuspended() {
+		// A game is on screen: its RetroArch is there, and the card is the
+		// game's.
+		return time.Minute, false
+	}
+	card := raCardCheck()
+	if !card.Missing {
+		// The games' RetroArch is there: looked at again in a while.
+		raGetNoteLook("not needed: " + raGetPresentWords(card))
+		return raGetWatchEvery, false
+	}
+	// Why the install below may not start yet, for the diagnostics.
+	waiting := func(why string) {
+		raGetNoteLook("not tried yet: RetroArch is " + card.Problem + "; " + why)
 	}
 	if emuCoreUpdateModeNow() == coreUpdateOff {
 		raGetRun.mu.Lock()
@@ -346,26 +383,38 @@ func raGetEnsureTick() (wait time.Duration, done bool) {
 		}
 		return 0, true
 	}
-	if !IsOnline() || gameScreenSuspended() || installBarActive() {
+	switch {
+	case !IsOnline():
+		waiting("waiting for the internet")
+		return time.Minute, false
+	case installBarActive():
+		waiting("waiting for the install on the install bar to end")
 		return time.Minute, false
 	}
 	if pct := getBatteryPercent(); pct >= 0 && pct < raGetLowBattery && !getBatteryCharging() {
+		waiting(fmt.Sprintf("waiting: the battery is at %d %% off the charger", pct))
 		return 5 * time.Minute, false
 	}
 	if !raGetClaim() {
+		raGetNoteLook("not tried by the start-up: an install of RetroArch is running or waiting for its turn")
 		return time.Minute, false
 	}
 	err := raGetRunFirst("start-up", true)
 	raGetRelease()
 	switch {
 	case err == nil, errors.Is(err, errRaGetPresent):
-		return 0, true
+		// Installed (or there after all): watched like any card with RetroArch.
+		return raGetWatchEvery, false
 	case errors.Is(err, context.Canceled):
 		// Stopped from the install bar: not again this session (the tile and a
 		// game still install it on a press).
 		logInfo("emulators", "RetroArch install stopped from the install bar; not tried again until the next start")
 		return 0, true
-	case errors.Is(err, errRaGetBusy), errors.Is(err, errRaGetOffline):
+	case errors.Is(err, errRaGetOffline):
+		waiting("waiting for the internet")
+		return time.Minute, false
+	case errors.Is(err, errRaGetBusy):
+		waiting("waiting for the download running now")
 		return time.Minute, false
 	}
 	raGetRun.mu.Lock()
@@ -532,9 +581,60 @@ func raGetSameFile(a, b string) bool {
 	return err == nil && os.SameFile(sa, sb)
 }
 
-// raGetLaunchNote is what a game's diagnosis adds when the card has no
-// RetroArch at all (gamelaunch_firmware.go): the install, started now when it
-// can be.
+// raGetPresentWords says where the games' RetroArch is, by its name (the
+// diagnostics carry no private paths).
+func raGetPresentWords(card raCardState) string {
+	bin := card.Need
+	if card.Found != "" {
+		bin = card.Found
+	}
+	switch {
+	case bin == "":
+		return "no SD card to look on"
+	case card.Problem != "" && card.Found == "":
+		return filepath.Base(bin) + " is " + card.Problem + ", and there is no card to install one on"
+	}
+	return filepath.Base(bin) + " in " + raCardFolderWords(bin, card.Target) + " can start"
+}
+
+// raLaunchMissingNote is what a game's diagnosis adds when its launch script
+// could not start the RetroArch at missing (gamelaunch_firmware.go): where
+// JukaHub sees the games' RetroArch, and — when they have none that can start
+// (racard.go) — that JukaHub is installing TrimUI's (raGetLaunchNote). The
+// script's failure is news, so the card is looked at again. Off the handheld,
+// where JukaHub installs no RetroArch, the search's answer as before.
+func raLaunchMissingNote(missing string) string {
+	if !raGetSupported() {
+		if ra := netplayRetroArchPath(); ra != "" {
+			return " JukaHub finds RetroArch at " + ra + "."
+		}
+		return " JukaHub finds no RetroArch either (it searched the RetroArch folders on " +
+			childEnvFirmwareCard() + ", every launch script in Emus and the card itself)."
+	}
+	raCardForget()
+	card := raCardCheck()
+	switch {
+	case card.Missing:
+		note := " JukaHub finds no RetroArch the games can start either: " + filepath.Base(card.Need) + " is " + card.Problem + "."
+		if !card.Lost.IsZero() {
+			note += " It was there at " + card.Lost.Format("15:04") +
+				": a card that loses files has errors or holds less than it claims — run Tools → System → Card check."
+		}
+		return note + raGetLaunchNote()
+	case card.Found != "":
+		return " JukaHub finds RetroArch at " + card.Found + ", but the launch scripts call " + card.Need + ", which is " + card.Problem + "."
+	case card.Problem != "":
+		return " " + card.Need + " is " + card.Problem + "."
+	case strings.HasPrefix(missing, "/") && !raSamePath(missing, card.Need):
+		return " JukaHub finds the games' RetroArch at " + card.Need + "; this script called " + missing + "."
+	}
+	// There now, though the script was told "not found" a moment ago.
+	return " JukaHub finds RetroArch at " + card.Need + " now: start the game again — if it stops the same way, run Tools → System → Card check."
+}
+
+// raGetLaunchNote is what a game's diagnosis adds when the games have no
+// RetroArch that can start (raLaunchMissingNote): the install, started now
+// when it can be.
 func raGetLaunchNote() string {
 	if !raGetSupported() {
 		return ""

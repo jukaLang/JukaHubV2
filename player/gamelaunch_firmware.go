@@ -251,16 +251,12 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		detail += " — " + missing + " is there, so what is missing is the program that starts it: its #! line or its loader, or it is not executable."
 	}
 	if launcherRetroArchName(missing) {
-		// Where JukaHub itself sees RetroArch, so the report tells a script
-		// that lost its folder apart from a card without RetroArch.
-		if ra := netplayRetroArchPath(); ra != "" {
-			detail += " JukaHub finds RetroArch at " + ra + "."
-		} else {
-			detail += " JukaHub finds no RetroArch either (it searched the RetroArch folders on " +
-				childEnvFirmwareCard() + ", every launch script in Emus and the card itself)."
-			// And gets one: TrimUI's newest build for this model (raget.go).
-			detail += raGetLaunchNote()
-		}
+		// Where JukaHub itself sees the games' RetroArch, so the report tells
+		// a script that lost its folder apart from a card without RetroArch —
+		// and a handheld whose games have none that can start gets TrimUI's
+		// newest build for its model, now (racard.go, raget.go). JH-X6HRVE's
+		// card had lost it, and "a RetroArch somewhere" kept the install off.
+		detail += raLaunchMissingNote(missing)
 	}
 	logWarn("gamediag", "%s: %s", title, missingLine)
 	issues = append(issues, launchIssue{

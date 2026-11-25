@@ -288,6 +288,9 @@ func outQueue(id sdl.AudioDeviceID, data []byte) error {
 		return errors.New("audio output is in use by a game")
 	}
 	if d.real != 0 {
+		// Screen Share's viewers hear it too (castaudio.go; one atomic load
+		// while nobody listens).
+		castAudioOwnQueue(id, int(d.freq), d.channels, d.paused, data)
 		return sdl.QueueAudio(d.real, data)
 	}
 	if d.dead {
@@ -306,6 +309,7 @@ func outQueue(id sdl.AudioDeviceID, data []byte) error {
 		return errors.New("audio backlog full")
 	}
 	d.fifo = append(d.fifo, data...)
+	castAudioOwnQueue(id, int(d.freq), d.channels, d.paused, data)
 	return nil
 }
 
@@ -346,6 +350,7 @@ func outClear(id sdl.AudioDeviceID) {
 		sdl.ClearQueuedAudio(d.draining)
 	}
 	d.fifo, d.head, d.phase = d.fifo[:0], 0, 0
+	castAudioOwnClear(id)
 }
 
 // outPause is sdl.PauseAudioDevice.
@@ -358,6 +363,7 @@ func outPause(id sdl.AudioDeviceID, paused bool) {
 		return
 	}
 	d.paused = paused
+	castAudioOwnPause(id, paused)
 	if d.real != 0 {
 		sdl.PauseAudioDevice(d.real, paused)
 	}
@@ -380,6 +386,7 @@ func outClose(id sdl.AudioDeviceID) {
 	rdev, ddev := d.real, d.draining
 	d.real, d.draining = 0, 0
 	outAudio.mu.Unlock()
+	castAudioOwnClear(id)
 	if rdev != 0 {
 		sdl.CloseAudioDevice(rdev)
 	}

@@ -243,6 +243,13 @@ func homeSearchRun() {
 	src.games = append(recentGames(), indexedGames...)
 	uiModeSearchSources(&src) // Kiosk / Kid mode: games and allowed screens only (uimode.go)
 	gsResults = homeSearchResults(gsQuery, src)
+	if !uiModeLocked() {
+		// "wifi off", "brightness 40", "update": the command first, with the
+		// value now (homesearch_verbs.go).
+		if cmds := homeSearchCommandRows(gsQuery); len(cmds) > 0 {
+			gsResults = append(cmds, gsResults...)
+		}
+	}
 	homeSearch.gen = homeSearchIdx.gen.Load()
 	if gsCursor >= len(gsResults) {
 		gsCursor = len(gsResults) - 1

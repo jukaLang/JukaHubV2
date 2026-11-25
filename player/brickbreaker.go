@@ -13,7 +13,6 @@ package main
 import (
 	"fmt"
 	"math"
-	"math/rand"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -49,6 +48,7 @@ var bb struct {
 }
 
 func initBrickBreaker() {
+	ghostRunBegin(gameBrickBreaker) // the run's seed and recording (ghost.go)
 	bb.lives, bb.level = 3, 1
 	gameScore = 0
 	bbNewLevel()
@@ -159,7 +159,7 @@ func tickBrickBreaker() {
 		bb.ballY = bbPadY - bbBallR - 1
 		if bb.launch {
 			bb.stuck = false
-			a := -math.Pi/2 + (rand.Float64()-0.5)*0.6
+			a := -math.Pi/2 + (arcadeRng.Float64()-0.5)*0.6
 			bb.vx, bb.vy = math.Cos(a)*bb.ballSpd, math.Sin(a)*bb.ballSpd
 		}
 		bb.launch = false

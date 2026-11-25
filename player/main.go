@@ -46,6 +46,13 @@ func main() {
 		}
 	}()
 
+	// Screen Share's game-sound tap (castaudio_tap.go) is this binary started
+	// by a game's ALSA plugin: it forwards the game's sound and must start fast
+	// and touch nothing else, so it goes first.
+	if handled, code := handleCastAudioTapCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// JukaHub OS (jukaos_linux.go): launch.sh starts "JukaHub --os-session" in
 	// OS mode; this applies the layers in a private mount namespace and runs
 	// JukaHub again inside it, or carries on as the app.
@@ -64,6 +71,10 @@ func main() {
 	// Spatial audio's check of the system audio route (spatial_alsa.go) is
 	// this binary started with its own flag.
 	if handled, code := handleSpatialCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+	// So is Screen Share's check of the game-sound route (castaudio_alsa.go).
+	if handled, code := handleCastTapProbeCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
 	// `JukaHub apt …` is the handheld's package manager for an SSH shell
@@ -993,6 +1004,9 @@ func main() {
 			powerKeyTick(config, true)
 			// Menu + volume brightness, in games too (brightkeys.go).
 			hwKeysTick(config, true)
+			// In-game indicators: a changed level or a notification drawn
+			// into the game by its hook (ingamehud.go).
+			ingameHUDTick(config)
 			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
 				lastAlarmCheck = now
 				alarmCheck(config, now)

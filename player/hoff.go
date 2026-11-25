@@ -935,7 +935,7 @@ func hoffResumeGame(o hoffOffer, launch bool) {
 			case synced.Pulled+synced.Conflicts > 0:
 				ShowToast("Brought "+pluralizeCount(synced.Pulled+synced.Conflicts, "save file", "save files")+" from "+o.PeerName, ToastKindSuccess)
 			case launch && found && !sameNames:
-				ShowToast("The ROM has another name on "+o.PeerName+" — sync its saves from Save sync", ToastKindInfo)
+				ShowToast("The ROM has another name on "+o.PeerName+" — sync its saves from Sync", ToastKindInfo)
 			}
 			if !launch {
 				openGameLibraryPanel()

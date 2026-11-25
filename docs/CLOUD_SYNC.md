@@ -11,10 +11,12 @@ it ends. There are four ways to get there; pick the first one that fits.
 | [WebDAV](#webdav-nextcloud-owncloud-koofr-a-nas) | Nextcloud, ownCloud, Koofr, InfiniCLOUD or a NAS | type the address and an app password on the phone |
 | [Google Drive through a computer](#google-drive-through-a-computer) | a PC or Mac with Google Drive for desktop | Syncthing, no sign-in |
 
-Everything is in **Tools → Save sync**: the Google Drive card at the top, then
-**WebDAV and other clouds**. The phone parts happen on the Phone Companion's
-**Cloud save sync** page (the handheld shows a QR code that opens it; the
-companion's main page links to it too).
+Everything is in **Tools → Sync** ([Sync](SYNC.md), which used to be Save
+sync): the QR code at its top opens the phone's **Sync** page, whose Google
+Drive and WebDAV cards connect either cloud, and each connected cloud is a row
+under **Connected** with Sync now, Compare, its automatic switch and Sign out
+or Forget. Setting up your own Google client still happens on the Phone
+Companion's **Cloud save sync** page, which the Sync page links to.
 
 > Status: Google Drive built 2026-11-17, phone setup and WebDAV 2026-11-18; none
 > of it has run on a device yet. The first real runs are [HW] tasks in

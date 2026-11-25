@@ -361,6 +361,7 @@ func (d *vpnDaemon) bringUp(payload vpnPayload, ep netip.AddrPort) (code int, fa
 		LocalPort: localPort,
 		Timestamp: d.clock.stamp,
 		Logf:      d.devLog,
+		AWG:       cfg.AWG,
 	}, tun, conn, rand.Reader)
 
 	d.mu.Lock()
@@ -373,7 +374,11 @@ func (d *vpnDaemon) bringUp(payload vpnPayload, ep netip.AddrPort) (code int, fa
 	if payload.RouteAll {
 		how = "everything"
 	}
-	d.event(fmt.Sprintf("%s is up; %s goes through %s", name, how, ep), false)
+	kind := ""
+	if cfg.AWG != nil {
+		kind = " (AmneziaWG)"
+	}
+	d.event(fmt.Sprintf("%s is up; %s goes through %s%s", name, how, ep, kind), false)
 	d.dev.Start()
 	d.writeStatus()
 	return 0, false

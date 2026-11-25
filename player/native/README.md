@@ -14,6 +14,7 @@ the host store) is Go in the parent folder.
 | `chiaki-regist.c` | PS5 pairing handshake (PSN Account-ID + PIN), writes a result file |
 | `moonlight-stream.c` | The Moonlight (GameStream) streamer for Vibepollo / Apollo / Sunshine / GeForce Experience PCs, on moonlight-common-c, with the same input, display and file modules (see [Moonlight helper](#moonlight-helper-moonlight-stream)) |
 | `moonlight/CMakeLists.txt` | moonlight-stream's own CMake project, apart from the chiaki-ng build |
+| `ingame_osd.c` | `libjukaosd.so`, the In-game indicators hook JukaHub puts in `LD_PRELOAD` for RetroArch and PPSSPP (`../ingamehud.go`): wraps `eglSwapBuffers`, `SDL_GL_SwapWindow` and `SDL_RenderPresent` and draws JukaHub's card over the frame; libc and libdl only. `build-helpers.sh` builds it in native mode, optional like moonlight-stream |
 | `moonlight-selftest.h264` | The ten-frame 720p H.264 clip built into moonlight-stream for its [self-test](#self-test) |
 | `CMakeLists.txt` | Adds both targets to a chiaki-ng build |
 | `build-helpers.sh` | Fetches the pinned chiaki-ng commit, builds both helpers and installs them into `bin/` here (`player/native/bin`) |
@@ -33,6 +34,7 @@ Output:
 player/native/bin/chiaki-stream
 player/native/bin/chiaki-regist
 player/native/bin/moonlight-stream   native mode, optional (see Moonlight helper)
+player/native/bin/libjukaosd.so     native mode, optional (the In-game indicators hook)
 player/native/bin/BUILDINFO.txt   native mode: versions, commits, NEEDED, highest GLIBC
 ```
 

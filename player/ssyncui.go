@@ -1,11 +1,11 @@
 package main
 
-// ssyncui.go — the Save sync page (Tools → Save sync).
+// ssyncui.go — the Sync page (Tools → Sync; it was Save sync).
 //
 // Three views on one page:
 //
-//   - the start: Google Drive (cloudsync_ui.go: sign in, compare, automatic
-//     sync, sign out), the paired devices to sync with, "Export encrypted
+//   - the start: the phone code and every device and cloud the saves follow
+//     (synchub.go), Device Sync's switches (devsync_ui.go), "Export encrypted
 //     saves" and "Import a saves file", and the result of the last job;
 //   - a comparison with one device or Google Drive: how many saves are the same, what comes
 //     here, what goes there and what changed on both (both kept), file by file,
@@ -116,8 +116,6 @@ type ssyncScreenModel struct {
 	builtAt   time.Time
 	header    UIPageHeader
 	work      ssyncWorkView
-	enabled   bool
-	devices   []peerRowModel
 	exportSub string
 	importSub string
 	drive     cloudDriveModel
@@ -162,31 +160,18 @@ func (ssyncSceneModule) handleController(e *sdl.ControllerButtonEvent, c *Config
 
 func init() { registerScene(ssyncSceneModule{sceneBase{name: ssyncSceneName}}) }
 
-// ssyncOpenScreen opens Save sync (the Tools hub tile).
+// ssyncOpenScreen opens Sync (the Tools hub tile, Settings, the search).
 func ssyncOpenScreen(config *Config) {
 	peerOpenScene(config, ssyncSceneName)
 }
 
-// ssyncHubTile is Save sync's tile on the Tools hub. It needs nothing: the
-// export and import work with no network at all.
+// ssyncHubTile is Sync's tile on the Tools hub: what the saves follow. It
+// needs nothing: the export and import work with no network at all. The id
+// stays "ssync" so pinned copies keep working.
 func ssyncHubTile() toolsHubTile {
-	t := toolsHubTile{
-		id: "ssync", label: "Save sync", icon: "sync",
-		value: "Saves the same on all your JukaHubs — Google Drive or Wi-Fi",
-	}
-	switch {
-	case ssyncWorkSnapshot().busy:
+	t := toolsHubTile{id: "ssync", label: "Sync", icon: "sync", value: syncHubTileValue(appConfig)}
+	if ssyncWorkSnapshot().busy {
 		t.value, t.tone = "Working…", toolsHubToneBusy
-	case gdriveSettingsGet().ready():
-		t.value = "Google Drive · " + gdriveSettingsGet().accountLabel()
-	case webdavSettingsGet().ready():
-		t.value = "WebDAV · " + webdavSettingsGet().label()
-	case peerEnabledFlag.Load():
-		if n := peerPairedCount(); n == 1 {
-			t.value = "1 paired device · or export a file"
-		} else if n > 1 {
-			t.value = strconv.Itoa(n) + " paired devices · or export a file"
-		}
 	}
 	return t
 }
@@ -210,22 +195,21 @@ func ssyncScreenEnter() {
 	ssyncScreen.nav.focus = ""
 	ssyncScreen.model.builtAt = time.Time{}
 	ssyncScreen.bundlesRead = false
+	// The phone code, the peer layer and the scan for other JukaHubs
+	// (synchub.go).
+	syncHubEnter()
 	if id := ssyncScreen.openWith; id != "" {
 		ssyncScreen.openWith = ""
 		ssyncStartCompare(id)
-	}
-	// Peers' addresses are refreshed for the device rows' "online" state.
-	if peerEnabledFlag.Load() {
-		runSceneTask(peerScanAndMerge)
 	}
 }
 
 // ── Model ────────────────────────────────────────────────────────────────
 
 func ssyncBuildModel(now time.Time, config *Config) ssyncScreenModel {
-	m := ssyncScreenModel{builtAt: now, work: ssyncWorkSnapshot(), enabled: peerEnabledFlag.Load(), drive: cloudBuildDriveModel(config)}
-	subtitle := "Your saves, the same on every JukaHub — Google Drive, Wi-Fi or one file"
-	status, ink := "", ColorTextTertiary()
+	m := ssyncScreenModel{builtAt: now, work: ssyncWorkSnapshot(), drive: cloudBuildDriveModel(config)}
+	subtitle := "Your saves on every JukaHub and cloud you add — one code sets them up"
+	status, ink := syncHubHeaderStatus(config)
 	switch {
 	case m.work.busy:
 		status, ink = m.work.label, glassAccent()
@@ -234,21 +218,8 @@ func ssyncBuildModel(now time.Time, config *Config) ssyncScreenModel {
 	case ssyncScreen.mode == ssyncModeImport:
 		subtitle = "Choose a saves file to import"
 	}
-	m.header = tbxHeader("Save sync", subtitle, "sync", status, ink)
+	m.header = tbxHeader("Sync", subtitle, "sync", status, ink)
 
-	for _, p := range peerPairedList() {
-		spec := tbxRowSpec{icon: "devices", title: p.Name, pill: "Compare", tone: tbxToneAccent}
-		if peerOnline(p.ID) {
-			spec.subtitle = "On this Wi-Fi now"
-		} else {
-			spec.subtitle = "Not seen on this Wi-Fi lately — it is looked for when you press A"
-			spec.tone = tbxToneNeutral
-		}
-		if last := peerLastSyncOf(p.ID); !last.IsZero() {
-			spec.subtitle += " · synced " + peerAgo(now, last)
-		}
-		m.devices = append(m.devices, peerRowModel{id: "dev:" + p.ID, spec: spec})
-	}
 	dir := ssyncExportDir()
 	m.exportSub = "One .jukasaves file in " + dir + " — carry it on a card or over SFTP"
 	switch {
@@ -336,6 +307,8 @@ func ssyncRenderScreen(renderer *sdl.Renderer, config *Config) {
 	if ssyncScreen.visit.begin() {
 		ssyncScreenEnter()
 	}
+	// The phone code's address and the pairing sheet, in every view.
+	syncHubFrame(config)
 	now := time.Now()
 	if now.Sub(ssyncScreen.model.builtAt) > 250*time.Millisecond {
 		ssyncScreen.model = ssyncBuildModel(now, config)
@@ -414,21 +387,9 @@ func ssyncRenderHome(renderer *sdl.Renderer, config *Config, fonts tbxFonts, fra
 		y += rowH + 8
 	}
 
-	y, row = cloudRenderDrive(renderer, config, fonts, frame, top, y, row, m.drive)
-	tbxDrawSection(renderer, config, "With a paired device", "sync", x, top+y, w)
-	y += tbxSectionHeight
-	switch {
-	case !m.enabled:
-		addRow("enable", tbxRowSpec{icon: "wifi", title: "Nearby devices is off", pill: "Turn on", tone: tbxToneAccent,
-			subtitle: "Turn it on to sync with your other JukaHubs over Wi-Fi"})
-	case len(m.devices) == 0:
-		addRow("pair", tbxRowSpec{icon: "devices", title: "Pair a device first", pill: "Open", tone: tbxToneAccent,
-			subtitle: "Settings → Network → Paired devices: compare a code on both screens once"})
-	default:
-		for _, d := range m.devices {
-			addRow(d.id, d.spec)
-		}
-	}
+	// The phone code, Sync everything now and the switch, every connected
+	// device and cloud, and what is nearby (synchub.go).
+	y, row = syncHubRenderHome(renderer, config, fonts, frame, top, y, row)
 	// Device Sync's switches and Send my settings (devsync_ui.go).
 	y, row = devsyncRenderHome(renderer, config, fonts, frame, top, y, row)
 
@@ -581,6 +542,12 @@ func ssyncScreenClick(mx, my int32, config *Config) bool {
 func ssyncScreenHints() []FooterHint {
 	id := ssyncScreen.nav.focus
 	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}}
+	if h, ok := syncHubHint(id); ok && ssyncScreen.mode == ssyncModeHome {
+		if ssyncWorkSnapshot().busy {
+			return append(hints, h, FooterHint{Button: "B", Label: "Stop"})
+		}
+		return append(hints, h, FooterHint{Button: "B", Label: "Back"})
+	}
 	if h, ok := cloudHint(id); ok && !ssyncWorkSnapshot().busy {
 		return append(hints, h, FooterHint{Button: "B", Label: "Back"})
 	}
@@ -595,9 +562,7 @@ func ssyncScreenHints() []FooterHint {
 		hints = append(hints, FooterHint{Button: "A", Label: "Export"})
 	case id == "import", strings.HasPrefix(id, "file:"):
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
-	case id == "enable":
-		hints = append(hints, FooterHint{Button: "A", Label: "Turn on"})
-	case id == "pair", id == "manager":
+	case id == "manager":
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	case strings.HasPrefix(id, "ds:cat:"), strings.HasPrefix(id, "ds:rom:"):
 		hints = append(hints, FooterHint{Button: "A", Label: "On or off"})
@@ -609,6 +574,11 @@ func ssyncScreenHints() []FooterHint {
 
 // ssyncActivate runs the focused row's action.
 func ssyncActivate(config *Config, id string) {
+	// Sync's own rows (synchub.go) check the job slot where they need it: the
+	// code, the switch and pairing work while a sync runs.
+	if syncHubActivate(config, id) {
+		return
+	}
 	if ssyncWorkSnapshot().busy {
 		ShowToast("Wait for the current job to finish (B stops it)", ToastKindInfo)
 		return
@@ -617,12 +587,6 @@ func ssyncActivate(config *Config, id string) {
 		return
 	}
 	switch {
-	case id == "enable":
-		PlayToggleSound()
-		peerSettingSetEnabled(config, true)
-	case id == "pair":
-		PlayActivateSound()
-		peerDevicesOpen(config)
 	case id == "manager":
 		openSaveManagerPanel()
 	case strings.HasPrefix(id, "dev:"):
@@ -790,9 +754,13 @@ func ssyncStartSync() {
 	PlayActivateSound()
 	job := *cmp
 	go func() {
+		// The other device's own automatic sync with this one waits
+		// (synchub_peers.go): one direction at a time.
+		syncPeersSetBusy(job.PeerID, true)
 		res := ssyncRunSync(ctx, job, ssyncWorkProgress)
 		// Then collections, recents, BIOS and ROMs (devsync_ui.go).
 		extra := devsyncRunExtras(ctx, job.PeerID, job.PeerName)
+		syncPeersSetBusy(job.PeerID, false)
 		tbxPost(func() {
 			ssyncWorkEnd()
 			ssyncScreen.cmp = nil

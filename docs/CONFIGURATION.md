@@ -72,10 +72,11 @@ settings such as `search_query` or `stream_url`.
 | `tools_path` | string | where yt-dlp / ffmpeg live |
 | `fileExplorerRoot` | string | starting directory of the file explorer |
 | `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country. In Settings → General, press Weather Unit to cycle Auto, Celsius and Fahrenheit. |
+| `weatherPlace`, `weatherLat`, `weatherLon`, `weatherPlaceCountry` | string, number, number, ISO code | the place the forecast is for, chosen under Settings → General → Weather location (a city found by name through Open-Meteo's geocoding). Absent: the place the internet address points to (with a VPN on, the VPN server's), New York when no lookup answers. |
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
 | `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. CC fetches a written track in that language, another region of it, the auto-generated track or a YouTube translation — from YouTube's caption list first, yt-dlp second — and caches it under the data folder's `subtitles/`; downloaded videos keep theirs beside the file as `<name>.<lang>.srt`. The code must start with a letter (`all` is refused). |
-| `uiLanguage` | string | Interface language (Settings → General → Language): `en` (default), `es`, `pt-BR`, `fr`, `de`, `it`, `ru`; unknown values mean English. Web pages, PDFs, chat, notes, subtitles, typed text, file names and game titles are never translated. |
+| `uiLanguage` | string | Interface language (Settings → General → Language): `en` (default), `es`, `pt-BR`, `fr`, `de`, `it`, `ru`, `uk`, `ja`, `ko`, `zh-CN` (`zh`, `zh_CN` and `zh-Hans` mean `zh-CN`); unknown values mean English. Japanese, Korean and Chinese are drawn in their own Noto Sans (JP, KR, SC), downloaded into the fonts folder when the language is picked; until it is there the interface stays in the language it was in. Web pages, PDFs, chat, notes, subtitles, typed text, file names and game titles are never translated. |
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
@@ -133,8 +134,10 @@ settings such as `search_query` or `stream_url`.
 | `consoleBackgrounds` | bool | **Console backgrounds** (default on): `data/backgrounds/<System>.png` or NextUI's `Roms/<console>/.media/bg.png` behind a console's game list |
 | `remotePlayAutoDownload` | bool | Settings → Games & emulators → **Download Remote Play automatically** (default on; shown only where Remote Play runs): while `bin/chiaki-stream` or `bin/chiaki-regist` is missing, JukaHub downloads them in the background about a minute after it starts — online, on screen (not behind a game or the idle screen) and with a clock past the build's date — and tries again after 2 to 60 minutes when the network, GitHub or the clock failed it. Off, they download when PS Remote Play opens. See [REMOTE_PLAY.md](REMOTE_PLAY.md#installing-the-helpers). |
 | `ssh_readonly`, `ssh_full_root` | bool | the SFTP server refuses every write; or it shares the whole Linux file system instead of the SD card (like `JUKAHUB_SSH_FULL_ROOT=1`, while the **Share whole system…** switch on its panel lasts one run). A design pushed through the Live Builder that sets either waits for approval on the device |
-| `castQuality` | `"smooth"`/`"balanced"`/`"sharp"` | Screen Share's picture: Smooth (640 px, 20 fps; the handheld's default), Balanced (960 px, 15 fps; a PC's default) or Sharp (full size, 10 fps). The handheld captures its menus at most about 12 times a second (fewer when the GPU readback is slow) and re-sends a screen that is not changing once a second |
-| `castGames` | bool | Screen Share's **Games too** (handheld only, on by default): while a game owns the screen the picture comes from `/dev/fb0`, through the bundled ffmpeg when it is installed, else JukaHub's own reader at up to 8 fps and 640 px. Off shows viewers a pause card while you play |
+| `castQuality` | `"smooth"`/`"balanced"`/`"sharp"` | Screen Share's picture: Smooth (640 px, 20 fps; the handheld's default), Balanced (960 px, 15 fps; a PC's default) or Sharp (full size, 10 fps). The handheld captures its menus at most about 12 times a second (24 while a viewer plays; fewer when the GPU readback is slow) and re-sends a screen that is not changing once a second |
+| `castGames` | bool | Screen Share's **Games too** (handheld only, on by default): while a game owns the screen the picture comes from `/dev/fb0`, through the bundled ffmpeg when it is installed, else JukaHub's own reader at up to 8 fps and 640 px. Off shows viewers a pause card while you play, sends none of the game's sound and keeps a playing viewer's presses out of the game |
+| `castSound` | bool | Screen Share's **Sound** (on by default): the viewer page's Sound button plays JukaHub's own sound and that of games started while sharing is on (their ALSA output is copied through `JukaHub --share-audio-tap`, once a check at the first share has proven the route; `JUKAHUB_SHARE_TAP=0` keeps games out of it) |
+| `castControl` | `"ask"`/`"off"` | Screen Share's **Controllers** (`"ask"` by default): a viewer may ask to play the handheld and plays once you allow it on the panel (a Phone Companion PIN plays without asking); `"off"` refuses every request |
 | `castRotate` | `0`/`90`/`180`/`270` | turns a shared game's picture clockwise; unset turns a portrait framebuffer under a landscape canvas a quarter anticlockwise (the guess for a panel mounted sideways) |
 | `castToken` | string | Screen Share's view-only link token (16 base32 characters), kept so a bookmarked link — a TV's, say — survives restarts; **Y** on the panel replaces it. A secret: exported configs redact it |
 | `spatialMode` | `"off"`/`"auto"`/`"headphones"`/`"speakers"` | Settings → Sound & haptics → **Spatial audio**, also Tools → Audio (default `off`): virtual surround for everything JukaHub plays — videos, music, podcasts, audiobooks, YouTube, background music — and, with `spatialGames`, games and apps. `headphones` places four virtual loudspeakers and a small virtual room around you, `speakers` widens the stereo of a close pair of speakers, and `auto` picks between them by the output in use. Music's Bit-perfect bypasses it ([SPATIAL_AUDIO.md](SPATIAL_AUDIO.md)) |
@@ -448,11 +451,15 @@ does in that boot: `cinematic` (it falls from the screen, big, shrinking as it
 nears the ground, and crashes onto it, which cracks, with a buzz of the
 vibration motor and a knock in the chime), `roll` (it rolls in on its rounded
 corners), `image` (the logo still), `classic` (the glass light running round
-the pane), `random` (cinematic, roll or classic, a different one each start)
+the pane), `random` (cinematic, roll or classic, a different one each start),
+several styles joined by commas (`cinematic,roll`: what **A** on the row's
+list of styles checks; one of them each start, never the last start's)
 or `none` (the default: no boot animation and no quick hello: the fastest
 start, `startupAnimation` then has no effect). Reduce motion switched
 on by hand, and battery saver, play `cinematic` and `roll` as `image`; an app
-launch plays a short version of the style. See [BOOT.md](BOOT.md).
+launch plays a short version of the style. With several, the style the last
+start played is kept in `Apps/JukaHub/data/bootstyle-last`, not in
+`jukauser.json`. See [BOOT.md](BOOT.md).
 
 The startup lock (Settings → Privacy & data → **Startup lock**) keeps four
 custom keys. `startupLockSecret` is the salted PBKDF2-SHA256 hash,
@@ -568,7 +575,8 @@ next page load. See [Browser → JavaScript](BROWSER.md#javascript).
 
 `browserBlockAds` (bool, default true) is Settings → Browser → **Block ads and
 trackers**: `false`, `0`, `"false"`, `"0"`, `"no"` and `"off"` let every page
-load all the subresources it asks for; anything else keeps the filter on. Sites
+load all the subresources it asks for and keep its ads on the page; anything
+else keeps the filter on, and removes the ads from the page. Sites
 excepted one by one (Site info → **Allow ads on this site**, or the Filter
 chip) are not Custom keys: they live in `data/browser-block.json`. See
 [Browser → Ads and trackers](BROWSER.md#ads-and-trackers).
@@ -1200,6 +1208,34 @@ unseen, still filed in the bell, and when the video pauses, stops or leaves full
 screen one line says how many came in. Errors always show. On, those toasts show
 over the video, and so do new chat messages (Discord, Juka's answers) as
 "Sender: message" toasts. Quiet Mode still holds every toast.
+
+### Quiet hours and notifications while playing (`notifQuietHours`, `notifWhilePlaying`)
+
+Settings → General writes both.
+
+- `notifQuietHours`: `""` (off, the default) or `"<from>-<to>"` in whole hours,
+  `"22-7"` for 22:00–07:00 (the window may run past midnight). Inside it, toasts
+  that do not answer a press wait in the bell, as during a full-screen video;
+  errors always show. The window only counts once the clock is set (the
+  handheld boots before NTP).
+- `notifWhilePlaying`: `"after"` (the default: the one-line summary when the
+  game hands the screen back, now counting new unread rows), `"over"` (each
+  toast drawn into RetroArch and PPSSPP games by In-game indicators; the
+  summary still comes when they are off) or `"bell"` (nothing shown).
+
+The notification centre keeps its unread rows, warnings, errors and rows with an
+action in `notifications.json` in the data folder (at most 50 rows; a file over
+256 KB or of another version is ignored).
+
+### In-game indicators (`ingameHUD`)
+
+`ingameHUD` (`"true"` / `"false"`; missing is off; Settings → Games &
+emulators → In-game indicators) puts JukaHub's `bin/libjukaosd.so` in
+`LD_PRELOAD` (with `JUKAHUB_OSD` naming its file in `/tmp`) for RetroArch and
+PPSSPP games the library starts, on a handheld only. The hook draws volume,
+brightness, low-battery and (with `notifWhilePlaying` `"over"`) notification
+cards over the game's frames. Without the library the switch says it comes with
+the next package.
 
 ### Glass, Settings lists and screen vision (`glassStyle`, `settingsShowAll`, `jukaSeesScreen`)
 

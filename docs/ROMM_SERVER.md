@@ -5,6 +5,11 @@ its full `http://` or `https://` address and a RomM **Client API Token** with
 read and write access under **Connection**, then choose **Connect and load games**.
 The token is stored in JukaHub's local data folder, is hidden on the connection
 screen, and is sent to your server as a bearer token.
+With RomM 4.8 or later there is no token to copy: on the phone's **Sync** page
+(the QR code at the top of **Tools → Sync**, see [Sync](SYNC.md)) type the
+server's address and the code RomM shows under **Client API Tokens → Pair
+device**; the handheld exchanges the code for the token itself. Give each
+device its own token, since pairing a token again moves it to the new device.
 **From your phone** (under the two fields) shows a code that opens the Phone
 Companion's **RomM server** card: type the address (a bare `192.168.1.20:8080`
 gets `http://` added) and paste the token on the phone. The handheld asks the

@@ -141,6 +141,12 @@ var uiFontCatalog = []uiFontEntry{
 		Repo: uiFontRepoGoogle, Regular: "ofl/pressstart2p/PressStart2P-Regular.ttf", KB: 115, Scale: 0.6},
 	{ID: "notosansjp", Name: "Noto Sans JP", Note: "Shows Japanese and kanji game names · large",
 		Repo: uiFontRepoNotoCJK, Regular: "Sans/SubsetOTF/JP/NotoSansJP-Regular.otf", KB: 4500, Cyrillic: true},
+	// The faces the Korean and Chinese interfaces are drawn in
+	// (uilangface.go); Japanese uses the one above.
+	{ID: "notosanskr", Name: "Noto Sans KR", Note: "Shows Korean (Hangul) · large",
+		Repo: uiFontRepoNotoCJK, Regular: "Sans/SubsetOTF/KR/NotoSansKR-Regular.otf", KB: 4600, Cyrillic: true},
+	{ID: "notosanssc", Name: "Noto Sans SC", Note: "Shows Simplified Chinese · large",
+		Repo: uiFontRepoNotoCJK, Regular: "Sans/SubsetOTF/SC/NotoSansSC-Regular.otf", KB: 8400, Cyrillic: true},
 }
 
 // uiFontEntryFor is the catalogue face with id.
@@ -557,6 +563,10 @@ var uiFontLanguageSamples = map[string]string{
 	"it":    "àèéìòùÀÈ",
 	"ru":    "АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюяЁё",
 	"uk":    "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯабвгґдеєжзиіїйклмнопрстуфхцчшщьюя’",
+	// Kana, Hangul and common hanzi (uilangface.go).
+	"ja":    "あいうえおかきくけこアイウエオ設定言語日本語",
+	"ko":    "가나다라마바사아자차카타파하설정언어한국어",
+	"zh-CN": "设置语言简体中文游戏音乐网络",
 }
 
 // uiFontLanguageGap is the first letter the interface language needs that the

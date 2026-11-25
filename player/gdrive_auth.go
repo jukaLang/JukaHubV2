@@ -59,9 +59,9 @@ const (
 )
 
 var (
-	errGdriveNoClient    = errors.New("no Google sign-in is set up yet — Tools → Save sync → Set up Google sign-in")
+	errGdriveNoClient    = errors.New("no Google sign-in is set up yet — Tools → Sync, then scan its code with your phone")
 	errGdriveSignedOut   = errors.New("not signed in to Google Drive")
-	errGdriveExpired     = errors.New("the Google Drive sign-in expired — sign in again in Tools → Save sync")
+	errGdriveExpired     = errors.New("the Google Drive sign-in expired — sign in again in Tools → Sync")
 	errGdriveDenied      = errors.New("the sign-in was declined on the phone — if Google said the app is still being tested, add your account as a test user or publish the app")
 	errGdriveCodeExpired = errors.New("the code expired before it was entered — start again")
 )

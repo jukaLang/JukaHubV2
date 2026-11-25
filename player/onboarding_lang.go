@@ -52,6 +52,9 @@ var onbLangTitles = map[string]string{
 	"it":    "Scegli la lingua",
 	"ru":    "Выберите язык",
 	"uk":    "Виберіть мову",
+	"ja":    "言語を選んでください",
+	"ko":    "언어를 선택하세요",
+	"zh-CN": "选择你的语言",
 }
 
 // onbLangWord is the one-line "Language" in every offered language, under the
@@ -60,6 +63,7 @@ func onbLangWord() string {
 	words := map[string]string{
 		"en": "Language", "es": "Idioma", "pt-BR": "Idioma", "fr": "Langue",
 		"de": "Sprache", "it": "Lingua", "ru": "Язык", "uk": "Мова",
+		"ja": "言語", "ko": "언어", "zh-CN": "语言",
 	}
 	seen := map[string]bool{}
 	parts := make([]string, 0, len(uiLanguages))
@@ -71,7 +75,9 @@ func onbLangWord() string {
 		seen[w] = true
 		parts = append(parts, w)
 	}
-	return strings.Join(parts, " · ")
+	// Only the words the face on screen can draw: Japanese, Korean and
+	// Chinese need their own (uilangface.go).
+	return strings.Join(uiLanguageWordsDrawable(parts), " · ")
 }
 
 // onbLangTitle is the page title in the highlighted language.
@@ -111,7 +117,9 @@ func onboardingLangReset(config *Config) {
 		}
 	}
 	onbLang.hits = onbLang.hits[:0]
-	uiSetLanguage(uiLanguages[onbLang.cursor].Code)
+	// A language whose face is not on the card yet stays English on screen
+	// until Next fetches it (uilangface.go).
+	uiSetLanguageDrawable(uiLanguages[onbLang.cursor].Code)
 }
 
 // onboardingLangSync puts the highlight on the language in force, for a page
@@ -139,7 +147,7 @@ func onboardingLangMove(delta int) {
 		return
 	}
 	onbLang.cursor = next
-	uiSetLanguage(uiLanguages[next].Code)
+	uiSetLanguageDrawable(uiLanguages[next].Code)
 	PlayNavSound()
 }
 
@@ -179,6 +187,13 @@ func onboardingLangCommit(config *Config) {
 	}
 	onboardingLangStore(config)
 	saveUserConfigDebounced(userConfigFromVariables(config))
+	// Japanese, Korean or Chinese without its face: it downloads now, and the
+	// tour switches when it lands (uilangface.go).
+	if onbLang.cursor >= 0 && onbLang.cursor < len(uiLanguages) {
+		if code := uiLanguages[onbLang.cursor].Code; !uiLanguageDrawable(code) {
+			uiLanguageFaceKeep(config, code, true)
+		}
+	}
 }
 
 // onboardingRenderLanguage draws the language list in the card's body area.
@@ -247,7 +262,7 @@ func onboardingRenderLanguage(renderer *sdl.Renderer, config *Config, cy, cardH,
 			color = ColorTextPrimary()
 		}
 		labelX := dotX + 18
-		label := ellipsize(font, l.Native, rect.X+rect.W-14-labelX)
+		label := ellipsize(font, uiLanguageLabel(l), rect.X+rect.W-14-labelX)
 		renderTextRaw(renderer, config, font, label, color, labelX, rect.Y+(rowH-int32(font.Height()))/2)
 	}
 }
@@ -326,7 +341,8 @@ func uiLanguageFromLocale(s string) string {
 			return l.Code
 		}
 	}
-	return ""
+	// "zh_CN", "zh-Hans", "zh": Simplified Chinese (uilangface.go).
+	return uiLanguageLocaleAlias(s)
 }
 
 // uiTrimuiSystemLanguage reads the stock firmware's "language" from
@@ -368,6 +384,9 @@ func uiTrimuiSystemLanguage() string {
 		return "ru"
 	case "ukrainian", "українська":
 		return "uk"
+	}
+	if code := uiLanguageLocaleAlias(v); code != "" {
+		return code // Japanese, Korean, Chinese (uilangface.go)
 	}
 	return uiLanguageFromLocale(v)
 }

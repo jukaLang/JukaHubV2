@@ -873,6 +873,74 @@ build_moonlight() {
     } >> "$OUTPUT_BIN/BUILDINFO.txt"
 }
 
+# ── libjukaosd.so, the In-game indicators hook (native mode, optional) ────
+
+# build_osd compiles ingame_osd.c into the LD_PRELOAD library JukaHub hands
+# RetroArch and PPSSPP (../ingamehud.go): one C file, libc and libdl only.
+# Held to the helpers' checks (strip, no rpath, the NEEDED allowlist without
+# SDL, GLIBC_MAX, the four hooked symbols exported), then installed into
+# OUTPUT_BIN with its block in BUILDINFO.txt. Returns 1, with the failed step
+# in OSD_FAILED, on any trouble; it never stops the build.
+build_osd() {
+    OSD_FAILED=""
+    osd_stage="$BUILD_DIR/jukahub-osd"
+    osd_lib="$osd_stage/libjukaosd.so"
+    rm -rf "$osd_stage"
+    mkdir -p "$osd_stage"
+    if ! cc -std=gnu11 -shared -fPIC -O2 -fvisibility=hidden -Wall -Wextra -Werror \
+        -o "$osd_lib" "$NATIVE_DIR/ingame_osd.c" -ldl > "$LOG_DIR/osd-build.log" 2>&1; then
+        OSD_FAILED="compile"
+        show_failure "$LOG_DIR/osd-build.log"
+        return 1
+    fi
+    if ! "$STRIP" --strip-unneeded "$osd_lib"; then
+        OSD_FAILED="strip"
+        return 1
+    fi
+    if readelf -d "$osd_lib" | grep -Eq '\((RPATH|RUNPATH)\)'; then
+        OSD_FAILED="the rpath check"
+        return 1
+    fi
+    osd_needed="$(needed_libs "$osd_lib" | tr '\n' ' ')"
+    for osd_dep in $osd_needed; do
+        case "$osd_dep" in
+            libc.so.6|libdl.so.2|ld-linux-aarch64.so.1) ;;
+            *)
+                OSD_FAILED="the NEEDED check ($osd_dep)"
+                return 1
+                ;;
+        esac
+    done
+    osd_max="$(glibc_max "$osd_lib")"
+    if [ -z "$osd_max" ] || ! version_le "$osd_max" "$GLIBC_MAX"; then
+        OSD_FAILED="the glibc check (GLIBC_${osd_max:-?}, newer than GLIBC_$GLIBC_MAX)"
+        return 1
+    fi
+    for osd_sym in eglSwapBuffers SDL_GL_SwapWindow SDL_RenderPresent SDL_DestroyRenderer; do
+        if ! readelf --dyn-syms -W "$osd_lib" | grep -Eq " FUNC +GLOBAL +DEFAULT +[0-9]+ $osd_sym\$"; then
+            OSD_FAILED="the export check ($osd_sym)"
+            return 1
+        fi
+    done
+    if ! { cp "$osd_lib" "$OUTPUT_BIN/libjukaosd.so.part" && chmod 644 "$OUTPUT_BIN/libjukaosd.so.part" &&
+        mv -f "$OUTPUT_BIN/libjukaosd.so.part" "$OUTPUT_BIN/libjukaosd.so"; }; then
+        rm -f "$OUTPUT_BIN/libjukaosd.so.part" "$OUTPUT_BIN/libjukaosd.so"
+        OSD_FAILED="installing into $OUTPUT_BIN"
+        return 1
+    fi
+    # The name alone on its line: remote-play-helpers.yml finds the block by
+    # it to check a reused library against its sha256.
+    {
+        echo ""
+        echo "libjukaosd.so"
+        echo "  what:       the In-game indicators hook (ingame_osd.c)"
+        echo "  sha256:     $(sha256sum "$OUTPUT_BIN/libjukaosd.so" | cut -d' ' -f1)"
+        echo "  size:       $(wc -c < "$OUTPUT_BIN/libjukaosd.so" | tr -d ' ') bytes"
+        echo "  needs:      $osd_needed"
+        echo "  glibc max:  GLIBC_$osd_max (limit GLIBC_$GLIBC_MAX)"
+    } >> "$OUTPUT_BIN/BUILDINFO.txt"
+}
+
 # ── Mode setup ───────────────────────────────────────────────────────────
 
 mkdir -p "$LOG_DIR"
@@ -985,7 +1053,8 @@ export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION
 # Binaries from an earlier run must not outlive a build that fails, or a
 # packaging script would ship them as this build's.
 rm -f "$OUTPUT_BIN/chiaki-stream" "$OUTPUT_BIN/chiaki-regist" "$OUTPUT_BIN/BUILDINFO.txt" \
-    "$OUTPUT_BIN/moonlight-stream" "$OUTPUT_BIN/moonlight-stream.part"
+    "$OUTPUT_BIN/moonlight-stream" "$OUTPUT_BIN/moonlight-stream.part" \
+    "$OUTPUT_BIN/libjukaosd.so" "$OUTPUT_BIN/libjukaosd.so.part"
 
 say "Configuring chiaki-ng"
 set -- \
@@ -1078,6 +1147,21 @@ if [ "$NATIVE_MODE" = "1" ]; then
     fi
 else
     echo "moonlight-stream: skipped (a TG5050 SDK build makes the PS helpers only; native mode builds it)"
+fi
+
+# The In-game indicators hook, last and optional like moonlight-stream: a
+# failure leaves every helper above as it is (../ingamehud.go says "comes with
+# the next JukaHub package" while it is missing).
+if [ "$NATIVE_MODE" = "1" ]; then
+    say "Building libjukaosd.so (optional)"
+    if build_osd; then
+        echo "libjukaosd.so: built and verified"
+    else
+        rm -f "$OUTPUT_BIN/libjukaosd.so" "$OUTPUT_BIN/libjukaosd.so.part"
+        printf '\nlibjukaosd.so: not built (%s failed; log: %s/osd-build.log)\n' "$OSD_FAILED" "$LOG_DIR" \
+            >> "$OUTPUT_BIN/BUILDINFO.txt"
+        echo "::warning title=In-game indicators::libjukaosd.so was not built: $OSD_FAILED failed. The other helpers are not affected."
+    fi
 fi
 
 echo "Installed helpers into $OUTPUT_BIN"

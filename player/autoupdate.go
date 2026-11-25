@@ -599,7 +599,11 @@ func releaseAssetDigest(digest string) string {
 func announceAvailableUpdate() {
 	label := availableUpdateLabel()
 	logPatch("auto-update: offering %s", label)
-	notifPush("JukaHub "+label+" is available — press the download icon in the header", notifInfo)
+	// One offer in the bell (its key replaces the last start's), and A on it
+	// opens the install choices (notifications_actions.go).
+	notifPost(notifSpec{Message: "JukaHub " + label + " is available — press the download icon in the header",
+		Priority: notifInfo, Source: notifSrcUpdates, Key: "update-offer", Toast: true,
+		Action: notifAction{Label: "Install update", Kind: notifActUpdate}})
 }
 
 // startAutoUpdateCheck runs the startup update check in the background. It is

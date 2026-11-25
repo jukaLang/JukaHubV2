@@ -2794,6 +2794,11 @@ func DiagnosticsText(config *Config) string {
 		if got := raGetDiagnostics(); got != "" {
 			sb.WriteString("RA install   : " + got + "\n")
 		}
+		// And the RetroArch the launch scripts call, as the last look found it
+		// (racard.go): JH-X6HRVE's card had lost it.
+		if got := raCardDiagnostics(); got != "" {
+			sb.WriteString("RA games     : " + got + "\n")
+		}
 	}
 	if snap := configHealth.Snapshot(); snap != nil {
 		loadErrs, _ := snap["load_errors"].(int)

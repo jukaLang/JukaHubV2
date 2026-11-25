@@ -308,3 +308,59 @@ func TestRommServerParsesROMHashesAndAutoSyncIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestSyncPhonePairInputs covers what the phone's Sync page sends — RomM's
+// pairing code or link and a Syncthing device ID — and RomM's answer to the
+// code exchange (companion_sync.go).
+func TestSyncPhonePairInputs(t *testing.T) {
+	for _, c := range []struct{ url, code, server, want string }{
+		{"romm.local:8080", "abcd-1234", "http://romm.local:8080", "abcd-1234"},
+		{"", "https://romm.example.com/pair?code=ABCD-1234", "https://romm.example.com", "ABCD-1234"},
+		{"https://h.example/romm/pair?code=X1Y2Z3W4", "", "https://h.example/romm", "X1Y2Z3W4"},
+		{"https://h.example/#/pair?code=Q1W2E3R4", "", "https://h.example", "Q1W2E3R4"},
+	} {
+		server, code := rommPairInput(c.url, c.code)
+		if server != c.server || code != c.want {
+			t.Errorf("rommPairInput(%q, %q) = %q, %q; want %q, %q", c.url, c.code, server, code, c.server, c.want)
+		}
+	}
+	for raw, want := range map[string]string{"abcd-1234": "ABCD1234", "12 34 56 78": "12345678", "abc": "", "abcd_1234": ""} {
+		got, ok := rommCleanPairCode(raw)
+		if (want == "") == ok || (ok && got != want) {
+			t.Errorf("rommCleanPairCode(%q) = %q, %v", raw, got, ok)
+		}
+	}
+	id := "AAAAAAA-BBBBBBB-CCCCCCC-DDDDDDD-EEEEEEE-FFFFFFF-GGGGGGG-HHHHHHH"
+	for raw, ok := range map[string]bool{strings.ToLower(id): true, strings.ReplaceAll(id, "-", ""): true, id[:20]: false, strings.Replace(id, "A", "1", 1): false} {
+		got, good := syncthingCleanID(raw)
+		if good != ok || (ok && got != id) {
+			t.Errorf("syncthingCleanID(%q) = %q, %v", raw, got, good)
+		}
+	}
+	token := "rmm_" + strings.Repeat("a", 64)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		switch {
+		case r.Method != http.MethodPost || r.URL.Path != "/romm/api/client-tokens/exchange" || r.Header.Get("Authorization") != "":
+			http.Error(w, "wrong call", http.StatusBadRequest)
+		case body.Code == "GOOD1234":
+			_ = json.NewEncoder(w).Encode(map[string]any{"raw_token": token, "scopes": []string{"roms.read"}})
+		default:
+			http.Error(w, `{"detail":"not found"}`, http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	base, err := rommServerBase(srv.URL + "/romm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := rommExchangePairCode(context.Background(), base, "GOOD1234"); err != nil || got != token {
+		t.Errorf("exchange = %q, %v", got, err)
+	}
+	if _, err := rommExchangePairCode(context.Background(), base, "BAD12345"); err == nil || !strings.Contains(err.Error(), "works once") {
+		t.Errorf("unknown code: %v", err)
+	}
+}

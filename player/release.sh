@@ -223,6 +223,12 @@ for device in "${TRIMUI_DEVICES[@]}"; do
             chmod 755 "$TARGET_DIR/bin/moonlight-stream"
             PKG_FILES+=(bin/moonlight-stream)
         fi
+        # The In-game indicators hook (ingamehud.go), optional as well.
+        if [ -f "$HELPERS_DIR/libjukaosd.so" ]; then
+            cp "$HELPERS_DIR/libjukaosd.so" "$TARGET_DIR/bin/"
+            chmod 644 "$TARGET_DIR/bin/libjukaosd.so"
+            PKG_FILES+=(bin/libjukaosd.so)
+        fi
     else
         echo "WARNING: ${device} ships without Remote Play streaming (no helpers)" >&2
     fi

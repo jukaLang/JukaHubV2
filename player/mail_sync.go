@@ -644,14 +644,18 @@ func mailMsgFromFetch(it map[string]imapValue) (mailCacheMsg, bool) {
 
 // mailNotify announces new mail: each of up to three messages, or a count.
 func mailNotify(a mailcalAccount, fresh []mailCacheMsg) {
+	// A in the bell opens Mail (notifications_actions.go).
+	open := notifAction{Label: "Open Mail", Kind: notifActScene, Arg: mailSceneName}
 	if len(fresh) > 3 {
-		notifPush(strconv.Itoa(len(fresh))+" new emails in "+a.label(), notifInfo)
+		notifPost(notifSpec{Message: strconv.Itoa(len(fresh)) + " new emails in " + a.label(), Priority: notifInfo,
+			Source: notifSrcMail, Action: open, Toast: true})
 		return
 	}
 	for i := len(fresh) - 1; i >= 0; i-- {
 		m := fresh[i]
 		subject := setOr(m.Subject, "(no subject)")
-		notifPush("New email from "+mailClean(m.sender(), 40)+": "+mailClean(subject, 80), notifInfo)
+		notifPost(notifSpec{Message: "New email from " + mailClean(m.sender(), 40) + ": " + mailClean(subject, 80),
+			Priority: notifInfo, Source: notifSrcMail, Action: open, Toast: true})
 	}
 }
 

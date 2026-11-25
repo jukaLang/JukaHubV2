@@ -786,6 +786,14 @@ func shoPlanFor(cmp shoComparison, keepLocal bool) ssyncPlan {
 // sync page and a handoff never write the same files at once, and the page
 // shows the progress too.
 func shoRun(cmp shoComparison, keepLocal bool, progress func(done, total int, current string)) (ssyncResult, error) {
+	return shoRunCtx(context.Background(), cmp, keepLocal, progress)
+}
+
+// shoRunCtx is shoRun that also stops when parent ends — the automatic
+// handover before a launch (synchub_peers.go), whose budget is the launch's.
+// It returns only once the copies have stopped, so nothing lands after the
+// caller has moved on to start the game.
+func shoRunCtx(parent context.Context, cmp shoComparison, keepLocal bool, progress func(done, total int, current string)) (ssyncResult, error) {
 	plan := shoPlanFor(cmp, keepLocal)
 	if len(plan.Items) == 0 {
 		if len(cmp.clash) > 0 {
@@ -804,6 +812,8 @@ func shoRun(cmp shoComparison, keepLocal bool, progress func(done, total int, cu
 	defer ssyncWorkEnd()
 	ctx, cancel := context.WithTimeout(jobCtx, shoRunBudget)
 	defer cancel()
+	stop := context.AfterFunc(parent, cancel)
+	defer stop()
 	// The comparison can be minutes old. When this game's saves changed here
 	// since (a sync from the other device, a game), the plan would replace a
 	// save nobody compared — or, for a file that was not here then, replace
@@ -834,7 +844,14 @@ func shoRun(cmp shoComparison, keepLocal bool, progress func(done, total int, cu
 	// The other device toasts "Saves synced with …" on done: not after a press
 	// that copied nothing (it refused the snapshot, a game is running there).
 	if res.Pulled+res.Pushed+res.Conflicts > 0 {
-		dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		// A launch waiting on parent does not wait the full ten seconds for a
+		// device that stopped answering; the other side records the base at
+		// the next sync instead.
+		wait := 10 * time.Second
+		if dl, ok := parent.Deadline(); ok {
+			wait = min(wait, max(time.Until(dl), 2*time.Second))
+		}
+		dctx, dcancel := context.WithTimeout(context.Background(), wait)
 		_ = peerDoJSON(dctx, cmp.PeerID, http.MethodPost, "/peer/v1/saves/done", ssyncDoneReq{
 			Session: session,
 			Base:    base,

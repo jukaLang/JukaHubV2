@@ -446,6 +446,9 @@ type geoLocation struct {
 	// TimeZone is the IANA zone the provider places the address in, when it
 	// says ("Europe/Berlin"); Settings → Date & time's "Set automatically".
 	TimeZone string
+	// City, Region and Country name the place, as far as the provider does
+	// (the weather's place label, weather_location.go).
+	City, Region, Country string
 }
 
 // lookupLocationContext tries the providers in order, stopping when the
@@ -489,6 +492,9 @@ func lookupIPWhoIs(ctx context.Context, client *http.Client) (geoLocation, bool)
 		Latitude    float64 `json:"latitude"`
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
+		City        string  `json:"city"`
+		Region      string  `json:"region"`
+		Country     string  `json:"country"`
 
 		TimeZone struct {
 			ID string `json:"id"`
@@ -500,7 +506,8 @@ func lookupIPWhoIs(ctx context.Context, client *http.Client) (geoLocation, bool)
 	if v.Latitude == 0 && v.Longitude == 0 {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone.ID}, true
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone.ID,
+		City: v.City, Region: v.Region, Country: v.Country}, true
 }
 
 func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool) {
@@ -510,6 +517,9 @@ func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool)
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
 		TimeZone    string  `json:"timezone"`
+		City        string  `json:"city"`
+		Region      string  `json:"region"`
+		Country     string  `json:"country_name"`
 	}
 	if !getGeoJSON(ctx, client, "https://ipapi.co/json/", &v) || v.Error {
 		return geoLocation{}, false
@@ -517,7 +527,8 @@ func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool)
 	if v.Latitude == 0 && v.Longitude == 0 {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone}, true
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode, TimeZone: v.TimeZone,
+		City: v.City, Region: v.Region, Country: v.Country}, true
 }
 
 func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) {
@@ -525,6 +536,8 @@ func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) 
 		Loc     string `json:"loc"`
 		Country string `json:"country"`
 		Zone    string `json:"timezone"`
+		City    string `json:"city"`
+		Region  string `json:"region"`
 	}
 	if !getGeoJSON(ctx, client, "https://ipinfo.io/json", &v) {
 		return geoLocation{}, false
@@ -538,7 +551,8 @@ func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) 
 	if errLat != nil || errLon != nil || (lat == 0 && lon == 0) {
 		return geoLocation{}, false
 	}
-	return geoLocation{Latitude: lat, Longitude: lon, CountryCode: v.Country, TimeZone: v.Zone}, true
+	return geoLocation{Latitude: lat, Longitude: lon, CountryCode: v.Country, TimeZone: v.Zone,
+		City: v.City, Region: v.Region, Country: v.Country}, true
 }
 
 func fetchWeatherOnce() {
@@ -561,9 +575,14 @@ func fetchWeatherOnceContext(parent context.Context) {
 	defer cancel()
 	client := &http.Client{Timeout: 6 * time.Second}
 	lat, lon := 40.71, -74.0 // default fallback (New York) if geolocation fails
-	g, ok := lookupLocationContext(ctx, client)
-	if ok {
+	place, source := "New York", weatherSourceDefault
+	if fixed, ok := weatherFixedNow(); ok {
+		// A place chosen in Settings (weather_location.go): no address lookup.
+		lat, lon, place, source = fixed.Lat, fixed.Lon, fixed.Name, weatherSourceSet
+		setWeatherCountry(fixed.Country)
+	} else if g, ok := lookupLocationContext(ctx, client); ok {
 		lat, lon = g.Latitude, g.Longitude
+		place, source = geoPlaceLabel(g), weatherSourceInternet
 		setWeatherCountry(g.CountryCode)
 	} else if ctx.Err() != nil {
 		return
@@ -630,6 +649,10 @@ func fetchWeatherOnceContext(parent context.Context) {
 	weatherDaily = days
 	weatherReady = len(days) > 0
 	wxMutex.Unlock()
+	if len(days) > 0 {
+		// The place this forecast is for, as the card and Settings say it.
+		weatherNoteUsed(place, source)
+	}
 	// Persist the forecast so the next boot has weather before the network is
 	// up; a failed write is logged, never fatal.
 	if len(days) > 0 {

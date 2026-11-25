@@ -85,6 +85,10 @@ JukaHub must set up in Google Cloud: [CLOUD_SYNC.md](CLOUD_SYNC.md).
 
 ## Syncthing
 
+[Sync](SYNC.md) turns Syncthing on and accepts its devices from the phone too
+(the QR code at the top of **Tools → Sync**), and lists it under **Connected**
+with the handheld's ID as a QR code. This page has every setting.
+
 **Syncthing** opens a page where JukaHub runs Syncthing for you. The first time
 you switch it **On**, it downloads the official release from
 github.com/syncthing/syncthing for this device: linux-arm64 on the handheld,

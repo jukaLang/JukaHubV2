@@ -21,6 +21,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,9 @@ func ppssppCardBody(st ppssppState, fw ppssppFirmwareInfo, haveFw bool, untested
 	default:
 		b.WriteString("PSP games run the PPSSPP on your card. ")
 	}
+	if usingOurs && ppssppBinaryCanResume(active.binary()) {
+		b.WriteString("It saves a PSP game for a power off or a flat battery, and the game starts again exactly there. ")
+	}
 	b.WriteString("JukaHub keeps a newer PPSSPP of its own — its own build of the newest upstream PPSSPP for this model, or the TrimUI build packaged by minui-psp, whichever is newer — and updates it with the Emulator updates setting. ")
 	b.WriteString("Both use the firmware's save folders, so saves and save states carry over either way, and if JukaHub's build does not start, the game opens in the firmware's PPSSPP instead.")
 	if reason, alone := ppssppScreenAloneReason(); alone {
@@ -257,6 +261,14 @@ func openPPSSPPCard(e emuEntry) {
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, false) }})
 	}
 
+	// Universal resume (instantresume.go): only JukaHub's own build can be
+	// asked to save a PSP game for a power off or a flat battery.
+	if platform == ppssppOwnPlatform && !ppssppActiveCanResume(st) {
+		options = append(options, recoveryOption{icon: "download", title: "Resume PSP games after a power off",
+			detail: "Installs JukaHub's own PPSSPP build, which can save the game for a power off or a flat battery · uses your saves",
+			run:    func(*Config) { recoveryCardClose(); ppssppStartInstallFrom(tile, true, true) }})
+	}
+
 	if prev, ok := ppssppGoBackTarget(st); ok {
 		active, _ := st.build(st.Active)
 		title := "Go back to the previous build"
@@ -332,7 +344,20 @@ func openPPSSPPCard(e emuEntry) {
 // chose JukaHub's PPSSPP, already plays a JukaHub build, or the new build is
 // newer than the firmware's.
 func ppssppStartInstall(tile string, use bool) {
+	ppssppStartInstallFrom(tile, use, false)
+}
+
+// ppssppStartInstallFrom is ppssppStartInstall; own installs JukaHub's own
+// build whatever ppssppPickRelease would choose — the card's "Resume PSP
+// games after a power off" (ppsspp_resume.go) — and only one whose notes say
+// it takes the save request. Once installed, a later check keeps it on a tie
+// (ppssppPickRelease prefers the build installed).
+func ppssppStartInstallFrom(tile string, use, own bool) {
 	platform, _ := ppssppPlatform()
+	if own && platform != ppssppOwnPlatform {
+		ShowToast("JukaHub builds its own PPSSPP for the Smart Pro and the Brick only", ToastKindInfo)
+		return
+	}
 	if platform == "" {
 		ShowToast("No PPSSPP build is published for this model", ToastKindInfo)
 		return
@@ -355,7 +380,14 @@ func ppssppStartInstall(tile string, use bool) {
 		// install card or the activity strip stops the transfer.
 		ctx, cancel := context.WithTimeout(installBarRunContext(), 45*time.Minute)
 		defer cancel()
-		rel, err := ppssppFetchRelease(ctx, newEmulatorUpdateClient())
+		fetch := ppssppFetchRelease
+		if own {
+			fetch = ppssppFetchOwnRelease
+		}
+		rel, err := fetch(ctx, newEmulatorUpdateClient())
+		if err == nil && own && !rel.Resume {
+			err = errors.New("JukaHub's own PPSSPP build cannot save a game for a power off yet — it comes with its next build")
+		}
 		if err != nil {
 			installBarFail(installCardDetail(emuFriendlyError(err)))
 			ShowToast("PPSSPP: "+emuFriendlyError(err), ToastKindError)

@@ -310,6 +310,22 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 
 	unit := weatherUnit(config)
 	heading := "Local weather · °" + unit
+	if place, _ := weatherUsedPlace(); place != "" {
+		// The place the forecast is for (weather_location.go): its city, cut
+		// to fit the card's width.
+		city, _, _ := strings.Cut(place, ",")
+		city = strings.TrimSpace(city)
+		for city != "" {
+			if w, _, _ := medium.SizeUTF8(city + " · °" + unit); int32(w)+36 <= r.W {
+				break
+			}
+			rs := []rune(city)
+			city = strings.TrimSpace(string(rs[:len(rs)-1]))
+		}
+		if city != "" {
+			heading = city + " · °" + unit
+		}
+	}
 	renderText(renderer, config, medium, heading, ColorTextPrimary(), r.X+18, r.Y+14)
 	// When the forecast came from the cache, say so instead of pretending it is
 	// live: a saved card is useful, a stale one presented as current is not.

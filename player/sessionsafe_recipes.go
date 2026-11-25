@@ -26,7 +26,10 @@ package main
 //     NextUI/MinUI builds of the Stapta-nl fork add SaveStateOnExit (ppsspp.ini
 //     [General]) and run it on SIGTERM with a 5 s limit, beside
 //     AutoLoadSaveState (0 off, 2 newest, 3+ a slot) for the resume. States are
-//     PSP/PPSSPP_STATE/*.ppst.
+//     PSP/PPSSPP_STATE/*.ppst. JukaHub's own build (2026-11-24,
+//     player/native/build-ppsspp.sh) takes a save request instead (SIGUSR1,
+//     sessionSafeRequestSave), known by the flag file beside its program
+//     rather than by anything here.
 //   - DraStic: enable_autosavestate = 1 in config/drastic.cfg writes a state
 //     on a proper exit (trngaje/advanced_drastic#23); a hotkey quit or a power
 //     cut does not (muOS forum, steward-fu/nds#63). Whether SIGTERM counts as a
@@ -244,6 +247,30 @@ var sessionSafeRecipes = []sessionSafeRecipe{
 // path sends, no save.
 var sessionSafeUnknown = sessionSafeRecipe{
 	ID: "unknown", Label: "This game", Class: sessionSafeQuitOnly, Signal: sessionSafeSigInt,
+}
+
+// sessionSafeAndroid is an Android game in AndroidRT. Its runner is called
+// "loader", too plain a name for the table, so it is known by its folder
+// (sessionSafeProcRecipe). No save state: held at the battery, asked to quit
+// at a power off (instantresume.go).
+var sessionSafeAndroid = sessionSafeRecipe{
+	ID: "android", Label: "This Android game", Class: sessionSafeQuitOnly, Signal: sessionSafeSigTerm,
+}
+
+// sessionSafeProcRecipe finds the row for one process: AndroidRT's runner by
+// the folder its program runs from, anything else by its names
+// (sessionSafeRecipeFor). Pure.
+func sessionSafeProcRecipe(p sessionSafeProc) (*sessionSafeRecipe, bool) {
+	argv0 := ""
+	if len(p.argv) > 0 {
+		argv0 = p.argv[0]
+	}
+	for _, s := range []string{p.exe, argv0} {
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(s, `\`, "/")), "/androidrt/") {
+			return &sessionSafeAndroid, true
+		}
+	}
+	return sessionSafeRecipeFor(p.comm, argv0, p.exe)
 }
 
 // sessionSafeRecipeFor finds the row for one process by its names (the

@@ -75,6 +75,14 @@ type setRow struct {
 	Sheet      func(c *Config) []setOption
 	SheetValue func(c *Config) string
 	SheetTitle string
+	// SheetChecked, with Sheet, makes the list a set (several boot
+	// animations): a check on every option it returns, and A on one calls
+	// SheetToggle, which adds or takes it out, and leaves the list open on it,
+	// so several can be changed in one visit (setSheetOpenSet). SheetNote is
+	// the line under the list's title.
+	SheetChecked func(c *Config) map[string]bool
+	SheetToggle  func(c *Config, value string)
+	SheetNote    string
 	// Clamp makes a choice stop at its ends instead of wrapping: a level
 	// (volume, brightness, a delay) must not jump from 100% to 0% on one more
 	// Right, or from the dimmest backlight to full on one more Left.
@@ -711,6 +719,9 @@ func setBuildSections() []setSection {
 						setToast("Temperature unit: " + weatherUnitSettingLabel(c))
 					},
 				},
+				// Where the forecast is for: the internet address's place, or
+				// a city chosen by name (weather_location.go).
+				weatherLocationRow(),
 				{
 					ID: "autostart", Label: "Start JukaHub at login", Kind: setKindToggle,
 					Detail: func(*Config) string {
@@ -755,12 +766,18 @@ func setBuildSections() []setSection {
 				{
 					// What the logo does: the cinematic crash, the roll, the
 					// still image, the classic glass light, a random one or
-					// none (bootstyles.go).
+					// none (bootstyles.go). A lists them to pick several,
+					// one of which plays each start.
 					ID: "bootStyle", Label: "Boot animation", Kind: setKindChoice,
-					Detail:  bootStyleDetail,
-					Options: bootStyleOptions,
-					Current: bootStyleCurrent,
-					Choose:  bootStyleChoose,
+					Detail:       bootStyleDetail,
+					Options:      bootStyleOptions,
+					Current:      bootStyleCurrent,
+					Choose:       bootStyleChoose,
+					Sheet:        bootStyleSheetOptions,
+					SheetTitle:   "Boot animations",
+					SheetChecked: bootStyleChecked,
+					SheetToggle:  bootStyleToggle,
+					SheetNote:    "Pick one or more: each start plays one of them, never the same one twice running",
 				},
 				{
 					// The firmware's power-on picture (bootlogo.go): A twice
@@ -793,6 +810,10 @@ func setBuildSections() []setSection {
 						return setOr(strings.TrimSpace(c.Variables.FileExplorerRoot), "Default")
 					},
 				},
+				// When toasts wait in the bell: a nightly window, and what
+				// happens to them while a game runs (notifications_actions.go).
+				notifQuietHoursRow(),
+				notifWhilePlayingRow(),
 			},
 		},
 		{
@@ -1318,15 +1339,24 @@ func setBuildSections() []setSection {
 					Visible: liveBuilderPendingVisible,
 					Open:    liveBuilderShowApproval,
 				},
+				// Every device and cloud the saves follow, set up with one
+				// code (synchub.go).
+				{
+					ID: "syncHub", Label: "Sync", Kind: setKindAction,
+					Detail: setStatic("Your saves on every JukaHub and cloud — one code sets them up"),
+					Value:  syncHubSettingValue,
+					Open:   ssyncOpenScreen,
+				},
 				// Your other JukaHubs on this Wi-Fi (peer.go): pairing, save
-				// sync, handoff and Nearby. Everything is off until switched on.
+				// sync, handoff and Nearby. Everything is off until switched on
+				// (pairing from Sync switches it on).
 				{
 					ID: "peerDevices", Label: "Nearby devices", Kind: setKindToggle,
 					Detail: func(c *Config) string {
 						if peerSettingEnabled(c) {
 							return "Visible on this Wi-Fi as " + peerDeviceName() + " · pair, sync saves, continue games"
 						}
-						return "Off: this device is invisible on the network and listens for nothing"
+						return "Off: invisible on the network, except while Sync is open or pairing"
 					},
 					Get: peerSettingEnabled,
 					Set: peerSettingSetEnabled,
@@ -1614,6 +1644,9 @@ func setBuildSections() []setSection {
 						setToast("In-game overlay: " + label)
 					},
 				},
+				// Volume, brightness, low battery and notifications drawn
+				// into RetroArch and PPSSPP by JukaHub (ingamehud.go).
+				ingameHUDSettingsRow(),
 				{
 					// RetroArch's picture for JukaHub launches; a game can
 					// override it in its options sheet (videofilter.go).

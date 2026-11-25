@@ -618,6 +618,9 @@ func raPathChanged(kind, value string) bool {
 // deviceRetroArchNote logs where the handheld's RetroArch was found, or every
 // RetroArch folder looked at when none holds one, once per change.
 func deviceRetroArchNote(bin string, looked []string) {
+	// Seen now: one that goes missing later this session is told as lost
+	// (racard.go).
+	raCardSaw(bin)
 	if !raPathChanged("binary", bin) {
 		return
 	}

@@ -411,6 +411,12 @@ type webStyle struct {
 	OverflowX int
 	OverflowY int
 	ScrollX   bool
+	// OverflowBFC is set by an overflow other than visible or clip (hidden,
+	// auto, scroll) and FlowRoot by display: flow-root: either element holds
+	// the floats inside it and sits beside the floats around it
+	// (webpage_floats.go).
+	OverflowBFC bool
+	FlowRoot    bool
 	// TextOverflow: 0 reader fallback, 1 clip, 2 ellipsis. Unlike word
 	// breaking it belongs to the box and does not inherit.
 	TextOverflow int
@@ -1003,6 +1009,20 @@ type webBlock struct {
 	// that layer's root would have started: layout records the place as the
 	// layer's static position and lays nothing out for it.
 	LayerMarker int
+	// FloatGroup is the floated subtree the block belongs to (a floated
+	// figure, aside, table or column: webDocument.FloatRoots, 1-based), 0
+	// outside one. A layout pass sets the group's blocks aside together, as
+	// FloatBlocks of the one block that stands for them in its flow
+	// (webpage_floats.go).
+	FloatGroup  int
+	FloatBlocks []webBlock
+	// ClearMarker is set on an empty block that only moves what follows below
+	// floats: a clearfix's ::after (Style.Clear says which floats), or the end
+	// of an element that holds its floats (overflow: hidden, display:
+	// flow-root), which clears the floats opened inside it — those after its
+	// own place in the document, ClearFrom.
+	ClearMarker bool
+	ClearFrom   int
 	// OwnsBox is set when that element is BoxOwner's element, so the paints
 	// the block makes are that box's own surface rather than content inside
 	// it (webSortPaintOrder).
@@ -1243,6 +1263,9 @@ type webDocument struct {
 	// inline-block children (openInlineRow): their items are as wide as their
 	// content, as inline boxes are, instead of sharing the row.
 	FlexInlineRow map[int]bool
+	// FlexAdCut marks the flex and grid groups an ad item was cut out of
+	// (webpage_adremove.go): a grid closes the tracks nothing is left in.
+	FlexAdCut map[int]bool
 
 	// Layers describes each positioned subtree the parser opened, indexed by
 	// webBlock.Layer-1, and Stickies each position: sticky element, whose
@@ -1253,6 +1276,9 @@ type webDocument struct {
 	Layers     []webLayerInfo
 	Stickies   []webStickyInfo
 	Positioned []webPositionedInfo
+	// FloatRoots describes each floated subtree, indexed by
+	// webBlock.FloatGroup-1 (webpage_floats.go).
+	FloatRoots []webFloatRootInfo
 }
 
 // webBoxInfo is one visual container box an element contributed. direct is
@@ -1501,6 +1527,10 @@ type webLayout struct {
 	// track's. The container pass paints the box at least that tall, so a row
 	// of cards ends level (webpage_flow.go).
 	boxStretch map[int]int32
+	// boxGeom is each layout box's border box across, where layout applied
+	// it (applyBoxConstraints): the container pass paints that width, not the
+	// width of the box's text (webpage_flow.go).
+	boxGeom map[int]webBoxGeom
 }
 
 type webBackgroundPaint struct {
@@ -1876,6 +1906,12 @@ type webFrame struct {
 	positioned int
 	flexItem   bool
 	suspended  *webSuspendedLine
+	// floatRoot is the element's webDocument.FloatRoots entry (1-based) when
+	// it is a floated block that takes its subtree with it; floatsAt is how
+	// many floats the page had opened when it opened (webParser.floatsSeen),
+	// so its end knows whether any opened inside it (webpage_floats.go).
+	floatRoot int
+	floatsAt  int
 }
 
 // webContainerInfo is one containment container's element facts. The size
@@ -8527,13 +8563,18 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		if len(fields) > 1 {
 			st.OverflowY = webOverflowValue(fields[1])
 		}
+		for _, f := range fields {
+			st.OverflowBFC = st.OverflowBFC || webOverflowHoldsFloats(f)
+		}
 	}
 	if v, ok := decls["overflow-x"]; ok {
 		st.OverflowX = webOverflowValue(v)
 		st.ScrollX = webOverflowScrolls(v)
+		st.OverflowBFC = st.OverflowBFC || webOverflowHoldsFloats(v)
 	}
 	if v, ok := decls["overflow-y"]; ok {
 		st.OverflowY = webOverflowValue(v)
+		st.OverflowBFC = st.OverflowBFC || webOverflowHoldsFloats(v)
 	}
 	if v, ok := decls["text-overflow"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
@@ -9010,6 +9051,7 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		st.DisplayContents = lower == "contents"
 		st.DisplayInline = lower == "inline"
 		st.DisplayInlineBlock = lower == "inline-block" || lower == "inline-flex" || lower == "inline-grid"
+		st.FlowRoot = lower == "flow-root"
 		switch lower {
 		case "contents":
 			st.Display = webDisplayBlock
@@ -10286,6 +10328,10 @@ type webParser struct {
 	// are taken back when the line it interrupted resumes, so an inline box
 	// around it still finds its last run in that line (closeInlineBox).
 	lineFlushes int
+	// floatsSeen counts the floated elements opened so far: a clearfix or an
+	// element that holds its floats only leaves a marker when a float came
+	// before its end (webpage_floats.go).
+	floatsSeen int
 }
 
 type webTableParse struct {
@@ -11290,6 +11336,10 @@ func (p *webParser) walk(source string) {
 			continue
 		}
 		if strings.HasPrefix(source[i:], "<!--") {
+			// An ad was cut out here (webpage_adremove.go).
+			if strings.HasPrefix(source[i:], webAdCutMarker) {
+				p.noteAdCut()
+			}
 			if end := strings.Index(source[i+4:], "-->"); end >= 0 {
 				i += 4 + end + 3
 			} else {
@@ -11413,6 +11463,9 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 		return
 	}
+	if style.FloatSide != 0 {
+		p.floatsSeen++
+	}
 	if name == "picture" {
 		p.pictures = append(p.pictures, webPictureFrame{})
 	}
@@ -11516,6 +11569,12 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	switch name {
 	case "br":
 		p.addBreak()
+		// <br clear="all"> ends the paragraph below the floats beside it
+		// (webpage_floats.go).
+		if c := webBreakClear(style.Clear, attrs); c != 0 && p.floatsSeen > 0 {
+			p.flush()
+			p.clearMarker(c, 0, len(p.stack))
+		}
 		return
 	case "hr":
 		p.flush()
@@ -11552,6 +11611,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		rule.Details, rule.DetailsShown = p.detailsTag()
 		rule.Layer, rule.TreeSeq = p.openLayerIn(len(p.stack)), p.blockFrameSeq()
 		rule.Float = rule.Layer != 0
+		rule.FloatGroup = p.openFloatIn(len(p.stack))
 		p.blocks = append(p.blocks, rule)
 		return
 	case "source":
@@ -11914,6 +11974,7 @@ func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string
 		// subtree's layer when the table sits in one (webpage_layers.go).
 		marker := webBlock{Style: *style, TableEmptyRow: true, Layer: p.openLayerIn(len(p.stack)), TreeSeq: p.blockFrameSeq()}
 		marker.Float = marker.Layer != 0
+		marker.FloatGroup = p.openFloatIn(len(p.stack))
 		p.blocks = append(p.blocks, marker)
 	case webTableRoleCell:
 		style.TableRow = ctx.row - 1
@@ -12046,10 +12107,12 @@ func (p *webParser) endTag(name string) {
 		// ::after resolves at the closing tag, after descendants have run
 		// their counter increments, which is when a browser computes it.
 		afterSet := false
+		clearAfter := 0
 		if p.pseudoMask&(1<<webPseudoElemAfter) != 0 {
 			frame := &p.stack[i]
 			if generated := p.pseudoContent(frame.el, frame.attrs, frame.style, webPseudoElemAfter); generated.Matched && generated.HasContent {
 				afterSet = true
+				clearAfter = webClearfixAfter(&generated.Style)
 				if generated.Text != "" {
 					st := generated.Style
 					if frame.kind == "inline" && frame.style.InlineChip && !webInlineOwnChip(&st) {
@@ -12097,6 +12160,12 @@ func (p *webParser) endTag(name string) {
 		}
 		for len(p.tables) > 0 && p.tables[len(p.tables)-1].depth >= i {
 			p.tables = p.tables[:len(p.tables)-1]
+		}
+		// A clearfix's ::after moves what follows below the floats, and an
+		// element that holds its floats ends below those opened inside it
+		// (webpage_floats.go).
+		if p.stack[i].kind == "block" || p.stack[i].kind == "list" {
+			p.endFloatScope(i, clearAfter)
 		}
 		// A sticky or relatively positioned element's subtree owns every box
 		// opened inside it (webpage_layers.go); unclosed children close with
@@ -12166,9 +12235,11 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 	// the element itself never produces a block (the card/hero/sidebar case).
 	// A positioned element always gets one too: it is the containing block of
 	// the absolutely positioned boxes inside it, so layout must be able to
-	// find its rectangle (webpage_layers.go).
+	// find its rectangle (webpage_layers.go). So does a floated one: a pinned
+	// sticky bar carries the floats whose box is inside it (webpage_floats.go).
 	boxID := 0
-	if (kind == "block" || kind == "list") && (webStyleHasBox(style) || webStyleHasLayoutBox(style) || webStyleIsAnchor(&style)) {
+	if (kind == "block" || kind == "list") &&
+		(webStyleHasBox(style) || webStyleHasLayoutBox(style) || webStyleIsAnchor(&style) || style.FloatSide != 0) {
 		p.boxSeq++
 		boxID = p.boxSeq
 		if p.doc.Boxes == nil {
@@ -12214,6 +12285,21 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 	// frame is not pushed yet.
 	if layer != 0 && !flexItem {
 		p.layerMarker(layer, seq)
+	}
+	// A floated block takes its whole subtree with it — a figure's picture and
+	// caption, an infobox table, a sidebar column (webpage_floats.go). A flex
+	// or grid item does not float, nor does a positioned layer.
+	floatRoot := 0
+	if (kind == "block" || kind == "list") && layer == 0 && !flexItem && p.floatRootWanted(&style) {
+		floatRoot = p.newFloatRoot(style, boxID, seq)
+	}
+	// `clear` on a block of the flow moves the whole element below the floats
+	// before it, children included, not only its own text — and an empty
+	// `<div style="clear: both">` moves what follows it. A float's own clear
+	// only moves the float.
+	if (kind == "block" || kind == "list") && layer == 0 && !flexItem && style.Clear != 0 &&
+		style.FloatSide == 0 && p.floatsSeen > 0 {
+		p.clearMarker(style.Clear, 0, len(p.stack))
 	}
 	sticky := 0
 	if (kind == "block" || kind == "list") && style.Sticky && boxID != 0 {
@@ -12284,6 +12370,7 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		attrs: attrs, counterResets: p.pendingCounterResets,
 		layer: layer, seq: seq, blockStart: len(p.blocks), sticky: sticky,
 		positioned: positioned, flexItem: flexItem,
+		floatRoot: floatRoot, floatsAt: p.floatsSeen,
 	}
 	p.pendingCounterResets = nil
 	p.stack = append(p.stack, frame)
@@ -12325,6 +12412,25 @@ func (p *webParser) flexDirectChild(top *webFlexFrame, depth int) bool {
 		}
 	}
 	return true
+}
+
+// noteAdCut records an ad cut out of the page where the walk stands
+// (webAdCutMarker). When it was an item of the flex or grid container open
+// here, the grid closes the column tracks nothing is left in (layoutGridItems):
+// an article beside a cut ad rail takes the rail's width.
+func (p *webParser) noteAdCut() {
+	n := len(p.flexStack)
+	if n == 0 {
+		return
+	}
+	top := &p.flexStack[n-1]
+	if !p.flexDirectChild(top, len(p.stack)) {
+		return
+	}
+	if p.doc.FlexAdCut == nil {
+		p.doc.FlexAdCut = make(map[int]bool)
+	}
+	p.doc.FlexAdCut[top.group] = true
 }
 
 func (p *webParser) topStyle() webStyle {
@@ -12447,6 +12553,7 @@ func webResetElementStyle(st *webStyle) {
 	st.DecorationStyle = 0
 	st.VerticalAlign, st.VerticalAlignPx = 0, 0
 	st.OverflowX, st.OverflowY, st.ScrollX = 0, 0, false
+	st.OverflowBFC, st.FlowRoot = false, false
 	st.TextOverflow = 0
 	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
 	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
@@ -13485,6 +13592,8 @@ func (p *webParser) ensureBlock() *webBlock {
 	if block.Layer != 0 {
 		block.Float = true
 	}
+	// So is everything inside a floated subtree (webpage_floats.go).
+	block.FloatGroup = p.openFloatIn(len(p.stack))
 	block.TreeSeq = p.blockFrameSeq()
 	block.Boxes = p.boxPath()
 	if len(block.Boxes) > 0 {
@@ -14281,7 +14390,6 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 			idx := int32(len(layout.Rows))
 			layout.Rows = append(layout.Rows, webRow{Y: idx * rowH})
 		}
-		println("DBG page height=", int32(len(layout.Rows))*rowH, "paintBottom=", layout.PaintBottom)
 		layout.Height = int32(len(layout.Rows)) * rowH
 		l.layoutLayers(floats, padX, contentW)
 		l.paintContainerBoxes()
@@ -14676,28 +14784,18 @@ func webBlockContentWidth(block webBlock, contentW int32, baseSize float64) int3
 	return int32(math.Round(content * scale))
 }
 
-// webFloatReserve is the part of the flow a CSS float occupies. Following
-// blocks narrow (left/right) while their first row is inside the reserve, and
-// clear moves a block below its end row.
+// webFloatReserve is the part of the flow a CSS float occupies: the rows from
+// startRow up to endRow, and across them x0..x1, the float's margin box in
+// layout pixels. The lines beside it are shortened to clear that span (and a
+// box that cannot run under it moves beside it), and clear moves a block below
+// its end row. seq is the float's place in the document, which tells the
+// floats inside an element from those around it (webpage_floats.go).
 type webFloatReserve struct {
 	side     int
-	width    int32
 	startRow int32
 	endRow   int32
-}
-
-func webFloatWidthsAt(reserves []webFloatReserve, row int32) (left, right int32) {
-	for _, r := range reserves {
-		if row < r.startRow || row >= r.endRow {
-			continue
-		}
-		if r.side == 1 {
-			left += r.width
-		} else if r.side == 2 {
-			right += r.width
-		}
-	}
-	return left, right
+	x0, x1   int32
+	seq      int
 }
 
 func webClearRow(reserves []webFloatReserve, row int32, clear int) int32 {
@@ -14811,8 +14909,11 @@ func ownBoxOf(block webBlock) int {
 // item can be laid out at 0 and moved later.
 func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	// A paragraph the parser split around inline images is one paragraph
-	// again before anything measures it (webpage_inline.go).
+	// again before anything measures it (webpage_inline.go). A floated
+	// subtree that starts in this pass is set aside as one block, so its table
+	// is measured at the float's width, not this column's (webpage_floats.go).
 	blocks = webMergeInlineChains(blocks)
+	blocks = l.gatherFloatGroups(blocks)
 	blocks = l.prepareWebTables(blocks, contentW)
 	layout := l.layout
 	rowH := l.rowH
@@ -14935,6 +15036,39 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 	previousMarginBot := 0.0
 	flowPadX, flowContentW := padX, contentW
 	var floatReserves []webFloatReserve
+	// besideFloats places a box that cannot run under a float — a flex row, a
+	// grid, a flex column, a table — beside the floats at the current row: x
+	// and w are its own place, padX/contentW the column it is in. A table
+	// keeps its width (table is its ID, 0 for anything else) and moves clear
+	// of them; the others narrow to the room left. Without room it goes below
+	// them. Every row of one table moves as its first did (tableShift), so its
+	// columns stay in line (webpage_floats.go).
+	var tableShift map[int]int32
+	besideFloats := func(x, w int32, table int) (int32, int32) {
+		if len(floatReserves) == 0 {
+			return x, w
+		}
+		if table > 0 {
+			if shift, ok := tableShift[table]; ok {
+				return x + shift, w
+			}
+		}
+		row := int32(len(layout.Rows))
+		nx, nw, ok := webBesideFloats(floatReserves, row, padX, contentW, x, w, table > 0, baseSize)
+		if !ok {
+			if end := webFloatsEndAt(floatReserves, row); end > row {
+				skipRows(end - row)
+			}
+			nx, nw = x, w
+		}
+		if table > 0 {
+			if tableShift == nil {
+				tableShift = make(map[int]int32, 2)
+			}
+			tableShift[table] = nx - x
+		}
+		return nx, nw
+	}
 	for i := 0; i < len(blocks); i++ {
 		block := blocks[i]
 		if len(layout.Rows) >= webMaxRows {
@@ -14950,6 +15084,18 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				layout.statics = make(map[int]webStaticPos, 4)
 			}
 			layout.statics[block.LayerMarker] = webStaticPos{X: markX, Y: int32(len(layout.Rows)) * rowH}
+			continue
+		}
+		if block.ClearMarker {
+			// A clearfix, or the end of an element that holds its floats: what
+			// follows starts below them (webpage_floats.go). It takes no room
+			// of its own.
+			syncBoxes(block.Boxes, 0)
+			row := int32(len(layout.Rows))
+			if target := webClearMarkerRow(floatReserves, row, block.Style.Clear, block.ClearFrom); target > row {
+				skipRows(target - row)
+				previousMarginBot = 0
+			}
 			continue
 		}
 		if block.Style.FloatSide == 0 && !block.Float {
@@ -15047,6 +15193,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if block.Style.TableCenter && rowW < groupW {
 					groupPadX += (groupW - rowW) / 2
 				}
+				// Beside a float a table keeps its width and moves clear of it,
+				// or goes below it; every row of the table the same way.
+				groupPadX, rowW = besideFloats(groupPadX, rowW, block.Style.TableID)
+			} else {
+				// A flex row or a grid sits beside the floats around it, as
+				// a block formatting context does (webpage_floats.go).
+				groupPadX, rowW = besideFloats(groupPadX, rowW, 0)
 			}
 			l.layoutFlexRow(blocks[i:j], groupPadX, rowW)
 			l.recordContainerRows(block, blockStart, int32(len(layout.Rows)))
@@ -15076,7 +15229,8 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if len(layout.Rows) > 0 {
 					skipRows(marginRows(lead))
 				}
-				groupPadX, groupW := padX, contentW
+				// A flex column sits beside the floats around it too.
+				groupPadX, groupW := besideFloats(padX, contentW, 0)
 				// A definite height has room to hand out: to the items' auto
 				// margins, or by justify-content (layoutFlexColumnAuto).
 				distributes := flexAutoCount(grouped) > 0 || block.FlexReverse || block.FlexJustify != webJustifyStart
@@ -15106,6 +15260,24 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			i = j - 1
 			continue
 		}
+		if len(block.FloatBlocks) > 0 {
+			// A floated subtree (webpage_floats.go) goes where the next block
+			// starts, at its side of the column, and the flow wraps round it.
+			// Its margins do not collapse with the flow's, which carries on as
+			// if it were not there.
+			gap := previousMarginBot
+			if i+1 < len(blocks) && webBlockInFlow(&blocks[i+1]) {
+				gap = math.Max(gap, blocks[i+1].MarginTop)
+			}
+			row := int32(len(layout.Rows))
+			if row > 0 {
+				row += marginRows(gap)
+			}
+			if r, ok := l.layoutFloatGroup(block, padX, contentW, row, floatReserves); ok {
+				floatReserves = append(floatReserves, r)
+			}
+			continue
+		}
 		gap := block.MarginTop
 		if previousMarginBot > gap {
 			gap = previousMarginBot
@@ -15129,21 +15301,28 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 		}
 		row := int32(len(layout.Rows))
-		leftFloat, rightFloat := webFloatWidthsAt(floatReserves, row)
-		if leftFloat+rightFloat > 0 && contentW-leftFloat-rightFloat >= 24 {
-			padX += leftFloat
-			contentW -= leftFloat + rightFloat
-		}
 		if block.Style.FloatSide != 0 {
-			endRow, floatW := l.layoutCSSFloat(block, flowPadX, flowContentW, row, leftFloat, rightFloat)
-			if endRow > row {
-				floatReserves = append(floatReserves, webFloatReserve{
-					side: block.Style.FloatSide, width: floatW, startRow: row, endRow: endRow,
-				})
+			// A floated block of its own (a floated picture) goes beside the
+			// floats already there, in its containing block (webpage_floats.go).
+			if r, ok := l.layoutCSSFloat(block, padX, contentW, row, floatReserves); ok {
+				floatReserves = append(floatReserves, r)
 			}
 			previousMarginBot = 0
 			shiftRelative()
 			continue
+		}
+		// Plain text wraps round the floats line by line (wrapFloats, in the
+		// line builder below): a line beside a float is shorter, a line below
+		// it has the whole measure again. A box with a surface of its own, a
+		// picture, a rule, preformatted text and a block that holds its floats
+		// sit beside them whole, or below them when there is no room.
+		wrapFloats := len(floatReserves) > 0 && webBlockWrapsFloats(&block)
+		if len(floatReserves) > 0 && !wrapFloats {
+			if nx, nw, ok := webBesideFloats(floatReserves, row, padX, contentW, padX, contentW, false, baseSize); ok {
+				padX, contentW = nx, nw
+			} else if end := webFloatsEndAt(floatReserves, row); end > row {
+				skipRows(end - row)
+			}
 		}
 		if block.Rule {
 			y := nextY() + rowH/2
@@ -15336,12 +15515,38 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		firstLine := true
 		lineStart := padX + textIndent
 		lineRight := lineStart + avail
+		// Beside a float only the lines next to it are shorter: each line takes
+		// the room the floats leave at its row (fitLine), and a line below them
+		// has the block's whole measure again (webpage_floats.go). lineShift is
+		// how far a float pushed the line's start — the list marker moves with
+		// it — and waitRows how many rows a line with no room beside the floats
+		// goes down, taken when its first word or picture is set (takeWait), so
+		// a block never ends in empty rows.
+		baseStart, baseAvail := lineStart, avail
+		lineShift, waitRows := int32(0), int32(0)
+		fitLine := func() {
+			lineStart, avail, lineShift, waitRows = baseStart, baseAvail, 0, 0
+			if wrapFloats {
+				lineStart, avail, lineShift, waitRows = webFitLine(floatReserves, int32(len(layout.Rows)), padX+indent, baseStart, baseAvail, baseSize)
+			}
+			lineRight = lineStart + avail
+		}
+		fitLine()
 		x := lineStart + firstLineIndent
 		// line-clamp: once clampLines lines are set, clampRow is the last one
 		// kept. Every later line is dropped, and the first one dropped puts
 		// "…" at the end of clampRow, since content was cut.
 		clampLines, linesSet := block.Style.LineClamp, 0
 		clampRow, clampCut := -1, false
+		// takeWait moves a line down the rows fitLine said it waits below a
+		// float, once its first word or picture is set; the lines a line clamp
+		// drops wait for nothing.
+		takeWait := func() {
+			if waitRows > 0 && len(line) == 0 && clampRow < 0 {
+				skipRows(waitRows)
+				waitRows = 0
+			}
+		}
 		// lineSeq counts the lines set, so a run can tell whether the line its
 		// last word went on is still open; edgeClosed is set when the word
 		// before closed an inline-block, whose edge is a break opportunity
@@ -15370,7 +15575,15 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				x = lineStart
 				return
 			}
-			lineWidth := lineMax - (padX + textIndent + firstLineIndent)
+			// The words start at the line's start, after text-indent on the
+			// first line only: every later line used to lose the indent from
+			// its width as well, so centred and justified lines of an indented
+			// paragraph ran past its right edge.
+			lineX := lineStart
+			if firstLine {
+				lineX += firstLineIndent
+			}
+			lineWidth := lineMax - lineX
 			if lineWidth < 0 {
 				lineWidth = 0
 			}
@@ -15378,7 +15591,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				if markerFont != nil {
 					line = append([]webRunPos{{
 						Text:  bullet,
-						X:     padX + indent,
+						X:     padX + indent + lineShift,
 						Font:  markerFont,
 						Color: webResolveColor(markerStyle, d),
 						Bold:  markerStyle.Bold,
@@ -15474,6 +15687,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			line = nil
 			lineMax, lineFontH = 0, 0
 			lineClipped = false
+			fitLine()
 			x = lineStart
 		}
 
@@ -15504,6 +15718,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				pos.X = x
 				pos.BoxWidth = contentW
 				pos.Boxes = append([]int(nil), block.Boxes...)
+				takeWait()
 				line = append(line, pos)
 				x += pos.ImageW
 				if x > lineMax {
@@ -15566,9 +15781,16 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						// An explicit <br> on an empty line is a blank row; a
 						// clamped block counts it as one of its lines.
 						if clampRow < 0 {
+							takeWait()
 							skipRows(1)
 							if linesSet++; clampLines > 0 && linesSet >= clampLines {
 								clampRow = len(layout.Rows) - 1
+							}
+							// The next line has the room the floats leave at its row.
+							fitLine()
+							x = lineStart
+							if firstLine {
+								x += firstLineIndent
 							}
 						}
 					} else {
@@ -15918,6 +16140,8 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						}
 					}
 					leadDone = true
+					// A line with no room beside a float starts below it.
+					takeWait()
 					// Letter spacing changes the advance between glyphs. A run with
 					// an inline background or a control frame is kept whole so its
 					// box does not become one box per character; those are rare and
@@ -16274,6 +16498,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		dx, dy = dx+tdx, dy+tdy
 		shiftRelative()
 		l.tagBlockBox(block, rectStart, bgStart)
+	}
+	// What one pass lays out — the page, a flex or grid item, a table cell, a
+	// layer, a float — holds its floats, as a formatting context does: it ends
+	// below the last of them, so a card is as tall as its floated picture and
+	// the page scrolls to a float's foot (webpage_floats.go).
+	if end := webFloatsEnd(floatReserves); end > int32(len(layout.Rows)) {
+		skipRows(end - int32(len(layout.Rows)))
 	}
 	syncBoxes(nil, 0)
 }

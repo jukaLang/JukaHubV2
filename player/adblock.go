@@ -22,6 +22,8 @@ package main
 //
 // brw_adblock.go builds on this: a broader curated host list, the Settings
 // switch (Block ads and trackers), the first-party rule and the Site info row.
+// webpage_adremove.go removes what is left of the ads from the page itself:
+// their slots, labels and sponsored boxes are cut out of the markup.
 
 import (
 	"encoding/json"

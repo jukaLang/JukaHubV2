@@ -564,6 +564,16 @@ func bluetoothEnabled() (bool, bool) {
 
 // setBluetoothEnabled switches the Bluetooth radio.
 func setBluetoothEnabled(on bool) error {
+	err := setBluetoothRadio(on)
+	if err == nil {
+		// The next start puts a radio left off back off (bt_bootswitch.go).
+		btSwitchRemember(on)
+	}
+	return err
+}
+
+// setBluetoothRadio is setBluetoothEnabled's work.
+func setBluetoothRadio(on bool) error {
 	// JukaHub OS starts Bluetooth at its next boot as it is left (jukaos_native.go).
 	jukaosNativeRadioIntent("BLUETOOTH", on)
 	if !on {

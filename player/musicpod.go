@@ -764,7 +764,7 @@ func podLanguageLabel() string {
 	}
 	for _, l := range uiLanguages {
 		if strings.EqualFold(l.Code, code) {
-			return l.Native
+			return uiLanguageLabel(l) // in English until its face is here (uilangface.go)
 		}
 	}
 	return "English"

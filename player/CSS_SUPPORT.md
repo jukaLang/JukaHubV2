@@ -133,10 +133,26 @@ gap, not a silent promise.
   and the modern `sv*`, `dv*` and `lv*` forms (`svh`, `dvh`, `lvh`, ...). They
   resolve against the reader's screen, including inside `calc()`, `min()`,
   `max()` and `clamp()`.
-- `float: left/right` and the logical `inline-start`/`inline-end` spellings (a
-  following block is narrowed beside it; `clear: left/right/both` and the
-  logical spellings move a block below the float). Floats shrink to their
-  widest run when no width is given.
+- `float: left/right` and the logical `inline-start`/`inline-end` spellings
+  (`webpage_floats.go`). A floated block element floats with everything in it
+  — a figure with its picture and caption, an infobox table, a caption box, a
+  float grid's column, a sidebar — at its `width`, or as wide as its widest
+  picture, line or row (a `display: table-caption` caption wraps under the
+  picture instead of widening the figure; a box inside with a width of its own
+  sets it), with its margins as the gap to the text. The lines beside a float
+  are shortened by exactly the part its margin box covers and the lines below
+  it have the whole measure again; a line with no room left beside it goes
+  below it. A box that cannot run under a float — a background or border of
+  its own, a picture, a rule, a flex row, a grid, a table (moved clear of it at
+  its own width) — sits beside it, or below it when the room is too narrow.
+  Floats stack: a second left float stands right of the first, a right float
+  left of the earlier one, and a float that does not fit beside them drops
+  below. `clear: left/right/both` (and the logical spellings) moves a block —
+  its children too — below the floats; on a float it moves only the float. A
+  clearfix (`::after { content: ""; clear: both }`), `<br clear="all">`, an
+  element with `overflow: hidden/auto/scroll` or `display: flow-root`, every
+  flex or grid item, table cell, positioned layer and float, and the page
+  itself hold their floats: what follows starts below them.
 - The page is laid out at the full width of the view, as a browser lays a
   page out at its window's width, and `@media` and `vw` answer for that same
   width (no narrower reading column).
@@ -478,6 +494,7 @@ mistaken for working CSS.
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
 | `@charset`, `@namespace` | Not applied. |
 | `@font-face`, `@keyframes`, `@page` | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
+| Floats inside a line, nested floated boxes, `shape-outside` | A floated inline element (`<span style="float:right">`) stays in its line, and a floated `<img>` floats on its own. Inside a floated box, inside a table cell, or past 600 floated boxes on a page, a floated element floats only its own text. A block that holds its floats and starts beside a float has its lines wrapped one by one, not its whole box narrowed. `shape-outside` is ignored: floats are rectangles. |
 
 ## Draw-path fixture coverage
 
@@ -491,7 +508,7 @@ feature that regresses paint or box flow fails the suite.
 | --- | --- | --- |
 | Inline `strong`/`em`/`code`/links, wrapping, `white-space` | `InlineFormattingAndWhitespace` and `WhiteSpaceModes` | Tabs in preserved text use four spaces rather than `tab-size`. |
 | List markers, nesting, counters | `NestedLists` | Markers are text; no `list-style-image` or marker boxes. |
-| Floats and `clear` | `FloatsAndClear` | Float shrink-to-fit uses the widest run. |
+| Floats and `clear` | `FloatsAndClear` | Float shrink-to-fit uses the widest picture, line or table row; text beside a float wraps line by line. |
 | Four-side borders, styles, radius | `BordersAndRadius` | Radius is clamped to the used box; no elliptical radii. |
 | Opacity | `OpacityPaintsThrough` | Opacity multiplies paint, not an isolated compositing group. |
 | Transforms | `TransformsStayInFlow` | `translate()` moves an in-flow box without taking it out of the flow; `rotate()` is not drawn, so content stays readable. |
