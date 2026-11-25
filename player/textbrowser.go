@@ -1849,6 +1849,10 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 	notPage := func() (textBrowserDocument, error) {
 		return fail(brwFailContent, "This address is a "+mediaType+" file, not a web page.")
 	}
+	if brwStreamResponse(resp.Request.URL.String(), mediaType) {
+		// A video, a song or a live playlist: its card plays it (brw_stream.go).
+		return brwStreamCard(address, mediaType)
+	}
 	if kind != brwDocHTML && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Disposition"))), "attachment") {
 		// The site asks for a download (an "Export CSV" link): the card with
 		// its Download button, not the file drawn as a page.

@@ -67,8 +67,9 @@ func (l *webLayout) paintRuns(i int) []webPaintRun {
 	return p.runs
 }
 
-// webBuildPaintRuns joins a row's word runs into paint runs. Invisible runs
-// and inline images (painted from layout.Images) are left out.
+// webBuildPaintRuns joins a row's word runs into paint runs. Invisible runs,
+// inline images (painted from layout.Images) and lifted words (painted by
+// their lifted layer, webLiftPositioned) are left out.
 func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 	if len(runs) == 0 {
 		return nil
@@ -77,7 +78,7 @@ func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 	var spaceFont *ttf.Font
 	spaceW := int32(-1)
 	for _, run := range runs {
-		if run.Invisible || run.Image != nil {
+		if run.Invisible || run.Image != nil || run.Lifted {
 			continue
 		}
 		w, h := int32(0), int32(0)
@@ -103,6 +104,9 @@ func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 				prev.run.Text += run.Text
 				prev.w = run.X + w - prev.run.X
 				prev.h = max(prev.h, h)
+				// The stretch now ends where the word did: at its inline box's
+				// right edge, when the word closed one (webpage_inlinebox.go).
+				prev.run.ChipTrail, prev.run.ChipRight = run.ChipTrail, run.ChipRight
 				continue
 			}
 		}
@@ -139,6 +143,12 @@ func webPaintJoinGap(prev *webPaintRun, run *webRunPos, spaceW int32) (int32, bo
 		a.HasClip != run.HasClip || a.Clip != run.Clip {
 		return 0, false
 	}
+	// A word stretch ends at an inline box's edge, and words in different
+	// boxes stay apart (webpage_inlinebox.go).
+	if a.ChipTrail != 0 || a.ChipRight || run.ChipLead != 0 || run.ChipLeft || (a.Chip == nil) != (run.Chip == nil) ||
+		(a.Chip != nil && *a.Chip != *run.Chip) {
+		return 0, false
+	}
 	gap := run.X - (a.X + prev.w)
 	switch {
 	case gap == 0 && run.SpaceBefore == 0:
@@ -164,7 +174,7 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 	for i := 0; i < len(runs); i++ {
 		pr := &runs[i]
 		run := &pr.run
-		if !run.HasBg || run.Font == nil {
+		if !(run.HasBg || run.Chip != nil) || run.Font == nil {
 			continue
 		}
 		if run.BoxW > 0 && run.BoxH > 0 {
@@ -173,12 +183,18 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 			webPaintFill(r, x0+run.X, y+run.VerticalOffset, run.BoxW, run.BoxH, 3, run.Bg)
 			continue
 		}
+		if run.Chip != nil {
+			// An inline box: its padding, border and radius
+			// (webpage_inlinebox.go).
+			i = webPaintChipSpan(r, runs, i, x0, y)
+			continue
+		}
 		startX := x0 + run.X - 2
 		endX := x0 + run.X + pr.w
 		h := pr.h
 		for j := i + 1; j < len(runs); j++ {
 			next := &runs[j]
-			if !next.run.HasBg || next.run.Bg != run.Bg || next.run.Font == nil || next.run.BoxW > 0 {
+			if !next.run.HasBg || next.run.Bg != run.Bg || next.run.Font == nil || next.run.BoxW > 0 || next.run.Chip != nil {
 				break
 			}
 			endX = x0 + next.run.X + next.w

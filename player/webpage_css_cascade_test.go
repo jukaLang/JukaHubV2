@@ -587,6 +587,10 @@ func TestWebCSSAcceptedPropertiesHaveCoverage(t *testing.T) {
 		// Rendered since 2026-11-21: an inline <svg>'s root paint
 		// (webpage_svg.go) and translate() on positioned boxes.
 		"fill", "stroke", "transform",
+		// Read since 2026-11-24 only as stacking contexts (webStackingProperty);
+		// their effects are in CSS_SUPPORT.md's not-rendered table.
+		"isolation", "filter", "backdrop-filter", "-webkit-backdrop-filter", "mix-blend-mode", "will-change",
+		"contain", "perspective", "clip-path", "-webkit-clip-path", "mask", "mask-image", "-webkit-mask-image",
 	} {
 		classified[name] = true
 	}

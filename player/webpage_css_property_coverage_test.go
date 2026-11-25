@@ -136,7 +136,9 @@ func TestWebCSSEveryAcceptedPropertyChangesRenderedState(t *testing.T) {
 		{"letter-spacing", text, ``, `.x{letter-spacing:8px}`},
 		{"line-height", text, ``, `.x{line-height:2.4}`},
 		{"margin", text, ``, `.x{margin:24px}`},
-		{"margin-block", `<p class="x">Alpha</p><p>After</p>`, ``, `.x{margin-block:24px}`},
+		// 81px crosses two blank rows: 24px and the UA paragraph margin both fit
+		// one, which the reader's row grid cannot tell apart.
+		{"margin-block", `<p class="x">Alpha</p><p>After</p>`, ``, `.x{margin-block:81px}`},
 		{"margin-block-end", `<p class="x">Alpha</p><p>After</p>`, ``, `.x{margin-block-end:80px}`},
 		{"margin-block-start", `<p>Before</p><p class="x">Alpha</p>`, ``, `.x{margin-block-start:80px}`},
 		{"margin-bottom", `<p class="x">Alpha</p><p>After</p>`, ``, `.x{margin-bottom:80px}`},

@@ -423,6 +423,11 @@ type webStyle struct {
 	// box must extend over the padding while leaving the margin outside it.
 	PadTop float64
 	PadBot float64
+	// PadLeft/PadRight are the horizontal padding inside Indent/IndentRight,
+	// which also hold the margins: an inline element's background covers its
+	// padding but not its margin (webInlineInsets).
+	PadLeft  float64
+	PadRight float64
 	// MarginTopAuto/MarginBotAuto remember `margin: auto` on the block axis.
 	// Block flow ignores them; flex cross-axis and grid rows use them after
 	// the item's own height is known.
@@ -615,9 +620,12 @@ type webStyle struct {
 	AlignSelf int
 	// Width/WidthPct size a flex item explicitly, the way a card with
 	// `width: 33%` or `width: 240px` does. On an ordinary block they bound
-	// the text measure and the painted box in layoutBlocks.
+	// the text measure and the painted box in layoutBlocks. WidthFit is
+	// width: fit-content or max-content (1) or min-content (2): the box is as
+	// wide as what it holds (webLayouter.fitBoxWidth).
 	Width    float64
 	WidthPct float64
+	WidthFit int
 	Height   float64
 	MinWidth float64
 	// MinWidthAuto keeps `min-width: auto` distinct from an explicit
@@ -752,6 +760,12 @@ type webStyle struct {
 	TranslateY    float64
 	TranslatePctX float64
 	TranslatePctY float64
+	// Isolate marks an element that starts a stacking context through a
+	// property the reader does not draw — any transform, isolation: isolate,
+	// a filter, a blend mode, will-change, contain, perspective, a clip path,
+	// a mask (webStackingProperty) — so a z-index inside it orders only what
+	// is inside it. Not inherited.
+	Isolate bool
 	// InsetPct keeps percentage top/right/bottom/left values (in that order;
 	// 0 for a length or auto). A positioned box resolves them against its
 	// containing block, where `left: 50%` is half the anchor's width.
@@ -761,6 +775,11 @@ type webStyle struct {
 	// a wrapping row with its inline-block siblings (openInlineRow); an li
 	// with it, or with display: inline, has no list marker. Not inherited.
 	DisplayInlineBlock bool
+	// InlineChip marks the style of an inline box that paints a chip — a
+	// background or border of its own, or its parent inline box's — so its
+	// runs paint with its padding, radius and border (webpage_inlinebox.go).
+	// Not inherited.
+	InlineChip bool
 	// CenterBlocks is text-align: -webkit-center (<center>, align="center" on a
 	// div or a table part): boxes narrower than the line are centred too, not
 	// only the text. Inherited, like text-align, and cleared by any other value.
@@ -791,6 +810,10 @@ type webStyle struct {
 	// (webTagCellSurface), never a badge or a card inside it. computeStyle
 	// clears it, prepareTableStyle sets it.
 	CellOwn bool
+	// CellLastRow marks a cell of a table's last row: that row keeps the
+	// padding band its cells paint below the row grid, so whatever follows
+	// the table starts under the paint (layoutFlexRowItems).
+	CellLastRow bool
 }
 
 // webGridAreas is the small named-area matrix a grid container declares.
@@ -852,6 +875,15 @@ type webRun struct {
 	// Image is set on the run that stands for an inline image once layout
 	// has stitched an image-split paragraph back together (webpage_inline.go).
 	Image *webBlock
+	// Lead and Trail are the room the edges of the inline boxes that open
+	// before the run's first word and close after its last take in the line,
+	// in CSS px (margin, border and padding); ChipLead and ChipTrail are the
+	// part of them the run's background chip covers, and OpensChip/ClosesChip
+	// mark the left and right edges of a box with a surface of its own
+	// (webpage_inlinebox.go).
+	Lead, Trail           float64
+	ChipLead, ChipTrail   float64
+	OpensChip, ClosesChip bool
 }
 
 // webBlock is one laid-out unit: a paragraph, heading, list item, quote, code
@@ -1214,9 +1246,13 @@ type webDocument struct {
 
 	// Layers describes each positioned subtree the parser opened, indexed by
 	// webBlock.Layer-1, and Stickies each position: sticky element, whose
-	// subtree layout copies into a pinned bar (webpage_layers.go).
-	Layers   []webLayerInfo
-	Stickies []webStickyInfo
+	// subtree layout copies into a pinned bar (webpage_layers.go). Positioned
+	// lists the relatively positioned elements of the flow, in document
+	// order, which layout may paint in stacking order with the layers
+	// (webLiftPositioned).
+	Layers     []webLayerInfo
+	Stickies   []webStickyInfo
+	Positioned []webPositionedInfo
 }
 
 // webBoxInfo is one visual container box an element contributed. direct is
@@ -1286,6 +1322,17 @@ type webRunPos struct {
 	// picture itself is painted from layout.Images.
 	Image          *webBlock
 	ImageW, ImageH int32
+	// Chip is the inline box this word paints in (webpage_inlinebox.go), shared
+	// by its run's words; nil keeps the plain chip of a run with a background.
+	// ChipLead/ChipTrail are how far the chip reaches before and after the
+	// word, and ChipLeft/ChipRight mark the box's own left and right edges.
+	Chip                *webInlineChip
+	ChipLead, ChipTrail int32
+	ChipLeft, ChipRight bool
+	// Lifted marks a word the page paints in a lifted layer instead
+	// (webLiftPositioned): the flow's paint skips it, everything else that
+	// reads the page's rows does not.
+	Lifted bool
 }
 
 // webRow is one line slot in the uniform layout grid. Tall lines (headings)
@@ -1344,6 +1391,9 @@ type webRect struct {
 	// clears the tag when it merges the cell.
 	cellKey  int64
 	cellPart uint8
+	// Lifted marks a paint a lifted layer draws instead of the flow
+	// (webLiftPositioned).
+	Lifted bool
 }
 
 // webFloat is a layer: a positioned subtree, a CSS float or a sticky bar's
@@ -1390,6 +1440,16 @@ type webFloat struct {
 	LimitTop  int32
 	Bottom    int32
 	HasBottom bool
+	// Root is the box of the element the layer is made of (a positioned
+	// subtree's root, a float's innermost box, a sticky bar's own box), and
+	// StickyIndex the pinned bar in webLayout.Stickies (1-based) that carries
+	// a copy of this layer: it is not painted at its page place while that
+	// bar is pinned. Lift marks a relatively positioned part of the flow
+	// painted in stacking order (webLiftPositioned): the page's rows still
+	// hold its words for links, find and the cursor.
+	Root        int
+	StickyIndex int
+	Lift        bool
 	// paint caches the rows' paint runs, as webLayout.paint does for the
 	// page. Render thread.
 	paint []webPaintRow
@@ -1405,6 +1465,11 @@ type webLayout struct {
 	Backgrounds []webBackgroundPaint
 	RowH        int32
 	Height      int32
+	// PaintBottom is the lowest bottom the page's scroll has to reach: a
+	// table cell keeps one padding row below its content rows
+	// (webTagCellSurface), and the page stops at the last content row unless
+	// that row is counted.
+	PaintBottom int32
 	// ContainerSizes holds the used border-box size of each containment
 	// container, in CSS px, measured by this layout. Container units in the
 	// next pass resolve against these numbers.
@@ -1462,6 +1527,8 @@ type webBackgroundPaint struct {
 	// cellKey and cellPart tag a table cell's own surface, as on webRect.
 	cellKey  int64
 	cellPart uint8
+	// Lifted marks a paint a lifted layer draws instead, as on webRect.
+	Lifted bool
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -1633,7 +1700,11 @@ type webRule struct {
 	selector    string
 	specificity int
 	order       int
-	decls       map[string]string
+	// layer is the rule's cascade layer rank (webCSSParse.layerRank): a later
+	// layer beats an earlier one, and a rule outside every layer
+	// (webUnlayered) beats them all, before specificity is compared.
+	layer int
+	decls map[string]string
 	// important holds the !important declarations of the same rule. They are
 	// kept apart because they outrank every normal declaration, whatever the
 	// selector's specificity.
@@ -1785,6 +1856,26 @@ type webFrame struct {
 	// later in that containing block is an overlay on the photo
 	// (webParser.anchorSawImage).
 	sawImage bool
+	// An inline element's box (webpage_inlinebox.go): how many lines had been
+	// flushed (webParser.lineFlushes) and how many runs the open block had
+	// when it opened, so its right edge (inlineTrail, of which the chip covers
+	// inlineTrailChip) lands on the last run added inside it; whether it
+	// paints a surface of its own, and whether the next word was to open with
+	// its left edge (startedChip).
+	inlineFlushes   int
+	inlineRuns      int
+	inlineTrail     float64
+	inlineTrailChip float64
+	ownChip         bool
+	startedChip     bool
+	// positioned is the element's webDocument.Positioned entry (1-based) when
+	// it is a relatively positioned element of the flow; flexItem
+	// is set on a direct item of a flex or grid container (a z-index makes
+	// it a stacking context); suspended is the line an absolutely positioned
+	// inline element set aside, resumed when it closes (webpage_layers.go).
+	positioned int
+	flexItem   bool
+	suspended  *webSuspendedLine
 }
 
 // webContainerInfo is one containment container's element facts. The size
@@ -2857,12 +2948,12 @@ func webContainerRange(inner string, w, h float64) bool {
 // it describes this screen: @media (except print/speech), @supports (evaluated
 // against the declarations and selectors this reader implements), @container
 // (kept as a condition on each enclosed rule and resolved against the parser's
-// open container stack at match time), and @layer (the cascade order is
-// approximated, but the rules are the site's real styling).
+// open container stack at match time), and @layer, whose rules carry their
+// layer's place in the cascade (webCSSParse).
 func parseWebCSS(src string) []webRule {
 	rules := make([]webRule, 0, 32)
-	order := 0
-	parseWebCSSInto(stripWebCSSComments(src), 0, &order, &rules, nil)
+	ps := &webCSSParse{}
+	parseWebCSSInto(stripWebCSSComments(src), 0, ps, &rules, nil, "")
 	return rules
 }
 
@@ -2877,15 +2968,88 @@ const (
 	webCSSMaxRules = 24000
 )
 
-// parseWebCSSInto appends the rules of one (comment-free) block to rules.
-func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery) {
+// webUnlayered is the cascade-layer rank of a rule outside every @layer: it
+// beats every layered rule of the same importance, whatever their
+// specificity or order (and loses to them among !important ones).
+const webUnlayered = 1 << 20
+
+// webCSSParse is the state one stylesheet parse threads through its nested
+// blocks: the source-order counter and the cascade layers, ranked in the order
+// the sheet first names them — `@layer theme, base, components, utilities;` is
+// how Tailwind CSS 4 orders its whole output.
+type webCSSParse struct {
+	order  int
+	layers map[string]int
+	anon   int
+}
+
+// layerRank is a layer's place in the cascade, registering the name on first
+// sight; "" is outside every layer.
+func (ps *webCSSParse) layerRank(name string) int {
+	if name == "" {
+		return webUnlayered
+	}
+	if ps.layers == nil {
+		ps.layers = make(map[string]int, 4)
+	}
+	if r, ok := ps.layers[name]; ok {
+		return r
+	}
+	r := len(ps.layers) + 1
+	ps.layers[name] = r
+	return r
+}
+
+// blockLayer is the full name of the layer an `@layer name { … }` block opens
+// inside parent: framework.base for `@layer base` in `@layer framework`. An
+// anonymous block is a layer of its own.
+func (ps *webCSSParse) blockLayer(atRule, parent string) string {
+	name := strings.TrimSpace(atRule[len("@layer"):])
+	if name == "" {
+		ps.anon++
+		name = "#" + strconv.Itoa(ps.anon)
+	}
+	if parent != "" {
+		return parent + "." + name
+	}
+	return name
+}
+
+// noteLayerStatements registers the names of the `@layer a, b;` statements in
+// front of a block, so they rank in the order the statement lists them.
+func (ps *webCSSParse) noteLayerStatements(text, parent string) {
+	for strings.HasPrefix(text, "@") {
+		end := strings.IndexByte(text, ';')
+		if end < 0 {
+			return
+		}
+		statement := strings.TrimSpace(text[:end])
+		if len(statement) > len("@layer") && asciiLower(statement[:len("@layer")]) == "@layer" {
+			for _, name := range strings.Split(statement[len("@layer"):], ",") {
+				if name = strings.TrimSpace(name); name != "" {
+					if parent != "" {
+						name = parent + "." + name
+					}
+					ps.layerRank(name)
+				}
+			}
+		}
+		text = strings.TrimSpace(text[end+1:])
+	}
+}
+
+// parseWebCSSInto appends the rules of one (comment-free) block to rules, in
+// the cascade layer named layer ("" for none).
+func parseWebCSSInto(src string, depth int, ps *webCSSParse, rules *[]webRule, containers []*webContainerQuery, layer string) {
 	for i := 0; i < len(src) && len(*rules) < webCSSMaxRules; {
 		open := strings.IndexByte(src[i:], '{')
 		if open < 0 {
 			break
 		}
 		open += i
-		selectorText := webSkipCSSStatementRules(strings.TrimSpace(src[i:open]))
+		prefix := strings.TrimSpace(src[i:open])
+		ps.noteLayerStatements(prefix, layer)
+		selectorText := webSkipCSSStatementRules(prefix)
 		close := webCSSBlockEnd(src, open)
 		if close < 0 {
 			break
@@ -2901,11 +3065,19 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 				query := webParseContainerQuery(selectorText)
 				if query != nil && depth < webCSSMaxNesting {
 					next := append(append([]*webContainerQuery(nil), containers...), query)
-					parseWebCSSInto(body, depth+1, order, rules, next)
+					parseWebCSSInto(body, depth+1, ps, rules, next, layer)
 				}
 				continue
 			}
-			keep := strings.HasPrefix(lower, "@layer")
+			if strings.HasPrefix(lower, "@layer") {
+				inner := ps.blockLayer(selectorText, layer)
+				ps.layerRank(inner)
+				if depth < webCSSMaxNesting {
+					parseWebCSSInto(body, depth+1, ps, rules, containers, inner)
+				}
+				continue
+			}
+			keep := false
 			if strings.HasPrefix(lower, "@supports") {
 				keep = webSupportsApplies(selectorText)
 			}
@@ -2915,7 +3087,7 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 			// A conditional group rule nests: `@media` inside `@layer` still
 			// has to be judged on its own query.
 			if keep && depth < webCSSMaxNesting {
-				parseWebCSSInto(body, depth+1, order, rules, containers)
+				parseWebCSSInto(body, depth+1, ps, rules, containers, layer)
 			}
 			continue
 		}
@@ -2924,7 +3096,7 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 		// declarations dropped every nested rule. Keep the fast path for the
 		// ordinary flat sheet.
 		if strings.IndexByte(body, '{') >= 0 {
-			if webEmitNestedCSSBody(body, webSplitSelectorList(selectorText), depth, order, rules, containers) {
+			if webEmitNestedCSSBody(body, webSplitSelectorList(selectorText), depth, ps, rules, containers, layer) {
 				continue
 			}
 		}
@@ -2932,7 +3104,7 @@ func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule, contai
 		if len(decls) == 0 && len(important) == 0 {
 			continue
 		}
-		webAppendCSSRule(webSplitSelectorList(selectorText), decls, important, order, rules, containers)
+		webAppendCSSRule(webSplitSelectorList(selectorText), decls, important, ps, rules, containers, layer)
 	}
 }
 
@@ -3005,14 +3177,14 @@ func webSplitCSSNestedBody(body string) (declText string, nested []webCSSNestedB
 // webEmitNestedCSSBody processes a parent declaration block that also holds
 // nested rules. It reports whether it found any nested block, so a flat body
 // can stay on the parser's original, cheaper path.
-func webEmitNestedCSSBody(body string, parents []string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery) bool {
-	return webEmitNestedCSSBodyAt(body, parents, depth, order, rules, containers, false)
+func webEmitNestedCSSBody(body string, parents []string, depth int, ps *webCSSParse, rules *[]webRule, containers []*webContainerQuery, layer string) bool {
+	return webEmitNestedCSSBodyAt(body, parents, depth, ps, rules, containers, layer, false)
 }
 
 // webEmitNestedCSSBodyAt is the recursive worker. force is set for any body
 // reached through a nested selector or at-rule: such a body may contain only
 // declarations for its parent, while the top-level fast path may not.
-func webEmitNestedCSSBodyAt(body string, parents []string, depth int, order *int, rules *[]webRule, containers []*webContainerQuery, force bool) bool {
+func webEmitNestedCSSBodyAt(body string, parents []string, depth int, ps *webCSSParse, rules *[]webRule, containers []*webContainerQuery, layer string, force bool) bool {
 	declText, nested := webSplitCSSNestedBody(body)
 	if len(nested) == 0 && !force {
 		return false
@@ -3021,7 +3193,7 @@ func webEmitNestedCSSBodyAt(body string, parents []string, depth int, order *int
 		return true
 	}
 	if decls, important := parseWebDeclsSplit(declText); len(decls) > 0 || len(important) > 0 {
-		webAppendCSSRule(parents, decls, important, order, rules, containers)
+		webAppendCSSRule(parents, decls, important, ps, rules, containers, layer)
 	}
 	for _, block := range nested {
 		selector := strings.TrimSpace(block.selector)
@@ -3033,26 +3205,28 @@ func webEmitNestedCSSBodyAt(body string, parents []string, depth int, order *int
 			switch {
 			case strings.HasPrefix(lower, "@media"):
 				if webMediaBlockApplies(selector) {
-					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, ps, rules, containers, layer, true)
 				}
 			case strings.HasPrefix(lower, "@supports"):
 				if webSupportsApplies(selector) {
-					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, ps, rules, containers, layer, true)
 				}
 			case strings.HasPrefix(lower, "@container"):
 				query := webParseContainerQuery(selector)
 				if query != nil {
 					next := append(append([]*webContainerQuery(nil), containers...), query)
-					webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, next, true)
+					webEmitNestedCSSBodyAt(block.body, parents, depth+1, ps, rules, next, layer, true)
 				}
 			case strings.HasPrefix(lower, "@layer"):
-				webEmitNestedCSSBodyAt(block.body, parents, depth+1, order, rules, containers, true)
+				inner := ps.blockLayer(selector, layer)
+				ps.layerRank(inner)
+				webEmitNestedCSSBodyAt(block.body, parents, depth+1, ps, rules, containers, inner, true)
 			}
 			continue
 		}
 		combined := webCombineNestedSelectors(parents, selector)
 		if len(combined) > 0 {
-			webEmitNestedCSSBodyAt(block.body, combined, depth+1, order, rules, containers, true)
+			webEmitNestedCSSBodyAt(block.body, combined, depth+1, ps, rules, containers, layer, true)
 		}
 	}
 	return true
@@ -3085,8 +3259,10 @@ func webCombineNestedSelectors(parents []string, nested string) []string {
 }
 
 // webAppendCSSRule compiles one selector list against a declaration block and
-// appends the resulting rules in source order.
-func webAppendCSSRule(selectors []string, decls, important map[string]string, order *int, rules *[]webRule, containers []*webContainerQuery) {
+// appends the resulting rules in source order, in the cascade layer named
+// layer.
+func webAppendCSSRule(selectors []string, decls, important map[string]string, ps *webCSSParse, rules *[]webRule, containers []*webContainerQuery, layer string) {
+	rank := ps.layerRank(layer)
 	hides := webDeclsHide(decls) || webDeclsHide(important)
 	reveals := webDeclsReveal(decls) || webDeclsReveal(important)
 	for _, selector := range selectors {
@@ -3107,7 +3283,8 @@ func webAppendCSSRule(selectors []string, decls, important map[string]string, or
 		*rules = append(*rules, webRule{
 			selector:    selector,
 			specificity: specificity,
-			order:       *order,
+			order:       ps.order,
+			layer:       rank,
 			decls:       decls,
 			important:   important,
 			sel:         sel,
@@ -3115,7 +3292,7 @@ func webAppendCSSRule(selectors []string, decls, important map[string]string, or
 			reveals:     reveals,
 			containers:  containers,
 		})
-		*order++
+		ps.order++
 	}
 }
 
@@ -3860,15 +4037,17 @@ func webSupportsSelector(selector string) bool {
 }
 
 // webSkipCSSStatementRules drops the statement at-rules — @charset, @import,
-// @namespace, which end at a semicolon instead of a block — from the text in
-// front of a block. They used to be read as part of the next selector, so
-// `@charset "utf-8"; body {…}` was taken for an at-rule block and the first
-// real rule of nearly every stylesheet was thrown away.
+// @namespace and the `@layer a, b;` order statement, which end at a semicolon
+// instead of a block — from the text in front of a block. They used to be read
+// as part of the next selector, so `@charset "utf-8"; body {…}` was taken for
+// an at-rule block and the first real rule of nearly every stylesheet was
+// thrown away (and `@layer base; body {…}` lost the body rule the same way).
+// An `@layer name` without a semicolon is the next block's own header.
 func webSkipCSSStatementRules(text string) string {
 	for strings.HasPrefix(text, "@") {
 		lower := asciiLower(text)
 		if !strings.HasPrefix(lower, "@charset") && !strings.HasPrefix(lower, "@import") &&
-			!strings.HasPrefix(lower, "@namespace") {
+			!strings.HasPrefix(lower, "@namespace") && !strings.HasPrefix(lower, "@layer") {
 			return text
 		}
 		end := -1
@@ -7873,6 +8052,54 @@ func webBorderVisible(value string) bool {
 	return true
 }
 
+// webTransparentInValue reports a border or outline value whose colour is
+// fully transparent.
+func webTransparentInValue(value string) bool {
+	c, ok := webColorInValueAny(value)
+	return ok && c.A == 0
+}
+
+// webBorderPaints is webBorderVisible for a value with a colour to paint in:
+// `border: 1px solid transparent` (Bootstrap's .btn and nav tabs) and
+// `outline: 2px solid transparent` (Tailwind's outline-none) draw nothing.
+// The reader's boxes do not reserve border room, so such a border is dropped.
+func webBorderPaints(value string) bool {
+	return webBorderVisible(value) && !webTransparentInValue(value)
+}
+
+// webResolveBorderColor lets a border-color that comes later in the cascade
+// than a border shorthand replace the colour the shorthand carries, as CSS
+// does: Bootstrap 4's `.btn { border: 1px solid transparent }` and
+// `.btn-outline-primary { border-color: #007bff }` is a blue border. rank is
+// each property's cascade position, as for webResolveBoxSides. A transparent
+// border-color also takes the borders set by width alone off the page.
+func webResolveBorderColor(merged map[string]string, rank map[string]int) {
+	color, ok := merged["border-color"]
+	if !ok {
+		return
+	}
+	at := rank["border-color"]
+	for _, key := range [...]string{"border", "border-left", "border-right", "border-top", "border-bottom"} {
+		v, has := merged[key]
+		if !has || rank[key] > at {
+			continue
+		}
+		fields := webCSSSpaceFields(v)
+		kept := make([]string, 0, len(fields)+1)
+		for _, f := range fields {
+			if _, isColor := webColorInValueAny(f); !isColor {
+				kept = append(kept, f)
+			}
+		}
+		merged[key] = strings.Join(append(kept, color), " ")
+	}
+	if webTransparentInValue(color) {
+		for _, key := range [...]string{"border-width", "border-left-width", "border-right-width", "border-top-width", "border-bottom-width"} {
+			delete(merged, key)
+		}
+	}
+}
+
 // webColorInValue finds the colour in a shorthand such as
 // `background: #123 url(x.png) no-repeat` or `1px solid rgba(0,0,0,.2)`. The
 // value is read in top-level tokens, so a colour function keeps its own spaces,
@@ -8258,6 +8485,22 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.HasTranslate = true
 			st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = x, y, pctX, pctY
 		}
+		// Any transform starts a stacking context, a rotation as much as a
+		// translation (webStackingContext).
+		if webStackingProperty("transform", v) {
+			st.Isolate = true
+		}
+	}
+	// So do these, though the reader draws none of their effects: Tailwind's
+	// `isolate`, a filter or backdrop blur, a blend mode, will-change,
+	// contain, perspective, a clip path or a mask (webpage_layers.go).
+	for _, key := range [...]string{
+		"isolation", "filter", "backdrop-filter", "-webkit-backdrop-filter", "mix-blend-mode", "will-change",
+		"contain", "perspective", "clip-path", "-webkit-clip-path", "mask", "mask-image", "-webkit-mask-image",
+	} {
+		if v, ok := decls[key]; ok && webStackingProperty(key, v) {
+			st.Isolate = true
+		}
 	}
 	if v, ok := decls["text-transform"]; ok {
 		st.Transform = webTextTransform(v)
@@ -8372,7 +8615,9 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.MarginBotAuto = webCSSAuto(v)
 	}
 	if v, ok := decls["padding-left"]; ok {
-		st.Indent += webLength(v, st.FontPx)
+		px := webLength(v, st.FontPx)
+		st.Indent += px
+		st.PadLeft += px
 	}
 	// A block's own top and bottom padding is breathing room, exactly like a
 	// margin: without it a card written as `padding-top: 24px` sat flush
@@ -8412,6 +8657,9 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 				st.IndentRight += right
 				if key == "margin-inline" {
 					st.MarginLeftAuto, st.MarginRightAuto = webAutoInlineMarginSides(v)
+				} else {
+					st.PadLeft += left
+					st.PadRight += right
 				}
 			}
 		}
@@ -8434,6 +8682,10 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 				st.PadTop += px
 			case "padding-block-end":
 				st.PadBot += px
+			case "padding-inline-start":
+				st.PadLeft += px
+			case "padding-inline-end":
+				st.PadRight += px
 			}
 		}
 	}
@@ -8457,10 +8709,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			st.MarginBot += bottom
 			st.PadTop += top
 			st.PadBot += bottom
+			st.PadLeft += left
+			st.PadRight += right
 		}
 	}
 	if v, ok := decls["padding-right"]; ok {
-		st.IndentRight += webLength(v, st.FontPx)
+		px := webLength(v, st.FontPx)
+		st.IndentRight += px
+		st.PadRight += px
 	}
 	// margin-left/margin-right are the box the paragraph sits in: a 24px
 	// gutter narrows the line on that side. `auto` is kept as a flag for the
@@ -8547,22 +8803,22 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	// Each edge maps to its own side: `border-right` used to set the left
 	// flag, so a sidebar divider drew on the wrong edge of the box.
-	if v, ok := decls["border-left"]; ok && webBorderVisible(v) {
+	if v, ok := decls["border-left"]; ok && webBorderPaints(v) {
 		st.BorderLeft = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 		st.BorderSideWidth[0] = webMaxAbs(st.BorderSideWidth[0], webBorderWidthInValue(v, st.FontPx))
 	}
-	if v, ok := decls["border-right"]; ok && webBorderVisible(v) {
+	if v, ok := decls["border-right"]; ok && webBorderPaints(v) {
 		st.BorderRight = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 		st.BorderSideWidth[1] = webMaxAbs(st.BorderSideWidth[1], webBorderWidthInValue(v, st.FontPx))
 	}
-	if v, ok := decls["border-top"]; ok && webBorderVisible(v) {
+	if v, ok := decls["border-top"]; ok && webBorderPaints(v) {
 		st.BorderTop = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 		st.BorderSideWidth[2] = webMaxAbs(st.BorderSideWidth[2], webBorderWidthInValue(v, st.FontPx))
 	}
-	if v, ok := decls["border-bottom"]; ok && webBorderVisible(v) {
+	if v, ok := decls["border-bottom"]; ok && webBorderPaints(v) {
 		st.BorderBottom = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 		st.BorderSideWidth[3] = webMaxAbs(st.BorderSideWidth[3], webBorderWidthInValue(v, st.FontPx))
@@ -8590,7 +8846,7 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
-	if v, ok := decls["border"]; ok && webBorderVisible(v) {
+	if v, ok := decls["border"]; ok && webBorderPaints(v) {
 		st.BoxBorder = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 		w := webBorderWidthInValue(v, st.FontPx)
@@ -8614,7 +8870,7 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	// Outline is its own box edge: keeping it separate from the border lets
 	// outline-offset move the ring without moving the card's border.
-	if v, ok := decls["outline"]; ok && webBorderVisible(v) {
+	if v, ok := decls["outline"]; ok && webBorderPaints(v) {
 		st.Outline = true
 		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
@@ -8626,6 +8882,10 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	if v, ok := decls["outline-offset"]; ok {
 		st.OutlineOffset = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["outline-color"]; ok && webTransparentInValue(v) {
+		// Tailwind's outline-none: a transparent outline draws nothing.
+		st.Outline = false
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
 		if v, ok := decls[key]; ok {
@@ -8987,7 +9247,10 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 		webFlexBasis(st, v)
 	}
 	if v, ok := decls["width"]; ok {
-		if pct, valid := webPercentValue(v); valid {
+		if fit := webWidthKeyword(v); fit >= 0 {
+			// An intrinsic size, or stretch (which is auto for a block).
+			st.WidthFit = fit
+		} else if pct, valid := webPercentValue(v); valid {
 			st.WidthPct = pct
 		} else if px := webLength(v, st.FontPx); px > 0 {
 			st.Width = px
@@ -10011,6 +10274,18 @@ type webParser struct {
 	// rem lengths follow (webpage_hints.go). Zero until <html> is styled.
 	linkColor  string
 	rootFontPx float64
+	// pendingLead is the room the left edges of the inline boxes opened since
+	// the last run take before the next word; pendingChipStart is where in it
+	// the chip begins, when pendingChip is set, and pendingOpens is set when a
+	// box with a surface of its own opens there (webpage_inlinebox.go).
+	pendingLead      float64
+	pendingChipStart float64
+	pendingChip      bool
+	pendingOpens     bool
+	// lineFlushes counts the lines flushed. A detached layer's own flushes
+	// are taken back when the line it interrupted resumes, so an inline box
+	// around it still finds its last run in that line (closeInlineBox).
+	lineFlushes int
 }
 
 type webTableParse struct {
@@ -10082,11 +10357,20 @@ func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []web
 	if p.buttonCtrl != nil {
 		p.endButton()
 	}
+	// A detached layer left open at the end of the page ends there, and the
+	// line it set aside with it.
+	p.resumeDetachedAbove(-1)
 	p.flush()
-	// A sticky element left open at the end of the page owns the rest of it.
+	// A sticky or positioned element left open at the end of the page owns
+	// the rest of it.
 	for i := range doc.Stickies {
 		if doc.Stickies[i].lastBox < doc.Stickies[i].rootBox {
 			doc.Stickies[i].lastBox = p.boxSeq
+		}
+	}
+	for i := range doc.Positioned {
+		if doc.Positioned[i].lastBox < doc.Positioned[i].rootBox {
+			doc.Positioned[i].lastBox = p.boxSeq
 		}
 	}
 	doc.FormHidden = p.formHidden
@@ -10403,9 +10687,16 @@ func webExpandCSSImports(parent context.Context, css string, base *url.URL, page
 		if imp.media != "" {
 			remaining -= len(imp.media) + 16
 		}
+		if imp.layered {
+			remaining -= len(imp.layer) + 16
+		}
 		child = webCSSBudgetPrefix(child, remaining)
 		if child == "" {
 			continue
+		}
+		if imp.layered {
+			// The sheet's rules belong to that cascade layer.
+			child = "@layer " + imp.layer + " {\n" + child + "\n}"
 		}
 		if imp.media != "" {
 			imported.WriteString("@media ")
@@ -10421,21 +10712,53 @@ func webExpandCSSImports(parent context.Context, css string, base *url.URL, page
 	if imported.Len() == 0 {
 		return css
 	}
-	return imported.String() + css
+	// The sheet's `@layer a, b;` order statements go in front of what it
+	// imports, so the layers keep the order it states.
+	return webLeadingLayerStatements(css) + imported.String() + css
 }
 
-// webCSSImport is one @import target plus its optional media query. The import
-// statement itself stays in the CSS (the parser ignores it), but the fetched
-// body is inserted before the sheet that asked for it.
+// webLeadingLayerStatements returns the `@layer a, b;` statements at the head
+// of a sheet, before its first rule (between @charset and @import).
+func webLeadingLayerStatements(css string) string {
+	var out strings.Builder
+	rest := stripWebCSSComments(css)
+	for {
+		rest = strings.TrimSpace(rest)
+		if !strings.HasPrefix(rest, "@") {
+			break
+		}
+		semi := strings.IndexByte(rest, ';')
+		if brace := strings.IndexByte(rest, '{'); semi < 0 || (brace >= 0 && brace < semi) {
+			break
+		}
+		if statement := rest[:semi+1]; len(statement) > len("@layer") && strings.EqualFold(statement[:len("@layer")], "@layer") {
+			out.WriteString(statement)
+			out.WriteByte('\n')
+		}
+		rest = rest[semi+1:]
+	}
+	return out.String()
+}
+
+// webCSSImport is one @import target plus its optional media query and
+// cascade layer. The import statement itself stays in the CSS (the parser
+// ignores it), but the fetched body is inserted before the sheet that asked
+// for it, inside `@layer` and `@media` blocks that say the same thing.
 type webCSSImport struct {
 	url   string
 	media string
+	// layered is set by a layer or layer(name) modifier; layer is the name,
+	// empty for an anonymous layer.
+	layer   string
+	layered bool
 }
 
 // webCSSImports reads the @import rules in a stylesheet. Comments are removed
 // before scanning, so a commented-out import cannot trigger a request. Only
-// url(...) and quoted string forms are accepted; layer()/supports() modifiers
-// are deliberately left to the normal parser fallback rather than guessed at.
+// url(...) and quoted string forms are accepted. A layer / layer(name)
+// modifier puts the sheet in that cascade layer (Tailwind 4 imports its parts
+// that way); a supports() condition is left to the normal parser fallback
+// rather than guessed at.
 func webCSSImports(css string) []webCSSImport {
 	stripped := stripWebCSSComments(css)
 	lower := strings.ToLower(stripped)
@@ -10489,11 +10812,25 @@ func webCSSImports(css string) []webCSSImport {
 		if target == "" {
 			continue
 		}
+		imp := webCSSImport{url: target}
 		lowerMedia := strings.ToLower(media)
-		if strings.Contains(lowerMedia, "layer(") || strings.Contains(lowerMedia, "supports(") {
+		switch {
+		case strings.HasPrefix(lowerMedia, "layer("):
+			close := webCSSParenEnd(media, len("layer"))
+			if close < 0 {
+				continue
+			}
+			imp.layer, imp.layered = strings.TrimSpace(media[len("layer("):close]), true
+			media = strings.TrimSpace(media[close+1:])
+		case lowerMedia == "layer" || strings.HasPrefix(lowerMedia, "layer "):
+			imp.layered = true
+			media = strings.TrimSpace(media[len("layer"):])
+		}
+		if strings.Contains(strings.ToLower(media), "supports(") || strings.Contains(strings.ToLower(media), "layer(") {
 			continue
 		}
-		out = append(out, webCSSImport{url: target, media: media})
+		imp.media = media
+		out = append(out, imp)
 	}
 	return out
 }
@@ -11315,6 +11652,9 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			p.push(el, style, "block", attrs)
 			return
 		}
+		// The reader's list gutter (18px, applyWebTagDefaults) is a list
+		// item's, not room before an inline one (webpage_inlinebox.go).
+		style.Indent = math.Max(0, style.Indent-18)
 		p.pushInline(el, style, attrs, selfClose, name)
 		return
 	}
@@ -11365,23 +11705,79 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 		return
 	}
+	if p.flexItemBlockifies() {
+		// The children of a flex or grid container are blockified (CSS
+		// Display 3): a link, a span or a label straight inside a flex row is a
+		// box with its own padding, background, border and radius — the
+		// buttons, pills and badges of most toolbars — not a chip of text that
+		// takes the row's measure.
+		p.flush()
+		p.push(el, style, "block", attrs)
+		if selfClose {
+			p.endTag(name)
+		}
+		return
+	}
+	if p.detachesInlineLayer(name, &style) {
+		// An absolutely positioned inline element leaves its line too (CSS
+		// 2.1 §9.7): a badge or a label over a card's photo is a layer at its
+		// corner, not a word in the text (webpage_layers.go).
+		p.detachInlineLayer(el, style, attrs, selfClose, name)
+		return
+	}
 	p.pushInline(el, style, attrs, selfClose, name)
+}
+
+// flexItemBlockifies reports whether the element about to open is a direct
+// child of a real flex or grid container (not the reader's implicit row of
+// inline-block boxes), which makes it a block-level item whatever its display.
+func (p *webParser) flexItemBlockifies() bool {
+	n := len(p.flexStack)
+	if n == 0 {
+		return false
+	}
+	top := &p.flexStack[n-1]
+	return !top.implicit && p.flexDirectChild(top, len(p.stack))
 }
 
 // pushInline opens an inline element. A nested inline element with no
 // background of its own paints its parent's (`<mark>a <b>b</b></mark>` is one
-// highlight), and horizontal margin or padding keeps a gap to the neighbour,
-// so minified nav markup does not read "HomeAboutContact".
+// highlight), and its horizontal margin, border and padding are the room they
+// take in a browser (webpage_inlinebox.go), so minified nav markup does not
+// read "HomeAboutContact" and a padded button is as wide as it is drawn.
 func (p *webParser) pushInline(el webElement, style webStyle, attrs string, selfClose bool, name string) {
-	if !style.HasBg && len(p.stack) > 0 {
-		if parent := p.stack[len(p.stack)-1]; parent.kind == "inline" && parent.style.HasBg {
-			style.HasBg, style.Background = true, parent.style.Background
+	// Inside a parent's chip the element paints with the parent's background,
+	// padding and border unless it has its own.
+	ownChip := webInlineOwnChip(&style)
+	inChip := false
+	var box webStyle
+	if len(p.stack) > 0 {
+		if parent := p.stack[len(p.stack)-1]; parent.kind == "inline" && parent.style.InlineChip {
+			inChip, box = true, parent.style
 		}
 	}
-	if style.Indent > 3 {
-		p.space = true
+	room, chip := webInlineEdge(&style, ownChip, inChip, true)
+	trail, trailChip := webInlineEdge(&style, ownChip, inChip, false)
+	switch {
+	case ownChip:
+		style.InlineChip = true
+	case inChip:
+		webInheritInlineChip(&style, &box)
+	}
+	if p.pendingBefore != "" && style.InlineChip && !webInlineOwnChip(&p.pendingBeforeStyle) {
+		// ::before content is inside the box: the chip goes on under it.
+		webInheritInlineChip(&p.pendingBeforeStyle, &style)
+	}
+	started := p.openInlineBox(room, chip, ownChip)
+	flushesAt, runsAt := p.lineFlushes, 0
+	if p.current != nil {
+		runsAt = len(p.current.Runs)
 	}
 	p.push(el, style, "inline", attrs)
+	f := &p.stack[len(p.stack)-1]
+	f.inlineFlushes, f.inlineRuns = flushesAt, runsAt
+	f.inlineTrail, f.inlineTrailChip = trail, trailChip
+	f.ownChip, f.startedChip = ownChip, started
 	if selfClose {
 		p.endTag(name)
 	}
@@ -11578,11 +11974,13 @@ func (p *webParser) endTag(name string) {
 				continue
 			}
 			if p.stack[i].style.Hidden {
+				p.resumeDetachedAbove(i - 1)
 				p.stack = p.stack[:i]
 				return
 			}
 			// A malformed hidden subtree may end at an outer visible tag.
 			// Drop its inert frames, then close that visible tag normally.
+			p.resumeDetachedAbove(i)
 			p.stack = p.stack[:i+1]
 			break
 		}
@@ -11642,6 +12040,9 @@ func (p *webParser) endTag(name string) {
 		if p.stack[i].el.tag != name {
 			continue
 		}
+		// An absolutely positioned inline element left open inside this one
+		// closes with it, and the line it set aside goes on.
+		p.resumeDetachedAbove(i)
 		// ::after resolves at the closing tag, after descendants have run
 		// their counter increments, which is when a browser computes it.
 		afterSet := false
@@ -11650,7 +12051,12 @@ func (p *webParser) endTag(name string) {
 			if generated := p.pseudoContent(frame.el, frame.attrs, frame.style, webPseudoElemAfter); generated.Matched && generated.HasContent {
 				afterSet = true
 				if generated.Text != "" {
-					p.addTextStyled(generated.Text, generated.Style)
+					st := generated.Style
+					if frame.kind == "inline" && frame.style.InlineChip && !webInlineOwnChip(&st) {
+						// ::after content is inside the box too (pushInline).
+						webInheritInlineChip(&st, &frame.style)
+					}
+					p.addTextStyled(generated.Text, st)
 				}
 			}
 		}
@@ -11665,10 +12071,10 @@ func (p *webParser) endTag(name string) {
 			// line of its own (webpage_layers.go).
 			p.layerSpacer(i)
 		}
-		if p.stack[i].kind == "inline" && p.stack[i].style.IndentRight > 3 {
-			// The element's right margin/padding is a gap before what
-			// follows (pushInline keeps the left one).
-			p.space = true
+		if p.stack[i].kind == "inline" {
+			// The element's right padding, border and margin are room after its
+			// last word (webpage_inlinebox.go).
+			p.closeInlineBox(&p.stack[i])
 		}
 		if name == "head" {
 			p.inHead = false
@@ -11692,14 +12098,23 @@ func (p *webParser) endTag(name string) {
 		for len(p.tables) > 0 && p.tables[len(p.tables)-1].depth >= i {
 			p.tables = p.tables[:len(p.tables)-1]
 		}
-		// A sticky element's subtree owns every box opened inside it
-		// (webpage_layers.go); unclosed children close with it.
+		// A sticky or relatively positioned element's subtree owns every box
+		// opened inside it (webpage_layers.go); unclosed children close with
+		// it.
 		for k := len(p.stack) - 1; k >= i; k-- {
 			if s := p.stack[k].sticky; s > 0 && s <= len(p.doc.Stickies) {
 				p.doc.Stickies[s-1].lastBox = p.boxSeq
 			}
+			if s := p.stack[k].positioned; s > 0 && s <= len(p.doc.Positioned) {
+				p.doc.Positioned[s-1].lastBox = p.boxSeq
+			}
 		}
 		p.popCounterResets(p.stack[i].counterResets)
+		if s := p.stack[i].suspended; s != nil {
+			// A detached layer is finished (flushed above): the line it
+			// interrupted goes on.
+			p.resumeLine(s)
+		}
 		p.stack = p.stack[:i]
 		return
 	}
@@ -11804,6 +12219,15 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 	if (kind == "block" || kind == "list") && style.Sticky && boxID != 0 {
 		sticky = p.newStickyRoot(style, boxID, seq)
 	}
+	// A relatively positioned element of the flow paints in the positioned
+	// pass, with everything in it: layout lifts it over the layers it comes
+	// after (webLiftPositioned). A sticky one has its pinned copy instead.
+	positioned := 0
+	if (kind == "block" || kind == "list") && boxID != 0 && layer == 0 && len(p.doc.Positioned) < webMaxPositioned &&
+		style.Position == webPositionRelative && !style.Sticky && p.openLayerIn(len(p.stack)) == 0 {
+		p.doc.Positioned = append(p.doc.Positioned, webPositionedInfo{rootBox: boxID, key: p.stackKey(style, seq)})
+		positioned = len(p.doc.Positioned)
+	}
 	group := 0
 	if (kind == "block" || kind == "list") && (style.Display == webDisplayFlex || style.Display == webDisplayGrid || style.Display == webDisplayTableRow) {
 		p.flexSeq++
@@ -11859,6 +12283,7 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		el: el, style: style, kind: kind, flexGroup: group, containerID: containerID, boxID: boxID,
 		attrs: attrs, counterResets: p.pendingCounterResets,
 		layer: layer, seq: seq, blockStart: len(p.blocks), sticky: sticky,
+		positioned: positioned, flexItem: flexItem,
 	}
 	p.pendingCounterResets = nil
 	p.stack = append(p.stack, frame)
@@ -11982,14 +12407,14 @@ func webResetElementStyle(st *webStyle) {
 	// A radius and a right gutter belong to the element that declared them;
 	// line-height, the list marker and the opacity group are inherited above.
 	st.Radius, st.IndentRight = 0, 0
-	st.PadTop, st.PadBot = 0, 0
+	st.PadTop, st.PadBot, st.PadLeft, st.PadRight = 0, 0, 0, 0
 	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
 	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
 	st.BorderStyle, st.Outline, st.OutlineOffset = webBorderSolid, false, 0
 	// Layout properties are per element too: a child of a flex container is
 	// not itself a container, and an item's grow factor belongs to it alone.
 	st.Display, st.DisplayBlock, st.DisplayContents, st.DisplayInline, st.FlexDir = webDisplayBlock, false, false, false, webFlexRow
-	st.DisplayInlineBlock = false
+	st.DisplayInlineBlock, st.InlineChip = false, false
 	st.FlexReverse = false
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.AlignContent = webContentStretch
@@ -12000,7 +12425,7 @@ func webResetElementStyle(st *webStyle) {
 	st.GridWeights, st.GridBases = [6]float64{}, [6]float64{}
 	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
 	st.Order = 0
-	st.Width, st.WidthPct, st.Height = 0, 0, 0
+	st.Width, st.WidthPct, st.WidthFit, st.Height = 0, 0, 0, 0
 	st.MinWidth, st.MaxWidth, st.MinWidthPct, st.MaxWidthPct = 0, 0, 0, 0
 	st.MinWidthAuto = true
 	st.MinHeight, st.MaxHeight = 0, 0
@@ -12026,7 +12451,7 @@ func webResetElementStyle(st *webStyle) {
 	st.HasBoxShadow, st.BoxShadowX, st.BoxShadowY = false, 0, 0
 	st.BoxShadowColor, st.HasBoxShadowColor = sdl.Color{}, false
 	st.BoxShadowBlur, st.BoxShadowSpread = 0, 0
-	st.HasTranslate = false
+	st.HasTranslate, st.Isolate = false, false
 	st.TranslateX, st.TranslateY, st.TranslatePctX, st.TranslatePctY = 0, 0, 0, 0
 	st.InsetPct = [4]float64{}
 	st.LineClamp = 0
@@ -12044,6 +12469,9 @@ func webSupportedWidthValue(name, value string, em float64) bool {
 	if v == "auto" || name == "max-width" && v == "none" {
 		return true
 	}
+	if name == "width" && webWidthKeyword(v) >= 0 {
+		return true
+	}
 	if pct, ok := webPercentValue(v); ok {
 		return pct >= 0
 	}
@@ -12054,6 +12482,203 @@ func webSupportedWidthValue(name, value string, em float64) bool {
 	}
 	px := webLength(v, em)
 	return px > 0 && !math.IsNaN(px) && !math.IsInf(px, 0)
+}
+
+// webWidthKeyword reads a keyword width: 1 for fit-content and max-content
+// (the reader's lines never run past their column, so the two agree), 2 for
+// min-content, 0 for stretch (a block's auto width), -1 for anything else.
+// Each comes with the vendor spellings sheets still ship as fallbacks.
+func webWidthKeyword(v string) int {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "fit-content", "-moz-fit-content", "-webkit-fit-content", "max-content", "-moz-max-content",
+		"-webkit-max-content", "intrinsic":
+		return 1
+	case "min-content", "-moz-min-content", "-webkit-min-content", "min-intrinsic":
+		return 2
+	case "stretch", "-webkit-fill-available", "-moz-available", "fill-available":
+		return 0
+	}
+	return -1
+}
+
+// webSortCascade puts matched rules in cascade order for their normal
+// declarations: cascade layer first (webRule.layer), then specificity, then
+// source order — the last one wins.
+func webSortCascade(matched []*webRule) {
+	slices.SortStableFunc(matched, func(a, b *webRule) int {
+		switch {
+		case a.layer != b.layer:
+			return a.layer - b.layer
+		case a.specificity != b.specificity:
+			return a.specificity - b.specificity
+		case a.order < b.order:
+			return -1
+		case a.order > b.order:
+			return 1
+		}
+		return 0
+	})
+}
+
+// webImportantCascade is the order matched rules' !important declarations
+// apply in. Layers count backwards there: an earlier layer's important
+// declaration beats a later layer's, and any layer's beats an unlayered one;
+// specificity and source order then decide as for normal declarations.
+// Without layered important rules it is matched itself.
+func webImportantCascade(matched []*webRule) []*webRule {
+	layered := false
+	for _, r := range matched {
+		if r.layer != webUnlayered && len(r.important) > 0 {
+			layered = true
+			break
+		}
+	}
+	if !layered {
+		return matched
+	}
+	out := slices.Clone(matched)
+	slices.SortStableFunc(out, func(a, b *webRule) int {
+		switch {
+		case a.layer != b.layer:
+			return b.layer - a.layer
+		case a.specificity != b.specificity:
+			return a.specificity - b.specificity
+		case a.order < b.order:
+			return -1
+		case a.order > b.order:
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+// webBoxSideProp is one property that sets sides of a box (margin or padding):
+// its name after the box's, its kind — 0 the shorthand, 1 a block/inline
+// pair, 2 one side — and, for a pair, 0 block (top, bottom) or 1 inline
+// (left, right), or for one side, the side (top, right, bottom, left). The
+// kind is also its precedence inside one declaration block: a side's longhand
+// is taken to come after the pair that covers it, and the pair after the
+// shorthand, as sheets write them.
+type webBoxSideProp struct {
+	suffix string
+	kind   int
+	side   int
+}
+
+// webBoxSideProps are the side-setting properties of margin and padding, the
+// shorthand first.
+var webBoxSideProps = [...]webBoxSideProp{
+	{"", 0, 0},
+	{"-block", 1, 0}, {"-inline", 1, 1},
+	{"-top", 2, 0}, {"-block-start", 2, 0},
+	{"-right", 2, 1}, {"-inline-end", 2, 1},
+	{"-bottom", 2, 2}, {"-block-end", 2, 2},
+	{"-left", 2, 3}, {"-inline-start", 2, 3},
+}
+
+// webResolveBoxSides settles margin and padding the way the cascade does: for
+// each side, the declaration that comes last wins, whether it is the shorthand
+// (padding), a pair (padding-block, padding-inline) or the side itself
+// (padding-top, padding-block-start). The style map holds one value per
+// property name, and applyWebDecls used to add a shorthand's side to the
+// longhand's, so Tailwind's `p-4 pt-2` padded the top by 24px instead of 8px
+// and `padding: 2rem; padding-bottom: 0` kept its bottom padding. rank is each
+// property's cascade position; the four physical longhands replace them all.
+func webResolveBoxSides(merged map[string]string, rank map[string]int) {
+	for _, box := range [...]string{"margin", "padding"} {
+		var side [4]string
+		at := [4]int{-1, -1, -1, -1}
+		present := false
+		for _, prop := range webBoxSideProps {
+			name := box + prop.suffix
+			value, ok := merged[name]
+			if !ok {
+				continue
+			}
+			present = true
+			delete(merged, name)
+			key := rank[name]*4 + prop.kind
+			set := func(s int, v string) {
+				if key >= at[s] {
+					side[s], at[s] = v, key
+				}
+			}
+			tokens := webCSSSpaceFields(strings.TrimSpace(value))
+			switch prop.kind {
+			case 0:
+				var t, r, b, l string
+				switch len(tokens) {
+				case 1:
+					t, r, b, l = tokens[0], tokens[0], tokens[0], tokens[0]
+				case 2:
+					t, r, b, l = tokens[0], tokens[1], tokens[0], tokens[1]
+				case 3:
+					t, r, b, l = tokens[0], tokens[1], tokens[2], tokens[1]
+				case 4:
+					t, r, b, l = tokens[0], tokens[1], tokens[2], tokens[3]
+				default:
+					continue
+				}
+				set(0, t)
+				set(1, r)
+				set(2, b)
+				set(3, l)
+			case 1:
+				var first, second string
+				switch len(tokens) {
+				case 1:
+					first, second = tokens[0], tokens[0]
+				case 2:
+					first, second = tokens[0], tokens[1]
+				default:
+					continue
+				}
+				if prop.side == 0 {
+					set(0, first)
+					set(2, second)
+				} else {
+					set(3, first)
+					set(1, second)
+				}
+			default:
+				if len(tokens) == 1 {
+					set(prop.side, tokens[0])
+				}
+			}
+		}
+		if !present {
+			continue
+		}
+		for s, suffix := range [...]string{"-top", "-right", "-bottom", "-left"} {
+			if at[s] >= 0 {
+				merged[box+suffix] = side[s]
+			}
+		}
+	}
+}
+
+// webDropUAInlineMargins takes back the UA sheet's side margin of a quote, a
+// figure or a definition (40px, applyWebTagDefaults) on a side the page sets
+// itself. The reader adds margins and padding into one inset, so the page's
+// value was added to the UA's: a reset's `blockquote, figure, dd { margin: 0 }`
+// (normalize, Tailwind's preflight, GitHub's markdown) left them 40px in.
+func webDropUAInlineMargins(st *webStyle, tag string, merged map[string]string) {
+	left, right := 0.0, 0.0
+	switch tag {
+	case "blockquote", "figure":
+		left, right = 40, 40
+	case "dd":
+		left = 40
+	default:
+		return
+	}
+	if _, ok := merged["margin-left"]; ok {
+		st.Indent -= left
+	}
+	if _, ok := merged["margin-right"]; ok {
+		st.IndentRight -= right
+	}
 }
 
 func webCascadedSupportedWidth(name string, matched []*webRule, inlineDecls, inlineImportant map[string]string, supported func(string) bool) (string, bool) {
@@ -12134,17 +12759,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		}
 		matched = append(matched, rule)
 	}
-	slices.SortStableFunc(matched, func(a, b *webRule) int {
-		switch {
-		case a.specificity != b.specificity:
-			return a.specificity - b.specificity
-		case a.order < b.order:
-			return -1
-		case a.order > b.order:
-			return 1
-		}
-		return 0
-	})
+	webSortCascade(matched)
 	// Cascade: stylesheet normals, inline normals, stylesheet important, then
 	// inline important. A normal inline style must not override an important
 	// stylesheet rule (including a rule that hides an element).
@@ -12155,26 +12770,28 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// first, below every style sheet (webpage_hints.go).
 	hints := p.webPresentationalHints(&el)
 	merged := make(map[string]string, 16+len(hints))
-	for name, value := range hints {
-		merged[name] = value
-	}
-	for _, rule := range matched {
-		for name, value := range rule.decls {
+	// rank is the cascade position of the block each winning declaration came
+	// from, so a shorthand and a longhand for the same side resolve by which
+	// comes later (webResolveBoxSides).
+	rank := make(map[string]int, 16+len(hints))
+	seq := 0
+	cascade := func(decls map[string]string) {
+		seq++
+		for name, value := range decls {
 			merged[name] = value
+			rank[name] = seq
 		}
+	}
+	cascade(hints)
+	for _, rule := range matched {
+		cascade(rule.decls)
 	}
 	inlineDecls, inlineImportant := parseWebDeclsSplit(htmlTagAttribute(attrs, "style"))
-	for name, value := range inlineDecls {
-		merged[name] = value
+	cascade(inlineDecls)
+	for _, rule := range webImportantCascade(matched) {
+		cascade(rule.important)
 	}
-	for _, rule := range matched {
-		for name, value := range rule.important {
-			merged[name] = value
-		}
-	}
-	for name, value := range inlineImportant {
-		merged[name] = value
-	}
+	cascade(inlineImportant)
 	// Custom properties are inherited, so this element's own definitions are
 	// resolved once here and carried down by the frames below it.
 	st.Vars = webVarScopeFor(p.topStyle().Vars, merged)
@@ -12256,6 +12873,9 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	for name, value := range merged {
 		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 	}
+	webResolveBoxSides(merged, rank)
+	webResolveBorderColor(merged, rank)
+	webDropUAInlineMargins(&st, el.tag, merged)
 	parentHeight := p.webContainingBlockHeight(el)
 	applyWebDecls(&st, merged)
 	webResolvePercentageHeights(&st, merged, parentHeight)
@@ -12282,6 +12902,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		st.CellVAlign = webCellVAlignCascade(role, webHTMLTablePart(el.tag), parent.TableRole, parent.CellVAlign, valign, declared)
 	}
 	st.CellOwn = false
+	st.CellLastRow = false
 	// rem is the root element's font size (webSubstituteRootEm).
 	if el.tag == "html" {
 		p.rootFontPx = st.FontPx
@@ -12420,27 +13041,22 @@ func (p *webParser) pseudoContent(el webElement, attrs string, base webStyle, ps
 		return result
 	}
 	result.Matched = true
-	slices.SortStableFunc(matched, func(a, b *webRule) int {
-		switch {
-		case a.specificity != b.specificity:
-			return a.specificity - b.specificity
-		case a.order < b.order:
-			return -1
-		case a.order > b.order:
-			return 1
-		}
-		return 0
-	})
+	webSortCascade(matched)
 	merged := make(map[string]string, 8)
-	for _, rule := range matched {
-		for name, value := range rule.decls {
+	rank := make(map[string]int, 8)
+	seq := 0
+	cascade := func(decls map[string]string) {
+		seq++
+		for name, value := range decls {
 			merged[name] = value
+			rank[name] = seq
 		}
 	}
 	for _, rule := range matched {
-		for name, value := range rule.important {
-			merged[name] = value
-		}
+		cascade(rule.decls)
+	}
+	for _, rule := range webImportantCascade(matched) {
+		cascade(rule.important)
 	}
 	// Custom properties inherit from the originating element, and a pseudo
 	// rule may add its own. Resolve var() before the declarations are parsed.
@@ -12460,6 +13076,8 @@ func (p *webParser) pseudoContent(el webElement, attrs string, base webStyle, ps
 	for name, value := range merged {
 		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
 	}
+	webResolveBoxSides(merged, rank)
+	webResolveBorderColor(merged, rank)
 	applyWebDecls(&st, merged)
 	if st.Hidden {
 		return result
@@ -12937,7 +13555,7 @@ func webStyleHasBox(st webStyle) bool {
 // `max-width` and padding used to disappear from every child's ancestry, so
 // its paragraphs ran to the page edge and the image/list inset did not line up.
 func webStyleHasLayoutBox(st webStyle) bool {
-	return st.Width > 0 || st.WidthPct > 0 || st.MaxWidth > 0 || st.MaxWidthPct > 0 ||
+	return st.Width > 0 || st.WidthPct > 0 || st.WidthFit != 0 || st.MaxWidth > 0 || st.MaxWidthPct > 0 ||
 		st.MinWidth > 0 || st.MinWidthPct > 0 || st.Height > 0 || st.MinHeight > 0 ||
 		st.Indent != 0 || st.IndentRight != 0
 }
@@ -13049,6 +13667,12 @@ func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	st := style
 	st.Control = ctrl
 	ctrl.Width, ctrl.WidthPct, ctrl.Height = style.Width, style.WidthPct, style.Height
+	button := boxed && ctrl.Kind == "submit"
+	if button {
+		// A submit button is an inline-block box with its padding, border and
+		// radius (webpage_inlinebox.go).
+		webButtonBox(&st, st.HasBg || st.HasGradient)
+	}
 	if boxed && !st.HasBg {
 		// A filled chip sized by the text it shows, so a field cannot be
 		// mistaken for body copy. An author's background (including
@@ -13061,7 +13685,20 @@ func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	// The italic that marks an empty field's prompt is decided at layout time
 	// instead (webControl.PlaceholderShown): fixing it here left the prompt
 	// looking italic after the field had been filled in.
+	if !button {
+		p.appendRun(ctrl.Display(), st)
+		p.space = true
+		return
+	}
+	room, chip := webInlineEdge(&st, true, false, true)
+	p.openInlineBox(room, chip, true)
+	flushesAt, runsAt := p.lineFlushes, 0
+	if p.current != nil {
+		runsAt = len(p.current.Runs)
+	}
 	p.appendRun(ctrl.Display(), st)
+	trail, trailChip := webInlineEdge(&st, true, false, false)
+	p.closeInlineBox(&webFrame{inlineFlushes: flushesAt, inlineRuns: runsAt, inlineTrail: trail, inlineTrailChip: trailChip, ownChip: true, startedChip: true})
 	p.space = true
 }
 
@@ -13401,18 +14038,28 @@ func (p *webParser) appendRun(text string, style webStyle) {
 		}
 	}
 	block := p.ensureBlock()
-	if n := len(block.Runs); n > 0 && block.Runs[n-1].Style == style {
+	n := len(block.Runs)
+	// A run that closed an inline box (Trail), or text that opens one, is not
+	// merged into its neighbour: the box's edges belong to its first and last
+	// words.
+	if n > 0 && block.Runs[n-1].Style == style && block.Runs[n-1].Trail == 0 && !block.Runs[n-1].ClosesChip &&
+		p.pendingLead == 0 && !p.pendingChip && !p.pendingOpens {
 		block.Runs[n-1].Text += text
 	} else {
-		block.Runs = append(block.Runs, webRun{Text: text, Style: style})
+		run := webRun{Text: text, Style: style}
+		run.Lead, run.ChipLead, run.OpensChip = p.takeInlineLead()
+		block.Runs = append(block.Runs, run)
 	}
 	p.textLen += len(text)
 }
 
 func (p *webParser) flush() {
 	// Every block boundary ends an inline-image chain; addImageElement
-	// reopens it after its own flushes.
+	// reopens it after its own flushes. The left edges of inline boxes that
+	// had no word yet belonged to the line that ends here.
 	p.inlineGroup = 0
+	p.clearInlineLead()
+	p.lineFlushes++
 	if p.current == nil {
 		return
 	}
@@ -13627,6 +14274,14 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		}
 		l.layoutBlocks(flow, padX, contentW)
 
+		// A table cell paints its bottom padding a row past its content rows
+		// (webTagCellSurface), so the page keeps that row: a table at the end
+		// of a page was cut there at max scroll.
+		for int32(len(layout.Rows))*rowH < layout.PaintBottom && len(layout.Rows) < webMaxRows {
+			idx := int32(len(layout.Rows))
+			layout.Rows = append(layout.Rows, webRow{Y: idx * rowH})
+		}
+		println("DBG page height=", int32(len(layout.Rows))*rowH, "paintBottom=", layout.PaintBottom)
 		layout.Height = int32(len(layout.Rows)) * rowH
 		l.layoutLayers(floats, padX, contentW)
 		l.paintContainerBoxes()
@@ -13664,6 +14319,9 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	// Sticky elements are copied whole from the finished page, surfaces
 	// included, into the bars the painter pins.
 	webCollectStickies(d, layout, &webLayouter{doc: d, layout: layout, rowH: rowH, baseSize: baseSize})
+	// A relatively positioned element that CSS paints over an earlier layer
+	// is painted in stacking order with the layers (webpage_layers.go).
+	webLiftPositioned(d, layout)
 	layout.Links = collectWebLinks(layout)
 	// Play cards and form controls are cursor stops too: the same hit shape as
 	// a link, with the video or the control attached instead of a destination.
@@ -13887,6 +14545,8 @@ type webLayouter struct {
 	// handheld: the caches cut the work without changing the layout.
 	spaceWidths map[*ttf.Font]int32
 	sanitized   map[webSanitizeKey]string
+	// fitWidths caches each fit-content box's width (fitBoxWidth).
+	fitWidths map[int]int32
 }
 
 // webContainerRowSpan is one container's vertical extent in layout-grid rows.
@@ -14112,8 +14772,11 @@ func webInFlowShift(st webStyle, cw, w, h int32, baseSize float64) (int32, int32
 	return int32(math.Round(dx)), int32(math.Round(dy))
 }
 
-// webMarginRows converts a CSS vertical margin to the reader's row grid. The
-// cap keeps a stray large margin from opening a hole bigger than three lines.
+// webMarginRows converts a CSS vertical margin (or a box's padding) to the
+// reader's row grid. The cap keeps a stray huge margin from opening a hole of
+// half a screen; it used to be three lines, which squeezed the 96-128px
+// padding a landing page's sections are drawn with to a third of it, and let
+// a padded box paint over what came before it.
 func webMarginRows(cssPx, baseSize float64, rowH int32) int32 {
 	if cssPx <= 0 || baseSize <= 0 || rowH <= 0 {
 		return 0
@@ -14123,10 +14786,24 @@ func webMarginRows(cssPx, baseSize float64, rowH int32) int32 {
 	if rows < 1 && design >= float64(rowH)*0.45 {
 		rows = 1
 	}
-	if rows > 3 {
-		rows = 3
+	if rows > webMaxMarginRows {
+		rows = webMaxMarginRows
 	}
 	return rows
+}
+
+// webMaxMarginRows is the most text rows one margin or padding takes: about
+// 180 CSS px at the reader's size.
+const webMaxMarginRows = 8
+
+// ownBoxOf is the box a block's own element paints: the one whose top inset the
+// block's leading margin already carries. It is 0 for a block that only sits
+// inside an ancestor's box, whose inset the box itself still has to reserve.
+func ownBoxOf(block webBlock) int {
+	if block.OwnsBox {
+		return block.BoxOwner
+	}
+	return 0
 }
 
 // layoutBlocks lays out a column of blocks into l.layout. Positions are
@@ -14208,7 +14885,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			skipRows(rows - (int32(len(layout.Rows)) - start))
 		}
 	}
-	syncBoxes := func(boxes []int) {
+	// ownBox is the box this block's own element paints (block.BoxOwner when
+	// block.OwnsBox). Such a block's leading margin already carries that box's
+	// top padding, so opening the box must not skip the same inset a second
+	// time. A child block that only inherits an ancestor's box (a heading in a
+	// padded section) passes 0: the section's inset is not the heading's.
+	syncBoxes := func(boxes []int, ownBox int) {
 		local := make([]int, 0, len(boxes))
 		for _, id := range boxes {
 			// A positioned element's anchor box is only a containing block
@@ -14232,8 +14914,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				// A wrapper that has no direct text block (a form, hero or card)
 				// still owns its top padding. The first child used to start at the
 				// wrapper edge, so the painted surface backed up over the previous
-				// table row (or sat tight against a hero heading).
-				if info, ok := d.Boxes[id]; ok {
+				// table row (or sat tight against a hero heading). A block that is
+				// the box's own element skips its inset below, as its leading
+				// margin, so skipping here too put two blank rows above an indented
+				// or painted first paragraph and made every card a row too tall.
+				if info, ok := d.Boxes[id]; ok && id != ownBox {
 					if rows := marginRows(info.style.MarginTop); rows > 0 {
 						skipRows(rows)
 					}
@@ -14259,7 +14944,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			// Where a positioned subtree would have started in the flow is its
 			// static position (webpage_layers.go). It takes no room and does
 			// not take part in margin collapsing.
-			syncBoxes(block.Boxes)
+			syncBoxes(block.Boxes, ownBoxOf(block))
 			markX, _ := l.applyBoxConstraints(block, flowPadX, flowContentW)
 			if layout.statics == nil {
 				layout.statics = make(map[int]webStaticPos, 4)
@@ -14272,7 +14957,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			// opening it here made the next block close it and pad the main
 			// flow by its min-height, pushing siblings below a float that had
 			// never displaced them.
-			syncBoxes(block.Boxes)
+			syncBoxes(block.Boxes, ownBoxOf(block))
 		}
 		// A float only narrows the rows it overlaps. Start each block with the
 		// full column and subtract the reserves that are active at its top row.
@@ -14425,10 +15110,15 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if previousMarginBot > gap {
 			gap = previousMarginBot
 		}
-		// No leading blank rows at the top of the page.
-		if len(layout.Rows) > 0 {
-			skipRows(marginRows(gap))
+		// The page's first block takes no leading margin row: a margin collapses
+		// out of the page top. The padding it paints inside its own box stays,
+		// though, or a card that opens the page lost its inset and its content
+		// sat against (or over) its own top border. MarginTop holds both, so the
+		// padding is taken on its own there.
+		if len(layout.Rows) == 0 {
+			gap = math.Max(0, block.Style.PadTop)
 		}
+		skipRows(marginRows(gap))
 		previousMarginBot = block.MarginBot
 		// `clear` moves the block below the floats it names instead of letting
 		// it slide into the narrowed band beside them.
@@ -14555,6 +15245,20 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if indentRight > contentW/3 {
 			indentRight = contentW / 3
 		}
+		// width: fit-content, max-content or min-content: the box is as wide as
+		// what it holds — the whole box when the block's element owns one with
+		// more inside it (fitBoxWidth), else the block's own text.
+		if block.Style.WidthFit != 0 && block.Style.Width <= 0 && block.Style.WidthPct <= 0 &&
+			!block.Float && block.Style.TableRole == webTableRoleNone {
+			fit := l.fitBoxWidth(block.BoxOwner)
+			if fit <= 0 {
+				fit = l.fitBlockWidth(&block, block.Style.WidthFit)
+			}
+			pad := (block.Indent + block.Style.IndentRight) * baseSize / 16
+			if css := (float64(fit) - pad) * 16 / baseSize; fit > 0 && css > 0 {
+				block.Style.Width, block.Style.BoxSizing = css, 0
+			}
+		}
 		// Resolve width/min-width/max-width (and box-sizing) for this block.
 		// blockW is the measure from the text's left edge; paintW is the full
 		// box including the right gutter, so an unconstrained block keeps the
@@ -14638,11 +15342,23 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		// "…" at the end of clampRow, since content was cut.
 		clampLines, linesSet := block.Style.LineClamp, 0
 		clampRow, clampCut := -1, false
+		// lineSeq counts the lines set, so a run can tell whether the line its
+		// last word went on is still open; edgeClosed is set when the word
+		// before closed an inline-block, whose edge is a break opportunity
+		// (webpage_inlinebox.go); atomicLeft is how many runs of an
+		// inline-block kept whole are still to come.
+		lineSeq, edgeClosed, atomicLeft := 0, false, 0
+		blockWhiteSpace := block.WhiteSpace
+		if blockWhiteSpace == webWhiteSpaceNormal {
+			blockWhiteSpace = block.Style.WhiteSpace
+		}
+		blockWraps := webWhiteSpaceWraps(blockWhiteSpace) && !block.Pre
 
 		flushLine := func(last bool) {
 			if len(line) == 0 {
 				return
 			}
+			lineSeq++
 			if clampRow >= 0 {
 				if !clampCut && clampRow < len(layout.Rows) {
 					webClampEllipsis(layout.Rows[clampRow].Runs, lineRight)
@@ -14724,7 +15440,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			// Runs of different sizes and faces share one baseline, and an
 			// inline image stands on it (webpage_inline.go); the line grows
 			// to hold both. A line in one face is unchanged.
-			metrics := webAlignLineRuns(line)
+			metrics := webAlignLineRuns(line, rowH)
 			if h := metrics.ascent + metrics.descent; h > lineFontH {
 				lineFontH = h
 			}
@@ -14761,10 +15477,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			x = lineStart
 		}
 
-		for _, run := range block.Runs {
+		for runIdx, run := range block.Runs {
 			if clampCut {
 				// line-clamp has already cut the block; nothing after it is drawn.
 				break
+			}
+			if atomicLeft > 0 {
+				atomicLeft--
 			}
 			// An inline image is one unbreakable box on the line, like a long
 			// word: it wraps when it does not fit and is placed once the line
@@ -14800,6 +15519,32 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if run.Style.Control != nil {
 				runText = run.Style.Control.Display()
 			}
+			// The edges of the inline boxes the run opens and closes take room
+			// before its first word and after its last, and a run inside a
+			// padded badge, button or <code> paints that box's chip
+			// (webpage_inlinebox.go).
+			leadPx := int32(math.Round(run.Lead * baseSize / 16))
+			trailPx := int32(math.Round(run.Trail * baseSize / 16))
+			leadChip := int32(math.Round(run.ChipLead * baseSize / 16))
+			trailChip := int32(math.Round(run.ChipTrail * baseSize / 16))
+			var chip *webInlineChip
+			if run.Style.InlineChip {
+				c := webRunChip(&run.Style, baseSize, d)
+				chip = &c
+			}
+			// An inline-block (a button, a badge) is atomic: the line may break
+			// at its edges without a space, and the box goes to the next line
+			// whole when it is short enough to (CSS Text 3 §5.1). A run inside
+			// one already kept whole does not start another.
+			atomicStart := run.Style.DisplayInlineBlock && (run.OpensChip || leadPx > 0) && atomicLeft == 0
+			atomicW := int32(0)
+			if atomicStart {
+				if w, n := l.inlineBlockSpan(block.Runs[runIdx:]); n > 0 && w <= avail {
+					atomicW, atomicLeft = w, n
+				}
+			}
+			leadDone, trailDone := false, false
+			lastPos, lastSeq := -1, -1
 			runWhiteSpace := block.WhiteSpace
 			if runWhiteSpace == webWhiteSpaceNormal {
 				runWhiteSpace = block.Style.WhiteSpace
@@ -14811,6 +15556,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				runWhiteSpace = webWhiteSpacePre
 			}
 			segments := strings.Split(runText, "\n")
+			lastSeg := len(segments) - 1
+			for lastSeg > 0 && strings.TrimSpace(segments[lastSeg]) == "" {
+				lastSeg--
+			}
 			for si, segment := range segments {
 				if si > 0 {
 					if len(line) == 0 {
@@ -15032,13 +15781,33 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						}
 						wordW = boxW
 					}
+					// The run's first word comes after the left edges of the boxes
+					// it opens, its last before the right edges of those it
+					// closes, and both count when the line decides whether the
+					// word fits; the first word of an inline-block kept whole
+					// needs room for the whole box.
+					isFirst := !leadDone
+					isLast := si == lastSeg && wi == len(words)-1
+					extraL, extraR := int32(0), int32(0)
+					if isFirst {
+						extraL = leadPx
+					}
+					if isLast {
+						extraR = trailPx
+					}
+					need := extraL + wordW + extraR
+					if isFirst && atomicW > 0 {
+						need = max(need, atomicW)
+					}
+					// Inside an inline-block kept whole the line does not break.
+					hold := atomicLeft > 0 && !(isFirst && atomicStart)
 					spaceBefore := int32(0)
 					if len(line) > 0 {
 						switch {
 						case preserveSpaces:
 							// The token carries its own leading spaces. A wrap drops
 							// the whole token to the next line, indentation included.
-							if wrap && x+wordW > lineRight && wordW <= avail {
+							if wrap && !hold && x+need > lineRight && need <= avail {
 								flushLine(false)
 							}
 						case wi > 0 || leadingSpace:
@@ -15049,31 +15818,39 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							// A nowrap inline run may still break before it starts when
 							// the authored space gives the line a break opportunity; it
 							// may not break between its own words.
-							canBreak := wrap || (wi == 0 && leadingSpace)
-							if canBreak && x+spaceW+wordW > lineRight {
+							canBreak := (wrap || (wi == 0 && leadingSpace)) && !hold
+							if canBreak && x+spaceW+need > lineRight {
 								flushLine(false)
 							} else {
 								x += spaceW
 								spaceBefore = spaceW
 							}
+						case blockWraps && !hold && ((isFirst && (atomicStart || leadPx > 0)) || edgeClosed):
+							// The edge of an inline-block is a break opportunity, and
+							// so, rather than run past the page, is the start of an
+							// inline box with room before it.
+							if x+need > lineRight {
+								flushLine(false)
+							}
 						}
 					}
-					if boxW > 0 && len(line) > 0 && x+boxW > lineRight {
+					if boxW > 0 && len(line) > 0 && x+extraL+boxW > lineRight {
 						flushLine(false)
 					}
-					if boxW == 0 && wordW > avail {
+					x += extraL
+					if room := max(avail-extraL-extraR, 0); boxW == 0 && wordW > room {
 						if block.Style.TextOverflow == 1 {
-							text = webClipWordToWidth(text, avail, measure)
+							text = webClipWordToWidth(text, room, measure)
 						} else {
-							text = ellipsize(font, text, avail)
+							text = ellipsize(font, text, room)
 						}
 						wordW = measure(text)
 					}
-					if boxW == 0 && !wrap && x+wordW > lineRight {
+					if boxW == 0 && !wrap && x+wordW+extraR > lineRight {
 						// nowrap/pre keeps one line: clip the overflowing tail with
 						// the requested text-overflow mode. Older pages without a
 						// mode retain the reader's ellipsis fallback.
-						remaining := lineRight - x
+						remaining := lineRight - x - extraR
 						if remaining <= 0 {
 							lineClipped = true
 							continue
@@ -15131,11 +15908,21 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						Invisible:      run.Style.Invisible || (run.Style.HasColor && run.Style.Color.A == 0 && run.Style.Control == nil),
 						VerticalOffset: webVerticalOffset(run.Style, font, baseSize),
 					}
+					if chip != nil && boxW == 0 && (pos.HasBg || chip.hasBorder()) {
+						pos.Chip = chip
+						if isFirst {
+							pos.ChipLead, pos.ChipLeft = leadChip, run.OpensChip
+						}
+						if isLast {
+							pos.ChipTrail, pos.ChipRight = trailChip, run.ClosesChip
+						}
+					}
+					leadDone = true
 					// Letter spacing changes the advance between glyphs. A run with
 					// an inline background or a control frame is kept whole so its
 					// box does not become one box per character; those are rare and
 					// their spacing is visually irrelevant.
-					if letterSpacing != 0 && boxW == 0 && !pos.HasBg && pos.Control == nil {
+					if letterSpacing != 0 && boxW == 0 && !pos.HasBg && pos.Chip == nil && pos.Control == nil {
 						drawX := x
 						for gi, r := range text {
 							glyph := string(r)
@@ -15153,7 +15940,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					} else {
 						line = append(line, pos)
 					}
+					lastPos, lastSeq = len(line)-1, lineSeq
 					x += wordW
+					if isLast {
+						x += extraR
+						trailDone = true
+					}
+					edgeClosed = isLast && run.Style.DisplayInlineBlock && (run.ClosesChip || trailPx > 0)
 					if x > lineMax {
 						lineMax = x
 					}
@@ -15164,6 +15957,16 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						lineFontH = int32(height)
 					}
 				}
+			}
+			if !trailDone && lastPos >= 0 && lastSeq == lineSeq && lastPos < len(line) && (trailPx > 0 || run.ClosesChip) {
+				// The run's last word was not the one expected (a trailing
+				// break, a dropped glyph): the box still closes after it.
+				if line[lastPos].Chip != nil {
+					line[lastPos].ChipTrail, line[lastPos].ChipRight = trailChip, run.ClosesChip
+				}
+				x += trailPx
+				lineMax = max(lineMax, x)
+				edgeClosed = run.Style.DisplayInlineBlock
 			}
 			if lineClipped && !webWhiteSpaceWraps(runWhiteSpace) {
 				// The clipped run has no line of its own left to fill; start the
@@ -15472,7 +16275,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		shiftRelative()
 		l.tagBlockBox(block, rectStart, bgStart)
 	}
-	syncBoxes(nil)
+	syncBoxes(nil, 0)
 }
 
 // tagBlockBox marks the paints this block produced for its own container box.
@@ -15577,9 +16380,17 @@ func collectWebControls(layout *webLayout) []webLinkHit {
 				// A submit button draws its label as ordinary text and has no
 				// control frame of its own. Its hit box was left at 0×0, so the
 				// D-pad could focus the button but not touch it. Use the measured
-				// run as the hit target, just like a link uses its own extent.
+				// run as the hit target, just like a link uses its own extent,
+				// with the button's padding and border round it.
 				if w, h, err := run.Font.SizeUTF8(run.Text); err == nil && w > 0 && h > 0 {
 					hit.Box = sdl.Rect{X: run.X, Y: y, W: int32(w), H: int32(h)}
+					if c := run.Chip; c != nil {
+						hit.Box.X -= run.ChipLead
+						hit.Box.W += run.ChipLead + run.ChipTrail
+						hit.Box.Y -= c.padT
+						hit.Box.H += c.padT + c.padB
+						hit.X, hit.W = hit.Box.X, hit.Box.W
+					}
 				}
 			}
 			hits = append(hits, hit)
@@ -15604,7 +16415,9 @@ func collectWebLinks(layout *webLayout) []webLinkHit {
 				continue
 			}
 			href := run.Href
-			startX := run.X
+			// A link drawn as a button or a pill is as wide as its chip
+			// (webpage_inlinebox.go).
+			startX := run.X - run.ChipLead
 			endX := run.X
 			label := ""
 			j := i
@@ -15626,7 +16439,7 @@ func collectWebLinks(layout *webLayout) []webLinkHit {
 					label += " " + cur.Image.ImageAlt
 				}
 				label += " " + cur.Text
-				if end := cur.X + w; end > endX {
+				if end := cur.X + w + cur.ChipTrail; end > endX {
 					endX = end
 				}
 			}
@@ -15642,7 +16455,10 @@ func collectWebLinks(layout *webLayout) []webLinkHit {
 				Href: href,
 				Text: strings.Join(strings.Fields(label), " "),
 			}
-			if vo := run.VerticalOffset; vo != 0 && layout.RowH > 0 {
+			if c := run.Chip; c != nil && run.Image == nil {
+				// The focus ring and the tap target are the chip.
+				hit.Box = sdl.Rect{X: startX, Y: row.Y + run.VerticalOffset - c.padT, W: endX - startX, H: int32(run.Font.Height()) + c.padT + c.padB}
+			} else if vo := run.VerticalOffset; vo != 0 && layout.RowH > 0 {
 				// Drawn below its row (a centred flex item, a grid track's exact
 				// edge): the focus ring and the tap target go where the words are.
 				hit.Box = sdl.Rect{X: startX - 4, Y: row.Y + vo - 2, W: endX - startX + 8, H: layout.RowH + 4}
@@ -16064,6 +16880,10 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		// positioned layers and pinned sticky bars in z order.
 		drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerUnder)
 		for _, bg := range layout.Backgrounds {
+			if bg.Lifted {
+				// Painted with its positioned element (webLiftPositioned).
+				continue
+			}
 			y := rect.Y + bg.Rect.Y - offset
 			if bg.Shadow {
 				// A soft shadow reaches past its box by the blur, so it has
@@ -16089,8 +16909,9 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 			webPaintFill(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
 		}
 		for _, bg := range layout.Rects {
-			if bg.BackgroundFill || bg.Shadow {
-				// Both are painted from layout.Backgrounds, in CSS order.
+			if bg.BackgroundFill || bg.Shadow || bg.Lifted {
+				// Both are painted from layout.Backgrounds, in CSS order; a
+				// lifted one with its positioned element.
 				continue
 			}
 			y := rect.Y + bg.Rect.Y - offset
@@ -16129,7 +16950,7 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		// with a header image scrolls the photo away like a normal line.
 		for i := range layout.Images {
 			im := layout.Images[i]
-			if im.Invisible {
+			if im.Invisible || im.Lifted {
 				continue
 			}
 			y := rect.Y + im.Rect.Y - offset

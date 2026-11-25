@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"hash/crc32"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func crcOf(data []byte) string {
@@ -413,6 +415,168 @@ func TestRetroArchPackageReadInPart(t *testing.T) {
 		if ok != tc.accepted || (ok && (a != tc.a || b != tc.b || n != tc.n)) {
 			t.Fatalf("raGetContentRange(%q) = %d, %d, %d, %v", tc.in, a, b, n, ok)
 		}
+	}
+}
+
+// raGet7zFixture is a TrimUI SD package as a 7z, 1,319 bytes, built byte by
+// byte with Python's lzma module and read back whole by libarchive: two LZMA2
+// blocks — Emus/GBA/launch.sh, RetroArch/.retroarch/assets/big.png,
+// …/cores/a_libretro.so, RetroArch/ra64.trimui (RetroArch 1.22.2, dated
+// 2025-04-30 12:00 UTC, CRC 4746ead6) and RetroArch/retroarch.cfg in the
+// first; Roms/readme.txt, …/cores/b_libretro.so (CRC b62b23e9) and
+// Roms/zz_after.bin in the second — the folders, an empty
+// …/config/empty.txt, file times, a plain header.
+const raGet7zFixture = `N3q8ryccAATi5J/FIQEAAAAAAADmAwAAAAAAAM8y8KvgWekAx10AEYhCRj30FjRzCg2kNp3mcg11
+G5RdfzABgEVJkdcnHTSxM7FVbApIX1U80R6j3/bu67IpiC3LinRvRFUIDqVVRPr7B1ZBtCEFpxzG
+tZFq7+tUMMfr0z1aMjXkXf2vky1Qi95Dm7lUP+7sG37bMQePL5jVhiPplWGJftZBI4FogZexx8F0
+dcMPvFMHjlnij8AxA1vIns4fj6gjgUY2KII8oyp40A2Zp5JUuBGlyWKdPTMmQ6aHBEOKvXaWiQ+G
+a0gDpyxQWyAl4ADgJX8ASl0AOB1Kz/aDM8rzlUTKxVqQPyVX2ArM9y+Avngg4zn5QQD31rl/5lw7
+0nhV6pM4VlF3PESmA4LpiEqxQRO316dYmovQ4IfLDN/OQAAAAQQGAAIJgM9SAAcLAgABISEBEAEh
+IQEQDMDqWaWAAAgNBQMJipaT7KOMl6yJYJBoCgFadix1I6nrqyE+6VTW6kZHe8O/1GG1k2LpIyu2
+f4VeowAABRAOAv4BDwEBEYL/AEUAbQB1AHMAAABFAG0AdQBzAC8ARwBCAEEAAABSAGUAdAByAG8A
+QQByAGMAaAAAAFIAZQB0AHIAbwBBAHIAYwBoAC8ALgByAGUAdAByAG8AYQByAGMAaAAAAFIAZQB0
+AHIAbwBBAHIAYwBoAC8ALgByAGUAdAByAG8AYQByAGMAaAAvAGEAcwBzAGUAdABzAAAAUgBlAHQA
+cgBvAEEAcgBjAGgALwAuAHIAZQB0AHIAbwBhAHIAYwBoAC8AYwBvAHIAZQBzAAAAUgBlAHQAcgBv
+AEEAcgBjAGgALwAuAHIAZQB0AHIAbwBhAHIAYwBoAC8AYwBvAG4AZgBpAGcAAABFAG0AdQBzAC8A
+RwBCAEEALwBsAGEAdQBuAGMAaAAuAHMAaAAAAFIAZQB0AHIAbwBBAHIAYwBoAC8ALgByAGUAdABy
+AG8AYQByAGMAaAAvAGEAcwBzAGUAdABzAC8AYgBpAGcALgBwAG4AZwAAAFIAZQB0AHIAbwBBAHIA
+YwBoAC8ALgByAGUAdAByAG8AYQByAGMAaAAvAGMAbwByAGUAcwAvAGEAXwBsAGkAYgByAGUAdABy
+AG8ALgBzAG8AAABSAGUAdAByAG8AQQByAGMAaAAvAHIAYQA2ADQALgB0AHIAaQBtAHUAaQAAAFIA
+ZQB0AHIAbwBBAHIAYwBoAC8AcgBlAHQAcgBvAGEAcgBjAGgALgBjAGYAZwAAAFIAbwBtAHMALwBy
+AGUAYQBkAG0AZQAuAHQAeAB0AAAAUgBlAHQAcgBvAEEAcgBjAGgALwAuAHIAZQB0AHIAbwBhAHIA
+YwBoAC8AYwBvAHIAZQBzAC8AYgBfAGwAaQBiAHIAZQB0AHIAbwAuAHMAbwAAAFIAbwBtAHMALwB6
+AHoAXwBhAGYAdABlAHIALgBiAGkAbgAAAFIAZQB0AHIAbwBBAHIAYwBoAC8ALgByAGUAdAByAG8A
+YQByAGMAaAAvAGMAbwBuAGYAaQBnAC8AZQBtAHAAdAB5AC4AdAB4AHQAAAAUgIIBAABgKDZzPdoB
+AGAoNnM92gEAYCg2cz3aAQBgKDZzPdoBAGAoNnM92gEAYCg2cz3aAQBgKDZzPdoBAGAoNnM92gEA
+YCg2cz3aAQBgKDZzPdoBAGAXZse52wEAYCg2cz3aAQBgKDZzPdoBAGAoNnM92gEAYCg2cz3aAQBg
+KDZzPdoBAAA=`
+
+// TestRetroArch7zPackage pins raget_7z.go: a 7z package's directory read in
+// range requests, RetroArch's folder and the binary's time found in it, one
+// pass over both blocks (in small range requests) that writes only
+// RetroArch's files the card does not have, each checked against its CRC, the
+// lean plan, a binary-only pass, and the move into the card's folder.
+func TestRetroArch7zPackage(t *testing.T) {
+	data, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(raGet7zFixture, "\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevDir, prev7z := raGetDirBlock, raGet7zBlock
+	raGetDirBlock, raGet7zBlock = 300, 200
+	t.Cleanup(func() { raGetDirBlock, raGet7zBlock = prevDir, prev7z })
+	dir := t.TempDir()
+	pkg := filepath.Join(dir, "sd_base.7z")
+	if err := os.WriteFile(pkg, data, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var ranged atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") == "" {
+			t.Errorf("a request without a range for %s", r.URL.Path)
+		}
+		ranged.Add(1)
+		http.ServeFile(w, r, pkg)
+	}))
+	defer server.Close()
+	allowUpdateTestServer(t, server.URL)
+
+	ctx := context.Background()
+	asset := emuGitHubAsset{Name: "sd_base.7z", BrowserDownloadURL: server.URL + "/sd_base.7z", Size: int64(len(data))}
+	src := raGetSource{Repo: "trimui/assets_smartpro", Model: DeviceTrimuiSmartPro}
+	c, ok, err := raGet7zOpenAsset(ctx, server.Client(), src, "20250430", asset)
+	if err != nil || !ok {
+		t.Fatalf("raGet7zOpenAsset = %v, %v", ok, err)
+	}
+	if c.Prefix != "RetroArch/" || !c.Full || c.Files != 6 {
+		t.Fatalf("candidate = prefix %q, full %v, %d files", c.Prefix, c.Full, c.Files)
+	}
+	if want := time.Date(2025, 4, 30, 12, 0, 0, 0, time.UTC); !c.When.Equal(want) {
+		t.Fatalf("binary time = %v, want %v", c.When, want)
+	}
+	if c.crc() != "4746ead6" || c.binSize() != 6060 {
+		t.Fatalf("binary = crc %s, %d bytes", c.crc(), c.binSize())
+	}
+
+	target := filepath.Join(dir, "card", "RetroArch")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "retroarch.cfg"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	rels := func(ws []raGet7zWanted) string {
+		var out []string
+		for _, w := range ws {
+			out = append(out, w.rel)
+		}
+		return strings.Join(out, ",")
+	}
+	lean, _, _, err := raGet7zPlan(&c, target, true, true)
+	if err != nil {
+		t.Fatalf("raGet7zPlan: %v", err)
+	}
+	if got := rels(lean); got != "ra64.trimui,.retroarch/cores/a_libretro.so,.retroarch/cores/b_libretro.so,.retroarch/config/empty.txt" {
+		t.Fatalf("lean plan = %s", got)
+	}
+
+	stage := filepath.Join(dir, "stage")
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	bin, err := raGet7zStage(ctx, &c, stage, 0, target, true, 0, nil)
+	if err != nil {
+		t.Fatalf("raGet7zStage: %v", err)
+	}
+	if got, _ := os.ReadFile(bin); crcOf(got) != "4746ead6" {
+		t.Fatalf("the binary came back as %d bytes", len(got))
+	}
+	if v := raGetBinaryVersion(bin); v != "1.22.2" {
+		t.Fatalf("version = %q, want 1.22.2", v)
+	}
+	if !c.stagedFolder || rels(c.stagedFiles) != ".retroarch/assets/big.png,.retroarch/cores/a_libretro.so,.retroarch/cores/b_libretro.so,.retroarch/config/empty.txt" {
+		t.Fatalf("staged = folder %v, files %s", c.stagedFolder, rels(c.stagedFiles))
+	}
+	created, err := raGet7zPlaceFolder(ctx, &c, target, func(int64, int64) {})
+	if err != nil {
+		t.Fatalf("raGet7zPlaceFolder: %v", err)
+	}
+	if len(created) != 4 {
+		t.Fatalf("written = %v", created)
+	}
+	for rel, crc := range map[string]string{
+		".retroarch/assets/big.png":      "abeba923",
+		".retroarch/cores/a_libretro.so": "54e93e21",
+		".retroarch/cores/b_libretro.so": "b62b23e9",
+		".retroarch/config/empty.txt":    "00000000",
+	} {
+		got, err := os.ReadFile(filepath.Join(target, filepath.FromSlash(rel)))
+		if err != nil || crcOf(got) != crc {
+			t.Fatalf("%s came back wrong (%v)", rel, err)
+		}
+	}
+	if got, _ := os.ReadFile(filepath.Join(target, "retroarch.cfg")); string(got) != "mine\n" {
+		t.Fatalf("the card's own retroarch.cfg was replaced: %q", got)
+	}
+	for _, absent := range []string{filepath.Join(target, "ra64.trimui"), filepath.Join(dir, "card", "Emus"), filepath.Join(dir, "card", "Roms")} {
+		if _, err := os.Stat(absent); err == nil {
+			t.Fatalf("%s was written", absent)
+		}
+	}
+
+	// An update's pass: the binary alone.
+	c2, ok, err := raGet7zOpenAsset(ctx, server.Client(), src, "20250430", asset)
+	if err != nil || !ok {
+		t.Fatalf("raGet7zOpenAsset again = %v, %v", ok, err)
+	}
+	bin2, err := raGet7zStage(ctx, &c2, stage, 1, "", true, 0, nil)
+	if err != nil || c2.stagedFolder || len(c2.stagedFiles) != 0 {
+		t.Fatalf("binary-only pass = %v, folder %v, files %s", err, c2.stagedFolder, rels(c2.stagedFiles))
+	}
+	if got, _ := os.ReadFile(bin2); crcOf(got) != "4746ead6" {
+		t.Fatalf("the binary-only pass gave %d bytes", len(got))
+	}
+	if n := ranged.Load(); n < 8 {
+		t.Fatalf("only %d range requests: the small blocks were not used", n)
 	}
 }
 

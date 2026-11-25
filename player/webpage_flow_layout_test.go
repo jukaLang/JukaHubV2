@@ -156,3 +156,33 @@ func TestWebFlexItemsKeepBackgroundLayersAndVideos(t *testing.T) {
 			firstRow, firstX, secondRow, secondX)
 	}
 }
+
+// A block that paints a box of its own (a background, padding, a border) took
+// its top inset twice: once when its box opened, once as its own leading
+// margin (syncBoxes in webpage.go). A page whose first block was indented or
+// painted started two blank rows down, and every such block later in the page
+// was a row too tall.
+func TestWebPaintedBlockTakesItsTopInsetOnce(t *testing.T) {
+	legibleTestInitFonts(t)
+	topAndGap := func(css string) (top, gap int) {
+		layout := parseWebPage(`<style>.x{`+css+`}</style><p class="x">Alpha</p><p>After</p>`,
+			"", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+		alpha, _ := webTestTextPosition(t, layout, "Alpha")
+		after, _ := webTestTextPosition(t, layout, "After")
+		return alpha, after - alpha
+	}
+	plainTop, plainGap := topAndGap("")
+	for _, css := range []string{"padding-left:24px", "margin-left:24px", "background:#eee", "border-left:4px solid #000"} {
+		top, gap := topAndGap(css)
+		if top != plainTop {
+			t.Fatalf("%s: the first paragraph started on row %d, want %d (a first block's top margin collapses at the page top)", css, top, plainTop)
+		}
+		if gap != plainGap {
+			t.Fatalf("%s: the gap to the next paragraph was %d rows, want %d — the block's top inset was counted twice", css, gap, plainGap)
+		}
+	}
+	quoted := parseWebPage(`<blockquote>Quoted words</blockquote><p>After</p>`, "", "https://example.com/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	if row, _ := webTestTextPosition(t, quoted, "Quoted"); row != 0 {
+		t.Fatalf("a blockquote opening the page started on row %d, want 0", row)
+	}
+}

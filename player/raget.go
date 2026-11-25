@@ -23,15 +23,17 @@ package main
 // of them; the Smart Pro S (A523, Mali) has its own. raGetCollect reads the
 // newest releases of the model's family, and in every .zip asset finds
 // RetroArch's folder without downloading the package (raget_remote.go reads
-// only the zip's directory). The Smart Pro's own packages are .7z archives,
-// which cannot be read in part, so a Smart Pro takes the Brick's or Brick
-// Pro's build — the same chip — whichever is newer.
+// only the zip's directory). Most of TrimUI's packages — all of the Smart
+// Pro's — are .7z archives: their directories are read the same way, and
+// their files in one pass over the blocks that hold them (raget_7z.go).
 //
-// Is it working here. Builds are tried newest first (by the binary's own time
-// in the zip; the handheld's own model wins a near tie), at most raGetMaxTries
-// of them, each downloaded alone and checked before anything is written to
-// the card's RetroArch folder (raGetCheck): a 64-bit ARM program, every
-// library it links found on this handheld, every symbol version defined — by
+// Is it working here. A first install tries the handheld's own model's builds
+// first, then the rest of the family's; within each, and in the update pass,
+// newest first (by the binary's own time in the package; the handheld's own
+// model wins a near tie) — at most raGetMaxTries of them, each downloaded and
+// checked before anything is written to the card's RetroArch folder
+// (raGetCheck): a 64-bit ARM program, every library it links found on this
+// handheld, every symbol version defined — by
 // the firmware's own loader listing and binding its libraries the way
 // `ldd -r` does, and again by JukaHub's private loader (glibc 2.39). A build
 // is taken when it starts on the firmware's glibc, or on JukaHub's where
@@ -57,13 +59,14 @@ package main
 // the core (ra_glibc.go, raGetOwnsLaunch), as long as the probe passes; the
 // firmware's glibc is what is left when it cannot.
 //
-// When. A minute and a half after start, on a card with no RetroArch, online
-// and between games (raget_ui.go), unless Emulator updates is Off; A on the
-// Emulators page's RetroArch tile; a game whose launch script found no
-// RetroArch. Afterwards the Emulator updates pass keeps the RetroArch JukaHub
-// installed current with TrimUI's newest build (the binary alone, the old one
-// kept as ra64.trimui.bak); a RetroArch that came with the card, or one
-// changed by hand, is never touched.
+// When. A minute after start, on a card with no RetroArch, online and between
+// games (raget_ui.go), unless Emulator updates is Off; A on the Emulators
+// page's RetroArch tile; a core install or "Get more cores" on such a card;
+// a game whose launch script found no RetroArch. Afterwards the Emulator
+// updates pass keeps the RetroArch JukaHub installed current with TrimUI's
+// newest build (the binary alone, the old one kept as ra64.trimui.bak; never
+// from another model's 7z package); a RetroArch that came with the card, or
+// one changed by hand, is never touched.
 
 import (
 	"archive/zip"
@@ -395,10 +398,41 @@ type raGetCandidate struct {
 	Version string
 	zr      *zip.Reader
 	remote  *raGetRemote
+	// A 7z package's (raget_7z.go; Bin and zr are nil): its directory and the
+	// binary's entry. staged is the folder its last pass unpacked into ("" until
+	// one ran); stagedFolder says that pass took RetroArch's folder, whose
+	// files and folders it wrote there are stagedFiles and stagedDirs (the
+	// binary not among them), stagedLean whether it left out what RetroArch
+	// runs without. szFailed says why the package is no use this time: a pass
+	// of it failed, or it failed for good before (raGetPassOver).
+	sz           *sevenZipArchive
+	szBin        int
+	staged       string
+	stagedFolder bool
+	stagedFiles  []raGet7zWanted
+	stagedDirs   []string
+	stagedLean   bool
+	szFailed     string
 }
 
-// crc is the binary's CRC-32 as the zip states it.
-func (c *raGetCandidate) crc() string { return fmt.Sprintf("%08x", c.Bin.CRC32) }
+// binCRC and binSize are the binary's CRC-32 and size as its package states
+// them.
+func (c *raGetCandidate) binCRC() uint32 {
+	if c.sz != nil {
+		return c.sz.Entries[c.szBin].CRC
+	}
+	return c.Bin.CRC32
+}
+
+func (c *raGetCandidate) binSize() uint64 {
+	if c.sz != nil {
+		return c.sz.Entries[c.szBin].Size
+	}
+	return c.Bin.UncompressedSize64
+}
+
+// crc is the binary's CRC-32 as its package states it.
+func (c *raGetCandidate) crc() string { return fmt.Sprintf("%08x", c.binCRC()) }
 
 // label names the build in logs and messages.
 func (c *raGetCandidate) label() string {
@@ -446,8 +480,8 @@ type raGetListing struct {
 }
 
 // raGetCollect reads the newest releases of model's family and opens each
-// .zip package not in skip, keeping those whose directory holds a RetroArch
-// binary. It fails only when no repository could be asked at all.
+// .zip or .7z package not in skip, keeping those whose directory holds a
+// RetroArch binary. It fails only when no repository could be asked at all.
 func raGetCollect(ctx context.Context, client *http.Client, model DeviceModel, skip map[string]bool) (raGetListing, error) {
 	var out raGetListing
 	own := raGetPackageModel(model)
@@ -490,11 +524,13 @@ func raGetCollect(ctx context.Context, client *http.Client, model DeviceModel, s
 			for _, a := range rel.Assets {
 				name := strings.TrimSpace(a.Name)
 				lower := strings.ToLower(name)
+				// TrimUI's packages are zips and 7z archives (raget_7z.go).
+				sevenZip := strings.HasSuffix(lower, ".7z")
 				switch {
-				case strings.HasSuffix(lower, ".7z") || strings.Contains(lower, ".7z."):
-					out.notes = append(out.notes, fmt.Sprintf("%s %s: %s is a 7-Zip archive, which cannot be read in part", src.Repo, tag, name))
+				case !sevenZip && strings.Contains(lower, ".7z."):
+					out.notes = append(out.notes, fmt.Sprintf("%s %s: %s is one part of a split 7-Zip archive, which JukaHub does not join", src.Repo, tag, name))
 					continue
-				case !strings.HasSuffix(lower, ".zip") || a.Size <= 0 || strings.TrimSpace(a.BrowserDownloadURL) == "":
+				case !sevenZip && !strings.HasSuffix(lower, ".zip"), a.Size <= 0, strings.TrimSpace(a.BrowserDownloadURL) == "":
 					continue
 				}
 				key := raGetAssetKey(src.Repo, tag, a)
@@ -502,7 +538,11 @@ func raGetCollect(ctx context.Context, client *http.Client, model DeviceModel, s
 				if skip[key] {
 					continue
 				}
-				c, ok, err := raGetOpenAsset(ctx, client, src, tag, a)
+				open := raGetOpenAsset
+				if sevenZip {
+					open = raGet7zOpenAsset
+				}
+				c, ok, err := open(ctx, client, src, tag, a)
 				switch {
 				case err != nil:
 					if ctx.Err() != nil {
@@ -606,10 +646,18 @@ func raGetUnder(name, prefix string) (string, bool) {
 
 // raGetRank sorts candidates best first: the newest build (the handheld's own
 // model's within raGetOwnBonus), then the version the notes name, then a whole
-// folder over a lone binary.
-func raGetRank(cands []raGetCandidate) {
+// folder over a lone binary. ownFirst (a first install) puts every build of
+// the handheld's own model's packages before the others: TrimUI's build for
+// exactly this screen, pad and firmware, with its folder in the same package
+// — since 7z packages became readable (raget_7z.go), the one a Smart Pro gets
+// rather than a Brick's. The update pass (newest first) moves on from it when
+// TrimUI publishes a newer build that starts here.
+func raGetRank(cands []raGetCandidate, ownFirst bool) {
 	sort.SliceStable(cands, func(i, j int) bool {
 		a, b := &cands[i], &cands[j]
+		if ownFirst && a.Own != b.Own {
+			return a.Own
+		}
 		ta, tb := a.When, b.When
 		if a.Own {
 			ta = ta.Add(raGetOwnBonus)
@@ -639,16 +687,18 @@ func raGetFolderSource(cands []raGetCandidate, pick int) int {
 	if pick < 0 || pick >= len(cands) {
 		return -1
 	}
+	// A 7z package whose pass failed (now, or for good before) is no source.
+	whole := func(c *raGetCandidate) bool { return c.Full && c.szFailed == "" }
 	own := -1
 	for i := range cands {
-		if cands[i].Own && cands[i].Full && (own < 0 || cands[i].When.After(cands[own].When)) {
+		if cands[i].Own && whole(&cands[i]) && (own < 0 || cands[i].When.After(cands[own].When)) {
 			own = i
 		}
 	}
 	switch {
 	case own >= 0:
 		return own
-	case cands[pick].Full:
+	case whole(&cands[pick]):
 		return pick
 	}
 	score := func(c *raGetCandidate) int {
@@ -664,7 +714,7 @@ func raGetFolderSource(cands []raGetCandidate, pick int) int {
 	best := -1
 	for i := range cands {
 		c := &cands[i]
-		if !c.Full {
+		if !whole(c) {
 			continue
 		}
 		if best < 0 || score(c) > score(&cands[best]) || (score(c) == score(&cands[best]) && c.When.After(cands[best].When)) {
@@ -991,27 +1041,49 @@ func raGetBinaryVersion(file string) string {
 
 // raGetPick tries the candidates best first (raGetRank), at most raGetMaxTries
 // binaries, and returns the first that starts here: its index, the staged
-// file in stage and the verdict.
-func raGetPick(ctx context.Context, cands []raGetCandidate, stage string, report func(phase string, done, total int64)) (int, string, raGetVerdict, error) {
-	raGetRank(cands)
+// file in stage and the verdict. target is the card's RetroArch folder for a
+// first install (its own model's builds first; a 7z package whose folder the
+// card will get unpacks that folder in the same pass), "" for an update.
+func raGetPick(ctx context.Context, cands []raGetCandidate, stage, target string, report func(phase string, done, total int64)) (int, string, raGetVerdict, error) {
+	raGetRank(cands, target != "")
 	var why []string
 	refused := map[uint32]bool{}
 	tries := 0
 	for i := range cands {
 		c := &cands[i]
-		if refused[c.Bin.CRC32] {
+		if refused[c.binCRC()] {
 			continue // the same binary in another package
+		}
+		if c.szFailed != "" {
+			// A 7z package that failed for good here before (raGetPassOver).
+			why = append(why, c.label()+": "+c.szFailed)
+			continue
 		}
 		if tries >= raGetMaxTries {
 			break
 		}
 		tries++
-		staged := filepath.Join(stage, fmt.Sprintf("ra64-%d.trimui", i))
-		total := int64(c.Bin.UncompressedSize64)
-		err := raGetFetch(ctx, c, c.Bin, staged, func(done, _ int64) { report(installPhaseDownload, done, total) })
+		download := func(done, total int64) { report(installPhaseDownload, done, total) }
+		var staged string
+		var err error
+		if c.sz != nil {
+			folderFor := ""
+			if target != "" && raGetFolderSource(cands, i) == i {
+				folderFor = target
+			}
+			staged, err = raGet7zStage(ctx, c, stage, i, folderFor, true, 0, download)
+		} else {
+			staged = filepath.Join(stage, fmt.Sprintf("ra64-%d.trimui", i))
+			total := int64(c.binSize())
+			err = raGetFetch(ctx, c, c.Bin, staged, func(done, _ int64) { download(done, total) })
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return -1, "", raGetVerdict{}, ctx.Err()
+			}
+			if c.sz != nil {
+				c.szFailed = "its pass failed: " + firstLine(err.Error())
+				raGetRefuseIfFinal(c, err)
 			}
 			logWarn("emulators", "RetroArch install: %s did not download: %v", c.label(), err)
 			why = append(why, c.label()+" did not download: "+firstLine(err.Error()))
@@ -1021,8 +1093,14 @@ func raGetPick(ctx context.Context, cands []raGetCandidate, stage string, report
 		c.Version = raGetBinaryVersion(staged)
 		v := raGetCheck(staged)
 		if !v.accepted() {
-			refused[c.Bin.CRC32] = true
+			refused[c.binCRC()] = true
+			// The binary only: a 7z package's folder unpacked beside it can
+			// still be the card's (raGetFolderSource). A later start passes
+			// such a package over (raGetPassOver).
 			_ = os.Remove(staged)
+			if c.sz != nil {
+				raGetRefuse(c, "its build does not start here: "+v.why)
+			}
 			logWarn("emulators", "RetroArch install: %s does not start here: %s", c.label(), v.why)
 			why = append(why, c.label()+": "+v.why)
 			continue
@@ -1387,46 +1465,39 @@ func raGetInstallFirst(ctx context.Context, client *http.Client, progress emuWin
 		return res, err
 	}
 	defer os.RemoveAll(stage)
-	pick, staged, verdict, err := raGetPick(ctx, list.cands, stage, report)
+	// A 7z package that failed for good at an earlier start is not unpacked
+	// again (raget_7z.go).
+	raGetPassOver(list.cands)
+	pick, staged, verdict, err := raGetPick(ctx, list.cands, stage, target, report)
 	if err != nil {
 		return res, err
 	}
 	chosen := &list.cands[pick]
-	src := raGetFolderSource(list.cands, pick)
-	if src < 0 {
-		return res, fmt.Errorf("%s comes without RetroArch's folder (retroarch.cfg, cores), and no other package of TrimUI's for this model has one", chosen.label())
+	binSize := int64(chosen.binSize())
+	var folder *raGetCandidate
+	var created []string
+	var lean, madeTarget bool
+	for {
+		src := raGetFolderSource(list.cands, pick)
+		if src < 0 {
+			return res, fmt.Errorf("%s comes without RetroArch's folder (retroarch.cfg, cores), and no other package of TrimUI's for this model has one JukaHub could unpack", chosen.label())
+		}
+		folder = &list.cands[src]
+		if folder.sz == nil {
+			created, lean, madeTarget, err = raGetZipFolderInto(ctx, folder, target, binSize, report)
+		} else {
+			created, lean, madeTarget, err = raGet7zFolderInto(ctx, folder, stage, src, target, binSize, report)
+			if err != nil && folder.szFailed != "" && ctx.Err() == nil {
+				// That package's folder could not be unpacked: the next
+				// package with a whole folder.
+				logWarn("emulators", "RetroArch install: %v", err)
+				continue
+			}
+		}
+		break
 	}
-	folder := &list.cands[src]
-	binSize := int64(chosen.Bin.UncompressedSize64)
-	plan, dirs, total, packed, err := raGetFolderPlan(folder, target, false)
 	if err != nil {
 		return res, err
-	}
-	free, ferr := freeBytes(filepath.Dir(target))
-	lean := false
-	if ferr == nil && free > 0 && free < total+binSize+raGetSpaceMargin {
-		lean = true
-		if plan, dirs, total, packed, err = raGetFolderPlan(folder, target, true); err != nil {
-			return res, err
-		}
-		if free < total+binSize+raGetSpaceMargin {
-			return res, fmt.Errorf("RetroArch needs about %s on the card, which has %s free", formatInstallBytes(total+binSize+raGetSpaceMargin), formatInstallBytes(free))
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return res, err
-	}
-	madeTarget := !dirExists(target)
-	leanNote := ""
-	if lean {
-		leanNote = " (without what it runs without: the card is short of space)"
-	}
-	logInfo("emulators", "RetroArch install: writing %d files (%s) of %s %s's RetroArch folder into %s%s",
-		len(plan), formatInstallBytes(total), folder.Repo, folder.Tag, target, leanNote)
-	created, err := raGetWriteFolder(ctx, folder, target, plan, dirs, total, packed, func(done, all int64) { report(installPhaseExtract, done, all) })
-	if err != nil {
-		raGetUndo(target, created, madeTarget)
-		return res, fmt.Errorf("writing RetroArch's folder: %w", err)
 	}
 	// Another model's settings: its screen size and viewport go.
 	if folder.Model != raGetPackageModel(model) && slices.Contains(created, "retroarch.cfg") {
@@ -1472,6 +1543,45 @@ func raGetInstallFirst(ctx context.Context, client *http.Client, progress emuWin
 	return res, nil
 }
 
+// raGetZipFolderInto writes the files of a zip package's RetroArch folder the
+// card's target does not have — all of them unless the card is short of space
+// (binSize: the binary still to come) — and returns what it wrote, whether it
+// left out what RetroArch runs without, and whether it made target. What it
+// wrote is removed again when it fails.
+func raGetZipFolderInto(ctx context.Context, folder *raGetCandidate, target string, binSize int64, report func(phase string, done, total int64)) ([]string, bool, bool, error) {
+	plan, dirs, total, packed, err := raGetFolderPlan(folder, target, false)
+	if err != nil {
+		return nil, false, false, err
+	}
+	free, ferr := freeBytes(filepath.Dir(target))
+	lean := false
+	if ferr == nil && free > 0 && free < total+binSize+raGetSpaceMargin {
+		lean = true
+		if plan, dirs, total, packed, err = raGetFolderPlan(folder, target, true); err != nil {
+			return nil, false, false, err
+		}
+		if free < total+binSize+raGetSpaceMargin {
+			return nil, false, false, fmt.Errorf("RetroArch needs about %s on the card, which has %s free", formatInstallBytes(total+binSize+raGetSpaceMargin), formatInstallBytes(free))
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, false, err
+	}
+	madeTarget := !dirExists(target)
+	leanNote := ""
+	if lean {
+		leanNote = " (without what it runs without: the card is short of space)"
+	}
+	logInfo("emulators", "RetroArch install: writing %d files (%s) of %s %s's RetroArch folder into %s%s",
+		len(plan), formatInstallBytes(total), folder.Repo, folder.Tag, target, leanNote)
+	created, err := raGetWriteFolder(ctx, folder, target, plan, dirs, total, packed, func(done, all int64) { report(installPhaseExtract, done, all) })
+	if err != nil {
+		raGetUndo(target, created, madeTarget)
+		return nil, false, false, fmt.Errorf("writing RetroArch's folder: %w", err)
+	}
+	return created, lean, madeTarget, nil
+}
+
 // raGetAfterInstall tells everything that looks for RetroArch, and has the
 // probe that starts it on JukaHub's glibc (ra_glibc.go) run now rather than
 // at the first game.
@@ -1497,6 +1607,12 @@ func raGetUpdateCandidates(ctx context.Context, client *http.Client, man raGetMa
 	built, _ := time.Parse(time.RFC3339, man.Built)
 	var newer []raGetCandidate
 	for _, c := range list.cands {
+		if c.sz != nil && !c.Own {
+			// Another model's 7z package: its binary costs most of the
+			// package to unpack (raget_7z.go), too much for a pass in the
+			// background. A first install still falls back to it.
+			continue
+		}
 		if c.crc() != man.CRC32 && c.When.After(built.Add(time.Minute)) {
 			newer = append(newer, c)
 		}
@@ -1554,7 +1670,7 @@ func raGetUpdate(ctx context.Context, client *http.Client, report func(phase str
 		return res, err
 	}
 	defer os.RemoveAll(stage)
-	pick, staged, verdict, err := raGetPick(ctx, newer, stage, report)
+	pick, staged, verdict, err := raGetPick(ctx, newer, stage, "", report)
 	if err != nil {
 		if ctx.Err() == nil {
 			raGetRememberSeen(dir, keys) // refused builds are not fetched again daily

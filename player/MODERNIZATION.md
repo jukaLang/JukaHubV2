@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **403** (audited 2026-11-19).
+Open tasks: **405** (audited 2026-11-19).
 
 This file tracks open work for the player, web builder and AndroidRT, plus a
 small ideas parking lot.
@@ -1095,29 +1095,73 @@ range requests (`raget_remote.go`), checks each build with the firmware's and
 the private loader, and starts it on glibc 2.39 (`ra_glibc.go`,
 `raGetOwnsLaunch`). Written without a Go toolchain, without access to GitHub
 (the package names, formats and folder layout come from TrimUI's release
-notes and setup guides; the Smart Pro's own packages are `.7z`, which are
-skipped) and without a device.
-**Where.** `raget.go`, `raget_remote.go`, `raget_ui.go`, `ra_glibc.go`
-(`raGlibcPlanFor`), `emulators.go`, `raemu.go`, `gamelaunch_firmware.go`; the
-JukaHub log (`emulators` lines "RetroArch packages:", "RetroArch install:",
-"RetroArch installed:"), `RetroArch/.jukahub-retroarch.json`.
+notes and setup guides) and without a device. 2026-11-24 (JH-X5T7PW, "cant
+install retroarch" on a Smart Pro): `.7z` packages — all of the Smart Pro's —
+were skipped, so a Smart Pro could only take the Brick's 2024 zip; now
+`raget_7z.go` reads them (directory by range requests, then one pass over
+the blocks holding RetroArch's files, decoded from their start), a first
+install takes the own model's build first, Get more cores puts RetroArch
+first, and the diagnostics carry an `RA install` line.
+**Where.** `raget.go`, `raget_7z.go`, `sevenzip.go`, `raget_remote.go`,
+`raget_ui.go`, `ra_glibc.go` (`raGlibcPlanFor`), `emulators.go`, `raemu.go`,
+`gamelaunch_firmware.go`, `emumorecores.go`; the JukaHub log (`emulators`
+lines "RetroArch packages:", "RetroArch install:", "RetroArch installed:"),
+the diagnostics' `RA install` line, `RetroArch/.jukahub-retroarch.json`.
 **Done when.** On a stock Smart Pro (then a Brick, a Brick Pro and a Smart Pro
-S), with the card's `RetroArch` folder renamed: 1. About a minute and a half
-after start the install bar shows "Getting RetroArch for the Smart Pro"; the
-log lists the packages found ("RetroArch packages: … in <asset> (N files,
-size)") and the build taken ("… starts on the firmware's glibc and on JukaHub's
-2.39"); the toast names the version. 2. A GBA game starts from Games with
+S), with the card's `RetroArch` folder renamed: 1. About a minute after start
+the install bar shows "Getting RetroArch for the Smart Pro"; the log lists the
+packages found ("RetroArch packages: … in <asset> (N files, size)"), the 7z
+pass ("unpacking N files … of trimui/assets_smartpro …", then "… downloaded of
+its …": record both sizes and how long the pass took) and the build taken
+("… starts on the firmware's glibc and on JukaHub's 2.39"); the toast names
+the version, and Report a bug's diagnostics show it on the `RA install` line.
+A 7z the log calls packed with a method JukaHub does not decode gets a FIX
+task with that method. 2. A GBA game starts from Games with
 sound, saves and the in-game menu, and the log says "RetroArch starts on
 JukaHub's glibc 2.39 … JukaHub installed this RetroArch". 3. Where the build
-came from another model's package (a Smart Pro takes the Brick's or Brick
-Pro's), the picture fills the screen and the buttons are right; record what is
-not. 4. The Emulators page's RetroArch tile opens RetroArch's menu, and reads
+came from another model's package (a Brick taking the Brick Pro's, or a Smart
+Pro whose own package failed), the picture fills the screen and the buttons
+are right; record what is not. On a Smart Pro, Emulators → Get more cores on
+the renamed card installs RetroArch first, then the cores. 4. The Emulators page's RetroArch tile opens RetroArch's menu, and reads
 "installed by JukaHub". 5. With the card nearly full, the install leaves out
 `.retroarch/assets` and RetroArch still starts. 6. Record, per model, the
 asset names and sizes, how long the install took and how much was downloaded;
 a package the log calls unreadable (a compression method, a 7z) gets a FIX
 task.
 **Verify.** Record in the HW log.
+
+### RACORES-HW-1 — Core installs on a card with no cores folder (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-24: "People are getting RetroArch cores folder not
+found on TrimUI Smart devices". `retroArchCoreDirs` lists only folders that
+exist, so a card without TrimUI's SD package (or a RetroArch without
+`.retroarch/cores`) refused every core install. Now `coreActivationTarget`
+falls back to `retroArchCoresHome` (the found RetroArch's cores folder, else
+`RetroArch/.retroarch/cores` on JukaHub's card), `installCoreFile` makes the
+folder, and Install on the Emulators page runs `raGetForCoreInstall` first on
+a card with no RetroArch. Written without a Go toolchain or a device.
+**Where.** `compat.go` (`retroArchCoresHome`, `retroArchNoCoresProblem`,
+`coreActivationTarget`, `installCoreFile`), `emulators.go`
+(`deviceRetroArchLocate`), `emulatorinstall.go` (`startEmulatorInstall`),
+`raget_ui.go`, `installbar.go` (`installBarRelabel`), `corebuilds_ui.go`; the
+JukaHub log (`emulators` lines "RetroArch is not on this card (a … core
+install)", "RetroArch installed:").
+**Done when.** On a Smart Pro (then a Smart Pro S), each step holds or a FIX
+task names what differs:
+1. Card with the `RetroArch` folder renamed, online: Core builds and the
+   compatibility panel say "RetroArch is not on this card: Install on the
+   Emulators page gets TrimUI's RetroArch with the core", not "cores folder
+   not found".
+2. Emulators → a system with no core (GBA) → Install: the install bar reads
+   "Installing RetroArch and the mGBA core", RetroArch installs first, then
+   the core; the toast names both, or says RetroArch came with TrimUI's mGBA
+   core; a GBA game starts.
+3. Same card with Wi-Fi blocking github.com only: Install still installs the
+   core into `RetroArch/.retroarch/cores` (made by it) and the toast says why
+   RetroArch did not install; Emulators → RetroArch later completes it and
+   the game starts.
+4. `RetroArch/.retroarch/cores` deleted with `ra64.trimui` present: Install
+   recreates the folder and the core loads.
+**Verify.** Record in the HW log with the log lines and a screenshot per step.
 
 ### CORESURVEY-HW-1 — The buildbot survey and the Emulators page on a device (P1, S) [HW] [NET]
 **Why.** Juka, 2026-11-23: "Make sure all emulators that get updated work on
@@ -3659,6 +3703,30 @@ names what differs:
    the Movies & TV route.
 **Verify.** Record in the HW log with a screenshot per step (screenshot mode).
 
+### BRWSTREAM-HW-1 — Videos and streams from the Browser (P1, S) [HW] [NET]
+**Why.** Juka, 2026-11-24, relaying a tester's reply to the Colosseum answer:
+"can streaming from browser". `brw_stream.go` plays media links and typed
+media addresses, adds Play to the "Can't show this file" card of a stream,
+and adds Select → Play video on this page (first play card, else the page
+through yt-dlp). Written without a Go toolchain or a device.
+**Where.** `brw_stream.go`, `browser_youtube.go` (`brwOpenYouTubeLink`,
+`brwOpenAddress`), `brw_offline.go` (`brwMediaButtons`), `brw_menu.go`
+(`brwMenuPlayVideo`), `textbrowser.go` (`brwStreamResponse`),
+`morefeatures.go` (`playSmartURLTitled`); docs/BROWSER.md.
+**Done when.** On a Smart Pro (then a Brick), each step holds or a FIX task
+names what differs:
+1. An archive.org film page: the `.mp4` download link plays in the video
+   player; leaving the player comes back to the page at the same place.
+2. Go to address with a public `.m3u8` test stream plays it; an `.mp3` link
+   opens the music player.
+3. An address with no file ending that serves `video/mp4` shows the card with
+   Play focused; Play streams it, Download file still saves it.
+4. Select → Play video on this page on a Vimeo or PeerTube video page plays the
+   video (the toast "Looking for the video on this page…" first); on a page
+   with a play card the row reads "1 video" and plays that card.
+5. A GitHub `…/blob/main/x.mp4` page and a `.ts` source file open as pages.
+**Verify.** Record in the HW log with a screenshot per step.
+
 ### MAIL-1 — Email and calendar on a device (P0, M) [HW] [NET]
 **Why.** The 2026-11-17 Email and calendar pass (`mailcal_store.go`,
 `mail_*.go`, `calsync*.go`, `mailcal_ui.go`, `companion_mailcal.go`,
@@ -3760,15 +3828,32 @@ a photo, light-mode media features, UA link colour on `<a href>` only, no
 alignment against the container's height, stretched cards, column
 `justify-content`/`align-items`, `inset: 0` overlays stretched, grid rows
 snapped to the row grid, in-flow `translate()` and relative backgrounds.
+2026-11-24 ("improve browser even more and make sure CSS rendered
+accurately"), also unbuilt: inline boxes with their padding, border, margin,
+radius and chip (`webpage_inlinebox.go`), atomic inline-blocks and submit
+buttons, flex children blockified, `@layer` cascade order (and `@import …
+layer()`), margin/padding sides and `border-color` by cascade order,
+transparent borders/outlines not drawn, UA quote/figure margins overridden,
+`width: fit-content`/`max-content`/`min-content`, and margins up to eight
+rows.
+2026-11-24 ("improve layerimg engine even further"), also unbuilt:
+relatively positioned boxes lifted over the layers they overlap
+(`webLiftPositioned`), picture-only inset boxes filled with their picture,
+absolutely positioned inline elements detached into layers
+(`detachInlineLayer`), stacking contexts from isolation, filters, blend
+modes, will-change, contain, clip paths, masks, transforms and flex items'
+z-index, sticky copies with their layers and floats, and overflow clips from
+boxes around a layer's containing block.
 **Where.** `webpage_svg.go`, `webpage_inline.go`, `webpage_fonts.go`,
 `webpage_paint.go`, `webpage_image.go`, `webpage.go`, `webpage_flow.go`,
 `webpage_hints.go`, `webpage_tune.go`, `webpage_decode.go`,
 `webpage_paintfast.go`, `webpage_table.go`, `webpage_layers.go`,
-`webpage_color.go`, `browser.go`, `browserfind.go`, `calculator.go`;
+`webpage_color.go`, `webpage_inlinebox.go`, `browser.go`, `browserfind.go`,
+`calculator.go`;
 `calculator.json` beside JukaHub; the JukaHub log (`browser` lines
 "RenderGeometry is unavailable", "Error loading the reader face",
 "reader tune:", "over the … MP limit").
-**Done when.** On a Smart Pro (then a Brick and a Windows PC), and steps 9-19
+**Done when.** On a Smart Pro (then a Brick and a Windows PC), and steps 9-21
 on a Smart Pro S too, each step holds or a FIX task names what differs:
 1. github.com/jukaLang/JukaHubV2 shows the GitHub logo and the octicons in
    the text colour, the README's badge row on one line, and its code blocks
@@ -3867,6 +3952,27 @@ on a Smart Pro S too, each step holds or a FIX task names what differs:
     bottom of the photo; a CSS grid of cards followed by the next section with
     no blank band between them. Link mode's focus ring stays on the words of a
     link in such a centred row.
+20. Boxes look as a desktop browser draws them: a Bootstrap page's `.btn`
+    links and `<button>`s are padded, rounded and as wide as in Chrome, and one
+    at the end of a line moves to the next line whole; `.badge` pills and
+    GitHub's inline `<code>` show their padding and rounded fill; a toolbar of
+    links in a flex row keeps each link's padding and surface; a Tailwind 4
+    page's utility classes beat its preflight reset where Chrome's do (and a
+    site's own unlayered rule beats a utility where Chrome's does); a
+    `w-fit mx-auto` label is centred at its text's width; GitHub's markdown
+    `<blockquote>` is flush with its grey bar, not 40px in. Link mode's focus
+    ring and a tap on such a button cover the whole button. Record the frame
+    time while scrolling such a page against the previous build.
+21. Layers match a desktop browser: a Tailwind UI or landing-page hero with a
+    background picture in an `absolute inset-0` box shows its heading and
+    buttons over the picture, the picture filling the hero; a shop's product
+    cards show their "Sale"/"New" badges on the photo's corner; a video grid
+    shows the duration on each thumbnail; a site whose sticky header has an
+    absolutely positioned logo or cart badge keeps them while pinned, with no
+    second copy flickering under it; a carousel shows no captions of hidden
+    slides; and links inside a lifted hero still take the D-pad and taps.
+    Record the frame time while scrolling such a page against the previous
+    build.
 
 ---
 

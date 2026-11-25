@@ -2,8 +2,8 @@ package main
 
 // raget_ui.go — when raget.go installs RetroArch, and what the player sees.
 //
-//   - Start-up (startRetroArchEnsure, from startCoreAutoUpdate): a minute and a
-//     half after JukaHub starts, a handheld whose card has no RetroArch gets
+//   - Start-up (startRetroArchEnsure, from startCoreAutoUpdate): about a
+//     minute after JukaHub starts, a handheld whose card has no RetroArch gets
 //     one — online, between games, with the install bar, the patch slot held
 //     like every other install — unless Emulator updates is Off, which gets a
 //     one-time note instead. A try that fails is repeated twice more in the
@@ -12,10 +12,17 @@ package main
 //   - The Emulators page: a card with no RetroArch shows a RetroArch tile
 //     saying so, and A on it (or on a RetroArch folder without its binary)
 //     installs it.
+//   - A core install (startEmulatorInstall) or "Get more cores"
+//     (emuMoreCoresStart) on such a card puts RetroArch first, inside its own
+//     patch slot (raGetForCoreInstall, raGetForMoreCores).
 //   - A game whose launch script found no RetroArch (gamelaunch_firmware.go):
 //     the card says JukaHub is installing it, and the install starts.
 //   - The Emulator updates pass keeps the RetroArch JukaHub installed current
 //     (raGetUpdate), as one more updater (emuautoupdate_registry.go).
+//
+// The last install's outcome is kept for the diagnostics (raGetDiagnostics):
+// JH-X5T7PW, "cant install retroarch", came with a log that began after the
+// try had failed, and nothing else said why.
 //
 // raGetOwnsLaunch is ra_glibc.go's question: a launch of the RetroArch JukaHub
 // installed starts on JukaHub's glibc whatever Automatic would decide.
@@ -23,6 +30,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -60,6 +68,86 @@ var raGetRun struct {
 	running bool
 	tries   int  // start-up tries that failed this session
 	told    bool // the Off note was shown
+	// last is this session's latest install, for the diagnostics.
+	last raGetOutcome
+}
+
+// raGetOutcome is one install as the diagnostics tell it: when it began, who
+// asked, and — once it ended — what it put on the card or why it could not.
+type raGetOutcome struct {
+	at    time.Time
+	why   string
+	ended bool
+	err   string
+	note  string
+}
+
+// raGetNoteStart and raGetNoteEnd record an install for raGetDiagnostics.
+func raGetNoteStart(why string) {
+	raGetRun.mu.Lock()
+	raGetRun.last = raGetOutcome{at: time.Now(), why: why}
+	raGetRun.mu.Unlock()
+}
+
+func raGetNoteEnd(res raGetResult, err error) {
+	raGetRun.mu.Lock()
+	defer raGetRun.mu.Unlock()
+	last := &raGetRun.last
+	last.ended = true
+	switch {
+	case errors.Is(err, errRaGetPresent):
+		last.note = "a RetroArch turned up on the card meanwhile"
+	case err != nil:
+		last.err = firstLine(err.Error())
+	default:
+		last.note = raGetDoneMessage(res, false)
+	}
+}
+
+// raGetDiagnostics is the diagnostics' line on the RetroArch JukaHub installs
+// ("" where it installs none): the one it installed, this session's latest
+// try and how it ended, the start-up's failed tries.
+func raGetDiagnostics() string {
+	if !raGetSupported() {
+		return ""
+	}
+	raGetRun.mu.Lock()
+	last, tries, told, running := raGetRun.last, raGetRun.tries, raGetRun.told, raGetRun.running
+	raGetRun.mu.Unlock()
+	var parts []string
+	if _, man, ok := raGetManaged(); ok {
+		what := "installed by JukaHub"
+		if man.Version != "" {
+			what += ": RetroArch " + man.Version
+		}
+		if m := DeviceModel(man.Model); m != "" {
+			what += ", TrimUI's " + raGetModelName(m) + " build from " + man.Release
+		}
+		parts = append(parts, what)
+	}
+	when := last.at.Format("15:04")
+	switch {
+	case last.at.IsZero() && told:
+		parts = append(parts, "not downloaded by itself: Emulator updates is Off")
+	case last.at.IsZero():
+	case !last.ended && running:
+		parts = append(parts, "installing since "+when+" ("+last.why+")")
+	case last.err != "":
+		why := last.err
+		if r := []rune(why); len(r) > 400 {
+			why = string(r[:400]) + "…"
+		}
+		parts = append(parts, "failed at "+when+" ("+last.why+"): "+why)
+	case last.note != "":
+		parts = append(parts, last.note+" at "+when+" ("+last.why+")")
+	}
+	if tries > 0 {
+		parts = append(parts, fmt.Sprintf("%d start-up tries failed", tries))
+	}
+	if len(parts) == 0 {
+		return "not tried this session"
+	}
+	return strings.Join(parts, " · ")
 }
 
 // raGetClaim takes the guard; false when an install runs.
@@ -130,9 +218,11 @@ func raGetRunFirst(why string, auto bool) error {
 	model := raGetModel()
 	gen, ctx := installBarBeginRunLabelled("RetroArch", "Getting RetroArch for the "+raGetModelName(model))
 	logInfo("emulators", "RetroArch is not on this card (%s): installing TrimUI's newest build for the %s", why, raGetModelName(model))
+	raGetNoteStart(why)
 	res, err := raGetInstallFirst(ctx, emuPassClient(newEmulatorUpdateClient()), func(phase string, done, total int64) {
 		installBarUpdateRun(gen, phase, done, total)
 	})
+	raGetNoteEnd(res, err)
 	switch {
 	case errors.Is(err, errRaGetPresent):
 		installBarAbortRun(gen)
@@ -153,6 +243,54 @@ func raGetRunFirst(why string, auto bool) error {
 		ShowToast(msg, ToastKindSuccess)
 	})
 	return nil
+}
+
+// raGetForCoreInstall is the RetroArch a core install on a card without one
+// puts first (startEmulatorInstall), the way the Windows page installs a
+// portable RetroArch before a core: inside that install's patch slot, on its
+// install bar, which it retitles. A card with no RetroArch had no cores folder
+// either, and the press ended in "RetroArch cores folder not found" (testers
+// on the Smart Pro family, 2026-11-24). installed reports that this call put
+// RetroArch there; a RetroArch that appeared meanwhile is no error.
+func raGetForCoreInstall(ctx context.Context, core string) (installed bool, err error) {
+	return raGetBeforeCores(ctx, "the "+coreConfigDisplayName(core)+" core", "a "+core+" core install")
+}
+
+// raGetForMoreCores is raGetForCoreInstall for "Get more cores"
+// (emuMoreCoresStart): the Game Ready card's fetch for a console with no
+// emulator ended in the same "RetroArch cores folder not found" on a card
+// without RetroArch (JH-X5T7PW). system "" is every console with games.
+func raGetForMoreCores(ctx context.Context, system string) (installed bool, err error) {
+	what := "more cores"
+	if system != "" {
+		what = "cores for " + system
+	}
+	return raGetBeforeCores(ctx, what, "fetching "+what)
+}
+
+// raGetBeforeCores is the first install those two put before their cores:
+// what names the cores on the install bar, why the request in the log.
+func raGetBeforeCores(ctx context.Context, what, why string) (bool, error) {
+	if !raGetClaim() {
+		return false, errRaGetBusy
+	}
+	defer raGetRelease()
+	name := raGetModelName(raGetModel())
+	installBarRelabel("Installing RetroArch and " + what)
+	installBarDetail("RetroArch is not on this card: TrimUI's build for the " + name + " comes first")
+	logInfo("emulators", "RetroArch is not on this card (%s): installing TrimUI's newest build for the %s first", why, name)
+	raGetNoteStart(why)
+	res, err := raGetInstallFirst(ctx, emuPassClient(newEmulatorUpdateClient()), emuInstallBarReport)
+	raGetNoteEnd(res, err)
+	switch {
+	case errors.Is(err, errRaGetPresent):
+		return false, nil
+	case err != nil:
+		logWarn("emulators", "RetroArch install (%s): %v", why, err)
+		return false, err
+	}
+	logInfo("emulators", "%s", raGetDoneMessage(res, false))
+	return true, nil
 }
 
 // raGetWaitSlot waits for the patch slot, up to raGetSlotWait, and takes it.
@@ -286,7 +424,7 @@ func raGetCheckUpdate(ctx context.Context, client *http.Client) (bool, string, e
 	if err != nil || len(newer) == 0 {
 		return false, "", err
 	}
-	raGetRank(newer)
+	raGetRank(newer, false)
 	return true, newer[0].label(), nil
 }
 

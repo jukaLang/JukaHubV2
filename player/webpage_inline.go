@@ -147,7 +147,10 @@ func webBlockHasText(b *webBlock) bool {
 
 // webMergeInlineChains stitches each run of adjacent blocks that share an
 // InlineGroup back into one paragraph. A lone image keeps its block layout,
-// and the document's own blocks are never changed.
+// and the document's own blocks are never changed. A layer that left the line
+// (an absolutely positioned badge, webParser.detachInlineLayer) and its
+// static-position marker may sit between two pieces of it; they follow the
+// stitched paragraph.
 func webMergeInlineChains(blocks []webBlock) []webBlock {
 	found := false
 	for i := range blocks {
@@ -160,20 +163,40 @@ func webMergeInlineChains(blocks []webBlock) []webBlock {
 		return blocks
 	}
 	out := make([]webBlock, 0, len(blocks))
+	var members []int
 	for i := 0; i < len(blocks); {
-		j := i + 1
+		members = append(members[:0], i)
 		if g := blocks[i].InlineGroup; g != 0 {
-			for j < len(blocks) && blocks[j].InlineGroup == g && webSameInlineContext(&blocks[i], &blocks[j]) {
-				j++
+			for k := i + 1; k < len(blocks); k++ {
+				b := &blocks[k]
+				if b.InlineGroup == g && webSameInlineContext(&blocks[i], b) {
+					members = append(members, k)
+					continue
+				}
+				if b.LayerMarker == 0 && (b.Layer == 0 || b.Layer == blocks[i].Layer) {
+					break
+				}
 			}
 		}
-		if j-i < 2 {
+		if len(members) < 2 {
 			out = append(out, blocks[i])
 			i++
 			continue
 		}
-		out = append(out, webMergeInlineChain(blocks[i:j]))
-		i = j
+		chain := make([]webBlock, len(members))
+		for m, k := range members {
+			chain[m] = blocks[k]
+		}
+		out = append(out, webMergeInlineChain(chain))
+		end := members[len(members)-1] + 1
+		for k, m := i+1, 1; k < end; k++ {
+			if m < len(members) && members[m] == k {
+				m++
+				continue
+			}
+			out = append(out, blocks[k])
+		}
+		i = end
 	}
 	return out
 }
@@ -296,7 +319,11 @@ type webLineMetrics struct {
 // down by the line's ascent less its own face's, so a large word, small print
 // and a monospace phrase share the baseline a browser gives them. Form
 // controls keep their frames where they were. A line in one face is unchanged.
-func webAlignLineRuns(line []webRunPos) webLineMetrics {
+// An inline-block chip (a padded button or badge) makes the line tall enough
+// for its padding and border (webpage_inlinebox.go), unless they fit within a
+// quarter of a row (rowH) more than its text: the row grid is coarse, and a
+// two-pixel badge padding is not worth a second row.
+func webAlignLineRuns(line []webRunPos, rowH int32) webLineMetrics {
 	var m webLineMetrics
 	textRun := func(r *webRunPos) bool { return r.Image == nil && r.Font != nil && r.BoxW == 0 }
 	for i := range line {
@@ -312,6 +339,17 @@ func webAlignLineRuns(line []webRunPos) webLineMetrics {
 		}
 	}
 	m.ascent, m.descent = m.textAscent, m.textDescent
+	boxAbove, boxBelow := m.ascent, m.descent
+	for i := range line {
+		r := &line[i]
+		if textRun(r) && r.Chip != nil && r.Chip.block {
+			boxAbove = max(boxAbove, int32(r.Font.Ascent())+r.Chip.padT)
+			boxBelow = max(boxBelow, -int32(r.Font.Descent())+r.Chip.padB)
+		}
+	}
+	if boxAbove+boxBelow > m.ascent+m.descent && (rowH <= 0 || boxAbove+boxBelow > rowH+rowH/4) {
+		m.ascent, m.descent = boxAbove, boxBelow
+	}
 	for i := range line {
 		r := &line[i]
 		if r.Image == nil {

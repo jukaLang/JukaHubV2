@@ -113,9 +113,9 @@ func browserFindScan(layout *webLayout, query string) []int {
 	layered := false
 	for fi := range layout.Floats {
 		f := &layout.Floats[fi]
-		if f.Pin != webPinNone {
+		if f.Pin != webPinNone || f.Lift {
 			// A bar pinned to the screen is always in view: no page row to
-			// scroll to.
+			// scroll to. A lifted part of the flow is in the page's rows.
 			continue
 		}
 		for _, row := range f.Rows {

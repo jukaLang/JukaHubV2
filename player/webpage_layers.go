@@ -30,22 +30,30 @@ package main
 //     surface of its own), so it can be a containing block; a positioned
 //     container whose children all left the flow keeps a line of its own
 //     (layerSpacer) so it still has a place and a height.
+//   - An absolutely positioned inline element (a badge, a ribbon, a label over
+//     a photo) leaves its line and is a layer too (detachInlineLayer); the
+//     line around it goes on as if it were not there.
 //   - Layers are ordered by a stacking key: the stacking contexts around them
 //     (a positioned ancestor with a z-index, a fixed or sticky one, a
-//     translucent or translated one), then their own z-index, then document
-//     order. A z-index: 9999 badge inside a z-index: 1 card no longer covers a
+//     translucent or transformed one, one isolated by isolation, a filter, a
+//     blend mode, will-change, contain, a clip path or a mask, a flex item
+//     with a z-index), then their own z-index, then document order. A
+//     z-index: 9999 badge inside a z-index: 1 card no longer covers a
 //     z-index: 2 header.
+//   - A relatively positioned element of the flow that comes after a layer
+//     in that order and overlaps it is painted over it (webLiftPositioned):
+//     a hero's `relative z-10` heading over its `absolute inset-0` picture.
 //   - Surfaces in the flow paint in tree order (webSortPaintOrder): a
 //     section's background goes under the code block inside it, not over it.
 //   - CSS floats paint under positioned content, and sticky bars and
 //     positioned layers share one z-ordered pass. A sticky element is pinned
 //     with everything inside it (a header of logo, menu and buttons, a table's
-//     header cells), copied from the laid-out page by box membership
-//     (webCollectStickies); it leaves with its containing block, and a
-//     bottom-sticky bar sticks to the bottom edge.
+//     header cells, its positioned and floated children), copied from the
+//     laid-out page by box membership (webCollectStickies); it leaves with its
+//     containing block, and a bottom-sticky bar sticks to the bottom edge.
 //   - Screen-reader-only and off-screen positioned blocks are not painted over
-//     the page, and an overflow: hidden containing block clips its layers
-//     (carousels, rounded cards).
+//     the page, and an overflow: hidden containing block — or a box around it
+//     — clips its layers (carousels, rounded cards).
 //   - Links and form controls inside layers and floats are cursor stops, and a
 //     tap goes to the topmost one.
 
@@ -96,6 +104,10 @@ const (
 	webMaxStickyShare = 0.4
 	// webMaxStickies bounds the sticky elements one page records.
 	webMaxStickies = 200
+	// webMaxPositioned bounds the relatively positioned elements one page
+	// records for lifting (webLiftPositioned); past it they paint with the
+	// flow, as they used to.
+	webMaxPositioned = 2000
 )
 
 // webStaticPos is a layer's static position in page coordinates: where its
@@ -114,6 +126,36 @@ type webStickyInfo struct {
 	lastBox  int
 	limitBox int
 	seq      int
+}
+
+// webPositionedInfo is one relatively positioned element of the flow: its
+// box, the last box opened inside it (its subtree is every box between) and
+// its stacking key. CSS paints such an element, everything in it
+// included, in the positioned pass in stacking order — over an earlier layer
+// it overlaps — which is where layout lifts it (webLiftPositioned).
+type webPositionedInfo struct {
+	rootBox int
+	lastBox int
+	key     webStackKey
+}
+
+// webSuspendedLine is the paragraph an absolutely positioned inline element
+// (a badge, a ribbon) interrupted: the element is laid out as a layer of its
+// own and the line around it goes on after it as if it were not there
+// (webParser.detachInlineLayer). The pending inline edges and list marker are
+// the line's, not the layer's.
+type webSuspendedLine struct {
+	current          *webBlock
+	space            bool
+	inlineGroup      int
+	pendingLead      float64
+	pendingChipStart float64
+	pendingChip      bool
+	pendingOpens     bool
+	pendingB         string
+	pendingBStyle    webStyle
+	hasPendingBStyle bool
+	flushes          int
 }
 
 // webStackLevel is one participant in a stacking order: a z-index and a
@@ -199,16 +241,18 @@ func webStyleIsAnchor(st *webStyle) bool {
 
 // webStackingContext reports an element whose box starts a stacking context
 // the reader can tell: a positioned box with an integer z-index, any fixed or
-// sticky box, a translated one, and a translucent one. Opacity is inherited
-// here as the fade a group applies, so only the element that set it (its
-// parent's differs) starts the context; parent may be nil.
+// sticky box, a transformed one, one isolated by isolation, a filter, a blend
+// mode, will-change, contain, a clip path or a mask (webStyle.Isolate), and a
+// translucent one. Opacity is inherited here as the fade a group applies, so
+// only the element that set it (its parent's differs) starts the context;
+// parent may be nil.
 func webStackingContext(st, parent *webStyle) bool {
 	switch {
 	case st.Position == webPositionFixed || st.Sticky:
 		return true
 	case st.ZSet && st.Position != webPositionStatic:
 		return true
-	case st.HasTranslate:
+	case st.HasTranslate || st.Isolate:
 		return true
 	}
 	if !st.HasOpacity || st.Opacity >= 0.999 {
@@ -318,6 +362,17 @@ func (p *webParser) blockFrameSeq() int {
 // is exactly its ancestors.
 func (p *webParser) newLayer(style webStyle, boxID, seq int) int {
 	info := webLayerInfo{style: style, outerBoxes: len(p.boxPath()), outerFlex: len(p.flexStack), rootBox: boxID}
+	info.key = p.stackKey(style, seq)
+	p.doc.Layers = append(p.doc.Layers, info)
+	return len(p.doc.Layers)
+}
+
+// stackKey is the stacking key of an element about to be pushed with
+// sequence seq (the stack is exactly its ancestors): the stacking contexts
+// around it, the outermost and the innermost kept, then its own z-index and
+// place in the document. A flex or grid item with a z-index is a stacking
+// context too, positioned or not, as in CSS.
+func (p *webParser) stackKey(style webStyle, seq int) webStackKey {
 	var ctx []webStackLevel
 	for i := range p.stack {
 		f := &p.stack[i]
@@ -325,21 +380,163 @@ func (p *webParser) newLayer(style webStyle, boxID, seq int) int {
 		if i > 0 {
 			parent = &p.stack[i-1].style
 		}
-		if f.kind != "skip" && webStackingContext(&f.style, parent) {
+		if f.kind != "skip" && (webStackingContext(&f.style, parent) || (f.flexItem && f.style.ZSet)) {
 			ctx = append(ctx, webStackLevel{z: f.style.ZIndex, order: f.seq})
 		}
 	}
 	if len(ctx) > 2 {
 		ctx = []webStackLevel{ctx[0], ctx[len(ctx)-1]}
 	}
+	var key webStackKey
 	for _, level := range ctx {
-		info.key.levels[info.key.n] = level
-		info.key.n++
+		key.levels[key.n] = level
+		key.n++
 	}
-	info.key.levels[info.key.n] = webStackLevel{z: style.ZIndex, order: seq}
-	info.key.n++
-	p.doc.Layers = append(p.doc.Layers, info)
-	return len(p.doc.Layers)
+	key.levels[key.n] = webStackLevel{z: style.ZIndex, order: seq}
+	key.n++
+	return key
+}
+
+// detachesInlineLayer reports an absolutely or fixed positioned inline element
+// that CSS takes out of its line (it is blockified, CSS 2.1 §9.7): a "Sale"
+// badge on a product card, a ribbon, a duration over a video thumbnail, a
+// label over a photo. The reader kept such a span in the text, so the badge
+// read as a word before the card. It becomes a layer at its insets in its
+// containing block, unless the reader could not place it there or would lose
+// something by moving it:
+//
+//   - a link, a label or a form control keeps its place (a stretched card link
+//     is the card's way to its page; its text is often all the link has);
+//   - a visually hidden one (1–2 px: sr-only, visually-hidden; or parked
+//     far off the page) keeps its place too — it is often the only name an
+//     icon link has;
+//   - one whose containing block is a positioned inline element (an icon link
+//     with position: relative) has no box the reader measures, and would land
+//     at some outer box's corner, so it stays in its line;
+//   - inside a layer, a form control or a button it stays where it is, as
+//     positioned elements inside a layer do.
+func (p *webParser) detachesInlineLayer(name string, st *webStyle) bool {
+	if st.Position != webPositionAbsolute && st.Position != webPositionFixed {
+		return false
+	}
+	switch name {
+	case "a", "label", "button", "input", "select", "textarea", "option", "img", "picture", "svg",
+		"video", "audio", "iframe", "object", "embed", "canvas", "br", "wbr", "area", "map":
+		return false
+	}
+	if tiny := func(px float64) bool { return px > 0 && px <= 2 }; tiny(st.Width) || tiny(st.Height) {
+		return false
+	}
+	// The older visually-hidden idiom parks the text far off the page
+	// (left: -9999px); it stays a label in its line as well.
+	if (st.HasLeft && st.Left <= -500) || (st.HasTop && st.Top <= -500) || (st.HasRight && st.Right <= -500) {
+		return false
+	}
+	if st.HasOpacity && st.Opacity <= 0.01 {
+		return false
+	}
+	if p.buttonCtrl != nil || p.textarea != nil || p.selectCtrl != nil || p.inHead ||
+		len(p.doc.Layers) >= webMaxLayers || p.openLayerIn(len(p.stack)) != 0 || !p.wantsLayer(st) {
+		return false
+	}
+	if st.Position == webPositionAbsolute {
+		for i := len(p.stack) - 1; i >= 0; i-- {
+			f := &p.stack[i]
+			if f.kind == "skip" || f.kind == "contents" || !webStyleIsAnchor(&f.style) {
+				continue
+			}
+			if f.kind != "block" && f.kind != "list" {
+				return false
+			}
+			break
+		}
+	}
+	return true
+}
+
+// detachInlineLayer opens a detachesInlineLayer element as a layer without
+// ending the line it sits in: the paragraph is set aside, the element's own
+// blocks go to its layer, and the paragraph resumes when the element closes
+// (resumeLine), so "Only 3 left" around a badge stays one line.
+func (p *webParser) detachInlineLayer(el webElement, style webStyle, attrs string, selfClose bool, name string) {
+	s := &webSuspendedLine{
+		current: p.current, space: p.space, inlineGroup: p.inlineGroup,
+		pendingLead: p.pendingLead, pendingChipStart: p.pendingChipStart,
+		pendingChip: p.pendingChip, pendingOpens: p.pendingOpens,
+		pendingB: p.pendingB, pendingBStyle: p.pendingBStyle, hasPendingBStyle: p.hasPendingBStyle,
+		flushes: p.lineFlushes,
+	}
+	p.current, p.space, p.inlineGroup = nil, false, 0
+	p.clearInlineLead()
+	p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
+	p.push(el, style, "block", attrs)
+	p.stack[len(p.stack)-1].suspended = s
+	if selfClose {
+		p.endTag(name)
+	}
+}
+
+// resumeDetachedAbove finishes the detached layers open above stack index i
+// (unclosed inside an element that is closing, or at the end of the page):
+// each one's last block goes to its layer and its line resumes.
+func (p *webParser) resumeDetachedAbove(i int) {
+	for k := len(p.stack) - 1; k > i && k >= 0; k-- {
+		if s := p.stack[k].suspended; s != nil {
+			p.flush()
+			p.resumeLine(s)
+			p.stack[k].suspended = nil
+		}
+	}
+}
+
+// resumeLine puts back the paragraph a detached layer set aside. The layer's
+// own last block has been flushed already.
+func (p *webParser) resumeLine(s *webSuspendedLine) {
+	if s == nil {
+		return
+	}
+	p.current, p.space, p.inlineGroup = s.current, s.space, s.inlineGroup
+	p.pendingLead, p.pendingChipStart = s.pendingLead, s.pendingChipStart
+	p.pendingChip, p.pendingOpens = s.pendingChip, s.pendingOpens
+	p.pendingB, p.pendingBStyle, p.hasPendingBStyle = s.pendingB, s.pendingBStyle, s.hasPendingBStyle
+	p.lineFlushes = s.flushes
+}
+
+// webStackingProperty reports a declaration that makes its element a stacking
+// context although the reader draws none of its effect (webStyle.Isolate):
+// isolation: isolate (Tailwind's `isolate`), a filter or backdrop filter, a
+// blend mode, will-change naming such a property, contain: paint/layout,
+// perspective, a clip path or a mask. A z-index inside such an element orders
+// only what is inside it: a `-z-10` picture in an isolated hero stays over
+// the hero's own background instead of going under the page.
+func webStackingProperty(name, value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch v {
+	case "", "none", "auto", "normal", "initial", "unset", "inherit", "revert", "revert-layer":
+		return false
+	}
+	switch name {
+	case "isolation":
+		return v == "isolate"
+	case "will-change":
+		for _, part := range strings.Split(v, ",") {
+			switch strings.TrimSpace(part) {
+			case "transform", "opacity", "filter", "backdrop-filter", "perspective", "isolation",
+				"mix-blend-mode", "clip-path", "mask", "contain", "translate", "rotate", "scale":
+				return true
+			}
+		}
+		return false
+	case "contain":
+		for _, part := range webCSSSpaceFields(v) {
+			switch part {
+			case "layout", "paint", "strict", "content":
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // layerMarker leaves an empty block in the flow where a layer's root is about
@@ -543,7 +740,7 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 			break
 		}
 	}
-	anchor, onPage, clipX, clipY := l.layerAnchor(first, info, padX, contentW, pageH)
+	anchor, onPage, clip, hasClip := l.layerAnchor(first, info, padX, contentW, pageH)
 
 	// The layer's width: authored, stretched between two insets, or shrunk
 	// to its widest line within the room its inset leaves.
@@ -635,6 +832,35 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 			for i := range blocks {
 				if blocks[i].FlexGroup == info.flexGroup && css > blocks[i].FlexHeight {
 					blocks[i].FlexHeight = css
+				}
+			}
+		}
+		// A box that is only a picture (`absolute inset-0` around an `h-full
+		// w-full object-cover` image: a hero's or a card's backdrop) fills its
+		// room with it, cropped as its object-fit says. The picture's own
+		// height: 100% was lost on the way (the box had no definite height
+		// while the page was read), so it used to keep its natural height and
+		// end above the hero's foot or hang past it. A room of a line or two
+		// (a box only a spacer measures) keeps the natural size.
+		if css := float64(roomH)/scale - st.PadTop - st.PadBot; css > 0 && roomH >= 3*l.rowH {
+			picture := -1
+			for i := range blocks {
+				b := &blocks[i]
+				switch {
+				case b.Image && picture < 0 && b.Style.Height <= 0:
+					picture = i
+				case b.Image || webBlockHasText(b):
+					picture = -2
+				}
+				if picture == -2 {
+					break
+				}
+			}
+			if picture >= 0 {
+				im := &blocks[picture].Style
+				im.Height = css
+				if im.Width <= 0 && im.WidthPct <= 0 {
+					im.WidthPct = 100
 				}
 			}
 		}
@@ -774,20 +1000,14 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 
 	f := webFloat{
 		Z: st.ZIndex, X: x, Y: y, H: h, W: w, Pin: pin, Bottom: bottom,
-		Phase: webLayerPhaseFor(info.key, st.ZIndex), Key: info.key,
+		Phase: webLayerPhaseFor(info.key, st.ZIndex), Key: info.key, Root: info.rootBox,
 		Rows: sub.Rows, Rects: sub.Rects, Backgrounds: sub.Backgrounds,
 		Images: sub.Images, Videos: sub.Videos,
 	}
-	if (clipX || clipY) && pin == webPinNone {
-		// An overflow: hidden containing block cuts its layers to its box;
-		// a layer wholly outside it (a carousel's next slide) is dropped.
-		clip := sdl.Rect{X: -1 << 20, Y: -1 << 20, W: 1 << 21, H: 1 << 21}
-		if clipX {
-			clip.X, clip.W = anchor.X, anchor.W
-		}
-		if clipY {
-			clip.Y, clip.H = anchor.Y, anchor.H
-		}
+	if hasClip && pin == webPinNone {
+		// An overflow: hidden containing block, or a box around it, cuts its
+		// layers to its box (layerClip); a layer wholly outside it (a
+		// carousel's next slide) is dropped.
 		if !webRectsOverlap(sdl.Rect{X: x, Y: y, W: w, H: h}, clip) {
 			return 0
 		}
@@ -808,7 +1028,7 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 		}
 		sf.X += x
 		sf.Y = local + y
-		sf.Phase, sf.Key, sf.Pin = f.Phase, f.Key, f.Pin
+		sf.Phase, sf.Key, sf.Pin, sf.Root = f.Phase, f.Key, f.Pin, f.Root
 		switch f.Pin {
 		case webPinBottom:
 			sf.Bottom = bottom + h - (local + sfH)
@@ -839,15 +1059,15 @@ func webViewHeightPx(scale float64, fallback int32) int32 {
 // layerAnchor finds a layer's containing block: the laid-out rectangle of
 // the nearest positioned ancestor that has one, the page column when there is
 // none, and the whole page width for a fixed box (its containing block is the
-// viewport). onPage reports the page; clipX and clipY an overflow: hidden
-// containing block.
-func (l *webLayouter) layerAnchor(first webBlock, info webLayerInfo, padX, contentW, pageH int32) (anchor sdl.Rect, onPage, clipX, clipY bool) {
+// viewport). onPage reports the page; clip is the overflow clip the layer is
+// cut to, when hasClip (layerClip).
+func (l *webLayouter) layerAnchor(first webBlock, info webLayerInfo, padX, contentW, pageH int32) (anchor sdl.Rect, onPage bool, clip sdl.Rect, hasClip bool) {
 	if info.style.Position == webPositionFixed {
-		return sdl.Rect{X: 0, Y: 0, W: contentW + 2*padX, H: pageH}, true, false, false
+		return sdl.Rect{X: 0, Y: 0, W: contentW + 2*padX, H: pageH}, true, sdl.Rect{}, false
 	}
 	page := sdl.Rect{X: padX, Y: 0, W: contentW, H: pageH}
 	if l.doc == nil {
-		return page, true, false, false
+		return page, true, sdl.Rect{}, false
 	}
 	for i := min(info.outerBoxes, len(first.Boxes)) - 1; i >= 0; i-- {
 		id := first.Boxes[i]
@@ -861,10 +1081,47 @@ func (l *webLayouter) layerAnchor(first webBlock, info webLayerInfo, padX, conte
 			// A wrapper that spans the whole page (a positioned <body>, a
 			// theme's #page) is the page itself.
 			onPage := rect.Y <= l.rowH && rect.Y+rect.H >= pageH-2*l.rowH
-			return rect, onPage, box.style.OverflowX != 0, box.style.OverflowY != 0
+			clip, hasClip := l.layerClip(first.Boxes[:i+1], id, rect)
+			return rect, onPage, clip, hasClip
 		}
 	}
-	return page, true, false, false
+	return page, true, sdl.Rect{}, false
+}
+
+// layerClip is the overflow clip of a layer whose containing block is the
+// last of boxes (anchor, laid out at anchorRect): the containing block itself
+// and every box around it with overflow hidden or clip cut the layer on that
+// axis. A carousel's frame clips the captions of the slides inside its moving
+// track, which is their containing block; a box between the containing block
+// and the layer does not clip it, as in CSS.
+func (l *webLayouter) layerClip(boxes []int, anchor int, anchorRect sdl.Rect) (sdl.Rect, bool) {
+	const far = 1 << 20
+	left, top, right, bottom := int32(-far), int32(-far), int32(far), int32(far)
+	has := false
+	for _, id := range boxes {
+		box, ok := l.doc.Boxes[id]
+		if !ok || (box.style.OverflowX == 0 && box.style.OverflowY == 0) {
+			continue
+		}
+		rect, found := anchorRect, true
+		if id != anchor {
+			rect, found = l.boxFlowRect(id)
+		}
+		if !found {
+			continue
+		}
+		if box.style.OverflowX != 0 {
+			left, right = max(left, rect.X), min(right, rect.X+rect.W)
+		}
+		if box.style.OverflowY != 0 {
+			top, bottom = max(top, rect.Y), min(bottom, rect.Y+rect.H)
+		}
+		has = true
+	}
+	if !has {
+		return sdl.Rect{}, false
+	}
+	return sdl.Rect{X: left, Y: top, W: max(right-left, 0), H: max(bottom-top, 0)}, true
 }
 
 // webLayerExtent is how far a measured layer reaches below its top: its rows,
@@ -1087,6 +1344,60 @@ func webCollectStickies(d *webDocument, layout *webLayout, l *webLayouter) {
 			extend(&accs[owner], im.Rect)
 		}
 	}
+	// The layers and floats inside a sticky element are part of its bar: a
+	// header's absolutely positioned logo, cart badge or menu button, a
+	// floated search box. They are copied in at their place on the page (the
+	// bar used to pin without them), and a layer is not painted a second time
+	// at its page place while its bar is pinned (webFloat.StickyIndex).
+	type stickyLayer struct{ float, owner int }
+	var attached []stickyLayer
+	ownSeen := make([]bool, n)
+	for i := range accs {
+		ownSeen[i] = accs[i].seen
+	}
+	for fi := range layout.Floats {
+		lf := &layout.Floats[fi]
+		if lf.Root == 0 || lf.Pin != webPinNone || lf.Lift {
+			continue
+		}
+		owner := ownerOfBox(lf.Root)
+		if owner < 0 {
+			continue
+		}
+		a := &accs[owner]
+		for _, row := range lf.Rows {
+			copied := webRow{Y: lf.Y + row.Y, Runs: make([]webRunPos, len(row.Runs))}
+			for k, run := range row.Runs {
+				run.X += lf.X
+				copied.Runs[k] = run
+			}
+			a.rows = append(a.rows, copied)
+		}
+		for _, r := range lf.Rects {
+			r.Rect.X, r.Rect.Y = r.Rect.X+lf.X, r.Rect.Y+lf.Y
+			a.rects = append(a.rects, r)
+		}
+		for _, bg := range lf.Backgrounds {
+			bg.Rect.X, bg.Rect.Y = bg.Rect.X+lf.X, bg.Rect.Y+lf.Y
+			a.bgs = append(a.bgs, bg)
+		}
+		for _, im := range lf.Images {
+			im.Rect.X, im.Rect.Y = im.Rect.X+lf.X, im.Rect.Y+lf.Y
+			im.HasClip = false
+			a.images = append(a.images, im)
+		}
+		if !ownSeen[owner] {
+			// A bar made only of layers is as big as they are. Otherwise the
+			// bar keeps its own size, so a dropdown hanging below a header
+			// does not stop it pinning; it hangs below the pinned bar too.
+			h := lf.H
+			if h <= 0 {
+				h = int32(len(lf.Rows)) * layout.RowH
+			}
+			extend(a, sdl.Rect{X: lf.X, Y: lf.Y, W: max(lf.W, 1), H: max(h, 1)})
+		}
+		attached = append(attached, stickyLayer{float: fi, owner: owner})
+	}
 	scale := 1.0
 	if l != nil && l.baseSize > 0 {
 		scale = l.baseSize / 16
@@ -1103,8 +1414,11 @@ func webCollectStickies(d *webDocument, layout *webLayout, l *webLayouter) {
 		top := max(a.minY, 0)
 		f := webFloat{
 			Z: s.style.ZIndex, Y: top, H: a.maxY - top, W: a.maxX - a.minX,
-			Key: webFreeStackKey(s.style.ZIndex, s.seq), LimitBox: s.limitBox,
+			Key: webFreeStackKey(s.style.ZIndex, s.seq), LimitBox: s.limitBox, Root: s.rootBox,
 		}
+		// Rows from the bar's layers came after its own: the painter walks
+		// them top to bottom.
+		sort.SliceStable(a.rows, func(i, j int) bool { return a.rows[i].Y < a.rows[j].Y })
 		if s.style.HasTop {
 			f.Top = max(0, int32(math.Round(s.style.Top*scale)))
 		}
@@ -1147,6 +1461,264 @@ func webCollectStickies(d *webDocument, layout *webLayout, l *webLayouter) {
 	}
 	sort.SliceStable(layout.Stickies, func(i, j int) bool {
 		return layout.Stickies[i].Key.less(layout.Stickies[j].Key)
+	})
+	for _, at := range attached {
+		root := d.Stickies[at.owner].rootBox
+		for si := range layout.Stickies {
+			if layout.Stickies[si].Root == root {
+				layout.Floats[at.float].StickyIndex = si + 1
+				break
+			}
+		}
+	}
+}
+
+// webLiftPositioned paints the relatively positioned elements of the flow
+// where CSS stacks them. A browser paints a positioned element with
+// everything in it in the positioned pass, in stacking order with the
+// absolutely positioned layers; the reader painted the whole flow first and
+// every layer over it. So the hero idiom — a picture or a scrim in an
+// `absolute inset-0` box, then the heading and buttons in a `relative z-10`
+// box — showed the picture over the heading. An element that comes after a
+// layer in stacking order (a higher z-index, or the same and later in the
+// page) and overlaps it is lifted: its words, surfaces and pictures are
+// painted as a layer of their own at their place in that order (webFloat.
+// Lift), and the flow's paint skips them (Lifted). The page's rows keep its
+// words, so links, find and the cursor work as before. An element inside a
+// lifted one goes with it; one that overlaps no such layer is left alone.
+func webLiftPositioned(d *webDocument, layout *webLayout) {
+	if d == nil || layout == nil || layout.RowH <= 0 || len(d.Positioned) == 0 || len(layout.Floats) == 0 {
+		return
+	}
+	type over struct {
+		rect sdl.Rect
+		key  webStackKey
+	}
+	var layers []over
+	for i := range layout.Floats {
+		f := &layout.Floats[i]
+		if f.Phase != webLayerAbove || f.Pin != webPinNone || f.Lift {
+			continue
+		}
+		h := f.H
+		if h <= 0 {
+			h = int32(len(f.Rows)) * layout.RowH
+		}
+		r := sdl.Rect{X: f.X, Y: f.Y, W: max(f.W, 1), H: max(h, 1)}
+		if f.HasClip {
+			left, top := max(r.X, f.Clip.X), max(r.Y, f.Clip.Y)
+			right, bottom := min(r.X+r.W, f.Clip.X+f.Clip.W), min(r.Y+r.H, f.Clip.Y+f.Clip.H)
+			if right <= left || bottom <= top {
+				continue
+			}
+			r = sdl.Rect{X: left, Y: top, W: right - left, H: bottom - top}
+		}
+		layers = append(layers, over{rect: r, key: f.Key})
+	}
+	if len(layers) == 0 {
+		return
+	}
+	n := len(d.Positioned)
+	roots := make(map[int]int, n)
+	parent := make([]int, n)
+	var open []int
+	for i := range d.Positioned {
+		e := &d.Positioned[i]
+		roots[e.rootBox] = i
+		for len(open) > 0 && d.Positioned[open[len(open)-1]].lastBox < e.rootBox {
+			open = open[:len(open)-1]
+		}
+		parent[i] = -1
+		if len(open) > 0 {
+			parent[i] = open[len(open)-1]
+		}
+		open = append(open, i)
+	}
+	// The innermost positioned element a chain of boxes runs through, or
+	// one whose subtree holds box id; -1 when there is none.
+	ownerOfChain := func(boxes []int) int {
+		for k := len(boxes) - 1; k >= 0; k-- {
+			if i, ok := roots[boxes[k]]; ok {
+				return i
+			}
+		}
+		return -1
+	}
+	ownerOfBox := func(id int) int {
+		if id == 0 {
+			return -1
+		}
+		i := sort.Search(n, func(k int) bool { return d.Positioned[k].rootBox > id }) - 1
+		for i >= 0 && d.Positioned[i].lastBox < id {
+			i = parent[i]
+		}
+		return i
+	}
+	// Each element's extent on the page, its nested elements' included.
+	type extent struct {
+		minX, minY, maxX, maxY int32
+		seen                   bool
+	}
+	ext := make([]extent, n)
+	grow := func(i int, r sdl.Rect) {
+		for ; i >= 0; i = parent[i] {
+			e := &ext[i]
+			if !e.seen {
+				*e = extent{minX: r.X, minY: r.Y, maxX: r.X + r.W, maxY: r.Y + r.H, seen: true}
+				continue
+			}
+			e.minX, e.minY = min(e.minX, r.X), min(e.minY, r.Y)
+			e.maxX, e.maxY = max(e.maxX, r.X+r.W), max(e.maxY, r.Y+r.H)
+		}
+	}
+	for ri := range layout.Rows {
+		row := &layout.Rows[ri]
+		for k := 0; k < len(row.Runs); {
+			// A stretch of runs with one owner is measured once, at its
+			// rightmost run.
+			o := ownerOfChain(row.Runs[k].Boxes)
+			j := k + 1
+			for j < len(row.Runs) && ownerOfChain(row.Runs[j].Boxes) == o {
+				j++
+			}
+			if o >= 0 {
+				last := &row.Runs[j-1]
+				w, h := last.ImageW, last.ImageH
+				if last.Image == nil && last.Font != nil {
+					if tw, th, err := last.Font.SizeUTF8(last.Text); err == nil {
+						w, h = int32(tw), int32(th)
+					}
+				}
+				h = max(h+last.VerticalOffset, layout.RowH)
+				grow(o, sdl.Rect{X: row.Runs[k].X, Y: row.Y, W: max(last.X+w-row.Runs[k].X, 1), H: h})
+			}
+			k = j
+		}
+	}
+	for _, r := range layout.Rects {
+		if o := ownerOfBox(r.BoxID); o >= 0 && !r.Shadow {
+			grow(o, r.Rect)
+		}
+	}
+	for _, bg := range layout.Backgrounds {
+		if o := ownerOfBox(bg.BoxID); o >= 0 && !bg.Shadow {
+			grow(o, bg.Rect)
+		}
+	}
+	for _, im := range layout.Images {
+		if o := ownerOfChain(im.Boxes); o >= 0 {
+			grow(o, im.Rect)
+		}
+	}
+	// Which elements are lifted: the outermost ones that come after a layer
+	// they overlap. liftRoot maps every element to the lifted one it is
+	// painted with, or -1.
+	liftRoot := make([]int, n)
+	lifted := 0
+	for i := 0; i < n; i++ {
+		liftRoot[i] = -1
+		if parent[i] >= 0 {
+			liftRoot[i] = liftRoot[parent[i]]
+		}
+		e := &ext[i]
+		if liftRoot[i] >= 0 || !e.seen {
+			continue
+		}
+		box := sdl.Rect{X: e.minX, Y: e.minY, W: max(e.maxX-e.minX, 1), H: max(e.maxY-e.minY, 1)}
+		for _, layer := range layers {
+			if layer.key.less(d.Positioned[i].key) && webRectsOverlap(layer.rect, box) {
+				liftRoot[i] = i
+				lifted++
+				break
+			}
+		}
+	}
+	if lifted == 0 {
+		return
+	}
+	floats := make(map[int]*webFloat, lifted)
+	floatOf := func(o int) *webFloat {
+		if o < 0 || liftRoot[o] < 0 {
+			return nil
+		}
+		root := liftRoot[o]
+		if f, ok := floats[root]; ok {
+			return f
+		}
+		e := &ext[root]
+		key := d.Positioned[root].key
+		f := &webFloat{
+			Y: e.minY, H: max(e.maxY-e.minY, 1), W: max(e.maxX, 1),
+			Phase: webLayerAbove, Key: key, Z: key.levels[key.n-1].z, Lift: true,
+			Root: d.Positioned[root].rootBox,
+		}
+		floats[root] = f
+		return f
+	}
+	for ri := range layout.Rows {
+		row := &layout.Rows[ri]
+		for k := range row.Runs {
+			run := &row.Runs[k]
+			f := floatOf(ownerOfChain(run.Boxes))
+			if f == nil {
+				continue
+			}
+			if len(f.Rows) == 0 || f.Rows[len(f.Rows)-1].Y != row.Y-f.Y {
+				f.Rows = append(f.Rows, webRow{Y: row.Y - f.Y})
+			}
+			cp := *run
+			if cp.HasClip {
+				cp.Clip.Y -= f.Y
+			}
+			last := &f.Rows[len(f.Rows)-1]
+			last.Runs = append(last.Runs, cp)
+			run.Lifted = true
+		}
+	}
+	for i := range layout.Rects {
+		r := &layout.Rects[i]
+		if f := floatOf(ownerOfBox(r.BoxID)); f != nil {
+			cp := *r
+			cp.Rect.Y -= f.Y
+			if cp.HasClip {
+				cp.Clip.Y -= f.Y
+			}
+			f.Rects = append(f.Rects, cp)
+			r.Lifted = true
+		}
+	}
+	for i := range layout.Backgrounds {
+		bg := &layout.Backgrounds[i]
+		if f := floatOf(ownerOfBox(bg.BoxID)); f != nil {
+			cp := *bg
+			cp.Rect.Y -= f.Y
+			f.Backgrounds = append(f.Backgrounds, cp)
+			bg.Lifted = true
+		}
+	}
+	for i := range layout.Images {
+		im := &layout.Images[i]
+		if f := floatOf(ownerOfChain(im.Boxes)); f != nil {
+			cp := *im
+			cp.Rect.Y -= f.Y
+			if cp.HasClip {
+				cp.Clip.Y -= f.Y
+			}
+			f.Images = append(f.Images, cp)
+			im.Lifted = true
+		}
+	}
+	for i := 0; i < n; i++ {
+		if f, ok := floats[i]; ok {
+			layout.Floats = append(layout.Floats, *f)
+		}
+	}
+	sort.SliceStable(layout.Floats, func(i, j int) bool {
+		a, b := &layout.Floats[i], &layout.Floats[j]
+		if a.Phase != b.Phase {
+			return a.Phase < b.Phase
+		}
+		return a.Key.less(b.Key)
 	})
 }
 
@@ -1215,6 +1787,14 @@ func drawWebTopLayers(r *sdl.Renderer, config *Config, doc *webDocument, layout 
 			j++
 			continue
 		}
+		// A layer inside a sticky bar is drawn with the bar while it is
+		// pinned (webCollectStickies), not again at its page place.
+		if s := floats[i].StickyIndex; s > 0 && s <= len(stickies) {
+			if _, pinned := webStickyPinnedTop(&stickies[s-1], rect, offset); pinned {
+				i++
+				continue
+			}
+		}
 		drawWebFloatLayer(r, config, doc, layout, rect, &floats[i], offset)
 		i++
 	}
@@ -1268,11 +1848,22 @@ func drawWebFloatLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout
 // stays inside its containing block: the bar leaves with the section, the
 // table or the article it heads.
 func drawWebStickyLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, f *webFloat, offset int32) {
-	// A bar taller than the view never pins, nor does one taller than two
-	// fifths of it across most of the width (a whole column of the page); a
-	// narrow side column may be taller.
-	if f.H <= 0 || f.H > rect.H || (float64(f.H) > float64(rect.H)*webMaxStickyShare && f.W*20 > rect.W*9) {
+	top, pinned := webStickyPinnedTop(f, rect, offset)
+	if !pinned {
 		return
+	}
+	drawWebLayer(r, config, doc, layout, rect, f, top, true)
+}
+
+// webStickyPinnedTop is where a sticky bar's pinned copy goes on screen at
+// this scroll, and whether it is pinned at all: once its place in the flow has
+// scrolled past the edge it sticks to, inside its containing block, and on
+// screen. A bar taller than the view never pins, nor does one taller than two
+// fifths of it across most of the width (a whole column of the page); a narrow
+// side column may be taller.
+func webStickyPinnedTop(f *webFloat, rect sdl.Rect, offset int32) (int32, bool) {
+	if f.H <= 0 || f.H > rect.H || (float64(f.H) > float64(rect.H)*webMaxStickyShare && f.W*20 > rect.W*9) {
+		return 0, false
 	}
 	var top int32
 	if f.HasBottom {
@@ -1282,12 +1873,12 @@ func drawWebStickyLayer(r *sdl.Renderer, config *Config, doc *webDocument, layou
 		}
 		if rect.Y+f.Y-offset <= top {
 			// Its own place is on screen above the bottom edge.
-			return
+			return 0, false
 		}
 	} else {
 		if offset <= f.Y {
 			// Still at or below its flow place, which the page draws.
-			return
+			return 0, false
 		}
 		top = rect.Y + f.Top
 		if f.Limit > 0 {
@@ -1295,9 +1886,9 @@ func drawWebStickyLayer(r *sdl.Renderer, config *Config, doc *webDocument, layou
 		}
 	}
 	if top+f.H <= rect.Y || top >= rect.Y+rect.H {
-		return
+		return 0, false
 	}
-	drawWebLayer(r, config, doc, layout, rect, f, top, true)
+	return top, true
 }
 
 // --- Hit testing -------------------------------------------------------------
@@ -1319,6 +1910,10 @@ func collectWebLayerHits(layout *webLayout, seen map[string]bool) []webLinkHit {
 	var hits []webLinkHit
 	for fi := range layout.Floats {
 		f := &layout.Floats[fi]
+		if f.Lift {
+			// A lifted part of the flow: the page's rows hold its links.
+			continue
+		}
 		pinned := 0
 		if f.Pin != webPinNone {
 			pinned = fi + 1

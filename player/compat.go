@@ -1000,8 +1000,10 @@ func retroArchCoreDirs() []string {
 	} else {
 		// The RetroArch the Emulators page shows (deviceRetroArchCoresDir:
 		// the card JukaHub runs from, Apps/RetroArch…) comes first, so a core
-		// install lands where that RetroArch loads it.
-		candidates = append([]string{deviceRetroArchCoresDir()}, candidates...)
+		// install lands where that RetroArch loads it; then TrimUI's folder on
+		// that card, which a first core install may have made before RetroArch
+		// itself arrived (retroArchCoresHome).
+		candidates = append([]string{deviceRetroArchCoresDir(), retroArchCardCoresDir()}, candidates...)
 	}
 	seen := map[string]bool{}
 	var out []string
@@ -1018,13 +1020,70 @@ func retroArchCoreDirs() []string {
 	return out
 }
 
+// retroArchCardCoresDir is TrimUI's cores folder on the card JukaHub runs from:
+// RetroArch/.retroarch/cores, the folder the firmware's launch scripts load
+// cores from and the one JukaHub's own RetroArch install fills (raget.go).
+func retroArchCardCoresDir() string {
+	return filepath.Join(childEnvFirmwareCard(), "RetroArch", ".retroarch", "cores")
+}
+
+// retroArchCoresHome is the cores folder a core goes into while RetroArch has
+// none, and the RetroArch it belongs to ("" when none was found). The folders
+// retroArchCoreDirs lists are only the ones that exist, so a card without one
+// — set up without TrimUI's SD package (formatted by hand, a NextUI or JukaHub
+// OS card, a RetroArch still on its way from raget.go), or a RetroArch whose
+// .retroarch/cores was never made — refused every core install with
+// "RetroArch cores folder not found" (testers on the Smart Pro family,
+// 2026-11-24). On the handheld it is the cores folder of the RetroArch JukaHub
+// finds, else TrimUI's on the card; installCoreFile makes it. "" on Windows
+// (its Emulators page installs a portable RetroArch first), on a computer with
+// no RetroArch, and where the RetroArch found is the firmware's read-only copy.
+func retroArchCoresHome() (dir, bin string) {
+	if IsWindows() || len(compatCoreDirsOverride) > 0 {
+		return "", ""
+	}
+	cores, bin := deviceRetroArchLocate()
+	switch {
+	case bin != "" && coreDirIsSystem(cores):
+		return "", bin
+	case bin != "":
+		return cores, bin
+	case IsTrimuiDevice() || strings.TrimSpace(trimuiSDRootFn()) != "":
+		return retroArchCardCoresDir(), ""
+	}
+	return "", ""
+}
+
+// retroArchNoCoresProblem says why there is no cores folder, for the readers
+// of the inventory (Core builds, the compatibility panel, About): RetroArch
+// is not on the card, or it has no cores yet. "Cores folder not found" read as
+// a fault when one install was all it took.
+func retroArchNoCoresProblem() string {
+	home, bin := retroArchCoresHome()
+	switch {
+	case home != "" && bin != "":
+		return "RetroArch has no cores yet: the first core install makes " + home
+	case home != "" && raGetSupported():
+		return "RetroArch is not on this card: Install on the Emulators page gets TrimUI's RetroArch with the core"
+	case home != "":
+		return "RetroArch is not on this card: the first core install makes " + home
+	}
+	return retroArchMissingText()
+}
+
+// retroArchMissingText is the refusal when there is no cores folder and none
+// may be made.
+func retroArchMissingText() string {
+	return "RetroArch is not installed here: install RetroArch first, then its cores"
+}
+
 func scanCoreInventory() coreInventory {
 	inv := coreInventory{Active: map[string]coreBuild{}}
 	dirs := retroArchCoreDirs()
 	if len(dirs) > 0 {
 		inv.CoresDir = dirs[0]
 	} else {
-		inv.Problem = "RetroArch cores folder not found"
+		inv.Problem = retroArchNoCoresProblem()
 	}
 	for _, dir := range dirs {
 		items, err := os.ReadDir(dir)
@@ -1266,12 +1325,11 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 // this did before) put an update beside a core that lives in another folder,
 // where nothing loads it, and the inventory then reported the new file as the
 // active one. A core the card does not have yet goes into the first cores folder
-// JukaHub may write, as <core>_libretro.<ext>.
+// JukaHub may write, as <core>_libretro.<ext> — and with none there yet, into
+// the one RetroArch will load it from (retroArchCoresHome), which
+// installCoreFile makes.
 func coreActivationTarget(build coreBuild) (string, error) {
 	dirs := retroArchCoreDirs()
-	if len(dirs) == 0 {
-		return "", errors.New("RetroArch cores folder not found")
-	}
 	if active := coreActiveBinary(build.Core, dirs); active != "" {
 		if coreDirIsSystem(filepath.Dir(active)) {
 			return "", fmt.Errorf("the %s core RetroArch loads is part of the firmware (%s) and is not replaced", coreConfigDisplayName(build.Core), filepath.Dir(active))
@@ -1286,7 +1344,18 @@ func coreActivationTarget(build coreBuild) (string, error) {
 		}
 	}
 	if destDir == "" {
-		return "", errors.New("RetroArch's cores folder is part of the firmware (read-only); nothing is installed there")
+		// No cores folder JukaHub may write: the one RetroArch will load from,
+		// which installCoreFile makes — unless the RetroArch found is the
+		// firmware's own, whose folder is not JukaHub's.
+		home, bin := retroArchCoresHome()
+		switch {
+		case home != "":
+			destDir = home
+		case bin == "" && len(dirs) == 0:
+			return "", errors.New(retroArchMissingText())
+		default:
+			return "", errors.New("RetroArch's cores folder is part of the firmware (read-only); nothing is installed there")
+		}
 	}
 	targetName := coreBuildFileName(build.Core)
 	if ext := strings.ToLower(filepath.Ext(build.File)); ext == ".so" || ext == ".dll" {
@@ -1487,6 +1556,11 @@ func coreRetroArchBinary(coresDir string) string {
 // never offered as a rollback), and a second replacement in the same second
 // gets its own name rather than overwriting the first build.
 func installCoreFile(source, target string) (string, error) {
+	// The first core of a RetroArch with no cores folder yet makes it
+	// (retroArchCoresHome); every other target's folder is there already.
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("make the cores folder: %w", err)
+	}
 	backup := ""
 	oldCRC := ""
 	if regularFile(target) {

@@ -170,6 +170,11 @@ func (l *webLayouter) mergeFlexSubLayoutShift(sub *webLayout, x, rowOffset, shif
 		return
 	}
 	dy := rowOffset*l.rowH + shift
+	// A table inside the item keeps its last row's bottom padding row below
+	// what it measured, so the page reaches it (webpage.go, PaintBottom).
+	if bottom := sub.PaintBottom + dy; bottom > l.layout.PaintBottom {
+		l.layout.PaintBottom = bottom
+	}
 	ensureRows := func(last int32) {
 		for int32(len(l.layout.Rows)) <= last && len(l.layout.Rows) < webMaxRows {
 			idx := int32(len(l.layout.Rows))
@@ -617,6 +622,9 @@ func (l *webLayouter) shrinkToFitWidth(blocks []webBlock, avail int32) int32 {
 			if font == nil {
 				return 0
 			}
+			// The margin, border and padding of the inline boxes the run opens
+			// and closes (webpage_inlinebox.go).
+			line += webInlineInsets(&run, l.baseSize)
 			for si, segment := range strings.Split(text, "\n") {
 				if si > 0 {
 					// A line break: the next segment starts a new line.
@@ -642,6 +650,81 @@ func (l *webLayouter) shrinkToFitWidth(blocks []webBlock, avail int32) int32 {
 	// The line builder measures word by word; a few pixels of slack keep the
 	// rounding from wrapping the last word.
 	return min(widest+int32(math.Ceil(6*scale)), avail)
+}
+
+// fitBlockWidth is how wide one block is under width: fit-content or
+// max-content (mode 1: its longest line set without wrapping) or min-content
+// (mode 2: its widest word), its padding included, in layout pixels. 0 when
+// its content cannot say (a table, preformatted text, a picture of unknown
+// size) or it has none.
+func (l *webLayouter) fitBlockWidth(b *webBlock, mode int) int32 {
+	if mode == 2 {
+		return l.intrinsicMinContentWidth([]webBlock{*b})
+	}
+	return l.shrinkToFitWidth([]webBlock{*b}, math.MaxInt32/2)
+}
+
+// fitBoxWidth is the width of the layout box id when it is sized by its
+// content (webStyle.WidthFit), in layout pixels: the widest of the blocks
+// inside it (fitBlockWidth) with the box's own padding round the nested ones.
+// 0 for any other box, and when one of the blocks cannot say or the box holds
+// a flex row, a table or a float, whose widths do not simply stack.
+func (l *webLayouter) fitBoxWidth(id int) int32 {
+	if l == nil || l.doc == nil || id == 0 {
+		return 0
+	}
+	if w, ok := l.fitWidths[id]; ok {
+		return w
+	}
+	info, ok := l.doc.Boxes[id]
+	if !ok || info.style.WidthFit == 0 || info.style.Width > 0 || info.style.WidthPct > 0 {
+		return 0
+	}
+	scale := l.baseSize / 16
+	pad := int32(math.Round((info.style.Indent + info.style.IndentRight) * scale))
+	widest := int32(0)
+	for i := range l.doc.Blocks {
+		b := &l.doc.Blocks[i]
+		at := -1
+		for k, box := range b.Boxes {
+			if box == id {
+				at = k
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		if b.Float || b.Style.FloatSide != 0 || b.Style.TableRole != webTableRoleNone {
+			widest = 0
+			break
+		}
+		if b.FlexGroup != 0 {
+			// A flex row or a grid inside the box sets its items side by side;
+			// one the box itself sits in is no concern of its width.
+			if depth, known := l.doc.FlexBoxDepth[b.FlexGroup]; !known || depth > at {
+				widest = 0
+				break
+			}
+		}
+		w := l.fitBlockWidth(b, info.style.WidthFit)
+		if w <= 0 {
+			if len(b.Runs) > 0 || b.Image || b.Video || b.Rule || b.Placeholder {
+				widest = 0
+				break
+			}
+			continue
+		}
+		if b.BoxOwner != id {
+			w += pad
+		}
+		widest = max(widest, w)
+	}
+	if l.fitWidths == nil {
+		l.fitWidths = make(map[int]int32, 4)
+	}
+	l.fitWidths[id] = widest
+	return widest
 }
 
 // A direct flex or grid child can contain several paragraphs. They share one
@@ -863,6 +946,12 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 		boxH = floor + padTop + padBot
 	}
 	endRow = startRow + int32(math.Ceil(float64(boxH)/float64(l.rowH)))
+	// The innermost box the float sits in places it inside a sticky bar,
+	// whose pinned copy carries it (webCollectStickies).
+	root := 0
+	if n := len(block.Boxes); n > 0 {
+		root = block.Boxes[n-1]
+	}
 	// A float paints over the flow's surfaces and under its text and every
 	// positioned layer (webpage_layers.go), in document order.
 	l.layout.Floats = append(l.layout.Floats, webFloat{
@@ -870,8 +959,10 @@ func (l *webLayouter) layoutCSSFloat(block webBlock, padX, contentW, startRow, l
 		X:           x,
 		Y:           startRow * l.rowH,
 		H:           boxH,
+		W:           width,
 		Phase:       webLayerFloat,
 		Key:         webFreeStackKey(block.ZIndex, block.TreeSeq),
+		Root:        root,
 		Rows:        sub.Rows,
 		Rects:       sub.Rects,
 		Backgrounds: sub.Backgrounds,
@@ -944,7 +1035,7 @@ func (l *webLayouter) intrinsicContainerWidth(blocks []webBlock) int32 {
 			if err != nil {
 				continue
 			}
-			if width := int32(w) + padding; width > widest {
+			if width := int32(w) + webInlineInsets(&run, l.baseSize) + padding; width > widest {
 				widest = width
 			}
 		}
@@ -996,10 +1087,22 @@ func (l *webLayouter) intrinsicMinContentWidth(blocks []webBlock) int32 {
 			if !webWhiteSpaceWraps(run.Style.WhiteSpace) || run.Style.Pre {
 				chunks = strings.Split(text, "\n")
 			}
-			for _, chunk := range chunks {
+			// The run's first word comes after the left edges of the inline
+			// boxes it opens and its last before the right edges of those it
+			// closes (webpage_inlinebox.go).
+			lead := int32(math.Round(run.Lead * l.baseSize / 16))
+			trail := int32(math.Round(run.Trail * l.baseSize / 16))
+			for ci, chunk := range chunks {
 				chunk = strings.TrimSpace(chunk)
 				if chunk == "" {
 					continue
+				}
+				edges := int32(0)
+				if ci == 0 {
+					edges += lead
+				}
+				if ci == len(chunks)-1 {
+					edges += trail
 				}
 				// anywhere and break-all create legal break points between
 				// glyphs. Their min-content floor is the widest glyph, not the
@@ -1021,7 +1124,7 @@ func (l *webLayouter) intrinsicMinContentWidth(blocks []webBlock) int32 {
 				if err != nil {
 					continue
 				}
-				if width := int32(w) + padding; width > widest {
+				if width := int32(w) + edges + padding; width > widest {
 					widest = width
 				}
 			}
@@ -1339,6 +1442,9 @@ func (l *webLayouter) applyBoxConstraints(block webBlock, padX, contentW int32) 
 				target = min32(target, int32(math.Round(float64(contentW)*st.WidthPct/100)))
 			} else if st.Width > 0 {
 				target = min32(target, int32(math.Round(st.Width*scale)))
+			} else if fit := l.fitBoxWidth(id); fit > 0 {
+				// width: fit-content: as wide as what the box holds.
+				target = min32(target, fit)
 			}
 			if st.MaxWidthPct > 0 {
 				target = min32(target, int32(math.Round(float64(contentW)*st.MaxWidthPct/100)))
@@ -2728,7 +2834,11 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 	gridMode := first.GridCols > 0 || first.GridMin > 0
 	keepRow := !first.FlexWrap && l.flexInFixedHeightBox(first)
 	autoCount := flexAutoCount(grouped)
-	if singleFull && n == 1 && autoCount == 0 {
+	// A one-cell table row still has to go through the row machinery: laying
+	// its only cell out flat skipped the row's own height, so a table whose
+	// rows have one spanning cell advanced a row short and the next row's
+	// cells painted over it.
+	if singleFull && n == 1 && autoCount == 0 && first.Style.TableRole != webTableRoleCell {
 		if !l.layoutFlexSingle(grouped[0], first, padX, contentW) {
 			l.layoutBlocksFlat(grouped[0].blocks, padX, contentW)
 		}
@@ -3337,12 +3447,29 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 			// short its content is; the content sits by its vertical-align
 			// (webpage_table.go).
 			webStretchTableCell(cell.sub, webTableCellKey(grouped[i].blocks[0].Style), free, drop)
+			// The cell's surface keeps a padding row below its content rows,
+			// which the row's own height does not count: the page has to
+			// reach the surface's bottom or the last row is clipped at max
+			// scroll.
+			if bottom := baseRow*l.rowH + drop + webFlexCellExtent(cell.sub); bottom > l.layout.PaintBottom {
+				l.layout.PaintBottom = bottom
+			}
 		}
 		// Merge every layer the item measured, not just its text, boxes and
 		// images: a card's gradient/background image, an embedded video and a
 		// positioned badge all live beside the rows and used to disappear when
 		// the card was a flex or grid item.
 		l.mergeFlexSubLayoutShift(cell.sub, cellX[i], baseRow+drop/l.rowH, drop%l.rowH)
+	}
+	if tableRow && n > 0 && grouped[0].blocks[0].Style.CellLastRow {
+		// A table's last row paints one padding row below the row grid
+		// (webTagCellSurface). The row keeps it, so the block after the
+		// table starts under the cell's bottom edge instead of on top of
+		// its padding.
+		if len(l.layout.Rows) < webMaxRows {
+			idx := int32(len(l.layout.Rows))
+			l.layout.Rows = append(l.layout.Rows, webRow{Y: idx * l.rowH})
+		}
 	}
 }
 
@@ -3450,7 +3577,15 @@ func drawWebLayer(r *sdl.Renderer, config *Config, doc *webDocument, layout *web
 		if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
 			continue
 		}
+		// A picture in an overflow: hidden box inside the layer is cut to it,
+		// as on the page; a sticky copy's clips were measured at its flow
+		// place.
+		restore := func() {}
+		if !sticky {
+			restore = webClipPaint(r, rect, im.Clip, im.HasClip, rect.X+f.X, top)
+		}
 		drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
+		restore()
 	}
 	for _, v := range f.Videos {
 		if v.Invisible {

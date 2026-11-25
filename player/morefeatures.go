@@ -115,6 +115,13 @@ func playStream(config *Config, url string) {
 // playSmartURL plays a URL: directly if it is a media file, otherwise via
 // yt-dlp (which handles YouTube, Twitter, TikTok, Instagram, ...).
 func playSmartURL(config *Config, url string) {
+	playSmartURLTitled(config, url, "")
+}
+
+// playSmartURLTitled is playSmartURL with the title the player's loading card
+// and Recents show for a page that goes to yt-dlp — the Browser's "Play video
+// on this page" knows the page's (brw_stream.go). "" leaves it to yt-dlp.
+func playSmartURLTitled(config *Config, url, title string) {
 	url = strings.TrimSpace(url)
 	if url == "" {
 		return
@@ -150,7 +157,7 @@ func playSmartURL(config *Config, url string) {
 	}
 	// playVideoInfo downloads with yt-dlp and decodes in the embedded player,
 	// which is the same path YouTube search results use.
-	v := VideoInfo{URL: url}
+	v := VideoInfo{URL: url, Title: strings.TrimSpace(title)}
 	playVideoInfo(config, v)
 	// A bare link has no title: name a YouTube video in Recents instead of
 	// showing its address (ytoembed.go).

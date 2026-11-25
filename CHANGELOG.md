@@ -13,6 +13,25 @@ For anything older, the git log and the
 
 ### Added
 
+- **Browser: videos, songs and live streams play from web pages** (Juka,
+  2026-11-24, relaying a tester's reply to the Colosseum answer: "If not it's
+  ok … can streaming from browser"). A link straight to a video, a song or a
+  live playlist (`.mp4`, `.webm`, `.mkv`, `.m3u8`, `.mp3`, `.flac`…) now plays
+  in the player instead of loading as a page, and so does such an address
+  typed, pasted or opened from a saved page; leaving the player comes back to
+  the page. An address whose server only says what it is in its answer (a
+  video or audio type, an HLS or DASH playlist) gets **Play** first on its
+  "Can't show this file" card, before Download file and Try again. The Select
+  menu has a new **Play video on this page** row: the page's first play card
+  when the reader found a `<video>` or an embed, otherwise the page itself
+  through yt-dlp, whose site extractors and generic scan find the video a
+  page's own scripts would build ([Browser](docs/BROWSER.md#videos-and-yt-dlp-playback),
+  `player/brw_stream.go`). What plays is what the site serves any browser:
+  services that protect their streams with DRM (Netflix, Disney+, Prime
+  Video) cannot play on these handhelds, and no torrent or scraper source is
+  wired in. Static checks only: no Go toolchain or device here
+  (BRWSTREAM-HW-1).
+
 - **Media: Movies & TV** (Juka, 2026-11-24, relaying testers: "make the
   TrimUI Brick JukaHub a streaming movie and media device" and "can I install
   this Android APK for movie streaming (Colosseum) through JukaHub?"). A new
@@ -3788,6 +3807,66 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The browser's layering engine stacks heroes, badges and sticky headers
+  like a browser** (Juka, 2026-11-24: "improve layerimg engine even
+  further"). A relatively positioned part of the page that CSS paints over an
+  earlier layer is now painted over it: the hero idiom — a picture or a scrim
+  in an `absolute inset-0` box, then the heading and buttons in a
+  `relative z-10` box — showed the picture on top of the heading, because the
+  reader drew the whole flow first and every layer over it. Such a box is
+  lifted into the stacking order (its words stay in the page for links, find
+  and the cursor). A box that is only a picture and is held by its top and
+  bottom insets fills that room with it, cropped, instead of keeping the
+  picture's own height. An absolutely or fixed positioned inline element — the
+  `<span>` "Sale", "New" or duration badge of a card — leaves its line and is
+  placed at its corner, as CSS blockifies it; the text around it stays one
+  line, and links, labels, form controls, screen-reader-only labels and badges
+  inside a positioned inline element keep their place. `isolation: isolate`,
+  filters, blend modes, `will-change`, `contain`, `perspective`, clip paths,
+  masks, every transform and a flex item's z-index now start stacking
+  contexts, so a Tailwind `isolate` hero's `-z-10` picture is drawn over the
+  hero's colour instead of under the page. A pinned sticky header carries its
+  absolutely positioned logo, badges and floated parts (they used to scroll
+  away), and an `overflow: hidden` box around a layer's containing block
+  clips it too, so a carousel's frame cuts the captions of the slides in its
+  moving track.
+
+- **The browser lays out buttons, badges and inline boxes as the CSS says, and
+  resolves the cascade like a browser** (Juka, 2026-11-24: "improve browser
+  even more and make sure CSS rendered accurately"). **Inline boxes** (new
+  `player/webpage_inlinebox.go`): the padding, border and margin of an inline
+  element took no room — a padded `<a class="btn">`, a badge or a GitHub
+  `<code>` was its bare text on a tight rectangle with fixed 3px corners, and
+  a single space stood in for its padding. Now its edges take their room before
+  its first word and after its last, its background covers its padding and
+  border, its `border-radius` and border are drawn (a pill stays a pill), and
+  the elements and `::before`/`::after` content inside it share its chip. An
+  inline-block (and every `<button>` and submit input, which get the browser's
+  own padding when the page gives none) moves to the next line whole instead of
+  leaving its first word behind, may break at its edges without a space, and
+  makes its line taller once its padding no longer fits the row. Links, spans
+  and labels straight inside a flex row are blockified into items of their own,
+  as CSS does, so a toolbar's buttons keep their padding, surface and radius.
+  **Cascade:** `@layer` blocks, order statements and `@import … layer(name)`
+  rank as in CSS — every layer under unlayered rules, `!important` reversed —
+  where layered rules used to compete on specificity alone, so a framework's
+  layered rule (Tailwind 4 ships every utility in a layer) beat the site's
+  own unlayered one, the opposite of a browser. Margin and padding
+  sides settle by cascade order: `padding: 1rem; padding-top: 0` padded the top
+  by 1rem, and Tailwind's `p-4 pt-2` by 24px, because a shorthand's side was
+  added to the longhand's. A reset's `margin: 0` on `blockquote`, `figure` and
+  `dd` no longer leaves the UA's 40px indent under it, an inline `<li>` no
+  longer carries the list gutter, a transparent border or outline
+  (`border: 1px solid transparent` on every Bootstrap `.btn` and nav tab,
+  Tailwind's `outline-none`) is no longer drawn in the text colour, and a
+  later `border-color` replaces a `border` shorthand's colour, so
+  `.btn-outline-primary` keeps its blue border. **Sizes:** `width: fit-content`,
+  `max-content`, `min-content` and `stretch` (with their vendor spellings) are
+  read — they were dropped, and an earlier `width: 100%` won — so a fitted label
+  or a `w-fit mx-auto` box is as wide as its text and centred. A margin or
+  padding may take up to eight text rows (was three: a 120px hero padding
+  collapsed to about 70px).
+
 - **The browser draws the page's colours and puts its items where the page
   does** (Juka, 2026-11-24: "improve web browser even further...make sure font
   color is correct and the location of items is rendered correctly").
@@ -4685,6 +4764,121 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Browser: a table's last row keeps its bottom padding on the page**
+  (2026-11-24). A cell paints one padding row below the row grid its content
+  sits on, and the page was as tall as the row grid only: with 12px padding the
+  bottom band of a table's last row fell outside the scrollable area, so the
+  last row looked cut off at max scroll. The reference table fixture measured a
+  page height of 360px against a final cell surface ending at 396px. The row
+  pass now remembers the lowest cell surface it merges (`webLayout.PaintBottom`,
+  `player/webpage_flow.go`), a nested table passes that up through the merge,
+  and the page keeps the rows it needs to reach it (`player/webpage.go`), so
+  the same fixture reports 396px — exactly the last surface's bottom — with
+  rows still flush and no blank row between them (the extra row is the page's
+  last). `TestWebTablePageHeightCoversLastRowPadding`
+  (`player/webpage_table_height_test.go`) pins the page height against the
+  last cell's surface; it reports 144px against a 180px surface with the
+  tracking removed. Lean by construction: one integer comparison per cell while
+  the row is merged, and nothing per cell afterwards.
+
+- **Browser: a table row holding one spanning cell no longer paints over the
+  row above it, so a trailing or row-wide `colspan` reads as every column it
+  crosses** (2026-11-24, the table half of the Chrome-parity audit). A row with
+  a single cell — a footer `<td colspan="2">`, a row-wide banner, a summary
+  line — skipped the flex-row machinery and had its cell laid out flat in the
+  page flow. That skipped the row's own height: with cell padding the cell's
+  surface started a row early and painted across the row above, so the last
+  row's spanning cell was read (and drawn) as one column wide, and the row it
+  overlapped was covered. Such rows now go through the row layout like any
+  other (`layoutFlexRowItems`, `player/webpage_flow.go`), so a row's height is
+  its tallest cell's surface, rows stack flush, and the column-width
+  distribution it already had — the sum of the tracks a cell spans — reaches
+  the paint. `TestWebTableColspanCoversItsColumns`
+  (`player/webpage_table_span_test.go`) pins the three cases: a span ending its
+  row, a span in the middle of a row (same width), and a span alone in its row
+  covering the whole table, with no row overlapping another; it fails when the
+  row path is reverted. The reader's own table fixture
+  (`TestBrowserHeadlessTableSpanPaddingAndBorders`) passes again. No per-cell
+  work was added: the fix is one condition, so a 1 GB handheld pays nothing.
+
+- **RetroArch could not be installed on a Smart Pro whose card had none**
+  (JH-X5T7PW, 2026-11-24: "cant install retroarch" — a TrimUI Smart Pro with
+  no RetroArch on the card, where fetching the Game Boy cores ended in
+  "RetroArch cores folder not found"). JukaHub takes TrimUI's own RetroArch
+  from the model's SD base packages on GitHub, but it read only zip packages,
+  and every one of the Smart Pro's is a 7z archive: a Smart Pro could only
+  take the Brick's November 2024 build, the one zip in the A133P family, and
+  when that failed — the report's log began after the try, so why is not
+  known — nothing else was tried; the cores fetched for a game (Get more
+  cores, the "no emulator yet" card) never asked for RetroArch at all. 7z
+  packages are now read too (`player/raget_7z.go`): the directory in a few
+  range requests, then one pass over the blocks that hold RetroArch's files,
+  decoded from their start (the files in between are read and dropped, never
+  written), each file checked against its CRC, unpacked into JukaHub's data
+  folder and moved into the card's `RetroArch` folder; `player/sevenzip.go`
+  reads a whole card's directory (bounds raised for these packages only) and
+  file times. A first install takes the handheld's own model's build first —
+  for a Smart Pro, TrimUI's Smart Pro package with its own `retroarch.cfg`,
+  cores and pad profiles — then the rest of the family's, and a package whose
+  folder cannot be unpacked hands over to the next one that has a whole
+  folder; the update pass leaves other models' 7z packages alone (unpacking
+  their binary costs most of the package), the pass waits while a game is on
+  screen (decoding keeps a core busy for minutes), and a 7z package whose
+  build did not start here or that cannot be decoded is passed over by later
+  starts for a week (`data/retroarch-get-refused.json`; a new build in it, or
+  JukaHub's glibc coming or going, tries it sooner). Get more cores on a card
+  without RetroArch now installs RetroArch first, as Install on the Emulators
+  page does, and the bug report's diagnostics carry an `RA install` line — what
+  JukaHub installed, this session's last try and why it failed, the
+  start-up's failed tries. `TestRetroArch7zPackage` (a 7z built byte by byte
+  and read back by libarchive) pins the reading, the pass over two blocks in
+  small range requests, the lean plan, a binary-only pass and the move. Not
+  compiled here; a block packed with a filter (BCJ, ARM64), PPMd or BZip2 is
+  still refused, with the 7z method named in the log and the diagnostics.
+
+- **Browser: a painted or indented block no longer takes its top inset twice**
+  (2026-11-24, from the rendering audit behind "keep improving web browser
+  until it is as good as WPE or Chrome"). When a block's own element paints a
+  box — a background, padding, a border — layout reserved that box's top inset
+  as the box opened *and* again as the block's leading margin. A page whose
+  first block was indented or painted therefore started two blank rows down
+  (a `<blockquote>` or a `padding-left` paragraph opened at y=72 instead of 0),
+  and every later card, alert or table cell was a row too tall: the reader's
+  own table fixture grew from 324 to 540 px. A block whose leading margin
+  already carries its own box's top padding now skips it once (`ownBoxOf`,
+  `syncBoxes` in `player/webpage.go`); an ancestor's box (a heading in a padded
+  section, a card's first paragraph) still reserves its inset, and the block
+  that opens a page keeps the padding it paints while its margin collapses out
+  of the page top. `TestWebPaintedBlockTakesItsTopInsetOnce` fails on the old
+  behaviour and passes now; `TestWebCSSCanMakeHeadingInline`, the layout suite
+  and the headless-render fixtures were re-run. The CSS property-coverage
+  fixture for `margin-block` also moved from 24px to 81px: 24px and the UA
+  paragraph margin both fit one row of the reader's grid, so the row grid
+  could not tell them apart and the property looked unrendered. One headless
+  table fixture (`TestBrowserHeadlessTableSpanPaddingAndBorders`, a trailing
+  `colspan` cell) fails identically before and after this change: it is the
+  table work another session has in flight, not this fix.
+
+- **"RetroArch cores folder not found" on cards without a cores folder**
+  (Juka, 2026-11-24: "People are getting RetroArch cores folder not found on
+  TrimUI Smart devices"). JukaHub only listed RetroArch cores folders that
+  already existed, so a card set up without TrimUI's SD package — formatted by
+  hand, a NextUI or JukaHub OS card, a card whose RetroArch JukaHub had not
+  installed yet — or a RetroArch whose `.retroarch/cores` was never made
+  refused every core install (the Emulators page, Get more cores, the PS2,
+  GameCube and J2ME set-ups) with those words, and Core builds, the
+  compatibility panel and About said the same. A core with nowhere to go now
+  goes into the folder its RetroArch loads from, made by the first install;
+  with no RetroArch at all that is TrimUI's `RetroArch/.retroarch/cores` on
+  the card JukaHub runs from (`retroArchCoresHome`, `player/compat.go`).
+  **Install** on the Emulators page puts TrimUI's RetroArch on such a card
+  first, as Windows gets a portable one, then the core; a core that came in
+  TrimUI's package is kept rather than swapped for the buildbot's, and a
+  RetroArch download that fails still leaves the core installed and says why
+  (`raGetForCoreInstall`, `player/raget_ui.go`). The panels now say
+  "RetroArch is not on this card" or "RetroArch has no cores yet". Static
+  checks only (RACORES-HW-1).
 
 - **JukaHub's threads no longer stay in the idle I/O class after a
   heavy-game boost** (found 2026-11-23 while building Faster game starts). A

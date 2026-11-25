@@ -2789,6 +2789,11 @@ func DiagnosticsText(config *Config) string {
 			line = fmt.Sprintf("not found (%d places searched, then the card)", len(loc.Looked))
 		}
 		sb.WriteString("RetroArch    : " + line + "\n")
+		// And JukaHub's install of one (raget_ui.go): JH-X5T7PW's log began
+		// after the try had failed, and nothing said why.
+		if got := raGetDiagnostics(); got != "" {
+			sb.WriteString("RA install   : " + got + "\n")
+		}
 	}
 	if snap := configHealth.Snapshot(); snap != nil {
 		loadErrs, _ := snap["load_errors"].(int)

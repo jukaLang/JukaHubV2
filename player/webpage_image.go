@@ -105,6 +105,9 @@ type webImagePos struct {
 	// card's surface and a containing block reach around it
 	// (webpage_layers.go). Shared with the block; read only.
 	Boxes []int
+	// Lifted marks a picture a lifted layer draws instead of the flow
+	// (webLiftPositioned).
+	Lifted bool
 }
 
 // webSrcsetTargetWidth is the design-pixel width a responsive image should

@@ -47,6 +47,21 @@ gap, not a silent promise.
 - `::marker` text and paint style (`color`, `font-size`, inherited typography).
   The reader has no marker background/border layer.
 
+### Cascade
+
+- Cascade layers: `@layer` blocks, `@layer a, b;` order statements, nested
+  and anonymous layers, and `@import` with `layer` or `layer(name)`. Earlier
+  layers lose to later ones and every layer loses to unlayered rules; for
+  `!important` declarations the order is reversed, as in CSS (Tailwind 4 and
+  many resets ship in layers).
+- Margin and padding shorthands, the logical pairs (`padding-inline`,
+  `margin-block`) and single sides (`padding-top`, `padding-inline-start`)
+  settle side by side: the declaration that comes last in the cascade wins
+  that side, so Tailwind's `p-4 pt-2` pads the top by 8px, not 24px.
+- The UA sheet's side margins of `blockquote`, `figure` and `dd` (40px) give
+  way to the page's own `margin` on that side, so a reset's
+  `blockquote, figure { margin: 0 }` sets them flush.
+
 ### Box and layout
 
 - `display: block`, `flex`, `grid` (including explicit
@@ -88,13 +103,32 @@ gap, not a silent promise.
   definite height, `justify-content` distributes the spare rows, and
   `align-items` `center`/`end` put an item without a width of its own in the
   middle or at the end of the column at its content's width.
-- Width (lengths and percentages), `height`/`min-height`/`max-height` in
+- Width (lengths, percentages, and `fit-content`, `max-content`,
+  `min-content` and `stretch` with their vendor spellings: a fitted box is as
+  wide as its longest line or widest word, its padding included, and
+  `margin: 0 auto` centres it), `height`/`min-height`/`max-height` in
   pixels and percentages against a definite parent height, `min-width`/`max-width`,
   `box-sizing: content-box/border-box` (padding is included in border-box
   width and height), aspect ratio on
   replaced media, margins, paddings, logical margin/padding variants, auto
   margins on width-constrained blocks and on flex/grid items (main and cross
-  axes), text indent, border radius.
+  axes), text indent, border radius. A margin or padding takes at most eight
+  text rows (about 180 CSS px at the reader's size).
+- The children of a flex or grid container are blockified, as in CSS: a link,
+  a span or a label straight inside a flex row is an item with its own
+  padding, background, border and radius (the buttons, pills and badges of
+  most toolbars).
+- Inline boxes (`webpage_inlinebox.go`): an inline element's horizontal
+  margin, border and padding take their room before its first word and after
+  its last, its background chip covers its padding and border on every side
+  with its `border-radius`, and its border is drawn (a box broken over two
+  lines has no side edge at the break). Elements and `::before`/`::after`
+  content inside the box share its chip. An `inline-block` / `inline-flex`
+  inline element (and every `<button>` and submit input, which an unstyled
+  page draws with the browser's padding) is atomic: the line may break at its
+  edges without a space and the box moves to the next line whole; once its
+  vertical padding and border outgrow the row's spacing the line grows to
+  hold them, while a plain inline box's padding overlaps the lines around it.
 - Viewport units `vw`, `vh`, `vmin`, `vmax`, their logical aliases `vi`/`vb`,
   and the modern `sv*`, `dv*` and `lv*` forms (`svh`, `dvh`, `lvh`, ...). They
   resolve against the reader's screen, including inside `calc()`, `min()`,
@@ -118,9 +152,15 @@ gap, not a silent promise.
   absolute box held by both its `top` and `bottom` (`inset: 0`) with no height
   of its own is as tall as the room between them: its surface fills it, and
   its own flex or grid container gets that height, so an overlay's caption
-  sits at the foot of its photo and a play button in its middle. A
-  positioned container whose children all left the flow keeps a line and its
-  height of its own.
+  sits at the foot of its photo and a play button in its middle; a box that
+  is only a picture (`absolute inset-0` around an `h-full w-full
+  object-cover` image) fills that room with it, cropped. A positioned
+  container whose children all left the flow keeps a line and its height of
+  its own. An absolutely or fixed positioned inline element (a `<span>`
+  badge, ribbon or label) leaves its line too and is placed at its insets,
+  while the text around it stays one line; a link, a label, a form control,
+  a visually hidden label and one whose containing block is a positioned
+  inline element keep their place in the line.
 - `position: fixed` boxes are layers pinned to the screen — at their top or
   bottom inset, centred by `margin: auto`, or at their static place — and stay
   there while the page scrolls under them; their links and fields are tapped
@@ -131,9 +171,17 @@ gap, not a silent promise.
   reaches behind the photo at its top), floats, the flow's pictures and text,
   then positioned layers and pinned sticky bars by z-index. A z-index orders a
   layer inside the stacking context of a positioned ancestor with a z-index, a
-  fixed or sticky one, or a translucent or translated one, so a badge's
-  `z-index: 9999` inside a `z-index: 1` card stays under a `z-index: 2`
-  header. An `overflow: hidden` containing block clips its layers. A layer
+  fixed or sticky one, a translucent or transformed one, one with
+  `isolation: isolate`, a `filter` or `backdrop-filter`, a `mix-blend-mode`,
+  `will-change`, `contain: paint`/`layout`, `perspective`, a `clip-path` or a
+  mask, or a flex or grid item with a z-index, so a badge's `z-index: 9999`
+  inside a `z-index: 1` card stays under a `z-index: 2` header, and a
+  `-z-10` picture in an `isolate` hero stays over the hero's background. A
+  relatively positioned element of the flow is painted, with everything in
+  it, in that order with the layers wherever it overlaps one, so a hero's
+  `relative z-10` heading is over its `absolute inset-0` picture. An
+  `overflow: hidden` containing block, or a box around it, clips its layers
+  (a carousel's frame clips the captions of the slides in its track). A layer
   wholly outside the page or its clip (a skip link parked above the page, an
   off-canvas drawer, a carousel's next slide), a fully transparent positioned
   block and a screen-reader-only one (the 1×1 px `sr-only`/`visually-hidden`
@@ -233,7 +281,10 @@ gap, not a silent promise.
   1.5:1 — the page assumed a background the reader could not draw); text over
   a picture (a covering background image, or a positioned overlay on an
   `<img>`) and text with a contrasting shadow are never changed.
-- Borders and outlines without a colour are drawn in `currentColor`.
+- Borders and outlines without a colour are drawn in `currentColor`; a
+  transparent one (Bootstrap's `.btn` and nav tabs, Tailwind's
+  `outline-none`) draws nothing, and a `border-color` later in the cascade
+  replaces the colour of a `border` shorthand (`.btn-outline-primary`).
   `text-shadow` inherits; `text-shadow: none` ends an inherited one.
 - Font size (up to twice the body size), weight (a real bold face: Inter
   SemiBold, or an emboldened copy of a picked UI face; numeric weights from
@@ -353,7 +404,8 @@ gap, not a silent promise.
 - The browser's own defaults: `h1`–`h6` are 2, 1.5, 1.17, 1, 0.83 and 0.67
   times their parent's size with Chrome's em margins; `p`, `pre`,
   `blockquote` and `figure` have one em above and below; `blockquote` and
-  `figure` are indented 40px on both sides (no rule), `dd` 40px on the left;
+  `figure` are indented 40px on both sides (no rule), `dd` 40px on the left,
+  unless the page sets that margin itself;
   `code`, `kbd`, `samp`, `tt` and `pre` are 13/16 of the surrounding size and
   monospace, with no background of their own; `mark` is yellow with black text;
   `small` and `sup`/`sub` are a step smaller, `big` a step larger; `th` is
@@ -404,15 +456,15 @@ mistaken for working CSS.
 | Construct | Current behaviour |
 | --- | --- |
 | `font-family` | Three faces only (the UI face, a monospace one and a serif one); web fonts are not downloaded. |
-| `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They stay inline text with a background chip; their own width, height and vertical padding are not boxes. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
+| `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They are inline boxes kept whole on their line, with their padding, border, radius and background; their own `width` and `height` are not applied, and a label wider than the whole line breaks like text instead of wrapping inside its box. Nested boxes with different backgrounds that end together paint the outer box's right padding in the inner one's colour. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
 | aspect-ratio on a wrapper with no direct block | Accepted for ordinary blocks; a wrapper that only colours its children reserves its ratio through its box, not through a text row. |
-| `position: sticky` | Kept in normal flow and pinned as a copy of the element's whole subtree (a header's logo, menu and buttons) once it scrolls past its inset, until its containing block (a table for a header cell) scrolls away; `bottom` alone sticks to the bottom edge. A bar taller than the view, or taller than two fifths of it across most of the width, scrolls; its floats and positioned children are not in the pinned copy, and nested scroll containers are not modelled. |
+| `position: sticky` | Kept in normal flow and pinned as a copy of the element's whole subtree (a header's logo, menu and buttons, its floats and positioned children) once it scrolls past its inset, until its containing block (a table for a header cell) scrolls away; `bottom` alone sticks to the bottom edge. A bar taller than the view, or taller than two fifths of it across most of the width, scrolls; links in the pinned copy are reached at the bar's place in the page, and nested scroll containers are not modelled. |
 | `position: fixed` too big to pin, and boxes covering the screen | A fixed box taller than the view, or most of it across most of the width (a drawer, a consent panel), scrolls with the page (one on the bottom edge after its last line). A fixed box, or an absolute one with no positioned ancestor (a positioned `<html>`/`<body>` counts as none), that covers the whole screen (`inset: 0`, or most of the viewport both ways: a modal backdrop, a cookie wall) keeps its child blocks in the flow, since the reader cannot press its close button; only its own text is a layer. A fixed box inside a positioned layer stays in that layer's flow. |
-| Stacking contexts from `isolation`, `filter`, `will-change`, `contain`, `mix-blend-mode` | Not recognised; z-index only nests inside positioned, fixed, sticky, translucent and translated ancestors. Positioned boxes in the flow paint with the flow: their z-index orders surfaces, not text. |
+| Effects of `isolation`, `filter`, `backdrop-filter`, `will-change`, `contain`, `mix-blend-mode`, `perspective`, `clip-path`, masks | They make stacking contexts (z-index nests inside them) but are not drawn: no blur, blend, clip shape or mask. A relatively positioned element is painted over a layer only where it overlaps one; its floats and videos stay with the flow. |
 | `box-shadow` inset; more than one shadow layer; `text-shadow` blur | Only the first visible outer box-shadow layer is painted; a text shadow's blur only lowers its alpha. |
-| `transform` (except `translate`), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; rotate, scale and skew are not drawn, so content stays upright. A translated box in the flow is painted moved and keeps its place in the flow. |
+| `transform` (except `translate`), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; rotate, scale and skew are not drawn, so content stays upright (a transformed box is still a stacking context). A translated box in the flow is painted moved and keeps its place in the flow. |
 | SVG `<text>`, `<image>`, filters, masks, clip paths, patterns, markers, dashes and `<foreignObject>`; external `<use href="sprite.svg#icon">` | Skipped; the rest of the drawing renders. |
 | non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
@@ -425,7 +477,7 @@ mistaken for working CSS.
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
 | `@charset`, `@namespace` | Not applied. |
-| `@font-face`, `@keyframes`, `@page`, `@layer` ordering | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated. |
+| `@font-face`, `@keyframes`, `@page` | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
 
 ## Draw-path fixture coverage
 

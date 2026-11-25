@@ -234,11 +234,12 @@ func brwVideoTitle(text string) string {
 // brwOpenYouTubeLink plays target in Media when it is a YouTube video link and
 // reports whether it did; title is the link's text, "" when there is none.
 // The callers are every way the browser follows a link, so it is the one
-// place that decides.
+// place that decides — also for a link straight to a video file, a song or a
+// live playlist, which plays in the player (brwOpenMediaLink, brw_stream.go).
 func brwOpenYouTubeLink(config *Config, target, title string) bool {
 	link, ok := brwYouTubeVideo(target)
 	if !ok || config == nil {
-		return false
+		return brwOpenMediaLink(config, target)
 	}
 	brwPlayFromBrowser(config, link, title)
 	return true
@@ -373,10 +374,12 @@ func brwHistoryCurrent() string {
 // or pasted, a bookmark, a link from another screen — and reports whether it
 // was one. The address bar goes back to the page on screen: the video's URL
 // left in it would make Reload replay the video and Save keep it as a page.
+// An address of a video file, a song or a playlist plays the same way
+// (brwOpenMediaAddress, brw_stream.go).
 func brwOpenAddress(config *Config, variable, address string) bool {
 	link, ok := brwYouTubeVideo(address)
 	if !ok || config == nil {
-		return false
+		return brwOpenMediaAddress(config, variable, address)
 	}
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}

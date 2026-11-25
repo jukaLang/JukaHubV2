@@ -235,6 +235,16 @@ func installBarProgressHook() func(phase, detail string) {
 	}
 }
 
+// installBarRelabel retitles the card on screen: a run that found more to do
+// than it began with (RetroArch before a core, raget_ui.go) says so.
+func installBarRelabel(label string) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.visible {
+		installBar.label = label
+	}
+}
+
 // installBarDetail replaces the detail line (used for errors and notes).
 func installBarDetail(msg string) {
 	installBar.mu.Lock()

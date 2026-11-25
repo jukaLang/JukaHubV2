@@ -90,15 +90,27 @@ that package JukaHub installs it (`player/raget.go`):
 - **Which build.** TrimUI's own, from its SD base packages on GitHub:
   `trimui/assets_smartpro`, `assets_brick` and `assets_brickpro` for the A133P
   handhelds (Smart Pro, Brick, Hammer, Brick Pro: one chip, GPU and SDK), and
-  `assets_smartpro_s` for the Smart Pro S. The newest build wins, the
-  handheld's own model's within two days. Only each package's directory and
-  the files used are downloaded (HTTP range requests). A `.7z` package — the
-  Smart Pro's own — cannot be read that way, so a Smart Pro takes the Brick's
-  or the Brick Pro's build.
-- **Is it working here.** Up to three builds, newest first, are downloaded
-  alone and checked before anything is written: a 64-bit ARM program whose
-  libraries the firmware's loader and this runtime's loader both list and bind
-  (as `ldd -r` does), every one found and every symbol version defined. A build
+  `assets_smartpro_s` for the Smart Pro S. A first install takes the
+  handheld's own model's newest build first (TrimUI's build for exactly this
+  screen, pad and firmware, with its folder in the same package), then the
+  rest of the family's, newest first. Only each package's directory and the
+  files used are downloaded (HTTP range requests). Most of TrimUI's packages —
+  all of the Smart Pro's, and by its set-up guides the Brick Pro's — are
+  `.7z` archives, read with JukaHub's own 7z reader (`player/raget_7z.go`):
+  the directory in a few range requests, then one pass over the solid blocks
+  that hold RetroArch's files, decoded from their start, so most of the
+  package may be downloaded (nothing but RetroArch's files is written).
+  Blocks packed with a filter (BCJ, ARM64), PPMd or BZip2 are not decoded:
+  that package is skipped with the method in the log, and the next build is
+  tried. The pass waits while a game is on screen, and a `.7z` package whose
+  build did not start here, or that cannot be decoded, is passed over by later
+  starts for a week (`data/retroarch-get-refused.json`). Until 2026-11-24 a
+  `.7z` package was skipped outright, so a Smart Pro could only take the
+  Brick's November 2024 build.
+- **Is it working here.** Up to three builds are downloaded and checked
+  before anything is written: a 64-bit ARM program whose libraries the
+  firmware's loader and this runtime's loader both list and bind (as
+  `ldd -r` does), every one found and every symbol version defined. A build
   is taken when it starts on the firmware's glibc, or on this runtime where
   JukaHub can start it so (the setting allows it, a game can have a mount
   namespace).
@@ -114,13 +126,26 @@ that package JukaHub installs it (`player/raget.go`):
   launch JukaHub makes of that RetroArch — a game, netplay, its own menu —
   runs on glibc 2.39, as with **JukaHub's glibc 2.39**, once the probe above
   passed; when it refuses, RetroArch starts on the firmware's glibc.
-- **When.** About a minute and a half after start, online and between games,
+- **When.** About a minute after start, online and between games,
   unless Settings → Games & emulators → **Emulator updates** is Off (a note
   then says Emulators → RetroArch installs it); **A** on the Emulators page's
-  RetroArch tile; or a game whose launch script found no RetroArch. The
+  RetroArch tile; **Install** on a system's tile or **Get more cores** (also
+  from a game's "no emulator yet" card), which put RetroArch on first and the
+  cores after it (a core that came in TrimUI's package is kept, not swapped for
+  the buildbot's); or a game whose launch script found no RetroArch. The
   Emulator updates pass keeps it on TrimUI's newest build: the binary only,
-  the one it replaces kept as `ra64.trimui.bak`. A RetroArch that came with the
-  card, or one replaced by hand, is never touched.
+  the one it replaces kept as `ra64.trimui.bak`, and never from another
+  model's `.7z` package (unpacking its binary costs most of that package). A
+  RetroArch that came with the card, or one replaced by hand, is never
+  touched. The bug report's diagnostics carry an `RA install` line: what
+  JukaHub installed, and this session's last try and why it failed.
+- **Cores before RetroArch.** Until RetroArch is there, a core installed any
+  other way (Get more cores, the PS2, GameCube or J2ME set-up), or after a
+  RetroArch download that failed, goes into `RetroArch/.retroarch/cores` on
+  the card JukaHub runs from — the folder TrimUI's RetroArch loads from, made
+  with the first core. A RetroArch whose cores folder was never made gets it
+  the same way. These used to stop at "RetroArch cores folder not found"
+  (`retroArchCoresHome` in `player/compat.go`).
 
 ## What is installed
 

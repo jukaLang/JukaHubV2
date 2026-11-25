@@ -19,7 +19,9 @@ a sheet opens at the right, with the page still in view beside it.
 
 Across its top are **Back**, **Forward**, **Reload** and **Home**. Under them, in
 this order: **Go to address**, **Search the web** (with the engine's name),
-**Links on this page** (with their count), **Find on this page**, **Zoom**,
+**Links on this page** (with their count), **Play video on this page** (see
+[Videos and yt-dlp playback](#videos-and-yt-dlp-playback)), **Find on this
+page**, **Zoom**,
 **Link mode**, **Save this page**, **Saved pages**, **Open on your phone**
 (**Open in web browser** on a PC; see
 [Taking a page elsewhere](#taking-a-page-elsewhere)), **Site info**, **Ad &
@@ -131,6 +133,14 @@ they were, and Select still opens the menu. The choice is the
   links and fields inside overlays, pinned bars and floated boxes are
   reachable with the D-pad and by tap (and, except on pinned bars, by
   find-in-page).
+* Layer the page like a browser in the cases a modern page leans on: a hero's
+  heading and buttons (`relative z-10`) stay over its `absolute inset-0`
+  picture, which fills the hero instead of keeping its own height; a "Sale"
+  or duration badge written as an absolutely positioned `<span>` sits on the
+  card's corner instead of reading as a word before it; a `-z-10` picture in
+  an `isolate` section shows over the section's colour; a pinned sticky
+  header keeps its absolutely positioned logo, badges and floated parts; and
+  a carousel's frame clips the captions of the slides inside its track.
 * Draw the page's colours as written: every CSS colour form (the exact named
   colours, `hsl()`, `oklch()` as Tailwind 4 writes its palette, `color-mix()`,
   `light-dark()`, relative colours), black text on white and blue links when a
@@ -146,6 +156,14 @@ they were, and Select still opens the menu. The choice is the
   with its heading and button in the middle; an overlay's caption at the foot of
   its photo (`inset: 0`); and `transform: translate()` and relative offsets
   moving a box together with its background.
+* Size boxes as the page's CSS says: a padded button, badge, tag or inline
+  `<code>` takes the room its padding and border take, with its background,
+  rounded corners and border drawn round the text, and moves to the next line
+  whole; links and labels straight inside a flex row are boxes of their own;
+  a `width: fit-content` box is as wide as its text; and the cascade decides
+  as a browser's does: `@layer` order (Tailwind 4), the later of
+  `padding: 1rem` and `padding-top: 0`, and a reset's `margin: 0` on quotes
+  and figures.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows and
   simple CSS grids (cards and icon+label pairs side by side), wrapped into
   further rows when needed, and positioned layers painted in their stacking
@@ -862,6 +880,31 @@ Activating the card (tap or A) never navigates: the URL is handed to
 sends everything else (YouTube, Twitter/X, TikTok, Instagram, Reddit, Vimeo, ...)
 through yt-dlp into the same player. An element with no resolvable source draws
 nothing at all, and a structurally non-video iframe is skipped as before.
+
+A link straight to a video, a song or a live playlist — an address ending in
+`.mp4`, `.m4v`, `.webm`, `.mkv`, `.mov`, `.avi`, `.flv`, `.wmv`, `.mpg`,
+`.mpeg`, `.m3u8`, `.mp3`, `.m4a`, `.aac`, `.ogg`, `.oga`, `.opus`, `.flac` or
+`.wav` — plays instead of loading: a song in the music player, the rest in the
+video player, and leaving the player comes back to the page where you were. So
+does such an address typed into **Go to address**, a saved page, or a link
+another screen opens in the Browser. A code host's page about a file
+(`…/blob/main/clip.mp4`) still opens as a page, and so does `.ts`, which on the
+web is more often TypeScript than a video.
+
+An address that shows what it is only when the server answers — a video or
+audio type, an HLS or DASH playlist, a playlist sent as plain text — gets the
+**Can't show this file** card with **Play** first, then **Download file** and
+**Try again**.
+
+**Select → Play video on this page** (the row counts the page's play cards)
+plays the page's first play card; on a page whose player is built by its
+scripts, where the reader finds no `<video>`, it hands the page's address to
+yt-dlp, whose site extractors and generic scan find the video most sites
+serve. What plays is what the site serves any browser: services that protect
+their streams with DRM (Netflix, Disney+, Prime Video) cannot play on these
+handhelds, and no torrent or scraper source is wired in (see
+[Movies & TV](MOVIES_TV.md#streaming-from-the-browser)). The code is
+`player/brw_stream.go`.
 
 ## Forms
 

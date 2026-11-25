@@ -383,9 +383,10 @@ func (r emuInstallReport) summary() string {
 // startEmulatorInstall installs or updates what one tile needs: on Windows the
 // emulator itself when the tile is (or needs) a standalone emulator, otherwise
 // the libretro core that provides the tile's system — after a portable
-// RetroArch when Windows has none yet. It runs off the event thread and
-// reports through the install bar and a toast, the same way every other
-// download action does.
+// RetroArch when Windows has none yet, and after TrimUI's RetroArch when the
+// handheld's card has none (raGetForCoreInstall). It runs off the event
+// thread and reports through the install bar and a toast, the same way every
+// other download action does.
 func startEmulatorInstall(e emuEntry) {
 	if dolphinTile(e) {
 		// Roms/GC, Roms/Wii and the Dolphin core install or update the Dolphin
@@ -458,11 +459,16 @@ func startEmulatorInstall(e emuEntry) {
 	go func() {
 		defer endPatchOp()
 		defer emuSetInstalling("")
+		// A handheld whose card has no RetroArch gets TrimUI's first, the way
+		// Windows gets a portable one: a core alone has nothing to load it
+		// (raGetForCoreInstall). Asked here, off the main thread: the search
+		// behind the answer may walk the card.
+		cardRetroArch := !IsWindows() && raGetMissingNow()
 		// The timeout derives from the card's run token, so a cancel from the
 		// card or the activity strip stops the transfer mid-flight.
 		// Large published cores need more time on handheld Wi-Fi.
 		timeout := 30 * time.Minute
-		if needRetroArch {
+		if needRetroArch || cardRetroArch {
 			timeout = emuWinInstallTimeout
 		}
 		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
@@ -479,19 +485,59 @@ func startEmulatorInstall(e emuEntry) {
 			invalidateEmulatorCache()
 			installBarResetProgress()
 		}
+		// raGot: this press put RetroArch on the card. raWhy: why it could
+		// not — the core is still installed where that RetroArch will load it
+		// (retroArchCoresHome), and the RetroArch tile tries again.
+		raGot, raWhy := false, ""
+		if cardRetroArch {
+			got, err := raGetForCoreInstall(ctx, core)
+			if ctx.Err() != nil {
+				installBarFail(installCardDetail(emuFriendlyError(ctx.Err())))
+				ShowToast("RetroArch: "+emuFriendlyError(ctx.Err()), ToastKindError)
+				return
+			}
+			if err != nil {
+				raWhy = "RetroArch could not be installed (" + firstLine(err.Error()) + "): Emulators → RetroArch tries again"
+			}
+			raGot = got
+			installBarDetail("")
+			installBarResetProgress()
+		}
+		// raSaid puts a RetroArch this press installed in front of a toast
+		// about the core.
+		raSaid := func(msg string) string {
+			if raGot {
+				return "RetroArch is installed · " + msg
+			}
+			return msg
+		}
 
 		index, err := fetchCoreIndex(ctx, client)
 		if err != nil {
 			installBarFail(installCardDetail(emuFriendlyError(err)))
-			ShowToast("Core index: "+emuFriendlyError(err), ToastKindError)
+			ShowToast(raSaid("Core index: "+emuFriendlyError(err)), ToastKindError)
 			return
 		}
 		plan := planEmuInstall(e, scanCoreInventory(), index)
+		if raGot && (plan.Action == emuInstallCurrent || plan.Action == emuInstallUpdate) {
+			// The core came with RetroArch (TrimUI's package carries its
+			// cores): the build TrimUI ships for this handheld stays, and the
+			// tile offers the buildbot's when there is a newer one.
+			installBarPhase(installPhaseDone)
+			installBarDone()
+			invalidateEmulatorCache()
+			invalidateCompatCache()
+			coreBuildsRequestReload()
+			trophyEvent(tkEmuInstall)
+			PlaySuccessSound()
+			ShowToast("RetroArch is installed, with TrimUI's "+coreConfigDisplayName(plan.Core)+" core", ToastKindSuccess)
+			return
+		}
 		switch plan.Action {
 		case emuInstallNone:
 			installBarPhase(installPhaseDone)
 			installBarDone()
-			ShowToast(plan.Reason, ToastKindWarning)
+			ShowToast(raSaid(plan.Reason), ToastKindWarning)
 			return
 		case emuInstallCurrent:
 			installBarPhase(installPhaseDone)
@@ -523,7 +569,7 @@ func startEmulatorInstall(e emuEntry) {
 					msg += " · the installed build is kept"
 				}
 			}
-			ShowToast(msg, kind)
+			ShowToast(raSaid(msg), kind)
 			return
 		}
 		installBarPhase(installPhaseDone)
@@ -538,7 +584,7 @@ func startEmulatorInstall(e emuEntry) {
 		// that was downloaded: an unwritable cores folder is reported here
 		// instead of as a game that will not start.
 		if err := emuConfirmInstalledCore(plan.Core, build); err != nil {
-			ShowToast(err.Error(), ToastKindError)
+			ShowToast(raSaid(err.Error()), ToastKindError)
 			return
 		}
 		trophyEvent(tkEmuInstall) // one per press, also when a RetroArch came first
@@ -550,7 +596,7 @@ func startEmulatorInstall(e emuEntry) {
 		}
 		if plan.Action == emuInstallNew {
 			note := coreConfigDisplayName(plan.Core) + " core installed · " + version
-			if needRetroArch {
+			if needRetroArch || raGot {
 				note = "RetroArch and the " + note
 			}
 			if system, _ := emuCoreInfo(plan.Core); system != "" && !IsWindows() {
@@ -560,7 +606,12 @@ func startEmulatorInstall(e emuEntry) {
 				// so the toast names the place that always lists it.
 				note += " · " + system + " games can use it (Game options → Emulator)"
 			}
-			ShowToast(note, ToastKindSuccess)
+			kind := ToastKindSuccess
+			if raWhy != "" {
+				note += " · " + raWhy
+				kind = ToastKindWarning
+			}
+			ShowToast(note, kind)
 			return
 		}
 		note := coreConfigDisplayName(plan.Core) + " core updated · " + version
@@ -572,7 +623,12 @@ func startEmulatorInstall(e emuEntry) {
 				note += " · it draws with the GPU: if its next game does not start, the previous build comes back by itself"
 			}
 		}
-		ShowToast(note, ToastKindSuccess)
+		kind := ToastKindSuccess
+		if raWhy != "" {
+			note += " · " + raWhy
+			kind = ToastKindWarning
+		}
+		ShowToast(note, kind)
 	}()
 }
 

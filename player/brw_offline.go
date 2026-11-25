@@ -68,7 +68,10 @@ type brwFailure struct {
 	Host   string
 	Title  string
 	Detail string
-	at     time.Time
+	// Media is the type of an address that answered with a video, a song or
+	// a playlist: its card plays it (brw_stream.go). "" for every other card.
+	Media string
+	at    time.Time
 }
 
 // text is the page text a failure leaves behind: the "Could not load" line the
@@ -305,6 +308,8 @@ const (
 	brwActWallAlways
 	brwActWallEngines
 	brwActWallBrowser
+	// A video, a song or a live stream plays in the player (brw_stream.go).
+	brwActStream
 )
 
 type brwCardButton struct {
@@ -330,6 +335,11 @@ var (
 		{action: brwActDownload, label: "Download file", icon: "download"},
 		{action: brwActRetry, label: "Try again", icon: "refresh"},
 	}
+	brwMediaButtons = []brwCardButton{
+		{action: brwActStream, label: "Play", icon: "play"},
+		{action: brwActDownload, label: "Download file", icon: "download"},
+		{action: brwActRetry, label: "Try again", icon: "refresh"},
+	}
 )
 
 func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
@@ -338,6 +348,8 @@ func brwButtonsFor(f brwFailure, offline bool) []brwCardButton {
 		return brwOfflineButtons
 	case f.Kind == brwFailNotFound:
 		return brwNotFoundButtons
+	case f.Kind == brwFailContent && f.Media != "":
+		return brwMediaButtons
 	case f.Kind == brwFailContent:
 		return brwContentButtons
 	case f.Kind == brwFailWall:
@@ -428,6 +440,8 @@ func brwCardActivate(config *Config, elem Element, f brwFailure, i int) {
 		loadTextBrowserURL(config, elem, textBrowserSearchURL(f.Host))
 	case brwActDownload:
 		browserStartDownload(f.URL, "")
+	case brwActStream:
+		brwPlayStreamCard(config, f)
 	case brwActWallSearch, brwActWallAlways, brwActWallEngines, brwActWallBrowser:
 		brwWallActivate(config, elem, f, buttons[i].action)
 	}
@@ -651,6 +665,8 @@ func brwDrawCard(r *sdl.Renderer, config *Config, page sdl.Rect, f brwFailure) {
 		title, detail, icon = brwOfflineTitle, brwOfflineDetail, "wifi-off"
 	case f.Kind == brwFailNotFound:
 		icon = "search"
+	case f.Kind == brwFailContent && f.Media != "":
+		icon = "video"
 	case f.Kind == brwFailContent:
 		icon = "download"
 	case f.Kind == brwFailTLS:

@@ -49,6 +49,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"github.com/ulikunitz/xz/lzma"
@@ -81,6 +82,20 @@ const (
 	sevenZipMaxNesting = 4
 )
 
+// sevenZipLimits bounds what one archive's directory may declare and what a
+// read of it may need: the files (and folders, pack streams, sub-streams),
+// the directory's size packed and decoded, and the decoder's dictionary. A
+// game's .7z is read with sevenZipDefaultLimits; TrimUI's SD packages, a
+// whole card in one archive, with larger ones (raget_7z.go).
+type sevenZipLimits struct {
+	Files  int
+	Header uint64
+	Dict   uint64
+}
+
+// sevenZipDefaultLimits are the bounds at the top of the file.
+var sevenZipDefaultLimits = sevenZipLimits{Files: sevenZipMaxFiles, Header: sevenZipMaxHeader, Dict: sevenZipMaxDict}
+
 // The directory's property ids (7zFormat.txt).
 const (
 	sevenZipIDEnd             = 0x00
@@ -100,6 +115,7 @@ const (
 	sevenZipIDEmptyStream     = 0x0E
 	sevenZipIDEmptyFile       = 0x0F
 	sevenZipIDName            = 0x11
+	sevenZipIDMTime           = 0x14
 	sevenZipIDEncodedHeader   = 0x17
 )
 
@@ -125,6 +141,8 @@ type sevenZipEntry struct {
 	CRC    uint32
 	HasCRC bool
 	Dir    bool
+	// MTime is its time (kMTime), zero when the archive keeps none.
+	MTime time.Time
 	// folder is the folder holding its data (-1: an empty file or a folder);
 	// offset is where it starts in that folder's decoded stream.
 	folder int
@@ -173,6 +191,17 @@ type sevenZipBuf struct {
 	b   []byte
 	p   int
 	err error
+	// maxFiles bounds the files, folders and streams the directory may
+	// declare (sevenZipMaxFiles when 0).
+	maxFiles int
+}
+
+// files is the most files, folders or streams the directory may declare.
+func (b *sevenZipBuf) files() int {
+	if b.maxFiles > 0 {
+		return b.maxFiles
+	}
+	return sevenZipMaxFiles
 }
 
 func (b *sevenZipBuf) fail() {
@@ -311,6 +340,11 @@ func sevenZipOpenFile(path string) (*sevenZipArchive, error) {
 
 // sevenZipOpen reads the directory of an archive of size bytes.
 func sevenZipOpen(r io.ReaderAt, size int64) (*sevenZipArchive, error) {
+	return sevenZipOpenWith(r, size, sevenZipDefaultLimits)
+}
+
+// sevenZipOpenWith is sevenZipOpen with lim's bounds.
+func sevenZipOpenWith(r io.ReaderAt, size int64, lim sevenZipLimits) (*sevenZipArchive, error) {
 	if size < sevenZipSigLen {
 		return nil, errSevenZipFormat
 	}
@@ -332,7 +366,7 @@ func sevenZipOpen(r io.ReaderAt, size int64) (*sevenZipArchive, error) {
 		return a, nil // an empty archive
 	}
 	room := uint64(size - sevenZipSigLen)
-	if nextSize > sevenZipMaxHeader || nextOff > room || nextSize > room-nextOff {
+	if nextSize > lim.Header || nextOff > room || nextSize > room-nextOff {
 		return nil, errSevenZipFormat
 	}
 	hdr := make([]byte, nextSize)
@@ -346,7 +380,7 @@ func sevenZipOpen(r io.ReaderAt, size int64) (*sevenZipArchive, error) {
 		if depth > sevenZipMaxNesting {
 			return nil, errSevenZipFormat
 		}
-		b := &sevenZipBuf{b: hdr}
+		b := &sevenZipBuf{b: hdr, maxFiles: lim.Files}
 		switch b.number() {
 		case sevenZipIDHeader:
 			if err := a.parseHeader(b); err != nil {
@@ -363,10 +397,10 @@ func sevenZipOpen(r io.ReaderAt, size int64) (*sevenZipArchive, error) {
 			}
 			// The directory is the first folder's whole output.
 			f := st.folders[0]
-			if f.unpackSize == 0 || f.unpackSize > sevenZipMaxHeader {
+			if f.unpackSize == 0 || f.unpackSize > lim.Header {
 				return nil, errSevenZipFormat
 			}
-			rd, err := st.folderReader(r, size, 0, f.unpackSize)
+			rd, err := st.folderReaderDict(r, size, 0, f.unpackSize, lim.Dict)
 			if err != nil {
 				return nil, err
 			}
@@ -463,7 +497,7 @@ func (a *sevenZipArchive) parseStreams(b *sevenZipBuf) sevenZipStreams {
 // and are checked against the file.
 func (a *sevenZipArchive) parsePackInfo(b *sevenZipBuf, st *sevenZipStreams) {
 	pos := b.number()
-	n := b.count(sevenZipMaxFiles)
+	n := b.count(b.files())
 	b.waitFor(sevenZipIDSize)
 	if b.err != nil {
 		return
@@ -502,7 +536,7 @@ func (a *sevenZipArchive) parsePackInfo(b *sevenZipBuf, st *sevenZipStreams) {
 // parseSevenZipFolders reads the folders, their coders and unpack sizes.
 func parseSevenZipFolders(b *sevenZipBuf, st *sevenZipStreams) {
 	b.waitFor(sevenZipIDFolder)
-	n := b.count(sevenZipMaxFiles)
+	n := b.count(b.files())
 	if b.byte() != 0 {
 		// The folders kept in another stream: never written by 7-Zip.
 		b.err = errSevenZipUnsupported
@@ -616,9 +650,9 @@ func parseSevenZipSubStreams(b *sevenZipBuf, st *sevenZipStreams) {
 		if t == sevenZipIDNumUnpackStream {
 			total := 0
 			for i := range numUnpack {
-				numUnpack[i] = b.count(sevenZipMaxFiles)
+				numUnpack[i] = b.count(b.files())
 				total += numUnpack[i]
-				if total > sevenZipMaxFiles {
+				if total > b.files() {
 					b.fail()
 				}
 			}
@@ -712,9 +746,10 @@ func (st *sevenZipStreams) addSub(folder int, offset, size uint64, crc uint32, h
 
 // parseFiles reads the files: names and which have no data.
 func (a *sevenZipArchive) parseFiles(b *sevenZipBuf) {
-	n := b.count(sevenZipMaxFiles)
+	n := b.count(b.files())
 	var emptyStream, emptyFile []bool
 	var names []string
+	var mtimes []time.Time
 	for b.err == nil {
 		t := b.number()
 		if t == sevenZipIDEnd {
@@ -741,6 +776,10 @@ func (a *sevenZipArchive) parseFiles(b *sevenZipBuf) {
 				b.fail()
 				return
 			}
+		case sevenZipIDMTime:
+			// Times that do not fit are left out, not an error: nothing
+			// depends on them.
+			mtimes = sevenZipTimes(data, n)
 		}
 	}
 	if b.err != nil {
@@ -753,6 +792,9 @@ func (a *sevenZipArchive) parseFiles(b *sevenZipBuf) {
 		e := sevenZipEntry{folder: -1}
 		if i < len(names) {
 			e.Name = names[i]
+		}
+		if i < len(mtimes) {
+			e.MTime = mtimes[i]
 		}
 		if i < len(emptyStream) && emptyStream[i] {
 			// No data: a folder unless flagged an empty file.
@@ -799,10 +841,55 @@ func sevenZipNames(data []byte, n int) []string {
 	return out
 }
 
+// sevenZipFiletimeUnix is 1970-01-01 as a Windows FILETIME: 100-nanosecond
+// steps since 1601.
+const sevenZipFiletimeUnix = 116444736000000000
+
+// sevenZipTimes decodes n optional file times (kMTime): an all-defined byte or
+// a bit field, the "external" byte (which must be 0), then a FILETIME for each
+// one defined. nil when they do not fit.
+func sevenZipTimes(data []byte, n int) []time.Time {
+	b := &sevenZipBuf{b: data}
+	defined := make([]bool, n)
+	if b.byte() != 0 {
+		for i := range defined {
+			defined[i] = true
+		}
+	} else if got := b.bits(n); got != nil {
+		defined = got
+	}
+	if b.byte() != 0 {
+		return nil // kept in another stream: never written by 7-Zip
+	}
+	out := make([]time.Time, n)
+	for i := range out {
+		if !defined[i] {
+			continue
+		}
+		raw := b.bytes(8)
+		if raw == nil {
+			return nil
+		}
+		if ft := binary.LittleEndian.Uint64(raw); ft > sevenZipFiletimeUnix {
+			d := ft - sevenZipFiletimeUnix
+			out[i] = time.Unix(int64(d/10000000), int64(d%10000000)*100).UTC()
+		}
+	}
+	if b.err != nil {
+		return nil
+	}
+	return out
+}
+
 // ── Reading a file's first bytes ────────────────────────────────────────────
 
 // folderReader decodes folder i's stream, at most limit bytes of it.
 func (st *sevenZipStreams) folderReader(r io.ReaderAt, size int64, i int, limit uint64) (io.Reader, error) {
+	return st.folderReaderDict(r, size, i, limit, sevenZipMaxDict)
+}
+
+// folderReaderDict is folderReader with a dictionary of at most maxDict.
+func (st *sevenZipStreams) folderReaderDict(r io.ReaderAt, size int64, i int, limit, maxDict uint64) (io.Reader, error) {
 	if i < 0 || i >= len(st.folders) {
 		return nil, errSevenZipFormat
 	}
@@ -831,7 +918,7 @@ func (st *sevenZipStreams) folderReader(r io.ReaderAt, size int64, i int, limit 
 		if d < lzma.MinDictCap {
 			d = lzma.MinDictCap
 		}
-		if d > sevenZipMaxDict {
+		if d > maxDict {
 			return 0, errSevenZipTooFar
 		}
 		return int(d), nil

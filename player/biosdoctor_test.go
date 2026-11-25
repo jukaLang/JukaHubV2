@@ -86,7 +86,8 @@ func TestBIOSDoctorVerifiesHashAndFolder(t *testing.T) {
 				t.Errorf("note = %q, want %q", check.Note, tc.wantNote)
 			}
 			if tc.want == biosCheckWrongPlace {
-				if want := filepath.Join(elsewhere, "dc", "dc_boot.bin"); check.Found != want {
+				want := filepath.Join(elsewhere, "dc", "dc_boot.bin")
+				if check.Found != want {
 					t.Errorf("found path = %q, want %q", check.Found, want)
 				}
 				lines := strings.Join(biosDoctorLines(report, false), "\n")

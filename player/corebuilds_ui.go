@@ -908,11 +908,15 @@ func coreBuildsCoreMeta(c coreBuildsCore) string {
 }
 
 // coresRootLabel is the cores folder a user would look at in a file manager:
-// the first one the card has, so an empty list still says where it looked.
+// the first one the card has, so an empty list still says where it looked —
+// or, with none yet, the one the first core install makes.
 func coresRootLabel() string {
 	dirs := retroArchCoreDirs()
 	if len(dirs) == 0 {
-		return "not found"
+		if home, _ := retroArchCoresHome(); home != "" {
+			return home + " (made by the first core install)"
+		}
+		return "none: RetroArch is not installed"
 	}
 	return dirs[0]
 }

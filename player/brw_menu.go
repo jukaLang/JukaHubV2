@@ -5,10 +5,11 @@ package main
 // One sheet holds everything the Browser can do, so the page can have the whole
 // screen (brw_fullscreen.go): Back, Forward, Reload and Home across the top in a
 // browser toolbar's order, and under them the address bar, web search, the
-// page's links, find, zoom, link mode, saving and the saved pages, site info,
-// the ad filter, sign-ins, the layout switch, Settings, the issue tracker and
-// the way out. It follows the WPE browser on the same device, whose Select menu
-// starts with Back, Forward, Home and the address bar.
+// page's links, its video (brw_stream.go), find, zoom, link mode, saving and
+// the saved pages, site info, the ad filter, sign-ins, the layout switch,
+// Settings, the issue tracker and the way out. It follows the WPE browser on
+// the same device, whose Select menu starts with Back, Forward, Home and the
+// address bar.
 //
 // Select opens and closes it on the pad; M or the Menu key on a keyboard, a
 // right click with a mouse. B, Esc and a click beside the sheet close it too.
@@ -40,6 +41,7 @@ const (
 	brwMenuAddress
 	brwMenuSearch
 	brwMenuLinks
+	brwMenuPlayVideo
 	brwMenuFind
 	brwMenuZoom
 	brwMenuMode
@@ -133,6 +135,18 @@ func brwMenuItems(config *Config) []brwMenuItem {
 	if links > 0 {
 		items[brwMenuLinks].Value = strconv.Itoa(links)
 	}
+	// The page's video in the player: its first play card, else the page
+	// through yt-dlp, which finds what the page's scripts would play.
+	video := brwMenuItem{Label: "Play video on this page", Icon: "video", Disabled: page == ""}
+	if haveElem && page != "" {
+		switch n := brwPageVideoCount(config, elem); {
+		case n == 1:
+			video.Value = "1 video"
+		case n > 1:
+			video.Value = strconv.Itoa(n) + " videos"
+		}
+	}
+	items[brwMenuPlayVideo] = video
 	items[brwMenuFind] = brwMenuItem{Label: "Find on this page", Icon: "search", Key: "F", KeyOnly: true,
 		Value: browserFindChipLabel(), Adjust: browserFind.active, Disabled: page == ""}
 	items[brwMenuZoom] = brwMenuItem{Label: "Zoom", Icon: "text", Value: browserZoomLabel(), Key: "L2/R2 / - / +", Adjust: true}
@@ -484,6 +498,8 @@ func brwMenuActivate(renderer *sdl.Renderer, config *Config, i int) {
 		openBrowserSearch(renderer, config, elem)
 	case brwMenuLinks:
 		openBrowserLinkPanel(config, elem)
+	case brwMenuPlayVideo:
+		brwPlayPageVideo(config, elem)
 	case brwMenuFind:
 		PlayActivateSound()
 		openBrowserFind(renderer, config, elem)

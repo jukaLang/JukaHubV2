@@ -72,12 +72,27 @@ The APK Store says so for such an APK and points here. Add-ons that stream
 films from torrents or from sites without the rights to them are not part of
 JukaHub.
 
+## Streaming from the Browser
+
+The Browser plays what a web page offers, as a phone's browser would (see
+[Videos and yt-dlp playback](BROWSER.md#videos-and-yt-dlp-playback)): a link
+straight to a video, a song or a live playlist (`.mp4`, `.webm`, `.mkv`,
+`.m3u8`, `.mp3`, …) opens in the player, an address that answers with one gets
+**Play** on its card, and **Select → Play video on this page** finds the video
+a page's own player would show — through yt-dlp, which knows most video sites.
+Free and public video works this way: the Internet Archive, PeerTube, Vimeo,
+Dailymotion, many news sites, and live channels that publish an HLS address.
+Services that protect their streams with DRM (Netflix, Disney+, Prime Video
+and the like) cannot play on a Linux handheld, and the Browser has no torrent
+or scraper add-ons either.
+
 ## Files
 
 `player/media_movies.go` (the tab), `player/dlna.go` (search, descriptions,
 Browse, DIDL-Lite), `player/freefilms.go` (the Archive's search and metadata
 APIs and the proxy routes), `player/musicsrc_jellyfin.go` and
-`player/musicproxy.go` (Jellyfin and the loopback proxy).
+`player/musicproxy.go` (Jellyfin and the loopback proxy), `player/brw_stream.go`
+(the Browser's streams).
 
 ## Related
 

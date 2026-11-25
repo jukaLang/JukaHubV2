@@ -253,11 +253,16 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 	}
 	for _, r := range plan.rowOrder {
 		row := r
+		// That row paints a padding band below the row grid: keep it in the
+		// flow so the block after the table starts under the paint
+		// (layoutFlexRowItems).
+		lastRow := row >= rows-1
 		items := make([]webBlock, 0, cols)
 		for c := 0; c < cols; c++ {
 			if cell, ok := webTableCellAt(plan.rows[row], c); ok {
 				cell = webTableSizeCell(cell, track, scale)
 				cell.FlexGapX = cell.Style.TableSpacingX
+				cell.Style.CellLastRow = lastRow
 				if r > 0 {
 					cell.MarginTop = cell.Style.TableSpacingY
 				}
@@ -275,6 +280,7 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 			// still has to be a flex item or the columns after it slide left.
 			placeholder := webTablePlaceholder(plan.rows[row], r, c, track[c], scale)
 			placeholder.FlexGapX = placeholder.Style.TableSpacingX
+			placeholder.Style.CellLastRow = lastRow
 			if r > 0 {
 				placeholder.MarginTop = placeholder.Style.TableSpacingY
 			}

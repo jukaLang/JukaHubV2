@@ -660,15 +660,48 @@ func emuMoreCoresStart(system string) {
 	go func() {
 		defer endPatchOp()
 		defer emuMoreCoresEnd()
+		// A handheld whose card has no RetroArch gets TrimUI's first, as a
+		// core install on the Emulators page does: cores alone have nothing
+		// to load them, and no folder to go in (raGetForMoreCores). Asked
+		// here, off the main thread: the search behind the answer may walk
+		// the card.
+		cardRetroArch := !IsWindows() && raGetMissingNow()
+		timeout := emuMoreCoresTimeout
+		if cardRetroArch {
+			timeout += emuWinInstallTimeout
+		}
 		// The deadline derives from the card's run token, so a cancel from the
 		// card stops the transfer mid-flight.
-		ctx, cancel := context.WithTimeout(installBarRunContext(), emuMoreCoresTimeout)
+		ctx, cancel := context.WithTimeout(installBarRunContext(), timeout)
 		defer cancel()
 		client := newEmulatorUpdateClient()
+		// raSaid puts what the RetroArch install did in front of the run's
+		// toast: that it installed RetroArch, or why it could not (the cores
+		// still go where that RetroArch will load them, retroArchCoresHome).
+		raSaid := func(msg string) string { return msg }
+		raGot := false
+		if cardRetroArch {
+			got, err := raGetForMoreCores(ctx, system)
+			if ctx.Err() != nil {
+				installBarFail(installCardDetail(emuFriendlyError(ctx.Err())))
+				ShowToast("RetroArch: "+emuFriendlyError(ctx.Err()), ToastKindError)
+				return
+			}
+			switch {
+			case got:
+				raGot = true
+				raSaid = func(msg string) string { return "RetroArch is installed · " + msg }
+			case err != nil:
+				why := "RetroArch could not be installed (" + firstLine(err.Error()) + "): Emulators → RetroArch tries again"
+				raSaid = func(msg string) string { return msg + " · " + why }
+			}
+			installBarDetail("")
+			installBarResetProgress()
+		}
 		index, err := fetchCoreIndex(ctx, client)
 		if err != nil {
 			installBarFail(installCardDetail(emuFriendlyError(err)))
-			ShowToast("Core index: "+emuFriendlyError(err), ToastKindError)
+			ShowToast(raSaid("Core index: "+emuFriendlyError(err)), ToastKindError)
 			return
 		}
 		// The catalog learns what the buildbot publishes: without a check of
@@ -688,6 +721,9 @@ func emuMoreCoresStart(system string) {
 			emuMoreCoresMarkDone(plan.Systems, nil)
 			msg := "Every core worth having for your consoles is here already"
 			switch {
+			case raGot:
+				// TrimUI's package brought the cores with RetroArch.
+				msg = "the cores came with it from TrimUI's package"
 			case len(systems) == 0:
 				msg = "No games on the card yet · add some and press again"
 			case system != "":
@@ -696,12 +732,17 @@ func emuMoreCoresStart(system string) {
 			if len(plan.Held) > 0 {
 				msg += " · " + emuRuntimeList(plan.Held) + " draw with the GPU: one press each on the Emulators page"
 			}
-			ShowToast(msg, ToastKindInfo)
+			kind := ToastKindInfo
+			if raGot {
+				kind = ToastKindSuccess
+				PlaySuccessSound()
+			}
+			ShowToast(raSaid(msg), kind)
 			return
 		}
 		installBarPhase(installPhaseDownload)
 		report := emuMoreCoresRun(ctx, client, plan, index, func(line string) { installBarDetail(line) })
-		msg := report.summary()
+		msg := raSaid(report.summary())
 		if len(report.Installed) == 0 && (len(report.Errors) > 0 || report.LowSpace != "") {
 			installBarFail(installCardDetail(msg))
 			ShowToast(msg, ToastKindWarning)

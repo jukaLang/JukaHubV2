@@ -554,6 +554,15 @@ var (
 // slot), an Apps/RetroArch app, or the firmware's internal copy. Only
 // /mnt/SDCARD was ever looked at, so a RetroArch anywhere else had no tile.
 func deviceRetroArchCoresDir() string {
+	cores, _ := deviceRetroArchLocate()
+	return cores
+}
+
+// deviceRetroArchLocate is deviceRetroArchCoresDir with the RetroArch binary
+// it found: "" when there is none anywhere, and the cores folder is then
+// deviceRACores, where TrimUI's would be. The folder need not exist yet
+// (retroArchCoresHome, compat.go).
+func deviceRetroArchLocate() (cores, bin string) {
 	var roots []string
 	if root := strings.TrimSpace(trimuiSDRootFn()); root != "" {
 		roots = append(roots, root)
@@ -567,12 +576,12 @@ func deviceRetroArchCoresDir() string {
 		)
 	}
 	cands = append(cands, "/usr/trimui/RetroArch/.retroarch/cores")
-	for _, cores := range cands {
-		ra := filepath.Dir(filepath.Dir(cores))
+	for _, dir := range cands {
+		ra := filepath.Dir(filepath.Dir(dir))
 		for _, name := range netplayRetroArchNames {
-			if regularFile(filepath.Join(ra, name)) {
-				deviceRetroArchNote(filepath.Join(ra, name), nil)
-				return cores
+			if p := filepath.Join(ra, name); regularFile(p) {
+				deviceRetroArchNote(p, nil)
+				return dir, p
 			}
 		}
 	}
@@ -580,10 +589,10 @@ func deviceRetroArchCoresDir() string {
 	// RetroArch, the paths the launch scripts name, a walk of the card.
 	if loc := raLocateDevice(); loc.Bin != "" {
 		deviceRetroArchNote(loc.Bin, nil)
-		return raCoresDirFor(loc.Bin)
+		return raCoresDirFor(loc.Bin), loc.Bin
 	}
 	deviceRetroArchNote("", cands)
-	return deviceRACores
+	return deviceRACores, ""
 }
 
 // raPathSeen is the last answer each RetroArch lookup logged: they run on
