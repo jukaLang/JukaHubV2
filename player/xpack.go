@@ -57,6 +57,9 @@ const (
 	xpackThemeDefault = "default"
 	// xpackWallpaperNone clears the wallpaper back to Home's backdrop.
 	xpackWallpaperNone = "none"
+	// xpackWallpaperTheme puts on the wallpaper JukaHub ships for the pack's
+	// theme (themewallpapers.go), or none when that theme has no wallpaper.
+	xpackWallpaperTheme = "theme"
 	// xpackDefaultWallpaper is the shipped background's name, which every
 	// screen reads as "no wallpaper" (appWallpaperIsShippedDefault).
 	xpackDefaultWallpaper = "background.jpg"
@@ -242,11 +245,11 @@ const xpackBuiltinSource = `[
   {
     "id": "retro-arcade",
     "name": "Retro Arcade",
-    "description": "Neon synthwave colours, the hero-tile Home, crisp clicks and straight into your games.",
+    "description": "Neon synthwave colours on a neon horizon, the hero-tile Home, crisp clicks and straight into your games.",
     "author": "JukaHub",
     "theme": "synthwave",
     "homeLayout": "grid",
-    "wallpaper": "none",
+    "wallpaper": "theme",
     "sounds": {"enabled": true, "level": 100},
     "startScene": "Games",
     "pinned": ["Games", "MusicPlayer", "Playtime"],
@@ -255,11 +258,11 @@ const xpackBuiltinSource = `[
   {
     "id": "movie-night",
     "name": "Movie Night",
-    "description": "A deep midnight palette, silent menus and Media first, with the clock dock when idle.",
+    "description": "A deep midnight palette under the northern lights, silent menus and Media first, with the clock dock when idle.",
     "author": "JukaHub",
     "theme": "midnight",
     "homeLayout": "dashboard",
-    "wallpaper": "none",
+    "wallpaper": "theme",
     "sounds": {"enabled": false, "level": 40},
     "startScene": "Tube",
     "pinned": ["Tube", "MusicPlayer"],
@@ -268,11 +271,11 @@ const xpackBuiltinSource = `[
   {
     "id": "focus-reading",
     "name": "Focus / Reading",
-    "description": "Paper-white e-ink colours, no clicks and your own calm Home for reading and notes.",
+    "description": "Paper-white e-ink colours on a quiet paper wallpaper, no clicks and your own calm Home for reading and notes.",
     "author": "JukaHub",
     "theme": "paper",
     "homeLayout": "custom",
-    "wallpaper": "none",
+    "wallpaper": "theme",
     "sounds": {"enabled": false, "level": 40},
     "pinned": ["PDFReader", "Notes", "Dictionary"],
     "screensaver": "dock"
@@ -441,6 +444,8 @@ func xpackValidate(e *xpackEntry) {
 		m.Wallpaper = ""
 	case strings.EqualFold(w, xpackWallpaperNone):
 		m.Wallpaper = xpackWallpaperNone
+	case strings.EqualFold(w, xpackWallpaperTheme):
+		m.Wallpaper = xpackWallpaperTheme
 	default:
 		path, err := xpackResolveAsset(e.Dir, w, xpackImageExts, xpackMaxWallpaperBytes)
 		if err != nil {
@@ -965,12 +970,28 @@ func xpackApply(config *Config, e xpackEntry) (string, error) {
 			homeLayout.SetArrangement(arrangement)
 		}
 	}
+	themePath := ""
+	if m.Wallpaper == xpackWallpaperTheme {
+		// The wallpaper made for the theme the pack just put on; a theme
+		// without one leaves the pack wallpaper-less, like "none".
+		if w, ok := themeWallpaperFor(themePresetName(config)); ok {
+			if path, err := themeWallpaperEnsure(w.id); err == nil {
+				themePath = path
+			} else {
+				skipped = append(skipped, "its theme's wallpaper ("+err.Error()+")")
+			}
+		}
+	}
 	switch {
 	case e.WallpaperPath != "":
 		config.Variables.BackgroundImage = e.WallpaperPath
 		custom[xpackWallpaperKey] = e.WallpaperPath
 		xpackDropDynamicWallpaper()
-	case m.Wallpaper == xpackWallpaperNone:
+	case themePath != "":
+		config.Variables.BackgroundImage = themePath
+		custom[xpackWallpaperKey] = themePath
+		xpackDropDynamicWallpaper()
+	case m.Wallpaper == xpackWallpaperNone, m.Wallpaper == xpackWallpaperTheme:
 		config.Variables.BackgroundImage = xpackDefaultWallpaper
 		custom[xpackWallpaperKey] = xpackWallpaperNone
 		xpackDropDynamicWallpaper()

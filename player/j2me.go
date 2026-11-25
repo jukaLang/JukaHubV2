@@ -280,7 +280,7 @@ func j2meOpenMIDlet(config *Config, path string) bool {
 			return
 		}
 		if err := launchLibraryGame(game, launcher); err != nil {
-			ShowToast("Cannot start "+game.Title+": "+err.Error(), ToastKindError)
+			gameLaunchErrorToast(game.Title, err)
 			return
 		}
 		if gameLaunchWasHeld(game.Path) {

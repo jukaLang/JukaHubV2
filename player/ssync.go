@@ -1271,8 +1271,10 @@ func ssyncMatchesGame(rel, stem string) bool {
 
 // ssyncPullForGame brings one game's newest saves from a paired device before
 // it starts here (handoff). Only copies toward this device run; a save that is
-// newer here stays.
-func ssyncPullForGame(ctx context.Context, peerID, peerName, romPath string) (ssyncResult, error) {
+// newer here stays. The caller holds the job slot (hoffPullSaves), so it never
+// copies files a Sync page or Automatic sync job is copying too; progress may
+// be nil.
+func ssyncPullForGame(ctx context.Context, peerID, peerName, romPath string, progress func(done, total int, current string)) (ssyncResult, error) {
 	stem := ssyncGameStem(romPath)
 	if stem == "" {
 		return ssyncResult{Peer: peerName}, nil
@@ -1287,7 +1289,7 @@ func ssyncPullForGame(ctx context.Context, peerID, peerName, romPath string) (ss
 	if len(cmp.Plan.Items) == 0 {
 		return ssyncResult{Peer: peerName}, nil
 	}
-	return ssyncRunSync(ctx, cmp, nil), nil
+	return ssyncRunSync(ctx, cmp, progress), nil
 }
 
 // ── Serving the other device ──────────────────────────────────────────────

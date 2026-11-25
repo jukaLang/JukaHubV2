@@ -1199,6 +1199,9 @@ func (h *HomeLayout) tabsDrawList(renderer *sdl.Renderer, fonts HomeFonts, lvl *
 
 // homeTabsEmptyText is what an empty page says, and how to fill it.
 func homeTabsEmptyText(lvl *homeTabsLevel) (title, line, glyph string) {
+	if t, l, g, ok := smartHomeEmptyText(lvl.key); ok {
+		return t, l, g
+	}
 	if lvl.folder.Folder {
 		return "Nothing here yet", "Press X on any game or app to add it to a collection.", "apps"
 	}

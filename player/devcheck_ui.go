@@ -618,7 +618,7 @@ func devCheckLaunchGame() {
 	launcher := strings.TrimSpace(resolveGameLauncherFor(game))
 	if err := launchLibraryGame(game, launcher); err != nil {
 		devCheckGameWatch("", 0)
-		ShowToast("Cannot launch "+game.Label()+": "+firstLine(err.Error()), ToastKindError)
+		gameLaunchErrorToast(game.Label(), err)
 		devCheckSetEvidence(run.ID, dcStepGame, []string{
 			"Game: " + devCheckClip(game.Label(), 60) + " (" + devCheckClip(game.System, 30) + ")",
 			"Could not start: " + devCheckClip(firstLine(err.Error()), 100),

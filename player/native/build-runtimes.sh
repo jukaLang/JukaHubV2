@@ -42,9 +42,11 @@
 #   build-runtimes.sh unpack ZIP DEST  verify, then put the package's folder at
 #                                      DEST (the TrimUI archives' androidrt/)
 #
-# androidrt also cross-builds (CROSS=aarch64-linux-gnu-, as build-tsp.sh does);
-# the loader cannot be started then, which BUILDINFO.txt says. wine builds on
-# aarch64 only.
+# androidrt also cross-builds (CROSS=aarch64-linux-gnu-, as build-tsp.sh does)
+# against a sysroot whose glibc is no newer than GLIBC_MAX (2.31: Ubuntu
+# 20.04's cross toolchain; 22.04's and 24.04's give binaries the glibc check
+# refuses); the loader cannot be started then, which BUILDINFO.txt says. wine
+# builds on aarch64 only.
 #
 # Packages go to OUT_DIR (default ./bin, i.e. player/native/bin, where
 # release.sh and package-sdcard.sh look for them). Every step writes its
@@ -78,6 +80,10 @@ STRIP="${STRIP:-strip}"
 
 ANDROIDRT_ZIP=JukaHub-AndroidRT-linux-arm64.zip
 WINE_ZIP=JukaHub-Wine-linux-arm64.zip
+
+# What AndroidRT's package is made from, the same list as ANDROIDRT_SOURCES in
+# .github/scripts/build-root.sh (its reuse key): keep the two the same.
+ANDROIDRT_SOURCES="player/androidrt/src player/androidrt/build-tsp.sh player/androidrt/launch.sh player/native/build-runtimes.sh .github/scripts/build-root.sh .gitattributes"
 
 # Box64, the x86_64 emulator the Windows-app runtime runs Wine with. The newest
 # stable release, fetched by the full id of the commit its tag names ("Bumped
@@ -113,6 +119,7 @@ ALLOWED_NEEDED="libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0 librt.so.1 libres
 
 usage() {
     echo "usage: $0 androidrt | wine | wine-check [ZIP] | smoke | verify ZIP | unpack ZIP DEST" >&2
+    echo "  CROSS=aarch64-linux-gnu- cross-builds androidrt against a sysroot whose glibc is no newer than $GLIBC_MAX" >&2
     exit 2
 }
 
@@ -355,10 +362,31 @@ write_sums() {
 # make_zip STAGE ROOT ZIP writes ZIP holding STAGE/ROOT as one folder, file
 # modes kept (JukaHub's unzip keeps the executable bit), no links followed
 # into anything else, no extra attributes (uid, times beyond the DOS stamp).
+# The entries go in name order and the DOS stamps are written in UTC, so the
+# same files with the same modes and times always make the same bytes.
 make_zip() {
     rm -f "$3" "$3.part"
-    ( cd "$1" && zip -q -X -r "$3.part" "$2" ) || die "could not write $3"
+    ( cd "$1" && find "$2" -print | LC_ALL=C sort | TZ=UTC zip -q -X -@ "$3.part" ) || die "could not write $3"
     mv "$3.part" "$3"
+}
+
+# stamp_tree DIR EPOCH gives DIR, its folders and its files the time EPOCH
+# (seconds since 1970, UTC) and the folders mode 755: with the bytes and the
+# file modes, all that make_zip records.
+stamp_tree() {
+    st_time="$(date -u -d "@$2" +%Y%m%d%H%M.%S 2>/dev/null || date -u -r "$2" +%Y%m%d%H%M.%S 2>/dev/null)" ||
+        die "could not read the time $2"
+    find "$1" -type d -exec chmod 755 {} + || die "could not set the folder modes in $1"
+    TZ=UTC find "$1" -exec touch -t "$st_time" {} + || die "could not set the file times in $1"
+}
+
+# utc_time [EPOCH] writes EPOCH (now without one) as 2026-11-24T21:30:00Z.
+utc_time() {
+    if [ -n "${1:-}" ]; then
+        date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0
+        date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null && return 0
+    fi
+    date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
 # extract_zip ZIP DEST with whatever this machine has; prints the tool's name.
@@ -557,6 +585,20 @@ source_commit() {
     fi
 }
 
+# androidrt_source prints "<commit> <unix time>" of the newest commit that
+# changed what AndroidRT is built from: what build-root.sh passes in
+# (ANDROIDRT_COMMIT and SOURCE_DATE_EPOCH, read with git on the runner, since
+# git inside the build root may refuse the mounted checkout), else git's own
+# answer here, else nothing.
+androidrt_source() {
+    if [ -n "${ANDROIDRT_COMMIT:-}" ] && [ -n "${SOURCE_DATE_EPOCH:-}" ]; then
+        echo "$ANDROIDRT_COMMIT $SOURCE_DATE_EPOCH"
+        return 0
+    fi
+    # shellcheck disable=SC2086 # a list of plain paths
+    git -C "$PLAYER_DIR/.." log -1 --format='%H %ct' -- $ANDROIDRT_SOURCES 2>/dev/null || true
+}
+
 source_line() {
     sl_commit="$(source_commit)"
     if [ -n "${SOURCE_KEY:-}" ]; then
@@ -576,13 +618,26 @@ build_androidrt() {
     mkdir -p "$stage"
 
     say "AndroidRT (logs in $LOG_DIR)"
-    commit="$(source_commit)"
-    # What `loader --version` names: the JukaHub commit it was built from.
+    # The newest commit that changed AndroidRT's sources names the build
+    # (`loader --version`), dates it (BUILDINFO's built: line) and stamps every
+    # file time in the zip, so an AndroidRT whose sources did not change
+    # rebuilds to the same zip, byte for byte, whatever else the JukaHub
+    # commit being built changed: the handheld, which compares the release
+    # asset's SHA-256 with its copy's, then sees nothing new to download.
+    src="$(androidrt_source)"
+    src_commit="${src%% *}"
+    src_time="${src#* }"
+    case "$src_commit:$src_time" in
+        *[!0-9a-f:]*|:*|*:) src_commit="" src_time="" ;;
+    esac
+    case "$src_time" in
+        *[!0-9]*) src_commit="" src_time="" ;;
+    esac
     version="${ANDROIDRT_VERSION:-}"
     if [ -z "$version" ]; then
-        case "$commit" in
-            unknown|'') version=dev ;;
-            *) version="$(printf '%s' "$commit" | cut -c1-12)" ;;
+        case "$src_commit" in
+            '') version=dev ;;
+            *) version="$(printf '%s' "$src_commit" | cut -c1-12)" ;;
         esac
     fi
     quietly androidrt-build env ANDROIDRT_OUT="$tree" ANDROIDRT_VERSION="$version" \
@@ -608,6 +663,15 @@ build_androidrt() {
     sh -n "$tree/launch.sh" || die "launch.sh is not a valid shell script"
     if can_run_aarch64; then
         start_loader="$(start_once loader "$WORK_DIR/androidrt-start.txt" "$tree/loader" --version)"
+        # The handheld's probe (androidRTProbe) takes the first line of what
+        # `loader --version` prints and wants it to start "AndroidRT loader"
+        # with exit 0; here only the whole answer of this build will do: this
+        # version, this CPU, the bionic loader.
+        want_loader="exit 0: AndroidRT loader $version (aarch64, bionic loader)"
+        if [ "$start_loader" != "$want_loader" ]; then
+            sed -n '1,5p' "$WORK_DIR/androidrt-start.txt" >&2
+            die "loader --version answered \"$start_loader\", not \"$want_loader\""
+        fi
         start_probe="$(start_once surface-probe "$WORK_DIR/androidrt-probe.txt" "$tree/surface-probe")"
     else
         start_loader="not started: cross-built on $(uname -m)"
@@ -618,8 +682,13 @@ build_androidrt() {
 
     {
         echo "JukaHub AndroidRT (the Android-app runtime, player/androidrt)"
-        echo "built:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        source_line
+        if [ -n "$src_commit" ]; then
+            echo "built:      $(utc_time "$src_time") (the date of its source commit: a rebuild is identical)"
+            echo "source:     JukaHub @ $src_commit, the newest commit that changed AndroidRT's sources${SOURCE_KEY:+ (sources $SOURCE_KEY)}"
+        else
+            echo "built:      $(utc_time)"
+            source_line
+        fi
         echo "version:    $version (what loader --version prints)"
         echo "compiler:   ${cc_used:-unknown}: $(${cc_used:-cc} --version 2>/dev/null | sed -n 1p)"
         echo "build libc: $(ldd --version 2>/dev/null | sed -n 1p)"
@@ -634,6 +703,9 @@ build_androidrt() {
 
     say "Packaging $ANDROIDRT_ZIP"
     write_sums "$tree"
+    if [ -n "$src_time" ]; then
+        stamp_tree "$tree" "$src_time"
+    fi
     make_zip "$stage" androidrt "$stage/$ANDROIDRT_ZIP"
     verify_zip "$stage/$ANDROIDRT_ZIP" > "$LOG_DIR/androidrt-verify.log" 2>&1 ||
         { cat "$LOG_DIR/androidrt-verify.log" >&2; die "the package just written does not verify"; }

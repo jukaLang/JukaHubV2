@@ -290,6 +290,74 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 	}
 }
 
+// --- Empty cells -------------------------------------------------------------------
+//
+// The parser drops a block that has no text, so a cell with nothing to draw —
+// <td></td>, or <td>&nbsp;</td>, whose no-break spaces strings.Fields reads as
+// white space — left no block at all, and the next cell of its row slid left
+// into its column. DuckDuckGo Lite pads every search result with such cells:
+// the snippet and the address landed under the number, the first column took
+// the snippet's width and the title was squeezed into a narrow column on the
+// right. Such a cell now keeps a block of its own (webBlock.TableEmptyCell),
+// empty, or one blank line tall when its text was a no-break space or a <br>,
+// as a browser draws it.
+
+// keepEmptyCell runs when a table cell closes and gives it a block when it
+// produced none.
+func (p *webParser) keepEmptyCell(f *webFrame) {
+	if len(p.blocks) > f.blockStart {
+		return
+	}
+	if p.current != nil && webBlockKept(p.current) {
+		return
+	}
+	blank := f.blankLine || (p.current != nil && len(p.current.Runs) > 0)
+	block := p.ensureBlock()
+	block.TableEmptyCell = true
+	block.CellBlankLine = blank
+}
+
+// keepSpacer runs when a block element outside any table closes having drawn
+// nothing but no-break spaces. One the page gives a height, and no surface to
+// paint, keeps that height (webBlock.Spacer): DuckDuckGo Lite parts its header,
+// form and results with `<p class="extra">&nbsp;</p>` at 1.3em. Without a
+// height it stays dropped, as such an element always was — the old clearfix
+// `<div style="clear:both;height:0">&nbsp;</div>` must not open a gap.
+func (p *webParser) keepSpacer(f *webFrame) {
+	if f.style.Height <= 0 || f.flexItem || webStyleHasBox(f.style) || len(p.blocks) > f.blockStart {
+		return
+	}
+	if p.current != nil && webBlockKept(p.current) {
+		return
+	}
+	p.ensureBlock().Spacer = true
+}
+
+// markBlankLine notes on the element a no-break-space-only text belongs to
+// that it holds text a browser draws as a blank line: the innermost open
+// table cell, or outside tables the innermost block that is not a flex or
+// grid item. Text between the cells of a row is in none.
+func (p *webParser) markBlankLine() {
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		f := &p.stack[i]
+		if f.style.CellOwn {
+			f.blankLine = true
+			return
+		}
+		switch f.style.TableRole {
+		case webTableRoleTable, webTableRoleRow, webTableRoleRowGroup, webTableRoleHeaderGroup, webTableRoleFooterGroup:
+			return
+		case webTableRoleNone:
+			if f.kind == "block" || f.kind == "list" {
+				if !f.flexItem {
+					f.blankLine = true
+				}
+				return
+			}
+		}
+	}
+}
+
 // --- Vertical alignment in rows ---------------------------------------------------
 //
 // A browser stretches every cell of a row to the row's height and places the
@@ -501,8 +569,11 @@ func webTableSizeCell(cell webBlock, track []int32, scale float64) webBlock {
 	for c := cell.Style.TableCol; c < cell.Style.TableCol+span && c < len(track); c++ {
 		width += track[c]
 	}
-	if width < 1 {
-		width = 1
+	// An empty column is 0 px wide; its cells keep 2 px, which the row reads
+	// back as a width (1 px could round to 0, and a cell of no width takes the
+	// row's spare room).
+	if width < 2 {
+		width = 2
 	}
 	cell.Width = float64(width) / scale
 	cell.WidthPct = 0
@@ -548,6 +619,7 @@ func webTablePlaceholder(row []webBlock, rowIndex, col int, width int32, scale f
 	}
 	b.FlexItem = 0
 	b.FlexDir = webFlexRow
+	width = max(width, 2) // a hole in an empty column (webTableSizeCell)
 	b.Width = float64(width) / scale
 	b.Style.Width = b.Width
 	b.Style.WidthPct = 0
@@ -615,6 +687,9 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 		}
 	}
 	explicit := make([]bool, cols)
+	// empty marks an auto table's columns whose cells are all empty: they get
+	// a 2 px sliver (webTableSizeCell's least) and none of the room left over.
+	empty := make([]bool, cols)
 	if fixed {
 		first := plan.rowOrder[0]
 		for _, cell := range plan.rows[first] {
@@ -658,7 +733,14 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 	} else {
 		for _, row := range plan.rowOrder {
 			for _, cell := range plan.rows[row] {
-				demand := l.intrinsicContainerWidth([]webBlock{cell})
+				// A cell with nothing to draw holds its column's place, not a
+				// width (keepEmptyCell): a column of empty cells is as narrow
+				// as in a browser, so the "Next Page" cell DuckDuckGo Lite sets
+				// beside an empty one stays at the left edge.
+				if cell.TableEmptyCell && webTableExplicitWidth(cell, target, scale) <= 0 {
+					continue
+				}
+				demand := max(l.intrinsicContainerWidth([]webBlock{cell}), l.webTableLineWidth(cell))
 				if demand <= 0 {
 					demand = webTableMinCell * int32(scale)
 				}
@@ -682,7 +764,10 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 			}
 		}
 		for c := 0; c < cols; c++ {
-			if track[c] < int32(webTableMinCell*scale) {
+			switch {
+			case track[c] <= 0:
+				empty[c], track[c] = true, 2
+			case track[c] < int32(webTableMinCell*scale):
 				track[c] = int32(webTableMinCell * scale)
 			}
 		}
@@ -693,22 +778,147 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 		sum += w
 	}
 	if sum < target {
+		// The room left goes to the columns that hold something; a column of
+		// empty cells stays a sliver. A table of nothing but empty cells
+		// shares it out evenly, as every table used to.
+		share := make([]int, 0, cols)
+		for c := 0; c < cols; c++ {
+			if !empty[c] {
+				share = append(share, c)
+			}
+		}
+		if len(share) == 0 {
+			for c := 0; c < cols; c++ {
+				share = append(share, c)
+			}
+		}
 		room := target - sum
-		for c := 0; c < cols && room > 0; c++ {
-			add := room / int32(cols-c)
+		for k, c := range share {
+			add := room / int32(len(share)-k)
 			track[c] += add
 			room -= add
 		}
 	} else if sum > target {
-		// Shrink proportionally so a fixed table never paints past its column.
-		for c := 0; c < cols; c++ {
-			track[c] = track[c] * target / sum
-			if track[c] < 1 {
-				track[c] = 1
+		// An auto table gives up the room above its columns' longest words
+		// first (webTableShrinkToFloors). A fixed table, or one whose words
+		// alone are too wide, shrinks proportionally so it never paints past
+		// its column.
+		if fixed || !webTableShrinkToFloors(track, l.webTableFloors(plan, cols, target, scale), target) {
+			for c := 0; c < cols; c++ {
+				track[c] = track[c] * target / sum
+				if track[c] < 1 {
+					track[c] = 1
+				}
 			}
 		}
 	}
 	return track, target
+}
+
+// webTableLineWidth is what a cell's text asks for in an auto table: its
+// runs side by side on one line up to each forced break, as a browser measures
+// a column's max-content width, with the same insets and breathing room as
+// intrinsicContainerWidth. That one takes the widest run alone, which read a
+// search result's snippet split by its bold query words as a third of its
+// length and handed the room it did not ask for to the number column beside
+// it.
+func (l *webLayouter) webTableLineWidth(b webBlock) int32 {
+	if l.baseSize <= 0 || b.Image || len(b.Runs) < 2 {
+		return 0
+	}
+	scale := l.baseSize / 16
+	widest, line := int32(0), int32(0)
+	for _, run := range b.Runs {
+		if run.Image != nil {
+			line += l.intrinsicImageWidth(run.Image)
+			continue
+		}
+		font := l.styledFont(run.Style)
+		if font == nil {
+			continue
+		}
+		text := run.Text
+		for {
+			part, rest, broke := strings.Cut(text, "\n")
+			if part != "" {
+				if w, _, err := font.SizeUTF8(part); err == nil {
+					line += int32(w)
+				}
+			}
+			if !broke {
+				break
+			}
+			// A <br> ends the line.
+			widest, line, text = max(widest, line), 0, rest
+		}
+		line += webInlineInsets(&run, l.baseSize)
+	}
+	widest = max(widest, line)
+	if widest <= 0 {
+		return 0
+	}
+	return widest + int32((b.Indent+b.Style.IndentRight)*scale) + int32(24*scale)
+}
+
+// webTableFloors is each column's floor in an auto table (CSS 2.1 §17.5.2.2):
+// the longest word of its cells, or a width a cell sets; a spanning cell
+// shares its own across its columns. It is measured only for a table too wide
+// for its column.
+func (l *webLayouter) webTableFloors(plan *webTablePlan, cols int, target int32, scale float64) []int32 {
+	floor := make([]int32, cols)
+	for _, row := range plan.rowOrder {
+		for _, cell := range plan.rows[row] {
+			// Two pixels of slack keep a word that exactly fits from wrapping
+			// on a rounding of the cell's measure.
+			least := l.intrinsicMinContentWidth([]webBlock{cell}) + 2
+			if width := webTableExplicitWidth(cell, target, scale); width > least {
+				least = width
+			}
+			span := max(cell.Style.ColSpan, 1)
+			first := cell.Style.TableCol
+			if first < 0 || first >= cols {
+				continue
+			}
+			have := int32(0)
+			for c := first; c < first+span && c < cols; c++ {
+				have += floor[c]
+			}
+			if least > have {
+				add := (least - have + int32(span) - 1) / int32(span)
+				for c := first; c < first+span && c < cols; c++ {
+					floor[c] += add
+				}
+			}
+		}
+	}
+	return floor
+}
+
+// webTableShrinkToFloors fits the tracks of an auto table that want more than
+// target into it. Every column keeps its floor, and the room above the floors
+// is shared in proportion to what each column wanted beyond its own, as a
+// browser does: the number column beside a search result keeps "10." whole
+// while the snippet beside it wraps. It reports false, changing nothing, when
+// the floors alone do not fit.
+func webTableShrinkToFloors(track, floor []int32, target int32) bool {
+	if len(floor) != len(track) || len(track) == 0 {
+		return false
+	}
+	sumFloor, sumOver := int64(0), int64(0)
+	for c := range track {
+		f := max(min(floor[c], track[c]), 0)
+		sumFloor += int64(f)
+		sumOver += int64(track[c] - f)
+	}
+	spare := int64(target) - sumFloor
+	if spare < 0 || sumOver <= 0 {
+		return false
+	}
+	for c := range track {
+		f := max(min(floor[c], track[c]), 0)
+		track[c] = f + int32(int64(track[c]-f)*spare/sumOver)
+	}
+	return true
 }
 
 func webTableExplicitWidth(cell webBlock, target int32, scale float64) int32 {

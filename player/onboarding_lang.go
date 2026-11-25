@@ -200,36 +200,43 @@ func onboardingLangCommit(config *Config) {
 func onboardingRenderLanguage(renderer *sdl.Renderer, config *Config, cy, cardH, textX, textW, bodyY int32, bodyFont, smallFont *ttf.Font, accent sdl.Color) {
 	onbLang.hits = onbLang.hits[:0]
 
-	// Fit, in order of preference: one column under the "Language · Idioma"
-	// line; one column without that line; two columns. A big text scale or a
-	// short canvas must not stack the rows on top of each other.
+	// Fit, in order of preference: rows with room around their names, in one
+	// column and then two under the "Language · Idioma" line, then two
+	// columns without it; tighter rows next, and the small face last. A big
+	// text scale or a short canvas must not stack the rows on top of each
+	// other, and eleven barely padded rows in one column read as cramped.
 	const gap = int32(8)
 	n := int32(len(uiLanguages))
-	bottom := cy + cardH - 106
-	font := bodyFont
-	if smallFont.Height() < bodyFont.Height() && (bottom-bodyY)/n < int32(bodyFont.Height())+10 {
-		font = smallFont
-	}
-	need := int32(font.Height()) + 10
+	bottom := cy + cardH - onbDotsY - onbContentGap
 	wordH := int32(smallFont.Height()) + 8
-	top := bodyY + wordH
-	showWord := (bottom-top)/n >= need
-	if !showWord {
+	tries := [...]struct {
+		cols int32
+		word bool
+		font *ttf.Font
+		pad  int32
+	}{
+		{1, true, bodyFont, 16}, {2, true, bodyFont, 16}, {2, false, bodyFont, 16},
+		{2, false, bodyFont, 8}, {2, false, smallFont, 4},
+	}
+	var cols, top, pitch, rowH int32
+	var showWord bool
+	var font *ttf.Font
+	for _, cand := range tries {
+		cols, showWord, font = cand.cols, cand.word, cand.font
 		top = bodyY - 6
+		if showWord {
+			top = bodyY + wordH
+		}
+		pitch = min((bottom-top+gap)/((n+cols-1)/cols), 56)
+		rowH = pitch - gap
+		if rowH >= int32(font.Height())+cand.pad {
+			break
+		}
 	}
-	cols := int32(1)
-	if (bottom-top)/n < need {
-		cols = 2
-	}
-	perCol := (n + cols - 1) / cols
-	pitch := int32(56)
-	if fit := (bottom - top) / perCol; fit < pitch {
-		pitch = fit
-	}
-	rowH := pitch - gap
-	if floor := min(int32(24), pitch); rowH < floor {
+	if floor := min(int32(font.Height())+4, pitch); rowH < floor {
 		rowH = floor
 	}
+	perCol := (n + cols - 1) / cols
 	colW := (textW + 20 - gap*(cols-1)) / cols
 
 	if showWord {

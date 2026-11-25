@@ -95,6 +95,9 @@ func planWineRuntime(ctx context.Context, exe string, args []string, env map[str
 		return wineRuntimePlan{}, err
 	}
 	applyWineCompatibilityEnv(out)
+	// The Video memory (VRAM) assigned in Settings, as the graphics card's
+	// memory Direct3D reports (vram.go).
+	vramWineEnv(out)
 	command, cmdArgs := rt.Command, rt.args(append([]string{exe}, args...)...)
 	if len(rt.Server) > 0 {
 		// A launcher or setup program that starts the real program and quits

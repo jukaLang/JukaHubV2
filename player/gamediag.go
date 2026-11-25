@@ -83,6 +83,12 @@ type gameDiagReport struct {
 	Issues   []launchIssue
 	LogLines []string
 	LogPath  string
+	// Launch is the launch that failed, for the card's bug report
+	// (launchreport.go), and Details that report's text, written on the
+	// goroutine that diagnosed it. A check the player asked for has neither:
+	// its card offers no report.
+	Launch  *launchRecord
+	Details string
 }
 
 // gameDiagState hands a finished report to the main thread and remembers
@@ -108,6 +114,12 @@ type gameDiagLaunch struct {
 	ended   time.Time
 	stopped bool
 	memMB   int
+	// rec is the launch as it ran, for the card's bug report
+	// (launchreport.go); nil when nothing recorded it.
+	rec *launchRecord
+	// captureAny keeps the output of any launcher, not only a shell script's:
+	// an Emulators-page start of a program (emuTileWatch).
+	captureAny bool
 }
 
 // gameDiagLogDir is JukaHub's own folder for emulator logs.
@@ -381,6 +393,23 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 			report.Summary += " The emulator wrote nothing useful to its log."
 		}
 	}
+	// The launch as it ran, written up for the card's bug report here, off the
+	// main thread (launchreport.go).
+	if d.rec != nil {
+		at := d.ended
+		if at.IsZero() {
+			at = time.Now()
+		}
+		d.rec.noteEnd(at, waitErr, d.stopped)
+		if d.rec.OutPath == "" {
+			d.rec.OutPath = d.outPath
+		}
+		if d.rec.RALog == "" {
+			d.rec.RALog = d.logPath
+		}
+		report.Launch = d.rec
+		report.Details = launchReportDetails(d.rec, report.Summary, report.Issues)
+	}
 	logInfoDiag(report)
 	gameDiagPost(report)
 }
@@ -413,6 +442,11 @@ func gameDiagShowPending() {
 	gameDiagState.pending = nil
 	gameDiagState.mu.Unlock()
 	if report == nil {
+		return
+	}
+	if report.Launch != nil {
+		// A launch that failed: the card offers its bug report (launchreport.go).
+		showLaunchDiagnosisReport(*report)
 		return
 	}
 	showLaunchDiagnosis(report.Title, report.Summary, report.Issues, report.LogLines, report.LogPath)

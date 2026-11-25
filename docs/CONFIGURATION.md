@@ -65,6 +65,7 @@ settings such as `search_query` or `stream_url`.
 | `backgroundImage` | string | your own wallpaper, drawn on every screen (Home included) under the backdrop's dim and colour blooms so glass and text stay readable. Empty or the stock `background.jpg` means Home's procedural backdrop; the stock image is not loaded. A picked image is scaled once to the canvas when it loads. A `.gif` plays: it is decoded frame by frame off the render thread, cropped to the screen's shape and kept within a memory budget (40 MB of frames on the handheld), and pixel art stays sharp at a whole-number scale (see `wallpaperAnimate`) |
 | `wallpaper` | string | the picture picked in **Settings → Theme & look → Wallpaper** (or Start → Device → Wallpapers), kept in `jukauser.json` and put back at start when the design config names the stock `background.jpg`; `none` means no wallpaper. Whichever came last, the pick or an experience pack's wallpaper, wins; a wallpaper named in the design config itself still beats both |
 | `wallpaperAnimate` | bool | Settings → Theme & look → **Animate wallpaper** (on by default): a GIF wallpaper plays; off holds its first frame. Battery Saver holds it too. Plain Reduce Motion does not, because the handheld ships with it on |
+| `themeWallpapers` | bool | Settings → Theme & look → **Theme wallpapers** (on by default): a theme with a wallpaper made for it (Synthwave's Neon Horizon, Midnight's Midnight Aurora… [THEMES.md](THEMES.md#theme-wallpapers)) brings it along whenever it is put on, unless `wallpaper` holds a picture — or `none` — picked by hand. Off takes a theme's wallpaper away. `themeWallpaperAuto` (bookkeeping, not exported) remembers the wallpaper a theme put on, which is how it is told from yours |
 | `themeAutoUpdate` | bool | Settings → Theme & look → **Update themes automatically** (on by default): a theme installed from the gallery (Community themes) gets its author's new version when the gallery index is read — on opening the panel, and once a day in the background while online. A theme on screen repaints itself. A theme file you edited on the device is never replaced automatically: the panel tags it **Edited · A update**, and A asks once more, keeping your file as `themes/<id>.edited.json.bak`. Off: new versions are only tagged **A update** in the panel |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
@@ -643,6 +644,23 @@ how busy the CPU is and remembers each app's level in `auto-performance.json`.
 A game's own CPU profile or limit wins; with `powerProfiles` (Full speed while
 playing) off it only ever lowers the clock.
 
+`cpuFrequency` (`"auto"` or a clock, default `"auto"`) is Settings → Power &
+battery → **CPU frequency** on TrimUI handhelds (the same rows sit under
+Automatic CPU speed in Games & emulators). The row writes one of the chip's
+own clocks as `"1416 MHz"`; a hand-written value is read like
+`powerProfileMaxFreq` (`"1.4 GHz"`, `1416`, `1416000` kHz) and means the
+nearest clock the chip has. A clock holds `scaling_max_freq` there and, unless
+`cpuFrequencyIdle` (bool, default `false`, **Slow down when idle**) is `true`,
+`scaling_min_freq` too. `cpuFrequencyUse` (`"all"`/`"hub"`/`"games"`, default
+`"all"`) is **CPU frequency for**: everywhere, only JukaHub's own screens, or
+only the games, ports and apps it starts. It holds with Automatic CPU speed on
+or off; Faster menus, the clock part of Faster game starts, CPU boost in games
+and the Heavy-game boost's clock stand aside where it holds, a game's own CPU
+options win, the heat guard still lowers it while the chip or battery is hot,
+and the idle screens still lower it. `powerProfileMaxFreq` and `powerProfiles`
+do not cap it. See
+[DEVICE_TUNING.md](DEVICE_TUNING.md#cpu-frequency-set-by-hand).
+
 `menuBoost` (bool, default `true`) is Settings → Games & emulators → **Faster
 menus** on TrimUI handhelds, part of Automatic CPU speed: a press (and a held
 button's repeats) lifts the hub's clock ceiling to the top the heat guard
@@ -699,6 +717,24 @@ written again until the switch goes off and on. Off switches JukaHub's own
 swap off, deletes the file and puts the swappiness back (with less memory
 free than the swap holds it stays on until the next start). See
 [LOCAL_AI.md](LOCAL_AI.md) for how the AI's memory check counts it.
+
+`videoMemory` (`"auto"` or a size in MB, default `"auto"`) is Settings → Games
+& emulators → **Video memory (VRAM)** on TrimUI handhelds: memory assigned to a
+game's graphics. Their GPUs share the 1 GB with everything else and have no
+VRAM carve-out, so a size works two ways. When a game, emulator, port or app
+takes the screen with less than the size free (MemAvailable plus the share of
+free swap the AI's check counts), JukaHub empties its own textures and byte
+caches at once, then returns its Go heap, stops its idle helpers (the speech
+recognizer unless "Hey Juka" keeps it, the offline AI's server, Piper), the
+video link prefetch and the media library scan, and drops the page cache; it
+never closes an app. And Windows programs under Wine see the size as the
+graphics card's memory: `WINE_D3D_CONFIG` gets `VideoMemorySize=<MB>`, which
+wins over the prefix's registry (a profile's own `WINE_D3D_CONFIG` that names
+`VideoMemorySize` keeps it). The list offers 64 MB up to half the RAM (512 MB
+on the handhelds); a bigger number set by hand still reaches Wine, while the
+room kept stays at half the RAM. `auto` assigns nothing: games take what is
+free and Wine guesses from the GPU. See
+[DEVICE_TUNING.md](DEVICE_TUNING.md#video-memory-vram).
 
 `xboxBoost` (bool, default `true`) is Settings → Games & emulators →
 **Heavy-game boost** (called Xbox boost until 2026-11-21; the key kept the
@@ -966,7 +1002,7 @@ five of them: Tabs, Standard, Hero grid, Carousel and Widgets.
 
 | Value | In Settings | What it is |
 |---|---|---|
-| `tabs` (default when unset; `tab`, `jukaos` and `v2` are read as `tabs`) | Tabs | the Tabs Home of JukaOS v2: a strip of tabs (Recent, Main, Games, Entertainment, Favourites, Collections) in the top bar over a page of tiles — see [HOME_TABS.md](HOME_TABS.md) |
+| `tabs` (default when unset; `tab`, `jukaos` and `v2` are read as `tabs`) | Tabs | the Tabs Home of JukaOS v2: a strip of tabs (Recent, Main, Games, Entertainment, Smart Home, Favourites, Collections) in the top bar over a page of tiles — see [HOME_TABS.md](HOME_TABS.md) |
 | `custom` (and any unknown value) | Standard | the scene's own tiles decide where the cards are — the arrangement described above |
 | `dashboard` | Standard | the built-in composition: the wide Continue card with the smaller cards beside it |
 | `grid` | Hero grid | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |

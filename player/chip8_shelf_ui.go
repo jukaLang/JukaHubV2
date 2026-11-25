@@ -475,7 +475,7 @@ func chip8ShelfPlay(c *Config, path string) {
 	game := libraryGame{Path: path, System: chip8System, Title: gameDisplayTitle(path)}
 	chooseGameLauncher(game, func(launcher string) {
 		if err := launchLibraryGame(game, launcher); err != nil {
-			ShowToast("Cannot start "+game.Title+": "+firstLine(err.Error()), ToastKindError)
+			gameLaunchErrorToast(game.Title, err)
 		}
 	})
 }

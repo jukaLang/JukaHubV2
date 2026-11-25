@@ -172,6 +172,11 @@ func vkHintList() []FooterHint {
 	if chat {
 		send = "Send"
 	}
+	// A note's body: the action key is New line, and Start is Done.
+	lines := vkEnterTypesNewline()
+	if lines {
+		send = "Done"
+	}
 	layer := "123"
 	if vkLayer == vkLayerSymbols {
 		layer = "ABC"
@@ -185,6 +190,9 @@ func vkHintList() []FooterHint {
 			{Button: "Backspace", Label: "Delete"},
 			{Button: "Ctrl+V", Label: "Paste"},
 			{Button: "Ctrl+C", Label: "Copy"},
+		}
+		if lines {
+			keys = append([]FooterHint{{Button: "Ctrl+Enter", Label: "Done"}, {Button: "Enter", Label: "New line"}}, keys[1:]...)
 		}
 		if vkVoiceHintShown() {
 			keys = append(keys, vkVoiceHint()) // F4 (vkvoice_button.go)
@@ -228,6 +236,9 @@ func vkLiveFilterTarget() bool {
 	switch vkTarget {
 	case vkTargetTV, vkTargetGameSearch, vkTargetMusic, vkTargetIPStream, homeSearchVKTarget, tzPickerVKTarget, steamSearchVKTarget, fdroidSearchVKTarget,
 		setSearchVKTarget, homebrewSearchVKTarget:
+		return true
+	case notesVKTarget:
+		// The note being typed shows above the sheet (notes_keyboard.go).
 		return true
 	}
 	return false
@@ -911,7 +922,8 @@ func vkFieldLayoutFor(font *ttf.Font, text string, caret int, maxW int32) *vkFie
 	fc.visible = display[vkRuneOffset(display, start):vkRuneOffset(display, end)]
 	fc.visW, _ = measureTextRaw(font, fc.visible)
 	fc.caretX = width(start, caret)
-	fc.remaining = vkMaxTextLen - len(text)
+	// The whole field's room, not the shown line's (vkFieldView).
+	fc.remaining = vkMaxLen() - len(vkCurrentText())
 	if !masked && fc.remaining < 200 && fc.remaining >= 0 {
 		fc.counter = strconv.Itoa(fc.remaining)
 	}
@@ -922,12 +934,14 @@ func vkFieldLayoutFor(font *ttf.Font, text string, caret int, maxW int32) *vkFie
 // as last drawn.
 func vkFieldIndexAt(mx int32) int {
 	fc := &vkFieldCache
-	text := vkCurrentText()
+	full := vkCurrentText()
 	if _, _, preview := vkVoiceDisplayText(); preview {
-		return vkCaretIndex(text)
+		return vkCaretIndex(full)
 	}
+	// A field of lines shows the caret's line: a click lands in that line.
+	text, _, base := vkFieldView(full, vkCaretIndex(full))
 	if !fc.valid || fc.font == nil || fc.text != text {
-		return utf8.RuneCountInString(text)
+		return base + utf8.RuneCountInString(text)
 	}
 	x := mx - (vkFieldRect.X + vkFieldPadX)
 	best, bestD := fc.startRune, int32(1<<30)
@@ -941,7 +955,24 @@ func vkFieldIndexAt(mx int32) int {
 			best, bestD = i, d
 		}
 	}
-	return best
+	return base + best
+}
+
+// vkFieldView is the part of text the one-line field shows: all of it, or —
+// in a field that holds lines, a note's body — the line the caret is on, with
+// the caret's place in that line and the rune index the line starts at.
+func vkFieldView(text string, caret int) (view string, viewCaret, base int) {
+	if !strings.Contains(text, "\n") {
+		return text, caret, 0
+	}
+	off := vkRuneOffset(text, caret)
+	start := strings.LastIndexByte(text[:off], '\n') + 1
+	end := len(text)
+	if i := strings.IndexByte(text[off:], '\n'); i >= 0 {
+		end = off + i
+	}
+	base = utf8.RuneCountInString(text[:start])
+	return text[start:end], caret - base, base
 }
 
 // vkFieldPadX is the field's inner left margin.
@@ -969,11 +1000,15 @@ func vkDrawFieldLive(renderer *sdl.Renderer, fonts vkFontSet, pal vkPalette, fie
 	if live, liveCaret, ok := vkVoiceDisplayText(); ok {
 		text, caret, preview = live, liveCaret, true
 	}
+	full := text
+	// A note's body shows the line the caret is on (vkFieldView).
+	text, caret, _ = vkFieldView(text, caret)
 	if text == "" {
 		// A steady caret marks the field before the first character; the
-		// placeholder moves aside so the two never overlap.
+		// placeholder moves aside so the two never overlap. An empty line of
+		// a note that has others shows the caret alone.
 		fillRoundedRect(renderer, x0, field.Y+field.H/2-textH/2+2, 2, textH-4, 1, pal.accent)
-		if ph := vkMemo.placeholder; ph != "" {
+		if ph := vkMemo.placeholder; ph != "" && full == "" {
 			drawText(renderer, font, ellipsize(font, ph, field.W-2*vkFieldPadX-12), x0+10, textY, pal.ink3, textAlignLeft)
 		}
 		return

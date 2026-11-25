@@ -63,12 +63,12 @@ var allowedToolRepos = map[string]bool{
 // whose name matches one of the wanted names (case-insensitive), size included.
 // The wanted names are a preference order (the GPL ffmpeg build before the LGPL
 // one), so they are tried in turn rather than in the order the API lists the
-// release's files.
-func resolveToolAsset(repo, apiToken string, wants ...string) (releaseAsset, error) {
+// release's files. Cancelling ctx closes the request.
+func resolveToolAsset(ctx context.Context, repo, apiToken string, wants ...string) (releaseAsset, error) {
 	if len(wants) == 0 {
 		return releaseAsset{}, fmt.Errorf("resolveToolAsset called without any wanted asset names")
 	}
-	assets, err := latestReleaseAssets(repo, apiToken)
+	assets, err := latestReleaseAssets(ctx, repo, apiToken)
 	if err != nil {
 		return releaseAsset{}, err
 	}
@@ -105,13 +105,13 @@ type releaseAsset struct {
 // latestReleaseAssets lists a trusted repo's latest release assets. The repo
 // must be in allowedToolRepos: this is the only place a download URL comes
 // from, so the list is the trust boundary rather than a convenience.
-func latestReleaseAssets(repo, apiToken string) ([]releaseAsset, error) {
+func latestReleaseAssets(ctx context.Context, repo, apiToken string) ([]releaseAsset, error) {
 	if !allowedToolRepos[strings.ToLower(repo)] {
 		return nil, fmt.Errorf("tool repo %q is not in the approved download list", repo)
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
-	req, err := http.NewRequest("GET", apiURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err
 	}

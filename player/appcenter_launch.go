@@ -68,11 +68,13 @@ type acSnapshot struct {
 // ceilings are Auto's to move: it follows the app as its own session and puts
 // its ceiling back itself (autoperf.go), so they are not recorded — restoring
 // them after the app would undo Auto's next write and make it look foreign.
+// The same holds with a CPU frequency set by hand (cpufreq_manual.go), which
+// Auto's sessions hold whether Automatic CPU speed is on or off.
 func acSnapshotTake() acSnapshot {
 	var s acSnapshot
 	paths := cpuGovernorPaths(cpufreqRoot)
 	s.governors = readGovernorSaves(paths)
-	if autoPerfSupported() && autoPerfOn.Load() {
+	if autoPerfSupported() && (autoPerfOn.Load() || cpuFreqSetKHz.Load() > 0) {
 		paths = nil
 	}
 	for _, p := range paths {

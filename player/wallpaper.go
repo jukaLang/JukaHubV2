@@ -48,6 +48,10 @@ var (
 // wallpaperNoneLabel is the first row: no picture, Home's own backdrop.
 const wallpaperNoneLabel = "None — the glass backdrop"
 
+// wallpaperShippedLabel is the row that opens the wallpapers JukaHub ships
+// for its themes (themewallpapers.go), shown in every other folder.
+const wallpaperShippedLabel = "JukaHub wallpapers"
+
 // wallpaperPage is how many rows L1/R1 (PgUp/PgDn on a keyboard) move.
 const wallpaperPage = 5
 
@@ -56,6 +60,11 @@ const wallpaperPage = 5
 var wallpaperExts = []string{".jpg", ".jpeg", ".png", ".bmp", ".gif"}
 
 func initWallpaperPicker() {
+	// The wallpapers JukaHub ships for its themes are in the data folder's
+	// wallpapers folder from the first visit on (themewallpapers.go).
+	if _, err := themeWallpaperEnsure(""); err != nil {
+		logWarn("wallpaper", "theme wallpapers not copied: %v", err)
+	}
 	dir := wallpaperStartDir(appConfig)
 	// An absolute folder always has a way up, even when the picker starts in
 	// the working directory.
@@ -105,7 +114,13 @@ func wallpaperStartDirs(config *Config) []string {
 	if home != "" {
 		dirs = append(dirs,
 			filepath.Join(home, "Pictures", "Wallpapers"),
-			filepath.Join(home, "Pictures", "Backgrounds"),
+			filepath.Join(home, "Pictures", "Backgrounds"))
+		if !P().IsHandheld() {
+			// The wallpapers JukaHub ships, before the whole Pictures folder
+			// (the handheld lists the same folder above).
+			dirs = append(dirs, themeWallpaperDir())
+		}
+		dirs = append(dirs,
 			filepath.Join(home, "Pictures"),
 			filepath.Join(home, "Downloads"))
 	}
@@ -177,6 +192,12 @@ func listPickerEntries(dir string, exts []string) ([]wallpaperEntry, error) {
 // so a folder that cannot be read is never a dead end.
 func scanWallpaperDir() {
 	wpEntries = []wallpaperEntry{{name: wallpaperNoneLabel, clear: true}}
+	// The wallpapers JukaHub ships are one press away from any folder.
+	if tw := themeWallpaperDir(); !strings.EqualFold(filepath.Clean(tw), filepath.Clean(wpDir)) {
+		if info, err := os.Stat(tw); err == nil && info.IsDir() {
+			wpEntries = append(wpEntries, wallpaperEntry{name: wallpaperShippedLabel, path: tw, folder: true})
+		}
+	}
 	if parent := filepath.Dir(wpDir); parent != wpDir {
 		wpEntries = append(wpEntries, wallpaperEntry{name: "Up a folder", path: parent, parent: true})
 	}

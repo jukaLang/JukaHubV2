@@ -28,6 +28,7 @@ package main
 // force an update.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -416,7 +417,7 @@ func themeUpdateCheckNow() {
 	go func() {
 		themeUpdateRescan()
 		if IsOnline() && safeModeAllows(SafeFeatureNetwork) {
-			startThemeCatalogLoad(true)
+			startThemeCatalogLoad(context.Background(), true)
 		}
 	}()
 }
@@ -453,7 +454,7 @@ func startThemeUpdateScheduler() {
 			for {
 				if themeUpdateFetchDue(time.Now(), lastTry) {
 					lastTry = time.Now()
-					startThemeCatalogLoad(true)
+					startThemeCatalogLoad(context.Background(), true)
 				}
 				time.Sleep(themeUpdatePoll)
 			}

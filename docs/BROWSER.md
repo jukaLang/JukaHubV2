@@ -112,7 +112,10 @@ they were, and Select still opens the menu. The choice is the
 * Set tables like a browser: every cell of a row reaches the row's bottom
   (backgrounds and borders included), and a cell's content sits in the middle
   of a taller row unless `vertical-align` or `valign` puts it at the top or
-  the bottom.
+  the bottom. A cell with nothing in it (`<td>&nbsp;</td>`) keeps its column,
+  so DuckDuckGo Lite's titles sit beside their numbers with the snippet
+  under them, and a narrow column keeps its longest word whole while a long
+  one beside it wraps.
 * Draw serif text in a serif face (Georgia, Times and Wikipedia's headings;
   on the handhelds the embedded Lora), and break long words at their soft
   hyphens (`&shy;`) with a hyphen, as German and Dutch pages expect.

@@ -531,9 +531,11 @@ func gameReadyLetThrough(game libraryGame) bool {
 		return true
 	}
 	// The launch path running again after the saves came down, the C library
-	// was installed or Dolphin or ARMSX2 was set up (dolphin.go and ps2.go set
-	// their markers before the re-entry and read them after the gates).
-	if saveSyncAuto.resume == path || raGlibcInstall.resume == path || dolphinResume == path || ps2Resume == path {
+	// was installed, Dolphin or ARMSX2 was set up (dolphin.go and ps2.go set
+	// their markers before the re-entry and read them after the gates) or
+	// hakuX got its build for this screen (hakux_fit.go).
+	if saveSyncAuto.resume == path || raGlibcInstall.resume == path || dolphinResume == path || ps2Resume == path ||
+		hakuxFitResume == path {
 		return true
 	}
 	if until, ok := gameReadyPasses[path]; ok {

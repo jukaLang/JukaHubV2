@@ -1475,16 +1475,18 @@ func steamPlaytimeText(minutes int) string {
 	return strconv.Itoa(minutes/60) + " h played"
 }
 
-// steamLastPlayedText is "last played Nov 3" (this year) or "Mar 2023".
+// steamLastPlayedText is "last played 3 Nov" (this year, in the user's date
+// order and the interface language) or "last played March 2023". Render
+// thread.
 func steamLastPlayedText(ts int64) string {
 	if ts <= 0 {
 		return ""
 	}
 	t := time.Unix(ts, 0)
 	if t.Year() == time.Now().Year() {
-		return "last played " + t.Format("Jan 2")
+		return "last played " + formatDateShort(appConfig, t)
 	}
-	return "last played " + t.Format("Jan 2006")
+	return "last played " + formatMonthYear(t)
 }
 
 // steamWhereText says where g is installed or downloading.

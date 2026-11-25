@@ -32,6 +32,8 @@
 #   build-root.sh key PART          the name of the artifact an earlier run kept
 #                                   PART under (helpers, androidrt or box64): a
 #                                   prefix and a hash of what PART is built from
+#   build-root.sh commit androidrt  "<commit> <unix time>" of the newest commit
+#                                   that changed what AndroidRT is built from
 #   build-root.sh release           unmount what create mounted
 #
 # Everything that decides what a build produces is in this file or in the
@@ -60,9 +62,16 @@ if [ -z "${JOBS:-}" ]; then
 fi
 
 usage() {
-    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|cores|stt|llm | check androidrt|box64 | key helpers|androidrt|box64|stt|llm | release" >&2
+    echo "usage: $0 create | build helpers|androidrt|box64|ppsspp|cores|stt|llm | check androidrt|box64 | key helpers|androidrt|box64|stt|llm | commit androidrt | release" >&2
     exit 2
 }
+
+# What AndroidRT's package is made from: its sources, build-tsp.sh and
+# launch.sh (copied into the package), the script that checks and packages it,
+# this file and .gitattributes; not its smoke tests or its README. Both its
+# reuse key (part_sources) and the commit it is named after (part_commit) read
+# this list.
+ANDROIDRT_SOURCES="player/androidrt/src player/androidrt/build-tsp.sh player/androidrt/launch.sh player/native/build-runtimes.sh .github/scripts/build-root.sh .gitattributes"
 
 # in_root [NAME=VALUE...] CMD...: CMD inside the root, as root, with nothing
 # from the runner's environment but HOME, LANG, PATH and the pairs given.
@@ -175,7 +184,13 @@ build() {
                 /bin/sh /src/player/native/build-helpers.sh
             ;;
         androidrt)
+            # Named and dated after the newest commit that changed AndroidRT's
+            # sources, not after the tip being built, so an unchanged AndroidRT
+            # rebuilds to the same zip byte for byte. git runs here, on the
+            # runner: inside the root it may refuse the mounted checkout.
+            bd_src="$(part_commit androidrt 2> /dev/null || true)"
             in_root SOURCE_COMMIT="$(source_commit)" SOURCE_KEY="$(part_key androidrt 2> /dev/null || true)" \
+                ANDROIDRT_COMMIT="${bd_src%% *}" SOURCE_DATE_EPOCH="${bd_src#* }" \
                 OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/androidrt \
                 /bin/sh /src/player/native/build-runtimes.sh androidrt
             ;;
@@ -278,12 +293,9 @@ part_sources() {
                 .github/scripts/build-root.sh .gitattributes
             ;;
         androidrt)
-            # AndroidRT's sources, build-tsp.sh and launch.sh (copied into the
-            # package) and the script that checks and packages it; not its
-            # smoke tests or its README.
-            git -C "$REPO" ls-files -s -- player/androidrt/src player/androidrt/build-tsp.sh \
-                player/androidrt/launch.sh player/native/build-runtimes.sh \
-                .github/scripts/build-root.sh .gitattributes
+            # ANDROIDRT_SOURCES, a list of plain paths.
+            # shellcheck disable=SC2086
+            git -C "$REPO" ls-files -s -- $ANDROIDRT_SOURCES
             ;;
         box64)
             # build-runtimes.sh pins all of it (the Box64 commit, its build
@@ -319,6 +331,26 @@ part_key() {
     printf '%s-%s\n' "$pk_prefix" "$(printf '%s\n' "$pk_sources" | sha256sum | cut -c1-16)"
 }
 
+# part_commit PART prints "<commit id> <unix time>" of the newest commit that
+# changed what PART is built from. It needs the history: the AndroidRT job
+# checks out every commit (without old file contents). In a shallow checkout
+# the tip seems to add every file, and the answer is the tip, true for that
+# one build only.
+part_commit() {
+    case "$1" in
+        androidrt)
+            # shellcheck disable=SC2086
+            pc_line="$(git -C "$REPO" log -1 --format='%H %ct' -- $ANDROIDRT_SOURCES)" || return 1
+            ;;
+        *) usage ;;
+    esac
+    case "$pc_line" in
+        *' '*) ;;
+        *) echo "build-root: git names no commit for $1's sources" >&2; return 1 ;;
+    esac
+    printf '%s\n' "$pc_line"
+}
+
 # ── release ──────────────────────────────────────────────────────────────
 
 release() {
@@ -334,6 +366,7 @@ case "$cmd:$#" in
     build:1) build "$1" ;;
     check:1) check "$1" ;;
     key:1) part_key "$1" ;;
+    commit:1) part_commit "$1" ;;
     release:0) release ;;
     *) usage ;;
 esac

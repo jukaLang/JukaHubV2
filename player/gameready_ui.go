@@ -262,7 +262,7 @@ func gameReadyQuietOffered() bool {
 func gameReadyStart(game libraryGame, launcher, note string) {
 	gameReadyGrantPass(game.Path)
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+game.Label()+": "+firstLine(err.Error()), ToastKindError)
+		gameLaunchErrorToast(game.Label(), err)
 		return
 	}
 	PlaySuccessSound()

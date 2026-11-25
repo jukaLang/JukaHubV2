@@ -570,7 +570,7 @@ func gmetaPlayWith(game libraryGame, st *gmetaState, launcher string) {
 		}
 	}
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+		gameLaunchErrorToast(game.Title, err)
 		return
 	}
 	if gameLaunchWasHeld(game.Path) {

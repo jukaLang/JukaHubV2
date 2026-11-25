@@ -97,12 +97,15 @@ func partySafeRequestURL(raw string) (string, error) {
 	return raw, nil
 }
 
-func partyNewRequest(method, raw string, body io.Reader) (*http.Request, error) {
+func partyNewRequest(ctx context.Context, method, raw string, body io.Reader) (*http.Request, error) {
 	safe, err := partySafeRequestURL(raw)
 	if err != nil {
 		return nil, err
 	}
-	return http.NewRequest(method, safe, body)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return http.NewRequestWithContext(ctx, method, safe, body)
 }
 
 // ── Server ──────────────────────────────────────────────────────────────────
@@ -442,6 +445,10 @@ type partyClient struct {
 	memberID string
 
 	http *http.Client
+	// ctx lasts as long as the membership: Leave cancels it, so a poll or a
+	// post still in flight is closed with it.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	last     partySnapshot
 	received time.Time
@@ -462,11 +469,14 @@ func newPartyHTTP() *http.Client {
 var partyHTTPFactory = newPartyHTTP
 
 func newPartyClient(baseURL, code, memberID string) *partyClient {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &partyClient{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		code:     strings.ToUpper(strings.TrimSpace(code)),
 		memberID: memberID,
 		http:     partyHTTPFactory(),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -545,7 +555,7 @@ func (c *partyClient) post(path string, payload interface{}) (partySnapshot, err
 	if err != nil || !partyHostAllowed(u.Hostname()) {
 		return partySnapshot{}, errors.New("the party address is not a safe local HTTP endpoint")
 	}
-	req, err := partyNewRequest(http.MethodPost, target, bytes.NewReader(body))
+	req, err := partyNewRequest(c.ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return partySnapshot{}, err
 	}
@@ -635,7 +645,7 @@ func (c *partyClient) Poll(watch float64) bool {
 		c.fail(errors.New("the party address is not a safe local HTTP endpoint"))
 		return true
 	}
-	req, err := partyNewRequest(http.MethodGet, target, nil)
+	req, err := partyNewRequest(c.ctx, http.MethodGet, target, nil)
 	if err != nil {
 		c.fail(err)
 		return true
@@ -708,6 +718,9 @@ func (c *partyClient) Leave() {
 	_, _ = c.post("/api/party/leave", map[string]interface{}{
 		"code": c.code, "member": c.memberID,
 	})
+	if c.cancel != nil {
+		c.cancel()
+	}
 }
 
 // Snapshot returns the last state received and when it arrived.
@@ -834,7 +847,7 @@ func partyJoin(invite, name string) error {
 	if parseErr != nil || !partyHostAllowed(u.Hostname()) {
 		return errors.New("the party address is not a safe local HTTP endpoint")
 	}
-	req, err := partyNewRequest(http.MethodPost, target, bytes.NewReader(body))
+	req, err := partyNewRequest(client.ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

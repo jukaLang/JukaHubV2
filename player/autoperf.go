@@ -58,6 +58,13 @@ package main
 // uiboost.go): a press lifts its ceiling to the top the heat allows and its
 // floor near it, through the same writes and records, until the press's hold
 // runs out. A press wakes the ticker at once rather than at its next sample.
+//
+// A clock set by hand (Settings → CPU frequency, cpufreq_manual.go) is a
+// third kind (autoPerfSession.fixed): the session's table stops at that clock
+// and holds it there — the floor too, unless "Slow down when idle" is on —
+// with only the heat dial moving it, whether Automatic CPU speed is on or off.
+// The boosts stand aside for it, a game's own CPU setting does not, and
+// nothing it holds is learned.
 
 import (
 	"encoding/json"
@@ -167,15 +174,20 @@ type autoPerfSession struct {
 	last    time.Time
 
 	// What the context asked for: a session that made itself manual (an
-	// emulator on the userspace governor) is not begun again every tick.
+	// emulator on the userspace governor) is not begun again every tick, and
+	// a new clock set by hand begins it again.
 	reqManual bool
 	reqBoost  bool
+	reqFixed  cpuFreqFixed
 	// CPU boost (cpuboost.go): the level is the heat dial's, the floor goes
 	// with it under a dynamic governor (minRaise), cores counts parked cores
 	// it woke.
 	boost    bool
 	minRaise bool
 	cores    int
+	// A clock set by hand (cpufreq_manual.go): the table's top is that clock,
+	// held like a boost's, the floor with it unless "Slow down when idle".
+	fixed bool
 	// The heat guard's own records in a session JukaHub does not clock
 	// (heatguard.go heatHoldLocked), and whether a refusal was logged.
 	heat    []saverSysfsWrite
@@ -205,14 +217,16 @@ var autoPerf struct {
 	denied  bool
 
 	// A launch on its way: the game's key (or "" to name it after the child
-	// process), whether it has its own CPU setting or is boosted, and when it
-	// began.
+	// process), whether it has its own CPU setting or is boosted, when it
+	// began, and whether the game has its own CPU options (launchOwn: a clock
+	// set by hand leaves such a game to them).
 	launchSet    bool
 	launchKey    string
 	launchLabel  string
 	launchManual bool
 	launchBoost  bool
 	launchAt     time.Time
+	launchOwn    bool
 
 	prev map[string]autoPerfCPUTimes
 	sess autoPerfSession
@@ -281,6 +295,9 @@ func autoPerfSettingDetail(c *Config) string {
 	switch {
 	case reason != "":
 		return "Not available: " + reason
+	case cpuFreqHolds(c, false) && cpuFreqHolds(c, true):
+		// Settings → CPU frequency holds everything (cpufreq_manual.go).
+		return "Resting: the CPU frequency is set by hand"
 	case !autoPerfEnabled(c):
 		return "Off: the CPU speed only changes for games"
 	case line != "":
@@ -324,6 +341,9 @@ func autoPerfFrame(config *Config, now time.Time) {
 	autoPerfHub.mu.Lock()
 	autoPerfHub.key, autoPerfHub.label, autoPerfHub.class = key, label, class
 	autoPerfHub.mu.Unlock()
+	// The CPU frequency set by hand (cpufreq_manual.go), before the ticker
+	// starts, so the first session already holds it.
+	cpuFreqPublish(config)
 	// Faster menus' row and power mode (uiboost.go), before the start's
 	// request below can read them; Faster game starts' too (faststart.go).
 	uiBoostPublish(config)
@@ -386,16 +406,18 @@ func autoPerfLaunchBegin(target string) {
 		return
 	}
 	target = strings.TrimSpace(target)
-	manual, boost := false, false
+	manual, boost, own := false, false, false
 	key, label := "", ""
 	if target != "" {
 		opts := gameOptionsFor(target)
 		// CPU boost holds the game at the top clock the heat allows
 		// (cpuboost.go); the heavy-game boost's games are among them unless
 		// CPU boost is off (xboxboost.go: a game waiting on its GPU must not
-		// read as quiet). Otherwise the game's own CPU setting is in charge.
+		// read as quiet). Otherwise the game's own CPU setting is in charge,
+		// over a clock set by hand too (cpufreq_manual.go).
+		own = normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0
 		boost = cpuBoostWanted(target, opts)
-		manual = !boost && (normaliseGameCPUProfile(opts.CPUProfile) != "" || opts.MaxFreqKHz > 0 || xboxBoostHolds(target))
+		manual = !boost && (own || xboxBoostHolds(target))
 		key = "game:" + gameOptionsKey(target)
 		label = strings.TrimSuffix(filepath.Base(target), filepath.Ext(target))
 	}
@@ -407,6 +429,7 @@ func autoPerfLaunchBegin(target string) {
 	autoPerfEndLocked(time.Now())
 	autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel = true, key, label
 	autoPerf.launchManual, autoPerf.launchBoost, autoPerf.launchAt = manual, boost, time.Now()
+	autoPerf.launchOwn = own
 }
 
 // autoPerfYield is called by beginGamePowerProfileWith (every launch,
@@ -433,6 +456,7 @@ func autoPerfYield() {
 	if !autoPerf.launchSet || now.Sub(autoPerf.launchAt) > 2*time.Second {
 		autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel = true, "", ""
 		autoPerf.launchManual, autoPerf.launchBoost, autoPerf.launchAt = false, false, now
+		autoPerf.launchOwn = false
 	}
 }
 
@@ -453,7 +477,7 @@ func autoPerfLaunchEnd() {
 	}
 	autoPerfEndLocked(time.Now())
 	autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel, autoPerf.launchManual = false, "", "", false
-	autoPerf.launchBoost = false
+	autoPerf.launchBoost, autoPerf.launchOwn = false, false
 }
 
 // ── The ticker ───────────────────────────────────────────────────────────
@@ -489,6 +513,9 @@ func autoPerfLoop() {
 				return
 			}
 		case <-uiBoostKick:
+			// A CPU frequency set by hand, in force at once while the hub is
+			// in front (cpufreq_manual.go).
+			cpuFreqApplyNow(time.Now())
 		case <-hold.C:
 		}
 		look(uiBoostReconcile(time.Now()))
@@ -560,23 +587,23 @@ func autoPerfFollowLocked(now time.Time, maxBusy, allBusy float64, sampled bool)
 		autoPerf.sess.adapt.DownRun = 0
 		autoPerf.sess.last = now
 	default:
-		key, label, class, manual, boost, wait := autoPerfContextLocked(now)
-		if !boost && !autoPerfOn.Load() {
+		key, label, class, manual, boost, fixed, wait := autoPerfContextLocked(now)
+		if !boost && fixed.khz <= 0 && !autoPerfOn.Load() {
 			// Automatic CPU speed off: the app in front is still followed,
-			// for the heat guard alone.
+			// for the heat guard alone (a clock set by hand still holds).
 			manual = true
 		}
 		s := &autoPerf.sess
 		switch {
 		case wait:
 			// A launch is starting its child: hands off until it is up.
-		case !s.active || key != s.key || manual != s.reqManual || boost != s.reqBoost:
+		case !s.active || key != s.key || manual != s.reqManual || boost != s.reqBoost || fixed != s.reqFixed:
 			// From one hub screen to another the ceiling is handed over as
 			// it is, rather than put back and lowered again a moment later.
 			keep := s.active && !s.manual && !s.foreign && !s.boost && !manual &&
 				strings.HasPrefix(s.key, "hub:") && strings.HasPrefix(key, "hub:")
 			carry := autoPerfFinishLocked(now, keep)
-			autoPerfBeginLocked(now, key, label, class, manual, boost, carry)
+			autoPerfBeginLocked(now, key, label, class, manual, boost, fixed, carry)
 		default:
 			autoPerfAdaptLocked(now, maxBusy, allBusy, sampled)
 		}
@@ -610,28 +637,39 @@ func autoPerfHubInFrontLocked() bool {
 }
 
 // autoPerfContextLocked names the app in front. boost reports a CPU boost
-// launch (cpuboost.go); wait reports a launch that has not started its child
-// yet, or a boosted one whose launch script may still be setting the clock.
-func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClass, manual, boost, wait bool) {
+// launch (cpuboost.go), fixed a clock set by hand for it (cpufreq_manual.go);
+// wait reports a launch that has not started its child yet, or one whose
+// launch script may still be setting the clock (a boosted one, or one that
+// gets a clock set by hand).
+func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClass, manual, boost bool, fixed cpuFreqFixed, wait bool) {
 	launchPowerProfile.mu.Lock()
 	depth := launchPowerProfile.depth
 	launchPowerProfile.mu.Unlock()
 	if depth > 0 || runningGameChildren.Load() > 0 || foreignScreenSuspended() {
+		// A clock set by hand for games, unless the game has its own CPU
+		// options; like a boost, it waits for the launch script.
+		if !autoPerf.launchSet || !autoPerf.launchOwn {
+			fixed = cpuFreqFixedFor(true)
+		}
+		settling := autoPerf.launchSet && now.Sub(autoPerf.launchAt) < cpuBoostSettle && !autoPerf.sess.active
+		if settling && (fixed.khz > 0 || (autoPerf.launchBoost && autoPerf.launchKey != "")) {
+			return "", "", autoPerfClassGame, false, false, cpuFreqFixed{}, true
+		}
 		if autoPerf.launchSet && autoPerf.launchKey != "" {
-			if autoPerf.launchBoost && now.Sub(autoPerf.launchAt) < cpuBoostSettle && !autoPerf.sess.active {
-				return "", "", autoPerfClassGame, false, false, true
+			if fixed.khz > 0 {
+				return autoPerf.launchKey, autoPerf.launchLabel, autoPerfClassGame, false, false, fixed, false
 			}
-			return autoPerf.launchKey, autoPerf.launchLabel, autoPerfClassGame, autoPerf.launchManual, autoPerf.launchBoost, false
+			return autoPerf.launchKey, autoPerf.launchLabel, autoPerfClassGame, autoPerf.launchManual, autoPerf.launchBoost, fixed, false
 		}
 		key, label = autoPerfChildKey()
-		return key, label, autoPerfClassGame, false, false, false
+		return key, label, autoPerfClassGame, false, false, fixed, false
 	}
 	if autoPerf.launchSet {
 		if now.Sub(autoPerf.launchAt) < autoPerfLaunchWait && !autoPerf.sess.active {
-			return "", "", autoPerfClassMenu, false, false, true
+			return "", "", autoPerfClassMenu, false, false, cpuFreqFixed{}, true
 		}
 		autoPerf.launchSet, autoPerf.launchKey, autoPerf.launchLabel, autoPerf.launchManual = false, "", "", false
-		autoPerf.launchBoost = false
+		autoPerf.launchBoost, autoPerf.launchOwn = false, false
 	}
 	autoPerfHub.mu.Lock()
 	key, label, class = autoPerfHub.key, autoPerfHub.label, autoPerfHub.class
@@ -639,7 +677,7 @@ func autoPerfContextLocked(now time.Time) (key, label string, class autoPerfClas
 	if key == "" {
 		key, label, class = "hub:scene:Home", "Home", autoPerfClassMenu
 	}
-	return key, label, class, false, false, false
+	return key, label, class, false, false, cpuFreqFixedFor(false), false
 }
 
 // autoPerfChildKey names a launch that came without a ROM path (an app
@@ -665,12 +703,13 @@ func autoPerfChildKey() (string, string) {
 
 // autoPerfBeginLocked starts following an app: its level table, its floor,
 // and the learned (or class) starting level, written once. A boosted launch
-// starts at the top of its table; a session JukaHub does not clock is only
-// held under the heat dial. Neither goes over the dial.
-func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, manual, boost bool, carry []saverSysfsWrite) {
+// starts at the top of its table, and a clock set by hand is the top of its
+// own; a session JukaHub does not clock is only held under the heat dial.
+// None goes over the dial.
+func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, manual, boost bool, fixed cpuFreqFixed, carry []saverSysfsWrite) {
 	autoPerf.sess = autoPerfSession{
 		active: true, key: key, label: label, class: class, manual: manual,
-		reqManual: manual, reqBoost: boost,
+		reqManual: manual, reqBoost: boost, reqFixed: fixed,
 		at: map[int64]time.Duration{}, last: now, writes: carry,
 	}
 	s := &autoPerf.sess
@@ -705,6 +744,9 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 		heatHoldLocked(s, heatCapKHzLocked())
 		return
 	}
+	// A clock set by hand (cpufreq_manual.go); the context never asks for one
+	// with a boost.
+	s.fixed = fixed.khz > 0 && !s.boost
 	if s.boost {
 		// Before the policies are listed: a cluster whose cores are all
 		// parked has no policy link until one comes up.
@@ -717,7 +759,12 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 	}
 	heatGuardRefreshLevelsLocked()
 	limit := autoPerfGlobalCap.Load()
-	if !autoPerfBoostOK.Load() {
+	switch {
+	case s.fixed:
+		// The clock picked, one of the chip's own: neither the global cap
+		// nor the firmware's ceiling overrules that choice.
+		limit = fixed.khz
+	case !autoPerfBoostOK.Load():
 		// "Full speed while playing" is off: never above what the firmware
 		// runs at — the value Auto found, not one it wrote itself.
 		maxPath := filepath.Join(s.dirs[0], "scaling_max_freq")
@@ -742,11 +789,17 @@ func autoPerfBeginLocked(now time.Time, key, label string, class autoPerfClass, 
 	s.top = len(s.levels) - 1
 	s.floor = autoPerfIndexAtLeast(s.levels, spec.FloorKHz)
 	start := s.top
-	if s.boost {
+	switch {
+	case s.boost:
 		// A dynamic governor idles the clock between frames: the floor goes
 		// with the level (autoPerfWriteLocked).
 		s.minRaise = cpuBoostGovernor(s.dirs) != "performance"
-	} else {
+	case s.fixed:
+		// The clock picked is the table's top; the floor goes with it, under
+		// any governor, unless "Slow down when idle" lets the load decide.
+		s.minRaise = !fixed.idle
+		logDebug("power", "CPU frequency set by hand: %s at %s", label, formatFrequencyKHz(s.levels[s.top]))
+	default:
 		if spec.StartKHz > 0 {
 			start = autoPerfIndexAtLeast(s.levels, spec.StartKHz)
 		}
@@ -790,6 +843,9 @@ func autoPerfLineLocked(s *autoPerfSession) string {
 		line = s.label + " · heavy-game boost · " + clock
 	case s.boost:
 		line = s.label + " · CPU boost · " + clock
+	case s.fixed:
+		// The CPU frequency set by hand (cpufreq_manual.go).
+		line = s.label + " · set by hand · " + clock
 	case s.burst:
 		// Faster game starts (faststart.go): the load's clock, then the level.
 		ceil, floor := uiBoostLevelsLocked(s)
@@ -807,8 +863,9 @@ func autoPerfLineLocked(s *autoPerfSession) string {
 
 // autoPerfAdaptLocked is one tick's decision for the app in front: a level
 // from the load (when a CPU sample came in), never over the heat dial; a
-// boosted launch's level is the dial's own; a session JukaHub does not clock
-// is held under the dial (heatHoldLocked).
+// boosted launch's level, and a clock set by hand, are the dial's own (under
+// the session's top); a session JukaHub does not clock is held under the dial
+// (heatHoldLocked).
 func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64, sampled bool) {
 	s := &autoPerf.sess
 	// A game still loading (Faster game starts, faststart.go): its seconds are
@@ -826,7 +883,7 @@ func autoPerfAdaptLocked(now time.Time, maxBusy, allBusy float64, sampled bool) 
 	}
 	heatIdx := autoPerfHeatIdxLocked(s)
 	next := heatIdx
-	if !s.boost {
+	if !s.boost && !s.fixed {
 		next = s.idx
 		if sampled {
 			// A warm chip or battery steps no higher (heatguard.go).
@@ -945,10 +1002,11 @@ func autoPerfIndexAtMost(levels []int64, khz int64) int {
 }
 
 // autoPerfWriteLocked moves every policy's ceiling to khz and, for a boosted
-// session under a dynamic governor, its floor with it. It reports whether the
-// level is now in force; a ceiling or floor someone else moved, or a refusal,
-// takes Auto's hands off this app (and a refusal off the rest of the run), and
-// from then on only the heat guard holds it (heatHoldLocked).
+// session under a dynamic governor or a clock set by hand (unless it may slow
+// down when idle), its floor with it. It reports whether the level is now in
+// force; a ceiling or floor someone else moved, or a refusal, takes Auto's
+// hands off this app (and a refusal off the rest of the run), and from then
+// on only the heat guard holds it (heatHoldLocked).
 func autoPerfWriteLocked(khz int64) bool {
 	s := &autoPerf.sess
 	// Faster menus (uiboost.go): while a press holds the boost, the ceiling is
@@ -997,9 +1055,10 @@ func autoPerfWriteLocked(khz int64) bool {
 			floor = min(lo, target)
 		}
 		switch {
-		case s.boost && s.minRaise:
-			// CPU boost: the floor at the level too, so a dynamic governor
-			// cannot idle the clock between frames.
+		case (s.boost || s.fixed) && s.minRaise:
+			// CPU boost, and a clock set by hand (cpufreq_manual.go): the
+			// floor at the level too, so a dynamic governor cannot idle the
+			// clock between frames.
 			floor = target
 		case uiFloor > 0:
 			// The menus' boost: its floor at least (a higher one found
@@ -1007,8 +1066,10 @@ func autoPerfWriteLocked(khz int64) bool {
 			// record above takes the floor back to the value found.
 			floor = min(max(lo, cpufreqScaleKHz(dir, uiFloor, refTop)), target)
 		case floor < 0 && lo > 0 && target < lo:
-			if heatCap > 0 && khz <= heatCap {
-				floor = target // the heat dial goes under a raised floor too
+			if s.fixed || (heatCap > 0 && khz <= heatCap) {
+				// A clock set by hand, and the heat dial, go under a
+				// raised floor too.
+				floor = target
 			} else {
 				target = lo // the kernel refuses a ceiling under the floor
 			}
@@ -1151,7 +1212,7 @@ func autoPerfFinishLocked(now time.Time, keep bool) []saverSysfsWrite {
 	if len(s.levels) > 0 && s.idx >= 0 && s.idx < len(s.levels) && !s.last.IsZero() {
 		s.at[s.levels[s.idx]] += now.Sub(s.last)
 	}
-	if !s.manual && !s.foreign && !s.boost && s.key != "" {
+	if !s.manual && !s.foreign && !s.boost && !s.fixed && s.key != "" {
 		var total time.Duration
 		for _, d := range s.at {
 			total += d

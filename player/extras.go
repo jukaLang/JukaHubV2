@@ -1378,23 +1378,9 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = patchHints
 		}
 	case "Notes":
-		// The list takes the four action keys the handler really has; while a
-		// note is open, typing owns the pad and only B does anything.
-		if notes.tab == 0 {
-			hints[1] = FooterHint{Button: "A", Label: "Edit"}
-			hints = append(hints,
-				FooterHint{Button: "Y", Label: "New"},
-				FooterHint{Button: "X", Label: "Delete"},
-				// "/ F": the keyboard cycles folders with F (inputhints.go
-				// shows whichever half the user can press).
-				FooterHint{Button: "L1/R1 / F", Label: "Folder"},
-			)
-		} else if notes.tab == 3 {
-			// Search is a draft, not an edit: B leaves the field.
-			hints = []FooterHint{{Button: "B", Label: "Done"}}
-		} else {
-			hints = []FooterHint{{Button: "B", Label: "Save & Back"}}
-		}
+		// The list, the editor, the search and the menus each name the keys
+		// they really take (notes_files.go).
+		hints = notesFooterHints(hints)
 	case "Calculator":
 		// The pad walks the key grid and the history list; the keys follow
 		// whichever holds it (calculator.go).
@@ -1944,6 +1930,8 @@ func dropRetiredVaultVars(user *UserConfig) bool {
 // (favorites.json, chat.json, jukaland.json) into jukauser.json sections and
 // removes them. Kept for users upgrading from older builds; new installs never
 // create these files.
+//
+// remove after 2027-05-01: an upgrade shim for installs from 0.4.0.
 func migrateLegacyUserFiles() {
 	if userConfigCache == nil {
 		return

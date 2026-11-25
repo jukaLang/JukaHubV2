@@ -130,6 +130,7 @@ test('diagnostics kind cannot carry a log or user-written report fields', () => 
   assert.equal(validateReport(info), '');
   for (const changed of [
     { log: 'private log' }, { title: 'A real bug' }, { description: 'custom text' }, { category: 'crash' },
+    { launch: 'launch details' },
   ]) {
     assert.equal(validateReport({ ...info, ...changed }), 'invalid anonymous diagnostics report');
   }
@@ -452,6 +453,37 @@ test('diagnostics and log are fenced, collapsed and kept under the issue limit',
   const tiny = buildIssue(r, 9000);
   assert.ok(tiny.body.length <= 9000, String(tiny.body.length));
   assert.ok(!tiny.body.includes('Recent log'), 'the log is dropped before the description is touched');
+});
+
+test('a launch report shows its details unfolded, gets its label and keeps them longest', async () => {
+  const launch = 'JukaHub launch report\nWhat        : Library game "Sonic CD"\n' +
+    'Emulator    : /mnt/SDCARD/Emus/SEGACD/launch.sh\n' + 'X'.repeat(30 * 1024) + '\nlast launch line';
+  const r = report({
+    category: 'crash', title: "Couldn't launch Sonic CD (Sega CD): The launch script could not find RetroArch",
+    launch, diagnostics: 'fps 60\n' + 'D'.repeat(16 * 1024), log: 'L'.repeat(48 * 1024),
+  });
+  assert.equal(validateReport(r), '');
+  assert.equal(validateReport(report({ launch: 'x'.repeat(40 * 1024) })), 'launch is too long');
+  assert.equal(validateReport(report({ launch: 42 })), 'launch is not text');
+
+  const c = collector({}, [NOT_FOUND, CREATED]);
+  assert.equal((await c.handle(post(r), at('203.0.113.9'))).status, 201);
+  const sent = JSON.parse(c.calls[1].init.body);
+  assert.deepEqual(sent.labels, ['bug', 'from-device', 'launch-failure']);
+  assert.ok(sent.body.includes('<details open>\n<summary>Launch details'), 'the details start unfolded');
+  assert.ok(sent.body.includes('/mnt/SDCARD/Emus/SEGACD/launch.sh'), 'folder and file names stay');
+  assert.ok(sent.body.length <= 60000, String(sent.body.length));
+  assert.ok(sent.body.includes('Library game'), 'the record survives what the log and diagnostics gave up');
+
+  const own = collector({ JUKAHUB_LAUNCH_LABELS: 'launch' }, [NOT_FOUND, CREATED]);
+  assert.equal((await own.handle(post(r), at('203.0.113.9'))).status, 201);
+  assert.deepEqual(JSON.parse(own.calls[1].init.body).labels, ['launch']);
+
+  const plain = buildIssue(report());
+  assert.ok(!plain.body.includes('Launch details'), 'other reports have no launch section');
+  const small = buildIssue(r, 12000);
+  assert.ok(small.body.length <= 12000, String(small.body.length));
+  assert.ok(small.body.includes('Library game'), 'the start of the details is what is kept');
 });
 
 test('the title names the category when the report has none', () => {

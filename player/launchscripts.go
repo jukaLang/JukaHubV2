@@ -322,7 +322,7 @@ func launchScriptsGate(game libraryGame, launcher string) (bool, error) {
 		err := launchLibraryGame(game, launcher)
 		launchScriptsState.resume = ""
 		if err != nil {
-			ShowToast("Cannot launch "+job.title+": "+err.Error(), ToastKindError)
+			gameLaunchErrorToast(job.title, err)
 		}
 	})
 	return true, nil

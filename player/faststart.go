@@ -150,6 +150,9 @@ func fastStartSettingDetail(c *Config) string {
 		return "Off: a game loads at the speed it settled at last time"
 	case fastStartResting(c):
 		return "Resting while Battery Saver is on"
+	case cpuFreqHolds(c, true):
+		// Settings → CPU frequency holds the games (cpufreq_manual.go).
+		return "Card read-ahead only: the CPU frequency is set by hand"
 	case !autoPerfEnabled(c):
 		return "Card read-ahead only: the CPU part needs Automatic CPU speed"
 	}
@@ -193,7 +196,7 @@ func fastStartBurstArmLocked(s *autoPerfSession, now time.Time) {
 // fastStartBurstEligibleLocked reports a session Automatic CPU speed clocks
 // itself, with a level table and a level in it.
 func fastStartBurstEligibleLocked(s *autoPerfSession) bool {
-	return s.active && !s.manual && !s.foreign && !s.boost && len(s.levels) > 0 &&
+	return s.active && !s.manual && !s.foreign && !s.boost && !s.fixed && len(s.levels) > 0 &&
 		s.top >= 0 && s.top < len(s.levels) && s.idx >= 0 && s.idx < len(s.levels)
 }
 

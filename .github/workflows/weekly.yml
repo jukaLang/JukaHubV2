@@ -257,8 +257,10 @@ jobs:
         # host gcc and driven headlessly (about 200 assertions, seconds). The
         # helper job runs the same suite on arm64 whenever it rebuilds
         # AndroidRT; here it runs every week whatever changed. Advisory until it
-        # has been green on the runner's gcc, like the step above.
+        # has been green on the runner's gcc, like the step above, and bounded:
+        # a hung probe ends the step, not the job.
         continue-on-error: true
+        timeout-minutes: 5
         env:
           SMOKE_WORK: ${{ runner.temp }}/androidrt-smoke
         run: sh player/androidrt/tests/smoke/run-smoke.sh

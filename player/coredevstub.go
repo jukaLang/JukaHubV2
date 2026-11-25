@@ -30,7 +30,14 @@ package main
 //     udev_stub), and what hidapi and SDL meet on a firmware with no libudev,
 //     so they look for devices the way they do there;
 //   - libbluetooth: -1 from every call (hci_get_route: no adapter), and Dolphin
-//     reports "Bluetooth not found".
+//     reports "Bluetooth not found";
+//   - libXi, the X Input extension: 0 (NULL) from every call and BadRequest
+//     from XIQueryVersion ("no XInput 2"). A Smart Pro's log of 2026-11-24
+//     (JH-X6HRVE) showed the buildbot's Dolphin refused for exactly two
+//     libraries, "libXi.so.6 and libusb-1.0.so.0": the firmware had every
+//     other library it links. Dolphin's X11 input backend
+//     is the only user, and Dolphin starts it only for an X11 window; the
+//     libretro core's window is RetroArch's (WindowSystemType::Libretro).
 // libevdev gets none: a build with Dolphin's evdev input backend needs a udev
 // that works (its hotplug thread would wait on a monitor a NULL udev never
 // gives), so such a build stays refused, with the library named.
@@ -88,8 +95,20 @@ type devStubLib struct {
 	// prefixes claim a core's unversioned imports for the library; a
 	// versioned import names its library itself.
 	prefixes []string
+	// claim, when set, claims them instead: for a library whose functions
+	// share a prefix with another's (libXi's XIQueryVersion, libX11's
+	// XInternAtom).
+	claim func(name string) bool
 	// ret is what each of its functions returns.
 	ret func(name string) devStubRet
+}
+
+// claims reports whether an unversioned import is the library's.
+func (l devStubLib) claims(name string) bool {
+	if l.claim != nil {
+		return l.claim(name)
+	}
+	return devStubClaims(name, l.prefixes)
 }
 
 // devStubLibs are the libraries JukaHub writes stand-ins for, by file name.
@@ -100,6 +119,45 @@ var devStubLibs = map[string]devStubLib{
 		prefixes: []string{"hci_", "sdp_", "bt_", "ba2", "str2ba", "bachk", "baswap", "batostr", "strtoba", "lmp_", "pal_"},
 		ret:      func(string) devStubRet { return devStubRet{value: -1} },
 	},
+	"libXi.so.6": {claim: devStubXiClaims, ret: devStubXiRet},
+}
+
+// devStubXiInput1 are libXi's XInput 1 functions, whose names carry no XI.
+var devStubXiInput1 = map[string]bool{
+	"XAllowDeviceEvents": true, "XChangeDeviceControl": true, "XChangeDeviceDontPropagateList": true,
+	"XChangeDeviceKeyMapping": true, "XChangeDeviceProperty": true, "XChangeFeedbackControl": true,
+	"XChangeKeyboardDevice": true, "XChangePointerDevice": true, "XCloseDevice": true,
+	"XDeleteDeviceProperty": true, "XDeviceBell": true, "XFreeDeviceControl": true, "XFreeDeviceList": true,
+	"XFreeDeviceMotionEvents": true, "XFreeDeviceState": true, "XFreeFeedbackList": true,
+	"XGetDeviceButtonMapping": true, "XGetDeviceControl": true, "XGetDeviceDontPropagateList": true,
+	"XGetDeviceFocus": true, "XGetDeviceKeyMapping": true, "XGetDeviceModifierMapping": true,
+	"XGetDeviceMotionEvents": true, "XGetDeviceProperty": true, "XGetExtensionVersion": true,
+	"XGetFeedbackControl": true, "XGetSelectedExtensionEvents": true, "XGrabDevice": true,
+	"XGrabDeviceButton": true, "XGrabDeviceKey": true, "XListDeviceProperties": true,
+	"XListInputDevices": true, "XOpenDevice": true, "XQueryDeviceState": true, "XSelectExtensionEvent": true,
+	"XSendExtensionEvent": true, "XSetDeviceButtonMapping": true, "XSetDeviceFocus": true,
+	"XSetDeviceMode": true, "XSetDeviceModifierMapping": true, "XSetDeviceValuators": true,
+	"XUngrabDevice": true, "XUngrabDeviceButton": true, "XUngrabDeviceKey": true,
+}
+
+// devStubXiClaims reports a libXi function: XI and a capital letter
+// (XIQueryVersion, XISelectEvents — not libX11's XInternAtom or XIfEvent),
+// or an XInput 1 call by name. Pure.
+func devStubXiClaims(name string) bool {
+	if len(name) > 2 && strings.HasPrefix(name, "XI") && name[2] >= 'A' && name[2] <= 'Z' {
+		return true
+	}
+	return devStubXiInput1[name]
+}
+
+// devStubXiRet is what libXi's stand-in returns: BadRequest (1) from
+// XIQueryVersion, so a caller hears "no XInput 2" and stops there; 0 (NULL,
+// Success, False) from the rest.
+func devStubXiRet(name string) devStubRet {
+	if name == "XIQueryVersion" {
+		return devStubRet{value: 1}
+	}
+	return devStubRet{}
 }
 
 // devStubLibusbNotSupported is libusb's LIBUSB_ERROR_NOT_SUPPORTED.
@@ -149,7 +207,7 @@ func devStubNeeds(f *elf.File, lib string) (versions []string, syms []devStubSym
 		switch {
 		case s.Library == lib:
 			syms = append(syms, devStubSym{name: s.Name, version: s.Version})
-		case s.Library == "" && s.Version == "" && devStubClaims(s.Name, info.prefixes):
+		case s.Library == "" && s.Version == "" && info.claims(s.Name):
 			syms = append(syms, devStubSym{name: s.Name})
 		}
 	}

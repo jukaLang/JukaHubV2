@@ -291,11 +291,52 @@ func webLayerHiddenBlock(name string, st *webStyle) bool {
 	if st.HasOpacity && st.Opacity <= 0.01 {
 		return true
 	}
+	if webOffCanvas(st) {
+		return true
+	}
 	// 1×1 px, or 1 px in one direction with overflow hidden (older
 	// `.element-invisible` rules set only the height).
 	tiny := func(px float64) bool { return px > 0 && px <= 2 }
 	clipped := st.OverflowX != 0 || st.OverflowY != 0
 	return (tiny(st.Width) && tiny(st.Height)) || (clipped && (tiny(st.Width) || tiny(st.Height)))
+}
+
+// webOffCanvas reports a positioned box parked wholly off the screen until a
+// script slides it in: a fixed one past the left or top edge — html5test's
+// index menu is `position: fixed; left: -240px; width: 220px` with 10px of
+// padding — or any one thousands of pixels out (a skip link at -9999px). A
+// browser shows nothing of it. Nested inside another positioned box the
+// reader lays it out in that box's flow, where its inset is lost, and the
+// menu covered a quarter of the page. A translate may bring it back, so a
+// box with one is left to layout.
+func webOffCanvas(st *webStyle) bool {
+	if st.HasTranslate {
+		return false
+	}
+	left := st.HasLeft && st.InsetPct[3] == 0
+	top := st.HasTop && st.InsetPct[0] == 0
+	if (left && st.Left <= -999) || (top && st.Top <= -999) {
+		return true
+	}
+	if st.Position != webPositionFixed {
+		// An absolute box hangs off its containing block, which is rarely
+		// at the screen's edge: a badge at left: -30px stays in view.
+		return false
+	}
+	// A drawer slid out by a percentage of its own width: `left: -100%;
+	// width: 80%`.
+	if st.HasLeft && st.InsetPct[3] < 0 && st.WidthPct > 0 && st.InsetPct[3]+st.WidthPct <= 0 {
+		return true
+	}
+	w, h := st.Width, st.Height
+	if st.BoxSizing != 1 {
+		w += st.PadLeft + st.PadRight
+		h += st.PadTop + st.PadBot
+	}
+	right := st.HasRight && st.InsetPct[1] == 0 && !st.HasLeft
+	return (left && st.Width > 0 && st.Left < 0 && st.Left+w <= 0) ||
+		(right && st.Width > 0 && st.Right < 0 && st.Right+w <= 0) ||
+		(top && st.Height > 0 && st.Top < 0 && st.Top+h <= 0)
 }
 
 // webLayerCoversScreen reports a box that would cover most of the screen: a
@@ -919,6 +960,13 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 	}
 	insetT := webInsetPx(st.Top, st.InsetPct[0], vertical, scale)
 	insetB := webInsetPx(st.Bottom, st.InsetPct[2], vertical, scale)
+	if fixed && st.HasBottom && !st.HasTop && insetB < 0 && -insetB >= h {
+		// Parked wholly below the screen's bottom edge until a script lifts it
+		// (Wikipedia's donation bar is `position: fixed; bottom: -500px` until
+		// it opens): a browser shows nothing of it. Too tall to pin, it used to
+		// be laid in after the page's text instead.
+		return 0
+	}
 	static, hasStatic := l.layout.statics[g.layer]
 	if g.layer == 0 {
 		hasStatic = false

@@ -182,9 +182,56 @@ they are while compressing the rest quickly, so the handheld stays usable. A
 name that is taken gets " (2)", and when the ZIP is done the cursor lands on
 it. **A** on the ZIP extracts it again.
 
-## Notes, Calculator, Alarms and Pomodoro
+## Notes
 
-- **Notes** keeps notes in folders, with search (`notes.json` beside JukaHub).
+**Notes** keeps notes in folders, with search (`notes.json` beside JukaHub).
+A note is light Markdown: a line starting with `# ` is a heading, `## ` a
+coloured subheading, `- ` a bullet, `> ` a quote, and ```` ``` ```` fences a
+block of code. Long lines wrap.
+
+**Typing on a handheld.** With no keyboard, the on-screen keyboard types the
+note. **Y** makes a new note with the keyboard already on its title ("New
+Note" selected, so the first letter replaces it); its **Next** key moves on to
+the body. In an open note, **Up**/**Down** move between the title and the body
+(and scroll a long body), **A** opens the keyboard on the one in focus,
+**L1**/**R1** move the note to another folder, and **B** saves and goes back
+to the list. On the body the keyboard's action key is **New line**, and
+**Start** (or **Y**) is **Done**; the note stays readable above the keyboard,
+scrolled so the caret is in view, and the keyboard's own field shows the line
+the caret is on. However the keyboard closes, the note is saved. Select all,
+Cut and Clear are off on a note's body: one press would take the whole note
+away (Copy still copies it).
+
+With a keyboard, type straight into the note: **Enter** or **Tab** moves from
+the title to the body, **Ctrl+Up** back, **Ctrl+S** saves, **Ctrl+M** opens
+the note's menu, **Esc** saves and goes back (see [CONTROLS.md](CONTROLS.md)).
+
+**Files.** In an open note, **Y** (or **Select**) → **Save as file** writes it
+as plain UTF-8 text to `Notes/<folder>/<title>.txt` at the root of the SD
+card (beside JukaHub.exe, in its `shared` folder, on a PC) — where a PC
+reading the card, the FTP server and the phone's Files card find it. Saving
+the same note again updates the same file, renamed with the note when its
+title or folder changed; two notes with the same title get `Title (2).txt`,
+and a file JukaHub did not write is never replaced. On the list, **Select** →
+**Every note as a file** writes them all (Ctrl+S with a keyboard).
+
+**Your phone.** **Select** → **Open on phone** on the list (or **Open on
+phone** in a note's menu) shows a QR code that opens the Phone Companion's
+**Notes** page — also reachable from the companion page's **Notes** card.
+There you can read every note, write new ones and finish old ones with the
+phone's keyboard, add `.txt` files as notes, and download a note as a `.txt`
+or all of them as a `.zip`. Changes appear on the handheld at once. Nothing is
+overwritten unseen: a note changed on the handheld while you edited it on the
+phone is not saved over (the page offers to keep both), and a note changed on
+the phone while it was open on the handheld keeps both versions too — the
+handheld's typing on the note, the phone's as "… (phone copy)". The page sits
+behind the companion's PIN like every other card.
+
+**X** on the list deletes the highlighted note after asking; so does
+**Delete note** in a note's menu. A file saved from the note stays.
+
+## Calculator, Alarms and Pomodoro
+
 - **Calculator** is a scientific calculator: the usual precedence (`−2²` is
   −4, `2^3^2` is 512), implicit multiplication (`2π`, `3(4)`), n!, `%` the way
   phone calculators add it (`200 + 10%` is 220), degrees or radians, **2nd**

@@ -114,6 +114,52 @@ To get the same look in your own theme file, set the matching
 `arrangement`, `carouselStyle`, `tileRadius`, `focusRing` and `focusRing2`
 keys from the table above.
 
+## Theme wallpapers
+
+JukaHub ships eight wallpapers, each drawn for a family of colour presets
+from their own palettes and glows, and a theme that has one brings it along:
+
+| Wallpaper | Themes |
+| --- | --- |
+| Neon Horizon — a synthwave sun over a neon grid | Synthwave, Vaporwave, Cyberpunk, Arcade |
+| Midnight Aurora — northern lights over dark ridges | Midnight, Aurora, Nord, Dracula |
+| Deep Ocean — light shafts and bubbles over a reef | Ocean, Ocean Glass, Cobalt, Blue |
+| Misty Forest — pines in layered mist, fireflies | Forest, Green, Gruvbox |
+| Ember Glow — sparks rising from a fire | Ember, Sunset, Amber CRT, Ruby, Red |
+| Paper Garden — watercolour sprigs on warm paper | Paper, E-Ink, Sand, Solarized Light, Moss |
+| Sakura Dusk — cherry blossom over a far mountain | Sakura, Cute, Girly, Lavender, Orchid |
+| Arctic Light — snowy ranges under a pale sky | Arctic, Light |
+
+A style built on one of those palettes (the Styles tab) brings the same
+picture. The defaults, OLED, the high-contrast and colour-blind palettes, the
+terminal looks and the console styles keep the glass backdrop: they are looks
+of their own.
+
+The rule runs whenever a theme is put on — picked by hand, by the light & dark
+schedule, by Battery Saver (OLED takes a theme's wallpaper away; the theme
+coming back brings it back), by an experience pack (whose own wallpaper
+choice comes after and wins):
+
+- a wallpaper you chose in the wallpaper picker — or **None** chosen there —
+  is never replaced;
+- otherwise the theme's wallpaper goes on, and a theme without one takes a
+  theme's wallpaper away again.
+
+Settings → Theme & look → **Theme wallpapers** (on by default,
+`"themeWallpapers"`) turns this off, taking a theme's wallpaper away; turning
+it back on forgets a "None" picked earlier and puts the theme's on.
+
+The pictures are 1280 × 720 (drawn by `branding/mkwallpapers.py`, embedded in
+JukaHub) and are copied into the data folder's `wallpapers` folder the first
+time the picker opens or a theme needs one; the picker lists them there, and
+its **JukaHub wallpapers** row opens that folder from any other. On a screen
+of another shape (the Brick's 4:3) the copy is the middle of the picture at
+the screen's shape, because a wallpaper is stretched to the screen. A copy you
+delete is not put back, except when a theme needs it; a file of the same name
+JukaHub did not write is never replaced. They are drawn to read under the
+backdrop's veil: vivid for the dark themes, soft for the light ones, with
+nothing important in the middle where the glass goes.
+
 ## Menu colour
 
 Settings → Theme & look → **Menu colour** keeps the theme (its backgrounds,

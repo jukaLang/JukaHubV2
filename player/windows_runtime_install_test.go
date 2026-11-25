@@ -9,6 +9,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"net/http"
@@ -87,11 +88,11 @@ func TestInstallWineRuntimeFromArchive(t *testing.T) {
 		"hangover/usr/bin/other":       "x",
 	})
 	srv := serveHangoverArchive(t, archive)
-	if err := installWineRuntime("http://127.0.0.1/hangover.tar"); err == nil || !strings.Contains(err.Error(), "https") {
+	if err := installWineRuntime(context.Background(), "http://127.0.0.1/hangover.tar"); err == nil || !strings.Contains(err.Error(), "https") {
 		t.Fatalf("a plain-HTTP runtime URL gave %v, want a refusal", err)
 	}
 
-	if err := installWineRuntime(srv.URL + "/hangover_11.16_debian12_bookworm_arm64.tar"); err != nil {
+	if err := installWineRuntime(context.Background(), srv.URL+"/hangover_11.16_debian12_bookworm_arm64.tar"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +136,7 @@ func TestInstallWineRuntimeRejectsTraversal(t *testing.T) {
 	})
 	srv := serveHangoverArchive(t, archive)
 
-	err := installWineRuntime(srv.URL + "/hangover.tar")
+	err := installWineRuntime(context.Background(), srv.URL+"/hangover.tar")
 	if err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("error = %v, want an escape rejection", err)
 	}

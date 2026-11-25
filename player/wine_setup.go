@@ -66,6 +66,7 @@ func buildWindowsSetupBase() windowsSetupBase {
 				{Title: "Display", Detail: "Programs open in their own windows.", Status: "not needed"},
 				{Title: "DXVK", Detail: "Windows has Direct3D already.", Status: "not needed"},
 				{Title: "Sample program", Detail: "Copy programs into the Windows Apps folder; they run directly.", Status: "not needed"},
+				{Title: "Wine test", Detail: "Windows runs programs itself; the Wine test is for handhelds.", Status: "not needed"},
 			},
 			lines: []string{"On a PC, Windows Apps opens .exe files directly: nothing needs installing."},
 		}
@@ -80,6 +81,8 @@ func buildWindowsSetupBase() windowsSetupBase {
 		windowsDisplaySetupRow(weston),
 		windowsDXVKSetupRow(dxvk, vulkan),
 		windowsSampleSetupRow(),
+		// The built-in Wine test (windowsapps_winetest.go).
+		windowsWineTestSetupRow(),
 	}
 	base.lines = windowsSetupFactLines(facts, weston, dxvk, vulkan)
 	return base

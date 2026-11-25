@@ -36,3 +36,7 @@ func winWifiReconnect() (wifiJoinResult, error) {
 }
 func winWifiForget(string) error { return errors.New(winWifiUnavailableReason()) }
 func winWifiLinkUp() bool        { return false }
+
+// winNetWatch is Windows' network-change callback (wifi_windows.go); here the
+// radio code and the timed probes nudge the monitor themselves.
+func winNetWatch() {}

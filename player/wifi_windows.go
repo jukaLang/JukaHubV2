@@ -36,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // wifiPOSIXForced pins the wpa_supplicant backend. It is true everywhere but
@@ -1005,4 +1007,31 @@ func winWifiForget(ssid string) error {
 	}
 	resetWinWifiIfaceCache()
 	return nil
+}
+
+// winNetWatchOnce makes winNetWatch's one registration.
+var winNetWatchOnce sync.Once
+
+// winNetWatch asks Windows to call back whenever an interface or a unicast
+// address changes — a cable, another network picked in Windows' own Wi-Fi
+// menu, a VPN coming up — and the callback asks the connectivity monitor for a
+// probe at once (netNudge), so JukaHub's status follows within about a second
+// instead of at the next timed probe. One registration for the life of the
+// process (callbacks cannot be freed); a refused one leaves the timed probes
+// in charge. The callback runs on a Windows pool thread: netNudge only sends
+// on a channel without blocking.
+func winNetWatch() {
+	winNetWatchOnce.Do(func() {
+		cb := windows.NewCallback(func(callerContext, row, notificationType uintptr) uintptr {
+			netNudge()
+			return 0
+		})
+		var iface, addr windows.Handle
+		if err := windows.NotifyIpInterfaceChange(windows.AF_UNSPEC, cb, nil, false, &iface); err != nil {
+			logWarn("net", "Windows interface-change notifications unavailable: %v", err)
+		}
+		if err := windows.NotifyUnicastIpAddressChange(windows.AF_UNSPEC, cb, nil, false, &addr); err != nil {
+			logWarn("net", "Windows address-change notifications unavailable: %v", err)
+		}
+	})
 }

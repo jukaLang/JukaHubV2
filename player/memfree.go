@@ -37,6 +37,11 @@ package main
 // beside JukaHub with nobody asking may be wanted (a Remote Play client
 // playing sound, a port's helper). That stays the user's choice.
 //
+// A game, emulator, port or app that takes the screen with less free than the
+// Video memory (VRAM) assigned in Settings (vram.go) gets steps 1–3 as
+// memFreeGame: its textures were already cleared on the main thread at the
+// hand-over, and it never closes an app either.
+//
 // "Free" here is memHeadroomMB: MemAvailable plus a cautious share of free
 // swap (memSwapCreditMB, memswap.go). The read-outs (Home's gauge, the
 // Hardware screen, the log) keep showing RAM alone.
@@ -64,6 +69,7 @@ const (
 	memFreeAIPreload                       // a background load (the model while the user talks, the wake word's recognizer): steps 1–3
 	memFreeAI                              // the model starting for a question: every step
 	memFreeSpeech                          // a speech recognizer starting: every step
+	memFreeGame                            // a game took the screen short of its Video memory (vram.go): steps 1–3, textures already gone
 )
 
 // memEvictTrim and memEvictFull are the forced evictions memFreeEvictWant
@@ -355,10 +361,10 @@ func memFreeStopHelpers(purpose memFreePurpose) []string {
 	if purpose != memFreeAI && purpose != memFreeAIPreload && offlineAIServerStopIdle(why) {
 		out = append(out, "offline AI")
 	}
-	if purpose == memFreeAI || purpose == memFreeSpeech {
-		// The user is talking to Juka, not browsing videos: the link
-		// extractors (Python, tens of MB each) and the library's ffprobe scan
-		// carry on later from where they stopped.
+	if purpose == memFreeAI || purpose == memFreeSpeech || purpose == memFreeGame {
+		// The user is talking to Juka or playing, not browsing videos: the
+		// link extractors (Python, tens of MB each) and the library's ffprobe
+		// scan carry on later from where they stopped.
 		prefetchMu.Lock()
 		windows := len(prefetchWindows)
 		prefetchMu.Unlock()

@@ -337,10 +337,15 @@ clock and the notification bell are in the bar itself.
   with the D-pad (`Up` from the card beneath them) and **A**. JukaHub hands the
   screen to the helper and closes while it runs; the stock menu returns when the
   stream ends. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
-* **Smart home** — **Start → Smart Home** drives Home Assistant entities,
-  mirrors every toggle to MQTT, shows the Pi-hole, router and Tailscale state,
-  and connects or disconnects the tunnel. WireGuard is status-only because
-  `wg-quick` needs root. See [docs/SMART_HOME.md](docs/SMART_HOME.md).
+* **Smart home** — the **Smart Home** tab of the Home screen switches TP-Link
+  Kasa and Tapo plugs, strips and lights (locally, no TP-Link cloud), controls
+  Google's Nest speakers, displays, Chromecast and Google TV (no account), and
+  everything Home Assistant has — Apple Home and Google Home accessories too,
+  shared to it through Matter. **Add devices** sets it all up on the handheld
+  or from the phone. **Start → Smart Home** also shows the Pi-hole, router and
+  Tailscale state, connects or disconnects the tunnel and mirrors Home
+  Assistant toggles to MQTT; WireGuard is status-only because `wg-quick` needs
+  root. See [docs/SMART_HOME.md](docs/SMART_HOME.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
@@ -801,7 +806,7 @@ four the same way, with controller hints; see
 | [Chat voice](docs/VOICE_CHANNEL.md) | the Voice tab's free voice room (one click, no sign-up, Mumble apps on phones can join), voice clips, private Voice Channels, and the optional self-hosted relay |
 | [Spatial audio](docs/SPATIAL_AUDIO.md) | virtual surround on headphones, wider stereo on the speakers, and RetroArch games through a filter JukaHub ships |
 | [Theme files](docs/THEMES.md) | the complete theme JSON schema and the shared glass rules |
-| [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
+| [Smart home](docs/SMART_HOME.md) | The Smart Home tab: TP-Link Kasa and Tapo, Google Cast, Home Assistant, Apple Home and Google Home through Matter; the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [TV mode](docs/TV_MODE.md) | the Brick Pro on a TV: detection, larger text, the controller as player 1, the built-in screen off |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |

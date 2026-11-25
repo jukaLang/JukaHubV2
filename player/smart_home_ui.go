@@ -31,6 +31,10 @@ const (
 	smartHomeRowWireGuard
 	smartHomeRowRefresh
 	smartHomeRowClose
+	// A TP-Link or Google device of the hub (smarthome_hub.go), its id in
+	// entityID, and the row that sets devices up from the phone.
+	smartHomeRowDevice
+	smartHomeRowSetup
 )
 
 type smartHomeRow struct {
@@ -41,6 +45,8 @@ type smartHomeRow struct {
 	entityID string
 	enabled  bool
 	on       bool
+	// toggle draws a device row's switch (one that turns on and off).
+	toggle bool
 }
 
 var smartHomePanel struct {
@@ -61,7 +67,7 @@ func smartHomeRowValueColour(row smartHomeRow) sdl.Color {
 	switch {
 	case !row.enabled:
 		return ColorTextTertiary()
-	case row.kind == smartHomeRowEntity || row.kind == smartHomeRowTailscale:
+	case row.kind == smartHomeRowEntity || row.kind == smartHomeRowTailscale || row.kind == smartHomeRowDevice:
 		if row.on {
 			return ColorToastSuccess
 		}
@@ -77,6 +83,9 @@ func smartHomeRowValueColour(row smartHomeRow) sdl.Color {
 func smartHomePanelRows(config *Config, snap smartHomeSnapshotData) []smartHomeRow {
 	settings := loadSmartHomeSettings(config)
 	rows := make([]smartHomeRow, 0, len(snap.entities)+6)
+
+	// TP-Link and Google devices first (hometabs_smarthome.go).
+	rows = append(rows, smartHomePanelDeviceRows()...)
 
 	for _, e := range snap.entities {
 		on := haEntityOn(e.State)
@@ -98,7 +107,7 @@ func smartHomePanelRows(config *Config, snap smartHomeSnapshotData) []smartHomeR
 		rows = append(rows, smartHomeRow{
 			label:  "Home Assistant",
 			value:  snap.haErr,
-			detail: "ha_url and ha_token in jukauser.json",
+			detail: "Set up devices connects Home Assistant from your phone",
 			kind:   smartHomeRowEntity,
 		})
 	}
@@ -182,6 +191,10 @@ func smartHomePanelRows(config *Config, snap smartHomeSnapshotData) []smartHomeR
 	}
 	rows = append(rows, wg)
 
+	rows = append(rows, smartHomeRow{
+		kind: smartHomeRowSetup, label: "Set up devices", value: "phone", enabled: true,
+		detail: "TP-Link ID, Home Assistant, Google Home and Apple Home, from your phone",
+	})
 	refresh := smartHomeRow{kind: smartHomeRowRefresh, label: "Refresh", value: "R", enabled: true}
 	if settings.hasMQTT() {
 		refresh.detail = "Toggles are mirrored to " + settings.MQTTPFX + "/<entity_id>"
@@ -206,6 +219,7 @@ func openSmartHomePanel(config *Config) {
 	smartHomePanelRect = sdl.Rect{}
 	smartHomePanel.enter.begin(uiClockMS(), 180)
 	refreshSmartHome(config)
+	shubKick(config)
 }
 
 // closeSmartHomePanel hides the panel. PlayBackSound is only played for a real
@@ -302,8 +316,15 @@ func smartHomePanelActivate(config *Config) {
 				showToast("Tailscale: "+firstLine(err.Error()), ToastWarn())
 			}
 		}()
+	case smartHomeRowDevice:
+		PlayActivateSound()
+		smartHomePanelDevice(config, row.entityID)
+	case smartHomeRowSetup:
+		closeSmartHomePanel()
+		smartHomePhoneOpen("")
 	case smartHomeRowRefresh:
 		refreshSmartHome(config)
+		shubScanNow()
 		PlayNavSound()
 	case smartHomeRowClose:
 		closeSmartHomePanel()
@@ -383,7 +404,10 @@ func handleSmartHomeMouse(mx, my int32, config *Config) bool {
 // or what to add when nothing is.
 func smartHomePanelSubtitle(config *Config, snap smartHomeSnapshotData) string {
 	settings := loadSmartHomeSettings(config)
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, 5)
+	if n := len(smartHomePanelDeviceRows()); n > 0 {
+		parts = append(parts, pluralizeCount(n, "device on the Wi-Fi", "devices on the Wi-Fi"))
+	}
 	if settings.hasHA() {
 		parts = append(parts, fmt.Sprintf("%d devices", len(snap.entities)))
 	}
@@ -397,7 +421,7 @@ func smartHomePanelSubtitle(config *Config, snap smartHomeSnapshotData) string {
 		parts = append(parts, "WireGuard")
 	}
 	if len(parts) == 0 {
-		return "Nothing configured — add ha_url, pihole_url or mqtt_host to jukauser.json"
+		return "Nothing set up yet — Set up devices, or add pihole_url / mqtt_host to jukauser.json"
 	}
 	line := strings.Join(parts, " · ")
 	if snap.loading {
@@ -413,6 +437,8 @@ func renderSmartHomePanel(renderer *sdl.Renderer, config *Config) {
 	if !smartHomePanel.open || renderer == nil {
 		return
 	}
+	// The hub reads its devices while the panel is up.
+	shubKick(config)
 	snap := smartHomeSnapshot()
 	rows := smartHomePanelRows(config, snap)
 	if len(rows) == 0 {
@@ -546,7 +572,7 @@ func renderSmartHomePanel(renderer *sdl.Renderer, config *Config) {
 
 		// A switch is drawn for the two rows that really toggle something; the
 		// other rows keep the value column only.
-		if row.kind == smartHomeRowEntity || row.kind == smartHomeRowTailscale {
+		if row.kind == smartHomeRowEntity || row.kind == smartHomeRowTailscale || (row.kind == smartHomeRowDevice && row.toggle) {
 			if row.enabled {
 				swW := int32(40)
 				swH := int32(22)

@@ -28,7 +28,10 @@
 // HTML, and what GitHub would still turn into a link or a notification — a
 // bare address, "www.", @mentions, #123 and GH-123 references — gets a
 // zero-width space that breaks it. Diagnostics and the log go into collapsed
-// code blocks, where nothing renders.
+// code blocks, where nothing renders; a launch-failure report's details
+// (player/launchreport.go: the command, environment, files and emulator output
+// of a game or emulator that would not start) into an open one, and the issue
+// gets the launch-failure label as well (JUKAHUB_LAUNCH_LABELS).
 //
 // Setup (docs/BUG_REPORTS.md): JUKAHUB_GITHUB_TOKEN in the site's environment
 // variables is the only required one; JUKAHUB_ISSUES_REPO, JUKAHUB_ISSUE_LABELS
@@ -50,6 +53,9 @@ const TEXT_LIMITS = {
   description: 4000 + CUT_SLACK,
   diagnostics: (16 << 10) + CUT_SLACK,
   log: (48 << 10) + CUT_SLACK,
+  // A launch-failure report's account of the launch (player/launchreport.go):
+  // the command, its environment, the files it needed, the emulator's output.
+  launch: (32 << 10) + CUT_SLACK,
 };
 
 // The device facts: short strings the device fills in. release and channel are
@@ -167,8 +173,10 @@ function fenced(text) {
   return `${fence}text\n${text}\n${fence}`;
 }
 
-function details(summary, text) {
-  return `<details>\n<summary>${summary}</summary>\n\n${fenced(text)}\n\n</details>`;
+// details is a collapsed code block; an open one starts unfolded (a launch
+// report's details, which are what the issue is about).
+function details(summary, text, open = false) {
+  return `<details${open ? ' open' : ''}>\n<summary>${summary}</summary>\n\n${fenced(text)}\n\n</details>`;
 }
 
 function capitalise(word) {
@@ -191,7 +199,7 @@ export function validateReport(r) {
   if (r.kind === 'anonymous_diagnostics' &&
       (r.category !== 'other' || r.title !== 'Anonymous device diagnostics' ||
        r.description !== 'Informational report sent automatically after about ten opted-in launches. No bug is being reported.' ||
-       (r.log !== undefined && r.log !== ''))) {
+       (r.log !== undefined && r.log !== '') || (r.launch !== undefined && r.launch !== ''))) {
     return 'invalid anonymous diagnostics report';
   }
   for (const [field, max] of Object.entries(TEXT_LIMITS)) {
@@ -250,12 +258,14 @@ function trimHead(text, max) {
 
 // buildIssue turns a valid report into the issue's title and markdown body. The
 // body stays under maxBody characters: the log gives way first (its oldest
-// lines), then the diagnostics (their end).
+// lines), then the diagnostics (their end), then a launch report's details
+// (their end: the record and the findings lead, the emulator's logs follow).
 export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
   const informational = r.kind === 'anonymous_diagnostics';
   const description = scrub(cleanText(r.description)).trim();
   let diagnostics = scrub(cleanText(r.diagnostics)).trim();
   let log = scrub(cleanText(r.log)).trim();
+  let launch = informational ? '' : scrub(cleanText(r.launch)).trim();
   const channel = cleanText(r.channel).trim().toLowerCase();
   const version = [r.version, r.release ? `(${r.release})` : '',
     channel ? `· ${capitalise(channel)} channel` : ''].filter(Boolean).join(' ');
@@ -279,6 +289,7 @@ export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
 
   const assemble = () => {
     const parts = [head];
+    if (launch) parts.push(details('Launch details (folder and file names kept)', launch, true));
     if (diagnostics) parts.push(details('Diagnostics (redacted)', diagnostics));
     if (log) parts.push(details('Recent log (redacted)', log));
     parts.push(foot);
@@ -296,8 +307,19 @@ export function buildIssue(r, maxBody = ISSUE_BODY_MAX) {
     diagnostics = room >= 400 ? trimHead(diagnostics, room) : '';
     body = assemble();
   }
+  if (body.length > maxBody && launch) {
+    const room = launch.length - (body.length - maxBody) - 64;
+    launch = room >= 400 ? trimHead(launch, room) : '';
+    body = assemble();
+  }
   if (body.length > maxBody) body = trimHead(body, maxBody);
   return { title: issueTitle(r), body };
+}
+
+// isLaunchReport tells a launch-failure report (one with launch details) from
+// the others, for its labels.
+export function isLaunchReport(r) {
+  return r.kind === 'bug_report' && typeof r.launch === 'string' && r.launch.trim() !== '';
 }
 
 // ── Rate limit ─────────────────────────────────────────────────────────────
@@ -563,9 +585,14 @@ export function createHandler(options = {}) {
     }
 
     const issue = buildIssue(report);
-    const labelSetting = report.kind === 'anonymous_diagnostics'
+    let labelSetting = report.kind === 'anonymous_diagnostics'
       ? env('JUKAHUB_DIAGNOSTICS_LABELS') ?? 'non-issue,from-device'
       : env('JUKAHUB_ISSUE_LABELS') ?? 'bug,from-device';
+    if (isLaunchReport(report)) {
+      // A launch that failed is its own kind of bug: a label the tracker can
+      // filter on.
+      labelSetting = env('JUKAHUB_LAUNCH_LABELS') ?? `${labelSetting},launch-failure`;
+    }
     const labels = String(labelSetting)
       .split(',').map(s => s.trim()).filter(Boolean).slice(0, 5).map(s => s.slice(0, 50));
     let resp;

@@ -426,7 +426,8 @@ func mailUnreadShown() int {
 }
 
 // mailDateText is a message's date for the list: the time today,
-// "Yesterday", the weekday this week, else the date. Before the clock is
+// "Yesterday", the weekday this week, else the date, in the interface
+// language and the user's date order (clockformat.go). Before the clock is
 // set it is always the plain date.
 func mailDateText(config *Config, now, t time.Time) string {
 	if t.IsZero() {
@@ -434,7 +435,7 @@ func mailDateText(config *Config, now, t time.Time) string {
 	}
 	lt := t.Local()
 	if now.Before(clockFloor()) {
-		return lt.Format("Jan 2, 2006")
+		return formatDate(config, lt)
 	}
 	// The calendar days are compared in UTC, where every day is 24 hours: a
 	// local midnight-to-midnight span is 23 or 25 hours across a DST change,
@@ -447,22 +448,23 @@ func mailDateText(config *Config, now, t time.Time) string {
 	case diff == 0:
 		return clockDigits(config, lt)
 	case diff == 24*time.Hour:
-		return "Yesterday"
+		return dateLocaleNow().word(-1)
 	case diff > 0 && diff < 6*24*time.Hour:
-		return lt.Format("Mon")
+		return formatWeekdayShort(lt)
 	case ty == ny:
-		return lt.Format("Jan 2")
+		return formatDateShort(config, lt)
 	}
-	return lt.Format("Jan 2, 2006")
+	return formatDate(config, lt)
 }
 
-// mailFullDate is a message's date for the reader.
+// mailFullDate is a message's date for the reader: "Monday, 9 November 2026 ·
+// 15:04" in the interface language, date order and clock.
 func mailFullDate(config *Config, t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
 	lt := t.Local()
-	return lt.Format("Mon, Jan 2, 2006") + " · " + clockDigits(config, lt)
+	return formatDateLong(config, lt) + " · " + clockDigits(config, lt)
 }
 
 // mailText draws content exactly as written (no interface translation, no
@@ -821,7 +823,7 @@ func mailReaderText() string {
 		b.WriteString(text)
 		b.WriteString("\n\n" + mailAttachHeading + "\n")
 		for _, a := range e.body.Attachments {
-			b.WriteString("• " + mailClean(a.Name, 80) + " · " + mailSizeText(a.Size))
+			b.WriteString("• " + mailClean(a.Name, 80) + " · " + formatSize(int64(a.Size)))
 			if a.Partial {
 				b.WriteString(" (incomplete)")
 			}
@@ -830,17 +832,6 @@ func mailReaderText() string {
 		text = b.String()
 	}
 	return text
-}
-
-// mailSizeText is a byte count for a person.
-func mailSizeText(n int) string {
-	switch {
-	case n >= 1<<20:
-		return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) + " MB"
-	case n >= 1<<10:
-		return strconv.Itoa(n>>10) + " KB"
-	}
-	return strconv.Itoa(n) + " bytes"
 }
 
 func mailRenderReader(renderer *sdl.Renderer, config *Config) {

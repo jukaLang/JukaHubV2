@@ -410,6 +410,9 @@ var osPrompt struct {
 	buffer      string
 	max         int
 	submit      func(string)
+	// secret masks the text and keeps it out of the suggestion strip and
+	// the learned words (vkSecretTarget): a password.
+	secret bool
 }
 
 // osPromptOpen opens the on-screen keyboard (or takes a physical keyboard's
@@ -419,9 +422,21 @@ var osPrompt struct {
 // longest text accepted (0 is 200). submit gets the trimmed text on Done —
 // possibly empty, which the caller decides about — and nothing on B.
 func osPromptOpen(title, placeholder, action, seed string, maxRunes int, submit func(string)) {
+	osPromptOpenAs(false, title, placeholder, action, seed, maxRunes, submit)
+}
+
+// osPromptOpenSecret is osPromptOpen for a password: masked, never learned,
+// no suggestions, no starting text.
+func osPromptOpenSecret(title, placeholder, action string, maxRunes int, submit func(string)) {
+	osPromptOpenAs(true, title, placeholder, action, "", maxRunes, submit)
+}
+
+// osPromptOpenAs is osPromptOpen with the secret switch.
+func osPromptOpenAs(secret bool, title, placeholder, action, seed string, maxRunes int, submit func(string)) {
 	if maxRunes <= 0 {
 		maxRunes = 200
 	}
+	osPrompt.secret = secret
 	osPrompt.title = strings.ToUpper(strings.TrimSpace(title))
 	osPrompt.placeholder = placeholder
 	osPrompt.action = action

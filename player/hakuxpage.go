@@ -191,6 +191,11 @@ func hakuxXboxEntry(folder, romsRoot string, device DeviceModel) emuEntry {
 			e.KeptVersion = hakuxKeptTag(hakuxDevicePaths())
 		}
 		e.Detail = "hakuX (experimental) · " + games
+		if support.Offer && hakuxNeedsFit(device) && strings.TrimSpace(m.ScreenBuild) == "" {
+			// The Smart Pro's emulator from an install before hakux_fit.go:
+			// the next game's start or X fits it.
+			e.Detail += " · the Smart Pro's build, X gets the one for this screen"
+		}
 	case support.Offer:
 		e.Detail = folder + " · installed outside JukaHub, X updates it · " + games
 	default:
@@ -348,6 +353,9 @@ func hakuxFinish(result hakuxInstallResult, err error) {
 		trophyEvent(tkEmuInstall) // installed or updated; a repair of the same version is neither
 	}
 	switch {
+	case result.Current && result.Fitted:
+		PlaySuccessSound()
+		ShowToast("hakuX "+result.Tag+" now has its build for this screen (spruceUI's) · it was the Smart Pro's", ToastKindSuccess)
 	case result.Current:
 		ShowToast("hakuX is already the newest version ("+result.Tag+")", ToastKindInfo)
 	case result.Restored > 0:

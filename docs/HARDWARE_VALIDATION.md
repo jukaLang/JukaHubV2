@@ -201,6 +201,224 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
 
 ### Regression checks without separate task IDs
 
+- **Launch-failure card with Submit report** (CHANGELOG Added and Fixed,
+  2026-11-25). On a handheld, two failures that change nothing on the card's
+  emulators: (1) an empty `Roms/GBA/empty.gba`, rescanned and started
+  (Game Ready may hold it first: X plays it anyway) — RetroArch quits within
+  seconds; (2) a game whose file you deleted from a PC since the last scan —
+  "ROM is missing". Each
+  time the card says why, its Bug report section fills in (Collecting the
+  launch details… then the details), and **Submit report** is focused: A
+  sends it, the card closes, and Notifications shows *Bug report sent ·
+  issue #…*; the issue has the `launch-failure` label and an open **Launch
+  details** block with the command, environment, files (`MISSING` for the
+  deleted game), the launcher's output, RetroArch's log and JukaHub's log.
+  Start the same game again: the card says it was reported at HH:MM; choose
+  **Cancel** (Left, then A, or B) and nothing is sent. On the Emulators page,
+  a tile whose launcher is a `#!/bin/bash` script or an extensionless program
+  opens; a tile whose emulator quits at once gets the card too. Offline,
+  Submit queues the report (it goes when online). A time limit, "one moment"
+  and a network drive that is offline stay toasts. On Windows: Enter/Esc, the
+  wheel and a click on either button work.
+- **Words in other scripts in the browser** (CHANGELOG Fixed, 2026-11-25).
+  On Windows open wikipedia.org: 日本語, 中文, Русский and فارسی read in their
+  own letters (the Persian word joined and right to left), and no donation
+  bar is laid out under "Read Wikipedia in your language". On a handheld with
+  Settings → General → Language set to 日本語 once (so the Noto face is on
+  the card), the Japanese and Chinese names draw too; without it they stay
+  "…". A Latin-only page is unchanged.
+- **html5test.co header and index menu** (CHANGELOG Fixed, 2026-11-25).
+  Open html5test.co: no blue index menu covers the left of the page; "your
+  browser", "other browsers" and "compare" sit in one row on the left and
+  "about the test" on one line at the right. A site whose menu list is reset
+  to `padding: 0` shows its items flush with the column, and a page with a
+  skip link or a slide-in drawer shows neither until it is opened.
+- **CPU frequency set by hand** (CHANGELOG Added, 2026-11-25). On a Smart Pro
+  open Settings → Power & battery → CPU frequency: A lists Automatic and the
+  chip's clocks (2000 … 408 MHz). Pick 1200 MHz: within a second the row reads
+  "1200 MHz in menus and games · now 1200 MHz", `cat
+  /sys/devices/system/cpu/cpu0/cpufreq/scaling_{min,max}_freq` gives 1200000
+  twice, the log has `CPU frequency set by hand: 1200 MHz`, and pressing around
+  Home no longer lifts the clock (Faster menus says "Resting"). Start a GBA and
+  an N64 game: about 3 s in both read 1200000 (CPU boost's row says "Resting"),
+  and on exit the hub is back at 1200 MHz. Turn **Slow down when idle** on: on
+  Home the min goes back to the firmware's value and `scaling_cur_freq` drops
+  while idle. Set **CPU frequency for** → Games only: Home goes back to
+  Automatic (Automatic CPU speed's row shows its own line again). Leave the idle
+  screen up 5 s and wake it: the clock comes back. Pick Automatic: the min file
+  returns to the firmware's value, the max to the level the Automatic CPU speed
+  row names, and the log says `CPU frequency: automatic again`. On a Smart Pro
+  S check both clusters (`policy0`, `policy4`) follow.
+  A game with its own CPU limit in its options sheet keeps that limit.
+
+- **Notes on the on-screen keyboard, as files and on the phone** (CHANGELOG
+  Added, 2026-11-25). On a Smart Pro with no keyboard: Notes → **Y** opens the
+  keyboard on the new note's title with "New Note" selected; type a title,
+  **Next** moves to the body; type two lines with **New line** between them and
+  a sentence long enough to wrap — the note above the sheet shows both lines,
+  wrapped, the caret where the next letter goes, and the sheet's field shows the
+  caret's line; **Start** closes and the list shows the note. Reopen it: **A**
+  on the body, **B** on the keyboard, **B** again — nothing typed is lost.
+  **L1/R1** move it between folders. **Y** in the note → **Save as file**:
+  `SD card/Notes/<folder>/<title>.txt` exists and opens on a PC; save again
+  after renaming the title — the old file is gone, the new one there. Select on
+  the list → **Open on phone**: the phone's camera opens the Notes page at the
+  list; edit a note there and save — the handheld's list shows it at once; with
+  that note open (and untouched) on the handheld its editor follows; type on
+  both and save on the handheld last — a "… (phone copy)" note appears. Add a
+  `.txt` file from the phone, download one note and the `.zip`. **X** on the
+  list asks before deleting.
+- **QR maker Save image** (CHANGELOG Added, 2026-11-25). Tools → QR maker, any
+  text, **Show**, then **X**: a toast names `screenshots/qr_….png`; the file is
+  a clean black-on-white code a phone scans from a PC screen. The pairing code
+  (Home's header QR) has no Save hint and **X** closes it.
+- **Theme wallpapers** (CHANGELOG Added, 2026-11-25). On a Smart Pro with no
+  wallpaper picked: Settings → Theme & look → Theme presets → Synthwave — Neon
+  Horizon is under the glass (toast "… · Neon Horizon wallpaper"); Paper → Paper
+  Garden; Dark → the glass backdrop again. Restart: the theme's wallpaper is
+  still there. Pick your own picture in Wallpaper, then Midnight: yours stays.
+  The picker's **JukaHub wallpapers** row lists the eight. On a Brick the
+  pictures are cropped, not squeezed. Experience → Retro Arcade brings Neon
+  Horizon; Undo puts back what was there.
+- **Wine test** (CHANGELOG Added, 2026-11-25). With the Windows runtime
+  installed, Windows Apps lists **Wine Test (built in)**; **A** opens a
+  full-screen window "Wine is working!" with the Wine version, Linux and the
+  kernel, Windows 10, x64 · translated by Box64, 1280 × 720 and the memory; the
+  ball moves and the clock ticks; the stick moves the pointer and **A**/**B**/
+  **X**/L2/R2/D-pad/Start/L1/R1 are named on the "Last input" line; a chime
+  plays (or the sound line says why not); **Y**, the Close button or Select +
+  Start closes it and a toast says "Wine test passed…". The app's log has the
+  `jukahub-winetest:` lines. Try the 1024 × 768 Brick too (it scales and
+  centres).
+- **Video memory (VRAM)** (CHANGELOG Added, 2026-11-25). On a Smart Pro set
+  Settings → Games & emulators → Video memory (VRAM) to 512 MB, scroll the
+  library's covers and open a web page, then start a PlayStation or SNES game
+  (one Heavy-game boost leaves alone). With less than 512 MB free the log has
+  `video memory: 512 MB assigned, … JukaHub's textures and caches emptied` and
+  `freed … for video memory`, and back on Home the row reads "Made room for the
+  last game: … free"; with room already it reads "The last game started with …
+  free". Covers and an animated wallpaper come back (it animates again) and the
+  game ran as before; with Auto there is no `video memory` line. Start the Wine
+  test in Windows Apps with 256 MB set: the log says `Windows programs see 256
+  MB of video memory`.
+- **Smart Home tab** (CHANGELOG Added, 2026-11-25). On the Smart Pro and on
+  Windows, with an old Kasa plug, a Tapo plug or bulb and a Nest speaker or
+  Chromecast on the same Wi-Fi: the Smart Home tab sits after Entertainment;
+  within a few seconds the Kasa plug and the speaker appear by name and the
+  Tapo device says "Sign in with your TP-Link ID". Add devices › TP-Link ›
+  Sign in on this device (the password shows as dots), and once from the phone
+  page: a wrong password is refused naming the device, the right one makes the
+  Tapo device switchable. A on a plug or bulb switches it (the tile at once,
+  the device right after); X on a bulb: Brighter, Dimmer, Warm white; A on the
+  speaker while music plays: Pause, Play, Volume up and down, Mute, Stop.
+  Unplug a device: its tile says Not answering. Hide one and bring it back from
+  Add devices › Hidden devices. After a restart the devices are listed at once.
+  Home Assistant from the phone page: a wrong token is refused, a right one
+  adds its lights and switches. A Tapo device on the newest firmware says
+  "Needs Third-Party Compatibility" and works after that switch in the Tapo
+  app and Find devices. On another Home layout, Start → Smart Home lists the
+  same devices in the panel.
+- **DuckDuckGo Lite results** (CHANGELOG Fixed, 2026-11-25). In the
+  browser search "hello", "cnn.com" and "google chrome" with DuckDuckGo: each
+  title is one line, one row tall, right beside its number; the snippet and
+  the green address start under the title; results are parted by a blank
+  line; "10." is whole. The top "Next Page >" button sits at the left edge
+  (not mid-screen). The search box is a grey-rimmed pill as tall as the blue
+  Search pill, whose label lines up with the box's text; the region and time
+  selects are two rimmed pills; there is a gap above the logo and between
+  the logo, the form and the results. A page with a plain table, and a
+  form with a text field and a button, still look as before.
+- **First-run tour fits its card** (CHANGELOG Fixed, 2026-11-25). Settings →
+  General → Replay tour on Windows (1280×720), on a Brick (960×720 canvas) and
+  once at Accessibility text size 145 %: on all 13 pages no text runs past the
+  card or across a row's border, "Open date & time settings" is whole, and the
+  controls hint under the card stays clear of it.
+- **Unpacking through a rooted folder** (CHANGELOG Changed, 2026-11-25). On
+  the Smart Pro and on Windows: a self-update, a package from the Patch
+  screen, a port and the Remote Play helpers still install; the log shows no
+  `open staging dir` or `path escapes` error.
+- **Leaving a screen stops its downloads** (CHANGELOG Changed, 2026-11-25).
+  Open Smart Home (with Home Assistant set up) or the community theme gallery
+  on a slow connection and leave at once: no "unreachable" or error line
+  greets the next visit, and it loads again. In the Dictionary, type a word
+  and leave before it answers: the next visit shows no "Network error".
+- **Windows: a network changed outside JukaHub** (CHANGELOG Added,
+  2026-11-25). Unplug the cable or pick another Wi-Fi network in Windows'
+  own menu: JukaHub's network status follows within about a second.
+- **Windows: started from another folder** (CHANGELOG Fixed, 2026-11-25).
+  With Start JukaHub at login on, sign out and in, or start `JukaHub.exe`
+  from a terminal in another folder: it loads the config beside the
+  executable, and the log says "working from the executable's folder".
+- **Windows brightness on real machines** (from the backlog, 2026-11-25). On
+  a laptop (and a ROG Ally or Legion Go class handheld) the brightness card
+  moves the same level as Windows' slider and follows it while open; on a
+  desktop with a DDC/CI monitor it moves the monitor; with neither (a VM,
+  Remote Desktop) the card says it dims JukaHub only, the dim survives a
+  restart and now covers the boot and the goodbye screen; no console window
+  flashes, and the first frame is not delayed.
+- **Xenia Canary and xemu on a Windows PC** (from the backlog, 2026-11-25).
+  Xenia Canary: the newest release installs (`xenia_canary_windows.7z`), a
+  later build shows as an update and R1 restores the one before; an `.iso` in
+  `Roms\XBOX360`, an extracted game (one entry under its folder's name, with
+  its cover) and a `.zar` start full screen; the Visual C++ hint shows only
+  without the redistributable (Windows on ARM too). xemu: v0.8.139 or newer
+  installs the non-debug build (ARM64 from a windows/arm64 JukaHub), the HDD
+  image lands in `BIOS\xbox`, BIOS files dropped there turn green on the open
+  sheet within seconds, an ISO is refused with "xemu needs …" until they are
+  there and then starts full screen with `-dvd_path`, and a portable xemu
+  whose `xemu.toml` uses relative paths launches with that file unchanged.
+- **An update restore cut short** (CHANGELOG Fixed, 2026-11-24). On a
+  handheld over SSH, with an update on probation whose build does not start
+  (a sideloaded build that hangs, `JUKAHUB_PROBATION_LIMIT=3`), wait for
+  errors.txt's `update check: … putting … back` line and `kill -9` launch.sh
+  at once, then start JukaHub from the menu: errors.txt says `a restore of
+  the previous version was interrupted; finishing it`, no `*.rescue-tmp` is
+  left in `Apps/JukaHub`, and the previous version starts with its "didn't
+  start, so JukaHub put back the version you had" card.
+- **Continue a game while a sync runs** (CHANGELOG Fixed, 2026-11-24). Two
+  paired handhelds: on one start Sync › the other › Sync now, then at once
+  continue a game the other one offers: the toast says "Waiting for the sync
+  in progress…", the Sync page then shows "Bringing saves from <device>…",
+  and the game starts with the other device's newest saves.
+- **Dates in another language** (CHANGELOG Changed, 2026-11-24). With
+  Settings → Language → Deutsch and the date format on day first, the mail
+  list shows "Gestern" and "Mo." for the last days, the reader "Montag, 9.
+  November 2026 · 15:04", the clock's calendar line "Morgen 09:00", and the
+  Ports store and Steam their dates the same way; with the 12-hour clock on,
+  each time ends in AM or PM.
+- **Azahar from JukaHub on a Windows PC** (CHANGELOG Added, 2026-11-24). On a
+  PC without Azahar, A on the Azahar tile installs the newest release's
+  `azahar-windows-msvc-<version>.zip` into `Emulators\Azahar`
+  (`.jukahub-emu.json` names the tag and the asset), a `.3ds` in `Roms\3DS`
+  starts full screen from the Games Library, and once a newer Azahar is
+  published the tile offers the update and R1 puts the previous one back.
+
+- **GameCube with the buildbot's Dolphin and the libXi stand-in** (CHANGELOG
+  Fixed, 2026-11-24). On a TrimUI whose RetroArch is on the card, online,
+  press the Emulators page's GameCube tile (or A on a GameCube game): while
+  JukaHub's own build is unpublished the setup takes the buildbot's, and the
+  log reads `device libraries for RetroArch on JukaHub's glibc: JukaHub's
+  stand-ins … libXi.so.6 (N functions) …`, `data/private-glibc/devlibs/devlibs.json`
+  lists `libXi.so.6` beside `libusb-1.0.so.0`, and the install ends with
+  "Dolphin is ready". A game then starts in RetroArch on JukaHub's glibc with
+  no `libXi.so.6: cannot open shared object file` in its log; a card that
+  refused the 2026-11-24 build before ("was refused here before: … needs
+  libXi.so.6 and libusb-1.0.so.0") fetches it again. Log what the game does
+  next (picture, speed, the video driver dolphin_video.go settles on).
+- **hakuX's build for the screen at an Xbox game's start** (CHANGELOG Fixed,
+  2026-11-24). On a Brick Pro (or Brick, Hammer, Smart Pro S) whose hakuX
+  JukaHub installed before spruceUI's build was used — its
+  `Emus/XBOX/.jukahub-hakux.json` has no `screen_build` — start an Xbox game
+  from the library online: the install card reads "Getting hakuX for this
+  screen", the log says which file it replaced (`hakuX: … replaced with
+  spruceUI/hakuX-spruce's beta-main build`), the provenance file gains
+  `screen_build`, and the game starts by itself: JukaHub closes (`screen handed
+  to helper pid …` in errors.txt) and hakuX's own picture fills the panel. Its
+  menu takes the buttons, Menu opens hakuX's settings, Start + Select held
+  about 1.2 s quits back to JukaHub, and the log has `back from <game> after
+  …`. Offline, the first start says what it waits for and the second plays.
+  If the picture still does not show with JukaHub gone, send
+  `Apps/JukaHub/data/gamediag/launcher.log` and errors.txt.
 - **In-game indicators** ([Configuration](CONFIGURATION.md#in-game-indicators-ingamehud),
   2026-11-24). Needs a package whose `bin/` has `libjukaosd.so` (its block in
   `bin/BUILDINFO.txt`). Turn Settings → Games & emulators → In-game indicators

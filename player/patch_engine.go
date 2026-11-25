@@ -1216,7 +1216,7 @@ func downloadFFmpegBundleCtx(ctx context.Context, target string, config *Config)
 		// A stale or partial copy goes before free space is measured.
 		_ = os.Remove(cache)
 		installBarPhase(installPhaseResolving)
-		asset, err := resolveToolAsset("BtbN/FFmpeg-Builds", "", assets...)
+		asset, err := resolveToolAsset(ctx, "BtbN/FFmpeg-Builds", "", assets...)
 		if err != nil {
 			return fmt.Errorf("find ffmpeg release: %w", err)
 		}
@@ -1951,7 +1951,9 @@ func satAddBytes(a, b int64) int64 {
 }
 
 // extractZipSafe extracts a zip archive into destDir after validating every
-// entry. Extraction is bounded by maxEntries and maxTotalBytes.
+// entry. Extraction is bounded by maxEntries and maxTotalBytes. Every write
+// goes through an os.Root opened on destDir, so on top of the name checks a
+// link already inside the folder can never carry a file out of it.
 func extractZipSafe(ctx context.Context, archive, destDir string, maxEntries int, maxTotalBytes int64) error {
 	zr, err := zip.OpenReader(archive)
 	if err != nil {
@@ -1961,6 +1963,11 @@ func extractZipSafe(ctx context.Context, archive, destDir string, maxEntries int
 	if len(zr.File) > maxEntries {
 		return fmt.Errorf("archive has %d entries (limit %d)", len(zr.File), maxEntries)
 	}
+	root, err := openExtractRoot(destDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	var total int64
 	for _, f := range zr.File {
 		if err := ctx.Err(); err != nil {
@@ -1970,29 +1977,32 @@ func extractZipSafe(ctx context.Context, archive, destDir string, maxEntries int
 		if err := sanitizeArchiveEntry(f.Name, mode, f.FileInfo().IsDir()); err != nil {
 			return err
 		}
-		target := filepath.Join(destDir, filepath.FromSlash(f.Name))
-		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(filepath.Separator)) {
-			return fmt.Errorf("entry escapes staging dir: %q", f.Name)
+		rel, err := extractRootRel(destDir, f.Name)
+		if err != nil {
+			return err
 		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := extractRootMkdirAll(root, rel); err != nil {
 				return err
 			}
 			continue
+		}
+		if rel == "." {
+			return fmt.Errorf("archive entry names the staging dir itself: %q", f.Name)
 		}
 		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), maxTotalBytes)
 		if !ok {
 			return fmt.Errorf("archive expands beyond %d bytes", maxTotalBytes)
 		}
 		total = sum
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := extractRootMkdirAll(root, filepath.Dir(rel)); err != nil {
 			return err
 		}
 		rc, err := f.Open()
 		if err != nil {
 			return err
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+		out, err := root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 		if err != nil {
 			rc.Close()
 			return err
@@ -2020,6 +2030,11 @@ func extractTarGzSafe(ctx context.Context, archive, destDir string, maxEntries i
 		return fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
+	root, err := openExtractRoot(destDir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	tr := tar.NewReader(gz)
 	entries := 0
 	var total int64
@@ -2047,25 +2062,28 @@ func extractTarGzSafe(ctx context.Context, archive, destDir string, maxEntries i
 		if hdr.Size < 0 {
 			return fmt.Errorf("archive entry %q declares a negative size", hdr.Name)
 		}
-		target := filepath.Join(destDir, filepath.FromSlash(hdr.Name))
-		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(filepath.Separator)) {
-			return fmt.Errorf("entry escapes staging dir: %q", hdr.Name)
+		rel, err := extractRootRel(destDir, hdr.Name)
+		if err != nil {
+			return err
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := extractRootMkdirAll(root, rel); err != nil {
 				return err
 			}
 		case tar.TypeReg:
+			if rel == "." {
+				return fmt.Errorf("archive entry names the staging dir itself: %q", hdr.Name)
+			}
 			sum, ok := addDeclaredBytes(total, hdr.Size, maxTotalBytes)
 			if !ok {
 				return fmt.Errorf("archive expands beyond %d bytes", maxTotalBytes)
 			}
 			total = sum
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := extractRootMkdirAll(root, filepath.Dir(rel)); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+			out, err := root.OpenFile(rel, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 			if err != nil {
 				return err
 			}
@@ -2080,6 +2098,43 @@ func extractTarGzSafe(ctx context.Context, archive, destDir string, maxEntries i
 		}
 	}
 	return nil
+}
+
+// openExtractRoot makes destDir if needed and opens it as the os.Root every
+// write of an extraction goes through.
+func openExtractRoot(destDir string) (*os.Root, error) {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return nil, fmt.Errorf("open staging dir: %w", err)
+	}
+	return root, nil
+}
+
+// extractRootRel is an entry's name as a clean path inside the root ("." for
+// the root itself), after the same prefix check the extractors always made:
+// the root is the second wall, not the only one.
+func extractRootRel(destDir, name string) (string, error) {
+	target := filepath.Join(destDir, filepath.FromSlash(name))
+	clean := filepath.Clean(destDir)
+	if target == clean {
+		return ".", nil
+	}
+	if !strings.HasPrefix(target, clean+string(filepath.Separator)) {
+		return "", fmt.Errorf("entry escapes staging dir: %q", name)
+	}
+	return strings.TrimPrefix(target, clean+string(filepath.Separator)), nil
+}
+
+// extractRootMkdirAll makes rel and its parents inside root; the root itself
+// is already there.
+func extractRootMkdirAll(root *os.Root, rel string) error {
+	if rel == "." || rel == "" {
+		return nil
+	}
+	return root.MkdirAll(rel, 0o755)
 }
 
 // extractSafe dispatches on the archive extension.

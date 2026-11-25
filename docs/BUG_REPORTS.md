@@ -90,6 +90,76 @@ invisible zero-width space that breaks it while the text reads the same: a
 report cannot ping anyone, cross-link an issue or carry a clickable link.
 Diagnostics and the log go into collapsed code blocks, where nothing renders.
 
+## When a game or an emulator does not start
+
+Every launch that fails opens the launch card — a game from the library, the
+game page, Recents, Files or Get Homebrew, a PortMaster port, an Xbox or PSP
+game JukaHub closed for, an emulator's tile or RetroArch's own menu on the
+Emulators page, an Android game, a Windows app. That covers a launch that
+failed before its program ran ("launcher is missing", "no launcher for SFC", a
+program that could not be executed) and one that started and stopped by
+itself within seconds. The card says why as well as JukaHub can tell, and
+under that shows the bug report it would send, line by line. It has two
+buttons:
+
+- **Submit report** — focused when the card opens, so **A** sends it. The
+  card closes at once; "Sending bug report JH-…" shows, then Notifications says
+  *Bug report sent · issue #…* (or why it waits, as for any queued report).
+- **Cancel** (**B**) — closes the card and sends nothing.
+
+**Left/Right** move between the buttons, **Up/Down** scroll, **L1/R1** turn a
+page. On a PC, Enter and Esc do the same, the wheel scrolls and both buttons
+take a click. A card that reports no failure — **Check why it won't start**
+from a game's options, Splore without PICO-8 — keeps its single Dismiss.
+
+A launch report is meant to be enough on its own to fix the bug, so it is
+verbose. Its issue is titled after what failed (`[Bug] Couldn't launch Sonic
+CD (Sega CD): The launch script could not find RetroArch (JH-…)`), carries the
+`launch-failure` label as well, and its description says what failed and
+what JukaHub's checks found. The **Launch details** block (open in the issue)
+holds:
+
+- what was launched: the kind of launch, game, system, game file, emulator,
+  the core (and whether the launch script names it or it is a guess), when it
+  started, and how it ended — exit status or signal, how long it ran, and
+  whether JukaHub had asked it to stop;
+- the device: model, firmware version, the OS on the card (stock, CrossMix,
+  NextUI…), kernel, the newest glibc the firmware's C library defines, free
+  memory at the start and now, free space where the game, the emulator and
+  JukaHub's data live;
+- the command: the program, every argument, the folder, the pid, which C
+  library it ran on (the firmware's, or JukaHub's private glibc), and the
+  environment variables that decide which program, libraries, config, display
+  and sound device the emulator gets (`HOME`, `PATH`, `LD_LIBRARY_PATH`,
+  `LD_PRELOAD`, `SDL_*`, `ALSA_*`, `AUDIODEV`, `XDG_*`, `JUKAHUB_*`…); every
+  other variable is named without its value, and a name that looks like a
+  secret (`…TOKEN…`, `…KEY…`, `…PASS…`) never shows a value;
+- what JukaHub found: each finding, how certain, the missing files and where
+  they go;
+- every file the launch needed — the game file, the launcher, the program,
+  the core, the RetroArch the launch scripts call: there or **MISSING**, size,
+  mode, time, and what it is (a script and whether its `#!` interpreter is on
+  the device, with a note on Windows line endings; a program's processor, its
+  loader and whether that is there, the libraries it needs and which are **NOT
+  FOUND** on its library path, and the glibc/libstdc++ version check), plus a
+  listing of the emulator's folder;
+- the launch script's first 60 lines, what the launcher printed, RetroArch's
+  log for the launch, a profile's or port's own log, and JukaHub's log from
+  just before the launch on.
+
+The diagnostics report and the recent log go along as with any report (the log
+cut to its newest 16 KB, since the details hold the launch's own lines).
+
+**Privacy.** Unlike Report a bug's text, a launch report keeps folder and file
+names — which file was missing or would not load is what a launch bug turns
+on. Credentials, the account name in a home folder (`C:\Users\[user]`; a
+`/home/<name>` becomes `~`), e-mail, IP and MAC addresses and the paths of
+links are still removed, and the card shows every line before Submit.
+
+A refusal is not a failure and stays a toast: a daily time limit, a check that
+is still busy ("one moment"), a game on a network drive that is offline, or a
+console this device does not run.
+
 ## Automatic informational diagnostics
 
 **Send anonymous diagnostics** is a separate opt-in switch. About every ten
@@ -117,8 +187,10 @@ issue when labels are unavailable, and the `[Info]` title remains.
   since instances are short-lived) to slow down a flood of reports, and logs
   only the reference, the issue number and error codes.
 - Manual bug reports are sent only when you press Submit (or Send in the
-  preview), and the preview shows all of it. Automatic informational reports
-  require the separate diagnostics switch described above.
+  preview), and the preview shows all of it. A launch report is sent only
+  when you press **Submit report** on the launch card, which shows all of it.
+  Automatic informational reports require the separate diagnostics switch
+  described above.
 
 ## Pointing reports elsewhere
 
@@ -197,6 +269,7 @@ deploy; no `netlify.toml` is needed. It has no dependencies.
    | `JUKAHUB_ISSUES_REPO` | no | `jukaLang/JukaHubV2` | Where issues are filed, as `owner/name`. A separate reports repository works. |
    | `JUKAHUB_ISSUE_LABELS` | no | `bug,from-device` | Comma-separated labels (up to five), applied when the token's account has triage access. Set it empty for none. |
    | `JUKAHUB_DIAGNOSTICS_LABELS` | no | `non-issue,from-device` | Labels for automatic informational diagnostics issues. Create them in the destination repository first. |
+   | `JUKAHUB_LAUNCH_LABELS` | no | the issue labels plus `launch-failure` | Labels for a launch-failure report (one with launch details). |
    | `JUKAHUB_DISCORD_WEBHOOK` | no | — | A Discord webhook that gets a one-line notice with the issue link (mentions disabled, the title's markdown escaped). |
 
    Make sure the variables are available to Functions (the default scope).

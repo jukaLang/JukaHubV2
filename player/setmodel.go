@@ -157,6 +157,9 @@ func setSectionRows(c *Config, s setSection) []setRow {
 // setLegacySection maps the old Settings pages onto the section that replaced
 // them, so every place that still opens SettingsGeneral or SettingsAppearance
 // (search, achievements, old configs) lands on the right rows.
+//
+// remove after 2027-05-01: an upgrade shim for configs from 0.4.0 — first
+// point any caller in the tree that still names an old page at its section.
 func setLegacySection(scene string) string {
 	switch scene {
 	case "SettingsGeneral":
@@ -975,6 +978,8 @@ func setBuildSections() []setSection {
 				},
 				// A GIF wallpaper plays unless this is off (gifwall.go).
 				wallpaperAnimateRow(),
+				// A theme brings the wallpaper made for it (themewallpapers.go).
+				themeWallpapersRow(),
 				// Glass or a picture as the device powers off (shutdownscreen.go).
 				shutdownScreenRow(),
 				shutdownPictureRow(),
@@ -1705,6 +1710,10 @@ func setBuildSections() []setSection {
 						setToast("Automatic CPU speed: " + setOnOff(on))
 					},
 				},
+				// "CPU frequency": Automatic or a clock set by hand, "CPU
+				// frequency for" and "Slow down when idle" (cpufreq_manual.go);
+				// the same rows as under Power & battery's Battery.
+				cpuFreqSettingsRow(), cpuFreqUseSettingsRow(), cpuFreqIdleSettingsRow(),
 				// "Faster menus": a press lifts the clock for a moment, and the
 				// menus draw up to 60 fps while in use (uiboost.go).
 				uiBoostSettingsRow(),
@@ -1716,6 +1725,9 @@ func setBuildSections() []setSection {
 				// starts slowing any game down (heatguard.go).
 				cpuBoostSettingsRow(),
 				heatLimitSettingsRow(),
+				// "Video memory (VRAM)": room kept free for a game's graphics,
+				// and what Windows games see as their card's memory (vram.go).
+				vramSettingsRow(),
 				// "Extra memory (swap)": zram or a swap file (memswap.go).
 				memSwapSettingsRow(),
 				// "Heavy-game boost": the whole handheld for Xbox, GameCube, Wii and
@@ -1866,6 +1878,11 @@ func setBuildSections() []setSection {
 					Visible: func(*Config) bool { return getBatteryPercent() >= 0 },
 					Open:    battGraphOpen,
 				},
+				// "CPU frequency": Automatic or a clock set by hand, and where
+				// and how it holds (cpufreq_manual.go); up front with Battery
+				// (setessentials.go), and under Automatic CPU speed in Games &
+				// emulators too.
+				cpuFreqSettingsRow(), cpuFreqUseSettingsRow(), cpuFreqIdleSettingsRow(),
 				// The level in the top bar: Always, 20% or less, Never (power_options.go).
 				batteryPercentSettingsRow(),
 				// "Still frames": a quiet Home is drawn only when it changes

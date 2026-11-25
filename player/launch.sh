@@ -51,7 +51,9 @@
 #  the limit; one that hangs, crashes or has no input is stopped (SIGABRT
 #  first: the Go runtime prints every goroutine's stack into errors.txt), the
 #  backups are copied back, .update-rescued tells the restored build what
-#  happened, and it starts at once. Once per plan.
+#  happened, and it starts at once. Once per plan. The copies are renamed into
+#  place under a synced marker (.update-restoring), so a power cut between two
+#  renames is finished by the next start before JukaHub runs.
 # ---------------------------------------------------------------------------
 
 # Use this script's installed folder even when an older Apps/JukaHub folder
@@ -108,6 +110,11 @@ PROBATION="$APP_DIR/.update-probation"
 PROBATION_TRIES="$APP_DIR/.update-probation-tries"
 START_CHECK="$APP_DIR/.start-check"
 RESCUED="$APP_DIR/.update-rescued"
+# The note for the restored build while a restore renames its copies into
+# place: written and synced once every copy is whole, renamed to $RESCUED when
+# the last one is in. A start that finds it finishes a restore a power cut
+# stopped halfway (probation_resume).
+RESTORING="$APP_DIR/.update-restoring"
 PROBATION_KILL="/tmp/jukahub-probation-kill.$$"
 # Seconds a start under the plan gets to report a working screen: 120, and 45
 # once a start of the same update ended with no verdict (a power-off on a black
@@ -871,6 +878,9 @@ probation_begin() {
         probation_drop
         return 0
     fi
+    # Copies a restore was still making when the power went (no marker was
+    # written for them, so they may be partial): a later restore makes its own.
+    probation_clean_tmp
     # Only the JukaHub the update installed is on probation, not one copied
     # over it by hand since.
     PB_SIZE="$(file_size "$APP_DIR/JukaHub")"
@@ -1001,10 +1011,11 @@ probation_clean_tmp() {
     done <"$PROBATION"
 }
 
-# Puts every file of the plan back: first every backup found and whole, then
-# each copied beside its target, then all renamed over it (the release stamp
-# last, as the plan lists it) and the stamp the update added removed. Nothing
-# is replaced unless every copy is ready. False, with the reason said, when the
+# Puts every file of the plan back ($1 why the start failed, $2 how far it
+# got, for the note): first every backup found and whole, then each copied
+# beside its target, then the note written as the marker ($RESTORING) and
+# synced, then all renamed over their targets (probation_finish). Nothing is
+# replaced unless every copy is ready. False, with the reason said, when the
 # previous version is not back in full.
 probation_restore() {
     PR_ERR=""
@@ -1042,11 +1053,32 @@ probation_restore() {
         say "update check: cannot put the previous version back: $PR_ERR"
         return 1
     fi
+    # The copies reach the card before the marker does, and the marker before
+    # the first rename: a marker found after a power cut means every copy
+    # still beside its target is whole.
+    sync
+    if ! probation_note "$1" "$2" "$RESTORING"; then
+        probation_clean_tmp
+        say "update check: cannot put the previous version back: writing $RESTORING failed (is the card full?)"
+        return 1
+    fi
+    sync
+    probation_finish
+}
+
+# Renames each copy still beside its target over it (the release stamp last,
+# as the plan lists it; a copy already gone was put in place before a power
+# cut), removes the stamp the update added, then turns the marker into the
+# note for the restored build. Shared by probation_restore and, after a power
+# cut, probation_resume. False, with the reason said, when a copy could not
+# be put in place.
+probation_finish() {
     PR_FAIL=""
     while IFS= read -r PR_L; do
         case "$PR_L" in
             "file "*)
                 probation_file_fields "$PR_L" || continue
+                [ -f "$APP_DIR/$PF_NAME.rescue-tmp" ] || continue
                 mv -f "$APP_DIR/$PF_NAME.rescue-tmp" "$APP_DIR/$PF_NAME" 2>/dev/null || PR_FAIL="$PR_FAIL $PF_NAME"
                 ;;
             "drop "*)
@@ -1061,10 +1093,34 @@ probation_restore() {
     sync
     if [ -n "$PR_FAIL" ]; then
         probation_clean_tmp
+        rm -f "$RESTORING"
         say "update check: putting the previous version back stopped halfway; not replaced:$PR_FAIL"
         return 1
     fi
+    mv -f "$RESTORING" "$RESCUED" 2>/dev/null
     return 0
+}
+
+# A restore that a power cut (or anything else that ended this script) stopped
+# between its renames left the marker: every copy it made was whole and on the
+# card by then, so the rest are renamed in now, before JukaHub starts, the note
+# reaches the restored build as after any restore, and the plan ends. Without
+# its plan only the marker goes.
+probation_resume() {
+    TAB="$(printf '\t')"
+    if [ ! -f "$PROBATION" ]; then
+        rm -f "$RESTORING"
+        say "update check: removed a restore marker whose plan is gone"
+        return 0
+    fi
+    say "update check: a restore of the previous version was interrupted; finishing it"
+    (
+        trap '' TERM INT HUP
+        probation_finish && say "update check: the previous version is back; starting it"
+        probation_drop
+        rm -f "$RESTART_NOW" "$HANDOFF"
+        sync
+    )
 }
 
 # How the start under the plan went, once it has exited. True when it failed
@@ -1111,8 +1167,11 @@ probation_verdict() {
     return 0
 }
 
-# The note for the restored build ($1 why, $2 how far it got).
+# The note for the restored build ($1 why, $2 how far it got), as $3 (default
+# $RESCUED; probation_restore writes it as the marker first). False when it
+# could not be written.
 probation_note() {
+    PN_TO="${3:-$RESCUED}"
     {
         echo "# launch.sh undid an update that did not start; JukaHub reads and removes this (player/updrescue.go)"
         echo "from $PB_FROM"
@@ -1124,7 +1183,7 @@ probation_note() {
         echo "stage $2"
         echo "pid $LAST_PID"
         echo "log $PB_LOG_AT"
-    } >"$RESCUED.tmp" 2>/dev/null && mv -f "$RESCUED.tmp" "$RESCUED"
+    } >"$PN_TO.tmp" 2>/dev/null && mv -f "$PN_TO.tmp" "$PN_TO"
 }
 
 # -------------------------------------------------------- USB storage mode
@@ -1199,8 +1258,10 @@ while :; do
     # Also covers a stop that arrived while waiting for an update helper.
     [ "$STOPPED" -eq 1 ] && break
     cpu_snapshot
-    # The first starts of an update are watched (the update check above).
+    # The first starts of an update are watched (the update check above). A
+    # restore a power cut stopped is finished first.
     PROBATION_ON=0
+    [ -f "$RESTORING" ] && probation_resume
     [ -f "$PROBATION" ] && probation_begin
     SWAP_VERDICT=""
     # JukaHub OS (docs/JUKAHUB_OS.md). With OS mode on in os/os.json, JukaHub
@@ -1317,8 +1378,7 @@ while :; do
             # of each. A stop still ends the session once this is done.
             if (
                 trap '' TERM INT HUP
-                probation_restore || exit 1
-                probation_note "$PV_WHY" "$PV_SEEN"
+                probation_restore "$PV_WHY" "$PV_SEEN" || exit 1
                 probation_drop
                 rm -f "$RESTART_NOW" "$HANDOFF"
                 sync

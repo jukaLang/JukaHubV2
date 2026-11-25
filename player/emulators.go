@@ -1333,23 +1333,27 @@ func emuPanelPageStep() int {
 func launchEmulatorEntry(e emuEntry) {
 	path := strings.TrimSpace(e.Launch)
 	ext := strings.ToLower(filepath.Ext(path))
+	// A start that fails is reported with what was tried (launchreport.go).
+	failed := func(err error) {
+		showLaunchFailureRecord(launchRecordNew(emuTileLaunchKind, e.Name, path), err, "")
+	}
 	switch ext {
 	case ".exe", ".bat", ".cmd", ".lnk", ".url", ".sh", "":
 	case ".dll":
 		// A Windows libretro core: RetroArch loads it with -L.
 		if !IsWindows() {
-			showLaunchFailureDialog(e.Name, fmt.Errorf("a %s core only runs inside RetroArch on Windows", e.Name), "")
+			failed(fmt.Errorf("a %s core only runs inside RetroArch on Windows", e.Name))
 			return
 		}
 	default:
 		logWarn("emulators", "refusing to launch %q", path)
 		err := fmt.Errorf("unsupported launcher file type %q", ext)
-		showLaunchFailureDialog(e.Name, withLaunchFailureKind(launchFailureUnsupportedLauncherType, err), "")
+		failed(withLaunchFailureKind(launchFailureUnsupportedLauncherType, err))
 		return
 	}
 	if !regularFile(path) {
 		logDebug("emulators", "%s vanished: %s", e.Name, path)
-		showLaunchFailureDialog(e.Name, fmt.Errorf("launcher file is missing: %w", os.ErrNotExist), "")
+		failed(fmt.Errorf("launcher file is missing: %w", os.ErrNotExist))
 		invalidateEmulatorCache()
 		return
 	}
@@ -1375,21 +1379,33 @@ func launchEmulatorEntry(e emuEntry) {
 		bat, err := winBatchCommand(path)
 		if err != nil {
 			logWarn("emulators", "refusing to launch %s: %v", path, err)
-			showLaunchFailureDialog(e.Name, err, "")
+			failed(err)
 			return
 		}
 		cmd = bat
 	case ext == ".dll":
 		retroArch := emuRetroArchForCore(path)
 		if retroArch == "" {
-			showLaunchFailureDialog(e.Name, fmt.Errorf("RetroArch is not installed: %w", os.ErrNotExist), "")
+			failed(fmt.Errorf("RetroArch is not installed: %w", os.ErrNotExist))
 			return
 		}
 		cmd = exec.Command(retroArch, "-L", path)
 		dir = filepath.Dir(retroArch)
 	case ext == ".sh" || ext == "":
 		// sh reads the launch script; the absolute path is an operand, not code.
-		cmd = exec.Command("sh", "--", path)
+		// A launcher whose "#!" line names another interpreter (bash) runs
+		// under it, and one that is a program (an extensionless ELF) runs as
+		// that program, the way MainUI starts them: sh read a program as text
+		// and a bash script's arrays and [[ ]] failed (gamelaunch_firmware.go).
+		name, args := "sh", []string{path}
+		if !IsWindows() {
+			name, args = firmwareScriptCommand(path, name, args)
+		}
+		if name == "sh" {
+			cmd = exec.Command("sh", "--", path)
+		} else {
+			cmd = exec.Command(name, args...)
+		}
 	default:
 		cmd = exec.Command(path)
 	}
@@ -1402,19 +1418,23 @@ func launchEmulatorEntry(e emuEntry) {
 	// exits. beginGamePowerProfile never fails a launch: an unsupported
 	// firmware only logs.
 	restoreProfile := beginLaunchPowerProfile(appConfig, path) // per-game profile, PWR-6
+	// What it prints, and how it ends: an emulator that cannot open gets the
+	// launch card with its bug report (launchreport.go).
+	watch := emuTileWatchBegin(emuTileLaunchKind, e.Name, path, cmd)
 	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
-		logWarn("emulators", "launch failed for %s: %v", path, err)
-		showLaunchFailureDialog(e.Name, err, "")
+		watch.failed(err)
 		return
 	}
 	noteGameChildStarted(cmd)
+	watch.started()
 	recorder := startTimelapse(appConfig, e.Name)
 	go func() {
-		_ = cmd.Wait() // reap the child, keep JukaHub responsive
+		waitErr := cmd.Wait() // reap the child, keep JukaHub responsive
 		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
+		watch.ended(waitErr)
 	}()
 	PlaySuccessSound()
 	if launchNote != "" {

@@ -350,6 +350,9 @@ func vkActionLabel() string {
 	case osPromptVKTarget:
 		// An everyday app's field names its own Done (osapps.go).
 		return osPromptActionLabel()
+	case notesVKTarget:
+		// Next, New line or Search (notes_keyboard.go).
+		return notesVKActionLabel()
 	case mlAddrVKTarget:
 		return mlVKActionLabel()
 	case bootLockVKTarget:
@@ -922,6 +925,8 @@ func vkCurrentText() string {
 		return gameRenameBuffer
 	case osPromptVKTarget:
 		return osPrompt.buffer
+	case notesVKTarget:
+		return notesVKText()
 	case mlAddrVKTarget:
 		return mlVKText()
 	case mailComposeVKTarget:
@@ -1031,6 +1036,10 @@ func vkSetText(text string, config *Config) {
 	case osPromptVKTarget:
 		// An everyday app's field acts on Done only (osapps.go).
 		osPromptSetText(text)
+	case notesVKTarget:
+		// A note is typed live, like a document: the editor above the sheet
+		// shows it as it grows, and closing saves it (notes_keyboard.go).
+		notesVKSetText(text)
 	case mlAddrVKTarget:
 		// A PC's address is asked or saved on Done only (moonlight_ui.go).
 		mlVKSetText(text)
@@ -1117,6 +1126,22 @@ func vkSetText(text string, config *Config) {
 
 const vkMaxTextLen = 2000
 
+// vkMaxLen is the longest text the active field takes, in bytes: vkMaxTextLen,
+// or a note's own limits (notes_keyboard.go).
+func vkMaxLen() int {
+	if vkTarget == notesVKTarget {
+		return notesVKMaxLen()
+	}
+	return vkMaxTextLen
+}
+
+// vkEnterTypesNewline reports a field that holds lines — a note's body —
+// where Enter and the action key type a line break and Done is Start, Y or
+// Ctrl+Enter.
+func vkEnterTypesNewline() bool {
+	return vkTarget == notesVKTarget && notesVKNewlineField()
+}
+
 // vkGameSearchRaw and vkTVSearchRaw hold what was typed into the game library
 // and Live TV searches. Both libraries trim their query, so a typed space used
 // to vanish at once and glue the next word on ("super mario" became
@@ -1154,7 +1179,7 @@ func vkInsertText(text string, config *Config) {
 		vkCaret = -1
 	}
 	current := vkCurrentText()
-	room := vkMaxTextLen - len(current)
+	room := vkMaxLen() - len(current)
 	if room <= 0 {
 		return
 	}
@@ -1270,6 +1295,8 @@ func vkTitle() string {
 		return "RENAME FILE"
 	case osPromptVKTarget:
 		return osPrompt.title
+	case notesVKTarget:
+		return notesVKHeading()
 	case mlAddrVKTarget:
 		return mlVKTitle()
 	case mailComposeVKTarget:
@@ -1430,6 +1457,8 @@ func vkPlaceholder() string {
 		return "Final Fantasy VI (USA)"
 	case osPromptVKTarget:
 		return osPrompt.placeholder
+	case notesVKTarget:
+		return notesVKPlaceholder()
 	case mlAddrVKTarget:
 		return mlVKPlaceholder()
 	case mailComposeVKTarget:
@@ -2107,6 +2136,10 @@ func vkCloseKeyboard() {
 		osPrompt.buffer = ""
 		osPrompt.submit = nil
 	}
+	if vkTarget == notesVKTarget {
+		// A note was typed live: closing, any way, saves it.
+		notesVKClosed()
+	}
 	if vkTarget == mlAddrVKTarget {
 		mlVKClear()
 	}
@@ -2203,6 +2236,12 @@ func vkActivateFocused(config *Config) {
 	case "BACK":
 		vkBackspace(config)
 	case "ENTER", "SEND":
+		if vkEnterTypesNewline() {
+			// A note's body: the key is New line; Start or Y is Done.
+			vkInsertText("\n", config)
+			vkKeySound()
+			break
+		}
 		vkPlay(PlayActivateSound)
 		vkSubmit(config, false)
 	case "ASK_AI":
@@ -2716,6 +2755,12 @@ func vkSubmit(config *Config, askAI bool) {
 		submit := osPromptTake()
 		vkCloseKeyboard()
 		osPromptRun(submit, text)
+	case notesVKTarget:
+		// A note: closing saved it; the title moves on to the body, the
+		// search shows its matches (notes_keyboard.go).
+		field := notesVK.field
+		vkCloseKeyboard()
+		notesVKDone(field)
 	case mlAddrVKTarget:
 		// And a PC's address: nothing is asked or saved until here.
 		vkCloseKeyboard()

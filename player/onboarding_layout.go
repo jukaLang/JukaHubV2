@@ -67,35 +67,31 @@ func onboardingLayoutCommit(config *Config) {
 	homeSetArrangement(config, homeArrangementChoiceList[onbLayout.cursor])
 }
 
-// onboardingRenderLayout puts all five choices on the card. A short, wide
-// canvas uses two columns; a narrow canvas keeps enough width for the labels.
-func onboardingRenderLayout(renderer *sdl.Renderer, config *Config, cy, cardH, textX, textW, top int32,
+// onboardingRenderLayout puts all five choices on the card between top and
+// bottom: a column of rows, each with a thumbnail of the arrangement, its
+// name, and its note when the rows have room for a second line
+// (onboardingRowFit). Only a card too short for one line per row splits the
+// choices into two columns.
+func onboardingRenderLayout(renderer *sdl.Renderer, config *Config, textX, textW, top, bottom int32,
 	bodyFont, smallFont *ttf.Font, accent sdl.Color) {
 	onbLayout.hits = onbLayout.hits[:0]
-	if renderer == nil || bodyFont == nil || smallFont == nil {
-		return
-	}
-	bottom := cy + cardH - 108
-	available := bottom - top
-	if available <= 0 {
+	n := len(homeArrangementChoiceList)
+	if renderer == nil || bodyFont == nil || smallFont == nil || n == 0 || bottom <= top {
 		return
 	}
 	cols := int32(1)
-	if textW >= 380 && available/int32(len(homeArrangementChoiceList)) < int32(bodyFont.Height())+22 {
+	fit := onboardingRowFit(n, top, bottom, bodyFont, smallFont)
+	if fit.lines == 0 && textW >= 380 {
 		cols = 2
+		fit = onboardingRowFit((n+1)/2, top, bottom, bodyFont, smallFont)
+		// Half the column is too narrow for the note.
+		fit.lines = min(fit.lines, 1)
 	}
-	rows := (int32(len(homeArrangementChoiceList)) + cols - 1) / cols
-	pitch := min32(60, available/rows)
-	gap := int32(7)
-	rowH := pitch - gap
-	if rowH < 24 {
-		rowH = min32(24, pitch)
-	}
-	colW := (textW + 20 - gap*(cols-1)) / cols
-	perCol := (int32(len(homeArrangementChoiceList)) + cols - 1) / cols
+	perCol := (int32(n) + cols - 1) / cols
+	colW := (textW + 20 - onbRowGap*(cols-1)) / cols
 	for i, name := range homeArrangementChoiceList {
 		col, row := int32(i)/perCol, int32(i)%perCol
-		rect := sdl.Rect{X: textX - 10 + col*(colW+gap), Y: top + row*pitch, W: colW, H: rowH}
+		rect := sdl.Rect{X: textX - 10 + col*(colW+onbRowGap), Y: top + row*fit.pitch, W: colW, H: fit.rowH}
 		onbLayout.hits = append(onbLayout.hits, rect)
 		selected := i == onbLayout.cursor
 		UIListRow(renderer, rect, RadiusMD, selected, false)
@@ -106,27 +102,17 @@ func onboardingRenderLayout(renderer *sdl.Renderer, config *Config, cy, cardH, t
 		} else {
 			strokeCircle(renderer, markX, markY, 7, WithAlpha(ColorTextTertiary(), 160))
 		}
-		thumb := sdl.Rect{X: rect.X + 9, Y: rect.Y + 5, W: min32(82, rect.W/3), H: rect.H - 10}
+		// The thumbnail keeps a screen's proportions however tall the row is.
+		thumbH := rect.H - 10
+		thumb := sdl.Rect{X: rect.X + 9, Y: rect.Y + 5, W: min(82, rect.W/3, thumbH*16/9), H: thumbH}
 		onboardingLayoutThumbnail(renderer, name, thumb, accent)
 		labelX := thumb.X + thumb.W + 12
-		labelW := markX - 12 - labelX
-		font := smallFont
-		if cols == 1 && rowH >= int32(bodyFont.Height())+int32(smallFont.Height())+6 {
-			font = bodyFont
-		}
 		ink := ColorTextSecondary()
 		if selected {
 			ink = ColorTextPrimary()
 		}
-		if cols == 1 && font == bodyFont {
-			labelY := rect.Y + (rect.H-int32(bodyFont.Height())-int32(smallFont.Height())-2)/2
-			renderText(renderer, config, font, ellipsize(font, homeArrangementChoiceLabel(name), labelW), ink, labelX, labelY)
-			renderText(renderer, config, smallFont, ellipsize(smallFont, onboardingLayoutNotes[i], labelW), ColorTextTertiary(),
-				labelX, labelY+int32(bodyFont.Height())+2)
-		} else {
-			renderText(renderer, config, font, ellipsize(font, homeArrangementChoiceLabel(name), labelW), ink,
-				labelX, rect.Y+(rect.H-int32(font.Height()))/2)
-		}
+		onbRowText(renderer, config, rect, fit, labelX, markX-12-labelX, homeArrangementChoiceLabel(name),
+			onboardingLayoutNotes[i], ink, bodyFont, smallFont)
 	}
 }
 

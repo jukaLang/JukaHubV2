@@ -112,6 +112,55 @@ func TestBugrepScrubRemovesPersonalData(t *testing.T) {
 	}
 }
 
+// A launch report (launchreport.go) keeps the folders and files a launch bug
+// turns on, and still drops what must never leave the device: credentials,
+// account names, the paths of links, addresses, and the values of the
+// environment variables it does not need; a long log keeps its newest end.
+func TestLaunchReportKeepsPathsNotSecrets(t *testing.T) {
+	cases := []struct {
+		in   string
+		gone []string
+		keep []string
+	}{
+		{"launch.sh: line 7: /mnt/SDCARD/RetroArch/ra64.trimui: not found", nil, []string{"/mnt/SDCARD/RetroArch/ra64.trimui"}},
+		{`program C:\Users\Bob\Emulators\ppsspp.exe`, []string{"Bob"}, []string{`\Emulators\ppsspp.exe`}},
+		{"config at /home/carol/.config/retroarch", []string{"carol"}, []string{".config/retroarch"}},
+		{"open http://bob:hunter2@media.example/private/list.m3u8?key=abc", []string{"hunter2", "private", "abc"}, []string{"media.example"}},
+		{"peer 10.1.2.3 joined, mail alice@example.com", []string{"10.1.2.3", "alice@example.com"}, []string{"joined"}},
+	}
+	for _, c := range cases {
+		got := bugrepScrubKeepPaths(c.in)
+		for _, g := range c.gone {
+			if strings.Contains(got, g) {
+				t.Errorf("scrub(%q) = %q still contains %q", c.in, got, g)
+			}
+		}
+		for _, k := range c.keep {
+			if !strings.Contains(got, k) {
+				t.Errorf("scrub(%q) = %q lost %q", c.in, got, k)
+			}
+		}
+	}
+
+	env := strings.Join(launchReportEnv([]string{"PATH=/usr/bin", "HOME=/mnt/SDCARD/RetroArch", "JUKAHUB_GITHUB_TOKEN=ghp_secret",
+		"WIFI_PSK=hunter2", "SDL_VIDEODRIVER=mali", "HOME=/mnt/SDCARD"}), "\n")
+	for _, want := range []string{"PATH=/usr/bin", "HOME=/mnt/SDCARD", "SDL_VIDEODRIVER=mali", "JUKAHUB_GITHUB_TOKEN", "WIFI_PSK"} {
+		if !strings.Contains(env, want) {
+			t.Errorf("the environment lacks %q:\n%s", want, env)
+		}
+	}
+	for _, never := range []string{"ghp_secret", "hunter2", "HOME=/mnt/SDCARD/RetroArch"} {
+		if strings.Contains(env, never) {
+			t.Errorf("the environment shows %q:\n%s", never, env)
+		}
+	}
+
+	tail := bugrepClipTail("oldest\n"+strings.Repeat("x", 100)+"\nnewest", 60)
+	if len(tail) > 60 || !strings.Contains(tail, "newest") || strings.Contains(tail, "oldest") {
+		t.Errorf("bugrepClipTail kept the wrong end: %q", tail)
+	}
+}
+
 func TestBugrepBuildHonoursTheToggles(t *testing.T) {
 	withTempPatchState(t) // DiagnosticsText creates patch/ state folders
 	config := &Config{Version: "1.2.3"}

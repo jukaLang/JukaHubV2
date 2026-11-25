@@ -700,4 +700,25 @@ func TestDeviceLibraryStandInIsALoadableLibrary(t *testing.T) {
 	if ver := data[sec.Offset:]; le.Uint16(ver[0:]) != 1 || le.Uint16(ver[4:]) != 27 {
 		t.Errorf("libusb_version starts %v", ver[:8])
 	}
+
+	// libXi (the buildbot's Dolphin on a Smart Pro, 2026-11-24): BadRequest
+	// from XIQueryVersion, NULL from the rest; its own functions only, never
+	// libX11's.
+	f, data = parse("libXi.so.6", nil, []devStubSym{{name: "XIQueryVersion"}, {name: "XIQueryDevice"}})
+	if _, words := code(f, data, "XIQueryVersion"); len(words) != 2 || words[0] != 0xd2800020 || words[1] != a64Ret {
+		t.Errorf("XIQueryVersion = %#x, want mov x0, #1; ret", words)
+	}
+	if _, words := code(f, data, "XIQueryDevice"); len(words) != 2 || words[0] != 0xd2800000 {
+		t.Errorf("XIQueryDevice = %#x, want NULL", words)
+	}
+	xi := devStubLibs["libXi.so.6"]
+	for name, want := range map[string]bool{"XIQueryVersion": true, "XISelectEvents": true, "XOpenDevice": true,
+		"XInternAtom": false, "XIfEvent": false, "XInitThreads": false, "XOpenDisplay": false} {
+		if xi.claims(name) != want {
+			t.Errorf("libXi's stand-in claims %s: %v, want %v", name, !want, want)
+		}
+	}
+	if libs := coreDevLibsMissing("needs libXi.so.6 and libusb-1.0.so.0, which this firmware does not have"); strings.Join(libs, " ") != "libXi.so.6 libusb-1.0.so.0" {
+		t.Errorf("the Smart Pro's refusal read back as %q", libs)
+	}
 }

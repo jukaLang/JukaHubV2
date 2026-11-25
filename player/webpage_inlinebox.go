@@ -238,6 +238,27 @@ func webRunChip(st *webStyle, baseSize float64, doc *webDocument) webInlineChip 
 	return c
 }
 
+// webChipHeight pads a button's chip out to the height its page sets — the
+// border box under box-sizing: border-box — with the label in the middle, as
+// DuckDuckGo Lite draws its 40px Search and Next Page pills. fontH is the
+// label's face height; the chip never grows past three rows.
+func webChipHeight(c *webInlineChip, st *webStyle, fontH int32, baseSize float64, rowH int32) {
+	if st.Height <= 0 || fontH <= 0 {
+		return
+	}
+	total := int32(math.Round(st.Height * baseSize / 16))
+	if st.BoxSizing != 1 {
+		total += c.padT + c.padB
+	}
+	if rowH > 0 {
+		total = min(total, rowH*3)
+	}
+	if extra := (total - fontH - c.padT - c.padB) / 2; extra > 0 {
+		c.padT += extra
+		c.padB += extra
+	}
+}
+
 // webInlineInsets is the width a run's own inline edges add to its line, in
 // layout pixels: what an intrinsic measure of the line has to count.
 func webInlineInsets(run *webRun, baseSize float64) int32 {

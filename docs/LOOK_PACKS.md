@@ -36,7 +36,7 @@ name):
 | `theme` | `"convert-snes"` | A built-in or installed theme preset id; `"default"` is JukaHub's own palette. |
 | `themeFile` | `"theme.json"` | A theme file in the pack (the `themes/*.json` format). |
 | `homeLayout` | `"tabs"` | `custom`, `dashboard`, `grid`, `carousel`, `widgets` or `tabs`. |
-| `wallpaper` | `"wallpaper.jpg"` | A picture in the pack (PNG, JPEG, WebP, BMP, up to 12 MB), or `"none"`. |
+| `wallpaper` | `"wallpaper.jpg"` | A picture in the pack (PNG, JPEG, WebP, BMP, up to 12 MB), `"none"`, or `"theme"`: the wallpaper JukaHub ships for the pack's theme ([THEMES.md](THEMES.md#theme-wallpapers); none when that theme has none). Retro Arcade, Movie Night and Focus / Reading use `"theme"`. |
 | `sounds` | `{"enabled": true, "level": 60}` | Interface sounds. |
 | `startupSound` | `false` | The start-up and shutdown chime. |
 | `menuColour` (or `menuColor`) | `"coral"` | One of Menu colour's names (sky, mint, lime, amber, coral, rose, violet, indigo, teal, white) or `"theme"`. |

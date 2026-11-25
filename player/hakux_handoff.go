@@ -1017,15 +1017,42 @@ func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 		d := &gameDiagLaunch{game: game, launcher: note.Launcher, outPath: note.Log}
 		d.addLauncherOutput(&report)
 	}
+	// The launch as the hand-off script recorded it, for the card's bug report
+	// (launchreport.go). JukaHub was closed while it ran, so its log is this
+	// start's.
+	rec := launchRecordNew("Hand-off game ("+emu+")", game.Label(), note.Launcher)
+	rec.System, rec.ROM, rec.OutPath = game.System, game.Path, note.Log
+	if !note.PlayedAt.IsZero() {
+		rec.Started = note.PlayedAt
+	}
+	rec.logMark = 0
+	rec.logTitle = "JukaHub log since it started again (it was closed while the game ran)"
+	if note.Script > 0 {
+		rec.Notes = append(rec.Notes, "hand-off script pid "+strconv.Itoa(note.Script))
+	}
+	if len(run.Steps) > 0 {
+		rec.Notes = append(rec.Notes, "hand-off steps: "+strings.Join(run.Steps, " → "))
+	}
 	if !run.HasStart {
 		why := run.lastStep()
 		if why == "" {
 			why = "the hand-off script never ran"
 		}
 		report.Summary = "JukaHub closed to give the game the screen, but the game was not started: " + why + "."
+		rec.Reason = "the game was not started: " + why
+		report.Launch = rec
+		report.Details = launchReportDetails(rec, report.Summary, report.Issues)
 		logInfoDiag(report)
 		gameDiagPost(report)
 		return
+	}
+	if run.HasRC {
+		rec.Exit = "exit status " + strconv.Itoa(run.RC)
+	} else {
+		rec.Exit = "status unknown (the hand-off script recorded none)"
+	}
+	if ran := run.ran(); ran > 0 && !rec.Started.IsZero() {
+		rec.Ended = rec.Started.Add(ran)
 	}
 	secs := int(run.ran().Round(time.Second) / time.Second)
 	if secs < 1 {
@@ -1043,6 +1070,8 @@ func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 	default:
 		report.Summary = when + ". JukaHub found nothing missing that it can check, and " + emu + "'s launcher printed nothing."
 	}
+	report.Launch = rec
+	report.Details = launchReportDetails(rec, report.Summary, report.Issues)
 	logInfoDiag(report)
 	gameDiagPost(report)
 }

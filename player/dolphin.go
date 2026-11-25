@@ -312,7 +312,7 @@ func dolphinPrepareLibraryLaunch(game libraryGame, launcher string) (deferred bo
 		}
 		dolphinResume = game.Path
 		if err := launchLibraryGame(game, next); err != nil {
-			ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+			gameLaunchErrorToast(game.Title, err)
 		}
 		dolphinResume = ""
 	})

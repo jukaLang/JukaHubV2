@@ -287,3 +287,190 @@ func hakuxFitApply(ctx context.Context, client *http.Client, p hakuxPaths, folde
 		target, hakuxFitRepo, hakuxFitTag, rel.AssetDate, rel.Digest)
 	return nil
 }
+
+// ── An Xbox game's start ─────────────────────────────────────────────────────
+
+func init() {
+	gameLaunchRegisterGate(hakuxFitGate)
+}
+
+// What a start already did this session about one install's fit
+// (hakuxFitState, by launcher folder).
+const (
+	// hakuxFitSaidOffline: a start offline said what the game waits for; the
+	// next one plays with the emulator there.
+	hakuxFitSaidOffline = 1
+	// hakuxFitRan: a fit ran for a start. One that failed (GitHub's limit, the
+	// Wi-Fi gone midway) lets the next start play with the emulator there
+	// rather than wait again.
+	hakuxFitRan = 2
+)
+
+// hakuxFitState and hakuxFitResume are main-thread state: the first is what a
+// start did about each install's fit this session, the second the game whose
+// start waited for a fit and runs again, which the gate lets through.
+var (
+	hakuxFitState  map[string]int
+	hakuxFitResume string
+)
+
+// hakuxFitDue reports an install that still has the package's own emulator on
+// a model that plays with spruceUI's build: a hakuX JukaHub installed (its
+// provenance file in folder) with no screen build recorded. A small read.
+func hakuxFitDue(folder string) bool {
+	if IsWindows() || !IsTrimuiDevice() || strings.TrimSpace(folder) == "" {
+		return false
+	}
+	device := hakuxDevice()
+	if !hakuxNeedsFit(device) || !hakuxSupportFor(device).Offer {
+		return false
+	}
+	m, managed := hakuxReadManifest(folder)
+	return managed && strings.TrimSpace(m.ScreenBuild) == ""
+}
+
+// hakuxFitGate is the library launch's gate (gamelaunch_hooks.go) for an Xbox
+// game started by the launcher of such an install (hakuxFitDue): the start
+// waits while spruceUI's build goes in and runs again once it is
+// (hakuxFitBegin). Offline it says what the game waits for, once; a start
+// nobody pressed for, and every start after this session's fit, plays with the
+// emulator there. Main thread.
+func hakuxFitGate(game libraryGame, launcher string) (held bool, err error) {
+	if hakuxFitResume != "" && hakuxFitResume == game.Path {
+		return false, nil
+	}
+	launcher = strings.TrimSpace(launcher)
+	if !strings.EqualFold(strings.TrimSpace(game.System), emuXboxEntryName) || !launcherShellScript(launcher) {
+		return false, nil
+	}
+	folder := filepath.Dir(launcher)
+	state := hakuxFitState[folder]
+	if state == hakuxFitRan || !hakuxIsXboxFolder(filepath.Base(folder), folder) || !hakuxFitDue(folder) {
+		return false, nil
+	}
+	if hakuxUnasked {
+		logInfo("emulators", "hakuX: %s starts with the Smart Pro's build of the emulator: a start nobody pressed for downloads nothing", filepath.Base(game.Path))
+		return false, nil
+	}
+	if !IsOnline() {
+		if state == hakuxFitSaidOffline {
+			logInfo("emulators", "hakuX: %s starts with the Smart Pro's build of the emulator (offline)", filepath.Base(game.Path))
+			return false, nil
+		}
+		hakuxFitNote(folder, hakuxFitSaidOffline)
+		return false, errors.New("hakuX here is still the Smart Pro's build, made for its 1280x720 screen · connect to the internet " +
+			"and start it again to get the one for this screen (once), or start it again now to play as it is")
+	}
+	if why := hakuxFitBegin(game, launcher, folder); why != "" {
+		return false, errors.New(why)
+	}
+	return true, nil
+}
+
+// hakuxFitNote records what a start did about the install at folder.
+func hakuxFitNote(folder string, state int) {
+	if hakuxFitState == nil {
+		hakuxFitState = map[string]int{}
+	}
+	hakuxFitState[folder] = state
+}
+
+// hakuxFitBegin puts spruceUI's build into the hakuX install at folder under
+// the install card, then starts game again with launcher when nothing else
+// took the screen since (hakuxFitAfter). It returns why it did not begin, ""
+// when it did. Main thread.
+func hakuxFitBegin(game libraryGame, launcher, folder string) string {
+	title := hakuxGameTitle(game)
+	if emuInstallingName() == emuXboxEntryName {
+		return "hakuX is being installed — start " + title + " again once it is in"
+	}
+	if installBarActive() || !tryBeginPatchOp() {
+		return "Another download or update is running — start " + title + " again when it is done"
+	}
+	hakuxFitNote(folder, hakuxFitRan)
+	installBarBeginLabelled(hakuxName, "Getting hakuX for this screen")
+	installBarPhase(installPhaseResolving)
+	emuSetInstalling(emuXboxEntryName)
+	// The caller shows "Playing …" for a start a gate held: that goes, and
+	// this stays (gameReadyHushCallerToast).
+	msg := "Getting the hakuX build for this screen (once) — " + title + " starts when it is in"
+	ShowToast(msg, ToastKindInfo)
+	gameReadyHushCallerToast(game)
+	tbxPost(func() { ShowToast(msg, ToastKindInfo) })
+	p := hakuxDevicePaths()
+	fromLibrary := gameLib.open
+	pressed := time.Now()
+	logInfo("emulators", "hakuX: %s waits for spruceUI's build of the emulator: the install in %s still has the Smart Pro's", filepath.Base(game.Path), folder)
+	go func() {
+		ctx, cancel := context.WithTimeout(installBarRunContext(), emuWinInstallTimeout)
+		err := hakuxFitInstalled(ctx, emuWinClient(), p, folder)
+		cancel()
+		emuSetInstalling("")
+		switch {
+		case err == nil:
+			installBarPhase(installPhaseDone)
+			installBarDone()
+			invalidateEmulatorCache()
+		case errors.Is(err, context.Canceled):
+			installBarAbort()
+		default:
+			installBarFail(installCardDetail(emuFriendlyError(err)))
+			logWarn("emulators", "hakuX: the build for this screen could not be installed: %v", err)
+		}
+		endPatchOp()
+		finished := time.Now()
+		tbxPost(func() { hakuxFitAfter(game, launcher, fromLibrary, pressed, finished, err) })
+	}()
+	return ""
+}
+
+// hakuxFitInstalled fits the install at folder (hakuxFitApply) and records
+// that in its provenance file; one fitted meanwhile (X on the tile) is left as
+// it is. Off the main thread, under the install card.
+func hakuxFitInstalled(ctx context.Context, client *http.Client, p hakuxPaths, folder string) error {
+	m, managed := hakuxReadManifest(folder)
+	if !managed {
+		return fmt.Errorf("%s holds no hakuX that JukaHub installed", folder)
+	}
+	if strings.TrimSpace(m.ScreenBuild) != "" {
+		return nil
+	}
+	if err := hakuxFitApply(ctx, client, p, folder, &m, func(done, total int64) {
+		emuInstallBarReport(installPhaseDownload, done, total)
+	}); err != nil {
+		return err
+	}
+	return hakuxWriteManifest(folder, m)
+}
+
+// hakuxFitAfter is the main loop's end of a start's fit: the game starts when
+// the build went in and nothing took the screen since the press
+// (hakuxPlayAfterInstall's rule); otherwise a toast says where things stand.
+// After a fit that failed, the next start plays with the emulator there.
+// Main thread.
+func hakuxFitAfter(game libraryGame, launcher string, fromLibrary bool, pressed, finished time.Time, err error) {
+	title := hakuxGameTitle(game)
+	switch {
+	case errors.Is(err, context.Canceled):
+		ShowToast("Stopped · start "+title+" again to play with the hakuX build that is there", ToastKindInfo)
+		return
+	case err != nil:
+		ShowToast("The hakuX build for this screen did not install ("+firstLine(emuFriendlyError(err))+") · start "+title+
+			" again to play with the Smart Pro's", ToastKindWarning)
+		return
+	}
+	still := !gameScreenSuspended() && !videoHoldsScreenAwake() && !emuPickOpen() &&
+		gameLib.open == fromLibrary && time.Since(pressed) < hakuxPlayAfterWithin &&
+		time.Since(finished) < hakuxPlayAfterLate
+	if !still || !regularFile(game.Path) {
+		ShowToast("hakuX for this screen is in · start "+title+" to play", ToastKindSuccess)
+		return
+	}
+	logInfo("emulators", "hakuX: the build for this screen is in; starting %s", filepath.Base(game.Path))
+	hakuxFitResume = game.Path
+	err = launchLibraryGame(game, launcher)
+	hakuxFitResume = ""
+	if err != nil {
+		gameLaunchErrorToast(title, err)
+	}
+}

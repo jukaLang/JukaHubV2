@@ -115,7 +115,7 @@ type launcherOutput struct {
 // never waits on a helper the script left running with the file open. nil
 // (and every method a no-op) when there is nothing to capture.
 func (d *gameDiagLaunch) captureLauncherOutput(cmd *exec.Cmd) *launcherOutput {
-	if d == nil || cmd == nil || IsWindows() || !launcherShellScript(d.launcher) ||
+	if d == nil || cmd == nil || IsWindows() || (!launcherShellScript(d.launcher) && !d.captureAny) ||
 		cmd.Stdout != nil || cmd.Stderr != nil {
 		return nil
 	}

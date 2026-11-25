@@ -156,7 +156,10 @@ the bell opens the notification centre, exactly like tapping it; **B**/Esc
 closes it. The highlighted notification shows its whole message, and the
 D-pad, **L1**/**R1**, **L2**/**R2** and the mouse wheel scroll through every
 one kept; a toast cut short with "…" opens the centre on its message when
-clicked.
+clicked. **A** runs the highlighted row's action ("Install update", "Open",
+"Retry", "Play" — the pill at the row's end; a row without one closes the
+centre), **X** dismisses the row and **Y** twice clears them all (Enter,
+Delete / X, Y and Shift+Delete on a keyboard; a tap on the pill or the "×").
 **Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
 it, and the D-pad does not move the screen underneath while it is open.
 
@@ -281,7 +284,7 @@ no footer names may have no key.
 | Windows apps | X setup · Y display · Start rescan | X · Y or D · R or F5 |
 | APK Store | A options · X details · Y rescan · L1 / R1 tabs | Enter · X or Del · Y · Tab / Shift+Tab or PgUp / PgDn |
 | Power tools, Memory scanner | X · Y | X · Y (R picks the target in the scanner) |
-| Notes | Y new · X delete · L1 / R1 folder | Y or N · X · F; S search |
+| Notes | Y new · X delete · L1 / R1 folder · Select menu | Y or N · X · F · M; S search, Ctrl+S every note as a file |
 | Calculator | X insert x (history: edit) · Y graph · L1 clear · R1 delete | type the sum · Y · Del · Backspace |
 | Pomodoro | A start / pause · X skip · Y reset | Enter · X · Y |
 | Tasks | A done · Y add · X task / list sheet · L1 / R1 list · Left / Right column. Due picker: L1 / R1 ±7 days / ±1 hour, Y save | Enter or Space · N or Y · X · PgUp / PgDn · ← / → or Tab; Del twice deletes a task |
@@ -1676,7 +1679,7 @@ The **Xbox** tile is always on the page. What it offers depends on the device:
 | Device | Xbox tile |
 |---|---|
 | Smart Pro (TG5040) | Installs the experimental [hakuX port](https://github.com/ToastedFrog2/hakux-trimui-smart-pro) |
-| Brick Pro | The same install, marked untested, with spruceUI's build of hakuX (which draws at the panel's own 1024x768) in place of the Smart Pro's |
+| Brick Pro | The same install, marked untested, with spruceUI's build of hakuX (which draws at the panel's own 1024x768) in place of the Smart Pro's. An install an older JukaHub made may still have the Smart Pro's: the first Xbox game's start gets this model's build first, once (online), and so does **X** |
 | Brick, Hammer | The same, marked untested and never installed by itself; no analog sticks (hakuX's **Menu** maps a game's controls per title, so a stick's job can go on the D-pad) |
 | Smart Pro S | The same, marked untested: spruceUI's build runs on any Vulkan driver, the A523's Mali included |
 | Windows | xemu, installed from its official release; **Y** on its tile opens the BIOS checklist |
@@ -1809,10 +1812,15 @@ the tile and the install toast say when that runtime is missing. Games go in
 
 3DS games (`Roms\3DS`, also `N3DS`) play in
 [Azahar](https://github.com/azahar-emu/azahar/releases), the maintained 3DS
-emulator that took over from Citra and Lime3DS. JukaHub does not install it
-yet: its tile (or the tile of a `Roms\3DS` folder that has games) opens the
-download page. JukaHub finds the installer's copy (Program Files, or your
-user's Programs folder), a portable copy in a folder named `Azahar` (the
+emulator that took over from Citra and Lime3DS. **A** or **X** on its tile (or
+on the tile of a `Roms\3DS` folder that has games) installs the portable build
+from Azahar's official releases, `azahar-windows-msvc-<version>.zip`
+(`azahar-<version>-windows-msvc.zip` up to 2124.3), never the installers, the
+msys2 or mxe builds or the libretro core published beside it; a Windows on ARM
+PC takes the same x64 build. A newer release shows as an update like any other
+emulator's, and **R1** puts the previous one back. JukaHub also finds a copy
+you installed yourself (Program Files, or your user's Programs folder), a
+portable copy in a folder named `Azahar` (the
 Emulators folder, Desktop, Downloads, Documents, Games) or `azahar.exe` on
 PATH, and starts a game with `azahar.exe -f "<game>"` (full screen). The shelf
 lists `.3ds`/`.cci`, `.cxi`/`.app`, `.3dsx` and `.elf`/`.axf` (and their
@@ -1850,8 +1858,8 @@ see [WINDOWS_APPS.md](WINDOWS_APPS.md).
 | Button | Action |
 |--------|--------|
 | D-pad Up / Down | Move through apps |
-| A | Start the selected app; its row shows the progress (the first start prepares Windows for a few minutes). On an empty list (handheld), download the sample program, Notepad++ |
-| Y | Display for this app: Windows (GDI) or OpenGL (handheld) |
+| A | Start the selected app; its row shows the progress (the first start prepares Windows for a few minutes). **Wine Test (built in)** starts the same way: one window that shows Wine works. On an empty list (handheld), download the sample program, Notepad++ |
+| Y | Display for this app: Windows (GDI) or OpenGL (handheld). While the list holds only the Wine test, download the sample program instead |
 | X | The runtime setup page (handheld) |
 | Start | Rescan the app folders |
 | B | Close setup, then the launcher |
@@ -2052,6 +2060,8 @@ one does is in [Everyday apps](EVERYDAY_APPS.md); these are their keys.
 
 | App | Pad | Keyboard |
 |-----|-----|----------|
+| Notes | **A** open · **Y** new (the on-screen keyboard opens on its title) · **X** delete (asks first) · **L1 / R1** folder filter · **Select** menu: Search, Every note as a file, Open on phone · **B** back | Enter or Space · N or Y · X or Del · F · M; S search, Ctrl+S every note as a file |
+| Notes, a note | **A** type into the title or the body with the on-screen keyboard · **Up / Down** title ↔ body (and scroll the body) · **L1 / R1** move the note to another folder · **Y** or **Select** menu: Save as file, Open on phone, Delete note · **B** save and back. On the on-screen keyboard the action key is **Next** on the title and **New line** on the body; **Start** or **Y** is Done, and closing it saves | type · Enter or Tab title → body · Ctrl+Up body → title · Ctrl+S save · Ctrl+M or the Menu key: the menu · PgUp / PgDn scroll · Esc save and back |
 | Tasks | **A** done / not done (a repeating task moves to its next date) · **Y** add · **X** the task's (or list's) sheet · **L1 / R1** previous / next list · **Left / Right** lists ↔ tasks · **B** back | Enter or Space · N or Y · X · PgUp / PgDn · Tab; Del twice deletes |
 | Tasks, due picker | **Left / Right** quick pick, ±1 day or ±5 min · **L1 / R1** ±7 days or ±1 hour · **A** use · **Y** save · **B** cancel | arrows · PgUp / PgDn · Enter · Y · Esc |
 | Voice Memos | **Y** record · **A** play / pause the focused memo · **X** options (rename, send to phone, delete, microphone test) · **L1 / R1** or **Left / Right** −5 s / +5 s · **B** stop / back | Y or R · Enter · X · ← / →; N rename, Del delete |
@@ -2739,6 +2749,8 @@ The code already contains the PIN.
 | A (on the selected code), or a tap on it | Fill the screen with the code and raise the backlight to full |
 | Up / Down, or Left from Share or Games too (Screen Share) | Select the code; the card opens on **Share** |
 | A / B / Esc, or any tap | Close the enlarged code and put the backlight back where it was |
+
+The **QR maker** (Tools → Everyday apps) shows its codes on the same card. There **X** (**S** on a keyboard) saves the code as a PNG in the screenshots folder and leaves it on screen; pairing codes are never saved.
 
 On **Diagnostics export**, **B** still leaves the page and the enlarged code is
 the page's only control, so **A** enlarges it instead of going back.

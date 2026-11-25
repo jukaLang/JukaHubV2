@@ -500,6 +500,9 @@ func ShowShutdown(renderer *sdl.Renderer, config *Config) {
 		}
 		track.snapshotInto(&snap)
 		renderShutdownFrameAt(renderer, config, &snap, float64(time.Since(start).Microseconds())/1000, dissolve, motion, farewell, bye)
+		// The software dimmer (a PC with no brightness control) covers the
+		// goodbye too, or it would flash at full brightness.
+		brightnessSoftRender(renderer)
 		renderer.Present()
 	}
 	frame := func() {

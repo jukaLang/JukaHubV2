@@ -577,6 +577,9 @@ func (s *companionServer) handler() http.Handler {
 	// The Tasks card: lists and tasks typed, ticked and deleted from the
 	// phone, behind the PIN (companion_tasks.go).
 	s.registerTaskRoutes(mux)
+	// The Notes page: the handheld's notes read, written, added from text
+	// files and downloaded on the phone (companion_notes.go).
+	s.registerNotesRoutes(mux)
 	// The Game Boy Printer scrapbook card: the prints, read-only, behind the
 	// PIN (gbprinter_companion.go).
 	s.registerGBPrinterRoutes(mux)
@@ -588,6 +591,10 @@ func (s *companionServer) handler() http.Handler {
 	// The Games page: the library, playing a game and its saves
 	// (companion_library.go).
 	s.registerLibraryRoutes(mux)
+	// Smart Home: the TP-Link ID and Home Assistant typed on the phone,
+	// checked before they are saved; Google and Apple Home explained
+	// (companion_smarthome.go).
+	s.registerSmartHomeRoutes(mux)
 	return mux
 }
 
@@ -1023,6 +1030,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <small>Leave the day and time empty for a plain checklist item; a task with a time reminds you on the handheld. Ring as alarm, repeats and edits are in Tasks on the handheld.</small>
 </div>
 
+<div class=card id=notesCard>
+  <h2>Notes</h2>
+  <div class=row><button id=notesPage>Open notes</button></div>
+  <small>The handheld's notes on your phone: read them, write new ones with this keyboard, add .txt files and download them as text.</small>
+</div>
+
 <div class=card>
   <h2>Games</h2>
   <div class=row><button id=gamesPage>Games and saves</button></div>
@@ -1039,6 +1052,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <h2>Sync</h2>
   <div class=row><button id=cloudPage>Devices and clouds</button></div>
   <small>Another JukaHub, Google Drive, Nextcloud or a NAS, RomM and Syncthing, all from one page: connect them once and your saves follow you.</small>
+</div>
+
+<div class=card id=smartHomeCard>
+  <h2>Smart Home</h2>
+  <div class=row><button id=smartHomePage>Set up Smart Home</button></div>
+  <small>Your TP-Link ID for Tapo and Kasa, Home Assistant, and what works with Google Home and Apple Home, for the handheld's Smart Home tab.</small>
 </div>
 
 <div class=card id=bugCard>
@@ -1259,8 +1278,10 @@ async function sendText() {
 document.getElementById('sendText').onclick = () => sendText().catch(e => toast(e.message, true));
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
+document.getElementById('notesPage').onclick = () => { location.href = '/notes?p=' + encodeURIComponent(pin); };
 document.getElementById('gamesPage').onclick = () => { location.href = '/games?p=' + encodeURIComponent(pin); };
 document.getElementById('cloudPage').onclick = () => { location.href = '/sync?p=' + encodeURIComponent(pin); };
+document.getElementById('smartHomePage').onclick = () => { location.href = '/smarthome?p=' + encodeURIComponent(pin); };
 
 // A report typed on the phone keeps its reference across a retry, so a lost
 // response cannot create a second issue. Saved device reports have the same

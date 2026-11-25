@@ -571,6 +571,8 @@ func packageActionsForget() {
 // pkgMigrateLegacy moves the registry list older builds kept inside
 // jukauser.json (Custom["packages_list"], rewritten on every settings save)
 // into the cache file, and shows it at once.
+//
+// remove after 2027-05-01: an upgrade shim for installs from 0.4.0.
 func pkgMigrateLegacy(config *Config) {
 	if config == nil || config.Variables.Custom == nil {
 		return

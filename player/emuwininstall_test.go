@@ -322,6 +322,73 @@ func TestEmuPickWinAssetXbox(t *testing.T) {
 	}
 }
 
+// TestEmuPickWinAssetAzahar: Azahar's releases before and after the 2125.0
+// rename, with the installers, the msys2 and mxe builds, the libretro core and
+// the room server beside the MSVC zip (2126.2's real list); the zip's one
+// folder holds the launcher the install looks for.
+func TestEmuPickWinAssetAzahar(t *testing.T) {
+	asset := func(name string) emuGitHubAsset {
+		return emuGitHubAsset{Name: name, BrowserDownloadURL: "https://example.invalid/" + name}
+	}
+	azahar, ok := emuWinSpecFor(emuAzaharName)
+	if !ok || !azahar.installable() {
+		t.Fatal("no Azahar install rules")
+	}
+	release := []emuGitHubAsset{
+		asset("azahar-libretro-windows-x86_64-2126.2.zip"),
+		asset("azahar-room-arm64-2126.2.dockerimage"),
+		asset("azahar-room-x86_64-2126.2.dockerimage"),
+		asset("azahar-unified-source-2126.2.tar.xz"),
+		asset("azahar-windows-msvc-2126.2-installer.exe"),
+		asset("azahar-windows-msvc-2126.2.zip"),
+		asset("azahar-windows-msys2-2126.2-installer.exe"),
+		asset("azahar-windows-msys2-2126.2.zip"),
+		asset("azahar-windows-mxe-2126.2-installer.exe"),
+		asset("azahar-windows-mxe-2126.2.zip"),
+	}
+	before2125 := []emuGitHubAsset{
+		asset("azahar-2124.3-windows-msvc-installer.exe"),
+		asset("azahar-2124.3-windows-msys2.zip"),
+		asset("azahar-2124.3-windows-msvc.zip"),
+	}
+	for _, tc := range []struct {
+		assets []emuGitHubAsset
+		goarch string
+		want   string
+	}{
+		{release, "amd64", "azahar-windows-msvc-2126.2.zip"},
+		// No official ARM64 build: Windows on ARM runs the x64 one.
+		{release, "arm64", "azahar-windows-msvc-2126.2.zip"},
+		{before2125, "amd64", "azahar-2124.3-windows-msvc.zip"},
+		{[]emuGitHubAsset{asset("azahar-2121-windows-msvc.zip")}, "amd64", "azahar-2121-windows-msvc.zip"},
+	} {
+		if got, ok := emuPickWinAssetFor(azahar, tc.assets, tc.goarch); !ok || got.Name != tc.want {
+			t.Errorf("Azahar on %s picked %q (%v), want %q", tc.goarch, got.Name, ok, tc.want)
+		}
+	}
+	others := []emuGitHubAsset{asset("azahar-libretro-windows-x86_64-2126.2.zip"), asset("azahar-windows-msys2-2126.2.zip"), asset("azahar-windows-mxe-2126.2.zip")}
+	if got, ok := emuPickWinAssetFor(azahar, others, "amd64"); ok {
+		t.Errorf("picked %q: only the MSVC zip is Azahar's portable build", got.Name)
+	}
+
+	stage := t.TempDir()
+	exe := filepath.Join(stage, "azahar-windows-msvc-2126.2", "azahar.exe")
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(exe, []byte("azahar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	content := emuArchiveContentRoot(stage)
+	if rel, ok := emuFindLauncher(content, emuWinLauncherNames(emuAzaharName)); !ok || rel != "azahar.exe" {
+		t.Fatalf("launcher = %q (%v) in %s, want azahar.exe", rel, ok, content)
+	}
+	if !emuWinUpdateAvailable(emuWinManifest{Tag: "2125.0.1"}, emuWinRelease{Tag: "2126.2"}) ||
+		emuWinUpdateAvailable(emuWinManifest{Tag: "2126.2"}, emuWinRelease{Tag: "2126.2"}) {
+		t.Error("Azahar's release numbers must order as versions")
+	}
+}
+
 // TestEmuCompareReleaseVersions: release tags order as releases — a final
 // release after its candidates — so an update never offers an rc over the
 // final release it led up to.

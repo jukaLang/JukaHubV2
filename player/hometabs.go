@@ -8,10 +8,10 @@ package main
 // Tabs is a Home arrangement (homeArrangementTabs, the default when none is
 // stored). The top bar keeps the wordmark on its left and the system controls
 // on its right; between them, in the middle, a strip of tabs — Recent, Main,
-// Games, Entertainment, Favourites, Collections — fades out at both ends. The
-// body under it is the active tab's page, drawn in the view the user picked
-// for it (grid, row, list, carousel, compact). The built-in cards and the
-// search pill are off in this arrangement: Y still searches.
+// Games, Entertainment, Smart Home, Favourites, Collections — fades out at
+// both ends. The body under it is the active tab's page, drawn in the view
+// the user picked for it (grid, row, list, carousel, compact). The built-in
+// cards and the search pill are off in this arrangement: Y still searches.
 //
 // Focus: Home's focus controller knows two stops of the shell, the page
 // (homeTabsPageID) and the strip (homeTabsStripID); which tile of the page is
@@ -174,6 +174,8 @@ func homeTabLabel(id string) string {
 		return "Games"
 	case homeTabEntertainment:
 		return "Entertainment"
+	case homeTabSmartHome:
+		return "Smart Home"
 	case homeTabFavourites:
 		return "Favourites"
 	case homeTabCollections:
@@ -622,6 +624,8 @@ func homeTabsBuild(c *Config, tab string, sub bool, folder homeTabItem) ([]homeT
 		return homeTabsGamesItems(c), false
 	case homeTabEntertainment:
 		return homeTabsEntertainmentItems(c), false
+	case homeTabSmartHome:
+		return homeTabsSmartHomeItems(c), false
 	case homeTabFavourites:
 		return homeTabsFavouriteItems(c), false
 	case homeTabCollections:
@@ -648,7 +652,10 @@ func homeTabsRebuild(c *Config, force bool) {
 	lvl := &p.levels[len(p.levels)-1]
 	gen := homeTabsContentGen.Load()
 	now := sdl.GetTicks64()
-	stale := homeTabs.cur == homeTabRecent && len(p.levels) == 1 && now-lvl.at >= homeTabsRecentEveryMS
+	// Smart Home is read again as often: each build is the hub's "on screen"
+	// (hometabs_smarthome.go), which keeps the devices' states coming.
+	stale := (homeTabs.cur == homeTabRecent || homeTabs.cur == homeTabSmartHome) && len(p.levels) == 1 &&
+		now-lvl.at >= homeTabsRecentEveryMS
 	if !force && lvl.gen == gen && !stale && lvl.at != 0 {
 		return
 	}

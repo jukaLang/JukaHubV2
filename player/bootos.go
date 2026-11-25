@@ -987,6 +987,7 @@ func bootOSPlay(renderer *sdl.Renderer, config *Config, allotted time.Duration, 
 		// starts after; the checks that run on their own keep the progress
 		// line honest.
 		r.drawHold(0)
+		brightnessSoftRender(r.renderer)
 		r.renderer.Present()
 		bootWorkDrain()
 	}
@@ -1053,6 +1054,9 @@ func (r *bootOSRun) play() {
 			}
 			r.drawArrival(ms, am)
 		}
+		// The software dimmer (a PC with no brightness control) covers the
+		// boot too, or it would flash at full brightness.
+		brightnessSoftRender(r.renderer)
 		r.renderer.Present()
 		if final {
 			return

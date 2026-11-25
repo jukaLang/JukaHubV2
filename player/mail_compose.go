@@ -88,11 +88,14 @@ func mailExtractAddrs(s string) []string {
 	return out
 }
 
-// mailQuoteText is the original message as a reply quotes it.
+// mailQuoteText is the original message as a reply quotes it. Its date and
+// time are written as every screen writes them (clockformat.go: the date
+// order, the clock and the language the main thread last used).
 func mailQuoteText(date time.Time, who, text string) string {
 	head := who + " wrote:"
 	if !date.IsZero() {
-		head = "On " + date.Local().Format("Mon, Jan 2, 2006 at 15:04") + ", " + who + " wrote:"
+		lt := date.Local()
+		head = "On " + formatDate(nil, lt) + " at " + clockDigits(nil, lt) + ", " + who + " wrote:"
 	}
 	var b strings.Builder
 	b.WriteString(head)

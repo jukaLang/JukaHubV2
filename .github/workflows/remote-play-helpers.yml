@@ -64,7 +64,9 @@ name: Remote Play helpers and AndroidRT
 # root: the AndroidRT steps run whatever became of the helpers, so a failed
 # build costs the run that part and nothing else. An advisory step runs
 # AndroidRT's host smoke suite natively on arm64 (written on x86_64) and only
-# reports.
+# reports. Each part is uploaded (and kept for later runs) right after its
+# build, before its report and any advisory step, so a hang there cannot cost
+# the run what was built.
 #
 # Most pushes change neither part, and the TrimUI archive waits for this job.
 # So each part first looks for what an earlier run built from exactly the same
@@ -107,6 +109,12 @@ jobs:
           # build code runs as root; nothing here pushes, so no token stays in
           # .git/config for it to read.
           persist-credentials: false
+          # Every commit, without old file contents (a few MB): AndroidRT is
+          # named and dated after the newest commit that changed its sources
+          # (`build-root.sh commit androidrt`), which a one-commit checkout
+          # cannot see, so that an unchanged AndroidRT rebuilds to the same zip.
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Look for helpers an earlier run built from these sources
         id: cache
@@ -229,9 +237,52 @@ jobs:
         timeout-minutes: 20
         run: sh .github/scripts/build-root.sh build helpers
 
+      - name: Upload the helpers
+        # Built or reused helpers, whatever became of AndroidRT (a build root
+        # that failed for AndroidRT must not cost reused helpers their upload),
+        # right after the build: the report below cannot hold it up.
+        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: remote-play-helpers
+          # Artifacts do not keep file modes: the packaging jobs set +x again.
+          # moonlight-stream and libjukaosd.so only when they were built
+          # (if-no-files-found looks at the whole list).
+          path: |
+            player/native/bin/chiaki-stream
+            player/native/bin/chiaki-regist
+            player/native/bin/moonlight-stream
+            player/native/bin/libjukaosd.so
+            player/native/bin/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 30
+          # A re-run of this job replaces its own earlier upload instead of
+          # failing on the name.
+          overwrite: true
+
+      - name: Keep the helpers for later runs
+        # A fresh build that passed its checks, on a push to main: the only
+        # kind the lookup above accepts. Reused helpers are kept already. A
+        # set without moonlight-stream would only ever be a miss: not kept.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('player/native/bin/moonlight-stream') != '' && hashFiles('player/native/bin/libjukaosd.so') != '' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: |
+            player/native/bin/chiaki-stream
+            player/native/bin/chiaki-regist
+            player/native/bin/moonlight-stream
+            player/native/bin/libjukaosd.so
+            player/native/bin/BUILDINFO.txt
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+
       - name: Report what was built
         if: always()
-        # Only a report: its failure must not cost the helpers their upload.
+        # Only a report, after the upload: its failure changes nothing.
         continue-on-error: true
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
@@ -321,48 +372,6 @@ jobs:
           retention-days: 14
           overwrite: true
 
-      - name: Upload the helpers
-        # Built or reused helpers, whatever became of AndroidRT (a build root
-        # that failed for AndroidRT must not cost reused helpers their upload).
-        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: remote-play-helpers
-          # Artifacts do not keep file modes: the packaging jobs set +x again.
-          # moonlight-stream and libjukaosd.so only when they were built
-          # (if-no-files-found looks at the whole list).
-          path: |
-            player/native/bin/chiaki-stream
-            player/native/bin/chiaki-regist
-            player/native/bin/moonlight-stream
-            player/native/bin/libjukaosd.so
-            player/native/bin/BUILDINFO.txt
-          if-no-files-found: error
-          retention-days: 30
-          # A re-run of this job replaces its own earlier upload instead of
-          # failing on the name.
-          overwrite: true
-
-      - name: Keep the helpers for later runs
-        # A fresh build that passed its checks, on a push to main: the only
-        # kind the lookup above accepts. Reused helpers are kept already. A
-        # set without moonlight-stream would only ever be a miss: not kept.
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' && hashFiles('player/native/bin/moonlight-stream') != '' && hashFiles('player/native/bin/libjukaosd.so') != '' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.cache.outputs.artifact }}
-          path: |
-            player/native/bin/chiaki-stream
-            player/native/bin/chiaki-regist
-            player/native/bin/moonlight-stream
-            player/native/bin/libjukaosd.so
-            player/native/bin/BUILDINFO.txt
-          if-no-files-found: error
-          retention-days: 90
-          overwrite: true
-
       # ── AndroidRT ──────────────────────────────────────────────────────────
       # Every step from here on names !cancelled() itself, so a failed helper
       # build does not skip it, and is continue-on-error, so its own failure
@@ -373,11 +382,44 @@ jobs:
         # build-tsp.sh in the 20.04 root, then build-runtimes.sh checks what it
         # built (AArch64, the standard loader, nothing NEEDED beyond the C
         # library, no symbol newer than GLIBC 2.31, the TLS slot NDK code reads,
-        # `loader --version` starts) and packages it.
+        # `loader --version` answers "AndroidRT loader <version> (aarch64,
+        # bionic loader)") and packages it, named and dated after the newest
+        # commit that changed its sources, so unchanged sources give the same
+        # zip.
         if: ${{ !cancelled() && steps.root.outcome == 'success' && steps.androidrt_cache.outputs.hit != 'true' }}
         continue-on-error: true
         timeout-minutes: 10
         run: sh .github/scripts/build-root.sh build androidrt
+
+      - name: Upload AndroidRT
+        # Right after the build, before the advisory smoke suite: a hang there
+        # must not cost the run its package.
+        if: ${{ !cancelled() && (steps.androidrt.outcome == 'success' || steps.androidrt_cache.outputs.hit == 'true') }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: androidrt-package
+          # The zip keeps the file modes an artifact would lose.
+          path: player/native/bin/JukaHub-AndroidRT-linux-arm64.zip
+          if-no-files-found: error
+          # Zipped already: zipping it again would only cost time.
+          compression-level: 0
+          retention-days: 30
+          overwrite: true
+
+      - name: Keep AndroidRT for later runs
+        if: ${{ !cancelled() && steps.androidrt.outcome == 'success' && steps.androidrt_cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.androidrt_cache.outputs.artifact }}
+          path: player/native/bin/JukaHub-AndroidRT-linux-arm64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
 
       - name: AndroidRT host smoke suite on arm64 (advisory)
         id: androidrt_smoke
@@ -391,7 +433,7 @@ jobs:
 
       - name: Report AndroidRT
         if: always()
-        # Only a report: its failure must not cost the package its upload.
+        # Only a report, after the upload: its failure changes nothing.
         continue-on-error: true
         env:
           ROOT_OUTCOME: ${{ steps.root.outcome }}
@@ -458,34 +500,6 @@ jobs:
           path: ${{ env.ROOTFS }}/tmp/jukahub-runtime-logs/androidrt/
           if-no-files-found: ignore
           retention-days: 14
-          overwrite: true
-
-      - name: Upload AndroidRT
-        if: ${{ !cancelled() && (steps.androidrt.outcome == 'success' || steps.androidrt_cache.outputs.hit == 'true') }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: androidrt-package
-          # The zip keeps the file modes an artifact would lose.
-          path: player/native/bin/JukaHub-AndroidRT-linux-arm64.zip
-          if-no-files-found: error
-          # Zipped already: zipping it again would only cost time.
-          compression-level: 0
-          retention-days: 30
-          overwrite: true
-
-      - name: Keep AndroidRT for later runs
-        if: ${{ !cancelled() && steps.androidrt.outcome == 'success' && steps.androidrt_cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.androidrt_cache.outputs.artifact }}
-          path: player/native/bin/JukaHub-AndroidRT-linux-arm64.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
           overwrite: true
 
       - name: Build offline speech recognition

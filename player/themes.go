@@ -1662,6 +1662,9 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	ClearShapeCache()
 	ClearIconAtlas()
 	clearHomeTextCache()
+	// A theme with a wallpaper made for it brings it along, and a theme
+	// without one takes a theme's wallpaper away (themewallpapers.go).
+	wallpaper := themeWallpaperFollow(config, presetName)
 	// The shared snapshot keeps Quick Settings levels and every other persisted
 	// field intact when the theme changes. Debounced: picking a theme, the
 	// battery saver and the time-of-day switch all run on the UI thread, and a
@@ -1680,6 +1683,9 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 		message := fmt.Sprintf("Theme: %s", preset.Name)
 		if preset.Summary != "" {
 			message += " · " + preset.Summary
+		}
+		if wallpaper != "" {
+			message += " · " + wallpaper + " wallpaper"
 		}
 		showToast(message, ToastInfo())
 	}
@@ -1720,6 +1726,8 @@ func clearThemePreset(config *Config) {
 	ClearShapeCache()
 	ClearIconAtlas()
 	clearHomeTextCache()
+	// No preset has no wallpaper of its own: a theme's goes (themewallpapers.go).
+	themeWallpaperFollow(config, "")
 }
 
 // themePresetOrder is the canonical, stable order for selectable presets.

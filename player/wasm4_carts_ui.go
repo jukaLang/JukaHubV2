@@ -683,7 +683,7 @@ func wasm4PlayCart(config *Config, c wasm4Cart) {
 			return
 		}
 		if err := launchLibraryGame(game, launcher); err != nil {
-			ShowToast("Cannot start "+c.Title+": "+firstLine(err.Error()), ToastKindError)
+			gameLaunchErrorToast(c.Title, err)
 			return
 		}
 		if gameLaunchWasHeld(game.Path) {

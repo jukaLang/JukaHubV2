@@ -2,6 +2,8 @@ package main
 
 import (
 	"container/list"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -33,6 +35,15 @@ const thumbnailMemMaxEntries = 512
 // (in order): the in-memory cache, the bbolt disk cache, then the network.
 // Successful downloads are stored in both caches. Safe for concurrent use.
 func fetchThumbnailBytes(url string) ([]byte, error) {
+	return fetchThumbnailBytesCtx(context.Background(), url)
+}
+
+// fetchThumbnailBytesCtx is fetchThumbnailBytes whose download ends when ctx
+// is cancelled. The prefetch worker passes the active screen's context
+// (scenetasks.go), so leaving the list that wanted the pictures closes their
+// requests; a picture the next screen wants is asked for again by its render
+// path.
+func fetchThumbnailBytesCtx(ctx context.Context, url string) ([]byte, error) {
 	if url == "" {
 		return nil, io.EOF
 	}
@@ -54,7 +65,7 @@ func fetchThumbnailBytes(url string) ([]byte, error) {
 	}
 
 	// 3. Network with retry + backoff.
-	data, err := httpGetWithRetry(url, 3, 2*time.Second)
+	data, err := httpGetWithRetry(ctx, url, 3, 2*time.Second)
 	if err != nil {
 		return nil, err
 	}
@@ -84,11 +95,19 @@ func normalizeThumbnailURL(raw string) string {
 
 // httpGetWithRetry performs an HTTP GET with exponential backoff + jitter on
 // transient failures (connection errors, 5xx, 429). Non-transient responses
-// (4xx) fail immediately.
-func httpGetWithRetry(url string, maxAttempts int, baseDelay time.Duration) ([]byte, error) {
+// (4xx) fail immediately. A cancelled ctx closes the request and ends the
+// back-off at once, with ctx's error.
+func httpGetWithRetry(ctx context.Context, url string, maxAttempts int, baseDelay time.Duration) ([]byte, error) {
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		resp, err := httpClientLong.Get(url)
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := httpClientLong.Do(req)
 		if err == nil {
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				data, rErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20)) // 8MB cap
@@ -113,7 +132,13 @@ func httpGetWithRetry(url string, maxAttempts int, baseDelay time.Duration) ([]b
 			// Exponential backoff with full jitter: delay ∈ [0, base*2^attempt).
 			cap := baseDelay * time.Duration(1<<uint(attempt-1))
 			delay := time.Duration(rand.Int63n(int64(cap)))
-			time.Sleep(delay)
+			wait := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				wait.Stop()
+				return nil, ctx.Err()
+			case <-wait.C:
+			}
 		}
 	}
 	return nil, lastErr
@@ -456,9 +481,14 @@ func thumbnailPrefetchWorker() {
 		}
 		err := func() error {
 			defer thumbnailInFlight.Delete(url)
-			_, err := fetchThumbnailBytes(url)
+			_, err := fetchThumbnailBytesCtx(sceneWorkContext(), url)
 			return err
 		}()
+		if errors.Is(err, context.Canceled) {
+			// The screen that wanted it was left: not a dead link, so the
+			// next screen may ask for it at once.
+			continue
+		}
 		if err == nil {
 			thumbnailFailedAt.Delete(url)
 		} else {

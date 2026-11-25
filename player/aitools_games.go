@@ -62,17 +62,18 @@ func aiGameTools() []aiTool {
 		},
 		{
 			Name:   "performance_get",
-			Desc:   "The performance settings now: power mode and its choices, automatic CPU speed, the CPU clock and temperature.",
+			Desc:   "The performance settings now: power mode and its choices, automatic CPU speed, the CPU frequency set by hand and its choices, the CPU clock and temperature.",
 			Params: aiObj(nil),
 			Risk:   aiRiskRead,
 			Run:    aiPerformanceGet,
 		},
 		{
 			Name: "performance_set",
-			Desc: "Set the power mode (a value performance_get lists) and/or automatic CPU speed. The user is asked first.",
+			Desc: "Set the power mode (a value performance_get lists), automatic CPU speed and/or the CPU frequency (auto, or a clock such as 1416 MHz). The user is asked first.",
 			Params: aiObj(map[string]any{
-				"power_mode": aiStrP("A power mode value from performance_get"),
-				"auto_cpu":   aiStrP("on or off"),
+				"power_mode":    aiStrP("A power mode value from performance_get"),
+				"auto_cpu":      aiStrP("on or off"),
+				"cpu_frequency": aiStrP("auto, or a CPU clock such as 1416 MHz or 1.4 GHz (the nearest one the chip has is used)"),
 			}),
 			Risk: aiRiskChange,
 			Run:  aiPerformanceSet,
@@ -414,6 +415,10 @@ func aiPerformanceGet(ctx context.Context, a aiArgs) aiStep {
 		if row, _, ok := aiFindRow(c, "autoPerformance"); ok {
 			fmt.Fprintf(&b, "Automatic CPU speed: %s — %s\n", aiRowValue(c, row), autoPerfSettingDetail(c))
 		}
+		// The clock set by hand, where it holds and how (cpufreq_manual.go).
+		if row, _, ok := aiFindRow(c, cpuFreqKey); ok {
+			fmt.Fprintf(&b, "CPU frequency: %s — %s (choices: %s)\n", aiRowValue(c, row), cpuFreqSettingDetail(c), aiRowChoices(c, row))
+		}
 		// The hub's own clock while it is used (uiboost.go).
 		if row, _, ok := aiFindRow(c, uiBoostSetting); ok {
 			fmt.Fprintf(&b, "Faster menus: %s — %s\n", aiRowValue(c, row), uiBoostSettingDetail(c))
@@ -453,8 +458,16 @@ func aiPerformanceSet(ctx context.Context, a aiArgs) aiStep {
 	if v := a.str("auto_cpu"); v != "" {
 		changes = append(changes, change{"autoPerformance", v})
 	}
+	if v := a.str("cpu_frequency"); v != "" {
+		// "1.4 GHz", "1416", "auto": the row's stop for it (cpufreq_manual.go).
+		value, ok := cpuFreqOptionFor(v)
+		if !ok {
+			return aiFail("cpu_frequency %q is not a clock this handheld has: give auto or one performance_get lists", v)
+		}
+		changes = append(changes, change{cpuFreqKey, value})
+	}
 	if len(changes) == 0 {
-		return aiFail("give power_mode and/or auto_cpu")
+		return aiFail("give power_mode, auto_cpu and/or cpu_frequency")
 	}
 	var lines []string
 	var problem string

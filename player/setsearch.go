@@ -176,6 +176,15 @@ var setSearchSynonyms = map[string][]string{
 	"tearing":       {"smooth motion"},
 	"stutter":       {"smooth motion"},
 	"resampler":     {"audio quality"},
+	"gpu":           {"video memory"},
+	"graphics":      {"video memory"},
+	"ram":           {"video memory", "extra memory"},
+	// The CPU frequency set by hand (cpufreq_manual.go).
+	"processor":  {"cpu frequency", "automatic cpu speed"},
+	"overclock":  {"cpu frequency", "cpu boost"},
+	"underclock": {"cpu frequency"},
+	"mhz":        {"cpu frequency"},
+	"ghz":        {"cpu frequency"},
 }
 
 // setSearchFold lowercases and turns punctuation into spaces.

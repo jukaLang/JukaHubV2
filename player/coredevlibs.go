@@ -25,8 +25,10 @@ package main
 //
 // Now JukaHub writes the libraries itself: stand-ins that export what the core
 // imports and report no such device (coredevstub.go; libusb, libudev,
-// libbluetooth — not libevdev). They go in <data>/private-glibc/devlibs/
-// (devlibs.json lists them, with what each exports), and are made or widened
+// libbluetooth, and since 2026-11-24 libXi, the last library a Smart Pro's
+// firmware lacked for the buildbot's Dolphin — not libevdev). They go in
+// <data>/private-glibc/devlibs/ (devlibs.json lists them, with what each
+// exports), and are made or widened
 // whenever something is about to need them, in a moment and without a
 // network:
 //   - the updater's load check, for a build whose only problem left is such

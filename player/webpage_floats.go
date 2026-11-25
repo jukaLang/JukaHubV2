@@ -597,11 +597,30 @@ func (l *webLayouter) floatGroupWidth(blocks []webBlock, info webFloatRootInfo, 
 	cells := make(map[[2]int]int32)
 	items := make(map[[2]int]int32)
 	gaps := make(map[int]int32)
+	// floatRun is the width of the floats inside this one that sit side by
+	// side so far: the items of a floated menu (`ul.left { float: left }`,
+	// `li { float: left }`) line up in a row, so the menu is as wide as all
+	// of them, not as its widest — they used to drop one under another.
+	floatRun := int32(0)
 	for i := range blocks {
 		b := blocks[i]
 		if b.LayerMarker != 0 || b.ClearMarker || b.TableEmptyRow || b.Float {
 			continue
 		}
+		if b.Style.FloatSide != 0 && b.TreeSeq != info.seq && !b.Image && b.Style.TableRole == webTableRoleNone {
+			if b.Style.Clear != 0 {
+				floatRun = 0
+			}
+			// As wide as layoutCSSFloat will make it.
+			if w := l.intrinsicContainerWidth([]webBlock{b}); w > 0 {
+				floatRun += w
+			} else {
+				floatRun += int32(math.Round(120 * l.baseSize / 16))
+			}
+			widest = max(widest, floatRun)
+			continue
+		}
+		floatRun = 0
 		if fixed := l.floatInnerBoxWidth(&b, info); fixed > 0 {
 			widest = max(widest, fixed)
 			continue

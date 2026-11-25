@@ -343,6 +343,11 @@ func scanWindowsApps(roots []string) ([]windowsAppEntry, []string) {
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
+		// The built-in Wine test stays below the user's own programs
+		// (windowsapps_winetest.go).
+		if ti, tj := wineTestPath(entries[i].Path), wineTestPath(entries[j].Path); ti != tj {
+			return tj
+		}
 		left := strings.ToLower(entries[i].Title)
 		right := strings.ToLower(entries[j].Title)
 		if left != right {
@@ -559,6 +564,10 @@ func wineLaunchSettingsTake(config *Config) {
 	// The pad session buzzes from its goroutine: find the motor here, on the
 	// main thread, as vcursorBridgeTick does.
 	hapticsAvailable()
+	// The video memory Wine reports, for the launch goroutine (vram.go).
+	if config != nil {
+		vramPublish(vramAssignedMB(config))
+	}
 	bridge := mbridgeDefaultParams()
 	if config != nil {
 		bridge = mbridgeParamsFor(config)
@@ -1060,19 +1069,34 @@ func launchWindowsApp(entry windowsAppEntry) error {
 	if pid := windowsAppRunningPID(entry.Path); pid > 0 {
 		return fmt.Errorf("%s is already running (pid %d)", entry.Title, pid)
 	}
+	logPath := windowsAppLogPath(entry)
 	return wineStart(wineLaunch{
 		Title:   entry.Title,
 		Key:     entry.Path,
 		Exe:     entry.Path,
 		Dir:     filepath.Dir(entry.Path),
 		OpenGL:  windowsAppOpenGL(entry.Path),
-		LogPath: windowsAppLogPath(entry),
+		LogPath: logPath,
 		Started: func(pid int) {
 			windowsAppSetRunning(entry.Path, pid)
 			trophyEvent(tkAppLaunch)
 		},
-		Ended:  func(error) { windowsAppSetRunning(entry.Path, 0) },
-		Failed: func(err error, logPath string) { windowsAppsLaunchFailed(entry, err, logPath) },
+		Ended: func(err error) {
+			windowsAppSetRunning(entry.Path, 0)
+			// The built-in Wine test says how its session went
+			// (windowsapps_winetest.go).
+			if wineTestPath(entry.Path) {
+				wineTestVerdict(logPath, err)
+			}
+		},
+		Failed: func(err error, failedLog string) {
+			// A Wine test that drew its window worked, however quickly it was
+			// closed or however Wine ended it; Ended says so.
+			if wineTestPath(entry.Path) && wineTestDrew(failedLog) {
+				return
+			}
+			windowsAppsLaunchFailed(entry, err, failedLog)
+		},
 	})
 }
 

@@ -135,7 +135,7 @@ func saveSyncDeferLaunch(game libraryGame, launcher string) (deferred bool, err 
 			err := launchLibraryGame(game, launcher)
 			saveSyncAuto.resume = ""
 			if err != nil {
-				ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+				gameLaunchErrorToast(game.Title, err)
 			}
 		})
 	}()

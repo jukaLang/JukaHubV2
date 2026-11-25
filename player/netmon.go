@@ -451,11 +451,13 @@ func (m *netMonitor) nextInterval(now time.Time) time.Duration {
 // with them (wake_resume.go). One probe runs a second after start, then every
 // 20 s — every 5 s for two minutes after the network goes, every 1.5 s after
 // a wake until the internet answers — and at once when something asks
-// (netNudge: a wake, a Wi-Fi join, a request waiting for the network). On TSP a
-// probe is one small HTTP request to a generate_204 endpoint, and it stops
-// requests from piling up when WiFi drops.
+// (netNudge: a wake, a Wi-Fi join, a request waiting for the network, and on
+// Windows a network change made outside JukaHub, winNetWatch). On TSP a probe
+// is one small HTTP request to a generate_204 endpoint, and it stops requests
+// from piling up when WiFi drops.
 func startNetworkMonitor() {
 	startWakeWatcher()
+	winNetWatch()
 	go func() {
 		// First probe slightly delayed so startup isn't blocked.
 		time.Sleep(1 * time.Second)

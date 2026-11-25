@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/url"
@@ -907,6 +908,48 @@ func hoffFindGame(a hoffActivity) (libraryGame, bool) {
 	return best, bestScore >= 2
 }
 
+// hoffSlotPoll is how often a handoff pull asks again for Save sync's job slot
+// while another job holds it.
+const hoffSlotPoll = 250 * time.Millisecond
+
+// errHoffSyncBusy: another Sync job held the slot for the pull's whole budget.
+var errHoffSyncBusy = errors.New("Sync stayed busy with another job")
+
+// hoffPullSaves brings one game's newest saves from the offering device under
+// Save sync's job slot (ssyncWorkStart), so the pull never copies the same
+// files as a sync started on the Sync page or by Automatic sync
+// (synchub_peers.go). A job already running is waited for, within ctx; while
+// the pull runs the Sync page shows it, and B there stops it. Any goroutine.
+func hoffPullSaves(ctx context.Context, o hoffOffer, romPath string) (ssyncResult, error) {
+	waited := false
+	for {
+		jobCtx, ok := ssyncWorkStart("Bringing saves from " + o.PeerName + "…")
+		if ok {
+			run, cancel := context.WithCancel(jobCtx)
+			stop := context.AfterFunc(ctx, cancel)
+			res, err := ssyncPullForGame(run, o.PeerID, o.PeerName, romPath, ssyncWorkProgress)
+			stop()
+			cancel()
+			ssyncWorkEnd()
+			if err != nil && ctx.Err() != nil {
+				// The budget ran out (the toast says "did not answer in
+				// time"), not a press of B on the Sync page ("Stopped").
+				err = ctx.Err()
+			}
+			return res, err
+		}
+		if !waited {
+			waited = true
+			tbxPost(func() { ShowToast("Waiting for the sync in progress…", ToastKindInfo) })
+		}
+		select {
+		case <-ctx.Done():
+			return ssyncResult{Peer: o.PeerName}, errHoffSyncBusy
+		case <-time.After(hoffSlotPoll):
+		}
+	}
+}
+
 // hoffResumeGame finds the game here, brings its newest saves from the other
 // device, then starts it (or, for a library pick, shows it in the library).
 func hoffResumeGame(o hoffOffer, launch bool) {
@@ -919,7 +962,7 @@ func hoffResumeGame(o hoffOffer, launch bool) {
 		sameNames := found && ssyncGameStem(a.Path) != "" && ssyncGameStem(a.Path) == ssyncGameStem(game.Path)
 		if found && launch && sameNames && peerOnline(o.PeerID) {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			synced, syncErr = ssyncPullForGame(ctx, o.PeerID, o.PeerName, a.Path)
+			synced, syncErr = hoffPullSaves(ctx, o, a.Path)
 			cancel()
 		}
 		tbxPost(func() {

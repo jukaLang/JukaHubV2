@@ -147,6 +147,12 @@ func homeTabsSheetBuild() {
 			homeTabsSheetRow{label: "Keep it", run: func(*Config) { homeTabsSheetPage(homeTabsSheetMain) }},
 		)
 	default:
+		// A Smart Home device has its own rows: switch, brightness, volume,
+		// Hide (hometabs_smarthome.go).
+		if shRows, ok := smartHomeSheetRows(it); ok {
+			rows = shRows
+			break
+		}
 		// A dimmed item opens only when it says why it is dimmed: a console
 		// with an Install badge offers the install; a missing one does not.
 		if it.Activate != nil && !it.Folder && (!it.Dim || it.Badge == "Install") {

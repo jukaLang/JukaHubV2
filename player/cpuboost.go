@@ -42,7 +42,9 @@ package main
 //   - Off: games follow Automatic CPU speed and their launch scripts.
 //
 // A game's own options win: "Performance" there is a boost whatever this row
-// says; Battery saver, Balanced or a CPU limit keep the game out. A game the
+// says; Battery saver, Balanced or a CPU limit keep the game out. A CPU
+// frequency set by hand for games (cpufreq_manual.go) wins over the row and
+// the heavy-game boost's clock, not over a game's own options. A game the
 // heavy-game boost takes (xboxboost.go: Xbox, GameCube, Wii, PS2, and the
 // A133P's heavy consoles) is boosted here too unless the row is Off; that
 // boost keeps its GPU, memory and priority work. An emulator on the userspace
@@ -335,6 +337,10 @@ func cpuBoostSettingDetail(c *Config) string {
 	autoPerfShown.mu.Unlock()
 	if reason != "" {
 		return "Not available: " + reason
+	}
+	if cpuFreqHolds(c, true) {
+		// Settings → CPU frequency holds the games (cpufreq_manual.go).
+		return "Resting: games run at the CPU frequency set by hand"
 	}
 	mode := cpuBoostMode(c)
 	if mode == cpuBoostOff {

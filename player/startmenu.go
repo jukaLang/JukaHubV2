@@ -321,7 +321,9 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: mailcalSettingsEntryName, icon: "E", glyph: "calendar", action: func(c *Config) { mailcalOpenSettings(c) }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
-		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},
+		// The Smart Home tab when the Tabs Home is up, else the panel
+		// (hometabs_smarthome.go).
+		{name: "Smart Home", icon: "M", action: func(c *Config) { smartHomeOpen(c) }},
 		{name: "Screen Share", icon: "V", action: func(c *Config) { openCastPanel(c) }},
 		// Say what to open (voicecmd.go); the phone's keyboard microphone works
 		// too, so the row stays on a device without a microphone.

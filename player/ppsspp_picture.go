@@ -543,7 +543,7 @@ func ppssppPictureRelaunch(game libraryGame, launcher string, tries int) {
 	}
 	ShowToast(title+"'s picture did not reach the screen beside JukaHub — starting it again with the screen to itself", ToastKindInfo)
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+title+": "+err.Error(), ToastKindError)
+		gameLaunchErrorToast(title, err)
 	}
 }
 

@@ -303,6 +303,39 @@ func TestHakuxSupportFor(t *testing.T) {
 	}
 }
 
+// The emulator spruceUI's build replaces (hakux_fit.go) is found among the
+// files the install recorded, outside the launcher folder too, and only ever a
+// 64-bit ARM program named for hakuX: not a library, not a text file, not a
+// recorded path that leaves the card's Data/ and Emus/ folders.
+func TestHakuxFitTargetFindsRecordedEmulator(t *testing.T) {
+	p, write, _ := hakuxTestCard(t)
+	elfHead := func(size int) string {
+		b := make([]byte, size)
+		copy(b, "\x7fELF")
+		b[4], b[5], b[16], b[18] = 2, 1, 2, 183 // 64-bit, little-endian, ET_EXEC, EM_AARCH64
+		return string(b)
+	}
+	write("Emus/XBOX/launch.sh", "#!/bin/sh\n")
+	write("Emus/XBOX/hakux-helper", elfHead(64))
+	write("Emus/XBOX/libhakux.so", elfHead(10000))
+	write("Emus/XBOX/hakux.txt", strings.Repeat("x", 9000))
+	write("Data/XBOX/bin/hakux.aarch64", elfHead(4096))
+	write("escape/hakux", elfHead(20000))
+	folder := filepath.Join(p.SDRoot, "Emus", "XBOX")
+	m := hakuxManifest{Tag: "v0.1.3", Files: []hakuxFileRecord{{Path: "Data/XBOX/bin/hakux.aarch64"}, {Path: "Data/../escape/hakux"}}}
+	got, err := hakuxFitTarget(p.SDRoot, folder, m)
+	if want := filepath.Join(p.SDRoot, "Data", "XBOX", "bin", "hakux.aarch64"); err != nil || got != want {
+		t.Fatalf("target = %q, %v; want the recorded emulator %q", got, err, want)
+	}
+	got, err = hakuxFitTarget(p.SDRoot, folder, hakuxManifest{})
+	if want := filepath.Join(folder, "hakux-helper"); err != nil || got != want {
+		t.Fatalf("target without records = %q, %v; want %q", got, err, want)
+	}
+	if got, err := hakuxFitTarget(p.SDRoot, filepath.Join(p.SDRoot, "Data"), hakuxManifest{Files: []hakuxFileRecord{{Path: "escape/hakux"}}}); err != nil {
+		t.Fatalf("Data/ walk = %q, %v; want the emulator under it", got, err)
+	}
+}
+
 // The once-per-card record lives in hakuX's state folder on the card and is
 // written once: what first showed an Xbox launcher stays, so a later removal
 // of hakuX is never answered by installing it again by itself. A failed first

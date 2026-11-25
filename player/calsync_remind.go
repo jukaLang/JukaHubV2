@@ -328,7 +328,7 @@ func calEvSetAlarm(ev calEvent) {
 	case calSameDay(at, now.AddDate(0, 0, 1)):
 		day = "tomorrow"
 	case !calSameDay(at, now):
-		day = at.Format("Mon 2 Jan")
+		day = formatDateBrief(appConfig, at)
 	}
 	PlayActivateSound()
 	ShowToast(fmt.Sprintf("Alarm set for %s %s: %s", day, clockDigits(appConfig, at), label), ToastKindSuccess)

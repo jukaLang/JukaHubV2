@@ -69,6 +69,11 @@ func openWindowsAppsPanel(returnEmu bool) {
 	windowsSampleLineRect = sdl.Rect{}
 	windowsSetupRowHit = [windowsSetupRowCount]sdl.Rect{}
 	setupCursor = windowsSetupRowWine
+	// The built-in Wine test goes into the list the first time, or a newer
+	// build over an older one (windowsapps_winetest.go).
+	if err := wineTestEnsure(false); err != nil {
+		logWarn("windowsapps", "built-in Wine test not placed: %v", err)
+	}
 	invalidateWindowsAppsCache()
 	// A launch from here runs on a goroutine: the settings it needs are read
 	// now, on the main thread. A failure from an earlier visit is old news,
@@ -152,6 +157,8 @@ func setupActivate() {
 		windowsAppsPanelInstallDXVK()
 	case windowsSetupRowSample:
 		windowsAppsPanelSample()
+	case windowsSetupRowWineTest:
+		windowsAppsPanelWineTest()
 	default:
 		if tag := windowsRuntimeUpdateTag(); tag != "" {
 			windowsAppsPanelUpdateRuntime(tag)
@@ -561,7 +568,7 @@ func ctrlWindowsApps(e *sdl.ControllerButtonEvent, config *Config) bool {
 		windowsAppsPanelToggleHelp()
 	case sdl.CONTROLLER_BUTTON_Y:
 		if !winAppsPanel.help {
-			windowsAppsPanelToggleDisplay()
+			windowsAppsPanelY()
 		}
 	case sdl.CONTROLLER_BUTTON_START:
 		if !winAppsPanel.help {
@@ -602,7 +609,11 @@ func handleWindowsAppsKey(e *sdl.KeyboardEvent, config *Config) bool {
 		}
 	case sdl.K_x, sdl.K_h:
 		windowsAppsPanelToggleHelp()
-	case sdl.K_y, sdl.K_d:
+	case sdl.K_y:
+		if !winAppsPanel.help {
+			windowsAppsPanelY()
+		}
+	case sdl.K_d:
 		if !winAppsPanel.help {
 			windowsAppsPanelToggleDisplay()
 		}
@@ -751,14 +762,16 @@ func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus)
 }
 
 // Windows Apps setup actions. They are the only focusable rows on the setup
-// page; everything below them is status text. The last one downloads the
-// sample program (windowsapps_sample.go).
+// page; everything below them is status text. The last two download the
+// sample program (windowsapps_sample.go) and start the built-in Wine test
+// (windowsapps_winetest.go).
 const (
-	windowsSetupRowWine    = 0
-	windowsSetupRowDisplay = 1
-	windowsSetupRowDXVK    = 2
-	windowsSetupRowSample  = 3
-	windowsSetupRowCount   = 4
+	windowsSetupRowWine     = 0
+	windowsSetupRowDisplay  = 1
+	windowsSetupRowDXVK     = 2
+	windowsSetupRowSample   = 3
+	windowsSetupRowWineTest = 4
+	windowsSetupRowCount    = 5
 )
 
 // windowsRuntimeStepRow maps a provisioning step to the setup row it belongs
@@ -888,6 +901,10 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 
 	var bodyH int32
 	var visible int32
+	// Only the built-in Wine test in the list: the lines an empty list has
+	// (how to add programs, the sample download) follow its row.
+	starter := !IsWindows() && windowsAppsOnlyBuiltIn(entries)
+	starterH := 10 + 4*(smallH+4)
 	setupLines := windowsAppsSetupLines(runtime)
 	if winAppsPanel.help && winAppsPanel.notice != "" {
 		// The notice answers "why did pressing A open this page"; it sits above
@@ -912,6 +929,9 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			visible = maxRows
 		}
 		bodyH = visible * rowH
+		if starter {
+			bodyH += starterH
+		}
 	}
 	panelH := headerH + bodyH + footerH
 	if panelH > screenHeight-24 {
@@ -1023,7 +1043,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		if !IsWindows() {
 			// A downloads the sample program; the line says so, or how its
 			// download goes, and a tap on it is A.
-			text, busy, failed := windowsSampleEmptyLine()
+			text, busy, failed := windowsSampleEmptyLine("A")
 			color := accentColor
 			switch {
 			case busy:
@@ -1107,6 +1127,9 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			renderText(renderer, config, font, ellipsize(font, detail, r.W-32),
 				detailColor, r.X+16, r.Y+8+medH+4)
 		}
+		if starter {
+			windowsAppsDrawStarterLines(renderer, config, font, panelX+padX, panelY+headerH+visible*rowH+2, panelW-2*padX, smallH)
+		}
 	}
 
 	backLabel := "Back"
@@ -1125,6 +1148,9 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
 	case len(entries) == 0:
 		hint = hintLine(FooterHint{"A", "Get Notepad++"}, FooterHint{"X", "Setup"}, FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
+	case starter:
+		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Y", "Get Notepad++"}, FooterHint{"X", "Setup"},
+			FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})
 	default:
 		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"Y", "Display"}, FooterHint{"X", "Setup"},
 			FooterHint{"Start", "Rescan"}, FooterHint{"B", backLabel})

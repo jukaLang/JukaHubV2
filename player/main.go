@@ -91,7 +91,14 @@ func main() {
 	// commands above are processes of their own and keep it on.
 	startupGCHold()
 
+	// Started from a folder without the config (Windows' Startup folder, a
+	// shortcut, another terminal folder): work from the executable's own
+	// (startup_config.go). Before logging, whose files may be relative.
+	movedFrom := startupFindHome()
 	InitLogging()
+	if movedFrom != "" {
+		logInfo("startup", "started in %s without a jukaconfig.json; working from the executable's folder", movedFrom)
+	}
 	// TrimUI: RCU grace periods expedited and the kernel's serial console
 	// quiet before SDL opens the input, GPU and sound devices, put back at
 	// exit (startup_kerneltune_linux.go).
@@ -966,6 +973,9 @@ func main() {
 		// pauses the game the same way to ask Juka about it (gameassist.go).
 		if gameScreenSuspended() && !wallpaperParkedForGame {
 			gifWallPauseForGame()
+			// Video memory (VRAM): JukaHub's textures go when less than the
+			// size assigned in Settings is free for the game (vram.go).
+			vramGameTookScreen(config)
 			wallpaperParkedForGame = true
 		}
 		if gameScreenSuspended() && !alarmFiringActive() && !gameAssistOverlayActive() {
@@ -2081,6 +2091,10 @@ func main() {
 				if recoveryCard.open {
 					continue
 				}
+				// The launch card scrolls its report; nothing behind it does.
+				if launchFailureWheel(e.Y) {
+					continue
+				}
 				// The Game Ready card scrolls; nothing behind it or the shelves'
 				// controls card does (gameready_ui.go, shelf_controls_card.go).
 				if gameReadyWheel(e.Y) || shelfCard.open {
@@ -2385,7 +2399,8 @@ func main() {
 							break
 						}
 						if launchFailure.open {
-							handleLaunchFailureMouse()
+							// Its Submit and Cancel buttons (launch_errors.go).
+							handleLaunchFailureMouse(mx, my)
 							break
 						}
 						if profilesPickerMouse(mx, my) {

@@ -13,6 +13,236 @@ For anything older, the git log and the
 
 ### Added
 
+- **A launch that fails files its own bug report** (Juka, 2026-11-25: "Make
+  sure that JukaHub is able to launch emulator successfully... if it can't
+  launch the emulator... display the bug and make a bug report in issues and
+  have a button to cancel or submit report with submit button default. Be very
+  verbose so we can squash bugs easily"). Every launch that fails now opens the
+  launch card — a library game whose emulator could not be started or stopped
+  by itself within seconds, a PortMaster port, an Xbox/PSP hand-off, an
+  emulator's tile or RetroArch's own menu on the Emulators page, an Android
+  game, a Windows app — with the bug under its findings and two buttons,
+  **Cancel** and **Submit report**; Submit is focused, so A files the report
+  as a public GitHub issue through the JukaHub report service (`[Bug] Couldn't
+  launch <game> (<system>): <first finding> (JH-…)`, labelled
+  `launch-failure` too) and the card closes; B or Cancel sends nothing.
+  Left/Right choose, Up/Down scroll, L1/R1 page; on a PC Enter/Esc, the wheel
+  and a click on either button. The report is verbose on purpose
+  (player/launchreport.go, shown line by line on the card before Submit): what
+  was launched and how it ended (exit status or signal, run time, whether
+  JukaHub had stopped it), the device (firmware, OS on the card, kernel, the
+  firmware's glibc, free memory and space), the command (program, every
+  argument, folder, pid, which C library, and the environment variables that
+  decide program, libraries, config, display and sound — others named only,
+  secret-looking names never with a value), what the checks found, every file
+  the launch needed (there or MISSING, size, mode, a script's interpreter and
+  CRLF line endings, a program's processor, loader, needed libraries NOT FOUND
+  on its library path and the glibc version check, the RetroArch the launch
+  scripts call), the emulator folder's listing, the launch script's first 60
+  lines, what the launcher printed, RetroArch's log for the launch and JukaHub's
+  log from just before the launch on — plus the usual diagnostics and the
+  newest 16 KB of the log. Unlike Report a bug's free text it keeps folder and
+  file names (account names in home folders, credentials, links' paths, e-mail,
+  IP and MAC addresses still go). A report that cannot go now waits in Report a
+  bug's outbox; the same failure reported again within 30 minutes is said so on
+  the card. Refusals stay toasts: a time limit, "one moment", an offline
+  network drive, a console this device does not run. The collector
+  (netlify/functions/bug-report.mjs) takes the new `launch` field (32 KB), shows
+  it in an open block and trims the log and the diagnostics before it
+  (`JUKAHUB_LAUNCH_LABELS` overrides the labels); docs/BUG_REPORTS.md "When a
+  game or an emulator does not start". Static checks only; not yet run on a
+  handheld — the collector change needs a Netlify deploy (a push does it)
+  before launch reports show their details block.
+
+- **CPU frequency set by hand** (Juka, 2026-11-25: "In settings, add ability
+  to adjust CPU frequency manually"). Settings → Power & battery → **CPU
+  frequency** (up front, under Battery; the same rows sit under Automatic CPU
+  speed in Games & emulators): Automatic (the default, nothing changes) or one
+  of the clocks the chip itself offers, in MHz from the top down — 2000 … 408
+  MHz on the Smart Pro; A opens the list, Left and Right step and stop at the
+  ends. A clock holds the CPU there: `scaling_max_freq` at it and the floor
+  too, so no governor runs it faster or slower, unless **Slow down when idle**
+  makes it a ceiling only. **CPU frequency for** picks where: menus and games
+  (the default), only JukaHub's own screens, or only the games, ports and apps
+  it starts. It is a session of Automatic CPU speed's own kind (same
+  compare-and-restore, hand-overs and crash marker) and holds with Automatic CPU
+  speed on or off; Faster menus, the clock part of Faster game starts, CPU boost
+  in games and the Heavy-game boost's clock stand aside where it holds, and
+  their rows say so. The heat guard still lowers it while the chip or battery
+  is hot, a game's own CPU options still win, the idle screens still slow it,
+  and a game's clock is set 3 s after the start, once its launch script has
+  run. The row shows the clock in force ("1416 MHz in menus and games · now
+  1416 MHz", or "held at 1200 MHz while it cools"); a change is in force at
+  once in the hub; the governor is never touched. Juka's `performance_set`
+  takes `cpu_frequency` ("1.4 GHz", "auto"), Settings search finds it by
+  "overclock", "processor", "MHz", and the rows are translated into the ten
+  catalogues. Keys `cpuFrequency`, `cpuFrequencyUse`, `cpuFrequencyIdle`;
+  docs/DEVICE_TUNING.md "CPU frequency set by hand" (`player/cpufreq_manual.go`).
+  Static checks only; not yet run on a handheld.
+
+- **Notes: typing on a handheld, notes as files, and your notes on the phone**
+  (Juka, 2026-11-25: "For Notes, add ability to type using virtual keyboard on
+  Trimui devices and make sure you can save notes as a file and sync to
+  telephone if needed"). On a TrimUI a note could be opened but not written:
+  Notes took only a real keyboard's letters. Now **A** in a note opens the
+  on-screen keyboard on the title or the body (Up/Down choose), and **Y** on
+  the list makes a new note with the keyboard already on its title ("New Note"
+  selected). The keyboard types the note live (its own target,
+  `notesVKTarget`): the body keeps its lines (the action key is **New line**,
+  Start or Y is Done, Enter is a line break and Ctrl+Enter Done on a real
+  keyboard), the note stays readable above the sheet, wrapped, with a real
+  caret and scrolled to keep it in view, the sheet's field shows the line the
+  caret is on, and closing the keyboard any way saves the note; Select all,
+  Cut and Clear are off on a body, where one press would take the whole note
+  away. **L1/R1** move an open note to another folder; long lines now wrap
+  (they used to run off the card) and the caret sits where the next letter
+  goes. **Save as file** (Y or Select in a note) writes it as UTF-8 text to
+  `Notes/<folder>/<title>.txt` at the SD card's root (the `shared` folder on a
+  PC), the same file again on the next save, never another note's file or one
+  JukaHub did not write; **Every note as a file** (Select on the list, Ctrl+S)
+  writes them all. **Open on phone** shows a QR code for the Phone Companion's
+  new **Notes** page (also a card on its main page, behind the PIN): read and
+  search every note, write and finish notes with the phone's keyboard, add
+  `.txt` files as notes, download one as `.txt` or all as a `.zip`. Every note
+  now counts its saves, so an edit on the phone and one on the handheld never
+  overwrite each other unseen: the phone is refused a save over a newer
+  version (and offered "keep both"), and a note changed on both keeps the
+  handheld's text and the phone's as "… (phone copy)". Delete now asks first.
+  New `notes_keyboard.go`, `notes_files.go`, `companion_notes.go`; docs in
+  EVERYDAY_APPS.md and CONTROLS.md. Static checks and a jsdom run of the phone
+  page only; not yet run on a handheld.
+- **QR maker saves its code as a picture.** On the QR maker's full-screen code,
+  **X** (S on a keyboard) writes a PNG — black on white with the proper
+  margin, about 1,000 px square — to the screenshots folder as
+  `qr_<date>_<time>.png`, leaves the code up and says where it went. Pairing
+  codes are never offered for saving (they carry the companion's PIN). Static
+  checks only; not yet run on a handheld.
+- **Wallpapers for the themes** (Juka, 2026-11-25: "Generate a few wallpapers
+  for people to use to customize (apply to certain themes)"). Eight wallpapers
+  drawn from the palettes of the themes they belong to (`branding/mkwallpapers.py`,
+  embedded from `player/builtin_wallpapers/`): Neon Horizon (Synthwave,
+  Vaporwave, Cyberpunk, Arcade), Midnight Aurora (Midnight, Aurora, Nord,
+  Dracula), Deep Ocean (Ocean, Ocean Glass, Cobalt, Blue), Misty Forest
+  (Forest, Green, Gruvbox), Ember Glow (Ember, Sunset, Amber CRT, Ruby, Red),
+  Paper Garden (Paper, E-Ink, Sand, Solarized Light, Moss), Sakura Dusk
+  (Sakura, Cute, Girly, Lavender, Orchid) and Arctic Light (Arctic, Light).
+  They are copied into the data folder's `wallpapers` folder, which the
+  picker lists (and a **JukaHub wallpapers** row opens from any folder); on a
+  4:3 screen the copy is the picture's middle, not a squeeze. A theme that has
+  one brings it along whenever it is put on — by hand, the light & dark
+  schedule, Battery Saver or a pack — unless you picked a wallpaper, or None,
+  yourself; a theme without one takes a theme's wallpaper away again. Settings
+  → Theme & look → **Theme wallpapers** (`themeWallpapers`, on) turns it off.
+  Experience packs take `"wallpaper": "theme"`, and Retro Arcade, Movie Night
+  and Focus / Reading now use it. Static checks only; not yet run on a
+  handheld.
+- **Wine test: a Windows program built into JukaHub** (Juka, 2026-11-25:
+  "generate 1 windows test app so people can see that wine emulator is
+  working"). Windows Apps on a handheld now always lists **Wine Test (built
+  in)**: a 40 KB 64-bit GDI program (`player/winetest/winetest.c`) whose one
+  window says "Wine is working!" with the Wine version, host, the Windows
+  version Wine reports, the processor (and Box64), screen and memory, a moving
+  ball, a ticking clock and a frame rate, every button, key and click named
+  with the pad button it came from, and a chime through Windows' sound. When
+  it closes, a toast reads its log lines and says whether Windows drew its
+  window and played sound; a test that drew is never reported as a failed
+  launch. It is built without a Windows toolchain by
+  `player/winetest/mkwinetest.py` (host gcc in the Microsoft calling
+  convention, its own PE writer, position independent) and checked by
+  `pe_smoke.c`, which loads it like Windows does and runs a scripted session
+  against stand-in DLLs; the gzipped result is embedded
+  (`windowsapps_winetest.go`). A user who deletes it keeps it deleted; the new
+  **Wine test** row in Setup puts it back. While the list holds only the
+  test, **Y** downloads the Notepad++ sample. Checked with pe_smoke on x86-64
+  Linux only; not yet run under Wine on a handheld.
+- **Video memory (VRAM) in Settings** (Juka, 2026-11-25: "Can we add ability
+  to add VRAM to JukaHub in settings? and assign it there!"). Settings → Games &
+  emulators → **Video memory (VRAM)**: Auto (the default) or a size from 64 MB
+  up to half the RAM, 512 MB on the 1 GB handhelds; A opens the list, Left and
+  Right step. The TrimUI handhelds' GPUs (PowerVR GE8300, Mali-G57) share the
+  RAM and have no VRAM carve-out a setting could move, so the size is made true
+  two ways. Room: when a game, emulator, port or app takes the screen with less
+  than the size free, JukaHub empties its own textures and caches (they sit in
+  that same memory) and stops its idle helpers, the video link prefetch and the
+  media scan — it never closes an app — and the row says how much the last
+  game started with. Windows programs under Wine see the size as their
+  graphics card's memory (`WINE_D3D_CONFIG` `VideoMemorySize`, what Winlator's
+  Video Memory Size sets), for games that check VRAM before they start or pick
+  their textures by it; a Wine profile's own `VideoMemorySize` wins. Auto
+  changes nothing. An animated wallpaper, already down to one frame while a
+  game plays, animates again afterwards when that start emptied the caches.
+  Settings search finds the row by "gpu", "graphics" and "ram" too. Key
+  `videoMemory` (`"auto"` or MB); docs/DEVICE_TUNING.md "Video memory (VRAM)"
+  (`player/vram.go`). Static checks only; not yet run on a handheld.
+
+- **A Smart Home tab, set up from the handheld or the phone** (Juka,
+  2026-11-24: "Make 'Smart Home' as one of the options at the top and see if we
+  can have people set it up. We should support TP-Link, Google Smart Home, and
+  maybe Apple home if possible"). The Tabs Home has a **Smart Home** tab
+  after Entertainment (a tab order saved before gets it at its end). Each
+  device is a tile that says its state: A switches a light or a plug; X, or A
+  on a speaker, opens its controls — on/off, brighter, dimmer, full brightness,
+  night light, warm white and daylight, volume, mute, pause and play, stop, and
+  Hide. **Add devices** sets every source up with no `jukauser.json` editing:
+  **TP-Link Kasa and Tapo** are controlled locally with no TP-Link cloud — old
+  Kasa devices need no account (port 9999), Tapo and newer Kasa take the
+  TP-Link ID typed on the on-screen keyboard (password masked:
+  `osPromptOpenSecret`) or on the phone, checked with one of the devices before
+  it is kept (KLAP v1 and v2, Tapo secure passthrough), and a device on the
+  newest firmware (TPAP) says how to let JukaHub in (Third-Party Compatibility
+  in the Tapo or Kasa app). **Google Home**: Nest speakers and displays,
+  Chromecast, Google TV and speaker groups appear by themselves (mDNS) and are
+  controlled over Google Cast, no Google account. **Home Assistant** connects
+  from the phone (address and token checked before they are saved in
+  `ha_url` / `ha_token`, the token encrypted). **Apple Home** works through
+  Home Assistant: the phone page shows how to share a Matter accessory from the
+  Home app (Turn On Pairing Mode) into it — Apple and Google let no other
+  device switch their homes directly, as
+  [SMART_HOME.md](docs/SMART_HOME.md) explains. The Phone Companion has a
+  **Set up Smart Home** page (`/smarthome`); Start → Smart Home and search open
+  the tab, and on other Home layouts the Smart Home panel now lists the
+  TP-Link and Google devices too. Nothing is contacted until the tab, the
+  panel or the phone page is shown. Devices and the TP-Link ID are kept in
+  `smarthome.json` (0600, the password encrypted)
+  (`player/hometabs_smarthome.go`, `smarthome_hub.go`, `smarthome_tplink*.go`,
+  `smarthome_cast.go`, `companion_smarthome.go`; the encodings are checked
+  against independently computed answers in `smart_home_tailscale_test.go`).
+  Static checks only; not yet run on a handheld or with real devices.
+
+- **Windows notices a network change made outside JukaHub** (backlog NET-20).
+  JukaHub asks Windows (`NotifyIpInterfaceChange`,
+  `NotifyUnicastIpAddressChange`) to be told when an interface or an address
+  changes — a cable, another network picked in Windows' own Wi-Fi menu, a VPN
+  — and the connectivity monitor probes at once, so the network status follows
+  within about a second instead of at the next timed probe
+  (`player/wifi_windows.go`, `player/netmon.go`). Static checks only; not yet
+  run on a PC.
+- **Three more architecture decision records** (backlog DOC-4), for decisions
+  the code already lives by: control hints name the keys the user has, decided
+  in one layer
+  ([0003](docs/adr/0003-hints-name-the-keys-you-have.md)); the interface is
+  translated where text becomes pixels, keyed by the English string
+  ([0004](docs/adr/0004-translate-where-text-becomes-pixels.md)); overlays are
+  folders on the card, turned into RetroArch configs at launch
+  ([0005](docs/adr/0005-overlays-are-folders.md)). The plugin sandbox gets its
+  record with the plugin permissions work.
+
+- **Azahar installs on a Windows PC like the other emulators** (backlog
+  DESK-13). **A** or **X** on the Azahar tile, or on the tile of a `Roms\3DS`
+  folder that has games but no emulator yet, installs Azahar's portable build
+  from its official releases (`azahar-emu/azahar`):
+  `azahar-windows-msvc-<version>.zip` since 2125.0,
+  `azahar-<version>-windows-msvc.zip` before it, never the installers, the
+  msys2 or mxe builds, the libretro core or the room server published beside
+  it (a Windows on ARM PC takes the same x64 build: there is no official ARM64
+  one). It lands in `Emulators\Azahar` with a manifest, so a newer release
+  shows as an update, the daily Emulator updates pass keeps it current and
+  **R1** puts the previous one back, as for Xenia Canary; the library's 3DS
+  games start in it full screen (`azahar.exe -f`), and its hint says "Install
+  Azahar" instead of "Get Azahar from …" (`player/emu_azahar.go`; the asset
+  pick is tested against 2126.2's published list and the 2124.3 and 2121
+  names in `emuwininstall_test.go`). Static checks only; not yet run on a PC.
+
 - **In-game indicators, and the game's CPU profile from the in-game menu**
   (Juka, 2026-11-24: "in-game overlay (volume/brightness/battery over a
   running game — its absence is the one moment JukaHub feels like an app, not
@@ -4054,6 +4284,81 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Leaving a screen stops its downloads** (backlog ARCH-6). The community
+  theme gallery's index, the Smart Home panel's Home Assistant and Pi-hole
+  reads, the Dictionary's lookups and suggestions, the curation feed and the
+  thumbnails fetched ahead for a list now run under the screen's context
+  (`player/scenetasks.go`): leaving the screen closes the request, and a
+  request closed that way is neither shown as an error on the next visit nor
+  cached (a thumbnail is not held back for a minute as a dead link, a
+  dictionary word is not cached without its synonyms). The offline
+  achievements proxy closes its forwarded request when RetroArch hangs up,
+  leaving a Watch Party closes its last poll, and the Hangover download stops
+  with its install. Every other request in the player now names its context
+  on purpose: a Smart Home toggle, a curation vote, a bug report, a crash
+  event, the Discord token check and the Pi-hole sign-out finish on their own
+  timeout wherever the player goes. Static checks only; not yet run on a
+  handheld.
+- **Archives are unpacked through a rooted folder** (backlog SEC-1, first
+  part). `extractZipSafe` and `extractTarGzSafe` — self-updates, sideloaded
+  updates, packages from the Patch screen and the repository, ports, the
+  Remote Play helpers and RomM downloads — write every file through an
+  `os.Root` opened on the destination, after the same name checks as before,
+  so a link already inside the folder cannot carry a file out of it. A `./`
+  folder entry at the top of a tarball is now accepted instead of failing as
+  an escape. The other extractors follow. Static checks only; not yet run on a
+  handheld.
+- **A shorter engineering backlog.** `player/MODERNIZATION.md` went from 169
+  open tasks (73 KB) to 127 (58 KB): work that had shipped was deleted (named
+  save checkpoints, ScreenScraper details, the Jellyfin client, scrobbling,
+  Kiosk and Kid modes, Xenia Canary and xemu on a PC, Windows brightness),
+  partly done tasks name only what is left, the Mail, Sync and release tasks
+  sit with their kin, tasks that wait on the owner (keys, accounts,
+  translators) have a section of their own, and 22 vague polish items became
+  one-line ideas. The two PC checks it held went to
+  [docs/HARDWARE_VALIDATION.md](docs/HARDWARE_VALIDATION.md). The six 0.4.0
+  upgrade shims carry a `remove after 2027-05-01` mark for the backlog's
+  dated clean-up.
+
+- **Dates in Mail, the calendar, the Ports store and Steam follow the
+  language, the date order and the 12-hour clock** (backlog I18N-7). The mail
+  list ("Yesterday", the weekday, the date), the reader's date line (now the
+  long form, "Tuesday, 24 November 2026 · 15:04"), a reply's "On … at …, …
+  wrote:" line, the calendar widget's next event ("Tomorrow 9:00", "Fri
+  9:00"), the alarm an event sets, the Ports store's "saved list from …" (with
+  the year when it is not this year's) and Steam's "last played …" ("March
+  2023" for an older year) used fixed English `time.Format` layouts; they go
+  through the shared helpers in `clockformat.go` now. An attachment's size in
+  the reader is `formatSize` like every other size ("1.5 MB"; "1,5 MB" in
+  German), and the toast and notification word wrap no longer breaks a number
+  grouped with a no-break space ("12 345") across two lines. Static checks
+  only; not yet run on a handheld.
+- **The AndroidRT package is reproducible, and its loader must give the exact
+  answer the handheld expects** (backlog AND-14). AndroidRT is named
+  (`loader --version`), dated (BUILDINFO's `built:` line) and time-stamped
+  (every file in the zip) after the newest commit that changed what it is
+  built from — the files its reuse key lists, read on the runner by the new
+  `build-root.sh commit androidrt`; the helpers' job now checks out the whole
+  history without old file contents (`fetch-depth: 0`, `filter: blob:none`)
+  — and `make_zip` writes its entries in name order with UTC stamps. So an
+  unchanged AndroidRT rebuilds to the same zip byte for byte, and a handheld,
+  which compares the release asset's SHA-256 with its copy's, no longer
+  downloads the same runtime again after a release that rebuilt it.
+  `build-runtimes.sh` refuses a build whose `loader --version` answers
+  anything but `AndroidRT loader <version> (aarch64, bionic loader)` with exit
+  0. Checked in the sandbox with the compiler stubbed: two packagings three
+  seconds apart and in two time zones gave the same SHA-256, a "platform
+  loader" answer was refused, and a tree without git history still builds as
+  "dev". Not yet run in CI.
+- **The release workflows upload what they built before any advisory step**
+  (backlog TEST-19). The Remote Play helpers, AndroidRT and the Box64 pack are
+  uploaded, and kept for later runs, right after their build, ahead of their
+  report and of the advisory AndroidRT smoke suite and Wine start, so a hang
+  there can no longer cost a run its packages; the weekly AndroidRT smoke step
+  is bounded to 5 minutes; `docs/BUILDING.md` and `build-runtimes.sh`'s usage
+  say that a cross build of AndroidRT needs a sysroot whose glibc is no newer
+  than 2.31 (Ubuntu 20.04's cross toolchain, not 22.04's or 24.04's).
+
 - **The low-battery guard acts once per low-battery episode, not once per
   JukaHub start**: a charger ends the episode, so a second drain in the same
   session is protected again. The sleep's power-off time with a game at 5 % or
@@ -5091,6 +5396,193 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Emulators page: an emulator that could not open said nothing, and some
+  could not open at all.** A tile's start threw the exit status away, so an
+  emulator that failed showed "Launching …" and the page again; now its start
+  and end are logged (command, folder, pid, free memory; run time and status)
+  and a start that is over by itself within 3 s, or within 8 s with an error
+  or a signal JukaHub did not send, opens the launch card with its report —
+  RetroArch's own menu too, whose output is kept as well. And a tile whose
+  launcher is an extensionless program or a `#!/bin/bash` script was read by
+  `sh` (a program as text, a bash script's arrays and `[[ ]]` failing); it now
+  starts the way MainUI and the library start it (firmwareScriptCommand).
+- **Bug reports kept the oldest half of a long log.** The log tail was cut to
+  its first 48 KB, which dropped the newest lines — the ones about the problem
+  being reported; it is now cut from the front (bugrepClipTail), as the
+  collector already did.
+
+- **Pages in other scripts draw their words, not "…".** The reader draws in
+  Inter (Latin, Greek, Cyrillic), so Wikipedia's front page showed 日本語,
+  中文 and فارسی — and every Chinese, Japanese, Korean, Arabic, Hebrew or Indic
+  word anywhere — as "…". A word the run's face cannot draw is now set in a
+  face that can, at the same size and weight: the Noto CJK face a Japanese,
+  Korean or Chinese interface downloads, a Noto font in JukaHub's fonts folder,
+  or the machine's own (Yu Gothic, Microsoft YaHei, Malgun Gothic, Segoe UI,
+  Nirmala UI and more on Windows; Noto, WenQuanYi, Droid Sans Fallback or
+  DejaVu on Linux). Font collections (`.ttc`) have their character map read
+  now. SDL_ttf draws left to right with no shaping, so a Hebrew or Arabic word
+  is reversed for it and its Arabic letters take their joined forms (initial,
+  medial, final, lam-alef) from Unicode's presentation forms first; a phrase
+  of several such words keeps its word order. A fixed box parked wholly below
+  the screen (Wikipedia's donation bar at `bottom: -500px`) is no longer laid
+  in after the page's text (`player/webpage_script.go`, `webpage.go`,
+  `webpage_fonts.go`, `webpage_layers.go`, `fonts.go`). A TrimUI with no CJK
+  or Arabic face installed keeps the "…". Static checks only; not yet run on
+  a handheld.
+- **Off-canvas menus stay off the screen, and floated menus line up.**
+  html5test.co keeps its index menu at `position: fixed; left: -240px` until
+  its button slides it in; nested in the page's other fixed box, the reader
+  laid it out in that box's flow and drew it over a quarter of the page. A
+  fixed box parked wholly past the left, top or right edge, a drawer slid out
+  by its own width in percent, and any positioned box thousands of pixels out
+  (a skip link) are now not drawn, as in a browser. A floated list whose
+  items float too (`ul.left { float: left }`, `li { float: left }`:
+  html5test's "your browser · other browsers · compare") is as wide as its
+  items side by side, so they line up instead of dropping one under another,
+  and a list whose page sets its padding (`* { padding: 0 }`, Bootstrap's
+  `.nav`) no longer indents its items by the reader's 18px list gutter
+  (`player/webpage_layers.go`, `webpage_floats.go`, `webpage.go`). Static
+  checks only; not yet run on a handheld.
+- **DuckDuckGo Lite's results read like a browser's again.** Its result
+  table pads every result with cells that hold only a no-break space
+  (`<td>&nbsp;&nbsp;&nbsp;</td>` before the snippet and the address,
+  `<td>&nbsp;</td>` rows between results). The reader dropped a cell with no
+  text, so the snippet and the address slid into the number's column, that
+  column took the snippet's width, and each title was squeezed into a narrow
+  column at the right edge, a word or two a line. A table cell with nothing to
+  draw now keeps its column — one blank line tall when it holds a no-break
+  space or a `<br>`, as in a browser — so the title sits beside its number
+  with the snippet and the address under it. Auto tables also measure a
+  cell's text as one line (a snippet split by its bold query words counted
+  only its longest piece, and the number column got the room it did not
+  ask for) and, when the columns want more than the table has, every column
+  keeps its longest word and gives up the room above it in proportion, so
+  "10." never wraps beside a long snippet. A column whose cells are all empty
+  is a sliver and takes none of the spare room, so the "Next Page" button
+  DuckDuckGo sets beside an empty cell stays at the left edge. A line whose
+  glyphs fit one row now takes one: text a little larger than the body with
+  no line-height of its own (DuckDuckGo's 18px result titles, an `h3`) took
+  two rows a line. Worked through by reading against the real page and its
+  stylesheet, saved as `tmp/ddglite/lite-hello.html` (git-ignored)
+  (`player/webpage.go`, `webpage_table.go`). Static checks only; not yet run
+  on a handheld.
+- **Search forms look like their page made them.** Text fields and selects
+  keep the border and rounded corners their page gives them (DuckDuckGo's
+  pill-shaped search box was a bare word on the white page), a field with
+  `width: 55%; max-width: 600px` stops at the maximum, a button the page
+  gives a height (`.submit { height: 40px }`) is that tall with its label in
+  the middle, and a button or label beside a tall field lines up with the
+  field's text instead of its top edge. Two selects side by side are two
+  boxes, not one bar. An element whose only text is a no-break space and
+  whose page gives it a height keeps that height — DuckDuckGo's
+  `<p class="extra">&nbsp;</p>` gaps between its header, form and results —
+  while one without a height (the old `height: 0` clearfix) still takes no
+  room (`player/webpage.go`, `webpage_table.go`, `webpage_paintfast.go`,
+  `webpage_inline.go`, `webpage_inlinebox.go`). Static checks only; not yet
+  run on a handheld.
+- **The first-run tour fits its card again.** Every tour page asked for the
+  config's "large", "medium" and "small" fonts, which the shipped config
+  leaves at one 24px size, so a hint was as big as the title and ran past the
+  card's right edge (Wi-Fi, time zone, Start with your device, ROMs, artwork,
+  Toolbox and trust), "Open date & time settings" was cut to "Open date &
+  time settin…", and the rows of the welcome page, "Get set up" and the Home
+  layout drew their second line across their own border. The tour now uses
+  the design type scale (title 28, body 18, labels 16) like every other
+  panel. The body, hint, status and last-action lines are word-wrapped to the
+  text column and the card grows to hold them, up to the room the controls
+  hint below it needs; past that, lines are given up in a fixed order rather
+  than spilled. List rows are sized from the measured text: two lines when
+  they fit, the title alone at the largest text sizes. The language list
+  prefers two roomy columns, and the action, Skip and Next buttons are as
+  wide as their labels (`player/onboarding.go`, `onboarding_layout.go`,
+  `onboarding_lang.go`). Checked with a PIL mock of all 13 pages at 1280×720,
+  on the 960×720 compact canvas and at text sizes 85–145 %. Static checks
+  only; not yet run on a handheld.
+- **JukaHub started from another folder works from its own** (backlog
+  DESK-7, first part). Windows' Startup folder, its Run key, a shortcut
+  without "Start in" or a terminal in another folder started JukaHub where
+  there is no `jukaconfig.json`, and every relative path — the config,
+  `jukauser.json`, the themes — missed. When the folder it starts in has no
+  config (`.json` or `.xml`) but the executable's folder does, JukaHub now
+  works from the executable's folder and logs it; a folder with a config of
+  its own (launch.sh, a developer's checkout) is never left
+  (`player/startup_config.go`). Static checks only; not yet run on a PC.
+- **The software dimmer covers the boot and the goodbye too** (backlog
+  DESK-11). On a PC whose brightness JukaHub can only dim in software, the
+  power-on animation and the shutdown screen were drawn at full brightness;
+  they now go through the same dimmer as every other frame
+  (`player/bootos.go`, `player/shutdown.go`).
+
+- **Continuing a game from another device no longer copies saves beside a
+  running sync** (backlog FIX-15). The pull that brings a continued game's
+  newest saves before it starts (`player/hoff.go`) now takes Save sync's job
+  slot, so it never writes the same files as a sync started on the Sync page
+  or by Automatic sync. When one is running it says "Waiting for the sync in
+  progress…" and waits for it within its two-minute budget (after that the
+  game starts with the saves here); while it runs, the Sync page shows
+  "Bringing saves from <device>…" with its progress, and B there stops it.
+  Static checks only; not yet run on two handhelds.
+- **A power cut while an update is being undone no longer leaves half of each
+  version** (backlog REL-16). When an update fails its first start, launch.sh
+  copies the previous version's files back beside their targets and renames
+  them into place; a power cut between two renames left a mix of both
+  versions, which the next start no longer watched. Now the note for the
+  restored build is written and synced as `.update-restoring` once every copy
+  is whole, and becomes `.update-rescued` when the last rename is done; a
+  start that finds the marker finishes the remaining renames from the
+  `.rescue-tmp` copies (and removes the stamp the update added) before JukaHub
+  runs, so the restored build starts with its note as after any restore.
+  Copies a power cut left half-made, before the marker, are removed at the
+  next watched start. A shell simulation under dash and busybox sh, killing
+  the restore after each of its three renames and once before the first,
+  recovered every time (`player/launch.sh`, `player/updrescue.go`). Not yet
+  run on a handheld.
+
+- **GameCube on TrimUI: the buildbot's Dolphin gets the last library it
+  lacked** (Juka, 2026-11-24, relaying a tester's "did you check the problem
+  with Dolphin emulator installation"). A Smart Pro's report the same day
+  (JH-X6HRVE, on the newest release) showed where Dolphin's install stands:
+  "JukaHub's build for TrimUI: no Dolphin build published yet", and the
+  libretro buildbot's 2026-11-24 build refused because it "needs libXi.so.6
+  and libusb-1.0.so.0". JukaHub already writes stand-ins for libusb, libudev
+  and libbluetooth beside its glibc 2.39; libXi, X11's input-extension
+  library, was the only other library it links that the firmware lacked.
+  Dolphin calls it only for an X11
+  window, and the libretro core's window is RetroArch's, so JukaHub now writes
+  a stand-in for it too: its XI… functions and XInput 1 calls (never
+  libX11's), NULL from each and "no XInput 2" from `XIQueryVersion`. The load
+  check names libXi among the device libraries, and a build refused before
+  for those libraries alone (the remembered "needs libXi.so.6 and
+  libusb-1.0.so.0") is fetched again (`player/coredevstub.go`,
+  `player/coretrimui.go`). JukaHub's own Dolphin for TrimUI, which needs
+  neither the private glibc nor the stand-ins, still has to come out of the
+  cores workflow (Actions → RetroArch cores for TrimUI → the dolphin job).
+  Static checks only; not yet run on a handheld.
+
+- **Xbox games on a Brick Pro: hakuX gets the build for its screen before the
+  game starts** (Juka, 2026-11-24, relaying a tester's "did you check the
+  problem with … Haku X": on 2026-11-21 and 22 the tester's Brick Pro, on
+  CrossMix-OS, played an Xbox game's music behind a menu that never moved).
+  Two things stood between that report and a fix on the handheld. No build
+  reached it from 2026-11-21 22:39 to the evening of 2026-11-23 (every release
+  failed to compile), so the Xbox hand-off (JukaHub closes while hakuX plays)
+  first reached handhelds with the releases published from that evening on
+  (`JukaHub-20261124021240` and later). And the tester's hakuX had been
+  installed by a build from before spruceUI's build of the emulator replaced
+  the Smart Pro's on the other models, so it still had the Smart Pro's, which
+  draws a 1280x720 picture only, on a 1024x768 panel. Nothing fitted such an
+  install afterwards: only an install or an update of the package did, and with
+  no newer release there was none (X on the Xbox tile did, behind "hakuX is
+  already the newest version"). Now an Xbox game's start on such an install
+  (every model but the Smart Pro) waits under the install card while
+  spruceUI's build downloads, once, and the game starts when it is in; offline
+  it says what the game waits for, and a second press plays it as it is. X on
+  the tile says it fitted the build, and the tile's line says when an install
+  still has the Smart Pro's. The emulator the build replaces is also looked
+  for among the files the install recorded (under `Data/` too), not only in
+  `Emus/XBOX` (`player/hakux_fit.go`, `player/hakux.go`, `player/hakuxpage.go`,
+  `player/gameready.go`). Static checks only; not yet run on a handheld.
 
 - **No games started: RetroArch is installed when the games' one is gone**
   (Juka, 2026-11-25, JH-X6HRVE: a Smart Pro whose every game stopped with

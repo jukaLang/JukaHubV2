@@ -145,10 +145,12 @@ func windowsSampleKey(p string) string { return strings.ToLower(filepath.Clean(p
 // windowsSampleTitles maps each build's program to its row title, for the
 // scanner: both builds' programs are called notepad++.exe.
 func windowsSampleTitles() map[string]string {
-	out := make(map[string]string, len(windowsSampleBuilds))
+	out := make(map[string]string, len(windowsSampleBuilds)+1)
 	for _, b := range windowsSampleBuilds {
 		out[windowsSampleKey(windowsSampleExe(b))] = b.Title
 	}
+	// The built-in Wine test too (windowsapps_winetest.go).
+	out[windowsSampleKey(wineTestExePath())] = wineTestTitle
 	return out
 }
 
@@ -454,16 +456,17 @@ func windowsSampleSetupOverlay(row *windowsSetupRow) {
 }
 
 // windowsSampleEmptyLine is the empty list's line about the sample: the
-// running install (busy), its failure (failed), or what A does. Main thread.
-func windowsSampleEmptyLine() (text string, busy, failed bool) {
+// running install (busy), its failure (failed), or what button does — A on an
+// empty list, Y under the built-in Wine test's row. Main thread.
+func windowsSampleEmptyLine(button string) (text string, busy, failed bool) {
 	line, lastFailed := windowsSampleProgress()
 	switch {
 	case line != "" && !lastFailed:
 		return line, true, false
 	case lastFailed:
-		return "Could not download " + windowsSampleName + ": " + line + " · " + hintSentence("%s tries again", "A", "Retry"), false, true
+		return "Could not download " + windowsSampleName + ": " + line + " · " + hintSentence("%s tries again", button, "Retry"), false, true
 	}
-	return hintSentence("%s downloads "+windowsSampleName+" ("+windowsSampleAbout+") to try Windows apps with,", "A", "Get Notepad++"), false, false
+	return hintSentence("%s downloads "+windowsSampleName+" ("+windowsSampleAbout+") to try Windows apps with,", button, "Get Notepad++"), false, false
 }
 
 // windowsAppsPanelSample is A on the setup page's sample row, or on the empty

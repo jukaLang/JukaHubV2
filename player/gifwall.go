@@ -1093,8 +1093,13 @@ func gifWallEvict() {
 // frames are the largest set of textures the app holds — up to 40 MB on the
 // handheld — and a still wallpaper is still a wallpaper. It stays still until
 // it is picked again (gifWallRetryPick).
+//
+// While a game owns the screen the pause already holds the first frame only
+// (gifWallPauseForGame) and the animation comes back after it, so an eviction
+// then (the Video memory room at a hand-over, vram.go) leaves it alone rather
+// than still for good.
 func gifWallShrinkForPressure() {
-	if gifWall.path == "" || gifWall.frozenPath == gifWall.path {
+	if gifWall.path == "" || gifWall.frozenPath == gifWall.path || gifWall.gamePaused {
 		return
 	}
 	gifWall.frozenPath = gifWall.path

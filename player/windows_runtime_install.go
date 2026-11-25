@@ -317,7 +317,7 @@ func windowsInstallRuntime(ctx context.Context) error {
 		if have, old := hostGlibcBelow("GLIBC_2.36"); old {
 			return fmt.Errorf("Hangover needs glibc 2.36 or newer, and this firmware has %s; unset JUKAHUB_WINE_FLAVOR to use Box64 + Wine", strings.TrimPrefix(have, "GLIBC_"))
 		}
-		return installWineRuntime(strings.TrimSpace(os.Getenv("JUKAHUB_WINE_RUNTIME_URL")))
+		return installWineRuntime(ctx, strings.TrimSpace(os.Getenv("JUKAHUB_WINE_RUNTIME_URL")))
 	}
 	return installWindowsRuntimeCore(ctx, nil, false, func(line string) {
 		setWindowsRuntimeStatus(line, "", true)
@@ -326,8 +326,8 @@ func windowsInstallRuntime(ctx context.Context) error {
 
 // installWineRuntime downloads and installs the Hangover archive. releaseURL
 // may be empty to resolve the latest release from GitHub; tests pass a local
-// URL directly.
-func installWineRuntime(releaseURL string) error {
+// URL directly. Cancelling ctx closes the release check and the download.
+func installWineRuntime(ctx context.Context, releaseURL string) error {
 	if releaseURL == "" {
 		releaseURL = windowsRuntimeRelease
 	}
@@ -340,7 +340,7 @@ func installWineRuntime(releaseURL string) error {
 	assetURL := releaseURL
 	if strings.HasSuffix(strings.ToLower(releaseURL), "/latest") || strings.Contains(releaseURL, "api.github.com") {
 		setWindowsRuntimeStatus("checking the latest Hangover release", "", true)
-		asset, err := latestHangoverAsset(releaseURL)
+		asset, err := latestHangoverAsset(ctx, releaseURL)
 		if err != nil {
 			return err
 		}
@@ -365,7 +365,7 @@ func installWineRuntime(releaseURL string) error {
 	}
 	archive := filepath.Join(base, "downloads", name)
 	setWindowsRuntimeStatus("downloading "+name, "", true)
-	if err := downloadRuntimeFile(assetURL, archive); err != nil {
+	if err := downloadRuntimeFile(ctx, assetURL, archive); err != nil {
 		return err
 	}
 
@@ -420,8 +420,8 @@ func installWineRuntime(releaseURL string) error {
 	return nil
 }
 
-func latestHangoverAsset(apiURL string) (string, error) {
-	req, err := http.NewRequest("GET", apiURL, nil)
+func latestHangoverAsset(ctx context.Context, apiURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return "", err
 	}
@@ -442,8 +442,8 @@ func latestHangoverAsset(apiURL string) (string, error) {
 	return assetURL, err
 }
 
-func downloadRuntimeFile(url, dest string) error {
-	req, err := http.NewRequest("GET", url, nil)
+func downloadRuntimeFile(ctx context.Context, url, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}

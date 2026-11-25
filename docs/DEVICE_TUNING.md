@@ -382,6 +382,56 @@ the dial does now, and Drivers & hardware's Thermal line says where it starts.
 `JUKAHUB_HEAT_GUARD=0` in the environment turns the guard off for one run, for
 comparing.
 
+### CPU frequency set by hand
+
+Everything above picks the clock for you. **CPU frequency** (Settings → Power
+& battery, under Battery; the same rows sit under Automatic CPU speed in Games
+& emulators) lets you pick it yourself:
+
+| Row | Key | Choices |
+|---|---|---|
+| CPU frequency | `cpuFrequency` | **Automatic** (the default), or one of the clocks the chip offers, in MHz from the top down (2000 … 408 MHz on the Smart Pro); **A** opens the list, **Left**/**Right** step and stop at the ends |
+| CPU frequency for | `cpuFrequencyUse` | **Menus and games** (`all`, the default), **Menus only** (`hub`: JukaHub's own screens, video and music) or **Games only** (`games`: every game, port and app JukaHub starts) |
+| Slow down when idle | `cpuFrequencyIdle` | off (the default): the CPU stays at that clock; on: it is a ceiling, and a governor that follows the load runs lower when there is little to do |
+
+The list is the fastest cluster's operating points (`scaling_available_frequencies`),
+so nothing outside the chip's own table is ever written; the Smart Pro S's second
+cluster gets the same share of its own range. A clock set by hand holds
+`scaling_max_freq` there and, unless Slow down when idle is on, `scaling_min_freq`
+too, so no governor runs it faster or slower; the governor itself is never
+touched. It is a session of Automatic CPU speed's own kind, with the same
+compare-and-restore, hand-over between screens and crash marker, and it holds
+whether Automatic CPU speed is on or off. Where it holds, Faster menus, the clock
+part of Faster game starts, CPU boost in games and the Heavy-game boost's clock
+stand aside (the Heavy-game boost's GPU, memory, read-ahead and priority work
+still run). Nothing it holds is learned.
+
+What still wins over it:
+
+- **the heat guard**: its dial lowers any clock while the chip or the battery is
+  hot and gives it back once they cool; the row then reads "held at 1200 MHz
+  while it cools";
+- **a game's own CPU options** (its profile or CPU limit in the library's options
+  sheet): the more specific choice;
+- **the idle screens**, which lower the clock a few seconds after they come up
+  and put it back on wake, and the voice assistant's short boost.
+
+A game's clock is set three seconds after it starts, once its launch script has
+run (its first seconds run under the launch profile), so what goes back when it
+ends is the script's own setting. In the hub a change is in force at once. A
+value in the config may be written like `powerProfileMaxFreq` (`"1416 MHz"`,
+`"1.4 GHz"`, `1416000` kHz) and means the chip's nearest clock; neither
+`powerProfileMaxFreq` nor Full speed while playing caps a clock picked here.
+
+The row reads `1416 MHz in menus and games · now 1416 MHz` (`Up to …` with Slow
+down when idle on), the Automatic CPU speed row `<app> · set by hand · 1.4 GHz`,
+and the rows standing aside say so. The log has `CPU frequency set by hand:
+1416 MHz (for all, slow down when idle Off)` when it is chosen and `CPU frequency:
+automatic again` when it is cleared. Juka's `performance_set` takes
+`cpu_frequency` (`auto`, `1.4 GHz`, `1416`; the nearest clock the chip has), and
+Settings search finds the row by "overclock", "underclock", "processor", "MHz"
+and "GHz" too.
+
 ### Heavy-game boost
 
 An Xbox game (hakuX), a GameCube, Wii or PS2 game where the handheld plays
@@ -650,6 +700,48 @@ next start put back what a crash left. CPU governors are not touched
 (Automatic CPU speed and the launch profile own them). The row only shows on a
 handheld whose GPU has a devfreq node; the log's `gpu` lines say what each
 launch got.
+
+## Video memory (VRAM)
+
+A PC with built-in graphics sets part of its RAM aside as video memory in the
+firmware, and handheld PCs let you assign it (a ROG Ally in Armoury Crate);
+Winlator asks for a Video Memory Size for Windows games. The TrimUI handhelds
+have nothing to set aside: the A133P's PowerVR GE8300 and the A523's Mali-G57
+take their textures and buffers from the same 1 GB as everything else, when a
+game asks, so its graphics get whatever is free at that moment. Settings →
+Games & emulators → **Video memory (VRAM)** (`videoMemory`) assigns a size
+anyway and makes it true where it can be:
+
+- **Room at every start.** When a game, emulator, port or app takes the screen
+  with less than the size free (MemAvailable plus the share of free swap the
+  AI's check counts), JukaHub gives back what only it holds: its own textures
+  — they live in that same memory — and byte caches at once, then its Go
+  heap, its idle helpers (the speech recognizer unless "Hey Juka" keeps it,
+  the offline AI's server, a Piper voice), the video link prefetch, the media
+  library scan and the kernel's page cache. It never closes an app. The row
+  then says how much the last game started with ("Made room for the last
+  game: 498 MB free").
+- **What Windows games see.** Under Wine, Direct3D and DirectDraw report the
+  size as the graphics card's memory (`WINE_D3D_CONFIG=VideoMemorySize=<MB>`,
+  which wins over the prefix's registry and leaves the prefix unchanged), so a
+  game that refuses to start below some amount of VRAM, or picks its texture
+  quality by it, sees what was assigned. A Wine profile whose own
+  `WINE_D3D_CONFIG` names `VideoMemorySize` keeps its value.
+
+| Value | What happens |
+|-------|--------------|
+| Auto (default) | Nothing is assigned: games take what is free (Heavy-game boost still empties JukaHub's caches for its games) and Wine guesses from the GPU |
+| 64 MB to 512 MB | That much kept free at each start; Windows games see that much VRAM |
+
+The list stops at half the RAM (512 MB on the 1 GB handhelds): past that the
+game would have little left to run in. A bigger number written into
+`jukauser.json` by hand still reaches Wine, while the room kept stays at half
+the RAM. More VRAM does not make the GPU faster; it decides whether a big
+game's textures fit without the kernel first pushing other memory out. The
+log's `mem` lines say what each start found and freed (`video memory: 512 MB
+assigned, 301 MB free as a game took the screen`, then `freed … for video
+memory`). For more memory overall there is **Extra memory (swap)**
+(`memorySwap` in [CONFIGURATION.md](CONFIGURATION.md)).
 
 ## Threaded video in RetroArch
 

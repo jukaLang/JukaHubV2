@@ -13,6 +13,7 @@ page of apps or games:
 | **Main** | The games you pinned to Home (with a *Pinned* badge), then Settings, Trophies (JukaHub's own achievements), RetroAchievements (where supported), Chat, Browser, the **Store**, Tools, Files, Bluetooth and Wi-Fi where the device has them, and Phone (the companion's pairing code) while it is running. |
 | **Games** | Your consoles (with covers and game counts), JukaHub's own games, PS / Xbox Remote Play, Steam, Minecraft, PortMaster, Windows Apps, the Emulators page and the whole Games library. |
 | **Entertainment** | YouTube, Shorts, Live TV, Downloaded (saved videos and music), Music, Podcasts and Game clips. |
+| **Smart Home** | Your TP-Link Kasa and Tapo plugs and lights, Google's speakers, displays and TVs, and Home Assistant's devices — A switches a light, X (or A on a speaker) opens its controls — then **Add devices** (TP-Link sign-in, Google Home, Home Assistant, Apple Home, hidden devices) and **Network & self-hosting**. See [SMART_HOME.md](SMART_HOME.md). |
 | **Favourites** | The games and apps you marked as favourites. |
 | **Collections** | Your own collections of games and apps. |
 | **Tools** (off until switched on) | Every screen, tool and plugin button the Start menu lists — Files, Settings, Music, YouTube, Notes, the Terminal, Downloads, Network tools, Screen Share… — opened the way the Start menu opens them. Switch it on in the arranging sheet (L2 → Y on Tools). |
@@ -168,7 +169,7 @@ Stored in `jukauser.json` (the `Custom` variables):
 | `homeArrangement` | `"tabs"` | The Home layout. Unset means Tabs; `"custom"` is Standard. `"jukaos"` and `"v2"` also mean Tabs. |
 | `homeTabViews` | `"games=row;main=grid;col:abc=list;store=compact"` | The view of each tab (by tab ID) and folder (`store`, `col:<id>`). Views: `grid`, `row`, `list`, `carousel`, `compact`, `backdrop`, `minimal`, `library`. |
 | `homeTabViewsLibrary` | `"games=grid"` | The same, kept for while the Library theme is on; a page it does not name is in the `library` view. |
-| `homeTabsShown` | `"recent,main,games,-entertainment,favourites,collections,tools"` | The tabs in their order; `-` hides one. A tab the value does not name is added at the end — shown, except `tools`, which stays hidden until named. |
+| `homeTabsShown` | `"recent,main,games,-entertainment,smarthome,favourites,collections,tools"` | The tabs in their order; `-` hides one. A tab the value does not name is added at the end — shown, except `tools`, which stays hidden until named. |
 | `homeTabsGridRing` | `"false"` | Grid selection ring: the ring round the selected tile (default on). |
 | `homeTabsRemember` | `"true"` | Open on the last tab (default on). Off, Home opens on the `homeTabsStart` tab, else Main. |
 | `homeTabsStart` | `"games"` | Settings → Theme & look → Start on: the tab Home opens on while `homeTabsRemember` is off. Choosing "Last used tab" there turns `homeTabsRemember` on; choosing a tab turns it off. Unset means Main (the old behaviour). |

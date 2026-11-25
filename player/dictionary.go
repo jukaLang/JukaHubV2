@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,14 +74,21 @@ var dictAsync struct {
 }
 
 // dictStartLookup looks a word up in the background; dictDrain applies it.
+// The requests run under the screen's context (scenetasks.go): leaving the
+// Dictionary closes them, and their answer is dropped rather than shown as a
+// network error on the next visit.
 func dictStartLookup(word string) {
 	dict.searching = true
 	dictAsync.mu.Lock()
 	dictAsync.gen++
 	gen := dictAsync.gen
 	dictAsync.mu.Unlock()
+	ctx := sceneWorkContext()
 	go func() {
-		result := dictLookup(word)
+		result := dictLookup(ctx, word)
+		if ctx.Err() != nil {
+			return
+		}
 		dictAsync.mu.Lock()
 		if gen == dictAsync.gen {
 			dictAsync.done = &result
@@ -129,13 +137,17 @@ func dictSuggestions(query string) []string {
 	}
 	if !dictAsync.suggBusy {
 		dictAsync.suggBusy = true
+		ctx := sceneWorkContext()
 		go func() {
-			s := dictSuggest(query)
+			s := dictSuggest(ctx, query)
 			dictAsync.mu.Lock()
-			if dictAsync.sugg == nil || len(dictAsync.sugg) > 200 {
-				dictAsync.sugg = map[string][]string{}
+			// A fetch closed by leaving the screen is not "no suggestions".
+			if ctx.Err() == nil {
+				if dictAsync.sugg == nil || len(dictAsync.sugg) > 200 {
+					dictAsync.sugg = map[string][]string{}
+				}
+				dictAsync.sugg[query] = s
 			}
-			dictAsync.sugg[query] = s
 			dictAsync.suggBusy = false
 			dictAsync.mu.Unlock()
 		}()
@@ -143,8 +155,17 @@ func dictSuggestions(query string) []string {
 	return nil
 }
 
+// dictGet is one Datamuse request, closed when ctx is cancelled.
+func dictGet(ctx context.Context, client *http.Client, address string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return nil, err
+	}
+	return client.Do(req)
+}
+
 // dictLookup fetches a word definition from the Datamuse API.
-func dictLookup(word string) dictResult {
+func dictLookup(ctx context.Context, word string) dictResult {
 	word = strings.TrimSpace(strings.ToLower(word))
 	if word == "" {
 		return dictResult{Error: "Enter a word to look up"}
@@ -170,7 +191,7 @@ func dictLookup(word string) dictResult {
 	q := url.QueryEscape(word)
 	defsURL := fmt.Sprintf("https://api.datamuse.com/words?sp=%s&md=dps&max=1", q)
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(defsURL)
+	resp, err := dictGet(ctx, client, defsURL)
 	if err != nil {
 		return dictResult{Query: word, Error: "Network error: " + err.Error()}
 	}
@@ -209,7 +230,7 @@ func dictLookup(word string) dictResult {
 
 	// Fetch synonyms.
 	synURL := fmt.Sprintf("https://api.datamuse.com/words?rel_syn=%s&max=8", q)
-	if synResp, err := client.Get(synURL); err == nil {
+	if synResp, err := dictGet(ctx, client, synURL); err == nil {
 		defer synResp.Body.Close()
 		if synBody, err := io.ReadAll(io.LimitReader(synResp.Body, 1<<20)); err == nil {
 			var syns []dictDef
@@ -223,7 +244,7 @@ func dictLookup(word string) dictResult {
 
 	// Fetch antonyms.
 	antURL := fmt.Sprintf("https://api.datamuse.com/words?rel_ant=%s&max=5", q)
-	if antResp, err := client.Get(antURL); err == nil {
+	if antResp, err := dictGet(ctx, client, antURL); err == nil {
 		defer antResp.Body.Close()
 		if antBody, err := io.ReadAll(io.LimitReader(antResp.Body, 1<<20)); err == nil {
 			var ants []dictDef
@@ -235,7 +256,10 @@ func dictLookup(word string) dictResult {
 		}
 	}
 
-	// Cache the result.
+	// Cache the result, unless leaving the screen cut it short.
+	if ctx.Err() != nil {
+		return result
+	}
 	if data, err := json.Marshal(result); err == nil {
 		if db, err := openSharedCache("jukahub.cache"); err == nil {
 			_ = cacheSet(db, cacheKey, data, 24*time.Hour)
@@ -246,13 +270,13 @@ func dictLookup(word string) dictResult {
 }
 
 // dictSuggest fetches autocomplete suggestions.
-func dictSuggest(prefix string) []string {
+func dictSuggest(ctx context.Context, prefix string) []string {
 	if len(prefix) < 2 {
 		return nil
 	}
 	sugURL := fmt.Sprintf("https://api.datamuse.com/sug?s=%s&max=6", url.QueryEscape(prefix))
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(sugURL)
+	resp, err := dictGet(ctx, client, sugURL)
 	if err != nil {
 		return nil
 	}

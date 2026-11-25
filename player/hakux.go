@@ -1150,6 +1150,9 @@ type hakuxInstallResult struct {
 	Updated bool
 	Kept    bool
 	Current bool
+	// Fitted: the newest release was installed and its Smart Pro emulator got
+	// spruceUI's build for this model now (hakux_fit.go).
+	Fitted bool
 	// Restored counts the missing files a repair put back: the newest release
 	// was installed but some of its files were gone. Nothing else is touched.
 	Restored int
@@ -1235,13 +1238,18 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 		result.Tag = installed.Tag
 		result.Launcher = hakuxLauncherIn(folder)
 		// An install from before hakux_fit.go on a model that needs
-		// spruceUI's build gets it now.
+		// spruceUI's build gets it now (an Xbox game's start does too:
+		// hakuxFitGate).
 		if hakuxNeedsFit(device) && installed.ScreenBuild == "" {
 			report(installPhaseDownload, 0, 0)
-			if err := hakuxFitApply(ctx, client, p, folder, &installed); err != nil {
+			if err := hakuxFitApply(ctx, client, p, folder, &installed, func(done, total int64) {
+				report(installPhaseDownload, done, total)
+			}); err != nil {
 				logWarn("emulators", "hakuX: the build for this model could not be installed (%v); the Smart Pro build stays", err)
 			} else if err := hakuxWriteManifest(folder, installed); err != nil {
 				logWarn("emulators", "could not record the hakuX install: %v", err)
+			} else {
+				result.Fitted = true
 			}
 		}
 		hakuxAutoRemember(p, "hakuX "+installed.Tag+" found in "+folder)
@@ -1454,7 +1462,10 @@ func hakuxInstall(ctx context.Context, client *http.Client, p hakuxPaths, device
 	// Every model but the Smart Pro plays with spruceUI's build of the same
 	// emulator, which draws at the panel's own mode (hakux_fit.go).
 	if hakuxNeedsFit(device) {
-		if err := hakuxFitApply(ctx, client, p, filepath.Join(p.SDRoot, hakuxOS(launcherDir)), &manifest); err != nil {
+		report(installPhaseDownload, 0, 0)
+		if err := hakuxFitApply(ctx, client, p, filepath.Join(p.SDRoot, hakuxOS(launcherDir)), &manifest, func(done, total int64) {
+			report(installPhaseDownload, done, total)
+		}); err != nil {
 			logWarn("emulators", "hakuX: the build for this model could not be installed (%v); the Smart Pro build stays", err)
 		}
 	}

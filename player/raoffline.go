@@ -473,13 +473,16 @@ type raoRequest struct {
 	query  string
 	post   bool
 	agent  string
+	// ctx is the incoming request's: RetroArch hanging up closes the
+	// forwarded one. Nil (a request built in a test) means none.
+	ctx context.Context
 }
 
 var errRaoTooLarge = errors.New("request too large")
 
 func raoParse(r *http.Request) (raoRequest, error) {
 	req := raoRequest{post: r.Method == http.MethodPost, query: r.URL.RawQuery, agent: r.UserAgent(),
-		ctype: r.Header.Get("Content-Type")}
+		ctype: r.Header.Get("Content-Type"), ctx: r.Context()}
 	params := r.URL.Query()
 	if req.post {
 		raw, err := io.ReadAll(io.LimitReader(r.Body, raoRequestMax+1))
@@ -814,7 +817,8 @@ func raoServeMedia(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	hr, err := http.NewRequest(http.MethodGet, raoMediaBase+"/"+media+".png", nil)
+	// RetroArch hanging up closes the fetch too.
+	hr, err := http.NewRequestWithContext(r.Context(), http.MethodGet, raoMediaBase+"/"+media+".png", nil)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -862,8 +866,12 @@ func raoUpstream(req raoRequest) (int, string, []byte, error) {
 	if req.query != "" {
 		target += "?" + req.query
 	}
+	ctx := req.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if req.post {
-		hr, err = http.NewRequest(http.MethodPost, target, bytes.NewReader(req.raw))
+		hr, err = http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(req.raw))
 		if err == nil {
 			ctype := req.ctype
 			if ctype == "" {
@@ -872,7 +880,7 @@ func raoUpstream(req raoRequest) (int, string, []byte, error) {
 			hr.Header.Set("Content-Type", ctype)
 		}
 	} else {
-		hr, err = http.NewRequest(http.MethodGet, target, nil)
+		hr, err = http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	}
 	if err != nil {
 		return 0, "", nil, errRaoUpstream
@@ -881,9 +889,11 @@ func raoUpstream(req raoRequest) (int, string, []byte, error) {
 }
 
 // raoPostForm sends a request JukaHub builds (a queued unlock, a cache
-// fetch) and returns the status and body.
+// fetch) and returns the status and body. Neither belongs to a screen — the
+// replay queue runs on its own and the cache job ends in a toast wherever
+// the player is — so only raoHTTP's timeout bounds it.
 func raoPostForm(form url.Values, agent string) (int, []byte, error) {
-	hr, err := http.NewRequest(http.MethodPost, raoUpstreamBase+"/dorequest.php", strings.NewReader(form.Encode()))
+	hr, err := http.NewRequestWithContext(context.Background(), http.MethodPost, raoUpstreamBase+"/dorequest.php", strings.NewReader(form.Encode()))
 	if err != nil {
 		return 0, nil, errRaoUpstream
 	}

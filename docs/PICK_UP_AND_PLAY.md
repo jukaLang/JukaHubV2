@@ -214,6 +214,7 @@ pasted there as it is.
 | `data/save-ledger.json` | the last confirmed saves of each game (up to 2000 games × 5 saves) |
 | `JukaHub reports/device-check-*.md` (SD card) | saved Device check reports |
 | `.update-probation`, `.start-check`, `.update-rescued` (app folder) | the update check's state while a new version is on probation |
+| `.update-restoring` (app folder) | the note for the restored version while launch.sh puts the backups back; a start that finds it (the power went in between) finishes the restore before JukaHub runs |
 
 ## For maintainers
 

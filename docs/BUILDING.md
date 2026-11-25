@@ -284,6 +284,11 @@ sh native/build-runtimes.sh wine         # an aarch64 host only
 sh native/build-runtimes.sh verify native/bin/JukaHub-Wine-linux-arm64.zip
 ```
 
+A cross build of AndroidRT (`CROSS=aarch64-linux-gnu-`) links against the cross
+toolchain's sysroot, so that sysroot's glibc must be no newer than 2.31
+(`GLIBC_MAX`): Ubuntu 20.04's `gcc-aarch64-linux-gnu` qualifies, while the one in
+22.04 or 24.04 (glibc 2.35 and 2.39) gives binaries the glibc check refuses.
+
 Both land in `player/native/bin/`, where `release.sh` and `package-sdcard.sh`
 pick them up. The release builds them natively in the same kind of Ubuntu 20.04
 arm64 root as the helpers (AndroidRT in the helpers' job; the Box64 pack in
@@ -293,7 +298,14 @@ publication waits for it; a `v*` tag's release waits for whichever of the two
 jobs finishes last) and refuses a binary that is not AArch64, asks for another
 loader, needs anything beyond the allowed glibc components and libgcc_s, or
 needs a glibc symbol newer than 2.31 (or a private one). The AndroidRT loader
-must also keep its TLS slot at offset 0 and answer `loader --version`; Box64
+must also keep its TLS slot at offset 0 and answer `loader --version` with
+exactly `AndroidRT loader <version> (aarch64, bionic loader)`. AndroidRT is
+named (that version), dated (BUILDINFO's `built:` line) and time-stamped (every
+file in the zip) after the newest commit that changed its sources
+(`.github/scripts/build-root.sh commit androidrt`, the files its reuse key
+lists), and its zip is written in name order with UTC stamps, so an unchanged
+AndroidRT rebuilds to the same zip byte for byte and a handheld that already
+has it sees nothing new to download. Box64
 must start (`box64 --version`) and name its pinned version. Box64 is fetched
 by the full id of its pinned release commit (v0.4.4) and built as a generic
 ARM64 build (`-DARM_DYNAREC=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo`; no BOX32,
@@ -310,7 +322,8 @@ on arm64, and `box64 wine --version` with that Wine.
 | `OUT_DIR` | `player/native/bin` | where the zips go |
 | `WORK_DIR`, `LOG_DIR` | `/tmp/jukahub-runtime-build`, `/tmp/jukahub-runtime-logs` | build folders, and one log per step (the console shows one line per step; a failed step prints the end of its log) |
 | `GLIBC_MAX` | `2.31` | newest glibc symbol version a binary may need |
-| `CROSS` | unset | cross-build AndroidRT (passed on to `build-tsp.sh`) |
+| `CROSS` | unset | cross-build AndroidRT (passed on to `build-tsp.sh`) against a sysroot whose glibc is no newer than 2.31 |
+| `ANDROIDRT_COMMIT`, `SOURCE_DATE_EPOCH` | from `git log` here | the commit AndroidRT is named after and its time (`build-root.sh` passes both); `ANDROIDRT_VERSION` still overrides the name |
 | `BOX64_CC` | `gcc-10` when installed, else `cc` | Box64's compiler |
 | `JOBS` | number of CPUs | parallel build jobs |
 

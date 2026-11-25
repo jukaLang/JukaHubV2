@@ -35,6 +35,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -162,7 +163,12 @@ type bugrepReport struct {
 	Arch        string `json:"arch"`
 	Diagnostics string `json:"diagnostics,omitempty"`
 	Log         string `json:"log,omitempty"`
-	Created     string `json:"created"`
+	// Launch is a launch-failure report's full account of the launch
+	// (launchreport.go): the command, its environment, the files it needed and
+	// the emulator's own output. A collector from before it ignores the field;
+	// the description still says what failed.
+	Launch  string `json:"launch,omitempty"`
+	Created string `json:"created"`
 }
 
 const (
@@ -170,6 +176,9 @@ const (
 	bugrepDescriptionMax = 4000
 	bugrepDiagnosticsMax = 16 << 10
 	bugrepLogMax         = 48 << 10
+	// bugrepLaunchMax bounds a launch report's details; the collector
+	// (netlify/functions/bug-report.mjs) takes the same.
+	bugrepLaunchMax = 32 << 10
 )
 
 var (
@@ -195,17 +204,7 @@ var (
 // (with or without a scheme, in any letter case), e-mail, IP and MAC addresses
 // and absolute paths.
 func bugrepScrub(text string) string {
-	text = redactDiagnosticText(text)
-	text = bugrepURL().ReplaceAllString(text, "$1://$2/…")
-	text = bugrepWWW().ReplaceAllString(text, "$1/…")
-	text = bugrepEmail().ReplaceAllString(text, "[email]")
-	text = bugrepMAC().ReplaceAllString(text, "[mac]")
-	text = bugrepIPv4().ReplaceAllStringFunc(text, func(ip string) string {
-		if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "1.1.1.1" || ip == "8.8.8.8" {
-			return ip
-		}
-		return "[ip]"
-	})
+	text = bugrepScrubKeepPaths(text)
 	text = bugrepWinAbs().ReplaceAllString(text, "[path]")
 	text = bugrepUnix().ReplaceAllStringFunc(text, func(m string) string {
 		// Keep the delimiter the match started with.
@@ -215,6 +214,46 @@ func bugrepScrub(text string) string {
 		return "[path]"
 	})
 	return text
+}
+
+// bugrepScrubKeepPaths is bugrepScrub without its last step: credentials, the
+// account name in a home folder, the path and query of links, e-mail, IP and
+// MAC addresses go, and file and folder names stay. A launch report
+// (launchreport.go) is about which file was not there or would not load, so it
+// keeps them; the card shows the player every line before Submit.
+func bugrepScrubKeepPaths(text string) string {
+	text = redactDiagnosticText(text)
+	text = bugrepURL().ReplaceAllString(text, "$1://$2/…")
+	text = bugrepWWW().ReplaceAllString(text, "$1/…")
+	text = bugrepEmail().ReplaceAllString(text, "[email]")
+	text = bugrepMAC().ReplaceAllString(text, "[mac]")
+	return bugrepIPv4().ReplaceAllStringFunc(text, func(ip string) string {
+		if ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "1.1.1.1" || ip == "8.8.8.8" {
+			return ip
+		}
+		return "[ip]"
+	})
+}
+
+// bugrepClipTail bounds a log to max bytes by dropping its oldest lines: the
+// newest end is where the failure being reported is. A marker says lines were
+// cut.
+func bugrepClipTail(s string, max int) string {
+	const marker = "… (earlier lines cut to fit)\n"
+	if len(s) <= max {
+		return s
+	}
+	if max <= len(marker) {
+		return bugrepClipRunes(s, max)
+	}
+	cut := len(s) - (max - len(marker))
+	for cut < len(s) && (s[cut]&0xC0) == 0x80 {
+		cut++
+	}
+	if nl := strings.IndexByte(s[cut:], '\n'); nl >= 0 && nl < len(s)-cut-1 {
+		cut += nl + 1
+	}
+	return marker + s[cut:]
 }
 
 // bugrepClip bounds s to max bytes on a rune boundary.
@@ -294,7 +333,9 @@ func bugrepBuild(config *Config, form bugrepForm, now time.Time) bugrepReport {
 		if strings.TrimSpace(tail) == "" {
 			tail = "(the log is empty — the app may have just started)"
 		}
-		r.Log = bugrepClip(bugrepScrub(tail), bugrepLogMax)
+		// The newest lines are kept: bugrepClip kept the oldest half of a long
+		// tail and cut the lines about the failure being reported.
+		r.Log = bugrepClipTail(bugrepScrub(tail), bugrepLogMax)
 	}
 	return r
 }
@@ -328,6 +369,9 @@ func bugrepPreviewText(r bugrepReport) string {
 	if r.Created != "" {
 		sb.WriteString("Created: " + r.Created + "\n")
 	}
+	if r.Launch != "" {
+		sb.WriteString("\n## Launch details\n" + r.Launch + "\n")
+	}
 	if r.Diagnostics != "" {
 		sb.WriteString("\n## Diagnostics (redacted)\n" + r.Diagnostics + "\n")
 	} else {
@@ -335,6 +379,12 @@ func bugrepPreviewText(r bugrepReport) string {
 	}
 	if r.Log != "" {
 		sb.WriteString("\n## Recent log (redacted)\n" + r.Log + "\n")
+	}
+	if r.Launch != "" {
+		// A launch report keeps the folders and files it is about.
+		sb.WriteString("\n## Never included\nNames, account details, tokens and keys, network names and addresses, and your config values. " +
+			"The launch details keep folder and file names, with the account name in a home folder removed.\n")
+		return sb.String()
 	}
 	sb.WriteString("\n## Never included\nNames, account details, tokens and keys, file paths, network names and addresses, and your config values.\n")
 	return sb.String()
@@ -497,7 +547,8 @@ func bugrepEncode(r bugrepReport) ([]byte, error) {
 }
 
 // bugrepPost sends one report. It returns what the collector said about it
-// and a classification of any failure.
+// and a classification of any failure. A report is sent from its outbox, not
+// from a screen, so only the client's timeout bounds the request.
 func bugrepPost(endpoint string, r bugrepReport) (bugrepSent, bugrepSendErr, error) {
 	if bugrepClockWrong(time.Now()) {
 		return bugrepSent{}, bugrepErrClock, errors.New("the device clock is wrong")
@@ -506,7 +557,7 @@ func bugrepPost(endpoint string, r bugrepReport) (bugrepSent, bugrepSendErr, err
 	if err != nil {
 		return bugrepSent{}, bugrepErrRejected, err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return bugrepSent{}, bugrepErrRejected, err
 	}

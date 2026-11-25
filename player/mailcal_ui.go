@@ -639,37 +639,37 @@ func mailcalNextEventLine(now time.Time) string {
 	if title == "" {
 		title = "Event"
 	}
-	c.text = mailcalEventWhen(clockHour12(appConfig), ev, now) + " · " + title
+	c.text = mailcalEventWhen(appConfig, ev, now) + " · " + title
 	return c.text
 }
 
 // mailcalEventWhen says when an event starts, relative to now: "Now", "14:30",
-// "Tomorrow 9:00", "Fri 9:00"; all-day events by day alone. Pure.
-func mailcalEventWhen(twelve bool, ev calEvent, now time.Time) string {
+// "Tomorrow 9:00", "Fri 9:00"; all-day events by day alone. The day words,
+// weekdays and the clock are the interface language's and the user's
+// (clockformat.go).
+func mailcalEventWhen(config *Config, ev calEvent, now time.Time) string {
 	start := ev.Start.In(now.Location())
 	if !ev.AllDay && !start.After(now) {
 		return "Now"
 	}
-	clock := start.Format("15:04")
-	if twelve {
-		clock = start.Format("3:04 PM")
-	}
+	clock := clockDigits(config, start)
+	l := dateLocaleNow()
 	ny, nm, nd := now.Date()
 	today := time.Date(ny, nm, nd, 0, 0, 0, 0, now.Location())
 	sy, sm, sd := start.Date()
 	day := time.Date(sy, sm, sd, 0, 0, 0, 0, now.Location())
 	switch days := int(day.Sub(today).Hours()/24 + 0.5); {
 	case days <= 0 && ev.AllDay:
-		return "Today"
+		return l.word(0)
 	case days <= 0:
 		return clock
 	case days == 1 && ev.AllDay:
-		return "Tomorrow"
+		return l.word(1)
 	case days == 1:
-		return "Tomorrow " + clock
+		return l.word(1) + " " + clock
 	case ev.AllDay:
-		return start.Format("Mon")
+		return formatWeekdayShort(start)
 	default:
-		return start.Format("Mon") + " " + clock
+		return formatWeekdayShort(start) + " " + clock
 	}
 }

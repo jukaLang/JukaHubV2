@@ -523,7 +523,7 @@ func vkVoicePreviewDraft(current, partial string, caret int, selected bool) (str
 		caret = n
 	}
 	insert := vkVoicePrepareText(current, caret, partial, true)
-	insert = vkTruncateUTF8(insert, vkMaxTextLen-len(current))
+	insert = vkTruncateUTF8(insert, vkMaxLen()-len(current))
 	if insert == "" {
 		return current, caret
 	}

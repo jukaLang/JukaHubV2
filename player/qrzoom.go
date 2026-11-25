@@ -27,6 +27,10 @@ type qrZoomState struct {
 	// restore is set when the card borrowed the backlight (the level was
 	// known and below full), so closing it gives the user's level back.
 	restore bool
+	// save, when set, is what X (S on a keyboard) does: the QR maker's
+	// codes can be kept as a picture (qrmaker.go). Pairing codes carry a PIN
+	// and are never offered for saving.
+	save func()
 }
 
 var qrZoom qrZoomState
@@ -65,6 +69,9 @@ func qrZoomOpenCardDetail(modules [][]bool, title, detail string) bool {
 	qrZoom.title = title
 	qrZoom.modules = modules
 	qrZoom.detail = detail
+	// A card opened over another one offers saving only if its opener asks
+	// again (qrMakerShow sets it after this returns).
+	qrZoom.save = nil
 	// A second open over a card already up keeps the borrow it made.
 	qrZoom.restore = qrZoomBorrowBrightness(qrZoomBrightness) || qrZoom.restore
 	PlayActivateSound()
@@ -100,6 +107,10 @@ func handleQRZoomKey(e *sdl.KeyboardEvent) bool {
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
 		qrZoomCloseCard()
+	case sdl.K_s, sdl.K_x:
+		if qrZoom.save != nil {
+			qrZoom.save()
+		}
 	}
 	return true
 }
@@ -108,6 +119,11 @@ func handleQRZoomKey(e *sdl.KeyboardEvent) bool {
 func ctrlQRZoom(e *sdl.ControllerButtonEvent) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !qrZoom.open {
 		return false
+	}
+	if e.Button == sdl.CONTROLLER_BUTTON_X && qrZoom.save != nil {
+		// The code stays up: the toast says where the picture went.
+		qrZoom.save()
+		return true
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK,
@@ -211,6 +227,15 @@ func renderQRZoom(renderer *sdl.Renderer, config *Config) {
 // closes, and the second half says where to point the phone — or, when the
 // surface gave one, its caption (qrZoomOpenCardDetail).
 func qrZoomHint() string {
+	if qrZoom.save != nil {
+		// "X / S": the keyboard saves with S (inputhints.go shows the half the
+		// user can press).
+		hints := []FooterHint{{"A / B", "Close"}, {"X / S", "Save image"}}
+		if qrZoom.detail != "" {
+			hints = append(hints, FooterHint{"", qrZoom.detail})
+		}
+		return hintLine(hints...)
+	}
 	if qrZoom.detail != "" {
 		return hintLine(FooterHint{"A / B", "Close"}, FooterHint{"", qrZoom.detail})
 	}

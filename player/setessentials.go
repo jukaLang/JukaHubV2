@@ -51,7 +51,8 @@ func setEssentialRows() map[string][]string {
 	m[ledSettingsSection] = []string{"lightsMissing", "ledsync", "ledMode", "ledColor", "ledBrightness"}
 	m["media"] = []string{"resolution", "subtitles", "downloads", "notifyDuringVideo"}
 	m["games"] = []string{"swapAB", "swapXY", "osd", "emulators", "library", "saves"}
-	m["power"] = []string{"powerMode", "batteryNow", "idleScreen", "autoSleep", "batterySaver", "lowPower"}
+	m["power"] = []string{"powerMode", "batteryNow", cpuFreqKey, cpuFreqUseKey, cpuFreqIdleKey, // cpufreq_manual.go
+		"idleScreen", "autoSleep", "batterySaver", "lowPower"}
 	m[brwSettingsSection] = []string{"searchEngine", "homePage", "blockAds"}
 	m["privacy"] = []string{"cookies", "forgetCookies", "diagnostics", "clearCache"}
 	m["about"] = []string{"device", "updates", "updatesCheck", "aboutPage", "bug", setShowAllKey}

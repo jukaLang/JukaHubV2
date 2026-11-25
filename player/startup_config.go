@@ -17,6 +17,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime/debug"
 )
 
@@ -50,4 +52,46 @@ func startupLoadConfigAsync(jsonPath string) func() (*Config, string, error) {
 		}
 		return res.config, res.path, res.err
 	}
+}
+
+// startupFindHome makes the executable's folder the working directory when
+// the folder JukaHub was started in holds no jukaconfig.json (or .xml) but
+// that one does, and returns the folder it left ("" when it stayed). Every
+// relative path JukaHub reads and writes — the design config, jukauser.json,
+// the themes — is then right whatever started it: Windows' Startup folder or
+// Run key, a shortcut without "Start in", a terminal in another folder. A
+// folder with a config of its own is never left, so a launcher that chose one
+// (launch.sh) or a developer's checkout keeps it. Called before logging
+// starts, which is why the caller logs the move.
+func startupFindHome() string {
+	if startupHasConfig(".") {
+		return ""
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	if !startupHasConfig(dir) {
+		return ""
+	}
+	was, _ := os.Getwd()
+	if os.Chdir(dir) != nil {
+		return ""
+	}
+	if was == "" {
+		was = "?"
+	}
+	return was
+}
+
+// startupHasConfig reports whether dir holds the design config, in either
+// format (xmlconfig.go).
+func startupHasConfig(dir string) bool {
+	for _, name := range []string{"jukaconfig.json", "jukaconfig.xml"} {
+		if st, err := os.Stat(filepath.Join(dir, name)); err == nil && st.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }

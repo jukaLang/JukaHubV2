@@ -180,7 +180,7 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 		if run.BoxW > 0 && run.BoxH > 0 {
 			// The field's frame goes where its text goes: VerticalOffset below
 			// the row (a field in a centred flex item or a grid track).
-			webPaintFill(r, x0+run.X, y+run.VerticalOffset, run.BoxW, run.BoxH, 3, run.Bg)
+			webPaintField(r, x0+run.X, y+run.VerticalOffset, run.BoxW, run.BoxH, run.Bg, run.Field)
 			continue
 		}
 		if run.Chip != nil {
@@ -194,7 +194,10 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 		h := pr.h
 		for j := i + 1; j < len(runs); j++ {
 			next := &runs[j]
-			if !next.run.HasBg || next.run.Bg != run.Bg || next.run.Font == nil || next.run.BoxW > 0 || next.run.Chip != nil {
+			// Two controls side by side (the region and time selects of a
+			// search page) are two chips, not one bar.
+			if !next.run.HasBg || next.run.Bg != run.Bg || next.run.Font == nil || next.run.BoxW > 0 || next.run.Chip != nil ||
+				next.run.Control != run.Control {
 				break
 			}
 			endX = x0 + next.run.X + next.w
@@ -202,8 +205,13 @@ func drawWebPaintRowAt(r *sdl.Renderer, config *Config, runs []webPaintRun, x0, 
 			i = j
 		}
 		// The chip sits behind the glyphs, which the baseline and
-		// vertical-align may have moved down the row.
-		webPaintFill(r, startX, y+run.VerticalOffset, endX-startX+4, h, 3, run.Bg)
+		// vertical-align may have moved down the row. A select keeps its
+		// page's border and corners (webPaintField).
+		if run.Field != nil {
+			webPaintField(r, startX, y+run.VerticalOffset, endX-startX+4, h, run.Bg, run.Field)
+		} else {
+			webPaintFill(r, startX, y+run.VerticalOffset, endX-startX+4, h, 3, run.Bg)
+		}
 	}
 	for i := range runs {
 		pr := &runs[i]
@@ -361,6 +369,48 @@ func webPaintFill(r *sdl.Renderer, x, y, w, h, radius int32, c sdl.Color) {
 		}
 	}
 	fillRoundedRect(r, x, y, w, h, radius, c)
+}
+
+// webPaintField paints a text field's box: its fill, then the border its page
+// gave it (frame, from webRunChip), with the page's corner radius — 3px when
+// it set none, as fields always had. Render thread.
+func webPaintField(r *sdl.Renderer, x, y, w, h int32, bg sdl.Color, frame *webInlineChip) {
+	if r == nil || w <= 0 || h <= 0 {
+		return
+	}
+	radius := int32(3)
+	if frame != nil && frame.radius > 0 {
+		radius = frame.radius
+	}
+	webPaintFill(r, x, y, w, h, radius, bg)
+	if frame == nil || !frame.hasBorder() {
+		return
+	}
+	b := frame.border
+	if b[0] == b[1] && b[1] == b[2] && b[2] == b[3] {
+		webPaintStroke(r, x, y, w, h, radius, b[0], frame.borderColor)
+		return
+	}
+	// Uneven sides (an underlined field: border-bottom only) are square bars:
+	// left, right, top, bottom, as webInlineChip.border orders them.
+	edges := [4]sdl.Rect{
+		{X: x, Y: y, W: b[0], H: h},
+		{X: x + w - b[1], Y: y, W: b[1], H: h},
+		{X: x, Y: y, W: w, H: b[2]},
+		{X: x, Y: y + h - b[3], W: w, H: b[3]},
+	}
+	var sides [4]sdl.Rect
+	n := 0
+	for i := range edges {
+		if b[i] > 0 {
+			sides[n] = edges[i]
+			n++
+		}
+	}
+	c := frame.borderColor
+	_ = r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	_ = r.SetDrawColor(c.R, c.G, c.B, c.A)
+	_ = r.FillRects(sides[:n])
 }
 
 // webPaintStroke draws a page box's border ring of the given thickness. A

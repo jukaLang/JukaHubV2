@@ -803,6 +803,13 @@ func startPortScript(name, path string) error {
 	launchedAt := time.Now()
 	gameLaunchWatchStart(cmd)
 	diag := gameDiagPortStart(name, path) // a port that quits at once is diagnosed (gamediag.go)
+	if diag != nil {
+		// The launch as it ran, for the card's bug report (launchreport.go).
+		diag.rec = launchRecordNew("PortMaster port", name, path)
+		diag.rec.LogPath = logPath
+		diag.rec.noteCommand(cmd)
+		diag.rec.noteStarted(cmd, diag.memMB)
+	}
 	if !master {
 		gameLaunchLogStart(game, cmd, gameLaunchMemFreeMB())
 	}

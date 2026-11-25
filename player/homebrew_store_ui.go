@@ -823,7 +823,7 @@ func hbPlay(config *Config, it *hbItem) {
 			return
 		}
 		if err := launchLibraryGame(game, launcher); err != nil {
-			ShowToast("Cannot start "+it.title+": "+firstLine(err.Error()), ToastKindError)
+			gameLaunchErrorToast(it.title, err)
 			return
 		}
 		if gameLaunchWasHeld(game.Path) {

@@ -394,6 +394,9 @@ func vkSentenceTarget() bool {
 		return fileEditorLineIsProse()
 	case mailComposeVKTarget:
 		return mailComposeProse()
+	case notesVKTarget:
+		// A note's title and body, not its search (notes_keyboard.go).
+		return notesVKProse()
 	}
 	return false
 }
@@ -454,6 +457,9 @@ func vkSecretTarget() bool {
 	case vkTargetTerm:
 		// A Terminal session's program asking for a password (termpty_ui.go).
 		return termPtySecretInput()
+	case osPromptVKTarget:
+		// A prompt opened for a password (osPromptOpenSecret).
+		return osPrompt.secret
 	}
 	return false
 }
@@ -503,6 +509,10 @@ func vkStripModeNow() vkStripMode {
 	case vkTargetScene:
 		if textBrowserAddressEditing {
 			return vkStripQuickURL
+		}
+	case osPromptVKTarget:
+		if osPrompt.secret {
+			return vkStripHidden
 		}
 	}
 	return vkStripWords
@@ -676,7 +686,7 @@ func vkApplySuggestion(s vkSuggestion, config *Config) {
 	}
 	b.WriteString(after)
 	next := b.String()
-	if len(next) > vkMaxTextLen {
+	if len(next) > vkMaxLen() {
 		return
 	}
 	vkTextSelected = false
@@ -719,6 +729,15 @@ func vkToolLabel(t vkTool, compact bool) string {
 // vkToolEnabled reports whether a chip can act right now.
 func vkToolEnabled(t vkTool) bool {
 	empty := vkCurrentText() == ""
+	if vkEnterTypesNewline() {
+		// A note's body: the field's selection is all or nothing, so Select
+		// all, Cut and Clear would each take the whole note away with one
+		// press. Copy still copies it.
+		switch t {
+		case vkToolSelectAll, vkToolCut, vkToolClear:
+			return false
+		}
+	}
 	switch t {
 	case vkToolCopy, vkToolCut:
 		return !empty && !vkSecretTarget()
@@ -785,6 +804,11 @@ func vkCopy() {
 
 // vkCut copies the field and clears it, keeping the old text for Ctrl+Z.
 func vkCut(config *Config) {
+	if vkEnterTypesNewline() {
+		// A note's body is copied, not taken away whole (vkToolEnabled).
+		vkCopy()
+		return
+	}
 	text := vkCopyText()
 	if vkSecretTarget() {
 		ShowToast("Passwords are not copied", ToastKindInfo)
@@ -818,7 +842,12 @@ func vkPaste(config *Config) bool {
 		ShowToast("Clipboard is unavailable: "+err.Error(), ToastKindWarning)
 		return false
 	}
-	text = vkPasteReplacer.Replace(text)
+	if vkEnterTypesNewline() {
+		// A note's body keeps the pasted lines.
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+	} else {
+		text = vkPasteReplacer.Replace(text)
+	}
 	if strings.TrimSpace(text) == "" {
 		ShowToast("Nothing to paste", ToastKindInfo)
 		return false
@@ -830,7 +859,8 @@ func vkPaste(config *Config) bool {
 // vkSelectAll selects the whole field: the next key replaces it, Copy and Cut
 // take it.
 func vkSelectAll() {
-	if vkCurrentText() == "" {
+	if vkCurrentText() == "" || vkEnterTypesNewline() {
+		// Not in a note's body: the next key would replace the whole note.
 		return
 	}
 	vkTextSelected = true
@@ -849,7 +879,7 @@ func vkToggleSelectAll() {
 // vkClear empties the field; Ctrl+Z brings it back.
 func vkClear(config *Config) {
 	text := vkCurrentText()
-	if text == "" {
+	if text == "" || vkEnterTypesNewline() {
 		return
 	}
 	vkUndoText = text
@@ -1291,6 +1321,13 @@ func vkHandlePhysicalKey(e *sdl.KeyboardEvent, config *Config) bool {
 		vkCaretEnd()
 	case sdl.K_DELETE:
 		vkForwardDelete(config)
+	case sdl.K_RETURN, sdl.K_KP_ENTER:
+		// In a note's body Enter is a line break; Ctrl+Enter (above: not
+		// consumed) is Done. Elsewhere Enter submits.
+		if !vkEnterTypesNewline() {
+			return false
+		}
+		vkInsertText("\n", config)
 	default:
 		return false
 	}

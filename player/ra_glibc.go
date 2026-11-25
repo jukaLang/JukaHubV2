@@ -1272,7 +1272,7 @@ func raGlibcRelaunch(game libraryGame, launcher string) {
 	}
 	raGlibcInstall.resume = game.Path
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+		gameLaunchErrorToast(game.Title, err)
 	}
 	raGlibcInstall.resume = ""
 }

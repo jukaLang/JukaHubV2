@@ -964,6 +964,38 @@ func TestWebHTMLTableEmptyRowspanRowKeepsHeight(t *testing.T) {
 	}
 }
 
+// DuckDuckGo Lite pads its result table with cells that draw nothing: a
+// <td>&nbsp;&nbsp;&nbsp;</td> before each snippet and address, <td>&nbsp;</td>
+// rows between results. Such a cell still takes its column, so the snippet and
+// the address sit under the title, not under the number; the number column
+// stays narrow beside a long snippet; and the blank row still parts results.
+func TestWebHTMLTableBlankCellsKeepTheirColumn(t *testing.T) {
+	legibleTestInitFonts(t)
+	snippet := "Snippet" + strings.Repeat(" words that wrap across the column", 12)
+	layout := parseWebPage(`<table border="0">`+
+		`<tr><td valign="top">1.&nbsp;</td><td><a rel="nofollow" href="/a" class='result-link'>Title</a></td></tr>`+
+		`<tr><td>&nbsp;&nbsp;&nbsp;</td><td class='result-snippet'>`+snippet+`</td></tr>`+
+		`<tr><td></td><td><span class='link-text'>Address</span></td></tr>`+
+		`<tr><td>&nbsp;</td><td>&nbsp;</td></tr>`+
+		`<tr><td valign="top">2.&nbsp;</td><td><a href="/b">Next</a></td></tr></table>`,
+		"", "https://lite.duckduckgo.com/lite/").computeLayout(&Config{}, Element{Font: "body"}, 720)
+	_, numX := webTestTextPosition(t, layout, "1.")
+	titleRow, titleX := webTestTextPosition(t, layout, "Title")
+	snipRow, snipX := webTestTextPosition(t, layout, "Snippet")
+	addrRow, addrX := webTestTextPosition(t, layout, "Address")
+	nextRow, _ := webTestTextPosition(t, layout, "Next")
+	if snipX != titleX || addrX != titleX {
+		t.Fatalf("a blank cell lost its column: title x=%d, snippet x=%d, address x=%d", titleX, snipX, addrX)
+	}
+	if titleX <= numX || titleX-numX > 120 {
+		t.Fatalf("the title is not beside its number: number x=%d, title x=%d", numX, titleX)
+	}
+	if snipRow <= titleRow || addrRow <= snipRow || nextRow < addrRow+2 {
+		t.Fatalf("rows out of order, or the blank row between results collapsed: title=%d snippet=%d address=%d next=%d",
+			titleRow, snipRow, addrRow, nextRow)
+	}
+}
+
 func TestWebHTMLTableCollapseBorderConflictWinners(t *testing.T) {
 	legibleTestInitFonts(t)
 	widthWin := parseWebPage(`<style>table{width:400px;border-collapse:collapse}td{border:1px solid #000}`+

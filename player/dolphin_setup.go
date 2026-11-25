@@ -15,9 +15,13 @@ package main
 //     firmware's): it installs when RetroArch can start on JukaHub's private
 //     glibc 2.39 (ra_glibc.go), fetched and probed first. As a desktop build
 //     it also links libusb and libudev, which no TrimUI firmware has (a Brick
-//     Pro refused it for libusb on 2026-11-22): JukaHub writes stand-ins for
-//     them beside that glibc, at the install and before every start
-//     (coredevlibs.go, coredevstub.go). When neither source gives a build,
+//     Pro refused it for libusb on 2026-11-22), and X11's input library libXi,
+//     which a Smart Pro's firmware lacks (2026-11-24: "needs libXi.so.6 and
+//     libusb-1.0.so.0"): JukaHub writes stand-ins for them beside that glibc,
+//     at the install and before every start (coredevlibs.go, coredevstub.go).
+//     As of 2026-11-24 the cores workflow had published no build of JukaHub's
+//     own (that handheld's log: "no Dolphin build published yet"), so this is
+//     the one a handheld gets until it does. When neither source gives a build,
 //     the error says why for each, JukaHub's own first. Both go through the
 //     door every core install uses (fetchCoreUpdate: allowlisted hosts, the
 //     index's CRC32, the load check against the file the build becomes;

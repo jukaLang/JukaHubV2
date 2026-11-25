@@ -99,7 +99,8 @@ func emuRetroArchMenuTile(e emuEntry) bool {
 func launchRetroArchMenu(e emuEntry) {
 	bin := strings.TrimSpace(e.Launch)
 	if !regularFile(bin) {
-		showLaunchFailureDialog(e.Name, fmt.Errorf("RetroArch is missing: %w", os.ErrNotExist), "")
+		err := fmt.Errorf("RetroArch is missing: %w", os.ErrNotExist)
+		showLaunchFailureRecord(launchRecordNew(raMenuLaunchKind, e.Name, bin), err, "")
 		invalidateEmulatorCache()
 		return
 	}
@@ -118,17 +119,21 @@ func launchRetroArchMenu(e emuEntry) {
 	// installed and this RetroArch starts on it (ra_glibc.go).
 	raGlibcPrepareMenu(cmd, bin)
 	restoreProfile := beginGamePowerProfile(appConfig)
+	// What RetroArch prints, and how it ends: one that cannot open its menu
+	// gets the launch card with its bug report (launchreport.go).
+	watch := emuTileWatchBegin(raMenuLaunchKind, e.Name, bin, cmd)
 	if err := screenChildStart(cmd); err != nil {
 		restoreProfile()
-		logWarn("emulators", "launch failed for %s: %v", bin, err)
-		showLaunchFailureDialog(e.Name, err, "")
+		watch.failed(err)
 		return
 	}
 	noteGameChildStarted(cmd)
+	watch.started()
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
 		screenChildReaped(cmd)
 		restoreProfile()
+		watch.ended(waitErr)
 	}()
 	PlaySuccessSound()
 	ShowToast("Opening RetroArch", ToastKindSuccess)

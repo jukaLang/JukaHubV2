@@ -350,6 +350,15 @@ func webAlignLineRuns(line []webRunPos, rowH int32) webLineMetrics {
 	if boxAbove+boxBelow > m.ascent+m.descent && (rowH <= 0 || boxAbove+boxBelow > rowH+rowH/4) {
 		m.ascent, m.descent = boxAbove, boxBelow
 	}
+	// A text field is a box with its value set in the middle of it
+	// (drawWebPaintRowAt), and that value stands on the line's baseline like
+	// any word: a button or a label beside a tall search box lines up with the
+	// box's text, not with its top edge.
+	for i := range line {
+		if above, below, ok := webFieldExtent(&line[i]); ok {
+			m.ascent, m.descent = max(m.ascent, above), max(m.descent, below)
+		}
+	}
 	for i := range line {
 		r := &line[i]
 		if r.Image == nil {
@@ -367,9 +376,22 @@ func webAlignLineRuns(line []webRunPos, rowH int32) webLineMetrics {
 		r := &line[i]
 		if textRun(r) {
 			r.VerticalOffset += m.ascent - int32(r.Font.Ascent())
+		} else if above, _, ok := webFieldExtent(r); ok {
+			r.VerticalOffset += m.ascent - above
 		}
 	}
 	return m
+}
+
+// webFieldExtent is how far a text field's box reaches above and below the
+// baseline of the value drawn in its middle; ok is false for anything that
+// is not a field box.
+func webFieldExtent(r *webRunPos) (above, below int32, ok bool) {
+	if r.Image != nil || r.Font == nil || r.BoxW <= 0 || r.BoxH <= 0 {
+		return 0, 0, false
+	}
+	above = (r.BoxH-int32(r.Font.Height()))/2 + int32(r.Font.Ascent())
+	return above, max(r.BoxH-above, 0), true
 }
 
 // webInlineImageExtent is how far an inline image reaches above and below the

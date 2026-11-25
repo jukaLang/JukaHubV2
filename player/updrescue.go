@@ -27,7 +27,11 @@ package main
 //     backups are copied back over the installation and the restored build
 //     starts at once, finding APP_DIR/.update-rescued. Once per plan: the plan
 //     goes with the restore, and a restore that cannot be done in full is not
-//     started at all.
+//     started at all. The copies are renamed into place only after the note
+//     is written and synced as APP_DIR/.update-restoring, which becomes
+//     .update-rescued when the last one is in: a power cut between two
+//     renames leaves the marker, and the next start's launch.sh finishes the
+//     renames before this program runs.
 //   - The restored build settles that as it starts (updRescueSettle): the
 //     release that failed goes on the not-again list (uhistSkipped) until a
 //     newer one exists, the update's half-done bookkeeping is undone (its
@@ -72,6 +76,10 @@ const (
 	updStartCheckName = ".start-check"
 	// updRescuedName is what launch.sh leaves after it undid an update.
 	updRescuedName = ".update-rescued"
+	// updRestoringName is that note while launch.sh renames the backups into
+	// place; launch.sh finishes a restore that left it before starting
+	// JukaHub, so one seen here is stale.
+	updRestoringName = ".update-restoring"
 	// updProbationDir (in the Patch state folder) keeps a plan's backups that
 	// neither the journal nor Version history keeps.
 	updProbationDir = "probation"
@@ -697,7 +705,7 @@ func updRescueApply(appDir, base, versionsDir string, r updRescue) {
 	if err := upchWriteJSON(filepath.Join(versionsDir, updRescueFactName), fact); err != nil {
 		logPatch("update check: %v", err)
 	}
-	for _, name := range []string{updRescuedName, updStartCheckName, startCheckTestName} {
+	for _, name := range []string{updRescuedName, updRestoringName, updStartCheckName, startCheckTestName} {
 		_ = os.Remove(filepath.Join(appDir, name))
 	}
 	logPatch("update check: launch.sh put %s back because %s did not start (%s, stage %s, exit code %d); %s is not offered again",

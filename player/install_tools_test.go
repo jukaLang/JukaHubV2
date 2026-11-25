@@ -150,7 +150,7 @@ func TestGetToolPathNeverReturnsDirectory(t *testing.T) {
 }
 
 func TestResolveToolAssetRejectsUnknownRepo(t *testing.T) {
-	if _, err := resolveToolAsset("evil/exfiltrate", "", "x.zip"); err == nil {
+	if _, err := resolveToolAsset(context.Background(), "evil/exfiltrate", "", "x.zip"); err == nil {
 		t.Error("resolveToolAsset must reject repos outside the allowlist")
 	}
 }

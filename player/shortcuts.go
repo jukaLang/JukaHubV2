@@ -125,7 +125,7 @@ var shortcutCategories = []struct {
 	{
 		title: "Tools",
 		items: []shortcutEntry{
-			{"Notes", "N or Y new, X delete, F folder, S search"},
+			{"Notes", "N or Y new, X delete, F folder, S search, M menu, Ctrl+S save (on the list: every note as a file)"},
 			{"Calculator", "Type a sum, Enter or = answer, Y graph, Del clear, Ctrl+C / Ctrl+V copy / paste"},
 			{"Pomodoro", "Enter start / pause, X skip, Y reset"},
 			{"Synth", "Space play, Tab page, [ ] pattern, Enter / Y / X edit, 1-7 pads"},

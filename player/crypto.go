@@ -151,6 +151,8 @@ var cryptoKey = func() []byte {
 //
 // Custom key material (JUKAHUB_CRYPTO_KEY / JUKAHUB_CRYPTO_SALT) is never
 // guessed: those values can only come from the user who set them.
+//
+// remove after 2027-05-01: an upgrade shim for configs from 0.4.0.
 func legacyDecryptionKeys() [][]byte {
 	legacyKeysOnce.Do(func() {
 		if os.Getenv("JUKAHUB_CRYPTO_KEY") != "" || os.Getenv("JUKAHUB_CRYPTO_SALT") != "" {

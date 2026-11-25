@@ -660,6 +660,16 @@ library: starting "Manhunt 2" (PlayStation Portable): sh /mnt/SDCARD/Emus/PSP/la
 library: "Manhunt 2" ended after 1.4s: exit status 0
 ```
 
+Every launch card about a launch that failed — this one, and the card for a
+game that could not be started at all ("launcher is missing", "no launcher
+for …", a program that could not be executed) — also carries a bug report and
+two buttons, **Cancel** and **Submit report** (focused, so A files it as a
+GitHub issue). The report holds the whole launch: the command, every argument
+and the environment it ran with, every file it needed and whether this device
+can load it, the launch script, what it printed, RetroArch's log and
+JukaHub's log around the launch. See
+[Bug reports: when a game or an emulator does not start](BUG_REPORTS.md#when-a-game-or-an-emulator-does-not-start).
+
 Windows `.bat`/`.cmd` launchers go through `cmd /c`, and an `.exe` (PPSSPP,
 RetroArch) is started directly with the ROM as its argument. JukaHub raises the
 game power profile for the child process and restores it when the emulator
@@ -864,8 +874,8 @@ than its ISO.
   while that is not published, the buildbot's nightly, which needs a newer
   libstdc++ than any TrimUI firmware has and so runs on JukaHub's private
   glibc (**RetroArch's C library** on Automatic), with JukaHub's stand-ins
-  for libusb and libudev beside it (a desktop build links them; JukaHub
-  writes them itself, no download, before the first start). Both go through
+  for libusb, libudev and X11's libXi beside it (a desktop build links them;
+  JukaHub writes them itself, no download, before the first start). Both go through
   the checks every core install has
   ([COMPATIBILITY.md](COMPATIBILITY.md#fetching-newer-builds)). When neither
   gives a core, the message says why for each, JukaHub's own build first.

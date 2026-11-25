@@ -149,6 +149,8 @@ func toolsHubEnsureScene(config *Config, name, icon, description string) {
 // runs on a config that is not on screen yet — at startup, before the first
 // scene is chosen, and on a freshly loaded reload, whose current scene is then
 // found again by name — so no live scene index points into the shortened list.
+//
+// remove after 2027-05-01: an upgrade shim for configs from 0.4.0.
 func toolsHubRetireMisc(config *Config) {
 	for si := range config.Scenes {
 		elems := config.Scenes[si].Elements

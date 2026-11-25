@@ -23,12 +23,12 @@ Unverified on device as of 2026-11-17: built and checked statically only.
 | `read_text_file` | A text file (configs, logs, scripts); binary files and files with keys or passwords are refused | read |
 | `search_settings`, `get_setting` | Settings rows, their values and choices | read |
 | `retroarch_get` | RetroArch options, globally or in a core's override file | read |
-| `performance_get` | Power mode, automatic CPU speed, faster menus, faster game starts, CPU boost in games, heat limit, clock, temperature | read |
+| `performance_get` | Power mode, automatic CPU speed, CPU frequency set by hand and its choices, faster menus, faster game starts, CPU boost in games, heat limit, clock, temperature | read |
 | `mail_inbox` | The newest messages of the mail accounts in Email & calendar, unread first: sender, subject, date, a 200-character snippet ([EMAIL_CALENDAR.md](EMAIL_CALENDAR.md)) | read |
 | `calendar_agenda` | The synced calendars' events for the coming days (1-31): time, title, place, calendar | read |
 | `open_screen` | Adds an "Open …" button under the answer (a Settings row or a screen) | read |
 | `set_setting` | One Settings switch or choice, through the row itself | change |
-| `performance_set` | Power mode and/or automatic CPU speed | change |
+| `performance_set` | Power mode, automatic CPU speed and/or the CPU frequency (`cpu_frequency`: `auto`, or a clock such as `1.4 GHz`; the nearest one the chip has) | change |
 | `retroarch_set` | One RetroArch option, globally or for one core; a backup of `retroarch.cfg` is kept | change |
 | `move_files`, `rename_file` | Move or rename on the same card | change |
 | `delete_files` | Moves into the card's trash folder `.jukahub-trash/<time>/` (frees nothing until emptied) | change |

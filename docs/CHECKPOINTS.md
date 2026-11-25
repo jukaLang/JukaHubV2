@@ -1,11 +1,15 @@
 # Checkpoints and quick switch — milestone design
 
-**Status: design only. Nothing in this document is implemented.** The current
-resume behaviour is RetroArch's auto state, described below; named checkpoints
-and a game switcher are not in the app.
+**Status: partly shipped (2026-11-25).** Named checkpoints are the Save Time
+Machine's pinned moments ([savetimeline.go](../player/savetimeline.go)); the
+Game switcher ([gameswitcher.go](../player/gameswitcher.go)) resumes recent
+games through their auto states; universal instant resume
+([instantresume.go](../player/instantresume.go)) saves a game before the
+battery or a power-off ends it. A suspended emulator kept behind the hub is
+still not in the app. The table below is the design as it was written.
 
-This page exists because "checkpoints / quick switch" is one of the largest
-items in the [engineering backlog](../player/MODERNIZATION.md) (GAME-3), and the
+This page exists because "checkpoints / quick switch" was one of the largest
+items in the [engineering backlog](../player/MODERNIZATION.md), and the
 two obvious designs have very different costs on this hardware. It
 records what the code already does, what each design would actually require, and
 which parts cannot work — so the next person starts from measurements instead of

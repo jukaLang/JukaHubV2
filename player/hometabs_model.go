@@ -4,9 +4,9 @@ package main
 //
 // The Tabs Home is a Home arrangement (homeArrangementTabs) with a strip of
 // tabs in the middle of the top bar — Recent, Main, Games, Entertainment,
-// Favourites, Collections — that L1 / R1 walk through. Each tab is a page of
-// items drawn in the view the user picked for that tab (grid, row, list,
-// carousel…).
+// Smart Home, Favourites, Collections — that L1 / R1 walk through. Each tab is
+// a page of items drawn in the view the user picked for that tab (grid, row,
+// list, carousel…).
 //
 // Two halves meet here:
 //
@@ -47,11 +47,13 @@ const (
 	homeTabCollections   = "collections"
 )
 
-// homeTabOrder is the default tab order. Tools (hometabs_tools.go) is off
-// until it is switched on (homeTabHiddenByDefault).
+// homeTabOrder is the default tab order. Smart Home (hometabs_smarthome.go)
+// comes after Entertainment; a stored order that predates it gets it at the
+// end. Tools (hometabs_tools.go) is off until it is switched on
+// (homeTabHiddenByDefault).
 var homeTabOrder = [...]string{
-	homeTabRecent, homeTabMain, homeTabGames, homeTabEntertainment, homeTabFavourites, homeTabCollections,
-	homeTabTools,
+	homeTabRecent, homeTabMain, homeTabGames, homeTabEntertainment, homeTabSmartHome, homeTabFavourites,
+	homeTabCollections, homeTabTools,
 }
 
 // The views a page can be drawn in (homeTabItem lists, any tab or folder).

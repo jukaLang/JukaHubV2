@@ -27,7 +27,8 @@ name: Windows-app runtime (Box64)
 # A failure here never stops a release: the job is continue-on-error and its
 # callers carry on whatever its result. A release without the pack makes
 # JukaHub install it from an older release that has one. An advisory step
-# starts Wine 10.0 once under the new Box64 and reports.
+# starts Wine 10.0 once under the new Box64 and reports; it runs after the pack
+# is uploaded and kept, so a hang there cannot cost the release its pack.
 #
 # Everything the pack is made from is pinned in build-runtimes.sh (with CMake
 # from the Python tool pins and the root from build-root.sh), so the job first
@@ -119,6 +120,40 @@ jobs:
         timeout-minutes: 30
         run: sh .github/scripts/build-root.sh build box64
 
+      - name: Upload the Box64 pack
+        # Right after the build, before the advisory Wine start: a hang there
+        # must not cost the release its pack.
+        if: ${{ !cancelled() && (steps.box64.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wine-runtime-package
+          # The zip keeps the file modes an artifact would lose.
+          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
+          if-no-files-found: error
+          # Zipped already: zipping it again would only cost time.
+          compression-level: 0
+          retention-days: 30
+          # A re-run of this job replaces its own earlier upload instead of
+          # failing on the name.
+          overwrite: true
+
+      - name: Keep the Box64 pack for later runs
+        # A fresh build that passed its checks, on a push to main: the only
+        # kind the lookup above accepts. A reused pack is kept already, and a
+        # gcc 9 one is not what its sources' name stands for.
+        if: ${{ !cancelled() && steps.box64.outcome == 'success' && steps.box64.outputs.reusable != 'false' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.cache.outputs.artifact }}
+          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+          overwrite: true
+
       - name: Start Wine 10.0 under the new Box64 (advisory)
         id: wine_check
         # box64 <wine>/bin/wine --version, once, bounded, with the pack's
@@ -132,7 +167,7 @@ jobs:
 
       - name: Report the Box64 pack
         if: always()
-        # Only a report: its failure must not cost the pack its upload.
+        # Only a report, after the upload: its failure changes nothing.
         continue-on-error: true
         env:
           ROOT_OUTCOME: ${{ steps.root.outcome }}
@@ -202,38 +237,6 @@ jobs:
             ${{ env.ROOTFS }}/tmp/jukahub-runtime-build/box64-build/CMakeFiles/CMakeConfigureLog.yaml
           if-no-files-found: ignore
           retention-days: 14
-          overwrite: true
-
-      - name: Upload the Box64 pack
-        if: ${{ !cancelled() && (steps.box64.outcome == 'success' || steps.cache.outputs.hit == 'true') }}
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: wine-runtime-package
-          # The zip keeps the file modes an artifact would lose.
-          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
-          if-no-files-found: error
-          # Zipped already: zipping it again would only cost time.
-          compression-level: 0
-          retention-days: 30
-          # A re-run of this job replaces its own earlier upload instead of
-          # failing on the name.
-          overwrite: true
-
-      - name: Keep the Box64 pack for later runs
-        # A fresh build that passed its checks, on a push to main: the only
-        # kind the lookup above accepts. A reused pack is kept already, and a
-        # gcc 9 one is not what its sources' name stands for.
-        if: ${{ !cancelled() && steps.box64.outcome == 'success' && steps.box64.outputs.reusable != 'false' && steps.cache.outputs.artifact != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        continue-on-error: true
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ steps.cache.outputs.artifact }}
-          path: player/native/bin/JukaHub-Wine-linux-arm64.zip
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 90
           overwrite: true
 
       - name: Release the build root

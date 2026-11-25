@@ -40,8 +40,11 @@ package main
 // installing and then failing every start at RetroArch's dlopen. Where
 // RetroArch starts on JukaHub's glibc, JukaHub writes stand-ins for libusb,
 // libudev and libbluetooth instead (coredevlibs.go, coredevstub.go; since
-// 2026-11-22, when the buildbot's Dolphin needed libusb on a Brick Pro);
-// libevdev it does not, so a build that links it stays refused.
+// 2026-11-22, when the buildbot's Dolphin needed libusb on a Brick Pro), and
+// since 2026-11-24 for the X Input extension, libXi, which the same Dolphin
+// links for its X11 input backend (a Smart Pro's firmware had every other
+// library that build links); libevdev it does not, so a build that links it
+// stays refused.
 
 import (
 	"debug/elf"
@@ -131,8 +134,8 @@ func coreTrimuiMisfit(core, crc string) string {
 }
 
 // coreDeviceLibs are the device-access libraries coreDeviceLibLoadProblem
-// looks for, by the stem coreLibIs compares.
-var coreDeviceLibs = []string{"libudev.so", "libusb-1.0.so", "libbluetooth.so", "libevdev.so"}
+// looks for, by the stem coreLibIs compares (libXi: X11's input devices).
+var coreDeviceLibs = []string{"libudev.so", "libusb-1.0.so", "libbluetooth.so", "libevdev.so", "libXi.so"}
 
 // coreDeviceLibLoadProblem is the device-library half of the load check (see
 // the file comment): a build that links one of coreDeviceLibs loads only where

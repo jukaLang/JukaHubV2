@@ -10,10 +10,13 @@ package main
 // that .bak rather than looking deleted.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 // TestNotesSaveIsAtomicAndLeavesABackup checks the write path: no .tmp is left
@@ -76,6 +79,37 @@ func TestNotesLoadWithoutAnyFileStartsEmpty(t *testing.T) {
 	notesLoad()
 	if len(notes.store.Notes) != 0 {
 		t.Errorf("a corrupt store with no backup produced notes: %+v", notes.store.Notes)
+	}
+}
+
+// TestNotesPhoneEditsNeverOverwriteUnseen pins how notes arrive from outside
+// (companion_notes.go): a phone save naming a revision the note has moved past
+// is refused with the note as it is now, text is cleaned on the way in, and
+// the names "Save as file" makes from titles stay single, legal file names.
+func TestNotesPhoneEditsNeverOverwriteUnseen(t *testing.T) {
+	notes.storePath = filepath.Join(t.TempDir(), "notes.json")
+	notes.store = noteStore{NextID: 1, Folders: []string{"All", "Personal", "Work"}}
+	notes.store.Notes = []noteEntry{{ID: 1, Title: "list", Content: "milk", Folder: "Personal", Rev: 2}}
+	now := time.Now()
+
+	_, _, cur, err := notesPhoneDo(notesPhoneRequest{Action: "save", ID: 1, Rev: 1, Title: "list", Content: "milk, eggs"}, now)
+	if !errors.Is(err, errNotesPhoneConflict) || cur == nil || cur.Content != "milk" {
+		t.Fatalf("a save from an old revision was not refused: err=%v cur=%+v", err, cur)
+	}
+	_, saved, _, err := notesPhoneDo(notesPhoneRequest{Action: "save", ID: 1, Rev: 2, Title: "list\nx", Folder: "work", Content: "milk\r\neggs\x00"}, now)
+	if err != nil || saved == nil || saved.Rev != 3 || saved.Title != "list x" || saved.Folder != "Work" || saved.Content != "milk\neggs" {
+		t.Fatalf("save = %+v, %v", saved, err)
+	}
+	if _, _, _, err := notesPhoneDo(notesPhoneRequest{Action: "save", Folder: "Nope", Content: "x"}, now); !errors.Is(err, errNotesPhoneFolder) {
+		t.Errorf("an unknown folder was accepted: %v", err)
+	}
+	for title, want := range map[string]string{"a/b\\c:d": "a-b-c-d", "..": "Note", "CON": "CON_", " trip. ": "trip"} {
+		if got := notesFileName(title); got != want {
+			t.Errorf("notesFileName(%q) = %q, want %q", title, got, want)
+		}
+	}
+	if got := notesFileName(strings.Repeat("é", 50)); len(got) > 60 || !utf8.ValidString(got) {
+		t.Errorf("a long title made %q", got)
 	}
 }
 

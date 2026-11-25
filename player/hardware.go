@@ -25,6 +25,10 @@ type logBuffer struct {
 	// version changes on every write and clear, so the Logs screen re-reads
 	// the buffer only when there is something new (systool_logs.go).
 	version uint64
+	// appended counts every line ever appended (a clear does not reset it):
+	// a launch report asks for the lines written since its launch started
+	// (Mark, LinesSince; launchreport.go).
+	appended uint64
 }
 
 // Write appends one line per newline-separated chunk, so the buffer can stand
@@ -41,6 +45,7 @@ func (b *logBuffer) Append(line string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.version++
+	b.appended++
 	b.lines = append(b.lines, line)
 	b.bytes += len(line) + 1
 	if b.max <= 0 {
@@ -89,6 +94,33 @@ func (b *logBuffer) Version() uint64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.version
+}
+
+// Mark is the number of lines appended so far, for LinesSince.
+func (b *logBuffer) Mark() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.appended
+}
+
+// LinesSince copies the lines appended after mark that the buffer still
+// holds, oldest first; at most max of them (the newest), when max > 0.
+func (b *logBuffer) LinesSince(mark uint64, max int) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if mark >= b.appended {
+		return nil
+	}
+	n := len(b.lines)
+	if since := b.appended - mark; since < uint64(n) {
+		n = int(since)
+	}
+	if max > 0 && n > max {
+		n = max
+	}
+	out := make([]string, n)
+	copy(out, b.lines[len(b.lines)-n:])
+	return out
 }
 
 // Snapshot copies the buffered lines, oldest first, with the version they

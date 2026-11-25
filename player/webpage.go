@@ -502,6 +502,11 @@ type webStyle struct {
 	// It inherits like a real browser's, so `ul { list-style: none }` reaches
 	// the items, which is how nav menus hide their bullets.
 	ListStyle int
+	// ListPadSet is set on a ul, ol or menu whose page sets its start padding
+	// (a reset's `* { padding: 0 }`, Bootstrap's `.nav`): its items drop the
+	// reader's 18px list gutter, which stands in for the UA sheet's 40px of
+	// list padding the page has replaced (webParser.dropListGutter).
+	ListPadSet bool
 	// LineHeight is the author's line-height in CSS px; 0 leaves the reader's
 	// row grid in charge. It inherits, so `body { line-height: 1.6 }` spaces
 	// every paragraph the way the design intended.
@@ -1072,6 +1077,17 @@ type webBlock struct {
 	// TableEmptyRow marks a <tr> that emitted no cell blocks. Layout still
 	// reserves its row height, so a pure rowspan gap does not collapse.
 	TableEmptyRow bool
+	// TableEmptyCell marks the block of a table cell that had nothing to draw
+	// (<td></td>, <td>&nbsp;</td>): it still takes its column, so the cells
+	// after it stay in theirs (webParser.keepEmptyCell). CellBlankLine makes it
+	// one empty line tall, as a browser draws a cell whose only text is a
+	// no-break space or a <br>.
+	TableEmptyCell bool
+	CellBlankLine  bool
+	// Spacer marks the block of an element whose only text was a no-break
+	// space and whose page gives it a height: layout skips that height, rounded
+	// like a margin (webParser.keepSpacer).
+	Spacer bool
 	// CollapseEdges is the resolved border-collapse result for this cell: at
 	// most one winning edge per side, painted by layout instead of the ordinary
 	// per-side border flags.
@@ -1334,6 +1350,9 @@ type webRunPos struct {
 	// Control carries the form control this run draws, if any.
 	Control    *webControl
 	BoxW, BoxH int32
+	// Field is a text field's own border and corner radius from the page's
+	// CSS (webPaintField); nil leaves the plain filled box.
+	Field *webInlineChip
 	// Boxes and BoxWidth are the container boxes this run belongs to and the
 	// used column width at the point it was laid out. The container pass uses
 	// them to paint a card, sidebar or hero around all of its child runs.
@@ -1912,6 +1931,10 @@ type webFrame struct {
 	// so its end knows whether any opened inside it (webpage_floats.go).
 	floatRoot int
 	floatsAt  int
+	// blankLine is set on a table cell, or a block outside tables, when text a
+	// browser draws as an empty line — no-break spaces — was found in it
+	// (webParser.markBlankLine).
+	blankLine bool
 }
 
 // webContainerInfo is one containment container's element facts. The size
@@ -11708,6 +11731,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			p.openInlineRow(style)
 		}
 		if style.DisplayInlineBlock || p.parentIsFlexContainer() {
+			p.dropListGutter(&style)
 			p.flush()
 			p.push(el, style, "block", attrs)
 			return
@@ -11719,6 +11743,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		return
 	}
 	if name == "li" {
+		p.dropListGutter(&style)
 		p.closeInlineRow()
 		p.flush()
 		// <li value="10"> renumbers its ordered list from this item on.
@@ -12125,6 +12150,17 @@ func (p *webParser) endTag(name string) {
 		}
 		if name == "q" && !afterSet {
 			p.addTextStyled("”", p.stack[i].style)
+		}
+		// A table cell with nothing to draw still takes its column; a cell
+		// left open closes with its row or table (keepEmptyCell). A spacer
+		// paragraph keeps its height (keepSpacer).
+		for k := len(p.stack) - 1; k >= i; k-- {
+			switch f := &p.stack[k]; {
+			case f.style.CellOwn && f.kind == "block":
+				p.keepEmptyCell(f)
+			case f.blankLine && f.style.TableRole == webTableRoleNone && (f.kind == "block" || f.kind == "list"):
+				p.keepSpacer(f)
+			}
 		}
 		if p.stack[i].kind == "block" || p.stack[i].kind == "list" || p.stack[i].kind == "contents" {
 			p.flush()
@@ -12983,6 +13019,11 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	webResolveBoxSides(merged, rank)
 	webResolveBorderColor(merged, rank)
 	webDropUAInlineMargins(&st, el.tag, merged)
+	st.ListPadSet = false
+	switch el.tag {
+	case "ul", "ol", "menu":
+		_, st.ListPadSet = merged["padding-left"]
+	}
 	parentHeight := p.webContainingBlockHeight(el)
 	applyWebDecls(&st, merged)
 	webResolvePercentageHeights(&st, merged, parentHeight)
@@ -13501,6 +13542,17 @@ func (p *webParser) popCounterResets(names []string) {
 		} else {
 			p.counters[name] = stack
 		}
+	}
+}
+
+// dropListGutter takes the reader's 18px list gutter (applyWebTagDefaults) off
+// an item whose list's start padding the page sets itself (ListPadSet). That
+// gutter stands in for the UA sheet's 40px of list padding: a nav menu reset
+// to `ul { padding: 0 }` lined its links up 18px in, and a floated menu item
+// (html5test's header) lost that much of its own width to it.
+func (p *webParser) dropListGutter(style *webStyle) {
+	if n := len(p.stack); n > 0 && p.stack[n-1].kind == "list" && p.stack[n-1].style.ListPadSet {
+		style.Indent = math.Max(0, style.Indent-18)
 	}
 }
 
@@ -14096,6 +14148,12 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 	collapsed := strings.Join(strings.Fields(text), " ")
 	if collapsed == "" {
 		p.space = true
+		// strings.Fields drops no-break spaces too, which a browser keeps: a
+		// table cell holding only &nbsp; is one empty line tall
+		// (keepEmptyCell), a spacer paragraph keeps its height (keepSpacer).
+		if strings.Trim(text, " \t\n\r\f") != "" {
+			p.markBlankLine()
+		}
 		return
 	}
 	// Whitespace can sit on either side of a tag boundary: `<b>x</b> next`
@@ -14175,14 +14233,7 @@ func (p *webParser) flush() {
 	block := p.current
 	p.current = nil
 	// Drop a block that only carried whitespace.
-	hasText := false
-	for _, run := range block.Runs {
-		if strings.TrimSpace(strings.ReplaceAll(run.Text, "\n", "")) != "" {
-			hasText = true
-			break
-		}
-	}
-	if !hasText && block.Bullet == "" && !block.Rule && !block.Image && !block.Video && !block.Placeholder {
+	if !webBlockKept(block) {
 		return
 	}
 	for i := range block.Runs {
@@ -14191,6 +14242,21 @@ func (p *webParser) flush() {
 		}
 	}
 	p.blocks = append(p.blocks, *block)
+}
+
+// webBlockKept reports whether a finished block draws anything — text, a list
+// marker, a rule, a picture, a frame — or holds the column of an empty table
+// cell (keepEmptyCell). flush drops the rest.
+func webBlockKept(block *webBlock) bool {
+	if block.Bullet != "" || block.Rule || block.Image || block.Video || block.Placeholder || block.TableEmptyCell || block.Spacer {
+		return true
+	}
+	for _, run := range block.Runs {
+		if strings.TrimSpace(strings.ReplaceAll(run.Text, "\n", "")) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Layout ---------------------------------------------------------------
@@ -14318,6 +14384,9 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		}
 		font := getFontSized(config, elem.Font, size)
 		fonts[size] = font
+		// The size getFontSized opened it at, which a fallback face for a
+		// script it lacks is opened at too (webpage_script.go).
+		webNoteFaceSize(font, a11yScaleFontSize(uiLegibleFontSize(size)))
 		return font
 	}
 	// Bold, italic and monospace runs are measured and drawn in faces of their
@@ -14934,8 +15003,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if len(layout.Rows) >= webMaxRows {
 			return
 		}
+		// A line whose glyphs fit one row takes one. The 4px of air between
+		// lines is only added to a face taller than a row: text set a little
+		// larger than the body with no line-height of its own (DuckDuckGo's
+		// 18px result titles, an h3) used to take two rows a line for them.
 		slots := int32(1)
-		if need := int32(math.Ceil(float64(fontH+4) / float64(rowH))); need > slots {
+		if need := int32(math.Ceil(float64(fontH+4) / float64(rowH))); need > slots && fontH > rowH {
 			slots = need
 		}
 		idx := int32(len(layout.Rows))
@@ -15153,6 +15226,17 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			skipRows(1)
 			previousMarginBot = 0
 			shiftRelative()
+			continue
+		}
+		if block.Spacer && block.FlexGroup == 0 {
+			// A spacer paragraph (webParser.keepSpacer) is its height and
+			// margins, rounded like margins; its own box pads the rest. Inside
+			// a flex or grid item it waits for the item's own pass.
+			if len(layout.Rows) > 0 {
+				skipRows(marginRows(math.Max(block.MarginTop, previousMarginBot)))
+			}
+			skipRows(marginRows(webHeightContentTarget(block.Style, block.Style.Height)))
+			previousMarginBot = block.MarginBot
 			continue
 		}
 		// A run of blocks tagged with one flex group is that container's
@@ -15745,6 +15829,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			var chip *webInlineChip
 			if run.Style.InlineChip {
 				c := webRunChip(&run.Style, baseSize, d)
+				if run.Style.Control != nil && run.Style.Height > 0 {
+					if f := fontAtStyle(run.Style); f != nil {
+						webChipHeight(&c, &run.Style, int32(f.Height()), baseSize, rowH)
+					}
+				}
 				chip = &c
 			}
 			// An inline-block (a button, a badge) is atomic: the line may break
@@ -15860,6 +15949,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							font = f
 						}
 					}
+					// A word in a script the face cannot draw (日本語, a Persian word) is set
+					// in a face that can, a right-to-left word shaped and turned
+					// for SDL_ttf's left-to-right drawing (webpage_script.go).
+					font, word = webScriptWord(font, word)
 					if strings.Contains(word, webSoftHyphen) {
 						// &shy; is a break point, not a glyph (webpage_hints.go):
 						// a word too long for the rest of the line breaks at the
@@ -15984,6 +16077,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						}
 						if boxW <= 0 {
 							boxW = int32(baseSize * 12)
+						}
+						// `width: 55%; max-width: 600px` (DuckDuckGo's search
+						// box) stops growing at the maximum.
+						if mw := webConstraintLength(run.Style.MaxWidth, run.Style.MaxWidthPct, avail, baseSize/16); mw > 0 {
+							boxW = min(boxW, int32(math.Round(mw*baseSize/16)))
 						}
 						if boxW > avail {
 							boxW = avail
@@ -16139,6 +16237,14 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							pos.ChipTrail, pos.ChipRight = trailChip, run.ClosesChip
 						}
 					}
+					if ctrl := run.Style.Control; boxW > 0 || (ctrl != nil && ctrl.Kind == "select" && chip == nil) {
+						// A text field or a select keeps the border and corners its
+						// page gives it: a search box styled white on a white page
+						// used to be drawn as a bare word (webPaintField).
+						if frame := webRunChip(&run.Style, baseSize, d); frame.hasBorder() || frame.radius > 0 {
+							pos.Field = &frame
+						}
+					}
 					leadDone = true
 					// A line with no room beside a float starts below it.
 					takeWait()
@@ -16201,6 +16307,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		flushLine(true)
 
 		endGrid := int32(len(layout.Rows))
+		// A table cell whose only text was a no-break space is one empty line
+		// tall (webParser.keepEmptyCell).
+		if block.CellBlankLine && endGrid == startGrid {
+			skipRows(1)
+			endGrid = int32(len(layout.Rows))
+		}
 		// A pixel height is a floor for the flow box: short content pads out,
 		// taller content keeps its rows (CSS overflow is not clipped).
 		if minBoxH := webHeightContentTarget(block.Style, block.Style.Height) * baseSize / 16; minBoxH > 0 {

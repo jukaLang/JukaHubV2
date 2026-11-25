@@ -30,11 +30,20 @@ few minutes; **later launches** still take tens of seconds before a window
 appears. Programs that need anti-cheat, .NET, a Windows installer that pulls
 more downloads, or a GPU feature the device lacks will not run.
 
+A game that checks the graphics card's memory before it starts, or picks its
+textures by it, sees what Settings → Games & emulators → **Video memory
+(VRAM)** assigns: JukaHub passes it to Wine as
+`WINE_D3D_CONFIG=VideoMemorySize=<MB>`, what Winlator's Video Memory Size sets.
+On Auto, Wine guesses from the GPU (see
+[DEVICE_TUNING.md](DEVICE_TUNING.md#video-memory-vram)).
+
 ## Starting a program
 
-No Windows program at hand? On the handheld, press **A** on the empty list,
-or on **Sample program** in Setup: JukaHub downloads Notepad++ to try Windows
-apps with (see [The sample program](#the-sample-program)). Otherwise:
+No Windows program at hand? On the handheld the list always has **Wine Test
+(built in)**: press **A** on it to see that Windows programs run (see [The
+Wine test](#the-wine-test)). **Y** on that list, or **Sample program** in
+Setup, downloads Notepad++ to try a real application with (see [The sample
+program](#the-sample-program)). Otherwise:
 
 1. Copy the program into one of these folders (up to four folders deep):
 
@@ -66,13 +75,55 @@ for a Wine game profile too. If another game took the screen while Windows was
 being prepared, the launch stops there and that game keeps the screen and the
 pad.
 
+## The Wine test
+
+JukaHub carries one small Windows program of its own, so a handheld can show
+in a minute that Wine works — no download, no program of your own needed.
+Opening Windows Apps puts it in the list as **Wine Test (built in)**
+(`data/windows-apps/Wine Test/WineTest.exe`, below your own programs); **A**
+starts it like any program, through the setup page first when the runtime is
+not installed yet. It opens one full-screen window:
+
+- **Wine is working!**, with what it runs on: the Wine version, the host
+  system and kernel, the Windows version Wine reports, the processor (and
+  whether Box64 translates it), the screen and the memory;
+- a ball that moves and a clock that ticks, with the frames drawn and the
+  frame rate, so a frozen picture is obvious;
+- every button, key, click and wheel turn it receives, named with the pad
+  button JukaHub maps it from ([In a Windows program](#in-a-windows-program)),
+  so the mouse and keys can be checked; a click leaves a ripple where it
+  landed;
+- a short chime through Windows' own sound when the window opens (**R1** /
+  Space plays it again), or a line saying Windows found no sound device.
+
+**Y** / Esc, its **Close** button or **Select + Start** closes it. When it
+ends, a toast on the handheld says how it went — *Wine test passed: Windows
+drew its window (N frames) and played its chime*, or what did not happen —
+read from the lines it prints into its log (`jukahub-winetest: started`, `…
+first frame drawn`, `… sound played`, `… closed`). A test that drew its window
+is never reported as a failed launch, however quickly it was closed.
+
+It is a 64-bit GDI program of about 40 KB with no C runtime: user32, gdi32,
+kernel32, ntdll and winmm only. Its source is `player/winetest/winetest.c`;
+`python3 player/winetest/mkwinetest.py --check` builds it with an ordinary
+x86-64 Linux gcc in the Microsoft calling convention, writes the PE file
+itself (position independent, with an empty relocation block, so it loads at
+any address) and runs it under `pe_smoke.c`, which loads it like Windows does
+and drives a scripted session against stand-ins for the DLLs. The result,
+`winetest.exe.gz`, is embedded in JukaHub; on a PC nothing is installed,
+because Windows runs programs itself.
+
+Delete the folder to remove it: it is not put back by itself. **Wine test**
+(the last row of Setup) puts it back and starts it. A folder called `Wine
+Test` that JukaHub did not make is never touched.
+
 ## The sample program
 
-So there is something to try Wine with, Windows Apps downloads one well-known
-program on request: **Notepad++ 8.9.9.1**, a Notepad-class editor that draws
-its own windows with GDI, the kind of program this page calls the target.
-**A** on the empty list, or on **Sample program** (the fourth row of Setup),
-gets it:
+So there is something real to try Wine with, Windows Apps downloads one
+well-known program on request: **Notepad++ 8.9.9.1**, a Notepad-class editor
+that draws its own windows with GDI, the kind of program this page calls the
+target. **Y** on a list that holds only the Wine test, **A** on an empty list,
+or **Sample program** (the fourth row of Setup) gets it:
 
 1. Both of its portable builds come from Notepad++'s own GitHub release, about
    16 MB together: the **64-bit** one, which Box64 runs directly, and the
@@ -190,7 +241,7 @@ and named in the app's log.
 |-------|--------|
 | D-pad Up / Down | Move through the programs |
 | A / Enter | Start the selected program; on an empty list, download the sample program |
-| Y / `y` / `d` | Display: Windows (GDI) or OpenGL, for this program |
+| Y / `y` / `d` | Display: Windows (GDI) or OpenGL, for this program; while the list holds only the Wine test, **Y** / `y` downloads the sample program |
 | X / `x` / `h` | The setup page |
 | Start / `r` / F5 | Rescan the folders |
 | B / Esc | Close setup, then the launcher |
@@ -241,10 +292,11 @@ programs that need typing are out of reach for now.
 
 ## First run on a device
 
-1. Install the runtime (see [Automatic setup](#automatic-setup)) and get the
-   sample program ([The sample program](#the-sample-program)), or copy one
-   small Windows program into `data/windows-apps`: a portable GDI tool, or an
-   old 2D game.
+1. Install the runtime (see [Automatic setup](#automatic-setup)) and start
+   the Wine test ([The Wine test](#the-wine-test)); then get the sample
+   program ([The sample program](#the-sample-program)), or copy one small
+   Windows program into `data/windows-apps`: a portable GDI tool, or an old 2D
+   game.
 2. Start it and time it: the first launch prepares Windows for a few minutes.
 3. Check, in this order: does a window appear; is there a pointer; do the
    sticks move it and does **A** click; do the D-pad, **Start** and **Y** act as

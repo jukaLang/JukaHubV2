@@ -654,7 +654,7 @@ func screenRecPageOpen(game libraryGame) {
 	}
 	chooseGameLauncher(game, func(launcher string) {
 		if err := launchLibraryGame(game, launcher); err != nil {
-			ShowToast("Cannot launch "+game.Label()+": "+firstLine(err.Error()), ToastKindError)
+			gameLaunchErrorToast(game.Label(), err)
 		}
 	})
 }

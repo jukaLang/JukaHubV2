@@ -63,7 +63,7 @@ func playRecentGameWith(g recentGame, game libraryGame, launcher string) {
 		return
 	}
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+g.Title+": "+err.Error(), ToastKindError)
+		gameLaunchErrorToast(g.Title, err)
 		return
 	}
 	if gameLaunchWasHeld(game.Path) {

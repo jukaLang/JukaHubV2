@@ -1,0 +1,19 @@
+{
+  "notes": [
+    {
+      "id": 2,
+      "title": "New Notes",
+      "content": "sadsad\n",
+      "folder": "Personal",
+      "created_at": "2026-11-24T23:41:49.6224117-05:00",
+      "updated_at": "2026-11-24T23:41:53.8960666-05:00"
+    }
+  ],
+  "next_id": 2,
+  "folders": [
+    "All",
+    "Personal",
+    "Work",
+    "Ideas"
+  ]
+}

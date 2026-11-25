@@ -144,10 +144,23 @@ func parseCMAPData(data []byte) ([]runeRange, error) {
 	if len(data) < 12 {
 		return nil, errShortFont
 	}
-	numTables := int(binary.BigEndian.Uint16(data[4:6]))
+	// A collection (.ttc: Windows' YaHei and Yu Gothic, Noto Sans CJK) holds
+	// several faces behind one header; SDL_ttf opens the first, so that face's
+	// table directory is the one read. Its offsets are from the file's start.
+	base := 0
+	if string(data[0:4]) == "ttcf" {
+		if len(data) < 16 {
+			return nil, errShortFont
+		}
+		base = int(binary.BigEndian.Uint32(data[12:16]))
+		if base < 0 || base > len(data)-12 {
+			return nil, errShortFont
+		}
+	}
+	numTables := int(binary.BigEndian.Uint16(data[base+4 : base+6]))
 	cmapOff := -1
 	for i := 0; i < numTables; i++ {
-		rec := 12 + i*16
+		rec := base + 12 + i*16
 		if rec+16 > len(data) {
 			break
 		}

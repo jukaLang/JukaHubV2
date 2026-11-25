@@ -378,7 +378,7 @@ func haEntityDomain(entityID string) string {
 // fetchHAEntities reads the entity list. The token is required: an instance
 // without one answers 401 and explaining that is more useful than pretending the
 // house has no lights.
-func fetchHAEntities(s smartHomeSettings) ([]haEntity, error) {
+func fetchHAEntities(ctx context.Context, s smartHomeSettings) ([]haEntity, error) {
 	if !s.hasHA() {
 		return nil, fmt.Errorf("set ha_url and ha_token")
 	}
@@ -389,7 +389,7 @@ func fetchHAEntities(s smartHomeSettings) ([]haEntity, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +417,7 @@ func fetchHAEntities(s smartHomeSettings) ([]haEntity, error) {
 // callHAService posts a toggle for one entity. It returns nil only when Home
 // Assistant accepted the request, so the panel can leave the switch where it was
 // on failure instead of lying for a frame.
-func callHAService(s smartHomeSettings, entityID string) error {
+func callHAService(ctx context.Context, s smartHomeSettings, entityID string) error {
 	domain := haEntityDomain(entityID)
 	if domain == "" {
 		return fmt.Errorf("invalid entity %q", entityID)
@@ -427,7 +427,7 @@ func callHAService(s smartHomeSettings, entityID string) error {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]string{"entity_id": entityID})
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -719,18 +719,18 @@ func parsePiholeV6(data []byte) (piholeSnapshot, error) {
 // fetchPihole probes v6 first and falls back to v5. A v6 instance answers
 // /admin/api.php with a redirect to the login page instead of JSON, so the
 // fallback is chosen by a failed parse, not only by a 404.
-func fetchPihole(s smartHomeSettings) (piholeSnapshot, error) {
+func fetchPihole(ctx context.Context, s smartHomeSettings) (piholeSnapshot, error) {
 	if !s.hasPiHole() {
 		return piholeSnapshot{}, fmt.Errorf("set pihole_url")
 	}
-	if snap, err := piholeV6Summary(s); err == nil {
+	if snap, err := piholeV6Summary(ctx, s); err == nil {
 		return snap, nil
 	}
-	return piholeV5Summary(s)
+	return piholeV5Summary(ctx, s)
 }
 
 // piholeV6Summary authenticates (when a password is set) and reads the summary.
-func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
+func piholeV6Summary(ctx context.Context, s smartHomeSettings) (piholeSnapshot, error) {
 	summaryURL, err := piholeV6URL(s.PiURL)
 	if err != nil {
 		return piholeSnapshot{}, err
@@ -742,7 +742,12 @@ func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
 			return piholeSnapshot{}, err
 		}
 		body, _ := json.Marshal(map[string]string{"password": s.PiToken})
-		resp, err := smartHomeHTTP.Post(authURL, "application/json", bytes.NewReader(body))
+		authReq, err := http.NewRequestWithContext(ctx, http.MethodPost, authURL, bytes.NewReader(body))
+		if err != nil {
+			return piholeSnapshot{}, err
+		}
+		authReq.Header.Set("Content-Type", "application/json")
+		resp, err := smartHomeHTTP.Do(authReq)
 		if err != nil {
 			return piholeSnapshot{}, fmt.Errorf("Pi-hole unreachable")
 		}
@@ -766,7 +771,7 @@ func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
 		// with "API seats exceeded".
 		defer piholeLogout(authURL, session.Session.SID)
 	}
-	req, err := http.NewRequest(http.MethodGet, summaryURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, summaryURL, nil)
 	if err != nil {
 		return piholeSnapshot{}, err
 	}
@@ -786,9 +791,11 @@ func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
 }
 
 // piholeLogout ends a v6 API session (DELETE /api/auth). Best effort: a session
-// that cannot be ended expires on Pi-hole's own clock.
+// that cannot be ended expires on Pi-hole's own clock. It runs even when the
+// refresh was stopped (leaving the screen must still free the seat), so only
+// the client's timeout bounds it.
 func piholeLogout(authURL, sid string) {
-	req, err := http.NewRequest(http.MethodDelete, authURL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, authURL, nil)
 	if err != nil {
 		return
 	}
@@ -800,12 +807,16 @@ func piholeLogout(authURL, sid string) {
 }
 
 // piholeV5Summary reads the legacy endpoint, which carries the token in the URL.
-func piholeV5Summary(s smartHomeSettings) (piholeSnapshot, error) {
+func piholeV5Summary(ctx context.Context, s smartHomeSettings) (piholeSnapshot, error) {
 	endpoint, err := piholeV5URL(s.PiURL, s.PiToken)
 	if err != nil {
 		return piholeSnapshot{}, err
 	}
-	resp, err := smartHomeHTTP.Get(endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return piholeSnapshot{}, err
+	}
+	resp, err := smartHomeHTTP.Do(req)
 	if err != nil {
 		return piholeSnapshot{}, fmt.Errorf("Pi-hole unreachable")
 	}
@@ -1174,7 +1185,9 @@ func smartHomeSnapshot() smartHomeSnapshotData {
 
 // refreshSmartHome probes every configured integration in parallel and stores
 // the result. Concurrent calls collapse into the running one: the panel's
-// refresh key can be mashed without spawning a goroutine per press.
+// refresh key can be mashed without spawning a goroutine per press. The Home
+// Assistant and Pi-hole requests run under the screen's context
+// (scenetasks.go): leaving it closes them and keeps what the panel showed.
 func refreshSmartHome(config *Config) {
 	smartHome.mu.Lock()
 	if smartHome.loading {
@@ -1183,6 +1196,7 @@ func refreshSmartHome(config *Config) {
 	}
 	smartHome.loading = true
 	smartHome.mu.Unlock()
+	ctx := sceneWorkContext()
 
 	settings := currentSmartHomeSettings(config)
 
@@ -1195,7 +1209,7 @@ func refreshSmartHome(config *Config) {
 		go func() {
 			defer wg.Done()
 			if settings.hasHA() {
-				ha, haErr = fetchHAEntities(settings)
+				ha, haErr = fetchHAEntities(ctx, settings)
 			}
 		}()
 
@@ -1204,7 +1218,7 @@ func refreshSmartHome(config *Config) {
 		go func() {
 			defer wg.Done()
 			if settings.hasPiHole() {
-				pi, piErr = fetchPihole(settings)
+				pi, piErr = fetchPihole(ctx, settings)
 			}
 		}()
 
@@ -1224,6 +1238,14 @@ func refreshSmartHome(config *Config) {
 
 		wg.Wait()
 
+		if ctx.Err() != nil {
+			// The screen was left mid-refresh: the closed requests are not
+			// "unreachable", so the last good state stays for the next visit.
+			smartHome.mu.Lock()
+			smartHome.loading = false
+			smartHome.mu.Unlock()
+			return
+		}
 		if piErr != nil {
 			pi.Configured = settings.hasPiHole()
 			pi.Err = piErr.Error()
@@ -1257,7 +1279,9 @@ func refreshSmartHome(config *Config) {
 // call, and a refresh follows so the real state wins if a scene overrode it.
 func toggleSmartHomeEntity(config *Config, entityID string) error {
 	settings := currentSmartHomeSettings(config)
-	if err := callHAService(settings, entityID); err != nil {
+	// A press finishes even if its screen is left at once: only the
+	// client's timeout bounds it.
+	if err := callHAService(context.Background(), settings, entityID); err != nil {
 		return err
 	}
 	trophyEvent(tkSmartHome)

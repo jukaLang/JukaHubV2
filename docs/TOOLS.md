@@ -130,3 +130,11 @@ The keyboard's tool row pastes, and it opens with the last text, so a second
 code is an edit. Up to 1,200 characters; past 300 the code uses lower error
 correction, which keeps its squares larger. The text is kept only until
 JukaHub closes.
+
+**X** on the code (**S** with a keyboard) saves it as a picture: a PNG of
+black squares on white with the proper margin, about 1,000 pixels square,
+named `qr_<date>_<time>.png`, in the screenshots folder (JukaHub's own
+`screenshots` folder, or where `JUKAHUB_SCREENSHOT_DIR` points) — the folder
+the Photos and wallpaper pickers already list, and that the phone's Files
+card reaches. The code stays on screen; a toast says where the file went.
+Pairing codes are never offered for saving: they carry the companion's PIN.

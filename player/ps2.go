@@ -327,7 +327,7 @@ func ps2PrepareLibraryLaunch(game libraryGame, launcher string) (deferred bool, 
 		}
 		ps2Resume = game.Path
 		if err := launchLibraryGame(game, next); err != nil {
-			ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+			gameLaunchErrorToast(game.Title, err)
 		}
 		ps2Resume = ""
 	})

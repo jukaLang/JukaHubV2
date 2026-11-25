@@ -297,7 +297,7 @@ func raoWaitForWifi(game libraryGame, launcher string, gen uint64) {
 		err := launchLibraryGame(game, launcher)
 		raoWait.resume = ""
 		if err != nil {
-			ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+			gameLaunchErrorToast(game.Title, err)
 		}
 	})
 }

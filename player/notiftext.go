@@ -46,7 +46,9 @@ func wrapWordsMeasured(text string, maxW int32, maxLines int, measure func(strin
 paragraphs:
 	for _, para := range strings.Split(text, "\n") {
 		cur := ""
-		for _, word := range strings.Fields(para) {
+		// A no-break space (formatNumber's French and Russian digit groups)
+		// keeps its two sides on one line.
+		for _, word := range strings.FieldsFunc(para, isLineBreakSpace) {
 			if cur == "" {
 				if measure(word) <= maxW {
 					cur = word

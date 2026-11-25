@@ -271,7 +271,7 @@ func homeSearchCatalog() []homeSearchEntry {
 		// The handheld as a game controller for a PC or phone (ctlmode_ui.go).
 		{title: "Controller Mode", where: "Tools", icon: "gamepad", keys: "controller mode gamepad pc controller use as controller bluetooth gamepad xinput steam dolphin dsu cemu receiver jukapad joystick pad for pc", open: ctlModeOpen},
 		{title: "Trophies", where: "Games", icon: "trophy", keys: "trophies achievements playtime stats", scene: playtimeSceneName},
-		{title: "Smart Home", where: "Device", icon: "home", keys: "smart home lights home assistant", open: openSmartHomePanel},
+		{title: "Smart Home", where: "Device", icon: "home", keys: "smart home lights plugs tp-link kasa tapo google nest chromecast apple home assistant", open: smartHomeOpen},
 		{title: "Quit JukaHub", where: "Device", icon: "exit", keys: "exit quit power off shutdown close", open: func(*Config) { requestAppExit() }},
 	}
 	// Notes, Tasks, Voice Memos, Paint, Stopwatch, Pomodoro, Solitaire

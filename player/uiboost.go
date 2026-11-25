@@ -29,9 +29,10 @@ package main
 // a launch ends the boost with the session.
 //
 // It stands aside with Settings → Faster menus off; Automatic CPU speed off or
-// refused; the Battery Saver power mode or the low-battery saver; a warm chip
-// or battery (the heat guard steps nothing up then) or the kernel's own
-// thermal limit; the idle screens, whose low-power state needs the floor down
+// refused; a CPU frequency set by hand for the menus (cpufreq_manual.go); the
+// Battery Saver power mode or the low-battery saver; a warm chip or battery
+// (the heat guard steps nothing up then) or the kernel's own thermal limit;
+// the idle screens, whose low-power state needs the floor down
 // (saver_power.go ends the boost before it lowers the clock); the voice
 // assistant's own boost; a game. With the Performance power mode it holds for
 // as long as the hub is in front.
@@ -191,9 +192,10 @@ func uiBoostReconcile(now time.Time) time.Duration {
 	autoPerf.mu.Lock()
 	defer autoPerf.mu.Unlock()
 	// Read under the lock: a press that lands while the tick holds it is seen.
+	// A CPU frequency set by hand for the menus is theirs (cpufreq_manual.go).
 	until := uiBoostUntil.Load()
 	pinned := uiBoostPinned.Load()
-	want := uiBoostOn.Load() && (pinned || now.UnixNano() < until)
+	want := uiBoostOn.Load() && (pinned || now.UnixNano() < until) && cpuFreqFixedFor(false).khz <= 0
 	if autoPerf.stopped {
 		uiBoost.on = false
 		uiBoostLive.Store(false)
@@ -269,7 +271,7 @@ func uiBoostWhy(pinned bool, until int64, now time.Time) string {
 // with nothing else holding the clock and the chip not warm. Under
 // autoPerf.mu; it takes autoPerfHub.mu and voiceBoost.mu, as the tick does.
 func uiBoostEligibleLocked(s *autoPerfSession) bool {
-	if autoPerf.denied || !s.active || s.manual || s.foreign || s.boost || len(s.levels) == 0 ||
+	if autoPerf.denied || !s.active || s.manual || s.foreign || s.boost || s.fixed || len(s.levels) == 0 ||
 		s.idx < 0 || s.idx >= len(s.levels) || s.top < 0 || s.top >= len(s.levels) ||
 		!strings.HasPrefix(s.key, "hub:") || s.key == uiBoostIdleKey {
 		return false
@@ -305,7 +307,7 @@ func uiBoostEndLocked() bool {
 	uiBoost.on = false
 	uiBoostLive.Store(false)
 	s := &autoPerf.sess
-	if saverLowPowerEngaged() || !s.active || s.manual || s.foreign || s.boost ||
+	if saverLowPowerEngaged() || !s.active || s.manual || s.foreign || s.boost || s.fixed ||
 		s.idx < 0 || s.idx >= len(s.levels) {
 		// Not Automatic CPU speed's to write now: the session's own end puts
 		// back whatever is still the value it wrote.
@@ -363,6 +365,9 @@ func uiBoostSettingDetail(c *Config) string {
 		return "Not available: " + reason
 	case !uiBoostEnabled(c):
 		return "Off: menus run at the Automatic CPU speed level"
+	case cpuFreqHolds(c, false):
+		// Settings → CPU frequency holds the menus (cpufreq_manual.go).
+		return "Resting: the CPU frequency is set by hand"
 	case !autoPerfEnabled(c):
 		return "Needs Automatic CPU speed"
 	case mode == PowerModeBatterySaver || batterySaverActive:

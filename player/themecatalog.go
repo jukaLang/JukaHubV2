@@ -10,6 +10,7 @@ package main
 // rewrite a shipped config or a built-in palette.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,15 +116,20 @@ func parseCommunityCatalog(data []byte) (entries []communityTheme, skipped []str
 	return entries, skipped, nil
 }
 
-// fetchCommunityCatalog downloads and validates the index.
-func fetchCommunityCatalog(client *http.Client, url string) ([]communityTheme, []string, error) {
+// fetchCommunityCatalog downloads and validates the index. Cancelling ctx
+// closes the request.
+func fetchCommunityCatalog(ctx context.Context, client *http.Client, url string) ([]communityTheme, []string, error) {
 	if strings.TrimSpace(url) == "" {
 		return nil, nil, errors.New("no gallery address is configured")
 	}
 	if client == nil {
 		client = &http.Client{Timeout: themeCatalogTimeout}
 	}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -154,8 +160,10 @@ func communityThemeEntries() ([]communityTheme, string, bool) {
 // startThemeCatalogLoad loads the cached index once and then refreshes it in
 // the background. force asks for a fresh fetch even when one already finished;
 // a concurrent call is a no-op, so pressing Refresh twice does not double the
-// traffic.
-func startThemeCatalogLoad(force bool) {
+// traffic. ctx bounds the fetch: the gallery screen passes its scene context
+// (leaving it closes the request, and the next visit fetches again), the
+// update check its own.
+func startThemeCatalogLoad(ctx context.Context, force bool) {
 	themeCatalogState.mu.Lock()
 	if themeCatalogState.loading || (themeCatalogState.loaded && !force) {
 		themeCatalogState.mu.Unlock()
@@ -174,10 +182,15 @@ func startThemeCatalogLoad(force bool) {
 	}
 
 	go func() {
-		entries, skipped, err := fetchCommunityCatalog(nil, themeCatalogURL)
+		entries, skipped, err := fetchCommunityCatalog(ctx, nil, themeCatalogURL)
 		themeCatalogState.mu.Lock()
 		defer themeCatalogState.mu.Unlock()
 		themeCatalogState.loading = false
+		if err != nil && ctx.Err() != nil {
+			// Stopped because its screen was left: not an error to show,
+			// and not loaded, so the next visit fetches again.
+			return
+		}
 		themeCatalogState.loaded = true
 		if err != nil {
 			themeCatalogState.err = err.Error()

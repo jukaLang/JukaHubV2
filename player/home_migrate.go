@@ -35,6 +35,9 @@ type homeTileGeometry struct {
 }
 
 // legacyHomeTiles is the home layout jukaconfig.json shipped with in 0.4.0.
+//
+// remove after 2027-05-01 (with its case in migrateLegacyHomeLayout): an
+// upgrade shim for configs from 0.4.0.
 var legacyHomeTiles = []homeTileGeometry{
 	{HomeFocusContinue, "Continue", 32, 164, 480, 258, "Resume your latest activity"},
 	{HomeFocusMedia, "Media", 536, 164, 348, 121, "Watch and listen"},

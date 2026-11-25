@@ -653,7 +653,25 @@ func gameLaunchExec(launcher, name string, args []string) (*exec.Cmd, error) {
 
 // launchLibraryGame starts the game detached, records it in the recents list
 // and returns an error instead of toasting so the caller can pick the message.
+// A launch that fails before its program runs opens the launch card with its
+// bug report (launchreport.go), and its error comes back marked as shown: the
+// caller's toast (gameLaunchErrorToast) leaves it out. A launch that stops
+// within seconds gets the card from its diagnosis (gamediag.go).
 func launchLibraryGame(game libraryGame, launcher string) error {
+	rec := launchRecordForGame(game, launcher)
+	outer := launchAttempt
+	launchAttempt = rec
+	err := launchLibraryGameRun(game, launcher)
+	launchAttempt = outer
+	return launchLibraryFailed(rec, err)
+}
+
+// launchLibraryGameRun is launchLibraryGame's launch; launchAttempt is its
+// record. An answer that is not a failure — a gate holding the launch, a time
+// limit, "one moment", a console this device does not run — is marked as a
+// refusal (launchRefusal), which stays a toast.
+func launchLibraryGameRun(game libraryGame, launcher string) error {
+	rec := launchAttempt
 	if uiModeLaunchHeld(game) { // Kid mode: kids' games only, ports and Android too (uimode_kids.go)
 		return nil
 	}
@@ -673,25 +691,25 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if !regularFile(game.Path) {
 		// A game on a network drive says where it is (nas_download.go).
 		if err := nasLaunchMissingError(game); err != nil {
-			return err
+			return launchRefusal(err)
 		}
 		return fmt.Errorf("ROM is missing: %s", filepath.Base(game.Path))
 	}
 	// A check that may hold the launch with a card of its own, such as Game
 	// Ready (gamelaunch_hooks.go). launcher may still be "" here.
 	if held, err := gameLaunchRunGates(game, launcher); held || err != nil {
-		return err
+		return launchRefusal(err)
 	}
 	if strings.TrimSpace(launcher) == "" {
 		// The Xbox, the Xbox 360 and the other consoles only a desktop runs
 		// have a specific, actionable answer: what to install, or why this
 		// device cannot run them (emuLibraryLauncherHint).
 		if hint := emuLibraryLauncherHint(game.System); hint != "" {
-			return errors.New(hint)
+			return launchRefusal(errors.New(hint))
 		}
 		// A NextUI folder whose TAG has no pak says which pak (nextui.go).
 		if hint := nextuiMissingPakHint(game.Path); hint != "" {
-			return errors.New(hint)
+			return launchRefusal(errors.New(hint))
 		}
 		// Which names were looked for, and where, so a report says why. The
 		// card's own folder names (WS, CPS2) come first, as on the card; the
@@ -749,9 +767,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	}
 	// The game's saves come down from Google Drive / RomM first: off this
 	// (render) thread, and the launch runs again once they are here
-	// (savesync_auto.go).
+	// (savesync_auto.go). Its only error is "one moment".
 	if deferred, err := saveSyncDeferLaunch(game, launcher); err != nil || deferred {
-		return err
+		return launchRefusal(err)
 	}
 	// xemu without the Xbox firmware opens a window that cannot boot the
 	// disc: what it lacks is said here instead, and files the setup found
@@ -848,6 +866,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	}
 	cmd, err := gameLaunchExec(launcher, name, args)
 	if err != nil {
+		if rec != nil {
+			rec.Program, rec.Args = name, append([]string{name}, args...)
+		}
 		return err
 	}
 	ppssppPrepareManagedLaunch(launcher, cmd)
@@ -875,6 +896,7 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// A J2ME game's core runs `java` by name: Java's bin folder first on
 	// RetroArch's PATH (j2me.go).
 	if err := j2mePrepareLaunch(launcher, cmd); err != nil {
+		rec.noteCommand(cmd)
 		return err
 	}
 	// In-game indicators: the hook library and its file, with the child's
@@ -882,9 +904,19 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	ingameHUDPrepareLaunch(launcher, game.System, cmd)
 	// Last before the start: the game in a mount namespace of its own whose
 	// RetroArch runs on JukaHub's C library, when the plan above said so.
-	raGlibcApply(cmd, ragPlan)
+	if raGlibcApply(cmd, ragPlan) && rec != nil {
+		rec.Glibc = "JukaHub's glibc " + privateGlibcVersion + ", in a mount namespace of its own (" + ragPlan.why + ")"
+	}
 	// The script's own output, for the card when the game stops at once.
 	output := diag.captureLauncherOutput(cmd)
+	// The launch as it runs, for the card's bug report if it fails: the
+	// command as it is now, the logs it writes (launchreport.go).
+	diag.rec = rec
+	if rec != nil {
+		rec.RALog = diag.logPath
+		rec.OutPath = diag.outPath
+		rec.noteCommand(cmd)
+	}
 	// An Xbox game gets the whole handheld: cores, GPU, JukaHub's memory and
 	// the CPU first (xboxboost.go). Before the power profile, which it sets.
 	boost := xboxBoostBegin(xboxBoostKindForGame(game), game.Path, game.Title)
@@ -896,6 +928,7 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return err
 	}
 	noteGameChildStarted(cmd)
+	rec.noteStarted(cmd, diag.memFreeMB())
 	boost.started(cmd.Process.Pid)
 	gameLaunchRunStarted(game, launcher, cmd)
 	// A NextUI pak's minarch owns the power key while it plays (nextui.go).

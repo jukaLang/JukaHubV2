@@ -15,6 +15,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -974,8 +975,15 @@ func submitCurationVotes(store curationVotesFile) (path string, sent bool, err e
 	if err != nil {
 		return exported, false, err
 	}
+	// A press that sends the votes finishes even if its screen is left at
+	// once: only the client's timeout bounds it.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return exported, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(endpoint, "application/json", bytes.NewReader(body))
+	resp, err := client.Do(req)
 	if err != nil {
 		if exportErr == nil {
 			return exported, false, fmt.Errorf("could not reach the collector — saved locally instead")
@@ -1064,7 +1072,7 @@ func parseCurationFeed(data []byte) (curationFeed, error) {
 	return feed, nil
 }
 
-func fetchCurationFeed() (curationFeed, error) {
+func fetchCurationFeed(ctx context.Context) (curationFeed, error) {
 	endpoint := curationFeedURL()
 	if endpoint == "" {
 		return curationFeed{}, errors.New("no curation feed configured")
@@ -1073,8 +1081,12 @@ func fetchCurationFeed() (curationFeed, error) {
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return curationFeed{}, errors.New("curation feed URL is invalid")
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return curationFeed{}, err
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(endpoint)
+	resp, err := client.Do(req)
 	if err != nil {
 		return curationFeed{}, err
 	}
@@ -1119,10 +1131,17 @@ func refreshCurationFeedAsync() {
 	}
 	curationFeedCache.loading = true
 	curationFeedCache.mu.Unlock()
+	// The panel's screen owns the fetch (scenetasks.go): leaving it closes
+	// the request, which is then neither an error nor a load.
+	ctx := sceneWorkContext()
 	go func() {
-		feed, err := fetchCurationFeed()
+		feed, err := fetchCurationFeed(ctx)
 		curationFeedCache.mu.Lock()
 		curationFeedCache.loading = false
+		if err != nil && ctx.Err() != nil {
+			curationFeedCache.mu.Unlock()
+			return
+		}
 		curationFeedCache.loaded = true
 		curationFeedCache.at = time.Now()
 		if err != nil {

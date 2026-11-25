@@ -831,7 +831,7 @@ func pstoreBuildLabels() {
 		status += " · " + pluralizeCount(pstore.updates, "update", "updates")
 	}
 	if !pstore.savedAt.IsZero() {
-		status += " · saved list from " + pstore.savedAt.Format("Jan 2")
+		status += " · saved list from " + formatDateNear(appConfig, pstore.savedAt, time.Now())
 	}
 	pstore.headerStatus = status
 	pstore.installedLabel = ""

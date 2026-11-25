@@ -45,7 +45,7 @@ func openThemeCommunityPanel(config *Config) {
 	themeCommunityPanel.detail = false
 	themeCommunityRowRects = nil
 	themeCommunityPanelRect = sdl.Rect{}
-	startThemeCatalogLoad(false)
+	startThemeCatalogLoad(sceneWorkContext(), false)
 	// The Update tags come from the index already here, so they show offline.
 	go themeUpdateRescan()
 }
@@ -104,7 +104,7 @@ func themeCommunityActivate(config *Config) {
 }
 
 func themeCommunityRefresh() {
-	startThemeCatalogLoad(true)
+	startThemeCatalogLoad(sceneWorkContext(), true)
 	ShowToast("Refreshing community themes…", ToastKindInfo)
 }
 

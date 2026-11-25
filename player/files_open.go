@@ -102,7 +102,7 @@ func filesOpenROM(config *Config, entry FileEntry) bool {
 			return
 		}
 		if err := launchLibraryGame(game, launcher); err != nil {
-			showToast("Cannot start "+game.Title+": "+err.Error(), ToastError())
+			gameLaunchErrorToast(game.Title, err)
 			return
 		}
 		if gameLaunchWasHeld(game.Path) {

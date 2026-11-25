@@ -201,7 +201,9 @@ gap, not a silent promise.
   wholly outside the page or its clip (a skip link parked above the page, an
   off-canvas drawer, a carousel's next slide), a fully transparent positioned
   block and a screen-reader-only one (the 1×1 px `sr-only`/`visually-hidden`
-  box) are not painted. Links and fields inside layers and floats are D-pad
+  box) are not painted, nor is a fixed box parked wholly past the screen's
+  left, top or right edge even inside another positioned box (html5test's
+  `left: -240px` index menu). Links and fields inside layers and floats are D-pad
   and tap targets, a tap goes to the topmost one, and find-in-page searches
   their text.
 - `calc()` over `px`, `em`, `rem`, percentages and viewport units, plus
@@ -264,10 +266,22 @@ gap, not a silent promise.
   cell's text as an inline offset. Collapsed borders resolve
   conflicts by width, style priority (hidden > double > solid > dashed >
   dotted > none), then cell over row over table, and each interior edge
-  paints once.
+  paints once. A cell with nothing to draw (`<td></td>`, `<td>&nbsp;</td>`)
+  still takes its column, one blank line tall when it holds a no-break space
+  or a `<br>`. An auto table measures a cell's text on one line (its
+  max-content width) and, when the columns want more than the table has,
+  each keeps its longest word and gives up the room above it in proportion,
+  as a browser's automatic table layout does. A column whose cells are all
+  empty is a 2 px sliver and takes none of the spare room.
 
 ### Typography and paint
 
+- Words in a script the reader's face lacks (CJK, Arabic, Hebrew, Indic,
+  Thai…) are set in a fallback face that has them — a downloaded Noto CJK
+  face, a Noto font in JukaHub's fonts folder, or the machine's own — at the
+  run's size and weight (`webpage_script.go`). Right-to-left words are
+  reversed and Arabic letters joined through Unicode's presentation forms;
+  there is no full bidi reordering of phrases and no Indic shaping.
 - Colour, background colour, linear/radial/conic gradients and opacity, with
   every CSS colour form (`webpage_color.go`): hex, the 148 named colours at
   their exact values (`red` is #ff0000), the system colours (`Canvas`,
@@ -368,7 +382,9 @@ gap, not a silent promise.
   layers are skipped.
 - Borders in `solid`, `dashed`, `dotted`, `double`, `none` and `hidden`
   styles; border width and colour; outlines as a separate box edge with
-  `outline-offset`; list styles and list-style none.
+  `outline-offset`; list styles and list-style none. A list whose page sets
+  its start padding (`ul { padding: 0 }`) drops the reader's 18px item
+  gutter, which stands in for the browser's 40px list padding.
 - `visibility: hidden/collapse` keeps the element's flow and text metrics and
   suppresses its paint; a descendant with `visibility: visible` paints again.
 - `object-fit: fill/contain/cover/none/scale-down` and `object-position`
@@ -452,6 +468,11 @@ gap, not a silent promise.
   border. Their fallback content is not interpreted.
 - Forms: `input` (text/password/checkbox/radio/submit/range/etc.), `textarea`,
   `select`/`option`, `button`, `label`, `legend`, `output`, `progress`, `meter`.
+  A text field, textarea or select keeps the border and `border-radius` its
+  page gives it, a field's `max-width` caps its `width`, a button's `height`
+  sizes its box (label in the middle, at most three rows), a field's text
+  stands on the line's baseline beside buttons and labels, and controls side
+  by side are separate boxes.
 - Table structure: `table`, `thead`, `tbody`, `tfoot`, `tr`, `td`, `th`,
   `caption` render rows and cells through the table grid; `caption` is a
   centred block above the rows. `colspan`/`rowspan` claim grid slots, direct
@@ -494,7 +515,7 @@ mistaken for working CSS.
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
 | `@charset`, `@namespace` | Not applied. |
 | `@font-face`, `@keyframes`, `@page` | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
-| Floats inside a line, nested floated boxes, `shape-outside` | A floated inline element (`<span style="float:right">`) stays in its line, and a floated `<img>` floats on its own. Inside a floated box, inside a table cell, or past 600 floated boxes on a page, a floated element floats only its own text. A block that holds its floats and starts beside a float has its lines wrapped one by one, not its whole box narrowed. `shape-outside` is ignored: floats are rectangles. |
+| Floats inside a line, nested floated boxes, `shape-outside` | A floated inline element (`<span style="float:right">`) stays in its line, and a floated `<img>` floats on its own. Inside a floated box, inside a table cell, or past 600 floated boxes on a page, a floated element floats only its own text; a floated box is as wide as the floats inside it side by side (a floated menu of floated items). A block that holds its floats and starts beside a float has its lines wrapped one by one, not its whole box narrowed. `shape-outside` is ignored: floats are rectangles. |
 
 ## Draw-path fixture coverage
 

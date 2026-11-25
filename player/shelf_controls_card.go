@@ -179,7 +179,7 @@ func shelfCardAccept() {
 	shelfMarkSeen(shelfGameKey(game.Path))
 	shelfCard.passPath, shelfCard.passUntil = game.Path, time.Now().Add(shelfCardPassFor)
 	if err := launchLibraryGame(game, launcher); err != nil {
-		ShowToast("Cannot launch "+game.Title+": "+err.Error(), ToastKindError)
+		gameLaunchErrorToast(game.Title, err)
 		return
 	}
 	gameLib.recents = recentGames()

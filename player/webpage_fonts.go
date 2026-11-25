@@ -203,6 +203,7 @@ func webOpenReaderFace(path string, size, style int, cut bool) *ttf.Font {
 	// sanitizeForFont reads the coverage of the file actually drawn: a
 	// monospace face has box drawing and arrows Inter lacks.
 	registerFontPath(font, path)
+	webNoteFaceSize(font, size)
 	fontStyleCache[key] = font
 	if cut || style&ttf.STYLE_BOLD != 0 {
 		webBoldFaces.Lock()
@@ -429,6 +430,7 @@ func webSerifFace(size int, bold, italic bool) *ttf.Font {
 	// The plain embedded face is the Library theme's own (it also registers
 	// the face's character map); a styled one is a copy of its own.
 	plain := libThemeSerifFont(size)
+	webNoteFaceSize(plain, size)
 	if plain == nil || style == ttf.STYLE_NORMAL {
 		return plain
 	}
@@ -452,6 +454,7 @@ func webSerifFace(size int, bold, italic bool) *ttf.Font {
 	}
 	font.SetStyle(style)
 	registerFontPath(font, libThemeSerifName)
+	webNoteFaceSize(font, size)
 	fontStyleCache[key] = font
 	if bold {
 		webBoldFaces.Lock()

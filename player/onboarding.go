@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -769,6 +770,206 @@ func handleOnboardingMouse(mx, my int32, config *Config) bool {
 	return true
 }
 
+// The tour card's geometry in canvas pixels. The Y distances from the bottom
+// are measured up from the card's bottom edge: Skip and Next end 28px above
+// it, the progress dots sit at onbDotsY and a step's action button (when it
+// has one) at onbActionY, above the dots.
+const (
+	onbCardW       = int32(820)
+	onbCardPlainH  = int32(470)
+	onbCardListH   = int32(600)
+	onbCoinR       = int32(38)
+	onbCoinY       = int32(100)
+	onbTitleY      = int32(78)
+	onbDotsY       = int32(92)
+	onbActionY     = int32(148)
+	onbActionH     = int32(42)
+	onbButtonH     = int32(50)
+	onbContentGap  = int32(14)
+	onbRowGap      = int32(8)
+	onbRowMaxPitch = int32(72)
+)
+
+// onbTextGaps are the gaps above a text step's hint, status and info blocks.
+var onbTextGaps = [...]int32{14, 8, 6}
+
+// onbTextCuts are the line budgets onboardingTextBlocks tries in turn, as
+// body, hint, status and info: everything, then the hint's second line, the
+// info's, the status's, the body's fourth and third lines, the hint, the
+// body's second line, and on the shortest canvas the status.
+var onbTextCuts = [...][4]int{
+	{4, 2, 2, 2}, {4, 1, 2, 2}, {4, 1, 2, 1}, {4, 1, 1, 1}, {3, 1, 1, 1}, {2, 1, 1, 1}, {2, 0, 1, 1},
+	{1, 0, 1, 1}, {1, 0, 0, 1},
+}
+
+// onbTextBlocks are a text step's blocks, wrapped to the text column, in the
+// order they are drawn: the body, the hint, the live status line and the
+// result of the last action.
+type onbTextBlocks struct {
+	body, hint, status, info []string
+}
+
+// onbBlockH is the height of n lines drawn lineH apart; the last line's
+// leading is not part of the block.
+func onbBlockH(n int, lineH, leading int32) int32 {
+	if n <= 0 {
+		return 0
+	}
+	return int32(n)*lineH - leading
+}
+
+// height is how tall the blocks stand when draw stacks them.
+func (b onbTextBlocks) height(bodyFont, smallFont *ttf.Font) int32 {
+	h := onbBlockH(len(b.body), int32(bodyFont.Height())+6, 6)
+	for i, block := range [...][]string{b.hint, b.status, b.info} {
+		if len(block) == 0 {
+			continue
+		}
+		if h > 0 {
+			h += onbTextGaps[i]
+		}
+		h += onbBlockH(len(block), int32(smallFont.Height())+4, 4)
+	}
+	return h
+}
+
+// draw stacks the blocks from y down: the body in the body face, then the
+// hint, status and info lines in the small face, each in its own ink.
+func (b onbTextBlocks) draw(renderer *sdl.Renderer, config *Config, x, y int32, bodyFont, smallFont *ttf.Font, accent sdl.Color) {
+	top := y
+	for _, line := range b.body {
+		renderText(renderer, config, bodyFont, line, ColorTextSecondary(), x, y)
+		y += int32(bodyFont.Height()) + 6
+	}
+	if len(b.body) > 0 {
+		y -= 6
+	}
+	inks := [...]sdl.Color{ColorTextTertiary(), ColorTextSecondary(), accent}
+	for i, block := range [...][]string{b.hint, b.status, b.info} {
+		if len(block) == 0 {
+			continue
+		}
+		if y > top {
+			y += onbTextGaps[i]
+		}
+		for _, line := range block {
+			renderText(renderer, config, smallFont, line, inks[i], x, y)
+			y += int32(smallFont.Height()) + 4
+		}
+		y -= 4
+	}
+}
+
+// onboardingTextBlocks wraps a text step's blocks to width, giving up lines
+// in onbTextCuts' order until they fit in room; the last cut is kept when
+// none does.
+func onboardingTextBlocks(step onboardingStep, status, info string, bodyFont, smallFont *ttf.Font, width, room int32) onbTextBlocks {
+	var b onbTextBlocks
+	for _, cut := range onbTextCuts {
+		b = onbTextBlocks{
+			body:   onboardingWrap(bodyFont, step.body, width, cut[0]),
+			hint:   onboardingWrap(smallFont, step.hint, width, cut[1]),
+			status: onboardingWrap(smallFont, status, width, cut[2]),
+			info:   onboardingWrap(smallFont, info, width, cut[3]),
+		}
+		if b.height(bodyFont, smallFont) <= room {
+			break
+		}
+	}
+	return b
+}
+
+// onbWrapKey and onbWrapMemo remember the tour's wrapped text: the card draws
+// the same few sentences every frame, and a wrap measures word by word.
+type onbWrapKey struct {
+	font     *ttf.Font
+	text     string
+	width    int32
+	maxLines int
+}
+
+var onbWrapMemo = map[onbWrapKey][]string{}
+
+// onboardingWrap is wrapTextLines remembered by font, translated text, width
+// and line budget. Blank text is no lines.
+func onboardingWrap(font *ttf.Font, text string, width int32, maxLines int) []string {
+	if font == nil || maxLines <= 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	text = uiT(text)
+	key := onbWrapKey{font: font, text: text, width: width, maxLines: maxLines}
+	if lines, ok := onbWrapMemo[key]; ok {
+		return lines
+	}
+	if len(onbWrapMemo) >= 96 {
+		onbWrapMemo = map[onbWrapKey][]string{}
+	}
+	lines := wrapTextLinesRaw(font, text, width, maxLines)
+	onbWrapMemo[key] = lines
+	return lines
+}
+
+// onbRowFit lays out a column of tour rows: the distance from one row's top
+// to the next, a row's height, and what a row shows: its title over a
+// detail line (lines 2), the title alone in the body face (1), or the title
+// in the small face (0, the last resort on a short card at a large text
+// size).
+type onbRowFit struct {
+	pitch, rowH int32
+	lines       int
+}
+
+// onboardingRowFit fits n rows between top and bottom by measuring the type.
+// The rows used to switch to two lines at a fixed 50px; with the config's
+// 24px fonts that put a 30px title over a 30px detail in a 53px row, and the
+// detail ran across the border into the next row.
+func onboardingRowFit(n int, top, bottom int32, bodyFont, smallFont *ttf.Font) onbRowFit {
+	if n <= 0 || bodyFont == nil || smallFont == nil {
+		return onbRowFit{}
+	}
+	bodyH, smallH := int32(bodyFont.Height()), int32(smallFont.Height())
+	pitch := min((bottom-top+onbRowGap)/int32(n), onbRowMaxPitch)
+	fit := onbRowFit{pitch: pitch, rowH: pitch - onbRowGap}
+	switch {
+	case fit.rowH >= bodyH+smallH+12:
+		fit.lines = 2
+	case fit.rowH >= bodyH+10:
+		fit.lines = 1
+	default:
+		// Never shorter than its text: rows that touch read better than a
+		// label drawn over a border.
+		fit.rowH = max(fit.rowH, smallH+6)
+		fit.pitch = max(fit.pitch, fit.rowH+2)
+	}
+	return fit
+}
+
+// onbRowsNeed is the height n rows take at their roomy two-line size, which
+// a list step's card grows to when the screen has the room.
+func onbRowsNeed(n int, bodyFont, smallFont *ttf.Font) int32 {
+	if n <= 0 {
+		return 0
+	}
+	row := int32(bodyFont.Height()) + int32(smallFont.Height()) + 16
+	return int32(n)*(row+onbRowGap) - onbRowGap
+}
+
+// onbRowText draws a row's title, and its detail when the fit has room for
+// it, vertically centred in rect from x.
+func onbRowText(renderer *sdl.Renderer, config *Config, rect sdl.Rect, fit onbRowFit, x, width int32, title, detail string, ink sdl.Color, bodyFont, smallFont *ttf.Font) {
+	bodyH, smallH := int32(bodyFont.Height()), int32(smallFont.Height())
+	switch {
+	case fit.lines == 2 && detail != "":
+		y := rect.Y + (rect.H-bodyH-2-smallH)/2
+		renderText(renderer, config, bodyFont, ellipsize(bodyFont, title, width), ink, x, y)
+		renderText(renderer, config, smallFont, ellipsize(smallFont, detail, width), ColorTextTertiary(), x, y+bodyH+2)
+	case fit.lines >= 1:
+		renderText(renderer, config, bodyFont, ellipsize(bodyFont, title, width), ink, x, rect.Y+(rect.H-bodyH)/2)
+	default:
+		renderText(renderer, config, smallFont, ellipsize(smallFont, title, width), ink, x, rect.Y+(rect.H-smallH)/2)
+	}
+}
+
 func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if !onboarding.active || renderer == nil || config == nil {
 		return
@@ -786,38 +987,99 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	}
 	step := onboardingSteps[onboarding.step]
 
-	titleFont, _ := getCachedFont(config, "large")
-	bodyFont, _ := getCachedFont(config, "medium")
-	smallFont, _ := getCachedFont(config, "small")
+	// The design type scale (UX-1), as every panel draws. The tour asked for
+	// the config's "large", "medium" and "small" fonts, which the shipped
+	// config leaves at one 24px default: each hint was as big as the title and
+	// ran off the card, a button cut its label, and a row drew its second line
+	// across its own border.
+	titleFont := FontForRole(config, TypeTitle)
+	bodyFont := FontForRole(config, TypeBody)
+	smallFont := FontForRole(config, TypeLabel)
 	if titleFont == nil || bodyFont == nil || smallFont == nil {
 		return
 	}
+	titleH := int32(titleFont.Height())
+	bodyLineH := int32(bodyFont.Height()) + 6
 
 	// Dim the screen and focus the card.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	renderer.SetDrawColor(2, 5, 12, 190)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
-	cardW := int32(820)
+	cardW := onbCardW
 	if cardW > screenWidth-80 {
 		cardW = screenWidth - 80
 	}
 	if cardW < 420 {
 		cardW = screenWidth - 32
 	}
-	cardH := int32(470)
-	if step.kind == "setup" || step.kind == "start" || step.kind == "language" || step.kind == "layout" {
-		// The checklist and the language list need a row per entry; the plain
-		// steps do not.
-		cardH = 600
+
+	// The text column starts beside the coin on a wide card and under it on a
+	// narrow one. Everything in it is measured before the card's height is
+	// chosen, so the card grows to its text rather than the text running past
+	// the card.
+	wide := cardW >= 680
+	textOff, titleTop := int32(52), onbTitleY
+	if wide {
+		textOff = 52 + 2*onbCoinR + 34
+	} else {
+		titleTop = onbCoinY + onbCoinR + 14
 	}
-	if cardH > screenHeight-100 {
-		cardH = screenHeight - 72
+	textW := cardW - 44 - textOff
+	var titleLines []string
+	if step.kind == "language" {
+		// Its own table, in the highlighted language, drawn raw.
+		titleLines = []string{ellipsize(titleFont, onbLangTitle(), textW)}
+	} else {
+		titleLines = onboardingWrap(titleFont, step.title, textW, 2)
 	}
+	bodyTop := titleTop + max(int32(len(titleLines)), 1)*titleH + 12
+
+	// The band under the text: the action button when the step has one, the
+	// dots, then Skip and Next. The controls hint goes below the card, so the
+	// card never takes that room.
+	actionLabel := onboardingActionLabel(step.kind)
+	band := onbDotsY + onbContentGap
+	if actionLabel != "" {
+		band = onbActionY + onbContentGap
+	}
+	maxH := screenHeight - 2*(int32(smallFont.Height())+16)
+	if maxH < 240 {
+		maxH = screenHeight - 16
+	}
+
+	cardH := onbCardPlainH
+	var blocks onbTextBlocks
+	var lead []string // a list step's sentence above its rows
+	rowsTop := bodyTop
+	switch step.kind {
+	case "language":
+		cardH = onbCardListH
+	case "start", "setup", "layout":
+		n := len(homeArrangementChoiceList)
+		if step.kind != "layout" {
+			n = len(onboardingSetupRefresh(config, false))
+		}
+		if step.kind != "setup" {
+			lead = onboardingWrap(bodyFont, step.body, textW, 2)
+			if len(lead) > 0 {
+				rowsTop += onbBlockH(len(lead), bodyLineH, 6) + onbContentGap
+			}
+		}
+		cardH = max(onbCardListH, rowsTop+onbRowsNeed(n, bodyFont, smallFont)+band)
+	default:
+		// Every line while the card can grow to hold it; past that, the
+		// blocks give up lines (onbTextCuts) rather than spill.
+		status := onboardingStatus(config, step.kind)
+		blocks = onboardingTextBlocks(step, status, onboarding.info, bodyFont, smallFont, textW, maxH-band-bodyTop)
+		cardH = max(cardH, bodyTop+blocks.height(bodyFont, smallFont)+band)
+	}
+	cardH = min(cardH, maxH)
+
 	cx := (screenWidth - cardW) / 2
 	cy := (screenHeight - cardH) / 2
-	if cy < 24 {
-		cy = 24
+	if cy < 8 {
+		cy = 8
 	}
 
 	progress := 1.0
@@ -827,7 +1089,7 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	rise := int32((1 - progress) * 18)
 	cy += rise
 
-	// What the frame is built on, recorded for the layout test.
+	// What the frame is built on.
 	onboarding.card = sdl.Rect{X: cx, Y: cy, W: cardW, H: cardH}
 
 	// Soft shadow and card.
@@ -842,94 +1104,44 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, smallFont, stepLabel, WithAlpha(accent, 230), cx+52, cy+28)
 
 	// Large sequence coin.
-	coinR := int32(38)
-	coinX := cx + 52 + coinR
-	coinY := cy + 100
-	fillCircle(renderer, coinX, coinY, coinR, WithAlpha(accent, 28))
-	strokeRoundedRect(renderer, coinX-coinR, coinY-coinR, coinR*2, coinR*2, coinR, 2, WithAlpha(accent, 200))
+	coinX := cx + 52 + onbCoinR
+	coinY := cy + onbCoinY
+	fillCircle(renderer, coinX, coinY, onbCoinR, WithAlpha(accent, 28))
+	strokeRoundedRect(renderer, coinX-onbCoinR, coinY-onbCoinR, onbCoinR*2, onbCoinR*2, onbCoinR, 2, WithAlpha(accent, 200))
 	num := itoa(onboarding.step + 1)
 	nw, nh, _ := titleFont.SizeUTF8(num)
 	renderText(renderer, config, titleFont, num, accent,
 		coinX-int32(nw)/2, coinY-int32(nh)/2)
 
-	// Text column starts under the coin on narrow cards and beside it on wide
-	// ones. The body wraps in pixels so no sentence spills past the card.
-	textX := cx + 52
-	if cardW >= 680 {
-		textX = coinX + coinR + 34
-	}
-	textW := cx + cardW - 44 - textX
-	titleY := cy + 74
-	if cardW >= 680 {
-		titleY = cy + 78
-	}
-	if step.kind == "language" {
-		// Its own table, in the highlighted language, drawn raw.
-		title := ellipsize(titleFont, onbLangTitle(), textW)
-		renderTextRaw(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
-	} else {
-		title := ellipsize(titleFont, step.title, textW)
-		renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
+	textX := cx + textOff
+	for i, line := range titleLines {
+		if step.kind == "language" {
+			renderTextRaw(renderer, config, titleFont, line, ColorTextPrimary(), textX, cy+titleTop)
+			continue
+		}
+		renderText(renderer, config, titleFont, line, ColorTextPrimary(), textX, cy+titleTop+int32(i)*titleH)
 	}
 
-	bodyY := titleY + int32(titleFont.Height()) + 18
-	// Two lines — the same budget the card has always had — but word-wrapped:
-	// the rune cut that was here split a word across the break ("th" over
-	// "n shows" on the Brick) and appended "…" even when nothing was cut.
-	onboarding.bodyLines = nil
-	if step.kind == "start" {
-		// One line of body above the choices.
-		renderText(renderer, config, bodyFont, ellipsize(bodyFont, step.body, textW), ColorTextSecondary(), textX, bodyY)
-		bodyY += int32(bodyFont.Height()) + 16
+	// The rows end where the dots' band begins.
+	rowsBottom := cy + cardH - onbDotsY - onbContentGap
+	onboarding.bodyLines = lead
+	for i, line := range lead {
+		renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, cy+bodyTop+int32(i)*bodyLineH)
 	}
-	if step.kind == "setup" || step.kind == "start" {
-		onboardingRenderSetup(renderer, config, cy, cx, cardW, cardH, textX, textW, bodyY, bodyFont, smallFont, accent)
-	} else if step.kind == "language" {
-		// On a narrow card the text column starts under the coin, not beside
-		// it: the list begins below the coin.
-		listY := bodyY
-		if cardW < 680 && listY < coinY+coinR+14 {
-			listY = coinY + coinR + 14
-		}
-		onboardingRenderLanguage(renderer, config, cy, cardH, textX, textW, listY, bodyFont, smallFont, accent)
-	} else if step.kind == "layout" {
-		lines := wrapTextLines(bodyFont, step.body, textW, 2)
-		onboarding.bodyLines = lines
-		lineH := int32(bodyFont.Height()) + 6
-		for i, line := range lines {
-			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
-		}
-		onboardingRenderLayout(renderer, config, cy, cardH, textX, textW,
-			bodyY+int32(len(lines))*lineH+12, bodyFont, smallFont, accent)
-	} else {
-		lines := wrapTextLines(bodyFont, step.body, textW, 2)
-		onboarding.bodyLines = lines
-		lineH := int32(bodyFont.Height()) + 6
-		for i, line := range lines {
-			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
-		}
-
-		hintY := bodyY + int32(len(lines))*lineH + 16
-		if hintY < cy+cardH-140 {
-			renderText(renderer, config, smallFont, step.hint, ColorTextTertiary(), textX, hintY)
-		}
-		status := onboardingStatus(config, step.kind)
-		if status != "" {
-			statusY := hintY + int32(smallFont.Height()) + 8
-			if statusY < cy+cardH-162 {
-				renderText(renderer, config, smallFont, ellipsize(smallFont, status, textW), ColorTextSecondary(), textX, statusY)
-			}
-		}
-		if onboarding.info != "" {
-			infoY := hintY + 2*int32(smallFont.Height()) + 14
-			if infoY < cy+cardH-162 {
-				renderText(renderer, config, smallFont, ellipsize(smallFont, onboarding.info, textW), accent, textX, infoY)
-			}
-		}
+	switch step.kind {
+	case "start", "setup":
+		onboardingRenderSetup(renderer, config, cy, cx, cardW, textX, textW, cy+rowsTop, rowsBottom, bodyFont, smallFont, accent)
+	case "language":
+		onboardingRenderLanguage(renderer, config, cy, cardH, textX, textW, cy+bodyTop, bodyFont, smallFont, accent)
+	case "layout":
+		onboardingRenderLayout(renderer, config, textX, textW, cy+rowsTop, rowsBottom, bodyFont, smallFont, accent)
+	default:
+		onboarding.bodyLines = blocks.body
+		blocks.draw(renderer, config, textX, cy+bodyTop, bodyFont, smallFont, accent)
 	}
 
 	// Progress dots.
-	dotY := cy + cardH - 92
+	dotY := cy + cardH - onbDotsY
 	for i := range onboardingSteps {
 		dx := textX + int32(i)*20
 		if i == onboarding.step {
@@ -939,14 +1151,12 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 	onboarding.action = sdl.Rect{}
-	if label := onboardingActionLabel(step.kind); label != "" {
-		actionW := int32(300)
-		if actionW > cardW-104 {
-			actionW = cardW - 104
-		}
-		actionH := int32(42)
-		actionY := cy + cardH - 150
-		onboarding.action = UIButton(renderer, config, sdl.Rect{X: textX, Y: actionY, W: actionW, H: actionH}, label, UIButtonStyle{
+	if actionLabel != "" {
+		// As wide as its label needs: a fixed 300px cut "Open date & time
+		// settings" to "Open date & time settin…".
+		lw, _ := measureText(smallFont, actionLabel)
+		actionW := min(max(int32(300), lw+48), textW)
+		onboarding.action = UIButton(renderer, config, sdl.Rect{X: textX, Y: cy + cardH - onbActionY, W: actionW, H: onbActionH}, actionLabel, UIButtonStyle{
 			Variant:    UIButtonGhost,
 			LabelColor: accent,
 			Font:       smallFont,
@@ -954,28 +1164,29 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		}, UIButtonState{})
 	}
 
-	// Skip and Next buttons.
-	btnH := int32(50)
-	btnW := int32(210)
-	nextX := cx + cardW - 28 - btnW
-	nextY := cy + cardH - 28 - btnH
+	// Skip and Next buttons, each at least as wide as its label.
 	nextLabel := "Next"
 	if onboarding.step == len(onboardingSteps)-1 {
 		nextLabel = "Start exploring"
 	} else if step.kind == "layout" {
 		nextLabel = "Use this layout"
 	}
-	onboarding.next = UIButton(renderer, config, sdl.Rect{X: nextX, Y: nextY, W: btnW, H: btnH}, nextLabel, UIButtonStyle{
+	nextTextW, _ := measureText(bodyFont, nextLabel)
+	btnW := max(int32(210), nextTextW+56)
+	nextX := cx + cardW - 28 - btnW
+	nextY := cy + cardH - 28 - onbButtonH
+	onboarding.next = UIButton(renderer, config, sdl.Rect{X: nextX, Y: nextY, W: btnW, H: onbButtonH}, nextLabel, UIButtonStyle{
 		Variant: UIButtonCustom,
 		Fill:    accent,
 		Font:    bodyFont,
 		Radius:  RadiusMD,
 	}, UIButtonState{})
 
-	skipW := int32(120)
-	skipX := nextX - 14 - skipW
-	skipY := nextY + (btnH-36)/2
 	skipLabel := "Skip tour"
+	skipTextW, _ := measureText(smallFont, skipLabel)
+	skipW := max(int32(120), skipTextW+32)
+	skipX := nextX - 14 - skipW
+	skipY := nextY + (onbButtonH-36)/2
 	onboarding.skip = UIButton(renderer, config, sdl.Rect{X: skipX, Y: skipY, W: skipW, H: 36}, skipLabel, UIButtonStyle{
 		Variant:    UIButtonGhost,
 		LabelColor: ColorTextTertiary(),
@@ -985,11 +1196,8 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	}, UIButtonState{})
 
 	// Footer hint. Use words, not key glyphs, so it survives any controller
-	// mapping. It sits just below the card: the band between the buttons and
-	// the card's edge is 28px while the line is 22px tall on the compact canvas
-	// (30px at 1280), so anchoring it at cy+cardH-18 drew it across the card's
-	// bottom border and against the Next button. Below the card is the dimmed
-	// band — centred, and with nothing left to collide with.
+	// mapping. It sits just below the card, in the dimmed band the card's
+	// height leaves free (maxH above): centred, with nothing to collide with.
 	footer := hintLine(FooterHint{"Left/Right", "Move"}, FooterHint{"A / Enter", "Next"},
 		FooterHint{"F / X", "Action"}, FooterHint{"B", "Skip"})
 	if step.kind == "setup" {
@@ -1014,18 +1222,19 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	}
 	fw, fh, _ := smallFont.SizeUTF8(footer)
 	footerY := cy + cardH + 10
-	if max := screenHeight - 6 - int32(fh); footerY > max {
-		footerY = max
+	if limit := screenHeight - 6 - int32(fh); footerY > limit {
+		footerY = limit
 	}
 	onboarding.footer = sdl.Rect{X: cx + (cardW-int32(fw))/2, Y: footerY, W: int32(fw), H: int32(fh)}
 	renderText(renderer, config, smallFont, footer, WithAlpha(ColorTextTertiary(), 170),
 		onboarding.footer.X, footerY)
 }
 
-// onboardingRenderSetup draws the "Get set up" checklist: one row per optional
-// link, each with its live state. The summary sits beside the step counter so
-// progress is visible before any row is read.
-func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW, cardH, textX, textW, bodyY int32, bodyFont, smallFont *ttf.Font, accent sdl.Color) {
+// onboardingRenderSetup draws the quick start's choices and the "Get set up"
+// checklist: one row per entry between top and bottom, each with its live
+// state. The checklist's summary sits beside the step counter so progress is
+// visible before any row is read.
+func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW, textX, textW, top, bottom int32, bodyFont, smallFont *ttf.Font, accent sdl.Color) {
 	rows := onboardingSetupRefresh(config, false)
 	onboarding.setupHits = onboarding.setupHits[:0]
 	if len(rows) == 0 {
@@ -1037,31 +1246,15 @@ func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW
 			cx+cardW-52-int32(w), cy+28)
 	}
 
-	const gap = int32(10)
-	top := bodyY - 6
-	bottom := cy + cardH - 116
-	pitch := int32(72)
-	if n := int32(len(rows)); n > 0 {
-		if fit := (bottom - top) / n; fit < pitch {
-			pitch = fit
-		}
-	}
-	rowH := pitch - gap
-	if rowH < 26 {
-		rowH = 26
-	}
-	if rowH > 62 {
-		rowH = 62
-	}
-
+	fit := onboardingRowFit(len(rows), top, bottom, bodyFont, smallFont)
 	for i, row := range rows {
-		rect := sdl.Rect{X: textX - 10, Y: top + int32(i)*pitch, W: textW + 20, H: rowH}
+		rect := sdl.Rect{X: textX - 10, Y: top + int32(i)*fit.pitch, W: textW + 20, H: fit.rowH}
 		onboarding.setupHits = append(onboarding.setupHits, rect)
 		UIListRow(renderer, rect, RadiusMD, i == onboarding.setupCursor, false)
 
 		// A filled tick means done; a hollow ring means this row is still open.
 		dotX := rect.X + 26
-		dotY := rect.Y + rowH/2
+		dotY := rect.Y + rect.H/2
 		if row.Done {
 			fillCircle(renderer, dotX, dotY, 7, WithAlpha(accent, 235))
 			setDrawColor(renderer, ColorTopBar)
@@ -1072,21 +1265,11 @@ func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW
 		}
 
 		labelX := dotX + 18
-		labelW := rect.X + rect.W - 14 - labelX
 		titleColor := ColorTextPrimary()
 		if !row.Done {
 			titleColor = ColorTextSecondary()
 		}
-		if rowH >= 50 {
-			renderText(renderer, config, bodyFont, ellipsize(bodyFont, row.Title, labelW), titleColor, labelX, rect.Y+6)
-			detailY := rect.Y + 6 + int32(bodyFont.Height())
-			renderText(renderer, config, smallFont, ellipsize(smallFont, row.Detail, labelW),
-				ColorTextTertiary(), labelX, detailY)
-			continue
-		}
-		// A short card shows one line per row rather than spilling the detail.
-		renderText(renderer, config, smallFont, ellipsize(smallFont, row.Title, labelW), titleColor,
-			labelX, rect.Y+(rowH-int32(smallFont.Height()))/2)
+		onbRowText(renderer, config, rect, fit, labelX, rect.X+rect.W-14-labelX, row.Title, row.Detail, titleColor, bodyFont, smallFont)
 	}
 }
 

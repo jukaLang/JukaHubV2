@@ -1205,9 +1205,11 @@ func discordAuthCandidates(token, tokenType string) []string {
 
 // discordTokenWorks performs a read-only GET /users/@me with one header value.
 // ok=false means Discord rejected the credentials; an error means the check
-// could not be completed (offline, HTTP 5xx, rate limit).
+// could not be completed (offline, HTTP 5xx, rate limit). It belongs to the
+// connect, not to a screen (Chat stays connected behind every one), so only
+// the client's timeout bounds it.
 func discordTokenWorks(auth string) (bool, error) {
-	req, err := http.NewRequest(http.MethodGet, discordAPIBase+"/users/@me", nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, discordAPIBase+"/users/@me", nil)
 	if err != nil {
 		return false, err
 	}

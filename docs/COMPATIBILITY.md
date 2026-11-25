@@ -215,12 +215,16 @@ own have: RetroArch does not bring those, and every start would end at its
 libusb-1.0.so.0 and libudev.so.1, which this firmware does not have").
 
 Where RetroArch can start on JukaHub's glibc (below), JukaHub supplies
-libusb, libudev and libbluetooth itself instead: it writes small stand-in
-libraries into `data/private-glibc/devlibs/` (a few kilobytes each, no
-download) that export exactly the functions and symbol versions the core
-imports and answer "no such device" — libusb's "not supported", a NULL
-udev, no Bluetooth adapter — which is all a handheld could offer Dolphin's
-USB, GameCube-adapter and Wii Remote code anyway. They are written when the
+libusb, libudev, libbluetooth and X11's input library libXi itself instead
+(libXi since 2026-11-24: a stock Smart Pro had every other library the
+buildbot's Dolphin links, and refused it for "libXi.so.6 and
+libusb-1.0.so.0"; Dolphin uses it only in an X11 window, never in
+RetroArch's): it writes small stand-in libraries into
+`data/private-glibc/devlibs/` (a few kilobytes each, no download) that
+export exactly the functions and symbol versions the core imports and answer
+"no such device" — libusb's "not supported", a NULL udev, no Bluetooth
+adapter, no XInput 2 — which is all a handheld could offer Dolphin's USB,
+GameCube-adapter, Wii Remote and X11 input code anyway. They are written when the
 updater checks such a build, before every launch of a core that links them
 (whichever way the core reached the card: RetroArch's own Online Updater
 included), and by the start's look at the installed cores; `devlibs.json`
@@ -232,8 +236,8 @@ Dolphin's evdev input backend needs a working udev, so a build that links it
 stays refused, the refusal naming it alone. A build that loads only with the
 stand-ins must then have every library it links somewhere RetroArch looks,
 or it is refused with the missing ones named. This is what lets the libretro
-buildbot's Dolphin — a desktop build that links libusb and libudev — run when
-JukaHub's own TrimUI build of it is not published.
+buildbot's Dolphin — a desktop build that links libusb, libudev and libXi —
+run when JukaHub's own TrimUI build of it is not published.
 
 On the 64-bit TrimUI handhelds a symbol version the firmware lacks is no
 longer the end of it: with Settings → Games & emulators → **RetroArch's C
