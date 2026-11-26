@@ -244,6 +244,29 @@ func (l *webLayouter) mergeFlexSubLayoutShift(sub *webLayout, x, rowOffset, shif
 		l.stretchBox(id, h)
 	}
 	l.mergeBoxGeom(sub, x)
+	l.mergeBoxEdges(sub)
+}
+
+// noteBoxEdges records the collapsed borders the container pass paints for box
+// id, a table cell's box (webTableCellBox).
+func (l *webLayouter) noteBoxEdges(id int, edges [4]webTableBorderEdge) {
+	if l == nil || l.layout == nil || id == 0 {
+		return
+	}
+	if l.layout.boxEdges == nil {
+		l.layout.boxEdges = make(map[int][4]webTableBorderEdge, 4)
+	}
+	l.layout.boxEdges[id] = edges
+}
+
+// mergeBoxEdges takes the collapsed cell borders a sub-layout recorded.
+func (l *webLayouter) mergeBoxEdges(sub *webLayout) {
+	if sub == nil {
+		return
+	}
+	for id, edges := range sub.boxEdges {
+		l.noteBoxEdges(id, edges)
+	}
 }
 
 // webBoxGeom is a layout box's border box across, in layout pixels: where
@@ -1462,7 +1485,13 @@ func (l *webLayouter) paintContainerBoxes() {
 		// The union is the box's own surface: tagged with its ID it paints in
 		// tree order, under the boxes and pictures nested in it.
 		rectStart, bgStart := len(l.layout.Rects), len(l.layout.Backgrounds)
-		l.paintWebBox(info, sdl.Rect{X: x, Y: y, W: w, H: h})
+		if edges, ok := l.layout.boxEdges[id]; ok {
+			// A table cell of several blocks: its borders are the ones the
+			// table's border-collapse left it, not its own four.
+			l.paintWebBoxEdges(info, sdl.Rect{X: x, Y: y, W: w, H: h}, &edges)
+		} else {
+			l.paintWebBox(info, sdl.Rect{X: x, Y: y, W: w, H: h})
+		}
 		l.tagPaints(id, false, rectStart, bgStart)
 	}
 }
@@ -1737,6 +1766,12 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 // its own. A throwaway layout is cheaper and much less error-prone than a
 // second implementation of gradients, background layers, radii and borders.
 func (l *webLayouter) paintWebBox(info webBoxInfo, rect sdl.Rect) {
+	l.paintWebBoxEdges(info, rect, nil)
+}
+
+// paintWebBoxEdges is paintWebBox with a table cell's collapsed borders in
+// place of the box's own, when edges is not nil.
+func (l *webLayouter) paintWebBoxEdges(info webBoxInfo, rect sdl.Rect, edges *[4]webTableBorderEdge) {
 	if rect.W <= 0 || rect.H <= 0 || l.baseSize <= 0 || l.rowH <= 0 || l.layout == nil {
 		return
 	}
@@ -1760,6 +1795,13 @@ func (l *webLayouter) paintWebBox(info webBoxInfo, rect sdl.Rect) {
 	box.Outline, box.OutlineOffset = style.Outline, style.OutlineOffset
 	if style.HasGradient && style.Gradient != nil {
 		box.Gradient, box.HasGradient = *style.Gradient, true
+	}
+	if edges != nil {
+		box.CollapseEdges, box.HasCollapseEdges = *edges, true
+		box.BoxBorder, box.Style.BoxBorder = false, false
+		box.BorderLeft, box.BorderRight, box.BorderTop, box.BorderBottom = false, false, false, false
+		box.Style.BorderLeft, box.Style.BorderRight = false, false
+		box.Style.BorderTop, box.Style.BorderBottom = false, false
 	}
 	boxLayout := &webLayout{RowH: l.rowH}
 	sl := &webLayouter{
@@ -3572,6 +3614,19 @@ func (l *webLayouter) layoutFlexRowItems(items []webBlock, padX, contentW int32,
 	for i, cell := range cells {
 		free := max(lineH-extents[i], 0)
 		drop := webFlexCrossDrop(grouped[i].blocks[0], cell.align, free)
+		if tableRow && len(grouped[i].blocks) > 1 {
+			if id, edges, hasEdges := l.webTableCellBox(grouped[i].blocks); id != 0 {
+				// A cell of several blocks is painted as its element's box
+				// around them (paintContainerBoxes). That box fills the row from
+				// the row's top, so the content stays at the top of it, and it
+				// draws the borders the table's border-collapse left the cell.
+				drop = 0
+				l.stretchBox(id, lineH)
+				if hasEdges {
+					l.noteBoxEdges(id, edges)
+				}
+			}
+		}
 		if crossStart, crossEnd := flexAutoCross(grouped[i].blocks[0]); !tableRow && free > 0 && cell.align == webItemStretch && !crossStart && !crossEnd {
 			// align-items: stretch (the default): the item is as tall as its
 			// line, so a row of cards ends level.

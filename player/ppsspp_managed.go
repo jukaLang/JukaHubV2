@@ -130,6 +130,36 @@ const (
 	ppssppStateName    = "state.json"
 )
 
+// ppssppShimDir is the folder in a build that holds JukaHub's stand-ins for
+// commands the firmware lacks (setterm): the launcher puts it on PPSSPP's PATH
+// only when the firmware has no such command.
+const ppssppShimDir = "jukahub-bin"
+
+// ppssppSettermShim is the stand-in for setterm that player/trimui/setterm is
+// for JukaHub itself: the firmware's SDL2 runs "setterm -cursor off" and
+// "setterm -cursor on" around its video, TrimUI firmware 1.1 ships no setterm,
+// and PPSSPP's log said "setterm: not found" (2026-11-25).
+const ppssppSettermShim = `#!/bin/sh
+# Written by JukaHub for its PPSSPP: the firmware's SDL2 runs "setterm -cursor
+# off" and "setterm -cursor on" around its video, and TrimUI firmware 1.1 has no
+# setterm. Only those two calls are handled; with no terminal there is no text
+# cursor to change.
+[ "$#" -eq 2 ] && [ "$1" = '-cursor' ] || exit 2
+case "$2" in
+on) [ -t 1 ] && printf '\033[?25h' ;;
+off) [ -t 1 ] && printf '\033[?25l' ;;
+*) exit 2 ;;
+esac
+exit 0
+`
+
+// ppssppInstanceCountFile is where PPSSPP counts its running copies (a POSIX
+// shared memory object, "/PPSSPP_ID"). A copy that is killed never counts
+// itself out, and every later start reads as a second copy: its volume set to
+// 0 and its settings never saved ("Secondary instance 2 - silencing audio",
+// 2026-11-25, JH-CA8ZMU). The launcher removes a count no running PPSSPP holds.
+const ppssppInstanceCountFile = "/dev/shm/PPSSPP_ID"
+
 // What the user asked for: nothing yet (JukaHub decides by version), JukaHub's
 // PPSSPP, or the firmware's.
 const (
@@ -168,7 +198,9 @@ const (
 	// next start instead of after the day an old "nothing to do" stamped.
 	// 3 (2026-11-23): a build whose force-quit mark was taken back
 	// (ppssppForgiveForceQuitMarks) is switched back to at once.
-	ppssppCheckRule = 3
+	// 4 (2026-11-25): the same for a mark PPSSPP's graphics fallback caused
+	// (ppssppForgiveBackendMarks).
+	ppssppCheckRule = 4
 )
 
 // ppssppDigestPattern is the only digest an install accepts: GitHub's own
@@ -319,6 +351,13 @@ type ppssppState struct {
 	ScreenAloneAt   string `json:"screen_alone_at,omitempty"`
 	ScreenAloneAuto bool   `json:"screen_alone_auto,omitempty"`
 	ScreenAloneRule int    `json:"screen_alone_rule,omitempty"`
+
+	// RetrySeen is the last "did not start, tried again" reason toasted for a
+	// card with no other PPSSPP (ppssppRevertBad); BackendFix the
+	// ppssppBackendFixRule whose marks were already looked at
+	// (ppssppForgiveBackendMarks).
+	RetrySeen  string `json:"retry_seen,omitempty"`
+	BackendFix int    `json:"backend_fix,omitempty"`
 }
 
 // ppssppFirmwareInfo is the firmware's PPSSPP as JukaHub would run it without
@@ -1612,6 +1651,100 @@ func ppssppForgiveForceQuitMarks() {
 	logInfo("ppsspp", "%s: the \"did not start\" mark a Select + Start force quit left before the picture check is taken back (a black panel, not a failing build)", strings.Join(forgiven, ", "))
 }
 
+// ppssppBackendFixRule numbers the graphics back-end repair (the launcher's
+// clean start, ppssppPrepareTrimuiHome). Marks from before it are looked at
+// once (ppssppForgiveBackendMarks).
+const ppssppBackendFixRule = 1
+
+// ppssppBackendFailureSigns are what PPSSPP prints when its crash memory sent
+// it to a graphics back end it cannot use.
+var ppssppBackendFailureSigns = []string{"Vulkan subsystem", "Graphics backend failed for", "Failed graphics backends", "All graphics backends failed"}
+
+// ppssppBackendFailureSeen reports whether a build's last failed start shows
+// PPSSPP's graphics fallback: in the launcher's status log, which keeps the end
+// of PPSSPP's output after a failed start, or in PPSSPP's log of its last run.
+func ppssppBackendFailureSeen(b ppssppBuild) bool {
+	if b.Dir == "" {
+		return false
+	}
+	for _, name := range []string{ppssppStatusName, ppssppLogName} {
+		f, err := os.Open(filepath.Join(b.Dir, name))
+		if err != nil {
+			continue
+		}
+		if info, err := f.Stat(); err == nil && info.Size() > 16<<10 {
+			_, _ = f.Seek(info.Size()-16<<10, io.SeekStart)
+		}
+		data, _ := io.ReadAll(io.LimitReader(f, 16<<10))
+		_ = f.Close()
+		for _, sign := range ppssppBackendFailureSigns {
+			if bytes.Contains(data, []byte(sign)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ppssppForgiveBackendMarks takes back, once, the "did not start" marks that
+// PPSSPP's own graphics fallback caused (2026-11-25, JH-CA8ZMU and JH-7NTNPW):
+// one run that died before its picture came up left OPENGL in PPSSPP's crash
+// memory, and every later start tried Vulkan, which the firmware's SDL cannot
+// give it, and aborted ("Vulkan subsystem 0 not supported"). Every start now
+// begins without that memory and with Vulkan off, so such a mark says nothing
+// about the build. When PSP games were moved off it and nothing took its place
+// (no other build that starts, no firmware PPSSPP, no launcher pinned by hand,
+// the firmware's not chosen), they are pointed at it again; the build's label
+// is returned then ("" otherwise). Elsewhere the next update check switches
+// back by the usual rule (ppssppAutoAdopt; ppssppCheckRule 4 makes it due).
+func ppssppForgiveBackendMarks(fw ppssppFirmwareInfo) string {
+	ppssppMgr.mu.Lock()
+	defer ppssppMgr.mu.Unlock()
+	st := ppssppLockedState()
+	if st.BackendFix >= ppssppBackendFixRule {
+		return ""
+	}
+	st.BackendFix = ppssppBackendFixRule
+	var forgiven []string
+	for _, b := range st.Builds {
+		file := filepath.Join(b.Dir, ppssppBadName)
+		_, marked := ppssppReadFirstLine(file)
+		if !marked && st.Bad[b.Tag] == "" {
+			continue
+		}
+		if !ppssppBackendFailureSeen(b) {
+			continue
+		}
+		delete(st.Bad, b.Tag)
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+			logWarn("ppsspp", "could not take back the mark on %s: %v", b.label(), err)
+		}
+		forgiven = append(forgiven, b.label())
+	}
+	back := ""
+	fw = ppssppSanitizeFirmware(fw)
+	if len(forgiven) > 0 && st.Active == "" && st.Choice != ppssppChoiceFirmware &&
+		strings.TrimSpace(fw.Launcher) == "" && !ppssppUserPinnedLocked() {
+		if b, ok := st.newestGood(); ok && b.usable(*st) && b.Tag != st.RolledBack {
+			if err := ppssppUseBuildLocked(st, b, fw); err != nil {
+				logWarn("ppsspp", "could not point PSP games at %s again: %v", b.label(), err)
+			} else {
+				back = b.label()
+			}
+		}
+	}
+	if err := ppssppSaveLocked(); err != nil {
+		logWarn("ppsspp", "could not save the PPSSPP state: %v", err)
+	}
+	if len(forgiven) > 0 {
+		logInfo("ppsspp", "%s: the \"did not start\" mark PPSSPP's own graphics fallback caused (Vulkan after a run that died) is taken back; every start now clears that memory", strings.Join(forgiven, ", "))
+	}
+	if back != "" {
+		logInfo("ppsspp", "PSP games use %s again: nothing else on this card plays them", back)
+	}
+	return back
+}
+
 // ppssppStaleMountsMu keeps the start-up cleanup and the scheduler's from
 // unmounting the same bind twice; ppssppStaleMountWarned (under it) keeps a
 // bind that will not come down to one warning, not one every wake.
@@ -1801,6 +1934,7 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line(`LOG="$BUILD/`, ppssppLogName, `"`)
 	line(`BAD="$BUILD/`, ppssppBadName, `"`)
 	line(`STICK="$PPSSPP_HOME/.config/ppsspp/PSP"`)
+	line("INSTANCES=", ppssppScriptValue(ppssppInstanceCountFile))
 	line("SAVE_BOUND=0")
 	line("STATE_BOUND=0")
 	line()
@@ -1824,6 +1958,18 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line()
 	line("bind() {")
 	line(`	mount --bind "$1" "$2" 2>/dev/null || mount -o bind "$1" "$2" 2>/dev/null`)
+	line("}")
+	line()
+	line("# ppsspp_running: whether any PPSSPP runs now (by its process name).")
+	line("ppsspp_running() {")
+	line("	for c in /proc/[0-9]*/comm; do")
+	line("		n=")
+	line(`		{ read -r n <"$c"; } 2>/dev/null`)
+	line(`		case "$n" in`)
+	line("		PPSSPP* | ppsspp*) return 0 ;;")
+	line("		esac")
+	line("	done")
+	line("	return 1")
 	line("}")
 	line()
 	line("# firmware REASON [ARGS...] hands the game (ARGS: the ROM and its options)")
@@ -1863,7 +2009,18 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("trap 'unbind; exit 130' INT")
 	line("trap 'unbind; exit 143' TERM")
 	line()
-	line(`[ -f "$BAD" ] && firmware "this build did not start last time" "$@"`)
+	// A build that did not start last time hands the game to the firmware's
+	// PPSSPP, when there is one. On a card with nothing else for PSP games the
+	// refusal only ended the next try at once (2026-11-25, JH-7NTNPW: "no
+	// firmware PSP launcher to fall back to"), so the build is tried again; it
+	// marks itself again if it still does not start.
+	line(`if [ -f "$BAD" ]; then`)
+	line(`	if [ -n "$FALLBACK" ] && [ -f "$FALLBACK" ]; then`)
+	line(`		firmware "this build did not start last time" "$@"`)
+	line("	fi")
+	line(`	note "this build did not start last time; no other PPSSPP is on this card, so it is tried again"`)
+	line(`	rm -f "$BAD" 2>/dev/null`)
+	line("fi")
 	line(`[ -f "$PPSSPP_BIN" ] || firmware "the PPSSPP binary is missing" "$@"`)
 	line(`mkdir -p "$STICK/SAVEDATA" "$STICK/PPSSPP_STATE" 2>/dev/null`)
 	line("# A bind that a killed run left behind comes down first, so nothing stacks.")
@@ -1884,6 +2041,36 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("	# No firmware PPSSPP on this card at all: nothing to share, and nothing")
 	line("	# to fall back to. This build keeps the saves in its own memstick.")
 	line(`	note "no firmware PPSSPP on this card: saves stay in JukaHub's PPSSPP"`)
+	line("fi")
+	line()
+	// What a run that died leaves behind is cleared before PPSSPP starts
+	// (2026-11-25, JH-CA8ZMU: every start aborted after one bad run, and the
+	// one before it had been told it was a muted second copy).
+	line("# PPSSPP remembers a graphics back end that was starting when a run died")
+	line("# (FailedGraphicsBackends.txt) and makes the next start try another one.")
+	line("# On a TrimUI that is Vulkan, which the firmware's SDL cannot give it: every")
+	line(`# start after one bad run aborted ("Vulkan subsystem 0 not supported").`)
+	line("# OpenGL is the back end that draws here, so each start begins without it.")
+	line(`for f in "$STICK/SYSTEM/FailedGraphicsBackends.txt" "$STICK/SYSTEM/CACHE/FailedGraphicsBackends.txt" "$PPSSPP_HOME/.cache/ppsspp/FailedGraphicsBackends.txt"; do`)
+	line(`	[ -f "$f" ] || continue`)
+	line("	was=")
+	line(`	{ read -r was <"$f"; } 2>/dev/null`)
+	line(`	rm -f "$f" 2>/dev/null && note "cleared PPSSPP's memory of a failed graphics back end (${was:-empty}) that a run which died left"`)
+	line("done")
+	line("# PPSSPP counts its running copies in $INSTANCES. A run that was killed")
+	line("# never counts itself out, and every later start then plays as a")
+	line(`# "secondary instance": silent (its volume set to 0), saving no settings.`)
+	line("# With no PPSSPP running, the count is stale: it starts from none again.")
+	line(`if [ -e "$INSTANCES" ] && ! ppsspp_running; then`)
+	line(`	rm -f "$INSTANCES" 2>/dev/null && note "cleared PPSSPP's stale instance count (a run that was killed left it; this start would have had no sound)"`)
+	line("fi")
+	line(`# The firmware's SDL2 runs "setterm -cursor off" when its video starts and`)
+	line(`# "on" when it ends, but TrimUI firmware 1.1 has no setterm ("setterm: not`)
+	line(`# found" in PPSSPP's log). JukaHub's stand-in for those two calls goes on`)
+	line("# PPSSPP's PATH alone, and only when the firmware has none.")
+	line(`RUNPATH="${PATH:-/usr/bin:/bin}"`)
+	line(`if ! command -v setterm >/dev/null 2>&1 && [ -f "$BUILD/`, ppssppShimDir, `/setterm" ]; then`)
+	line(`	RUNPATH="$BUILD/`, ppssppShimDir, `:$RUNPATH"`)
 	line("fi")
 	line()
 	line(`PADS="${SDL_GAMECONTROLLERCONFIG_FILE:-}"`)
@@ -1934,9 +2121,9 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("START=$(date +%s 2>/dev/null)")
 	line(`case "$START" in ''|*[!0-9]*) START=0 ;; esac`)
 	line(`if [ "$#" -gt 0 ]; then`)
-	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen ${RESUME:+"$RESUME"} >&4 2>&4`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" PATH="$RUNPATH" "$PPSSPP_BIN" --pause-menu-exit "$@" --fullscreen ${RESUME:+"$RESUME"} >&4 2>&4`)
 	line("else")
-	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" "$PPSSPP_BIN" --fullscreen >&4 2>&4`)
+	line("\t", video, `HOME="$PPSSPP_HOME" XDG_CONFIG_HOME="$PPSSPP_HOME/.config" LD_LIBRARY_PATH="$LIBS" SDL_GAMECONTROLLERCONFIG_FILE="$PADS" SDL_GAMECONTROLLERCONFIG="$PADMAP" PATH="$RUNPATH" "$PPSSPP_BIN" --fullscreen >&4 2>&4`)
 	line("fi")
 	line("RC=$?")
 	line("exec 4>&-")
@@ -1955,11 +2142,15 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line("# such as an ISO it could not load): in the status log, on stderr for the")
 	line("# launch card, and its last line in the reason JukaHub shows. With no log")
 	line("# of this run, an older one is not passed off as its reason.")
+	// The reason skips what says nothing about the cause — the shell's signal
+	// name, C++'s "terminate called…", setterm — so it reads "Vulkan subsystem
+	// 0 not supported" rather than "Aborted" (2026-11-25, JH-CA8ZMU).
 	line("LAST=")
 	line(`if [ -n "$LOG" ]; then`)
 	line(`	tail -n 15 "$LOG" 2>/dev/null | sed 's/^/  | /' >>"$STATUS" 2>/dev/null`)
 	line(`	tail -n 15 "$LOG" >&2 2>/dev/null`)
-	line(`	LAST=$(tail -n 1 "$LOG" 2>/dev/null | tr -d '\r' | cut -c 1-160)`)
+	line(`	LAST=$(tail -n 15 "$LOG" 2>/dev/null | tr -d '\r' | grep -v -e '^Aborted' -e '^Segmentation fault' -e '^Killed' -e '^Bus error' -e '^Illegal instruction' -e '^terminate called' -e 'setterm' -e '^[[:space:]]*$' | tail -n 1 | cut -c 1-160)`)
+	line(`	[ -n "$LAST" ] || LAST=$(tail -n 1 "$LOG" 2>/dev/null | tr -d '\r' | cut -c 1-160)`)
 	line("fi")
 	line(`if [ "$RC" != 0 ] && [ "$QUICK" = 1 ]; then`)
 	line(`	printf 'PPSSPP %s exited with status %s after %ss%s\n' "$VERSION" "$RC" "$ELAPSED" "${LAST:+: $LAST}" >"$BAD" 2>/dev/null`)
@@ -2709,6 +2900,28 @@ func ppssppSeedHome(b ppssppBuild, fwStick string) {
 	ppssppApplyDeviceAspect(sys, ppssppDevice())
 	// The picture opaque on the A133P's panel (ppsspp_opaque.go).
 	ppssppEnsureOpaquePicture(stick, b.Platform)
+	// The stand-ins the launcher puts on PPSSPP's PATH (setterm).
+	ppssppWriteShims(b.Dir)
+}
+
+// ppssppWriteShims lays a build's stand-in commands (ppssppShimDir) down when
+// they are missing or differ. A failure costs only the stand-in: the launcher
+// looks for the file before it uses the folder.
+func ppssppWriteShims(dir string) {
+	if strings.TrimSpace(dir) == "" || !dirExists(dir) {
+		return
+	}
+	file := filepath.Join(dir, ppssppShimDir, "setterm")
+	if data, err := os.ReadFile(file); err == nil && string(data) == ppssppSettermShim {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		logDebug("ppsspp", "could not create %s: %v", filepath.Dir(file), err)
+		return
+	}
+	if err := writeFileSynced(file, []byte(ppssppSettermShim), 0o755); err != nil {
+		logDebug("ppsspp", "could not write the setterm stand-in: %v", err)
+	}
 }
 
 // ppssppDeviceAspect is the display aspect ratio minui-psp's launcher gives
@@ -3163,8 +3376,10 @@ func ppssppFirmwareLabel(fw ppssppFirmwareInfo) string {
 // ppssppRevertBad handles a build whose launcher reported that it does not
 // start: it is marked bad, and PSP games go back to the build used before it
 // when that one is still fine (and no launcher was pinned by hand meanwhile,
-// which is never overwritten), else to the firmware's PPSSPP. It returns the
-// toast to show ("" when tag was no longer the active build).
+// which is never overwritten), else to the firmware's PPSSPP. With neither on
+// the card the build keeps PSP games, unmarked in the state, and its launcher
+// tries it again. It returns the toast to show ("" when tag was no longer the
+// active build, or the same reason was already said).
 func ppssppRevertBad(tag, reason string, fw ppssppFirmwareInfo) (string, error) {
 	ppssppMgr.mu.Lock()
 	defer ppssppMgr.mu.Unlock()
@@ -3172,18 +3387,36 @@ func ppssppRevertBad(tag, reason string, fw ppssppFirmwareInfo) (string, error) 
 	if st.Active != tag || tag == "" {
 		return "", nil
 	}
-	if st.Bad == nil {
-		st.Bad = map[string]string{}
-	}
-	st.Bad[tag] = reason
 	failed, _ := st.build(tag)
 	failedLabel := failed.label()
 	if failed.Tag == "" {
 		failedLabel = "JukaHub's PPSSPP"
 	}
+	prev, hasPrev := st.build(st.Previous)
+	hasPrev = hasPrev && prev.Tag != tag && prev.usable(*st) && !ppssppUserPinnedLocked()
+	if !hasPrev && strings.TrimSpace(fw.Launcher) == "" {
+		// Nothing else on this card plays PSP games: going "back" would leave
+		// them with no emulator at all (2026-11-25, JH-7NTNPW, a Smart Pro with
+		// no firmware PPSSPP). The build keeps them, its launcher tries it again
+		// at the next game (removing the file mark it left), and the launch
+		// card has already said why; the toast says it once per reason.
+		if st.RetrySeen == reason {
+			return "", nil
+		}
+		st.RetrySeen = reason
+		if err := ppssppSaveLocked(); err != nil {
+			return "", err
+		}
+		logWarn("ppsspp", "%s did not start (%s); no other PPSSPP is on this card, so PSP games keep it and the next one tries it again", failedLabel, reason)
+		return failedLabel + " did not start on this device (" + ppssppToastReason(reason) + ") — there is no other PPSSPP on this card, so the next PSP game tries it again", nil
+	}
+	if st.Bad == nil {
+		st.Bad = map[string]string{}
+	}
+	st.Bad[tag] = reason
 	back := ppssppFirmwareLabel(fw)
 	var err error
-	if prev, ok := st.build(st.Previous); ok && prev.Tag != tag && prev.usable(*st) && !ppssppUserPinnedLocked() {
+	if hasPrev {
 		err = ppssppUseBuildLocked(st, prev, fw)
 		back = prev.label()
 	} else {
@@ -3198,13 +3431,16 @@ func ppssppRevertBad(tag, reason string, fw ppssppFirmwareInfo) (string, error) 
 		return "", err
 	}
 	logWarn("ppsspp", "%s did not start (%s); PSP games use %s again", failedLabel, reason, back)
-	// The launcher's reason (with PPSSPP's last line) is in the toast, so a
-	// report from the device carries it.
-	why := reason
-	if r := []rune(why); len(r) > 120 {
-		why = string(r[:120]) + "…"
+	return failedLabel + " did not start on this device (" + ppssppToastReason(reason) + ") — PSP games use " + back + " again", nil
+}
+
+// ppssppToastReason is the launcher's reason (with PPSSPP's last line) cut for
+// a toast, which a report from the device then carries.
+func ppssppToastReason(reason string) string {
+	if r := []rune(reason); len(r) > 120 {
+		return string(r[:120]) + "…"
 	}
-	return failedLabel + " did not start on this device (" + why + ") — PSP games use " + back + " again", nil
+	return reason
 }
 
 // ppssppReadFirstLine reads the first line of a small file.
@@ -3710,9 +3946,13 @@ func ppssppAutoUpdateLoop() {
 		ppssppCleanLeftovers()
 		endPatchOp()
 	}
-	ppssppDetectFirmwareNow()
+	fw := ppssppDetectFirmwareNow()
 	ppssppCheckPlatform()
 	ppssppForgiveForceQuitMarks()
+	if back := ppssppForgiveBackendMarks(fw); back != "" {
+		invalidateEmulatorCache()
+		ShowToast("PSP games use "+back+" again: its last failed start was PPSSPP's graphics fallback, which JukaHub now prevents", ToastKindInfo)
+	}
 	ppssppRefreshActiveScript()
 	lastRefresh := time.Now()
 	var lastTick time.Time

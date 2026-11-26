@@ -418,3 +418,32 @@ func TestWebJSModNoPanic(t *testing.T) {
 		t.Errorf("whole module: %v", err)
 	}
 }
+
+// A page the script pass did not rebuild reaches the reader through the same
+// tree builder (webDOMRendererMarkup): every element closed, written back with
+// serializeForRenderer's rules. The trees are the ones TestWebDOMParseDocument
+// and TestWebDOMParseFragment check.
+func TestWebDOMRendererMarkup(t *testing.T) {
+	tests := []struct{ name, src, want string }{
+		{"implied cells, rows and tbody", "<table><tr><td>a<td>b</table>",
+			`<html><head></head><body><table><tbody><tr><td>a</td><td>b</td></tr></tbody></table></body></html>`},
+		{"implied paragraph and list item ends", "<title>a&amp;b</title><p>x<ul><li>d<li>e</ul>",
+			`<html><head><title>a&amp;b</title></head><body><p>x</p><ul><li>d</li><li>e</li></ul></body></html>`},
+		{"text and values escaped again", `<p>a &lt; b&nbsp;c<a href="x?a=1&amp;b=2" title='say "hi"'>l</a>`,
+			`<html><head></head><body><p>a &lt; b&nbsp;c<a href="x?a=1&amp;b=2" title="say &quot;hi&quot;">l</a></p></body></html>`},
+		{"comments and script bodies left out, raw end tags kept in", `<style>p{content:"</b>"}</style><p>a<!-- c --><script>var x=1;</script>b`,
+			`<html><head><style>p{content:"<\/b>"}</style></head><body><p>a<script></script>b</p></body></html>`},
+		{"doctype and whitespace", "<!DOCTYPE html>\n<html>\n<head>\n<title>T</title>\n</head>\n<body>\n<p>x</p>\n</body>\n</html>\n",
+			"<!DOCTYPE html><html><head>\n<title>T</title>\n</head>\n<body>\n<p>x</p>\n\n\n</body></html>"},
+	}
+	for _, tt := range tests {
+		if got := webDOMRendererMarkup(tt.src); got != tt.want {
+			t.Errorf("%s:\n got %s\nwant %s", tt.name, got, tt.want)
+		}
+	}
+	// A page larger than the DOM pass takes on comes back as it arrived.
+	big := "<p>" + strings.Repeat("x", webDOMMaxSourceBytes)
+	if got := webDOMRendererMarkup(big); got != big {
+		t.Errorf("an oversized page was rebuilt (%d bytes back)", len(got))
+	}
+}

@@ -7,6 +7,9 @@ package main
 // applies, not merely that a string was fetched.
 
 import (
+	"bytes"
+	"compress/zlib"
+	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -266,5 +269,90 @@ func TestWebStylesheetCommentedImportIsIgnored(t *testing.T) {
 	}
 	if !strings.Contains(css, "color:#123456") {
 		t.Fatalf("sheet body missing: %q", css)
+	}
+}
+
+// A page's web fonts are outside data the reader unpacks: @font-face sources
+// it can read, the subsets worth a download, and a WOFF file rebuilt table for
+// table as the sfnt it packs (webpage_webfont.go).
+func TestWebFontFacesAndWOFF(t *testing.T) {
+	p := &webParser{doc: &webDocument{URL: "https://example.com/css/site.css"}}
+	got := p.webFontSources(`url(a.woff2) format("woff2"), url('a.woff') format('woff'), local(Foo), url(b.ttf), url(c.eot?#iefix) format("embedded-opentype"), url(d.svg#x)`)
+	want := []string{"https://example.com/css/a.woff", "https://example.com/css/b.ttf"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("sources = %q, want %q", got, want)
+	}
+	for v, useful := range map[string]bool{
+		"": true, "U+0000-00FF, U+0131": true, "U+0400-045F": false, "U+F000-F2FF": true, "U+00??": true, "U+1F00-1FFF": false,
+	} {
+		if webFontRangeUseful(v) != useful {
+			t.Errorf("unicode-range %q useful = %v", v, !useful)
+		}
+	}
+	if lo, hi := webFontWeightRange("100 900"); lo != 100 || hi != 900 {
+		t.Errorf("weight range = %d..%d", lo, hi)
+	}
+
+	ttf := libThemeSerifTTF
+	if len(ttf) < 12 {
+		t.Skip("no embedded serif face")
+	}
+	be := binary.BigEndian
+	n := int(be.Uint16(ttf[4:6]))
+	var head, body bytes.Buffer
+	head.Write(make([]byte, 44+20*n))
+	woffHead := head.Bytes()
+	for i := 0; i < n; i++ {
+		rec := ttf[12+16*i : 28+16*i]
+		off, length := be.Uint32(rec[8:12]), be.Uint32(rec[12:16])
+		table := ttf[off : off+length]
+		var z bytes.Buffer
+		zw := zlib.NewWriter(&z)
+		_, _ = zw.Write(table)
+		_ = zw.Close()
+		packed := z.Bytes()
+		if len(packed) >= len(table) {
+			packed = table
+		}
+		e := woffHead[44+20*i : 64+20*i]
+		copy(e[0:4], rec[0:4])
+		be.PutUint32(e[4:8], uint32(44+20*n+body.Len()))
+		be.PutUint32(e[8:12], uint32(len(packed)))
+		be.PutUint32(e[12:16], length)
+		be.PutUint32(e[16:20], be.Uint32(rec[4:8]))
+		body.Write(packed)
+		for body.Len()%4 != 0 {
+			body.WriteByte(0)
+		}
+	}
+	copy(woffHead[0:4], "wOFF")
+	copy(woffHead[4:8], ttf[0:4])
+	be.PutUint16(woffHead[12:14], uint16(n))
+	be.PutUint32(woffHead[16:20], uint32(len(ttf)))
+	woff := append(append([]byte(nil), woffHead...), body.Bytes()...)
+	sfnt, ok := webFontSFNT(woff, 8<<20)
+	if !ok {
+		t.Fatal("the WOFF did not unpack")
+	}
+	tables := func(f []byte) map[string]string {
+		out := map[string]string{}
+		for i := 0; i < int(be.Uint16(f[4:6])); i++ {
+			rec := f[12+16*i : 28+16*i]
+			off, length := be.Uint32(rec[8:12]), be.Uint32(rec[12:16])
+			out[string(rec[0:4])] = string(f[off : off+length])
+		}
+		return out
+	}
+	a, b := tables(ttf), tables(sfnt)
+	if len(a) != len(b) {
+		t.Fatalf("%d tables back, want %d", len(b), len(a))
+	}
+	for tag, data := range a {
+		if b[tag] != data {
+			t.Errorf("table %q differs after unpacking", tag)
+		}
+	}
+	if _, ok := webFontSFNT([]byte("wOF2\x00\x01\x00\x00 not a font"), 8<<20); ok {
+		t.Error("a WOFF2 file was taken for a font the reader can open")
 	}
 }

@@ -481,6 +481,12 @@ gap, not a silent promise.
   `colgroup`/`col` widths (including `span`) define column tracks in fixed and
   auto layout, with a cell's own width winning where CSS gives it precedence.
   A `<tr>` with no cells still reserves a row when rowspans occupy it.
+  A cell holding several blocks (paragraphs, a list, a table) is one cell
+  with its blocks stacked in it, its surface painted round all of them over
+  the row's height; a table inside a cell or a flex/grid item is laid out at
+  that cell's or item's width. Markup a page leaves unclosed (`<td>a<td>b`,
+  `<li>` without `</li>`) is closed as HTML's parser closes it, with or
+  without scripts.
 - `head` metadata and `script`/`style`/`noscript`/`title` content are not
   painted. Raw-text containers (`svg`, `canvas`, `template`, `object`) are not
   interpreted as HTML.
@@ -492,7 +498,7 @@ mistaken for working CSS.
 
 | Construct | Current behaviour |
 | --- | --- |
-| `font-family` | Three faces only (the UI face, a monospace one and a serif one); web fonts are not downloaded. |
+| `font-family` and `@font-face` | A family of the page's `@font-face` rules is downloaded when the file is TrueType, OpenType or WOFF (a WOFF2-only source is skipped; Google Fonts is asked for TrueType), only its regular and bold weights and only a subset holding Latin letters or private-use icons; italic is the face slanted, and past the per-run caps (8 files a page, 24 MB a run on a handheld) the reader's three faces set the text. Material Icons ligature names still become the nearest glyph the reader has. Font descriptors other than family, weight, style and `unicode-range` are ignored. |
 | `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They are inline boxes kept whole on their line, with their padding, border, radius and background; their own `width` and `height` are not applied, and a label wider than the whole line breaks like text instead of wrapping inside its box. Nested boxes with different backgrounds that end together paint the outer box's right padding in the inner one's colour. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
@@ -505,7 +511,7 @@ mistaken for working CSS.
 | SVG `<text>`, `<image>`, filters, masks, clip paths, patterns, markers, dashes and `<foreignObject>`; external `<use href="sprite.svg#icon">` | Skipped; the rest of the drawing renders. |
 | non-rectangular `grid-template-areas` matrices | Accepted; named areas use the bounding box of their cells. |
 | Table row groups (`thead`/`tbody`/`tfoot`) as separate layout boxes; borders/backgrounds on `colgroup`/`col` | Rows share one table grid; column width and span are applied, but column-level borders/backgrounds are not painted. |
-| `list-style-image`, `list-style-position` | Accepted; markers are text only. |
+| `list-style-image`, `list-style-position` | Markers are text only (an image marker draws the list's text marker). `list-style-position: outside` hangs the marker left of the text when the page sets the list's own start padding (Wikipedia's `ul { margin-left: 1.6em; padding: 0 }`); a list on the browser's default padding keeps the marker before the text inside its 40px gutter. A list styled `display: inline` stays in its line (Wikipedia's `.hlist.inline`). |
 | `background-clip: text` | The glyphs take the gradient's average colour; the ramp is not clipped to the letter shapes. |
 | `line-clamp` on a wrapper whose text sits in child blocks | Only the element's own lines are clamped; a clamp on a wrapper of paragraphs does not count their lines. |
 | `vertical-align: baseline` and lengths in table cells | Read as top. |
@@ -514,7 +520,7 @@ mistaken for working CSS.
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
 | `@charset`, `@namespace` | Not applied. |
-| `@font-face`, `@keyframes`, `@page` | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
+| `@keyframes`, `@page` (and `@font-face` beyond the row above) | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
 | Floats inside a line, nested floated boxes, `shape-outside` | A floated inline element (`<span style="float:right">`) stays in its line, and a floated `<img>` floats on its own. Inside a floated box, inside a table cell, or past 600 floated boxes on a page, a floated element floats only its own text; a floated box is as wide as the floats inside it side by side (a floated menu of floated items). A block that holds its floats and starts beside a float has its lines wrapped one by one, not its whole box narrowed. `shape-outside` is ignored: floats are rectangles. |
 
 ## Draw-path fixture coverage

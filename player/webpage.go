@@ -502,6 +502,8 @@ type webStyle struct {
 	// It inherits like a real browser's, so `ul { list-style: none }` reaches
 	// the items, which is how nav menus hide their bullets.
 	ListStyle int
+	// ListInside is list-style-position: inside, inherited like ListStyle.
+	ListInside bool
 	// ListPadSet is set on a ul, ol or menu whose page sets its start padding
 	// (a reset's `* { padding: 0 }`, Bootstrap's `.nav`): its items drop the
 	// reader's 18px list gutter, which stands in for the UA sheet's 40px of
@@ -670,6 +672,13 @@ type webStyle struct {
 	TableColumnCount int
 	TablePrepared    bool
 	TableCols        *webTableColumns
+	// TableRowGroup is the flex group of the row a cell sits in (a <tr> is a
+	// flex row: webpage.go push), inherited by everything inside the cell. A
+	// layout pass prepares a table only where its cells' blocks have that group
+	// as their own: a table inside another table's cell, or inside a flex or
+	// grid item, waits for that cell's or item's pass (webpage_table.go). Zero
+	// for a CSS table cell with no row around it.
+	TableRowGroup int
 	// FloatSide is 0 none, 1 left, 2 right. Clear is 0 none, 1 left,
 	// 2 right, 3 both. These are per element and do not inherit.
 	FloatSide int
@@ -754,6 +763,10 @@ type webStyle struct {
 	Mono     bool
 	Serif    bool
 	IconFont bool
+	// WebFont is 1 + the index in webDocument.WebFamilies of the web font
+	// (@font-face) family the run is set in, 0 for the reader's own faces.
+	// Inherited like font-family (webpage_webfont.go).
+	WebFont int
 	// BoxShadowBlur/BoxShadowSpread complete the first visible outer
 	// box-shadow layer, in CSS px: the painter fades the shadow over the blur
 	// and grows the box by the spread (webpage_paint.go); neither inherits.
@@ -912,6 +925,10 @@ type webBlock struct {
 	MarginTop    float64
 	MarginBot    float64
 	Bullet       string
+	// MarkerHang sets the marker outside the item's text, in the list's
+	// padding (list-style-position: outside on a list whose page sets that
+	// padding); otherwise the text starts after it.
+	MarkerHang bool
 	// MarkerStyle is the resolved ::marker style for this list item. Its
 	// colour and font size paint the bullet; HasMarkerStyle separates an
 	// author marker from the reader's default bullet.
@@ -1265,6 +1282,17 @@ type webDocument struct {
 	// an image whose size the markup did not give, which froze the whole app.
 	imageMu sync.Mutex
 
+	// WebFonts are the page's @font-face rules the reader can load and
+	// WebFamilies their family names (webStyle.WebFont is 1 + an index into
+	// WebFamilies); webFontUse marks the families text is set in, 1 regular and
+	// 2 bold. webFontPick, guarded by webFontMu, is the loaded file for each
+	// family and weight (webpage_webfont.go).
+	WebFonts    []webFontFace
+	WebFamilies []string
+	webFontUse  []uint8
+	webFontMu   sync.Mutex
+	webFontPick map[[2]int]string
+
 	// SVGInline holds each drawable inline <svg> under its synthetic
 	// "jhsvg:" image key until the image pass rasterises it; SVGDefs keeps the
 	// page's sprite sheets (<symbol>s a <use> elsewhere points at). The byte
@@ -1550,6 +1578,10 @@ type webLayout struct {
 	// it (applyBoxConstraints): the container pass paints that width, not the
 	// width of the box's text (webpage_flow.go).
 	boxGeom map[int]webBoxGeom
+	// boxEdges holds the collapsed borders (border-collapse) of a table cell
+	// painted as a box around several blocks: the container pass draws these
+	// instead of the cell's own four borders (webpage_table.go).
+	boxEdges map[int][4]webTableBorderEdge
 }
 
 type webBackgroundPaint struct {
@@ -3040,6 +3072,9 @@ type webCSSParse struct {
 	order  int
 	layers map[string]int
 	anon   int
+	// fontFaces, when set, collects the bodies of the @font-face rules in
+	// force (webpage_webfont.go).
+	fontFaces *[]string
 }
 
 // layerRank is a layer's place in the cascade, registering the name on first
@@ -3120,6 +3155,12 @@ func parseWebCSSInto(src string, depth int, ps *webCSSParse, rules *[]webRule, c
 		}
 		if strings.HasPrefix(selectorText, "@") {
 			lower := strings.ToLower(selectorText)
+			if strings.HasPrefix(lower, "@font-face") {
+				if ps.fontFaces != nil && len(*ps.fontFaces) < webMaxFontFaceRules {
+					*ps.fontFaces = append(*ps.fontFaces, body)
+				}
+				continue
+			}
 			if strings.HasPrefix(lower, "@container") {
 				query := webParseContainerQuery(selectorText)
 				if query != nil && depth < webCSSMaxNesting {
@@ -8259,13 +8300,13 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.WhiteSpace = webWhiteSpacePre
 		st.MarginTop, st.MarginBot = st.FontPx, st.FontPx
 		st.FontPx *= monoScale
-		st.Mono, st.IconFont = true, false
+		st.Mono, st.IconFont, st.WebFont = true, false, 0
 	case "code", "kbd", "samp":
 		st.FontPx *= monoScale
-		st.Mono, st.IconFont = true, false
+		st.Mono, st.IconFont, st.WebFont = true, false, 0
 	case "tt":
 		st.FontPx *= monoScale
-		st.Mono, st.IconFont = true, false
+		st.Mono, st.IconFont, st.WebFont = true, false, 0
 	case "sup", "sub":
 		// font-size: smaller, vertical-align: super/sub. The raise itself is
 		// webApplyBaselineShift's, against the parent's size.
@@ -8280,7 +8321,7 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.WhiteSpace = webWhiteSpaceNowrap
 	case "mat-icon":
 		// Angular Material's icon element: its text is a ligature name.
-		st.IconFont, st.Mono = true, false
+		st.IconFont, st.Mono, st.WebFont = true, false, 0
 	case "li":
 		st.Indent += 18
 		st.MarginTop, st.MarginBot = 2, 2
@@ -8950,6 +8991,18 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["outline-color"]; ok && webTransparentInValue(v) {
 		// Tailwind's outline-none: a transparent outline draws nothing.
 		st.Outline = false
+	}
+	if v, ok := decls["list-style-position"]; ok {
+		st.ListInside = strings.EqualFold(strings.TrimSpace(v), "inside")
+	} else if v, ok := decls["list-style"]; ok {
+		for _, f := range strings.Fields(strings.ToLower(v)) {
+			switch f {
+			case "inside":
+				st.ListInside = true
+			case "outside":
+				st.ListInside = false
+			}
+		}
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
 		if v, ok := decls[key]; ok {
@@ -10277,6 +10330,7 @@ type webParser struct {
 	pendingB           string
 	pendingBStyle      webStyle
 	hasPendingBStyle   bool
+	pendingHang        bool
 	// counters holds the active CSS counter instances. Each name is a stack:
 	// counter-reset pushes a nested instance and the element's end tag pops
 	// it, while counter-increment changes the nearest one.
@@ -10326,6 +10380,9 @@ type webParser struct {
 	// open-element stack alone. selTreePos advances one node per startTag.
 	selTree    []*webElement
 	selTreePos int
+	// webFamilies maps a web font family name (lower case) to 1 + its index
+	// in doc.WebFamilies.
+	webFamilies map[string]int
 	// target is the page address's fragment: the element whose id it names is
 	// the one :target matches.
 	target string
@@ -10412,7 +10469,13 @@ func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []web
 		webCollectInlineCSS(source, &p.css)
 	}
 	if p.css.Len() > 0 {
-		p.rules = parseWebCSS(p.css.String())
+		var faces []string
+		p.rules = make([]webRule, 0, 32)
+		ps := &webCSSParse{fontFaces: &faces}
+		parseWebCSSInto(stripWebCSSComments(p.css.String()), 0, ps, &p.rules, nil, "")
+		// The page's web fonts: their families are matched as styles are
+		// computed, their files fetched beside the pictures.
+		p.webFontSetup(faces)
 	}
 	p.ruleIx = newWebRuleIndex(p.rules)
 	p.pseudoMask = webRulesPseudoMask(p.rules)
@@ -10695,6 +10758,7 @@ func fetchWebStylesheetDepth(parent context.Context, pageURL, address string, se
 		return ""
 	}
 	browserChromeResource(req.Header, "style", browserAcceptStyle, browserURL(pageURL), req.URL)
+	webFontsSheetRequest(req)
 	// Same jar as the page: a sheet served only to a session (a CDN that
 	// hands out a token with the HTML) has to see the page's cookie.
 	client := browserHTTPClient(6 * time.Second)
@@ -11706,11 +11770,20 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		return
 	}
 	if name == "ul" || name == "ol" {
+		state := webListState{ordered: name == "ol"}
+		if style.DisplayInline && !p.flexItemBlockifies() {
+			// `display: inline` on the list itself (Wikipedia's
+			// `.hlist.inline ul`: "Recently featured: A · B · C", "Ongoing:
+			// …") keeps it in the line it starts in. It used to end that line
+			// and start one of its own; its inline items still number.
+			p.lists = append(p.lists, state)
+			p.pushInline(el, style, attrs, selfClose, name)
+			return
+		}
 		if !style.DisplayInlineBlock || !p.openInlineRow(style) {
 			p.closeInlineRow()
 		}
 		p.flush()
-		state := webListState{ordered: name == "ol"}
 		// <ol start="5"> counts from 5.
 		if v, ok := el.attr("start"); state.ordered && ok {
 			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > -1<<20 && n < 1<<20 {
@@ -11756,6 +11829,9 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 		p.pendingB = p.nextBullet(style)
 		p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
+		// A list whose page sets its start padding hangs its markers in that
+		// padding (list-style-position: outside), as a browser does.
+		p.pendingHang = p.listMarkerHangs(style)
 		// A ::marker rule can replace the bullet and style it. The list
 		// counter still advances above, so ordered items keep their numbers.
 		if p.pseudoMask&(1<<webPseudoElemMarker) != 0 {
@@ -12000,6 +12076,10 @@ func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string
 		marker := webBlock{Style: *style, TableEmptyRow: true, Layer: p.openLayerIn(len(p.stack)), TreeSeq: p.blockFrameSeq()}
 		marker.Float = marker.Layer != 0
 		marker.FloatGroup = p.openFloatIn(len(p.stack))
+		// It also belongs to the cell or flex item its table sits in, so it
+		// travels with that cell's blocks to the pass that lays the table out
+		// (webpage_table.go).
+		p.tagRowMarker(&marker)
 		p.blocks = append(p.blocks, marker)
 	case webTableRoleCell:
 		style.TableRow = ctx.row - 1
@@ -12017,6 +12097,15 @@ func (p *webParser) prepareTableStyle(name string, style *webStyle, attrs string
 		}
 		style.VerticalAlign, style.VerticalAlignPx = webVerticalBaseline, 0
 		style.CellOwn = true
+		// The row the cell sits in: its flex group is what the cell's blocks
+		// carry once the passes around the table have taken theirs.
+		style.TableRowGroup = 0
+		for k := len(p.stack) - 1; k > ctx.depth && k >= 0; k-- {
+			if f := &p.stack[k]; f.style.TableRole == webTableRoleRow && f.style.TableID == ctx.id {
+				style.TableRowGroup = f.flexGroup
+				break
+			}
+		}
 	}
 }
 
@@ -12185,6 +12274,7 @@ func (p *webParser) endTag(name string) {
 		}
 		if name == "li" {
 			p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
+			p.pendingHang = false
 		}
 		if name == "form" {
 			p.form = webForm{}
@@ -13026,6 +13116,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	}
 	parentHeight := p.webContainingBlockHeight(el)
 	applyWebDecls(&st, merged)
+	p.applyWebFontFamily(&st, merged)
 	webResolvePercentageHeights(&st, merged, parentHeight)
 	// `inherit` on an inherited property is the parent's value even where the
 	// tag has a default of its own (a reset's `h1 { font-weight: inherit }`).
@@ -13227,6 +13318,7 @@ func (p *webParser) pseudoContent(el webElement, attrs string, base webStyle, ps
 	webResolveBoxSides(merged, rank)
 	webResolveBorderColor(merged, rank)
 	applyWebDecls(&st, merged)
+	p.applyWebFontFamily(&st, merged)
 	if st.Hidden {
 		return result
 	}
@@ -13556,6 +13648,16 @@ func (p *webParser) dropListGutter(style *webStyle) {
 	}
 }
 
+// listMarkerHangs reports whether the list item about to open hangs its marker
+// outside its text: its list (the frame it opens in) has a start padding the
+// page set itself (ListPadSet), and the marker is not inside. Wikipedia's
+// `ul { margin: 0.3em 0 0 1.6em; padding: 0 }` puts the text at 1.6em and the
+// bullet left of it; the reader used to start the text after the bullet.
+func (p *webParser) listMarkerHangs(style webStyle) bool {
+	n := len(p.stack)
+	return n > 0 && p.stack[n-1].kind == "list" && p.stack[n-1].style.ListPadSet && !style.ListInside
+}
+
 func (p *webParser) nextBullet(style webStyle) string {
 	if len(p.lists) == 0 || style.ListNone {
 		return ""
@@ -13612,6 +13714,7 @@ func (p *webParser) ensureBlock() *webBlock {
 		BorderColor:        st.BorderColor,
 		HasBorderColor:     st.HasBorderColor,
 		Bullet:             p.pendingB,
+		MarkerHang:         p.pendingHang,
 		MarkerStyle:        p.pendingBStyle,
 		HasMarkerStyle:     p.hasPendingBStyle,
 		FlexGrow:           st.FlexGrow,
@@ -13673,6 +13776,7 @@ func (p *webParser) ensureBlock() *webBlock {
 	// Text that follows an inline image continues its line (webpage_inline.go).
 	block.InlineGroup = p.inlineGroup
 	p.pendingB, p.pendingBStyle, p.hasPendingBStyle = "", webStyle{}, false
+	p.pendingHang = false
 	p.current = block
 	return block
 }
@@ -14109,6 +14213,8 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 			return
 		}
 	}
+	// Text set in a web font is what makes its file worth fetching.
+	p.noteWebFontUse(style, raw)
 	if p.buttonCtrl != nil {
 		if p.buttonText.Len() < 512 {
 			p.buttonText.WriteString(htmlstd.UnescapeString(raw))
@@ -14395,13 +14501,29 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	// step smaller than its line when the text size is raised.
 	styledFonts := make(map[webFaceRequest]*ttf.Font, 8)
 	fontAtStyle := func(style webStyle) *ttf.Font {
-		if !style.Bold && !style.Italic && !style.Mono && !style.Serif {
+		web := style.WebFont
+		if style.IconFont {
+			// Material ligature names are rewritten to the glyphs the reader has.
+			web = 0
+		}
+		if !style.Bold && !style.Italic && !style.Mono && !style.Serif && web == 0 {
 			return fontAt(style.FontPx)
 		}
 		size := fontSize(style.FontPx)
-		key := webFaceRequest{size: size, bold: style.Bold, italic: style.Italic, mono: style.Mono, serif: style.Serif}
+		key := webFaceRequest{size: size, bold: style.Bold, italic: style.Italic, mono: style.Mono, serif: style.Serif, web: web}
 		if font, ok := styledFonts[key]; ok {
 			return font
+		}
+		if web != 0 {
+			// The page's own font, once its file has arrived
+			// (webpage_webfont.go); until then the face below.
+			if font := d.webFontFor(web, size, style.Bold, style.Italic); font != nil {
+				styledFonts[key] = font
+				return font
+			}
+			if !style.Bold && !style.Italic && !style.Mono && !style.Serif {
+				return fontAt(style.FontPx)
+			}
 		}
 		font := webReaderFace(config, elem.Font, size, style.Bold, style.Italic, style.Mono, style.Serif)
 		if font == nil {
@@ -14763,7 +14885,13 @@ func (l *webLayouter) sanitizedWord(font *ttf.Font, text string) string {
 	if out, ok := l.sanitized[key]; ok {
 		return out
 	}
-	out := sanitizeForFont(font, webDropPrivateUse(text))
+	// A web font (an icon font among them) draws the code points it maps,
+	// its icons included (webpage_webfont.go).
+	plain := text
+	if !webIsWebFace(font) {
+		plain = webDropPrivateUse(text)
+	}
+	out := sanitizeForFont(font, plain)
 	if l.sanitized == nil {
 		l.sanitized = make(map[webSanitizeKey]string, 256)
 	}
@@ -15220,9 +15348,11 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				layout.Floats[i].Y += dy
 			}
 		}
-		if block.TableEmptyRow {
+		if block.TableEmptyRow && block.FlexGroup == 0 {
 			// A row made only of rowspan holes never produced a cell block. Its
 			// marker still reserves the row so the table does not collapse it.
+			// A marker still inside a flex item or an outer table's cell goes
+			// with that item's blocks to the pass that lays its table out.
 			skipRows(1)
 			previousMarginBot = 0
 			shiftRelative()
@@ -15585,6 +15715,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 		textIndent := indent + bulletW
 		avail := blockW - bulletW
+		// An outside marker hangs in the list's padding, left of the text,
+		// where there is room for it; the text keeps the item's own edge.
+		hang := block.MarkerHang && bulletW > 0 && padX+indent >= bulletW
+		if hang {
+			textIndent, avail = indent, blockW
+		}
 		if avail < 48 {
 			textIndent = indent
 			avail = blockW
@@ -15673,9 +15809,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 			if firstLine && bullet != "" {
 				if markerFont != nil {
+					markerX := padX + indent + lineShift
+					if hang {
+						markerX -= bulletW
+					}
 					line = append([]webRunPos{{
 						Text:  bullet,
-						X:     padX + indent + lineShift,
+						X:     markerX,
 						Font:  markerFont,
 						Color: webResolveColor(markerStyle, d),
 						Bold:  markerStyle.Bold,
@@ -15945,6 +16085,16 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						// keeps the UI face instead of turning into substitutes.
 						plain := run.Style
 						plain.Serif = false
+						if f := fontAtStyle(plain); f != nil {
+							font = f
+						}
+					}
+					if run.Style.WebFont != 0 && webIsWebFace(font) && !webFontCoversText(font, word) {
+						// A web font that lacks a letter of the word (a Latin-only
+						// subset beside a Greek word) leaves the word to the reader's
+						// own face.
+						plain := run.Style
+						plain.WebFont = 0
 						if f := fontAtStyle(plain); f != nil {
 							font = f
 						}

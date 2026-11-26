@@ -892,6 +892,11 @@ func launchReportNewDraft(rec *launchRecord, cardTitle, summary string, issues [
 	if seen, ok := launchReportSeen[d.title]; ok && time.Since(seen.at) < launchReportRepeatWindow {
 		d.seenRef, d.seenAt = seen.ref, seen.at
 	}
+	// The diagnostics Submit adds hash JukaHub's own files: started now in the
+	// background, as Report a bug does, so Submit finds them done (or says
+	// "still being hashed") instead of hashing tens of megabytes on the UI
+	// thread — 7.5 s frozen on 2026-11-25 (JH-CA8ZMU's log).
+	componentVersionsWarm(appConfig)
 	if details != "" {
 		d.details, d.ready = details, true
 		return d

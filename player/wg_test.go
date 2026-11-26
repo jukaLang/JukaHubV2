@@ -308,13 +308,14 @@ func TestWGAmneziaWG(t *testing.T) {
 		t.Fatalf("the default values are plain WireGuard: %v %+v", err, p)
 	}
 	for name, bad := range map[string]string{
-		"overlapping types": strings.Replace(text, "H2 = 2000000", "H2 = 1000050", 1),
-		"same padded size":  strings.Replace(text, "S2 = 18", "S2 = 71", 1),
-		"Jmin over Jmax":    strings.Replace(text, "Jmin = 40", "Jmin = 90", 1),
-		"broken tag":        strings.Replace(text, "<rd 3>", "<rd 3", 1),
-		"backwards range":   strings.Replace(text, "1000000-1000100", "1000100-1000000", 1),
-		"type zero":         strings.Replace(text, "H3 = 3000000", "H3 = 0", 1),
-		"header protection": strings.Replace(text, "Jc = 3", "Jc = 3\nHeaderProtectionKey = "+base64.StdEncoding.EncodeToString(peer[:]), 1),
+		"overlapping types":     strings.Replace(text, "H2 = 2000000", "H2 = 1000050", 1),
+		"same padded size":      strings.Replace(text, "S2 = 18", "S2 = 71", 1),
+		"Jmin over Jmax":        strings.Replace(text, "Jmin = 40", "Jmin = 90", 1),
+		"broken tag":            strings.Replace(text, "<rd 3>", "<rd 3", 1),
+		"backwards range":       strings.Replace(text, "1000000-1000100", "1000100-1000000", 1),
+		"type zero":             strings.Replace(text, "H3 = 3000000", "H3 = 0", 1),
+		"protection, S3 < 12":   strings.Replace(text, "Jc = 3", "Jc = 3\nHeaderProtectionKey = "+base64.StdEncoding.EncodeToString(peer[:]), 1),
+		"trailers not a switch": strings.Replace(text, "Jc = 3", "Jc = 3\nRandomTrailers = maybe", 1),
 	} {
 		if _, err := wgParseConfig(bad); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -391,6 +392,50 @@ func TestWGAmneziaWG(t *testing.T) {
 	deliver(take(wireB), dA, epB)
 	if len(tunA.got) != 1 || !bytes.Equal(tunA.got[0], pong) {
 		t.Fatalf("a's tunnel got %x, want one %x", tunA.got, pong)
+	}
+
+	// AmneziaWG 3.1 (2026-11-25): header protection, content padding, random
+	// trailers, a timer and a keepalive range — the same exchange works, and
+	// no plain type is left on the wire.
+	text3 := strings.Replace(text, "S3 = 9", "S3 = 20", 1)
+	text3 = strings.Replace(text3, "Jc = 3", "Jc = 3\nHeaderProtectionKey = "+base64.StdEncoding.EncodeToString(peer[:])+
+		"\nContentPaddingAddition = 10-50\nRandomTrailers = on\nDisableCookies = on\nRekeyTimeout = 4-7", 1)
+	text3 = strings.Replace(text3, "Endpoint = ", "PersistentKeepalive = 22-30\nEndpoint = ", 1)
+	c3a, errA := wgParseConfig(text3)
+	c3b, errB := wgParseConfig(text3)
+	if errA != nil || errB != nil {
+		t.Fatal(errA, errB)
+	}
+	if a3 := c3a.AWG; !a3.HP || !a3.Trailers || !a3.NoCookies || a3.Content != (wgAWGRange{10, 50}) ||
+		c3a.Keepalive < 22 || c3a.Keepalive > 30 || len(c3a.Skipped) != 1 || !strings.HasPrefix(c3a.Skipped[0], "RekeyTimeout (") {
+		t.Fatalf("3.1 parsed %+v (AWG %+v)", c3a, c3a.AWG)
+	}
+	if quick := c3a.quickText(false); !strings.Contains(quick, "RandomTrailers = on\n") || !strings.Contains(quick, "HeaderProtectionKey = ") {
+		t.Fatalf("wg-quick text lost the 3.1 keys:\n%s", quick)
+	}
+	wireA, wireB, tunA, tunB = &wgTestWire{}, &wgTestWire{}, &wgTestTUN{}, &wgTestTUN{}
+	dA = newWGDevice(wgDeviceConfig{Identity: idA, Endpoint: epB, Allowed: all, MTU: wgDefaultMTU, Timestamp: stamp, AWG: c3a.AWG}, tunA, wireA, crand.Reader)
+	dB = newWGDevice(wgDeviceConfig{Identity: idB, Endpoint: epA, Allowed: all, MTU: wgDefaultMTU, Timestamp: stamp, AWG: c3b.AWG}, tunB, wireB, crand.Reader)
+	dA.sendPacket(ping, nil)
+	first = take(wireA)
+	init = first[len(first)-1]
+	if len(init) <= 15+wgInitiationSize || c3a.AWG.H[0].has(binary.LittleEndian.Uint32(init[15:19])) {
+		t.Fatalf("3.1 initiation %d bytes (want a trailer), type %d in the clear", len(init), binary.LittleEndian.Uint32(init[15:19]))
+	}
+	deliver(first, dB, epA)
+	deliver(take(wireB), dA, epB)
+	data = take(wireA)
+	if len(data) != 1 || len(data[0]) < 12+wgDataHeaderSize+len(ping)+10+wgTagSize {
+		t.Fatalf("3.1 data after the handshake: %d datagrams", len(data))
+	}
+	deliver(data, dB, epA)
+	if len(tunB.got) != 1 || !bytes.Equal(tunB.got[0], ping) {
+		t.Fatalf("3.1: b's tunnel got %x, want one %x", tunB.got, ping)
+	}
+	dB.sendPacket(pong, nil)
+	deliver(take(wireB), dA, epB)
+	if len(tunA.got) != 1 || !bytes.Equal(tunA.got[0], pong) {
+		t.Fatalf("3.1: a's tunnel got %x, want one %x", tunA.got, pong)
 	}
 }
 

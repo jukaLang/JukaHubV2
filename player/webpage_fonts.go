@@ -59,6 +59,7 @@ type webFaceRequest struct {
 	italic bool
 	mono   bool
 	serif  bool
+	web    int
 }
 
 // webBoldFaces remembers every face opened as a bold cut or emboldened copy,

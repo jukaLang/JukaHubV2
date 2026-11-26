@@ -33,6 +33,35 @@ type webTablePlan struct {
 	target   int32
 	cols     *webTableColumns
 	rowCount int
+	// parts holds, beside each cell of rows (same index), the cell's blocks in
+	// document order when it has more than one — the paragraphs, list items or
+	// nested table a <td> holds — and nil for a cell of one block, which rows
+	// already holds whole.
+	parts map[int][]webTableCellParts
+}
+
+// webTableCellParts is a cell of several blocks: all of them, in document
+// order, and which one is the cell element's own (the head in plan.rows).
+type webTableCellParts struct {
+	blocks []webBlock
+	own    int
+}
+
+// content is what a cell holds, for measuring: its blocks, or the head alone.
+func (c webTableCellParts) content(head webBlock) []webBlock {
+	if len(c.blocks) == 0 {
+		return []webBlock{head}
+	}
+	return c.blocks
+}
+
+// cellParts is the blocks of the ci-th cell of row, empty for a cell of one
+// block.
+func (plan *webTablePlan) cellParts(row, ci int) webTableCellParts {
+	if parts := plan.parts[row]; ci >= 0 && ci < len(parts) {
+		return parts[ci]
+	}
+	return webTableCellParts{}
 }
 
 type webTableColumn struct {
@@ -62,51 +91,124 @@ type webTableBorderEdge struct {
 
 type webTableBorderSpec [4]webTableBorderEdge
 
-// prepareWebTables rewrites the cell blocks of every table into columns. It is
-// a no-op for pages without table roles, so ordinary documents pay one scan.
+// prepareWebTables rewrites the cells of every table this pass lays out into
+// columns. It is a no-op for pages without table roles, so ordinary documents
+// pay one scan.
+//
+// A cell is every block its row holds under one item number (a <tr> is a flex
+// row, each <td> one of its items): the cell's own text, and the paragraphs,
+// list items and tables inside it. Each block used to be a cell of its own, so
+// a <td> of two paragraphs took two columns and pushed the rest of its row
+// right — a Hacker News comment of three paragraphs was three columns.
+//
+// A table is laid out by the pass in which its cells' blocks carry their row's
+// own flex group (webStyle.TableRowGroup): a table inside another table's cell,
+// or inside a flex or grid item, waits for that cell's or item's pass and is
+// measured at its width. At the page level its cells carried the outer row's
+// group, so all its rows were drawn as one long row of the outer table, and a
+// table in a flex item took the page's width.
 func (l *webLayouter) prepareWebTables(blocks []webBlock, contentW int32) []webBlock {
 	if len(blocks) == 0 || l.baseSize <= 0 {
 		return blocks
 	}
-	plans := make(map[int]*webTablePlan)
-	for _, block := range blocks {
-		if block.Style.TableRole != webTableRoleTable || block.Style.TableID == 0 {
-			continue
-		}
-		plans[block.Style.TableID] = &webTablePlan{
-			id: block.Style.TableID, table: block, cols: block.Style.TableCols,
-			rows: make(map[int][]webBlock), items: make(map[int][]webBlock),
+	rowOf := make(map[int][2]int)
+	for i := range blocks {
+		st := &blocks[i].Style
+		if st.TableRole == webTableRoleCell && !st.TablePrepared && st.TableRowGroup != 0 &&
+			blocks[i].FlexGroup == st.TableRowGroup {
+			rowOf[st.TableRowGroup] = [2]int{st.TableID, st.TableRow}
 		}
 	}
-	for _, block := range blocks {
-		if block.Style.TableRole != webTableRoleCell || block.Style.TablePrepared {
+	// The cells: a run of blocks of one row group and item number with a
+	// block of that row's table in it (the head: the cell element's own block
+	// when it has one). A CSS table cell with no row around it is one block, as
+	// every cell used to be.
+	type cellGroup struct{ start, end, own int }
+	var groups []cellGroup
+	cellOf := make([]int, len(blocks))
+	for i := 0; i < len(blocks); {
+		cellOf[i] = -1
+		b := &blocks[i]
+		ref, inRow := rowOf[b.FlexGroup]
+		if !inRow || b.FlexGroup == 0 {
+			if st := &b.Style; st.TableRole == webTableRoleCell && !st.TablePrepared && st.TableRowGroup == 0 {
+				cellOf[i] = len(groups)
+				groups = append(groups, cellGroup{start: i, end: i + 1, own: i})
+			}
+			i++
 			continue
 		}
-		plan := plans[block.Style.TableID]
+		j := i + 1
+		for j < len(blocks) && blocks[j].FlexGroup == b.FlexGroup && blocks[j].FlexItem == b.FlexItem {
+			j++
+		}
+		own := -1
+		for k := i; k < j; k++ {
+			st := &blocks[k].Style
+			if st.TableRole != webTableRoleCell || st.TablePrepared || st.TableID != ref[0] || st.TableRowGroup != b.FlexGroup {
+				continue
+			}
+			if own < 0 || (st.CellOwn && !blocks[own].Style.CellOwn) {
+				own = k
+			}
+		}
+		for k := i; k < j; k++ {
+			cellOf[k] = -1
+			if own >= 0 {
+				cellOf[k] = len(groups)
+			}
+		}
+		if own >= 0 {
+			groups = append(groups, cellGroup{start: i, end: j, own: own})
+		}
+		i = j
+	}
+	if len(groups) == 0 {
+		return blocks
+	}
+	plans := make(map[int]*webTablePlan)
+	newPlan := func(id int, table webBlock) *webTablePlan {
+		return &webTablePlan{
+			id: id, table: table, cols: table.Style.TableCols,
+			rows: make(map[int][]webBlock), items: make(map[int][]webBlock),
+			parts: make(map[int][]webTableCellParts),
+		}
+	}
+	for i := range blocks {
+		if st := &blocks[i].Style; st.TableRole == webTableRoleTable && st.TableID != 0 {
+			plans[st.TableID] = newPlan(st.TableID, blocks[i])
+		}
+	}
+	for _, g := range groups {
+		head := blocks[g.own]
+		plan := plans[head.Style.TableID]
 		if plan == nil {
 			// A table whose only content is cells never emitted a block of its
 			// own (the parser has no empty table block). Its cells still carry
 			// the table width and layout settings inherited from the context.
-			plan = &webTablePlan{
-				id: block.Style.TableID, table: webBlock{Style: block.Style}, cols: block.Style.TableCols,
-				rows: make(map[int][]webBlock), items: make(map[int][]webBlock),
-			}
-			plans[block.Style.TableID] = plan
+			plan = newPlan(head.Style.TableID, webBlock{Style: head.Style})
+			plans[head.Style.TableID] = plan
 		}
 		if plan.cols == nil {
-			plan.cols = block.Style.TableCols
+			plan.cols = head.Style.TableCols
 		}
-		row := block.Style.TableRow
+		row := head.Style.TableRow
 		if _, ok := plan.rows[row]; !ok {
 			plan.rowOrder = append(plan.rowOrder, row)
 		}
-		plan.rows[row] = append(plan.rows[row], block)
+		plan.rows[row] = append(plan.rows[row], head)
+		var parts webTableCellParts
+		if g.end-g.start > 1 {
+			parts = webTableCellParts{blocks: blocks[g.start:g.end], own: g.own - g.start}
+		}
+		plan.parts[row] = append(plan.parts[row], parts)
 		if row+1 > plan.rowCount {
 			plan.rowCount = row + 1
 		}
 	}
-	for _, block := range blocks {
-		if !block.TableEmptyRow {
+	for i := range blocks {
+		block := &blocks[i]
+		if !block.TableEmptyRow || cellOf[i] >= 0 {
 			continue
 		}
 		if plan := plans[block.Style.TableID]; plan != nil {
@@ -118,41 +220,155 @@ func (l *webLayouter) prepareWebTables(blocks []webBlock, contentW int32) []webB
 			}
 		}
 	}
-	if len(plans) == 0 {
-		return blocks
-	}
 	for _, plan := range plans {
 		l.prepareWebTable(plan, contentW)
 	}
 
-	out := make([]webBlock, 0, len(blocks))
+	out := make([]webBlock, 0, len(blocks)+len(groups))
 	emitted := make(map[[2]int]bool)
-	for _, block := range blocks {
+	for i := range blocks {
+		block := &blocks[i]
+		if g := cellOf[i]; g >= 0 {
+			// The row's cells, every block of each, go where its first cell
+			// starts.
+			head := &blocks[groups[g].own]
+			key := [2]int{head.Style.TableID, head.Style.TableRow}
+			if !emitted[key] {
+				emitted[key] = true
+				if plan := plans[key[0]]; plan != nil {
+					out = append(out, plan.items[key[1]]...)
+				}
+			}
+			continue
+		}
 		if block.TableEmptyRow {
 			if plan := plans[block.Style.TableID]; plan != nil && len(plan.rows[block.Style.TableRow]) > 0 {
 				continue
 			}
-			out = append(out, block)
-			continue
 		}
-		if block.Style.TableRole != webTableRoleCell {
-			out = append(out, block)
-			continue
-		}
-		plan := plans[block.Style.TableID]
-		if plan == nil {
-			out = append(out, block)
-			continue
-		}
-		row := block.Style.TableRow
-		key := [2]int{block.Style.TableID, row}
-		if emitted[key] {
-			continue
-		}
-		emitted[key] = true
-		out = append(out, plan.items[row]...)
+		out = append(out, *block)
 	}
 	return out
+}
+
+// webTableCellBlocks is one sized cell as items of its row. A cell of one block
+// is that block, as every cell used to be. A cell of several keeps them all,
+// in their order, under one item number (item) so the row lays them out
+// together, one under another, at the cell's width; the head goes first,
+// since the row reads the cell's width, alignment and table settings from an
+// item's first block. A head with nothing to draw (the block keepEmptyCell
+// gives a cell whose content is all child blocks) is moved there; a head with
+// text of its own after a child block stays where its text is, and an empty
+// copy of it leads the cell.
+func webTableCellBlocks(head webBlock, parts webTableCellParts, item int) []webBlock {
+	if len(parts.blocks) == 0 {
+		head.FlexItem = 0
+		head.FlexDir = webFlexRow
+		head.FlexTrail = nil
+		return []webBlock{head}
+	}
+	head.FlexItem, head.FlexDir = item, webFlexRow
+	if head.AlignSelf < 0 {
+		// A paragraph inside the cell has no cell alignment of its own; the
+		// cell's (a valign, or middle) is inherited as CellVAlign.
+		head.AlignSelf = webCellAlignSelf(head.Style.CellVAlign)
+		head.Style.AlignSelf = head.AlignSelf
+	}
+	// The cell's height floor belongs to the whole cell, and its bottom
+	// padding below its last block, not under the head's first line (the box
+	// the container pass paints round the cell keeps it).
+	head.Style.Height, head.Style.MinHeight = 0, 0
+	head.MarginBot = 0
+	out := make([]webBlock, 0, len(parts.blocks)+1)
+	own := parts.blocks[parts.own]
+	empty := own.TableEmptyCell && len(own.Runs) == 0
+	switch {
+	case parts.own == 0, empty:
+		out = append(out, head)
+	default:
+		lead := head
+		lead.Runs = nil
+		lead.TableEmptyCell, lead.CellBlankLine = true, false
+		lead.Style.CellOwn = false
+		webStripBlockPaint(&lead)
+		lead.Boxes, lead.BoxOwner, lead.OwnsBox = nil, 0, false
+		lead.Bullet = ""
+		out = append(out, lead)
+	}
+	for k, b := range parts.blocks {
+		if k == parts.own {
+			if parts.own == 0 || empty {
+				continue
+			}
+			// The head's own text, where the cell has it; the lead above
+			// carries the cell's size and its top padding, and this block the
+			// collapsed edges the table pass resolved for the cell.
+			b.MarginTop, b.MarginBot = 0, 0
+			b.Style.TableCol, b.Style.TablePrepared = head.Style.TableCol, true
+			if head.HasCollapseEdges {
+				b.HasCollapseEdges, b.CollapseEdges = true, head.CollapseEdges
+				b.BoxBorder, b.Style.BoxBorder = false, false
+				b.BorderLeft, b.BorderRight, b.BorderTop, b.BorderBottom = false, false, false, false
+				b.Style.BorderLeft, b.Style.BorderRight = false, false
+				b.Style.BorderTop, b.Style.BorderBottom = false, false
+			}
+		} else if b.Style.TableID == head.Style.TableID && b.Style.TableRole == webTableRoleCell {
+			// Blocks of this cell (not of a table nested in it) know their
+			// column, and are not prepared again by the cell's own pass.
+			b.Style.TableCol, b.Style.TablePrepared = head.Style.TableCol, true
+		}
+		b.FlexItem = item
+		b.FlexDir = webFlexRow
+		out = append(out, b)
+	}
+	return out
+}
+
+// webStripBlockPaint clears everything a block would paint of its own surface:
+// the empty block that leads a cell carries the cell's size, not a second copy
+// of its background and borders.
+func webStripBlockPaint(b *webBlock) {
+	b.HasBg, b.HasGradient = false, false
+	b.BorderLeft, b.BorderRight, b.BorderTop, b.BorderBottom = false, false, false, false
+	b.BoxBorder, b.Outline = false, false
+	b.HasCollapseEdges = false
+	st := &b.Style
+	st.HasBg, st.HasGradient, st.Gradient = false, false, nil
+	st.BackgroundImage, st.BackgroundLayerCount = "", 0
+	st.BoxBorder, st.Outline, st.HasBoxShadow = false, false, false
+	st.BorderLeft, st.BorderRight, st.BorderTop, st.BorderBottom = false, false, false, false
+}
+
+// webTableCellBox is the box of the cell element whose blocks these are, when
+// it paints a surface (a background, borders): with several blocks in the cell
+// the container pass paints it around all of them. It also returns the
+// collapsed borders the table pass resolved for the cell.
+func (l *webLayouter) webTableCellBox(blocks []webBlock) (int, [4]webTableBorderEdge, bool) {
+	if l.doc == nil {
+		return 0, [4]webTableBorderEdge{}, false
+	}
+	for k := range blocks {
+		b := &blocks[k]
+		if !b.Style.CellOwn || !b.OwnsBox || b.BoxOwner == 0 {
+			continue
+		}
+		if info, ok := l.doc.Boxes[b.BoxOwner]; ok && info.visual {
+			return b.BoxOwner, b.CollapseEdges, b.HasCollapseEdges
+		}
+		break
+	}
+	return 0, [4]webTableBorderEdge{}, false
+}
+
+// webTableCellIndexAt is the index in a row's cells of the one that starts at
+// column col, or -1.
+func webTableCellIndexAt(cells []webBlock, col int) int {
+	for i := range cells {
+		if cells[i].Style.TableCol == col {
+			return i
+		}
+	}
+	return -1
 }
 
 func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
@@ -259,8 +475,8 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 		lastRow := row >= rows-1
 		items := make([]webBlock, 0, cols)
 		for c := 0; c < cols; c++ {
-			if cell, ok := webTableCellAt(plan.rows[row], c); ok {
-				cell = webTableSizeCell(cell, track, scale)
+			if ci := webTableCellIndexAt(plan.rows[row], c); ci >= 0 {
+				cell := webTableSizeCell(plan.rows[row][ci], track, scale)
 				cell.FlexGapX = cell.Style.TableSpacingX
 				cell.Style.CellLastRow = lastRow
 				if r > 0 {
@@ -269,10 +485,10 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 				cell.Style.TableColumnCount = cols
 				cell.Style.TableWidthPx = float64(target) / scale
 				cell.Style.TableWidthPct = 0
-				cell.FlexItem = 0
-				cell.FlexDir = webFlexRow
-				cell.FlexTrail = nil
-				items = append(items, cell)
+				// One item number per column: the cell's blocks stay together,
+				// and the number is no element's, so the row's box depths
+				// (FlexItemBoxDepth) apply to the cell as to a one-block cell.
+				items = append(items, webTableCellBlocks(cell, plan.cellParts(row, ci), -(c+1))...)
 				c += cell.Style.ColSpan - 1
 				continue
 			}
@@ -303,18 +519,69 @@ func (l *webLayouter) prepareWebTable(plan *webTablePlan, contentW int32) {
 // as a browser draws it.
 
 // keepEmptyCell runs when a table cell closes and gives it a block when it
-// produced none.
+// produced none. A cell of a row whose content was all child blocks — its
+// paragraphs, a list, a table nested in it — gets an empty block of its own
+// too: the cell element's width, spans and alignment are then on a block of
+// the cell, which the table pass puts first among its blocks
+// (webTableCellBlocks). It draws nothing.
 func (p *webParser) keepEmptyCell(f *webFrame) {
-	if len(p.blocks) > f.blockStart {
-		return
-	}
-	if p.current != nil && webBlockKept(p.current) {
+	if len(p.blocks) > f.blockStart || (p.current != nil && webBlockKept(p.current)) {
+		if f.style.TableRowGroup == 0 || p.cellHasOwnBlock(f) {
+			return
+		}
+		// Only where the cell itself is the innermost open block: an element
+		// left open inside it would lend the block its own style.
+		if st := p.nearestBlockStyle(); !p.ownCellStyle(&st, f) {
+			return
+		}
+		p.flush()
+		p.ensureBlock().TableEmptyCell = true
 		return
 	}
 	blank := f.blankLine || (p.current != nil && len(p.current.Runs) > 0)
 	block := p.ensureBlock()
 	block.TableEmptyCell = true
 	block.CellBlankLine = blank
+}
+
+// tagRowMarker gives the marker a row leaves (webBlock.TableEmptyRow) the flex
+// memberships open around its table — an outer table's cell, a flex or grid
+// item — so it stays with that cell's or item's blocks until the pass that lays
+// the table out (prepareWebTables). A row that is itself an item of the flex
+// container around it (a CSS table row straight in a flex box) takes its item
+// number only when it is pushed, so its marker keeps none, as every marker
+// used to.
+func (p *webParser) tagRowMarker(marker *webBlock) {
+	n := len(p.flexStack)
+	if n == 0 || p.flexDirectChild(&p.flexStack[n-1], len(p.stack)) {
+		return
+	}
+	for i := range p.flexStack {
+		if p.flexStack[i].item == 0 {
+			return
+		}
+	}
+	p.tagFlexBlock(marker, marker.Style)
+}
+
+// ownCellStyle reports whether st is the style of cell frame f's own element.
+func (p *webParser) ownCellStyle(st *webStyle, f *webFrame) bool {
+	return st.CellOwn && st.TableID == f.style.TableID && st.TableRow == f.style.TableRow &&
+		st.TableRowGroup == f.style.TableRowGroup
+}
+
+// cellHasOwnBlock reports whether cell frame f produced a block of its own
+// element's style: its own text, or an empty block that holds its column.
+func (p *webParser) cellHasOwnBlock(f *webFrame) bool {
+	if p.current != nil && webBlockKept(p.current) && p.ownCellStyle(&p.current.Style, f) {
+		return true
+	}
+	for i := f.blockStart; i < len(p.blocks); i++ {
+		if p.ownCellStyle(&p.blocks[i].Style, f) {
+			return true
+		}
+	}
+	return false
 }
 
 // keepSpacer runs when a block element outside any table closes having drawn
@@ -551,15 +818,6 @@ func webStretchTableCell(sub *webLayout, key int64, extra, drop int32) {
 	}
 }
 
-func webTableCellAt(cells []webBlock, col int) (webBlock, bool) {
-	for _, cell := range cells {
-		if cell.Style.TableCol == col {
-			return cell, true
-		}
-	}
-	return webBlock{}, false
-}
-
 func webTableSizeCell(cell webBlock, track []int32, scale float64) webBlock {
 	span := cell.Style.ColSpan
 	if span < 1 {
@@ -650,6 +908,13 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 	if target > contentW {
 		target = contentW
 	}
+	if cols == 1 {
+		// One column is the table's width whatever its cells ask for: a page
+		// laid out in one big table (Hacker News's) is not measured word by
+		// word for it.
+		track[0] = target
+		return track, target
+	}
 	fixed := plan.table.Style.TableLayout == webTableLayoutFixed
 	colSpecified := make([]bool, cols)
 	if plan.cols != nil {
@@ -732,15 +997,22 @@ func (l *webLayouter) webTableTracks(plan *webTablePlan, cols int, contentW int3
 		}
 	} else {
 		for _, row := range plan.rowOrder {
-			for _, cell := range plan.rows[row] {
+			for ci, cell := range plan.rows[row] {
+				parts := plan.cellParts(row, ci)
 				// A cell with nothing to draw holds its column's place, not a
 				// width (keepEmptyCell): a column of empty cells is as narrow
 				// as in a browser, so the "Next Page" cell DuckDuckGo Lite sets
 				// beside an empty one stays at the left edge.
-				if cell.TableEmptyCell && webTableExplicitWidth(cell, target, scale) <= 0 {
+				if len(parts.blocks) == 0 && cell.TableEmptyCell && webTableExplicitWidth(cell, target, scale) <= 0 {
 					continue
 				}
-				demand := max(l.intrinsicContainerWidth([]webBlock{cell}), l.webTableLineWidth(cell))
+				// A cell of several blocks asks for its widest: a paragraph's
+				// line, a list item, a table nested in it.
+				content := parts.content(cell)
+				demand := l.intrinsicContainerWidth(content)
+				for k := range content {
+					demand = max(demand, l.webTableLineWidth(content[k]))
+				}
 				if demand <= 0 {
 					demand = webTableMinCell * int32(scale)
 				}
@@ -867,10 +1139,10 @@ func (l *webLayouter) webTableLineWidth(b webBlock) int32 {
 func (l *webLayouter) webTableFloors(plan *webTablePlan, cols int, target int32, scale float64) []int32 {
 	floor := make([]int32, cols)
 	for _, row := range plan.rowOrder {
-		for _, cell := range plan.rows[row] {
+		for ci, cell := range plan.rows[row] {
 			// Two pixels of slack keep a word that exactly fits from wrapping
 			// on a rounding of the cell's measure.
-			least := l.intrinsicMinContentWidth([]webBlock{cell}) + 2
+			least := l.intrinsicMinContentWidth(plan.cellParts(row, ci).content(cell)) + 2
 			if width := webTableExplicitWidth(cell, target, scale); width > least {
 				least = width
 			}

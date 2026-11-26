@@ -201,6 +201,27 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
 
 ### Regression checks without separate task IDs
 
+- **Wikipedia lists** (CHANGELOG Fixed, 2026-11-25). On en.wikipedia.org's Main
+  Page: "Recently featured:" and its three links are one line, In the news's
+  "Ongoing:" and "Recent deaths:" lines keep their names on the same line, the
+  "Archive · By email · …" footers read with dots between, and the bullets of
+  In the news / Did you know / On this day sit left of each item with the text
+  lined up under the first line's start.
+- 2026-11-25 (JH-CA8ZMU): start a PSP game on a stock Smart Pro with JukaHub's
+  PPSSPP. `jukahub-ppsspp.status` should say "cleared PPSSPP's memory of a failed
+  graphics back end" the first time, the game should start with sound, and the
+  log should have no "setterm: not found" or "Secondary instance". Also import an
+  AmneziaWG 3.1 file (HeaderProtectionKey, RandomTrailers) and check that the
+  handshake completes and data flows.
+- **Browser tables and web fonts** (CHANGELOG Added and Fixed, 2026-11-25).
+  On a handheld: news.ycombinator.com shows the orange bar, then the stories
+  one per row (rank, arrow, title; points line under the title), and a
+  comment page shows each comment's paragraphs stacked in one column; a
+  Wikipedia article's infobox rows with lists stay two columns; a page on a
+  Google Font (fonts.google.com itself, or a blog using Roboto/Lora) redraws
+  in it within a few seconds of loading; a site with Font Awesome icons
+  (fontawesome.com) shows the icons in its buttons. With JavaScript off,
+  lite.duckduckgo.com still lays out as before.
 - **Launch-failure card with Submit report** (CHANGELOG Added and Fixed,
   2026-11-25). On a handheld, two failures that change nothing on the card's
   emulators: (1) an empty `Roms/GBA/empty.gba`, rescanned and started

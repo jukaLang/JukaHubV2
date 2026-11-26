@@ -1019,7 +1019,7 @@ skip. While music plays (and no game runs), the power button only turns the
 screen off and the music keeps playing (**Power button while music plays**:
 Screen off or Sleep); see [MUSIC_PLAYER.md](MUSIC_PLAYER.md#screen-off).
 
-When a game closes within seconds of starting, a card says what is missing and where to copy it; **Up/Down** scroll a long card and any other button dismisses it. The game options sheet has **Check why it won't start** to run the same check before playing.
+When a game closes within seconds of starting, or cannot be started at all, a card says what is missing and where to copy it, and shows the bug report it can send. **Submit report** is focused, so **A** files the report as a GitHub issue; **B** (or **Cancel**) closes the card and sends nothing. **Left/Right** choose between the two, **Up/Down** scroll and **L1/R1** turn a page; on a PC Enter, Esc, the wheel and a click work too ([Bug reports](BUG_REPORTS.md#when-a-game-or-an-emulator-does-not-start)). The emulators on the Emulators page get the same card when one cannot open. The game options sheet has **Check why it won't start** to run the same check before playing; that card reports nothing, and any button dismisses it.
 
 #### Edit Home
 

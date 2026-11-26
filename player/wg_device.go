@@ -436,11 +436,15 @@ func sealData(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte) []
 }
 
 // sealDataAWG is sealData with AmneziaWG's transport type and the random
-// padding in front (wg_awg.go); a nil a is plain WireGuard.
+// padding in front, 3.0's extra zero padding inside and header protection over
+// the 16-byte header (wg_awg.go); a nil a is plain WireGuard.
 func sealDataAWG(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte, a *wgAWG) []byte {
 	pre := a.pad(wgMsgData)
-	pad := wgPadding(len(pkt), mtu)
-	body := len(pkt) + pad
+	inner := len(pkt) + a.extra(len(pkt))
+	if mtu > 0 && inner > mtu {
+		inner = max(len(pkt), mtu)
+	}
+	body := inner + wgPadding(inner, mtu)
 	if cap(buf) < pre+wgDataHeaderSize+body+wgTagSize {
 		buf = make([]byte, 0, pre+wgDataHeaderSize+body+wgTagSize)
 	}
@@ -453,7 +457,9 @@ func sealDataAWG(kp *wgKeypair, counter uint64, pkt []byte, mtu int, buf []byte,
 	copy(msg[wgDataHeaderSize:], pkt)
 	clear(msg[wgDataHeaderSize+len(pkt):])
 	nonce := wgNonce(counter)
-	return kp.send.Seal(buf[:pre+wgDataHeaderSize], nonce[:], msg[wgDataHeaderSize:], nil)
+	out := kp.send.Seal(buf[:pre+wgDataHeaderSize], nonce[:], msg[wgDataHeaderSize:], nil)
+	a.protect(out, pre, wgDataHeaderSize)
+	return out
 }
 
 // sendPacket sends one packet from the tunnel to the peer — or a keepalive
@@ -725,9 +731,11 @@ func (d *wgDevice) receive(msg []byte, src netip.AddrPort, buf []byte) {
 }
 
 // receiveAWG is receive for an AmneziaWG server (wg_awg.go): a handshake
-// message is known by its padded size and a type in its range behind the
-// padding; anything else is a transport message behind S4 bytes, with a type
-// in H4's range. What matches nothing (junk, decoys) is dropped.
+// message is known by its padded size (at least that with 3.1's trailers) and
+// a type in its range behind the padding; anything else is a transport message
+// behind S4 bytes, with a type in H4's range. With header protection the type
+// is read through the keystream and the message is unprotected before it is
+// taken. What matches nothing (junk, decoys) is dropped.
 func (d *wgDevice) receiveAWG(msg []byte, src netip.AddrPort, buf []byte) {
 	a := d.cfg.AWG
 	for _, k := range [...]struct {
@@ -735,10 +743,14 @@ func (d *wgDevice) receiveAWG(msg []byte, src netip.AddrPort, buf []byte) {
 		size int
 	}{{wgMsgInitiation, wgInitiationSize}, {wgMsgResponse, wgResponseSize}, {wgMsgCookie, wgCookieSize}} {
 		pad := a.pad(k.kind)
-		if len(msg) != pad+k.size || !a.is(k.kind, binary.LittleEndian.Uint32(msg[pad:pad+4])) {
+		if len(msg) != pad+k.size && (!a.Trailers || len(msg) < pad+k.size) {
 			continue
 		}
-		switch body := msg[pad:]; k.kind {
+		if v, ok := a.typeAt(msg, pad); !ok || !a.is(k.kind, v) {
+			continue
+		}
+		a.protect(msg, pad, k.size)
+		switch body := msg[pad : pad+k.size]; k.kind {
 		case wgMsgInitiation:
 			d.receiveInitiation(body, src)
 		case wgMsgResponse:
@@ -749,7 +761,11 @@ func (d *wgDevice) receiveAWG(msg []byte, src netip.AddrPort, buf []byte) {
 		return
 	}
 	pad := a.pad(wgMsgData)
-	if len(msg) >= pad+wgKeepaliveSize && a.is(wgMsgData, binary.LittleEndian.Uint32(msg[pad:pad+4])) {
+	if len(msg) < pad+wgKeepaliveSize {
+		return
+	}
+	if v, ok := a.typeAt(msg, pad); ok && a.is(wgMsgData, v) {
+		a.protect(msg, pad, wgDataHeaderSize)
 		d.receiveData(msg[pad:], src, buf)
 	}
 }

@@ -280,11 +280,12 @@ func (c *wgConfig) setPeer(key, val string, havePeerKey *bool) error {
 			c.Keepalive = 0
 			break
 		}
-		n, err := strconv.Atoi(val)
-		if err != nil || n < 0 || n > 65535 {
+		// AmneziaWG 3 allows a range ("22-30"): one value in it is drawn.
+		r, err := wgAWGParseSpan("PersistentKeepalive", val)
+		if err != nil {
 			return fmt.Errorf("PersistentKeepalive %q is not a number of seconds", val)
 		}
-		c.Keepalive = n
+		c.Keepalive = r.draw()
 	default:
 		c.Skipped = append(c.Skipped, wgKeyName(key))
 	}

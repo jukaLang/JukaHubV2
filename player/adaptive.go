@@ -147,8 +147,13 @@ func (fc *FrameRateController) NotifyInput() {
 	fc.mu.Lock()
 	fc.lastInputTime = sdl.GetTicks64()
 	if fc.currentMode != FrameRateActive {
+		// Only waking from deep idle is logged: under Low Power (the handheld's
+		// default) every press flipped Active ↔ Idle with two lines, and they
+		// filled the recent log of every bug report (2026-11-25).
+		if fc.currentMode == FrameRateDeepIdle {
+			logDebug("framerate", "→ Active (%d fps)", fc.profile.fps(FrameRateActive))
+		}
 		fc.currentMode = FrameRateActive
-		logDebug("framerate", "→ Active (%d fps)", fc.profile.fps(FrameRateActive))
 	}
 	fc.mu.Unlock()
 	// Faster menus: the CPU speeds up for the frames this press asked for
@@ -276,8 +281,11 @@ func (fc *FrameRateController) Delay() uint32 {
 
 	fc.mu.Lock()
 	if mode != fc.currentMode {
+		// Into and out of deep idle only (see NotifyInput).
+		if mode == FrameRateDeepIdle || fc.currentMode == FrameRateDeepIdle {
+			logDebug("framerate", "→ %v (%d fps, idle %dms)", mode, fc.profile.fps(mode), elapsed)
+		}
 		fc.currentMode = mode
-		logDebug("framerate", "→ %v (%d fps, idle %dms)", mode, fc.profile.fps(mode), elapsed)
 	}
 	fc.mu.Unlock()
 

@@ -105,32 +105,98 @@ func ppssppSetSectionValue(lines []string, sectionName, keyName, value string) [
 	return out
 }
 
+// ppssppTrimuiNoBackend is the graphics back end PPSSPP must never pick on the
+// A133P. Vulkan needs a window the firmware's SDL2 (its mali driver) cannot
+// describe, so PPSSPP ended at once with "Vulkan subsystem 0 not supported"
+// every time its own crash memory sent it there (2026-11-25, JH-CA8ZMU). Listed
+// in DisabledGraphicsBackends it counts as failed for good, and with OpenGL in
+// the crash memory as well PPSSPP starts its default — OpenGL — rather than it.
+const ppssppTrimuiNoBackend = "VULKAN"
+
+// ppssppFailedBackendsFile is PPSSPP's crash memory for graphics: the back end
+// it is starting is written there first and the file is deleted once its
+// graphics came up, so a run that died on the way leaves it, and the next
+// start tries another back end (Vulkan on a TrimUI, which cannot work). The
+// handheld's builds keep it beside ppsspp.ini; older ones in SYSTEM/CACHE.
+const ppssppFailedBackendsFile = "FailedGraphicsBackends.txt"
+
+// ppssppBackendListHas reports whether a comma list of graphics back ends
+// (PPSSPP's FailedGraphicsBackends / DisabledGraphicsBackends) names one.
+func ppssppBackendListHas(list, name string) bool {
+	for _, part := range strings.Split(list, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// ppssppPrepareTrimuiHome readies the shared settings (sys: the memstick's
+// SYSTEM folder) of a tg5040 build before every game: OpenGL in full screen,
+// Vulkan off, no crash memory of a failed back end, and the pad mapped.
 func ppssppPrepareTrimuiHome(sys, platform string) {
 	if platform != ppssppOwnPlatform || sys == "" {
 		return
 	}
 	graphics := filepath.Join(sys, "ppsspp.ini")
 	if !regularFile(graphics) {
-		if err := os.WriteFile(graphics, []byte("[Graphics]\nGraphicsBackend = 0 (OPENGL)\nFullScreen = True\n"), 0o644); err != nil {
+		if err := os.WriteFile(graphics, []byte("[Graphics]\nGraphicsBackend = 0 (OPENGL)\nFullScreen = True\nDisabledGraphicsBackends = "+ppssppTrimuiNoBackend+"\n"), 0o644); err != nil {
 			logWarn("ppsspp", "could not set the TrimUI graphics backend: %v", err)
 		}
 	} else if raw, err := os.ReadFile(graphics); err == nil {
 		lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
 		backend, _ := ppssppINIValue(lines, "Graphics", "GraphicsBackend")
 		fullScreen, _ := ppssppINIValue(lines, "Graphics", "FullScreen")
-		if !strings.HasPrefix(strings.TrimSpace(backend), "0 ") || !strings.EqualFold(fullScreen, "True") {
+		failed, _ := ppssppINIValue(lines, "Graphics", "FailedGraphicsBackends")
+		disabled, _ := ppssppINIValue(lines, "Graphics", "DisabledGraphicsBackends")
+		fixBackend := !strings.HasPrefix(strings.TrimSpace(backend), "0 ")
+		fixFull := !strings.EqualFold(fullScreen, "True")
+		// The crash memory as an ini value (PPSSPP saves it there too). A
+		// player's own IGNORE, which turns the fallback off, stays.
+		clearFailed := failed != "" && !strings.EqualFold(failed, "IGNORE")
+		addDisabled := !ppssppBackendListHas(disabled, ppssppTrimuiNoBackend)
+		if fixBackend || fixFull || clearFailed || addDisabled {
 			if err := writePPSSPPControls(graphics, func(lines []string) []string {
-				if !strings.HasPrefix(strings.TrimSpace(backend), "0 ") {
+				if fixBackend {
 					lines = ppssppSetSectionValue(lines, "Graphics", "GraphicsBackend", "0 (OPENGL)")
 				}
-				if !strings.EqualFold(fullScreen, "True") {
+				if fixFull {
 					lines = ppssppSetSectionValue(lines, "Graphics", "FullScreen", "True")
+				}
+				if clearFailed {
+					lines = ppssppSetSectionValue(lines, "Graphics", "FailedGraphicsBackends", "")
+				}
+				if addDisabled {
+					list := ppssppTrimuiNoBackend
+					if cur, _ := ppssppINIValue(lines, "Graphics", "DisabledGraphicsBackends"); cur != "" {
+						list = cur + "," + list
+					}
+					lines = ppssppSetSectionValue(lines, "Graphics", "DisabledGraphicsBackends", list)
 				}
 				return lines
 			}); err != nil {
 				logWarn("ppsspp", "could not repair the TrimUI graphics settings: %v", err)
+			} else if clearFailed {
+				logInfo("ppsspp", "cleared PPSSPP's memory of a failed graphics back end (%s) in ppsspp.ini: a run that died left it", failed)
 			}
 		}
+	}
+	for _, file := range []string{filepath.Join(sys, ppssppFailedBackendsFile), filepath.Join(sys, "CACHE", ppssppFailedBackendsFile)} {
+		if !regularFile(file) {
+			continue
+		}
+		was := "empty"
+		if data, err := os.ReadFile(file); err == nil && strings.TrimSpace(string(data)) != "" {
+			was = strings.TrimSpace(string(data))
+			if len(was) > 80 {
+				was = was[:80]
+			}
+		}
+		if err := os.Remove(file); err != nil {
+			logWarn("ppsspp", "could not clear PPSSPP's memory of a failed graphics back end: %v", err)
+			continue
+		}
+		logInfo("ppsspp", "cleared PPSSPP's memory of a failed graphics back end (%s): a run that died left %s", was, file)
 	}
 
 	controls := filepath.Join(sys, "controls.ini")

@@ -13,7 +13,13 @@ func TestPPSSPPTrimuiHomeRepairsKeyboardAndGraphics(t *testing.T) {
 	sys := t.TempDir()
 	graphics := filepath.Join(sys, "ppsspp.ini")
 	controls := filepath.Join(sys, "controls.ini")
-	if err := os.WriteFile(graphics, []byte("[General]\nLanguage = en_US\n[Graphics]\nGraphicsBackend = 3 (VULKAN)\nDisplayAspectRatio = 0.848000\n"), 0o644); err != nil {
+	if err := os.WriteFile(graphics, []byte("[General]\nLanguage = en_US\n[Graphics]\nGraphicsBackend = 3 (VULKAN)\nDisplayAspectRatio = 0.848000\nFailedGraphicsBackends = OPENGL\nDisabledGraphicsBackends = DIRECT3D11\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// PPSSPP's crash memory (2026-11-25, JH-CA8ZMU): it sent every start to
+	// Vulkan, which the firmware's SDL cannot give it.
+	crashMemory := filepath.Join(sys, ppssppFailedBackendsFile)
+	if err := os.WriteFile(crashMemory, []byte("OPENGL"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Pause = 10-109 is what an older JukaHub wrote: a code PPSSPP's SDL front
@@ -25,6 +31,10 @@ func TestPPSSPPTrimuiHomeRepairsKeyboardAndGraphics(t *testing.T) {
 	gotGraphics, _ := os.ReadFile(graphics)
 	if !strings.Contains(string(gotGraphics), "GraphicsBackend = 0 (OPENGL)") || !strings.Contains(string(gotGraphics), "DisplayAspectRatio = 0.848000") || !strings.Contains(string(gotGraphics), "Language = en_US") {
 		t.Fatalf("graphics were not repaired without losing settings: %s", gotGraphics)
+	}
+	if !strings.Contains(string(gotGraphics), "DisabledGraphicsBackends = DIRECT3D11,VULKAN") ||
+		strings.Contains(string(gotGraphics), "FailedGraphicsBackends = OPENGL") || regularFile(crashMemory) {
+		t.Fatalf("Vulkan not disabled or the crash memory kept: %s", gotGraphics)
 	}
 	gotControls, _ := os.ReadFile(controls)
 	if !strings.Contains(string(gotControls), "Cross = 1-44,10-189") || !strings.Contains(string(gotControls), "An.Up = 10-4003") ||

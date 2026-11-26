@@ -1088,10 +1088,11 @@ when a page's container structure depends on layout the reader does not model,
 it can still pick the wrong branch. Column flow grows implicit rows when the
 block axis is indefinite, and `auto-fit` removes the gaps belonging to
 tracks it collapses. A non-rectangular `grid-template-areas` matrix still uses
-the bounding box of its cells. A font family chooses only between the app's
-face, a monospace one (when the machine has a monospace font) and a serif one;
-web fonts are not downloaded, and an icon font shows only the icons Inter has a
-glyph for. SVG text, embedded pictures, filters, masks and clip paths are not
+the bounding box of its cells. A page's own fonts (`@font-face`) are
+downloaded when they come as TrueType, OpenType or WOFF, regular and bold only
+(a WOFF2-only font, Material Icons and anything past the handheld's caps keep
+the app's face, a monospace one or a serif one); Font Awesome style icon fonts
+draw their icons. SVG text, embedded pictures, filters, masks and clip paths are not
 drawn (the rest of the drawing is). A cell's content moves within its row by
 whole text rows, so `vertical-align: middle` centres it to the nearest row.
 A fixed box too big to pin (taller than the screen, or most of it across the

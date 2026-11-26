@@ -1591,6 +1591,14 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 		return browserPage{}
 	}
 	source := scripted.HTML
+	// The script pass hands back markup its document wrote out, every element
+	// closed. A page it did not rebuild — nothing to run, JavaScript off, a pass
+	// that stopped — goes through the same HTML5 tree builder here, so unclosed
+	// cells, rows, list items and paragraphs end where a browser ends them
+	// (webdom_markup.go). A pass stopped at its memory ceiling is left alone.
+	if !scripted.Serialized && webJSLoadGeneration() == gen && !strings.HasPrefix(scripted.Reason, "stopped: memory") {
+		source = webDOMRendererMarkup(source)
+	}
 	// The page's ads come out of its markup before anything reads it: the
 	// reader text, the links, the style sheets, the layout and the image pass
 	// never see them, and the page closes up where they were
@@ -1652,7 +1660,15 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	}
 	// Images load with the page: one bounded concurrent pass stores the bytes
 	// and natural sizes the reader paints from (webpage_image.go).
+	// The page's web fonts load beside them (webpage_webfont.go); each file
+	// that arrives lays the page out again in it.
+	fontsDone := make(chan struct{})
+	go func() {
+		defer close(fontsDone)
+		fetchWebFontsContext(ctx, doc)
+	}()
 	fetchWebImagesContext(ctx, doc)
+	<-fontsDone
 	if ctx.Err() != nil {
 		return browserPage{}
 	}

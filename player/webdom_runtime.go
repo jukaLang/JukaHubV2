@@ -151,6 +151,11 @@ type webJSPageResult struct {
 	Navigate string // where a script sent the page (location.href = …); "" for none
 	Ran      bool   // the DOM pass ran the page's scripts
 	Reason   string // why the pass was skipped or gave up, for the debug log
+	// Serialized is set when HTML is the DOM pass's own serialisation, every
+	// element closed; otherwise it is the markup as it arrived (or as the
+	// legacy pass left it), which the page load rebuilds through the same tree
+	// builder (webDOMRendererMarkup).
+	Serialized bool
 }
 
 // browserJavaScriptKey is the Custom key of Settings → Browser → JavaScript.
@@ -759,6 +764,7 @@ func (s *webJSSession) runPage(tree, source string) (webJSPageResult, error) {
 		res.Reason = fmt.Sprintf("scripts left %d of %d characters of text", st.TextAfter, st.TextBefore)
 	default:
 		res.HTML = out
+		res.Serialized = true
 		res.Reason = abort
 	}
 	requests, bytes, blocked := s.net.stats()

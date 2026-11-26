@@ -111,6 +111,25 @@ func coverageFor(path string) ([]runeRange, bool) {
 	return ranges, true
 }
 
+// registerFontCoverageData records the character map of a font held only in
+// memory (a page's web font) under key, the name registerFontPath gives its
+// faces, so sanitizeForFont and fontCoversRune read it like a file's.
+func registerFontCoverageData(key string, data []byte) {
+	if key == "" {
+		return
+	}
+	ranges, err := parseCMAPData(data)
+	if err == nil {
+		sort.Slice(ranges, func(i, j int) bool { return ranges[i].lo < ranges[j].lo })
+		ranges = mergeRanges(ranges)
+	} else {
+		ranges = nil
+	}
+	coverageMu.Lock()
+	coverageCache[key] = ranges
+	coverageMu.Unlock()
+}
+
 func mergeRanges(in []runeRange) []runeRange {
 	out := in[:0]
 	for _, r := range in {

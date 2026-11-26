@@ -29,14 +29,35 @@ package main
 //	J1 J2 J3 Itime (1.5) the same kind of decoys, sent instead of the I ones
 //	              between two Itime seconds apart.
 //
+// AmneziaWG 3.0 and 3.1 (the current protocol; a tester, 2026-11-25: "actual
+// version of protocol is 3.1, 2.0 not used now") add, all optional:
+//
+//	HeaderProtectionKey   a 32-byte ChaCha20 key (base64). Every datagram's
+//	              first 12 bytes — the start of its S padding, so S1-S4 must
+//	              be 12 or more — are the nonce (counter 0), and the keystream
+//	              is XORed over the whole handshake message behind the padding,
+//	              or over a transport message's 16-byte header. The MACs are
+//	              of the message before it.
+//	ContentPaddingAddition  "n" or "min-max": that many more zero bytes inside
+//	              each encrypted transport message, within the MTU. The
+//	              receiver cuts them off by the IP packet's own length.
+//	RandomTrailers  (3.1, both ends) random bytes after every handshake
+//	              message, so its size no longer gives it away, and zeros
+//	              inside transport messages when ContentPaddingAddition is 0.
+//	              A handshake message is then any datagram at least its padded
+//	              size whose type matches.
+//	DisableCookies  (3.1, this end only) never answer with a cookie reply:
+//	              JukaHub is a client and sends none anyway.
+//	RekeyAfterTime RekeyTimeout RejectAfterTime KeepaliveTimeout
+//	MaxHandshakeAttempts  (3.0) this end's own timers, a number or range. The
+//	              server does not need them to match: JukaHub keeps
+//	              WireGuard's and names them under the ignored keys.
+//
 // The server drops the decoys and the junk; only the types and the padding
 // must match it, which is why a configuration without them is plain WireGuard
 // and runs exactly as before (wgConfig.AWG is nil then). A decoy with a tag
 // JukaHub does not know is left out (it only disguises the start) and named
-// under the configuration's ignored keys. AmneziaWG 3's header protection
-// (HeaderProtectionKey, ContentPaddingAddition) encrypts header fields this
-// code does not know the layout of: such a file is refused with that reason
-// rather than imported to never connect.
+// under the configuration's ignored keys.
 
 import (
 	"encoding/binary"
@@ -48,6 +69,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/chacha20"
 )
 
 const (
@@ -57,16 +80,22 @@ const (
 	wgAWGMaxJunkSize = 1280
 	// wgAWGMaxDecoy bounds one I/J decoy datagram as its tags build it.
 	wgAWGMaxDecoy = 8192
+	// wgAWGNonceSize is header protection's ChaCha20 nonce, taken from the
+	// front of the S padding (amneziawg-go's HeaderCipherNonceSize).
+	wgAWGNonceSize = 12
+	// wgAWGMaxTrailer bounds RandomTrailers' bytes after a handshake message.
+	wgAWGMaxTrailer = 32
 )
 
 // wgAWGKeyNames are the AmneziaWG [Interface] keys in their usual spelling, in
 // the order quickText writes them.
 var wgAWGKeyNames = []string{"Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4",
-	"I1", "I2", "I3", "I4", "I5", "J1", "J2", "J3", "Itime"}
+	"I1", "I2", "I3", "I4", "I5", "J1", "J2", "J3", "Itime",
+	"HeaderProtectionKey", "ContentPaddingAddition", "RandomTrailers", "DisableCookies",
+	"RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts"}
 
-// wgAWG3Keys are AmneziaWG 3's header-protection keys, which JukaHub cannot
-// carry out (see the file comment).
-var wgAWG3Keys = []string{"HeaderProtectionKey", "ContentPaddingAddition"}
+// wgAWGTimerKeys are AmneziaWG 3's local timers (see the file comment).
+var wgAWGTimerKeys = []string{"RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts"}
 
 // errWGAWGUnknownTag marks a decoy tag JukaHub does not know.
 var errWGAWGUnknownTag = errors.New("unknown tag")
@@ -103,9 +132,16 @@ type wgAWG struct {
 	I     [5][]wgAWGTag
 	J     [3][]wgAWGTag
 	Itime int
+	// HP is header protection (3.0): HPKey is used when it is set.
+	HP    bool
+	HPKey [32]byte
+	// Content is ContentPaddingAddition's range of extra zero bytes (3.0).
+	Content wgAWGRange
+	// Trailers and NoCookies are 3.1's RandomTrailers and DisableCookies.
+	Trailers, NoCookies bool
 	// Keys holds every AmneziaWG key the file set, as written (for quickText).
 	Keys map[string]string
-	// Notes are decoys left out, for the configuration's ignored keys.
+	// Notes are decoys left out and timers kept, for the ignored keys.
 	Notes []string
 
 	mu      sync.Mutex
@@ -136,11 +172,6 @@ func wgAWGKey(key string) string {
 // wgAWGSet reads one AmneziaWG key into a (lower-case key as the parser has
 // it). handled is false for a key that is not AmneziaWG's.
 func wgAWGSet(a *wgAWG, key, val string) (handled bool, err error) {
-	for _, k := range wgAWG3Keys {
-		if strings.EqualFold(k, key) && strings.TrimSpace(val) != "" {
-			return true, fmt.Errorf("%s is AmneziaWG 3's header protection, which JukaHub cannot connect with yet: ask the server for an AmneziaWG 2.0 configuration (without header protection)", k)
-		}
-	}
 	name := wgAWGKey(key)
 	if name == "" {
 		return false, nil
@@ -189,8 +220,79 @@ func wgAWGSet(a *wgAWG, key, val string) (handled bool, err error) {
 			return true, err
 		}
 		a.J[name[1]-'1'] = tags
+	case "HeaderProtectionKey":
+		if strings.TrimSpace(val) == "" {
+			break
+		}
+		var k [32]byte
+		if k, err = wgParseKey(val); err != nil {
+			return true, fmt.Errorf("HeaderProtectionKey %v", err)
+		}
+		// An all-zero key is amneziawg-go's "off".
+		a.HP, a.HPKey = k != [32]byte{}, k
+	case "ContentPaddingAddition":
+		a.Content, err = wgAWGParseSpan(name, val)
+	case "RandomTrailers":
+		a.Trailers, err = wgAWGParseBool(name, val)
+	case "DisableCookies":
+		a.NoCookies, err = wgAWGParseBool(name, val)
+	default:
+		// The local timers: checked, kept as WireGuard's, and named.
+		if _, err = wgAWGParseSpan(name, val); err == nil {
+			a.Notes = append(a.Notes, name+" (JukaHub keeps WireGuard's own timer; the server does not need it to match)")
+		}
 	}
 	return true, err
+}
+
+// wgAWGParseSpan reads AmneziaWG 3's "n" or "min-max" from 0 to 65535 ("" and
+// "0" are none).
+func wgAWGParseSpan(name, val string) (wgAWGRange, error) {
+	v := strings.TrimSpace(val)
+	if v == "" {
+		return wgAWGRange{}, nil
+	}
+	lo, hi, isRange := strings.Cut(v, "-")
+	parse := func(s string) (uint32, error) {
+		n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 16)
+		if err != nil {
+			return 0, fmt.Errorf("%s %q is not a number from 0 to 65535, or a range of them", name, val)
+		}
+		return uint32(n), nil
+	}
+	a, err := parse(lo)
+	if err != nil {
+		return wgAWGRange{}, err
+	}
+	b := a
+	if isRange {
+		if b, err = parse(hi); err != nil {
+			return wgAWGRange{}, err
+		}
+		if b < a {
+			return wgAWGRange{}, fmt.Errorf("%s %q runs backwards", name, val)
+		}
+	}
+	return wgAWGRange{a, b}, nil
+}
+
+// wgAWGParseBool reads one of 3.1's switches.
+func wgAWGParseBool(name, val string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "", "0", "false", "no", "off":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s %q is neither on nor off", name, val)
+}
+
+// draw is a value in the range (lo when it is one value).
+func (r wgAWGRange) draw() int {
+	if r.hi <= r.lo {
+		return int(r.lo)
+	}
+	return int(r.lo) + rand.N(int(r.hi-r.lo)+1)
 }
 
 // wgAWGDecoy reads one I/J decoy. One with a tag JukaHub does not know is left
@@ -307,16 +409,25 @@ func wgAWGFinish(a *wgAWG) (*wgAWG, error) {
 		return nil, fmt.Errorf("Jmin %d is more than Jmax %d", a.Jmin, a.Jmax)
 	}
 	// The receiver tells the handshake messages apart by their padded sizes
-	// (AmneziaWG refuses S1 + 56 = S2 for that reason).
+	// (AmneziaWG refuses S1 + 56 = S2 for that reason) — not with 3.1's
+	// trailers, where only the type does.
 	sizes := map[int]string{}
 	for _, m := range []struct {
 		name string
 		size int
 	}{{"initiation (148 + S1)", wgInitiationSize + a.S1}, {"response (92 + S2)", wgResponseSize + a.S2}, {"cookie reply (64 + S3)", wgCookieSize + a.S3}} {
-		if other, ok := sizes[m.size]; ok {
+		if other, ok := sizes[m.size]; ok && !a.Trailers {
 			return nil, fmt.Errorf("the padded %s is as long as the %s; change S1, S2 or S3", m.name, other)
 		}
 		sizes[m.size] = m.name
+	}
+	// Header protection's nonce is the first 12 bytes of every padding.
+	if a.HP {
+		for i, s := range [...]int{a.S1, a.S2, a.S3, a.S4} {
+			if s < wgAWGNonceSize {
+				return nil, fmt.Errorf("HeaderProtectionKey needs S1 to S4 of at least %d (S%d is %d)", wgAWGNonceSize, i+1, s)
+			}
+		}
 	}
 	for i := range a.H {
 		for j := i + 1; j < len(a.H); j++ {
@@ -336,7 +447,7 @@ func (a *wgAWG) obfuscates() bool {
 	if a == nil {
 		return false
 	}
-	if a.Jc > 0 || a.S1 > 0 || a.S2 > 0 || a.S3 > 0 || a.S4 > 0 {
+	if a.Jc > 0 || a.S1 > 0 || a.S2 > 0 || a.S3 > 0 || a.S4 > 0 || a.HP || a.Trailers || a.Content.hi > 0 {
 		return true
 	}
 	for i, r := range a.H {
@@ -410,16 +521,81 @@ func wgAWGFill(b []byte) {
 	}
 }
 
-// frame puts a handshake message of WireGuard type kind behind its padding.
+// frame puts a handshake message of WireGuard type kind behind its padding,
+// with 3.1's random trailer after it and 3.0's header protection over it.
 func (a *wgAWG) frame(kind uint32, msg []byte) []byte {
-	n := a.pad(kind)
-	if n == 0 || len(msg) == 0 {
+	if a == nil || len(msg) == 0 {
 		return msg
 	}
-	out := make([]byte, n+len(msg))
+	n := a.pad(kind)
+	trailer := 0
+	if a.Trailers {
+		trailer = 1 + rand.N(wgAWGMaxTrailer)
+	}
+	if n == 0 && trailer == 0 && !a.HP {
+		return msg
+	}
+	out := make([]byte, n+len(msg)+trailer)
 	wgAWGFill(out[:n])
 	copy(out[n:], msg)
+	wgAWGFill(out[n+len(msg):])
+	a.protect(out, n, len(msg))
 	return out
+}
+
+// protect is header protection (3.0) over the n bytes behind a datagram's
+// padding of pre bytes: ChaCha20 keyed by HPKey, its nonce the padding's first
+// 12 bytes, from block 0. XOR, so the receiver undoes it with the same call.
+// Nothing without a key, or before a padding too short to hold the nonce
+// (wgAWGFinish refuses those).
+func (a *wgAWG) protect(dgram []byte, pre, n int) {
+	if a == nil || !a.HP || pre < wgAWGNonceSize || n <= 0 || pre+n > len(dgram) {
+		return
+	}
+	c, err := chacha20.NewUnauthenticatedCipher(a.HPKey[:], dgram[:wgAWGNonceSize])
+	if err != nil {
+		return
+	}
+	c.XORKeyStream(dgram[pre:pre+n], dgram[pre:pre+n])
+}
+
+// typeAt is the message type behind a padding of pre bytes as the sender
+// wrote it: with header protection the first four bytes of the keystream are
+// taken off (every message's protection starts at block 0 of the same nonce).
+func (a *wgAWG) typeAt(dgram []byte, pre int) (uint32, bool) {
+	if pre+4 > len(dgram) {
+		return 0, false
+	}
+	v := binary.LittleEndian.Uint32(dgram[pre : pre+4])
+	if a != nil && a.HP {
+		if pre < wgAWGNonceSize {
+			return 0, false
+		}
+		var ks [4]byte
+		c, err := chacha20.NewUnauthenticatedCipher(a.HPKey[:], dgram[:wgAWGNonceSize])
+		if err != nil {
+			return 0, false
+		}
+		c.XORKeyStream(ks[:], ks[:])
+		v ^= binary.LittleEndian.Uint32(ks[:])
+	}
+	return v, true
+}
+
+// extra is how many more zero bytes a transport message of n bytes carries
+// inside its encryption: ContentPaddingAddition, or 3.1's zero trailer when
+// that is 0. A keepalive (n = 0) gets none.
+func (a *wgAWG) extra(n int) int {
+	if a == nil || n == 0 {
+		return 0
+	}
+	if a.Content.hi > 0 {
+		return a.Content.draw()
+	}
+	if a.Trailers {
+		return rand.N(wgAWGMaxTrailer)
+	}
+	return 0
 }
 
 // decoy builds one I/J datagram from its tags.

@@ -13,6 +13,26 @@ For anything older, the git log and the
 
 ### Added
 
+- **AmneziaWG 3.0 and 3.1** (2026-11-25, a tester: "actual version of protocol
+  is 3.1"). `HeaderProtectionKey` (ChaCha20 over the handshake messages and the
+  transport headers, with the nonce taken from the S padding),
+  `ContentPaddingAddition`, `RandomTrailers` and `DisableCookies` are carried
+  out. The 3.0 timers are accepted and listed as kept, and `PersistentKeepalive`
+  takes a range. These files used to be refused. Checked against JukaHub's own
+  two-ended test only, not yet against an AmneziaWG 3.1 server.
+
+- **The Browser sets pages in their own fonts, icon fonts included** (Juka,
+  2026-11-25: "improve browser even more"). A page's `@font-face` rules are read
+  with its style sheets; the families its text is set in are downloaded beside
+  the pictures (TrueType, OpenType and WOFF, regular and bold, the subset with
+  Latin letters or an icon font's glyphs; Google Fonts is asked for TrueType
+  instead of WOFF2) and the page is laid out again as each arrives. Font
+  Awesome and other private-use icon fonts draw their icons instead of
+  nothing; a word a font has no letters for keeps the reader's face. Files are
+  kept for the run and capped (8 a page, 24 MB in all on a handheld); Legible
+  reading font and Bold text keep the reader's faces (`webpage_webfont.go`).
+  Static checks only; not yet run on a handheld.
+
 - **A launch that fails files its own bug report** (Juka, 2026-11-25: "Make
   sure that JukaHub is able to launch emulator successfully... if it can't
   launch the emulator... display the bug and make a bug report in issues and
@@ -5396,6 +5416,53 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Lists in the Browser, as on Wikipedia's Main Page** (Juka, 2026-11-25:
+  "improve ul and li css as those do not seem to render with css correctly...
+  look at main wikipedia page"). A list styled `display: inline` (Wikipedia's
+  `.hlist.inline`: "Recently featured: A · B · C", "Ongoing: …", "Recent
+  deaths: …") stays in the line it starts in instead of breaking onto its own;
+  and a list whose page sets its own start padding (`ul { margin: 0.3em 0 0
+  1.6em; padding: 0 }`) hangs its bullets and numbers left of the text, as
+  `list-style-position: outside` does, instead of pushing every item's text a
+  bullet's width right (`inside` keeps the marker in the line). Static checks
+  only; not yet run on a handheld.
+
+- **PSP games stopped at once after one bad PPSSPP run** (2026-11-25, JH-CA8ZMU,
+  JH-7NTNPW). A run that died before its picture came up left OPENGL in PPSSPP's
+  own crash memory (`FailedGraphicsBackends.txt`), so every later start switched
+  to Vulkan, which the firmware's SDL cannot give it, and aborted ("Vulkan
+  subsystem 0 not supported"). Every start now clears that memory, and on the
+  A133P `ppsspp.ini` gets `DisabledGraphicsBackends = VULKAN`. A stale
+  `/dev/shm/PPSSPP_ID` count, which made the next game a silent "secondary
+  instance" that saved no settings, is removed when no PPSSPP runs. The
+  firmware's SDL2 now finds a `setterm` stand-in on PPSSPP's PATH ("setterm: not
+  found"). On a card with no other PPSSPP, a build that failed once is tried
+  again instead of PSP games being left with no emulator. Marks this failure
+  already left are taken back once, and PSP games point at the build again. The
+  failure reason now names PPSSPP's own last useful line, not "Aborted". Static
+  checks and a dash/BusyBox simulation of the launcher only; not yet run on a
+  handheld.
+- **Submitting a launch report froze the screen for 7.5 s**: the component
+  hashes are started in the background when the failure card opens, as Report a
+  bug already did.
+- **Bug reports' recent log was filled with frame-rate lines**: only changes into
+  and out of deep idle are logged now, not every Active/Idle flip at each press.
+
+- **Tables in the Browser: cells with paragraphs, nested tables, unclosed
+  markup** (2026-11-25). Every block of a table cell used to be a column of its
+  own, so a `<td>` with two paragraphs or a list pushed the rest of its row
+  right (a Hacker News comment of three paragraphs was three columns); a cell
+  is now one column with its blocks stacked, its background and borders
+  (border-collapse included) round all of them. A table inside another table's
+  cell or inside a flex or grid item was laid out at the page level, where all
+  its rows became one long row of the outer table; it is now laid out in that
+  cell or item at its width (Hacker News's whole page is such a table). A page
+  without scripts, or any page with JavaScript off, now goes through the same
+  HTML5 tree builder as the script pass (`webdom_markup.go`), so `<td>a<td>b`,
+  open `<li>` lists and open `<p>`s close as in a browser instead of nesting
+  (an unclosed list stepped right with every item). Static checks only; not
+  yet run on a handheld.
 
 - **Emulators page: an emulator that could not open said nothing, and some
   could not open at all.** A tile's start threw the exit status away, so an

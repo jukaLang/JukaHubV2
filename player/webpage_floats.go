@@ -576,6 +576,7 @@ func (l *webLayouter) layoutFloatGroup(g webBlock, padX, contentW, row int32, re
 		l.stretchBox(id, sh)
 	}
 	l.mergeBoxGeom(sub, x)
+	l.mergeBoxEdges(sub)
 	return webFloatReserve{
 		side: st.FloatSide, startRow: row, endRow: row + (h+l.rowH-1)/l.rowH,
 		x0: x - marginL, x1: x + w + marginR, seq: info.seq,
@@ -595,6 +596,7 @@ func (l *webLayouter) floatGroupWidth(blocks []webBlock, info webFloatRootInfo, 
 	}
 	widest, caption := int32(0), int32(0)
 	cells := make(map[[2]int]int32)
+	cellW := make(map[[4]int]int32)
 	items := make(map[[2]int]int32)
 	gaps := make(map[int]int32)
 	// floatRun is the width of the floats inside this one that sit side by
@@ -648,8 +650,13 @@ func (l *webLayouter) floatGroupWidth(blocks []webBlock, info webFloatRootInfo, 
 		}
 		switch {
 		case b.Style.TableRole == webTableRoleCell:
-			// A table is as wide as its cells side by side.
-			cells[[2]int{b.Style.TableID, b.Style.TableRow}] += w
+			// A table is as wide as its cells side by side, and a cell of
+			// several blocks (paragraphs, list items) as its widest of them.
+			key := [4]int{b.Style.TableID, b.Style.TableRow, b.FlexGroup, b.FlexItem}
+			if b.Style.TableRowGroup == 0 || b.FlexGroup != b.Style.TableRowGroup {
+				key[2], key[3] = 0, -1-i
+			}
+			cellW[key] = max(cellW[key], w)
 		case b.FlexGroup != 0 && b.FlexDir == webFlexRow:
 			// So is a flex row of its items.
 			key := [2]int{b.FlexGroup, b.FlexItem}
@@ -660,6 +667,9 @@ func (l *webLayouter) floatGroupWidth(blocks []webBlock, info webFloatRootInfo, 
 		default:
 			widest = max(widest, w)
 		}
+	}
+	for key, w := range cellW {
+		cells[[2]int{key[0], key[1]}] += w
 	}
 	for _, w := range cells {
 		widest = max(widest, w)
