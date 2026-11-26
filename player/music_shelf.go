@@ -245,7 +245,12 @@ func musicShelfChoose(config *Config) {
 		musicShelfPlayGroup(config, row.key, false, row.path)
 	case "listen", "topartist", "clearhistory":
 		musicShelfChooseHistory(config, row)
-	case "radiodir", "station":
+	case "nowplaying", "radiodir", "station":
+		// What plays is Play / Stop in place, with its own click
+		// (radiodir_ui.go).
+		if musicShelfChooseNow(row) {
+			return
+		}
 		musicShelfChooseRadio(config, row)
 	}
 	PlayActivateSound()
@@ -316,6 +321,11 @@ func musicShelfHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 		musicShelfBack(config)
 	case sdl.K_F5:
 		mlibStartScan(config, true)
+	case sdl.K_x:
+		// The Now playing row's player, as X on a pad (radiodir_ui.go).
+		if musicShelfNowFocused() {
+			radioOpenPlayer(config, true)
+		}
 	default:
 		return true
 	}
@@ -340,7 +350,12 @@ func musicShelfHandlePad(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_B:
 		musicShelfBack(config)
 	case sdl.CONTROLLER_BUTTON_X:
-		mlibStartScan(config, true)
+		// On the Now playing row X opens the player (radiodir_ui.go).
+		if musicShelfNowFocused() {
+			radioOpenPlayer(config, true)
+		} else {
+			mlibStartScan(config, true)
+		}
 	default:
 		return true
 	}
@@ -468,8 +483,11 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 		}
 		renderText(renderer, config, font, msg, ColorTextSecondary(), x+28, listY+22)
 	}
+	// The Radio shelf's Now playing row and its station read as they are now
+	// (radiodir_ui.go).
+	np, npOK := musicNow()
 	for i := musicShelf.scroll; i < len(musicShelf.rows) && i < musicShelf.scroll+visible; i++ {
-		row := musicShelf.rows[i]
+		row := radioShelfNowRow(musicShelf.rows[i], np, npOK)
 		rect := sdl.Rect{X: x + 16, Y: listY + int32(i-musicShelf.scroll)*rowH, W: w - 32, H: rowH - 6}
 		if row.kind == "heading" {
 			// A History section's name, under the rows before it.
@@ -491,12 +509,19 @@ func renderMusicShelf(renderer *sdl.Renderer, config *Config) {
 				_ = renderer.Copy(tex, nil, &dst)
 			}
 		}
+		if row.kind == "nowplaying" && npOK {
+			drawHomeGlyphTinted(renderer, radioShelfNowGlyph(np), sdl.Rect{X: art.X + 14, Y: art.Y + 14, W: art.W - 28, H: art.H - 28}, ColorTextPrimary())
+		}
 		tx := art.X + art.W + 15
 		renderText(renderer, config, font, ellipsize(font, row.title, rect.W-(tx-rect.X)-16), ColorTextPrimary(), tx, rect.Y+8)
 		renderText(renderer, config, font, ellipsize(font, row.sub, rect.W-(tx-rect.X)-16), ColorTextSecondary(), tx, rect.Y+34)
 		musicShelf.hits = append(musicShelf.hits, rect)
 	}
-	renderText(renderer, config, font, "A Open · L1/R1 Shelves · X Rescan", ColorTextSecondary(), x+24, screenHeight-46)
+	footer := "A Open · L1/R1 Shelves · X Rescan"
+	if now, ok := musicShelfNowFooter(); ok {
+		footer = now // the Now playing row's Play / Stop and player
+	}
+	renderText(renderer, config, font, footer, ColorTextSecondary(), x+24, screenHeight-46)
 	musicShelf.up = sdl.Rect{X: x + w - 180, Y: screenHeight - 52, W: 34, H: 34}
 	musicShelf.down = sdl.Rect{X: x + w - 140, Y: screenHeight - 52, W: 34, H: 34}
 	musicShelf.back = sdl.Rect{X: x + w - 92, Y: screenHeight - 52, W: 76, H: 34}

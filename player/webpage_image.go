@@ -47,18 +47,18 @@ import (
 // decoded textures, so the encoded image budget scales with free memory. The
 // count still bounds requests from pages with thousands of tiny images.
 const (
-	webMaxImagesPerPage      = 256
+	webMaxImagesPerPage      = 600
 	webMaxImageBytes         = 8 << 20  // 8 MiB per image
 	webMinImagesBytes        = 16 << 20 // floor when little free memory is reported
 	webMaxImagesBytes        = 64 << 20 // ceiling for encoded images on one page
-	webMaxVideoThumbsPerPage = 24
+	webMaxVideoThumbsPerPage = 64
 	webImageFetchTimeout     = 10 * time.Second
 	webImageFetchWorkers     = 8 // concurrent image downloads per page
 	// webImagePassTimeout bounds the whole image pass, not one image. The page
 	// is already readable when this pass starts, so slow hero banners must not
 	// keep the loading card up; anything still in flight when it expires is
 	// drawn as a placeholder and the next visit can try again.
-	webImagePassTimeout = 20 * time.Second
+	webImagePassTimeout = 45 * time.Second
 	webMinImagePx       = 16 // smallest drawable image
 )
 
@@ -582,6 +582,53 @@ func (d *webDocument) imageBytes(key string) []byte {
 	return d.Images[key]
 }
 
+// awaitImage reports whether key's bytes may still arrive — an image pass is
+// running for the document and has not settled key (fetched it, or given up
+// on it) yet — and asks that pass to fetch it next: a box on screen is
+// waiting for it. Render thread.
+func (d *webDocument) awaitImage(key string) bool {
+	if d == nil {
+		return false
+	}
+	d.imageMu.Lock()
+	defer d.imageMu.Unlock()
+	if d.imagePasses <= 0 {
+		return false
+	}
+	if _, settled := d.ImageMeta[key]; settled {
+		return false
+	}
+	for _, want := range d.imageWant {
+		if want == key {
+			return true
+		}
+	}
+	if len(d.imageWant) >= webImageWantMax {
+		d.imageWant = d.imageWant[1:]
+	}
+	d.imageWant = append(d.imageWant, key)
+	return true
+}
+
+// webImageWantMax bounds the pictures a page's boxes wait for at once.
+const webImageWantMax = 48
+
+// nextWantedImage returns the longest-waiting picture a box on screen asked
+// for that ok accepts, dropping the ones it does not (taken already, or not
+// this pass's to fetch).
+func (d *webDocument) nextWantedImage(ok func(string) bool) (string, bool) {
+	d.imageMu.Lock()
+	defer d.imageMu.Unlock()
+	for len(d.imageWant) > 0 {
+		src := d.imageWant[0]
+		d.imageWant = d.imageWant[1:]
+		if ok(src) {
+			return src, true
+		}
+	}
+	return "", false
+}
+
 // imageMeta returns one image's recorded natural size under the image mutex.
 func (d *webDocument) imageMeta(key string) (webImageMeta, bool) {
 	if d == nil {
@@ -913,14 +960,39 @@ func drawBrowserFavicon(r *sdl.Renderer, config *Config, doc *webDocument, rect 
 // and under the per-page/per-byte limits. It also records the natural sizes
 // the layout needs, and always stores an entry per key so the layout never
 // has to probe a second time.
+// Test seam (ARCH-8): only tests call it.
 func fetchWebImages(doc *webDocument) {
 	fetchWebImagesContext(context.Background(), doc)
 }
 
 func fetchWebImagesContext(parent context.Context, doc *webDocument) {
+	fetchWebImagesPass(parent, doc, false)
+}
+
+// fetchWebImagesPass is the image pass. preview marks the pass of the page
+// drawn while its scripts run (browserPreview): it starts no new picture once
+// the finished page's own pass has begun, which takes over what it fetched
+// through the load's picture cache (webLoadImageBytes).
+func fetchWebImagesPass(parent context.Context, doc *webDocument, preview bool) {
 	if doc == nil {
 		return
 	}
+	loads := webLoadCachesFrom(parent)
+	if loads != nil && !preview {
+		loads.final.Store(true)
+	}
+	// While the pass runs, a picture it has not settled yet is still coming:
+	// a page tile painted without it waits for it, and a box on screen asks
+	// for it first (webDocument.awaitImage).
+	doc.imageMu.Lock()
+	doc.imagePasses++
+	doc.imageMu.Unlock()
+	defer func() {
+		doc.imageMu.Lock()
+		doc.imagePasses--
+		doc.imageMu.Unlock()
+		webPaintGen.Add(1)
+	}()
 	seen := make(map[string]bool)
 	srcs := make([]string, 0, webMaxImagesPerPage)
 	for _, b := range doc.Blocks {
@@ -999,8 +1071,12 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 		}
 		doc.ImageMeta[src] = m
 		doc.imageMu.Unlock()
+		// A page tile painted without this picture is painted again
+		// (webpage_tiles.go); a size lays the page out again soon, not at
+		// once for every picture (layoutFor).
+		webPaintGen.Add(1)
 		if m.HasSize {
-			doc.invalidateFormState()
+			doc.noteSizesArrived()
 		}
 	}
 	budget := webImagePageBudgetBytes()
@@ -1052,7 +1128,37 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 	// used to be read only when a fetch was scheduled — and every fetch was
 	// scheduled before the first one finished, so all of them ran and the
 	// page cap never held.
-	queue := make(chan string)
+	//
+	// Each worker takes the next picture from next(): first one a box on
+	// screen is waiting for (drawWebImage asks, webDocument.awaitImage), then
+	// the page's own order — a browser fetches what is in view first too.
+	inRemote := make(map[string]bool, len(remote))
+	for _, src := range remote {
+		inRemote[src] = true
+	}
+	taken := make(map[string]bool, len(remote))
+	nextAt := 0
+	var pick sync.Mutex
+	next := func() (string, bool) {
+		pick.Lock()
+		defer pick.Unlock()
+		if ctx.Err() != nil || (preview && loads != nil && loads.final.Load()) {
+			return "", false
+		}
+		if src, ok := doc.nextWantedImage(func(src string) bool { return inRemote[src] && !taken[src] }); ok {
+			taken[src] = true
+			return src, true
+		}
+		for nextAt < len(remote) {
+			src := remote[nextAt]
+			nextAt++
+			if !taken[src] {
+				taken[src] = true
+				return src, true
+			}
+		}
+		return "", false
+	}
 	workers := webImageFetchWorkers
 	if n := webTuneNow().FetchWorkers; n > 0 {
 		// The Smart Pro S's Wi-Fi 6 and eight cores take a few more at once.
@@ -1062,7 +1168,11 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for src := range queue {
+			for {
+				src, ok := next()
+				if !ok {
+					return
+				}
 				mu.Lock()
 				// Reservations are temporary. Wait for the in-flight images to
 				// return their unused bytes before deciding that the page has
@@ -1086,7 +1196,7 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 				inFlight++
 				mu.Unlock()
 
-				body := fetchWebImageBytes(ctx, doc.URL, src, reserve)
+				body := webLoadImageBytes(ctx, doc.URL, src, reserve)
 				var m webImageMeta
 				if len(body) > 0 && webSVGLooksLike(body) {
 					// SDL_image may not read SVG at all: the reader draws it
@@ -1112,10 +1222,6 @@ func fetchWebImagesContext(parent context.Context, doc *webDocument) {
 			}
 		}()
 	}
-	for _, src := range remote {
-		queue <- src
-	}
-	close(queue)
 	wg.Wait()
 
 	// Anything scheduled but never fetched still needs an entry so the layout
@@ -1339,16 +1445,20 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 	key := webImageCacheKey(im.Key)
 	async := webDecodeAsync()
 	if tex := getThumbnailTextures().Get(key); tex != nil {
-		if async {
-			// A box larger than the texture was made for (the page zoomed
-			// in) asks for a sharper decode; this one draws until then.
-			webDecodeWants(doc, im.Key, key, rect, im.ObjectFit)
+		// A box larger than the texture was made for (the page zoomed in) asks
+		// for a sharper decode; this one draws until then, and a page tile
+		// painted with it is painted again when it lands (webPaintPartial).
+		if async && webDecodeWants(doc, im.Key, key, rect, im.ObjectFit) {
+			webPaintPartial = true
 		}
 		_ = drawWebImagePicture(r, tex, rect, im)
 		return
 	}
 	data := doc.imageBytes(im.Key)
 	if len(data) == 0 {
+		if doc.awaitImage(im.Key) {
+			webPaintPartial = true
+		}
 		drawWebImagePlaceholder(r, config, rect)
 		return
 	}
@@ -1357,6 +1467,8 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 		// (webpage_decode.go); the box stays empty until the texture lands.
 		if webDecodeRequest(doc, im.Key, key, rect, im.ObjectFit, true) == webDecodeFailed {
 			drawWebImagePlaceholder(r, config, rect)
+		} else {
+			webPaintPartial = true
 		}
 		return
 	}

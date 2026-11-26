@@ -281,6 +281,8 @@ func saverRadioPlay(config *Config) bool {
 	if !musicPlayPlaylist(tracks, 0) {
 		return false
 	}
+	// Stations: the dock's Play stops them rather than pause (music_transport.go).
+	musicMarkLive(tracks)
 	// Marked once the player holds the list, so a decoder of the previous
 	// list that ends in between is not taken for a station of this one.
 	listed := make(map[string]bool, len(tracks))

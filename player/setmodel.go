@@ -1490,6 +1490,25 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					// A film with several audio tracks starts in this language
+					// when it has it (videotracks.go); the player's sheet still
+					// switches per film.
+					ID: "audioLanguage", Label: "Audio language", Kind: setKindChoice,
+					Detail:     setStatic("Films with several tracks start in it · A lists them all"),
+					Options:    func(*Config) []setOption { return setAudioQuickOptions() },
+					Current:    func(*Config) int { return setAudioCurrent(videoAudioLanguage()) },
+					Sheet:      func(*Config) []setOption { return setAudioAllOptions() },
+					SheetValue: func(*Config) string { return videoAudioLanguage() },
+					SheetTitle: "Audio language",
+					Value: func(*Config) string {
+						return setAudioLabel(videoAudioLanguage())
+					},
+					Choose: func(c *Config, value string) {
+						videoSetAudioLanguage(c, value)
+						setToast("Audio language: " + setAudioLabel(value))
+					},
+				},
+				{
 					ID: "downloads", Label: "Downloads", Kind: setKindAction,
 					Detail: setStatic("Videos and music saved for offline"),
 					Open:   mediaOpenDownloads,
@@ -1744,6 +1763,9 @@ func setBuildSections() []setSection {
 				ps2EmulatorRow(),
 				// "PS2 speed": the PlayStation 2's Speed level (emuspeed.go).
 				ps2SpeedSettingsRow(),
+				// "PS2 renderer": Automatic, or Vulkan, OpenGL ES or Software
+				// by hand (ps2_video.go).
+				ps2RendererSettingsRow(),
 				// "Fan": the Smart Pro S only (fan.go).
 				fanSettingsRow(),
 				{

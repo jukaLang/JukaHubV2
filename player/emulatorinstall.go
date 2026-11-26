@@ -147,6 +147,13 @@ func planEmuInstall(e emuEntry, inv coreInventory, index []coreIndexEntry) emuIn
 	plan.Index = entry
 	active, installed := inv.Active[plan.Core]
 	if !installed {
+		if why := coreGPUNoBuildHere(plan.Core); why != "" {
+			// The handheld's RetroArch could not draw it (coregpuoffer.go):
+			// the press says so instead of installing a core that cannot run.
+			plan.Action = emuInstallNone
+			plan.Reason = coreConfigDisplayName(plan.Core) + " is not installed here: " + why
+			return plan
+		}
 		plan.Action = emuInstallNew
 		plan.Reason = "Install the " + coreConfigDisplayName(plan.Core) + " core (" + entry.Date + ")"
 		return plan
@@ -320,7 +327,7 @@ type emuInstallReport struct {
 	Asked []string
 	// HeldGPU names the GPU-rendered cores an automatic pass left on the
 	// firmware's own build (coreGPUAutoHold, corerisk.go), the first time it
-	// left each build: the toast says a press installs them.
+	// left each build: the toast says why (coreGPUHeldNote).
 	HeldGPU []string
 	// The run's log line counts what it did not look at: installed cores only
 	// a press replaces (Held), cores on the firmware's read-only partition
@@ -434,6 +441,13 @@ func startEmulatorInstall(e emuEntry) {
 		return
 	}
 	core := emuCoreForEntry(e)
+	if why := emuGPUCoreNotHere(e, core); why != "" {
+		// Said before anything goes online: the buildbot's build of this
+		// GPU core could not run here (coregpuoffer.go).
+		PlayNavSound()
+		ShowToast(why, ToastKindInfo)
+		return
+	}
 	if core == "" {
 		ShowToast(e.Name+": no emulator is published for this system", ToastKindWarning)
 		return
@@ -854,7 +868,8 @@ func emuWinManagedSpecs() []emuWinSpec {
 
 // startEmulatorUpdateInstalled updates every installed core the index has a
 // newer build of — and every standalone emulator JukaHub installed: the managed
-// ones on Windows, hakuX and JukaHub's own PPSSPP on the handheld — so a card
+// ones on Windows, hakuX, JukaHub's own PPSSPP, Dolphin, ARMSX2, the Godot port
+// and the J2ME pair on the handheld (emuautoupdate_handheld.go) — so a card
 // full of emulators is brought forward in one press instead of one tile at a
 // time. Nothing that is not installed is added: this action updates.
 func startEmulatorUpdateInstalled() {
@@ -864,10 +879,11 @@ func startEmulatorUpdateInstalled() {
 	}
 	hakux := hakuxManagedOnCard()
 	ppsspp := ppssppUpdatableOnCard()
-	// The build switch covers the cores only; standalone emulators, hakuX and
-	// PPSSPP update the same way their tile's X does.
+	handheld := emuHandheldUpdatersReady()
+	// The build switch covers the cores only; standalone emulators, hakuX,
+	// PPSSPP and the handheld's own setups update the way their tile's X does.
 	cores := emuCoreInstallSupported() && len(emuInstalledCoreSet()) > 0
-	if !cores && len(standalone) == 0 && !hakux && !ppsspp {
+	if !cores && len(standalone) == 0 && !hakux && !ppsspp && len(handheld) == 0 {
 		if !emuCoreInstallSupported() {
 			ShowToast("Core updates are switched off in this build", ToastKindInfo)
 		} else {
@@ -883,7 +899,7 @@ func startEmulatorUpdateInstalled() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	more := len(standalone) > 0 || hakux || ppsspp
+	more := len(standalone) > 0 || hakux || ppsspp || len(handheld) > 0
 	if more {
 		installBarBeginLabelled("Emulators", "Updating emulators")
 	} else {
@@ -962,6 +978,11 @@ func startEmulatorUpdateInstalled() {
 				report.Updated = append(report.Updated, label)
 			}
 		}
+		if len(handheld) > 0 && ctx.Err() == nil {
+			// Dolphin, ARMSX2, the Godot port and the J2ME pair, each the way
+			// its own tile updates it (emuautoupdate_handheld.go).
+			emuHandheldUpdateRun(ctx, handheld, &report)
+		}
 		installBarPhase(installPhaseDone)
 		installBarDone()
 		if len(report.Updated) > 0 {
@@ -1018,6 +1039,10 @@ func emuInstallHintLabel(e emuEntry) string {
 		}
 	}
 	if emuCoreInstallSupported() && emuCoreForEntry(e) != "" {
+		if emuGPUCoreNotHere(e, emuCoreForEntry(e)) != "" {
+			// A press says why there is no core to install (coregpuoffer.go).
+			return "Details"
+		}
 		return "Install"
 	}
 	return ""
@@ -1384,11 +1409,10 @@ func emuRollbackHintLabel(e emuEntry) string {
 // takes the patch lock, as the installs do, so it cannot land in the middle of
 // the daily pass replacing the same files.
 func startEmulatorRollback() {
-	entries := emulatorEntries()
-	if emuPanel.cursor < 0 || emuPanel.cursor >= len(entries) {
+	e, ok := emuSelectedEntry()
+	if !ok {
 		return
 	}
-	e := entries[emuPanel.cursor]
 	if hakuxTile(e) {
 		if !e.Managed || e.KeptVersion == "" {
 			ShowToast("No previous hakuX version is kept — one is kept after the next update", ToastKindInfo)

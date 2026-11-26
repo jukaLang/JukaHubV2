@@ -628,6 +628,11 @@ func newWebJSSession(page *url.URL, gen uint64, budget time.Duration) *webJSSess
 		scripts:       map[string]*webJSScriptFetch{},
 	}
 	s.net = newWebJSNet(page, deadline)
+	// A page fetched from a LAN server under a public-looking name may reach
+	// the LAN, as its server is there (webJSNetPageGuardFor).
+	if server := webJSPageServer(gen, page); server.IsValid() {
+		s.net.guard = webJSNetPageGuardFor(s.net.page, server)
+	}
 	return s
 }
 
@@ -1229,7 +1234,98 @@ func (s *webJSSession) natives() *goja.Object {
 	set("btoa", s.nBtoa)
 	set("randomBytes", s.nRandomBytes)
 	set("urlParse", s.nURLParse)
+	set("linkedSheets", s.nLinkedSheets)
 	return n
+}
+
+// webJSSheetWait is how long a script waits for the page's linked style
+// sheets still downloading when it first asks for a computed style.
+const webJSSheetWait = 1500 * time.Millisecond
+
+// webJSMaxLinkedSheets bounds the sheets one nLinkedSheets call asks for.
+const webJSMaxLinkedSheets = 32
+
+// webJSSheetSource is how a page load hands its style sheets to its own
+// script pass: the load that began generation gen registers get, which returns
+// a sheet's CSS by address from the load's sheet cache — the sheets fetched
+// beside the scripts (browserPrefetchSheets) — waiting a little for one still
+// downloading. A pass of any other generation gets none.
+var webJSSheetSource struct {
+	mu  sync.Mutex
+	gen uint64
+	get func(pageURL, address string) string
+}
+
+// webJSSetSheetSource registers (or, with get nil, withdraws) generation
+// gen's sheets. Withdrawing leaves a newer generation's alone.
+func webJSSetSheetSource(gen uint64, get func(pageURL, address string) string) {
+	webJSSheetSource.mu.Lock()
+	defer webJSSheetSource.mu.Unlock()
+	if get == nil {
+		if webJSSheetSource.gen == gen {
+			webJSSheetSource.get = nil
+		}
+		return
+	}
+	webJSSheetSource.gen, webJSSheetSource.get = gen, get
+}
+
+// webJSSheetSourceFor returns generation gen's sheet source, or nil.
+func webJSSheetSourceFor(gen uint64) func(pageURL, address string) string {
+	webJSSheetSource.mu.Lock()
+	defer webJSSheetSource.mu.Unlock()
+	if webJSSheetSource.gen != gen {
+		return nil
+	}
+	return webJSSheetSource.get
+}
+
+// nLinkedSheets hands the prelude the text of the page's <link> style sheets
+// (45_css.js), so getComputedStyle answers from the site's own sheets as well
+// as its <style> blocks — jQuery's .show() on a panel the site's stylesheet
+// hides used to do nothing. The argument is the sheets' addresses; the result
+// maps each one the load could give to its CSS. They are waited for all at
+// once, as a browser holds scripts for the sheets before them, and the wait is
+// not counted against the script's own time.
+func (s *webJSSession) nLinkedSheets(call goja.FunctionCall) goja.Value {
+	out := s.rt.NewObject()
+	get := webJSSheetSourceFor(s.gen)
+	list, _ := call.Argument(0).Export().([]interface{})
+	if get == nil || len(list) == 0 || s.page == nil {
+		return out
+	}
+	urls := make([]string, 0, len(list))
+	for _, item := range list {
+		if u, ok := item.(string); ok && u != "" && len(urls) < webJSMaxLinkedSheets {
+			urls = append(urls, u)
+		}
+	}
+	page := s.page.String()
+	texts := make([]string, len(urls))
+	unblock := s.block()
+	var wg sync.WaitGroup
+	for i, u := range urls {
+		wg.Add(1)
+		go func(i int, u string) {
+			defer wg.Done()
+			// A sheet's fetch parses what the network sent: a bug there must not
+			// take the hub down from a goroutine nothing else recovers.
+			defer func() {
+				if r := recover(); r != nil {
+					logWarn("browser", "linked sheet for a script failed: %v", r)
+				}
+			}()
+			texts[i] = get(page, u)
+		}(i, u)
+	}
+	wg.Wait()
+	unblock()
+	for i, u := range urls {
+		if texts[i] != "" {
+			_ = out.Set(u, texts[i])
+		}
+	}
+	return out
 }
 
 // nParseDocument parses a whole document (DOMParser, createHTMLDocument).

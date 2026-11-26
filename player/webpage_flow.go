@@ -1397,12 +1397,7 @@ func (l *webLayouter) paintContainerBoxes() {
 		// Counting them keeps the wrapper from being treated as a single block
 		// that already painted itself: each control's fragment used to leave
 		// white bands between the fields and a label outside the form fill.
-		directBlocks := 0
-		for _, b := range l.doc.Blocks {
-			if b.BoxOwner == id {
-				directBlocks++
-			}
-		}
+		directBlocks := l.doc.boxCounts().direct[id]
 		// A box with a single direct block and no nested content is already
 		// fully painted by that block. A mixed wrapper (intro text plus a
 		// child paragraph, a card plus a nested card, or a form with several
@@ -1614,17 +1609,38 @@ func (l *webLayouter) boxHasNestedBlocks(id int) bool {
 	if l == nil || l.doc == nil || id == 0 {
 		return false
 	}
-	for _, b := range l.doc.Blocks {
-		if b.BoxOwner == id {
-			continue
-		}
-		for _, box := range b.Boxes {
-			if box == id {
-				return true
+	return l.doc.boxCounts().nested[id]
+}
+
+// webBoxCounts is, per box, how many blocks the box's own element produced
+// (direct) and whether a block of an element inside it exists (nested),
+// counted once per document: the container pass asked both of every block of
+// the page for every box it painted, which on a news front page (thousands of
+// each) took longer than the rest of the layout.
+type webBoxCounts struct {
+	direct map[int]int
+	nested map[int]bool
+}
+
+// boxCounts is the document's webBoxCounts, counted on first use. The blocks
+// do not change after the parse.
+func (d *webDocument) boxCounts() *webBoxCounts {
+	d.boxCountOnce.Do(func() {
+		c := &webBoxCounts{direct: make(map[int]int, len(d.Boxes)), nested: make(map[int]bool, len(d.Boxes))}
+		for i := range d.Blocks {
+			b := &d.Blocks[i]
+			if b.BoxOwner != 0 {
+				c.direct[b.BoxOwner]++
+			}
+			for _, id := range b.Boxes {
+				if id != b.BoxOwner {
+					c.nested[id] = true
+				}
 			}
 		}
-	}
-	return false
+		d.boxCountCache = c
+	})
+	return d.boxCountCache
 }
 
 // removeBoxPaints drops the partial surface a direct block painted for a

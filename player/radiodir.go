@@ -667,7 +667,11 @@ func radioDirPlay(config *Config, stations []radioStation, i int) bool {
 	if len(tracks) == 0 || !musicPlayPlaylist(tracks, start) {
 		return false
 	}
+	// Stations: Play / Pause is Play / Stop, and the player opens with the pad
+	// on it, so A stops the radio (music_transport.go).
+	musicMarkLive(tracks)
 	openMusicPlayerScene(config)
 	musicPlayTrack(start)
+	musicCtlFocusPlay()
 	return true
 }

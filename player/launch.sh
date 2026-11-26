@@ -612,12 +612,16 @@ export JUKAHUB_ORIG_ENV
 LD_LIBRARY_PATH="$APP_DIR:$APP_DIR/libs:/usr/trimui/lib:/usr/lib:/lib:$LD_LIBRARY_PATH"
 PATH="$APP_DIR:$APP_DIR/required:$PATH"
 HOME="$APP_DIR"
-# Stock Smart Pro firmware has a usable CA bundle, but its old curl was built
-# with a different default path and rejects the tested HTTPS hosts without
-# SSL_CERT_FILE. Export the firmware's own bundle for curl and other OpenSSL
-# helpers started by JukaHub. Keep an explicit owner-provided path.
-if [ -r /etc/ssl/certs/ca-certificates.crt ]; then
-    : "${SSL_CERT_FILE:=/etc/ssl/certs/ca-certificates.crt}"
+# Give downloads a CA bundle. Some Smart Pro firmware bundles are present but
+# too old for the libretro buildbot; the Juka package on the same card carries
+# a maintained bundle. Keep an explicit owner-provided path, and fall back to
+# the firmware bundle where Juka is absent.
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+    if [ -s "$APP_DIR/../Juka/ca-certificates.crt" ]; then
+        SSL_CERT_FILE="$APP_DIR/../Juka/ca-certificates.crt"
+    elif [ -r /etc/ssl/certs/ca-certificates.crt ]; then
+        SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    fi
     export SSL_CERT_FILE
 fi
 # Read by JukaHub before an update to tell it that this script will do the

@@ -995,6 +995,9 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 		startEmbeddedPlayback(config, url, startSec, false)
 		return playbackStarted
 	}
+	// With CC on, a YouTube video's captions start now, beside the resolve,
+	// so the first line comes with the first frame (videocaptions.go).
+	subtitlePrefetchStart(config, url)
 	var ytDlpPath, missing string
 	var err error
 	if isDirectStreamURL(url) && !toolPathRunnable(getToolPath("yt-dlp", config)) {

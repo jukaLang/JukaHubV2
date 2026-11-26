@@ -526,6 +526,7 @@ func windowsSystemEntries(romsRoots, coresDirs []string, standalone []emuEntry) 
 				Name:   r.Name(),
 				Detail: "Games in " + folder + " — no emulator yet",
 				Status: emuMissing,
+				Core:   core,
 				Glyph:  emuGlyphFor(r.Name(), core),
 			})
 		}
@@ -820,10 +821,10 @@ func emuPublishedCoreRows(index []coreIndexEntry, installed map[string]bool, exi
 			detail += " · " + note
 		}
 		if coreNeedsGPU(entry.Core) {
-			// The one-line warning of a per-core press: "Get more cores"
-			// leaves these here for a console that plays already
+			// Only an OpenGL ES build gets this far (coregpuoffer.go); "Get
+			// more cores" leaves it here for a console that plays already
 			// (emumorecores.go).
-			detail += " · draws with the GPU: this build may not run here"
+			detail += " · draws with the GPU (an OpenGL ES build)"
 		}
 		rows = append(rows, emuEntry{
 			Name:   entry.Core,
@@ -862,8 +863,10 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	// Where the Godot port is offered, its folders are one Godot tile.
 	godotHere := godotOffered()
 	// Where Dolphin plays GameCube and Wii, each has its own tile, whatever
-	// the card holds yet (dolphin_folders.go).
+	// the card holds yet (dolphin_folders.go). So does the PlayStation 2
+	// where ARMSX2 plays it (ps2_folders.go).
 	dolphinTiles := dolphinConsoleTilesShown()
+	ps2Tiles := ps2ConsoleTilesShown()
 
 	for _, root := range emuRoots {
 		dirEntries, err := os.ReadDir(root)
@@ -953,6 +956,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				if dolphinTiles && dolphinConsoleFolderName(r.Name()) {
 					continue // so do the GameCube and Wii tiles for Roms/GC and Roms/WII
 				}
+				if ps2Tiles && ps2ConsoleFolderName(r.Name()) {
+					continue // and the PlayStation 2 tile for Roms/PS2
+				}
 				folder := filepath.Join(romsRoot, r.Name())
 				if sys, ok := emuDesktopSystemFor(r.Name()); ok {
 					if sys.System == emuXboxEntryName {
@@ -984,6 +990,10 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	// GameCube and Wii too, while Dolphin plays them here: Dolphin, where their
 	// games go, and A plays or sets it up (dolphin_folders.go).
 	for _, e := range dolphinConsoleEntries(romsRoot, byName) {
+		add(e)
+	}
+	// And the PlayStation 2, while ARMSX2 plays it here (ps2_folders.go).
+	for _, e := range ps2ConsoleEntries(romsRoot, byName) {
 		add(e)
 	}
 	// Xbox is listed whether or not a Roms/ folder exists: people ask for it
@@ -1222,17 +1232,89 @@ func windowsAppsEmuEntry() emuEntry {
 // ── Panel ────────────────────────────────────────────────────────────────
 
 type emuPanelState struct {
-	open   bool
-	cursor int
-	scroll int
+	open      bool
+	cursor    int
+	scroll    int
+	selected  emuEntryKey
+	footerKey emuEntryKey // tile whose action badges the last frame drew
 }
 
 var emuPanel emuPanelState
 
-// emuRowHit maps one visible tile back to its catalog index for clicks.
+// These fields stay fixed when a tile's install status or position changes.
+// Core and Via distinguish, for example, a PPSSPP standalone from a PPSSPP
+// RetroArch core in the Windows catalog. The handheld catalog deduplicates
+// folder and system rows by name.
+type emuEntryKey struct {
+	name   string
+	pinned bool
+	core   string
+	via    string
+}
+
+func emuEntryIdentity(e emuEntry) emuEntryKey {
+	return emuEntryKey{
+		name:   strings.ToLower(strings.TrimSpace(e.Name)),
+		pinned: e.Pinned,
+		core:   strings.ToLower(strings.TrimSpace(e.Core)),
+		via:    strings.ToLower(strings.TrimSpace(e.Via)),
+	}
+}
+
+func emuEntryIndex(entries []emuEntry, key emuEntryKey) int {
+	if key.name == "" {
+		return -1
+	}
+	for i, e := range entries {
+		if e.Pinned == key.pinned &&
+			strings.EqualFold(strings.TrimSpace(e.Name), key.name) &&
+			strings.EqualFold(strings.TrimSpace(e.Core), key.core) &&
+			strings.EqualFold(strings.TrimSpace(e.Via), key.via) {
+			return i
+		}
+	}
+	return -1
+}
+
+// emuPanelSelect remembers the tile from the caller's catalog snapshot. Some
+// callers select a tile before openEmulatorPanel rebuilds the catalog.
+func emuPanelSelect(entries []emuEntry, index int) bool {
+	if index < 0 || index >= len(entries) {
+		return false
+	}
+	emuPanel.cursor = index
+	emuPanel.selected = emuEntryIdentity(entries[index])
+	return true
+}
+
+// emuPanelResolve follows that tile in the current catalog. Actions reject a
+// vanished tile; rendering and navigation may choose a visible replacement.
+func emuPanelResolve(entries []emuEntry, fallback bool) bool {
+	if len(entries) == 0 {
+		emuPanel.cursor = 0
+		return false
+	}
+	if index := emuEntryIndex(entries, emuPanel.selected); index >= 0 {
+		emuPanel.cursor = index
+		return true
+	}
+	if !fallback {
+		return false
+	}
+	index := emuPanel.cursor
+	if index < 0 {
+		index = 0
+	} else if index >= len(entries) {
+		index = len(entries) - 1
+	}
+	return emuPanelSelect(entries, index)
+}
+
+// emuRowHit keeps the identity shown in a drawn tile, so a click after a
+// catalog refresh cannot activate a different entry at its former index.
 type emuRowHit struct {
-	index int
-	rect  sdl.Rect
+	key  emuEntryKey
+	rect sdl.Rect
 }
 
 // emuRowHits and emuPanelRect are filled by renderEmuPanel: the visible tile
@@ -1251,13 +1333,17 @@ func openEmulatorPanel() {
 	invalidateGameProfileCache()
 	// On Windows an executable's icon comes from the shell in the background;
 	// tiles show their vector glyph until the picture lands in the cache.
-	requestAppIconExtraction(emuProgramPaths(emulatorEntries()))
+	entries := emulatorEntries()
+	requestAppIconExtraction(emuProgramPaths(entries))
 	// "Update available" badges come from a throttled background check; the
 	// page draws at once and the badges appear when it answers.
 	emuStartUpdateCheck(emuUpdateCheckInterval)
 	emuPanel.open = true
 	emuPanel.cursor = 0
 	emuPanel.scroll = 0
+	emuPanel.selected = emuEntryKey{}
+	emuPanel.footerKey = emuEntryKey{}
+	emuPanelSelect(entries, 0)
 	emuPanelRect = sdl.Rect{}
 	emuRowHits = nil
 	emuHintHits = nil
@@ -1282,14 +1368,14 @@ func closeEmulatorPanel() {
 // the page the way a flat list did.
 func emuPanelMove(dx, dy int) {
 	entries := emulatorEntries()
-	if len(entries) == 0 {
+	if !emuPanelResolve(entries, true) {
 		return
 	}
 	next := emuGridTarget(emuPanel.cursor, len(entries), emuGridColumns(), dx, dy)
 	if next == emuPanel.cursor {
 		return
 	}
-	emuPanel.cursor = next
+	emuPanelSelect(entries, next)
 	PlayNavSound()
 }
 
@@ -1297,7 +1383,7 @@ func emuPanelMove(dx, dy int) {
 // clamped to the catalog.
 func emuPanelJump(index int) {
 	entries := emulatorEntries()
-	if len(entries) == 0 {
+	if !emuPanelResolve(entries, true) {
 		return
 	}
 	if index < 0 {
@@ -1309,8 +1395,14 @@ func emuPanelJump(index int) {
 	if index == emuPanel.cursor {
 		return
 	}
-	emuPanel.cursor = index
+	emuPanelSelect(entries, index)
 	PlayNavSound()
+}
+
+func emuPanelPageMove(delta int) {
+	if emuPanelResolve(emulatorEntries(), true) {
+		emuPanelJump(emuPanel.cursor + delta)
+	}
 }
 
 // emuPanelPageStep is how many tiles one page step (PageUp/PageDown, the
@@ -1331,7 +1423,9 @@ func emuPanelPageStep() int {
 // (emuFolderLauncher) - so unlike the Apps launcher there is no folder sandbox
 // to pass here; the entry point itself is still re-checked before it runs.
 func launchEmulatorEntry(e emuEntry) {
-	path := strings.TrimSpace(e.Launch)
+	// A on the handheld's PSP tile opens PPSSPP's own menu: the PPSSPP that
+	// plays PSP games, never handed an empty game (ppssppTileStart).
+	path, extra, ppssppMenu := ppssppTileStart(e, strings.TrimSpace(e.Launch))
 	ext := strings.ToLower(filepath.Ext(path))
 	// A start that fails is reported with what was tried (launchreport.go).
 	failed := func(err error) {
@@ -1358,6 +1452,11 @@ func launchEmulatorEntry(e emuEntry) {
 		return
 	}
 	logDebug("emulators", "launching %s (%s)", e.Name, path)
+	// While PSP games get the panel to themselves, so does PPSSPP's menu:
+	// JukaHub closes for it and comes back when it ends (hakux_handoff.go).
+	if ppssppMenu && hakuxHandoffMenuLaunch(e.Name, path, extra) {
+		return
+	}
 	// xemu started from its tile takes up Xbox files the setup sheet found but
 	// nobody applied yet; what is still missing goes into the launch toast.
 	launchNote := ""
@@ -1397,14 +1496,15 @@ func launchEmulatorEntry(e emuEntry) {
 		// under it, and one that is a program (an extensionless ELF) runs as
 		// that program, the way MainUI starts them: sh read a program as text
 		// and a bash script's arrays and [[ ]] failed (gamelaunch_firmware.go).
+		// What the PSP tile gives in place of a game goes after the script.
 		name, args := "sh", []string{path}
 		if !IsWindows() {
 			name, args = firmwareScriptCommand(path, name, args)
 		}
 		if name == "sh" {
-			cmd = exec.Command("sh", "--", path)
+			cmd = exec.Command("sh", append([]string{"--", path}, extra...)...)
 		} else {
-			cmd = exec.Command(name, args...)
+			cmd = exec.Command(name, append(args, extra...)...)
 		}
 	default:
 		cmd = exec.Command(path)
@@ -1447,7 +1547,7 @@ func launchEmulatorEntry(e emuEntry) {
 // emuSelectedEntry is the highlighted tile.
 func emuSelectedEntry() (emuEntry, bool) {
 	entries := emulatorEntries()
-	if emuPanel.cursor < 0 || emuPanel.cursor >= len(entries) {
+	if !emuPanelResolve(entries, false) {
 		return emuEntry{}, false
 	}
 	return entries[emuPanel.cursor], true
@@ -1518,6 +1618,12 @@ func emuPanelActivate(config *Config) {
 		// The GameCube and Wii tiles: the console's games once Dolphin is in,
 		// its setup before that (dolphin_folders.go).
 		dolphinConsoleActivate(e)
+		return
+	}
+	if ps2ConsoleTile(e) {
+		// The PlayStation 2 tile: its games once ARMSX2 is in, its setup
+		// before that (ps2_folders.go).
+		ps2ConsoleActivate(e)
 		return
 	}
 	if raGetTileWantsInstall(e) {
@@ -1596,7 +1702,11 @@ func emuPanelInstall() {
 // the Xbox tile where hakuX is offered (the handheld), the RetroAchievements
 // panel everywhere else it is supported.
 func emuPanelAlt() {
-	if e, ok := emuSelectedEntry(); ok && emuXboxSetupAvailable(e) {
+	e, ok := emuSelectedEntry()
+	if !ok {
+		return
+	}
+	if emuXboxSetupAvailable(e) {
 		emuOpenXboxSetup()
 		return
 	}
@@ -1663,9 +1773,9 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_RIGHT:
 		emuPanelMove(1, 0)
 	case sdl.K_PAGEUP:
-		emuPanelJump(emuPanel.cursor - emuPanelPageStep())
+		emuPanelPageMove(-emuPanelPageStep())
 	case sdl.K_PAGEDOWN:
-		emuPanelJump(emuPanel.cursor + emuPanelPageStep())
+		emuPanelPageMove(emuPanelPageStep())
 	case sdl.K_HOME:
 		emuPanelJump(0)
 	case sdl.K_END:
@@ -1700,13 +1810,26 @@ func handleEmuMouse(mx, my int32, config *Config) bool {
 	}
 	for _, hit := range emuHintHits {
 		if pointInRect(mx, my, hit.rect) {
+			if emuHintTargetsSelection(hit.button) {
+				entries := emulatorEntries()
+				index := emuEntryIndex(entries, emuPanel.footerKey)
+				if index < 0 {
+					return true
+				}
+				emuPanelSelect(entries, index)
+			}
 			emuHintPress(hit.button, config)
 			return true
 		}
 	}
 	for _, hit := range emuRowHits {
 		if pointInRect(mx, my, hit.rect) {
-			emuPanel.cursor = hit.index
+			entries := emulatorEntries()
+			index := emuEntryIndex(entries, hit.key)
+			if index < 0 {
+				return true
+			}
+			emuPanelSelect(entries, index)
 			emuPanelActivate(config)
 			return true
 		}
@@ -1717,6 +1840,17 @@ func handleEmuMouse(mx, my int32, config *Config) bool {
 	}
 	closeEmulatorPanel()
 	return true
+}
+
+func emuHintTargetsSelection(button string) bool {
+	if i := strings.Index(button, " / "); i >= 0 {
+		button = button[:i]
+	}
+	switch strings.TrimSpace(button) {
+	case "A", "X", "Y", "R1":
+		return true
+	}
+	return false
 }
 
 // handleEmuWheel scrolls the grid a row per notch. It reports whether the

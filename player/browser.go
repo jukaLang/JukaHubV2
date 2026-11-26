@@ -1081,6 +1081,11 @@ func browserLinkPanelActivate(config *Config) {
 	if brwOpenYouTubeLink(config, link.URL, link.Text) {
 		return
 	}
+	// A file link saves its file, as it does from the page (browserFollowLink).
+	if browserLooksLikeDownload(link.URL) {
+		browserStartDownload(link.URL, "")
+		return
+	}
 	loadTextBrowserURL(config, elem, link.URL)
 }
 
@@ -1563,25 +1568,53 @@ func browserOpenFocusedPageLink(config *Config, elem Element) bool {
 		showToast("That link cannot be opened here", ToastInfo())
 		return true
 	}
+	browserFollowLink(config, elem, layout.Links[cursor], target, false)
+	return true
+}
+
+// browserFollowLink does what activating a page link does, however it was
+// activated (A in link mode, a tap, a mouse click): a YouTube video plays in
+// Media, a play card streams its video or sound, a download link (<a
+// download>, or the address of an archive, an installer or a game file)
+// saves its file to Downloads, and anything else opens in the reader. A tap
+// on a play card used to open its video's address as a page — the "Can't
+// show this file" card — instead of playing it. tap plays the press sound
+// before a page opens, as the tap path always did.
+func browserFollowLink(config *Config, elem Element, hit webLinkHit, target string, tap bool) {
 	browserLinkCursor = browserLinkCursorState{}
-	// A YouTube video, as a link or a play card, plays in Media instead of
-	// loading a page the reader cannot show (browser_youtube.go).
-	if brwOpenYouTubeLink(config, target, layout.Links[cursor].Text) {
-		return true
-	}
-	// A play card is activated, not navigated: the URL streams through
-	// yt-dlp inside the embedded player, exactly like a search result.
-	if layout.Links[cursor].Video {
+	if hit.Video {
+		// A play card is activated, not navigated: the URL streams through
+		// yt-dlp inside the embedded player, exactly like a search result —
+		// in the card itself, on the page (brw_inline_video.go); a second
+		// press on the playing card opens the player.
 		if !IsOnline() {
 			ShowToast("You're offline — videos need an internet connection", ToastKindWarning)
-			return true
+			return
 		}
+		brwInlinePlay(config, hit.Href, func() {
+			if !brwOpenYouTubeLink(config, target, hit.Text) {
+				playSmartURL(config, target)
+			}
+		})
+		return
+	}
+	if brwOpenYouTubeLink(config, target, hit.Text) {
+		return
+	}
+	if hit.Control == nil {
+		name, marked := "", false
+		if doc := browserDocumentFor(elem.Variable); doc != nil {
+			name, marked = doc.DownloadLinks[hit.Href]
+		}
+		if marked || browserLooksLikeDownload(target) {
+			browserStartDownload(target, name)
+			return
+		}
+	}
+	if tap {
 		PlayActivateSound()
-		playSmartURL(config, target)
-		return true
 	}
 	loadTextBrowserURL(config, elem, target)
-	return true
 }
 
 // ── Scroll ⇄ Link mode ─────────────────────────────────────────────────
@@ -2606,13 +2639,7 @@ func browserTapPageHit(renderer *sdl.Renderer, config *Config, elem Element, lay
 			showToast("That link cannot be opened here", ToastInfo())
 			return true
 		}
-		browserLinkCursor = browserLinkCursorState{}
-		// A YouTube video plays in Media (browser_youtube.go).
-		if brwOpenYouTubeLink(config, target, layout.Links[i].Text) {
-			return true
-		}
-		PlayActivateSound()
-		loadTextBrowserURL(config, elem, target)
+		browserFollowLink(config, elem, layout.Links[i], target, true)
 		return true
 	}
 	return false

@@ -273,7 +273,10 @@ func coreGPUAutoHold(b coreBuild) (crc string, hold bool) {
 }
 
 // coreGPUHeldNote is how a toast names the GPU cores an automatic pass left
-// alone, the first time it leaves each build.
+// alone, the first time it leaves each build. Since 2026-11-26 it no longer
+// sends the player to the Emulators page to try the buildbot's build: that is
+// a desktop OpenGL build, and the page does not offer such a core for a
+// console without one either (coregpuoffer.go).
 func coreGPUHeldNote(names []string) string {
 	list := names
 	more := ""
@@ -282,9 +285,9 @@ func coreGPUHeldNote(names []string) string {
 		list = list[:3]
 	}
 	if len(names) == 1 {
-		return "kept the firmware's own " + names[0] + " (it draws with this GPU; the generic build may not) — update it on the Emulators page to try"
+		return "kept the firmware's own " + names[0] + ", the build made for this GPU (the libretro buildbot's is a desktop OpenGL build)"
 	}
-	return "kept the firmware's own " + strings.Join(list, ", ") + more + " (they draw with this GPU; the generic builds may not) — update them on the Emulators page to try"
+	return "kept the firmware's own " + strings.Join(list, ", ") + more + ", the builds made for this GPU (the libretro buildbot's are desktop OpenGL builds)"
 }
 
 // coreConsoleShort is the console a GPU core is known by, for a toast ("N64"),

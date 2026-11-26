@@ -207,7 +207,12 @@ gap, not a silent promise.
   and tap targets, a tap goes to the topmost one, and find-in-page searches
   their text.
 - `calc()` over `px`, `em`, `rem`, percentages and viewport units, plus
-  `min()`, `max()` and `clamp()` in ordinary lengths.
+  `min()`, `max()` and `clamp()` in ordinary lengths. A `width`, `min-width`,
+  `max-width`, `flex-basis` (or the `flex` shorthand's basis), `left` or
+  `right` that mixes a percentage with lengths (`calc(100% - 300px)`,
+  `min(100%, 40rem)`) is the percentage it comes to in the parent's modelled
+  width, so it still scales with the column the box gets; `round()` and the
+  other stepped functions over a percentage are left as written.
 - Container queries and container-relative units.
 - Images, video, forms and details/summary layout. An inline-level image
   (not `display: block`, floated, positioned or a flex/grid item) is an
@@ -403,7 +408,18 @@ gap, not a silent promise.
   anchored at the positioned origin and clipped to the padding box. `space`
   keeps tile size and distributes equal gaps without far-edge clipping;
   `round` rescales tiles so an integer count fills the box. Gradients accept
-  the same sizes, positions and repeats.
+  the same sizes, positions and repeats. A linear gradient is drawn at its
+  real angle (`135deg`, and `to bottom right` with its angle from the box's
+  shape), and a radial one as rings around its centre — circle or ellipse,
+  `closest-side`/`farthest-side`/`closest-corner`/`farthest-corner` or
+  explicit radii, `at` keywords, percentages or lengths — both as GPU
+  geometry clipped to the box's rounded corners (`webpage_gradient.go`), and
+  so is a conic one (`from` an angle, `at` a position, stops by angle or
+  percentage: pie charts and colour wheels). `repeating-linear-gradient()` and
+  `repeating-radial-gradient()` repeat their stops as stripes and rings; a stop
+  with two positions (`red 0 25%`) or two stops at one place make a hard edge;
+  a stop placed in px (`transparent 0, #000 40px`) is resolved against the box
+  it is drawn in.
 - `vertical-align` (`baseline`, `middle`, `top`, `bottom`, `text-top`,
   `text-bottom`, plus lengths/percentages) shifts the inline run inside its
   line slot; decorations move with it.
@@ -447,7 +463,23 @@ gap, not a silent promise.
 - Lists: `ul`, `ol`, `li`, including nested lists and custom counters. Nested
   bulleted lists step from disc to circle to square; `<ol start>`,
   `<li value>` and the `type` attribute (`1`, `a`, `A`, `i`, `I`, `disc`,
-  `circle`, `square`) number and mark the way the page says.
+  `circle`, `square`) number and mark the way the page says. The marker
+  follows `list-style-type`, not the tag (`ul { list-style-type: decimal }`
+  numbers): `disc`, `circle`, `square`, `decimal`, `decimal-leading-zero`,
+  `lower/upper-alpha`/`-latin`, `lower/upper-roman`, `lower-greek`,
+  `disclosure-open/closed`, a string (`"→ "`), and decimal for the
+  numbering systems of other scripts. `<ol reversed>` counts down from its
+  item count. Only a list item draws a marker: `li { display: block }` and a
+  flex or grid `<li>` have none, and any element styled `display: list-item`
+  has one. An item whose list's start padding the page sets hangs its marker
+  left of its text (`list-style-position: outside`; `inside` keeps it in the
+  line), and a list styled `display: inline` stays in its line.
+- Newer CSS: the two-keyword `display` values (`block flex`, `inline grid`,
+  `inline flow-root`, `block flow list-item`), `@scope (root) { … }` (rules
+  apply inside the root, `:scope` is the root; the `to (…)` limit is not
+  modelled), and the math functions `round()`, `mod()`, `rem()`, `abs()`,
+  `sign()`, `pow()`, `sqrt()`, `hypot()`, `exp()`, `log()` and the constants
+  `pi` and `e`, inside `calc()` or written bare.
 - Inline and text: `a`, `span`, `strong`, `b`, `em`, `i`, `u`, `ins`, `s`,
   `del`, `strike`, `small`, `big`, `mark`, `code`, `kbd`, `samp`, `var`, `q`,
   `cite`, `abbr`, `time`, `sub`, `sup`, `font`, `nobr`, `br`, `wbr`, and
@@ -498,13 +530,13 @@ mistaken for working CSS.
 
 | Construct | Current behaviour |
 | --- | --- |
-| `font-family` and `@font-face` | A family of the page's `@font-face` rules is downloaded when the file is TrueType, OpenType or WOFF (a WOFF2-only source is skipped; Google Fonts is asked for TrueType), only its regular and bold weights and only a subset holding Latin letters or private-use icons; italic is the face slanted, and past the per-run caps (8 files a page, 24 MB a run on a handheld) the reader's three faces set the text. Material Icons ligature names still become the nearest glyph the reader has. Font descriptors other than family, weight, style and `unicode-range` are ignored. |
+| `font-family` and `@font-face` | A family of the page's `@font-face` rules is downloaded when the file is TrueType, OpenType, WOFF or WOFF2 (Brotli and the WOFF2 outline transforms unpacked by `webfont_brotli.go`/`webfont_woff2.go`; Google Fonts is asked for TrueType), only its regular and bold weights and only a subset holding Latin letters or private-use icons; italic is the face slanted, and past the per-run caps (8 files a page, 24 MB a run on a handheld) the reader's three faces set the text. Material Icons ligature names still become the nearest glyph the reader has. Font descriptors other than family, weight, style and `unicode-range` are ignored. |
 | `display: inline-block` on inline elements (`a`, `span`, `button`) and other block/inline conversion | They are inline boxes kept whole on their line, with their padding, border, radius and background; their own `width` and `height` are not applied, and a label wider than the whole line breaks like text instead of wrapping inside its box. Nested boxes with different backgrounds that end together paint the outer box's right padding in the inner one's colour. A block-level element containing block children inside an inline row is one item; text between inline-block siblings joins the box before it. |
 | Width/min-width/max-width on a flex/grid container | Accepted; item widths use the page measure because the container itself has no separate box in this engine. |
 | Percentage heights (`height: 50%`, `min-height`, `max-height`) | Resolved when the containing block has a definite height, including `calc()`, `min()`, `max()` and `clamp()` with percentages. An auto-height ancestor leaves them content-sized. |
 | aspect-ratio on a wrapper with no direct block | Accepted for ordinary blocks; a wrapper that only colours its children reserves its ratio through its box, not through a text row. |
 | `position: sticky` | Kept in normal flow and pinned as a copy of the element's whole subtree (a header's logo, menu and buttons, its floats and positioned children) once it scrolls past its inset, until its containing block (a table for a header cell) scrolls away; `bottom` alone sticks to the bottom edge. A bar taller than the view, or taller than two fifths of it across most of the width, scrolls; links in the pinned copy are reached at the bar's place in the page, and nested scroll containers are not modelled. |
-| `position: fixed` too big to pin, and boxes covering the screen | A fixed box taller than the view, or most of it across most of the width (a drawer, a consent panel), scrolls with the page (one on the bottom edge after its last line). A fixed box, or an absolute one with no positioned ancestor (a positioned `<html>`/`<body>` counts as none), that covers the whole screen (`inset: 0`, or most of the viewport both ways: a modal backdrop, a cookie wall) keeps its child blocks in the flow, since the reader cannot press its close button; only its own text is a layer. A fixed box inside a positioned layer stays in that layer's flow. |
+| `position: fixed` too big to pin, and boxes covering the screen | A fixed box taller than the view, or most of it across most of the width (a drawer, a consent panel), scrolls with the page (one on the bottom edge after its last line). A fixed box, or an absolute one with no positioned ancestor (a positioned `<html>`/`<body>` counts as none), that covers the whole screen (`inset: 0`, or most of the viewport both ways: a modal backdrop, a cookie wall) keeps its child blocks in the flow, since the reader cannot press its close button; only its own text is a layer. A positioned box inside another (a close button at a dialog's corner, a badge on a positioned card, a dropdown under a fixed header), up to four deep, is a layer of its own placed against the boxes of the layer it sits in and painted over it; a fixed box inside a layer moves with that layer. |
 | Effects of `isolation`, `filter`, `backdrop-filter`, `will-change`, `contain`, `mix-blend-mode`, `perspective`, `clip-path`, masks | They make stacking contexts (z-index nests inside them) but are not drawn: no blur, blend, clip shape or mask. A relatively positioned element is painted over a layer only where it overlaps one; its floats and videos stay with the flow. |
 | `box-shadow` inset; more than one shadow layer; `text-shadow` blur | Only the first visible outer box-shadow layer is painted; a text shadow's blur only lowers its alpha. |
 | `transform` (except `translate`), `transition`, `animation`, `filter`, `clip-path` | Accepted or skipped; rotate, scale and skew are not drawn, so content stays upright (a transformed box is still a stacking context). A translated box in the flow is painted moved and keeps its place in the flow. |
@@ -516,11 +548,11 @@ mistaken for working CSS.
 | `line-clamp` on a wrapper whose text sits in child blocks | Only the element's own lines are clamped; a clamp on a wrapper of paragraphs does not count their lines. |
 | `vertical-align: baseline` and lengths in table cells | Read as top. |
 | Presentation attributes not listed above (`frame`/`rules`, a table's `align="left"/"right"`) | Ignored; CSS for the same properties works. |
-| `::first-line`, `::first-letter`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. |
+| `::first-line`, `::selection`, `::placeholder`, `::backdrop`, scrollbar/form-control pseudo-elements | Not generated; their rules do not style the element. `::first-letter` is: the first letter (with the punctuation before it) of a block's text takes its colour, size, weight and face, but a floated drop cap stays in its line. |
 | `content: url(...)` and image content | Skipped; generated content is text only. |
 | `counter-reset`/`counter-increment` inside `::before`/`::after` | Parsed on the pseudo-element; counter operations are applied on elements, not generated boxes. |
 | `@charset`, `@namespace` | Not applied. |
-| `@keyframes`, `@page` (and `@font-face` beyond the row above) | Not modelled as rendering features. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
+| `@keyframes`, `@page` (and `@font-face` beyond the row above) | Nothing moves: an animation that keeps its end state (`animation-fill-mode: forwards` or `both`, not infinite) is drawn in that state — its `to`/`100%` frame's opacity, visibility, transform, position and colours — so content that fades in shows and a loading screen that fades out goes; any other animation leaves the element as styled. `@page` is not modelled. `font-variant: small-caps` sets lower-case words as capitals a size smaller. `@media`, `@supports` and `@container` are evaluated, and `@layer` orders the cascade. |
 | Floats inside a line, nested floated boxes, `shape-outside` | A floated inline element (`<span style="float:right">`) stays in its line, and a floated `<img>` floats on its own. Inside a floated box, inside a table cell, or past 600 floated boxes on a page, a floated element floats only its own text; a floated box is as wide as the floats inside it side by side (a floated menu of floated items). A block that holds its floats and starts beside a float has its lines wrapped one by one, not its whole box narrowed. `shape-outside` is ignored: floats are rectangles. |
 
 ## Draw-path fixture coverage

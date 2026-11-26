@@ -407,7 +407,11 @@ func windowsAppsLaunch(entry windowsAppEntry) {
 		return
 	}
 	PlaySuccessSound()
-	ShowToast("Starting "+entry.Title, ToastKindSuccess)
+	message := "Starting " + entry.Title
+	if !IsWindows() && !windowsAppOpenGL(entry.Path) && !wineTestPath(entry.Path) {
+		message += " · Start opens Virtual Keyboard"
+	}
+	ShowToast(message, ToastKindSuccess)
 }
 
 // windowsAppsRuntimeBusy refuses, politely, to start an app while the Windows
@@ -1119,6 +1123,8 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			} else {
 				if !IsWindows() && windowsAppOpenGL(entry.Path) {
 					detail += " · OpenGL"
+				} else if !IsWindows() && !wineTestPath(entry.Path) {
+					detail = "Start: Virtual Keyboard · " + detail
 				}
 				if !runtime.ready() {
 					detailColor = ToastErrorInk()

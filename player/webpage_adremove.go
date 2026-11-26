@@ -1273,3 +1273,28 @@ var webAdLabels = webAdSet(
 // webAdNeutral are the words of an ad's own controls: neither content nor a
 // label.
 var webAdNeutral = webAdSet("x", "close", "dismiss", "hide", "skip", "report", "i", "info")
+
+// webConsentCSS hides the cookie-consent banners and walls of the common
+// consent platforms (OneTrust, Cookiebot, Quantcast, Sourcepoint, Didomi,
+// Usercentrics, TrustArc, Osano, Complianz, CookieYes, iubenda, Google's
+// Funding Choices, Borlabs). Their buttons answer a script the reader runs once
+// and cannot press afterwards, so a banner stayed over or in the page as a block
+// of legal text; a browser with the user's choice made shows none.
+const webConsentCSS = `#onetrust-consent-sdk,#onetrust-banner-sdk,.onetrust-pc-dark-filter,
+#CybotCookiebotDialog,#CybotCookiebotDialogBodyUnderlay,#qc-cmp2-container,.qc-cmp2-container,
+[id^="sp_message_container_"],#didomi-host,#didomi-popup,#usercentrics-root,#usercentrics-cmp-ui,
+#truste-consent-track,#consent_blackbar,.truste_overlay,.truste_box_overlay,.osano-cm-window,
+.osano-cm-dialog,.cc-window,.cc-revoke,#cmplz-cookiebanner-container,.cmplz-cookiebanner,
+.cky-consent-container,.cky-overlay,#cookie-law-info-bar,#iubenda-cs-banner,.fc-consent-root,
+.fc-dialog-overlay,#BorlabsCookieBox,#cookie-notice,#cookie-banner,#cookieConsent,
+#gdpr-consent-tool-wrapper{display:none !important}`
+
+// webReaderCleanCSS is the reader's own sheet for a page: the consent banners
+// hidden, unless the user turned filtering off for the site (the same switch
+// as the ad cut, webRemoveAds).
+func webReaderCleanCSS(pageURL string) string {
+	if browserAdBlockOff(pageURL) {
+		return ""
+	}
+	return webConsentCSS
+}

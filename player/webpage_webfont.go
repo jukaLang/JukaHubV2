@@ -15,10 +15,11 @@ package main
 // reader's own face sets the text.
 //
 // SDL_ttf reads TrueType and OpenType, and WOFF is those tables zlib-packed,
-// unpacked here. WOFF2 needs Brotli and a glyph-table transform the reader
-// does not have, so a WOFF2 source is skipped for the next one in the list;
-// Google Fonts, which answers a browser with WOFF2 only, is asked for its
-// style sheet the way a plain HTTP client is, and answers with TrueType.
+// unpacked here. WOFF2 — what most sites serve now, often alone — is a Brotli
+// stream with its outlines transformed, rebuilt by webfont_woff2.go. Google
+// Fonts, which answers a browser with WOFF2, is still asked for its style
+// sheet the way a plain HTTP client is and answers with TrueType, which needs
+// no unpacking at all.
 //
 // Files are kept, by address, for the rest of the run (another page of the
 // same site reuses them), and faces are opened at the reader's sizes and never
@@ -146,8 +147,8 @@ func webFontFamilyName(v string) string {
 }
 
 // webFontSources are the addresses of a src list the reader can read —
-// TrueType, OpenType and WOFF, as their format() or file name says — in the
-// author's order. local() faces and WOFF2, EOT and SVG fonts are skipped.
+// TrueType, OpenType, WOFF and WOFF2, as their format() or file name says —
+// in the author's order. local() faces and EOT and SVG fonts are skipped.
 func (p *webParser) webFontSources(src string) []string {
 	var out []string
 	for _, part := range webSplitTopLevel(src, ',') {
@@ -169,7 +170,8 @@ func (p *webParser) webFontSources(src string) []string {
 			}
 		}
 		switch format {
-		case "truetype", "opentype", "woff", "truetype-variations", "opentype-variations", "woff-variations":
+		case "truetype", "opentype", "woff", "woff2", "truetype-variations", "opentype-variations",
+			"woff-variations", "woff2-variations":
 		case "":
 			if strings.HasPrefix(strings.ToLower(raw), "data:") {
 				break
@@ -179,7 +181,7 @@ func (p *webParser) webFontSources(src string) []string {
 				name = name[:i]
 			}
 			switch strings.ToLower(path.Ext(name)) {
-			case ".woff2", ".eot", ".svg", ".svgz":
+			case ".eot", ".svg", ".svgz":
 				continue
 			}
 		default:
@@ -502,7 +504,7 @@ func fetchWebFontsContext(parent context.Context, doc *webDocument) {
 				doc.webFontPick[pick] = key
 			}
 			doc.webFontMu.Unlock()
-			doc.invalidateFormState()
+			doc.noteSizesArrived()
 		}(jb)
 	}
 	wg.Wait()
@@ -608,8 +610,8 @@ func webFontDataURI(src string) []byte {
 }
 
 // webFontSFNT is data as a font SDL_ttf opens — TrueType or OpenType as it
-// is, WOFF unpacked — and false for anything else (WOFF2 included) or for a
-// font larger than limit bytes.
+// is, WOFF and WOFF2 unpacked — and false for anything else or for a font
+// larger than limit bytes.
 func webFontSFNT(data []byte, limit int64) ([]byte, bool) {
 	if len(data) < 12 || int64(len(data)) > limit {
 		return nil, false
@@ -619,6 +621,8 @@ func webFontSFNT(data []byte, limit int64) ([]byte, bool) {
 		return data, true
 	case "wOFF":
 		return webFontUnWOFF(data, limit)
+	case "wOF2":
+		return webFontUnWOFF2(data, limit)
 	}
 	return nil, false
 }

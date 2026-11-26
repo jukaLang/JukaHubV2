@@ -65,7 +65,10 @@ package main
 // beside JukaHub (ppsspp_picture.go), or when the player chose it on the
 // PPSSPP card: the note's Kind says which, for the log and the card. Their
 // one-launch PPSSPP settings are written before JukaHub quits and put back at
-// the return (emuspeed_ppsspp.go).
+// the return (emuspeed_ppsspp.go). PPSSPP's own menu, started with no game
+// from the PSP tile, takes it too while they do (hakuxHandoffMenuLaunch): the
+// note's Menu names the tile, the return opens the Emulators page on it, and
+// nothing of a game's is kept.
 
 import (
 	"bufio"
@@ -151,6 +154,9 @@ type hakuxHandoffNote struct {
 	// Kind is handoffKindXbox or handoffKindPSP ("" from before PSP games
 	// took this way: an Xbox game).
 	Kind string `json:"kind,omitempty"`
+	// Menu is the Emulators page tile whose emulator's own menu this was,
+	// started with no game (hakuxHandoffMenuLaunch); "" for a game.
+	Menu string `json:"menu,omitempty"`
 }
 
 // game is the note's game, as the library names it.
@@ -289,6 +295,30 @@ func hakuxHandoffKindFor(game libraryGame, launcher string) string {
 // the start (the caller returns then); false starts the game beside JukaHub as
 // before, the reason in the log. Main thread.
 func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
+	return hakuxHandoffStart(game, launcher, nil)
+}
+
+// hakuxHandoffMenu is a hand-off with no game: PPSSPP's own menu, from the PSP
+// tile on the Emulators page (ppssppTileStart). Tile is that tile, which the
+// return opens the page on; Args are what the launcher gets in place of a game.
+type hakuxHandoffMenu struct {
+	Tile string
+	Args []string
+}
+
+// hakuxHandoffMenuLaunch is hakuxHandoffLaunch for PPSSPP's own menu, started
+// with no game from the PSP tile: while PSP games get the panel to themselves,
+// so does the menu, whose picture reaches the panel beside JukaHub no more
+// than a game's. Nothing of a game's is kept for it — recents, playtime, save
+// sync, resume. Main thread.
+func hakuxHandoffMenuLaunch(tile, launcher string, args []string) bool {
+	game := libraryGame{System: ppssppLibrarySystem, Title: tile}
+	return hakuxHandoffStart(game, launcher, &hakuxHandoffMenu{Tile: tile, Args: args})
+}
+
+// hakuxHandoffStart is hakuxHandoffLaunch, and with menu set
+// hakuxHandoffMenuLaunch. Main thread.
+func hakuxHandoffStart(game libraryGame, launcher string, menu *hakuxHandoffMenu) bool {
 	kind := hakuxHandoffKindFor(game, launcher)
 	if kind == "" {
 		return false
@@ -315,24 +345,33 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		// current, the PSP's speed level in its ini. That level goes back at
 		// the return (hakuxHandoffReturn).
 		ppssppReadyManagedLaunch(launcher)
-		emuSpeedPrepare(launcher, game)
-		// Where JukaHub's PPSSPP build saves on request, for the battery
-		// watch below (ppsspp_resume.go).
-		saveTo = ppssppResumeTargetFor(launcher, game.Path)
+		if menu == nil {
+			emuSpeedPrepare(launcher, game)
+			// Where JukaHub's PPSSPP build saves on request, for the battery
+			// watch below (ppsspp_resume.go).
+			saveTo = ppssppResumeTargetFor(launcher, game.Path)
+		}
 	}
-	// The command MainUI's queue would run, as launchLibraryGame builds it.
-	romArg := firmwareROMArg(launcher, game.Path)
-	extra := hotseatLaunchArgs(launcher, parseGameArgs(gameOptionsFor(game.Path).Args))
-	if len(extra) > 0 && !hotseatLauncherForwards(launcher) {
-		extra = nil
+	// The command MainUI's queue would run, as launchLibraryGame builds it; a
+	// menu's launcher gets what its tile gives in place of a game.
+	var name string
+	var args []string
+	if menu != nil {
+		name, args = "sh", append([]string{launcher}, menu.Args...)
+	} else {
+		romArg := firmwareROMArg(launcher, game.Path)
+		extra := hotseatLaunchArgs(launcher, parseGameArgs(gameOptionsFor(game.Path).Args))
+		if len(extra) > 0 && !hotseatLauncherForwards(launcher) {
+			extra = nil
+		}
+		name, args = gameLaunchCommandArgs(launcher, romArg, extra)
 	}
-	name, args := gameLaunchCommandArgs(launcher, romArg, extra)
 	name, args = firmwareScriptCommand(launcher, name, args)
 	logPath := ""
 	if dir := gameDiagLogDir(); dir != "" && os.MkdirAll(dir, 0o755) == nil {
 		logPath = filepath.Join(dir, launcherLogName)
 	}
-	boost := xboxBoostSupported() && xboxBoostEnabled(appConfig) && xboxBoostKindForGame(game) != xboxBoostNone
+	boost := menu == nil && xboxBoostSupported() && xboxBoostEnabled(appConfig) && xboxBoostKindForGame(game) != xboxBoostNone
 	scriptPath := hakuxHandoffPath(hakuxHandoffScriptName)
 	statusPath := hakuxHandoffPath(hakuxHandoffStatusName)
 	notePath := hakuxHandoffPath(hakuxHandoffNoteName)
@@ -396,17 +435,6 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	}
 	go func() { _ = cmd.Wait() }()
 	hakuxHandoffBegun = true
-	// A record of an earlier save of this game is this start's now, and a
-	// power-on resume marker written in this boot is superseded, as at a
-	// start beside JukaHub (sessionsafe.go, instantresume.go). Before JukaHub
-	// quits, not on a goroutine.
-	sessionSafeNoteStart(game.Path)
-	resumeDropSameBootMarker()
-
-	// The start counts now — the recents, the game's launches, the Continue
-	// card — and the next start credits the time played (hakuxHandoffReturn).
-	gmetaNoteLaunch(game)
-	recents := recordGameLaunch(game)
 	note := hakuxHandoffNote{
 		Version:      hakuxHandoffNoteVersion,
 		Path:         game.Path,
@@ -415,12 +443,27 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 		DisplayTitle: game.DisplayTitle,
 		Launcher:     launcher,
 		Log:          logPath,
-		FromLibrary:  gameLib.open,
 		Script:       pid,
 		Kind:         kind,
 	}
-	if len(recents) > 0 && recents[0].Path == game.Path {
-		note.PlayedAt = recents[0].PlayedAt
+	if menu != nil {
+		note.Menu = menu.Tile
+	} else {
+		// A record of an earlier save of this game is this start's now, and a
+		// power-on resume marker written in this boot is superseded, as at a
+		// start beside JukaHub (sessionsafe.go, instantresume.go). Before
+		// JukaHub quits, not on a goroutine.
+		sessionSafeNoteStart(game.Path)
+		resumeDropSameBootMarker()
+
+		// The start counts now — the recents, the game's launches, the
+		// Continue card — and the next start credits the time played
+		// (hakuxHandoffReturn).
+		gmetaNoteLaunch(game)
+		if recents := recordGameLaunch(game); len(recents) > 0 && recents[0].Path == game.Path {
+			note.PlayedAt = recents[0].PlayedAt
+		}
+		note.FromLibrary = gameLib.open
 	}
 	if data, err := json.Marshal(note); err != nil {
 		logWarn(tag, "the note for the return from %s was not written: %v", title, err)
@@ -432,7 +475,11 @@ func hakuxHandoffLaunch(game libraryGame, launcher string) bool {
 	}
 	logInfo(tag, "%s gets the screen to itself: hand-off script pid %d runs %s once JukaHub has closed, and launch.sh starts JukaHub again when the game ends",
 		title, pid, strings.Join(append([]string{name}, args...), " "))
-	ShowToast(title+" is starting — JukaHub closes while it plays and comes back after", ToastKindInfo)
+	if menu != nil {
+		ShowToast(title+" is opening — JukaHub closes while it is open and comes back after", ToastKindInfo)
+	} else {
+		ShowToast(title+" is starting — JukaHub closes while it plays and comes back after", ToastKindInfo)
+	}
 	requestAppExit()
 	return true
 }
@@ -923,7 +970,8 @@ func hakuxHandoffReturn() {
 		return
 	}
 	var note hakuxHandoffNote
-	if json.Unmarshal(data, &note) != nil || note.Version != hakuxHandoffNoteVersion || strings.TrimSpace(note.Path) == "" {
+	if json.Unmarshal(data, &note) != nil || note.Version != hakuxHandoffNoteVersion ||
+		(strings.TrimSpace(note.Path) == "" && note.Menu == "") {
 		hakuxHandoffClear()
 		return
 	}
@@ -952,7 +1000,7 @@ func hakuxHandoffReturn() {
 		// puts them back after a game beside JukaHub (emuspeed_ppsspp.go).
 		go emuSpeedPPSSPPRestore()
 	}
-	if run.HasStart {
+	if run.HasStart && note.Menu == "" {
 		// Its saves go up to Google Drive / RomM, as after any game
 		// (savesync_auto.go).
 		saveSyncAfterExit(game.Path, game.System)
@@ -963,8 +1011,11 @@ func hakuxHandoffReturn() {
 	if hakuxHandoffFailed(run) {
 		go hakuxHandoffDiagnose(note, run)
 	}
-	if note.FromLibrary {
+	switch {
+	case note.FromLibrary:
 		hakuxHandoffReopen(game, 0)
+	case note.Menu != "":
+		hakuxHandoffReopenTile(note.Menu, 0)
 	}
 	if run.LowBattery {
 		// The battery watch ended the game: its state is kept for the next
@@ -1012,7 +1063,14 @@ func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 	}()
 	emu := handoffKindEmulator(note.Kind)
 	game := note.game()
-	report, _ := diagnoseLibraryGame(game, note.Launcher, "")
+	// An emulator's own menu had no game to check (hakuxHandoffMenuLaunch).
+	report := gameDiagReport{Title: game.Label() + " didn't start"}
+	what := "Hand-off game (" + emu + ")"
+	if note.Menu == "" {
+		report, _ = diagnoseLibraryGame(game, note.Launcher, "")
+	} else {
+		what = emuTileLaunchKind + ", with the screen to itself"
+	}
 	if strings.TrimSpace(note.Log) != "" {
 		d := &gameDiagLaunch{game: game, launcher: note.Launcher, outPath: note.Log}
 		d.addLauncherOutput(&report)
@@ -1020,7 +1078,7 @@ func hakuxHandoffDiagnose(note hakuxHandoffNote, run hakuxHandoffRun) {
 	// The launch as the hand-off script recorded it, for the card's bug report
 	// (launchreport.go). JukaHub was closed while it ran, so its log is this
 	// start's.
-	rec := launchRecordNew("Hand-off game ("+emu+")", game.Label(), note.Launcher)
+	rec := launchRecordNew(what, game.Label(), note.Launcher)
 	rec.System, rec.ROM, rec.OutPath = game.System, game.Path, note.Log
 	if !note.PlayedAt.IsZero() {
 		rec.Started = note.PlayedAt
@@ -1093,5 +1151,29 @@ func hakuxHandoffReopen(game libraryGame, tries int) {
 	openGameLibraryOnSystem(game.System, "")
 	if !gameLib.scanning {
 		jumpToLibraryGame(game)
+	}
+}
+
+// hakuxHandoffReopenTile opens the Emulators page on the tile an emulator's
+// own menu was started from (hakuxHandoffMenuLaunch), once the start-up
+// questions are answered. Main thread.
+func hakuxHandoffReopenTile(tile string, tries int) {
+	if exitRequested.Load() || gameScreenSuspended() {
+		return
+	}
+	if startupLocked() || onboarding.active || profilesPicker.sheet.open {
+		if tries < hakuxHandoffWaitFrames {
+			requestFrameEvery(50)
+			tbxPost(func() { hakuxHandoffReopenTile(tile, tries+1) })
+		}
+		return
+	}
+	openEmulatorPanel()
+	entries := emulatorEntries()
+	for i, e := range entries {
+		if e.Name == tile {
+			emuPanelSelect(entries, i)
+			return
+		}
 	}
 }

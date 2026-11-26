@@ -190,7 +190,7 @@ func gameReadyOpenEmulators(system string) {
 	idx := emulatorEntryForSystem(entries, system)
 	openEmulatorPanel()
 	if idx >= 0 {
-		emuPanel.cursor = clampPanelIndex(idx, len(entries))
+		emuPanelSelect(entries, clampPanelIndex(idx, len(entries)))
 	}
 	gameReadyDetour.emulators = hid
 }

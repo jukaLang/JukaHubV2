@@ -39,6 +39,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -447,17 +448,109 @@ func videoTracksAudioMapArgs(sess *playbackSession) []string {
 		return nil
 	}
 	audio := videoTracksAudioChoice(path)
-	if audio <= 0 {
+	pref := videoAudioLanguage()
+	if audio <= 0 && pref == "" {
 		return nil
 	}
 	// The probe is normally done (the sheet asked it); a remembered choice at
 	// the start of a film waits for it here, briefly — the picture waits for
 	// the sound's first buffer, so the two still start together.
 	list, _, ok := videoTracksWait(path, 6*time.Second)
-	if !ok || audio > len(list.audio) {
+	if !ok {
+		return nil
+	}
+	if audio <= 0 {
+		// No choice for this file: the preferred language's track, when the
+		// file has one ffmpeg would not have picked by itself.
+		want := videoTracksPreferredAudio(list, pref)
+		if want < 0 || want == videoTracksAutoAudio(list) {
+			return nil
+		}
+		return []string{"-map", "0:a:" + strconv.Itoa(want)}
+	}
+	if audio > len(list.audio) {
 		return nil
 	}
 	return []string{"-map", "0:a:" + strconv.Itoa(audio-1)}
+}
+
+// videoAudioLanguageKey is the Custom key of Settings → Media & playback →
+// Audio language: a language code ("ja"), or none for each video's own
+// default track.
+const videoAudioLanguageKey = "video_audio_language"
+
+// videoAudioLanguagePref mirrors that setting for the decoder goroutines,
+// which must not read the config's Custom map; it is loaded once from the
+// config and stored again by the Settings row.
+var videoAudioLanguagePref struct {
+	once sync.Once
+	code atomic.Value // string
+}
+
+// videoAudioLanguage is the preferred audio language, "" for none.
+func videoAudioLanguage() string {
+	videoAudioLanguagePref.once.Do(func() {
+		code := ""
+		if appConfig != nil && appConfig.Variables.Custom != nil {
+			if v, ok := appConfig.Variables.Custom[videoAudioLanguageKey].(string); ok {
+				code = strings.TrimSpace(v)
+			}
+		}
+		videoAudioLanguagePref.code.Store(code)
+	})
+	code, _ := videoAudioLanguagePref.code.Load().(string)
+	return code
+}
+
+// videoSetAudioLanguage stores the preferred audio language. Render thread.
+func videoSetAudioLanguage(config *Config, code string) {
+	code = strings.TrimSpace(code)
+	videoAudioLanguage() // the once has run, so it cannot overwrite this
+	videoAudioLanguagePref.code.Store(code)
+	if config == nil {
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom[videoAudioLanguageKey] = code
+	syncVariableOverrides(config)
+}
+
+// videoTracksLangMatches reports whether a stream's language tag ("jpn",
+// "ja", "pt-BR") is the language code ("ja", "pt").
+func videoTracksLangMatches(tag, code string) bool {
+	if tag == "" || code == "" {
+		return false
+	}
+	short := strings.ToLower(videoTracksLang2(tag))
+	if i := strings.IndexAny(short, "-_"); i > 0 {
+		short = short[:i]
+	}
+	code = strings.ToLower(code)
+	if i := strings.IndexAny(code, "-_"); i > 0 {
+		code = code[:i]
+	}
+	return short == code
+}
+
+// videoTracksPreferredAudio is the audio stream (0-based) in the preferred
+// language — its default one, else the one with the most channels — or -1.
+func videoTracksPreferredAudio(list videoTrackList, code string) int {
+	best, bestScore := -1, -1
+	for i, a := range list.audio {
+		if !videoTracksLangMatches(a.Lang, code) {
+			continue
+		}
+		score := a.Channels
+		if a.Default {
+			score += 1000
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	return best
 }
 
 // videoTracksAutoAudio is the stream ffmpeg picks by itself: the default one,
@@ -480,6 +573,9 @@ func videoTracksAutoAudio(list videoTrackList) int {
 func videoTracksCurrentAudio(path string, list videoTrackList) int {
 	if a := videoTracksAudioChoice(path); a > 0 && a <= len(list.audio) {
 		return a - 1
+	}
+	if a := videoTracksPreferredAudio(list, videoAudioLanguage()); a >= 0 {
+		return a
 	}
 	return videoTracksAutoAudio(list)
 }

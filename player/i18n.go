@@ -178,11 +178,16 @@ func uiMarkTranslated(s string) string {
 	return uiTranslatedStart + s + uiTranslatedEnd
 }
 
+// uiUnmarkReplacer is built once: uiT runs for every label of every frame,
+// and a replacer made per call was built anew each time (a report's stall
+// trace, JH-AT4EEE, caught the main thread building one).
+var uiUnmarkReplacer = strings.NewReplacer(uiTranslatedStart, "", uiTranslatedEnd, "")
+
 func uiUnmarkTranslated(s string) string {
 	if !strings.Contains(s, uiTranslatedStart) && !strings.Contains(s, uiTranslatedEnd) {
 		return s
 	}
-	return strings.NewReplacer(uiTranslatedStart, "", uiTranslatedEnd, "").Replace(s)
+	return uiUnmarkReplacer.Replace(s)
 }
 
 // translateMarked translates the unmarked parts of a composed label and keeps

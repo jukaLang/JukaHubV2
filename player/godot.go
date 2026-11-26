@@ -335,9 +335,10 @@ func godotOpen() {
 		return
 	}
 	openEmulatorPanel()
-	for i, e := range emulatorEntries() {
+	entries := emulatorEntries()
+	for i, e := range entries {
 		if godotTile(e) {
-			emuPanel.cursor = i
+			emuPanelSelect(entries, i)
 			break
 		}
 	}
@@ -821,11 +822,16 @@ func godotCopyMissing(src, dst string) int {
 // ── Provenance ──────────────────────────────────────────────────────────────
 
 // godotMarker is JukaHub's record of the port it installed: where from, when,
-// and each of its files' SHA-256 (slash paths under Emus/GODOT).
+// each of its files' SHA-256 (slash paths under Emus/GODOT) and the commit of
+// the standalone port's repository it came from (after a fall back to Kiwi,
+// the one it tried), which the Emulator updates pass records
+// (emuautoupdate_handheld.go; "" for a press, which takes the default branch
+// as it is).
 type godotMarker struct {
 	Source    string            `json:"source"`
 	Installed time.Time         `json:"installed"`
 	Files     map[string]string `json:"files,omitempty"`
+	Commit    string            `json:"commit,omitempty"`
 }
 
 func godotMarkerPath() string {

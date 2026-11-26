@@ -605,7 +605,10 @@ type wineLaunch struct {
 	// WestonPack's OpenGL mode where WestonPack is the display.
 	Display string
 	OpenGL  bool
-	LogPath string
+	// Keyboard starts this app through the Wine-native floating Virtual
+	// Keyboard. Windows Apps enables it; the built-in test and profiles do not.
+	Keyboard bool
+	LogPath  string
 	// Started runs once the program is up, Ended once its whole session is
 	// over; Failed reports a launch that did not start, or ended with an error
 	// right away (wineQuickExit). All three run on the launch's goroutine:
@@ -773,7 +776,22 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 			log.printf("runtime: %s\n", line)
 		}
 	}
-	plan, err := planWineRuntime(context.Background(), l.Exe, l.Args, l.Env, progress)
+	program := wineProgramSpec{Exe: l.Exe, Args: l.Args, Env: l.Env}
+	keyboardOn := l.Keyboard && !IsWindows()
+	if keyboardOn {
+		helper, err := wineKeyboardEnsure()
+		if err != nil {
+			failed(fmt.Errorf("prepare Virtual Keyboard: %w", err))
+			return
+		}
+		program, err = wineKeyboardWrap(l, helper)
+		if err != nil {
+			failed(err)
+			return
+		}
+		log.printf("input: Virtual Keyboard enabled\n")
+	}
+	plan, err := planWineRuntime(context.Background(), program.Exe, program.Args, program.Env, progress)
 	if err != nil {
 		failed(err)
 		return
@@ -788,7 +806,7 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	release := func(d wineDisplayPlan) {
 		wineBounded(log, "the WestonPack unmount", wineUnmountLimit, func() { d.release(log) })
 	}
-	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, log, func(line string) { wineSetPhase(l.Key, line) }, settings.binBashOff)
+	disp, err := prepareWineDisplay(l.Display, l.OpenGL, plan, l.Dir, log, func(line string) { wineSetPhase(l.Key, line) }, settings.binBashOff)
 	if err == nil && gameScreenSuspended() {
 		// Planning took minutes with JukaHub on screen: whatever started
 		// meanwhile owns the screen and the pad now, and must keep them.
@@ -806,9 +824,17 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	// quiet until the program has started (wineInputLive): until then
 	// JukaHub's own screen is up and would take them.
 	var running atomic.Pointer[exec.Cmd]
+	// playerQuit: Select + Start held is ending the session, which the start
+	// watch (wine_watch.go) must not take for a display that failed.
+	var playerQuit atomic.Bool
 	stopInput := func() {}
 	if disp.lendsPad() {
-		stop, inputErr := wineInputStart(settings.bridge, func() { wineQuit(running.Load(), log) })
+		bridge := settings.bridge
+		bridge.keyboardToggle = keyboardOn
+		stop, inputErr := wineInputStart(bridge, func() {
+			playerQuit.Store(true)
+			wineQuit(running.Load(), log)
+		})
 		if inputErr != nil {
 			log.printf("input: the pad stays a pad: %v\n", inputErr)
 			ShowToast("The pad could not become a mouse: "+inputErr.Error(), ToastKindWarning)
@@ -831,6 +857,7 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	// wineWaitMarker line says the program has exited and Windows programs
 	// have kept the session waiting for wineWaitNotice.
 	var watchR, watchW *os.File
+	var westonLogOffset int64
 	cmd, err := disp.command(l.Dir)
 	if err == nil {
 		log.printf("runtime: %s\n", plan.Flavor)
@@ -851,6 +878,9 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 				hide[key] = true
 			}
 		}
+		if keyboardOn {
+			hide[wineKeyboardTargetEnv], hide[wineKeyboardCommandEnv] = true, true
+		}
 		if len(plan.Env) > 0 {
 			log.printf("environment: %s\n", wineLogEnv(plan.Env, hide))
 		}
@@ -858,10 +888,19 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		// in every display mode; they are not copied to the log either, since
 		// one can be a password or a token.
 		logArgs := append([]string{}, disp.Args...)
-		for i := len(logArgs) - len(l.Args); i >= 0 && i < len(logArgs); i++ {
+		for i := len(logArgs) - len(program.Args); i >= 0 && i < len(logArgs); i++ {
 			logArgs[i] = "<argument>"
 		}
 		log.printf("command: %s\nworking dir: %s\n", wineLogCommand(disp.Command, logArgs, hide), l.Dir)
+		if disp.weston() || keyboardOn {
+			// WestonPack sees only the private command script; keep the app
+			// itself visible in the log without copying caller arguments.
+			privateArgs := make([]string, len(l.Args))
+			for i := range privateArgs {
+				privateArgs[i] = "<argument>"
+			}
+			log.printf("application: %s\n", wineLogCommand(l.Exe, privateArgs, nil))
+		}
 		if log.f != nil {
 			cmd.Stdout, cmd.Stderr = log.f, log.f
 		}
@@ -881,6 +920,9 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		// Last, as for ports: a real /bin/bash in the session's own mount
 		// namespace where the firmware's is not one (nil: nothing to do).
 		disp.binbash.apply(cmd)
+		// Include every line emitted by this start, even when Weston exits
+		// before the watch goroutine gets its first turn.
+		westonLogOffset = wineLogSize(log.path)
 		err = screenChildStart(cmd)
 		if watchW != nil {
 			// The child has its own copy; the pipe ends when the last
@@ -911,8 +953,19 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 		l.Started(cmd.Process.Pid)
 	}
 	logInfo("windowsapps", "started %s (pid %d, %s, %s)", l.Title, cmd.Process.Pid, plan.Flavor, windowsDisplayLabel(disp.Mode))
+	// westonwrap.sh waits for Weston with no time limit: a display that never
+	// comes up ends the session instead of parking the screen for good.
+	stopWatch := func() error { return nil }
+	if disp.weston() {
+		// Stuck waiting for its display, the wrapper has nothing to save: the
+		// group goes at once, and the clean-up below puts Weston's things away.
+		stopWatch = wineWatchWestonStart(cmd, disp.launchScriptPath(), disp.appStatus, log.path, westonLogOffset, log, func() { _ = screenChildKill(cmd) }, playerQuit.Load)
+	}
 
-	waitErr := cmd.Wait()
+	waitErr := disp.appExit(cmd.Wait())
+	if stuck := stopWatch(); stuck != nil {
+		waitErr = stuck
+	}
 	ran := time.Since(started).Round(time.Second)
 	if waitErr != nil {
 		log.printf("exit after %s: %v\n", ran, waitErr)
@@ -929,7 +982,13 @@ func wineRun(l wineLaunch, settings wineLaunchSettings) {
 	release(disp)
 	if waitErr != nil {
 		logWarn("windowsapps", "%s exited after %s: %v", l.Title, ran, waitErr)
-		if ran < wineQuickExit && l.Failed != nil {
+		var stuck *wineDisplayStuckError
+		switch {
+		case l.Failed == nil:
+		case errors.As(waitErr, &stuck):
+			// Its display never came up, however long that took to tell.
+			l.Failed(waitErr, log.path)
+		case ran < wineQuickExit:
 			l.Failed(fmt.Errorf("%s closed after %s (%v); the log says why", l.Title, ran, waitErr), log.path)
 		}
 	}
@@ -1070,13 +1129,15 @@ func launchWindowsApp(entry windowsAppEntry) error {
 		return fmt.Errorf("%s is already running (pid %d)", entry.Title, pid)
 	}
 	logPath := windowsAppLogPath(entry)
+	openGL := windowsAppOpenGL(entry.Path)
 	return wineStart(wineLaunch{
-		Title:   entry.Title,
-		Key:     entry.Path,
-		Exe:     entry.Path,
-		Dir:     filepath.Dir(entry.Path),
-		OpenGL:  windowsAppOpenGL(entry.Path),
-		LogPath: logPath,
+		Title:    entry.Title,
+		Key:      entry.Path,
+		Exe:      entry.Path,
+		Dir:      filepath.Dir(entry.Path),
+		OpenGL:   openGL,
+		Keyboard: !openGL && !wineTestPath(entry.Path),
+		LogPath:  logPath,
 		Started: func(pid int) {
 			windowsAppSetRunning(entry.Path, pid)
 			trophyEvent(tkAppLaunch)

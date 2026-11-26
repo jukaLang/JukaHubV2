@@ -660,3 +660,42 @@ func browserDownloadNetError(err error, ctx context.Context) error {
 	}
 	return fmt.Errorf("the download failed: %w", err)
 }
+
+// browserDownloadType reports a response type that is a file to save, not
+// something to show: archives, installers, disk images and raw bytes.
+func browserDownloadType(mediaType string) bool {
+	switch mediaType {
+	case "application/zip", "application/x-zip-compressed", "application/x-7z-compressed",
+		"application/x-rar-compressed", "application/vnd.rar", "application/x-tar", "application/gzip",
+		"application/x-gzip", "application/x-bzip2", "application/x-xz", "application/zstd",
+		"application/vnd.android.package-archive", "application/x-msdownload", "application/x-msi",
+		"application/x-ms-installer", "application/x-apple-diskimage", "application/x-iso9660-image",
+		"application/x-debian-package", "application/x-rpm", "application/java-archive",
+		"application/octet-stream", "application/x-executable", "application/x-binary":
+		return true
+	}
+	return false
+}
+
+// browserDownloadExtensions are file names a link points at to be saved:
+// archives, installers, disk images and game files.
+var browserDownloadExtensions = map[string]bool{
+	".zip": true, ".7z": true, ".rar": true, ".tar": true, ".gz": true, ".tgz": true, ".bz2": true,
+	".xz": true, ".zst": true, ".lzma": true, ".apk": true, ".xapk": true, ".apks": true, ".obb": true,
+	".exe": true, ".msi": true, ".dmg": true, ".pkg": true, ".deb": true, ".rpm": true, ".appimage": true,
+	".iso": true, ".img": true, ".bin": true, ".cue": true, ".chd": true, ".cso": true, ".pbp": true,
+	".nsp": true, ".xci": true, ".wbfs": true, ".rvz": true, ".gcz": true, ".3ds": true, ".cia": true,
+	".nds": true, ".gba": true, ".gbc": true, ".gb": true, ".nes": true, ".sfc": true, ".smc": true,
+	".gen": true, ".n64": true, ".z64": true, ".v64": true, ".pce": true, ".ws": true,
+	".wsc": true, ".ngp": true, ".ngc": true, ".lnx": true, ".a26": true, ".jar": true, ".pak": true,
+}
+
+// browserLooksLikeDownload reports a link whose address names such a file.
+func browserLooksLikeDownload(address string) bool {
+	u, err := url.Parse(address)
+	if err != nil || strings.Contains(u.Path, "/blob/") {
+		// A code host's /blob/ address is the page that shows the file.
+		return false
+	}
+	return browserDownloadExtensions[strings.ToLower(path.Ext(u.Path))]
+}

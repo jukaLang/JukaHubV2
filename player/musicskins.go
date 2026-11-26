@@ -354,10 +354,8 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	// Transport and modes on the right of the strip.
 	btnY := stripY + 20
 	btnH := int32(46)
-	playIcon := ">"
-	if playing && !paused {
-		playIcon = "II"
-	}
+	// Stop, not Pause, while a radio station plays (music_transport.go).
+	playIcon := musicPlayIcon(playing, paused)
 	rightX := stripX + stripW - 16
 	musicRects.next = musicButton(renderer, config, medFont, rightX-56, btnY, 56, btnH, ">|", false)
 	musicRects.playPause = musicButton(renderer, config, medFont, rightX-56-70, btnY, 62, btnH, playIcon, true)
@@ -378,6 +376,9 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	musicRects.shuffle = musicButton(renderer, config, font, shuffleX, btnY+btnH+8, shuffleW, 32, shuffleLabel, shuffleOn)
 	musicRects.repeat = musicButton(renderer, config, font, repeatX, btnY+btnH+8, repeatW, 32, repeatLabel, repeatMode != musicRepeatOff)
 	musicStockOSLayout.controls = sdl.Rect{X: repeatX, Y: btnY, W: rightX - repeatX, H: btnH + 8 + 32}
+	// The control the pad is on, when it is on one (music_transport.go).
+	musicCtlDrawFocus(renderer, config)
+	ctlFocus := musicCtlHasFocus(config)
 
 	// ── List ──
 	listY := stripY + stripH + 16
@@ -426,7 +427,7 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		for i := start; i < end; i++ {
 			rowY := rowsTop + int32(i-start)*musicRowHeight
 			row := sdl.Rect{X: stripX + 12, Y: rowY, W: stripW - 24, H: musicRowHeight - 6}
-			if i == cursor {
+			if i == cursor && !ctlFocus {
 				fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(ColorCardFocus, 255))
 				drawGlassFocusRing(renderer, row, 8)
 			}
@@ -470,8 +471,10 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 
 	// "pad / key" pairs name the half the user can press (inputhints.go);
 	// search has no pad button of its own here (Start → Search songs does it).
-	hints := []FooterHint{{"A", "Play"}, {"B", "Back"}, {"Start / K", "Options"},
-		{"L2 / G", "PEQ"}, {"Select / O", "Screen Off"}}
+	// A names the focused media control when the pad is on one, and a
+	// station's X its Stop (music_transport.go).
+	hints := append(musicStockOSHintsNow(config), FooterHint{"B", "Back"}, FooterHint{"Start / K", "Options"},
+		FooterHint{"L2 / G", "PEQ"}, FooterHint{"Select / O", "Screen Off"})
 	if hintsUseKeyboard() {
 		hints = append(hints, FooterHint{"/", "Search"})
 	}

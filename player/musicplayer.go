@@ -108,6 +108,9 @@ type musicState struct {
 	// mediaRate is the seconds of the track one second of the running
 	// decoder's output holds: the speed times the tape speed (musicfx.go).
 	mediaRate float64
+	// liveURLs are the radio stations played this session (musicMarkLive):
+	// Play / Pause is Play / Stop on them (music_transport.go).
+	liveURLs map[string]bool
 }
 
 var music = musicState{current: -1, volume: 0.8}
@@ -300,6 +303,9 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 	musicHistoryEnd(previousPath, previousPos, previousDur, false)
 	musicShelf.open = false
 	musicShelf.fromShelf = false
+	// A new list starts with the pad on its rows; a station puts it on Play /
+	// Stop afterwards (radioDirPlay, music_transport.go).
+	musicCtl.focus = ""
 	return true
 }
 
@@ -340,7 +346,13 @@ func openAudioPlayer(config *Config, path string) {
 			playPodcastEpisode(config, show, idx)
 			return
 		}
-		musicPlayPlaylist([]musicTrack{{Path: path, Name: podcastEpisodeTitleFromURL(path)}}, 0)
+		tracks := []musicTrack{{Path: path, Name: podcastEpisodeTitleFromURL(path)}}
+		musicPlayPlaylist(tracks, 0)
+		// A saved channel (Continue, search) is a station: Play / Stop, the
+		// pad on it as the player opens (music_transport.go).
+		if radioDirSavedSet()[strings.TrimSpace(path)] {
+			musicMarkLive(tracks)
+		}
 		openMusicPlayerScene(config)
 		musicPlayTrack(0)
 		return
@@ -407,6 +419,9 @@ func musicDefaultDir(config *Config) string {
 // musicSceneEnter prepares the player when its scene is opened. An active
 // playlist survives leaving and re-entering the scene.
 func musicSceneEnter() {
+	// The pad starts on the playlist, or on Play / Stop for a station
+	// (music_transport.go).
+	musicCtlSceneEnter()
 	// The iPod layout keeps its own menus (musicpod.go).
 	if musicPodActive(appConfig) {
 		musicPodEnter(appConfig)
@@ -647,6 +662,11 @@ func musicStartDecodeKeep(path string, startSec float64, keep bool) {
 		lead += dacExclusiveLeadBytes()
 	}
 	music.mu.Lock()
+	// A radio station tunes in live: a restart part way (speed, equaliser,
+	// effects) would hand ffmpeg the seconds listened so far as -ss.
+	if music.liveURLs[path] {
+		startSec = 0
+	}
 	music.gen++
 	gen := music.gen
 	music.pcmBytes = 0
@@ -1163,6 +1183,20 @@ func musicTogglePause() {
 		}
 		return
 	}
+	// A radio station has no place to hold: Pause stops it, and Play tunes in
+	// again (music_transport.go). One that something else paused (sleep, a
+	// voice memo) tunes in afresh rather than play what piled up meanwhile.
+	if musicLiveLocked() {
+		index, wasPaused := music.current, music.paused
+		music.mu.Unlock()
+		if wasPaused {
+			musicPlayTrack(index)
+			return
+		}
+		musicStop()
+		PlayBackSound()
+		return
+	}
 	music.paused = !music.paused
 	paused := music.paused
 	path, pos, dur := "", 0.0, 0.0
@@ -1194,6 +1228,12 @@ func musicSeek(seconds float64) {
 	music.mu.Lock()
 	if music.current < 0 || music.current >= len(music.tracks) {
 		music.mu.Unlock()
+		return
+	}
+	// A radio station has no timeline to move along (music_transport.go).
+	if musicLiveLocked() {
+		music.mu.Unlock()
+		showToast("Live radio cannot be skipped through", ToastInfo())
 		return
 	}
 	if music.duration > 0 {
@@ -1853,10 +1893,8 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 	iconFont := medFont
-	playIcon := ">"
-	if playing && !paused {
-		playIcon = "II"
-	}
+	// Stop, not Pause, while a radio station plays (music_transport.go).
+	playIcon := musicPlayIcon(playing, paused)
 
 	// The button row is planned before anything is drawn. Mode labels are
 	// measured, not guessed: a fixed 124 px repeat button ellipsized
@@ -1957,6 +1995,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	if volLabelX > textX+286+modeGap {
 		renderText(renderer, config, font, volLabel, ColorTextSecondary(), volLabelX, btnY+16)
 	}
+	// The control the pad is on, when it is on one (music_transport.go).
+	musicCtlDrawFocus(renderer, config)
+	ctlFocus := musicCtlHasFocus(config)
 
 	// ── Playlist card ──
 	listY := cardY + cardH + 20
@@ -2041,11 +2082,12 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		for i := start; i < end; i++ {
 			rowY := rowsTop + int32(i-start)*musicRowHeight
 			row := sdl.Rect{X: cardX + 16, Y: rowY, W: cardW - 32, H: musicRowHeight - 6}
-			if i == cursor {
+			if i == cursor && !ctlFocus {
 				// The playlist cursor is a keyboard focus, not a selected mark:
 				// a filled row alone read as hover once the row was already
 				// playing. The 3px ring goes over the fill and stays inside the
-				// row, so the list's edges cannot clip it.
+				// row, so the list's edges cannot clip it. It is not drawn while
+				// the pad is on the media controls.
 				fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, WithAlpha(ColorCardFocus, 255))
 				drawGlassFocusRing(renderer, row, 10)
 			}
@@ -2126,10 +2168,9 @@ var musicPlayerKeyHints = []FooterHint{
 // keys on a PC without a pad or a handheld with a keyboard plugged in. The
 // footer used to name keyboard keys on every handheld.
 func musicPlayerHintLines() []string {
-	hints, split := musicPlayerPadHints, 5
-	if hintsUseKeyboard() {
-		hints, split = musicPlayerKeyHints, 8
-	}
+	// What A does on a focused media control, and a station's Stop
+	// (music_transport.go).
+	hints, split := musicPlayerHintsNow(appConfig)
 	return []string{hintLine(hints[:split]...), hintLine(hints[split:]...)}
 }
 
@@ -2241,53 +2282,13 @@ func HandleMusicClick(mx, my int32) bool {
 		}
 		return true
 	}
-	if pointInRect(mx, my, musicRects.playPause) {
-		musicTogglePause()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.prev) {
-		musicPrev()
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.next) {
-		musicNext()
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.stop) {
-		musicStop()
-		PlayBackSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.shuffle) {
-		on := musicToggleShuffle()
-		if on {
-			showToast("Shuffle on", ToastSuccess())
-		} else {
-			showToast("Shuffle off", ToastInfo())
+	// The media controls: a tap does what A does on a focused one
+	// (music_transport.go).
+	for _, it := range musicCtlItems() {
+		if pointInRect(mx, my, it.rect) {
+			musicCtlPress(it.id)
+			return true
 		}
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.repeat) {
-		mode := musicCycleRepeatMode()
-		showToast(mode.label(), ToastInfo())
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.favorite) {
-		if fav, name, ok := musicFavoriteCurrent(); ok {
-			if fav {
-				showToast("Favorite: "+name, ToastSuccess())
-			} else {
-				showToast("Removed favorite: "+name, ToastInfo())
-			}
-		} else {
-			showToast("Nothing to favorite yet", ToastInfo())
-		}
-		PlayNavSound()
-		return true
 	}
 	if musicRects.search.W > 0 && pointInRect(mx, my, musicRects.search) {
 		musicOpenSearch()
@@ -2296,16 +2297,6 @@ func HandleMusicClick(mx, my int32) bool {
 	if musicRects.exitTimer.W > 0 && pointInRect(mx, my, musicRects.exitTimer) {
 		minutes := musicCycleExitTimer()
 		showToast(musicTimerToast("Auto-exit", minutes), ToastInfo())
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.volUp) {
-		musicAdjustVolume(0.1)
-		PlayNavSound()
-		return true
-	}
-	if pointInRect(mx, my, musicRects.volDown) {
-		musicAdjustVolume(-0.1)
 		PlayNavSound()
 		return true
 	}
@@ -2371,15 +2362,30 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		return
 	}
 
+	// The arrows and Enter walk and press the media controls while one has
+	// the focus (music_transport.go); Up past the first row steps onto them.
+	ctlFocus := musicCtlHasFocus(config)
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
+		if ctlFocus {
+			musicCtlMove(config, 0, -1)
+			return
+		}
 		music.mu.Lock()
-		if music.cursor > 0 {
+		atTop := music.cursor <= 0
+		if !atTop {
 			music.cursor--
 		}
 		music.mu.Unlock()
+		if atTop && musicCtlTakeFocus(config) {
+			return
+		}
 		PlayNavSound()
 	case sdl.K_DOWN:
+		if ctlFocus {
+			musicCtlDown(config)
+			return
+		}
 		music.mu.Lock()
 		if music.cursor < len(music.tracks)-1 {
 			music.cursor++
@@ -2389,6 +2395,9 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if e.Keysym.Sym == sdl.K_SPACE {
 			musicTogglePause()
+			return
+		}
+		if musicCtlPressFocused(config) {
 			return
 		}
 		music.mu.Lock()
@@ -2455,8 +2464,16 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 		PlayNavSound()
 	case sdl.K_LEFT:
+		if ctlFocus {
+			musicCtlMove(config, -1, 0)
+			return
+		}
 		musicSeekBy(-10)
 	case sdl.K_RIGHT:
+		if ctlFocus {
+			musicCtlMove(config, 1, 0)
+			return
+		}
 		musicSeekBy(10)
 	case sdl.K_MINUS, sdl.K_KP_MINUS, sdl.K_EQUALS, sdl.K_PLUS, sdl.K_KP_PLUS, sdl.K_VOLUMEUP, sdl.K_VOLUMEDOWN:
 		// A tap changes the volume; holding the same key skips a track.
@@ -2644,11 +2661,19 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		}
 	}
 
+	// The D-pad and A walk and press the media controls while one has the
+	// focus (music_transport.go).
+	ctlFocus := musicCtlHasFocus(appConfig)
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_X:
 		musicArmSearchChord()
 		musicTogglePause()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if ctlFocus {
+			// The controls' upper line, else release the press so Up steps
+			// onto the top bar, the only Back, clock and bell this screen has.
+			return musicCtlMove(appConfig, 0, -1)
+		}
 		music.mu.Lock()
 		atTop := music.cursor <= 0
 		if !atTop {
@@ -2656,12 +2681,16 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		}
 		music.mu.Unlock()
 		if atTop {
-			// Nothing above the first track: release the press so Up steps
-			// onto the top bar, the only Back, clock and bell this screen has.
-			return false
+			// Nothing above the first track: Up steps onto the media controls,
+			// and from there to the top bar.
+			return musicCtlTakeFocus(appConfig)
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		if ctlFocus {
+			musicCtlDown(appConfig)
+			return true
+		}
 		music.mu.Lock()
 		if music.cursor < len(music.tracks)-1 {
 			music.cursor++
@@ -2669,7 +2698,11 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		music.mu.Unlock()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
-		// A plays the highlighted playlist row.
+		// A presses the focused media control, else plays the highlighted
+		// playlist row.
+		if musicCtlPressFocused(appConfig) {
+			return true
+		}
 		music.mu.Lock()
 		idx := music.cursor
 		music.mu.Unlock()
@@ -2729,6 +2762,10 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			musicToggleBackground(appConfig)
 			return true
 		}
+		if ctlFocus {
+			musicCtlMove(appConfig, -1, 0)
+			return true
+		}
 		musicSeekBy(-10)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
@@ -2737,6 +2774,10 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		if musicTakeSearchChord() {
 			musicTogglePause()
 			musicOpenSearch()
+			return true
+		}
+		if ctlFocus {
+			musicCtlMove(appConfig, 1, 0)
 			return true
 		}
 		musicSeekBy(10)

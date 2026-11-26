@@ -5,17 +5,22 @@ package main
 // planWineRuntime (wine_runtime.go) returns the command that runs a program:
 // Box64 + Wine on the handheld, Wine on a Linux desktop, the .exe itself on
 // Windows. On a stock TrimUI nothing it starts has anywhere to draw: Wine's
-// winex11.drv needs an X server, and the firmware has no X11, no Wayland and no
-// DRM (SDL draws straight to the framebuffer). This file puts a display around
-// the command:
+// winex11.drv needs an X server, and the firmware has no X11 or Wayland
+// desktop (its SDL apps draw directly to the panel). This file puts a display
+// around the command:
 //
 //   - a Linux desktop session (DISPLAY or WAYLAND_DISPLAY) is used as it is;
 //   - on the handheld, WestonPack (PortMaster's weston_pkg runtime) starts
 //     Weston with Xwayland and shows it through Crusty, its SDL2 presenter.
 //     JukaHub runs westonwrap.sh the way a PortMaster port does: the SquashFS
 //     image mounted read-only (an unpacked copy is used as it is), then
-//     `westonwrap.sh <backend> <renderer> <shell> <gl> [NAME=VALUE...] <program>
-//     [args]`, then `westonwrap.sh cleanup` and the unmount once it returned;
+//     `westonwrap.sh <backend> <renderer> <shell> <gl> /bin/sh <private script>`,
+//     then `westonwrap.sh cleanup` and the unmount once it returned. The script
+//     quotes the program, arguments, environment and working directory: the
+//     upstream wrapper joins its arguments into an eval string, so passing a
+//     Wine value such as `WINEDLLOVERRIDES=...;...` directly runs the second
+//     half as a shell command. It also always exits 0, so the script records
+//     the program's real exit status before the wrapper cleans up;
 //   - on Windows the program opens its own windows: nothing goes around it.
 //
 // Two WestonPack modes are offered, both from the Westonpack wiki's examples:
@@ -25,9 +30,9 @@ package main
 //	weston-gl   headless noop kiosk crusty_glx_gl4es OpenGL 2 games (GLX on
 //	                                                 GLES through gl4es)
 //
-// WestonPack hands the program only the NAME=VALUE words before it, so the
-// program's whole environment travels that way; the wrapper's own environment
-// carries what westonwrap.sh reads itself (PortMaster's device variables,
+// The private script exports the program's environment after WestonPack sets
+// its display and graphics variables. The wrapper's own environment carries
+// what westonwrap.sh reads itself (PortMaster's device variables,
 // CRUSTY_SHOW_CURSOR, the headless size).
 //
 // westonwrap.sh is a bash script; a stock TrimUI has only BusyBox's sh, which
@@ -75,6 +80,10 @@ const (
 	// westonEnvFileName is the optional file of westonwrap.sh settings in
 	// data/windows-runtime (westonEnvOverrides).
 	westonEnvFileName = "weston.env"
+	// westonLaunchScriptName and westonLaunchStatusName live in a private /tmp
+	// directory for one launch. WestonPack's eval sees only their safe paths.
+	westonLaunchScriptName = "launch.sh"
+	westonLaunchStatusName = "exit-status"
 )
 
 var windowsAppDisplayNames = map[string]string{
@@ -221,6 +230,11 @@ type wineDisplayPlan struct {
 	// mount namespace of its own (portmaster_binbash.go); nil when the
 	// firmware's /bin/bash is one, or when none can be given.
 	binbash *pmBinBashPlan
+	// The upstream wrapper does `cd $game_dir` without quotes and returns 0
+	// even when its app fails. It starts in launchDir (a safe /tmp path), while
+	// the private script changes to the app's real folder and writes appStatus.
+	launchDir string
+	appStatus string
 }
 
 // weston reports a WestonPack session.
@@ -248,8 +262,35 @@ func (d wineDisplayPlan) command(dir string) (*exec.Cmd, error) {
 		cmd = exec.Command(d.Command, d.Args...)
 	}
 	cmd.Dir = dir
+	if d.launchDir != "" {
+		cmd.Dir = d.launchDir
+	}
 	cmd.Env = d.Env
 	return cmd, nil
+}
+
+// appExit returns the program's status, which WestonPack's cleanup hides by
+// always exiting 0. A missing marker means its wrapper stopped before the
+// private command could finish, even when the wrapper claimed success.
+func (d wineDisplayPlan) appExit(waitErr error) error {
+	if d.appStatus == "" {
+		return waitErr
+	}
+	data, err := os.ReadFile(d.appStatus)
+	if err != nil {
+		if waitErr != nil {
+			return waitErr
+		}
+		return errors.New("WestonPack ended before the Windows program reported an exit status")
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || code < 0 || code > 255 {
+		return errors.New("WestonPack recorded an invalid Windows program exit status")
+	}
+	if code != 0 {
+		return fmt.Errorf("Windows program exited with status %d", code)
+	}
+	return waitErr
 }
 
 // prepareWineDisplay puts the display around plan's command. openGL picks
@@ -257,7 +298,7 @@ func (d wineDisplayPlan) command(dir string) (*exec.Cmd, error) {
 // is mounted here; whatever this sets up is put away by stop and release.
 // phase shows a step that takes a while (a bash download, westonPickShell);
 // binBashOff is the portBinBash setting, read on the main thread.
-func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
+func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, dir string, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
 	host := currentWineHost()
 	mode, err := resolveWineDisplay(request, host)
 	if err != nil {
@@ -274,7 +315,7 @@ func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log w
 		}
 		return d, nil
 	case windowsDisplayWeston, windowsDisplayWestonGL:
-		return prepareWestonDisplay(d, host.weston, plan, log, phase, binBashOff)
+		return prepareWestonDisplay(d, host.weston, plan, dir, log, phase, binBashOff)
 	case windowsDisplayHeadless:
 		// An explicitly headless launch must not pick up a desktop session's
 		// display connection.
@@ -292,7 +333,7 @@ func prepareWineDisplay(request string, openGL bool, plan wineRuntimePlan, log w
 // (or fetched) to run it, the image mounted when WestonPack is one, the
 // wrapper checked, the PortMaster-style values set, the input devices labelled
 // for Weston's libinput.
-func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRuntimePlan, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
+func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRuntimePlan, dir string, log wineLog, phase func(string), binBashOff bool) (wineDisplayPlan, error) {
 	// The shell comes first: getting JukaHub's bash is a download, and no
 	// image stays mounted meanwhile.
 	base := screenChildEnv(os.Environ())
@@ -340,12 +381,14 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 	if custom := modes[d.Mode]; len(custom) == 4 {
 		words = custom
 	}
-	control, err := westonControlShim(w, h)
+	home, err := westonControlShim(w, h)
 	if err != nil {
-		log.printf("display: no PortMaster stand-in (%v); westonwrap.sh runs without one\n", err)
-		control = ""
+		log.printf("display: no PortMaster stand-in (%v); westonwrap.sh reads PortMaster's own control.txt, if it finds one\n", err)
+		home = ""
+	} else {
+		log.printf("display: westonwrap.sh's HOME is %s, where it finds JukaHub's PortMaster stand-in\n", home)
 	}
-	d.Env = westonWrapperEnv(base, w, h, control, overrides)
+	d.Env = westonWrapperEnv(base, w, h, home, overrides)
 	if shellDir != "" {
 		// `bash` by name is the same bash as the one running westonwrap.sh.
 		path, _ := childEnvLookup(d.Env, "PATH")
@@ -353,13 +396,30 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 	}
 
 	// Crusty draws the pointer itself (CRUSTY_SHOW_CURSOR); the program gets the
-	// switch as well, for the mode where Crusty runs inside it.
+	// switch as well, for the mode where Crusty runs inside it. WestonPack 0.2.7
+	// concatenates its app words and evals them. Give it only /bin/sh and a
+	// metacharacter-free /tmp path; the private script quotes every real word.
 	appEnv := cloneGameProfileEnv(plan.Env)
 	if !hasEnvKey(appEnv, "CRUSTY_SHOW_CURSOR") {
 		appEnv["CRUSTY_SHOW_CURSOR"] = "1"
 	}
+	// westonwrap.sh runs with the stand-in's HOME; the program gets its own.
+	westonAppHome(appEnv, base, home)
+	// Box64's native FreeType wrapper opens the unversioned libfreetype.so,
+	// while both WestonPack and the firmware provide only libfreetype.so.6.
+	// Without an alias, Wine cannot draw TrueType text in ordinary apps.
+	fontLib := wineFreeTypeSource()
+	if fontLib == "" {
+		return fail(errors.New("Wine cannot draw text: no compatible ARM64 FreeType library was found in the firmware"))
+	}
+	log.printf("display: Wine fonts use %s through a private libfreetype.so alias\n", fontLib)
+	launchDir, appStatus, script, err := westonLaunchScript(dir, plan, appEnv, fontLib)
+	if err != nil {
+		return fail(err)
+	}
+	d.launchDir, d.appStatus = launchDir, appStatus
 	d.Command = shell
-	d.Args = append([]string{wrapper}, westonWrapArgs(words, plan.Command, plan.Args, appEnv)...)
+	d.Args = append([]string{wrapper}, westonWrapArgs(words, "/bin/sh", []string{script})...)
 	binbash, binbashNote := westonBinBashPlan(shell, d.Env, binBashOff)
 	d.binbash = binbash
 	if binbashNote != "" {
@@ -367,6 +427,78 @@ func prepareWestonDisplay(d wineDisplayPlan, src westonPackSource, plan wineRunt
 	}
 	wineLabelInputDevices(log)
 	return d, nil
+}
+
+// westonLaunchScript writes one private command for WestonPack. The script is
+// needed because upstream westonwrap.sh evals a space-joined argument string:
+// directly passing Wine's semicolon-bearing overrides, a folder with spaces,
+// or a caller's arbitrary arguments is unsafe and fails on the Smart Pro.
+func westonLaunchScript(dir string, plan wineRuntimePlan, env map[string]string, fontLib string) (launchDir, status, script string, err error) {
+	launchDir, err = os.MkdirTemp("/tmp", "jukahub-wine-")
+	if err != nil {
+		return "", "", "", fmt.Errorf("make a temporary WestonPack command: %w", err)
+	}
+	status = filepath.Join(launchDir, westonLaunchStatusName)
+	script = filepath.Join(launchDir, westonLaunchScriptName)
+	fontAlias := filepath.Join(launchDir, wineFreeTypeAlias)
+	err = os.Symlink(fontLib, fontAlias)
+	if err != nil {
+		_ = os.Remove(launchDir)
+		return "", "", "", fmt.Errorf("link Wine's native FreeType library: %w", err)
+	}
+	command, err := westonLaunchScriptText(dir, plan.Command, plan.Args, env, status, launchDir)
+	if err == nil {
+		err = os.WriteFile(script, []byte(command), 0o600)
+	}
+	if err != nil {
+		_ = os.Remove(script)
+		_ = os.Remove(fontAlias)
+		_ = os.Remove(launchDir)
+		return "", "", "", fmt.Errorf("write the WestonPack command: %w", err)
+	}
+	return launchDir, status, script, nil
+}
+
+// westonLaunchScriptText is the actual /bin/sh command. It inherits DISPLAY,
+// Wayland and the GPU libraries WestonPack sets, adds the app's own variables,
+// runs in the app's folder, and records the exit that WestonPack discards.
+func westonLaunchScriptText(dir, command string, args []string, env map[string]string, status, nativeLibDir string) (string, error) {
+	if command == "" || status == "" || strings.ContainsRune(command, 0) || strings.ContainsRune(dir, 0) || strings.ContainsRune(status, 0) || strings.ContainsRune(nativeLibDir, 0) {
+		return "", errors.New("invalid WestonPack command")
+	}
+	keys := make([]string, 0, len(env))
+	for key, value := range env {
+		if !gameProfileEnvKeyPattern().MatchString(key) || strings.ContainsRune(value, 0) {
+			return "", fmt.Errorf("invalid Windows program environment variable %q", key)
+		}
+		keys = append(keys, key)
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) {
+			return "", errors.New("invalid Windows program argument")
+		}
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	if dir != "" {
+		fmt.Fprintf(&b, "cd %s || { printf '125\\n' > %s; exit 125; }\n", shellQuote(dir), shellQuote(status))
+	}
+	for _, key := range keys {
+		fmt.Fprintf(&b, "export %s=%s\n", key, shellQuote(env[key]))
+	}
+	if nativeLibDir != "" {
+		// Preserve WestonPack's GL/X11 chain (or a profile's chosen path)
+		// while letting Box64 find the private unversioned FreeType alias.
+		fmt.Fprintf(&b, "export LD_LIBRARY_PATH=%s\"${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\n", shellQuote(nativeLibDir))
+	}
+	b.WriteString(shellQuote(command))
+	for _, arg := range args {
+		b.WriteByte(' ')
+		b.WriteString(shellQuote(arg))
+	}
+	fmt.Fprintf(&b, "\njh_status=$?\nprintf '%%s\\n' \"$jh_status\" > %s\nexit \"$jh_status\"\n", shellQuote(status))
+	return b.String(), nil
 }
 
 // stop ends what the display left running once the program has exited:
@@ -382,6 +514,9 @@ func (d wineDisplayPlan) stop(log wineLog) {
 	}
 	cmd := exec.Command(shell, d.wrapper, "cleanup")
 	cmd.Dir = filepath.Dir(d.wrapper)
+	if d.launchDir != "" {
+		cmd.Dir = d.launchDir
+	}
 	cmd.Env = d.Env
 	if log.f != nil {
 		cmd.Stdout, cmd.Stderr = log.f, log.f
@@ -407,32 +542,38 @@ func (d wineDisplayPlan) stop(log wineLog) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+	// Whatever the clean-up started in the background and left behind — a
+	// control.txt's splash (sdl2imgshow) — must not stay over the screen JukaHub
+	// takes back: nothing in this group outlives it on purpose.
+	if screenChildGroupAlive(cmd) {
+		log.printf("display: westonwrap.sh cleanup left %s running; stopping it\n", screenChildGroupNames(cmd))
+		_ = screenChildKill(cmd)
+	}
 }
 
 // release unmounts the image this launch mounted (lazily when something still
 // holds it). A mount someone else made is left alone.
 func (d wineDisplayPlan) release(log wineLog) {
-	if d.mountDir == "" || !d.unmount {
-		return
+	if d.mountDir != "" && d.unmount {
+		wineUnmountWeston(d.mountDir, log)
 	}
-	wineUnmountWeston(d.mountDir, log)
+	if d.launchDir != "" {
+		_ = os.Remove(filepath.Join(d.launchDir, westonLaunchScriptName))
+		_ = os.Remove(filepath.Join(d.launchDir, wineFreeTypeAlias))
+		_ = os.Remove(d.appStatus)
+		if err := os.Remove(d.launchDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+			log.printf("display: temporary command folder could not be removed: %v\n", err)
+		}
+	}
 }
 
 // ── westonwrap.sh's arguments and environment ────────────────────────────
 
-// westonWrapArgs is westonwrap.sh's command line after the script: the four
-// mode words, the program's environment as NAME=VALUE words (sorted, so the
-// log reads the same every time), then the program and its arguments.
-func westonWrapArgs(words []string, command string, args []string, env map[string]string) []string {
+// westonWrapArgs gives upstream westonwrap.sh only plain shell words. It evals
+// everything after the four mode words, so app environment and arguments live
+// in the private script instead of this list.
+func westonWrapArgs(words []string, command string, args []string) []string {
 	out := append([]string{}, words...)
-	keys := make([]string, 0, len(env))
-	for key := range env {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		out = append(out, key+"="+env[key])
-	}
 	out = append(out, command)
 	return append(out, args...)
 }
@@ -440,11 +581,12 @@ func westonWrapArgs(words []string, command string, args []string, env map[strin
 // westonWrapperEnv is westonwrap.sh's own environment: base (the firmware's,
 // screenChildEnv) plus what a PortMaster port would have set — the device's
 // screen and name, ESUDO empty because JukaHub runs as root, PortMaster's
-// control folder (control, the stand-in) — and Crusty's software pointer, the
+// control folder (under home, the stand-in HOME of westonControlShim, which
+// becomes HOME and XDG_DATA_HOME's base) — and Crusty's software pointer, the
 // only pointer a Windows program gets on this screen. overrides (weston.env)
 // win. A desktop session's DISPLAY or WAYLAND_DISPLAY is dropped: WestonPack
 // starts its own.
-func westonWrapperEnv(base []string, w, h int, control string, overrides map[string]string) []string {
+func westonWrapperEnv(base []string, w, h int, home string, overrides map[string]string) []string {
 	set := map[string]string{
 		"CRUSTY_SHOW_CURSOR":     "1",
 		"WESTON_HEADLESS_WIDTH":  strconv.Itoa(w),
@@ -458,9 +600,11 @@ func westonWrapperEnv(base []string, w, h int, control string, overrides map[str
 		"DEVICE_ARCH": westonArch(),
 		"ESUDO":       "",
 	}
-	if control != "" {
-		set["XDG_DATA_HOME"] = control
-		set["controlfolder"] = filepath.Join(control, "PortMaster")
+	if home != "" {
+		share := filepath.Join(home, ".local", "share")
+		set["HOME"] = home
+		set["XDG_DATA_HOME"] = share
+		set["controlfolder"] = filepath.Join(share, "PortMaster")
 	}
 	for key, value := range overrides {
 		set[key] = value
@@ -609,15 +753,65 @@ func westonBinBashPlan(shell string, env []string, off bool) (*pmBinBashPlan, st
 	return plan, why + ", so the session runs in its own mount namespace where /bin/bash is " + target
 }
 
+// westonHomeBase is the HOME westonwrap.sh runs with: JukaHub's PortMaster
+// stand-in is its .local/share/PortMaster (westonControlShim). In RAM, and a
+// path without spaces: westonwrap.sh sources $controlfolder/control.txt
+// without quotes.
+var westonHomeBase = "/tmp/jukahub-weston-home"
+
 // westonControlShim writes the PortMaster control.txt stand-in westonwrap.sh
-// sources (it looks under $XDG_DATA_HOME/PortMaster, like every port) and
-// returns the folder to use as XDG_DATA_HOME. JukaHub is not PortMaster: the
-// stand-in sets the values a port launch would have — each one only when the
-// environment (weston.env) has not — and makes PortMaster's helper functions
-// do nothing, so no real control.txt with other ideas about the device is read.
+// sources and returns the folder westonwrap.sh gets as HOME (westonHomeBase,
+// else data/windows-runtime/weston-env). westonwrap.sh 0.2.7.1 looks for
+// PortMaster in /opt/system/Tools/PortMaster, /opt/tools/PortMaster,
+// $HOME/.local/share/PortMaster and /roms/ports/PortMaster — it sets
+// XDG_DATA_HOME to "$HOME/.local/share" first, so the XDG_DATA_HOME JukaHub
+// used to point at the stand-in was never read. With the firmware's HOME it
+// found the real PortMaster through the link JukaHub's port launches make
+// there (ports_env.go), and every session ran PortMaster's TrimUI control.txt,
+// device_info.txt and get_controls on its way to Weston and again in
+// `westonwrap.sh cleanup`: a sdl2imgshow splash started in the background,
+// setterm, HOME moved to the card (device log, 2026-11-25). JukaHub is not
+// PortMaster: the stand-in sets the values a port launch would have — each one
+// only when the environment (weston.env) has not — and makes PortMaster's
+// helper functions do nothing. westonAppHome gives the program its own HOME
+// back.
 func westonControlShim(w, h int) (string, error) {
-	base := filepath.Join(windowsRuntimeDir(), "weston-env")
-	control := filepath.Join(base, "PortMaster")
+	var lastErr error
+	for _, home := range []string{westonHomeBase, filepath.Join(windowsRuntimeDir(), "weston-env")} {
+		if !westonPlainPath(home) {
+			lastErr = errors.New(home + " has spaces or wildcards, which westonwrap.sh cannot source through")
+			continue
+		}
+		if err := westonWriteControl(home, w, h); err != nil {
+			lastErr = err
+			continue
+		}
+		return home, nil
+	}
+	return "", lastErr
+}
+
+// westonPlainPath reports an absolute path westonwrap.sh can use unquoted:
+// letters, digits and / . _ - + , : @ only.
+func westonPlainPath(p string) bool {
+	if !strings.HasPrefix(p, "/") {
+		return false
+	}
+	for _, r := range p {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case strings.ContainsRune("/._-+,:@", r):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// westonWriteControl writes the stand-in control.txt for HOME home (in
+// .local/share/PortMaster), unless it already holds exactly that.
+func westonWriteControl(home string, w, h int) error {
+	control := filepath.Join(home, ".local", "share", "PortMaster")
 	sticks := "2"
 	if !stickHardware() {
 		sticks = "0"
@@ -641,15 +835,30 @@ func westonControlShim(w, h int) (string, error) {
 	b.WriteString("pm_message() { echo \"$*\"; }\n")
 	path := filepath.Join(control, "control.txt")
 	if old, err := os.ReadFile(path); err == nil && string(old) == b.String() {
-		return base, nil
+		return nil
 	}
 	if err := os.MkdirAll(control, 0o755); err != nil {
-		return "", err
+		return err
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return "", err
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// westonAppHome gives the program the HOME (and XDG_DATA_HOME) it would have
+// had without westonwrap.sh's stand-in HOME home (westonControlShim): what its
+// own env names, else the firmware's from base. Nothing changes when there is
+// no stand-in, or base has no value either.
+func westonAppHome(app map[string]string, base []string, home string) {
+	if home == "" {
+		return
 	}
-	return base, nil
+	for _, key := range []string{"HOME", "XDG_DATA_HOME"} {
+		if hasEnvKey(app, key) {
+			continue
+		}
+		if v, ok := childEnvLookup(base, key); ok {
+			app[key] = v
+		}
+	}
 }
 
 // shellSafeWord keeps the characters that are plain text inside a

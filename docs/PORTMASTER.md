@@ -447,7 +447,7 @@ path. See [MINECRAFT.md](MINECRAFT.md).
 
 | Symptom | Look at |
 |---------|---------|
-| Black screen, back to JukaHub after a second | The "didn't start" card opens by itself for a port that ends within 8 seconds without being quit (within 20 when its logs name a cause): it names the cause it read in the logs (BusyBox's sh, PortMaster not found, newer glibc, missing library, graphics, crash, memory, runtime) or shows the port's last lines. Later: **Why didn't it start?**; `data/gamediag/ports/<script>.log` and the port's `log.txt` |
+| Black screen, back to JukaHub after a second | The "didn't start" card opens by itself for a port that ends within 8 seconds without being quit (within 20 when its logs name a cause): it names the cause it read in the logs (BusyBox's sh, PortMaster not found or missing files of its own, newer glibc, missing library, graphics, crash, memory, runtime, a saved sign-in the port could not read) or shows the port's last lines. Lines every launch prints on a card without TRIMUI_EX — `control.txt` unable to source `ex_config`, `sdl2imgshow: command not found` — are not a cause: bash goes on past them. Later: **Why didn't it start?**; `data/gamediag/ports/<script>.log` and the port's `log.txt` |
 | "No such file" for a `.squashfs` | The runtime is missing: open PortMaster with Wi-Fi, or **Update** |
 | The port starts but its folder is empty | It needs your game files; see its `README.md` |
 | Buttons swapped or wrong | PortMaster's device probe; try `portLaunchVia: firmware` (if your card has `Emus/PORTS`) and report the log |

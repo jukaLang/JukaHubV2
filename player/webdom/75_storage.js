@@ -157,3 +157,43 @@ function stoRecover() {
 }
 envReadonly('localStorage', function () { return stoLocal || (stoLocal = stoMake('local')); });
 envReadonly('sessionStorage', function () { return stoSession || (stoSession = stoMake('session')); });
+
+// indexedDB and caches, as a browser with site storage switched off has them: every database open fails
+// with an error event, and the Cache API answers that it is not available. Scripts that guard on
+// `'indexedDB' in window` keep their memory fallback; a bundle that calls indexedDB.open() unguarded at start
+// (an analytics or state library) used to throw a TypeError there, which ended the rest of that script.
+function stoIDBRequest() {
+  var req = new EventTarget();
+  req.onsuccess = null;
+  req.onerror = null;
+  req.onupgradeneeded = null;
+  req.onblocked = null;
+  req.result = undefined;
+  req.error = null;
+  req.readyState = 'pending';
+  req.source = null;
+  req.transaction = null;
+  loopQueueTask(function () {
+    req.readyState = 'done';
+    req.error = domErr('UnknownError', 'The operation failed for reasons unrelated to the database itself and not covered by any other error code.');
+    var ev = new Event('error', { bubbles: false, cancelable: true });
+    try { if (typeof req.onerror === 'function') req.onerror.call(req, ev); } catch (e) { reportException(e); }
+    try { req.dispatchEvent(ev); } catch (e) { reportException(e); }
+  });
+  return req;
+}
+var stoIDB = {
+  open: function () { return stoIDBRequest(); },
+  deleteDatabase: function () { return stoIDBRequest(); },
+  databases: function () { return Promise.resolve([]); },
+  cmp: function (a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+};
+envReadonly('indexedDB', function () { return stoIDB; });
+var stoCaches = {
+  open: function () { return Promise.reject(domErr('SecurityError', 'The operation is insecure.')); },
+  has: function () { return Promise.resolve(false); },
+  keys: function () { return Promise.resolve([]); },
+  match: function () { return Promise.resolve(undefined); },
+  'delete': function () { return Promise.resolve(false); }
+};
+envReadonly('caches', function () { return stoCaches; });

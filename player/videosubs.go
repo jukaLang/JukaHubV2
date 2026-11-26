@@ -84,6 +84,9 @@ var videoSubs struct {
 	preparing     bool
 	notifyPrepare bool
 	fetchNotify   bool
+	// fetchAt is when the running fetch started: the caption area says it
+	// is on its way for the first seconds (videocaptions.go).
+	fetchAt time.Time
 	// pressed is set once CC (or Get subtitles) was pressed for the video on
 	// screen. With CC carried over, the first press asks for the subtitles
 	// that did not come up by themselves; the next one turns CC off.
@@ -686,7 +689,9 @@ func fetchPageSubtitles(ctx context.Context, r subtitleRequest) subtitleResult {
 		return subtitleResult{reason: "Subtitles need an internet connection"}
 	}
 	if id := youtubeVideoID(r.page); id != "" {
-		cues, err := ytNativeCaptionsFor(ctx, id, r.lang)
+		// The answer of the prefetch Play started, when there is one
+		// (videocaptions.go); else the caption list, asked now.
+		cues, err := subtitleNativeCaptions(ctx, r.page, id, r.lang)
 		if len(cues) > 0 {
 			subtitleCacheStore(r.page, r.lang, cues)
 			return subtitleResult{cues: cues, ok: true, status: subtitleSourceLabel(r.page, r.lang)}
@@ -965,6 +970,7 @@ func startSubtitleFetchLocked(config *Config, spec subtitleFetchSpec) {
 	ctx, cancel := context.WithCancel(videoSubs.videoCtx)
 	videoSubs.cancel = cancel
 	videoSubs.fetching = true
+	videoSubs.fetchAt = time.Now()
 	videoSubs.fetchNotify = spec.notify
 	videoSubs.status = "Getting " + subtitleLanguageName(spec.lang) + " subtitles…"
 	r := subtitleRequest{config: config, page: spec.page, lang: spec.lang, pressed: spec.notify}
@@ -1292,82 +1298,27 @@ func subtitlesFetchFromSource(config *Config) (subtitleToggle, string) {
 	return subtitleEnableLocked(config, true)
 }
 
-// subtitleTextAt returns the cue text covering the given playback position.
+// subtitleTextAt returns the caption covering the given playback position,
+// from the track's timeline (videocaptions.go: overlapping cues together,
+// short pauses bridged).
 func subtitleTextAt(seconds float64) string {
 	videoSubs.mu.Lock()
 	defer videoSubs.mu.Unlock()
 	if !videoSubs.enabled || len(videoSubs.cues) == 0 {
 		return ""
 	}
-	for _, cue := range videoSubs.cues {
-		if seconds >= cue.Start && seconds < cue.End {
-			return cue.Text
-		}
-	}
-	return ""
+	return capTimelineText(videoSubs.cues, seconds)
 }
 
-// renderVideoSubtitles draws the active cue centred above the bottom edge.
-// bottomInset is the distance from the element's bottom to the text baseline.
-// seconds is media time (progress × duration), which videoAdvanceProgress
-// already moves at the playback speed, so cues keep to the picture at 2× too.
+// renderVideoSubtitles draws the caption at seconds over the player at (x, y,
+// w, h), its last line bottomInset above the player's foot. seconds is media
+// time (progress × duration), which videoAdvanceProgress already moves at the
+// playback speed, so captions keep to the picture at 2× too. The caption is
+// sized from the player (Accessibility → Caption size), set in balanced lines
+// on rounded boxes and centred on the picture (capRender, videocaptions.go);
+// subtitles are content, never the interface language (i18n.go).
 func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int32, seconds float64, bottomInset int32) {
-	text := subtitleTextAt(seconds)
-	if text == "" || renderer == nil {
-		return
-	}
-	fontKey := "medium"
-	lineGap := int32(4)
-	switch a11y.captionSize {
-	case 0:
-		fontKey, lineGap = "small", 2
-	case 2:
-		fontKey, lineGap = "large", 7
-	}
-	font, _ := getCachedFont(config, fontKey)
-	if font == nil {
-		font, _ = getCachedFont(config, "medium")
-	}
-	if font == nil {
-		font, _ = getCachedFont(config, "small")
-	}
-	if font == nil {
-		return
-	}
-	if w <= 32 || h <= 0 {
-		return
-	}
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		// Subtitles are content: never the interface language (i18n.go).
-		lines = append(lines, wrapTextLinesRaw(font, line, w-32, 20)...)
-	}
-	lineH := int32(font.Height()) + lineGap
-	maxLines := int((h - 16) / lineH)
-	if maxLines < 1 || len(lines) == 0 {
-		return
-	}
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
-	}
-	top := y + h - bottomInset - int32(len(lines))*lineH
-	if top < y+8 {
-		top = y + 8
-	}
-	var maxWidth int32
-	for _, line := range lines {
-		lineW, _, _ := font.SizeUTF8(line)
-		maxWidth = max32(maxWidth, int32(lineW))
-	}
-	if a11y.captionBackground {
-		fillRoundedRect(renderer, x+(w-maxWidth)/2-8, top-2, maxWidth+16, int32(len(lines))*lineH+4, 6, sdl.Color{R: 0, G: 0, B: 0, A: 170})
-	}
-	for i, line := range lines {
-		lineW, _, _ := font.SizeUTF8(line)
-		lx := x + (w-int32(lineW))/2
-		ly := top + int32(i)*lineH
-		renderTextRaw(renderer, config, font, line, sdl.Color{R: 255, G: 255, B: 255, A: 255}, lx, ly)
-	}
+	capRender(renderer, config, x, y, w, h, seconds, bottomInset)
 }
 
 // subtitleStatusLine is the settings sheet's description of the loaded track:

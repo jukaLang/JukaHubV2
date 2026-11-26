@@ -185,14 +185,27 @@ var launcherMissingRe = regexp.MustCompile(`(?i)(?:can't (?:open|cd to) '?([^'\s
 // launcherLoaderRe finds the library the dynamic loader could not open.
 var launcherLoaderRe = regexp.MustCompile(`(?i)error while loading shared libraries: ([^\s:]+)`)
 
+// launcherBootFileRe is an emulator's refusal of the game it was given:
+// PPSSPP's NativeInit prints "File not found: <name>" and exits with status 1
+// for an argument that does not start with "-" (it takes that for the game to
+// boot) and names no file. The name is empty when a launch script started
+// with no game passed "$*" or "$1" on: one empty argument.
+var launcherBootFileRe = regexp.MustCompile(`^File not found:\s*(.*)$`)
+
 // launcherOutputFindings reads a launch script's output: an issue for what
 // it could not find (RetroArch when that is among them, else the first),
 // and its last lines for the card. RetroArch's own log lines ("[ERROR] …",
 // on stderr when its log could not go to a file) are shown but not read as
-// the shell's: their "content: No such file" is not a missing program.
+// the shell's: their "content: No such file" is not a missing program. A
+// command the firmware lacks to no effect (gameDiagPortHarmlessCmds) is not
+// one either: the firmware SDL's "setterm -cursor off" prints "sh: setterm:
+// not found" at every start, and the card blamed it for a PPSSPP that had
+// quit on an empty game name (2026-11-25, JH-FRF8NW). That refusal is an
+// issue of its own, first: the emulator ran and said why it stopped.
 func launcherOutputFindings(lines []string, launcher string) (issues []launchIssue, excerpt []string) {
 	script := filepath.Base(strings.TrimSpace(launcher))
 	missing, missingLine := "", ""
+	bootFile, bootLine := "", ""
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if line == "" {
@@ -202,6 +215,12 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 			line = string(r[:220]) + "…"
 		}
 		excerpt = append(excerpt, line)
+		if m := launcherBootFileRe.FindStringSubmatch(line); m != nil {
+			if bootLine == "" {
+				bootFile, bootLine = strings.TrimSpace(m[1]), line
+			}
+			continue
+		}
 		if strings.HasPrefix(line, "[") || (missing != "" && launcherRetroArchName(missing)) {
 			continue
 		}
@@ -223,6 +242,9 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		if found == "" {
 			found = m[2]
 		}
+		if gameDiagPortHarmlessCmds[strings.ToLower(path.Base(found))] {
+			continue
+		}
 		if missing == "" || launcherRetroArchName(found) {
 			missing, missingLine = found, line
 		}
@@ -230,8 +252,11 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 	if len(excerpt) > launcherExcerptMax {
 		excerpt = excerpt[len(excerpt)-launcherExcerptMax:]
 	}
+	if bootLine != "" {
+		issues = append(issues, launcherBootFileIssue(bootFile, bootLine, launcher))
+	}
 	if missing == "" {
-		return nil, excerpt
+		return issues, excerpt
 	}
 	title := "The launch script could not find " + path.Base(missing)
 	if launcherRetroArchName(missing) {
@@ -267,6 +292,31 @@ func launcherOutputFindings(lines []string, launcher string) (issues []launchIss
 		Detail: detail,
 	})
 	return issues, excerpt
+}
+
+// launcherBootFileIssue is the issue for an emulator that quit on the game it
+// was given (launcherBootFileRe): no name is a start with no game whose launch
+// script passed one empty argument; a name is a game the emulator did not find.
+func launcherBootFileIssue(name, line, launcher string) launchIssue {
+	script := filepath.Base(strings.TrimSpace(launcher))
+	is := launchIssue{
+		Level:  int(gameDiagLikely),
+		Title:  "The emulator could not find the game it was given",
+		Files:  []string{name},
+		Where:  filepath.Dir(launcher),
+		Detail: script + " stopped with: " + line,
+	}
+	if name == "" {
+		is = launchIssue{
+			Level: int(gameDiagSure),
+			Title: "The launch script gave the emulator an empty game",
+			Where: filepath.Dir(launcher),
+			Detail: script + ` passed an empty argument where the game goes, and the emulator quit on it ("` + line +
+				`" names no file). A script written for games passes the game on as "$*" or "$1", which is one empty argument when nothing is given, and PPSSPP takes any argument that does not start with "-" for the game to boot.`,
+		}
+	}
+	logWarn("gamediag", "%s: %s", is.Title, line)
+	return is
 }
 
 // launcherRetroArchName reports whether a path names a RetroArch binary.

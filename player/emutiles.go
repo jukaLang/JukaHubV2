@@ -572,6 +572,8 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	entries := emulatorEntries()
+	haveEntries := len(entries) > 0
+	emuPanelResolve(entries, true)
 	if len(entries) == 0 {
 		entries = []emuEntry{{
 			Name:   "No emulators found",
@@ -580,13 +582,6 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 			Glyph:  "emu-generic",
 		}}
 	}
-	if emuPanel.cursor >= len(entries) {
-		emuPanel.cursor = len(entries) - 1
-	}
-	if emuPanel.cursor < 0 {
-		emuPanel.cursor = 0
-	}
-
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return
@@ -642,7 +637,9 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 				continue
 			}
 			cell := emuTileCell(layout, i, firstRow)
-			emuRowHits = append(emuRowHits, emuRowHit{index: i, rect: cell})
+			if haveEntries {
+				emuRowHits = append(emuRowHits, emuRowHit{key: emuEntryIdentity(entries[i]), rect: cell})
+			}
 			drawEmuTile(r, config, cell, entries[i], i == emuPanel.cursor, i == hovered, labelFont)
 		}
 	})
@@ -663,6 +660,10 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.DrawLine(layout.body.X, footerY, layout.body.X+layout.body.W, footerY)
 
 	selected := entries[emuPanel.cursor]
+	emuPanel.footerKey = emuEntryKey{}
+	if haveEntries {
+		emuPanel.footerKey = emuEntryIdentity(selected)
+	}
 	emuDrawFooterDetail(renderer, config, font, selected, layout.body, footerY+12)
 
 	hints := emuFooterHints(selected, retroAchievementsSupported())

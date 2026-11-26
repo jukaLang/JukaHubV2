@@ -253,25 +253,25 @@ func webDecodeRequest(doc *webDocument, src, key string, box sdl.Rect, fit int, 
 }
 
 // webDecodeWants reports whether a texture already made for key is smaller
-// than a draw of box now needs, and queues the larger decode when it is.
+// than a draw of box now needs — a larger decode is then queued or under way.
 // Render thread.
-func webDecodeWants(doc *webDocument, src, key string, box sdl.Rect, fit int) {
+func webDecodeWants(doc *webDocument, src, key string, box sdl.Rect, fit int) bool {
 	webDecode.mu.Lock()
 	have, ok := webDecode.made[key]
 	limit := webDecode.limit
 	webDecode.mu.Unlock()
 	if !ok || (have[0] == 0 && have[1] == 0) {
-		return
+		return false
 	}
 	meta, _ := doc.imageMeta(src)
 	if !meta.HasSize {
-		return
+		return false
 	}
 	wantW, wantH := webDecodeNeed(int32(meta.W), int32(meta.H), box.W, box.H, fit, limit)
 	if webDecodeCovers(have, [2]int32{wantW, wantH}) {
-		return
+		return false
 	}
-	webDecodeRequest(doc, src, key, box, fit, true)
+	return webDecodeRequest(doc, src, key, box, fit, true) == webDecodePending
 }
 
 // webDecodePromoteLocked moves key from the ahead queue to the urgent one.
@@ -624,6 +624,11 @@ func webDecodeUpload(r *sdl.Renderer) {
 		}
 	}
 	webDecode.mu.Unlock()
+	// A page tile painted while these were decoding is painted again with
+	// them (webpage_tiles.go); one that failed stops waiting.
+	if len(results) > 0 {
+		webPaintGen.Add(1)
+	}
 }
 
 // webDecodeReset forgets every queued job, finished picture and failure, for a

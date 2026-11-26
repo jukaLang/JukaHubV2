@@ -745,6 +745,10 @@ func startPortScript(name, path string) error {
 	if err != nil {
 		return err
 	}
+	// GreenOvercast's settings: kept private, and a saved sign-in its last
+	// start could not read set aside (greenovercast_store.go). Before
+	// portLogOpen, which empties that start's log.
+	goPrepareSettings(&plan, name, path)
 	if master && shadow == "" && plan.Mode == portLaunchDirect && len(plan.Args) == 2 && plan.Args[1] == path {
 		// PortMaster's launch.sh without TRIMUI_EX runs as a patched copy.
 		run, copyPath, notes := pmMasterLauncher(path)

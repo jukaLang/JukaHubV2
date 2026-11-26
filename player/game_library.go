@@ -857,6 +857,9 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	romArg := game.Path
 	if !IsWindows() {
 		romArg = firmwareROMArg(launcher, game.Path)
+		// A PS2 CD game's .cue goes to the ARMSX2 core as its data track,
+		// which the core reads as the disc (ps2.go).
+		romArg = ps2ContentArg(launcher, game, romArg)
 	}
 	name, args := gameLaunchCommandArgs(launcher, romArg, extra)
 	if !IsWindows() {
@@ -902,6 +905,16 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	// In-game indicators: the hook library and its file, with the child's
 	// environment settled (ingamehud.go).
 	ingameHUDPrepareLaunch(launcher, game.System, cmd)
+	// The Smart Pro's EGL omits core GLES symbols from eglGetProcAddress. Only
+	// Dolphin's direct RetroArch launch gets the small fallback library.
+	if err := dolphinEGLPrepareLaunch(launcher, cmd); err != nil {
+		if rec != nil {
+			rec.noteCommand(cmd)
+		}
+		return err
+	}
+	// A staged Vulkan loader and IMG ICD apply only to direct PS2 core starts.
+	ps2VulkanPrepareLaunch(launcher, cmd)
 	// Last before the start: the game in a mount namespace of its own whose
 	// RetroArch runs on JukaHub's C library, when the plan above said so.
 	if raGlibcApply(cmd, ragPlan) && rec != nil {

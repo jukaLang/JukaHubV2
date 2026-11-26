@@ -1640,3 +1640,42 @@ func TestWebJSNetFetchScript(t *testing.T) {
 		t.Error("a data: HTML document was accepted as a script")
 	}
 }
+
+// A page is placed by where it was fetched from as well as by its name:
+// a router or home server under a public-looking name that the
+// home network's DNS answers with a private address gets the LAN guard, so
+// its scripts reach the LAN; a public page still cannot, and a public name
+// that led to this device does not make its page this device's.
+func TestWebJSNetPageGuardByServer(t *testing.T) {
+	for _, tc := range []struct {
+		page, server string
+		want         webJSNetGuard
+	}{
+		{"https://router.example.com/", "192.168.1.1", webJSNetGuardLAN},
+		{"https://ha.example.net/lovelace", "10.0.0.7", webJSNetGuardLAN},
+		{"https://www.example.com/", "93.184.216.34", webJSNetGuardPublic},
+		{"https://www.example.com/", "", webJSNetGuardPublic},
+		{"https://app.example.com/", "127.0.0.1", webJSNetGuardPublic},
+		{"http://192.168.1.10/", "192.168.1.10", webJSNetGuardLAN},
+		{"http://localhost:8080/", "127.0.0.1", webJSNetGuardLocal},
+	} {
+		var server netip.Addr
+		if tc.server != "" {
+			server = netip.MustParseAddr(tc.server)
+		}
+		if got := webJSNetPageGuardFor(webJSNetTestURL(t, tc.page), server); got != tc.want {
+			t.Errorf("%s from %q: guard %d, want %d", tc.page, tc.server, got, tc.want)
+		}
+	}
+	if !webJSNetAllows(webJSNetGuardLAN, webJSNetPrivate) || webJSNetAllows(webJSNetGuardPublic, webJSNetPrivate) {
+		t.Fatal("a LAN page must reach the LAN and a public page must not")
+	}
+	page := webJSNetTestURL(t, "https://router.example.com/#status")
+	webJSNotePageServer(7, page, netip.MustParseAddr("192.168.1.1"))
+	if got := webJSPageServer(7, webJSNetTestURL(t, "https://router.example.com/")); got != netip.MustParseAddr("192.168.1.1") {
+		t.Fatalf("the page's server was not kept for its script pass: %v", got)
+	}
+	if got := webJSPageServer(8, page); got.IsValid() {
+		t.Fatalf("another load's page server leaked: %v", got)
+	}
+}

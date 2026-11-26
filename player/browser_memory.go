@@ -97,6 +97,11 @@ func browserReleaseMemory(config *Config) {
 	// (webpage_decode.go), before their textures are dropped.
 	webDecodeReset()
 	getThumbnailTextures().ClearPrefix("webimg:")
+	// The page's GPU tiles (webpage_tiles.go) and the style sheets kept for
+	// the next page (browser_subres.go) go with it.
+	webTilesReset()
+	browserSheetMemoryClear()
+	brwAnchorForget()
 	browserSharedTransport().CloseIdleConnections()
 
 	textBrowserWrapCache.mu.Lock()

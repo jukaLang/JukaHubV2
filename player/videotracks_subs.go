@@ -605,15 +605,34 @@ func videoTracksStartSubs(ctx context.Context, sess *playbackSession, config *Co
 	if !ok {
 		return nil, "", false
 	}
-	for _, t := range list.subs {
+	// The text track in the subtitle language (a full one before a forced
+	// one), else the first: a film with English, French and Spanish tracks
+	// starts with the one Settings names, not with whichever comes first.
+	pick := -1
+	want := strings.TrimSpace(lang)
+	if want == "" {
+		want = "en"
+	}
+	for i, t := range list.subs {
 		if t.Bitmap {
 			continue
 		}
+		if pick < 0 {
+			pick = i
+		}
+		if videoTracksLangMatches(t.Lang, want) {
+			best := &list.subs[pick]
+			if !videoTracksLangMatches(best.Lang, want) || (best.Forced && !t.Forced) {
+				pick = i
+			}
+		}
+	}
+	if pick >= 0 {
+		t := list.subs[pick]
 		if c := extractEmbeddedSubtitleTrack(ctx, ffmpegPath, path, t.Index); len(c) > 0 {
 			videoTracksSetSubsChoice(path, "emb:"+strconv.Itoa(t.Index))
 			return c, "inside the video", true
 		}
-		break
 	}
 	return nil, "", true
 }

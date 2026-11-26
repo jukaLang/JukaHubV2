@@ -21,13 +21,19 @@ package main
 //     (activateCoreBuild: the old build kept as a .bak, an update watched
 //     through its first game). A release whose core this firmware refused is
 //     not downloaded again; the next one gets its own check.
-//   - The core does not boot without ARMSX2's resources folder (GameIndex.yaml
-//     with the per-game fixes, the renderer shaders, fonts) from a matching
-//     build, in <system>/pcsx2/resources. The core's archive holds the .so
-//     alone, so the folder comes from the same release's SDL handheld archive,
-//     of which only the resources tree is unpacked. A resources folder JukaHub
-//     put there is replaced along with the core; one the player put there is
-//     left alone unless it is missing.
+//   - A core from before ARMSX2's nightly of 2026-09-08 does not boot without
+//     ARMSX2's resources folder (GameIndex.yaml with the per-game fixes, the
+//     renderer shaders, fonts) from a matching build, in
+//     <system>/pcsx2/resources. That core's archive holds the .so alone, so the
+//     folder comes from the same release's SDL handheld archive, of which only
+//     the resources tree is unpacked. Since that nightly ("GS, GameDB, Patch:
+//     carry the resources in the binary, so none are needed on disk") the core
+//     carries them itself, and its release's handheld archive is not
+//     downloaded: a resources folder JukaHub put there for an older build is
+//     taken away instead (it must not stand in for the core's own copy), and
+//     only a start whose log says the core still looked for one on disk gets
+//     the folder fetched (ResNeeded, ps2_video.go). A resources folder the
+//     player put there is left alone.
 //   - The BIOS cannot be downloaded: it is a dump of the player's own console.
 //     The core reads <system>/pcsx2/bios. A valid image (4 to 8 MB with the PS2
 //     ROM directory, the test PCSX2 itself applies) found in the usual BIOS
@@ -71,8 +77,13 @@ const (
 	ps2UnpackMax      = int64(2 << 30)
 	ps2UnpackFilesMax = 50000
 	// ps2NeedBytes is the free space a setup keeps on the card: an archive and
-	// what it unpacks beside it.
-	ps2NeedBytes = int64(640 << 20)
+	// what it unpacks beside it. ps2NeedBytesCore is the same for the core
+	// archive alone (a build that carries its resources).
+	ps2NeedBytes     = int64(640 << 20)
+	ps2NeedBytesCore = int64(256 << 20)
+	// ps2ResourcesEmbeddedFrom is the day of the first ARMSX2 nightly whose
+	// core carries its resources (GS shaders, GameDB, patches) in the binary.
+	ps2ResourcesEmbeddedFrom = "2026-09-08"
 	// ps2SetupTimeout bounds one setup: two archives on handheld Wi-Fi.
 	ps2SetupTimeout = 45 * time.Minute
 	// ps2StateName is the record in JukaHub's data folder.
@@ -131,9 +142,24 @@ type ps2Record struct {
 	CorePath string `json:"corePath,omitempty"`
 	CoreSize int64  `json:"coreSize,omitempty"`
 	CoreTime int64  `json:"coreTime,omitempty"` // modification time, Unix seconds
+	// ReleaseDate is that release's day (YYYY-MM-DD), for a tag that does not
+	// name it.
+	ReleaseDate string `json:"releaseDate,omitempty"`
 	// ResRelease is the release the resources folder at ResPath came from.
 	ResRelease string `json:"resourcesRelease,omitempty"`
 	ResPath    string `json:"resourcesPath,omitempty"`
+	// ResNeeded is a release whose core carries its resources and still could
+	// not start without the folder on disk (its log said so): that release
+	// gets the folder like an older one.
+	ResNeeded string `json:"resourcesNeeded,omitempty"`
+	// Folder is set once the card's PS2 folder was made or found
+	// (ps2_folders.go): one the player deleted since stays deleted.
+	Folder bool `json:"folder,omitempty"`
+	// RAVulkan is what the RetroArch at RAVulkanStamp (path, size, time) was
+	// built with: "yes" (Vulkan and its display context), "no", or "" when
+	// its file did not say (ps2_video.go).
+	RAVulkan      string `json:"retroArchVulkan,omitempty"`
+	RAVulkanStamp string `json:"retroArchVulkanStamp,omitempty"`
 	// Refused lists the releases whose core cannot load on this firmware for
 	// a reason JukaHub's private glibc does not change (the architecture, a
 	// library the firmware lacks), the last one's reason in RefusedWhy: those
@@ -266,6 +292,63 @@ func ps2ResourcesPresent(sysDir string) bool {
 	return regularFile(filepath.Join(ps2ResourcesDir(sysDir), "GameIndex.yaml"))
 }
 
+// ps2ReleaseDay is a release's day as YYYY-MM-DD: the one a nightly's tag
+// names (nightly-20261123), else day (a recorded or published date); "" when
+// neither says.
+func ps2ReleaseDay(tag, day string) string {
+	if s, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(tag)), "nightly-"); ok && len(s) >= 8 {
+		if t, err := time.Parse("20060102", s[:8]); err == nil {
+			return t.Format("2006-01-02")
+		}
+	}
+	if t, err := time.Parse("2006-01-02", strings.TrimSpace(day)); err == nil {
+		return t.Format("2006-01-02")
+	}
+	return ""
+}
+
+// ps2ReleaseEmbedsResources reports whether a release's core carries its
+// resources in the binary: one from ARMSX2's nightly of 2026-09-08 on. A
+// release of no known day is taken to need the folder.
+func ps2ReleaseEmbedsResources(tag, day string) bool {
+	d := ps2ReleaseDay(tag, day)
+	return d != "" && d >= ps2ResourcesEmbeddedFrom
+}
+
+// ps2RecordNeedsResources reports whether the core the record names needs
+// the resources folder on disk: an older build, one whose start said so
+// (ResNeeded), or none recorded.
+func ps2RecordNeedsResources(rec ps2Record) bool {
+	if rec.Release == "" || rec.ResNeeded == rec.Release {
+		return true
+	}
+	return !ps2ReleaseEmbedsResources(rec.Release, rec.ReleaseDate)
+}
+
+// ps2PickNeedsResources is the same for a release about to be installed.
+func ps2PickNeedsResources(p ps2Pick, rec ps2Record) bool {
+	if rec.ResNeeded != "" && rec.ResNeeded == p.Release.Tag {
+		return true
+	}
+	return !ps2ReleaseEmbedsResources(p.Release.Tag, p.ps2Date())
+}
+
+// ps2DropResources takes the resources folder JukaHub put in sysDir for an
+// older build out of the way of a core that carries its own: one rename,
+// the files deleted in the background, the record forgets it. The player's
+// own folder is never passed here (ps2Inspect's ResDrop).
+func ps2DropResources(sysDir string) {
+	resDir := ps2ResourcesDir(sysDir)
+	old := filepath.Join(filepath.Dir(resDir), fmt.Sprintf("%s-old-%d", ps2WorkName, time.Now().UnixNano()))
+	if err := os.Rename(resDir, old); err != nil {
+		logWarn("library", "PS2: could not move the older resources folder %s aside: %v", resDir, err)
+		return
+	}
+	ps2RecordUpdate(func(r *ps2Record) { r.ResRelease, r.ResPath = "", "" })
+	logInfo("library", "PS2: ARMSX2 carries its own resources; the folder JukaHub put in %s for an older build is gone", resDir)
+	go func() { _ = os.RemoveAll(old) }()
+}
+
 // ps2Needs is what a start in ARMSX2 lacks (ps2Inspect).
 type ps2Needs struct {
 	Core        string // the core file, "" when there is none
@@ -276,8 +359,9 @@ type ps2Needs struct {
 	SysDir     string // RetroArch's system folder
 	ResMissing bool
 	// ResStale: JukaHub's resources are from another release than JukaHub's
-	// core.
+	// core. ResDrop: they are, and that core carries its own, so they go.
 	ResStale bool
+	ResDrop  bool
 	BIOS     string // a valid image the core reads, "" when there is none
 	// BIOSFound is a valid image elsewhere, which the setup copies in.
 	BIOSFound string
@@ -347,7 +431,14 @@ func ps2Inspect(launcher, romPath string) ps2Needs {
 		return n
 	}
 	resDir := ps2ResourcesDir(n.SysDir)
+	// A script's core, and one JukaHub did not install, may be any build: the
+	// folder is wanted for them as before.
+	needRes := script || !ours || ps2RecordNeedsResources(rec)
 	switch {
+	case !needRes:
+		// JukaHub's core carries its resources: a folder JukaHub put there for
+		// an older build goes, so it cannot stand in for the core's own.
+		n.ResDrop = rec.ResPath == filepath.Clean(resDir) && rec.ResRelease != "" && rec.ResRelease != rec.Release && dirExists(resDir)
 	case !ps2ResourcesPresent(n.SysDir):
 		n.ResMissing = true
 	case ours && rec.ResPath == filepath.Clean(resDir) && rec.ResRelease != rec.Release:
@@ -409,10 +500,12 @@ func ps2CardPath(p string) string {
 	return p
 }
 
-// ps2NoBIOSHint is what a start says when no PS2 BIOS is anywhere.
+// ps2NoBIOSHint is what a start says when no PS2 BIOS is anywhere: the card's
+// own BIOS folder is the easy place (ps2FindBIOS looks there and copies the
+// image to sysDir's pcsx2/bios, where the core reads it).
 func ps2NoBIOSHint(sysDir string) string {
 	return "PlayStation 2 games need a BIOS dumped from your own console (a 4 MB file such as SCPH-70012.bin): copy it to " +
-		ps2CardPath(ps2BIOSDir(sysDir)) + " (or BIOS/PS2), then start the game again"
+		ps2BIOSFolderShown() + " on the SD card (or " + ps2CardPath(ps2BIOSDir(sysDir)) + "), then start the game again"
 }
 
 // ── The BIOS ─────────────────────────────────────────────────────────────
@@ -749,6 +842,9 @@ func ps2Setup(ctx context.Context, launcher, romPath string, update, stale bool,
 			return "", fmt.Errorf("copying the BIOS %s into %s: %w", need.BIOSFound, ps2BIOSDir(need.SysDir), err)
 		}
 	}
+	if need.ResDrop {
+		ps2DropResources(need.SysDir)
+	}
 	rec := ps2RecordGet()
 	ours := core != "" && ps2CoreIsOurs(core, rec)
 	if !need.ps2NeedsDownload() && !(update && !script) {
@@ -810,7 +906,17 @@ func ps2Setup(ctx context.Context, launcher, romPath string, update, stale bool,
 	}
 	resDir := ps2ResourcesDir(need.SysDir)
 	resOurs := rec.ResPath == filepath.Clean(resDir) && rec.ResRelease != ""
-	wantRes := need.ResMissing || need.ResStale || (wantCore && resOurs)
+	wantRes := need.ResMissing || need.ResStale
+	// A new core that carries its resources gets no folder (its release's
+	// handheld archive is not downloaded), and the one JukaHub put there for
+	// the build it replaces goes once it is in; an older build's folder comes
+	// from its own release, as before.
+	dropRes := false
+	if wantCore {
+		pickNeeds := script || ps2PickNeedsResources(pick, rec)
+		wantRes = pickNeeds && (wantRes || resOurs)
+		dropRes = !pickNeeds && resOurs && rec.ResRelease != pick.Release.Tag && dirExists(resDir)
+	}
 	if !wantCore && !wantRes {
 		return core, nil // already the newest
 	}
@@ -818,8 +924,12 @@ func ps2Setup(ctx context.Context, launcher, romPath string, update, stale bool,
 	if err := os.MkdirAll(filepath.Dir(work), 0o755); err != nil {
 		return "", err
 	}
-	if free, ok := emuMoreCoresLeastFree([]string{filepath.Dir(work)}); ok && free < ps2NeedBytes {
-		return "", fmt.Errorf("only %s free on the card: ARMSX2 needs about %s while it unpacks", bootFormatBytes(free), bootFormatBytes(ps2NeedBytes))
+	needBytes := ps2NeedBytesCore
+	if wantRes {
+		needBytes = ps2NeedBytes
+	}
+	if free, ok := emuMoreCoresLeastFree([]string{filepath.Dir(work)}); ok && free < needBytes {
+		return "", fmt.Errorf("only %s free on the card: ARMSX2 needs about %s while it unpacks", bootFormatBytes(free), bootFormatBytes(needBytes))
 	}
 	// What a setup that died midway left.
 	_ = os.RemoveAll(work)
@@ -834,6 +944,9 @@ func ps2Setup(ctx context.Context, launcher, romPath string, update, stale bool,
 		case err == nil:
 			core, resStage = installed, stage
 			resPick = pick
+			if dropRes {
+				ps2DropResources(need.SysDir)
+			}
 		case usable && !update && ctx.Err() == nil:
 			// A start that only wanted the newest release beside new
 			// resources: the build there still plays. Its resources stay
@@ -847,27 +960,47 @@ func ps2Setup(ctx context.Context, launcher, romPath string, update, stale bool,
 			return "", err
 		}
 	}
+	resSkipped := false
 	if wantRes {
 		if err := ps2PutResources(ctx, client, resPick, resStage, resDir, work, phase, progress); err != nil {
-			if !ps2ResourcesPresent(need.SysDir) || ctx.Err() != nil {
+			switch {
+			case ctx.Err() != nil:
+				return "", err
+			case ps2ResourcesPresent(need.SysDir):
+				// The folder there stays (an older release's): a game still
+				// boots with it more often than not.
+				logWarn("library", "PS2: ARMSX2's resources could not be replaced, keeping %s: %v", resDir, err)
+				ShowToast("ARMSX2's resources could not be updated ("+firstLine(emuFriendlyError(err))+") — the ones there stay", ToastKindWarning)
+			case errors.Is(err, errPS2NoResources) && !ps2PickNeedsResources(resPick, rec):
+				// A release whose core carries its resources may ship no
+				// folder at all: the core there (a script's, or one installed
+				// by hand) starts without one, as JukaHub's own does.
+				logInfo("library", "PS2: %s ships no resources folder; the core carries its own (%v)", resPick.Release.Tag, err)
+				resSkipped = true
+			default:
 				return "", err
 			}
-			// The folder there stays (an older release's): a game still boots
-			// with it more often than not.
-			logWarn("library", "PS2: ARMSX2's resources could not be replaced, keeping %s: %v", resDir, err)
-			ShowToast("ARMSX2's resources could not be updated ("+firstLine(emuFriendlyError(err))+") — the ones there stay", ToastKindWarning)
 		}
 	}
 	phase(installPhaseVerify, "")
-	if !ps2ResourcesPresent(need.SysDir) {
-		return "", errors.New("ARMSX2's resources folder did not land in " + resDir)
+	if !resSkipped {
+		if final := ps2Inspect(launcher, ""); final.ResMissing {
+			return "", errors.New("ARMSX2's resources folder did not land in " + resDir)
+		}
 	}
 	if script {
 		return core, nil // the script starts its own core
 	}
-	if core == "" || coreRetroArchBinary(filepath.Dir(core)) == "" {
+	ra := ""
+	if core != "" {
+		ra = coreRetroArchBinary(filepath.Dir(core))
+	}
+	if ra == "" {
 		return "", errors.New("ARMSX2 is in, but there is no RetroArch beside it to start it")
 	}
+	// What that RetroArch was built with, read now rather than at the
+	// game's start (ps2_video.go).
+	ps2RAVulkan(ra)
 	return core, nil
 }
 
@@ -1012,6 +1145,7 @@ func ps2InstallCore(ctx context.Context, client *http.Client, pick ps2Pick, curr
 	}
 	ps2RecordUpdate(func(r *ps2Record) {
 		r.Release = pick.Release.Tag
+		r.ReleaseDate = date
 		r.CorePath = filepath.Clean(found)
 		r.CoreSize = st.Size()
 		r.CoreTime = st.ModTime().Unix()
@@ -1036,10 +1170,14 @@ func ps2FetchResources(ctx context.Context, client *http.Client, pick ps2Pick, w
 		return "", fmt.Errorf("ARMSX2's resources: %w", err)
 	}
 	if res == "" {
-		return "", fmt.Errorf("%s has no resources folder (GameIndex.yaml)", pick.Resources.Name)
+		return "", fmt.Errorf("%s has %w", pick.Resources.Name, errPS2NoResources)
 	}
 	return res, nil
 }
+
+// errPS2NoResources is an archive without the resources folder: normal for a
+// release whose core carries its resources (ps2Setup).
+var errPS2NoResources = errors.New("no resources folder (GameIndex.yaml)")
 
 // ps2SwapIn puts the folder at src in place of dest (the same card: two
 // renames), and removes what dest held. A swap that fails puts dest back.

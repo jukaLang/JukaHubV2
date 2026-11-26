@@ -241,7 +241,16 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	if d.port != "" {
 		quick = gameDiagPortQuickExit
 	}
-	if ran > quick+screenSettleDelay {
+	// A PS2 start is looked at past that (ps2_video.go): ARMSX2 takes a while
+	// to start on these chips, so a crash in its first half minute (ps2Crash:
+	// the signal) is its renderer's as likely as anything, and a core that
+	// never drew keeps RetroArch on a black screen until the player leaves
+	// (ps2Quiet).
+	ps2Crash, ps2Quiet := 0, false
+	if d.port == "" {
+		ps2Crash, ps2Quiet = ps2StartTrouble(d.game, d.launcher, d.logPath, waitErr, ran, d.stopped)
+	}
+	if ran > quick+screenSettleDelay && ps2Crash == 0 && !ps2Quiet {
 		// A game that got going proves the core build it ran: a build on
 		// probation stays (corebuilds_probation.go). Unless RetroArch's log
 		// says the core never started it: RetroArch can sit in its own menu
@@ -316,7 +325,7 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 	// nothing about the core build: the driver is switched below instead of
 	// the build being put back (dolphin_video.go). The same for ARMSX2's
 	// renderer (ps2_video.go).
-	if ownGame && !dolphinVideoFailedStart(d.game, d.launcher, d.logPath) && !ps2VideoFailedStart(d.game, d.launcher, d.logPath) {
+	if ownGame && !dolphinVideoFailedStart(d.game, d.launcher, d.logPath) && !ps2VideoFailedStart(d.game, d.launcher, d.logPath, ps2Crash) {
 		if outcome, why := gameDiagCoreOutcome(report, failed, code, sig); outcome != coreRunUnclear {
 			core, path := d.coreUsed()
 			if note := coreProbationJudge(core, path, outcome, why); note != "" {
@@ -344,12 +353,17 @@ func (d *gameDiagLaunch) exited(waitErr error) {
 				report.Issues = append([]launchIssue{fix}, report.Issues...)
 				strong = true
 			}
-			// ARMSX2's renderer that could not draw: the next one next
-			// time (ps2_video.go).
-			if fix, ok := ps2AfterGame(d.game, d.launcher, d.logPath); ok {
-				report.Issues = append([]launchIssue{fix}, report.Issues...)
-				strong = true
-			}
+		}
+	}
+	// ARMSX2's renderer that could not draw: the next one next time
+	// (ps2_video.go). Also after a start that crashed while ARMSX2 started,
+	// and after one the player left — by RetroArch's menu or JukaHub's —
+	// whose core never drew (its Null GS keeps RetroArch on a black screen)
+	// or looked for its resources folder on disk.
+	if d.port == "" && !probation && ((ownGame && (code != 0 || failed || killed || brief)) || ps2Quiet || ps2Crash != 0) {
+		if fix, ok := ps2AfterGame(d.game, d.launcher, d.logPath, ps2Crash); ok {
+			report.Issues = append([]launchIssue{fix}, report.Issues...)
+			strong = true
 		}
 	}
 	if !strong && code == 0 && !failed && !killed && !brief && !portGone {
@@ -754,10 +768,16 @@ func (d *gameDiagLaunch) longRunOutcome(core string) (coreRunOutcome, string) {
 // gameDiagGPULogIssue reads RetroArch's log for the two ways a core built for
 // desktop OpenGL fails under this device's OpenGL ES RetroArch: the core cannot
 // be opened at all (it links libGL.so.1, which the firmware does not have), or
-// it opens and asks for a desktop OpenGL context RetroArch cannot make.
+// it opens and asks for a desktop OpenGL context RetroArch cannot make. Dolphin
+// tries several APIs in order; a later accepted OpenGL ES or Vulkan context
+// makes the earlier rejected candidates irrelevant.
 func gameDiagGPULogIssue(lines []string) (launchIssue, bool) {
 	const fix = " The firmware's own build of this core draws with OpenGL ES: roll the core back on the Emulators page (R1) or in Core builds."
-	for _, line := range lines {
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		if dolphinVideoSelectedContextLine(line) {
+			return launchIssue{}, false
+		}
 		lower := strings.ToLower(line)
 		switch {
 		case strings.Contains(lower, "compiled against opengles") || strings.Contains(lower, "cannot use hw context") ||
@@ -1451,6 +1471,16 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 	if len(output) > 0 {
 		report.LogPath = jukaLog
 	}
+	// GreenOvercast also writes a log of its own, in the settings folder the
+	// launch notes name (greenovercast_store.go).
+	if goLog := goLogFromNotes(script, notes); goLog != "" {
+		if lines := gameDiagReadTail(goLog, started); len(lines) > 0 {
+			output = gameDiagPortMergeOutput(output, lines)
+			if report.LogPath == "" {
+				report.LogPath = goLog
+			}
+		}
+	}
 	finish := func(dir string) (gameDiagReport, bool) {
 		failed := gameDiagPortAddOutput(&report, notes, output, script, dir)
 		if report.LogPath == "" && len(notes) > 0 {
@@ -1508,6 +1538,11 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 // failed, or a finding rests on one of its lines (the launch notes and the
 // folder checks do not count). dir is the port's folder ("" when missing).
 func gameDiagPortAddOutput(report *gameDiagReport, notes, output []string, script, dir string) bool {
+	// What every launch on a card without TRIMUI_EX prints (ex_config, the
+	// splash tool) is neither a cause, a missing file nor a line to read.
+	if kept := gameDiagPortDropHarmless(output); len(kept) > 0 {
+		output = kept
+	}
 	excerpt, failed := gameDiagExcerpt(output)
 	found, evidence, fromOutput := gameDiagPortLogFindings(notes, output, script)
 	failed = failed || fromOutput

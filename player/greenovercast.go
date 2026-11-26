@@ -403,6 +403,12 @@ func goDecodeNote() string {
 	if !IsTrimuiDevice() {
 		return ""
 	}
+	if DetectDevice() == DeviceTrimuiSmartProS {
+		// Report JH-AT4EEE (2026-11-25): "Cedar decoder initialization
+		// failed", then "Selected video decoder: ffmpeg-software".
+		return "On a Smart Pro S (A523), GreenOvercast's Cedar decoder did not start in the first test, so it decodes the picture on the CPU: " +
+			"pick 720p and 30 fps in GreenOvercast's settings."
+	}
 	return "On a tested A133 TrimUI, GreenOvercast selected its cedar-h616 decoder at startup; a live stream has not been checked yet. " +
 		"If the picture stutters, pick 720p and 30 fps in GreenOvercast's settings."
 }

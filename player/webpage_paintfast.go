@@ -476,6 +476,11 @@ func webPaintGradient(r *sdl.Renderer, rect sdl.Rect, radius int32, g webGradien
 	if webGeomFailed || r == nil || rect.W <= 0 || rect.H <= 0 || len(g.Stops) == 0 {
 		return false
 	}
+	if g.Radial || g.Angled || g.Conic || g.Repeating || len(g.Raw) > 0 {
+		// At its real angle, round, repeating, or with stops placed in px
+		// (webpage_gradient.go).
+		return webPaintGradientShape(r, rect, radius, g)
+	}
 	length, cross := float64(rect.W), float64(rect.H)
 	if g.Vertical {
 		length, cross = cross, length
@@ -523,8 +528,12 @@ func webPaintGradient(r *sdl.Renderer, rect sdl.Rect, radius int32, g webGradien
 	}
 	x, y := float64(rect.X), float64(rect.Y)
 	v := webGeom.v[:0]
+	// A hard edge (two stops at one place: `red 50%, blue 50%`, a stripe) is
+	// two vertex pairs at the cut, the colour before it and the colour after.
+	const eps = 1e-7
+	pairs := int32(0)
 	for _, c := range uniq {
-		col := g.At(c / length)
+		left, right := g.At(c/length-eps), g.At(c/length+eps)
 		in := inset(c)
 		var a, b sdl.FPoint
 		if g.Vertical {
@@ -534,10 +543,15 @@ func webPaintGradient(r *sdl.Renderer, rect sdl.Rect, radius int32, g webGradien
 			a = sdl.FPoint{X: float32(x + c), Y: float32(y + in)}
 			b = sdl.FPoint{X: float32(x + c), Y: float32(y + cross - in)}
 		}
-		v = append(v, sdl.Vertex{Position: a, Color: col}, sdl.Vertex{Position: b, Color: col})
+		v = append(v, sdl.Vertex{Position: a, Color: left}, sdl.Vertex{Position: b, Color: left})
+		pairs++
+		if right != left {
+			v = append(v, sdl.Vertex{Position: a, Color: right}, sdl.Vertex{Position: b, Color: right})
+			pairs++
+		}
 	}
 	idx := webGeom.idx[:0]
-	for i := int32(0); i+1 < int32(len(uniq)); i++ {
+	for i := int32(0); i+1 < pairs; i++ {
 		a0, b0, a1, b1 := 2*i, 2*i+1, 2*i+2, 2*i+3
 		idx = append(idx, a0, b0, a1, b0, b1, a1)
 	}

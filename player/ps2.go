@@ -19,18 +19,37 @@ package main
 //     lists the folder, and A there (or Settings → "PS2 emulator") installs
 //     or updates ARMSX2.
 //   - A game's start with no emulator for it (chooseGameLauncher) sets ARMSX2
-//     up — the core, its resources folder, the player's BIOS copied where the
-//     core reads it — and starts the game once that is done, as GameCube's
-//     start does (dolphin.go). With no BIOS anywhere it says where to put one.
+//     up — the core, the resources folder for a build that still needs one,
+//     the player's BIOS copied where the core reads it — and starts the game
+//     once that is done, as GameCube's start does (dolphin.go). With no BIOS
+//     anywhere it says where to put one.
 //   - Every start in the core (launchLibraryGame) first makes sure the core
-//     can load, the resources folder is there and a BIOS is in place; what is
-//     missing is fetched or copied first and the launch runs again.
-//   - The core's first start gets the handheld's settings: the OpenGL ES
-//     renderer where the firmware has no Vulkan driver (the Smart Pro's
-//     PowerVR GE8300 has none; ARMSX2's default is Vulkan) and the BIOS
-//     intro skipped. A start that stops because the renderer could not draw
-//     moves the core to the next one, Software last (ps2_video.go).
+//     can load, a resources folder is there where the build needs one and a
+//     BIOS is in place; what is missing is fetched or copied first and the
+//     launch runs again.
+//   - The core's first start gets the BIOS intro skipped. Every start gets the
+//     renderer this handheld can draw with (ps2_video.go): Vulkan where the
+//     firmware has a Vulkan driver and its RetroArch was built with Vulkan
+//     (TrimUI's own since its 2024 SD packages: RetroArch 1.18 and later on
+//     the Smart Pro, Brick and Brick Pro, 1.22 on the Smart Pro S), else
+//     OpenGL. A start that stops, or that never drew (the core's "Null GS"),
+//     moves it to the next one; Settings → "PS2 renderer" picks one by hand.
+//   - The card gets a PS2 folder for the games, and the Emulators page a
+//     PlayStation 2 tile, whatever the card holds yet (ps2_folders.go).
 //   - The game gets the whole handheld while it plays (xboxboost.go).
+//
+// 2026-11-26, Juka: "Add PS2 support for Trimui Smart devices (Trimui Smart
+// pro, Trimui Smart Pro S, Trimui Brick, and Trimui Brick Hammer, Trimui
+// Brick Pro)....make sure it works and launches". The 11-20 setup had no
+// folder or tile to start from on a fresh card, still fetched a resources
+// folder newer ARMSX2 builds carry inside the core (a release whose archives
+// no longer hold one could never finish), and chose OpenGL or Vulkan once,
+// at the core's first start, from a Vulkan driver manifest alone — and
+// OpenGL is the path ARMSX2's own reports show drawing nothing through an
+// OpenGL ES frontend, while RetroArch keeps running on a black screen. All
+// five models share this one path: the four A133P boards (PowerVR GE8300,
+// firmware glibc 2.33, so a core built on a newer one runs on JukaHub's
+// glibc 2.39, ra_glibc.go) and the Smart Pro S (A523, Mali-G57).
 //
 // On a PC nothing here runs: PS2 games start in the Windows PCSX2 the
 // Emulators page installs, as before.
@@ -100,9 +119,24 @@ func ps2Enabled(c *Config) bool {
 	return customBool(c.Variables.Custom, ps2Setting, true)
 }
 
-// ps2SyncMode copies the setting into ps2Off. Main thread.
+// ps2RendererMode mirrors Settings → PS2 renderer (ps2RendererFrom) for the
+// reaper goroutine (ps2AfterGame).
+var ps2RendererMode atomic.Value // string
+
+// ps2SyncMode copies the settings into ps2Off and ps2RendererMode. Main
+// thread.
 func ps2SyncMode(c *Config) {
 	ps2Off.Store(!ps2Enabled(c))
+	ps2RendererMode.Store(ps2RendererFrom(c))
+}
+
+// ps2RendererModeNow is the renderer setting as last synced: "auto" until
+// then.
+func ps2RendererModeNow() string {
+	if v, ok := ps2RendererMode.Load().(string); ok && v != "" {
+		return v
+	}
+	return ps2RendererAuto
 }
 
 // ps2PlaysHere reports whether PS2 games play on this device: a TrimUI
@@ -159,7 +193,7 @@ func ps2LauncherHint(system string) string {
 	if !ps2IsSystem(system) || !ps2PlaysHere() {
 		return ""
 	}
-	return "PlayStation 2 games start in ARMSX2 (RetroArch), which the first start sets up; the BIOS must be dumped from your own console"
+	return "PlayStation 2 games start in ARMSX2 (RetroArch), which the first start sets up; the BIOS must be dumped from your own console (put it in " + ps2BIOSFolderShown() + ")"
 }
 
 // ps2ChipNote is what to expect on this chip, for the Settings line.
@@ -203,6 +237,9 @@ func ps2LauncherForGame(game libraryGame, launch func(launcher string)) bool {
 	if err := ps2CopyBIOSNow(&need); err != nil {
 		ShowToast(err.Error(), ToastKindError)
 		return true
+	}
+	if need.ResDrop {
+		ps2DropResources(need.SysDir)
 	}
 	if !need.ps2NeedsAnything() && need.Core != "" {
 		// Set up already (the catalog had not listed the core yet).
@@ -299,6 +336,9 @@ func ps2PrepareLibraryLaunch(game libraryGame, launcher string) (deferred bool, 
 	stale := ps2StaleWanted(&need)
 	if err := ps2CopyBIOSNow(&need); err != nil {
 		return false, err
+	}
+	if need.ResDrop {
+		ps2DropResources(need.SysDir)
 	}
 	if !need.ps2NeedsAnything() {
 		return false, nil
@@ -399,6 +439,23 @@ func ps2BeginSetup(label, launcher, romPath string, pressed time.Time, update, s
 	return ""
 }
 
+// ps2ContentArg is the file a start in the ARMSX2 core is given for game: a
+// .cue sheet's first file that is on the card — the CD's data track, which
+// the core reads as the disc (ARMSX2 lists .bin among its files, not .cue:
+// PCSX2 reads a CD image's data track straight) — else romArg. A script
+// launcher gets romArg: it picks its own file. Main thread: one small read.
+func ps2ContentArg(launcher string, game libraryGame, romArg string) string {
+	if !strings.EqualFold(filepath.Ext(game.Path), ".cue") || !ps2IsCore(launcher) || ps2SoC() == "" {
+		return romArg
+	}
+	for _, ref := range romSheetReferences(game.Path) {
+		if regularFile(ref) {
+			return ref
+		}
+	}
+	return romArg
+}
+
 // ps2Start starts the game in core after a setup, when nothing else took the
 // screen since; otherwise a toast says it is ready. Main thread.
 func ps2Start(game libraryGame, launch func(launcher string), core string) {
@@ -451,8 +508,13 @@ func ps2StartInstall() {
 		case rec.Release != "":
 			msg = "ARMSX2 " + rec.Release + " is ready for PlayStation 2 games"
 		}
-		if need := ps2Inspect(core, ""); need.BIOS == "" && need.SysDir != "" {
-			msg += " · copy your PS2 BIOS to " + ps2CardPath(ps2BIOSDir(need.SysDir))
+		// The games' folder, made once now if the card has none
+		// (ps2_folders.go).
+		if dir := ps2EnsureRomsFolder(false); dir != "" {
+			msg += " · games go in " + ps2FolderShown(dir)
+		}
+		if need := ps2Inspect(core, ""); need.BIOS == "" && need.BIOSFound == "" && need.SysDir != "" {
+			msg += " · copy your PS2 BIOS to " + ps2BIOSFolderShown()
 		}
 		ShowToast(msg, ToastKindSuccess)
 	}); why != "" {
@@ -474,6 +536,9 @@ func ps2SettingsRow() setRow {
 			// The Emulators page and the library's hints read the switch.
 			invalidateEmulatorCache()
 			if on {
+				// The games' folder, also when the player deleted it once
+				// (ps2_folders.go).
+				go ps2EnsureRomsFolder(true)
 				setToast("PlayStation 2: on · a game's first start sets ARMSX2 up")
 				return
 			}
@@ -523,13 +588,10 @@ const (
 )
 
 // ps2BoostOptions adds the handheld's ARMSX2 settings to options
-// (addSystemBoostOptions, compat.go): the BIOS intro skipped, and OpenGL ES
-// where the firmware has no Vulkan driver. Native resolution and full EE
-// speed are the core's defaults and stay: the speed hacks that remain break
-// games outright.
+// (addSystemBoostOptions, compat.go): the BIOS intro skipped. The renderer
+// is not one of them: every start sets it (ps2LaunchPrepare, ps2_video.go).
+// Native resolution and full EE speed are the core's defaults and stay: the
+// speed hacks that remain break games outright.
 func ps2BoostOptions(options map[string]string) {
 	options["armsx2_fast_boot"] = "enabled"
-	if !dolphinVulkanPresent() {
-		options[ps2RendererKey] = ps2RendererGL
-	}
 }

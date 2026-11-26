@@ -1847,6 +1847,60 @@ func webJSNetPageGuard(page *url.URL) webJSNetGuard {
 	return webJSNetGuardPublic
 }
 
+// webJSNetPageGuardFor is webJSNetPageGuard told the address the page itself
+// was fetched from (server, invalid when unknown). A page whose server is on
+// the LAN — a router's admin page or a home server under a public-looking
+// name, which a home network's own DNS answers with a private address — gets
+// the LAN guard, as a browser places a page by where it was loaded from: its
+// scripts call that server's API at the address the page came from. This adds
+// no rebinding risk, because the page's bytes already came from that address:
+// only the LAN server could have written its scripts. Only a private address
+// widens the guard; a public name that led to this device stays public.
+func webJSNetPageGuardFor(page *url.URL, server netip.Addr) webJSNetGuard {
+	guard := webJSNetPageGuard(page)
+	if guard == webJSNetGuardPublic && server.IsValid() && webJSNetPlaceOf(server) == webJSNetPrivate {
+		return webJSNetGuardLAN
+	}
+	return guard
+}
+
+// webJSPageServers records where the pages of the load now running scripts
+// came from (textBrowserDocument.Server), by their bare address, for the
+// script pass's guard (newWebJSSession).
+var webJSPageServers struct {
+	mu   sync.Mutex
+	gen  uint64
+	addr map[string]netip.Addr
+}
+
+// webJSNotePageServer records that page, of load generation gen, came from
+// server. A new generation forgets the last one's pages.
+func webJSNotePageServer(gen uint64, page *url.URL, server netip.Addr) {
+	if page == nil || !server.IsValid() {
+		return
+	}
+	webJSPageServers.mu.Lock()
+	defer webJSPageServers.mu.Unlock()
+	if webJSPageServers.gen != gen || webJSPageServers.addr == nil {
+		webJSPageServers.gen, webJSPageServers.addr = gen, make(map[string]netip.Addr, 2)
+	}
+	webJSPageServers.addr[webJSNetBareURL(page).String()] = server
+}
+
+// webJSPageServer is where page, of generation gen, came from; invalid when
+// that is not known.
+func webJSPageServer(gen uint64, page *url.URL) netip.Addr {
+	if page == nil {
+		return netip.Addr{}
+	}
+	webJSPageServers.mu.Lock()
+	defer webJSPageServers.mu.Unlock()
+	if webJSPageServers.gen != gen {
+		return netip.Addr{}
+	}
+	return webJSPageServers.addr[webJSNetBareURL(page).String()]
+}
+
 // webJSNetCheckDial is the dialer's check on the address it is about to
 // connect to — already resolved, so whatever DNS said is what is judged.
 func webJSNetCheckDial(guard webJSNetGuard, address string) error {

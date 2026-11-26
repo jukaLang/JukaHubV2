@@ -17,7 +17,7 @@ remaining gaps are worth closing.
 | Formats | MP3, WAV, OGG, Opus, M4A/AAC, FLAC, WMA, AIFF, DSF and DFF, decoded through the bundled ffmpeg; DSD is converted to PCM for playback |
 | Library | Albums, artists and audiobooks from the Media index; an opened file plays its folder. Audiobooks resume at the saved chapter and show Finished when the last chapter ends. |
 | Album art | Folder and embedded covers first; missing music covers are looked up through MusicBrainz and Cover Art Archive when online. Set `music_art_online: false` to turn lookup off. |
-| Transport | Play/pause, next/previous, stop, seek ±10 s, seek by tapping the rail, volume ±10 % |
+| Transport | Play/pause, next/previous, stop, seek ±10 s, seek by tapping the rail, volume ±10 %. On a pad or keyboard, Up from the top of the playlist steps onto these controls: Left/Right choose one, A (Enter) presses it, Down goes back. On an internet radio station Play/pause is Play/stop |
 | Modes | Shuffle (every track once before wrapping), repeat off / all / one, a play-next queue |
 | Favorites | Toggled per track, marked in the list, stored in `musicfavorites.json` |
 | Long form | 1/16×–2× speed (pitch kept; the position and the saved resume point count in the track's own time), sleep timer (15/30/60 min, exits playback at zero), resume for files of 8 minutes or more. On a pad **Start** in the player opens them, with lyrics, shuffle, repeat and the full-screen visualizer: the Audio panel's *Now playing* rows |
@@ -276,6 +276,13 @@ opens the free [Radio Browser](https://www.radio-browser.info) directory, about
 
 **A** plays the station in the music player, with the rest of the list after it
 for Next / Previous; a station that does not answer is skipped for the next.
+The player opens with the pad on Play, which shows a Stop mark: a station has
+no place to pause at, so Play / Pause is Play / Stop on it (**A** there, **X**,
+Space, the dock's Play) and Play tunes in again at the live edge. A station
+cannot be seeked. While something plays, the directory's tabs and the Radio
+shelf show it on a **Now playing** row on top: **A** stops it (or tunes in
+again), **X** opens the player; **A** on the playing station's own row, which
+says Playing or Stopped, does the same.
 **X** keeps the station in your stations (again to take it out). **Y** reloads
 the list (on Search it types a new name). **L1 / R1** or **Left / Right**
 switch tabs, **B** steps back from a genre or the country list, then leaves.

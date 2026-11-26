@@ -32,7 +32,11 @@ package main
 // load and then show nothing under TrimUI's OpenGL-ES-only RetroArch, and a
 // console that plays already should not be handed a choice that may not. Those
 // stay one press each on the Emulators page, whose row says so, and the
-// summary names the ones it left there.
+// summary names the ones it left there. Since 2026-11-26 a GPU core whose
+// build nothing shows to be made for OpenGL ES is not fetched at all, nor
+// listed on the page: coreTrimuiMisfit leaves it out (coregpuoffer.go), so in
+// practice only a GLES build — JukaHub's own for TrimUI, a …_gles variant, one
+// the survey read as OpenGL ES — reaches either rule.
 //
 // Where it is offered: Settings → Games & emulators → Get more cores, a pinned
 // tile on the Emulators page, and for one console the "Which emulator?" sheet's

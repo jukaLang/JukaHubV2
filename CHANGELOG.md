@@ -13,6 +13,101 @@ For anything older, the git log and the
 
 ### Added
 
+- **Browser: WOFF2 web fonts, every kind of CSS gradient, and LAN pages'
+  scripts reach the LAN** (Juka, 2026-11-26: "improve browser even
+  further...finish up bigger jobs"). A page whose fonts come only as WOFF2 —
+  most sites now — kept the reader's own faces; the reader now has its own
+  Brotli decoder (RFC 7932, with the static dictionary and its word
+  transforms) and rebuilds WOFF2's transformed outlines and metrics into a
+  font SDL_ttf opens, so those pages are set in their own typefaces. Both were
+  written beside Python versions of themselves that decode exactly what the
+  reference Brotli encoder writes at every quality and rebuild the VM's WOFF2
+  fonts (Lato, Roboto Slab, Font Awesome, and fonts re-encoded with every
+  transform) to the outlines and metrics fontTools reads; a test checks the
+  Go code against them. Gradients: `conic-gradient()` (pie charts, colour
+  wheels) is drawn instead of its averaged colour, `repeating-linear-` and
+  `repeating-radial-gradient()` draw their stripes and rings, a stop with two
+  positions or two stops at one place make a hard edge in every direction,
+  and stops placed in px are resolved against the box they are drawn in. A
+  page fetched from a server on the LAN under a public-looking name (a
+  router's admin page, Home Assistant behind the home network's own DNS) now
+  counts as a LAN page, so its scripts can call that server (backlog NET-16).
+  Static checks only; not yet run on a handheld.
+
+- **Browser: gradients at their real angle and radial gradients; widths in
+  `calc(100% - …)`; scripts see the site's linked stylesheets** (Juka,
+  2026-11-26: "see what's left and improve web browser even further"). A
+  linear gradient off the four axes (`135deg`, `to bottom right` — most hero
+  banners and buttons) ran straight down; it is now drawn at its real angle,
+  and `radial-gradient()` (the glow behind a headline, a spotlight on a card),
+  which was a flat averaged tint, is drawn as rings around its centre with its
+  shape, size and position; both are GPU geometry clipped to rounded corners.
+  A width, flex basis or left/right inset written as `calc()`, `min()`,
+  `max()` or `clamp()` of a percentage and lengths (`calc(100% - 300px)`, a
+  sidebar layout's main column) used to be dropped; it is now the percentage
+  it comes to in the parent's modelled width. Page scripts now read the
+  page's `<link>` stylesheets too: the load hands the sheets it started
+  beside the scripts to `getComputedStyle` (waiting up to 1.5 s for one still
+  downloading), so jQuery's `.show()` shows a panel the site's stylesheet
+  hides and `document.styleSheets` lists their rules (backlog APP-11). Static
+  checks, a geometry simulation of the gradient code and the 101 DOM tests
+  pass; not yet run on a handheld.
+
+- **Every emulator JukaHub sets up now updates by itself, and the handheld
+  offers only emulators that run on it** (Juka, 2026-11-26: "Make sure all
+  emulators get auto updated....make sure all emulators listed can run on
+  Trimui Smart pro"). The daily Emulator updates pass already brought the
+  cores, JukaHub's PPSSPP, hakuX, RetroArch and PortMaster forward; Dolphin
+  (GameCube and Wii), ARMSX2 (PlayStation 2), the Godot port and the
+  FreeJ2ME-Plus pair for J2ME games moved only on a press. Each now has an
+  updater in the same pass (`player/emuautoupdate_handheld.go`) that runs its
+  tile's own install, under the same setting and at the same quiet moment:
+  Dolphin from JukaHub's own TrimUI build whenever a new one is published, or
+  the libretro buildbot's nightly a week after the one in use at the earliest
+  (a large download, new nearly every day); ARMSX2's next stable release at
+  once, its next nightly a week after the one in use; the Godot port when its
+  repository has a newer commit (`godot-port.json` records the commit); the
+  FreeJ2ME-Plus core and jar when `cores-aarch64` has a newer pair. Only what
+  JukaHub set up and nobody changed is replaced, and **L1** on the Emulators
+  page runs all four too, without the week's wait. MAME 2000, 2003, 2003
+  Midway, 2010, 2015 and 2016, frozen at one MAME romset, are now updated by
+  the pass like any core; current MAME, MAME 2003-Plus and FBNeo, whose
+  nightlies move the romset, stay with a press. On the handheld a core that
+  draws with the GPU is no longer offered — not as a downloadable tile, not by
+  Get more cores, not from a console's "no emulator found" tile — unless
+  something shows its build is made for OpenGL ES (a `…_gles` variant,
+  JukaHub's own TrimUI build, or the cores survey reading an OpenGL ES library
+  in it): the buildbot's N64, Dreamcast, PSP-core, HW PlayStation and Saturn 3D
+  builds are desktop OpenGL builds, and on 2026-11-25 a Smart Pro installed
+  Yaba Sanshiro from that list only for the load check to refuse it ("needs
+  libGL.so.1"). The firmware's own GPU cores stay listed and playable; the
+  pass's toast now calls them the builds made for this GPU instead of sending
+  the player to try the buildbot's (`player/coregpuoffer.go`). Static checks
+  only; not yet run on a handheld.
+- **Browser: pages appear sooner, then complete in place, and the Smart Pro
+  paints them on its GPU** (Juka, 2026-11-26: "improve browser even further
+  especially on Trimui Smart pro...make sure it loads fast and then completes
+  or re-renders like modern browsers do...take advantage of graphing card on
+  TrimuiSmartPro"). On the handhelds the page is painted once into GPU tiles
+  (256-pixel bands as wide as the page, 10 kept on the A133P models, 12 on the
+  Smart Pro S) and each frame copies the three or four the view covers instead
+  of issuing a draw call for every box, corner, shadow layer, picture and line
+  of text; fixed bars, pinned sticky headers and a video playing in its card
+  are drawn over them each frame, and a tile is painted again only when its
+  part of the page changes (`JUKAHUB_WEB_TILES=0` turns it off). A page's style
+  sheets start downloading as soon as its markup arrives, beside its scripts,
+  and each is fetched once per load; the page drawn while the scripts run now
+  gets its pictures and web fonts, which the finished page takes over; the
+  pictures on screen are fetched first; a site's style sheets and small
+  pictures are remembered for 15 minutes for its next pages (Reload fetches
+  them again). The early page is drawn after 0.8 s of scripts on the A133P
+  models and 0.9 s on the Smart Pro S (1.5 s before). While pictures and web
+  fonts stream in, the page is laid out again at most every 400 ms (250 ms on
+  the Smart Pro S) instead of once per picture; when it is laid out again or
+  replaced by its finished version the line at the top of the view stays
+  there (scroll anchoring), and a thin line along the top of the page shows a
+  load still in progress. Static checks only; not yet run on a handheld.
+
 - **AmneziaWG 3.0 and 3.1** (2026-11-25, a tester: "actual version of protocol
   is 3.1"). `HeaderProtectionKey` (ChaCha20 over the handshake messages and the
   transport headers, with the nonce taken from the S padding),
@@ -174,7 +269,8 @@ For anything older, the git log and the
   (`windowsapps_winetest.go`). A user who deletes it keeps it deleted; the new
   **Wine test** row in Setup puts it back. While the list holds only the
   test, **Y** downloads the Notepad++ sample. Checked with pe_smoke on x86-64
-  Linux only; not yet run under Wine on a handheld.
+  Linux and visibly under Wine on a Smart Pro (2026-11-26): the window drew
+  readable text, played its chime and advanced its frame counter.
 - **Video memory (VRAM) in Settings** (Juka, 2026-11-25: "Can we add ability
   to add VRAM to JukaHub in settings? and assign it there!"). Settings → Games &
   emulators → **Video memory (VRAM)**: Auto (the default) or a size from 64 MB
@@ -4304,6 +4400,34 @@ For anything older, the git log and the
 
 ### Changed
 
+- **Media player: smoother, with controls that step aside** (Juka,
+  2026-11-26: "improve media player section...make it smoother and improve UX
+  and UI"). While a video plays, the controls now fade away three seconds after
+  the last press in the Media screen's window as well as in full screen — they
+  used to cover the foot of every film in the window and to cut in and out in
+  full screen — and fade back on any press, a pause, a seek or the pointer
+  moving over the picture; with motion on, the bar sinks and the title rises as
+  they go. A first Left/Right while they are away only shows them, with the
+  ring on play/pause, and the ring glides from button to button. Quick presses
+  of L1/R1 (the rewind and fast-forward buttons, Shift+arrows, J/L) add up: the
+  handle, the clock and a "+30 s" flash move at once, with the time in a bubble
+  over the handle, and the video jumps once, a moment after the last press.
+  Dragging the seek handle with a mouse works, with its time over it, and a
+  pointer resting on the track shows the time under it. Up/Down show a volume
+  pill at the side, resuming blooms the play glyph out of the paused button,
+  the settings sheet rises in with a selection that glides, the subtitles ride
+  up and down with the bar, a spinner sits on the picture while a seek or a
+  stalled stream waits for frames, and in the last ten seconds a card counts
+  down to the next Up Next video. The "PLAYING" pill is gone (LIVE, PAUSED and
+  errors keep theirs; LIVE's dot breathes). A click on the picture plays or
+  pauses and a double click goes full screen; the wheel over the picture is the
+  volume; on a keyboard K, J, L and M play/pause, skip −10 / +10 s and mute.
+  The Media screen's footer offers L2/R2 Prev / Next only when the video came
+  from a list, and the floating window's four lines of help are two, under a
+  progress line in the player's accent. Fades follow Battery Saver, slides
+  Reduce motion. New file `player/videomotion.go`. Static checks only; not yet
+  run on a handheld.
+
 - **Leaving a screen stops its downloads** (backlog ARCH-6). The community
   theme gallery's index, the Smart Home panel's Home Assistant and Pi-hole
   reads, the Dictionary's lookups and suggestions, the curation feed and the
@@ -5416,6 +5540,274 @@ For anything older, the git log and the
   changed meanwhile (`player/hotreload.go`, `player/livebuilder.go`).
 
 ### Fixed
+
+- **Smart Pro launches for GameCube, PSP, Xbox and Windows apps**
+  (2026-11-26). Dolphin setup now installs its core and Sys data with the X11
+  libraries missing from the firmware and an EGL shim for its video path.
+  Weston/Wine gets the FreeType alias and a corrected app launcher; Start opens
+  a virtual keyboard. PPSSPP and Xbox use a corrected screen handoff that
+  returns to JukaHub. On the device, a GameCube homebrew `.dol` drew at 10
+  seconds and RetroArch was still running at 1m26; the user restarted before
+  a longer-run check finished. PSP Hello World was visible, and hakuX produced
+  Xbox homebrew guest frames. Wine Test and both
+  64-bit and 32-bit Notepad++ displayed text, and virtual-keyboard typing
+  worked.
+
+- **PlayStation 2 on every TrimUI model: a folder, a tile, and a start that
+  draws** (Juka, 2026-11-26: "Add PS2 support for Trimui Smart devices (Trimui
+  Smart pro, Trimui Smart Pro S, Trimui Brick, and Trimui Brick Hammer, Trimui
+  Brick Pro)....make sure it works and launches"). PS2 games have started in
+  RetroArch's ARMSX2 core since 2026-11-20, but nothing made `Roms/PS2`, so a
+  fresh card showed PlayStation 2 nowhere. JukaHub now makes `Roms/PS2` (once:
+  a folder you delete stays deleted until you press the tile or turn
+  PlayStation 2 on again) and the Emulators page always has a **PlayStation 2**
+  tile — A sets ARMSX2 up, then opens the games; it says how many games there
+  are and when the BIOS is missing (`Bios/PS2` is where to put it). The setup
+  no longer downloads ARMSX2's handheld archive for its `resources` folder:
+  builds since the 2026-09-08 nightly carry those files inside the core, so a
+  release whose archive holds no folder could never finish setting up; a
+  folder JukaHub put there for an older build is taken away, and one a newer
+  build's log still asks for is fetched. Every start now writes the renderer
+  this handheld can draw with: Vulkan where the firmware has a Vulkan driver
+  and the RetroArch binary was built with Vulkan and its `khr_display` context
+  (TrimUI's own RetroArch has been since April 2024; JukaHub reads each binary
+  once), else OpenGL — before, the core's first start chose from a Vulkan
+  driver manifest alone and never again, and OpenGL draws nothing through an
+  OpenGL ES RetroArch. That start also lets RetroArch switch to the driver the
+  core asks for and turns threaded video off. A start after which the core
+  never drew (its "Null GS", a black screen RetroArch stays on until you
+  leave), and one that crashed in its first half minute (a GPU driver that
+  falls over leaves no log line), now open the card and move to the next
+  renderer — Software after Vulkan, then OpenGL — like a start that stopped
+  at once; **Settings → Games & emulators → PS2 renderer** picks one by hand.
+  A `.cue` PS2 game is given to the core as its first track, which ARMSX2
+  reads as the disc. Static checks only; not yet run on a handheld.
+
+- **Media player: frames on time, seeks without jumps, volume kept**
+  (2026-11-26). The main loop showed a video's frames whenever its own 30 fps
+  (60 on a PC) cadence came round, so as the two clocks drifted a frame was now
+  and then shown twice and the next one never — the small hitch every few
+  seconds in a slow pan; it now wakes when the decoder publishes a frame and
+  shows it at once, the active cadence staying the ceiling. After a start, a
+  seek or a speed change the position ran on from the press and jumped back
+  when the first frame arrived; it now waits for that frame. Every L1/R1 press
+  restarted both ffmpeg processes, and the seek bar's drag, which never
+  started, would have restarted them on every pointer move. The played part of
+  the seek bar was rasterised as a new cached shape at every pixel it grew.
+  Each video started at full volume whatever the last one was left at, and the
+  volume reading truncated (a level stepped down to 30 % read 29 %). Static
+  checks only; not yet run on a handheld.
+
+- **Browser: a page's video plays in its place and opens in the player; long
+  pages load all their pictures** (Juka, 2026-11-26: "improve browsers even
+  more...let's make it load everything....and videos too and can be expanded
+  in media player"). A play card (a `<video>`, a YouTube or other video embed,
+  a script player's card) took the reader off the page to the player; the
+  video now plays in the card, scrolling with the page, with its subtitles, a
+  progress line and close and expand buttons. A again on the card, a tap on the
+  picture or the expand button opens it in the media player, and Back from
+  there returns to the page with it still playing; B or the close button stops
+  it, and while the card is off the screen it carries on in the corner window.
+  Pictures and web fonts now load on 45 seconds of their own instead of what
+  was left of the page's 20, so the pictures far down a long page no longer
+  stay empty; a page may have 600 pictures (was 256) and 64 video thumbnails
+  (was 24), and keeps up to 1.5 MB of text, 8000 blocks and 30000 lines (was
+  768 KB, 4000 and 12000). An `<iframe>` that is not a video (a map, a post, a
+  form) is an "Embedded: …" link to what it shows instead of nothing. Static
+  checks only; not yet run on a handheld.
+
+- **Music: internet radio stops, and the player's media controls take the pad**
+  (Juka, 2026-11-26: "I cannot stop radio when it's playing", "radio media
+  controls are not accessible...make sure they are"). The player's row of
+  controls (previous, play, next, stop, shuffle, repeat, favourite, volume)
+  could only be tapped: on a handheld the D-pad walked the playlist,
+  Left/Right seeked and no button stopped anything. Up from the top of the
+  playlist now steps onto the controls in the Auralis and StockOS layouts:
+  Left/Right choose one, A presses it, Down goes back to the playlist and Up
+  on to the top bar; a keyboard does the same with the arrows and Enter, and
+  the footer names what A does. A station from the Radio directory, Music →
+  Radio or the dock opens the player with the pad on Play, which shows a Stop
+  mark. A station has no place to pause at (pause left ffmpeg and the
+  station's connection hanging, and Play then played what had piled up or
+  found the station had hung up), so on a station Play / Pause is Play / Stop
+  — X, A on the control, Space, the dock's Play, voice "pause", headphones
+  unplugged — and Play tunes in again at the live edge. Left/Right no longer
+  seek a station: the restart handed ffmpeg the seconds listened so far as
+  `-ss`, and a speed, equaliser or effects change now tunes in live too. The
+  Radio directory and Music → Radio show what plays on a Now playing row on
+  top (A stops it or tunes in again, X opens the player), and the playing
+  station's own row says Playing or Stopped, with the same Play / Stop on A.
+  New file `player/music_transport.go`. Static checks only; not yet run on a
+  handheld.
+
+- **Browser: tapping a video plays it; script players get a play card; storage
+  stubs; nested layers at their own foot** (Juka, 2026-11-26: "improve layering
+  engine even further...make sure download and playing videos work...make sure
+  javascript works properly"). A tap or a mouse click on a play card opened the
+  video's address as a page (the "Can't show this file" card); every way of
+  activating a link — A, a tap, a click, the link list — now does the same
+  thing: a YouTube link plays in Media, a play card plays, a download link
+  saves its file, anything else opens. A `<video>` a script player feeds (a
+  `blob:` address, or only a poster) is now a play card that hands the page to
+  yt-dlp, and a video card shows the video's own poster frame. The script pass
+  has `indexedDB` and `caches` as a browser with site storage switched off has
+  them (an open fails with an error event), so a bundle that opens a database
+  at start no longer stops at a TypeError. A positioned box inside another one
+  with `bottom` set sits at its parent's foot instead of after it. The script
+  pass was checked against jQuery, Bootstrap 4 with Popper, underscore, Sizzle
+  and highlight.js in the node harness (and the 101 DOM and environment tests
+  pass). Static checks only; not yet run on a handheld.
+
+- **Player: caption size works, captions readable without a panel, films
+  start in your languages; the Browser plays `<audio>`** (Juka, 2026-11-26:
+  "improve media player and browser even more"). Accessibility → Caption size
+  named three UI fonts that all open at one size, so Small, Medium and Large
+  looked the same; captions are now sized from the picture (a 26th, 20th or
+  15th of its height), and with Caption background off they get a dark edge so
+  white text stays readable on a bright scene. A new Settings → Media &
+  playback → Audio language starts a film with several audio tracks in that
+  language when it has one (the sheet's Audio track row still switches per
+  film), and a film's own subtitle tracks start with the one in the Subtitle
+  language (a full track before a forced one) instead of the first. In the
+  Browser an `<audio>` with a source is a play card that opens the music player
+  instead of a grey bar (backlog MED-6). Static checks only; not yet run on a
+  handheld.
+
+- **Windows apps: Wine gets as far as the program, and a display that never
+  comes up no longer freezes the handheld** (Juka, 2026-11-25: "WINE emulator
+  doesn't want to launch on Trimui Smart Pro"; tester report JH-JMGVDB, "wine
+  freeze on start"). The Smart Pro's own logs of the Wine test and Notepad++
+  showed WestonPack's display working — Weston and Xwayland up in about a
+  second — and Wine never starting: `westonwrap.sh` 0.2.7.1 joins the words
+  after its four mode words into one string and runs it with `eval`, so the
+  `;` in `WINEDLLOVERRIDES` ran `winemenubuilder.exe=d` as a command (exit
+  127), the "Wine Test" folder fell apart at its space, and the wrapper, which
+  always exits 0, brought the list back after four seconds with no message. The
+  program now reaches `westonwrap.sh` as `/bin/sh` and one private script in
+  `/tmp` (see "The command" in [WINDOWS_APPS.md](docs/WINDOWS_APPS.md)), whose
+  exit status JukaHub reads. Three more things the logs showed: `westonwrap.sh`
+  sets `XDG_DATA_HOME` to `$HOME/.local/share` before it looks for PortMaster,
+  so JukaHub's stand-in `control.txt` was never read and every session (and
+  every clean-up) ran PortMaster's TrimUI `control.txt` instead — a
+  `sdl2imgshow` splash in the background, `setterm`, `HOME` moved to the card;
+  `westonwrap.sh` now gets a `HOME` in `/tmp/jukahub-weston-home` that holds the
+  stand-in, and the program gets the firmware's `HOME` back. `westonwrap.sh`
+  waits for Xwayland's socket with no time limit, so a Weston that stopped while
+  starting kept JukaHub's screen parked and the pad lent as the mouse for good;
+  a watch (`player/wine_watch.go`) now ends such a session within a few seconds
+  of Weston going (or after 90 seconds without a start) and the *Couldn't
+  launch* card says so. And whatever `westonwrap.sh cleanup` leaves running in
+  the background is stopped before JukaHub takes the screen back. Static checks
+  only; not yet run on a handheld.
+
+- **Download links download; nested positioned boxes; cleaner, faster pages**
+  (Juka, 2026-11-25: "improve performance and layering engine of the
+  browser... sites look clean and download link can be downloaded"). A link
+  marked `download`, or pointing at an archive, installer, disk image or game
+  file, now saves the file to Downloads straight away, and so does an address
+  whose server sends such a file or an attachment (the "Can't show this file"
+  card used to wait for a second press). A positioned box inside another
+  positioned box (a dialog's close button, a card's corner badge, a fixed
+  header's dropdown) is now a layer of its own, placed against its own
+  containing block, instead of being laid into its parent's text. Cookie-consent
+  banners of the common consent platforms are hidden (they cannot be answered
+  in the reader). The container pass counted every block of the page for every
+  box it painted; the counts are now taken once per page, which was most of the
+  layout time on a long news page. Static checks only; not yet run on a
+  handheld.
+
+- **Heavy pages such as cnn.com open, and open sooner** (Juka, 2026-11-25:
+  "make sure cnn.com works and launches appropriately"). A page load has 20
+  seconds; a news front page's scripts could take ten of them on a handheld,
+  and when the time ran out during the style sheets or the pictures the load
+  returned nothing — a page already on screen went blank. Now only a load the
+  reader left is dropped: one that runs out of time is drawn with what arrived.
+  The scripts get the load's time less seven seconds for the style sheets,
+  parse and pictures, and when they are still running after a second and a
+  half the page as its server sent it is drawn meanwhile (style sheets applied,
+  fetched once for both), then replaced by the scripted page. Static checks
+  only; not yet run on a handheld.
+
+- **GreenOvercast's launch card names the real cause, and JukaHub works
+  round a saved sign-in GreenOvercast cannot read** (Juka, 2026-11-25,
+  JH-AT4EEE: GreenOvercast closed after 3 seconds on a Smart Pro S with a
+  NextUI card). The card said *The script did not find PortMaster*, yet the
+  script had found it: PortMaster's TrimUI `control.txt` sources TRIMUI_EX's
+  `ex_config`, which that card lacks, and bash goes on past the line (and past
+  its splash tool, `sdl2imgshow`). Such lines are no longer a cause, a missing
+  file or a card line; only `control.txt` itself not opening is *did not find
+  PortMaster*, and a file of PortMaster's own it cannot load is *PortMaster is
+  missing some of its own files*. GreenOvercast had in fact started, chosen
+  software decoding (its Cedar decoder does not start on the A523), printed
+  `Credential store could not be read` and shut down; the card now says *Its
+  saved sign-in could not be read*. Before each start, on a FAT32 or exFAT
+  card, which cannot keep GreenOvercast's folder private as its launcher
+  wants, JukaHub keeps that folder in internal storage
+  (`/mnt/UDISK/jukahub/config/greenovercast`, artwork cache left on the card;
+  the first time its small files are copied, but not a sign-in its last start
+  could not read), and a saved sign-in the last start could not read is
+  renamed aside (never deleted), so GreenOvercast shows a new sign-in code.
+  GreenOvercast's own log joins the diagnosis, a launch report now carries a
+  long script's last lines (where a port starts its program), the heavy-game
+  boost no longer syncs and drops the page cache for a game that has already
+  ended, and drawing text no longer builds a new string replacer for every
+  label that carries translation marks (the report's stall traces caught
+  both). Static checks only; not yet run on a handheld.
+
+- **PPSSPP opens from its Emulators tile, and the launch card no longer
+  blames setterm** (Juka, 2026-11-25, JH-FRF8NW: "I was trying to install
+  emulator 1.20.3 from emulator menu"). **A** on the PSP tile ran the
+  firmware's `Emus/PPSSPP/launch.sh` with no game, and its `./PPSSPPSDL_gl
+  "$*"` hands PPSSPP one empty argument then, which PPSSPP takes for the game
+  to boot: `File not found: ` and exit status 1 after 3 seconds. The card
+  named `sh: setterm: not found` instead, the firmware SDL's harmless
+  `setterm -cursor off` that every start prints. **A** on the tile now opens
+  PPSSPP's own menu in the PPSSPP that plays PSP games: JukaHub's build
+  through its own script, or the firmware's with `--fullscreen` in place of a
+  game, which JukaHub's script also gives the firmware's launcher when it falls
+  back with no game. While PSP games get the screen to themselves, so does
+  that menu, and JukaHub comes back to the Emulators page after it. The tile's
+  line names what **X** does first (*X: install PPSSPP 1.20.3*, *update to
+  PPSSPP …*) and the footer says Install or Update. Launch cards skip commands
+  the firmware lacks to no effect (setterm, sudo, …) and explain an emulator's
+  `File not found:` (an empty game, or the game file it did not find). Static
+  checks and shell simulations only; not yet run on a handheld.
+
+- **Windows apps now reach Wine through WestonPack on the Smart Pro**
+  (2026-11-25). WestonPack 0.2.7 joined its arguments into an `eval` command:
+  Wine's normal `WINEDLLOVERRIDES=mscoree,mshtml=;winemenubuilder.exe=d`
+  stopped the command at the semicolon before Wine ran, and an app folder
+  with spaces broke WestonPack's unquoted `cd`. JukaHub now starts WestonPack
+  in a private `/tmp` folder and gives it only a small quoted script that
+  enters the app folder and starts Wine. The script records the program's
+  exit status, which WestonPack's own cleanup otherwise hides as success, so
+  an early failure opens the launch report. Verified against the device's
+  Wine Test and Notepad++ logs and a shell quoting test; device retest follows.
+
+- **Animated content shows, drop caps and small caps draw** (Juka, 2026-11-25:
+  "improve browser further make sure all css supported"). The Browser draws a
+  page once, so an element animated in from `opacity: 0` (a fade-in that keeps
+  its end state with `animation-fill-mode: forwards`/`both`) used to stay
+  invisible, and a loading screen that fades out the same way covered the page;
+  such an animation is now drawn at its end frame. `::first-letter` styles a
+  block's first letter (colour, size, weight, face), and `font-variant:
+  small-caps` sets lower-case words as smaller capitals. Static checks only;
+  not yet run on a handheld.
+
+- **List markers follow CSS, and newer CSS is read** (Juka, 2026-11-25:
+  "make sure ... styles for <ul> and <li> are correct and latest version of CSS
+  is supported"). A list's marker now comes from its `list-style-type`, not its
+  tag: `ul { list-style-type: decimal }` numbers and `ol { list-style: square }`
+  bullets, and `decimal-leading-zero`, `lower-greek`, `disclosure-open/closed`
+  and string markers (`list-style-type: "→ "`) draw; `<ol reversed>` counts
+  down; an `<li>` styled `display: block`, `flex` or `grid` (Wikipedia's sister
+  projects) no longer draws a stray bullet, while any element styled
+  `display: list-item` gets one; every item counts, `list-style: none` ones too.
+  The two-keyword `display` syntax (`block flex`, `inline flow-root`), `@scope`
+  blocks (their rules used to be dropped) and the CSS math functions `round()`,
+  `mod()`, `rem()`, `abs()`, `sign()`, `pow()`, `sqrt()`, `hypot()`, `exp()`,
+  `log()` (with `pi` and `e`) are read. Static checks only; not yet run on a
+  handheld.
 
 - **Lists in the Browser, as on Wikipedia's Main Page** (Juka, 2026-11-25:
   "improve ul and li css as those do not seem to render with css correctly...

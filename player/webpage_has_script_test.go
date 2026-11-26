@@ -2,8 +2,38 @@ package main
 
 import (
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 )
+
+// A <link> sheet the page's load fetched reaches its scripts: getComputedStyle
+// reports the display it sets, so a jQuery-style show() shows the panel.
+func TestWebJSLinkedSheetReachesScripts(t *testing.T) {
+	base, err := url.Parse("https://example.com/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen := webJSLoadGeneration()
+	webJSSetSheetSource(gen, func(page, address string) string {
+		if address == "https://example.com/site.css" {
+			return ".panel{display:none}"
+		}
+		return ""
+	})
+	defer webJSSetSheetSource(gen, nil)
+	source := `<html><head><link rel="stylesheet" href="/site.css"></head><body>` +
+		`<div class="panel" id="p">Panel</div><script>var p = document.getElementById('p');` +
+		`document.body.setAttribute('data-before', getComputedStyle(p).display);` +
+		`if (getComputedStyle(p).display === 'none') { p.style.display = 'block'; }</script></body></html>`
+	scripted := webJSRunPageFor(source, base, gen, time.Time{})
+	if !strings.Contains(scripted.HTML, `data-before="none"`) {
+		t.Fatalf("getComputedStyle did not see the linked sheet (%s): %s", scripted.Reason, scripted.HTML)
+	}
+	if !strings.Contains(scripted.HTML, "display: block") && !strings.Contains(scripted.HTML, "display:block") {
+		t.Fatalf("show() did not show the panel the linked sheet hides: %s", scripted.HTML)
+	}
+}
 
 func TestWebHasReflectsScriptedMutations(t *testing.T) {
 	cases := []struct {

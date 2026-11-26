@@ -25,7 +25,14 @@ package main
 //     own #!/bin/bash line (under a working bash only the latter counts, and
 //     bash's own arithmetic errors never do);
 //   - PortMaster's control.txt not found, or an empty PortMaster folder that
-//     wins the script's search;
+//     wins the script's search, or a file of PortMaster's own that
+//     control.txt loads missing. An error control.txt reports about one of
+//     its own lines proves it was found: PortMaster's TrimUI control.txt
+//     sources TRIMUI_EX's ex_config and starts sdl2imgshow, which a card
+//     without TRIMUI_EX lacks, and bash goes on past both (a Smart Pro S
+//     report, JH-AT4EEE, blamed PortMaster for that);
+//   - the program saying it could not read the sign-in it saved
+//     (GreenOvercast, which then closes: greenovercast_store.go);
 //   - a program built for a newer glibc or libstdc++, a library the handheld
 //     lacks, or a program built for another processor (or missing);
 //   - JukaHub's own bash (Ubuntu's, on the private C runtime) not starting;
@@ -76,6 +83,10 @@ var (
 	// from its folder ("line 38: ./game: No such file or directory"): the
 	// file, or its loader (a 32-bit one), is not there.
 	gameDiagPortNoProgRe = regexp.MustCompile(`line \d+: (\./[^\s:]+): No such file or directory`)
+	// gameDiagPortMissingObjRe is a file's line that could not open
+	// something: "control.txt: line 9: /x/ex_config: No such file or
+	// directory" (the file, then the thing its line wanted).
+	gameDiagPortMissingObjRe = regexp.MustCompile(`(?i)^([^\s:]+):\s*(?:line\s+)?\d+:\s*(.+?):\s*(?:no such file|cannot open|can't open)`)
 )
 
 // gameDiagPortBashOwnErrors are bash's own syntax errors that also say
@@ -105,9 +116,14 @@ var (
 	gameDiagPortExecWords = []string{"exec format error", "cannot execute binary file", "cannot execute: required file not found"}
 	// gameDiagPortHarmlessCmds are commands port scripts call that a TrimUI
 	// lacks without any effect on the game (stock SDL's fbdev back end calls
-	// setterm on every start).
+	// setterm on every start; PortMaster's TrimUI control.txt shows its
+	// splash with TRIMUI_EX's sdl2imgshow).
 	gameDiagPortHarmlessCmds = map[string]bool{"setterm": true, "systemctl": true, "sudo": true, "dbus-send": true,
-		"nmcli": true, "udevadm": true, "fbset": true, "loadkeys": true}
+		"nmcli": true, "udevadm": true, "fbset": true, "loadkeys": true, "sdl2imgshow": true}
+	// gameDiagPortControlMissWords say a file could not be opened.
+	gameDiagPortControlMissWords = []string{"no such file", "not found", "can't open", "cannot open"}
+	// gameDiagPortStoreWords say a saved sign-in could not be used.
+	gameDiagPortStoreWords = []string{"could not", "couldn't", "cannot", "can't", "unable", "failed", "unreadable", "corrupt"}
 )
 
 // gameDiagPortJukaLog splits JukaHub's log of a port launch into its notes
@@ -224,7 +240,7 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		}
 	}
 	// The first line of each cause, and what the lines name.
-	var sh, control, glibc, lib, execLine, ownBash, gfx, crash, mem, rt, perm, cmd string
+	var sh, control, pmBroken, store, glibc, lib, execLine, ownBash, gfx, crash, mem, rt, perm, cmd string
 	var shFile, glibcBy string
 	var glibcNeeds, libs, progs, cmds []string
 	addOnce := func(list []string, s string) []string {
@@ -237,10 +253,11 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 	}
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
-		if line == "" {
+		if line == "" || gameDiagPortHarmless(line) {
 			continue
 		}
 		lower := strings.ToLower(line)
+		missing, broken := gameDiagPortControlLine(line, lower)
 		switch {
 		case gameDiagPortShRe.MatchString(line) && !gameDiagHasAny(lower, gameDiagPortBashOwnErrors):
 			file := gameDiagPortLineFile(line)
@@ -253,9 +270,17 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 			if sh == "" {
 				sh, shFile = line, file
 			}
-		case strings.Contains(lower, "control.txt") && gameDiagHasAny(lower, []string{"no such file", "not found", "can't open", "cannot open"}):
+		case missing:
 			if control == "" {
 				control = line
+			}
+		case broken:
+			if pmBroken == "" {
+				pmBroken = line
+			}
+		case strings.Contains(lower, "credential store") && gameDiagHasAny(lower, gameDiagPortStoreWords):
+			if store == "" {
+				store = line
 			}
 		case gameDiagPortGlibcRe.MatchString(line):
 			m := gameDiagPortGlibcRe.FindStringSubmatch(line)
@@ -366,6 +391,16 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 	case control != "" || controlNote:
 		add(gameDiagSure, "The script did not find PortMaster",
 			"Every port starts by loading PortMaster's control.txt. Open PortMaster once, or press Y on the PortMaster row of the Ports panel → Repair PortMaster.", control, nil)
+	case pmBroken != "":
+		add(gameDiagSure, "PortMaster is missing some of its own files",
+			"The script found PortMaster's control.txt, but a file it loads from PortMaster's folder is not there. Press Y on the PortMaster row of the Ports panel → Repair PortMaster.", pmBroken, nil)
+	}
+	if store != "" {
+		// The folder this launch kept the sign-in in, from its notes
+		// (greenovercast_store.go).
+		folder := goSettingsFolderFromNotes(notes)
+		found = append(found, gameDiagPortFound{issue: launchIssue{Level: int(gameDiagLikely), Title: "Its saved sign-in could not be read",
+			Where: folder, Detail: goStoreFailDetail(script, folder)}, line: store})
 	}
 	if glibc != "" {
 		hasC := false
@@ -437,6 +472,66 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		}
 	}
 	return issues, evidence, fromOutput
+}
+
+// gameDiagPortControlLine sorts a line that names control.txt. missing: the
+// script could not open control.txt itself (bash's "GreenOvercast.sh: line
+// 18: /roms/ports/PortMaster/control.txt: No such file or directory",
+// BusyBox's "source: can't open '…/control.txt'"). broken: control.txt was
+// read, and one of its own lines could not open a file in PortMaster's folder
+// (device_info.txt, funcs.txt). A line of control.txt that could not open
+// anything else — TRIMUI_EX's ex_config — is neither: PortMaster was found.
+func gameDiagPortControlLine(line, lower string) (missing, broken bool) {
+	if !strings.Contains(lower, "control.txt") || !gameDiagHasAny(lower, gameDiagPortControlMissWords) {
+		return false, false
+	}
+	if !strings.EqualFold(filepath.Base(gameDiagPortLineFile(line)), "control.txt") {
+		return true, false
+	}
+	m := gameDiagPortMissingObjRe.FindStringSubmatch(line)
+	if m == nil {
+		return false, false
+	}
+	// Shell paths, so slashes on every OS.
+	obj := strings.Trim(strings.TrimSpace(m[2]), `'"`)
+	i := strings.LastIndexByte(m[1], '/')
+	if i < 0 || !strings.HasPrefix(obj, "/") {
+		return false, false
+	}
+	return false, strings.HasPrefix(obj, m[1][:i+1])
+}
+
+// gameDiagPortHarmless reports a line that changes nothing for the game: on
+// a card without TRIMUI_EX, under a working bash, PortMaster's TrimUI
+// control.txt cannot source ex_config and goes on; and commands no port
+// needs (gameDiagPortHarmlessCmds: its splash tool, setterm). Such a line is
+// no cause, no missing file and nothing the card shows.
+func gameDiagPortHarmless(line string) bool {
+	if strings.Contains(strings.ToLower(line), "ex_config") &&
+		strings.EqualFold(filepath.Base(gameDiagPortLineFile(line)), "control.txt") {
+		return true
+	}
+	ms := gameDiagPortCmdRe.FindAllStringSubmatch(line, -1)
+	if len(ms) == 0 {
+		return false
+	}
+	for _, m := range ms {
+		if !gameDiagPortHarmlessCmds[strings.ToLower(m[1])] {
+			return false
+		}
+	}
+	return true
+}
+
+// gameDiagPortDropHarmless is lines without the gameDiagPortHarmless ones.
+func gameDiagPortDropHarmless(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if !gameDiagPortHarmless(strings.TrimSpace(line)) {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // gameDiagPortNestedScript reports whether file — the one a shell error

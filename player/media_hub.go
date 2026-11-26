@@ -2252,8 +2252,11 @@ func mediaHubFooterHints(base []FooterHint) []FooterHint {
 		key = 1
 	case mediaHub.sheet.open:
 		key = 2
-	case mediaHubPlayerOnScreen():
+	case mediaHubPlayerOnScreen() && vcQueueHasList():
 		key = 3
+	case mediaHubPlayerOnScreen():
+		// The player without a list to step through: no Prev / Next.
+		key = 10
 	case mediaHub.tab == mediaTabDownloads && mediaHub.zone == mediaZoneContent:
 		key = 4
 	case mediaHub.zone == mediaZoneSearch:
@@ -2279,14 +2282,19 @@ func mediaHubFooterHints(base []FooterHint) []FooterHint {
 		hints = []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Confirm"}, {Button: "B", Label: "Cancel"}}
 	case 2:
 		hints = []FooterHint{{Button: "D-Pad", Label: "Choose"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Close"}}
-	case 3:
+	case 3, 10:
 		hints = []FooterHint{
 			{Button: "D-Pad", Label: "Controls"}, {Button: "A", Label: "Select"}, {Button: "B", Label: "Back"},
 			// The second half of each badge is the keyboard's key in the
 			// player (HandleVideoKeyInput); inputhints.go shows the half the
 			// user can press.
 			{Button: "X / C", Label: "Captions"}, {Button: "Y / S", Label: "Settings"},
-			{Button: "L1/R1 / Shift+←→", Label: "Seek"}, {Button: "L2/R2 / P/N", Label: "Prev / Next"},
+			{Button: "L1/R1 / Shift+←→", Label: "Seek"},
+		}
+		if key == 3 {
+			// Previous / next only name a job while the video came from a
+			// list (vcQueueHasList); otherwise they only said "No list".
+			hints = append(hints, FooterHint{Button: "L2/R2 / P/N", Label: "Prev / Next"})
 		}
 	case 4:
 		hints = []FooterHint{

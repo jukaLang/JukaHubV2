@@ -8,11 +8,11 @@ that desktop; on Windows it simply runs the program.
 Open it from **Start → Windows Apps**, or from the pinned **Windows Apps** row
 in **Emulators**.
 
-> **Not verified on hardware yet.** The launch path described here (display,
-> pad-as-mouse, clean-up) was written on 2026-11-11 without a device to try it
-> on. It follows how PortMaster's own WestonPack ports start, but expect
-> surprises on the first runs, and send the logs listed in
-> [First run on a device](#first-run-on-a-device).
+> **Checked on a TrimUI Smart Pro (2026-11-26).** Wine Test and both portable
+> Notepad++ builds opened with readable text. The physical Start button opened
+> the Virtual Keyboard, and its keys wrote into Notepad++. OpenGL games and
+> other Windows programs still need their own checks; see
+> [First run on a device](#first-run-on-a-device) for their logs.
 
 ## What runs
 
@@ -145,9 +145,9 @@ The setup row says **downloading** with the bytes so far, **installed**, or
 **failed** with the reason; **A** tries again, and a download that was cut off
 resumes. A folder at those places that JukaHub did not make is never
 replaced: the install stops and says so. To remove the sample, delete
-`data/windows-apps/Notepad++`. With no on-screen keyboard inside Windows
-programs yet, Notepad++ is for its menus, dialogs and opening files with the
-pad as the mouse, not for typing.
+`data/windows-apps/Notepad++`. Notepad++ also lets you try the floating
+**Virtual Keyboard**: press **Start**, click the editor, then
+choose a letter with the pad's pointer and **A**.
 
 ## Display modes
 
@@ -178,11 +178,16 @@ to it:
   the program, lazily if something still holds it. Mounting needs root, which
   JukaHub has on the TrimUI; when the system refuses, the launch says why. An
   unpacked `westonwrap.sh` (or `JUKAHUB_WESTON`) is used without mounting.
-* **The command.** `westonwrap.sh <four mode words> NAME=VALUE… <Box64 + Wine>
-  <program>` — the program's whole environment (`WINEPREFIX`, the Box64 and
-  Wine settings, a profile's `env`) travels as `NAME=VALUE` words, because
-  WestonPack hands the program only those. Afterwards `westonwrap.sh cleanup`
-  runs, as in every WestonPack port.
+* **The command.** JukaHub gives `westonwrap.sh` only `/bin/sh` and the path
+  of a private script in `/tmp`. That script changes to the program's folder,
+  sets its environment (`WINEPREFIX`, Box64 and Wine settings, a profile's
+  `env`) and starts Box64 + Wine with every argument quoted. WestonPack 0.2.7
+  joins its app arguments into a shell command; passing Wine's default
+  `WINEDLLOVERRIDES` directly made its semicolon run the second half as a
+  command, and a folder with spaces broke its own `cd`. JukaHub starts the
+  wrapper from the private folder and reads the script's exit status, since
+  WestonPack itself exits 0 even after the app fails. The script is removed
+  after `westonwrap.sh cleanup` and the display unmount.
 * **A real bash.** `westonwrap.sh` is a bash script, and a stock TrimUI has
   only BusyBox's sh, which stops a script at the first file it cannot source
   — on a card without TRIMUI_EX, PortMaster's TrimUI `control.txt` reading
@@ -194,14 +199,36 @@ to it:
   and goes on. Where `/bin/bash` itself is not bash, the session runs in a
   mount namespace of its own where it is (`portBinBash` "off" stops that), as
   ports do. The log's `display: shell:` line names the shell.
-* **PortMaster's values.** `westonwrap.sh` reads PortMaster's `control.txt`.
-  JukaHub writes a small stand-in at
-  `data/windows-runtime/weston-env/PortMaster/control.txt` and points
-  `XDG_DATA_HOME` and `controlfolder` at it, with `DISPLAY_WIDTH` and
-  `DISPLAY_HEIGHT` (1280×720 on the Smart Pro, 1024×768 on the Brick),
-  `DEVICE_NAME`, `DEVICE_ARCH`, `ANALOG_STICKS`, an empty `ESUDO` (JukaHub runs
-  as root) and `CFW_NAME=JukaHub`, plus `CRUSTY_SHOW_CURSOR=1` (Crusty draws the
-  pointer) and `WESTON_HEADLESS_WIDTH`/`HEIGHT`.
+* **PortMaster's values.** `westonwrap.sh` reads PortMaster's `control.txt`,
+  which it looks for in `$HOME/.local/share/PortMaster` (after
+  `/opt/system/Tools/PortMaster` and `/opt/tools/PortMaster`, before
+  `/roms/ports/PortMaster`); it sets `XDG_DATA_HOME` to `$HOME/.local/share`
+  itself before it looks. JukaHub writes a small stand-in at
+  `/tmp/jukahub-weston-home/.local/share/PortMaster/control.txt` (in RAM;
+  `data/windows-runtime/weston-env/.local/share/PortMaster/` when `/tmp` cannot
+  take it) and gives `westonwrap.sh` that folder as `HOME`, with
+  `DISPLAY_WIDTH` and `DISPLAY_HEIGHT` (1280×720 on the Smart Pro, 1024×768 on
+  the Brick), `DEVICE_NAME`, `DEVICE_ARCH`, `ANALOG_STICKS`, an empty `ESUDO`
+  (JukaHub runs as root) and `CFW_NAME=JukaHub`, plus `CRUSTY_SHOW_CURSOR=1`
+  (Crusty draws the pointer) and `WESTON_HEADLESS_WIDTH`/`HEIGHT`. The program
+  itself gets the firmware's `HOME` back through its script. Until 2026-11-25
+  the stand-in was only offered through `XDG_DATA_HOME`, which `westonwrap.sh`
+  overrides, so it found the real PortMaster through the link JukaHub's port
+  launches put in the firmware's `HOME` and ran PortMaster's TrimUI
+  `control.txt` in every session and every clean-up: its `sdl2imgshow` splash
+  in the background, `setterm`, `HOME` moved to the card. The log's
+  `display: westonwrap.sh's HOME is …` line names the folder.
+* **A display that never comes up.** `westonwrap.sh` starts Weston and then
+  waits for Xwayland's socket with no time limit; a Weston that stopped while
+  it started used to leave that wait running for good, with JukaHub's last
+  picture on the screen and the pad lent as the mouse — a handheld that looked
+  frozen. JukaHub now watches the session until the program's script runs: a
+  Weston that was there and is gone ends the session within a few seconds, and
+  no start within 90 seconds ends it too. Either way the *Couldn't launch*
+  card says so and the app's log has Weston's own messages (the log's
+  `display: WestonPack started the program after …` line is the good case).
+  Anything `westonwrap.sh cleanup` leaves running in the background is stopped
+  before JukaHub takes the screen back.
 * **Input devices.** The stock firmware's udev has no `input_id` rule, and
   Weston ignores every input device udev did not tag — it then does not start
   at all. Before the first Windows program after a restart, JukaHub adds that
@@ -269,7 +296,7 @@ JukaHub's own screen:
 | X | Middle click |
 | L2 / R2 | Wheel up / down |
 | Y | Esc |
-| Start | Enter |
+| Start | Show or hide the Virtual Keyboard in ordinary Windows Apps (Windows/GDI); Enter in the built-in Wine Test, OpenGL mode and game profiles |
 | L1 | Tab |
 | R1 | Space |
 | Select + Start | Alt+F4: close the window |
@@ -279,8 +306,19 @@ JukaHub's own screen:
 
 The vibration motor pulses when the pad becomes the mouse and when it is given
 back. An alarm that rings takes the pad back for JukaHub and returns it to the
-program afterwards. There is no on-screen keyboard inside a Windows program, so
-programs that need typing are out of reach for now.
+program afterwards.
+
+Ordinary Windows Apps show a **Virtual Keyboard** tab at the lower right.
+Press **Start** to open or hide it. Click the app's text
+field above the keyboard, then click letters, digits or punctuation. **Shift**
+changes the next character, **Bksp** deletes, and **Space** and **Enter** do
+what their names say. **Hide** returns it to the small tab. The built-in Wine
+Test starts directly and keeps its own input test. The keyboard draws with
+Windows GDI, so use **Windows (GDI)** display mode when typing; OpenGL mode
+does not show GDI windows.
+
+If a launcher starts a separate program and closes, the keyboard may close
+while that program stays open. Open the program's own `.exe` directly to type.
 
 ## Logs
 
@@ -446,13 +484,17 @@ program runs directly whatever `display` says. See
 
 ## Limits
 
-* Nothing here has been checked on a TrimUI yet; see the note at the top.
-* One Windows program at a time. A launcher that starts the real program and
-  exits ends the session with it — point the app or profile at the program's
-  own `.exe`.
+* The GDI apps above were checked on a Smart Pro; OpenGL games and other
+  Windows programs still need per-app checks.
+* One Windows session at a time. If a launcher starts another program and
+  exits, JukaHub keeps the display up while that program remains in the Wine
+  prefix, for at most 12 hours. The Virtual Keyboard may close with the
+  launcher; open the program's own `.exe` directly to type.
 * The display and the pad are lent for the whole session; while a Windows
   program runs, JukaHub's own screen is parked like during any game.
-* No on-screen keyboard inside Windows programs.
+* The floating Virtual Keyboard is available for scanned Windows Apps in
+  Windows (GDI) mode. Wine game profiles still use the pad's pointer and
+  shortcut keys without a text keyboard.
 * Only regular files the scan found are started; nothing is run from an
   arbitrary path or from the network. The sample program is downloaded into
   `data/windows-apps` first and started through the same scan.

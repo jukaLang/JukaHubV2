@@ -45,6 +45,14 @@ type VideoPlayerState struct {
 	totalPausedDuration float64
 	isDragging          bool
 	dragStartX          int32
+	// awaitFrame: a decoder started (a video, a seek, a speed change) and has
+	// not shown its first frame. The position waits for it
+	// (videoAdvanceProgress) instead of running ahead on the wall clock and
+	// jumping back when the picture arrives.
+	awaitFrame bool
+	// mutedLevel is the level a mute put aside (videoToggleMute): unmuting
+	// brings it back, and so does the next video.
+	mutedLevel float64
 }
 
 // Global embedded video player state.
@@ -232,14 +240,11 @@ func clampSeekFraction(progress, duration, seconds float64) float64 {
 // seekVideoBySeconds seeks relative to the current position, clamped to the
 // clip. A media player's skip buttons are counted in seconds, not percent:
 // five percent of a ten-minute video is half a minute, which overshot badly.
+// Presses in quick succession gather (vcSeekBy, videomotion.go): the handle,
+// the clock and the flash ("+30 s") move at once, and the decoders start
+// again once, a moment after the last press, instead of on every press.
 func seekVideoBySeconds(state videoStateSnapshot, seconds float64) {
-	if state.duration <= 0 {
-		return
-	}
-	// The picture says how far it went (videochrome.go): a skip from the pad
-	// or a shoulder otherwise shows only as a jump in the track.
-	vcNoteSeek(seconds)
-	SeekVideo(clampSeekFraction(state.progress, state.duration, seconds))
+	vcSeekBy(state, seconds)
 }
 
 // playbackQueue remembers the list the current video came from, so L2/R2 can
@@ -360,8 +365,9 @@ func activateVideoControl() {
 	}
 	// A control the layout dropped (previous / next once the list is gone,
 	// the speed pill on a narrow player, everything but close while the stream
-	// opens) has no ring on screen, so A must not press it.
-	if !videoControlDrawn(videoControlFocus) {
+	// opens) has no ring on screen, so A must not press it — nor a ring whose
+	// controls have stepped aside (videomotion.go): A is play/pause then.
+	if !videoControlDrawn(videoControlFocus) || !videoChromeVisible() {
 		videoControlFocus = vcNone
 	}
 	switch videoControlFocus {
@@ -405,34 +411,31 @@ func activateVideoControl() {
 		skipPlayback(appConfig, 1)
 	default:
 		PlayActivateSound()
-		ToggleVideoPlayback()
+		vcTogglePlayback()
 	}
 	revealVideoChrome()
 }
 
-// videoChromeVisible reports whether the controls should be drawn. While not in
-// full screen they are always visible; in full screen they fade after a moment,
-// except while the settings sheet is open — the pad still drives it, so it must
-// not vanish under the user.
+// videoChromeVisible reports whether the controls are up (or on their way
+// up). While a video plays they step aside a few seconds after the last
+// input — in the scene's window as well as in full screen, so the bar no
+// longer covers the foot of every film — and they stay while it is paused,
+// opening or failed, while the settings sheet is open (the pad still drives
+// it) and while a seek gathers. They fade rather than cut (videomotion.go).
 func videoChromeVisible() bool {
-	if !videoFullscreen || videoSettingsOpen {
-		return true
-	}
-	return sdl.GetTicks64() < videoChromeUntil
+	return vcChromeShown()
 }
 
-// revealVideoChrome shows the controls in full screen for a few seconds.
+// revealVideoChrome brings the controls up for vcIdleHideMS.
 func revealVideoChrome() {
-	videoChromeUntil = sdl.GetTicks64() + 3000
+	videoChromeUntil = sdl.GetTicks64() + vcIdleHideMS
 }
 
 // toggleVideoFullscreen switches between the scene element and full screen.
 func toggleVideoFullscreen() {
 	videoFullscreen = !videoFullscreen
 	videoSettingsOpen = false
-	if videoFullscreen {
-		revealVideoChrome()
-	}
+	revealVideoChrome()
 }
 
 // toggleVideoSettings opens or closes the settings sheet (on its first page).
@@ -1279,13 +1282,15 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			}
 			clock.start(time.Now())
 			// The progress bar and the subtitles count from the first
-			// frame too, not from before ffmpeg opened the file.
+			// frame too, not from before ffmpeg opened the file; the bar
+			// held still until now (awaitFrame).
 			if playbackCurrentSession() == sess {
 				embeddedPlayer.mu.Lock()
 				if embeddedPlayer.phase == "playing" {
 					embeddedPlayer.decoderStartTime = time.Now()
 					embeddedPlayer.totalPausedDuration = 0
 				}
+				embeddedPlayer.awaitFrame = false
 				embeddedPlayer.mu.Unlock()
 			}
 		} else if !clock.wait(sess.ctx, float64(frameCount-1)/fps, isPaused) {
@@ -1318,6 +1323,10 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		embeddedPlayer.height = height
 		embeddedPlayer.lastFrameTime = time.Now()
 		embeddedPlayer.frameSeq++
+		// The main loop wakes for it and shows it at once (videoFrameWake);
+		// set under the lock, so an upload can never clear it before the
+		// frame it stands for is there.
+		videoFrameFresh.Store(true)
 		embeddedPlayer.mu.Unlock()
 
 		// Reuse the retired buffer. The renderer only touches a published
@@ -1509,6 +1518,9 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	if renderer == nil {
 		return
 	}
+	// A player on screen asks for its frame every time it draws: only then
+	// may a new frame wake the main loop early (videoFrameWake).
+	videoUploadAt.Store(sdl.GetTicks64())
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
 
@@ -1519,9 +1531,13 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		return
 	}
 	if embeddedPlayer.phase == "paused" {
+		// Nothing new is shown while paused: a frame read just before the
+		// pause must not keep waking the loop.
+		videoFrameFresh.Store(false)
 		return
 	}
 	if embeddedPlayer.frameSeq == embeddedPlayer.uploadedSeq && embeddedPlayer.current != nil {
+		videoFrameFresh.Store(false)
 		return
 	}
 
@@ -1561,6 +1577,7 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		return
 	}
 	embeddedPlayer.uploadedSeq = embeddedPlayer.frameSeq
+	videoFrameFresh.Store(false)
 }
 
 func StartEmbeddedPlayback(config *Config, url string) {
@@ -1620,7 +1637,15 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	embeddedPlayer.phase = "downloading"
 	embeddedPlayer.progress = 0
 	embeddedPlayer.progressBase = 0
-	embeddedPlayer.volume = 1.0
+	// The level the last video was left at carries over (every video used to
+	// start at full volume). A mute does not: the new video starts at the
+	// level from before it, so it is never silent by surprise.
+	if embeddedPlayer.volume <= 0.001 {
+		embeddedPlayer.volume = embeddedPlayer.mutedLevel
+		if embeddedPlayer.volume <= 0.001 {
+			embeddedPlayer.volume = 1
+		}
+	}
 	embeddedPlayer.speed = startSpeed
 	embeddedPlayer.downloadSpeed = 0
 	embeddedPlayer.lastErr = ""
@@ -1679,6 +1704,7 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.decoderStartTime = time.Now()
 		embeddedPlayer.progressBase = progressBase
 		embeddedPlayer.progress = progressBase
+		embeddedPlayer.awaitFrame = true
 		// The speed is read in the same step that leaves "downloading": a
 		// press while the stream opened (SetPlaybackSpeed) changed it.
 		speed := avSpeedFactor(embeddedPlayer.speed)
@@ -1759,6 +1785,8 @@ func stopEmbeddedPlayback(stopped *playbackSession) {
 	embeddedPlayer.frameSeq = 0
 	embeddedPlayer.uploadedSeq = 0
 	embeddedPlayer.downloadSpeed = 0
+	embeddedPlayer.awaitFrame = false
+	videoFrameFresh.Store(false)
 	// The frame texture is retired, not destroyed: Stop runs on decoder
 	// goroutines too, and a texture may only be destroyed on the render thread
 	// (mediaReleaseRetiredFrames, called from the main loop).
@@ -1940,6 +1968,8 @@ func videoRestartAt(prev *playbackSession, fraction, speed float64, keepPaused b
 	embeddedPlayer.totalPausedDuration = 0
 	embeddedPlayer.progressBase = fraction
 	embeddedPlayer.progress = fraction
+	// The bar stays at the new point until its first frame (awaitFrame).
+	embeddedPlayer.awaitFrame = true
 	embeddedPlayer.mu.Unlock()
 	if !paused {
 		// A seek resumes playback, so the device resumes too. Seeking from
@@ -1959,18 +1989,6 @@ func videoRestartAt(prev *playbackSession, fraction, speed float64, keepPaused b
 		mediaRecoverStream(appConfig, failure)
 	}()
 	return true
-}
-
-func AdjustVolume(delta float64) {
-	embeddedPlayer.mu.Lock()
-	defer embeddedPlayer.mu.Unlock()
-	embeddedPlayer.volume += delta
-	if embeddedPlayer.volume < 0 {
-		embeddedPlayer.volume = 0
-	}
-	if embeddedPlayer.volume > 1 {
-		embeddedPlayer.volume = 1
-	}
 }
 
 // SetPlaybackSpeed plays the video on screen at speed (1 = normal; clamped to
@@ -2014,12 +2032,18 @@ func SetPlaybackSpeed(speed float64) {
 		return
 	}
 	state := snapshotVideoState()
-	if videoRestartAt(sess, state.progress, speed, true) {
+	at := state.progress
+	if target, ok := vcSeekTake(); ok {
+		// A seek still gathering: the new speed starts there, in the same
+		// restart (videomotion.go).
+		at = target
+	}
+	if videoRestartAt(sess, at, speed, true) {
 		// What the new session really plays at (videoRestartAt has the
 		// last word, a Watch Party joined meanwhile).
 		now := snapshotVideoState().speed
 		videoSpeedRemember(page, now)
-		logInfo("video", "speed %sx at %.1f s", avNumArg(now), state.progress*state.duration)
+		logInfo("video", "speed %sx at %.1f s", avNumArg(now), at*state.duration)
 	}
 }
 
@@ -2131,6 +2155,9 @@ type videoStateSnapshot struct {
 	decoderStartTime    time.Time
 	pauseStartTime      time.Time
 	totalPausedDuration float64
+	awaitFrame          bool
+	frameSeq            uint64
+	frameRate           float64
 }
 
 func snapshotVideoState() videoStateSnapshot {
@@ -2150,6 +2177,9 @@ func snapshotVideoState() videoStateSnapshot {
 		decoderStartTime:    embeddedPlayer.decoderStartTime,
 		pauseStartTime:      embeddedPlayer.pauseStartTime,
 		totalPausedDuration: embeddedPlayer.totalPausedDuration,
+		awaitFrame:          embeddedPlayer.awaitFrame,
+		frameSeq:            embeddedPlayer.frameSeq,
+		frameRate:           embeddedPlayer.frameRate,
 	}
 }
 
@@ -2196,6 +2226,15 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 	if effectiveElapsed < 0 {
 		effectiveElapsed = 0
 	}
+	if state.awaitFrame && effectiveElapsed < videoAwaitFrameMaxSec {
+		// A decoder that has not shown its first frame (a start, a seek, a
+		// speed change): the position stays where it starts. Counting from
+		// the press ran the bar ahead, and the first frame then pulled it
+		// back by however long ffmpeg took to open the stream. A picture
+		// that never comes cannot freeze the clock: past a few seconds it
+		// counts on as before.
+		return
+	}
 	// Wall time is output time; at 2× each second of it is two of the video,
 	// so the bar, the clock, the subtitles and the resume point all move at
 	// the speed the decoders play at.
@@ -2231,6 +2270,9 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 // the repaint all happen in one place, and it is called from the main loop so a
 // video that finished while its scene was off screen still releases the player.
 func videoSyncPlaybackEnd() {
+	// Seeks gathered from the shoulders or a drag start here once they settle
+	// (videomotion.go): every frame, whoever draws the video.
+	vcSeekTick()
 	// A session nothing on screen draws any more (the scene was left without
 	// Back: the BACK/Menu button, the header's back pill, Home, the Start menu)
 	// gets a visible home or ends here, once per frame, whatever path left it.
@@ -2334,26 +2376,18 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		}
 	}
 
-	// Full screen with the chrome faded out: just the picture and subtitles.
-	if videoFullscreen && !videoChromeVisible() {
-		videoSettingsSheetDrawn = sdl.Rect{}
-		drawVideoFrameArea(renderer, currentTex, x, y, w, h)
-		renderVideoSubtitles(renderer, config, x, y, w, h, state.progress*state.duration, 48)
-		return
+	// The picture, then the controls at the strength their fade has reached
+	// — away while a video plays untouched, in the window as in full screen
+	// (vcChromeTick, videomotion.go): the cached scrims, then the bar and its
+	// buttons — and last what sits over both: subtitles, the paused button,
+	// the volume pill, the settings sheet.
+	vis := vcChromeTick(state, sdl.Rect{X: x, Y: y, W: w, H: h})
+	drawVideoFrameArea(renderer, currentTex, x, y, w, h)
+	if vis > 0 {
+		vcDrawScrimsFaded(renderer, config, x, y, w, h, vis)
+		vcDrawChromeFaded(renderer, config, state, x, y, w, h, vis)
 	}
-
-	cachedOverlay := vkEnsureVideoOverlayCache(renderer, config, w, h)
-	if cachedOverlay != nil {
-		// Live video frame first, then the cached static layer over it, then
-		// the state-dependent controls on top of both.
-		drawVideoFrameArea(renderer, currentTex, x, y, w, h)
-		renderer.Copy(cachedOverlay,
-			&sdl.Rect{X: 0, Y: 0, W: w, H: h},
-			&sdl.Rect{X: x, Y: y, W: w, H: h})
-		drawVideoOverlayLive(renderer, config, state, x, y, w, h)
-	} else {
-		drawVideoOverlayFallback(renderer, config, state, currentTex, x, y, w, h)
-	}
+	vcDrawOverlays(renderer, config, state, x, y, w, h, vis, currentTex != nil)
 }
 
 // renderVideoFullscreen draws the embedded player over the entire panel, hiding
@@ -2413,29 +2447,14 @@ func mediaFitRect(box sdl.Rect, vw, vh int32) sdl.Rect {
 
 // drawVideoOverlayStatic draws the part of the overlay that never changes while
 // a video is on screen: the readability scrims (vcDrawScrims, videochrome.go).
-// The overlay cache renders this once per element size and theme change;
-// everything state-dependent is drawn per frame by drawVideoOverlayLive.
-// (ox, oy) is the origin the layer is drawn at: the element position on screen,
-// or (0, 0) when rendering into the element-sized cache texture.
+// The overlay cache renders this once per element size and theme change, and
+// RenderVideoOverlay copies it at the controls' fade (vcDrawScrimsFaded);
+// everything state-dependent is drawn per frame over it (vcDrawChromeFaded,
+// vcDrawOverlays). (ox, oy) is the origin the layer is drawn at: the element
+// position on screen, or (0, 0) when rendering into the element-sized cache
+// texture.
 func drawVideoOverlayStatic(renderer *sdl.Renderer, ox, oy, w, h int32) {
 	vcDrawScrims(renderer, ox, oy, w, h)
-}
-
-// drawVideoOverlayLive draws everything that changes while a video plays — the
-// glass bar and its controls, the chip and title, the subtitle cue, the
-// settings sheet and the paused picture's play button (vcDrawChrome) — every
-// frame on top of the static layer.
-func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoStateSnapshot, x, y, w, h int32) {
-	vcDrawChrome(renderer, config, state, x, y, w, h)
-}
-
-// drawVideoOverlayFallback draws the entire overlay from scratch. Used when
-// the cached overlay texture is unavailable.
-func drawVideoOverlayFallback(renderer *sdl.Renderer, config *Config, state videoStateSnapshot,
-	currentTex *sdl.Texture, x, y, w, h int32) {
-	drawVideoFrameArea(renderer, currentTex, x, y, w, h)
-	drawVideoOverlayStatic(renderer, x, y, w, h)
-	drawVideoOverlayLive(renderer, config, state, x, y, w, h)
 }
 
 // Layout of the settings sheet. The renderer records the rows it drew and
@@ -2508,24 +2527,23 @@ func HandleVideoControlClick(mx, my int32) bool {
 		return false
 	}
 
-	// In full screen a tap anywhere brings the controls back first — except
-	// while the stream opens, when the loader's close button is always drawn.
-	if videoFullscreen && !videoChromeVisible() && state.phase != "downloading" {
-		revealVideoChrome()
-		return true
-	}
-	if videoFullscreen {
-		revealVideoChrome()
-	}
-
 	// Windowed, the player covers only the rect its controls were laid out in.
 	// Clicks on the rest of the scene stay the scene's, and clicks inside the
 	// window reach the controls — they used to be drawn there but unreachable, so
-	// the only working close was Stop in the bar, and only in full screen. This
-	// gate sits after the settings sheet below, which is modal over the panel.
+	// the only working close was Stop in the bar, and only in full screen. The
+	// settings sheet below is modal over the panel, so it skips this gate.
 	if !videoFullscreen && !videoSettingsOpen && !pointInRect(mx, my, videoControlBounds) {
 		return false
 	}
+
+	// A tap while the controls are away brings them back first, in the
+	// window as in full screen — except while the stream opens, when the
+	// loader's close button is always drawn.
+	if !videoChromeVisible() && state.phase != "downloading" {
+		revealVideoChrome()
+		return true
+	}
+	revealVideoChrome()
 
 	// The settings sheet owns every click while it is open. Its rows are hit
 	// where they were drawn (videoSettingsSheetDrawn): the windowed player
@@ -2560,7 +2578,7 @@ func HandleVideoControlClick(mx, my int32) bool {
 		toggleVideoFullscreen()
 	case vcHit(mx, my, r.overlayPlay), vcHit(mx, my, r.playPause):
 		videoControlFocus = vcPlayPause
-		ToggleVideoPlayback()
+		vcTogglePlayback()
 	case vcHit(mx, my, r.seekBack):
 		videoControlFocus = vcSeekBack
 		seekVideoBySeconds(state, -10)
@@ -2579,7 +2597,13 @@ func HandleVideoControlClick(mx, my int32) bool {
 	case vcHit(mx, my, r.volBar):
 		videoVolumeAt(mx, r.volBar)
 	case vcHit(mx, my, r.progress):
-		SeekVideo(float64(mx-r.progress.X) / float64(r.progress.W))
+		// A press on the track starts a drag: the handle follows the
+		// pointer with its time over it, and the video seeks once, on the
+		// release (vcSeekTick). Every move used to restart ffmpeg — and the
+		// drag never started at all, so seeking was tap-only.
+		isDraggingSeekBar = true
+		seekBarDragRect = r.progress
+		vcScrubBegin(float64(mx-r.progress.X) / float64(r.progress.W))
 	case vcHit(mx, my, r.speedCycle):
 		videoControlFocus = vcSpeed
 		cyclePlaybackSpeed()
@@ -2592,6 +2616,10 @@ func HandleVideoControlClick(mx, my int32) bool {
 		// and the window steps down to the floating mini player.
 		videoControlFocus = vcBack
 		videoBackOut(appConfig)
+	default:
+		// The picture itself: play / pause, and a double click full screen
+		// (videomotion.go).
+		vcPictureClick(mx, my, state)
 	}
 	return true
 }
@@ -2693,7 +2721,12 @@ func cycleVideoQuality(config *Config) {
 	setVideoQualityOverride(url, next)
 	showToast("Quality: "+videoQualityLabel(config), ToastInfo())
 	if state := snapshotVideoState(); state.phase != "idle" {
-		restartVideoAtQuality(config, url, state.progress*state.duration, previous)
+		pos := state.progress * state.duration
+		if target, ok := vcSeekTake(); ok {
+			// The new stream starts where a gathering seek was going.
+			pos = target * state.duration
+		}
+		restartVideoAtQuality(config, url, pos, previous)
 	}
 }
 
@@ -2760,8 +2793,10 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		return false
 	}
 
-	// The settings sheet is modal over the player while it is open.
+	// The settings sheet is modal over the player while it is open. The
+	// controls stay a while after it closes.
 	if videoSettingsOpen {
+		revealVideoChrome()
 		switch e.Keysym.Sym {
 		case sdl.K_UP:
 			moveVideoSettingsItem(-1)
@@ -2814,11 +2849,34 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 	case sdl.K_SPACE, sdl.K_RETURN:
 		activateVideoControl()
 	case sdl.K_LEFT:
+		// With the controls away the first press only brings them back,
+		// ringing Play (vcWakeChrome).
+		if vcWakeChrome() {
+			return true
+		}
 		moveVideoControlFocus(-1)
 		PlayNavSound()
 	case sdl.K_RIGHT:
+		if vcWakeChrome() {
+			return true
+		}
 		moveVideoControlFocus(1)
 		PlayNavSound()
+	case sdl.K_k:
+		// The keys desktop players taught everyone: K plays and pauses, J and
+		// L skip ten seconds, M mutes.
+		if e.Repeat == 0 {
+			PlayActivateSound()
+			vcTogglePlayback()
+		}
+	case sdl.K_j:
+		seekVideoBySeconds(state, -10)
+	case sdl.K_l:
+		seekVideoBySeconds(state, 10)
+	case sdl.K_m:
+		if e.Repeat == 0 {
+			videoToggleMute()
+		}
 	case sdl.K_f:
 		// The toggles act once per press, like the pad's buttons: a held
 		// key's auto-repeat flickered them.
@@ -2850,10 +2908,14 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		skipPlayback(appConfig, 1)
 	case sdl.K_p:
 		skipPlayback(appConfig, -1)
-	case sdl.K_UP:
-		AdjustVolume(0.1)
-	case sdl.K_DOWN:
-		AdjustVolume(-0.1)
+	case sdl.K_UP, sdl.K_DOWN:
+		// The volume pill answers; the rest of the controls stay as they are.
+		step := 0.1
+		if e.Keysym.Sym == sdl.K_DOWN {
+			step = -step
+		}
+		vcStepVolume(step)
+		return true
 	case sdl.K_1:
 		SetPlaybackSpeed(0.5)
 	case sdl.K_2:
@@ -2893,6 +2955,9 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	}
 
 	if videoSettingsOpen {
+		// The controls stay a while after the sheet closes, rather than
+		// fading the moment B leaves it.
+		revealVideoChrome()
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
 			moveVideoSettingsItem(-1)
@@ -2926,15 +2991,26 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 		// drawing it.
 		videoBackOut(appConfig)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		// With the controls away the first press only brings them back,
+		// ringing Play (vcWakeChrome).
+		if vcWakeChrome() {
+			return true
+		}
 		moveVideoControlFocus(-1)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		if vcWakeChrome() {
+			return true
+		}
 		moveVideoControlFocus(1)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		AdjustVolume(0.1)
+		// The volume pill answers; the rest of the controls stay as they are.
+		vcStepVolume(0.1)
+		return true
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		AdjustVolume(-0.1)
+		vcStepVolume(-0.1)
+		return true
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		// Shoulders skip through the clip; speed lives on the overlay button
 		// and the 1-4 keys, where an accidental brush cannot change it.

@@ -19,3 +19,13 @@ func wineReleaseLoop(dev string, log wineLog) {}
 func wineLabelInputDevices(log wineLog) {}
 
 func wineSettleInput(log wineLog) {}
+
+// wineGroupProc is one process of a session's process group (only read on
+// Linux, wine_display_linux.go).
+type wineGroupProc struct {
+	comm string
+	argv []string
+}
+
+// wineGroupProcs has nothing to read here: no WestonPack session runs.
+func wineGroupProcs(pgid int) []wineGroupProc { return nil }

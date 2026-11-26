@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -251,6 +252,55 @@ func wineUdevadm() string {
 		}
 	}
 	return ""
+}
+
+// wineGroupProc is one live process of a session's process group, from /proc:
+// its name and its command line.
+type wineGroupProc struct {
+	comm string
+	argv []string
+}
+
+// wineGroupProcs lists the live processes of process group pgid, for the
+// start watch (wine_watch.go); nil when there are none or /proc cannot be
+// read. A zombie (Weston killed, not yet reaped by westonwrap.sh) does not
+// count, and a process that ends while it is read is skipped.
+func wineGroupProcs(pgid int) []wineGroupProc {
+	if pgid <= 0 {
+		return nil
+	}
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	want := strconv.Itoa(pgid)
+	var out []wineGroupProc
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 {
+			continue
+		}
+		stat, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		s := string(stat)
+		open, end := strings.IndexByte(s, '('), strings.LastIndexByte(s, ')')
+		if open < 0 || end < open {
+			continue
+		}
+		// After the name: state, parent, process group, ...
+		f := strings.Fields(s[end+1:])
+		if len(f) < 3 || f[2] != want || f[0] == "Z" || f[0] == "X" {
+			continue
+		}
+		p := wineGroupProc{comm: s[open+1 : end]}
+		if raw, err := os.ReadFile("/proc/" + e.Name() + "/cmdline"); err == nil {
+			p.argv = strings.Split(strings.TrimRight(string(raw), "\x00"), "\x00")
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // wineRunTool runs one system tool with a time limit and logs a failure with

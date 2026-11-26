@@ -67,8 +67,22 @@ already waiting is replaced only after the new download has arrived.
   PortMaster's shell setup stay unchanged. Wi-Fi is needed for that first
   download. See [Private C runtime](PRIVATE_GLIBC.md) for details and limits.
 - **Video decoding.** On the tested A133 TrimUI, GreenOvercast selected its
-  `cedar-h616` decoder at startup. A live stream has not been checked yet; if
-  the picture stutters, pick 720p and 30 fps in GreenOvercast's settings.
+  `cedar-h616` decoder at startup. On a Smart Pro S (A523) its Cedar decoder
+  did not start in the first test, so it decodes the picture on the CPU. A
+  live stream has not been checked yet; if the picture stutters, pick 720p and
+  30 fps in GreenOvercast's settings.
+- **Settings and sign-in.** GreenOvercast keeps its settings, artwork cache
+  and saved sign-in in `~/.config/greenovercast` and wants that folder
+  private. A FAT32 or exFAT card cannot keep it private, so on such a card
+  JukaHub keeps the folder in the handheld's internal storage
+  (`/mnt/UDISK/jukahub/config/greenovercast`) and leaves the artwork cache on
+  the card. The first time, the folder's small files are copied there; the
+  card's copy is left as it was. When GreenOvercast says it could not read its
+  saved sign-in (*Credential store could not be read*, then it closes), the
+  launch card says so, and the next start renames that sign-in aside
+  (`tokens.bin.unreadable-<time>`, nothing is deleted) so GreenOvercast shows
+  a new sign-in code. After three such set-asides the card asks for a report
+  instead.
 - **Heavy-game boost.** While GreenOvercast runs, JukaHub gives it full CPU
   speed, every core, a full-speed GPU and memory clock where the firmware
   allows it, its own memory and priority, and switches Wi-Fi power saving off;
@@ -106,4 +120,5 @@ paid memberships get priority access and play longer at higher quality.
 | --- | --- |
 | `data/greenovercast.json` | The GreenOvercast build JukaHub installed (build, address, MD5) |
 | `data/private-glibc/` | The private glibc 2.39 runtime (Ubuntu's signed packages) used by GreenOvercast, and by PortMaster's bash, on older TrimUI firmware |
+| `/mnt/UDISK/jukahub/config/greenovercast/` | GreenOvercast's settings and saved sign-in when the card is FAT32 or exFAT (its `artwork` links back to the card) |
 | `data/ports-store/incoming/` | Where the download waits for the port installer |

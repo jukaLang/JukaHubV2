@@ -153,6 +153,14 @@ esac
 exit 0
 `
 
+// ppssppMenuArg is what a PPSSPP launcher is given in place of a game to open
+// PPSSPP's own menu (ppssppTileStart): an option every PPSSPP reads (its SDL
+// front end, else NativeInit), so the launcher hands PPSSPP no game. A launch
+// script written for games passes "$*" or "$1" on, which with no game at all is
+// one empty argument: PPSSPP takes that for the game to boot, prints "File not
+// found: " and quits with status 1 (2026-11-25, JH-FRF8NW).
+const ppssppMenuArg = "--fullscreen"
+
 // ppssppInstanceCountFile is where PPSSPP counts its running copies (a POSIX
 // shared memory object, "/PPSSPP_ID"). A copy that is killed never counts
 // itself out, and every later start reads as a second copy: its volume set to
@@ -1981,6 +1989,10 @@ func ppssppLauncherScript(s ppssppScriptSpec) string {
 	line(`	note "firmware PPSSPP: $1"`)
 	line("	shift")
 	line("	exec 4>&-")
+	// PPSSPP's own menu, started with no game (ppssppMenuArg).
+	line(`	# With no game (PPSSPP's own menu), the firmware's script gets `, ppssppMenuArg, `: its "$*"`)
+	line("	# would be one empty argument, which PPSSPP takes for a game that is not there.")
+	line(`	[ "$#" -gt 0 ] || set -- `, ppssppMenuArg)
 	line(`	if [ -n "$FALLBACK" ] && [ -f "$FALLBACK" ]; then`)
 	line(`		if [ -n "$FALLBACK_ROMS" ] && [ "$#" -gt 0 ]; then`)
 	line(`			case "$1" in`)

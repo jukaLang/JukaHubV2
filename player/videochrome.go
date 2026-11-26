@@ -109,10 +109,13 @@ type vcGeom struct {
 // zero value), for a frame that draws no bar.
 var vcNoRects = videoControlRects
 
-// vcLast is this frame's layout and where it was placed, for the live layer.
+// vcLast is this frame's layout and where it was placed, for the live layer,
+// and the height Up Next's line took above the bar (the subtitles sit over
+// it, videomotion.go).
 var vcLast struct {
-	geom vcGeom
-	x, y int32
+	geom    vcGeom
+	x, y    int32
+	upNextH int32
 }
 
 // vcFont is the chrome's type at a design size.
@@ -362,11 +365,14 @@ func vcDrawScrims(renderer *sdl.Renderer, ox, oy, w, h int32) {
 // ── Live layer ───────────────────────────────────────────────────────────
 
 // vcRing is Home's focus ring standing off a control: 3px of accent with a
-// 3px gap, the radius grown to stay concentric.
+// 3px gap, the radius grown to stay concentric. A step along the bar carries
+// the ring over to the next control (homefocusglide.go, Settings → Focus
+// bounce) instead of making it jump.
 func vcRing(renderer *sdl.Renderer, r sdl.Rect, radius int32) {
 	const gap, width = int32(3), int32(3)
 	out := gap + width
-	strokeRoundedRect(renderer, r.X-out, r.Y-out, r.W+2*out, r.H+2*out, radius+out, width, vcAccent())
+	ring := sdl.Rect{X: r.X - out, Y: r.Y - out, W: r.W + 2*out, H: r.H + 2*out}
+	strokeRoundedRectAt(renderer, ring, homeFocusGlide.apply(ring), radius+out, width, vcAccent())
 }
 
 // vcButton is one icon button: a glass well under the pointer or the ring,
@@ -513,20 +519,26 @@ func vcText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, ink
 }
 
 // vcDrawChip is the state chip: a pill with a dot, naming what the player is
-// doing. It returns the chip's bottom edge.
-func vcDrawChip(renderer *sdl.Renderer, font *ttf.Font, x, y int32, state videoStateSnapshot) int32 {
+// doing when the controls do not already say it — paused, failed, or a live
+// stream. A video that simply plays has none: a "PLAYING" pill only repeated
+// the pause button beside it. It returns the chip's bottom edge and whether it
+// drew one.
+func vcDrawChip(renderer *sdl.Renderer, font *ttf.Font, x, y int32, state videoStateSnapshot) (int32, bool) {
 	if font == nil {
-		return y
+		return y, false
 	}
-	label, ink, lit := "PLAYING", vcAccent(), true
+	var label string
+	ink, lit := vcInk2, false
 	switch {
 	case state.phase == "paused":
-		label, ink, lit = "PAUSED", vcInk2, false
+		label = "PAUSED"
 	case state.phase == "error":
-		label, ink, lit = "ERROR", DangerInk(), false
+		label, ink = "ERROR", DangerInk()
 	case state.duration <= 0:
 		// A stream with no length is live: Live TV, a radio feed, a webcam.
-		label, ink = "LIVE", vcLiveInk
+		label, ink, lit = "LIVE", vcLiveInk, true
+	default:
+		return y, false
 	}
 	tw, th := measureText(font, label)
 	const h = int32(26)
@@ -534,23 +546,34 @@ func vcDrawChip(renderer *sdl.Renderer, font *ttf.Font, x, y int32, state videoS
 	fillRoundedRect(renderer, x, y, w, h, h/2, sdl.Color{R: 6, G: 20, B: 26, A: 170})
 	strokeRoundedRect(renderer, x, y, w, h, h/2, 1, WithAlpha(ink, 110))
 	if lit {
-		homeGlowBlob(renderer, sdl.Rect{X: x + 13 - 9, Y: y + h/2 - 9, W: 18, H: 18}, ink, 150)
+		glow := uint8(150)
+		if vcMotionOn() {
+			// The live dot breathes, like a studio's on-air light.
+			beat := float64(sdl.GetTicks64()%1600) / 1600
+			glow = uint8(95 + 75*(0.5+0.5*math.Sin(beat*2*math.Pi)))
+		}
+		homeGlowBlob(renderer, sdl.Rect{X: x + 13 - 9, Y: y + h/2 - 9, W: 18, H: 18}, ink, glow)
 	}
 	fillCircle(renderer, x+13, y+h/2, 3, ink)
 	drawText(renderer, font, label, x+24, y+(h-th)/2, ink, textAlignLeft)
-	return y + h
+	return y + h, true
 }
 
 // vcDrawSeek is the seek row: the elapsed time, the track with its played
 // part and handle, and the time left. A live stream has no position, so its
-// row says LIVE over an empty track.
+// row says LIVE over an empty track. While a seek gathers or the track is
+// dragged, the handle and the clock show where it will land, with the time in
+// a bubble over the handle; a pointer resting on the track lights the stretch
+// up to it and names its time the same way (videomotion.go).
 func vcDrawSeek(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy int32, state videoStateSnapshot) {
 	t := vcOffset(g.track, ox, oy)
 	if t.W <= 0 {
 		return
 	}
 	acc := vcAccent()
-	grab := isDraggingSeekBar || vcHovered(videoControlRects.progress)
+	hoverX, hovering := vcTrackHover(t)
+	seeking := vcSeeking()
+	grab := isDraggingSeekBar || hovering || seeking
 	if grab {
 		t.Y--
 		t.H += 2
@@ -564,10 +587,14 @@ func vcDrawSeek(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy int32, 
 		}
 		return
 	}
-	progress := uiClamp01(state.progress)
+	progress := uiClamp01(vcShownProgress(state))
 	fw := int32(float64(t.W) * progress)
+	if hovering && !seeking && hoverX > t.X+fw {
+		// Where a click would land, lighter than the played part.
+		fillRoundedRect(renderer, t.X, t.Y, hoverX-t.X, t.H, t.H/2, sdl.Color{R: 255, G: 255, B: 255, A: 40})
+	}
 	if fw > 0 {
-		fillRoundedRect(renderer, t.X, t.Y, max32(fw, t.H), t.H, t.H/2, acc)
+		vcFillBar(renderer, t.X, t.Y, max32(fw, t.H), t.H, acc)
 	}
 	r := vcHandleR
 	if grab {
@@ -580,12 +607,24 @@ func vcDrawSeek(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy int32, 
 	if font == nil {
 		return
 	}
-	current := state.progress * state.duration
+	current := progress * state.duration
 	elapsed := vcFormatClock(current)
 	left := "−" + vcFormatClock(state.duration-current)
 	_, th := measureText(font, elapsed)
-	drawText(renderer, font, elapsed, ox+g.timeL, cy-th/2, vcInk2, textAlignLeft)
+	ink := vcInk2
+	if seeking {
+		ink = acc
+	}
+	drawText(renderer, font, elapsed, ox+g.timeL, cy-th/2, ink, textAlignLeft)
 	drawText(renderer, font, left, ox+g.timeR, cy-th/2, vcInk3, textAlignRight)
+	bar := vcOffset(g.bar, ox, oy)
+	switch {
+	case seeking:
+		vcDrawTimeBubble(renderer, font, hx, t.Y-10, bar.X+8, bar.X+bar.W-8, current)
+	case hovering:
+		at := float64(hoverX-t.X) / float64(t.W) * state.duration
+		vcDrawTimeBubble(renderer, font, hoverX, t.Y-10, bar.X+8, bar.X+bar.W-8, at)
+	}
 }
 
 // vcDrawVolume is the volume cluster: the speaker (a mute toggle) and, when
@@ -606,7 +645,7 @@ func vcDrawVolume(renderer *sdl.Renderer, font *ttf.Font, g vcGeom, ox, oy int32
 		fillRoundedRect(renderer, track.X, track.Y, max32(fw, track.H), track.H, 2, ink)
 	}
 	if font != nil && g.volTextX > 0 {
-		label := formatPercentSimple(volume)
+		label := vcPercent(volume)
 		_, th := measureText(font, label)
 		drawText(renderer, font, label, ox+g.volTextX, oy+g.rowY-th/2, vcInk3, textAlignLeft)
 	}
@@ -640,11 +679,13 @@ func vcDrawSpeed(renderer *sdl.Renderer, font *ttf.Font, r sdl.Rect, speed float
 	drawText(renderer, font, label, r.X+r.W/2, r.Y+(r.H-th)/2, ink, textAlignCenter)
 }
 
-// vcDrawChrome draws everything that changes while a video plays, over the
-// cached scrims: the chip, title and corner buttons, the bar with its seek row
-// and transport, the subtitle cue, Up Next, the settings sheet, and the big
-// play button and seek flash over the picture.
-func vcDrawChrome(renderer *sdl.Renderer, config *Config, state videoStateSnapshot, x, y, w, h int32) {
+// vcDrawChrome draws the controls, over the cached scrims: the chip, title and
+// corner buttons, the bar with its seek row and transport, and Up Next's line
+// above it. sink moves the bar down and the top row up by that many pixels,
+// as the controls fade (vcDrawChromeFaded). What sits over the picture apart
+// from the controls — the subtitles, the settings sheet, the paused button,
+// the seek flash, the volume pill — is vcDrawOverlays' (videomotion.go).
+func vcDrawChrome(renderer *sdl.Renderer, config *Config, state videoStateSnapshot, x, y, w, h, sink int32) {
 	if renderer == nil {
 		return
 	}
@@ -661,26 +702,30 @@ func vcDrawChrome(renderer *sdl.Renderer, config *Config, state videoStateSnapsh
 		_ = renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 	}
 
-	// Top-left: the state chip and the title.
-	chipFont := vcFont(config, 12)
-	chipBottom := vcDrawChip(renderer, chipFont, x+20, y+18, state)
+	// Top-left: the state chip (when there is something to say) and the
+	// title; top-right: minimise, then close. The row rises as it fades.
+	ty := y - sink
+	titleY := ty + 18
+	if bottom, drawn := vcDrawChip(renderer, vcFont(config, 12), x+20, ty+18, state); drawn {
+		titleY = bottom + 10
+	}
 	if titleFont := vcFont(config, 19); titleFont != nil {
 		if title, ok := currentMediaTitle(); ok && strings.TrimSpace(title) != "" {
-			maxW := vcOffset(g.minimize, x, y).X - 24 - (x + 20)
+			maxW := vcOffset(g.minimize, x, ty).X - 24 - (x + 20)
 			if g.minimize.W <= 0 {
 				maxW = w - 40
 			}
 			if maxW > 40 {
-				vcText(renderer, titleFont, ellipsize(titleFont, strings.TrimSpace(title), maxW), x+20, chipBottom+10, vcInk, textAlignLeft)
+				vcText(renderer, titleFont, ellipsize(titleFont, strings.TrimSpace(title), maxW), x+20, titleY, vcInk, textAlignLeft)
 			}
 		}
 	}
-	// Top-right: minimise, then close.
-	vcRoundButton(renderer, vcOffset(g.minimize, x, y), "chevron-down", videoControlFocus == vcBack)
-	vcRoundButton(renderer, vcOffset(g.close, x, y), "close", videoControlFocus == vcClose)
+	vcRoundButton(renderer, vcOffset(g.minimize, x, ty), "chevron-down", videoControlFocus == vcBack)
+	vcRoundButton(renderer, vcOffset(g.close, x, ty), "close", videoControlFocus == vcClose)
 
-	// The bar.
-	bar := vcOffset(g.bar, x, y)
+	// The bar, sinking as it fades.
+	by := y + sink
+	bar := vcOffset(g.bar, x, by)
 	if bar.W > 0 {
 		fillRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, vcBarRadius, vcGlass)
 		strokeRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, vcBarRadius, 1, sdl.Color{R: 255, G: 255, B: 255, A: 30})
@@ -688,69 +733,71 @@ func vcDrawChrome(renderer *sdl.Renderer, config *Config, state videoStateSnapsh
 		_ = renderer.DrawLine(bar.X+vcBarRadius, bar.Y+1, bar.X+bar.W-vcBarRadius, bar.Y+1)
 	}
 	timeFont := vcFont(config, 13)
-	vcDrawSeek(renderer, timeFont, g, x, y, state)
-	vcDrawVolume(renderer, timeFont, g, x, y, state.volume)
+	vcDrawSeek(renderer, timeFont, g, x, by, state)
+	vcDrawVolume(renderer, timeFont, g, x, by, state.volume)
 
 	// The transport. Seeking needs a length: a live stream dims its pair.
 	live := state.duration <= 0
-	vcButton(renderer, vcOffset(g.prev, x, y), "skip-back", 22, videoControlFocus == vcPrev, false, false)
-	vcButton(renderer, vcOffset(g.rewind, x, y), "rewind", 26, videoControlFocus == vcSeekBack, false, live)
-	vcPlayButton(renderer, vcOffset(g.play, x, y), !paused, videoControlFocus == vcPlayPause)
-	vcButton(renderer, vcOffset(g.forward, x, y), "fast-forward", 26, videoControlFocus == vcSeekFwd, false, live)
-	vcButton(renderer, vcOffset(g.next, x, y), "skip-forward", 22, videoControlFocus == vcNext, false, false)
+	vcButton(renderer, vcOffset(g.prev, x, by), "skip-back", 22, videoControlFocus == vcPrev, false, false)
+	vcButton(renderer, vcOffset(g.rewind, x, by), "rewind", 26, videoControlFocus == vcSeekBack, false, live)
+	vcPlayButton(renderer, vcOffset(g.play, x, by), !paused, videoControlFocus == vcPlayPause)
+	vcButton(renderer, vcOffset(g.forward, x, by), "fast-forward", 26, videoControlFocus == vcSeekFwd, false, live)
+	vcButton(renderer, vcOffset(g.next, x, by), "skip-forward", 22, videoControlFocus == vcNext, false, false)
 
 	// The tools.
-	vcDrawSpeed(renderer, vcFont(config, 14), vcOffset(g.speed, x, y), state.speed, videoControlFocus == vcSpeed)
-	if d := vcOffset(g.divider, x, y); d.W > 0 {
+	vcDrawSpeed(renderer, vcFont(config, 14), vcOffset(g.speed, x, by), state.speed, videoControlFocus == vcSpeed)
+	if d := vcOffset(g.divider, x, by); d.W > 0 {
 		setDrawColor(renderer, sdl.Color{R: 255, G: 255, B: 255, A: 36})
 		_ = renderer.FillRect(&d)
 	}
-	vcButton(renderer, vcOffset(g.subs, x, y), "subtitles", 24, videoControlFocus == vcSubs, subtitlesEnabled(), false)
-	vcButton(renderer, vcOffset(g.settings, x, y), "settings", 24, videoControlFocus == vcSettings, videoSettingsOpen, false)
+	vcButton(renderer, vcOffset(g.subs, x, by), "subtitles", 24, videoControlFocus == vcSubs, subtitlesEnabled(), false)
+	if subtitleFetchingNow() {
+		// Captions on their way: the CC button pulses (videocaptions.go).
+		capDrawFetchDot(renderer, vcOffset(g.subs, x, by))
+	}
+	vcButton(renderer, vcOffset(g.settings, x, by), "settings", 24, videoControlFocus == vcSettings, videoSettingsOpen, false)
 	fsIcon := "fullscreen"
 	if videoFullscreen {
 		fsIcon = "fullscreen-exit"
 	}
-	vcButton(renderer, vcOffset(g.fullscreen, x, y), fsIcon, 24, videoControlFocus == vcFullscreen, videoFullscreen, false)
+	vcButton(renderer, vcOffset(g.fullscreen, x, by), fsIcon, 24, videoControlFocus == vcFullscreen, videoFullscreen, false)
 
-	// The subtitle cue and Up Next sit above the bar, Up Next nearest to it.
-	upNextH := int32(0)
-	if line := upNextSummary(); line != "" && timeFont != nil && bar.W > 0 {
-		_, lh := measureText(timeFont, line)
-		upNextH = lh + 10
-		vcText(renderer, timeFont, ellipsize(timeFont, line, bar.W-40), x+w/2, bar.Y-8-lh, vcInk2, textAlignCenter)
+	// Up Next's line sits just above the bar (the subtitles go over it). In
+	// the last seconds its card stands in for it (vcDrawUpNextCard).
+	vcLast.upNextH = 0
+	if _, card := vcUpNextCountdown(state); !card && timeFont != nil && bar.W > 0 {
+		if line := upNextSummary(); line != "" {
+			_, lh := measureText(timeFont, line)
+			vcLast.upNextH = lh + 10
+			vcText(renderer, timeFont, ellipsize(timeFont, line, bar.W-40), x+w/2, bar.Y-8-lh, vcInk2, textAlignCenter)
+		}
 	}
-	subInset := int32(28)
-	if bar.W > 0 {
-		subInset = (y + h) - bar.Y + 14 + upNextH
-	}
-	renderVideoSubtitles(renderer, config, x, y, w, h, state.progress*state.duration, subInset)
-
-	if videoSettingsOpen {
-		vcDrawSettingsSheet(renderer, config, g, x, y)
-	} else {
-		videoSettingsSheetDrawn = sdl.Rect{}
-	}
-
-	if paused {
-		vcDrawBigPlay(renderer, vcOffset(g.bigPlay, x, y))
-	}
-	vcDrawSeekFlash(renderer, vcFont(config, 14), g, x, y)
 }
 
 // vcDrawBigPlay is the paused picture's play button: a large glass disc with
-// the accent triangle, the whole picture's call to action.
-func vcDrawBigPlay(renderer *sdl.Renderer, r sdl.Rect) {
-	if r.W <= 0 {
+// the accent triangle, the whole picture's call to action. scale grows or
+// shrinks the disc about its centre and alpha fades it, for its pop as a pause
+// lands (vcDrawPausedButton). The glyph keeps its size, so the icon atlas
+// bakes it once, and a disc smaller than at rest is scaled up from one cached
+// texture at the smallest size rather than rasterised at every step.
+func vcDrawBigPlay(renderer *sdl.Renderer, r sdl.Rect, scale, alpha float64) {
+	if r.W <= 0 || alpha <= 0 {
 		return
 	}
+	alpha = uiClamp01(alpha)
 	acc := vcAccent()
 	cx, cy, rad := r.X+r.W/2, r.Y+r.H/2, r.W/2
-	homeGlowBlob(renderer, sdl.Rect{X: cx - rad*2, Y: cy - rad*2, W: rad * 4, H: rad * 4}, acc, 70)
-	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, rad, sdl.Color{R: 8, G: 14, B: 22, A: 170})
-	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, rad, 2, WithAlpha(acc, 190))
+	base, dst := r, r
+	if scale != 1 {
+		base, dst = vcScaleRect(r, 0.78), vcScaleRect(r, math.Max(scale, 0.78))
+	}
+	homeGlowBlob(renderer, sdl.Rect{X: cx - rad*2, Y: cy - rad*2, W: rad * 4, H: rad * 4}, acc, uint8(70*alpha))
+	fillRoundedRectAt(renderer, base, dst, base.W/2, sdl.Color{R: 8, G: 14, B: 22, A: uint8(170 * alpha)})
+	strokeRoundedRectAt(renderer, base, dst, base.W/2, 2, WithAlpha(acc, uint8(190*alpha)))
 	g := r.W * 2 / 5
-	drawHomeGlyphTinted(renderer, "play", sdl.Rect{X: cx - g/2 + r.W/30, Y: cy - g/2, W: g, H: g}, acc)
+	ink := acc
+	ink.A = uint8(255 * alpha)
+	drawHomeGlyphTinted(renderer, "play", sdl.Rect{X: cx - g/2 + r.W/30, Y: cy - g/2, W: g, H: g}, ink)
 }
 
 // ── Seek flash ───────────────────────────────────────────────────────────
@@ -763,8 +810,14 @@ var vcSeekFlash struct {
 	at      uint64
 }
 
-// vcNoteSeek records a relative seek for the flash.
+// vcNoteSeek records a relative seek for the flash: the total of the presses
+// gathered so far (vcSeekBy), so three presses of R1 read "+30 s". Presses
+// that cancel out leave no flash.
 func vcNoteSeek(seconds float64) {
+	if math.Abs(seconds) < 0.5 {
+		vcSeekFlash.at = 0
+		return
+	}
 	vcSeekFlash.dir = 1
 	if seconds < 0 {
 		vcSeekFlash.dir = -1
@@ -877,15 +930,18 @@ func vcDrawSettingsSheet(renderer *sdl.Renderer, config *Config, g vcGeom, ox, o
 	if font == nil {
 		return
 	}
+	// The selection's highlight glides to the row it moved to; the row's text
+	// lights up at once (vcSheetSelectionY, videomotion.go).
+	selTop := sheet.Y + videoSettingsTopPad + int32(videoSettingsItem)*rowH
+	selY := vcSheetSelectionY(selTop, videoSettingsPage)
+	fillRoundedRect(renderer, sheet.X+10, selY, sheet.W-20, rowH-6, 10, WithAlpha(acc, 46))
+	strokeRoundedRect(renderer, sheet.X+10, selY, sheet.W-20, rowH-6, 10, 1, WithAlpha(acc, 120))
 	for i, id := range ids {
 		text := videoSheetRowLabel(id, ctx)
 		rowY := sheet.Y + videoSettingsTopPad + int32(i)*rowH
 		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: rowH - 6}
 		selected := i == videoSettingsItem
-		if selected {
-			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, WithAlpha(acc, 46))
-			strokeRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, 1, WithAlpha(acc, 120))
-		} else if vcHit(mouseX, mouseY, row) {
+		if !selected && vcHit(mouseX, mouseY, row) {
 			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, sdl.Color{R: 255, G: 255, B: 255, A: 20})
 		}
 		name, value := text, ""
@@ -997,9 +1053,6 @@ func vcSpinner(renderer *sdl.Renderer, cx, cy, radius int32) {
 
 // ── Volume ───────────────────────────────────────────────────────────────
 
-// vcMutedVolume is the level a mute put aside, restored by unmuting.
-var vcMutedVolume float64
-
 // videoSetVolume sets the player's volume, 0..1.
 func videoSetVolume(v float64) {
 	if math.IsNaN(v) {
@@ -1010,21 +1063,30 @@ func videoSetVolume(v float64) {
 	embeddedPlayer.mu.Unlock()
 }
 
-// videoToggleMute silences the player, or brings back the level it had.
+// videoToggleMute silences the player, or brings back the level it had
+// (embeddedPlayer.mutedLevel, which the next video starts at too). The volume
+// pill shows the change on the picture (videomotion.go).
 func videoToggleMute() {
-	volume := snapshotVideoState().volume
-	if volume > 0.001 {
-		vcMutedVolume = volume
-		videoSetVolume(0)
+	embeddedPlayer.mu.Lock()
+	before := embeddedPlayer.volume
+	if before > 0.001 {
+		embeddedPlayer.mutedLevel = before
+		embeddedPlayer.volume = 0
+	} else {
+		restore := embeddedPlayer.mutedLevel
+		if restore <= 0.001 {
+			restore = 0.5
+		}
+		embeddedPlayer.volume = restore
+	}
+	after := embeddedPlayer.volume
+	embeddedPlayer.mu.Unlock()
+	vcShowVolume(before)
+	if after <= 0.001 {
 		showToast("Muted", ToastInfo())
 		return
 	}
-	restore := vcMutedVolume
-	if restore <= 0.001 {
-		restore = 0.5
-	}
-	videoSetVolume(restore)
-	showToast("Volume "+formatPercentSimple(restore), ToastInfo())
+	showToast("Volume "+vcPercent(after), ToastInfo())
 }
 
 // videoVolumeAt sets the volume from a tap on the level bar, in 5% steps.
@@ -1032,6 +1094,8 @@ func videoVolumeAt(mx int32, bar sdl.Rect) {
 	if bar.W <= 0 {
 		return
 	}
+	before := snapshotVideoState().volume
 	v := float64(mx-bar.X) / float64(bar.W)
 	videoSetVolume(math.Round(uiClamp01(v)*20) / 20)
+	vcShowVolume(before)
 }

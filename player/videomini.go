@@ -28,7 +28,9 @@ const (
 	// The picture stops short of the panel's bottom edge so the visible
 	// progress bar sits inside the rounded corner instead of squaring it off.
 	videoMiniProgressH = int32(6)
-	videoMiniHintH     = int32(78)
+	// Two hint lines (videoMiniHints): four of them used to take a quarter
+	// of the window.
+	videoMiniHintH = int32(42)
 )
 
 // videoMiniHitRects is the layout of the last drawn window. A click falls back
@@ -333,6 +335,11 @@ func computeVideoMiniLayout(r sdl.Rect) {
 // renderVideoMini draws the floating window: the title strip with its close
 // button, the live picture, a progress line and a play badge while paused.
 func renderVideoMini(renderer *sdl.Renderer, config *Config) {
+	// A web page drew the video in its card this frame (brw_inline_video.go):
+	// no second copy in the corner.
+	if brwInlineTakeFrame() {
+		return
+	}
 	if renderer == nil || !videoMiniVisible() {
 		return
 	}
@@ -362,13 +369,14 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 		renderVideoSubtitles(rr, config, frame.X, frame.Y, frame.W, frame.H, state.progress*state.duration, 12)
 	})
 
+	// The progress line in the player's accent, round-ended like its seek
+	// bar (vcFillBar, videomotion.go).
 	barY := frame.Y + frame.H + 1
 	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 120)
-	renderer.FillRect(&sdl.Rect{X: frame.X + 2, Y: barY, W: max32(0, frame.W-4), H: 3})
+	renderer.FillRect(&sdl.Rect{X: frame.X + 4, Y: barY, W: max32(0, frame.W-8), H: 3})
 	if state.progress > 0 {
-		fw := int32(float64(frame.W-4) * state.progress)
-		renderer.SetDrawColor(ColorInfo.R, ColorInfo.G, ColorInfo.B, 255)
-		renderer.FillRect(&sdl.Rect{X: frame.X + 2, Y: barY, W: fw, H: 3})
+		fw := int32(float64(frame.W-8) * uiClamp01(state.progress))
+		vcFillBar(renderer, frame.X+4, barY, max32(fw, 3), 3, vcAccent())
 	}
 
 	if state.phase == "paused" {
@@ -420,12 +428,13 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, RadiusMD, 1, WithAlpha(ColorBorder, 220))
 }
 
+// videoMiniHints is the window's two lines of help: how to close it, and how
+// to bring the video back — a tap on it, or A on the top bar's Now Playing
+// chip (where X closes it too).
 func videoMiniHints() []string {
 	return []string{
-		"Tap video: open",
-		hintLine(FooterHint{"B", "Close"}),
-		"Focus Now Playing",
-		hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Close"}),
+		hintLine(FooterHint{"B", "Close"}) + " · Tap: open",
+		"Now Playing: " + hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Close"}),
 	}
 }
 
@@ -473,6 +482,10 @@ func closeFocusedMiniVideo() bool { return closeMiniVideo() }
 // back to the player, the close button ends the session. It reports whether the
 // tap belonged to the window so the scene underneath never sees it.
 func handleVideoMiniClick(mx, my int32, config *Config) bool {
+	if brwInlineShown() {
+		// The video is in its card on the page, not in the corner.
+		return brwInlineClick(mx, my, config)
+	}
 	if !videoMiniVisible() {
 		return false
 	}

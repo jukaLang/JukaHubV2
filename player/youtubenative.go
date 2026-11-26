@@ -400,6 +400,9 @@ func youtubeNativeStream(ctx context.Context, videoID string, maxHeight int) (st
 			}
 			continue
 		}
+		// The answer lists the video's captions too: kept for the caption
+		// fetch, which then needs no player call of its own (videocaptions.go).
+		ytCaptionStashPut(videoID, player)
 		direct, botCheck, ok := ytStreamFromPlayer(player, client.name, videoID, maxHeight)
 		if botCheck {
 			// The bot check is about this network and this client, not this

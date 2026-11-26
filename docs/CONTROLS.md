@@ -258,7 +258,7 @@ no footer names may have no key.
 | Favorites | Left / Right tabs · X remove · Y undo | Left / Right · X, D or Del · Y or U |
 | Live TV | X search · Y favourite | X · Y or F |
 | Browser | Select menu (link mode, site info, …) · L1 / R1 scroll · L2 / R2 zoom · X links · Y search | M or the Menu key · PgUp / PgDn · - / + · X or L · Y or **/** · Tab; F find, N / P next / previous match, I site info, Backspace or Alt+← / Alt+→ back / forward, F5 reload |
-| Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → · P / N (or Shift+↑ / ↓); F full screen, Q end playback, 1–4 speed |
+| Video player | X captions · Y settings · L1 / R1 seek · L2 / R2 previous / next | X or C · Y or S · Shift+← / → or J / L · P / N (or Shift+↑ / ↓); K play / pause, M mute, F full screen, Q end playback, 1–4 speed |
 | Chat | L1 / R1 tabs (Voice after Saved) · Start send · X attach files · Y tab action | Tab · Ctrl+Enter · X · Y; Enter types inline, 1–3 pick a tab, 4 Voice, R renames you, Del drops a waiting file |
 | On-screen keyboard | A type · Start send / submit · B close · X delete · Y submit (Ask AI in chat) · L1 / R1 shift / layer · R2 voice typing | type on the keyboard · Esc · Backspace · Enter · Shift; Ctrl+C / Ctrl+V · F4 voice typing |
 | Settings | L1 / R1 sections · Y search settings · A on "More settings (N)" unfolds the rest · D-pad in an option sheet | Tab / Shift+Tab or PgUp / PgDn · Ctrl+F or type a letter on the rail to search · arrows (Left / Right page the sheet) |
@@ -1367,8 +1367,22 @@ The control bar is a focus ring: **Left / Right** walk it from the volume
 (mute) button through rewind, play/pause and fast-forward — with previous and
 next around them when the video came from a list — to speed, captions, settings
 and full screen, and on to the two corner buttons; **A** presses the highlighted
-button. With a mouse, the level bar beside the speaker sets the volume and the
-seek row takes a click anywhere along the track.
+button, and the ring glides from button to button (Settings → Focus bounce).
+With a mouse, the level bar beside the speaker sets the volume, and the seek
+row takes a click anywhere along the track or a drag: the handle follows the
+pointer with its time over it, and the video jumps there when you let go. A
+pointer resting on the track shows the time under it. A click on the picture
+plays or pauses, a double click goes full screen, and the wheel over the
+picture is the volume.
+
+While a video plays, the controls step aside three seconds after the last
+press, in the Media screen's window as well as in full screen, so the picture
+is clear; they fade back on any press, when it pauses, during a seek, and when
+the pointer moves over the picture. A first **Left** or **Right** while they
+are away only brings them back, with the ring on play/pause, so the ring never
+moves where you cannot see it; **A** plays and pauses straight away. With
+Reduce motion on they fade without sliding, and Battery Saver shows and hides
+them at once.
 
 The corners are two separate actions: **Close** (the X) ends playback and leaves
 the video, and the downward chevron beside it steps the player down a size without
@@ -1378,19 +1392,28 @@ a tap anywhere else on the scene still belongs to the scene.
 
 | Button | Action |
 |--------|--------|
-| Left / Right | Move the selection along the control bar |
-| A | Press the selected control (play/pause when nothing is selected) |
-| Up / Down | Volume |
+| Left / Right | Move the selection along the control bar (the first press while the controls are away only shows them) |
+| A | Press the selected control (play/pause when nothing is selected, or while the controls are away) |
+| Up / Down | Volume, shown by a level pill at the side of the picture; the rest of the controls stay as they are |
 | X (keyboard **X** or **C**) | Subtitles on / off (in your subtitle language; CC stays on for the next video) |
 | Y (keyboard **Y** or **S**) | Video settings sheet |
-| L1 / R1 | Skip −10 / +10 seconds |
+| L1 / R1 (keyboard **J** / **L**) | Skip −10 / +10 seconds; quick presses add up (**+30 s**) and the video jumps once you stop |
+| K / M (keyboard) | Play / pause · mute |
 | L2 / R2 | Previous / next video in the list that launched this one (search results or the Shorts feed) |
 | B | Step back from the settings sheet's Save offline page, close the sheet, then step down: leave full screen, float the video and go back; press again to close the floating video |
 
-The rewind and fast-forward buttons skip 10 seconds per press. With the settings
-sheet open, **Up / Down** move between its rows and **A** applies the row, so
-subtitles, full screen, speed and quality are reachable without a touch screen.
-A tap on a control also moves the ring there, so touch and D-pad never disagree.
+The rewind and fast-forward buttons skip 10 seconds per press. Presses in quick
+succession add up: the handle and the clock move to the new place at once, the
+time shows in a bubble over the handle and "+30 s" on the picture, and the
+video starts again there once, a moment after the last press — not once per
+press. While it gets there, a spinner sits on the last picture. With the
+settings sheet open, **Up / Down** move between its rows and **A** applies the
+row, so subtitles, full screen, speed and quality are reachable without a touch
+screen. A tap on a control also moves the ring there, so touch and D-pad never
+disagree.
+
+The volume a video is left at carries on to the next one; a muted video's next
+one starts at the level from before the mute.
 
 **Audio track and subtitles** — for a video on the card the sheet has an
 **Audio track** row: **A** steps to the file's next audio stream ("2/3 · English ·
@@ -1460,10 +1483,11 @@ moving focus. Tap the window to return to the player; its **×** also ends the
 session, as do the player's Stop button and `q`. The dock and the screensaver
 cover the window because they take the whole panel.
 
-Progress, resume position and subtitles are handled automatically; the control
-bar hides itself while playback continues and reappears on any input. When a
-video reaches its end the player closes and returns to the scene — the frozen
-last frame no longer keeps the grid behind it locked.
+Progress, resume position and subtitles are handled automatically; the
+subtitles ride up and down with the control bar. In the last ten seconds of a
+video with something in Up Next, a card names what comes next and counts down.
+When a video reaches its end the player closes and returns to the scene — the
+frozen last frame no longer keeps the grid behind it locked.
 
 ## Chat
 
@@ -2196,15 +2220,19 @@ saved chapter. On **Radio**, the first row opens the Radio directory (Top,
 Country, Genre and Search tabs: **L1/R1** or **Left/Right** switch tabs, **A**
 plays, **X** saves the station or takes it out, **Y** reloads or searches, **B**
 steps back) and the rows under it are your saved stations — see
-[MUSIC_PLAYER.md](MUSIC_PLAYER.md#radio).
+[MUSIC_PLAYER.md](MUSIC_PLAYER.md#radio). While something plays, a **Now
+playing** row sits on top of the Radio shelf and of every directory tab:
+**A** stops it (or tunes in again) and **X** opens the player; **A** on the
+playing station's own row does the same. A station opens the player with the
+pad on Play / Stop.
 
 | Button | Action |
 |--------|--------|
-| Up / Down | Move through the playlist |
-| A | Play the highlighted track |
-| X | Play / pause |
+| Up / Down | Move through the playlist; **Up** past the first track steps onto the media controls (previous, play, next, stop, shuffle, repeat, favourite, volume), **Down** goes back to the list |
+| A | Play the highlighted track, or press the media control the ring is on |
+| X | Play / pause; on an internet radio station Play / stop (a station cannot pause) |
 | Y | Favorite the playing track |
-| Left / Right | Seek −10 s / +10 s |
+| Left / Right | Seek −10 s / +10 s; on the media controls, choose one (a radio station cannot be seeked) |
 | L1 / R1 | Previous / next track |
 | Start | The player's options: the Audio panel with **Now playing** on top — full-screen visualizer, lyrics (a `.lrc` file beside the song, or the lyrics stored inside it), sleep timer (off, 15, 30, 60 min), shuffle, repeat, speed, auto-exit and song search. Start or B closes it; in the full-screen visualizer Start puts the visualizer away |
 | Guide (logo button, where the pad reports it) | Toggle shuffle |
@@ -3193,6 +3221,7 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | F12 | Screenshot |
 | PgUp / PgDn | Page up / down (previous / next results page in Media) |
 | Shift+Left / Shift+Right | Skip −10 / +10 s in the video player |
+| J / K / L, M | Skip −10 s / play or pause / skip +10 s, and mute, in the video player |
 | N / P | Next / previous video in the player's list (also Shift+Down / Shift+Up) |
 
 Mouse and touch work as well: clicking or tapping activates a card or tile, and

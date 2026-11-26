@@ -66,10 +66,13 @@ import (
 
 const (
 	// The parts of the details are bounded one by one, so the whole stays
-	// under bugrepLaunchMax: the launch script's first lines, what it printed,
-	// RetroArch's log, another log the failure names, and JukaHub's own log.
+	// under bugrepLaunchMax: the launch script's first lines (and a long
+	// one's last, within half as much again), what it printed, RetroArch's
+	// log, another log the failure names, and JukaHub's own log.
 	launchReportScriptLines = 60
 	launchReportScriptMax   = 3 << 10
+	launchReportScriptTail  = 30
+	launchReportScriptRead  = 64 << 10
 	launchReportOutputLines = 60
 	launchReportOutputMax   = 6 << 10
 	launchReportRALines     = 80
@@ -474,7 +477,7 @@ func launchReportFiles(b *strings.Builder, rec *launchRecord, line func(key, val
 	}
 
 	if script := launchReportScript(rec.Launcher); script != "" {
-		section("Launch script " + filepath.Base(rec.Launcher) + " (first lines)")
+		section("Launch script " + filepath.Base(rec.Launcher))
 		b.WriteString(script)
 	}
 	launchReportLog(b, section, "What the launcher printed", rec.OutPath, launchReportOutputLines, launchReportOutputMax)
@@ -787,8 +790,10 @@ func launchReportFolder(dir string) string {
 	return dir + ": " + strings.Join(names, ", ") + more
 }
 
-// launchReportScript is the first lines of a launch script, numbered, or ""
-// when the launcher is not a script (a program, a core).
+// launchReportScript is a launch script's first lines, numbered, and a long
+// one's last lines too — where a port script starts its program, which the
+// first lines of GreenOvercast's never reached (JH-AT4EEE) — or "" when the
+// launcher is not a script (a program, a core).
 func launchReportScript(launcher string) string {
 	if !launcherShellScript(launcher) && !strings.EqualFold(filepath.Ext(launcher), ".bat") &&
 		!strings.EqualFold(filepath.Ext(launcher), ".cmd") {
@@ -799,17 +804,36 @@ func launchReportScript(launcher string) string {
 		return ""
 	}
 	defer f.Close()
-	data, _ := io.ReadAll(io.LimitReader(f, launchReportScriptMax))
+	data, _ := io.ReadAll(io.LimitReader(f, launchReportScriptRead))
 	if len(data) == 0 || bytes.HasPrefix(data, []byte("\x7fELF")) || bytes.IndexByte(data, 0) >= 0 {
 		return ""
 	}
-	lines := strings.Split(strings.ReplaceAll(string(data), "\r", ""), "\n")
+	head := data[:min(len(data), launchReportScriptMax)]
+	lines := strings.Split(strings.ReplaceAll(string(head), "\r", ""), "\n")
 	if len(lines) > launchReportScriptLines {
 		lines = lines[:launchReportScriptLines]
 	}
 	var b strings.Builder
 	for i, text := range lines {
 		b.WriteString(fmt.Sprintf("%3d| %s\n", i+1, text))
+	}
+	if len(data) >= launchReportScriptRead {
+		return b.String() // too long to number its last lines
+	}
+	all := strings.Split(strings.TrimRight(strings.ReplaceAll(string(data), "\r", ""), "\n"), "\n")
+	from, size := len(all), 0
+	for from > len(lines) && len(all)-from < launchReportScriptTail && size+len(all[from-1])+1 <= launchReportScriptMax/2 {
+		from--
+		size += len(all[from]) + 1
+	}
+	if from >= len(all) {
+		return b.String()
+	}
+	if from > len(lines) {
+		b.WriteString(fmt.Sprintf("   | … lines %d–%d left out …\n", len(lines)+1, from))
+	}
+	for i := from; i < len(all); i++ {
+		b.WriteString(fmt.Sprintf("%3d| %s\n", i+1, all[i]))
 	}
 	return b.String()
 }

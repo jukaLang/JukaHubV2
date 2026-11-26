@@ -2048,7 +2048,9 @@ func main() {
 					if math.IsNaN(fraction) || math.IsInf(fraction, 0) {
 						fraction = 0
 					}
-					SeekVideo(fraction)
+					// Only the handle and its time follow the pointer; the
+					// video seeks once, on the release (videomotion.go).
+					vcScrubMove(fraction)
 				}
 				// Dragging a zoomed picture pans it (imageviewer.go); dragging a
 				// PDF page pans the page.
@@ -2132,6 +2134,11 @@ func main() {
 					continue
 				}
 				if volumeWheel(config, mouseX, mouseY, e.Y) {
+					continue
+				}
+				// Over a video, the wheel is the player's volume
+				// (videomotion.go).
+				if videoPlayerWheel(e.Y) {
 					continue
 				}
 				if brightnessWheel(config, mouseX, mouseY, e.Y) {
@@ -2717,7 +2724,7 @@ func main() {
 							isDraggingSeekBar = true
 							seekBarDragRect = videoControlRects.progress
 							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
-							SeekVideo(fraction)
+							vcScrubBegin(fraction)
 						}
 						// Image viewer: its chips (close, zoom, fit, lock screen) act;
 						// any other press starts a drag that pans a zoomed picture, and

@@ -243,7 +243,7 @@ func openGameLibraryHandoff(game libraryGame) {
 		cpPanel.cursor = clampPanelIndex(idx, compatRowCount())
 	default:
 		openEmulatorPanel()
-		emuPanel.cursor = clampPanelIndex(idx, len(entries))
+		emuPanelSelect(entries, clampPanelIndex(idx, len(entries)))
 	}
 	ShowToast("Opening "+game.Title+" in "+kind.String(), ToastKindInfo)
 }

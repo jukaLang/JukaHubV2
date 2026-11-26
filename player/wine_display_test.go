@@ -1,9 +1,69 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// WestonPack 0.2.7 evals its app words. A direct WINEDLLOVERRIDES value with
+// a semicolon made it run winemenubuilder.exe=d as a command and return home.
+// The private script must carry that value, the app's spaced folder and every
+// argument literally, and preserve the app's exit status after Weston exits 0.
+func TestWestonLaunchScriptKeepsAppWordsAndStatus(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires a POSIX shell")
+	}
+	root := t.TempDir()
+	appDir := filepath.Join(root, "Wine Test's app")
+	if err := os.Mkdir(appDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(root, "received")
+	program := filepath.Join(root, "capture's app")
+	programText := "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$WINEDLLOVERRIDES\" \"$DISPLAY\" \"$LD_LIBRARY_PATH\" \"$1\" \"$2\" > " + shellQuote(marker) + "\nexit 37\n"
+	if err := os.WriteFile(program, []byte(programText), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	status := filepath.Join(root, "status")
+	nativeLibDir := filepath.Join(root, "native lib's")
+	command, err := westonLaunchScriptText(appDir, program, []string{"one;two", "a word's value"},
+		map[string]string{"WINEDLLOVERRIDES": "mscoree,mshtml=;winemenubuilder.exe=d"}, status, nativeLibDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(root, "launch.sh")
+	if err := os.WriteFile(script, []byte(command), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := exec.Command("/bin/sh", script)
+	run.Env = append(os.Environ(), "DISPLAY=:42", "LD_LIBRARY_PATH=/weston/lib")
+	if err := run.Run(); err == nil || !strings.Contains(err.Error(), "37") {
+		t.Fatalf("launch exit = %v, want status 37", err)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{appDir, "mscoree,mshtml=;winemenubuilder.exe=d", ":42", nativeLibDir + ":/weston/lib", "one;two", "a word's value", ""}, "\n")
+	if string(got) != want {
+		t.Errorf("program received %q, want %q", got, want)
+	}
+	d := wineDisplayPlan{appStatus: status}
+	if err := d.appExit(nil); err == nil || !strings.Contains(err.Error(), "37") {
+		t.Errorf("Weston exit 0 hid app status 37: %v", err)
+	}
+}
+
+func TestWestonMissingAppStatusIsFailure(t *testing.T) {
+	d := wineDisplayPlan{appStatus: filepath.Join(t.TempDir(), "never-written")}
+	if err := d.appExit(nil); err == nil || !strings.Contains(err.Error(), "before") {
+		t.Errorf("Weston exit 0 hid an app that never ran: %v", err)
+	}
+}
 
 func TestWinebootUsesFirmwareLibraries(t *testing.T) {
 	t.Setenv("JUKAHUB_ORIG_ENV", "HOME PATH LD_LIBRARY_PATH")

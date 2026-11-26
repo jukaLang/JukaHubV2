@@ -27,6 +27,16 @@ package main
 //
 // JUKAHUB_WEB_DECODE=0 keeps a handheld on the old render-thread path;
 // JUKAHUB_WEB_DECODE=N (1-8) sets the thread count.
+//
+// It also says how the page reaches the screen and how soon: how many page
+// tiles the GPU keeps (webpage_tiles.go; 12 on the Smart Pro S, 10 on the
+// A133P handhelds, none on a PC, where the page is painted directly as
+// before), how often a page may be laid out again while its pictures and web
+// fonts arrive (every 250 / 400 ms on the handhelds, at once on a PC), and
+// how long a page's scripts run before the page as its server sent it is drawn
+// meanwhile (0.9 / 0.8 s on the handhelds, 1.5 s on a PC).
+// JUKAHUB_WEB_TILES=0 paints the page directly on a handheld too;
+// JUKAHUB_WEB_TILES=N (1-64) keeps N tiles, also on a PC.
 
 import (
 	"os"
@@ -34,6 +44,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // webTune is the reader's work budget on this machine.
@@ -61,25 +72,36 @@ type webTune struct {
 	MaxSide int32
 	// FetchWorkers is how many of a page's images download at once.
 	FetchWorkers int
+	// Tiles is how many page tiles the GPU keeps (webpage_tiles.go): the page
+	// is painted into them once and copied to the screen each frame. 0 paints
+	// the page directly every frame.
+	Tiles int
+	// RelayoutEvery is the least time between two layouts of a page that its
+	// arriving pictures and web fonts ask for (layoutFor); 0 lays it out again
+	// on the next frame.
+	RelayoutEvery time.Duration
+	// PreviewAfter is how long a page's scripts run before the page as its
+	// server sent it is drawn meanwhile (browserRunScripts).
+	PreviewAfter time.Duration
 }
 
 // The profiles. Named so the docs and the log agree on the numbers.
 var webTuneSmartProS = webTune{
 	Name: "Smart Pro S", DecodeWorkers: 4, AheadScreens: 2, BehindScreens: 1,
 	UploadBytes: 8 << 20, DecodeBytes: 96 << 20, MaxPixels: 24 << 20, MaxSide: 4096,
-	FetchWorkers: 10,
+	FetchWorkers: 10, Tiles: 12, RelayoutEvery: 250 * time.Millisecond, PreviewAfter: 900 * time.Millisecond,
 }
 
 var webTuneA133P = webTune{
 	Name: "A133P handheld", DecodeWorkers: 2, AheadScreens: 1, BehindScreens: 0.5,
 	UploadBytes: 4 << 20, DecodeBytes: 48 << 20, MaxPixels: 24 << 20, MaxSide: 4096,
-	FetchWorkers: 8,
+	FetchWorkers: 8, Tiles: 10, RelayoutEvery: 400 * time.Millisecond, PreviewAfter: 800 * time.Millisecond,
 }
 
 var webTuneDesktop = webTune{
 	Name: "desktop", DecodeWorkers: 0, AheadScreens: 0, BehindScreens: 0,
 	UploadBytes: 0, DecodeBytes: 0, MaxPixels: 100 << 20, MaxSide: 16384,
-	FetchWorkers: 8,
+	FetchWorkers: 8, Tiles: 0, RelayoutEvery: 0, PreviewAfter: 1500 * time.Millisecond,
 }
 
 // webTuneFor picks the profile for a machine: trimui says it is a TrimUI
@@ -138,12 +160,28 @@ func webTuneNow() webTune {
 		if trimui {
 			soc = deviceHardware(DetectDevice()).SoC
 		}
-		webTuneState.tune = webTuneFor(trimui, soc, runtime.NumCPU(), os.Getenv("JUKAHUB_WEB_DECODE"))
+		webTuneState.tune = webTuneTiles(webTuneFor(trimui, soc, runtime.NumCPU(), os.Getenv("JUKAHUB_WEB_DECODE")),
+			os.Getenv("JUKAHUB_WEB_TILES"))
 		t := webTuneState.tune
-		logInfo("browser", "reader tune: %s, %d decode thread(s), %.1f screen(s) ahead, %d downloads at once",
-			t.Name, t.DecodeWorkers, t.AheadScreens, t.FetchWorkers)
+		logInfo("browser", "reader tune: %s, %d decode thread(s), %.1f screen(s) ahead, %d downloads at once, %d page tiles",
+			t.Name, t.DecodeWorkers, t.AheadScreens, t.FetchWorkers, t.Tiles)
 	})
 	return webTuneState.tune
+}
+
+// webTuneTiles applies JUKAHUB_WEB_TILES to a profile: 0 paints pages
+// directly, N (1-64) keeps N page tiles on any machine.
+func webTuneTiles(t webTune, env string) webTune {
+	env = strings.TrimSpace(env)
+	if env == "" {
+		return t
+	}
+	n, err := strconv.Atoi(env)
+	if err != nil || n < 0 {
+		return t
+	}
+	t.Tiles = min(n, 64)
+	return t
 }
 
 // webTuneTextureLimit is the longest picture side the renderer takes: the

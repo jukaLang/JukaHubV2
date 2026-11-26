@@ -115,3 +115,41 @@ func setSubtitleLabel(code string) string {
 	}
 	return code
 }
+
+// setAudioDefaultLabel is the Audio language carousel's first stop: no code,
+// each video plays its own default track.
+const setAudioDefaultLabel = "Video's default"
+
+// setAudioQuickOptions is the Audio language carousel: the video's default,
+// then the quick languages of the subtitle list.
+func setAudioQuickOptions() []setOption {
+	out := setSubtitleQuickOptions()
+	out[0] = setOption{Value: "", Label: setAudioDefaultLabel}
+	return out
+}
+
+// setAudioAllOptions is its sheet: the default and every language.
+func setAudioAllOptions() []setOption {
+	out := setSubtitleAllOptions()
+	out[0] = setOption{Value: "", Label: setAudioDefaultLabel, Note: "The track the video marks as its default"}
+	return out
+}
+
+// setAudioCurrent is the carousel stop of a stored code, -1 for one only the
+// sheet lists.
+func setAudioCurrent(code string) int {
+	for i, o := range setAudioQuickOptions() {
+		if strings.EqualFold(o.Value, strings.TrimSpace(code)) {
+			return i
+		}
+	}
+	return -1
+}
+
+// setAudioLabel names a stored code.
+func setAudioLabel(code string) string {
+	if strings.TrimSpace(code) == "" {
+		return setAudioDefaultLabel
+	}
+	return setSubtitleLabel(code)
+}

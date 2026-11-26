@@ -71,7 +71,11 @@ type brwFailure struct {
 	// Media is the type of an address that answered with a video, a song or
 	// a playlist: its card plays it (brw_stream.go). "" for every other card.
 	Media string
-	at    time.Time
+	// AutoDownload marks a file the site asked to have downloaded (an
+	// attachment, an archive or an installer): the card saves it to
+	// Downloads by itself, once (brwTickCard).
+	AutoDownload bool
+	at           time.Time
 }
 
 // text is the page text a failure leaves behind: the "Could not load" line the
@@ -376,6 +380,8 @@ var brwCard struct {
 	wrapMax   int
 	wrapFont  *ttf.Font
 	wrapLines []string
+	// autoAt is the failure whose file the card already started saving.
+	autoAt time.Time
 }
 
 // brwProbing is set while a connectivity probe the card started is running,
@@ -574,6 +580,12 @@ func brwTickCard(config *Config, elem Element, f brwFailure) {
 	if !f.at.Equal(brwCard.failAt) {
 		brwCard.failAt = f.at
 		brwCard.focus = 0
+	}
+	if f.AutoDownload && !f.at.Equal(brwCard.autoAt) {
+		// A download link does what it does in any browser: the file goes
+		// to Downloads, and the card stays to say so (and to save it again).
+		brwCard.autoAt = f.at
+		browserStartDownload(f.URL, "")
 	}
 	if !IsOnline() {
 		brwKickProbe(now)

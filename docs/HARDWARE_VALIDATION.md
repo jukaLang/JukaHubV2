@@ -201,6 +201,161 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
 
 ### Regression checks without separate task IDs
 
+- **WOFF2 fonts, conic and repeating gradients, LAN page scripts** (CHANGELOG
+  Added, 2026-11-26). On a handheld, a site that serves its fonts as WOFF2
+  only (most self-hosted fonts; a Read the Docs page with Lato and Roboto
+  Slab) shows its own typeface once the fonts arrive, and its Font Awesome
+  icons; the log has no "WOFF2 font not read". A page with a pie chart drawn
+  as `conic-gradient()` shows its slices, a progress bar or warning tape made
+  of `repeating-linear-gradient()` shows stripes. Open the router's admin page
+  by its name (router.asus.com, a Home Assistant name your network's DNS
+  answers with a 192.168.x.x address): its pages that load data with scripts
+  fill in.
+- **PlayStation 2: Roms/PS2, the tile, and a start that draws** (CHANGELOG
+  Fixed, 2026-11-26). On each model in turn — Smart Pro (stock and CrossMix),
+  Smart Pro S, Brick, Hammer, Brick Pro — with PlayStation 2 on: after a start
+  the card has `Roms/PS2`, and the Emulators page has a **PlayStation 2** tile
+  saying "A sets it up". A on it, online: the install card downloads only the
+  core (no handheld archive), the toast names `Roms/PS2` and `Bios/PS2`, and
+  `data/armsx2.json` has `release`, `releaseDate` and `retroArchVulkan`
+  (expected `yes` on TrimUI's RetroArch). Copy a BIOS into `Bios/PS2` and the
+  test homebrew into `Roms/PS2` — `JukaHub PS2 Test ELF.elf` and `… Disc.iso`, made by
+  `tmp/ps2-device-check/mkps2test.py` (git-ignored; its README shows the
+  expected screen) — rescan, start each: the log has `PS2: ARMSX2 draws with
+  Vulkan`, RetroArch's log (`data/gamediag/retroarch.log`) has "Requesting
+  Vulkan context" and "Using HW render, vulkan driver forced", and the screen
+  shows a border, eight colour bars in order, "JUKAHUB" / "PS2 OK" and a
+  bouncing orange square (the BIOS intro is skipped). Then a real game. On the
+  A133P models the launch line says it starts on JukaHub's glibc. If the
+  screen stays black: leave with the menu key — the card must say "ARMSX2 will
+  draw with the software renderer next time" (a "Null GS" line), and the next
+  start must draw (slowly). **PS2 renderer** set to OpenGL ES, then Software,
+  then Automatic: each start's log line names the one chosen. A `.cue` + `.bin`
+  CD game starts with the `.bin` on RetroArch's command line.
+- **Angled and radial gradients, calc() widths, linked sheets for scripts**
+  (CHANGELOG Added, 2026-11-26). On a handheld, a page with a diagonal hero
+  (`linear-gradient(135deg, …)`, e.g. stripe.com or a Bootstrap landing page)
+  shows the ramp running corner to corner, a page with a radial glow shows a
+  soft round light instead of a flat tint, and rounded buttons keep their
+  corners. A WordPress page with a sidebar shows the main column beside it.
+  A page whose menu or tabs a script shows with jQuery (`.show()`, `.toggle()`)
+  on a panel the site's stylesheet hides opens it on A.
+- **Every emulator auto-updates; only emulators that run are offered**
+  (CHANGELOG Added and Changed, 2026-11-26). On a stock Smart Pro with
+  Dolphin, ARMSX2, the Godot port and a J2ME game set up through JukaHub,
+  **Emulator updates** on *Install automatically*: leave it on the charger for
+  a few minutes after start; the log's `[patch] emulator updates:` lines name
+  Dolphin, ARMSX2, the Godot port and FreeJ2ME-Plus (each "is current" or
+  "installing …"), and a Dolphin core from the buildbot younger than a week
+  logs `Dolphin: the buildbot's … build waits until a week after …`. **L1** on
+  the Emulators page lists them in its summary too. The page's downloadable
+  tiles show no Mupen64Plus-Next, ParaLLEl N64, Flycast, PPSSPP core, HW
+  PlayStation core or Yaba Sanshiro (the firmware's own GPU cores stay listed
+  and play), **Get more cores** fetches none of them, and with a `Roms/N64`
+  folder but no N64 core on the card, A on its tile says the core is not
+  installed here because it draws with desktop OpenGL. MAME 2010 is updated by
+  the daily pass; MAME 2003-Plus and FBNeo are left for a press. The pass's
+  toast names held GPU cores as "the builds made for this GPU" without sending
+  you to the Emulators page.
+- **Browser on the GPU, early page with pictures, no jumps** (CHANGELOG
+  Added, 2026-11-26). On a Smart Pro: the log's `reader tune: …` line ends in
+  `10 page tiles` (12 on the Smart Pro S). Open a long news front page
+  (cnn.com, bbc.com): the page as sent appears within about a second with its
+  first pictures loading, a thin line sweeps along its top until the load
+  ends, and the finished page replaces it without moving the paragraph at the
+  top of the view; scrolling up and down a fully loaded page stays smooth, a
+  sticky header stays pinned, and a page with a fixed cookie or chat bar keeps
+  it in place. Follow a link to another page of the same site: it appears
+  faster than the first (its style sheets are remembered). Reading halfway down
+  an article while its pictures arrive, the text stays put. With
+  `JUKAHUB_WEB_TILES=0` the same pages draw the same way (painted directly).
+- **Media player motion and feedback** (CHANGELOG Changed and Fixed,
+  2026-11-26). On a handheld: play a film from Media; three seconds after the
+  last press the bar and the title fade away (in the window too) and the
+  subtitles drop towards the foot. **Left** brings them back with the ring on
+  play/pause, and a second **Left** slides the ring on. **A** pauses at once
+  with the bar away (the paused button pops in) and resumes (the play glyph
+  blooms out). **R1** three times quickly: "+30 s" on the picture, the handle
+  and the clock jump at once with the time in a bubble, the video moves once,
+  a spinner sits on the picture until it does, and the bar does not jump back
+  afterwards. **Up/Down** show the volume pill without the bar, and the next
+  video starts at that level. A slow pan looks even, with no hitch every few
+  seconds. With a PC mouse: drag the handle (the video jumps on release), click
+  the picture to pause, double-click for full screen, turn the wheel over the
+  picture for the volume; queue a video in Up Next and watch its card count
+  down over the last ten seconds.
+- **Videos play on the page; long pages load every picture** (CHANGELOG
+  Fixed, 2026-11-26). On a handheld, open an article with a YouTube embed,
+  focus its play card and press **A**: after the loading card the video plays
+  in the card (a toast names A and B once) and scrolls with the page; scrolled
+  off the screen it goes on in the corner window, and back in its card when
+  scrolled back. **A** again opens the media player at the same point; **Back**
+  returns to the page, at the same place, with the video in its card; **B**
+  stops it. A long page full of pictures (a Wikipedia list article, a photo
+  blog) shows them to its foot, and a page with an embedded map or post shows
+  an "Embedded: …" link that opens it.
+- **Radio stops; the player's controls take the pad** (CHANGELOG Fixed,
+  2026-11-26). On a handheld: Music → Radio → Radio directory → **A** on a
+  station opens the player with a ring on Play, which shows a Stop mark; **A**
+  stops the radio at once (the status bar's headphone chip goes) and **A**
+  again tunes in; **X** does the same. **B** back to the directory: a Now
+  playing row is on top and the station's row says Playing; **A** on either
+  stops it, **X** on the Now playing row opens the player. In the player
+  **Left/Right** on the station list say it cannot be skipped through. On a
+  local album, **Up** from the first track rings Play / Pause; **Left/Right**
+  walk the controls, **A** presses (Next skips, Stop stops), **Down** returns
+  to the list and **Up** from the controls reaches the top bar.
+- **Caption size, audio language, `<audio>` cards** (CHANGELOG Fixed,
+  2026-11-26). On a handheld: a film with subtitles shows visibly different
+  sizes for Accessibility → Caption size Small/Medium/Large, and with Caption
+  background off the text has a dark edge; with Settings → Media & playback →
+  Audio language set to a film's second language (an MKV with two audio
+  tracks), it starts in that language; a page with an `<audio>` tag shows a
+  play card that opens the music player.
+- **Wine on the Smart Pro** (CHANGELOG Fixed, 2026-11-25, JH-JMGVDB). Windows
+  Apps → **Wine Test (built in)** → **A**: the "Wine is working!" window opens
+  (the first start after the Windows folder was made can take a minute). Its
+  log (`data/windows-runtime/logs/winetest-*.log`) has `display: westonwrap.sh's
+  HOME is /tmp/jukahub-weston-home`, no `device_info.txt` or `lscpu` lines (no
+  PortMaster `control.txt` ran), `display: WestonPack started the program
+  after …`, and after "Running your command" no `command not found`. Then
+  **Notepad++ (64-bit)** and **(32-bit)**; after each one closes, JukaHub's
+  screen comes back and `ps` shows no `sdl2imgshow`, `wp_weston` or `seatd`.
+  The watch: put `JUKAHUB_WESTON_MODE=drm gl nosuch system` in
+  `data/windows-runtime/weston.env` (Weston cannot load that shell), start the
+  Wine test: within about ten seconds the *Couldn't launch* card says
+  WestonPack's display stopped while it was starting (before: the handheld
+  stayed on the list's picture for good); remove the line afterwards.
+- **Download links, nested layers, consent banners** (CHANGELOG Fixed,
+  2026-11-25). On a handheld: a GitHub release's `.zip` asset link starts a
+  download (Downloads panel) without a second press; a site with a cookie
+  banner (a European news site) shows no banner; a modal or header with a
+  close button at its corner shows the button there, not as a line of text.
+- **cnn.com loads** (CHANGELOG Fixed, 2026-11-25). On a Smart Pro, open
+  cnn.com: the front page appears within a few seconds (before its scripts
+  finish), is replaced by the full page later, and stays on screen even when
+  the pictures are slow; the log shows "showing … as sent while its scripts
+  run". A light page (wikipedia.org) shows no preview flash.
+- **GreenOvercast on a FAT32/exFAT card** (CHANGELOG Fixed, 2026-11-25,
+  JH-AT4EEE). On the Smart Pro S with the NextUI card: start GreenOvercast.
+  Its launch log (`data/gamediag/ports/GreenOvercast.log`) has the note
+  "GreenOvercast settings folder: /mnt/UDISK/jukahub/config/greenovercast
+  (internal storage …)", and that folder holds GreenOvercast's files with
+  `artwork` a link to `.userdata/tg5050/.config/greenovercast/artwork` on the
+  card. GreenOvercast shows a sign-in code instead of closing; sign in, quit,
+  start again: it is still signed in. If it still closes after 3 s, the card
+  says "Its saved sign-in could not be read" (not "did not find PortMaster")
+  and the next start's log notes the files set aside; send that report.
+  Confirm the software decoder's picture at 720p/30 fps.
+
+- **PPSSPP from its Emulators tile** (CHANGELOG Fixed, 2026-11-25, JH-FRF8NW).
+  On a stock Smart Pro without JukaHub's PPSSPP: the PSP tile's line says
+  "X: install PPSSPP 1.20.3" and the footer says Install; **A** opens
+  PPSSPP's own menu (game browser) instead of the "didn't start" card, and its
+  Exit returns to JukaHub. **X** → Install PPSSPP 1.20.3, then **A** again
+  opens 1.20.3's menu (its About screen says 1.20.3). With "Give PSP games the
+  screen to themselves" on, **A** closes JukaHub, opens the menu, and Exit
+  brings JukaHub back on the Emulators page with the PSP tile selected.
 - **Wikipedia lists** (CHANGELOG Fixed, 2026-11-25). On en.wikipedia.org's Main
   Page: "Recently featured:" and its three links are one line, In the news's
   "Ongoing:" and "Recent deaths:" lines keep their names on the same line, the

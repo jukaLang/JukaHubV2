@@ -38,11 +38,11 @@ import (
 
 const (
 	// webMaxTextBytes bounds how much readable text one page may contribute.
-	webMaxTextBytes = 768 << 10
+	webMaxTextBytes = 1536 << 10
 	// webMaxBlocks bounds the block list so a pathological page cannot make
-	// the layout take seconds on the handheld. 1800 cut long articles and
-	// busy front pages off part-way down.
-	webMaxBlocks = 4000
+	// the layout take seconds on the handheld. 1800, then 4000, cut long
+	// articles and busy news front pages off part-way down.
+	webMaxBlocks = 8000
 	// webMaxStylesheets and webSheetByteCap bound external CSS fetching. Real
 	// sites link a theme, a framework and several plugin sheets, and their main
 	// sheet is often well past 256 KiB: the old limits (3 sheets, and a larger
@@ -60,7 +60,7 @@ const (
 	webMaxStyleImports     = 16
 	webMaxStyleImportDepth = 4
 	// webMaxRows bounds the laid-out row count (each row is one text line).
-	webMaxRows = 12000
+	webMaxRows = 30000
 )
 
 // webElement is the little of an open element the CSS matcher needs. attrs is
@@ -504,6 +504,15 @@ type webStyle struct {
 	ListStyle int
 	// ListInside is list-style-position: inside, inherited like ListStyle.
 	ListInside bool
+	// ListString is the text of a string marker (webListStyleString).
+	ListString string
+	// SmallCaps is font-variant(-caps): small-caps and its kin, inherited:
+	// lower-case letters are set as capitals a size smaller.
+	SmallCaps bool
+	// ListItem is display: list-item, an <li>'s default: only a list item
+	// draws a marker and counts in its list (`li { display: block }` or a
+	// flex <li> has none). Not inherited.
+	ListItem bool
 	// ListPadSet is set on a ul, ol or menu whose page sets its start padding
 	// (a reset's `* { padding: 0 }`, Bootstrap's `.nav`): its items drop the
 	// reader's 18px list gutter, which stands in for the UA sheet's 40px of
@@ -1275,23 +1284,40 @@ type webDocument struct {
 	mu     sync.Mutex
 	stamp  webLayoutStamp
 	layout *webLayout
+	// sizesDirty is set when pictures or web fonts arrived after the layout
+	// was measured, laidOutAt when it was: layoutFor measures the page again
+	// at most every webTune.RelayoutEvery while they stream in. Guarded by mu.
+	sizesDirty bool
+	laidOutAt  time.Time
 
 	// imageMu guards Images and ImageMeta separately from mu. They need their
 	// own lock because the layouter reads the natural sizes while layoutFor
 	// holds mu: sharing one mutex deadlocked the reader on the first page with
 	// an image whose size the markup did not give, which froze the whole app.
 	imageMu sync.Mutex
+	// imagePasses counts the image passes running for this document, under
+	// imageMu: while one runs, a picture with no bytes yet is still on its way
+	// (webDocument.awaitImage). imageWant lists the pictures boxes on screen
+	// wait for, which the pass fetches first (nextWantedImage).
+	imagePasses int
+	imageWant   []string
 
 	// WebFonts are the page's @font-face rules the reader can load and
 	// WebFamilies their family names (webStyle.WebFont is 1 + an index into
 	// WebFamilies); webFontUse marks the families text is set in, 1 regular and
 	// 2 bold. webFontPick, guarded by webFontMu, is the loaded file for each
 	// family and weight (webpage_webfont.go).
-	WebFonts    []webFontFace
-	WebFamilies []string
-	webFontUse  []uint8
-	webFontMu   sync.Mutex
-	webFontPick map[[2]int]string
+	// boxCountCache is boxCounts' result (webpage_flow.go), counted once.
+	boxCountOnce  sync.Once
+	boxCountCache *webBoxCounts
+	// DownloadLinks are the hrefs of the page's <a download> links, with the
+	// file name each asks for ("" for the server's).
+	DownloadLinks map[string]string
+	WebFonts      []webFontFace
+	WebFamilies   []string
+	webFontUse    []uint8
+	webFontMu     sync.Mutex
+	webFontPick   map[[2]int]string
 
 	// SVGInline holds each drawable inline <svg> under its synthetic
 	// "jhsvg:" image key until the image pass rasterises it; SVGDefs keeps the
@@ -2043,6 +2069,8 @@ type webFlexFrame struct {
 type webListState struct {
 	ordered bool
 	n       int
+	// reversed counts down (<ol reversed>): n is one above the next number.
+	reversed bool
 }
 
 // --- Document store -------------------------------------------------------
@@ -3041,6 +3069,7 @@ func webContainerRange(inner string, w, h float64) bool {
 // (kept as a condition on each enclosed rule and resolved against the parser's
 // open container stack at match time), and @layer, whose rules carry their
 // layer's place in the cascade (webCSSParse).
+// Test seam (ARCH-8): only tests call it.
 func parseWebCSS(src string) []webRule {
 	rules := make([]webRule, 0, 32)
 	ps := &webCSSParse{}
@@ -3075,6 +3104,9 @@ type webCSSParse struct {
 	// fontFaces, when set, collects the bodies of the @font-face rules in
 	// force (webpage_webfont.go).
 	fontFaces *[]string
+	// keyframes, when set, collects each @keyframes animation's end state:
+	// the declarations of its `to` / `100%` frame (webKeyframesEnd).
+	keyframes map[string]map[string]string
 }
 
 // layerRank is a layer's place in the cascade, registering the name on first
@@ -3155,9 +3187,31 @@ func parseWebCSSInto(src string, depth int, ps *webCSSParse, rules *[]webRule, c
 		}
 		if strings.HasPrefix(selectorText, "@") {
 			lower := strings.ToLower(selectorText)
+			if strings.HasPrefix(lower, "@keyframes") || strings.HasPrefix(lower, "@-webkit-keyframes") || strings.HasPrefix(lower, "@-moz-keyframes") {
+				if ps.keyframes != nil && len(ps.keyframes) < 512 {
+					if name := webKeyframesName(selectorText); name != "" {
+						if end := webKeyframesEnd(body); end != nil {
+							ps.keyframes[name] = end
+						} else {
+							delete(ps.keyframes, name)
+						}
+					}
+				}
+				continue
+			}
 			if strings.HasPrefix(lower, "@font-face") {
 				if ps.fontFaces != nil && len(*ps.fontFaces) < webMaxFontFaceRules {
 					*ps.fontFaces = append(*ps.fontFaces, body)
+				}
+				continue
+			}
+			if strings.HasPrefix(lower, "@scope") {
+				// @scope (.card) { img { … } }: the rules inside apply within
+				// their scope root, as if nested in it (`:scope` is the root
+				// itself). The lower boundary (`to (…)`) is not modelled: the
+				// scope runs to the end of the root's subtree.
+				if roots := webScopeRoots(selectorText); depth < webCSSMaxNesting {
+					webEmitNestedCSSBodyAt(webScopeBody(body), roots, depth+1, ps, rules, containers, layer, true)
 				}
 				continue
 			}
@@ -3206,6 +3260,53 @@ func parseWebCSSInto(src string, depth int, ps *webCSSParse, rules *[]webRule, c
 		}
 		webAppendCSSRule(webSplitSelectorList(selectorText), decls, important, ps, rules, containers, layer)
 	}
+}
+
+// webScopeRoots is the scope root selector list of an @scope prelude, `:root`
+// when it names none (an @scope inside a <style> is scoped to the element the
+// sheet sits in, which a sheet parsed whole cannot know).
+func webScopeRoots(prelude string) []string {
+	rest := strings.TrimSpace(prelude[len("@scope"):])
+	if strings.HasPrefix(rest, "(") {
+		if end := webCSSParenEnd(rest, 0); end > 0 {
+			if roots := webSplitSelectorList(strings.TrimSpace(rest[1:end])); len(roots) > 0 {
+				return roots
+			}
+		}
+	}
+	return []string{":root"}
+}
+
+// webScopeBody rewrites :scope in an @scope body as the nesting selector &,
+// which stands for the scope root there.
+func webScopeBody(body string) string {
+	lower := asciiLower(body)
+	if !strings.Contains(lower, ":scope") {
+		return body
+	}
+	var out strings.Builder
+	last := 0
+	for i := strings.Index(lower, ":scope"); i >= 0; {
+		end := i + len(":scope")
+		if end < len(lower) && (isWebIdentByte(lower[end]) || lower[end] == '-') {
+			next := strings.Index(lower[end:], ":scope")
+			if next < 0 {
+				break
+			}
+			i = end + next
+			continue
+		}
+		out.WriteString(body[last:i])
+		out.WriteString("&")
+		last = end
+		next := strings.Index(lower[end:], ":scope")
+		if next < 0 {
+			break
+		}
+		i = end + next
+	}
+	out.WriteString(body[last:])
+	return out.String()
 }
 
 // webCSSNestedBlock is one nested selector (or conditional at-rule) inside a
@@ -4019,10 +4120,10 @@ func webSupportsBackground(value string) bool {
 	if _, ok := webParseGradient(value); ok {
 		return true
 	}
-	// The WebKit radial aliases normalize to these unprefixed forms. The
-	// reader paints them as their averaged colour, so they are supported even
-	// though they are not a linear ramp. Conic gradients are deliberately not
-	// accepted: no prefixed conic alias is supported by Chromium.
+	// The WebKit radial aliases normalize to these unprefixed forms, which the
+	// reader paints (webpage_gradient.go), and a radial one it cannot read
+	// still counts by its averaged colour. Conic gradients are accepted
+	// unprefixed only: Chromium supports no prefixed conic alias.
 	if strings.Contains(lower, "radial-gradient(") {
 		_, ok := webGradientColor(value)
 		return ok
@@ -4511,11 +4612,70 @@ func webCSSParenEnd(src string, open int) int {
 // webResolveValue prepares one declaration for the property parsers: var()
 // substituted first, then any calc() that can be reduced to a px length.
 func webResolveValue(value string, scope *webVarScope, em float64) string {
-	value = webSubstituteVars(value, scope)
+	value = webWrapMathFunctions(webSubstituteVars(value, scope))
 	if strings.Contains(strings.ToLower(value), "calc(") {
 		value = webSubstituteCalc(value, em)
 	}
 	return value
+}
+
+// webMathFunctionNames are CSS Values 4's math functions calc() evaluates
+// (mathFactor) beside min(), max() and clamp().
+var webMathFunctionNames = [...]string{"round(", "mod(", "rem(", "abs(", "sign(", "pow(", "sqrt(", "hypot(", "exp(", "log("}
+
+// webHasMathFunction reports whether a lower-case value calls one of those.
+func webHasMathFunction(lower string) bool {
+	for _, name := range webMathFunctionNames {
+		if strings.Contains(lower, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// webWrapMathFunctions puts each of those written bare in a value (`width:
+// round(up, 33.3%, 1px)`) inside calc(), the one place math is evaluated, so
+// it resolves like a calc() would. A value with none comes back as it is.
+func webWrapMathFunctions(value string) string {
+	if strings.IndexByte(value, '(') < 0 {
+		return value
+	}
+	lower := asciiLower(value)
+	found := false
+	for _, name := range webMathFunctionNames {
+		if strings.Contains(lower, name) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return value
+	}
+	var out strings.Builder
+	last := 0
+	for i := 0; i < len(lower); i++ {
+		if i > 0 && (isWebIdentByte(lower[i-1]) || lower[i-1] == '-') {
+			continue
+		}
+		for _, name := range webMathFunctionNames {
+			if !strings.HasPrefix(lower[i:], name) {
+				continue
+			}
+			end := webCSSParenEnd(value, i+len(name)-1)
+			if end < 0 {
+				break
+			}
+			out.WriteString(value[last:i])
+			out.WriteString("calc(")
+			out.WriteString(value[i : end+1])
+			out.WriteString(")")
+			last = end + 1
+			i = end
+			break
+		}
+	}
+	out.WriteString(value[last:])
+	return out.String()
 }
 
 // webSubstituteCalc replaces each calc() it can evaluate with a px length. A
@@ -4523,6 +4683,60 @@ func webResolveValue(value string, scope *webVarScope, em float64) string {
 // is left as authored.
 func webSubstituteCalc(value string, em float64) string {
 	return webSubstituteCalcContainer(value, em, 0, 0, 0, 0)
+}
+
+// webCalcPercentsIn turns each calc(), min(), max() or clamp() in value that
+// mixes a percentage with lengths — `calc(100% - 300px)`, `min(100%, 40rem)`,
+// `calc(33.333% - 20px)` in a flex shorthand — into the percentage it comes
+// to in a containing block base CSS px wide: the parent's modelled width
+// (webContainerDimensions). The layout still scales it with the column it
+// really gets, and where that column is the modelled one it comes out exact.
+// Such a value used to be dropped, leaving a sidebar layout's main column the
+// full width. Anything it cannot evaluate is left as written.
+func webCalcPercentsIn(value string, em, base float64) string {
+	if base <= 0 || !strings.Contains(value, "%") || strings.IndexByte(value, '(') < 0 {
+		return value
+	}
+	lower := asciiLower(value)
+	var out strings.Builder
+	last := 0
+	for i := 0; i < len(lower); i++ {
+		if i > 0 && (isWebIdentByte(lower[i-1]) || lower[i-1] == '-') {
+			continue
+		}
+		name := ""
+		for _, fn := range [...]string{"calc(", "min(", "max(", "clamp("} {
+			if strings.HasPrefix(lower[i:], fn) {
+				name = fn
+				break
+			}
+		}
+		if name == "" {
+			continue
+		}
+		end := webCSSParenEnd(value, i+len(name)-1)
+		if end < 0 {
+			break
+		}
+		// round() and the other stepped and exponential functions over a
+		// percentage are left as written: they size a carousel's cards to a
+		// fraction of a row that scrolls sideways, which the reader flows
+		// into rows of the cards' own readable width instead.
+		if expr := value[i : end+1]; strings.Contains(expr, "%") && !webHasMathFunction(asciiLower(expr)) {
+			if px, ok := webEvalCalcContainerPercent(expr, em, 0, 0, 0, 0, base); ok && !math.IsNaN(px) && !math.IsInf(px, 0) {
+				out.WriteString(value[last:i])
+				out.WriteString(strconv.FormatFloat(px/base*100, 'f', 4, 64))
+				out.WriteString("%")
+				last = end + 1
+			}
+		}
+		i = end
+	}
+	if last == 0 {
+		return value
+	}
+	out.WriteString(value[last:])
+	return out.String()
 }
 
 // webSubstituteCalcContainer is webSubstituteCalc with query-container
@@ -4591,7 +4805,7 @@ func (p *webParser) webResolveStyleValueIn(value string, scope *webVarScope, em,
 	if p.rootFontPx > 0 && p.rootFontPx != 16 {
 		value = webSubstituteRootEm(value, p.rootFontPx)
 	}
-	value = webSubstituteContainerUnits(value, cw, ch)
+	value = webWrapMathFunctions(webSubstituteContainerUnits(value, cw, ch))
 	if strings.Contains(strings.ToLower(value), "calc(") {
 		value = webSubstituteCalcContainer(value, em, 0, 0, cw, ch)
 	}
@@ -4988,7 +5202,8 @@ func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) 
 		}
 	}
 	if name == "" {
-		return webCalcValue{}, false, false
+		// The stepped-value and exponential functions of CSS Values 4.
+		return p.mathFactor(lower)
 	}
 	open := p.pos + len(name)
 	close := webCSSParenEnd(p.src, open)
@@ -5042,6 +5257,135 @@ func (p *webCalcParser) functionFactor() (value webCalcValue, ok, handled bool) 
 	}
 	p.pos = close + 1
 	return webCalcValue{px: px}, true, true
+}
+
+// mathFactor parses CSS Values 4's other math functions where a value is
+// expected — round(), mod(), rem(), abs(), sign(), pow(), sqrt(), hypot(),
+// exp(), log() — and the constants pi and e. lower is the source from here,
+// lower-cased. handled is false when none starts here.
+func (p *webCalcParser) mathFactor(lower string) (value webCalcValue, ok, handled bool) {
+	for _, c := range []struct {
+		name string
+		v    float64
+	}{{"pi", math.Pi}, {"e", math.E}} {
+		if strings.HasPrefix(lower, c.name) && (len(lower) == len(c.name) || !isWebIdentByte(lower[len(c.name)])) {
+			p.pos += len(c.name)
+			return webCalcValue{px: c.v, unitless: true}, true, true
+		}
+	}
+	name := ""
+	for _, candidate := range []string{"round", "mod", "rem", "abs", "sign", "pow", "sqrt", "hypot", "exp", "log"} {
+		if strings.HasPrefix(lower, candidate+"(") {
+			name = candidate
+			break
+		}
+	}
+	if name == "" {
+		return webCalcValue{}, false, false
+	}
+	open := p.pos + len(name)
+	close := webCSSParenEnd(p.src, open)
+	if close < 0 {
+		return webCalcValue{}, false, true
+	}
+	args := webSplitSelectorList(p.src[open+1 : close])
+	strategy := "nearest"
+	if name == "round" && len(args) > 0 {
+		switch first := strings.ToLower(strings.TrimSpace(args[0])); first {
+		case "nearest", "up", "down", "to-zero":
+			strategy, args = first, args[1:]
+		}
+	}
+	values := make([]webCalcValue, 0, len(args))
+	for _, arg := range args {
+		sub := &webCalcParser{src: strings.TrimSpace(arg), em: p.em, vw: p.vw, vh: p.vh, cw: p.cw, ch: p.ch, percentBase: p.percentBase}
+		v, valid := sub.sum()
+		sub.skipSpace()
+		if !valid || sub.pos != len(sub.src) {
+			return webCalcValue{}, false, true
+		}
+		values = append(values, v)
+	}
+	need := map[string][2]int{"round": {1, 2}, "mod": {2, 2}, "rem": {2, 2}, "abs": {1, 1}, "sign": {1, 1},
+		"pow": {2, 2}, "sqrt": {1, 1}, "hypot": {1, 16}, "exp": {1, 1}, "log": {1, 2}}[name]
+	if len(values) < need[0] || len(values) > need[1] {
+		return webCalcValue{}, false, true
+	}
+	a := values[0]
+	out := webCalcValue{unitless: a.unitless}
+	unitlessArgs := true
+	for _, v := range values {
+		unitlessArgs = unitlessArgs && v.unitless
+	}
+	switch name {
+	case "round", "mod", "rem":
+		step := 1.0
+		if len(values) > 1 {
+			step = values[1].px
+		} else if !a.unitless {
+			return webCalcValue{}, false, true
+		}
+		if step == 0 {
+			return webCalcValue{}, false, true
+		}
+		q := a.px / step
+		switch {
+		case name == "mod":
+			q = math.Floor(q)
+		case name == "rem", strategy == "to-zero":
+			q = math.Trunc(q)
+		case strategy == "up":
+			q = math.Ceil(q)
+		case strategy == "down":
+			q = math.Floor(q)
+		default:
+			q = math.Floor(q + 0.5)
+		}
+		out.px = q * step
+		if name != "round" {
+			out.px = a.px - out.px
+		}
+	case "abs":
+		out.px = math.Abs(a.px)
+	case "sign":
+		out = webCalcValue{unitless: true}
+		switch {
+		case a.px > 0:
+			out.px = 1
+		case a.px < 0:
+			out.px = -1
+		}
+	case "hypot":
+		sum := 0.0
+		for _, v := range values {
+			sum += v.px * v.px
+		}
+		out.px = math.Sqrt(sum)
+	default:
+		// pow, sqrt, exp and log take and give numbers.
+		if !unitlessArgs {
+			return webCalcValue{}, false, true
+		}
+		out.unitless = true
+		switch name {
+		case "pow":
+			out.px = math.Pow(a.px, values[1].px)
+		case "sqrt":
+			out.px = math.Sqrt(a.px)
+		case "exp":
+			out.px = math.Exp(a.px)
+		case "log":
+			out.px = math.Log(a.px)
+			if len(values) == 2 {
+				out.px /= math.Log(values[1].px)
+			}
+		}
+	}
+	if math.IsNaN(out.px) || math.IsInf(out.px, 0) {
+		return webCalcValue{}, false, true
+	}
+	p.pos = close + 1
+	return out, true, true
 }
 
 // --- CSS selectors --------------------------------------------------------
@@ -5117,6 +5461,9 @@ const (
 	webPseudoElemBefore
 	webPseudoElemAfter
 	webPseudoElemMarker
+	// webPseudoElemFirstLetter styles the first letter of an element's text
+	// (a drop cap): the parser sets it as a run of its own.
+	webPseudoElemFirstLetter
 )
 
 // webSelCompound is one compound selector, such as `div.note[data-x]:hover`.
@@ -5662,6 +6009,8 @@ func (p *webSelParser) pseudo(c *webSelCompound) bool {
 				pseudo = webPseudoElemAfter
 			case "marker":
 				pseudo = webPseudoElemMarker
+			case "first-letter":
+				pseudo = webPseudoElemFirstLetter
 			}
 		}
 		if pseudo == webPseudoElemNone || p.sel.pseudo != webPseudoElemNone {
@@ -5948,7 +6297,7 @@ func webRulesPseudoMask(rules []webRule) uint8 {
 		// sheets are full of colour/font rules for ::before, and those must
 		// not cost every element a second rule scan. ::marker is different:
 		// its colour and font paint the default bullet even without content.
-		if pseudo != webPseudoElemMarker {
+		if pseudo != webPseudoElemMarker && pseudo != webPseudoElemFirstLetter {
 			if _, ok := rules[i].decls["content"]; !ok {
 				if _, ok := rules[i].important["content"]; !ok {
 					continue
@@ -8324,6 +8673,7 @@ func applyWebTagDefaults(st *webStyle, tag string) {
 		st.IconFont, st.Mono, st.WebFont = true, false, 0
 	case "li":
 		st.Indent += 18
+		st.ListItem = true
 		st.MarginTop, st.MarginBot = 2, 2
 	case "a":
 		st.Underline = true
@@ -8992,6 +9342,16 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		// Tailwind's outline-none: a transparent outline draws nothing.
 		st.Outline = false
 	}
+	for _, key := range [...]string{"font-variant-caps", "font-variant"} {
+		v, ok := decls[key]
+		if !ok || webInheritKeyword(v) {
+			continue
+		}
+		lower := strings.ToLower(v)
+		st.SmallCaps = strings.Contains(lower, "small-caps") || strings.Contains(lower, "petite-caps") ||
+			strings.Contains(lower, "unicase") || strings.Contains(lower, "titling-caps")
+		break
+	}
 	if v, ok := decls["list-style-position"]; ok {
 		st.ListInside = strings.EqualFold(strings.TrimSpace(v), "inside")
 	} else if v, ok := decls["list-style"]; ok {
@@ -9006,8 +9366,8 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
 		if v, ok := decls[key]; ok {
-			if marker := webListStyleValue(v); marker != webListStyleDefault {
-				st.ListStyle = marker
+			if marker, text := webListStyleValue(v); marker != webListStyleDefault {
+				st.ListStyle, st.ListString = marker, text
 				if marker == webListStyleNone {
 					st.ListNone = true
 				}
@@ -9124,6 +9484,10 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 				lower = "inline-block"
 			}
 		}
+		// The two-keyword syntax of CSS Display 3 (`block flex`, `inline
+		// flow-root`, `block flow list-item`) means its one-keyword form.
+		lower, listItem := webDisplayKeywords(lower)
+		st.ListItem = listItem
 		st.DisplayContents = lower == "contents"
 		st.DisplayInline = lower == "inline"
 		st.DisplayInlineBlock = lower == "inline-block" || lower == "inline-flex" || lower == "inline-grid"
@@ -10331,6 +10695,15 @@ type webParser struct {
 	pendingBStyle      webStyle
 	hasPendingBStyle   bool
 	pendingHang        bool
+	// keyframes are the page's @keyframes end states (webApplyAnimationEnd).
+	keyframes map[string]map[string]string
+	// firstLetter is the ::first-letter style waiting for the first letter of
+	// the element at stack depth firstLetter.depth (addTextStyled).
+	firstLetter *webFirstLetter
+	// olSeq numbers the <ol> start tags met so far; olCounts holds each one's
+	// item count, for <ol reversed> (webReversedListCounts).
+	olSeq    int
+	olCounts []int
 	// counters holds the active CSS counter instances. Each name is a stack:
 	// counter-reset pushes a nested instance and the element's end tag pops
 	// it, while counter-increment changes the nearest one.
@@ -10471,8 +10844,9 @@ func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []web
 	if p.css.Len() > 0 {
 		var faces []string
 		p.rules = make([]webRule, 0, 32)
-		ps := &webCSSParse{fontFaces: &faces}
+		ps := &webCSSParse{fontFaces: &faces, keyframes: make(map[string]map[string]string)}
 		parseWebCSSInto(stripWebCSSComments(p.css.String()), 0, ps, &p.rules, nil, "")
+		p.keyframes = ps.keyframes
 		// The page's web fonts: their families are matched as styles are
 		// computed, their files fetched beside the pictures.
 		p.webFontSetup(faces)
@@ -10481,6 +10855,9 @@ func parseWebPageWithLinkedSheets(source, extraCSS, baseURL string, sheets []web
 	p.pseudoMask = webRulesPseudoMask(p.rules)
 	if webRulesNeedSelectorTree(p.rules) {
 		p.selTree = webBuildSelectorTree(source)
+	}
+	if strings.Contains(asciiLower(source), " reversed") {
+		p.olCounts = webReversedListCounts(source)
 	}
 	if u, err := url.Parse(baseURL); err == nil {
 		p.target = u.Fragment
@@ -10573,7 +10950,7 @@ func fetchWebStylesheetBlocksContext(parent context.Context, source string, base
 			wg.Add(1)
 			go func(i int, address string) {
 				defer wg.Done()
-				bodies[i-first] = webCSSBudgetPrefix(fetchWebStylesheetContext(ctx, pageURL, address), webMaxLinkedCSSBytes)
+				bodies[i-first] = webCSSBudgetPrefix(webCachedStylesheet(ctx, pageURL, address), webMaxLinkedCSSBytes)
 			}(i, sheets[i].url)
 		}
 		wg.Wait()
@@ -10610,6 +10987,75 @@ func fetchWebStylesheetBlocksContext(parent context.Context, source string, base
 		}
 	}
 	return result
+}
+
+// webSheetCacheKey is the context key of a page load's style sheet bodies.
+type webSheetCacheKey struct{}
+
+// webSheetCache holds the sheets one page load fetched, by address, so the
+// preview drawn while the page's scripts run and the page itself share one
+// download of each (browserRunScripts). pending holds the sheets being
+// fetched: a second asker waits for that download (browserPrefetchSheets
+// starts them before anyone asks).
+type webSheetCache struct {
+	mu      sync.Mutex
+	css     map[string]string
+	pending map[string]chan struct{}
+}
+
+// webWithSheetCache gives a page load's context a sheet cache.
+func webWithSheetCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, webSheetCacheKey{}, &webSheetCache{css: make(map[string]string, 8)})
+}
+
+// webCachedStylesheet is fetchWebStylesheetContext through the load's sheet
+// cache, when its context carries one, and the reader's memory of the sheets
+// recent pages used (browser_subres.go).
+func webCachedStylesheet(ctx context.Context, pageURL, address string) string {
+	cache, _ := ctx.Value(webSheetCacheKey{}).(*webSheetCache)
+	if cache == nil {
+		return fetchWebStylesheetContext(ctx, pageURL, address)
+	}
+	cache.mu.Lock()
+	if css, ok := cache.css[address]; ok {
+		cache.mu.Unlock()
+		return css
+	}
+	if wait, busy := cache.pending[address]; busy {
+		cache.mu.Unlock()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return ""
+		}
+		cache.mu.Lock()
+		css, ok := cache.css[address]
+		cache.mu.Unlock()
+		if ok {
+			return css
+		}
+		// That download failed: one more try of this asker's own.
+		return fetchWebStylesheetContext(ctx, pageURL, address)
+	}
+	if cache.pending == nil {
+		cache.pending = make(map[string]chan struct{}, 8)
+	}
+	done := make(chan struct{})
+	cache.pending[address] = done
+	cache.mu.Unlock()
+	css, remembered := browserSheetRecall(ctx, pageURL, address)
+	if !remembered {
+		css = fetchWebStylesheetContext(ctx, pageURL, address)
+		browserSheetKeep(pageURL, address, css)
+	}
+	cache.mu.Lock()
+	if css != "" {
+		cache.css[address] = css
+	}
+	delete(cache.pending, address)
+	cache.mu.Unlock()
+	close(done)
+	return css
 }
 
 // webLinkedSheet is one <link> stylesheet: its absolute address and the media
@@ -11323,6 +11769,7 @@ func webInlineCSSBlocks(source string) []webInlineCSSBlock {
 // sheets in front. Every block is expanded independently, so an import in a
 // later block cannot move ahead of an earlier block's rules. The imported
 // sheets themselves go through the linked-sheet fetcher.
+// Test seam (ARCH-8): only tests call it.
 func webExpandInlineCSSImports(source string, pageURL *url.URL) string {
 	return webExpandInlineCSSImportsContext(context.Background(), source, pageURL)
 }
@@ -11472,6 +11919,14 @@ func (p *webParser) walk(source string) {
 		if p.topStyle().Hidden && webPlaceholderElement(name) {
 			continue
 		}
+		if name == "audio" && !selfClose {
+			// An <audio> with a source is a play card the player opens; one
+			// without stays the grey bar it always was (addVideoBlock).
+			inner, next, _ := webRawElement(source, i, name)
+			i = next
+			p.addVideoBlock(name, attrs, inner)
+			continue
+		}
 		if webPlaceholderElement(name) {
 			p.addPlaceholderBlock(name, attrs)
 			if !selfClose && !webVoidElement(name) {
@@ -11528,6 +11983,11 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		el.node = p.selTree[p.selTreePos]
 		p.selTreePos++
 	}
+	olIndex := -1
+	if name == "ol" {
+		olIndex = p.olSeq
+		p.olSeq++
+	}
 	el.target = p.target != "" && el.id == p.target
 	style := p.computeStyle(el, attrs)
 	// A screen-reader-only or fully transparent positioned block shows nothing
@@ -11568,6 +12028,13 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		if generated := p.pseudoContent(el, attrs, style, webPseudoElemBefore); generated.Matched && generated.HasContent {
 			p.pendingBefore, p.pendingBeforeStyle = generated.Text, generated.Style
 			beforeSet = true
+		}
+	}
+	// ::first-letter of a block container (a drop cap): its first letter,
+	// generated ::before text included, is set in the pseudo-element's style.
+	if p.pseudoMask&(1<<webPseudoElemFirstLetter) != 0 && webFirstLetterHost(name, &style) && !selfClose {
+		if generated := p.pseudoContent(el, attrs, style, webPseudoElemFirstLetter); generated.Matched && !generated.Style.Hidden {
+			p.firstLetter = &webFirstLetter{style: generated.Style, depth: len(p.stack)}
 		}
 	}
 	// <q> is quoted by the UA sheet's `q::before { content: open-quote }`,
@@ -11784,10 +12251,18 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			p.closeInlineRow()
 		}
 		p.flush()
-		// <ol start="5"> counts from 5.
+		// <ol start="5"> counts from 5; <ol reversed> counts down, from its
+		// item count unless a start says otherwise.
+		state.reversed = state.ordered && htmlTagAttributeHas(attrs, "reversed")
+		if state.reversed && olIndex >= 0 && olIndex < len(p.olCounts) {
+			state.n = p.olCounts[olIndex] + 1
+		}
 		if v, ok := el.attr("start"); state.ordered && ok {
 			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > -1<<20 && n < 1<<20 {
 				state.n = n - 1
+				if state.reversed {
+					state.n = n + 1
+				}
 			}
 		}
 		p.lists = append(p.lists, state)
@@ -11824,17 +12299,25 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			if v, ok := el.attr("value"); ok {
 				if k, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && k > -1<<20 && k < 1<<20 {
 					p.lists[n-1].n = k - 1
+					if p.lists[n-1].reversed {
+						p.lists[n-1].n = k + 1
+					}
 				}
 			}
 		}
-		p.pendingB = p.nextBullet(style)
+		// Only a list item draws a marker and counts: `li { display: block }`
+		// and a flex or grid <li> (Wikipedia's sister projects) have none.
+		p.pendingB = ""
+		if style.ListItem {
+			p.pendingB = p.nextBullet(style)
+		}
 		p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
 		// A list whose page sets its start padding hangs its markers in that
 		// padding (list-style-position: outside), as a browser does.
 		p.pendingHang = p.listMarkerHangs(style)
 		// A ::marker rule can replace the bullet and style it. The list
 		// counter still advances above, so ordered items keep their numbers.
-		if p.pseudoMask&(1<<webPseudoElemMarker) != 0 {
+		if style.ListItem && p.pseudoMask&(1<<webPseudoElemMarker) != 0 {
 			if generated := p.pseudoContent(el, attrs, style, webPseudoElemMarker); generated.Matched {
 				p.pendingBStyle, p.hasPendingBStyle = generated.Style, true
 				if generated.HasContent {
@@ -11860,6 +12343,16 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 			p.closeInlineRow()
 		}
 		p.flush()
+		if style.ListItem && name != "li" {
+			// Any element styled `display: list-item` draws a marker too.
+			p.pendingB = webListMarker(style.ListStyle, style.ListString, false, 1)
+			if len(p.lists) > 0 {
+				p.pendingB = p.nextBullet(style)
+			} else if style.ListNone {
+				p.pendingB = ""
+			}
+			p.pendingBStyle, p.hasPendingBStyle = webStyle{}, false
+		}
 		p.push(el, style, "block", attrs)
 		if selfClose {
 			p.endTag(name)
@@ -12311,6 +12804,10 @@ func (p *webParser) endTag(name string) {
 			p.resumeLine(s)
 		}
 		p.stack = p.stack[:i]
+		if p.firstLetter != nil && p.firstLetter.depth >= i {
+			// The element ended with no letter in it.
+			p.firstLetter = nil
+		}
 		return
 	}
 }
@@ -12380,7 +12877,7 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 	// unless it sits inside one already (webpage_layers.go).
 	layer := 0
 	if (kind == "block" || kind == "list") && len(p.doc.Layers) < webMaxLayers &&
-		p.wantsLayer(&style) && p.openLayerIn(len(p.stack)) == 0 {
+		p.wantsLayer(&style) && p.layerDepthIn(len(p.stack)) < webMaxLayerDepth {
 		layer = p.newLayer(style, boxID, seq)
 	}
 	// A block element pushed directly under an open flex container is one of
@@ -12630,6 +13127,7 @@ func webResetElementStyle(st *webStyle) {
 	st.MarginTopAuto, st.MarginBotAuto = false, false
 	st.MarginLeftAuto, st.MarginRightAuto = false, false
 	st.BorderLeft, st.BorderRight, st.ListNone = false, false, false
+	st.ListItem = false
 	st.BorderWidth = 0
 	st.BorderSideWidth = [4]float64{}
 	st.BorderSideStyle = [4]int{}
@@ -13025,6 +13523,9 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		cascade(rule.important)
 	}
 	cascade(inlineImportant)
+	// An animation that holds its end state (fill-mode forwards or both) shows
+	// that state once it has run: a fade-in's opacity 1, a preloader's 0.
+	p.applyAnimationEnd(merged)
 	// Custom properties are inherited, so this element's own definitions are
 	// resolved once here and carried down by the frames below it.
 	st.Vars = webVarScopeFor(p.topStyle().Vars, merged)
@@ -13080,12 +13581,25 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 			em = px
 		}
 	}
+	// A width written as calc() of a percentage and lengths (`calc(100% -
+	// 300px)`, `min(100%, 40rem)`) is the percentage it comes to in the
+	// parent's modelled width (webCalcPercentsIn).
+	calcBase := 0.0
+	percentsIn := func(value string) string {
+		if !strings.Contains(value, "%") || strings.IndexByte(value, '(') < 0 {
+			return value
+		}
+		if calcBase == 0 {
+			calcBase, _ = p.webContainerDimensions(len(p.stack) - 1)
+		}
+		return webCalcPercentsIn(value, em, calcBase)
+	}
 	for _, name := range [...]string{"width", "min-width", "max-width"} {
 		if _, present := merged[name]; !present {
 			continue
 		}
 		supported := func(value string) bool {
-			resolved := p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
+			resolved := percentsIn(p.webResolveStyleValueIn(value, st.Vars, em, cw, ch))
 			return webSupportedWidthValue(name, resolved, em)
 		}
 		value, ok := webCascadedSupportedWidth(name, matched, inlineDecls, inlineImportant, supported)
@@ -13105,6 +13619,10 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	}
 	for name, value := range merged {
 		merged[name] = p.webResolveStyleValueIn(value, st.Vars, em, cw, ch)
+		switch name {
+		case "width", "min-width", "max-width", "flex-basis", "flex", "left", "right":
+			merged[name] = percentsIn(merged[name])
+		}
 	}
 	webResolveBoxSides(merged, rank)
 	webResolveBorderColor(merged, rank)
@@ -13198,6 +13716,14 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	// sibling: every <a> names its own, and its children inherit that.
 	if el.tag == "a" {
 		st.Href = htmlstd.UnescapeString(strings.TrimSpace(htmlTagAttribute(attrs, "href")))
+		// <a download> saves its target instead of opening it (browser.go);
+		// the attribute's value, when it has one, is the file's name.
+		if st.Href != "" && htmlTagAttributeHas(attrs, "download") && len(p.doc.DownloadLinks) < 4096 {
+			if p.doc.DownloadLinks == nil {
+				p.doc.DownloadLinks = make(map[string]string, 4)
+			}
+			p.doc.DownloadLinks[st.Href] = htmlAttrValue(htmlTagAttribute(attrs, "download"))
+		}
 	}
 	// Decorative icon fonts and aria-hidden helpers render as short words like
 	// "navigate_next" or "menu" in a text engine; hide them.
@@ -13472,8 +13998,40 @@ func webCounterText(value int, style string) string {
 		return webRomanCounter(value, false)
 	case "upper-roman":
 		return webRomanCounter(value, true)
+	case "lower-greek":
+		return webGreekCounter(value)
+	case "disc":
+		return "•"
+	case "circle":
+		return "◦"
+	case "square":
+		return "▪"
+	case "disclosure-open":
+		return "▾"
+	case "disclosure-closed":
+		return "▸"
 	}
 	return strconv.Itoa(value)
+}
+
+// webGreekCounter counts α, β, … ω, then αα, αβ, … (CSS's lower-greek, an
+// alphabetic system of the 24 letters, final sigma left out).
+func webGreekCounter(value int) string {
+	if value <= 0 {
+		return strconv.Itoa(value)
+	}
+	const letters = "αβγδεζηθικλμνξοπρστυφχψω"
+	alphabet := []rune(letters)
+	var digits []rune
+	for value > 0 {
+		value--
+		digits = append(digits, alphabet[value%len(alphabet)])
+		value /= len(alphabet)
+	}
+	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
+		digits[i], digits[j] = digits[j], digits[i]
+	}
+	return string(digits)
 }
 
 func webPadCounter(value int) string {
@@ -13659,12 +14217,18 @@ func (p *webParser) listMarkerHangs(style webStyle) bool {
 }
 
 func (p *webParser) nextBullet(style webStyle) string {
-	if len(p.lists) == 0 || style.ListNone {
+	if len(p.lists) == 0 {
 		return ""
 	}
 	list := &p.lists[len(p.lists)-1]
-	if list.ordered {
+	// Every list item counts (the list-item counter), whatever its marker.
+	if list.reversed {
+		list.n--
+	} else {
 		list.n++
+	}
+	if style.ListNone {
+		return ""
 	}
 	marker := style.ListStyle
 	// A nested bulleted list steps through the UA sheet's markers: disc, then
@@ -13677,7 +14241,7 @@ func (p *webParser) nextBullet(style webStyle) string {
 			marker = webListStyleSquare
 		}
 	}
-	return webListMarker(marker, list.ordered, list.n)
+	return webListMarker(marker, style.ListString, list.ordered, list.n)
 }
 
 func (p *webParser) ensureBlock() *webBlock {
@@ -14191,6 +14755,18 @@ func (p *webParser) addTextStyled(raw string, style webStyle) {
 	if p.inHead || raw == "" || style.Hidden {
 		return
 	}
+	if fl := p.firstLetter; fl != nil && p.textarea == nil && p.selectCtrl == nil && p.buttonCtrl == nil && !style.IconFont {
+		if cut := webFirstLetterEnd(raw); cut > 0 {
+			p.firstLetter = nil
+			letter := fl.style
+			letter.Href, letter.Link, letter.Underline = style.Href, style.Link, style.Underline
+			letter.FloatSide, letter.Hidden = 0, false
+			p.addTextStyled(raw[:cut], letter)
+			if raw = raw[cut:]; raw == "" {
+				return
+			}
+		}
+	}
 	// A field's own text belongs to the field, not to the page: a textarea's
 	// shipped value and an option's label are collected here and drawn once, by
 	// the closing tag, as the control's run.
@@ -14390,7 +14966,14 @@ func webGradientStamp(g webGradient, has bool) string {
 	}
 	first, last := g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color
 	axis := "h"
-	if g.Vertical {
+	switch {
+	case g.Conic:
+		axis = fmt.Sprintf("c%.1f@%.2f,%.2f", g.From, g.CX, g.CY)
+	case g.Radial:
+		axis = fmt.Sprintf("r%.2f,%.2f", g.CX, g.CY)
+	case g.Angled:
+		axis = fmt.Sprintf("a%.1f/%d%d", g.Angle, g.CornerX, g.CornerY)
+	case g.Vertical:
 		axis = "v"
 	}
 	return fmt.Sprintf("%s%d:%02x%02x%02x-%02x%02x%02x", axis, len(g.Stops),
@@ -14425,11 +15008,34 @@ func (d *webDocument) layoutFor(config *Config, elem Element, width int32) *webL
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.layout != nil && d.stamp == stamp {
-		return d.layout
+		if !d.sizesDirty {
+			return d.layout
+		}
+		// Pictures or web fonts arrived since it was measured. It is measured
+		// again, but not on every frame while a page's pictures stream in: on a
+		// handheld each layout of a long page is a pause the scroll can see, and
+		// a front page's pictures land one after another for seconds.
+		if every := webTuneNow().RelayoutEvery; every > 0 && time.Since(d.laidOutAt) < every {
+			return d.layout
+		}
 	}
 	d.layout = d.computeLayout(config, elem, width)
 	d.stamp = stamp
+	d.sizesDirty = false
+	d.laidOutAt = time.Now()
 	return d.layout
+}
+
+// noteSizesArrived marks the layout stale for pictures or web font files that
+// arrived: layoutFor measures the page again soon, not necessarily on the
+// next frame (webTune.RelayoutEvery). Any thread.
+func (d *webDocument) noteSizesArrived() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.sizesDirty = true
+	d.mu.Unlock()
 }
 
 // invalidateFormState drops the cached layout so the next frame measures the
@@ -16080,6 +16686,18 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					if !transformedPart[wi] {
 						word = webTransformWord(word, run.Style.Transform)
 					}
+					if run.Style.SmallCaps {
+						// Small caps: a word with lower-case letters is set in
+						// capitals a size smaller.
+						if upper := strings.ToUpper(word); upper != word {
+							small := run.Style
+							small.FontPx *= 0.8
+							if f := fontAtStyle(small); f != nil {
+								font = f
+							}
+							word = upper
+						}
+					}
 					if run.Style.Serif && !run.Style.Mono && !webFontCoversText(font, word) {
 						// A word the serif cannot set (Greek in a Lora page)
 						// keeps the UI face instead of turning into substitutes.
@@ -17279,6 +17897,12 @@ func drawWebGradient(renderer *sdl.Renderer, rect sdl.Rect, radius int32, g webG
 	if webPaintGradient(renderer, rect, radius, g) {
 		return
 	}
+	if g.Radial || g.Conic {
+		// Rings and slices need geometry; without it the gradient is its
+		// averaged colour, as it always was.
+		webPaintFill(renderer, rect.X, rect.Y, rect.W, rect.H, radius, webGradientAverage(g))
+		return
+	}
 	const maxBands = 96
 	if g.Vertical {
 		bands := rect.H
@@ -17356,133 +17980,165 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 	// Pictures decoded off the render thread since the last frame become
 	// textures first, so this frame can already draw them (webpage_decode.go).
 	webDecodeUpload(renderer)
+	offset := int32(startRow) * layout.RowH
+	// On the handhelds the page is painted once into GPU tiles and copied to
+	// the screen each frame (webpage_tiles.go); elsewhere, and on a page the
+	// tiles cannot hold, it is painted here every frame.
+	if webTilesDraw(renderer, config, doc, layout, rect, offset) {
+		webDecodeAhead(doc, layout, rect, offset)
+		return
+	}
 	renderWithClip(renderer, rect.X, rect.Y, rect.W, rect.H, func(r *sdl.Renderer) {
-		if doc.HasPaperGradient {
-			// The page background is a ramp too, not the average of one: a
-			// body gradient is most of what a landing page looks like.
-			drawWebGradient(r, rect, 0, doc.PaperGradient)
-		} else {
-			r.SetDrawColor(doc.Paper.R, doc.Paper.G, doc.Paper.B, 255)
-			r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
-		}
+		drawWebPageContent(r, config, doc, layout, rect, offset, webPaintAll)
+		// Pictures just outside the view are decoded before they scroll in.
+		webDecodeAhead(doc, layout, rect, offset)
+	})
+}
 
-		offset := int32(startRow) * layout.RowH
-		// The page paints as a browser stacks it (webpage_layers.go): layers
-		// with a negative z-index, the flow's surfaces, negative layers inside a
-		// stacking context, floats, the flow's pictures and text, then the
-		// positioned layers and pinned sticky bars in z order.
-		drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerUnder)
-		for _, bg := range layout.Backgrounds {
-			if bg.Lifted {
-				// Painted with its positioned element (webLiftPositioned).
-				continue
-			}
-			y := rect.Y + bg.Rect.Y - offset
-			if bg.Shadow {
-				// A soft shadow reaches past its box by the blur, so it has
-				// its own visibility test.
-				drawWebShadowPaint(r, bg, rect.X+bg.Rect.X, y, rect)
-				continue
-			}
-			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
-				continue
-			}
-			if bg.Image != "" {
-				drawWebImage(r, config, doc, webImagePos{
-					Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
-					ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
-					Radius: bg.Radius,
-				}, rect.X+bg.Rect.X, y)
-				continue
-			}
-			if bg.HasGradient {
-				drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, bg.Radius, bg.Gradient)
-				continue
-			}
-			webPaintFill(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
+// What drawWebPageContent paints: the whole page, or the part that moves with
+// the scroll — everything but position: fixed layers and sticky bars' pinned
+// copies — which is what a page tile holds (webpage_tiles.go).
+const (
+	webPaintAll uint8 = iota
+	webPaintScrolling
+)
+
+// drawWebPageContent paints the page's paper and everything on it into rect,
+// the page scrolled offset layout pixels down. The caller sets the clip.
+// Render thread.
+func drawWebPageContent(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, offset int32, part uint8) {
+	if doc.HasPaperGradient {
+		// The page background is a ramp too, not the average of one: a
+		// body gradient is most of what a landing page looks like.
+		drawWebGradient(r, rect, 0, doc.PaperGradient)
+	} else {
+		r.SetDrawColor(doc.Paper.R, doc.Paper.G, doc.Paper.B, 255)
+		r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
+	}
+
+	// The page paints as a browser stacks it (webpage_layers.go): layers
+	// with a negative z-index, the flow's surfaces, negative layers inside a
+	// stacking context, floats, the flow's pictures and text, then the
+	// positioned layers and pinned sticky bars in z order.
+	drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerUnder)
+	for _, bg := range layout.Backgrounds {
+		if bg.Lifted {
+			// Painted with its positioned element (webLiftPositioned).
+			continue
 		}
-		for _, bg := range layout.Rects {
-			if bg.BackgroundFill || bg.Shadow || bg.Lifted {
-				// Both are painted from layout.Backgrounds, in CSS order; a
-				// lifted one with its positioned element.
-				continue
+		y := rect.Y + bg.Rect.Y - offset
+		if bg.Shadow {
+			// A soft shadow reaches past its box by the blur, so it has
+			// its own visibility test.
+			drawWebShadowPaint(r, bg, rect.X+bg.Rect.X, y, rect)
+			continue
+		}
+		if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H || bg.Rect.W <= 0 || bg.Rect.H <= 0 {
+			continue
+		}
+		if bg.Image != "" {
+			drawWebImage(r, config, doc, webImagePos{
+				Key: bg.Image, Rect: bg.Rect, ObjectFit: bg.ObjectFit,
+				ObjectPosition: bg.ObjectPosition, Opacity: bg.Opacity,
+				Radius: bg.Radius,
+			}, rect.X+bg.Rect.X, y)
+			continue
+		}
+		if bg.HasGradient {
+			drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, bg.Radius, bg.Gradient)
+			continue
+		}
+		webPaintFill(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, bg.Radius, bg.Color)
+	}
+	for _, bg := range layout.Rects {
+		if bg.BackgroundFill || bg.Shadow || bg.Lifted {
+			// Both are painted from layout.Backgrounds, in CSS order; a
+			// lifted one with its positioned element.
+			continue
+		}
+		y := rect.Y + bg.Rect.Y - offset
+		if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
+			continue
+		}
+		if bg.Stroke {
+			thickness := bg.Thickness
+			if thickness < 1 {
+				thickness = 1
 			}
-			y := rect.Y + bg.Rect.Y - offset
-			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
-				continue
-			}
-			if bg.Stroke {
-				thickness := bg.Thickness
-				if thickness < 1 {
-					thickness = 1
-				}
-				if segs := webBorderPaintRects(bg.Rect, thickness, bg.BorderStyle, true); len(segs) > 0 {
-					for _, seg := range segs {
-						webPaintFill(r, rect.X+seg.X, y+seg.Y, seg.W, seg.H, 0, bg.Color)
-					}
-					continue
-				}
-				webPaintStroke(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
-				continue
-			}
-			if segs := webBorderPaintRects(bg.Rect, bg.Thickness, bg.BorderStyle, false); len(segs) > 0 {
+			if segs := webBorderPaintRects(bg.Rect, thickness, bg.BorderStyle, true); len(segs) > 0 {
 				for _, seg := range segs {
 					webPaintFill(r, rect.X+seg.X, y+seg.Y, seg.W, seg.H, 0, bg.Color)
 				}
 				continue
 			}
-			if bg.HasGradient {
-				drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
-				continue
-			}
-			webPaintFill(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
+			webPaintStroke(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
+			continue
 		}
-		drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerUnderText)
-		drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerFloat)
-		// Images draw on their own reserved rows, before the text, so a page
-		// with a header image scrolls the photo away like a normal line.
-		for i := range layout.Images {
-			im := layout.Images[i]
-			if im.Invisible || im.Lifted {
-				continue
+		if segs := webBorderPaintRects(bg.Rect, bg.Thickness, bg.BorderStyle, false); len(segs) > 0 {
+			for _, seg := range segs {
+				webPaintFill(r, rect.X+seg.X, y+seg.Y, seg.W, seg.H, 0, bg.Color)
 			}
-			y := rect.Y + im.Rect.Y - offset
-			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
-				continue
-			}
-			restore := webClipPaint(r, rect, im.Clip, im.HasClip, rect.X, rect.Y-offset)
-			drawWebImage(r, config, doc, im, rect.X+im.Rect.X, y)
-			restore()
+			continue
 		}
-		// Video play cards come after the images on the same terms: they
-		// own their reserved rows and draw before the text rows.
-		for i := range layout.Videos {
-			v := layout.Videos[i]
-			if v.Invisible {
-				continue
-			}
-			y := rect.Y + v.Rect.Y - offset
-			if v.Rect.H <= 0 || y >= rect.Y+rect.H || y+v.Rect.H <= rect.Y {
-				continue
-			}
-			restore := webClipPaint(r, rect, v.Clip, v.HasClip, rect.X, rect.Y-offset)
-			drawWebVideo(r, config, doc, v, rect.X+v.Rect.X, y)
-			restore()
+		if bg.HasGradient {
+			drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
+			continue
 		}
-		for i := startRow; i < len(layout.Rows); i++ {
-			y := rect.Y + layout.Rows[i].Y - offset
-			if y >= rect.Y+rect.H {
-				break
-			}
-			// The row's words joined into stretches that share their paint,
-			// measured once (webpage_paintfast.go): inline background chips
-			// first, then the text, shadows and decorations.
-			drawWebPaintRow(r, config, layout.paintRuns(i), rect.X, y, rect, offset)
+		webPaintFill(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
+	}
+	drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerUnderText)
+	drawWebLayerPhase(r, config, doc, layout, rect, offset, webLayerFloat)
+	// Images draw on their own reserved rows, before the text, so a page
+	// with a header image scrolls the photo away like a normal line.
+	for i := range layout.Images {
+		im := layout.Images[i]
+		if im.Invisible || im.Lifted {
+			continue
 		}
+		y := rect.Y + im.Rect.Y - offset
+		if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
+			continue
+		}
+		restore := webClipPaint(r, rect, im.Clip, im.HasClip, rect.X, rect.Y-offset)
+		drawWebImage(r, config, doc, im, rect.X+im.Rect.X, y)
+		restore()
+	}
+	// Video play cards come after the images on the same terms: they
+	// own their reserved rows and draw before the text rows.
+	for i := range layout.Videos {
+		v := layout.Videos[i]
+		if v.Invisible {
+			continue
+		}
+		y := rect.Y + v.Rect.Y - offset
+		if v.Rect.H <= 0 || y >= rect.Y+rect.H || y+v.Rect.H <= rect.Y {
+			continue
+		}
+		restore := webClipPaint(r, rect, v.Clip, v.HasClip, rect.X, rect.Y-offset)
+		drawWebVideo(r, config, doc, v, rect.X+v.Rect.X, y)
+		restore()
+	}
+	start := int(offset / layout.RowH)
+	if part == webPaintScrolling {
+		// A tile's top edge cuts through lines: a heading's glyphs reach
+		// below the row they are laid out in.
+		start -= webTileRowLead
+	}
+	for i := max(start, 0); i < len(layout.Rows); i++ {
+		y := rect.Y + layout.Rows[i].Y - offset
+		if y >= rect.Y+rect.H {
+			break
+		}
+		// The row's words joined into stretches that share their paint,
+		// measured once (webpage_paintfast.go): inline background chips
+		// first, then the text, shadows and decorations.
+		drawWebPaintRow(r, config, layout.paintRuns(i), rect.X, y, rect, offset)
+	}
+	if part == webPaintAll {
 		drawWebTopLayers(r, config, doc, layout, rect, offset)
-		// Pictures just outside the view are decoded before they scroll in.
-		webDecodeAhead(doc, layout, rect, offset)
-	})
+	} else {
+		drawWebTopLayersPart(r, config, doc, layout, rect, offset, false)
+	}
 }
 
 // webDocumentRows returns the row count for a styled page, or 0 when the page

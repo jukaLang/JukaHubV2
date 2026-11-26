@@ -1359,11 +1359,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		// Controller card lists them too. The iPod layout names its keys on
 		// its own screens.
 		if !musicPodActive(config) {
-			if hintsUseKeyboard() {
-				hints = append([]FooterHint(nil), musicPlayerKeyHints...)
-			} else {
-				hints = append([]FooterHint(nil), musicPlayerPadHints...)
-			}
+			// The pad's or the keyboard's, with a focused media control's and
+			// a radio station's words (music_transport.go).
+			now, _ := musicPlayerHintsNow(config)
+			hints = append([]FooterHint(nil), now...)
 		}
 	case "Apps":
 		// The launcher is a tile grid: A starts the focused app.

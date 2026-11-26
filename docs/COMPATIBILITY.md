@@ -383,8 +383,10 @@ download decides, as before.
 A save state is a snapshot of the core's memory in that core's own format, so
 a new build of a core can refuse a state an older build wrote. On the handheld,
 **Settings → Games & emulators → Emulator updates** decides what the daily check
-does — for the libretro cores, the PPSSPP build JukaHub manages, hakuX when
-JukaHub installed it, and the runtimes JukaHub downloads (the Windows-app
+does — for the libretro cores, the PPSSPP build JukaHub manages, hakuX, RetroArch
+and PortMaster when JukaHub installed them, Dolphin (GameCube and Wii), ARMSX2
+(PlayStation 2), the Godot port and the FreeJ2ME-Plus pair for J2ME games when
+JukaHub set them up, and the runtimes JukaHub downloads (the Windows-app
 runtime, AndroidRT); the row says which of those this device has. On a PC the
 same setting covers the emulators JukaHub installed there (see
 [below](#beyond-the-cores-hakux-runtimes-and-a-pcs-emulators)):
@@ -421,6 +423,13 @@ left alone. Every pass writes one line to the device log with its counts
 (installed, updated, current, refused, failed, held for a press, on the
 firmware partition, not published for this device).
 
+Three arcade cores stay with a press: current MAME, MAME 2003-Plus and
+FinalBurn Neo, whose nightlies move the romset the core expects, so an unattended
+update could stop games that ran the day before. The MAME cores frozen at one
+MAME release — MAME 2000, 2003, 2003 Midway, 2010, 2015 and 2016 — expect the
+same romset from every nightly, and since 2026-11-26 the pass updates them like
+any other core.
+
 #### GPU cores, probation and automatic rollback
 
 Cores that draw with the GPU — Mupen64Plus-Next and ParaLLEl N64, Flycast,
@@ -435,10 +444,19 @@ second after **A**, while the build the firmware or CrossMix shipped worked.
 
 - **A build that links desktop OpenGL is refused** before it replaces anything,
   like a build that needs a newer glibc, on a press too.
+- **A GPU core that cannot run here is not offered.** Since 2026-11-26 the
+  Emulators page's downloadable tiles and **Get more cores** leave out a GPU
+  core unless something shows its build draws with OpenGL ES: a variant named
+  for it (`…_gles2`, `…_gles3`), JukaHub's own build for TrimUI, or the cores
+  workflow's survey finding an OpenGL ES library in the buildbot's build and no
+  desktop one. A console's "no emulator found" tile does not install such a
+  core either; the press says why. (On 2026-11-25 a Smart Pro installed Yaba
+  Sanshiro from that list and the build was refused: it needs `libGL.so.1`.)
+  Dolphin and ARMSX2 keep their own setups, which pick a build that loads here.
 - **The automatic pass leaves a GPU core on the firmware's build.** It names it
-  once in its toast; a press on the Emulators page still installs the buildbot
-  build, with a warning. A GPU core JukaHub already moved to the buildbot's builds
-  keeps following them.
+  once in its toast, as the build made for this GPU; a press on the core's own
+  tile still installs the buildbot build. A GPU core JukaHub already moved to
+  the buildbot's builds keeps following them.
 - **Every new build is on probation until a game has run with it.** If the first
   game that uses it fails at once — RetroArch could not open the core, the
   content or the GPU context failed, it crashed, or it exited with an error
@@ -516,7 +534,34 @@ toast says where Xbox games go. The card then remembers it had one
 (`Apps/JukaHub/data/hakux/auto-install.json`): a hakuX you delete is not put
 back, and an `Emus/XBOX` you made yourself is never replaced. *Notify me* does
 not announce it, *Off* never installs it, and on the Brick Pro (untested) it
-stays a press. Each is checked once a day and keeps its own record
+stays a press.
+
+Since 2026-11-26 the same pass also keeps the emulators JukaHub sets up on the
+handheld itself current, each with the install its own tile runs
+(`player/emuautoupdate_handheld.go`):
+
+- **Dolphin** (GameCube and Wii): JukaHub's own build for TrimUI whenever the
+  cores workflow publishes a new one; where the core in use is the libretro
+  buildbot's nightly, the next nightly a week after it at the earliest — it is
+  one of the buildbot's largest downloads, with a new build nearly every day. A
+  build that cannot load here never replaces the one there, and JukaHub's own
+  build is only replaced by a newer one of its own.
+- **ARMSX2** (PlayStation 2): the release a setup would pick (the newest stable
+  one with a Linux arm64 libretro core, else the newest nightly), with whatever
+  else that release needs beside the core (its resources folder, for a build
+  that does not carry it); a stable release as soon as it is out, a nightly a
+  week after the release in use at the earliest.
+- **The Godot port**: when the standalone port's repository has a commit newer
+  than the install (`godot-port.json` records the commit from now on).
+- **FreeJ2ME-Plus**: a newer core-and-jar pair in JukaHub's `cores-aarch64`
+  release, into RetroArch's own system folder.
+
+Only what JukaHub set up and nobody changed since is replaced: a core copied in
+by hand, a port put on the card some other way, a pair from elsewhere keep their
+own way of updating. **L1** (Update) on the Emulators page runs the same four
+after the cores, hakuX and PPSSPP, without the week's wait.
+
+Each is checked once a day and keeps its own record
 (`emu-autoupdate.json` beside the patch state), so:
 
 - one that is running — an Xbox game, an Android game, an emulator open on the
@@ -589,5 +634,6 @@ Mouse and touch select rows and tabs in the same way.
   [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
 * PlayStation 2 has no tier either: in the ARMSX2 core the light games run at
   or near full speed on the A133P models and most 3D games well below it. How
-  ARMSX2, its resources folder and the BIOS are set up is in
+  ARMSX2 and the BIOS are set up, where the games go (`Roms/PS2`) and which
+  renderer each start gets is in
   [GAME_LIBRARY.md](GAME_LIBRARY.md#playstation-2-on-the-handheld).

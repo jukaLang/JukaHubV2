@@ -260,6 +260,9 @@ func voiceEmuRunTile(config *Config, name string) {
 		// GameCube or Wii: that console's games, or Dolphin's setup
 		// (dolphin_folders.go).
 		dolphinConsoleActivate(e)
+	case ps2ConsoleTile(e):
+		// PlayStation 2: its games, or ARMSX2's setup (ps2_folders.go).
+		ps2ConsoleActivate(e)
 	case voiceEmuStarts(e):
 		launchEmulatorEntry(e)
 	case e.Status == emuAvailable && strings.TrimSpace(e.Launch) == "":
@@ -280,7 +283,7 @@ func voiceEmuOpenTile(config *Config, name string, press bool) {
 		if entries[i].Name != name {
 			continue
 		}
-		emuPanel.cursor = i
+		emuPanelSelect(entries, i)
 		if press {
 			emuPanelActivate(config)
 		}

@@ -298,7 +298,12 @@ models (Smart Pro, Brick, Brick Pro, Hammer) two threads, one screen ahead and
 is scaled to the size its box has on the screen before it becomes a texture,
 so the 64 MB picture cache holds a whole page. The log's `browser` line
 `reader tune: …` names the choice; `JUKAHUB_WEB_DECODE=0` goes back to decoding
-on the drawing thread for one run. See
+on the drawing thread for one run. The page itself is painted once into GPU
+tiles and copied each frame — 12 tiles on the Smart Pro S, 10 on the A133P
+models (`JUKAHUB_WEB_TILES=0` paints it directly for one run) — and while its
+pictures and web fonts arrive it is laid out again at most every 250 ms on the
+Smart Pro S and 400 ms on the A133P models; the page as the server sent it is
+drawn after 0.9 s and 0.8 s of its scripts. See
 [BROWSER.md](BROWSER.md#speed-on-the-handhelds).
 
 ### CPU boost in games and the heat guard

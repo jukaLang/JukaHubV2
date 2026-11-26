@@ -546,9 +546,14 @@ func raGlibcStamp() string {
 		return raGlibcMode() + ":none"
 	}
 	stamp := raGlibcMode() + ":" + filepath.Base(libDir) + ":" + strings.Join(raGlibcRefusedUnder(libDir), ",")
-	// The device libraries beside it count too (coredevlibs.go).
+	// The device libraries beside it count too (coredevlibs.go,
+	// dolphin_x11.go). A former load refusal is checked again when the real
+	// X11 chain lands.
 	if dev := coreDevLibsStamp(); dev != "" {
 		stamp += ":dev=" + dev
+	}
+	if dolphinX11Ready() {
+		stamp += ":x11=" + dolphinX11Version
 	}
 	return stamp
 }
@@ -1153,7 +1158,8 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 		// sure of here too, for the Always setting, which skips
 		// raGlibcCoreNeeds.
 		coreDevLibsEnsureFor(core)
-		if plan.extra = coreDevLibsForCore(core); len(plan.extra) > 0 && mode != raGlibcAlways {
+		plan.extra = append(coreDevLibsForCore(core), dolphinX11Dirs(core)...)
+		if len(plan.extra) > 0 && mode != raGlibcAlways {
 			plan.why = filepath.Base(core) + " needs a newer glibc or device libraries the firmware does not have"
 		}
 	case menu:
@@ -1167,6 +1173,9 @@ func raGlibcPlanFor(core, preferred string, menu bool) (plan raGlibcPlan, missin
 			coreDevLibsEnsureFor(dolphinCore)
 		}
 		plan.extra = coreDevLibsDirs()
+		if dolphinCore := dolphinFindCore(); dolphinCore != "" {
+			plan.extra = append(plan.extra, dolphinX11Dirs(dolphinCore)...)
+		}
 	}
 	return plan, false, unprobed
 }

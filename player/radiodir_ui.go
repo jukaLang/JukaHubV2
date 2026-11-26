@@ -14,6 +14,11 @@ package main
 // genre's stations) and Search (Y or A on the search row types a name). Left
 // and Right or L1 and R1 switch tabs, A plays, X keeps the station in your
 // stations (or takes it out), Y searches or reloads, B steps back.
+//
+// While something plays, both screens show it on a Now playing row on top: A
+// stops it (pauses a song) or tunes in again, X opens the player. A on the
+// station that is on the air does the same Play / Stop in place. A tester
+// could not stop the radio from here (2026-11-26; music_transport.go).
 
 import (
 	"strconv"
@@ -24,6 +29,9 @@ import (
 
 // radioDirSceneName is the directory's scene, added in memory when opened.
 const radioDirSceneName = "RadioDirectory"
+
+// radioDirNowID is the directory's Now playing row, above every tab's list.
+const radioDirNowID = "np"
 
 // musicShelfTabRadio is the Music screen's Radio shelf (musichistory.go
 // counts the shelves).
@@ -289,6 +297,12 @@ func radioDirRender(renderer *sdl.Renderer, config *Config) {
 		y += 180
 	}
 
+	// What plays comes first on every tab: its pill is what A does.
+	if np, ok := radioNowShown(); ok {
+		drawRow(radioDirNowID, tbxRowSpec{icon: "music", title: radioNowTitle(np), subtitle: radioNowLine(np),
+			pill: np.action(), tone: tbxToneAccent})
+	}
+
 	switch radioDirUI.tab {
 	case radioDirTabCountry:
 		if radioDirUI.countryPick || radioDirUI.country == "" {
@@ -338,7 +352,23 @@ func radioDirRender(renderer *sdl.Renderer, config *Config) {
 
 	nav.extend(y)
 	tbxUnclip(renderer)
+	// A list that lost its focused row (a new tab, genre, country or search)
+	// starts on its first row, not on the Now playing row above it; while the
+	// list is still loading, the focus waits for its rows.
+	waiting := false
+	if nav.index() < 0 {
+		waiting = true
+		for _, it := range nav.items {
+			if it.id != radioDirNowID {
+				nav.focus, waiting = it.id, false
+				break
+			}
+		}
+	}
 	nav.end()
+	if waiting {
+		nav.focus = ""
+	}
 	tbxDrawScrollbar(renderer, frame.x+frame.w+10, view.Y, view.H, nav.contentH, nav.scroll)
 	tbxEndFrame(renderer, config)
 }
@@ -359,10 +389,18 @@ func radioDirDrawStations(drawRow func(string, tbxRowSpec), empty func(string, s
 		}
 		return
 	}
+	np, npOK := radioNowShown()
 	for i, s := range l.stations {
 		spec := tbxRowSpec{icon: "podcast", title: s.Name, subtitle: radioDirStationLine(s)}
 		if radioDirUI.saved[s.URL] {
 			spec.pill, spec.tone = "Saved", tbxToneGood
+		}
+		if npOK && s.URL == np.path {
+			// The station on the air (or stopped): A is its Play / Stop.
+			if spec.pill != "" {
+				spec.note = spec.pill
+			}
+			spec.pill, spec.tone = np.state(), tbxToneAccent
 		}
 		drawRow("st:"+strconv.Itoa(i), spec)
 	}
@@ -442,6 +480,10 @@ func radioDirAction(config *Config, act tbxAction) bool {
 		radioDirActivate(config, nav.focus)
 		return true
 	case tbxActX:
+		if nav.focus == radioDirNowID {
+			radioOpenPlayer(config, false)
+			return true
+		}
 		radioDirToggleFocused()
 		return true
 	case tbxActY:
@@ -462,10 +504,17 @@ func radioDirAction(config *Config, act tbxAction) bool {
 			return false
 		}
 		PlayBackSound()
-		radioDirUI.nav.first()
+		radioDirFocusTop()
 		return true
 	}
 	return tbxNavAction(nav, act)
+}
+
+// radioDirFocusTop puts the focus on the open list's first row, under the Now
+// playing row: radioDirRender picks it once the list is laid out.
+func radioDirFocusTop() {
+	radioDirUI.nav.focus = ""
+	radioDirUI.nav.scroll = 0
 }
 
 // radioDirSwitchTab steps to the next tab and loads what it shows.
@@ -481,10 +530,17 @@ func radioDirSwitchTab(dir int) {
 // radioDirActivate is A on a row.
 func radioDirActivate(config *Config, id string) {
 	switch {
+	case id == radioDirNowID:
+		radioToggleNow()
 	case strings.HasPrefix(id, "st:"):
 		i, err := strconv.Atoi(id[3:])
 		l := radioDirCurrentList()
 		if err != nil || l == nil || i < 0 || i >= len(l.stations) {
+			return
+		}
+		// The station on the air: A stops it, or tunes in again, in place.
+		if radioIsNow(l.stations[i].URL) {
+			radioToggleNow()
 			return
 		}
 		PlayActivateSound()
@@ -503,12 +559,12 @@ func radioDirActivate(config *Config, id string) {
 		}
 		PlayActivateSound()
 		radioDirUI.country, radioDirUI.countryPick = code, false
-		radioDirUI.nav.first()
+		radioDirFocusTop()
 		radioDirLoadTab(false)
 	case id == "genre":
 		PlayActivateSound()
 		radioDirUI.genre = ""
-		radioDirUI.nav.first()
+		radioDirFocusTop()
 	case strings.HasPrefix(id, "g:"):
 		i, err := strconv.Atoi(id[2:])
 		if err != nil || i < 0 || i >= len(radioDirGenres) {
@@ -516,7 +572,7 @@ func radioDirActivate(config *Config, id string) {
 		}
 		PlayActivateSound()
 		radioDirUI.genre = radioDirGenres[i]
-		radioDirUI.nav.first()
+		radioDirFocusTop()
 		radioDirLoadTab(false)
 	case id == "search":
 		radioDirAskQuery()
@@ -530,7 +586,7 @@ func radioDirAskQuery() {
 		text = radioDirOneLine(text, 60)
 		radioDirUI.query = text
 		radioDirUI.tab = radioDirTabSearch
-		radioDirUI.nav.first()
+		radioDirFocusTop()
 		if text != "" {
 			radioDirLoad("q:"+strings.ToLower(text), false)
 		}
@@ -575,8 +631,14 @@ func radioDirFooterHints(scene string) ([]FooterHint, bool) {
 	hints := []FooterHint{{Button: "L1/R1", Label: "Tabs"}}
 	focus := radioDirUI.nav.focus
 	switch {
+	case focus == radioDirNowID:
+		hints = append(hints, FooterHint{Button: "A", Label: radioNowAction()}, FooterHint{Button: "X", Label: "Player"})
 	case strings.HasPrefix(focus, "st:"):
-		hints = append(hints, FooterHint{Button: "A", Label: "Play"}, FooterHint{Button: "X", Label: "Save"})
+		play := "Play"
+		if s, ok := radioDirStationFor(focus); ok && radioIsNow(s.URL) {
+			play = radioNowAction()
+		}
+		hints = append(hints, FooterHint{Button: "A", Label: play}, FooterHint{Button: "X", Label: "Save"})
 	case focus != "":
 		hints = append(hints, FooterHint{Button: "A", Label: "Open"})
 	}
@@ -588,20 +650,115 @@ func radioDirFooterHints(scene string) ([]FooterHint, bool) {
 	return append(hints, FooterHint{Button: "B", Label: "Back"}), true
 }
 
+// radioDirStationFor is the station row id names on the open list.
+func radioDirStationFor(id string) (radioStation, bool) {
+	if !strings.HasPrefix(id, "st:") {
+		return radioStation{}, false
+	}
+	i, err := strconv.Atoi(id[3:])
+	l := radioDirCurrentList()
+	if err != nil || l == nil || i < 0 || i >= len(l.stations) {
+		return radioStation{}, false
+	}
+	return l.stations[i], true
+}
+
+// ── Now playing, on both radio screens ───────────────────────────────────
+
+// radioNowShown is what the Now playing rows show: the loaded track while it
+// plays or is paused, or a station that was stopped (musicNowState.shown).
+func radioNowShown() (musicNowState, bool) {
+	np, ok := musicNow()
+	return np, ok && np.shown()
+}
+
+// radioIsNow reports whether link is the station a Now playing row shows: A on
+// its row is Play / Stop in place rather than a fresh tune-in.
+func radioIsNow(link string) bool {
+	np, ok := radioNowShown()
+	return ok && link != "" && np.path == link
+}
+
+// radioNowAction is what A does on a Now playing row: Stop, Pause or Play.
+func radioNowAction() string {
+	np, _ := musicNow()
+	return np.action()
+}
+
+// radioNowTitle is a Now playing row's title: the track's name, else its link's.
+func radioNowTitle(np musicNowState) string {
+	if t := radioDirOneLine(np.title, 80); t != "" {
+		return t
+	}
+	return channelNameFromURL(np.path)
+}
+
+// radioNowLine is a Now playing row's second line: where the track is, and what
+// it is.
+func radioNowLine(np musicNowState) string {
+	where := "Now playing"
+	if st := np.state(); st != "Playing" {
+		where = st
+	}
+	if np.live {
+		return where + " · Internet radio"
+	}
+	return where + " · Music"
+}
+
+// radioToggleNow is A on a Now playing row, or on the station it shows: Stop,
+// Pause or Play, as the player's own control (musicTogglePause plays its own
+// click). A stopped station tunes in again only online, and not in Kid mode.
+func radioToggleNow() {
+	np, ok := musicNow()
+	if !ok {
+		return
+	}
+	if np.live && !np.playing {
+		if !uiModeStreamOK(np.path) {
+			return
+		}
+		if !IsOnline() && !netReconnecting() {
+			ShowToast(offlinePlainNotice, ToastKindWarning)
+			return
+		}
+		ShowToast("Tuning in to "+radioNowTitle(np)+"…", ToastKindInfo)
+	}
+	musicTogglePause()
+}
+
+// radioOpenPlayer is X on a Now playing row: the music player, the pad on its
+// Play / Stop for a station. fromShelf sends the player's B back to the Radio
+// shelf (it lives in the player's scene); from the directory B returns there.
+func radioOpenPlayer(config *Config, fromShelf bool) {
+	PlayActivateSound()
+	musicShelf.open, musicShelf.fromShelf = false, fromShelf
+	openMusicPlayerScene(config)
+	if musicCurrentLive() {
+		musicCtlFocusPlay()
+	}
+}
+
 // ── The Music screen's Radio shelf ───────────────────────────────────────
 
 // radioShelfGen marks the Radio shelf's rows as built (musicShelf.gen; 0 is
 // "rebuild").
 const radioShelfGen = ^uint64(0) - 7
 
-// musicShelfRefreshRadio builds the Radio shelf: the directory, then the
-// user's stations (musicShelfRefresh).
+// musicShelfRefreshRadio builds the Radio shelf: what plays, the directory,
+// then the user's stations (musicShelfRefresh).
 func musicShelfRefreshRadio() {
 	if musicShelf.gen == radioShelfGen {
 		return
 	}
-	rows := []musicShelfRow{{kind: "radiodir", title: "Radio directory",
-		sub: "Stations by country, genre or name — free, from Radio Browser"}}
+	var rows []musicShelfRow
+	// The Now playing row's words are read as it is drawn: A changes them
+	// under it (radioShelfNowRow).
+	if _, ok := radioNowShown(); ok {
+		rows = append(rows, musicShelfRow{kind: "nowplaying"})
+	}
+	rows = append(rows, musicShelfRow{kind: "radiodir", title: "Radio directory",
+		sub: "Stations by country, genre or name — free, from Radio Browser"})
 	for _, s := range radioDirSavedStations() {
 		sub := s.Group
 		if sub == "" {
@@ -640,4 +797,66 @@ func musicShelfChooseRadio(config *Config, row musicShelfRow) {
 		musicShelf.fromShelf = true // B goes back to the shelf, as History does
 		ShowToast("Tuning in to "+row.title+"…", ToastKindInfo)
 	}
+}
+
+// musicShelfChooseNow is A on the Radio shelf's Now playing row, or on the
+// saved station it shows: Play / Stop in place. It reports false for any
+// other row, which musicShelfChooseRadio opens.
+func musicShelfChooseNow(row musicShelfRow) bool {
+	if row.kind != "nowplaying" && (row.kind != "station" || !radioIsNow(row.path)) {
+		return false
+	}
+	radioToggleNow()
+	return true
+}
+
+// musicShelfNowFocused reports whether the shelf's cursor is on the Now
+// playing row, where X opens the player instead of rescanning.
+func musicShelfNowFocused() bool {
+	c := musicShelf.cursor
+	return c >= 0 && c < len(musicShelf.rows) && musicShelf.rows[c].kind == "nowplaying"
+}
+
+// radioShelfNowRow is a Radio shelf row as it is drawn this frame: the Now
+// playing row's words, and the saved station on the air marked where it is.
+func radioShelfNowRow(row musicShelfRow, np musicNowState, npOK bool) musicShelfRow {
+	switch {
+	case row.kind == "nowplaying" && npOK:
+		row.title, row.sub = radioNowTitle(np), radioNowLine(np)
+	case row.kind == "nowplaying":
+		row.title, row.sub = "Nothing playing", "Pick a station below"
+	case row.kind == "station" && npOK && row.path == np.path:
+		row.sub = np.state() + " · " + row.sub
+	}
+	return row
+}
+
+// radioShelfNowGlyph is the mark in the Now playing row's artwork square: what
+// A does.
+func radioShelfNowGlyph(np musicNowState) string {
+	switch np.action() {
+	case "Stop":
+		return "stop"
+	case "Pause":
+		return "pause"
+	}
+	return "play"
+}
+
+// musicShelfNowFooter is the shelf's footer on the Now playing row or on the
+// station it shows: A's Play / Stop and, on the row, X's player. ok is false
+// elsewhere, where the shelf keeps its own line.
+func musicShelfNowFooter() (string, bool) {
+	c := musicShelf.cursor
+	if c < 0 || c >= len(musicShelf.rows) {
+		return "", false
+	}
+	switch row := musicShelf.rows[c]; {
+	case row.kind == "nowplaying":
+		return hintLine(FooterHint{Button: "A", Label: radioNowAction()}, FooterHint{Button: "X", Label: "Player"},
+			FooterHint{Button: "L1/R1", Label: "Shelves"}), true
+	case row.kind == "station" && radioIsNow(row.path):
+		return hintLine(FooterHint{Button: "A", Label: radioNowAction()}, FooterHint{Button: "L1/R1", Label: "Shelves"}), true
+	}
+	return "", false
 }

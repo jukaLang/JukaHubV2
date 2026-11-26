@@ -423,7 +423,14 @@ func (s *xboxBoostSession) background(before uint64) {
 	if sttServeStopIdle("a boosted game needs the memory", true) {
 		s.detail("speech recognizer stopped")
 	}
-	if memFreeKernel() {
+	// Not for a game that already ended: the sync and the dropped pages
+	// would only slow JukaHub's own screen (after a GreenOvercast start that
+	// closed within 3 s, the failure card stalled 1.5 s while this ran,
+	// JH-AT4EEE).
+	s.mu.Lock()
+	gone := s.ended
+	s.mu.Unlock()
+	if !gone && memFreeKernel() {
 		s.detail("page cache dropped")
 	}
 	// JukaHub's own threads behind the game, unless it already ended

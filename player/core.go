@@ -3892,6 +3892,13 @@ func ensureVideoScene(config *Config) bool {
 	// started from is recorded (media_hub.go): Back from a file opened in Files
 	// returns to Files, Back from Media's own player stays in Media.
 	mediaNotePlayOrigin(config)
+	if videoInlineStart {
+		// A web page's play card: the video starts in its card, on the page
+		// (brw_inline_video.go).
+		videoInlineStart = false
+		return false
+	}
+	brwInlineForget()
 	idx := sceneWithVideoElement(config)
 	if idx < 0 || idx == currentSceneIndex {
 		return false

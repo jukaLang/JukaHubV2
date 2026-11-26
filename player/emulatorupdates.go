@@ -755,14 +755,30 @@ func coreRefusalForget(core, crc string) {
 
 // ── What an automatic pass leaves to a press ─────────────────────────────────
 
-// coreAutoUpdateNever reports a core no automatic pass replaces: MAME's family
-// and FinalBurn Neo. Their nightlies move the romset version the core expects,
-// so an unattended update can stop arcade games that ran the day before on a
-// card whose romsets were built for the installed build. A press on the
-// Emulators page still updates them.
+// coreAutoUpdateNever reports a core no automatic pass replaces: the arcade
+// cores whose nightlies move the romset the core expects — current MAME, MAME
+// 2003-Plus (its own set, still growing) and FinalBurn Neo — so an unattended
+// update can stop arcade games that ran the day before on a card whose romsets
+// were built for the installed build. A press on the Emulators page still
+// updates them. The MAME cores frozen at one MAME release
+// (coreArcadeFrozenRomsets) expect the same romset from every nightly, so
+// since 2026-11-26 ("make sure all emulators get auto updated") the pass
+// updates them like any other core; a MAME core this table does not know stays
+// with a press.
 func coreAutoUpdateNever(core string) bool {
 	core = normalizeCoreName(core)
+	if coreArcadeFrozenRomsets[core] {
+		return false
+	}
 	return strings.HasPrefix(core, "mame") || core == "fbneo"
+}
+
+// coreArcadeFrozenRomsets are the MAME cores pinned to one MAME release, whose
+// romset no nightly changes: MAME 2000 (0.37b5), 2003 and 2003 Midway (0.78),
+// 2010 (0.139), 2015 (0.160) and 2016 (0.174).
+var coreArcadeFrozenRomsets = map[string]bool{
+	"mame2000": true, "mame2003": true, "mame2003_midway": true,
+	"mame2010": true, "mame2015": true, "mame2016": true,
 }
 
 // coreCrossMixShippedCRCs lists, per core, the CRC32 (lower-case hex, as the

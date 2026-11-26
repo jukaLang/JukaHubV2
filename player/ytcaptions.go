@@ -215,6 +215,11 @@ var ytNativeCaptionsFor = ytNativeCaptions
 // into a client cooldown. A client that answers OK with nothing for the
 // language is the answer: the next client would list the same tracks.
 func ytNativeCaptions(ctx context.Context, videoID, lang string) ([]subtitleCue, error) {
+	// The stream resolver's player answer lists the captions already
+	// (videocaptions.go): no second player call when it answers.
+	if cues, answered, err := ytCaptionsFromStash(ctx, videoID, lang); answered {
+		return cues, err
+	}
 	if !ytNativeAllowed() {
 		return nil, errors.New("the native client is cooling down")
 	}
@@ -247,6 +252,7 @@ func ytNativeCaptions(ctx context.Context, videoID, lang string) ([]subtitleCue,
 			lastErr = fmt.Errorf("%s: %w", client.name, err)
 			continue
 		}
+		ytCaptionStashPut(videoID, player)
 		if len(tracks) == 0 {
 			return nil, fmt.Errorf("%s: the answer lists no caption tracks: %w", client.name, errNoCaptions)
 		}
@@ -271,6 +277,11 @@ func ytNativeCaptions(ctx context.Context, videoID, lang string) ([]subtitleCue,
 // empty answer is a failure: it is how YouTube refuses a track it wants a
 // proof-of-origin token for.
 func ytFetchCaptionTrack(ctx context.Context, choice ytCaptionChoice) ([]subtitleCue, error) {
+	// An address YouTube marks for a proof-of-origin token answers with an
+	// empty body without one: not worth the request (videocaptions.go).
+	if ytCaptionNeedsToken(choice.track.BaseURL) {
+		return nil, errCaptionNeedsToken
+	}
 	raw, err := ytCaptionURL(choice.track.BaseURL, choice.tlang)
 	if err != nil {
 		return nil, err

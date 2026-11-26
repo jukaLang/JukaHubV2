@@ -63,6 +63,7 @@ const (
 	evdevKeyLeftAlt = 56
 	evdevKeySpace   = 57
 	evdevKeyF4      = 62
+	evdevKeyF12     = 88
 	evdevKeyUp      = 103
 	evdevKeyLeft    = 105
 	evdevKeyRight   = 106
@@ -408,10 +409,12 @@ func evdevPickPad(devs []evdevDevice) (evdevDevice, bool) {
 // A, B, X and Y under the face-button swap, and the sticks' calibration.
 // keys turns on the Windows-app layout (a Wine session, wineInputStart): the
 // pad also types the few keys a Windows program needs without a keyboard.
+// keyboardToggle changes Start from Enter to F12 for a floating keyboard.
 type mbridgeParams struct {
 	codeA, codeB, codeX, codeY uint16
 	calL, calR                 stickCal
 	keys                       bool
+	keyboardToggle             bool
 }
 
 const (
@@ -445,6 +448,7 @@ const (
 	mbKeyRight
 	mbKeyAlt
 	mbKeyF4
+	mbKeyF12
 	mbKeyCount
 )
 
@@ -452,7 +456,7 @@ const (
 var mbridgeKeyCodes = [mbKeyCount]uint16{
 	evdevKeyEsc, evdevKeyTab, evdevKeyEnter, evdevKeySpace,
 	evdevKeyUp, evdevKeyDown, evdevKeyLeft, evdevKeyRight,
-	evdevKeyLeftAlt, evdevKeyF4,
+	evdevKeyLeftAlt, evdevKeyF4, evdevKeyF12,
 }
 
 // mbridgeEngine turns the pad's evdev events into mouse events. It does no
@@ -466,7 +470,7 @@ var mbridgeKeyCodes = [mbKeyCount]uint16{
 // the pointer, trig and trigAt the L2 / R2 wheel latch and its next repeat,
 // last the previous tick. The Windows-app layout (p.keys) adds kbd, the keys
 // held down on the virtual device; combo, Start pressed while Select was held
-// (Alt+F4 instead of Enter); quitAt, when that hold started; and quit, set
+// (Alt+F4 instead of Enter or F12); quitAt, when that hold started; and quit, set
 // once the hold lasted mbridgeQuitHold, for the bridge to end the program.
 type mbridgeEngine struct {
 	p      mbridgeParams
@@ -536,7 +540,7 @@ func (g *mbridgeEngine) reconcileKeys(out []evdevEvent) []evdevEvent {
 	for _, src := range [...]struct {
 		key  int
 		code uint16
-	}{{mbKeyEsc, g.p.codeY}, {mbKeyTab, evdevBtnTL}, {mbKeyEnter, evdevBtnStart}, {mbKeySpace, evdevBtnTR}} {
+	}{{mbKeyEsc, g.p.codeY}, {mbKeyTab, evdevBtnTL}, {mbKeyEnter, evdevBtnStart}, {mbKeyF12, evdevBtnStart}, {mbKeySpace, evdevBtnTR}} {
 		if g.kbd[src.key] && !g.key(src.code) {
 			out = g.keyEvent(src.key, false, out)
 		}
@@ -594,7 +598,8 @@ func (g *mbridgeEngine) letGo(out []evdevEvent) []evdevEvent {
 }
 
 // layoutKey is the Windows-app layout for one button while the pad is the
-// mouse: Y is Escape, Start is Enter, L1 is Tab, R1 is Space. Start pressed
+// mouse: Y is Escape, Start is F12 when a floating keyboard is enabled (Enter
+// otherwise), L1 is Tab, R1 is Space. Start pressed
 // while Select is held is Alt+F4 instead (close the window), and holding that
 // pair for mbridgeQuitHold asks the bridge to end the program (tick). L1
 // pressed while Select is held belongs to the Select + L1 chord.
@@ -623,6 +628,16 @@ func (g *mbridgeEngine) layoutKey(code uint16, down, selectHeld bool, now time.T
 		if !down && g.combo {
 			g.combo, g.quitAt = false, time.Time{}
 			return out
+		}
+		if g.p.keyboardToggle {
+			if !down {
+				return out
+			}
+			out = g.keyEvent(mbKeyF12, true, out)
+			// Keep the press and release in separate evdev frames. A held
+			// Start never repeats inside the editor or toggles the panel twice.
+			out = append(out, evdevEvent{Type: evdevEvSyn, Code: evdevSynReport})
+			return g.keyEvent(mbKeyF12, false, out)
 		}
 		return g.keyEvent(mbKeyEnter, down, out)
 	case evdevBtnSelect:
@@ -685,6 +700,7 @@ func (g *mbridgeEngine) feedKey(ev evdevEvent, now time.Time, out []evdevEvent) 
 	// Whether Select was already held when this button moved: L1 and Start
 	// mean something else with it (layoutKey).
 	selectHeld := g.key(evdevBtnSelect)
+	wasDown := g.keys[i]
 	g.keys[i] = down
 	off := false
 	switch ev.Code {
@@ -707,7 +723,11 @@ func (g *mbridgeEngine) feedKey(ev evdevEvent, now time.Time, out []evdevEvent) 
 			out = append(out, evdevEvent{Type: evdevEvKey, Code: evdevMouseButtons[b], Value: evdevBool(down)})
 		}
 		if g.p.keys {
-			out = g.layoutKey(ev.Code, down, selectHeld, now, out)
+			// Firmware may re-send an already held Start button. Its F12
+			// mapping is a one-shot tap, so only a new physical down emits it.
+			if ev.Code != evdevBtnStart || !down || !wasDown {
+				out = g.layoutKey(ev.Code, down, selectHeld, now, out)
+			}
 		}
 	}
 	return out, off

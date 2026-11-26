@@ -775,7 +775,7 @@ func homeTabsOfferInstall(system string) {
 	openEmulatorPanel()
 	entries := emulatorEntries()
 	if i := homeTabsEmuEntryIndex(system, entries); i >= 0 {
-		emuPanel.cursor = i
+		emuPanelSelect(entries, i)
 		// emuInstallHintLabel is the page's A label (emuFooterHints).
 		if label := emuInstallHintLabel(entries[i]); label == "Install" || label == "Get" {
 			ShowToast("Nothing plays "+system+" games yet · "+hintLine(FooterHint{"A", label}), ToastKindInfo)

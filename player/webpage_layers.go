@@ -221,6 +221,12 @@ type webLayerInfo struct {
 	// it is a plain block): a layer stretched between its top and bottom
 	// insets hands that container its height (layoutLayer).
 	flexGroup int
+	// parent is the layer this one sits in (0 for one in the page's flow): a
+	// close button at the corner of a positioned dialog, a dropdown under a
+	// fixed header's menu. It is laid out in its parent's pass, against the
+	// boxes that layer measured, and painted with it.
+	parent int
+	depth  int
 }
 
 // webLayerGroup is the blocks of one layer, in document order. layer is 0 for
@@ -228,7 +234,14 @@ type webLayerInfo struct {
 type webLayerGroup struct {
 	layer  int
 	blocks []webBlock
+	// nested are the layers inside this one (webLayerInfo.parent).
+	nested []webLayerGroup
 }
+
+// webMaxLayerDepth bounds how deep positioned boxes nest as layers of their
+// own; deeper ones are laid out in their parent's flow, as every nested one
+// used to be.
+const webMaxLayerDepth = 4
 
 // --- Parser ------------------------------------------------------------------
 
@@ -377,12 +390,20 @@ func (p *webParser) wantsLayer(style *webStyle) bool {
 }
 
 // openLayerIn returns the layer the first n open elements put new blocks in:
-// the outermost positioned subtree among them, or 0 for the flow.
+// the innermost positioned subtree among them, or 0 for the flow.
 func (p *webParser) openLayerIn(n int) int {
-	for i := 0; i < n && i < len(p.stack); i++ {
+	for i := min(n, len(p.stack)) - 1; i >= 0; i-- {
 		if p.stack[i].layer != 0 {
 			return p.stack[i].layer
 		}
+	}
+	return 0
+}
+
+// layerDepthIn is how many layers nest at the first n open elements.
+func (p *webParser) layerDepthIn(n int) int {
+	if layer := p.openLayerIn(n); layer > 0 && layer <= len(p.doc.Layers) {
+		return p.doc.Layers[layer-1].depth
 	}
 	return 0
 }
@@ -404,6 +425,8 @@ func (p *webParser) blockFrameSeq() int {
 func (p *webParser) newLayer(style webStyle, boxID, seq int) int {
 	info := webLayerInfo{style: style, outerBoxes: len(p.boxPath()), outerFlex: len(p.flexStack), rootBox: boxID}
 	info.key = p.stackKey(style, seq)
+	info.parent = p.openLayerIn(len(p.stack))
+	info.depth = p.layerDepthIn(len(p.stack)) + 1
 	p.doc.Layers = append(p.doc.Layers, info)
 	return len(p.doc.Layers)
 }
@@ -599,6 +622,9 @@ func (p *webParser) layerMarker(layer, seq int) {
 	st.Invisible = true
 	st.Href, st.Control = "", nil
 	marker := webBlock{Style: st, LayerMarker: layer, TreeSeq: seq}
+	// A layer inside another keeps its static place in that layer's flow.
+	marker.Layer = p.openLayerIn(len(p.stack))
+	marker.Float = marker.Layer != 0
 	marker.ContainerIDs = p.containerPath()
 	marker.Boxes = p.boxPath()
 	p.tagFlexBlock(&marker, st)
@@ -718,7 +744,7 @@ func (l *webLayouter) layoutLayers(blocks []webBlock, padX, contentW int32) {
 			groups = append(groups, webLayerGroup{layer: b.Layer, blocks: []webBlock{b}})
 		}
 		bottom, parked := int32(0), pageH
-		for _, g := range groups {
+		for _, g := range l.nestLayerGroups(groups, index) {
 			bottom = max(bottom, l.layoutLayer(g, padX, contentW, pageH, &parked))
 		}
 		// The page grows by two screens at most: a dropdown or caption that
@@ -740,6 +766,47 @@ func (l *webLayouter) layoutLayers(blocks []webBlock, padX, contentW int32) {
 		}
 		return a.Key.less(b.Key)
 	})
+}
+
+// nestLayerGroups puts each layer's group inside the group of the layer it
+// sits in (webLayerInfo.parent), so it is laid out in that layer's pass; a
+// group whose parent laid nothing out is placed on the page like any other.
+// index maps a layer to its group.
+func (l *webLayouter) nestLayerGroups(groups []webLayerGroup, index map[int]int) []webLayerGroup {
+	if l.doc == nil {
+		return groups
+	}
+	children := make(map[int][]int)
+	roots := make([]int, 0, len(groups))
+	for i := range groups {
+		parent := 0
+		if layer := groups[i].layer; layer > 0 && layer <= len(l.doc.Layers) {
+			parent = l.doc.Layers[layer-1].parent
+		}
+		if pi, ok := index[parent]; parent != 0 && ok && pi != i {
+			children[pi] = append(children[pi], i)
+			continue
+		}
+		roots = append(roots, i)
+	}
+	if len(children) == 0 {
+		return groups
+	}
+	var build func(i, depth int) webLayerGroup
+	build = func(i, depth int) webLayerGroup {
+		g := groups[i]
+		if depth <= webMaxLayerDepth {
+			for _, c := range children[i] {
+				g.nested = append(g.nested, build(c, depth+1))
+			}
+		}
+		return g
+	}
+	out := make([]webLayerGroup, 0, len(roots))
+	for _, i := range roots {
+		out = append(out, build(i, 0))
+	}
+	return out
 }
 
 // layoutLayer measures one positioned subtree (or one lone positioned block),
@@ -785,6 +852,12 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 		}
 	}
 	anchor, onPage, clip, hasClip := l.layerAnchor(first, info, padX, contentW, pageH)
+	if layered && info.parent != 0 {
+		// Inside another layer the containing block is that layer's box, never
+		// the page: a caption at `bottom: 0` sits at its card's foot, not after
+		// it.
+		onPage = false
+	}
 
 	// The layer's width: authored, stretched between two insets, or shrunk
 	// to its widest line within the room its inset leaves.
@@ -936,7 +1009,8 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 		sl.layoutBlocksFlat(blocks, 0, w)
 	}
 	l.absorbContainerRows(sl.containerRows)
-	if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 && len(sub.Backgrounds) == 0 && len(sub.Videos) == 0 {
+	if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 && len(sub.Backgrounds) == 0 && len(sub.Videos) == 0 &&
+		len(g.nested) == 0 {
 		return 0
 	}
 	webSortPaintOrder(sub)
@@ -948,12 +1022,22 @@ func (l *webLayouter) layoutLayer(g webLayerGroup, padX, contentW, pageH int32, 
 		webStretchLayerSurface(sub, info.rootBox, h, roomH)
 		h = roomH
 	}
+	// The layers inside this one: placed against the boxes this layer just
+	// measured (its root, a positioned card in it), they become floats of its
+	// sub-layout, which follow it below — moved with it, painted over it.
+	if len(g.nested) > 0 {
+		parkedIn := h
+		for _, child := range g.nested {
+			sl.layoutLayer(child, 0, w, h, &parkedIn)
+		}
+	}
 
 	// Percentage insets resolve against the containing block (a fixed box's
 	// vertical ones against the screen), and translate() moves the box by
 	// lengths and by percentages of its own size: the `left: 50%; transform:
 	// translate(-50%, -50%)` centring idiom.
-	fixed := st.Position == webPositionFixed
+	// A fixed box inside another layer stays with that layer.
+	fixed := st.Position == webPositionFixed && info.parent == 0
 	vertical := anchor.H
 	if fixed {
 		vertical = webViewHeightPx(scale, pageH)

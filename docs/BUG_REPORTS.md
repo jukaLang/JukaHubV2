@@ -143,9 +143,10 @@ holds:
   loader and whether that is there, the libraries it needs and which are **NOT
   FOUND** on its library path, and the glibc/libstdc++ version check), plus a
   listing of the emulator's folder;
-- the launch script's first 60 lines, what the launcher printed, RetroArch's
-  log for the launch, a profile's or port's own log, and JukaHub's log from
-  just before the launch on.
+- the launch script's first 60 lines (and a longer script's last 30, where a
+  port starts its program), what the launcher printed, RetroArch's log for
+  the launch, a profile's or port's own log, and JukaHub's log from just
+  before the launch on.
 
 The diagnostics report and the recent log go along as with any report (the log
 cut to its newest 16 KB, since the details hold the launch's own lines).

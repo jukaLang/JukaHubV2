@@ -782,19 +782,40 @@ Smart Pro S. See
 [GAME_LIBRARY.md](GAME_LIBRARY.md#gamecube-and-wii-on-the-handheld).
 
 `ps2` (bool, default `true`) is Settings → Games & emulators → **PlayStation
-2** on TrimUI handhelds: whether PS2 games play here, in RetroArch's ARMSX2
-core. On, a game's first start (or **PS2 emulator** below it, or the Emulators
-page's PS2 tile) installs ARMSX2's own Linux arm64 libretro core and its
-`resources` folder from ARMSX2's GitHub releases and copies the player's BIOS
-into `pcsx2/bios` in RetroArch's system folder; PS2 games also get Heavy-game
-boost, and **PS2 speed** below it is `raTuning.playstation-2.speed` (see
-`raTuningSpeed`).
+2** on TrimUI handhelds (every model: Smart Pro, Smart Pro S, Brick, Hammer,
+Brick Pro): whether PS2 games play here, in RetroArch's ARMSX2 core. On,
+JukaHub makes `Roms/PS2` on the card and lists a PlayStation 2 tile on the
+Emulators page; a game's first start (or **PS2 emulator** below it, or that
+tile) installs ARMSX2's own Linux arm64 libretro core from ARMSX2's GitHub
+releases — with its `resources` folder only for a build from before the
+2026-09-08 nightly, later ones carry it in the core — and copies the player's
+BIOS (from `Bios/PS2`, `Bios` or another BIOS folder) into `pcsx2/bios` in
+RetroArch's system folder; PS2 games also get Heavy-game boost, and **PS2
+speed** below it is `raTuning.playstation-2.speed` (see `raTuningSpeed`).
 Off, JukaHub sets nothing up for PS2 (a PS2 core installed by hand still
 starts the games) and `Roms/PS2` shows as not supported. JukaHub keeps
-`armsx2.json` in its data folder: the release and core file it installed, the
-resources folder it put in place, a release whose core this firmware refused,
-and the renderer the start-failure fallback wrote into ARMSX2's core options.
-See [GAME_LIBRARY.md](GAME_LIBRARY.md#playstation-2-on-the-handheld).
+`armsx2.json` in its data folder: the release (and its day) and core file it
+installed, the resources folder it put in place (`resourcesNeeded`: a newer
+build whose log asked for the folder all the same gets it), a release whose
+core this firmware refused, whether it found or made `Roms/PS2` (`folder`: a
+folder you delete stays deleted until you press the tile or turn the setting
+on again), what the RetroArch binary was built with (`retroArchVulkan` for the
+file `retroArchVulkanStamp` names), and the renderer it last wrote into
+ARMSX2's core options with the renderers this core build failed with. See
+[GAME_LIBRARY.md](GAME_LIBRARY.md#playstation-2-on-the-handheld).
+
+`ps2Renderer` (`"auto"`/`"Vulkan"`/`"OpenGL"`/`"Software"`, default `"auto"`)
+is Settings → Games & emulators → **PS2 renderer**: the `armsx2_renderer` core
+option every PS2 start writes into the options file RetroArch reads for ARMSX2.
+`auto` (**Automatic**) picks Vulkan where the firmware has a Vulkan driver and
+the RetroArch binary was built with Vulkan and its `khr_display` context, else
+OpenGL; a start that stops with the renderer failing, crashes in its first
+half minute, or after which the core never drew (its "Null GS"), moves to the
+next one for that core build —
+Software after Vulkan, then OpenGL — and a value you set in RetroArch's own
+menu stays. Any other value is written at every start. Each PS2 start also
+gets `driver_switch_enable = "true"` and `video_threaded = "false"` for that
+start only.
 
 `led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
 dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It

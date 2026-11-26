@@ -576,25 +576,32 @@ func saverFrameSleep(normal uint32) {
 // press every framePressPollMS and returning when there is one, so the press
 // is handled — and its frame drawn — at once instead of after the rest of the
 // frame's sleep. Stick drift and motion do not count (saverPressEvents), so a
-// resting stick keeps the cadence it had. Main thread.
+// resting stick keeps the cadence it had. While a video is on screen it also
+// returns when the decoder publishes a frame, looking every videoFramePollMS:
+// each frame is then shown once and on time instead of whenever the loop came
+// round (videoFrameWake, videomotion.go). Main thread.
 func framePressSleep(ms uint32) {
 	if ms <= framePressPollMS {
 		sdl.Delay(ms)
 		return
 	}
 	start := sdl.GetTicks64()
+	poll := uint64(framePressPollMS)
+	if videoFramePolling(start) {
+		poll = videoFramePollMS
+	}
 	for {
 		elapsed := sdl.GetTicks64() - start
 		if elapsed >= uint64(ms) {
 			return
 		}
-		step := uint64(framePressPollMS)
+		step := poll
 		if left := uint64(ms) - elapsed; left < step {
 			step = left
 		}
 		sdl.Delay(uint32(step))
 		sdl.PumpEvents()
-		if saverPressQueued() {
+		if saverPressQueued() || videoFrameWake(sdl.GetTicks64()) {
 			return
 		}
 	}

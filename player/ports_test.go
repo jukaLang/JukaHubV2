@@ -380,16 +380,82 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 		{"sh: setterm: not found", ""},
 		{"data/level1.pak: not found", ""},
 		{"line 3: syntax error near unexpected token `('", ""},
+		// PortMaster's TrimUI control.txt was found: its own lines failed
+		// (JH-AT4EEE blamed PortMaster for these).
+		{"/roms/ports/PortMaster/control.txt: line 9: /mnt/SDCARD/System/etc/ex_config: No such file or directory", ""},
+		{"/roms/ports/PortMaster/control.txt: line 25: sdl2imgshow: command not found", ""},
+		{"/tmp/jukahub-greenovercast-1.sh: line 18: /roms/ports/PortMaster/control.txt: No such file or directory", "The script did not find PortMaster"},
+		{"/roms/ports/PortMaster/control.txt: line 30: /roms/ports/PortMaster/funcs.txt: No such file or directory", "PortMaster is missing some of its own files"},
+		{"Credential store could not be read", "Its saved sign-in could not be read"},
 	} {
 		if got := titles(c.line); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.line, got, c.want)
 		}
+	}
+	if files := gameDiagPortMissingFiles(gameDiagPortDropHarmless([]string{
+		"/roms/ports/PortMaster/control.txt: line 9: /mnt/SDCARD/System/etc/ex_config: No such file or directory"})); len(files) != 0 {
+		t.Errorf("TRIMUI_EX's ex_config listed as a missing port file: %q", files)
 	}
 	// Under a working bash a sourced PortMaster file's syntax error is not
 	// BusyBox's.
 	good := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39) — /bin/bash cannot run bash arrays"}
 	if issues, _, _ := gameDiagPortLogFindings(good, []string{`/x/device_info.txt: line 12: syntax error: unexpected "("`}, script); len(issues) != 0 {
 		t.Errorf("BusyBox blamed under a working bash: %+v", issues)
+	}
+}
+
+// GreenOvercast's settings folder (greenovercast_store.go): the last launch's
+// log names the folder whose saved sign-in could not be read; the move to
+// internal storage copies the small files but leaves that sign-in and the
+// log on the card, and keeps the artwork cache there; a set-aside renames.
+func TestGreenOvercastSettingsStore(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "card")
+	card := filepath.Join(home, ".config", goSettingsDirName)
+	priv := filepath.Join(root, "udisk", "config", goSettingsDirName)
+	logPath := filepath.Join(root, "GreenOvercast.log")
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"settings.json", "tokens.bin", "tokens.key", goLogName} {
+		write(filepath.Join(card, name), name)
+	}
+	// A log from before the folder was noted: HOME names it.
+	write(logPath, "# JukaHub port launch x\n# HOME="+home+"\n"+portLogOutputMarker+
+		"\nSelected video decoder: ffmpeg-software\nCredential store could not be read\nLifecycle: cold_start -> shutdown\n")
+	dir, at := goStoreFailedIn(logPath)
+	if !goSameDir(dir, card) || at.IsZero() {
+		t.Fatalf("failed folder %q (at %v), want %q", dir, at, card)
+	}
+	if err := goMoveSettings(card, priv, false); err != nil {
+		t.Fatal(err)
+	}
+	if !regularFile(filepath.Join(priv, "settings.json")) || regularFile(filepath.Join(priv, "tokens.bin")) ||
+		regularFile(filepath.Join(priv, goLogName)) || !regularFile(filepath.Join(card, "tokens.bin")) {
+		t.Fatal("move: settings copied; the unreadable sign-in and the log stay on the card")
+	}
+	if !dirExists(filepath.Join(card, goArtworkDirName)) {
+		t.Fatal("the artwork cache belongs on the card")
+	}
+	// The noted folder wins over HOME; its sign-in is renamed, not deleted.
+	write(filepath.Join(priv, "tokens.bin"), "new")
+	write(logPath, "# HOME="+home+"\n# note: "+goSettingsNote+priv+" (internal storage)\n"+portLogOutputMarker+"\nCredential store could not be read\n")
+	if dir, at = goStoreFailedIn(logPath); !goSameDir(dir, priv) {
+		t.Fatalf("noted folder %q, want %q", dir, priv)
+	}
+	if note := goStoreSetAside(priv, at); note == "" || regularFile(filepath.Join(priv, "tokens.bin")) || goStoreAsideCount(priv) != 1 {
+		t.Fatalf("set aside: note %q, count %d", note, goStoreAsideCount(priv))
+	}
+	// A launch that read its sign-in sets nothing aside.
+	write(logPath, "# note: "+goSettingsNote+priv+"\n"+portLogOutputMarker+"\nLifecycle: cold_start -> sign_in\n")
+	if dir, _ = goStoreFailedIn(logPath); dir != "" {
+		t.Fatalf("clean launch named %q", dir)
 	}
 }
 

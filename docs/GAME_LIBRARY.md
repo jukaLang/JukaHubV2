@@ -605,7 +605,15 @@ menu, sleep and hotkeys are not there; PPSSPP's own menu, **Menu**, has
 **Exit**), and PSP games keep that way. A Select + Start hold that ends a PSP
 game whose picture was never seen chooses it too. The PPSSPP card (**X** on
 the PSP tile of the Emulators page) says so and has **Play PSP games beside
-JukaHub again** and **Give PSP games the screen to themselves**.
+JukaHub again** and **Give PSP games the screen to themselves**. The tile's
+line names what **X** does first (*install PPSSPP 1.20.3*, *update to PPSSPP
+…*, or *PPSSPP builds*). **A** on the tile opens PPSSPP's own menu, with no
+game, in the PPSSPP that plays PSP games: JukaHub's build through its own
+script, the firmware's with `--fullscreen` in place of a game (its
+`launch.sh` passes `"$*"` on, which with no game is one empty argument, and
+PPSSPP quits on that with `File not found:` and status 1). While PSP games get
+the screen to themselves, so does that menu, and JukaHub comes back to the
+Emulators page after it.
 
 Starts that already know their emulator never ask: a save state on the game
 page uses the emulator the states were listed for (the game's remembered one,
@@ -773,13 +781,17 @@ through the Emulators page's own install: the CRC32 the index states, the size
 limit, the check that this firmware can load it (a build that needs a newer
 glibc is refused before anything is written), and the free-space floor of a
 core update (256 MB plus room for the core). Cores that draw with the GPU —
-Mupen64Plus-Next and ParaLLEl N64, Flycast, PPSSPP, YabaSanshiro — are
-downloaded this way only for a console with no emulator at all: the
-buildbot's generic builds of them may load and show nothing under TrimUI's
-OpenGL ES RetroArch. For a console that plays already they stay one press each
-on the Emulators page, whose row says *draws with the GPU: this build may not
-run here*, and the summary names them. One toast says what was installed; the
-next start of a game of that console asks which emulator to use.
+Mupen64Plus-Next and ParaLLEl N64, Flycast, PPSSPP, YabaSanshiro — are left
+out altogether unless something shows the build is made for OpenGL ES (a
+`…_gles2`/`…_gles3` variant, JukaHub's own build for TrimUI, or the cores
+survey finding an OpenGL ES library in it): the buildbot's generic builds are
+desktop OpenGL builds, which TrimUI's OpenGL ES RetroArch cannot open or draw
+with, so since 2026-11-26 neither this action nor the Emulators page offers
+them (docs/COMPATIBILITY.md, "GPU cores, probation and automatic rollback"). An
+OpenGL ES build of one is downloaded this way only for a console with no
+emulator at all; for a console that plays already it stays one press on the
+Emulators page, and the summary names it. One toast says what was installed;
+the next start of a game of that console asks which emulator to use.
 
 With **Emulator updates** on *Install automatically*, the daily pass does the
 same by itself, once per console, at its usual quiet moment (never over a
@@ -925,46 +937,63 @@ than its ISO.
 
 ### PlayStation 2 on the handheld
 
-Every TrimUI model plays PS2 games in RetroArch's ARMSX2 core, a PCSX2 fork
-with ARM64 recompilers. Expect the light games (2D, menu-heavy, simple 3D) at
-or near full speed on the Smart Pro, Brick and Hammer, and most 3D games well
+Every TrimUI model — the Smart Pro, Smart Pro S, Brick, Hammer and Brick Pro —
+plays PS2 games in RetroArch's ARMSX2 core, a PCSX2 fork with ARM64
+recompilers. Expect the light games (2D, menu-heavy, simple 3D) at or near full
+speed on the Smart Pro, Brick, Hammer and Brick Pro, and most 3D games well
 below it; the Smart Pro S does a little better. **Settings → Games & emulators
 → PlayStation 2** turns it off (`ps2` in [CONFIGURATION.md](CONFIGURATION.md)).
-Put games in `Roms/PS2` as `.iso`, `.chd`, `.cso`, `.zso`, `.cue` (with its
-`.bin` tracks), `.m3u` for a multi-disc game, or `.elf` homebrew; CHD keeps a
-game much smaller than its ISO. A stray `.bin` is not listed as a game.
+While it is on, JukaHub makes `Roms/PS2` on the card (a folder you delete stays
+deleted until you press the tile or turn the setting on again) and the
+Emulators page always has a **PlayStation 2** tile: A sets ARMSX2 up while it is
+not in, then opens your PS2 games; X looks for a newer build. Put games in
+`Roms/PS2` as `.iso`, `.chd`, `.cso`, `.zso`, `.cue` (with its `.bin` tracks:
+the core is given the first track, which it reads as the disc), `.m3u` for a
+multi-disc game, or `.elf` homebrew; CHD keeps a game much smaller than its
+ISO. A stray `.bin` is not listed as a game.
 
 - **The BIOS is yours to add.** PS2 games need a BIOS dumped from your own
-  console (a 4 MB file such as `SCPH-70012.bin`). Put it in `BIOS/PS2` (or
-  `Bios/PS2`, or the BIOS folder itself, or `Roms/PS2`): the first start
-  copies it to `pcsx2/bios` in RetroArch's system folder, where the core reads
-  it, after checking it the way PCSX2 does (4–8 MB, with the PS2 ROM
-  directory). With no BIOS anywhere the start says where to put one and
-  downloads nothing.
+  console (a 4 MB file such as `SCPH-70012.bin`). Put it in `Bios/PS2` (or
+  the BIOS folder itself, or `Roms/PS2`): the first start copies it to
+  `pcsx2/bios` in RetroArch's system folder, where the core reads it, after
+  checking it the way PCSX2 does (4–8 MB, with the PS2 ROM directory). With no
+  BIOS anywhere the start says where to put one and downloads nothing; the
+  PlayStation 2 tile says so too.
 - **The first start sets ARMSX2 up.** With no emulator for PS2 yet, A on a
-  game downloads ARMSX2's own Linux arm64 libretro core from its GitHub
-  releases (the newest stable release that has one, else the newest nightly;
-  the archive must match the SHA-256 GitHub states) and installs it like any
-  core: the load check, and RetroArch on JukaHub's newer glibc since ARMSX2
-  needs one. The core cannot boot without ARMSX2's `resources` folder (the
-  per-game fixes, the renderer's shaders) from the same build, so the same
-  release's handheld archive gives `pcsx2/resources` in RetroArch's system
-  folder (a resources folder you put there yourself is left alone). Then the
-  game starts. The libretro buildbot's ARMSX2 core is not used: it needs
-  libraries the TrimUI firmware does not have; a start in such a core installs
-  ARMSX2's own build first.
-- **Updates.** **Settings → Games & emulators → PS2 emulator**, or A on the PS2
-  tile of the Emulators page, installs the newest release over the one there
-  (the old core kept as a backup, the first game watched like any core
-  update). JukaHub's automatic core updates leave ARMSX2 alone.
-- **The renderer.** ARMSX2 draws with Vulkan by default, which the PowerVR
-  GE8300 in the Smart Pro, Brick and Hammer has no driver for, so the core's
-  first start here gets OpenGL ES and the BIOS intro skipped (JukaHub never
-  writes over options the core already has). When a start stops because the
-  renderer could not draw, the card says so and the core's options
-  (`config/ARMSX2/ARMSX2.opt`) move to the next renderer for the next start:
-  OpenGL ES, then the software renderer (slow, but it draws anywhere). Change
-  it in RetroArch (Quick Menu → Core Options → GS Renderer).
+  game (or on the tile) downloads ARMSX2's own Linux arm64 libretro core from
+  its GitHub releases (the newest stable release that has one, else the newest
+  nightly; the archive must match the SHA-256 GitHub states) and installs it
+  like any core: the load check, and RetroArch on JukaHub's newer glibc where
+  the core needs one (the A133P firmware's is 2.33). Builds since ARMSX2's
+  nightly of 2026-09-08 carry their `resources` (the per-game fixes, the
+  renderer's shaders) inside the core, so nothing else is downloaded, and a
+  `pcsx2/resources` folder JukaHub put there for an older build is taken away
+  so it cannot stand in for the core's own; an older build gets the folder from
+  its release's handheld archive, and so does a newer one whose log says it
+  still looked for it on the card. A resources folder you put there yourself
+  is left alone. Then the game starts. The libretro buildbot's ARMSX2 core is
+  not used: it needs libraries the TrimUI firmware does not have; a start in
+  such a core installs ARMSX2's own build first.
+- **Updates.** **Settings → Games & emulators → PS2 emulator**, or X on the
+  PlayStation 2 tile of the Emulators page, installs the newest release over
+  the one there (the old core kept as a backup, the first game watched like any
+  core update).
+- **The renderer.** Every start writes ARMSX2's GS Renderer into the options
+  RetroArch reads for it (`config/ARMSX2/ARMSX2.opt`, or the game's own):
+  Vulkan, ARMSX2's own, where the firmware has a Vulkan driver (TrimUI's since
+  the Smart Pro's firmware 1.0.4; Mali's on the Smart Pro S) and the RetroArch
+  that starts the game was built with Vulkan (TrimUI's own RetroArch is, since
+  its April 2024 SD package; JukaHub reads each RetroArch binary once to be
+  sure), else OpenGL. For that start RetroArch may switch its video driver to
+  the one the core asks for and does not thread video. When a start stops
+  because the renderer could not draw, crashes in its first half minute, or
+  ends at any time after the core never drew (its "Null GS": RetroArch stays
+  on a black screen until you leave), the card says so and the next start uses
+  the next renderer: after Vulkan the software renderer (the CPU draws; slow,
+  but the GPU only shows the picture), then OpenGL. **Settings → Games &
+  emulators → PS2 renderer** picks one by hand (`ps2Renderer`); while it is
+  Automatic, a renderer you set in RetroArch (Quick Menu → Core Options → GS
+  Renderer) stays.
 - **Speed.** Native resolution and multi-threaded VU1 are the core's defaults
   and stay. Settings → Games & emulators → **PS2 speed** (the PS2's own
   [Emulator speed](DEVICE_TUNING.md#emulator-speed) level) is **Fastest** on

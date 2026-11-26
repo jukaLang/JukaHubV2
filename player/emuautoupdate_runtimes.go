@@ -1243,13 +1243,24 @@ func emuAutoUpdateCoverageLoad() {
 			add("Windows emulators", "emulators")
 			add("RetroArch cores", "cores")
 		}
-		runtimes := false
+		runtimes, standalone := false, false
 		for _, u := range emuRuntimeUpdatersSnapshot() {
 			if u.Supported != nil && !u.Supported() {
 				continue
 			}
 			if u.Key == "hakux" || u.Key == "portmaster" {
 				add(u.Title, u.Title)
+				continue
+			}
+			if emuHandheldKey(u.Key) {
+				// The handheld's own emulator setups (emuautoupdate_handheld.go)
+				// are emulators, not runtimes: each by name in the long list,
+				// one word for all of them in the short one.
+				long = append(long, u.Title)
+				if !standalone {
+					short = append(short, "emulators")
+					standalone = true
+				}
 				continue
 			}
 			runtimes = true

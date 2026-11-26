@@ -647,7 +647,7 @@ func TestCoreAutoUpdateRunnerLeavesArcadeAndCrossMixBuildsToAPress(t *testing.T)
 	if press := runInstalledCoreUpdates(context.Background(), client, nil, nil); len(press.Updated) != 3 || len(press.Errors) != 0 {
 		t.Fatalf("press = %+v, want all three updated", press)
 	}
-	for core, want := range map[string]bool{"mame": true, "mame2010": true, "MAME2003_Plus_libretro": true, "fbneo": true, "fbalpha2012": false, "mgba": false} {
+	for core, want := range map[string]bool{"mame": true, "mame2010": false, "mame2003": false, "MAME2003_Plus_libretro": true, "mame2099": true, "fbneo": true, "fbalpha2012": false, "mgba": false} {
 		if got := coreAutoUpdateNever(core); got != want {
 			t.Errorf("coreAutoUpdateNever(%q) = %v, want %v", core, got, want)
 		}

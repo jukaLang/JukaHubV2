@@ -3237,7 +3237,7 @@ func cachedVideoOverlayBytes() int64 {
 // overlay (gradients, control bar, seek track) sized to the video element,
 // rebuilding it only when the element size or theme changes. The parts that
 // change while a video plays (badge, progress, transport buttons, time) are
-// drawn every frame by drawVideoOverlayLive on top of this layer, so the cache
+// drawn every frame by vcDrawChromeFaded on top of this layer, so the cache
 // must never bake them in.
 func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int32) *sdl.Texture {
 	vkForgetForeignTexture(renderer, &vkVideoOverlayTex, &vkVideoOverlayOwner, &vkVideoOverlayValid)

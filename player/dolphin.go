@@ -269,11 +269,11 @@ func dolphinPrepareLibraryLaunch(game libraryGame, launcher string) (deferred bo
 	if need.CoreStale && dolphinStaleTried[need.Core] {
 		need.CoreStale = false
 	}
-	if !need.SysMissing && !need.CoreStale {
+	if !dolphinNeedsSetup(need) {
 		return false, nil
 	}
 	what := dolphinNeedLabel(need)
-	staleOnly := !need.SysMissing
+	staleOnly := dolphinStaleOnly(need)
 	oldCore := func() {
 		logWarn("library", "GameCube: %s starts in a Dolphin core from before 2026-10-23 (%s): its dual-core mode may freeze about ten seconds in", filepath.Base(game.Path), need.Core)
 		if !hakuxUnasked {
@@ -287,12 +287,16 @@ func dolphinPrepareLibraryLaunch(game libraryGame, launcher string) (deferred bo
 		oldCore()
 		return false, nil
 	}
-	setting := "Getting Dolphin's system files (once) — " + game.Label() + " starts when they are in"
+	setting := "Setting up Dolphin (once) — " + game.Label() + " starts when it is ready"
 	switch {
 	case staleOnly:
 		setting = "Updating the Dolphin core (its old build froze ten seconds into a game) — " + game.Label() + " starts when it is in"
 	case need.CoreStale:
 		setting = "Updating the Dolphin core and getting its system files — " + game.Label() + " starts when they are in"
+	case need.CoreMissing:
+		setting = "Installing the Dolphin core — " + game.Label() + " starts when it is ready"
+	case need.SysMissing && !need.X11Missing:
+		setting = "Getting Dolphin's system files (once) — " + game.Label() + " starts when they are in"
 	}
 	want := dolphinKeepCore
 	if need.CoreStale {

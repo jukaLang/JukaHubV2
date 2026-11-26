@@ -936,8 +936,8 @@ func addSystemBoostOptions(options map[string]string, core string, plan boostPla
 		// the stall at each new shader (dolphin_video.go).
 		dolphinBoostOptions(options)
 	case ps2CoreName:
-		// The BIOS intro skipped and OpenGL ES where there is no Vulkan
-		// driver (ps2.go).
+		// The BIOS intro skipped (ps2.go); every start sets the renderer
+		// (ps2_video.go).
 		ps2BoostOptions(options)
 	}
 }
@@ -1514,8 +1514,9 @@ func coreLoadEnvWith(target string, withRuntime bool) elfLoadEnv {
 		if dir := raGlibcLoadDir(target); dir != "" {
 			env.libDirs = append([]string{dir}, env.libDirs...)
 			// Such a launch also finds JukaHub's stand-ins for the
-			// device-access libraries a desktop build links (coredevlibs.go).
-			env.deviceDirs = coreDevLibsDirs()
+			// device-access libraries a desktop build links (coredevlibs.go),
+			// and the real X11 libraries the buildbot's Dolphin links.
+			env.deviceDirs = append(coreDevLibsDirs(), dolphinX11Dirs(target)...)
 		}
 	}
 	return env

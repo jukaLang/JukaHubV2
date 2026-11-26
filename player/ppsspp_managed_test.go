@@ -472,6 +472,7 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 	// first line names.
 	fallbackSaw := "/card/Emus/PSP/../../Roms/Game.iso|/original/home"
 	withFirmware := true
+	rom := []string{"/card/Roms/Game.iso"}
 	run := func(binary string) {
 		t.Helper()
 		spec := ppssppScriptSpec{
@@ -493,7 +494,7 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 		if err := os.WriteFile(script, []byte(ppssppLauncherScript(spec)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(sh, script, "/card/Roms/Game.iso")
+		cmd := exec.Command(sh, append([]string{script}, rom...)...)
 		cmd.Env = append(os.Environ(), "HOME=/original/home", "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 		_ = cmd.Run()
 	}
@@ -523,6 +524,16 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 	if reason := ppssppFallbackReason(ppssppLastStatusLine(b)); !strings.Contains(reason, "did not start last time") {
 		t.Errorf("last status reason = %q", reason)
 	}
+	// PPSSPP's own menu (no game) going to the firmware's script: it gets
+	// ppssppMenuArg, never the one empty argument its "$*" would make of
+	// nothing, which PPSSPP quits on (2026-11-25, JH-FRF8NW).
+	_ = os.Remove(marker)
+	rom = nil
+	run("ok")
+	if got, _ := os.ReadFile(marker); string(got) != ppssppMenuArg+"|/original/home" {
+		t.Errorf("with no game the fallback got %q", got)
+	}
+	rom = []string{"/card/Roms/Game.iso"}
 
 	// A card with no firmware PPSSPP at all: nothing to share, nothing to fall
 	// back to, so the build plays with the saves in its own memstick.

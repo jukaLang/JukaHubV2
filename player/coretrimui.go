@@ -24,7 +24,12 @@ package main
 //     no new try changes (coreBuildRefused, raGlibcRefusalMayPass): it cannot
 //     load on this firmware even with JukaHub's glibc, or it is over the
 //     download limit. The buildbot's next build gets its own check, and the
-//     tile comes back with it.
+//     tile comes back with it;
+//   - since 2026-11-26 ("make sure all emulators listed can run on Trimui
+//     Smart pro"), it draws with the GPU and nothing shows its build is made
+//     for OpenGL ES, the only kind these firmwares' RetroArch has
+//     (coreGPUNoBuildHere, coregpuoffer.go): the buildbot's N64, Dreamcast,
+//     PSP, PlayStation-HW and Saturn 3D cores are desktop OpenGL builds.
 //
 // Dolphin and ARMSX2 have setups of their own (dolphin.go, ps2.go): their
 // tiles stay while their console is on, whatever chip, since that setup picks
@@ -118,6 +123,11 @@ func coreTrimuiMisfit(core, crc string) string {
 				return sys.Reason
 			}
 		}
+	}
+	// A GPU-rendered core whose published build is made for desktop OpenGL,
+	// which no TrimUI firmware's RetroArch draws with (coregpuoffer.go).
+	if why := coreGPUNoBuildHere(core); why != "" {
+		return why
 	}
 	// What the cores workflow's survey says the buildbot's build needs, held
 	// against this firmware and JukaHub's glibc (corecompat.go): a core that

@@ -908,7 +908,7 @@ func TestWebSupportsConditions(t *testing.T) {
 		{"@supports (background-image: -webkit-linear-gradient(nope))", false},
 		{"@supports (background-image: -webkit-image-set(url(a.png) 1x))", false},
 		{"@supports (background-image: radial-gradient(red, blue))", true},
-		{"@supports (background-image: conic-gradient(red, blue))", false},
+		{"@supports (background-image: conic-gradient(red, blue))", true},
 		{"@supports (-webkit-background-clip: text)", true},
 		{"@supports (background-clip: text)", true},
 		{"@supports (-webkit-background-clip: made-up)", false},

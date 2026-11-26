@@ -5,7 +5,9 @@ package main
 //
 // Anything JukaHub installs and can bring forward on its own — hakuX on the
 // Smart Pro, the Windows emulators it manages on a PC, the Windows-app runtime
-// (Box64 + Wine), a downloaded AndroidRT — registers one emuRuntimeUpdater from
+// (Box64 + Wine), a downloaded AndroidRT, RetroArch and PortMaster where
+// JukaHub installed them, and the handheld's Dolphin, ARMSX2, Godot port and
+// J2ME pair (emuautoupdate_handheld.go) — registers one emuRuntimeUpdater from
 // an init() function in its own file. So does one thing that is not an
 // update: the handheld's "extra cores" (emumorecores.go), which in Install
 // automatically fetches the cores worth having for each console with games

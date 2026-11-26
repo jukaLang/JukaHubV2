@@ -23,8 +23,10 @@ package main
 // all rather than a dead box.
 
 import (
+	htmlstd "html"
 	"math"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -183,7 +185,7 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	}
 	var src string
 	switch name {
-	case "video":
+	case "video", "audio":
 		src = webVideoSrcFromElement(attrs, inner)
 	case "iframe":
 		src = webVideoSrcFromIFrame(attrs, inner)
@@ -191,8 +193,25 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 		return
 	}
 	resolved := p.webImageURL(src) // http(s) relative-to-document resolution
+	pageVideo := false
+	if resolved == "" && name == "video" && webVideoNeedsPage(src, attrs) {
+		// A script player's <video> (video.js, hls.js, a news site's own)
+		// plays a stream its scripts feed it (a blob: address), or none yet
+		// behind its poster. The card hands the page to yt-dlp, whose site
+		// and generic extractors find the stream a browser would get, as the
+		// menu's "Play video on this page" does.
+		if u, err := url.Parse(p.doc.URL); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			resolved, pageVideo = p.doc.URL, true
+		}
+	}
+	if resolved == "" && name == "iframe" {
+		// Not a video: the embedded page (a map, a post, a form, a widget) is
+		// a link to it, so what the page embeds can still be opened.
+		p.addEmbedLink(attrs, inner, videoStyle)
+		return
+	}
 	if resolved == "" {
-		if name == "video" {
+		if name == "video" || name == "audio" {
 			p.addPlaceholderBlock(name, attrs)
 		}
 		return
@@ -218,7 +237,96 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	// maps straight onto a URL on the image CDN, and the same thumbnail
 	// pass that fetches <img> bytes picks it up.
 	block.VideoThumb = webYouTubeThumbURL(resolved)
+	if poster := htmlAttrValue(htmlTagAttribute(attrs, "poster")); block.VideoThumb == "" && poster != "" {
+		// The video's own poster frame, fetched by the image pass.
+		block.VideoThumb = p.webImageURL(poster)
+	}
+	if pageVideo && block.VideoTitle == "" {
+		block.VideoTitle = "Video on this page"
+	}
+	if name == "audio" {
+		// A sound is a short bar with its name, not a 16:9 picture: the card
+		// opens the music player (playSmartURL).
+		if block.Style.Height <= 0 {
+			block.Style.Height = 56
+		}
+		if block.Style.Width <= 0 && block.Style.WidthPct <= 0 && block.ImageW <= 0 {
+			block.Style.Width = 420
+		}
+		if block.VideoTitle == "" {
+			block.VideoTitle = webAudioCardTitle(resolved)
+		}
+	}
 	p.flush()
+}
+
+// addEmbedLink turns an <iframe> that is not a video into a line linking to
+// the page it embeds, which the reader does not draw inside the page: a map,
+// a social post, a form, a widget. An iframe that is a pixel, hidden, or from
+// an ad or tracker host is left out, as before.
+func (p *webParser) addEmbedLink(attrs, inner string, style webStyle) {
+	address := p.webImageURL(webVideoSrcFromElement(attrs, inner))
+	if !strings.HasPrefix(address, "http://") && !strings.HasPrefix(address, "https://") {
+		return
+	}
+	for _, name := range []string{"width", "height"} {
+		if v := htmlTagAttributeFloat(attrs, name); v > 0 && v <= 2 {
+			return
+		}
+	}
+	if (style.Width > 0 && style.Width <= 2) || (style.Height > 0 && style.Height <= 2) || style.Invisible {
+		return
+	}
+	if browserRequestBlocked(p.doc.URL, address) {
+		return
+	}
+	label := strings.Join(strings.Fields(htmlAttrValue(htmlTagAttribute(attrs, "title"))), " ")
+	if label == "" {
+		label = strings.Join(strings.Fields(htmlAttrValue(htmlTagAttribute(attrs, "aria-label"))), " ")
+	}
+	if label == "" {
+		if u, err := url.Parse(address); err == nil {
+			label = strings.TrimPrefix(u.Hostname(), "www.")
+		}
+	}
+	if label == "" {
+		return
+	}
+	if r := []rune(label); len(r) > 80 {
+		label = string(r[:79]) + "…"
+	}
+	st := style
+	st.Href, st.Link, st.Underline = address, true, true
+	st.Display, st.DisplayBlock, st.DisplayInline, st.DisplayInlineBlock = webDisplayBlock, false, false, false
+	p.flush()
+	p.addTextStyled(htmlstd.EscapeString("Embedded: "+label), st)
+	p.flush()
+}
+
+// webVideoNeedsPage reports a <video> whose picture comes from the page's
+// scripts: a blob: or MediaSource address, or no address at all but a poster
+// (the player fills it in when pressed).
+func webVideoNeedsPage(src, attrs string) bool {
+	src = strings.TrimSpace(strings.ToLower(src))
+	if strings.HasPrefix(src, "blob:") || strings.HasPrefix(src, "mediasource:") {
+		return true
+	}
+	return src == "" && strings.TrimSpace(htmlTagAttribute(attrs, "poster")) != ""
+}
+
+// webAudioCardTitle names an <audio> card after its file: "Audio · track.mp3".
+func webAudioCardTitle(address string) string {
+	name := address
+	if u, err := url.Parse(address); err == nil {
+		name = path.Base(u.Path)
+	}
+	if name == "" || name == "/" || name == "." {
+		return "Audio"
+	}
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+	return "Audio · " + name
 }
 
 // layoutVideo reserves a page layout's rows for one play card and records
@@ -358,6 +466,11 @@ func drawWebVideo(r *sdl.Renderer, config *Config, doc *webDocument, v webVideoP
 	if r == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
+	// The card whose video is playing in place shows the video
+	// (brw_inline_video.go).
+	if drawWebVideoInline(r, config, v, rect) {
+		return
+	}
 	opacity := webVideoPaintOpacity(v)
 	if !drawWebVideoThumb(r, doc, v.Thumb, rect, v.ObjectFit, v.ObjectPosition, opacity) {
 		fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 4, webScaleColorAlpha(sdl.Color{R: 16, G: 18, B: 24, A: 255}, opacity))
@@ -425,12 +538,17 @@ func drawWebVideoThumb(r *sdl.Renderer, doc *webDocument, thumb string, rect sdl
 	}
 	data := doc.imageBytes(thumb)
 	if len(data) == 0 {
+		if doc.awaitImage(thumb) {
+			webPaintPartial = true // a page tile waits for it (webpage_tiles.go)
+		}
 		return false
 	}
 	if webDecodeAsync() {
 		// On a handheld the art decodes off the render thread like any page
 		// picture (webpage_decode.go); the plain card shows until it lands.
-		webDecodeRequest(doc, thumb, key, rect, fit, true)
+		if webDecodeRequest(doc, thumb, key, rect, fit, true) == webDecodePending {
+			webPaintPartial = true
+		}
 		return false
 	}
 	rwops, err := sdl.RWFromMem(data)

@@ -290,8 +290,12 @@ The HTML allowance scales with free memory from 8 to 64 MiB, with a matching
 20 to 76-second download timeout. Anything past the chosen allowance is drawn
 partially with a note at the top. The parsed page is shown before its image
 pass finishes: each picture appears in place as its bytes arrive. The image
-pass considers up to 256 page images and keeps 16 to 64 MiB of encoded image
-data, chosen from available memory, with an 8 MiB limit for one image.
+pass considers up to 600 page images and 64 video thumbnails and keeps 16 to
+64 MiB of encoded image data, chosen from available memory, with an 8 MiB limit
+for one image. It and the web-font pass beside it have 45 seconds of their own
+from when the page is shown, not what is left of the load's budget, so the
+pictures far down a long page arrive too; leaving the page stops both. A page
+keeps up to 1.5 MiB of text, 8 000 blocks and 30 000 lines; past that it stops.
 
 ### Redirects
 
@@ -373,8 +377,10 @@ answered `null`, so pages like that came out empty.
   engine lacks, that formats numbers and dates the US-English way.
 * Layout questions get plausible answers: an element that is shown reports a
   size on screen, so "has it scrolled into view yet?" checks pass, and
-  `getComputedStyle` sees inline styles and the page's own `<style>` sheets
-  (linked stylesheet files are fetched after the scripts, for the drawing).
+  `getComputedStyle` sees inline styles, the page's own `<style>` sheets and
+  its linked stylesheet files, which start downloading beside the scripts and
+  are waited for (up to 1.5 s) the first time a script asks — so jQuery's
+  `.show()` shows a panel the site's stylesheet hides.
 
 A shadow root a component attached is drawn in its element's place, with the
 light-DOM children in their slots. The declarative form
@@ -423,7 +429,10 @@ page scripts are kept on a short leash:
   `.lan` names …), and cannot navigate there either. The address is checked
   when the connection opens, so a site whose name starts resolving to a LAN
   address mid-visit gains nothing. A page opened from the LAN may reach the
-  LAN; only a page on `localhost` may reach `localhost`.
+  LAN — one with a LAN address or name, and one whose server turned out to be
+  on the LAN when the page was fetched (a router's or a home server's page
+  under a public-looking name the home network's DNS answers privately); only
+  a page on `localhost` may reach `localhost`.
 * **Cookies stay with their site.** A script's own requests carry cookies only
   for the page's own site, the way browsers treat `SameSite=Lax` cookies; a
   response from another origin reaches the script only when that server allows
@@ -433,8 +442,9 @@ page scripts are kept on a short leash:
 * **No workers, sockets or databases.** Web Workers, service workers, IndexedDB
   and the Cache API are absent, so pages that check for them take their
   fallback; `WebSocket` and `EventSource` exist but never connect; `<canvas>`
-  has no drawing context; media elements refuse to play (videos open in Media
-  instead, see [Videos and yt-dlp playback](#videos-and-yt-dlp-playback)); and
+  has no drawing context; media elements refuse to play (the reader's play
+  card plays the video instead, see
+  [Videos and yt-dlp playback](#videos-and-yt-dlp-playback)); and
   permission requests (notifications, location) are answered "no".
 * Every locale formats as US English, and the only real time zones are UTC, the
   device's own and the fixed `Etc/GMT±N` ones.
@@ -924,11 +934,23 @@ show the video's real thumbnail on the card — the video id maps to a URL on
 the image CDN, which the page's own image pass fetches under the same limits;
 anything else (and any failed fetch) falls back to the dark chrome card.
 
-Activating the card (tap or A) never navigates: the URL is handed to
-`playSmartURL`, which streams direct media files in the embedded player and
-sends everything else (YouTube, Twitter/X, TikTok, Instagram, Reddit, Vimeo, ...)
-through yt-dlp into the same player. An element with no resolvable source draws
-nothing at all, and a structurally non-video iframe is skipped as before.
+Activating the card (A, a tap or a click) never navigates, and it does not
+leave the page: the video plays in the card itself and scrolls with the page,
+with its subtitles, a progress line along its foot and two round buttons —
+close at the top right, expand at the bottom right. A again on the card, a tap
+on the picture or the expand button opens it in the media player, where all
+its controls are; Back from the player returns to the page with the video still
+playing in its card. B or the close button stops it. While the card is off the
+screen (scrolled away, or another page open) the video carries on in the corner
+window, and it goes back into its card when the card is on screen again. What
+starts it is the ordinary playback path — `playSmartURL` streams direct media
+files in the embedded player and sends everything else (YouTube, Twitter/X,
+TikTok, Instagram, Reddit, Vimeo, ...) through yt-dlp into the same player —
+with the change to the player's screen left out (`player/brw_inline_video.go`).
+An `<audio>` card opens the music player. An element with no resolvable source
+draws nothing at all, and an `<iframe>` that is not a video (a map, a post, a
+form) is a link, **Embedded: …**, to the page it shows; tracking pixels,
+hidden frames and frames from blocked servers stay out.
 
 A link straight to a video, a song or a live playlist — an address ending in
 `.mp4`, `.m4v`, `.webm`, `.mkv`, `.mov`, `.avi`, `.flv`, `.wmv`, `.mpg`,
@@ -944,6 +966,13 @@ An address that shows what it is only when the server answers — a video or
 audio type, an HLS or DASH playlist, a playlist sent as plain text — gets the
 **Can't show this file** card with **Play** first, then **Download file** and
 **Try again**.
+
+A download link saves its file to Downloads at once, as in any browser: an
+`<a download>` link, a link to an archive, an installer, a disk image or a game
+file (`.zip`, `.7z`, `.apk`, `.exe`, `.iso`, `.chd`, `.gba`, …), and an address
+whose server answers with such a file or asks for a download (`Content-
+Disposition: attachment`). The Downloads panel shows its progress; the card
+that stays on screen can save another copy.
 
 **Select → Play video on this page** (the row counts the page's play cards)
 plays the page's first play card; on a page whose player is built by its
@@ -1039,11 +1068,11 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 The reader sets its pace by the handheld it runs on, and the log says which
 pace it chose (`browser` line `reader tune: …`):
 
-| Device | Picture threads | Decoded ahead / behind | New pictures per frame | Downloads at once |
-| --- | --- | --- | --- | --- |
-| Smart Pro S (A523, eight cores) | 4 | 2 screens / 1 screen | 8 MB | 10 |
-| Smart Pro, Brick, Brick Pro, Hammer (A133P, four cores) | 2 | 1 screen / ½ screen | 4 MB | 8 |
-| PC | on the drawing thread, as before | — | — | 8 |
+| Device | Picture threads | Decoded ahead / behind | New pictures per frame | Downloads at once | Page tiles | Laid out again at most every | Early page after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Smart Pro S (A523, eight cores) | 4 | 2 screens / 1 screen | 8 MB | 10 | 12 | 250 ms | 0.9 s |
+| Smart Pro, Brick, Brick Pro, Hammer (A133P, four cores) | 2 | 1 screen / ½ screen | 4 MB | 8 | 10 | 400 ms | 0.8 s |
+| PC | on the drawing thread, as before | — | — | 8 | none (painted directly) | at once | 1.5 s |
 
 On a handheld a picture is never decoded in the middle of a frame. A decoding
 thread opens it and scales it down to the size its box has on this screen
@@ -1064,6 +1093,58 @@ pictures made for each size.
 `JUKAHUB_WEB_DECODE=0` puts a handheld back on the old path (pictures decoded
 when drawn) for one run; `JUKAHUB_WEB_DECODE=4` sets the number of threads.
 
+### The page on the GPU
+
+Painting a page used to mean every box, corner, border, gradient, picture and
+line of text as a draw call of its own on every frame — three to five hundred
+on a busy front page, and a blurred card shadow is a stack of translucent
+layers — and on the A133P's PowerVR GPU each draw call costs the CPU time the
+page's own scripts, layout and picture decoding need while it loads. On the
+handhelds the page is now painted once into tiles, textures 256 pixels tall and
+as wide as the page that the GPU keeps, and each frame copies the three or four
+the view covers; a scroll copies them from a new place. Only what moves on its
+own is drawn every frame over them: `position: fixed` bars, sticky headers
+while they are pinned, a video playing in its card, the link cursor and the
+find marks. A tile is painted again when what it shows changes — a new layout
+(pictures sized, a web font, zoom, a form edit), the finished page replacing the
+early one, a picture it was waiting for — and the tiles just outside the view
+are painted ahead on quiet frames, so a scroll finds them ready. A page whose
+background is a gradient, or with a fixed layer under its content, is painted
+directly as before (`player/webpage_tiles.go`). `JUKAHUB_WEB_TILES=0` turns the
+tiles off for one run; `JUKAHUB_WEB_TILES=N` keeps N of them, on a PC too.
+
+### Fast first, then complete
+
+A page appears in steps, as in a desktop browser, and each step keeps the
+reader where they are:
+
+* **Its style sheets start at once.** The sheets the server's markup links
+  begin downloading the moment it arrives, beside the page's scripts, rather
+  than after them; whoever needs a sheet first (the early page or the
+  finished one) gets that download, and nobody starts a second.
+* **The early page has pictures.** When the scripts take longer than the
+  table's "early page after", the page as its server sent it is drawn
+  meanwhile — and now its pictures and web fonts load too. The finished page
+  takes over what that pass fetched instead of fetching it again.
+* **What is on screen comes first.** The picture downloads follow the boxes the
+  screen is drawing, then the page's order.
+* **Recent pages' files are remembered.** A site's style sheets (8 MB in all)
+  and its small pictures — logos, icons, thumbnails up to 512 KB, 8 MB in all —
+  are kept for 15 minutes, so the next page of the same site does not fetch
+  them again. A blocked address is never served from memory, Reload fetches
+  everything again, and leaving the Browser lets it all go.
+* **A picture arriving does not stop the screen.** Laying out a long page is a
+  pause a handheld can show, and a front page's pictures land one after another
+  for seconds; the page is laid out again at most every 250 ms (Smart Pro S) or
+  400 ms (A133P models) while they do, not once per picture.
+* **The page does not jump.** When the page on screen is laid out again or
+  replaced by its finished version, the first line with text at the top of the
+  view is found in the new layout and the page stays on it (scroll anchoring,
+  `player/browser_anchor.go`).
+* **A page still loading says so.** A thin line sweeps along the top of the page
+  until its scripts, pictures and web fonts are in
+  (`player/browser_progress.go`).
+
 ## What it cannot do
 
 This is a reading browser, not a full web engine. It runs a page's scripts
@@ -1075,24 +1156,27 @@ a full browser stop at their test. It can fill and POST ordinary text forms, but
 cannot upload a file or complete sign-ins that depend on browser features
 outside its page model (see
 [Forms](#forms)). Cookies survive a relaunch (see [Cookies](#cookies)); a session
-is only saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
-(`calc(100% - 20px)`) is left unresolved; viewport units (`vw`, `vh`, and the
+is only saved if the site handed one out itself. A `calc()` that mixes a percentage with lengths (`calc(100% - 300px)`,
+`min(100%, 40rem)`) in a width, a flex basis or a left/right inset is the
+percentage it comes to in the parent's modelled width, which the layout then
+scales with the column the box really gets; anywhere else it is left
+unresolved; viewport units (`vw`, `vh`, and the
 modern `svh`/`dvh`/`lvh` forms) resolve against the reader's own screen, so a
 full-height hero does not collapse to its text. `columns` still lays out as a
-plain block: the reader stacks content one column deep. `letter-spacing` is
-ignored (the text is drawn as measured words, not per-glyph advances), a
-diagonal gradient is drawn on its dominant axis instead of at its real angle,
-and inline `<span>`/`<a>` backgrounds stay flat fills rather than ramps.
+plain block: the reader stacks content one column deep. Gradients are drawn
+on the GPU — linear at any angle, radial and conic, repeating ones as stripes
+and rings, hard stops as hard edges — but inline `<span>`/`<a>` backgrounds
+stay flat fills rather than ramps.
 `@container` queries are answered against the nearest modelled size container;
 when a page's container structure depends on layout the reader does not model,
 it can still pick the wrong branch. Column flow grows implicit rows when the
 block axis is indefinite, and `auto-fit` removes the gaps belonging to
 tracks it collapses. A non-rectangular `grid-template-areas` matrix still uses
 the bounding box of its cells. A page's own fonts (`@font-face`) are
-downloaded when they come as TrueType, OpenType or WOFF, regular and bold only
-(a WOFF2-only font, Material Icons and anything past the handheld's caps keep
-the app's face, a monospace one or a serif one); Font Awesome style icon fonts
-draw their icons. SVG text, embedded pictures, filters, masks and clip paths are not
+downloaded when they come as TrueType, OpenType, WOFF or WOFF2 (unpacked by the
+reader's own Brotli decoder), regular and bold only (Material Icons' ligature
+names and anything past the handheld's caps keep the app's face, a monospace
+one or a serif one); Font Awesome style icon fonts draw their icons. SVG text, embedded pictures, filters, masks and clip paths are not
 drawn (the rest of the drawing is). A cell's content moves within its row by
 whole text rows, so `vertical-align: middle` centres it to the nearest row.
 A fixed box too big to pin (taller than the screen, or most of it across the

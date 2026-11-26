@@ -415,11 +415,46 @@ function parentForStyle(r) {
 // getComputedStyle used to see only the element's inline style and the UA defaults, so a script asking "is
 // this hidden?" about content the page's own stylesheet hides heard "block" — and jQuery's .show(),
 // .fadeIn() and .slideDown() did nothing, since they only write display when the computed value is none.
-// This covers the sheets a script can see without a network: <style> elements, CSSOM-inserted rules and
-// adopted sheets (external <link> sheets are not fetched for scripts). Rules aimed at pseudo-elements are
-// skipped; specificity, source order and !important decide; only the properties scripts test are kept.
-// The rule index is rebuilt when cssVersion moves; each element's result is kept until the document or the
-// rules change.
+// This covers <style> elements, CSSOM-inserted rules, adopted sheets and the page's <link> sheets, whose
+// text the load fetched beside the scripts (N.linkedSheets, webdom_runtime.go: asked once for every link
+// not asked about yet). Rules aimed at pseudo-elements are skipped; specificity, source order and
+// !important decide; only the properties scripts test are kept. The rule index is rebuilt when cssVersion
+// moves; each element's result is kept until the document or the rules change.
+
+// linkCSS holds the text of the linked sheets, by absolute URL: '' for one the load could not give.
+var linkCSS = objCreate(null);
+
+function linkURL(r) {
+  var href = getAttrRaw(r, 'href');
+  return href === null ? null : (resolveURL(r.d, href) || href);
+}
+
+function linkIsSheet(r) {
+  return splitTokens(asciiLower(getAttrRaw(r, 'rel') || '')).indexOf('stylesheet') >= 0;
+}
+
+// linkAskSheets fetches, in one native call, the text of every connected <link rel=stylesheet> of d not
+// asked about yet.
+function linkAskSheets(d) {
+  if (!N || typeof N.linkedSheets !== 'function') return;
+  var want = [];
+  var els = d.sheetEls || [];
+  for (var i = 0; i < els.length && want.length < 32; i++) {
+    var e = els[i];
+    if (!e.c || e.d !== d || e.ln !== 'link' || !linkIsSheet(e)) continue;
+    var media = getAttrRaw(e, 'media');
+    if (media !== null && !cascadeMedia(media)) continue;
+    var url = linkURL(e);
+    if (url !== null && linkCSS[url] === undefined && want.indexOf(url) < 0) want.push(url);
+  }
+  if (!want.length) return;
+  var got = null;
+  try { got = N.linkedSheets(want); } catch (err) { got = null; }
+  for (var j = 0; j < want.length; j++) {
+    var t = got ? got[want[j]] : undefined;
+    linkCSS[want[j]] = typeof t === 'string' ? t : '';
+  }
+}
 
 var CASCADE_PROPS = { display: 1, visibility: 1, opacity: 1, position: 1, float: 1, 'overflow-x': 1, 'overflow-y': 1,
   overflow: 1, 'z-index': 1, 'pointer-events': 1, 'content-visibility': 1, 'transition-duration': 1,
@@ -438,13 +473,21 @@ function cascadeIndex(d) {
   if (cascadeCache.doc === d && cascadeCache.ver === cssVersion && cascadeCache.adopted === adopted &&
       cascadeCache.adoptedLen === adoptedLen) return cascadeCache.index;
   var index = { byId: objCreate(null), byClass: objCreate(null), byTag: objCreate(null), any: [], n: 0, display: false, order: 0 };
+  linkAskSheets(d);
   var els = (d.sheetEls || []).slice();
   els.sort(function (a, b) { return a === b ? 0 : precedes(a, b) ? -1 : 1; });
   for (var i = 0; i < els.length && index.n < CASCADE_MAX_RULES; i++) {
     var e = els[i];
-    if (!e.c || e.d !== d || e.ln !== 'style' || inShadowTree(e)) continue;
+    if (!e.c || e.d !== d || (e.ln !== 'style' && e.ln !== 'link') || inShadowTree(e)) continue;
     var media = getAttrRaw(e, 'media');
     if (media !== null && !cascadeMedia(media)) continue;
+    if (e.ln === 'link') {
+      if (!linkIsSheet(e)) continue;
+      var lso = sheetOfLink(e);
+      var lst = lso && lso[SH];
+      if (lst && !lst.disabled && (lst.dirty || (lst.text || '').length <= CASCADE_MAX_SHEET)) cascadeAddRules(index, sheetRules(lst), 0);
+      continue;
+    }
     if (childText(e).length > CASCADE_MAX_SHEET && !(e.sheet && e.sheet.dirty)) continue;
     var so = sheetOfStyle(e);
     var sst = so && so[SH];
@@ -1214,12 +1257,15 @@ function sheetOfStyle(r) {
 }
 function sheetOfLink(r) {
   if (!r.c) return null;
-  var rel = asciiLower(getAttrRaw(r, 'rel') || '');
-  if (splitTokens(rel).indexOf('stylesheet') < 0) return null;
+  if (!linkIsSheet(r)) return null;
   if (!r.sheet) {
-    var href = getAttrRaw(r, 'href');
-    r.sheet = newSheet(r, '', href === null ? null : (resolveURL(r.d, href) || href));
+    var url = linkURL(r);
+    r.sheet = newSheet(r, url === null ? '' : (linkCSS[url] || ''), url);
     bindSheet(objCreate(CSSStyleSheet.prototype), r.sheet);
+  } else if (!r.sheet.dirty && !r.sheet.text && r.sheet.href && linkCSS[r.sheet.href]) {
+    // Its text came after a script first looked at the sheet.
+    r.sheet.text = linkCSS[r.sheet.href];
+    r.sheet.rules = null;
   }
   return r.sheet.obj;
 }

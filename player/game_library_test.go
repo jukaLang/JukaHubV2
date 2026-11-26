@@ -455,6 +455,20 @@ func TestFirmwareROMArgAndLauncherOutput(t *testing.T) {
 	if issues, _ := launcherOutputFindings(loader, "/x/launch.sh"); len(issues) != 1 || issues[0].Files[0] != "libEGL.so" {
 		t.Errorf("missing library: %+v", issues)
 	}
+	// JH-FRF8NW: the firmware SDL's setterm is no reason; PPSSPP quitting on
+	// the one empty argument "$*" makes of no game is.
+	ppsspp := []string{"sh: setterm: not found", "File not found: ", "VulkanMayBeAvailable: Device allowed ('SDL:Linux')"}
+	if issues, _ := launcherOutputFindings(ppsspp, "/mnt/SDCARD/Emus/PPSSPP/launch.sh"); len(issues) != 1 ||
+		issues[0].Title != "The launch script gave the emulator an empty game" || len(issues[0].Files) != 0 {
+		t.Errorf("PPSSPP with no game: %+v", issues)
+	}
+	if issues, _ := launcherOutputFindings(ppsspp[:1], "/x/launch.sh"); len(issues) != 0 {
+		t.Errorf("setterm alone: %+v", issues)
+	}
+	if issues, _ := launcherOutputFindings([]string{"File not found: /mnt/SDCARD/Roms/PSP/a.iso"}, "/x/launch.sh"); len(issues) != 1 ||
+		len(issues[0].Files) != 1 || issues[0].Files[0] != "/mnt/SDCARD/Roms/PSP/a.iso" {
+		t.Errorf("a game PPSSPP did not find: %+v", issues)
+	}
 
 	// A launcher's "#!" line, read the way the kernel reads it (MainUI runs
 	// the script itself): one interpreter, the rest of the line one argument.

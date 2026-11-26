@@ -10,6 +10,8 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -98,6 +100,10 @@ type browserNavigation struct {
 	ContentType string
 	Referrer    string
 	Context     context.Context // cancels the page and its subresources on navigation or scene exit
+	// Fresh is a Reload (or a form post): the page's style sheets and pictures
+	// are fetched again, not taken from what recent pages fetched
+	// (browser_subres.go).
+	Fresh bool
 }
 
 // browserPageProgress publishes a usable page before its image pass finishes.
@@ -577,6 +583,13 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		y += 6
 	}
 
+	if styledLayout != nil {
+		// A new layout of the page on screen (its pictures or web fonts
+		// arrived), or the finished page replacing the one drawn while its
+		// scripts ran, keeps the line at the top of the view where it was
+		// (browser_anchor.go).
+		textBrowserScrollY = brwAnchorScroll(styledDoc, styledLayout, textBrowserScrollY)
+	}
 	scrollMax := int32(0)
 	if int32(totalLines) > int32(maxLines) {
 		scrollMax = int32(totalLines) - int32(maxLines)
@@ -630,6 +643,12 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		// Then the in-page search's own marks, so the current match is never
 		// covered by a link outline drawn over it.
 		browserDrawPageFind(renderer, element, styledLayout, int(textBrowserScrollY), contentTop+4, contentH)
+		// A page drawn before its load finished (its scripts, pictures or web
+		// fonts still on the way) says so along its top edge, as a browser's
+		// progress bar does.
+		if source == textBrowserSourceWeb && browserLoadInFlight(element.Variable) {
+			brwDrawLoadProgress(renderer, sdl.Rect{X: element.X + 7, Y: contentTop + 4, W: elemW - 14, H: contentH}, accentColor)
+		}
 	} else if loading {
 		drawTextBrowserLoading(renderer, config, element, contentTop, contentH, accentColor)
 	} else {
@@ -1193,6 +1212,8 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 	config.Variables.Custom[textBrowserURLVariable] = address
 	textBrowserScrollY = 0
 	textBrowserScrollVelocity = 0
+	// A new page: no place on the old one to keep (browser_anchor.go).
+	brwAnchorForget()
 	// An in-page search belongs to the page it was run against. Navigating
 	// leaves the old match list pointing at rows that no longer exist, so the
 	// search ends with the page.
@@ -1284,6 +1305,9 @@ func browserLoadNavigation(config *Config, element Element, nav browserNavigatio
 	}
 	loadCtx, cancel := context.WithCancel(parent)
 	nav.Context = loadCtx
+	// Reload and a form post fetch the page's sheets and pictures again
+	// (browser_subres.go).
+	nav.Fresh = !useCache
 	textBrowserRequestMutex.Lock()
 	textBrowserRequestCancels[outputVariable] = cancel
 	textBrowserRequestMutex.Unlock()
@@ -1514,6 +1538,8 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 		return browserPage{Text: f.text(), Fail: &f}
 	}
 	body, truncated, pageURL, pageLimit := fetched.Body, fetched.Truncated, fetched.URL, fetched.Limit
+	// Where the page came from places its scripts (webJSNetPageGuardFor).
+	webJSNotePageServer(gen, pageURL, fetched.Server)
 	// A redirect that ended on a YouTube watch page goes to the player
 	// (brwQueueLanding); running its scripts and fetching its stylesheets and
 	// images would only delay that.
@@ -1532,9 +1558,26 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	// reason to spend the page's script budget running them, and some ship an
 	// inline fallback that would run even with the src blocked.
 	html := stripBlockedWebScripts(string(body), pageURL)
+	// The page's style sheets and pictures are fetched once for the preview
+	// and the page, and its sheets start downloading now, beside the script
+	// pass, as a browser's preload scanner starts them (browser_subres.go).
+	ctx = webWithLoadCaches(ctx, nav.Fresh)
+	browserPrefetchSheets(ctx, html, pageURL)
+	// The page's scripts read those sheets too: getComputedStyle answers from
+	// the site's own stylesheet (nLinkedSheets, webdom_runtime.go).
+	webJSSetSheetSource(gen, func(page, address string) string {
+		wait, cancel := context.WithTimeout(ctx, webJSSheetWait)
+		defer cancel()
+		return webCachedStylesheet(wait, page, address)
+	})
+	defer webJSSetSheetSource(gen, nil)
 	// Page scripts run first, against a real document (webdom_runtime.go), so
 	// the text, link, CSS and image passes below see the markup they built.
-	scripted := webJSRunPageFor(html, pageURL, gen, time.Time{})
+	// They get the load's time less what the style sheets, the parse and the
+	// pictures need, so a heavy page (cnn.com) still arrives in time; a page
+	// with too little left keeps the markup its server sent. When they take
+	// longer than a moment, that markup is drawn meanwhile (browserPreview).
+	scripted := browserRunScripts(ctx, html, pageURL, gen, truncated, pageLimit, publishProgress)
 	// A script that sends the page elsewhere — a stub whose only job is
 	// location.replace(…), a consent or locale bounce — is followed like a meta
 	// refresh: a few hops on the same client and time budget, never back to an
@@ -1583,11 +1626,16 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 			return browserPage{Text: f.text(), Fail: &f}
 		}
 		body, truncated, pageURL, pageLimit = next.Body, next.Truncated, next.URL, next.Limit
+		webJSNotePageServer(gen, pageURL, next.Server)
 		seen[landed] = true
 		html = stripBlockedWebScripts(string(body), pageURL)
+		browserPrefetchSheets(ctx, html, pageURL)
 		scripted = webJSRunPageFor(html, pageURL, gen, deadline)
 	}
-	if ctx.Err() != nil {
+	// Only a load the reader left ends here. One that ran out of time goes on
+	// with what it has: what the network did not deliver in time is skipped
+	// below at once, and the page is drawn without it rather than not at all.
+	if parent.Err() != nil {
 		return browserPage{}
 	}
 	source := scripted.HTML
@@ -1632,10 +1680,10 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	// Keep linked sheets at their positions relative to <style> blocks. A late
 	// linked sheet can override an earlier block, just as it does on the web.
 	pageSheets := fetchWebStylesheetBlocksContext(ctx, source, pageURL)
-	if ctx.Err() != nil {
+	if parent.Err() != nil {
 		return browserPage{}
 	}
-	doc := parseWebPageWithLinkedSheets(source, "", pageURL.String(), pageSheets)
+	doc := parseWebPageWithLinkedSheets(source, webReaderCleanCSS(pageURL.String()), pageURL.String(), pageSheets)
 	doc.Favicon = browserFaviconURL(source, pageURL)
 	if doc.Title == "" {
 		doc.Title = title
@@ -1662,14 +1710,22 @@ func browseWebPageResult(nav browserNavigation, gen uint64, progress ...browserP
 	// and natural sizes the reader paints from (webpage_image.go).
 	// The page's web fonts load beside them (webpage_webfont.go); each file
 	// that arrives lays the page out again in it.
+	//
+	// Both run on the time of their own (webImagePassTimeout), not on what is
+	// left of the page's: the page is already on screen, and a picture that
+	// arrives late still takes its place — a long page used to keep only the
+	// pictures that came in before the page's deadline. Leaving the page stops
+	// them. They keep the load's caches: what the early page's pass fetched is
+	// handed over, not fetched again (browser_subres.go).
+	assets := webCarryLoadCaches(parent, ctx)
 	fontsDone := make(chan struct{})
 	go func() {
 		defer close(fontsDone)
-		fetchWebFontsContext(ctx, doc)
+		fetchWebFontsContext(assets, doc)
 	}()
-	fetchWebImagesContext(ctx, doc)
+	fetchWebImagesContext(assets, doc)
 	<-fontsDone
-	if ctx.Err() != nil {
+	if parent.Err() != nil {
 		return browserPage{}
 	}
 	// The reader text is assembled last: the blocked count and truncation state
@@ -1733,6 +1789,10 @@ type textBrowserDocument struct {
 	URL       *url.URL
 	Truncated bool
 	Limit     int
+	// Server is the address the page came from, when the connection to it
+	// was direct (no proxy): the script pass places the page by it
+	// (webJSNetPageGuardFor).
+	Server netip.Addr
 }
 
 // textBrowserPageLimitBytes picks the HTML budget for one download from the
@@ -1838,6 +1898,33 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 	if nav.Referrer != "" {
 		browserChromeFormNavigate(req.Header, browserURL(nav.Referrer), req.URL, method)
 	}
+	// Where the page comes from, as connected — the last connection of its
+	// redirects is the one that served it. Through a proxy the connection
+	// says nothing about the server, and nothing is recorded.
+	var server struct {
+		mu   sync.Mutex
+		addr netip.Addr
+	}
+	proxied := false
+	if tr, ok := client.Transport.(*http.Transport); ok && tr.Proxy != nil {
+		if u, perr := tr.Proxy(req); perr != nil || u != nil {
+			proxied = true
+		}
+	}
+	if !proxied {
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) {
+				if info.Conn == nil {
+					return
+				}
+				if ap, perr := netip.ParseAddrPort(info.Conn.RemoteAddr().String()); perr == nil {
+					server.mu.Lock()
+					server.addr = ap.Addr()
+					server.mu.Unlock()
+				}
+			},
+		}))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		// Nothing below shows the transport error itself: a resolver failure
@@ -1880,10 +1967,15 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		// A video, a song or a live playlist: its card plays it (brw_stream.go).
 		return brwStreamCard(address, mediaType)
 	}
-	if kind != brwDocHTML && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Disposition"))), "attachment") {
-		// The site asks for a download (an "Export CSV" link): the card with
-		// its Download button, not the file drawn as a page.
-		return notPage()
+	if kind != brwDocHTML && (strings.HasPrefix(strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Disposition"))), "attachment") ||
+		browserDownloadType(mediaType)) {
+		// The site asks for a download (an "Export CSV" link, an archive, an
+		// installer): it is saved to Downloads straight away, and the card
+		// says so, with its Download button for another copy.
+		f := brwNewFailure(brwFailContent, address, "This address is a "+mediaType+" file, not a web page. It is being saved to Downloads.")
+		f.Title = "Downloading this file"
+		f.AutoDownload = true
+		return textBrowserDocument{}, &brwFetchError{fail: f}
 	}
 	switch kind {
 	case brwDocImage:
@@ -1925,7 +2017,10 @@ func fetchTextBrowserOnceRequest(ctx context.Context, client *http.Client, nav b
 		}
 		logDebug("browser", "showing the page that came with HTTP %d from %s", resp.StatusCode, webJSLogURL(resp.Request.URL))
 	}
-	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated, Limit: limit}, nil
+	server.mu.Lock()
+	from := server.addr
+	server.mu.Unlock()
+	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated, Limit: limit, Server: from}, nil
 }
 
 // browserMetaRefreshTarget reads the redirect a page asks for in its markup:
@@ -2860,4 +2955,119 @@ func refreshSceneTextBrowsers(config *Config) {
 			startTextBrowserAutoRefresh(config, elem)
 		}
 	}
+}
+
+// browserScriptReserve is the part of a load's time the scripts leave for the
+// style sheets, the parse and the pictures.
+const browserScriptReserve = 7 * time.Second
+
+// browserRunScripts runs the page's scripts (webJSRunPageFor) with the load's
+// time less browserScriptReserve. When they are still running after the
+// tune's PreviewAfter (0.8 s on the A133P handhelds, 0.9 s on the Smart Pro S,
+// 1.5 s on a PC: webpage_tune.go), the page as its server sent it is drawn
+// meanwhile (browserPreview): a news front page's scripts can take the
+// handheld ten seconds, and the reader used to show "Loading" for all of them.
+// The preview is published before this returns, so the page that follows
+// always replaces it, never the other way round.
+func browserRunScripts(ctx context.Context, html string, pageURL *url.URL, gen uint64, truncated bool, pageLimit int, publish browserPageProgress) webJSPageResult {
+	var deadline time.Time
+	if d, ok := ctx.Deadline(); ok {
+		deadline = d.Add(-browserScriptReserve)
+		if !deadline.After(time.Now()) {
+			// Already past it: the pass sees no time left and skips the scripts.
+			deadline = time.Now()
+		}
+	}
+	done := make(chan webJSPageResult, 1)
+	go func() {
+		done <- webJSRunPageFor(html, pageURL, gen, deadline)
+	}()
+	if publish == nil {
+		return <-done
+	}
+	wait := time.NewTimer(webTuneNow().PreviewAfter)
+	defer wait.Stop()
+	select {
+	case res := <-done:
+		return res
+	case <-wait.C:
+	}
+	browserPreview(ctx, html, pageURL, truncated, pageLimit, publish, done)
+	return <-done
+}
+
+// browserPreview publishes the page as its server sent it — style sheets
+// applied, pictures not yet fetched — unless its scripts finish first (done
+// receives their result, which is then handed back through done again).
+func browserPreview(ctx context.Context, html string, pageURL *url.URL, truncated bool, pageLimit int, publish browserPageProgress, done chan webJSPageResult) {
+	finished := func() bool {
+		select {
+		case res := <-done:
+			done <- res
+			return true
+		default:
+			return ctx.Err() != nil
+		}
+	}
+	address := pageURL.String()
+	source := webDOMRendererMarkup(html)
+	if !browserAdBlockOff(address) {
+		source, _ = webRemoveAds(source, address)
+	}
+	if finished() {
+		return
+	}
+	title, pageText := extractTextBrowserHTML(source)
+	if title == "" {
+		title = pageURL.Hostname()
+	}
+	if pageText == "" {
+		pageText = "This page has no readable text content."
+	}
+	pageText = capTextBrowserText(pageText)
+	links := extractBrowserLinks(source, pageURL)
+	source = webExpandInlineCSSImportsContext(ctx, source, pageURL)
+	sheets := fetchWebStylesheetBlocksContext(ctx, source, pageURL)
+	if finished() {
+		return
+	}
+	doc := parseWebPageWithLinkedSheets(source, webReaderCleanCSS(address), address, sheets)
+	if len(doc.Blocks) == 0 || finished() {
+		return
+	}
+	doc.Favicon = browserFaviconURL(source, pageURL)
+	if doc.Title == "" {
+		doc.Title = title
+	}
+	logDebug("browser", "showing %s as sent while its scripts run", webJSLogURL(pageURL))
+	publish(browserPage{
+		Text: browserReaderText(title, address, len(links), pageText,
+			browserBlockedRequests(), browserAdBlockOff(address), truncated, pageLimit),
+		Links:    links,
+		FinalURL: address,
+		Doc:      doc,
+		Blocked:  browserBlockedRequests(),
+	})
+	// Its pictures and web fonts come now too, the ones on screen first. The
+	// finished page takes over what this pass fetched (webLoadImageBytes), and
+	// the pass starts no new picture once that page's own pass begins.
+	// Both parse what the network sends (picture headers, SVG, font files), off
+	// the load's goroutine and so outside its recover: a bug there is logged,
+	// not a crash.
+	recovered := func(what string) {
+		if r := recover(); r != nil {
+			logError("browser", "early page's %s pass crashed on %s: %v", what, webJSLogURL(pageURL), r)
+		}
+	}
+	go func() {
+		defer recovered("picture")
+		fontsDone := make(chan struct{})
+		go func() {
+			defer close(fontsDone)
+			defer recovered("web font")
+			fetchWebFontsContext(ctx, doc)
+		}()
+		fetchWebImagesPass(ctx, doc, true)
+		<-fontsDone
+	}()
 }

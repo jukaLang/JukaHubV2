@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **128**.
+Open tasks: **125**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -406,12 +406,6 @@ first: JukaHub's own captures and RetroArch's are grouped by the game named in
 the file name, anything else under "Other"; A opens a picture full screen and
 L1/R1 step between games.
 
-### MED-6 — Preferred audio and subtitle tracks, and subtitle style (P2, M)
-**Where.** `videoplayer.go`, `videosubs.go` (`SubtitleLanguage` only picks the
-language of downloaded subtitles).
-**Done when.** A preferred audio and subtitle language picks the matching
-tracks of any new video, and subtitles can be styled (size, background).
-
 ### MED-7 — Crossfade and ReplayGain (P3, S)
 **Where.** `musicplayer.go`, `musicsettings.go`.
 **Done when.** An optional crossfade (0–10 s) overlaps a track's end with the
@@ -551,14 +545,6 @@ used as a read-only music or video source streamed through its `nasFS`.
 **Done when.** `AUTH TLS` with a persisted self-signed certificate whose
 fingerprint the sheet shows, `PROT P` data channels, and the sheet recommends
 FTPS or SFTP.
-
-### NET-16 — The script guard knows where the page itself lives (P2, M)
-**Where.** `textbrowser.go` (`fetchTextBrowserOnce`), `webdom_net.go`
-(`webJSNetPageGuard`, `newWebJSNet`), `webdom_runtime.go`.
-**Done when.** The page fetch records the address it actually connected to
-(`httptrace.ClientTrace.GotConn`) and the guard classes the page by that address:
-a page whose server is on the LAN reaches the LAN, a public page still cannot,
-and a test covers both.
 
 ### NET-23 — Matter: Apple Home and Google Home accessories without Home Assistant (P2, L) [NET]
 **Where.** New `matter*.go` beside `smarthome_hub.go` (a fourth source of the
@@ -894,14 +880,6 @@ exporting module's namespace (with scope analysis in the rewrite, so local
 variables and property names of the same spelling stay untouched), cycles
 evaluate in the standard's order, and a test links a two-module cycle that
 reassigns an exported `let`.
-
-### APP-11 — Linked stylesheets for page scripts (P2, S)
-**Where.** `textbrowser.go` (`browseWebPageResult`), `webpage.go`
-(`fetchWebStylesheets`), `webdom_runtime.go` (boot), `webdom/45_css.js`.
-**Done when.** The first linked sheets (the renderer's limits) are fetched beside
-the page's scripts and handed to the prelude before the parser scripts run, the
-renderer reuses the same bytes instead of a second download, and a test shows
-`.show()` on an element a linked sheet hides.
 
 ### APP-12 — Ranges that follow the document (P3, S)
 **Done when.** Live ranges are tracked per document and their boundaries move on

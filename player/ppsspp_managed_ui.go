@@ -33,6 +33,10 @@ import (
 // press can tell the PSP tile from the rest without scanning the card.
 var ppssppTileName atomic.Pointer[string]
 
+// ppssppTileAct is the footer's word for X on that tile, from the same build
+// (ppssppTileAction).
+var ppssppTileAct atomic.Pointer[string]
+
 // ppssppPSPTileIndex finds the PSP tile in a handheld catalog: the tile whose
 // launcher PSP games resolve to (findGameLauncher), else a tile named after the
 // PSP (a Roms/PSP folder with no emulator). Core rows are RetroArch's, never it.
@@ -118,7 +122,9 @@ func ppssppDecorateCatalog(entries []emuEntry) []emuEntry {
 	e := &entries[i]
 	name := e.Name
 	ppssppTileName.Store(&name)
-	line := ppssppTileLine(st, fw, haveFw, platform) + " · " + hintSentence("%s: PPSSPP builds", "X", "PPSSPP builds")
+	action, short := ppssppTileAction(st, platform)
+	ppssppTileAct.Store(&short)
+	line := ppssppTileLine(st, fw, haveFw, platform) + " · " + hintSentence("%s: "+action, "X", short)
 	if detail := strings.TrimSpace(e.Detail); detail != "" {
 		line += " — " + detail
 	}
@@ -144,10 +150,74 @@ func ppssppTileOpensCard(e emuEntry) bool {
 // ppssppTileXLabel is the X hint for the PSP tile ("" elsewhere), for the
 // page's footer.
 func ppssppTileXLabel(e emuEntry) string {
-	if ppssppTileOpensCard(e) {
-		return "PPSSPP"
+	if !ppssppTileOpensCard(e) {
+		return ""
 	}
-	return ""
+	if p := ppssppTileAct.Load(); p != nil && *p != "" {
+		return *p
+	}
+	return "PPSSPP"
+}
+
+// ppssppTileAction is what X on the PSP tile does first — the PPSSPP card's
+// first choice (openPPSSPPCard) — for the tile's line, and the footer's word
+// for it. The line said "1.20.3 available · X: PPSSPP builds", and a tester
+// pressed A to install it, which only started the firmware's PPSSPP
+// (2026-11-25, JH-FRF8NW): it names the install now.
+func ppssppTileAction(st ppssppState, platform string) (action, short string) {
+	if platform == "" {
+		return "PPSSPP builds", "PPSSPP"
+	}
+	newest, installed := st.newest()
+	switch {
+	case !installed:
+		return strings.TrimSpace("install PPSSPP " + st.LatestVersion), "Install"
+	case ppssppUpdateOffered(st, newest) && st.LatestVersion == "":
+		return "update JukaHub's PPSSPP", "Update"
+	case ppssppUpdateOffered(st, newest):
+		return "update to PPSSPP " + st.LatestVersion, "Update"
+	}
+	return "PPSSPP builds", "PPSSPP"
+}
+
+// ppssppUpdateOffered reports whether the card offers an update over newest,
+// the newest build installed: a newer release that did not fail here.
+func ppssppUpdateOffered(st ppssppState, newest ppssppBuild) bool {
+	return st.LatestTag != "" && st.LatestTag != newest.Tag && st.Bad[st.LatestTag] == "" &&
+		ppssppWorthOver(st.LatestTag, st.LatestVersion, newest)
+}
+
+// ppssppTileStart is what A on the handheld's PSP tile starts — the launcher of
+// the PPSSPP that plays PSP games, and what it gets in place of a game — and
+// whether that is PPSSPP's own menu (menu). Any other tile keeps its launcher.
+//
+// A tester's A on that tile ended in "PPSSPP didn't start … could not find
+// setterm" (2026-11-25, JH-FRF8NW). The firmware's launch scripts are written
+// for MainUI, which starts them with a game only: TrimUI's ends in
+// `./PPSSPPSDL_gl "$*"`, and with no game "$*" is ONE empty argument. PPSSPP
+// takes an argument that does not start with "-" for the game to boot, so it
+// printed "File not found: " and quit with status 1 (setterm is the firmware
+// SDL's harmless "setterm -cursor off"). The firmware's launcher gets
+// ppssppMenuArg there now; JukaHub's own build, while PSP games use it — the
+// PPSSPP the tile's line names — starts through its own script, which opens
+// PPSSPP's menu by itself when it is given no game (ppssppLauncherScript).
+func ppssppTileStart(e emuEntry, launcher string) (start string, args []string, menu bool) {
+	if ppssppIsManagedLauncher(launcher) {
+		return launcher, nil, true
+	}
+	if !ppssppTileOpensCard(e) {
+		return launcher, nil, false
+	}
+	st := ppssppSnapshot()
+	if b, ok := st.build(st.Active); ok && regularFile(b.script()) {
+		return b.script(), nil, true
+	}
+	if !launcherShellScript(launcher) || retroArchLauncher(launcher) {
+		// RetroArch's PPSSPP core behind the tile reads no option of
+		// PPSSPP's, and RetroArch opens its own menu with no game.
+		return launcher, nil, false
+	}
+	return launcher, []string{ppssppMenuArg}, true
 }
 
 // ppssppCardBody explains, in a paragraph, what the card's choices mean.
@@ -246,8 +316,7 @@ func openPPSSPPCard(e emuEntry) {
 		options = append(options, recoveryOption{icon: "download", title: title + " for PSP games",
 			detail: ppssppInstallDetail(st.LatestTag) + " · uses your saves · the firmware's PPSSPP stays",
 			run:    func(*Config) { recoveryCardClose(); ppssppStartInstall(tile, true) }})
-	case st.LatestTag != "" && st.LatestTag != newest.Tag && st.Bad[st.LatestTag] == "" &&
-		ppssppWorthOver(st.LatestTag, st.LatestVersion, newest):
+	case ppssppUpdateOffered(st, newest):
 		title := "Update JukaHub's PPSSPP"
 		if st.LatestVersion != "" {
 			title = "Update to PPSSPP " + st.LatestVersion

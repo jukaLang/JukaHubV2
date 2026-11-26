@@ -274,16 +274,33 @@ func dolphinVideoFailureIn(path string) string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
+	return dolphinVideoFailureLines(strings.Split(string(data), "\n"))
+}
+
+// dolphinVideoSelectedContextLine marks the point after Dolphin has accepted a
+// hardware API. Its earlier OpenGL, ES 3.2 and ES 3.1 probes may all have
+// failed on a RetroArch that successfully gave it ES 3.0 afterward.
+func dolphinVideoSelectedContextLine(line string) bool {
+	lower := strings.ToLower(line)
+	return strings.Contains(lower, "video - sethwrender - using ") &&
+		(strings.Contains(lower, "opengl") || strings.Contains(lower, "vulkan"))
+}
+
+// dolphinVideoFailureLines finds the last graphics failure after the core's
+// final successful context choice, if any. A rejected candidate before that
+// choice is not a failure of the context Dolphin actually used.
+func dolphinVideoFailureLines(lines []string) string {
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
-		if !dolphinVideoFailureLine(line) {
-			continue
+		if dolphinVideoFailureLine(line) {
+			if r := []rune(line); len(r) > 160 {
+				line = string(r[:160]) + "…"
+			}
+			return line
 		}
-		if r := []rune(line); len(r) > 160 {
-			line = string(r[:160]) + "…"
+		if dolphinVideoSelectedContextLine(line) {
+			return ""
 		}
-		return line
 	}
 	return ""
 }

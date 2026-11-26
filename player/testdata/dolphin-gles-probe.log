@@ -1,0 +1,27 @@
+[INFO] [Environ]: GET_PREFERRED_HW_RENDER, video driver name: gl.
+[INFO] [Environ]: GET_PREFERRED_HW_RENDER - Context callback set to RETRO_HW_CONTEXT_OPENGL.
+[INFO] [Environ]: SET_HW_RENDER, context type: gl.
+[ERROR] Requesting OpenGL context, but RetroArch is compiled against OpenGLES. Cannot use HW context.
+[ERROR] [Environ]: SET_HW_RENDER - Dynamic request HW context failed.
+[libretro WARN] 10:07:694 DolphinLibretro/Video.cpp:214 W[Video]: Video - SetHWRender - failed to set hw renderer for OpenGL 3.0
+[INFO] [Environ]: SET_HW_RENDER, context type: gl.
+[ERROR] Requesting OpenGL context, but RetroArch is compiled against OpenGLES. Cannot use HW context.
+[ERROR] [Environ]: SET_HW_RENDER - Dynamic request HW context failed.
+[libretro WARN] 10:07:694 DolphinLibretro/Video.cpp:183 W[Video]: Video - SetHWRender - failed to set hw renderer for OpenGL Core
+[INFO] [Environ]: SET_HW_RENDER, context type: gl.
+[ERROR] Requesting OpenGLES3.2 context, but RetroArch is compiled against a lesser version. Cannot use HW context.
+[ERROR] [Environ]: SET_HW_RENDER - Dynamic request HW context failed.
+[libretro WARN] 10:07:694 DolphinLibretro/Video.cpp:214 W[Video]: Video - SetHWRender - failed to set hw renderer for OpenGL ES 3.2
+[INFO] [Environ]: SET_HW_RENDER, context type: gl.
+[ERROR] Requesting OpenGLES3.1 context, but RetroArch is compiled against a lesser version. Cannot use HW context.
+[ERROR] [Environ]: SET_HW_RENDER - Dynamic request HW context failed.
+[libretro WARN] 10:07:694 DolphinLibretro/Video.cpp:214 W[Video]: Video - SetHWRender - failed to set hw renderer for OpenGL ES 3.1
+[INFO] [Environ]: SET_HW_RENDER, context type: gl.
+[INFO] Requesting OpenGLES3 context.
+[INFO] [Environ]: SET_HW_SHARED_CONTEXT.
+[libretro INFO] 10:07:695 DolphinLibretro/Video.cpp:208 I[Video]: Video - SetHWRender - using OpenGL ES 3.0
+[libretro INFO] 10:07:696 DolphinLibretro/Boot.cpp:733 N[Video]: Using GFX backend: OGL
+[INFO] GLES version = 3.
+[INFO] [GL]: Version: OpenGL ES 3.2 build 1.19@6345021.
+[libretro ERROR] 10:08:566 Common/GL/GLExtensions/GLExtensions.cpp:2436 E[Video]: Couldn't load function glGetIntegerv
+[libretro WARN] 10:08:566 DolphinLibretro/Boot.cpp:340 W[COMMON]: Suppressed popup: Warning - GPU: OGL ERROR: Does your video card support OpenGL 2.0?

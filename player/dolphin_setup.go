@@ -252,21 +252,35 @@ type dolphinNeeds struct {
 	Core        string // the core file, "" when there is none
 	CoreMissing bool
 	CoreStale   bool
+	X11Missing  bool   // a desktop build needs real X11 libraries beside the runtime
 	SysDir      string // RetroArch's system folder
 	SysMissing  bool
 	Why         string // what stops the start that no download fixes
 }
 
+// A missing core still needs setup when RetroArch already has Dolphin's Sys
+// folder, for example after the core was removed by an updater or by hand.
+func dolphinNeedsSetup(n dolphinNeeds) bool {
+	return n.CoreMissing || n.CoreStale || n.X11Missing || n.SysMissing
+}
+
+func dolphinStaleOnly(n dolphinNeeds) bool {
+	return n.CoreStale && !n.CoreMissing && !n.X11Missing && !n.SysMissing
+}
+
 // dolphinNeedLabel names what a setup fetches, for a toast.
 func dolphinNeedLabel(n dolphinNeeds) string {
-	core := n.CoreMissing || n.CoreStale
-	switch {
-	case core && n.SysMissing:
-		return "a newer core and its system files"
-	case core:
-		return "a newer core"
+	var parts []string
+	if n.CoreMissing || n.CoreStale {
+		parts = append(parts, "a newer core")
 	}
-	return "its system files"
+	if n.X11Missing {
+		parts = append(parts, "its display libraries")
+	}
+	if n.SysMissing {
+		parts = append(parts, "its system files")
+	}
+	return mlJoinAnd(parts)
 }
 
 // dolphinInspect looks at the core launcher starts (the active Dolphin core
@@ -280,6 +294,12 @@ func dolphinInspect(launcher, romPath string) dolphinNeeds {
 	}
 	n.Core = core
 	script := strings.TrimSpace(launcher) != "" && !dolphinIsCore(launcher)
+	// A custom RetroArch script manages its own core and libraries. Checking
+	// a different core found on the card would request setup this script cannot
+	// perform and leave the game in a repeated setup loop.
+	if !script && regularFile(core) && dolphinX11CoreNeeds(core) && (!dolphinX11Ready() || raGlibcLoadDir(core) == "") {
+		n.X11Missing = true
+	}
 	switch {
 	case script:
 		// A RetroArch script brings its own core: JukaHub neither installs
@@ -369,7 +389,7 @@ func dolphinSetup(ctx context.Context, launcher, romPath string, want dolphinCor
 	if !dolphinIsCore(core) {
 		core = dolphinFindCore()
 	}
-	if !script && (core == "" || want == dolphinGetNewest || (want == dolphinFixStale && dolphinCoreStale(core))) {
+	if !script && (!regularFile(core) || want == dolphinGetNewest || (want == dolphinFixStale && dolphinCoreStale(core))) {
 		// A system folder that cannot take the Sys folder stops the setup
 		// before a core is downloaded for nothing.
 		if pre, _, _ := gameDiagSystemDir(core, romPath); romPath != "" && !dolphinSysPresent(pre) {
@@ -381,12 +401,17 @@ func dolphinSetup(ctx context.Context, launcher, romPath string, want dolphinCor
 		switch {
 		case err == nil:
 			core = installed
-		case core != "" && ctx.Err() == nil:
+		case regularFile(core) && ctx.Err() == nil:
 			// Only an update: the old build still plays (the caller says so).
 			logWarn("library", "GameCube: the Dolphin core could not be updated, keeping %s: %v", core, err)
 			kept = err
 		default:
 			return "", nil, err
+		}
+	}
+	if !script && core != "" && dolphinX11CoreNeeds(core) && (!dolphinX11Ready() || raGlibcLoadDir(core) == "") {
+		if err := dolphinX11Ensure(ctx, core, phase); err != nil {
+			return "", nil, fmt.Errorf("Dolphin's display libraries: %w", err)
 		}
 	}
 	from := core
@@ -536,6 +561,17 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 			logInfo("library", "GameCube: %s has no Dolphin core", src.name)
 			continue
 		}
+		if !src.own && (!dolphinX11Ready() || raGlibcLoadDir(target) == "") {
+			// The buildbot's desktop core links libX11 even when RetroArch
+			// gives it a framebuffer EGL context. Without the real library
+			// chain the core is refused before installation; the firmware has
+			// none of these libraries (dolphin_x11.go).
+			if err := dolphinX11Ensure(ctx, target, phase); err != nil {
+				lastErr = err
+				note(src, "Dolphin's display libraries: "+firstLine(err.Error()))
+				continue
+			}
+		}
 		if active := dolphinFindCore(); active != "" {
 			if sum, err := emuCachedCRC32(active); err == nil && sum == entry.CRC32 {
 				// This source's newest build already: an old file time said
@@ -544,7 +580,8 @@ func dolphinInstallCore(ctx context.Context, client *http.Client, current string
 				return active, nil
 			}
 		}
-		if reason, refused := coreBuildRefused(dolphinCoreName, entry.CRC32); refused && !raGlibcRefusalMayPass(reason, target) {
+		if reason, refused := coreBuildRefused(dolphinCoreName, entry.CRC32); refused &&
+			!raGlibcRefusalMayPass(reason, target) && !dolphinX11RefusalMayPass(reason, target) {
 			// Not fetched again; the source's next build gets its own check.
 			logInfo("library", "GameCube: %s's %s Dolphin build was refused here before: %s", src.name, entry.Date, reason)
 			lastErr = &coreRefusedError{Core: dolphinCoreName, Build: entry.Date, Reason: "was refused here before: " + reason}
