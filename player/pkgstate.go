@@ -18,7 +18,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+
 	"math"
 	"os"
 	"path/filepath"
@@ -541,7 +541,7 @@ func pkgOnSceneEnter(config *Config) {
 	// Whatever fetch the last visit started was cancelled with that visit.
 	st.loading = false
 	st.fetchGen++
-	pkgMigrateLegacy(config)
+
 	runSceneTask(pkgLoadLocal)
 	if !st.haveCatalog {
 		runSceneTask(pkgLoadCache)
@@ -568,47 +568,6 @@ func packageActionsForget() {
 	pkgStoresNoteDeparture()
 }
 
-// pkgMigrateLegacy moves the registry list older builds kept inside
-// jukauser.json (Custom["packages_list"], rewritten on every settings save)
-// into the cache file, and shows it at once.
-//
-// remove after 2027-05-01: an upgrade shim for installs from 0.4.0.
-func pkgMigrateLegacy(config *Config) {
-	if config == nil || config.Variables.Custom == nil {
-		return
-	}
-	v, ok := config.Variables.Custom["packages_list"]
-	if !ok {
-		return
-	}
-	delete(config.Variables.Custom, "packages_list")
-	delete(config.Variables.Custom, "packages_error")
-	saveUserConfigDebounced(userConfigFromVariables(config))
-	data, err := json.Marshal(v)
-	if err != nil {
-		return
-	}
-	entries, err := pkgParseCatalog(data)
-	if err != nil || len(entries) == 0 {
-		return
-	}
-	st := &pkgUI
-	if !st.haveCatalog {
-		st.entries = entries
-		st.haveCatalog = true
-		st.fetchedAt = time.Time{}
-		st.dirty = true
-	}
-	go func() {
-		if _, statErr := os.Stat(pkgCatalogCachePath()); os.IsNotExist(statErr) {
-			if werr := pkgWriteCatalogCache(data, time.Time{}); werr != nil {
-				logWarn("packages", "caching the carried-over list: %v", werr)
-			}
-		}
-	}()
-}
-
-// pkgLoadCache reads the cached registry for the first frame.
 func pkgLoadCache(ctx context.Context) {
 	entries, at, err := pkgReadCatalogCache()
 	if ctx.Err() != nil {

@@ -53,7 +53,18 @@ HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO="$(CDPATH= cd -- "$HERE/../.." && pwd)"
 WORKSPACE="${GITHUB_WORKSPACE:-$REPO}"
 ROOTFS="${ROOTFS:-/srv/jukahub-focal}"
-MIRROR=http://ports.ubuntu.com/ubuntu-ports
+# TEST-15: one dated Ubuntu archive snapshot for debootstrap and every apt
+# pocket. The snapshot service serves arm64 under /ubuntu/<id>, the same tree
+# ports.ubuntu.com serves live. Focal's public pockets froze in 2025-05, so
+# this snapshot is also the last state a fresh focal build could ever see.
+# Set SNAPSHOT to move the root deliberately; a malformed id stops the build
+# instead of silently falling back to a moving mirror.
+SNAPSHOT="${SNAPSHOT:-20250530T000000Z}"
+case "$SNAPSHOT" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+    *) echo "build-root: SNAPSHOT must be YYYYMMDDTHHMMSSZ" >&2; exit 2 ;;
+esac
+MIRROR="http://snapshot.ubuntu.com/ubuntu/$SNAPSHOT"
 # The logs of create's steps, on the runner (the builds keep theirs inside
 # the root, under /tmp).
 LOG_DIR="${RUNNER_TEMP:-/tmp}/jukahub-build-root-logs"
@@ -125,7 +136,8 @@ create() {
         'path-exclude=/usr/share/man/*' 'path-exclude=/usr/share/info/*' \
         'path-exclude=/usr/share/locale/*' \
         | sudo tee "$ROOTFS/etc/dpkg/dpkg.cfg.d/jukahub-build-root" > /dev/null
-    echo 'Acquire::Languages "none";' \
+    printf '%s\n' 'Acquire::Languages "none";' \
+        'Acquire::Check-Valid-Until "false";' \
         | sudo tee "$ROOTFS/etc/apt/apt.conf.d/99jukahub-build-root" > /dev/null
     # The security and bug-fix updates too: OpenSSL is linked statically, so
     # whatever libssl-dev holds is what ships. Focal's public update pockets
@@ -146,18 +158,20 @@ create() {
     quietly build-packages in_root apt-get -o Acquire::Retries=3 install -y -q \
         --no-install-recommends \
         build-essential ca-certificates curl file git libssl-dev make \
-        ninja-build patchelf pkg-config python3 python3-pip \
+        ninja-build patchelf perl pkg-config python3 python3-pip \
         python3-setuptools python3-wheel unzip xz-utils zip
     # 20.04's pip predates the wheel tags current cmake and grpcio-tools
-    # publish (manylinux_2_17), and would fall back to compiling them.
-    quietly pip in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: 'pip==24.0'
+    # publish (manylinux_2_17), and would fall back to compiling them. Its
+    # wheel is hashed from PyPI like the tools below (TEST-15).
+    quietly pip in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: \
+        --require-hashes 'pip==24.0 --hash=sha256:ba0d021a166865d2265246961bec0152ff124de910c5cc39f1156ce3fa7c69dc'
     # CMake, and the grpcio-tools protoc that player/native/protoc-wrapper.py
     # runs for nanopb: exact versions, wheels only (no source builds, no
-    # setup.py), from player/native/helper-build-requirements.txt, which says
-    # why each one and why hashes are not pinned yet. Box64 builds with the
+    # setup.py), each wheel hashed from PyPI against Python 3.8/aarch64 in
+    # /src/player/native/helper-build-requirements.txt. Box64 builds with the
     # same CMake.
     quietly python-tools in_root python3 -m pip install -q --no-cache-dir --only-binary=:all: \
-        -r /src/player/native/helper-build-requirements.txt
+        --require-hashes -r /src/player/native/helper-build-requirements.txt
     if ! cr_cmake="$(in_root cmake --version)"; then
         echo "build-root: the pinned CMake does not run in the root" >&2
         exit 1
@@ -181,6 +195,7 @@ build() {
     case "$1" in
         helpers)
             in_root JOBS="$JOBS" JUKAHUB_HELPERS_NATIVE=1 DEPS_PREFIX=/opt/jukahub-deps \
+                BUILD_ROOT_SNAPSHOT="$SNAPSHOT" \
                 /bin/sh /src/player/native/build-helpers.sh
             ;;
         androidrt)
@@ -190,6 +205,7 @@ build() {
             # runner: inside the root it may refuse the mounted checkout.
             bd_src="$(part_commit androidrt 2> /dev/null || true)"
             in_root SOURCE_COMMIT="$(source_commit)" SOURCE_KEY="$(part_key androidrt 2> /dev/null || true)" \
+                BUILD_ROOT_SNAPSHOT="$SNAPSHOT" \
                 ANDROIDRT_COMMIT="${bd_src%% *}" SOURCE_DATE_EPOCH="${bd_src#* }" \
                 OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/androidrt \
                 /bin/sh /src/player/native/build-runtimes.sh androidrt
@@ -214,6 +230,7 @@ build() {
                 fi
             fi
             in_root JOBS="$JOBS" BOX64_CC="$bd_cc" SOURCE_COMMIT="$(source_commit)" \
+                BUILD_ROOT_SNAPSHOT="$SNAPSHOT" \
                 SOURCE_KEY="$(part_key box64 2> /dev/null || true)" \
                 OUT_DIR=/src/player/native/bin LOG_DIR=/tmp/jukahub-runtime-logs/wine \
                 /bin/sh /src/player/native/build-runtimes.sh wine

@@ -261,6 +261,10 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 			{"Flycast VMU", "Flycast/vmu"},
 			{"Flycast VMU", "flycast/vmu"},
 			{"Flycast saves", "Flycast/saves"},
+			{"Dolphin memory cards", "Dolphin/User/GC"},
+			{"Dolphin memory cards", "dolphin-emu/GC"},
+			{"Dolphin memory cards", "Emus/Dolphin/User/GC"},
+			{"Dolphin memory cards", "Apps/Dolphin/User/GC"},
 		} {
 			add(c.name, filepath.Join(sdRoot, filepath.FromSlash(c.rel)))
 		}
@@ -274,6 +278,8 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 			{"PPSSPP states", ".local/share/ppsspp/PSP/PPSSPP_STATE"},
 			{"RetroArch saves", ".config/retroarch/saves"},
 			{"RetroArch states", ".config/retroarch/states"},
+			{"Dolphin memory cards", ".local/share/dolphin-emu/GC"},
+			{"Dolphin memory cards", "Documents/Dolphin Emulator/GC"},
 		} {
 			add(c.name, filepath.Join(home, filepath.FromSlash(c.rel)))
 		}
@@ -286,6 +292,12 @@ func saveRootsFor(sdRoot, configText, configPath string) []saveRoot {
 		for _, r := range nextuiSaveRoots(sdRoot) {
 			add(r.Name, r.Path)
 		}
+	}
+	// Notes travel through Save Sync like a save folder: one root, one
+	// notes.json, so paired devices compare the same file. The folder is made
+	// by notesInit at startup; until then there is no store to offer.
+	if notesDataDirOverride != "" || notes.storePath != "" {
+		add("JukaHub notes", notesDataDir())
 	}
 
 	sort.Slice(roots, func(i, j int) bool {

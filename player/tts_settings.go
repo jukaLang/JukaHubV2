@@ -17,6 +17,7 @@ package main
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/skip2/go-qrcode"
@@ -34,9 +35,43 @@ const (
 	// voice).
 	ttsVoiceKey    = "jukaVoiceName"
 	ttsVoiceDevice = "device"
+	// ttsVolumeKey is the voice's own 0–100 level, separate from interface
+	// sounds and from the music's volume (SND-14).
+	ttsVolumeKey = "jukaVoiceVolume"
 	// ttsTestLine is what Hear Juka says.
 	ttsTestLine = "Hi, I'm Juka. This is how I sound when I answer you."
 )
+
+// ttsVolumeOptions are the stops of the voice's own level. A default of 100
+// keeps the old full-volume voice for anyone who has not set it.
+var ttsVolumeOptions = setLevelOptions(0)
+
+// ttsVolumeOf reads the stored voice level, clamped to a whole stop.
+func ttsVolumeOf(c *Config) int {
+	if c == nil {
+		return 100
+	}
+	pct, err := strconv.Atoi(strings.TrimSpace(customStringValue(c.Variables.Custom, ttsVolumeKey)))
+	if err != nil || pct < 0 {
+		return 100
+	}
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+// ttsVolumeGain turns the percent into a sample multiplier. Zero is silence;
+// 100 leaves the synthesised samples untouched.
+func ttsVolumeGain(pct int) float64 {
+	if pct <= 0 {
+		return 0
+	}
+	if pct >= 100 {
+		return 1
+	}
+	return float64(pct) / 100
+}
 
 // ttsModeOptions are the stops of "Juka's voice".
 var ttsModeOptions = []setOption{
@@ -72,6 +107,16 @@ func ttsSettingsRows() []setRow {
 			Choose: func(c *Config, value string) {
 				ttsStore(c, ttsVoiceKey, value)
 				setToast("Voice: " + ttsOptionLabel(ttsVoiceOptions(c), value))
+			},
+		},
+		{
+			ID: ttsVolumeKey, Label: "Voice volume", Kind: setKindChoice,
+			Detail:  setStatic("How loud Juka speaks, apart from interface sounds and music"),
+			Options: func(*Config) []setOption { return ttsVolumeOptions },
+			Current: func(c *Config) int { return setNearestStop(ttsVolumeOptions, ttsVolumeOf(c)) },
+			Choose: func(c *Config, value string) {
+				ttsStore(c, ttsVolumeKey, value)
+				setToast("Voice volume: " + value + "%")
 			},
 		},
 		{
@@ -304,6 +349,8 @@ func ttsTestOutcome(rep ttsReport) {
 		msg = "Groq rejected the key — check it in Settings → General"
 	case ttsFailTerms:
 		msg = "Groq's voice needs a one-time OK — use “Turn on Groq's voice” below"
+	case ttsFailModel:
+		msg = "Groq no longer offers this speech model — Juka's voice is unavailable"
 	case ttsFailLimit:
 		msg = "Groq's voice is busy — try again in a minute"
 		if rep.daily {

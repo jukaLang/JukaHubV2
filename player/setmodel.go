@@ -153,25 +153,6 @@ func setSectionRows(c *Config, s setSection) []setRow {
 	}
 	return s.Rows
 }
-
-// setLegacySection maps the old Settings pages onto the section that replaced
-// them, so every place that still opens SettingsGeneral or SettingsAppearance
-// (search, achievements, old configs) lands on the right rows.
-//
-// remove after 2027-05-01: an upgrade shim for configs from 0.4.0 — first
-// point any caller in the tree that still names an old page at its section.
-func setLegacySection(scene string) string {
-	switch scene {
-	case "SettingsGeneral":
-		return "general"
-	case "SettingsAppearance":
-		return "display"
-	case "SettingsSmart":
-		return "power"
-	}
-	return ""
-}
-
 // ── Small helpers ─────────────────────────────────────────────────────────
 
 func setStatic(text string) func(*Config) string {
@@ -875,6 +856,28 @@ func setBuildSections() []setSection {
 						Visible: func(*Config) bool { return !setHandheld() },
 						Get:     func(c *Config) bool { return c.Variables.Fullscreen },
 						Set:     setQSWrite(qsActionFullscreen),
+					},
+					{
+						// DESK-3: the borderless window remembers its state with
+						// the rest of the geometry; Alt+Enter still reaches full
+						// screen from it.
+						ID: "windowBorderless", Label: "Borderless window", Kind: setKindToggle,
+						Detail:  setStatic("Hide the title bar while keeping the window's size and position"),
+						Visible: func(*Config) bool { return IsWindows() },
+						Get:     func(*Config) bool { return windowBorderlessNow() },
+						Set:     func(_ *Config, on bool) { setWindowBorderless(on) },
+					},
+					{
+						ID: "windowMonitor", Label: "Monitor", Kind: setKindChoice,
+						Detail:  setStatic("Which monitor the window opens on"),
+						Visible: func(*Config) bool { return IsWindows() && len(desktopDisplayBounds()) > 1 },
+						Options: windowMonitorOptions,
+						Current: func(*Config) int { return windowDisplayIndex() },
+						Choose: func(_ *Config, value string) {
+							if n, err := strconv.Atoi(value); err == nil {
+								setWindowMonitor(n)
+							}
+						},
 					},
 				},
 			),

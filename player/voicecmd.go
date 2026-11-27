@@ -578,8 +578,8 @@ func voiceSTTSetupFix(mode string, supported, local bool, key string) voiceFix {
 }
 
 // voiceTranscribe sends a clip to Groq's Whisper, the way voice typing does
-// (vkTranscribe), with English as the language — the commands are English —
-// and prompt as the vocabulary hint.
+// (vkTranscribe), with the keyboard layout's language (English when it has no
+// command table yet) and prompt as the vocabulary hint.
 func voiceTranscribe(ctx context.Context, key string, wav []byte, prompt string) (string, error) {
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -593,7 +593,7 @@ func voiceTranscribe(ctx context.Context, key string, wav []byte, prompt string)
 	if _, err := part.Write(wav); err != nil {
 		return "", err
 	}
-	fields := [][2]string{{"model", vkVoiceModel}, {"response_format", "json"}, {"temperature", "0"}, {"language", "en"}}
+	fields := [][2]string{{"model", vkVoiceModel}, {"response_format", "json"}, {"temperature", "0"}, {"language", voiceCommandLanguage()}}
 	if prompt != "" {
 		fields = append(fields, [2]string{"prompt", prompt})
 	}

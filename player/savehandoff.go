@@ -104,6 +104,10 @@ type shoGame struct {
 	stem    string // the ROM's file name without its extension, lower case
 	romFile string // the ROM's file name, lower case (NextUI's save names)
 	system  string
+	// pspID is the disc ID PSP SAVEDATA folders and states are named after
+	// (ULUS10041), gcID the six-character ID a GameCube GCI export carries.
+	pspID string
+	gcID  string
 }
 
 func shoGameOf(game libraryGame) shoGame {
@@ -111,7 +115,8 @@ func shoGameOf(game libraryGame) shoGame {
 	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
 		base = base[i+1:]
 	}
-	return shoGame{path: game.Path, stem: ssyncGameStem(game.Path), romFile: strings.ToLower(base), system: game.System}
+	pspID, gcID := discIDForPath(game.Path, game.System)
+	return shoGame{path: game.Path, stem: ssyncGameStem(game.Path), romFile: strings.ToLower(base), system: game.System, pspID: pspID, gcID: gcID}
 }
 
 // shoApplies reports whether the game keeps emulator saves at all: Android
@@ -226,6 +231,9 @@ func shoNameKind(name string, g shoGame) (match, kept bool) {
 	if g.stem == "" {
 		return false, false
 	}
+	if discIDPrefix(name, g.gcID) {
+		return true, false
+	}
 	for _, own := range []string{g.stem, g.romFile} {
 		if own != "" && strings.Contains(name, " (from ") && (strings.HasPrefix(name, own+" (from ") || strings.HasPrefix(name, own+".")) {
 			return false, true
@@ -260,6 +268,9 @@ func shoNameKind(name string, g shoGame) (match, kept bool) {
 // folder check.
 func shoFileKind(rel string, g shoGame) (match, kept bool) {
 	dir, name := path.Split(rel)
+	if discIDInPath(rel, g.pspID) {
+		return true, false
+	}
 	match, kept = shoNameKind(strings.ToLower(name), g)
 	if (match || kept) && !shoDirFits(strings.TrimSuffix(dir, "/"), g.system) {
 		return false, false
@@ -274,6 +285,9 @@ func shoIsState(rel string, g shoGame) bool {
 		return false
 	}
 	if gameResetStateFile(name, g.stem) {
+		return true
+	}
+	if strings.HasSuffix(name, ".ppst") && discIDInPath(rel, g.pspID) {
 		return true
 	}
 	return strings.HasSuffix(name, ".dss") || (len(name) > 4 && name[len(name)-4:len(name)-1] == ".st" && shoDigits(name[len(name)-1:]))

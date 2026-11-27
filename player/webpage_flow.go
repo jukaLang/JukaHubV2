@@ -2371,13 +2371,6 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 		if rowSpan <= 0 {
 			rowSpan = 1
 		}
-		if webFlexDebug {
-			txt := ""
-			for _, r := range b.Runs {
-				txt += r.Text
-			}
-			println("  cand item", i, "rowStart", rowStart, "colStart", start, "area", areaOK, "styleArea", b.Style.GridArea, "styleRow", b.Style.GridRowStart, "styleCol", b.Style.GridColumnStart, "text", txt)
-		}
 		candidates = append(candidates, gridCandidate{
 			item: i, rowStart: rowStart, rowEnd: rowEnd, rowSpan: rowSpan,
 			colStart: start, colEnd: end, colSpan: span, area: areaOK,
@@ -2577,12 +2570,6 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 					autoRow, autoCol = row+1, 0
 				}
 			}
-		}
-	}
-	if webFlexDebug {
-		println("GRIDPLACE group", first.FlexGroup, "cols", cols, "items", len(placements), "rows", len(occupied))
-		for _, pl := range placements {
-			println("  cell item", pl.item, "row", pl.row, "col", pl.col, "span", pl.rowSpan, pl.colSpan)
 		}
 	}
 	sort.SliceStable(placements, func(i, j int) bool { return placements[i].item < placements[j].item })

@@ -352,6 +352,14 @@ and writes to `dist/`:
   `sha256`, `size`, `min_firmware`, `files`)
 - `SHA256SUMS`
 
+Windows packages are generated from those release inputs by
+`packaging/windows/generate.py`: a `VERSIONINFO` resource from `jukaconfig.json`
+(the `build.bat` build writes the same resource through `mkversioninfo.ps1`),
+an Inno Setup script and winget/Scoop manifests that carry the hash from
+`SHA256SUMS`. Run `make test-packaging` to check the generator with synthetic
+assets. The portable zip stays the release's installation asset; the installer
+and manifests are extras for package managers.
+
 The JukaHub OS package is made from any of these TrimUI builds by
 `player/trimui/make-os-package.sh` (`make os-package APP=...`): the app as an
 SD-card root with OS mode on and the boot hook already in `System/starts`. The

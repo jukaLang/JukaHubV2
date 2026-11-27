@@ -78,6 +78,7 @@ const (
 	ttsFailOffline         // no internet
 	ttsFailKey             // Groq rejected the key
 	ttsFailTerms           // the model's terms are not accepted yet
+	ttsFailModel           // the speech model is gone or the request does not name one it has (400/404)
 	ttsFailLimit           // the free allowance (or the per-minute limit) is used up
 	ttsFailServer          // Groq failed, timed out or sent something unplayable
 	ttsFailQuiet           // Quiet Mode is on (Hear Juka says so)
@@ -216,6 +217,10 @@ func ttsGroqFailure(status int, header http.Header, body []byte) *ttsError {
 	case code == "model_terms_required" ||
 		(status == http.StatusBadRequest && strings.Contains(lower, "terms") && strings.Contains(lower, "accept")):
 		e.fail = ttsFailTerms
+	case ttsModelRefusal(status, code, msg):
+		// A 404, or a 400 that says the model is unknown, will not be fixed
+		// by retrying or by waiting: remember it for the rest of this run.
+		e.fail = ttsFailModel
 	case status == http.StatusTooManyRequests:
 		e.fail = ttsFailLimit
 		e.daily = strings.Contains(lower, "per day") || strings.Contains(lower, "(rpd)") ||
@@ -223,6 +228,24 @@ func ttsGroqFailure(status int, header http.Header, body []byte) *ttsError {
 		e.wait = ttsRetryWait(header, msg)
 	}
 	return e
+}
+
+// ttsModelRefusal reports a 400/404 that says the speech model is not
+// available. Pure: it reads only the status and Groq's error code/message, and
+// never treats a rate limit or a key problem as a missing model.
+func ttsModelRefusal(status int, code, msg string) bool {
+	if status == http.StatusNotFound {
+		return true
+	}
+	if status != http.StatusBadRequest {
+		return false
+	}
+	text := strings.ToLower(code + " " + msg)
+	return strings.Contains(text, "model") &&
+		(strings.Contains(text, "not found") || strings.Contains(text, "does not exist") ||
+			strings.Contains(text, "invalid") || strings.Contains(text, "unknown") ||
+			strings.Contains(text, "unsupported") || strings.Contains(text, "deprecated") ||
+			strings.Contains(text, "no longer"))
 }
 
 // ttsRetryWait is how long Groq asked to wait: the retry-after header in

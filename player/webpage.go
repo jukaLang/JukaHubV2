@@ -13005,9 +13005,6 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 			top.item++
 			top.itemStyle = style
 			flexItem = true
-			if webFlexDebug && top.group == 32 {
-				println("  ITEM", top.group, top.item, el.tag, strings.Join(el.classes, "."))
-			}
 			if boxID != 0 {
 				if p.doc.FlexItemBoxDepth[top.group] == nil {
 					p.doc.FlexItemBoxDepth[top.group] = make(map[int]int)
@@ -13066,9 +13063,6 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		p.doc.FlexScrollX[group] = style.ScrollX
 		if layer != 0 && layer <= len(p.doc.Layers) {
 			p.doc.Layers[layer-1].flexGroup = group
-		}
-		if webFlexDebug {
-			println("FLEXGROUP", group, el.tag, strings.Join(el.classes, "."), "display", style.Display, "cols", style.GridCols, "gapX", int(style.GapX), "depth", depth, "stack", len(p.stack))
 		}
 		p.flexStack = append(p.flexStack, webFlexFrame{
 			group:             group,

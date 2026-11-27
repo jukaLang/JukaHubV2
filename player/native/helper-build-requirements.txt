@@ -1,24 +1,26 @@
 # Python packages for player/native/build-helpers.sh (and the CMake the Box64
 # pack builds with), exactly as the release installs them into its Ubuntu 20.04
-# build root (Python 3.8, aarch64) in .github/scripts/build-root.sh:
+# arm64 build root (Python 3.8, aarch64) in .github/scripts/build-root.sh:
 #
-#   python3 -m pip install --no-cache-dir --only-binary=:all: -r helper-build-requirements.txt
+#   python3 -m pip install --no-cache-dir --only-binary=:all: --require-hashes \
+#       -r helper-build-requirements.txt
 #
-# Every version is exact and only published wheels are accepted, so nothing is
-# compiled from source and no setup.py runs. Hashes are not pinned yet (they
-# could not be looked up where this file was written); switching to
-# --require-hashes is backlog task TEST-15 in player/MODERNIZATION.md.
+# Every version is exact, every wheel is hashed (TEST-15), and only published
+# wheels are accepted, so nothing is compiled from source and no setup.py
+# runs. The hashes are the sha256 digests PyPI publishes for the aarch64 /
+# Python 3.8 wheels pip selects in this root; change a version, a wheel or a
+# Python version and all four hashes must be looked up again.
 # setuptools (pkg_resources, which grpc_tools needs on Python 3.8) and ninja
 # come from Ubuntu's python3-setuptools and ninja-build packages.
 
 # CMake 3.24 or newer for chiaki-ng; 4.x refuses its submodules' old
-# cmake_minimum_required.
-cmake==3.31.6
+# cmake_minimum_required. manylinux_2_17_aarch64 wheel.
+cmake==3.31.6 --hash=sha256:42d9883b8958da285d53d5f69d40d9650c2d1bcf922d82b3ebdceb2b3a7d4521
 
 # The protoc nanopb runs (player/native/protoc-wrapper.py) and the protobuf
 # runtime its generator imports; grpcio is grpcio-tools' own dependency.
 # grpcio-tools 1.70 is the last release with Python 3.8/aarch64 wheels and
 # accepts protobuf 5.29.6, which fixes PYSEC-2026-1805.
-grpcio-tools==1.70.0
-grpcio==1.70.0
-protobuf==5.29.6
+grpcio-tools==1.70.0 --hash=sha256:904f13d2d04f88178b09d8ef89549b90cbf8792b684a7c72540fc1a9887697e2
+grpcio==1.70.0 --hash=sha256:0ba0a173f4feacf90ee618fbc1a27956bfd21260cd31ced9bc707ef551ff7dc7
+protobuf==5.29.6 --hash=sha256:a8866b2cff111f0f863c1b3b9e7572dc7eaea23a7fae27f6fc613304046483e6

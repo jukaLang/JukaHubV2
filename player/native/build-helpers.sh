@@ -136,8 +136,14 @@ OPUS_VERSION=1.5.2
 OPUS_SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
 JSONC_VERSION=0.19
 JSONC_SHA256=37ad0249902e301bd9052bf712e511fcc6acff4ecaad4b5900aad9ce564e26de
-LIBEVENT_VERSION=2.1.12-stable
-LIBEVENT_SHA256=92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb
+LIBEVENT_VERSION=2.1.13-stable
+LIBEVENT_SHA256=f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c
+# TEST-16/17: OpenSSL 3.5 is an LTS release supported beyond focal's 1.1.1f.
+# The digest is the one openssl.org publishes beside the tarball; fetch()
+# refuses the source if it does not match.
+OPENSSL_VERSION=3.5.9
+OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
+OPENSSL_URL="https://www.openssl.org/source/openssl-$OPENSSL_VERSION.tar.gz"
 
 STAGE="setup"
 say() {
@@ -375,6 +381,31 @@ build_sdl2() {
     quietly sdl2-install locked cmake --install "$DEPS_SRC/sdl2-build"
 }
 
+# build_openssl builds a supported LTS into DEPS_PREFIX, no-shared, so none
+# of the helpers needs libcrypto.so on the handheld. The root's libssl-dev is
+# only there for the configure tools; CMAKE_PREFIX_PATH and OPENSSL_ROOT_DIR
+# below make every helper find this one instead.
+build_openssl() {
+    if [ -f "$DEPS_PREFIX/lib/pkgconfig/openssl.pc" ]; then
+        return 0
+    fi
+    say "OpenSSL $OPENSSL_VERSION (static)"
+    fetch "openssl-$OPENSSL_VERSION.tar.gz" "$OPENSSL_SHA256" "$OPENSSL_URL"
+    rm -rf "$DEPS_SRC/openssl-$OPENSSL_VERSION" "$DEPS_SRC/openssl-build"
+    tar -xzf "$DEPS_SRC/openssl-$OPENSSL_VERSION.tar.gz" -C "$DEPS_SRC"
+    (
+        cd "$DEPS_SRC/openssl-$OPENSSL_VERSION"
+        CFLAGS=-fPIC ./Configure no-shared no-tests \
+            --prefix="$DEPS_PREFIX" --libdir="$DEPS_PREFIX/lib" \
+            --openssldir="$DEPS_PREFIX/ssl"
+        quietly openssl-build make -j "$JOBS"
+        quietly openssl-install locked make install_sw
+    )
+    if [ ! -f "$DEPS_PREFIX/lib/libcrypto.a" ]; then
+        die "OpenSSL $OPENSSL_VERSION installed no lib/libcrypto.a under $DEPS_PREFIX"
+    fi
+}
+
 build_opus() {
     if [ -f "$DEPS_PREFIX/lib/pkgconfig/opus.pc" ]; then
         return 0
@@ -460,14 +491,39 @@ libevent_cmake_dir() {
     done
 }
 
+# build_miniupnpc installs the commit-pinned source into DEPS_PREFIX as a
+# static library, the same way the other dependencies are installed. chiaki-ng
+# then finds it through pkg-config and its FetchContent never runs (TEST-17).
+# Called only after fetch_sources has checked the checkout out.
+build_miniupnpc() {
+    if [ -f "$DEPS_PREFIX/lib/pkgconfig/miniupnpc.pc" ]; then
+        return 0
+    fi
+    if [ ! -f "$MINIUPNPC_SOURCE/CMakeLists.txt" ]; then
+        die "miniupnpc source is missing at $MINIUPNPC_SOURCE"
+    fi
+    say "miniupnpc $MINIUPNPC_TAG (static)"
+    rm -rf "$DEPS_SRC/miniupnpc-build"
+    quietly miniupnpc-configure cmake -S "$MINIUPNPC_SOURCE" -B "$DEPS_SRC/miniupnpc-build" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX" \
+        -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DUPNPC_BUILD_STATIC=ON -DUPNPC_BUILD_SHARED=OFF \
+        -DUPNPC_BUILD_TESTS=OFF -DUPNPC_BUILD_SAMPLE=OFF -DUPNPC_NO_INSTALL=OFF
+    quietly miniupnpc-build cmake --build "$DEPS_SRC/miniupnpc-build" -j "$JOBS"
+    quietly miniupnpc-install locked cmake --install "$DEPS_SRC/miniupnpc-build"
+    if [ ! -f "$DEPS_PREFIX/lib/pkgconfig/miniupnpc.pc" ]; then
+        die "miniupnpc installed no lib/pkgconfig/miniupnpc.pc under $DEPS_PREFIX"
+    fi
+}
+
 build_libevent() {
     # chiaki-lib asks CMake for libevent (find_package(libevent) in the pinned
     # commit's lib/CMakeLists.txt; its PSN hole punching runs on libevent), and
     # its configure stops without it. Built with CMake, static and
-    # position-independent like the others; its OpenSSL part is linked against
-    # the distribution's static OpenSSL, so the helpers NEED nothing new
-    # whichever part chiaki-lib links. 2.1.12 is what other static chiaki-ng
-    # builds use; 2.1.13 (2026-07) can follow once its digest is checked.
+    # position-independent like the others; its OpenSSL part links the static
+    # OpenSSL built into DEPS_PREFIX, so the helpers NEED nothing new whichever
+    # part chiaki-lib links. 2.1.13-stable's tarball digest is checked against
+    # the release asset (TEST-17).
     #
     # libevent installs its CMake package as LibeventConfig.cmake, while
     # find_package(libevent) looks for libeventConfig.cmake or
@@ -495,7 +551,7 @@ build_libevent() {
         -DEVENT__LIBRARY_TYPE=STATIC \
         -DEVENT__DISABLE_TESTS=ON -DEVENT__DISABLE_REGRESS=ON \
         -DEVENT__DISABLE_SAMPLES=ON -DEVENT__DISABLE_BENCHMARK=ON \
-        -DOPENSSL_USE_STATIC_LIBS=TRUE
+        -DOPENSSL_ROOT_DIR="$DEPS_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE
     quietly libevent-build cmake --build "$DEPS_SRC/libevent-build" -j "$JOBS"
     quietly libevent-install locked cmake --install "$DEPS_SRC/libevent-build"
     if [ ! -f "$DEPS_PREFIX/lib/libevent_core.a" ]; then
@@ -567,22 +623,23 @@ verify_native() {
     {
         echo "JukaHub Remote Play helpers"
         echo "built:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "build root: Ubuntu focal snapshot ${BUILD_ROOT_SNAPSHOT:-not named}"
         echo "chiaki-ng:  $CHIAKI_REPO @ $CHIAKI_COMMIT"
-        echo "miniupnpc:  $MINIUPNPC_TAG @ $(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD 2>/dev/null || echo unknown)"
+        echo "miniupnpc:  $MINIUPNPC_TAG @ $(git -C "$MINIUPNPC_SOURCE" rev-parse HEAD 2>/dev/null || echo unknown) (static, DEPS_PREFIX)"
         echo "FFmpeg:     $FFMPEG_VERSION (static: h264, hevc, swscale; avformat without formats)"
         echo "opus:       $OPUS_VERSION (static)"
         echo "json-c:     $JSONC_VERSION (static)"
         echo "libevent:   $LIBEVENT_VERSION (static)"
-        echo "OpenSSL:    $(pkg-config --modversion openssl 2>/dev/null || echo unknown) (static, distribution)"
+        echo "OpenSSL:    $OPENSSL_VERSION from $OPENSSL_URL sha256 $OPENSSL_SHA256 (static)"
         echo "curl:       chiaki-ng's third-party/curl submodule, static"
         echo "SDL2:       $SDL2_VERSION headers; the handheld's own libSDL2-2.0.so.0 at run time"
         echo "compiler:   $(cc --version 2>/dev/null | head -n 1)"
         echo "build libc: $(ldd --version 2>/dev/null | head -n 1)"
-        # Anything chiaki-ng's configure downloaded by itself (FetchContent)
-        # shows up here, so an unpinned fetch cannot go unnoticed.
-        if [ -d "$BUILD_DIR/_deps" ]; then
-            echo "fetched by the configure: $(ls "$BUILD_DIR/_deps" | tr '\n' ' ')"
-        fi
+        # Every FetchContent source is already local and the configure is
+        # fully disconnected, so there is nothing to list here. The line is
+        # kept as a promise in BUILDINFO, not a directory scan that would
+        # report the local source symlinks as if they had been downloaded.
+        echo "fetched by the configure: none (FETCHCONTENT_FULLY_DISCONNECTED=ON)"
     } > "$report"
     for name in chiaki-stream chiaki-regist; do
         bin="$STAGE_DIR/$name"
@@ -808,7 +865,8 @@ build_moonlight() {
     if ! cmake -S "$NATIVE_DIR/moonlight" -B "$MOONLIGHT_BUILD_DIR" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_SKIP_RPATH=ON \
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DOPENSSL_USE_STATIC_LIBS=TRUE \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+        -DOPENSSL_ROOT_DIR="$DEPS_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
         -DCMAKE_PREFIX_PATH="$DEPS_PREFIX" \
         -DMOONLIGHT_COMMON_SOURCE="$MOONLIGHT_COMMON_SOURCE" \
         > "$LOG_DIR/moonlight-configure.log" 2>&1; then
@@ -962,10 +1020,11 @@ if [ "$NATIVE_MODE" = "1" ]; then
         # afterwards but files: libevent's CMake package is looked up below.
         # The downloads come last in the list, so a slow one does not hold
         # back the lines of the builds.
-        echo "    SDL2, opus, FFmpeg, json-c and libevent build side by side while chiaki-ng and miniupnpc download;"
+        echo "    SDL2, OpenSSL, opus, FFmpeg, json-c and libevent build side by side while chiaki-ng and miniupnpc download;"
         echo "    each part's lines follow once it has finished"
         trap stop_parts INT TERM HUP
         start_part sdl2 build_sdl2
+        start_part openssl build_openssl
         start_part opus build_opus
         start_part ffmpeg build_ffmpeg
         start_part json-c build_jsonc
@@ -976,6 +1035,7 @@ if [ "$NATIVE_MODE" = "1" ]; then
         SOURCES_FETCHED=1
     else
         build_sdl2
+        build_openssl
         build_opus
         build_ffmpeg
         build_jsonc
@@ -1004,6 +1064,11 @@ say "chiaki-ng $CHIAKI_COMMIT"
 if [ "$SOURCES_FETCHED" != "1" ]; then
     fetch_sources
     fetch_moonlight_note
+fi
+# miniupnpc needs the checked-out source, so it cannot be one of the parts
+# above. It is installed into DEPS_PREFIX before chiaki-ng is configured.
+if [ "$NATIVE_MODE" = "1" ]; then
+    build_miniupnpc
 fi
 
 # chiaki-lib links the bundled curl as CURL::libcurl_shared, the target curl's
@@ -1062,7 +1127,6 @@ set -- \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_SKIP_RPATH=ON \
     -DPROTOC="$PROTOC" -DPYTHON_EXECUTABLE="$PYTHON" -DPython_EXECUTABLE="$PYTHON" \
     -DPython3_EXECUTABLE="$PYTHON" \
-    -DFETCHCONTENT_SOURCE_DIR_MINIUPNPC="$MINIUPNPC_SOURCE" \
     -DJUKAHUB_NATIVE_SOURCE="$NATIVE_DIR" \
     -DCHIAKI_ENABLE_GUI=OFF -DCHIAKI_ENABLE_CLI=OFF -DCHIAKI_ENABLE_TESTS=OFF \
     -DCHIAKI_ENABLE_ANDROID=OFF -DCHIAKI_ENABLE_BOREALIS=OFF \
@@ -1071,13 +1135,14 @@ set -- \
     -DCHIAKI_ENABLE_RUDP=OFF -DCHIAKI_ENABLE_FFMPEG_DECODER=ON \
     -DCHIAKI_ENABLE_PI_DECODER=OFF -DCHIAKI_LIB_ENABLE_OPUS=ON \
     -DCHIAKI_USE_SYSTEM_JERASURE=OFF -DCHIAKI_USE_SYSTEM_NANOPB=OFF \
-    -DCHIAKI_USE_SYSTEM_CURL=OFF -DCHIAKI_LIB_MINIUPNPC_EXTERNAL_PROJECT=ON \
+    -DCHIAKI_USE_SYSTEM_CURL=OFF -DCHIAKI_LIB_MINIUPNPC_EXTERNAL_PROJECT=OFF \
     -DCURL_USE_LIBPSL=OFF -DCURL_ZLIB=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF \
     -DUSE_NGHTTP2=OFF -DUSE_LIBIDN2=OFF -DCURL_USE_LIBSSH2=OFF
 if [ "$NATIVE_MODE" = "1" ]; then
     set -- "$@" \
         -DCMAKE_PREFIX_PATH="$DEPS_PREFIX" \
-        -DOPENSSL_USE_STATIC_LIBS=TRUE \
+        -DFETCHCONTENT_FULLY_DISCONNECTED=ON \
+        -DOPENSSL_ROOT_DIR="$DEPS_PREFIX" -DOPENSSL_USE_STATIC_LIBS=TRUE \
         -Dlibevent_DIR="$LIBEVENT_CMAKE_DIR" -DLIBEVENT_STATIC_LINK=TRUE \
         -DJUKAHUB_STATIC_DEPS=ON
 else

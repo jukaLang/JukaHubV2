@@ -1624,6 +1624,12 @@ you press **Done** / **Send**. A tapped key flashes as pressed, a moving mouse
 pointer lights up the key it is over before you click, and an empty field keeps
 its caret visible so it is obvious where typing will land.
 
+**Keyboard settings → Typing → Wrap around** carries the highlight from one end
+of a row to the other instead of stopping at the edge; **Down** on the last row
+returns to the first, and **Up** on the first returns to the last. It is off by
+default. With it off, **Up** on the first key row still moves to the text field,
+as it always has.
+
 ## First-run tour
 
 The first launch opens a short, skippable tour of the D-pad controls, top-bar

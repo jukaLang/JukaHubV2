@@ -1,5 +1,15 @@
 # Hardware validation log
 
+## 2026-11-27 — Windows desktop, DPI and window state (pending)
+
+DESK-2 and DESK-3 are implemented and `build.bat` builds JukaHub.exe with the
+manifest in `rsrc_windows_amd64.syso` (the `permonitorv2` string is present in
+the compiled resource). Unit tests cover geometry parsing and clamping. The
+following still need a real PC to *see*, so they are recorded here rather
+than asserted: text crispness at 150 % and 200 % scaling, save/restore after a
+restart, a window dragged between mixed-DPI monitors, monitor unplug/reorder,
+and maximized/borderless precedence. No display check has been done yet.
+
 ## 2026-11-19 — Smart Pro stock firmware, JukaHub OS boot
 
 The active OS package at `/mnt/SDCARD/Apps/JukaHub-Trimui` was checked over
@@ -318,7 +328,13 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
   log (`data/windows-runtime/logs/winetest-*.log`) has `display: westonwrap.sh's
   HOME is /tmp/jukahub-weston-home`, no `device_info.txt` or `lscpu` lines (no
   PortMaster `control.txt` ran), `display: WestonPack started the program
-  after …`, and after "Running your command" no `command not found`. Then
+  after …`, and after "Running your command" no `command not found`. No
+  `Failed to load module: … libpng16.so.16: undefined symbol: inflateValidate,
+  version ZLIB_1.2.9` either: the log has `display: xwayland.so asks libz.so.1
+  for inflateValidate (ZLIB_1.2.9), which this firmware's copy does not have;
+  JukaHub's libz.so.1 in … answers it, with the firmware's library underneath`
+  (JH-6G5TZF, JH-2S4CSH), and `data/windows-runtime/weston-libs/libz.so.1` is
+  that shim. Then
   **Notepad++ (64-bit)** and **(32-bit)**; after each one closes, JukaHub's
   screen comes back and `ps` shows no `sdl2imgshow`, `wp_weston` or `seatd`.
   The watch: put `JUKAHUB_WESTON_MODE=drm gl nosuch system` in
@@ -326,6 +342,16 @@ game while playing is checked by VERIFY-HW-1 and SAVELOG-HW-1. See
   Wine test: within about ten seconds the *Couldn't launch* card says
   WestonPack's display stopped while it was starting (before: the handheld
   stayed on the list's picture for good); remove the line afterwards.
+- **A launch stopped by an old library says which one** (CHANGELOG Fixed,
+  2026-11-27, JH-6G5TZF, JH-2S4CSH). On the Smart Pro, empty
+  `data/windows-runtime/weston-libs` of `libz.so.1` and make the folder
+  read-only (`chmod 555`), then start **Wine Test (built in)**: the *Couldn't
+  launch* card reads `libz.so.1 is too old: no inflateValidate (ZLIB_1.2.9)`
+  and names `libpng16.so.16`, not only that the display stopped; JukaHub's log
+  has the same sentence on its `display: …` line, and **Submit report** files
+  an issue whose first finding names the library, the function and the
+  version. `chmod 755` the folder afterwards, so the next launch gets its shim
+  back.
 - **Download links, nested layers, consent banners** (CHANGELOG Fixed,
   2026-11-25). On a handheld: a GitHub release's `.zip` asset link starts a
   download (Downloads panel) without a second press; a site with a cookie

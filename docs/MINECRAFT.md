@@ -68,6 +68,10 @@ settings never leave it.
 
 ### Limits
 
+- The port opens on PortMaster's LÖVE menu before Java starts. On a firmware
+  without libmpg123/libvorbis (stock TrimUI 1.0.4 has none), JukaHub installs
+  Ubuntu's copies the first time a port starts with Wi-Fi on (about 200 KB) —
+  see [PORTMASTER.md](PORTMASTER.md#on-a-stock-trimui).
 - The Java port needs two analog sticks: PortMaster lists it for the Smart Pro,
   not the Brick.
 - 1 GB of RAM is tight for Java Edition; keep render distance low.

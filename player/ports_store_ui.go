@@ -689,18 +689,21 @@ func pstoreOpenDetail(e mcCatalogEntry, idx int, launch string, compat portCompa
 		switch {
 		case dir != "":
 			folder, sub := portGameDataFolder(dir)
-			what := "the port's own folder"
-			if sub != "" {
-				what = "its " + sub + " folder"
-			}
-			b.WriteString("Copy the game's own files into " + what + " on the card (" + gameDiagPortCardPath(folder) +
-				"), keeping the folders they come in as they are in your copy.")
 			if gameDiagDirHasGameFiles(folder, 2) {
-				b.WriteString(" It already has files in it.")
+				b.WriteString("It already has files in it. ")
 			} else {
-				b.WriteString(" It has no game files in it yet, so the port stops until they are there.")
+				b.WriteString("It has no game files in it yet. ")
 			}
-			b.WriteString(" Why didn't it start? names the file a port waits for.")
+			// Read the installed port's own startup script for the file it
+			// stops without, so this page names it here instead of pointing
+			// at "Why didn't it start?".
+			need := gameDiagPortNeededFile(d.launch, dir)
+			if need != "" && sub != "" {
+				if trimmed, ok := strings.CutPrefix(need, sub+"/"); ok && trimmed != "" {
+					need = trimmed
+				}
+			}
+			b.WriteString(gameDiagPortDataDetail(folder, need))
 		default:
 			b.WriteString("Install the port first: these details then name the exact folder on the card (Data/ports) to copy them into, and Why didn't it start? names the file a port waits for.")
 		}

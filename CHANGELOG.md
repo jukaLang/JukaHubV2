@@ -11,6 +11,106 @@ what the About screen and the updater read.
 
 ### Added
 
+- The Live Builder proves each request with a signature, never the pairing code
+  (SEC-19): the browser signs the method, path, body digest, timestamp and a
+  one-time nonce with an HMAC-SHA256 keyed by the code; the device refuses a
+  replay, an old signature, and a request carrying only the old code header.
+  The signature and nonce headers are the only credential on the wire, and the
+  builder keeps the code in its own fields. Backend: the WebCrypto signer in
+  `builder-device.js`, `liveBuilderRequestMAC`, `checkAuth` and the bounded
+  nonce table in `livebuilder.go`; tests in `livebuilder_hmac_test.go` cover a
+  signed request with no code header, a replay and a stale timestamp. Not
+  checked: a real browser-to-handheld push, a packet capture, or a phone.
+
+- Voice command understands Spanish and asks Whisper for the keyboard's
+  language (INP-18): the folded Spanish verbs, volume, mute, time, battery,
+  screenshot, Home, Back, music and close-all phrases are translated onto the
+  existing English grammar, so English remains the fallback; the transcription
+  request now sends `language: "es"` when the current keyboard layout is
+  Spanish. Backend: `voiceSpanishEnglish`, `voiceCommandLanguage` in
+  `voicecmd_intent.go` and the language field in `voicecmd.go`; tests in
+  `voicecmd_lang_test.go` cover the Spanish intents and the multipart language
+  field. Not checked: a microphone recording, a live Groq transcription, or a
+  Spanish hardware keyboard.
+
+- Notes sync between paired devices and checkboxes render in the reader
+  (APP-7): the store now lives in `notes/notes.json` under the data folder,
+  which `saveRootsFor` offers to Save Sync as the **JukaHub notes** root; the
+  old store beside the app is copied there once and left in place. Task-list
+  lines (`- [ ]`, `- [x]`, `* [X]`) draw as `☐`/`☑` glyphs in the reader while
+  keeping the same rune width, so the caret still points at the body. Backend:
+  `notesDataDir`, `notesStorePath`, `notesMigrateLegacy` and
+  `notesCheckboxShown` (notes.go), the root in `savemanager.go`; tests in
+  `notes_sync_test.go` cover the glyphs, the store path, the save root and the
+  `notes.json` entry in an `ssync` manifest. Not checked: two paired handhelds
+  exchanging a real note, or a phone edit after a sync.
+
+- Back returns to the row the player was looking at (SHELL-6): every scene
+  remembers `scrollY` and `textBrowserScrollY` when it is left and restores
+  them on return, and both the focus and scroll maps are bounded (oldest entry
+  evicted first). Backend: `scenememory.go`, the `switchScene` /
+  `completeSceneTransition` calls in `core.go`, and `focusPersistMax` in
+  `focus.go`; tests in `scenememory_test.go` cover restore, update, eviction and
+  the focus bound. Not checked: a real Back press on a handheld.
+
+- A port that stops under BusyBox's sh, because the firmware's Ports launcher
+  started it with `/bin/sh`, offers **Try it directly** on its launch card: A
+  starts it again under the bash JukaHub supplies and keeps that choice for
+  that port alone (`data/ports-direct.txt`), overriding `portLaunchVia` for
+  nobody else. The card opens with it focused when the launcher caused the
+  error (JH-AN6U7W: OldBits Hub's `export -f`). Backend: `portDirectChosen` /
+  `portDirectRemember` (ports_env.go), the button and `launchFailureTryDirect`
+  (launch_errors.go), `gameDiagPortOffersDirect` (gamediag_port.go); tests in
+  `ports_test.go` cover the per-port store and when the button is offered.
+  Not checked: a handheld, or the button on a real screen.
+
+- Standalone emulators save a state when JukaHub closes them for the battery or
+  a power off (PWR-12): a library launch through DraStic, Flycast or Mednafen
+  turns the emulator's own save-on-exit option on for that launch only, in the
+  config its last run read. The user's value is journaled before the edit and
+  put back when the game exits or at the next start after a crash; a value the
+  player changed during the game is kept. Flycast also gets its auto-load key
+  and Mednafen's autosave loads at the next start; DraStic's resume is not
+  claimed. Backend: `standalonesave.go`, the format-aware journal in
+  `racfgscope.go` and the launch hook in `game_library.go`; tests in
+  `standalonesave_test.go` cover the edit, both restores and the kept player
+  change. Not checked: a real DraStic, Flycast or Mednafen exit on a handheld.
+
+- PSP SAVEDATA and GameCube GCI saves move with the game in the save handoff
+  (LIB-30): the PSP disc ID is read from a PBP, ISO or CISO's PARAM.SFO and
+  matches SAVEDATA folders and PPSSPP `.ppst` states; GameCube GCI exports
+  match the six-character disc ID, and Dolphin's memory-card folders are save
+  roots. Backend: `discids.go`, `savehandoff.go` and `savemanager.go`; tests in
+  `discids_test.go` cover the ID readers, the save-name matching and the
+  Dolphin root. Not checked: a real PSP or GameCube save handoff between two
+  devices.
+
+- Minecraft copies only what the installed port lacks (AND-21): before the
+  space check, files already present at the right size and checksum are left
+  out, so the port's own ARM libraries and assets are not downloaded over.
+  A copy row now says the version's declared size ("about 1.5 GB") before A,
+  from the PC's version metadata. Backend: `mcDeclaredSize`,
+  `mcPlanKeepOnlyPortLacks` (minecraft_peer.go) and the size on the copy row
+  (minecraft_ui.go); tests in `minecraft_copy_test.go` cover the culled plan,
+  the declared size in the version list and the row's size. Not checked: a
+  copy from a real paired PC into a real PortMaster Minecraft install.
+
+- CPU profiles follow the system and the power source (PWR-6): a launch uses
+  the game's own profile first, then its library system's, then the battery or
+  charger profile, and finally the global setting; a game's CPU limit still
+  wins over all of them. System profiles are set with the custom value
+  `powerProfileSystems` (a JSON object or `PSP=performance; GBA=balanced`),
+  and the source profiles with `powerProfileOnBattery` / `powerProfileOnCharger`.
+  The game options sheet's CPU profile row names the profile in force and where
+  it came from ("Auto · Performance (PSP)"). Backend: `powerLaunchSystem`,
+  `powerSourceState`, `effectivePowerProfile` and `launchPowerProfileConfig`
+  (powerprofile.go), the options row (gameoptions.go, game_options_ui.go);
+  tests in `powerprofile_profiles_test.go` cover the precedence, config
+  parsing, the row's label and the system profile reaching a launch. Not
+  checked: a handheld switching profiles from its real battery/charger state.
+
+- Keyboard settings → Typing → **Wrap around**: Left/Right carry on from the other end of a key row, and Up/Down wrap between the first and last rows. It is off by default, so the old edge behaviour stays; with it off, Up from the first row still moves to the text field.
+
 - Notifications reach the Phone Companion (APP-6): the main page has a
   Notifications card and `/notifications` mirrors the handheld's centre with
   each row's source, priority, age and unread state. A row's action is offered
@@ -806,6 +906,12 @@ what the About screen and the updater read.
 
 ### Changed
 
+- A cut-off Windows emulator download now resumes from its `.part` with a Range request, keeps the part if the network dies again, and uses one part per release so a nightly tail cannot be appended to a stable archive. Range/Content-Range decisions are pure helpers with tests (DESK-12, partial).
+- Windows builds carry a VERSIONINFO resource from `jukaconfig.json`; `packaging/windows/generate.py` renders the same resource plus an Inno Setup script and winget/Scoop manifests from the release's SHA-256, with `make test-packaging` checking the generator (DESK-4, partial).
+- Juka's voice has its own volume setting, logs how much of the first word was waiting for Groq versus the device, and remembers a 400/404 missing speech model for the rest of the run instead of retrying it (SND-14, partial).
+- Supply chain checks tightened: the weekly govulncheck now fails on reachable findings, a weekly CodeQL workflow covers the Go player and the builder's JavaScript, and the Windows build verifies the three SDL dev tarballs against the same SHA-256 pins CI uses (SEC-10).
+- Windows builds declare per-monitor-v2 DPI awareness in an embedded manifest and keep SDL's DPI handling in step. A remembered desktop window now restores its size, position, monitor, maximized and borderless state on the next start, with clamping after a monitor is unplugged or resized; Display gains borderless and monitor rows, and F11 keeps the windowed geometry. Verified with a full `build.bat` build; the visual DPI checks are logged as pending in the hardware validation log (DESK-2, DESK-3).
+- The arm64 helper build root is pinned to the dated Ubuntu focal snapshot `20250530T000000Z` with hash-checked pip wheels, and the helpers build their own supported OpenSSL 3.5.9 and miniupnpc statically. chiaki-ng configures fully disconnected, BUILDINFO names the root and each pinned source, and Box64's v0.4.4 tarball digest from the AUR was checked once against the pinned commit (TEST-15..18).
 - Bluetooth left off stays off after a sleep or wake. The stored choice is re-read after every resume and on a slow watchdog instead of only in a short start-up window, an explicit Off clears the "on this session" latch, and internal scans no longer remember themselves as an On or write a next-boot On intent. Airplane-mode restore also respects the stored Off.
 - A typed short-video site's Play now prefers a stream that carries both picture and sound; the old format ranking could pick a video-only MP4 and leave the clip silent. The whole-file fallback asks for a muxed file too, keeping the joined-stream fallback for sites that have none.
 - No built-in text names a particular short-video host: the site screen and docs speak generically, and only a domain you typed appears on its own tile or in a search message.
@@ -977,6 +1083,12 @@ what the About screen and the updater read.
 
 ### Fixed
 
+- A Windows launch that stopped because a library this firmware has is too old says so on its card and in its report: JukaHub reads Weston's own `Failed to load module: …: undefined symbol: X, version V` line from the session's log and names the function, the library that should answer it and the version — `libz.so.1 is too old: no inflateValidate (ZLIB_1.2.9)`, which `libpng16.so.16` needs — instead of only "Weston stopped while it was starting", and the same three are the report's first finding (JH-6G5TZF, JH-2S4CSH; `wine_weston_cause.go`)
+- Notepad++ and Wine Test start on a stock Smart Pro again: WestonPack's libpng16 asks zlib for `inflateValidate`, the one function zlib 1.2.9 added, and the firmware loads zlib 1.2.8, so Weston stopped at `undefined symbol: inflateValidate, version ZLIB_1.2.9` in every mode. JukaHub gives the session a shim that answers that call and keeps the firmware's own zlib underneath, so everything else is still its code (JH-6G5TZF, JH-2S4CSH)
+- Minecraft's Java port starts on a stock Smart Pro: PortMaster's LÖVE runtime (the port's own launcher menu) loads libmpg123, libvorbis and libvorbisfile from the firmware, which has none of them, so JukaHub installs Ubuntu's ARM64 copies (pinned packages, SHA-256 checked) on the first port start with Wi-Fi on and puts them last on the port's library path (JH-TKWGE5)
+- The launch card no longer says a runtime is missing when a port's own rename of PortMaster's `*.aarch64.squashfs` images fails with every runtime its `port.json` declares in place — Minecraft's launcher does that on every launch after the first
+- OldBits Hub starts on stock firmware: a port under Roms/Ports that needs bash runs under JukaHub's, not the firmware Ports launcher's BusyBox sh
+- A port's launch card names BusyBox's `export: illegal option -f` as the cause, and shows the line it printed instead of "JukaHub found nothing" when the log holds an error no known cause matches
 - Browser: an ad cut out of a page takes the box it was the whole of, so its slot no longer draws as a blank gap
 - Notepad++ and Wine Test start again: Weston's own modules are given the one library the WestonPack image leaves to the firmware
 - A port is given no shell option set from JukaHub, and a script that stopped on an unset variable is named on its launch card

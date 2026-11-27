@@ -101,14 +101,15 @@ type pmRuntimeCheck struct {
 }
 
 var pmRuntime struct {
-	mu        sync.Mutex
-	check     pmRuntimeCheck
-	running   bool
-	retry     func()
-	attempted time.Time // when the last download attempt ended
-	pyTried   bool      // a download included Python this session
-	err       string
-	warned    bool
+	mu          sync.Mutex
+	check       pmRuntimeCheck
+	running     bool
+	retry       func()
+	attempted   time.Time // when the last download attempt ended
+	pyTried     bool      // a download included Python this session
+	codecWarned bool      // the player was told the LÖVE libraries could not be added
+	err         string
+	warned      bool
 }
 
 // pmSDLLogged makes pmSDLDir log the links it made once a session.
@@ -144,6 +145,7 @@ func pmRuntimeForget() {
 		pmRuntime.check = pmRuntimeCheck{}
 		pmRuntime.attempted = time.Time{}
 		pmRuntime.pyTried = false
+		pmRuntime.codecWarned = false
 		pmRuntime.warned = false
 	}
 	pmRuntime.mu.Unlock()
@@ -273,9 +275,10 @@ func pmRuntimeProbe(env []string, launcher string) pmRuntimeCheck {
 }
 
 // pmRuntimeNeeds is what still has to be downloaded for this check.
-func pmRuntimeNeeds(c pmRuntimeCheck, master bool) (python, bash bool) {
+func pmRuntimeNeeds(c pmRuntimeCheck, master bool) (python, bash, codecs bool) {
 	return master && c.Done && !c.PythonOK && !pmPythonReady(),
-		c.Done && !c.BashOK && c.BashGood == "" && !privateGlibcBashReady()
+		c.Done && !c.BashOK && c.BashGood == "" && !privateGlibcBashReady(),
+		len(pmCodecsNeeded()) > 0
 }
 
 // pmRuntimeGate runs on the main thread before a port or PortMaster starts.
@@ -296,8 +299,8 @@ func pmRuntimeGate(master bool, retry func()) error {
 	}
 	c, attempted, pyTried := pmRuntime.check, pmRuntime.attempted, pmRuntime.pyTried
 	pmRuntime.mu.Unlock()
-	needPython, needBash := pmRuntimeNeeds(c, master)
-	if c.Done && !needPython && !needBash {
+	needPython, needBash, needCodecs := pmRuntimeNeeds(c, master)
+	if c.Done && !needPython && !needBash && !needCodecs {
 		return nil
 	}
 	online := IsOnline()
@@ -307,6 +310,13 @@ func pmRuntimeGate(master bool, retry func()) error {
 	}
 	if needPython {
 		return errors.New(pmRuntimePythonMissing(online))
+	}
+	if needCodecs && pmRuntimeWarnCodecs() {
+		msg := "PortMaster's LÖVE games need audio libraries this firmware does not have — connect to Wi-Fi once so JukaHub can add them"
+		if online {
+			msg = "Could not add PortMaster's LÖVE audio libraries (" + firstLine(pmRuntimeLastError()) + ") — the port starts as it is"
+		}
+		ShowToast(msg, ToastKindWarning)
 	}
 	// Only bash is missing: the firmware's shell may still do for an older
 	// PortMaster or a simple port. Said once a session.
@@ -328,6 +338,18 @@ func pmRuntimeLastError() string {
 	pmRuntime.mu.Lock()
 	defer pmRuntime.mu.Unlock()
 	return setOr(pmRuntime.err, "unknown error")
+}
+
+// pmRuntimeWarnCodecs says once a session that PortMaster's LÖVE libraries
+// could not be added (true the first time).
+func pmRuntimeWarnCodecs() bool {
+	pmRuntime.mu.Lock()
+	defer pmRuntime.mu.Unlock()
+	if pmRuntime.codecWarned {
+		return false
+	}
+	pmRuntime.codecWarned = true
+	return true
 }
 
 // pmRuntimePythonMissing says why PortMaster cannot open without Python.
@@ -379,23 +401,23 @@ func pmRuntimeStart(env []string, launcher string, master, online bool, retry fu
 		pmRuntime.mu.Unlock()
 		logInfo("portmaster", "firmware check: bash ok=%v %s; python3 ok=%v %s", c.BashOK || c.BashGood != "",
 			setOr(c.BashGood, c.BashNote), c.PythonOK, setOr(c.PythonNote, c.PythonPath))
-		needPython, needBash := pmRuntimeNeeds(c, master)
-		if !online || (!needPython && !needBash) {
+		needPython, needBash, needCodecs := pmRuntimeNeeds(c, master)
+		if !online || (!needPython && !needBash && !needCodecs) {
 			return
 		}
 		handedOver = true
-		tbxPost(func() { pmRuntimeBeginDownloads(needPython, needBash, 0) })
+		tbxPost(func() { pmRuntimeBeginDownloads(needPython, needBash, needCodecs, 0) })
 	}()
 }
 
 // pmRuntimeBeginDownloads shows the install card and downloads what is
 // missing. Main thread. It waits while another install has the card, since a
 // new run would cancel that one.
-func pmRuntimeBeginDownloads(needPython, needBash bool, waited int) {
+func pmRuntimeBeginDownloads(needPython, needBash, needCodecs bool, waited int) {
 	if installBarActive() && waited < pmBarWaitMax {
 		go func() {
 			time.Sleep(2 * time.Second)
-			tbxPost(func() { pmRuntimeBeginDownloads(needPython, needBash, waited+1) })
+			tbxPost(func() { pmRuntimeBeginDownloads(needPython, needBash, needCodecs, waited+1) })
 		}()
 		return
 	}
@@ -434,6 +456,12 @@ func pmRuntimeBeginDownloads(needPython, needBash bool, waited int) {
 			installBarUpdateRun(gen, installPhaseResolving, 0, 0)
 			if err := privateGlibcEnsureBash(ctx, progress); err != nil {
 				errs = append(errs, "bash: "+err.Error())
+			}
+		}
+		if needCodecs && ctx.Err() == nil {
+			installBarUpdateRun(gen, installPhaseResolving, 0, 0)
+			if err := pmCodecEnsure(ctx, gen); err != nil {
+				errs = append(errs, "LÖVE audio libraries: "+err.Error())
 			}
 		}
 		if len(errs) > 0 {
@@ -586,7 +614,7 @@ func pmRuntimeEnv(env []string) []string {
 		// another standard library.
 		env = pmEnvDrop(env, "PYTHONHOME", "PYTHONPATH")
 	}
-	return env
+	return pmCodecEnv(env)
 }
 
 // pmEnvDrop is env without the named variables.
@@ -691,6 +719,9 @@ func pmRuntimeNotes(master bool) []string {
 		default:
 			notes = append(notes, "python3: none usable — "+c.PythonNote)
 		}
+	}
+	if dir := pmCodecDir(); dir != "" && pmCodecDirReady() {
+		notes = append(notes, "audio codecs: JukaHub's "+strings.Join(pmCodecInstalledNames(), ", ")+" for PortMaster's LÖVE runtime")
 	}
 	return notes
 }
@@ -850,4 +881,3 @@ func pmRuntimeQuickExit() string {
 	}
 	return "PortMaster closed at once: " + issues[0].Title + " — " + hintKeyFor("Y", "Options") + " on its row, then Why didn't it open?"
 }
-

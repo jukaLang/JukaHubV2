@@ -156,22 +156,27 @@ func cycleGameCPUProfile(v string, delta int) string {
 // A per-game CPU limit (max_freq_khz) is applied last and wins over all of
 // them, so a game that already had a cap keeps it.
 func gameLaunchPowerConfig(cfg powerProfileConfig, opts gameOptions) powerProfileConfig {
-	switch normaliseGameCPUProfile(opts.CPUProfile) {
-	case "performance":
-		cfg.Balanced = false
-		cfg.MaxFreqKHz = 0
-	case "balanced":
-		cfg.Balanced = true
-	case "battery":
-		cfg.Balanced = true
-		if cfg.MaxFreqKHz <= 0 || cfg.MaxFreqKHz > gameCPUBatteryCeilingKHz {
-			cfg.MaxFreqKHz = gameCPUBatteryCeilingKHz
-		}
-	}
-	if opts.MaxFreqKHz > 0 {
-		cfg.MaxFreqKHz = opts.MaxFreqKHz
-	}
+	cfg, _ = launchPowerProfileConfig(cfg, opts, "", false, false)
 	return cfg
+}
+
+// gameOptionsCPUProfileValue is what the options sheet shows: the game's own
+// profile when it has one, otherwise Auto and the profile Auto actually
+// follows, named with where it came from.
+func gameOptionsCPUProfileValue(opts gameOptions) string {
+	onBattery, sourceKnown := powerSourceState()
+	return gameOptionsCPUProfileValueFor(opts, gameOptsUI.game.System, loadPowerProfileConfig(appConfig), onBattery, sourceKnown)
+}
+
+func gameOptionsCPUProfileValueFor(opts gameOptions, system string, cfg powerProfileConfig, onBattery, sourceKnown bool) string {
+	if p := normaliseGameCPUProfile(opts.CPUProfile); p != "" {
+		return gameCPUProfileLabel(p)
+	}
+	profile, origin := effectivePowerProfile(cfg, opts, system, onBattery, sourceKnown)
+	if profile == "" {
+		return "Auto"
+	}
+	return "Auto · " + gameCPUProfileLabel(profile) + " (" + origin + ")"
 }
 
 // gameOptionsPowerSummary is the short line the library shows beside a game

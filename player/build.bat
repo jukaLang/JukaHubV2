@@ -21,9 +21,13 @@ set "ARCH=x86_64-w64-mingw32"
 set "GO_MIN_MINOR=26"
 set "GO_FALLBACK=go1.26.0"
 set "W64DK_VER=2.0.0"
-set "SDL2_VER=2.30.5"
+REM  Versions and digests are the same pins as .github/scripts/install-sdl-mingw.sh
+set "SDL2_VER=2.30.11"
+set "SDL2_SHA=0590db0a47b564aab92499ed03eaa75db9aee17c371080caa3b05df9d49d9ff9"
 set "IMG_VER=2.8.2"
+set "IMG_SHA=7c0b437c54919ec3899f3edf49f8f260f5f2703451ee32e61da77eccbc04f542"
 set "TTF_VER=2.22.0"
+set "TTF_SHA=7e3edf46630bbfb1cb8bffd69a5456b037469ed7a20a75232caee0b1752dc65b"
 
 set "ROOT=%~dp0"
 set "TOOLS=%LOCALAPPDATA%\JukaHub\tools"
@@ -256,9 +260,9 @@ if defined SDL2_DIR (
 call :validate_sdl quiet && goto sdl_ok
 
 echo Fetching SDL2 development libraries ...
-call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL/releases/download/release-%SDL2_VER%/SDL2-devel-%SDL2_VER%-mingw.tar.gz" "SDL2-%SDL2_VER%" || exit /b 1
-call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL_image/releases/download/release-%IMG_VER%/SDL2_image-devel-%IMG_VER%-mingw.tar.gz" "SDL2_image-%IMG_VER%" || exit /b 1
-call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL_ttf/releases/download/release-%TTF_VER%/SDL2_ttf-devel-%TTF_VER%-mingw.tar.gz" "SDL2_ttf-%TTF_VER%" || exit /b 1
+call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL/releases/download/release-%SDL2_VER%/SDL2-devel-%SDL2_VER%-mingw.tar.gz" "SDL2-%SDL2_VER%" "%SDL2_SHA%" || exit /b 1
+call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL_image/releases/download/release-%IMG_VER%/SDL2_image-devel-%IMG_VER%-mingw.tar.gz" "SDL2_image-%IMG_VER%" "%IMG_SHA%" || exit /b 1
+call :fetch_sdl_pkg "https://github.com/libsdl-org/SDL_ttf/releases/download/release-%TTF_VER%/SDL2_ttf-devel-%TTF_VER%-mingw.tar.gz" "SDL2_ttf-%TTF_VER%" "%TTF_SHA%" || exit /b 1
 call :validate_sdl || (set "ERR=SDL2 libraries are still incomplete after download." & exit /b 1)
 
 :sdl_ok
@@ -269,7 +273,11 @@ exit /b 0
 
 :fetch_sdl_pkg
 set "PKG_TGZ=%DLTMP%\%~2.tar.gz"
+set "PKG_SHA=%~3"
 call :download "%~1" "%PKG_TGZ%" "%~2" || exit /b 1
+if "%~3"=="" (set "ERR=No SHA-256 pin for %~2." & exit /b 1)
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command "$a=(Get-FileHash -LiteralPath $env:PKG_TGZ -Algorithm SHA256).Hash.ToLowerInvariant(); if ($a -ne $env:PKG_SHA) { Write-Host ('  expected ' + $env:PKG_SHA + ', got ' + $a); exit 1 }"
+if errorlevel 1 (set "ERR=SDL archive SHA256 mismatch - download corrupted or tampered." & exit /b 1)
 if exist "%DLTMP%\x" rd /s /q "%DLTMP%\x" >nul 2>&1
 mkdir "%DLTMP%\x" >nul 2>&1
 "%TAR%" -xzf "%PKG_TGZ%" -C "%DLTMP%\x" || (set "ERR=Failed to extract %~2." & exit /b 1)
@@ -309,8 +317,14 @@ if not exist "%GCC_DIR%\windres.exe" (
     echo [warn] windres.exe not found - reusing the committed icon resource.
     exit /b 0
 )
-"%GCC_DIR%\windres.exe" -i JukaHub.rc -o rsrc_windows_amd64.syso -O coff || (set "ERR=windres failed to compile JukaHub.rc." & exit /b 1)
-echo [ok] icon resource  ^(JukaHub.ico^)
+REM  VERSIONINFO comes from jukaconfig.json (DESK-4). The same generator is
+REM  available to CI as packaging/windows/generate.py; this inline copy keeps
+REM  a local build independent of a Python install.
+"%PS%" -NoProfile -ExecutionPolicy Bypass -File "%ROOT%mkversioninfo.ps1" -Config "%ROOT%jukaconfig.json" -Out "%ROOT%JukaHubVersion.rc" || (set "ERR=Could not generate JukaHubVersion.rc from jukaconfig.json." & exit /b 1)
+copy /y /b JukaHub.rc+JukaHubVersion.rc JukaHubCombined.rc >nul || (set "ERR=Could not combine the Windows resources." & exit /b 1)
+"%GCC_DIR%\windres.exe" -i JukaHubCombined.rc -o rsrc_windows_amd64.syso -O coff || (set "ERR=windres failed to compile the Windows resources." & exit /b 1)
+del /q JukaHubVersion.rc JukaHubCombined.rc >nul 2>&1
+echo [ok] icon, manifest and version resource
 exit /b 0
 
 

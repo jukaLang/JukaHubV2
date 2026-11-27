@@ -34,25 +34,6 @@ type homeTileGeometry struct {
 	placeholder string
 }
 
-// legacyHomeTiles is the home layout jukaconfig.json shipped with in 0.4.0.
-//
-// remove after 2027-05-01 (with its case in migrateLegacyHomeLayout): an
-// upgrade shim for configs from 0.4.0.
-var legacyHomeTiles = []homeTileGeometry{
-	{HomeFocusContinue, "Continue", 32, 164, 480, 258, "Resume your latest activity"},
-	{HomeFocusMedia, "Media", 536, 164, 348, 121, "Watch and listen"},
-	{HomeFocusFiles, "Files", 900, 164, 162, 121, "Browse storage"},
-	{HomeFocusPackages, "Packages", 536, 301, 348, 121, "Discover content"},
-	{HomeFocusChat, "Chat", 340, 454, 292, 158, "Chat with others"},
-	{HomeFocusFavorites, "Favorites", 32, 454, 138, 158, "Saved"},
-	{HomeFocusApps, "Apps", 900, 301, 348, 121, "Launch installed apps"},
-	{HomeFocusSettings, "Settings", 1082, 164, 166, 121, "Preferences"},
-	{HomeFocusTools, "Tools", 648, 454, 292, 158, "Network and utilities"},
-	{HomeFocusBrowser, "Browser", 186, 454, 138, 158, "Internet"},
-	{HomeFocusEmulator, "Emulator", 956, 454, 292, 158, "Play games"},
-	{HomeFocusExit, "Exit", 8, 678, 116, 36, "Power down"},
-}
-
 // redesignHomeTiles is the 2026-11-03 redesign: the design sheet's grid with
 // the game library at the far end of the bottom row.
 var redesignHomeTiles = []homeTileGeometry{
@@ -157,8 +138,6 @@ func migrateLegacyHomeLayout(config *Config) bool {
 		}
 		var from []homeTileGeometry
 		switch {
-		case homeLayoutIs(scene, tiles, legacyHomeTiles):
-			from = legacyHomeTiles
 		case homeLayoutIs(scene, tiles, redesignHomeTiles):
 			from = redesignHomeTiles
 		default:

@@ -128,6 +128,13 @@ func main() {
 	takeConfig := startupLoadConfigAsync("jukaconfig.json")
 
 	startupWaitDisplay() // JukaHub OS on the Smart Pro: its drivers load beside this start (startup_displaywait.go)
+	if IsWindows() {
+		// DESK-2: the embedded manifest makes Windows per-monitor-v2 aware
+		// before SDL starts; these hints keep SDL's own DPI handling in step
+		// and leave window coordinates in physical pixels for DESK-3.
+		sdl.SetHint("SDL_WINDOWS_DPI_AWARENESS", "permonitorv2")
+		sdl.SetHint("SDL_WINDOWS_DPI_SCALING", "0")
+	}
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
 		logFatal("startup", "SDL init error: %v", err)
 	}
@@ -600,6 +607,22 @@ func main() {
 	if P().ResizableDefault() {
 		windowFlags |= sdl.WINDOW_RESIZABLE
 	}
+	// DESK-3: on a PC the remembered geometry wins over the centred canvas.
+	// Fullscreen still wins over everything: a session left in fullscreen must
+	// not come back as a small window on a monitor that has since gone away.
+	winX, winY := int32(sdl.WINDOWPOS_CENTERED), int32(sdl.WINDOWPOS_CENTERED)
+	if IsWindows() && !fullscreen {
+		if r, ok := rememberedWindowRect(config); ok {
+			winX, winY = int32(r.X), int32(r.Y)
+			screenW, screenH = r.W, r.H
+			if r.Maximized {
+				windowFlags |= sdl.WINDOW_MAXIMIZED
+			}
+			if r.Borderless {
+				windowFlags |= sdl.WINDOW_BORDERLESS
+			}
+		}
+	}
 	startupMarkNow("modules")
 	LogSceneOp(config.Scenes[currentSceneIndex].Name, "init").Info("creating window",
 		"platform", P().Name(),
@@ -616,7 +639,7 @@ func main() {
 	// The boot guard's record is flushed beside the start; it is on the card
 	// before the GPU driver starts (bootguard.go writeBootGuardStart).
 	bootGuardWaitSynced()
-	window, err := sdl.CreateWindow(config.Title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, screenWidth, screenHeight, uint32(windowFlags))
+	window, err := sdl.CreateWindow(config.Title, winX, winY, screenWidth, screenHeight, uint32(windowFlags))
 	mainWindow = window
 	if err != nil {
 		logFatal("startup", "Window creation error: %v", err)
@@ -1167,6 +1190,15 @@ func main() {
 				case sdl.WINDOWEVENT_SIZE_CHANGED:
 					w, h := mainWindow.GetSize()
 					updateWindowScale(w, h)
+					if IsWindows() {
+						rememberWindowRect(config, mainWindow)
+					}
+				case sdl.WINDOWEVENT_MOVED, sdl.WINDOWEVENT_MAXIMIZED:
+					// Saving a geometry on every event is still off the frame
+					// path, and the config's own save is debounced.
+					if IsWindows() {
+						rememberWindowRect(config, mainWindow)
+					}
 				case sdl.WINDOWEVENT_MINIMIZED, sdl.WINDOWEVENT_HIDDEN:
 					// Nothing this process draws can be seen, so the background
 					// pollers park (backgroundwork.go). The loop keeps running: SDL
@@ -1174,6 +1206,9 @@ func main() {
 					setWindowMinimised(true)
 				case sdl.WINDOWEVENT_RESTORED, sdl.WINDOWEVENT_SHOWN:
 					setWindowMinimised(false)
+					if IsWindows() {
+						rememberWindowRect(config, mainWindow)
+					}
 				}
 			case *sdl.KeyboardEvent:
 				if e.Type == sdl.KEYUP {

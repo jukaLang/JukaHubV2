@@ -88,9 +88,16 @@ ANDROIDRT_SOURCES="player/androidrt/src player/androidrt/build-tsp.sh player/and
 # Box64, the x86_64 emulator the Windows-app runtime runs Wine with. The newest
 # stable release, fetched by the full id of the commit its tag names ("Bumped
 # version to v0.4.4", 2026-08-02) and checked against all of it, the way
-# build-helpers.sh fetches chiaki-ng: no distribution's digest of the v0.4.4
-# tarball could be confirmed when this was pinned, and a commit id pins every
-# file of the tree anyway. A generic ARM64 build (box64's docs/COMPILE.md): ARM_DYNAREC,
+# build-helpers.sh fetches chiaki-ng. TEST-18: the Arch User Repository's
+# box64 0.4.4-1 PKGBUILD
+# (https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h=box64, read
+# 2026-11-27) publishes sha256
+# 99c6de4f509e46ab1de15df740d0e0ea338a7790efa3f67510dfbb975cc24029 for the
+# v0.4.4 tarball at https://github.com/ptitSeb/box64/archive/v0.4.4.tar.gz;
+# that tarball was downloaded once and compared file for file with the tree at
+# BOX64_COMMIT (identical, ignoring checkout line endings). The build keeps
+# pinning the commit, so a packager's re-cut tarball cannot change what ships.
+# A generic ARM64 build (box64's docs/COMPILE.md): ARM_DYNAREC,
 # RelWithDebInfo. No BOX32: box64's README says Wine's WoW64 build runs 32-bit
 # Windows programs in Box64-only environments, and that is the Wine below.
 BOX64_REPO="${BOX64_REPO:-https://github.com/ptitSeb/box64.git}"
@@ -682,6 +689,7 @@ build_androidrt() {
 
     {
         echo "JukaHub AndroidRT (the Android-app runtime, player/androidrt)"
+        echo "build root: Ubuntu focal snapshot ${BUILD_ROOT_SNAPSHOT:-not named}"
         if [ -n "$src_commit" ]; then
             echo "built:      $(utc_time "$src_time") (the date of its source commit: a rebuild is identical)"
             echo "source:     JukaHub @ $src_commit, the newest commit that changed AndroidRT's sources${SOURCE_KEY:+ (sources $SOURCE_KEY)}"
@@ -880,6 +888,7 @@ build_wine_pack() {
 
     {
         echo "JukaHub Windows-app runtime: Box64 (and the Wine build it runs, in wine.json)"
+        echo "build root: Ubuntu focal snapshot ${BUILD_ROOT_SNAPSHOT:-not named}"
         echo "built:      $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         source_line
         echo "box64:      $BOX64_REPO $BOX64_TAG @ $BOX64_COMMIT (fetched by commit id; tree $tree_id)"

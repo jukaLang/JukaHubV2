@@ -619,6 +619,10 @@ def build_assets():
         "player/JukaPlayer.png": app300,
         "player/trimui/Apps/JukaHub/icon.png": png_bytes(render_app_icon()),
         "player/JukaHub.ico": ico,
+        # Icon-only fallback: JukaHub.rc also embeds JukaHub.manifest
+        # (per-monitor-v2 DPI awareness). build.bat / mkwinres.sh recompile the
+        # .syso from that script with windres; do not treat this byte-for-byte
+        # COFF writer as the manifest-bearing build.
         "player/rsrc_windows_amd64.syso": syso_bytes(ico),
         "favicon.png": png_bytes(render_mark(48, bleed=True)),
         "favicon.svg": svg_mark().encode(),

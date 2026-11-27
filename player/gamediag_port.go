@@ -78,9 +78,15 @@ var (
 	// BusyBox ash and dash report bash syntax as `file: line 5: syntax error:
 	// unexpected "("` and `file: 5: Syntax error: "(" unexpected`; bash's own
 	// form is "syntax error near unexpected token", which does not match.
-	gameDiagPortShRe = regexp.MustCompile(`(?i)syntax error: |bad substitution|(?:^|[\s:])(?:\[\[|declare|shopt|mapfile|readarray|pushd|popd|typeset|compgen): (?:command )?not found`)
-	// gameDiagPortLineFileRe is the file a shell error names first.
-	gameDiagPortLineFileRe = regexp.MustCompile(`^([^\s:]+):\s*(?:line\s+)?\d+:`)
+	// They also refuse a bash builtin's option as `file: export: line 75:
+	// illegal option -f` (bash's own form is "invalid option"), which is how a
+	// bash port script ends at once when something runs it with BusyBox
+	// (JH-AN6U7W: OldBits Hub).
+	gameDiagPortShRe = regexp.MustCompile(`(?i)syntax error: |bad substitution|(?:^|[\s:])(?:\[\[|declare|shopt|mapfile|readarray|pushd|popd|typeset|compgen): (?:command )?not found|(?:^|[\s:])(?:export|readonly|local|declare|typeset|unset|shift|set|source|trap|ulimit|alias|printf|test|read): (?:line \d+: )?illegal option`)
+	// gameDiagPortLineFileRe is the file a shell error names first: `file: line
+	// 5: …`, `file: 5: …` and BusyBox's `file: export: line 75: …`. The name
+	// may hold spaces, as a card path does ("…/OldBits Hub.sh").
+	gameDiagPortLineFileRe = regexp.MustCompile(`^(.+?):\s*(?:(?:line\s+)?\d+:|[^\s:]+:\s*line\s+\d+:)`)
 	// The loader's "version `GLIBC_2.34' not found (required by ./game)".
 	gameDiagPortGlibcRe = regexp.MustCompile("(GLIBC(?:XX)?_[0-9][0-9.]*)['`]? not found(?: \\(required by ([^)]+)\\))?")
 	gameDiagPortLibRe   = regexp.MustCompile(`error while loading shared libraries: ([^:\s]+):`)
@@ -117,6 +123,12 @@ var (
 var gameDiagPortBashOwnErrors = []string{"operand expected", "arithmetic", "error token is"}
 
 var (
+	// gameDiagPortFallbackWords are what a line needs to count as an error
+	// when no known cause matched: the card's last resort (JH-AN6U7W was told
+	// JukaHub found nothing while its log held `export: illegal option -f`).
+	gameDiagPortFallbackWords = []string{"error", "failed", "failure", "fatal", "cannot", "can't",
+		"could not", "couldn't", "unable to", "invalid", "denied", "no such file", "illegal option",
+		"bad substitution", "syntax error", "not permitted", "aborted"}
 	// gameDiagPortFailWords say something did not work.
 	gameDiagPortFailWords = []string{"fail", "error", "could not", "couldn't", "cannot", "can't", "unable",
 		"no available", "not available", "not supported", "unsupported", "invalid", "no such file", "not found"}
@@ -240,6 +252,34 @@ type gameDiagPortFound struct {
 	line  string
 }
 
+// gameDiagPortBusyBoxTitle is the finding about a port script that met
+// BusyBox's sh, where its own bash commands stopped it (JH-AN6U7W).
+const gameDiagPortBusyBoxTitle = "It ran under BusyBox's sh, not bash"
+
+// gameDiagPortOffersDirect reports whether the launch card can offer "Try it
+// directly": the port met BusyBox because the firmware's Ports launcher ran
+// it, so starting it under JukaHub's bash can help. A port already started
+// directly has no launcher note, and a script's own #!/bin/bash line under a
+// working bash is a different cause the retry cannot fix.
+func gameDiagPortOffersDirect(issues []launchIssue, notes []string) bool {
+	busyBox := false
+	for _, is := range issues {
+		if is.Title == gameDiagPortBusyBoxTitle {
+			busyBox = true
+			break
+		}
+	}
+	if !busyBox {
+		return false
+	}
+	for _, n := range notes {
+		if strings.HasPrefix(n, "through the firmware's Ports launcher ") {
+			return true
+		}
+	}
+	return false
+}
+
 // gameDiagPortBashMissing reports a TrimUI where no full bash can be given to
 // a port right now: the firmware has none and JukaHub's is not there yet.
 func gameDiagPortBashMissing() bool {
@@ -250,6 +290,26 @@ func gameDiagPortBashMissing() bool {
 	return !c.BashOK && c.BashGood == "" && !privateGlibcBashReady()
 }
 
+// portRuntimeRenamesExplained reports that a port's own "mv: can't rename
+// ...squashfs" lines are its rename of PortMaster's arch-suffixed runtime
+// images to the plain names its port.json declares, with every declared
+// runtime in place: Minecraft's launcher does this on every launch after the
+// first, and nothing is missing (JH-TKWGE5). A port whose manifest declares no
+// runtime, or one libs/ does not have, is not explained: its line stands.
+func portRuntimeRenamesExplained(script string) bool {
+	control := portRealControlFolder()
+	runtimes := portMetaFor(script).Runtime
+	if control == "" || len(runtimes) == 0 {
+		return false
+	}
+	for _, rt := range runtimes {
+		if pnRuntimeFile(rt) != "" && !portRuntimePresent(control, rt) {
+			return false
+		}
+	}
+	return true
+}
+
 // gameDiagPortLogFindings sorts a port's output (and JukaHub's launch notes)
 // into the causes listed at the top of this file. It returns the issues, the
 // surest first and at most gameDiagPortIssueMax, the output lines that show
@@ -258,11 +318,18 @@ func gameDiagPortBashMissing() bool {
 // finding reads the firmware's libc.
 func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssue, []string, bool) {
 	// The bash the launch used, from its notes: a "syntax error:" under a
-	// working bash is the script's own, not BusyBox's.
-	goodBash := false
+	// working bash is the script's own, not BusyBox's. The launcher note
+	// narrows that: a firmware launcher runs the port with its own shell
+	// (stock TrimUI's launch_balanced.sh ends in `/bin/sh "$@"`), so the bash
+	// note does not cover the port's own script (JH-AN6U7W: OldBits Hub's
+	// `export -f`).
+	goodBash, fwLauncher := false, false
 	for _, n := range notes {
-		if strings.HasPrefix(n, "bash: the firmware's") || strings.HasPrefix(n, "bash: JukaHub's") {
+		switch {
+		case strings.HasPrefix(n, "bash: the firmware's"), strings.HasPrefix(n, "bash: JukaHub's"):
 			goodBash = true
+		case strings.HasPrefix(n, "through the firmware's Ports launcher "):
+			fwLauncher = true
 		}
 	}
 	// The first line of each cause, and what the lines name.
@@ -290,8 +357,9 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 			file := gameDiagPortLineFile(line)
 			// Under a working bash only a script started by its own
 			// #!/bin/bash line (not the port's script, not a sourced *.txt)
-			// can have met BusyBox.
-			if goodBash && !gameDiagPortNestedScript(file, script) {
+			// can have met BusyBox — unless the firmware's launcher ran the
+			// port itself with /bin/sh, which the bash note does not cover.
+			if goodBash && !fwLauncher && !gameDiagPortNestedScript(file, script) {
 				continue
 			}
 			if sh == "" {
@@ -412,7 +480,7 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		found = append(found, gameDiagPortFound{issue: launchIssue{Level: int(level), Title: title, Files: files, Detail: detail}, line: line})
 	}
 	if sh != "" {
-		add(gameDiagSure, "It ran under BusyBox's sh, not bash", gameDiagPortShDetail(shFile, script), sh, nil)
+		add(gameDiagSure, gameDiagPortBusyBoxTitle, gameDiagPortShDetail(shFile, script, fwLauncher), sh, nil)
 	} else if noBash != "" {
 		why := strings.TrimSpace(strings.TrimPrefix(noBash, "—"))
 		add(gameDiagLikely, "This firmware has no full bash", "The launch found no bash that runs PortMaster's scripts ("+why+
@@ -456,8 +524,12 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		add(gameDiagSure, title, detail+". This build cannot load here — look for an update of the port, or a firmware with newer libraries.", glibc, nil)
 	}
 	if lib != "" {
-		add(gameDiagSure, "A library it needs is not on this handheld",
-			"Neither the port's own libs folder nor the firmware has it. Reinstall the port (Update in its details); if it stays, this build does not suit this firmware.", lib, gameDiagListFiles(libs, 6))
+		detail := "Neither the port's own libs folder nor the firmware has it. Reinstall the port (Update in its details); if it stays, this build does not suit this firmware."
+		if pmRuntimeApplies() && pmCodecCoversLibs(libs) {
+			detail = "PortMaster's LÖVE runtime loads this one from the firmware, and this firmware does not have it. " +
+				"JukaHub installs Ubuntu's copy (about 200 KB) when a port starts with Wi-Fi on; without a connection the port cannot start."
+		}
+		add(gameDiagSure, "A library it needs is not on this handheld", detail, lib, gameDiagListFiles(libs, 6))
 	}
 	if execLine != "" {
 		detail := "The program is missing from the port's folder, or it is built for another processor or C library (a 32-bit ARM build, for one), which this firmware cannot run. Reinstall the port; if it stays, this build does not suit this handheld."
@@ -479,7 +551,7 @@ func gameDiagPortLogFindings(notes, lines []string, script string) ([]launchIssu
 		add(gameDiagLikely, "The system stopped it, likely for memory",
 			"The game asked for more memory than was free. Close what else is running (a video, downloads) or turn on Settings → Games & emulators → Extra memory (swap), then try again.", mem, nil)
 	}
-	if rt != "" {
+	if rt != "" && !portRuntimeRenamesExplained(script) {
 		add(gameDiagLikely, "A runtime it needs is missing or did not mount",
 			"PortMaster downloads a port's runtime (Godot, Mono, LÖVE …) into its libs folder when it installs the port. Open PortMaster with Wi-Fi on, or press Update on the port.", rt, nil)
 	}
@@ -656,6 +728,37 @@ func gameDiagPortDropHarmless(lines []string) []string {
 	return out
 }
 
+// gameDiagPortErrorLine is the first line of a port's output that reads as a
+// failure, or "". It is the launch card's last resort: when no known cause
+// matched, this line is shown instead of "JukaHub found nothing missing that
+// it can check" (JH-AN6U7W: `export: illegal option -f`). A line another
+// finding owns (a data file's "not found") and one that changes nothing stay
+// out.
+func gameDiagPortErrorLine(lines []string) string {
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if line == "" || gameDiagPortHarmless(line) ||
+			!gameDiagHasAny(strings.ToLower(line), gameDiagPortFallbackWords) {
+			continue
+		}
+		// `<data file>: not found` belongs to the missing-files finding.
+		if ms := gameDiagPortCmdRe.FindAllStringSubmatch(line, -1); len(ms) > 0 {
+			dataOnly := true
+			for _, m := range ms {
+				if gameDiagPortProgramName(m[1]) {
+					dataOnly = false
+					break
+				}
+			}
+			if dataOnly {
+				continue
+			}
+		}
+		return line
+	}
+	return ""
+}
+
 // gameDiagPortNestedScript reports whether file — the one a shell error
 // names — is a script the port started by its own #!/bin/bash line: not the
 // port's script (nor JukaHub's temporary copy of it, jukahub-*.sh) and not a
@@ -667,11 +770,15 @@ func gameDiagPortNestedScript(file, script string) bool {
 }
 
 // gameDiagPortShDetail says what to do about a script that ran under BusyBox.
-// file is the one the shell's error names.
-func gameDiagPortShDetail(file, script string) string {
+// file is the one the shell's error names; viaLauncher: the firmware's Ports
+// launcher started the port with its own /bin/sh.
+func gameDiagPortShDetail(file, script string, viaLauncher bool) string {
 	if gameDiagPortBashMissing() {
 		return "PortMaster's scripts need a full bash, and this firmware's /bin/bash is BusyBox. JukaHub adds one (Ubuntu's bash on its own C library) the next time a port starts with Wi-Fi on" +
 			pmRuntimeErrSuffix() + "."
+	}
+	if viaLauncher {
+		return "This firmware's Ports launcher starts every port with /bin/sh, which is BusyBox here, so the script's bash commands stop it. Choose Try it directly below: JukaHub then starts this port under the bash it supplies, and remembers that for this port only."
 	}
 	if gameDiagPortNestedScript(file, script) {
 		return filepath.Base(file) + " was started by its own #!/bin/bash line, which on this firmware is BusyBox's sh. JukaHub gives each launch a real /bin/bash of its own when it can; this time it could not (the launch log's notes say why: portBinBash off, no mount namespace, or a failed bind). Send the log below with a bug report."

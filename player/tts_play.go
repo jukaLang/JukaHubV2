@@ -22,9 +22,11 @@ package main
 // voice waits for it. A ringing alarm silences the voice for good: its own
 // player clears the queue, and the feeder stops at its next slice.
 //
-// The voice plays at the level it came in, through the system volume as every
-// sound does; the "Interface sounds" switch and slider are for the taps, not
-// for Juka. While Juka speaks, the music and a video carry on at ttsDuckLevel
+// The voice plays through the system volume, scaled by its own "Voice volume"
+// setting; the "Interface sounds" switch and slider are for the taps, not for
+// Juka. The first word's delay is logged with its answer/download and device
+// lead parts, so a slow answer is not mistaken for a slow speaker (SND-14).
+// While Juka speaks, the music and a video carry on at ttsDuckLevel
 // of their volume (QueueVideoAudio asks ttsMediaDuck), easing down and back up
 // rather than jumping. Their own queue is about a second long, which is about
 // how long Groq takes to answer: the duck starts when the session starts, so
@@ -38,6 +40,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -77,6 +80,12 @@ type ttsSession struct {
 	gender   string // that voice's, for a local voice that has both
 	local    ttsLocalVoice
 	hasLocal bool
+	volume   float64 // 0..1, the Voice volume setting; 1 for an unset value
+	posted   time.Time
+	// firstClipNS is set by the producer when the first samples arrive. The
+	// feeder reads it once at the first queued buffer: the gap from there is
+	// the download/answer wait, the rest the device's own lead.
+	firstClipNS atomic.Int64
 }
 
 // ttsReport is what a session found out, for the one-time notices and the
@@ -142,6 +151,15 @@ func ttsRun(ctx context.Context, s *ttsSession, pre ttsFail) {
 // go) — or nothing more, when there is none.
 func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *ttsProduced) {
 	defer close(out)
+	// Mark the moment the first samples exist, so the feeder can log how much
+	// of the first-word delay was waiting for the answer and how much was the
+	// device's own lead (SND-14).
+	send := func(ctx context.Context, clip []int16) bool {
+		if clip != nil && s.firstClipNS.Load() == 0 {
+			s.firstClipNS.Store(time.Since(s.posted).Nanoseconds())
+		}
+		return ttsSend(ctx, out, clip)
+	}
 	groq := s.key != ""
 	for i := 0; ctx.Err() == nil; i++ {
 		chunk, ok := s.src.at(ctx, i)
@@ -154,7 +172,7 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 		if keep && s.origin != ttsFromTest && (groq || s.hasLocal) {
 			if samples, rate, hit := ttsCacheLoad(s.cacheID(groq), chunk); hit {
 				res.local = res.local || !groq
-				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !ttsSend(ctx, out, clip) {
+				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !send(ctx, clip) {
 					return
 				}
 				continue
@@ -166,7 +184,7 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 				if keep {
 					ttsCacheStore(s.cacheID(true), chunk, samples, rate)
 				}
-				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !ttsSend(ctx, out, clip) {
+				if clip := ttsClipFor(samples, rate, s.rate); clip != nil && !send(ctx, clip) {
 					return
 				}
 				continue
@@ -222,7 +240,7 @@ func ttsProduce(ctx context.Context, s *ttsSession, out chan<- []int16, res *tts
 				return ctx.Err() == nil
 			}
 			emitted = true
-			return ttsSend(ctx, out, clip)
+			return send(ctx, clip)
 		})
 		if err != nil && !emitted && !errors.Is(err, errTTSPartial) {
 			res.localFailed = ctx.Err() == nil
@@ -258,6 +276,7 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 	var cur []int16
 	pos := 0
 	spoke := false
+	timed := false
 	watched := time.Now()
 	moved := time.Now() // the last time a slice went in, or a clip arrived
 	ttsMixOpen(s.gen)
@@ -318,8 +337,14 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 			acc[i] = int32(cur[pos+i])
 		}
 		ttsMixTake(s.gen, acc[:n])
+		gain := s.volume
+		if gain <= 0 {
+			// Keep the feeder alive and the clock moving at zero volume, but
+			// queue silence rather than a full-level line.
+			gain = 0
+		}
 		for i := 0; i < n; i++ {
-			v := ttsClampS16(acc[i])
+			v := ttsClampS16(int32(float64(acc[i]) * gain))
 			buf[2*i] = byte(v)
 			buf[2*i+1] = byte(uint16(v) >> 8)
 		}
@@ -330,6 +355,17 @@ func ttsFeed(ctx context.Context, s *ttsSession, clips <-chan []int16) bool {
 			queueErr = outQueue(audioDev, buf[:n*2])
 			if queueErr == nil {
 				ttsFed.Store(true)
+				if !timed {
+					timed = true
+					answer := time.Duration(s.firstClipNS.Load())
+					total := time.Since(s.posted)
+					lead := total - answer
+					if lead < 0 {
+						lead = 0
+					}
+					logInfo("tts", "first word after %s (answer and download %s, device lead %s)",
+						total.Round(10*time.Millisecond), answer.Round(10*time.Millisecond), lead.Round(10*time.Millisecond))
+				}
 			}
 		}
 		audioMutex.Unlock()
@@ -586,6 +622,8 @@ func ttsReported(rep ttsReport) {
 			}
 		case rep.fail == ttsFailTerms && ttsGateTellOnce(rep.keyID, ttsFailTerms):
 			ShowToast("Juka's voice needs a one-time OK on Groq — see Settings → Voice & AI", ToastKindWarning)
+		case rep.fail == ttsFailModel && ttsGateTellOnce(rep.keyID, ttsFailModel):
+			ShowToast("Groq no longer offers this speech model — Juka's voice is unavailable until Settings chooses another", ToastKindWarning)
 		case rep.fail == ttsFailLimit && rep.daily && ttsGateTellOnce(rep.keyID, ttsFailLimit):
 			ShowToast("Juka's voice is resting — today's free Groq voice allowance is used up", ToastKindInfo)
 		case rep.fail == ttsFailLimit && rep.wait >= time.Minute && ttsGateTellOnce(rep.keyID, ttsFailLimit):

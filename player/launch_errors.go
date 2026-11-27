@@ -14,12 +14,16 @@ package main
 // into "…/system/d", and a card taller than the screen scrolls with Up/Down.
 //
 // A card about a launch that failed also carries its bug report
-// (launchreport.go): the report's full text under the findings, and two
-// buttons, Cancel and Submit report. Submit is focused when the card opens, so
-// A files the report as a GitHub issue; B or Cancel closes the card and sends
-// nothing. Left/Right move between the buttons, Up/Down scroll, L1/R1 a page.
-// A card that reports no failure — a check the player asked for ("Check why
-// it won't start"), Splore without PICO-8 — keeps its single Dismiss.
+// (launchreport.go): the report's full text under the findings, and buttons
+// Cancel and Submit report. Submit is focused when the card opens, so A files
+// the report as a GitHub issue; B or Cancel closes the card and sends nothing.
+// Left/Right move between the buttons, Up/Down scroll, L1/R1 a page. A port
+// that met BusyBox's sh because the firmware's launcher ran it gets a third
+// button, Try it directly (gameDiagReport.TryDirect): A remembers that choice
+// for this port and starts it again under JukaHub's bash, and it opens
+// focused. A card that reports no failure — a check the player asked for
+// ("Check why it won't start"), Splore without PICO-8 — keeps its single
+// Dismiss, unless it can offer the retry too.
 
 import (
 	"errors"
@@ -57,6 +61,9 @@ type launchFailureState struct {
 	summary  string
 	issues   []launchIssue
 	logLines []string
+	// tryDirect is the port a "Try it directly" button starts again under
+	// JukaHub's bash (ports_env.go); nil when the card does not offer it.
+	tryDirect *gameDiagTryDirect
 	// scroll is the first body line drawn; maxScroll is set by the renderer.
 	scroll    int
 	maxScroll int
@@ -66,13 +73,14 @@ type launchFailureState struct {
 	// report is the bug report the card offers (launchreport.go); nil on a
 	// card that reports no failure, whose only answer is Dismiss.
 	report *launchReportDraft
-	// focus is the button A presses: launchFocusSubmit, where the card opens,
-	// or launchFocusCancel.
+	// focus is the button A presses (launchFocusTry when the card offers the
+	// retry, else launchFocusSubmit where it opens, or launchFocusCancel).
 	focus int
-	// page is how many lines L1/R1 scroll; card and the two buttons are the
+	// page is how many lines L1/R1 scroll; card and the buttons are the
 	// renderer's hit targets for a tap or a click.
 	page       int
 	card       sdl.Rect
+	tryRect    sdl.Rect
 	submitRect sdl.Rect
 	cancelRect sdl.Rect
 	// openedAt arms the buttons launchFailureArmDelay later.
@@ -81,10 +89,11 @@ type launchFailureState struct {
 
 var launchFailure launchFailureState
 
-// The report card's buttons.
+// The report card's buttons, in the order Left/Right step through them.
 const (
-	launchFocusSubmit = iota
+	launchFocusTry = iota
 	launchFocusCancel
+	launchFocusSubmit
 )
 
 // launchFailureArmDelay is how long a report card's buttons ignore A, B and
@@ -144,6 +153,17 @@ func withLaunchFailureKind(kind launchFailureKind, err error) error {
 }
 
 func launchFailureSuggestion(err error) string {
+	// A display that stopped on a library older than the program needs: the
+	// cause is the firmware's file, not anything the player can install from
+	// JukaHub.
+	var old *wineOldLibraryError
+	if errors.As(err, &old) {
+		lib := old.lib
+		if lib == "" {
+			lib = "the library it links"
+		}
+		return "Update this firmware if it carries a newer " + lib + ": JukaHub answers only the libraries it can safely complete (zlib), so this one needs the firmware's own newer copy."
+	}
 	var categorized *launchFailureCause
 	if errors.As(err, &categorized) {
 		switch categorized.kind {
@@ -192,6 +212,7 @@ func showLaunchFailureRecord(rec *launchRecord, err error, logPath string) {
 		return
 	}
 	target := ""
+	issues := launchFailureIssues(err)
 	if rec != nil {
 		target = rec.Title
 		if rec.Reason == "" {
@@ -203,6 +224,7 @@ func showLaunchFailureRecord(rec *launchRecord, err error, logPath string) {
 		target:   strings.TrimSpace(target),
 		reason:   strings.TrimSpace(err.Error()),
 		fix:      launchFailureSuggestion(err),
+		issues:   issues,
 		log:      strings.TrimSpace(logPath),
 		openedAt: time.Now(),
 	}
@@ -211,8 +233,21 @@ func showLaunchFailureRecord(rec *launchRecord, err error, logPath string) {
 		if launchFailure.target != "" {
 			title += " " + launchFailure.target
 		}
-		launchFailure.report = launchReportNewDraft(rec, title, "", nil, "")
+		launchFailure.report = launchReportNewDraft(rec, title, "", issues, "")
 	}
+}
+
+// launchFailureIssues are the findings a failed launch's report carries besides
+// the reason: a display that stopped because a library this firmware has is too
+// old names that library, the function and the version there too
+// (wine_weston_cause.go), so a report like JH-6G5TZF says why instead of
+// "Weston stopped while it was starting".
+func launchFailureIssues(err error) []launchIssue {
+	var old *wineOldLibraryError
+	if errors.As(err, &old) {
+		return []launchIssue{old.issue()}
+	}
+	return nil
 }
 
 // showLaunchDiagnosis opens the card with a diagnosis: title ("Sonic CD
@@ -227,15 +262,22 @@ func showLaunchDiagnosis(title, summary string, issues []launchIssue, logLines [
 		issues:   append([]launchIssue(nil), issues...),
 		logLines: append([]string(nil), logLines...),
 		log:      strings.TrimSpace(logPath),
+		focus:    launchFocusSubmit,
 		openedAt: time.Now(),
 	}
 }
 
 // showLaunchDiagnosisReport is showLaunchDiagnosis for a launch that failed:
 // the card also carries the bug report the diagnosis wrote (report.Launch,
-// report.Details). Main thread only.
+// report.Details) and, for a port that met BusyBox through the firmware's
+// launcher, the "Try it directly" button, which opens focused because it is
+// the fix. Main thread only.
 func showLaunchDiagnosisReport(report gameDiagReport) {
 	showLaunchDiagnosis(report.Title, report.Summary, report.Issues, report.LogLines, report.LogPath)
+	if report.TryDirect != nil {
+		launchFailure.tryDirect = report.TryDirect
+		launchFailure.focus = launchFocusTry
+	}
 	if report.Launch != nil {
 		launchFailure.report = launchReportNewDraft(report.Launch, launchFailure.title, launchFailure.summary,
 			launchFailure.issues, report.Details)
@@ -254,6 +296,50 @@ func launchFailureCancel() {
 		logInfo("launch", "launch report %s not sent: Cancel", d.ref)
 	}
 	closeLaunchFailureDialog()
+}
+
+// launchFailureTryDirect is "Try it directly": it remembers the choice for this
+// port alone (ports_env.go) and starts the port again under the bash JukaHub
+// supplies, instead of through the firmware's Ports launcher. Main thread.
+func launchFailureTryDirect() {
+	d := launchFailure.tryDirect
+	if d == nil {
+		return
+	}
+	if err := portDirectRemember(d.Script); err != nil {
+		ShowToast("Could not remember the choice for "+d.Name+": "+firstLine(err.Error()), ToastKindError)
+		return
+	}
+	closeLaunchFailureDialog()
+	logInfo("portmaster", "%s: Try it directly chosen; this port runs under JukaHub's bash from now on", d.Name)
+	ShowToast("Starting "+d.Name+" under JukaHub's bash", ToastKindInfo)
+	launchPortScript(d.Name, d.Script)
+}
+
+// launchFailureFocusMove moves the focused button one step in the card's order:
+// Try it directly, Cancel, Submit report.
+func launchFailureFocusMove(delta int) {
+	order := make([]int, 0, 3)
+	if launchFailure.tryDirect != nil {
+		order = append(order, launchFocusTry)
+	}
+	if launchFailure.report != nil {
+		order = append(order, launchFocusCancel, launchFocusSubmit)
+	}
+	if len(order) < 2 {
+		return
+	}
+	at := 0
+	for i, f := range order {
+		if f == launchFailure.focus {
+			at = i
+		}
+	}
+	at = (at + delta%len(order) + len(order)) % len(order)
+	if next := order[at]; next != launchFailure.focus {
+		launchFailure.focus = next
+		PlayNavSound()
+	}
 }
 
 // launchFailureScroll moves a tall card by delta lines.
@@ -296,24 +382,21 @@ func launchFailureAction(act tbxAction) {
 	case tbxActEnd:
 		launchFailureScroll(launchFailure.maxScroll - launchFailure.scroll)
 	case tbxActLeft:
-		if launchFailure.focus != launchFocusCancel {
-			launchFailure.focus = launchFocusCancel
-			PlayNavSound()
-		}
+		launchFailureFocusMove(-1)
 	case tbxActRight:
-		if launchFailure.focus != launchFocusSubmit {
-			launchFailure.focus = launchFocusSubmit
-			PlayNavSound()
-		}
+		launchFailureFocusMove(1)
 	case tbxActConfirm:
 		if !launchFailureArmed() {
 			return
 		}
-		if launchFailure.focus == launchFocusCancel {
+		switch launchFailure.focus {
+		case launchFocusTry:
+			launchFailureTryDirect()
+		case launchFocusCancel:
 			launchFailureCancel()
-			return
+		default:
+			launchReportSubmit()
 		}
-		launchReportSubmit()
 	case tbxActBack:
 		if launchFailureArmed() {
 			launchFailureCancel()
@@ -328,7 +411,7 @@ func handleLaunchFailureKey(e *sdl.KeyboardEvent) bool {
 	if !launchFailure.open || e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
-	if launchFailure.report != nil {
+	if launchFailure.report != nil || launchFailure.tryDirect != nil {
 		launchFailureAction(tbxKeyAction(e))
 		return true
 	}
@@ -348,7 +431,7 @@ func handleLaunchFailureController(e *sdl.ControllerButtonEvent) bool {
 	if !launchFailure.open || e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
 	}
-	if launchFailure.report != nil {
+	if launchFailure.report != nil || launchFailure.tryDirect != nil {
 		launchFailureAction(tbxPadAction(e))
 		return true
 	}
@@ -371,12 +454,15 @@ func handleLaunchFailureMouse(mx, my int32) bool {
 	if !launchFailure.open {
 		return false
 	}
-	if launchFailure.report == nil {
+	if launchFailure.report == nil && launchFailure.tryDirect == nil {
 		closeLaunchFailureDialog()
 		return true
 	}
 	switch {
 	case !launchFailureArmed():
+	case launchFailure.tryRect.W > 0 && pointInRect(mx, my, launchFailure.tryRect):
+		launchFailure.focus = launchFocusTry
+		launchFailureTryDirect()
 	case launchFailure.submitRect.W > 0 && pointInRect(mx, my, launchFailure.submitRect):
 		launchFailure.focus = launchFocusSubmit
 		launchReportSubmit()
@@ -718,7 +804,7 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 	}
 	headTop := 20 + f.titleH + 14
 	footH := int32(56)
-	if st.report != nil {
+	if st.report != nil || st.tryDirect != nil {
 		footH = 72
 	}
 	panelH := headTop + contentH + footH
@@ -794,8 +880,8 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 	}
 
 	footY := panelY + panelH - footH
-	if st.report == nil {
-		st.submitRect, st.cancelRect = sdl.Rect{}, sdl.Rect{}
+	if st.report == nil && st.tryDirect == nil {
+		st.tryRect, st.submitRect, st.cancelRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 		hints := []FooterHint{{"A", "Dismiss"}}
 		if st.maxScroll > 0 {
 			hints = append([]FooterHint{{"Up/Down", "Scroll"}}, hints...)
@@ -805,26 +891,48 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, f.body, footer, ColorTextTertiary(), panelX+(panelW-fw)/2, footY+(footH-fh)/2)
 		return
 	}
-	// The two buttons, Submit on the right and focused when the card opens.
-	collecting := st.report.waiting && !st.report.ready
-	label := "Submit report"
-	if collecting {
-		label = "Collecting details…"
-	}
+	// The buttons, right to left: Submit report, Cancel, and for a port that
+	// met BusyBox through the firmware's launcher, Try it directly.
+	st.tryRect, st.submitRect, st.cancelRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 	const buttonH = int32(46)
 	by := footY + (footH-buttonH)/2
-	sw := tbxButtonWidth(f.head, label, 170)
-	cw := tbxButtonWidth(f.head, "Cancel", 120)
-	st.submitRect = sdl.Rect{X: panelX + panelW - padX - sw, Y: by, W: sw, H: buttonH}
-	st.cancelRect = sdl.Rect{X: st.submitRect.X - 12 - cw, Y: by, W: cw, H: buttonH}
-	tbxDrawButton(renderer, config, f.head, st.cancelRect, "Cancel", false, st.focus == launchFocusCancel, false)
-	tbxDrawButton(renderer, config, f.head, st.submitRect, label, true, st.focus == launchFocusSubmit, collecting)
-	hints := []FooterHint{{"Left/Right", "Choose"}, {"B", "Cancel"}}
+	left := panelX + panelW - padX
+	collecting, label := false, ""
+	if st.report != nil {
+		collecting = st.report.waiting && !st.report.ready
+		label = "Submit report"
+		if collecting {
+			label = "Collecting details…"
+		}
+		sw := tbxButtonWidth(f.head, label, 170)
+		cw := tbxButtonWidth(f.head, "Cancel", 120)
+		st.submitRect = sdl.Rect{X: left - sw, Y: by, W: sw, H: buttonH}
+		st.cancelRect = sdl.Rect{X: st.submitRect.X - 12 - cw, Y: by, W: cw, H: buttonH}
+		left = st.cancelRect.X - 12
+	}
+	if st.tryDirect != nil {
+		tw := tbxButtonWidth(f.head, "Try it directly", 190)
+		st.tryRect = sdl.Rect{X: left - tw, Y: by, W: tw, H: buttonH}
+		left = st.tryRect.X - 12
+	}
+	if st.tryDirect != nil {
+		tbxDrawButton(renderer, config, f.head, st.tryRect, "Try it directly", true, st.focus == launchFocusTry, false)
+	}
+	if st.report != nil {
+		tbxDrawButton(renderer, config, f.head, st.cancelRect, "Cancel", false, st.focus == launchFocusCancel, false)
+		tbxDrawButton(renderer, config, f.head, st.submitRect, label, true, st.focus == launchFocusSubmit, collecting)
+	}
+	var hints []FooterHint
+	if st.report != nil {
+		hints = []FooterHint{{"Left/Right", "Choose"}, {"B", "Cancel"}}
+	} else if st.tryDirect != nil {
+		hints = []FooterHint{{"B", "Cancel"}}
+	}
 	if st.maxScroll > 0 {
 		hints = append([]FooterHint{{"Up/Down", "Scroll"}, {"L1/R1", "Page"}}, hints...)
 	}
-	hintW := st.cancelRect.X - panelX - padX - 16
-	if hintW > 40 {
+	hintW := left - panelX - padX - 16
+	if len(hints) > 0 && hintW > 40 {
 		hint := ellipsize(f.mono, hintLine(hints...), hintW)
 		_, hh := measureText(f.mono, hint)
 		renderText(renderer, config, f.mono, hint, ColorTextTertiary(), panelX+padX, footY+(footH-hh)/2)

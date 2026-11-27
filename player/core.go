@@ -6860,6 +6860,7 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// Persist focus for the current scene before leaving it.
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		focusEngine.Persist(config.Scenes[currentSceneIndex].Name)
+		sceneScrollRemember(config.Scenes[currentSceneIndex].Name, scrollY, textBrowserScrollY)
 	}
 	// Remember the last focused home card so returning to Home restores it.
 	if homeLayoutActive && homeLayout != nil {
@@ -6983,8 +6984,7 @@ func completeSceneTransition(config *Config) {
 	focusedResultIndex = -1
 	resetResultActions()
 	focusedFileIndex = 0
-	scrollY = 0
-	textBrowserScrollY = 0
+	scrollY, textBrowserScrollY = sceneScrollRestore(scene.Name)
 	textBrowserScrollVelocity = 0
 	textBrowserScrollCooldown = 0
 	hoveredButtonIndex = -1
@@ -7819,4 +7819,3 @@ func handleVirtualKeyboardInput(e *sdl.KeyboardEvent, config *Config) {
 		vkSubmit(config, false)
 	}
 }
-

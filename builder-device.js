@@ -223,12 +223,39 @@
     return MIXED_CONTENT_NOTE;
   }
 
+  function bytesHex(bytes) {
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // signedHeaders is the pairing proof: an HMAC of the method, path, body
+  // digest, timestamp and a one-time nonce, keyed by the code. The code itself
+  // is never a header, so a packet capture cannot replay it.
+  async function signedHeaders(method, path, body) {
+    if (!state.code) return {};
+    if (!globalThis.crypto || !crypto.subtle) {
+      throw new Error('This browser cannot sign the pairing request (WebCrypto is unavailable).');
+    }
+    const enc = new TextEncoder();
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const nonce = bytesHex(crypto.getRandomValues(new Uint8Array(16)));
+    const bodyBytes = body === undefined || body === null ? new Uint8Array(0) : enc.encode(String(body));
+    const digest = bytesHex(await crypto.subtle.digest('SHA-256', bodyBytes));
+    const key = await crypto.subtle.importKey('raw', enc.encode(state.code), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const message = String(method || 'GET').toUpperCase() + '\n' + path + '\n' + timestamp + '\n' + nonce + '\n' + digest;
+    const signature = bytesHex(await crypto.subtle.sign('HMAC', key, enc.encode(message)));
+    return {
+      'X-Live-Builder-Timestamp': timestamp,
+      'X-Live-Builder-Nonce': nonce,
+      'X-Live-Builder-Signature': signature
+    };
+  }
+
   async function request(path, options) {
     const opts = Object.assign({}, options || {});
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
     const headers = Object.assign({}, opts.headers || {});
-    if (state.code) headers['X-Live-Builder-Code'] = state.code;
+    if (state.code) Object.assign(headers, await signedHeaders(opts.method, path, opts.body));
     try {
       const response = await fetch(state.url + path, Object.assign({}, opts, {
         headers,

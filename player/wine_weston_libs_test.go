@@ -147,6 +147,132 @@ func TestWestonModuleLibsLeavesARealCopyAlone(t *testing.T) {
 	}
 }
 
+// TestWestonModuleLibsCompletesAnOldZlib is the launch of JH-6G5TZF and
+// JH-2S4CSH: nothing is missing — the firmware's zlib 1.2.8 is there — but
+// WestonPack's libpng16 asks it for inflateValidate, which zlib 1.2.9 added,
+// so Weston stopped at "undefined symbol: inflateValidate, version
+// ZLIB_1.2.9". The shim answers that one call, defines every name in zlib's
+// version table, and keeps the firmware's file underneath in DT_NEEDED so
+// every other call is still the firmware's own code.
+func TestWestonModuleLibsCompletesAnOldZlib(t *testing.T) {
+	root, stubDir := t.TempDir(), filepath.Join(t.TempDir(), westonStubDirName)
+	westonTestPack(t, root, map[string]testELF{
+		"xwayland.so": {machine: elf.EM_AARCH64, needed: []string{"libcairo.so.2"}},
+	})
+	// The image's libcairo links the libpng that does the asking, two
+	// libraries below the module.
+	tree := filepath.Join(root, "lib_aarch64")
+	writeTestFile(t, filepath.Join(tree, "libcairo.so.2"), buildTestELF(t, testELF{
+		machine: elf.EM_AARCH64, soname: "libcairo.so.2", needed: []string{"libpng16.so.16"},
+	}))
+	writeTestFile(t, filepath.Join(tree, "libpng16.so.16"), buildTestELF(t, testELF{
+		machine: elf.EM_AARCH64, soname: "libpng16.so.16", needed: []string{"libz.so.1"},
+		needs: map[string][]string{"libz.so.1": {"ZLIB_1.2.0", "ZLIB_1.2.9"}},
+		imports: []testImport{
+			{name: "inflate", version: "ZLIB_1.2.0"},
+			{name: "inflateValidate", version: "ZLIB_1.2.9"},
+		},
+	}))
+	old := filepath.Join(tree, "libz.so.1")
+	writeTestFile(t, old, buildTestELF(t, testELF{
+		machine: elf.EM_AARCH64, soname: "libz.so.1",
+		exports: []string{"inflate", "inflateInit2_", "inflateReset", "crc32"},
+	}))
+
+	// The fixture has to read the way the real libpng16 does: versioned imports
+	// from libz, two libraries below the module.
+	pack, err := elf.Open(filepath.Join(tree, "libpng16.so.16"))
+	if err != nil {
+		t.Fatalf("open the fixture's libpng16: %v", err)
+	}
+	imports := westonImportsByLib(pack)
+	_ = pack.Close()
+	if len(imports["libz.so.1"]) != 2 {
+		t.Fatalf("the fixture's imports from libz.so.1 = %v, want inflate and inflateValidate", imports["libz.so.1"])
+	}
+
+	dir, unavailable, err := westonModuleLibs(root, stubDir, westonSessionModules([]string{"headless", "noop", "kiosk", "crusty_glx_gl4es"}), nil, wineLog{})
+	if err != nil {
+		t.Fatalf("westonModuleLibs: %v", err)
+	}
+	if dir != stubDir {
+		t.Fatalf("folder = %q, want %q", dir, stubDir)
+	}
+	if len(unavailable) != 0 {
+		t.Errorf("unavailable = %q, want nothing: the library is here", unavailable)
+	}
+
+	path := filepath.Join(stubDir, "libz.so.1")
+	f, err := elf.Open(path)
+	if err != nil {
+		t.Fatalf("open the shim: %v", err)
+	}
+	defer f.Close()
+	if soname, _ := f.DynString(elf.DT_SONAME); !slices.Contains(soname, "libz.so.1") {
+		t.Errorf("soname = %v, want libz.so.1: the loader must take the shim for the firmware's library", soname)
+	}
+	if needed, _ := f.ImportedLibraries(); !slices.Equal(needed, []string{old}) {
+		t.Errorf("DT_NEEDED = %v, want the firmware's %s underneath", needed, old)
+	}
+	defs := elfVersionDefs(f)
+	for _, v := range []string{"ZLIB_1.2.0", "ZLIB_1.2.5", "ZLIB_1.2.9"} {
+		if !defs[v] {
+			t.Errorf("the shim defines %v, want %s among them", defs, v)
+		}
+	}
+	symbols, err := f.DynamicSymbols()
+	if err != nil {
+		t.Fatalf("read the shim's symbols: %v", err)
+	}
+	have := map[string]bool{}
+	for _, s := range symbols {
+		have[s.Name] = true
+	}
+	if !have["inflateValidate"] {
+		t.Errorf("the shim does not export inflateValidate")
+	}
+	if have["inflate"] {
+		t.Errorf("the shim exports inflate: the firmware's own zlib answers that call")
+	}
+
+	// A second launch keeps the file it has.
+	if again, _, err := westonModuleLibs(root, stubDir, []string{"xwayland.so"}, nil, wineLog{}); err != nil || again != stubDir {
+		t.Errorf("second look = %q, %v; want the same folder", again, err)
+	}
+}
+
+// TestWestonModuleLibsKeepsANewerZlib: a firmware whose zlib has
+// inflateValidate (1.2.9 and later) keeps its own library, and a shim an older
+// firmware needed is removed rather than shadowing it in a later session.
+func TestWestonModuleLibsKeepsANewerZlib(t *testing.T) {
+	root, stubDir := t.TempDir(), filepath.Join(t.TempDir(), westonStubDirName)
+	westonTestPack(t, root, map[string]testELF{
+		"xwayland.so": {machine: elf.EM_AARCH64, needed: []string{"libz.so.1"}},
+	})
+	writeTestFile(t, filepath.Join(root, "lib_aarch64", "libz.so.1"), buildTestELF(t, testELF{
+		machine: elf.EM_AARCH64, soname: "libz.so.1", defines: []string{"ZLIB_1.2.9"},
+		exports: []string{"inflate", "inflateValidate"},
+	}))
+	if err := os.MkdirAll(stubDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(stubDir, "libz.so.1")
+	writeTestFile(t, stale, buildTestELF(t, testELF{
+		machine: elf.EM_AARCH64, soname: "libz.so.1", exports: []string{"inflateValidate"},
+	}))
+
+	dir, _, err := westonModuleLibs(root, stubDir, westonSessionModules([]string{"headless", "noop", "kiosk", "crusty_glx_gl4es"}), nil, wineLog{})
+	if err != nil {
+		t.Fatalf("westonModuleLibs: %v", err)
+	}
+	if dir != "" {
+		t.Errorf("folder = %q, want nothing to add", dir)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Errorf("the shim of a closed gap is still in %s", stubDir)
+	}
+}
+
 // TestWestonStubCovers: a stand-in is rewritten only when it no longer answers
 // what the modules import.
 func TestWestonStubCovers(t *testing.T) {

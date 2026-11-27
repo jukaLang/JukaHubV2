@@ -250,6 +250,34 @@ to it:
   into libjpeg only where it reads an image for a capture, which no Wine
   program asks for, so the stand-in has to load, not decode; the log's
   `display: WestonPack's Weston links …` line names what it covered.
+* **A library the firmware has, but too old.** WestonPack's `libpng16.so.16`
+  — which `libcairo`, and through it `xwayland.so` and `headless-backend.so`,
+  link — asks zlib for `inflateValidate`, the one function zlib 1.2.9 added, and
+  a stock TrimUI firmware loads zlib 1.2.8: `Failed to load module: …:
+  undefined symbol: inflateValidate, version ZLIB_1.2.9`, in every mode
+  (JH-6G5TZF, JH-2S4CSH, 2026-11-27). Nothing is missing there, so a stand-in
+  for a missing library would answer nothing: zlib is used for real by libpng
+  and libcairo. Before a session JukaHub walks the libraries the mode's modules
+  load — the modules, their `DT_NEEDED`, and theirs, since the module itself
+  never names zlib — and for a library it knows how to complete writes a shim
+  into `data/windows-runtime/weston-libs` **under the firmware library's own
+  name and soname**: it defines every version name zlib ever used, exports only
+  the calls the firmware's copy does not have (`inflateValidate`, which turns on
+  a header check the PNG supplies anyway), and names the firmware's file in
+  `DT_NEEDED`, so the loader brings that file in beside the shim and every other
+  call still runs the firmware's code. A gap JukaHub cannot answer is left to
+  the loader; a shim whose gap has closed (a firmware with a newer zlib) is
+  removed, so it never shadows a newer library. The log's `display: … asks …
+  for …` line names what a session completed. A session that still stops on
+  such a gap — a library JukaHub cannot complete, or a shim that could not be
+  written — is not left as "Weston stopped while it was starting": the
+  *Couldn't launch* card reads Weston's `Failed to load module: …` line from
+  the session's log and names the function, the library that should answer it
+  and the version (`libz.so.1 is too old: no inflateValidate (ZLIB_1.2.9)`,
+  which `libpng16.so.16` needs), and the same three are the first finding of
+  the report (`wine_weston_cause.go`). The library is the one the failing
+  module's own version needs name for that version, so a report says which of
+  the firmware's libraries is old, not just that the loader failed.
 * **Input devices.** The stock firmware's udev has no `input_id` rule, and
   Weston ignores every input device udev did not tag — it then does not start
   at all. Before the first Windows program after a restart, JukaHub adds that

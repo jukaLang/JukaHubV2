@@ -100,10 +100,10 @@ jobs:
         # fresh on every run anyway, so the pin costs no coverage.
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - name: Scan the player
-        # Advisory: the scan includes the standard library of whichever
-        # toolchain go.mod selects, so a fresh Go patch release can turn it red
-        # without any change here; the fix for that is a toolchain bump.
-        continue-on-error: true
+        # Blocking for reachable findings: the default source/call-graph scan
+        # only reports vulnerabilities code here can actually reach. Do not
+        # switch to -scan=module, which would also fail on unreachable
+        # advisories in the standard library or a transitive dependency.
         run: govulncheck ./...
 
   fuzz:

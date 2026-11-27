@@ -94,7 +94,7 @@ func ensureToolsHubScene(config *Config) {
 	if config == nil {
 		return
 	}
-	toolsHubRetireMisc(config)
+
 	toolsHubEnsureScenes(config)
 	// The three pages are drawn and driven by Go. A button another feature
 	// injected into one of them would win the keyboard from the page (the
@@ -143,39 +143,6 @@ func toolsHubEnsureScene(config *Config, name, icon, description string) {
 		Description: description,
 	})
 }
-
-// toolsHubRetireMisc points every "change_scene:Misc" (and the old
-// "tools_open" overlay trigger) at the hub and removes the Misc scene. It only
-// runs on a config that is not on screen yet — at startup, before the first
-// scene is chosen, and on a freshly loaded reload, whose current scene is then
-// found again by name — so no live scene index points into the shortened list.
-//
-// remove after 2027-05-01: an upgrade shim for configs from 0.4.0.
-func toolsHubRetireMisc(config *Config) {
-	for si := range config.Scenes {
-		elems := config.Scenes[si].Elements
-		for ei := range elems {
-			e := &elems[ei]
-			if e.Trigger == "change_scene:"+toolsHubLegacyScene || e.Trigger == "tools_open" {
-				e.Trigger = "change_scene:" + toolsHubSceneName
-				e.TriggerTarget = toolsHubSceneName
-			}
-			// The loader copies the target into TriggerTarget (and the builder
-			// writes SceneChange), so both spellings follow the trigger.
-			if e.TriggerTarget == toolsHubLegacyScene &&
-				(e.Trigger == "change_scene" || e.Trigger == "change_scene:"+toolsHubSceneName) {
-				e.TriggerTarget = toolsHubSceneName
-			}
-			if e.SceneChange == toolsHubLegacyScene {
-				e.SceneChange = toolsHubSceneName
-			}
-		}
-	}
-	if idx := sceneIndexExact(config, toolsHubLegacyScene); idx >= 0 {
-		config.Scenes = append(config.Scenes[:idx], config.Scenes[idx+1:]...)
-	}
-}
-
 // toolsHubOpen opens the Tools hub at its top (cross-area contract: Home, the
 // Start menu, the "tools_open" trigger and every other entry point call it).
 // Coming back from a tool goes through the scene history instead and keeps

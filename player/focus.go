@@ -151,6 +151,10 @@ func chromeTier(idx int) int {
 	return 0
 }
 
+// focusPersistMax bounds the per-scene focus map: a long session visits more
+// transient scenes than a small card needs to remember.
+const focusPersistMax = 128
+
 // FocusGraph is the explicit focus graph for one scene.
 type FocusGraph struct {
 	Nodes []FocusNode
@@ -164,6 +168,7 @@ type FocusEngine struct {
 	scene        string         // scene name the installed graph was built for
 	current      int            // index into graph.Nodes (-1 = none)
 	persistFocus map[string]int // scene name -> last focused element index
+	persistOrder []string       // insertion order, for the bounded eviction
 	mu           sync.RWMutex
 }
 
@@ -171,6 +176,7 @@ type FocusEngine struct {
 func NewFocusEngine() *FocusEngine {
 	return &FocusEngine{
 		persistFocus: make(map[string]int),
+		persistOrder: make([]string, 0, focusPersistMax),
 	}
 }
 
@@ -601,9 +607,21 @@ func (fe *FocusEngine) ScanStep(delta int) int {
 func (fe *FocusEngine) Persist(sceneName string) {
 	fe.mu.Lock()
 	defer fe.mu.Unlock()
-	if fe.graph != nil && fe.current >= 0 && fe.current < len(fe.graph.Nodes) {
-		fe.persistFocus[sceneName] = fe.graph.Nodes[fe.current].Index
+	if fe.graph == nil || fe.current < 0 || fe.current >= len(fe.graph.Nodes) {
+		return
 	}
+	if fe.persistFocus == nil {
+		fe.persistFocus = make(map[string]int)
+	}
+	if _, seen := fe.persistFocus[sceneName]; !seen {
+		fe.persistOrder = append(fe.persistOrder, sceneName)
+		if len(fe.persistOrder) > focusPersistMax {
+			oldest := fe.persistOrder[0]
+			fe.persistOrder = fe.persistOrder[1:]
+			delete(fe.persistFocus, oldest)
+		}
+	}
+	fe.persistFocus[sceneName] = fe.graph.Nodes[fe.current].Index
 }
 
 // Restore reloads persisted focus for the given scene name (no-op if graph not set).
@@ -628,6 +646,7 @@ func (fe *FocusEngine) Restore(sceneName string) {
 func (fe *FocusEngine) Clear() {
 	fe.mu.Lock()
 	fe.persistFocus = make(map[string]int)
+	fe.persistOrder = nil
 	fe.mu.Unlock()
 }
 

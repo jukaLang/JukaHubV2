@@ -16,6 +16,7 @@ import "github.com/veandco/go-sdl2/sdl"
 // keeping config.Variables.Fullscreen in step with what is on screen so the next
 // start (and the settings row) reads the same value.
 func applyFullscreen(config *Config, on bool) {
+	wasFullscreen := mainWindow != nil && mainWindow.GetFlags()&sdl.WINDOW_FULLSCREEN != 0
 	if config != nil {
 		config.Variables.Fullscreen = on
 	}
@@ -23,8 +24,19 @@ func applyFullscreen(config *Config, on bool) {
 		return
 	}
 	if on {
+		// Keep the windowed geometry: coming back from F11 must land where
+		// the user left it, not centred on a monitor that may have changed.
+		if !wasFullscreen {
+			rememberWindowRect(config, mainWindow)
+		}
 		mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
-		return
+	} else {
+		mainWindow.SetFullscreen(0)
+		if wasFullscreen {
+			rememberWindowRect(config, mainWindow)
+		}
 	}
-	mainWindow.SetFullscreen(0)
+	if config != nil {
+		syncVariableOverrides(config)
+	}
 }

@@ -71,6 +71,17 @@ type powerProfileConfig struct {
 	BatteryGovernor string
 	MaxFreqKHz      int64
 	Balanced        bool
+	// OnBattery and OnCharger are the profiles a launch uses when the
+	// handheld is running from that source. A game's own profile wins over
+	// its system's, which wins over the source, which wins over the global
+	// setting. Empty means "no opinion".
+	OnBattery string
+	OnCharger string
+	// SystemProfiles maps a library system name (lower case) to one of
+	// gameCPUProfiles. Per-system settings are edited in the config's custom
+	// values (powerProfileSystems) and shown, when they apply, in the game
+	// options sheet's CPU profile row.
+	SystemProfiles map[string]string
 }
 
 // loadPowerProfileConfig reads the custom keys. The feature is on by default:
@@ -91,6 +102,79 @@ func loadPowerProfileConfig(config *Config) powerProfileConfig {
 	}
 	if v, ok := customValue(config.Variables.Custom, "powerProfileMaxFreq"); ok {
 		cfg.MaxFreqKHz = parseProfileMaxFreqKHz(v)
+	}
+	if v, ok := customString(config.Variables.Custom, "powerProfileOnBattery"); ok {
+		cfg.OnBattery = normaliseGameCPUProfile(v)
+	}
+	if v, ok := customString(config.Variables.Custom, "powerProfileOnCharger"); ok {
+		cfg.OnCharger = normaliseGameCPUProfile(v)
+	}
+	if v, ok := customValue(config.Variables.Custom, "powerProfileSystems"); ok {
+		cfg.SystemProfiles = parsePowerProfileSystems(v)
+	}
+	return cfg
+}
+
+// parsePowerProfileSystems reads the per-system table. The config editor
+// writes a JSON object; a hand-typed custom value may also be
+// "PSP=performance; GBA=balanced". Unknown profiles are dropped rather than
+// left to switch a launch to something no code can apply.
+func parsePowerProfileSystems(v interface{}) map[string]string {
+	out := map[string]string{}
+	put := func(system, profile string) {
+		system = strings.ToLower(strings.TrimSpace(system))
+		profile = normaliseGameCPUProfile(profile)
+		if system != "" && profile != "" {
+			out[system] = profile
+		}
+	}
+	switch t := v.(type) {
+	case map[string]string:
+		for system, profile := range t {
+			put(system, profile)
+		}
+	case map[string]interface{}:
+		for system, raw := range t {
+			if profile, ok := raw.(string); ok {
+				put(system, profile)
+			}
+		}
+	case string:
+		var m map[string]interface{}
+		if json.Unmarshal([]byte(t), &m) == nil {
+			for system, raw := range m {
+				if profile, ok := raw.(string); ok {
+					put(system, profile)
+				}
+			}
+			return out
+		}
+		for _, part := range strings.FieldsFunc(t, func(r rune) bool { return r == ';' || r == ',' || r == '\n' }) {
+			system, profile, ok := strings.Cut(part, "=")
+			if ok {
+				put(system, profile)
+			}
+		}
+	}
+	return out
+}
+
+// applyNamedPowerProfile starts from the global profile and applies one named
+// profile. It does not merge with a less specific profile: the most specific
+// one wins as a whole, so a system's Balanced does not inherit the battery
+// source's 1.2 GHz ceiling.
+func applyNamedPowerProfile(cfg powerProfileConfig, profile string) powerProfileConfig {
+	switch normaliseGameCPUProfile(profile) {
+	case "performance":
+		cfg.Balanced = false
+		cfg.MaxFreqKHz = 0
+	case "balanced":
+		cfg.Balanced = true
+	case "battery":
+		cfg.Balanced = true
+		if cfg.MaxFreqKHz <= 0 || cfg.MaxFreqKHz > gameCPUBatteryCeilingKHz {
+			cfg.MaxFreqKHz = gameCPUBatteryCeilingKHz
+		}
 	}
 	return cfg
 }
@@ -616,11 +700,68 @@ func beginLaunchPowerProfile(config *Config, target string) func() {
 		cfg = xboxBoostPowerConfig(cfg)
 	}
 	if strings.TrimSpace(target) != "" {
-		cfg = gameLaunchPowerConfig(cfg, gameOptionsFor(target))
+		onBattery, sourceKnown := powerSourceState()
+		cfg, _ = launchPowerProfileConfig(cfg, gameOptionsFor(target), powerLaunchSystem(target), onBattery, sourceKnown)
 	}
 	// Auto performance (autoperf.go) follows this game by its ROM path.
 	autoPerfLaunchBegin(target)
 	return beginGamePowerProfileWith(cfg)
+}
+
+// powerLaunchSystem names the library system a target belongs to, or "". The
+// path alone is enough: filesROMSystem reads Roms/<console> and its extension
+// map without touching the card, so this is safe on the launch path.
+func powerLaunchSystem(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	return filesROMSystem(target)
+}
+
+// powerSourceState says whether the device is running from its battery. known
+// is false on a desktop (no battery reading), where neither source profile
+// should apply.
+func powerSourceState() (onBattery, known bool) {
+	if getBatteryPercent() < 0 {
+		return false, false
+	}
+	return !getBatteryCharging(), true
+}
+
+// effectivePowerProfile chooses the single profile a launch uses, from most
+// specific to least: the game's own, its library system's, the power source's,
+// then the global setting (""). origin names the winner for the options sheet.
+func effectivePowerProfile(cfg powerProfileConfig, opts gameOptions, system string, onBattery, sourceKnown bool) (profile, origin string) {
+	if p := normaliseGameCPUProfile(opts.CPUProfile); p != "" {
+		return p, "this game"
+	}
+	if system != "" {
+		if p := cfg.SystemProfiles[strings.ToLower(strings.TrimSpace(system))]; p != "" {
+			return p, system
+		}
+	}
+	if sourceKnown {
+		if onBattery && cfg.OnBattery != "" {
+			return cfg.OnBattery, "on battery"
+		}
+		if !onBattery && cfg.OnCharger != "" {
+			return cfg.OnCharger, "on charger"
+		}
+	}
+	return "", "global"
+}
+
+// launchPowerProfileConfig folds the most specific profile into the global
+// profile, then applies the game's own frequency limit last. It returns the
+// config to apply and where the profile came from, for the game options sheet.
+func launchPowerProfileConfig(cfg powerProfileConfig, opts gameOptions, system string, onBattery, sourceKnown bool) (powerProfileConfig, string) {
+	profile, origin := effectivePowerProfile(cfg, opts, system, onBattery, sourceKnown)
+	cfg = applyNamedPowerProfile(cfg, profile)
+	if opts.MaxFreqKHz > 0 {
+		cfg.MaxFreqKHz = opts.MaxFreqKHz
+	}
+	return cfg, origin
 }
 
 // beginGamePowerProfileWith applies an already-loaded profile. Keeping the

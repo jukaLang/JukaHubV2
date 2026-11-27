@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -94,8 +96,46 @@ var (
 	notesOpenNow atomic.Int64
 )
 
+// notesDataDir is the folder the notes store travels in: a normal Save Sync
+// root (saveRootsFor), separate from the files a note is exported to.
+var notesDataDirOverride string
+
+func notesDataDir() string {
+	if notesDataDirOverride != "" {
+		return notesDataDirOverride
+	}
+	if dir, err := P().DataDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "notes")
+	}
+	return filepath.Join("data", "notes")
+}
+
+func notesStorePath() string { return filepath.Join(notesDataDir(), "notes.json") }
+
+// notesMigrateLegacy copies the old notes.json beside the app into the sync
+// folder once. The old file is left where it is: it is the player's data, and
+// a read-only card must not turn a migration into a deletion.
+func notesMigrateLegacy() {
+	if fileExists(notes.storePath) {
+		return
+	}
+	data, err := os.ReadFile("notes.json")
+	if err != nil {
+		return
+	}
+	if err := AtomicWrite(notes.storePath, data, 0o644); err != nil {
+		logWarn("notes", "could not move the old notes store into the sync folder: %v", err)
+		return
+	}
+	logInfo("notes", "moved notes.json into the sync folder %s", notesDataDir())
+}
+
 func notesInit() {
-	notes.storePath = "notes.json"
+	notes.storePath = notesStorePath()
+	if err := os.MkdirAll(notesDataDir(), 0o755); err != nil {
+		logWarn("notes", "could not create the notes sync folder: %v", err)
+	}
+	notesMigrateLegacy()
 	notesLoad()
 	notesMu.Lock()
 	if len(notes.store.Folders) == 0 {
@@ -441,6 +481,28 @@ const (
 	notesStyleCode
 )
 
+// notesCheckboxShown turns a task-list line into its reader form. The glyph
+// replacement is three runes wide ("☐  "/"☑  ") exactly like "[ ]"/"[x]", so
+// the line's rune offsets still point into the body for the caret.
+func notesCheckboxShown(para string) (string, bool) {
+	if len(para) < 5 || (para[0] != '-' && para[0] != '*') || para[1] != ' ' {
+		return "", false
+	}
+	rest := para[2:]
+	if len(rest) < 3 || rest[0] != '[' || rest[2] != ']' {
+		return "", false
+	}
+	mark := "☐  "
+	switch rest[1] {
+	case 'x', 'X':
+		mark = "☑  "
+	case ' ':
+	default:
+		return "", false
+	}
+	return "• " + mark + rest[3:], true
+}
+
 // notesBodyLine is one line of the body as drawn: where its first character
 // is in the body (runes), how many runes it has, its text as shown ("- "
 // shown as "• ", the same length) and its paragraph's style.
@@ -537,7 +599,9 @@ func notesLayoutBody(font, head *ttf.Font, text string, width int32) []notesBody
 			style = notesStyleQuote
 		}
 		shown := para
-		if style == notesStyleBullet {
+		if box, ok := notesCheckboxShown(para); ok {
+			style, shown = notesStyleBullet, box
+		} else if style == notesStyleBullet {
 			shown = "• " + para[2:]
 		}
 		f := font

@@ -804,6 +804,10 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	// written as they come and synced once, just before the game starts
 	// (racfgscope.go), and the card reads ahead for the game's first seconds.
 	defer fastStartPrepare(game, launcher)()
+	// DraStic, Flycast and Mednafen save a state as they quit only when their
+	// own option is on; turn it on for this launch and put it back after the
+	// game (standalonesave.go).
+	prepareStandaloneSaveOnExit(launcher, nil)
 	// A RetroArch launcher gets the two cfg switches that make the next boot
 	// continue from the auto state, plus the folder its own record toggle
 	// writes captures to, so the Recordings screen can list them. Standalone
@@ -1167,4 +1171,3 @@ func recordGameRecent(game libraryGame) []recentGame {
 	homeConsoleRecordGame(game.Path)
 	return append([]recentGame(nil), next...)
 }
-

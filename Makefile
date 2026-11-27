@@ -61,7 +61,7 @@ WEB_SCRIPTS := builder-icons.js script.js builder-device.js builder-gallery.js g
 
 .PHONY: help dev build helpdocs run test test-web e2e vet fmt fmt-check lint bench web \
         release os-package jukaboot clean check coverage workflows docs-links backlog-check deadcode-scan test-scripts test-spatialfx \
-        vendor-sync
+        test-packaging vendor-sync
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -176,6 +176,9 @@ backlog-check: ## Check the open task count, IDs and local anchors
 deadcode-scan: ## Catch test-only player functions with no documented purpose
 	@$(PYTHON) tests/scripts/deadcode-scan.py $(PLAYER)
 
+test-packaging: ## Check the Windows installer/manifest generator against synthetic release inputs
+	@$(PYTHON) packaging/windows/test_generate.py
+
 test-scripts: ## Check the CI helper scripts (tampered archives refused, release-cache provenance, TrimUI build); CI runs it weekly
 	@bash tests/scripts/install-sdl-mingw.test.sh
 	@bash tests/scripts/go-build-cache.test.sh
@@ -186,5 +189,5 @@ test-scripts: ## Check the CI helper scripts (tampered archives refused, release
 test-spatialfx: ## Check the game-audio plugin against its DSP spec (Linux, gcc)
 	@if [ "$$(uname -s 2>/dev/null)" = Linux ]; then sh $(PLAYER)/spatialfx/tests/run-tests.sh >/dev/null && echo "test-spatialfx: ok"; else echo "test-spatialfx: skipped (Linux only)"; fi
 
-check: lint test test-web workflows docs-links backlog-check deadcode-scan ## Run local lint and tests (no browser needed); ESLint is skipped by lint until test-web installs it
+check: lint test test-web workflows docs-links backlog-check deadcode-scan test-packaging ## Run local lint and tests (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

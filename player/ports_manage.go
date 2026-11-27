@@ -436,22 +436,18 @@ func portWhyReport(name, script string) gameDiagReport {
 	if meta.Dir != "" {
 		haveData := false
 		for _, is := range report.Issues {
-			if is.Title == "The game's own files are not there yet" {
+			if gameDiagIsPortDataTitle(is.Title) {
 				haveData = true
 				break
 			}
 		}
-		folder, sub := portGameDataFolder(meta.Dir)
+		folder, _ := portGameDataFolder(meta.Dir)
 		if !haveData && !gameDiagDirHasGameFiles(folder, 2) {
-			what := "the port's folder"
-			if sub != "" {
-				what = "its " + sub + " folder"
-			}
 			report.Issues = append(report.Issues, launchIssue{
 				Level:  int(gameDiagMaybe),
 				Title:  "Where its game files go",
 				Where:  folder,
-				Detail: "This port runs the original game's data. Copy the game's own files into " + what + " on the card (" + gameDiagPortCardPath(folder) + "), keeping the folders they come in, then start the port again.",
+				Detail: gameDiagPortDataDetail(folder, ""),
 			})
 		}
 	}

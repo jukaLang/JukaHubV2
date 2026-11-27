@@ -155,7 +155,7 @@ func voiceFold(raw string) string {
 
 // voiceWakeWords open a command and carry no meaning. "juka land" is a game,
 // so a bare "juka" is only dropped when it is not the start of a name.
-var voiceWakeWords = [...]string{"hey", "hi", "hello", "ok", "okay", "yo"}
+var voiceWakeWords = [...]string{"hey", "hi", "hello", "ok", "okay", "yo", "hola", "oye"}
 
 // voiceSoundAlikes fix the names speech recognition hears wrong most often:
 // JukaHub's own name first. Word for word, applied after folding.
@@ -183,9 +183,11 @@ var (
 		"i want to", "i wanna", "i would like to", "i need to", "i would like", "let me", "let us",
 		"lets", "go ahead and", "just", "now", "quickly", "kindly", "and",
 		"um", "uh", "uhm", "umm", "er", "erm", "hmm", "so", "well", "alright", "all right", "okay so",
+		"por favor", "puedes", "podrias", "quieres", "quiero", "quisiera", "me gustaria", "ayudame a", "anda",
 	}
 	voicePoliteSuffixes = [...]string{
 		"please", "for me", "now", "right now", "thanks", "thank you", "if you can", "if you could",
+		"por favor", "gracias",
 	}
 )
 
@@ -421,10 +423,59 @@ var (
 	voiceMinWords  = voiceSet("min", "minimum", "lowest", "all the way down", "zero", "darkest")
 )
 
-// voiceParse reads one command.
+// voiceSpanishEnglish rewrites the folded Spanish commands JukaHub knows into
+// the English phrase shapes below. The grammar stays one table; a second
+// language is a translation in front of it, not a second parser. Longer
+// phrases come first, so "sube el volumen" does not become "up the volume".
+func voiceSpanishEnglish(s string) string {
+	s = strings.NewReplacer("á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ü", "u", "ñ", "n", "Á", "a", "É", "e", "Í", "i", "Ó", "o", "Ú", "u", "Ü", "u", "Ñ", "n").Replace(s)
+	for _, p := range [...][2]string{
+		{"abre el", "open the"}, {"abre la", "open the"}, {"abre los", "open the"}, {"abre las", "open the"},
+		{"abrir el", "open the"}, {"abrir la", "open the"}, {"abre", "open"}, {"abrir", "open"},
+		{"juega a", "play"}, {"jugar a", "play"}, {"juega", "play"}, {"jugar", "play"}, {"reproduce", "play"},
+		{"busca en internet", "search the web for"}, {"busca en la web", "search the web for"},
+		{"busca en google", "google"}, {"buscar en internet", "search the web for"},
+		{"busca", "search for"}, {"buscar", "search for"},
+		{"sube el volumen", "volume up"}, {"sube volumen", "volume up"}, {"aumenta el volumen", "volume up"},
+		{"baja el volumen", "volume down"}, {"baja volumen", "volume down"}, {"reduce el volumen", "volume down"},
+		{"pon el volumen al", "volume"}, {"volumen al", "volume"}, {"sube", "up"}, {"baja", "down"},
+		{"quita el silencio", "unmute"}, {"activa el sonido", "unmute"}, {"silencia", "mute"}, {"silenciar", "mute"},
+		{"que hora es", "what time is it"}, {"hora es", "what time is it"},
+		{"que fecha es", "what is the date"}, {"fecha es", "what is the date"},
+		{"nivel de bateria", "battery level"}, {"bateria", "battery"},
+		{"captura de pantalla", "screenshot"}, {"hacer captura", "screenshot"},
+		{"pantalla de inicio", "home screen"}, {"inicio", "home"},
+		{"atras", "back"}, {"volver", "back"}, {"regresar", "back"},
+		{"siguiente cancion", "next song"}, {"cancion siguiente", "next song"}, {"siguiente", "next"},
+		{"cancion anterior", "previous song"}, {"anterior", "previous"},
+		{"pausar", "pause"}, {"pausa", "pause"}, {"reanudar", "resume"}, {"reanuda", "resume"}, {"continuar", "resume"},
+		{"apaga la pantalla", "screen off"}, {"bloquear pantalla", "lock screen"},
+		{"cierra todo", "close all"}, {"cerrar todo", "close all"},
+		{"configuracion rapida", "quick settings"}, {"ajustes rapidos", "quick settings"}, {"centro de control", "control center"},
+		{"modo avion", "airplane mode"}, {"apaga", "off"}, {"desactiva", "off"}, {"enciende", "on"}, {"activa", "on"},
+		{"salir", "quit"}, {"cerrar jukahub", "close jukahub"},
+		{"el", "the"}, {"la", "the"}, {"los", "the"}, {"las", "the"}, {"un", "a"}, {"una", "a"},
+	} {
+		s = strings.TrimSpace(strings.ReplaceAll(" "+s+" ", " "+p[0]+" ", " "+p[1]+" "))
+	}
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// voiceCommandLanguage is the language Whisper is asked for: the keyboard's
+// layout language when it is one of the command languages, English otherwise.
+var voiceCommandLanguageFn = func() string {
+	if l := vkCurrentLayout(); l != nil && strings.HasPrefix(strings.ToLower(l.Lang), "es") {
+		return "es"
+	}
+	return "en"
+}
+
+func voiceCommandLanguage() string { return voiceCommandLanguageFn() }
+
 func voiceParse(raw string) voiceIntent {
-	s := voiceNormalize(raw)
-	in := voiceIntent{Heard: s}
+	heard := voiceNormalize(raw)
+	s := voiceSpanishEnglish(heard)
+	in := voiceIntent{Heard: heard}
 	if s == "" {
 		return in
 	}

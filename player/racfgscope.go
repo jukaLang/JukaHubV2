@@ -84,13 +84,17 @@ const (
 	raScopeBatchMax = 20 * time.Second
 )
 
-// raScopeEdit is one key JukaHub changed in one config for a launch.
+// raScopeEdit is one key JukaHub changed in one config for a launch. Format
+// is empty for RetroArch's `key = "value"`; a standalone emulator's syntax
+// (standalonesave.go) names its own format so the restore writes it back the
+// same way. Journals written before Format existed restore as RetroArch.
 type raScopeEdit struct {
-	Path   string `json:"path"`
-	Key    string `json:"key"`
-	Had    bool   `json:"had"`
-	Before string `json:"before,omitempty"`
-	Wrote  string `json:"wrote"`
+	Path   string         `json:"path"`
+	Key    string         `json:"key"`
+	Had    bool           `json:"had"`
+	Before string         `json:"before,omitempty"`
+	Wrote  string         `json:"wrote"`
+	Format raConfigFormat `json:"format,omitempty"`
 }
 
 // raScopeJournal is the file the edits are recorded in.
@@ -307,26 +311,36 @@ func raConfigUnset(cfg, key string) (string, bool) {
 // differ from what the file holds now, with what it holds (or that it holds
 // nothing) as the value to put back.
 func raScopePlan(cfg, path string, values []raScopeValue) []raScopeEdit {
+	return raScopePlanFormat(cfg, path, values, raFormatRetroArch)
+}
+
+// raScopePlanFormat is raScopePlan for one config syntax.
+func raScopePlanFormat(cfg, path string, values []raScopeValue, format raConfigFormat) []raScopeEdit {
 	var edits []raScopeEdit
 	for _, v := range values {
-		before, had := raConfigGet(cfg, v.Key)
+		before, had := configGetIn(cfg, v.Key, format)
 		if (had && raValueEqual(before, v.Value)) || raScopeSkips(cfg, v) {
 			continue
 		}
-		edits = append(edits, raScopeEdit{Path: path, Key: v.Key, Had: had, Before: before, Wrote: v.Value})
+		edits = append(edits, raScopeEdit{Path: path, Key: v.Key, Had: had, Before: before, Wrote: v.Value, Format: format})
 	}
 	return edits
 }
 
 // raScopeApplyText writes the launch's values into one config's text.
 func raScopeApplyText(cfg string, values []raScopeValue) (string, bool) {
+	return raScopeApplyTextFormat(cfg, values, raFormatRetroArch)
+}
+
+// raScopeApplyTextFormat is raScopeApplyText for one config syntax.
+func raScopeApplyTextFormat(cfg string, values []raScopeValue, format raConfigFormat) (string, bool) {
 	changed := false
 	for _, v := range values {
 		if raScopeSkips(cfg, v) {
 			continue
 		}
 		var step bool
-		cfg, step = raConfigSet(cfg, v.Key, v.Value)
+		cfg, step = configSetIn(cfg, v.Key, v.Value, format)
 		changed = changed || step
 	}
 	return cfg, changed
@@ -336,17 +350,23 @@ func raScopeApplyText(cfg string, values []raScopeValue) (string, bool) {
 // key that no longer holds what JukaHub wrote was changed since — in
 // RetroArch's own menu during the game, or by the user — and is left alone.
 func raScopeRestoreText(cfg string, edits []raScopeEdit) (string, bool) {
+	return raScopeRestoreTextAny(cfg, edits)
+}
+
+// raScopeRestoreTextAny is raScopeRestoreText for a journal that can hold
+// several config syntaxes (RetroArch and the standalone emulators).
+func raScopeRestoreTextAny(cfg string, edits []raScopeEdit) (string, bool) {
 	changed := false
 	for _, e := range edits {
-		current, has := raConfigGet(cfg, e.Key)
+		current, has := configGetIn(cfg, e.Key, e.Format)
 		if !has || !raValueEqual(current, e.Wrote) {
 			continue
 		}
 		var step bool
 		if e.Had {
-			cfg, step = raConfigSet(cfg, e.Key, e.Before)
+			cfg, step = configSetIn(cfg, e.Key, e.Before, e.Format)
 		} else {
-			cfg, step = raConfigUnset(cfg, e.Key)
+			cfg, step = configUnsetIn(cfg, e.Key, e.Format)
 		}
 		changed = changed || step
 	}
@@ -367,7 +387,7 @@ func raScopeNoteKept(cfg string, edits []raScopeEdit) {
 		return
 	}
 	for _, e := range edits {
-		if current, has := raConfigGet(cfg, e.Key); has && !raValueEqual(current, e.Wrote) {
+		if current, has := configGetIn(cfg, e.Key, e.Format); has && !raValueEqual(current, e.Wrote) {
 			hook(e, current)
 		}
 	}
@@ -601,13 +621,18 @@ func raScopeSaveJournalLocked(journal raScopeJournal, durable bool) error {
 // that cannot be written means no edit at all — an edit nobody could undo is
 // the bug this file exists to remove.
 func raScopeApply(path string, values []raScopeValue) (bool, error) {
+	return raScopeApplyFormat(path, values, raFormatRetroArch)
+}
+
+// raScopeApplyFormat is raScopeApply for one config syntax (standalonesave.go).
+func raScopeApplyFormat(path string, values []raScopeValue, format raConfigFormat) (bool, error) {
 	raScope.mu.Lock()
 	defer raScope.mu.Unlock()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
 	}
-	edits := raScopePlan(string(raw), path, values)
+	edits := raScopePlanFormat(string(raw), path, values, format)
 	if len(edits) == 0 {
 		return false, nil
 	}
@@ -626,7 +651,7 @@ func raScopeApply(path string, values []raScopeValue) (bool, error) {
 		raScopeBatch.journal = true
 	}
 	changed, err := editRetroArchConfigWith(path, func(cfg string) (string, bool) {
-		return raScopeApplyText(cfg, values)
+		return raScopeApplyTextFormat(cfg, values, format)
 	}, !batched)
 	if err != nil {
 		return false, err
@@ -805,7 +830,7 @@ func raScopeRestoreLocked() (int, error) {
 		}
 		changed, err := editRetroArchConfig(path, func(cfg string) (string, bool) {
 			raScopeNoteKept(cfg, edits)
-			return raScopeRestoreText(cfg, edits)
+			return raScopeRestoreTextAny(cfg, edits)
 		})
 		if err != nil {
 			remaining = append(remaining, edits...)

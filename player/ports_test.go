@@ -401,6 +401,11 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 		{script + ": line 5: $1: unbound variable", "A script stopped on a variable that was not set"},
 		{"Data/ports/hakux-disc/launch.sh: 5: $1: parameter not set", "A script stopped on a variable that was not set"},
 		{"/roms/ports/PortMaster/control.txt: line 30: XDG_DATA_HOME: unbound variable", "A script stopped on a variable that was not set"},
+		// BusyBox refuses a bash builtin's option as `file: export: line 75:
+		// illegal option -f` (JH-AN6U7W: OldBits Hub's `export -f`), naming a
+		// card path that holds a space.
+		{`/mnt/SDCARD/Roms/Ports/OldBits Hub.sh: export: line 75: illegal option -f`, "It ran under BusyBox's sh, not bash"},
+		{"sh: set: line 9: illegal option -o pipefail", "It ran under BusyBox's sh, not bash"},
 	} {
 		if got := titles(c.line); got != c.want {
 			t.Errorf("%q: got %q, want %q", c.line, got, c.want)
@@ -415,6 +420,120 @@ func TestPortQuickExitLogFindings(t *testing.T) {
 	good := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39) — /bin/bash cannot run bash arrays"}
 	if issues, _, _ := gameDiagPortLogFindings(good, []string{`/x/device_info.txt: line 12: syntax error: unexpected "("`}, script); len(issues) != 0 {
 		t.Errorf("BusyBox blamed under a working bash: %+v", issues)
+	}
+	// The bash note says what JukaHub supplied. A firmware launcher runs the
+	// port with its own `/bin/sh`, which that note does not cover, so the
+	// port's own script meeting BusyBox is a cause there (JH-AN6U7W).
+	busy := script + ": export: line 75: illegal option -f"
+	viaFW := append(append([]string(nil), good...), "through the firmware's Ports launcher /mnt/SDCARD/Emus/PORTS/launch_balanced.sh")
+	if issues, _, _ := gameDiagPortLogFindings(viaFW, []string{busy}, script); len(issues) != 1 ||
+		issues[0].Title != "It ran under BusyBox's sh, not bash" {
+		t.Errorf("BusyBox under the firmware launcher: %+v", issues)
+	} else if !strings.Contains(issues[0].Detail, "Try it directly") {
+		t.Errorf("launcher detail = %q", issues[0].Detail)
+	}
+	if issues, _, _ := gameDiagPortLogFindings(good, []string{busy}, script); len(issues) != 0 {
+		t.Errorf("BusyBox blamed when JukaHub's bash ran the port: %+v", issues)
+	}
+	if got := gameDiagPortLineFile(`/mnt/SDCARD/Roms/Ports/OldBits Hub.sh: export: line 75: illegal option -f`); got != "/mnt/SDCARD/Roms/Ports/OldBits Hub.sh" {
+		t.Errorf("file of a BusyBox builtin error = %q", got)
+	}
+}
+
+// A port whose log holds an error JukaHub knows nothing specific about still
+// gets a cause, so its card never says JukaHub found nothing (JH-AN6U7W).
+// What another finding owns and what changes nothing stay out.
+func TestPortErrorFallback(t *testing.T) {
+	for _, c := range []struct{ line, want string }{
+		{"ALC: could not create context", "ALC: could not create context"},
+		{"OldBits Hub.sh: export: line 75: illegal option -f", "OldBits Hub.sh: export: line 75: illegal option -f"},
+		{"data/level1.pak: not found", ""},
+		{"sh: setterm: not found", ""},
+		{"Starting game", ""},
+	} {
+		if got := gameDiagPortErrorLine([]string{c.line}); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.line, got, c.want)
+		}
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "Port.sh")
+	report := gameDiagReport{}
+	gameDiagPortAddOutput(&report, nil, []string{"ALC: could not create context"}, script, dir)
+	if len(report.Issues) != 1 || report.Issues[0].Title != "It stopped on an error it printed" ||
+		report.Issues[0].Level != int(gameDiagMaybe) {
+		t.Fatalf("fallback issue = %+v", report.Issues)
+	}
+	// A cause JukaHub knows wins over the fallback.
+	report = gameDiagReport{}
+	gameDiagPortAddOutput(&report, nil, []string{script + ": export: line 75: illegal option -f"}, script, dir)
+	if len(report.Issues) != 1 || report.Issues[0].Title != "It ran under BusyBox's sh, not bash" {
+		t.Fatalf("BusyBox issue = %+v", report.Issues)
+	}
+}
+
+// portTestPlatform points P().DataDir at a temporary folder, so a test never
+// writes into the developer's real data folder.
+type portTestPlatform struct {
+	trimuiLinuxPlatform
+	dir string
+}
+
+func (p portTestPlatform) DataDir() (string, error) { return p.dir, nil }
+
+// "Try it directly" remembers the choice for that port alone (JH-AN6U7W):
+// the script goes in data/ports-direct.txt, and another port is untouched.
+func TestPortDirectChoiceIsPerPort(t *testing.T) {
+	prev := platform
+	dir := t.TempDir()
+	platform = portTestPlatform{dir: dir}
+	t.Cleanup(func() { platform = prev })
+	script := filepath.Join(dir, "Roms", "Ports", "OldBits Hub.sh")
+	other := filepath.Join(dir, "Roms", "Ports", "Other.sh")
+	if portDirectChosen(script) {
+		t.Fatal("a port was already chosen before anything was saved")
+	}
+	if err := portDirectRemember(script); err != nil {
+		t.Fatalf("remember: %v", err)
+	}
+	if !portDirectChosen(script) {
+		t.Fatal("the chosen port is not read back")
+	}
+	if portDirectChosen(other) {
+		t.Fatal("the choice leaked to another port")
+	}
+	// A second click does not add a second line.
+	if err := portDirectRemember(script); err != nil {
+		t.Fatalf("remember again: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, portDirectFileName))
+	if err != nil {
+		t.Fatalf("read store: %v", err)
+	}
+	if got := strings.TrimSpace(string(data)); got != filepath.ToSlash(script) {
+		t.Fatalf("store = %q, want the one script", got)
+	}
+	// A card saved on FAT may come back in another case or with either
+	// separator; it is still the same port.
+	if !portDirectChosen(strings.ToLower(filepath.ToSlash(script))) {
+		t.Fatal("a case variant of the saved path is not the same port")
+	}
+}
+
+// The card offers "Try it directly" only when the cause is BusyBox and the
+// firmware's launcher ran the port: a retry cannot mend a script's own
+// #!/bin/bash line under a working bash.
+func TestPortOffersDirectOnlyForLauncherBusyBox(t *testing.T) {
+	busy := launchIssue{Level: int(gameDiagSure), Title: gameDiagPortBusyBoxTitle}
+	notes := []string{"bash: JukaHub's (Ubuntu's bash on the private glibc 2.39)"}
+	via := append(append([]string(nil), notes...), "through the firmware's Ports launcher /mnt/SDCARD/Emus/PORTS/launch_balanced.sh")
+	if gameDiagPortOffersDirect([]launchIssue{busy}, notes) {
+		t.Fatal("offered for a port that already ran under JukaHub's bash")
+	}
+	if gameDiagPortOffersDirect(nil, via) {
+		t.Fatal("offered without the BusyBox finding")
+	}
+	if !gameDiagPortOffersDirect([]launchIssue{busy}, via) {
+		t.Fatal("not offered for a BusyBox port the firmware launcher ran")
 	}
 }
 
@@ -545,10 +664,34 @@ func TestPortGameDataFolder(t *testing.T) {
 	// The card's detail names the folder on the card and the file the script
 	// stops without, so a copy is made in the right place, one folder deep.
 	detail := gameDiagPortDataDetail(dir, "valve/halflife.wad")
-	for _, want := range []string{"Data/ports/Half-Life", "valve/halflife.wad", "copy the folder it comes in (valve)"} {
+	for _, want := range []string{
+		"Data/ports/Half-Life",
+		"The port's startup script stops until valve/halflife.wad is there",
+		"Copy the whole valve folder",
+		"Data/ports/Half-Life/valve/halflife.wad",
+		"not one folder deeper",
+		"Start the port again when the files are in place",
+	} {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail %q does not name %q", detail, want)
 		}
+	}
+	if strings.Contains(detail, "file below") {
+		t.Errorf("detail %q still points below instead of naming the file", detail)
+	}
+	// Without a file the script checks, the detail still says where a copy goes.
+	plain := gameDiagPortDataDetail(dir, "")
+	if !strings.Contains(plain, "Data/ports/Half-Life") || strings.Contains(plain, "startup script") {
+		t.Errorf("detail without a checked file: %q", plain)
+	}
+	// The finding names the port, so the card says whose data is missing, and
+	// the port's own checks know it apart from their other findings.
+	title := gameDiagPortDataTitle("Half-Life")
+	if title != "Half-Life's game files are not there yet" || !gameDiagIsPortDataTitle(title) {
+		t.Errorf("data finding title = %q", title)
+	}
+	if gameDiagIsPortDataTitle("Its game program could not be run") {
+		t.Errorf("another finding counted as the data finding")
 	}
 }
 

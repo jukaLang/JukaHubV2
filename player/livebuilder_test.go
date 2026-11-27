@@ -7,6 +7,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -21,6 +23,8 @@ import (
 )
 
 const liveBuilderTestCode = "482913"
+
+var liveBuilderTestNonce uint64
 
 func liveBuilderTestConfig(sceneName string) []byte {
 	return []byte(`{
@@ -80,7 +84,12 @@ func liveBuilderRequestFrom(t *testing.T, handler http.Handler, method, path str
 		req.RemoteAddr = remote
 	}
 	if code != "" {
-		req.Header.Set(liveBuilderCodeHeader, code)
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		nonce := "test-" + strconv.FormatUint(atomic.AddUint64(&liveBuilderTestNonce, 1), 10)
+		sum := sha256.Sum256(body)
+		req.Header.Set(liveBuilderTimestampHeader, ts)
+		req.Header.Set(liveBuilderNonceHeader, nonce)
+		req.Header.Set(liveBuilderSignatureHeader, liveBuilderRequestMAC(code, method, path, ts, nonce, hex.EncodeToString(sum[:])))
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")

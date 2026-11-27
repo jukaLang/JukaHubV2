@@ -1,0 +1,16 @@
+name: "JukaHub sources"
+
+paths:
+  - player/**/*.go
+  - "*.js"
+  - "*.mjs"
+  - gallery/**/*.js
+  - player/webdom/**/*.js
+  - tests/e2e/**/*.js
+  - tests/web/**/*.js
+
+paths-ignore:
+  - "**/node_modules/**"
+  - "**/vendor/**"
+  - "**/testdata/**"
+  - "player/.sdl2/**"

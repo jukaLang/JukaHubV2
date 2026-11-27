@@ -453,6 +453,10 @@ func ytdlAttempts(config *Config, page, ffmpegPath string) []ytdlAttempt {
 	youTube := youtubeVideoID(page) != ""
 	if !youTube {
 		// A typed site can rank a video-only MP4 first. Ask for a file with
+		// sound; a site with no muxed format still gets the joined fallback.
+		singleFormat = siteStreamFormatSelector(height)
+	}
+	single := ytdlAttempt{name: "single file", args: []string{"-f", singleFormat}}
 	if youTube {
 		// android for format 18 where YouTube still serves it, then the
 		// defaults and web_embedded (streaming.go explains the list).
@@ -473,7 +477,10 @@ func ytdlAttempts(config *Config, page, ffmpegPath string) []ytdlAttempt {
 	}
 	joined := ytdlAttempt{name: "picture and sound", args: joinArgs(ytdlJoinedFormat(height, ""))}
 	if !youTube {
-		return []ytdlAttempt{joined, single}
+		// Short-video sites serve one muxed file. Trying it first avoids
+		// an ffmpeg merge and, more importantly, a second full yt-dlp pass.
+		// Sites with separate streams still get the joined fallback.
+		return []ytdlAttempt{single, joined}
 	}
 	hls := ytdlAttempt{name: "HLS picture and sound", args: joinArgs(ytdlJoinedFormat(height, "m3u8"))}
 	return []ytdlAttempt{joined, hls, single}
@@ -1455,4 +1462,3 @@ func (m *ytdlSpeedMeter) add(now time.Time, done int64) float64 {
 	m.at, m.bytes = now, done
 	return m.rate
 }
-

@@ -83,12 +83,23 @@ type gameDiagReport struct {
 	Issues   []launchIssue
 	LogLines []string
 	LogPath  string
+	// TryDirect is a port the card offers to start again under JukaHub's own
+	// bash: set when its diagnosis found it ran under BusyBox through the
+	// firmware's Ports launcher (ports_env.go, launch_errors.go).
+	TryDirect *gameDiagTryDirect
 	// Launch is the launch that failed, for the card's bug report
 	// (launchreport.go), and Details that report's text, written on the
 	// goroutine that diagnosed it. A check the player asked for has neither:
 	// its card offers no report.
 	Launch  *launchRecord
 	Details string
+}
+
+// gameDiagTryDirect is a port the launch card can start again under JukaHub's
+// bash: the name the card shows and the script to start.
+type gameDiagTryDirect struct {
+	Name   string
+	Script string
 }
 
 // gameDiagState hands a finished report to the main thread and remembers
@@ -458,12 +469,9 @@ func gameDiagShowPending() {
 	if report == nil {
 		return
 	}
-	if report.Launch != nil {
-		// A launch that failed: the card offers its bug report (launchreport.go).
-		showLaunchDiagnosisReport(*report)
-		return
-	}
-	showLaunchDiagnosis(report.Title, report.Summary, report.Issues, report.LogLines, report.LogPath)
+	// A launch that failed offers its bug report (launchreport.go), and a port
+	// that ran under BusyBox offers "Try it directly" (launch_errors.go).
+	showLaunchDiagnosisReport(*report)
 }
 
 // gameDiagRunManual is the options sheet's "Check why it won't start": the
@@ -1543,6 +1551,11 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		if report.LogPath == "" && len(notes) > 0 {
 			report.LogPath = jukaLog
 		}
+		// A port the firmware's launcher started with BusyBox's sh: the card
+		// can start it again under JukaHub's bash ("Try it directly").
+		if gameDiagPortOffersDirect(report.Issues, notes) {
+			report.TryDirect = &gameDiagTryDirect{Name: name, Script: script}
+		}
 		return report, failed
 	}
 	dir, rel := gameDiagPortDir(script)
@@ -1566,10 +1579,10 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 	if need != "" {
 		report.Issues = append(report.Issues, launchIssue{
 			Level:  int(gameDiagLikely),
-			Title:  "The game's own files are not there yet",
+			Title:  gameDiagPortDataTitle(name),
 			Files:  []string{need},
 			Where:  dir,
-			Detail: "Its script stops here when the file below is not there. " + gameDiagPortDataDetail(dir, need),
+			Detail: gameDiagPortDataDetail(dir, need),
 		})
 	}
 	for _, sub := range []string{"gamedata", "data", "assets", "game"} {
@@ -1585,7 +1598,7 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 		}
 		report.Issues = append(report.Issues, launchIssue{
 			Level:  int(gameDiagLikely),
-			Title:  "The game's own files are not there yet",
+			Title:  gameDiagPortDataTitle(name),
 			Where:  data,
 			Detail: gameDiagPortDataDetail(data, ""),
 		})
@@ -1622,29 +1635,57 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 	return finish(dir)
 }
 
+// gameDiagPortDataTitle is the finding about game files that are not there
+// yet, naming the port so the card says whose data is missing (Half-Life's
+// game files are not there yet) instead of a bare "The game's own files".
+func gameDiagPortDataTitle(name string) string {
+	if name == "" {
+		return "Game files are not there yet"
+	}
+	return name + "'s game files are not there yet"
+}
+
+// gameDiagIsPortDataTitle says a title is gameDiagPortDataTitle's, whatever
+// port it names: the port's checks use it to keep one such finding only.
+func gameDiagIsPortDataTitle(title string) bool {
+	return strings.HasSuffix(title, "game files are not there yet")
+}
+
 // gameDiagPortDataDetail says what a port that runs the original game's data
 // needs, and exactly where the files go: the folder named beside it, as the
 // card shows it with the card in a PC (Data/ports/<port>, or the port's
 // gamedata folder inside it). need is the file the port's script itself stops
 // without (gameDiagPortNeededFile), "" when the script checks nothing.
 func gameDiagPortDataDetail(dir, need string) string {
-	detail := "This port runs the original game's data, which PortMaster cannot ship. Copy the game's own files into this folder on the card"
-	if card := gameDiagPortCardPath(dir); card != "" {
-		detail += " (" + card + ")"
+	where := gameDiagPortCardPath(dir)
+	onCard := where != "" && where != filepath.ToSlash(dir)
+	detail := "PortMaster cannot ship the game's own data. Copy the game's files from a copy of the game you own"
+	switch {
+	case where != "" && onCard:
+		detail += " into " + where + " on the card"
+	case where != "":
+		detail += " into " + where
+	default:
+		detail += " into this folder"
 	}
-	detail += ", keeping the folders they come in as they are in the copy you own."
+	detail += ", keeping the folders as they are in that copy."
 	if need != "" {
 		need = filepath.ToSlash(need)
-		detail += " The port stops until " + need + " is there"
+		detail += " The port's startup script stops until " + need + " is there."
 		if folder, _, ok := strings.Cut(need, "/"); ok {
-			detail += ": copy the folder it comes in (" + folder + "), not only the file"
+			detail += " Copy the whole " + folder + " folder"
+			if where != "" {
+				detail += "; the file must be at " + strings.TrimSuffix(where, "/") + "/" + need
+			}
+			detail += ", not one folder deeper."
+		} else {
+			detail += " Copy the file there."
 		}
-		detail += "."
 	}
-	detail += " Then start the port again."
 	if p, ok := gameDiagFileIn(dir, "README.md"); ok {
-		detail += " Its README lists which files: " + p
+		detail += " Its README lists every file it needs: " + p + "."
 	}
+	detail += " Start the port again when the files are in place."
 	return detail
 }
 
@@ -1697,6 +1738,19 @@ func gameDiagPortAddOutput(report *gameDiagReport, notes, output []string, scrip
 			Where:  dir,
 			Detail: "Named in the port's log. If they are the game's own files, copy them into the folder above (a port with a gamedata folder wants them in it), keeping the game's folders; a missing .so library means this build does not suit the device.",
 		})
+	}
+	// Last: a card never says JukaHub found nothing while the port's own log
+	// holds an error (JH-AN6U7W: `export: illegal option -f`, which no cause
+	// above knew). The line it printed is shown below.
+	if len(report.Issues) == 0 {
+		if line := gameDiagPortErrorLine(output); line != "" {
+			report.Issues = append(report.Issues, launchIssue{
+				Level:  int(gameDiagMaybe),
+				Title:  "It stopped on an error it printed",
+				Detail: "No cause JukaHub knows matched, and this line is the port's own report of what went wrong. Send the log below with a bug report; PortMaster's Discord (#port-help) can read it.",
+			})
+			evidence = append(evidence, line)
+		}
 	}
 	// The surest first.
 	sort.SliceStable(report.Issues, func(i, j int) bool { return report.Issues[i].Level < report.Issues[j].Level })

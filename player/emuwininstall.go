@@ -38,6 +38,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -845,65 +846,137 @@ func emuWinClient() *http.Client {
 	}
 }
 
+// emuHashPart feeds an existing .part into the digest so a resumed download's
+// checksum is the checksum of the whole file, not just the new tail.
+func emuHashPart(part string, hash hash.Hash) error {
+	f, err := os.Open(part)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	buf := make([]byte, 64<<10)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			_, _ = hash.Write(buf[:n])
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
 // emuDownload streams raw to dest, reporting progress, and returns the SHA-256
-// of the bytes written. The file only appears under its name once complete.
+// of the whole file. A leftover .part is resumed with a Range request when the
+// server honours it; a transport failure keeps the part for the next attempt,
+// while a bad length or a bad server answer discards it (DESK-12). The file
+// only appears under its name once complete.
 func emuDownload(ctx context.Context, client *http.Client, raw, dest string, maxBytes int64, progress func(done, total int64)) (string, error) {
 	if err := emulatorUpdateValidateURL(raw); err != nil {
 		return "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "JukaHub-EmulatorUpdates/"+versionString(nil))
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
-	}
-	if maxBytes > 0 && resp.ContentLength > maxBytes {
-		return "", fmt.Errorf("the download is %s, more than the %s limit", formatInstallBytes(resp.ContentLength), formatInstallBytes(maxBytes))
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
 	part := dest + ".part"
-	out, err := os.Create(part)
-	if err != nil {
-		return "", err
-	}
 	limit := maxBytes
 	if limit <= 0 {
 		limit = emuMaxUnpackedBytes
 	}
-	hash := sha256.New()
-	n, copyErr := io.Copy(io.MultiWriter(out, hash), &progressReader{r: io.LimitReader(resp.Body, limit+1), total: resp.ContentLength, fn: progress})
-	closeErr := out.Close()
-	switch {
-	case copyErr != nil:
-		err = copyErr
-	case closeErr != nil:
-		err = closeErr
-	case n > limit:
-		err = fmt.Errorf("the download is larger than the %s limit", formatInstallBytes(limit))
-	case n == 0:
-		err = errors.New("the download was empty")
-	case resp.ContentLength > 0 && n != resp.ContentLength:
-		err = fmt.Errorf("the download stopped after %s of %s", formatInstallBytes(n), formatInstallBytes(resp.ContentLength))
+	for attempt := 0; attempt < 2; attempt++ {
+		var partSize int64
+		if st, err := os.Stat(part); err == nil {
+			partSize = st.Size()
+		}
+		offset := emuResumeOffset(partSize, maxBytes)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "JukaHub-EmulatorUpdates/"+versionString(nil))
+		if offset > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			// Keep the part: this is exactly the cut-off case a resume is for.
+			return "", err
+		}
+		action := emuRangeActionFor(resp.StatusCode, offset)
+		if action == emuRangeDropRetry {
+			resp.Body.Close()
+			_ = os.Remove(part)
+			continue
+		}
+		if action == emuRangeFail {
+			resp.Body.Close()
+			return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
+		}
+		total := resp.ContentLength
+		if action == emuRangeAppend {
+			if t, ok := emuParseContentRange(resp.Header.Get("Content-Range"), offset); ok {
+				total = t
+			} else {
+				total = offset + resp.ContentLength
+			}
+		}
+		if total > limit {
+			resp.Body.Close()
+			_ = os.Remove(part)
+			return "", fmt.Errorf("the download is %s, more than the %s limit", formatInstallBytes(total), formatInstallBytes(limit))
+		}
+		hash := sha256.New()
+		var out *os.File
+		if action == emuRangeAppend {
+			if err := emuHashPart(part, hash); err != nil {
+				resp.Body.Close()
+				return "", err
+			}
+			out, err = os.OpenFile(part, os.O_WRONLY|os.O_APPEND, 0o644)
+		} else {
+			out, err = os.Create(part)
+		}
+		if err != nil {
+			resp.Body.Close()
+			return "", err
+		}
+		remaining := limit + 1
+		if action == emuRangeAppend {
+			remaining -= offset
+		}
+		pr := &progressReader{r: io.LimitReader(resp.Body, remaining), total: total, fn: progress}
+		pr.done = offset
+		n, copyErr := io.Copy(io.MultiWriter(out, hash), pr)
+		closeErr := out.Close()
+		resp.Body.Close()
+		written := offset + n
+		switch {
+		case copyErr != nil:
+			// Network died mid-stream: keep the part for the next run.
+			return "", copyErr
+		case closeErr != nil:
+			return "", closeErr
+		case n > remaining-1 || written > limit:
+			_ = os.Remove(part)
+			return "", fmt.Errorf("the download is larger than the %s limit", formatInstallBytes(limit))
+		case written == 0:
+			_ = os.Remove(part)
+			return "", errors.New("the download was empty")
+		case total > 0 && written != total:
+			_ = os.Remove(part)
+			return "", fmt.Errorf("the download stopped after %s of %s", formatInstallBytes(written), formatInstallBytes(total))
+		}
+		_ = os.Remove(dest)
+		if err := os.Rename(part, dest); err != nil {
+			_ = os.Remove(part)
+			return "", err
+		}
+		return hex.EncodeToString(hash.Sum(nil)), nil
 	}
-	if err != nil {
-		_ = os.Remove(part)
-		return "", err
-	}
-	_ = os.Remove(dest)
-	if err := os.Rename(part, dest); err != nil {
-		_ = os.Remove(part)
-		return "", err
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return "", errors.New("the download could not be resumed")
 }
 
 // emuDigestMatches checks a download's SHA-256 against GitHub's
@@ -1241,7 +1314,13 @@ func emuWinInstall(ctx context.Context, client *http.Client, spec emuWinSpec, pr
 		return result, nil
 	}
 
-	archive := filepath.Join(root, ".downloads", sanitizeFileName(release.Asset))
+	// One part per release: a nightly tail must never be appended to a stable
+	// archive (or the other way round) when a download is resumed.
+	tag := strings.TrimSpace(release.Tag)
+	if tag == "" {
+		tag = "update"
+	}
+	archive := filepath.Join(root, ".downloads", sanitizeFileName(tag+"-"+release.Asset))
 	report(installPhaseDownload, 0, release.Size)
 	sum, err := emuDownload(ctx, client, release.URL, archive, maxBytes, func(done, total int64) {
 		report(installPhaseDownload, done, total)

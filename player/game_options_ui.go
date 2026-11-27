@@ -349,7 +349,7 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 	case gameOptionsRowDisc:
 		return discOptionsValue()
 	case gameOptionsRowCPUProfile:
-		return gameCPUProfileLabel(opts.CPUProfile)
+		return gameOptionsCPUProfileValue(opts)
 	case gameOptionsRowCeiling:
 		return formatGameCeiling(opts.MaxFreqKHz)
 	case gameOptionsRowVideo:

@@ -65,6 +65,10 @@ import (
 const (
 	// portLaunchViaKey is the Custom setting: "auto", "firmware" or "direct".
 	portLaunchViaKey = "portLaunchVia"
+	// portDirectFileName is data/ports-direct.txt: the scripts the player
+	// chose to run under JukaHub's bash from the launch card ("Try it
+	// directly"), one path per line. The choice holds for those ports only.
+	portDirectFileName = "ports-direct.txt"
 	// portEnvFileName is data/ports.env.
 	portEnvFileName = "ports.env"
 	// portLogDirName is the folder under gamediag/ for the per-port logs.
@@ -120,6 +124,69 @@ func portLaunchVia(config *Config) string {
 		}
 	}
 	return "auto"
+}
+
+// portDirectStorePath is data/ports-direct.txt, "" when there is no data
+// folder.
+func portDirectStorePath() string {
+	dir, err := P().DataDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return ""
+	}
+	return filepath.Join(dir, portDirectFileName)
+}
+
+// portSameScript compares two script paths the way the card's folders do: FAT
+// ignores case, and a path can be written with either separator.
+func portSameScript(a, b string) bool {
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if a == "" || b == "" {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+// portDirectChosen reports whether the player chose this port's "Try it
+// directly" on its launch card: it then runs under JukaHub's bash whatever
+// portLaunchVia says, and no other port is affected.
+func portDirectChosen(script string) bool {
+	path := portDirectStorePath()
+	if path == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if portSameScript(line, script) {
+			return true
+		}
+	}
+	return false
+}
+
+// portDirectRemember keeps the player's "Try it directly" for script alone.
+func portDirectRemember(script string) error {
+	path := portDirectStorePath()
+	if path == "" {
+		return fmt.Errorf("JukaHub's data folder is not available")
+	}
+	var lines []string
+	if data, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if portSameScript(line, script) {
+				return nil
+			}
+			lines = append(lines, line)
+		}
+	}
+	lines = append(lines, filepath.ToSlash(filepath.Clean(script)))
+	return AtomicWrite(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
 }
 
 // portFirmwareLauncher is the firmware's Ports launcher for a script under
@@ -338,22 +405,29 @@ func portBuildLaunchPlan(config *Config, script string, master bool) portLaunchP
 	via := portLaunchVia(config)
 	fw := ""
 	if !master && via != "direct" {
-		fw = portFirmwareLauncher(portMasterSDRoot, script)
-		if fw == "" && via == "firmware" {
-			plan.Notes = append(plan.Notes, "portLaunchVia=firmware but no configured Emus/PORTS launcher for this script; running it directly")
-		}
-		// The firmware's launcher starts the script with the firmware's own
-		// shell. With no real bash anywhere on the firmware that is BusyBox,
-		// where PortMaster's scripts die at once: run it directly instead,
-		// under the bash JukaHub supplies (portmaster_runtime.go), once it is
-		// there.
-		if fw != "" && via == "auto" && pmFirmwareHasNoBash() && privateGlibcBashReady() &&
-			!strings.EqualFold(filepath.Base(script), oldBitsHubScriptName) {
-			plan.Notes = append(plan.Notes, "not through the firmware's Ports launcher "+fw+": this firmware has no full bash, so JukaHub runs the script with its own")
-			fw = ""
-		}
-		if fw != "" && strings.EqualFold(filepath.Base(script), oldBitsHubScriptName) {
-			plan.Notes = append(plan.Notes, "OldBits Hub goes through the firmware's Ports launcher as it does from MainUI")
+		if portDirectChosen(script) {
+			// The card's "Try it directly" for this port (JH-AN6U7W: OldBits
+			// Hub died under the launcher's BusyBox sh). Its own line in
+			// data/ports-direct.txt, so no other port changes.
+			plan.Notes = append(plan.Notes, "not through the firmware's Ports launcher: \"Try it directly\" was chosen for this port, so JukaHub runs the script with its own bash")
+		} else {
+			fw = portFirmwareLauncher(portMasterSDRoot, script)
+			if fw == "" && via == "firmware" {
+				plan.Notes = append(plan.Notes, "portLaunchVia=firmware but no configured Emus/PORTS launcher for this script; running it directly")
+			}
+			// The launcher runs the port with a shell of its own — stock
+			// TrimUI's launch_balanced.sh ends in `/bin/sh "$@"` — so a real
+			// /bin/bash in this launch's mount namespace
+			// (portmaster_binbash.go) never reaches a bash port script started
+			// there (JH-AN6U7W: OldBits Hub's `export -f` at line 75). With no
+			// real bash anywhere on the firmware that leaves BusyBox, where
+			// PortMaster's scripts die at once: run it directly instead, under
+			// the bash JukaHub supplies (portmaster_runtime.go), once it is
+			// there.
+			if fw != "" && via == "auto" && pmFirmwareHasNoBash() && privateGlibcBashReady() {
+				plan.Notes = append(plan.Notes, "not through the firmware's Ports launcher "+fw+": this firmware has no full bash, so JukaHub runs the script with its own")
+				fw = ""
+			}
 		}
 	}
 	if fw != "" {

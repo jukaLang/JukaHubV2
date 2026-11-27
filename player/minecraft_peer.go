@@ -65,6 +65,10 @@ type mcPeerVersion struct {
 	Type     string `json:"type,omitempty"`
 	Inherits string `json:"inheritsFrom,omitempty"`
 	Jar      bool   `json:"jar"`
+	// Size is what the version's launcher files declare they need. It is an
+	// estimate (the PC may be missing some of them), used to show the copy's
+	// size before the player presses A.
+	Size int64 `json:"size,omitempty"`
 }
 
 type mcPeerVersions struct {
@@ -402,10 +406,116 @@ func mcListVersions(root string) []mcPeerVersion {
 			continue
 		}
 		out = append(out, mcPeerVersion{ID: id, Type: v.Type, Inherits: v.InheritsFrom,
-			Jar: regularFile(filepath.Join(root, "versions", id, id+".jar"))})
+			Jar: regularFile(filepath.Join(root, "versions", id, id+".jar")), Size: mcDeclaredSize(root, id)})
 		if len(out) >= mcPeerVersionsMax {
 			break
 		}
+	}
+	return out
+}
+
+// mcDeclaredSize sums the sizes a version's own metadata declares: its json
+// and client jar, the Linux libraries, the logging config, the asset index and
+// its objects. It reads no file contents and stats only the two json files, so
+// listing a PC's versions stays quick. A file the PC never downloaded is still
+// counted (the launcher would fetch it), which is why the copy row calls this
+// an estimate.
+func mcDeclaredSize(root, id string) int64 {
+	if !mcSafeName(id) {
+		return 0
+	}
+	seen := map[string]bool{}
+	var total int64
+	add := func(rel string, size int64) {
+		rel = strings.TrimPrefix(rel, "/")
+		if rel == "" || seen[rel] || size <= 0 || size > mcPlanMaxBytes {
+			return
+		}
+		seen[rel] = true
+		if total <= mcPlanMaxBytes-size {
+			total += size
+		}
+	}
+	var index mcSHA1Size
+	var logging mcSHA1Size
+	cur := id
+	for depth := 0; cur != "" && depth < 6; depth++ {
+		if !mcSafeName(cur) {
+			return 0
+		}
+		var v mcVersionJSON
+		jsonRel := "versions/" + cur + "/" + cur + ".json"
+		if err := mcReadJSON(root, filepath.FromSlash(jsonRel), &v); err != nil {
+			break
+		}
+		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(jsonRel))); err == nil && info.Mode().IsRegular() {
+			add(jsonRel, info.Size())
+		}
+		add("versions/"+cur+"/"+cur+".jar", v.Downloads.Client.Size)
+		for _, lib := range v.Libraries {
+			if !mcLibAllowed(lib.Rules) || strings.Contains(lib.Name, ":natives-") ||
+				lib.Natives != nil && lib.Downloads.Artifact == nil {
+				continue
+			}
+			if a := lib.Downloads.Artifact; a != nil && a.Path != "" {
+				add("libraries/"+a.Path, a.Size)
+			}
+		}
+		if index.ID == "" {
+			index = v.AssetIndex
+			if index.ID == "" && v.Assets != "" {
+				index.ID = v.Assets
+			}
+		}
+		if logging.ID == "" {
+			logging = v.Logging.Client.File
+		}
+		cur = v.InheritsFrom
+	}
+	if logging.ID != "" && mcSafeName(logging.ID) {
+		add("assets/log_configs/"+logging.ID, logging.Size)
+	}
+	if index.ID != "" && mcSafeName(index.ID) {
+		indexRel := "assets/indexes/" + index.ID + ".json"
+		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(indexRel))); err == nil && info.Mode().IsRegular() {
+			add(indexRel, info.Size())
+		}
+		var idx struct {
+			Objects map[string]struct {
+				Hash string `json:"hash"`
+				Size int64  `json:"size"`
+			} `json:"objects"`
+		}
+		if err := mcReadJSON(root, filepath.FromSlash(indexRel), &idx); err == nil {
+			for _, o := range idx.Objects {
+				h := strings.ToLower(o.Hash)
+				if len(h) != 40 || strings.Trim(h, "0123456789abcdef") != "" {
+					continue
+				}
+				add("assets/objects/"+h[:2]+"/"+h, o.Size)
+			}
+		}
+	}
+	if total > mcPlanMaxBytes {
+		return 0
+	}
+	return total
+}
+
+// mcPlanKeepOnlyPortLacks drops the files the installed port already has:
+// its ARM native libraries and any other file already at the right size (and
+// checksum when the launcher gave one). The bytes and progress cover only the
+// files that will actually travel.
+func mcPlanKeepOnlyPortLacks(plan mcPlan, gameDir string) mcPlan {
+	out := plan
+	out.Files = nil
+	out.Bytes = 0
+	for _, f := range plan.Files {
+		if gameDir != "" && mcHaveFile(filepath.Join(gameDir, filepath.FromSlash(f.Path)), f) {
+			continue
+		}
+		out.Files = append(out.Files, f)
+		out.Bytes += f.Size
 	}
 	return out
 }
@@ -681,6 +791,14 @@ func mcCopyVersion(ctx context.Context, gen uint64, peerID, version, gameDir str
 	if total > mcPlanMaxBytes {
 		return plan.Missing, errors.New("this version is larger than a handheld copy allows")
 	}
+	// Validate every path first, then drop the files the port already holds:
+	// mcPlanKeepOnlyPortLacks must never stat a path the PC did not list
+	// inside versions/, libraries/ or assets/.
+	plan = mcPlanKeepOnlyPortLacks(plan, gameDir)
+	if len(plan.Files) == 0 {
+		return plan.Missing, nil
+	}
+	total, need = plan.Bytes, plan.Bytes
 	if err := os.MkdirAll(gameDir, 0o755); err != nil {
 		return plan.Missing, fmt.Errorf("cannot create %s: %w", gameDir, err)
 	}

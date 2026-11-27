@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
+
 	"time"
 )
 
@@ -152,22 +152,7 @@ var cryptoKey = func() []byte {
 // Custom key material (JUKAHUB_CRYPTO_KEY / JUKAHUB_CRYPTO_SALT) is never
 // guessed: those values can only come from the user who set them.
 //
-// remove after 2027-05-01: an upgrade shim for configs from 0.4.0.
-func legacyDecryptionKeys() [][]byte {
-	legacyKeysOnce.Do(func() {
-		if os.Getenv("JUKAHUB_CRYPTO_KEY") != "" || os.Getenv("JUKAHUB_CRYPTO_SALT") != "" {
-			return
-		}
-		legacyKeys = append(legacyKeys,
-			deriveKeyFromSecret([]byte(defaultSecretText), []byte(defaultSaltText)))
-	})
-	return legacyKeys
-}
 
-var (
-	legacyKeysOnce sync.Once
-	legacyKeys     [][]byte
-)
 
 // getCryptoKey returns the player's encryption key.
 func getCryptoKey() []byte {
@@ -280,12 +265,6 @@ func decryptData(data []byte) ([]byte, error) {
 	plaintext, currentErr := decryptAESGCM(getCryptoKey(), data)
 	if currentErr == nil {
 		return plaintext, nil
-	}
-	for _, key := range legacyDecryptionKeys() {
-		if plaintext, err := decryptAESGCM(key, data); err == nil {
-			logDebug("crypto", "Decrypted a value written with the legacy default salt")
-			return plaintext, nil
-		}
 	}
 	return nil, currentErr
 }

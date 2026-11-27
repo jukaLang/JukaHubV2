@@ -18,9 +18,11 @@ package main
 //     On a PC it is on by default but listens on this computer only (loopback)
 //     unless JUKAHUB_LIVE_LAN=1 or the liveBuilderLAN setting opens it to the
 //     network.
-//   - The code travels in the X-Live-Builder-Code header only. It is shown on
-//     the device's own screen and nowhere else: not on the status page, not in
-//     a log, not in the notification history. Five wrong codes in a minute
+//   - The code never travels. Every request carries an HMAC-SHA256 signature
+//     over its method, path, body digest, timestamp and a one-time nonce,
+//     keyed by the code; the code is shown on the device's own screen and
+//     nowhere else: not on the status page, not in a log, not in the
+//     notification history. Five wrong signatures in a minute
 //     lock the sender (an IPv6 sender by its /64) out for five minutes; twenty
 //     from anyone pause pairing for a minute and replace the code. A request
 //     without a code is not a guess and is not counted.
@@ -47,10 +49,12 @@ package main
 // would silently strip features.
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -72,21 +76,32 @@ import (
 )
 
 const (
-	liveBuilderDefaultPort = 8422
-	liveBuilderMaxBody     = 4 << 20 // 4 MiB: a full 33-scene config is ~120 KiB
-	liveBuilderCodeFile    = ".livebuilder-code"
-	liveBuilderVersion     = "2"
-	liveBuilderSettingKey  = "liveBuilder"
-	liveBuilderLANKey      = "liveBuilderLAN"
-	liveBuilderCodeHeader  = "X-Live-Builder-Code"
-	liveBuilderSiteOrigin  = "https://generate.jukalang.com"
-	liveBuilderPendingExt  = ".pending"
-	liveBuilderKeptValue   = "<kept on device>"
+	liveBuilderDefaultPort     = 8422
+	liveBuilderMaxBody         = 4 << 20 // 4 MiB: a full 33-scene config is ~120 KiB
+	liveBuilderCodeFile        = ".livebuilder-code"
+	liveBuilderVersion         = "3"
+	liveBuilderSettingKey      = "liveBuilder"
+	liveBuilderLANKey          = "liveBuilderLAN"
+	liveBuilderTimestampHeader = "X-Live-Builder-Timestamp"
+	liveBuilderNonceHeader     = "X-Live-Builder-Nonce"
+	liveBuilderSignatureHeader = "X-Live-Builder-Signature"
+	liveBuilderSiteOrigin      = "https://generate.jukalang.com"
+	liveBuilderPendingExt      = ".pending"
+	liveBuilderKeptValue       = "<kept on device>"
 )
 
 // The abuse limits. A pairing code has a million values; these keep guessing
 // it far slower than the idle switch-off ends the chance to.
 const (
+	// liveBuilderAuthWindow bounds how old a signed request may be (and how
+	// far in the future a device whose clock is slightly ahead accepts it).
+	// The browser's nonce, kept for the same window, makes a replay of a
+	// captured request fail even inside it.
+	liveBuilderAuthWindow = 5 * time.Minute
+	// liveBuilderReplayMax bounds the nonce table; a real builder makes a
+	// handful of requests a minute, so this is hours of history.
+	liveBuilderReplayMax = 4096
+
 	liveBuilderIdleLimit     = 30 * time.Minute
 	liveBuilderFailWindow    = time.Minute
 	liveBuilderFailLimit     = 5 // wrong codes per sender per window
@@ -143,6 +158,7 @@ type liveBuilderServer struct {
 	lastElems  int
 	pushCount  int
 	senders    map[string]*liveBuilderSender
+	replays    map[string]time.Time // nonce → the end of its acceptance window
 	recentFail []time.Time
 	pausedTill time.Time
 	pending    *liveBuilderPending
@@ -203,6 +219,7 @@ func newLiveBuilderServer(configPath, code string, onReload func()) *liveBuilder
 		onReload:   onReload,
 		now:        time.Now,
 		senders:    map[string]*liveBuilderSender{},
+		replays:    map[string]time.Time{},
 	}
 }
 
@@ -613,9 +630,9 @@ func (s *liveBuilderServer) handler() http.Handler {
 
 // guard is every request's front door: the CORS answer for the builder's
 // origins (first, so the builder can read any refusal), the origin check and
-// the host-name check against DNS rebinding. The pairing code is a header
-// rather than a cookie, so no browser holds an ambient credential, and only
-// the builder's origins may read an answer.
+// the host-name check against DNS rebinding. The pairing proof is a signed
+// header rather than a cookie, so no browser holds an ambient credential, and
+// only the builder's origins may read an answer.
 func (s *liveBuilderServer) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -634,7 +651,7 @@ func (s *liveBuilderServer) guard(next http.HandlerFunc) http.HandlerFunc {
 			}
 			h.Set("Access-Control-Allow-Origin", origin)
 			h.Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			h.Set("Access-Control-Allow-Headers", "Content-Type, "+liveBuilderCodeHeader)
+			h.Set("Access-Control-Allow-Headers", "Content-Type, "+liveBuilderTimestampHeader+", "+liveBuilderNonceHeader+", "+liveBuilderSignatureHeader)
 			h.Set("Access-Control-Max-Age", "600")
 			// Chrome's local-network checks ask before a page reaches a LAN
 			// address; the allowed origins get a yes.
@@ -735,20 +752,76 @@ func liveBuilderClient(r *http.Request) string {
 	}
 }
 
-// codeMatchesLocked compares a code with the one in force in constant time.
-// s.mu is held.
-func (s *liveBuilderServer) codeMatchesLocked(got string) bool {
-	return got != "" && s.code != "" && len(got) == len(s.code) &&
-		subtle.ConstantTimeCompare([]byte(got), []byte(s.code)) == 1
+// liveBuilderBodyDigest is the body's SHA-256 as the signature covers it.
+func liveBuilderBodyDigest(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
-// checkCode compares a pairing code with the lockout in front of it, in one
+// liveBuilderRequestMAC is the browser's signature: HMAC-SHA256 keyed by the
+// pairing code over what the request is, when it was made and a one-time
+// nonce. Only the signature crosses the network.
+func liveBuilderRequestMAC(code, method, path, timestamp, nonce, bodyDigest string) string {
+	mac := hmac.New(sha256.New, []byte(code))
+	_, _ = io.WriteString(mac, method+"\n"+path+"\n"+timestamp+"\n"+nonce+"\n"+bodyDigest)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// liveBuilderAuthTimeOK accepts a timestamp inside the window. The device and
+// the browser share a clock in use; the second check lets a test server with a
+// fixed clock accept a browser (or test helper) signing with the real one.
+func liveBuilderAuthTimeOK(ts int64, now time.Time) bool {
+	if ts <= 0 {
+		return false
+	}
+	window := int64(liveBuilderAuthWindow / time.Second)
+	inside := func(t int64) bool {
+		return ts >= t-window && ts <= t+window
+	}
+	return inside(now.Unix()) || inside(time.Now().Unix())
+}
+
+// noteReplayLocked remembers a nonce for the signature window and keeps the
+// table bounded. s.mu is held.
+func (s *liveBuilderServer) noteReplayLocked(nonce string, now time.Time) {
+	if s.replays == nil {
+		s.replays = map[string]time.Time{}
+	}
+	for n, until := range s.replays {
+		if !now.Before(until) {
+			delete(s.replays, n)
+		}
+	}
+	if len(s.replays) >= liveBuilderReplayMax {
+		var oldest string
+		var oldestAt time.Time
+		for n, until := range s.replays {
+			if oldest == "" || until.Before(oldestAt) {
+				oldest, oldestAt = n, until
+			}
+		}
+		delete(s.replays, oldest)
+	}
+	s.replays[nonce] = now.Add(liveBuilderAuthWindow)
+}
+
+// checkAuth verifies a signed request with the lockout in front of it, in one
 // critical section, so parallel requests cannot all slip past a check that has
-// not yet seen each other's failures. wait > 0: locked out, nothing compared.
-// A request without a code is not a guess and is not counted. rotated is true
-// when this failure paused pairing for everyone and replaced the code.
-func (s *liveBuilderServer) checkCode(client, got string, now time.Time) (wait time.Duration, ok, rotated bool) {
-	got = strings.TrimSpace(got)
+// not yet seen each other's failures. A request with no signature is not a
+// guess and is not counted. rotated is true when a wrong signature paused
+// pairing for everyone and replaced the code; reason says why a refused one
+// was refused.
+func (s *liveBuilderServer) checkAuth(client string, r *http.Request, body []byte, now time.Time, count bool) (wait time.Duration, ok, rotated bool, reason string) {
+	timestamp := strings.TrimSpace(r.Header.Get(liveBuilderTimestampHeader))
+	nonce := strings.TrimSpace(r.Header.Get(liveBuilderNonceHeader))
+	signature := strings.TrimSpace(r.Header.Get(liveBuilderSignatureHeader))
+	if timestamp == "" || nonce == "" || signature == "" {
+		return 0, false, false, "pairing signature is missing"
+	}
+	ts, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil || !liveBuilderAuthTimeOK(ts, now) {
+		return 0, false, false, "the request signature has expired"
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if now.Before(s.pausedTill) {
@@ -759,21 +832,29 @@ func (s *liveBuilderServer) checkCode(client, got string, now time.Time) (wait t
 			wait = d
 		}
 	}
-	if wait > 0 || got == "" {
-		return wait, false, false
+	if wait > 0 {
+		return wait, false, false, ""
 	}
-	if s.codeMatchesLocked(got) {
-		delete(s.senders, client)
-		s.lastActive = now
-		return 0, true, false
+	want := liveBuilderRequestMAC(s.code, r.Method, r.URL.RequestURI(), timestamp, nonce, liveBuilderBodyDigest(body))
+	if len(signature) != len(want) || !hmac.Equal([]byte(signature), []byte(want)) {
+		if count {
+			rotated = s.noteFailureLocked(client, now)
+		}
+		return 0, false, rotated, "pairing signature is wrong"
 	}
-	return 0, false, s.noteFailureLocked(client, now)
+	if until, seen := s.replays[nonce]; seen && now.Before(until) {
+		return 0, false, false, "this signed request was already used"
+	}
+	s.noteReplayLocked(nonce, now)
+	delete(s.senders, client)
+	s.lastActive = now
+	return 0, true, false, ""
 }
 
-// authorize checks the pairing code with the lockout in front of it. It writes
+// authorize checks the signed request with the lockout in front of it. It writes
 // the refusal itself and reports whether the request may go on.
-func (s *liveBuilderServer) authorize(w http.ResponseWriter, r *http.Request) bool {
-	wait, ok, rotated := s.checkCode(liveBuilderClient(r), r.Header.Get(liveBuilderCodeHeader), s.now())
+func (s *liveBuilderServer) authorize(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	wait, ok, rotated, reason := s.checkAuth(liveBuilderClient(r), r, body, s.now(), true)
 	if rotated {
 		s.persistCode()
 		if s.onCodeChange != nil {
@@ -787,9 +868,10 @@ func (s *liveBuilderServer) authorize(w http.ResponseWriter, r *http.Request) bo
 			Error: "too many wrong pairing codes — try again in " + liveBuilderWaitText(wait),
 		})
 	case !ok:
-		writeLiveBuilderJSON(w, http.StatusUnauthorized, liveBuilderResponse{
-			Error: "pairing code is missing or wrong",
-		})
+		if reason == "" {
+			reason = "pairing code is missing or wrong"
+		}
+		writeLiveBuilderJSON(w, http.StatusUnauthorized, liveBuilderResponse{Error: reason})
 	}
 	return ok
 }
@@ -830,22 +912,11 @@ func (s *liveBuilderServer) noteFailureLocked(client string, now time.Time) (rot
 // touchIfPaired keeps the server on for a builder that knows the code. The
 // health answer is the same either way, so this is no way to test codes, and
 // a wrong code here is not counted.
-func (s *liveBuilderServer) touchIfPaired(client, got string, now time.Time) {
-	got = strings.TrimSpace(got)
-	if got == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if now.Before(s.pausedTill) {
-		return
-	}
-	if snd := s.senders[client]; snd != nil && now.Before(snd.until) {
-		return
-	}
-	if s.codeMatchesLocked(got) {
-		s.lastActive = now
-	}
+// touchIfPaired keeps the server on for a builder that knows the code. The
+// health answer is the same either way, so this is no way to test codes, and
+// a wrong signature here is not counted.
+func (s *liveBuilderServer) touchIfPaired(r *http.Request) {
+	s.checkAuth(liveBuilderClient(r), r, nil, s.now(), false)
 }
 
 // liveBuilderRecent drops the times older than the failure window. It filters
@@ -902,7 +973,7 @@ func (s *liveBuilderServer) handleHealth(w http.ResponseWriter, r *http.Request)
 		writeLiveBuilderJSON(w, http.StatusMethodNotAllowed, liveBuilderResponse{Error: "use GET"})
 		return
 	}
-	s.touchIfPaired(liveBuilderClient(r), r.Header.Get(liveBuilderCodeHeader), s.now())
+	s.touchIfPaired(r)
 	builderURL := s.LANURL()
 	s.mu.Lock()
 	lastPush := ""
@@ -938,7 +1009,21 @@ func (s *liveBuilderServer) handleDesign(w http.ResponseWriter, r *http.Request)
 		writeLiveBuilderJSON(w, http.StatusMethodNotAllowed, liveBuilderResponse{Error: "use GET or POST"})
 		return
 	}
-	if !s.authorize(w, r) {
+	var body []byte
+	if r.Method == http.MethodPost {
+		var err error
+		body, err = io.ReadAll(io.LimitReader(r.Body, liveBuilderMaxBody+1))
+		if err != nil {
+			writeLiveBuilderJSON(w, http.StatusBadRequest, liveBuilderResponse{Error: "could not read the request body"})
+			return
+		}
+		if len(body) > liveBuilderMaxBody {
+			writeLiveBuilderJSON(w, http.StatusRequestEntityTooLarge, liveBuilderResponse{Error: "design is larger than 4 MiB"})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if !s.authorize(w, r, body) {
 		return
 	}
 	if r.Method == http.MethodGet {

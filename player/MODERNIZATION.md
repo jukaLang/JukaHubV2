@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **96**.
+Open tasks: **88**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -286,11 +286,6 @@ screenshots, achievements, last played, playtime graph, the save-state strip
 and Play / Resume / Options as the first three actions (manuals and guides are
 under More → Manual & guide).
 
-### LIB-30 — PSP and Dolphin saves in the save handoff (P3, M)
-**Where.** `savehandoff.go`, `ppsspp_*.go`, `dolphin*.go`.
-**Done when.** A PSP game's SAVEDATA folders and PPSSPP states (by the ID read
-from its ISO/CSO/PBP) and a GameCube game's GCI saves move with the game.
-
 ### PROF-2 — Per-person RetroAchievements and standalone-emulator saves (P2, M)
 **Where.** `retroachievements*.go`, `profiles_saves.go`, the managed PPSSPP
 launch (its memory stick folder), DraStic's launch environment,
@@ -321,10 +316,6 @@ current with a pbuffer stays raw; the context-first smoke case asserts 5
 **Done when.** The store groups a base APK with its splits (same package and
 version, side by side or inside a bundle), judges them as one app, and
 AndroidPak stages the native libraries from the matching split.
-
-### AND-21 — Minecraft copy: pick only what the port lacks (P3, S)
-**Done when.** The plan skips the ones the port provides (by the port's own file list),
-and the copy row shows the size before A.
 
 ---
 
@@ -359,8 +350,6 @@ version.
 order), fetched at most daily and checked (signature or a pinned hash list), is
 cached and used ahead of the built-in table; a bad or unverifiable file is
 ignored with a log line.
-
-
 
 ---
 
@@ -468,7 +457,7 @@ it.
 **Done when.** The first-word delay is logged (`tts_play.go` logs only
 failures) and, if it is the download, the WAV streams into the feeder as it
 arrives; a 400 or 404 for the speech model is remembered for the run; a voice
-volume slider sits under **Voice**; a second language follows INP-18 where
+volume slider sits under **Voice**; a second language follows the keyboard layout's language where
 Groq has a voice for it.
 
 ---
@@ -525,13 +514,6 @@ each scene and state, renders the footer in both vocabularies and replays each
 hint's key through the scene's key handler with a recording stub.
 **Done when.** A `make` target runs it and lists mismatches.
 
-### INP-18 — Voice command in more languages (P2, M)
-**Where.** `voicecmd_intent.go` (phrase tables), `voicecmd.go` (the
-transcription request); the keyboard layout's language
-(`vkCurrentLayout().Lang`) or the UI language as the source.
-**Done when.** At least one more language has its phrase table, is picked from
-the layout or the UI language, and English stays the fallback.
-
 ### INP-19 — Offline voice recognition on Windows (P3, M) [WIN]
 **Where.** `stt_local.go`, `stt_install.go`, the release workflow that builds
 the pack, `voicecmd.go`.
@@ -545,31 +527,9 @@ path.
 
 ## Shell (SHELL)
 
-### SHELL-6 — Back and focus that remember (P2, M)
-**Done when.** Each scene saves focus + scroll on leave and restores it on
-return (bounded map); Home restores the last focused card after a game.
-
 ---
 
 ## Power and battery (PWR)
-
-### PWR-6 — Profiles that follow the situation (P2, M)
-**Where.** `powerprofile.go`, `raemu.go`, the game options sheet.
-**Done when.** Every launch path goes through `beginLaunchPowerProfile`;
-profiles exist per game, per system and per power source (battery / charger),
-most specific wins; the game options sheet shows which one applies.
-
-### PWR-12 — Standalone emulators save on exit for JukaHub's launches (P2, M)
-**Where.** `sessionsafe_recipes.go`, `racfgscope.go` (the journaled one-launch
-edit to copy), `instantresume.go`.
-**Done when.** A library launch through DraStic (`enable_autosavestate`),
-Flycast (`Dreamcast.AutoSaveState`) or Mednafen (`autosave`) turns the
-emulator's save-on-exit on for that launch only, in the config its last run
-read, journaled and put back when the game exits; the next start loads that
-state where the emulator can be told to; such games then take the plan's Save
-step at the battery and power offs instead of the hold.
-**Verify.** A test over fixture configs: the edit, the restore after an exit
-and after a crash, and a value the player changed during the game kept.
 
 ---
 
@@ -652,13 +612,6 @@ CodeQL runs weekly on Go and JavaScript (`.github/codeql/` is empty; not a new
 per-push job), the container image and SDL
 tarballs are covered by dependabot or a pinned-digest check.
 
-### SEC-19 — The pairing code never crosses the network in clear (P2, M)
-**Where.** `livebuilder.go`, `builder-device.js`.
-**Done when.** Requests are authenticated with an HMAC of the method, path, body
-hash and a timestamp/nonce keyed by the code (or TLS with a pinned self-signed
-certificate shown as a QR), the code itself is never sent, replays are refused,
-and tests cover a replay and a stale timestamp.
-
 ### SEC-29 — Build the arm64 parts as an unprivileged user (P3, S)
 **Where.** `.github/scripts/build-root.sh` (`in_root`, `build`, `check`),
 `player/native/build-helpers.sh`, `build-runtimes.sh`.
@@ -694,10 +647,6 @@ the catalogue is signed (SEC-16).
 of the marked rows, Files has a filter-as-you-type search, and copy and move
 run off-thread with progress (the extraction queue in `files_extract.go` is
 the model: one job at a time, a staging folder, a drain on the SDL thread).
-
-### APP-7 — Notes that travel (P3, S)
-**Done when.** Notes sync between paired devices through `ssync` and render
-Markdown (headings, lists, checkboxes) in the reader view.
 
 ### APP-8 — File uploads in forms (P2, M)
 **Where.** `browser.go` (form submission), `webpage.go` (file control), Files

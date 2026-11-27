@@ -1286,7 +1286,7 @@ var bkupLibraryKeys = []string{playtimeCustomKey, "recently_played"}
 func bkupDeviceKey(k string) bool {
 	switch strings.ToLower(k) {
 	case "fullscreen", "screenwidth", "screenheight", "swapabbuttons", "swapxybuttons", strings.ToLower(abSwapMigrationKey),
-		"devicemodel", "targetplatform", "tools_path":
+		"devicemodel", "targetplatform", "tools_path", windowRectKey:
 		return true
 	}
 	return false

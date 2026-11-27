@@ -10,3 +10,8 @@
  * mkwinres.sh) recompile the .syso from this script with windres.
  */
 1 ICON "JukaHub.ico"
+
+/* Per-monitor-v2 DPI awareness (DESK-2). Windows reads the manifest before
+ * SDL starts, so the logical canvas and the window scale agree from the first
+ * frame; the legacy dpiAware line is the fallback for Windows 8.1. */
+1 24 "JukaHub.manifest"

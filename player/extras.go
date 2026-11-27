@@ -1879,10 +1879,7 @@ func loadUserConfig() *UserConfig {
 		userConfigRecoveryNotice = "Settings were damaged and have been restored from the last backup. Check anything you changed recently."
 		saveUserConfig(userConfigCache)
 	}
-	// One-time migration: fold the legacy per-feature JSON files into their
-	// jukauser.json sections, then delete them so only the two canonical JSON
-	// files remain on disk.
-	migrateLegacyUserFiles()
+
 	// Older builds wrote their implicit Celsius default into jukauser.json.
 	// Clear that legacy "C" once so the country-based default can take over;
 	// the marker keeps a later explicit choice intact.
@@ -1938,47 +1935,6 @@ func dropRetiredVaultVars(user *UserConfig) bool {
 		}
 	}
 	return changed
-}
-
-// migrateLegacyUserFiles folds any still-present legacy JSON files
-// (favorites.json, chat.json, jukaland.json) into jukauser.json sections and
-// removes them. Kept for users upgrading from older builds; new installs never
-// create these files.
-//
-// remove after 2027-05-01: an upgrade shim for installs from 0.4.0.
-func migrateLegacyUserFiles() {
-	if userConfigCache == nil {
-		return
-	}
-	if userConfigCache.Favorites == nil {
-		if data, err := os.ReadFile("favorites.json"); err == nil {
-			var fs FavoritesStore
-			if json.Unmarshal(data, &fs) == nil {
-				userConfigCache.Favorites = &fs
-				_ = os.Remove("favorites.json")
-			}
-		}
-	}
-	if userConfigCache.Chat == nil {
-		if data, err := os.ReadFile("chat.json"); err == nil {
-			var w struct {
-				Messages []ChatMessage `json:"messages"`
-			}
-			if json.Unmarshal(data, &w) == nil {
-				userConfigCache.Chat = &ChatSection{Messages: w.Messages}
-				_ = os.Remove("chat.json")
-			}
-		}
-	}
-	if userConfigCache.JukaLand == nil {
-		if data, err := os.ReadFile("jukaland.json"); err == nil {
-			var js JukaLandState
-			if json.Unmarshal(data, &js) == nil {
-				userConfigCache.JukaLand = &js
-				_ = os.Remove("jukaland.json")
-			}
-		}
-	}
 }
 
 // migrateWeatherUnitAuto clears the old implicit Celsius default once so the

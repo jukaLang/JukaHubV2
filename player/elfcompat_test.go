@@ -30,6 +30,16 @@ type testELF struct {
 	// file defines (.gnu.version_d), none when empty.
 	soname  string
 	defines []string
+	// imports are the functions the file imports, each with the symbol
+	// version it asks for ("" for an unversioned one); exports are the
+	// functions it defines.
+	imports []testImport
+	exports []string
+}
+
+// testImport is one function a test ELF imports, with the version it asks for.
+type testImport struct {
+	name, version string
 }
 
 // buildTestELF lays the file out as header, section data, section headers.
@@ -63,6 +73,8 @@ func buildTestELF(t *testing.T, spec testELF) []byte {
 	}
 	sort.Strings(libs)
 	var verneed []byte
+	versionAt := map[string]uint16{}
+	nextVersion := uint16(2)
 	for i, lib := range libs {
 		versions := spec.needs[lib]
 		vn := make([]byte, 16)
@@ -79,13 +91,40 @@ func buildTestELF(t *testing.T, spec testELF) []byte {
 			if spec.weak[v] {
 				le.PutUint16(aux[4:], elfVerFlagWeak)
 			}
-			le.PutUint16(aux[6:], uint16(2+j))
+			le.PutUint16(aux[6:], nextVersion)
+			versionAt[v] = nextVersion
+			nextVersion++
 			le.PutUint32(aux[8:], str(v))
 			if j < len(versions)-1 {
 				le.PutUint32(aux[12:], 16)
 			}
 			verneed = append(verneed, aux...)
 		}
+	}
+
+	// The dynamic symbols: the null one, the imports (SHN_UNDEF) and the
+	// exports, with one version index each (.gnu.version).
+	dynsym := make([]byte, 24)
+	versym := []byte{0, 0}
+	addSym := func(name, version string, defined bool) {
+		e := make([]byte, 24)
+		le.PutUint32(e[0:], str(name))
+		e[4] = byte(elf.STB_GLOBAL)<<4 | byte(elf.STT_FUNC)
+		if defined {
+			le.PutUint16(e[6:], uint16(elf.SHN_ABS))
+		}
+		dynsym = append(dynsym, e...)
+		ndx := uint16(1)
+		if version != "" {
+			ndx = versionAt[version]
+		}
+		versym = append(versym, byte(ndx), byte(ndx>>8))
+	}
+	for _, s := range spec.imports {
+		addSym(s.name, s.version, false)
+	}
+	for _, name := range spec.exports {
+		addSym(name, "", true)
 	}
 
 	var verdef []byte
@@ -115,8 +154,12 @@ func buildTestELF(t *testing.T, spec testELF) []byte {
 		data                []byte
 		link, info, entsize uint32
 	}
+	// .dynstr is section 1, .dynsym 2 and .gnu.version 3: their sh_link
+	// values name each other in that order.
 	sections := []section{
 		{name: ".dynstr", typ: uint32(elf.SHT_STRTAB), data: dynstr},
+		{name: ".dynsym", typ: uint32(elf.SHT_DYNSYM), data: dynsym, link: 1, info: 1, entsize: 24},
+		{name: ".gnu.version", typ: uint32(elf.SHT_GNU_VERSYM), data: versym, link: 2, entsize: 2},
 		{name: ".dynamic", typ: uint32(elf.SHT_DYNAMIC), data: dynamic, link: 1, entsize: 16},
 	}
 	if len(verneed) > 0 {

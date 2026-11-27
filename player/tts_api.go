@@ -250,7 +250,8 @@ func ttsBegin(gen uint64, kind ttsKind, origin ttsOrigin, text string, src *ttsS
 		}
 		src = ttsFixedSource(chunks)
 	}
-	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate)}
+	s := &ttsSession{gen: gen, kind: kind, origin: origin, src: src, rate: int(audioSampleRate),
+		volume: ttsVolumeGain(ttsVolumeOf(cfg)), posted: time.Now()}
 	s.local, s.hasLocal = ttsLocal()
 	pre := ttsFailNone
 	voice := ttsVoiceOf(cfg)
@@ -308,10 +309,12 @@ var ttsGate struct {
 	keyID     uint64
 	terms     bool      // the model's terms are not accepted
 	keyBad    bool      // Groq rejected the key
+	modelBad  bool      // the speech model was refused (400/404): no retry helps this run
 	restUntil time.Time // the allowance is used up until then (monotonic)
 	daily     bool      // that rest is the day's allowance
 	toldTerms bool      // the one-time notices were shown
 	toldRest  bool
+	toldModel bool
 }
 
 // ttsKeyID is a key's fingerprint.
@@ -327,9 +330,9 @@ func ttsGateKeyLocked(keyID uint64) {
 		return
 	}
 	ttsGate.keyID = keyID
-	ttsGate.terms, ttsGate.keyBad, ttsGate.daily = false, false, false
+	ttsGate.terms, ttsGate.keyBad, ttsGate.modelBad, ttsGate.daily = false, false, false, false
 	ttsGate.restUntil = time.Time{}
-	ttsGate.toldTerms, ttsGate.toldRest = false, false
+	ttsGate.toldTerms, ttsGate.toldRest, ttsGate.toldModel = false, false, false
 }
 
 // ttsGateCheck is the refusal that still stands for keyID, or ttsFailNone.
@@ -342,6 +345,8 @@ func ttsGateCheck(keyID uint64) ttsFail {
 		return ttsFailTerms
 	case ttsGate.keyBad:
 		return ttsFailKey
+	case ttsGate.modelBad:
+		return ttsFailModel
 	case time.Now().Before(ttsGate.restUntil):
 		return ttsFailLimit
 	}
@@ -358,6 +363,8 @@ func ttsGateNote(keyID uint64, fail ttsFail, wait time.Duration, daily bool) {
 		ttsGate.terms = true
 	case ttsFailKey:
 		ttsGate.keyBad = true
+	case ttsFailModel:
+		ttsGate.modelBad = true
 	case ttsFailLimit:
 		now := time.Now()
 		if !now.Before(ttsGate.restUntil) {
@@ -373,9 +380,9 @@ func ttsGateNote(keyID uint64, fail ttsFail, wait time.Duration, daily bool) {
 func ttsGateClear() {
 	ttsGate.mu.Lock()
 	defer ttsGate.mu.Unlock()
-	ttsGate.terms, ttsGate.keyBad, ttsGate.daily = false, false, false
+	ttsGate.terms, ttsGate.keyBad, ttsGate.modelBad, ttsGate.daily = false, false, false, false
 	ttsGate.restUntil = time.Time{}
-	ttsGate.toldTerms, ttsGate.toldRest = false, false
+	ttsGate.toldTerms, ttsGate.toldRest, ttsGate.toldModel = false, false, false
 }
 
 // ttsGateTellOnce reports whether the notice for fail is still to be shown for
@@ -398,6 +405,12 @@ func ttsGateTellOnce(keyID uint64, fail ttsFail) bool {
 			return false
 		}
 		ttsGate.toldRest = true
+		return true
+	case ttsFailModel:
+		if ttsGate.toldModel {
+			return false
+		}
+		ttsGate.toldModel = true
 		return true
 	}
 	return false

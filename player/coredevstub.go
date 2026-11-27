@@ -241,8 +241,10 @@ const (
 	devStubRWBias = 0x10000
 	// devStubMaxSyms bounds one stand-in.
 	devStubMaxSyms = 8192
-	// devStubDynCount is the number of dynamic entries, DT_NULL included.
-	devStubDynCount = 10
+	// devStubDynBase is the number of dynamic entries a stand-in has before
+	// its DT_NEEDED ones: name, hash, string and symbol tables, their sizes,
+	// and the version tables.
+	devStubDynBase = 9
 )
 
 // The section headers, in file order after the null one.
@@ -311,8 +313,23 @@ func a64StrX(rt, rn uint32, imm uint64) uint32 {
 // what ret says), versions defined beside the base one (with any version a
 // symbol names), for 64-bit ARM. See the file comment for the layout.
 func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(string) devStubRet) ([]byte, error) {
+	return devStubBuildNeeding(soname, nil, versions, syms, ret)
+}
+
+// devStubBuildNeeding is devStubBuild for a stand-in that keeps a real library
+// underneath it: every path in needed goes into DT_NEEDED, so the loader
+// brings that file in beside the stand-in and the calls the stand-in does not
+// export are still answered by the library itself. JukaHub uses it for a
+// library the firmware has but too old (wine_weston_libs.go).
+func devStubBuildNeeding(soname string, needed, versions []string, syms []devStubSym, ret func(string) devStubRet) ([]byte, error) {
 	if soname == "" || strings.ContainsAny(soname, "/\x00") {
 		return nil, errors.New("no library name")
+	}
+	needed = slices.Clone(needed)
+	for _, path := range needed {
+		if path == "" || strings.ContainsRune(path, 0) {
+			return nil, errors.New("a library to keep underneath has no name")
+		}
 	}
 	syms = slices.Clone(syms)
 	sort.Slice(syms, func(i, j int) bool {
@@ -362,6 +379,9 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 	str(soname)
 	for _, v := range vers {
 		str(v)
+	}
+	for _, path := range needed {
+		str(path)
 	}
 	for _, s := range syms {
 		str(s.name)
@@ -484,7 +504,8 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 	oText := place(textSize, 16)
 	oRodata := place(uint64(len(rodata)), 8)
 	rxEnd := off
-	oDynamic := place(devStubDynCount*16, 16)
+	dynCount := devStubDynBase + len(needed) + 1
+	oDynamic := place(uint64(dynCount)*16, 16)
 	var dataSize uint64
 	if hasVersion {
 		dataSize = 24 // struct libusb_version: four uint16, two pointers
@@ -550,7 +571,7 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 	copy(out[oShstr:], shstr)
 
 	// The dynamic section.
-	dyn := [devStubDynCount][2]uint64{
+	dyn := [][2]uint64{
 		{uint64(elf.DT_SONAME), uint64(str(soname))},
 		{uint64(elf.DT_HASH), oHash},
 		{uint64(elf.DT_STRTAB), oDynstr},
@@ -560,7 +581,13 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 		{uint64(elf.DT_VERSYM), oVersym},
 		{uint64(elf.DT_VERDEF), oVerdef},
 		{uint64(elf.DT_VERDEFNUM), uint64(len(defs))},
-		{uint64(elf.DT_NULL), 0},
+	}
+	for _, path := range needed {
+		dyn = append(dyn, [2]uint64{uint64(elf.DT_NEEDED), uint64(str(path))})
+	}
+	dyn = append(dyn, [2]uint64{uint64(elf.DT_NULL), 0})
+	if len(dyn) != dynCount {
+		return nil, fmt.Errorf("%d dynamic entries, want %d", len(dyn), dynCount)
 	}
 	for i, d := range dyn {
 		le.PutUint64(out[oDynamic+uint64(16*i):], d[0])
@@ -596,7 +623,7 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 	}
 	ph(0, elf.PT_LOAD, elf.PF_R|elf.PF_X, 0, 0, rxEnd, devStubAlign)
 	ph(1, elf.PT_LOAD, elf.PF_R|elf.PF_W, oDynamic, oDynamic+devStubRWBias, rwEnd-oDynamic, devStubAlign)
-	ph(2, elf.PT_DYNAMIC, elf.PF_R|elf.PF_W, oDynamic, oDynamic+devStubRWBias, devStubDynCount*16, 8)
+	ph(2, elf.PT_DYNAMIC, elf.PF_R|elf.PF_W, oDynamic, oDynamic+devStubRWBias, uint64(dynCount)*16, 8)
 	ph(3, elf.PT_GNU_STACK, elf.PF_R|elf.PF_W, 0, 0, 0, 16)
 
 	// The section headers.
@@ -621,7 +648,7 @@ func devStubBuild(soname string, versions []string, syms []devStubSym, ret func(
 	sh(devStubShVerdef, elf.SHT_GNU_VERDEF, alloc, oVerdef, oVerdef, uint64(len(verdef)), devStubShDynstr, uint32(len(defs)), 8, 0)
 	sh(devStubShText, elf.SHT_PROGBITS, alloc|elf.SHF_EXECINSTR, oText, oText, textSize, 0, 0, 16, 0)
 	sh(devStubShRodata, elf.SHT_PROGBITS, alloc, oRodata, oRodata, uint64(len(rodata)), 0, 0, 8, 0)
-	sh(devStubShDynamic, elf.SHT_DYNAMIC, alloc|elf.SHF_WRITE, oDynamic+devStubRWBias, oDynamic, devStubDynCount*16, devStubShDynstr, 0, 8, 16)
+	sh(devStubShDynamic, elf.SHT_DYNAMIC, alloc|elf.SHF_WRITE, oDynamic+devStubRWBias, oDynamic, uint64(dynCount)*16, devStubShDynstr, 0, 8, 16)
 	sh(devStubShData, elf.SHT_PROGBITS, alloc|elf.SHF_WRITE, oData+devStubRWBias, oData, dataSize, 0, 0, 8, 0)
 	sh(devStubShShstrtab, elf.SHT_STRTAB, 0, 0, oShstr, uint64(len(shstr)), 0, 0, 1, 0)
 	return out, nil

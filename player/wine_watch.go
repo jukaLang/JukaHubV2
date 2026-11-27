@@ -59,10 +59,24 @@ const (
 
 // wineDisplayStuckError is a session the start watch ended: its display never
 // came up, so its program never started. wineRun shows it whatever the
-// session's length.
-type wineDisplayStuckError struct{ reason string }
+// session's length. old is the loader's cause when the display stopped because
+// a library this firmware has is too old (wine_weston_cause.go): the card's
+// report names its library, function and version.
+type wineDisplayStuckError struct {
+	reason string
+	old    *wineOldLibraryError
+}
 
 func (e *wineDisplayStuckError) Error() string { return e.reason }
+
+// Unwrap hands the card and its report the old library, when that is why the
+// display stopped.
+func (e *wineDisplayStuckError) Unwrap() error {
+	if e.old == nil {
+		return nil
+	}
+	return e.old
+}
 
 // wineWestonWatch is the watch's memory between looks.
 type wineWestonWatch struct {
@@ -186,6 +200,7 @@ func wineWatchWestonStart(cmd *exec.Cmd, script, status, logPath string, logOffs
 				said = wineLogHas(logPath, logOffset, wineWestonStartLine)
 			}
 			var reason string
+			var old *wineOldLibraryError
 			switch w.step(wineGroupProcs(pgid), script, status != "" && regularFile(status), said, ran, now) {
 			case wineWestonWaiting:
 				continue
@@ -195,6 +210,12 @@ func wineWatchWestonStart(cmd *exec.Cmd, script, status, logPath string, logOffs
 			case wineWestonOver:
 				return
 			case wineWestonDied:
+				// Weston's own words first: a module it could not load says
+				// which function, library and version stopped it.
+				if old = westonLoadFailure(logPath, logOffset); old != nil {
+					reason = old.Error()
+					break
+				}
 				reason = "WestonPack's display (Weston) stopped while it was starting, so the program could not open a window; the log has Weston's own messages"
 			case wineWestonTimedOut:
 				reason = "WestonPack's display had not come up after " + wineWestonStartLimit.String() + ", so the program was not started; the log shows how far WestonPack got"
@@ -202,7 +223,7 @@ func wineWatchWestonStart(cmd *exec.Cmd, script, status, logPath string, logOffs
 			if quitting != nil && quitting() {
 				return
 			}
-			stuck.Store(&wineDisplayStuckError{reason: reason})
+			stuck.Store(&wineDisplayStuckError{reason: reason, old: old})
 			log.printf("display: %s; ending the session\n", reason)
 			logWarn("windowsapps", "%s", reason)
 			quit()

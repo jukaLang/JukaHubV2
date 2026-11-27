@@ -182,11 +182,7 @@ func setHubEnter(c *Config, ctx context.Context, scene string) {
 	pendingRow, pendingLabel := setHub.pendingRow, setHub.pendingLabel
 	setHub.pendingRow, setHub.pendingLabel = "", ""
 	setHub.deepLink = false
-	if id := setLegacySection(scene); id != "" {
-		if i := setSectionIndex(id); i >= 0 {
-			section, deep = i, true
-		}
-	}
+
 	if section < 0 || section >= len(setSections()) {
 		section = 0
 	}

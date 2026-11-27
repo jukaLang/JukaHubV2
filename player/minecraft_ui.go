@@ -358,6 +358,9 @@ func mcCopyRowSpec(r mcCopyRow) tbxRowSpec {
 	case r.version.Type != "":
 		bits = append(bits, r.version.Type)
 	}
+	if r.version.Size > 0 {
+		bits = append(bits, "about "+humanBytes(r.version.Size))
+	}
 	java := mcScreen.ports[mcPortJava]
 	switch {
 	case len(java.Starts) == 0:
