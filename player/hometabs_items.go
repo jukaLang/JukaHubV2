@@ -362,6 +362,18 @@ func homeTabsEntertainmentItems(c *Config) []homeTabItem {
 		}
 	}
 	add(m.app(homeTileScenePrefix+"Tube", "YouTube", "Videos and channels", "youtube"))
+	// Other Videos is a folder of site shortcuts. Each tile opens the same
+	// link keyboard and queues a video through yt-dlp; the children come from
+	// the site list, so user additions and plugin hosts appear here too.
+	out = append(out, homeTabItem{
+		Key:        "x:othervideos",
+		Title:      "Other Videos",
+		Sub:        "Type a domain, then play or save links from it",
+		Glyph:      "tv",
+		Folder:     true,
+		FolderView: "other-videos",
+		Children:   otherVideosChildren,
+	})
 	add(m.app(homeTileScenePrefix+"Shorts", "", "Short videos", ""))
 	add(m.app(homeTileScenePrefix+"LiveTV", "Live TV", "Channels to watch now", "tv"))
 	if it, ok := m.app(homeTileActionPrefix+"Downloads", "Downloaded", "Saved videos and music", "download"); ok {

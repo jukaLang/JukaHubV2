@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -233,7 +232,7 @@ func jukaosNativeWifiAddress() {
 	for time.Now().Before(end) {
 		time.Sleep(time.Second)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		out, _ := exec.CommandContext(ctx, "wpa_cli", "-i", jukaosWifiIface, "status").Output()
+		out, _ := hiddenCommandContext(ctx, "wpa_cli", "-i", jukaosWifiIface, "status").Output()
 		cancel()
 		if !strings.Contains(string(out), "wpa_state=COMPLETED") {
 			continue
@@ -315,3 +314,4 @@ func jukaosNativeService(script, verb string) error {
 	logInfo("jukaos", "%s %s", script, verb)
 	return nil
 }
+

@@ -265,7 +265,7 @@ func castTapRunProbeChild(configPath string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), castTapProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, castTapProbeFlag)
+	cmd := hiddenCommandContext(ctx, exe, castTapProbeFlag)
 	env := spatialEnvWithout(os.Environ(), "AUDIODEV", "ALSA_CONFIG_PATH", "SDL_AUDIODRIVER")
 	cmd.Env = append(env, "ALSA_CONFIG_PATH="+configPath, "AUDIODEV="+castTapPCM, "SDL_AUDIODRIVER=alsa")
 	cmd.WaitDelay = 2 * time.Second
@@ -600,3 +600,4 @@ func castAudioChildEnv(cmd *exec.Cmd, env []string) []string {
 	logInfo("cast", "this program's sound also goes to Screen Share (%s)", path)
 	return env
 }
+

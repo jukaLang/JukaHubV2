@@ -2072,7 +2072,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 	musicRects.rowStart = start
 	if len(chapters) > 0 {
-		renderMusicChapterRows(renderer, config, font, chapters, position, cardX, cardW, rowsTop, visible)
+		renderMusicChapterRows(renderer, config, font, chapters, position, cursor, cardX, cardW, rowsTop, visible)
 	} else if len(tracks) == 0 {
 		empty := "No audio files here. Open Files, enter a folder and pick a song."
 		ew, _, _ := font.SizeUTF8(empty)
@@ -2312,7 +2312,12 @@ func HandleMusicClick(mx, my int32) bool {
 	}
 	for i, row := range musicRects.rows {
 		if pointInRect(mx, my, row) {
-			musicPlayTrack(musicRects.rowStart + i)
+			idx := musicRects.rowStart + i
+			if ch := musicChapters(); len(ch) > 0 {
+				musicPlayChapter(idx)
+			} else {
+				musicPlayTrack(idx)
+			}
 			return true
 		}
 	}
@@ -2386,8 +2391,15 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 			musicCtlDown(config)
 			return
 		}
+		// musicChapters takes the same lock, so read the chapter list first:
+		// taking it again while this handler holds it stops the UI thread.
+		chapters := musicChapters()
 		music.mu.Lock()
-		if music.cursor < len(music.tracks)-1 {
+		limit := len(music.tracks) - 1
+		if len(chapters) > 0 {
+			limit = len(chapters) - 1
+		}
+		if music.cursor < limit {
 			music.cursor++
 		}
 		music.mu.Unlock()
@@ -2403,7 +2415,11 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		music.mu.Lock()
 		idx := music.cursor
 		music.mu.Unlock()
-		musicPlayTrack(idx)
+		if ch := musicChapters(); len(ch) > 0 {
+			musicPlayChapter(idx)
+		} else {
+			musicPlayTrack(idx)
+		}
 	case sdl.K_p:
 		musicTogglePause()
 	case sdl.K_n:
@@ -2691,8 +2707,15 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 			musicCtlDown(appConfig)
 			return true
 		}
+		// musicChapters takes the same lock, so read the chapter list first:
+		// taking it again while this handler holds it stops the UI thread.
+		chapters := musicChapters()
 		music.mu.Lock()
-		if music.cursor < len(music.tracks)-1 {
+		limit := len(music.tracks) - 1
+		if len(chapters) > 0 {
+			limit = len(chapters) - 1
+		}
+		if music.cursor < limit {
 			music.cursor++
 		}
 		music.mu.Unlock()
@@ -2706,7 +2729,11 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		music.mu.Lock()
 		idx := music.cursor
 		music.mu.Unlock()
-		musicPlayTrack(idx)
+		if ch := musicChapters(); len(ch) > 0 {
+			musicPlayChapter(idx)
+		} else {
+			musicPlayTrack(idx)
+		}
 	case sdl.CONTROLLER_BUTTON_Y:
 		// Y arms the Y+Left chord (background playback) as well as favoriting:
 		// a Left pressed within the window consumes the chord instead.

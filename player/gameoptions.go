@@ -31,8 +31,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -46,6 +48,13 @@ const (
 	gameOptionsMaxArgs   = 16
 	gameOptionsMaxArgLen = 200
 	gameOptionsMaxText   = 512
+
+	// gameOptionsMaxEnv caps how many per-game environment variables a game can
+	// carry, and the lengths keep a hand-edited file from turning into a
+	// megabyte of environment.
+	gameOptionsMaxEnv      = 16
+	gameOptionsMaxEnvName  = 64
+	gameOptionsMaxEnvValue = 512
 )
 
 // gameOptions is what one ROM overrides. Both fields are optional: a zero
@@ -54,6 +63,7 @@ const (
 type gameOptions struct {
 	MaxFreqKHz  int64  `json:"max_freq_khz,omitempty"`
 	Args        string `json:"args,omitempty"`
+	Env         string `json:"env,omitempty"`
 	CPUProfile  string `json:"cpu_profile,omitempty"`
 	VideoFilter string `json:"video_filter,omitempty"`
 
@@ -67,6 +77,7 @@ type gameOptions struct {
 
 func (o gameOptions) empty() bool {
 	return o.MaxFreqKHz <= 0 && strings.TrimSpace(o.Args) == "" &&
+		strings.TrimSpace(o.Env) == "" &&
 		o.CPUProfile == "" && o.VideoFilter == "" && o.Emulator == "" && o.LastEmulator == ""
 }
 
@@ -337,6 +348,93 @@ func parseGameArgs(text string) []string {
 	return out
 }
 
+// parseGameEnv parses a per-game environment field into a map of validated
+// names. Lines are "NAME=value" (one per line, or separated by spaces after
+// the '='). Invalid names, duplicates or more than gameOptionsMaxEnv entries
+// make it return an error instead of a partial result, so the options sheet
+// can tell the user rather than silently dropping a variable.
+func parseGameEnv(text string) (map[string]string, error) {
+	out := map[string]string{}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return out, nil
+	}
+	count := 0
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Allow ";"-separated entries on one line too.
+		for _, part := range strings.Split(line, ";") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			idx := strings.IndexByte(part, '=')
+			var key, value string
+			if idx < 0 {
+				fields := strings.Fields(part)
+				if len(fields) < 2 {
+					return nil, fmt.Errorf("invalid environment entry %q", part)
+				}
+				key = fields[0]
+				value = strings.Join(fields[1:], " ")
+			} else {
+				key = strings.TrimSpace(part[:idx])
+				value = part[idx+1:]
+			}
+			if key == "" || !gameProfileEnvKeyPattern().MatchString(key) {
+				return nil, fmt.Errorf("invalid environment variable name %q", key)
+			}
+			if len(key) > gameOptionsMaxEnvName {
+				return nil, fmt.Errorf("environment variable name %q is too long", key)
+			}
+			if len(value) > gameOptionsMaxEnvValue {
+				value = value[:gameOptionsMaxEnvValue]
+			}
+			if _, dup := out[key]; dup {
+				return nil, fmt.Errorf("duplicate environment variable %q", key)
+			}
+			out[key] = value
+			count++
+			if count > gameOptionsMaxEnv {
+				return nil, fmt.Errorf("more than %d environment variables", gameOptionsMaxEnv)
+			}
+		}
+	}
+	return out, nil
+}
+
+// validateGameEnv reports whether text parses as a valid environment field.
+func validateGameEnv(text string) error {
+	_, err := parseGameEnv(text)
+	return err
+}
+
+// gameEnvString turns a parsed environment map back into the field's text form,
+// sorted by name, for storage and display.
+func gameEnvString(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for _, name := range names {
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(name)
+		b.WriteByte('=')
+		b.WriteString(env[name])
+	}
+	return b.String()
+}
+
 // normaliseGameOptions trims and validates what came from a file or the panel.
 func normaliseGameOptions(o gameOptions) gameOptions {
 	o.Args = strings.TrimSpace(o.Args)
@@ -349,6 +447,15 @@ func normaliseGameOptions(o gameOptions) gameOptions {
 			limit = len(runes)
 		}
 		o.Args = strings.TrimSpace(string(runes[:limit]))
+	}
+	o.Env = strings.TrimSpace(o.Env)
+	if len(o.Env) > gameOptionsMaxText {
+		runes := []rune(o.Env)
+		limit := gameOptionsMaxText
+		if limit > len(runes) {
+			limit = len(runes)
+		}
+		o.Env = strings.TrimSpace(string(runes[:limit]))
 	}
 	if o.MaxFreqKHz < 0 {
 		o.MaxFreqKHz = 0

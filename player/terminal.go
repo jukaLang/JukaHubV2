@@ -566,7 +566,7 @@ func termRunExternal(line string) {
 			termAppend("Command not found: "+fields[0], termKindError)
 			return
 		}
-		cmd = exec.CommandContext(ctx, binPath, fields[1:]...)
+		cmd = hiddenCommandContext(ctx, binPath, fields[1:]...)
 	}
 	cmd.Dir = term.cwd
 	// On the handheld, the programs Linux packages installed come first
@@ -1821,3 +1821,4 @@ func (terminalScene) handleController(e *sdl.ControllerButtonEvent, c *Config) b
 }
 
 func init() { registerScene(terminalScene{sceneBase{name: "Terminal"}}) }
+

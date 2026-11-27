@@ -4397,3 +4397,2101 @@ body:not(.element-selected) .element:focus {
   --player-input: #eef1f7;
   --player-input-text: #242a38;
 }
+
+/* Add your CSS improvements below this marker */
+
+
+/* === Previewed content === */
+/* Rules here only apply inside the canvas where the builder shows a
+   previewed page or the Text Browser element. They are intentionally narrow
+   so they do not act like a global reset on the builder chrome. */
+
+#canvas img,
+#canvas video,
+#canvas picture,
+#canvas svg {
+  max-width: 100%;
+  max-height: 75vh;
+}
+
+#canvas img,
+#canvas video {
+  object-fit: contain;
+}
+
+#canvas img[width],
+#canvas img[height] {
+  aspect-ratio: attr(width) / attr(height);
+}
+
+#canvas svg {
+  shape-rendering: geometricPrecision;
+}
+
+#canvas video,
+#canvas iframe,
+#canvas embed,
+#canvas object {
+  margin-block-start: 0;
+  margin-block-end: 0.5em;
+}
+
+#canvas img.logo,
+#canvas img.icon,
+#canvas img.thumbnail,
+#canvas .thumbnail {
+  max-width: 100%;
+  max-height: 6em;
+}
+
+#canvas a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+#canvas a:link,
+#canvas a:visited {
+  color: var(--link, inherit);
+}
+
+#canvas th,
+#canvas td {
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  border-block-end: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+#canvas th {
+  text-align: start;
+  font-weight: 600;
+}
+
+#canvas .table-wrapper,
+#canvas .table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-md);
+}
+
+#canvas hr,
+#canvas .rule,
+#canvas .divider,
+#canvas .separator {
+  border: 0;
+  border-block-start: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  margin-block-start: 0.8em;
+  margin-block-end: 0.8em;
+}
+
+#canvas .alert-info {
+  border-inline-start: 3px solid var(--accent, #6ee7b7);
+}
+
+#canvas .alert-warning {
+  border-inline-start: 3px solid var(--warn, #f5d371);
+}
+
+#canvas .alert-error {
+  border-inline-start: 3px solid var(--danger, #f78b8b);
+}
+
+#canvas .alert-success {
+  border-inline-start: 3px solid var(--success, #6ee7b7);
+}
+
+#canvas .tooltip,
+#canvas .popover,
+#canvas .dropdown,
+#canvas .menu {
+  max-width: 90vw;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* === Text Browser web content === */
+.textbrowser-content,
+.textbrowser-content *,
+.element.is-textbrowser .textbrowser-content {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: start;
+}
+
+.textbrowser-content p,
+.textbrowser-content div,
+.textbrowser-content section,
+.textbrowser-content article,
+.textbrowser-content li,
+.textbrowser-content td,
+.textbrowser-content th {
+  margin-block-start: 0.35em;
+  margin-block-end: 0.35em;
+}
+
+.textbrowser-content p {
+  margin-block-end: 0.5em;
+}
+
+.textbrowser-content h1,
+.textbrowser-content h2,
+.textbrowser-content h3,
+.textbrowser-content h4,
+.textbrowser-content h5,
+.textbrowser-content h6 {
+  margin-block-start: 0.6em;
+  margin-block-end: 0.25em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.textbrowser-content a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+.textbrowser-content code,
+.textbrowser-content pre,
+.textbrowser-content kbd {
+  font-size: 0.9em;
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.25em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.textbrowser-content pre {
+  padding: 0.5em 0.7em;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+}
+
+.textbrowser-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.textbrowser-content .table-scroll,
+.textbrowser-content table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.textbrowser-content table {
+  border-collapse: collapse;
+}
+
+.textbrowser-content .article,
+.textbrowser-content .content,
+.textbrowser-content .post,
+.textbrowser-content .entry,
+.textbrowser-content .copy,
+.textbrowser-content .body {
+  max-width: 46em;
+  margin-inline: auto;
+}
+
+.textbrowser-content img,
+.textbrowser-content svg,
+.textbrowser-content video {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  margin-block-start: 0.35em;
+  margin-block-end: 0.35em;
+  display: block;
+}
+
+.textbrowser-content figure {
+  margin-block-start: 0.5em;
+  margin-block-end: 0.5em;
+}
+
+.textbrowser-content figcaption {
+  font-size: 0.85em;
+  color: var(--text-muted, inherit);
+  margin-block-start: 0.25em;
+}
+
+.textbrowser-content iframe,
+.textbrowser-content embed,
+.textbrowser-content object,
+.textbrowser-content video {
+  max-height: 65vh;
+  margin-block-start: 0;
+  margin-block-end: 0.4em;
+}
+
+/* === Input Field Rendering === */
+#canvas .element.is-input,
+#canvas .element.is-input *,
+#canvas .element.is-input::before,
+#canvas .element.is-input::after {
+  --element-radius: var(--radius-md);
+}
+
+#canvas .element.is-input {
+  border-radius: var(--element-radius);
+}
+
+#canvas .element.is-input .element-label,
+#canvas .element.is-input .element-value,
+#canvas .element.is-input .element-placeholder {
+  border-radius: inherit;
+}
+
+#canvas .element.is-input .element-placeholder {
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+/* === More previewed-site patterns === */
+/* These handle common patterns that show up on arbitrary pages and tend to
+   look cramped or broken inside a small handheld preview. They stay inside
+   #canvas and the Text Browser so they do not touch the builder chrome. */
+
+/* Breadcrumbs and step indicators are usually dense and wide. Keep them on
+   one line only when they fit, otherwise let them wrap or ellipsis. */
+#canvas .breadcrumb,
+#canvas .breadcrumbs,
+#canvas .steps,
+#canvas .step-links,
+#canvas .pager,
+#canvas .pagination,
+#canvas .pagination-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em 0.5em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .breadcrumb {
+  max-width: 100%;
+}
+
+#canvas .breadcrumb a,
+#canvas .breadcrumbs a,
+#canvas .step-links a,
+#canvas .pager a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Pagination controls often use tiny tap targets. Give them a little more
+   breathing room inside the preview so they stay usable on a controller. */
+#canvas .pagination,
+#canvas .pagination-inner,
+#canvas .pager,
+#canvas .page-numbers {
+  gap: 0.25em;
+}
+
+#canvas .pagination a,
+#canvas .pagination button,
+#canvas .page-numbers a,
+#canvas .page-numbers button {
+  min-width: 2.2em;
+  min-height: 2.2em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+/* Sticky headers and bars from third-party sites can pin under the builder's
+   own canvas chrome. Keep them from escaping the preview, and keep them from
+   taking the full preview height on a small screen. */
+#canvas .sticky,
+#canvas [style*="position: sticky"],
+#canvas header.sticky,
+#canvas .site-header,
+#canvas .topbar,
+#canvas .nav-wrapper {
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* Read-more, show-more and tab controls should not collapse to a single
+   dense line on a tiny preview. Give them a touch-friendly minimum size. */
+#canvas .read-more,
+#canvas .show-more,
+#canvas .more,
+#canvas .tab,
+#canvas .tab-link,
+#canvas .tab-btn,
+#canvas .tab-button,
+#canvas [role="tab"],
+#canvas .toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  cursor: pointer;
+}
+
+#canvas .tabs,
+#canvas .tab-list,
+#canvas .tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em;
+}
+
+/* Lists inside previewed articles often use very tight markers. Keep them
+   readable and let long list items wrap on a handheld preview. */
+#canvas .list,
+#canvas .list-item,
+#canvas li > a,
+#canvas ul a,
+#canvas ol a {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas li > a,
+#canvas ul a,
+#canvas ol a {
+  display: inline-block;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Figures with captions often lose their caption on small previews when the
+   image is forced huge. Keep the caption attached and let the figure breathe. */
+#canvas figure,
+#canvas .figure,
+#canvas figure img,
+#canvas figure svg,
+#canvas figure video {
+  max-width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+  display: block;
+  margin-block-start: 0;
+  margin-block-end: 0.35em;
+}
+
+#canvas figcaption,
+#canvas .caption,
+#canvas .figure-caption {
+  font-size: 0.82em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+  margin-block-start: 0.15em;
+  margin-block-end: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Long UI strings from other sites (buttons, chips, tags, filenames, paths)
+   should not overflow the small preview edge horizontally. */
+#canvas .filename,
+#canvas .file-path,
+#canvas .path,
+#canvas .code-path,
+#canvas .token,
+#canvas .hash,
+#canvas .id,
+#canvas .code,
+#canvas .monospace,
+#canvas .mono {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  white-space: -moz-pre-wrap;
+}
+
+/* Keep wide data strings such as long query strings, hashes or base64 chunks
+   from breaking layout inside the preview. */
+#canvas code,
+#canvas pre,
+#canvas samp,
+#canvas kbd,
+#canvas var,
+#canvas .inline-code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* When a previewed site centers a small card or widget very tightly, keep it
+   from becoming impossibly tiny on a handheld canvas. */
+#canvas .centered,
+#canvas .center,
+#canvas .align-center,
+#canvas .card-columns,
+#canvas .grid {
+  max-width: 100%;
+}
+
+/* If a previewed page uses a very wide content column by default, scale it
+   back inside the preview so the text stays readable on a small screen. */
+#canvas .container,
+#canvas .wrapper,
+#canvas .wrap,
+#canvas .content,
+#canvas .layout {
+  max-width: 100%;
+}
+
+/* Overflowing sidebars on arbitrary sites can push the preview off the tiny
+   handheld screen. Keep their width contained and let the preview scroll. */
+#canvas aside,
+#canvas .sidebar,
+#canvas .side,
+#canvas .aside {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* If a previewed page uses very long inline emphasis strings, keep them from
+   stretching the preview horizontally. */
+#canvas strong,
+#canvas b,
+#canvas em,
+#canvas i,
+#canvas u,
+#canvas mark,
+#canvas small,
+#canvas sub,
+#canvas sup,
+#canvas span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+ strong,
+ #canvas b {
+  font-weight: 600;
+ }
+
+#canvas small {
+  font-size: 0.85em;
+}
+
+/* If a previewed page uses a lot of non-breaking content, leave the canvas a
+   way to keep it inside the small screen without letting one string force a
+   horizontal scroll on the whole page. */
+#canvas .nobreak,
+#canvas .no-break,
+#canvas .nowrap,
+#canvas .text-nowrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* Keep very long quotes from becoming an unread wall on a handheld preview. */
+#canvas blockquote,
+#canvas .pullquote,
+#canvas q {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* === CNN-style patterns === */
+/* Network/news pages tend to stack a lot of media, promo cards, video
+   thumbnails, recommendation ribs and consent layers. This keeps those
+   pieces readable inside the small canvas preview without turning the rule
+   into a global reset on the builder chrome. */
+
+/* Video and live player embeds from news sites often push a tall preview
+   around. Keep them inside the canvas and leave a little room under them. */
+#canvas video,
+#canvas iframe,
+#canvas embed,
+#canvas .video-player,
+#canvas .video-player-wrapper,
+#canvas .video-wrapper,
+#canvas .media-player,
+#canvas [class*="player"],
+#canvas [class*="Video"],
+#canvas [class*="video"],
+#canvas [class*="Live"],
+#canvas .media-embed {
+  max-height: 65vh;
+  margin-block-start: 0;
+  margin-block-end: 0.4em;
+  overflow: hidden;
+}
+
+#canvas iframe,
+#canvas embed {
+  border: 0;
+}
+
+/* Promo and article-card patterns often use huge imagery with a thin headline
+   under them. Keep the image bounded and the text attached. */
+#canvas .media,
+#canvas .media-body,
+#canvas .media-object,
+#canvas .featured-image,
+#canvas .article-media,
+#canvas .card-media,
+#canvas .story-media,
+#canvas .img-wrap,
+#canvas .media-wrap,
+#canvas .photo-credit {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .featured-image img,
+#canvas .article-media img,
+#canvas .card-media img,
+#canvas .media img,
+#canvas .media-object img {
+  max-width: 100%;
+  max-height: 55vh;
+  object-fit: contain;
+  display: block;
+}
+
+#canvas .photo-credit {
+  font-size: 0.75em;
+  color: var(--text-muted, inherit);
+  margin-block-start: 0.2em;
+}
+
+/* Headlines on news sites are often large and truncate aggressively. Keep
+   them from overflowing the small preview horizontally and let them wrap. */
+#canvas h1,
+#canvas h2,
+#canvas h3,
+#canvas .headline,
+#canvas .title,
+#canvas .article-title,
+#canvas .story-title,
+#canvas .section-title,
+#canvas .post-title,
+#canvas .entry-title,
+#canvas [class*="title"],
+#canvas [class*="headline"] {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+  max-width: 100%;
+}
+
+#canvas .headline,
+#canvas .title,
+#canvas .article-title,
+#canvas .story-title {
+  font-size: clamp(1.05rem, 4.5vw, 1.5rem);
+}
+
+/* Teaser summaries and description text should stay readable without filling
+   the whole screen on a handheld. */
+#canvas .summary,
+#canvas .description,
+#canvas .teaser,
+#canvas .lede,
+#canvas .subhead,
+#canvas .abstract,
+#canvas .excerpt,
+#canvas .article-body,
+#canvas .story-body {
+  font-size: clamp(0.9rem, 3.6vw, 1.05rem);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+/* Recommendation ribs and "More from CNN" style lists can be dense, with
+   many small blocks. Keep them wrapped and tappable. */
+#canvas .recommendations,
+#canvas .recs,
+#canvas .related,
+#canvas .related-story,
+#canvas .more-stories,
+#canvas .trending,
+#canvas .top-stories,
+#canvas .story-rail,
+#canvas .card-list,
+#canvas .media-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .recommendations a,
+#canvas .recs a,
+#canvas .related a,
+#canvas .related-story a,
+#canvas .more-stories a,
+#canvas .trending a,
+#canvas .top-stories a,
+#canvas .story-rail a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Segments, topics and section labels are often shown as pills or short
+   uppercase strings. Keep them legible inside the preview. */
+#canvas .segment,
+#canvas .topic,
+#canvas .section-label,
+#canvas .category,
+#canvas .tag,
+#canvas .kicker,
+#canvas .label,
+#canvas .category-label,
+#canvas .section-name {
+  font-size: 0.78em;
+  line-height: 1.3;
+  text-transform: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  color: var(--text-muted, inherit);
+}
+
+/* Timestamp/source lines are usually small and get cramped on a small
+   preview. Keep them legible but secondary. */
+#canvas .timestamp,
+#canvas .time,
+#canvas .date,
+#canvas .published,
+#canvas .source,
+#canvas .byline,
+#canvas .author,
+#canvas .updated,
+#canvas .meta,
+#canvas .metadata {
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Cookie/consent banners and interstitials can take over the entire small
+   preview. Keep them contained and let them scroll inside the canvas. */
+#canvas .cookie-banner,
+#canvas .consent,
+#canvas .consent-banner,
+#canvas .cookieconsent,
+#canvas .otcm,
+#canvas .gdpr,
+#canvas .notice-banner,
+#canvas .interstitial,
+#canvas .modal-dialog,
+#canvas .overlay-content,
+#canvas .fullscreen-message {
+  max-width: 92vw;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 0.8em 1em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+#canvas .consent-actions,
+#canvas .cookie-actions,
+#canvas .notice-actions,
+#canvas .interstitial-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  margin-block-start: 0.6em;
+}
+
+#canvas .consent-actions a,
+#canvas .consent-actions button,
+#canvas .cookie-actions a,
+#canvas .cookie-actions button {
+  display: inline-flex;
+  align-items: center;
+  min-width: 3.2em;
+  min-height: 2.4em;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+/* Paywall/gating screens and popup upsells often overlay the whole preview.
+   Keep them inside a contained box so the surrounding content remains visible. */
+#canvas .paywall,
+#canvas .subscription,
+#canvas .subscribe,
+#canvas .upsell,
+#canvas .premium,
+#canvas .gate,
+#canvas .limited-access {
+  max-width: 88vw;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 0.8em 1em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+#canvas .paywall a,
+#canvas .subscription a,
+#canvas .subscribe a,
+#canvas .upsell a,
+#canvas .premium a,
+#canvas .gate a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Video thumbnail overlays and play buttons can get huge on news sites.
+   Keep them inside the preview and from taking the full canvas height. */
+#canvas .thumbnail-overlay,
+#canvas .play-overlay,
+#canvas .video-thumb,
+#canvas .media-thumb,
+#canvas .thumb-overlay,
+#canvas .play-button,
+#canvas .play-icon {
+  max-width: 100%;
+  max-height: 60vh;
+  overflow: hidden;
+}
+
+#canvas .play-button,
+#canvas .play-icon {
+  cursor: pointer;
+}
+
+/* Bylines, publisher marks and brand bars often sit in a sticky header.
+   Keep those sticky bars from escaping the small preview. */
+#canvas .brand-bar,
+#canvas .publisher-bar,
+#canvas .site-branding,
+#canvas .top-bar,
+#canvas .masthead,
+#canvas .header-bar {
+  max-height: 32vh;
+  overflow: auto;
+}
+
+/* If a news page uses a very wide article column by default, keep it inside
+   the preview so the text stays readable on a small canvas. */
+#canvas .article,
+#canvas .article-container,
+#canvas .story,
+#canvas .story-container,
+#canvas .content-body,
+#canvas .body-copy,
+#canvas .post-content {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Lists of updates, live notes and tickers often contain many short lines.
+   Keep them scannable and tappable on a handheld preview. */
+#canvas .live-notes,
+#canvas .live-updates,
+#canvas .live-blog,
+#canvas .timeline,
+#canvas .updates,
+#canvas .live-list,
+#canvas .ticker,
+#canvas .marquee,
+#canvas .scrolling-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .live-notes a,
+#canvas .live-updates a,
+#canvas .live-blog a,
+#canvas .timeline a,
+#canvas .updates a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* If a news page uses a very tight aspect-ratio wrapper for thumbnails,
+   let that wrapper stay inside the preview even on a small screen. */
+#canvas .aspect,
+#canvas .aspect-ratio,
+#canvas .ratio,
+#canvas .embed-responsive,
+#canvas .embed-responsive-item {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+}
+
+/* === More news/site furniture patterns === */
+/* Additional common page furniture that still shows up on arbitrary sites and
+   tends to overflow a small controller-driven preview. Kept scoped to the
+   canvas and the Text Browser so the builder chrome is not reset. */
+
+/* Secondary content rails (most-read, scoreboard, peripherals, weather).
+   These often overflow visually and take a lot of vertical space. */
+#canvas .rail,
+#canvas .sidebar-rail,
+#canvas .secondary,
+#canvas .side-rail,
+#canvas .ticker-rail,
+#canvas .scoreboard,
+#canvas .score-card,
+#canvas .stat-card,
+#canvas .stat-block,
+#canvas .info-card,
+#canvas .panel-card,
+#canvas .widget,
+#canvas .widget-card {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .rail a,
+#canvas .sidebar-rail a,
+#canvas .secondary a,
+#canvas .widget a,
+#canvas .widget-card a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Compact lists of scores, markets, stats or headlines can become a dense,
+   unread wall on a small preview. Keep each entry scannable. */
+#canvas .stats,
+#canvas .score-list,
+#canvas .market-list,
+#canvas .list-items,
+#canvas .feed,
+#canvas .feed-item,
+#canvas .feed-list,
+#canvas .story-compact,
+#canvas .compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .feed-item a,
+#canvas .story-compact a,
+#canvas .compact-list a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Site navigation bars and submenus often push content down or escape the
+   preview edge on a handheld. Keep them bounded and scrollable where needed. */
+#canvas .site-nav,
+#canvas .main-nav,
+#canvas .primary-nav,
+#canvas .nav-bar,
+#canvas .nav-list,
+#canvas .nav-row,
+#canvas .nav-links,
+#canvas .nav-menu,
+#canvas .nav-items {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .nav-item,
+#canvas .nav-links a,
+#canvas .nav-list a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Dropdowns, mega-menus and flyout panels can cover the whole preview. Keep
+   them from escaping and let them scroll when they are tall. */
+#canvas .dropdown-menu,
+#canvas .dropdown-panel,
+#canvas .flyout,
+#canvas .popover-menu,
+#canvas .menu-panel,
+#canvas .menu-dropdown {
+  max-width: 92vw;
+  max-height: 72vh;
+  overflow: auto;
+  padding: 0.5em 0.7em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+#canvas .dropdown-item a,
+#canvas .dropdown-menu a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Carousels and swipeable stacks often render as wide horizontal strips inside
+   a tiny preview. Keep the strip bounded and the slides contained. */
+#canvas .carousel,
+#canvas .swiper,
+#canvas .slider,
+#canvas .slides,
+#canvas .carousel-inner,
+#canvas .track,
+#canvas .slide-list,
+#canvas .scroll-snap {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35em;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x proximity;
+  padding-bottom: 0.35em;
+  scrollbar-width: thin;
+}
+
+#canvas .carousel-item,
+#canvas .swiper-slide,
+#canvas .slide,
+#canvas .card {
+  flex: 0 0 auto;
+  min-width: 45vw;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .card-media,
+#canvas .card-thumb,
+#canvas .card-image,
+#canvas .card-media img,
+#canvas .card-thumb img,
+#canvas .card-image img {
+  max-width: 100%;
+  max-height: 48vh;
+  object-fit: contain;
+  display: block;
+}
+
+#canvas .card-title,
+#canvas .card-head,
+#canvas .card-heading,
+#canvas .card-summary,
+#canvas .card-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .card-title {
+  font-size: clamp(0.9rem, 3vw, 1.15rem);
+  line-height: 1.25;
+}
+
+#canvas .card-text,
+#canvas .card-summary {
+  font-size: clamp(0.8rem, 2.6vw, 0.95rem);
+  line-height: 1.4;
+  color: var(--text-muted, inherit);
+}
+
+/* Conversation, comment, chat and command lists often use tight bubbles and
+   timestamps. Keep the bubbles readable and attached to their labels. */
+#canvas .message,
+#canvas .msg,
+#canvas .comment,
+#canvas .comment-body,
+#canvas .chat-item,
+#canvas .conversation-item,
+#canvas .chat-bubble,
+#canvas .message-bubble,
+#canvas .bubble {
+  max-width: 88vw;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.4;
+  padding: 0.4em 0.7em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+#canvas .message-meta,
+#canvas .msg-meta,
+#canvas .chat-meta,
+#canvas .comment-meta,
+#canvas .bubble-meta,
+#canvas .timestamp,
+#canvas .time,
+#canvas .byline {
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Tables of scores, markets, hardware info or status rows can go wide. Keep
+   the table horizontally scrollable without pushing the preview off-screen. */
+#canvas .table,
+#canvas .table-striped,
+#canvas .table-compact,
+#canvas .grid-table,
+#canvas .data-table,
+#canvas .stats-table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+#canvas .table th,
+#canvas .table td,
+#canvas .data-table th,
+#canvas .data-table td {
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  border-block-end: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .table th {
+  text-align: start;
+  font-weight: 600;
+}
+
+/* Status badges, pills and inline labels often sit on one long line. Keep them
+   stacked or wrapped on a small preview. */
+#canvas .badge,
+#canvas .status-badge,
+#canvas .chip,
+#canvas .label-pill,
+#canvas .status-pill,
+#canvas .pill,
+#canvas .status,
+#canvas .tag-list,
+#canvas .tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3em 0.5em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .badge a,
+#canvas .chip a,
+#canvas .tag-list a,
+#canvas .tags a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* If a news page or dashboard uses a full-width hero band, keep it from taking
+   the entire handheld preview height. */
+#canvas .hero,
+#canvas .hero-banner,
+#canvas .jumbotron,
+#canvas .cover,
+#canvas .featured,
+#canvas .top-story,
+#canvas .lead-story {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+}
+
+#canvas .hero img,
+#canvas .hero-banner img,
+#canvas .cover img,
+#canvas .featured img,
+#canvas .top-story img,
+#canvas .lead-story img {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: cover;
+  display: block;
+}
+
+#canvas .hero-title,
+#canvas .cover-title,
+#canvas .lead-title {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+  max-width: 100%;
+}
+
+/* Promo/progressive-web-app install banners and browser chrome overlays can
+   fill the whole small preview. Keep them contained and scrollable. */
+#canvas .app-banner,
+#canvas .install-banner,
+#canvas .install-prompt,
+#canvas .browser-prompt,
+#canvas .browser-ui,
+#canvas .browser-notice,
+#canvas .browser-bar {
+  max-width: 92vw;
+  max-height: 60vh;
+  overflow: auto;
+  padding: 0.6em 0.9em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+#canvas .app-banner a,
+#canvas .install-banner a,
+#canvas .browser-prompt a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Map/image/canvas placeholders and data visualizations can overflow the small
+   preview horizontally. Keep them inside and respect the aspect boxes. */
+#canvas canvas,
+#canvas .plot,
+#canvas .chart,
+#canvas .graph,
+#canvas .map,
+#canvas .heatmap,
+#canvas .visualization,
+#canvas .visualization-container {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+  display: block;
+}
+
+#canvas .chart-container,
+#canvas .graph-container,
+#canvas .map-container {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+/* List/table headers and footers that repeat metadata can crush the preview
+   vertically if they are large. Keep them compact. */
+#canvas .thead,
+#canvas .tfoot,
+#canvas .table-head,
+#canvas .table-foot,
+#canvas .list-head,
+#canvas .list-footer,
+#canvas .feed-head,
+#canvas .feed-foot {
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* When a previewed page uses a lot of inline icons, emoji, or SVG icons next to
+   text, keep them from being pushed off the edge by a long label. */
+#canvas .icon,
+#canvas .icon-img,
+#canvas .icon-svg,
+#canvas .icon-inline,
+#canvas .inline-icon,
+#canvas .meta-icon,
+#canvas [class*="icon-"],
+#canvas [class*="Icon"] {
+  max-width: 1.4em;
+  max-height: 1.4em;
+  vertical-align: -0.2em;
+  overflow: hidden;
+}
+
+/* If a site embeds live social widgets or third-party blocks, keep them inside
+   the preview and let them scroll when they are tall. */
+#canvas .social,
+#canvas .social-widget,
+#canvas .social-block,
+#canvas .social-embed,
+#canvas .social-feed,
+#canvas .social-panel,
+#canvas .social-bar {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+#canvas .social a,
+#canvas .social-widget a,
+#canvas .social-block a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Buttons, chips and CTAs that appear inside previewed content should not be so
+   dense that they are hard to hit on a controller. */
+#canvas .btn,
+#canvas .button,
+#canvas .cta,
+#canvas .action,
+#canvas .btn-primary,
+#canvas .btn-secondary,
+#canvas .btn-link,
+#canvas .btn-sm,
+#canvas .btn-small {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  min-width: 4em;
+  min-height: 2.4em;
+  padding: 0.4em 0.8em;
+  border-radius: var(--radius-sm);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* Link lists and inline link chains inside previewed content should not wrap
+   into an unread stack. Keep them on one line when they fit. */
+#canvas .link-list,
+#canvas .links,
+#canvas .link-row,
+#canvas .link-chips,
+#canvas .inline-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em 0.5em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .link-list a,
+#canvas .links a,
+#canvas .link-row a,
+#canvas .link-chips a,
+#canvas .inline-links a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* When a news page packs a section header into a single dense line, give the
+   header a little more structure on a small preview. */
+#canvas .section-header,
+#canvas .category-header,
+#canvas .feed-header,
+#canvas .list-header,
+#canvas .header-row,
+#canvas .header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em 0.5em;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .header-row a,
+#canvas .section-header a,
+#canvas .category-header a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* If a previewed page uses a very tight vertical rhythm, keep it from becoming
+   unread on a handheld by slightly loosening repeated content blocks. */
+#canvas .post,
+#canvas .entry,
+#canvas .article,
+#canvas .story,
+#canvas .content,
+#canvas .copy,
+#canvas .body,
+#canvas .content-body {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .post p,
+#canvas .entry p,
+#canvas .article p,
+#canvas .story p,
+#canvas .content p,
+#canvas .copy p,
+#canvas .body p,
+#canvas .content-body p {
+  margin-block-end: 0.5em;
+}
+
+/* Keep the small-but-verbose furniture (sponsored notes, disclosure lines,
+   footer links) from pushing the preview off the handheld screen. */
+#canvas .sponsored,
+#canvas .sponsor,
+#canvas .disclosure,
+#canvas .footnote,
+#canvas .legal,
+#canvas .fine-print {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.8em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+}
+
+#canvas .sponsored a,
+#canvas .sponsor a,
+#canvas .disclosure a,
+#canvas .footnote a,
+#canvas .legal a,
+#canvas .fine-print a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* A previewed page can still show the slots its ads were cut from: an empty
+   wrapper keeps the padding, min-height or margin the page gave the slot, so it
+   draws as the gap the ad left. Hiding the slot lets the page close up round it.
+   Exact class names only: "ad" inside a longer word (header, card, shadow,
+   padding, loading) is page content, not a slot. */
+#canvas .ad,
+#canvas .ad-slot,
+#canvas .advert,
+#canvas .adverts,
+#canvas .advertisement,
+#canvas .ad-container,
+#canvas .ad-unit {
+  display: none !important;
+}
+
+/* === General preview rendering support === */
+/* Broader rendering primitives that show up on arbitrary pages and tend to look
+   broken inside a small controller-driven preview. These stay scoped to the
+   canvas and the Text Browser so they do not reset the builder chrome. */
+
+/* Forms inside previewed content should stay legible and contained. Normalize.css
+   already styles raw form controls, so these rules bound the form containers and
+   labels without fighting native control styling. */
+#canvas form,
+#canvas .form,
+#canvas .form-group,
+#canvas .form-row,
+#canvas .form-field,
+#canvas .field,
+#canvas .input-group,
+#canvas .input-row {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas label,
+#canvas .field-label,
+#canvas .form-label,
+#canvas .control-label {
+  display: block;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.35;
+  font-size: 0.85em;
+  color: var(--text-muted, inherit);
+}
+
+#canvas .form-actions,
+#canvas .form-buttons,
+#canvas .button-row,
+#canvas .submit-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  margin-block-start: 0.5em;
+}
+
+/* File, image and media upload UI often includes a button plus a filename region.
+   Keep the row from overflowing a tiny preview. */
+#canvas .file-input,
+#canvas .file-upload,
+#canvas .upload,
+#canvas .drop-zone,
+#canvas .drop-target {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border, rgba(255, 255, 255, 0.18));
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  padding: 0.6em 0.8em;
+  text-align: start;
+}
+
+/* Embedded iframes and foreign documents are the hardest part of arbitrary pages.
+   Keep them inside the preview, give them a sane aspect where possible, and let
+   them scroll when the embedded page is tall. */
+#canvas iframe,
+#canvas frame,
+#canvas object,
+#canvas embed {
+  max-width: 100%;
+  max-height: 70vh;
+  height: auto;
+  width: 100%;
+  border: 0;
+  display: block;
+  overflow: hidden;
+}
+
+#canvas iframe.sandbox,
+#canvas iframe[seamless],
+#canvas iframe.widget,
+#canvas iframe.embed,
+#canvas iframe.responsive {
+  aspect-ratio: auto;
+}
+
+/* Embedded document-like blocks (docs, sheets, slides, PDFs via embed) should not
+   balloon the preview height. */
+#canvas .document,
+#canvas .doc,
+#canvas .sheet,
+#canvas .slide,
+#canvas .presentation,
+#canvas .pdf-embed,
+#canvas .file-preview {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+/* Live or async widgets often ship with a loading skeleton or placeholder that can
+   be wide or tall. Keep it inside and keep its text from escaping. */
+#canvas .loading,
+#canvas .loader,
+#canvas .spinner,
+#canvas .skeleton,
+#canvas .placeholder,
+#canvas .empty-state,
+#canvas .status-message,
+#canvas .pending {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+  text-align: start;
+  color: var(--text-muted, inherit);
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+#canvas .loading a,
+#canvas .placeholder a,
+#canvas .empty-state a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* If a previewed page uses a message/alert layout for loader states or empty states,
+   keep the message readable and contained. */
+#canvas .message-card,
+#canvas .alert-card,
+#canvas .notice-card,
+#canvas .status-card {
+  max-width: 88vw;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 0.6em 0.9em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+/* Headings, emphasis and font scaling often get too aggressive on arbitrary sites.
+   Keep them legible but constrained so a single huge headline does not consume the
+   whole handheld preview. */
+#canvas h1,
+#canvas h2,
+#canvas h3,
+#canvas h4,
+#canvas h5,
+#canvas h6,
+#canvas .h1,
+#canvas .h2,
+#canvas .h3,
+#canvas .h4,
+#canvas .h5,
+#canvas .h6 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.3;
+  max-width: 100%;
+}
+
+#canvas h1,
+#canvas .h1 {
+  font-size: clamp(1.1rem, 5vw, 1.7rem);
+}
+
+#canvas h2,
+#canvas .h2 {
+  font-size: clamp(1rem, 4vw, 1.35rem);
+}
+
+#canvas h3,
+#canvas .h3 {
+  font-size: clamp(0.9rem, 3vw, 1.1rem);
+}
+
+#canvas h4,
+#canvas h5,
+#canvas h6,
+#canvas .h4,
+#canvas .h5,
+#canvas .h6 {
+  font-size: clamp(0.8rem, 2.4vw, 0.95rem);
+}
+
+/* Inline emphasis, small caps, subscripts and superscripts should not expand a
+   preview horizontally or push surrounding lines apart. */
+#canvas strong,
+#canvas b,
+#canvas em,
+#canvas i,
+#canvas u,
+#canvas s,
+#canvas strike,
+#canvas del,
+#canvas ins,
+#canvas mark,
+#canvas small,
+#canvas sub,
+#canvas sup,
+#canvas abbr,
+#canvas acronym,
+#canvas cite,
+#canvas dfn,
+#canvas q,
+#canvas span,
+#canvas time {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas small {
+  font-size: 0.8em;
+}
+
+#canvas sub,
+#canvas sup {
+  line-height: 0;
+  vertical-align: baseline;
+  position: relative;
+}
+
+#canvas sub {
+  bottom: -0.25em;
+}
+
+#canvas sup {
+  top: -0.5em;
+}
+
+/* Code, preformatted text and technical strings inside previewed content should not
+   overflow horizontally. Normalize already adds a monospace stack to pre/code, so
+   these rules keep the layout contained. */
+#canvas code,
+#canvas pre,
+#canvas samp,
+#canvas kbd,
+#canvas var,
+#canvas .inline-code,
+#canvas .code-block,
+#canvas .code-snippet,
+#canvas .code-block pre,
+#canvas .code-block code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  white-space: -moz-pre-wrap;
+}
+
+#canvas pre,
+#canvas .code-block {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.5em 0.7em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.10));
+}
+
+#canvas pre code,
+#canvas .code-block code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+#canvas kbd,
+#canvas samp {
+  font-size: 0.85em;
+}
+
+/* Lists on arbitrary sites can be dense or wide. Keep them readable and let long
+   list items wrap on a handheld preview. */
+#canvas ul,
+#canvas ol,
+#canvas dl,
+#canvas .unordered,
+#canvas .ordered,
+#canvas .definition-list,
+#canvas .list-block {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  padding-inline-start: 1.2em;
+}
+
+#canvas li,
+#canvas .list-item,
+#canvas dt,
+#canvas .term,
+#canvas dd,
+#canvas .definition {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+#canvas li > a,
+#canvas ul a,
+#canvas ol a,
+#canvas dl a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Tables that are not article/media tables often come from dashboards, admin panels
+   or data listings. Keep them scrollable and wrapped. */
+#canvas table,
+#canvas .simple-table,
+#canvas .compact-table,
+#canvas .grid-alt,
+#canvas .matrix {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+}
+
+#canvas table th,
+#canvas table td,
+#canvas .simple-table th,
+#canvas .simple-table td,
+#canvas .compact-table th,
+#canvas .compact-table td {
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  border-block-end: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas table th {
+  text-align: start;
+  font-weight: 600;
+}
+
+/* Floated or positioned content can escape a tiny preview or overlap surrounding text
+   when the preview is narrow. Keep floated blocks inside and let them wrap. */
+#canvas .float-left,
+#canvas .float-right,
+#canvas .align-left,
+#canvas .align-right,
+#canvas .pull-left,
+#canvas .pull-right,
+#canvas .left,
+#canvas .right,
+#canvas .alignoutside {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas img.float-left,
+#canvas img.float-right,
+#canvas img.align-left,
+#canvas img.align-right,
+#canvas .figure.align-left,
+#canvas .figure.align-right {
+  max-width: calc(100% - 0.5em);
+  max-height: 60vh;
+  object-fit: contain;
+  display: block;
+}
+
+/* Flex and grid containers from other sites often break when the preview is far smaller
+   than the page expected. Keep the container bounded and let overflow scroll. */
+#canvas .flex,
+#canvas .flex-row,
+#canvas .flex-wrap,
+#canvas .flex-column,
+#canvas .inline-flex,
+#canvas .d-flex,
+#canvas .flex-container,
+#canvas [style*="display: flex"],
+#canvas [class*="flex"] {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .flex a,
+#canvas .d-flex a,
+#canvas .flex-row a,
+#canvas .flex-wrap a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+#canvas .grid,
+#canvas .grid-x,
+#canvas .grid-y,
+#canvas .grid-cols,
+#canvas .grid-rows,
+#canvas .grid-container,
+#canvas .d-grid,
+#canvas .grid-inline,
+#canvas [style*="display: grid"],
+#canvas [class*="grid"] {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas .grid a,
+#canvas .d-grid a,
+#canvas .grid-cols a,
+#canvas .grid-rows a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Sections, articles and content regions from other sites can be very tall. Keep them
+   contained and scrollable so the preview does not balloon. */
+#canvas section,
+#canvas .region,
+#canvas .block,
+#canvas .wrapper-section,
+#canvas .content-section,
+#canvas .panel-section,
+#canvas article,
+#canvas .article-section,
+#canvas .post-section,
+#canvas .entry-section {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+/* When a previewed page uses a sidebar or aside as a layout column, keep it from
+   forcing the preview wider than the handheld screen. */
+#canvas aside,
+#canvas .aside,
+#canvas .sidebar-layout,
+#canvas .content-with-sidebar,
+#canvas .primary,
+#canvas .secondary-column,
+#canvas .col,
+#canvas .col-aside {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Figure captions, credits and labels attached to media should stay legible and not
+   overflow the small preview edge. */
+#canvas figcaption,
+#canvas .caption,
+#canvas .figure-caption,
+#canvas .credit,
+#canvas .photo-credit,
+#canvas .caption-text,
+#canvas .caption-label {
+  font-size: 0.78em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: block;
+}
+
+/* Footnotes, endnotes and references at the bottom of articles can be dense. Keep
+   them readable but secondary, and keep their links tappable. */
+#canvas .footnotes,
+#canvas .notes,
+#canvas .endnotes,
+#canvas .references,
+#canvas .cite-list,
+#canvas .bibliographic,
+#canvas .source-list {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 0.8em;
+  line-height: 1.4;
+  color: var(--text-muted, inherit);
+}
+
+#canvas .footnotes a,
+#canvas .notes a,
+#canvas .references a,
+#canvas .source-list a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Divider rules, separators and visual breaks inside previewed content should scale
+   down with the preview and not force a wide horizontal strip. */
+#canvas hr,
+#canvas .rule,
+#canvas .divider,
+#canvas .separator,
+#canvas .section-rule,
+#canvas .hairline {
+  border: 0;
+  border-block-start: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  margin-block-start: 0.6em;
+  margin-block-end: 0.6em;
+  max-width: 100%;
+}
+
+/* SVG graphics, logos and inline illustrations inside previewed content should not
+   exceed the preview height, and should keep their aspect. */
+#canvas svg,
+#canvas .svg,
+#canvas .vector,
+#canvas .illustration,
+#canvas .graphic,
+#canvas [class*="svg"],
+#canvas [class*="vector"] {
+  max-width: 100%;
+  max-height: 60vh;
+  height: auto;
+  width: auto;
+  display: block;
+  shape-rendering: geometricPrecision;
+}
+
+/* Embedded iconsets and icon fonts in previewed content should stay small enough to
+   sit next to text without pushing it off the edge. */
+#canvas .icon,
+#canvas .icon-font,
+#canvas .glyph,
+#canvas .symbol,
+#canvas .icon-box,
+#canvas [class*="icon"],
+#canvas [class*="Icon"] {
+  max-width: 1.6em;
+  max-height: 1.6em;
+  vertical-align: -0.15em;
+  overflow: hidden;
+  display: inline-block;
+}
+
+/* When a previewed page uses an inline SVG as an icon next to a long label, keep the
+   icon from winning the width contest. */
+#canvas .icon-inline,
+#canvas .inline-svg,
+#canvas .meta-icon,
+#canvas .status-icon,
+#canvas .badge-icon,
+#canvas .label-icon {
+  max-width: 1.2em;
+  max-height: 1.2em;
+  vertical-align: -0.2em;
+  overflow: hidden;
+  display: inline-block;
+}
+
+/* Tooltips, popovers and hover notes from third-party pages can be positioned
+   off-screen in a tiny preview. Keep them inside and scrollable where needed. */
+#canvas [role="tooltip"],
+#canvas .tooltip,
+#canvas .popover,
+#canvas .hover-card,
+#canvas .hover-text,
+#canvas .hover-info,
+#canvas .tooltip-content,
+#canvas .popover-content {
+  max-width: 90vw;
+  max-height: 70vh;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  overflow: auto;
+  text-align: start;
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
+/* Breadcrumb trails and step lists from other sites should be one line only when they
+   fit, otherwise let them wrap or ellipsis. */
+#canvas .breadcrumb,
+#canvas .breadcrumbs,
+#canvas .steps,
+#canvas .step-links,
+#canvas .pager,
+#canvas .pagination,
+#canvas .pagination-inner,
+#canvas .step-indicator {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35em 0.5em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+#canvas .breadcrumb a,
+#canvas .breadcrumbs a,
+#canvas .step-links a,
+#canvas .pager a,
+#canvas .step-indicator a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+/* Pagination controls often use tiny tap targets. Give them a little more breathing
+   room inside the preview so they stay usable on a controller. */
+#canvas .pagination,
+#canvas .pagination-inner,
+#canvas .pager,
+#canvas .page-numbers,
+#canvas .pager-items {
+  gap: 0.25em;
+}
+
+#canvas .pagination a,
+#canvas .pagination button,
+#canvas .page-numbers a,
+#canvas .page-numbers button,
+#canvas .pager button {
+  min-width: 2.2em;
+  min-height: 2.2em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}
+
+/* A previewed page may use its own scrollbars on inner panels. On a small handheld
+   preview, that can be awkward; keep inner scroll containers contained. */
+#canvas .scroll,
+#canvas .scrollable,
+#canvas .scroll-panel,
+#canvas .scroll-box,
+#canvas .overflow,
+#canvas .overflow-auto,
+#canvas .overflow-scroll,
+#canvas [style*="overflow": auto],
+#canvas [style*="overflow": scroll] {
+  max-width: 100%;
+  max-height: 70vh;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* When a previewed page uses a container or wrapper set to a very wide fixed width,
+   keep it inside the preview so the text stays readable on a small screen. */
+#canvas .container,
+#canvas .wrapper,
+#canvas .wrap,
+#canvas .content,
+#canvas .layout,
+#canvas .wrapper-container,
+#canvas .site-container,
+#canvas .page-container {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* If a previewed page uses very long inline emphasis strings, keep them from
+   stretching the preview horizontally. */
+#canvas strong,
+#canvas b,
+#canvas em,
+#canvas i,
+#canvas u,
+#canvas mark,
+#canvas small,
+#canvas sub,
+#canvas sup,
+#canvas span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas strong,
+#canvas b {
+  font-weight: 600;
+}
+
+#canvas small {
+  font-size: 0.85em;
+}
+
+/* If a previewed page uses a lot of non-breaking content, leave the canvas a way to
+   keep it inside the small screen without letting one string force a horizontal scroll
+   on the whole page. */
+#canvas .nobreak,
+#canvas .no-break,
+#canvas .nowrap,
+#canvas .text-nowrap {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+/* Keep very long quotes from becoming an unread wall on a handheld preview. */
+#canvas blockquote,
+#canvas .pullquote,
+#canvas q {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

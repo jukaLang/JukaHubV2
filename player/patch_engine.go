@@ -36,7 +36,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -1608,7 +1607,7 @@ func toolVersionFromPath(path string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	// The ffmpeg family only understands "-version"; yt-dlp takes "--version".
-	cmd := exec.CommandContext(ctx, path, versionProbeArgs(path)...)
+	cmd := hiddenCommandContext(ctx, path, versionProbeArgs(path)...)
 	cmd.Env = helperToolEnv(path)
 	out, err := cmd.Output()
 	if err != nil {
@@ -3094,3 +3093,4 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	}
 	return s
 }
+

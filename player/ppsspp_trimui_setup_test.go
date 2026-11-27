@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,7 +57,7 @@ func TestPPSSPPFirstManagedLaunchRepairsExistingHome(t *testing.T) {
 	st := ppssppLockedState()
 	st.Builds, st.Active = []ppssppBuild{b}, b.Tag
 	ppssppMgr.mu.Unlock()
-	cmd := exec.Command("sh", b.script())
+	cmd := hiddenCommand("sh", b.script())
 	ppssppPrepareManagedLaunch(b.script(), cmd)
 	// The video driver is set in the script, on PPSSPP's command alone
 	// (TestPPSSPPLauncherScript): the launch keeps the environment JukaHub
@@ -70,7 +69,7 @@ func TestPPSSPPFirstManagedLaunchRepairsExistingHome(t *testing.T) {
 		!regularFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")) {
 		t.Fatal("the first game did not prepare the managed PPSSPP before launch")
 	}
-	other := exec.Command("sh", "other.sh")
+	other := hiddenCommand("sh", "other.sh")
 	ppssppPrepareManagedLaunch("/outside/jukahub-ppsspp.sh", other)
 	if other.Env != nil {
 		t.Fatal("another emulator inherited PPSSPP's video driver")
@@ -165,3 +164,4 @@ func TestPPSSPPTrimuiHomeKeepsPackagedControllerMap(t *testing.T) {
 		t.Fatal("a build without an ini got no safe graphics backend")
 	}
 }
+

@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -378,7 +377,7 @@ func recoveryRestartApp() bool {
 func recoverySpawn(self string, args []string, wd string) {
 	// A restart is not a power-on: the boot request a login launcher passed
 	// (--boot, JUKAHUB_BOOT) stays behind (bootos.go).
-	cmd := exec.Command(self, bootOSRestartArgs(args)...)
+	cmd := hiddenCommand(self, bootOSRestartArgs(args)...)
 	cmd.Dir = wd
 	// The new process waits for this one to end before an erase or an undo
 	// (factoryWaitForOldProcess): a late save here could undo its work.
@@ -390,3 +389,4 @@ func recoverySpawn(self string, args []string, wd string) {
 	}
 	_ = cmd.Process.Release()
 }
+

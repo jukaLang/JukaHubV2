@@ -25,7 +25,6 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -1142,7 +1141,7 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 
 	// Options may go in any order; the page stays last.
 	args = append(downloadToolArgs(ytDlp, appConfig), args...)
-	cmd := exec.CommandContext(runCtx, ytDlp, args...)
+	cmd := hiddenCommandContext(runCtx, ytDlp, args...)
 	cmd.Env = helperToolEnv(ytDlp)
 	// The one-file yt-dlp runs the real one as its child. Killing only the
 	// first (what CommandContext does) left the child downloading — and
@@ -1272,9 +1271,34 @@ func downloadHelperFailure(job downloadJob, stderr string, waitErr error) error 
 	// last line used to be the "no JavaScript runtime" warning as often as
 	// not.
 	if text != "" {
+		if hint := classifyOtherDownloadFailure(text); hint != "" {
+			return errors.New(hint + " (" + text + ")")
+		}
 		return errors.New(text)
 	}
 	return waitErr
+}
+
+// classifyOtherDownloadFailure turns a site's raw yt-dlp error into an
+// actionable line for a non-YouTube link. It keeps the original text too, so
+// nothing is hidden from the person who can act on it.
+func classifyOtherDownloadFailure(text string) string {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "sign in") || strings.Contains(lower, "login") ||
+		strings.Contains(lower, "cookies") || strings.Contains(lower, "age confirmation"):
+		return "This site needs a login or cookies — add them in the yt-dlp extra arguments"
+	case strings.Contains(lower, "geoblock") || strings.Contains(lower, "not available in your country"):
+		return "This video is blocked in your region"
+	case strings.Contains(lower, "private video") || strings.Contains(lower, "video unavailable") ||
+		strings.Contains(lower, "video is unavailable") || strings.Contains(lower, "removed"):
+		return "The video is private, unavailable or was removed"
+	case strings.Contains(lower, "no formats") || strings.Contains(lower, "format"):
+		return "No playable format was offered for this link"
+	case strings.Contains(lower, "403") || strings.Contains(lower, "forbidden"):
+		return "The site refused the request — try again on another network"
+	}
+	return ""
 }
 
 // downloadArgs is the yt-dlp command line for one saved track. It is a pure
@@ -1294,6 +1318,9 @@ func downloadArgs(partDir string, job downloadJob, config *Config) []string {
 		// parser sees complete lines.
 		"--newline",
 		"--progress",
+		// A live stream has no end: the queue would fetch it until the timeout
+		// and leave no playable file. Finished broadcasts are not is_live.
+		"--match-filter", "!is_live",
 		// Resume a staged file after a pause or a dropped link instead of
 		// re-downloading it from zero on the card.
 		"--continue",
@@ -1365,6 +1392,9 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"--geo-bypass",
 		"--newline",
 		"--progress",
+		// A livestream has no file to save; skip it rather than filling the
+		// card until the run's timeout.
+		"--match-filter", "!is_live",
 		// Resume the staged streams after an interruption instead of pulling
 		// several hundred megabytes again on the handheld's card.
 		"--continue",
@@ -1394,7 +1424,9 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 func videoDownloadFormat(height int, handheld bool) string {
 	format := ytdlJoinedFormat(height, "")
 	if handheld {
-		return format + "/bv*[vcodec!^=?av01]+ba/b[vcodec!^=?av01]"
+		// Prefer a decodable stream, but accept the best progressive file as
+		// a last resort: a site with only one combined format still downloads.
+		return format + "/bv*[vcodec!^=?av01]+ba/b[vcodec!^=?av01]/b"
 	}
 	return format + "/bv*+ba/b"
 }
@@ -1767,3 +1799,4 @@ func dirBytes(root string) int64 {
 	})
 	return total
 }
+

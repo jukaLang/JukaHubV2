@@ -965,8 +965,7 @@ func auditStorePythonWorks(path string) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--version")
-	auditConfigureHidden(cmd)
+	cmd := hiddenCommandContext(ctx, path, "--version")
 	cmd.WaitDelay = powerScriptWaitDelay
 	out, err := cmd.CombinedOutput()
 	works = err == nil && strings.HasPrefix(strings.TrimSpace(string(out)), "Python 3")
@@ -1111,8 +1110,7 @@ func auditWingetRun(ctx context.Context, args ...string) (string, error) {
 	if err != nil {
 		return "", errAuditNoWinget
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
-	auditConfigureHidden(cmd)
+	cmd := hiddenCommandContext(ctx, path, args...)
 	// An installer that leaves a helper holding winget's output must not keep
 	// the sheet waiting after winget itself has finished.
 	cmd.WaitDelay = powerScriptWaitDelay
@@ -1667,10 +1665,10 @@ func auditTerminalCommand(t secAuditTool, path string) string {
 
 // secAuditOpen starts a GUI tool and lets it run on its own.
 func secAuditOpen(path string) (string, error) {
-	cmd := exec.Command(path)
+	cmd := hiddenCommand(path)
 	cmd.Dir = filepath.Dir(path)
 	cmd.Env = helperToolEnv(path)
-	auditConfigureDetached(cmd)
+	startDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
@@ -1705,10 +1703,9 @@ func secAuditProbe(id string, timeout time.Duration) (string, error) {
 			}
 		}
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := hiddenCommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = filepath.Dir(path)
 	cmd.Env = helperToolEnv(path)
-	auditConfigureHidden(cmd)
 	cmd.WaitDelay = powerScriptWaitDelay
 	out, err := cmd.CombinedOutput()
 	text := truncatePowerOutput(string(out))
@@ -1726,3 +1723,4 @@ func secAuditProbe(id string, timeout time.Duration) (string, error) {
 	}
 	return text, err
 }
+

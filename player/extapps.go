@@ -246,9 +246,9 @@ func extAppLaunchWith(app extApp, exe string, env []string, args ...string) bool
 	var cmd *exec.Cmd
 	if strings.EqualFold(filepath.Ext(clean), ".sh") {
 		// sh reads the script file; the path and the arguments are operands.
-		cmd = exec.Command("sh", append([]string{"--", clean}, args...)...)
+		cmd = hiddenCommand("sh", append([]string{"--", clean}, args...)...)
 	} else {
-		cmd = exec.Command(clean, args...)
+		cmd = hiddenCommand(clean, args...)
 	}
 	cmd.Dir = filepath.Dir(clean)
 	if len(env) > 0 {
@@ -271,3 +271,4 @@ func extAppLaunchWith(app extApp, exe string, env []string, args ...string) bool
 	}()
 	return true
 }
+

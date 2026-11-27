@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -226,7 +225,7 @@ func runQuietCommand(prog string, args []string, timeout time.Duration) error {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
-	cmd := exec.CommandContext(ctx, prog, args...)
+	cmd := hiddenCommandContext(ctx, prog, args...)
 	cmd.Stdout = io.Discard
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -468,3 +467,4 @@ func assembleTimelapseWith(deps timelapseDeps, config *Config, dir, title string
 	}
 	return out, nil
 }
+

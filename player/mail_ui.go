@@ -24,6 +24,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,13 +92,22 @@ var mailUI struct {
 	neverSynced bool
 
 	// The reader.
-	open     mailRow
-	openGen  int
-	loading  bool
-	entry    *mailBodyEntry
-	openErr  string
-	readText string
-	readWrap tbxWrapCache
+	open       mailRow
+	openGen    int
+	loading    bool
+	entry      *mailBodyEntry
+	openErr    string
+	readText   string
+	readWrap   tbxWrapCache
+	readHTML   bool
+	showImages bool
+	// htmlDoc and htmlLayout are the browser engine's view of the current
+	// HTML body: parsed and laid out once per width, then drawn each frame.
+	htmlDoc     *webDocument
+	htmlLayout  *webLayout
+	htmlWidth   int32
+	htmlBody    sdl.Rect
+	htmlHeaderH int32
 
 	compose mailCompose
 
@@ -196,6 +206,12 @@ func (mailScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 		case sym == sdl.K_r && mailUI.view == mailViewRead:
 			mailReplyOpen(c, false)
 			return true
+		case sym == sdl.K_h && mailUI.view == mailViewRead && mailHTMLAvailable():
+			mailSetReadHTML(!mailUI.readHTML)
+			return true
+		case sym == sdl.K_i && mailUI.view == mailViewRead && mailUI.readHTML:
+			mailSetShowImages(!mailUI.showImages)
+			return true
 		}
 	}
 	return tbxDispatch(c, tbxKeyAction(e), mailSceneAction)
@@ -281,6 +297,9 @@ func mailSceneClick(mx, my int32, config *Config) bool {
 			}
 		}
 	}
+	if mailUI.view == mailViewRead && mailUI.readHTML && mailHTMLTapLink(config, mx, my) {
+		return true
+	}
 	nav := mailActiveNav()
 	it, ok := nav.hit(mx, my)
 	if !ok {
@@ -298,7 +317,18 @@ func mailSceneHints() []FooterHint {
 	menu := FooterHint{Button: "Select / M", Label: "Menu"}
 	switch mailUI.view {
 	case mailViewRead:
-		return []FooterHint{{Button: "D-Pad", Label: "Scroll"}, {Button: "Y", Label: "Reply"}, {Button: "X", Label: "Delete"}, menu, {Button: "B", Label: "Back"}}
+		hints := []FooterHint{{Button: "D-Pad", Label: "Scroll"}}
+		if mailHTMLAvailable() {
+			label := "HTML"
+			if mailUI.readHTML {
+				label = "Text"
+			}
+			hints = append(hints, FooterHint{Button: "H", Label: label})
+			if mailUI.readHTML && !mailUI.showImages {
+				hints = append(hints, FooterHint{Button: "I", Label: "Images"})
+			}
+		}
+		return append(hints, FooterHint{Button: "Y", Label: "Reply"}, FooterHint{Button: "X", Label: "Delete"}, menu, FooterHint{Button: "B", Label: "Back"})
 	case mailViewCompose:
 		return mailComposeHints()
 	}
@@ -789,8 +819,65 @@ func mailOpenMessage(r mailRow) {
 			mailUI.entry = e
 			mailUI.readText = mailReaderText()
 			mailUI.open.msg.Unread = false
+			mailSetReadHTML(e.body.FromHTML)
+			mailUI.showImages = false
 		})
 	}()
+}
+
+// mailHTMLAvailable reports whether the open message has an HTML part to
+// render.
+func mailHTMLAvailable() bool {
+	return mailUI.entry != nil && mailUI.entry.body.FromHTML && strings.TrimSpace(mailUI.entry.body.HTML) != ""
+}
+
+// mailSetReadHTML switches the reader between the browser engine's rendering
+// and the flat text. Opening a message calls it with the part's kind and then
+// clears showImages, so every message starts with remote images off.
+func mailSetReadHTML(on bool) {
+	mailUI.readHTML = on && mailHTMLAvailable()
+	mailUI.htmlDoc, mailUI.htmlLayout = nil, nil
+	mailUI.htmlWidth, mailUI.htmlHeaderH = 0, 0
+	mailUI.readNav.scroll = 0
+}
+
+// mailSetShowImages lets remote pictures into an HTML message (or blocks them
+// again); the page is parsed afresh so the tags come back or go away.
+func mailSetShowImages(on bool) {
+	if mailUI.showImages == on {
+		return
+	}
+	mailUI.showImages = on
+	mailUI.htmlDoc, mailUI.htmlLayout = nil, nil
+	mailUI.htmlWidth = 0
+}
+
+var (
+	mailHTMLScript = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>`)
+	mailHTMLFrame  = regexp.MustCompile(`(?is)<(iframe|object|embed|form|video|audio|meta|base|link)\b[^>]*>.*?</(iframe|object|form|video|audio)\s*>`)
+	mailHTMLVoid   = regexp.MustCompile(`(?is)<(embed|meta|base|link)\b[^>]*>`)
+	mailHTMLImage  = regexp.MustCompile(`(?is)<img\b[^>]*>`)
+	mailHTMLEvent  = regexp.MustCompile(`(?is)\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
+	mailHTMLJS     = regexp.MustCompile(`(?is)(href|src)\s*=\s*(["']?)\s*javascript\s*:`)
+	mailHTMLCSSURL = regexp.MustCompile(`(?is)url\s*\([^)]*\)`)
+)
+
+// mailSafeHTML makes an HTML body safe to hand to the browser engine: scripts
+// and active embeds are removed, event handlers and javascript: URLs are
+// dropped, and remote pictures (img tags and CSS url() layers) are removed
+// until the reader presses Show images. The engine never runs page scripts; it
+// only parses and lays the markup out.
+func mailSafeHTML(src string, showImages bool) string {
+	src = mailHTMLScript.ReplaceAllString(src, "")
+	src = mailHTMLFrame.ReplaceAllString(src, "")
+	src = mailHTMLVoid.ReplaceAllString(src, "")
+	src = mailHTMLEvent.ReplaceAllString(src, "")
+	src = mailHTMLJS.ReplaceAllString(src, `${1}=${2}about:blank`)
+	if !showImages {
+		src = mailHTMLImage.ReplaceAllString(src, "")
+		src = mailHTMLCSSURL.ReplaceAllString(src, "none")
+	}
+	return src
 }
 
 // mailAttachHeading heads the attachment list in the reader. The reader
@@ -857,6 +944,14 @@ func mailRenderReader(renderer *sdl.Renderer, config *Config) {
 		tbxEndFrame(renderer, config)
 		return
 	}
+	if mailUI.readHTML && mailHTMLAvailable() {
+		if mailRenderHTMLReader(renderer, config, frame, body, fonts) {
+			return
+		}
+		// The browser engine could not lay the part out: show the flat text
+		// that mailParseBody kept beside it.
+		mailUI.readHTML = false
+	}
 	tbxClip(renderer, body)
 	top := body.Y - nav.scroll
 	x, w := frame.x, frame.w
@@ -902,6 +997,106 @@ func mailRenderReader(renderer *sdl.Renderer, config *Config) {
 	nav.end()
 	tbxDrawScrollbar(renderer, frame.x+frame.w+10, body.Y, body.H, nav.contentH, nav.scroll)
 	tbxEndFrame(renderer, config)
+}
+
+// mailRenderHTMLReader draws the message's HTML part through the browser
+// engine: the header card, then the laid-out page, scrolled as one. It reports
+// false when the part has nothing the engine can lay out, which leaves the
+// reader on its plain text.
+func mailRenderHTMLReader(renderer *sdl.Renderer, config *Config, frame tbxFrame, body sdl.Rect, fonts tbxFonts) bool {
+	m := mailUI.open.msg
+	nav := &mailUI.readNav
+	html := mailSafeHTML(mailUI.entry.body.HTML, mailUI.showImages)
+	width := body.W
+	if width < 80 {
+		return false
+	}
+	if mailUI.htmlDoc == nil || mailUI.htmlWidth != width {
+		mailUI.htmlDoc = parseWebPage(html, "", "")
+		mailUI.htmlWidth = width
+		mailUI.htmlLayout = nil
+	}
+	layout := mailUI.htmlLayout
+	if layout == nil {
+		layout, _ = webDocumentRows(mailUI.htmlDoc, config, Element{Font: "body"}, width)
+		mailUI.htmlLayout = layout
+	}
+	if layout == nil || len(layout.Rows) == 0 {
+		return false
+	}
+
+	top := body.Y - nav.scroll
+	x, w := frame.x, frame.w
+	lines := []string{"From  " + mailFromLine(m)}
+	if m.To != "" {
+		lines = append(lines, "To  "+m.To)
+	}
+	if m.Cc != "" {
+		lines = append(lines, "Cc  "+m.Cc)
+	}
+	if d := mailFullDate(config, m.Date); d != "" {
+		lines = append(lines, d)
+	}
+	cardH := int32(len(lines))*(fonts.smallH+4) + 24
+	UICard(renderer, sdl.Rect{X: x, Y: top, W: w, H: cardH}, DefaultUICardStyle())
+	ly := top + 12
+	for _, l := range lines {
+		mailText(renderer, config, fonts.small, ellipsize(fonts.small, l, w-36), ColorTextSecondary(), x+18, ly)
+		ly += fonts.smallH + 4
+	}
+
+	pageH := layout.Height
+	if pageH <= 0 {
+		pageH = int32(len(layout.Rows)) * layout.RowH
+	}
+	headerH := cardH + 18
+	mailUI.htmlHeaderH, mailUI.htmlBody = headerH, body
+	tbxClip(renderer, body)
+	drawWebPageContent(renderer, config, mailUI.htmlDoc, layout,
+		sdl.Rect{X: body.X, Y: top + headerH, W: width, H: pageH}, 0, webPaintAll)
+	nav.extend(headerH + pageH + 20)
+	tbxUnclip(renderer)
+	nav.end()
+	tbxDrawScrollbar(renderer, frame.x+frame.w+10, body.Y, body.H, nav.contentH, nav.scroll)
+	tbxEndFrame(renderer, config)
+	return true
+}
+
+// mailHTMLTapLink opens the HTML link under a tap in the Browser. It reports
+// whether the tap was on one, so the reader can keep the click for scrolling.
+func mailHTMLTapLink(config *Config, mx, my int32) bool {
+	layout := mailUI.htmlLayout
+	body := mailUI.htmlBody
+	if layout == nil || body.W <= 0 || layout.RowH <= 0 {
+		return false
+	}
+	contentTop := body.Y + mailUI.htmlHeaderH - mailUI.readNav.scroll
+	for _, hit := range layout.Links {
+		if hit.Control != nil || hit.Video {
+			continue
+		}
+		var r sdl.Rect
+		if hit.Box.W > 0 && hit.Box.H > 0 {
+			r = sdl.Rect{X: body.X + hit.Box.X, Y: contentTop + hit.Box.Y, W: hit.Box.W, H: hit.Box.H}
+		} else {
+			if hit.Row < 0 || hit.Row >= len(layout.Rows) {
+				continue
+			}
+			r = sdl.Rect{X: body.X + hit.X - 4, Y: contentTop + layout.Rows[hit.Row].Y - 2, W: hit.W + 8, H: layout.RowH + 4}
+		}
+		if !pointInRect(mx, my, r) {
+			continue
+		}
+		target, ok := browserResolveLink("https://mail.invalid/", hit.Href)
+		if !ok {
+			ShowToast("That link cannot be opened here", ToastKindInfo)
+			return true
+		}
+		PlayActivateSound()
+		openBrowserAtURL(config, target)
+		return true
+	}
+	return false
 }
 
 // mailFromLine is "Name <address>".
@@ -1151,6 +1346,16 @@ func mailOpenMenu(config *Config) {
 		add("Archive", "box", func() { mailMoveRow(r, "archive") })
 		add("Delete", "trash", func() { mailMoveRow(r, "trash") })
 		add("Mark unread", "message", func() { mailSetUnreadRow(r) })
+		if mailHTMLAvailable() {
+			if mailUI.readHTML {
+				add("Show plain text", "message", func() { mailSetReadHTML(false) })
+				if !mailUI.showImages {
+					add("Show images", "image", func() { mailSetShowImages(true) })
+				}
+			} else {
+				add("Show formatted message", "globe", func() { mailSetReadHTML(true) })
+			}
+		}
 		if e := mailUI.entry; e != nil {
 			for i, a := range e.body.Attachments {
 				add("Save “"+mailClean(a.Name, 40)+"” to Downloads", "download", func() { mailSaveAttachment(i) })

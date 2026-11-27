@@ -36,7 +36,6 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"regexp"
 	"runtime"
@@ -69,10 +68,9 @@ var (
 // runFFmpegProtocols runs `<tool> -hide_banner -protocols`; ffmpeg and ffprobe
 // both answer it.
 func runFFmpegProtocols(ctx context.Context, tool string) (string, error) {
-	cmd := exec.CommandContext(ctx, tool, "-hide_banner", "-protocols")
+	cmd := hiddenCommandContext(ctx, tool, "-hide_banner", "-protocols")
 	cmd.WaitDelay = time.Second
 	// No console window flashing up on Windows (sched_windows.go).
-	schedHideWindow(cmd)
 	out, err := cmd.Output()
 	return string(out), err
 }
@@ -793,3 +791,4 @@ func mediaRelayRewriteRef(ref string, base *url.URL, route func(string) string) 
 	}
 	return ref
 }
+

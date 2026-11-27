@@ -35,7 +35,6 @@ import (
 	"net/http"
 	"net/textproto"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -224,7 +223,7 @@ func visionWorkDir() (string, error) {
 func visionRunFFmpeg(ctx context.Context, ffmpeg string, args []string, limit time.Duration, stderr io.Writer) error {
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, ffmpeg, args...)
+	cmd := hiddenCommandContext(runCtx, ffmpeg, args...)
 	tail := &textTail{}
 	if stderr != nil {
 		cmd.Stderr = stderr
@@ -233,7 +232,6 @@ func visionRunFFmpeg(ctx context.Context, ffmpeg string, args []string, limit ti
 	}
 	// A child that left the pipe open must not hold the goroutine for good.
 	cmd.WaitDelay = 3 * time.Second
-	schedHideWindow(cmd)
 	err := cmd.Run()
 	if err == nil {
 		return nil
@@ -574,3 +572,4 @@ func visionTranscribeFile(ctx context.Context, key, path string) (string, error)
 	}
 	return strings.TrimSpace(out.Text), nil
 }
+

@@ -4320,13 +4320,14 @@ func ppssppRunUpdate(ctx context.Context) (string, error) {
 func ppssppUnmount(mountPoint string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "umount", mountPoint).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, "umount", mountPoint).CombinedOutput()
 	if err == nil {
 		return nil
 	}
-	lazy, lerr := exec.CommandContext(ctx, "umount", "-l", mountPoint).CombinedOutput()
+	lazy, lerr := hiddenCommandContext(ctx, "umount", "-l", mountPoint).CombinedOutput()
 	if lerr == nil {
 		return nil
 	}
 	return fmt.Errorf("%v (%s %s)", lerr, strings.TrimSpace(string(out)), strings.TrimSpace(string(lazy)))
 }
+

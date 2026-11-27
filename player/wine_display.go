@@ -259,7 +259,7 @@ func (d wineDisplayPlan) command(dir string) (*exec.Cmd, error) {
 		}
 		cmd = batch
 	} else {
-		cmd = exec.Command(d.Command, d.Args...)
+		cmd = hiddenCommand(d.Command, d.Args...)
 	}
 	cmd.Dir = dir
 	if d.launchDir != "" {
@@ -535,7 +535,7 @@ func (d wineDisplayPlan) stop(log wineLog) {
 	if shell == "" {
 		shell = "/bin/sh"
 	}
-	cmd := exec.Command(shell, d.wrapper, "cleanup")
+	cmd := hiddenCommand(shell, d.wrapper, "cleanup")
 	cmd.Dir = filepath.Dir(d.wrapper)
 	if d.launchDir != "" {
 		cmd.Dir = d.launchDir
@@ -1165,3 +1165,4 @@ func wineLogEnv(env map[string]string, hide map[string]bool) string {
 	}
 	return strings.Join(words, " ")
 }
+

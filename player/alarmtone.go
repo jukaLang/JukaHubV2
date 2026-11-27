@@ -435,7 +435,6 @@ func alarmDecodeMusic(ctx context.Context, path string, rate int32, seconds int,
 		"-t", strconv.Itoa(seconds), "-f", "s16le", "-acodec", "pcm_s16le",
 		"-ac", "1", "-ar", strconv.Itoa(int(rate)), "pipe:1"}
 	cmd := P().CommandContext(ctx, ffmpeg, args...)
-	alarmHideConsole(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fail("pipe", err)

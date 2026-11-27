@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -523,7 +522,7 @@ func btStartDaemon(ctx context.Context) {
 func btRunBounded(ctx context.Context, limit time.Duration, name string, args ...string) error {
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, name, args...)
+	cmd := hiddenCommandContext(runCtx, name, args...)
 	cmd.Env = screenChildEnv(os.Environ())
 	cmd.Dir = "/"
 	cmd.SysProcAttr = btDetachedAttr()
@@ -536,7 +535,7 @@ func btRunBounded(ctx context.Context, limit time.Duration, name string, args ..
 // either way its exit is collected here, so it never lingers as a zombie. The
 // channel closes when it has exited (hciattach -n that gave up on the chip).
 func btStartDetached(bin string, args ...string) (<-chan struct{}, error) {
-	cmd := exec.Command(bin, args...)
+	cmd := hiddenCommand(bin, args...)
 	cmd.Env = screenChildEnv(os.Environ())
 	cmd.Dir = "/"
 	cmd.SysProcAttr = btDetachedAttr()
@@ -802,3 +801,4 @@ func btSleep(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
+

@@ -376,12 +376,12 @@ for /f "delims=" %%T in ('%PS% -NoProfile -Command "[DateTime]::UtcNow.ToString(
 if not defined BUILD_TIME (set "ERR=Could not read the current time for the build stamp." & exit /b 1)
 set "BUILD_DATE=%BUILD_TIME:~0,10%"
 
-REM Release builds are GUI-subsystem executables: a double-clicked JukaHub must
-REM not open a console window beside it. There is no stderr then, so warnings
-REM and errors are appended to %LOCALAPPDATA%\JukaHub\logs\errors.txt instead
-REM (player/logfile.go). JUKAHUB_CONSOLE=1 keeps a console build for debugging.
-set "GUI_LDFLAGS=-H windowsgui"
-if defined JUKAHUB_CONSOLE set "GUI_LDFLAGS="
+REM Builds are console-subsystem executables, so the log runs in a terminal
+REM window beside the app. JUKAHUB_GUI=1 links -H windowsgui instead: no
+REM console window, and warnings and errors are appended to
+REM %LOCALAPPDATA%\JukaHub\logs\errors.txt (player/logfile.go).
+set "GUI_LDFLAGS="
+if defined JUKAHUB_GUI set "GUI_LDFLAGS=-H windowsgui"
 
 REM Google Drive sign-in (docs/CLOUD_SYNC.md): the OAuth client is stamped in
 REM only when JUKAHUB_GOOGLE_CLIENT_ID is set; without it the Save sync page

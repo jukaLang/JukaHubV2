@@ -95,6 +95,11 @@ func builtInCoverData(cover string) []byte {
 // arcade minigame's by its id, a scene game's by its scene; "" for none. The
 // Games screen's own scene has no cover: each of its minigames carries one.
 func builtInMenuCover(g gameEntry) string {
+	// Ghost Challenges is a scene game like JukaLand and Synth, but it is not
+	// a library console: its cover only appears on the Games screen.
+	if g.scene == ghostSceneName {
+		return "ghost.png"
+	}
 	for _, b := range builtInLibraryGames {
 		if g.scene != "" && b.arcade == gameNone && b.scene == g.scene {
 			return b.cover

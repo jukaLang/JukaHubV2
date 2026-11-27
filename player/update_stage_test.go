@@ -233,9 +233,9 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", script)
+		cmd = hiddenCommand("cmd", "/c", script)
 	} else {
-		cmd = exec.Command(script)
+		cmd = hiddenCommand(script)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("swap helper failed: %v\n%s", err, out)
@@ -259,3 +259,4 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 		t.Error("journal must be removed after a successful swap")
 	}
 }
+

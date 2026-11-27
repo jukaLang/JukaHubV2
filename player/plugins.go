@@ -182,7 +182,7 @@ func runPluginScript(plugin PluginInfo, pluginRoot, path, action string, vars ma
 	ctx, cancel := context.WithTimeout(context.Background(), plugActionTimeout)
 	defer cancel()
 	newCmd := func(wall bool) (*exec.Cmd, bool) {
-		cmd := exec.CommandContext(ctx, interpreter, args...)
+		cmd := hiddenCommandContext(ctx, interpreter, args...)
 		cmd.Dir = filepath.Dir(path)
 		cmd.Env = plugScriptEnv(plugin, pluginRoot)
 		// A script that leaves a child holding the output pipe must not keep
@@ -222,3 +222,4 @@ func plugInterpreter(entry string) string {
 	}
 	return "sh"
 }
+

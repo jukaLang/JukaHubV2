@@ -56,7 +56,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -770,7 +769,7 @@ func vpndEnsureTUN() error {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		cmd := exec.CommandContext(ctx, mp, "tun")
+		cmd := hiddenCommandContext(ctx, mp, "tun")
 		cmd.Env = []string{"PATH=/sbin:/usr/sbin:/bin:/usr/bin"}
 		_ = cmd.Run()
 		cancel()
@@ -1378,3 +1377,4 @@ func (c *vpndClock) finish() {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+

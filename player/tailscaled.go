@@ -351,8 +351,7 @@ func tailscaledRunCLI(timeout time.Duration, args ...string) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, append(pre, args...)...)
-	schedHideWindow(cmd)
+	cmd := hiddenCommandContext(ctx, bin, append(pre, args...)...)
 	// A child that keeps the pipe open cannot hold Wait past the kill.
 	cmd.WaitDelay = 2 * time.Second
 	var stderr bytes.Buffer
@@ -741,7 +740,7 @@ func tailscaledStart() error {
 	// state and the port: it goes first.
 	tailscaledKillStale(tailscaledPIDFile(), home)
 	sock := tailscaledSocketPath()
-	cmd := exec.Command(tailscaledBinPath("tailscaled"),
+	cmd := hiddenCommand(tailscaledBinPath("tailscaled"),
 		"--tun=userspace-networking",
 		"--statedir="+home,
 		"--socket="+sock,
@@ -936,8 +935,7 @@ func tailscaledLoginStart(keyFile string) {
 		if bin, pre, ok := tailscaleCLI(); !ok {
 			err = errors.New("tailscale is not installed")
 		} else {
-			cmd := exec.CommandContext(ctx, bin, append(pre, args...)...)
-			schedHideWindow(cmd)
+			cmd := hiddenCommandContext(ctx, bin, append(pre, args...)...)
 			cmd.WaitDelay = 2 * time.Second
 			var buf bytes.Buffer
 			cmd.Stdout = &buf
@@ -1453,3 +1451,4 @@ func tailscaledStepSystem(w *tailscaledWorkerState) {
 		s.Detail = ""
 	})
 }
+

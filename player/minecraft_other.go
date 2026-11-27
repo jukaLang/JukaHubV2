@@ -31,7 +31,7 @@ func mcJavaHomeCandidates() []string {
 
 // mcStartCmd starts a program and lets it run on.
 func mcStartCmd(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	cmd := hiddenCommand(name, args...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -70,3 +70,4 @@ func mcDesktopApps() []mcDesktopApp {
 	}
 	return apps
 }
+

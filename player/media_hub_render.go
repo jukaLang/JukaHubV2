@@ -249,9 +249,41 @@ func mediaThumbWorker() {
 // while none is decoded yet. A picture of another shape is cropped to its
 // middle rather than squeezed (a Short's 16:9 frame in a 9:16 card, a film
 // poster in a 16:9 one), except an album cover, which is shown whole.
-func mediaDrawCardArt(renderer *sdl.Renderer, card *mediaCard, rect sdl.Rect) bool {
+func mediaDrawCardArt(renderer *sdl.Renderer, config *Config, card *mediaCard, rect sdl.Rect, focused bool, previewStart uint64) bool {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return false
+	}
+	// A focused YouTube card cycles its three preview frames for about three
+	// seconds, then settles back on its poster. The frames are warmed when the
+	// card is focused (mediaHubWarmFocused), so this only draws what is ready.
+	if focused && uiMotionEnabled(config) && previewStart > 0 && uiClockMS()-previewStart < 3000 {
+		if vid := webYouTubeVideoID(card.video.URL); vid != "" {
+			urls := mediaPreviewFrameURLs(card.video)
+			if len(urls) > 0 {
+				idx := mediaPreviewFrameIndex(uiClockMS(), len(urls))
+				key := urls[idx]
+				normalized := normalizeThumbnailURL(key)
+				if len(mediaThumbKeys) >= mediaThumbTrackedMax {
+					mediaPruneThumbKeys()
+				}
+				mediaThumbKeys[normalized] = struct{}{}
+				tex := cachedThumbnailTexture(renderer, key)
+				if tex != nil {
+					_, _, tw, th, err := tex.Query()
+					if err == nil && tw > 0 && th > 0 {
+						if card.artContain {
+							dst := mediaFitRect(rect, tw, th)
+							renderer.Copy(tex, nil, &dst)
+						} else {
+							src := mediaCoverCrop(tw, th, rect.W, rect.H)
+							renderer.Copy(tex, &src, &rect)
+						}
+						return true
+					}
+				}
+				mediaWarmThumb(key)
+			}
+		}
 	}
 	for _, key := range card.art {
 		if key == "" {
@@ -384,7 +416,7 @@ func mediaDrawCard(renderer *sdl.Renderer, card *mediaCard, rect sdl.Rect, focus
 		artH = r.H - mediaCardTextH(titleFont, metaFont) - mediaCardPad
 	}
 	art := sdl.Rect{X: r.X + mediaCardPad, Y: r.Y + mediaCardPad, W: r.W - 2*mediaCardPad, H: artH}
-	mediaDrawCardArt(renderer, card, art)
+	mediaDrawCardArt(renderer, appConfig, card, art, focused, mediaHub.previewStart)
 	if card.duration != "" {
 		mediaDrawDurationBadge(renderer, badgeFont, card.duration, art)
 	}
@@ -457,7 +489,11 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	mediaHubEnsureBuilt(config)
-
+ 
+	if mediaHub.previewStart == 0 {
+		mediaHub.previewStart = uiClockMS()
+	}
+ 
 	online := IsOnline()
 	statusW := int32(0)
 	statusText := ""
@@ -1361,7 +1397,7 @@ func mediaDrawDownloadRow(renderer *sdl.Renderer, card *mediaCard, r sdl.Rect, f
 	thumbH := r.H - 16
 	thumbW := thumbH * 16 / 9
 	art := sdl.Rect{X: r.X + 10, Y: r.Y + 8, W: thumbW, H: thumbH}
-	mediaDrawCardArt(renderer, card, art)
+	mediaDrawCardArt(renderer, appConfig, card, art, false, 0)
 	if card.duration != "" {
 		mediaDrawDurationBadge(renderer, badgeFont, card.duration, art)
 	}

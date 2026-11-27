@@ -6,7 +6,6 @@ import "os/exec"
 
 // feToolProcAttr has nothing to set here.
 func feToolProcAttr(cmd *exec.Cmd) {
-	emuHideConsole(cmd)
 }
 
 // fe7ZipCommandLine has nothing to do here: 7-Zip gets its words as argv.

@@ -35,7 +35,7 @@ func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 	if comspec == "" {
 		comspec = "cmd.exe"
 	}
-	cmd := exec.CommandContext(ctx, comspec)
+	cmd := hiddenCommandContext(ctx, comspec)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow: true,
 		CmdLine:    `"` + comspec + `" /d /q /s`,
@@ -53,11 +53,11 @@ func termKillTree(cmd *exec.Cmd) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	kill := exec.CommandContext(ctx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
-	kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: termCreateNoWindow}
+	kill := hiddenCommandContext(ctx, "taskkill", "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid))
 	_ = kill.Run()
 	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
 	return nil
 }
+

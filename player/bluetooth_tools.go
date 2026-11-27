@@ -112,7 +112,7 @@ func btToolCmd(ctx context.Context, name string, args ...string) *exec.Cmd {
 	if !ok {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := hiddenCommandContext(ctx, path, args...)
 	cmd.Env = screenChildEnv(os.Environ())
 	cmd.WaitDelay = time.Second
 	return cmd
@@ -130,3 +130,4 @@ func btToolRun(name string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+

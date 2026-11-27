@@ -126,8 +126,7 @@ func narrSAPIStartLocked(v ttsLocalVoice, gender string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(v.path, "-NoProfile", "-NonInteractive", "-Command", narrSAPIScript)
-	auditConfigureHidden(cmd)
+	cmd := hiddenCommand(v.path, "-NoProfile", "-NonInteractive", "-Command", narrSAPIScript)
 	g := ""
 	switch gender {
 	case "female":
@@ -201,3 +200,4 @@ func narrSAPIWatch() {
 		narrSAPI.mu.Unlock()
 	}
 }
+

@@ -161,7 +161,7 @@ func (tspPlatform) WriteFile(name string, data []byte, perm os.FileMode) error {
 func (tspPlatform) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
 
 func (tspPlatform) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	// TSP tools in ./required/ may need the directory on PATH.
 	// Resolve relative to the binary dir, not CWD, so the app works when
 	// launched from a different working directory.
@@ -246,13 +246,13 @@ func (windowsPlatform) OpenURL(url string) error {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "https://" + url
 	}
-	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	return hiddenCommand("rundll32", "url.dll,FileProtocolHandler", url).Start()
 }
 
 func (windowsPlatform) OpenFile(path string) error {
 	// rundll32's protocol handler, not `cmd /c start`: cmd read metacharacters
 	// in a path as shell syntax, and one existed only to reach it.
-	return exec.Command("rundll32", "url.dll,FileProtocolHandler", path).Start()
+	return hiddenCommand("rundll32", "url.dll,FileProtocolHandler", path).Start()
 }
 
 func (windowsPlatform) Stat(name string) (os.FileInfo, error) { return os.Stat(name) }
@@ -263,7 +263,7 @@ func (windowsPlatform) WriteFile(name string, data []byte, perm os.FileMode) err
 func (windowsPlatform) MkdirAll(path string, perm os.FileMode) error { return os.MkdirAll(path, perm) }
 
 func (windowsPlatform) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	// Merge env from current process.
 	cmd.Env = os.Environ()
 	return cmd
@@ -296,3 +296,4 @@ func MustExecutableDir() string {
 	}
 	return dir
 }
+

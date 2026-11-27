@@ -607,7 +607,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	// count, for this launch only (netplay_link.go).
 	netplayLinkBeforeLaunch(&plan)
 	name, args := netplayCommand(plan)
-	cmd := exec.Command(name, args...)
+	cmd := hiddenCommand(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)
 	if netplayTrimuiBuild(plan.RetroArch) {
 		// Every firmware launch.sh starts ra64.trimui from its own folder with
@@ -652,3 +652,4 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	recordGameLaunch(plan.Session.Game)
 	return nil
 }
+

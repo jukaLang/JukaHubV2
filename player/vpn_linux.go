@@ -19,7 +19,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -189,7 +188,7 @@ func vpnPlatformApply(payload []byte) error {
 	if anchor <= 1 {
 		anchor = os.Getpid()
 	}
-	cmd := exec.Command(exe, "--vpn-daemon", "--vpn-run-dir", dir, "--vpn-state-dir", vpnDaemonStateDir(),
+	cmd := hiddenCommand(exe, "--vpn-daemon", "--vpn-run-dir", dir, "--vpn-state-dir", vpnDaemonStateDir(),
 		"--vpn-anchor", strconv.Itoa(anchor))
 	cmd.Stdin = bytes.NewReader(payload)
 	cmd.Stderr = os.Stderr
@@ -237,3 +236,4 @@ func vpnPlatformRecover() {
 	}
 	vpndRecoverRoutes(vpnRunDir())
 }
+

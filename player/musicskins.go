@@ -389,7 +389,15 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	drawCard(renderer, stripX, listY, stripW, listH, 16)
 	musicStockOSLayout.list = sdl.Rect{X: stripX, Y: listY, W: stripW, H: listH}
 
+	// A one-file book lists its own chapters instead (audiobook_chapters.go).
+	var chapters []audioChapter
+	if len(tracks) == 1 {
+		chapters = audioChaptersFor(tracks[0].Path)
+	}
 	header := fmt.Sprintf("All songs   ·   %d", len(tracks))
+	if len(chapters) > 0 {
+		header = fmt.Sprintf("Chapters   ·   %d", len(chapters))
+	}
 	renderText(renderer, config, font, header, ColorTextSecondary(), stripX+20, listY+14)
 
 	exitLabel := "Exit"
@@ -420,7 +428,9 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		end = len(tracks)
 	}
 	musicRects.rowStart = start
-	if len(tracks) == 0 {
+	if len(chapters) > 0 {
+		renderMusicChapterRows(renderer, config, font, chapters, position, cursor, stripX, stripW, rowsTop, visible)
+	} else if len(tracks) == 0 {
 		empty := "No audio files here. Open Files, enter a folder and pick a song."
 		renderText(renderer, config, font, ellipsize(font, empty, stripW-40), ColorTextTertiary(), stripX+20, rowsTop+20)
 	} else {

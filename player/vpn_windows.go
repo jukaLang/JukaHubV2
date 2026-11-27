@@ -35,7 +35,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -422,7 +421,7 @@ func vpnWinUp(reqPath, wantSum string) int {
 	// the new one before it is gone could start the new setup under the old
 	// name after a reboot.
 	if vpnWinServiceState() != 0 {
-		_ = exec.Command(exe, "/uninstalltunnelservice", vpnWinTunnel).Run()
+		_ = hiddenCommand(exe, "/uninstalltunnelservice", vpnWinTunnel).Run()
 		if !vpnWinWaitGone() {
 			return vpnWinExitUninstall
 		}
@@ -431,7 +430,7 @@ func vpnWinUp(reqPath, wantSum string) int {
 	if err != nil {
 		return vpnWinExitFolder
 	}
-	if err := exec.Command(exe, "/installtunnelservice", confPath).Run(); err != nil {
+	if err := hiddenCommand(exe, "/installtunnelservice", confPath).Run(); err != nil {
 		_ = os.Remove(confPath) // no service will read it; it holds the key
 		return vpnWinExitInstall
 	}
@@ -444,7 +443,7 @@ func vpnWinDown() int {
 		return vpnWinExitNoWG
 	}
 	if vpnWinServiceState() != 0 {
-		_ = exec.Command(exe, "/uninstalltunnelservice", vpnWinTunnel).Run()
+		_ = hiddenCommand(exe, "/uninstalltunnelservice", vpnWinTunnel).Run()
 		if !vpnWinWaitGone() {
 			return vpnWinExitUninstall
 		}
@@ -582,3 +581,4 @@ func vpnWinAdminDir(dir string, sd *windows.SECURITY_DESCRIPTOR) error {
 	return windows.SetSecurityInfo(h, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
+

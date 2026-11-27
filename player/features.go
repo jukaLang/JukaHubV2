@@ -544,7 +544,7 @@ func feScriptCommand(config *Config, path string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command("sh", "--", file)
+	cmd := hiddenCommand("sh", "--", file)
 	cmd.Dir = filepath.Dir(file)
 	return cmd, nil
 }
@@ -972,3 +972,4 @@ func applyColorVar(config *Config, name, value string) {
 	config.Variables.Custom[name] = rgbHex(c)
 	logDebug("features", "Set %s = %d,%d,%d", name, c.R, c.G, c.B)
 }
+

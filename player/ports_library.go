@@ -432,9 +432,69 @@ func libraryAddPortGames(lib *gameLibraryReport, seconds map[string]int64) {
 	lib.WithArt += withArt
 }
 
+// oldBitsLibrarySystem is the console OldBits Hub is shown under in Games.
+const oldBitsLibrarySystem = "OldBits"
+
+// libraryAddOldBitsGames adds an "OldBits" console containing the OldBits Hub
+// port, so it shows up in Games as if it were an emulator. Main thread / scan
+// goroutine. It reuses the port launch path (startPortScript).
+func libraryAddOldBitsGames(lib *gameLibraryReport, seconds map[string]int64) {
+	if lib == nil || !portsLibraryEnabled() {
+		return
+	}
+	for i := range lib.Systems {
+		if lib.Systems[i].Name == oldBitsLibrarySystem {
+			return // already added
+		}
+	}
+	found := scanPortLaunchers(portRoots(portMasterSDRoot))
+	var oldBits []portEntry
+	for _, p := range found {
+		if strings.EqualFold(filepath.Base(p.Launch), "OldBits Hub.sh") {
+			oldBits = append(oldBits, p)
+		}
+	}
+	if len(oldBits) == 0 {
+		// Still show the console so the first launch can download and install
+		// the hub (oldbits_install.go).
+		games := []libraryGame{{Path: "oldbits:install", System: oldBitsLibrarySystem, Title: "OldBits Hub (install)"}}
+		lib.Systems = append(lib.Systems, librarySystem{Name: oldBitsLibrarySystem, Games: games})
+		lib.Total++
+		return
+	}
+	games := make([]libraryGame, 0, len(oldBits))
+	for _, p := range oldBits {
+		portEnsureCover(p.Launch)
+		g := portLibraryGame(p.Launch)
+		g.System = oldBitsLibrarySystem
+		if info, err := os.Stat(p.Launch); err == nil {
+			g.AddedAt = info.ModTime()
+		}
+		games = append(games, g)
+	}
+	libraryDecorateGames(games, seconds)
+	withArt := countCoveredGames(games)
+	lib.Systems = append(lib.Systems, librarySystem{Name: oldBitsLibrarySystem, Games: games, WithArt: withArt})
+	lib.Total += len(games)
+	lib.WithArt += withArt
+}
+
 // launchPortLibraryGame starts a port from the library, Continue or search
 // (launchLibraryGame). Main thread.
 func launchPortLibraryGame(game libraryGame) error {
+	if game.System == oldBitsLibrarySystem {
+		ShowToast("OldBits Hub — by OldBits (oldbits.net)", ToastKindInfo)
+		// Install the hub on first launch when it is missing. PortMaster's
+		// own files, if absent, are installed by startPortScript below.
+		path, err := oldBitsEnsureInstalled(appConfig)
+		if err != nil {
+			return err
+		}
+		game.Path = path
+		if err := oldBitsPreflight(path); err != nil {
+			return err
+		}
+	}
 	if !portsLibraryEnabled() {
 		return fmt.Errorf("PortMaster ports run on the handheld")
 	}

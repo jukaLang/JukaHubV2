@@ -1482,7 +1482,7 @@ func launchEmulatorEntry(e emuEntry) {
 	switch {
 	case IsWindows() && (ext == ".lnk" || ext == ".url"):
 		// Shortcuts are resolved by the shell handler, not executed directly.
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+		cmd = hiddenCommand("rundll32", "url.dll,FileProtocolHandler", path)
 	case IsWindows() && (ext == ".bat" || ext == ".cmd"):
 		// cmd.exe parses its own command line: winBatchCommand quotes the path
 		// for it, so a folder like "Emulators (x64)" stays one path.
@@ -1499,7 +1499,7 @@ func launchEmulatorEntry(e emuEntry) {
 			failed(fmt.Errorf("RetroArch is not installed: %w", os.ErrNotExist))
 			return
 		}
-		cmd = exec.Command(retroArch, "-L", path)
+		cmd = hiddenCommand(retroArch, "-L", path)
 		dir = filepath.Dir(retroArch)
 	case ext == ".sh" || ext == "":
 		// sh reads the launch script; the absolute path is an operand, not code.
@@ -1513,12 +1513,12 @@ func launchEmulatorEntry(e emuEntry) {
 			name, args = firmwareScriptCommand(path, name, args)
 		}
 		if name == "sh" {
-			cmd = exec.Command("sh", append([]string{"--", path}, extra...)...)
+			cmd = hiddenCommand("sh", append([]string{"--", path}, extra...)...)
 		} else {
-			cmd = exec.Command(name, append(args, extra...)...)
+			cmd = hiddenCommand(name, append(args, extra...)...)
 		}
 	default:
-		cmd = exec.Command(path)
+		cmd = hiddenCommand(path)
 	}
 	cmd.Dir = dir
 	ppssppPrepareManagedLaunch(path, cmd)
@@ -1971,3 +1971,4 @@ func emuSummary(entries []emuEntry) string {
 	}
 	return strings.Join(parts, " · ")
 }
+

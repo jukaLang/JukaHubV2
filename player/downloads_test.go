@@ -482,10 +482,23 @@ func TestDownloadSubtitleStepYieldsToANewRow(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForDownload(t, "the transfers and the subtitle steps", func() bool { return len(f.snapshot()) >= 5 })
-	got := strings.Join(f.snapshot(), ", ")
-	want := "transfer 1, subtitles clip1.mp4 cut short, transfer 2, subtitles clip1.mp4, subtitles clip2.mp4"
-	if got != want {
-		t.Fatalf("order = %s\nwant    %s", got, want)
+	// Two workers may finish in either order. What matters is that the
+	// subtitle step was cut short and both retries waited for the transfers.
+	events := f.snapshot()
+	if len(events) != 5 || events[0] != "transfer 1" {
+		t.Fatalf("events = %v", events)
+	}
+	cut, second := false, false
+	for _, e := range events {
+		if strings.Contains(e, "cut short") {
+			cut = true
+		}
+		if e == "transfer 2" {
+			second = true
+		}
+	}
+	if !cut || !second || events[3] != "subtitles clip1.mp4" || events[4] != "subtitles clip2.mp4" {
+		t.Fatalf("events = %v", events)
 	}
 }
 

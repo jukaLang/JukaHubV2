@@ -14,7 +14,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -2784,7 +2783,7 @@ func getRunningServices() (result string) {
 		return "Unavailable (not Linux)"
 	}
 
-	out, err := exec.Command("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--plain").Output()
+	out, err := hiddenCommand("systemctl", "list-units", "--type=service", "--state=running", "--no-pager", "--plain").Output()
 	if err != nil {
 		return "Unavailable"
 	}
@@ -2854,7 +2853,7 @@ func getProcessTree() (result string) {
 	if runtime.GOOS != "linux" {
 		return "Unavailable (not Linux)"
 	}
-	out, err := exec.Command("ps", "-eo", "pid,ppid,user,%cpu,%mem,cmd", "--sort=-%cpu").Output()
+	out, err := hiddenCommand("ps", "-eo", "pid,ppid,user,%cpu,%mem,cmd", "--sort=-%cpu").Output()
 	if err != nil {
 		return "Unavailable"
 	}
@@ -3071,3 +3070,4 @@ func browserPreview(ctx context.Context, html string, pageURL *url.URL, truncate
 		<-fontsDone
 	}()
 }
+

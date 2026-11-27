@@ -151,7 +151,7 @@ type wifiJoinResult struct {
 var wifiRunner = func(timeout time.Duration, stdin, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
@@ -2229,3 +2229,4 @@ func wifiSavedID(ssid string, saved []savedNetwork) (int, bool) {
 	}
 	return 0, false
 }
+

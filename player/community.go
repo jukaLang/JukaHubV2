@@ -33,6 +33,7 @@ const (
 	communityPageOfflineRef
 	communityPageWineComponents
 	communityPageWineApps
+	communityPageSiteVideos
 	communityPageDiagnosticsQR
 )
 
@@ -323,11 +324,11 @@ func openExternalURL(raw string) error {
 	case "windows":
 		// rundll32 avoids cmd.exe, so a query string full of & and % arrives
 		// intact and cannot be parsed as shell syntax.
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", link)
+		cmd = hiddenCommand("rundll32", "url.dll,FileProtocolHandler", link)
 	case "darwin":
-		cmd = exec.Command("open", link)
+		cmd = hiddenCommand("open", link)
 	default:
-		cmd = exec.Command("xdg-open", link)
+		cmd = hiddenCommand("xdg-open", link)
 	}
 	if err := cmd.Start(); err != nil {
 		return err
@@ -422,6 +423,25 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 			}
 		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
 			closeCommunityPanel()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageSiteVideos {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			siteVideosMove(-1)
+		case sdl.K_DOWN:
+			siteVideosMove(1)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			siteVideosActivate()
+		case sdl.K_y:
+			vkOpenVideoSearch()
+		case sdl.K_x:
+			vkOpenOtherVideosPlay()
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
 		}
 		return true
 	}
@@ -630,6 +650,25 @@ func ctrlCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 		return true
 	}
+	if communityPanel.page == communityPageSiteVideos {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			siteVideosMove(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			siteVideosMove(1)
+		case sdl.CONTROLLER_BUTTON_A:
+			siteVideosActivate()
+		case sdl.CONTROLLER_BUTTON_Y:
+			vkOpenVideoSearch()
+		case sdl.CONTROLLER_BUTTON_X:
+			vkOpenOtherVideosPlay()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
 	if communityPanel.page == communityPageWineApps {
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -791,7 +830,8 @@ func handleCommunityMouse(mx, my int32, config *Config) bool {
 	}
 	if communityPanel.page != communityPageHome {
 		if communityPanel.page == communityPagePluginMarket || communityPanel.page == communityPageOfflineRef ||
-			communityPanel.page == communityPageWineComponents || communityPanel.page == communityPageWineApps {
+			communityPanel.page == communityPageWineComponents || communityPanel.page == communityPageWineApps ||
+			communityPanel.page == communityPageSiteVideos {
 			// The card is opened from the hub: a tap inside keeps it open,
 			// a tap outside goes back to the hub list.
 			if communityPanelRect.W > 0 && !pointInRect(mx, my, communityPanelRect) {
@@ -871,7 +911,7 @@ func communityPanelSize(page communityPage, rowH, headerH int32) (int32, int32) 
 	if page == communityPageChangelog || page == communityPageBIOSDoctor ||
 		page == communityPageROMAudit || page == communityPageJournal || page == communityPageSteamAch ||
 		page == communityPagePluginMarket || page == communityPageOfflineRef || page == communityPageWineComponents ||
-		page == communityPageWineApps || page == communityPageDiagnosticsQR {
+		page == communityPageWineApps || page == communityPageSiteVideos || page == communityPageDiagnosticsQR {
 		panelH = 620
 		if panelH > screenHeight-40 {
 			panelH = screenHeight - 40
@@ -936,6 +976,12 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	} else if communityPanel.page == communityPageWineApps {
 		title = "Wine apps"
 		sub = "Free open-source Windows programs, from their own sites"
+	} else if communityPanel.page == communityPageSiteVideos {
+		title = siteVideoUI.site.Name
+		if strings.TrimSpace(title) == "" {
+			title = siteVideoUI.site.Host
+		}
+		sub = "Saved, favourite and watched videos from this site"
 	} else if communityPanel.page == communityPageDiagnosticsQR {
 		title = "Diagnostics export"
 		sub = "A time-limited QR link to the redacted support report"
@@ -982,6 +1028,12 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	if communityPanel.page == communityPageWineApps {
 		renderCommunityWineApps(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH)
+		return
+	}
+	if communityPanel.page == communityPageSiteVideos {
+		renderReportCard(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH,
+			siteVideosLines(siteVideoUI.cursor),
+			[]FooterHint{{"Up/Down", "Pick"}, {"A", "Play"}, {"Y", "Search"}, {"X", "Paste link"}, {"B", "Back"}})
 		return
 	}
 	if communityPanel.page == communityPageROMAudit {
@@ -1127,3 +1179,4 @@ func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, 
 	renderText(renderer, config, medium, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
 }
+

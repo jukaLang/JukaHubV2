@@ -486,7 +486,7 @@ func raGlibcNamespaceOK() bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, sh, "-c", ":")
+	cmd := hiddenCommandContext(ctx, sh, "-c", ":")
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
 	if !raGlibcNamespace(cmd) {
 		return false
@@ -909,7 +909,7 @@ func (w *raGlibcCapped) Write(p []byte) (int, error) {
 func raGlibcRunProbe(name string, args, env []string, dir string, namespace bool) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), raGlibcProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.WaitDelay = time.Second
@@ -1787,3 +1787,4 @@ func raGlibcChoose(c *Config, value string) string {
 	}
 	return "RetroArch's C library: " + raGlibcModeLabel(now)
 }
+

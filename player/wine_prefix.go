@@ -350,7 +350,7 @@ func wineRunBounded(ctx context.Context, argv []string, env []string, limit time
 	if len(argv) == 0 {
 		return errors.New("nothing to run")
 	}
-	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd := hiddenCommand(argv[0], argv[1:]...)
 	cmd.Env = env
 	if out != nil {
 		cmd.Stdout = out
@@ -384,7 +384,7 @@ func wineRunBounded(ctx context.Context, argv []string, env []string, limit time
 func wineRunOutput(ctx context.Context, limit time.Duration, name string, args ...string) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
-	out, err := exec.CommandContext(runCtx, name, args...).CombinedOutput()
+	out, err := hiddenCommandContext(runCtx, name, args...).CombinedOutput()
 	return string(out), err
 }
 
@@ -980,3 +980,4 @@ func wineWaitArgs(server []string, command string, args []string) []string {
 	out = append(out, "-c", script, "jukahub-wine", command)
 	return append(out, args...)
 }
+

@@ -359,7 +359,7 @@ func screenRecStart(config *Config, title, gamePath string) (string, error) {
 		return "", fmt.Errorf("cannot write to %s — is the card read-only?", dir)
 	}
 	probe.Close()
-	cmd := exec.Command(ffmpeg, screenRecArgs(castFBDevice, path, deg, geom.W, geom.H)...)
+	cmd := hiddenCommand(ffmpeg, screenRecArgs(castFBDevice, path, deg, geom.W, geom.H)...)
 	screenRecConfigure(cmd)
 	if lib := filepath.Join(filepath.Dir(filepath.Dir(ffmpeg)), "lib"); strings.Contains(ffmpeg, "ScreencapTK") && dirExists(lib) {
 		// CrossMix's ffmpeg, with the libraries beside it.
@@ -806,3 +806,4 @@ func init() {
 	// Quitting closes the file cleanly rather than leaving ffmpeg to its -t.
 	Cleanup = append(Cleanup, screenRecShutdown)
 }
+

@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -862,7 +861,7 @@ func startPortScript(name, path string) error {
 	plan.Notes = append(plan.Notes, pmRuntimeNotes(master)...)
 	logInfo("portmaster", "launching %s: %s %s (PortMaster folder %s%s)", name, plan.Name, strings.Join(plan.Args, " "),
 		setOr(plan.Control, "unknown"), map[string]string{"": "", "link": ", linked", "xdg": ", via XDG_DATA_HOME"}[plan.Fix])
-	cmd := exec.Command(plan.Name, plan.Args...)
+	cmd := hiddenCommand(plan.Name, plan.Args...)
 	cmd.Dir = plan.Dir
 	// The environment is the port's alone, so JukaHub's own audio, libraries
 	// and the next launch are untouched even if the port crashes.
@@ -1344,3 +1343,4 @@ func portsRowNameWidth(rowW, badgeW, statusW int32) int32 {
 	}
 	return w
 }
+

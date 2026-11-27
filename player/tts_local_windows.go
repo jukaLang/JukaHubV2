@@ -74,8 +74,7 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 
 	ctx, cancel := context.WithTimeout(ctx, ttsSAPITimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, v.path, "-NoProfile", "-NonInteractive", "-Command", ttsSAPIScript)
-	auditConfigureHidden(cmd)
+	cmd := hiddenCommandContext(ctx, v.path, "-NoProfile", "-NonInteractive", "-Command", ttsSAPIScript)
 	switch gender {
 	case "female":
 		gender = "Female"
@@ -108,3 +107,4 @@ func ttsPiperStream(context.Context, ttsLocalVoice, func(context.Context) (strin
 func ttsPiperPrewarm() {}
 
 func ttsPiperWarmStop() {}
+

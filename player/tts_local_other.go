@@ -127,14 +127,14 @@ func ttsLocalSynth(ctx context.Context, v ttsLocalVoice, text, gender string) ([
 	stdin := false
 	switch v.kind {
 	case "espeak-ng", "espeak":
-		cmd = exec.CommandContext(ctx, v.path, "-w", wav, "--stdin")
+		cmd = hiddenCommandContext(ctx, v.path, "-w", wav, "--stdin")
 		stdin = true
 	case "flite":
-		cmd = exec.CommandContext(ctx, v.path, "-o", wav, "-t", text)
+		cmd = hiddenCommandContext(ctx, v.path, "-o", wav, "-t", text)
 	case "pico2wave":
-		cmd = exec.CommandContext(ctx, v.path, "-l", "en-US", "-w", wav, "--", text)
+		cmd = hiddenCommandContext(ctx, v.path, "-l", "en-US", "-w", wav, "--", text)
 	case "piper":
-		cmd = exec.CommandContext(ctx, v.path, "--model", v.model, "--output_file", wav)
+		cmd = hiddenCommandContext(ctx, v.path, "--model", v.model, "--output_file", wav)
 		stdin = true
 	default:
 		return nil, 0, errors.New("unknown voice engine " + v.kind)
@@ -226,7 +226,7 @@ func ttsPiperStream(ctx context.Context, v ttsLocalVoice, next func(context.Cont
 	timeout := ttsPiperTimeout + time.Duration(ttsSpokenMax/6)*time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, v.path, "--model", v.model, "--output_dir", dir)
+	cmd := hiddenCommandContext(ctx, v.path, "--model", v.model, "--output_dir", dir)
 	cmd.Env = ttsLocalEnv(v)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -518,7 +518,7 @@ func ttsPiperWarmStartLocked(v ttsLocalVoice) *ttsPiperProc {
 	if err != nil {
 		return nil
 	}
-	cmd := exec.Command(v.path, "--model", v.model, "--output_dir", dir)
+	cmd := hiddenCommand(v.path, "--model", v.model, "--output_dir", dir)
 	cmd.Env = ttsLocalEnv(v)
 	feToolProcAttr(cmd) // it dies with JukaHub
 	p := &ttsPiperProc{at: time.Now(), key: ttsPiperKey(v), cmd: cmd, out: make(chan string, 64), exited: make(chan struct{}), dir: dir, stderr: &strings.Builder{}}
@@ -922,3 +922,4 @@ func ttsCreateTemp(pattern string) (*os.File, error) {
 	}
 	return os.CreateTemp("", pattern)
 }
+

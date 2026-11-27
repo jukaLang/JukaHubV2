@@ -827,7 +827,7 @@ func usbProbeVolume(name string, size int64) (label, fstype string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, "/dev/"+name).Output()
+	out, err := hiddenCommandContext(ctx, bin, "/dev/"+name).Output()
 	if err == nil {
 		label, fstype = usbParseBlkid(firstLine(string(out)))
 	}
@@ -1708,3 +1708,4 @@ func usbImportSummary(res usbImportResult) string {
 	}
 	return strings.TrimSpace(b.String())
 }
+

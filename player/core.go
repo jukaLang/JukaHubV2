@@ -2954,7 +2954,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 
 	// Run the tool directly (no shell) so special characters are not
 	// interpreted by cmd.exe / sh (e.g. "<" as input redirection).
-	cmd := exec.CommandContext(ctx, fullToolPath, args...)
+	cmd := hiddenCommandContext(ctx, fullToolPath, args...)
 	cmd.Env = helperToolEnv(fullToolPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -5587,7 +5587,10 @@ func showToastPrimitiveMode(message string, kind ToastKind, quiet bool) {
 	if msg != "" && kind != ToastKindSwitch && gameScreenSuspended() && notifWhilePlayingMode() == notifPlayOver {
 		ingameHUDToast(msg, kind)
 	}
-	now := sdl.GetTicks64()
+	// SDL_GetTicks64 is not safe to call from a download worker (the queue's
+	// goroutines now run two at a time), and under go test SDL may not be
+	// initialised at all. The millisecond clock is all the toast queue needs.
+	now := uint64(time.Now().UnixMilli())
 	currentToastMu.Lock()
 	// It shows now, replaces the one with the same words, or waits its turn
 	// behind a toast that was just raised (toastqueue.go).
@@ -6704,9 +6707,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			go func(url string) {
 				var cmd *exec.Cmd
 				if IsWindows() {
-					cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+					cmd = hiddenCommand("rundll32", "url.dll,FileProtocolHandler", url)
 				} else {
-					cmd = exec.Command("xdg-open", url)
+					cmd = hiddenCommand("xdg-open", url)
 				}
 				if err := cmd.Run(); err != nil {
 					logWarn("core", "open url error: %v", err)
@@ -7807,3 +7810,4 @@ func handleVirtualKeyboardInput(e *sdl.KeyboardEvent, config *Config) {
 		vkSubmit(config, false)
 	}
 }
+

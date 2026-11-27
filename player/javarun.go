@@ -39,7 +39,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -608,10 +607,10 @@ func javaStartDetached(rt javaRuntime, dir string, args []string, name string, r
 	if rt.Javaw != "" {
 		exe = rt.Javaw
 	}
-	cmd := exec.Command(exe, args...)
+	cmd := hiddenCommand(exe, args...)
 	cmd.Dir = dir
 	cmd.Env = javaEnvFor(rt, os.Environ())
-	auditConfigureDetached(cmd)
+	startDetached(cmd)
 	if report == nil {
 		report = func(err error) {
 			if err != nil {
@@ -652,3 +651,4 @@ func javaQuoteArgs(args []string) string {
 	}
 	return strings.Join(out, " ")
 }
+

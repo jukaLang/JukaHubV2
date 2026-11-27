@@ -538,7 +538,7 @@ func ytdlpInstalledVersion(ctx context.Context, path string) string {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, ytdlpVersionProbeLimit)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, path, "--version")
+	cmd := hiddenCommandContext(probeCtx, path, "--version")
 	cmd.Env = helperToolEnv(path)
 	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.Output()
@@ -778,7 +778,7 @@ func ytdlpKilledBySignal(err error) bool {
 func ytdlpProbeBinary(path string) (ytdlpProbeResult, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), ytdlpVerifyLimit)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd := hiddenCommandContext(ctx, path, "--version")
 	cmd.Env = helperToolEnv(path)
 	cmd.WaitDelay = 3 * time.Second
 	var stdout, stderr strings.Builder
@@ -893,3 +893,4 @@ func ytdlpSweepStale(dir, base string, now time.Time) {
 		}
 	}
 }
+

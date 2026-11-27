@@ -59,9 +59,8 @@ var (
 )
 
 func runFFmpegDemuxers(ctx context.Context, tool string) (string, error) {
-	cmd := exec.CommandContext(ctx, tool, "-hide_banner", "-demuxers")
+	cmd := hiddenCommandContext(ctx, tool, "-hide_banner", "-demuxers")
 	cmd.WaitDelay = time.Second
-	schedHideWindow(cmd)
 	out, err := cmd.Output()
 	return string(out), err
 }
@@ -286,3 +285,4 @@ func chiptuneSpliceArgs(args, input []string, filter string) []string {
 // The SID player is ffmpeg's stdin: it must stay an io.Reader whose io.EOF
 // ends the song.
 var _ io.Reader = (*sidStream)(nil)
+

@@ -123,7 +123,7 @@ func acSnapshotRestore(s acSnapshot) []string {
 	}
 	if s.inputd && procNameRunning([]string{acInputDaemonName}) == "" {
 		if info, err := os.Stat(acInputDaemonPath); err == nil && info.Mode().IsRegular() {
-			cmd := exec.Command(acInputDaemonPath)
+			cmd := hiddenCommand(acInputDaemonPath)
 			cmd.Dir = filepath.Dir(acInputDaemonPath)
 			// Its own process group: never the app's, whose leftovers are
 			// stopped, and never JukaHub's screen hand-off.
@@ -301,9 +301,9 @@ func acLaunch(in acInstalled, file string) bool {
 	var cmd *exec.Cmd
 	if strings.EqualFold(filepath.Ext(clean), ".sh") {
 		// sh reads the script; the path and the file are operands, never code.
-		cmd = exec.Command("sh", append([]string{"--", clean}, args...)...)
+		cmd = hiddenCommand("sh", append([]string{"--", clean}, args...)...)
 	} else {
-		cmd = exec.Command(clean, args...)
+		cmd = hiddenCommand(clean, args...)
 	}
 	cmd.Dir = filepath.Dir(clean)
 	started := time.Now()
@@ -393,3 +393,4 @@ func acExitText(cmd *exec.Cmd, err error) string {
 	}
 	return cmd.ProcessState.String()
 }
+

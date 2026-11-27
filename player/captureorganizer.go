@@ -9,7 +9,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -298,7 +297,7 @@ func captureProbeDuration(ctx context.Context, probe, path string) float64 {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, probe, "-v", "error", "-show_entries", "format=duration",
+	out, err := hiddenCommandContext(ctx, probe, "-v", "error", "-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1", path).Output()
 	if err != nil || len(out) > 128 {
 		return 0
@@ -339,7 +338,7 @@ func captureTrimRecording(ctx context.Context, ffmpeg, path string, start, end f
 		"-i", path, "-t", captureTimeArg(end - start), "-map", "0:v:0", "-map", "0:a?",
 		"-c:v", "mpeg4", "-q:v", "5", "-threads", "1", "-c:a", "aac", "-b:a", "128k",
 		"-movflags", "+faststart", "-y", tempPath}
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd := hiddenCommandContext(ctx, ffmpeg, args...)
 	var stderr castTail
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
@@ -366,3 +365,4 @@ func captureTrimRecording(ctx context.Context, ffmpeg, path string, start, end f
 	}
 	return to, nil
 }
+

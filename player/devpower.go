@@ -41,7 +41,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -164,7 +163,7 @@ func devPowerRun(verb string) error {
 			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), devPowerCmdTimeout)
-		out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+		out, err := hiddenCommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
 		cancel()
 		cmd := strings.Join(argv, " ")
 		if err == nil {
@@ -493,3 +492,4 @@ func init() {
 	bootOnShutdown(backlightOn)
 	Cleanup = append(Cleanup, backlightOn)
 }
+

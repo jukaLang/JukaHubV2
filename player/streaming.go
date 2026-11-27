@@ -471,7 +471,7 @@ func streamFailureFatal(reason string) bool {
 // Stderr is captured rather than inherited: yt-dlp's errors are the only way to
 // tell "no such format" from "network down", and the old code logged neither.
 func ytDlpGetURL(ctx context.Context, ytDlpPath string, args []string) (string, error) {
-	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
+	cmd := hiddenCommandContext(ctx, ytDlpPath, args...)
 	cmd.Env = helperToolEnv(ytDlpPath)
 	// The one-file helper runs the real yt-dlp as its child, and killing only
 	// the process started here left that child extracting on: every attempt
@@ -1498,3 +1498,4 @@ func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobeP
 	rememberDirectStream(source, direct, effectivePlaybackMaxHeight(config, source))
 	return true
 }
+

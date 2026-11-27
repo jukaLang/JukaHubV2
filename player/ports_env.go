@@ -347,9 +347,13 @@ func portBuildLaunchPlan(config *Config, script string, master bool) portLaunchP
 		// where PortMaster's scripts die at once: run it directly instead,
 		// under the bash JukaHub supplies (portmaster_runtime.go), once it is
 		// there.
-		if fw != "" && via == "auto" && pmFirmwareHasNoBash() && privateGlibcBashReady() {
+		if fw != "" && via == "auto" && pmFirmwareHasNoBash() && privateGlibcBashReady() &&
+			!strings.EqualFold(filepath.Base(script), oldBitsHubScriptName) {
 			plan.Notes = append(plan.Notes, "not through the firmware's Ports launcher "+fw+": this firmware has no full bash, so JukaHub runs the script with its own")
 			fw = ""
+		}
+		if fw != "" && strings.EqualFold(filepath.Base(script), oldBitsHubScriptName) {
+			plan.Notes = append(plan.Notes, "OldBits Hub goes through the firmware's Ports launcher as it does from MainUI")
 		}
 	}
 	if fw != "" {

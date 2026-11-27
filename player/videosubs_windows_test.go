@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -36,10 +35,9 @@ func TestSubtitleCancellationKillsWindowsProcessTree(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestSubtitleCancellationKillsWindowsProcessTree$")
+	cmd := hiddenCommandContext(ctx, os.Args[0], "-test.run=^TestSubtitleCancellationKillsWindowsProcessTree$")
 	cmd.Env = append(os.Environ(), subtitleTreeRoleEnv+"=launcher", subtitleTreeDirEnv+"="+dir)
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: termCreateNoWindow}
 	cmd.Cancel = func() error { return termKillTree(cmd) }
 	cmd.WaitDelay = 3 * time.Second
 	if err := cmd.Start(); err != nil {
@@ -76,8 +74,7 @@ func TestSubtitleCancellationKillsWindowsProcessTree(t *testing.T) {
 	defer func() {
 		state, waitErr := windows.WaitForSingleObject(leaf, 0)
 		if waitErr == nil && state == uint32(windows.WAIT_TIMEOUT) {
-			kill := exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(leafPID))
-			kill.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: termCreateNoWindow}
+			kill := hiddenCommand("taskkill", "/T", "/F", "/PID", strconv.Itoa(leafPID))
 			_ = kill.Run()
 		}
 	}()
@@ -102,7 +99,7 @@ func TestSubtitleCancellationKillsWindowsProcessTree(t *testing.T) {
 func subtitleTreeHelper(t *testing.T, role, dir string) {
 	switch role {
 	case "launcher":
-		child := exec.Command(os.Args[0], "-test.run=^TestSubtitleCancellationKillsWindowsProcessTree$")
+		child := hiddenCommand(os.Args[0], "-test.run=^TestSubtitleCancellationKillsWindowsProcessTree$")
 		child.Env = append(os.Environ(), subtitleTreeRoleEnv+"=child", subtitleTreeDirEnv+"="+dir)
 		child.Stdout, child.Stderr = io.Discard, io.Discard
 		child.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: termCreateNoWindow}
@@ -127,3 +124,4 @@ func subtitleTreeHelper(t *testing.T, role, dir string) {
 		t.Fatalf("unknown helper role %q", role)
 	}
 }
+

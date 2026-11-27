@@ -11,7 +11,6 @@ package main
 import (
 	"encoding/binary"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -26,11 +25,6 @@ const schedCreateNoWindow = 0x08000000
 
 // schedApprovedRoot is where Task Manager keeps its startup on/off flags.
 const schedApprovedRoot = `Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\`
-
-// schedHideWindow starts a helper without a console window.
-func schedHideWindow(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: schedCreateNoWindow}
-}
 
 // schedApprovedOff reports whether Task Manager's flag for name under key says
 // "disabled": the first byte of the 12-byte value is even when the app is on
@@ -86,6 +80,11 @@ func schedRegistryStartupItems() []schedItem {
 			continue
 		}
 		for _, name := range names {
+			// JukaHub's own Run value is listed once, by schedJukaHubItem,
+			// with the Settings switch it belongs to.
+			if rk.root == registry.CURRENT_USER && rk.path == run && strings.EqualFold(name, autostartWindowsRunValue) {
+				continue
+			}
 			cmd, typ, err := k.GetStringValue(name)
 			if err != nil {
 				continue

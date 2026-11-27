@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -327,7 +326,7 @@ func offlineAIAnswerPrompt(ctx context.Context, prompt string, onPartial func(st
 	}
 	output.stop = cancel
 	started := time.Now()
-	cmd := exec.CommandContext(runCtx, bin, offlineAIArgs(model, prompt)...)
+	cmd := hiddenCommandContext(runCtx, bin, offlineAIArgs(model, prompt)...)
 	cmd.Stdout = output
 	cmd.Stderr = io.Discard // model diagnostics do not belong in the voice bubble
 	feToolProcAttr(cmd)
@@ -365,3 +364,4 @@ func offlineAIResult(output *offlineAIStreamWriter) (string, error) {
 	}
 	return answer, nil
 }
+

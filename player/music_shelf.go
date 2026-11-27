@@ -28,6 +28,7 @@ var musicShelf struct {
 	cursor, scroll  int
 	gen             uint64
 	progressRev     uint64
+	chapterRev      uint64
 	histRev         uint64 // the musicHistoryRev the History rows were built at
 	histReady       bool   // the listening history has been read
 	histArmed       bool   // Clear listening history was chosen once
@@ -88,7 +89,13 @@ func musicShelfBuildRows(m *mlibModel, tab int, artist, album string) []musicShe
 		for _, g := range m.books {
 			key := musicShelfBookKey(m, g)
 			progress := audioBookProgress(key)
-			sub := g.sub + " · " + strconv.Itoa(len(g.items)) + " chapter(s)"
+			count := len(g.items)
+			if len(g.items) == 1 && len(g.items) > 0 {
+				if ch := audioChaptersFor(m.items[g.items[0]].Path); len(ch) > 0 {
+					count = len(ch)
+				}
+			}
+			sub := g.sub + " · " + strconv.Itoa(count) + " chapter(s)"
 			if progress.Finished {
 				sub += " · Finished"
 			} else if progress.Path != "" {
@@ -147,12 +154,14 @@ func musicShelfRefresh() {
 		return
 	}
 	progressRev := audioBookRevision.Load()
-	if musicShelf.gen == m.gen && (musicShelf.tab != 2 || musicShelf.progressRev == progressRev) {
+	chapterRev := audioChapterRevision.Load()
+	if musicShelf.gen == m.gen && (musicShelf.tab != 2 || (musicShelf.progressRev == progressRev && musicShelf.chapterRev == chapterRev)) {
 		return
 	}
 	musicShelf.rows = musicShelfBuildRows(m, musicShelf.tab, musicShelf.artist, musicShelf.album)
 	musicShelf.gen = m.gen
 	musicShelf.progressRev = progressRev
+	musicShelf.chapterRev = chapterRev
 	if musicShelf.cursor >= len(musicShelf.rows) {
 		musicShelf.cursor = len(musicShelf.rows) - 1
 	}

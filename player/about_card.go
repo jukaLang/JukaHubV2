@@ -35,7 +35,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -518,7 +517,7 @@ func aboutRACandidates(data []byte, found map[string]bool) {
 func aboutRAVersionFromRun(bin string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), aboutRARunLimit)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "--version")
+	cmd := hiddenCommandContext(ctx, bin, "--version")
 	cmd.Args[0] = "jukahub-version-check"
 	cmd.Dir = filepath.Dir(bin)
 	cmd.Env = append(os.Environ(), "HOME="+filepath.Dir(bin))
@@ -602,3 +601,4 @@ func aboutParseCoreInfo(text string) (name, version string) {
 	}
 	return name, version
 }
+

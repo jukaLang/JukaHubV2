@@ -73,7 +73,8 @@ done
 
 # --- Windows x64 ---
 echo "Building Windows x64..."
-GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/JukaHub.exe" .
+# A GUI-subsystem executable: the Run key starts it at logon with no console.
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags "-H windowsgui $LDFLAGS" -o "$OUT/JukaHub.exe" .
 (cd "$OUT" && zip -q -r "JukaHub-win-x64.zip" JukaHub.exe)
 # Tools -> Security & trust opens SECURITY.md from next to the binary (the app
 # falls back to a short built-in summary when it is missing). -j stores it at

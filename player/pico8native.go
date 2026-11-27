@@ -511,7 +511,7 @@ func pico8SploreOpen() {
 	pico8NativeMakeRunnable(bin)
 	roms := pico8NativeRomsDir(true)
 	args := append(pico8NativeArgs(roms), "-splore")
-	cmd := exec.Command(bin, args...)
+	cmd := hiddenCommand(bin, args...)
 	cmd.Dir = filepath.Dir(bin)
 	if !IsWindows() {
 		cmd.Env = pico8NativeEnv(bin)
@@ -957,3 +957,4 @@ func pico8SameCart(src, dst string) bool {
 func pico8CartInFolder(system, name string) bool {
 	return system == pico8SystemName && strings.HasSuffix(strings.ToLower(name), ".p8.png")
 }
+

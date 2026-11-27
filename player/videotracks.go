@@ -33,7 +33,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -173,10 +172,9 @@ func videoTracksProbe(ctx context.Context, ffprobePath, path string) (videoTrack
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffprobePath, "-v", "error",
+	cmd := hiddenCommandContext(ctx, ffprobePath, "-v", "error",
 		"-show_entries", "stream=codec_type,codec_name,channels,channel_layout:stream_tags=language,title:stream_disposition=default,forced",
 		"-of", "json", path)
-	schedHideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return videoTrackList{}, err
@@ -769,3 +767,4 @@ func videoTracksAudioChoice(path string) int {
 	}
 	return 0
 }
+

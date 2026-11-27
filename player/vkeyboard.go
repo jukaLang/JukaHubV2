@@ -50,33 +50,37 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm        // terminal command line
-	vkTargetName        // chat display name
-	vkTargetTV          // Live TV channel search
-	vkTargetParty       // Watch Party invite / shared link
-	vkTargetRA          // RetroAchievements username / Web API key
-	vkTargetMusic       // audio player initialism search
-	vkTargetNetplay     // LAN play host address
-	vkTargetPSRemote    // PS Remote Play pairing / account / address entry
-	vkTargetWiFi        // Wi-Fi passphrase for the network picker
-	vkTargetMemory      // Memory panel value field (scan / write value)
-	vkTargetGameSearch  // game library search
-	vkTargetPortsSearch // PortMaster catalogue search
-	vkTargetRommServer  // RomM server address or client API token
-	vkTargetDownloads   // Downloads panel: a link to save for offline use
-	vkTargetGameArgs    // game library: extra launch arguments for one game
-	vkTargetGameTitle   // game library: display title for one game
-	vkTargetToolArgs    // toolbox: arguments for the highlighted tool
-	vkTargetPodcast     // podcasts panel: an RSS feed URL to subscribe to
-	vkTargetFiles       // Files screen: address, password, new folder, rename
-	vkTargetDNS         // Tools: host name or IP for the DNS lookup
-	vkTargetFileLine    // text file editor: the line under the cursor
-	vkTargetToolsURL    // Tools: URL or host for the HTTP check
-	vkTargetNetwork     // Tools: host:port or domain for the port/whois rows
-	vkTargetIPStream    // stream menu: the Find row's filter
-	vkTargetPlaylist    // audio player: name for a saved queue
-	vkTargetGroqKey     // Keyboard settings: the Groq API key voice typing uses
-	vkTargetBrowserURL  // Settings → Browser: the home page or a custom search address
+	vkTargetTerm            // terminal command line
+	vkTargetName            // chat display name
+	vkTargetTV              // Live TV channel search
+	vkTargetParty           // Watch Party invite / shared link
+	vkTargetRA              // RetroAchievements username / Web API key
+	vkTargetMusic           // audio player initialism search
+	vkTargetNetplay         // LAN play host address
+	vkTargetPSRemote        // PS Remote Play pairing / account / address entry
+	vkTargetWiFi            // Wi-Fi passphrase for the network picker
+	vkTargetMemory          // Memory panel value field (scan / write value)
+	vkTargetGameSearch      // game library search
+	vkTargetPortsSearch     // PortMaster catalogue search
+	vkTargetRommServer      // RomM server address or client API token
+	vkTargetDownloads       // Downloads panel: a link to save for offline use
+	vkTargetOtherVideos     // Entertainment → Other Videos: a link to save as a video
+	vkTargetOtherVideosPlay // Entertainment → Other Videos: play a link now
+	vkTargetVideoDomain     // Entertainment → Other Videos: remember a domain
+	vkTargetVideoSearch     // Entertainment → Other Videos: search a video site
+	vkTargetGameArgs        // game library: extra launch arguments for one game
+	vkTargetGameTitle       // game library: display title for one game
+	vkTargetToolArgs        // toolbox: arguments for the highlighted tool
+	vkTargetPodcast         // podcasts panel: an RSS feed URL to subscribe to
+	vkTargetFiles           // Files screen: address, password, new folder, rename
+	vkTargetDNS             // Tools: host name or IP for the DNS lookup
+	vkTargetFileLine        // text file editor: the line under the cursor
+	vkTargetToolsURL        // Tools: URL or host for the HTTP check
+	vkTargetNetwork         // Tools: host:port or domain for the port/whois rows
+	vkTargetIPStream        // stream menu: the Find row's filter
+	vkTargetPlaylist        // audio player: name for a saved queue
+	vkTargetGroqKey         // Keyboard settings: the Groq API key voice typing uses
+	vkTargetBrowserURL      // Settings → Browser: the home page or a custom search address
 )
 
 // podcastFeedInput holds the feed URL while it is being typed. It is only read
@@ -337,7 +341,7 @@ func vkActionLabel() string {
 		}
 		return "Save"
 	case vkTargetName, vkTargetPlaylist, vkTargetRA, vkTargetRommServer, vkTargetGameArgs, vkTargetGameTitle,
-		vkTargetPodcast, vkTargetDownloads, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
+		vkTargetPodcast, vkTargetDownloads, vkTargetOtherVideos, vkTargetFiles, vkTargetGroqKey, vkTargetBrowserURL, homeTabsNameVKTarget,
 		artworkAliasVKTarget, homebrewKeyVKTarget, nasPassVKTarget, tailscaleKeyVKTarget:
 		return "Save"
 	case vkTargetFileLine:
@@ -345,6 +349,12 @@ func vkActionLabel() string {
 		return fileEditorVKAction()
 	case raachPassVKTarget, screenScraperPassVKTarget:
 		return "Sign in"
+	case vkTargetVideoDomain:
+		return "Add"
+	case vkTargetVideoSearch:
+		return "Search"
+	case vkTargetOtherVideosPlay:
+		return "Play"
 	case gameFileNameVKTarget:
 		return "Rename"
 	case osPromptVKTarget:
@@ -885,7 +895,7 @@ func vkCurrentText() string {
 		return vkRommServerBuffer
 	case vkTargetIPStream:
 		return ipPanelQuery
-	case vkTargetDownloads:
+	case vkTargetDownloads, vkTargetOtherVideos, vkTargetOtherVideosPlay, vkTargetVideoDomain, vkTargetVideoSearch:
 		return downloadLinkInput
 	case vkTargetGameArgs:
 		return gameArgsBuffer
@@ -1046,7 +1056,7 @@ func vkSetText(text string, config *Config) {
 	case mailComposeVKTarget:
 		// A Mail compose field changes on Done only (mail_compose.go).
 		mailComposeBuffer = text
-	case vkTargetDownloads:
+	case vkTargetDownloads, vkTargetOtherVideos, vkTargetOtherVideosPlay, vkTargetVideoDomain, vkTargetVideoSearch:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
 		downloadLinkInput = text
@@ -1301,8 +1311,14 @@ func vkTitle() string {
 		return mlVKTitle()
 	case mailComposeVKTarget:
 		return mailComposeKeyboardTitle()
-	case vkTargetDownloads:
+	case vkTargetDownloads, vkTargetOtherVideos:
 		return "SAVE TO SD CARD"
+	case vkTargetOtherVideosPlay:
+		return "PLAY A VIDEO"
+	case vkTargetVideoDomain:
+		return "VIDEO DOMAIN"
+	case vkTargetVideoSearch:
+		return "SEARCH VIDEO SITE"
 	case vkTargetGameArgs:
 		return "LAUNCH ARGUMENTS"
 	case vkTargetGameTitle:
@@ -1465,6 +1481,12 @@ func vkPlaceholder() string {
 		return mailComposeKeyboardHint()
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
+	case vkTargetOtherVideos, vkTargetOtherVideosPlay:
+		return otherVideosPlaceholder()
+	case vkTargetVideoDomain:
+		return "vimeo.com"
+	case vkTargetVideoSearch:
+		return "search words"
 	case vkTargetGameArgs:
 		return "--profile \"My Game\""
 	case vkTargetGameTitle:
@@ -1990,6 +2012,45 @@ func vkOpenDownloadLink() {
 	sdl.StartTextInput()
 	vkEnsureLayout()
 }
+
+// vkOpenOtherVideosLink opens the keyboard for a video link entered from
+// Entertainment → Other Videos. The queue and validation are shared with the
+// Downloads panel; only the submit target differs.
+func vkOpenOtherVideosLink() {
+	chatInputActive = false
+	unitInputActive = false
+	downloadLinkInput = ""
+	vkTarget = vkTargetOtherVideos
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenVideoTarget opens the keyboard for one of the Other Videos actions.
+// They share the link buffer but use different submit paths.
+func vkOpenVideoTarget(target vkTargetKind) {
+	chatInputActive = false
+	unitInputActive = false
+	// These fields share one buffer. A link pasted for Play must not be
+	// carried into a domain or search field as a prefix.
+	downloadLinkInput = ""
+	vkTarget = target
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+func vkOpenVideoDomain()     { vkOpenVideoTarget(vkTargetVideoDomain) }
+func vkOpenVideoSearch()     { vkOpenVideoTarget(vkTargetVideoSearch) }
+func vkOpenOtherVideosPlay() { vkOpenVideoTarget(vkTargetOtherVideosPlay) }
 
 // vkOpenSceneInput opens the keyboard for a scene input element.
 func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
@@ -2773,6 +2834,18 @@ func vkSubmit(config *Config, askAI bool) {
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.
 		downloadLinkSubmit(text)
+		vkCloseKeyboard()
+	case vkTargetOtherVideos:
+		otherVideosLinkSubmit(text)
+		vkCloseKeyboard()
+	case vkTargetOtherVideosPlay:
+		otherVideosPlaySubmit(text)
+		vkCloseKeyboard()
+	case vkTargetVideoDomain:
+		otherVideosDomainSubmit(text)
+		vkCloseKeyboard()
+	case vkTargetVideoSearch:
+		siteVideosSearchSubmit(text)
 		vkCloseKeyboard()
 	case vkTargetIPStream:
 		// The filter already applied while typing: submitting trims it and says

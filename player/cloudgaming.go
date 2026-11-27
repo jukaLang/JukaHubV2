@@ -280,7 +280,7 @@ func cgFindGFNApp() (cgDesktopApp, bool) {
 // cgStartDesktop starts a PC client.
 func cgStartDesktop(name, launch string, args []string, service string) {
 	logDebug("cloudgaming", "launch %s (%s %v)", name, launch, args)
-	cmd := exec.Command(launch, args...)
+	cmd := hiddenCommand(launch, args...)
 	cmd.Dir = filepath.Dir(launch)
 	if err := cmd.Start(); err != nil {
 		logWarn("cloudgaming", "launch %s failed: %v", launch, err)
@@ -895,3 +895,4 @@ func cgOpenSwitchSheet(config *Config, target goBuild) {
 func cgInstallChecked(_ *Config, build goBuild) {
 	goInstall(build, cgScreenUp, cgAfterInstall)
 }
+

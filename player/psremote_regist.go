@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -167,7 +166,7 @@ func ps5Register(engine psEngine, host, pin, accountID string, timeout time.Dura
 	outPath := filepath.Join(dir, fmt.Sprintf("jukahub-ps5-result-%d.conf", time.Now().UnixNano()))
 	defer os.Remove(outPath)
 
-	cmd := exec.Command(engine.Regist, inPath, outPath)
+	cmd := hiddenCommand(engine.Regist, inPath, outPath)
 	cmd.Dir = filepath.Dir(engine.Regist)
 	cmd.Env = psHelperEnv(engine)
 	var output strings.Builder
@@ -252,3 +251,4 @@ func parseIntDefault(value string, fallback int) (int, error) {
 	}
 	return parsed, nil
 }
+

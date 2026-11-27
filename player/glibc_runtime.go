@@ -42,7 +42,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -631,7 +630,7 @@ func privateGlibcProbe(ctx context.Context, dir string) error {
 	loader := filepath.Join(dir, "ld-linux-aarch64.so.1")
 	libc := filepath.Join(dir, "libc.so.6")
 	for _, args := range [][]string{{"--version"}, {"--library-path", dir, libc}} {
-		cmd := exec.CommandContext(ctx, loader, args...)
+		cmd := hiddenCommandContext(ctx, loader, args...)
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 		out, err := cmd.CombinedOutput()
 		if err != nil || !bytes.Contains(out, []byte(privateGlibcVersion)) {
@@ -646,7 +645,7 @@ func privateGlibcProbe(ctx context.Context, dir string) error {
 func privateRuntimeProbeBash(ctx context.Context, dir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(dir, "ld-linux-aarch64.so.1"), "--inhibit-cache", "--library-path", dir,
+	cmd := hiddenCommandContext(ctx, filepath.Join(dir, "ld-linux-aarch64.so.1"), "--inhibit-cache", "--library-path", dir,
 		filepath.Join(dir, filepath.FromSlash(privateRuntimeBashRel)), "-c", `a=(jukahub bash); echo "${a[1]}-${#a[@]}"`)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	out, err := cmd.CombinedOutput()
@@ -1228,3 +1227,4 @@ func privateGlibcRefreshAsync() {
 		privateRuntimeMarkChecked()
 	}()
 }
+

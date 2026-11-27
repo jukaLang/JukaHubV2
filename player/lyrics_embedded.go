@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -195,9 +194,8 @@ func lyricsEmbeddedText(path string) (string, float64) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, probePath, "-v", "error",
+	cmd := hiddenCommandContext(ctx, probePath, "-v", "error",
 		"-show_entries", "format=duration:format_tags:stream_tags", "-of", "json", path)
-	schedHideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", 0
@@ -279,3 +277,4 @@ func lyricsEmbeddedWanted(path string) bool {
 	return music.current >= 0 && music.current < len(music.tracks) &&
 		sameAudioPath(music.tracks[music.current].Path, path) && len(music.lyrics) == 0
 }
+

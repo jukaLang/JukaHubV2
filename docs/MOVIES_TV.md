@@ -1,9 +1,9 @@
 # Movies & TV
 
 **Media → Movies & TV** (the second chip in Media's strip) streams films and
-shows from the places a handheld can reach legitimately: your own Jellyfin
-server, the media servers on your home network, and the public-domain classics
-of the Internet Archive. It is laid out like Library: rows of cards, and a card
+shows from the places a handheld can reach legitimately: your own Jellyfin or
+Plex server, the media servers on your home network, and the public-domain
+classics of the Internet Archive. It is laid out like Library: rows of cards, and a card
 that stands for a list (a show, a server's folder, a whole collection) opens it
 one level deeper. **B** goes back up a level, **Y** opens a card's details
 (resume, play from the start, Up Next, Favorites), **R2** loads more of a long
@@ -12,9 +12,42 @@ collection.
 | Row | Where it comes from | Needs |
 |-----|---------------------|-------|
 | Continue watching, Recently added, Movies, TV shows | Your Jellyfin server | Jellyfin signed in; home network (or Tailscale) |
+| Continue watching, Movies, TV shows | Your Plex server | Plex connected with plex.tv/link; home network (or Plex relay) |
 | On your network | Media servers found on the home network (DLNA / UPnP AV) | Wi-Fi on the same network |
 | Free classic films, Sci-fi & horror classics, Silent films, Classic cartoons | The Internet Archive's curated film collections (public domain) | The internet |
-| Your own media server | A **Connect Jellyfin** card while no server is set up | Your phone |
+| Your own media server | **Connect Jellyfin** and **Connect Plex** cards while a server is not set up | Your phone |
+
+## Other Videos
+
+**Tabs Home → Entertainment → Other Videos** is a folder of site shortcuts and
+two tools: **Type a video domain** and **Play a link now**. Pressing a site tile
+opens a full screen, the way the YouTube tile opens the Media screen — not a
+popup. That screen lists videos saved from the domain, favourites and watch
+history; **A** plays the highlighted video, **Y** searches that site and **X**
+pastes a link. The screen opens with trending videos from the site and shows
+keyword results from the same yt-dlp extractor when you search; it has a search
+bar, section chips and a card grid with real poster thumbnails. The posters are
+fetched with the results into `<data>/site-thumbs` and cached; a site with no
+poster just shows its art panel empty. YouTube is not repeated here because
+Entertainment already has its tile. Two sites are built in because the bundled
+yt-dlp handles them reliably: Bilibili and SoundCloud. They are labels, not a
+restriction — any `http` or `https` link yt-dlp can read works, including sites
+you type yourself or a plugin adds.
+
+The queue resumes interrupted downloads, skips livestreams (there is no file to
+save), sends a browser user agent to sites other than YouTube, and falls back
+to a combined video file when a site offers no separate streams. A site that
+needs a login still needs cookies configured in the yt-dlp extra arguments; a
+failure appears on its Downloads row with a Retry action.
+
+The folder has two tools that use the on-screen keyboard: **Type a video
+domain** saves a domain you enter in `jukauser.json`, and **Play a link now**
+plays a pasted link through the same yt-dlp player YouTube uses. A typed domain
+becomes a shortcut. There is no separate “any link” or site-search tile — those
+actions are on the site screen. A typed domain can be removed under
+**Settings → Media & playback → Remove a video domain**. For example, typing
+a short-video host lets you search it and play or save its public links — no
+site is named in the built-in list until you add it.
 
 ## Jellyfin
 
@@ -30,6 +63,29 @@ or TrueHD sound) streams as it is; anything else (HEVC, AV1, VP9, 10-bit, 4K,
 DTS) is transcoded by the server to H.264 and AAC at 720p. The server hears what
 plays, so where you stopped shows up in every Jellyfin app, and Continue
 watching here follows what you watched elsewhere.
+
+## Plex
+
+**Connect Plex** starts Plex's own PIN sign-in: the handheld shows a QR code
+for **plex.tv/link** and a short code, and after you enter the code on a phone
+or computer it finds the Plex servers on your account. It prefers a
+home-network connection and falls back to a relay only when no direct address
+answers. The token is encrypted in the handheld's server settings and is added
+by the loopback proxy, so it never appears in a player address, an ffmpeg
+command line or a log. **Try again** on the Plex row repeats sign-in or refresh
+after a server error.
+
+On Deck, Movies and TV shows appear as rows. A show opens its seasons (a show
+with one season opens its episodes directly) and a season its episodes.
+
+Plex's own playback decision uses the same rule as Jellyfin: an 8-bit H.264 or
+MPEG-4 file up to 1080p with no DTS or TrueHD sound plays directly; anything
+else goes through Plex's universal transcoder at 720p H.264/AAC. The transcode
+playlist and every segment are rewritten through the loopback proxy, and the
+player reports its timeline to Plex every 30 seconds and when it stops, so
+Continue Watching keeps the place and a stopped transcode releases its slot.
+If Plex cannot answer or a video has no playable file, the row shows **Try
+again** or the player says why instead of doing nothing.
 
 ## Media servers on your network
 
@@ -90,9 +146,9 @@ or scraper add-ons either.
 
 `player/media_movies.go` (the tab), `player/dlna.go` (search, descriptions,
 Browse, DIDL-Lite), `player/freefilms.go` (the Archive's search and metadata
-APIs and the proxy routes), `player/musicsrc_jellyfin.go` and
-`player/musicproxy.go` (Jellyfin and the loopback proxy), `player/brw_stream.go`
-(the Browser's streams).
+APIs and the proxy routes), `player/musicsrc_jellyfin.go`, `player/plex.go` and
+`player/musicproxy.go` (Jellyfin, Plex and the loopback proxy),
+`player/brw_stream.go` (the Browser's streams).
 
 ## Related
 

@@ -276,6 +276,8 @@ func main() {
 	// page an older config still carries is retired here, before the first
 	// scene is chosen, and its buttons are pointed at the hub.
 	ensureToolsHubScene(config)
+	// The per-site video page reached from Entertainment → Other Videos.
+	ensureSiteVideosScene(config)
 	// Devices, Save sync and Nearby (your other JukaHubs on this Wi-Fi) are
 	// Go-owned pages injected the same way (peer.go).
 	peerEnsureScenes(config)
@@ -302,7 +304,7 @@ func main() {
 	// theme file and wallpaper before the theme below is applied (xpack.go).
 	xpackEnsure(config)
 	// Apply the saved "Start JukaHub at login" setting to the platform's
-	// startup folder (only ever our own launcher file).
+	// startup location (only ever our own entry).
 	reconcileAutoStart(config)
 	// A card that already had OS boot on before this release gets the stock
 	// Smart Pro speed hooks after its first frame. The settings switches also
@@ -2718,6 +2720,10 @@ func main() {
 						// draw their own controls, so they own the clicks on their
 						// body; a click on the top bar (or with its menus open)
 						// falls through to the shared handlers below (systool.go).
+						// The per-site video screen draws its own search bar and cards.
+						if siteVideosHandleClick(mx, my, config) {
+							break
+						}
 						if sysToolHandleClick(mx, my, config) {
 							break
 						}

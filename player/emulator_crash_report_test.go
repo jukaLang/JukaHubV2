@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,7 +13,7 @@ import (
 // status, so the report sees a real *exec.ExitError on every platform.
 func testExitError(t *testing.T, code int) error {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=TestEmulatorCrashExitHelper")
+	cmd := hiddenCommand(os.Args[0], "-test.run=TestEmulatorCrashExitHelper")
 	cmd.Env = append(os.Environ(), "JUKE_TEST_EXIT="+strconv.Itoa(code))
 	return cmd.Run()
 }
@@ -108,3 +107,4 @@ func TestEmulatorCrashSavesAndPrunes(t *testing.T) {
 		t.Fatalf("after pruning = %d, want %d", len(emulatorCrashReports()), emuCrashKeep)
 	}
 }
+

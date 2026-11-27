@@ -904,6 +904,7 @@ func mediaHubFocusHit(hit mediaHit) bool {
 	}
 	mediaHub.chipFocus = -1
 	mediaHub.index = idx
+	mediaHub.previewStart = uiClockMS()
 	return true
 }
 

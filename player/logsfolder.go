@@ -59,7 +59,7 @@ func openFolderAt(dir string) error {
 	var cmd *exec.Cmd
 	switch {
 	case IsWindows():
-		cmd = exec.Command("explorer.exe", dir)
+		cmd = hiddenCommand("explorer.exe", dir)
 	case IsTrimuiDevice():
 		return errors.New("no file manager on this device")
 	default:
@@ -67,7 +67,7 @@ func openFolderAt(dir string) error {
 		if err != nil {
 			return errors.New("no file manager")
 		}
-		cmd = exec.Command(opener, dir)
+		cmd = hiddenCommand(opener, dir)
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting the file manager: %w", err)
@@ -87,3 +87,4 @@ func bugrepLogToggleDetail() string {
 	}
 	return base
 }
+

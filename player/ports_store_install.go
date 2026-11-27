@@ -43,7 +43,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -768,7 +767,7 @@ func pstoreHarbourInstall(zipPath string, scripts, env []string, gen uint64, car
 	defer hcancel()
 	ctx, cancel := context.WithTimeout(hctx, pstoreHarbourTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, portShell(env), "-c", pstoreHarbourScript(exports), "jukahub-ports-store", control, abs)
+	cmd := hiddenCommandContext(ctx, portShell(env), "-c", pstoreHarbourScript(exports), "jukahub-ports-store", control, abs)
 	cmd.Dir = control
 	cmd.Env = env
 	processGroupConfigure(cmd)
@@ -823,3 +822,4 @@ func pstoreOpenInstallLog(zipPath string, exports []string) *os.File {
 	}
 	return f
 }
+

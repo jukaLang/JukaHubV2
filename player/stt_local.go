@@ -13,7 +13,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -387,7 +386,7 @@ func sttLocalTranscribeRun(ctx context.Context, wav []byte, lang, prompt string,
 
 func sttRunFast(ctx context.Context, bin, model string, wav []byte) (string, error) {
 	started := time.Now()
-	cmd := exec.CommandContext(ctx, bin, "-m", model, "-f", "-")
+	cmd := hiddenCommandContext(ctx, bin, "-m", model, "-f", "-")
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, io.Discard
@@ -442,7 +441,7 @@ func sttRunLocal(ctx context.Context, bin, model string, wav []byte, lang, promp
 		// in about half the time; dictation keeps the full window.
 		args = append(args, "-ac", "768")
 	}
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := hiddenCommandContext(ctx, bin, args...)
 	cmd.Stdin = bytes.NewReader(wav)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -478,3 +477,4 @@ func sttLocalArgs(model, lang, prompt string, quick bool) []string {
 	}
 	return args
 }
+

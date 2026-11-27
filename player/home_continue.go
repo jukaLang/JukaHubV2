@@ -38,7 +38,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -905,7 +904,7 @@ func homeMeasureWave(path string) ([homeWaveBars]float32, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), homeWaveTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffmpeg, "-v", "error", "-t", fmt.Sprint(homeWaveMaxSeconds),
+	cmd := hiddenCommandContext(ctx, ffmpeg, "-v", "error", "-t", fmt.Sprint(homeWaveMaxSeconds),
 		"-i", path, "-vn", "-ac", "1", "-ar", fmt.Sprint(homeWaveRate), "-f", "s16le", "-")
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1061,3 +1060,4 @@ func drawHomeAudioGraph(renderer *sdl.Renderer, rect sdl.Rect, bars *[homeWaveBa
 		fillRoundedRect(renderer, x, mid-bh/2, barW, bh, barW/2, color)
 	}
 }
+

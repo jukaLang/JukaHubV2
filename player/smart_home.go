@@ -1335,7 +1335,7 @@ func toggleTailscale(config *Config) error {
 func runCommandTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	// A child that keeps the pipe open cannot hold Wait past the kill.
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
@@ -1344,3 +1344,4 @@ func runCommandTimeout(timeout time.Duration, name string, args ...string) ([]by
 	}
 	return out, err
 }
+

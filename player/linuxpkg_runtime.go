@@ -27,7 +27,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -637,7 +636,7 @@ func linuxPkgProbeLoader(ctx context.Context, lay linuxPkgLayout) (string, error
 	}
 	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(pctx, loader, "--version")
+	cmd := hiddenCommandContext(pctx, loader, "--version")
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 	out, err := cmd.CombinedOutput()
 	first := strings.TrimSpace(firstLine(string(out)))
@@ -684,3 +683,4 @@ func linuxPkgWrapperPath(name string) string {
 	}
 	return ""
 }
+

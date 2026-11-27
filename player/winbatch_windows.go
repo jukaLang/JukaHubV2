@@ -22,7 +22,8 @@ func winBatchCommand(script string, args ...string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(comspec)
+	cmd := hiddenCommand(comspec)
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: line}
 	return cmd, nil
 }
+

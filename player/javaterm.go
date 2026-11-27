@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -174,11 +173,10 @@ func termJavaSplit(line string) ([]string, bool) {
 // open and the Java's own folder first on PATH.
 func termRunJavaArgv(rt javaRuntime, exe string, args []string, label, dir string) {
 	ctx, cancel := context.WithTimeout(termJobParent(), javaTermTimeout)
-	cmd := exec.CommandContext(ctx, exe, args...)
+	cmd := hiddenCommandContext(ctx, exe, args...)
 	cmd.Dir = dir
 	cmd.Env = javaEnvFor(rt, linuxPkgShellEnv(append(os.Environ(), "TERM=dumb")))
 	// No console window flashes up over JukaHub on Windows.
-	auditConfigureHidden(cmd)
 	termLaunchInput(ctx, cancel, cmd, label, javaTermTimeout)
 }
 
@@ -382,3 +380,4 @@ func termJavaRemove(cmdline string) {
 		return nil
 	})
 }
+

@@ -130,7 +130,7 @@ func steamOpenURI(uri string) error {
 	if bin == "" {
 		return errSteamNoClient
 	}
-	cmd := exec.Command(bin, append(args, uri)...)
+	cmd := hiddenCommand(bin, append(args, uri)...)
 	// Steam's runtime minds the library path: it gets the session's own
 	// environment back, not the one JukaHub runs with (childenv.go), and its
 	// own session, so a Steam this call started keeps running when JukaHub
@@ -143,3 +143,4 @@ func steamOpenURI(uri string) error {
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
+

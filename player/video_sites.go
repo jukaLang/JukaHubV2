@@ -20,23 +20,14 @@ type videoSite struct {
 
 // videoBuiltinSites are familiar sites with public video pages. None of these
 // entries grants access to anything: the user still supplies the link.
+// No site is built in. The bundled yt-dlp's search/extract behaviour depends
+// on the network and the site's anti-bot rules, so a shortcut that works on
+// one machine fails on another. A site appears only after the user types its
+// domain (or a plugin adds it); "any http(s) link yt-dlp can read" still
+// works without a shortcut.
 var videoBuiltinSites = []videoSite{
-	{"YouTube", "youtube.com", "The usual videos and Shorts"},
-	{"YouTube Music", "music.youtube.com", "Music videos and albums"},
-	{"Vimeo", "vimeo.com", "Creator and instructional videos"},
-	{"Dailymotion", "dailymotion.com", "News and short videos"},
-	{"Twitch", "twitch.tv", "Past broadcasts and clips"},
 	{"Bilibili", "bilibili.com", "Anime, gaming and creator videos"},
-	{"Niconico", "nicovideo.jp", "Japanese creator videos"},
 	{"SoundCloud", "soundcloud.com", "Tracks and sets"},
-	{"Bandcamp", "bandcamp.com", "Albums and tracks from artists"},
-	{"Reddit", "reddit.com", "Linked and hosted videos"},
-	{"TikTok", "tiktok.com", "Short videos"},
-	{"Instagram", "instagram.com", "Reels and clips"},
-	{"Kick", "kick.com", "Livestream archives and clips"},
-	{"Rumble", "rumble.com", "Creator videos"},
-	{"Odysee", "odysee.com", "Decentralised video channels"},
-	{"Internet Archive", "archive.org", "Public-domain and archived video"},
 }
 
 // videoUserSites is the user's comma-separated list from jukauser.json.
@@ -112,6 +103,54 @@ func videoSiteForURL(raw string) string {
 		}
 	}
 	return ""
+}
+
+// videoCustomSites is only the domains the user typed themselves, for the
+// remove row and for showing what is kept in jukauser.json.
+func videoCustomSites(c *Config) []string {
+	return videoUserSites(c)
+}
+
+// videoSiteRemove forgets one typed domain. Built-in sites cannot be removed.
+func videoSiteRemove(c *Config, host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if c == nil || host == "" {
+		return false
+	}
+	kept := make([]string, 0, 2)
+	found := false
+	for _, have := range videoUserSites(c) {
+		if have == host {
+			found = true
+			continue
+		}
+		kept = append(kept, have)
+	}
+	if !found {
+		return false
+	}
+	setStoreString(c, videoSitesCustomKey, strings.Join(kept, ","))
+	return true
+}
+
+// videoLastDomain is the most recently typed domain. Search uses it until
+// another site is picked, so entering a domain is enough to make "Search this
+// site" work without an extra selection step.
+func videoLastDomain(c *Config) string {
+	list := videoCustomSites(c)
+	if len(list) == 0 {
+		return ""
+	}
+	return list[len(list)-1]
+}
+
+// videoSiteRemoveOptions is the carousel's stops: only domains the user typed.
+func videoSiteRemoveOptions(c *Config) []setOption {
+	var out []setOption
+	for _, host := range videoCustomSites(c) {
+		out = append(out, setOption{Value: host, Label: host, Note: "Removes this shortcut from your settings"})
+	}
+	return out
 }
 
 // videoSiteAddOptions is the carousel's stops: the built-in sites the user

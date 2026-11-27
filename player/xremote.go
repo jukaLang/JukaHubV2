@@ -250,7 +250,7 @@ func x1Launch(c x1Client) {
 		return
 	}
 	logDebug("xremote", "launch %s (%s %v)", c.name, c.launch, c.args)
-	cmd := exec.Command(c.launch, c.args...)
+	cmd := hiddenCommand(c.launch, c.args...)
 	cmd.Dir = filepath.Dir(c.launch)
 	if err := cmd.Start(); err != nil {
 		logWarn("xremote", "launch %s failed: %v", c.launch, err)
@@ -295,3 +295,4 @@ func x1InstallPort() {
 	scene := currentSceneIndex
 	goInstall(goBuildXHome, func() bool { return currentSceneIndex == scene }, func(portsInstallResult) { x1InvalidateScan() })
 }
+

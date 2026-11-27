@@ -50,7 +50,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -556,7 +555,7 @@ func ytDlpJSRuntimeArgs(ytDlpPath string) []string {
 func ytdlRunAttempt(parent context.Context, config *Config, ytDlpPath, page, tempPath string, a ytdlAttempt, seq uint64) *ytdlFailure {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ytDlpPath, ytdlArgs(config, ytDlpPath, page, tempPath, a)...)
+	cmd := hiddenCommandContext(ctx, ytDlpPath, ytdlArgs(config, ytDlpPath, page, tempPath, a)...)
 	cmd.Env = helperToolEnv(ytDlpPath)
 	// The one-file helper runs the real yt-dlp as a child of the process
 	// started here. A cancel that killed only the first left the second
@@ -1454,3 +1453,4 @@ func (m *ytdlSpeedMeter) add(now time.Time, done int64) float64 {
 	m.at, m.bytes = now, done
 	return m.rate
 }
+

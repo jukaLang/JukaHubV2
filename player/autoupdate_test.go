@@ -282,11 +282,11 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", script)
+		cmd = hiddenCommand("cmd", "/c", script)
 	} else if sh, lookErr := exec.LookPath("sh"); lookErr == nil {
-		cmd = exec.Command(sh, script)
+		cmd = hiddenCommand(sh, script)
 	} else {
-		cmd = exec.Command(script)
+		cmd = hiddenCommand(script)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("swap helper failed: %v\n%s", err, out)
@@ -364,7 +364,7 @@ func TestSwapScriptReplacesFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out, err := exec.Command("cmd", "/c", script).CombinedOutput(); err != nil {
+	if out, err := hiddenCommand("cmd", "/c", script).CombinedOutput(); err != nil {
 		t.Fatalf("swap helper failed: %v\n%s", err, out)
 	}
 	for name, want := range map[string]string{
@@ -534,3 +534,4 @@ func TestLatestReleasePageAndLimitNote(t *testing.T) {
 		t.Errorf("a 403 with lookups left got the note %q", note)
 	}
 }
+

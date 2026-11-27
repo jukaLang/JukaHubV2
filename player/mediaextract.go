@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -125,11 +124,10 @@ func mediaExtractArgs(in, out string, encode bool) []string {
 // no streams." then "To ignore this, add a trailing '?' to the map.", and on
 // ffmpeg 7 more after that), so the last line alone never says it.
 var mediaExtractRunner = func(ctx context.Context, ffmpeg string, args []string) error {
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd := hiddenCommandContext(ctx, ffmpeg, args...)
 	var stderr textTail
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 3 * time.Second
-	schedHideWindow(cmd)
 	if err := cmd.Run(); err != nil {
 		if mediaExtractNoAudioText(stderr.buf.String()) {
 			return fmt.Errorf("%w (%v)", errMediaNoAudio, err)
@@ -392,3 +390,4 @@ func mediaExtractRun(ctx context.Context, config *Config, videoPath string, meta
 	}
 	return dest, nil
 }
+

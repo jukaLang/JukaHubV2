@@ -671,7 +671,7 @@ func launchInstalledApp(path string) bool {
 	switch {
 	case runtime.GOOS == "windows" && (ext == ".lnk" || ext == ".url"):
 		// Shortcuts are resolved by the shell handler, not executed directly.
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", clean)
+		cmd = hiddenCommand("rundll32", "url.dll,FileProtocolHandler", clean)
 	case runtime.GOOS == "windows" && (ext == ".bat" || ext == ".cmd"):
 		// A batch file needs cmd.exe, which parses its own command line:
 		// winBatchCommand quotes the path for it, so "Game (USA).bat" or a
@@ -685,9 +685,9 @@ func launchInstalledApp(path string) bool {
 		cmd = bat
 	case ext == ".sh":
 		// sh reads the script file; the absolute path is an operand, not code.
-		cmd = exec.Command("sh", "--", clean)
+		cmd = hiddenCommand("sh", "--", clean)
 	default:
-		cmd = exec.Command(clean)
+		cmd = hiddenCommand(clean)
 	}
 	cmd.Dir = filepath.Dir(clean)
 	// Same hand-off rule as the emulator launchers: the child leads its own
@@ -722,3 +722,4 @@ func openAppsFolder() {
 	// placeholder file inside the apps folder.
 	openInExplorer(filepath.Join(dir, "apps"))
 }
+

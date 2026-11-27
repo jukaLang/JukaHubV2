@@ -19,6 +19,14 @@ package main
 // column tracks nothing is left in (layoutGridItems): an article whose ad rail
 // is gone takes the rail's width instead of leaving a blank column.
 //
+// A box the ads were the whole of goes with them. Cutting the ad alone would
+// leave the box it sat in — the slot's wrapper, the frame round a feed, a row
+// nothing else was in — which the page still styles with the slot's padding,
+// border, min-height or margin, so the reader saw the gap the ad left as an
+// empty block. webAdEmptyRubble drops such a box, and a <br>, <wbr> or
+// whitespace inside one neither counts as content nor keeps it alive; a box
+// that still holds anything the page wrote stays.
+//
 // What counts as an ad, from most to least certain:
 //
 //   - ad-tech markers: AdSense's <ins class="adsbygoogle">, Google Publisher
@@ -133,6 +141,10 @@ const (
 type webAdSpan struct {
 	start, end int
 	element    bool
+	// ads is how many ad elements the stretch is counted as: one for a cut
+	// ad, and for a box dropped with its ads (webAdEmptyRubble) the ads that
+	// went inside it, which are no longer there to be counted themselves.
+	ads int
 }
 
 // webAdFrame is one open element of the walk, with what its content so far
@@ -158,9 +170,13 @@ type webAdFrame struct {
 	// img: a picture that is not an ad; media: a video, frame, object or form
 	// control that is not one; heavy: an <h1> or <main> inside.
 	img, media, heavy bool
-	// ads counts the elements cut inside, near is how many levels down the
-	// nearest is (0 for none) and elems how many elements are inside.
+	// ads counts the elements cut inside — ads, and the boxes that went with
+	// them (webAdEmptyRubble) — near is how many levels down the nearest is
+	// (0 for none) and elems how many elements are inside. labels counts the
+	// label lines cut from inside as their own elements, and cuts the ads
+	// those cuts are counted as.
 	ads, near, elems int
+	labels, cuts     int
 	// pending are label lines — an inline element or a text run holding only
 	// a label — whose fate is this element's: they go unless it has running
 	// text for them to be part of.
@@ -177,10 +193,12 @@ type webAdRemover struct {
 	inHead bool
 }
 
-// webRemoveAds returns the page's markup with its ads cut out, and how many
-// elements went. pageURL is the page's address: it resolves the addresses of
-// pictures, frames and links and tells which hosts are the page's own. The
-// caller decides whether the page is filtered at all (browserAdBlockOff).
+// webRemoveAds returns the page's markup with its ads cut out, and how many ad
+// elements went. A box dropped for holding nothing but its ads (webAdEmptyRubble)
+// adds nothing of its own; the ads that went inside it are counted.
+// pageURL is the page's address: it resolves the addresses of pictures, frames
+// and links and tells which hosts are the page's own. The caller decides
+// whether the page is filtered at all (browserAdBlockOff).
 func webRemoveAds(source, pageURL string) (string, int) {
 	if source == "" {
 		return source, 0
@@ -352,18 +370,32 @@ func (r *webAdRemover) text(start, end int) {
 // settle decides an element at its end and hands what it holds to the element
 // round it.
 func (r *webAdRemover) settle(f *webAdFrame, end int, explicit bool) {
+	if f.tag == "br" || f.tag == "wbr" {
+		// A break draws nothing on its own: it is neither content nor an
+		// element, so a box emptied by the ad cut still goes with one inside.
+		return
+	}
 	cut, label := webAdVerdict(f, explicit)
+	// The box the ad was the whole of is the gap the ad left: it goes too.
+	rubble := !cut && webAdEmptyRubble(f, explicit)
 	if !cut && !label && f.inline == 0 {
 		// The element stays, and has no running text: its label lines go.
 		r.cuts = append(r.cuts, f.pending...)
 	}
 	parent := &r.stack[len(r.stack)-1]
 	switch {
-	case cut:
-		r.cuts = append(r.cuts, webAdSpan{start: f.start, end: end, element: true})
+	case cut || rubble:
+		tally := 1
+		if rubble {
+			// The box was the page's own: the ads that went inside it,
+			// which the cut now hides, are what it is counted as.
+			tally = f.cuts
+		}
+		r.cuts = append(r.cuts, webAdSpan{start: f.start, end: end, element: true, ads: tally})
 		parent.ads++
 		parent.near = 1
 		parent.elems++
+		parent.cuts += tally
 		// A label line cut from a box still says what the box was.
 		if f.label && f.content == 0 && f.ads == 0 {
 			parent.own = true
@@ -372,6 +404,7 @@ func (r *webAdRemover) settle(f *webAdFrame, end int, explicit bool) {
 		parent.pending = append(parent.pending, webAdSpan{start: f.start, end: end})
 		parent.label, parent.own = true, true
 		parent.long = parent.long || f.long
+		parent.labels++
 		parent.elems++
 	default:
 		parent.content += f.content
@@ -390,6 +423,7 @@ func (r *webAdRemover) settle(f *webAdFrame, end int, explicit bool) {
 				parent.near = d
 			}
 		}
+		parent.cuts += f.cuts
 		parent.elems += f.elems + 1
 	}
 }
@@ -439,6 +473,27 @@ func webAdVerdict(f *webAdFrame, explicit bool) (cut, label bool) {
 	return false, true
 }
 
+// webAdEmptyRubble reports a box that held nothing but ads and their labels:
+// with them cut it would draw as the empty block their gap was — the padding,
+// border, margin or min-height the page gave the slot, round nothing. Only a
+// box every one of whose elements was cut qualifies, so one that still holds
+// text, a picture, a control or an element this pass kept stays as it is.
+func webAdEmptyRubble(f *webAdFrame, explicit bool) bool {
+	if !explicit || f.keep || f.hold || f.ads == 0 || f.ads+f.labels != f.elems {
+		return false
+	}
+	return f.content == 0 && !f.img && !f.media && !f.heavy && !webAdRubbleKeep[f.tag]
+}
+
+// webAdRubbleKeep are the elements that stay even when the cut ads were all
+// they held: page structure and controls whose absence would change how the
+// rest of the page behaves, rather than an empty box drawing the gap.
+var webAdRubbleKeep = webAdSet(
+	"html", "head", "body", "main", "form", "fieldset", "select", "textarea", "button",
+	"iframe", "video", "audio", "canvas", "object", "embed", "map", "area", "noscript",
+	"template",
+)
+
 // output builds the markup without the cut stretches: an element leaves the
 // marker walk notes, a label's text run leaves nothing.
 func (r *webAdRemover) output() (string, int) {
@@ -463,7 +518,7 @@ func (r *webAdRemover) output() (string, int) {
 		b.WriteString(r.src[pos:c.start])
 		if c.element {
 			b.WriteString(webAdCutMarker)
-			count++
+			count += c.ads
 		}
 		pos = c.end
 	}

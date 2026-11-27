@@ -100,7 +100,7 @@ var errHotspotNoTools = errors.New("this firmware has no hotspot tools (no softa
 func hotspotExec(timeout time.Duration, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
@@ -850,3 +850,4 @@ func hotspotBuiltinDHCPNames() map[string]string {
 	}
 	return pool.namesByMAC()
 }
+

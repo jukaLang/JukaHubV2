@@ -965,7 +965,7 @@ func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, 
 		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
 		"-of", "default=noprint_wrappers=1")
 	input := ffmpegReadableInput(ffprobePath, path)
-	cmd := exec.CommandContext(ctx, ffprobePath, append(args, input)...)
+	cmd := hiddenCommandContext(ctx, ffprobePath, append(args, input)...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -975,7 +975,7 @@ func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, 
 	if err != nil && ctx.Err() == nil && ffmpegNoteTLSFailure(stderr.String()) {
 		if retry := ffmpegReadableInput(ffprobePath, path); retry != input {
 			stderr.Reset()
-			cmd = exec.CommandContext(ctx, ffprobePath, append(args, retry)...)
+			cmd = hiddenCommandContext(ctx, ffprobePath, append(args, retry)...)
 			cmd.Stderr = &stderr
 			out, err = cmd.Output()
 		}
@@ -1165,7 +1165,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	filtered := !avFiltersOff.Load()
 	args := ffmpegDecoderArgs(ffmpegReadableInput(ffmpegPath, path), ffmpegStreamInputArgs(path, sess.pageURL),
 		width, height, scaling, startSec, fps, duration <= 0, speed)
-	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
+	cmd := hiddenCommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		if sess.ctx.Err() != nil {
@@ -1455,7 +1455,7 @@ func runFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec flo
 		"-ar", fmt.Sprintf("%d", rate),
 		"-",
 	)
-	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
+	cmd := hiddenCommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		logWarn("audio", "ffmpeg audio pipe failed: %v", err)
@@ -3031,3 +3031,4 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 func pointInRect(px, py int32, r sdl.Rect) bool {
 	return px >= r.X && px <= r.X+r.W && py >= r.Y && py <= r.Y+r.H
 }
+

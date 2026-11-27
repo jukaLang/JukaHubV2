@@ -299,6 +299,9 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 			case installed:
 				status = StatusAvailable
 				right = "Update · " + hintLine(FooterHint{"A", "Menu"})
+			case PackageFilesMissing(&p):
+				status = StatusAvailable
+				right = "Files missing · " + hintLine(FooterHint{"A", "Menu"})
 			}
 			rows = append(rows, uiRow{
 				id:     "pkg:" + p.ID,
@@ -859,6 +862,15 @@ func patchConfirmModal() {
 				HighRisk:  true,
 				PackageID: m.PackageID,
 			}
+		case "Forget":
+			patchModal = &patchModalState{
+				ID:        "confirm-forget",
+				Title:     "Forget " + m.PackageName + "?",
+				Body:      "The package's files are already gone; this only removes its install record.",
+				Confirm:   "Forget",
+				HighRisk:  false,
+				PackageID: m.PackageID,
+			}
 		}
 		return
 	}
@@ -893,6 +905,20 @@ func patchConfirmModal() {
 	case "confirm-remove":
 		RunPatchOp("Removing package", func(ctx context.Context) error {
 			return OpRemovePackage(ctx, appConfig, m.PackageID)
+		})
+	case "confirm-forget":
+		RunPatchOp("Forgetting package", func(ctx context.Context) error {
+			// Files are already gone; just drop the install record.
+			p, _, _ := findPackageByID(m.PackageID)
+			name := m.PackageName
+			if p != nil {
+				name = p.Name
+			}
+			if err := dbRemoveInstalled(name); err != nil {
+				return err
+			}
+			patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(appConfig)})
+			return nil
 		})
 	case "confirm-rollback":
 		RunPatchOp("Rolling back transaction", func(ctx context.Context) error { return OpRollbackTx(ctx, appConfig) })
@@ -1043,15 +1069,21 @@ func patchActivate(config *Config) {
 		}
 		// Only an installed package has a choice to make. B, Escape or a click
 		// outside the menu closes it, so there is no "Cancel" row.
-		primary := "Update"
-		if current {
-			primary = "Reinstall"
+		var menu []string
+		if PackageFilesMissing(p) {
+			menu = []string{"Reinstall", "Forget"}
+		} else {
+			primary := "Update"
+			if current {
+				primary = "Reinstall"
+			}
+			menu = []string{primary, "Remove"}
 		}
 		patchModal = &patchModalState{
 			ID:          "pkg-menu",
 			Title:       p.Name + "  v" + p.Version,
 			Body:        p.Description,
-			Menu:        []string{primary, "Remove"},
+			Menu:        menu,
 			MenuFocus:   0,
 			PackageID:   p.ID,
 			PackageName: p.Name,

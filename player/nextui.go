@@ -675,7 +675,7 @@ func nextuiLaunchCommand(romPath string, resume bool) (*exec.Cmd, error) {
 	}
 	name, args := gameLaunchCommand(pak, romPath)
 	name, args = firmwareScriptCommand(pak, name, args)
-	cmd := exec.Command(name, args...)
+	cmd := hiddenCommand(name, args...)
 	cmd.Dir = filepath.Dir(pak)
 	if resume {
 		nextuiRequestResume(romPath)
@@ -1136,3 +1136,4 @@ func nextuiImportRecentsOnce() {
 	}
 	_ = AtomicWrite(marker, []byte("1\n"), 0o644)
 }
+

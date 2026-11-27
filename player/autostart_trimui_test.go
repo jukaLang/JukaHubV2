@@ -288,7 +288,7 @@ func TestTrimuiHookParses(t *testing.T) {
 			continue
 		}
 		args := append(append([]string{}, shell[1:]...), "-n", file)
-		if out, err := exec.Command(bin, args...).CombinedOutput(); err != nil {
+		if out, err := hiddenCommand(bin, args...).CombinedOutput(); err != nil {
 			t.Errorf("%s -n: %v\n%s", strings.Join(shell, " "), err, out)
 		}
 		ran++
@@ -495,3 +495,4 @@ func TestLastLogLine(t *testing.T) {
 		t.Fatalf("a line cut by the tail gave %q", got)
 	}
 }
+

@@ -12,7 +12,6 @@ package main
 // file could not be looked at at all.
 
 import (
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -169,7 +168,7 @@ func filesOpenWithSystem(path string) bool {
 	if path == "" {
 		return false
 	}
-	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	cmd := hiddenCommand("rundll32", "url.dll,FileProtocolHandler", path)
 	if err := cmd.Start(); err != nil {
 		showToast("Windows could not open "+filepath.Base(path)+": "+filesFriendlyError(err), ToastError())
 		return false
@@ -180,3 +179,4 @@ func filesOpenWithSystem(path string) bool {
 	showToast("Opened "+filepath.Base(path)+" with Windows", ToastSuccess())
 	return true
 }
+

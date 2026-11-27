@@ -39,6 +39,7 @@ const (
 	mtvCardNone mtvCardKind = iota
 	// The three kinds that play.
 	mtvCardJfVideo
+	mtvCardPlexVideo
 	mtvCardDlnaVideo
 	mtvCardFilm
 	// The kinds that open a list one level deeper.
@@ -46,18 +47,24 @@ const (
 	mtvCardJfSeason
 	mtvCardJfAllMovies
 	mtvCardJfAllShows
+	mtvCardPlexShow
+	mtvCardPlexSeason
+	mtvCardPlexAllMovies
+	mtvCardPlexAllShows
 	mtvCardDlnaServer
 	mtvCardDlnaFolder
 	mtvCardFilmsAll
-	// mtvCardSetup sets Jellyfin up from the phone; mtvCardRetry asks a
-	// source again (its key names the source).
+	// mtvCardSetup sets Jellyfin up from the phone; mtvCardPlexSetup starts
+	// Plex's PIN sign-in; mtvCardRetry asks a source again (its key names the
+	// source).
 	mtvCardSetup
+	mtvCardPlexSetup
 	mtvCardRetry
 )
 
 // mtvCardPlays reports a card that plays a video.
 func mtvCardPlays(k mtvCardKind) bool {
-	return k == mtvCardJfVideo || k == mtvCardDlnaVideo || k == mtvCardFilm
+	return k == mtvCardJfVideo || k == mtvCardPlexVideo || k == mtvCardDlnaVideo || k == mtvCardFilm
 }
 
 // mtvCardOpens reports a card that opens a list.
@@ -110,10 +117,19 @@ type mtvNetwork struct {
 	servers []dlnaServer
 }
 
+type mtvPlex struct {
+	load   mtvLoad
+	server string
+	cont   []mediaCard
+	movies []mediaCard
+	shows  []mediaCard
+}
+
 // mtv is the tab's model. Main thread only.
 var mtv struct {
 	gen     uint64
 	jf      mtvJellyfin
+	plex    mtvPlex
 	network mtvNetwork
 	films   []mtvList
 	lists   map[string]*mtvList
@@ -156,6 +172,9 @@ func mtvEnterTab() {
 	}
 	if musicSrcReady(musicSrcJellyfin) && mtv.jf.load.stale() {
 		mtvLoadJellyfin(false)
+	}
+	if plexReady() && mtv.plex.load.stale() {
+		mtvLoadPlex(false)
 	}
 	if mtv.network.load.stale() {
 		mtvLoadNetwork()
@@ -260,6 +279,8 @@ func mtvRetry(key string) {
 	switch {
 	case key == "jf":
 		mtvLoadJellyfin(false)
+	case key == "plex":
+		mtvLoadPlex(false)
 	case key == "net":
 		mtvLoadNetwork()
 	case strings.HasPrefix(key, "films:"):
@@ -277,21 +298,245 @@ func mtvRetry(key string) {
 // Jellyfin video stopped moves Continue watching and the cards' progress, so
 // those are asked for again once the server has heard about it.
 func mtvAfterPlayback() {
-	if mediaHub.tab != mediaTabMovies || !musicSrcReady(musicSrcJellyfin) {
+	if mediaHub.tab != mediaTabMovies {
+		return
+	}
+	jf, pl := musicSrcReady(musicSrcJellyfin), plexReady()
+	if !jf && !pl {
 		return
 	}
 	go func() {
 		time.Sleep(2 * time.Second)
 		tbxPost(func() {
-			mtvLoadJellyfin(true)
+			if jf {
+				mtvLoadJellyfin(true)
+			}
+			if pl {
+				mtvLoadPlex(true)
+			}
 			if n := len(mtvNav.stack); n > 0 {
 				switch mtvNav.stack[n-1].kind {
-				case mtvCardJfShow, mtvCardJfSeason:
+				case mtvCardJfShow, mtvCardJfSeason, mtvCardPlexShow, mtvCardPlexSeason:
 					mtvLoadList(mtvNav.stack[n-1], true)
 				}
 			}
 		})
 	}()
+}
+
+// ── Plex ────────────────────────────────────────────────────────────────────
+
+func mtvLoadPlex(continueOnly bool) {
+	if mtv.plex.load.loading {
+		return
+	}
+	mtv.plex.load.loading = true
+	mtvChanged()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		res, err := mtvFetchPlex(ctx, continueOnly)
+		tbxPost(func() {
+			if continueOnly {
+				mtv.plex.load.loading = false
+				if err == nil {
+					mtv.plex.cont = res.cont
+				}
+				mtvChanged()
+				return
+			}
+			mtv.plex.load = mtvLoad{loaded: true, at: time.Now()}
+			if err != nil {
+				mtv.plex.load.err = firstLine(err.Error())
+			} else {
+				mtv.plex.server, mtv.plex.cont = res.server, res.cont
+				mtv.plex.movies, mtv.plex.shows = res.movies, res.shows
+			}
+			mtvChanged()
+		})
+	}()
+}
+
+type mtvPlexResult struct {
+	server string
+	cont   []mediaCard
+	movies []mediaCard
+	shows  []mediaCard
+}
+
+func mtvFetchPlex(ctx context.Context, continueOnly bool) (mtvPlexResult, error) {
+	c, err := plexNewClient()
+	if err != nil {
+		return mtvPlexResult{}, err
+	}
+	res := mtvPlexResult{server: dlFirstNonEmpty(c.name, plexHostOf(c.base.String()))}
+	if deck, err := c.onDeck(ctx); err == nil {
+		for _, it := range deck {
+			res.cont = append(res.cont, mtvPlexCard(c, it, res.server, false))
+		}
+	}
+	if continueOnly {
+		return res, nil
+	}
+	sections, err := c.sections(ctx)
+	if err != nil {
+		return res, err
+	}
+	for _, sec := range sections {
+		switch sec.Type {
+		case "movie":
+			items, err := c.sectionItems(ctx, sec.Key, "1")
+			if err != nil {
+				return res, err
+			}
+			for _, it := range items {
+				res.movies = append(res.movies, mtvPlexCard(c, it, res.server, false))
+			}
+		case "show":
+			items, err := c.sectionItems(ctx, sec.Key, "2")
+			if err != nil {
+				return res, err
+			}
+			for _, it := range items {
+				res.shows = append(res.shows, mtvPlexCard(c, it, res.server, false))
+			}
+		}
+	}
+	return res, nil
+}
+
+// mtvPlexCard is one Plex item's card: a film or an episode plays, a show or
+// a season opens.
+func mtvPlexCard(c *plexClient, it plexItem, server string, inList bool) mediaCard {
+	card := mediaCard{title: dlnaCleanText(it.Title), mtvKey: plexRatingKey(it), glyph: "video", detail: server}
+	card.art = mtvPlexArt(c, it)
+	card.video = VideoInfo{Title: card.title, Thumbnail: card.art[0]}
+	switch it.Type {
+	case "show":
+		card.mtvKind = mtvCardPlexShow
+		card.meta = "TV show"
+		if it.ChildCount > 0 {
+			card.meta = pluralizeCount(it.ChildCount, "season", "seasons")
+		}
+		if it.Year > 0 {
+			card.meta += " · " + strconv.Itoa(it.Year)
+		}
+		return card
+	case "season":
+		card.mtvKind = mtvCardPlexSeason
+		card.mtvKey = plexRatingKey(it) + mtvKeySep + it.ParentRatingKey
+		card.meta = dlFirstNonEmpty(it.ParentTitle, "Season")
+		if it.LeafCount > 0 {
+			card.meta = pluralizeCount(it.LeafCount, "episode", "episodes")
+		}
+		return card
+	}
+	session := musicPlaySession()
+	url, _ := plexPlayURL(c, it, session)
+	durMs := it.Duration
+	if durMs <= 0 {
+		if _, m, ok := plexFirstPart(it); ok {
+			durMs = m.Duration
+		}
+	}
+	dur := float64(durMs) / 1000
+	card.mtvKind = mtvCardPlexVideo
+	card.video = VideoInfo{Title: card.title, Uploader: server, Duration: dur, URL: url, Thumbnail: card.art[0]}
+	if dur > 0 {
+		card.duration = formatDuration(dur)
+	}
+	if it.ViewCount == 0 {
+		card.progress = mediaProgressFraction(float64(it.ViewOffset)/1000, dur)
+	}
+	switch {
+	case it.Type == "episode" && inList:
+		card.meta = "Episode"
+		if it.Index > 0 {
+			card.meta = "Episode " + strconv.Itoa(it.Index)
+		}
+	case it.Type == "episode":
+		card.meta = dlFirstNonEmpty(it.GrandparentTitle, "Episode")
+		if it.ParentIndex > 0 && it.Index > 0 {
+			card.meta += " · S" + strconv.Itoa(it.ParentIndex) + " E" + strconv.Itoa(it.Index)
+		}
+	case it.Year > 0:
+		card.meta = "Movie · " + strconv.Itoa(it.Year)
+	default:
+		card.meta = "Movie"
+	}
+	if it.ViewCount > 0 {
+		card.meta += " · Watched"
+	}
+	return card
+}
+
+// plexRatingKey is an item's id, from ratingKey or its metadata key. Pure.
+func plexRatingKey(it plexItem) string {
+	if it.RatingKey != "" {
+		return it.RatingKey
+	}
+	key := strings.TrimPrefix(it.Key, "/library/metadata/")
+	if i := strings.IndexByte(key, '/'); i >= 0 {
+		return key[:i]
+	}
+	return key
+}
+
+// mtvPlexArt is a card's pictures: the wide art first, then the poster.
+func mtvPlexArt(c *plexClient, it plexItem) [2]string {
+	wide := dlFirstNonEmpty(it.Art, it.GrandparentThumb, it.ParentThumb, it.Thumb)
+	poster := dlFirstNonEmpty(it.Thumb, it.ParentThumb, it.GrandparentThumb)
+	return [2]string{mtvPlexImageURL(c.srv, wide), mtvPlexImageURL(c.srv, poster)}
+}
+
+// mtvPlexImageURL is a Plex picture through the loopback proxy. Pure.
+func mtvPlexImageURL(srv, raw string) string {
+	p, ok := plexCleanPath(raw, "/library/")
+	if !ok {
+		p, ok = plexCleanPath(raw, "/photo/")
+	}
+	if !ok {
+		return ""
+	}
+	return musicProxyBase() + "/plexi/" + srv + "/image.jpg?path=" + url.QueryEscape(p)
+}
+
+// mtvFetchPlexList reads a show (its seasons — or, with one season, that
+// season's episodes) or a season (its episodes).
+func mtvFetchPlexList(ctx context.Context, d mtvDrill) ([]mediaCard, error) {
+	c, err := plexNewClient()
+	if err != nil {
+		return nil, err
+	}
+	server := dlFirstNonEmpty(c.name, plexHostOf(c.base.String()))
+	episodes := func(season string) ([]mediaCard, error) {
+		items, err := c.children(ctx, season)
+		cards := make([]mediaCard, 0, len(items))
+		for _, it := range items {
+			cards = append(cards, mtvPlexCard(c, it, server, true))
+		}
+		return cards, err
+	}
+	if d.kind == mtvCardPlexSeason {
+		season, _, _ := strings.Cut(d.key, mtvKeySep)
+		return episodes(season)
+	}
+	seasons, err := c.children(ctx, d.key)
+	if err != nil {
+		return nil, err
+	}
+	if len(seasons) == 1 {
+		return episodes(plexRatingKey(seasons[0]))
+	}
+	cards := make([]mediaCard, 0, len(seasons))
+	for _, it := range seasons {
+		card := mtvPlexCard(c, it, server, true)
+		if card.mtvKind == mtvCardPlexSeason && it.ParentRatingKey == "" {
+			card.mtvKey = plexRatingKey(it) + mtvKeySep + d.key
+		}
+		cards = append(cards, card)
+	}
+	return cards, nil
 }
 
 // ── Jellyfin ────────────────────────────────────────────────────────────────
@@ -654,6 +899,11 @@ func mtvLoadList(d mtvDrill, force bool) {
 			mtvLoadJellyfin(false)
 		}
 		return
+	case mtvCardPlexAllMovies, mtvCardPlexAllShows:
+		if force {
+			mtvLoadPlex(false)
+		}
+		return
 	}
 	key := mtvListKey(d)
 	if mtv.lists == nil {
@@ -696,6 +946,8 @@ func mtvLoadList(d mtvDrill, force bool) {
 		switch d.kind {
 		case mtvCardJfShow, mtvCardJfSeason:
 			cards, err = mtvFetchJfList(ctx, d)
+		case mtvCardPlexShow, mtvCardPlexSeason:
+			cards, err = mtvFetchPlexList(ctx, d)
 		case mtvCardDlnaServer, mtvCardDlnaFolder:
 			_, id, found := strings.Cut(d.key, mtvKeySep)
 			if !found {
@@ -833,6 +1085,8 @@ func mtvDrillLoad(d mtvDrill) mtvLoad {
 	switch d.kind {
 	case mtvCardJfAllMovies, mtvCardJfAllShows:
 		return mtv.jf.load
+	case mtvCardPlexAllMovies, mtvCardPlexAllShows:
+		return mtv.plex.load
 	}
 	if l := mtv.lists[mtvListKey(d)]; l != nil {
 		return l.load
@@ -847,6 +1101,10 @@ func mtvDrillCards(d mtvDrill) []mediaCard {
 		return mtv.jf.movies
 	case mtvCardJfAllShows:
 		return mtv.jf.shows
+	case mtvCardPlexAllMovies:
+		return mtv.plex.movies
+	case mtvCardPlexAllShows:
+		return mtv.plex.shows
 	}
 	l := mtv.lists[mtvListKey(d)]
 	if l == nil {
@@ -918,6 +1176,34 @@ func mtvBuildRows(prev []mediaRow) []mediaRow {
 		}
 	}
 
+	if plexReady() {
+		px := &mtv.plex
+		server := dlFirstNonEmpty(px.server, "Plex")
+		has := len(px.cont)+len(px.movies)+len(px.shows) > 0
+		switch {
+		case !has && (px.load.loading || !px.load.loaded):
+			rows = append(rows, mediaRow{kind: mediaRowMtvMovies, title: "Plex", empty: "Asking your Plex server…"})
+		case !has && px.load.err != "":
+			rows = append(rows, mediaRow{kind: mediaRowMtvMovies, title: "Plex",
+				cards: []mediaCard{mtvRetryCard("plex", "Try again", px.load.err)}})
+		case !has:
+			rows = append(rows, mediaRow{kind: mediaRowMtvMovies, title: server,
+				empty: "No films or shows on " + server + " yet"})
+		default:
+			if len(px.cont) > 0 {
+				rows = append(rows, mediaRow{kind: mediaRowMtvContinue, title: "Continue watching · " + server, cards: px.cont})
+			}
+			if len(px.movies) > 0 {
+				rows = append(rows, mediaRow{kind: mediaRowMtvMovies, title: "Movies · " + server,
+					cards: mtvCapRow(px.movies, mtvSeeAllCard(mtvCardPlexAllMovies, "", len(px.movies), "movie", "movies"))})
+			}
+			if len(px.shows) > 0 {
+				rows = append(rows, mediaRow{kind: mediaRowMtvShows, title: "TV shows · " + server,
+					cards: mtvCapRow(px.shows, mtvSeeAllCard(mtvCardPlexAllShows, "", len(px.shows), "show", "shows"))})
+			}
+		}
+	}
+
 	netRow := mediaRow{kind: mediaRowMtvNetwork, title: "On your network"}
 	for _, s := range mtv.network.servers {
 		netRow.cards = append(netRow.cards, mtvServerCard(s))
@@ -961,11 +1247,22 @@ func mtvBuildRows(prev []mediaRow) []mediaRow {
 		rows = append(rows, row)
 	}
 
-	if !jfReady {
-		rows = append(rows, mediaRow{kind: mediaRowMtvSetup, title: "Your own media server", cards: []mediaCard{{
-			title: "Connect Jellyfin", meta: "Sign in from your phone", mtvKind: mtvCardSetup, glyph: "phone",
-			detail: "Your films and shows, Continue watching and transcoding by your server",
-		}}})
+	if !jfReady || !plexReady() {
+		var cards []mediaCard
+		if !jfReady {
+			cards = append(cards, mediaCard{title: "Connect Jellyfin", meta: "Sign in from your phone",
+				mtvKind: mtvCardSetup, glyph: "phone",
+				detail: "Your films and shows, Continue watching and transcoding by your server"})
+		}
+		if !plexReady() {
+			meta := "Sign in with plex.tv/link"
+			if active, code := plexSignInActive(); active && code != "" {
+				meta = "Waiting for code " + code
+			}
+			cards = append(cards, mediaCard{title: "Connect Plex", meta: meta, mtvKind: mtvCardPlexSetup,
+				glyph: "phone", detail: "Your Plex libraries, Continue watching and 720p transcoding"})
+		}
+		rows = append(rows, mediaRow{kind: mediaRowMtvSetup, title: "Your own media server", cards: cards})
 	}
 	mediaCarryRowFocus(rows, prev)
 	return rows
@@ -996,9 +1293,9 @@ func mtvOpen(config *Config, card mediaCard) {
 	}
 	title, sub := card.title, card.meta
 	switch card.mtvKind {
-	case mtvCardJfAllMovies:
+	case mtvCardJfAllMovies, mtvCardPlexAllMovies:
 		title = "Movies"
-	case mtvCardJfAllShows:
+	case mtvCardJfAllShows, mtvCardPlexAllShows:
 		title = "TV shows"
 	case mtvCardFilmsAll:
 		if i, err := strconv.Atoi(card.mtvKey); err == nil && i >= 0 && i < len(freeFilmShelves) {
@@ -1057,6 +1354,9 @@ func mtvPlayCard(config *Config, card mediaCard, list []mediaCard, index int, fr
 	case card.mtvKind == mtvCardSetup:
 		PlayActivateSound()
 		musicServersPhoneOpen("jellyfin")
+	case card.mtvKind == mtvCardPlexSetup:
+		PlayActivateSound()
+		plexStartSignIn()
 	case card.mtvKind == mtvCardRetry:
 		PlayActivateSound()
 		mtvRetry(card.mtvKey)
@@ -1070,11 +1370,15 @@ func mtvPlayCard(config *Config, card mediaCard, list []mediaCard, index int, fr
 // list as the player's queue.
 func mtvPlayVideo(config *Config, card mediaCard, list []mediaCard, index int, fromStart bool) {
 	v := card.video
-	if config == nil || strings.TrimSpace(v.URL) == "" {
+	if config == nil {
 		return
 	}
 	if card.mtvKind == mtvCardFilm && !IsOnline() {
 		ShowToast("Free films need the internet", ToastKindWarning)
+		return
+	}
+	if strings.TrimSpace(v.URL) == "" {
+		ShowToast("This Plex video has no file the handheld can open", ToastKindWarning)
 		return
 	}
 	v.Position = 0
@@ -1085,8 +1389,8 @@ func mtvPlayVideo(config *Config, card mediaCard, list []mediaCard, index int, f
 			v.Position = favoriteResumePosition(v.URL)
 		}
 	}
-	if card.mtvKind == mtvCardJfVideo {
-		// Jellyfin hears what plays and keeps where it stopped.
+	if card.mtvKind == mtvCardJfVideo || card.mtvKind == mtvCardPlexVideo {
+		// Jellyfin and Plex hear what plays and keep where it stopped.
 		scrobbleStartWatcher()
 	}
 	if card.mtvKind != mtvCardFilm {
@@ -1155,6 +1459,8 @@ func mtvSheetActions(card mediaCard, favorite, queued bool) ([]mediaSheetAction,
 		return []mediaSheetAction{mediaActOpen}, []string{"Open"}
 	case card.mtvKind == mtvCardSetup:
 		return []mediaSheetAction{mediaActOpen}, []string{"Set up on your phone"}
+	case card.mtvKind == mtvCardPlexSetup:
+		return []mediaSheetAction{mediaActOpen}, []string{"Sign in to Plex"}
 	case card.mtvKind == mtvCardRetry:
 		return []mediaSheetAction{mediaActOpen}, []string{card.title}
 	}

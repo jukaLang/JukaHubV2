@@ -27,7 +27,7 @@ import (
 func launchScriptRunOne(path string, env []string) (int, time.Duration, []byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), launchScriptTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", path)
+	cmd := hiddenCommandContext(ctx, "/bin/sh", path)
 	cmd.Dir = filepath.Dir(path)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -177,3 +177,4 @@ func shotRequestSave() (string, error) {
 	gameShotTell(path, nil)
 	return path, nil
 }
+

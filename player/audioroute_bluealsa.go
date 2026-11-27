@@ -41,7 +41,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -515,7 +514,7 @@ func bluealsaSpawn(path string, args []string) error {
 		_, err := btStartDetached(path, args...)
 		return err
 	}
-	cmd := exec.Command(path, args...)
+	cmd := hiddenCommand(path, args...)
 	cmd.Env = screenChildEnv(os.Environ())
 	cmd.Dir = "/"
 	cmd.Stdout, cmd.Stderr = f, f
@@ -1469,3 +1468,4 @@ func audioWriteFileAtomic(path, body string) error {
 	}
 	return nil
 }
+

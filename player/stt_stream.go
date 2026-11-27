@@ -114,7 +114,7 @@ func sttServeCapable(bin string) (ok, known bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, bin, "--help").Output()
+	out, _ := hiddenCommandContext(ctx, bin, "--help").Output()
 	ok = strings.Contains(string(out), "--serve")
 	if !ok && ctx.Err() != nil {
 		return false, false // a slow card at boot: ask again next time
@@ -323,7 +323,7 @@ func sttServerGetFor(asked bool) (*sttServer, error) {
 }
 
 func sttServerStart(bin, model string) (*sttServer, error) {
-	cmd := exec.Command(bin, "--serve", "-m", model)
+	cmd := hiddenCommand(bin, "--serve", "-m", model)
 	// The decoder is single-threaded; so are its maths libraries here, which
 	// leaves the other cores to the interface and a game.
 	cmd.Env = append(os.Environ(), "OPENBLAS_NUM_THREADS=1", "OMP_NUM_THREADS=1")
@@ -994,3 +994,4 @@ func sttStreamWanted(config *Config, wake bool) bool {
 	}
 	return sttStreamChoice(sttModeOf(config), groqAPIKey(), IsOnline(), true, wake)
 }
+

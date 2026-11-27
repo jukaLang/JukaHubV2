@@ -866,9 +866,8 @@ func saverVideoRun(ctx context.Context, path string, w, h int32, config *Config)
 		saverVideoBroken(path, true)
 		return
 	}
-	cmd := exec.CommandContext(ctx, ffmpeg, saverVideoArgs(path, w, h)...)
+	cmd := hiddenCommandContext(ctx, ffmpeg, saverVideoArgs(path, w, h)...)
 	// No console window over the idle screen on Windows (sched_windows.go).
-	schedHideWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	pipe, err := cmd.StdoutPipe()
@@ -1034,3 +1033,4 @@ func saverVideoDraw(renderer *sdl.Renderer, config *Config, tick uint64) bool {
 	}
 	return true
 }
+

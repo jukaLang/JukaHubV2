@@ -579,7 +579,7 @@ func mlStartDesktopStream(h mlHost, app mlApp, host string) error {
 		target = "[" + host + "]"
 	}
 	argv := append(append([]string(nil), args...), "stream", target, app.Title)
-	cmd := exec.Command(path, argv...)
+	cmd := hiddenCommand(path, argv...)
 	cmd.Dir = filepath.Dir(path)
 	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
@@ -687,3 +687,4 @@ func mlEnsureHelper(done func(ok bool, msg string)) {
 		}
 	}()
 }
+

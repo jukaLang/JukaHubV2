@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -39,7 +38,7 @@ func TestWestonLaunchScriptKeepsAppWordsAndStatus(t *testing.T) {
 	if err := os.WriteFile(script, []byte(command), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	run := exec.Command("/bin/sh", script)
+	run := hiddenCommand("/bin/sh", script)
 	run.Env = append(os.Environ(), "DISPLAY=:42", "LD_LIBRARY_PATH=/weston/lib")
 	if err := run.Run(); err == nil || !strings.Contains(err.Error(), "37") {
 		t.Fatalf("launch exit = %v, want status 37", err)
@@ -134,3 +133,4 @@ func TestParseProcMounts(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+

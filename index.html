@@ -36,6 +36,7 @@
     <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="fonts/inter.css">
     <link rel="stylesheet" href="style.css">
+    <script type="module" src="normalize-loader.js"></script>
 </head>
 <body class="theme-dark">
     <noscript>
@@ -968,8 +969,11 @@
             <button id="previewNext" class="action-button small" type="button" aria-label="Next scene">
                 <svg class="ico" data-icon="chevron-right" aria-hidden="true"></svg>
             </button>
+            <span class="preview-hint" title="Hold Esc, or click the eye icon in the corner, to exit preview">
+                <svg class="ico" data-icon="keyboard" aria-hidden="true"></svg> Esc to leave
+            </span>
             <button id="previewExit" class="action-button small primary" type="button">
-                <svg class="ico" data-icon="pen" aria-hidden="true"></svg> Back to editor
+                <svg class="ico" data-icon="close" aria-hidden="true"></svg> Back to editor
             </button>
         </div>
     </div>

@@ -699,10 +699,10 @@ func mailBodyPut(e *mailBodyEntry) {
 	mailBodies.list = append(mailBodies.list, e)
 	total := 0
 	for _, x := range mailBodies.list {
-		total += len(x.raw) + len(x.body.Text)
+		total += len(x.raw) + len(x.body.Text) + len(x.body.HTML)
 	}
 	for len(mailBodies.list) > 1 && (len(mailBodies.list) > mailBodyCacheMax || total > mailBodyCacheBytes) {
-		total -= len(mailBodies.list[0].raw) + len(mailBodies.list[0].body.Text)
+		total -= len(mailBodies.list[0].raw) + len(mailBodies.list[0].body.Text) + len(mailBodies.list[0].body.HTML)
 		mailBodies.list = mailBodies.list[1:]
 	}
 }

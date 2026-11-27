@@ -18,7 +18,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -86,7 +85,7 @@ func sttPackProbe(dir string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "--help")
+	cmd := hiddenCommandContext(ctx, bin, "--help")
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
@@ -94,7 +93,7 @@ func sttPackProbe(dir string) string {
 		}
 		return "the recognizer cannot start on this device: " + err.Error()
 	}
-	cmd = exec.CommandContext(ctx, fastBin, "--help")
+	cmd = hiddenCommandContext(ctx, fastBin, "--help")
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Run(); err != nil {
 		return "fast English recognition cannot start on this device: " + err.Error()
@@ -443,3 +442,4 @@ func sttStartInstall(auto bool) bool {
 	}()
 	return true
 }
+

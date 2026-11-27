@@ -8,11 +8,9 @@ package main
 
 import (
 	"errors"
-	"os/exec"
 )
 
-// schedHideWindow is a no-op: there is no console window to hide.
-func schedHideWindow(cmd *exec.Cmd) {}
+
 
 func schedRegistryStartupItems() []schedItem { return nil }
 
@@ -21,3 +19,5 @@ func schedStartupFolderItems() []schedItem { return nil }
 func schedSetApproved(key, name string, enabled bool) error {
 	return errors.New("startup approval is a Windows setting")
 }
+
+

@@ -154,6 +154,16 @@ type musicJellyfinConf struct {
 	ServerName string `json:"serverName,omitempty"`
 }
 
+// musicPlexConf is the Plex account and the server it last chose. Token is
+// encrypted like the other server secrets; the same token signs the plex.tv
+// discovery calls and the server's API calls.
+type musicPlexConf struct {
+	URL        string `json:"url,omitempty"`
+	Token      string `json:"token,omitempty"` // encrypted
+	ServerID   string `json:"serverId,omitempty"`
+	ServerName string `json:"serverName,omitempty"`
+}
+
 type musicLastFMConf struct {
 	User    string `json:"user,omitempty"`
 	Session string `json:"session,omitempty"` // encrypted
@@ -172,6 +182,7 @@ type musicServersFile struct {
 	DeviceID     string                `json:"deviceId,omitempty"`
 	Navidrome    musicNavidromeConf    `json:"navidrome"`
 	Jellyfin     musicJellyfinConf     `json:"jellyfin"`
+	Plex         musicPlexConf         `json:"plex"`
 	LastFM       musicLastFMConf       `json:"lastfm"`
 	ListenBrainz musicListenBrainzConf `json:"listenbrainz"`
 }

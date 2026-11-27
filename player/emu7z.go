@@ -133,8 +133,7 @@ func emu7zExtract(ctx context.Context, client *http.Client, archive, dest string
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, tool, "x", "-y", "-bd", "-o"+dest, archive)
-	emuHideConsole(cmd)
+	cmd := hiddenCommandContext(ctx, tool, "x", "-y", "-bd", "-o"+dest, archive)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return nil
@@ -152,3 +151,4 @@ func emu7zExtract(ctx context.Context, client *http.Client, archive, dest string
 	}
 	return fmt.Errorf("%w (7-Zip: %s)", errBadToolArchive, detail)
 }
+

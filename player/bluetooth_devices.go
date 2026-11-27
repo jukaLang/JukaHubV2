@@ -868,7 +868,7 @@ func bzStartProcess(ctx context.Context, limit time.Duration, args ...string) (b
 	}
 	runCtx, cancel := context.WithTimeout(ctx, limit)
 	newCmd := func() *exec.Cmd {
-		cmd := exec.CommandContext(runCtx, tool, args...)
+		cmd := hiddenCommandContext(runCtx, tool, args...)
 		cmd.Env = bzChildEnv()
 		return cmd
 	}
@@ -2108,3 +2108,4 @@ func bzRefreshToolCache() bool {
 	bzToolCache.mu.Unlock()
 	return ok
 }
+

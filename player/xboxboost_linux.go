@@ -172,7 +172,7 @@ func xboxBoostIface(name string) bool {
 func xboxBoostRun(name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), xboxBoostCmdTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, name, args...).CombinedOutput()
 	return string(out), err
 }
 
@@ -236,3 +236,4 @@ func xboxBoostWiFiOn(radios []string) {
 		}
 	}
 }
+

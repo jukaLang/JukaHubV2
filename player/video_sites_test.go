@@ -8,8 +8,15 @@ import (
 func TestVideoSitesCanBeAddedFromTheBuiltinList(t *testing.T) {
 	c := &Config{}
 	c.Variables.Custom = map[string]interface{}{}
-	if len(videoBuiltinSites) < 10 {
-		t.Fatalf("only %d built-in sites", len(videoBuiltinSites))
+	if len(videoBuiltinSites) != 2 {
+		t.Fatalf("built-in sites = %d, want 2", len(videoBuiltinSites))
+	}
+	for _, site := range videoBuiltinSites {
+		switch site.Host {
+		case "bilibili.com", "soundcloud.com":
+		default:
+			t.Fatalf("built-in %q is not one of the added sites", site.Host)
+		}
 	}
 	if !videoSiteAdd(c, " VIMEO.COM ") {
 		t.Fatal("a built-in host was refused")
@@ -28,8 +35,20 @@ func TestVideoSitesCanBeAddedFromTheBuiltinList(t *testing.T) {
 			t.Fatal("an added site was still offered")
 		}
 	}
-	if got := videoSiteSummary(c); !strings.Contains(got, "Vimeo") {
+	if got := videoSiteSummary(c); !strings.Contains(got, "vimeo.com") {
 		t.Fatalf("summary = %q", got)
+	}
+	if !videoSiteRemove(c, "vimeo.com") {
+		t.Fatal("the typed domain could not be removed")
+	}
+	if videoSiteRemove(c, "youtube.com") {
+		t.Fatal("a built-in site was removed")
+	}
+	if len(videoCustomSites(c)) != 0 {
+		t.Fatalf("custom sites after removal = %v", videoCustomSites(c))
+	}
+	if len(videoSiteRemoveOptions(c)) != 0 {
+		t.Fatalf("remove options after removal = %v", videoSiteRemoveOptions(c))
 	}
 }
 
@@ -39,7 +58,10 @@ func TestVideoSiteForURLNamesAKnownHost(t *testing.T) {
 	c.Variables.Custom = map[string]interface{}{}
 	appConfig = c
 	defer func() { appConfig = old }()
-	if got := videoSiteForURL("https://www.vimeo.com/12345"); got != "Vimeo" {
+	if !videoSiteAdd(c, "example.org") {
+		t.Fatal("the test domain was not saved")
+	}
+	if got := videoSiteForURL("https://www.example.org/clip/1"); got != "example.org" {
 		t.Fatalf("site = %q", got)
 	}
 	if got := videoSiteForURL("https://example.com/video"); got != "" {

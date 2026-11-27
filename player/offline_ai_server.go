@@ -280,7 +280,7 @@ func offlineAIServerStart(server, model, why string) *offlineAIServerProc {
 		started: time.Now(),
 		log:     &strings.Builder{},
 	}
-	cmd := exec.Command(server, offlineAIServerArgs(model, port, p.key)...)
+	cmd := hiddenCommand(server, offlineAIServerArgs(model, port, p.key)...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = &offlineAILogWriter{b: p.log}
 	feToolProcAttr(cmd) // it dies with JukaHub
@@ -659,3 +659,4 @@ func offlineAIServerStopProc(p *offlineAIServerProc, why string) {
 	}
 	logDebug("voice", "offline AI server stopped (%s)", why)
 }
+

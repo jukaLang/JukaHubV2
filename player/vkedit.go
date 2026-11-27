@@ -484,9 +484,10 @@ func vkStripModeNow() vkStripMode {
 			return vkStripHidden
 		}
 		return vkStripQuickURL
-	case vkTargetDownloads, vkTargetPodcast, vkTargetToolsURL, vkTargetParty, vkTargetBrowserURL:
+	case vkTargetDownloads, vkTargetOtherVideos, vkTargetOtherVideosPlay, vkTargetVideoSearch,
+		vkTargetPodcast, vkTargetToolsURL, vkTargetParty, vkTargetBrowserURL:
 		return vkStripQuickURL
-	case vkTargetDNS, vkTargetNetwork, vkTargetNetplay, mlAddrVKTarget:
+	case vkTargetVideoDomain, vkTargetDNS, vkTargetNetwork, vkTargetNetplay, mlAddrVKTarget:
 		return vkStripQuickHost
 	case mailComposeVKTarget:
 		// Addresses are not words: the strip must not learn pieces of them.
@@ -1323,8 +1324,14 @@ func vkHandlePhysicalKey(e *sdl.KeyboardEvent, config *Config) bool {
 		vkForwardDelete(config)
 	case sdl.K_RETURN, sdl.K_KP_ENTER:
 		// In a note's body Enter is a line break; Ctrl+Enter (above: not
-		// consumed) is Done. Elsewhere Enter submits.
+		// consumed) is Done. Elsewhere Enter submits. The video-domain and
+		// link fields commit here too, so a physical Enter is never swallowed.
 		if !vkEnterTypesNewline() {
+			switch vkTarget {
+			case vkTargetVideoDomain, vkTargetVideoSearch, vkTargetOtherVideosPlay, vkTargetOtherVideos:
+				vkSubmit(config, false)
+				return true
+			}
 			return false
 		}
 		vkInsertText("\n", config)

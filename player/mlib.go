@@ -34,7 +34,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -965,10 +964,9 @@ func mlibProbeFile(ctx context.Context, ffprobe, path string) (mlibTags, error) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, mlibProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error",
+	cmd := hiddenCommandContext(ctx, ffprobe, "-v", "error",
 		"-show_entries", "format=duration:format_tags",
 		"-of", "default=noprint_wrappers=1", path)
-	schedHideWindow(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return mlibTags{}, err
@@ -1914,3 +1912,4 @@ func mlibNextEpisode(m *mlibModel, g mlibGroup) int {
 	}
 	return g.items[0]
 }
+

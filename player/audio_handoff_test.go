@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -101,7 +100,7 @@ func TestScreenChildAudioReturnsAfterFailedLaunch(t *testing.T) {
 		screenChildAudio.mu.Unlock()
 	}()
 
-	cmd := exec.Command(filepath.Join(t.TempDir(), "missing-emulator"))
+	cmd := hiddenCommand(filepath.Join(t.TempDir(), "missing-emulator"))
 	if err := screenChildStart(cmd); err == nil {
 		t.Fatal("missing emulator started")
 	}
@@ -177,3 +176,4 @@ func TestScreenChildAudioBorrowedByPausedOverlay(t *testing.T) {
 		t.Fatal("audio was not restored after the game exited")
 	}
 }
+

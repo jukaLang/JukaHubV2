@@ -28,7 +28,7 @@ func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 		}
 		sh = "/bin/sh"
 	}
-	cmd := exec.CommandContext(ctx, sh, "-s")
+	cmd := hiddenCommandContext(ctx, sh, "-s")
 	cmd.Stdin = strings.NewReader(line + "\n")
 	return cmd
 }
@@ -38,3 +38,4 @@ func termShellCommand(ctx context.Context, line string) *exec.Cmd {
 func termKillTree(cmd *exec.Cmd) error {
 	return screenChildKill(cmd)
 }
+

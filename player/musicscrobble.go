@@ -640,6 +640,7 @@ var scrobbleWatch struct {
 	paused    bool
 	// The Jellyfin video being watched, from the video player's address.
 	vidID     string
+	vidSrc    string
 	vidPos    float64
 	vidRep    time.Time
 	vidSessID string
@@ -803,30 +804,37 @@ func scrobbleTrackEnded() {
 // the server keeps where it was left (and marks it watched at the end).
 func scrobbleVideoTick(now time.Time) {
 	w := &scrobbleWatch
-	id := musicProxyVideoItem(playbackPageURL())
+	ref := musicProxyVideoReport(playbackPageURL())
+	id := ref.ID
 	st := snapshotVideoState()
 	live := id != "" && st.phase != "idle"
 	pos := st.progress * st.duration
-	if w.vidID != "" && (!live || id != w.vidID) {
-		vid, vpos, sess := w.vidID, w.vidPos, w.vidSessID
+	if w.vidID != "" && (!live || id != w.vidID || ref.Src != w.vidSrc) {
+		vid, src, vpos, sess := w.vidID, w.vidSrc, w.vidPos, w.vidSessID
 		w.vidID = ""
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			_ = jfReport(ctx, "stopped", vid, vpos, false, sess)
-			musicSrcCacheClear() // Continue watching changed
+			_ = videoReport(ctx, src, "stopped", vid, vpos, false, sess)
+			if src != "plex" {
+				musicSrcCacheClear() // Continue watching changed
+			}
 		}()
 	}
 	if !live {
 		return
 	}
 	if w.vidID == "" {
-		w.vidID, w.vidSessID, w.vidRep = id, musicPlaySession(), now
+		w.vidID, w.vidSrc, w.vidRep = id, ref.Src, now
+		w.vidSessID = ref.Session
+		if w.vidSessID == "" {
+			w.vidSessID = musicPlaySession()
+		}
 		sess := w.vidSessID
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			_ = jfReport(ctx, "playing", id, pos, false, sess)
+			_ = videoReport(ctx, ref.Src, "playing", id, pos, false, sess)
 		}()
 	}
 	if pos > 0 {
@@ -838,25 +846,70 @@ func scrobbleVideoTick(now time.Time) {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			_ = jfReport(ctx, "progress", id, pos, false, sess)
+			_ = videoReport(ctx, ref.Src, "progress", id, pos, false, sess)
 		}()
 	}
+}
+
+// videoReport sends one playback report to the server that owns the address.
+func videoReport(ctx context.Context, src, what, id string, pos float64, paused bool, session string) error {
+	if src == "plex" {
+		return plexReport(ctx, what, id, pos, paused, session)
+	}
+	return jfReport(ctx, what, id, pos, paused, session)
+}
+
+// proxyVideoReport is where a loopback video address points: the source, the
+// item id and the play session. Pure.
+type proxyVideoReport struct {
+	Src     string
+	ID      string
+	Session string
+}
+
+func musicProxyVideoReport(addr string) proxyVideoReport {
+	u, err := url.Parse(addr)
+	if err != nil || u.Hostname() != "127.0.0.1" {
+		return proxyVideoReport{}
+	}
+	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
+	if len(parts) < 3 {
+		return proxyVideoReport{}
+	}
+	switch parts[0] {
+	case "jfv", "jfh":
+		id, err := url.PathUnescape(parts[2])
+		if err != nil {
+			return proxyVideoReport{}
+		}
+		return proxyVideoReport{Src: "jellyfin", ID: id}
+	case "plexv":
+		id, _ := plexSplitExt(parts[2])
+		id, err = url.PathUnescape(id)
+		if err != nil {
+			return proxyVideoReport{}
+		}
+		return proxyVideoReport{Src: "plex", ID: id, Session: u.Query().Get("session")}
+	case "plexh":
+		if len(parts) < 4 || parts[2] != "start" {
+			return proxyVideoReport{}
+		}
+		id := strings.TrimSuffix(parts[3], ".m3u8")
+		id, err = url.PathUnescape(id)
+		if err != nil {
+			return proxyVideoReport{}
+		}
+		return proxyVideoReport{Src: "plex", ID: id, Session: u.Query().Get("session")}
+	}
+	return proxyVideoReport{}
 }
 
 // musicProxyVideoItem is the Jellyfin item id in a proxy video address, ""
 // for any other address. Pure.
 func musicProxyVideoItem(addr string) string {
-	u, err := url.Parse(addr)
-	if err != nil || u.Hostname() != "127.0.0.1" {
+	ref := musicProxyVideoReport(addr)
+	if ref.Src != "jellyfin" {
 		return ""
 	}
-	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
-	if len(parts) < 3 || (parts[0] != "jfv" && parts[0] != "jfh") {
-		return ""
-	}
-	id, err := url.PathUnescape(parts[2])
-	if err != nil {
-		return ""
-	}
-	return id
+	return ref.ID
 }

@@ -34,7 +34,6 @@ import (
 	"html"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -320,7 +319,7 @@ func extractEmbeddedSubtitles(ctx context.Context, ffmpegPath, videoPath string)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:0", "-f", "srt", "-")
+	cmd := hiddenCommandContext(ctx, ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:0", "-f", "srt", "-")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, ""
@@ -755,7 +754,7 @@ func ytdlpSubtitles(ctx context.Context, r subtitleRequest) ([]subtitleCue, stri
 	if extra == nil {
 		extra = subtitleExtraArgs()
 	}
-	cmd := exec.CommandContext(ctx, ytDlpPath, subtitleDownloadArgs(dir, r.page, r.lang, extra)...)
+	cmd := hiddenCommandContext(ctx, ytDlpPath, subtitleDownloadArgs(dir, r.page, r.lang, extra)...)
 	cmd.Env = helperToolEnv(ytDlpPath)
 	// yt-dlp is a one-file bundle: the process started here unpacks the real
 	// one and runs it as its child. Stop the whole group on POSIX and the whole
@@ -1341,3 +1340,4 @@ func subtitleStatusLine() string {
 	}
 	return "Subtitles: " + state + " (" + videoSubs.status + ")"
 }
+

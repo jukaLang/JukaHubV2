@@ -9,8 +9,8 @@ package main
 // JukaHub's own file is ever written or removed.
 //
 // Two kinds of hook are supported:
-//   - Desktop: a freedesktop .desktop file (or a .cmd on Windows) in the
-//     per-user autostart folder.
+//   - Desktop: a freedesktop .desktop file in the per-user autostart folder,
+//     or (on Windows) a value in the current user's Run key.
 //   - TrimUI: an SD-card boot script in System/starts, which the firmware's
 //     runtrimui.sh runs at boot. That directory is the community-documented
 //     hook for stock and CrossMix firmware; the app creates it when missing and
@@ -50,6 +50,11 @@ import (
 const (
 	autostartWindowsFile = "JukaHub.cmd"
 	autostartLinuxFile   = "jukahub.desktop"
+	// Windows starts JukaHub from the per-user Run key (no console), not a
+	// .cmd. The file name above is still the old launcher the setting cleans
+	// up when it changes.
+	autostartWindowsRunKey   = `Software\Microsoft\Windows\CurrentVersion\Run`
+	autostartWindowsRunValue = "JukaHub"
 	// trimuiAutostartFile lives in <SD>/System/starts. The name marks it as
 	// ours so the setting can remove exactly this file later.
 	trimuiAutostartFile = "jukahub-autostart.sh"
@@ -1153,6 +1158,9 @@ func setAutoStart(on bool) error {
 	if !autostartSupported() {
 		return fmt.Errorf("this device manages startup apps itself")
 	}
+	if handled, err := setPlatformAutoStart(on); handled {
+		return err
+	}
 	path, err := autoStartLauncherPath()
 	if err != nil {
 		return err
@@ -1192,12 +1200,37 @@ func setAutoStart(on bool) error {
 // autoStartInstalled reports whether the launcher exists on disk, which is the
 // ground truth the setting is reconciled against at startup.
 func autoStartInstalled() bool {
+	if handled, installed := platformAutoStartInstalled(); handled {
+		return installed
+	}
 	path, err := autoStartLauncherPath()
 	if err != nil {
 		return false
 	}
 	_, statErr := os.Stat(path)
 	return statErr == nil
+}
+
+// autoStartStaleLauncher reports a launcher from the old Windows .cmd format
+// that must be replaced by the Run value (or removed when the setting is off).
+func autoStartStaleLauncher() bool {
+	if handled, stale := platformAutoStartStale(); handled {
+		return stale
+	}
+	return false
+}
+
+// autoStartLocation is what to show for JukaHub's own entry on the Scheduled
+// tasks screen: the Windows Run value, or the launcher file elsewhere.
+func autoStartLocation() (command, source string, err error) {
+	if command, source, handled := platformAutoStartCommand(); handled {
+		return command, source, nil
+	}
+	path, err := autoStartLauncherPath()
+	if err != nil {
+		return "", "", err
+	}
+	return path, filepath.Dir(path), nil
 }
 
 // trimuiAutostartHookStale reports whether the boot hook on the card is not
@@ -1515,6 +1548,13 @@ func reconcileAutoStart(config *Config) {
 	}
 	want := autoStartEnabled(config)
 	installed := autoStartInstalled()
+	if autoStartStaleLauncher() {
+		if err := setAutoStart(want); err != nil {
+			logPatch("autostart: could not replace the old launcher (%v)", err)
+		} else {
+			installed = autoStartInstalled()
+		}
+	}
 	if !want && installed && autostartIsTrimui() && trimuiOSEditionCard() {
 		// The OS package put the boot hook on the card, over settings that
 		// had "Start JukaHub at login" off (an app install that was there

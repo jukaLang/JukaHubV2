@@ -17,11 +17,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
+
 	"time"
 )
 
@@ -254,10 +253,9 @@ func extractAppIcons(programs []string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), appIconExtractTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "powershell",
+	cmd := hiddenCommandContext(ctx, "powershell",
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-File", scriptPath, "-ListPath", listPath, "-OutDir", dir)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		logWarn("apps", "icon extraction failed: %v (%s)", err, strings.TrimSpace(string(out)))
@@ -268,3 +266,4 @@ func extractAppIcons(programs []string) {
 	// on the next frame instead of on the next scan.
 	dropAppIconPathCache()
 }
+

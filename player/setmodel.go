@@ -1536,6 +1536,23 @@ func setBuildSections() []setSection {
 					},
 				},
 				{
+					ID: "videoDomain", Label: "Type a video domain", Kind: setKindAction,
+					Detail: setStatic("Enter a domain on the keyboard. It is saved in your settings and appears in Entertainment → Other Videos."),
+					Open:   func(*Config) { vkOpenVideoDomain() },
+				},
+				{
+					ID: "videoSiteRemove", Label: "Remove a video domain", Kind: setKindChoice,
+					Detail:  setStatic("Only domains you typed can be removed; the built-in list stays."),
+					Options: videoSiteRemoveOptions,
+					Current: func(*Config) int { return -1 },
+					Value:   func(c *Config) string { return itoa(len(videoCustomSites(c))) + " saved" },
+					Choose: func(c *Config, value string) {
+						if videoSiteRemove(c, value) {
+							setToast("Removed " + value)
+						}
+					},
+				},
+				{
 					ID: "keepWatched", Label: "Keep fully watched videos", Kind: setKindToggle,
 					Detail: func(c *Config) string {
 						if mediaKeepWatchedEnabled(c) {

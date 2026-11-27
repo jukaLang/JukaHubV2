@@ -76,7 +76,7 @@ func termPtySpawn(c termPtyCommand, env []string, dir string, cols, rows int) (t
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(c.argv[0], c.argv[1:]...)
+	cmd := hiddenCommand(c.argv[0], c.argv[1:]...)
 	cmd.Env = env
 	if dir != "" {
 		if st, statErr := os.Stat(dir); statErr == nil && st.IsDir() {
@@ -243,3 +243,4 @@ func termPtySessionAlive(sid int) bool {
 	}
 	return false
 }
+

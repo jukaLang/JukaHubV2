@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"time"
 )
@@ -42,7 +41,7 @@ func offlineAIPackProbe(dir string) string {
 	}
 	for _, runner := range runners {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		cmd := exec.CommandContext(ctx, runner, "--help")
+		cmd := hiddenCommandContext(ctx, runner, "--help")
 		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 		err := cmd.Run()
 		timedOut := ctx.Err() != nil
@@ -207,3 +206,4 @@ func offlineAIStartInstall() {
 		})
 	}()
 }
+

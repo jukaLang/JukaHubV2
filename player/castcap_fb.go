@@ -23,7 +23,6 @@ import (
 	"image/jpeg"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -685,7 +684,7 @@ func castStartFBSource(p castPreset, rotateSetting int, ffmpeg string) (*castFBS
 // runFFmpeg streams the framebuffer through the bundled ffmpeg.
 func (s *castFBSource) runFFmpeg(ctx context.Context, ffmpeg string, geom castFBGeom, deg int) {
 	defer close(s.done)
-	cmd := exec.CommandContext(ctx, ffmpeg, castFFmpegArgs(castFBDevice, s.preset, deg, geom.W, geom.H)...)
+	cmd := hiddenCommandContext(ctx, ffmpeg, castFFmpegArgs(castFBDevice, s.preset, deg, geom.W, geom.H)...)
 	// Its own process group, stopped as a whole: if the resolved ffmpeg is a
 	// wrapper, or forks, a survivor would keep the pipe and /dev/fb0 open, the
 	// read below would never end, and stopping the share would hang on it.
@@ -805,3 +804,4 @@ func (s *castFBSource) runNative(ctx context.Context, f *os.File, geom castFBGeo
 		timer.Reset(castNativeWait(interval, time.Since(start)))
 	}
 }
+

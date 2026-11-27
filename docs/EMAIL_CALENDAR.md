@@ -105,8 +105,10 @@ calendar.
 - **Mail** lists the newest messages of all inboxes (L1/R1 or Tab switches
   between All inboxes and each account). **A** opens a message, **Y** replies,
   **X** moves it to Trash; **Select** opens the menu: Compose, Sync now, Mark
-  all read, Archive, Mark unread, Save attachments (to Downloads), Email
-  settings. In Compose, **Start** sends.
+  all read, Archive, Mark unread, Show plain text / Show formatted message,
+  Show images, Save attachments (to Downloads), Email settings. In Compose,
+  **Start** sends. In the reader **H** switches between the formatted HTML and
+  the plain text, and **I** shows remote images one message at a time.
 - **Home**: the Mail tile shows the unread count; the Calendar widget shows the
   next event (in place of the month name on a small tile, under the month on a
   tall one).
@@ -149,9 +151,11 @@ snippets, calendar events).
 
 - **Calendars are read-only.** Events are shown and remind you; creating or
   changing events happens in your calendar app.
-- **Plain-text mail.** Messages are shown as text (HTML mail is converted);
-  replies and new mail are plain text. Images are not shown; attachments can
-  be saved.
+- **HTML mail is rendered by the browser engine.** A message with an HTML
+  part opens formatted, with its scripts and active embeds removed and remote
+  images off until **I** (or the menu's **Show images**); **H** switches to the
+  converted plain text. Links open in the Browser. Replies and new mail stay
+  plain text; attachments can be saved.
 - **No push.** Mail is checked on the interval above, and when you open Mail
   or press Sync now; there is no IMAP IDLE yet.
 - **Inbox first.** Mail lists the inbox of each account.

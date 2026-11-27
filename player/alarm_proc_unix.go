@@ -37,5 +37,6 @@ func alarmSignalChild(cmd *exec.Cmd, stop bool) error {
 // alarm on this platform.
 func alarmCanPauseChildren() bool { return true }
 
-// alarmHideConsole is a no-op off Windows: a decoder has no window here.
-func alarmHideConsole(cmd *exec.Cmd) {}
+
+
+

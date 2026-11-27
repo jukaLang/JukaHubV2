@@ -378,7 +378,10 @@ var mediaHub = struct {
 
 	cards   []mediaCard
 	index   int
-	scrollY float64
+	// previewStart is when the focused card began showing its preview frames.
+	// Zero means "no preview yet"; the art routine shows the poster instead.
+	previewStart uint64
+	scrollY     float64
 
 	// chipFocus is the Downloads header chip under the ring, -1 on the list.
 	chipFocus int
@@ -1747,6 +1750,11 @@ func mediaHubWarmFocused(config *Config) {
 	if len(vids) > 0 {
 		prefetchVideos(config, vids, 0)
 	}
+	// A YouTube card cycles its three preview frames while it is focused.
+	if idx >= 0 && idx < len(list) {
+		prefetchCardPreviewFrames(list[idx].video)
+	}
+	mediaHub.previewStart = uiClockMS()
 }
 
 // ── Actions ──────────────────────────────────────────────────────────────────

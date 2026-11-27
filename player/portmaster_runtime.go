@@ -46,7 +46,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -214,7 +213,7 @@ func pmEnsureDevFD() {
 func pmBashWorks(ctx context.Context, shell string, env []string) bool {
 	bctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(bctx, shell, "-c", pmBashProbe)
+	cmd := hiddenCommandContext(bctx, shell, "-c", pmBashProbe)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	return err == nil && bytes.Contains(out, []byte(pmBashProbeOK))
@@ -851,3 +850,4 @@ func pmRuntimeQuickExit() string {
 	}
 	return "PortMaster closed at once: " + issues[0].Title + " — " + hintKeyFor("Y", "Options") + " on its row, then Why didn't it open?"
 }
+

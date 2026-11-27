@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -344,7 +343,7 @@ func aiProcesses(ctx context.Context) []aiProc {
 func aiWindowsProcesses(ctx context.Context) []aiProc {
 	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	raw, err := exec.CommandContext(cctx, "tasklist", "/fo", "csv", "/nh").Output()
+	raw, err := hiddenCommandContext(cctx, "tasklist", "/fo", "csv", "/nh").Output()
 	if err != nil {
 		return nil
 	}
@@ -476,3 +475,4 @@ func aiRunCommand(ctx context.Context, a aiArgs) aiStep {
 		},
 	}
 }
+

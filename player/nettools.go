@@ -29,7 +29,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"runtime"
 	"sort"
 	"strconv"
@@ -288,7 +287,7 @@ func lanNeighbourList() ([]lanNeighbour, error) {
 	var list []lanNeighbour
 	switch {
 	case runtime.GOOS == "windows":
-		out, err := exec.Command("arp", "-a").Output()
+		out, err := hiddenCommand("arp", "-a").Output()
 		if err != nil {
 			return nil, fmt.Errorf("arp -a: %w", err)
 		}
@@ -298,7 +297,7 @@ func lanNeighbourList() ([]lanNeighbour, error) {
 			list = parseProcNetARP(string(data))
 			break
 		}
-		out, err := exec.Command("ip", "neigh", "show").Output()
+		out, err := hiddenCommand("ip", "neigh", "show").Output()
 		if err != nil {
 			return nil, errors.New("no neighbour table on this device (no /proc/net/arp and no ip command)")
 		}
@@ -463,7 +462,7 @@ func formatListeningPorts(list []listeningPort) string {
 // listeningPortList is this device's listening TCP sockets, one row per port.
 func listeningPortList() ([]listeningPort, error) {
 	if runtime.GOOS == "windows" {
-		out, err := exec.Command("netstat", "-ano", "-p", "tcp").Output()
+		out, err := hiddenCommand("netstat", "-ano", "-p", "tcp").Output()
 		if err != nil {
 			return nil, fmt.Errorf("netstat: %w", err)
 		}
@@ -480,7 +479,7 @@ func listeningPortList() ([]listeningPort, error) {
 		list = append(list, parseProcNetTCP(string(data))...)
 	}
 	if !read {
-		out, err := exec.Command("netstat", "-ltn").Output()
+		out, err := hiddenCommand("netstat", "-ltn").Output()
 		if err != nil {
 			return nil, errors.New("no socket table on this device (no /proc/net/tcp and no netstat)")
 		}
@@ -664,3 +663,4 @@ func toolsHTTPCheckSubmit(raw string) {
 		return powerAsyncResult{text: text, err: err}
 	})
 }
+

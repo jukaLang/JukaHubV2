@@ -26,7 +26,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,6 +40,13 @@ import (
 // brightnessProbeBlocks: the probe may start PowerShell, so it runs on its own
 // goroutine (brightnessStartProbe).
 const brightnessProbeBlocks = true
+
+// brightnessRestoresSavedLevel: never on Windows. The saved level is the
+// handheld's, and Windows keeps its own brightness. With no DDC/CI or WMI
+// control the fallback is the software dimmer, so restoring it would paint a
+// dark layer over the whole app at launch (a saved 30% dimmed the picture to
+// 30% on a monitor Windows itself had left alone).
+const brightnessRestoresSavedLevel = false
 
 const (
 	// brightnessPowerShellTimeout bounds one WMI call. PowerShell's first
@@ -130,8 +136,7 @@ func brightnessPowerShellPath() string {
 func brightnessPowerShell(script string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), brightnessPowerShellTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, brightnessPowerShellPath(), "-NoProfile", "-NonInteractive", "-Command", script)
-	auditConfigureHidden(cmd)
+	cmd := hiddenCommandContext(ctx, brightnessPowerShellPath(), "-NoProfile", "-NonInteractive", "-Command", script)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(out), fmt.Errorf("powershell: %w (%s)", err, firstLine(strings.TrimSpace(string(out))))
@@ -306,3 +311,4 @@ func ddcSetBrightness(pct int) error {
 		return lastErr
 	})
 }
+

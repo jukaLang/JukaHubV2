@@ -7,7 +7,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -56,10 +55,11 @@ func steamClientBinary() string {
 // rundll32 gets the link as one argument: no shell ever parses it, and
 // steamRunURI only ever builds steam://rungameid/<n> or steam://install/<n>.
 func steamOpenURI(uri string) error {
-	cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", uri)
+	cmd := hiddenCommand("rundll32", "url.dll,FileProtocolHandler", uri)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go func() { _ = cmd.Wait() }()
 	return nil
 }
+

@@ -105,6 +105,7 @@ var consoleOrder = map[string]int{
 	"Dreamcast":            9,
 	"PlayStation":          10,
 	"PlayStation Portable": 11,
+	"OldBits":              12,
 }
 
 // gameDisplayTitle turns a ROM filename into something readable: the extension
@@ -189,6 +190,9 @@ func buildGameLibraryWith(report romScanReport, artRoot string, playtimeSeconds 
 	}
 	// PortMaster's ports join as one more console (LIB-9, ports_library.go).
 	libraryAddPortGames(&lib, playtimeSeconds)
+	// OldBits Hub runs as a PortMaster port but is presented as its own
+	// console so it shows up in Games (ports_library.go).
+	libraryAddOldBitsGames(&lib, playtimeSeconds)
 	sortLibrarySystems(lib.Systems)
 	return lib
 }
@@ -640,7 +644,7 @@ func gameLauncherIsBatch(launcher string) bool {
 }
 
 // gameLaunchExec is the process for a gameLaunchCommandArgs result. A batch
-// launcher runs through winBatchCommand (SEC-12): exec.Command("cmd", "/c", …)
+// launcher runs through winBatchCommand (SEC-12): hiddenCommand("cmd", "/c", …)
 // quoted the ROM path and the game's own arguments for CommandLineToArgvW, not
 // for cmd.exe, so a ROM named "Tom&calc&.sfc" started calc (BatBadBut), a
 // launcher path with spaces made cmd.exe strip the quotes that remained, and
@@ -648,7 +652,7 @@ func gameLauncherIsBatch(launcher string) bool {
 // cannot take literally (% or ") is refused with a message instead.
 func gameLaunchExec(launcher, name string, args []string) (*exec.Cmd, error) {
 	if !gameLauncherIsBatch(launcher) {
-		return exec.Command(name, args...), nil
+		return hiddenCommand(name, args...), nil
 	}
 	cmd, err := winBatchCommand(name, args...)
 	if errors.Is(err, errWinBatchUnsafe) {
@@ -691,7 +695,7 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	if game.System == html5LibrarySystem {
 		return launchHTML5Game(game)
 	}
-	if game.System == portsLibrarySystem {
+	if game.System == portsLibrarySystem || game.System == oldBitsLibrarySystem {
 		return launchPortLibraryGame(game) // PortMaster ports (LIB-9, ports_library.go)
 	}
 	if strings.TrimSpace(game.Path) == "" {
@@ -846,6 +850,8 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)
+	// Per-game environment variables, validated in the options sheet.
+	gameEnv, _ := parseGameEnv(options.Env)
 	// With two or more players in Local play, a RetroArch launch gets their
 	// controller order as a one-launch --appendconfig (hotseat.go).
 	extra := hotseatLaunchArgs(launcher, parseGameArgs(options.Args))
@@ -946,6 +952,14 @@ func launchLibraryGameRun(game libraryGame, launcher string) error {
 	// the CPU first (xboxboost.go). Before the power profile, which it sets.
 	boost := xboxBoostBegin(xboxBoostKindForGame(game), game.Path, game.Title)
 	restoreProfile := beginLaunchPowerProfile(appConfig, game.Path)
+	// Per-game environment variables are merged last, so they override anything a
+	// prepare step set for the same name.
+	if len(gameEnv) > 0 {
+		if cmd.Env == nil {
+			cmd.Env = screenChildEnv(os.Environ())
+		}
+		cmd.Env = mergeGameProfileEnv(cmd.Env, gameEnv)
+	}
 	if err := screenChildStart(cmd); err != nil {
 		output.started(false)
 		restoreProfile()
@@ -1153,3 +1167,4 @@ func recordGameRecent(game libraryGame) []recentGame {
 	homeConsoleRecordGame(game.Path)
 	return append([]recentGame(nil), next...)
 }
+

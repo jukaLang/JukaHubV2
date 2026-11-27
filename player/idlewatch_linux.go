@@ -26,7 +26,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -407,7 +406,7 @@ func idleHookRunScripts(state, where, source string) {
 func idleHookRunOne(dir, name, state, where, source string) {
 	ctx, cancel := context.WithTimeout(context.Background(), idleHookTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", filepath.Join(dir, name))
+	cmd := hiddenCommandContext(ctx, "/bin/sh", filepath.Join(dir, name))
 	cmd.Dir = dir
 	env := screenChildEnvFor(os.Environ(), childEnvAppDir())
 	cmd.Env = append(env,
@@ -441,3 +440,4 @@ func idleHookRunOne(dir, name, state, where, source string) {
 		logInfo("idle", "hook %s/%s (%s) ran in %s %s", state, name, where, took, first)
 	}
 }
+

@@ -337,6 +337,7 @@ type mailAttachment struct {
 // mailBody is a message as the reader shows it.
 type mailBody struct {
 	Text        string
+	HTML        string
 	FromHTML    bool
 	Attachments []mailAttachment
 	Truncated   bool
@@ -361,12 +362,15 @@ func mailParseBody(raw []byte, truncated bool) mailBody {
 	w := mailWalker{want: -1, truncated: truncated}
 	w.run(raw)
 	b := mailBody{Attachments: w.atts, Truncated: truncated}
+	if w.haveHTML {
+		b.HTML = w.html
+		b.FromHTML = true
+	}
 	switch {
 	case w.havePlain && strings.TrimSpace(w.plain) != "":
 		b.Text = w.plain
 	case w.haveHTML:
 		_, b.Text = epubHTMLText([]byte(w.html))
-		b.FromHTML = true
 	default:
 		b.Text = w.plain
 	}

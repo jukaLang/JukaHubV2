@@ -225,7 +225,7 @@ func usbNetProbeKind(gadget, kind string) bool {
 	if err != nil && errors.Is(err, os.ErrNotExist) {
 		if p, lookErr := exec.LookPath("modprobe"); lookErr == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = exec.CommandContext(ctx, p, "usb_f_"+kind).Run()
+			_ = hiddenCommandContext(ctx, p, "usb_f_"+kind).Run()
 			cancel()
 			err = try()
 		}
@@ -916,3 +916,4 @@ func usbNetNoteNoRoom(gadget string, own bool) {
 	}
 	usbNetSetUnavailable(usbNetNoRoomReason(own))
 }
+

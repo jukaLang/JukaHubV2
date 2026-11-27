@@ -1203,6 +1203,13 @@ function enterPreviewMode() {
   previewFocusReset();
   requestAnimationFrame(() => { fitPreviewCanvas(); previewFocusReset(); });
 
+  // Make the Exit preview control reachable on touch and keyboard once the
+  // canvas has been nudged back under it.
+  requestAnimationFrame(() => {
+    const exit = document.getElementById('previewExit');
+    if (exit) exit.focus({ preventScroll: true });
+  });
+
   // Save immediately on entering preview so the latest workspace survives a
   // reload even if the normal debounce timer has not fired yet. This is the
   // regular autosave: a reduced snapshot here used to drop the imported
@@ -1211,7 +1218,7 @@ function enterPreviewMode() {
   persistAutoSave();
 
   showToast('Preview mode — click the scene menu, arrow keys, or Esc to exit', 'info');
-  announce('Preview mode. Variables are resolved like the player. Press Escape to return to the editor.');
+  announce('Preview mode. Variables are resolved like the player. Press Escape to return to the editor.\nTip: the button turns into “Exit preview” while preview is active — click it to leave.');
 }
 
 // The preview button remains available as the visible exit control while preview is active.

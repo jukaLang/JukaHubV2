@@ -258,7 +258,7 @@ func mtpEnsureConfigfs() error {
 	if !dirExists(mtpGadgetBase) {
 		if p, err := exec.LookPath("modprobe"); err == nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = exec.CommandContext(ctx, p, "libcomposite").Run()
+			_ = hiddenCommandContext(ctx, p, "libcomposite").Run()
 			cancel()
 		}
 	}
@@ -933,3 +933,4 @@ func usbMtpSerial() string {
 	sum := sha1.Sum([]byte("jukahub-mtp:" + seed))
 	return strings.ToUpper(hex.EncodeToString(sum[:8]))
 }
+

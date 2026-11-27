@@ -419,7 +419,7 @@ func psHelperProbeEnv(base []string, ldPath string) []string {
 func psProbeHelperExec(path string, env []string) psHelperProbeResult {
 	ctx, cancel := context.WithTimeout(context.Background(), psHelperProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path)
+	cmd := hiddenCommandContext(ctx, path)
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(path)
 	out, err := cmd.CombinedOutput()
@@ -456,3 +456,4 @@ func psProbeHelperExec(path string, env []string) psHelperProbeResult {
 	}
 	return res
 }
+

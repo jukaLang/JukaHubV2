@@ -1017,7 +1017,7 @@ func writeWineWrapper(wrapper, binary, prefix string) error {
 }
 
 func verifyWineRuntime(wrapper string) error {
-	cmd := exec.Command(wrapper, "--version")
+	cmd := hiddenCommand(wrapper, "--version")
 	done := make(chan error, 1)
 	var output []byte
 	go func() {
@@ -1245,7 +1245,7 @@ func installWestonRuntime() error {
 	installDir := filepath.Join(base, "weston")
 	staging := filepath.Join(base, fmt.Sprintf("staging-%d", time.Now().UnixNano()))
 	defer os.RemoveAll(staging)
-	if out, err := exec.CommandContext(ctx, unsquashfs, "-f", "-d", staging, image).CombinedOutput(); err != nil {
+	if out, err := hiddenCommandContext(ctx, unsquashfs, "-f", "-d", staging, image).CombinedOutput(); err != nil {
 		return fmt.Errorf("unpack WestonPack: %w: %s", err, firstLine(strings.TrimSpace(string(out))))
 	}
 	wrapper, err := findWestonWrapper(staging)
@@ -1773,3 +1773,4 @@ func windowsProvisionLoop() {
 	ShowToast("Windows runtime ready", ToastKindSuccess)
 	ready = true
 }
+

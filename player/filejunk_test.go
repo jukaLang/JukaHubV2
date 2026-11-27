@@ -67,7 +67,16 @@ func TestXboxLibraryLauncherHint(t *testing.T) {
 	if got := xboxLibraryLauncherHintFor(DeviceTrimuiBrickPro); !strings.Contains(got, "Install hakuX") {
 		t.Errorf("Brick Pro hint = %q, want the install path", got)
 	}
-	for _, d := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceUnknown} {
+	// Since 2026-11-21 every TrimUI model is offered hakuX (spruceUI's build
+	// on the models the Smart Pro package was not made for), so those hints
+	// name the install path too. A device with no build still gets the reason.
+	for _, d := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiHammer} {
+		got := xboxLibraryLauncherHintFor(d)
+		if !strings.Contains(got, "Install hakuX") {
+			t.Errorf("%s hint = %q, want the install path", d, got)
+		}
+	}
+	for _, d := range []DeviceModel{DeviceUnknown} {
 		got := xboxLibraryLauncherHintFor(d)
 		if !strings.Contains(got, "does not support") || !strings.Contains(got, "—") {
 			t.Errorf("%s hint = %q, want the device's reason", d, got)

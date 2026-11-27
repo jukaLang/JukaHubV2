@@ -186,6 +186,9 @@ func musicProxyServe(w http.ResponseWriter, r *http.Request) {
 	case "jfi":
 		// A Jellyfin picture for Media › Movies & TV (media_movies.go).
 		mtvJfImageProxy(w, r, srv, rest)
+	case "plexv", "plexh", "plexi":
+		// Plex direct play, universal transcode and pictures (plex.go).
+		plexProxy(w, r, route, srv, rest)
 	case "iav", "iai":
 		// A free film or its picture from the Internet Archive (freefilms.go).
 		freeFilmsProxy(w, r, route, rest)

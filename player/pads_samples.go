@@ -97,7 +97,6 @@ func padsDecodeFFmpeg(path string) (*padsSample, error) {
 		"-t", fmt.Sprint(padsMaxSampleSecs), "-f", "s16le", "-acodec", "pcm_s16le",
 		"-ac", "1", "-ar", fmt.Sprint(padsDecodeRate), "pipe:1"}
 	cmd := P().CommandContext(ctx, ffmpeg, args...)
-	alarmHideConsole(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

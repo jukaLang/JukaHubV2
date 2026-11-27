@@ -153,6 +153,17 @@ func decodeImageRGBA(ctx context.Context, data []byte) (*image.RGBA, error) {
 	// handheld showed could get it killed for running out of memory.
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
+		if webpBytes(data) {
+			if img, werr := webpDecodeBytes(data, 0, imageDecodeMaxPixels()); werr == nil {
+				if rgba, ok := img.(*image.RGBA); ok {
+					return rgba, nil
+				}
+				bounds := img.Bounds()
+				rgba := image.NewRGBA(bounds)
+				draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+				return rgba, nil
+			}
+		}
 		return nil, err
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > imageDecodeMaxPixels() {

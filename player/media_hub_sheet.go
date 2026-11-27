@@ -256,7 +256,7 @@ func mediaHubDrawSheet(renderer *sdl.Renderer, config *Config) {
 		}
 		art.X = card.X + pad + (leftW-pad-art.W)/2
 	}
-	mediaDrawCardArt(renderer, &s.card, art)
+	mediaDrawCardArt(renderer, config, &s.card, art, false, 0)
 	small := FontForRole(config, TypeCaption)
 	if small != nil && s.card.duration != "" {
 		mediaDrawDurationBadge(renderer, small, s.card.duration, art)

@@ -178,7 +178,7 @@ func runPowerScript(command string, timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	name, args := powerShellCommand(command)
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	// A snippet is usually a pipeline, or starts something in the background.
 	// The context alone kills only the shell; the commands it started kept the
 	// output pipe open, CombinedOutput waited for them, and the "hard timeout"
@@ -348,7 +348,7 @@ func powerPingSummary(host string) string {
 			args = []string{"-n", "3", "-w", "2000", host}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-		out, pingErr := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+		out, pingErr := hiddenCommandContext(ctx, bin, args...).CombinedOutput()
 		cancel()
 		if pingErr == nil && strings.TrimSpace(string(out)) != "" {
 			return truncatePowerOutput(string(out))
@@ -388,7 +388,7 @@ func powerTraceRoute(host string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, bin, args...).CombinedOutput()
 	if ctx.Err() == context.DeadlineExceeded {
 		return truncatePowerOutput(string(out)) + "\n(traceroute stopped after 30s)", ctx.Err()
 	}
@@ -446,7 +446,7 @@ func powerWiFiSummary() string {
 	if runtime.GOOS == "windows" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		out, err := exec.CommandContext(ctx, "netsh", "wlan", "show", "interfaces").CombinedOutput()
+		out, err := hiddenCommandContext(ctx, "netsh", "wlan", "show", "interfaces").CombinedOutput()
 		if err != nil {
 			return "Wi-Fi details unavailable on this device.\n" + strings.TrimSpace(string(out))
 		}
@@ -1183,7 +1183,7 @@ func runPowerRsync(source, target string, dryRun bool, timeout time.Duration) (s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, bin, args...).CombinedOutput()
 	text := truncatePowerOutput(string(out))
 	if ctx.Err() == context.DeadlineExceeded {
 		return text + "\n(sync stopped after the timeout)", ctx.Err()
@@ -1202,3 +1202,4 @@ func runPowerRsync(source, target string, dryRun bool, timeout time.Duration) (s
 func powerSyncthingStatus() string {
 	return syncthingPowerStatus()
 }
+

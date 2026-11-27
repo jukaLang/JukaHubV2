@@ -1652,9 +1652,9 @@ func openInExplorer(path string) {
 		if _, err := os.Stat(dir); err != nil {
 			dir = "."
 		}
-		cmd = exec.Command("explorer.exe", dir)
+		cmd = hiddenCommand("explorer.exe", dir)
 	} else {
-		cmd = exec.Command("xdg-open", filepath.Dir(path))
+		cmd = hiddenCommand("xdg-open", filepath.Dir(path))
 	}
 	if err := cmd.Start(); err != nil {
 		logWarn("favorites", "openInExplorer: %v", err)
@@ -1664,3 +1664,4 @@ func openInExplorer(path string) {
 	// Linux until JukaHub exits.
 	go func() { _ = cmd.Wait() }()
 }
+

@@ -14,7 +14,6 @@ import (
 
 // feToolProcAttr keeps an unpacking program's console window hidden.
 func feToolProcAttr(cmd *exec.Cmd) {
-	emuHideConsole(cmd)
 }
 
 // fe7ZipCommandLine writes a 7-Zip command's line the way 7-Zip reads it. Go

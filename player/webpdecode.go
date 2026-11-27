@@ -213,6 +213,35 @@ func webpDecodeImage(path string, maxEdge int, maxPixels int64) (image.Image, er
 	return pic, nil
 }
 
+// webpBytes reports whether data is a RIFF/WEBP file.
+func webpBytes(data []byte) bool {
+	return len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WEBP"
+}
+
+// webpDecodeBytes decodes WebP bytes through the card's ffmpeg, using a
+// temporary file. maxEdge 0 keeps the picture's own size.
+func webpDecodeBytes(data []byte, maxEdge int, maxPixels int64) (image.Image, error) {
+	if !webpBytes(data) {
+		return nil, errWebPUnreadable
+	}
+	f, err := os.CreateTemp("", "jukahub-webp-*")
+	if err != nil {
+		return nil, errWebPUnreadable
+	}
+	name := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(name)
+		return nil, errWebPUnreadable
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return nil, errWebPUnreadable
+	}
+	defer os.Remove(name)
+	return webpDecodeImage(name, maxEdge, maxPixels)
+}
+
 func webpFirstErr(errs ...error) error {
 	for _, err := range errs {
 		if err != nil {

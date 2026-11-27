@@ -1262,10 +1262,14 @@ func decodeLibraryArt(path string, ctx context.Context) (*image.NRGBA, error) {
 			return nil, err
 		}
 	} else {
-		// Go has no WebP decoder, and a local cover can be a .webp; SDL_image
-		// reads it (and caps the pixel count itself). The size check below
-		// still applies to what it returns.
-		if picture, err = imgvDecodeSDL(path); err != nil {
+		// Go has no WebP decoder, and a local cover can be a .webp. On the
+		// stock firmware ffmpeg decodes it; otherwise SDL_image reads it (and
+		// caps the pixel count itself). The size check below still applies.
+		if webpFFmpegFallback(path) {
+			if picture, err = webpDecodeImage(path, libraryArtDecodeMaxEdge, imageDecodeMaxPixels()); err != nil {
+				return nil, cfgErr
+			}
+		} else if picture, err = imgvDecodeSDL(path); err != nil {
 			return nil, cfgErr
 		}
 	}

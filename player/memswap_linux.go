@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -249,7 +248,7 @@ func memZramFree() (string, error) {
 	if !memSwapExists("/sys/block/zram0") && !memSwapExists("/sys/class/zram-control") {
 		// Not built in: the module may be there.
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		out, err := exec.CommandContext(ctx, "modprobe", "zram", "num_devices=1").CombinedOutput()
+		out, err := hiddenCommandContext(ctx, "modprobe", "zram", "num_devices=1").CombinedOutput()
 		cancel()
 		if err != nil {
 			return "", fmt.Errorf("this kernel has no zram (modprobe zram: %v %s)", err, firstLine(strings.TrimSpace(string(out))))
@@ -498,3 +497,4 @@ func memSwapExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
+

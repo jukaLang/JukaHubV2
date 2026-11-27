@@ -324,7 +324,7 @@ func spatialALSARunProbeChild(configPath string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), spatialALSAProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, spatialALSAProbeFlag)
+	cmd := hiddenCommandContext(ctx, exe, spatialALSAProbeFlag)
 	env := spatialEnvWithout(os.Environ(), "AUDIODEV", "ALSA_CONFIG_PATH", "SDL_AUDIODRIVER")
 	cmd.Env = append(env, "ALSA_CONFIG_PATH="+configPath, "AUDIODEV="+spatialALSAPCM, "SDL_AUDIODRIVER=alsa")
 	cmd.WaitDelay = 2 * time.Second
@@ -1034,3 +1034,4 @@ func spatialScriptLooks32(text, scriptDir, runDir string, depth int, seen map[st
 	}
 	return false
 }
+

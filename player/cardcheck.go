@@ -1639,7 +1639,7 @@ func cardCheckFsckStep(ctx context.Context, vol cardCheckVolume, boot cardCheckB
 	}
 	cctx, cancel := context.WithTimeout(ctx, cardCheckFsckTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, tool, "-n", vol.Device)
+	cmd := hiddenCommandContext(cctx, tool, "-n", vol.Device)
 	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
 	var out cardCheckCapped
 	cmd.Stdout, cmd.Stderr = &out, &out
@@ -1757,3 +1757,4 @@ func cardCheckReport(steps []cardCheckStep) string {
 	b.WriteString("How to repair\n-------------\n" + strings.ReplaceAll(cardCheckRepairText, "• ", "- ") + "\n")
 	return b.String()
 }
+

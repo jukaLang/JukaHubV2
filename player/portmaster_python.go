@@ -39,7 +39,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -538,7 +537,7 @@ func pmPythonSafeName(n string) bool {
 func pmPythonProbe(ctx context.Context, python string, env []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, python, "-c", pmPythonProbeCode)
+	cmd := hiddenCommandContext(ctx, python, "-c", pmPythonProbeCode)
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil || !bytes.Contains(out, []byte(pmPythonProbeOK)) {
@@ -632,3 +631,4 @@ func pmPythonInstall(ctx context.Context, progress func(done, total int64), phas
 	logInfo("portmaster", "installed %s for PortMaster", asset.Name)
 	return nil
 }
+

@@ -378,7 +378,7 @@ opens; password, key, address and search fields never listen
 ([Voice](VOICE.md#voice-typing)).
 
 `autoStart` (Settings → General → **Start JukaHub at login**) writes exactly
-one launcher and removes exactly that file again. It is off by default on a
+one startup entry and removes exactly that entry again. It is off by default on a
 desktop. On a TrimUI the first start switches it on once when nobody has set it
 yet (the first-run tour's *Start with your device* step says so and can turn it
 off); `autoStartDefaulted` records that this happened, so turning it off is
@@ -388,7 +388,7 @@ final and a value set beforehand is never overridden:
 |----------|-----------|
 | TrimUI / CrossMix | `<SD>/System/starts/jukahub-autostart.sh` |
 | Linux, macOS | `~/.config/autostart/jukahub.desktop` |
-| Windows | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JukaHub.cmd` |
+| Windows | `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `JukaHub` (an older `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JukaHub.cmd` is removed) |
 
 The handheld hook is a `#!/bin/sh` script that never holds the firmware's boot
 up and is as safe sourced as it is run. It starts JukaHub the way the stock

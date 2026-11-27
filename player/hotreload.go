@@ -327,6 +327,7 @@ func applyConfigReload(prev, next *Config) *Config {
 	ensurePlaytimeScene(next)
 	ensurePlaytimeEntry(next)
 	ensureToolsHubScene(next)
+	ensureSiteVideosScene(next)
 	peerEnsureScenes(next)
 	ensureRommScene(next)
 	ensureApkStoreScene(next)

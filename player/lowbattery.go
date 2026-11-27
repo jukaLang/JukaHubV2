@@ -40,7 +40,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -456,7 +455,7 @@ func syncDisks() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), lowBatterySyncTimeout)
 	defer cancel()
-	if err := exec.CommandContext(ctx, "sync").Run(); err != nil {
+	if err := hiddenCommandContext(ctx, "sync").Run(); err != nil {
 		return fmt.Errorf("sync: %w", err)
 	}
 	return nil
@@ -730,3 +729,4 @@ func waitForRetroArchExit(budget time.Duration) bool {
 	}
 	return false
 }
+

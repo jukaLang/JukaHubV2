@@ -76,7 +76,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -401,7 +400,7 @@ func hakuxHandoffStart(game libraryGame, launcher string, menu *hakuxHandoffMenu
 		logWarn(tag, "%s starts beside JukaHub: the hand-off script could not be written (%v)", title, err)
 		return false
 	}
-	cmd := exec.Command("sh", "--", scriptPath)
+	cmd := hiddenCommand("sh", "--", scriptPath)
 	cmd.Dir = filepath.Dir(launcher)
 	// The firmware's environment, as screenChildGroupConfigure gives a game
 	// started beside JukaHub; with a Bluetooth headset routed, the game's
@@ -1177,3 +1176,4 @@ func hakuxHandoffReopenTile(tile string, tries int) {
 		}
 	}
 }
+

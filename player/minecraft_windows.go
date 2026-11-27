@@ -8,7 +8,6 @@ package main
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -52,7 +51,7 @@ func mcEnvJoin(env string, elem ...string) string {
 
 // mcStartExe starts a program in its own folder and lets it run on.
 func mcStartExe(exe string, args ...string) error {
-	cmd := exec.Command(exe, args...)
+	cmd := hiddenCommand(exe, args...)
 	cmd.Dir = filepath.Dir(exe)
 	if err := cmd.Start(); err != nil {
 		return err
@@ -64,7 +63,7 @@ func mcStartExe(exe string, args ...string) error {
 // mcStartAppsFolder starts a Store app by its application id through the
 // shell's AppsFolder, the way the Start menu does.
 func mcStartAppsFolder(appID string) error {
-	cmd := exec.Command("explorer.exe", `shell:AppsFolder\`+appID)
+	cmd := hiddenCommand("explorer.exe", `shell:AppsFolder\`+appID)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -121,3 +120,4 @@ func mcDesktopApps() []mcDesktopApp {
 	}
 	return apps
 }
+

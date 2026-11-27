@@ -11,6 +11,59 @@ what the About screen and the updater read.
 
 ### Added
 
+- Start with Windows without a console flash (DESK-7): the setting now writes
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `JukaHub`,
+  which starts the GUI executable directly; an older Startup folder
+  `JukaHub.cmd` is removed when the setting is changed. The release build is a
+  Windows GUI-subsystem executable, so logon opens no console at all.
+
+- Plex (MED-40): a Plex account signs in with the plex.tv/link PIN flow, the
+  handheld picks a home-network server connection before a relay, and Media ›
+  Movies & TV lists On Deck, Movies and TV shows. An 8-bit H.264/MPEG-4 file up
+  to 1080p plays directly; other files use Plex's universal 720p H.264/AAC
+  transcode. Playback is reported on Plex's timeline (every 30 seconds and on
+  stop) so Continue Watching keeps the place, the transcode is stopped with the
+  player, and the token stays encrypted and inside the loopback proxy. Backend:
+  plex.go, musicPlexConf (musicsrc.go), /plexv, /plexh and /plexi routes
+  (musicproxy.go), Plex rows and cards (media_movies.go), timeline dispatch
+  (musicscrobble.go). Not checked: a real Plex server and device playback.
+
+- WebP, second round (MED-38): a local .webp now draws in Chat on the stock
+  firmware through the card's ffmpeg (decodeImageRGBA falls back to
+  webpDecodeBytes when Go has no decoder), and decodeLibraryArt uses the ffmpeg
+  fallback for .webp covers so a converted cover shows without a library
+  refresh. Backend: webpDecodeBytes (webpdecode.go), decodeImageRGBA (bounded.go),
+  decodeLibraryArt (game_library_ui.go). Not checked: a real TrimUI with ffmpeg
+  and the library refresh path on device.
+
+- Audiobook chapters, second round (MED-39): both music layouts now list a
+  chaptered file's chapters; Up/Down moves the selection and A, a click or a
+  tap starts the chosen chapter; the Audiobooks shelf counts a probed file's
+  chapters. Backend: renderMusicChapterRows (audiobook_chapters.go),
+  musicPlayChapter/musicChapters, row click and key/pad handling (musicplayer.go),
+  renderMusicStockOS (musicskins.go), musicShelfBuildRows/musicShelfRefresh
+  (music_shelf.go). Not checked: device rendering of the StockOS chapter list.
+
+- HTML mail through the browser engine (MAIL-4): a message with an HTML part
+  opens in the reader through the browser engine (parseWebPage) with remote
+  images off by default and one "Show images" press, scripts stripped, links
+  opening in the Browser, and the plain-text view one press away. Backend:
+  mailBody.HTML/FromHTML (mail_mime.go), mailSafeHTML, mailRenderHTMLReader,
+  readHTML/showImages toggles (mail_ui.go). Not checked: rendering on device.
+
+- Per-game environment variables (GAME-13): a game's options carry validated,
+  bounded environment variables that the launch merges into RetroArch's and
+  standalone emulators' environments; options re-attach on rename/move; an empty
+  override changes nothing. Backend: `parseGameEnv`/`validateGameEnv` in
+  `gameoptions.go`, launch wiring in `game_library.go`. Not checked: the options
+  sheet row (UI not added).
+
+- Package integrity (REL-14): a package counts as installed only while at least
+  one of its managed files still exists; a record whose files are all gone shows
+  as "files missing" with Reinstall and Forget. Backend: IsPackageInstalled /
+  PackageFilesMissing (patch_repo.go); UI: patch.go row + pkg: menu + confirm-forget.
+  Not checked: visual rendering of the "files missing" row.
+
 - Calendars that write back (MAIL-2): CalDAV PUT/DELETE of a VEVENT with
   If-Match/If-None-Match (412 conflict → reload) plus Microsoft Graph
   create/update/delete (Calendars.ReadWrite scope, If-Match on update/delete,
@@ -796,6 +849,7 @@ what the About screen and the updater read.
 
 ### Fixed
 
+- Browser: an ad cut out of a page takes the box it was the whole of, so its slot no longer draws as a blank gap
 - Notepad++ and Wine Test start again: Weston's own modules are given the one library the WestonPack image leaves to the firmware
 - A port is given no shell option set from JukaHub, and a script that stopped on an unset variable is named on its launch card
 - A port that crashed is no longer blamed on memory when PortMaster's own cleanup stops its key mapper

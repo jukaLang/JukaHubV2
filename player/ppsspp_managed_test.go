@@ -418,7 +418,7 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 	}
 	sh, err := exec.LookPath("sh")
 	if err == nil {
-		parse := exec.Command(sh, "-n")
+		parse := hiddenCommand(sh, "-n")
 		parse.Stdin = strings.NewReader(text)
 		if out, parseErr := parse.CombinedOutput(); parseErr != nil {
 			t.Fatalf("sh -n: %v\n%s", parseErr, out)
@@ -430,7 +430,7 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 	// The split marker is still the same path to the shell.
 	for _, l := range strings.Split(markedText, "\n") {
 		if strings.HasPrefix(l, "FALLBACK=") {
-			out, err := exec.Command(sh, "-c", l+`; printf %s "$FALLBACK"`).CombinedOutput()
+			out, err := hiddenCommand(sh, "-c", l+`; printf %s "$FALLBACK"`).CombinedOutput()
 			if err != nil || string(out) != marked.Fallback {
 				t.Errorf("FALLBACK reads %q (%v), want %q", out, err, marked.Fallback)
 			}
@@ -441,7 +441,7 @@ func TestPPSSPPLauncherScript(t *testing.T) {
 	if err := os.WriteFile(file, []byte(ppssppLauncherScript(spec)), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(sh, "-n", file).CombinedOutput(); err != nil {
+	if out, err := hiddenCommand(sh, "-n", file).CombinedOutput(); err != nil {
 		t.Fatalf("sh -n: %v\n%s", err, out)
 	}
 }
@@ -494,7 +494,7 @@ func TestPPSSPPLauncherFallsBack(t *testing.T) {
 		if err := os.WriteFile(script, []byte(ppssppLauncherScript(spec)), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		cmd := exec.Command(sh, append([]string{script}, rom...)...)
+		cmd := hiddenCommand(sh, append([]string{script}, rom...)...)
 		cmd.Env = append(os.Environ(), "HOME=/original/home", "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 		_ = cmd.Run()
 	}
@@ -1371,3 +1371,4 @@ func TestPPSSPPRetroAchievementsSignIn(t *testing.T) {
 		t.Error("another account's RetroArch token was taken")
 	}
 }
+

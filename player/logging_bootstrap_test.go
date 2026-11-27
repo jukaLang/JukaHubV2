@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -34,7 +33,7 @@ func TestDetectDeviceBeforeInitLogging(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDetectDeviceBeforeInitLogging$")
+	cmd := hiddenCommandContext(ctx, os.Args[0], "-test.run=^TestDetectDeviceBeforeInitLogging$")
 	cmd.Env = append(os.Environ(), "JUKAHUB_TEST_DETECT_BEFORE_LOGGING=1", "JUKAHUB_DEVICE_MODEL=", "JUKAHUB_LOG_LEVEL=info")
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
@@ -44,3 +43,4 @@ func TestDetectDeviceBeforeInitLogging(t *testing.T) {
 		t.Fatalf("device detection before logging: %v\n%s", err, out)
 	}
 }
+

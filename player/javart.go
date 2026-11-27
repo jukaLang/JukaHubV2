@@ -513,14 +513,13 @@ func (b *javaCapBuffer) Write(p []byte) (int, error) {
 // stderr). env nil means JukaHub's own environment. A Java that cannot start
 // here (a missing library, a glibc too old) fails with its first line.
 func javaProbeVersion(ctx context.Context, java string, env []string) (int, string, error) {
-	cmd := exec.CommandContext(ctx, java, "-version")
+	cmd := hiddenCommandContext(ctx, java, "-version")
 	if env != nil {
 		cmd.Env = env
 	}
 	cmd.Dir = filepath.Dir(java)
 	out := &javaCapBuffer{max: javaProbeMaxOutput}
 	cmd.Stdout, cmd.Stderr = out, out
-	auditConfigureHidden(cmd)
 	cmd.WaitDelay = 2 * time.Second
 	err := cmd.Run()
 	text := out.buf.String()
@@ -699,3 +698,4 @@ func javaRunWhenReady(rt javaRuntime, then func(rt javaRuntime)) {
 	}
 	then(rt)
 }
+

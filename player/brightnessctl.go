@@ -711,7 +711,7 @@ func brightnessNoteSavedLevel(pct int) {
 // session. Main thread. The software dimmer takes it at once, so not a single
 // frame more is drawn undimmed.
 func brightnessRestoreFor(b string, pct int) {
-	if !brightnessOwnedByJukaHub(b) {
+	if !brightnessRestoresSavedLevel || !brightnessOwnedByJukaHub(b) {
 		return
 	}
 	brightnessLevel.mu.Lock()

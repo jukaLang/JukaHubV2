@@ -968,9 +968,8 @@ func toolboxRun(id, argLine string, timeout time.Duration) (string, error) {
 	_, args := toolboxCommandLine(t, argLine)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
+	cmd := hiddenCommandContext(ctx, path, args...)
 	cmd.Env = helperToolEnv(path)
-	auditConfigureHidden(cmd)
 	// A tool that leaves a child holding the output pipe must not keep the
 	// run (and the sheet waiting on it) past the timeout.
 	cmd.WaitDelay = powerScriptWaitDelay
@@ -1063,3 +1062,4 @@ func toolboxSummaryValue() string {
 	}
 	return fmt.Sprintf("%d of %d installed", n, len(toolboxCatalog()))
 }
+

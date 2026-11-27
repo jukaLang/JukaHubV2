@@ -3,7 +3,10 @@ package main
 // mail_parse_test.go — the Mail app's parsers of outside data: IMAP
 // responses (mail_imap.go) and MIME messages (mail_mime.go).
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestImapParseResp(t *testing.T) {
 	// A FETCH with a literal: readResp hands the text before "{n}" and the
@@ -106,7 +109,26 @@ func TestMailDecode(t *testing.T) {
 	}
 
 	html := "Content-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Hello <b>World</b></p><p>Bye</p></body></html>"
-	if b := mailParseBody([]byte(html), false); b.Text != "Hello World\nBye" || !b.FromHTML {
+	if b := mailParseBody([]byte(html), false); b.Text != "Hello World\nBye" || !b.FromHTML || !strings.Contains(b.HTML, "<b>World</b>") {
 		t.Errorf("html: %+v", b)
+	}
+}
+
+func TestMailSafeHTML(t *testing.T) {
+	in := `<p onclick="evil()">Hi <a href="javascript:evil()">there</a></p>` +
+		`<script>alert(1)</script><iframe src="https://evil/"></iframe>` +
+		`<img src="https://tracker/pixel"><div style="background:url(https://tracker/bg)">x</div>`
+	got := mailSafeHTML(in, false)
+	for _, banned := range []string{"<script", "onclick", "javascript:", "<iframe", "<img", "tracker/pixel", "tracker/bg"} {
+		if strings.Contains(got, banned) {
+			t.Errorf("unsafe HTML kept %q: %s", banned, got)
+		}
+	}
+	if !strings.Contains(got, "Hi") || !strings.Contains(got, "there") {
+		t.Errorf("safe text lost: %s", got)
+	}
+	withImages := mailSafeHTML(`<img src="https://example.com/a.png">`, true)
+	if !strings.Contains(withImages, "<img") {
+		t.Errorf("Show images dropped the picture: %s", withImages)
 	}
 }

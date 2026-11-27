@@ -20,7 +20,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -276,8 +275,7 @@ func extractEmbeddedSubtitleTrack(ctx context.Context, ffmpegPath, videoPath str
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cmd := exec.CommandContext(ctx, ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:"+strconv.Itoa(n), "-f", "srt", "-")
-	schedHideWindow(cmd)
+	cmd := hiddenCommandContext(ctx, ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:"+strconv.Itoa(n), "-f", "srt", "-")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil
@@ -636,3 +634,4 @@ func videoTracksStartSubs(ctx context.Context, sess *playbackSession, config *Co
 	}
 	return nil, "", true
 }
+

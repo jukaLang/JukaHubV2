@@ -822,7 +822,7 @@ func micStartArecord(dev string) (*micPipe, error) {
 	if path == "" {
 		return nil, errors.New("arecord is not installed")
 	}
-	cmd := exec.Command(path, "-q", "-D", dev, "-t", "raw", "-f", "S16_LE",
+	cmd := hiddenCommand(path, "-q", "-D", dev, "-t", "raw", "-f", "S16_LE",
 		"-r", strconv.Itoa(micRate), "-c", strconv.Itoa(micChannels))
 	out, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1233,3 +1233,4 @@ func micMixerLevelWanted(name string) bool {
 	}
 	return strings.Contains(n, "mic") || strings.HasPrefix(n, "adc")
 }
+

@@ -924,7 +924,7 @@ func launchGameProfileClaimed(entry gameProfileEntry, tl timelapseSettings) erro
 			return buildErr
 		}
 	}
-	cmd := exec.Command(command, args...)
+	cmd := hiddenCommand(command, args...)
 	cmd.Dir = gameDir
 	cmd.Env = mergeGameProfileEnv(childEnvWithTZ(os.Environ(), gameChildZone()), env)
 	configureGameChild(cmd)
@@ -1254,3 +1254,4 @@ func gameProfileRuntimeLabel(runtime string) string {
 		return "NATIVE"
 	}
 }
+

@@ -1,0 +1,952 @@
+
+/* === Rendering baseline (works across sites) === */
+/* These rules normalize spacing, sizing, scrollbars, focus rings and form
+   controls so the same page looks steadier on dark and light sites, on
+   narrow handheld windows and on desktop preview. They are scoped to the
+   parts of the builder and preview that the editor controls, so they do
+   not leak into unrelated third-party widgets that sites may embed here. */
+
+html {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  text-size-adjust: 100%;
+  -webkit-text-size-adjust: 100%;
+  line-height: inherit;
+  margin: 0;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+img,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+img {
+  object-fit: contain;
+}
+
+/* Keep the canvas centered and restrained when sites hand the editor a very
+   wide or very short container, so large previews do not overflow the
+   window on small screens. */
+#canvas {
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas p,
+#canvas li,
+#canvas blockquote,
+#canvas figure,
+#canvas figcaption {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Scrollbars that stay usable in both themes and on high-density handheld
+   screens, without removing the styled scrollbar on sites that already have
+   one of their own. Use overlay scrolling where the platform supports it. */
+#canvas {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-2, rgba(255, 255, 255, 0.08))
+    var(--surface-1, rgba(255, 255, 255, 0.04));
+}
+
+#canvas::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+#canvas::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#canvas::-webkit-scrollbar-thumb {
+  background: var(--surface-2, rgba(255, 255, 255, 0.12));
+  border: 2px solid transparent;
+  border-radius: 999px;
+}
+
+#canvas::-webkit-scrollbar-thumb:hover {
+  background: var(--surface-3, rgba(255, 255, 255, 0.18));
+}
+
+#canvas {
+  overscroll-behavior: contain;
+}
+
+/* A single focus-visible ring used by builder controls, inspector fields and
+   preview links so keyboard users always see where focus went, even on sites
+   that normally hide outlines. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+.element:focus-visible,
+.element.is-input:focus-visible,
+.element.is-input .element-value:focus-visible {
+  outline: 2px solid var(--accent, #6ee7b7);
+  outline-offset: 2px;
+  border-radius: inherit;
+}
+
+/* === Media and embedded content === */
+/* Media on arbitrary sites is messy: banners, tall player embeds, off-scale
+   sprites and stretched background images all appear here. This keeps them
+   inside the preview, keeps icons from blowing up, and leaves room for a
+   caption when the source includes one. */
+
+#canvas img,
+#canvas video,
+#canvas picture,
+#canvas svg {
+  max-width: 100%;
+  max-height: 75vh;
+}
+
+#canvas img,
+#canvas video {
+  object-fit: contain;
+}
+
+#canvas img[width],
+#canvas img[height] {
+  aspect-ratio: attr(width) / attr(height);
+}
+
+#canvas svg {
+  shape-rendering: geometricPrecision;
+}
+
+/* Do not let video or large embeds steal the full preview height on narrow
+   handheld windows. Cap the top margin they add and let the rest scroll. */
+#canvas video,
+#canvas iframe,
+#canvas embed,
+#canvas object {
+  margin-block-start: 0;
+  margin-block-end: 0.5em;
+}
+
+/* Respect smaller embedded media when it is intentionally thumbnail-sized. */
+#canvas img.logo,
+#canvas img.icon,
+#canvas img.thumbnail,
+#canvas .thumbnail {
+  max-width: 100%;
+  max-height: 6em;
+}
+
+/* Links inside previewed sites stay tappable and visible without becoming
+   giant targets on a small controller-driven screen. */
+#canvas a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+#canvas a:link,
+#canvas a:visited {
+  color: var(--link, inherit);
+}
+
+/* Images used by the builder chrome (logo, toolbar icons, canvas preview) do
+   not shrink when the container gets tiny. Keep them at a usable minimum and
+   let the shell scale the rest. */
+.app-bar-logo,
+.app-bar-logo img {
+  height: 1.4em;
+  width: auto;
+  max-width: none;
+}
+
+.ICO,
+[data-icon],
+.ico {
+  shape-rendering: geometricPrecision;
+  image-rendering: crisp-edges;
+}
+
+/* === Text blocks (sites vary widely here) === */
+/* Different sites ship wildly different paragraph, list, code and quote
+   styling. This gives previewed text a readable baseline on a handheld
+   screen without turning every page into the same tiny font. */
+
+#canvas p,
+#canvas div,
+#canvas section,
+#canvas article,
+#canvas aside,
+#canvas main,
+#canvas nav,
+#canvas header,
+#canvas footer {
+  padding: 0.5em 0;
+  margin-block-start: 0;
+  margin-block-end: 0;
+}
+
+#canvas p {
+  margin-block-start: 0;
+  margin-block-end: 0.5em;
+}
+
+#canvas h1,
+#canvas h2,
+#canvas h3,
+#canvas h4,
+#canvas h5,
+#canvas h6 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+  margin-block-start: 0.6em;
+  margin-block-end: 0.3em;
+}
+
+/* Small running text stays small enough to read on a handheld without
+   filling the whole screen, but we do not force every site to a single
+   tiny size; larger headings keep their emphasis. */
+#canvas p,
+#canvas li,
+#canvas td,
+#canvas th,
+#canvas span.text,
+#canvas .text {
+  font-size: clamp(0.95rem, 4vw, 1.1rem);
+  line-height: 1.45;
+}
+
+#canvas ul,
+#canvas ol {
+  margin-block-start: 0.4em;
+  margin-block-end: 0.4em;
+  padding-inline-start: 1.4em;
+}
+
+#canvas li {
+  margin-block-end: 0.2em;
+}
+
+/* Make plain article text easier to scan on small screens by giving it a
+   slightly comfortable measure. Do not apply it to pages that clearly use a
+   very different typographic plan by respecting explicit max-width when a
+   site sets it. */
+#canvas .article,
+#canvas .content,
+#canvas .post,
+#canvas .body,
+#canvas .entry,
+#canvas .copy {
+  max-width: 50em;
+}
+
+/* Code, preformatted blocks and terminal-style output on arbitrary sites
+   should stay legible and not overflow horizontally. */
+#canvas pre,
+#canvas code,
+#canvas kbd,
+#canvas samp,
+#canvas var,
+#canvas tt {
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+#canvas pre,
+#canvas code {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono",
+    "Cascadia Code", Menlo, Consolas, Roboto Mono, monospace;
+}
+
+#canvas pre {
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  white-space: -moz-pre-wrap;
+  word-wrap: break-word;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+}
+
+#canvas code {
+  padding: 0.1em 0.3em;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, rgba(255, 255, 255, 0.1));
+}
+
+#canvas pre code {
+  padding: 0;
+  background: none;
+  border-radius: 0;
+}
+
+/* Quotes and citations often appear too large or too flat on small screens. */
+#canvas blockquote,
+#canvas cite,
+#canvas q {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas blockquote {
+  margin-block-start: 0.6em;
+  margin-block-end: 0.6em;
+  padding-inline-start: 1em;
+  border-inline-start: 3px solid var(--accent, rgba(110, 231, 183, 0.4));
+}
+
+/* Tables on sites are often wide and cramped; give them a little breathing
+   room and let them scroll horizontally only inside the preview, not the
+   whole page. */
+#canvas table {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+#canvas th,
+#canvas td {
+  padding: 0.35em 0.5em;
+  vertical-align: top;
+  border-block-end: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+#canvas th {
+  text-align: start;
+  font-weight: 600;
+}
+
+#canvas .table-wrapper,
+#canvas .table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-md);
+}
+
+/* Lists with very long items should wrap on a small handheld screen. */
+#canvas li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* === Form controls (sites style these very differently) === */
+/* Inputs, selects, checkboxes, toggles and textareas built into third-party
+   pages often look broken here because they inherit tiny or weird sizing,
+   borders and backgrounds. This gives them a usable, themed baseline that
+   still works inside the builder preview. */
+
+#canvas input,
+#canvas select,
+#canvas textarea,
+#canvas button,
+#canvas [role="button"],
+#canvas button[type="button"],
+#canvas button[type="submit"],
+#canvas button[type="reset"],
+#canvas a.button,
+#canvas .btn,
+#canvas .control,
+#canvas .field {
+  font-size: 1em;
+  line-height: 1.25;
+  padding: 0.4em 0.7em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  color: var(--text, inherit);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+}
+
+#canvas input[type="text"],
+#canvas input[type="search"],
+#canvas input[type="url"],
+#canvas input[type="tel"],
+#canvas input[type="email"],
+#canvas input[type="number"],
+#canvas input[type="password"],
+#canvas input[type="password"],
+#canvas input:not([type]),
+#canvas input[type="text"],
+#canvas input[type="search"],
+#canvas input[type="url"],
+#canvas input[type="tel"],
+#canvas input[type="email"],
+#canvas input[type="number"],
+#canvas input[type="password"],
+#canvas input:not([type]),
+#canvas textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding-block-start: 0.5em;
+  padding-block-end: 0.5em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas textarea {
+  resize: vertical;
+  min-height: 4em;
+  line-height: 1.4;
+}
+
+#canvas select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' d='M1 1l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6em center;
+  background-size: 10px 6px;
+  padding-inline-end: 2em;
+  cursor: pointer;
+}
+
+#canvas button,
+#canvas [role="button"],
+#canvas a.button,
+#canvas .btn,
+#canvas .control,
+#canvas .field {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#canvas button:hover,
+#canvas [role="button"]:hover,
+#canvas a.button:hover,
+#canvas .btn:hover,
+#canvas .control:hover,
+#canvas .field:hover {
+  background: var(--surface-3, rgba(255, 255, 255, 0.12));
+}
+
+#canvas button:active,
+#canvas [role="button"]:active,
+#canvas a.button:active,
+#canvas .btn:active,
+#canvas .control:active,
+#canvas .field:active {
+  background: var(--surface-4, rgba(255, 255, 255, 0.16));
+}
+
+/* Keep search fields from hiding the clear control on sites that render one. */
+#canvas input[type="search"] {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none'%3E%3Ccircle cx='5.5' cy='5.5' r='3.5' stroke='%23aeaeae' stroke-width='1.2'/%3E%3Cline x1='9.5' y1='9.5' x2='2.5' y2='2.5' stroke='%23aeaeae' stroke-width='1.2'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5em center;
+  background-size: 12px 12px;
+  padding-inline-end: 2em;
+}
+
+/* Checkboxes and radios are too small on some sites; standardize their hit
+   target and keep them visible in dark themes. */
+#canvas input[type="checkbox"],
+#canvas input[type="radio"] {
+  width: 1.1em;
+  height: 1.1em;
+  margin-inline-end: 0.4em;
+  accent-color: var(--accent, #6ee7b7);
+  cursor: pointer;
+}
+
+/* Toggle-style switches from other designers should stay legible and not
+   collapse to a bare checkbox. */
+#canvas .switch,
+#canvas .toggle,
+#canvas toggle,
+#canvas input[type="checkbox"][role="switch"],
+#canvas .toggle-on,
+#canvas .toggle-off {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+}
+
+/* Form labels should stay readable and keep a little vertical rhythm when a
+   site uses tiny or stacked labels. */
+#canvas label,
+#canvas legend,
+#canvas .label,
+#canvas .form-label,
+#canvas .field-label {
+  display: block;
+  font-size: 0.92em;
+  line-height: 1.2;
+  margin-block-end: 0.25em;
+  color: var(--text-muted, inherit);
+}
+
+/* Placeholder text commonly disappears on dark sites when the site sets a
+   white-ish color but the preview is dark. Keep it legible. */
+#canvas input::placeholder,
+#canvas textarea::placeholder,
+#canvas .placeholder {
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  opacity: 1;
+}
+
+#canvas input:focus,
+#canvas textarea:focus,
+#canvas select:focus,
+#canvas button:focus,
+#canvas [role="button"]:focus {
+  border-color: var(--accent, #6ee7b7);
+  outline: none;
+}
+
+#canvas input:focus-visible,
+#canvas textarea:focus-visible,
+#canvas select:focus-visible,
+#canvas button:focus-visible,
+#canvas [role="button"]:focus-visible {
+  outline: 2px solid var(--accent, #6ee7b7);
+  outline-offset: 1px;
+}
+
+/* === Site chrome: cards, panels, dividers, alerts === */
+/* Third-party sites style containers in all kinds of ways. This gives the
+   preview a gentler, theme-consistent baseline for cards, panels, rules,
+   nag screens and helper text without overriding every site layout. */
+
+#canvas .card,
+#canvas .panel,
+#canvas .widget,
+#canvas .tile,
+#canvas .module,
+#canvas .block,
+#canvas .well,
+#canvas .inset,
+#canvas .content-card {
+  padding: 0.8em 1em;
+  border-radius: var(--radius-md);
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#canvas hr,
+#canvas .rule,
+#canvas .divider,
+#canvas .separator {
+  border: 0;
+  border-block-start: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  margin-block-start: 0.8em;
+  margin-block-end: 0.8em;
+}
+
+/* Status chips, badges and pills are common across sites and should stay
+   tappable and readable on a controller-driven screen. */
+#canvas .badge,
+#canvas .chip,
+#canvas .pill,
+#canvas .tag,
+#canvas .status,
+#canvas .label-badge {
+  display: inline-block;
+  padding: 0.15em 0.55em;
+  border-radius: 999px;
+  font-size: 0.85em;
+  line-height: 1.4;
+  background: var(--accent-soft, rgba(110, 231, 183, 0.14));
+  color: var(--accent-text, inherit);
+}
+
+/* Interstitials, cookie notices, tooltips and similar toast-like panels
+   should sit on top but not fill the whole handheld screen. */
+#canvas .toast,
+#canvas .alert,
+#canvas .notification,
+#canvas .notice,
+#canvas .snackbar,
+#canvas .popup,
+#canvas .dialog,
+#canvas .modal,
+#canvas .overlay,
+#canvas .backdrop {
+  max-width: 90vw;
+  max-height: 60vh;
+  overflow: auto;
+  border-radius: var(--radius-md);
+  padding: 0.8em 1em;
+  background: var(--surface-2, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.12));
+  text-align: start;
+}
+
+#canvas .alert-info {
+  border-inline-start: 3px solid var(--accent, #6ee7b7);
+}
+
+#canvas .alert-warning {
+  border-inline-start: 3px solid var(--warn, #f5d371);
+}
+
+#canvas .alert-error {
+  border-inline-start: 3px solid var(--danger, #f78b8b);
+}
+
+#canvas .alert-success {
+  border-inline-start: 3px solid var(--success, #6ee7b7);
+}
+
+/* Tooltip-like overlays on arbitrary sites can easily overflow the small
+   preview edge. Clip them to the preview. */
+#canvas .tooltip,
+#canvas .popover,
+#canvas .dropdown,
+#canvas .menu {
+  max-width: 90vw;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
+}
+
+#canvas hr {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* === Text Browser web content === */
+/* The Text Browser element previews readable web pages (article text,
+   system and JSON output, search pages). Here, reset a couple of the most
+   common site styles that make extracted pages look broken or too dense on
+   the handheld canvas. Only apply where the builder shows the rendered
+   browser inside #canvas so we do not touch unrelated UI on the page. */
+
+.textbrowser-content,
+.textbrowser-content *,
+.element.is-textbrowser .textbrowser-content {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: start;
+}
+
+.textbrowser-content p,
+.textbrowser-content div,
+.textbrowser-content section,
+.textbrowser-content article,
+.textbrowser-content li,
+.textbrowser-content td,
+.textbrowser-content th {
+  margin-block-start: 0.35em;
+  margin-block-end: 0.35em;
+}
+
+.textbrowser-content p {
+  margin-block-end: 0.5em;
+}
+
+.textbrowser-content h1,
+.textbrowser-content h2,
+.textbrowser-content h3,
+.textbrowser-content h4,
+.textbrowser-content h5,
+.textbrowser-content h6 {
+  margin-block-start: 0.6em;
+  margin-block-end: 0.25em;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Strip huge link underlines and noisy section styling beyond what the site
+   itself provides, so extracted pages do not look over-styled inside the
+   builder. */
+.textbrowser-content a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.12em;
+}
+
+.textbrowser-content code,
+.textbrowser-content pre,
+.textbrowser-content kbd {
+  font-size: 0.9em;
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.25em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.textbrowser-content pre {
+  padding: 0.5em 0.7em;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-x: auto;
+}
+
+.textbrowser-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* Keep wide tables and logs in the Text Browser from running off the small
+   canvas; let them scroll inside their own frame instead. */
+.textbrowser-content .table-scroll,
+.textbrowser-content table {
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.textbrowser-content table {
+  border-collapse: collapse;
+}
+
+/* Avoid dense article walls on small handheld cans by giving readable blocks
+   a softer measure, but still let the page choose a very wide layout when it
+   explicitly sets one. */
+.textbrowser-content .article,
+.textbrowser-content .content,
+.textbrowser-content .post,
+.textbrowser-content .entry,
+.textbrowser-content .copy,
+.textbrowser-content .body {
+  max-width: 46em;
+  margin-inline: auto;
+}
+
+.textbrowser-content img,
+.textbrowser-content svg,
+.textbrowser-content video {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  margin-block-start: 0.35em;
+  margin-block-end: 0.35em;
+  display: block;
+}
+
+.textbrowser-content .figure,
+.textbrowser-content figure,
+.textbrowser-content .caption,
+.textbrowser-content figcaption {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-align: start;
+  line-height: 1.35;
+}
+
+.textbrowser-content figure {
+  margin-block-start: 0.5em;
+  margin-block-end: 0.5em;
+}
+
+.textbrowser-content figcaption {
+  font-size: 0.85em;
+  color: var(--text-muted, inherit);
+  margin-block-start: 0.25em;
+}
+
+/* Keep embedded video, maps and similar tall embeds from pushing the whole
+   page down on a handheld preview. */
+.textbrowser-content iframe,
+.textbrowser-content embed,
+.textbrowser-content object,
+.textbrowser-content video {
+  max-height: 65vh;
+  margin-block-start: 0;
+  margin-block-end: 0.4em;
+}
+
+/* === Builder chrome stability === */
+/* The editor UI around the tiny canvas must keep its layout stable on
+   handhelds and on desktop preview, without fighting every site's global
+   reset that a previewed page may apply. Scope these rules to the app shell
+   and canvas area so they do not leak into the page being previewed. */
+
+.app-shell,
+.editor-frame,
+.canvas-area {
+  display: block;
+  overflow: hidden;
+}
+
+.canvas-container,
+.canvas-scaler,
+.canvas {
+  box-sizing: border-box;
+}
+
+.canvas {
+  display: block;
+  overflow: auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Panels and inspector lists can get very tall on a small handheld screen;
+   let them scroll inside themselves instead of overflowing the app frame. */
+.sidebar,
+.sidebar-content,
+.properties-panel,
+.element-properties,
+.variables-list,
+#rightSidebar,
+#leftSidebar {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Small UI rows inside the inspector should keep a consistent touch target
+   height even when sites render tiny form rows elsewhere. */
+.control-group,
+.range-row,
+.input-group,
+.field-row,
+.form-row,
+.property-row {
+  display: block;
+}
+
+/* Keep the top bar and canvas header from collapsing on narrow handheld
+   windows when a previewed page injects large fonts into the global scope. */
+.app-bar,
+.app-bar-brand,
+.app-bar-actions,
+.canvas-header,
+.canvas-controls,
+.panel-header,
+.export-dropdown-wrapper {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Icon buttons and labels should still fit in a fixed bar when a previewed
+   site sets very large body text. */
+.icon-button,
+.app-bar-button,
+.btn-label,
+.bar-label,
+.bar-divider,
+.tool-group {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Dropdown menus and modals inside the builder should stay within the
+   visible app frame on very small screens. */
+.guide-modal,
+.guide-content,
+.export-dropdown,
+.mobile-toolbar {
+  max-height: 88vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Help and inspector notes stay readable and do not get squashed by site
+   font overrides. */
+.field-help,
+.help-text,
+.small,
+.note,
+.caption,
+.muted {
+  font-size: 0.85em;
+  line-height: 1.35;
+  color: var(--text-muted, inherit);
+}
+
+/* Rounded framing tokens used across the builder stay consistent when a
+   previewed page sets a heavy global border-radius. */
+:root,
+.app-shell,
+.canvas,
+.element,
+.element-label,
+.element-value,
+.element-placeholder,
+.sidebar,
+.properties-panel,
+.guide-content,
+.export-dropdown {
+  border-radius: var(--radius-md);
+}
+
+/* Keep focus-visible visible on builder chrome even if a previewed site
+   suppresses it with outline: none everywhere. */
+.app-bar-button:focus-visible,
+.action-button:focus-visible,
+.properties-tab:focus-visible,
+.close-button:focus-visible,
+.icon-button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible,
+.mobile-tab:focus-visible {
+  outline: 2px solid var(--accent, #6ee7b7);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}/* === Input Field Rendering === */
+/* Builder element cards on the canvas, not in the sidebar. These read as
+   selected tiles while editing and loosen up a little when the preview hides
+   the inspector chrome.
+
+   Field wrapper boundary
+   The outer wrapper for a styled text field originally stopped the builder
+   at `border-radius: 4px`. Text with descenders like `g`, `y`, or `p` then
+   clipped under the corners and looked cut even though the characters were
+   fully there. Round the wrapper the same way the inner input is rounded so
+   the visible edge matches the editable area. */
+
+#canvas .element.is-input,
+#canvas .element.is-input *,
+#canvas .element.is-input::before,
+#canvas .element.is-input::after {
+  --element-radius: var(--radius-md);
+}
+
+#canvas .element.is-input {
+  border-radius: var(--element-radius);
+}
+
+#canvas .element.is-input .element-label,
+#canvas .element.is-input .element-value,
+#canvas .element.is-input .element-placeholder {
+  border-radius: inherit;
+}
+
+#canvas .element.is-input .element-placeholder {
+  color: var(--text-muted);
+  pointer-events: none;
+}

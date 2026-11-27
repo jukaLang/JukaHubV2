@@ -437,7 +437,7 @@ func openSystemSettingsPage(kind string) error {
 			return fmt.Errorf("no system settings app here")
 		}
 	}
-	cmd := exec.Command(command, args...)
+	cmd := hiddenCommand(command, args...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -1322,3 +1322,4 @@ func ensureOnboardingEntry(config *Config) {
 		BgColor: "$buttonColor",
 	})
 }
+

@@ -121,7 +121,7 @@ func TestDSDDecoderProducesPCM(t *testing.T) {
 			if err := os.WriteFile(path, tc.data, 0o644); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(ffmpeg, musicFFmpegArgs(path, 0, 1, 44100)...)
+			cmd := hiddenCommand(ffmpeg, musicFFmpegArgs(path, 0, 1, 44100)...)
 			pcm, err := cmd.Output()
 			if err != nil {
 				if exit, ok := err.(*exec.ExitError); ok {
@@ -200,3 +200,4 @@ func TestMusicFFmpegArgsStreamTimeout(t *testing.T) {
 		}
 	}
 }
+

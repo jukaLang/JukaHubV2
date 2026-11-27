@@ -39,7 +39,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"runtime"
@@ -161,7 +160,7 @@ func winePackProbe(dir string) string {
 	_ = os.Chmod(box, 0o755)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, box, "--version")
+	cmd := hiddenCommandContext(ctx, box, "--version")
 	cmd.Env = mergeGameProfileEnv(screenChildEnv(os.Environ()), map[string]string{
 		"BOX64_NOBANNER": "1", "BOX64_LOG": "0", "BOX64_DYNACACHE": "0",
 	})
@@ -1084,3 +1083,4 @@ func init() {
 		Install: wineUpdateInstall,
 	})
 }
+

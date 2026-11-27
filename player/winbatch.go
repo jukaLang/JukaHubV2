@@ -7,7 +7,7 @@ package main
 // its own rules: outside quotes & | < > ^ ( ) @ split or redirect commands,
 // and %NAME% is replaced everywhere, quotes or not. Go quotes arguments for
 // CommandLineToArgvW, not for cmd.exe — the os/exec documentation says so and
-// points at SysProcAttr.CmdLine — so exec.Command("cmd", "/c", path) broke
+// points at SysProcAttr.CmdLine — so hiddenCommand("cmd", "/c", path) broke
 // "Game (USA).bat" at the parenthesis and ran whatever followed a '&' in a
 // file name. Arguments passed that way are the class of bug behind
 // CVE-2024-24576 ("BatBadBut").
@@ -93,3 +93,4 @@ func winBatchCommandLine(comspec, script string, args []string) (string, error) 
 	b.WriteString(`"`)
 	return b.String(), nil
 }
+

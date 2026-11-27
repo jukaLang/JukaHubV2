@@ -339,7 +339,7 @@ func fe7ZipParseListing(r io.Reader, max int) ([]fe7ZipEntry, error) {
 func feList7Zip(ctx context.Context, tool, archive, password string) ([]fe7ZipEntry, error) {
 	listCtx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
-	cmd := exec.CommandContext(listCtx, tool, "l", "-slt", "-spd", fe7ZipPasswordArg(password), "--", archive)
+	cmd := hiddenCommandContext(listCtx, tool, "l", "-slt", "-spd", fe7ZipPasswordArg(password), "--", archive)
 	feToolProcAttr(cmd)
 	if !fe7ZipCommandLine(cmd) {
 		return nil, errFePasswordQuote
@@ -432,7 +432,7 @@ func fe7ZipFollowProgress(r io.Reader, meter *feExtractMeter) {
 // Exit code 1 is 7-Zip's "warning": the files were written, and the warning
 // is returned for the toast.
 func feRun7Zip(ctx context.Context, tool, archive, out, password string, meter *feExtractMeter) (string, error) {
-	cmd := exec.CommandContext(ctx, tool, "x", "-y", "-bso0", "-bsp1", "-spd", fe7ZipPasswordArg(password), "-o.", "--", archive)
+	cmd := hiddenCommandContext(ctx, tool, "x", "-y", "-bso0", "-bsp1", "-spd", fe7ZipPasswordArg(password), "-o.", "--", archive)
 	cmd.Dir = out
 	feToolProcAttr(cmd)
 	if !fe7ZipCommandLine(cmd) {
@@ -486,7 +486,7 @@ func feRun7Zip(ctx context.Context, tool, archive, out, password string, meter *
 // feRunWindowsTar unpacks archive into out with Windows' tar.exe, which
 // refuses absolute and ".." member names on its own.
 func feRunWindowsTar(ctx context.Context, tool, archive, out string) error {
-	cmd := exec.CommandContext(ctx, tool, "-x", "-f", archive, "-C", out)
+	cmd := hiddenCommandContext(ctx, tool, "-x", "-f", archive, "-C", out)
 	feToolProcAttr(cmd)
 	var errOut feTailBuffer
 	cmd.Stderr = &errOut
@@ -556,7 +556,7 @@ func feWinTarParseListing(r io.Reader, max int) ([]fe7ZipEntry, error) {
 func feWinTarPreflight(ctx context.Context, tool, archive, out string) error {
 	listCtx, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
-	cmd := exec.CommandContext(listCtx, tool, "-t", "-v", "-f", archive)
+	cmd := hiddenCommandContext(listCtx, tool, "-t", "-v", "-f", archive)
 	feToolProcAttr(cmd)
 	var errOut feTailBuffer
 	cmd.Stderr = &errOut
@@ -857,3 +857,4 @@ func feExtractTidy(out string, st *feExtractStats) error {
 		return nil
 	})
 }
+

@@ -843,9 +843,9 @@ func runTerminalCommand(cmdStr string, timeout time.Duration) string {
 	defer cancel()
 	var c *exec.Cmd
 	if runtime.GOOS == "windows" {
-		c = exec.CommandContext(ctx, "cmd", "/d", "/q")
+		c = hiddenCommandContext(ctx, "cmd", "/d", "/q")
 	} else {
-		c = exec.CommandContext(ctx, "sh")
+		c = hiddenCommandContext(ctx, "sh")
 	}
 	c.Stdin = strings.NewReader(cmdStr + "\n")
 	processGroupConfigure(c)
@@ -909,9 +909,8 @@ func (b *taskOutputBuffer) Write(p []byte) (int, error) {
 func queryWindowsTasks(ctx context.Context) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "schtasks", "/query", "/fo", "CSV", "/nh")
+	cmd := hiddenCommandContext(ctx, "schtasks", "/query", "/fo", "CSV", "/nh")
 	// No console window flashing over the UI (sched_windows.go).
-	schedHideWindow(cmd)
 	var output taskOutputBuffer
 	cmd.Stdout, cmd.Stderr = &output, &output
 	if err := cmd.Run(); err != nil {
@@ -986,7 +985,7 @@ func loadCron(config *Config) {
 	if data, err := os.ReadFile("/etc/crontab"); err == nil {
 		sb.WriteString("=== /etc/crontab ===\n" + string(data) + "\n")
 	}
-	if out, err := exec.Command("crontab", "-l").Output(); err == nil {
+	if out, err := hiddenCommand("crontab", "-l").Output(); err == nil {
 		sb.WriteString("=== crontab -l ===\n" + string(out) + "\n")
 	}
 	if fis, err := os.ReadDir("/etc/cron.d"); err == nil {
@@ -996,7 +995,7 @@ func loadCron(config *Config) {
 			}
 		}
 	}
-	if out, err := exec.Command("systemctl", "list-timers", "--no-pager").Output(); err == nil {
+	if out, err := hiddenCommand("systemctl", "list-timers", "--no-pager").Output(); err == nil {
 		sb.WriteString("=== systemd timers ===\n" + string(out) + "\n")
 	}
 	if sb.Len() == 0 {
@@ -1225,3 +1224,4 @@ func renderTickerBoard(renderer *sdl.Renderer, config *Config, element Element, 
 		}
 	}
 }
+

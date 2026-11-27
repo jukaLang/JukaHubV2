@@ -1599,6 +1599,26 @@ func diagnosePort(name, script string, started time.Time) (gameDiagReport, bool)
 			}
 		}
 	}
+	// Some ports redirect their own output to a log of their own inside the
+	// port's folder (OldBits Hub writes data/hub.log): JukaHub's capture of the
+	// script's stdout/stderr is then empty and the real cause hides there.
+	// Read every *.log under the port's data/ folder the same way.
+	if dataDir := filepath.Join(dir, "data"); dirExists(dataDir) {
+		if entries, err := os.ReadDir(dataDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".log") {
+					continue
+				}
+				logPath := filepath.Join(dataDir, e.Name())
+				if lines := gameDiagReadTail(logPath, started); len(lines) > 0 {
+					output = gameDiagPortMergeOutput(output, lines)
+					if report.LogPath == "" {
+						report.LogPath = logPath
+					}
+				}
+			}
+		}
+	}
 	return finish(dir)
 }
 

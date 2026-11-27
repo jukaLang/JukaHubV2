@@ -73,10 +73,10 @@ func TestJukaLandIsReachableUnderBuiltInGames(t *testing.T) {
 	if found := filterLibrarySystems(lib.Systems, "jukaland"); len(found) != 1 || len(found[0].Games) != 1 {
 		t.Errorf("searching for JukaLand found %+v", found)
 	}
-	// JukaLand and the Games screen's six arcade games, no Synth or Solitaire.
+	// JukaLand and the Games screen's seven arcade games, no Synth or Solitaire.
 	var onlyJukaLand gameLibraryReport
 	libraryAddBuiltInGames(&onlyJukaLand, builtInScenesPresent(config), "")
-	if onlyJukaLand.Total != 7 || onlyJukaLand.Systems[0].Games[0].Path != jukaLandLibraryPath || onlyJukaLand.Systems[0].Games[0].HasArt {
+	if onlyJukaLand.Total != 8 || onlyJukaLand.Systems[0].Games[0].Path != jukaLandLibraryPath || onlyJukaLand.Systems[0].Games[0].HasArt {
 		t.Errorf("config without the Synth scene lists %+v", onlyJukaLand)
 	}
 

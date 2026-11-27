@@ -137,8 +137,7 @@ func schedPublish(ctx context.Context, gen uint64, tab schedTab, items []schedIt
 func schedRunTool(ctx context.Context, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, schedToolTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...)
-	schedHideWindow(cmd)
+	cmd := hiddenCommandContext(ctx, name, args...)
 	cmd.WaitDelay = 2 * time.Second
 	var out, errOut taskOutputBuffer
 	cmd.Stdout, cmd.Stderr = &out, &errOut
@@ -361,7 +360,7 @@ func schedJukaHubItem() (schedItem, bool) {
 	if !autostartSupported() {
 		return schedItem{}, false
 	}
-	path, err := autoStartLauncherPath()
+	command, source, err := autoStartLocation()
 	if err != nil {
 		return schedItem{}, false
 	}
@@ -372,8 +371,8 @@ func schedJukaHubItem() (schedItem, bool) {
 		Schedule: "At login",
 		Enabled:  on,
 		Status:   "Off",
-		Command:  path,
-		Source:   filepath.Dir(path),
+		Command:  command,
+		Source:   source,
 		Icon:     "juka",
 		Comment:  "The same switch as Settings → Smart Widgets → Start JukaHub at login.",
 		Toggle:   schedToggleJukaHub,

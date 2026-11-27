@@ -101,7 +101,7 @@ func androidRTProbe(dir string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), androidRTProbeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, loader, "--version")
+	cmd := hiddenCommandContext(ctx, loader, "--version")
 	cmd.Dir = dir
 	out := &androidRTProbeOutput{}
 	cmd.Stdout = out
@@ -434,3 +434,4 @@ func init() {
 		},
 	})
 }
+

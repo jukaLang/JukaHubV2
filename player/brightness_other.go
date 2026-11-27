@@ -8,6 +8,11 @@ import "errors"
 // ioctl, so it runs on the first call (brightnessStartProbe).
 const brightnessProbeBlocks = false
 
+// brightnessRestoresSavedLevel: elsewhere JukaHub restores the level saved in
+// jukauser.json where it owns the level (the handheld's backlight, the software
+// dimmer).
+const brightnessRestoresSavedLevel = true
+
 // brightnessPlatformProbe: outside Windows the backend is found by
 // brightnessFindBackend's own chain (the display driver, sysfs, the software
 // dimmer); there is no platform-only control.

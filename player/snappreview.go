@@ -28,7 +28,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -485,7 +484,7 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 		return
 	}
 	args := snapDecoderArgs(path, snapPreviewWidth, snapPreviewHeight, snapPreviewFPS)
-	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd := hiddenCommandContext(ctx, ffmpeg, args...)
 	// ffmpeg's chatter is not the app's log, but the reason a clip produced no
 	// frames is worth one line, so stderr is captured and only quoted on
 	// failure.
@@ -694,3 +693,4 @@ func drawSnapFrame(renderer *sdl.Renderer, config *Config, rect sdl.Rect, tex *s
 
 // The only child process here is ffmpeg, started with an argv — never through a
 // shell, so a file name with spaces or quotes is one argument.
+

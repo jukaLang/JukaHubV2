@@ -89,7 +89,7 @@ func wineMountWestonImage(image string, log wineLog) (string, bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, mountBin, "-t", "squashfs", "-o", "loop,ro", abs, westonMountDir).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, mountBin, "-t", "squashfs", "-o", "loop,ro", abs, westonMountDir).CombinedOutput()
 	if err != nil {
 		reason := strings.TrimSpace(string(out))
 		if reason == "" {
@@ -308,9 +308,10 @@ func wineGroupProcs(pgid int) []wineGroupProc {
 func wineRunTool(log wineLog, limit time.Duration, name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := hiddenCommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
 		log.printf("input: %s %s: %v %s\n", filepath.Base(name), strings.Join(args, " "), err, firstLine(strings.TrimSpace(string(out))))
 	}
 	return err
 }
+

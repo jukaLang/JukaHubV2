@@ -7,5 +7,6 @@ package main
 
 import "os/exec"
 
-// emuHideConsole is a no-op off Windows.
-func emuHideConsole(*exec.Cmd) {}
+
+
+

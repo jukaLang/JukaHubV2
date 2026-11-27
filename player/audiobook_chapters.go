@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -211,6 +212,7 @@ func audioChaptersStore(path string, list []audioChapter) {
 		audioChapterCache.order = append(audioChapterCache.order, path)
 	}
 	audioChapterCache.byPath[path] = list
+	audioChapterRevision.Add(1)
 	for len(audioChapterCache.order) > audioChapterCacheMax {
 		delete(audioChapterCache.byPath, audioChapterCache.order[0])
 		audioChapterCache.order = audioChapterCache.order[1:]
@@ -305,22 +307,73 @@ func musicChapterMeta(path string, position float64) string {
 	return fmt.Sprintf("Chapter %d of %d   ·   %s", i+1, len(chapters), chapters[i].Title)
 }
 
+// audioChapterRevision bumps whenever a file's chapter list is stored, so the
+// music shelf can re-count a probed file's chapters.
+var audioChapterRevision atomic.Uint64
+
+// musicChapters returns the chapter list shown for the current single-track
+// book, if any.
+func musicChapters() []audioChapter {
+	music.mu.Lock()
+	tracks := append([]musicTrack(nil), music.tracks...)
+	music.mu.Unlock()
+	if len(tracks) != 1 {
+		return nil
+	}
+	return audioChaptersFor(tracks[0].Path)
+}
+
+// musicPlayChapter starts chapter i of the current book file.
+func musicPlayChapter(i int) {
+	chapters := musicChapters()
+	if i < 0 || i >= len(chapters) {
+		return
+	}
+	music.mu.Lock()
+	needPlay := music.current != 0 || !music.playing
+	music.mu.Unlock()
+	if needPlay {
+		musicPlayTrack(0)
+	}
+	musicSeek(chapters[i].Start)
+	music.mu.Lock()
+	music.cursor = i
+	music.mu.Unlock()
+	showToast(fmt.Sprintf("Chapter %d of %d — %s", i+1, len(chapters), chapters[i].Title), ToastInfo())
+}
+
 // renderMusicChapterRows draws a chaptered file's chapters in the player's list
-// card, the playing one marked and kept in view. The rows are not tap targets
-// (the list's hit rows stay the playlist's); Next and Previous move between
-// them.
+// card, the playing one marked and kept in view. Rows are tap targets: Up/Down
+// move the cursor, A or a click/tap starts the chosen chapter.
 func renderMusicChapterRows(renderer *sdl.Renderer, config *Config, font *ttf.Font, chapters []audioChapter,
-	position float64, cardX, cardW, rowsTop int32, visible int) {
+	position float64, cursor int, cardX, cardW, rowsTop int32, visible int) {
 	cur := max(audioChapterIndex(chapters, position), 0)
+	if cursor < 0 || cursor >= len(chapters) {
+		cursor = cur
+	}
 	start := 0
-	if cur >= visible {
-		start = cur - visible + 1
+	if cursor >= visible {
+		start = cursor - visible + 1
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start+visible > len(chapters) {
+		start = len(chapters) - visible
+		if start < 0 {
+			start = 0
+		}
 	}
 	end := min(start+visible, len(chapters))
+	ctlFocus := musicCtlHasFocus(config)
 	for i := start; i < end; i++ {
 		rowY := rowsTop + int32(i-start)*musicRowHeight
 		row := sdl.Rect{X: cardX + 16, Y: rowY, W: cardW - 32, H: musicRowHeight - 6}
 		textY := row.Y + (row.H-int32(font.Height()))/2
+		if i == cursor && !ctlFocus {
+			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 10, WithAlpha(ColorCardFocus, 255))
+			drawGlassFocusRing(renderer, row, 10)
+		}
 		col := ColorTextPrimary()
 		if i == cur {
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
@@ -332,5 +385,7 @@ func renderMusicChapterRows(renderer *sdl.Renderer, config *Config, font *ttf.Fo
 		at := formatTime(chapters[i].Start)
 		aw, _, _ := font.SizeUTF8(at)
 		renderText(renderer, config, font, at, ColorTextTertiary(), row.X+row.W-int32(aw)-18, textY)
+		musicRects.rows = append(musicRects.rows, row)
 	}
+	musicRects.rowStart = start
 }

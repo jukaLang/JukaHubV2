@@ -708,7 +708,7 @@ func syncthingStart(ctx context.Context) (syncthingAPI, error) {
 	}
 	// Double-dash flags only: v2 dropped the single-dash spellings, and v1
 	// reads both.
-	cmd := exec.Command(bin, "serve",
+	cmd := hiddenCommand(bin, "serve",
 		"--home="+home,
 		"--no-browser",
 		"--no-restart",
@@ -1643,3 +1643,4 @@ func syncthingPowerStatus() string {
 	b.WriteString("\nSet it up in Save Manager → Syncthing.")
 	return b.String()
 }
+

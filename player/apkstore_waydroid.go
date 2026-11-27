@@ -89,7 +89,7 @@ func apkStoreCurrentWaydroidHost() apkStoreWaydroidHost {
 			return err == nil
 		},
 		run: func(ctx context.Context, bin string, args ...string) (string, error) {
-			out, err := exec.CommandContext(ctx, bin, args...).CombinedOutput()
+			out, err := hiddenCommandContext(ctx, bin, args...).CombinedOutput()
 			return string(out), err
 		},
 	}
@@ -264,3 +264,4 @@ func apkStoreWaydroidInstall(ctx context.Context, host apkStoreWaydroidHost, bin
 	}
 	return apkWaydroidHandedOver, nil
 }
+
