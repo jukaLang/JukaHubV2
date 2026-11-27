@@ -134,7 +134,21 @@ func pkgInstall(config *Config, p Package) bool {
 	pkgRecordInstalled(p, res.Verified, res.SHA256)
 	trophyEvent(tkPackage)
 
+	// A stock-OS app has to sit in the Apps folder for TrimUI's own launcher to
+	// list it (pkgapps.go). A failure here leaves the install standing.
+	key := packageDirName(p.Name)
+	published, perr := pkgPublishApps(filepath.Join(root, key), pkgStockAppsDir, key)
+	if perr != nil {
+		logWarn("packages", "%s: copying the app into %s: %v", p.Name, pkgStockAppsDir, perr)
+	}
+	if len(published) > 0 {
+		bootSyncFilesystems()
+	}
+
 	msg := "Installed " + p.Name
+	if len(published) > 0 {
+		msg += " · added to Apps"
+	}
 	if res.Kept {
 		msg += " · the previous version is kept"
 	}

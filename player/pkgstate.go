@@ -1160,6 +1160,7 @@ func pkgStartRemove(it *pkgItem) {
 	go func() {
 		err := pkgRemoveDir(key)
 		if err == nil {
+			pkgUnpublishApps(pkgStockAppsDir, key)
 			pkgForgetInstalled(key)
 			showToast("Removed "+name, ToastSuccess())
 		} else {
