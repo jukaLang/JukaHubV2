@@ -375,6 +375,36 @@ func TestWestonRedirectAllowed(t *testing.T) {
 	}
 }
 
+// The WestonPack image is fetched from an immutable commit and checked against
+// the pinned SHA-256; a moving branch or a digest-less spec would let a changed
+// image through.
+func TestWestonRuntimeSpecIsPinned(t *testing.T) {
+	allowLoopbackPatchHost(t)
+	spec := westonRuntimeSpec()
+	if spec.Asset != westonPackImageName {
+		t.Errorf("asset = %q, want %q", spec.Asset, westonPackImageName)
+	}
+	if !strings.Contains(spec.URL, "/b0e8206422c0fe79bec9ad266387ee45a861b2eb/") || strings.Contains(spec.URL, "/main/") {
+		t.Errorf("URL is not pinned to the image's commit: %s", spec.URL)
+	}
+	if len(spec.SHA256) != 64 || strings.Trim(spec.SHA256, "0123456789abcdef") != "" {
+		t.Errorf("SHA-256 = %q, want 64 lowercase hex digits", spec.SHA256)
+	}
+	if spec.Size != 55398400 {
+		t.Errorf("size = %d, want 55398400", spec.Size)
+	}
+
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("not the pinned WestonPack"))
+	}))
+	defer srv.Close()
+	dest := filepath.Join(t.TempDir(), westonPackImageName)
+	err := downloadToFile(context.Background(), srv.Client(), srv.URL, dest, spec.SHA256, 1<<20)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("a download with the wrong digest gave %v, want a SHA-256 refusal", err)
+	}
+}
+
 // The prefix image is 2 GB when the card has room, else 1 GB, else refused.
 func TestWineImageSize(t *testing.T) {
 	t.Setenv("JUKAHUB_WINE_PREFIX_IMAGE_MB", "")

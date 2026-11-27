@@ -14,13 +14,17 @@ import (
 
 // PluginInfo describes a loaded plugin module.
 type PluginInfo struct {
-	Name        string                 `json:"name"`
-	Version     string                 `json:"version"`
-	Description string                 `json:"description"`
-	Author      string                 `json:"author"`
-	Entry       string                 `json:"entry"`
-	Enabled     bool                   `json:"enabled"`
-	Config      map[string]interface{} `json:"config"`
+	Name string `json:"name"`
+	// SchemaVersion is the manifest schema the plugin was written for. A
+	// manifest without it is schema 1; a newer schema is listed as a problem
+	// instead of being half-read by an older JukaHub.
+	SchemaVersion int                    `json:"schemaVersion,omitempty"`
+	Version       string                 `json:"version"`
+	Description   string                 `json:"description"`
+	Author        string                 `json:"author"`
+	Entry         string                 `json:"entry"`
+	Enabled       bool                   `json:"enabled"`
+	Config        map[string]interface{} `json:"config"`
 	// Title is the name the Plugins page shows; the folder name stays the id.
 	Title string `json:"title,omitempty"`
 	// Icon names a shared glyph (DrawHomeIcon) for the plugin's row.
@@ -102,6 +106,15 @@ func LoadPlugins(config *Config) {
 				Name:    entry.Name(),
 				Title:   plugTitle(entry.Name(), ""),
 				Problem: "plugin.json is not valid JSON",
+			})
+			continue
+		}
+		if problem := plugSchemaProblem(info.SchemaVersion); problem != "" {
+			catalog = append(catalog, plugEntry{
+				Name:    entry.Name(),
+				Title:   plugTitle(entry.Name(), info.Title),
+				Version: info.Version,
+				Problem: problem,
 			})
 			continue
 		}
@@ -222,4 +235,3 @@ func plugInterpreter(entry string) string {
 	}
 	return "sh"
 }
-

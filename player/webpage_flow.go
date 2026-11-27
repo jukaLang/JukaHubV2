@@ -1686,6 +1686,21 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	if l == nil || l.layout == nil || l.doc == nil || id == 0 || l.baseSize <= 0 {
 		return sdl.Rect{}, false
 	}
+	if l.boxFlow == nil {
+		l.boxFlow = make(map[int]boxFlowCache)
+	}
+	if cached, seen := l.boxFlow[id]; seen {
+		return cached.rect, cached.ok
+	}
+	rect, ok := l.boxFlowRectUncached(id)
+	l.boxFlow[id] = boxFlowCache{rect: rect, ok: ok}
+	return rect, ok
+}
+
+// boxFlowRectUncached does the scan behind boxFlowRect. Rows and box geometry
+// are final by the time layers are positioned; the empty tail rows added after
+// the last layer carry no runs, so an answer stays valid for the whole layout.
+func (l *webLayouter) boxFlowRectUncached(id int) (sdl.Rect, bool) {
 	info, ok := l.doc.Boxes[id]
 	if !ok {
 		return sdl.Rect{}, false
@@ -1765,6 +1780,16 @@ func (l *webLayouter) boxFlowRect(id int) (sdl.Rect, bool) {
 	h := maxY - minY + top + bottom
 	if floor := int32(math.Round(max(info.style.Height, info.style.MinHeight) * scale)); floor > h {
 		h = floor
+	}
+	// A box with an aspect ratio and no height of its own is as tall as the
+	// ratio says. Such a box often holds nothing in its flow — a media frame
+	// whose only child is its absolutely positioned cover picture — so it has
+	// one row to be measured by, and its layers (the picture at inset: 0, a
+	// caption at bottom: 0) need the box the page gives it.
+	if info.style.AspectRatio > 0 && info.style.Height <= 0 && info.style.MinHeight <= 0 && w > 0 {
+		if ratioH := int32(math.Round(float64(w) / info.style.AspectRatio)); ratioH > h {
+			h = ratioH
+		}
 	}
 	if s := l.layout.boxStretch[id]; s > h && info.style.Height <= 0 {
 		// A stretched flex or grid item: the badge at its foot sits at the
@@ -2346,6 +2371,13 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 		if rowSpan <= 0 {
 			rowSpan = 1
 		}
+		if webFlexDebug {
+			txt := ""
+			for _, r := range b.Runs {
+				txt += r.Text
+			}
+			println("  cand item", i, "rowStart", rowStart, "colStart", start, "area", areaOK, "styleArea", b.Style.GridArea, "styleRow", b.Style.GridRowStart, "styleCol", b.Style.GridColumnStart, "text", txt)
+		}
 		candidates = append(candidates, gridCandidate{
 			item: i, rowStart: rowStart, rowEnd: rowEnd, rowSpan: rowSpan,
 			colStart: start, colEnd: end, colSpan: span, area: areaOK,
@@ -2545,6 +2577,12 @@ func (l *webLayouter) layoutGridItems(grouped []webFlexItem, padX, contentW int3
 					autoRow, autoCol = row+1, 0
 				}
 			}
+		}
+	}
+	if webFlexDebug {
+		println("GRIDPLACE group", first.FlexGroup, "cols", cols, "items", len(placements), "rows", len(occupied))
+		for _, pl := range placements {
+			println("  cell item", pl.item, "row", pl.row, "col", pl.col, "span", pl.rowSpan, pl.colSpan)
 		}
 	}
 	sort.SliceStable(placements, func(i, j int) bool { return placements[i].item < placements[j].item })

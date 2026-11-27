@@ -245,6 +245,13 @@ func (c *imapConn) idleWait(ctx context.Context, d time.Duration) (bool, error) 
 	}
 	changed := false
 	_ = c.conn.SetDeadline(time.Now().Add(d))
+	// The cancellation hook moves the socket deadline into the past once. If
+	// the context ended before this re-arm, SetDeadline has just undone it, so
+	// check again: otherwise a cancel that lands between begin() and here sits
+	// in IDLE until the whole renew window runs out.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	for {
 		r, err := c.readResp()
 		if err != nil {

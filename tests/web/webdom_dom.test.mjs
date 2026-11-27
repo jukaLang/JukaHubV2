@@ -948,3 +948,50 @@ test(':nth-child on a long table is not quadratic', async () => {
   assert.equal(n, 1501);
   assert.ok(Date.now() - t0 < 3000, 'took ' + (Date.now() - t0) + ' ms');
 });
+
+test('live ranges follow insert, remove, replaceData, splitText and normalize like jsdom', async () => {
+  const cases = [
+    // An insertion exactly at a boundary leaves it; past the boundary moves it.
+    ['<p id=p><b></b><i></i></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p,0);p.insertBefore(d.createElement('u'),p.firstChild);return JSON.stringify([r.startContainer.nodeName,r.startOffset,r.endOffset]);})()"],
+    ['<p id=p><b></b><i></i></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p,2);var f=d.createDocumentFragment();f.appendChild(d.createElement('u'));f.appendChild(d.createElement('s'));p.appendChild(f);return JSON.stringify([r.startOffset,r.endOffset]);})()"],
+    // Removing before a parent boundary pulls it back one.
+    ['<p id=p><b></b><i></i></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p,2);p.removeChild(p.firstChild);return JSON.stringify([r.startContainer.nodeName,r.startOffset]);})()"],
+    // A boundary on the removed node itself moves to its parent...
+    ['<p id=p><b></b><i></i></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p.firstChild,0);p.removeChild(p.firstChild);return JSON.stringify([r.startContainer===p,r.startOffset]);})()"],
+    // ...and one inside the removed subtree moves to the parent's index too.
+    ['<p id=p><b><i>x</i></b></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p.firstChild.firstChild,1);p.removeChild(p.firstChild);return JSON.stringify([r.startContainer===p,r.startOffset]);})()"],
+    // Replace data: boundaries inside the replaced run collapse to its start,
+    // boundaries after it move by the length change.
+    ['<p id=p>abcdef</p>',
+      "(function(){var d=document,t=d.getElementById('p').firstChild,r=d.createRange();r.setStart(t,3);t.replaceData(2,2,'XYZ');return JSON.stringify([r.startContainer.nodeValue,r.startOffset]);})()"],
+    ['<p id=p>abcdef</p>',
+      "(function(){var d=document,t=d.getElementById('p').firstChild,r=d.createRange();r.setStart(t,5);t.replaceData(2,2,'XYZ');return JSON.stringify([r.startContainer.nodeValue,r.startOffset]);})()"],
+    // splitText: a boundary after the split moves to the new text node; one
+    // exactly at the split stays at the end of the old node.
+    ['<p id=p>hello</p>',
+      "(function(){var d=document,t=d.getElementById('p').firstChild,r=d.createRange();r.setStart(t,4);t.splitText(2);return JSON.stringify([r.startContainer.nodeValue,r.startOffset]);})()"],
+    ['<p id=p>hello</p>',
+      "(function(){var d=document,t=d.getElementById('p').firstChild,r=d.createRange();r.setStart(t,2);t.splitText(2);return JSON.stringify([r.startContainer.nodeValue,r.startOffset]);})()"],
+    // normalize(): a boundary in the surviving node stays where it is.
+    ['<p id=p>ab</p>',
+      "(function(){var d=document,p=d.getElementById('p');p.appendChild(d.createTextNode('cd'));var r=d.createRange();r.setStart(p.firstChild,1);p.normalize();return JSON.stringify([p.childNodes.length,r.startContainer.data,r.startOffset]);})()"],
+    // A cloned range is live too.
+    ['<p id=p><b></b><i></i></p>',
+      "(function(){var d=document,p=d.getElementById('p'),r=d.createRange();r.setStart(p,1);var c=r.cloneRange();p.insertBefore(d.createElement('u'),p.firstChild);return JSON.stringify([r.startOffset,c.startOffset]);})()"],
+  ];
+  for (const [html, code] of cases) await same(html, code, code);
+
+  // jsdom removes the merged Text nodes without running the standard's
+  // normalize boundary steps, so those two moves are asserted directly.
+  const inMerged = await ours('<p id=p>ab</p>');
+  assert.equal(inMerged.run("(function(){var d=document,p=d.getElementById('p');p.appendChild(d.createTextNode('cd'));var r=d.createRange();r.setStart(p.lastChild,1);p.normalize();return JSON.stringify([p.childNodes.length,r.startContainer.data,r.startOffset]);})()"),
+    '[1,"abcd",3]', 'a boundary in the merged text node moves into the surviving one');
+  const atJoin = await ours('<p id=p>ab</p>');
+  assert.equal(atJoin.run("(function(){var d=document,p=d.getElementById('p');p.appendChild(d.createTextNode('cd'));var r=d.createRange();r.setStart(p,1);p.normalize();return JSON.stringify([p.childNodes.length,r.startContainer.data,r.startOffset]);})()"),
+    '[1,"abcd",2]', 'a boundary on the parent before the merged node moves to the join');
+});

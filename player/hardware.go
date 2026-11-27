@@ -10,130 +10,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"jukahub/JukaHub/internal/logx"
 )
 
 // ---------------------------------------------------------------------------
 // In-memory log buffer (Log Exporter)
 // ---------------------------------------------------------------------------
 
-type logBuffer struct {
-	mu       sync.Mutex
-	lines    []string
-	bytes    int
-	max      int
-	maxBytes int
-	// version changes on every write and clear, so the Logs screen re-reads
-	// the buffer only when there is something new (systool_logs.go).
-	version uint64
-	// appended counts every line ever appended (a clear does not reset it):
-	// a launch report asks for the lines written since its launch started
-	// (Mark, LinesSince; launchreport.go).
-	appended uint64
-}
-
-// Write appends one line per newline-separated chunk, so the buffer can stand
-// in for an io.Writer (an exec's combined output, a test).
-func (b *logBuffer) Write(p []byte) (int, error) {
-	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
-		b.Append(line)
-	}
-	return len(p), nil
-}
-
-// Append adds one line, dropping the oldest lines past the line and byte caps.
-func (b *logBuffer) Append(line string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.version++
-	b.appended++
-	b.lines = append(b.lines, line)
-	b.bytes += len(line) + 1
-	if b.max <= 0 {
-		b.lines = nil
-		b.bytes = 0
-		return
-	}
-	if len(b.lines) > b.max {
-		drop := len(b.lines) - b.max
-		for i := 0; i < drop; i++ {
-			b.bytes -= len(b.lines[i]) + 1
-			b.lines[i] = "" // release the string before the backing array is kept
-		}
-		b.lines = b.lines[drop:]
-	}
-	// The line cap alone is not a byte cap: one malformed stack trace can hold
-	// most of the heap on the handheld. Trim the oldest lines, then the head of
-	// a single overlong line.
-	for b.maxBytes > 0 && b.bytes > b.maxBytes && len(b.lines) > 1 {
-		b.bytes -= len(b.lines[0]) + 1
-		b.lines[0] = ""
-		b.lines = b.lines[1:]
-	}
-	if b.maxBytes > 0 && len(b.lines) == 1 && len(b.lines[0]) > b.maxBytes {
-		b.lines[0] = b.lines[0][len(b.lines[0])-b.maxBytes:]
-		b.bytes = len(b.lines[0]) + 1
-	}
-}
-
-func (b *logBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return strings.Join(b.lines, "\n")
-}
-
-func (b *logBuffer) Clear() {
-	b.mu.Lock()
-	b.lines = nil
-	b.bytes = 0
-	b.version++
-	b.mu.Unlock()
-}
-
-// Version reports a number that changes whenever the buffer does.
-func (b *logBuffer) Version() uint64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.version
-}
-
-// Mark is the number of lines appended so far, for LinesSince.
-func (b *logBuffer) Mark() uint64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.appended
-}
-
-// LinesSince copies the lines appended after mark that the buffer still
-// holds, oldest first; at most max of them (the newest), when max > 0.
-func (b *logBuffer) LinesSince(mark uint64, max int) []string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if mark >= b.appended {
-		return nil
-	}
-	n := len(b.lines)
-	if since := b.appended - mark; since < uint64(n) {
-		n = int(since)
-	}
-	if max > 0 && n > max {
-		n = max
-	}
-	out := make([]string, n)
-	copy(out, b.lines[len(b.lines)-n:])
-	return out
-}
-
-// Snapshot copies the buffered lines, oldest first, with the version they
-// were read at.
-func (b *logBuffer) Snapshot() ([]string, uint64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	out := make([]string, len(b.lines))
-	copy(out, b.lines)
-	return out, b.version
-}
-
-var appLog = &logBuffer{max: 2000, maxBytes: logBufferMaxBytes}
+// appLog is the app log ring (internal/logx). It is the package's default
+// ring, so a handler built without an explicit ring (a test, a package
+// initialiser) still feeds the Logs screen.
+var appLog = logx.DefaultRing
 
 // exportLogs writes the captured log buffer to logs.txt in the app folder,
 // rotating the previous export to logs.txt.1 and capping the file size.

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -123,8 +124,8 @@ func siteDisplayName(site videoSite) string {
 	return "this site"
 }
 
-// siteTagBrowseURL is the browse?tags= page RedGifs serves and yt-dlp's
-// RedGifsSearchIE understands. It is that site's form, not a generic one:
+// siteTagBrowseURL is the browse?tags= page one short-video host serves and
+// its yt-dlp extractor understands. It is that site's form, not a generic one:
 // another host answers it with a 404, so only a site known to use it is sent
 // there.
 func siteTagBrowseURL(host, query string) string {
@@ -207,8 +208,8 @@ func siteSearchTarget(host, query string) string {
 }
 
 // siteThumbURL derives the poster image from the video URL yt-dlp returned.
-// RedGifs-style hosts serve <name>-poster.jpg beside <name>.mp4; a site that
-// does not follow that pattern simply has no thumbnail.
+// Some hosts serve <name>-poster.jpg beside <name>.mp4; a site that does not
+// follow that pattern simply has no thumbnail.
 func siteThumbURL(formats []siteFormat) string {
 	var fallback string
 	for _, f := range formats {
@@ -280,10 +281,10 @@ func siteCacheThumb(raw string) string {
 	return path
 }
 
-// siteIsRedGifs reports whether a host is RedGifs. Its own API answers a
-// keyword search; yt-dlp's RedGifsSearchIE still asks for "search_text", which
-// RedGifs now ignores, so a search came back as the trending feed and the grid
-// looked like it had not changed at all.
+// siteIsRedGifs reports whether a typed host is one of the short-video sites
+// with its own search API. That API answers a keyword search; yt-dlp's extractor
+// asks for "search_text", which the site ignores, so a search came back as the
+// trending feed and the grid looked like it had not changed at all.
 func siteIsRedGifs(host string) bool {
 	host = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(host), "*."))
 	return host == "redgifs.com" || strings.HasSuffix(host, ".redgifs.com")
@@ -302,7 +303,7 @@ type redGifsGif struct {
 }
 
 // redGifsSearchQuery is the API's query string. A typed word is a tag: "tags"
-// is the parameter RedGifs filters on, while "search_text" (what yt-dlp sends)
+// is the parameter the site filters on, while "search_text" (what yt-dlp sends)
 // is ignored and answers with the trending feed. The screen's own "trending"
 // load asks for that feed with no tag.
 func redGifsSearchQuery(query string) string {
@@ -315,32 +316,101 @@ func redGifsSearchQuery(query string) string {
 	return values.Encode()
 }
 
+// siteThumbWorkers bounds the poster fetches of one search. Twenty posters
+// fetched one after the other, each with a 20 s timeout, used to keep a cold
+// site grid on "Loading" far longer than the search itself took.
+const siteThumbWorkers = 4
+
 // siteRedGifsVideos maps the API's answer to cards. poster turns a picture URL
-// into a cached file, so the mapping can be tested without a network.
+// into a cached file, so the mapping can be tested without a network. Posters
+// are fetched in parallel but written back in API order.
 func siteRedGifsVideos(gifs []redGifsGif, poster func(string) string) []siteVideo {
-	out := make([]siteVideo, 0, len(gifs))
-	for _, g := range gifs {
-		id := strings.TrimSpace(g.ID)
-		if id == "" {
-			continue
-		}
-		title := strings.Join(g.Tags, " ")
-		if title == "" {
-			title = g.UserName
-		}
-		if title == "" {
-			title = id
-		}
-		thumb := ""
-		if poster != nil {
-			thumb = poster(g.URLs.Poster)
-		}
-		out = append(out, siteVideo{
-			Title: title, URL: "https://www.redgifs.com/watch/" + id, Section: "Recommended",
-			Label: videoSiteLabel(g.Duration, g.Views), Thumb: thumb,
-		})
+	out := make([]siteVideo, len(gifs))
+	workers := siteThumbWorkers
+	if len(gifs) < workers {
+		workers = len(gifs)
 	}
-	return out
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				g := gifs[i]
+				id := strings.TrimSpace(g.ID)
+				if id == "" {
+					continue
+				}
+				title := strings.Join(g.Tags, " ")
+				if title == "" {
+					title = g.UserName
+				}
+				if title == "" {
+					title = id
+				}
+				thumb := ""
+				if poster != nil {
+					thumb = poster(g.URLs.Poster)
+				}
+				out[i] = siteVideo{
+					Title: title, URL: "https://www.redgifs.com/watch/" + id, Section: "Recommended",
+					Label: videoSiteLabel(g.Duration, g.Views), Thumb: thumb,
+				}
+			}
+		}()
+	}
+	for i := range gifs {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	kept := out[:0]
+	for _, v := range out {
+		if v.URL != "" {
+			kept = append(kept, v)
+		}
+	}
+	return kept
+}
+
+// redGifsToken is the anonymous token the site hands a first-time visitor.
+// Fetching it used to add a whole HTTP round trip to every keyword search and
+// every trending refresh. It is kept for a short while and refreshed on a 401.
+var redGifsToken struct {
+	mu    sync.Mutex
+	value string
+	at    time.Time
+}
+
+// redGifsTokenTTL is deliberately well under the lifetime of a temporary
+// token: a stale one costs one retried search, a cached one saves a request.
+const redGifsTokenTTL = 30 * time.Minute
+
+// redGifsTemporaryToken returns a usable token, fetching a new one when the
+// cached one is missing, old, or force is set.
+func redGifsTemporaryToken(readJSON func(string, string, interface{}) error, force bool) (string, error) {
+	if !force {
+		redGifsToken.mu.Lock()
+		value, at := redGifsToken.value, redGifsToken.at
+		redGifsToken.mu.Unlock()
+		if value != "" && time.Since(at) < redGifsTokenTTL {
+			return value, nil
+		}
+	}
+	var auth struct {
+		Token string `json:"token"`
+	}
+	if err := readJSON("https://api.redgifs.com/v2/auth/temporary", "", &auth); err != nil {
+		return "", err
+	}
+	if auth.Token == "" {
+		return "", fmt.Errorf("the site gave no token")
+	}
+	redGifsToken.mu.Lock()
+	redGifsToken.value, redGifsToken.at = auth.Token, time.Now()
+	redGifsToken.mu.Unlock()
+	return auth.Token, nil
 }
 
 // siteRedGifsSearch asks the site's public API for one page of videos. The
@@ -363,7 +433,7 @@ func siteRedGifsSearch(ctx context.Context, query string) ([]siteVideo, error) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("redgifs answered %d", resp.StatusCode)
+			return fmt.Errorf("the site answered %d", resp.StatusCode)
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 		if err != nil {
@@ -371,20 +441,22 @@ func siteRedGifsSearch(ctx context.Context, query string) ([]siteVideo, error) {
 		}
 		return json.Unmarshal(data, into)
 	}
-	var auth struct {
-		Token string `json:"token"`
-	}
-	if err := readJSON("https://api.redgifs.com/v2/auth/temporary", "", &auth); err != nil {
+	token, err := redGifsTemporaryToken(readJSON, false)
+	if err != nil {
 		return nil, err
-	}
-	if auth.Token == "" {
-		return nil, fmt.Errorf("redgifs gave no token")
 	}
 	var doc struct {
 		GIFs []redGifsGif `json:"gifs"`
 	}
 	link := "https://api.redgifs.com/v2/gifs/search?" + redGifsSearchQuery(query)
-	if err := readJSON(link, auth.Token, &doc); err != nil {
+	err = readJSON(link, token, &doc)
+	if err != nil && strings.Contains(err.Error(), "answered 401") {
+		// A cached token can expire; refresh once rather than fail the search.
+		if fresh, refreshErr := redGifsTemporaryToken(readJSON, true); refreshErr == nil {
+			err = readJSON(link, fresh, &doc)
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return siteRedGifsVideos(doc.GIFs, siteCacheThumb), nil
@@ -469,6 +541,33 @@ func videoSiteLabel(seconds float64, views int64) string {
 	return strings.Join(parts, " · ")
 }
 
+// sitePrefetchMax is how many fresh results are warmed. The budget is small:
+// a site page can list twenty videos, and resolving all of them would occupy
+// the helper pool for longer than a viewing session lasts.
+const sitePrefetchMax = 4
+
+// sitePrefetchResults warms the first few results so pressing Play does not
+// pay for a cold yt-dlp extraction. The work is background and bounded, and
+// beginVideoPrepare cancels it the moment playback starts, so it never
+// competes with the video the user just chose. Cache entries are height-aware,
+// matching the Play path, and expire with the short signed URLs.
+func sitePrefetchResults(videos []siteVideo) {
+	if len(videos) == 0 || !IsOnline() {
+		return
+	}
+	end := len(videos)
+	if end > sitePrefetchMax {
+		end = sitePrefetchMax
+	}
+	list := make([]VideoInfo, 0, end)
+	for _, v := range videos[:end] {
+		if strings.TrimSpace(v.URL) != "" {
+			list = append(list, VideoInfo{URL: v.URL})
+		}
+	}
+	prefetchVideos(appConfig, list, 0)
+}
+
 // siteVideosLoad starts a background fetch and keeps the local rows visible
 // while it runs. Results replace only the Recommended section.
 func siteVideosLoad(query string) {
@@ -516,6 +615,7 @@ func siteVideosLoad(query string) {
 			}
 			siteVideoUI.entries = append(videos, kept...)
 			siteVideoUI.cursor = 0
+			sitePrefetchResults(videos)
 		})
 	}()
 }

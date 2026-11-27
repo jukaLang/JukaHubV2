@@ -180,6 +180,24 @@ To check the script from a terminal, run it from its own folder
 [`player/plugins/`](../player/plugins) are plain POSIX `sh` and make good
 starting points.
 
+## Scaffold a plugin
+
+`JukaHub --new-plugin <name>` writes the smallest plugin that loads:
+
+```text
+plugins/<name>/
+├── plugin.json   # schemaVersion 1, one action, no permissions
+├── main.sh       # answers that action
+└── README.md
+```
+
+It refuses a name that is not lower-case letters, digits, `-` or `_` (at most
+32 characters) and never writes into a folder that already exists. Run it from
+the folder that holds `plugins/`, or name another folder with
+`--plugins-dir <folder>`. It does not need a display, so it works over SSH on
+the handheld. The result is the same shape as
+[`examples/hello-plugin/`](../examples/hello-plugin).
+
 ## Manifest and discovery
 
 Each immediate subdirectory of `plugins/` is scanned for a readable, valid
@@ -187,19 +205,23 @@ Each immediate subdirectory of `plugins/` is scanned for a readable, valid
 
 ```json
 {
+  "schemaVersion": 1,
   "name": "cardspace",
   "version": "1.0.0",
   "description": "Free space on the SD card.",
   "author": "Me",
   "entry": "cardspace.sh",
-  "enabled": true
+  "enabled": true,
+  "permissions": []
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
+| `schemaVersion` | Manifest schema. Missing means 1; a newer number is listed as a problem instead of being half-read. |
 | `name` | Ignored as the identifier: the containing directory name wins. |
 | `version`, `author` | Strings displayed in the plugin list. |
+| `permissions` | What the script needs beyond its own folder: `network`, `files`, `programs`, `settings`. Switching on a plugin that asks for a new one opens an Allow card; an empty list is the right starting point. |
 | `description` | Free-text description. |
 | `entry` | Path to a regular file, relative to the plugin directory; use `.sh` or `.py`. |
 | `enabled` | Must be `true`; missing or false manifests are skipped. |
@@ -217,6 +239,11 @@ The `plugin_refresh` trigger scans and updates `plugin_list`. A scan also occurs
 when entering a scene with a `dynamiclist` whose `variable` is `plugin_list`;
 the shipped Plugins scene uses a `textlog`, so **press Refresh there** rather
 than relying on entering the scene.
+
+`--new-plugin` writes a manifest at the current schema. A manifest without
+`schemaVersion` stays readable as schema 1; a manifest from a newer JukaHub
+(say `"schemaVersion": 2`) is shown with "uses schemaVersion 2; this JukaHub
+reads up to 1" and is not loaded, rather than being partly understood.
 Every scan rebuilds the catalog and live plugin map. After disabling, deleting
 or fixing a manifest, press **Refresh** to update the list and loaded
 contributions; safe mode skips plugin loading for that launch.

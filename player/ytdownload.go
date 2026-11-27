@@ -449,8 +449,10 @@ type ytdlAttempt struct {
 // download needs ffmpeg; without one the muxed file is the only way.
 func ytdlAttempts(config *Config, page, ffmpegPath string) []ytdlAttempt {
 	height := effectivePlaybackMaxHeight(config, page)
-	single := ytdlAttempt{name: "single file", args: []string{"-f", videoFormatSelectorFor(config, page)}}
+	singleFormat := videoFormatSelectorFor(config, page)
 	youTube := youtubeVideoID(page) != ""
+	if !youTube {
+		// A typed site can rank a video-only MP4 first. Ask for a file with
 	if youTube {
 		// android for format 18 where YouTube still serves it, then the
 		// defaults and web_embedded (streaming.go explains the list).

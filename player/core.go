@@ -3638,29 +3638,38 @@ func prefetchCardPreviewFrames(vid VideoInfo) {
 // but never reads disk or touches the network. This keeps the animated preview
 // from adding a blocking fetch to the render loop on a handheld.
 func cachedThumbnailTexture(renderer *sdl.Renderer, rawURL string) *sdl.Texture {
+	tex, _, _ := cachedThumbnailTextureSize(renderer, rawURL)
+	return tex
+}
+
+// cachedThumbnailTextureSize is cachedThumbnailTexture with the dimensions a
+// cover crop needs. The size is measured once, at decode time, and kept in the
+// LRU beside the texture: asking SDL again for every visible card every frame
+// was a cgo call per card.
+func cachedThumbnailTextureSize(renderer *sdl.Renderer, rawURL string) (*sdl.Texture, int32, int32) {
 	url := normalizeThumbnailURL(rawURL)
-	if tex := getThumbnailTextures().Get(url); tex != nil {
-		return tex
+	if tex, w, h := getThumbnailTextures().GetSize(url); tex != nil {
+		return tex, w, h
 	}
 	data := thumbnailDataGet(url)
 	if len(data) == 0 || !allowThumbnailDecode(frameCount, thumbnailDecodeBudgetPerFrame()) {
-		return nil
+		return nil, 0, 0
 	}
 	rwops, err := sdl.RWFromMem(data)
 	if err != nil {
-		return nil
+		return nil, 0, 0
 	}
 	tex, err := img.LoadTextureRW(renderer, rwops, false)
 	_ = rwops.Close()
 	if err != nil {
-		return nil
+		return nil, 0, 0
 	}
 	var w, h int32
 	if _, _, tw, th, err := tex.Query(); err == nil {
 		w, h = tw, th
 	}
 	getThumbnailTextures().Put(url, tex, w, h)
-	return tex
+	return tex, w, h
 }
 
 // drawResultThumbnail keeps the normal poster for idle rows and cycles through

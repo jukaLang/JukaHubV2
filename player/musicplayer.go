@@ -2131,6 +2131,11 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		// The key list is longer than a narrow window at a large text scale;
 		// ellipsize it so the line cannot run off both edges of the screen.
 		line = ellipsize(hintFont, line, screenWidth-32)
+		// fitTextCached returns fitted labels with their internal zero-width
+		// provenance marks. They are invisible on screen but would leak into
+		// the layout (and its tests), so strip them at this draw boundary
+		// before measuring or storing the line.
+		line = uiUnmarkTranslated(line)
 		hw, _, _ := hintFont.SizeUTF8(line)
 		y := hintTop + int32(i)*(footerFontH+hintGap)
 		renderText(renderer, config, hintFont, line, musicAuralisLayout.hintInk,

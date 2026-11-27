@@ -87,6 +87,11 @@ func main() {
 	if handled, code := handleSilentBootCommand(os.Args[1:]); handled {
 		os.Exit(code)
 	}
+	// `JukaHub --new-plugin <name>`: write a versioned starter manifest, entry
+	// and README into plugins/ without opening a window (pluginscaffold.go).
+	if handled, code := handleNewPluginCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
 	// The collector stays off from here to the first frame (startup.go); the
 	// commands above are processes of their own and keep it on.
 	startupGCHold()

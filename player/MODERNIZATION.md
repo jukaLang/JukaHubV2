@@ -1,6 +1,6 @@
 # JukaHub engineering backlog
 
-Open tasks: **111**.
+Open tasks: **96**.
 
 Open work an agent can finish and check without a person at the device —
 builds, tests, static checks, scripted probes, screenshots it can read — plus
@@ -84,11 +84,6 @@ renderer.
 keeps thin aliases (`var retryDo = retry.Do`) so call sites stay unchanged;
 `make check` green after each move.
 **Verify.** `go build -x` shows the moved packages cached on an edit to `core.go`.
-
-### ARCH-2 — Package split, step 2: logging (P2, S) [WIN]
-**Where.** `logging.go`, the `appLog` ring in `hardware.go`.
-**Done when.** `internal/logx` owns the handler and ring; `main` keeps
-`logDebug = logx.Debug` aliases; 127 dependents untouched.
 
 ### ARCH-3 — Package split, step 3: models and parsers (P2, L) [WIN]
 **Where.** PDF (`pdfreader.go`, `pdfv_doc.go`), EPUB/HTML reader (`reader.go`),
@@ -296,12 +291,6 @@ under More → Manual & guide).
 **Done when.** A PSP game's SAVEDATA folders and PPSSPP states (by the ID read
 from its ISO/CSO/PBP) and a GameCube game's GCI saves move with the game.
 
-### LIB-31 — Share Game Lab setups from the phone (P3, S)
-**Where.** `gamelab_share.go`, `companion_files.go`.
-**Done when.** Share in Game Lab offers a QR to download the profile on a
-phone, and the companion can upload a profile into `game-lab/import` (JSON
-only, 64 KB cap).
-
 ### PROF-2 — Per-person RetroAchievements and standalone-emulator saves (P2, M)
 **Where.** `retroachievements*.go`, `profiles_saves.go`, the managed PPSSPP
 launch (its memory stick folder), DraStic's launch environment,
@@ -341,18 +330,6 @@ and the copy row shows the size before A.
 
 ## Media (MED)
 
-### MED-3 — Reactive visualiser from real audio (P3, S)
-**Where.** `musicplayer.go` (synthetic bars today), `ledsync.go` (`audioBus`).
-**Done when.** The bars come from an FFT of the decoded PCM (bounded cost per
-frame).
-
-### MED-5 — Screenshot gallery by game (P3, S)
-**Where.** `screenshot.go`, `imageviewer.go`, `recordings.go`.
-**Done when.** Screenshots open as a gallery with one section per game, newest
-first: JukaHub's own captures and RetroArch's are grouped by the game named in
-the file name, anything else under "Other"; A opens a picture full screen and
-L1/R1 step between games.
-
 ### MED-7 — Crossfade and ReplayGain (P3, S)
 **Where.** `musicplayer.go`, `musicsettings.go`.
 **Done when.** An optional crossfade (0–10 s) overlaps a track's end with the
@@ -367,21 +344,6 @@ import/export works, chapters are shown, played episodes clean up.
 **Done when.** The Radio Browser directory (Music → Radio,
 `radiodir.go`) and saved stations show a buffering state while a stream
 connects and the station's now-playing title (ICY metadata) while it plays.
-
-### MED-15 — Search, tracks and folders in the music library (P3, S)
-**Where.** `music_shelf.go`, `mlib.go`, `musicplayer.go`.
-**Done when.** The music library has Tracks and Folders tabs with natural sort,
-and a search (on-screen keyboard) over title, artist and album that answers
-over a 2,000-track library without a visible stall.
-
-### MED-18 — Trim, rename and delete a recording (P2, M)
-**Where.** `recordings.go`, the scene that lists them, the video player.
-**Done when.** A recording can be renamed, deleted after a two-press
-confirmation (into the APP-4 trash once it exists) and trimmed to in and out
-points (ffmpeg stream copy where the codec allows, else a re-encode), keeping
-the original until the trimmed file plays; the list shows duration and size.
-**Verify.** A test trims a generated clip by stream copy, checks it with
-ffprobe, and finds the original intact until the trim is confirmed.
 
 ### MED-19 — A JavaScript runtime for yt-dlp on Windows (P1, M) [WIN] [NET]
 **Where.** `ytdlp_update.go`, `ytdownload.go` (`ytDlpJSRuntimeArgs` already
@@ -494,14 +456,6 @@ Linux `chip-all-clusters-app` in a container commissions it and toggles OnOff.
 **Done when.** The speaker route uses the same mixer on one stereo device (the
 per-output passthrough is gone), and the LED analyser is fed from the mix.
 
-### SND-9 — The game plugin's interfaces against the real headers (P1, S) [NET]
-**Where.** `player/spatialfx/jukahub_spatial.h`, `jukahub_spatial.c`,
-`README.md`; libretro-common's `libretro_dspfilter.h` and `dsp_filter.c`;
-`ladspa.h`.
-**Done when.** Every struct, typedef, flag and entry point matches the headers
-(or is fixed) and the README says so; then DSP API v2 (RetroArch's int16
-`process_i16` path) is decided.
-
 ### SND-11 — The game filter on Windows (P3, S) [WIN]
 **Where.** `player/spatialfx/build.sh` (`TARGET=windows`), the Windows release
 job, `spatial_games.go` (where it looks).
@@ -587,13 +541,6 @@ like the arm64 one, and on a PC without a Groq key Voice command, the orb and
 voice typing work offline; with the pack missing they say so and keep the Groq
 path.
 
-### INP-22 — The voice orb from a pad on Windows (P3, S) [WIN]
-**Where.** `voiceorb.go` (`voiceOrbMenuOwnsGuide`), Settings → Controls (the
-"Menu button: voice" row is handheld-only).
-**Done when.** An opt-in switch on Windows makes the pad's Guide (or a long
-press of Back) open the orb, with the Game Bar caveat in its second line and
-`docs/CONTROLS.md`.
-
 ---
 
 ## Shell (SHELL)
@@ -601,15 +548,6 @@ press of Back) open the orb, with the Game Bar caveat in its second line and
 ### SHELL-6 — Back and focus that remember (P2, M)
 **Done when.** Each scene saves focus + scroll on leave and restores it on
 return (bounded map); Home restores the last focused card after a game.
-
-### SHELL-9 — The tip of the day takes A, a click and a tap (P2, S)
-**Where.** `helpdoc.go` (`homeTipClick`, `homeTipOpen`), `homefocus.go`,
-`homelayout.go`, `home.go` (`handleHomeMouseClick`), `hometabs*.go`,
-`cfgdoc.go` (`cfgdocRuntimeKeys`).
-**Done when.** The tip is focusable on the Standard, Hero and Tabs Homes (Down
-from the last row, Up from the footer); A opens its CONTROLS.md section and X
-hides it for the day, a click or a tap the same; `homeTipHiddenDay` is a
-runtime key.
 
 ---
 
@@ -653,12 +591,6 @@ release notes come from the tag's CHANGELOG section.
 within the limit, a `SIGABRT` dump, one restore, `.update-rescued`), and
 a stub launcher that hangs before its first frame is put back by the same
 watchdog.
-
-### REL-17 — Version history says how each version started here (P3, S)
-**Where.** `upch_ui.go`, `uhist.go`, `updrescue.go`.
-**Done when.** The running version and each saved one show one line from those
-records ("Started fine on this Smart Pro" / "Didn't start on this Smart Pro —
-not offered again"), with a date only when the clock was plausible.
 
 ---
 
@@ -720,10 +652,6 @@ CodeQL runs weekly on Go and JavaScript (`.github/codeql/` is empty; not a new
 per-push job), the container image and SDL
 tarballs are covered by dependabot or a pinned-digest check.
 
-### SEC-11 — A privacy page that tells everything (P3, S)
-**Done when.** Settings → Privacy lists every network feature, what it sends,
-where, and whether it is on; "Export my data" writes a zip of every user file.
-
 ### SEC-19 — The pairing code never crosses the network in clear (P2, M)
 **Where.** `livebuilder.go`, `builder-device.js`.
 **Done when.** Requests are authenticated with an HMAC of the method, path, body
@@ -760,23 +688,12 @@ licence, source link and dependencies that install first; "Update all"; a
 changelog per update; installs stay verified and staged (`pkgstage.go`) and
 the catalogue is signed (SEC-16).
 
-### APP-2 — A plugin SDK (P2, M)
-**Done when.** `docs/PLUGINS.md` documents a versioned manifest (with the
-permissions of SEC-6), a sample plugin lives in `examples/`, and
-`JukaHub --new-plugin <name>` (or a script) scaffolds one.
-
 ### APP-4 — Files that forgive (P1, M)
 **Done when.** Delete moves to a `.trash` per volume (bounded by size and age,
 "Empty trash" in the storage view, SYS-8), **Compress to zip** makes an archive
 of the marked rows, Files has a filter-as-you-type search, and copy and move
 run off-thread with progress (the extraction queue in `files_extract.go` is
 the model: one job at a time, a staging folder, a drain on the SDL thread).
-
-### APP-6 — Notifications on the phone companion (P2, S)
-**Where.** `companion*.go` (the Games page already lists, starts and takes
-saves: `companion_library.go`), `notifications*.go`.
-**Done when.** The companion page mirrors JukaHub's notifications, with their
-actions where they are safe from a phone, through the existing pairing.
 
 ### APP-7 — Notes that travel (P3, S)
 **Done when.** Notes sync between paired devices through `ssync` and render
@@ -798,11 +715,6 @@ variables and property names of the same spelling stay untouched), cycles
 evaluate in the standard's order, and a test links a two-module cycle that
 reassigns an exported `let`.
 
-### APP-12 — Ranges that follow the document (P3, S)
-**Done when.** Live ranges are tracked per document and their boundaries move on
-insert, remove, `splitText` and `normalize` as the DOM standard says, covered by
-the jsdom comparison in `tests/web/webdom_dom.test.mjs`.
-
 ### APP-15 — 7z extraction without 7-Zip (P3, M)
 **Where.** `sevenzip.go` (reads 7z directories and decodes Copy, LZMA, LZMA2
 and the ARM filters in-process), `files_extract.go`, `emu7z.go`.
@@ -810,14 +722,6 @@ and the ARM filters in-process), `files_extract.go`, `emu7z.go`.
 x86 BCJ filter, to add) in-process through the same staging and `os.Root`
 rules, with fixtures made by 7-Zip in the tests; other coders (BCJ2, PPMd,
 AES) still go to 7-Zip.
-
-### APP-19 — A pinned checksum for WestonPack (P2, S) [NET]
-**Where.** `windows_runtime_install.go` (`installWestonRuntime`,
-`windowsWestonRuntimeURL`).
-**Done when.** The download URL names a PortMaster-New commit instead of `main`,
-the file's SHA-256 is pinned beside it (from portmaster.games' runtimes page,
-PortMaster-New's `.md5` files or harbourmaster's runtime index), and
-`wineDownload` checks it before the rename.
 
 ### APP-22 — Typing in Windows programs (P2, M)
 **Where.** `vcursor_bridge_linux.go` (the "JukaHub Mouse" uinput device, which

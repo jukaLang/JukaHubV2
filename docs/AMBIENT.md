@@ -109,6 +109,12 @@ With `ambientMode: false` the starfield screensaver is the idle screen and its
 The timeout can be changed in Settings → Display → **Lock screen after** or from
 Quick Settings, in steps from 15 seconds up (25 by default). Start → Ambient still opens the dock screen manually in that case.
 
+Neither idle screen comes up while something is loading: the modal loading card,
+a video being resolved before playback starts, a scene transition, or a video
+site search. Audio or video playing, downloads, installs and an AI answer hold
+the screen off too. When the wait ends the idle countdown starts over rather
+than dropping onto the idle screen the moment the spinner disappears.
+
 ## Game slideshow and game videos
 
 Settings → Power & battery → **Idle screen** has two more choices besides the

@@ -2588,7 +2588,8 @@ func vkMoveFocus(dx, dy int) {
 	if keyboardPosY < 0 || keyboardPosY >= len(keyboard) {
 		keyboardPosY, keyboardPosX = 0, 0
 	}
-	if dy < 0 && keyboardPosY == 0 {
+	wrap := vkWrapEnabled()
+	if dy < 0 && keyboardPosY == 0 && !wrap {
 		if vkGeom.nCells > 0 && vkStripHasContent() {
 			vkFocusZone = vkZoneStrip
 			vkZoneIndex = vkNearestCell(vkFocusedKeyCenterX())
@@ -2599,6 +2600,12 @@ func vkMoveFocus(dx, dy int) {
 	}
 	if dy != 0 {
 		ny := keyboardPosY + dy
+		if wrap {
+			// With wrap on, Up from the first key row goes to the last one
+			// instead of leaving for the text field. Field, suggestions and
+			// tools stay reachable by their own navigation paths.
+			ny = (ny + len(keyboard)) % len(keyboard)
+		}
 		if ny >= 0 && ny < len(keyboard) {
 			cx := vkFocusedKeyCenterX()
 			keyboardPosY = ny
@@ -2607,7 +2614,11 @@ func vkMoveFocus(dx, dy int) {
 	}
 	if dx != 0 {
 		nx := keyboardPosX + dx
-		if nx >= 0 && nx < len(keyboard[keyboardPosY]) {
+		n := len(keyboard[keyboardPosY])
+		if wrap && n > 0 {
+			nx = (nx + n) % n
+		}
+		if nx >= 0 && nx < n {
 			keyboardPosX = nx
 		}
 	}

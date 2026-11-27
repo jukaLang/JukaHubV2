@@ -584,6 +584,12 @@ func (s *companionServer) handler() http.Handler {
 	// The Notes page: the handheld's notes read, written, added from text
 	// files and downloaded on the phone (companion_notes.go).
 	s.registerNotesRoutes(mux)
+	// The Notifications page: the handheld's notification centre, with the
+	// actions safe from a phone (companion_notifications.go).
+	s.registerNotificationRoutes(mux)
+	// Game Lab setups: a shared profile downloaded, and one sent from the
+	// phone into game-lab/import (companion_gamelab.go).
+	s.registerGameLabRoutes(mux)
 	// The Game Boy Printer scrapbook card: the prints, read-only, behind the
 	// PIN (gbprinter_companion.go).
 	s.registerGBPrinterRoutes(mux)
@@ -1040,6 +1046,12 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <small>The handheld's notes on your phone: read them, write new ones with this keyboard, add .txt files and download them as text.</small>
 </div>
 
+<div class=card id=notificationsCard>
+  <h2>Notifications</h2>
+  <div class=row><button id=notificationsPage>Open notifications</button></div>
+  <small>Everything JukaHub told you on the handheld, with the actions that are safe from here.</small>
+</div>
+
 <div class=card>
   <h2>Games</h2>
   <div class=row><button id=gamesPage>Games and saves</button></div>
@@ -1283,6 +1295,7 @@ document.getElementById('sendText').onclick = () => sendText().catch(e => toast(
 document.getElementById('clearText').onclick = () => { document.getElementById('text').value = ''; document.getElementById('text').focus(); };
 document.getElementById('voicePage').onclick = () => { location.href = '/voice?p=' + encodeURIComponent(pin); };
 document.getElementById('notesPage').onclick = () => { location.href = '/notes?p=' + encodeURIComponent(pin); };
+document.getElementById('notificationsPage').onclick = () => { location.href = '/notifications?p=' + encodeURIComponent(pin); };
 document.getElementById('gamesPage').onclick = () => { location.href = '/games?p=' + encodeURIComponent(pin); };
 document.getElementById('cloudPage').onclick = () => { location.href = '/sync?p=' + encodeURIComponent(pin); };
 document.getElementById('smartHomePage').onclick = () => { location.href = '/smarthome?p=' + encodeURIComponent(pin); };

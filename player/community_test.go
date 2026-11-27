@@ -245,7 +245,7 @@ func TestRedactDiagnosticTextLeavesDiagnosticsAlone(t *testing.T) {
 func TestLogRingHandlerRedactsCredentials(t *testing.T) {
 	// Every log line passes the redaction before the ring and stderr: the
 	// Logs screen, logs.txt and errors.txt never see the key.
-	h := &logRingHandler{level: slog.LevelDebug, stderr: slog.Level(12)}
+	h := &logRingHandler{Level: slog.LevelDebug, StderrLevel: slog.Level(12), Redact: redactLogSecrets}
 	msg := "steam: GET https://api.example/sec2-ring/?key=ABCDEF0123 failed"
 	if err := h.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, msg, 0)); err != nil {
 		t.Fatal(err)

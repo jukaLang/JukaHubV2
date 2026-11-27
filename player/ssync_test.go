@@ -219,7 +219,7 @@ func TestSsyncChooseConflictKeepsSelectedSaveActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmp := &ssyncComparison{PeerID: "paired-device", PeerName: "There", Local: local, Remote: remote,
+	cmp := &ssyncComparison{PeerID: "paired-device", PeerName: "There", LocalName: "Here", Local: local, Remote: remote,
 		Plan: ssyncBuildPlan(local, remote, nil, 0, "Here", "There")}
 	if len(cmp.Plan.Items) != 1 || cmp.Plan.Items[0].Action != ssyncConflict || !cmp.Plan.Items[0].LocalWins {
 		t.Fatalf("expected a conflict with this device active: %+v", cmp.Plan)

@@ -106,15 +106,27 @@ var (
 // stops it between rungs; a bluetoothctl run already under way is killed with
 // it (btPowerOn).
 func btBringUp(ctx context.Context, stage func(string)) error {
-	err := btBringUpStack(ctx, stage)
-	if err == nil {
+	return btBringUpRemembering(ctx, stage, true)
+}
+
+// btBringUpQuiet is an internal scan (a Device Check probe) that needs the
+// radio for a moment. It must not turn a user's explicit Off into a remembered
+// On, nor write a "Bluetooth on for next boot" intent just because the probe
+// ran. Its caller restores the radio afterwards.
+func btBringUpQuiet(ctx context.Context, stage func(string)) error {
+	return btBringUpRemembering(ctx, stage, false)
+}
+
+func btBringUpRemembering(ctx context.Context, stage func(string), remember bool) error {
+	err := btBringUpStack(ctx, stage, remember)
+	if err == nil && remember {
 		btSwitchRemember(true)
 	}
 	return err
 }
 
 // btBringUpStack is btBringUp's work.
-func btBringUpStack(ctx context.Context, stage func(string)) error {
+func btBringUpStack(ctx context.Context, stage func(string), remember bool) error {
 	if runtime.GOOS != "linux" {
 		return errBzNoTool
 	}
@@ -136,7 +148,7 @@ func btBringUpStack(ctx context.Context, stage func(string)) error {
 	daemonOK := func() bool { return !firmware || btDaemonRunning() }
 	// JukaHub OS keeps Bluetooth on for its next boot and, on plastron, starts
 	// the image's own service first (jukaos_native.go).
-	jukaosNativeBluetoothOn(ctx)
+	jukaosNativeBluetoothOn(ctx, remember)
 	// btRadioIsOn asks the kernel, or bluetoothctl where the kernel cannot be
 	// asked: a radio that is on is never powered "on" again.
 	if btAdapterPresent() && daemonOK() && btRadioIsOn() {

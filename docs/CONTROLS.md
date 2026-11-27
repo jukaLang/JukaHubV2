@@ -302,6 +302,15 @@ no footer names may have no key.
 
 
 
+### Windows pads: Guide as the voice button
+
+On Windows a pad's **Guide** button belongs to the system by default. Turn on
+**Settings → Controls → Guide button: voice** to give it to JukaHub: a press
+opens the voice orb, and holding it talks. It is off until chosen, because
+Windows Game Bar may take Guide before JukaHub sees it; turn Guide off in Game
+Bar's settings if the orb does not open. **F4** remains the keyboard voice key,
+and turning the switch off leaves Guide to the system.
+
 ### TrimUI Brick
 
 The Brick (and the Hammer, the same board) has two small keys under the screen,
@@ -1111,6 +1120,10 @@ are connected. **Power** opens the power card — Sleep, Restart and Power off o
 the handheld, with Power off focused; Exit on a desktop. Where JukaHub cannot
 switch the radio itself (Windows, macOS) the Wi-Fi and Bluetooth tiles open
 their pages instead.
+
+A Bluetooth switch you set to off is remembered: firmware bring-up at boot, a
+sleep/wake, and an internal device scan do not quietly turn it back on. Turning
+it on again in JukaHub or in the stock menu clears the remembered off.
 
 **With a mouse**: click a tile to focus it and its remove badge to remove it.
 On the focused tile, drag the handle on its bottom-right corner to any size (it

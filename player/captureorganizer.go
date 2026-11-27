@@ -33,6 +33,9 @@ type captureRecording struct {
 	name string
 	at   time.Time
 	size int64
+	// duration is filled by the organizer's background ffprobe after the scan;
+	// 0 means it has not been read (or ffprobe is unavailable).
+	duration float64
 }
 
 type captureCollection struct {
@@ -73,18 +76,52 @@ func captureUniqueDirs(dirs []string) []string {
 	return out
 }
 
+// captureTimeLayout is the timestamp every capture name ends with.
+const captureTimeLayout = "2006-01-02_15-04-05"
+
+// captureStampSuffix trims the "-2" screenshotPath adds when two captures
+// land in the same second. The timestamp's own dashes mean a trailing number
+// is only a counter when what remains is a whole timestamp.
+func captureStampSuffix(stamp string) string {
+	if at := strings.LastIndexByte(stamp, '-'); at > 0 {
+		if n := stamp[at+1:]; n != "" && strings.Trim(n, "0123456789") == "" {
+			if _, err := time.Parse(captureTimeLayout, stamp[:at]); err == nil {
+				return stamp[:at]
+			}
+		}
+	}
+	return stamp
+}
+
+// captureStampTitle finds <title><sep><timestamp> by trying every separator:
+// the timestamp has an underscore of its own, so the last separator is often
+// not the one before it, and a title may contain the separator too.
+func captureStampTitle(stem, sep string) (string, bool) {
+	for at := strings.Index(stem, sep); at > 0; {
+		title := strings.TrimSpace(stem[:at])
+		stamp := captureStampSuffix(stem[at+len(sep):])
+		if title != "" {
+			if _, err := time.Parse(captureTimeLayout, stamp); err == nil {
+				return title, true
+			}
+		}
+		next := strings.Index(stem[at+len(sep):], sep)
+		if next < 0 {
+			break
+		}
+		at += len(sep) + next
+	}
+	return "", false
+}
+
 // capturePictureGroup uses the title in new JukaHub game screenshots. Older
 // screenshots did not record a game name and stay in a clearly labelled group.
 // A one-level game folder and RetroArch's title + timestamp names also work.
 func capturePictureGroup(name, folder string) string {
 	stem := strings.TrimSuffix(name, filepath.Ext(name))
-	if strings.HasPrefix(stem, "game-") {
-		if at := strings.LastIndex(stem, "_"); at > len("game-") {
-			if _, err := time.Parse("2006-01-02_15-04-05", stem[at+1:]); err == nil {
-				if title := strings.TrimSpace(stem[len("game-"):at]); title != "" {
-					return title
-				}
-			}
+	if title, ok := strings.CutPrefix(stem, "game-"); ok {
+		if title, ok := captureStampTitle(title, "_"); ok {
+			return title
 		}
 	}
 	if folder != "" {
@@ -97,10 +134,8 @@ func capturePictureGroup(name, folder string) string {
 		return "JukaHub screens"
 	}
 	for _, sep := range []string{" - ", "_", "-"} {
-		if at := strings.LastIndex(stem, sep); at > 0 {
-			if _, err := time.Parse("2006-01-02_15-04-05", stem[at+len(sep):]); err == nil {
-				return strings.TrimSpace(stem[:at])
-			}
+		if title, ok := captureStampTitle(stem, sep); ok {
+			return title
 		}
 	}
 	return "Other screenshots"
@@ -231,6 +266,53 @@ func captureFreePath(dir, stem, ext string) (string, error) {
 	return "", errors.New("too many recordings with the same name")
 }
 
+// captureRecordingMeta is the recording list's second line: its length when it
+// has been read, then its size. Pure.
+func captureRecordingMeta(clip captureRecording) string {
+	meta := formatSize(clip.size)
+	if clip.duration > 0 {
+		meta = captureDisplayTime(clip.duration) + " · " + meta
+	}
+	return meta
+}
+
+// captureDeleteRecording removes one finished recording, after the same
+// containment check as rename and trim: only a regular recording directly in
+// one of JukaHub's capture folders, never the clip being recorded now.
+func captureDeleteRecording(path string, dirs []string) error {
+	if _, err := captureRecordingAllowed(path, dirs); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	syncDirectory(filepath.Dir(path))
+	return nil
+}
+
+// captureDeleteWindow is how long the first Delete press stays armed. Long
+// enough to be deliberate, short enough that a press remembered from minutes
+// ago cannot remove a different intention's file.
+const captureDeleteWindow = 6 * time.Second
+
+// captureDeleteConfirm is the recordings list's two-press delete: the first
+// press arms this clip, the second within the window removes it. Main thread.
+type captureDeleteConfirm struct {
+	path string
+	at   time.Time
+}
+
+// armed records the first press and reports whether this is the second one
+// for the same clip inside the window.
+func (c *captureDeleteConfirm) armed(path string, now time.Time) bool {
+	if c.path == path && !c.at.IsZero() && now.Sub(c.at) >= 0 && now.Sub(c.at) <= captureDeleteWindow {
+		*c = captureDeleteConfirm{}
+		return true
+	}
+	*c = captureDeleteConfirm{path: path, at: now}
+	return false
+}
+
 // captureRenameRecording leaves the extension alone and refuses to replace an
 // existing file. The recording is only moved within its original folder.
 func captureRenameRecording(path, title string, dirs []string) (string, error) {
@@ -309,9 +391,54 @@ func captureProbeDuration(ctx context.Context, probe, path string) float64 {
 	return seconds
 }
 
+// captureTrimRun runs one trim into out. copyStreams keeps the source's codecs
+// (no quality loss, and fast on a handheld); otherwise the clip is re-encoded,
+// which gives an accurate start even for a fragmented recording.
+func captureTrimRun(ctx context.Context, ffmpeg, path, out string, start, end float64, copyStreams bool) error {
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-ss", captureTimeArg(start),
+		"-i", path, "-t", captureTimeArg(end - start), "-map", "0:v:0", "-map", "0:a?"}
+	if copyStreams {
+		args = append(args, "-c", "copy", "-avoid_negative_ts", "make_zero")
+	} else {
+		args = append(args, "-c:v", "mpeg4", "-q:v", "5", "-threads", "1", "-c:a", "aac", "-b:a", "128k")
+	}
+	args = append(args, "-movflags", "+faststart", "-y", out)
+	cmd := hiddenCommandContext(ctx, ffmpeg, args...)
+	var stderr castTail
+	cmd.Stderr = &stderr
+	cmd.Stdout = io.Discard
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		msg := firstLine(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
+// captureTrimHasVideo checks that a stream-copy result really holds a video
+// stream. A source whose codec the MP4 container cannot carry can make ffmpeg
+// exit successfully with only audio, which is not a usable clip.
+func captureTrimHasVideo(ctx context.Context, probe, path string) bool {
+	if !toolPathRunnable(probe) {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := hiddenCommandContext(ctx, probe, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=codec_name", "-of", "csv=p=0", path).Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
 // captureTrimRecording makes a new clip beside the source. It never edits or
-// removes the original; any failed partial output is removed. Re-encoding
-// gives an accurate start time, including for fragmented handheld recordings.
+// removes the original; any failed partial output is removed. A stream copy is
+// tried first and kept when it produced a real video with a decodable duration;
+// otherwise the clip is re-encoded, which also covers fragmented handheld
+// recordings.
 func captureTrimRecording(ctx context.Context, ffmpeg, path string, start, end float64, dirs []string) (string, error) {
 	if !toolPathRunnable(ffmpeg) {
 		return "", errors.New("FFmpeg is not installed; install it from Toolbox")
@@ -334,23 +461,36 @@ func captureTrimRecording(ctx context.Context, ffmpeg, path string, start, end f
 	tempPath := temp.Name()
 	_ = temp.Close()
 	defer os.Remove(tempPath)
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin", "-ss", captureTimeArg(start),
-		"-i", path, "-t", captureTimeArg(end - start), "-map", "0:v:0", "-map", "0:a?",
-		"-c:v", "mpeg4", "-q:v", "5", "-threads", "1", "-c:a", "aac", "-b:a", "128k",
-		"-movflags", "+faststart", "-y", tempPath}
-	cmd := hiddenCommandContext(ctx, ffmpeg, args...)
-	var stderr castTail
-	cmd.Stderr = &stderr
-	cmd.Stdout = io.Discard
-	if err := cmd.Run(); err != nil {
+	probe := getToolPath("ffprobe", nil)
+	length := end - start
+	// Stream copy first: no re-encode means the source quality is untouched.
+	// It is only kept when the result has a video stream and roughly the
+	// requested length, because a codec the MP4 container cannot carry can
+	// otherwise leave an audio-only file that ffmpeg still exits 0 on.
+	copyErr := captureTrimRun(ctx, ffmpeg, path, tempPath, start, end, true)
+	copied := copyErr == nil
+	if copied {
+		out, statErr := os.Stat(tempPath)
+		copied = statErr == nil && out.Size() >= screenRecMinBytes && captureTrimHasVideo(ctx, probe, tempPath)
+		if copied && length >= 1 {
+			got := captureProbeDuration(ctx, probe, tempPath)
+			copied = got <= 0 || (got >= length*0.5 && got <= length*2+2)
+		}
+	}
+	if !copied {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		msg := firstLine(stderr.String())
-		if msg == "" {
-			msg = err.Error()
+		_ = os.Remove(tempPath)
+		if copyErr != nil {
+			logDebug("captures", "stream copy could not trim %s (%v); re-encoding", filepath.Base(path), copyErr)
 		}
-		return "", fmt.Errorf("could not trim the recording: %s", msg)
+		if err := captureTrimRun(ctx, ffmpeg, path, tempPath, start, end, false); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", fmt.Errorf("could not trim the recording: %s", err)
+		}
 	}
 	if out, err := os.Stat(tempPath); err != nil || out.Size() < screenRecMinBytes {
 		return "", errors.New("the chosen time range produced no video")
@@ -365,4 +505,3 @@ func captureTrimRecording(ctx context.Context, ffmpeg, path string, start, end f
 	}
 	return to, nil
 }
-

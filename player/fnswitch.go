@@ -550,7 +550,7 @@ func fnSwitchRadiosBack(r fnSwitchRadios) error {
 		if !r.wifi {
 			_ = setWifiEnabled(false)
 		}
-		if !r.bt {
+		if !r.bt || btSwitchStillOff() {
 			_ = setBluetoothEnabled(false)
 		}
 		return nil
@@ -563,7 +563,7 @@ func fnSwitchRadiosBack(r fnSwitchRadios) error {
 			wifiKeeperRadioOn() // saved networks join again (wifi_keeper.go)
 		}
 	}
-	if r.bt {
+	if r.bt && !btSwitchStillOff() {
 		if err := setBluetoothEnabled(true); err != nil {
 			errs = append(errs, err)
 		}

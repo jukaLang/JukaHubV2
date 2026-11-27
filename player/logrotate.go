@@ -16,11 +16,9 @@ import (
 
 const (
 	// logExportMaxBytes caps one exported log file at 2 MiB. The 2000-line ring
-	// usually fits in a few hundred KB; the cap is for pathological lines.
+	// (internal/logx, with its own 512 KiB byte cap) usually fits in a few
+	// hundred KB; the cap is for pathological lines.
 	logExportMaxBytes = 2 << 20
-	// logBufferMaxBytes caps the in-memory ring as well as its line count, so a
-	// single huge stack trace cannot hold megabytes for the whole session.
-	logBufferMaxBytes = 512 << 10
 )
 
 // capLogData returns at most maxBytes from the end of data (the newest part),

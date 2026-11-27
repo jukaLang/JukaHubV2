@@ -290,6 +290,13 @@ func upchOpenHistory(config *Config) {
 	upchUI.sheet = upchSheetHistory
 	upchUI.focus, upchUI.top = 0, 0
 	upchUI.headLine = "Installed now"
+	// How the running build started here, from the same records as the saved
+	// ones (REL-17): startcheck.go's or updrescue.go's fact for its tag.
+	if tag := strings.TrimSpace(readInstalledReleaseInfo().Tag); tag != "" {
+		if note := uhistStartNote(tag); note != "" {
+			upchUI.headLine += " · " + note
+		}
+	}
 	upchSetHistory()
 }
 
@@ -310,6 +317,9 @@ func upchSetHistory() {
 		sub := humanBytes(e.Bytes)
 		if t, ok := parseReleaseTimestamp(e.SavedAt); ok {
 			sub = "Replaced " + formatDateTimeNear(nil, t.Local(), time.Now()) + " · " + sub
+		}
+		if start := uhistStartNote(e.Tag); start != "" {
+			sub += " · " + start
 		}
 		if note := upchFirstNote(e.Notes); note != "" {
 			sub += " · " + note

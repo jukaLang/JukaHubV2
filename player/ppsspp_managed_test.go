@@ -1166,7 +1166,7 @@ func TestPPSSPPInstallFromRelease(t *testing.T) {
 	if !regularFile(filepath.Join(b.memstick(), "SYSTEM", "ULUS10041_ppsspp.ini")) {
 		t.Error("the firmware's per-game config was not carried into the first install")
 	}
-	if data, _ := os.ReadFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")); strings.Contains(string(data), "VULKAN") {
+	if data, _ := os.ReadFile(filepath.Join(b.memstick(), "SYSTEM", "ppsspp.ini")); strings.Contains(string(data), "GraphicsBackend = 3 (VULKAN)") {
 		t.Error("the firmware's ppsspp.ini replaced the build's own")
 	}
 	if !dirExists(filepath.Join(b.memstick(), "SAVEDATA")) || !dirExists(filepath.Join(b.memstick(), "PPSSPP_STATE")) {
@@ -1371,4 +1371,3 @@ func TestPPSSPPRetroAchievementsSignIn(t *testing.T) {
 		t.Error("another account's RetroArch token was taken")
 	}
 }
-

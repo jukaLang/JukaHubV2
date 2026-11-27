@@ -3,8 +3,8 @@ package main
 // logging.go — the app's one log.
 //
 // Everything JukaHub reports goes through log/slog into one handler
-// (logRingHandler). Each record becomes a compact line in the in-memory ring
-// (appLog, hardware.go) that the Logs screen, the bug report and the
+// (internal/logx.Handler). Each record becomes a compact line in the in-memory
+// ring (appLog, internal/logx) that the Logs screen, the bug report and the
 // diagnostics export read; records at warning level and above are also copied
 // to stderr, which launch.sh appends to errors.txt on the card. Both copies
 // have credentials removed first (redactLogSecrets, logredact.go). Debug lines on
@@ -25,10 +25,35 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
+
+	"jukahub/JukaHub/internal/logx"
 )
 
 var logger *slog.Logger
+
+// logRingHandler is kept as the name the package's tests use; the handler
+// itself lives in internal/logx.
+type logRingHandler = logx.Handler
+
+// newLogHandler wires the app's policy into the logx handler: redaction, the
+// Windows warning file, and the runtime Debug logging switch.
+func newLogHandler(level, stderr slog.Level) *logx.Handler {
+	return &logx.Handler{
+		Level:       level,
+		StderrLevel: stderr,
+		Ring:        appLog,
+		Redact:      redactLogSecrets,
+		WarnFile:    logFileAppend,
+		ForceDebug:  logDebugForced.Load,
+	}
+}
+
+// Package initialisers log before main installs the real level. Install a
+// redacting handler at once so none of those early lines can miss redaction.
+func init() {
+	logger = slog.New(newLogHandler(slog.LevelInfo, slog.LevelWarn))
+	logx.SetLogger(logger)
+}
 
 // logLevelFromEnv reads JUKAHUB_LOG_LEVEL (case-insensitive) and
 // JUKAHUB_DEBUG. Valid values: debug, info, warn, error, off.
@@ -61,19 +86,14 @@ func logLevelFromEnv() slog.Level {
 // once, first thing in main; Log() calls it lazily for code that runs earlier
 // (package initialisers, tests, the secret CLI).
 func InitLogging() {
-	if logger == nil {
-		// Keep a bootstrap logger available while choosing the real level.
-		// Device detection can happen here; its identity is logged only after
-		// the final handler is installed below.
-		logger = slog.New(&logRingHandler{level: slog.LevelInfo, stderr: slog.LevelWarn})
-	}
 	level := logLevelFromEnv()
 	stderrLevel := slog.LevelWarn
 	if !IsTrimuiDevice() && level < stderrLevel {
 		// A desktop run has a console a developer is looking at.
 		stderrLevel = level
 	}
-	logger = slog.New(&logRingHandler{level: level, stderr: stderrLevel})
+	logger = slog.New(newLogHandler(level, stderrLevel))
+	logx.SetLogger(logger)
 	slog.SetDefault(logger)
 	// Anything a dependency still prints through the log package is chatter.
 	slog.SetLogLoggerLevel(slog.LevelDebug)
@@ -101,144 +121,21 @@ func LogSceneOp(scene, op string) *slog.Logger {
 // logDebug, logInfo, logWarn and logError are the printf-style entry points;
 // sys names the subsystem ("apps", "wifi", ...) and leads the message. The
 // message is only formatted when the level is enabled.
-func logDebug(sys, format string, args ...any) { logPrintf(slog.LevelDebug, sys, format, args...) }
-func logInfo(sys, format string, args ...any)  { logPrintf(slog.LevelInfo, sys, format, args...) }
-func logWarn(sys, format string, args ...any)  { logPrintf(slog.LevelWarn, sys, format, args...) }
-func logError(sys, format string, args ...any) { logPrintf(slog.LevelError, sys, format, args...) }
+var (
+	logDebug = logx.Debug
+	logInfo  = logx.Info
+	logWarn  = logx.Warn
+	logError = logx.Error
+)
 
 // logFatal reports a startup failure the app cannot continue past and exits.
 // The line goes to stderr even if logging is off, because it is the only
 // evidence a black screen leaves behind.
 func logFatal(sys, format string, args ...any) {
 	msg := sys + ": " + fmt.Sprintf(format, args...)
-	logPrintf(slog.LevelError, "", "%s", msg)
+	logError("", "%s", msg)
 	if !Log().Enabled(context.Background(), slog.LevelError) {
 		fmt.Fprintln(os.Stderr, redactLogSecrets(msg))
 	}
 	os.Exit(1)
-}
-
-func logPrintf(level slog.Level, sys, format string, args ...any) {
-	l := Log()
-	if !l.Enabled(context.Background(), level) {
-		return
-	}
-	msg := fmt.Sprintf(format, args...)
-	if sys != "" {
-		msg = sys + ": " + msg
-	}
-	_ = l.Handler().Handle(context.Background(), slog.NewRecord(time.Now(), level, msg, 0))
-}
-
-// logRingHandler renders a record as "15:04:05 WARN  message key=value" into
-// appLog and, at or above the stderr level, onto stderr.
-type logRingHandler struct {
-	level  slog.Level
-	stderr slog.Level
-	attrs  string // pre-rendered " key=value" pairs from WithAttrs
-	group  string // dotted group prefix from WithGroup
-}
-
-func (h *logRingHandler) Enabled(_ context.Context, level slog.Level) bool {
-	// Settings → Developer → Debug logging lets debug lines in at runtime
-	// (devoptions.go).
-	return level >= h.level || (level >= slog.LevelDebug && logDebugForced.Load())
-}
-
-func (h *logRingHandler) Handle(_ context.Context, r slog.Record) error {
-	var b strings.Builder
-	b.Grow(24 + len(r.Message) + len(h.attrs))
-	t := r.Time
-	if t.IsZero() {
-		t = time.Now()
-	}
-	b.WriteString(t.Format("15:04:05"))
-	b.WriteByte(' ')
-	b.WriteString(logLevelTag(r.Level))
-	b.WriteByte(' ')
-	b.WriteString(r.Message)
-	b.WriteString(h.attrs)
-	r.Attrs(func(a slog.Attr) bool {
-		appendLogAttr(&b, h.group, a)
-		return true
-	})
-	// Credentials go before the line reaches the ring or the card
-	// (logredact.go): an error string can echo a request URL or a header.
-	line := redactLogSecrets(b.String())
-	appLog.Append(line)
-	if r.Level >= h.stderr {
-		_, _ = os.Stderr.WriteString(line + "\n")
-	}
-	// A GUI-subsystem Windows build has no stderr to copy to, so warnings and
-	// errors also go to errors.txt in the log folder (logfile.go).
-	if r.Level >= slog.LevelWarn {
-		logFileAppend(line)
-	}
-	return nil
-}
-
-func (h *logRingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	if len(attrs) == 0 {
-		return h
-	}
-	var b strings.Builder
-	b.WriteString(h.attrs)
-	for _, a := range attrs {
-		appendLogAttr(&b, h.group, a)
-	}
-	c := *h
-	c.attrs = b.String()
-	return &c
-}
-
-func (h *logRingHandler) WithGroup(name string) slog.Handler {
-	if name == "" {
-		return h
-	}
-	c := *h
-	c.group = c.group + name + "."
-	return &c
-}
-
-// logLevelTag is the fixed-width level column the Logs screen reads back
-// (sysToolParseLogLine).
-func logLevelTag(level slog.Level) string {
-	switch {
-	case level >= slog.LevelError:
-		return "ERROR"
-	case level >= slog.LevelWarn:
-		return "WARN "
-	case level >= slog.LevelInfo:
-		return "INFO "
-	}
-	return "DEBUG"
-}
-
-// appendLogAttr writes " key=value", quoting a value with spaces so a line
-// stays one parsable row.
-func appendLogAttr(b *strings.Builder, group string, a slog.Attr) {
-	a.Value = a.Value.Resolve()
-	if a.Equal(slog.Attr{}) {
-		return
-	}
-	if a.Value.Kind() == slog.KindGroup {
-		prefix := group
-		if a.Key != "" {
-			prefix += a.Key + "."
-		}
-		for _, ga := range a.Value.Group() {
-			appendLogAttr(b, prefix, ga)
-		}
-		return
-	}
-	b.WriteByte(' ')
-	b.WriteString(group)
-	b.WriteString(a.Key)
-	b.WriteByte('=')
-	v := a.Value.String()
-	if v == "" || strings.ContainsAny(v, " \t\n\"=") {
-		fmt.Fprintf(b, "%q", v)
-		return
-	}
-	b.WriteString(v)
 }

@@ -178,8 +178,9 @@ func TestMusicAuralisFooterFitsAtLargestText(t *testing.T) {
 				}
 			}
 			// Drawn whole: the lines name the buttons in hand (musicPlayerHintLines).
-			if full := musicPlayerHintLines(); l.hintLines[0] != full[0] || l.hintLines[1] != full[1] {
-				t.Fatalf("footer hints were truncated: %q / %q", l.hintLines[0], l.hintLines[1])
+			full := musicPlayerHintLines()
+			if l.hintLines[0] != full[0] || l.hintLines[1] != full[1] {
+				t.Fatalf("footer hints were truncated: %q / %q, want %q / %q", l.hintLines[0], l.hintLines[1], full[0], full[1])
 			}
 			font, _ := getCachedFont(cfg, "small")
 			if font == nil {

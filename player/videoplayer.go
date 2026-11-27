@@ -2364,9 +2364,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 
 	UpdateCurrentTexture(renderer)
 
-	embeddedPlayer.mu.Lock()
-	currentTex := embeddedPlayer.current
-	embeddedPlayer.mu.Unlock()
+	currentTex, frameW, frameH := currentVideoFrame()
 
 	if currentTex == nil && state.phase == "playing" {
 		videoTextureLogCount++
@@ -2382,7 +2380,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	// buttons — and last what sits over both: subtitles, the paused button,
 	// the volume pill, the settings sheet.
 	vis := vcChromeTick(state, sdl.Rect{X: x, Y: y, W: w, H: h})
-	drawVideoFrameArea(renderer, currentTex, x, y, w, h)
+	drawVideoFrameAreaSized(renderer, currentTex, frameW, frameH, x, y, w, h)
 	if vis > 0 {
 		vcDrawScrimsFaded(renderer, config, x, y, w, h, vis)
 		vcDrawChromeFaded(renderer, config, state, x, y, w, h, vis)
@@ -2404,15 +2402,25 @@ func renderVideoFullscreen(renderer *sdl.Renderer, config *Config) {
 // drawVideoFrameArea draws the current video frame, or a dark backdrop with a
 // spinner while the decoder has not produced one yet (downloading or buffering),
 // so playback never looks like a dead black rectangle.
+// currentVideoFrame reads the texture and its size under one lock. The overlay
+// used to lock three separate times for facts that never change mid-frame.
+func currentVideoFrame() (*sdl.Texture, int32, int32) {
+	embeddedPlayer.mu.Lock()
+	defer embeddedPlayer.mu.Unlock()
+	return embeddedPlayer.current, embeddedPlayer.width, embeddedPlayer.height
+}
+
 func drawVideoFrameArea(renderer *sdl.Renderer, currentTex *sdl.Texture, x, y, w, h int32) {
+	_, vw, vh := currentVideoFrame()
+	drawVideoFrameAreaSized(renderer, currentTex, vw, vh, x, y, w, h)
+}
+
+func drawVideoFrameAreaSized(renderer *sdl.Renderer, currentTex *sdl.Texture, vw, vh, x, y, w, h int32) {
 	if currentTex != nil {
 		// The picture keeps its own shape: a Short (9:16) or a 4:3 clip used
 		// to be stretched to the width of the player, which on the Media
 		// screen's wide element squashed every face.
 		dst := sdl.Rect{X: x, Y: y, W: w, H: h}
-		embeddedPlayer.mu.Lock()
-		vw, vh := embeddedPlayer.width, embeddedPlayer.height
-		embeddedPlayer.mu.Unlock()
 		if fit := mediaFitRect(dst, vw, vh); fit != dst {
 			renderer.SetDrawColor(0, 0, 0, 255)
 			renderer.FillRect(&dst)

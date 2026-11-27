@@ -131,7 +131,9 @@ they were, and Select still opens the menu. The choice is the
   table header stays with its table). Layers, floats and sticky bars paint
   in `z-index` order inside their stacking contexts, a section's background
   stays under the code block or note inside it, and a card's surface reaches
-  behind its photo. Screen-reader-only headings and skip links no longer
+  behind its photo. A news card whose cover is `picture img{position:absolute;
+  inset:0}` in a 16:9 frame stays in that frame — it is clipped to the card's
+  column and drawn under the card's own headline, not across the page. Screen-reader-only headings and skip links no longer
   appear over the page, carousel slides outside their frame are hidden, and
   links and fields inside overlays, pinned bars and floated boxes are
   reachable with the D-pad and by tap (and, except on pinned bars, by
@@ -158,7 +160,15 @@ they were, and Select still opens the menu. The choice is the
   hero; a row of cards ending level; a centred column (`align-items: center`)
   with its heading and button in the middle; an overlay's caption at the foot of
   its photo (`inset: 0`); and `transform: translate()` and relative offsets
-  moving a box together with its background.
+  moving a box together with its background. A grid cell belongs to the element
+  that asks for it, never to the boxes inside it: CNN's card list is itself a
+  grid item, but its cards still take one line each, every headline and
+  summary under the card above it, instead of stacking onto one cell and
+  printing over each other.
+* Show the page's words, not invented ones: a search bar's magnifier built as an
+  empty `<button>` with a background icon stays a button with no label (a
+  `<input type="submit">` with no value keeps its HTML default, "Submit"), so a
+  header or Yahoo-style search pill adds no stray "Submit" to its line.
 * Size boxes as the page's CSS says: a padded button, badge, tag or inline
   `<code>` takes the room its padding and border take, with its background,
   rounded corners and border drawn round the text, and moves to the next line

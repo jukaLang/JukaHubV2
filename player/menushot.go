@@ -387,7 +387,7 @@ func gameShotSave(fr gameShotFrame, at time.Time) {
 		fail(err)
 		return
 	}
-	path, err := screenshotPath("game", at)
+	path, err := screenshotPath(gameScreenshotPrefix(), at)
 	if err == nil {
 		err = os.WriteFile(path, buf.Bytes(), 0o644)
 	}

@@ -287,6 +287,7 @@ func thumbnailTextureBudgetBytes() int64 {
 type thumbnailTextureEntry struct {
 	texture *sdl.Texture
 	bytes   int64
+	w, h    int32 // measured once at decode; a render frame must not call Query
 	elem    *list.Element
 }
 
@@ -349,6 +350,20 @@ func (c *thumbnailTextureCache) Get(key string) *sdl.Texture {
 	return entry.texture
 }
 
+// GetSize returns a cached texture with the dimensions measured at decode time.
+// Callers that crop a picture need both; asking SDL again per visible card per
+// frame was a cgo call for a number the cache already had.
+func (c *thumbnailTextureCache) GetSize(key string) (*sdl.Texture, int32, int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil, 0, 0
+	}
+	c.lru.MoveToFront(entry.elem)
+	return entry.texture, entry.w, entry.h
+}
+
 // Has reports whether key has a texture, without marking it used: a look-ahead
 // that only asks must not keep a picture off screen warmer than the ones in
 // view.
@@ -377,7 +392,7 @@ func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32
 		c.destroy(old.texture)
 		delete(c.entries, key)
 	}
-	entry := &thumbnailTextureEntry{texture: texture, bytes: bytes}
+	entry := &thumbnailTextureEntry{texture: texture, bytes: bytes, w: w, h: h}
 	entry.elem = c.lru.PushFront(key)
 	c.entries[key] = entry
 	c.bytes += bytes

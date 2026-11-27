@@ -435,13 +435,17 @@ function childAt(r, i) {
 function Range() {
   if (!new.target) throw new TypeError("Failed to construct 'Range': Please use the 'new' operator.");
   var d = mainDoc || standaloneDoc();
-  defineProperty(this, RG, { value: { sc: d, so: 0, ec: d, eo: 0 }, configurable: true });
+  var s = { doc: d, sc: d, so: 0, ec: d, eo: 0 };
+  defineProperty(this, RG, { value: s, configurable: true });
+  registerRange(s);
 }
 iface('Range', AbstractRange, Range);
 constants(Range, { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 });
 function makeRangeFor(d) {
   var o = objCreate(Range.prototype);
-  defineProperty(o, RG, { value: { sc: d, so: 0, ec: d, eo: 0 }, configurable: true });
+  var s = { doc: d, sc: d, so: 0, ec: d, eo: 0 };
+  defineProperty(o, RG, { value: s, configurable: true });
+  registerRange(s);
   return o;
 }
 // comparePoints: -1 / 0 / 1 for (a, ao) relative to (b, bo).
@@ -587,7 +591,9 @@ mix(Range.prototype, {
   cloneRange: function () {
     var s = rangeState(this);
     var o = objCreate(Range.prototype);
-    defineProperty(o, RG, { value: { sc: s.sc, so: s.so, ec: s.ec, eo: s.eo }, configurable: true });
+    var copy = { doc: s.doc, sc: s.sc, so: s.so, ec: s.ec, eo: s.eo };
+    defineProperty(o, RG, { value: copy, configurable: true });
+    registerRange(copy);
     return o;
   },
   detach: function () {},
@@ -674,7 +680,115 @@ iface('StaticRange', AbstractRange, StaticRange);
 mix(Document.prototype, {
   createRange: function () { return makeRangeFor(documentOf(this)); }
 });
-function rangesBeforeRemove(node) {}
+// A Range made for a document is kept on that document's list, and every tree
+// change moves its boundaries the way the DOM standard says. A boundary inside
+// a removed subtree (the node or any descendant) moves to the node's parent at
+// its old index; a boundary on the parent past that index moves back one.
+function docRangeList(d) {
+  var list = d.__jukahubRanges;
+  if (!list) list = d.__jukahubRanges = [];
+  return list;
+}
+function registerRange(s) {
+  if (!s.doc) s.doc = s.sc && s.sc.d;
+  if (s.doc) docRangeList(s.doc).push(s);
+}
+function unregisterRange(s) {
+  var list = s.doc && s.doc.__jukahubRanges;
+  if (!list) return;
+  var at = list.indexOf(s);
+  if (at >= 0) list.splice(at, 1);
+}
+// The DOM "insert" steps: a boundary on the parent past the insertion index
+// moves one place right (one exactly at the index stays).
+function rangesAfterInsert(parent, index) {
+  var list = docRangeList(docOf(parent));
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (s.sc === parent && s.so > index) s.so++;
+    if (s.ec === parent && s.eo > index) s.eo++;
+  }
+}
+// The DOM "remove" steps, run while the node is still attached.
+function rangesBeforeRemove(node) {
+  var parent = node.p;
+  if (!parent) return;
+  var index = childIndex(node);
+  var list = docRangeList(docOf(parent));
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (isInclusiveAncestor(node, s.sc)) {
+      s.sc = parent;
+      s.so = index;
+    } else if (s.sc === parent && s.so > index) {
+      s.so--;
+    }
+    if (isInclusiveAncestor(node, s.ec)) {
+      s.ec = parent;
+      s.eo = index;
+    } else if (s.ec === parent && s.eo > index) {
+      s.eo--;
+    }
+  }
+}
+// The DOM "replace data" steps: a boundary inside the replaced run collapses
+// to its start, one past it shifts by the length change.
+function rangesAfterReplaceData(r, offset, count, added) {
+  var delta = added - count;
+  var list = docRangeList(r.d);
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (s.sc === r && s.so > offset) s.so = s.so <= offset + count ? offset : s.so + delta;
+    if (s.ec === r && s.eo > offset) s.eo = s.eo <= offset + count ? offset : s.eo + delta;
+  }
+}
+// The DOM "split text" steps: a boundary after the split moves to the new
+// node, shifted back by the split offset.
+function rangesAfterSplit(r, offset, tail) {
+  var list = docRangeList(r.d);
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (s.sc === r && s.so > offset) {
+      s.sc = tail;
+      s.so -= offset;
+    }
+    if (s.ec === r && s.eo > offset) {
+      s.ec = tail;
+      s.eo -= offset;
+    }
+  }
+}
+// normalize() merges a text node into the one before it: a boundary in the
+// merged node moves there, shifted by the surviving node's old length, and a
+// boundary on the parent exactly before the merged node moves to the join.
+function rangesAtParentIndex(parent, index, to, at) {
+  var list = docRangeList(docOf(parent));
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (s.sc === parent && s.so === index) {
+      s.sc = to;
+      s.so = at;
+    }
+    if (s.ec === parent && s.eo === index) {
+      s.ec = to;
+      s.eo = at;
+    }
+  }
+}
+function rangesMergeText(from, to, at) {
+  var list = docRangeList(from.d);
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (s.sc === from) {
+      s.sc = to;
+      s.so += at;
+    }
+    if (s.ec === from) {
+      s.ec = to;
+      s.eo += at;
+    }
+  }
+}
 
 // ---------------------------------------------------------------- Selection
 

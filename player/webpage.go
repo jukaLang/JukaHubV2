@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	htmlstd "html"
 	"io"
 	"math"
@@ -1724,6 +1723,11 @@ type webControl struct {
 	// dots: the reader paints on a shared screen, and a prefilled password
 	// rendered in the clear is one glance away from being read off it.
 	Secret                  bool
+	// IconOnly marks a <button> whose content is empty (a search bar's
+	// magnifier drawn by a background image). HTML gives an empty <button> no
+	// default label at all, while <input type=submit> without a value says
+	// "Submit" — so the reader must not invent a word to put on it.
+	IconOnly                bool
 	Form                    webForm
 	Width, WidthPct, Height float64
 }
@@ -1802,6 +1806,11 @@ func (c *webControl) Display() string {
 			label = strings.TrimSpace(c.Value)
 		}
 		if label == "" {
+			if c.IconOnly {
+				// An icon-only button draws no word and reserves no text; its
+				// box is the page's own size for it.
+				return ""
+			}
 			label = "Submit"
 		}
 		return " " + label + " "
@@ -12996,6 +13005,9 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 			top.item++
 			top.itemStyle = style
 			flexItem = true
+			if webFlexDebug && top.group == 32 {
+				println("  ITEM", top.group, top.item, el.tag, strings.Join(el.classes, "."))
+			}
 			if boxID != 0 {
 				if p.doc.FlexItemBoxDepth[top.group] == nil {
 					p.doc.FlexItemBoxDepth[top.group] = make(map[int]int)
@@ -13054,6 +13066,9 @@ func (p *webParser) push(el webElement, style webStyle, kind string, attrs strin
 		p.doc.FlexScrollX[group] = style.ScrollX
 		if layer != 0 && layer <= len(p.doc.Layers) {
 			p.doc.Layers[layer-1].flexGroup = group
+		}
+		if webFlexDebug {
+			println("FLEXGROUP", group, el.tag, strings.Join(el.classes, "."), "display", style.Display, "cols", style.GridCols, "gapX", int(style.GapX), "depth", depth, "stack", len(p.stack))
 		}
 		p.flexStack = append(p.flexStack, webFlexFrame{
 			group:             group,
@@ -13255,6 +13270,14 @@ func webResetElementStyle(st *webStyle) {
 	st.GridAutoColSpecs, st.GridAutoColCount = [6]webGridTrackSpec{}, 0
 	st.GridAutoRowSpecs, st.GridAutoRowCount = [6]webGridTrackSpec{}, 0
 	st.GridWeights, st.GridBases = [6]float64{}, [6]float64{}
+	// Placement is not inherited either. A grid container that is itself an
+	// item (CNN's card list carries `grid-area: 1/1/auto/-1` for the wrapper's
+	// grid) used to hand its own cell down to every descendant, so each card's
+	// link, headline and summary block asked for the same cell and their text
+	// drew on top of each other.
+	st.GridRowStart, st.GridRowEnd, st.GridRowSpan = 0, 0, 0
+	st.GridColumnStart, st.GridColumnEnd, st.GridColumnSpan = 0, 0, 0
+	st.GridArea = ""
 	st.FlexGrow, st.FlexShrink, st.FlexBasis, st.BasisPct = 0, 1, -1, 0
 	st.Order = 0
 	st.Width, st.WidthPct, st.WidthFit, st.Height = 0, 0, 0, 0
@@ -14628,7 +14651,9 @@ func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	if p.current != nil {
 		runsAt = len(p.current.Runs)
 	}
-	p.appendRun(ctrl.Display(), st)
+	if label := ctrl.Display(); label != "" {
+		p.appendRun(label, st)
+	}
 	trail, trailChip := webInlineEdge(&st, true, false, false)
 	p.closeInlineBox(&webFrame{inlineFlushes: flushesAt, inlineRuns: runsAt, inlineTrail: trail, inlineTrailChip: trailChip, ownChip: true, startedChip: true})
 	p.space = true
@@ -14748,6 +14773,7 @@ func (p *webParser) endButton() {
 		return
 	}
 	ctrl.Label = strings.Join(strings.Fields(p.buttonText.String()), " ")
+	ctrl.IconOnly = ctrl.Label == ""
 	p.buttonCtrl = nil
 	p.buttonText.Reset()
 	p.emitControl(ctrl, p.buttonStyle, true)
@@ -15063,24 +15089,34 @@ func webBaseFontSize(config *Config, fontName string) float64 {
 // changed from one gradient to another keeps the same average colour, so the
 // colours alone would let a stale layout through with the old ramp baked into
 // its rects.
-func webGradientStamp(g webGradient, has bool) string {
+type webGradientStampValue struct {
+	axis                 uint8 // 0 horizontal, 1 vertical, 2 radial, 3 conic, 4 angled
+	stops                int
+	cx, cy, from, angle  float64
+	cornerX, cornerY     int8
+	first, last          sdl.Color
+}
+
+func webGradientStamp(g webGradient, has bool) webGradientStampValue {
+	var out webGradientStampValue
 	if !has || len(g.Stops) == 0 {
-		return "-"
+		return out
 	}
-	first, last := g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color
-	axis := "h"
+	out.stops = len(g.Stops)
+	out.first, out.last = g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color
+	out.cx, out.cy, out.from, out.angle = g.CX, g.CY, g.From, g.Angle
+	out.cornerX, out.cornerY = int8(g.CornerX), int8(g.CornerY)
 	switch {
 	case g.Conic:
-		axis = fmt.Sprintf("c%.1f@%.2f,%.2f", g.From, g.CX, g.CY)
+		out.axis = 3
 	case g.Radial:
-		axis = fmt.Sprintf("r%.2f,%.2f", g.CX, g.CY)
+		out.axis = 2
 	case g.Angled:
-		axis = fmt.Sprintf("a%.1f/%d%d", g.Angle, g.CornerX, g.CornerY)
+		out.axis = 4
 	case g.Vertical:
-		axis = "v"
+		out.axis = 1
 	}
-	return fmt.Sprintf("%s%d:%02x%02x%02x-%02x%02x%02x", axis, len(g.Stops),
-		first.R, first.G, first.B, last.R, last.G, last.B)
+	return out
 }
 
 // webLayoutStamp is what a cached layout was measured for. It is compared on
@@ -15094,7 +15130,7 @@ type webLayoutStamp struct {
 	textSize int
 	paper    sdl.Color
 	text     sdl.Color
-	gradient string
+	gradient webGradientStampValue
 	zoom     float64
 }
 
@@ -15555,6 +15591,15 @@ type webLayouter struct {
 	sanitized   map[webSanitizeKey]string
 	// fitWidths caches each fit-content box's width (fitBoxWidth).
 	fitWidths map[int]int32
+	// boxFlow caches containing-block rectangles. Layer positioning asks for
+	// the same ancestor box from several layers; without this each answer
+	// rescanned every row and run on the page.
+	boxFlow map[int]boxFlowCache
+}
+
+type boxFlowCache struct {
+	rect sdl.Rect
+	ok   bool
 }
 
 // webContainerRowSpan is one container's vertical extent in layout-grid rows.

@@ -1158,8 +1158,10 @@ func setAutoStart(on bool) error {
 	if !autostartSupported() {
 		return fmt.Errorf("this device manages startup apps itself")
 	}
-	if handled, err := setPlatformAutoStart(on); handled {
-		return err
+	if !autostartIsTrimui() {
+		if handled, err := setPlatformAutoStart(on); handled {
+			return err
+		}
 	}
 	path, err := autoStartLauncherPath()
 	if err != nil {
@@ -1200,8 +1202,10 @@ func setAutoStart(on bool) error {
 // autoStartInstalled reports whether the launcher exists on disk, which is the
 // ground truth the setting is reconciled against at startup.
 func autoStartInstalled() bool {
-	if handled, installed := platformAutoStartInstalled(); handled {
-		return installed
+	if !autostartIsTrimui() {
+		if handled, installed := platformAutoStartInstalled(); handled {
+			return installed
+		}
 	}
 	path, err := autoStartLauncherPath()
 	if err != nil {
@@ -1214,6 +1218,9 @@ func autoStartInstalled() bool {
 // autoStartStaleLauncher reports a launcher from the old Windows .cmd format
 // that must be replaced by the Run value (or removed when the setting is off).
 func autoStartStaleLauncher() bool {
+	if autostartIsTrimui() {
+		return false
+	}
 	if handled, stale := platformAutoStartStale(); handled {
 		return stale
 	}
@@ -1223,8 +1230,10 @@ func autoStartStaleLauncher() bool {
 // autoStartLocation is what to show for JukaHub's own entry on the Scheduled
 // tasks screen: the Windows Run value, or the launcher file elsewhere.
 func autoStartLocation() (command, source string, err error) {
-	if command, source, handled := platformAutoStartCommand(); handled {
-		return command, source, nil
+	if !autostartIsTrimui() {
+		if command, source, handled := platformAutoStartCommand(); handled {
+			return command, source, nil
+		}
 	}
 	path, err := autoStartLauncherPath()
 	if err != nil {

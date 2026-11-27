@@ -281,7 +281,12 @@ var homeTip struct {
 	pill    sdl.Rect
 }
 
-func init() { homeTip.key = -1 }
+func init() {
+	homeTip.key = -1
+	// The dismissed day is written by the app, not chosen by the player: the
+	// settings reference must not offer it as an editable variable.
+	cfgdocRuntimeKeys[helpTipHiddenSetting] = true
+}
 
 // helpTipHiddenDay is the day whose tip was dismissed (main thread).
 func helpTipHiddenDay(c *Config) int {
@@ -360,6 +365,7 @@ func homeTipDraw(renderer *sdl.Renderer, fonts HomeFonts, footer sdl.Rect, width
 	}
 	homeTipRefresh()
 	if !homeTip.show {
+		homeTipFocusable(false)
 		return
 	}
 	fh := int32(fonts.Small.Height())
@@ -375,9 +381,11 @@ func homeTipDraw(renderer *sdl.Renderer, fonts HomeFonts, footer sdl.Rect, width
 	pill := sdl.Rect{X: footer.X, W: homeTip.tw + 2*padX, H: fh + scaleY(8, height)}
 	pill.Y = footer.Y - pill.H - scaleY(6, height)
 	if pill.Y < 0 {
+		homeTipFocusable(false)
 		return
 	}
 	homeTip.pill = pill
+	homeTipFocusable(true)
 	fillRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, sdl.Color{R: 0, G: 0, B: 0, A: 90})
 	strokeRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, 1, homeGlass(30))
 	drawText(renderer, fonts.Small, homeTip.fitted, pill.X+padX, pill.Y+(pill.H-fh)/2, ColorTextMuted(), textAlignLeft)
@@ -394,9 +402,23 @@ func homeTipOpen(config *Config) {
 // homeTipClick handles a click or tap at (mx, my) on Home: the tip opens its
 // Help page. It reports whether the tip took it.
 func homeTipClick(config *Config, mx, my int32) bool {
-	if homeTip.pill.W <= 0 || !pointInRect(mx, my, homeTip.pill) {
+	if !homeTipVisible() || !pointInRect(mx, my, homeTip.pill) {
 		return false
 	}
 	homeTipOpen(config)
 	return true
+}
+
+// homeTipVisible reports whether Home drew the tip this frame, which is also
+// when its focus stop exists.
+func homeTipVisible() bool {
+	return homeTip.show && homeTip.pill.W > 0
+}
+
+// homeTipFocusable adds or removes the tip's stop in the Home focus graph.
+// Home calls it from the draw that knows whether the line fitted.
+func homeTipFocusable(on bool) {
+	if homeLayout != nil {
+		homeLayout.Focus.SetEnabled(HomeFocusTip, on)
+	}
 }

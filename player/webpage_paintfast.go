@@ -30,6 +30,7 @@ package main
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -77,6 +78,15 @@ func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 	out := make([]webPaintRun, 0, len(runs))
 	var spaceFont *ttf.Font
 	spaceW := int32(-1)
+	// Joining words with += copied the whole stretch again for every word (a
+	// 30-word line built ~60 temporary strings). The builder grows in place;
+	// the string is materialised once, when the stretch closes.
+	var text strings.Builder
+	closeRun := func() {
+		if len(out) > 0 {
+			out[len(out)-1].run.Text = text.String()
+		}
+	}
 	for _, run := range runs {
 		if run.Invisible || run.Image != nil || run.Lifted {
 			continue
@@ -99,9 +109,9 @@ func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 			}
 			if gap, ok := webPaintJoinGap(prev, &run, spaceW); ok {
 				if gap > 0 {
-					prev.run.Text += " "
+					text.WriteByte(' ')
 				}
-				prev.run.Text += run.Text
+				text.WriteString(run.Text)
 				prev.w = run.X + w - prev.run.X
 				prev.h = max(prev.h, h)
 				// The stretch now ends where the word did: at its inline box's
@@ -110,8 +120,12 @@ func webBuildPaintRuns(runs []webRunPos) []webPaintRun {
 				continue
 			}
 		}
+		closeRun()
+		text.Reset()
+		text.WriteString(run.Text)
 		out = append(out, webPaintRun{run: run, w: w, h: h})
 	}
+	closeRun()
 	return out
 }
 

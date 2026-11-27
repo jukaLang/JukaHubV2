@@ -311,7 +311,7 @@ func devCheckBluetoothProbe(ctx context.Context, runID int64, done func()) {
 		return true
 	}
 	auto := ""
-	err := btBringUp(ctx, nil)
+	err := btBringUpQuiet(ctx, nil)
 	var devs []bzDevice
 	if err == nil {
 		if !wasOn {

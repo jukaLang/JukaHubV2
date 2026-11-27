@@ -72,6 +72,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -1098,7 +1099,9 @@ func autoCollDetails() {
 // first four-digit year in it that could be one, 0 when there is none.
 func autoCollYear(text string) int {
 	year, digits := 0, 0
-	for _, r := range text + " " {
+	// The old `text + " "` allocated a copy per game to get a final flush.
+	// Checking once after the loop gives the same answer without the copy.
+	for _, r := range text {
 		if r >= '0' && r <= '9' {
 			if digits < 4 {
 				year = year*10 + int(r-'0')
@@ -1111,6 +1114,9 @@ func autoCollYear(text string) int {
 		}
 		year, digits = 0, 0
 	}
+	if digits == 4 && year >= autoCollYearMin && year <= autoCollYearMax {
+		return year
+	}
 	return 0
 }
 
@@ -1118,7 +1124,7 @@ func autoCollYear(text string) int {
 // largest number in it, 0 when there is none.
 func autoCollPlayers(text string) int {
 	best, cur, in := 0, 0, false
-	for _, r := range text + " " {
+	for _, r := range text {
 		if r >= '0' && r <= '9' {
 			if cur < 1000 {
 				cur = cur*10 + int(r-'0')
@@ -1130,6 +1136,9 @@ func autoCollPlayers(text string) int {
 			best = cur
 		}
 		cur, in = 0, false
+	}
+	if in && cur > best {
+		best = cur
 	}
 	return best
 }
@@ -1154,7 +1163,10 @@ func autoCollGenreLabel(genre string) string {
 func autoCollSlug(name string) string {
 	var b strings.Builder
 	dash := false
-	for _, r := range strings.ToLower(name) {
+	// Lowercase each rune as it is read: ToLower would allocate a whole copy
+	// of the genre name for every game in the library.
+	for _, r := range name {
+		r = unicode.ToLower(r)
 		switch {
 		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			if dash && b.Len() > 0 {

@@ -689,7 +689,18 @@ func (p *webParser) layerSpacer(i int) {
 				layers++
 			}
 		case b.Layer == 0 && b.LayerMarker == 0:
-			return
+			// A lone positioned block that opened no layer of its own — an
+			// absolutely positioned picture (`picture img{position:absolute;
+			// inset:0}`, a news card's cover) — left the flow as well. It used
+			// to read as content, so a frame holding nothing but its picture
+			// measured no box at all: the picture then anchored to the page,
+			// drew as wide as the column and covered the card's own headline.
+			if !webBlockOutsideFlow(b) {
+				return
+			}
+			if b.Style.Position != webPositionFixed {
+				layers++
+			}
 		}
 	}
 	if layers == 0 {
@@ -699,6 +710,12 @@ func (p *webParser) layerSpacer(i int) {
 	webResetElementStyle(&st)
 	st.Invisible = true
 	st.Href, st.Control = "", nil
+	// The container's own ratio still sizes the line: a frame that holds
+	// nothing but its cover picture reserves the 16:9 box it is on the page
+	// (`aspect-ratio` on a media wrapper), and its picture fills that.
+	if frame.style.AspectRatio > 0 && frame.style.Height <= 0 && frame.style.MinHeight <= 0 {
+		st.AspectRatio = frame.style.AspectRatio
+	}
 	spacer := webBlock{Style: st, Runs: []webRun{{Text: ".", Style: st}}, TreeSeq: frame.seq}
 	for k := 0; k <= i; k++ {
 		if id := p.stack[k].containerID; id != 0 {
@@ -715,6 +732,18 @@ func (p *webParser) layerSpacer(i int) {
 	spacer.Details, spacer.DetailsShown = p.detailsTag()
 	spacer.FloatGroup = p.openFloatIn(i + 1)
 	p.blocks = append(p.blocks, spacer)
+}
+
+// webBlockOutsideFlow reports a block that takes no line of its container's
+// flow although it opened no layer: a positioned block whose own text stayed
+// in the page (a covering overlay), or a lone positioned picture. Such a
+// block still leaves the box around it empty, so a positioned container whose
+// only children are these still needs its own line (layerSpacer).
+func webBlockOutsideFlow(b *webBlock) bool {
+	if b == nil || !b.Float || len(b.Runs) > 0 && !b.Image {
+		return false
+	}
+	return b.Style.Position == webPositionAbsolute || b.Style.Position == webPositionFixed
 }
 
 // --- Layout ------------------------------------------------------------------

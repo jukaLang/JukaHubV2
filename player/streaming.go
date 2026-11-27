@@ -277,6 +277,45 @@ func streamAttempts(maxHeight int) []streamAttempt {
 	}
 }
 
+// siteStreamFormatSelector is the yt-dlp selector for a typed site. It ranks
+// formats that carry BOTH picture and sound first: the plain "best[ext=mp4]"
+// ranking can pick a video-only MP4 on these sites, and ffmpeg's audio decoder
+// then finds no stream, so the clip plays silent. The last two fallbacks keep
+// a site that publishes no muxed format working — the download path can join
+// separate streams with ffmpeg, which also keeps the sound.
+func siteStreamFormatSelector(maxHeight int) string {
+	h := maxHeight
+	if h <= 0 {
+		h = 720
+	}
+	muxed := fmt.Sprintf("best[height<=%d][vcodec!=none][acodec!=none]", h)
+	return fmt.Sprintf("best[height<=%d][ext=mp4][vcodec!=none][acodec!=none]/%s/best[vcodec!=none][acodec!=none]/best[height<=%d]/best", h, muxed, h)
+}
+
+// siteStreamAttempts is the extraction path for everything that is not
+// YouTube. The player-client arguments above only mean something to YouTube's
+// extractor: yt-dlp ignores them elsewhere, so a typed site's watch link used to
+// pay for three cold starts (about 2.8 s each, just unpacking the one-file
+// binary) to ask for clients that do not exist. One neutral call gets the
+// site's single file — with sound, when the site offers it; if it cannot, the
+// caller falls through to the whole-file download, which still honours the
+// height ceiling.
+func siteStreamAttempts(maxHeight int) []streamAttempt {
+	return []streamAttempt{{
+		name: "site extractor",
+		args: []string{"-f", siteStreamFormatSelector(maxHeight)},
+	}}
+}
+
+// sourceIsYouTube is the broad host check. It keeps the tuned player-client
+// attempts for every YouTube link, including ones whose id does not match the
+// native client's 11-character pattern, while every other host takes the
+// one-call site path.
+func sourceIsYouTube(raw string) bool {
+	lower := strings.ToLower(strings.TrimSpace(raw))
+	return strings.Contains(lower, "youtube.com") || strings.Contains(lower, "youtu.be")
+}
+
 // ytDlpDownloadClients is the client list of the whole-file download's
 // single-file attempt: android for the muxed format 18, then yt-dlp's
 // defaults and web_embedded for a helper with a JavaScript runtime. It
@@ -546,8 +585,12 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 		"--geo-bypass",
 		"--user-agent", streamUserAgent,
 	}
+	attempts := streamAttempts(maxHeight)
+	if !sourceIsYouTube(source) {
+		attempts = siteStreamAttempts(maxHeight)
+	}
 	var lastErr error
-	for _, attempt := range streamAttempts(maxHeight) {
+	for _, attempt := range attempts {
 		if ctx.Err() != nil {
 			break
 		}

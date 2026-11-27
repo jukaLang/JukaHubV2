@@ -338,6 +338,13 @@ func homeActivate(config *Config) {
 	if !uiModeHomeCardOK(id) {
 		return
 	}
+	// The tip of the day is a line, not a card: A opens the CONTROLS.md
+	// section its text names (helpdoc.go).
+	if id == HomeFocusTip {
+		PlayActivateSound()
+		homeTipOpen(config)
+		return
+	}
 	// The notification bell opens the same dropdown as the touch target and
 	// the chrome control on other scenes. notifToggle plays its own
 	// activation sound, so return before the generic one.
@@ -599,6 +606,12 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 			return false
 		}
 	case sdl.K_x:
+		// X on the tip of the day hides it for the day, as the pad's X does
+		// (helpdoc.go).
+		if e.Repeat == 0 && homeLayout.Focus.Current() == HomeFocusTip && homeTipVisible() {
+			helpHideTodaysTip(config)
+			break
+		}
 		// X on the Tabs Home opens the focused item's sheet (hometabs.go).
 		if e.Repeat == 0 && homeTabsX(config) {
 			break
@@ -698,6 +711,11 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		PlayActivateSound()
 		homeSearchOpen(config, true)
 	case sdl.CONTROLLER_BUTTON_X:
+		// On the tip of the day, X hides it for the day (helpdoc.go).
+		if homeLayout.Focus.Current() == HomeFocusTip && homeTipVisible() {
+			helpHideTodaysTip(config)
+			break
+		}
 		// On the Tabs Home, X opens the focused item's sheet (hometabs.go).
 		if homeTabsX(config) {
 			break
@@ -766,6 +784,11 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 		return true
 	}
 	if weatherPopoverClick(mx, my, config) {
+		return true
+	}
+	// A click or tap on the tip of the day opens its CONTROLS.md section, the
+	// same as A on it (helpdoc.go).
+	if homeTipClick(config, mx, my) {
 		return true
 	}
 	// The header QR is a direct pairing affordance: a tap shows it full screen,

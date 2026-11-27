@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -114,6 +116,43 @@ func TestSiteRedGifsVideosCarryPosterTitleAndLength(t *testing.T) {
 	}
 	if got.Thumb != "cached:https://media.redgifs.com/LooseBronzeSifaka-poster.jpg" {
 		t.Fatalf("thumb = %q", got.Thumb)
+	}
+}
+
+func TestRedGifsTokenIsCachedAndCanBeRefreshed(t *testing.T) {
+	oldValue, oldAt := redGifsToken.value, redGifsToken.at
+	defer func() {
+		redGifsToken.mu.Lock()
+		redGifsToken.value, redGifsToken.at = oldValue, oldAt
+		redGifsToken.mu.Unlock()
+	}()
+	redGifsToken.mu.Lock()
+	redGifsToken.value, redGifsToken.at = "", time.Time{}
+	redGifsToken.mu.Unlock()
+
+	authCalls := 0
+	read := func(link, _ string, into interface{}) error {
+		if !strings.Contains(link, "auth/temporary") {
+			return nil
+		}
+		authCalls++
+		out := into.(*struct {
+			Token string `json:"token"`
+		})
+		out.Token = "token-" + strconv.Itoa(authCalls)
+		return nil
+	}
+	first, err := redGifsTemporaryToken(read, false)
+	if err != nil || first != "token-1" {
+		t.Fatalf("first token = %q, %v", first, err)
+	}
+	second, err := redGifsTemporaryToken(read, false)
+	if err != nil || second != first || authCalls != 1 {
+		t.Fatalf("cached token = %q, auth calls = %d", second, authCalls)
+	}
+	fresh, err := redGifsTemporaryToken(read, true)
+	if err != nil || fresh != "token-2" || authCalls != 2 {
+		t.Fatalf("refreshed token = %q, auth calls = %d", fresh, authCalls)
 	}
 }
 

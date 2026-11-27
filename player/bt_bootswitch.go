@@ -27,9 +27,14 @@ import (
 const (
 	// btSwitchFileName is the remembered switch, in JukaHub's data folder.
 	btSwitchFileName = "bluetooth-switch.json"
-	// btSwitchMaxOffs bounds the switch-offs after one start: a firmware that
-	// keeps switching the radio back on is not fought.
+	// btSwitchMaxOffs bounds the switch-offs in the start-up burst: a firmware
+	// that keeps switching the radio back on is not fought there. After that,
+	// a wake watcher still honours an explicit Off (btSwitchWatchEvery).
 	btSwitchMaxOffs = 2
+	// btSwitchWatchEvery is the slow re-check of an explicit Off. It catches a
+	// firmware or daemon that powers the adapter up long after the start-up
+	// window, including after a suspend/resume that is not a full boot.
+	btSwitchWatchEvery = 2 * time.Minute
 )
 
 // btSwitchChecks are when, after JukaHub starts, a radio left off is looked at:
@@ -58,8 +63,9 @@ type btSwitchRecord struct {
 	Firmware string `json:"firmware,omitempty"`
 }
 
-// btSwitchPath is the remembered switch's file, "" without a data folder.
-func btSwitchPath() string {
+// btSwitchPath is the remembered switch's file, "" without a data folder. A
+// variable so a test can point it at a temporary file.
+var btSwitchPath = func() string {
 	dir, err := P().DataDir()
 	if err != nil || dir == "" {
 		return ""
@@ -75,15 +81,7 @@ func btSwitchRemember(on bool) {
 	if runtime.GOOS != "linux" {
 		return
 	}
-	st := &btSwitchState
-	st.mu.Lock()
-	if on {
-		st.onThisSession = true
-	}
-	same := st.known && st.on == on
-	st.known, st.on = true, on
-	st.mu.Unlock()
-	if same {
+	if !btSwitchNote(on) {
 		return
 	}
 	rec := btSwitchRecord{On: on, At: time.Now().UTC().Format(time.RFC3339)}
@@ -100,6 +98,26 @@ func btSwitchRemember(on bool) {
 			logDebug("bluetooth", "the Bluetooth switch was not remembered: %v", err)
 		}
 	}
+}
+
+// btSwitchNote updates the in-memory switch and reports whether it changed, so
+// the file and firmware setting are only written on a real change. Kept apart
+// from the platform guard so the session latch can be tested anywhere.
+func btSwitchNote(on bool) bool {
+	st := &btSwitchState
+	st.mu.Lock()
+	if on {
+		st.onThisSession = true
+	} else {
+		// An explicit Off re-arms the start-up restore and the wake watcher:
+		// once a user said off, an incidental bring-up or a later wake must
+		// not be able to latch the radio on for the rest of the session.
+		st.onThisSession = false
+	}
+	same := st.known && st.on == on
+	st.known, st.on = true, on
+	st.mu.Unlock()
+	return !same
 }
 
 // btSwitchFirmwareWord is the firmware's own setting as a record keeps it.
@@ -167,6 +185,59 @@ func btSwitchLoad() (btSwitchRecord, bool) {
 	return rec, true
 }
 
+// btSwitchStillOff is the authoritative answer: an explicit Off is remembered
+// on disk, and nothing this session switched on has cancelled it since. The
+// persisted file is re-read every time because a firmware service can power
+// the adapter up after the in-memory state was set.
+func btSwitchStillOff() bool {
+	st := &btSwitchState
+	st.mu.Lock()
+	onThisSession := st.onThisSession
+	st.mu.Unlock()
+	if onThisSession {
+		return false
+	}
+	rec, ok := btSwitchLoad()
+	return ok && !rec.On
+}
+
+// btSwitchEnforceOff puts the radio back off when the user's stored choice is
+// off and something powered it up. Main thread (it posts the power-off).
+func btSwitchEnforceOff() {
+	if runtime.GOOS != "linux" || !IsTrimuiDevice() || !btSwitchStillOff() {
+		return
+	}
+	if on, known := btKernelRadio(); !known || !on {
+		return
+	}
+	logInfo("bluetooth", "Bluetooth came on though it was left off; switching it off again")
+	btPowerOffAsync(nil)
+}
+
+// btSwitchWatchWake keeps an explicit Off after a long sleep. A suspend/resume
+// is not a boot, so the start-up burst below never runs; the firmware (or a
+// bluetoothd restart) can power the adapter up on wake. One watcher per run,
+// same as the auto-reconnect loop.
+func btSwitchWatchWake() {
+	if runtime.GOOS != "linux" || !IsTrimuiDevice() {
+		return
+	}
+	go func() {
+		wake := subscribeWake()
+		tick := time.NewTicker(btSwitchWatchEvery)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wake:
+				// bluetoothd and the chip need a moment after a resume.
+				time.Sleep(5 * time.Second)
+			case <-tick.C:
+			}
+			btSwitchEnforceOff()
+		}
+	}()
+}
+
 // btSwitchRestoreAtStart switches the radio off again after a start on a
 // TrimUI when JukaHub last left it off and the firmware's boot switched it on
 // (see the file comment). It returns at once; the checks run on a goroutine.
@@ -178,10 +249,12 @@ func btSwitchRestoreAtStart() {
 	if !ok {
 		return
 	}
-	if now := btSwitchFirmwareWord(); now == "on" && rec.Firmware != "" && rec.Firmware != now {
+	if now := btSwitchFirmwareWord(); now == "on" && rec.Firmware == "off" {
 		// The firmware's own setting was switched on in the stock menu since
-		// JukaHub last left it off: that is the newer choice.
+		// JukaHub explicitly left it off: that is the newer choice. Persist it,
+		// or the wake watcher would keep enforcing the stale Off in the file.
 		rec.On = true
+		btSwitchRemember(true)
 	}
 	st := &btSwitchState
 	st.mu.Lock()
@@ -189,6 +262,7 @@ func btSwitchRestoreAtStart() {
 		st.known, st.on = true, rec.On
 	}
 	st.mu.Unlock()
+	btSwitchWatchWake()
 	if rec.On {
 		return
 	}
@@ -197,10 +271,7 @@ func btSwitchRestoreAtStart() {
 		offs := 0
 		for _, at := range btSwitchChecks {
 			time.Sleep(time.Until(start.Add(at)))
-			st.mu.Lock()
-			skip := st.onThisSession || (st.known && st.on)
-			st.mu.Unlock()
-			if skip {
+			if !btSwitchStillOff() {
 				return
 			}
 			if on, known := btKernelRadio(); !known || !on {
@@ -211,10 +282,7 @@ func btSwitchRestoreAtStart() {
 			done := make(chan struct{})
 			tbxPost(func() {
 				// Looked at again here: a press that switched it on since wins.
-				st.mu.Lock()
-				skip := st.onThisSession
-				st.mu.Unlock()
-				if !skip {
+				if btSwitchStillOff() {
 					btPowerOffAsync(nil)
 				}
 				close(done)

@@ -226,6 +226,8 @@ func vkSettingsRows() []vkSetRow {
 			title: "Auto-capitalization", detail: "A capital at the start of each sentence"},
 		vkSetRow{kind: vkSetToggle, key: vkKeySounds, on: vkSoundsEnabled(),
 			title: "Key sounds", detail: "A soft tick on every key"},
+		vkSetRow{kind: vkSetToggle, key: vkKeyWrap, on: vkWrapEnabled(),
+			title: "Wrap around", detail: "Left and Right carry on from the other end of the row; Down from the last row returns to the first"},
 	)
 	learned := vkLearnedCount()
 	clearDetail := "No learned words yet"

@@ -410,6 +410,55 @@ func uhistSummaryLine() string {
 	return line
 }
 
+// uhistStartNote is the one line the version history shows for how a build
+// first started here, from the records startcheck.go and updrescue.go keep in
+// versions/. It is "" when neither record names this build.
+func uhistStartNote(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ""
+	}
+	dir, err := uhistDir()
+	if err != nil {
+		return ""
+	}
+	var started struct {
+		Tag   string `json:"tag"`
+		Model string `json:"model"`
+		Date  string `json:"date"`
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, startCheckFactName)); err == nil &&
+		json.Unmarshal(data, &started) == nil && strings.EqualFold(strings.TrimSpace(started.Tag), tag) {
+		return uhistStartLine("Started fine on ", started.Model, started.Date, "")
+	}
+	var rescued updRescueFact
+	if data, err := os.ReadFile(filepath.Join(dir, updRescueFactName)); err == nil &&
+		json.Unmarshal(data, &rescued) == nil && strings.EqualFold(strings.TrimSpace(rescued.To), tag) {
+		return uhistStartLine("Didn't start on ", rescued.Model, rescued.Date, " — not offered again")
+	}
+	return ""
+}
+
+// uhistStartLine phrases one start record. The date is shown only when it is a
+// real date: vfDateNow writes "" on an implausible clock, and a config carried
+// from another device may hold anything.
+func uhistStartLine(prefix, model, date, suffix string) string {
+	on := "this device"
+	if model = strings.TrimSpace(model); model != "" {
+		if short := strings.TrimSpace(vfModelShort(model)); short != "" {
+			on = short
+			if !strings.HasPrefix(on, "this ") {
+				on = "this " + on
+			}
+		}
+	}
+	line := prefix + on
+	if t, err := time.Parse("2006-01-02", strings.TrimSpace(date)); err == nil {
+		line += " on " + t.Format("2006-01-02")
+	}
+	return line + suffix
+}
+
 // uhistLabel names a build for people: its release date and time, else its
 // tag or version.
 func uhistLabel(tag, date, version string) string {

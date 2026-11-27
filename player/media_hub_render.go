@@ -267,19 +267,16 @@ func mediaDrawCardArt(renderer *sdl.Renderer, config *Config, card *mediaCard, r
 					mediaPruneThumbKeys()
 				}
 				mediaThumbKeys[normalized] = struct{}{}
-				tex := cachedThumbnailTexture(renderer, key)
-				if tex != nil {
-					_, _, tw, th, err := tex.Query()
-					if err == nil && tw > 0 && th > 0 {
-						if card.artContain {
-							dst := mediaFitRect(rect, tw, th)
-							renderer.Copy(tex, nil, &dst)
-						} else {
-							src := mediaCoverCrop(tw, th, rect.W, rect.H)
-							renderer.Copy(tex, &src, &rect)
-						}
-						return true
+				tex, tw, th := cachedThumbnailTextureSize(renderer, key)
+				if tex != nil && tw > 0 && th > 0 {
+					if card.artContain {
+						dst := mediaFitRect(rect, tw, th)
+						renderer.Copy(tex, nil, &dst)
+					} else {
+						src := mediaCoverCrop(tw, th, rect.W, rect.H)
+						renderer.Copy(tex, &src, &rect)
 					}
+					return true
 				}
 				mediaWarmThumb(key)
 			}
@@ -294,12 +291,11 @@ func mediaDrawCardArt(renderer *sdl.Renderer, config *Config, card *mediaCard, r
 			mediaPruneThumbKeys()
 		}
 		mediaThumbKeys[normalized] = struct{}{}
-		tex := cachedThumbnailTexture(renderer, key)
+		tex, tw, th := cachedThumbnailTextureSize(renderer, key)
 		if tex == nil {
 			continue
 		}
-		_, _, tw, th, err := tex.Query()
-		if err != nil || tw <= 0 || th <= 0 {
+		if tw <= 0 || th <= 0 {
 			renderer.Copy(tex, nil, &rect)
 			return true
 		}
@@ -494,7 +490,12 @@ func mediaHubRender(renderer *sdl.Renderer, config *Config) {
 		mediaHub.previewStart = uiClockMS()
 	}
  
-	online := IsOnline()
+	// mediaHubTick already sampled the network monitor this frame; taking the
+	// lock again here only to reach the same answer is waste on every frame.
+	online := mediaHub.online
+	if !mediaHub.onlineKnown {
+		online = IsOnline()
+	}
 	statusW := int32(0)
 	statusText := ""
 	statusKind := 0

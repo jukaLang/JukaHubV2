@@ -56,6 +56,16 @@ var (
 	imageViewerIndex int = -1
 )
 
+// imgvGameGroup is one game's section of the capture gallery: the pictures
+// the organizer opened, newest first. When imageViewerGroups holds more than
+// one, L1/R1 step between games and L2/R2 stays inside the current game.
+type imgvGameGroup struct {
+	name  string
+	paths []string
+}
+
+var imageViewerGroups []imgvGameGroup
+
 // imageViewerRemote marks the viewer as showing a downloaded image (a chat
 // preview URL) instead of a file on disk.
 var imageViewerRemote bool
@@ -129,6 +139,7 @@ func openImageViewerURL(url string) {
 	}
 	imageViewerFiles = nil
 	imageViewerIndex = -1
+	imageViewerGroups = nil
 	imgvReleaseTextures()
 	imgv = imgvState{}
 	imageViewerRemote = true
@@ -209,6 +220,7 @@ func openImageViewer(config *Config, path string) {
 	path = filepath.Clean(path)
 	imageViewerFiles = nil
 	imageViewerIndex = -1
+	imageViewerGroups = nil
 	if config != nil {
 		if entries, ok := config.Variables.Custom["fe_entries"].([]FileEntry); ok && !filesNav.atLocations {
 			for _, entry := range entries {
@@ -283,6 +295,42 @@ func imageViewerStep(delta int) {
 	PlayNavSound()
 }
 
+// imgvGroupStep moves the viewer to the next or previous game's section of the
+// capture gallery, wrapping at both ends. It reports false when the picture
+// did not come from a gallery with more than one game, so L1/R1 keep zooming
+// for an ordinary folder.
+func imgvGroupStep(delta int) bool {
+	if len(imageViewerGroups) < 2 || delta == 0 {
+		return false
+	}
+	current := -1
+	for i, group := range imageViewerGroups {
+		for _, path := range group.paths {
+			if path == imageViewerPath {
+				current = i
+				break
+			}
+		}
+		if current >= 0 {
+			break
+		}
+	}
+	if current < 0 {
+		return false
+	}
+	next := (current + delta%len(imageViewerGroups) + len(imageViewerGroups)) % len(imageViewerGroups)
+	group := imageViewerGroups[next]
+	if len(group.paths) == 0 {
+		return false
+	}
+	imageViewerFiles = append([]string(nil), group.paths...)
+	imageViewerIndex = 0
+	imageViewerShow(group.paths[0])
+	PlayNavSound()
+	showToast(group.name, ToastInfo())
+	return true
+}
+
 // imgvReleaseTextures frees the viewer's own textures (never a remote one: the
 // chat cache owns those).
 func imgvReleaseTextures() {
@@ -313,6 +361,7 @@ func closeImageViewer() {
 	imageViewerPanY = 0
 	imageViewerFiles = nil
 	imageViewerIndex = -1
+	imageViewerGroups = nil
 	imageViewerRemote = false
 	imageViewerCloseBtn = sdl.Rect{}
 	imageViewerLockBtn = sdl.Rect{}
@@ -874,9 +923,13 @@ func imgvController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// had no job in the viewer, which keeps the pad until it closes.
 		imgvMarkUp(config)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		imgvZoomBy(-1, cx, cy)
+		if !imgvGroupStep(-1) {
+			imgvZoomBy(-1, cx, cy)
+		}
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		imgvZoomBy(1, cx, cy)
+		if !imgvGroupStep(1) {
+			imgvZoomBy(1, cx, cy)
+		}
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		imgvDirection(-1, 0)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
@@ -905,9 +958,13 @@ func imgvShoulder(s padShoulder) {
 	case padR2:
 		imageViewerStep(1)
 	case padL1:
-		imgvZoomBy(-1, screenWidth/2, screenHeight/2)
+		if !imgvGroupStep(-1) {
+			imgvZoomBy(-1, screenWidth/2, screenHeight/2)
+		}
 	case padR1:
-		imgvZoomBy(1, screenWidth/2, screenHeight/2)
+		if !imgvGroupStep(1) {
+			imgvZoomBy(1, screenWidth/2, screenHeight/2)
+		}
 	}
 }
 
@@ -1226,9 +1283,15 @@ func imgvFooterHints() []FooterHint {
 	}
 	// The keyboard's halves (handleImageViewerInput): - and + zoom, PgUp and
 	// PgDn step through the folder.
+	zoomButton, zoomLabel := "L1/R1 / - / +", "Zoom"
+	if len(imageViewerGroups) > 1 {
+		// A screenshot gallery: the shoulders change game, the triggers keep
+		// moving through the current game's pictures.
+		zoomButton, zoomLabel = "L1/R1", "Game"
+	}
 	hints := []FooterHint{
 		{Button: "D-Pad", Label: direction},
-		{Button: "L1/R1 / - / +", Label: "Zoom"},
+		{Button: zoomButton, Label: zoomLabel},
 		{Button: "Y", Label: "Fit / Fill / 1:1"},
 	}
 	if !imageViewerRemote {

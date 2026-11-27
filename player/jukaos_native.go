@@ -284,12 +284,18 @@ func jukaosNativeStopDHCP() {
 // jukaosNativeBluetoothOn is btBringUp's first step on JukaHub OS: Bluetooth
 // switched on is kept for the next boot, and on plastron its service is
 // started as the launcher does, so the bring-up finds an adapter and a
-// bluetoothd instead of attaching the chip the stock firmware's way. Workers.
-func jukaosNativeBluetoothOn(ctx context.Context) {
+// bluetoothd instead of attaching the chip the stock firmware's way. remember
+// is false for a short scan that restores the radio and must leave no boot
+// intent behind. Workers.
+func jukaosNativeBluetoothOn(ctx context.Context, remember bool) {
 	if !jukaosNativeActive() {
 		return
 	}
-	jukaosNativeRadioIntent("BLUETOOTH", true)
+	// A probe that switches the radio on for a scan must not write a boot
+	// intent: the user left Bluetooth off, and the probe switches it off again.
+	if remember {
+		jukaosNativeRadioIntent("BLUETOOTH", true)
+	}
 	if jukaosNativeBase() != "plastron" || !fileExists(jukaosBTService) {
 		return
 	}

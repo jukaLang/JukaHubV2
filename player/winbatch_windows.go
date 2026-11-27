@@ -8,7 +8,6 @@ package main
 import (
 	"os"
 	"os/exec"
-	"syscall"
 )
 
 // winBatchCommand is a command that runs script with args through cmd.exe.
@@ -23,7 +22,9 @@ func winBatchCommand(script string, args ...string) (*exec.Cmd, error) {
 		return nil, err
 	}
 	cmd := hiddenCommand(comspec)
-	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: line}
+	// Set the line on the attr the wrapper already made: replacing it would
+	// drop HideWindow/CREATE_NO_WINDOW and flash a cmd.exe on every launch.
+	cmd.SysProcAttr.CmdLine = line
 	return cmd, nil
 }
 

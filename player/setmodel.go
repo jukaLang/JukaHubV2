@@ -2040,7 +2040,7 @@ func setBuildSections() []setSection {
 		{
 			ID: "privacy", Title: "Privacy & data", Glyph: "shield",
 			Subtitle: "Sign-ins, diagnostics and stored data",
-			Rows: []setRow{
+			Rows: append([]setRow{
 				{
 					ID: "cookies", Label: "Keep browser sign-ins", Kind: setKindChoice,
 					Detail: func(*Config) string {
@@ -2121,11 +2121,17 @@ func setBuildSections() []setSection {
 						handleTrigger(nil, c, Element{Trigger: "cache_clear"})
 					},
 				},
+				{
+					ID: "exportData", Label: "Export my data", Kind: setKindAction,
+					Detail: setStatic("A zip of settings, notes, library stores, themes and saves; ROMs and media stay"),
+					Value:  setStatic("Zip"),
+					Open:   func(*Config) { privacyExportAllData() },
+				},
 				// Startup lock: a button code or a password (bootlock.go).
 				bootLockTypeRow(), bootLockWhenRow(), bootLockChangeRow(),
 				// Voice unlock: a spoken phrase beside it (bootlock_voice.go).
 				bootLockVoiceRow(), bootLockVoiceChangeRow(),
-			},
+			}, privacyNetworkRows()...),
 		},
 		// Kiosk and Kid mode, beside the startup lock (uimode_settings.go).
 		uiModeSettingsSection(),

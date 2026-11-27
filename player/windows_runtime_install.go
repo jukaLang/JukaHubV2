@@ -55,14 +55,20 @@ import (
 
 const (
 	windowsRuntimeReleaseAPI = "https://api.github.com/repos/AndreRH/hangover/releases/latest"
-	// windowsWestonRuntimeURL is WestonPack in PortMaster-New's repository.
+	// windowsWestonRuntimeURL is WestonPack in PortMaster-New's repository, at
+	// the commit that last changed the image rather than a moving branch.
 	// GitHub answers it with a redirect to raw.githubusercontent.com (or to
-	// media.githubusercontent.com for a file kept in Git LFS); westonDownloadClient
-	// admits exactly those two places for this repository.
-	windowsWestonRuntimeURL = "https://github.com/PortsMaster/PortMaster-New/raw/main/runtimes/weston_pkg_0.2.aarch64.squashfs"
-	windowsDXVKReleaseAPI   = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
-	windowsRuntimeMaxBytes  = int64(2 << 30) // 2 GiB safety limit
-	windowsRuntimeMaxFiles  = 100000
+	// media.githubusercontent.com for a file kept in Git LFS);
+	// westonDownloadClient admits exactly those two places for this repository.
+	windowsWestonRuntimeURL = "https://github.com/PortsMaster/PortMaster-New/raw/b0e8206422c0fe79bec9ad266387ee45a861b2eb/runtimes/weston_pkg_0.2.aarch64.squashfs"
+	// The image at that commit is 55,398,400 bytes with this SHA-256. The
+	// repository publishes no digest, so the build pins both here and
+	// wineDownload checks every byte before the image is mounted or unpacked.
+	windowsWestonRuntimeSHA256 = "0bccaeebc11296bb1fe4278c9677cb82965c5a04bcd63745fa09d78228bc1a93"
+	windowsWestonRuntimeSize   = int64(55398400)
+	windowsDXVKReleaseAPI      = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
+	windowsRuntimeMaxBytes     = int64(2 << 30) // 2 GiB safety limit
+	windowsRuntimeMaxFiles     = 100000
 	// The last DXVK release that runs on Vulkan 1.1, for devices whose driver
 	// is no newer. GitHub publishes no digest for it; the MD5 is the one
 	// Bottles' component index lists for this tarball.
@@ -1219,7 +1225,7 @@ func installWestonRuntime() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 	image := filepath.Join(base, westonPackImageName)
-	spec := wineTarballSpec{Asset: westonPackImageName, URL: windowsWestonRuntimeURL}
+	spec := westonRuntimeSpec()
 	err := wineDownload(ctx, westonDownloadClient(), spec, image, func(got, total int64) {
 		setWindowsRuntimeStatus("Downloading WestonPack · "+formatInstallBytes(got)+" of about 53 MB", "", true)
 	})
@@ -1263,6 +1269,17 @@ func installWestonRuntime() error {
 	}
 	_ = os.Chmod(filepath.Join(installDir, filepath.Base(wrapper)), 0o755)
 	return nil
+}
+
+// westonRuntimeSpec is the pinned WestonPack image. Kept in one place so the
+// install and its test read the same URL, digest and size.
+func westonRuntimeSpec() wineTarballSpec {
+	return wineTarballSpec{
+		Asset:  westonPackImageName,
+		URL:    windowsWestonRuntimeURL,
+		SHA256: windowsWestonRuntimeSHA256,
+		Size:   windowsWestonRuntimeSize,
+	}
 }
 
 func findWestonWrapper(root string) (string, error) {
@@ -1773,4 +1790,3 @@ func windowsProvisionLoop() {
 	ShowToast("Windows runtime ready", ToastKindSuccess)
 	ready = true
 }
-

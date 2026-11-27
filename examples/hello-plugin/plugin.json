@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "hello-plugin",
+  "title": "Hello plugin",
+  "version": "1.0.0",
+  "description": "The smallest complete JukaHub plugin: one action, no permissions.",
+  "author": "JukaHub",
+  "entry": "main.sh",
+  "icon": "apps",
+  "enabled": true,
+  "permissions": [],
+  "actions": [
+    {"id": "hello", "label": "Say hello"}
+  ],
+  "onEnable": "hello",
+  "quick": ["hello"]
+}

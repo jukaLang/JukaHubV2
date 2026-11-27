@@ -27,13 +27,14 @@ type capturePictureSet struct {
 }
 
 type captureOrganizerState struct {
-	visit tbxVisit
-	nav   tbxNav
-	mode  int
-	data  captureCollection
-	gen   uint64
-	busy  bool
-	load  bool
+	visit    tbxVisit
+	nav      tbxNav
+	mode     int
+	data     captureCollection
+	gen      uint64
+	busy     bool
+	load     bool
+	deleteOK captureDeleteConfirm
 }
 
 var captureOrganizer captureOrganizerState
@@ -75,6 +76,7 @@ func captureOrganizerRescan(config *Config) {
 	captureOrganizer.gen++
 	gen := captureOrganizer.gen
 	captureOrganizer.load = true
+	captureOrganizer.deleteOK = captureDeleteConfirm{}
 	pictureDirs := capturePictureDirs()
 	recordingDirs := captureRecordingDirs(config)
 	go func() {
@@ -88,7 +90,38 @@ func captureOrganizerRescan(config *Config) {
 			}
 			captureOrganizer.data = data
 			captureOrganizer.load = false
+			captureOrganizerProbeDurations(config, gen)
 		})
+	}()
+}
+
+// captureOrganizerProbeDurations reads the length of each scanned recording in
+// the background and fills it into the list as it arrives. ffprobe is optional:
+// without it the list simply keeps showing the date and size.
+func captureOrganizerProbeDurations(config *Config, gen uint64) {
+	probe := getToolPath("ffprobe", config)
+	if !toolPathRunnable(probe) {
+		return
+	}
+	clips := append([]captureRecording(nil), captureOrganizer.data.recordings...)
+	go func() {
+		for _, clip := range clips {
+			seconds := captureProbeDuration(context.Background(), probe, clip.path)
+			if seconds <= 0 {
+				continue
+			}
+			tbxPost(func() {
+				if captureOrganizer.gen != gen {
+					return
+				}
+				for i := range captureOrganizer.data.recordings {
+					if captureOrganizer.data.recordings[i].path == clip.path {
+						captureOrganizer.data.recordings[i].duration = seconds
+						return
+					}
+				}
+			})
+		}
 	}()
 }
 
@@ -183,8 +216,8 @@ func captureOrganizerRender(renderer *sdl.Renderer, config *Config) {
 		section("Recordings", "video")
 		for _, clip := range captureOrganizer.data.recordings {
 			drawRow("recording:"+clip.path, tbxRowSpec{icon: "video",
-				title: strings.TrimSuffix(clip.name, filepath.Ext(clip.name)),
-				subtitle: clip.at.Format("Jan 2, 3:04 PM") + " · " + formatSize(clip.size), pill: "Open"})
+				title:    strings.TrimSuffix(clip.name, filepath.Ext(clip.name)),
+				subtitle: clip.at.Format("Jan 2, 3:04 PM") + " · " + captureRecordingMeta(clip), pill: "Open"})
 		}
 		if len(captureOrganizer.data.recordings) == 0 && !captureOrganizer.load {
 			drawRow("empty", tbxRowSpec{icon: "video", title: "No recordings yet",
@@ -287,26 +320,38 @@ func captureOrganizerActivate(config *Config, id string) {
 
 func captureOrganizerViewPicture(config *Config, picture capturePicture) {
 	openImageViewer(config, picture.path)
-	var paths []string
-	index := 0
-	for _, candidate := range captureOrganizer.data.pictures {
-		if candidate.group != picture.group {
+	// Hand the viewer every game's section, not only this one: L1/R1 step
+	// between games (imageviewer.go) while L2/R2 walk this game's pictures.
+	sets := capturePictureSets(captureOrganizer.data.pictures)
+	groups := make([]imgvGameGroup, 0, len(sets))
+	for _, set := range sets {
+		group := imgvGameGroup{name: set.name}
+		for _, item := range set.items {
+			group.paths = append(group.paths, item.path)
+		}
+		groups = append(groups, group)
+	}
+	imageViewerGroups = groups
+	for _, group := range groups {
+		if group.name != picture.group || len(group.paths) == 0 {
 			continue
 		}
-		if candidate.path == picture.path {
-			index = len(paths)
+		imageViewerFiles = append([]string(nil), group.paths...)
+		imageViewerIndex = 0
+		for i, path := range group.paths {
+			if path == picture.path {
+				imageViewerIndex = i
+				break
+			}
 		}
-		paths = append(paths, candidate.path)
-	}
-	if len(paths) > 0 {
-		imageViewerFiles = paths
-		imageViewerIndex = index
+		break
 	}
 }
 
 func captureOrganizerOpenRecording(config *Config, clip captureRecording) {
 	PlayActivateSound()
-	var duration float64
+	captureOrganizer.deleteOK = captureDeleteConfirm{}
+	duration := clip.duration
 	token := "capture-duration:" + strconv.FormatUint(captureOrganizer.gen+uint64(time.Now().UnixNano()), 10)
 	buttons := []tbxSheetButton{
 		{label: "Play", primary: true, run: func() {
@@ -314,11 +359,19 @@ func captureOrganizerOpenRecording(config *Config, clip captureRecording) {
 		}},
 		{label: "Rename", run: func() { captureOrganizerRename(config, clip) }},
 		{label: "Trim", run: func() { captureOrganizerTrim(config, clip.path, duration) }},
+		{label: "Delete", keepOpen: true, run: func() { captureOrganizerDelete(config, clip) }},
 		{label: "Close"},
 	}
-	body := fmt.Sprintf("File: %s\nSize: %s\nFolder: %s\n\nThe original clip stays safe when you trim it. Reading its length…",
-		clip.name, formatSize(clip.size), filepath.Dir(clip.path))
+	length := "Reading its length…"
+	if duration > 0 {
+		length = "Length: " + captureDisplayTime(duration)
+	}
+	body := fmt.Sprintf("File: %s\nSize: %s\n%s\nFolder: %s\n\nThe original clip stays safe when you trim it.",
+		clip.name, formatSize(clip.size), length, filepath.Dir(clip.path))
 	tbxOpenSheet(config, tbxSheetSpec{token: token, title: clip.name, icon: "video", body: body, buttons: buttons})
+	if duration > 0 {
+		return
+	}
 	probe := getToolPath("ffprobe", config)
 	go func() {
 		seconds := captureProbeDuration(context.Background(), probe, clip.path)
@@ -327,10 +380,43 @@ func captureOrganizerOpenRecording(config *Config, clip captureRecording) {
 			length := "Length unavailable — enter times in seconds or mm:ss"
 			if seconds > 0 {
 				length = "Length: " + captureDisplayTime(seconds)
+				for i := range captureOrganizer.data.recordings {
+					if captureOrganizer.data.recordings[i].path == clip.path {
+						captureOrganizer.data.recordings[i].duration = seconds
+					}
+				}
 			}
-			body := fmt.Sprintf("File: %s\nSize: %s\n%s\nFolder: %s\n\nTrim makes a new clip and keeps this original.",
+			body := fmt.Sprintf("File: %s\nSize: %s\n%s\nFolder: %s\n\nTrim makes a new clip and keeps this original. Delete asks for a second press.",
 				clip.name, formatSize(clip.size), length, filepath.Dir(clip.path))
 			tbxUpdateSheet(token, body, nil)
+		})
+	}()
+}
+
+// captureOrganizerDelete is the sheet's Delete button: the first press arms
+// this clip and leaves the sheet up, the second removes it. Main thread.
+func captureOrganizerDelete(config *Config, clip captureRecording) {
+	if captureOrganizer.busy {
+		ShowToast("Finish saving the current clip first", ToastKindInfo)
+		return
+	}
+	if !captureOrganizer.deleteOK.armed(clip.path, time.Now()) {
+		ShowToast("Press Delete again to remove "+clip.name, ToastKindWarning)
+		return
+	}
+	captureOrganizer.busy = true
+	dirs := captureRecordingDirs(config)
+	go func() {
+		err := captureDeleteRecording(clip.path, dirs)
+		tbxPost(func() {
+			captureOrganizer.busy = false
+			if err != nil {
+				ShowToast("Delete failed: "+firstLine(err.Error()), ToastKindError)
+				return
+			}
+			tbxCloseSheet()
+			ShowToast("Deleted "+clip.name, ToastKindSuccess)
+			captureOrganizerRescan(config)
 		})
 	}()
 }

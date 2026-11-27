@@ -1098,11 +1098,14 @@ func (n ssyncNetIO) push(ctx context.Context, f ssyncFile, src string) error {
 type ssyncComparison struct {
 	PeerID   string
 	PeerName string
-	Local    ssyncManifest
-	Remote   ssyncManifest
-	Plan     ssyncPlan
-	Roots    []saveRoot
-	At       time.Time
+	// LocalName is the name the plan used for this device. A conflict's copy
+	// suffix names the loser, so it must use the same spelling the plan did.
+	LocalName string
+	Local     ssyncManifest
+	Remote    ssyncManifest
+	Plan      ssyncPlan
+	Roots     []saveRoot
+	At        time.Time
 }
 
 // ssyncChooseConflict changes which version keeps the original filename on
@@ -1131,7 +1134,10 @@ func ssyncChooseConflict(cmp *ssyncComparison, index int, localWins bool) bool {
 			taken[strings.ToLower(other.Root+"/"+other.CopyPath)] = true
 		}
 	}
-	loser := cmp.Local.Name
+	loser := cmp.LocalName
+	if loser == "" {
+		loser = cmp.Local.Name
+	}
 	if localWins {
 		loser = cmp.PeerName
 	}
@@ -1183,13 +1189,14 @@ func ssyncCompare(ctx context.Context, peerID, peerName string) (ssyncComparison
 		plan = ssyncFilterPlan(plan, func(it ssyncItem) bool { return !clash[it.Key] })
 	}
 	return ssyncComparison{
-		PeerID:   peerID,
-		PeerName: peerName,
-		Local:    local,
-		Remote:   remote,
-		Plan:     plan,
-		Roots:    roots,
-		At:       time.Now(),
+		PeerID:    peerID,
+		PeerName:  peerName,
+		LocalName: local.Name,
+		Local:     local,
+		Remote:    remote,
+		Plan:      plan,
+		Roots:     roots,
+		At:        time.Now(),
 	}, nil
 }
 

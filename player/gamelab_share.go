@@ -34,6 +34,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/skip2/go-qrcode"
 )
 
 const (
@@ -228,6 +230,32 @@ func gameLabExport(game libraryGame, e gameLabEntry, side string) {
 	}
 	logInfo("gamelab", "shared setup %s of %s as %s", strings.ToUpper(side), filepath.Base(game.Path), name)
 	ShowToast("Saved to game-lab/export/"+name+" — copy it to a friend's game-lab/import folder", ToastKindSuccess)
+	tbxPost(func() { gameLabShareQR(name) })
+}
+
+// gameLabShareQR offers the setup just written on the phone: the Game Lab
+// page lists it and downloads it as the file JukaHub reads. It runs on the
+// main thread, where the companion's address and the QR overlay live.
+func gameLabShareQR(name string) {
+	companionStart()
+	if companion.url == "" {
+		msg := companion.err
+		if msg == "" {
+			msg = "Connect this device to Wi-Fi to send the setup to a phone"
+		}
+		ShowToast(msg, ToastKindWarning)
+		return
+	}
+	code, err := qrcode.New(companionGameLabURL(companion.url), qrcode.Low)
+	if err != nil {
+		ShowToast("Cannot draw the QR code: "+err.Error(), ToastKindWarning)
+		return
+	}
+	detail := "Open it and download " + name
+	if caption := companionPairingCaption(companion.url); caption != "" {
+		detail += " · " + caption
+	}
+	qrZoomOpenCardDetail(code.Bitmap(), "Game Lab on your phone", detail)
 }
 
 // ── Import ───────────────────────────────────────────────────────────────

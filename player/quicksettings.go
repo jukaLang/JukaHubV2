@@ -972,7 +972,7 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 					if qsAirplaneSnap.savedWifi && !qsAirplaneSnap.wifiWasOn {
 						_ = setWifiEnabled(false)
 					}
-					if qsAirplaneSnap.savedBT && !qsAirplaneSnap.btWasOn {
+					if (qsAirplaneSnap.savedBT && !qsAirplaneSnap.btWasOn) || btSwitchStillOff() {
 						_ = setBluetoothEnabled(false)
 					}
 					qsAirplaneSnap.savedWifi, qsAirplaneSnap.savedBT = false, false

@@ -609,6 +609,14 @@ func screenRecGameStarted(game libraryGame) {
 	}
 }
 
+// screenRecGameTitleNow is the library game on screen, "" when none is. Any
+// goroutine (a screenshot's save names the file after it).
+func screenRecGameTitleNow() string {
+	screenRec.mu.Lock()
+	defer screenRec.mu.Unlock()
+	return screenRec.gameTitle
+}
+
 // screenRecGameExited ends a recording that belonged to the game (the
 // reaper goroutine).
 func screenRecGameExited(game libraryGame) {
@@ -806,4 +814,3 @@ func init() {
 	// Quitting closes the file cleanly rather than leaving ffmpeg to its -t.
 	Cleanup = append(Cleanup, screenRecShutdown)
 }
-

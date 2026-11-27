@@ -20,6 +20,10 @@ func hiddenCommandContext(ctx context.Context, name string, args ...string) *exe
 	return exec.CommandContext(ctx, name, args...)
 }
 
-// startDetached is a no-op off Windows: a desktop program runs on its own
-// already, without a console.
-func startDetached(cmd *exec.Cmd) {}
+// startDetached puts POSIX helpers in their own process group. There is no
+// console to hide here, but the group is what lets the exit path stop the
+// whole tree (javaStartDetached, secAuditOpen); dropping it when the console
+// helpers were consolidated left those children in JukaHub's own group.
+func startDetached(cmd *exec.Cmd) {
+	processGroupConfigure(cmd)
+}

@@ -472,7 +472,11 @@ function insertRaw(node, parent, ref, suppress) {
     if (node.p) removeRaw(node, false);
   }
   var prev = ref ? ref.v : parent.l;
-  for (i = 0; i < nodes.length; i++) linkBefore(parent, nodes[i], ref);
+  for (i = 0; i < nodes.length; i++) {
+    var at = ref ? childIndex(ref) : nodeLength(parent);
+    linkBefore(parent, nodes[i], ref);
+    rangesAfterInsert(parent, at);
+  }
   var pd = docOf(parent);
   pd.ver++;
   pd.trv = (pd.trv | 0) + 1;
@@ -697,6 +701,7 @@ function replaceData(r, offset, count, data) {
   if (r.p && r.p.t === 1 && r.p.ln === 'style') cssVersion++;
   if (moActive) moQueueCharacterData(r, old);
   if (r.p) childrenChanged(r.p);
+  rangesAfterReplaceData(r, offset, count, data.length);
 }
 
 // ---------------------------------------------------------------- URLs
@@ -1062,15 +1067,17 @@ mix(Node.prototype, {
           next = nextSkipping(r, root);
           removeRaw(r, false);
         } else {
-          var data = '';
           var s = r.n;
           while (s && s.t === 3) {
-            data += s.x;
+            var more = s.x;
             var after = s.n;
+            var at = r.x.length;
+            replaceData(r, at, 0, more);
+            rangesMergeText(s, r, at);
+            if (s.p) rangesAtParentIndex(s.p, childIndex(s), r, at);
             removeRaw(s, false);
             s = after;
           }
-          if (data) replaceData(r, r.x.length, 0, data);
           next = nextNode(r, root);
         }
       }
@@ -1584,6 +1591,7 @@ mix(Text.prototype, {
     if (offset > r.x.length) throw domErr('IndexSizeError', 'The offset is larger than the data length.');
     var tail = textRec(r.d, r.x.slice(offset));
     if (r.p) insertRaw(tail, r.p, r.n, false);
+    rangesAfterSplit(r, offset, tail);
     replaceData(r, offset, r.x.length - offset, '');
     return wrap(tail);
   },

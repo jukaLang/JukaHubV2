@@ -78,7 +78,12 @@ gap, not a silent promise.
   `justify-content` and `align-content` track distribution). Column
   `minmax(auto, <length>)` minima come from the placed items' measured
   min-content width and remain clamped by the maximum; row auto minima come
-  from content height. The table display modes
+  from content height. Placement belongs to the element that declares it and
+  is not inherited (as in CSS): a card list that is itself a grid item
+  (`grid-area: 1/1/auto/-1` on the wrapping `<ul>`, CNN's standard card list)
+  places its cards, not every link and heading inside them — those are auto-
+  placed, so the cards stack instead of asking for one cell and drawing their
+  headlines over each other. The table display modes
   `table`, `table-row`, `table-cell`, `table-header-group`, `table-row-group`,
   `table-footer-group`, `table-caption`.
 - Flex direction, wrap, justify, align, gap, grow, shrink, basis, order,
@@ -172,7 +177,10 @@ gap, not a silent promise.
   is only a picture (`absolute inset-0` around an `h-full w-full
   object-cover` image) fills that room with it, cropped. A positioned
   container whose children all left the flow keeps a line and its height of
-  its own. An absolutely or fixed positioned inline element (a `<span>`
+  its own; so does one holding nothing but an absolutely positioned picture
+  (`picture img{position:absolute;inset:0}`, a news card's cover), which sits
+    in the frame's own `aspect-ratio` or height box instead of the page's.
+  An absolutely or fixed positioned inline element (a `<span>`
   badge, ribbon or label) leaves its line too and is placed at its insets,
   while the text around it stays one line; a link, a label, a form control,
   a visually hidden label and one whose containing block is a positioned
@@ -517,7 +525,10 @@ gap, not a silent promise.
   page gives it, a field's `max-width` caps its `width`, a button's `height`
   sizes its box (label in the middle, at most three rows), a field's text
   stands on the line's baseline beside buttons and labels, and controls side
-  by side are separate boxes.
+  by side are separate boxes. An `<input type="submit">` with no value shows
+  its HTML default label ("Submit"); a `<button>` with no content (a search
+  bar's magnifier drawn by a background image, an icon-only nav toggle) shows
+  no word at all, since HTML gives it none — the reader does not invent one.
 - Table structure: `table`, `thead`, `tbody`, `tfoot`, `tr`, `td`, `th`,
   `caption` render rows and cells through the table grid; `caption` is a
   centred block above the rows. `colspan`/`rowspan` claim grid slots, direct

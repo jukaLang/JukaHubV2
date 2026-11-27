@@ -844,14 +844,22 @@ void jh_spatial_process_planar(jh_spatial *s, const float *in_l, const float *in
 
 /* ── RetroArch audio DSP filter ────────────────────────────────────────────
  *
- * The plain-C ABI of libretro-common's libretro_dspfilter.h (API version 1),
- * declared here from its public description. RetroArch loads every library in
- * the folder of the .dsp preset named by audio_dsp_plugin, calls
- * dspfilter_get_implementation, and matches the preset's "filter0 = jhspatial"
- * against short_ident. Settings come from the preset as jhspatial_mode,
- * jhspatial_strength and jhspatial_room (or filter0_mode, ...), read with the
- * config's get_float — the struct's first member, the one this plugin relies
- * on. Samples are interleaved stereo floats, processed in place.
+ * The plain-C ABI of libretro-common's libretro_dspfilter.h, checked field by
+ * field against the upstream header and its loader (audio/dsp_filter.c) on
+ * 2026-11-27. RetroArch loads every library in the folder of the .dsp preset
+ * named by audio_dsp_plugin, calls dspfilter_get_implementation, and matches
+ * the preset's "filter0 = jhspatial" against short_ident. Settings come from
+ * the preset as jhspatial_mode, jhspatial_strength and jhspatial_room (or
+ * filter0_mode, ...), read with the config's get_float — the struct's first
+ * member, the one this plugin relies on. Samples are interleaved stereo
+ * floats, processed in place.
+ *
+ * Upstream master is DSPFILTER_API_VERSION 2: version 2 appends an optional
+ * process_i16 after short_ident, and the loader reads that field only behind
+ * an api_version >= 2 check (it accepts 1 through DSPFILTER_API_VERSION). This
+ * plugin's DSP is float end to end, so a process_i16 that converted both ways
+ * would only add work; it reports version 1 and keeps the version-1 struct
+ * (ending at short_ident), which every current loader still accepts.
  */
 
 struct jh_dspfilter_info
@@ -958,12 +966,13 @@ JH_EXPORT const struct jh_dspfilter_implementation *dspfilter_get_implementation
 
 /* ── LADSPA ────────────────────────────────────────────────────────────────
  *
- * The LADSPA 1.1 plugin ABI, declared here from its public description:
- * ladspa_descriptor(index) hands out descriptors; a host instantiates one at
- * its sample rate, connects every port, activates it and calls run. Two audio
- * inputs, two audio outputs (in-place is fine) and three control inputs.
- * The UniqueID is not registered with ladspa.org; hosts here select the
- * plugin by its label, "jukahub_spatial".
+ * The LADSPA 1.1 plugin ABI, checked field by field against ladspa.h 1.1 on
+ * 2026-11-27 (the descriptor's field order, the port and property bits and
+ * the range-hint bits): ladspa_descriptor(index) hands out descriptors; a
+ * host instantiates one at its sample rate, connects every port, activates it
+ * and calls run. Two audio inputs, two audio outputs (in-place is fine) and
+ * three control inputs. The UniqueID is not registered with ladspa.org; hosts
+ * here select the plugin by its label, "jukahub_spatial".
  */
 
 typedef float jh_ladspa_data;

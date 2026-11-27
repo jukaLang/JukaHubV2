@@ -166,7 +166,7 @@ func shotRequestSave() (string, error) {
 	if err := enc.Encode(&buf, img); err != nil {
 		return "", err
 	}
-	path, err := screenshotPath("game", time.Now())
+	path, err := screenshotPath(gameScreenshotPrefix(), time.Now())
 	if err != nil {
 		return "", err
 	}
@@ -177,4 +177,3 @@ func shotRequestSave() (string, error) {
 	gameShotTell(path, nil)
 	return path, nil
 }
-

@@ -834,9 +834,27 @@ func screensaverAutoTick(config *Config, now time.Time) {
 // idleScreenHoldOffFrom is the pure decision at the heart of the gate: the
 // screen stays awake while a modal owns the UI, while audio or video plays,
 // while an AI answer is being thought out or spoken, and while a download or
-// install is running.
-func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, videoBusy, downloadActive, patchBusy, aiBusy bool) bool {
-	return uiBlocked || musicPlaying || musicPaused || videoBusy || downloadActive || patchBusy || aiBusy
+// install is running. A visible loading screen counts too: the user is waiting
+// for it to finish, so an idle screensaver must not cover it (or put the panel
+// to sleep behind it).
+func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, videoBusy, downloadActive, patchBusy, aiBusy, loadingVisible bool) bool {
+	return uiBlocked || musicPlaying || musicPaused || videoBusy || downloadActive || patchBusy || aiBusy || loadingVisible
+}
+
+// loadingScreenVisible reports whether a loading surface is on screen. It
+// mirrors the render gate for the modal loading card (main.go) and adds the
+// two in-scene wait states that have no modal: a video being resolved by
+// yt-dlp before the decoder starts, and a site video search in flight.
+// videoHoldsScreenAwake only sees the decoder's phase, which is still "idle"
+// during the first — and often longest — part of a cold video load.
+func loadingScreenVisible(config *Config) bool {
+	if videoPrepareActive() || transitionPhase != "none" {
+		return true
+	}
+	if config != nil && config.Variables.LoadingSpinner && !mediaHubIsCurrent(config) {
+		return true
+	}
+	return siteVideoUI.loading
 }
 
 // aiHoldsScreenAwake reports whether Juka is thinking or responding. An answer
@@ -868,6 +886,7 @@ func idleScreenHoldOff(config *Config) bool {
 		installInProgress() || usbAwakeHolds(),
 		patchInstallBusy(),
 		aiHoldsScreenAwake(),
+		loadingScreenVisible(config),
 	)
 }
 

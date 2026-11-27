@@ -377,26 +377,56 @@ func voiceOrbModal() bool {
 
 // ── Settings ─────────────────────────────────────────────────────────────
 
+// voiceOrbGuideAvailable reports whether Settings → Controls can turn the
+// pad's Guide/Menu button into the voice button on this platform. A handheld
+// always has it; Windows has it as an opt-in because Game Bar may claim Guide
+// first. Elsewhere the voice key is F4.
+func voiceOrbGuideAvailable() bool { return voiceOrbGuideAvailableFor(P().IsHandheld(), IsWindows()) }
+
+func voiceOrbGuideAvailableFor(handheld, windows bool) bool { return handheld || windows }
+
 // voiceOrbMenuEnabled reports Settings → Controls → "Menu button: voice".
+// It starts on for a handheld, where Menu has no other job, and off on
+// Windows, where Guide belongs to Game Bar until the user chooses otherwise.
 func voiceOrbMenuEnabled(config *Config) bool {
+	defaultOn := P().IsHandheld()
 	if config == nil {
-		return true
+		return defaultOn
 	}
-	return customBool(config.Variables.Custom, voiceOrbMenuKey, true)
+	return customBool(config.Variables.Custom, voiceOrbMenuKey, defaultOn)
+}
+
+func voiceOrbGuideLabel(handheld, windows bool) string {
+	if windows && !handheld {
+		return "Guide button: voice"
+	}
+	return "Menu button: voice"
+}
+
+// voiceOrbGuideDetail is the second line under the switch. On Windows it
+// names the Game Bar caveat the task and the docs promise.
+func voiceOrbGuideDetail(handheld, windows bool) string {
+	if windows && !handheld {
+		return "Guide opens the voice orb. Windows Game Bar may take Guide first; turn Guide off in Game Bar settings if it does."
+	}
+	return "Menu opens the voice orb (hold it to talk); off, Menu goes back like B"
 }
 
 // voiceOrbSettingsRows is the switch in Settings → Controls (stickcal.go), on
-// a handheld: a PC's voice key is F4 whatever it says.
+// a handheld and, as an opt-in, on Windows.
 func voiceOrbSettingsRows() []setRow {
 	return []setRow{{
-		ID: voiceOrbMenuKey, Label: "Menu button: voice", Kind: setKindToggle,
+		ID: voiceOrbMenuKey, Label: voiceOrbGuideLabel(P().IsHandheld(), IsWindows()), Kind: setKindToggle,
 		Detail: func(c *Config) string {
+			if IsWindows() && !P().IsHandheld() {
+				return voiceOrbGuideDetail(false, true)
+			}
 			if menuShotEnabled(c) {
 				return "A tap of Menu opens the voice orb; off, Menu goes back like B"
 			}
-			return "Menu opens the voice orb (hold it to talk); off, Menu goes back like B"
+			return voiceOrbGuideDetail(P().IsHandheld(), false)
 		},
-		Visible: func(*Config) bool { return P().IsHandheld() },
+		Visible: func(*Config) bool { return voiceOrbGuideAvailable() },
 		Get:     voiceOrbMenuEnabled,
 		Set: func(c *Config, on bool) {
 			if c == nil {
@@ -408,9 +438,13 @@ func voiceOrbSettingsRows() []setRow {
 			c.Variables.Custom[voiceOrbMenuKey] = on
 			saveUserConfigDebounced(userConfigFromVariables(c))
 			if on {
-				setToast("Menu button: voice")
+				setToast(voiceOrbGuideLabel(P().IsHandheld(), IsWindows()))
 			} else {
-				setToast("Menu button: back")
+				if IsWindows() && !P().IsHandheld() {
+					setToast("Guide button: system")
+				} else {
+					setToast("Menu button: back")
+				}
 			}
 		},
 	}}
@@ -422,13 +456,17 @@ func voiceOrbLegendRow(keyboard bool) (FooterHint, bool) {
 	if keyboard {
 		return FooterHint{Button: "F4", Label: "Voice"}, true
 	}
-	if !P().IsHandheld() || !voiceOrbMenuEnabled(appConfig) {
+	if !voiceOrbGuideAvailable() || !voiceOrbMenuEnabled(appConfig) {
 		return FooterHint{}, false
 	}
-	if menuShotEnabled(appConfig) {
-		return FooterHint{Button: "Menu", Label: "Voice (tap)"}, true
+	button := "Menu"
+	if IsWindows() && !P().IsHandheld() {
+		button = "Guide"
 	}
-	return FooterHint{Button: "Menu", Label: "Voice (hold to talk)"}, true
+	if menuShotEnabled(appConfig) {
+		return FooterHint{Button: button, Label: "Voice (tap)"}, true
+	}
+	return FooterHint{Button: button, Label: "Voice (hold to talk)"}, true
 }
 
 // voiceOrbFooterHint names the existing push-to-talk key in the button bar.
@@ -549,7 +587,7 @@ func voiceOrbController(e *sdl.ControllerButtonEvent, raw uint8, config *Config)
 // mapping has a Select of its own — on one that reports Select as GUIDE,
 // GUIDE stays Back.
 func voiceOrbMenuOwnsGuide(config *Config, which sdl.JoystickID) bool {
-	if !P().IsHandheld() || !voiceOrbMenuEnabled(config) || brwGameActive() {
+	if !voiceOrbGuideAvailable() || !voiceOrbMenuEnabled(config) || brwGameActive() {
 		return false
 	}
 	switch tbxCurrentScene(config) {

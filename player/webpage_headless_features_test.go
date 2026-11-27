@@ -991,23 +991,50 @@ func TestBrowserHeadlessBackgroundLayersRepeatAndPosition(t *testing.T) {
 	if rightOrange <= leftOrange+20 {
 		t.Fatalf("background-position did not anchor the image at the right: left=%d right=%d", leftOrange, rightOrange)
 	}
-	gradients := 0
-	for _, bg := range layout.Backgrounds {
+	var gradient *webBackgroundPaint
+	for i := range layout.Backgrounds {
+		bg := &layout.Backgrounds[i]
 		if bg.HasGradient && bg.Rect.X < layeredBox.X+layeredBox.W && layeredBox.X < bg.Rect.X+bg.Rect.W &&
 			bg.Rect.Y < layeredBox.Y+layeredBox.H && layeredBox.Y < bg.Rect.Y+bg.Rect.H {
-			gradients++
+			gradient = bg
+			break
 		}
 	}
-	if gradients == 0 {
-		t.Fatalf("layered background collapsed to one image layer: box=%+v", layeredBox)
+	if gradient == nil || len(gradient.Gradient.Stops) < 2 {
+		t.Fatalf("layered background collapsed to one image layer: box=%+v backgrounds=%+v", layeredBox, layout.Backgrounds)
 	}
-	red := sdl.Color{R: 255, G: 0, B: 0, A: 255}
-	blue := sdl.Color{R: 0, G: 0, B: 255, A: 255}
-	if r, _ := headlessCountNear(raster, layeredBox, red, 45); r < 200 {
-		t.Fatalf("layered gradient lost its red stop: %d pixels", r)
+	// Both stops are translucent over the repeating orange swatch, so the
+	// painted ends of the ramp are the exact source-over composite of the
+	// stop with that tile, never a pure primary colour. Derive the value from
+	// the parsed stops instead of assuming the layer underneath is black.
+	// The software rasteriser interpolates the strip in fixed point, which
+	// moves a channel by up to 4 levels; 6 still rejects an opaque stop, a
+	// wrong alpha or a missing image layer by a wide margin.
+	stops := gradient.Gradient.Stops
+	composite := func(stop sdl.Color) color.NRGBA {
+		mix := func(src, dst uint8) uint8 {
+			return uint8((uint32(stop.A)*uint32(src) + uint32(255-stop.A)*uint32(dst) + 127) / 255)
+		}
+		return color.NRGBA{R: mix(stop.R, orange.R), G: mix(stop.G, orange.G), B: mix(stop.B, orange.B), A: 255}
 	}
-	if b, _ := headlessCountNear(raster, layeredBox, blue, 45); b < 200 {
-		t.Fatalf("layered gradient lost its blue stop: %d pixels", b)
+	for name, want := range map[string]color.NRGBA{
+		"red":  composite(stops[0].Color),
+		"blue": composite(stops[len(stops)-1].Color),
+	} {
+		y := gradient.Rect.Y + 1
+		if name == "blue" {
+			y = gradient.Rect.Y + gradient.Rect.H - 2
+		}
+		got := headlessPixelAt(raster, gradient.Rect.X+gradient.Rect.W-4, y)
+		channel := func(a, b uint8) int {
+			if a > b {
+				return int(a - b)
+			}
+			return int(b - a)
+		}
+		if channel(got.R, want.R) > 6 || channel(got.G, want.G) > 6 || channel(got.B, want.B) > 6 {
+			t.Fatalf("layered gradient %s stop is not its source-over composite: got=%v want=%v (alpha=%d tile=%v) rect=%+v", name, got, want, stops[0].Color.A, orange, gradient.Rect)
+		}
 	}
 	if matched, total := countPixels(raster, layeredBox, func(c color.NRGBA) bool {
 		return c.R > 80 && c.B > 50 || headlessOrange(c)

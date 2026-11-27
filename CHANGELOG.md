@@ -11,6 +11,127 @@ what the About screen and the updater read.
 
 ### Added
 
+- Notifications reach the Phone Companion (APP-6): the main page has a
+  Notifications card and `/notifications` mirrors the handheld's centre with
+  each row's source, priority, age and unread state. A row's action is offered
+  only when it is safe from a phone (opening a screen, Downloads, a file, or
+  retrying a download); install offers stay on the handheld. The action's
+  argument never leaves the device and the request only names the row and the
+  kind the page drew. Backend: `companionNotifSnapshot`, the `/notifications`
+  page and `/api/notifications` handlers (companion_notifications.go), route
+  registration and the card (companion.go); tests in
+  `companion_notifications_test.go` cover the list, the safe-action allowlist,
+  refusal of an install or a stale kind, main-thread dispatch, the page and
+  the PIN requirement. Not checked: the page in a phone browser or an action
+  against a live handheld.
+
+- Privacy & data tells everything that uses the network and exports the user's
+  files (SEC-11): the Settings section appends a read-only row for each of 24
+  network surfaces — updates, emulator and package downloads, artwork, weather,
+  the browser, media servers, cloud and device sync, RomM, RetroAchievements,
+  the Phone Companion, Remote Play, Steam, Smart Home, the assistant, mail,
+  chat, diagnostics, reports, netplay, file servers, VPN and community feeds —
+  saying what leaves the device, where it goes and whether it is on. "Export my
+  data" writes a zip with every backup category, whole plugin folders and the
+  game saves, off the render thread, and reports where it landed. Backend:
+  `privacyNetworkFeatures`/`privacyNetworkRows` and `privacyExportData`
+  (privacy.go), the Privacy & data rows (setmodel.go); tests in
+  `privacy_test.go` cover the inventory, its Settings wiring and the exported
+  zip's verified contents. Not checked: the section's rendering on a device
+  screen or the completion toast after a real export.
+
+- The music library has Tracks and Folders shelves (MED-15): Tracks lists every
+  song in a numeric-aware title order, Folders lists the directories that hold
+  songs and opens one into its own track list, and Y (or Search) opens the
+  on-screen keyboard to filter title, artist and album. Playing from Tracks or
+  a folder plays the visible list, so a search plays only its matches. Backend:
+  `musicShelfBuildRows`, `musicShelfTracksAll`, `musicShelfFolders` and
+  `musicNaturalLess` (music_shelf.go), `musicShelfPlayRows`; tests in
+  `music_shelf_test.go` cover ordering, folders, search and a 2,000-track
+  library. Not checked: the seven shelves and the search keyboard on a device
+  screen.
+
+- Game Lab setups move between a handheld and a phone (LIB-31): Share writes
+  the profile as before and now opens a QR for the companion's Game Lab page,
+  where the exported JSON can be downloaded; the page's upload checks the
+  64 KB cap and the Game Lab schema, then stores a re-marshalled profile in
+  `game-lab/import` for the game's Shared setups list. Backend:
+  `gameLabShareQR` (gamelab_share.go), the `/gamelab` page and `/api/game-lab`
+  handlers (companion_gamelab.go), route registration (companion.go); tests in
+  `companion_gamelab_test.go` cover the QR URL, list and download, traversal
+  refusal, upload validation, duplicate naming and the size cap. Not checked:
+  scanning the QR or uploading from a phone browser.
+
+- The screenshot gallery steps between games (MED-5): the capture organizer
+  hands the viewer one section per game (JukaHub's `game-<title>_<time>` names
+  and RetroArch's `<title> - <time>` names, anything else under "Other"), and
+  L1/R1 in the viewer move to the previous or next game while L2/R2 keep
+  walking the current game's pictures. A folder with no sections keeps L1/R1
+  for zoom. Backend: `imgvGameGroup` and `imgvGroupStep` (imageviewer.go),
+  `captureOrganizerViewPicture` (captureorganizer_ui.go). Not checked: pad
+  input on hardware.
+
+- The tip of the day is a real Home control (SHELL-9): Down from any card in
+  the last row reaches it and Up from the power button returns to it; A (or a
+  click/tap) opens the CONTROLS.md section it names and X hides it for the day.
+  The stop exists only while the line is drawn, and `homeTipHiddenDay` is now
+  registered as runtime bookkeeping so the settings reference does not offer
+  it. Backend: `HomeFocusTip` and `homeRowAboveTip` (homefocus.go),
+  `homeTipVisible`/`homeTipFocusable` (helpdoc.go), the Home actions (home.go).
+
+- Live ranges follow the document in the web DOM (APP-12): every Range is
+  registered on its document and its boundaries move on insert, remove,
+  `replaceData`, `splitText` and `normalize` as the DOM standard says, with a
+  boundary inside a removed subtree moving to the removed node's parent. A
+  jsdom comparison in `tests/web/webdom_dom.test.mjs` covers each mutation.
+
+- Recordings are finished media (MED-18): trimming tries a stream copy first
+  (H.264 stays H.264, the original quality and speed intact) and falls back to
+  a re-encode when the container or codec cannot carry it; the original stays
+  until the copy is complete. The organizer's list now shows each clip's
+  length beside its size once ffprobe has read it, and Delete asks for a second
+  press within six seconds before removing a recording. Backend:
+  `captureTrimRun`, `captureDeleteRecording`, `captureRecordingMeta`
+  (captureorganizer.go), the sheet's Delete button (captureorganizer_ui.go).
+  Not checked: the delete button on hardware.
+
+- Plugins have a versioned starting point (APP-2): `JukaHub --new-plugin
+  <name>` writes `plugins/<name>/` with a `schemaVersion` 1 manifest, a POSIX
+  sh entry and a README, without overwriting an existing folder; a newer
+  manifest schema is listed as a problem instead of being half-read. The
+  manifest's permission names are documented, and `examples/hello-plugin/` is
+  a complete copyable sample. Backend: `newPluginScaffold` and
+  `plugSchemaProblem` (pluginscaffold.go), the loader check (plugins.go),
+  `docs/PLUGINS.md`. Not checked: the generated plugin on a handheld.
+
+- The log ring and slog handler live in `internal/logx` (ARCH-2), with the
+  app's redaction, warning file and Debug-logging switch wired in from
+  `logging.go`; `logDebug`/`logInfo`/`logWarn`/`logError` are aliases to the
+  package's entry points and every call site is unchanged. The ring keeps the
+  same line and byte caps, append marks and snapshots the Logs screen reads.
+
+- Version history says how each version started here (REL-17): the running
+  build's head line and every saved version's row carry the record
+  `startcheck.go` and `updrescue.go` keep in `versions/` — "Started fine on
+  this Smart Pro" or "Didn't start on this Smart Pro — not offered again" —
+  with a date only when the clock was plausible. Backend: `uhistStartNote` and
+  `uhistStartLine` (uhist.go), the head line and rows (upch_ui.go).
+
+- The music player's artwork-tile bars follow the real audio spectrum (MED-3):
+  `musicUpdateVisualizer` reads the FFT bands of the queued PCM
+  (`musicVizBars`/`musicScopeRead`, musicviz.go) and falls back to the drawn
+  waves only until audio reaches the device. Not checked: device audio output.
+
+- The pad's Guide button can be the voice orb on Windows (INP-22). Settings →
+  Controls → **Guide button: voice** is off until chosen, because Windows Game
+  Bar may take Guide first; the row says so, and `docs/CONTROLS.md` explains
+  the caveat. On a handheld the existing Menu-button switch is unchanged.
+
+- WestonPack is fetched from the PortMaster-New commit that last changed the
+  image, not the moving `main` branch, and its pinned SHA-256 and size are
+  checked before the image is mounted or unpacked (APP-19). A changed or
+  truncated download is refused with the existing "unverified" message.
+
 - Start with Windows without a console flash (DESK-7): the setting now writes
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `JukaHub`,
   which starts the GUI executable directly; an older Startup folder
@@ -685,6 +806,13 @@ what the About screen and the updater read.
 
 ### Changed
 
+- Bluetooth left off stays off after a sleep or wake. The stored choice is re-read after every resume and on a slow watchdog instead of only in a short start-up window, an explicit Off clears the "on this session" latch, and internal scans no longer remember themselves as an On or write a next-boot On intent. Airplane-mode restore also respects the stored Off.
+- A typed short-video site's Play now prefers a stream that carries both picture and sound; the old format ranking could pick a video-only MP4 and leave the clip silent. The whole-file fallback asks for a muxed file too, keeping the joined-stream fallback for sites that have none.
+- No built-in text names a particular short-video host: the site screen and docs speak generically, and only a domain you typed appears on its own tile or in a search message.
+- Less work on a frame: thumbnail crop sizes are cached with the decoded texture instead of queried through SDL for every card, the browser memoizes containing-block rectangles and closes paint runs with a string builder, the media hub reuses the network state sampled by its tick, and the video overlay reads the frame texture and its size under one lock. Playtime pruning filters its log in place rather than allocating a second 5000-record slice on every append (`BenchmarkPlaytimeSessionNote`: ~391 µs/525 KB → ~53 µs/360 B); smart-folder grouping no longer copies year/player strings or lowercases each genre twice (~980 µs/6224 allocs → ~765 µs/5724 allocs).
+- The idle screen and Auto sleep wait out a loading screen: a video being resolved before playback starts, the modal loading card, a scene transition and a video-site search all keep the panel awake. The idle countdown restarts when the wait ends instead of dropping straight onto the screensaver.
+- Video links on sites other than YouTube start faster: one neutral yt-dlp call instead of three YouTube player-client attempts, the first few site results warmed in the background, and downloads try the muxed file first. Site searches reuse their token and fetch posters in parallel.
+- The game audio plugin's RetroArch and LADSPA interfaces are checked field by field against the upstream headers, and the DSP API version 1 choice is recorded (SND-9)
 - Media player: smoother, with controls that step aside
 - Leaving a screen stops its downloads
 - Archives are unpacked through a rooted folder

@@ -199,35 +199,44 @@ fails the program's open — no sound at all — so the probe
 its output matches the plugin driven directly to one 16-bit step; a wrong label
 or folder fails the open, as the probe expects.
 
-## ABI notes — verify before trusting a release
+## ABI notes
 
-Both ABIs are declared in `jukahub_spatial.c` from their public descriptions,
-written from memory because the sandbox this was built in cannot fetch the
-upstream headers. Before relying on a release, diff them against:
+Both ABIs in `jukahub_spatial.c` were checked field by field on 2026-11-27
+against the upstream headers and, for RetroArch, its loader:
 
 * libretro-common `include/libretro_dspfilter.h`:
   `dspfilter_info {float input_rate}`, `dspfilter_input/output {float
   *samples; unsigned frames}`, `dspfilter_config` (the plugin reads only its
-  first member, `get_float(userdata, key, &value, default)`),
-  `dspfilter_implementation {init, process, free, unsigned api_version,
-  const char *ident, const char *short_ident}`, `DSPFILTER_API_VERSION` 1,
-  and `dspfilter_get_implementation(dspfilter_simd_mask_t)`;
-* `ladspa.h` 1.1: `LADSPA_Descriptor` field order, the port and hint bit
-  values.
+  first member, `get_float(userdata, key, &value, default)`; the other
+  members are declared in the same order), `dspfilter_implementation {init,
+  process, free, unsigned api_version, const char *ident, const char
+  *short_ident}`, and
+  `dspfilter_get_implementation(dspfilter_simd_mask_t)` with
+  `dspfilter_simd_mask_t` = `unsigned`. All match;
+* `ladspa.h` 1.1: the `LADSPA_Descriptor` field order, the descriptor's
+  `Properties`/`PortDescriptor` typedefs, and the property, port and
+  range-hint bit values. All match. The LADSPA side has also been driven by a
+  real host — alsa-lib's ladspa PCM, built against its own copy of
+  `ladspa.h` — and processed audio correctly (above).
 
-The host test drives both ABIs through `dlopen`, so a layout mismatch with
-the test's own copy is caught; a mismatch of both with upstream is not. The
-LADSPA side has since been driven by a real host — alsa-lib's ladspa PCM, built
-against its own copy of `ladspa.h` — and processed audio correctly (above).
+The host test drives both ABIs through `dlopen`, so a layout mismatch with the
+test's own copy is caught; the check above covers upstream.
 
-Newer RetroArch master adds an optional int16 path: plugins that declare API
-version 2 may export a `process_i16`, and the host only reads that field from
-version-2 plugins (it checks `api_version < 2` first; seen in search excerpts
-of `dsp_filter.c`, not in the full source). This plugin deliberately stays at
-version 1 with the float `process`, which old builds load and new ones still
-chain (they only lose the int16 fast path). Check that a current loader still
-accepts version 1 when the real header can be read; a version-2
-`process_i16` is the follow-up.
+### Why it stays at DSP API version 1
+
+RetroArch's header is now `DSPFILTER_API_VERSION` 2: version 2 appends an
+optional `process_i16` **after** `short_ident`, and `audio/dsp_filter.c`
+accepts any plugin whose `api_version` is 1 through 2. It folds the chain's
+int16 capability once at creation and reads `process_i16` only after an
+`api_version < 2` check, so a version-1 plugin's shorter struct is never
+over-read.
+
+This plugin reports version 1 with the float `process`. Its DSP is float end
+to end, so a `process_i16` would convert int16 → float → int16 inside the
+plugin and save the host's conversion only to add its own; the int16 fast path
+would not be faster here. Old builds load the version-1 plugin and current
+ones still chain it, losing only that path. Revisit if the DSP core ever
+becomes fixed-point.
 
 ## Limits
 

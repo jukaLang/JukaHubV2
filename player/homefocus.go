@@ -20,6 +20,10 @@ const (
 	HomeFocusWeather   HomeFocusID = "weather"
 	HomeFocusClock     HomeFocusID = "clock"
 	HomeFocusExit      HomeFocusID = "exit"
+	// HomeFocusTip is the tip of the day drawn between the last row of cards
+	// and the footer (helpdoc.go). A opens its CONTROLS.md section and X hides
+	// it for the day. The controller enables it only while it is drawn.
+	HomeFocusTip HomeFocusID = "tip"
 	// HomeFocusBell is the notification bell in the far-right corner of the
 	// header. It is a chrome control on every other scene, but Home drives its
 	// own focus graph, so without an entry here the D-pad could never reach it.
@@ -319,6 +323,14 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusFavorites, Down: HomeFocusExit,
 		Left: HomeFocusExit, Right: HomeFocusEditPill,
 	},
+	// The tip of the day is a line above the footer: its Up goes back to the
+	// last row of cards and its Down to the power button. neighbor() makes
+	// Down from any of those cards and Up from the power button reach it,
+	// so the static edges here are only the fallback.
+	HomeFocusTip: {
+		Up: HomeFocusFavorites, Down: HomeFocusExit,
+		Left: HomeFocusTip, Right: HomeFocusTip,
+	},
 	// The Edit pill; the dynamic layouts take Up to the tile drawn above it
 	// (home_dynbody.go), so the graph's Up only matters to the dashboard,
 	// which never draws it.
@@ -361,6 +373,8 @@ func NewHomeFocusController() *HomeFocusController {
 		f.enabled[id] = true
 	}
 	f.enabled[HomeFocusEditPill] = false
+	// The tip's stop exists only while Home draws the tip (helpdoc.go).
+	f.enabled[HomeFocusTip] = false
 	return f
 }
 
@@ -506,6 +520,17 @@ func (f *HomeFocusController) Restore() HomeFocusID {
 
 // neighbor returns the neighbor HomeFocusID in the given direction.
 func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection) HomeFocusID {
+	// While the tip of the day is drawn, it stands between the last row of
+	// cards and the footer: Down from any bottom-row card reaches it, and Up
+	// from the power button comes back to it. Hidden, the old edges stay.
+	if f.IsEnabled(HomeFocusTip) {
+		if direction == FocusDown && homeRowAboveTip(id) {
+			return HomeFocusTip
+		}
+		if direction == FocusUp && id == HomeFocusExit {
+			return HomeFocusTip
+		}
+	}
 	// The top bar's controls stand in the user's order (Edit Home → Top bar,
 	// header_arrange.go), so Left, Right and Down from one of them follow
 	// where they are drawn; the graph below is the shipped order's answer
@@ -562,6 +587,18 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	default:
 		return id
 	}
+}
+
+// homeRowAboveTip reports whether id is one of the last row's cards, the row
+// drawn directly above the tip of the day on the Standard, Hero and Tabs
+// Homes.
+func homeRowAboveTip(id HomeFocusID) bool {
+	switch id {
+	case HomeFocusFavorites, HomeFocusBrowser, HomeFocusChat, HomeFocusTools,
+		HomeFocusFiles, HomeFocusSettings:
+		return true
+	}
+	return false
 }
 
 // lastRemotePlayPill is the rightmost drawn pill of the Remote Play group

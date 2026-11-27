@@ -122,6 +122,16 @@ func screenshotDirWritable(dir string) bool {
 	return true
 }
 
+// gameScreenshotPrefix names a game capture after the library game on screen
+// ("game-<title>"), so the capture organizer can group shots by game. Without
+// a title (a game started outside the library) the old "game" is kept.
+func gameScreenshotPrefix() string {
+	if title := screenRecTitleClean(screenRecGameTitleNow()); title != "" {
+		return "game-" + title
+	}
+	return "game"
+}
+
 // screenshotPath is a new file in screenshotDir named prefix and the time,
 // with -2, -3… when two land in the same second. Any goroutine.
 func screenshotPath(prefix string, at time.Time) (string, error) {

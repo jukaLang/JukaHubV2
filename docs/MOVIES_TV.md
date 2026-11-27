@@ -40,6 +40,15 @@ to a combined video file when a site offers no separate streams. A site that
 needs a login still needs cookies configured in the yt-dlp extra arguments; a
 failure appears on its Downloads row with a Retry action.
 
+Playback starts faster on non-YouTube sites: only YouTube needs its three
+player-client attempts, so a site link makes one neutral yt-dlp call. The first
+few results are also resolved in the background while you browse, so Play
+usually uses a cached stream URL instead of waiting for a cold helper. A typed
+domain whose site offers its own search API reuses its anonymous token for half
+an hour and fetches posters in parallel; the token is refreshed automatically
+if it expires. Playback prefers a stream that carries both picture and sound,
+so a site offering separate audio never plays silent.
+
 The folder has two tools that use the on-screen keyboard: **Type a video
 domain** saves a domain you enter in `jukauser.json`, and **Play a link now**
 plays a pasted link through the same yt-dlp player YouTube uses. A typed domain

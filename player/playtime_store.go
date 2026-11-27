@@ -187,7 +187,10 @@ func playtimeSessionsPrune(list []playtimeSession, now time.Time) []playtimeSess
 		return nil
 	}
 	cutoff := now.AddDate(0, 0, -playtimeDaysKept).Format(wrappedDayKey)
-	out := make([]playtimeSession, 0, len(list))
+	// Filter in place: every caller assigns the result back to the slice it
+	// passed, so a second 5000-record allocation on each session append is
+	// pure waste on the handheld.
+	out := list[:0]
 	for _, s := range list {
 		if s.Day == "" || s.Day < cutoff || s.Seconds <= 0 {
 			continue

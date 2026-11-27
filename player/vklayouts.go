@@ -52,6 +52,7 @@ const (
 	vkKeyAutoCap     = "vk_autocap"
 	vkKeySounds      = "vk_sounds"
 	vkKeyVoiceLang   = "vk_voice_language"
+	vkKeyWrap        = "vk_wrap"
 
 	// vkDefaultLayoutID is the layout a fresh install starts on.
 	vkDefaultLayoutID = "en-US"
@@ -455,6 +456,10 @@ func vkSuggestionsEnabled() bool { return vkCustomBool(appConfig, vkKeySuggestio
 func vkLearnEnabled() bool       { return vkCustomBool(appConfig, vkKeyLearn, true) }
 func vkAutoCapEnabled() bool     { return vkCustomBool(appConfig, vkKeyAutoCap, true) }
 func vkSoundsEnabled() bool      { return vkCustomBool(appConfig, vkKeySounds, true) }
+
+// vkWrapEnabled is the keyboard's "carry on from the other edge" setting. It
+// is off by default: the existing edge-clamping is what long-time users know.
+func vkWrapEnabled() bool { return vkCustomBool(appConfig, vkKeyWrap, false) }
 
 // vkVoiceFollowsLayout reports whether voice typing tells the recogniser the
 // layout's language (the default) rather than letting it detect one.
